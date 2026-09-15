@@ -24,7 +24,7 @@ from novel.llm import stage5_runs
 from novel.llm.cache import CachePolicy
 from novel.llm.ledger import CostLedger, ledger_path
 from novel.orchestrator.node_agents import Stage5SessionPool
-from novel.orchestrator import admission, reviewer_action_evidence, reviewer_contract, queue, state
+from novel.orchestrator import admission, reviewer_action_evidence, reviewer_legacy, queue, state
 from novel.run import RunContext
 from novel.stages.stage5 import reviewer_rewrite as rewrite, write
 from novel.store import ArtifactStore
@@ -105,7 +105,7 @@ def rig(tmp_path, monkeypatch):
             'fresh', (), review_rel='stage5/review_1.json', seq=1, review=current)
 
     monkeypatch.setattr(write.review, 'require_fresh_review', fresh_review)
-    # Commander 四账封存另由 test_agent 真运输验证；此处隔离其上游权限来源。
+    # 席位/权限封存另由 test_reviewer_* 与 evidence 模块真运输验证；此处隔离其上游权限来源。
     monkeypatch.setattr(reviewer_action_evidence, 'require_reviewer_rewrite_authority', lambda *_a, **_kw: None)
     monkeypatch.setattr(reviewer_action_evidence, 'reviewer_rewrite_authority_sealed', lambda *_a, **_kw: True)
     monkeypatch.setattr(rewrite, '_require_request_authority', lambda *_a, **_kw: None)
@@ -120,7 +120,7 @@ def rig(tmp_path, monkeypatch):
             'directives': [{'code': 'remove_repetition', 'current_text_evidence': f'第{ordinal}章独立定位。'}],
         } for ordinal in (1, 2)],
         reviewer_action_record_sha256='a' * 64, business_sha256='b' * 64,
-        reviewer_contract_sha256=hashlib.sha256(reviewer_contract.for_blocker(
+        reviewer_contract_sha256=hashlib.sha256(reviewer_legacy.for_blocker(
             queue.WAITING_ON_STAGE5_CLOSURE).encode()).hexdigest(),
         reviewer_session_run_id='reviewer-session', reviewer_seat_turn_id='reviewer-turn',
         provider_response_sha256='c' * 64)

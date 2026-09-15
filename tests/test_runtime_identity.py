@@ -7,8 +7,8 @@ import json
 import pytest
 
 from contracts.schema.orchestration import AgentRunStart, ExecutionEpoch
-from novel.commanders import context as commander_context
-from tests.test_commander_context import _profiles
+from novel.orchestrator import execution_context
+from tests.test_execution_context import _profiles
 
 
 def test_legacy_start_and_epoch_roundtrip_preserve_the_original_hash_surface(tmp_path):
@@ -26,14 +26,14 @@ def test_legacy_start_and_epoch_roundtrip_preserve_the_original_hash_surface(tmp
     epoch = ExecutionEpoch.model_validate(epoch_wire)
     assert epoch.identity_version == 1
     assert epoch.model_dump(mode='json') == epoch_wire
-    original = dict(protocol=commander_context.CONTRACT_V2_PROTOCOL,
+    original = dict(protocol=execution_context.CONTRACT_V2_PROTOCOL,
                     run_id='parent-1', epoch=epoch_wire)
     digest = hashlib.sha256(json.dumps(original, ensure_ascii=False, sort_keys=True,
                                        separators=(',', ':')).encode('utf-8')).hexdigest()
-    assert commander_context.epoch_sha256(run_id='parent-1', epoch=epoch) == digest
+    assert execution_context.epoch_sha256(run_id='parent-1', epoch=epoch) == digest
     current = ExecutionEpoch.model_validate(dict(epoch_wire, identity_version=2, skill_sha256=None))
     assert current.model_dump(mode='json')['identity_version'] == 2
-    assert commander_context.epoch_sha256(run_id='parent-1', epoch=current) != digest
+    assert execution_context.epoch_sha256(run_id='parent-1', epoch=current) != digest
     with pytest.raises(ValueError, match='不接受 skill'):
         ExecutionEpoch.model_validate(dict(epoch_wire, identity_version=2))
     with pytest.raises(ValueError, match='不接受 skill'):

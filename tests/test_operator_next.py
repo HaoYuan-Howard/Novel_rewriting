@@ -342,7 +342,7 @@ def test_no_lane_item_is_pipeline_complete_not_delivery_ready(monkeypatch, tmp_p
         (
             _blocked(
                 'stage4.context', Q.WAITING_ON_STAGE4_STRUCTURE_REPLAN),
-            'commander',
+            'human',
         ),
         (
             QueueItem(

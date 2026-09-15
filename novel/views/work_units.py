@@ -47,7 +47,10 @@ def get(base: str, sid: str) -> tuple[list[dict[str, Any]] | None, str | None]:
                 row['review_unavailable_reason'] = str(exc)
             continue
         if row is None:
-            budget = WorkUnitBudget(base, sid, node, 'commander', scope)
+            # 未登记的合成行只是审阅进度的展示载体（`registered: False`），
+            # 必须以只读身份构造：Commander 工作单元角色已退役，新账不可写。
+            budget = WorkUnitBudget(
+                base, sid, node, 'commander', scope, read_only=True)
             row = {**unit_view(budget._read()), 'registered': False}
             rows.append(row)
         row['review'] = progress

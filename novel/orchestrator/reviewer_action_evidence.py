@@ -36,15 +36,14 @@ from novel.errors import ArtifactUnreadable, NovelError
 from novel.llm.agent_runs import canonical_sha256
 from novel.llm.ledger import ledger_path as cost_ledger_path, read_jsonl_rows
 from novel.orchestrator import (
-    admission, queue, reviewer_contract, reviewer_seat_ledger,
-    reviewer_tasks, uploads,
+    admission, queue, reviewer_legacy, uploads,
 )
 
 
 def recorded_response_sha256(record: ReviewerActionRecord) -> str:
     """从 durable full action 复原 Commander 原回答的 canonical digest。"""
     if record.node is None:
-        raise reviewer_tasks.ReviewerTaskError(
+        raise reviewer_legacy.ReviewerTaskError(
             'Stage5 durable disposition record 缺 node action')
     action: dict[str, object] = {
         'kind': 'node',
@@ -54,7 +53,7 @@ def recorded_response_sha256(record: ReviewerActionRecord) -> str:
     if record.input_payload is not None:
         action['input_payload'] = record.input_payload
     document = {
-        'schema': reviewer_tasks.REQUEST_SCHEMA,
+        'schema': reviewer_legacy.REQUEST_SCHEMA,
         'surface_seal': record.surface_seal,
         'waiting_on': record.waiting_on,
         'action': action,
@@ -87,7 +86,7 @@ def _validated_work_unit(
     try:
         return work_units.validate_reviewer_record(base, sid, record)
     except (work_units.WorkUnitRefused, OSError, ValueError, NovelError) as exc:
-        raise reviewer_tasks.ReviewerTaskError(str(exc)) from exc
+        raise reviewer_legacy.ReviewerTaskError(str(exc)) from exc
 
 
 def _work_unit_evidence_hashes(
@@ -103,23 +102,23 @@ def _work_unit_evidence_hashes(
         or record.reviewer_seat_turn_id != turn.turn_id
         or not turn.attempts
     ):
-        raise reviewer_tasks.ReviewerTaskError(
+        raise reviewer_legacy.ReviewerTaskError(
             'Stage5 durable disposition 缺当前工作单元的已交付内容证据')
     attempt = turn.attempts[-1]
     if attempt.outcome != 'ok' or not attempt.provider_session_id:
-        raise reviewer_tasks.ReviewerTaskError(
+        raise reviewer_legacy.ReviewerTaskError(
             'Stage5 durable disposition 内容轮缺成功 provider attempt')
     sessions = [session for session in agent_session_audit.fold(
         agent_session_audit.read_events(base))
         if session.session_run_id == record.reviewer_session_run_id]
     if len(sessions) != 1:
-        raise reviewer_tasks.ReviewerTaskError('Stage5 工作单元缺唯一 logical session')
+        raise reviewer_legacy.ReviewerTaskError('Stage5 工作单元缺唯一 logical session')
     session = sessions[0]
     attempts = [row for row in session.attempts if row.attempt_id == attempt.attempt_id]
     turns = [row for row in session.turns if row.attempt_id == attempt.attempt_id]
     if (session.start.role != 'commander' or session.start.node is not None
             or len(attempts) != 1 or len(turns) != 1):
-        raise reviewer_tasks.ReviewerTaskError('Stage5 工作单元 session/attempt/turn 不唯一')
+        raise reviewer_legacy.ReviewerTaskError('Stage5 工作单元 session/attempt/turn 不唯一')
     audit_attempt, audit_turn = attempts[0], turns[0]
     if (
         audit_attempt.error_kind is not None or audit_turn.error_kind is not None
@@ -133,7 +132,7 @@ def _work_unit_evidence_hashes(
         or audit_attempt.requested_model != audit_turn.requested_model
         or audit_attempt.requested_effort != audit_turn.requested_effort
     ):
-        raise reviewer_tasks.ReviewerTaskError('Stage5 工作单元 attempt 与 provider turn 不闭合')
+        raise reviewer_legacy.ReviewerTaskError('Stage5 工作单元 attempt 与 provider turn 不闭合')
     costs = [row for row in read_jsonl_rows(cost_ledger_path(base))
              if row.get('run_id') == turn.run_id
              and row.get('session_run_id') == record.reviewer_session_run_id
@@ -141,7 +140,7 @@ def _work_unit_evidence_hashes(
              and row.get('attempt_id') == attempt.attempt_id
              and row.get('activity') == f'reviewer:{queue.WAITING_ON_STAGE5_CLOSURE}']
     if len(costs) != 1:
-        raise reviewer_tasks.ReviewerTaskError('Stage5 工作单元成本证据不唯一')
+        raise reviewer_legacy.ReviewerTaskError('Stage5 工作单元成本证据不唯一')
     cost = costs[0]
     if (
         cost.get('outcome') != 'ok' or cost.get('exit_code') != 0
@@ -156,7 +155,7 @@ def _work_unit_evidence_hashes(
         or cost.get('protocol_version') != audit_turn.protocol_version
         or cost.get('cli_version') != audit_turn.cli_version
     ):
-        raise reviewer_tasks.ReviewerTaskError(
+        raise reviewer_legacy.ReviewerTaskError(
             'Stage5 工作单元成本账未证明同 attempt/response exit 0')
     # logical session 可继续，内容轮也会从 delivered 转 adopted；封存只绑定
     # 原请求、响应、typed 决定与该次 attempt，不绑定整本可变预算账或 session ended。
@@ -185,7 +184,7 @@ def _record_evidence_path(
 ) -> Path:
     if record.work_unit_id is not None:
         return _validated_work_unit(base, sid, record).path
-    return reviewer_seat_ledger.ledger_path(
+    return reviewer_legacy.ledger_path(
         base, sid, waiting_on=record.waiting_on,
         business_sha256=record.business_sha256)
 
@@ -227,17 +226,17 @@ def validate_stage5_action_record_ledger(
         or record.reviewer_seat_turn_id is None
         or record.provider_response_sha256 is None
     ):
-        raise reviewer_tasks.ReviewerTaskError(
+        raise reviewer_legacy.ReviewerTaskError(
             'Stage5 durable disposition record 缺完整席位恢复身份')
     if (record.work_unit_id is None
             and recorded_response_sha256(record) != record.provider_response_sha256):
-        raise reviewer_tasks.ReviewerTaskError(
+        raise reviewer_legacy.ReviewerTaskError(
             'Stage5 durable disposition record 与 provider 原回答 digest 不一致')
     if read_only and current_parent_run_id is not None:
-        raise reviewer_tasks.ReviewerTaskError(
+        raise reviewer_legacy.ReviewerTaskError(
             'sealed reviewer authority 只读复核不得自报 parent 身份')
     if read_only and _owner_guard_same_parent is not None:
-        raise reviewer_tasks.ReviewerTaskError(
+        raise reviewer_legacy.ReviewerTaskError(
             'sealed reviewer authority 只读复核不得借用 owner guard')
     expected_same_parent = _record_owner_run_id(base, sid, record) == current_parent_run_id
     if (
@@ -247,7 +246,7 @@ def validate_stage5_action_record_ledger(
             or _owner_guard_same_parent != expected_same_parent
         )
     ):
-        raise reviewer_tasks.ReviewerTaskError(
+        raise reviewer_legacy.ReviewerTaskError(
             'Stage5 durable disposition 外层 owner guard 身份不闭合')
     same_parent = read_only or expected_same_parent
     try:
@@ -275,20 +274,20 @@ def validate_stage5_action_record_ledger(
                 current_parent_run_id=current_parent_run_id,
             )
         with owner_guard:
-            ledger = reviewer_seat_ledger.read(
+            ledger = reviewer_legacy.read(
                 base, sid,
                 waiting_on=record.waiting_on,
                 business_sha256=record.business_sha256,
             )
             if ledger is None:
-                raise reviewer_tasks.ReviewerTaskError(
+                raise reviewer_legacy.ReviewerTaskError(
                     'Stage5 durable disposition record 找不到原 reviewer 席位账')
             turns = [
                 turn for turn in ledger.turns
                 if turn.turn_id == record.reviewer_seat_turn_id
             ]
             if len(turns) != 1:
-                raise reviewer_tasks.ReviewerTaskError(
+                raise reviewer_legacy.ReviewerTaskError(
                     'Stage5 durable disposition record 找不到唯一原 seat turn')
             turn = turns[0]
             if (
@@ -302,7 +301,7 @@ def validate_stage5_action_record_ledger(
                 or turn.provider_response_sha256
                 != record.provider_response_sha256
             ):
-                raise reviewer_tasks.ReviewerTaskError(
+                raise reviewer_legacy.ReviewerTaskError(
                     'Stage5 durable disposition record 与原 seat/response 身份不闭合，'
                     '或已有更新 turn')
             pending = ledger.pending_correction
@@ -312,7 +311,7 @@ def validate_stage5_action_record_ledger(
                     if row.turn_id == pending.source_turn_id
                 ]
                 if len(source_rows) != 1:
-                    raise reviewer_tasks.ReviewerTaskError(
+                    raise reviewer_legacy.ReviewerTaskError(
                         'Stage5 durable disposition pending correction 来源不唯一')
                 source = source_rows[0]
                 # correction 预留后、清旧 pending 前的唯一合法硬杀窗：pending
@@ -322,11 +321,11 @@ def validate_stage5_action_record_ledger(
                     and source.ordinal + 1 == turn.ordinal
                     and source.session_run_id == turn.session_run_id
                 ):
-                    raise reviewer_tasks.ReviewerTaskError(
+                    raise reviewer_legacy.ReviewerTaskError(
                         'Stage5 durable disposition 已有不早于原 action 的 pending '
                         'correction，拒绝重放旧回答')
             if not turn.attempts:
-                raise reviewer_tasks.ReviewerTaskError(
+                raise reviewer_legacy.ReviewerTaskError(
                     'Stage5 durable disposition 原 turn 缺进程 attempt 证据')
             last_attempt = turn.attempts[-1]
             if (
@@ -336,7 +335,7 @@ def validate_stage5_action_record_ledger(
                 or not last_attempt.wire_evidence
                 or not last_attempt.provider_session_id
             ):
-                raise reviewer_tasks.ReviewerTaskError(
+                raise reviewer_legacy.ReviewerTaskError(
                     'Stage5 durable disposition 原 turn 没有 wire+exit0 attempt')
 
             sessions = [
@@ -345,7 +344,7 @@ def validate_stage5_action_record_ledger(
                 if session.session_run_id == record.reviewer_session_run_id
             ]
             if len(sessions) != 1:
-                raise reviewer_tasks.ReviewerTaskError(
+                raise reviewer_legacy.ReviewerTaskError(
                     'Stage5 durable disposition 没有唯一 logical session 审计')
             session = sessions[0]
             audit_attempts = [
@@ -363,7 +362,7 @@ def validate_stage5_action_record_ledger(
                 or len(audit_attempts) != 1
                 or len(audit_turns) != 1
             ):
-                raise reviewer_tasks.ReviewerTaskError(
+                raise reviewer_legacy.ReviewerTaskError(
                     'Stage5 durable disposition logical session/attempt/turn 不唯一')
             audit_attempt = audit_attempts[0]
             audit_turn = audit_turns[0]
@@ -384,7 +383,7 @@ def validate_stage5_action_record_ledger(
                 or audit_attempt.requested_model != audit_turn.requested_model
                 or audit_attempt.requested_effort != audit_turn.requested_effort
             ):
-                raise reviewer_tasks.ReviewerTaskError(
+                raise reviewer_legacy.ReviewerTaskError(
                     'Stage5 durable disposition attempt 与 provider turn 身份不闭合')
 
             cost_rows = [
@@ -419,7 +418,7 @@ def validate_stage5_action_record_ledger(
                 != audit_turn.protocol_version
                 or cost_rows[0].get('cli_version') != audit_turn.cli_version
             ):
-                raise reviewer_tasks.ReviewerTaskError(
+                raise reviewer_legacy.ReviewerTaskError(
                     'Stage5 durable disposition 成本账未证明同 attempt/response exit 0')
 
             if session.end is None and not same_parent:
@@ -433,7 +432,7 @@ def validate_stage5_action_record_ledger(
                     or audit_turn.schema_sha256 is None
                     or session.start.start_code_version is None
                 ):
-                    raise reviewer_tasks.ReviewerTaskError(
+                    raise reviewer_legacy.ReviewerTaskError(
                         'Stage5 durable disposition open session 缺补尾所需真实 turn 身份')
                 agent_session_audit.finish_restored_session(
                     base,
@@ -459,7 +458,7 @@ def validate_stage5_action_record_ledger(
                     if row.session_run_id == record.reviewer_session_run_id
                 ]
                 if len(sessions) != 1:
-                    raise reviewer_tasks.ReviewerTaskError(
+                    raise reviewer_legacy.ReviewerTaskError(
                         'Stage5 durable disposition session 补尾后不唯一')
                 session = sessions[0]
             if session.end is not None and (
@@ -467,20 +466,20 @@ def validate_stage5_action_record_ledger(
                 or session.error_kind is not None
                 or session.delivery_state not in {'unknown', 'blocked'}
             ):
-                raise reviewer_tasks.ReviewerTaskError(
+                raise reviewer_legacy.ReviewerTaskError(
                     'Stage5 durable disposition logical session 未证明 process ok')
             if session.end is None and not same_parent:
-                raise reviewer_tasks.ReviewerTaskError(
+                raise reviewer_legacy.ReviewerTaskError(
                     'Stage5 durable disposition 跨 parent 恢复后 session 仍未闭合')
 
             recoverable_failed = (
                 turn.outcome == 'failed' and turn.exit_code == CRASH
             )
             if turn.outcome == 'started' and same_parent:
-                raise reviewer_tasks.ReviewerTaskError(
+                raise reviewer_legacy.ReviewerTaskError(
                     'Stage5 durable disposition 同 parent 仍有 started turn，不得从旁补席')
             if turn.outcome == 'started':
-                turn = reviewer_seat_ledger.finish(
+                turn = reviewer_legacy.finish(
                     base, sid,
                     waiting_on=record.waiting_on,
                     business_sha256=record.business_sha256,
@@ -491,11 +490,11 @@ def validate_stage5_action_record_ledger(
                 turn.outcome == 'ok' and turn.exit_code == 0
                 or recoverable_failed
             ):
-                raise reviewer_tasks.ReviewerTaskError(
+                raise reviewer_legacy.ReviewerTaskError(
                     'Stage5 durable disposition 原 seat turn 既非成功闭账，也非'
                     '有独立 wire 成功证据的 durable/promote 故障')
 
-            after = reviewer_seat_ledger.read(
+            after = reviewer_legacy.read(
                 base, sid,
                 waiting_on=record.waiting_on,
                 business_sha256=record.business_sha256,
@@ -503,7 +502,7 @@ def validate_stage5_action_record_ledger(
             if after is None or any(
                 row.outcome == 'started' for row in after.turns
             ):
-                raise reviewer_tasks.ReviewerTaskError(
+                raise reviewer_legacy.ReviewerTaskError(
                     'Stage5 durable disposition 恢复后仍有 started turn')
             final_rows = [
                 row for row in after.turns
@@ -520,17 +519,17 @@ def validate_stage5_action_record_ledger(
                     and final_rows[0].exit_code == CRASH
                 )
             ):
-                raise reviewer_tasks.ReviewerTaskError(
+                raise reviewer_legacy.ReviewerTaskError(
                     'Stage5 durable disposition 恢复后原 seat 终态不闭合')
-    except reviewer_tasks.ReviewerTaskError:
+    except reviewer_legacy.ReviewerTaskError:
         raise
     except (
         NovelError,
         OSError,
         ValueError,
-        reviewer_seat_ledger.ReviewerSeatRefused,
+        reviewer_legacy.ReviewerSeatRefused,
     ) as exc:
-        raise reviewer_tasks.ReviewerTaskError(
+        raise reviewer_legacy.ReviewerTaskError(
             'Stage5 durable disposition 原席位账无法确定性补完：'
             f'{type(exc).__name__}: {exc}') from exc
 
@@ -558,15 +557,15 @@ def _authority_root(
     def validate_chain() -> None:
         for directory in chain:
             if directory.is_symlink():
-                raise reviewer_tasks.ReviewerTaskError(
+                raise reviewer_legacy.ReviewerTaskError(
                     f'reviewer rewrite authority 路径目录不得是符号链接：{directory}')
             if directory.exists() and not directory.is_dir():
-                raise reviewer_tasks.ReviewerTaskError(
+                raise reviewer_legacy.ReviewerTaskError(
                     f'reviewer rewrite authority 路径祖先不是普通目录：{directory}')
         try:
             authority_root.resolve().relative_to(service_root.resolve())
         except (OSError, ValueError) as exc:
-            raise reviewer_tasks.ReviewerTaskError(
+            raise reviewer_legacy.ReviewerTaskError(
                 'reviewer rewrite authority 路径越出 _service') from exc
 
     validate_chain()
@@ -588,7 +587,7 @@ def _authority_path(
         len(record_sha256) != 64
         or any(char not in '0123456789abcdef' for char in record_sha256)
     ):
-        raise reviewer_tasks.ReviewerTaskError(
+        raise reviewer_legacy.ReviewerTaskError(
             'reviewer rewrite authority record SHA 形状非法')
     return _authority_root(base, sid) / f'reviewer-action-{record_sha256}.json'
 
@@ -601,38 +600,38 @@ def _authority_receipt_path(
         f'reviewer-action-{record_sha256}.receipt.json')
 
 
-class ReviewerRewriteAuthorityPending(reviewer_tasks.ReviewerTaskError):
+class ReviewerRewriteAuthorityPending(reviewer_legacy.ReviewerTaskError):
     """canonical request 已存在，但来源 action 尚未完成 immutable seal。"""
 
 
 def _read_archived_authority(path: Path, record_sha256: str) -> ReviewerActionRecord:
     try:
         if path.is_symlink() or not path.is_file():
-            raise reviewer_tasks.ReviewerTaskError(
+            raise reviewer_legacy.ReviewerTaskError(
                 'reviewer rewrite archived authority 不是普通文件')
         raw = path.read_bytes()
         if hashlib.sha256(raw).hexdigest() != record_sha256:
-            raise reviewer_tasks.ReviewerTaskError(
+            raise reviewer_legacy.ReviewerTaskError(
                 'reviewer rewrite archived authority 内容地址不闭合')
         return ReviewerActionRecord.model_validate_json(raw)
-    except reviewer_tasks.ReviewerTaskError:
+    except reviewer_legacy.ReviewerTaskError:
         raise
     except Exception as exc:  # noqa: BLE001 —— 坏永久凭据必须关闭式报告
-        raise reviewer_tasks.ReviewerTaskError(
+        raise reviewer_legacy.ReviewerTaskError(
             'reviewer rewrite archived authority 无法 typed 读取') from exc
 
 
 def _read_authority_receipt(path: Path) -> ReviewerRewriteAuthorityReceipt:
     try:
         if path.is_symlink() or not path.is_file():
-            raise reviewer_tasks.ReviewerTaskError(
+            raise reviewer_legacy.ReviewerTaskError(
                 'reviewer rewrite authority receipt 不是普通文件')
         return ReviewerRewriteAuthorityReceipt.model_validate_json(
             path.read_bytes())
-    except reviewer_tasks.ReviewerTaskError:
+    except reviewer_legacy.ReviewerTaskError:
         raise
     except Exception as exc:  # noqa: BLE001 —— 坏永久 seal 不能降级为 active
-        raise reviewer_tasks.ReviewerTaskError(
+        raise reviewer_legacy.ReviewerTaskError(
             'reviewer rewrite authority receipt 无法 typed 读取') from exc
 
 
@@ -646,7 +645,7 @@ def _active_authority(
         if path.name == expected_name
     ]
     if len(matches) > 1:  # pragma: no cover —— 同目录同名结构上不可能
-        raise reviewer_tasks.ReviewerTaskError(
+        raise reviewer_legacy.ReviewerTaskError(
             'reviewer rewrite active authority 不唯一')
     return matches[0] if matches else None
 
@@ -665,7 +664,7 @@ def load_reviewer_rewrite_authority(
         if record is not None
     ]
     if not records or any(record != records[0] for record in records[1:]):
-        raise reviewer_tasks.ReviewerTaskError(
+        raise reviewer_legacy.ReviewerTaskError(
             'reviewer rewrite 找不到唯一一致的 content-addressed authority')
     return records[0]
 
@@ -676,21 +675,21 @@ def _atomic_write_once(
 ) -> None:
     authority_root = _authority_root(base, sid, create=True)
     if path.absolute().parent != authority_root:
-        raise reviewer_tasks.ReviewerTaskError(
+        raise reviewer_legacy.ReviewerTaskError(
             f'{label} 目标不在 reviewer rewrite authority 目录')
     if path.is_symlink():
-        raise reviewer_tasks.ReviewerTaskError(f'{label} 不是普通文件')
+        raise reviewer_legacy.ReviewerTaskError(f'{label} 不是普通文件')
     if path.is_file():
         try:
             existing = path.read_bytes()
         except OSError as exc:
             raise ArtifactUnreadable(f'读不了已有 {label}：{exc!r}') from exc
         if existing != raw:
-            raise reviewer_tasks.ReviewerTaskError(
+            raise reviewer_legacy.ReviewerTaskError(
                 f'immutable {label} 已存在不同字节')
         return
     if path.exists():
-        raise reviewer_tasks.ReviewerTaskError(f'{label} 不是普通文件')
+        raise reviewer_legacy.ReviewerTaskError(f'{label} 不是普通文件')
     tmp = path.with_name(f'.{path.name}.{uuid.uuid4().hex}.tmp')
     try:
         tmp.write_bytes(raw)
@@ -732,15 +731,15 @@ def _require_record_binding(
         or record.provider_response_sha256
         != trusted.provider_response_sha256
     ):
-        raise reviewer_tasks.ReviewerTaskError(
+        raise reviewer_legacy.ReviewerTaskError(
             'reviewer rewrite trusted input 与 durable action 身份不闭合')
     if require_current_contract:
         current_contract_sha256 = hashlib.sha256(
-            reviewer_contract.for_blocker(
+            reviewer_legacy.for_blocker(
                 queue.WAITING_ON_STAGE5_CLOSURE).encode('utf-8')
         ).hexdigest()
         if trusted.reviewer_contract_sha256 != current_contract_sha256:
-            raise reviewer_tasks.ReviewerTaskError(
+            raise reviewer_legacy.ReviewerTaskError(
                 'reviewer rewrite authority 所绑 Reviewer contract 已非 current')
     expected_business = canonical_sha256({
         'kind': 'stage5-top-review-business-v3',
@@ -753,7 +752,7 @@ def _require_record_binding(
         'reviewer_contract_sha256': trusted.reviewer_contract_sha256,
     })
     if trusted.business_sha256 != expected_business:
-        raise reviewer_tasks.ReviewerTaskError(
+        raise reviewer_legacy.ReviewerTaskError(
             'reviewer rewrite trusted input 的稳定 business identity 不闭合')
 
 
@@ -765,11 +764,11 @@ def _closed_evidence_hashes(
         base, sid, record=record, read_only=True)
     if record.work_unit_id is not None:
         return _work_unit_evidence_hashes(base, sid, record)
-    ledger = reviewer_seat_ledger.read(
+    ledger = reviewer_legacy.read(
         base, sid, waiting_on=record.waiting_on,
         business_sha256=record.business_sha256)
     if ledger is None:
-        raise reviewer_tasks.ReviewerTaskError(
+        raise reviewer_legacy.ReviewerTaskError(
             'reviewer rewrite sealed authority 缺 seat ledger')
     turns = [
         row for row in ledger.turns
@@ -782,7 +781,7 @@ def _closed_evidence_hashes(
         or ledger.pending_correction is not None
         or any(row.outcome == 'started' for row in ledger.turns)
     ):
-        raise reviewer_tasks.ReviewerTaskError(
+        raise reviewer_legacy.ReviewerTaskError(
             'reviewer rewrite authority 只能封存最后一轮 ok/0 且无 pending 的席位')
     sessions = [
         session for session in agent_session_audit.fold(
@@ -790,7 +789,7 @@ def _closed_evidence_hashes(
         if session.session_run_id == record.reviewer_session_run_id
     ]
     if len(sessions) != 1:
-        raise reviewer_tasks.ReviewerTaskError(
+        raise reviewer_legacy.ReviewerTaskError(
             'reviewer rewrite sealed authority 找不到唯一 logical session')
     session = sessions[0]
     if (
@@ -799,7 +798,7 @@ def _closed_evidence_hashes(
         or session.error_kind is not None
         or session.delivery_state not in {'unknown', 'blocked'}
     ):
-        raise reviewer_tasks.ReviewerTaskError(
+        raise reviewer_legacy.ReviewerTaskError(
             'reviewer rewrite authority seal 前 logical session 未成功闭合')
     last_attempt = turns[0].attempts[-1]
     cost_rows = [
@@ -813,7 +812,7 @@ def _closed_evidence_hashes(
         == f'reviewer:{queue.WAITING_ON_STAGE5_CLOSURE}'
     ]
     if len(cost_rows) != 1:
-        raise reviewer_tasks.ReviewerTaskError(
+        raise reviewer_legacy.ReviewerTaskError(
             'reviewer rewrite sealed authority 成本证据不唯一')
     return (
         canonical_sha256(ledger.model_dump(mode='json')),
@@ -842,21 +841,21 @@ def _require_request_file(
     path = paths.artifact_path(novel_dir, STAGE5_REVIEWER_REWRITE_REQUEST)
     try:
         if path.is_symlink() or not path.is_file():
-            raise reviewer_tasks.ReviewerTaskError(
+            raise reviewer_legacy.ReviewerTaskError(
                 'canonical reviewer rewrite request 不是普通文件')
         store = ArtifactStore(readonly_ctx(novel_dir, 'stage5.review', prov.code_version()))
         current, digest = store.read_own_with_sha256(
             ReviewerRewriteBatchRequest, STAGE5_REVIEWER_REWRITE_REQUEST)
         if digest != request_file_sha256:
-            raise reviewer_tasks.ReviewerTaskError(
+            raise reviewer_legacy.ReviewerTaskError(
                 'canonical reviewer rewrite request raw SHA 漂移')
         if current != request:
-            raise reviewer_tasks.ReviewerTaskError(
+            raise reviewer_legacy.ReviewerTaskError(
                 'canonical reviewer rewrite request typed bytes 漂移')
-    except reviewer_tasks.ReviewerTaskError:
+    except reviewer_legacy.ReviewerTaskError:
         raise
     except Exception as exc:  # noqa: BLE001 —— request 是后续付费 authority
-        raise reviewer_tasks.ReviewerTaskError(
+        raise reviewer_legacy.ReviewerTaskError(
             'canonical reviewer rewrite request 无法完整复读') from exc
 
 
@@ -887,7 +886,7 @@ def _require_receipt_matches(
         or receipt.cost_evidence_sha256 != cost_sha256
         or receipt.request_rel != STAGE5_REVIEWER_REWRITE_REQUEST
     ):
-        raise reviewer_tasks.ReviewerTaskError(
+        raise reviewer_legacy.ReviewerTaskError(
             'reviewer rewrite authority receipt 与永久来源证据不闭合')
     if request is not None and (
         request_file_sha256 is None
@@ -905,7 +904,7 @@ def _require_receipt_matches(
         or receipt.provider_response_sha256
         != request.requests[0].provider_response_sha256
     ):
-        raise reviewer_tasks.ReviewerTaskError(
+        raise reviewer_legacy.ReviewerTaskError(
             'reviewer rewrite authority receipt 与 canonical request 不闭合')
 
 
@@ -925,11 +924,11 @@ def reviewer_rewrite_authority_sealed(
         # readonly planner 不补写，只投影 pending/unknown。
         if archive_exists and active is not None:
             return False
-        raise reviewer_tasks.ReviewerTaskError(
+        raise reviewer_legacy.ReviewerTaskError(
             'reviewer rewrite authority archive/receipt 半组且无 active 恢复凭据')
     record = _read_archived_authority(archive_path, record_sha256)
     if active is not None and active[1] != record:
-        raise reviewer_tasks.ReviewerTaskError(
+        raise reviewer_legacy.ReviewerTaskError(
             'reviewer rewrite active/archive authority 字节冲突')
     receipt = _read_authority_receipt(receipt_path)
     seat_path = _record_evidence_path(base, sid, record)
@@ -940,11 +939,11 @@ def reviewer_rewrite_authority_sealed(
         record_after = _read_archived_authority(archive_path, record_sha256)
         receipt_after = _read_authority_receipt(receipt_path)
         if record_after != record or receipt_after != receipt:
-            raise reviewer_tasks.ReviewerTaskError(
+            raise reviewer_legacy.ReviewerTaskError(
                 'reviewer rewrite authority 只读双采之间漂移')
         evidence_after = _closed_evidence_hashes(base, sid, record)
         if evidence_after != evidence:
-            raise reviewer_tasks.ReviewerTaskError(
+            raise reviewer_legacy.ReviewerTaskError(
                 'reviewer rewrite authority 三账双采之间漂移')
     _require_receipt_matches(
         receipt, record, record_sha256=record_sha256,
@@ -999,7 +998,7 @@ def seal_reviewer_rewrite_authority(
 ) -> ReviewerRewriteAuthorityReceipt:
     """在真实 Agent parent 内把 active action 两相封成永久 authority。"""
     if not current_parent_run_id:
-        raise reviewer_tasks.ReviewerTaskError(
+        raise reviewer_legacy.ReviewerTaskError(
             'reviewer rewrite authority seal 缺真实 current parent')
     _require_request_file(base, sid, request, request_file_sha256)
     digest = request.requests[0].reviewer_action_record_sha256
@@ -1024,7 +1023,7 @@ def seal_reviewer_rewrite_authority(
                 current_active = _active_authority(base, sid, digest)
                 if current_active is not None:
                     if current_active[1] != record:
-                        raise reviewer_tasks.ReviewerTaskError(
+                        raise reviewer_legacy.ReviewerTaskError(
                             'reviewer rewrite sealed authority 的 active 尾漂移')
                     uploads.discard_edit_plan(base, current_active[0])
         require_sealed_reviewer_rewrite_authority(
@@ -1032,10 +1031,10 @@ def seal_reviewer_rewrite_authority(
         return receipt
     if receipt_exists and not archive_exists:
         # producer 固定先 archive 后 receipt；反向半组不是任何合法硬杀窗。
-        raise reviewer_tasks.ReviewerTaskError(
+        raise reviewer_legacy.ReviewerTaskError(
             'reviewer rewrite authority receipt 缺 archive，拒绝反向补铸')
     if active is None:
-        raise reviewer_tasks.ReviewerTaskError(
+        raise reviewer_legacy.ReviewerTaskError(
             'reviewer rewrite authority seal 找不到 active action record')
     initial_record = active[1]
     # 跨 parent 的 owner-stopped lease 必须包住整个 seal，而不只是账本补尾：
@@ -1057,21 +1056,21 @@ def seal_reviewer_rewrite_authority(
             receipt = _read_authority_receipt(receipt_path)
             if current_active is not None:
                 if current_active[1] != record:
-                    raise reviewer_tasks.ReviewerTaskError(
+                    raise reviewer_legacy.ReviewerTaskError(
                         'reviewer rewrite sealed authority 的 active 尾漂移')
                 uploads.discard_edit_plan(base, current_active[0])
             require_sealed_reviewer_rewrite_authority(
                 base, sid, request, request_file_sha256)
             return receipt
         if receipt_exists and not archive_exists:
-            raise reviewer_tasks.ReviewerTaskError(
+            raise reviewer_legacy.ReviewerTaskError(
                 'reviewer rewrite authority receipt 缺 archive，拒绝反向补铸')
         if current_active is None:
-            raise reviewer_tasks.ReviewerTaskError(
+            raise reviewer_legacy.ReviewerTaskError(
                 'reviewer rewrite authority seal 入锁后 active action record 已漂移')
         record = current_active[1]
         if record != initial_record:
-            raise reviewer_tasks.ReviewerTaskError(
+            raise reviewer_legacy.ReviewerTaskError(
                 'reviewer rewrite authority seal 入锁后 active action record 已漂移')
         _require_record_binding(
             record, _trusted_from_request(request),
@@ -1089,7 +1088,7 @@ def seal_reviewer_rewrite_authority(
                 # old-owner-stopped 证明前的 Path/record 快照。
                 current_active = _active_authority(base, sid, digest)
                 if current_active is None or current_active[1] != record:
-                    raise reviewer_tasks.ReviewerTaskError(
+                    raise reviewer_legacy.ReviewerTaskError(
                         '待 seal reviewer rewrite active authority 已漂移')
                 try:
                     active_raw = current_active[0].read_bytes()
@@ -1097,7 +1096,7 @@ def seal_reviewer_rewrite_authority(
                     raise ArtifactUnreadable(
                         f'读不了 reviewer rewrite active authority：{exc!r}') from exc
                 if hashlib.sha256(active_raw).hexdigest() != digest:
-                    raise reviewer_tasks.ReviewerTaskError(
+                    raise reviewer_legacy.ReviewerTaskError(
                         '待 seal reviewer rewrite active authority 内容地址不闭合')
                 _atomic_write_once(
                     base, sid, archive_path, active_raw,
@@ -1105,7 +1104,7 @@ def seal_reviewer_rewrite_authority(
                 evidence = _closed_evidence_hashes(base, sid, record)
                 archived = _read_archived_authority(archive_path, digest)
                 if archived != record:
-                    raise reviewer_tasks.ReviewerTaskError(
+                    raise reviewer_legacy.ReviewerTaskError(
                         'reviewer rewrite authority archive 与 active record 不一致')
                 if receipt_path.is_file():
                     receipt = _read_authority_receipt(receipt_path)
@@ -1146,7 +1145,7 @@ def seal_reviewer_rewrite_authority(
         current_active = _active_authority(base, sid, digest)
         if current_active is not None:
             if current_active[1] != record:
-                raise reviewer_tasks.ReviewerTaskError(
+                raise reviewer_legacy.ReviewerTaskError(
                     'reviewer rewrite authority commit 后 active 尾漂移')
             uploads.discard_edit_plan(base, current_active[0])
         require_sealed_reviewer_rewrite_authority(
@@ -1166,12 +1165,12 @@ def require_reviewer_rewrite_authority(
     走 ``require_sealed_reviewer_rewrite_authority``。
     """
     if current_parent_run_id is None:
-        raise reviewer_tasks.ReviewerTaskError(
+        raise reviewer_legacy.ReviewerTaskError(
             'active reviewer rewrite authority 必须由真实 Agent parent 消费')
     active = _active_authority(
         base, sid, trusted.reviewer_action_record_sha256)
     if active is None:
-        raise reviewer_tasks.ReviewerTaskError(
+        raise reviewer_legacy.ReviewerTaskError(
             'active reviewer rewrite authority 已缺失或已被 seal 消费')
     record = active[1]
     _require_record_binding(

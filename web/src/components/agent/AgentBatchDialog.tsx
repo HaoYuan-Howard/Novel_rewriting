@@ -145,7 +145,7 @@ export function AgentBatchDialog({
                 一本结束自动带起下一本。
                 {alreadyRunning > 0 ? '现在已经有 ' + alreadyRunning + ' 本在跑，占着名额。' : ''}
                 <div className="mt-6 text-ink-4">
-                  ⚠ 每本书起一个指挥 Agent；它派生的执行者按下方同一快照运行。
+                  ⚠ 每本书起一个执行 Agent 进程；全部节点按下方同一快照运行。
                   排队只在服务进程内存里，重启不保留。
                 </div>
               </div>

@@ -3,9 +3,9 @@
 """
 agent.py —— `/api/agent/runs`：前端一键唤起 headless agent 代跑一本书。
 
-【这一层只组装与转发】提示词与 Commander invocation 的唯一 planner 在
+【这一层只组装与转发】冻结 profiles 与范围上界的唯一 planner 在
 `novel/orchestrator/agent.py::plan`——preview、单本启动与 batch 入队
-共享它，「界面上摊开的那条」与「真的被 Popen 的那条」是同一个对象
+共享它，「界面上摊开的那份」与「真被 Supervisor 执行的那份」是同一个对象
 （`R-11.8` 同构）。变更路由全部在全局 CSRF 中间件后面，不另开闸。
 """
 from __future__ import annotations
@@ -32,10 +32,10 @@ def _one(base: str, run_id: str) -> AgentRunRecord:
 
 @router.post('/preview', response_model=AgentRunPreview)
 def preview_run(req: AgentRunRequest, base: str = Depends(get_base)) -> AgentRunPreview:
-    """把**将要拉起的那条命令与提示词全文**摊开。**0 成本：只算，不跑、不写。**
+    """把**将要冻结的配置全文**摊开。**0 成本：只算，不跑、不写。**
 
-    ⚠ 与真跑共用 ``agent.plan``（`R-11.8` 同构）——
-    两个授权勾选框的文案都会在提示词原文里逐字变化，确认框里给人看的就是全文。
+    ⚠ 与真跑共用 ``agent.plan``（`R-11.8` 同构）——Commander 退役后不再有
+    顶层进程命令行；摊开的是关闭式校验后的完整 profiles、两项授权与范围上界。
     """
     sid = checked_sid(req.sid)
     planned = agent.plan(
@@ -43,7 +43,7 @@ def preview_run(req: AgentRunRequest, base: str = Depends(get_base)) -> AgentRun
         egress_authorized=req.egress_authorized, profiles=req.profiles,
         **({'continuation': req.continuation} if req.continuation is not None else {}),
         **({'pause_before_node': req.pause_before_node} if 'pause_before_node' in req.model_fields_set else {}))
-    return AgentRunPreview(argv=list(planned.invocation.argv), prompt=planned.prompt,
+    return AgentRunPreview(argv=None, prompt=None,
                            authorized=req.authorized,
                            egress_authorized=req.egress_authorized,
                            profiles=planned.profiles, continuation=planned.continuation,

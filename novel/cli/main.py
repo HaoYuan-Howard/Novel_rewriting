@@ -59,7 +59,7 @@ from contracts.schema.orchestration import (
     LegacyLlmProfile, ProgressEvent,
 )
 from novel import paths, prov, run_identity
-from novel.commanders import context as commander_context
+from novel.orchestrator import execution_context
 from novel import exit_codes as X
 from novel.errors import (
     ApprovalRequired, ArtifactUnreadable, RefusedByStructure, TerminalState,
@@ -1725,7 +1725,7 @@ def _cmd_preview(a: argparse.Namespace) -> int:
     return X.OK
 
 
-def _require_commander_execution_permit(
+def _require_execution_permit(
     a: argparse.Namespace,
     flags: list[str],
     parent_context,
@@ -1840,19 +1840,19 @@ def _cmd_run(a: argparse.Namespace) -> int:
         executor_backend, bool(a.allow_egress))
     parent_context = None
     if (
-        commander_context.COMMANDER_RUN_ID_ENV in os.environ
-        or commander_context.COMMANDER_CONTRACT_SHA256_ENV in os.environ
-        or commander_context.COMMANDER_EPOCH_ID_ENV in os.environ
-        or commander_context.COMMANDER_EPOCH_SHA256_ENV in os.environ
-        or commander_context.COMMANDER_ADMISSION_ID_ENV in os.environ
+        execution_context.COMMANDER_RUN_ID_ENV in os.environ
+        or execution_context.COMMANDER_CONTRACT_SHA256_ENV in os.environ
+        or execution_context.COMMANDER_EPOCH_ID_ENV in os.environ
+        or execution_context.COMMANDER_EPOCH_SHA256_ENV in os.environ
+        or execution_context.COMMANDER_ADMISSION_ID_ENV in os.environ
     ):
         if a.sid is None:
             raise TerminalState('Commander contract 下的 node run 必须显式给已有书 sid')
-        parent_context = commander_context.load_from_environment(a.base, a.sid)
+        parent_context = execution_context.load_from_environment(a.base, a.sid)
         assert parent_context is not None
         # 缺 claim/permit、伪 step_index/argv 与 root permit 漂移都必须先于
         # executor 选择、RunContext、LLM 与 producer 被拒绝。
-        _require_commander_execution_permit(a, flags, parent_context)
+        _require_execution_permit(a, flags, parent_context)
         tokens = frozenset(N.flag_tokens(flags))
         if N.is_paid(a.node, flags):
             expected_backend = parent_context.executor_backend(a.node)
@@ -1879,9 +1879,9 @@ def _cmd_run(a: argparse.Namespace) -> int:
                 f'子 CLI NOVEL_RUN_ID={inherited!r} 与 Commander run '
                 f'{parent_context.run_id!r} 不一致')
     else:
-        _require_commander_execution_permit(a, flags, None)
+        _require_execution_permit(a, flags, None)
     if parent_context is not None:
-        commander_context.require_execution_authorized(parent_context)
+        execution_context.require_execution_authorized(parent_context)
     if executor_backend is not None and egress_authorized is not True:
         raise ApprovalRequired(
             'executor 会向所选 provider 外发小说正文；正文外发授权必须显式加 '
@@ -2573,8 +2573,8 @@ def _cmd_mark(a: argparse.Namespace) -> int:
     # 冻结 pointer 的 currentness；下方 active claim 与 beacon exact-start 双闸
     # 仍然阻止任何新 execution、孤儿 end 或业务写盘。
     context_loader = (
-        commander_context.load_for_execution_close_from_environment
-        if a.phase == 'end' else commander_context.load_from_environment)
+        execution_context.load_for_execution_close_from_environment
+        if a.phase == 'end' else execution_context.load_from_environment)
     parent_context = context_loader(a.base, checked_sid)
     if parent_context is not None:
         if inherited != parent_context.run_id:
@@ -2687,8 +2687,12 @@ def _normalize_operator_permit_argv(argv: list[str]) -> list[str]:
     return argv[:2] + controls + body + flags
 
 
-def _commander_control_mutation(a: argparse.Namespace) -> bool:
-    """Commander 子上下文不可递归操纵队列/恢复控制面；纯读模板仍允许。"""
+def _execution_context_control_mutation(a: argparse.Namespace) -> bool:
+    """执行子上下文不可递归操纵队列/恢复控制面；纯读模板仍允许。
+
+    历史名 ``_commander_control_mutation``：Commander 退役后 executor 子进程
+    仍经同一组环境变量取得执行上下文，递归防护随之保留。
+    """
     if a.cmd == 'workflow':
         return True
     if a.cmd == 'queue':
@@ -2707,19 +2711,22 @@ def _commander_control_mutation(a: argparse.Namespace) -> bool:
     return not admission_inspect or supplied
 
 
-def _refuse_commander_control_mutation(a: argparse.Namespace) -> None:
-    pointer_present = (
-        commander_context.COMMANDER_RUN_ID_ENV in os.environ
-        or commander_context.COMMANDER_CONTRACT_SHA256_ENV in os.environ
-        or commander_context.COMMANDER_EPOCH_ID_ENV in os.environ
-        or commander_context.COMMANDER_EPOCH_SHA256_ENV in os.environ
-        or commander_context.COMMANDER_ADMISSION_ID_ENV in os.environ
-    )
-    if pointer_present and _commander_control_mutation(a):
+def _refuse_execution_context_control_mutation(a: argparse.Namespace) -> None:
+    pointer_present = any(
+        name in os.environ
+        for name in (
+            execution_context.COMMANDER_RUN_ID_ENV,
+            execution_context.COMMANDER_CONTRACT_SHA256_ENV,
+            execution_context.COMMANDER_EPOCH_ID_ENV,
+            execution_context.COMMANDER_EPOCH_SHA256_ENV,
+            execution_context.COMMANDER_ADMISSION_ID_ENV,
+        ))
+    if pointer_present and _execution_context_control_mutation(a):
         raise TerminalState(
-            f'Commander execution context 下不得执行控制面 mutation `{a.cmd}`；'
-            '请退出该 Commander 子上下文，由外部操作员执行 queue/reconcile 控制动作。'
-            'queue-list、queue --plan-only 与 admission/beacon tail 查看模板仍为只读')
+            f'执行上下文（历史 Commander 环境变量）下不得执行控制面 mutation '
+            f'`{a.cmd}`；请退出该子上下文，由外部操作员执行 queue/reconcile '
+            '控制动作。queue-list、queue --plan-only 与 admission/beacon '
+            'tail 查看模板仍为只读')
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -2727,12 +2734,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     _force_utf8()
     raw = list(sys.argv[1:] if argv is None else argv)
     a = _parser().parse_args(_normalize_operator_permit_argv(raw))
+
     from novel.errors import ArtifactSubmittedReviewPending
     try:
         from novel.output_root import require_active
         if getattr(a, 'base', None) is not None:
             require_active(a.base)
-        _refuse_commander_control_mutation(a)
+        _refuse_execution_context_control_mutation(a)
         return _CMDS[a.cmd](a)
     except ArtifactSubmittedReviewPending as e:
         print(f'\n✗ 产物已落盘，审阅提交尚未完成：{e}', file=sys.stderr)

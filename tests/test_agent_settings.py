@@ -30,8 +30,6 @@ def _profile(*, driver: str = 'codex', model: str = 'gpt-5.6-sol',
 
 def _profiles() -> PipelineAgentProfiles:
     return PipelineAgentProfiles(
-        commander=_profile(
-            driver='claude-code', model='claude-opus-5', effort='xhigh'),
         executor_default=AgentExecutorBackend(profile=_profile()),
         executor_overrides={
             'stage6.semantic': AgentExecutorBackend(
@@ -54,7 +52,6 @@ def test_settings_are_explicit_three_state_snapshots_and_materialize_profiles(tm
     )
     assert saved.state == 'configured'
     assert saved.profiles is not None
-    assert saved.profiles.commander.execution_mode == 'standard'
     assert saved.profiles.executor_default.kind == 'agent'
     assert saved.profiles.executor_default.profile.execution_mode == 'standard'
     assert saved.updated_at is not None
@@ -82,7 +79,6 @@ def test_settings_persist_an_explicit_legacy_backend_without_provider_secrets(tm
         provider='deepseek', model='deepseek-v4-pro',
         reasoning_effort='high', thinking_mode='on'))
     requested = PipelineAgentProfiles(
-        commander=_profile(),
         executor_default=backend,
         # agent-only 节点没有 legacy 执行器：legacy 默认必须逐节点配 agent
         # 覆盖（2026-09-15 单向豁免），否则保存即被拒。
@@ -187,20 +183,20 @@ def test_agent_profile_settings_http_is_csrf_guarded_and_does_not_change_product
     assert paths.agent_profile_settings_path(tmp_path).is_file()
 
 
-def test_v1_settings_are_read_without_rewrite_and_next_save_upgrades_to_v2(tmp_path):
+def test_v2_settings_are_read_without_rewrite_and_next_save_upgrades_to_v3(tmp_path):
+    """v2 含 commander 的历史设置：读边界迁到 v3（丢 commander 键），不重写盘上字节。"""
     target = paths.agent_profile_settings_path(tmp_path)
     target.parent.mkdir(parents=True)
-    v1_profiles = _profiles().model_dump(mode='json')
-    v1_profiles.pop('schema_version')
-    v1_profiles['executor_default'] = v1_profiles['executor_default']['profile']
-    v1_profiles['executor_overrides'] = {
-        node: backend['profile']
-        for node, backend in v1_profiles['executor_overrides'].items()
+    v2_profiles = _profiles().model_dump(mode='json')
+    v2_profiles['schema_version'] = 2
+    v2_profiles['commander'] = {
+        'driver': 'claude-code', 'model': 'claude-opus-5',
+        'reasoning_effort': 'xhigh', 'execution_mode': None,
     }
     target.write_text(
         json.dumps({
-            'schema_version': 1,
-            'profiles': v1_profiles,
+            'schema_version': 2,
+            'profiles': v2_profiles,
             'updated_at': 1,
         }, ensure_ascii=False),
         encoding='utf-8',
@@ -210,7 +206,7 @@ def test_v1_settings_are_read_without_rewrite_and_next_save_upgrades_to_v2(tmp_p
     loaded = agent_settings.read(tmp_path)
     assert loaded.state == 'configured'
     assert loaded.profiles is not None
-    assert loaded.profiles.schema_version == 2
+    assert loaded.profiles.schema_version == 3
     assert loaded.profiles.executor_default.kind == 'agent'
     assert target.read_bytes() == before, '只读迁移不得偷偷改写用户设置'
 
@@ -219,7 +215,8 @@ def test_v1_settings_are_read_without_rewrite_and_next_save_upgrades_to_v2(tmp_p
         profiles=loaded.profiles,
         expected_revision=loaded.revision,
     )
-    assert saved.profiles is not None and saved.profiles.schema_version == 2
+    assert saved.profiles is not None and saved.profiles.schema_version == 3
     raw = json.loads(target.read_text(encoding='utf-8'))
-    assert raw['schema_version'] == 2
+    assert raw['schema_version'] == 3
+    assert 'commander' not in raw['profiles']
     assert raw['profiles']['executor_default']['kind'] == 'agent'

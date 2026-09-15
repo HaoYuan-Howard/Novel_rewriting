@@ -36,9 +36,6 @@ from contracts.schema.orchestration import AgentProfile
 from novel.agents import AgentConfigurationError, AgentRequest
 from novel.agents.base import validate_agent_output_schema
 from novel.agents.session_client import agent_json_schema
-from novel.commanders import (
-    ClaudeCodeCommanderDriver, CodexCommanderDriver, CommanderConfigurationError,
-)
 
 #: 已接入 Claude AJV strict 与 OpenAI Structured Outputs 的公共关键字子集。
 #: ⚠ 测试独立维护白名单，不导入生产常量，否则两边一起误放宽会继续假绿。
@@ -288,12 +285,7 @@ def test_reference_assertion_siblings_are_refused_instead_of_silently_dropped(si
         agent_json_schema(CustomSchema)
 
 
-@pytest.mark.parametrize('driver_cls,driver_name,model_name', [
-    (ClaudeCodeCommanderDriver, 'claude-code', 'claude-opus-5'),
-    (CodexCommanderDriver, 'codex', 'gpt-5.6-sol'),
-])
-def test_raw_ref_sibling_is_rejected_at_executor_and_commander_before_runner(
-        tmp_path, driver_cls, driver_name, model_name):
+def test_raw_ref_sibling_is_rejected_at_executor_before_runner(tmp_path):
     schema = {
         'type': 'object', 'additionalProperties': False,
         '$defs': {'Alias': {'type': 'string', 'enum': ['a', 'b']}},
@@ -303,13 +295,6 @@ def test_raw_ref_sibling_is_rejected_at_executor_and_commander_before_runner(
     with pytest.raises(AgentConfigurationError, match=r'\$ref 必须独占'):
         AgentRequest(prompt='只读探针', execution_policy='executor-isolated',
                      output_schema=schema, cwd=tmp_path)
-    calls = []
-    driver = driver_cls(executable=driver_name, runner=lambda *_args, **_kwargs: calls.append(True))
-    with pytest.raises(CommanderConfigurationError, match=r'\$ref 必须独占'):
-        driver.build_invocation(
-            AgentProfile(driver=driver_name, model=model_name, reasoning_effort='high'),
-            '只读审阅', repo=tmp_path, base=tmp_path, structured_response=True, output_schema=schema)
-    assert calls == []
 
 
 def _closed_object(properties):
@@ -430,11 +415,10 @@ def test_both_construction_sites_go_through_the_single_landing_point(where):
     assert source.count('agent_json_schema(') >= 3, where
 
 
-def _glm_native_argv(schema, *, commander, directory, monkeypatch):
-    """只构造真实默认驱动 invocation；runner 是禁止执行的反向哨兵。"""
+def _glm_native_argv(schema, *, directory, monkeypatch):
+    """只构造真实默认 executor 驱动 invocation；runner 是禁止执行的反向哨兵。"""
     from novel.agents.base import CLAUDE_STRUCTURED_DELIVERY_V1, ensure_command_line_fits
     from novel.agents.glm import BIGMODEL_BASE_URL, GlmClaudeCodeDriver
-    from novel.commanders.glm import GlmClaudeCodeCommanderDriver
 
     monkeypatch.setenv('CLAUDE_CONFIG_DIR', str(directory / 'no-cli-config'))
     monkeypatch.setenv('ANTHROPIC_BASE_URL', BIGMODEL_BASE_URL)
@@ -442,18 +426,11 @@ def _glm_native_argv(schema, *, commander, directory, monkeypatch):
         reasoning_effort='high', execution_mode='standard')
     def forbidden_runner(*args, **kwargs):
         raise AssertionError('schema 预检不得启动模型或进程')
-    if commander:
-        driver = GlmClaudeCodeCommanderDriver(executable='claude', runner=forbidden_runner)
-        invocation = driver.build_invocation(profile, '完整审阅材料通过 stdin 提供。',
-            repo=directory, base=directory, structured_response=True, output_schema=schema)
-        argv = invocation.argv
-        assert invocation.output_schema == schema
-    else:
-        driver = GlmClaudeCodeDriver(executable='claude', runner=forbidden_runner)
-        driver._check_profile(profile)
-        request = AgentRequest(prompt='完整章节材料通过 stdin 提供。', execution_policy='executor-isolated',
-            cwd=directory, output_schema=schema, delivery_protocol=CLAUDE_STRUCTURED_DELIVERY_V1)
-        argv = driver._argv(profile, request, session_id=None)
+    driver = GlmClaudeCodeDriver(executable='claude', runner=forbidden_runner)
+    driver._check_profile(profile)
+    request = AgentRequest(prompt='完整章节材料通过 stdin 提供。', execution_policy='executor-isolated',
+        cwd=directory, output_schema=schema, delivery_protocol=CLAUDE_STRUCTURED_DELIVERY_V1)
+    argv = driver._argv(profile, request, session_id=None)
     assert argv[argv.index('--model') + 1] == profile.model
     assert argv[argv.index('--effort') + 1] == profile.reasoning_effort
     assert json.loads(argv[argv.index('--json-schema') + 1]) == schema
@@ -464,25 +441,17 @@ def _glm_native_argv(schema, *, commander, directory, monkeypatch):
 @pytest.mark.parametrize('label', [
     'stage2.blueprint', 'stage2.blueprint/repair',
     'stage4.design/strategy', 'stage4.design/chapter', 'stage4.plan', 'stage4.plan/chapter',
-    'stage4.design/commander', 'stage4.plan/commander',
 ])
 def test_gate_b_real_response_schemas_reach_default_glm_without_model_request(label, tmp_path, monkeypatch):
-    from novel.orchestrator import queue, stage4_reviewer_wire
     from novel.stages.stage2.contract import contract_for
-    from tests.test_stage4_reviewer_wire import _task
 
-    commander = label.endswith('/commander')
     if label == 'stage2.blueprint':
         model = contract_for('plot-blueprint-v1').response_model
         assert model is _models()[label], '验证真实 wrapper，不能只扫描其中一个子模型'
         schema = agent_json_schema(model)
-    elif label in {'stage4.design/commander', 'stage4.plan/commander'}:
-        task = _task(queue.WAITING_ON_STAGE4_DESIGN_REVIEW if label.startswith('stage4.design')
-                     else queue.WAITING_ON_STAGE4_STRUCTURE_REVIEW)
-        schema = stage4_reviewer_wire.output_schema_for(task)
     else:
         schema = agent_json_schema(_models()[label])
     assert schema is not None
     assert not _object_contract_errors(schema)
     assert not _keywords(schema) - _VOCABULARY
-    _glm_native_argv(schema, commander=commander, directory=tmp_path, monkeypatch=monkeypatch)
+    _glm_native_argv(schema, directory=tmp_path, monkeypatch=monkeypatch)

@@ -728,8 +728,9 @@ def commander_session_pointer_path(
 ) -> Path:
     """`<base>/_service/runs/<sid>/sessions/<session_run_id>.json`；不摸盘。
 
-    Commander 首个协议事件到达时写入的 provider session 指针；一席一份，
-    同席 resume 原地覆盖。它不是产物，不进来源账。
+    历史 Commander 首个协议事件到达时写入的 provider session 指针；一席一份，
+    同席 resume 原地覆盖。Commander 退役（2026-09-15）后不再有新写入；本
+    路径只读保留，供存量书历史会话指针解码。它不是产物，不进来源账。
     """
     return (service_runs_dir(base) / check_sid(sid) / 'sessions'
             / (_service_segment(session_run_id, label='commander session id')

@@ -1,7 +1,6 @@
 import type {
   AgentAvailability,
   AgentCapabilitiesResponse,
-  AgentRole,
 } from '@/types/agent'
 import type {
   AgentProfileDraft,
@@ -33,7 +32,6 @@ const AVAILABILITY_LABEL: Record<AgentAvailability, string> = {
 
 export function AgentProfileFields({
   capabilities,
-  role,
   label,
   idPrefix,
   value,
@@ -41,17 +39,16 @@ export function AgentProfileFields({
   disabled = false,
 }: {
   capabilities: AgentCapabilitiesResponse
-  role: AgentRole
   label: string
   idPrefix: string
   value: AgentProfileDraft
   onChange: (next: AgentProfileDraft) => void
   disabled?: boolean
 }) {
-  const drivers = capabilities.drivers.filter((driver) => driver.roles.includes(role))
+  const drivers = capabilities.drivers
   const driver = driverForDraft(capabilities, value)
   const model = driver?.models.find((candidate) => candidate.id === value.model) ?? null
-  const driverReady = driver?.availability === 'ready' && driver.roles.includes(role)
+  const driverReady = driver?.availability === 'ready'
 
   return (
     <fieldset
@@ -297,7 +294,6 @@ function ExecutorBackendFields({
       {value.kind === 'agent' ? (
         <AgentProfileFields
           capabilities={capabilities}
-          role="executor"
           label={label + ' · Agent CLI'}
           idPrefix={idPrefix + '-agent'}
           value={value.agent_profile}
@@ -354,15 +350,6 @@ export function PipelineAgentProfilesForm({
 }) {
   return (
     <div className="flex flex-col gap-11" data-testid="pipeline-agent-profiles-form">
-      <AgentProfileFields
-        capabilities={capabilities}
-        role="commander"
-        label="指挥大脑"
-        idPrefix="agent-commander"
-        value={value.commander}
-        disabled={disabled}
-        onChange={(commander) => onChange({ ...value, commander })}
-      />
       <ExecutorBackendFields
         capabilities={capabilities}
         label="默认执行者"

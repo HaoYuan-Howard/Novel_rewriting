@@ -178,21 +178,23 @@ class PipelineConcurrency(FrozenModel):
 
 
 class PipelineAgentProfiles(FrozenModel):
-    """一次整书代跑的 commander 与显式 executor backend 选择。
+    """一次整书代跑的显式 executor backend 选择（schema v3，executor-only）。
 
-    ``schema_version=2`` 起 executor 不再用 ``AgentProfile | None`` 暗示模式：
-    ``agent`` 携 ``AgentProfile``，``legacy`` 携 ``LegacyLlmProfile``。旧 v1
-    profile 只会被无损包成 ``kind=agent``，新序列化永远写显式分辨字段。
+    ``schema_version=3`` 起不再有 Commander 角色（2026-09-15 用户裁决：删除
+    commander，审批一律人工，自动跑书停在闸前等过闸后续跑）：v1/v2 的
+    ``commander`` 字段在读边界直接丢弃，原始 append-only 字节不动，历史身份
+    由退役解码路径承接。executor 侧语义自 v2 延续：``agent`` 携
+    ``AgentProfile``，``legacy`` 携 ``LegacyLlmProfile``，旧 v1 裸 profile
+    只会被无损包成 ``kind=agent``。
 
     默认 backend 覆盖付费 executor 节点；节点覆盖只写差异，且**只允许同一种
     模式**：全部 backend 的 ``kind`` 必须与 ``executor_default`` 一致，整跑要么
     纯 agent、要么纯 legacy，混用两种模式在构造期即被拒绝。键必须属于
     ``AGENT_EXECUTOR_NODES``，不能拿 stage 名、代码节点或退役节点冒充。
-    角色能力与每个 backend/profile 的组合仍由 registry 校验。
+    backend/profile 的组合仍由 registry 校验。
     """
 
-    schema_version: Literal[2] = 2
-    commander: AgentProfile
+    schema_version: Literal[3] = 3
     executor_default: ExecutorBackend
     executor_overrides: dict[str, ExecutorBackend] = Field(default_factory=dict)
     concurrency: PipelineConcurrency | None = None
@@ -210,8 +212,11 @@ class PipelineAgentProfiles(FrozenModel):
         if not isinstance(value, Mapping):
             return value
         data = dict(value)
-        if data.get('schema_version') in (None, 1):
-            data['schema_version'] = 2
+        if data.get('schema_version') in (None, 1, 2):
+            # v3 起没有 commander 字段：读取旧行时丢弃（原始字节仍留在账上），
+            # 不无损重建一个已退役的角色身份。
+            data.pop('commander', None)
+            data['schema_version'] = 3
         if 'executor_default' in data:
             data['executor_default'] = _backend_from_legacy_profile(
                 data['executor_default'])
@@ -788,8 +793,8 @@ class RunResumeFrontierView(StrictModel):
         if self.state == 'blocked' and not self.waiting_on:
             raise ValueError('blocked 续跑点必须明确 waiting_on')
         if self.state == 'blocked' and self.next_handler not in {
-                'commander', 'executor', 'human'}:
-            raise ValueError('blocked 的 next_handler 必须是 commander/executor/human')
+                'executor', 'human'}:
+            raise ValueError('blocked 的 next_handler 必须是 executor/human')
         return self
 
 
@@ -874,10 +879,10 @@ class RunProgressView(StrictModel):
 class AgentRunStart(FrozenModel):
     """`started` 事件的载荷——一次 agent 代跑的全部静态字段。
 
-    ⚠ `argv` 与 `prompt` **分栏全文留档**：Commander 与它调度的逐节点
-    executor 都可能产生外部模型费用，审计与前端要能看到
-    「到底跑了哪条命令、授权声明原文是什么」。prompt 只作为
-    Commander stdin 传入，绝不出现在 `argv` 或进程日志里。
+    ⚠ ``argv`` 与 ``prompt`` 是 Commander 时代的启动审计分栏（prompt 只作为
+    Commander stdin 传入，绝不出现在 ``argv`` 或进程日志里）。Commander 退役
+    （2026-09-15）后新 run 不再有 commander 启动进程，两格保持 ``None`` 并在
+    序列化时省略；历史行原值保留，只读解码不回填。
     """
 
     sid: str = Field(min_length=1)
@@ -887,11 +892,11 @@ class AgentRunStart(FrozenModel):
     #: 从 append-only 事件流反查并核验同一份配置，不能只信一段可被改写的环境 JSON。
     base: str | None = Field(default=None, min_length=1)
 
-    #: 解析后的真实 Commander 命令行（可安全回显，不含 prompt）。
-    argv: list[str] = Field(min_length=1)
+    #: 历史 Commander 启动命令行（可安全回显，不含 prompt）；新 run 为 ``None``。
+    argv: list[str] | None = Field(default=None, min_length=1)
 
-    #: 发给 agent 的提示词全文。两项授权声明都在里面；下面两格只是机读摘要。
-    prompt: str = Field(min_length=1)
+    #: 历史 Commander stdin 提示词全文；新 run 为 ``None``。
+    prompt: str | None = Field(default=None, min_length=1)
 
     #: 显式付费总授权：True = 允许执行付费命令；False = 首个付费节点前停。
     authorized: bool
@@ -926,6 +931,10 @@ class AgentRunStart(FrozenModel):
             payload.pop('identity_version', None)
         if self.pause_before_node is None:
             payload.pop('pause_before_node', None)
+        if self.argv is None:
+            payload.pop('argv', None)
+        if self.prompt is None:
+            payload.pop('prompt', None)
         return payload
 
     @model_validator(mode='after')
@@ -999,10 +1008,10 @@ class RunContractV2(FrozenModel):
 
 
 class ExecutionEpoch(FrozenModel):
-    """同一 parent run 内一段身份稳定的 Commander 执行窗口。
+    """同一 parent run 内一段身份稳定的执行窗口。
 
-    一个 epoch 可以包含多个 provider turn；只要代码、执行契约与 Commander
-    profile 身份没有变化，Supervisor 就在同一 epoch 内精确续会。发生代码或
+    一个 epoch 覆盖全部 executor 派发与（历史上的）Commander reviewer 轮；
+    只要代码与执行契约没有变化，Supervisor 就在同一 epoch 内继续。发生代码或
     执行契约漂移时关闭旧 epoch、另开新 epoch，但仍保留同一个 parent run。
     Stage4 typed repair/replan 还是显式的 producer 边界：即使身份未漂移，也要在
     执行动作前以 ``reason=continue`` 打开 fresh epoch，不能让修前与修后 aggregate
@@ -1010,13 +1019,20 @@ class ExecutionEpoch(FrozenModel):
     已结束 producer 留下的 prepared aggregate **提交补尾**不是新的模型 repair/replan：
     它在当前 recovery epoch 内执行 FREE/0-wire deterministic action，不续 source
     provider，也不得把 source run 填进 ``resume_provider_session_id``。
+
+    ``argv`` / ``prompt_sha256`` / ``resume_provider_session_id`` 原本锚定
+    Commander 启动与供应商精确续会；Commander 退役（2026-09-15）后新 epoch
+    两格写 ``None`` 并在序列化时省略，历史行原值保留。epoch 身份（SHA 链）
+    由全部剩余字段继续覆盖。
     """
 
     epoch_id: str = Field(pattern=r'^[a-z0-9][a-z0-9_-]{0,127}$')
     ordinal: int = Field(ge=1)
     reason: ExecutionEpochReason
-    argv: list[str] = Field(min_length=1)
-    prompt_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    #: 历史 Commander 启动命令行；新 epoch 为 ``None``。
+    argv: list[str] | None = Field(default=None, min_length=1)
+    #: 历史 Commander stdin 提示词 SHA-256；新 epoch 为 ``None``。
+    prompt_sha256: str | None = Field(default=None, pattern=r'^[0-9a-f]{64}$')
     protocol_version: str = Field(min_length=1)
     cli_version: str | None = Field(default=None, min_length=1)
     code_version: str = Field(min_length=1)
@@ -1025,6 +1041,7 @@ class ExecutionEpoch(FrozenModel):
 
     #: 新 epoch 若沿用既有供应商会话，必须把精确 id 先写进 opened 事件；
     #: ``None`` 只表示首次创建 provider session，不能解释成“可任选一个会话”。
+    #: Commander 退役后新 epoch 恒为 ``None``；历史行保留原值只读解码。
     resume_provider_session_id: str | None = Field(default=None, min_length=1)
 
 
@@ -1036,6 +1053,10 @@ class ExecutionEpoch(FrozenModel):
         payload = handler(self)
         if self.identity_version == 1:
             payload.pop('identity_version', None)
+        if self.argv is None:
+            payload.pop('argv', None)
+        if self.prompt_sha256 is None:
+            payload.pop('prompt_sha256', None)
         return payload
 
     @model_validator(mode='after')

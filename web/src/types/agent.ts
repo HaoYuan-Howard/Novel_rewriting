@@ -48,9 +48,12 @@ export interface PipelineConcurrencyCapability {
   scope: string
 }
 
+/**
+ * v3：Commander 受托审阅角色退役（2026-09-15 用户裁决）后只剩执行者维度；
+ * 旧 v1/v2 行里的 commander 键由后端读入时直接丢弃。
+ */
 export interface PipelineAgentProfiles {
-  schema_version: 2
-  commander: AgentProfile
+  schema_version: 3
   executor_default: ExecutorBackend
   /**
    * 键同样由 capability 响应的 executor_nodes 给出，前端不保存节点副本。
@@ -60,8 +63,6 @@ export interface PipelineAgentProfiles {
   executor_overrides: Record<string, ExecutorBackend>
   concurrency?: PipelineConcurrency
 }
-
-export type AgentRole = 'commander' | 'executor'
 
 export type AgentAvailability = 'ready' | 'missing' | 'unknown' | 'unauthenticated'
 
@@ -78,7 +79,6 @@ export interface AgentDriverCapability {
   /** 供应商元数据，不等于可执行 driver id。 */
   provider: string
   label: string
-  roles: AgentRole[]
   availability: AgentAvailability
   availability_reason: string
   version: string | null
@@ -176,7 +176,7 @@ export interface AgentRunPreview {
   prompt: string
   authorized: boolean
   egress_authorized: boolean
-  /** 服务端解析后的双角色配置；旧路由尚未接线或旧记录为 null。 */
+  /** 服务端解析后的执行者配置；旧路由尚未接线或旧记录为 null。 */
   profiles: PipelineAgentProfiles | null
 }
 
@@ -186,8 +186,10 @@ export interface AgentRunStart {
   sid: string
   /** 规范化绝对 base；旧事件可能没有。 */
   base?: string | null
-  argv: string[]
-  prompt: string
+  /** 历史行有值；新事件（Commander 退役后不再落完整 argv）为 null。 */
+  argv: string[] | null
+  /** 历史行有值；新事件为 null。 */
+  prompt: string | null
   authorized: boolean
   egress_authorized: boolean
   /** 启动时仓库代码指纹；历史记录可能没有。 */
@@ -235,7 +237,11 @@ export type AgentRunState =
 
 export type AgentRunControl = 'pause' | 'resume' | 'stop'
 
-/** 保留退出码的来源；缺失表示历史未知，不能推断已落盘。 */
+/**
+ * 保留退出码的来源；缺失表示历史未知，不能推断已落盘。
+ * 'commander' 只为解码 Commander 受托审阅时期的历史事件保留（2026-09-15 退役），
+ * 新事件不再产生该来源。
+ */
 export type AgentRunExitOrigin = 'novel_cli' | 'commander' | 'supervisor'
 
 export type AgentDeliveryState =

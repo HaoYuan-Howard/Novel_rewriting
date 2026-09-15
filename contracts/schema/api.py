@@ -53,7 +53,6 @@ from contracts.invariants import (
     AgentExecutionMode,
     AgentProfileSettingsState,
     AgentReasoningEffort,
-    AgentRole,
     ANCHOR_COVERAGE_STATE,
     ANCHOR_COVERAGE_WARN,
     APPROVAL_GATES,
@@ -774,10 +773,15 @@ class AgentBatchRequest(StrictModel):
 
 
 class AgentRunPreview(StrictModel):
-    """`POST /api/agent/runs/preview` 的响应。与真跑同一构造函数（`R-11.8` 同构）。"""
+    """`POST /api/agent/runs/preview` 的响应。与真跑同一构造函数（`R-11.8` 同构）。
 
-    argv: list[str] = Field(min_length=1)
-    prompt: str = Field(min_length=1)
+    Commander 退役（2026-09-15）后 preview 不再摊开顶层进程命令行：
+    ``argv`` / ``prompt`` 保持 schema 兼容并恒为 ``None``（序列化省略），
+    摊开的冻结事实只剩 profiles 与两项授权。
+    """
+
+    argv: list[str] | None = Field(default=None, min_length=1)
+    prompt: str | None = Field(default=None, min_length=1)
     authorized: bool
     egress_authorized: bool
 
@@ -811,13 +815,16 @@ class AgentModelCapability(FrozenModel):
 
 
 class AgentDriverCapability(FrozenModel):
-    """一个本机 CLI driver 的静态能力与当次只读探针结果。"""
+    """一个本机 CLI driver 的静态能力与当次只读探针结果。
+
+    Commander 角色退役（2026-09-15）后 driver 只承接 executor；``roles`` 字段
+    随角色概念一并删除，不再发布单值列表冒充选择面。
+    """
 
     id: AgentDriver
     #: 只作能力元数据；真正选择仍以 ``AgentProfile.driver`` 为唯一键。
     provider: str = Field(min_length=1)
     label: str = Field(min_length=1)
-    roles: list[AgentRole] = Field(min_length=1)
     availability: AgentAvailability
 
     #: 人读探针说明。``ready`` 也会明确写出「只验 CLI/版本，未发模型请求」。
@@ -829,8 +836,6 @@ class AgentDriverCapability(FrozenModel):
 
     @model_validator(mode='after')
     def _domains_are_unique(self) -> AgentDriverCapability:
-        if len(self.roles) != len(set(self.roles)):
-            raise ValueError('roles 不得重复')
         ids = [model.id for model in self.models]
         if len(ids) != len(set(ids)):
             raise ValueError(f'driver={self.id!r} 的 model id 不得重复')

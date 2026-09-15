@@ -46,7 +46,7 @@
 
 ---
 
-## 零、Commander 与 executor backend —— 模式由判别字段决定
+## 零、executor backend —— 模式由判别字段决定
 
 `AgentProfile` 只记录一次选择，不自己声明“哪些组合可用”。可选 driver、角色、model、
 reasoning effort 与 execution mode 的唯一公开来源是 `GET /api/agent/capabilities`；组合校验由
@@ -88,12 +88,11 @@ DeepSeek base URL 后继续复用它的模型回退、tokenizer、thinking wire 
 `agent` 时无任何豁免；补齐 legacy 执行器后豁免集合随之收窄。⚠ 这是**新选择的准入规则**，不是重放判据：append-only 代跑账里存着裁决前合法写入的
 混用选择，历史行只经 `AgentRunEvent.replay_validate` 读回，准入校验不重审判历史；
 新写入（preview、启动、设置保存、CLI）永远走 `model_validate`，豁免不生效。
-一次整书代跑用 `PipelineAgentProfiles` v2：
+一次整书代跑用 `PipelineAgentProfiles` v3（2026-09-15 用户裁决：删除 Commander 角色，审批一律人工）：
 
 | 字段 | 类型 | 必填 | 内容 | 证据 |
 |---|---|---|---|---|
-| `schema_version` | `2` | **是** | v1 的裸 `AgentProfile` 只在读边界无损迁移为 `kind=agent`；所有新写入只发 v2 | **契·码** |
-| `commander` | `AgentProfile` | **是** | 本轮工作包内的受托语义审阅身份；Commander 本身不走 legacy API | **契·码** |
+| `schema_version` | `3` | **是** | v1 的裸 `AgentProfile` 只在读边界无损迁移为 `kind=agent`；v1/v2 行的 `commander` 字段在读边界直接丢弃（原始 append-only 字节不动，需要原 commander 配置比对的历史证明关闭式拒绝）；所有新写入只发 v3 | **契·码** |
 | `executor_default` | `ExecutorBackend` | **是** | 所有未覆盖付费 executor 节点的默认 backend；其 `kind` 是本次选择的唯一 executor 模式 | **契·码** |
 | `executor_overrides` | `{node: ExecutorBackend}` | 否；默认 `{}` | 只写同模式内的逐节点差异；键严格属于 `AGENT_EXECUTOR_NODES`，值的 `kind` 必须与 `executor_default` 一致。stage 名、代码节点、退役节点与跨模式混用一律拒绝；唯一例外是默认 `legacy` 时 `AGENT_ONLY_EXECUTOR_NODES` 节点允许 `agent` 覆盖（单向豁免） | **契·码** |
 | `concurrency` | `PipelineConcurrency` | 否 | 显式冻结逐节点并发与整书、同根供应商总上限；未配置时序列化省略，保留既有 profiles 的字节身份 | **契·码** |
@@ -101,7 +100,7 @@ DeepSeek base URL 后继续复用它的模型回退、tokenizer、thinking wire 
 `PipelineConcurrency.node_overrides` 只接受 `PIPELINE_PARALLEL_NODES` 中的节点和
 `PIPELINE_CONCURRENCY_TRIALS` 档位。默认逐节点并发为 4，显式对照可选 6/8；其他节点保持原配置。
 `per_book` 默认 4，`per_provider` 默认 8，均为 1～32 的整数。两个总槽作用于同一输出根的实际
-Executor/Commander 调用；不把不同输出根或不同供应商混算。节点并发提高后仍受两个总槽约束。
+Executor 调用；不把不同输出根或不同供应商混算。节点并发提高后仍受两个总槽约束。
 服务端 capability 发布节点、档位、默认与范围；设置、preview/start、batch、历史和原配置续跑
 完整保留这一字段。旧 profiles 缺失该字段不回填历史测量值。
 
@@ -142,15 +141,17 @@ direct job 另有一条正交授权链：`PreviewRequest.egress_authorized` 默�
 显式冻结 bool 到 `JobStart` 与付费 executor `Step`；只有 true 才在 argv 加 `--allow-egress`。false
 允许 0 成本 preview 摊开不可执行命令，真 start 与手敲 CLI 会在 job/driver/probe/wire 前拒绝；无
 backend 时 false 归一为 `null`，true 反而拒绝。它不是 `NodeSpec.flags`，也不能由 `--yes` 推导。
-公开 agent run 的非空 `PipelineAgentProfiles` 已接进 provider-neutral Commander。
-preview/start/batch 共用一份 plan；规范化 base、完整 resolved profiles 与两项授权冻结进
-`RunContractV2`，起始代码、执行契约、stdin-only invocation、admission 与 provider session 冻结进可滚动
+公开 agent run 的非空 `PipelineAgentProfiles` 只描述 executor 选择；受托 Commander 审阅已退役
+（2026-09-15），审批闸一律人工。preview/start/batch 共用一份 plan；规范化 base、完整 resolved profiles
+与两项授权冻结进 `RunContractV2`，起始代码、执行契约、admission 与 provider session 冻结进可滚动
 `ExecutionEpoch`。`profiles=null` 只保留旧请求形状，当前无服务端默认时关闭式拒绝。
-页面从 capability 动态构造 Commander、默认 executor 与逐节点 override，成功 preview 保存的完整请求
-对象就是 start 唯一可消费的快照；配置、授权或 capability 变化会使它失效，不重新取默认。Commander
-child 只持 run id + contract SHA-256 + epoch id，从 append-only 事件复核快照；`run_step.py` 再按 exact
-node/flags 选择 executor backend。现有结论来自 fake driver、本机零模型 CLI 检查与非 corpus
-回归，**真实 provider 模型请求仍为 0，没有质量、速度、entitlement 或 current-schema corpus 实证**。
+页面从 capability 动态构造默认 executor 与逐节点 override，成功 preview 保存的完整请求
+对象就是 start 唯一可消费的快照；配置、授权或 capability 变化会使它失效，不重新取默认。命中人工
+审批闸时 Supervisor 以 exit 2 stopped 停下（reason「停在人工审批闸：{blocker}；在 Stage 页面完成裁决后
+用原配置续跑」），`next_handler='human'`；child executor 经 parent contract SHA 与 current epoch identity
+复核快照，`run_step.py` 再按 exact node/flags 选择 executor backend。现有结论来自 fake driver、本机零模型
+CLI 检查与非 corpus 回归，**真实 provider 模型请求仍为 0，没有质量、速度、entitlement 或
+current-schema corpus 实证**。
 
 ---
 
@@ -286,7 +287,8 @@ argv 的形态是：
 
 agent 代跑不是 `NODES` 中的流水线节点，不能塞进 `JobStart`；它使用独立的
 `Output/_service/agent_runs.jsonl` append-only 事件流。RunSupervisor 只是 orchestrator 内的确定性
-状态机，不调用模型；模型角色仍只有 Commander / Executor。`started` 保存稳定 parent contract，
+状态机，不调用模型；模型角色只有 Executor（受托 Commander 已于 2026-09-15 退役，审批闸一律人工）。
+`started` 保存稳定 parent contract，
 `epoch_opened` 保存本 epoch 的可执行身份：
 
 > **并发模型**：锁**按书**分（`jobs.agent_lock_key`，同书不并行），
@@ -300,14 +302,14 @@ agent 代跑不是 `NODES` 中的流水线节点，不能塞进 `JobStart`；它
 |---|---|---|---|---|
 | `sid / base` | `str / str` | **是** | v2 parent run 的书与规范化 base；v1 旧事件缺 base 仍不用当前配置回填 | **契·码** |
 | `authorized / egress_authorized` | `bool / bool` | **是** | 稳定 parent run 的付费与正文外发授权，二者正交 | **契·码** |
-| `profiles` | `PipelineAgentProfiles` | **是** | 稳定 Commander + 默认 Executor + 节点 override；v1 旧 null 不回填，也不能构造 v2 contract | **契·码** |
-| `argv / prompt / code_version` | 首 epoch 审计投影 / `ExecutionEpoch` | **否（不属于 parent contract）** | 新 v2 started 把首次 argv/prompt 放在不参加 parent hash 的 `start` 兼容投影；code 与实际 invocation 身份只属于 `ExecutionEpoch`。早期 v2 内嵌字段仅由 reader 保守解码，重新序列化与 contract hash 均排除 | **契·码** |
+| `profiles` | `PipelineAgentProfiles` | **是** | 稳定默认 Executor + 节点 override；v1 旧 null 不回填，也不能构造 v2 contract | **契·码** |
+| `argv / prompt / code_version` | 首 epoch 审计投影 / `ExecutionEpoch` | **否（不属于 parent contract）** | 新 v2 started 把首次 argv/prompt 放在不参加 parent hash 的 `start` 兼容投影；code 与实际 invocation 身份只属于 `ExecutionEpoch`。早期 v2 内嵌字段仅由 reader 保守解码，重新序列化与 contract hash 均排除。Commander 退役后新 run 的 argv/prompt 保持 `None` 并序列化省略 | **契·码** |
 | `epoch_id` | `str` | **epoch 必填** | 同一 parent run 内单调打开的 execution epoch 身份 | **契·码** |
-| `argv / prompt_sha256` | `str[] / SHA-256` | **epoch 必填** | 本 epoch 的 Commander invocation 与 stdin prompt 身份；prompt 正文不复制进 epoch | **契·码** |
+| `argv / prompt_sha256` | `str[] / SHA-256` | **epoch 必填** | 历史 Commander invocation 与 stdin prompt 身份（Commander 退役后新 epoch 保持 `None`，历史行原值只读解码）；prompt 正文不复制进 epoch | **契·码** |
 | `code_version / protocol_version` | `str` | **epoch 必填** | 本 epoch 的代码与协议身份；无法证明不得打开 epoch | **契·码** |
 | `identity_version / skill_sha256` | 见 `contracts/schema/orchestration.py::ExecutionEpoch` | 版本化 | 当前 identity v2 不带 skill 摘要；v1 保留原字段和 canonical hash，仅供历史复验，不用于当前执行或重签 | **契·码** |
 | `cli_version` | `str \| null` | **epoch 必填（可空）** | provider CLI 未观测时为 null，不用请求值倒填 | **契·码** |
-| `session_run_id / resume_provider_session_id` | `str / str \| null` | **epoch 必填** | Commander session run 与本 epoch 的 producer 身份；同 epoch exact resume 才可复用 provider context。代码 漂移或 Stage4 typed repair/replan 的 producer 边界都必须换 fresh `session_run_id`，不得续旧 provider | **契·码** |
+| `session_run_id / resume_provider_session_id` | `str / str \| null` | **epoch 必填** | 本 epoch 的 producer 身份与可续接 provider session；Commander 退役后 `resume_provider_session_id` 新 epoch 保持 `None`（历史行只读解码）。同 epoch exact resume 才可复用 provider context。代码 漂移或 Stage4 typed repair/replan 的 producer 边界都必须换 fresh `session_run_id`，不得续旧 provider | **契·码** |
 
 两项授权不能相互推定。preview 可在任一项为 false 时只读展示；start/batch 在任何 probe/spawn/wire
 前同时要求二者为 true。API 请求可以有 wire 默认，但核心 prompt 构造与 `started` 事件必须显式取得
@@ -331,19 +333,20 @@ epoch/run/code、完整请求章集合和可恢复交付失败的 `delivery_reco
 Supervisor 复活；其已验章只能由后续新 run 的 producer 按下述只读 adoption 契约采用。内部阻塞 helper
 只供诊断/测试，不改变公开异步语义。重启后证明不了存活状态仍为 unknown，不自动洗成 paused。
 
-Commander 的 stdout/stderr 只形成供应商 observation，不作为业务完成事实。`role=commander,node=null`
-的 session/ledger 以 attempt id 联结；actual model/effort/provider session id 缺失保持 unknown，不拿请求值
-倒填。ledger 行的 `latency_ms` 记该轮 Commander 子进程墙钟（含其内部全部模型往返与工具调用，不含之后的
-execution drain），进程未启动为 `null`；可选 `activity` 只把同一 `role=commander` 事实标成
+历史 Commander 的 stdout/stderr 只形成供应商 observation，不作为业务完成事实；`role=commander,node=null`
+的 session/ledger 以 attempt id 联结、仅历史解码，actual model/effort/provider session id 缺失保持 unknown，
+不拿请求值倒填。ledger 行的 `latency_ms` 记该轮 Commander 子进程墙钟（含其内部全部模型往返与工具调用，
+不含之后的 execution drain），进程未启动为 `null`；可选 `activity` 只把同一 `role=commander` 事实标成
 `stage2.global.prereview` / `stage2.global.review-or-edit` / `stage2.blueprint.review` 等墙钟分段，
 不创建假 node、也不改变成本归属。身份漂移、provider session 跨 logical session 复用或账/审计失败会把 delivery 降为 unknown，
 但 outer state 仍尽力落账。child executor 通过 parent contract SHA 与 current epoch identity 复验相同
 base/sid/profiles/授权/code/provider context；无法复验时不得启动付费节点。
 
-Reviewer 某轮若携 provider-native output schema，`CommanderInvocation` 会先用 Executor 共用的严格
-公共子集校验，冻结为排序键、无空白的 canonical JSON 字节与 SHA-256；调用方之后修改原 mapping 不会
-改变真实 wire。带 schema 的 exact resume 必须显式回带上一轮 SHA 且与本轮规范字节完全一致。该真实
-schema SHA 进入本 logical session 的 `started / attempt / turn / ended` 四类
+以下两段是历史 Commander reviewer 调用面的运输纪律，已随角色退役，只约束账上历史行的解码；
+解码符号收在 `novel/orchestrator/reviewer_legacy.py`。历史 Reviewer 某轮若携 provider-native output
+schema，invocation 先用 Executor 共用的严格公共子集校验，冻结为排序键、无空白的
+canonical JSON 字节与 SHA-256；带 schema 的 exact resume 必须显式回带上一轮 SHA 且与本轮规范字节
+完全一致。该真实 schema SHA 进入本 logical session 的 `started / attempt / turn / ended` 四类
 `agent_sessions.jsonl` 事件和在线 `CommanderSessionPointer`；只有 schema-less 请求才继续用
 provider observation protocol hash，不能在同一席位混用两种身份。
 
@@ -354,7 +357,7 @@ Stage4 native v3 从冻结 options 建立逐章局部引用表，保留节点、
 漂移，exact request SHA 继续绑定决定入口；只共享完全同构定义，避免重复展开相同验证条件。
 预检同时检查服务支持的 schema 资源上限；压缩只改变运输，不扩大合法回答集合。
 
-两家 CLI 只在运输方式上不同。Codex invocation 的 `--output-schema` 路径按 schema SHA 固定在本 epoch
+历史两家 CLI 只在运输方式上不同。Codex invocation 的 `--output-schema` 路径按 schema SHA 固定在本 epoch
 scratch 直属目录，但文件在 build/preview 时不存在：driver 只于实际 runner 生命周期以独占普通文件创建、
 逐字回读，结束后清理。硬杀留下的孤儿只在非 symlink、普通文件且内容与本轮冻结字节完全相同时回收；
 异字节或异常类型在 runner 前拒绝。清理失败不得覆盖已经观测到的 provider result，残留由下一次同字节
@@ -364,7 +367,7 @@ runner/wire 前按 UTF-16 上限预检，超限以零 wire 配置失败返回。
 
 #### 2.4a `commander_admissions.jsonl` —— 顶层退出与子执行之间的持久准入账
 
-只扫 `agent_progress.jsonl` 抓不到“已经决定启动、尚未来得及写 start beacon”的窗口；顶层 Commander
+只扫 `agent_progress.jsonl` 抓不到“已经决定启动、尚未来得及写 start beacon”的窗口；顶层 agent run
 若在这时退出，空扫描会过早验盘并释放书锁。每条外层 AgentRun 因此先取得 per-lifecycle OS
 byte-lock owner lease，并持有到 ended/书锁收口的最外层 finally；每个 execution action 再以独立
 admission id 写 `opened`，并在 v2 行中把 `lifecycle_run_id` 固化为该 outer AgentRun；headless
@@ -373,11 +376,12 @@ admission id 写 `opened`，并在 v2 行中把 `lifecycle_run_id` 固化为该 
 `write:<operation>` claim 覆盖自己的完整 currentness＋write 窗口。一次 execution turn 返回或异常后
 关闭该 execution 的 claim 窗；claim 与 close 共用同一个 append transaction，所以 close 后迟到 claim
 必拒，close 前成功 claim 必留在 active 集合里等待 release。双面 drain 正常闭合后追加 `drained`；
-RunSupervisor 随后重读 `operator next`：仍 ready 时由确定性主路直接消费同快照 execution token，
-不会启动或续跑 Commander；命中 `DETERMINISTIC_RECOVERY_WAITING_ON` 的 blocker 时现场铸 exact
-recovery permit 并直接交 Executor，同样不启动 Commander；只有命中关闭 `reviewer_tasks` 注册表的
-blocker 才以 immutable workpack 进入同 epoch 的 Commander exact-resume turn。只有显式、hash-bound
-的孤儿恢复才追加 `reconciled`。
+RunSupervisor 随后重读 `operator next`：仍 ready 时由确定性主路直接消费同快照 execution token；
+命中 `DETERMINISTIC_RECOVERY_WAITING_ON` 的 blocker 时现场铸 exact recovery permit 并直接交
+Executor；其余审批闸 blocker 不再进入任何模型审阅席——受托 Commander reviewer 已退役
+（2026-09-15），Supervisor 以 exit 2 `stopped`（reason「停在人工审批闸：{blocker}；在 Stage 页面
+完成裁决后用原配置续跑」）停下并投影 `next_handler='human'`，用户在现有人工 Stage 页面过闸后
+原配置续跑。只有显式、hash-bound 的孤儿恢复才追加 `reconciled`。
 
 其中 `recovery:stage4-design-repair-aggregate-commit` 是一条 FREE/0-wire 的确定性
 producer 补尾：编排上的 `next_handler=executor` 只表示由 child execution 消费，并不构造模型
@@ -434,15 +438,16 @@ lock 内截回 committed prefix、fsync，并分别追加 `authorized / applied`
 `wire_version / ts / quarantine_name`；不得解析、补全、补 LF 或猜测半条 JSON/end。
 
 `ended` 事件在原始 `exit_code` 外另带 `exit_origin` 与 `outcome`。来源闭集由
-`AGENT_RUN_EXIT_ORIGINS` 登记为 `novel_cli / commander / supervisor`，只允许 ended producer 明确填写；
+`AGENT_RUN_EXIT_ORIGINS` 登记为 `novel_cli / commander / supervisor`（`commander` 仅历史行解码，
+新 run 不再产生该来源），只允许 ended producer 明确填写；
 事件和 `AgentRunRecord` 在来源为 None 时省略该新字段，保持旧账的序列化形状，`wire_version` 不变。
 外部 CLI 的 raw 退出码、parent 进程状态、独立盘面交付终验是三条轴：parent 保留收到的原始数字，
 不把供应商 exit 1 改写成小说 CLI 的“已落盘”。`AgentRunRecord.state` 中 0 为 `ok`，仅
-`1 + exit_origin=novel_cli` 为 `landed_red`；Commander、Supervisor 或历史缺来源的 1 均为 `failed`，
+`1 + exit_origin=novel_cli` 为 `landed_red`；历史 Commander、Supervisor 或旧账缺来源的 1 均为 `failed`，
 不从诊断、理由或旧 note 推断来源，也不为未知来源补“已经落盘”说明。旧 note 原样保留。
 `run_step.py` 透传正式 CLI 的退出码，但自身未捕异常统一为 70；显式控制异常保持原语义。
 确定性交付终验的退出码归 `supervisor` 来源；终验失败不承诺有新产物落盘。
-已发行恢复 policy 的 parent 摘要经 `reviewer_protocol_recovery.parent_proof_projection_v1`
+已发行恢复 policy 的 parent 摘要经 `reviewer_legacy.parent_proof_projection_v1`
 复现发行时的完整投影，只隔离新增字段和已变更的派生 state/note；源事件、授权、epoch、outcome
 等事实仍逐字进入原摘要，session/attempt/cost/log 仍按原策略交叉校验。该投影不回写旧账，
 不用于 UI 或执行授权，也不因旧投影含 `landed_red` 而放宽恢复条件。
@@ -454,10 +459,10 @@ lock 内截回 committed prefix、fsync，并分别追加 `authorized / applied`
 global review 的 generation-safe 面（blocking 逐项 PASS，或仅含已显式完整组隔离的
 secret 组 UNVER；关系与规则不允许隔离，前者仍是 disclosure-ready 而不是 PASS）、当前可下载成书、阻塞待办与
 启动/结束代码指纹；不解析 agent 自述。两轴不许互推，尤其 `state=ok` 不推出可交付。
-一次 Commander reviewer turn `exit_code=0` 但 fresh outcome=`stopped` 时，RunSupervisor 再读一次
-`operator next`：ready 交确定性 execution-token 主路；只有下一个状态仍是登记的 reviewer blocker 才
-继续审阅。所有模型节点按 `NODES.lifecycle` 的工作单元划分 E/C 身份；同一 Commander 单元
-连续审阅，局部返修的 surface 或候选变化不重置预算，也不强制换审阅者。Stage4 A/B 分别隔离，
+审批闸 turn 以 exit 2 `stopped` 结束（reason「停在人工审批闸：{blocker}；在 Stage 页面完成裁决后
+用原配置续跑」）后，RunSupervisor 等 `operator next` 变化：过闸后 ready 交确定性 execution-token 主路，
+其余审批闸 blocker 仍是人工。所有模型节点按 `NODES.lifecycle` 的工作单元划分 E/C 身份；同一 Executor 单元
+连续生成/自修，局部返修的 surface 或候选变化不重置预算。Stage4 A/B 分别隔离，
 Stage6 双盲 judge 分别隔离；这些业务边界不因共用基础设施而合并。
 
 Stage2 冷启动执行 Analyze E → 独立 Characters/Global 编译 → Global C 统一接受 →
@@ -468,7 +473,7 @@ Blueprint。联合首抽只记 Analyze 的一次真实 attempt，两份产物共
 不把完整联合回答挂为可变人物文件的失效边。Analyze E、独立 owner 修订 E、每章 Blueprint E、
 Global C 与每个 Blueprint 审阅范围各有独立工作单元，
 内容额度为基础 4 次加已生效的不可变人工追加，包含首次、格式和内容纠错。
-不存在人物 Commander、预审、额外 Global 终审或按序号保留的第四席。
+不存在人物审阅席位、预审、额外 Global 终审或按序号保留的第四席；Commander 角色已于 2026-09-15 整体删除。
 
 Stage5 当前闭合后才进入 Prepare E / C；两席各有独立累计额度。Prepare C 只消费完整正文、
 原钩子和准备主体，使用同源段号并去掉正式证据中重复的原文。native wire 绑定 options SHA 与
@@ -483,7 +488,8 @@ Blueprint 工作包消费当前章完整剧情、原文、必要人物与知识�
 范围接受绑定实际消费投影摘要；跨章范围独立反查原文和全书连续性。全部章级接受、KnowledgeLinks
 与跨章接受同时有效后，运行确定性 seen/gate 收口；旧逐项回执和 `review_delta` 不参与新链。
 
-`submission_options` 同时是可执行 binding：Stage2 既有字段 patch 的行数、顺序、subject id 与字段集合
+`submission_options` 同时是可执行 binding（本段描述历史 Stage2 审阅 wire，已随 2026-09-13 语义审阅与
+2026-09-15 Commander 角色退役，只约束账上历史行解码）：Stage2 既有字段 patch 的行数、顺序、subject id 与字段集合
 逐字保留；集合新增/删除/拆分走模板给出的 hash-bound `collection_edits.operations`，不复制整组成功主体。
 三种 operation 是关闭式形状：`add={op,item}`、`delete={op,subject_id}`、
 `split={op,subject_id,items>=2}`，没有 `value` 字段；submission option 按模板实际 collection 下发
@@ -504,7 +510,7 @@ edit 时才启用 merge/drop：此时空数组保留 failed baseline，撤销只
 `purpose=correction` 本身不能启用该语义。旧 v1 row list 不兼容。Supervisor 从
 这份 immutable exact request 注入 wrapper/action/flags、actor/source/workpack/chapter/default/
 review_scope、collection identity/SHA 与 decision subject SHA，只为模型显式提交的业务行组装完整
-request 交 `reviewer_tasks.load_action`，不得把未变 no-op 行带回 sparse edit；assembler 不判断哪些旧 review item 在修后仍存活，
+request 交历史 action loader（解码符号在 `novel/orchestrator/reviewer_legacy.py`），不得把未变 no-op 行带回 sparse edit；assembler 不判断哪些旧 review item 在修后仍存活，
 该结论仍只来自 producer 的 apply/normalize/HARD/reenumerate 链。compact 原始 JSON 的规范 digest 只用于
 拒因、重复请求和 no-progress；物化后的 full candidate/residue 使用其自身内容 digest，不能拿前者命名
 后者。
@@ -525,7 +531,7 @@ unknown 停止并保留 action 供零模型重放。
 不能因 edit 逻辑上似乎修好就漏掉 hash 未变的集合完整性（例如只订正 relation 的证据定位，业务字段和 ID 集均未变时的
 `relation_set_complete`）。新打开项才使用默认证明。typed loader 拒绝或 canonical action exit 2 时，
 Supervisor 在仍有预算且可修复时把完整紧凑包与确定性拒因交回同一工作单元继续修订，
-物理会话按当前 schema/profile 续用或重建；相同请求字节且无进展立即停。新内容调用计入该 Commander
+物理会话按当前 schema/profile 续用或重建；相同请求字节且无进展立即停。新内容调用计入该工作单元
 基础额度与已生效人工追加的累计总额，不另发纠错轮次。权限失败、未知提交结果与明确 uncertain/stop 分别保留原因，
 不能当普通模型格式错误重试；已保存决定的补提交不占模型额度。预算、授权、pause/stop、current blocker
 与 admission 均关闭式生效，surface 自变不能重开预算或制造循环。已经 `pipeline_complete` 而
@@ -713,30 +719,30 @@ stale。producer 输出汇总为 `file_changed`、策略未登记或参数不唯
 | `node / seq / label` | 当前真实续跑点，必须逐字来自 `NODES`；完成或 unknown 时全为空 |
 | `resume_verdict / why / waiting_on` | planner 对当前动作的判定、证据说明与 blocker；UI 不重算 |
 | `paid / writes` | exact node/flags 的登记贵贱与写盘效果；不是前端估算 |
-| `next_handler` | 后端闭合投影：免费 ready=`code`、付费 ready=`executor`、登记的确定性恢复=`executor`、reviewer blocker=`commander`、其余 blocker=`human`、终态=`none`、未知=`unknown` |
+| `next_handler` | 后端闭合投影：免费 ready=`code`、付费 ready=`executor`、登记的确定性恢复=`executor`、其余 blocker（含全部人工审批闸）=`human`、终态=`none`、未知=`unknown` |
 | `verified_skipped_nodes / verified_skipped_count` | 同一 planner 快照已明确无需再次执行、且严格位于续跑点之前的有序前缀；只能来自 `NODES`，数量必须一致 |
 
 运行页默认折叠 `verified_skipped_nodes`，但允许展开审计；这只是呈现压缩，不删除步骤和信标历史。
 普通规划返回续跑点之前已验证的完整前缀；原 owner 或 prepared 提交优先恢复时，不重读可能半提交的
 审批材料，前缀可为空或短于续跑点。空前缀只表示尚未验证前置节点，不能按节点位置补造跳过证明。
 例如 Stage4B 的 `request_replan` 会先显示 `stage4.context` 上的
-`approval:stage4-structure-replan / commander`。若交叉核证得到具体结构损害，形成新的 non-all-accept
+`approval:stage4-structure-replan / human`。若人工交叉核证得到具体结构损害，形成新的 non-all-accept
 typed A 决定后才显示 `stage4.design / recovery:stage4-design-action / executor`；若只有 read-only
 INFO/metric/UNVER/binding concern，则同包 typed stop 以 exit 2 结束本轮，不出现 execution permit 或
 Executor。它不会把 Stage0～Stage2 的历史 pending 信标画成“必须从头执行”，也不会把既有 typed
-决定误报成再次调用 Commander。
+决定误报成再次调用模型审阅。
 
 若 Stage4 repair/replan aggregate 已 prepared 而 source producer 已结束，前沿必须先显示
 `stage4.design / recovery:stage4-design-repair-aggregate-commit / executor`。这条 0-wire 补尾
 committed 后，才允许恢复普通 approval、inbox 或后续节点；已经 stale 的 review token 不再进入前沿。
 
-Stage5 继续只使用 `stage5.review / approval:stage5-closure / commander` 这一张顶部卡，`waiting_on`
-名称不代表当前一定提交 closure。current view 为纯 unresolved trim 时，同一席只可互斥选择：full-batch
+Stage5 继续只使用 `stage5.review / approval:stage5-closure / human` 这一张顶部卡，`waiting_on`
+名称不代表当前一定提交 closure。current view 为纯 unresolved trim 时，同一卡只发布互斥的人工出口：full-batch
 `stage5.review --retain-pretrim-batch @reviewer-input`、其中恰好一章的 typed
 `stage5.review --request-reviewer-rewrite @reviewer-input`、或 typed stop；ready/expired 时只给 closure
 approval；缺章、活动 `.INVALID` 或 HARD 与 trim 并存时在开席前 stopped/2。retain batch 是一席人审后的
 0-LLM node，不构造 Executor profile；部分落盘重启时，同一 durable record 在 exact prefix/current suffix
-证明下零 Commander 补尾，全部 resolution 落稳后仍使用原 fresh Review，只因
+证明下零模型补尾，全部 resolution 落稳后仍使用原 fresh Review，只因
 `trim_subjects/wontfix_sha256` 变化重建 closure workpack/token。rewrite 回答先由 0-LLM node 落正式
 single-chapter request；queue 随后在 stale Review/closure/新 Reviewer 前以
 `recovery:stage5-reviewer-rewrite` 滚新 epoch，并只给唯一 paid writer 或 matching prepared 的 0-wire
@@ -896,13 +902,13 @@ active_key(sid, node) -> str
 Output/_service/jobs.jsonl        append-only 事件流
 Output/_service/queues.jsonl      持久批量队列 append-only 事件流
 Output/_service/agent_runs.jsonl  headless agent append-only 事件流（含双授权快照）
-Output/_service/commander_admissions.jsonl Commander node/generic writer 六态准入账
-Output/_service/commander_owner_leases/<run>.lock per-parent 顶层 Commander OS owner lease 载体（文件存在不代表存活）
+Output/_service/commander_admissions.jsonl executor node/generic writer 六态准入账（文件名沿用历史 commander 命名）
+Output/_service/commander_owner_leases/<run>.lock per-parent 顶层 agent run OS owner lease 载体（文件名沿用历史命名；文件存在不代表存活）
 Output/_service/commander_admission_tail_repairs/ non-LF 坏尾原字节与 authorized/applied 两相恢复账
-Output/_service/agent_sessions.jsonl commander / executor CLI 会话审计（wire v2）
+Output/_service/agent_sessions.jsonl executor CLI 会话审计（wire v2；历史行含 commander 角色，只读解码）
 Output/_service/agent_progress.jsonl agent/runner 的 CLI 步骤观察轨迹
 Output/_service/agent_progress_tail_repairs/ beacon non-LF 坏尾原字节与 authorized/applied 两相恢复账
-Output/_service/operator_phases/<session_id>.jsonl Commander/operator 阶段墙钟遥测（每会话一流）
+Output/_service/operator_phases/<session_id>.jsonl agent run/operator 阶段墙钟遥测（每会话一流）
 Output/_service/human_actions.jsonl 已落盘人工动作的 append-only 身份审计（不含正文）
 Output/_service/human_actions_tail_recovery/<sha>.json 被 kill 截断的 human action 尾行隔离证据
 Output/_service/stage5_writer_locks/<book>/book.lock Stage5 CLI writer / API closure 共用总锁
@@ -915,10 +921,10 @@ Output/_service/runs/<sid>/work_units.json 工作单元注册索引，固定 tas
 Output/_service/runs/<sid>/work_units/<unit_id>/ledger.json 每角色工作单元的内容轮次、attempts、响应/决定/提交状态与最大 4 次额度
 Output/_service/runs/<sid>/work_units/<unit_id>/<sha256>.json 不可变 request、raw response/prepared receipt、typed 决定、feedback 与提交证明
 Output/_service/edits/<sid>/…     交给 CLI 的一次性 typed 编辑稿、人工决定或批处理 manifest
-Output/_service/edits/<sid>/reviewer-action-<sha>.json 已通过 typed loader 的 Commander 决定；绑定 work_unit_id/work_unit_turn_id、原 logical session 与 provider response SHA；它可零模型重放但不授予执行 permit（R-11.25）
+Output/_service/edits/<sid>/reviewer-action-<sha>.json 已通过 typed loader 的历史 Commander/Reviewer 决定（历史解码）；绑定 work_unit_id/work_unit_turn_id、原 logical session 与 provider response SHA；它可零模型重放但不授予执行 permit（R-11.25）
 Output/_service/runs/<sid>/reviewer_action_authorities/reviewer-action-<sha>.json Stage5 canonical rewrite request 对应 ReviewerActionRecord 的 immutable 原始字节归档；内容 SHA 必须等于文件名，并以该原字节 SHA 对证 receipt/request；不得用 typed decode 后补入默认字段的重序列化摘要代替
 Output/_service/runs/<sid>/reviewer_action_authorities/reviewer-action-<sha>.receipt.json 上述归档的 authority commit point；绑定 request raw/self、stable business/current-then contract、原 session/seat/provider response 与三账 evidence SHA，自身再 self-hash
-Output/_service/runs/<sid>/sessions/<session_run_id>.json Commander 一席的在线 provider session 指针（`CommanderSessionPointer`）：首个协议事件到达即写，同席 resume 原地覆盖；hash-bound 到本次 prompt/schema/profile，只是运维事实，不是审计账也不是预算（R-11.26）
+Output/_service/runs/<sid>/sessions/<session_run_id>.json 历史 Commander 一席的在线 provider session 指针（`CommanderSessionPointer`，历史解码）：首个协议事件到达即写，同席 resume 原地覆盖；hash-bound 到本次 prompt/schema/profile，只是运维事实，不是审计账也不是预算（R-11.26）
 Output/_service/approvals/<sid>.json 人工闸门、已阅状态与 canonical 写作授权（原子替换）
 ```
 
@@ -927,13 +933,13 @@ Output/_service/approvals/<sid>.json 人工闸门、已阅状态与 canonical �
 `ReviewerActionRecord` 不是执行授权，也不替代 Supervisor 的 live permit。通用字段为
 `kind / sid / run_id / epoch_id / waiting_on / surface_seal / business_sha256 / recorded_at`；
 approval 形状携带 `surface / payload / review_token`，node 形状携带
-`node / flags / input_payload / review_token`。新模型决定必须关联以下原调用证据：
+`node / flags / input_payload / review_token`。历史模型决定必须关联以下原调用证据：
 
-| 字段 | 类型 | 新 Commander 决定 | 含义 |
+| 字段 | 类型 | 历史模型决定 | 含义 |
 |---|---|---|---|
 | `work_unit_id` | 64 位 SHA-256 | **是** | 固定 task/node/role/scope 的身份，scope 由 NODES 登记；candidate/run/session 不参与 |
 | `work_unit_turn_id` | 非空字符串 | **是** | 同一角色单元具体内容请求；占用基础额度与已生效人工追加的累计总额，不因重启变化 |
-| `reviewer_session_run_id` | 非空字符串 | **是** | 原 Commander logical session，恢复新 parent 不重签原成本 |
+| `reviewer_session_run_id` | 非空字符串 | **是** | 原历史 reviewer logical session，恢复新 parent 不重签原成本 |
 | `reviewer_seat_turn_id` | 非空字符串 | **是** | 兼容字段名，现役值等于 `work_unit_turn_id`，不引用旧席位预算 |
 | `provider_response_sha256` | 64 位 SHA-256 | **是** | 原始模型回答的规范字节摘要，不以 assembler 展开的 request SHA 代替 |
 
@@ -958,7 +964,7 @@ Review/contract 已换代、精确已落前缀 + current unresolved 后缀、身
 reviewer rewrite 的 FREE request producer 先 typed readback，再把 record 原始字节与 authority receipt
 两相封入 `reviewer_action_authorities`，最后退休活动记录；receipt 是 commit point。
 queue 在 stale Review、closure 与新 Reviewer 前先处理 request，创建当前 execution epoch 后才授权
-`stage5.write --reviewer-rewrite`。Executor 仅按已保存 request 指定章节修订，不重新调用 Commander，
+`stage5.write --reviewer-rewrite`。Executor 仅按已保存 request 指定章节修订，不重新调用任何审阅模型，
 不复用旧 provider 物理 session。正式 request 不是 permit；后继仍逐写核验 Review/audit/正文及精确前后缀。
 
 #### 冻结旧工作流记录（只读）
@@ -989,7 +995,7 @@ exact `stage2.global --apply-edit stage2/global_edit.json`；首次 canonical �
 WAL 时，permit 也不伪造一份 external-input 字节身份，由 producer 从 WAL target 物化并收敛。
 若 formal journal 的 `action_kind=revalidate`，则唯一恢复动作改为逐字复用 target audit 冻结的
 `--revalidate --actor ... --reason ...`；generic INVALID 没有 canonical edit/formal 也不改变这条
-身份。所有补尾均为零 Commander wire。
+身份。所有补尾均为零模型 wire。
 
 Stage2 Global/BP 两份接受落盘后，`close_stage2_accepted` 只核验当前接受与 token，顺序补齐
 `s0 → s1 → seen.read → seen.global → s2`。中途失败保留已落 raw 证明，由
@@ -1062,7 +1068,7 @@ writing 授权与盘面；不得先查文件、再另读授权，从而留下两
 
 ### 7.0 `agent_sessions.jsonl` —— 内部 session wire，不是公开 HTTP 模型
 
-该账记录 commander / executor 各自的多轮 CLI 会话，供重放、成本对账和失败定位使用；它不属于
+该账记录 executor（历史行含 commander 角色，只读解码）的多轮 CLI 会话，供重放、成本对账和失败定位使用；它不属于
 artifact，也没有同名公开响应类型。`wire_version=2` 的每行键集固定为：
 
 `wire_version` · `session_run_id` · `parent_run_id` · `role` · `node` · `chapter` ·
@@ -1080,7 +1086,7 @@ wire v2 在 v1 字段集之上只新增 ended 事件的提交诊断四元组，�
 | 轴 | 现役约束 |
 |---|---|
 | 事件 | `kind=started / turn / ended`。turn 必须有正整数 `turn_index`、`attempt_id` 与 `provider_session_id`；started / turn 绑定 prompt 与 schema hash；ended 显式封存两条终态轴 |
-| 身份 | `role=commander / executor`；commander 不带 node/chapter，其 `parent_run_id` 指外层 AgentRun；executor 的 node 只接受 `AGENT_EXECUTOR_NODES`，其 `parent_run_id` 指 checkpoint/ledger 共用的 producer run。整书归因经 AgentRun started 事件登记的 epoch `session_run_id` 集合闭合，不按时间猜。新写入必须有 subject SHA-256 与已解析 `AgentProfile`，requested model/effort 必须与 profile 相等 |
+| 身份 | `role=commander / executor`（commander 仅历史行解码）；commander 不带 node/chapter，其 `parent_run_id` 指外层 AgentRun；executor 的 node 只接受 `AGENT_EXECUTOR_NODES`，其 `parent_run_id` 指 checkpoint/ledger 共用的 producer run。整书归因经 AgentRun started 事件登记的 epoch `session_run_id` 集合闭合，不按时间猜。新写入必须有 subject SHA-256 与已解析 `AgentProfile`，requested model/effort 必须与 profile 相等 |
 | 实际执行 | requested 与 actual model/effort 分格，CLI 与 protocol 版本分格；每个新事件带启动代码版本，ended 另带结束版本，代码漂移时不能声明 delivered。缺失事实留 `null` / `unknown`，不能把 requested 冒充 actual。checkpoint 的 adopted model 是另一格：actual 非空时须精确相等；actual 缺失时只接受 capability registry 登记的 `driver-enforced` 单模型无 fallback argv，并要求 turn 留有 CLI 版本 |
 | 成本 | `usage` 的 prompt、cache hit/miss、completion、reasoning、total token 均可为 `null`；`null` 是未观测，不是 0 |
 | 终态 | `process_state=ok / failed / stopped / unknown` 与 `delivery_state=delivered / blocked / failed / unknown` 正交；进程退出不推出产物已交付 |
@@ -1256,8 +1262,8 @@ primary，照常 journal/adoption 但保持 landed-red；Stage5 rejected/INVALID
 ### 7.0d `operator_phases/<session_id>.jsonl` —— legacy 诊断墙钟，不是主路权威账
 
 正常主路的权威时间线来自 RunSupervisor lifecycle events、admission claims、node beacon、
-`ledger.jsonl` 与 `agent_sessions.jsonl`；这些由生产动作自动形成。Commander/Executor 不在 prompt
-或正常主路里手工埋点。`operator_phases` 只保留 legacy/显式诊断兼容：缺失、未闭合或无法与权威账
+`ledger.jsonl` 与 `agent_sessions.jsonl`；这些由生产动作自动形成。Executor 不在 prompt
+或正常主路里手工埋点，历史 Commander 账只读。`operator_phases` 只保留 legacy/显式诊断兼容：缺失、未闭合或无法与权威账
 联结时，完整 phase 墙钟分解必须是 unknown，不能阻断运行或洗成 0。若显式使用，每个 session 仍独占
 append-only 流；人工审阅、批准与终审可以被量时，但不会因此成为 pipeline node、provider turn 或
 交付闸。事件 wire 的字段证据如下：
@@ -1278,7 +1284,7 @@ failed 必须有 `error_kind`。summary 对已结束 phase 的时间区间取并
 截断尾时拒绝继续拼接，保留旧 session 证据并要求另开 session，不能把下一条 JSON 接进半行。
 
 本 wire **刻意没有** node、model、usage、token、price、prompt、正文、reason、argv、路径或密钥。
-Commander 宿主内部模型 usage 没经过仓库边界时，summary 固定给
+历史 Commander 宿主内部模型 usage 没经过仓库边界时，summary 固定给
 `model_usage_state=unavailable_host_boundary`；不得按墙钟、字数或 executor 均价反推成本。
 
 ### 7.0e `_service/runs`、scratch、trash 与 retention
@@ -1376,7 +1382,7 @@ UTF-8，接到**管道**时退回 cp936——而报告里满篇 `✓ ✗ ↻ ⚠
 `NODES.lifecycle` 唯一登记现役节点的工作单元、生成与审阅模式、`review_actions` 动作子集、
 机械 `repair_actions`、修复属主、会话、预算与恢复入口；`approval_projection` 只指向既有有效审批字段。
 `GET /api/novels/:sid/run` 的 `resume_frontier.node / next_handler` 来自同一 operator 快照；
-`resume_frontier.review_states[]` 按该快照审批原状态显示各 Commander 节点、范围和状态。只有布尔 gate
+`resume_frontier.review_states[]` 按该快照审批原状态显示各审批节点、范围和状态。只有布尔 gate
 或 writing 授权的 Stage0/5/6/7 显示 `accepted / not_accepted`，后者不猜测缺失或未通过原因；未取得审批快照为 null。
 `work_units[]` 是稳定内容账的只读投影，包含原角色、范围、已用/上限/剩余、原请求/回答摘要和恢复动作。
 `current_recovery_actions` 只选当前 blocker 的登记属主、当前下一角色与范围；历史工作单元不决定下一角色。

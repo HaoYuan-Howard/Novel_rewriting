@@ -54,7 +54,6 @@ function fourStateCapabilities(): AgentCapabilitiesResponse {
         id: 'driver-' + availability,
         provider: 'provider-' + availability,
         label: '驱动-' + availability,
-        roles: ['commander' as const],
         availability,
         availability_reason: '探针原因-' + availability,
         version: null,
@@ -168,22 +167,16 @@ describe('AgentRunDialog', () => {
 
   it('用户常用配置优先于产品默认，并作为本次 preview 的完整快照', async () => {
     const savedProfiles: PipelineAgentProfiles = {
-      schema_version: 2,
-      commander: {
-        driver: 'commander-dynamic' as const,
-        model: 'commander-model-v10',
-        reasoning_effort: 'new-effort-dynamic',
-        execution_mode: 'new-mode-dynamic',
+      schema_version: 3,
+      executor_default: {
+        kind: 'agent',
+        profile: {
+          driver: 'executor-dynamic',
+          model: 'executor-model-v8',
+          reasoning_effort: 'fast-dynamic',
+          execution_mode: 'worker-dynamic',
+        },
       },
-      executor_default: READY_PROFILES.executor_default.kind === 'agent'
-        ? {
-            kind: 'agent',
-            profile: { ...READY_PROFILES.executor_default.profile },
-          }
-        : {
-            kind: 'legacy',
-            profile: { ...READY_PROFILES.executor_default.profile },
-          },
       executor_overrides: {},
     }
     vi.mocked(api.getAgentProfileSettings).mockResolvedValue({
@@ -205,8 +198,8 @@ describe('AgentRunDialog', () => {
 
     expect(await screen.findByText(/已载入设置页保存的常用配置/)).toBeVisible()
     await waitFor(() => expect(preview).toHaveBeenCalledTimes(1))
-    expect(screen.getByRole('combobox', { name: '指挥大脑 模型' })).toHaveValue(
-      'commander-model-v10',
+    expect(screen.getByRole('combobox', { name: '默认执行者 · Agent CLI 模型' })).toHaveValue(
+      'executor-model-v8',
     )
     expect(preview.mock.calls[0]?.[0].profiles).toEqual(savedProfiles)
   })
@@ -232,8 +225,8 @@ describe('AgentRunDialog', () => {
 
     act(() => resolveCapabilities(agentCapabilities()))
     await waitFor(() => expect(preview).toHaveBeenCalledTimes(1))
-    expect(screen.getByRole('combobox', { name: '指挥大脑 模型' })).toHaveValue(
-      'commander-model-v9',
+    expect(screen.getByRole('combobox', { name: '默认执行者 · Agent CLI 模型' })).toHaveValue(
+      'executor-model-v7',
     )
     expect(screen.getByRole('button', {
       name: '需先授权模型调用费用',
@@ -257,15 +250,20 @@ describe('AgentRunDialog', () => {
       name: '需先授权模型调用费用',
     })).toBeDisabled()
 
-    const commander = screen.getByRole('combobox', { name: '指挥大脑 driver' })
-    expect(within(commander).getByRole('option', { name: '驱动-missing · 未安装' })).toBeDisabled()
-    expect(within(commander).getByRole('option', { name: '驱动-unknown · 状态未知' })).toBeDisabled()
-    expect(within(commander).getByRole('option', { name: '驱动-unauthenticated · 未登录' })).toBeDisabled()
-    const states = screen.getByTestId('agent-commander-availability')
+    // 表单不再代选任何后端；显式选择 Agent CLI 后才进入 driver 选择面。
+    fireEvent.change(screen.getByRole('combobox', { name: '默认执行者 后端' }), {
+      target: { value: 'agent' },
+    })
+    const executor = screen.getByRole('combobox', { name: '默认执行者 · Agent CLI driver' })
+    expect(executor).toHaveValue('')
+    expect(within(executor).getByRole('option', { name: '驱动-missing · 未安装' })).toBeDisabled()
+    expect(within(executor).getByRole('option', { name: '驱动-unknown · 状态未知' })).toBeDisabled()
+    expect(within(executor).getByRole('option', { name: '驱动-unauthenticated · 未登录' })).toBeDisabled()
+    const states = screen.getByTestId('agent-executor-default-agent-availability')
     expect(states).toHaveTextContent(/驱动-missing · 未安装.*探针原因-missing/)
     expect(states).toHaveTextContent(/驱动-unknown · 状态未知.*探针原因-unknown/)
     expect(states).toHaveTextContent(/驱动-unauthenticated · 未登录.*探针原因-unauthenticated/)
-    expect(states).toHaveTextContent(/动态指挥 CLI · 可用.*动态指挥探针通过/)
+    expect(states).toHaveTextContent(/动态执行 CLI · 可用.*动态执行探针通过/)
   })
 
   it('动态选项、逐节点覆盖与授权变化都重新 preview，start 复用最后成功 preview 的同一深快照', async () => {
@@ -284,22 +282,6 @@ describe('AgentRunDialog', () => {
     )
     await screen.findByText(/界面不会猜第一项/)
 
-    await user.selectOptions(
-      screen.getByRole('combobox', { name: '指挥大脑 driver' }),
-      'commander-dynamic',
-    )
-    await user.selectOptions(
-      screen.getByRole('combobox', { name: '指挥大脑 模型' }),
-      'commander-model-v9',
-    )
-    await user.selectOptions(
-      screen.getByRole('combobox', { name: '指挥大脑 思考强度' }),
-      'careful-dynamic',
-    )
-    await user.selectOptions(
-      screen.getByRole('combobox', { name: '指挥大脑 执行模式' }),
-      'interactive-dynamic',
-    )
     await user.selectOptions(
       screen.getByRole('combobox', { name: '默认执行者 后端' }),
       'agent',
@@ -323,7 +305,6 @@ describe('AgentRunDialog', () => {
 
     await waitFor(() => expect(preview).toHaveBeenCalledTimes(1))
     expect(preview.mock.calls[0]?.[0].profiles).toEqual(READY_PROFILES)
-    expect(screen.getByText('动态指挥模型九')).toBeVisible()
     expect(screen.getByText('动态执行模型七')).toBeVisible()
 
     await user.click(screen.getByRole('checkbox', { name: '单独配置 node.dynamic-a' }))
@@ -404,35 +385,35 @@ describe('AgentRunDialog', () => {
     await waitFor(() => expect(preview).toHaveBeenCalledTimes(1))
 
     await user.selectOptions(
-      screen.getByRole('combobox', { name: '指挥大脑 模型' }),
-      'commander-model-v10',
+      screen.getByRole('combobox', { name: '默认执行者 · Agent CLI 模型' }),
+      'executor-model-v8',
     )
-    expect(screen.getByRole('combobox', { name: '指挥大脑 思考强度' })).toHaveValue('')
+    expect(screen.getByRole('combobox', { name: '默认执行者 · Agent CLI 思考强度' })).toHaveValue('')
     expect(screen.getByRole('button', {
       name: '需先授权模型调用费用',
     })).toBeDisabled()
     await user.selectOptions(
-      screen.getByRole('combobox', { name: '指挥大脑 思考强度' }),
-      'new-effort-dynamic',
+      screen.getByRole('combobox', { name: '默认执行者 · Agent CLI 思考强度' }),
+      'fast-dynamic',
     )
     await user.selectOptions(
-      screen.getByRole('combobox', { name: '指挥大脑 执行模式' }),
-      'new-mode-dynamic',
+      screen.getByRole('combobox', { name: '默认执行者 · Agent CLI 执行模式' }),
+      'worker-dynamic',
     )
     await waitFor(() => expect(preview).toHaveBeenCalledTimes(2))
-    expect(preview.mock.calls.at(-1)?.[0].profiles.commander.model).toBe(
-      'commander-model-v10',
-    )
+    expect(preview.mock.calls.at(-1)?.[0].profiles).toMatchObject({
+      executor_default: { kind: 'agent', profile: { model: 'executor-model-v8' } },
+    })
 
     current = agentCapabilities()
     current.drivers[0].models = current.drivers[0].models.filter(
-      (model) => model.id !== 'commander-model-v10',
+      (model) => model.id !== 'executor-model-v8',
     )
     await act(async () => {
       await queryClient.invalidateQueries({ queryKey: qk.agentCapabilities() })
     })
-    await waitFor(() => expect(screen.getByText(/commander-model-v10 不属于当前 driver/)).toBeVisible())
-    expect(screen.getByRole('combobox', { name: '指挥大脑 模型' })).toHaveValue('')
+    await waitFor(() => expect(screen.getByText(/executor-model-v8 不属于当前 driver/)).toBeVisible())
+    expect(screen.getByRole('combobox', { name: '默认执行者 · Agent CLI 模型' })).toHaveValue('')
     expect(screen.getByRole('button', {
       name: '需先授权模型调用费用',
     })).toBeDisabled()

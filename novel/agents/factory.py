@@ -3,15 +3,14 @@
 """AgentProfile → vendor driver 的唯一工厂；未知配置绝不 fallback。"""
 from __future__ import annotations
 
-from contracts.invariants import AgentRole
 from contracts.schema.orchestration import AgentProfile
 from novel.agents.capabilities import validate_profile
 from novel.agents import AgentDriver, ClaudeCodeDriver, CodexDriver
 from novel.agents.glm import GlmClaudeCodeDriver
 
 
-def create_driver(profile: AgentProfile, *, role: AgentRole) -> AgentDriver:
-    resolved = validate_profile(profile, role=role)
+def create_driver(profile: AgentProfile) -> AgentDriver:
+    resolved = validate_profile(profile)
     if resolved.driver == 'claude-code':
         return ClaudeCodeDriver()
     if resolved.driver == 'claude-code-glm':

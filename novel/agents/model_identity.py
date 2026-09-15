@@ -40,7 +40,7 @@ def _profile_fields(
             if isinstance(profile, AgentProfile)
             else AgentProfile.model_validate(dict(profile))
         )
-        resolved = validate_profile(materialized, role='executor')
+        resolved = validate_profile(materialized)
     except (TypeError, ValueError) as exc:
         raise AgentModelIdentityRefused(
             'resolved profile 缺 driver/model，不能判定 accepted model',

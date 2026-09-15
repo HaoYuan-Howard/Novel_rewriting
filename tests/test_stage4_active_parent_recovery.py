@@ -12,7 +12,7 @@ from contracts.artifacts import STAGE4_BLIND_CANDIDATE
 from contracts.schema.orchestration import (
     AgentRunEvent, AgentRunStart, ExecutionEpoch, PipelineAgentProfiles, RunContractV2,
 )
-from novel.commanders import context as commander_context
+from novel.orchestrator import execution_context
 from novel.errors import ProvenanceRefused, TerminalState
 from novel.llm import design_adoption, stage4_runs
 from novel.llm.ledger import CostLedger
@@ -58,7 +58,7 @@ def _open_successor(source, target, monkeypatch, *, drain='drained', claim=True)
     gate_id = current.epoch_id
     admission.open_gate(source.novel_dir.parent, gate_id, source.sid,
                         lifecycle_run_id=source.parent_run_id)
-    env = commander_context.env_with_context(
+    env = execution_context.env_with_context(
         run_id=source.parent_run_id, base=source.novel_dir.parent, contract=contract,
         epoch=current, admission_id=gate_id, env={})
     if claim:

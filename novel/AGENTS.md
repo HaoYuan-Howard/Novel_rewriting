@@ -11,7 +11,7 @@
 | 产物、依赖与历史采用 | `novel/store.py`、`novel/paths.py`、`novel/consumption.py`、`novel/prov.py` |
 | 本层生成、重验或人工编辑 | `novel/stages/` 对应 stage 的 producer 与恢复模块；对应 `docs/schema/` |
 | 下一动作、授权、并发与暂停 | `novel/orchestrator/operator.py`、`novel/orchestrator/execution_permit.py`、`novel/orchestrator/agent_supervisor.py` |
-| Commander 材料与决定 | `novel/orchestrator/reviewer_tasks.py`、`novel/orchestrator/reviewer_contract.py` |
+| 历史审阅决定的解码与执行 | `novel/orchestrator/reviewer_legacy.py`（Commander 退役后的迁入地）、`novel/orchestrator/reviewer_action_evidence.py` |
 | Executor、传输与成本 | `novel/agents/base.py`、`novel/agents/unit_session_pool.py`、`novel/llm/`、`novel/work_units.py` |
 | CLI、HTTP 与展示不一致 | `novel/cli/` → `novel/api/` → `novel/views/`，继续追到前端真实消费者 |
 
@@ -30,8 +30,9 @@
 
 ## 调度与模型边界
 
-- RunSupervisor 只执行 planner 的冻结 action，不参与语义审阅。Executor 在校验过的空 cwd 中运行，
-  Commander 只读裁决契约与 workpack；不要把工程指南、skill 或额外盘上材料加入模型上下文。
+- RunSupervisor 只执行 planner 的冻结 action；审批闸一律人工（Commander 受托审阅已退役，2026-09-15），
+  run 停闸等过闸后续跑。Executor 在校验过的空 cwd 中运行；
+  不要把工程指南、skill 或额外盘上材料加入模型上下文。
 - 业务工作单元、execution epoch 与 provider session 分开；代码 漂移走新 epoch，原 profiles 与累计额度保留。
   连续会话绑定原目录和输出 schema 字节，不静默切模型或 effort。
 - 停止时先关 admission，再证明 claim、execution 和后代全部排空；父进程退出、超时或暂停字样不证明书锁可释放。

@@ -716,7 +716,7 @@ class SessionAgentClient:
         self.ctx = ctx
         if driver is None and ctx.paid:
             raise ValueError('无 driver 的 client 只允许显式免费原回答恢复')
-        self.profile = validate_profile(profile, role='executor')
+        self.profile = validate_profile(profile)
         self.driver = driver
         self.chapter = chapter
         if parent_run_id is not None and parent_run_id != ctx.run_id:
@@ -885,7 +885,7 @@ class SessionAgentClient:
         因此这里用独立 discriminator 诚实记录 requested ceiling，不伪造成旧
         ``ChatRequest`` 的 model-chain/rungs/max_tokens。
         """
-        resolved = validate_profile(profile, role='executor')
+        resolved = validate_profile(profile)
         rows: list[dict[str, Any]] = []
         seen: set[str] = set()
         for phase, response_model, max_tokens, prefer_content in phases:

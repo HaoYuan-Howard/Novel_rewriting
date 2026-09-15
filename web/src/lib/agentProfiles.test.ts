@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
   agentCapabilities,
-  COMMANDER_PROFILE,
   EXECUTOR_PROFILE,
   READY_PROFILES,
 } from '@/test/agent'
@@ -47,7 +46,6 @@ describe('agent profile draft/materialize', () => {
     expect(materializePipelineAgentProfiles(capabilities, empty)).toMatchObject({
       profiles: null,
       errors: expect.arrayContaining([
-        '指挥大脑：请选择 driver',
         '默认执行者：请选择 Agent 或 Legacy API',
       ]),
     })
@@ -60,22 +58,22 @@ describe('agent profile draft/materialize', () => {
   })
 
   it('driver/model 改变会清空全部下游选择', () => {
-    const draft = pipelineDraftOf(READY_PROFILES).commander
+    const draft = pipelineDraftOf(READY_PROFILES).executor_default.agent_profile
     expect(withProfileDriver(draft, 'another-driver')).toEqual({
       driver: 'another-driver',
       model: '',
       reasoning_effort: '',
       execution_mode: '',
     })
-    expect(withProfileModel(draft, 'commander-model-v10')).toEqual({
-      driver: COMMANDER_PROFILE.driver,
-      model: 'commander-model-v10',
+    expect(withProfileModel(draft, 'executor-model-v8')).toEqual({
+      driver: EXECUTOR_PROFILE.driver,
+      model: 'executor-model-v8',
       reasoning_effort: '',
       execution_mode: '',
     })
   })
 
-  it('关闭式拒绝非 ready、错误 role/model/effort 与未知 override', () => {
+  it('关闭式拒绝非 ready、错误 model/effort 与未知 override', () => {
     const capabilities = agentCapabilities(null)
     capabilities.drivers[0].availability = 'unknown'
     capabilities.drivers[0].availability_reason = '探针没有结论'
@@ -91,10 +89,6 @@ describe('agent profile draft/materialize', () => {
         ...validExecutor.agent_profile,
         reasoning_effort: 'not-published',
       },
-    }
-    draft.executor_overrides['node.dynamic-a'] = {
-      ...validExecutor,
-      agent_profile: { ...draft.commander },
     }
     draft.executor_overrides['node.dynamic-b'] = {
       ...validExecutor,
@@ -112,7 +106,6 @@ describe('agent profile draft/materialize', () => {
     expect(result.profiles).toBeNull()
     expect(result.errors.join('\n')).toMatch(/探针没有结论/)
     expect(result.errors.join('\n')).toMatch(/not-published/)
-    expect(result.errors.join('\n')).toMatch(/不支持 executor 角色/)
     expect(result.errors.join('\n')).toMatch(/not-this-driver/)
     expect(result.errors.join('\n')).toMatch(/unknown\.node/)
   })
@@ -176,8 +169,7 @@ describe('agent profile draft/materialize', () => {
     }
     expect(materializePipelineAgentProfiles(capabilities, draft)).toEqual({
       profiles: {
-        schema_version: 2,
-        commander: COMMANDER_PROFILE,
+        schema_version: 3,
         executor_default: {
           kind: 'legacy',
           profile: draft.executor_default.legacy_profile,
@@ -294,7 +286,6 @@ describe('agent profile draft/materialize', () => {
     // agent-only 的 node.agent-only 自动补成空 Agent 草稿覆盖（不猜 driver），
     // 可承接的 node.dynamic-a 保持继承；materialize 只差待选 driver ⇒ 纯 legacy 可整跑。
     const draft = emptyPipelineAgentProfilesDraft()
-    draft.commander = { ...pipelineDraftOf(READY_PROFILES).commander }
     const swept = withExecutorDefault(capabilities, draft, flashLegacyDraft)
     expect(Object.keys(swept.executor_overrides)).toEqual(['node.dynamic-b', 'node.agent-only'])
     expect(swept.executor_overrides['node.agent-only'].kind).toEqual('agent')

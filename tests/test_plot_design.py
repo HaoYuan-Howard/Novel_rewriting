@@ -395,32 +395,11 @@ def produce_through_first_chapter(tmp_path, monkeypatch, *, distributed=False, g
         reviewer_kind='human', review_run_id='plot-design-review', reason='合成设计语义审阅')
     if capture is not None:
         capture['design_template'] = template.model_dump(mode='json')
-    from novel.orchestrator import reviewer_tasks
-    closure = reviewer_tasks._design_constraint_reference_closure(template)
-    assert all(row['beat_aliases'] for row in closure.values())
-    assert 'fact_aliases' not in json.dumps(closure)
-    def native_request():
-        from novel import paths
-        from novel.orchestrator import operator, stage4_reviewer_wire as wire
-        from tests.test_stage4_reviewer_wire import _response
-        current = operator.next_action(book.parent, ctx.sid)
-        request_path = paths.scratch_session_dir(book.parent, ctx.sid, 'plot-native-review') / (
-            current.action.waiting_on + '.json')
-        task = reviewer_tasks.build_task(book.parent, ctx.sid, current, request_path,
-                                         epoch_id='plot-native-review')
-        assert task is not None
-        schema = wire.output_schema_for(task)
-        assert schema and 'fact_aliases' not in json.dumps(schema)
-        document = wire.assemble(task, _response(task))
-        request_path.parent.mkdir(parents=True, exist_ok=True)
-        request_path.write_text(json.dumps(document, ensure_ascii=False), encoding='utf-8')
-        return reviewer_tasks.load_action(
-            request_path, current, submission_options=task.submission_options).payload
-    if distributed:
-        from contracts.schema.api import DesignReviewRequest
-        submission = DesignReviewRequest.model_validate(native_request())
-    else:
-        submission = _accept_all(template)
+    # 审阅闸人工（Commander 退役）：模板是人在 Stage 页面读到的关闭式材料，
+    # 每章必须带非空 beats，且不得把事实别名泄露进人审投影。
+    assert all(row.subject.blind_truth.beats for row in template.chapters)
+    assert 'fact_aliases' not in template.model_dump_json()
+    submission = _accept_all(template)
     decision = approvals.approve_design(book.parent, ctx.sid, submission)
     assert decision.design_review.state == 'accepted'
     from novel.stages.stage4.plot_binding import (
@@ -482,8 +461,6 @@ def produce_through_first_chapter(tmp_path, monkeypatch, *, distributed=False, g
     payload = template.model_dump(mode='json')
     for row in payload['chapters']:
         row.update(decision='accept', reason='合成完整节点、证据和端点一致')
-    if distributed:
-        payload = native_request()
     approvals.approve_structure(book.parent, ctx.sid, StructureApprovalRequest.model_validate(payload))
     context_report = plan.run_context(_ctx(book, 'stage4.context', paid=False))
     assert context_report.passed

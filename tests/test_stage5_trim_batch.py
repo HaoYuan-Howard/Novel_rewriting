@@ -1,30 +1,30 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Stage5 trim 批量销账（P1-2）：整批预检、按章幂等、漂移即整批不开始。"""
+"""Stage5 trim 批量销账（P1-2）：整批预检、按章幂等、漂移即整批不开始。
+
+【角色边界】批量 trim 销账是现役人工入口（``--retain-pretrim-batch``，Stage 页面
+在用）。旧 commander 载体的席位回执重放机器（``reviewer_tasks``/
+``reviewer_contract`` 的 submission options、partial replay binding 与 typed
+loader）随受托审阅退役删除；「前缀重放」改由批量写路径自身的幂等重交承接，
+历史席位回执的只读解码归 ``reviewer_legacy`` 的消费方。
+"""
 from __future__ import annotations
 
-import copy
 import hashlib
 import importlib
 import json
-from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
-from contracts.schema.api import BatchTrimResolutionRequest, Stage5ClosureView
+from contracts.schema.api import BatchTrimResolutionRequest
 from contracts.schema.evaluation import TrimResolution
-from contracts.schema.orchestration import ReviewerActionRecord
 from contracts.schema.stage5 import Chapter
 from novel.errors import ArtifactUnreadable, ProvenanceRefused, TerminalState
 from novel.llm.cache import CachePolicy
 from novel.llm.ledger import CostLedger
 from novel.run import RunContext
-from novel.orchestrator import queue, reviewer_contract, reviewer_tasks
 from novel.stages.stage5 import trim_resolution
 from novel.store import ArtifactStore
-
-_GATES = 2
 
 
 def _chapter(ordinal: int, text: str, root_fp: str, root_sha1: str) -> Chapter:
@@ -102,100 +102,6 @@ def _delegated_request(sha_by_ordinal, audit_sha):
     })
 
 
-def _current(*, code='test-trim-batch', seal='a' * 64):
-    return SimpleNamespace(
-        state='blocked', surface_seal=seal, code_version=code,
-        action=SimpleNamespace(
-            waiting_on=queue.WAITING_ON_STAGE5_CLOSURE,
-            action_sha256='b' * 64),
-    )
-
-
-def _trim_pack(
-        sha_by_ordinal, audit_sha, unresolved, *,
-        workpack_sha='a' * 64, review_sha='f' * 64):
-    unresolved = list(unresolved)
-    view = Stage5ClosureView.model_validate({
-        'state': 'blocked',
-        'next_step': '先销账 trim',
-        'workpack': {
-            'review_seq': 1,
-            'review_rel': 'stage5/review_1.json',
-            'review_sha256': review_sha,
-            'planned_chapters': sorted(sha_by_ordinal),
-            'missing_chapters': [],
-            'chapter_subjects': [{
-                'output_ordinal': ordinal,
-                'chapter_sha256': sha_by_ordinal[ordinal],
-            } for ordinal in sorted(sha_by_ordinal)],
-            'invalid_chapters': [],
-            'hard_findings': [],
-            'unresolved_trim_chapters': unresolved,
-            'unresolved_trim_items': [{
-                'output_ordinal': ordinal,
-                'audit_sha256': audit_sha[ordinal],
-                'chapter_sha256': sha_by_ordinal[ordinal],
-            } for ordinal in unresolved],
-            'trim_subjects': [{
-                'output_ordinal': ordinal,
-                'audit_sha256': audit_sha[ordinal],
-                'chapter_sha256': sha_by_ordinal[ordinal],
-                'resolution_sha256': (
-                    None if ordinal in unresolved else f'{ordinal + 5:x}' * 64),
-            } for ordinal in sorted(sha_by_ordinal)],
-            'wontfix_sha256': None,
-            'must_appear': [],
-            'disclosure': {},
-            'resolved': {},
-            'workpack_sha256': workpack_sha,
-            'review_token': f's5cr1_{workpack_sha}',
-        },
-    })
-    return {'stage5_trim': {
-        'closure': view.model_dump(mode='json'),
-        'chapters': [],
-    }}
-
-
-def _durable_record(pack, current, request, *, sid='001'):
-    options = reviewer_tasks._submission_options(
-        pack, current, queue.WAITING_ON_STAGE5_CLOSURE)
-    business = reviewer_tasks._non_stage2_business_identity(
-        pack, queue.WAITING_ON_STAGE5_CLOSURE, options)
-    closure = Stage5ClosureView.model_validate(
-        pack['stage5_trim']['closure']).workpack
-    assert closure is not None
-    contract_sha = hashlib.sha256(reviewer_contract.for_blocker(
-        queue.WAITING_ON_STAGE5_CLOSURE).encode('utf-8')).hexdigest()
-    payload = request.model_dump(mode='json')
-    provider_response_sha256 = hashlib.sha256(json.dumps({
-        'schema': reviewer_tasks.REQUEST_SCHEMA,
-        'surface_seal': current.surface_seal,
-        'waiting_on': queue.WAITING_ON_STAGE5_CLOSURE,
-        'action': {
-            'kind': 'node', 'node': 'stage5.review',
-            'flags': ['--retain-pretrim-batch', '@reviewer-input'],
-            'input_payload': payload,
-        },
-    }, ensure_ascii=False, sort_keys=True, separators=(',', ':'),
-        allow_nan=False).encode('utf-8') + b'\n').hexdigest()
-    return ReviewerActionRecord(
-        sid=sid, run_id='old-parent', epoch_id='old-epoch',
-        waiting_on=queue.WAITING_ON_STAGE5_CLOSURE,
-        surface_seal=current.surface_seal,
-        business_sha256=reviewer_tasks._canonical_json_sha256(business),
-        node='stage5.review',
-        flags=('--retain-pretrim-batch', '@reviewer-input'),
-        input_payload=payload,
-        stage5_review_sha256=closure.review_sha256,
-        stage5_reviewer_contract_sha256=contract_sha,
-        reviewer_session_run_id='old-stage5-session',
-        reviewer_seat_turn_id='old-stage5-turn',
-        provider_response_sha256=provider_response_sha256,
-        recorded_at=1,
-    )
-
-
 def test_batch_writes_every_resolution_and_is_idempotent(rig):
     ctx, store, sha_by_ordinal, audit_sha = rig
     request = _request(sha_by_ordinal, audit_sha)
@@ -221,13 +127,10 @@ def test_batch_writes_every_resolution_and_is_idempotent(rig):
 
 
 def test_batch_kill_after_prefix_replays_original_manifest_across_new_epoch(
-        rig, tmp_path, monkeypatch):
-    """首章落地后 kill：旧人类决定零模型重放，旧 round/raw 不改，只补 suffix。"""
+        rig, monkeypatch):
+    """首章落地后 kill：同一份 manifest 零模型重交，旧 round/raw 不改，只补 suffix。"""
     ctx, store, sha_by_ordinal, audit_sha = rig
     request = _delegated_request(sha_by_ordinal, audit_sha)
-    original_pack = _trim_pack(sha_by_ordinal, audit_sha, (1, 2))
-    original_current = _current()
-    record = _durable_record(original_pack, original_current, request)
     original_write_round = ArtifactStore.write_round
     writes = 0
 
@@ -258,78 +161,14 @@ def test_batch_kill_after_prefix_replays_original_manifest_across_new_epoch(
         run_id='new-producer-run', parent_run_id='new-parent',
         observer=lambda _event: None,
     )
-    suffix_pack = _trim_pack(
-        sha_by_ordinal, audit_sha, (2,), workpack_sha='b' * 64)
-    suffix_current = _current(
-        code='test-trim-batch-code-v2', seal='c' * 64)
-    suffix_options = reviewer_tasks._submission_options(
-        suffix_pack, suffix_current, queue.WAITING_ON_STAGE5_CLOSURE)
-    binding = reviewer_tasks.stage5_trim_partial_replay_options(
-        str(ctx.novel_dir.parent), '001', record, suffix_current, suffix_options,
-        current_review_sha256='f' * 64)
-    assert binding is not None and binding.state == 'replayable'
-    replay_path = tmp_path / 'stage5-replay.json'
-    replay_document = reviewer_tasks.replay_request_document(
-        record, suffix_current)
-    replay_path.write_text(json.dumps(
-        replay_document, ensure_ascii=False), encoding='utf-8')
-    replay = reviewer_tasks.load_action(
-        replay_path, suffix_current,
-        submission_options=binding.submission_options)
-    assert isinstance(replay, reviewer_tasks.ReviewerNodeAction)
-    assert replay.input_payload == request.model_dump(mode='json')
-    for mutate in (
-        lambda body: body['action']['input_payload'].__setitem__(
-            'actor', 'agent:forged'),
-        lambda body: body['action']['input_payload'].__setitem__(
-            'reason', '换一个共享理由'),
-        lambda body: body['action']['input_payload']['items'][1].__setitem__(
-            'reason', '改写未落 suffix 的人工理由'),
-    ):
-        altered = copy.deepcopy(replay_document)
-        mutate(altered)
-        replay_path.write_text(json.dumps(
-            altered, ensure_ascii=False), encoding='utf-8')
-        with pytest.raises(
-                reviewer_tasks.ReviewerTaskError,
-                match='partial replay.*逐字'):
-            reviewer_tasks.load_action(
-                replay_path, suffix_current,
-                submission_options=binding.submission_options)
-    stale = reviewer_tasks.stage5_trim_partial_replay_options(
-        str(ctx.novel_dir.parent), '001', record, suffix_current, suffix_options,
-        current_review_sha256='e' * 64)
-    assert stale is not None and stale.state == 'stale'
-    foreign_options = copy.deepcopy(suffix_options)
-    foreign_options[0]['exact_request']['action']['input_payload']['items'][0][
-        'audit_sha256'] = '9' * 64
-    with pytest.raises(reviewer_tasks.ReviewerTaskError, match='exact 已落前缀'):
-        reviewer_tasks.stage5_trim_partial_replay_options(
-            str(ctx.novel_dir.parent), '001', record, suffix_current,
-            foreign_options, current_review_sha256='f' * 64)
-    store.path(first_rel).unlink()
-    with pytest.raises(reviewer_tasks.ReviewerTaskError, match='不可证明'):
-        reviewer_tasks.stage5_trim_partial_replay_options(
-            str(ctx.novel_dir.parent), '001', record, suffix_current,
-            suffix_options, current_review_sha256='f' * 64)
-    store.path(first_rel).write_bytes(first_raw)
-
     trim_resolution.retain_pretrim_batch(new_ctx, request)
     assert store.path(first_rel).read_bytes() == first_raw
     assert store.next_round(first_rel) == first_round
     assert store.exists(second_rel)
-    first, _ = store.read_own(
-        __import__('contracts.schema.evaluation', fromlist=['TrimResolution']).TrimResolution,
-        first_rel)
-    second, _ = store.read_own(
-        __import__('contracts.schema.evaluation', fromlist=['TrimResolution']).TrimResolution,
-        second_rel)
+    first, _ = store.read_own(TrimResolution, first_rel)
+    second, _ = store.read_own(TrimResolution, second_rel)
     assert first.provenance.code == 'test-trim-batch'
     assert second.provenance.code == 'test-trim-batch-code-v2'
-    landed = reviewer_tasks.stage5_trim_partial_replay_options(
-        str(ctx.novel_dir.parent), '001', record, suffix_current, (),
-        current_review_sha256='f' * 64)
-    assert landed is not None and landed.state == 'fully_landed'
 
 
 def test_any_drift_refuses_the_whole_batch(rig):
@@ -648,7 +487,7 @@ def test_single_item_override_reason(rig):
 
 def test_cli_trim_batch_resolves_relative_to_book_and_keeps_absolute_path(
         rig, monkeypatch):
-    """direct CLI 保持现役语义；Commander 的绝对路径边界另由 permit 收窄。"""
+    """direct CLI 保持现役语义：相对 manifest 相对书目录解析，绝对路径原样受理。"""
     ctx, _store, sha_by_ordinal, audit_sha = rig
     cli = importlib.import_module('novel.cli.main')
     relative_request = _request(sha_by_ordinal, audit_sha)

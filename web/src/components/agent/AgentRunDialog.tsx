@@ -239,7 +239,7 @@ export function AgentRunDialog({
             />
             <span className="text-body text-ink-2">
               允许本会话产生外部模型调用费用。它只控制付费授权，不会顺带开启正文外发；
-              指挥与执行者的真实费用由所选 Agent CLI 或 Legacy API 模型产生。
+              执行节点的真实费用由所选 Agent CLI 或 Legacy API 模型产生。
             </span>
           </label>
 
@@ -287,7 +287,7 @@ export function AgentRunDialog({
           ) : null}
 
           <div className="flex items-center gap-10">
-            <span className="text-sm2 text-ink-4">给指挥 Agent 的 prompt（授权原文在里面）</span>
+            <span className="text-sm2 text-ink-4">给执行 Agent 的 prompt（授权原文在里面）</span>
             <LinkButton onClick={() => setPromptOpen((value) => !value)} disabled={!previewResponse}>
               {promptOpen
                 ? '收起 prompt'
@@ -327,10 +327,10 @@ export function AgentRunDialog({
         >
           <span data-testid="agent-run-cost-note" className="text-tag text-ink-4">
             {!authorized
-              ? '未授予模型调用费用：当前只可预览，不会启动指挥 Agent。'
+              ? '未授予模型调用费用：当前只可预览，不会启动执行 Agent。'
               : !egressAuthorized
-                ? '未授予正文外发：当前只可预览，不会启动指挥 Agent。'
-                : '发起后跳到进度屏；指挥与付费执行节点都可能产生所选模型的调用费用。'}
+                ? '未授予正文外发：当前只可预览，不会启动执行 Agent。'
+                : '发起后跳到进度屏；付费执行节点会产生所选模型的调用费用。'}
           </span>
           <button
             type="button"

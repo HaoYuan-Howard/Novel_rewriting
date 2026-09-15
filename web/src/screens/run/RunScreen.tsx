@@ -441,9 +441,8 @@ function nodeScreen(node: string): ScreenName | null {
 
 const NEXT_HANDLER_LABEL: Record<RunNextHandler, string> = {
   code: '代码（0 成本）',
-  commander: 'Commander（形成新裁决）',
   executor: 'Executor（执行既有决定）',
-  human: '等待人工处理',
+  human: '人工审批（在 Stage 页面过闸后可原配置续跑）',
   none: '没有后续节点',
   unknown: '尚不可判',
 }
@@ -628,7 +627,7 @@ export function RunScreen() {
                         <td>{unit.review ? <>
                           义务总量 {unit.review.total}<br />
                           待审 {unit.review.pending}，决定继承 {unit.review.decision_inherited}
-                        </> : unit.role === 'commander' ? `审阅进度未知：${unit.review_unavailable_reason ?? '尚无当前义务投影'}` : '由对应 Commander 审阅'}</td>
+                        </> : unit.role === 'commander' ? `审阅进度未知：${unit.review_unavailable_reason ?? '尚无当前义务投影'}` : '由人工审阅'}</td>
                         <td><span>{unit.state}</span><br /><span>{unit.recovery_action ?? '无已登记恢复动作'}</span>
                           {unit.registered !== false ? <WorkUnitBudgetGrant sid={sid} unitId={unit.unit_id} /> : null}
                         </td>

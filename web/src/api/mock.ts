@@ -397,7 +397,7 @@ function mockStage5Workpack(): Stage5ClosureWorkpack {
 
 function mockStage5ClosureDecision(): Stage5ClosureDecision {
   return {
-    actor: 'mock-commander',
+    actor: 'mock-reviewer',
     reason: 'mock 样本已完成整书闭合复核',
     review_token: MOCK_STAGE5_REVIEW_TOKEN,
     must_appear: [],
@@ -1242,8 +1242,7 @@ function cloneMockProfiles(profiles: AgentProfileSettingsView['profiles']) {
       ? { kind: 'agent' as const, profile: { ...backend.profile } }
       : { kind: 'legacy' as const, profile: { ...backend.profile } }
   return {
-    schema_version: 2 as const,
-    commander: { ...profiles.commander },
+    schema_version: 3 as const,
     executor_default: cloneBackend(profiles.executor_default),
     executor_overrides: Object.fromEntries(
       Object.entries(profiles.executor_overrides).map(([node, backend]) => [

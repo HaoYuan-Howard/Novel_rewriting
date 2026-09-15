@@ -357,7 +357,7 @@ def test_reconcile_cli_exposes_zero_cost_typed_beacon_tail_repair(
     assert beacon.open_executions(base, 'parent-1') == ()
 
 
-def test_commander_control_policy_allows_beacon_tail_inspect_but_not_apply(
+def test_execution_context_control_policy_allows_beacon_tail_inspect_but_not_apply(
         base, monkeypatch, capsys):
     import novel.cli.main as cli
 
@@ -365,13 +365,13 @@ def test_commander_control_policy_allows_beacon_tail_inspect_but_not_apply(
     path.parent.mkdir(parents=True, exist_ok=True)
     damaged = b'{"truncated":'
     path.write_bytes(damaged)
-    monkeypatch.setenv(cli.commander_context.COMMANDER_RUN_ID_ENV, 'parent-1')
+    monkeypatch.setenv(cli.execution_context.COMMANDER_RUN_ID_ENV, 'parent-1')
 
     assert cli.main([
         'reconcile', '--base', base, '--beacon-repair-tail']) == X.OK
     shown = json.loads(capsys.readouterr().out)
     assert cli.main([
         'reconcile', '--base', base, '--beacon-repair-tail',
-        '--actor', '恢复值守员', '--reason', 'Commander 内不得 apply',
+        '--actor', '恢复值守员', '--reason', '执行上下文内不得 apply',
         '--subject-sha256', shown['subject_sha256']]) == X.TERMINAL_STATE
     assert path.read_bytes() == damaged

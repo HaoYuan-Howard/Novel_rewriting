@@ -2,7 +2,6 @@ import type {
   AgentCapabilitiesResponse,
   AgentDriverCapability,
   AgentProfile,
-  AgentRole,
   ExecutorBackend,
   LegacyLlmProfile,
   LegacyProviderCapability,
@@ -32,7 +31,6 @@ export interface ExecutorBackendDraft {
 }
 
 export interface PipelineAgentProfilesDraft {
-  commander: AgentProfileDraft
   executor_default: ExecutorBackendDraft
   /** 键存在表示启用覆盖；没有键表示继承 executor_default。 */
   executor_overrides: Record<string, ExecutorBackendDraft>
@@ -62,7 +60,6 @@ export function emptyExecutorBackendDraft(): ExecutorBackendDraft {
 
 export function emptyPipelineAgentProfilesDraft(): PipelineAgentProfilesDraft {
   return {
-    commander: emptyAgentProfileDraft(),
     executor_default: emptyExecutorBackendDraft(),
     executor_overrides: {},
   }
@@ -107,7 +104,6 @@ export function pipelineDraftOf(
   if (profiles === null) return emptyPipelineAgentProfilesDraft()
   return {
     ...concurrencySnapshot(profiles.concurrency),
-    commander: profileDraftOf(profiles.commander),
     executor_default: executorBackendDraftOf(profiles.executor_default),
     executor_overrides: Object.fromEntries(
       Object.entries(profiles.executor_overrides).map(([node, backend]) => [
@@ -331,7 +327,6 @@ function legacyServesNodeAnywhere(
 function materializeProfile(
   capabilities: AgentCapabilitiesResponse,
   draft: AgentProfileDraft,
-  role: AgentRole,
   label: string,
 ): { profile: AgentProfile | null; errors: string[] } {
   const errors: string[] = []
@@ -344,7 +339,6 @@ function materializeProfile(
     errors.push(`${label}：driver ${draft.driver} 已不在当前 capability 中`)
     return { profile: null, errors }
   }
-  if (!driver.roles.includes(role)) errors.push(`${label}：${driver.label} 不支持 ${role} 角色`)
   if (driver.availability !== 'ready') {
     errors.push(`${label}：${driver.label} 当前为 ${driver.availability}：${driver.availability_reason}`)
   }
@@ -455,7 +449,7 @@ function materializeBackend(
   if (!draft.kind) return { backend: null, errors: [`${label}：请选择 Agent 或 Legacy API`] }
   if (draft.kind === 'agent') {
     const result = materializeProfile(
-      capabilities, draft.agent_profile, 'executor', label,
+      capabilities, draft.agent_profile, label,
     )
     return {
       backend: result.profile ? { kind: 'agent', profile: result.profile } : null,
@@ -476,13 +470,10 @@ export function materializePipelineAgentProfiles(
   capabilities: AgentCapabilitiesResponse,
   draft: PipelineAgentProfilesDraft,
 ): MaterializedProfiles {
-  const commander = materializeProfile(
-    capabilities, draft.commander, 'commander', '指挥大脑',
-  )
   const executorDefault = materializeBackend(
     capabilities, draft.executor_default, '默认执行者',
   )
-  const errors = [...commander.errors, ...executorDefault.errors]
+  const errors = [...executorDefault.errors]
   const overrides: Record<string, ExecutorBackend> = {}
   const knownNodes = new Set(capabilities.executor_nodes)
   // 任何 legacy 模型都不承接的节点 = agent-only：默认 legacy 时这些节点的
@@ -542,14 +533,13 @@ export function materializePipelineAgentProfiles(
   }
 
   const uniqueErrors = [...new Set(errors)]
-  if (!commander.profile || !executorDefault.backend || uniqueErrors.length > 0) {
+  if (!executorDefault.backend || uniqueErrors.length > 0) {
     return { profiles: null, errors: uniqueErrors }
   }
   return {
     profiles: {
-      schema_version: 2,
+      schema_version: 3,
       ...concurrencySnapshot(draft.concurrency),
-      commander: commander.profile,
       executor_default: executorDefault.backend,
       executor_overrides: overrides,
     },
@@ -572,9 +562,8 @@ export function clonePipelineAgentProfiles(
   profiles: PipelineAgentProfiles,
 ): PipelineAgentProfiles {
   return {
-    schema_version: 2,
+    schema_version: 3,
     ...concurrencySnapshot(profiles.concurrency),
-    commander: cloneAgentProfile(profiles.commander),
     executor_default: cloneExecutorBackend(profiles.executor_default),
     executor_overrides: Object.fromEntries(
       Object.entries(profiles.executor_overrides).map(([node, backend]) => [
@@ -627,7 +616,6 @@ export function pipelineProfilesEqual(
   if (left === null || right === null) return left === right
   if (left.schema_version !== right.schema_version) return false
   if (!concurrencyEqual(left.concurrency, right.concurrency)) return false
-  if (!profileEqual(left.commander, right.commander)) return false
   if (!backendEqual(left.executor_default, right.executor_default)) return false
   const leftNodes = Object.keys(left.executor_overrides).sort()
   const rightNodes = Object.keys(right.executor_overrides).sort()

@@ -133,28 +133,41 @@ def test_run_projects_current_review_states_and_only_current_role_recovery(clien
     reviews = actual['resume_frontier']['review_states']
     assert len(reviews) == 8
     assert {row['node'] for row in reviews} == {
-        node for node, spec in NODES.items() if spec.lifecycle.review_mode == 'commander'}
-    # Stage2 Commander 随语义审阅退役：run 面不再有 stage2 复核状态行。
+        node for node, spec in NODES.items() if spec.lifecycle.review_mode == 'human'}
+    # Stage2 语义审阅退役：run 面不再有 stage2 审批状态行。
     assert not [row for row in reviews if row['node'].startswith('stage2.')]
     assert operator._review_state_projection(None) is None
-    frontier = RunResumeFrontierView(
-        state='blocked', node='stage2.blueprint', seq=list(NODES).index('stage2.blueprint') + 1,
-        label=NODES['stage2.blueprint'].label, resume_verdict='run', why='先完成 Global 审阅',
-        waiting_on='approval:stage2-global-review', paid=True, writes='BluePrint',
-        next_handler='commander', review_states=reviews,
-        verified_skipped_nodes=list(NODES)[:list(NODES).index('stage2.blueprint')],
-        verified_skipped_count=list(NODES).index('stage2.blueprint'))
-    monkeypatch.setattr(operator, 'progress_read_snapshot',
-                        lambda *_args: nullcontext((SimpleNamespace(stages=[]), frontier)))
     def row(node, role, scope):
         return dict(unit_id=node+role+scope, node=node, role=role, scope=scope,
                     content_used=1, content_limit=4, content_remaining=3, state='delivered',
                     recovery_action='replay_response')
     monkeypatch.setattr(run.work_units, 'list_unit_views', lambda *_args: [
-        row('stage2.global', 'commander', 'book'), row('stage2.global', 'executor', 'book'),
-        row('stage2.blueprint', 'commander', 'chapter:1')])
+        row('stage4.plan', 'executor', 'structure'),
+        # 历史 commander 行保留只读解码，但不得进入当前恢复动作面。
+        row('stage4.plan', 'commander', 'structure'),
+        row('stage4.design', 'executor', 'design')])
+    # 人工审批闸：next_handler=human，任何模型工作单元都不投影恢复动作。
+    frontier = RunResumeFrontierView(
+        state='blocked', node='stage4.plan', seq=list(NODES).index('stage4.plan') + 1,
+        label=NODES['stage4.plan'].label, resume_verdict='run', why='等结构审阅人工裁决',
+        waiting_on='approval:stage4-structure-review', paid=False, writes='PlanChapters',
+        next_handler='human', review_states=reviews,
+        verified_skipped_nodes=list(NODES)[:list(NODES).index('stage4.plan')],
+        verified_skipped_count=list(NODES).index('stage4.plan'))
+    monkeypatch.setattr(operator, 'progress_read_snapshot',
+                        lambda *_args: nullcontext((SimpleNamespace(stages=[]), frontier)))
     response = c.get('/api/novels/42/run')
     assert response.status_code == 200
-    # Stage2 Commander 退役：global 的 commander 工作单元不再进入恢复动作面。
-    assert response.json()['current_recovery_actions'] == ['chapter:1: replay_response']
-    assert response.json()['resume_frontier']['next_handler'] == 'commander'
+    assert response.json()['resume_frontier']['next_handler'] == 'human'
+    assert response.json()['current_recovery_actions'] == []
+    # executor lane：只有与 next_handler 同角色的当前节点工作单元进入恢复动作。
+    frontier = RunResumeFrontierView(
+        state='blocked', node='stage4.design', seq=list(NODES).index('stage4.design') + 1,
+        label=NODES['stage4.design'].label, resume_verdict='run', why='A 修订待续跑',
+        waiting_on='recovery:stage4-design-action', paid=True, writes='BlindCandidate',
+        next_handler='executor', review_states=reviews,
+        verified_skipped_nodes=list(NODES)[:list(NODES).index('stage4.design')],
+        verified_skipped_count=list(NODES).index('stage4.design'))
+    response = c.get('/api/novels/42/run')
+    assert response.status_code == 200
+    assert response.json()['current_recovery_actions'] == ['design: replay_response']

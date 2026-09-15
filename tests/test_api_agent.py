@@ -1,16 +1,26 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-test_api_agent.py —— `/api/agent/runs` 各端点真的走一遍 HTTP（fake spawn 注入）。
+test_api_agent.py —— `/api/agent/runs` 各端点真的走一遍 HTTP（零成本子进程注入）。
 
-钉五件事：preview 与真跑同构（`R-11.8`）、202 拉起、列表与字节续读日志、
-熄火闸、以及**两个方向的互斥**（agent 活 ⇒ 起作业 409；作业活 ⇒ 拉 agent 409）。
+钉六件事：preview 与真跑同构（`R-11.8`）、202 拉起、列表与字节续读日志、
+熄火闸、暂停/恢复/停止的异步控制面，以及**两个方向的互斥**
+（agent 活 ⇒ 起作业 409；作业活 ⇒ 拉 agent 409）。
+
+【角色边界】受托 Commander 已退役（2026-09-15）：新 run 不再有顶层进程
+argv/prompt，也没有 driver fake 可注入；本文件改用与 test_agent.py 同一套
+Supervisor harness——``operator.next_action_at_code`` 假读面 +
+``agent._run_step_argv`` 零成本 ``python -c`` 子进程。历史 exit origin
+'commander' 仍是合法 Literal，只在「历史账解码」语境断言。
 
 本批不需要语料、不需要模型配额。
 """
 from __future__ import annotations
 
-import threading
+import sys
+import time
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -22,10 +32,6 @@ from contracts.schema.orchestration import (           # noqa: E402
     AgentDeliveryOutcome, AgentRunEvent, AgentRunStart,
 )
 from novel.api.app import UI_HEADER, create_app         # noqa: E402
-from novel.agents.base import AgentUsage                # noqa: E402
-from novel.commanders import (                          # noqa: E402
-    CommanderInvocation, CommanderObservation, CommanderProcessResult,
-)
 from novel.orchestrator import agent                    # noqa: E402
 
 UI = {UI_HEADER: '1'}
@@ -36,32 +42,12 @@ _PROFILE = {
     'reasoning_effort': 'high',
     'execution_mode': 'standard',
 }
+#: schema v3：只有 executor backend，没有 commander 字段。
 _PIPELINE_PROFILES = {
-    'schema_version': 2,
-    'commander': _PROFILE,
+    'schema_version': 3,
     'executor_default': {'kind': 'agent', 'profile': _PROFILE},
     'executor_overrides': {},
 }
-
-
-class _PlanningDriver:
-    def __init__(self, profile):
-        self.profile = profile
-
-    def build_invocation(self, profile, prompt, *, repo, base, **_kwargs):
-        del base
-        resume_id = _kwargs.get('resume_provider_session_id')
-        argv = [profile.driver, 'headless', '--model', profile.model]
-        if resume_id is not None:
-            argv.extend(('--resume', resume_id))
-        return CommanderInvocation(
-            argv=tuple(argv),
-            stdin_text=prompt, cwd=str(repo), env_overrides={},
-            profile=profile, protocol=f'{profile.driver}-test-v1',
-            resume_provider_session_id=resume_id)
-
-    def close(self):
-        return None
 
 
 @pytest.fixture(autouse=True)
@@ -76,20 +62,6 @@ def stable_code_version(monkeypatch):
     from novel import prov
 
     monkeypatch.setattr(prov, 'code_version', lambda: 'test-api-code-version')
-
-
-@pytest.fixture(autouse=True)
-def no_real_commander_cli(monkeypatch):
-    monkeypatch.setattr(
-        agent, 'create_commander_driver',
-        lambda profile, **_kwargs: _PlanningDriver(profile))
-    # HTTP 用例的 fake 只覆盖路由、锁与审计，不会真的推进 operator 盘面；
-    # 因此显式终止续会，避免 production 按 ready action 正确地继续拉 Commander。
-    monkeypatch.setattr(
-        agent.commander_completion, 'review_commander_stop',
-        lambda _base, _sid, outcome, **_kwargs:
-        agent.commander_completion.CommanderCompletionReview(
-            outcome=outcome, error_kind=None, continue_ready=False))
 
 
 #: 这一族用例真去拉 agent，而 `agent.start` / `enqueue` 现在**拒绝一本不在盘上的书**
@@ -109,35 +81,81 @@ def client(tmp_path):
         yield c, base
 
 
-def _result(invocation, env, *, exit_code=0):
-    return CommanderProcessResult(
-        exit_code=exit_code,
-        observation=CommanderObservation(
-            provider_session_id=f"provider-{env['NOVEL_COMMANDER_RUN_ID']}",
-            actual_model=invocation.profile.model,
-            actual_effort=invocation.profile.reasoning_effort,
-            usage=AgentUsage(prompt_tokens=5, completion_tokens=1,
-                             total_tokens=6)))
+# ── 派发 harness：HTTP 拉起的 agent 走真实 Supervisor ──────────────────
+
+def _install_dispatch(monkeypatch, tmp_root, *, blocking=True, ready_reads=1):
+    """前 ``ready_reads`` 次读面各派发一个零成本子进程，之后停在 stage0.approve
+    人工闸（exit 2 stopped）。
+
+    * ``blocking=True``：子进程等到 ``<stem>.go`` 出现才退出（暂停/停止类用例）。
+    返回 box：reads / argvs(epoch, permit, stem) / marker_root。
+    """
+    marker_root = Path(tmp_root) / '_dispatch'
+    marker_root.mkdir(parents=True, exist_ok=True)
+    box = {'reads': 0, 'argvs': [], 'marker_root': marker_root}
+
+    def next_action(_base, _sid, *, code):
+        box['reads'] += 1
+        if box['reads'] <= ready_reads:
+            return SimpleNamespace(
+                state='ready', code_version=code,
+                action=SimpleNamespace(
+                    node='stage0.remove', flags=[], waiting_on=None,
+                    action_sha256='a' * 64),
+                execution_token=SimpleNamespace(node='stage0.remove', flags=[]))
+        return SimpleNamespace(
+            state='blocked', code_version=code,
+            action=SimpleNamespace(
+                waiting_on='stage0.approve', action_sha256='b' * 64),
+            execution_token=None)
+
+    def step_argv(_base, _sid, epoch, permit, *, stem, **_kwargs):
+        box['argvs'].append((epoch, permit, stem))
+        if not blocking:
+            return [sys.executable, '-c', 'raise SystemExit(0)']
+        go = marker_root / f'{stem}.go'
+        ready = marker_root / f'{stem}.ready'
+        script = (
+            'import pathlib,sys,time\n'
+            'go=pathlib.Path(sys.argv[1]); ready=pathlib.Path(sys.argv[2])\n'
+            'ready.parent.mkdir(parents=True,exist_ok=True)\n'
+            'ready.write_text("1",encoding="utf-8")\n'
+            'while not go.exists():\n'
+            '    time.sleep(0.05)\n'
+            'raise SystemExit(0)\n')
+        return [sys.executable, '-c', script, str(go), str(ready)]
+
+    monkeypatch.setattr(agent.operator, 'next_action_at_code', next_action)
+    monkeypatch.setattr(agent, '_run_step_argv', step_argv)
+    monkeypatch.setattr(
+        agent, '_delivery_pause_note', lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        agent, '_assess_delivery',
+        lambda *_args, **_kwargs: AgentDeliveryOutcome(
+            state='stopped', reason='HTTP 派发 harness 测试停点', checked_at=1))
+    return box
 
 
-def _ok_spawn(invocation, env, log):
-    log.write(b'fake agent output\n')
-    return _result(invocation, env)
+def _wait_marker(path: Path, timeout: float = 10.0) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if path.is_file():
+            return
+        time.sleep(0.05)
+    raise AssertionError(f'子进程未落启动标记：{path}')
 
 
-def _inject_legacy_spawn(monkeypatch, fake_spawn):
-    """HTTP/互斥用例只替换 Commander 进程，不误触确定性节点 runner。"""
-    start_planned = agent._start_planned
-
-    def injected(plan, *, spawn=None, registry=agent.REGISTRY):
-        del spawn
-        return start_planned(plan, spawn=fake_spawn, registry=registry)
-
-    monkeypatch.setattr(agent, '_start_planned', injected)
+def _start_body(sid='42'):
+    return {
+        'sid': sid, 'authorized': True, 'egress_authorized': True,
+        'profiles': _PIPELINE_PROFILES,
+    }
 
 
-def test_preview_shows_the_exact_argv_and_prompt(client):
-    c, base = client
+# ── preview：与真跑同一 planner（R-11.8） ───────────────────────────────
+
+def test_preview_shows_the_frozen_boundary_without_commander_columns(client):
+    c, _ = client
     r = c.post('/api/agent/runs/preview', json={
         'sid': '42', 'authorized': True, 'egress_authorized': True,
         'profiles': _PIPELINE_PROFILES,
@@ -147,17 +165,15 @@ def test_preview_shows_the_exact_argv_and_prompt(client):
     d = r.json()
     assert d['authorized'] is True
     assert d['egress_authorized'] is True
-    assert '付费授权已授予' in d['prompt']
-    assert '正文外发授权已授予' in d['prompt']
     assert d['profiles'] == _PIPELINE_PROFILES
-    assert d['prompt'] not in d['argv']
+    # Commander 退役：preview 不再摊开顶层进程命令行/提示词两格。
+    assert d.get('argv') is None and d.get('prompt') is None
     # preview 仍可在未授权状态 0 成本查看；profiles 不能省略，因为当前默认是 null。
     d2 = c.post('/api/agent/runs/preview', json={
         'sid': '42', 'profiles': _PIPELINE_PROFILES,
     }, headers=UI).json()
     assert d2['authorized'] is False and d2['egress_authorized'] is True
-    assert '付费授权未授予' in d2['prompt']
-    assert '正文外发授权已授予' in d2['prompt']
+    assert d2['profiles'] == _PIPELINE_PROFILES
 
     # 外发授权可独立取消，不能被已勾选的付费授权覆盖。
     d3 = c.post('/api/agent/runs/preview', json={
@@ -165,8 +181,6 @@ def test_preview_shows_the_exact_argv_and_prompt(client):
         'profiles': _PIPELINE_PROFILES,
     }, headers=UI).json()
     assert d3['authorized'] is True and d3['egress_authorized'] is False
-    assert '付费授权已授予' in d3['prompt']
-    assert '正文外发授权未授予' in d3['prompt']
 
 
 @pytest.mark.parametrize('path,payload', [
@@ -185,11 +199,15 @@ def test_missing_pipeline_profiles_are_closed_while_default_is_null(
     assert '显式选择' in response.json()['message']
 
 
-def test_invalid_profile_combination_is_refused(client):
+def test_invalid_executor_profile_combination_is_refused(client):
+    """legacy 默认不再配 agent 覆盖 ⇒ 构造期就 400，不能等真跑才炸。"""
     c, _ = client
     bad = {
-        **_PIPELINE_PROFILES,
-        'commander': {**_PROFILE, 'model': 'claude-opus-5'},
+        'schema_version': 3,
+        'executor_default': {'kind': 'legacy', 'profile': {
+            'provider': 'deepseek', 'model': 'deepseek-v4-pro',
+            'reasoning_effort': 'high', 'thinking_mode': 'on'}},
+        'executor_overrides': {},
     }
     response = c.post('/api/agent/runs/preview', json={
         'sid': '42', 'profiles': bad,
@@ -198,27 +216,33 @@ def test_invalid_profile_combination_is_refused(client):
     assert response.json()['kind'] == 'UnsupportedRunMode'
 
 
-def test_start_list_log_and_stop_gate(client, monkeypatch):
+# ── 启动 / 列表 / 日志 / 熄火闸 ────────────────────────────────────────
+
+def test_start_list_log_and_stop_gate(client, monkeypatch, tmp_path):
     c, base = client
-    _inject_legacy_spawn(monkeypatch, _ok_spawn)
+    box = _install_dispatch(monkeypatch, tmp_path, blocking=False)
 
-    r = c.post('/api/agent/runs', json={
-        'sid': '42', 'authorized': True, 'egress_authorized': True,
-        'profiles': _PIPELINE_PROFILES,
-    }, headers=UI)
+    r = c.post('/api/agent/runs', json=_start_body(), headers=UI)
     assert r.status_code == 202
-    assert r.json()['start']['authorized'] is True
-    assert r.json()['start']['egress_authorized'] is True
-    assert r.json()['start']['profiles'] == _PIPELINE_PROFILES
-    run_id = r.json()['run_id']
-    assert agent.wait(run_id, 10)
+    started = r.json()
+    assert started['start']['authorized'] is True
+    assert started['start']['egress_authorized'] is True
+    assert started['start']['profiles'] == _PIPELINE_PROFILES
+    # 新 run 的 started 载荷不再写入 Commander 时代的 argv/prompt 两格。
+    assert started['start'].get('argv') is None
+    assert started['start'].get('prompt') is None
+    run_id = started['run_id']
+    assert agent.wait(run_id, 15)
 
+    # 单个 ready 动作跑完后，盘面停在人工审批闸 ⇒ exit 2 stopped。
     runs = c.get('/api/agent/runs?sid=42').json()['runs']
-    assert [r['state'] for r in runs] == ['ok']
+    assert [row['state'] for row in runs] == ['stopped']
+    assert runs[0]['exit_code'] == 2
+    assert '停在人工审批闸' in runs[0]['outcome']['reason']
     assert c.get('/api/agent/runs?sid=other').json()['runs'] == []
 
     log = c.get(f'/api/agent/runs/{run_id}/log?offset=0').json()
-    assert 'fake agent output' in log['text']
+    assert 'ready-stage0.remove' in log['text']
     again = c.get(f"/api/agent/runs/{run_id}/log?offset={log['next_byte']}").json()
     assert again['text'] == ''
 
@@ -251,6 +275,8 @@ def test_run_list_exposes_exit_two_with_stopped_outcome_as_stopped(client):
 
 @pytest.mark.parametrize('origin', [None, 'novel_cli', 'commander', 'supervisor'])
 def test_run_list_preserves_exit_origin_and_only_projects_novel_cli_one_as_landed(client, origin):
+    """历史账解码：'commander' 是已退役角色的历史 origin，仍是合法 Literal，
+    HTTP 读面必须原样投影而不重判；只有 novel_cli 的 1 投影成 landed_red。"""
     c, base = client
     agent.append(base, AgentRunEvent(
         run_id='origin', kind='started', ts=10,
@@ -277,85 +303,71 @@ def test_run_list_preserves_exit_origin_and_only_projects_novel_cli_one_as_lande
         assert record['note'] is None
 
 
-def test_pause_resume_stop_are_async_202_and_stop_ends_in_background(
-        client, monkeypatch):
-    """HTTP 只受理控制请求；节点自然闭合/取消后的 ended 由 worker 独占。"""
+# ── 暂停 / 恢复 / 停止：HTTP 只受理，ended 由 worker 独占 ──────────────
+
+def test_pause_resume_are_async_202_and_worker_writes_the_final_states(
+        client, monkeypatch, tmp_path):
+    """pause/resume 只受理（202，不带 ended）；最终 stopped 事实由 worker 写。"""
     c, base = client
-    first_entered = threading.Event()
-    release_first = threading.Event()
-    second_entered = threading.Event()
-    release_second = threading.Event()
-    cancel_requested = threading.Event()
-    invocations = []
-
-    monkeypatch.setattr(
-        agent.commander_completion, 'review_commander_stop',
-        lambda _base, _sid, outcome, **_kwargs:
-        agent.commander_completion.CommanderCompletionReview(
-            outcome=outcome, error_kind=None, continue_ready=True))
-
-    def controlled_spawn(invocation, env, log):
-        invocations.append(invocation)
-        if len(invocations) == 1:
-            first_entered.set()
-            assert release_first.wait(5)
-        else:
-            second_entered.set()
-            assert release_second.wait(5)
-        return _result(invocation, env)
-
-    def cancel(run_id):
-        del run_id
-        cancel_requested.set()
-        return 'Commander driver 已确认 cancel 请求'
-
-    _inject_legacy_spawn(monkeypatch, controlled_spawn)
-    monkeypatch.setattr(agent, '_cancel_commander_owner', cancel)
-    started = c.post('/api/agent/runs', json={
-        'sid': '42', 'authorized': True, 'egress_authorized': True,
-        'profiles': _PIPELINE_PROFILES,
-    }, headers=UI)
+    box = _install_dispatch(monkeypatch, tmp_path, blocking=True, ready_reads=2)
+    started = c.post('/api/agent/runs', json=_start_body(), headers=UI)
     assert started.status_code == 202
     run_id = started.json()['run_id']
     try:
-        assert first_entered.wait(5)
-        paused_request = c.post(
-            f'/api/agent/runs/{run_id}/pause', headers=UI)
+        _wait_marker(box['marker_root'] / 'ready-stage0.remove.ready')
+        paused_request = c.post(f'/api/agent/runs/{run_id}/pause', headers=UI)
         assert paused_request.status_code == 202
         assert paused_request.json()['ended'] is None
-        release_first.set()
+        (box['marker_root'] / 'ready-stage0.remove.go').touch()
         assert agent.pause(base, run_id, timeout=5).state == 'paused'
 
-        resumed_request = c.post(
-            f'/api/agent/runs/{run_id}/resume', headers=UI)
+        resumed_request = c.post(f'/api/agent/runs/{run_id}/resume', headers=UI)
         assert resumed_request.status_code == 202
-        assert second_entered.wait(5)
-        assert invocations[0].resume_provider_session_id is None
-        assert invocations[1].resume_provider_session_id == f'provider-{run_id}'
-
-        stopped_request = c.post(
-            f'/api/agent/runs/{run_id}/stop', headers=UI)
-        assert stopped_request.status_code == 202
-        assert cancel_requested.is_set()
-        assert stopped_request.json()['ended'] is None
-        assert not agent.wait(run_id, 0.05), (
-            '202 stop 不得同步等待并伪装 execution 已经 drain')
+        assert resumed_request.json()['ended'] is None
+        assert agent.wait(run_id, 15)
     finally:
-        if not cancel_requested.is_set():
-            try:
-                agent.request_stop(base, run_id)
-            except Exception:
-                pass
-        release_first.set()
-        release_second.set()
-        agent.wait(run_id, 10)
+        (box['marker_root'] / 'ready-stage0.remove.go').touch()
+        agent.wait(run_id, 15)
 
-    [done] = [row for row in c.get(
-        '/api/agent/runs?sid=42').json()['runs']
-              if row['run_id'] == run_id]
-    assert done['ended'] is not None
-    assert done['outcome']['state'] == 'stopped'
-    assert done['allowed_controls'] == []
+    # 暂停前后的两个 ready 动作都在同一 execution epoch 内派发；新世界没有
+    # provider 会话可续接，epoch 的 argv/prompt_sha256 两格保持 None。
+    assert len(box['argvs']) == 2
+    first_epoch, _permit, _stem = box['argvs'][0]
+    second_epoch, _permit, _stem = box['argvs'][1]
+    assert first_epoch.session_run_id == second_epoch.session_run_id
+    assert first_epoch.argv is None and first_epoch.prompt_sha256 is None
+    events = [row for row in agent.read_events(base) if row.run_id == run_id]
+    kinds = [row.kind for row in events]
+    assert 'paused' in kinds and 'resumed' in kinds
+    assert kinds.count('epoch_opened') == 1
+    [done] = [row for row in agent.records(base) if row.run_id == run_id]
+    assert done.ended is not None and done.exit_code == 2
+    assert done.state == 'stopped' and done.allowed_controls == []
+
+
+def test_stop_is_async_202_and_ends_only_after_the_process_tree_drains(
+        client, monkeypatch, tmp_path):
+    """stop 202 不得同步等待并伪装 execution 已经 drain；cancel 后仍由 worker 收口。"""
+    c, base = client
+    box = _install_dispatch(monkeypatch, tmp_path, blocking=True)
+    started = c.post('/api/agent/runs', json=_start_body(), headers=UI)
+    assert started.status_code == 202
+    run_id = started.json()['run_id']
+    try:
+        _wait_marker(box['marker_root'] / 'ready-stage0.remove.ready')
+
+        stopped_request = c.post(f'/api/agent/runs/{run_id}/stop', headers=UI)
+        assert stopped_request.status_code == 202
+        # 受理响应只能携带请求时刻的记录：ended 必须还是空，路由层不同步等待。
+        assert stopped_request.json()['ended'] is None
+    finally:
+        (box['marker_root'] / 'ready-stage0.remove.go').touch()
+        agent.wait(run_id, 15)
+
+    [done] = [row for row in agent.records(base) if row.run_id == run_id]
+    assert done.ended is not None and done.exit_code != 0
+    assert done.outcome is not None and done.outcome.state == 'stopped'
+    assert done.allowed_controls == []
 
 
 def test_csrf_guard_covers_the_mutation(client):
@@ -366,13 +378,13 @@ def test_csrf_guard_covers_the_mutation(client):
 @pytest.mark.parametrize('authorized,egress_authorized', [
     (False, True), (True, False), (False, False),
 ])
-def test_http_start_requires_both_authorizations_before_driver(
+def test_http_start_requires_both_authorizations_before_any_dispatch(
         client, monkeypatch, authorized, egress_authorized):
-    c, _ = client
-    called = []
+    c, base = client
+    dispatched = []
     monkeypatch.setattr(
-        agent, 'create_commander_driver',
-        lambda *_args, **_kwargs: called.append(True))
+        agent, '_run_step_argv',
+        lambda *_args, **_kwargs: dispatched.append(True))
     response = c.post('/api/agent/runs', json={
         'sid': '42', 'authorized': authorized,
         'egress_authorized': egress_authorized,
@@ -380,69 +392,55 @@ def test_http_start_requires_both_authorizations_before_driver(
     }, headers=UI)
     assert response.status_code == 409
     assert response.json()['kind'] == 'ApprovalRequired'
-    assert called == []
+    assert dispatched == [], '缺授权时不得构造任何 canonical 子进程'
+    assert not agent.runs_path(base).exists()
 
 
 def test_http_start_refuses_unknown_code_before_spawn(client, monkeypatch):
     from novel import prov
 
-    c, _ = client
-    spawned = []
+    c, base = client
+    dispatched = []
     monkeypatch.setattr(prov, 'code_version', lambda: prov.CODE_UNKNOWN)
     monkeypatch.setattr(
-        agent, '_default_spawn', lambda _run_id: spawned.append(True))
-    response = c.post('/api/agent/runs', json={
-        'sid': '42', 'authorized': True, 'egress_authorized': True,
-        'profiles': _PIPELINE_PROFILES,
-    }, headers=UI)
+        agent, '_run_step_argv',
+        lambda *_args, **_kwargs: dispatched.append(True))
+    response = c.post('/api/agent/runs', json=_start_body(), headers=UI)
     assert response.status_code == 400
     assert response.json()['kind'] == 'UnsupportedRunMode'
     assert '代码指纹不可用' in response.json()['message']
-    assert spawned == []
+    assert dispatched == []
+    assert not agent.runs_path(base).exists()
 
 
 def test_http_start_refuses_dirty_code_but_preview_shows_it(client, monkeypatch):
-    """`R-11.23`：dirty digest 可预览，付费 start 在 spawn 前 400。"""
+    """`R-11.23`：dirty digest 可 0 成本预览，付费 start 在派发前 400。"""
     from novel import prov
 
-    c, _ = client
-    spawned = []
+    c, base = client
     dirty = 'a' * 40 + '-dirty.' + 'b' * 16
     monkeypatch.setattr(prov, 'code_version', lambda: dirty)
+    dispatched = []
     monkeypatch.setattr(
-        agent, '_default_spawn', lambda _run_id: spawned.append(True))
-    preview = c.post('/api/agent/runs/preview', json={
-        'sid': '42', 'authorized': True, 'egress_authorized': True,
-        'profiles': _PIPELINE_PROFILES,
-    }, headers=UI)
+        agent, '_run_step_argv',
+        lambda *_args, **_kwargs: dispatched.append(True))
+    preview = c.post('/api/agent/runs/preview', json=_start_body(), headers=UI)
     assert preview.status_code == 200
-    # 公开 preview 不单列 code_version 字段；代码身份只在 Commander prompt 的审计起点里。
-    assert f'code_version=`{dirty}`' in preview.json()['prompt']
-    response = c.post('/api/agent/runs', json={
-        'sid': '42', 'authorized': True, 'egress_authorized': True,
-        'profiles': _PIPELINE_PROFILES,
-    }, headers=UI)
+    assert preview.json()['profiles'] == _PIPELINE_PROFILES
+    response = c.post('/api/agent/runs', json=_start_body(), headers=UI)
     assert response.status_code == 400
     assert response.json()['kind'] == 'UnsupportedRunMode'
     assert '未提交改动' in response.json()['message']
-    assert spawned == []
+    assert dispatched == []
 
 
-def test_both_directions_of_the_mutex(client, monkeypatch):
+def test_both_directions_of_the_mutex(client, monkeypatch, tmp_path):
     c, base = client
-    gate = threading.Event()
-
-    def slow(invocation, env, log):
-        gate.wait(10)
-        return _result(invocation, env)
-
-    _inject_legacy_spawn(monkeypatch, slow)
-    r = c.post('/api/agent/runs', json={
-        'sid': '42', 'authorized': True, 'egress_authorized': True,
-        'profiles': _PIPELINE_PROFILES,
-    }, headers=UI)
+    box42 = _install_dispatch(monkeypatch, tmp_path / 'b42', blocking=True)
+    r = c.post('/api/agent/runs', json=_start_body(), headers=UI)
     assert r.status_code == 202
     other = None
+    boxes = [box42]
     try:
         # agent 活着 ⇒ 起 API 作业 409（反向互斥在 jobs.start 里，路由层白拿）
         # ⚠ 必填的人工凭据要带全：`stage0.approve` 的 `required_flags` 缺一个就是 400
@@ -455,41 +453,32 @@ def test_both_directions_of_the_mutex(client, monkeypatch):
         }, headers=UI)
         assert r2.status_code == 409
         # 同一本书的第二个 agent 仍 409（一本书一把锁）
-        r3 = c.post('/api/agent/runs', json={
-            'sid': '42', 'authorized': True, 'egress_authorized': True,
-            'profiles': _PIPELINE_PROFILES,
-        },
-                     headers=UI)
+        r3 = c.post('/api/agent/runs', json=_start_body(),
+                    headers=UI)
         assert r3.status_code == 409
         # ⭐ 但**另一本书**起得来：锁按书分，异书两个 agent 谁也碰不到谁的目录。
-        r4 = c.post('/api/agent/runs', json={
-            'sid': '43', 'authorized': True, 'egress_authorized': True,
-            'profiles': _PIPELINE_PROFILES,
-        }, headers=UI)
+        boxes.append(_install_dispatch(
+            monkeypatch, tmp_path / 'b43', blocking=True))
+        r4 = c.post('/api/agent/runs', json=_start_body('43'), headers=UI)
         assert r4.status_code == 202, '另一本书被挡住了——锁又变回全局一把了'
         other = r4.json()['run_id']
     finally:
-        # ⚠ 收尾走 `wait` 不是 `stop`：这一批用的是 monkeypatch 进去的假 spawn，
-        # Commander owner 表里根本没有句柄，`stop` 会以「没有在跑的子进程」当场炸掉。
-        gate.set()
-        agent.wait(r.json()['run_id'], 10)
+        # ⚠ 收尾走 `wait` 不是 `stop`：子进程是 harness 造的零成本 python 子进程，
+        #   逐个放行 go 标记后等 worker 自己收口。
+        for box in boxes:
+            (box['marker_root'] / 'ready-stage0.remove.go').touch()
+        agent.wait(r.json()['run_id'], 15)
         if other:
-            agent.wait(other, 10)
+            agent.wait(other, 15)
 
 
 # ───────────────────── 批量入口与队列（并发放开之后的新面） ─────────────────────
 
-def test_batch_starts_what_it_can_and_queues_the_rest(client, monkeypatch):
+def test_batch_starts_what_it_can_and_queues_the_rest(client, monkeypatch, tmp_path):
     """⭐ 一次交 N 本：闸内的立刻跑，超出的排队。**202 = 已受理，不是已跑完。**"""
     c, base = client
     monkeypatch.setattr(agent, 'MAX_CONCURRENT', 2)
-    gate = threading.Event()
-
-    def slow(invocation, env, log):
-        gate.wait(10)
-        return _result(invocation, env)
-
-    _inject_legacy_spawn(monkeypatch, slow)
+    box = _install_dispatch(monkeypatch, tmp_path, blocking=True)
     started = []
     try:
         r = c.post('/api/agent/runs/batch', json={
@@ -507,11 +496,11 @@ def test_batch_starts_what_it_can_and_queues_the_rest(client, monkeypatch):
         assert d['rejected'] == []
         started = [rec['run_id'] for rec in d['running']]
     finally:
-        gate.set()
+        (box['marker_root'] / 'ready-stage0.remove.go').touch()
         for run_id in started:
-            agent.wait(run_id, 10)
+            agent.wait(run_id, 15)
         for rec in agent.records(base):
-            agent.wait(rec.run_id, 10)
+            agent.wait(rec.run_id, 15)
 
 
 def test_the_queue_endpoint_publishes_the_gate(client):
@@ -524,20 +513,11 @@ def test_the_queue_endpoint_publishes_the_gate(client):
     assert d['running'] == [] and d['pending'] == []
 
 
-def test_batch_rejects_a_book_that_already_has_an_agent(client, monkeypatch):
+def test_batch_rejects_a_book_that_already_has_an_agent(client, monkeypatch, tmp_path):
     """**部分失败不回滚**：重复那本进 `rejected`，其余照常受理。"""
     c, base = client
-    gate = threading.Event()
-
-    def slow(invocation, env, log):
-        gate.wait(10)
-        return _result(invocation, env)
-
-    _inject_legacy_spawn(monkeypatch, slow)
-    first = c.post('/api/agent/runs', json={
-        'sid': '42', 'authorized': True, 'egress_authorized': True,
-        'profiles': _PIPELINE_PROFILES,
-    }, headers=UI)
+    box = _install_dispatch(monkeypatch, tmp_path, blocking=True)
+    first = c.post('/api/agent/runs', json=_start_body(), headers=UI)
     assert first.status_code == 202
     try:
         r = c.post('/api/agent/runs/batch', json={
@@ -549,9 +529,9 @@ def test_batch_rejects_a_book_that_already_has_an_agent(client, monkeypatch):
         assert [x['sid'] for x in d['rejected']] == ['42']
         assert '43' in {rec['start']['sid'] for rec in d['running']}
     finally:
-        gate.set()
+        (box['marker_root'] / 'ready-stage0.remove.go').touch()
         for rec in agent.records(base):
-            agent.wait(rec.run_id, 10)
+            agent.wait(rec.run_id, 15)
 
 
 def test_batch_still_needs_the_csrf_header(client):

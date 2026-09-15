@@ -34,7 +34,8 @@ Stage4～7 链路重构批次。V5→V6 显式迁移用例（`tests/test_workflo
 `frozen_stage5` 按来源证明守卫带原因跳过，链路迁移批次闭合后自动恢复。
 
 - [x] Gate A：一次 Analyze Executor、两个独立编译器、Characters v2 / Global v7、统一
-      Global Commander；闭合 CLI/API、待审、共享首抽统计、typed 编辑及已购回答/半边失败恢复。
+      Global 接受（当时经统一 Global Commander 席位完成，该角色已于 2026-09-15 退役，现役审批一律
+      人工在 Stage 页面过闸）；闭合 CLI/API、待审、共享首抽统计、typed 编辑及已购回答/半边失败恢复。
       已在 `f5a95aa` 完成指定小说原文核验及免费 typed 恢复，接受署名 `codex`。
       C1 误接受、C2～C4 格式拒绝原样保留；不声明模型正常路径自动通过。
       冻结证据为 `E:\NovelAcceptance_Stage2CoreV2\reports\gate-a-f5a95aa.json`。
@@ -50,7 +51,7 @@ Stage4～7 链路重构批次。V5→V6 显式迁移用例（`tests/test_workflo
 Gate A 使用 `E:\NovelAcceptance_Stage2CoreV2`：source 为指定小说的字节一致副本，output
 为独立产物根；`NOVEL_DATA` / `NOVEL_CORPUS` 指 source，`NOVEL_OUTPUT` 指 output。
 已核验源 SHA-256 为 `c717b0e567cf7aff7ac35caf3c665be00341a39b246e205327f8686ec75a234c`。
-Executor / Commander 固定 `claude-code-glm / glm-5.3-flash[1M] / high`，已获付费与全文外发授权；
+Executor 与历史轮的 Commander 固定 `claude-code-glm / glm-5.3-flash[1M] / high`，已获付费与全文外发授权；
 每个 E/C 单元基础四次，不自动追加、重置或切模型。跨 Gate 冻结新代码、排空旧 owner、开新
 执行 epoch，保留任务身份、原 profiles、累计费用和可证明复用产物。
 
@@ -98,7 +99,8 @@ Stage5 紧凑整章任务书、不可变人工追加额度与原 profiles 续跑
 
 **历史授权范围（2026-09-11，当前暂停执行）**：继续隔离根中的《夫君的报恩》，并验收
 《夫君不行，但我有孕啦》。用户因 Codex 连接超时改用已配置的 Claude CLI / 智谱 GLM 5.3 Flash，
-两书的 Executor、Commander 均明确设为 `max`，能力仅发布 `low/high/max`。
+两书的 Executor 与当时现役的 Commander 均明确设为 `max`（Commander 已于 2026-09-15 退役），
+能力仅发布 `low/high/max`。
 原 OpenAI 配置、失败尝试及已购成果作为原始证据保留；换模型走显式新运行，累计预算不重置。
 两书原 OpenAI 外发与付费及本次指定智谱路线的必要调用沿用会话授权，不重复询问。
 先冻结已验收工程代码并提交，

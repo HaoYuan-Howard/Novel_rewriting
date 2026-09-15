@@ -75,7 +75,7 @@ def test_commander_mark_reuses_a_preclose_node_claim_after_gate_closed(
     monkeypatch.setenv(admission.CLAIM_ID_ENV, claim.claim_id)
     monkeypatch.setenv(C.run_identity.RUN_ID_ENV, parent_run_id)
     monkeypatch.setattr(
-        C.commander_context, 'load_from_environment',
+        C.execution_context, 'load_from_environment',
         lambda *_args, **_kwargs: SimpleNamespace(run_id=parent_run_id))
     monkeypatch.setattr(
         write_admission, 'operation_scope',
@@ -110,9 +110,9 @@ def test_commander_end_closes_exact_open_execution_through_drift_loader(
         raise AssertionError('phase=end 不得再走会被当前 code/skill 漂移阻断的执行 loader')
 
     monkeypatch.setattr(
-        C.commander_context, 'load_from_environment', strict_loader)
+        C.execution_context, 'load_from_environment', strict_loader)
     monkeypatch.setattr(
-        C.commander_context, 'load_for_execution_close_from_environment',
+        C.execution_context, 'load_for_execution_close_from_environment',
         lambda *_args, **_kwargs: SimpleNamespace(run_id=parent_run_id))
     args = SimpleNamespace(
         base=str(tmp_path), sid='42', node='stage2.blueprint', phase='end',
@@ -136,7 +136,7 @@ def test_commander_end_drift_loader_cannot_append_an_orphan_execution(
     monkeypatch.setenv(admission.CLAIM_ID_ENV, claim.claim_id)
     monkeypatch.setenv(C.run_identity.RUN_ID_ENV, parent_run_id)
     monkeypatch.setattr(
-        C.commander_context, 'load_for_execution_close_from_environment',
+        C.execution_context, 'load_for_execution_close_from_environment',
         lambda *_args, **_kwargs: SimpleNamespace(run_id=parent_run_id))
     args = SimpleNamespace(
         base=str(tmp_path), sid='42', node='stage2.blueprint', phase='end',
@@ -159,7 +159,7 @@ def test_contextless_mark_uses_writer_coordination_scope(monkeypatch, tmp_path):
         yield object()
 
     monkeypatch.setattr(
-        C.commander_context, 'load_from_environment',
+        C.execution_context, 'load_from_environment',
         lambda *_args, **_kwargs: None)
     monkeypatch.setattr(write_admission, 'operation_scope', scope)
     monkeypatch.setattr(C.beacon, 'append', lambda _base, event: events.append(event))
@@ -187,7 +187,7 @@ def test_commander_mark_requires_exact_execution_and_parent_identity(
     monkeypatch.setenv(admission.CLAIM_ID_ENV, claim.claim_id)
     monkeypatch.setenv(C.run_identity.RUN_ID_ENV, parent_run_id)
     monkeypatch.setattr(
-        C.commander_context, 'load_from_environment',
+        C.execution_context, 'load_from_environment',
         lambda *_args, **_kwargs: SimpleNamespace(run_id=parent_run_id))
     args = SimpleNamespace(
         base=str(tmp_path), sid='42', node='stage2.global', phase='start',
@@ -208,7 +208,7 @@ def test_commander_mark_does_not_let_explicit_run_id_mask_inherited_drift(
     monkeypatch.setenv(admission.CLAIM_ID_ENV, claim.claim_id)
     monkeypatch.setenv(C.run_identity.RUN_ID_ENV, 'other-parent')
     monkeypatch.setattr(
-        C.commander_context, 'load_from_environment',
+        C.execution_context, 'load_from_environment',
         lambda *_args, **_kwargs: SimpleNamespace(run_id=parent_run_id))
     args = SimpleNamespace(
         base=str(tmp_path), sid='42', node='stage2.global', phase='start',

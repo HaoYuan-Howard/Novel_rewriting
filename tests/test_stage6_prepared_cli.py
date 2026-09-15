@@ -103,16 +103,16 @@ def test_exact_free_recovery_is_real_queue_supervisor_cli_and_http_preview(tmp_p
         rc = cli.main(['run', node, ctx.sid, '--base', str(tmp_path), *flags])
         assert X.landed(rc) and rc == expected_rc
         return SupervisorActionResult(rc, _outcome('ready' if rc == X.OK else 'stopped'), False)
-    forbidden = lambda *_a: pytest.fail('免费提交不能进入 Commander 或默认生成')
+    forbidden = lambda *_a: pytest.fail('免费提交不能进入默认生成或已退役审阅通道')
     supervisor = RunSupervisor(
         run_id='test-free-stage6', append_event=lambda _event: None,
         make_epoch=forbidden, open_epoch=lambda _epoch: None,
-        close_epoch=lambda _epoch, _turn: 'drained', run_commander_turn=forbidden,
-        epoch_identity_current=lambda _epoch: True, cancel_commander=lambda: True,
+        close_epoch=lambda _epoch, _turn: 'drained',
+        epoch_identity_current=lambda _epoch: True, cancel_active=lambda: True,
         initial_epoch=_epoch('free-stage6-epoch', 1, 'initial').model_copy(update={
             'code_version': current.code_version}),
         read_operator_next=lambda _epoch: operator.next_action(tmp_path, ctx.sid),
-        run_ready_action=forbidden, run_reviewer=forbidden, finalize_run=forbidden,
+        run_ready_action=forbidden, finalize_run=forbidden,
         run_blocked_action=recover, deterministic_blockers=queue.DETERMINISTIC_RECOVERY_WAITING_ON)
     result = supervisor.run()
     assert X.landed(result.turn.exit_code) and result.turn.exit_code == expected_rc

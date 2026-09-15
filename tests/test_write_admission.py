@@ -14,7 +14,7 @@ from contracts.schema.orchestration import (
     AgentProfile, AgentRunEvent, AgentRunStart, PipelineAgentProfiles,
 )
 from novel.orchestrator import operator_telemetry as telemetry
-from novel.commanders import context as commander_context
+from novel.orchestrator import execution_context
 from novel.errors import TerminalState
 from novel.orchestrator import admission, agent, jobs, write_admission
 
@@ -41,21 +41,21 @@ def _install_commander(base: Path, monkeypatch, *, run_id: str = PARENT) -> str:
         identity_version=2, profiles=_profiles())
     agent.append(base, AgentRunEvent(
         run_id=run_id, kind='started', ts=1, start=start))
-    env = commander_context.env_with_context(
+    env = execution_context.env_with_context(
         run_id=run_id, base=base, start=start, env={})
     for key, value in env.items():
         monkeypatch.setenv(key, value)
     monkeypatch.setattr(
-        commander_context.prov, 'code_version',
+        execution_context.prov, 'code_version',
         lambda: 'write-guard-code-v1')
     return run_id
 
 
 def _without_commander(monkeypatch) -> None:
     monkeypatch.delenv(
-        commander_context.COMMANDER_RUN_ID_ENV, raising=False)
+        execution_context.COMMANDER_RUN_ID_ENV, raising=False)
     monkeypatch.delenv(
-        commander_context.COMMANDER_CONTRACT_SHA256_ENV, raising=False)
+        execution_context.COMMANDER_CONTRACT_SHA256_ENV, raising=False)
 
 
 def _finish_gate(base: Path, run_id: str) -> None:

@@ -53,7 +53,8 @@ def inspect(base: str | Path, run_id: str) -> AgentRunContinuationView:
         if resolved != profiles:
             raise TerminalState('当前 profile 解析会改变历史配置，拒绝静默改写')
         return AgentRunContinuationView(run_id=checked, sid=run.start.sid, available=True,
-            reason='复用原 Commander、默认执行者与逐节点覆盖；重新明确本次两项授权',
+            reason='复用原默认执行者与逐节点覆盖（profiles v3 起无 Commander 字段，'
+                   '历史行读边界自动丢弃）；重新明确本次两项授权',
             profiles=profiles, source=source, pause_before_node=boundary)
     except (TerminalState, OSError, ValueError) as exc:
         return AgentRunContinuationView(run_id=checked, available=False, reason=str(exc))

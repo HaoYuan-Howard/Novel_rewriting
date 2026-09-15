@@ -23,7 +23,7 @@ Stage0 revision、当前材料 SHA 和最初模型的生成根；旧候选仍从
 旧提交，也不能借一次免费修订继承原接受。仅原钩子变化且正文完全相同时，Stage2–5
 依 `source_identity` 的窄证明保留自身来源与有效审批，Prepare / Hook 仍按真实输入失效。
 
-Hook 和 A/B 的 `judged` 只记录实际下发的连续开篇章稿；最终文案 Commander 的 v4 工作包
+Hook 和 A/B 的 `judged` 只记录实际下发的连续开篇章稿；最终文案人工审批的 v4 工作包
 另绑定全书成稿、原钩子和 `prepare_subject_sha256`，token 前缀 `s6r4_`。Prepare 证据定位
 或 rationale 订正可重开 Prepare 审阅，但不改变创作语义时不扩大 Hook / A/B 付费输入。
 全书故事地图保留 Writer9 的公开人物、global_subjects、narration、background_beats 和所有

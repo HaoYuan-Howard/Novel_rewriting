@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-commander_context.py —— Commander 与它启动的 operator/CLI 子进程之间的冻结契约。
+execution_context.py —— AgentRun 与它启动的 operator/CLI 子进程之间的冻结契约。
+
+历史名 ``commander_context``：Commander 受托审阅退役（2026-09-15）后这里是
+executor 子进程派发的唯一上下文契约。环境变量名与盘上 contract/epoch SHA 面
+保持不变——它们是跨进程冻结契约，重命名只会制造一次无收益的漂移。
 
 这里刻意不把完整 profile 或授权 JSON 塞进环境变量。环境只携带 append-only
 ``agent_runs.jsonl`` 中一条 ``started`` 事件的 run id 与 canonical SHA-256；每个
@@ -167,7 +171,7 @@ def env_with_context(
 
 
 @dataclass(frozen=True)
-class CommanderContext:
+class ExecutionContext:
     run_id: str
     base: str
     contract_sha256: str
@@ -205,7 +209,7 @@ class CommanderContext:
 
 
 @dataclass(frozen=True)
-class CommanderExecutionCloseContext:
+class ExecutionCloseContext:
     """只能标识旧 execution 收尾，不携 profile、授权或 producer 能力。"""
 
     run_id: str
@@ -237,7 +241,7 @@ def _load_from_environment(
     env: Mapping[str, str] | None = None,
     records: Sequence[AgentRunRecord] | None = None,
     require_current_identity: bool,
-) -> CommanderContext | CommanderExecutionCloseContext | None:
+) -> ExecutionContext | ExecutionCloseContext | None:
     """重读并验证父 Commander 的冻结事实；没有两格环境时表示直接 CLI。
 
     ``records`` 只是给零成本测试/只读调用注入已经折叠的事件；生产省略时从
@@ -314,7 +318,7 @@ def _load_from_environment(
         # 这里有意在 profile registry、当前 code/identity 与两项执行授权之前返回。
         # 关闭凭证不暴露这些字段，因此既不会因今天的 registry 变化再次卡死，
         # 也不可能被误传给 executor/producer 当作旧 epoch 的执行授权。
-        return CommanderExecutionCloseContext(
+        return ExecutionCloseContext(
             run_id=run_id, base=base_abs, contract_sha256=claimed_sha,
             epoch=epoch, admission_id=admission_id_raw)
     profile_snapshot = (
@@ -341,7 +345,7 @@ def _load_from_environment(
         raise TerminalState(
             'Commander contract 的起始代码指纹与当前代码不一致或不可证明；'
             f'epoch/start={effective_code_version!r}, current={current_code!r}')
-    return CommanderContext(
+    return ExecutionContext(
         run_id=run_id,
         base=base_abs,
         contract_sha256=claimed_sha,
@@ -357,11 +361,11 @@ def load_from_environment(
     base: str | os.PathLike[str], sid: str, *,
     env: Mapping[str, str] | None = None,
     records: Sequence[AgentRunRecord] | None = None,
-) -> CommanderContext | None:
+) -> ExecutionContext | None:
     """严格加载执行上下文；任何当前 code/identity 漂移都拒绝继续执行。"""
     loaded = _load_from_environment(
         base, sid, env=env, records=records, require_current_identity=True)
-    assert loaded is None or isinstance(loaded, CommanderContext)
+    assert loaded is None or isinstance(loaded, ExecutionContext)
     return loaded
 
 
@@ -369,7 +373,7 @@ def load_for_execution_close_from_environment(
     base: str | os.PathLike[str], sid: str, *,
     env: Mapping[str, str] | None = None,
     records: Sequence[AgentRunRecord] | None = None,
-) -> CommanderExecutionCloseContext | None:
+) -> ExecutionCloseContext | None:
     """加载仅供精确 execution end 收尾的旧 epoch 指针。
 
     这不是执行授权。调用方必须同时证明 active admission claim 与同 parent 下
@@ -377,11 +381,11 @@ def load_for_execution_close_from_environment(
     """
     loaded = _load_from_environment(
         base, sid, env=env, records=records, require_current_identity=False)
-    assert loaded is None or isinstance(loaded, CommanderExecutionCloseContext)
+    assert loaded is None or isinstance(loaded, ExecutionCloseContext)
     return loaded
 
 
-def require_execution_authorized(context: CommanderContext) -> None:
+def require_execution_authorized(context: ExecutionContext) -> None:
     """首个外部调用前同时核两项授权；任一不能从另一项推定。"""
     missing: list[str] = []
     if not context.start.authorized:
@@ -397,8 +401,8 @@ __all__ = [
     'COMMANDER_ADMISSION_ID_ENV', 'COMMANDER_CONTRACT_SHA256_ENV',
     'COMMANDER_EPOCH_ID_ENV',
     'COMMANDER_EPOCH_SHA256_ENV', 'COMMANDER_RUN_ID_ENV',
-    'CONTRACT_PROTOCOL', 'CONTRACT_V2_PROTOCOL', 'CommanderContext',
-    'CommanderExecutionCloseContext',
+    'CONTRACT_PROTOCOL', 'CONTRACT_V2_PROTOCOL', 'ExecutionContext',
+    'ExecutionCloseContext',
     'action_admission_id_belongs_to_epoch',
     'contract_payload', 'contract_sha256', 'contract_v2_payload',
     'contract_v2_sha256', 'epoch_sha256', 'env_with_context', 'load_from_environment',

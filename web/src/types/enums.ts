@@ -32,17 +32,17 @@ export interface EnumJobKind {
     unit_kind: string
     input_workpack: string
     generation_mode: string
+    /** 审阅节点一律 'human'（Commander 退役后审批闸由人工在 Stage 页面过）。 */
     review_mode: string
     review_scope: string
-    review_actions: string[]
-      approval_projection: string[]
+    approval_projection: string[]
     repair_actions: string[]
     repair_owners: string[]
     session_scope: string
     recovery_entries: string[]
     executor_content_limit: number
-    commander_content_limit: number
-    commander_bindings: [string, string][]
+    /** [blocker, scope][]：审批闸归属映射，形状与退役前的 commander_bindings 相同。 */
+    approval_bindings: [string, string][]
   }
 }
 

@@ -26,7 +26,6 @@
       "id": "claude-code",
       "provider": "anthropic",
       "label": "Claude Code",
-      "roles": ["commander", "executor"],
       "availability": "ready",
       "availability_reason": "mock：CLI 可执行且版本探针成功；未发模型请求",
       "version": "2.1.237 (mock)",
@@ -49,7 +48,6 @@
       "id": "codex",
       "provider": "openai",
       "label": "Codex",
-      "roles": ["commander", "executor"],
       "availability": "ready",
       "availability_reason": "mock：CLI 可执行且版本探针成功；未发模型请求",
       "version": "0.148.0 (mock)",
@@ -72,10 +70,6 @@
       "id": "claude-code-glm",
       "provider": "bigmodel",
       "label": "Claude Code · 智谱 GLM",
-      "roles": [
-        "commander",
-        "executor"
-      ],
       "availability": "ready",
       "availability_reason": "mock：CLI 可执行且版本探针成功；未发模型请求",
       "version": "2.1.259 (mock)",

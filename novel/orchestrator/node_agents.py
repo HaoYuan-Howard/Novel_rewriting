@@ -105,7 +105,7 @@ class NodeExecutorAgent(ABC, Generic[A]):
             raise ValueError(f'{self.node} executor 缺 resolved profile')
         self.ctx = ctx
         self.driver = driver or create_driver(
-            ctx.executor_profile, role='executor')
+            ctx.executor_profile)
         self.client = SessionAgentClient(
             ctx, ctx.executor_profile, self.driver,
             parent_run_id=ctx.run_id, max_semantic_turns=max_turns)
@@ -424,7 +424,7 @@ class BlueprintSessionPool:
         self._contract = active_contract()
         self._driver_factory = driver_factory or (
             lambda _phase, _purpose, _chapter: create_driver(
-                self.profile, role='executor'))
+                self.profile))
         self._clients = self._sessions.clients
         self._purpose_keys: dict[str, tuple[str, str, int]] = {}
         self._subjects: dict[str, tuple[str, str]] = {}
@@ -1159,7 +1159,7 @@ class Stage4DesignSessionPool:
         self.concurrency = self._sessions.concurrency
         self._driver_factory = driver_factory or (
             lambda _purpose, _chapter: create_driver(
-                self.profile, role='executor'))
+                self.profile))
         self._clients = self._sessions.clients
         self._restored: dict[str, dict[str, Any]] = {}
         self._subjects: dict[str, tuple[str, str]] = {}
@@ -1732,7 +1732,7 @@ class Stage4PlanSessionPool:
         self.concurrency = self._sessions.concurrency
         self._driver_factory = driver_factory or (
             lambda _purpose, _chapter: create_driver(
-                self.profile, role='executor'))
+                self.profile))
         self._clients = self._sessions.clients
         self._failed_chapters = self._sessions.isolation_failed_keys
         self._progress: dict[int, RequestProgress] = {}
@@ -2007,7 +2007,7 @@ class Stage5SessionPool:
         self.concurrency = self._sessions.concurrency
         self._reviewer_rewrite = reviewer_rewrite
         self._driver_factory = driver_factory or (
-            lambda _chapter: create_driver(self.profile, role='executor'))
+            lambda _chapter: create_driver(self.profile))
         self._clients = self._sessions.clients
         self._subjects: dict[int, tuple[str, str, int]] = {}
         self._restored: dict[int, dict[str, Any]] = {}
@@ -2680,7 +2680,7 @@ class SemanticSessionPool:
         self.model = self._sessions.model
         self.max_turns = self._sessions.max_turns
         self._driver_factory = driver_factory or (
-            lambda _role: create_driver(self.profile, role='executor'))
+            lambda _role: create_driver(self.profile))
         self._clients = self._sessions.clients
         self._restored: dict[str, dict[str, Any]] = {}
         self._subjects: dict[str, tuple[str, str]] = {}

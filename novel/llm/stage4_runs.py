@@ -4640,10 +4640,10 @@ def _design_recovery_source_owner(
             f'Stage4 recovery parent={parent!r} fold 与严格生命周期不等')
     live_parent = not ended
     if live_parent and not ctx.readonly:
-        from novel.commanders import context as commander_context
+        from novel.orchestrator import execution_context
         from novel.orchestrator import admission
 
-        current = commander_context.load_from_environment(
+        current = execution_context.load_from_environment(
             base, ctx.sid)
         if (ctx.parent_run_id != parent or ctx.run_id == source
                 or current is None or current.run_id != parent
@@ -4752,7 +4752,7 @@ def _repair_source_profile(run: Mapping[str, Any], *, purpose: str) -> AgentProf
     raw = policy.get('profile') if isinstance(policy, dict) else None
     try:
         profile = validate_profile(
-            AgentProfile.model_validate(raw), role='executor')
+            AgentProfile.model_validate(raw))
     except (ValidationError, ValueError) as exc:
         raise ProvenanceRefused(
             f'{purpose}: source run 的 executor profile 不可执行：{exc}') from exc

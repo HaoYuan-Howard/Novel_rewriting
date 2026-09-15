@@ -251,7 +251,7 @@ def _resolved_profile(ctx: Any, value: object, *, label: str) -> dict[str, Any]:
         raise ProvenanceRefused(f'{label} 缺 resolved agent profile 对象')
     try:
         resolved = validate_profile(
-            AgentProfile.model_validate(value), role='executor')
+            AgentProfile.model_validate(value))
     except (ValidationError, ValueError) as exc:
         raise ProvenanceRefused(f'{label} 的 agent profile 不可执行：{exc}') from exc
     normalized = resolved.model_dump(mode='json')
@@ -263,7 +263,7 @@ def _resolved_profile(ctx: Any, value: object, *, label: str) -> dict[str, Any]:
         raise ProvenanceRefused(
             f'{label} 声明 agent 协议，但当前 RunContext 没有 executor profile')
     try:
-        current_resolved = validate_profile(current, role='executor')
+        current_resolved = validate_profile(current)
     except (ValidationError, ValueError) as exc:
         raise ProvenanceRefused(f'当前 executor profile 不可执行：{exc}') from exc
     if current_resolved.model_dump(mode='json') != normalized:

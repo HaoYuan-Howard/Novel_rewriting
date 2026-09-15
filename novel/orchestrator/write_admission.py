@@ -26,7 +26,7 @@ from dataclasses import dataclass
 
 from novel import paths, run_identity
 
-from novel.commanders import context as commander_context
+from novel.orchestrator import execution_context
 from novel.orchestrator import admission, jobs
 
 
@@ -116,7 +116,7 @@ def operation_scope(
         env: Mapping[str, str] | None = None) -> Iterator[WriteAdmission]:
     """在一次非节点写动作的完整窗口内持有 generic claim。
 
-    Commander context 的校验由 ``commander_context.load_from_environment`` 唯一
+    Commander context 的校验由 ``execution_context.load_from_environment`` 唯一
     落点完成，包含 base/sid、started contract、代码、skill 整树与 resolved profile。
     这里不重复拼一份弱化验证，也不要求付费/正文外发授权：这些动作不发模型 wire。
     """
@@ -128,7 +128,7 @@ def operation_scope(
     claim_sha = operation_sha256(
         base_abs, checked_sid, checked_operation,
         details=payload['details'])  # type: ignore[arg-type]
-    context = commander_context.load_from_environment(
+    context = execution_context.load_from_environment(
         base_abs, checked_sid, env=env)
 
     if context is None:

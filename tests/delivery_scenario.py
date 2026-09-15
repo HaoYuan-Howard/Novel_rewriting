@@ -253,7 +253,7 @@ def build(base):
 def automatic(base):
     from novel.orchestrator import agent
     from novel.llm.ledger import ledger_path
-    from tests.test_agent import _PlanningDriver, _PROFILES
+    from tests.test_agent import _PROFILES
 
     book = paths.resolve_novel_dir(base, SID)
     target = book / paths.book_txt_rel(book)
@@ -262,20 +262,18 @@ def automatic(base):
     dispatched = []
     real_argv = agent._run_step_argv
 
+    # Commander 角色已删：自动跑书是 executor-only，任何派发都必须经 run_step。
+    # 只放行免费的 stage7.assemble；其余节点（尤其付费节点）直接断言失败，
+    # 因此「自动免费收尾不购买任何模型响应」仍被此替身钉住。
     def only_free_assembly(base, sid, epoch, permit, **kwargs):
         assert permit.node == 'stage7.assemble' and permit.paid is False and permit.flags == []
         argv = real_argv(base, sid, epoch, permit, **kwargs)
         dispatched.append(argv)
         return argv
 
-    class NoModelDriver(_PlanningDriver):
-        def run(self, *_args, **_kwargs):
-            raise AssertionError('自动免费收尾不应调用任何 Commander')
-
     with pytest.MonkeyPatch.context() as env:
         env.delenv('DEEPSEEK_API_KEY', raising=False)
         env.setenv('NOVEL_STAGE2_BLUEPRINT_CONTRACT', 'plot-blueprint-v1')
-        env.setattr(agent, 'create_commander_driver', lambda profile, **_kw: NoModelDriver(profile))
         env.setattr(agent, '_run_step_argv', only_free_assembly)
         target.unlink()
         with TestClient(create_app(base)) as http:

@@ -19,7 +19,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel
 
-from contracts.invariants import NODES, commander_work_unit, commander_scope_allowed
+from contracts.invariants import NODES, approval_work_unit, approval_scope_allowed
 from contracts.schema.workflow import (
     WorkflowManifestV6, WorkflowManifestV7, WorkUnitAttempt, WorkUnitBlobV1,
     WorkUnitContentTurn, WorkUnitGroupBlobV1, WorkUnitLedgerV2, WorkUnitRegistryV1,
@@ -287,10 +287,17 @@ class WorkUnitBudget:
                  role: str = 'executor', scope: str = 'book', *, read_only: bool = False) -> None:
         if node not in NODES or role not in ('executor', 'commander'):
             raise WorkUnitRefused('未登记的工作单元节点或角色')
+        if role == 'commander' and not read_only:
+            # Commander 受托审阅已退役（2026-09-15）：新工作单元不再接受
+            # commander 角色；``read_only=True`` 仅服务存量书历史账的解码与
+            # owner 停止证明，不参与任何新预算。
+            raise WorkUnitRefused('Commander 工作单元已退役；历史账只读解码仍可用')
         spec = NODES[node].lifecycle
         if role == 'commander':
-            allowed_scope = commander_scope_allowed(node, scope)
-            allowed_role = spec.commander_content_limit == 4
+            # 原 ``spec.commander_content_limit == 4`` 的准入面随字段退役；
+            # 历史解码以现存的审批登记（approval_bindings）为等价准入证据。
+            allowed_scope = approval_scope_allowed(node, scope)
+            allowed_role = bool(spec.approval_bindings)
         else:
             allowed_role = spec.executor_content_limit == 4
             chapter_scope = bool(re.fullmatch(r'chapter:[1-9][0-9]*', scope))
@@ -854,9 +861,9 @@ class WorkUnitBudget:
         """旧审阅指纹只经原冻结包投影为当前业务身份；不改写账或拒因。"""
         if recorded == current:
             return True
-        from novel.orchestrator import reviewer_revalidation
+        from novel.orchestrator import reviewer_legacy
 
-        if (waiting_on not in reviewer_revalidation.WAITING_ON
+        if (waiting_on not in reviewer_legacy.REVALIDATION_WAITING_ON
                 or self.turn(turn_id).request_payload_sha256 is None):
             return False
         request = self.request_payload(turn_id)
@@ -864,8 +871,8 @@ class WorkUnitBudget:
                 or request.get('waiting_on') != waiting_on):
             return False
         try:
-            return reviewer_revalidation.request_business_sha256(request) == current
-        except reviewer_revalidation.RevalidationRefused as exc:
+            return reviewer_legacy.request_business_sha256(request) == current
+        except reviewer_legacy.RevalidationRefused as exc:
             raise WorkUnitRefused(str(exc)) from exc
 
     def latest_feedback(self, *, business_sha256: str | None = None) -> dict[str, Any] | None:
@@ -962,28 +969,6 @@ def readonly_budget(base: str | os.PathLike[str], sid: str, unit_id: str) -> Wor
     return budget
 
 
-def readonly_commander_action(budget: WorkUnitBudget, turn_id: str) -> dict[str, Any]:
-    """从永久原回答证明读取 typed 动作；不依赖已清理的活动重放记录或自由 actor。"""
-    from types import SimpleNamespace
-
-    turn = budget.turn(turn_id)
-    proof = budget.recovery_proof(turn_id)
-    action = proof.get('action')
-    if not isinstance(action, dict) or action.get('kind') not in {'node', 'approval'}:
-        raise WorkUnitRefused('原回答缺可验证的 typed 动作')
-    # 下列仅是既有证明器所需的内存投影，不是新的审批/恢复记录，也不补造 epoch。
-    record = SimpleNamespace(
-        sid=budget.identity['sid'], work_unit_id=budget.unit_id, work_unit_turn_id=turn_id,
-        waiting_on=proof.get('waiting_on'), business_sha256=proof.get('business_sha256'),
-        provider_response_sha256=proof.get('provider_response_sha256'),
-        reviewer_session_run_id=turn.session_run_id,
-        node=action.get('node') if action['kind'] == 'node' else None,
-        flags=action.get('flags'), input_payload=action.get('input_payload'),
-        surface=action.get('surface'), payload=action.get('payload'))
-    validate_reviewer_record(budget.base, budget.identity['sid'], record)
-    return action
-
-
 def reconcile_commander_response(
         budget: WorkUnitBudget, turn_id: str, *, read_only: bool = False) -> None:
     """原始回答的成本/会话尾账必须闭合后才能消费 typed 决定。"""
@@ -1006,8 +991,8 @@ def reconcile_commander_response(
     if not isinstance(response, str):
         raise WorkUnitRefused('Commander 原回答缺文本')
     # 沿用 Commander 唯一严格 JSON 摘要口；格式错误也有有界纠错身份。
-    from novel.orchestrator.agent import _reviewer_response_sha256
-    response_sha = _reviewer_response_sha256(response)
+    from novel.orchestrator.reviewer_legacy import reviewer_response_sha256
+    response_sha = reviewer_response_sha256(response)
     expected = dict(run_id=row.run_id, session_run_id=row.session_run_id, sid=budget.identity['sid'],
                     attempt_id=attempt.attempt_id, response_sha256=response_sha,
                     outcome='ok', exit_code=0, error_kind=None,
@@ -1056,17 +1041,17 @@ def commander_budget_for_record(base: str | os.PathLike[str], sid: str, record: 
     if not record.work_unit_id or record.sid != sid:
         raise WorkUnitRefused('审阅记录缺当前书的原工作单元身份')
     ledger = _read(base, paths.work_unit_dir(base, sid, record.work_unit_id) / 'ledger.json', WorkUnitLedgerV2)
-    identity = commander_work_unit(record.waiting_on)
+    identity = approval_work_unit(record.waiting_on)
     budget = WorkUnitBudget(base, sid, ledger.node, 'commander', ledger.scope, read_only=True)
     if (identity is None or identity[0] != ledger.node or ledger.role != 'commander'
-            or budget.unit_id != record.work_unit_id or not commander_scope_allowed(ledger.node, ledger.scope)):
+            or budget.unit_id != record.work_unit_id or not approval_scope_allowed(ledger.node, ledger.scope)):
         raise WorkUnitRefused('审阅记录与原 Commander 属主或范围不一致')
     return budget
 
 
 def validate_reviewer_record(base: str | os.PathLike[str], sid: str, record: Any) -> WorkUnitBudget:
     """所有决定消费者共用原回答、工作单元及 typed 动作的精确证明。"""
-    from novel.orchestrator import reviewer_tasks
+    from novel.orchestrator import reviewer_legacy
 
     unit_id = record.work_unit_id
     turn_id = record.work_unit_turn_id
@@ -1079,29 +1064,29 @@ def validate_reviewer_record(base: str | os.PathLike[str], sid: str, record: Any
     turn = budget._turn(ledger, turn_id)
     if turn.state not in ('delivered', 'adopted'):
         raise WorkUnitRefused('审阅决定不属于登记 owner 或回答已经拒绝')
-    if ledger.scope != commander_work_unit(record.waiting_on)[1]:
+    if ledger.scope != approval_work_unit(record.waiting_on)[1]:
         if budget.request_payload(turn_id).get('work_unit_scope') != ledger.scope:
             raise WorkUnitRefused('分章审阅原请求缺精确批次绑定')
     reconcile_commander_response(budget, turn_id, read_only=True)
-    from novel.orchestrator.reviewer_schema_recovery import validate_work_unit_recovery
+    from novel.orchestrator.reviewer_legacy import validate_work_unit_recovery
     validate_work_unit_recovery(str(base), sid, budget=budget, turn_id=turn_id)
     proof = budget.recovery_proof(turn_id)
     if record.node is not None:
-        action = reviewer_tasks.ReviewerNodeAction(
+        action = reviewer_legacy.ReviewerNodeAction(
             kind='node', node=record.node, flags=tuple(record.flags), input_payload=record.input_payload)
     else:
-        action = reviewer_tasks.ReviewerApprovalAction(kind='approval', surface=record.surface, payload=record.payload)
+        action = reviewer_legacy.ReviewerApprovalAction(kind='approval', surface=record.surface, payload=record.payload)
     expected = dict(business_sha256=record.business_sha256, waiting_on=record.waiting_on,
-                    action_sha256=reviewer_tasks.action_business_sha256(action),
+                    action_sha256=reviewer_legacy.action_business_sha256(action),
                     provider_response_sha256=record.provider_response_sha256)
     if any(proof.get(key) != value for key, value in expected.items()):
-        from novel.orchestrator import reviewer_revalidation
+        from novel.orchestrator import reviewer_legacy
         try:
-            rebound = reviewer_revalidation.proof_matches(
+            rebound = reviewer_legacy.proof_matches(
                 budget.request_payload(turn_id), proof,
                 business_sha256=record.business_sha256, waiting_on=record.waiting_on,
                 action=asdict(action), provider_response_sha256=record.provider_response_sha256)
-        except reviewer_revalidation.RevalidationRefused as exc:
+        except reviewer_legacy.RevalidationRefused as exc:
             raise WorkUnitRefused(str(exc)) from exc
         if not rebound:
             raise WorkUnitRefused('typed 动作与原工作单元回答不一致')

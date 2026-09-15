@@ -314,7 +314,8 @@ typed 编辑与完整 owner 修订均继承已退休集合，并追加本轮删�
 `novel-stage2-reviewer-delta-v3`、`novel-stage2-core-review-choice-v1`）、两席 Commander
 派修与问题义务已整体退役。旧席位账与 reviewed-edit 修正在 `novel/orchestrator/stage2_review_ledger.py`
 保留只读审计解码，不参与新工作单元；带 `post_edit_review` 的 GlobalEdit 新提交被关闭式拒绝。
-共享 Commander/reviewer 框架继续服务 Stage4/5/6/7 的保留审阅。
+原共享 Commander/reviewer 框架也已于 2026-09-15 随 Commander 角色整体退役；Stage4/5/6/7 的保留审阅
+现役语义是人工在 Stage 页面过闸，历史决定解码见 `novel/orchestrator/reviewer_legacy.py`。
 
 ### 原子提交、恢复与当前版本
 

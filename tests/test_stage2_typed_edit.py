@@ -13,7 +13,6 @@ from contracts.schema.knowledge import GlobalRelation, GlobalArcSecret
 import copy
 import re
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 from pydantic import ValidationError
@@ -590,18 +589,13 @@ def test_preflight_aggregates_unknown_collection_deletes_into_safe_correction_re
     assert len(caught.value.diagnostics) == 988
     assert _book_file_snapshot(book) == before
 
-    # producer safe_summary 是下一 fresh correction session 唯一收到的失败事实；
-    # roundtrip 必须保留机器可操作三元组，同时仍不泄露任一模型 ID。
-    from novel.orchestrator import reviewer_tasks
-    task = SimpleNamespace(
-        waiting_on='human:stage2-review-correction',
-        prompt='冻结的 Stage2 correction workpack',
-    )
-    prompt = reviewer_tasks.correction_prompt(
-        task, summary, request_sha256='a' * 64, attempt=1)
-    assert summary in prompt
-    assert 'collection_breakdown=collection=relations' in prompt
-    assert sentinel_prefix not in prompt
+    # Commander 席位退役后不再有二次包装的 correction prompt；拒绝终态消息
+    # 本身就是下一 fresh 订正会话（executor 自续或人工）收到的唯一失败事实，
+    # 机器可操作三元组必须原样保留，且不泄露任一模型 ID。
+    message = str(caught.value)
+    assert summary in message
+    assert 'collection_breakdown=collection=relations' in message
+    assert sentinel_prefix not in message
 
 
 def test_candidate_preflight_reports_every_bad_collection_before_applying_any() -> None:

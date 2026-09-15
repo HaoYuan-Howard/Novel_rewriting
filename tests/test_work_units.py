@@ -15,7 +15,8 @@ def sha(text):
 
 
 def test_rejected_responses_keep_two_original_answers_and_stop_at_subject_change(tmp_path):
-    unit = WorkUnitBudget(tmp_path, '42', 'stage4.design', 'commander', 'design')
+    # Commander 受托审阅退役后，同一套账本机制由 executor 工作单元承载。
+    unit = WorkUnitBudget(tmp_path, '42', 'stage4.design', 'executor', 'strategy')
     for index, business in enumerate(('old', 'current', 'current', 'current')):
         turn = unit.reserve(sha(str(index)), run_id=f'parent-{index}')
         identity = {'business_sha256': sha(business), 'waiting_on': 'approval:stage4-design-review'}
@@ -40,7 +41,7 @@ def test_rejected_responses_keep_two_original_answers_and_stop_at_subject_change
 
 @pytest.mark.parametrize('damage', ['response', 'feedback', 'business'])
 def test_rejected_response_context_refuses_missing_or_mismatched_evidence(tmp_path, damage):
-    unit = WorkUnitBudget(tmp_path, '42', 'stage4.design', 'commander', 'design')
+    unit = WorkUnitBudget(tmp_path, '42', 'stage4.design', 'executor', 'strategy')
     turn = unit.reserve(sha('request'), run_id='original-parent')
     identity = {'business_sha256': sha('current'), 'waiting_on': 'approval:stage4-design-review'}
     unit.save_response(turn.turn_id, {
@@ -104,7 +105,7 @@ def test_budget_survives_candidate_session_and_producer_changes(tmp_path):
     initialize_workflow(tmp_path)
     ids = set()
     for index in range(4):
-        budget = WorkUnitBudget(tmp_path, '42', 'stage4.design', 'commander', 'design')
+        budget = WorkUnitBudget(tmp_path, '42', 'stage4.design', 'executor', 'strategy')
         ids.add(budget.unit_id)
         turn = budget.reserve(sha(str(index)), run_id=f'run-{index}', session_run_id=f's-{index}')
         budget.record_attempt(turn.turn_id, attempt_id=f'a-{index}', outcome='ok')
@@ -113,9 +114,9 @@ def test_budget_survives_candidate_session_and_producer_changes(tmp_path):
     assert len(ids) == 1
     assert budget.used == 4 and budget.remaining == 0
     with pytest.raises(WorkUnitBudgetExhausted):
-        WorkUnitBudget(tmp_path, '42', 'stage4.design', 'commander', 'design').reserve(
+        WorkUnitBudget(tmp_path, '42', 'stage4.design', 'executor', 'strategy').reserve(
             sha('fifth'), run_id='another-epoch')
-    assert WorkUnitBudget(tmp_path, '42', 'stage4.plan', 'commander', 'structure').remaining == 4
+    assert WorkUnitBudget(tmp_path, '42', 'stage4.plan', 'executor', 'chapter:1').remaining == 4
 
 
 def test_reserved_unknown_cannot_be_reissued_after_restart(tmp_path):
@@ -290,13 +291,23 @@ def test_recovery_proof_keeps_original_response(tmp_path):
 
 
 def test_unregistered_role_and_scope_cannot_create_new_budget(tmp_path):
+    initialize_workflow(tmp_path)
     for node, role, scope in (
             ('stage1.partition', 'executor', 'book'),
             ('stage6.semantic', 'executor', 'judge:c'),
-            ('stage2.global', 'commander', 'candidate-v2'),
             ('stage5.write', 'executor', 'chapter:0')):
         with pytest.raises(WorkUnitRefused, match='登记'):
             WorkUnitBudget(tmp_path, '42', node, role, scope)
+    # Commander 受托审阅退役（2026-09-15）：新工作单元一律拒绝 commander 角色。
+    with pytest.raises(WorkUnitRefused, match='已退役'):
+        WorkUnitBudget(tmp_path, '42', 'stage4.design', 'commander', 'design')
+    # 退役后只保留存量书历史账的只读解码；read_only 也不再发放新预算。
+    unit = WorkUnitBudget(tmp_path, '42', 'stage4.design', 'commander', 'design',
+                          read_only=True)
+    assert unit.used == 0
+    with pytest.raises(WorkUnitRefused, match='登记'):
+        WorkUnitBudget(tmp_path, '42', 'stage4.design', 'commander', 'strategy',
+                       read_only=True)
 
 
 def test_deleted_unit_directory_does_not_refund_budget(tmp_path):

@@ -319,8 +319,11 @@ def test_profiles_and_human_gates_are_explicit_before_semantic_calls(tmp_path):
     assert '没有自动放行门' in by_node['stage6.semantic']['semantic_gate_behavior']
     # `stage5.semantic` 于 2026-08-17 整节点下线 ⇒ 付费面上只剩 stage6 一条语义 dispatch。
     assert 'stage5.semantic' not in by_node
-    assert any('Global/Blueprint' in line and '两个独立 Commander 均已接受' in line
+    # Commander 已退役：s2 gate 由统一机械准入收口，不再有审阅席位接受语。
+    assert any('机械准入' in line
                for line in by_node['stage4.design']['human_gate_dependencies'])
+    assert not any('Commander' in line
+                   for line in by_node['stage4.design']['human_gate_dependencies'])
     assert any('actor/reason' in line for line in by_node['stage2.global']['human_gate_dependencies'])
     assert any('approve' in line for line in by_node['stage7.rename']['human_gate_dependencies'])
     global_version = P.artifact_spec(P.STAGE2_GLOBAL_GROUNDING).current_version

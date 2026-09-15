@@ -59,7 +59,7 @@ def test_live_code_profile_contains_required_public_config_and_no_private_roots(
         '.env.example', 'pyproject.toml', 'web/.env', 'web/package.json',
         'web/package-lock.json', 'tests/fixtures/manifest.json',
         'novel/orchestrator/run_step.py', 'novel/orchestrator/delivery.py',
-        'novel/orchestrator/preflight.py', 'novel/stages/stage0/review_workpack.py',
+        'novel/orchestrator/preflight.py', 'novel/stages/stage0/revisions.py',
     } <= rels
     assert '.env' not in rels
     assert '.claude/settings.local.json' not in rels

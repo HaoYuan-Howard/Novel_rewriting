@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 from novel import paths, prov, run_identity
 
-from novel.commanders import context as commander_context
+from novel.orchestrator import execution_context
 from contracts.schema.api import ExecutionPermit
 from contracts.schema.orchestration import (
     AgentExecutorBackend, LegacyExecutorBackend,
@@ -134,7 +134,7 @@ def _mark(base: str, sid: str, node: str, phase: str,
 
 def _evidence_bytes(
     steps: Sequence[Any],
-    context: commander_context.CommanderContext | None = None,
+    context: execution_context.CommanderContext | None = None,
     execution_permit: ExecutionPermit | None = None,
 ) -> bytes:
     """直接投影本次 ``build_steps`` 的对象；不重造 argv 或运行判定。"""
@@ -165,7 +165,9 @@ def _evidence_bytes(
             'commander': {
                 'run_id': context.run_id,
                 'contract_sha256': context.contract_sha256,
-                'profile': context.profiles.commander.model_dump(mode='json'),
+                # profiles v3 起不再有 commander 字段；新证据里这格固定为
+                # None，历史证据文件的原值仍在盘上按 append-only 原样可读。
+                'profile': None,
                 'authorized': context.start.authorized,
                 'egress_authorized': context.start.egress_authorized,
                 'code_version': context.start.code_version,
@@ -257,18 +259,18 @@ def _main(argv: list[str] | None = None) -> int:
         flags = flags[1:]
     try:
         context = None
-        if os.environ.get(commander_context.COMMANDER_RUN_ID_ENV) is not None \
+        if os.environ.get(execution_context.COMMANDER_RUN_ID_ENV) is not None \
                 or os.environ.get(
-                    commander_context.COMMANDER_CONTRACT_SHA256_ENV) is not None \
+                    execution_context.COMMANDER_CONTRACT_SHA256_ENV) is not None \
                 or os.environ.get(
-                    commander_context.COMMANDER_EPOCH_ID_ENV) is not None \
+                    execution_context.COMMANDER_EPOCH_ID_ENV) is not None \
                 or os.environ.get(
-                    commander_context.COMMANDER_EPOCH_SHA256_ENV) is not None \
+                    execution_context.COMMANDER_EPOCH_SHA256_ENV) is not None \
                 or os.environ.get(
-                    commander_context.COMMANDER_ADMISSION_ID_ENV) is not None:
+                    execution_context.COMMANDER_ADMISSION_ID_ENV) is not None:
             if args.sid is None:
                 raise TerminalState('Commander contract 只属于一本文书，run_step 必须显式给 --sid')
-            context = commander_context.load_from_environment(args.base, args.sid)
+            context = execution_context.load_from_environment(args.base, args.sid)
             assert context is not None
             # v1 context 没有 epoch/execution_id 三格；读取兼容面仍把 parent
             # run 当作唯一 execution。v2 才按当前 turn admission 精确封口。
@@ -364,7 +366,7 @@ def _main(argv: list[str] | None = None) -> int:
             steps, context, current_permit)
         evidence_sha256 = hashlib.sha256(evidence_data).hexdigest()
         if args.execute and context is not None:
-            commander_context.require_execution_authorized(context)
+            execution_context.require_execution_authorized(context)
     except TerminalState as exc:
         print(f'✗ {exc}', file=sys.stderr)
         return X.TERMINAL_STATE
@@ -410,7 +412,7 @@ def _main(argv: list[str] | None = None) -> int:
 
         if context is not None:
             effective_run_id = context.run_id
-            child_env = commander_context.env_with_context(
+            child_env = execution_context.env_with_context(
                 run_id=context.run_id, base=context.base, start=context.start,
                 contract=getattr(context, 'contract', None),
                 epoch=getattr(context, 'epoch', None),

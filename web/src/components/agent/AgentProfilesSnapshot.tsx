@@ -77,7 +77,6 @@ export function AgentProfilesSnapshot({
       className="rounded-tag border border-line bg-inset px-10 py-7 text-tag text-ink-3"
     >
       <div className={compact ? 'flex flex-wrap gap-x-12 gap-y-3' : 'grid gap-4'}>
-        <span><strong>指挥：</strong><Mono>{profileText(profiles.commander)}</Mono></span>
         <span><strong>默认执行：</strong><Mono>{backendText(profiles.executor_default)}</Mono></span>
       </div>
       {overrides.length > 0 ? (

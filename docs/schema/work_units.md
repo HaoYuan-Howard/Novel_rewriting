@@ -12,7 +12,12 @@ v5 → v6 使用独立 prepared v2，原冻结代码必须另行证明 Stage5 �
 操作及中断补尾见 `docs/OPERATIONS.md`。其他存量仍由与原审计匹配的冻结代码恢复，不能删账换取预算。
 
 `WorkUnitLedgerV2` 位于 `novel/paths.py::work_unit_dir`。工作单元身份仍由工作流任务、书、
-节点、角色和 scope 决定。基础内容额度四次；新候选、新会话、新 run 和新 epoch 都沿用原账。
+节点、角色和 scope 决定。Commander 角色已退役（2026-09-15）：新工作单元只接受
+`role=executor`，`role='commander'` 在构造期关闭式拒绝；历史 commander 账经
+`read_only=True` 只读解码，仅服务 owner 停止证明与历史决定重放（`validate_reviewer_record` /
+`reconcile_commander_response` 保留为历史解码），不参与任何新预算。waiting_on 到 owner/scope 的
+投影用 `contracts/invariants.py::approval_work_unit` / `::approval_scope_allowed`（由原
+commander_* 更名）。基础内容额度四次；新候选、新会话、新 run 和新 epoch 都沿用原账。
 网络重试单列为 attempt，缓存命中单列。追加金额只表示允许增加的内容调用次数，不是货币费用。
 
 人工追加入口为运行页工作单元详情，API 为
@@ -46,7 +51,9 @@ Stage2 语义审阅退役删除）登记过已发布完整动作的免费重验�
 `WorkUnitView` 统一发布 content_base_limit、content_granted、grant_count、content_used、
 content_limit、content_remaining 和恢复入口，运行页与指标工具复用同一投影。
 
-`contracts/schema/work_unit_recovery.py` 定义无回答 Commander 传输失败的工程收口请求、预览与回执。
+`contracts/schema/work_unit_recovery.py` 定义无回答传输失败的工程收口请求、预览与回执（Commander
+角色已退役，仅服务存量书历史工作单元的 owner 停止证明与失败收口；原 commander profile 自 profiles
+v3 读边界起不可恢复，改用 append-only started 原字节核对）。
 仅最后一轮 `unknown/commander_transport_failed`、全部 attempt 明确连接或超时失败、成本/session/
 原请求/日志及原 owner 排空证明一致时可用；已保存或孤立回答、待补提交和未结束尝试均拒绝。
 预览 token 绑定完整来源；提交在书级 writer、审批/工作单元锁及 owner 停止 lease 内复验。
@@ -54,7 +61,8 @@ content_limit、content_remaining 和恢复入口，运行页与指标工具复�
 读取及新 reserve 必须再次验证原轮次与回执；损坏保持拒绝。原轮次、attempt、追加额度与成本不变，
 缺失 token 仍未知；仅允许另开内容轮消耗原剩余额度，不恢复旧 provider 会话。工程操作入口见 OPERATIONS。
 
-Stage2 Commander 有剩余额度时，纠错请求从同一工作单元恢复最近两份同业务主体、同
+Stage2 语义审阅已退役；本段纠错恢复只描述存量书历史 Commander 工作单元的账面语义。历史单元有剩余
+额度时，纠错请求从同一工作单元恢复最近两份同业务主体、同
 waiting_on 的被拒原回答及拒因，供新 provider 会话自足定位错误。每份原回答、拒因 blob
 及运输摘要必须相互匹配；损坏保持 unknown 并在调用前停止。遇到已采用回答或业务主体
 变化即停止回溯，不把旧上下文带给新主体。它们只是明确隔离的不可信诊断数据，绑定和
@@ -75,7 +83,7 @@ waiting_on 的被拒原回答及拒因，供新 provider 会话自足定位错�
 # 按原配置继续
 
 `GET /api/agent/runs/:run_id/continuation` 返回历史完整 profiles、来源 hash、可用性及原因。
-Commander、默认 Executor 和全部逐节点覆盖必须完整；缺失、冲突、模型已不支持或原执行
+默认 Executor 和全部逐节点覆盖必须完整；缺失、冲突、模型已不支持或原执行
 未排空均不得用当前 settings/default 补齐。只读能力查询不会产生模型请求。
 
 `AgentRunRequest.continuation` 在 preview 和 start 中绑定同一个 `RunContinuationSource`。
@@ -89,10 +97,11 @@ Commander、默认 Executor 和全部逐节点覆盖必须完整；缺失、冲�
 排空并释放 owner，结果为 `stopped`，原因明确为范围边界，不伪造 `pipeline_complete`。
 返修按实际 owner 位置判断，联合首抽按两侧物化归属守界；未知节点归属关闭式停止。
 blocked 动作中的 node 是等待中的消费者，审阅范围则采用工作单元登记的
-waiting_on 对应 Commander owner；因此 Blueprint 等待 Global 时，仍允许上界前的
+waiting_on 经 `approval_work_unit` 投影的审批闸 owner（现役为人工）；
+因此 Blueprint 等待 Global 时，仍允许上界前的
 Global 审阅，接受后才在真正的 Blueprint 启动点停下。
 
 continuation 返回并继承原上界：请求省略该字段保持原范围，显式新节点改变范围，显式
 `null` 解除上界。范围变化不改变已冻结 profiles、历史来源或工作单元累计额度；旧 contract
 没有上界时不向原内容地址补入 `null`。Gate A 验收传 `stage2.blueprint`，Global 接受后
-不会启动 Blueprint 的 Executor 或 Commander；再次继续仍须显式沿用或扩大范围。
+不会启动 Blueprint 的 Executor；再次继续仍须显式沿用或扩大范围。

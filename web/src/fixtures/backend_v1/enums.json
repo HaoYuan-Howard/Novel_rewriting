@@ -39,7 +39,6 @@
  ],
  "run_next_handlers": [
   "code",
-  "commander",
   "executor",
   "human",
   "none",
@@ -868,13 +867,6 @@
   3,
   4
  ],
- "review_actions": [
-  "accept",
-  "patch",
-  "rework",
-  "uncertain",
-  "stop"
- ],
  "stages": [
   "stage0",
   "stage1",
@@ -1028,9 +1020,7 @@
      "--check-only"
     ],
     "executor_content_limit": 0,
-    "commander_content_limit": 0,
-    "commander_bindings": [],
-    "review_actions": [],
+    "approval_bindings": [],
     "approval_projection": []
    }
   },
@@ -1051,7 +1041,7 @@
     "unit_kind": "book",
     "input_workpack": "完整 retained 与 removed 工作包",
     "generation_mode": "human_submission",
-    "review_mode": "commander",
+    "review_mode": "human",
     "review_scope": "当前剔除 revision",
     "repair_actions": [
      "accept",
@@ -1060,22 +1050,16 @@
     "repair_owners": [
      "stage0.edit"
     ],
-    "session_scope": "commander:stage0",
+    "session_scope": "human:stage0",
     "recovery_entries": [
      "typed_replay"
     ],
     "executor_content_limit": 0,
-    "commander_content_limit": 4,
-    "commander_bindings": [
+    "approval_bindings": [
      [
       "stage0.approve",
       "book"
      ]
-    ],
-    "review_actions": [
-     "accept",
-     "uncertain",
-     "stop"
     ],
     "approval_projection": [
      "gate",
@@ -1118,9 +1102,7 @@
      "--apply-candidate-plan"
     ],
     "executor_content_limit": 0,
-    "commander_content_limit": 0,
-    "commander_bindings": [],
-    "review_actions": [],
+    "approval_bindings": [],
     "approval_projection": []
    }
   },
@@ -1156,9 +1138,7 @@
      "--check-only"
     ],
     "executor_content_limit": 0,
-    "commander_content_limit": 0,
-    "commander_bindings": [],
-    "review_actions": [],
+    "approval_bindings": [],
     "approval_projection": []
    }
   },
@@ -1195,9 +1175,7 @@
      "prepared_commit"
     ],
     "executor_content_limit": 4,
-    "commander_content_limit": 0,
-    "commander_bindings": [],
-    "review_actions": [],
+    "approval_bindings": [],
     "approval_projection": []
    }
   },
@@ -1245,9 +1223,7 @@
      "prepared_commit"
     ],
     "executor_content_limit": 4,
-    "commander_content_limit": 0,
-    "commander_bindings": [],
-    "review_actions": [],
+    "approval_bindings": [],
     "approval_projection": []
    }
   },
@@ -1296,9 +1272,7 @@
      "prepared_commit"
     ],
     "executor_content_limit": 4,
-    "commander_content_limit": 0,
-    "commander_bindings": [],
-    "review_actions": [],
+    "approval_bindings": [],
     "approval_projection": []
    }
   },
@@ -1348,9 +1322,7 @@
      "prepared_commit"
     ],
     "executor_content_limit": 4,
-    "commander_content_limit": 0,
-    "commander_bindings": [],
-    "review_actions": [],
+    "approval_bindings": [],
     "approval_projection": []
    }
   },
@@ -1384,7 +1356,7 @@
     "unit_kind": "strategy_and_chapter",
     "input_workpack": "去序盲事实与独立章工作包",
     "generation_mode": "executor",
-    "review_mode": "commander",
+    "review_mode": "human",
     "review_scope": "A 设计及本轮明确变更",
     "repair_actions": [
      "accept",
@@ -1397,7 +1369,7 @@
      "stage2.blueprint",
      "stage4.design"
     ],
-    "session_scope": "executor:strategy/chapter / commander:design",
+    "session_scope": "executor:strategy/chapter / human:design",
     "recovery_entries": [
      "--apply-edit",
      "--recover-repair-aggregate",
@@ -1409,8 +1381,7 @@
      "prepared_commit"
     ],
     "executor_content_limit": 4,
-    "commander_content_limit": 4,
-    "commander_bindings": [
+    "approval_bindings": [
      [
       "approval:stage4-design-review",
       "design"
@@ -1423,12 +1394,6 @@
       "approval:stage4-structure-replan",
       "design"
      ]
-    ],
-    "review_actions": [
-     "accept",
-     "rework",
-     "uncertain",
-     "stop"
     ],
     "approval_projection": [
      "design_review",
@@ -1465,7 +1430,7 @@
     "unit_kind": "ambiguous_chapter",
     "input_workpack": "已接受 A 与本章关闭目录、机械基线",
     "generation_mode": "executor_or_deterministic",
-    "review_mode": "commander",
+    "review_mode": "human",
     "review_scope": "独立 B 结构及证据绑定",
     "repair_actions": [
      "accept",
@@ -1478,7 +1443,7 @@
      "stage4.design",
      "stage4.plan"
     ],
-    "session_scope": "executor:ambiguous_chapter / commander:structure",
+    "session_scope": "executor:ambiguous_chapter / human:structure",
     "recovery_entries": [
      "--revalidate",
      "--apply-binding",
@@ -1490,18 +1455,11 @@
      "prepared_commit"
     ],
     "executor_content_limit": 4,
-    "commander_content_limit": 4,
-    "commander_bindings": [
+    "approval_bindings": [
      [
       "approval:stage4-structure-review",
       "structure"
      ]
-    ],
-    "review_actions": [
-     "accept",
-     "rework",
-     "uncertain",
-     "stop"
     ],
     "approval_projection": [
      "structure",
@@ -1538,9 +1496,7 @@
      "canonical"
     ],
     "executor_content_limit": 0,
-    "commander_content_limit": 0,
-    "commander_bindings": [],
-    "review_actions": [],
+    "approval_bindings": [],
     "approval_projection": []
    }
   },
@@ -1580,7 +1536,7 @@
     "unit_kind": "chapter",
     "input_workpack": "当前 Context、计划与独立 writing 授权",
     "generation_mode": "executor",
-    "review_mode": "commander",
+    "review_mode": "human",
     "review_scope": "独立 writing 授权；产出交机械 Review 与整书 closure",
     "repair_actions": [
      "typed_edit",
@@ -1591,7 +1547,7 @@
      "stage4.design",
      "stage5.write"
     ],
-    "session_scope": "executor:chapter / commander:writing",
+    "session_scope": "executor:chapter / human:writing",
     "recovery_entries": [
      "--revalidate",
      "--apply-edit",
@@ -1599,17 +1555,11 @@
      "--recover-reviewer-rewrite-prepared"
     ],
     "executor_content_limit": 4,
-    "commander_content_limit": 4,
-    "commander_bindings": [
+    "approval_bindings": [
      [
       "approval:stage5-writing",
       "writing"
      ]
-    ],
-    "review_actions": [
-     "accept",
-     "uncertain",
-     "stop"
     ],
     "approval_projection": [
      "writing"
@@ -1638,7 +1588,7 @@
     "unit_kind": "book",
     "input_workpack": "全章 canonical、计划与 trim 处置",
     "generation_mode": "deterministic",
-    "review_mode": "commander",
+    "review_mode": "human",
     "review_scope": "独立 closure 或 trim disposition 工作包",
     "repair_actions": [
      "accept",
@@ -1650,25 +1600,18 @@
      "stage5.write",
      "stage5.review"
     ],
-    "session_scope": "commander:closure/disposition",
+    "session_scope": "human:closure/disposition",
     "recovery_entries": [
      "--check-only",
      "--retain-pretrim-batch",
      "typed_replay"
     ],
     "executor_content_limit": 0,
-    "commander_content_limit": 4,
-    "commander_bindings": [
+    "approval_bindings": [
      [
       "approval:stage5-closure",
       "closure"
      ]
-    ],
-    "review_actions": [
-     "accept",
-     "rework",
-     "uncertain",
-     "stop"
     ],
     "approval_projection": [
      "closure",
@@ -1701,7 +1644,7 @@
     "unit_kind": "book",
     "input_workpack": "完整源正文、原钩子与独立准备产物",
     "generation_mode": "executor",
-    "review_mode": "commander",
+    "review_mode": "human",
     "review_scope": "事实支持与连续开篇范围独立接受",
     "repair_actions": [
      "accept",
@@ -1711,7 +1654,7 @@
     "repair_owners": [
      "stage6.prepare"
     ],
-    "session_scope": "executor:book / commander:prepare",
+    "session_scope": "executor:book / human:prepare",
     "recovery_entries": [
      "--revalidate",
      "--apply-edit",
@@ -1722,18 +1665,11 @@
      "prepared_commit"
     ],
     "executor_content_limit": 4,
-    "commander_content_limit": 4,
-    "commander_bindings": [
+    "approval_bindings": [
      [
       "approval:stage6-prepare",
       "prepare"
      ]
-    ],
-    "review_actions": [
-     "accept",
-     "rework",
-     "uncertain",
-     "stop"
     ],
     "approval_projection": [
      "prepare",
@@ -1788,9 +1724,7 @@
      "prepared_commit"
     ],
     "executor_content_limit": 4,
-    "commander_content_limit": 0,
-    "commander_bindings": [],
-    "review_actions": [],
+    "approval_bindings": [],
     "approval_projection": []
    }
   },
@@ -1828,9 +1762,7 @@
      "prepared_commit"
     ],
     "executor_content_limit": 4,
-    "commander_content_limit": 0,
-    "commander_bindings": [],
-    "review_actions": [],
+    "approval_bindings": [],
     "approval_projection": []
    }
   },
@@ -1852,7 +1784,7 @@
     "unit_kind": "candidate_batch",
     "input_workpack": "三候选与两名 judge 的完整 workpack",
     "generation_mode": "human_submission",
-    "review_mode": "commander",
+    "review_mode": "human",
     "review_scope": "当前候选的 typed pick",
     "repair_actions": [
      "accept",
@@ -1861,23 +1793,17 @@
     "repair_owners": [
      "stage6.hook"
     ],
-    "session_scope": "commander:hook_approval",
+    "session_scope": "human:hook_approval",
     "recovery_entries": [
      "typed_replay",
      "--review-token"
     ],
     "executor_content_limit": 0,
-    "commander_content_limit": 4,
-    "commander_bindings": [
+    "approval_bindings": [
      [
       "stage6.approve",
       "hook"
      ]
-    ],
-    "review_actions": [
-     "accept",
-     "uncertain",
-     "stop"
     ],
     "approval_projection": [
      "gate",
@@ -1934,9 +1860,7 @@
      "prepared_commit"
     ],
     "executor_content_limit": 4,
-    "commander_content_limit": 0,
-    "commander_bindings": [],
-    "review_actions": [],
+    "approval_bindings": [],
     "approval_projection": []
    }
   },
@@ -1957,7 +1881,7 @@
     "unit_kind": "book",
     "input_workpack": "人物表与真实替换、残留扫描工作包",
     "generation_mode": "human_submission",
-    "review_mode": "commander",
+    "review_mode": "human",
     "review_scope": "当前人名与替换表",
     "repair_actions": [
      "accept",
@@ -1966,23 +1890,17 @@
     "repair_owners": [
      "stage7.rename"
     ],
-    "session_scope": "commander:rename_approval",
+    "session_scope": "human:rename_approval",
     "recovery_entries": [
      "typed_replay",
      "--review-token"
     ],
     "executor_content_limit": 0,
-    "commander_content_limit": 4,
-    "commander_bindings": [
+    "approval_bindings": [
      [
       "stage7.approve",
       "rename"
      ]
-    ],
-    "review_actions": [
-     "accept",
-     "uncertain",
-     "stop"
     ],
     "approval_projection": [
      "gate",
@@ -2018,9 +1936,7 @@
      "canonical"
     ],
     "executor_content_limit": 0,
-    "commander_content_limit": 0,
-    "commander_bindings": [],
-    "review_actions": [],
+    "approval_bindings": [],
     "approval_projection": []
    }
   }

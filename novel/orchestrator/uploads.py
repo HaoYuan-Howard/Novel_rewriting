@@ -31,14 +31,12 @@ from contracts.artifacts import (
     STAGE2_GLOBAL_EDIT,
     STAGE2_GLOBAL_REVIEW_DECISIONS,
 )
-from contracts.schema.api import (
-    BatchTrimResolutionRequest, Stage5ReviewerRewriteRequest,
-)
+from contracts.schema.api import BatchTrimResolutionRequest
 from contracts.schema.plot_edit import PlotEdit
 from contracts.schema.stage2 import GlobalEdit
 from contracts.schema.characters import CharactersEdit
 from contracts.schema.analyze_draft import AnalyzeOwnerDraftEdit
-from contracts.schema.stage5 import ChapterResponse, ReviewerRewriteBatchTrustedInput
+from contracts.schema.stage5 import ChapterResponse
 from novel import paths
 from novel.errors import (
     ArtifactUnreadable,
@@ -360,105 +358,6 @@ def save_stage5_trim_batch(
     finally:
         # 保存失败发生在 contextmanager yield 之前，不能指望调用方 finally
         # 清理这份含人工逐章理由的临时文件。
-        try:
-            tmp.unlink(missing_ok=True)
-        except OSError:
-            pass
-    return target.resolve()
-
-
-def save_stage5_reviewer_rewrite_input(
-    base: str | os.PathLike[str],
-    sid: str,
-    request: Stage5ReviewerRewriteRequest,
-    *,
-    reviewer_action_record_sha256: str,
-    business_sha256: str,
-    reviewer_contract_sha256: str,
-    reviewer_session_run_id: str,
-    reviewer_seat_turn_id: str,
-    provider_response_sha256: str,
-) -> Path:
-    """把 API 决定与服务端 durable 身份合成 producer 受信输入。"""
-    try:
-        paths.check_sid(sid)
-    except PathRefused as exc:
-        raise SourcePathRejected(
-            f'Reviewer rewrite request 的书 id 不合法：{exc}') from exc
-    root = service_dir(base) / EDITS_DIRNAME / sid
-    root.mkdir(parents=True, exist_ok=True)
-    target = root / f'stage5-reviewer-rewrite-{uuid.uuid4().hex}.json'
-    tmp = target.with_suffix('.tmp')
-    try:
-        trusted = ReviewerRewriteBatchTrustedInput.model_validate({
-            **request.model_dump(mode='json'),
-            'reviewer_action_record_sha256': reviewer_action_record_sha256,
-            'business_sha256': business_sha256,
-            'reviewer_contract_sha256': reviewer_contract_sha256,
-            'reviewer_session_run_id': reviewer_session_run_id,
-            'reviewer_seat_turn_id': reviewer_seat_turn_id,
-            'provider_response_sha256': provider_response_sha256,
-        })
-        payload = trusted.model_dump(mode='json', by_alias=True)
-        tmp.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + NL,
-            encoding='utf-8')
-        os.replace(tmp, target)
-    except OSError as exc:
-        raise ArtifactUnreadable(
-            f'写不了 Stage5 Reviewer rewrite request：{exc!r}') from exc
-    finally:
-        try:
-            tmp.unlink(missing_ok=True)
-        except OSError:
-            pass
-    return target.resolve()
-
-
-def save_reviewer_action(
-    base: str | os.PathLike[str], sid: str, record: ReviewerActionRecord,
-) -> Path:
-    """按内容身份持久化一份已通过 typed loader 的 Commander 决定。
-
-    与 ``save_candidate_plan`` 同款：同字节幂等复用，不同字节拒绝覆盖。它是
-    一次已完成模型审阅的可重放半边，必须活过 epoch 关闭与 scratch 清理，只在
-    canonical approval/node action 已 landed 或得到显式 exit 2 拒因后由
-    调用方删除；exit 70 结论未知时必须保留。Stage2 node 记录额外保存
-    workpack、原 logical session 与 provider 原始回答 digest，其中不写回答正文；
-    Stage5 batch 额外保存原 Review、reviewer contract 及原 seat turn/
-    logical session/provider 回答摘要，结合 payload 内完整有序双 SHA，
-    供 partial-write 后自证旧 business、补完 durable-first 席位，再区分
-    stale / replay / evidence conflict。trim 记录不绑定会随处置面重构的
-    closure token。
-    """
-    try:
-        paths.check_sid(sid)
-    except PathRefused as exc:
-        raise SourcePathRejected(f'reviewer 决定记录的书 id 不合法：{exc}') from exc
-    if record.sid != sid:
-        raise SourcePathRejected(
-            f'reviewer 决定记录属于 sid={record.sid!r}，不能落到 sid={sid!r}')
-    raw = (record.model_dump_json() + '\n').encode('utf-8')
-    digest = hashlib.sha256(raw).hexdigest()
-    root = service_dir(base) / EDITS_DIRNAME / sid
-    root.mkdir(parents=True, exist_ok=True)
-    target = root / f'reviewer-action-{digest}.json'
-    if target.is_file():
-        try:
-            existing = target.read_bytes()
-        except OSError as exc:
-            raise ArtifactUnreadable(f'读不了已有 reviewer 决定记录：{exc!r}') from exc
-        if existing != raw:
-            raise SourceConflict(
-                f'reviewer 决定记录内容地址 {target} 已存在不同字节；拒绝覆盖')
-        return target.resolve()
-    tmp = target.with_name(f'.{target.name}.{uuid.uuid4().hex}.tmp')
-    try:
-        tmp.write_bytes(raw)
-        os.replace(tmp, target)
-    except OSError as exc:
-        raise ArtifactUnreadable(f'保存 reviewer 决定记录失败：{exc!r}') from exc
-    finally:
         try:
             tmp.unlink(missing_ok=True)
         except OSError:

@@ -790,7 +790,7 @@ def resolve_executor_profile(
     if not is_paid(node, flags):  # pragma: no cover —— 当前空 flags 纵切均为付费
         raise UnsupportedRunMode('executor_profile 只属于真正付费生成步，0 成本恢复步不接 agent')
     try:
-        return validate_profile(profile, role='executor')
+        return validate_profile(profile)
     except AgentProfileRefused as exc:
         raise UnsupportedRunMode(f'executor_profile 不可执行：{exc}') from exc
 

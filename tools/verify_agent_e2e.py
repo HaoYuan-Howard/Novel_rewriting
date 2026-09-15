@@ -39,10 +39,11 @@ from typing import Any, Iterable, Mapping, Sequence
 sys.stdout.reconfigure(encoding='utf-8')
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from contracts.invariants import (                                  # noqa: E402
-    AGENT_EXECUTOR_NODES, APPROVAL_GATES,
-    COMMANDER_MAX_ATTEMPTS_PER_SEAT, STAGES,
-)
+from contracts.invariants import AGENT_EXECUTOR_NODES, APPROVAL_GATES, STAGES  # noqa: E402
+
+#: Commander reviewer 已退役（2026-09-15）；本工具校验的是历史代跑账，
+#: 席位重试上限不再由 contracts 发布，按退役前值本地保留。
+COMMANDER_MAX_ATTEMPTS_PER_SEAT = 3
 from novel import paths, prov                                        # noqa: E402
 from novel.agents import session_audit as agent_session_audit         # noqa: E402
 from novel.orchestrator import operator_telemetry                     # noqa: E402

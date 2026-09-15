@@ -135,7 +135,7 @@ Prompt 选型完成后，`prompt_variants`、`prompt_defaults` 与 `--prompt-var
 | `GET /api/novels/:sid/approvals` | `ApprovalDoc` | 新 |
 | `GET /api/novels/:sid/approvals/stage5/template` | `Stage5ClosureTemplate` | 只读、0 成本；按当前整书主体生成带 placeholder/token 的关闭式模板，不代签 |
 | `POST /api/novels/:sid/approvals/stage5` | `ApprovalDoc`（请求体 `Stage5ClosureRequest`：actor/reason + opaque `review_token` + typed must-appear/group rulings） | 服务端重建当前完整 closure workpack 后原子保存回执；成功才打开 `gate.s5`，不启动作业 |
-| `GET /api/novels/:sid/approvals/design/workpack` | `ApprovalWorkpack` v2（绑定 current A candidate + 完整 design subject；异常优先，只读、0 LLM） | 新；Commander/前端审阅入口，不预填决定 |
+| `GET /api/novels/:sid/approvals/design/workpack` | `ApprovalWorkpack` v2（绑定 current A candidate + 完整 design subject；异常优先，只读、0 LLM） | 新；人工/前端审阅入口，不预填决定 |
 | `GET /api/novels/:sid/approvals/design/template?actor=&reviewer_kind=&review_run_id=&reason=` | `DesignReviewTemplate` | 四项 query 均必填；按当前 A 生成关闭式全书模板，可逐章复用仍完全绑定的历史 accept，但不代签；fresh B infeasible 时发布当前证明并禁止复用旧 accept |
 | `POST /api/novels/:sid/approvals/design` | `ApprovalDoc`（请求体 `DesignReviewRequest`：actor/reviewer/run/reason + opaque `review_token` + 策略/逐章 typed rulings） | 服务端重建当前 Design workpack 与内部全部 SHA 后原子保存；不启动修订、B 或任何作业 |
 | `POST /api/novels/:sid/approvals/gate/:key` | `ApprovalDoc` | 新；key 只接受 `s0/s1/s4/s5/s6/s7`（gate.s2 与 seen 记录已随 Stage2 语义审阅退役） |
@@ -174,7 +174,7 @@ Prompt 选型完成后，`prompt_variants`、`prompt_defaults` 与 `--prompt-var
 | `POST /api/agent/runs` | `AgentRunRecord`（202；请求体 `AgentRunRequest`） | **复用** `_orchestration.md` |
 | `GET /api/agent/runs?sid=` | `AgentRunList` | 新 |
 | `GET /api/agent/runs/:id/log?offset=N` | `LogChunk`（与作业日志同一形状） | 新 |
-| `POST /api/agent/runs/:id/stop` | `AgentRunRecord`（202） | 只受理永久终止：后台先关 admission gate、terminate 全部 Commander/Executor 子进程树并 drain，闭合后才追加 ended；stop 后不可 resume，HTTP 返回不冒充 drain 已完成 |
+| `POST /api/agent/runs/:id/stop` | `AgentRunRecord`（202） | 只受理永久终止：后台先关 admission gate、terminate 全部 Executor 子进程树并 drain，闭合后才追加 ended；stop 后不可 resume，HTTP 返回不冒充 drain 已完成 |
 | `POST /api/agent/runs/:id/pause` | `AgentRunRecord`（202） | 只受理暂停：立即停止接纳新节点，后台等待当前 claim/beacon 闭合后才追加 paused；不取消正常付费节点，HTTP 返回不冒充已 paused |
 | `POST /api/agent/runs/:id/resume` | `AgentRunRecord`（202） | 受理后由后台同身份续 current epoch/provider session；代码或执行契约 漂移时同 parent run 开新 epoch并免费复检 |
 | `POST /api/novels/:sid/review/:o/edit/preview` | `DraftEditPreview`（请求体 `DraftEditPreviewRequest`） | 同步、只读、0 成本；与正式 apply 共用归一/判据/subject 构造，不写一次性文件、产物或 Review |
@@ -262,17 +262,17 @@ Prompt 选型完成后，`prompt_variants`、`prompt_defaults` 与 `--prompt-var
 |---|---|---|---|
 | `authorized` | `bool` | `false` | 是否允许产生外部模型调用费用 |
 | `egress_authorized` | `bool` | `true` | 是否允许向外部模型发送小说正文及派生上下文 |
-| `profiles` | `PipelineAgentProfiles \| null` | `null` | commander、默认 executor 与逐节点覆盖的选择；`null` 只是旧客户端/迁移期未指定，不是某个隐含默认 |
+| `profiles` | `PipelineAgentProfiles \| null` | `null` | 默认 executor 与逐节点覆盖的选择（v3 起无 commander 字段，旧行在读边界丢弃）；`null` 只是旧客户端/迁移期未指定，不是某个隐含默认 |
 
 只有正文外发轴的 wire 缺省是 `true`，不代表两项授权合并。UI 必须显示两个独立复选框并显式提交
 二者；`AgentRunPreview` 回显两个布尔值，preview 与真跑都由同一 planner 把两段授权原文写入 prompt。
-其中正文外发声明由 capability registry 把冻结 profiles 展开成实际可达的 Commander 与逐节点
+其中正文外发声明由 capability registry 把冻结 profiles 展开成实际可达的逐节点
 executor 具体 provider 路由；这只是同一 bool 授权的精确接收方边界，不增加第三条授权轴。
-preview 可以在任一项为 false 时 0 成本展开；单本 start 与 batch 则在任何 Commander probe/spawn/wire
-之前同时要求二者为 true。`profiles` 键同样恒在：非空值经 registry 解析并进入真实 Commander；
-`null` 只保留请求兼容形状，当前 `default_profiles=null` 时 preview/start/batch 均关闭式拒绝，不能代选。
+preview 可以在任一项为 false 时 0 成本展开；单本 start 与 batch 则在任何
+probe/spawn/wire 之前同时要求二者为 true。`profiles` 键同样恒在：非空值经 registry 解析并进入真实
+executor 运行；`null` 只保留请求兼容形状，当前 `default_profiles=null` 时 preview/start/batch 均关闭式拒绝，不能代选。
 
-`GET /api/agent/capabilities` 是 Commander 与 executor backend 选择面的唯一公开数据源：
+`GET /api/agent/capabilities` 是 executor backend 选择面的唯一公开数据源：
 
 原配置续跑通过 `GET /api/agent/runs/:run_id/continuation` 读取历史完整快照和可用性；
 preview/start 都携相同 `RunContinuationSource` 并由后端复验。运行页工作单元的
@@ -282,13 +282,13 @@ preview/start 都携相同 `RunContinuationSource` 并由后端复验。运行�
 | 模型 | 字段 | 约束 |
 |---|---|---|
 | `AgentCapabilitiesResponse` | `drivers[]` · `legacy_providers[]` · `executor_nodes[]` · `legacy_model_pins{node: model}` · `default_profiles` | `executor_nodes` 按 `AGENT_EXECUTOR_NODES` 完整有序发布，前端不维护第二份节点表。`legacy_model_pins` 发布产品契约钉死的 legacy 模型（`NODES[node].model`，质量裁决）：钉死的是**模型**不是 agent/legacy 模式，被钉节点在 legacy 下经覆盖选该模型即可纯 legacy 整跑；键⊆executor 节点，值必须是已发布的 legacy 模型 id。legacy 模型的 `executor_nodes[]` 不含 `AGENT_ONLY_EXECUTOR_NODES`（无 legacy 执行器的付费节点）：默认 legacy 时这些节点必须配 `agent` 覆盖（构造期单向豁免），前端从「executor 节点减 legacy 承接面」派生，不另抄清单。`default_profiles` 是经整书验收后才可发布的产品预置配置，不是 backend 模式选择器；当前明确为 `null`，不能取任一数组首项猜 |
-| `AgentDriverCapability` | `id` · `provider` · `label` · `roles[]` · `availability` · `availability_reason` · `version` · `models[]` | `id` 是可执行 driver 身份，`provider` 只是供应商元数据，`label` 只展示。可用性四态为 `ready / missing / unknown / unauthenticated` |
+| `AgentDriverCapability` | `id` · `provider` · `label` · `availability` · `availability_reason` · `version` · `models[]` | `id` 是可执行 driver 身份，`provider` 只是供应商元数据，`label` 只展示。可用性四态为 `ready / missing / unknown / unauthenticated`；Commander 角色退役（2026-09-15）后 driver 只承接 executor，`roles` 字段随角色概念删除 |
 | `AgentModelCapability` | `id` · `label` · `reasoning_efforts[]` · `execution_modes[]` | 精确 `id` 进入 argv/审计，label 可改；effort 与 execution mode 正交，只能提交该 model 实际发布的组合 |
-| `AgentProfile` | `driver` · `model` · `reasoning_effort` · `execution_mode` | schema 只承载选择；driver/角色/model/effort/mode 的组合由同一个 capability registry 关闭式校验，客户端不得自造笛卡尔积 |
+| `AgentProfile` | `driver` · `model` · `reasoning_effort` · `execution_mode` | schema 只承载选择；driver/model/effort/mode 的组合由同一个 capability registry 关闭式校验，客户端不得自造笛卡尔积 |
 | `LegacyProviderCapability` | `id` · `label` · `models[]` | 直接 LLM API adapter 的稳定身份；当前只发布 DeepSeek，模型能力里继续给出 thinking/effort 与精确 `executor_nodes[]`，前端不得按模型名猜节点适用面 |
 | `LegacyLlmProfile` | `provider` · `model` · `reasoning_effort` · `thinking_mode` | 只保存改变模型行为的稳定选择，不保存 API key、base URL、代理、超时或缓存目录 |
 | `ExecutorBackend` | `{kind:'agent',profile:AgentProfile}` 或 `{kind:'legacy',profile:LegacyLlmProfile}` | `kind` 是唯一模式选择器；两套 profile 不得混搭，运行中也不得自动降级到另一种 backend |
-| `PipelineAgentProfiles` | `schema_version=2` · `commander` · `executor_default` · `executor_overrides{node: backend}` | Commander 固定使用 AgentProfile；默认 executor 和逐节点覆盖使用 `ExecutorBackend`。override 键只接受响应中的 executor 节点，值的 `kind` 必须与 `executor_default` 一致——一次选择内 executor 只允许一种模式 |
+| `PipelineAgentProfiles` | `schema_version=3` · `executor_default` · `executor_overrides{node: backend}` · `concurrency` | 默认 executor 和逐节点覆盖使用 `ExecutorBackend`。override 键只接受响应中的 executor 节点，值的 `kind` 必须与 `executor_default` 一致——一次选择内 executor 只允许一种模式。v1/v2 行的 `commander` 字段在读边界丢弃，原始账字节不动 |
 | `PipelineConcurrency` | `node_overrides{node: int}` · `per_book` · `per_provider` | `PipelineAgentProfiles.concurrency` 的可选精确配置；随常用配置、preview/start、batch 与原配置续跑保留。缺失时省略序列化，不改写旧身份 |
 | `PipelineConcurrencyCapability` | `nodes[]` · `node_choices[]` · `default_node` · `defaults` · `total_min` · `total_max` · `scope` | `AgentCapabilitiesResponse.concurrency` 发布的唯一选择面；当前总槽作用域为同一输出根。界面不复制节点、档位和数值边界 |
 
@@ -305,8 +305,9 @@ Legacy capability 是 provider driver 的静态关闭表，也不读取密钥、
 | `AgentProfileSettingsView` | `state` · `profiles` · `revision` · `updated_at` · `issue` | `configured` 才携完整 profiles；从未配置或显式清空为 `unset`；文件字节存在但不合当前契约为 `unreadable`，携原始字节 revision 与不回显正文的诊断。读取失败不得静默回退 |
 | `AgentProfileSettingsUpdate` | `profiles` · `expected_revision` | profiles 非空时再次经 capability registry 关闭式校验并显式物化 execution mode；null 表示清空。revision 不等返回 409 `AgentProfileSettingsConflict`，不得最后写入者覆盖 |
 
-设置文件固定为 `<base>/_service/agent_profile_settings.json`。v2 保存 Commander 的 AgentProfile，以及
-默认/逐节点 executor 的显式 `kind + profile`；API key、CLI 登录态、base URL、代理、付费授权、正文外发
+设置文件固定为 `<base>/_service/agent_profile_settings.json`。v2 保存默认/逐节点 executor 的显式
+`kind + profile`（`PipelineAgentProfiles` v3，无 commander 字段，旧文件里的 commander 键在读边界丢弃）；
+API key、CLI 登录态、base URL、代理、付费授权、正文外发
 授权与 prompt 均不进入该文件。旧 v1 裸 AgentProfile 只在读边界无损包成 `kind=agent`，读取不会擅自
 重写，下一次成功保存才发 v2。设置只初始化未来运行表单：单次运行仍可
 临时覆盖，start/batch 仍逐次要求两项独立授权并冻结自己的 profiles，已启动、已排队和历史 run 不读取
@@ -337,20 +338,21 @@ direct `PreviewRequest.egress_authorized` 默认 false（不要与上方 outer `
 与手敲 CLI 在 job、probe、driver、wire 前拒绝。backend 为空时 false 归一为 `null`，true 关闭式拒绝。
 Stage6 A/B 的 session/checkpoint/两阶段提交与代码裁决不因 backend 种类改变。
 
-outer `AgentRunRequest.profiles` 已接入 provider-neutral Commander 和显式 executor backend：
+outer `AgentRunRequest.profiles` 已接入显式 executor backend：
 preview/start/batch 共用唯一 plan，
-把规范化 base、起始代码指纹、resolved profiles、stdin-only invocation 与两项授权冻结进 started/queue；
-排队出队不重读 capability 或默认。Commander child 只持 run id 与 contract SHA-256，再从 append-only
+把规范化 base、起始代码指纹、resolved profiles 与两项授权冻结进 started/queue；
+排队出队不重读 capability 或默认。child executor 只持 run id 与 contract SHA-256，再从 append-only
 started 事件复核整份配置；operator runner 按 exact node/flags 选 default executor 或 override，不能手拼
-任一 backend 参数。Claude Code / Codex Commander 的 prompt 只走 stdin，argv/env/log 不复制全文；Commander
-本身另记 `role=commander,node=null` 的 session 与 ledger，实际模型/effort 缺失保持 unknown，漂移、串
+任一 backend 参数。受托 Commander 已退役（2026-09-15）：审批闸一律人工，自动跑书停在闸前等
+`next_handler='human'` 过闸后续跑；历史 `role=commander,node=null` 的 session 与 ledger 行只读解码，
+实际模型/effort 缺失保持 unknown，漂移、串
 provider session 或账/审计不闭合只可把 delivery 降成 unknown。进程 state 与盘面 delivery outcome 正交。
 
-页面现已从 capability 动态构造 Commander、默认 executor 与逐节点 override 表单；新表单优先载入
+页面现已从 capability 动态构造默认 executor 与逐节点 override 表单；新表单优先载入
 `configured` 用户常用配置，其次才用非空产品默认，两者都没有时必须显式选全，不取数组第一项；设置
 不可读或请求失败时关闭预览/启动。单本与批量 start 直接消费最后一次成功 preview 保存的同一请求快照；
 profiles、两项授权或 capability 有任何漂移都先使 preview 失效，不能用新默认重解释旧确认。历史 run 的
-`profiles=null` 只显示 unknown；direct Job 的 executor backend / egress 只读展示仍与 outer Commander
+`profiles=null` 只显示 unknown；direct Job 的 executor backend / egress 只读展示仍与 outer agent run
 分开。Phase 1～6 的工程验证仍没有真实 provider 模型请求或 current-schema corpus 验收，不能据此宣称
 模型质量、速度、账号认证或 entitlement 已验证。
 

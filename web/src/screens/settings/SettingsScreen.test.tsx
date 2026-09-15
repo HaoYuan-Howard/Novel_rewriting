@@ -47,16 +47,16 @@ describe('SettingsScreen', () => {
     expect(await screen.findByText('已配置')).toBeVisible()
     expect(screen.getByText(/产品默认仍为 null/)).toBeVisible()
     await user.selectOptions(
-      screen.getByRole('combobox', { name: '指挥大脑 模型' }),
-      'commander-model-v10',
+      screen.getByRole('combobox', { name: '默认执行者 · Agent CLI 模型' }),
+      'executor-model-v8',
     )
     await user.selectOptions(
-      screen.getByRole('combobox', { name: '指挥大脑 思考强度' }),
-      'new-effort-dynamic',
+      screen.getByRole('combobox', { name: '默认执行者 · Agent CLI 思考强度' }),
+      'fast-dynamic',
     )
     await user.selectOptions(
-      screen.getByRole('combobox', { name: '指挥大脑 执行模式' }),
-      'new-mode-dynamic',
+      screen.getByRole('combobox', { name: '默认执行者 · Agent CLI 执行模式' }),
+      'worker-dynamic',
     )
     await user.click(screen.getByRole('button', { name: '保存常用配置' }))
 
@@ -64,10 +64,13 @@ describe('SettingsScreen', () => {
     expect(save.mock.calls[0]?.[0]).toMatchObject({
       expected_revision: 'a'.repeat(64),
       profiles: {
-        commander: {
-          model: 'commander-model-v10',
-          reasoning_effort: 'new-effort-dynamic',
-          execution_mode: 'new-mode-dynamic',
+        executor_default: {
+          kind: 'agent',
+          profile: {
+            model: 'executor-model-v8',
+            reasoning_effort: 'fast-dynamic',
+            execution_mode: 'worker-dynamic',
+          },
         },
       },
     })
@@ -90,16 +93,16 @@ describe('SettingsScreen', () => {
     renderRoute(<SettingsScreen />, '/n/book-1/settings')
     await screen.findByText('已配置')
     await user.selectOptions(
-      screen.getByRole('combobox', { name: '指挥大脑 模型' }),
-      'commander-model-v10',
+      screen.getByRole('combobox', { name: '默认执行者 · Agent CLI 模型' }),
+      'executor-model-v8',
     )
     await user.selectOptions(
-      screen.getByRole('combobox', { name: '指挥大脑 思考强度' }),
-      'new-effort-dynamic',
+      screen.getByRole('combobox', { name: '默认执行者 · Agent CLI 思考强度' }),
+      'fast-dynamic',
     )
     await user.selectOptions(
-      screen.getByRole('combobox', { name: '指挥大脑 执行模式' }),
-      'new-mode-dynamic',
+      screen.getByRole('combobox', { name: '默认执行者 · Agent CLI 执行模式' }),
+      'worker-dynamic',
     )
     await user.click(screen.getByRole('button', { name: '保存常用配置' }))
 
@@ -158,7 +161,7 @@ describe('SettingsScreen', () => {
     await waitFor(() => expect(save).toHaveBeenCalledTimes(1))
     expect(save.mock.calls[0]?.[0]).toMatchObject({
       profiles: {
-        schema_version: 2,
+        schema_version: 3,
         executor_default: {
           kind: 'legacy',
           profile: {

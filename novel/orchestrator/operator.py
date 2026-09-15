@@ -374,7 +374,7 @@ def _review_state_projection(approval_doc: ApprovalDoc | None) -> list[dict[str,
         for key in life.approval_projection:
             value = value.get(key) if isinstance(value, dict) else None
         status = ('accepted' if value else 'not_accepted') if isinstance(value, bool) else value
-        rows.append({'node': node, 'scope': life.commander_bindings[0][1],
+        rows.append({'node': node, 'scope': life.approval_bindings[0][1],
                      'state': status if isinstance(status, str) else 'unknown'})
     return rows
 
@@ -397,14 +397,9 @@ def _frontier_view(lane: _LanePlan, approval_doc: ApprovalDoc | None = None) -> 
     elif action.waiting_on in queue.DETERMINISTIC_RECOVERY_WAITING_ON:
         handler = 'executor'
     else:
-        # 延迟导入：reviewer_tasks 本身依赖 queue/schema，不让 operator 顶层形成环。
-        from novel.orchestrator import reviewer_tasks
-        handler = (
-            'commander'
-            if action.waiting_on is not None
-            and reviewer_tasks.is_registered(action.waiting_on)
-            else 'human'
-        )
+        # 受托 Commander reviewer 已退役：除登记过的 deterministic recovery
+        # 外，一切审批闸都属于人工，等用户在 Stage 页面过闸后原配置续跑。
+        handler = 'human'
     return RunResumeFrontierView(
         state=lane.state,
         node=action.node,

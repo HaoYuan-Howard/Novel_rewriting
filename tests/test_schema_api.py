@@ -368,12 +368,19 @@ def test_agent_capability_response_keeps_ids_labels_and_options_separate():
         id='gpt-5.6-sol', label='GPT-5.6 Sol',
         reasoning_efforts=['none', 'high'], execution_modes=['standard'],
     )
+    # Commander 角色退役：driver 只承接 executor，``roles`` 不再是发布面，
+    # 多余输入必须被 schema 拒绝而不是静默吞掉。
     driver = AgentDriverCapability(
         id='codex', provider='openai', label='Codex',
-        roles=['commander', 'executor'],
         availability='unknown', availability_reason='只做了本机版本探针',
         models=[model],
     )
+    with pytest.raises(ValidationError, match='roles'):
+        AgentDriverCapability(
+            id='codex', provider='openai', label='Codex', roles=['executor'],
+            availability='unknown', availability_reason='只做了本机版本探针',
+            models=[model],
+        )
     legacy = LegacyProviderCapability(
         id='deepseek', label='DeepSeek API', models=[LegacyModelCapability(
             id='deepseek-v4-pro', label='DeepSeek V4 Pro',

@@ -7,7 +7,8 @@ Stage4 规划呈现，不重新抽取剧情。Beat.content 只有一份，BeatPl
 执行顺序是 stage4.design → 设计审阅 → stage4.plan → 结构审阅 → stage4.context。
 A 与章级 B 使用独立授权和 session；Context 独立零调用生成。Stage5 仍一次写整章。
 
-Commander 使用 `novel-stage4-reviewer-rulings-v3` 运输契约：每章完整引用目录映射为局部
+历史 Commander 审阅曾使用 `novel-stage4-reviewer-rulings-v3` 运输契约（已随 2026-09-15 角色退役，
+账上历史行只读解码）：每章完整引用目录映射为局部
 短句柄，历史约束按冻结目录映射为 `hN`；代码从不可变 submission_options 恢复原引用与
 摘要。完整 options SHA 与 exact request SHA 同时校验，未知或跨章引用拒绝。只共享完全
 同构的 schema 定义，不缩减章节、判断、修复码或引用基数；正式审批仍经过原 typed loader。
@@ -181,7 +182,7 @@ STRUCTURE_REVIEW_CONTRACT=stage4-structure-review-v4。结构包包含父节点�
 必要证据、状态、约束、知识及当前 B concerns。每章独立审阅联合语义，当前全部章明确 accept
 才打开 s4。证据位置、重叠、成员闭合只证明结构，不证明剧情完整或隐含知识未泄漏。
 
-较新 request_replan 不允许旧接受覆盖。现有 A resolution 路径由 Commander 交叉核验具体损害后
+较新 request_replan 不允许旧接受覆盖。现有 A resolution 路径由人工在 Stage 页面交叉核验具体损害后
 提交新的 typed A repair/replan；只读指标不足以触发付费。当前同主体仅允许 exact replay 或
 provenance 变化后的同语义 proof rebound，不能用旧 token 改票。完整规则见 BACKEND_CONTRACT R-5.20。
 
@@ -323,9 +324,10 @@ source_contexts 数量/证据重叠/场景数量不能作为语义完整或重�
 
 设计或结构审阅可提交 BlueprintRefinementRequest：当前 origin/token、章节、维度、主体及具体疑点。
 A 只可用当前 opaque 主体或 chapter；B 可用本章正式主体。代码定位证据并保存稳定实际问题，
-不会因为定位到证据就宣布问题成立。转交本身零调用，只让 Blueprint Commander 重新反查该章。
+不会因为定位到证据就宣布问题成立。转交本身零调用，只让蓝图 owner 的修订入口重新反查该章
+（原 Blueprint Commander 审阅已随 2026-09-15 角色退役）。
 
-Commander 可撤销不成立的疑点；确认漏抽、错抽、重要揭示/知识/独立依赖边界缺失时，才按当前
-Stage2 编辑或定向生成入口修订。Executor 写回不能自动解决问题，仍需章审和独立跨章复核。
+人工可撤销不成立的疑点；确认漏抽、错抽、重要揭示/知识/独立依赖边界缺失时，才按当前
+Stage2 编辑或定向生成入口修订。Executor 写回不能自动解决问题，仍需后续人工审阅复核。
 无据的新剧情不能借转交进入真相层。exact 转交重放只证明已保存，不覆盖后续撤销/解决，
 不重置 scope 或书级累计预算。

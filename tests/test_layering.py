@@ -207,24 +207,18 @@ _JSON_READ_ALLOWED = {
         '唯一审批 owner 显式检查当前 v8、SID 与 typed 决定，旧版本不迁移。'
         '章节产物及来源证据仍必须通过 ArtifactStore 读取'),
     'novel/model_slots.py': '只读 _service/model_slots 的容量配置，不读小说产物；损坏配置关闭式拒绝。',
+    'novel/orchestrator/reviewer_legacy.py': (
+        '退役 Commander 审阅载体的历史收口：只规范化已在内存中的传输回答'
+        '（拒绝重复键）与 _service 公开协议日志的完整失败信封，供存量书'
+        '只读解码与 owner 停止证明；不读取盘上小说产物，不形成 provenance 输入'),
     'novel/work_units.py': '只读 _service 工作单元账和已保存响应，不读小说产物。',
     'novel/orchestrator/work_unit_recovery.py': (
         'JSON 解码只将内存中的失败恢复证据规范化为落盘重放的嵌套形状；'
         '原账、成本、session 与 owner 证明走各自权威读路，不读取小说产物'),
-    'novel/orchestrator/reviewer_schema_recovery.py': (
-        '只解析 service 公开协议日志的完整失败信封并拒绝重复键，不读取小说产物；'
-        '没有响应恢复或人工决定，来源证明只供有界席位预留 CAS'),
     'novel/stages/stage5/reviewer_rewrite.py': (
         '只解码 Commander 决定的临时 trusted transport，并拒绝重复键/NaN；'
         '该输入不是产物，canonical request 与章稿仍全部经 ArtifactStore 读取'),
     'novel/store.py': '它就是那条唯一的读路，记账在这里发生',
-    'novel/commanders/base.py': (
-        'Commander output schema 的 JSON 解码只规范化调用方已在内存中的传输契约；'
-        '它不读取盘上小说产物、不会形成 provenance 输入，真正 schema 仍由现役 '
-        'Pydantic/portable validator 复验'),
-    'novel/orchestrator/stage4_reviewer_wire.py': (
-        '只解析内存中的 Reviewer 传输回答并拒绝重复键，不读取盘上小说产物；'
-        '按冻结模板组装的 canonical request 仍由现役 typed loader 复验并经 store 落盘'),
     'novel/orchestrator/jobs.py': (
         '作业记录**不是产物**：不进来源账、不进 `_provenance`、`ARTIFACTS` 里没有它。'
         '它是 append-only 的事件流（`_service/jobs.jsonl`），'
@@ -348,10 +342,6 @@ _WRITE_ALLOWED = {
         '写前校验代码与 permit、执行期还需有效 claim，既有不同字节拒绝覆盖。'
         '该导出不是小说产物、费用账或授权来源；小说修改仍由受控 CLI 经 Store 完成'),
     'novel/work_units.py': '只写 _service 运行预算、内容寻址回答和恢复证明，不写小说产物。',
-    'novel/orchestrator/reviewer_protocol_recovery.py': (
-        '仅在 _service/runs/<sid>/reviewer_protocol_recoveries 写内容寻址的复验审计副本；'
-        '调用方持原 owner-stopped lease，来源四证与当前 typed loader 通过后才写，'
-        '不修改历史失败账或小说产物，副本不被活动 action 扫描器消费'),
     'novel/orchestrator/reviewer_action_evidence.py': (
         '只在 _service/runs 下写内容寻址的不可变 Reviewer authority receipt；'
         '以跨进程锁、原字节 CAS 和正式证据复核封口，不写 canonical 小说产物'),
@@ -405,11 +395,6 @@ _WRITE_ALLOWED = {
         'Executor/Commander 在 _service/model_slots 下共享整书和供应商 OS 锁槽，'
         '只创建固定字节锁文件和原子容量配置；原显式外层槽仍支持受管 scratch。'
         '容量记录不代表占用，变更容量须先持有全部旧槽。崩溃由内核释放，正式产物仍只经 store'),
-    'novel/commanders/output_schema_file.py': (
-        'Codex CLI 只接受文件形态的原生 output schema；本模块只在受管 epoch '
-        'scratch 中为一次 runner 独占物化冻结 schema，并校验路径、hash、普通文件、'
-        '原子创建与崩溃孤儿后清理。它不是小说产物/缓存/审计账，独立成模块避免给 '
-        '整个 provider driver 开裸 IO 豁免'),
     'novel/orchestrator/service_lifecycle.py': (
         '受管 scratch 生命周期只写 `_service/scratch/<sid>/<session>/`；创建与显式 finish '
         '均绑定精确 session，TTL sweep 先排除活跃 owner 再有界扫描。其余维护只经'
@@ -421,10 +406,12 @@ _WRITE_ALLOWED = {
         '清理自己的临时文件，并在全部原字节和旧 owner 证明闭合后交接 pending 指针。'
         '工作流 manifest 仍由 work_units 的 CAS 写入；唯一人物派生投影仍经 ArtifactStore，'
         '不允许直接覆盖小说产物或删除历史来源记录'),
-    'novel/orchestrator/reviewer_seat_ledger.py': (
-        '非 Stage2 reviewer blocker 的席位账，只原子写 '
-        '`_service/runs/<sid>/reviewer_seats/<blocker>/`；有效面只有 blocker/business SHA、'
-        '轮次 purpose、session 身份、退出状态与同轮 attempts，不含正文，也不是正式 artifact。'),
+    'novel/orchestrator/reviewer_legacy.py': (
+        '退役 Commander 审阅载体的历史收口（原 reviewer_seat_ledger）：'
+        '只对存量书 `_service/runs/<sid>/reviewer_seats/<blocker>/` 席位账做'
+        '原子替换与孤儿临时文件清理；有效面只有 blocker/business SHA、'
+        '轮次 purpose、session 身份、退出状态与同轮 attempts，不含正文，'
+        '也不是正式 artifact；新工作单元不再开席位。'),
     'novel/orchestrator/stage2_review_ledger.py': (
         'Stage2 Global Commander 的跨进程调用预算与单调进展账，只原子写 '
         '`_service/runs/<sid>/stage2/global_review_ledgers/`；有效面只有主体/workpack/progress '
@@ -864,9 +851,6 @@ _CROSS_STAGE_DEEP_GRANDFATHER = frozenset({
     ('novel/orchestrator/queue.py', 'novel.stages.stage0.eligibility'),
     ('novel/orchestrator/queue.py', 'novel.stages.stage2.plot_diagnostics'),
     ('novel/orchestrator/queue.py', 'novel.stages.stage4.phase_state'),
-    ('novel/orchestrator/reviewer_tasks.py', 'novel.stages.stage2.paragraphs'),
-    ('novel/orchestrator/reviewer_tasks.py', 'novel.stages.stage4.plan'),
-    ('novel/orchestrator/reviewer_tasks.py', 'novel.stages.stage5.measure'),
     ('novel/orchestrator/state.py', 'novel.stages.stage2.character_rebind'),
     ('novel/orchestrator/state.py', 'novel.stages.stage5.measure'),
     ('novel/orchestrator/state.py', 'novel.stages.stage5.review'),
@@ -943,7 +927,8 @@ def test_cross_stage_imports_stay_on_the_package_surface():
     measure / prompts / plot_compile / checks 等内部实现一律禁止。
 
     「删一个机制为什么改几十个文件」的根源正是这些深边——StageN 的内部
-    实现被当成公共接口消费。现存 71 条深边为 2026-09 冻结基线，
+    实现被当成公共接口消费。现存 68 条深边为 2026-09 冻结基线
+    （2026-09-15 随 Commander 审阅退役消化 reviewer_tasks 的 3 条边），
     **只减不增**：消化一条就把它从清单删掉（diff 里可见、须说理由），
     新增深边必须先建 stageN 包级公开导出。
     """
@@ -958,7 +943,7 @@ def test_cross_stage_imports_stay_on_the_package_surface():
         f'以下深边已消失，请同步从冻结清单删除（消化须在提交说明给理由）：{sorted(stale)}')
     # 守卫的守卫：扫描器必须看得见冻结清单里的已知边，否则红的是探测器。
     assert ('novel/views/stage4.py', 'novel.stages.stage5.prompts') in current
-    assert len(_CROSS_STAGE_DEEP_GRANDFATHER) == 71
+    assert len(_CROSS_STAGE_DEEP_GRANDFATHER) == 68
 
 
 

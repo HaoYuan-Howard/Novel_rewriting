@@ -213,11 +213,11 @@ def test_commander_context_direct_node_cli_without_claim_is_refused_before_run(
         tmp_path, monkeypatch):
     cli = importlib.import_module('novel.cli.main')
     monkeypatch.setenv(
-        cli.commander_context.COMMANDER_RUN_ID_ENV, 'parent-direct')
+        cli.execution_context.COMMANDER_RUN_ID_ENV, 'parent-direct')
     monkeypatch.setenv(
-        cli.commander_context.COMMANDER_CONTRACT_SHA256_ENV, 'a' * 64)
+        cli.execution_context.COMMANDER_CONTRACT_SHA256_ENV, 'a' * 64)
     monkeypatch.setattr(
-        cli.commander_context, 'load_from_environment',
+        cli.execution_context, 'load_from_environment',
         lambda *_args, **_kwargs: SimpleNamespace(run_id='parent-direct'))
     monkeypatch.setattr(
         cli.RunContext, 'open',
@@ -251,12 +251,12 @@ def test_v2_child_run_uses_epoch_producer_id_and_keeps_parent_link(
         executor_backend=None, egress_authorized=None, placeholders=False)
     monkeypatch.setattr(sys, 'orig_argv', list(steps[0].argv))
     monkeypatch.setenv(
-        cli.commander_context.COMMANDER_RUN_ID_ENV, parent.run_id)
+        cli.execution_context.COMMANDER_RUN_ID_ENV, parent.run_id)
     monkeypatch.setenv(
-        cli.commander_context.COMMANDER_CONTRACT_SHA256_ENV, 'a' * 64)
+        cli.execution_context.COMMANDER_CONTRACT_SHA256_ENV, 'a' * 64)
     monkeypatch.setenv(cli.run_identity.RUN_ID_ENV, parent.run_id)
     monkeypatch.setattr(
-        cli.commander_context, 'load_from_environment',
+        cli.execution_context, 'load_from_environment',
         lambda *_args, **_kwargs: parent)
     captured: dict[str, object] = {}
 
@@ -308,7 +308,7 @@ def test_one_claim_and_permit_cover_root_and_follow_without_planner_remint(
     monkeypatch.setattr(
         operator, 'permit',
         lambda *_args, **_kwargs: pytest.fail('root child 不得重铸 operator permit'))
-    cli._require_commander_execution_permit(args, permit.flags, parent)
+    cli._require_execution_permit(args, permit.flags, parent)
 
     # root 落盘后 surface 已变；follow 仍只复验同一 claim/envelope 与
     # canonical build_steps[1]，不会拿旧 surface 再做一次错误 CAS。
@@ -317,7 +317,7 @@ def test_one_claim_and_permit_cover_root_and_follow_without_planner_remint(
     monkeypatch.setattr(
         operator, 'permit',
         lambda *_args, **_kwargs: pytest.fail('follow-check 不得重铸已 stale 的 root permit'))
-    cli._require_commander_execution_permit(
+    cli._require_execution_permit(
         args, ['--check-only'], parent)
 
 
@@ -344,7 +344,7 @@ def test_child_rejects_forged_step_index_or_argv(
     monkeypatch.setattr(sys, 'orig_argv', list(chosen.argv))
 
     with pytest.raises(TerminalState, match=match):
-        cli._require_commander_execution_permit(
+        cli._require_execution_permit(
             SimpleNamespace(base=base, sid=permit.sid, node=permit.node),
             permit.flags, parent)
 
@@ -364,7 +364,7 @@ def test_child_rejects_permit_whose_hash_differs_from_active_claim(
     _install_child_envelope(monkeypatch, forged, claim, 0)
 
     with pytest.raises(TerminalState, match='claim SHA-256'):
-        cli._require_commander_execution_permit(
+        cli._require_execution_permit(
             SimpleNamespace(base=base, sid=forged.sid, node=forged.node),
             forged.flags, parent)
 
@@ -375,8 +375,8 @@ def test_plain_direct_run_refuses_durable_unresolved_before_run_context(
     base = str(tmp_path.resolve())
     admission.open_gate(base, 'parent-orphan-direct', '42')
     for name in (
-        cli.commander_context.COMMANDER_RUN_ID_ENV,
-        cli.commander_context.COMMANDER_CONTRACT_SHA256_ENV,
+        cli.execution_context.COMMANDER_RUN_ID_ENV,
+        cli.execution_context.COMMANDER_CONTRACT_SHA256_ENV,
         admission.CLAIM_ID_ENV,
         execution_permit.PERMIT_JSON_ENV,
         execution_permit.STEP_INDEX_ENV,
@@ -397,8 +397,8 @@ def test_plain_check_only_can_observe_unresolved_admission_without_writing(tmp_p
     cli = importlib.import_module('novel.cli.main')
     base = str(tmp_path.resolve())
     admission.open_gate(base, 'parent-read-only', '42')
-    for name in (cli.commander_context.COMMANDER_RUN_ID_ENV,
-                 cli.commander_context.COMMANDER_CONTRACT_SHA256_ENV,
+    for name in (cli.execution_context.COMMANDER_RUN_ID_ENV,
+                 cli.execution_context.COMMANDER_CONTRACT_SHA256_ENV,
                  admission.CLAIM_ID_ENV, execution_permit.PERMIT_JSON_ENV,
                  execution_permit.STEP_INDEX_ENV):
         monkeypatch.delenv(name, raising=False)
@@ -423,13 +423,13 @@ def test_permit_envelope_without_commander_context_is_an_orphan(
     for key, value in env.items():
         monkeypatch.setenv(key, value)
     monkeypatch.delenv(
-        cli.commander_context.COMMANDER_RUN_ID_ENV, raising=False)
+        cli.execution_context.COMMANDER_RUN_ID_ENV, raising=False)
     monkeypatch.delenv(
-        cli.commander_context.COMMANDER_CONTRACT_SHA256_ENV, raising=False)
+        cli.execution_context.COMMANDER_CONTRACT_SHA256_ENV, raising=False)
     monkeypatch.delenv(admission.CLAIM_ID_ENV, raising=False)
 
     with pytest.raises(TerminalState, match='脱离 Commander contract'):
-        cli._require_commander_execution_permit(
+        cli._require_execution_permit(
             SimpleNamespace(
                 base=permit.base, sid=permit.sid, node=permit.node),
             permit.flags, None)
@@ -440,8 +440,8 @@ def test_plain_direct_run_without_unresolved_keeps_legacy_path_reachable(
     cli = importlib.import_module('novel.cli.main')
     base = str(tmp_path.resolve())
     for name in (
-        cli.commander_context.COMMANDER_RUN_ID_ENV,
-        cli.commander_context.COMMANDER_CONTRACT_SHA256_ENV,
+        cli.execution_context.COMMANDER_RUN_ID_ENV,
+        cli.execution_context.COMMANDER_CONTRACT_SHA256_ENV,
         admission.CLAIM_ID_ENV,
         execution_permit.PERMIT_JSON_ENV,
         execution_permit.STEP_INDEX_ENV,
@@ -469,8 +469,8 @@ def test_stage0_source_guards_the_derived_sid_and_rejects_explicit_mismatch(
     source.write_text('正文', encoding='utf-8')
     admission.open_gate(base, 'parent-source-orphan', '42')
     for name in (
-        cli.commander_context.COMMANDER_RUN_ID_ENV,
-        cli.commander_context.COMMANDER_CONTRACT_SHA256_ENV,
+        cli.execution_context.COMMANDER_RUN_ID_ENV,
+        cli.execution_context.COMMANDER_CONTRACT_SHA256_ENV,
         admission.CLAIM_ID_ENV,
         execution_permit.PERMIT_JSON_ENV,
         execution_permit.STEP_INDEX_ENV,
@@ -929,41 +929,6 @@ def test_reconcile_cli_has_read_only_template_then_typed_apply(
 
 
 @pytest.mark.parametrize('argv', [
-    ['queue', '42', '--base', 'unused', '--until', 'stage0'],
-    ['queue-cancel', 'queue-1', '0', '--base', 'unused'],
-    ['queue-resume', 'queue-1', '--base', 'unused'],
-    ['reconcile', '--base', 'unused'],
-    [
-        'reconcile', '--base', 'unused',
-        '--admission-parent-run-id', 'parent-control',
-        '--actor', 'agent', '--reason', '不应在子上下文 apply',
-        '--subject-sha256', 'a' * 64,
-    ],
-    [
-        'reconcile', '--base', 'unused', '--admission-repair-tail',
-        '--actor', 'agent', '--reason', '不应在子上下文 repair',
-        '--subject-sha256', 'a' * 64,
-    ],
-    [
-        'reconcile', '--base', 'unused',
-        '--beacon-repair-tail',
-        '--actor', 'agent', '--reason', '不应在子上下文修复信标账',
-        '--subject-sha256', 'a' * 64,
-    ],
-])
-def test_commander_dispatcher_refuses_control_plane_mutations_before_handler(
-        monkeypatch, argv):
-    cli = importlib.import_module('novel.cli.main')
-    monkeypatch.setenv(
-        cli.commander_context.COMMANDER_RUN_ID_ENV, 'parent-control')
-    monkeypatch.setitem(
-        cli._CMDS, argv[0],
-        lambda _args: pytest.fail('Commander control mutation 不得进入 handler'))
-
-    assert cli.main(argv) == 2
-
-
-@pytest.mark.parametrize('argv', [
     ['queue-list', '--base', 'unused'],
     ['queue', '42', '--base', 'unused', '--until', 'stage0', '--plan-only'],
     [
@@ -980,7 +945,7 @@ def test_commander_dispatcher_keeps_control_plane_inspection_read_only(
         monkeypatch, argv):
     cli = importlib.import_module('novel.cli.main')
     monkeypatch.setenv(
-        cli.commander_context.COMMANDER_RUN_ID_ENV, 'parent-control')
+        cli.execution_context.COMMANDER_RUN_ID_ENV, 'parent-control')
     called: list[str] = []
     monkeypatch.setitem(
         cli._CMDS, argv[0], lambda args: called.append(args.cmd) or 0)

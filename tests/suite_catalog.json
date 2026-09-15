@@ -318,26 +318,6 @@
       "layer": "unit_contract",
       "stages": []
     },
-    "tests/test_commander_completion.py": {
-      "layer": "unit_contract",
-      "stages": []
-    },
-    "tests/test_commander_context.py": {
-      "layer": "unit_contract",
-      "stages": []
-    },
-    "tests/test_commander_drivers.py": {
-      "layer": "unit_contract",
-      "stages": []
-    },
-    "tests/test_commander_receipt_recovery.py": {
-      "layer": "unit_contract",
-      "stages": []
-    },
-    "tests/test_commander_work_unit_recovery.py": {
-      "layer": "unit_contract",
-      "stages": []
-    },
     "tests/test_core.py": {
       "layer": "unit_contract",
       "stages": []
@@ -383,6 +363,10 @@
       ]
     },
     "tests/test_docs_references.py": {
+      "layer": "unit_contract",
+      "stages": []
+    },
+    "tests/test_execution_context.py": {
       "layer": "unit_contract",
       "stages": []
     },
@@ -434,6 +418,18 @@
     "tests/test_human_actions.py": {
       "layer": "unit_contract",
       "stages": []
+    },
+    "tests/test_inbox_projection.py": {
+      "layer": "unit_contract",
+      "stages": [
+        "stage0",
+        "stage1",
+        "stage2",
+        "stage4",
+        "stage5",
+        "stage6",
+        "stage7"
+      ]
     },
     "tests/test_ingest_fixtures.py": {
       "layer": "unit_contract",
@@ -679,75 +675,7 @@
         "stage7"
       ]
     },
-    "tests/test_reviewer_contract.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage0",
-        "stage1",
-        "stage2",
-        "stage4",
-        "stage5",
-        "stage6",
-        "stage7"
-      ]
-    },
     "tests/test_reviewer_node_landed.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage0",
-        "stage1",
-        "stage2",
-        "stage4",
-        "stage5",
-        "stage6",
-        "stage7"
-      ]
-    },
-    "tests/test_reviewer_parent_proof_projection.py": {
-      "layer": "unit_contract",
-      "stages": []
-    },
-    "tests/test_reviewer_protocol_recovery.py": {
-      "layer": "unit_contract",
-      "stages": []
-    },
-    "tests/test_reviewer_revalidation.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage0",
-        "stage1",
-        "stage2",
-        "stage4",
-        "stage5",
-        "stage6",
-        "stage7"
-      ]
-    },
-    "tests/test_reviewer_schema_recovery_integration.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage0",
-        "stage1",
-        "stage2",
-        "stage4",
-        "stage5",
-        "stage6",
-        "stage7"
-      ]
-    },
-    "tests/test_reviewer_schema_recovery_log.py": {
-      "layer": "unit_contract",
-      "stages": []
-    },
-    "tests/test_reviewer_seat_ledger.py": {
-      "layer": "unit_contract",
-      "stages": []
-    },
-    "tests/test_reviewer_suffix_recovery.py": {
-      "layer": "unit_contract",
-      "stages": []
-    },
-    "tests/test_reviewer_tasks.py": {
       "layer": "unit_contract",
       "stages": [
         "stage0",
@@ -1271,36 +1199,6 @@
         "stage4"
       ]
     },
-    "tests/test_stage4_review_constraint_context.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage4"
-      ]
-    },
-    "tests/test_stage4_review_inheritance.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage4"
-      ]
-    },
-    "tests/test_stage4_reviewer_constraint_operations.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage4"
-      ]
-    },
-    "tests/test_stage4_reviewer_integration.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage4"
-      ]
-    },
-    "tests/test_stage4_reviewer_wire.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage4"
-      ]
-    },
     "tests/test_stage4_runtime_v3.py": {
       "layer": "unit_contract",
       "stages": [
@@ -1486,10 +1384,8 @@
     "tests/test_stage6_prepare_workflow.py": {
       "cases": {
         "test_actual_cli_templates_are_free_and_canonical_prepare_requires_stage5": "unit_contract",
-        "test_prepare_changed_reading_or_binding_cannot_rewrap": "unit_contract",
-        "test_prepare_loader_rejects_changed_source_binding_even_in_full_typed_document": "unit_contract",
-        "test_prepare_native_rejects_wrong_binding_and_legacy_response": "unit_contract",
-        "test_prepare_revalidation_rejects_unbound_original_source": "unit_contract"
+        "test_canonical_durable_prepare_decision_replays_and_uses_same_service_input": "unit_contract",
+        "test_pending_decision_exposes_exact_free_recovery_and_preserves_budget": "unit_contract"
       },
       "layer": "stage",
       "stages": [
@@ -1616,18 +1512,6 @@
       "layer": "unit_contract",
       "stages": []
     },
-    "tests/test_inbox_projection.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage0",
-        "stage1",
-        "stage2",
-        "stage4",
-        "stage5",
-        "stage6",
-        "stage7"
-      ]
-    },
     "tests/test_views_stage2.py": {
       "cases": {
         "test_a_malformed_artifact_is_409_material_not_404": "stage",
@@ -1719,6 +1603,10 @@
       ]
     },
     "tests/test_write_admission.py": {
+      "layer": "unit_contract",
+      "stages": []
+    },
+    "tests/test_commander_receipt_recovery.py": {
       "layer": "unit_contract",
       "stages": []
     }

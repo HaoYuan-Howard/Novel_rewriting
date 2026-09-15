@@ -94,7 +94,7 @@ export function SettingsScreen() {
         <div className="flex flex-col gap-5">
           <h1 className="m-0 text-screen font-semibold">设置</h1>
           <div className="text-body text-ink-3">
-            当前输出目录的常用 Commander 与 Executor 配置
+            当前输出目录的常用 Executor 配置
           </div>
         </div>
         <div className="flex items-center gap-10 text-tag text-ink-4">

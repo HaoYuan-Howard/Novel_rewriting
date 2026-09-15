@@ -2,6 +2,10 @@
 
 工程入口先 preview，再用相同 token、actor/reason apply。成本、session、原请求、
 日志与 owner 结束证明必须闭合；未知用量仍保留未知。运行代码不自动批准此动作。
+
+Commander 受托审阅已退役（2026-09-15）；本 CLI 只服务存量书历史工作单元的
+owner 停止证明与失败收口，不再产生新的 commander 工作单元。原 commander
+profile 自 profiles v3 读边界起不可恢复，改用 append-only started 原字节核对。
 """
 from __future__ import annotations
 
@@ -21,7 +25,7 @@ from contracts.schema.work_unit_recovery import (
 from contracts.schema.workflow import WorkUnitBlobV1, WorkUnitContentTurn, WorkUnitLedgerV2
 from novel import prov, work_units
 from novel.agents import session_audit as agent_session_audit
-from novel.commanders import context as commander_context
+from novel.orchestrator import execution_context
 from novel.appendlog import path_transaction_lock
 from novel.agents.base import decode_wire_json
 from novel.errors import NovelError
@@ -30,6 +34,15 @@ from novel.orchestrator.work_unit_evidence import (
     cost_evidence, load_budget, owner_stop_proof, read_rows,
 )
 from novel.work_unit_usage import summarize
+
+#: 同席 resume 的续接提示（原 ``agent._REVIEWER_RESUME_PROMPT``，随 Commander
+#: 执行链退役搬入本模块）：上一进程已因网络/瞬态故障终止，续接同一 provider
+#: 会话完成同一 immutable workpack。历史失败收口仍按这串字节核对 prompt SHA。
+_REVIEWER_RESUME_PROMPT = (
+    '上一进程因网络或瞬态故障中断，本轮是同一席位的续接。请继续同一 immutable '
+    'workpack 与同一 typed 请求文件路径完成审阅并写出请求；不要重读盘上产物，'
+    '不要更改请求文件路径，也不要重复已经写出的请求。'
+)
 
 
 @dataclass(frozen=True)
@@ -97,9 +110,16 @@ def _inspect(base: str | Path, sid: str, unit_id: str, turn_id: str) -> _Inspect
             or session.start.schema_sha256 != request_payload.get('schema_sha256')):
         raise work_units.WorkUnitRefused('原请求与会话起点的 prompt/schema 不闭合')
     runs = [row for row in owner_proof['runs'] if row['run_id'] == turn.run_id]
+    # owner_proof 的 runs 来自 v3 fold，已不携带 commander 字段；冻结配置只能
+    # 从 append-only started 原字节读取，读不到即关闭式拒绝，不得伪造通过。
+    started_rows = [row for row in read_rows(agent.runs_path(base), 'Commander 失败收口 AgentRun 账')
+                    if row.get('run_id') == turn.run_id and row.get('kind') == 'started']
+    frozen_commander = (
+        started_rows[0].get('start', {}).get('profiles', {}).get('commander')
+        if len(started_rows) == 1 else None)
     if (len(runs) != 1 or session.start.profile is None
-            or session.start.profile.model_dump(mode='json')
-            != runs[0]['start']['profiles']['commander']):
+            or not isinstance(frozen_commander, dict)
+            or session.start.profile.model_dump(mode='json') != frozen_commander):
         raise work_units.WorkUnitRefused('原失败会话与冻结的 Commander 配置不一致')
     if {row.attempt_id for row in session.attempts} != attempt_ids:
         raise work_units.WorkUnitRefused('原会话与工作单元的尝试分母不一致')
@@ -129,7 +149,7 @@ def _inspect(base: str | Path, sid: str, unit_id: str, turn_id: str) -> _Inspect
         }
         usage = {} if event.usage is None else event.usage.to_dict()
         has_prior_session = any(row.provider_session_id is not None for row in turn.attempts[:index])
-        expected_prompt = agent._REVIEWER_RESUME_PROMPT if has_prior_session else prompt
+        expected_prompt = _REVIEWER_RESUME_PROMPT if has_prior_session else prompt
         if (any(row.get(key) != value for key, value in metadata.items())
                 or event.prompt_sha256 != hashlib.sha256(expected_prompt.encode('utf-8')).hexdigest()
                 or any(row.get(key) != usage.get(key) for key in (
@@ -186,9 +206,9 @@ def inspect(base: str | Path, sid: str, unit_id: str, turn_id: str) -> Commander
 def apply(base: str | Path, sid: str, unit_id: str, turn_id: str,
           request: CommanderFailureRecoveryRequest) -> CommanderFailureRecoveryReceipt:
     if any(key in os.environ for key in (
-            commander_context.COMMANDER_RUN_ID_ENV, commander_context.COMMANDER_CONTRACT_SHA256_ENV,
-            commander_context.COMMANDER_EPOCH_ID_ENV, commander_context.COMMANDER_EPOCH_SHA256_ENV,
-            commander_context.COMMANDER_ADMISSION_ID_ENV)):
+            execution_context.COMMANDER_RUN_ID_ENV, execution_context.COMMANDER_CONTRACT_SHA256_ENV,
+            execution_context.COMMANDER_EPOCH_ID_ENV, execution_context.COMMANDER_EPOCH_SHA256_ENV,
+            execution_context.COMMANDER_ADMISSION_ID_ENV)):
         raise work_units.WorkUnitRefused('Commander 子上下文不能执行工程失败收口')
     request = CommanderFailureRecoveryRequest.model_validate(request.model_dump(mode='json'))
     budget = load_budget(base, sid, unit_id)

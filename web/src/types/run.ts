@@ -11,7 +11,8 @@
  */
 export type RunBeacon = 'pending' | 'running' | 'ok' | 'landed_red' | 'stopped' | 'failed'
 export type RunResumeFrontierState = 'ready' | 'blocked' | 'pipeline_complete' | 'unknown'
-export type RunNextHandler = 'code' | 'commander' | 'executor' | 'human' | 'none' | 'unknown'
+/** Commander 裁决者退役（2026-09-15）：审批闸一律投影为 human，blocked 时只剩 executor/human。 */
+export type RunNextHandler = 'code' | 'executor' | 'human' | 'none' | 'unknown'
 export type RunResumeVerdict = 'run' | 'skip' | 'redo' | 'unknown' | 'legacy_incompatible'
 
 export interface RunStep {

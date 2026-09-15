@@ -20,7 +20,7 @@ from typing import Callable
 
 from contracts.invariants import (
     AGENT_EXECUTOR_NODES, AgentAvailability, AgentDriver,
-    AgentModelEvidence, AgentReasoningEffort, AgentRole, NODES,
+    AgentModelEvidence, AgentReasoningEffort, NODES,
 )
 from contracts.schema.api import (
     AgentCapabilitiesResponse, AgentDriverCapability, AgentModelCapability,
@@ -59,7 +59,6 @@ class _DriverSpec:
     provider: str
     label: str
     executable: str
-    roles: tuple[AgentRole, ...]
     models: tuple[_ModelSpec, ...]
     # 只有公开结果协议确实不提供 actual model、且本驱动用受测的单模型
     # 无 fallback argv 强制请求时才登记。None 表示缺 actual 必须关闭式拒绝。
@@ -81,7 +80,6 @@ _DRIVERS: tuple[_DriverSpec, ...] = (
         provider='bigmodel',
         label='Claude Code · 智谱 GLM',
         executable='claude',
-        roles=('commander', 'executor'),
         models=(
             _ModelSpec(
                 id='glm-5.3-flash[1M]', label='GLM 5.3 Flash · 1M',
@@ -96,7 +94,6 @@ _DRIVERS: tuple[_DriverSpec, ...] = (
         provider='anthropic',
         label='Claude Code',
         executable='claude',
-        roles=('commander', 'executor'),
         models=(
             _ModelSpec(
                 id='claude-opus-5', label='Claude Opus 5',
@@ -113,7 +110,6 @@ _DRIVERS: tuple[_DriverSpec, ...] = (
         provider='openai',
         label='Codex',
         executable='codex',
-        roles=('commander', 'executor'),
         models=(
             _ModelSpec(
                 id='gpt-5.6-sol', label='GPT-5.6 Sol',
@@ -262,7 +258,6 @@ def get_agent_capabilities(
             id=spec.id,
             provider=spec.provider,
             label=spec.label,
-            roles=list(spec.roles),
             availability=probed.availability,
             availability_reason=probed.reason,
             version=probed.version,
@@ -313,9 +308,10 @@ def get_agent_capabilities(
     )
 
 
-def validate_profile(profile: AgentProfile, *, role: AgentRole) -> AgentProfile:
-    """按 role + driver + model + effort + mode 关闭式校验一份 profile。
+def validate_profile(profile: AgentProfile) -> AgentProfile:
+    """按 driver + model + effort + mode 关闭式校验一份 executor profile。
 
+    Commander 角色退役（2026-09-15）后 driver 只承接 executor，role 维度删除。
     返回**已物化**的新对象；任何未知组合都响亮拒绝，绝不映射到
     相近档位。``execution_mode=None`` 按当前 ``standard`` 校验后显式写回，
     使 argv/provenance 快照不依赖未来 registry 对 None 的解释。
@@ -323,9 +319,6 @@ def validate_profile(profile: AgentProfile, *, role: AgentRole) -> AgentProfile:
     driver = _DRIVER_BY_ID.get(profile.driver)
     if driver is None:  # Pydantic 正常入口已会挡住；保留给 model_construct/内部调用。
         raise AgentProfileRefused(f'未知 agent driver {profile.driver!r}')
-    if role not in driver.roles:
-        raise AgentProfileRefused(
-            f'driver={profile.driver!r} 不支持 role={role!r}；可选 {driver.roles}')
 
     model = next((item for item in driver.models if item.id == profile.model), None)
     if model is None:
@@ -352,13 +345,12 @@ def validate_profile(profile: AgentProfile, *, role: AgentRole) -> AgentProfile:
 
 def validate_pipeline_profiles(
         profiles: PipelineAgentProfiles) -> PipelineAgentProfiles:
-    """一次校验 commander、默认 backend 与全部节点覆盖。
+    """一次校验默认 backend 与全部节点覆盖（schema v3，executor-only）。
 
     默认 backend 必须逐个通过所有未覆盖节点；否则一份 Flash 默认会在
     Stage4/Stage6 的 Pro 钉死节点直到真跑才失败。设置保存和 preview 就应把这类
     半份配置拦住，并明确要求节点覆盖。
     """
-    commander = validate_profile(profiles.commander, role='commander')
     overrides = {
         node: validate_executor_backend(backend, node=node)
         for node, backend in profiles.executor_overrides.items()
@@ -371,7 +363,6 @@ def validate_pipeline_profiles(
     for node in default_nodes:
         default_backend = validate_executor_backend(default_backend, node=node)
     return PipelineAgentProfiles(
-        commander=commander,
         executor_default=default_backend,
         executor_overrides=overrides,
         concurrency=profiles.concurrency,
@@ -384,7 +375,7 @@ def validate_executor_backend(
     """按显式 discriminator 校验 executor；两类 driver 不共享隐式 fallback。"""
     if isinstance(backend, AgentExecutorBackend):
         return AgentExecutorBackend(
-            profile=validate_profile(backend.profile, role='executor'))
+            profile=validate_profile(backend.profile))
     if isinstance(backend, LegacyExecutorBackend):
         try:
             profile = validate_legacy_profile(backend.profile, node=node)

@@ -51,7 +51,7 @@ ActorBinding 保存 `presentation_id`、`char_id`、登记字面 `surfaces`、�
 
 BlueprintCharacterProjection v2 保存实际截止本章出现的人物候选及每项
 `surface/identity_revealed_from`。canonical 未出现时不强制改称；相同字面涉及多个人物时
-保留所有候选，Commander 按原文消歧。首次出场尚未发生的实体不因共享字面被引入。
+保留所有候选，人工按原文消歧（原 Commander 审阅已随 2026-09-15 角色退役）。首次出场尚未发生的实体不因共享字面被引入。
 映射时点不禁止称谓本身出现；本章揭示不等于章首已知。
 
 Narration 保存 `narrator/focalizer` ActorRef、`beat_refs` 与原文证据。

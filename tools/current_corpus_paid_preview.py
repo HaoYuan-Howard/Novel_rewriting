@@ -125,7 +125,7 @@ PREREQUISITES = {
     ),
     'stage4.design': (
         'Stage2 blueprint 必须 fresh，去序真相图投影可完整闭合。',
-        'Global generation-safe 且 Global/Blueprint 两个独立 Commander 均已接受，打开 s2 gate。',
+        'Global generation-safe 且统一机械准入（stage4_ready）通过，进入 Stage4。',
     ),
     'stage4.plan': (
         'Stage4 blind_candidate 必须 fresh；Stage2 global + blueprint 证据层必须 fresh。',
@@ -629,7 +629,11 @@ def _aggregate(dispatches: list[dict[str, Any]]) -> dict[str, int]:
 
 
 def workflow_role_budget(chapters: int) -> dict[str, Any]:
-    """当前生命周期的内容上限；B 只有真实歧义章开模型工作单元。"""
+    """当前生命周期的内容上限；B 只有真实歧义章开模型工作单元。
+
+    Commander 审阅席位已随角色退役（2026-09-15）：这里只剩 executor 预算行，
+    审批闸一律人工，不产生任何模型审阅工作单元。
+    """
     rows: list[dict[str, Any]] = []
     for node, spec in NODES.items():
         life = spec.lifecycle
@@ -643,20 +647,8 @@ def workflow_role_budget(chapters: int) -> dict[str, Any]:
             rows.append({'node': node, 'role': 'executor', 'minimum_units': minimum,
                          'maximum_units': units, 'content_limit_per_unit': life.executor_content_limit,
                          'content_hard_limit': units * life.executor_content_limit})
-        if life.commander_content_limit:
-            review_units = len({scope for _blocker, scope in life.commander_bindings})
-            if not review_units:
-                raise ValueError(f'{node} 的 Commander 缺少预算工作单元 scope')
-            rows.append({'node': node, 'role': 'commander', 'minimum_units': review_units,
-                         'maximum_units': review_units,
-                         'content_limit_per_unit': life.commander_content_limit,
-                         'content_hard_limit': life.commander_content_limit * review_units})
-    stage2_commanders = [row for row in rows if row['role'] == 'commander'
-                         and row['node'].startswith('stage2.')]
     return {'contract': WORKFLOW_ROLE_CONTRACT, 'scope': 'new_clean_base', 'units': rows,
             'content_hard_limit': sum(row['content_hard_limit'] for row in rows),
-            'stage2_commander_units': sum(row['maximum_units'] for row in stage2_commanders),
-            'stage2_commander_content_hard_limit': sum(row['content_hard_limit'] for row in stage2_commanders),
             'network_attempts': '独立有界并逐次留账；由实际运行 profile/transport 冻结',
             'token_estimate': None, 'cost_estimate': None}
 
@@ -701,7 +693,7 @@ def build_plan(
         'workflow_role_budget': {
             book['sid']: workflow_role_budget(book['chapters']) for book in books},
         'transport_estimate_scope': (
-            '既有 legacy CLI 首批请求观察；不含 Commander，不能作为新工作流总付费上限。'
+            '既有 legacy CLI 首批请求观察；不含已退役的历史审阅轮，不能作为新工作流总付费上限。'
             '现役内容预算以 workflow_role_budget 为准；总 wire/token/费用必须由冻结运行 profile 另行预览。'),
         'token_estimate': {
             'stage2_characters_exact_before_generation': character_tokens,

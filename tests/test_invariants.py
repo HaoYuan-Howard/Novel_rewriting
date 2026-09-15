@@ -385,7 +385,7 @@ def test_the_approval_union_covers_its_value_domain_exactly():
 
 
 def test_node_lifecycle_covers_real_nodes_and_preserves_boundaries():
-    from contracts.invariants import NODES, REVIEW_ACTIONS, commander_review_actions
+    from contracts.invariants import NODES
 
     assert len(NODES) == 20
     assert all(spec.lifecycle is not None for spec in NODES.values())
@@ -393,18 +393,16 @@ def test_node_lifecycle_covers_real_nodes_and_preserves_boundaries():
         life = spec.lifecycle
         assert life.input_workpack and life.unit_kind and life.recovery_entries
         assert set(life.repair_owners) <= set(NODES)
-        assert set(life.review_actions) <= set(REVIEW_ACTIONS)
-        assert bool(life.review_actions) == (life.review_mode == 'commander')
-        for waiting_on, _scope in life.commander_bindings:
-            assert commander_review_actions(waiting_on) == life.review_actions
-            assert {'uncertain', 'stop'} <= set(life.review_actions)
+        # 审批闸人工（Commander 退役）：登记了 approval_bindings 的节点必须
+        # 以 human 为审阅模式；approval_bindings 本身保留，供审批状态投影与
+        # 历史 reviewer 工作单元解码使用。
+        assert bool(life.approval_bindings) == (life.review_mode == 'human')
         assert life.executor_content_limit == (4 if spec.paid else 0)
-        assert life.commander_content_limit == (4 if life.review_mode == 'commander' else 0)
-    # Stage2 语义审阅退役：两个生产节点不再登记 commander 席位或审阅动作。
-    assert not NODES['stage2.global'].lifecycle.commander_bindings
-    assert not NODES['stage2.blueprint'].lifecycle.commander_bindings
+    # Stage2 语义审阅退役：两个生产节点不再有任何审批登记或人审面。
+    assert not NODES['stage2.global'].lifecycle.approval_bindings
+    assert not NODES['stage2.blueprint'].lifecycle.approval_bindings
     assert NODES['stage2.global'].lifecycle.review_mode == 'none'
-    assert NODES['stage2.blueprint'].lifecycle.review_mode == 'none' 
+    assert NODES['stage2.blueprint'].lifecycle.review_mode == 'none'
     assert NODES['stage4.context'].lifecycle.review_mode == 'none'
     assert NODES['stage1.partition'].lifecycle.review_mode == 'none'
     assert NODES['stage7.assemble'].lifecycle.review_mode == 'none'

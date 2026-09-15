@@ -1,4 +1,9 @@
-"""智谱 Claude CLI 的两角色、接收端、结构化交付和真实计量边界；零模型请求。"""
+"""智谱 Claude CLI 的 executor 驱动、接收端、结构化交付和真实计量边界；零模型请求。
+
+【角色边界】受托 Commander 已退役（2026-09-15）：``novel/commanders`` 与
+``create_commander_driver`` 已删，GLM driver 只承接 executor；历史 commander
+构建/解码用例随之退役，不补造占位流程。
+"""
 from __future__ import annotations
 
 import json
@@ -15,8 +20,6 @@ from novel.agents.model_identity import AgentModelIdentityRefused, resolve_agent
 from novel.agents import base as agent_base
 from novel.agents.factory import create_driver
 from novel.agents.glm import BIGMODEL_BASE_URL, GlmClaudeCodeDriver, bigmodel_cli_settings
-from novel.commanders.base import CommanderConfigurationError
-from novel.commanders.factory import create_commander_driver
 
 
 PROFILE = AgentProfile(driver='claude-code-glm', model='glm-5.3-flash[1M]',
@@ -37,21 +40,19 @@ def glm_config(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize('effort', ['low', 'high', 'max'])
-def test_glm_capability_and_both_roles_are_closed(effort, monkeypatch):
+def test_glm_capability_and_executor_role_are_closed(effort, monkeypatch):
     profile = PROFILE.model_copy(update={'reasoning_effort': effort})
-    resolved = validate_pipeline_profiles(PipelineAgentProfiles(commander=profile, executor_default=profile))
-    assert resolved.commander == resolved.executor_default.profile == profile
+    resolved = validate_pipeline_profiles(PipelineAgentProfiles(
+        executor_default=profile, executor_overrides={}))
+    assert resolved.executor_default.profile == profile
     assert provider_for_driver(profile.driver) == 'bigmodel'
     capability = next(row for row in get_agent_capabilities(which=lambda _: None).drivers
                       if row.id == profile.driver)
     assert capability.models[0].reasoning_efforts == ['low', 'high', 'max']
     assert capability.availability == 'missing'
     monkeypatch.setattr(agent_base, 'resolve_cli_entry', lambda *args: 'claude.exe')
-    with create_driver(profile, role='executor') as executor:
+    with create_driver(profile) as executor:
         assert executor.provider == 'bigmodel'
-    commander = create_commander_driver(profile, executable='claude.exe')
-    assert commander.provider == 'bigmodel'
-    commander.close()
 
 
 @pytest.mark.parametrize('updates', [
@@ -60,7 +61,7 @@ def test_glm_capability_and_both_roles_are_closed(effort, monkeypatch):
 ])
 def test_glm_rejects_unregistered_combinations(updates):
     with pytest.raises(AgentProfileRefused):
-        validate_profile(PROFILE.model_copy(update=updates), role='executor')
+        validate_profile(PROFILE.model_copy(update=updates))
 
 
 @pytest.mark.parametrize('actual', ['glm-5.3-flash', 'glm-5.3-flash[1m]', 'glm-5.3-flash[1M]'])
@@ -112,37 +113,8 @@ def test_glm_executor_pins_recipient_and_model_and_keeps_resume(glm_config, tmp_
     assert glm_config.read_bytes() == original and not list(cwd.iterdir())
 
 
-def test_glm_commander_pins_recipient_without_loading_engineering_context(glm_config, tmp_path):
-    driver = create_commander_driver(PROFILE, executable='claude.exe')
-    invocation = driver.build_invocation(PROFILE, '仅消费工作包', repo=tmp_path, base=tmp_path,
-        structured_response=True, output_schema=SCHEMA)
-    assert invocation.profile == PROFILE
-    assert '--safe-mode' in invocation.argv and '--fallback-model' not in invocation.argv
-    assert invocation.argv[invocation.argv.index('--effort') + 1] == 'max'
-    assert invocation.argv[invocation.argv.index('--tools') + 1] == ''
-    assert '--allowedTools' not in invocation.argv
-    assert 'test-private-token' not in repr(invocation)
-    events = [
-        {'type': 'system', 'subtype': 'init', 'session_id': 'glm-session', 'model': PROFILE.model},
-        {'type': 'result', 'subtype': 'success', 'is_error': False, 'session_id': 'glm-session',
-         'modelUsage': {'glm-5.3-flash': {'inputTokens': 7, 'outputTokens': 2}}},
-    ]
-    observation = driver._decode_events(events, profile=PROFILE, exit_code=0, expected_provider_session_id=None)
-    assert observation.actual_model == 'glm-5.3-flash'
-    assert observation.actual_effort is None
-    events[-1].pop('modelUsage')
-    from novel.commanders.base import CommanderProtocolError
-    with pytest.raises(CommanderProtocolError, match='实际模型'):
-        driver._decode_events(events, profile=PROFILE, exit_code=0, expected_provider_session_id=None)
-    driver.close()
-
-
 @pytest.mark.parametrize('endpoint', [None, 'https://api.anthropic.com', 'https://open.bigmodel.cn.evil.invalid/api/anthropic'])
-def test_glm_wrong_or_missing_recipient_is_rejected_before_spawn(glm_config, tmp_path, endpoint):
+def test_glm_wrong_or_missing_recipient_is_rejected_before_spawn(glm_config, endpoint):
     glm_config.write_text(json.dumps({'env': {'ANTHROPIC_BASE_URL': endpoint}}), encoding='utf-8')
     with pytest.raises(agent_base.AgentConfigurationError, match='接收端'):
         bigmodel_cli_settings()
-    driver = create_commander_driver(PROFILE, executable='claude.exe')
-    with pytest.raises(CommanderConfigurationError, match='接收端'):
-        driver.build_invocation(PROFILE, '不会发出', repo=tmp_path, base=tmp_path)
-    driver.close()

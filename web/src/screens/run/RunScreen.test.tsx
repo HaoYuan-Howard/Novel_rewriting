@@ -25,7 +25,7 @@ describe('RunScreen 交付终验', () => {
     vi.spyOn(api, 'getRunProgress').mockResolvedValue({
       ...run,
       resume_frontier: {
-        ...run.resume_frontier, next_handler: 'commander',
+        ...run.resume_frontier, next_handler: 'human',
         review_states: [
           { node: 'stage2.global', scope: 'book', state: 'accepted' },
           { node: 'stage2.blueprint', scope: 'book', state: 'uncertain' },
@@ -39,7 +39,7 @@ describe('RunScreen 交付终验', () => {
     vi.spyOn(api, 'getCheck').mockResolvedValue(null)
     vi.spyOn(api, 'getAgentRuns').mockResolvedValue({ runs: [] })
     renderRoute(<RunScreen />, `/n/${SAMPLE_SID}/run`)
-    expect(await screen.findByText('下一处理者：Commander（形成新裁决）')).toBeVisible()
+    expect(await screen.findByText('下一处理者：人工审批（在 Stage 页面过闸后可原配置续跑）')).toBeVisible()
     expect(screen.getByText('stage2.global · book：accepted')).toBeVisible()
     expect(screen.getByText('stage2.blueprint · book：uncertain')).toBeVisible()
     expect(screen.getByText('当前恢复：book: replay_response')).toBeVisible()
@@ -180,11 +180,11 @@ describe('RunScreen 交付终验', () => {
       seq: stage0Approve.seq,
       label: stage0Approve.label,
       resume_verdict: 'run',
-      why: 'Stage0 当前版本等待正式审阅决定',
+      why: '停在人工审批闸：stage0.approve；在 Stage 页面完成裁决后用原配置续跑',
       waiting_on: 'stage0.approve',
       paid: false,
       writes: 'approval',
-      next_handler: 'commander',
+      next_handler: 'human',
       verified_skipped_nodes: ['stage0.remove'],
       verified_skipped_count: 1,
     }
@@ -212,7 +212,7 @@ describe('RunScreen 交付终验', () => {
         note: null,
         outcome: {
           state: 'stopped',
-          reason: 'Commander reviewer 明确拒绝批准 stage0.approve：需先形成新的业务面',
+          reason: '停在人工审批闸：stage0.approve；在 Stage 页面完成裁决后用原配置续跑',
           checked_at: 3,
         },
         allowed_controls: [],
@@ -226,7 +226,7 @@ describe('RunScreen 交付终验', () => {
     })
     expect(toggle).toHaveAttribute('aria-expanded', 'true')
     expect(await screen.findByTestId('delivery-reason')).toHaveTextContent(
-      'Commander reviewer 明确拒绝批准 stage0.approve',
+      '停在人工审批闸：stage0.approve',
     )
     expect(screen.getByText('stopped 安全停点')).toBeVisible()
     expect(screen.queryByText('failed 失败')).not.toBeInTheDocument()
@@ -272,7 +272,7 @@ describe('RunScreen 交付终验', () => {
         note: null,
         outcome: {
           state: 'unknown',
-          reason: 'Commander 未形成可信成功终态，结论未知',
+          reason: '外部进程异常退出，未形成可信交付结论',
           checked_at: 3,
         },
         allowed_controls: [],
@@ -342,7 +342,7 @@ describe('RunScreen 交付终验', () => {
     },
   )
 
-  it('展示每次运行已冻结的 commander/default/override 精确配置', async () => {
+  it('展示每次运行已冻结的默认/override 精确配置', async () => {
     const run = await mockApi.getRunProgress(SAMPLE_SID)
     vi.spyOn(api, 'getRunProgress').mockResolvedValue(run)
     vi.spyOn(api, 'getCheck').mockResolvedValue(null)
@@ -389,7 +389,6 @@ describe('RunScreen 交付终验', () => {
     renderRoute(<RunScreen />, `/n/${SAMPLE_SID}/run`)
 
     const snapshot = await screen.findByTestId('agent-profiles-snapshot')
-    expect(snapshot).toHaveTextContent('commander-model-v9')
     expect(snapshot).toHaveTextContent('executor-model-v7')
     expect(snapshot).toHaveTextContent('node.dynamic-a')
     expect(snapshot).toHaveTextContent('effort=deep-dynamic')
@@ -442,7 +441,7 @@ describe('RunScreen check composition', () => {
       waiting_on: 'approval:stage4-structure-replan',
       paid: false,
       writes: 'artifact',
-      next_handler: 'commander',
+      next_handler: 'human',
       verified_skipped_nodes: skipped,
       verified_skipped_count: skipped.length,
     }
@@ -455,7 +454,7 @@ describe('RunScreen check composition', () => {
     const frontier = await screen.findByTestId('resume-frontier')
     expect(frontier).toHaveTextContent(/下一节点：stage4 写作上下文组装/)
     expect(frontier).toHaveTextContent('当前执行：stage4 重构计划（stage4.plan）')
-    expect(frontier).toHaveTextContent('下一处理者：Commander（形成新裁决）')
+    expect(frontier).toHaveTextContent('下一处理者：人工审批（在 Stage 页面过闸后可原配置续跑）')
     expect(screen.getByRole('button', { name: '跳到下一节点' })).toBeEnabled()
     expect(screen.queryAllByTitle('stage0.remove')).toHaveLength(0)
 

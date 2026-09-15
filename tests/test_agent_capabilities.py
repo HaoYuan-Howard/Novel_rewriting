@@ -11,7 +11,7 @@ from pydantic import ValidationError
 
 from contracts.invariants import (
     AGENT_EXECUTOR_NODES, AGENT_ONLY_EXECUTOR_NODES, NODES, AgentAvailability,
-    AgentDriver, AgentModelEvidence, AgentRole,
+    AgentDriver, AgentModelEvidence,
 )
 from contracts.schema.orchestration import (
     AgentExecutorBackend, AgentProfile, LegacyExecutorBackend, LegacyLlmProfile,
@@ -195,8 +195,8 @@ def test_registry_publishes_exact_ids_labels_and_model_specific_options():
     assert capabilities.unreported_model_evidence_for_driver('codex') \
         == 'driver-enforced'
     assert capabilities.unreported_model_evidence_for_driver('claude-code') is None
-    assert all(set(driver.roles) == set(get_args(AgentRole))
-               for driver in drivers.values())
+    # Commander 角色退役：driver 不再有 roles 维度。
+    assert all(not hasattr(driver, 'roles') for driver in drivers.values())
     assert set(get_args(AgentAvailability)) == {
         'ready', 'missing', 'unknown', 'unauthenticated',
     }
@@ -240,23 +240,18 @@ def test_registry_publishes_exact_ids_labels_and_model_specific_options():
 
 def test_profile_validation_is_closed_over_driver_model_effort_and_mode():
     unresolved = _profile()
-    resolved = capabilities.validate_profile(unresolved, role='executor')
+    resolved = capabilities.validate_profile(unresolved)
     assert resolved.model == 'gpt-5.6-sol'
     assert resolved.execution_mode == 'standard'
     assert unresolved.execution_mode is None and resolved is not unresolved
-    assert capabilities.validate_profile(
-        _profile(mode='standard'), role='commander').execution_mode == 'standard'
 
     with pytest.raises(capabilities.AgentProfileRefused, match='不支持 model'):
-        capabilities.validate_profile(
-            _profile(model='claude-opus-5'), role='executor')
+        capabilities.validate_profile(_profile(model='claude-opus-5'))
     with pytest.raises(capabilities.AgentProfileRefused, match='reasoning_effort'):
         capabilities.validate_profile(
-            _profile(driver='claude-code', model='claude-sonnet-5', effort='none'),
-            role='executor',
-        )
+            _profile(driver='claude-code', model='claude-sonnet-5', effort='none'))
     with pytest.raises(capabilities.AgentProfileRefused, match='execution_mode'):
-        capabilities.validate_profile(_profile(mode='ultra'), role='executor')
+        capabilities.validate_profile(_profile(mode='ultra'))
 
 
 def test_executor_overrides_reject_code_and_approval_nodes():
@@ -266,18 +261,17 @@ def test_executor_overrides_reject_code_and_approval_nodes():
             executor_overrides={'stage4.context': _profile()},
         )
     profiles = PipelineAgentProfiles(
-        commander=_profile(), executor_default=_profile(),
+        executor_default=_profile(),
         executor_overrides={'stage6.semantic': _profile(model='gpt-5.6-terra')},
     )
     resolved = capabilities.validate_pipeline_profiles(profiles)
     assert resolved is not profiles
-    assert resolved.commander.execution_mode == 'standard'
     assert isinstance(resolved.executor_default, AgentExecutorBackend)
     assert resolved.executor_default.profile.execution_mode == 'standard'
     override = resolved.executor_overrides['stage6.semantic']
     assert isinstance(override, AgentExecutorBackend)
     assert override.profile.execution_mode == 'standard'
-    assert profiles.commander.execution_mode is None, '请求对象不应被原地改写'
+    assert profiles.executor_default.profile.execution_mode is None, '请求对象不应被原地改写'
 
 
 def test_legacy_backend_is_closed_over_provider_model_thinking_effort_and_node():

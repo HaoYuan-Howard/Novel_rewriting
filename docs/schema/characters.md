@@ -2,7 +2,8 @@
 
 人物登记只保存实体、称谓归属及首次公开身份。`stage2.analyze` 从 MainText 一次提取
 人物与 Global 草稿，代码分别物化两份独立产物；后续修订由各自 producer 负责。
-Global Commander 统一审阅两侧，人物不新增 Commander。Gate A 的实际验收范围见
+原统一 Global Commander 审阅已随 Stage2 语义审阅与 Commander 角色先后退役（2026-09），人物不新增
+审阅席位。Gate A 的实际验收范围见
 `docs/REQUIREMENTS.md::TODO-49`，下游 presentation/ActorRef 的 Gate B 消费不能由本层落盘代替。
 
 | 路径 | 模型与版本 | 用途 |
@@ -131,7 +132,7 @@ CharactersProvenance 的 `retired_character_ids` 独立于 `characters_edit` 保
 当前提示文本改变不抹除原调用来源，无法解码的旧 schema 保持 unver。
 首轮/接受后 core 采用无空白 JSON **字符数**与 MainText 字符数比较；证据、审计另外计量。
 候选去留按原 checkpoint 的稳定主体 ID 统计，无法证明的拆分/合并不推测。C 干预先验证
-永久 Commander WorkUnit 的原请求、回答、typed 动作、会话与唯一成本来源，再关联实际提交：
+永久历史 Commander WorkUnit 的原请求、回答、typed 动作、会话与唯一成本来源，再关联实际提交：
 Core 编辑绑定原审批、prepared 和 completed；reviewed GlobalEdit 绑定稀疏编辑 SHA 与已提交
 历史 WAL；C 指派的独立 E 修订按原 review_token/owner 关联 E 的冻结请求、checkpoint、基线与
 提交目标，并单列为 E 执行的变化。人工 Core 批次不会因 actor 字样被算作模型 C；缺少来源或

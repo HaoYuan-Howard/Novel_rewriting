@@ -1,4 +1,11 @@
-"""永久写作授权绑定单次内容证明，不因连续审阅的后续 turn 漂移。"""
+"""永久写作授权绑定单次内容证明，不因连续审阅的后续 turn 漂移。
+
+【角色边界】受托 Commander reviewer 已退役（2026-09-15）：本文件钉的是
+历史 commander 工作单元账的**只读证据链**——生产消费侧
+（``reviewer_action_evidence`` / ``work_units.validate_reviewer_record``）
+仍按 commander 身份复核存量书的历史席位；符号统一取自
+``novel.orchestrator.reviewer_legacy``。
+"""
 from dataclasses import asdict
 import hashlib
 import json
@@ -6,7 +13,7 @@ import json
 import pytest
 
 from contracts.schema.orchestration import ReviewerActionRecord
-from novel.orchestrator import reviewer_action_evidence as evidence, reviewer_tasks
+from novel.orchestrator import reviewer_action_evidence as evidence, reviewer_legacy
 from novel.work_units import WorkUnitBudget
 
 
@@ -20,7 +27,7 @@ def seed_commander_response(base, *, sid='42', node='stage5.review', scope='clos
     from novel.llm import ledger
     from tests.test_agent_session_audit import _start, _turn
 
-    action = action or reviewer_tasks.ReviewerNodeAction(
+    action = action or reviewer_legacy.ReviewerNodeAction(
         kind='node', node='stage5.review',
         flags=('--request-reviewer-rewrite', '@reviewer-input'),
         input_payload={'actor': '审阅者', 'reason': '明确返工范围'})
@@ -35,12 +42,16 @@ def seed_commander_response(base, *, sid='42', node='stage5.review', scope='clos
                          actual_model=profile.model if profile else 'gpt-5.6-sol',
                          actual_effort=profile.reasoning_effort if profile else 'max'), **common)
     attempt = replace(turn, kind='attempt', turn_index=None, delivery_attempts=1)
-    budget = WorkUnitBudget(base, sid, node, 'commander', scope)
+    # commander 新账构造已关闭；历史证据播种按生产解码同款 read_only 身份打开
+    # 预算账（其 reserve/save 系列仍写历史行，与存量书盘面同形）。
+    from novel.work_units import initialize_workflow
+    initialize_workflow(base)
+    budget = WorkUnitBudget(base, sid, node, 'commander', scope, read_only=True)
     reservation = budget.reserve('1' * 64, run_id=run_id, session_run_id=session_run_id,
                                  request_payload={'prompt': prompt, 'schema_sha256': turn.schema_sha256})
     budget.record_attempt(reservation.turn_id, attempt_id=attempt.attempt_id, outcome='ok',
                           provider_session_id=attempt.provider_session_id)
-    response = {'schema': reviewer_tasks.REQUEST_SCHEMA, 'surface_seal': 'original-seal',
+    response = {'schema': reviewer_legacy.REQUEST_SCHEMA, 'surface_seal': 'original-seal',
                 'waiting_on': waiting_on, 'action': asdict(action)}
     raw = json.dumps(response, ensure_ascii=False)
     digest = hashlib.sha256((json.dumps(
@@ -64,10 +75,10 @@ def seed_commander_response(base, *, sid='42', node='stage5.review', scope='clos
     ledger.append_commander_call(base, **kwargs)
     budget.save_recovery(reservation.turn_id, {
         'business_sha256': business_sha256, 'waiting_on': waiting_on, 'action': asdict(action),
-        'action_sha256': reviewer_tasks.action_business_sha256(action),
+        'action_sha256': reviewer_legacy.action_business_sha256(action),
         'provider_response_sha256': digest})
     fields = (dict(node=action.node, flags=action.flags, input_payload=action.input_payload)
-              if isinstance(action, reviewer_tasks.ReviewerNodeAction)
+              if isinstance(action, reviewer_legacy.ReviewerNodeAction)
               else dict(surface=action.surface, payload=action.payload))
     record = ReviewerActionRecord(
         sid=sid, run_id='recovery-parent', epoch_id='new-epoch',
@@ -104,5 +115,5 @@ def test_work_unit_authority_still_requires_exact_original_cost(
     cost[field] = value
     from novel.llm.ledger import ledger_path
     ledger_path(tmp_path).write_text(json.dumps(cost) + '\n', encoding='utf-8')
-    with pytest.raises(reviewer_tasks.ReviewerTaskError, match='成本'):
+    with pytest.raises(reviewer_legacy.ReviewerTaskError, match='成本'):
         evidence._closed_evidence_hashes(tmp_path, '42', record)

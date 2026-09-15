@@ -33,7 +33,7 @@ function MetricLog({ sid, run }: { sid: string; run?: RunMetrics['runs'][number]
 
 function UnitRow({ unit, maximum, maxTokens, sid, runs }: { unit: UnitMetrics; maximum: number; maxTokens: number; sid: string; runs: RunMetrics['runs'] }) {
   return <tr className="border-t border-line">
-    <td className="py-12 pr-18 align-top">{unit.node}<br /><span className="text-ink-3">{unit.role} · {unit.scope}</span></td>
+    <td className="py-12 pr-18 align-top">{unit.node}<br /><span className="text-ink-3">{unit.role === 'commander' ? 'commander（历史）' : unit.role} · {unit.scope}</span></td>
     <td className="py-12 pr-18 align-top">{duration(unit.usage.model_time_ms)}
       <div className="mt-5 h-5 w-140 bg-inset" aria-hidden="true"><div className="h-full bg-ink-3" style={{ width: (maximum ? unit.usage.known_model_time_ms / maximum * 100 : 0) + '%' }} /></div>
       {unit.usage.model_time_ms === null ? <small>已知 {duration(unit.usage.known_model_time_ms)}</small> : null}

@@ -1,7 +1,8 @@
 # 工程运维手册
 
-本文供开发维护 agent 和维护者查环境、部署、测试、诊断与工程恢复。它不被 Executor 或受托
-Commander 加载，也不参与确定性调度。正常使用通过前端自动跑书或人工各 Stage 页面完成；
+本文供开发维护 agent 和维护者查环境、部署、测试、诊断与工程恢复。它不被 Executor 加载，也不参与
+确定性调度。正常使用通过前端自动跑书或人工各 Stage 页面完成；受托 Commander 审阅角色已退役
+（2026-09-15），自动跑书在人工审批闸停止、过闸后原配置续跑。
 页面应提供阻塞原因、材料与可用动作，不要求用户先读本手册。产品语义见
 `docs/BACKEND_CONTRACT.md`，前端开发见 `web/AGENTS.md`。
 
@@ -106,8 +107,8 @@ token/耗时优化前的工程基线是 `24e4cf42c76309adaf1f4ee4df0dca3cdbea4d3
 
 自动运行的暂停、恢复、停止和按原配置继续使用跑书页；人工生成、编辑、审批使用各 Stage 页面。
 工程诊断先查询 `python -m novel.cli --help` 和目标子命令 `--help`。内部执行入口为
-`novel/orchestrator/run_step.py`；Stage0 材料在 `novel/stages/stage0/review_workpack.py`，
-命名 scratch 诊断在 `novel/orchestrator/preflight.py`。这些模块均可用 `python -m <模块名> --help` 查看参数。
+`novel/orchestrator/run_step.py`；命名 scratch
+诊断在 `novel/orchestrator/preflight.py`。这些模块均可用 `python -m <模块名> --help` 查看参数。
 运行代码和 workpack 身份覆盖必要资源；当前 start/epoch 使用 `identity_version=2`，不再计算 skill 整树摘要。
 旧身份只作历史证据读取，不能补新摘要重签；旧 owner 排空后才可开当前 epoch，不续旧供应商会话。
 
@@ -126,24 +127,26 @@ Claude CLI 用户配置中设置 `ANTHROPIC_BASE_URL=https://open.bigmodel.cn/ap
 切换供应商或模型要在旧 owner 排空后显式开新配置的运行；原配置继续入口不承担换模型，
 工作单元额度与已购成果仍保留。版本探针不证明网络、账号或模型权限。
 
-无回答的 Commander 连接失败可由开发维护 agent 免费收口：先用
+无回答的传输失败（历史 Commander 工作单元；角色已退役，仅存量书收口）可由开发维护 agent 免费收口：先用
 `python -m novel.orchestrator.work_unit_recovery --base <根> --sid <sid> --unit-id <id> --turn-id <id>`
 取得预览；将 `preview_token`、执行者 `actor`、核实理由 `reason` 写入 JSON 后，同命令增加
 `--apply-request <JSON路径>`。该入口逐项核成本、session、原请求、日志和 owner 排空证据，
 只把已确认失败的 unknown 改为 failed，不生成语义决定、不退还额度、不清除未知用量。
-存在已购回答或证据缺失时继续阻断，先恢复原结果；同一请求重放幂等。该入口不是产品跑书步骤。
+存在已购回答或证据缺失时继续阻断，先恢复原结果；同一请求重放幂等。该入口不是产品跑书步骤；
+admission 账沿用历史命名（`commander_admissions.jsonl`），现役 executor 同一入口收口。
 
 对实际结束的 agent-only 整书做关闭式、0 模型请求验收：
 
 ```powershell
 conda run -n novel_refactor python -X utf8 tools/verify_agent_e2e.py `
-  --base <Output目录> --sid <sid> --run-id <Commander-run-id>
+  --base <Output目录> --sid <sid> --run-id <agent-run-id>
 ```
 
 默认 `fresh` 验收仍要求九个付费 Agent 节点均在指定 run 中有完整采纳证据。
 续跑可加 `--resume`：七层 current 产物、强闸、typed 定稿与交付检查不变，
 费用/session/adoption 只核本轮实际调用，报告显式标为 `mode=resume`，
-不能据此宣称九个节点在本轮重新执行。两种模式均逐 attempt 核对独立 Commander 席位；
+不能据此宣称九个节点在本轮重新执行。两种模式均逐 attempt 核对独立执行席位
+（席位重试上限按退役前值本地保留）；
 Stage6/7 定稿复用 production current proof，不把 API 审批检查单当第二套人工决定。
 同时核对公开 gate 与该 proof 的一致性，不能用 producer 真值掩盖 API 的错误状态。
 同席瞬态失败不从账本删除，也不要求失败 attempt 伪装成成功：验收须将每次成本行与
@@ -183,7 +186,7 @@ Stage7 页面共用该判定，统计在运行页读取原账。工程诊断从 
 `docs/schema/stage5.md` 和 `docs/schema/_orchestration.md`，不要用手工删锁代替排空证明。
 
 append-only 坏尾先 inspect，再把返回的 current subject 连同 `actor/reason` 交回。两步必须由对应
-Commander 子上下文之外的操作员执行，tail repair 不接受 `--force`：
+agent run 子上下文之外的操作员执行，tail repair 不接受 `--force`：
 
 ```powershell
 python -X utf8 -u -m novel.cli reconcile --base <Output目录> --beacon-repair-tail
@@ -261,7 +264,7 @@ API 只监听 `127.0.0.1:8765`。前端默认配置在 `web/.env`，真实联调
 
 ## legacy DeepSeek 传输诊断
 
-本节只服务显式选择的 legacy DeepSeek 回滚路径，不是 Claude Code / Codex Commander 或 executor 的
+本节只服务显式选择的 legacy DeepSeek 回滚路径，不是 Claude Code / Codex executor 的
 启动条件。若本机代理使用 TUN/fake-IP，后台 DeepSeek 请求出现 `SSL UNEXPECTED_EOF`，可在根 `.env`
 显式设置：
 

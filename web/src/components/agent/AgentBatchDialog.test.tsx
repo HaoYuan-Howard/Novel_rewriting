@@ -69,7 +69,7 @@ describe('AgentBatchDialog', () => {
     )
 
     expect(await screen.findByText(/尚未保存常用 Agent 配置/)).toBeVisible()
-    expect(screen.getByRole('combobox', { name: '指挥大脑 driver' })).toHaveValue('')
+    expect(screen.getByRole('combobox', { name: '默认执行者 后端' })).toHaveValue('')
     const button = screen.getByRole('button', {
       name: '需先授权模型调用费用',
     })

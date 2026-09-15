@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""批次四 parent run / execution epoch 的零模型生命周期测试。"""
+"""批次四 parent run / execution epoch 的零模型生命周期测试。
+
+Commander reviewer 已退役（2026-09-15 用户裁决）：Supervisor 只保留确定性主路
+（ready executor token、登记的 deterministic recovery、交付终验）与人工审批闸
+停止语义；本文件按新接口守住 pause / resume / stop / epoch 滚动 / 恢复边界。
+"""
 from __future__ import annotations
 
-import json
 import threading
 import time
 from types import SimpleNamespace
@@ -11,16 +15,12 @@ from types import SimpleNamespace
 import pytest
 
 from contracts.schema.orchestration import (
-    AgentDeliveryOutcome, AgentProfile, AgentRunEvent, ExecutionEpoch,
+    AgentDeliveryOutcome, AgentRunEvent, ExecutionEpoch,
 )
-from novel.commanders import (
-    ClaudeCodeCommanderDriver, CodexCommanderDriver,
-    CommanderProtocolError,
+from novel.orchestrator.agent_supervisor import (
+    ExecutionTurnResult, RunSupervisor, SupervisorActionResult,
 )
 from novel.orchestrator.jobs import JobConflict
-from novel.orchestrator.agent_supervisor import (
-    CommanderTurnResult, RunSupervisor, SupervisorActionResult,
-)
 
 
 def _outcome(state: str = 'stopped') -> AgentDeliveryOutcome:
@@ -29,35 +29,166 @@ def _outcome(state: str = 'stopped') -> AgentDeliveryOutcome:
 
 def _epoch(epoch_id: str, ordinal: int, reason: str,
            resume: str | None = None) -> ExecutionEpoch:
+    """构造一条现役形状的 epoch；``resume`` 只为历史行解码兼容保留。"""
     return ExecutionEpoch(
         epoch_id=epoch_id, ordinal=ordinal, reason=reason,
-        argv=['commander', '-'], prompt_sha256='b' * 64,
-        protocol_version='test-protocol', cli_version='test-cli',
-        code_version=f'code-{ordinal}',
-        skill_sha256='a' * 64, session_run_id='session-1',
+        argv=None, prompt_sha256=None,
+        protocol_version='supervisor-executor-v1', cli_version=None,
+        code_version=f'code-{ordinal}', skill_sha256=None,
+        session_run_id=f'session-{epoch_id}',
         resume_provider_session_id=resume)
 
 
-def test_ready_producer_boundary_drains_then_rereads_without_reviewer():
+def _current(*, state: str, waiting_on: str | None = None,
+             node: str = 'stage0.remove') -> SimpleNamespace:
+    action = None
+    token = None
+    if state == 'ready':
+        token = SimpleNamespace(node=node)
+        action = SimpleNamespace(node=node, waiting_on=None, action_sha256='a' * 64)
+    elif state == 'blocked':
+        action = SimpleNamespace(
+            node=node, flags=[], waiting_on=waiting_on, action_sha256='b' * 64)
+    return SimpleNamespace(state=state, code_version='code-1',
+                           action=action, execution_token=token)
+
+
+# ── 人工审批闸：非确定性 blocked 停止 parent，不启动任何模型进程 ───────────
+
+def test_non_deterministic_blocked_stops_at_human_approval_gate():
+    """审批闸属于人工：exit 2 stopped，reason 指明过闸后续跑，无 callback 启动。"""
+    events = []
+    closed = []
+    current = _current(state='blocked', waiting_on='stage0.approve')
+
+    supervisor = RunSupervisor(
+        run_id='run-human-gate', append_event=events.append,
+        make_epoch=lambda *_args: pytest.fail('人工闸不滚新 epoch'),
+        open_epoch=lambda _epoch: None,
+        close_epoch=lambda epoch, turn: (
+            closed.append((epoch.epoch_id, turn.exit_code)) or 'drained'),
+        epoch_identity_current=lambda _epoch: True,
+        cancel_active=lambda: True,
+        initial_epoch=_epoch('epoch-human-gate', 1, 'initial'),
+        read_operator_next=lambda _epoch: current,
+        run_ready_action=lambda *_args: pytest.fail('人工闸不得执行 ready'),
+        run_blocked_action=lambda *_args: pytest.fail('人工闸不得执行恢复动作'),
+        deterministic_blockers=frozenset({'recovery:stage4-design-action'}),
+        finalize_run=lambda *_args: pytest.fail('人工闸不做交付终验'))
+
+    result = supervisor.run()
+
+    assert result.stopped is False
+    assert result.turn is not None
+    assert result.turn.exit_code == 2
+    assert result.turn.continue_ready is False
+    assert result.turn.outcome.state == 'stopped'
+    assert result.turn.outcome.reason == (
+        '停在人工审批闸：stage0.approve；在 Stage 页面完成裁决后用原配置续跑')
+    assert closed == [('epoch-human-gate', 2)]
+    assert [event.kind for event in events] == ['epoch_closed']
+
+
+def test_deterministic_blocked_still_dispatches_registered_recovery():
+    """闭集内的 deterministic blocker 仍由 callback 执行，不落入人工闸。"""
+    events: list[AgentRunEvent] = []
+    calls: list[str] = []
+    states = ['blocked', 'pipeline_complete']
+
+    def read_next(_epoch):
+        if states[0] == 'pipeline_complete':
+            return SimpleNamespace(state='pipeline_complete', code_version='code-1')
+        return _current(state='blocked', waiting_on='recovery:stage4-design-action',
+                        node='stage4.design')
+
+    def blocked(_epoch, current, ticket):
+        calls.append(current.action.waiting_on)
+        ticket.commit()
+        states.pop(0)
+        return SupervisorActionResult(0, _outcome(), True)
+
+    def finalize(_epoch, ticket):
+        calls.append('finalize')
+        ticket.commit()
+        states.pop(0)
+        return SupervisorActionResult(0, _outcome('ready'), False)
+
+    supervisor = RunSupervisor(
+        run_id='run-deterministic-recovery', append_event=events.append,
+        make_epoch=lambda *_args: pytest.fail('身份未漂移不应滚 epoch'),
+        open_epoch=lambda _epoch: None,
+        close_epoch=lambda _epoch, _turn: 'drained',
+        epoch_identity_current=lambda _epoch: True,
+        cancel_active=lambda: True,
+        initial_epoch=_epoch('epoch-deterministic-recovery', 1, 'initial'),
+        read_operator_next=read_next,
+        run_ready_action=lambda *_args: pytest.fail('本例没有 ready node'),
+        run_blocked_action=blocked,
+        deterministic_blockers=frozenset({'recovery:stage4-design-action'}),
+        finalize_run=finalize)
+
+    result = supervisor.run()
+
+    assert result.stopped is False
+    assert calls == ['recovery:stage4-design-action', 'finalize']
+    assert [event.kind for event in events] == ['epoch_closed']
+
+
+def test_supervisor_requires_the_full_deterministic_main_path():
+    """确定性主路三个 callback 必须同时提供；blocked 路由与闭集成对。"""
+    common = dict(
+        run_id='run-incomplete', append_event=lambda _event: None,
+        make_epoch=lambda *_args: pytest.fail('不应滚 epoch'),
+        open_epoch=lambda _epoch: None,
+        close_epoch=lambda _epoch, _turn: 'drained',
+        epoch_identity_current=lambda _epoch: True,
+        cancel_active=lambda: True,
+        initial_epoch=_epoch('epoch-incomplete', 1, 'initial'),
+        read_operator_next=lambda _epoch: _current(state='pipeline_complete'))
+    with pytest.raises(ValueError, match='三个 callback 必须同时提供'):
+        RunSupervisor(**{**common,
+                         'run_ready_action': lambda *_args: pytest.fail('x')})
+    with pytest.raises(ValueError, match='成对提供'):
+        RunSupervisor(**{**common,
+                         'run_ready_action': lambda *_args: pytest.fail('x'),
+                         'finalize_run': lambda *_args: pytest.fail('x'),
+                         'run_blocked_action': lambda *_args: pytest.fail('x')})
+    with pytest.raises(ValueError, match='成对提供'):
+        RunSupervisor(**{**common,
+                         'run_ready_action': lambda *_args: pytest.fail('x'),
+                         'finalize_run': lambda *_args: pytest.fail('x'),
+                         'deterministic_blockers': frozenset({'recovery:x'})})
+    with pytest.raises(ValueError, match='子集'):
+        RunSupervisor(**{**common,
+                         'run_ready_action': lambda *_args: pytest.fail('x'),
+                         'finalize_run': lambda *_args: pytest.fail('x'),
+                         'run_blocked_action': lambda *_args: pytest.fail('x'),
+                         'deterministic_blockers': frozenset({'recovery:x'}),
+                         'fresh_epoch_blockers': frozenset({'recovery:other'})})
+
+
+# ── ready producer 边界与 epoch 滚动 ─────────────────────────────────────
+
+def test_ready_producer_boundary_drains_then_rereads_without_new_turn():
     events, calls = [], []
     done = False
     initial = _epoch('first', 1, 'initial')
 
     def read(epoch):
         calls.append(('read', epoch.session_run_id))
-        return SimpleNamespace(state='pipeline_complete' if done else 'ready', code_version='code-1',
+        return SimpleNamespace(
+            state='pipeline_complete' if done else 'ready', code_version='code-1',
             action=SimpleNamespace(node='stage4.design', flags=[]),
-            execution_token=SimpleNamespace(node='stage4.design', snapshot=epoch.session_run_id))
+            execution_token=SimpleNamespace(node='stage4.design'))
 
-    def fresh(reason, ordinal, resume):
-        assert (reason, ordinal, resume) == ('continue', 2, None)
+    def fresh(reason, ordinal):
+        assert (reason, ordinal) == ('continue', 2)
         return _epoch('second', 2, reason).model_copy(update={
-            'code_version': 'code-1', 'session_run_id': 'session-2'})
+            'code_version': 'code-1'})
 
-    def ready(epoch, current, resume, ticket):
+    def ready(epoch, current, ticket):
         nonlocal done
-        assert current.execution_token.snapshot == epoch.session_run_id == 'session-2'
-        assert resume is None
+        assert current.execution_token is not None
         calls.append(('run', epoch.session_run_id))
         ticket.commit()
         done = True
@@ -70,119 +201,25 @@ def test_ready_producer_boundary_drains_then_rereads_without_reviewer():
     supervisor = RunSupervisor(run_id='ready-rebuild', append_event=events.append,
         make_epoch=fresh, open_epoch=lambda _epoch: None,
         close_epoch=lambda epoch, _turn: (calls.append(('drain', epoch.session_run_id)) or 'drained'),
-        run_commander_turn=lambda *_: pytest.fail('重建边界不调用 Commander'),
-        epoch_identity_current=lambda _epoch: True, cancel_commander=lambda: True,
+        epoch_identity_current=lambda _epoch: True, cancel_active=lambda: True,
         initial_epoch=initial, read_operator_next=read, run_ready_action=ready,
-        ready_requires_fresh_epoch=lambda epoch, _current: epoch.session_run_id == 'session-1',
-        run_reviewer=lambda *_: pytest.fail('重建边界不调用 Reviewer'), finalize_run=finish)
+        ready_requires_fresh_epoch=lambda epoch, _current: epoch.session_run_id == 'session-first',
+        run_blocked_action=lambda *_: pytest.fail('重建边界不执行恢复'),
+        deterministic_blockers=frozenset({'recovery:x'}),
+        finalize_run=finish)
     assert not supervisor.run().stopped
-    assert calls == [('read', 'session-1'), ('drain', 'session-1'),
-                     ('read', 'session-2'), ('run', 'session-2'),
-                     ('read', 'session-2'), ('drain', 'session-2')]
+    assert calls == [('read', 'session-first'), ('drain', 'session-first'),
+                     ('read', 'session-second'), ('run', 'session-second'),
+                     ('read', 'session-second'), ('drain', 'session-second')]
     assert [event.kind for event in events].count('epoch_closed') == 2
-
-
-def test_supervisor_exact_resumes_without_artificial_turn_limit():
-    events: list[AgentRunEvent] = []
-    calls: list[str | None] = []
-    initial = _epoch('run-1', 1, 'initial')
-
-    def run_turn(_identity, resume):
-        calls.append(resume)
-        return CommanderTurnResult(
-            exit_code=0, provider_session_id='provider-1',
-            continue_ready=len(calls) < 4, outcome=_outcome())
-
-    supervisor = RunSupervisor(
-        run_id='run-1', append_event=events.append,
-        make_epoch=lambda *_args: pytest.fail('身份未漂移不应滚 epoch'),
-        open_epoch=lambda _epoch: None,
-        close_epoch=lambda _epoch, _turn: 'drained',
-        run_commander_turn=run_turn,
-        epoch_identity_current=lambda _epoch: True,
-        cancel_commander=lambda: True,
-        initial_epoch=initial)
-
-    result = supervisor.run()
-
-    assert result.stopped is False
-    assert calls == [None, 'provider-1', 'provider-1', 'provider-1']
-    assert [event.kind for event in events] == ['epoch_closed']
-    assert events[0].epoch_id == initial.epoch_id
-
-
-def test_v2_supervisor_routes_ready_review_and_complete_without_commander_dispatch():
-    """ready/complete 属于确定性面；只有闭集 blocked 才进入 reviewer callback。"""
-    events: list[AgentRunEvent] = []
-    calls: list[str] = []
-    states = ['ready', 'blocked', 'pipeline_complete']
-
-    def current():
-        state = states[0]
-        action = None
-        token = None
-        if state == 'ready':
-            token = SimpleNamespace(node='stage0.remove')
-            action = SimpleNamespace(waiting_on=None, action_sha256='a' * 64)
-        elif state == 'blocked':
-            action = SimpleNamespace(
-                waiting_on='stage0.approve', action_sha256='b' * 64)
-        return SimpleNamespace(
-            state=state, code_version='code-1', surface_seal='c' * 64,
-            action=action, execution_token=token)
-
-    def ready(_epoch, snapshot, resume, ticket):
-        assert resume is None
-        calls.append(f'ready:{snapshot.execution_token.node}')
-        ticket.commit()
-        states.pop(0)
-        return SupervisorActionResult(
-            0, _outcome(), True,
-            provider_session_id='provider-from-ready')
-
-    def reviewer(_epoch, snapshot, resume, ticket):
-        calls.append(f'reviewer:{snapshot.action.waiting_on}:{resume}')
-        ticket.commit()
-        states.pop(0)
-        return CommanderTurnResult(
-            0, 'provider-from-ready', True, _outcome())
-
-    def finalize(_epoch, ticket):
-        calls.append('finalize')
-        ticket.commit()
-        states.pop(0)
-        return SupervisorActionResult(0, _outcome('ready'), False)
-
-    supervisor = RunSupervisor(
-        run_id='run-v2-route', append_event=events.append,
-        make_epoch=lambda *_args: pytest.fail('身份未漂移不应滚 epoch'),
-        open_epoch=lambda _epoch: None,
-        close_epoch=lambda _epoch, _turn: 'drained',
-        run_commander_turn=lambda *_args: pytest.fail('v2 不得落回 legacy Commander'),
-        epoch_identity_current=lambda _epoch: True,
-        cancel_commander=lambda: True,
-        initial_epoch=_epoch('epoch-v2-route', 1, 'initial'),
-        read_operator_next=lambda _epoch: current(),
-        run_ready_action=ready,
-        run_reviewer=reviewer,
-        finalize_run=finalize)
-
-    result = supervisor.run()
-
-    assert result.stopped is False
-    assert calls == [
-        'ready:stage0.remove',
-        'reviewer:stage0.approve:provider-from-ready', 'finalize']
-    assert states == []
-    assert [event.kind for event in events] == ['epoch_closed']
 
 
 @pytest.mark.parametrize('flags', [
     ['--review-token', 's4rr1_' + 'd' * 64],
     ['--replan', '--review-token', 's4rr1_' + 'e' * 64],
 ], ids=['targeted-repair', 'strategy-replan'])
-def test_v2_stage4_design_action_rolls_fresh_epoch_before_executor(flags):
-    """repair/replan 都先换 producer epoch，再重读、铸权；不占 reviewer。"""
+def test_stage4_design_action_rolls_fresh_epoch_before_executor(flags):
+    """repair/replan 都先换 producer epoch，再重读、铸权；不占人工闸。"""
     events: list[AgentRunEvent] = []
     calls: list[tuple[str, str]] = []
     reads: list[str] = []
@@ -194,14 +231,8 @@ def test_v2_stage4_design_action_rolls_fresh_epoch_before_executor(flags):
         if states[0] == 'pipeline_complete':
             return SimpleNamespace(
                 state='pipeline_complete', code_version='code-1')
-        return SimpleNamespace(
-            state='blocked', code_version='code-1', surface_seal='c' * 64,
-            action=SimpleNamespace(
-                node='stage4.design',
-                flags=flags,
-                waiting_on='recovery:stage4-design-action',
-                action_sha256='a' * 64),
-            execution_token=None)
+        return _current(state='blocked', waiting_on='recovery:stage4-design-action',
+                        node='stage4.design')
 
     def blocked(epoch, snapshot, ticket):
         calls.append((epoch.session_run_id, snapshot.action.node))
@@ -215,36 +246,32 @@ def test_v2_stage4_design_action_rolls_fresh_epoch_before_executor(flags):
         states.pop(0)
         return SupervisorActionResult(0, _outcome('ready'), False)
 
-    def make_epoch(reason, ordinal, resume):
-        assert (reason, ordinal, resume) == ('continue', 2, None)
-        return _epoch(
-            'epoch-v2-recovery-fresh', ordinal, reason, resume,
-        ).model_copy(update={
-            'code_version': 'code-1', 'session_run_id': 'session-2',
-        })
+    def make_epoch(reason, ordinal):
+        assert (reason, ordinal) == ('continue', 2)
+        return _epoch('epoch-v2-recovery-fresh', ordinal, reason).model_copy(
+            update={'code_version': 'code-1'})
 
     supervisor = RunSupervisor(
         run_id='run-v2-recovery', append_event=events.append,
         make_epoch=make_epoch,
         open_epoch=lambda epoch: opened.append(epoch.epoch_id),
         close_epoch=lambda _epoch, _turn: 'drained',
-        run_commander_turn=lambda *_args: pytest.fail('不得落回 legacy Commander'),
         epoch_identity_current=lambda _epoch: True,
-        cancel_commander=lambda: True,
+        cancel_active=lambda: True,
         initial_epoch=_epoch('epoch-v2-recovery', 1, 'initial'),
         read_operator_next=current,
         run_ready_action=lambda *_args: pytest.fail('本例没有 ready node'),
         run_blocked_action=blocked,
         deterministic_blockers=frozenset({'recovery:stage4-design-action'}),
         fresh_epoch_blockers=frozenset({'recovery:stage4-design-action'}),
-        run_reviewer=lambda *_args: pytest.fail('恢复动作不得启动 reviewer'),
         finalize_run=finalize)
 
     result = supervisor.run()
 
     assert result.stopped is False
     assert calls == [
-        ('session-2', 'stage4.design'), ('session-2', 'finalize')]
+        ('session-epoch-v2-recovery-fresh', 'stage4.design'),
+        ('session-epoch-v2-recovery-fresh', 'finalize')]
     assert reads == [
         'epoch-v2-recovery', 'epoch-v2-recovery-fresh',
         'epoch-v2-recovery-fresh']
@@ -254,7 +281,8 @@ def test_v2_stage4_design_action_rolls_fresh_epoch_before_executor(flags):
         'epoch_closed', 'epoch_opened', 'epoch_closed']
     assert events[1].epoch is not None
     assert events[1].epoch.reason == 'continue'
-    assert events[1].epoch.session_run_id == 'session-2'
+    assert events[1].epoch.argv is None and events[1].epoch.prompt_sha256 is None
+    assert events[1].epoch.resume_provider_session_id is None
 
 
 def test_stage4_design_action_rolls_once_per_action_sha_without_hot_loop():
@@ -268,18 +296,14 @@ def test_stage4_design_action_rolls_once_per_action_sha_without_hot_loop():
         if complete:
             return SimpleNamespace(
                 state='pipeline_complete', code_version='code-1')
-        return SimpleNamespace(
-            state='blocked', code_version='code-1', surface_seal='c' * 64,
-            action=SimpleNamespace(
-                node='stage4.design', flags=['--review-token', 'token'],
-                waiting_on='recovery:stage4-design-action',
-                action_sha256='a' * 64), execution_token=None)
+        return _current(state='blocked', waiting_on='recovery:stage4-design-action',
+                        node='stage4.design')
 
-    def make_epoch(reason, ordinal, resume):
+    def make_epoch(reason, ordinal):
         nonlocal makes
         makes += 1
-        return _epoch('fresh-once', ordinal, reason, resume).model_copy(
-            update={'code_version': 'code-1', 'session_run_id': 'session-2'})
+        return _epoch('fresh-once', ordinal, reason).model_copy(
+            update={'code_version': 'code-1'})
 
     def recover(epoch, _current, ticket):
         nonlocal complete
@@ -292,16 +316,14 @@ def test_stage4_design_action_rolls_once_per_action_sha_without_hot_loop():
         run_id='run-fresh-once', append_event=events.append,
         make_epoch=make_epoch, open_epoch=lambda _epoch: None,
         close_epoch=lambda _epoch, _turn: 'drained',
-        run_commander_turn=lambda *_args: pytest.fail('不得启动 Commander'),
         epoch_identity_current=lambda _epoch: True,
-        cancel_commander=lambda: True,
+        cancel_active=lambda: True,
         initial_epoch=_epoch('old-once', 1, 'initial'),
         read_operator_next=next_action,
         run_ready_action=lambda *_args: pytest.fail('没有 ready'),
         run_blocked_action=recover,
         deterministic_blockers=frozenset({'recovery:stage4-design-action'}),
         fresh_epoch_blockers=frozenset({'recovery:stage4-design-action'}),
-        run_reviewer=lambda *_args: pytest.fail('不得启动 reviewer'),
         finalize_run=lambda _epoch, ticket: (
             ticket.commit() or SupervisorActionResult(
                 0, _outcome('ready'), False)))
@@ -325,12 +347,8 @@ def test_each_outer_parent_rolls_the_same_stage4_action_once():
             if complete:
                 return SimpleNamespace(
                     state='pipeline_complete', code_version='code-1')
-            return SimpleNamespace(
-                state='blocked', code_version='code-1', surface_seal='c' * 64,
-                action=SimpleNamespace(
-                    node='stage4.design', flags=['--review-token', 'token'],
-                    waiting_on='recovery:stage4-design-action',
-                    action_sha256='a' * 64), execution_token=None)
+            return _current(state='blocked', waiting_on='recovery:stage4-design-action',
+                            node='stage4.design')
 
         def recover(_epoch, _current, ticket):
             nonlocal complete
@@ -338,29 +356,23 @@ def test_each_outer_parent_rolls_the_same_stage4_action_once():
             ticket.commit()
             return SupervisorActionResult(0, _outcome(), True)
 
-        def make_epoch(reason, ordinal, resume):
+        def make_epoch(reason, ordinal):
             opened.append((f'parent-{index}', reason))
-            return _epoch(
-                f'fresh-parent-{index}', ordinal, reason, resume,
-            ).model_copy(update={
-                'code_version': 'code-1',
-                'session_run_id': f'session-parent-{index}',
-            })
+            return _epoch(f'fresh-parent-{index}', ordinal, reason).model_copy(
+                update={'code_version': 'code-1'})
 
         RunSupervisor(
             run_id=f'parent-{index}', append_event=lambda _event: None,
             make_epoch=make_epoch, open_epoch=lambda _epoch: None,
             close_epoch=lambda _epoch, _turn: 'drained',
-            run_commander_turn=lambda *_args: pytest.fail('不得启动 Commander'),
             epoch_identity_current=lambda _epoch: True,
-            cancel_commander=lambda: True,
+            cancel_active=lambda: True,
             initial_epoch=_epoch(f'old-parent-{index}', 1, 'initial'),
             read_operator_next=next_action,
             run_ready_action=lambda *_args: pytest.fail('没有 ready'),
             run_blocked_action=recover,
             deterministic_blockers=frozenset({'recovery:stage4-design-action'}),
             fresh_epoch_blockers=frozenset({'recovery:stage4-design-action'}),
-            run_reviewer=lambda *_args: pytest.fail('不得启动 reviewer'),
             finalize_run=lambda _epoch, ticket: (
                 ticket.commit() or SupervisorActionResult(
                     0, _outcome('ready'), False)),
@@ -391,21 +403,17 @@ def test_control_after_stage4_boundary_precedes_fresh_epoch(control):
                 holder['supervisor'].request_pause()
             else:
                 holder['supervisor'].request_stop()
-        return SimpleNamespace(
-            state='blocked', code_version='code-1', surface_seal='c' * 64,
-            action=SimpleNamespace(
-                node='stage4.design', flags=['--review-token', 'token'],
-                waiting_on='recovery:stage4-design-action',
-                action_sha256='a' * 64), execution_token=None)
+        return _current(state='blocked', waiting_on='recovery:stage4-design-action',
+                        node='stage4.design')
 
     def close_epoch(epoch, turn):
         closed.append((epoch.epoch_id, turn.exit_code))
         return 'drained'
 
-    def make_epoch(reason, ordinal, resume):
+    def make_epoch(reason, ordinal):
         makes.append(reason)
-        return _epoch('fresh-after-control', ordinal, reason, resume).model_copy(
-            update={'code_version': 'code-1', 'session_run_id': 'session-2'})
+        return _epoch('fresh-after-control', ordinal, reason).model_copy(
+            update={'code_version': 'code-1'})
 
     def recover(epoch, _current, ticket):
         nonlocal complete
@@ -418,17 +426,15 @@ def test_control_after_stage4_boundary_precedes_fresh_epoch(control):
         run_id=f'run-boundary-{control}', append_event=events.append,
         make_epoch=make_epoch, open_epoch=lambda _epoch: None,
         close_epoch=close_epoch,
-        run_commander_turn=lambda *_args: pytest.fail('不得启动 Commander'),
         epoch_identity_current=lambda _epoch: True,
-        cancel_commander=lambda: True,
-        set_commander_quiesced=lambda _value: True,
+        cancel_active=lambda: True,
+        set_quiesced=lambda _value: True,
         initial_epoch=_epoch(f'old-{control}', 1, 'initial'),
         read_operator_next=next_action,
         run_ready_action=lambda *_args: pytest.fail('没有 ready'),
         run_blocked_action=recover,
         deterministic_blockers=frozenset({'recovery:stage4-design-action'}),
         fresh_epoch_blockers=frozenset({'recovery:stage4-design-action'}),
-        run_reviewer=lambda *_args: pytest.fail('不得启动 reviewer'),
         finalize_run=lambda _epoch, ticket: (
             ticket.commit() or SupervisorActionResult(
                 0, _outcome('ready'), False)))
@@ -450,7 +456,7 @@ def test_control_after_stage4_boundary_precedes_fresh_epoch(control):
     if control == 'stop':
         assert makes == ['continue'] and executions == []
         assert results and results[0].stopped is True
-        assert closed == [('old-stop', 0), ('fresh-after-control', 2)]
+        assert closed == [(f'old-{control}', 0), ('fresh-after-control', 2)]
     else:
         assert makes == ['continue']
         assert executions == ['fresh-after-control']
@@ -467,11 +473,11 @@ def test_code_drift_after_stage4_boundary_does_not_roll_continue_forever():
     reads: list[str] = []
     executions: list[str] = []
 
-    def make_epoch(reason, ordinal, resume):
+    def make_epoch(reason, ordinal):
         makes.append(reason)
         code = current_code
-        return _epoch(f'epoch-{reason}', ordinal, reason, resume).model_copy(
-            update={'code_version': code, 'session_run_id': f'session-{ordinal}'})
+        return _epoch(f'epoch-{reason}', ordinal, reason).model_copy(
+            update={'code_version': code})
 
     def open_epoch(epoch):
         nonlocal current_code
@@ -484,11 +490,12 @@ def test_code_drift_after_stage4_boundary_does_not_roll_continue_forever():
             return SimpleNamespace(
                 state='pipeline_complete', code_version=current_code)
         return SimpleNamespace(
-            state='blocked', code_version=current_code, surface_seal='c' * 64,
+            state='blocked', code_version=current_code,
             action=SimpleNamespace(
-                node='stage4.design', flags=['--replan', '--review-token', 'token'],
+                node='stage4.design', flags=['--replan', '--review-token', 't'],
                 waiting_on='recovery:stage4-design-action',
-                action_sha256='a' * 64), execution_token=None)
+                action_sha256='a' * 64),
+            execution_token=None)
 
     def recover(epoch, _current, ticket):
         nonlocal complete
@@ -501,16 +508,14 @@ def test_code_drift_after_stage4_boundary_does_not_roll_continue_forever():
         run_id='run-boundary-drift', append_event=events.append,
         make_epoch=make_epoch, open_epoch=open_epoch,
         close_epoch=lambda _epoch, _turn: 'drained',
-        run_commander_turn=lambda *_args: pytest.fail('不得启动 Commander'),
         epoch_identity_current=lambda epoch: epoch.code_version == current_code,
-        cancel_commander=lambda: True,
+        cancel_active=lambda: True,
         initial_epoch=_epoch('epoch-initial', 1, 'initial'),
         read_operator_next=next_action,
         run_ready_action=lambda *_args: pytest.fail('没有 ready'),
         run_blocked_action=recover,
         deterministic_blockers=frozenset({'recovery:stage4-design-action'}),
         fresh_epoch_blockers=frozenset({'recovery:stage4-design-action'}),
-        run_reviewer=lambda *_args: pytest.fail('不得启动 reviewer'),
         finalize_run=lambda _epoch, ticket: (
             ticket.commit() or SupervisorActionResult(
                 0, _outcome('ready'), False)))
@@ -527,7 +532,7 @@ def test_code_drift_after_stage4_boundary_does_not_roll_continue_forever():
     ] == ['continue', 'code_change']
 
 
-def test_v2_operator_read_failure_after_code_drift_rolls_epoch():
+def test_operator_read_failure_after_code_drift_rolls_epoch():
     """读 next 期间发生代码漂移时，旧 epoch 应换代而不是把 parent 打成 70。"""
     events: list[AgentRunEvent] = []
     closed: list[tuple[str, int, str]] = []
@@ -557,17 +562,17 @@ def test_v2_operator_read_failure_after_code_drift_rolls_epoch():
 
     supervisor = RunSupervisor(
         run_id='run-read-drift', append_event=events.append,
-        make_epoch=lambda reason, ordinal, resume: _epoch(
-            'epoch-after-read-drift', ordinal, reason, resume),
+        make_epoch=lambda reason, ordinal: _epoch(
+            'epoch-after-read-drift', ordinal, reason),
         open_epoch=lambda _epoch: None,
         close_epoch=close,
-        run_commander_turn=lambda *_args: pytest.fail('v2 不走 legacy Commander'),
         epoch_identity_current=identity_current,
-        cancel_commander=lambda: True,
+        cancel_active=lambda: True,
         initial_epoch=_epoch('epoch-before-read-drift', 1, 'initial'),
         read_operator_next=read_next,
         run_ready_action=lambda *_args: pytest.fail('本例没有 ready node'),
-        run_reviewer=lambda *_args: pytest.fail('本例没有 reviewer node'),
+        run_blocked_action=lambda *_args: pytest.fail('本例没有 blocked node'),
+        deterministic_blockers=frozenset({'recovery:x'}),
         finalize_run=finalize)
 
     result = supervisor.run()
@@ -586,10 +591,10 @@ def test_v2_operator_read_failure_after_code_drift_rolls_epoch():
     assert events[1].epoch.resume_provider_session_id is None
 
 
-def test_v2_operator_read_failure_without_drift_remains_a_crash():
+def test_operator_read_failure_without_drift_remains_a_crash():
     """身份仍 current 的读错是真故障，不能被宽泛伪装成一次正常换 epoch。"""
     events: list[AgentRunEvent] = []
-    closed: list[tuple[str, int, str]] = []
+    closed: list[tuple[str, int]] = []
 
     def read_next(_epoch):
         raise RuntimeError('stable operator bug')
@@ -602,13 +607,13 @@ def test_v2_operator_read_failure_without_drift_remains_a_crash():
             closed.append((
                 epoch.epoch_id, turn.exit_code, turn.outcome.state))
             or 'unknown'),
-        run_commander_turn=lambda *_args: pytest.fail('v2 不走 legacy Commander'),
         epoch_identity_current=lambda _epoch: True,
-        cancel_commander=lambda: True,
+        cancel_active=lambda: True,
         initial_epoch=_epoch('epoch-stable-read-failure', 1, 'initial'),
         read_operator_next=read_next,
         run_ready_action=lambda *_args: pytest.fail('不应执行 ready node'),
-        run_reviewer=lambda *_args: pytest.fail('不应启动 reviewer'),
+        run_blocked_action=lambda *_args: pytest.fail('不应执行 blocked node'),
+        deterministic_blockers=frozenset({'recovery:x'}),
         finalize_run=lambda *_args: pytest.fail('不应 finalize'))
 
     with pytest.raises(RuntimeError, match='stable operator bug'):
@@ -618,69 +623,7 @@ def test_v2_operator_read_failure_without_drift_remains_a_crash():
     assert [event.kind for event in events] == ['epoch_closed']
 
 
-def test_stage2_review_can_continue_into_ready_blueprint_redo():
-    """Global 上游更新后，Supervisor 应执行确定性 REDO，不再 exit 2 停在手工断点。"""
-    events: list[AgentRunEvent] = []
-    snapshots = [
-        SimpleNamespace(
-            state='blocked', code_version='code-1', surface_seal='1' * 64,
-            action=SimpleNamespace(
-                node='stage2.global',
-                waiting_on='approval:stage2-global-review',
-                action_sha256='2' * 64),
-            execution_token=None),
-        SimpleNamespace(
-            state='ready', code_version='code-1', surface_seal='3' * 64,
-            action=SimpleNamespace(
-                node='stage2.blueprint', waiting_on=None,
-                resume_verdict='redo', action_sha256='4' * 64),
-            execution_token=SimpleNamespace(node='stage2.blueprint')),
-        SimpleNamespace(
-            state='pipeline_complete', code_version='code-1',
-            surface_seal='5' * 64, action=None, execution_token=None),
-    ]
-    calls: list[str] = []
-
-    def reviewer(_epoch, _current, _resume, ticket):
-        calls.append('review')
-        ticket.commit()
-        snapshots.pop(0)
-        return CommanderTurnResult(
-            0, 'provider-stage2-review', True, _outcome())
-
-    def ready(_epoch, current, _provider_session_id, ticket):
-        assert current.action.resume_verdict == 'redo'
-        calls.append(f'redo:{current.execution_token.node}')
-        ticket.commit()
-        snapshots.pop(0)
-        return SupervisorActionResult(0, _outcome(), True)
-
-    def finalize(_epoch, ticket):
-        calls.append('finalize')
-        ticket.commit()
-        snapshots.pop(0)
-        return SupervisorActionResult(0, _outcome('ready'), False)
-
-    supervisor = RunSupervisor(
-        run_id='run-stage2-redo', append_event=events.append,
-        make_epoch=lambda *_args: pytest.fail('同代码身份不得滚 epoch'),
-        open_epoch=lambda _epoch: None,
-        close_epoch=lambda _epoch, _turn: 'drained',
-        run_commander_turn=lambda *_args: pytest.fail('v2 不走 legacy Commander'),
-        epoch_identity_current=lambda _epoch: True,
-        cancel_commander=lambda: True,
-        initial_epoch=_epoch('epoch-stage2-redo', 1, 'initial'),
-        read_operator_next=lambda _epoch: snapshots[0],
-        run_ready_action=ready,
-        run_reviewer=reviewer,
-        finalize_run=finalize)
-
-    result = supervisor.run()
-
-    assert result.stopped is False
-    assert calls == ['review', 'redo:stage2.blueprint', 'finalize']
-    assert snapshots == []
-
+# ── typed 恢复暂停：exit 2 + pause_note 不结束 parent ────────────────────
 
 def test_recoverable_action_failure_pauses_and_resumes_the_same_epoch():
     """有 typed 恢复凭据的 exit 2 不结束 parent；继续后仍用原 epoch。"""
@@ -692,17 +635,10 @@ def test_recoverable_action_failure_pauses_and_resumes_the_same_epoch():
 
     def current():
         if state == 'ready':
-            return SimpleNamespace(
-                state='ready', code_version='code-1', surface_seal='3' * 64,
-                action=SimpleNamespace(
-                    node='stage2.blueprint', waiting_on=None,
-                    resume_verdict='run', action_sha256='4' * 64),
-                execution_token=SimpleNamespace(node='stage2.blueprint'))
-        return SimpleNamespace(
-            state='pipeline_complete', code_version='code-1',
-            surface_seal='5' * 64, action=None, execution_token=None)
+            return _current(state='ready', node='stage2.blueprint')
+        return SimpleNamespace(state='pipeline_complete', code_version='code-1')
 
-    def ready(current_epoch, _current, _provider_session_id, ticket):
+    def ready(current_epoch, _current, ticket):
         nonlocal state
         assert current_epoch is epoch
         ticket.commit()
@@ -724,14 +660,14 @@ def test_recoverable_action_failure_pauses_and_resumes_the_same_epoch():
         make_epoch=lambda *_args: pytest.fail('同 run 恢复不得滚 epoch'),
         open_epoch=lambda _epoch: None,
         close_epoch=lambda _epoch, _turn: 'drained',
-        run_commander_turn=lambda *_args: pytest.fail('v2 不走 legacy Commander'),
         epoch_identity_current=lambda _epoch: True,
-        cancel_commander=lambda: True,
-        set_commander_quiesced=lambda value: quiesced.append(value) or True,
+        cancel_active=lambda: True,
+        set_quiesced=lambda value: quiesced.append(value) or True,
         initial_epoch=epoch,
         read_operator_next=lambda _epoch: current(),
         run_ready_action=ready,
-        run_reviewer=lambda *_args: None,
+        run_blocked_action=lambda *_args: pytest.fail('本例没有 blocked'),
+        deterministic_blockers=frozenset({'recovery:x'}),
         finalize_run=finalize)
     result_box: list[object] = []
     worker = threading.Thread(target=lambda: result_box.append(supervisor.run()))
@@ -756,128 +692,9 @@ def test_recoverable_action_failure_pauses_and_resumes_the_same_epoch():
     assert result_box and result_box[0].stopped is False
 
 
-def test_v2_supervisor_resumes_one_commander_across_review_edit_and_rereview():
-    """三相都属同一业务上下文；surface 变化不能重开 Commander session。"""
-    events: list[AgentRunEvent] = []
-    snapshots = [
-        SimpleNamespace(
-            state='blocked', code_version='code-1', surface_seal='1' * 64,
-            action=SimpleNamespace(
-                node='stage2.global', waiting_on='stage2_global_review',
-                action_sha256='2' * 64, phase='review'),
-            execution_token=None),
-        SimpleNamespace(
-            state='blocked', code_version='code-1', surface_seal='3' * 64,
-            action=SimpleNamespace(
-                node='stage2.global', waiting_on='stage2_global_review',
-                action_sha256='4' * 64, phase='edit'),
-            execution_token=None),
-        SimpleNamespace(
-            state='blocked', code_version='code-1', surface_seal='5' * 64,
-            action=SimpleNamespace(
-                node='stage2.global', waiting_on='stage2_global_review',
-                action_sha256='6' * 64, phase='rereview'),
-            execution_token=None),
-        SimpleNamespace(
-            state='pipeline_complete', code_version='code-1',
-            surface_seal='7' * 64, action=None, execution_token=None),
-    ]
-    reviews: list[tuple[str, str, str | None]] = []
+# ── 控制与 launch ticket 线性化 ──────────────────────────────────────────
 
-    def reviewer(_epoch, current, resume, ticket):
-        reviews.append((
-            current.action.phase, current.surface_seal, resume))
-        ticket.commit()
-        snapshots.pop(0)
-        return CommanderTurnResult(
-            exit_code=0, provider_session_id='provider-stage2-review',
-            continue_ready=True, outcome=_outcome())
-
-    def finalize(_epoch, ticket):
-        ticket.commit()
-        snapshots.pop(0)
-        return SupervisorActionResult(0, _outcome('ready'), False)
-
-    supervisor = RunSupervisor(
-        run_id='run-repeat-reviewer-node', append_event=events.append,
-        make_epoch=lambda *_args: pytest.fail('同代码身份的重复 node 不得滚 epoch'),
-        open_epoch=lambda _epoch: None,
-        close_epoch=lambda _epoch, _turn: 'drained',
-        run_commander_turn=lambda *_args: pytest.fail('v2 不走 legacy Commander'),
-        epoch_identity_current=lambda _epoch: True,
-        cancel_commander=lambda: True,
-        initial_epoch=_epoch('epoch-repeat-reviewer-node', 1, 'initial'),
-        read_operator_next=lambda _epoch: snapshots[0],
-        run_ready_action=lambda *_args: pytest.fail('本例没有 ready node'),
-        run_reviewer=reviewer,
-        finalize_run=finalize)
-
-    result = supervisor.run()
-
-    assert result.stopped is False
-    assert reviews == [
-        ('review', '1' * 64, None),
-        ('edit', '3' * 64, 'provider-stage2-review'),
-        ('rereview', '5' * 64, 'provider-stage2-review'),
-    ]
-    assert snapshots == []
-    assert [event.kind for event in events] == ['epoch_closed']
-
-
-def test_reviewer_correction_keeps_frozen_workpack_before_global_replan():
-    """动作 exit 2 后 INVALID/stale next 不能抢走同会话的紧凑纠错。"""
-    events: list[AgentRunEvent] = []
-    frozen = SimpleNamespace(
-        state='blocked', code_version='code-1', surface_seal='1' * 64,
-        action=SimpleNamespace(
-            waiting_on='stage2_global_review', action_sha256='2' * 64),
-        execution_token=None)
-    changed = SimpleNamespace(
-        state='blocked', code_version='code-1', surface_seal='3' * 64,
-        action=SimpleNamespace(
-            waiting_on='resume:manual-decision', action_sha256='4' * 64),
-        execution_token=None)
-    reads = 0
-    reviews: list[tuple[object, str | None]] = []
-
-    def read_next(_epoch):
-        nonlocal reads
-        reads += 1
-        return frozen if reads == 1 else changed
-
-    def reviewer(_epoch, current, resume, ticket):
-        reviews.append((current, resume))
-        ticket.commit()
-        if len(reviews) == 1:
-            return CommanderTurnResult(
-                2, 'provider-correction', True, _outcome(),
-                continue_reviewer=True)
-        return CommanderTurnResult(
-            0, 'provider-correction', False, _outcome('ready'))
-
-    supervisor = RunSupervisor(
-        run_id='run-reviewer-correction', append_event=events.append,
-        make_epoch=lambda *_args: pytest.fail('同代码身份不得滚 epoch'),
-        open_epoch=lambda _epoch: None,
-        close_epoch=lambda _epoch, _turn: 'drained',
-        run_commander_turn=lambda *_args: pytest.fail('v2 不走 legacy Commander'),
-        epoch_identity_current=lambda _epoch: True,
-        cancel_commander=lambda: True,
-        initial_epoch=_epoch('epoch-reviewer-correction', 1, 'initial'),
-        read_operator_next=read_next,
-        run_ready_action=lambda *_args: pytest.fail('本例没有 ready node'),
-        run_reviewer=reviewer,
-        finalize_run=lambda *_args: pytest.fail('本例不进入 finalizer'))
-
-    result = supervisor.run()
-
-    assert result.stopped is False
-    assert reads == 1
-    assert reviews == [(frozen, None), (frozen, 'provider-correction')]
-    assert [event.kind for event in events] == ['epoch_closed']
-
-
-@pytest.mark.parametrize('branch', ['ready', 'reviewer', 'finalize'])
+@pytest.mark.parametrize('branch', ['ready', 'blocked', 'finalize'])
 @pytest.mark.parametrize('control', ['pause', 'stop'])
 def test_control_between_operator_read_and_launch_never_calls_old_action(branch, control):
     """next 已取到、票尚未发放时的控制请求不能变成 70 或执行旧快照。"""
@@ -889,14 +706,12 @@ def test_control_between_operator_read_and_launch_never_calls_old_action(branch,
     results, errors, closed, quiesced, cancelled = [], [], [], [], []
     reads = 0
     epoch = _epoch(f'epoch-before-launch-{branch}-{control}', 1, 'initial')
-    old = SimpleNamespace(
-        state={'ready': 'ready', 'reviewer': 'blocked', 'finalize': 'pipeline_complete'}[branch],
-        code_version='code-1', surface_seal='1' * 64,
-        action=SimpleNamespace(waiting_on='stage2_global_review', action_sha256='2' * 64),
-        execution_token=SimpleNamespace(node='stage0.remove'))
+    old = _current(
+        state={'ready': 'ready', 'blocked': 'blocked',
+               'finalize': 'pipeline_complete'}[branch],
+        waiting_on='recovery:x')
     refreshed = SimpleNamespace(
-        state='pipeline_complete', code_version='code-1', surface_seal='3' * 64,
-        action=None, execution_token=None)
+        state='pipeline_complete', code_version='code-1')
 
     def read_next(current_epoch):
         nonlocal reads
@@ -914,15 +729,15 @@ def test_control_between_operator_read_and_launch_never_calls_old_action(branch,
         if event.kind == 'paused':
             paused.set()
 
-    def ready(_epoch, current, _provider, ticket):
+    def ready(_epoch, current, ticket):
         calls.append(('ready', reads))
         ticket.commit()
         return SupervisorActionResult(0, _outcome(), False)
 
-    def reviewer(_epoch, current, _provider, ticket):
-        calls.append(('reviewer', reads))
+    def blocked(_epoch, current, ticket):
+        calls.append(('blocked', reads))
         ticket.commit()
-        return CommanderTurnResult(0, None, False, _outcome())
+        return SupervisorActionResult(0, _outcome(), False)
 
     def finalize(current_epoch, ticket):
         assert current_epoch is epoch
@@ -939,12 +754,13 @@ def test_control_between_operator_read_and_launch_never_calls_old_action(branch,
         run_id=f'run-before-launch-{branch}-{control}', append_event=append,
         make_epoch=lambda *_args: pytest.fail('控制请求不能新增 epoch'),
         open_epoch=lambda _epoch: None, close_epoch=close,
-        run_commander_turn=lambda *_args: pytest.fail('v2 不走 legacy Commander'),
         epoch_identity_current=lambda _epoch: True,
-        cancel_commander=lambda: cancelled.append(True) or True,
-        set_commander_quiesced=lambda value: quiesced.append(value) or True,
+        cancel_active=lambda: cancelled.append(True) or True,
+        set_quiesced=lambda value: quiesced.append(value) or True,
         initial_epoch=epoch, read_operator_next=read_next,
-        run_ready_action=ready, run_reviewer=reviewer, finalize_run=finalize)
+        run_ready_action=ready, run_blocked_action=blocked,
+        deterministic_blockers=frozenset({'recovery:x'}),
+        finalize_run=finalize)
 
     def run():
         try:
@@ -993,14 +809,14 @@ def test_control_between_operator_read_and_launch_never_calls_old_action(branch,
             worker.join(5)
 
 
-@pytest.mark.parametrize('branch', ['ready', 'reviewer', 'finalize'])
+@pytest.mark.parametrize('branch', ['ready', 'blocked', 'finalize'])
 def test_dispatch_failure_is_not_reclassified_as_control(branch):
     """统一控制 catch 不能吞掉已启动 callback 的真实故障。"""
     events: list[AgentRunEvent] = []
-    current = SimpleNamespace(
-        state={'ready': 'ready', 'reviewer': 'blocked', 'finalize': 'pipeline_complete'}[branch],
-        code_version='code-1', action=SimpleNamespace(waiting_on='stage2_global_review'),
-        execution_token=SimpleNamespace(node='stage0.remove'))
+    current = _current(
+        state={'ready': 'ready', 'blocked': 'blocked',
+               'finalize': 'pipeline_complete'}[branch],
+        waiting_on='recovery:x')
 
     def broken(*args):
         args[-1].commit()
@@ -1010,11 +826,12 @@ def test_dispatch_failure_is_not_reclassified_as_control(branch):
         run_id=f'run-dispatch-failure-{branch}', append_event=events.append,
         make_epoch=lambda *_args: pytest.fail('不能以换 epoch 隐去异常'),
         open_epoch=lambda _epoch: None, close_epoch=lambda _epoch, _turn: 'drained',
-        run_commander_turn=lambda *_args: pytest.fail('v2 不走 legacy Commander'),
-        epoch_identity_current=lambda _epoch: True, cancel_commander=lambda: True,
+        epoch_identity_current=lambda _epoch: True, cancel_active=lambda: True,
         initial_epoch=_epoch('epoch-dispatch-failure', 1, 'initial'),
         read_operator_next=lambda _epoch: current,
-        run_ready_action=broken, run_reviewer=broken, finalize_run=broken)
+        run_ready_action=broken, run_blocked_action=broken,
+        deterministic_blockers=frozenset({'recovery:x'}),
+        finalize_run=broken)
     with pytest.raises(RuntimeError, match='真实 callback 故障'):
         supervisor.run()
     assert [event.kind for event in events] == ['epoch_closed']
@@ -1031,12 +848,9 @@ def test_launch_ticket_never_accepts_control_before_process_is_registered(contro
     process_registered = threading.Event()
     events: list[AgentRunEvent] = []
 
-    current = SimpleNamespace(
-        state='ready', code_version='code-1', surface_seal='d' * 64,
-        action=SimpleNamespace(waiting_on=None, action_sha256='e' * 64),
-        execution_token=SimpleNamespace(node='stage0.remove'))
+    current = _current(state='ready')
 
-    def ready(_epoch, _current, _provider_session_id, ticket):
+    def ready(_epoch, _current, ticket):
         entered.set()
         assert allow_commit.wait(5)
         process_registered.set()
@@ -1049,14 +863,14 @@ def test_launch_ticket_never_accepts_control_before_process_is_registered(contro
         make_epoch=lambda *_args: pytest.fail('不应滚 epoch'),
         open_epoch=lambda _epoch: None,
         close_epoch=lambda _epoch, _turn: 'drained',
-        run_commander_turn=lambda *_args: pytest.fail('不应走 legacy'),
         epoch_identity_current=lambda _epoch: True,
-        cancel_commander=lambda: True,
-        set_commander_quiesced=lambda _value: True,
+        cancel_active=lambda: True,
+        set_quiesced=lambda _value: True,
         initial_epoch=_epoch(f'epoch-ticket-{control}', 1, 'initial'),
         read_operator_next=lambda _epoch: current,
         run_ready_action=ready,
-        run_reviewer=lambda *_args: None,
+        run_blocked_action=lambda *_args: pytest.fail('本例没有 blocked'),
+        deterministic_blockers=frozenset({'recovery:x'}),
         finalize_run=lambda *_args: pytest.fail('不应 finalize'))
     worker = threading.Thread(target=supervisor.run)
     worker.start()
@@ -1087,51 +901,65 @@ def test_launch_ticket_never_accepts_control_before_process_is_registered(contro
     assert not worker.is_alive()
 
 
-def test_supervisor_rolls_epoch_and_drops_old_provider_on_identity_change():
+# ── epoch 滚动与崩溃闭合 ────────────────────────────────────────────────
+
+def test_supervisor_rolls_epoch_on_identity_change_after_action():
+    """动作成功后身份漂移：关闭当前 epoch，用新身份继续同一 parent。"""
     events: list[AgentRunEvent] = []
-    resumes: list[str | None] = []
-    identity_checks = 0
+    executions: list[str] = []
+    flipped = {'value': False}
+    reads: list[str] = []
 
-    def run_turn(_identity, resume):
-        resumes.append(resume)
-        return CommanderTurnResult(
-            exit_code=0,
-            provider_session_id=('provider-old' if len(resumes) == 1
-                                 else 'provider-new'),
-            continue_ready=len(resumes) == 1, outcome=_outcome())
+    def read_next(epoch):
+        reads.append(epoch.epoch_id)
+        if epoch.epoch_id == 'run-2':
+            return _current(state='ready')
+        return SimpleNamespace(
+            state='pipeline_complete', code_version=epoch.code_version)
 
-    def identity_current(_epoch):
-        nonlocal identity_checks
-        identity_checks += 1
-        return identity_checks > 1
+    def ready(_epoch, _current, ticket):
+        executions.append(_epoch.epoch_id)
+        ticket.commit()
+        flipped['value'] = True
+        return SupervisorActionResult(0, _outcome(), True)
+
+    def identity_current(epoch):
+        return epoch.epoch_id != 'run-2' or not flipped['value']
 
     supervisor = RunSupervisor(
         run_id='run-2', append_event=events.append,
-        make_epoch=lambda reason, ordinal, resume: _epoch(
-            'epoch-2', ordinal, reason, resume),
+        make_epoch=lambda reason, ordinal: _epoch('epoch-2', ordinal, reason),
         open_epoch=lambda _epoch: None,
         close_epoch=lambda _epoch, _turn: 'drained',
-        run_commander_turn=run_turn,
         epoch_identity_current=identity_current,
-        cancel_commander=lambda: True,
-        initial_epoch=_epoch('run-2', 1, 'initial'))
+        cancel_active=lambda: True,
+        initial_epoch=_epoch('run-2', 1, 'initial'),
+        read_operator_next=read_next,
+        run_ready_action=ready,
+        run_blocked_action=lambda *_args: pytest.fail('本例没有 blocked'),
+        deterministic_blockers=frozenset({'recovery:x'}),
+        finalize_run=lambda _epoch, ticket: (
+            ticket.commit() or SupervisorActionResult(
+                0, _outcome('ready'), False)))
 
     supervisor.run()
 
-    assert resumes == [None, None]
+    assert executions == ['run-2']
+    assert reads == ['run-2', 'epoch-2']
     assert [event.kind for event in events] == [
         'epoch_closed', 'epoch_opened', 'epoch_closed']
     assert events[1].epoch is not None
     assert events[1].epoch.reason == 'code_change'
 
 
-def test_supervisor_closes_first_epoch_when_first_turn_raises():
-    """已写 epoch_opened 后即使首 turn 未形成结果，也必须以 70/unknown 闭合。"""
+def test_supervisor_closes_first_epoch_when_first_action_raises():
+    """已写 epoch_opened 后即使首 action 未形成结果，也必须以 70/unknown 闭合。"""
     events: list[AgentRunEvent] = []
     closed: list[tuple[str, int]] = []
     epoch = _epoch('epoch-first-failure', 1, 'initial')
 
-    def run_turn(_epoch, _resume):
+    def ready(_epoch, _current, ticket):
+        ticket.commit()
         raise RuntimeError('spawn failed')
 
     supervisor = RunSupervisor(
@@ -1140,10 +968,14 @@ def test_supervisor_closes_first_epoch_when_first_turn_raises():
         open_epoch=lambda _epoch: None,
         close_epoch=lambda current, turn: (
             closed.append((current.epoch_id, turn.exit_code)) or 'unknown'),
-        run_commander_turn=run_turn,
         epoch_identity_current=lambda _epoch: True,
-        cancel_commander=lambda: True,
-        initial_epoch=epoch)
+        cancel_active=lambda: True,
+        initial_epoch=epoch,
+        read_operator_next=lambda _epoch: _current(state='ready'),
+        run_ready_action=ready,
+        run_blocked_action=lambda *_args: pytest.fail('本例没有 blocked'),
+        deterministic_blockers=frozenset({'recovery:x'}),
+        finalize_run=lambda *_args: pytest.fail('不应 finalize'))
 
     with pytest.raises(RuntimeError, match='spawn failed'):
         supervisor.run()
@@ -1154,34 +986,37 @@ def test_supervisor_closes_first_epoch_when_first_turn_raises():
     assert events[0].exit_code == 70
 
 
-def test_new_epoch_first_turn_failure_never_reuses_previous_epoch_result():
-    """跨 epoch 的首 turn 失败不能拿上一 epoch 的成功退出码关闭新身份。"""
+def test_new_epoch_first_action_failure_never_reuses_previous_epoch_result():
+    """跨 epoch 的首 action 失败不能拿上一 epoch 的成功退出码关闭新身份。"""
     events: list[AgentRunEvent] = []
     closed: list[tuple[str, int]] = []
-    calls = 0
+    flipped = {'value': False}
 
-    def run_turn(epoch, _resume):
-        nonlocal calls
-        calls += 1
-        if calls == 1:
-            return CommanderTurnResult(
-                exit_code=0, provider_session_id='provider-old',
-                continue_ready=True, outcome=_outcome())
+    def ready(epoch, _current, ticket):
+        ticket.commit()
+        if not flipped['value']:
+            flipped['value'] = True
+            return SupervisorActionResult(0, _outcome(), True)
         assert epoch.epoch_id == 'epoch-new'
         raise RuntimeError('new epoch failed')
 
     supervisor = RunSupervisor(
         run_id='run-cross-epoch-failure', append_event=events.append,
-        make_epoch=lambda reason, ordinal, resume: _epoch(
-            'epoch-new', ordinal, reason, resume),
+        make_epoch=lambda reason, ordinal: _epoch(
+            'epoch-new', ordinal, reason).model_copy(
+            update={'code_version': 'code-1'}),
         open_epoch=lambda _epoch: None,
         close_epoch=lambda current, turn: (
             closed.append((current.epoch_id, turn.exit_code)) or 'unknown'),
-        run_commander_turn=run_turn,
-        # 首 turn 后滚 epoch；新 epoch 的首 turn 在再次检查身份前就异常。
-        epoch_identity_current=lambda epoch: epoch.epoch_id != 'epoch-old',
-        cancel_commander=lambda: True,
-        initial_epoch=_epoch('epoch-old', 1, 'initial'))
+        epoch_identity_current=lambda epoch: (
+            epoch.epoch_id != 'epoch-old' or not flipped['value']),
+        cancel_active=lambda: True,
+        initial_epoch=_epoch('epoch-old', 1, 'initial'),
+        read_operator_next=lambda _epoch: _current(state='ready'),
+        run_ready_action=ready,
+        run_blocked_action=lambda *_args: pytest.fail('本例没有 blocked'),
+        deterministic_blockers=frozenset({'recovery:x'}),
+        finalize_run=lambda *_args: pytest.fail('不应 finalize'))
 
     with pytest.raises(RuntimeError, match='new epoch failed'):
         supervisor.run()
@@ -1193,69 +1028,69 @@ def test_new_epoch_first_turn_failure_never_reuses_previous_epoch_result():
     assert events[-1].exit_code == 70
 
 
-def test_pause_keeps_the_same_epoch_and_exact_provider_session():
-    """pause 只冻结下一 turn；代码未变时不得伪造一次 epoch rollover。"""
-    events: list[AgentRunEvent] = []
-    calls: list[tuple[str, str | None]] = []
-    first_returned = threading.Event()
-    allow_second = threading.Event()
-    initial = _epoch('run-pause', 1, 'initial')
+# ── pause / resume 语义 ─────────────────────────────────────────────────
 
-    def run_turn(epoch, resume):
-        calls.append((epoch.epoch_id, resume))
-        if len(calls) == 1:
-            first_returned.set()
-            return CommanderTurnResult(
-                exit_code=0, provider_session_id='provider-pause',
-                continue_ready=True, outcome=_outcome())
-        assert allow_second.wait(5)
-        return CommanderTurnResult(
-            exit_code=0, provider_session_id='provider-pause',
-            continue_ready=False, outcome=_outcome())
+def test_pause_keeps_the_same_epoch_and_rereads_after_resume():
+    """pause 只冻结下一动作；代码未变时不得伪造一次 epoch rollover。"""
+    events: list[AgentRunEvent] = []
+    calls: list[str] = []
+    initial = _epoch('run-pause', 1, 'initial')
+    reads = {'count': 0}
+
+    def read_next(epoch):
+        reads['count'] += 1
+        if reads['count'] == 1:
+            return _current(state='ready')
+        return SimpleNamespace(state='pipeline_complete', code_version='code-1')
+
+    def ready(epoch, _current, ticket):
+        calls.append(epoch.epoch_id)
+        ticket.commit()
+        return SupervisorActionResult(0, _outcome(), True)
 
     supervisor = RunSupervisor(
         run_id='run-pause', append_event=events.append,
         make_epoch=lambda *_args: pytest.fail('同身份 pause/resume 不得滚 epoch'),
         open_epoch=lambda _epoch: None,
         close_epoch=lambda _epoch, _turn: 'drained',
-        run_commander_turn=run_turn,
         epoch_identity_current=lambda _epoch: True,
-        cancel_commander=lambda: True,
-        initial_epoch=initial)
+        cancel_active=lambda: True,
+        initial_epoch=initial,
+        read_operator_next=read_next,
+        run_ready_action=ready,
+        run_blocked_action=lambda *_args: pytest.fail('本例没有 blocked'),
+        deterministic_blockers=frozenset({'recovery:x'}),
+        finalize_run=lambda _epoch, ticket: (
+            ticket.commit() or SupervisorActionResult(
+                0, _outcome('ready'), False)))
     supervisor.request_pause()
     worker = threading.Thread(target=supervisor.run)
     worker.start()
 
-    assert first_returned.wait(5)
     for _ in range(100):
         if supervisor.paused:
             break
-        __import__('time').sleep(0.01)
+        time.sleep(0.01)
     assert supervisor.paused
+    assert calls == [] and reads['count'] == 0, 'pause 必须先于首个动作受理'
     assert [event.kind for event in events] == ['paused']
 
     supervisor.request_resume()
-    allow_second.set()
     worker.join(5)
 
     assert not worker.is_alive()
-    assert calls == [
-        ('run-pause', None),
-        ('run-pause', 'provider-pause'),
-    ]
+    assert calls == ['run-pause']
     assert [event.kind for event in events] == [
         'paused', 'resumed', 'epoch_closed']
+    assert [event.kind for event in events].count('epoch_opened') == 0
 
 
 def test_concurrent_resume_is_accepted_exactly_once():
     """worker 离开 barrier 前的第二个 resume 也必须关闭式冲突。"""
     events: list[AgentRunEvent] = []
-    current = SimpleNamespace(
-        state='ready', code_version='code-1', surface_seal='f' * 64,
-        action=SimpleNamespace(waiting_on=None, action_sha256='a' * 64),
-        execution_token=SimpleNamespace(node='stage0.remove'))
+    current = _current(state='ready')
 
-    def ready(_epoch, _current, _provider_session_id, ticket):
+    def ready(_epoch, _current, ticket):
         ticket.commit()
         return SupervisorActionResult(0, _outcome(), False)
 
@@ -1264,13 +1099,13 @@ def test_concurrent_resume_is_accepted_exactly_once():
         make_epoch=lambda *_args: pytest.fail('不应滚 epoch'),
         open_epoch=lambda _epoch: None,
         close_epoch=lambda _epoch, _turn: 'drained',
-        run_commander_turn=lambda *_args: pytest.fail('不走 legacy'),
         epoch_identity_current=lambda _epoch: True,
-        cancel_commander=lambda: True,
+        cancel_active=lambda: True,
         initial_epoch=_epoch('epoch-one-resume', 1, 'initial'),
         read_operator_next=lambda _epoch: current,
         run_ready_action=ready,
-        run_reviewer=lambda *_args: None,
+        run_blocked_action=lambda *_args: pytest.fail('本例没有 blocked'),
+        deterministic_blockers=frozenset({'recovery:x'}),
         finalize_run=lambda *_args: pytest.fail('不应 finalize'))
     supervisor.request_pause()
     worker = threading.Thread(target=supervisor.run)
@@ -1290,81 +1125,102 @@ def test_concurrent_resume_is_accepted_exactly_once():
 
 
 def test_pause_quiesce_exit_is_not_mistaken_for_pipeline_terminal():
-    """关闭 gate 导致的非零/无 ready 退出仍须先落安全 paused。"""
+    """已受理 pause 后动作返回非零退出：先落安全 paused，再按原事实结束。"""
     events: list[AgentRunEvent] = []
-    calls: list[str | None] = []
+    calls: list[str] = []
+    closed: list[ExecutionTurnResult] = []
     initial = _epoch('run-pause-quiesce', 1, 'initial')
+    box: dict[str, RunSupervisor] = {}
 
-    def run_turn(_epoch, resume):
-        calls.append(resume)
-        if len(calls) == 1:
-            return CommanderTurnResult(
-                exit_code=2, provider_session_id='provider-quiesced',
-                continue_ready=False, outcome=_outcome('stopped'))
-        return CommanderTurnResult(
-            exit_code=0, provider_session_id='provider-quiesced',
-            continue_ready=False, outcome=_outcome('ready'))
+    def read_next(_epoch):
+        if len(calls) == 0:
+            return _current(state='ready')
+        return SimpleNamespace(state='pipeline_complete', code_version='code-1')
+
+    def ready(_epoch, _current, ticket):
+        calls.append('action')
+        ticket.commit()
+        # 动作执行中用户请求 pause：quiesce 已封住新 claim，本动作按显式
+        # 终态 exit 2 返回；这枚 False 不能抢在已受理 pause 前结束 parent。
+        box['supervisor'].request_pause()
+        return SupervisorActionResult(2, _outcome('stopped'), False)
+
+    def close(epoch, turn):
+        assert epoch is initial
+        closed.append(turn)
+        return 'drained'
 
     supervisor = RunSupervisor(
         run_id='run-pause-quiesce', append_event=events.append,
         make_epoch=lambda *_args: pytest.fail('同身份恢复不得滚 epoch'),
         open_epoch=lambda _epoch: None,
-        close_epoch=lambda _epoch, _turn: 'drained',
-        run_commander_turn=run_turn,
+        close_epoch=close,
         epoch_identity_current=lambda _epoch: True,
-        cancel_commander=lambda: True,
-        initial_epoch=initial)
-    supervisor.request_pause()
-    worker = threading.Thread(target=supervisor.run)
+        cancel_active=lambda: True,
+        initial_epoch=initial,
+        read_operator_next=read_next,
+        run_ready_action=ready,
+        run_blocked_action=lambda *_args: pytest.fail('本例没有 blocked'),
+        deterministic_blockers=frozenset({'recovery:x'}),
+        finalize_run=lambda *_args: pytest.fail('不应 finalize'))
+    box['supervisor'] = supervisor
+    results: list[object] = []
+    worker = threading.Thread(target=lambda: results.append(supervisor.run()))
     worker.start()
 
     for _ in range(100):
         if supervisor.paused:
             break
-        __import__('time').sleep(0.01)
+        time.sleep(0.01)
     assert supervisor.paused
-    assert calls == [None]
+    assert calls == ['action'] and closed == []
     assert [event.kind for event in events] == ['paused']
 
     supervisor.request_resume()
     worker.join(5)
 
     assert not worker.is_alive()
-    assert calls == [None, 'provider-quiesced']
     assert [event.kind for event in events] == [
         'paused', 'resumed', 'epoch_closed']
+    assert closed and closed[0].exit_code == 2
+    assert results and results[0].stopped is False
+    assert results[0].turn.exit_code == 2
 
 
-def test_code_drift_while_paused_opens_a_new_epoch_without_old_provider_context():
+def test_code_drift_while_paused_opens_a_new_epoch_without_old_context():
     events: list[AgentRunEvent] = []
-    calls: list[tuple[str, str | None]] = []
+    reads: list[str] = []
     drifted = False
 
-    def run_turn(epoch, resume):
-        calls.append((epoch.epoch_id, resume))
-        return CommanderTurnResult(
-            exit_code=0,
-            provider_session_id=(
-                'provider-old' if epoch.epoch_id == 'run-pause-drift'
-                else 'provider-new'),
-            # pause 关闭 admission 后即使旧 turn 看不见 ready action，resume
-            # 发现身份漂移时仍必须滚新 epoch，不能拿这枚 False 结束 parent。
-            continue_ready=False,
-            outcome=_outcome())
+    def read_next(epoch):
+        reads.append(epoch.epoch_id)
+        if epoch.epoch_id == 'run-pause-drift':
+            return _current(state='ready')
+        return SimpleNamespace(state='pipeline_complete', code_version='code-2')
+
+    def ready(epoch, _current, ticket):
+        ticket.commit()
+        return SupervisorActionResult(0, _outcome(), True)
 
     def identity_current(epoch):
         return epoch.epoch_id != 'run-pause-drift' or not drifted
 
     supervisor = RunSupervisor(
         run_id='run-pause-drift', append_event=events.append,
-        make_epoch=lambda reason, ordinal, resume: _epoch(
-            'epoch-after-drift', ordinal, reason, resume),
+        make_epoch=lambda reason, ordinal: _epoch(
+            'epoch-after-drift', ordinal, reason),
         open_epoch=lambda _epoch: None,
         close_epoch=lambda _epoch, _turn: 'drained',
-        run_commander_turn=run_turn,
         epoch_identity_current=identity_current,
-        cancel_commander=lambda: True,
-        initial_epoch=_epoch('run-pause-drift', 1, 'initial'))
+        cancel_active=lambda: True,
+        initial_epoch=_epoch('run-pause-drift', 1, 'initial'),
+        read_operator_next=read_next,
+        run_ready_action=ready,
+        run_blocked_action=lambda *_args: pytest.fail('本例没有 blocked'),
+        deterministic_blockers=frozenset({'recovery:x'}),
+        finalize_run=lambda _epoch, ticket: (
+            ticket.commit() or SupervisorActionResult(
+                0, _outcome('ready'), False)))
     supervisor.request_pause()
     worker = threading.Thread(target=supervisor.run)
     worker.start()
@@ -1372,17 +1228,13 @@ def test_code_drift_while_paused_opens_a_new_epoch_without_old_provider_context(
     for _ in range(100):
         if supervisor.paused:
             break
-        __import__('time').sleep(0.01)
+        time.sleep(0.01)
     assert supervisor.paused
     drifted = True
     supervisor.request_resume()
     worker.join(5)
 
     assert not worker.is_alive()
-    assert calls == [
-        ('run-pause-drift', None),
-        ('epoch-after-drift', None),
-    ]
     assert [event.kind for event in events] == [
         'paused', 'resumed', 'epoch_closed', 'epoch_opened', 'epoch_closed']
     assert events[3].epoch is not None
@@ -1390,61 +1242,17 @@ def test_code_drift_while_paused_opens_a_new_epoch_without_old_provider_context(
     assert events[3].epoch.resume_provider_session_id is None
 
 
-@pytest.mark.parametrize('driver_name', ['codex', 'claude-code'])
-def test_commander_resume_argv_and_returned_session_are_exact(
-        tmp_path, driver_name):
-    repo = tmp_path / 'repo'
-    base = tmp_path / 'base'
-    repo.mkdir()
-    base.mkdir()
-    expected = 'provider-session-1'
-    profile = AgentProfile(
-        driver=driver_name,
-        model=('gpt-5.6-sol' if driver_name == 'codex' else 'claude-opus-5'),
-        reasoning_effort=('max' if driver_name == 'codex' else 'high'),
-        execution_mode='standard')
-    if driver_name == 'codex':
-        stdout = ''.join(json.dumps(row) + '\n' for row in (
-            {'type': 'thread.started', 'thread_id': 'wrong-session'},
-            {'type': 'turn.completed'},
-        ))
-        driver = CodexCommanderDriver(
-            executable='codex.exe',
-            runner=lambda argv, **_kwargs: __import__('subprocess').CompletedProcess(
-                argv, 0, stdout, ''))
-    else:
-        stdout = json.dumps({
-            'type': 'result', 'subtype': 'success', 'is_error': False,
-            'session_id': 'wrong-session', 'usage': {},
-        }) + '\n'
-        driver = ClaudeCodeCommanderDriver(
-            executable='claude.exe',
-            runner=lambda argv, **_kwargs: __import__('subprocess').CompletedProcess(
-                argv, 0, stdout, ''))
-    invocation = driver.build_invocation(
-        profile, '继续', repo=repo, base=base,
-        resume_provider_session_id=expected)
-
-    assert invocation.resume_provider_session_id == expected
-    assert expected in invocation.argv
-    if driver_name == 'codex':
-        assert invocation.argv.index('--add-dir') < invocation.argv.index('resume')
-        assert invocation.argv[-3:] == ('resume', expected, '-')
-    with pytest.raises(CommanderProtocolError, match='不同'):
-        driver.run(invocation, log=__import__('io').BytesIO(), run_id='run-1')
-
+# ── 退出域保真 ──────────────────────────────────────────────────────────
 
 @pytest.mark.parametrize('route', ['ready', 'blocked', 'finalize'])
 def test_canonical_action_exit_origin_survives_supervisor_conversion(route):
     """三个确定性消费入口都保留 action 的退出域，关闭 epoch 不覆盖来源。"""
     events = []
     closed = []
-    current = SimpleNamespace(
+    current = _current(
         state={'ready': 'ready', 'blocked': 'blocked',
                'finalize': 'pipeline_complete'}[route],
-        code_version='code-1', surface_seal='a' * 64,
-        execution_token=SimpleNamespace(node='stage4.design'),
-        action=SimpleNamespace(waiting_on='test-recovery', action_sha256='b' * 64))
+        waiting_on='test-recovery')
 
     def execute(*args):
         args[-1].commit()
@@ -1460,14 +1268,12 @@ def test_canonical_action_exit_origin_survives_supervisor_conversion(route):
         run_id='origin-run', append_event=events.append,
         make_epoch=lambda *_args: pytest.fail('无需滚 epoch'),
         open_epoch=lambda _epoch: None, close_epoch=close,
-        run_commander_turn=lambda *_args: pytest.fail('不应启动 Commander'),
         epoch_identity_current=lambda _epoch: True,
-        cancel_commander=lambda: True,
+        cancel_active=lambda: True,
         initial_epoch=_epoch('origin-epoch', 1, 'initial'),
         read_operator_next=lambda _epoch: current,
         run_ready_action=execute, run_blocked_action=execute,
         deterministic_blockers=frozenset({'test-recovery'}),
-        run_reviewer=lambda *_args: pytest.fail('不应启动 Reviewer'),
         finalize_run=execute)
     result = supervisor.run()
     assert result.turn.exit_code == 1 and result.turn.exit_origin == 'novel_cli'

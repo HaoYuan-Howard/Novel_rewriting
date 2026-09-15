@@ -5,13 +5,6 @@ import type {
   PipelineAgentProfiles,
 } from '@/types/agent'
 
-export const COMMANDER_PROFILE: AgentProfile = {
-  driver: 'commander-dynamic',
-  model: 'commander-model-v9',
-  reasoning_effort: 'careful-dynamic',
-  execution_mode: 'interactive-dynamic',
-}
-
 export const EXECUTOR_PROFILE: AgentProfile = {
   driver: 'executor-dynamic',
   model: 'executor-model-v7',
@@ -37,19 +30,20 @@ export const OVERRIDE_BACKEND: ExecutorBackend = {
 }
 
 export const READY_PROFILES: PipelineAgentProfiles = {
-  schema_version: 2,
-  commander: COMMANDER_PROFILE,
+  schema_version: 3,
   executor_default: EXECUTOR_BACKEND,
   executor_overrides: {},
 }
 
 function cloneProfiles(profiles: PipelineAgentProfiles): PipelineAgentProfiles {
   return {
-    schema_version: 2,
-    commander: { ...profiles.commander },
+    schema_version: 3,
     executor_default: profiles.executor_default.kind === 'agent'
       ? { kind: 'agent', profile: { ...profiles.executor_default.profile } }
       : { kind: 'legacy', profile: { ...profiles.executor_default.profile } },
+    ...(profiles.concurrency
+      ? { concurrency: { ...profiles.concurrency, node_overrides: { ...profiles.concurrency.node_overrides } } }
+      : {}),
     executor_overrides: Object.fromEntries(
       Object.entries(profiles.executor_overrides).map(([node, backend]) => [
         node,
@@ -67,33 +61,9 @@ export function agentCapabilities(
   return {
     drivers: [
       {
-        id: 'commander-dynamic',
-        provider: 'provider-a',
-        label: '动态指挥 CLI',
-        roles: ['commander'],
-        availability: 'ready',
-        availability_reason: '动态指挥探针通过',
-        version: 'v-command',
-        models: [
-          {
-            id: 'commander-model-v9',
-            label: '动态指挥模型九',
-            reasoning_efforts: ['careful-dynamic', 'slow-dynamic'],
-            execution_modes: ['interactive-dynamic'],
-          },
-          {
-            id: 'commander-model-v10',
-            label: '动态指挥模型十',
-            reasoning_efforts: ['new-effort-dynamic'],
-            execution_modes: ['new-mode-dynamic'],
-          },
-        ],
-      },
-      {
         id: 'executor-dynamic',
         provider: 'provider-b',
         label: '动态执行 CLI',
-        roles: ['executor'],
         availability: 'ready',
         availability_reason: '动态执行探针通过',
         version: 'v-executor',

@@ -200,8 +200,8 @@ def _require_current_reviewer_rewrite_request(
     if batch_digest != digest:
         raise ProvenanceRefused('reviewer rewrite 批次读取期间漂移')
     _require_request_authority(ctx, request, digest)
-    from novel.orchestrator import queue, reviewer_contract
-    contract = hashlib.sha256(reviewer_contract.for_blocker(
+    from novel.orchestrator import queue, reviewer_legacy
+    contract = hashlib.sha256(reviewer_legacy.for_blocker(
         queue.WAITING_ON_STAGE5_CLOSURE).encode('utf-8')).hexdigest()
     if request.reviewer_contract_sha256 != contract:
         raise UpstreamStale('reviewer rewrite authority 所绑 Reviewer contract 已非 current')

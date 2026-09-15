@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query
 
-from contracts.invariants import STAGES, commander_work_unit
+from contracts.invariants import STAGES, approval_work_unit
 from contracts.schema.orchestration import RunProgressView, RunResumeFrontierView
 from contracts.schema.api import WorkUnitGrantPreview, WorkUnitGrantRequest, WorkUnitGrantResult
 from novel.api.deps import checked_sid, get_base
@@ -70,7 +70,7 @@ def get_run_progress(sid: str = Depends(checked_sid),
         )
         units, units_unavailable = work_units.get(base, sid)
         blueprint = blueprint_progress.get(base, sid, units)
-    identity = commander_work_unit(resume_frontier.waiting_on or '')
+    identity = approval_work_unit(resume_frontier.waiting_on or '')
     current_node = identity[0] if identity else resume_frontier.node
     current_scope = identity[1] if identity else None
     recovery = None if units is None or resume_frontier.state == 'unknown' else [

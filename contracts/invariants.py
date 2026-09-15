@@ -63,10 +63,12 @@ OPERATOR_NEXT_STATES: Final = ('ready', 'blocked', 'pipeline_complete')
 #: ``OPERATOR_NEXT_STATES``。
 RUN_RESUME_FRONTIER_STATES: Final = (*OPERATOR_NEXT_STATES, 'unknown')
 
-#: 下一动作真正由谁承接。``code`` 是 0 成本确定性节点，``human`` 是没有
-#: 登记 Commander 任务的人工/恢复边界；前端只呈现，不从 paid/waiting_on 猜。
+#: 下一动作真正由谁承接。``code`` 是 0 成本确定性节点，``human`` 是需要人工
+#: 在 Stage 页面裁决的审批/恢复边界（Commander 受托审阅已退役，2026-09-15
+#: 用户裁决：审批一律人工，自动跑书停在闸前等待过闸后续跑）；前端只呈现，
+#: 不从 paid/waiting_on 猜。
 RUN_NEXT_HANDLERS: Final = (
-    'code', 'commander', 'executor', 'human', 'none', 'unknown',
+    'code', 'executor', 'human', 'none', 'unknown',
 )
 
 #: operator 执行许可的两种来源。``ready`` 只许可当前 ``operator next``
@@ -252,7 +254,6 @@ STAGE5_CLOSED_EXEMPT_FLAGS: Final = (
 #: ``unknown`` 只用于探针无法下结论；``missing`` 是 PATH 中没有 CLI；
 #: ``unauthenticated`` 留给能够在不发模型请求的前提下明确识别登录态的 driver。
 AgentDriver = Literal['claude-code', 'claude-code-glm', 'codex']
-AgentRole = Literal['commander', 'executor']
 AgentAvailability = Literal['ready', 'missing', 'unknown', 'unauthenticated']
 AgentProfileSettingsState = Literal['unset', 'configured', 'unreadable']
 
@@ -2033,15 +2034,17 @@ OPERATOR_REDO_STRATEGIES: Final = (
 WORKFLOW_ROLE_CONTRACT: Final = 'pipeline-cost-latency-v2'
 WORK_UNIT_EXECUTOR_MAX_CONTENT_CALLS: Final = 4
 WORK_UNIT_MAX_DELIVERY_ATTEMPTS: Final = 4
-WORK_UNIT_COMMANDER_MAX_CONTENT_CALLS: Final = 4
 WORK_UNIT_GRANT_ADDITIONS: Final = (1, 2, 3, 4)
 
 
-REVIEW_ACTIONS: Final = ('accept', 'patch', 'rework', 'uncertain', 'stop')
-
-
 class NodeLifecycleSpec(NamedTuple):
-    """节点职责登记；运行状态和剩余预算必须读取持久工作单元账。"""
+    """节点职责登记；运行状态和剩余预算必须读取持久工作单元账。
+
+    ``approval_bindings`` 把审批 blocker 映射到 (属主节点, scope)：它登记
+    「这道闸属于哪个节点的工作面」，供 operator 审批状态投影与历史 reviewer
+    工作单元解码使用。Commander 受托审阅退役（2026-09-15）后这些闸由人工
+    在 Stage 页面过，映射本身保留——blocker 的存在性与归属不随审阅者变化。
+    """
 
     unit_kind: str
     input_workpack: str
@@ -2053,9 +2056,7 @@ class NodeLifecycleSpec(NamedTuple):
     session_scope: str
     recovery_entries: tuple[str, ...]
     executor_content_limit: int = WORK_UNIT_EXECUTOR_MAX_CONTENT_CALLS
-    commander_content_limit: int = WORK_UNIT_COMMANDER_MAX_CONTENT_CALLS
-    commander_bindings: tuple[tuple[str, str], ...] = ()
-    review_actions: tuple[str, ...] = ()
+    approval_bindings: tuple[tuple[str, str], ...] = ()
     approval_projection: tuple[str, ...] = ()
 
 
@@ -2153,24 +2154,24 @@ class NodeSpec(NamedTuple):
 NODES: Final[dict[str, NodeSpec]] = {
     # Stage0 只有一个 JSON 权威和一个正文投影；运行时报告不落盘。
     'stage0.remove':    NodeSpec('stage0', 'R-0',  False, 'stage0 非正文剔除',
-                                  lifecycle=NodeLifecycleSpec('book', '原始文本与当前 revision', 'deterministic', 'none', '剔除结果由 stage0.approve 接受', ('recompute',), ('stage0.remove', 'stage0.edit'), 'none', ('--check-only',), 0, 0),
+                                  lifecycle=NodeLifecycleSpec('book', '原始文本与当前 revision', 'deterministic', 'none', '剔除结果由 stage0.approve 接受', ('recompute',), ('stage0.remove', 'stage0.edit'), 'none', ('--check-only',), 0),
                                   flags=('--source', '--dry-run', '--check-only'),
                                   produces=(artifact_paths.STAGE0_REVISIONS,
                                             artifact_paths.STAGE0_CLEAN_TEXT)),
     'stage0.approve':   NodeSpec('stage0', 'R-0',  False, 'stage0 人工批准',
-                                  lifecycle=NodeLifecycleSpec('book', '完整 retained 与 removed 工作包', 'human_submission', 'commander', '当前剔除 revision', ('accept', 'stop'), ('stage0.edit',), 'commander:stage0', ('typed_replay',), 0, commander_bindings=(('stage0.approve', 'book'),), review_actions=('accept', 'uncertain', 'stop'), approval_projection=('gate', 's0')),
+                                  lifecycle=NodeLifecycleSpec('book', '完整 retained 与 removed 工作包', 'human_submission', 'human', '当前剔除 revision', ('accept', 'stop'), ('stage0.edit',), 'human:stage0', ('typed_replay',), 0, approval_bindings=(('stage0.approve', 'book'),), approval_projection=('gate', 's0')),
                                   flags=('--expected-revision-id', '--actor', '--reason'),
                                   required_flags=(
                                       '--expected-revision-id', '--actor', '--reason'),
                                    produces=(artifact_paths.STAGE0_REVISIONS,)),
     'stage0.edit':      NodeSpec('stage0', 'R-0',  False, 'stage0 人工编辑',
-                                  lifecycle=NodeLifecycleSpec('book', 'revision 与 typed 编辑计划', 'deterministic', 'none', '编辑后重新批准当前 revision', ('typed_edit',), ('stage0.edit',), 'none', ('--apply-edit', '--apply-edit-plan', '--apply-candidate-plan'), 0, 0),
+                                  lifecycle=NodeLifecycleSpec('book', 'revision 与 typed 编辑计划', 'deterministic', 'none', '编辑后重新批准当前 revision', ('typed_edit',), ('stage0.edit',), 'none', ('--apply-edit', '--apply-edit-plan', '--apply-candidate-plan'), 0),
                                   flags=('--apply-edit', '--apply-edit-plan',
                                          '--apply-candidate-plan', '--actor', '--reason'),
                                   produces=(artifact_paths.STAGE0_REVISIONS,
                                             artifact_paths.STAGE0_CLEAN_TEXT)),
     'stage1.partition': NodeSpec('stage1', 'R-1',  False, 'stage1 分章',
-                                 lifecycle=NodeLifecycleSpec('book', '已批准的 clean_text', 'deterministic', 'none', '机械覆盖与章号校验', ('recompute', 'stop'), ('stage0.edit', 'stage1.partition'), 'none', ('--check-only',), 0, 0),
+                                 lifecycle=NodeLifecycleSpec('book', '已批准的 clean_text', 'deterministic', 'none', '机械覆盖与章号校验', ('recompute', 'stop'), ('stage0.edit', 'stage1.partition'), 'none', ('--check-only',), 0),
                                  flags=('--dry-run', '--check-only'),
                                  produces=(artifact_paths.STAGE1_MAIN_TEXT,
                                            artifact_paths.STAGE1_HOOK_COPY),
@@ -2180,11 +2181,11 @@ NODES: Final[dict[str, NodeSpec]] = {
     #   ——没有 schema 管形状，来源账上也留不下「这是人改的」。
     #   当时除 Stage1 外的 stage0/3/4/5/6/7 都已有这条 0 成本人工路；Stage3 后来整层退役。
     'stage2.analyze': NodeSpec('stage2', 'R-2', True, 'stage2 联合语义分析（共享首抽）',
-                                 lifecycle=NodeLifecycleSpec('book', '完整 MainText 与关闭的证据候选', 'executor', 'none', '联合人物与长期知识草稿，分别编译为独立产物', ('typed_edit', 'stop'), ('stage2.characters', 'stage2.global'), 'executor:book', ('saved_response', 'prepared_commit'), commander_content_limit=0),
+                                 lifecycle=NodeLifecycleSpec('book', '完整 MainText 与关闭的证据候选', 'executor', 'none', '联合人物与长期知识草稿，分别编译为独立产物', ('typed_edit', 'stop'), ('stage2.characters', 'stage2.global'), 'executor:book', ('saved_response', 'prepared_commit')),
                                  flags=('--dry-run', '--response-repair', '--recover-analyze-run'),
                                  produces=(artifact_paths.STAGE2_ANALYZE_RECEIPT,), stage_required=False),
     'stage2.characters': NodeSpec('stage2', 'R-2', True, 'stage2 静态人物登记',
-                                  lifecycle=NodeLifecycleSpec('book', '完整 MainText 与人物证据闭集', 'executor', 'none', '静态身份、称谓及来源证据；机械检查自证，语义未审以 unver 披露', ('typed_edit', 'targeted_rework', 'stop'), ('stage2.characters',), 'executor:book', ('--revalidate', '--apply-edit', 'saved_response', 'prepared_commit'), commander_content_limit=0),
+                                  lifecycle=NodeLifecycleSpec('book', '完整 MainText 与人物证据闭集', 'executor', 'none', '静态身份、称谓及来源证据；机械检查自证，语义未审以 unver 披露', ('typed_edit', 'targeted_rework', 'stop'), ('stage2.characters',), 'executor:book', ('--revalidate', '--apply-edit', 'saved_response', 'prepared_commit')),
                                   flags=('--dry-run', '--revalidate', '--apply-edit', '--resample',
                                          '--emit-edit-template', '--actor', '--reason',
                                          '--emit-analyze-draft-template', '--repair-analyze-draft', '--recover-analyze-draft',
@@ -2193,7 +2194,7 @@ NODES: Final[dict[str, NodeSpec]] = {
                                             artifact_paths.STAGE2_BLUEPRINT_CHARACTER_PROJECTION),
                                   operator_redo='canonical'),
     'stage2.global':    NodeSpec('stage2', 'R-2',  True,  'stage2 全书级抽取',
-                                 lifecycle=NodeLifecycleSpec('book', '完整 MainText 与 Global 事实工作包', 'executor', 'none', '生成所必需的全书事实；机械检查自证，语义未审以 unver 披露', ('typed_edit', 'targeted_rework', 'stop'), ('stage2.characters', 'stage2.global'), 'executor:book', ('--revalidate', '--apply-edit', 'saved_response', 'prepared_commit'), commander_content_limit=0),
+                                 lifecycle=NodeLifecycleSpec('book', '完整 MainText 与 Global 事实工作包', 'executor', 'none', '生成所必需的全书事实；机械检查自证，语义未审以 unver 披露', ('typed_edit', 'targeted_rework', 'stop'), ('stage2.characters', 'stage2.global'), 'executor:book', ('--revalidate', '--apply-edit', 'saved_response', 'prepared_commit')),
                                  flags=('--renormalize', '--resample',
                                          '--revalidate',
                                          '--apply-edit', '--recover-analyze',
@@ -2206,7 +2207,7 @@ NODES: Final[dict[str, NodeSpec]] = {
     #   `blueprint --chapters`（定向重生成那几章），而它此前只挂在 `stage5.write` 上。
     #   漏了它，那 19 条在 F5-4 注册的那一刻全被 `_validate` ⑧ 拒收。
     'stage2.blueprint': NodeSpec('stage2', 'R-3',  True,  'stage2 逐章抽取',
-                                  lifecycle=NodeLifecycleSpec('chapter', '当前 Global、人物与本章正文', 'executor', 'none', '逐章剧情骨架；机械检查自证，语义未审以 unver 披露', ('typed_edit', 'targeted_rework', 'stop'), ('stage2.characters', 'stage2.global', 'stage2.blueprint'), 'executor:chapter', ('--revalidate', '--apply-edit', '--chapters', 'saved_response', 'prepared_commit'), commander_content_limit=0),
+                                  lifecycle=NodeLifecycleSpec('chapter', '当前 Global、人物与本章正文', 'executor', 'none', '逐章剧情骨架；机械检查自证，语义未审以 unver 披露', ('typed_edit', 'targeted_rework', 'stop'), ('stage2.characters', 'stage2.global', 'stage2.blueprint'), 'executor:chapter', ('--revalidate', '--apply-edit', '--chapters', 'saved_response', 'prepared_commit')),
                                   flags=('--dry-run', '--check-only', '--renormalize',
                                          '--chapters',
                                          '--emit-edit-template', '--validate-edit',
@@ -2223,7 +2224,7 @@ NODES: Final[dict[str, NodeSpec]] = {
     #   架构改变本身不静默翻默认；后续须在同一 unit 契约下比较首交率、
     #   HARD、token 与墙钟再裁决。
     'stage4.design':    NodeSpec('stage4', 'R-5',  True,  'stage4 盲场景设计',
-                                  lifecycle=NodeLifecycleSpec('strategy_and_chapter', '去序盲事实与独立章工作包', 'executor', 'commander', 'A 设计及本轮明确变更', ('accept', 'typed_edit', 'targeted_rework', 'replan', 'stop'), ('stage2.blueprint', 'stage4.design'), 'executor:strategy/chapter / commander:design', ('--apply-edit', '--recover-repair-aggregate', '--recover-prepared', '--close-review', '--reaggregate', '--recover-responses', 'saved_response', 'prepared_commit'), commander_bindings=(('approval:stage4-design-review', 'design'), ('approval:stage4-binding-resolution', 'design'), ('approval:stage4-structure-replan', 'design')), review_actions=('accept', 'rework', 'uncertain', 'stop'), approval_projection=('design_review', 'state')),
+                                  lifecycle=NodeLifecycleSpec('strategy_and_chapter', '去序盲事实与独立章工作包', 'executor', 'human', 'A 设计及本轮明确变更', ('accept', 'typed_edit', 'targeted_rework', 'replan', 'stop'), ('stage2.blueprint', 'stage4.design'), 'executor:strategy/chapter / human:design', ('--apply-edit', '--recover-repair-aggregate', '--recover-prepared', '--close-review', '--reaggregate', '--recover-responses', 'saved_response', 'prepared_commit'), approval_bindings=(('approval:stage4-design-review', 'design'), ('approval:stage4-binding-resolution', 'design'), ('approval:stage4-structure-replan', 'design')), approval_projection=('design_review', 'state')),
                                    flags=('--dry-run', '--replan', '--review-token', '--close-review', '--reaggregate', '--recover-responses',
                                           '--recover-prepared', '--subject-sha256',
                                           '--validate-edit',
@@ -2236,7 +2237,7 @@ NODES: Final[dict[str, NodeSpec]] = {
                                   model='deepseek-v4-pro',
                                   operator_redo='canonical'),
     'stage4.plan':      NodeSpec('stage4', 'R-5',  True,  'stage4 证据绑定与计划编译',
-                                  lifecycle=NodeLifecycleSpec('ambiguous_chapter', '已接受 A 与本章关闭目录、机械基线', 'executor_or_deterministic', 'commander', '独立 B 结构及证据绑定', ('accept', 'typed_edit', 'targeted_rework', 'stop'), ('stage2.blueprint', 'stage4.design', 'stage4.plan'), 'executor:ambiguous_chapter / commander:structure', ('--revalidate', '--apply-binding', '--apply-edit', '--reaggregate', '--recover-prepared', '--close-review', 'saved_response', 'prepared_commit'), commander_bindings=(('approval:stage4-structure-review', 'structure'),), review_actions=('accept', 'rework', 'uncertain', 'stop'), approval_projection=('structure', 'state')),
+                                  lifecycle=NodeLifecycleSpec('ambiguous_chapter', '已接受 A 与本章关闭目录、机械基线', 'executor_or_deterministic', 'human', '独立 B 结构及证据绑定', ('accept', 'typed_edit', 'targeted_rework', 'stop'), ('stage2.blueprint', 'stage4.design', 'stage4.plan'), 'executor:ambiguous_chapter / human:structure', ('--revalidate', '--apply-binding', '--apply-edit', '--reaggregate', '--recover-prepared', '--close-review', 'saved_response', 'prepared_commit'), approval_bindings=(('approval:stage4-structure-review', 'structure'),), approval_projection=('structure', 'state')),
                                   flags=('--dry-run', '--check-only', '--reaggregate', '--close-review',
                                          '--recover-prepared', '--subject-sha256',
                                          '--revalidate', '--names-only', '--identity',
@@ -2250,7 +2251,7 @@ NODES: Final[dict[str, NodeSpec]] = {
     # ⚠ `flags=()` 在这一格是【终态】不是待定：本节点**本身**就是那个动作
     #   `stage4.context` 本身就是该动作，因此不再另设同义 flag。
     'stage4.context':   NodeSpec('stage4', 'R-6',  False, 'stage4 写作上下文组装',
-                                 lifecycle=NodeLifecycleSpec('book', '已接受 B 计划与当前事实', 'deterministic', 'none', '机械投影闭合', ('recompute', 'stop'), ('stage2.blueprint', 'stage4.design', 'stage4.plan'), 'none', ('canonical',), 0, 0),
+                                 lifecycle=NodeLifecycleSpec('book', '已接受 B 计划与当前事实', 'deterministic', 'none', '机械投影闭合', ('recompute', 'stop'), ('stage2.blueprint', 'stage4.design', 'stage4.plan'), 'none', ('canonical',), 0),
                                  produces=(artifact_paths.STAGE4_WRITER_CONTEXT,),
                                  operator_redo='canonical'),
     # ⚠ `--revise` 是 F4 从 `stage5.review` **挪过来**的（用户裁决，见本表下方那段）。
@@ -2260,7 +2261,7 @@ NODES: Final[dict[str, NodeSpec]] = {
     #   「能把一个 **0 成本节点**变成付费的 flag」，而本节点的默认路径本来就付费。
     #   留着它是一格永远不起作用的声明——`is_paid` 早在 `spec.paid` 那一步就判完了。
     'stage5.write':     NodeSpec('stage5', 'R-7',  True,  'stage5 全书闭卷写作',
-                                  lifecycle=NodeLifecycleSpec('chapter', '当前 Context、计划与独立 writing 授权', 'executor', 'commander', '独立 writing 授权；产出交机械 Review 与整书 closure', ('typed_edit', 'targeted_rework', 'stop'), ('stage4.design', 'stage5.write'), 'executor:chapter / commander:writing', ('--revalidate', '--apply-edit', '--recover-prepared', '--recover-reviewer-rewrite-prepared'), commander_bindings=(('approval:stage5-writing', 'writing'),), review_actions=('accept', 'uncertain', 'stop'), approval_projection=('writing',)),
+                                  lifecycle=NodeLifecycleSpec('chapter', '当前 Context、计划与独立 writing 授权', 'executor', 'human', '独立 writing 授权；产出交机械 Review 与整书 closure', ('typed_edit', 'targeted_rework', 'stop'), ('stage4.design', 'stage5.write'), 'executor:chapter / human:writing', ('--revalidate', '--apply-edit', '--recover-prepared', '--recover-reviewer-rewrite-prepared'), approval_bindings=(('approval:stage5-writing', 'writing'),), approval_projection=('writing',)),
                                   flags=('--dry-run', '--recheck', '--revalidate',
                                          '--preview-edit', '--apply-edit', '--revise',
                                          '--reviewer-rewrite',
@@ -2284,7 +2285,7 @@ NODES: Final[dict[str, NodeSpec]] = {
     #   而豁免那一份是**可选**的——没人豁免过任何东西时它就不该存在（盘上 3/3 本都没有）。
     #   把它登记进来会让每一本书**永远差一份产物**。⇒ 它的写盘效应登记在 `WRITE_EFFECTS`。
     'stage5.review':    NodeSpec('stage5', 'R-8',  False, 'stage5 全书验收',
-                                 lifecycle=NodeLifecycleSpec('book', '全章 canonical、计划与 trim 处置', 'deterministic', 'commander', '独立 closure 或 trim disposition 工作包', ('accept', 'typed_edit', 'targeted_rework', 'stop'), ('stage5.write', 'stage5.review'), 'commander:closure/disposition', ('--check-only', '--retain-pretrim-batch', 'typed_replay'), 0, commander_bindings=(('approval:stage5-closure', 'closure'),), review_actions=('accept', 'rework', 'uncertain', 'stop'), approval_projection=('closure', 'state')),
+                                 lifecycle=NodeLifecycleSpec('book', '全章 canonical、计划与 trim 处置', 'deterministic', 'human', '独立 closure 或 trim disposition 工作包', ('accept', 'typed_edit', 'targeted_rework', 'stop'), ('stage5.write', 'stage5.review'), 'human:closure/disposition', ('--check-only', '--retain-pretrim-batch', 'typed_replay'), 0, approval_bindings=(('approval:stage5-closure', 'closure'),), approval_projection=('closure', 'state')),
                                  flags=('--check-only', '--wontfix', '--retain-pretrim',
                                         '--retain-pretrim-batch',
                                         '--request-reviewer-rewrite',
@@ -2312,7 +2313,7 @@ NODES: Final[dict[str, NodeSpec]] = {
     #   而结论池是复检算出来的。⚠⚠ 本层的两条语义判据此前**没有任何人工闭环**，
     #   而待人工清单在建议人去跑一个这一层根本没有的 flag（见 `orchestrator/inbox_projection.py::_human_how`）。
     'stage6.prepare':   NodeSpec('stage6', 'R-9', True, 'stage6 文案准备',
-                                 lifecycle=NodeLifecycleSpec('book', '完整源正文、原钩子与独立准备产物', 'executor', 'commander', '事实支持与连续开篇范围独立接受', ('accept', 'typed_edit', 'stop'), ('stage6.prepare',), 'executor:book / commander:prepare', ('--revalidate', '--apply-edit', '--review-decisions', '--recover-edit', '--recover-prepared', 'saved_response', 'prepared_commit'), commander_bindings=(('approval:stage6-prepare', 'prepare'),), review_actions=('accept', 'rework', 'uncertain', 'stop'), approval_projection=('prepare', 'state')),
+                                 lifecycle=NodeLifecycleSpec('book', '完整源正文、原钩子与独立准备产物', 'executor', 'human', '事实支持与连续开篇范围独立接受', ('accept', 'typed_edit', 'stop'), ('stage6.prepare',), 'executor:book / human:prepare', ('--revalidate', '--apply-edit', '--review-decisions', '--recover-edit', '--recover-prepared', 'saved_response', 'prepared_commit'), approval_bindings=(('approval:stage6-prepare', 'prepare'),), approval_projection=('prepare', 'state')),
                                  flags=('--dry-run', '--revalidate', '--emit-edit-template',
                                         '--emit-review-template', '--emit-review-workpack',
                                         '--apply-edit', '--review-decisions', '--recover-edit',
@@ -2320,7 +2321,7 @@ NODES: Final[dict[str, NodeSpec]] = {
                                  produces=(artifact_paths.STAGE6_PREPARE,),
                                  operator_redo='canonical'),
     'stage6.hook':      NodeSpec('stage6', 'R-9',  True,  'stage6 开篇文案',
-                                 lifecycle=NodeLifecycleSpec('candidate_batch', '原文文案、限定正文与全书事实地图', 'executor', 'none', '三候选经独立 judge 与定稿', ('typed_edit', 'targeted_rework', 'stop'), ('stage6.hook',), 'executor:hook', ('--revalidate', '--apply-edit', '--recheck', '--recover-prepared', 'saved_response', 'prepared_commit'), commander_content_limit=0),
+                                 lifecycle=NodeLifecycleSpec('candidate_batch', '原文文案、限定正文与全书事实地图', 'executor', 'none', '三候选经独立 judge 与定稿', ('typed_edit', 'targeted_rework', 'stop'), ('stage6.hook',), 'executor:hook', ('--revalidate', '--apply-edit', '--recheck', '--recover-prepared', 'saved_response', 'prepared_commit')),
                                  flags=('--dry-run', '--check-only', '--identity',
                                         '--recheck', '--revalidate', '--apply-edit',
                                         '--wontfix', '--rebind-review', '--recover-prepared', '--subject-sha256',
@@ -2339,14 +2340,14 @@ NODES: Final[dict[str, NodeSpec]] = {
     #   判 PASS 并排成第一名，证据区间圈成候选全文（等于没有指向）——对「结论必须
     #   绑证据」的判官是死刑。钉在本表 ⇒ `DEEPSEEK_MODEL` 换不掉它。
     'stage6.semantic':  NodeSpec('stage6', 'R-9',  True,  'stage6 文案语义审判',
-                                 lifecycle=NodeLifecycleSpec('judge', '匿名候选与独立 A/B 证据工作包', 'executor', 'none', '只产带证据 UNVER，交 stage6.approve', ('self_correct', 'stop'), ('stage6.semantic',), 'executor:judge_A / executor:judge_B', ('--recover-prepared', 'saved_response', 'prepared_commit'), commander_content_limit=0),
+                                 lifecycle=NodeLifecycleSpec('judge', '匿名候选与独立 A/B 证据工作包', 'executor', 'none', '只产带证据 UNVER，交 stage6.approve', ('self_correct', 'stop'), ('stage6.semantic',), 'executor:judge_A / executor:judge_B', ('--recover-prepared', 'saved_response', 'prepared_commit')),
                                  flags=('--dry-run', '--response-repair', '--recover-prepared', '--subject-sha256'),
                                  produces=(artifact_paths.STAGE6_SEMANTIC,),
                                  model='deepseek-v4-pro'),
     # ⚠ `--pick` 是**参数**不是 0 成本入口（见 `VALUED_FLAGS`）。
     #   本节点的 `flags` 从前是空的，注释写着「候选序号是它们的参数，参数名属 F 期」。
     'stage6.approve':   NodeSpec('stage6', 'R-9',  False, 'stage6 文案定稿',
-                                 lifecycle=NodeLifecycleSpec('candidate_batch', '三候选与两名 judge 的完整 workpack', 'human_submission', 'commander', '当前候选的 typed pick', ('accept', 'stop'), ('stage6.hook',), 'commander:hook_approval', ('typed_replay', '--review-token'), 0, commander_bindings=(('stage6.approve', 'hook'),), review_actions=('accept', 'uncertain', 'stop'), approval_projection=('gate', 's6')),
+                                 lifecycle=NodeLifecycleSpec('candidate_batch', '三候选与两名 judge 的完整 workpack', 'human_submission', 'human', '当前候选的 typed pick', ('accept', 'stop'), ('stage6.hook',), 'human:hook_approval', ('typed_replay', '--review-token'), 0, approval_bindings=(('stage6.approve', 'hook'),), approval_projection=('gate', 's6')),
                                  flags=('--pick', '--actor', '--reason',
                                         '--review-token'),
                                  required_flags=('--pick', '--actor', '--reason',
@@ -2356,7 +2357,7 @@ NODES: Final[dict[str, NodeSpec]] = {
     #   不照 stage6——那一层一次产三份，拦的是「一条干净候选都没有」），
     #   而**闸门是我们自己加的，不给一条 0 成本提升路，一次付费产出就被永久锁死**。
     'stage7.rename':    NodeSpec('stage7', 'R-10', True,  'stage7 人名表',
-                                  lifecycle=NodeLifecycleSpec('book', '全书人物、别名与已闭合正文', 'executor', 'none', '人名表交独立定稿', ('typed_edit', 'targeted_rework', 'stop'), ('stage7.rename',), 'executor:rename', ('--revalidate', '--apply-edit', '--adopt-residual', '--recover-prepared', 'saved_response', 'prepared_commit'), commander_content_limit=0),
+                                  lifecycle=NodeLifecycleSpec('book', '全书人物、别名与已闭合正文', 'executor', 'none', '人名表交独立定稿', ('typed_edit', 'targeted_rework', 'stop'), ('stage7.rename',), 'executor:rename', ('--revalidate', '--apply-edit', '--adopt-residual', '--recover-prepared', 'saved_response', 'prepared_commit')),
                                   flags=('--dry-run', '--check-only', '--identity',
                                          '--recheck', '--apply-edit', '--revalidate',
                                           '--emit-edit-template', '--adopt-residual',
@@ -2368,14 +2369,14 @@ NODES: Final[dict[str, NodeSpec]] = {
     # ⚠⚠ 本层没有候选序号：一本书只有一份人物表，定稿是「给整份盖章」。
     #   但审批动作必须携带统一人工凭据，并用 decision-surface SHA-256 防旧页面误批。
     'stage7.approve':   NodeSpec('stage7', 'R-10', False, 'stage7 人名表定稿',
-                                  lifecycle=NodeLifecycleSpec('book', '人物表与真实替换、残留扫描工作包', 'human_submission', 'commander', '当前人名与替换表', ('accept', 'stop'), ('stage7.rename',), 'commander:rename_approval', ('typed_replay', '--review-token'), 0, commander_bindings=(('stage7.approve', 'rename'),), review_actions=('accept', 'uncertain', 'stop'), approval_projection=('gate', 's7')),
+                                  lifecycle=NodeLifecycleSpec('book', '人物表与真实替换、残留扫描工作包', 'human_submission', 'human', '当前人名与替换表', ('accept', 'stop'), ('stage7.rename',), 'human:rename_approval', ('typed_replay', '--review-token'), 0, approval_bindings=(('stage7.approve', 'rename'),), approval_projection=('gate', 's7')),
                                   flags=('--actor', '--reason', '--review-token'),
                                   required_flags=('--actor', '--reason',
                                                   '--review-token'),
                                   produces=(artifact_paths.STAGE7_NAME_MAP,)),
     # 成书只能消费已批准的人名表；声明顺序同时是队列和进度屏的唯一顺序权威。
     'stage7.assemble':  NodeSpec('stage7', 'R-10', False, 'stage7 替换与成书',
-                                 lifecycle=NodeLifecycleSpec('book', '已批准人名表、文案与 canonical 正文', 'deterministic', 'none', '机械替换与交付对账', ('recompute', 'stop'), ('stage7.rename', 'stage7.assemble'), 'none', ('canonical',), 0, 0),
+                                 lifecycle=NodeLifecycleSpec('book', '已批准人名表、文案与 canonical 正文', 'deterministic', 'none', '机械替换与交付对账', ('recompute', 'stop'), ('stage7.rename', 'stage7.assemble'), 'none', ('canonical',), 0),
                                  produces=(artifact_paths.STAGE7_BOOK,),
                                  operator_redo='canonical'),
 }
@@ -2386,25 +2387,24 @@ assert all(owner in NODES for spec in NODES.values()
            for owner in spec.lifecycle.repair_owners)
 
 
-def commander_work_unit(waiting_on: str) -> tuple[str, str] | None:
-    """审阅 blocker 到预算属主／scope 的唯一投影；未知 blocker 不授予模型预算。"""
+def approval_work_unit(waiting_on: str) -> tuple[str, str] | None:
+    """审批 blocker 到 (属主节点, scope) 的唯一投影；未知 blocker 不归属任何节点。
+
+    历史上这是 Commander 审阅工作单元的预算属主投影；Commander 退役
+    （2026-09-15）后它继续回答「这道闸属于谁的工作面」，供 operator 审批
+    状态投影与存量书 reviewer 工作单元的只读解码使用。
+    """
     found = [(node, scope) for node, spec in NODES.items()
-             for blocker, scope in spec.lifecycle.commander_bindings
+             for blocker, scope in spec.lifecycle.approval_bindings
              if blocker == waiting_on]
     if len(found) > 1:
-        raise ValueError(f'Commander blocker 重复登记：{waiting_on}')
+        raise ValueError(f'审批 blocker 重复登记：{waiting_on}')
     return found[0] if found else None
 
 
-def commander_scope_allowed(node: str, scope: str) -> bool:
-    """审阅 scope 只由节点登记派生；未登记的 scope 不授予持久预算。"""
-    return scope in {value for _, value in NODES[node].lifecycle.commander_bindings}
-
-
-def commander_review_actions(waiting_on: str) -> tuple[str, ...]:
-    """当前 blocker 的审阅权限只由节点登记派生，未知 blocker 不授予动作。"""
-    identity = commander_work_unit(waiting_on)
-    return () if identity is None else NODES[identity[0]].lifecycle.review_actions
+def approval_scope_allowed(node: str, scope: str) -> bool:
+    """审批 scope 只由节点登记派生；未登记的 scope 不属于该节点的审批面。"""
+    return scope in {value for _, value in NODES[node].lifecycle.approval_bindings}
 
 #: 允许配置 executor agent 的现役节点。这里只列**真正调用生成/审判模型**的九个
 #: 付费节点；``stage4.context``、人工 approve 与机械 review 仍由代码执行，不能在
@@ -2571,14 +2571,6 @@ STAGE2_LEGACY_REVALIDATE_REASON: Final = (
 #: 同一席位内的真实 CLI 进程尝试种类：``launch`` 是新进程首发，``resume`` 是
 #: 用供应商 exact session id 续接同一 provider 会话。两者都不新开席位。
 COMMANDER_ATTEMPT_KINDS: Final = ('launch', 'resume')
-#: Commander 子进程的首事件超时：Popen 后这么久仍没有任何协议事件（Claude
-#: ``system/init``、Codex ``thread.started``）就判 0-wire 启动失败，可同席 relaunch。
-COMMANDER_FIRST_EVENT_TIMEOUT_SECONDS: Final = 600.0
-#: 空闲超时：stdout/stderr 连续这么久没有任何字节。Commander 一轮内部有工具调用
-#: 与模型往返，正常不会长时间静默；静默通常是 CLI 内部无限重连（实测 08-28
-#: websocket 连不上后每 60 秒重试）。超时后已捕获 provider session 的席位可 resume。
-COMMANDER_IDLE_TIMEOUT_SECONDS: Final = 1800.0
-#: 同一席位内最多几次真实进程尝试（含首发）；超过即席位以最后一次失败终态。
-COMMANDER_MAX_ATTEMPTS_PER_SEAT: Final = 3
-#: 同席重试前的退避秒数，按尝试序号取值，越界取最后一档。
-COMMANDER_RETRY_BACKOFF_SECONDS: Final = (30.0, 120.0)
+#: Commander 顶层子进程的首事件/空闲超时、同席尝试上限与重试退避已随角色
+#: 退役（2026-09-15）删除：这些是驱动层重试参数，executor 会话各自持有
+#: 独立的超时与尝试策略（见 ``novel/agents``），不再有全局 Commander 席位。

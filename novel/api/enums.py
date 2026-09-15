@@ -72,7 +72,6 @@ _WITHHELD: dict[str, str] = {
     'WORKFLOW_ROLE_CONTRACT': '工作流执行身份；界面只显示后端工作单元读模型',
     'WORK_UNIT_EXECUTOR_MAX_CONTENT_CALLS': '预算已由持久工作单元账折叠，前端不自行重算',
     'WORK_UNIT_MAX_DELIVERY_ATTEMPTS': '网络尝试上限只由工作单元底座执行，前端显示后端预算投影',
-    'WORK_UNIT_COMMANDER_MAX_CONTENT_CALLS': '同上，Commander 与 Executor 各自计数',
     'LEGACY_STAGE2_COMMANDER_SEAT_PURPOSES': '退役预审与终审只供历史审计解码',
     'LEGACY_STAGE2_COMMANDER_MAX_SEATS': '冻结旧席账的历史预算，不参与新工作单元',
     'LEGACY_STAGE2_COMMANDER_MAX_EDIT_SEAT': '冻结旧席账的历史编辑上限',
@@ -87,10 +86,6 @@ _WITHHELD: dict[str, str] = {
         '当前浏览器没有该 delegated rewrite 表单，单独发布会制造未接线的第二消费面'),
     'COMMANDER_ATTEMPT_KINDS': (
         '同席内 launch/resume 只写进席位账与 session 审计；不是 HTTP/UI 取值面'),
-    'COMMANDER_FIRST_EVENT_TIMEOUT_SECONDS': '调用层超时是驱动配置，不是前端读数',
-    'COMMANDER_IDLE_TIMEOUT_SECONDS': '同上',
-    'COMMANDER_MAX_ATTEMPTS_PER_SEAT': '同上：同席重试上限由 Supervisor 执行，前端只看结果',
-    'COMMANDER_RETRY_BACKOFF_SECONDS': '同上',
     'REVIEWER_APPROVAL_SURFACES': (
         'Commander reviewer typed request 的 approval 面闭集，只由 RunSupervisor 与'
         ' loader 消费；页面各审批面已有自己的 typed 表单，另发只会制造第二个消费面'),
