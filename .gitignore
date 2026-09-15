@@ -50,3 +50,6 @@ dist/
 #   要在别的机器上复现这条链接：`cd <仓根> && mklink CLAUDE.md AGENTS.md`
 #   （Windows 需管理员或开发者模式）/ `ln -s AGENTS.md CLAUDE.md`（类 Unix）。
 /CLAUDE.md
+
+# ZCode 会话工作区（计划/本地 agent 状态）：只在各人本地存在，不进仓
+.zcode/
