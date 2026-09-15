@@ -19,11 +19,15 @@ from uuid import uuid4
 
 from pydantic import BaseModel
 
-from contracts.invariants import NODES, approval_work_unit, approval_scope_allowed
+from contracts.invariants import (
+    BOOK_CONTENT_CALL_CEILING_DEFAULT, NODES, approval_work_unit,
+    approval_scope_allowed,
+)
 from contracts.schema.workflow import (
-    WorkflowManifestV6, WorkflowManifestV7, WorkUnitAttempt, WorkUnitBlobV1,
-    WorkUnitContentTurn, WorkUnitGroupBlobV1, WorkUnitLedgerV2, WorkUnitRegistryV1,
-    WorkUnitProcessing,
+    BookBudgetGrantV1, BookContentBudgetV1, WorkflowManifestV6,
+    WorkflowManifestV7, WorkUnitAttempt, WorkUnitBlobV1,
+    WorkUnitContentTurn, WorkUnitGroupBlobV1, WorkUnitLedgerV2,
+    WorkUnitRegistryV1, WorkUnitProcessing,
 )
 from contracts.schema.work_unit_recovery import CommanderFailureRecoveryReceipt
 from novel import paths
@@ -275,6 +279,75 @@ def require_workflow(base: str | os.PathLike[str]) -> WorkflowManifestV7:
     return manifest
 
 
+# ─── 整书级付费内容调用总闸 ────────────────────────────────────────────────
+
+def _book_budget_path(base: str | os.PathLike[str], sid: str) -> Path:
+    return _safe(base, paths.book_budget_path(base, sid))
+
+
+def read_book_budget(
+    base: str | os.PathLike[str], sid: str, *, task_id: str | None = None,
+) -> BookContentBudgetV1 | None:
+    """只读整书总闸账；缺账返回 None，坏账关闭式上抛，不把坏账当零。"""
+    path = _book_budget_path(base, sid)
+    if not path.is_file():
+        return None
+    budget = _read(base, path, BookContentBudgetV1)
+    if task_id is not None and budget.task_id != task_id:
+        raise WorkUnitRefused('整书预算账任务身份漂移')
+    return budget
+
+
+def _reserve_book_call(base: str | os.PathLike[str], identity: dict) -> None:
+    """在已持有的单元账锁内对整书总闸 +1；锁序恒为 单元账 → 整书账。
+
+    账在首次付费调用时创建；重启/恢复/重建 job 读的是同一份持久账，
+    已消耗额度不重置。坏账关闭式拒绝新调用（Q-13：付费副作用状态未知
+    不得绕过）。
+    """
+    path = _book_budget_path(base, identity['sid'])
+    with path_transaction_lock(path):
+        budget = read_book_budget(
+            base, identity['sid'], task_id=identity['task_id'])
+        if budget is None:
+            budget = BookContentBudgetV1(
+                task_id=identity['task_id'], sid=identity['sid'],
+                ceiling=BOOK_CONTENT_CALL_CEILING_DEFAULT)
+        if budget.remaining <= 0:
+            raise WorkUnitBudgetExhausted(
+                f'整书付费内容调用总闸已耗尽（{budget.used}/'
+                f'{budget.ceiling + sum(g.additional for g in budget.grants)}）——'
+                '这是跨全部工作单元的合计上限；请显式追加整书预算后再续跑，'
+                '自动恢复路径不得追加')
+        _write(base, path, budget.model_copy(update={'used': budget.used + 1}))
+
+
+def grant_book_budget(
+    base: str | os.PathLike[str], sid: str, *,
+    actor: str, reason: str, additional: int,
+    task_id: str | None = None,
+) -> BookContentBudgetV1:
+    """整书总闸的显式人工追加；唯一合法调用方是人工 HTTP/CLI 入口。"""
+    if not actor.strip() or not reason.strip():
+        raise WorkUnitRefused('整书预算追加必须显式给非空 actor 与 reason')
+    if not 1 <= additional <= 64:
+        raise WorkUnitRefused('整书预算单次追加必须在 1~64 之间')
+    manifest = require_workflow(base)
+    path = _book_budget_path(base, sid)
+    with path_transaction_lock(path):
+        budget = read_book_budget(base, sid, task_id=task_id)
+        if budget is None:
+            budget = BookContentBudgetV1(
+                task_id=manifest.task_id, sid=sid,
+                ceiling=BOOK_CONTENT_CALL_CEILING_DEFAULT)
+        grant = BookBudgetGrantV1(
+            actor=actor, reason=reason, additional=additional,
+            created_at=int(time.time()), before_used=budget.used)
+        updated = budget.model_copy(update={'grants': (*budget.grants, grant)})
+        _write(base, path, updated)
+        return updated
+
+
 @dataclass(frozen=True)
 class ContentReservation:
     unit_id: str
@@ -441,6 +514,10 @@ class WorkUnitBudget:
                 raise WorkUnitBudgetExhausted(
                     f'本工作单元内容预算已耗尽（{len(ledger.turns)}/{ledger.content_limit}），'
                     '请免费恢复、人工编辑或明确申请追加额度')
+            # 整书总闸在单元账写入之前判：被拒时单元账不留下未闭合的
+            # reserved 轮；反向（总闸已 +1 而单元账写失败）只是保守多计
+            # 一次，不构成付费风险。
+            _reserve_book_call(self.base, self.identity)
             turn = WorkUnitContentTurn(
                 turn_id=uuid4().hex, ordinal=len(ledger.turns) + 1,
                 request_sha256=request_sha256, run_id=run_id,

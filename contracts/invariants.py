@@ -2035,6 +2035,20 @@ WORKFLOW_ROLE_CONTRACT: Final = 'pipeline-cost-latency-v2'
 WORK_UNIT_EXECUTOR_MAX_CONTENT_CALLS: Final = 4
 WORK_UNIT_MAX_DELIVERY_ATTEMPTS: Final = 4
 WORK_UNIT_GRANT_ADDITIONS: Final = (1, 2, 3, 4)
+#: 整书级付费内容调用总闸（2026-09-15 全自动裁决）。
+#: 工作单元额度按 `(node, scope)` 各自记账，防不住跨单元的总量失控；本闸在
+#: `reserve` 时对整本书的**全部**内容调用合账设绝对上限。量级依据：正常完成
+#: 一本书每单元 1–2 次调用（≤ 约 100 次），全部单元同时耗尽 4×额度在 40 章
+#: 书上可达约 700——那已是灾难性质量事件，512 拦在它之前。持久于
+#: `_service/runs/<sid>/book_budget.json`，重启/恢复/重建 job 不重置；
+#: 追加只能显式人工（`novel/work_units.py::grant_book_budget`），
+#: 自动恢复路径不得追加。
+BOOK_CONTENT_CALL_CEILING_DEFAULT: Final = 512
+#: 确定性重建白名单（2026-09-15 全自动裁决）：改选等后置决定触发的自动重建
+#: 只允许进入这些节点（全部 `paid=False`、确定性）加交付终验
+#: （`novel/orchestrator/delivery.py`）。任何自动重建路径不得触发付费节点——
+#: 不是「顺便补齐上游」的整书 start。测试钉扎白名单节点的付费与确定性。
+DETERMINISTIC_REBUILD_NODES: Final = frozenset({'stage7.assemble'})
 
 
 class NodeLifecycleSpec(NamedTuple):

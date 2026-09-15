@@ -107,6 +107,40 @@ def test_unver_rule_cannot_be_repairable():
         Registry().register(_ok(sev='unver', **_FIX))
 
 
+def test_disclosable_unver_requires_unver_severity():
+    """Q-13 披露分层：hard/info/metric 的命中是**有结论的**，走修复或阻断，
+    不存在「降为披露」这回事；置位只留给内容质量层面的 unver。"""
+    with pytest.raises(ValueError, match='disclosable_unver'):
+        Registry().register(_ok(sev='hard', disclosable_unver=True))
+
+
+def test_degradable_requires_hard_with_repair_path():
+    """可降级目标 = 生成期按 HARD 修复、预算耗尽后降披露 ⇒ 必须既有修复路。
+    没有修复路的 HARD 是交付硬约束，不存在「耗尽后降级」。"""
+    with pytest.raises(ValueError, match='degradable'):
+        Registry().register(_ok(sev='hard', degradable=True))   # 无 repair
+    Registry().register(_ok(sev='hard', degradable=True, **_FIX))  # 有修复路则过
+
+
+def test_disclosure_and_degradable_sets_are_pinned():
+    """披露集合与可降级集合是逐条人工裁决（Q-13 / §七），双向钉扎：
+
+    · 反向：新置位判据未同步更新本钉扎 ⇒ 集合悄悄漂，披露面/降级面失控；
+    · 正向：集合空了 ⇒ 分层机制被整体绕开，上面那条反向断言照样绿。
+    """
+    from contracts.rules import REGISTRY
+    disclosed = {r.rule for r in REGISTRY.all() if r.disclosable_unver}
+    assert disclosed == {
+        'role_fate_unverifiable', 'secrets_absent', 'plot_semantics'}, \
+        '披露集合变化须同步 Q-13 理由与本钉扎'
+    degradable = {r.rule for r in REGISTRY.all() if r.degradable}
+    assert degradable == {'paragraph_budget_missed'}, \
+        '可降级集合变化须同步契约 §七 与本钉扎'
+    # 披露集合同时是机械准入的唯一披露面（单一落点）
+    from novel.orchestrator.mechanical_admission import SEMANTIC_UNREVIEWED_RULES
+    assert SEMANTIC_UNREVIEWED_RULES == frozenset(disclosed)
+
+
 @pytest.mark.parametrize('bad', ['unique', 'free', 'none', '', 'YES'])
 def test_repair_bucket_must_be_one_of_the_three(bad):
     """⚠ `Literal` 在运行时不拦任何东西，而这一格写歪的后果是**会花钱**：

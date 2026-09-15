@@ -20,6 +20,14 @@ v5 → v6 使用独立 prepared v2，原冻结代码必须另行证明 Stage5 �
 commander_* 更名）。基础内容额度四次；新候选、新会话、新 run 和新 epoch 都沿用原账。
 网络重试单列为 attempt，缓存命中单列。追加金额只表示允许增加的内容调用次数，不是货币费用。
 
+**整书级付费内容调用总闸**（2026-09-15）：`BookContentBudgetV1` 持久于
+`novel/paths.py::book_budget_path`（`_service/runs/<sid>/book_budget.json`），对同一本书
+**全部**工作单元的内容调用合账设绝对上限（默认 `BOOK_CONTENT_CALL_CEILING_DEFAULT=512`）。
+只有 `WorkUnitBudget.reserve` 计数；网络重试共享同一 reservation、免费恢复与 prepared 补尾
+不计数。坏账关闭式拒绝新调用，不作零（Q-13）。重启、恢复、重建 job 不重置；追加只能经
+`novel/work_units.py::grant_book_budget` 显式人工（actor/reason 必填），自动恢复路径不得
+追加。反例见 `tests/test_book_budget.py`。
+
 人工追加入口为运行页工作单元详情，API 为
 `GET/POST /api/novels/:sid/work-units/:unit_id/grant`，唯一实现是
 `novel/orchestrator/work_unit_grants.py`。GET 不创建锁、账或模型请求；成本只来自实际 ledger，

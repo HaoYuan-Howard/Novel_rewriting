@@ -409,3 +409,16 @@ def test_node_lifecycle_covers_real_nodes_and_preserves_boundaries():
     assert NODES['stage5.review'].lifecycle.generation_mode == 'deterministic'
     assert NODES['stage4.design'].lifecycle.session_scope != NODES['stage4.plan'].lifecycle.session_scope
     assert NODES['stage6.semantic'].lifecycle.unit_kind == 'judge'
+
+
+def test_deterministic_rebuild_whitelist_is_free_and_deterministic():
+    """确定性重建白名单（2026-09-15 全自动裁决）：自动重建只允许进入
+    paid=False 且确定性生成的节点 + 交付终验；任何自动重建路径不得触发
+    付费节点。双向钉扎：白名单空了 = 分层机制被整体绕开。"""
+    from contracts.invariants import DETERMINISTIC_REBUILD_NODES, NODES
+    assert DETERMINISTIC_REBUILD_NODES, '白名单不得为空——改选等自动重建需要显式边界'
+    for node in DETERMINISTIC_REBUILD_NODES:
+        spec = NODES[node]
+        assert not spec.paid, f'{node} 是付费节点，不得进入自动重建白名单'
+        assert spec.lifecycle.generation_mode == 'deterministic', (
+            f'{node} 不是确定性生成，不得进入自动重建白名单')

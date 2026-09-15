@@ -136,10 +136,11 @@ _hard('hedge_words', '身份 / 显示名里没有模棱语', 'R-2.6', wordlist=T
 
 
 _unver('role_fate_unverifiable', '改写式结局泄漏有确定性防线', 'R-2.6',
+       who_checks='HUMAN', disclosable_unver=True,
        note='⚠⚠ **本仓改成无条件产出**（同 F4-6 对 `name_surface_survey` 的处置）。'
             '原型把它挂在 `if not leaky` 那一支上——`role_leaks_fate` 命中的那两本'
             '**根本走不到它**，于是「这一维没有确定性防线」这句话'
-            '**在最需要说的两本上反而不说**。'
+            '在最需要说的两本上反而不说。'
             '⇒ 本条与 `role_leaks_fate` 报绿灯还是红灯无关，**每本每次都产**：'
             '词表只挡转抄式（实测头牌命中 0/17 而人读真违规 6/17），'
             '改写式泄漏仍须人读；人工核对后的 typed `role` 可用 '
@@ -157,7 +158,9 @@ _hard('canon_chapter_refs_dangling', 'Global 全部成立、揭示、铺垫及�
 
 
 
-_unver('secrets_absent', '长线秘密覆盖完整性的语义核验', 'R-2.9b', note='Stage2 语义未审：数量包括合法空集都不证明全书覆盖；本条不产生审批待办。')
+_unver('secrets_absent', '长线秘密覆盖完整性的语义核验', 'R-2.9b',
+       disclosable_unver=True,
+       note='Stage2 语义未审：数量包括合法空集都不证明全书覆盖；本条不产生审批待办。')
 
 _hard('relation_dangling', '长期关系两端属于独立人物登记', 'R-2.8', fix=FIX_RESAMPLE)
 
@@ -186,6 +189,7 @@ _metric('plot_shape', '完整节点、状态、约束与共享证据数量', 'R-
         note='只报告实际规模，不设节点配额，不把辅助结构变回事实数据库。')
 _metric('context_scope', '实际逐章抽取契约与正文边界', 'R-3.16b')
 _unver('plot_semantics', '完整剧情、归因、因果与揭示的语义核验', 'R-3.13',
+       disclosable_unver=True,
        note='Stage2 语义未审：普通 schema/坐标检查不能证明语义完整；本条不产生审批待办。')
 
 # Global v7 的机械闭合；语义提升门槛与同章情节单元交给同一全书审阅。

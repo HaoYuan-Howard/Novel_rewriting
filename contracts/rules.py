@@ -9,7 +9,7 @@ rules.py —— 判据注册表。**判据表只有一张**，key 重复当场�
 原型实测过一次：四条确定性检查在新契约下**三条静默失效、一条全量误报**（结论恒为「需修订」）。
 两种故障方向相反、危害相同：**报告不再携带信息**。
 
-【注册期就校验，不等到跑的时候】九条，每条都对应一次已发生的损失，见 `_validate`。
+【注册期就校验，不等到跑的时候】十一条，每条都对应一次已发生的损失或一次裁决出的边界，见 `_validate`。
 
 Stage3 已整层退役；注册表必须完整覆盖其余七个现役层。
 """
@@ -111,6 +111,20 @@ class Rule:
     #: Registered prompt surface that is responsible for providing those IDs.
     prompt_surface: str | None = None
 
+    #: 【披露分层（Q-13）】仅**内容质量层面**的不可验证项允许置位：进交付
+    #: 披露、不阻断机械准入。产物完整性、契约有效性、输入新鲜度、机械检查
+    #: 执行状态与付费副作用状态的 unknown **永远不得置位**——它们只能走恢复
+    #: 路径或终态失败，披露不是「没查成」的出路（把前提/执行状态的 unver
+    #: 披露出去等于把「检查本身不可判」当「查过没问题」卖）。置位是逐条人工
+    #: 裁决：新增披露判据必须同步更新 ``tests`` 里的披露集合钉扎与 Q-13 理由。
+    disclosable_unver: bool = False
+
+    #: 【交付硬约束 vs 可降级目标（契约 §七）】True = 这是一条**从一开始就定义
+    #: 为可降级的目标偏差**：生成期照常按 HARD 驱动预算内修复，预算耗尽后按
+    #: 预定义规则降为交付披露——不是四次失败之后把 HARD 临时改 WARN。
+    #: False（默认）= 交付硬约束：未满足即阻断交付，预算耗尽即终态失败。
+    degradable: bool = False
+
 
 @dataclass(frozen=True)
 class PromptSurface:
@@ -189,7 +203,7 @@ class Registry:
 
 
 def _validate(r: Rule, prompt_surfaces: dict[str, PromptSurface]) -> None:
-    """注册期校验。七条，每条对应一次已发生的损失。"""
+    """注册期校验。逐条对应已发生的损失或裁决出的边界（Q-13 披露分层、可降级目标）。"""
 
     # ① 取值域闭合。`dict.get(key, 默认值)` 用在契约枚举上，就是给违约数据发一张静默通行证。
     if r.sev not in SEVERITY:
@@ -288,7 +302,26 @@ def _validate(r: Rule, prompt_surfaces: dict[str, PromptSurface]) -> None:
             f'不进的必须留空——一句永远发不出去的指令会被下一个人当成现役的'
         )
 
-    # ⑧ `fix` 指的必须是**真跑得起来的那条命令**。四道，各消灭一种故障：
+    # ⑧ 披露分层（Q-13）：只有 unver 判据可置位 disclosable_unver——hard/info/
+    #    metric 的命中是**有结论的**，走各自的原路（修复或阻断），不存在
+    #    「降为披露」这回事。内容质量 vs 完整性/执行状态的边界由置位本身逐条
+    #    裁决，并由准入测试的披露集合钉扎守着。
+    if r.disclosable_unver and r.sev != 'unver':
+        raise ValueError(
+            f'{r.rule}: disclosable_unver 只允许 unver 判据置位'
+            f'（当前 sev={r.sev!r}）。'
+            f'产物完整性/契约有效性/输入新鲜度/检查执行状态的未知不得通过披露绕过')
+
+    # ⑨ 可降级目标必须有可耗尽的模型修复路径；没有修复路的 HARD 是交付硬约束，
+    #    不存在「预算耗尽后降级」这回事。
+    if r.degradable and (r.sev != 'hard' or r.repair == 'NONE'):
+        raise ValueError(
+            f'{r.rule}: degradable 要求 sev=hard 且 repair != NONE'
+            f'（当前 sev={r.sev!r}, repair={r.repair!r}）。'
+            f'可降级目标偏差必须既有生成期修复路，才有「预算耗尽后降为披露」可言；'
+            f'其余 HARD 一律是交付硬约束')
+
+    # ⑩ `fix` 指的必须是**真跑得起来的那条命令**。四道，各消灭一种故障：
     #      · 节点名拼错   ⇒ 界面上那个「去修」按钮点下去是 404，而表里看不出来；
     #      · flag 不在该节点的 `flags` 里 ⇒ `build_argv` 当场拒收，
     #        于是「这一条能 0 成本修」是一句**永远兑现不了**的承诺；

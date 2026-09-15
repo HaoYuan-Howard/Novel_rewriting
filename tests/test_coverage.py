@@ -80,13 +80,14 @@ _R_SECTION_SIZES = {
     # 2026-09-04：R-11.25 冻结 Commander approval 决定的内容寻址持久化与零模型重放；
     # R-12.2a 冻结 Claude/Codex 公共严格响应 schema 与动态映射 wire。
     # R-11.23b：受管运行范围上界与保持额度的原配置续跑。
-    'R-10': 34, 'R-11': 28, 'R-12': 15, 'R-13': 9, 'R-14': 8,
+    'R-10': 34, 'R-11': 29, 'R-12': 15, 'R-13': 9, 'R-14': 8,
 }
 
 
 def test_doc_parses_and_has_all_three_families():
     q, b = DOC.of_kind('Q'), DOC.of_kind('B')
-    assert len(q) == 12, f'Q 应有 12 条，实得 {len(q)}'
+    # 2026-09-15 新增 Q-13（披露分层：仅内容质量类不可验证项可进交付披露）。
+    assert len(q) == 13, f'Q 应有 13 条，实得 {len(q)}'
     # 2026-08-23 新增 B-23（：守卫自陈排除掉的样本此后没被判过）。
     assert len(b) == 23, f'B 应有 23 条，实得 {len(b)}'
 

@@ -306,7 +306,11 @@
       "layer": "unit_contract",
       "stages": []
     },
-    "tests/test_cli.py": {
+    "tests/test_book_budget.py": {
+    "layer": "unit_contract",
+    "stages": []
+  },
+  "tests/test_cli.py": {
       "layer": "unit_contract",
       "stages": []
     },

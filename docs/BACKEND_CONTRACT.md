@@ -347,7 +347,7 @@ A 脱离源顺序设计，B 给冻结候选绑定证据，代码编译正式计�
 | R-7.22c | **守卫自陈排除掉的样本，要说清它们此后没有被判过**：`noatom` fact 被计数、被报出，但语义落点没有可靠第二把自动尺子 | **无守卫 → `B-23`** |
 | R-7.23 | 自造的数字在**跨章之间**不许打架——同一件事在两章里写成两个数，两处都不是原作给的，选哪个都行**但必须一致** | `INFO` |
 | R-7.24 | `stage5.write --apply-edit` 是 **0 LLM 调用的新人工修订轮**，不是一个局部文本补丁。输入必须是文件名指向的单章完整 `ChapterResponse`，`segments` 覆盖该章全部 producer-owned slot 且每个恰好一次；缺 slot、多 slot或只交一段差异均关闭式拒绝。`--recheck` 只刷新 v2 派生字段，不归一或改写 segments、任务快照与写作 provenance；`--revalidate` 按 `.INVALID` 保存的原始 segments 重判，提升不能借机修改正文 | `结构`（`ChapterResponse` + `novel/stages/stage5/write.py::run_apply_edit` / `run_recheck` / `run_revalidate`）+ 回归测试 |
-| R-7.25 | 写手收到的自然段数量目标必须与落盘判据共用同一公式：逐章篇幅带除以本书 `avg_paragraph_chars + paragraph_sep_chars`，下限至少 3、上限至少 4。`paragraph_count_report` 无条件报实际值与目标；越界由 `paragraph_budget_missed` **HARD** 拦成 `.INVALID`，不得由 `--apply-edit` 正式化 | `HARD`（`paragraph_budget_missed`）+ `度量`（`paragraph_count_report`）；两者共用 `novel/stages/stage5/measure.py::target_paragraphs` 与 `novel/stages/stage5/checks.py::_paragraph_budget` |
+| R-7.25 | 写手收到的自然段数量目标必须与落盘判据共用同一公式：逐章篇幅带除以本书 `avg_paragraph_chars + paragraph_sep_chars`，下限至少 3、上限至少 4。`paragraph_count_report` 无条件报实际值与目标；越界由 `paragraph_budget_missed` **HARD** 拦成 `.INVALID`，不得由 `--apply-edit` 正式化。⚠ 本条是 §七登记的**可降级目标偏差**（`degradable=True`）：生成期照常 HARD 驱动预算内修复，预算耗尽后按预定义规则降为交付披露，不是事后改 WARN | `HARD`（`paragraph_budget_missed`）+ `度量`（`paragraph_count_report`）；两者共用 `novel/stages/stage5/measure.py::target_paragraphs` 与 `novel/stages/stage5/checks.py::_paragraph_budget` |
 | R-7.26 | fresh 只代表 Review 结论仍绑定当前主体，不代表当前主体可以正式下游消费。s5 审批、Stage6、Stage7 与最终交付必须再要求 accepted Review：无活动 `.INVALID`、计划章均有正式稿、当前 Review 无 HARD | `结构`（唯一出口 `novel/stages/stage5/review.py::require_accepted_review`；`novel/orchestrator/approvals.py::_stage5_subject_rels`、`novel/stages/stage6/hook.py::_Upstreams`、`novel/stages/stage7/rename.py::_Upstreams` 共用）+ 回归测试 |
 | R-7.27 | foreign `prepared` 是旧 run 已完成有效 initial-write 响应、却未可靠提交 canonical 的尾窗，不是第二条写作臂。默认付费写作必须在 client、driver factory、session、probe、cache 与 wire 前关闭式拒绝其目标章；唯一恢复路是同一个新 target run 先 `--emit-prepared-recovery-workpack <SOURCE_RUN_ID>`、再以工作包完整 SHA-256、actor/reason 执行 `--recover-prepared`。两入口均为 FREE，禁止 executor profile/egress、`--chapters`、`--revise` 与 response repair，恢复期间 target run 的持久 ledger/session 及当前 run 计数必须共同证明零 wire、零 cache、零 session | `结构`（`contracts/invariants.py::FREE_ENTRIES` / `VALUED_FLAGS` + `novel/stages/stage5/write.py` 的付费最低边界与 recovery producer）+ `tests/test_stage5_prepared_recovery.py` |
 | R-7.27b | apply 不是“checkpoint 存在即采用”：必须重验 current Stage4 typed 最终结构批准、current WriterContext、独立 writing proof、source 章仍在当前计划，以及当前代码下的输入、prompt、schema、业务 validator、HARD 与 live baseline。正常 Stage5 Review 因尾窗未闭合而 stale 时不反向堵死这条专用恢复路；恢复会使 Review stale，全部收口后仍须单独重跑 `stage5.review` | `结构`（`novel/orchestrator/approvals.py::authorize_prepared_recovery` + `novel/stages/stage5/write.py::run_prepared_recovery`）+ 审批与 recovery 回归测试 |
@@ -519,6 +519,7 @@ freshness 唯一入口是 `novel/stages/stage5/review.py::review_status`，实�
 | R-11.24 | 运行页必须把三种事实分开呈现：节点 beacon 给“当前正在执行什么”，operator 同快照给“下一节点/下一处理者”，AgentRun lifecycle 给“当前或最后 execution epoch、rollover 原因与累计换 epoch 次数”。空 beacon 不得把下一节点伪装成正在执行，epoch rollover 也不得藏在日志里；三者都只呈现后端事实，不由前端推断新鲜度或调度 | `结构`（`web/src/screens/run/RunScreen.tsx::ResumeFrontier` / `::AgentRunBlock`）+ 前端回归 |
 | R-11.25 | 受托 Commander 审阅已退役；本条的持久化语义继续约束存量书的历史决定与 Stage5 reviewer rewrite 执行链。历史/Reviewer 决定先持久保存原始回答，再通过同源 typed loader，把可执行决定按内容寻址写入 `_service/edits/<sid>/reviewer-action-<sha256>.json`，之后才取得当前 permit 与调用 canonical producer；现役人工审批只经 typed façade，不产生模型决定记录。新决定必须携 `work_unit_id / work_unit_turn_id`，并以工作单元原响应、business、waiting_on、typed action SHA、原物理 session 与 provider response digest 联结；恢复窗口的 run/epoch 包装变化不改变真实调用所属 parent。工作包、请求、原始响应和 typed 决定分别落盘；缺失或损坏保持 unknown，不能重新发放内容预算。`NODES.lifecycle.review_actions` 登记 accept/编辑/rework/uncertain/stop 的节点实际子集，`approval_projection` 只投影同一 operator 快照的有效审阅原状态。`ReviewerStopAction` 的 stop/uncertain 均只持久保存本次响应与明确原因，不铸可执行 action 或 permit，也不当作格式错误继续纠错。已保存响应优先免费重验、补提交；Blueprint 与 Stage6/7 的 business 绑定审阅主体、裁决契约与当前义务，代码版本及 validation seal 只守执行和提交竞态，不因代码修复重购。原请求、原回答、原 owner/session/cost 闭合后，只有实际阅读材料、裁决说明、输出 schema 及可选动作未变，才可更新登记的临时提交凭证并用当前 loader/producer 免费重验。首次 typed 证明不可改写；后继 action 仍引用原内容轮且决定、理由、编辑值相同，先保存并核验后继再退休旧记录，中断可补尾。格式/内容拒绝需先保存反馈再关闭重放，同一错误无进展提前停止。canonical exit 0 后标记 adopted；exit 1 表示已落盘但未通过，exit 2 表示明确拒绝，exit 70 表示未知，不能互相代替。Stage6 Prepare 原回答、独立决定与免费编辑也先耐久，再按本 owner 冻结基线 CAS 发布；任何 paid/free 提交窗口优先走 --recover-prepared/--recover-edit，必须由完成 journal 与当前目标证明原 C 已采用，不能凭 actor 或 exit 文案猜测。Stage5 retain 整批与有序非空 rewrite targets 互斥，其 review/contract、audit/章 SHA 和关闭式 directive 仍精确绑定当前工作包。rewrite request 的永久 authority 保留原 action 字节、request raw/self SHA、原内容轮、唯一成功 provider attempt、对应 logical-session turn 与成本账；新工作单元封存只绑定该次不可变响应证据，后续连续审阅或 delivered→adopted 不得破坏已有 seal，不要求整个 logical session 提前结束。跨 parent 补提交必须持真实内容调用 owner-stopped lease 直到 seal 完成，不能用新的 record 包装冒充原 owner。历史旧席账和协议恢复只供冻结旧契约的审计与原证明复读，不参与新工作单元运行或预算重置。 | `结构`（`novel/work_units.py::validate_reviewer_record` / `WorkUnitBudget` + `novel/orchestrator/reviewer_legacy.py`（历史 request 文档/席位账/协议恢复解码） + `novel/orchestrator/reviewer_action_evidence.py::validate_stage5_action_record_ledger` / `::_closed_evidence_hashes` / `::seal_reviewer_rewrite_authority` + `novel/orchestrator/uploads.py::load_reviewer_actions`）；原回答/typed决定/提交分离、跨parent、无模型补提交、未知保留、连续审阅历史seal与预算不重置反例 |
 | R-11.26 | **agent CLI 共用一层可恢复 JSONL 子进程调用（`novel/agents/jsonl_runner.py`），网络/瞬态故障在同一内容请求内续接，不扣新内容轮。** 公共 runner 只定义一次进程组创建、三线程泵、按 owner 的 cancel、幂等 close 与 Popen 后 launch 回调；stdout 逐行流式解析、协议事件即时回调、首事件在线 session 指针、三档超时与同席 exact-resume/relaunch 是历史 Commander 审阅链的会话语义——首事件 `session_id` 到达即写 `CommanderSessionPointer`、`COMMANDER_FIRST_EVENT_TIMEOUT_SECONDS` / `COMMANDER_IDLE_TIMEOUT_SECONDS` / `COMMANDER_MAX_ATTEMPTS_PER_SEAT` / `COMMANDER_RETRY_BACKOFF_SECONDS` 常量族已随角色删除，账上指针与超时记录只读解码。现役 executor 协议不做流式解析，只保留总超时并把公共异常映射回本层 typed 错误。非 0 退出与超时都经 executor 侧同一分类器（`classify_agent_command_failure`）得到 `failure_kind / retryable / wire_evidence`：可重试且已捕获 provider session 的失败在同席 **resume**（Claude `--resume`、Codex `exec resume`，续接提示不重发工作包），0-wire 启动失败在同席 **relaunch**，每席按登记上限执行真实进程尝试并退避；authentication / usage_limit / permission / 协议错 / model drift / provider session 被他人占用一律不重试。Codex/Claude 已提供的当前结构化失败是分类权威；未知或空的明确失败仍是未知，不拼入无关 stderr 警告，也不借模型回答或此前已恢复的错误推导重试。只有缺少结构化失败时才使用 CLI stderr。已实测的完整模型容量不足拒绝归既有 `provider_transient`，沿用同席上限与退避，不换模型、不返还席位。每次 attempt 都逐次落成本账（`attempt_id` 唯一）、`agent_sessions.jsonl` 的 `attempt` 事件（席内序号 `delivery_attempts`）与对应工作单元内容轮的 `attempts[]`；已取得 provider session 的失败尝试再记一条带 `error_kind` 的 provider turn，同一 logical session 的 `turn_index` 严格递增。内容轮预留、`reserved`、launch ticket 只属于第一次尝试；宿主崩溃留下的 `reserved` 仍按 R-11.22 不返还 | `结构`（`novel/agents/jsonl_runner.py::JsonlProcessRunner` + `novel/agents/base.py` 默认可取消 runner 与 `classify_agent_command_failure` + `novel/agents/session_client.py` + `novel/agents/session_audit.py::fold` + `novel/work_units.py::WorkUnitBudget.record_attempt` / `::WorkUnitBudget.save_response`）；owner 取消、分类与部分观测、同席 resume/relaunch/上限/不可重试、attempt/response 逐次落账与历史指针文件回归查 |
+| R-11.27 | **确定性重建白名单**（2026-09-15 全自动裁决）：后置人工决定（如 Stage6 文案改选）触发的自动重建，只允许进入 `contracts/invariants.py::DETERMINISTIC_REBUILD_NODES` 登记的节点（全部 `paid=False` 且 `generation_mode='deterministic'`）加只读交付终验；任何自动重建路径不得触发付费节点，也不得借道整书 start「顺便补齐上游」。白名单钉扎测试双向守卫：混入付费节点即红，白名单清空即红（分层被整体绕开同样不可接受） | `结构`（`contracts/invariants.py::DETERMINISTIC_REBUILD_NODES` + `tests/test_invariants.py::test_deterministic_rebuild_whitelist_is_free_and_deterministic`）+ 白名单收缩/清空反例 |
 
 以下只保留跨层顺序与拒绝边界，字段清单不在此重复：
 
@@ -622,7 +623,7 @@ freshness 唯一入口是 `novel/stages/stage5/review.py::review_status`，实�
 - 原子替换单个文件不等于跨文件事务。中断矩阵、内存队列限制与补尾条件见 `docs/schema/_orchestration.md` §八；
   具体操作以 `docs/OPERATIONS.md` 为准，生命周期反例见 `tests/test_service_lifecycle.py`。
 
-## 三、工程约束 Q-1 ~ Q-12
+## 三、工程约束 Q-1 ~ Q-13
 
 跨阶段成立。它们不是「最佳实践」，每一条都对应一次已发生的损失。
 
@@ -697,6 +698,15 @@ typed `--apply-edit` 是新人工轮次，旧主体决定按依赖失效，不�
 终审成本只认 `<base>/_service/ledger.jsonl`；实付与缓存命中分列，局部 provenance、日志与报告不能重复加总，
 reasoning 已含在 completion 中时不再累加。
 
+**额度与重试层级**（2026-09-15 全自动裁决补全）：付费内容调用有两层持久额度——每工作单元
+`WORK_UNIT_EXECUTOR_MAX_CONTENT_CALLS`（含首次生成），以及**整书级总闸**
+`BOOK_CONTENT_CALL_CEILING_DEFAULT`（跨全部工作单元合账，持久于
+`_service/runs/<sid>/book_budget.json`，仅 `WorkUnitBudget.reserve` 计数）。重启、恢复、
+重建 job 不重置任一层；追加只能显式人工（单元 `work_unit_grants`、整书
+`novel/work_units.py::grant_book_budget`），自动恢复路径不得追加。重试不叠加放大：
+网络层重试共享同一 reservation 不耗新额度，语义轮走内容额度，queue/supervisor
+从不扩张已确认的付费命令面；反例见 `tests/test_book_budget.py`、`tests/test_work_units.py`。
+
 ### Q-11 · 缓存
 
 关闭缓存同时关闭读写；缓存命中与真实调用分别记账；已合法保存的回答优先免费恢复。
@@ -709,6 +719,18 @@ reasoning 已含在 completion 中时不再累加。
 不能只改校验器。保留两类反例：旧守卫恒通过或全量误报；改名后消费链静默生成空材料。
 `tests/test_coverage.py`、`tests/test_hard_counterexamples.py` 与 `tests/test_ingest_fixtures.py` 分别守
 双向关联、真实判据分支和摄入边界；测试通过不等于未被覆盖的语义也正确。
+
+### Q-13 · 披露边界（未知分层）
+
+**仅内容质量层面的不可验证项允许进入交付披露**（未执行语义评估、可降级目标偏差见 §七分级）。
+产物完整性、契约有效性、输入新鲜度、机械检查执行状态与付费副作用状态的 unknown **不得通过披露
+绕过**：进入对应恢复路径或终态失败。机械检查器异常退出（exit 3/70/未登记码）保持 fail-closed，
+不得折成「通过但有披露」。
+
+唯一落点：判据注册表 `Rule.disclosable_unver`（注册期校验只收 `sev=unver`；集合双向钉扎在
+`tests/test_rules_registry.py::test_disclosure_and_degradable_sets_are_pinned`），机械准入
+`novel/orchestrator/mechanical_admission.py::SEMANTIC_UNREVIEWED_RULES` 从注册表派生，
+表外任何 `unver`/`skipped` 一律按不可判阻断。`ready_with_disclosures` 只装质量类披露。
 
 ## 四、无守卫清单 B-01 ~ B-23
 
@@ -803,6 +825,15 @@ reasoning 已含在 completion 中时不再累加。
 处理顺序：首轮生成 → 机械检查 → deterministic 先修 → UNIQUE 才可付费修 → 连续两轮未消转人 →
 全规则回归 → Stage5 Review 只在 `review_status == fresh` 时驱动后续；Stage6 才有独立语义审判。unver 与 skipped 不属于四种修复，
 也不得洗成通过。
+
+**交付硬约束 vs 可降级目标偏差**（2026-09-15 全自动裁决；分级落在 `Rule.degradable`，注册期校验
+`degradable=True` 要求 `sev=hard` 且有修复路，集合钉扎同 Q-13）：
+
+- 未标记的 HARD 是**交付硬约束**（缺章、schema 无效、指纹不一致、替换正确性、覆盖游走等）：
+  不满足即阻断交付，预算内修复，耗尽即终态失败。
+- 标记 `degradable=True` 的是**从一开始就定义为可降级的目标偏差**（现役仅 `paragraph_budget_missed`）：
+  生成期照常按 HARD 驱动预算内修复；预算耗尽后按预定义规则降为交付披露，不是四次失败之后把
+  HARD 临时改 WARN。降级事实随交付披露常驻（Q-13），不静默、不作零。
 
 唯一落点：路由算法 `novel/report/builder.py::remediation_of`；付费筛选
 `novel/stages/stage5/write.py::revise_targets`；轮次上限

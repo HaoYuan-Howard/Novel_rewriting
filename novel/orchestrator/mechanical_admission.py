@@ -35,16 +35,16 @@ from novel.orchestrator import state as st
 from novel.store import ArtifactStore
 
 #: 语义未审的登记规则。这些 ``unver`` 行**不阻断**机械准入，只作为
-#: “Stage2 语义未审”披露输出；表外任何 ``unver``/``skipped`` 都按
-#: 机械不可判阻断。新增语义披露必须先登记到这里并说明为什么不阻断。
-SEMANTIC_UNREVIEWED_RULES: frozenset[str] = frozenset({
-    # R-2.6：改写式结局泄漏没有确定性防线，须人读。
-    'role_fate_unverifiable',
-    # R-2.9b：长线秘密覆盖完整性由语义核验；数量不能证明覆盖。
-    'secrets_absent',
-    # R-3.13：完整剧情、归因、因果与揭示不能由形状检查证明。
-    'plot_semantics',
-})
+# “Stage2 语义未审”披露输出；表外任何 ``unver``/``skipped`` 都按
+# 机械不可判阻断。**唯一落点是判据注册表的 ``disclosable_unver`` 位**
+# （Q-13 披露分层）：只有内容质量层面的不可验证项允许进交付披露；
+# 产物完整性/契约有效性/输入新鲜度/检查执行状态的未知不得置位，
+# 由注册期校验与披露集合钉扎测试共同守着。
+import contracts.judges  # noqa: F401  —— import 即注册；派生前必须完成注册
+from contracts.rules import REGISTRY
+
+SEMANTIC_UNREVIEWED_RULES: frozenset[str] = frozenset(
+    rule.rule for rule in REGISTRY.all() if rule.disclosable_unver)
 
 SEMANTIC_UNREVIEWED_NOTE = (
     'Stage2 语义未审：机械检查只证明形状、引用与证据闭合，'

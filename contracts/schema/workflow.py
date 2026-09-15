@@ -368,3 +368,39 @@ class WorkUnitRegistryV1(FrozenModel):
     task_id: Sha256
     sid: str = Field(min_length=1)
     unit_ids: tuple[Sha256, ...] = ()
+
+
+class BookBudgetGrantV1(FrozenModel):
+    """整书付费总闸的显式人工追加；自动恢复路径不得调用。"""
+
+    actor: str = Field(min_length=1, max_length=120)
+    reason: str = Field(min_length=1, max_length=2000)
+    additional: int = Field(ge=1, le=64, strict=True)
+    created_at: int = Field(ge=0)
+    before_used: int = Field(ge=0)
+
+    @model_validator(mode='after')
+    def _reason_is_real(self) -> 'BookBudgetGrantV1':
+        if not self.reason.strip() or not self.actor.strip():
+            raise ValueError('整书预算追加必须有 actor 与理由')
+        return self
+
+
+class BookContentBudgetV1(FrozenModel):
+    """整书级付费内容调用总闸的持久账（跨全部工作单元合账）。
+
+    ``used`` 只在 ``WorkUnitBudget.reserve`` 成功时 +1：网络层重试共享同一
+    reservation、免费恢复与 prepared 补尾不计数（重试层级不变式，契约 §七）。
+    账随书目录持久，重启/恢复/重建 job 不重置；坏账关闭式拒绝新调用。
+    """
+
+    schema_version: Literal[1] = 1
+    task_id: Sha256
+    sid: str = Field(min_length=1)
+    ceiling: int = Field(ge=1)
+    used: int = Field(default=0, ge=0)
+    grants: tuple[BookBudgetGrantV1, ...] = ()
+
+    @property
+    def remaining(self) -> int:
+        return self.ceiling + sum(g.additional for g in self.grants) - self.used
