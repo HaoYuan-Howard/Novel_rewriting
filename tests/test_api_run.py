@@ -66,10 +66,12 @@ def test_empty_base_is_all_pending(client):
 
 def test_beacon_events_fold_into_steps(client):
     c, base = client
+    # stage0.approve / stage0.edit 已退役（2026-09-15）：fold 节点面 = NODES，
+    # 改用现役节点名钉同一组状态。
     beacon.append(base, _ev(10, 'stage0.remove', 'start'))
     beacon.append(base, _ev(20, 'stage0.remove', 'end', exit_code=0))
-    beacon.append(base, _ev(30, 'stage0.approve', 'start'))
-    beacon.append(base, _ev(31, 'stage0.edit', 'end', exit_code=1))
+    beacon.append(base, _ev(30, 'stage2.analyze', 'start'))
+    beacon.append(base, _ev(31, 'stage2.characters', 'end', exit_code=1))
     beacon.append(base, _ev(32, 'stage1.partition', 'end', exit_code=2))
     beacon.append(base, _ev(33, 'stage2.global', 'end', exit_code=70))
     beacon.append(base, _ev(30, 'stage1.partition', 'start', sid='other'))
@@ -77,10 +79,10 @@ def test_beacon_events_fold_into_steps(client):
     by_node = {s['node']: s for s in d['steps']}
     assert by_node['stage0.remove']['beacon'] == 'ok'
     assert by_node['stage0.remove']['last_exit'] == 0
-    assert by_node['stage0.approve']['beacon'] == 'running'
-    assert by_node['stage0.approve']['elapsed'] is not None
-    assert by_node['stage0.edit']['beacon'] == 'landed_red'
-    assert by_node['stage0.edit']['last_exit'] == 1
+    assert by_node['stage2.analyze']['beacon'] == 'running'
+    assert by_node['stage2.analyze']['elapsed'] is not None
+    assert by_node['stage2.characters']['beacon'] == 'landed_red'
+    assert by_node['stage2.characters']['last_exit'] == 1
     assert by_node['stage1.partition']['beacon'] == 'stopped'
     assert by_node['stage2.global']['beacon'] == 'failed'
     assert len(d['events_tail']) == 6
@@ -131,7 +133,8 @@ def test_run_projects_current_review_states_and_only_current_role_recovery(clien
     os.mkdir(os.path.join(base, '测试书_42'))
     actual = c.get('/api/novels/42/run').json()
     reviews = actual['resume_frontier']['review_states']
-    assert len(reviews) == 8
+    # stage0.approve 人工闸退役（2026-09-15）：human 审阅面 8 → 7。
+    assert len(reviews) == 7
     assert {row['node'] for row in reviews} == {
         node for node, spec in NODES.items() if spec.lifecycle.review_mode == 'human'}
     # Stage2 语义审阅退役：run 面不再有 stage2 审批状态行。

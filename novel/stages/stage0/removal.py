@@ -26,12 +26,9 @@ from pydantic import ValidationError
 from contracts.schema.report import CheckReport
 from contracts.schema.stage0 import (
     ApprovedApproval,
-    PendingApproval,
     RemovedSegment,
     RequestedRemoval,
-    Stage0CandidatePlan,
     Stage0Current,
-    Stage0EditPlan,
     Stage0Revision,
     Stage0RevisionContent,
     Stage0Revisions,
@@ -53,12 +50,12 @@ from novel.core.source import (
 from novel.errors import (
     ArtifactUnreadable,
     ByteFormRefused,
-    HumanEditProtected,
     PathRefused,
     ProvenanceRefused,
     SourceConflict,
     SourceDecodeFailed,
     SourcePathRejected,
+    TerminalState,
     UpstreamMissing,
 )
 from novel.llm.cache import CachePolicy
@@ -146,7 +143,7 @@ def _provisional(source: Stage0Source, content: Stage0RevisionContent,
         revisions=[revision],
         current=Stage0Current(
             revision_id=revision.revision_id,
-            approval=PendingApproval(status='pending')),
+            approval=_auto_approval()),
         candidate_revision_id=None,
     )
     return RemovalResult(content.clean_text, rev.snapshot_of(log), scan_text(content.clean_text))
@@ -232,6 +229,17 @@ def _result_of(log: Stage0Revisions) -> RemovalResult:
     return RemovalResult(content.clean_text, rev.snapshot_of(log), scan_text(content.clean_text))
 
 
+def _auto_approval() -> ApprovedApproval:
+    """机械校验通过后的自动接受记录（2026-09-15 全自动裁决）。
+
+    `by` 与人工 actor 一样只是自报身份；它记录的是「这一版由 stage0.remove 的
+    机械判据放行」，非正文剔除的语义正确性（番外盲区）随交付披露（Q-13）。
+    """
+    return ApprovedApproval(
+        status='approved', at=rev.now_iso(), by='system:stage0-auto',
+        reason='机械校验通过后自动接受；剔除语义正确性未审，随交付披露')
+
+
 def _checked(ctx: RunContext, log: Stage0Revisions) -> tuple[RemovalResult, CheckReport]:
     from novel.stages.stage0.checks import run_check_only
     return _result_of(log), run_check_only(ctx)
@@ -280,9 +288,9 @@ def run_source(source_path: str | Path, base: str | Path, *, force: bool = False
     store = ArtifactStore(ctx)
     log = rev.read(store) if dry_run else rev.ensure_materialized(store)
 
-    # 首跑恒 pending（2026-08-21 裁决）：零命中不再自动批准。「零 removed、零 warning、
-    # clean == source」恰好是纯数字番外盲区（`docs/schema/stage1.md` §五）的形状——
-    # 那个盲区全链唯一的防线就是这道人工闸门，自动放行等于把防线拆了。
+    # 首跑即机械接受（2026-09-15 全自动裁决）：stage0.approve 人工闸退役，
+    # 机械校验（s0_* HARD，含正文占比闸）通过即写 auto 批准；「这一段是不是
+    # 番外」的语义盲区没有确定性防线，随交付披露（Q-13），不再挡链。
     if log is None:
         if dry_run:
             return novel_dir, machine, None
@@ -294,7 +302,7 @@ def run_source(source_path: str | Path, base: str | Path, *, force: bool = False
             revisions=[root],
             current=Stage0Current(
                 revision_id=root.revision_id,
-                approval=PendingApproval(status='pending')),
+                approval=_auto_approval()),
             candidate_revision_id=None,
         )
         rev.commit(store, fresh)
@@ -331,209 +339,21 @@ def run_source(source_path: str | Path, base: str | Path, *, force: bool = False
     if dry_run:
         return novel_dir, _result_of(log), None
 
-    if current.origin == 'machine' and log.current.approval.status == 'pending':
-        # 当前稿是机器算的、还没人看过 ⇒ 换成新结果**不丢任何东西**：
-        # 没有人工内容可覆盖，也没有「人看过并批准了这一版」可绕过。
-        published = rev.published(log, proposal, candidate_revision_id=None)
-        rev.commit(store, published)
-        result, report = _checked(ctx, published)
-        return novel_dir, result, report
+    if current.origin != 'machine':
+        # 存量书含人工剔除内容（旧 stage0.edit 产物）。人工编辑入口已退役，
+        # 机器重算会覆盖人工内容 ⇒ 关闭式拒绝，指引重跑，不静默覆盖。
+        raise TerminalState(
+            '当前 stage0 正式稿含人工剔除内容（origin=human），人工编辑入口已随'
+            '全自动裁决退役；请显式废弃该书目录后重跑 stage0.remove（R-0.14）')
 
-    # 剩下的两种都要人来裁：当前稿含人工内容（换掉就是覆盖人的作业），
-    # 或者当前稿已经被人批准过（换掉就是绕过那道闸门）。
-    # ⇒ 正式稿一个字不动，新结果只挂成候选，等三选一。
-    entries = list(log.revisions)
-    if all(item.revision_id != proposal.revision_id for item in entries):
-        entries.append(proposal)
-    pending = Stage0Revisions(
-        source=log.source,
-        revisions=entries,
-        current=log.current,
-        candidate_revision_id=proposal.revision_id,
-        dismissed=log.dismissed,
-    )
-    rev.commit(store, pending)
-    result, report = _checked(ctx, pending)
-    return novel_dir, result, report
-
-
-def _human_text(edit_path: str | Path) -> str:
-    path = Path(edit_path).resolve()
-    if not path.is_file():
-        raise UpstreamMissing(f'人工编辑文件不在盘上：{path}')
-    try:
-        raw = path.read_bytes()
-    except OSError as exc:
-        raise ArtifactUnreadable(f'读不了人工编辑文件 {path}：{exc!r}') from exc
-    if raw.startswith(codecs.BOM_UTF8):
-        raise ByteFormRefused('人工 clean_text 带 UTF-8 BOM；请按无 BOM UTF-8 保存')
-    try:
-        text = raw.decode('utf-8')
-    except UnicodeDecodeError as exc:
-        raise ArtifactUnreadable(f'人工 clean_text 不是 UTF-8：{exc!r}') from exc
-    if '\r' in text:
-        raise ByteFormRefused('人工 clean_text 含 CR/CRLF；请按 LF-only 保存，不做静默归一')
-    return text
-
-
-def _load(ctx: RunContext) -> tuple[ArtifactStore, Stage0Revisions]:
-    store = ArtifactStore(ctx)
-    log = rev.ensure_materialized(store)
-    if log is None:
-        raise UpstreamMissing('stage0 还没跑，盘上没有可操作的 revision 链')
-    return store, log
-
-
-def _apply_edit(
-    ctx: RunContext,
-    text: str,
-    *,
-    removed: Sequence[RemovedSegment] | None = None,
-    expected_revision_id: str | None = None,
-    actor: str,
-    reason: str,
-) -> tuple[Stage0Snapshot, CheckReport]:
-    '''在链上落一条人工 revision；乐观锁只在审校台计划路径启用。'''
-    from novel.stages.stage0.checks import run_check_only
-    store, log = _load(ctx)
-    current = rev.current_revision(log)
-    if not actor.strip() or not reason.strip():
-        raise HumanEditProtected('stage0 人工编辑必须显式给 actor 与 reason')
-    if expected_revision_id is not None and expected_revision_id != current.revision_id:
-        raise HumanEditProtected(
-            '这份 stage0 编辑计划基于旧页面，拒绝覆盖当前版本：'
-            f'revision_id 页面={expected_revision_id!r}，当前={current.revision_id!r}')
-
-    next_removed = list(removed) if removed is not None else list(current.content.removed)
-    if text == current.content.clean_text and next_removed == current.content.removed:
-        return rev.snapshot_of(log), run_check_only(ctx)
-
-    content = Stage0RevisionContent(
-        clean_text=text,
-        removed=next_removed,
-    )
-    revision = rev.make_revision(
-        parent_revision_id=current.revision_id, origin='human_edit',
-        actor=actor.strip(), reason=reason.strip(), code=ctx.code, content=content)
-    # ⚠ 编辑即已对候选做出决定：人是在**当前稿**上继续动手的，那份候选相对的
-    #   基线已经过去了。清指针即可，不记进 `dismissed`——下次机器重跑会挂在新的
-    #   当前稿下、得到新的 id，不存在「被否掉的候选复活」这回事。
-    published = rev.published(log, revision, candidate_revision_id=None)
+    # 当前稿是机器稿（旧 pending 或已批准）⇒ 换成新结果不丢人工内容：
+    # 剔除是确定性算法的输出，新结果即当前算法的当前结论；旧人工批准语义
+    # 已随人工闸退役（存量书按裁决重跑）。
+    published = rev.published(
+        log, proposal, candidate_revision_id=None, approval=_auto_approval())
     rev.commit(store, published)
-    return rev.snapshot_of(published), run_check_only(ctx)
-
-
-def run_edit(ctx: RunContext, edit_path: str | Path, *,
-             actor: str, reason: str,
-             removed: Sequence[RemovedSegment] | None = None) -> tuple[Stage0Snapshot, CheckReport]:
-    '''落一版人工 clean_text；上一版留在链上不可变。'''
-    return _apply_edit(
-        ctx, _human_text(edit_path), removed=removed, actor=actor, reason=reason)
-
-
-def _read_plan(model, plan_path: str | Path, what: str):
-    path = Path(plan_path).resolve()
-    if not path.is_file():
-        raise UpstreamMissing(f'{what}不在盘上：{path}')
-    try:
-        raw = path.read_bytes()
-    except OSError as exc:
-        raise ArtifactUnreadable(f'读不了{what} {path}：{exc!r}') from exc
-    if raw.startswith(codecs.BOM_UTF8):
-        raise ByteFormRefused(f'{what}带 UTF-8 BOM；内部 JSON 必须是无 BOM UTF-8')
-    try:
-        return model.model_validate_json(raw)
-    except (ValidationError, UnicodeDecodeError) as exc:
-        raise ArtifactUnreadable(f'{what}不是合法契约：{exc}') from exc
-
-
-def _edit_plan_source(ctx: RunContext, log: Stage0Revisions) -> str:
-    """按生产读取尺子取回 edit-plan 的原文坐标系。"""
-    # ⚠ 经唯一读取落点，不自己拼路径：`managed_upload` 那一支的位置**只能**由当前
-    #   base 算出来（它跟着 base 走），而这里此前只认记录的绝对路径 ⇒ Output 根
-    #   搬过家的上传书会在这里假报「原文没了」。
-    source = resolve_recorded_source(log.source.source_ref, ctx.novel_dir.parent)
-    if source is None:
-        raise UpstreamMissing(
-            f'原始小说已不在记录位置：{describe_source(log.source.source_ref)}')
-    try:
-        raw = source.read_bytes()
-    except OSError as exc:
-        raise ArtifactUnreadable(f'读不了原始小说 {source}：{exc!r}') from exc
-    try:
-        decoded = decode_source_bytes(raw)
-    except DecodeProblem as exc:
-        raise SourceDecodeFailed(f'{source}: {exc}') from exc
-    if decoded.normalized_source_sha1 != log.source.normalized_source_sha1:
-        raise SourceConflict(
-            f'原始小说已从 {log.source.normalized_source_sha1[:10]} 变为 '
-            f'{decoded.normalized_source_sha1[:10]}；'
-            '页面上的区间全部失效，请重新摄入并审阅')
-    if len(decoded.text) != log.source.total_code_points:
-        raise SourceConflict(
-            f'原始小说当前长度 {len(decoded.text)} 与当前版本 '
-            f'{log.source.total_code_points} 对不上')
-    return decoded.text
-
-
-def prepare_edit_plan(ctx: RunContext, plan: Stage0EditPlan) -> PreparedEditPlan:
-    """只读复算计划将落到哪条 revision；API 与 CLI 共用这一处。"""
-    log = rev.read(ArtifactStore(ctx))
-    if log is None:
-        raise UpstreamMissing('stage0 还没跑，盘上没有可预演的 revision 链')
-    current = rev.current_revision(log)
-    if plan.expected_revision_id != current.revision_id:
-        raise HumanEditProtected(
-            '这份 stage0 编辑计划基于旧页面，拒绝按当前稿预演：'
-            f'revision_id 页面={plan.expected_revision_id!r}，当前={current.revision_id!r}')
-    source_text = _edit_plan_source(ctx, log)
-
-    cursor = 0
-    kept: list[str] = []
-    for segment in plan.removed:
-        lo, hi = segment.span
-        kept.append(source_text[cursor:lo])
-        cursor = hi
-    kept.append(source_text[cursor:])
-    reconstructed = ''.join(kept)
-    removed = tuple(verified_removals(
-        plan.removed, source_text, current.content.removed))
-    content = Stage0RevisionContent(
-        clean_text=reconstructed, removed=list(removed))
-    revision_id = (
-        current.revision_id
-        if content == current.content else
-        rev.revision_digest(
-            parent_revision_id=current.revision_id,
-            origin='human_edit',
-            actor=plan.actor.strip(),
-            reason=plan.reason.strip(),
-            content=content,
-        )
-    )
-    return PreparedEditPlan(
-        clean_text=reconstructed, removed=removed, revision_id=revision_id)
-
-
-def run_edit_plan(
-    ctx: RunContext,
-    plan_path: str | Path,
-) -> tuple[Stage0Snapshot, CheckReport]:
-    '''应用 S-00 选择计划；原文、区间、重建正文与乐观锁全部在子进程内复核。'''
-    plan: Stage0EditPlan = _read_plan(Stage0EditPlan, plan_path, 'stage0 编辑计划')
-    prepared = prepare_edit_plan(ctx, plan)
-    landed = _apply_edit(
-        ctx,
-        prepared.clean_text,
-        removed=prepared.removed,
-        expected_revision_id=plan.expected_revision_id,
-        actor=plan.actor,
-        reason=plan.reason,
-    )
-    if landed[0].revision_id != prepared.revision_id:
-        raise ProvenanceRefused(
-            'stage0 edit-plan 预演 revision 与实际落点不一致；拒绝向调用方返回错误版本')
-    return landed
+    result, report = _checked(ctx, published)
+    return novel_dir, result, report
 
 
 def verified_removals(
@@ -571,132 +391,3 @@ def verified_removals(
     return verified
 
 
-def run_approve(ctx: RunContext, *, actor: str, reason: str,
-                expected_revision_id: str | None = None,
-                approved_at: str | None = None) \
-        -> tuple[Stage0Snapshot, CheckReport]:
-    '''批准当前这一版。批准不改正文、不产生新 revision。'''
-    from novel.stages.stage0.checks import run_check_only
-    store, log = _load(ctx)
-    if not actor.strip() or not reason.strip():
-        raise HumanEditProtected('stage0 人工批准必须显式给 actor 与 reason')
-    if (expected_revision_id is not None
-            and expected_revision_id != log.current.revision_id):
-        raise HumanEditProtected(
-            'Stage0 批准乐观锁失效：实际审阅的 revision 已不是当前版本；'
-            f'工作包={expected_revision_id!r}，当前={log.current.revision_id!r}')
-    # ⚠ 判的是「这次批准是不是同一决定的重放」，**不是执行资格**——后者的唯一落点是
-    #   `eligibility.is_stage0_executable`，那是给消费方用的，本函数是写入方。
-    if log.current.approval.status == 'approved':
-        return rev.snapshot_of(log), run_check_only(ctx)
-    # ⚠ 前置条件：批准的是**盘上这一刻的** source/clean 决策面。
-    _require_stage0_fresh(store)
-    approved = Stage0Revisions(
-        source=log.source,
-        revisions=log.revisions,
-        current=Stage0Current(
-            revision_id=log.current.revision_id,
-            approval=ApprovedApproval(
-                status='approved',
-                at=approved_at or rev.now_iso(),
-                by=actor.strip(), reason=reason.strip())),
-        candidate_revision_id=log.candidate_revision_id,
-        dismissed=log.dismissed,
-    )
-    rev.commit(store, approved)
-    try:
-        # ⚠ 后置条件仍在：原文可能恰好在前置检查与提交之间被换掉。回滚只是**再写一次
-        #   那一份文件**（链是权威、一次提交只写一份）——旧实现要为此维持一个跨文件
-        #   history_transaction，现在一行原子写就回到批准前的状态。
-        _require_stage0_fresh(store)
-    except ProvenanceRefused:
-        rev.commit(store, log)
-        raise
-    return rev.snapshot_of(approved), run_check_only(ctx)
-
-
-def read_candidate(ctx: RunContext) -> Stage0Revision:
-    """待裁决的那条机器候选；没有就明说，不返回一个空壳。"""
-    log = rev.read(ArtifactStore(ctx))
-    if log is None or log.candidate_revision_id is None:
-        raise UpstreamMissing('stage0 当前没有待裁决的机器候选')
-    return rev.by_id(log, log.candidate_revision_id)
-
-
-def run_candidate_plan(
-    ctx: RunContext, plan_path: str | Path,
-) -> tuple[Stage0Snapshot, CheckReport]:
-    """三选一里的两个写动作：采纳候选 / 否掉候选。
-
-    ⚠ 「采纳后再编辑」不在这里：那是 adopt 之后照常走 `stage0.edit`，
-    两步各自已经是一次原子提交。
-    """
-    from novel.stages.stage0.checks import run_check_only
-    plan: Stage0CandidatePlan = _read_plan(
-        Stage0CandidatePlan, plan_path, 'stage0 候选裁决')
-    store, log = _load(ctx)
-    current = rev.current_revision(log)
-
-    replayed = _completed_decision(log, plan)
-    if replayed is not None:
-        return rev.snapshot_of(replayed), run_check_only(ctx)
-
-    if log.candidate_revision_id != plan.candidate_revision_id:
-        raise HumanEditProtected(
-            f'盘上待裁决的候选是 {log.candidate_revision_id}，'
-            f'请求要裁决 {plan.candidate_revision_id}；页面已过期，请刷新')
-    if plan.expected_revision_id != current.revision_id:
-        raise HumanEditProtected(
-            f'Stage0 候选裁决的乐观锁失效：页面当前稿={plan.expected_revision_id}，'
-            f'盘上={current.revision_id}')
-
-    candidate = rev.by_id(log, plan.candidate_revision_id)
-    if plan.action == 'dismiss':
-        from contracts.schema.stage0 import Stage0DismissedCandidate
-        kept = Stage0Revisions(
-            source=log.source,
-            revisions=log.revisions,
-            current=log.current,
-            candidate_revision_id=None,
-            dismissed=[*log.dismissed, Stage0DismissedCandidate(
-                revision_id=candidate.revision_id, at=rev.now_iso(),
-                by=plan.actor.strip(), reason=plan.reason.strip())],
-        )
-        rev.commit(store, kept)
-        return rev.snapshot_of(kept), run_check_only(ctx)
-
-    # 采纳：内容逐字取候选，但它是**人做的一次状态转移** ⇒ 单独成一条 revision，
-    # 记下谁在何时以什么理由换掉了正文（审计链折叠进来之后这是唯一落点）。
-    adopted = rev.make_revision(
-        parent_revision_id=current.revision_id, origin='human_adopt',
-        actor=plan.actor.strip(), reason=plan.reason.strip(), code=ctx.code,
-        content=candidate.content)
-    published = rev.published(log, adopted, candidate_revision_id=None)
-    rev.commit(store, published)
-    return rev.snapshot_of(published), run_check_only(ctx)
-
-
-def _completed_decision(
-    log: Stage0Revisions, plan: Stage0CandidatePlan,
-) -> Stage0Revisions | None:
-    """认出一次已经落完的裁决（进程崩在 commit 之后、CLI 返回之前）。
-
-    ⚠ 这是全部的「崩溃恢复」——两个分支，不是一台状态机：链是权威且一次提交只写
-    一份文件，所以「做过了没有」永远可以直接从链上读出来，不需要 WAL 意图行。
-    """
-    if all(item.revision_id != plan.candidate_revision_id for item in log.revisions):
-        return None
-    if plan.action == 'dismiss':
-        if any(item.revision_id == plan.candidate_revision_id
-               and item.by == plan.actor.strip() and item.reason == plan.reason.strip()
-               for item in log.dismissed):
-            return log
-        return None
-    current = rev.current_revision(log)
-    if (current.origin == 'human_adopt'
-            and current.parent_revision_id == plan.expected_revision_id
-            and current.actor == plan.actor.strip()
-            and current.reason == plan.reason.strip()
-            and current.content == rev.by_id(log, plan.candidate_revision_id).content):
-        return log
-    return None

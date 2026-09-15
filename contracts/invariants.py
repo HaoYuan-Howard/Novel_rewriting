@@ -1852,14 +1852,10 @@ VALUED_FLAGS: Final = {
         '已落 prepared recovery WAL 的 exact target run_id；checkpoint 首次恢复不带'),
     '--reviewer-rewrite-recovery-journal-sha256': (
         '已落 prepared recovery WAL 的 immutable self SHA-256；必须与 target run_id 同有同无'),
-    '--apply-edit-plan': '审校台生成的 stage0 编辑计划路径（正文 + 剔除账 + 乐观锁）',
     '--recover-analyze-run': '尚未闭合的 Stage2 Analyze 原 run_id',
     '--repair-analyze-draft': '当前书或 SID 服务目录中的 AnalyzeOwnerDraftEdit v1 文件',
-    '--apply-candidate-plan': '审校台生成的 stage0 候选裁决（采纳 / 否掉整版 + 乐观锁）',
     '--actor': '人工决定的自报身份（不是认证身份）',
     '--reason': '人工决定的非空理由',
-    '--expected-revision-id': ('Stage0 人工批准乐观锁定的完整 revision SHA-256；'
-                               '必须取自本次实际审阅的 current/workpack'),
     '--subject-sha256': '人工决定乐观锁定的完整内容 SHA-256',
     '--current-chapter-sha256': 'Stage5 人工改稿预览时读到的当前 canonical 完整文件 SHA-256',
     '--preview-subject-sha256': 'Stage5 改稿预览绑定的归一候选、判据身份与结论 SHA-256',
@@ -1937,10 +1933,10 @@ WRITE_EFFECTS: Final = {
     # ── 免费但**会写盘**的那些：原型那 8 条注释点名的正是它们 ──
     '--recheck': '按当前判据刷新已有成稿的派生指标，并对账 trim 状态',
     '--revalidate': '必填 actor/reason；0 LLM 同轮重判并留不可变审计，合格的 .INVALID 才提升，旧稿归档进 _rounds/',
-    # ⚠ 本表按 flag 索引 ⇒ 这句话必须对**每一个**挂它的节点都成立。2026-08-22 阶段 C
-    #   之后 stage0 的历史不再进 `_rounds/`（它在 revision 链上，且不可覆盖），
-    #   所以这一格只说得出两边都成立的那部分：落成新的一版、上一版仍可回看。
-    '--apply-edit': '把人工稿落成新的一版，上一版仍可回看（stage0 在 revision 链上，其余归档进 _rounds/）',
+    # ⚠ 本表按 flag 索引 ⇒ 这句话必须对**每一个**挂它的节点都成立。
+    #   `stage0.edit` 已随 2026-09-15 全自动裁决退役，现役挂 `--apply-edit` 的节点
+    #   归档语义一致：落成新的一版、上一版归档进 `_rounds/`。
+    '--apply-edit': '把人工稿落成新的一版，上一版归档进 _rounds/',
     '--renormalize': '按当前契约重算代码派生字段与原文定位并写回',
     '--recover-analyze': '由原 Analyze checkpoint 免费物化 Global，保留原始来源与独立新恢复账',
     '--recover-analyze-run': '复验原联合 checkpoint 并按冻结目标补尾；不调用模型或重开已完成事务',
@@ -2166,25 +2162,16 @@ class NodeSpec(NamedTuple):
 #: 这不是重复登记：**一层要哪几份**取的是本层各节点的并集。
 NODES: Final[dict[str, NodeSpec]] = {
     # Stage0 只有一个 JSON 权威和一个正文投影；运行时报告不落盘。
+    # ⚠ `stage0.approve` / `stage0.edit` 已随 2026-09-15 全自动裁决退役
+    #   （移入 RETIRED_NODES）：机械校验通过即由 producer 写入 auto 批准
+    #   （`system:stage0-auto`）；剔除的语义正确性（番外盲区）随交付披露。
     'stage0.remove':    NodeSpec('stage0', 'R-0',  False, 'stage0 非正文剔除',
-                                  lifecycle=NodeLifecycleSpec('book', '原始文本与当前 revision', 'deterministic', 'none', '剔除结果由 stage0.approve 接受', ('recompute',), ('stage0.remove', 'stage0.edit'), 'none', ('--check-only',), 0),
+                                  lifecycle=NodeLifecycleSpec('book', '原始文本', 'deterministic', 'none', '机械校验通过即自动接受', ('recompute',), ('stage0.remove',), 'none', ('--check-only',), 0),
                                   flags=('--source', '--dry-run', '--check-only'),
                                   produces=(artifact_paths.STAGE0_REVISIONS,
                                             artifact_paths.STAGE0_CLEAN_TEXT)),
-    'stage0.approve':   NodeSpec('stage0', 'R-0',  False, 'stage0 人工批准',
-                                  lifecycle=NodeLifecycleSpec('book', '完整 retained 与 removed 工作包', 'human_submission', 'human', '当前剔除 revision', ('accept', 'stop'), ('stage0.edit',), 'human:stage0', ('typed_replay',), 0, approval_bindings=(('stage0.approve', 'book'),), approval_projection=('gate', 's0')),
-                                  flags=('--expected-revision-id', '--actor', '--reason'),
-                                  required_flags=(
-                                      '--expected-revision-id', '--actor', '--reason'),
-                                   produces=(artifact_paths.STAGE0_REVISIONS,)),
-    'stage0.edit':      NodeSpec('stage0', 'R-0',  False, 'stage0 人工编辑',
-                                  lifecycle=NodeLifecycleSpec('book', 'revision 与 typed 编辑计划', 'deterministic', 'none', '编辑后重新批准当前 revision', ('typed_edit',), ('stage0.edit',), 'none', ('--apply-edit', '--apply-edit-plan', '--apply-candidate-plan'), 0),
-                                  flags=('--apply-edit', '--apply-edit-plan',
-                                         '--apply-candidate-plan', '--actor', '--reason'),
-                                  produces=(artifact_paths.STAGE0_REVISIONS,
-                                            artifact_paths.STAGE0_CLEAN_TEXT)),
     'stage1.partition': NodeSpec('stage1', 'R-1',  False, 'stage1 分章',
-                                 lifecycle=NodeLifecycleSpec('book', '已批准的 clean_text', 'deterministic', 'none', '机械覆盖与章号校验', ('recompute', 'stop'), ('stage0.edit', 'stage1.partition'), 'none', ('--check-only',), 0),
+                                 lifecycle=NodeLifecycleSpec('book', 'stage0.remove 的机械通过稿 clean_text', 'deterministic', 'none', '机械覆盖与章号校验', ('recompute', 'stop'), ('stage1.partition',), 'none', ('--check-only',), 0),
                                  flags=('--dry-run', '--check-only'),
                                  produces=(artifact_paths.STAGE1_MAIN_TEXT,
                                            artifact_paths.STAGE1_HOOK_COPY),
@@ -2438,12 +2425,10 @@ AGENT_ONLY_EXECUTOR_NODES: Final = frozenset({
 #: ⚠ 两张表分开而不是合并成一个可调用的谓词：必填这件事要能被 `preview`
 #: **0 成本地摊开**（渲染占位符），谓词做不到——它只能回答是/否，说不出缺哪几个。
 #:
-#: ⇒ `stage0.edit` 的三条编辑路只有 `--apply-edit` 那条要人工凭据；
-#:   `--apply-edit-plan` / `--apply-candidate-plan` 的凭据在计划文件里（连同乐观锁）。
 #: ⇒ `stage5.review --retain-pretrim` 要 `--chapters` 指定恰好一章，并强制留下
 #:   自报 `--actor` / `--reason`：它是逐章的 hash-bound 人工决定，不是匿名布尔开关。
+#: （`stage0.edit --apply-edit` 那一格已随 2026-09-15 全自动裁决退役删除。）
 CONDITIONAL_REQUIRED_FLAGS: Final[dict[tuple[str, str], tuple[str, ...]]] = {
-    ('stage0.edit', '--apply-edit'): ('--actor', '--reason'),
     ('stage2.characters', '--apply-edit'): ('--actor', '--reason'),
     ('stage2.characters', '--repair-analyze-draft'): ('--actor', '--reason'),
     ('stage2.global', '--repair-analyze-draft'): ('--actor', '--reason'),
@@ -2490,7 +2475,7 @@ STAGES: Final = ('stage0', 'stage1', 'stage2', 'stage4', 'stage5', 'stage6', 'st
 
 # 只供 append-only 作业/队列历史解码。它们不进 NODES/STAGES，因此不能 preview、
 # 调度或创建新队列；删除这两个名字会让既有 jobs.jsonl / queues.jsonl 整流不可读。
-RETIRED_NODES: Final = ('stage3.style', 'stage6.semantic')
+RETIRED_NODES: Final = ('stage3.style', 'stage6.semantic', 'stage0.approve', 'stage0.edit')
 RETIRED_STAGES: Final = ('stage3',)
 
 #: `stage` → 它的需求节。**从 `NODES` 派生，不许手抄。**

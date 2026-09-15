@@ -85,7 +85,8 @@ def run_partition(
     from novel.stages.stage0.eligibility import is_stage0_executable
     if not is_stage0_executable(stage0):
         raise ApprovalRequired(
-            f'stage0 当前状态为 {stage0.approval.status!r}；人工批准前不能启动 stage1')
+            f'stage0 当前状态为 {stage0.approval.status!r}；'
+            '先重跑 stage0.remove 完成机械接受，再启动 stage1')
     actual_input = prov.content_sha1(clean_text.encode('utf-8'))
     if actual_input != stage0.clean_sha1:
         raise PartitionInputMismatch(

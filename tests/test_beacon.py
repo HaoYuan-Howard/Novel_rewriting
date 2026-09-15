@@ -150,12 +150,14 @@ def test_a_bad_line_in_the_middle_is_not_silent(base):
 
 
 def test_fold_six_states():
+    # stage0.approve / stage0.edit 已退役（2026-09-15）：fold 的节点面就是 NODES，
+    # 改用现役节点名钉同一组状态。
     events = [
         _ev(10, 'stage0.remove', 'start'),
         _ev(20, 'stage0.remove', 'end', exit_code=0),
-        _ev(30, 'stage0.approve', 'start'),                       # 还在跑
-        _ev(35, 'stage0.edit', 'start'),
-        _ev(36, 'stage0.edit', 'end', exit_code=1),               # 落盘但红
+        _ev(30, 'stage2.analyze', 'start'),                       # 还在跑
+        _ev(35, 'stage2.characters', 'start'),
+        _ev(36, 'stage2.characters', 'end', exit_code=1),         # 落盘但红
         _ev(40, 'stage1.partition', 'start'),
         _ev(50, 'stage1.partition', 'end', exit_code=2),          # 显式终态
     ]
@@ -164,10 +166,10 @@ def test_fold_six_states():
     assert [s.seq for s in steps] == list(range(1, len(NODES) + 1))
     assert by_node['stage0.remove'].beacon == 'ok'
     assert by_node['stage0.remove'].last_exit == 0
-    assert by_node['stage0.approve'].beacon == 'running'
-    assert by_node['stage0.approve'].elapsed == 70
-    assert by_node['stage0.edit'].beacon == 'landed_red'
-    assert by_node['stage0.edit'].last_exit == 1
+    assert by_node['stage2.analyze'].beacon == 'running'
+    assert by_node['stage2.analyze'].elapsed == 70
+    assert by_node['stage2.characters'].beacon == 'landed_red'
+    assert by_node['stage2.characters'].last_exit == 1
     assert by_node['stage1.partition'].beacon == 'stopped'
     assert by_node['stage1.partition'].last_exit == 2
     assert by_node['stage4.plan'].beacon == 'pending'

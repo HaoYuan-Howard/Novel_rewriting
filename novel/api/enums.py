@@ -433,7 +433,6 @@ def actions() -> list[dict[str, Any]]:
     credential_flags = {
         '--actor', '--reason', '--subject-sha256',
         '--review-token',
-        '--expected-revision-id',
         '--current-chapter-sha256', '--preview-subject-sha256',
         '--edit-confirmation',
         '--source-journal-sha256', '--source-commit-sha256',

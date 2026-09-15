@@ -10,8 +10,12 @@ from tests.test_plot_producer import generate_plot, plot_contract  # noqa: F401
 
 
 def prepare_complete_book(tmp_path):
-    """贯通 fixture 从真实摄入/批准/分章产生来源链，不跳过 Stage0/1 闸门。"""
-    from novel.stages.stage0.removal import run_source, run_approve, _context
+    """贯通 fixture 从真实摄入/分章产生来源链，不跳过 Stage0/1 闸门。
+
+    stage0 机械通过即自动接受（2026-09-15 全自动裁决）：run_source 首跑落
+    `system:stage0-auto` 批准，不再有单独的人工批准步骤。
+    """
+    from novel.stages.stage0.removal import run_source, _context
     from novel.stages.stage1.partition import run_partition
     from tests.test_stage2 import main_text
     from tests.test_stage2_generation import _ctx, _client, _ok, _response_global, _accept_fixture_global
@@ -21,10 +25,8 @@ def prepare_complete_book(tmp_path):
     body = '李宝珠收到父亲已经回城的来信。\n\n' + '\n\n'.join(
         f"{row['chapter_ordinal']}\n\n{row['text']}" for row in main_text())
     source.write_text(body, encoding='utf-8', newline='\n')
-    book, _, _ = run_source(source, tmp_path / 'output')
-    _, report = run_approve(_context(book, 'stage0.approve'),
-                            actor='test:源文审阅者', reason='已核对合成全书来源与保留范围')
-    assert report.passed
+    book, _, report = run_source(source, tmp_path / 'output')
+    assert report is not None and report.passed
     _, report = run_partition(_context(book, 'stage1.partition'))
     assert report.passed
     generate_characters(_ctx(book, 'stage2.characters'))

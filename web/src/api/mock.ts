@@ -56,7 +56,6 @@ import type {
   DraftEditRequest,
   InboxResponse,
   ReviewResponse,
-  Stage0EditRequest,
   Stage0Extras,
   Stage0Report,
   Stage0Segments,
@@ -1041,10 +1040,8 @@ function codePoints(text: string): number {
   return [...text].length
 }
 
-function mockStage0Segments(sid: string): Stage0Segments {
+function mockStage0Segments(_sid: string): Stage0Segments {
   const data = raw<Stage0Extras>('stage0_extras.json')
-  const saved = lsRead<Stage0EditRequest>('stage0.selection.' + sid)
-  const selected = new Set(saved?.removed_segment_ids)
   const pieces = [
     ...data.blocks.map((block, index) => ({
       id: 'keep-' + index,
@@ -1063,7 +1060,8 @@ function mockStage0Segments(sid: string): Stage0Segments {
   ]
   let offset = 0
   const segments = pieces.map((piece) => {
-    const initial = saved ? selected.has(piece.id) : piece.machine
+    // stage0 人工选择已随 2026-09-15 全自动裁决退役：mock 只呈现机器结论。
+    const initial = piece.machine
     const chars = codePoints(piece.text)
     const start = offset
     offset += chars
@@ -1091,10 +1089,8 @@ function mockStage0Report(sid: string): Stage0Report {
     total_code_points: data.total_code_points,
     warnings: [],
     executable: approved,
-    revision_id: (lsRead<Stage0EditRequest>('stage0.selection.' + sid) ? 'b' : 'a').repeat(64),
-    revision_origin: lsRead<Stage0EditRequest>('stage0.selection.' + sid)
-      ? ('human_edit' as const)
-      : ('machine' as const),
+    revision_id: 'a'.repeat(64),
+    revision_origin: 'machine' as const,
   }
 }
 
@@ -1329,64 +1325,8 @@ export const mockApi: Api = {
   getStage0Segments: (sid) =>
     bookOnly(sid, `/novels/${sid}/stage0/segments`, () => mockStage0Segments(sid)),
 
-  editStage0: (sid, request) => {
-    lsWrite('stage0.selection.' + sid, request)
-    return later({
-      job: finish({
-        kind: 'stage0.edit',
-        label: 'stage0 人工编辑',
-        extra: null,
-        sid,
-        ordinal: null,
-      }),
-      revision_id: 'b'.repeat(64),
-    })
-  },
-
-  approveStage0: (sid, request) => {
-    const current = mockStage0Report(sid)
-    if (request.expected_revision_id !== current.revision_id) {
-      return fail(new ApiError('server', `/novels/${sid}/stage0/approve`, {
-        status: 409,
-        message: 'Stage0 页面已过期，请刷新后重新审阅',
-        backendKind: 'HumanEditProtected',
-      }))
-    }
-    lsWrite('stage0.approval.' + sid, request)
-    const doc = loadDoc(sid)
-    saveDoc({ ...doc, gate: { ...doc.gate, s0: true } })
-    return later(finish({
-      kind: 'stage0.approve',
-      label: 'stage0 人工批准',
-      extra: null,
-      sid,
-      ordinal: null,
-    }))
-  },
-
-  getStage0Candidate: () => later(null),
-
-  adoptStage0Candidate: (sid, request) => {
-    lsWrite('stage0.candidate.adopt.' + sid, request)
-    return later(finish({
-      kind: 'stage0.candidate.adopt',
-      label: 'stage0 采纳机器新版',
-      extra: null,
-      sid,
-      ordinal: null,
-    }))
-  },
-
-  dismissStage0Candidate: (sid, request) => {
-    lsWrite('stage0.candidate.dismiss.' + sid, request)
-    return later(finish({
-      kind: 'stage0.candidate.dismiss',
-      label: 'stage0 保留当前版',
-      extra: null,
-      sid,
-      ordinal: null,
-    }))
-  },
+  // stage0 的人工编辑/批准/候选三选一已随 2026-09-15 全自动裁决退役：
+  // 机械校验通过即自动接受（system:stage0-auto），mock 不再模拟这些写动作。
 
   partitionStage1: (sid) =>
     later(finish({

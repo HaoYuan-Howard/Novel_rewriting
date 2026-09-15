@@ -35,9 +35,10 @@ from contracts.schema.stage0 import Stage0Snapshot
 def is_stage0_executable(report: Stage0Snapshot) -> bool:
     """当前 Stage0 快照是否具备放行 stage1 与付费链的资格。
 
-    批准只有人一种诚实来源：`approval.status == 'approved'`。
-    「这一段到底是不是番外」没有结构不变量可查（`R-0.7`），
-    而按本层的设计这道闸门是纯数字番外盲区（`docs/schema/stage1.md` §五）
-    全链唯一的防线 ⇒ 它必须是人点的，且必须在花钱的 stage2 之前。
+    2026-09-15 全自动裁决：`stage0.approve` 人工闸退役，机械校验通过即由
+    producer 写入 auto 批准（`removal._auto_approval`）⇒ 本谓词恒等于
+    `approval.status == 'approved'`，收口理由不变——「同一条 R 只有一个守卫」。
+    「这一段到底是不是番外」没有结构不变量可查（`R-0.7`），该语义盲区随
+    交付披露（Q-13），不再挡链。
     """
     return report.approval.status == 'approved'

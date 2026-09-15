@@ -73,11 +73,10 @@ _STAGE5_REVIEW = queue.WAITING_ON_REVIEW
 _STAGE5_CLOSURE = queue.WAITING_ON_STAGE5_CLOSURE
 _STAGE5_REVIEWER_REWRITE = queue.WAITING_ON_STAGE5_REVIEWER_REWRITE
 _PREPARED_DELIVERY = queue.WAITING_ON_PREPARED_DELIVERY
-_STAGE0_APPROVE = 'stage0.approve'
 _STAGE6_APPROVE = 'stage6.approve'
 _STAGE7_APPROVE = 'stage7.approve'
 
-_W0 = frozenset({_INBOX, _RESUME, _STAGE0_APPROVE})
+_W0 = frozenset({_INBOX, _RESUME})
 # stage2 恢复入口只认统一机械准入 blockers；节点写权仍按知识生产节点登记。
 _W2 = frozenset({_INBOX, _RESUME})
 _W4 = frozenset({
@@ -95,15 +94,6 @@ _W7 = frozenset({_INBOX, _RESUME, _STAGE7_APPROVE})
 #: 暂时能解析，也不能拿到 Commander 执行许可。
 RECOVERY_RUN_POLICIES: Final[tuple[RecoveryRunPolicy, ...]] = (
     RecoveryRunPolicy('stage0.remove', _t('--check-only'), _W0),
-    RecoveryRunPolicy(
-        'stage0.approve',
-        _t('--expected-revision-id', '--actor', '--reason'),
-        frozenset({_STAGE0_APPROVE}),
-    ),
-    RecoveryRunPolicy(
-        'stage0.edit', _t('--apply-edit', '--actor', '--reason'), _W0),
-    RecoveryRunPolicy('stage0.edit', _t('--apply-edit-plan'), _W0),
-    RecoveryRunPolicy('stage0.edit', _t('--apply-candidate-plan'), _W0),
     RecoveryRunPolicy(
         'stage1.partition', _t('--check-only'),
         frozenset({_INBOX, _RESUME}),
@@ -287,9 +277,6 @@ ExternalPathScope = Literal[
 EXTERNAL_INPUT_POLICIES: Final[
     dict[tuple[str, str], ExternalPathScope]
 ] = {
-    ('stage0.edit', '--apply-edit'): 'repo',
-    ('stage0.edit', '--apply-edit-plan'): 'repo',
-    ('stage0.edit', '--apply-candidate-plan'): 'repo',
     ('stage2.global', '--apply-edit'): 'book_or_service_edit',
     ('stage2.blueprint', '--validate-edit'): 'book_or_service_edit',
     ('stage2.blueprint', '--apply-edit'): 'book_or_service_edit',
@@ -561,12 +548,10 @@ def _require_recovery_policy(
                 'Stage5 Reviewer rewrite execution state 已变化；'
                 '不得沿用旧 paid/recovery argv')
 
-    # 恢复不能越过 blocker 去动更晚层。两个显式例外都是产品链上的真实恢复：
-    # Stage0 批准前先编辑；Stage5 Review currentness 由后一个 review 节点重算。
+    # 恢复不能越过 blocker 去动更晚层。显式例外是产品链上的真实恢复：
+    # Stage5 Review currentness 由后一个 review 节点重算。
     rank = {name: index for index, name in enumerate(NODES)}
     later_exception = (
-        waiting_on == _STAGE0_APPROVE and node == 'stage0.edit'
-    ) or (
         waiting_on == _STAGE5_REVIEW and node == 'stage5.review'
     )
     if not later_exception and rank[node] > rank[current.action.node]:

@@ -67,11 +67,6 @@ import type {
   InboxResponse,
   ReadingResponse,
   ReviewResponse,
-  Stage0EditRequest,
-  Stage0EditResult,
-  Stage0ApprovalRequest,
-  Stage0CandidateDecisionRequest,
-  Stage0CandidateView,
   Stage0Report,
   Stage0Segments,
   Stage1View,
@@ -102,11 +97,8 @@ export interface Api {
 
   getStage0Report(sid: string): Promise<Stage0Report>
   getStage0Segments(sid: string): Promise<Stage0Segments>
-  editStage0(sid: string, request: Stage0EditRequest): Promise<Stage0EditResult>
-  approveStage0(sid: string, request: Stage0ApprovalRequest): Promise<Job>
-  getStage0Candidate(sid: string): Promise<Stage0CandidateView | null>
-  adoptStage0Candidate(sid: string, request: Stage0CandidateDecisionRequest): Promise<Job>
-  dismissStage0Candidate(sid: string, request: Stage0CandidateDecisionRequest): Promise<Job>
+  // stage0 的人工编辑/批准/候选三选一已随 2026-09-15 全自动裁决退役；
+  // 机械校验通过即自动接受，Stage0 面只剩只读展示。
   partitionStage1(sid: string): Promise<Job>
   getStage1(sid: string): Promise<Stage1View>
   getReading(sid: string, ordinal: number): Promise<ReadingResponse>

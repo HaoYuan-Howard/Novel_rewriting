@@ -77,8 +77,11 @@ def test_joint_owner_and_repair_owner_cannot_evade_range_order():
     assert range_boundary_reason(_current('stage2.analyze'), 'stage2.global') is not None
     assert range_boundary_reason(_current('stage2.analyze'), 'stage2.characters') is not None
     assert range_boundary_reason(_current('stage2.analyze'), 'stage2.blueprint') is None
-    assert range_boundary_reason(_current('stage0.edit'), 'stage0.approve') is None
-    assert range_boundary_reason(_current('stage0.edit'), 'stage0.edit') is not None
+    # stage0.approve / stage0.edit 已退役（2026-09-15）：退役节点不在运行范围
+    # 取值面里，关闭式拒排（不猜测节点先后），不再有「编辑归属 remove 槽」的重映射。
+    assert range_boundary_reason(_current('stage0.edit'), 'stage0.remove') is not None
+    assert range_boundary_reason(_current('stage0.remove'), 'stage1.partition') is None
+    assert range_boundary_reason(_current('stage0.remove'), 'stage0.remove') is not None
     with pytest.raises(ValidationError):
         AgentRunRequest(sid='42', pause_before_node='stage3.retired')
 

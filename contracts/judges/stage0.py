@@ -22,7 +22,7 @@ def _info(rule: str, item: str, requirement: str, **kw) -> Rule:
 
 _hard('s0_nonbody_shared', '剔除与残留断言使用同一套非正文判据', 'R-0.1')
 _hard('s0_removal_ledger', '每段剔除都有可回到原文的完整账', 'R-0.2')
-_hard('s0_approval', 'stage0 已获人工批准才可继续', 'R-0.3b')
+_hard('s0_approval', 'stage0 已获批准（机械校验通过即自动接受）才可继续', 'R-0.3b')
 _hard('s0_revision_chain', 'revision 链逐条自证，两份 live 产物是它的物化投影', 'R-0.5')
 _hard('s0_hashes', '原始正文与清理正文的两个指纹都对得上', 'R-0.6')
 _hard('s0_human_preserved', '人工编辑状态没有被机器重跑抹掉', 'R-0.8')
@@ -35,5 +35,6 @@ _hard('s0_source_identity', '原始小说没有被换成另一份正文', 'R-0.1
 
 REGISTRY.register(Rule(
     rule='s0_correctness', stage=STAGE, item='剔除段在语义上确实不是正文',
-    sev='unver', who_checks='HUMAN', requirement='R-0.7',
-    note='这一段到底是不是番外没有结构不变量可查，必须由人读原文确认。'))
+    sev='unver', who_checks='HUMAN', requirement='R-0.7', disclosable_unver=True,
+    note='这一段到底是不是番外没有结构不变量可查。2026-09-15 全自动裁决：'
+         '人工确认入口已退役，本条转为 Q-13 内容质量类披露随交付输出。'))

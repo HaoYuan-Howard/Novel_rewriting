@@ -10,7 +10,6 @@ import type {
   RuleLine,
   Sources,
 } from './common'
-import type { Job } from './jobs'
 import type { AgentDeliveryOutcome } from './agent'
 
 /* ---------------------------------------------------------------- stage0 */
@@ -80,27 +79,6 @@ export interface Stage0Segments {
 /** 批准前分章预览里逐章原始章号的异常分类（`contracts/invariants.py::CHAPTER_LABEL_ANOMALY`）。 */
 export type ChapterLabelAnomaly = 'reset' | 'gap' | 'repeat'
 
-export interface Stage0EditRequest {
-  /** 乐观锁：页面看到的那一版（阶段 C 起取代 round + clean_sha1 两格） */
-  expected_revision_id: string
-  removed_segment_ids: string[]
-  actor: string
-  reason: string
-}
-
-export interface Stage0EditResult {
-  job: Job
-  /** 本次 edit 计划实际落成的版本；作业未落盘时为 null。 */
-  revision_id: string | null
-}
-
-export interface Stage0ApprovalRequest {
-  /** 乐观锁：必须等于本次实际审阅的 current revision。 */
-  expected_revision_id: string
-  actor: string
-  reason: string
-}
-
 export interface TrimResolutionRequest {
   /** Self-reported audit label; not an authenticated identity. */
   actor: string
@@ -118,41 +96,6 @@ export interface TrimResolution {
   chapter_rel: string
   chapter_sha256: string
   _provenance: Provenance
-}
-
-/**
- * 链上不可变的一版。**内容整团一起变**——聚合根不是 `clean_text` 一个字段
- * （外部评审 P0-3：只对正文做 diff3 保证不了整个聚合一致）。
- */
-export interface Stage0CandidateRevision {
-  revision_id: string
-  origin: Stage0RevisionOrigin
-  clean_text: string
-  body_code_points: number
-  removed_count: number
-}
-
-/**
- * 机器重跑算出的、与当前稿不同的那一版 + **当前稿的读数**。
- *
- * ⚠ 「机器重跑改了什么」由服务端给读数，前端不自己算：各算一遍就是两个会分家的
- * 落点。⚠ 阶段 C 起页面上要决定的不再是「逐个冲突选 ours 还是 theirs」
- * （diff3 与 typed 冲突已整份下线），而是**整版留哪一版**。
- */
-export interface Stage0CandidateView {
-  candidate: Stage0CandidateRevision
-  current_revision_id: string
-  current_body_code_points: number
-  current_removed_count: number
-  current_origin: string
-}
-
-export interface Stage0CandidateDecisionRequest {
-  candidate_revision_id: string
-  /** 乐观锁：页面看到的当前稿。候选是相对某一版当前稿提出的 */
-  expected_revision_id: string
-  actor: string
-  reason: string
 }
 
 export interface S0Block {

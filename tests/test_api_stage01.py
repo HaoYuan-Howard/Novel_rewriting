@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-'''Stage 0/1 的真实 HTTP 链：上传字节、人工选段、批准、分章、连续文本读取。'''
+'''Stage 0/1 的真实 HTTP 链：上传、机械接受、只读对照与分章。
+
+2026-09-15 全自动裁决：stage0/edit|approve|candidate 人工端点整体退役——
+上传落稿即机械接受（`system:stage0-auto`），Stage0 页面只剩只读展示。
+本文件钉住退役后的 HTTP 面：旧端点 404、只读缝行为不变、stage1 直接可跑。
+'''
 from __future__ import annotations
 
 import shutil
 import tempfile
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -60,86 +64,24 @@ def _upload(client: TestClient) -> dict:
     return body
 
 
-def test_stage0_cli_approval_projects_current_revision_without_service_stamp(root: Path):
-    from novel.cli import main as cli
-    from novel.orchestrator import approvals
+def test_retired_stage0_human_endpoints_answer_404(client: TestClient):
+    """stage0/edit|approve|candidate 人工端点随全自动裁决整体下线。
 
-    with TestClient(create_app(root)) as first:
-        sid = _upload(first)['sid']
-        report = first.get(f'/api/novels/{sid}/stage0/report').json()
-    assert cli.main([
-        'run', 'stage0.approve', sid, '--base', str(root),
-        '--expected-revision-id', report['revision_id'],
-        '--actor', 'cli-reviewer', '--reason', '核对完整保留与移除文本后批准',
-    ]) in (0, 1)
-    assert approvals._read_raw(root, sid).gate['s0'] is False
-    from novel import paths
-    assert approvals._current_typed_gate_proof(
-        paths.resolve_novel_dir(root, sid), 's0', approvals._read_raw(root, sid))
-    before = {str(path.relative_to(root)): path.read_bytes()
-              for path in root.rglob('*') if path.is_file()}
-    for _ in range(2):
-        with TestClient(create_app(root)) as restarted:
-            report = restarted.get(f'/api/novels/{sid}/stage0/report').json()
-            doc = restarted.get(f'/api/novels/{sid}/approvals').json()
-            assert report['executable'] is True
-            assert doc['gate']['s0'] is True
-    assert {str(path.relative_to(root)): path.read_bytes()
-            for path in root.rglob('*') if path.is_file()} == before
-    assert approvals._read_raw(root, sid).gate['s0'] is False
-
-
-def test_stage0_landed_job_survives_a_stamp_writer_conflict(
-        client: TestClient, root: Path, monkeypatch):
-    """s0 盖章与 edits 共用 helper；抢锁只披露，不篡改 jobs.run 终态。"""
-    from novel.api import approval_stamp
-    from novel.api.routes import ingest as route
-
-    revision_id = 'a' * 64
-    key = route.jobs.agent_lock_key('9001')
-    holder = 'agent-between-stage0-job-and-stamp'
-    armed = False
-
-    monkeypatch.setattr(
-        route.ingest, 'stage0_report',
-        lambda _base, _sid: SimpleNamespace(revision_id=revision_id))
-
-    def landed_then_agent(base, node, sid, flags, **_kwargs):
-        nonlocal armed
-        route.jobs.AGENT_REGISTRY.acquire(key, holder)
-        armed = True
-        start = route.jobs.plan_start(node, sid, flags, base=base)
-        return route.JobRecord(
-            job_id='stage0-landed-before-stamp-conflict', start=start,
-            started=1, ended=2, exit_code=0, state='ok',
-            steps_started=len(start.steps),
-        )
-
-    monkeypatch.setattr(route.jobs, 'run', landed_then_agent)
-    monkeypatch.setattr(
-        approval_stamp.approvals, 'approve_gate',
-        lambda *_args: pytest.fail('同书 agent 活着时不得写 s0 审批章'))
-    assert (
-        route.stamp_approval_after_landed
-        is approval_stamp.stamp_approval_after_landed)
-    try:
-        with pytest.warns(RuntimeWarning, match='没有并发写盘'):
-            response = client.post(
-                '/api/novels/9001/stage0/approve',
-                headers=UI,
-                json={
-                    'expected_revision_id': revision_id,
-                    'actor': 'api-stage01-stamp-race',
-                    'reason': '确认盖章冲突不篡改已落作业终态',
-                },
-            )
-    finally:
-        if armed:
-            route.jobs.AGENT_REGISTRY.release(key, holder)
-
-    assert response.status_code == 200, response.text
-    assert response.json()['job_id'] == 'stage0-landed-before-stamp-conflict'
-    assert response.json()['state'] == 'ok'
+    ⚠ 用 OpenAPI 发布面钉：UI catch-all 会把未知 GET 当成前端路由、把未知 POST
+    判成 405，所以「状态码不是 200」在 HTTP 层验不出「路由真的没了」。
+    发布面里 stage0 只剩 report/segments 两条只读缝才算退役闭合。
+    """
+    spec = client.get('/openapi.json').json()
+    paths = set(spec['paths'])
+    assert {path for path in paths if '/stage0/' in path} == {
+        '/api/novels/{sid}/stage0/report',
+        '/api/novels/{sid}/stage0/segments',
+    }
+    assert not any(
+        'stage0/approve' in path or 'stage0/edit' in path
+        or 'stage0/candidate' in path or 'partition-preview' in path
+        for path in paths
+    )
 
 
 def test_real_http_flow_from_upload_through_stage1(client: TestClient, root: Path):
@@ -156,52 +98,17 @@ def test_real_http_flow_from_upload_through_stage1(client: TestClient, root: Pat
     report = report_response.json()
     view = segments_response.json()
     assert report['total_code_points'] == len(TEXT)
-    assert report['executable'] is False
+    # 机械校验通过即自动接受（2026-09-15）：上传落稿即可执行，没有任何人工动作。
+    assert report['executable'] is True
+    assert report['revision_origin'] == 'machine'
     assert view['available'] is True and view['reason'] is None
     assert ''.join(segment['text'] for segment in view['segments']) == TEXT
 
-    machine = [segment['id'] for segment in view['segments'] if segment['kind'] == 'remove']
-    manual = next(
-        segment['id'] for segment in view['segments']
-        if segment['kind'] == 'keep' and '第二句文案' in segment['text'])
-    request = {
-        'expected_revision_id': report['revision_id'],
-        'removed_segment_ids': [*machine, manual],
-        'actor': 'api-stage01-test',
-        'reason': 'exercise audited edit route',
-    }
-    edited_response = client.post(
-        f'/api/novels/{sid}/stage0/edit', json=request, headers=UI)
-    assert edited_response.status_code == 200, edited_response.text
-    edit_result = edited_response.json()
-    assert edit_result['job']['state'] == 'ok'
+    # 机器剔除账：只有番外那一段，完结标记留在正文侧。
+    removed = [segment for segment in view['segments'] if segment['kind'] == 'remove']
+    assert [segment['origin'] for segment in removed] == ['machine']
+    assert any(segment['kind'] == 'end_marker' for segment in view['segments'])
 
-    edited = client.get(f'/api/novels/{sid}/stage0/report').json()
-    assert edited['revision_id'] != report['revision_id']
-    assert edit_result['revision_id'] == edited['revision_id']
-    assert edited['revision_origin'] == 'human_edit'
-    assert edited['executable'] is False
-    edited_segments = client.get(f'/api/novels/{sid}/stage0/segments').json()['segments']
-    assert any(segment['origin'] == 'human' for segment in edited_segments)
-
-    stale = client.post(f'/api/novels/{sid}/stage0/edit', json=request, headers=UI)
-    assert stale.status_code == 409
-    assert stale.json()['kind'] == 'HumanEditProtected'
-
-    stale_approval = client.post(
-        f'/api/novels/{sid}/stage0/approve', headers=UI,
-        json={'expected_revision_id': report['revision_id'],
-              'actor': 'api-stage01-test', 'reason': '误批旧工作包'},
-    )
-    assert stale_approval.status_code == 409
-    assert stale_approval.json()['kind'] == 'HumanEditProtected'
-
-    approved = client.post(
-        f'/api/novels/{sid}/stage0/approve', headers=UI,
-        json={'expected_revision_id': edited['revision_id'],
-              'actor': 'api-stage01-test', 'reason': 'approve reviewed removal'},
-    )
-    assert approved.status_code == 200 and approved.json()['state'] == 'ok'
     partitioned = client.post(f'/api/novels/{sid}/stage1/partition', headers=UI)
     assert partitioned.status_code == 200 and partitioned.json()['state'] == 'ok'
 
@@ -211,13 +118,13 @@ def test_real_http_flow_from_upload_through_stage1(client: TestClient, root: Pat
     stage1 = body['segments']
     assert [segment['kind'] for segment in stage1] == [
         'hook', 'chapter', 'chapter', 'end_marker']
-    assert ''.join(segment['text'] for segment in stage1) == (
-        TEXT.replace('第二句文案。\n\n', '').split('番外', 1)[0])
+    assert ''.join(segment['text'] for segment in stage1) == TEXT.split('番外', 1)[0]
     chapter_rows = [row for row in stage1 if row['kind'] == 'chapter']
     assert [row['source_chapter_no'] for row in chapter_rows] == [1, 2]
     assert body['anomaly_count'] == 0
     assert all(row['anomaly'] is None for row in chapter_rows)
-    assert stage1[0]['text'] == '开篇钩子。\n\n'
+    # 没有人工编辑：开篇文案整段保留在 hook 里（机器只剔番外）。
+    assert stage1[0]['text'] == '开篇钩子。\n\n第二句文案。\n\n'
 
 
 #: 纯数字番外：章标记只是一个数字，正文里一个非正文关键词都没有 ⇒ 机器认不出。
@@ -245,27 +152,23 @@ def test_stage1_is_the_only_partition_diagnostic_surface(
     report = client.get(f'/api/novels/{sid}/stage0/report').json()
     segments = client.get(f'/api/novels/{sid}/stage0/segments').json()['segments']
     assert not [segment for segment in segments if segment['kind'] == 'remove']
-    # ⚠ 执行资格是**后端算好投影下来的**，不是前端自己从 approval 推的
-    #   （评审点名的第五处消费方，2026-08-22 收口）。
-    assert report['executable'] is False
+    # ⚠ 机械接受之后零命中书也是可执行的；纯数字番外盲区随交付披露（Q-13），
+    #   不再由人工闸兜底。执行资格仍是**后端算好投影下来的**（executable）。
+    assert report['executable'] is True
     # ⚠ 配套的 `block_reason` 已于 2026-08-22 随 `auto_zero_hit` 删除：理由码只剩一个
     #   取值之后它与 `executable` 是同一个 bit，一个 bit 只留一个投影。
     assert 'block_reason' not in report
 
     assert client.get(f'/api/novels/{sid}/stage0/partition-preview').status_code == 404
-    assert client.get(f'/api/novels/{sid}/stage1').status_code == 409
+    # 机械接受之后 stage0 不再挡 stage1：读不到分章产物就是「还没跑」（404），
+    # 而不是「在等批准」（409）。
+    assert client.get(f'/api/novels/{sid}/stage1').status_code == 404
 
-    # 只读：预览不建 stage1 目录，stage1 仍然只能由已批准的 stage0 启动。
+    # 只读：预览不建 stage1 目录；stage1 只能由已机械接受的 stage0 启动。
     partition = client.post(f'/api/novels/{sid}/stage1/partition')
     assert partition.status_code != 200 or partition.json()['state'] != 'ok'
 
-    # 人批准并正式切分后，唯一 Stage1 响应同时给连续原文和章号诊断。
-    approved = client.post(
-        f'/api/novels/{sid}/stage0/approve', headers=UI,
-        json={'expected_revision_id': report['revision_id'],
-              'actor': 'api-stage01-test', 'reason': '核对章号异常后批准'},
-    )
-    assert approved.status_code == 200 and approved.json()['state'] == 'ok'
+    # 正式切分后，唯一 Stage1 响应同时给连续原文和章号诊断。
     partition = client.post(f'/api/novels/{sid}/stage1/partition', headers=UI)
     assert partition.status_code == 200
     body = client.get(f'/api/novels/{sid}/stage1').json()
@@ -275,27 +178,6 @@ def test_stage1_is_the_only_partition_diagnostic_surface(
         for row in chapters
     ] == [(1, None, 'repeat'), (2, 1, None), (1, -1, 'reset')]
     assert body['anomaly_count'] == 2
-
-
-def test_stage0_refuses_to_remove_the_end_marker(client: TestClient):
-    sid = _upload(client)['sid']
-    report = client.get(f'/api/novels/{sid}/stage0/report').json()
-    view = client.get(f'/api/novels/{sid}/stage0/segments').json()
-    selected = [segment['id'] for segment in view['segments'] if segment['kind'] == 'remove']
-    selected.append(next(
-        segment['id'] for segment in view['segments'] if segment['kind'] == 'end_marker'))
-    response = client.post(
-        f'/api/novels/{sid}/stage0/edit',
-        json={
-            'expected_revision_id': report['revision_id'],
-            'removed_segment_ids': selected,
-            'actor': 'api-stage01-test',
-            'reason': 'negative end-marker test',
-        },
-        headers=UI,
-    )
-    assert response.status_code == 409
-    assert response.json()['kind'] == 'HumanEditProtected'
 
 
 def test_missing_original_is_explicitly_unavailable(client: TestClient, root: Path):

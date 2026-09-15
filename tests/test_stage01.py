@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-'''F6/F7：摄入、批准、人工编辑、分章与真实小说的端到端回归。'''
+'''F6/F7：摄入、机械接受、分章与真实小说的端到端回归。
+
+2026-09-15 全自动裁决：stage0.approve / stage0.edit 人工闸退役，机械校验
+（s0_* HARD）通过即由 producer 写入 auto 批准（`system:stage0-auto`）。
+人工闸时代的用例（approve 乐观锁、人工编辑、候选三选一）随之退役；
+本文件钉住的是退役后的现役行为。
+'''
 from __future__ import annotations
 
 import json
@@ -22,7 +28,6 @@ from novel.errors import (
     ApprovalRequired,
     HumanEditProtected,
     PartitionChapterMismatch,
-    ProvenanceRefused,
     SourceConflict,
     SourcePathRejected,
     Stage0BodyRejected,
@@ -39,8 +44,6 @@ from novel.stages.stage0.removal import (
     CLEAN_REL,
     _context,
     remove_bytes,
-    run_approve as _run_approve,
-    run_edit as _run_edit,
     run_source,
 )
 from novel.stages.stage1 import checks as stage1_checks
@@ -77,17 +80,22 @@ def _line(report, rule: str):
     return next(line for line in report.rules if line.rule == rule)
 
 
-def run_approve(ctx, *, approved_at=None):
-    return _run_approve(
-        ctx, actor='stage01-test', reason='explicit test approval',
-        approved_at=approved_at,
-    )
+def _assert_auto_accepted(approval) -> None:
+    """机械接受记录的形状（`removal._auto_approval` 是唯一落点）。"""
+    assert approval.status == 'approved'
+    assert approval.by == 'system:stage0-auto'
+    assert approval.reason
+    assert approval.at
 
 
-def run_edit(ctx, path, *, removed=None):
-    return _run_edit(
-        ctx, path, actor='stage01-test', reason='explicit test edit', removed=removed,
-    )
+def _craft_pending_legacy_draft(novel_dir: Path) -> None:
+    """把盘面退回 B1 之前的形状：同一版机器稿，批准格还是 pending。"""
+    from novel.stages.stage0 import revisions as rev
+
+    store = ArtifactStore(_context(novel_dir, 'stage0.remove'))
+    log = rev.read(store)
+    rev.commit(store, log.model_copy(update={'current': log.current.model_copy(
+        update={'approval': PendingApproval(status='pending')})}))
 
 
 def test_stage01_packages_are_in_the_explicit_wheel_manifest():
@@ -124,11 +132,12 @@ def test_materializing_writes_the_single_clean_projection_once():
     assert calls == [('text', CLEAN_REL, content.clean_text)]
 
 
-def test_first_zero_hit_dry_run_previews_pending_without_writing(work):
-    """零命中首跑也恒 pending（2026-08-21 停产自动批准）。
+def test_first_zero_hit_dry_run_previews_auto_acceptance_without_writing(work):
+    """零命中首跑也是机械接受（2026-09-15 全自动裁决）。
 
-    「零 removed、零 warning、clean == source」恰好是纯数字番外盲区的形状——
-    人工闸门是那个盲区全链唯一的防线，自动放行等于把防线拆了。
+    「零 removed、零 warning、clean == source」曾是纯数字番外盲区的形状，
+    人工闸是那道防线的最后兜底；闸退役后该语义盲区转为 Q-13 交付披露，
+    不再挡链——s0_correctness 保持 unver 随报告披露。
     """
     source = _source(work, 'FQ_dry_auto_102.txt', 'enc_utf8_sig')
     output = work / 'Output'
@@ -136,25 +145,22 @@ def test_first_zero_hit_dry_run_previews_pending_without_writing(work):
     novel_dir, preview, check = run_source(source, output, dry_run=True)
 
     assert check is None
-    # ⚠ 曾经这里有三条：status / origin / by。后两条 2026-08-22 起**在类型上就
-    #   不可能存在**（`PendingApproval` 一个字段都没有），断言它们为 None 等于
-    #   断言一件写不出来的事。
-    assert preview.report.approval == PendingApproval(status='pending')
+    _assert_auto_accepted(preview.report.approval)
     assert preview.report.revision_origin == 'machine'
     assert not output.exists() and not novel_dir.exists(), \
         'dry-run 只能构造内存预览，不得创建 output/书目录/revision 链'
 
     written_dir, written, written_check = run_source(source, output)
     assert written_dir == novel_dir
-    assert written.report.approval == preview.report.approval
-    # 零命中首跑也停在人工闸前：s0_approval 命中是**预期语义**，不是回归。
+    # 两次独立预演/落盘的批准只在时间戳上不同，裁决身份一致。
+    assert written.report.approval.status == preview.report.approval.status
+    assert written.report.approval.by == preview.report.approval.by
     assert written_check is not None
-    assert _line(written_check, 's0_approval').status == 'hit'
-    assert _line(written_check, 's0_approval').item == \
-        'stage0 已获人工批准才可继续'
+    assert _line(written_check, 's0_approval').status == 'ok'
+    assert _line(written_check, 's0_correctness').status == 'unver'
 
 
-def test_first_nonzero_hit_dry_run_stays_pending_without_writing(work):
+def test_first_nonzero_hit_dry_run_previews_auto_acceptance_without_writing(work):
     source = _source(work, 'FQ_dry_pending_103.txt', 'end_marker_then_fanwai')
     output = work / 'Output'
 
@@ -162,12 +168,12 @@ def test_first_nonzero_hit_dry_run_stays_pending_without_writing(work):
 
     assert check is None
     assert preview.report.removed
-    assert preview.report.approval == PendingApproval(status='pending')
+    _assert_auto_accepted(preview.report.approval)
     assert preview.report.revision_origin == 'machine'
     assert not output.exists() and not novel_dir.exists()
 
 
-def test_disk_path_blocks_before_approval_then_writes_current_bytes(work):
+def test_disk_path_first_run_writes_current_bytes_and_auto_accepts(work):
     source = _source(work, 'FQ_book_123.txt', 'end_marker_then_fanwai')
     novel_dir, removal, initial = run_source(source, work / 'Output')
 
@@ -176,19 +182,9 @@ def test_disk_path_blocks_before_approval_then_writes_current_bytes(work):
     clean = (novel_dir / CLEAN_REL).read_bytes()
     assert clean == removal.clean_text.encode('utf-8')
     assert not clean.startswith(b'\xef\xbb\xbf') and b'\r' not in clean
-    assert initial is not None and _line(initial, 's0_approval').status == 'hit'
+    assert initial is not None and _line(initial, 's0_approval').status == 'ok'
 
-    with pytest.raises(ApprovalRequired):
-        run_partition(_context(novel_dir, 'stage1.partition'))
-    assert not (novel_dir / 'stage1').exists()
-
-    approved, approval_report = run_approve(
-        _context(novel_dir, 'stage0.approve'),
-        approved_at='2026-08-12T00:00:00+00:00',
-    )
-    assert approved.approval.status == 'approved'
-    assert approval_report.passed
-
+    # 首跑即机械接受 ⇒ stage1 直接可跑，中间没有任何人工动作。
     partitioned, report = run_partition(_context(novel_dir, 'stage1.partition'))
     assert report is not None and report.passed
     assert len(partitioned.main_text.root) == 4
@@ -199,29 +195,9 @@ def test_disk_path_blocks_before_approval_then_writes_current_bytes(work):
     assert not (novel_dir / 'stage1/partition_report.json').exists()
 
 
-def test_human_approval_refuses_when_the_source_moved(work):
-    source = _source(work, 'FQ_approval_race_124.txt', 'end_marker_then_fanwai')
-    novel_dir, removal, _initial = run_source(source, work / 'Output')
-    before_log = (novel_dir / stage0_removal.REVISIONS_REL).read_bytes()
-
-    source.write_bytes(source.read_bytes() + b'\nsource changed after review\n')
-
-    with pytest.raises(ProvenanceRefused, match='not current'):
-        run_approve(
-            _context(novel_dir, 'stage0.approve'),
-            approved_at='2026-08-12T00:00:00+00:00',
-        )
-
-    assert (novel_dir / stage0_removal.REVISIONS_REL).read_bytes() == before_log
-
-
 def test_r114_writes_all_artifacts_and_then_reports_failure(work):
     source = _source(work, 'FQ_tail_234.txt', 'r114_violation')
     novel_dir, _removal, _initial = run_source(source, work / 'Output')
-    run_approve(
-        _context(novel_dir, 'stage0.approve'),
-        approved_at='2026-08-12T00:00:00+00:00',
-    )
 
     _partitioned, report = run_partition(_context(novel_dir, 'stage1.partition'))
 
@@ -235,10 +211,6 @@ def test_stage1_cli_propagates_a_written_check_failure(work, capsys):
 
     source = _source(work, 'FQ_tail_cli_235.txt', 'r114_violation')
     novel_dir, _removal, _initial = run_source(source, work / 'Output')
-    run_approve(
-        _context(novel_dir, 'stage0.approve'),
-        approved_at='2026-08-12T00:00:00+00:00',
-    )
 
     exit_code = cli.main([
         'run', 'stage1.partition', '235',
@@ -255,7 +227,6 @@ def test_s1_approval_binds_main_and_hook_and_hook_tampering_revokes_it(work):
     source = _source(work, 'FQ_s1_proof_9901.txt', 'end_marker_then_fanwai')
     base = work / 'Output'
     novel_dir, _removal, _initial = run_source(source, base)
-    run_approve(_context(novel_dir, 'stage0.approve'))
     approvals.approve_gate(base, '9901', 's0')
     run_partition(_context(novel_dir, 'stage1.partition'))
 
@@ -274,68 +245,25 @@ def test_s1_approval_binds_main_and_hook_and_hook_tampering_revokes_it(work):
     assert not approvals.get(base, '9901').gate['s1']
 
 
-def test_human_edit_lands_a_revision_and_the_same_machine_rerun_preserves_it(work):
-    """人工编辑 = 链上一条 `human_edit`；上一版**在链上**，不再复制进 `_rounds/`。"""
-    from novel.stages.stage0 import revisions as rev
+def test_tampered_live_clean_text_refuses_the_read_view(work):
+    """绕过入口直接改盘上的 `clean_text.txt` ⇒ 读屏拒绝，而不是渲染两轮拼接。
 
-    source = _source(work, 'FQ_edit_345.txt', 'enc_utf8_sig')
-    novel_dir, removal, _initial = run_source(source, work / 'Output')
-    machine_revision = removal.report.revision_id
-    edit = work / 'human.txt'
-    edit.write_bytes((removal.clean_text + '人工补记一行。\n').encode('utf-8'))
-
-    edited, edit_report = run_edit(_context(novel_dir, 'stage0.edit'), edit)
-
-    log = rev.read(ArtifactStore(_context(novel_dir, 'stage0.edit')))
-    assert edited.revision_origin == 'human_edit'
-    assert edited.approval.status == 'pending' and not edit_report.passed
-    # 上一版没有被覆盖：它仍在链上，且逐字可取回。
-    assert [item.revision_id for item in log.revisions] == [machine_revision, edited.revision_id]
-    assert rev.by_id(log, machine_revision).content.clean_text == removal.clean_text
-
-    rerun_dir, rerun, _rerun_report = run_source(source, work / 'Output')
-    assert rerun_dir == novel_dir
-    assert rerun.report == edited
-    assert rerun.clean_text == removal.clean_text + '人工补记一行。\n'
-
-    approved, _report = run_approve(
-        _context(novel_dir, 'stage0.approve'),
-        approved_at='2026-08-12T01:00:00+00:00',
-    )
-    approved_bytes = (novel_dir / stage0_removal.REVISIONS_REL).read_bytes()
-    again, _again_report = run_approve(
-        _context(novel_dir, 'stage0.approve'),
-        approved_at='2099-01-01T00:00:00+00:00',
-    )
-    assert again.approval.at == approved.approval.at
-    assert (novel_dir / stage0_removal.REVISIONS_REL).read_bytes() == approved_bytes
-
-
-def test_stage0_edit_refuses_a_hand_edited_live_clean_text(work):
-    """绕过入口直接改盘上的 `clean_text.txt` ⇒ 拒绝，而不是被下一次物化冲掉。
-
-    ⚠ 中断留下的一定是**链上某一版**的正文，手改留下的字节链上一版都对不上
-    ——判别是干净的，所以这里可以拒绝而不必猜。
+    ⚠ 人工编辑入口退役后，这层保护由唯一的连续文本读取缝承担：
+    手改字节链上任何一版都对不上，判别是干净的，所以可以拒绝而不必猜。
     """
     source = _source(work, 'FQ_half_pair_347.txt', 'enc_utf8_sig')
     novel_dir, removal, _initial = run_source(source, work / 'Output')
     changed = removal.clean_text + '绕过入口直接改盘。\n'
     (novel_dir / CLEAN_REL).write_bytes(changed.encode('utf-8'))
-    edit = work / 'same_half.txt'
-    edit.write_bytes(changed.encode('utf-8'))
 
-    with pytest.raises(HumanEditProtected, match='绕过'):
-        run_edit(_context(novel_dir, 'stage0.edit'), edit)
+    with pytest.raises(HumanEditProtected, match='不能拿两轮内容'):
+        ingest_views.stage0_segments(work / 'Output', novel_dir.name)
     assert (novel_dir / CLEAN_REL).read_bytes() == changed.encode('utf-8')
 
 
-def test_early_cut_stays_blocked_even_after_human_approval(work):
+def test_early_cut_stays_blocked_by_stage1_after_auto_acceptance(work):
     source = _source(work, 'FQ_cut_456.txt', 'early_cut')
     novel_dir, _removal, _initial = run_source(source, work / 'Output')
-    run_approve(
-        _context(novel_dir, 'stage0.approve'),
-        approved_at='2026-08-12T00:00:00+00:00',
-    )
 
     with pytest.raises(Stage0BodyRejected):
         run_partition(_context(novel_dir, 'stage1.partition'))
@@ -350,10 +278,6 @@ def test_empty_chapter_is_terminal_before_stage1_writes(work):
         newline='',
     )
     novel_dir, _removal, _initial = run_source(source, work / 'Output')
-    run_approve(
-        _context(novel_dir, 'stage0.approve'),
-        approved_at='2026-08-12T00:00:00+00:00',
-    )
 
     with pytest.raises(PartitionChapterMismatch):
         run_partition(_context(novel_dir, 'stage1.partition'))
@@ -564,10 +488,9 @@ def test_numeric_only_fanwai_is_visible_in_the_stage1_view(work):
 
     # 盲区成立的前提——机器什么都没剔，也没有一条 warning 可看。
     assert removed.report.removed == [] and removed.report.warnings == []
-    assert removed.report.approval == PendingApproval(status='pending')
-    assert initial is not None and _line(initial, 's0_approval').status == 'hit'
+    _assert_auto_accepted(removed.report.approval)
+    assert initial is not None and _line(initial, 's0_approval').status == 'ok'
 
-    run_approve(_context(novel_dir, 'stage0.approve'))
     run_partition(_context(novel_dir, 'stage1.partition'))
     view = ingest_views.stage1_view(base, novel_dir.name)
     chapters = [segment for segment in view.segments if segment.kind == 'chapter']
@@ -595,7 +518,6 @@ def test_a_serially_numbered_book_flags_nothing_in_the_stage1_view(work):
     base = work / 'Output'
     novel_dir, _removed, _initial = run_source(source, base)
 
-    run_approve(_context(novel_dir, 'stage0.approve'))
     run_partition(_context(novel_dir, 'stage1.partition'))
     view = ingest_views.stage1_view(base, novel_dir.name)
     chapters = [segment for segment in view.segments if segment.kind == 'chapter']
@@ -611,7 +533,6 @@ def test_unpartitionable_book_is_an_explicit_stage1_terminal(work):
     base = work / 'Output'
     novel_dir, _removed, _initial = run_source(source, base)
 
-    run_approve(_context(novel_dir, 'stage0.approve'))
     with pytest.raises(TooFewChapters, match='少于最低要求'):
         run_partition(_context(novel_dir, 'stage1.partition'))
     assert not (novel_dir / 'stage1').exists()
@@ -632,19 +553,13 @@ def test_test_data_matches_the_registered_source_set():
 def test_real_test_data_runs_through_both_deterministic_layers(source: Path, work: Path):
     novel_dir, removed, initial = run_source(source, work / 'Output')
     assert initial is not None
-    # 首跑恒 pending（自动批准已于 2026-08-21 停产），零命中书也一样。
-    assert removed.report.approval == PendingApproval(status='pending')
-    assert _line(initial, 's0_approval').status == 'hit'
-    approved, approval_report = run_approve(
-        _context(novel_dir, 'stage0.approve'),
-        approved_at='2026-08-12T00:00:00+00:00',
-    )
+    # 首跑即机械接受（2026-09-15 全自动裁决），零命中书也一样。
+    _assert_auto_accepted(removed.report.approval)
+    assert _line(initial, 's0_approval').status == 'ok'
     partitioned, partition_report = run_partition(
         _context(novel_dir, 'stage1.partition'),
     )
 
-    assert approved.approval.status == 'approved'
-    assert approval_report.passed and approval_report.badge == 'amber'
     assert partition_report is not None and partition_report.passed
     assert removed.body_ratio >= 0.60
     assert len(partitioned.main_text.root) >= 1
@@ -662,7 +577,7 @@ def test_no_artifact_holds_the_removed_extra_body(work):
 
     ⚠ 判据刻意**不是**「任何产物的 `content_sha1` 不得等于 `normalized_source_sha1`」：
       零 removed 的干净书**合法地**满足 `clean_sha1 == normalized_source_sha1`（首跑零命中正是这个
-      形状，2026-08-21 起它同样停在人工闸门前）⇒ 那样写是假红。
+      形状）⇒ 那样写是假红。
       这里直接查番外正文本身。Stage0 只保存其 span、类型与标记行，正文仍以外部原始 txt
       为唯一证据源，不在产物目录复制。
     """
@@ -694,7 +609,7 @@ def test_no_artifact_holds_the_removed_extra_body(work):
     assert unique in source.read_bytes().decode('utf-8')
 
 
-# ── 2026-08-21 审批收口：not_run 出局 + 停产自动批准 ─────────────────────────
+# ── 2026-09-15 全自动裁决：审批格的取值面与状态解释 ─────────────────────────
 
 
 def test_approval_state_no_longer_carries_not_run():
@@ -710,10 +625,10 @@ def test_approval_state_no_longer_carries_not_run():
 
 
 def test_unapproved_states_are_interpreted_not_conflated(work):
-    """五行状态解释表：删掉 `not_run` 之后没有重新制造状态歧义。
+    """状态解释表：pending 与「没跑过」必须解释出**不同**的人读结论。
 
-    每一行都必须在真实盘面（产物在不在 + 报告字段）上解释出不同的人读结论，
-    而不是靠一个枚举值压平。
+    2026-09-15 之后 pending 只在存量书上出现（B1 之前中途留下的机器稿）；
+    它的唯一恢复口径是重跑 stage0.remove，而不是「等人工批准」。
     """
     from novel.errors import UpstreamMissing
     from novel.stages.stage1.partition import run_partition
@@ -730,32 +645,35 @@ def test_unapproved_states_are_interpreted_not_conflated(work):
     empty_dir.mkdir(parents=True)
     assert '先跑产它的那一层' in _stage1_outcome(empty_dir)
 
-    # 行 3：有 report + pending → 说「等人工批准」。
+    # 行 3：有 report + pending（存量机器稿）→ 指路重跑 stage0.remove 完成机械接受。
     source = _source(work, 'FQ_状态解释_9502.txt', 'enc_utf8_sig')
-    novel_dir, result, _ = run_source(source, work / 'Output')
-    assert '人工批准' in _stage1_outcome(novel_dir)
+    pending_dir, _result, _ = run_source(source, work / 'Output')
+    _craft_pending_legacy_draft(pending_dir)
+    assert '先重跑 stage0.remove' in _stage1_outcome(pending_dir)
 
-    # 行 4：approved + human → 真的跑得动（enc_utf8_sig 样本 ≥2 章）。
-    run_approve(_context(novel_dir, 'stage0.approve'))
+    # 行 4：approved（机械接受）→ 真的跑得动（enc_utf8_sig 样本 ≥2 章）。
+    source_ok = _source(work, 'FQ_状态解释_9503.txt', 'enc_utf8_sig')
+    novel_dir, _result, _ = run_source(source_ok, work / 'Output')
     assert _stage1_outcome(novel_dir) == 'ran'
 
     # 行 2（无 report + JobState failed）与行 1 同走「产物不存在」的 UpstreamMissing，
     # 失败与否由作业记录解释，本层不重复建模。
     #
     # ⚠ 这里曾有第 5 行：`approved + auto_zero_hit`（历史自动批）→「需人工重批」。
-    #   2026-08-22 随该死值删除（产地 08-21 停产 + 存量产物是 v1 而本产物已 v3、
-    #   本仓不迁移 ⇒ 结构不可达）。剩下的四行仍必须彼此分得开：那才是本用例的题目。
+    #   2026-08-22 随该死值删除。
 
 
 def test_execution_eligibility_has_exactly_one_home():
-    """纪律：五处消费方必须 import 同一个谓词，不许各自复述条件。
+    """纪律：消费方必须 import 同一个谓词，不许各自复述条件。
 
     审批条件在消费方里再次出现，就是绕过闸门的复活口
     （`docs/LESSONS.md` §21：改向时把同一条 R 的全部守卫一次列全）。
 
-    ⚠ **2026-08-22 之后这个谓词恰好等于 `status == 'approved'`**（`auto_zero_hit`
-    死值删除），本用例因此比以前更要紧而不是更没用：条件越像一句废话，
-    「顺手在消费方里直接写一遍」就越顺手，而下一次收紧时漏的就是那一处。
+    ⚠ **2026-09-15 之后这个谓词恰好等于 `status == 'approved'`**
+    （机械通过即自动接受；pending 只在存量书上出现），本用例因此比以前更要紧
+    而不是更没用：条件越像一句废话，「顺手在消费方里直接写一遍」就越顺手，
+    而下一次收紧时漏的就是那一处。
+    ⚠ queue 不再消费 stage0 资格（stage0.approve 闸退役后队列没有这一格）。
     """
     from pathlib import Path as _Path
 
@@ -763,7 +681,6 @@ def test_execution_eligibility_has_exactly_one_home():
         'novel/stages/stage1/partition.py',
         'novel/stages/stage0/checks.py',
         'novel/views/ingest.py',
-        'novel/orchestrator/queue.py',
         'novel/orchestrator/approvals.py',
     ]
     for rel in consumers:
@@ -776,9 +693,12 @@ def test_execution_eligibility_has_exactly_one_home():
             f'novel/stages/stage0/eligibility.py::is_stage0_executable')
         assert 'eligibility' in text, f'{rel} 应经 eligibility 落点判执行资格'
 
-    # ⚠ **第五处消费方是前端**，而它一直在自己拼这个条件
-    #   （`approved === 'approved' && approval_origin === 'human'`，2026-08-22 发现）。
-    #   外部评审点名的五处里，这一处是最后收口的：现在响应里带
+    queue_text = (_Path('novel/orchestrator/queue.py')).read_text(encoding='utf-8')
+    assert 'eligibility' not in queue_text, (
+        'stage0 人工闸退役后队列不再判 stage0 资格；'
+        '重新引入时必须走 eligibility 落点并把本文件 consumers 表补回')
+
+    # ⚠ **前端是另一处消费方**，而它一直在自己拼这个条件。现在响应里带
     #   `executable`，屏幕只读结论。这条断言防它长回来。
     screen = _Path('web/src/screens/stage0/Stage0Screen.tsx').read_text(encoding='utf-8')
     #   ⚠ 认的是**读取表达式**不是措辞：写成匹配 `=== 'approved'` 会连自己那条
@@ -791,41 +711,15 @@ def test_execution_eligibility_has_exactly_one_home():
     assert 'current.executable' in screen
 
 
-# ── 2026-08-21 P0-3：edit-plan 恢复出口的服务端重建（provenance 不信客户端）──
+# ── 命令 DTO：意图与事实在类型上分家（TODO-36） ─────────────────────────────
 
 
-def _selection_plan(work, sid: str, removal):
-    """经视图生成一份计划：机器段 + 一个新的人工 keep 段。
+def test_command_dto_cannot_even_express_forged_provenance():
+    """命令 DTO 与产物 DTO 分家之后，伪造 provenance **构造不出来**。
 
-    ⚠ 2026-08-22 阶段 C（TODO-36）之后**没有「篡改 provenance」这回事了**：
-    计划里的每一条只有 `span` + `kind`（`RequestedRemoval`），origin/行号/标记行/
-    两条预览在类型上就不在客户端手里。这份夹具因此只交意图，
-    由 `test_edit_plan_cannot_even_express_forged_provenance` 单独钉住那件事。
-    """
-    from contracts.schema.api import Stage0EditRequest
-    from novel.views.ingest import stage0_edit_plan, stage0_segments
-
-    view = stage0_segments(work / 'Output', sid)
-    machine = [item.id for item in view.segments if item.kind == 'remove']
-    manual = next(item.id for item in view.segments if item.kind == 'keep')
-    request = Stage0EditRequest(
-        expected_revision_id=removal.report.revision_id,
-        removed_segment_ids=[*machine, manual],
-        actor='planner', reason='人工补圈一段',
-    )
-    plan = stage0_edit_plan(work / 'Output', sid, request)
-    machine_spans = {segment.span for segment in removal.report.removed}
-    path = work / 'selection-plan.json'
-    path.write_text(plan.model_dump_json(), encoding='utf-8')
-    return path, machine_spans
-
-
-def test_edit_plan_cannot_even_express_forged_provenance():
-    """TODO-36：命令 DTO 与产物 DTO 分家之后，伪造 provenance **构造不出来**。
-
-    此前 `Stage0EditPlan.removed` 直接复用产物的 `RemovedSegment`，客户端可以提交
-    `origin='machine'` 或任意标记行；服务端会重新落定这些字段（伪造无效），
-    但**类型上看不出这是意图还是事实**。现在它只有两格。
+    `Stage0EditPlan.removed` 只收 `RequestedRemoval`（span + kind 意图）；
+    origin/行号/标记行/预览在类型上就不在客户端手里，事实字段由服务端
+    唯一落点复算。此职责现由 Stage5/6/7 的 typed 编辑计划共用同一分家原则。
     """
     import pydantic
     from contracts.schema.stage0 import RequestedRemoval, Stage0EditPlan
@@ -839,50 +733,6 @@ def test_edit_plan_cannot_even_express_forged_provenance():
         })
 
 
-def test_edit_plan_recomputes_provenance_server_side(work):
-    """恢复出口收口：origin/标记行一律服务端落定。
-
-    两条规则一起验：与当前版本机器段 span 完全一致的条目**原样保留**（origin 仍是
-    machine，人只是确认了机器的圈选）；新的人工 span 按 ledger 同一口径复算、
-    origin='human'。
-    """
-    from novel.stages.stage0.removal import run_edit_plan
-
-    source = _source(work, 'FQ_plan_prov_9601.txt', 'end_marker_then_fanwai')
-    novel_dir, removal, _initial = run_source(source, work / 'Output')
-    assert removal.report.removed, '这份样本必须已有机器剔除段'
-    text = decode_source_bytes(source.read_bytes()).text
-
-    path, machine_spans = _selection_plan(work, '9601', removal)
-    edited, _check = run_edit_plan(_context(novel_dir, 'stage0.edit'), path)
-
-    assert edited.revision_origin == 'human_edit'
-    assert edited.revision_id != removal.report.revision_id
-    human_origins = 0
-    for segment in edited.removed:
-        if segment.span in machine_spans:
-            assert segment.origin == 'machine', 'span 未变的机器段账目应原样保留'
-        else:
-            assert segment.origin == 'human', '人工新圈的段必须落 origin=human'
-            human_origins += 1
-        lo, hi = segment.span
-        assert segment.marker_line in text[lo:hi]
-    assert human_origins >= 1, '必须至少有一条人工新圈段'
-
-
-def test_edit_plan_refuses_when_source_hash_drifts(work):
-    """原文已换：页面上的 span 全部失效，计划必须死在门口而不是落到正式稿上。"""
-    from novel.stages.stage0.removal import run_edit_plan
-
-    source = _source(work, 'FQ_plan_prov_9602.txt', 'end_marker_then_fanwai')
-    novel_dir, removal, _initial = run_source(source, work / 'Output')
-    path, _machine_spans = _selection_plan(work, '9602', removal)
-
-    source.write_bytes(source.read_bytes() + '\n原文已被替换\n'.encode('utf-8'))
-    with pytest.raises(SourceConflict):
-        run_edit_plan(_context(novel_dir, 'stage0.edit'), path)
-
-
 # ── 2026-08-21 R-1.15 源文本覆盖不变量：schema-valid 定向反例 ────────────────
 
 
@@ -890,10 +740,6 @@ def test_r115_decomposition_is_derived_from_the_current_clean_text(work):
     """R-1.15 不再信任可篡改 span 报表；覆盖账只由当前原文复扫。"""
     source = _source(work, 'FQ_r115_9701.txt', 'end_marker_then_fanwai')
     novel_dir, removal, _initial = run_source(source, work / 'Output')
-    run_approve(
-        _context(novel_dir, 'stage0.approve'),
-        approved_at='2026-08-21T00:00:00+00:00',
-    )
     partitioned, report = run_partition(_context(novel_dir, 'stage1.partition'))
     assert report is not None and report.passed, '九条判据应全绿打底'
 
@@ -933,10 +779,6 @@ def test_emoji_and_extension_chars_keep_code_point_spans_honest(work):
     source = work / 'FQ_emoji_seam_9801.txt'
     source.write_bytes(text.encode('utf-8'))
     novel_dir, removal, _initial = run_source(source, work / 'Output')
-    run_approve(
-        _context(novel_dir, 'stage0.approve'),
-        approved_at='2026-08-21T00:00:00+00:00',
-    )
     partitioned, report = run_partition(_context(novel_dir, 'stage1.partition'))
 
     assert report is not None and report.passed

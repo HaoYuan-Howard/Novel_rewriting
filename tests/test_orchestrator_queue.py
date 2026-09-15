@@ -118,10 +118,10 @@ def test_an_unknown_stage_is_refused_not_silently_empty():
 
 
 def test_human_nodes_are_exactly_the_ones_a_person_does():
-    """stage6.approve 已随判官退役移出人工闸（2026-09-15）：默认自动定稿是
-    队列的普通 todo；仍由人把守的只有 stage0/stage7 的 approve 与 stage0.edit。"""
-    assert Q.HUMAN_NODES == {'stage0.approve', 'stage0.edit',
-                             'stage7.approve'}
+    """stage6.approve 不算人工闸（默认槽位序自动定稿是队列的普通 todo）；
+    stage0.approve / stage0.edit 已移入 RETIRED_NODES（2026-09-15 全自动裁决，
+    stage0 机械通过即自动接受）。现役人工闸只剩 stage7.approve（批次 B4 处理）。"""
+    assert Q.HUMAN_NODES == {'stage7.approve'}
 
 
 @pytest.mark.parametrize(

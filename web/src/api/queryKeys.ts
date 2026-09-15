@@ -24,7 +24,6 @@ export const qk = {
 
   stage0Report: (sid: string) => ['stage0', sid, 'report'] as const,
   stage0Segments: (sid: string) => ['stage0', sid, 'segments'] as const,
-  stage0Candidate: (sid: string) => ['stage0', sid, 'candidate'] as const,
   stage1: (sid: string) => ['stage1', sid] as const,
   reading: (sid: string, o: number) => ['reading', sid, o] as const,
   blueprintReadingWorkpack: (sid: string, scope?: string) =>

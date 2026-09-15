@@ -213,11 +213,13 @@ def published(
     revision: Stage0Revision,
     *,
     candidate_revision_id: str | None,
+    approval: Stage0Approval | None = None,
 ) -> Stage0Revisions:
-    """把一条新 revision 追加进链并指为当前稿。**审批一律退回 pending。**
+    """把一条新 revision 追加进链并指为当前稿，带上它的审批状态。
 
-    ⚠ 换稿必须重新批准，这不是保守：stage2 是第一个花钱的层，而这道闸门是
-    纯数字番外盲区全链唯一的防线（`docs/schema/stage1.md` §五）。
+    ⚠ 2026-09-15 全自动裁决：stage0 的人工批准闸退役，机器稿在机械校验通过后
+    由 producer 写入 auto 批准（`removal._auto_approval`）——本参数不再默认退回
+    pending；`approval=None` 仅保留给历史解码路径。
     """
     from contracts.schema.stage0 import PendingApproval
     existing = [item.revision_id for item in revisions.revisions]
@@ -228,7 +230,8 @@ def published(
         source=revisions.source,
         revisions=entries,
         current=Stage0Current(
-            revision_id=revision.revision_id, approval=PendingApproval(status='pending')),
+            revision_id=revision.revision_id,
+            approval=approval or PendingApproval(status='pending')),
         candidate_revision_id=candidate_revision_id,
         dismissed=[item for item in revisions.dismissed
                    if item.revision_id != revision.revision_id],

@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from novel.llm.client import DEFAULT_RUNGS, PRO_FALLBACK_MODEL
-from novel.stages.stage0.removal import _context, run_approve, run_source
+from novel.stages.stage0.removal import _context, run_source
 from novel.stages.stage1.partition import run_partition
 from tests.fixtures_ingest import body
 from tools import current_corpus_paid_preview as P
@@ -272,13 +272,8 @@ def test_stage1_preview_reads_two_books_from_one_canonical_output_root(tmp_path)
     shared = source_spec.books[0].base
     for book in source_spec.books:
         assert book.source is not None
-        novel_dir, removed, _ = run_source(book.source, shared)
-        if removed.report.approval.status != 'approved':
-            run_approve(
-                _context(novel_dir, 'stage0.approve'),
-                actor='current-corpus-preview-test',
-                reason='为共享根 Stage1 只读预览构造已批准 fixture',
-            )
+        # stage0 机械通过即自动接受（2026-09-15）：首跑即 approved，无需人工批准。
+        novel_dir, _removed, _ = run_source(book.source, shared)
         run_partition(_context(novel_dir, 'stage1.partition'))
 
     plan = P.build_plan(

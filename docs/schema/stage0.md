@@ -1,8 +1,10 @@
-# Stage0 schema：非正文剔除与人工闸门
+# Stage0 schema：非正文剔除
 
-Stage0 把原始 txt 变成只含文案和正文的文本，并在进入 Stage1 前要求人工批准。
-本层不调用 LLM。产品要求与判据编号见 `docs/BACKEND_CONTRACT.md::R-0`；本文只说明
-现役载体、字段语义和读写边界。
+Stage0 把原始 txt 变成只含文案和正文的文本；机械校验（含正文占比闸）通过即由
+producer 写入 auto 批准（`system:stage0-auto`），进入 Stage1。2026-09-15 全自动
+裁决：`stage0.approve` / `stage0.edit` 节点退役（RETIRED_NODES），剔除的语义
+正确性（番外盲区）随交付披露（Q-13）。本层不调用 LLM。产品要求与判据编号见
+`docs/BACKEND_CONTRACT.md::R-0`；本文只说明现役载体、字段语义和读写边界。
 
 ## 一、产物与权威关系
 

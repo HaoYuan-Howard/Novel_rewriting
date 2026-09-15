@@ -13,20 +13,17 @@ from collections import Counter
 from dataclasses import dataclass
 
 from contracts.schema.api import (
-    Stage0CandidateRevisionView,
-    Stage0CandidateView,
-    Stage0EditRequest,
     Stage0Report,
     Stage0Segment,
     Stage0Segments,
     Stage1Segment,
     Stage1View,
 )
-from contracts.schema.stage0 import RequestedRemoval, Stage0EditPlan, Stage0Snapshot
+from contracts.schema.stage0 import Stage0Snapshot
 from contracts.schema.stage1 import HookCopy, MainText
 from novel import paths, prov
 from novel.core.ingest import (
-    DecodeProblem, ScanResult, decode_source_bytes, nonbody_kind, scan_text,
+    DecodeProblem, ScanResult, decode_source_bytes, scan_text,
 )
 from novel.core.source import describe_source, resolve_recorded_source
 from novel.core.warnings import describe
@@ -46,38 +43,6 @@ from novel.stages.stage1.audit import Stage1Audit, audit_surface
 from novel.store import ArtifactStore
 
 STAGE0_NODE = 'stage0.remove'
-
-
-def stage0_candidate(
-    base: str | os.PathLike[str], sid: str,
-) -> Stage0CandidateView:
-    """待裁决的机器候选 + 当前稿的读数，**并排给出**。
-
-    ⚠ 前端不自己算「机器重跑改了什么」：那是服务端已经有的事实（两版的正文长度、
-    剔除条数、起源），各算一遍就是两个会分家的落点。
-    """
-    from novel.stages.stage0 import revisions as rev
-    store = _store(base, sid, STAGE0_NODE)
-    log = rev.read(store)
-    if log is None or log.candidate_revision_id is None:
-        raise UpstreamMissing('stage0 当前没有待裁决的机器候选')
-    current = rev.current_revision(log)
-    candidate = rev.by_id(log, log.candidate_revision_id)
-    return Stage0CandidateView(
-        candidate=Stage0CandidateRevisionView(
-            revision_id=candidate.revision_id,
-            origin=candidate.origin,
-            clean_text=candidate.content.clean_text,
-            body_code_points=len(candidate.content.clean_text),
-            removed_count=len(candidate.content.removed),
-        ),
-        current_revision_id=current.revision_id,
-        current_body_code_points=len(current.content.clean_text),
-        current_removed_count=len(current.content.removed),
-        current_origin=current.origin,
-    )
-
-
 STAGE1_NODE = 'stage1.partition'
 _PARAGRAPH_BREAK = re.compile(r'\n[ \t　]*\n')
 
@@ -271,62 +236,6 @@ def stage0_segments(base: str | os.PathLike[str], sid: str) -> Stage0Segments:
     )
 
 
-def _requested_removal(segment: Stage0Segment) -> RequestedRemoval:
-    """页面分区选择只产生 ``kind``/``span`` 意图；事实字段由 CLI 复算。"""
-    first = next((line.strip() for line in segment.text.splitlines() if line.strip()), '')
-    marker_line = segment.marker_line or first or '人工剔除'
-    return RequestedRemoval(
-        kind=segment.removed_kind or nonbody_kind(marker_line) or '番外',
-        span=(segment.start, segment.end),
-    )
-
-
-def stage0_edit_plan(
-    base: str | os.PathLike[str],
-    sid: str,
-    request: Stage0EditRequest,
-) -> Stage0EditPlan:
-    '''把分区 id 选择转成完整计划；未知/过期 id 在任何子进程启动前拒绝。'''
-    report = stage0_report(base, sid)
-    stale = []
-    if request.expected_revision_id != report.revision_id:
-        stale.append(
-            f'revision 页面={request.expected_revision_id[:12]}… '
-            f'当前={report.revision_id[:12]}…')
-    if stale:
-        raise HumanEditProtected('Stage 0 页面已过期，请刷新后重选：' + '；'.join(stale))
-
-    view = stage0_segments(base, sid)
-    if not view.available:
-        raise SourceConflict(view.reason or '原始文件当前不可用于审校')
-    by_id = {segment.id: segment for segment in view.segments}
-    selected = set(request.removed_segment_ids)
-    unknown = sorted(selected - set(by_id))
-    if unknown:
-        raise HumanEditProtected(f'页面提交了当前版本不存在的分区 id：{unknown[:8]}')
-    end_markers = sorted(
-        item for item in selected if by_id[item].kind == 'end_marker')
-    if end_markers:
-        raise HumanEditProtected('完结标记属于保留正文，不能在 Stage 0 作为剔除段选择')
-
-    ordered = [segment for segment in view.segments if segment.id in selected]
-    return Stage0EditPlan(
-        expected_revision_id=report.revision_id,
-        removed=[_requested_removal(segment) for segment in ordered],
-        actor=request.actor,
-        reason=request.reason,
-    )
-
-
-def stage0_edit_target_revision_id(
-    base: str | os.PathLike[str], sid: str, plan: Stage0EditPlan,
-) -> str:
-    """返回这份计划唯一能落成的 revision，不读取“执行后的 latest”。"""
-    novel_dir = paths.resolve_novel_dir(base, sid)
-    ctx = readonly_ctx(novel_dir, 'stage0.edit', prov.code_version())
-    return removal.prepare_edit_plan(ctx, plan).revision_id
-
-
 @dataclass(frozen=True)
 class _Stage1Material:
     clean: str
@@ -346,7 +255,8 @@ def _stage1_material(base: str | os.PathLike[str], sid: str) -> _Stage1Material:
     from novel.stages.stage0.eligibility import is_stage0_executable
     if not is_stage0_executable(stage0):
         raise ApprovalRequired(
-            f'stage0 当前状态为 {stage0.approval.status!r}；先回 S-00 审阅并批准')
+            f'stage0 当前状态为 {stage0.approval.status!r}；'
+            '先重跑 stage0.remove 完成机械接受，再启动 stage1')
     clean = store.read_text(partition.CLEAN_TEXT)
     actual = prov.content_sha1(clean.encode('utf-8'))
     if actual != stage0.clean_sha1:

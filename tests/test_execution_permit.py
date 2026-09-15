@@ -339,8 +339,9 @@ def test_stage5_paid_revise_accepts_only_a_nonempty_picked_subset(
 
 def test_recovery_cannot_jump_past_the_current_blocker(monkeypatch, tmp_path):
     _stable(monkeypatch)
+    # stage0.approve 已退役（2026-09-15）：用现役早层节点钉同一条「不得越闸」。
     current = _next(
-        tmp_path, state='blocked', node='stage0.approve',
+        tmp_path, state='blocked', node='stage1.partition',
         waiting_on=Q.WAITING_ON_INBOX)
     with pytest.raises(UnsupportedRunMode, match='位于当前 blocker'):
         P.permit_from_next(current, 'stage7.rename', ['--recheck'])
@@ -362,9 +363,6 @@ def test_policy_tables_are_closed_and_paid_rows_are_exactly_profiled():
     }
     assert all(tokens in EXECUTOR_PROFILED_RUNS[node] for node, tokens in paid)
     expected_files = {
-        ('stage0.edit', '--apply-edit'),
-        ('stage0.edit', '--apply-edit-plan'),
-        ('stage0.edit', '--apply-candidate-plan'),
         ('stage2.global', '--apply-edit'),
         ('stage2.blueprint', '--validate-edit'),
         ('stage2.blueprint', '--apply-edit'),

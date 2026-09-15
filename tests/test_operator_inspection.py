@@ -183,8 +183,8 @@ def test_approval_projection_reuses_snapshot_overview_and_code_without_fallback(
     assert A.get(
         tmp_path, 'book-1', overview=overview, code='code-v1') == 'approval-doc'
     # _spawns 先用解析后的书目录建 ctx；外层审批投影仍用 base 本身。
-    assert contexts == [(tmp_path / 'book_1', 'stage0.approve', 'code-v1'),
-                        (tmp_path, 'stage0.approve', 'code-v1')]
+    assert contexts == [(tmp_path / 'book_1', 'stage0.remove', 'code-v1'),
+                        (tmp_path, 'stage0.remove', 'code-v1')]
     assert A._READ_CODE.get() is None
     assert A._READ_OVERVIEW.get() is None
 

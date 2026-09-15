@@ -71,9 +71,7 @@ import type {
   InboxResponse,
   ReadingResponse,
   ReviewResponse,
-  Stage0EditResult,
   Stage0Report,
-  Stage0CandidateView,
   Stage0Segments,
   Stage1View,
   Stage2Global,
@@ -115,11 +113,6 @@ interface BackendStageState {
   done: boolean | null
   chapters_done: number[]
   reviewable: boolean
-}
-
-interface BackendStage0EditResult {
-  job: BackendJobRecord
-  revision_id: string | null
 }
 
 interface BackendNovelOverview {
@@ -380,27 +373,8 @@ export const realApi: Api = {
 
   getStage0Report: (sid) => get<Stage0Report>(n(sid) + '/stage0/report'),
   getStage0Segments: (sid) => get<Stage0Segments>(n(sid) + '/stage0/segments'),
-  editStage0: async (sid, request) => {
-    const raw = await post<BackendStage0EditResult>(n(sid) + '/stage0/edit', request)
-    return {
-      job: adaptJob(raw.job),
-      revision_id: raw.revision_id,
-    } satisfies Stage0EditResult
-  },
-  approveStage0: async (sid, request) =>
-    adaptJob(await post<BackendJobRecord>(n(sid) + '/stage0/approve', request)),
-  getStage0Candidate: async (sid) => {
-    try {
-      return await get<Stage0CandidateView>(n(sid) + '/stage0/candidate')
-    } catch (error) {
-      if (isApiError(error) && error.kind === 'notfound') return null
-      throw error
-    }
-  },
-  adoptStage0Candidate: async (sid, request) =>
-    adaptJob(await post<BackendJobRecord>(n(sid) + '/stage0/candidate/adopt', request)),
-  dismissStage0Candidate: async (sid, request) =>
-    adaptJob(await post<BackendJobRecord>(n(sid) + '/stage0/candidate/dismiss', request)),
+  // stage0 的人工编辑/批准/候选三选一端点已随 2026-09-15 全自动裁决退役；
+  // 机械校验通过即自动接受，Stage0 只剩只读展示，stage1.partition 直接可跑。
   partitionStage1: async (sid) =>
     adaptJob(await post<BackendJobRecord>(n(sid) + '/stage1/partition')),
   getStage1: (sid) => get<Stage1View>(n(sid) + '/stage1'),

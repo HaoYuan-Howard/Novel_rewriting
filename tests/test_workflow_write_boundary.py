@@ -8,7 +8,7 @@ import pytest
 
 from novel.cli.main import main
 from novel.run import RunContext
-from novel.stages.stage0.removal import run_approve, run_source
+from novel.stages.stage0.removal import run_source
 from novel.stages.stage1.partition import MAIN_TEXT, run_partition
 from novel.store import ArtifactStore
 from novel.work_units import WorkUnitRefused, workflow_manifest
@@ -25,8 +25,7 @@ def _current_and_frozen(tmp_path: Path) -> tuple[Path, Path]:
     source.write_text(body(), encoding='utf-8')
     current = tmp_path / 'current'
     novel_dir, _result, _report = run_source(source, current)
-    run_approve(RunContext.open(current, '42', 'stage0.approve', paid=False),
-                actor='边界测试', reason='已核对合成正文与剔除范围')
+    # stage0 机械通过即自动接受（2026-09-15）：首跑即 approved，无人工批准步骤。
     run_partition(RunContext.open(current, '42', 'stage1.partition', paid=False))
     # 旧 base 独立构造：只携原产物，没有当前工作流 manifest 或新预算。
     frozen = tmp_path / 'frozen'

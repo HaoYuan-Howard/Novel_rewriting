@@ -1194,7 +1194,10 @@ def _root_clean_sha1(novel_dir: Path) -> str:
 
 
 def _store_for(novel_dir: Path) -> ArtifactStore:
-    ctx = state.readonly_ctx(novel_dir, 'stage0.approve', _projection_code())
+    # 审批投影的只读仓没有单一「产它的节点」（跨 stage0～stage7 读数）；
+    # node 只进错误前缀。曾用 'stage0.approve'，该节点 2026-09-15 退役后
+    # 不能再作为 RunContext 的 node（取值面唯一落点是 NODES）。
+    ctx = state.readonly_ctx(novel_dir, 'stage0.remove', _projection_code())
     return ArtifactStore(ctx)
 
 

@@ -610,48 +610,12 @@ def _run_stage0_source(
 
 
 def _run_stage0(ctx: RunContext, flags: list[str]) -> int:
-    '''stage0 三个人工/机器动作。只有 remove 承担本层复检入口。'''
+    '''stage0 只剩 remove：机械剔除 + 自动接受（人工 approve/edit 已退役）。'''
     from contracts.schema.stage0 import Stage0Revisions
     from novel.stages.stage0 import checks, removal
     from novel.store import ArtifactStore
 
     tokens = set(N.flag_tokens(flags))
-    if ctx.node == 'stage0.approve':
-        expected_revision_id = _valued(flags, '--expected-revision-id')
-        actor = _valued(flags, '--actor')
-        reason = _valued(flags, '--reason')
-        if expected_revision_id is None or actor is None or reason is None:
-            raise TerminalState(
-                'stage0.approve 必须显式给 --expected-revision-id、--actor 与 --reason')
-        _art, report = removal.run_approve(
-            ctx, actor=actor, reason=reason,
-            expected_revision_id=expected_revision_id)
-        print(render(report))
-        return X.OK if report.passed else X.CHECK_FAILED
-    if ctx.node == 'stage0.edit':
-        edit_path = _valued(flags, '--apply-edit')
-        edit_plan_path = _valued(flags, '--apply-edit-plan')
-        candidate_plan_path = _valued(flags, '--apply-candidate-plan')
-        if sum(value is not None
-               for value in (edit_path, edit_plan_path, candidate_plan_path)) != 1:
-            raise TerminalState(
-                'stage0.edit 必须且只能给一种输入：--apply-edit / --apply-edit-plan / '
-                '--apply-candidate-plan')
-        if candidate_plan_path is not None:
-            art, report = removal.run_candidate_plan(ctx, candidate_plan_path)
-        elif edit_plan_path is not None:
-            art, report = removal.run_edit_plan(ctx, edit_plan_path)
-        else:
-            actor = _valued(flags, '--actor')
-            reason = _valued(flags, '--reason')
-            if actor is None or reason is None:
-                raise TerminalState('stage0.edit --apply-edit 必须显式给 --actor 与 --reason')
-            art, report = removal.run_edit(
-                ctx, edit_path or '', actor=actor, reason=reason)
-        print(render(report))
-        print(f'  ✓ 已落为 revision {art.revision_id[:12]}…'
-              f'（{art.revision_origin}）；状态 {art.approval.status}')
-        return X.OK
     if '--check-only' in tokens:
         if '--source' in tokens or '--dry-run' in tokens:
             raise TerminalState('stage0.remove --check-only 不与 --source/--dry-run 混用')

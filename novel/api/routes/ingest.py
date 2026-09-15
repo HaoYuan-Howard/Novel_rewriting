@@ -13,19 +13,12 @@ from fastapi import APIRouter, Depends, Query, Request
 from fastapi.concurrency import run_in_threadpool
 
 from contracts.schema.api import (
-    Stage0ApprovalRequest,
-    Stage0CandidateDecisionRequest,
-    Stage0CandidateView,
-    Stage0EditRequest,
-    Stage0EditResult,
     Stage0Report,
     Stage0Segments,
     Stage1View,
     UploadResult,
 )
 from contracts.schema.orchestration import JobRecord
-from contracts.schema.stage0 import Stage0CandidatePlan
-from novel.api.approval_stamp import stamp_approval_after_landed
 from novel.api.deps import checked_sid, get_base
 from novel.errors import HumanEditProtected, NovelError, SourcePathRejected
 from novel.orchestrator import jobs, uploads
@@ -48,116 +41,6 @@ def get_stage0_segments(
     base: str = Depends(get_base),
 ) -> Stage0Segments:
     return ingest.stage0_segments(base, sid)
-
-
-@router.post('/novels/{sid}/stage0/edit', response_model=Stage0EditResult)
-def edit_stage0(
-    request: Stage0EditRequest,
-    sid: str = Depends(checked_sid),
-    base: str = Depends(get_base),
-) -> Stage0EditResult:
-    plan = ingest.stage0_edit_plan(base, sid, request)
-    target_revision_id = ingest.stage0_edit_target_revision_id(base, sid, plan)
-    plan_path = uploads.save_edit_plan(base, sid, plan)
-    try:
-        record = jobs.run(
-            base,
-            'stage0.edit',
-            sid,
-            ['--apply-edit-plan', str(plan_path)],
-            follow_check=False,
-        )
-        return Stage0EditResult(
-            job=record,
-            revision_id=(target_revision_id
-                         if record.state in ('ok', 'landed_red') else None),
-        )
-    finally:
-        try:
-            uploads.discard_edit_plan(base, plan_path)
-        except NovelError as exc:
-            warnings.warn(
-                f'Stage 0 作业已结束，但一次性编辑计划清理失败：{exc}',
-                RuntimeWarning,
-                stacklevel=2,
-            )
-
-
-@router.post('/novels/{sid}/stage0/approve', response_model=JobRecord)
-def approve_stage0(
-    request: Stage0ApprovalRequest,
-    sid: str = Depends(checked_sid),
-    base: str = Depends(get_base),
-) -> JobRecord:
-    current = ingest.stage0_report(base, sid)
-    if request.expected_revision_id != current.revision_id:
-        raise HumanEditProtected(
-            'Stage0 批准页面已过期：'
-            f'工作包={request.expected_revision_id!r}，当前={current.revision_id!r}')
-    record = jobs.run(
-        base, 'stage0.approve', sid,
-        ['--expected-revision-id', request.expected_revision_id,
-         '--actor', request.actor, '--reason', request.reason],
-    )
-    if record.state == 'ok':
-        stamp_approval_after_landed(base, sid, 's0')
-    return record
-
-
-@router.get('/novels/{sid}/stage0/candidate', response_model=Stage0CandidateView)
-def get_stage0_candidate(
-    sid: str = Depends(checked_sid),
-    base: str = Depends(get_base),
-) -> Stage0CandidateView:
-    return ingest.stage0_candidate(base, sid)
-
-
-def _run_candidate_decision(
-    base: str, sid: str, request: Stage0CandidateDecisionRequest, action: str,
-) -> JobRecord:
-    plan = Stage0CandidatePlan(
-        action=action,
-        candidate_revision_id=request.candidate_revision_id,
-        expected_revision_id=request.expected_revision_id,
-        actor=request.actor,
-        reason=request.reason,
-    )
-    plan_path = uploads.save_candidate_plan(base, sid, plan)
-    record = jobs.run(
-        base, 'stage0.edit', sid,
-        ['--apply-candidate-plan', str(plan_path)], follow_check=False,
-    )
-    # ``ok`` and ``landed_red`` both mean the decision landed; the latter only
-    # says its deterministic report still has red rows.  Process failure or an
-    # exception is not terminal: retain the content-addressed decision so the
-    # next identical API request replays it.
-    if record.state in ('ok', 'landed_red'):
-        try:
-            uploads.discard_edit_plan(base, plan_path)
-        except NovelError as exc:
-            warnings.warn(
-                f'Stage 0 候选裁决作业已结束，但一次性决定清理失败：{exc}',
-                RuntimeWarning, stacklevel=2,
-            )
-    return record
-
-
-@router.post('/novels/{sid}/stage0/candidate/adopt', response_model=JobRecord)
-def adopt_stage0_candidate(
-    request: Stage0CandidateDecisionRequest,
-    sid: str = Depends(checked_sid),
-    base: str = Depends(get_base),
-) -> JobRecord:
-    return _run_candidate_decision(base, sid, request, 'adopt')
-
-
-@router.post('/novels/{sid}/stage0/candidate/dismiss', response_model=JobRecord)
-def dismiss_stage0_candidate(
-    request: Stage0CandidateDecisionRequest,
-    sid: str = Depends(checked_sid),
-    base: str = Depends(get_base),
-) -> JobRecord:
-    return _run_candidate_decision(base, sid, request, 'dismiss')
 
 
 @router.post('/novels/{sid}/stage1/partition', response_model=JobRecord)

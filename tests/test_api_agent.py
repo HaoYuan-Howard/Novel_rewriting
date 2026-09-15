@@ -443,13 +443,11 @@ def test_both_directions_of_the_mutex(client, monkeypatch, tmp_path):
     boxes = [box42]
     try:
         # agent 活着 ⇒ 起 API 作业 409（反向互斥在 jobs.start 里，路由层白拿）
-        # ⚠ 必填的人工凭据要带全：`stage0.approve` 的 `required_flags` 缺一个就是 400
-        #   （`validate_run` 在拼 argv 那一步拒），而那会让这条测试在**够不到互斥**的
-        #   地方变绿/变红——它要测的是「一条本来能起的作业被锁挡住」。
+        # ⚠ stage0.approve 已退役（2026-09-15）：互斥改用现役免费节点
+        #   `stage1.partition`——它无必填凭据，保证这条测试测的是「一条本来
+        #   能起的作业被锁挡住」，而不是在 validate_run 处先 400。
         r2 = c.post('/api/jobs', json={
-            'sid': '42', 'node': 'stage0.approve',
-            'flags': ['--expected-revision-id', 'a' * 64,
-                      '--actor', 'tester', '--reason', '互斥用例'],
+            'sid': '42', 'node': 'stage1.partition', 'flags': [],
         }, headers=UI)
         assert r2.status_code == 409
         # 同一本书的第二个 agent 仍 409（一本书一把锁）

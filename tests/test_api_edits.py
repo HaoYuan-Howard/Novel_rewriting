@@ -229,13 +229,13 @@ def test_stamp_chain_follows_current_gate_order_without_touching_stage3(monkeypa
 
 def test_stamp_writes_normally_through_the_short_admission_scope(tmp_path, monkeypatch):
     from novel.api import approval_stamp
-    from novel.api.routes import edits, ingest
     from novel.orchestrator import jobs
 
     stamped = []
     monkeypatch.setattr(approval_stamp.approvals, 'approve_gate',
                         lambda base, sid, gate: stamped.append((base, sid, gate)))
-    assert ingest.stamp_approval_after_landed is approval_stamp.stamp_approval_after_landed
+    # stage0 approve 路由已退役（2026-09-15 全自动裁决）；helper 仅剩遗留盘面
+    # 复刻与自身 admission-scope 语义的职责。
     approval_stamp.stamp_approval_after_landed(str(tmp_path), '422', 's0')
     assert stamped == [(str(tmp_path), '422', 's0')]
     assert jobs.REGISTRY.conflicting_holder('422') is None

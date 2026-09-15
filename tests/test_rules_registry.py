@@ -131,7 +131,8 @@ def test_disclosure_and_degradable_sets_are_pinned():
     from contracts.rules import REGISTRY
     disclosed = {r.rule for r in REGISTRY.all() if r.disclosable_unver}
     assert disclosed == {
-        'role_fate_unverifiable', 'secrets_absent', 'plot_semantics'}, \
+        'role_fate_unverifiable', 'secrets_absent', 'plot_semantics',
+        's0_correctness'}, \
         '披露集合变化须同步 Q-13 理由与本钉扎'
     degradable = {r.rule for r in REGISTRY.all() if r.degradable}
     assert degradable == {'paragraph_budget_missed'}, \

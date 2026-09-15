@@ -5,30 +5,26 @@
 本文件取代 `tests/test_stage0_merge.py`：码点级 diff3、typed 冲突、WAL 崩溃重放矩阵
 与 `_rounds/` 逐轮归档一起下线之后，那些用例守的洞由这里的三组接管——
 ① 链自证（逐条复算 `revision_id`）；② 物化投影可自愈、且**手改会被拦住**；
-③ 三选一（保留当前 / 采纳候选 / 采纳后再编辑）与它们的乐观锁、幂等重放。
+③ 机器重跑：机械校验通过即自动接受（2026-09-15 全自动裁决，人工 approve/edit/
+候选三选一已退役），存量人工稿关闭式拒绝重跑。
 """
 from __future__ import annotations
 
 import json
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
-from contracts.schema.api import Stage0CandidateDecisionRequest
 from contracts.schema.stage0 import (
-    Stage0CandidatePlan, Stage0Revisions,
+    PendingApproval, Stage0Current, Stage0RevisionContent, Stage0Revisions,
 )
-from novel.api.routes import ingest as ingest_routes
 from novel.errors import (
-    ArtifactUnreadable, HumanEditProtected, ProvenanceRefused, SourceConflict,
-    UpstreamMissing,
+    ArtifactUnreadable, SourceConflict, TerminalState,
 )
-from novel.orchestrator import uploads
 from novel.stages.stage0 import checks as stage0_checks
 from novel.stages.stage0 import removal
 from novel.stages.stage0 import revisions as rev
-from novel.stages.stage0.removal import CLEAN_REL, _context, run_edit, run_source
+from novel.stages.stage0.removal import CLEAN_REL, _context, run_source
 
 
 def _source(tmp_path: Path, sid: str = '900') -> Path:
@@ -59,42 +55,16 @@ def _log(novel_dir: Path) -> Stage0Revisions:
     return rev.read(removal.ArtifactStore(_context(novel_dir, 'stage0.remove')))
 
 
-def _approve(novel_dir: Path, *, at: str = '2026-08-22T00:00:00+00:00'):
-    return removal.run_approve(
-        _context(novel_dir, 'stage0.approve'),
-        actor='reviewer', reason='看过了', approved_at=at)[0]
+def _store(novel_dir: Path):
+    return removal.ArtifactStore(_context(novel_dir, 'stage0.remove'))
 
 
-def _edit(novel_dir: Path, tmp_path: Path, text: str):
-    path = tmp_path / 'human.txt'
-    path.write_text(text, encoding='utf-8', newline='')
-    return run_edit(
-        _context(novel_dir, 'stage0.edit'), path,
-        actor='annotator-a', reason='人工校正正文')[0]
-
-
-def _candidate_plan(novel_dir: Path, tmp_path: Path, action: str, *,
-                    actor: str = 'reviewer', reason: str = '三选一') -> Path:
-    log = _log(novel_dir)
-    plan = Stage0CandidatePlan(
-        action=action,
-        candidate_revision_id=log.candidate_revision_id,
-        expected_revision_id=log.current.revision_id,
-        actor=actor, reason=reason,
-    )
-    path = tmp_path / f'{action}-plan.json'
-    path.write_text(plan.model_dump_json(), encoding='utf-8', newline='')
-    return path
-
-
-def _pending_candidate(tmp_path: Path, monkeypatch, sid: str = '900'):
-    """机器重跑与**已批准**的当前稿不同 ⇒ 挂候选，正式稿一个字不动。"""
-    source = _source(tmp_path, sid)
-    novel_dir, _first, _ = run_source(source, tmp_path / 'Output')
-    _approve(novel_dir)
-    _machine_learns_new_extra(monkeypatch)
-    run_source(source, tmp_path / 'Output')
-    return novel_dir, source
+def _assert_auto_approval(approval) -> None:
+    """机械接受记录的形状（`removal._auto_approval` 唯一落点）。"""
+    assert approval.status == 'approved'
+    assert approval.by == 'system:stage0-auto'
+    assert approval.reason
+    assert approval.at
 
 
 # ── ① 链自证 ────────────────────────────────────────────────────────────────
@@ -110,7 +80,8 @@ def test_first_run_writes_one_machine_root_and_materializes_the_live_pair(tmp_pa
     assert root.parent_revision_id is None
     assert (root.origin, root.actor, root.reason) == ('machine', None, None)
     assert log.current.revision_id == root.revision_id
-    assert log.current.approval.status == 'pending'
+    # 首跑即机械接受（2026-09-15 全自动裁决）：不再停在人工闸前。
+    _assert_auto_approval(log.current.approval)
     assert log.candidate_revision_id is None and log.dismissed == []
 
     # 两份 live 产物就是 current 的物化投影，逐字。
@@ -118,9 +89,8 @@ def test_first_run_writes_one_machine_root_and_materializes_the_live_pair(tmp_pa
     assert result.report == rev.snapshot_of(log)
     assert result.report.revision_id == root.revision_id
     assert result.report.revision_origin == 'machine'
-    # 零命中首跑照样停在人工闸前（2026-08-21 停产自动批）。
     assert check is not None
-    assert next(line for line in check.rules if line.rule == 's0_approval').status == 'hit'
+    assert next(line for line in check.rules if line.rule == 's0_approval').status == 'ok'
     assert next(
         line for line in check.rules if line.rule == 's0_revision_chain').status == 'ok'
 
@@ -207,7 +177,7 @@ def test_stale_materialization_heals_on_the_next_write_path(tmp_path, monkeypatc
     stale_clean = (novel_dir / CLEAN_REL).read_bytes()
 
     _machine_learns_new_extra(monkeypatch)
-    run_source(source, tmp_path / 'Output')          # 当前稿是机器且 pending ⇒ 直接替换
+    run_source(source, tmp_path / 'Output')          # 当前稿是机器稿 ⇒ 直接替换
     fresh_clean = (novel_dir / CLEAN_REL).read_bytes()
     assert fresh_clean != stale_clean
 
@@ -221,25 +191,7 @@ def test_stale_materialization_heals_on_the_next_write_path(tmp_path, monkeypatc
     assert (novel_dir / CLEAN_REL).read_bytes() == fresh_clean
 
 
-def test_bypassing_the_entry_point_to_edit_clean_text_is_refused_not_overwritten(
-        tmp_path):
-    """live 正文是投影，但**投影不是可以随便冲掉的东西**。
-
-    中断留下的一定是链上某一版的正文；手改留下的字节链上一版都对不上。
-    ⇒ 对不上就拒绝并指路，绝不「补一次物化」把人的字悄悄冲掉——剔除是破坏性的，
-    产物目录里没有第二份副本。
-    """
-    novel_dir, _first, _ = run_source(_source(tmp_path, '921'), tmp_path / 'Output')
-    forged = '绕过入口直接改盘。\n'
-    (novel_dir / CLEAN_REL).write_text(forged, encoding='utf-8', newline='')
-
-    with pytest.raises(HumanEditProtected, match='绕过'):
-        _approve(novel_dir)
-
-    assert (novel_dir / CLEAN_REL).read_text(encoding='utf-8') == forged
-
-
-# ── ③ 机器重跑：换掉 / 挂候选，两条路各有明确条件 ──────────────────────────
+# ── ③ 机器重跑：机械通过即自动接受 ──────────────────────────────────────────
 
 
 def test_same_machine_result_changes_nothing_on_disk(tmp_path):
@@ -253,9 +205,13 @@ def test_same_machine_result_changes_nothing_on_disk(tmp_path):
     assert {rel: (novel_dir / rel).read_bytes() for rel in before} == before
 
 
-def test_machine_rerun_replaces_an_unapproved_machine_draft_without_a_candidate(
+def test_machine_rerun_replaces_the_machine_draft_and_stays_auto_approved(
         tmp_path, monkeypatch):
-    """当前稿是机器算的、还没人看过 ⇒ 换成新结果**不丢任何东西**。"""
+    """当前稿是机器算的 ⇒ 换成新结果不丢任何东西，且**保持机械接受**。
+
+    2026-09-15 全自动裁决前这里要求人工重批（换稿退回 pending）；现在
+    `stage0.remove` 的机械判据就是唯一放行条件，替换稿直接带 auto 批准。
+    """
     source = _source(tmp_path, '931')
     novel_dir, first, _ = run_source(source, tmp_path / 'Output')
     _machine_learns_new_extra(monkeypatch)
@@ -267,31 +223,12 @@ def test_machine_rerun_replaces_an_unapproved_machine_draft_without_a_candidate(
     assert len(log.revisions) == 2
     assert log.current.revision_id != first.report.revision_id
     assert rev.current_revision(log).parent_revision_id == first.report.revision_id
-    assert log.current.approval.status == 'pending'
+    _assert_auto_approval(log.current.approval)
     assert second.report.revision_origin == 'machine'
     assert second.clean_text != first.clean_text
-
-
-@pytest.mark.parametrize('guard', ['approved', 'human_edit'])
-def test_machine_rerun_only_proposes_a_candidate_when_something_could_be_lost(
-        tmp_path, monkeypatch, guard):
-    source = _source(tmp_path, '932' if guard == 'approved' else '933')
-    novel_dir, first, _ = run_source(source, tmp_path / 'Output')
-    if guard == 'approved':
-        _approve(novel_dir)
-    else:
-        _edit(novel_dir, tmp_path, first.clean_text + '人工补记一行。\n')
-    before_clean = (novel_dir / CLEAN_REL).read_bytes()
-
-    _machine_learns_new_extra(monkeypatch)
-    run_source(source, tmp_path / 'Output')
-
-    log = _log(novel_dir)
-    assert log.candidate_revision_id is not None
-    candidate = rev.by_id(log, log.candidate_revision_id)
-    assert candidate.origin == 'machine'
-    # 正式稿一个字不动：候选只是链上一条还没被指向的 revision。
-    assert (novel_dir / CLEAN_REL).read_bytes() == before_clean
+    # 替换后执行资格仍然成立：下游 stage1 无需任何人工动作。
+    from novel.stages.stage0.eligibility import is_stage0_executable
+    assert is_stage0_executable(second.report)
 
 
 def test_a_changed_source_is_refused_before_anything_is_written(tmp_path):
@@ -306,214 +243,62 @@ def test_a_changed_source_is_refused_before_anything_is_written(tmp_path):
     assert (novel_dir / rev.REVISIONS_REL).read_bytes() == before
 
 
-# ── ④ 三选一 ────────────────────────────────────────────────────────────────
+def test_human_origin_legacy_draft_refuses_the_machine_rerun(tmp_path):
+    """存量书含人工剔除内容（旧 stage0.edit 产物）⇒ 关闭式拒绝重跑。
 
+    机器重算会覆盖人工内容，而人工编辑入口已随全自动裁决退役——所以不是
+    「挂候选等裁决」，而是指引显式废弃书目录后重跑（R-0.14），绝不静默覆盖。
+    """
+    source = _source(tmp_path, '935')
+    novel_dir, first, _ = run_source(source, tmp_path / 'Output')
 
-def test_adopting_a_candidate_records_who_swapped_the_text_and_reopens_the_gate(
-        tmp_path, monkeypatch):
-    novel_dir, _source = _pending_candidate(tmp_path, monkeypatch, '940')
-    log = _log(novel_dir)
-    candidate = rev.by_id(log, log.candidate_revision_id)
-
-    removal.run_candidate_plan(
-        _context(novel_dir, 'stage0.edit'),
-        _candidate_plan(novel_dir, tmp_path, 'adopt',
-                        actor='reviewer', reason='机器新结果更准'))
-
-    after = _log(novel_dir)
-    current = rev.current_revision(after)
-    assert current.origin == 'human_adopt'
-    assert (current.actor, current.reason) == ('reviewer', '机器新结果更准')
-    assert current.content == candidate.content          # 内容逐字取候选……
-    assert current.revision_id != candidate.revision_id  # ……但它是另一次状态转移
-    assert current.parent_revision_id == log.current.revision_id
-    assert after.candidate_revision_id is None
-    # ⚠ 换稿必须重新批准：原来那一版是**已批准**的，采纳之后闸门重新关上。
-    assert after.current.approval.status == 'pending'
-    assert (novel_dir / CLEAN_REL).read_text(encoding='utf-8') == candidate.content.clean_text
-
-
-def test_dismissing_a_candidate_keeps_the_current_text_and_never_resurrects_it(
-        tmp_path, monkeypatch):
-    novel_dir, source = _pending_candidate(tmp_path, monkeypatch, '941')
-    before_clean = (novel_dir / CLEAN_REL).read_bytes()
-    log = _log(novel_dir)
-    dismissed_id = log.candidate_revision_id
-
-    removal.run_candidate_plan(
-        _context(novel_dir, 'stage0.edit'),
-        _candidate_plan(novel_dir, tmp_path, 'dismiss',
-                        actor='reviewer', reason='机器认错了，保留当前稿'))
-
-    after = _log(novel_dir)
-    assert after.candidate_revision_id is None
-    assert after.current.revision_id == log.current.revision_id
-    assert after.current.approval.status == 'approved'   # 当前稿没动 ⇒ 批准也没动
-    assert [item.revision_id for item in after.dismissed] == [dismissed_id]
-    assert (novel_dir / CLEAN_REL).read_bytes() == before_clean
-
-    # 机器再跑一次仍然算出同一份内容 ⇒ 同一个 id ⇒ **不复活**。
-    run_source(source, tmp_path / 'Output')
-    assert _log(novel_dir).candidate_revision_id is None
-
-
-def test_editing_on_top_of_an_adopted_candidate_is_just_adopt_then_edit(
-        tmp_path, monkeypatch):
-    """三选一的第三支不是第三个动作：adopt 之后照常走 `stage0.edit`。"""
-    novel_dir, _source = _pending_candidate(tmp_path, monkeypatch, '942')
-    removal.run_candidate_plan(
-        _context(novel_dir, 'stage0.edit'),
-        _candidate_plan(novel_dir, tmp_path, 'adopt'))
-    adopted = rev.current_revision(_log(novel_dir))
-
-    edited = _edit(novel_dir, tmp_path, adopted.content.clean_text + '再补一句。\n')
-
-    log = _log(novel_dir)
-    assert [item.origin for item in log.revisions] == [
-        'machine', 'machine', 'human_adopt', 'human_edit']
-    assert edited.revision_origin == 'human_edit'
-    assert rev.current_revision(log).parent_revision_id == adopted.revision_id
-    assert edited.approval.status == 'pending'
-
-
-def test_a_stale_page_cannot_decide_a_candidate(tmp_path, monkeypatch):
-    novel_dir, _source = _pending_candidate(tmp_path, monkeypatch, '943')
-    plan_path = _candidate_plan(novel_dir, tmp_path, 'adopt')
-    # 页面还开着，另一条路先把当前稿改了。
-    _edit(novel_dir, tmp_path, '另一位审阅者先改了正文。\n')
-
-    with pytest.raises(HumanEditProtected):
-        removal.run_candidate_plan(_context(novel_dir, 'stage0.edit'), plan_path)
-
-
-@pytest.mark.parametrize('action', ['adopt', 'dismiss'])
-def test_replaying_the_same_decision_after_a_crash_is_idempotent(
-        tmp_path, monkeypatch, action):
-    novel_dir, _source = _pending_candidate(
-        tmp_path, monkeypatch, '944' if action == 'adopt' else '945')
-    plan_path = _candidate_plan(novel_dir, tmp_path, action)
-
-    first, _ = removal.run_candidate_plan(_context(novel_dir, 'stage0.edit'), plan_path)
-    landed = (novel_dir / rev.REVISIONS_REL).read_bytes()
-
-    # 进程崩在 CLI 返回之前 ⇒ 同一份决定再跑一次，只认账不翻案。
-    again, _ = removal.run_candidate_plan(_context(novel_dir, 'stage0.edit'), plan_path)
-
-    assert again == first
-    assert (novel_dir / rev.REVISIONS_REL).read_bytes() == landed
-
-
-def test_reading_a_candidate_when_there_is_none_says_so(tmp_path):
-    novel_dir, _first, _ = run_source(_source(tmp_path, '946'), tmp_path / 'Output')
-    with pytest.raises(UpstreamMissing, match='没有待裁决'):
-        removal.read_candidate(_context(novel_dir, 'stage0.remove'))
-
-
-# ── ⑤ 审批 ──────────────────────────────────────────────────────────────────
-
-
-def test_approval_rolls_back_to_pending_when_the_source_moves_mid_commit(
-        tmp_path, monkeypatch):
-    """提交与后置条件之间原文被换 ⇒ 回滚。**回滚 = 再原子写一次那一份文件。**"""
-    source = _source(tmp_path, '950')
-    novel_dir, _first, _ = run_source(source, tmp_path / 'Output')
+    # 复刻 B1 之前的存量盘面：链上最新一版是人工编辑稿（origin=human_edit）。
+    store = _store(novel_dir)
+    log = rev.read(store)
+    current = rev.current_revision(log)
+    human = rev.make_revision(
+        parent_revision_id=current.revision_id, origin='human_edit',
+        actor='annotator', reason='存量人工校正', code='legacy',
+        content=Stage0RevisionContent(
+            clean_text=current.content.clean_text + '人工补记一行。\n',
+            removed=first.report.removed))
+    rev.commit(store, rev.published(log, human, candidate_revision_id=None))
     before = (novel_dir / rev.REVISIONS_REL).read_bytes()
-    original_write = removal.ArtifactStore.write
 
-    def write_then_move_source(self, rel, artifact):
-        path = original_write(self, rel, artifact)
-        if rel == rev.REVISIONS_REL:
-            source.write_bytes(source.read_bytes() + b'\nsource changed during commit\n')
-        return path
-
-    monkeypatch.setattr(removal.ArtifactStore, 'write', write_then_move_source)
-
-    with pytest.raises(ProvenanceRefused, match='not current'):
-        _approve(novel_dir)
+    with pytest.raises(TerminalState, match='origin=human|人工剔除'):
+        run_source(source, tmp_path / 'Output')
 
     assert (novel_dir / rev.REVISIONS_REL).read_bytes() == before
+    assert (novel_dir / CLEAN_REL).read_text(encoding='utf-8').endswith('人工补记一行。\n')
 
 
-def test_approving_moves_only_the_gate_and_never_forks_the_chain(tmp_path):
-    """批准是唯一一件**不改变正文**的人工决定 ⇒ 它不产生新 revision。
+def test_pending_machine_draft_keeps_stage1_blocked_until_stage0_accepts(tmp_path):
+    """存量书停在 pending（B1 之前中途留下的机器稿）⇒ stage1 拒绝并指路重跑。
 
-    ⚠ 这里曾是一对 legacy 用例（`auto_zero_hit` 可 decode 不可执行 / 人工重批后恢复
-    资格）。该取值 2026-08-22 删除后那两条题目不存在了，但它们各自钉住的一句
-    「批准只动闸门那一格」仍然要有人钉——本用例接手的就是那一句。
+    「先重跑 stage0.remove 完成机械接受」是现役唯一恢复口径；执行资格的
+    唯一落点仍是 `is_stage0_executable`，views 与 producer 都不得复述条件。
     """
+    from novel.errors import ApprovalRequired
     from novel.stages.stage0.eligibility import is_stage0_executable
+    from novel.stages.stage1.partition import run_partition
 
-    novel_dir, _first, _ = run_source(_source(tmp_path, '961'), tmp_path / 'Output')
-    before_clean = (novel_dir / CLEAN_REL).read_bytes()
-    before = _log(novel_dir).current.revision_id
-    assert not is_stage0_executable(rev.snapshot_of(_log(novel_dir)))
+    source = _source(tmp_path, '936')
+    novel_dir, first, _ = run_source(source, tmp_path / 'Output')
+    assert is_stage0_executable(first.report)
 
-    approved = _approve(novel_dir)
+    # 把盘面退回 B1 之前的形状：同一版机器稿、批准格还是 pending。
+    store = _store(novel_dir)
+    log = rev.read(store)
+    rev.commit(store, log.model_copy(update={'current': Stage0Current(
+        revision_id=log.current.revision_id,
+        approval=PendingApproval(status='pending'))}))
 
-    assert approved.approval.by == 'reviewer' and approved.approval.reason == '看过了'
-    assert approved.revision_id == before
-    assert len(_log(novel_dir).revisions) == 1
-    assert (novel_dir / CLEAN_REL).read_bytes() == before_clean
-    assert is_stage0_executable(approved)
+    snapshot = rev.snapshot_of(rev.read(store))
+    assert not is_stage0_executable(snapshot)
+    with pytest.raises(ApprovalRequired, match='先重跑 stage0.remove'):
+        run_partition(_context(novel_dir, 'stage1.partition'))
+    assert not (novel_dir / 'stage1').exists()
 
-
-# ── ⑥ HTTP：一次性决定的留存与清理 ──────────────────────────────────────────
-
-
-def _decision_request() -> Stage0CandidateDecisionRequest:
-    return Stage0CandidateDecisionRequest(
-        candidate_revision_id='a' * 64,
-        expected_revision_id='b' * 64,
-        actor='api-reviewer', reason='retain until terminal',
-    )
-
-
-def test_api_candidate_plan_is_content_addressed_and_cleaned_only_after_terminal(
-    tmp_path, monkeypatch,
-):
-    request = _decision_request()
-    plan = Stage0CandidatePlan(action='adopt', **request.model_dump())
-    first = uploads.save_candidate_plan(tmp_path, '901', plan)
-    second = uploads.save_candidate_plan(tmp_path, '901', plan)
-    assert first == second and first.is_file()
-
-    monkeypatch.setattr(ingest_routes.uploads, 'save_candidate_plan', lambda *_a: first)
-    discarded: list[Path] = []
-    real_discard = uploads.discard_edit_plan
-
-    def discard(base, path):
-        discarded.append(Path(path))
-        real_discard(base, path)
-
-    monkeypatch.setattr(ingest_routes.uploads, 'discard_edit_plan', discard)
-    monkeypatch.setattr(
-        ingest_routes.jobs, 'run', lambda *_a, **_k: SimpleNamespace(state='failed'))
-    failed = ingest_routes._run_candidate_decision(
-        str(tmp_path), '901', request, 'adopt')
-    assert failed.state == 'failed' and discarded == [] and first.is_file()
-
-    monkeypatch.setattr(
-        ingest_routes.jobs, 'run', lambda *_a, **_k: SimpleNamespace(state='landed_red'))
-    landed = ingest_routes._run_candidate_decision(
-        str(tmp_path), '901', request, 'adopt')
-    assert landed.state == 'landed_red' and discarded == [first] and not first.exists()
-
-
-def test_api_keeps_the_candidate_plan_when_the_job_runner_crashes(tmp_path, monkeypatch):
-    request = _decision_request()
-    plan_path = tmp_path / 'durable-candidate-plan.json'
-    plan_path.write_text('{}', encoding='utf-8')
-    monkeypatch.setattr(
-        ingest_routes.uploads, 'save_candidate_plan', lambda *_a: plan_path)
-    discarded: list[Path] = []
-    monkeypatch.setattr(
-        ingest_routes.uploads, 'discard_edit_plan',
-        lambda _base, path: discarded.append(Path(path)))
-
-    def crash(*_args, **_kwargs):
-        raise RuntimeError('spawn crashed')
-
-    monkeypatch.setattr(ingest_routes.jobs, 'run', crash)
-    with pytest.raises(RuntimeError, match='spawn crashed'):
-        ingest_routes._run_candidate_decision(str(tmp_path), '901', request, 'adopt')
-    assert discarded == [] and plan_path.is_file()
+    from novel.views import ingest as ingest_views
+    with pytest.raises(ApprovalRequired, match='先重跑 stage0.remove'):
+        ingest_views.stage1_view(novel_dir.parent, novel_dir.name)

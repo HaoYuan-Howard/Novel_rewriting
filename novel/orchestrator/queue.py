@@ -23,7 +23,7 @@ queue.py —— 批量队列（`R-13`）。**一次排入多本书，人只在�
 from __future__ import annotations
 
 from contracts.artifacts import (
-    STAGE0_REVISIONS, STAGE2_GLOBAL_EDIT, STAGE6_HOOK, STAGE7_NAME_MAP,
+    STAGE2_GLOBAL_EDIT, STAGE6_HOOK, STAGE7_NAME_MAP,
 )
 
 import json
@@ -44,7 +44,6 @@ from contracts.schema.orchestration import (
     NovelOverview, QueueCounts, QueueEntry, QueueEvent, QueueItem,
     QueueLaneCounts, QueuePlan, QueueRun, QueueStart,
 )
-from contracts.schema.stage0 import Stage0Revisions
 from contracts.schema.stage6 import Hook
 from contracts.schema.stage7 import NameMap
 from contracts.artifacts import STAGE4_BLIND_CANDIDATE
@@ -62,20 +61,14 @@ from novel.orchestrator.nodes import build_steps, flag_value, shell_line
 from novel.stages.stage4.phase_state import current_infeasible_binding
 from novel.store import ArtifactStore
 
-#: 人做的那几个动作。**队列永不自动排它们**——`--apply-edit` 改一个字是
-#: 「人看过之后的裁决」，机器替不了。
+#: 人做的那几个动作。**队列永不自动排它们**——「人看过之后的裁决」机器替不了。
 #: ⚠ 它们进 `blocked` 而不是被跳过：被跳过的闸门在界面上与「不需要它」长得一样。
-#: ⚠ `stage6.approve` 已移出（2026-09-15 全自动裁决）：默认槽位序自动定稿是
-#:   队列的普通 todo；人工改选（--pick）是后置动作，不再构成闸门。stage0/stage7
-#:   的 approve 闸在批次 B 随各自人工审批退役一并处理。
+#: ⚠ `stage6.approve` 不算人工闸（2026-09-15 全自动裁决）：默认槽位序自动定稿是
+#:   队列的普通 todo，由下方 `_stage6_approval_current` 特判，进 HUMAN_NODES 会把
+#:   自动定稿误报成「在等人」。`stage0.approve` / `stage0.edit` 已整体移出 NODES
+#:   （RETIRED_NODES），机械通过即自动接受；现役只剩 `stage7.approve`（批次 B4 处理）。
 HUMAN_NODES: frozenset[str] = frozenset(
-    {n for n in NODES if n.endswith('.approve')} - {'stage6.approve'}
-    | {'stage0.edit'})
-
-#: ``stage0.edit`` is a human capability, not a mandatory gate.  Listing it as
-#: an automatic step would make every book wait forever for an edit the user
-#: may neither need nor want.
-OPTIONAL_HUMAN_NODES: frozenset[str] = frozenset({'stage0.edit'})
+    {n for n in NODES if n.endswith('.approve')} - {'stage6.approve'})
 
 #: 待人工清单非空时挡队列的那个理由（`INBOX_KIND` 的 `invalid`）。
 WAITING_ON_INBOX = 'inbox:invalid'
@@ -316,7 +309,6 @@ def _human_gate_satisfied(base: str | os.PathLike[str], sid: str, node: str) -> 
     already approved book while still leaving the actual decision to a human.
     """
     model_rel = {
-        'stage0.approve': (Stage0Revisions, STAGE0_REVISIONS),
         'stage7.approve': (NameMap, STAGE7_NAME_MAP),
     }.get(node)
     if model_rel is None:
@@ -332,13 +324,6 @@ def _human_gate_satisfied(base: str | os.PathLike[str], sid: str, node: str) -> 
             return rename.approval_is_current(store, artifact)
     except TerminalState:
         return False
-    if node == 'stage0.approve':
-        # 唯一落点在 eligibility，队列不自己复述批准条件；不具执行资格
-        # 在这里等于「闸门未过」——队列会继续说出在等 stage0.approve。
-        from novel.stages.stage0.eligibility import is_stage0_executable
-        from novel.stages.stage0 import revisions as stage0_revisions
-        stage0_revisions.verify_chain(artifact)
-        return is_stage0_executable(stage0_revisions.snapshot_of(artifact))
     raise AssertionError(f'未登记的人工闸门 current 判定：{node}')
 
 
@@ -557,8 +542,6 @@ def plan_book_from_overview(
         )
         why_blocked = stuck
         if why_blocked is None and node in HUMAN_NODES:
-            if node in OPTIONAL_HUMAN_NODES:
-                continue                             # 可选人工编辑不是流水线必经闸门
             if not _gate_is_reachable(ov, spec.stage):
                 continue                             # 还没轮到它，不是「在等人」
             if _human_gate_satisfied(base, sid, node):
@@ -986,10 +969,9 @@ def plan_book_from_overview(
 
         if steps is None and why_blocked is not None and node in HUMAN_NODES:
             # ⚠⚠ **人还没签字之前，这道闸没有一条「诚实的可执行命令」可以快照。**
-            # `stage0.approve` / `stage6.approve` / `stage7.approve` 的 argv 必填
-            # `--actor` / `--reason`（人此刻还没给出的东西）⇒ `build_steps` 会抛
-            # `UnsupportedRunMode`。而这一项本来就是 `blocked`，它要回答的是
-            # 「在等谁」，不是「怎么跑」。
+            # `stage7.approve` 的 argv 必填 `--actor` / `--reason`（人此刻还没给出的
+            # 东西）⇒ `build_steps` 会抛 `UnsupportedRunMode`。而这一项本来就是
+            # `blocked`，它要回答的是「在等谁」，不是「怎么跑」。
             # ⚠ 曾经这里无条件 `build_steps`：于是一本「stage0 还没人批」的书会让
             #   **整条队列计划当场抛异常**——CLI `queue --plan-only` 退出码 2、
             #   HTTP 400，而真正的事实只是「在等人批准 stage0」。
@@ -2103,7 +2085,7 @@ def resume_incomplete(base: str | os.PathLike[str], *,
 
 
 __all__ = [
-    'HUMAN_NODES', 'OPTIONAL_HUMAN_NODES', 'WAITING_ON_INBOX',
+    'HUMAN_NODES', 'WAITING_ON_INBOX',
     'WAITING_ON_STAGE2_EDIT_COMMIT',
     'WAITING_ON_STAGE2_EDIT_REVALIDATE',
     'WAITING_ON_STAGE4_DESIGN_REVIEW',

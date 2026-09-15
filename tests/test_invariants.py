@@ -171,8 +171,8 @@ def test_operator_redo_strategies_are_closed_and_explicit_per_node():
     )
     assert all(
         inv.NODES[node].operator_redo is None
-        for node in ('stage0.approve', 'stage0.edit',
-                     'stage6.approve', 'stage7.approve')
+        # stage0.approve / stage0.edit 已移入 RETIRED_NODES（2026-09-15 全自动裁决）。
+        for node in ('stage6.approve', 'stage7.approve')
     )
 
 
@@ -206,8 +206,9 @@ def test_the_three_pinned_models_are_exactly_the_decided_exceptions():
 
 def test_free_nodes_are_the_ones_without_llm():
     free = {node for node, spec in inv.NODES.items() if not spec.paid}
+    # stage0.approve / stage0.edit 已退役（2026-09-15 全自动裁决）：NODES 20 → 17。
     assert free == {
-        'stage0.remove', 'stage0.approve', 'stage0.edit',
+        'stage0.remove',
         'stage1.partition', 'stage4.context', 'stage5.review',
         'stage6.approve', 'stage7.assemble', 'stage7.approve',
     }
@@ -388,7 +389,8 @@ def test_node_lifecycle_covers_real_nodes_and_preserves_boundaries():
     from contracts.invariants import NODES
 
     # stage6.semantic 已退役（2026-09-15）：20 → 19
-    assert len(NODES) == 19
+    # stage0.approve / stage0.edit 退役（2026-09-15 全自动裁决）：19 → 17
+    assert len(NODES) == 17
     assert all(spec.lifecycle is not None for spec in NODES.values())
     for node, spec in NODES.items():
         life = spec.lifecycle

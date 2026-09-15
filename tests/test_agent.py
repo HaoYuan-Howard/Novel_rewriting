@@ -685,14 +685,18 @@ def test_approval_gate_stop_reports_the_blocker_and_human_next_handler(
     assert closed.exit_code == 2 and closed.drain_state == 'drained'
 
 
-def test_human_gate_pass_then_continuation_advances_to_the_next_node(
+def test_stage0_auto_acceptance_feeds_the_run_frontier_and_continuation(
         tmp_path, monkeypatch):
-    """正例：真实摄入 → 自动跑停闸 → 真实批准 → 原配置续跑推进到下一节点。"""
+    """正例：真实摄入即机械接受 ⇒ 自动跑不再停在 stage0 闸。
+
+    2026-09-15 全自动裁决后 stage0 没有人工闸：operator 首读就是 ready 的
+    `stage1.partition`（0 成本，next_handler=code）；首派发后停在显式停点，
+    原配置续跑（inspect + plan）照常推进，且 stage0 没有任何「裁决」需要重买。
+    """
+    import sys as _sys
     from novel import prov
     from novel.orchestrator import agent_continuation, operator
     from novel.stages.stage0 import removal as stage0_removal
-    from novel.stages.stage0.removal import _context as stage0_context
-    from novel.stages.stage0.removal import run_approve
     from novel.work_units import initialize_workflow
 
     initialize_workflow(tmp_path)
@@ -701,74 +705,78 @@ def test_human_gate_pass_then_continuation_advances_to_the_next_node(
     source = tmp_path / 'FQ_续跑正例_42.txt'
     source.write_text('开篇悬念。\n\n1\n沈月来到门前。\n\n2\n她推开屋门。\n',
                       encoding='utf-8')
-    novel_dir, _preview, check = stage0_removal.run_source(source, tmp_path)
-    assert check is not None, '首跑必须停在 stage0 人工闸前'
+    _novel_dir, _preview, check = stage0_removal.run_source(source, tmp_path)
+    assert check is not None, '摄入必须真的跑过一次机械校验'
+    approval_line = next(
+        line for line in check.rules if line.rule == 's0_approval')
+    assert approval_line.status == 'ok', '机械校验通过即自动接受，不再是 hit'
 
     monkeypatch.setattr(prov, 'code_version', lambda: 'test-code-version')
-    # 第一次自动跑：真实 operator 盘面 blocked 在 stage0.approve，立即停闸。
+    # 真实 operator 盘面：没有 stage0 闸，frontier 直接 ready 在下一节点。
     _overview, frontier = operator.progress_snapshot(base, sid)
-    assert frontier.state == 'blocked'
-    assert frontier.waiting_on == 'stage0.approve'
-    assert frontier.next_handler == 'human'
-    first = agent.start(
-        base, sid, authorized=True, egress_authorized=True, profiles=_PROFILES)
-    assert agent.wait(first.run_id, 30)
-    [first_done] = [row for row in agent.records(base) if row.run_id == first.run_id]
-    assert first_done.exit_code == 2 and first_done.outcome is not None
-    assert '停在人工审批闸：stage0.approve' in first_done.outcome.reason
+    assert frontier.state != 'blocked'
+    assert frontier.waiting_on is None
+    assert frontier.node == 'stage1.partition'
+    assert frontier.next_handler != 'human'
 
-    # 人工过闸：走真实 stage0 批准 producer（不经过任何模型）。
-    run_approve(
-        stage0_context(novel_dir, 'stage0.approve'),
-        actor='human-test', reason='逐字核对剔除工作包后明确批准')
-
-    view = agent_continuation.inspect(base, first.run_id)
-    assert view.available, view.reason
-    assert view.profiles == _PROFILES
-
-    # 续跑：原配置 + continuation；首个派发动作必须是过闸后的下一节点。
-    real_next = operator.next_action_at_code
     box = {'reads': 0, 'argvs': []}
+    real_next = operator.next_action_at_code
 
-    def next_after_gate(base_arg, sid_arg, *, code):
+    def next_action(base_arg, sid_arg, *, code):
         box['reads'] += 1
-        if box['reads'] == 1:
-            return real_next(base_arg, sid_arg, code=code)
-        return SimpleNamespace(
-            state='blocked', code_version=code,
-            action=SimpleNamespace(
-                waiting_on='manual-stop-after-continuation', action_sha256='e' * 64),
-            execution_token=None)
+        if box['reads'] % 2 == 0:
+            # 每次跑各派发一次 ready 动作，随后的重读撞上显式停点即停。
+            return SimpleNamespace(
+                state='blocked', code_version=code,
+                action=SimpleNamespace(
+                    waiting_on='manual-stop-after-first-dispatch',
+                    action_sha256='e' * 64),
+                execution_token=None)
+        return real_next(base_arg, sid_arg, code=code)
 
     def step_argv(_base, _sid, epoch, permit, *, stem, **_kwargs):
         box['argvs'].append((epoch, permit, stem))
-        return [sys.executable, '-c', 'raise SystemExit(0)']
+        return [_sys.executable, '-c', 'raise SystemExit(0)']
 
-    monkeypatch.setattr(agent.operator, 'next_action_at_code', next_after_gate)
+    monkeypatch.setattr(agent.operator, 'next_action_at_code', next_action)
     monkeypatch.setattr(agent, '_run_step_argv', step_argv)
     monkeypatch.setattr(
         agent, '_delivery_pause_note', lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
         agent, '_assess_delivery',
         lambda *_args, **_kwargs: AgentDeliveryOutcome(
-            state='stopped', reason='续跑正例测试停点', checked_at=1))
+            state='stopped', reason='首跑停点', checked_at=1))
+
+    first = agent.start(
+        base, sid, authorized=True, egress_authorized=True, profiles=_PROFILES)
+    assert agent.wait(first.run_id, 30)
+    [first_done] = [row for row in agent.records(base) if row.run_id == first.run_id]
+    assert first_done.exit_code == 2 and first_done.outcome is not None
+    assert first_done.outcome.state == 'stopped'
+    # 首个派发就是 stage0 之后的下一节点；stage0 自身没有任何停闸理由。
+    assert len(box['argvs']) == 1
+    _epoch, permit, stem = box['argvs'][0]
+    assert permit.node == 'stage1.partition'
+    assert stem == 'ready-stage1.partition'
+
+    # 续跑：原配置 + continuation；stage0 没有裁决可买，推进的是同一个 ready todo。
+    view = agent_continuation.inspect(base, first.run_id)
+    assert view.available, view.reason
+    assert view.profiles == _PROFILES
     planned = agent.plan(
         base, sid, authorized=True, egress_authorized=True,
         profiles=view.profiles, continuation=view.source)
     second = agent._start_planned(planned)
     assert agent.wait(second.run_id, 30)
 
-    assert len(box['argvs']) == 1
-    _epoch, permit, stem = box['argvs'][0]
-    assert permit.node == 'stage1.partition', '续跑必须推进到过闸后的下一节点'
-    assert stem == 'ready-stage1.partition'
+    assert box['reads'] == 4
+    assert len(box['argvs']) == 2
+    _epoch2, permit2, _stem2 = box['argvs'][1]
+    assert permit2.node == 'stage1.partition'
     [second_done] = [row for row in agent.records(base)
                      if row.run_id == second.run_id]
-    assert second_done.exit_code == 2
     assert second_done.contract is not None
     assert second_done.contract.profiles == _PROFILES
-    # 续跑不得重买已过闸的裁决：只有一次 ready 派发。
-    assert box['reads'] == 2
 
 
 def test_unregistered_deterministic_blocker_keeps_epoch_and_parent_end_in_sync(
@@ -1251,13 +1259,7 @@ def test_api_job_refused_while_the_same_book_has_an_agent(base):
     jobs.AGENT_REGISTRY.acquire(jobs.agent_lock_key('42'), 'r-test')
     try:
         with pytest.raises(JobConflict):
-            jobs.start(
-                base,
-                'stage0.approve',
-                '42',
-                ['--expected-revision-id', 'a' * 64,
-                 '--actor', '测试者', '--reason', '验证同书 agent 互斥'],
-            )
+            jobs.start(base, 'stage1.partition', '42')
     finally:
         jobs.AGENT_REGISTRY.release(jobs.agent_lock_key('42'), 'r-test')
 
@@ -1269,7 +1271,8 @@ def test_an_agent_on_another_book_does_not_block_this_one(base):
     jobs.AGENT_REGISTRY.acquire(jobs.agent_lock_key('42'), 'r-test')
     try:
         try:
-            jobs.start(base, 'stage0.approve', '43')
+            # stage0.approve 已退役（2026-09-15）：改用现役免费节点。
+            jobs.start(base, 'stage1.partition', '43')
         except JobConflict as exc:                       # pragma: no cover
             pytest.fail(f'另一本书的 agent 把这本挡住了：{exc}')
         except Exception:

@@ -226,6 +226,10 @@ _JSON_READ_ALLOWED = {
     'novel/orchestrator/queue.py': (
         '持久队列记录不是产物：`_service/queues.jsonl` 是 append-only 编排事件，'
         '不进来源账/ARTIFACTS；与 jobs.jsonl 一样只容忍被 kill 截断的最后一行'),
+    'novel/orchestrator/rebuild.py': (
+        '改选重建意图不是产物：`_service` 下的 rebuild intents 账是 append-only '
+        '编排事件（先耐久再执行），不进来源账/ARTIFACTS；与 jobs.jsonl 一样'
+        '只容忍被打断的最后一行'),
     'novel/orchestrator/beacon.py': (
         '进度信标**不是产物**：与 jobs.jsonl 同理，append-only 事件流'
         '（`_service/agent_progress.jsonl`），不进来源账、不进 `_provenance`；'
@@ -692,8 +696,9 @@ def test_service_mutations_are_narrowly_owned_by_mutation_routes():
             ('approvals', 'approve_gate'),
         },
         'novel/api/routes/ingest.py': {
+            # stage0 edit/approve 路由已退役（2026-09-15 全自动裁决）：
+            # 一次性编辑计划/候选计划的保存与清理随路由一并下线。
             ('jobs', 'run'), ('uploads', 'save_upload'),
-            ('uploads', 'save_edit_plan'), ('uploads', 'discard_edit_plan'),
         },
         'novel/api/routes/jobs.py': {
             ('jobs', 'start'),
@@ -839,7 +844,8 @@ _CROSS_STAGE_DEEP_GRANDFATHER = frozenset({
     ('novel/orchestrator/approvals.py', 'novel.stages.stage5.closure'),
     ('novel/orchestrator/approvals.py', 'novel.stages.stage5.review'),
     ('novel/orchestrator/approvals.py', 'novel.stages.stage7.rename'),
-    ('novel/orchestrator/queue.py', 'novel.stages.stage0.eligibility'),
+    # ('novel/orchestrator/queue.py', 'novel.stages.stage0.eligibility'):
+    # stage0.approve 人工闸退役（2026-09-15）后 queue 不再读 eligibility。
     ('novel/orchestrator/queue.py', 'novel.stages.stage2.plot_diagnostics'),
     ('novel/orchestrator/queue.py', 'novel.stages.stage4.phase_state'),
     ('novel/orchestrator/state.py', 'novel.stages.stage2.character_rebind'),
@@ -918,8 +924,9 @@ def test_cross_stage_imports_stay_on_the_package_surface():
     measure / prompts / plot_compile / checks 等内部实现一律禁止。
 
     「删一个机制为什么改几十个文件」的根源正是这些深边——StageN 的内部
-    实现被当成公共接口消费。现存 68 条深边为 2026-09 冻结基线
-    （2026-09-15 随 Commander 审阅退役消化 reviewer_tasks 的 3 条边），
+    实现被当成公共接口消费。现存 67 条深边为 2026-09 冻结基线
+    （2026-09-15 随 Commander 审阅退役消化 reviewer_tasks 的 3 条边；
+    stage0.approve 人工闸退役再消化 queue→stage0.eligibility 1 条），
     **只减不增**：消化一条就把它从清单删掉（diff 里可见、须说理由），
     新增深边必须先建 stageN 包级公开导出。
     """
@@ -934,7 +941,7 @@ def test_cross_stage_imports_stay_on_the_package_surface():
         f'以下深边已消失，请同步从冻结清单删除（消化须在提交说明给理由）：{sorted(stale)}')
     # 守卫的守卫：扫描器必须看得见冻结清单里的已知边，否则红的是探测器。
     assert ('novel/views/stage4.py', 'novel.stages.stage5.prompts') in current
-    assert len(_CROSS_STAGE_DEEP_GRANDFATHER) == 68
+    assert len(_CROSS_STAGE_DEEP_GRANDFATHER) == 67
 
 
 
