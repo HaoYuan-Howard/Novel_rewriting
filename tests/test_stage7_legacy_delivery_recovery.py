@@ -208,41 +208,49 @@ def test_completed_history_still_requires_original_paid_evidence(tmp_path, monke
 
 
 def test_readonly_foreign_reservation_scan_shares_the_real_commit_guard(tmp_path, monkeypatch):
-    from novel.llm import stage7_runs
-    from novel.orchestrator.node_agents import Stage7RenameAgent
-    from tests.test_stage7_rename_agent import (
-        _Driver, _SimulatedProcessExit, _ctx as agent_ctx, _patch_business, _response,
-    )
+    """恢复盘点只读、不写盘；拒绝必须持真实提交锁。
 
-    _patch_business(monkeypatch)
-    ctx = agent_ctx(tmp_path)
+    C2b 对照：agent journal 的半途 prepared 已无生产制造口（提交协议随臂
+    删除）；「半途提交证明」职责由 work_units anchor 版本在下方
+    test_prepared_recovers_* 的 boundary 矩阵与 test_incomplete_original_proof
+    承接，这里钉住只读扫描与锁语义本身。
+    """
+    from novel.llm import stage7_runs
+    from novel.work_units import WorkUnitBudget
+
+    ctx, first, _wire, client, _up = _rig(tmp_path, monkeypatch)
+
+    class _SimulatedProcessExit(BaseException):
+        pass
+
+    original_save = WorkUnitBudget.save_group_producer_recovery
+
+    def save_then_die(self, proof):
+        original_save(self, proof)
+        raise _SimulatedProcessExit('原 prepared 已落盘，完成标记未及')
+
     with monkeypatch.context() as fault:
-        def interrupt(*_a, **_k):
-            raise _SimulatedProcessExit('原 Agent prepared 尚未完成')
-        fault.setattr(stage7_runs, 'mark_committed', interrupt)
+        fault.setattr(WorkUnitBudget, 'save_group_producer_recovery', save_then_die)
         with pytest.raises(_SimulatedProcessExit):
-            Stage7RenameAgent(ctx, driver=_Driver([_response('完整合格映射')]), max_turns=2).run()
-    other = agent_ctx(tmp_path)
+            rename.run_rename(ctx, first)
     before = {path.relative_to(tmp_path): path.read_bytes()
               for path in tmp_path.rglob('*') if path.is_file()}
-    with pytest.raises(ProvenanceRefused, match='prepared'):
-        stage7_runs.inspect_foreign_commit_reservations(other)
-    assert {path.relative_to(tmp_path): path.read_bytes()
-            for path in tmp_path.rglob('*') if path.is_file()} == before
+    # 只读扫描共享同一份事实：无 journal 时通过且不写任何字节。
+    stage7_runs.inspect_foreign_commit_reservations(ctx)  # ctx（RunContext）
+    after = {path.relative_to(tmp_path): path.read_bytes()
+             for path in tmp_path.rglob('*') if path.is_file()}
+    assert after == before
     # 只读通过/拒绝都不能授予写所有权，真正 apply 仍必须在书锁内重验。
+    other = _ctx(tmp_path / '改名恢复_972', 'stage7.rename')
     with pytest.raises(ProvenanceRefused, match='commit_ownership'):
         stage7_runs.refuse_foreign_commit_reservations(other)
-    commit = stage7_runs._commit_spec(ctx).commit_path(ctx)
-    raw = commit.read_bytes()
-    commit.write_text('{broken', encoding='utf-8')
-    with pytest.raises((ArtifactUnreadable, ProvenanceRefused)):
-        stage7_runs.inspect_foreign_commit_reservations(other)
-    commit.write_bytes(raw)
-    restarted = agent_ctx(tmp_path, run_id=ctx.run_id)
-    Stage7RenameAgent(restarted, driver=_Driver([], forbid_wire=True), max_turns=2).run()
-    stage7_runs.inspect_foreign_commit_reservations(other)
     with stage7_runs.commit_ownership(other.novel_dir):
         stage7_runs.refuse_foreign_commit_reservations(other)
+    # 半途 anchor 由恢复面按精确原身份接续，且不新增 wire。
+    restarted = _ctx(tmp_path / '改名恢复_972', 'stage7.rename')
+    restarted.ledger = CostLedger(path=restarted.ledger.path, run_id=ctx.run_id)
+    second_client, _second_wire = client(restarted, no_wire=True)
+    rename.run_rename(restarted, second_client)
 
 
 @pytest.mark.parametrize('incomplete_tail', [False, True])

@@ -19,7 +19,9 @@ import threading
 import pytest
 
 from contracts.invariants import NODES
-from contracts.schema.orchestration import AgentProfile, JobEvent, JobStart, Step
+from contracts.schema.orchestration import (
+    AgentProfile, JobEvent, JobStart, LegacyExecutorBackend, LegacyLlmProfile, Step,
+)
 from novel import run_identity
 from novel.errors import ApprovalRequired, UnsupportedRunMode
 from novel.orchestrator import beacon
@@ -27,6 +29,9 @@ from novel.orchestrator import jobs as J
 from novel.orchestrator import nodes as N
 
 SID = '7615069877019300633'
+LEGACY_BACKEND = LegacyExecutorBackend(profile=LegacyLlmProfile(
+    provider='deepseek', model='deepseek-v4-pro',
+    reasoning_effort='high', thinking_mode='on'))
 EXECUTOR_PROFILE = AgentProfile(
     driver='codex',
     model='gpt-5.6-sol',
@@ -557,9 +562,12 @@ def test_the_service_only_writes_under_service_dir(base):
 
 
 @pytest.mark.parametrize(('node', 'flags', 'step_count'), EXECUTOR_RUN_CASES)
-def test_executor_profile_is_frozen_from_plan_through_spawn_and_disk(
+def test_executor_backend_is_frozen_from_plan_through_spawn_and_disk(
         base, node, flags, step_count):
-    """preview/start/Step/argv 必须是一份已解析选择，不能在子进程重新猜默认。"""
+    """preview/start/Step/argv 必须是一份已解析选择，不能在子进程重新猜默认。
+
+    C2a/C2b：执行面 legacy-only，冻结职责由 legacy backend 承担。
+    """
     spawn = _fake()
     registry = J.JobRegistry()
 
@@ -568,39 +576,40 @@ def test_executor_profile_is_frozen_from_plan_through_spawn_and_disk(
         node,
         SID,
         flags,
-        executor_profile=EXECUTOR_PROFILE,
+        executor_backend=LEGACY_BACKEND,
         egress_authorized=True,
         spawn=spawn,
         registry=registry,
     )
 
-    resolved = record.start.executor_profile
-    assert resolved is not None and resolved.execution_mode == 'standard'
+    resolved = record.start.executor_backend
+    assert resolved is not None and resolved.kind == 'legacy'
     assert len(record.start.steps) == step_count
-    assert record.start.steps[0].executor_profile == resolved
+    assert record.start.steps[0].executor_backend == resolved
     assert record.start.flags == flags
     assert record.start.egress_authorized is True
     assert record.start.steps[0].egress_authorized is True
     assert spawn.calls == [step.argv for step in record.start.steps]
     argv = spawn.calls[0]
-    assert argv[argv.index('--executor-driver') + 1] == resolved.driver
-    assert argv[argv.index('--executor-model') + 1] == resolved.model
-    assert argv[argv.index('--executor-effort') + 1] == resolved.reasoning_effort
-    assert argv[argv.index('--executor-mode') + 1] == resolved.execution_mode
+    assert argv[argv.index('--executor-backend') + 1] == 'legacy'
+    assert argv[argv.index('--legacy-provider') + 1] == resolved.profile.provider
+    assert argv[argv.index('--legacy-model') + 1] == resolved.profile.model
+    assert argv[argv.index('--legacy-effort') + 1] == resolved.profile.reasoning_effort
+    assert argv[argv.index('--legacy-thinking') + 1] == resolved.profile.thinking_mode
     assert '--allow-egress' in argv
     if step_count == 2:
         follow = record.start.steps[1]
-        assert follow.executor_profile is None
+        assert follow.executor_backend is None
         assert follow.egress_authorized is None
         assert follow.paid is False
         assert '--check-only' in follow.argv
         assert '--allow-egress' not in follow.argv
         assert '--yes' not in follow.argv
-        assert not any(token.startswith('--executor-') for token in follow.argv)
+        assert not any(token.startswith('--legacy-') for token in follow.argv)
 
     reread = J.records(base, registry=registry)[0]
-    assert reread.start.executor_profile == resolved
-    assert reread.start.steps[0].executor_profile == resolved
+    assert reread.start.executor_backend == resolved
+    assert reread.start.steps[0].executor_backend == resolved
     assert reread.start.steps == record.start.steps
 
 
@@ -612,7 +621,7 @@ def test_profiled_job_without_egress_approval_never_starts(
     with pytest.raises(ApprovalRequired, match='正文外发'):
         entrypoint(
             base, 'stage2.global', SID,
-            executor_profile=EXECUTOR_PROFILE,
+            executor_backend=LEGACY_BACKEND,
             egress_authorized=False,
             spawn=spawn,
             registry=J.JobRegistry())
@@ -621,7 +630,10 @@ def test_profiled_job_without_egress_approval_never_starts(
     assert not J.jobs_path(base).exists(), '拒绝前不得建立 job 事件账'
 
 
-def test_frozen_steps_cannot_smuggle_a_profile_into_an_unmigrated_node(base):
+def test_frozen_steps_cannot_smuggle_an_agent_backend_into_any_node(base):
+    """C2b：agent backend 在解析层已退役；冻结 steps 夹带在任何节点都被拒。"""
+    from novel.errors import RetiredExecutorBackend
+
     smuggled = Step(
         argv=['python', '-m', 'novel.cli', 'run', 'stage4.context'],
         cwd='.',
@@ -631,7 +643,7 @@ def test_frozen_steps_cannot_smuggle_a_profile_into_an_unmigrated_node(base):
         executor_profile=EXECUTOR_PROFILE,
     )
 
-    with pytest.raises(UnsupportedRunMode, match='不再接受 executor agent'):
+    with pytest.raises(RetiredExecutorBackend):
         J.plan_start(
             'stage4.context', SID, base=base, steps=[smuggled])
 

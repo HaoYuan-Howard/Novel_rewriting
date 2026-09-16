@@ -1416,12 +1416,6 @@
     "stage7"
    ]
   },
-  "tests/test_stage7_rename_agent.py": {
-   "layer": "unit_contract",
-   "stages": [
-    "stage7"
-   ]
-  },
   "tests/test_stage7_subs.py": {
    "layer": "unit_contract",
    "stages": [

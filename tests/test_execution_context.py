@@ -6,7 +6,8 @@ from pathlib import Path
 import pytest
 
 from contracts.schema.orchestration import (
-    AgentProfile, AgentRunRecord, AgentRunStart, ExecutionEpoch,
+    AgentRunRecord, AgentRunStart, ExecutionEpoch,
+    LegacyExecutorBackend, LegacyLlmProfile,
     PipelineAgentProfiles, RunContractV2,
 )
 from novel.orchestrator import execution_context
@@ -14,17 +15,15 @@ from novel.errors import TerminalState
 
 
 def _profiles() -> PipelineAgentProfiles:
+    """C2a 起执行面 legacy-only：上下文契约 fixtures 用 legacy backend。"""
     return PipelineAgentProfiles(
-        commander=AgentProfile(
-            driver='claude-code', model='claude-opus-5',
-            reasoning_effort='high', execution_mode='standard'),
-        executor_default=AgentProfile(
-            driver='codex', model='gpt-5.6-sol',
-            reasoning_effort='high', execution_mode='standard'),
+        executor_default=LegacyExecutorBackend(profile=LegacyLlmProfile(
+            provider='deepseek', model='deepseek-v4-pro',
+            reasoning_effort='high', thinking_mode='on')),
         executor_overrides={
-            'stage7.rename': AgentProfile(
-                driver='claude-code', model='claude-sonnet-5',
-                reasoning_effort='xhigh', execution_mode='standard'),
+            'stage7.rename': LegacyExecutorBackend(profile=LegacyLlmProfile(
+                provider='deepseek', model='deepseek-flash',
+                reasoning_effort='high', thinking_mode='on')),
         },
     )
 
@@ -66,11 +65,10 @@ def test_context_env_is_only_a_pointer_and_round_trips_the_started_snapshot(
     assert loaded.producer_run_id == loaded.run_id == 'commander-1'
     assert env['KEEP'] == 'yes'
     assert loaded.start == start and loaded.profiles == _profiles()
-    assert loaded.executor_profile('stage2.global').driver == 'codex'
-    assert loaded.executor_profile('stage7.rename').driver == 'claude-code'
+    assert loaded.executor_backend('stage2.global').profile.provider == 'deepseek'
+    assert loaded.executor_backend('stage7.rename').profile.model == 'deepseek-flash'
     serialized_env = '\n'.join(f'{key}={value}' for key, value in env.items())
-    assert 'claude-opus-5' not in serialized_env
-    assert 'gpt-5.6-sol' not in serialized_env
+    assert 'deepseek-v4-pro' not in serialized_env
 
 
 def test_v2_parent_compatibility_snapshots_do_not_override_epoch_identity(

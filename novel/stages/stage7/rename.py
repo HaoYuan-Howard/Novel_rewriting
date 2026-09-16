@@ -41,13 +41,11 @@ from contracts.schema.stage7 import (
     NameMapFreeProvenance, NameMapProvenance, NameMapResponse,
 )
 from novel import paths, prov
-from novel.agents import session_audit as agent_session_audit
 from novel.core.naming import family_groups, registered_surfaces, strip_distinguisher, surface_owners
 from novel.errors import (
     BlockingFindingsUnresolved, GateBlocked, ProvenanceRefused, TerminalState, UpstreamMissing,
 )
 from novel.llm.client import LlmClient, LlmFailed
-from novel.llm.stage7_runs import RECOVERY_POLICY as AGENT_RECOVERY_POLICY
 from novel.report import build
 from novel.report.findings import Outcome
 from novel.report.workpack import compact_approval_check
@@ -1039,8 +1037,6 @@ class RenameCandidateBatch:
     requested_model: str
     adopted_models: tuple[str, ...]
     attempt_id: str | None
-    restored_acceptance: Mapping[str, Any] | None
-    agent_mode: bool
     _batch_sha256: str
 
 
@@ -1056,10 +1052,6 @@ class RenameCandidateEvaluation:
     input_sha256: str
     _batch: RenameCandidateBatch
     _candidate_sha256: str
-
-
-def _uses_agent_runs(ctx: RunContext) -> bool:
-    return ctx.executor_profile is not None
 
 
 def _accepted_attempt(source: _NameMapResponseSource, purpose: str) -> str | None:
@@ -1127,16 +1119,6 @@ def prepare_rename_candidate(ctx: RunContext) -> RenameCandidateContext:
         _up=up,
     )
     _assert_rename_prepared_current(ctx, prepared)
-    if _uses_agent_runs(ctx):
-        from novel.llm import stage7_runs
-        stage7_runs.ensure_run(
-            ctx,
-            input_sha256=prepared.input_sha256,
-            system=prepared.system,
-            user=prepared.user,
-            response_model=NameMapResponse,
-            max_tokens=MAX_TOKENS,
-        )
     return prepared
 
 
@@ -1259,212 +1241,21 @@ def _candidate_verdict(
     )
 
 
-def _write_rename_checkpoint(
-        ctx: RunContext, source: _NameMapResponseSource,
-        prepared: RenameCandidateContext, response: NameMapResponse, *,
-        findings: Sequence[Finding], revision_key: str,
-) -> None:
-    from novel.llm import stage7_runs
-
-    stage7_runs.write_checkpoint(
-        ctx,
-        input_sha256=prepared.input_sha256,
-        system=prepared.system,
-        user=prepared.user,
-        response_model=NameMapResponse,
-        max_tokens=MAX_TOKENS,
-        response_payload=response.model_dump(by_alias=True, mode='json'),
-        acceptance=source.accepted_checkpoint(ctx.node),
-        revision_key=revision_key,
-        state_payload=_checkpoint_state(
-            response, findings=findings, identity=prepared.identity),
-    )
-
-
-def _restore_rename_checkpoint(
-        ctx: RunContext, source: _NameMapResponseSource,
-        prepared: RenameCandidateContext,
-) -> tuple[NameMapResponse, list[Finding], dict[str, Any]] | None:
-    """恢复 adoption 与累计轮次，不把历史 provider id 冒充 live session。"""
-    from novel.llm import stage7_runs
-
-    restored = stage7_runs.restore_checkpoint(
-        ctx,
-        input_sha256=prepared.input_sha256,
-        system=prepared.system,
-        user=prepared.user,
-        response_model=NameMapResponse,
-        max_tokens=MAX_TOKENS,
-        validator=_response_materialization_validator(ctx, source, prepared),
-    )
-    if restored is None:
-        return None
-    source.restore_checkpoint_acceptance(
-        ctx.node,
-        restored.acceptance,
-        system=prepared.system,
-        user=prepared.user,
-        max_tokens=MAX_TOKENS,
-        recovery_policy=AGENT_RECOVERY_POLICY,
-    )
-    _artifact, findings = _candidate_verdict(
-        ctx, source, prepared, restored.value)
-    expected_state = _checkpoint_state(
-        restored.value, findings=findings, identity=prepared.identity)
-    if restored.state_payload != expected_state:
-        raise ProvenanceRefused(
-            'stage7.rename checkpoint 的 response/identity/HARD 索引不再等于当前代码判定')
-    return restored.value, findings, dict(restored.acceptance)
-
-
-def _finish_restored_rename_session(
-        ctx: RunContext, acceptance: Mapping[str, Any], *,
-        delivery_state: str, error_kind: str | None = None,
-) -> None:
-    """补旧 logical session 的 ended；公共桥自己保证跨进程幂等。"""
-    agent_session_audit.finish_restored_session(
-        ctx.novel_dir.parent,
-        acceptance,
-        process_state='ok',
-        delivery_state=delivery_state,
-        error_kind=error_kind,
-        end_code_version=prov.code_version(),
-        only_if_open=True,
-    )
-
-
-def _agent_rename_candidate(
-        ctx: RunContext, source: _NameMapResponseSource,
-        prepared: RenameCandidateContext,
-) -> RenameCandidateBatch:
-    required = (
-        'accepted_checkpoint', 'restore_checkpoint_acceptance',
-        'accepted_attempt', 'accepted_models',
-        'queue_code_validation_feedback',
-        'queue_restored_code_validation_feedback',
-    )
-    missing = [name for name in required if not callable(getattr(source, name, None))]
-    if missing:
-        raise ProvenanceRefused(
-            f'stage7.rename agent source 缺 checkpoint/session bridge {missing}；'
-            '已在首个 wire 前停止')
-    queue_feedback = source.queue_code_validation_feedback
-    queue_restored_feedback = source.queue_restored_code_validation_feedback
-    validator = _response_materialization_validator(ctx, source, prepared)
-    restored = _restore_rename_checkpoint(ctx, source, prepared)
-    restored_only = restored is not None
-    restored_acceptance: dict[str, Any] | None = None
-    if restored is None:
-        response = source.ask_json(
-            prepared.system,
-            prepared.user,
-            model_cls=NameMapResponse,
-            purpose=ctx.node,
-            max_tokens=MAX_TOKENS,
-            validator=validator,
-            recovery_policy=AGENT_RECOVERY_POLICY,
-        )
-        _artifact, findings = _candidate_verdict(
-            ctx, source, prepared, response)
-        checkpoint = source.accepted_checkpoint(ctx.node)
-        turn = checkpoint.get('accepted_turn_index')
-        _write_rename_checkpoint(
-            ctx, source, prepared, response,
-            findings=findings,
-            revision_key=f'candidate:{turn}',
-        )
-    else:
-        response, findings, restored_acceptance = restored
-
-    while True:
-        hard = _hard_findings(findings)
-        if not hard:
-            break
-        feedback = _safe_rule_feedback(hard)
-        queued = (
-            queue_restored_feedback(feedback, purpose=ctx.node)
-            if restored_only else
-            queue_feedback(feedback, purpose=ctx.node)
-        )
-        # 恢复桥已在新 provider start 前幂等结束旧 session 为 ok/blocked；
-        # 后续无论是否还有预算，都不能再把它结束成 delivered。
-        if restored_only:
-            restored_acceptance = None
-        if not queued:
-            break
-        try:
-            response = source.ask_json(
-                prepared.system,
-                prepared.user,
-                model_cls=NameMapResponse,
-                purpose=ctx.node,
-                max_tokens=MAX_TOKENS,
-                validator=validator,
-                recovery_policy=AGENT_RECOVERY_POLICY,
-            )
-        except LlmFailed:
-            turns_used = getattr(source, 'turns_used', None)
-            max_semantic_turns = getattr(
-                source, 'max_semantic_turns', None)
-            exhausted = (
-                getattr(source, 'content_budget_exhausted', False) is True
-                or isinstance(turns_used, int) and not isinstance(turns_used, bool)
-                and isinstance(max_semantic_turns, int)
-                and not isinstance(max_semantic_turns, bool)
-                and turns_used >= max_semantic_turns)
-            if bool(getattr(source, 'driver_failed', False)) or not exhausted:
-                raise
-            break
-        restored_only = False
-        _artifact, findings = _candidate_verdict(
-            ctx, source, prepared, response)
-        checkpoint = source.accepted_checkpoint(ctx.node)
-        turn = checkpoint.get('accepted_turn_index')
-        _write_rename_checkpoint(
-            ctx, source, prepared, response,
-            findings=findings,
-            revision_key=f'candidate:{turn}',
-        )
-
-    attempt_id = _accepted_attempt(source, ctx.node)
-    if attempt_id is None:
-        raise ProvenanceRefused(
-            'stage7.rename agent 完整 replacement 缺 accepted attempt')
-    return _rename_batch(
-        response=response,
-        requested_model=source.model,
-        adopted_models=source.accepted_models(ctx.node),
-        attempt_id=attempt_id,
-        restored_acceptance=restored_acceptance,
-        agent_mode=True,
-    )
-
-
 def _rename_batch(
         *, response: NameMapResponse, requested_model: str,
         adopted_models: Sequence[str], attempt_id: str | None,
-        restored_acceptance: Mapping[str, Any] | None,
-        agent_mode: bool,
 ) -> RenameCandidateBatch:
     payload = {
         'response': response.model_dump(by_alias=True, mode='json'),
         'requested_model': requested_model,
         'adopted_models': sorted(set(adopted_models)),
         'attempt_id': attempt_id,
-        'restored_acceptance': (
-            None if restored_acceptance is None
-            else dict(restored_acceptance)),
-        'agent_mode': agent_mode,
     }
     return RenameCandidateBatch(
         response=response.model_copy(deep=True),
         requested_model=requested_model,
         adopted_models=tuple(sorted(set(adopted_models))),
         attempt_id=attempt_id,
-        restored_acceptance=(
-            None if restored_acceptance is None
-            else dict(restored_acceptance)),
-        agent_mode=agent_mode,
         _batch_sha256=_canonical_sha256(payload),
     )
 
@@ -1475,10 +1266,6 @@ def _rename_batch_identity(batch: RenameCandidateBatch) -> str:
         'requested_model': batch.requested_model,
         'adopted_models': list(batch.adopted_models),
         'attempt_id': batch.attempt_id,
-        'restored_acceptance': (
-            None if batch.restored_acceptance is None
-            else dict(batch.restored_acceptance)),
-        'agent_mode': batch.agent_mode,
     })
 
 
@@ -1488,9 +1275,7 @@ def request_rename_candidate(
 ) -> RenameCandidateBatch:
     """取得最终完整 response；中间坏候选只进 checkpoint 与内存反馈。"""
     _assert_rename_prepared_current(ctx, prepared)
-    if _uses_agent_runs(ctx):
-        return _agent_rename_candidate(ctx, source, prepared)
-    # legacy 一次请求的顺序、schema、purpose 与参数保持原样。
+    # 直连一次请求；顺序、schema、purpose 与参数保持原样。
     response = source.ask_json(
         prepared.system,
         prepared.user,
@@ -1503,8 +1288,6 @@ def request_rename_candidate(
         requested_model=source.model,
         adopted_models=source.accepted_models(ctx.node),
         attempt_id=_accepted_attempt(source, ctx.node),
-        restored_acceptance=None,
-        agent_mode=False,
     )
 
 
@@ -1521,11 +1304,6 @@ def evaluate_rename_candidate(
         raise ProvenanceRefused('stage7.rename candidate batch 在请求后被修改')
     if source.model != batch.requested_model:
         raise ProvenanceRefused('stage7.rename requested model 在评估前漂移')
-    if batch.agent_mode:
-        if (_accepted_attempt(source, ctx.node) != batch.attempt_id
-                or source.accepted_models(ctx.node) != batch.adopted_models):
-            raise ProvenanceRefused(
-                'stage7.rename agent 最终 accepted attempt/model 在评估前漂移')
     artifact, findings = _materialize_rename_candidate(
         ctx, prepared, batch.response,
         requested_model=batch.requested_model,
@@ -1558,11 +1336,7 @@ def _assert_rename_evaluation(
             or source.model != evaluation.requested_model):
         raise ProvenanceRefused(
             'stage7.rename evaluation 不属于当前冻结输入/response/model')
-    if evaluation._batch.agent_mode:
-        if (_accepted_attempt(source, ctx.node) != evaluation.attempt_id
-                or source.accepted_models(ctx.node) != evaluation.adopted_models):
-            raise ProvenanceRefused(
-                'stage7.rename agent 最终 accepted attempt/model 在 finalize 前漂移')
+
 
 
 def _terminal_rename_evaluation(
@@ -1931,120 +1705,6 @@ def recover_prepared_rename(
     return result
 
 
-def _rename_finalization_payload(
-        prepared: RenameCandidateContext,
-        terminal: RenameCandidateEvaluation,
-) -> dict[str, object]:
-    payload = terminal.candidate.model_dump(by_alias=True, mode='json')
-    provenance = payload.get('_provenance')
-    if not isinstance(provenance, Mapping):
-        raise ProvenanceRefused('stage7.rename candidate 缺 typed provenance')
-    return {
-        'artifact': REL,
-        'input_sha256': prepared.input_sha256,
-        'identity': prepared.identity.model_dump(by_alias=True, mode='json'),
-        'inputs': provenance.get('inputs'),
-        'judged': payload.get('judged'),
-        'hook_consumed': payload.get('hook_consumed'),
-        'hard_rules': list(terminal.hard_rules),
-    }
-
-
-def _formal_target_state(
-        ctx: RunContext, store: ArtifactStore,
-        journal: Mapping[str, Any], artifact: NameMap,
-) -> str:
-    from novel.llm import stage7_runs
-
-    expected_sha = hashlib.sha256(store._render(REL, artifact)).hexdigest()
-    return stage7_runs.target_state(
-        ctx, journal, REL, expected_file_sha256=expected_sha)
-
-
-def _finalize_agent_rename_formal(
-        ctx: RunContext, prepared: RenameCandidateContext,
-        terminal: RenameCandidateEvaluation,
-) -> NameMap:
-    """prepared→write→typed readback→adoption→committed 的可恢复正式尾窗。"""
-    from novel.llm import stage7_runs
-
-    artifact = terminal.candidate
-    payload = artifact.model_dump(by_alias=True, mode='json')
-    finalization = _rename_finalization_payload(prepared, terminal)
-    store = ArtifactStore(ctx)
-    journal = stage7_runs.committed(ctx) or stage7_runs.prepared(ctx)
-    if journal is None:
-        if terminal.attempt_id is None:
-            raise ProvenanceRefused(
-                'stage7.rename 正式 agent 候选缺 accepted attempt')
-        journal = stage7_runs.prepare_commit(
-            ctx,
-            primary_payload=payload,
-            finalization_payload=finalization,
-            touched_paths=(REL, _INVALID, book_txt_rel(store)),
-            attempt_id=terminal.attempt_id,
-        )
-    elif (not stage7_runs.verify_commit_primary(journal, payload)
-          or not stage7_runs.verify_commit_finalization(
-              journal, finalization)):
-        raise ProvenanceRefused(
-            'stage7.rename commit journal 与最终人物表/冻结输入漂移')
-
-    _assert_rename_prepared_current(ctx, prepared)
-    formal_state = _formal_target_state(ctx, store, journal, artifact)
-    invalid_state = stage7_runs.target_state(
-        ctx, journal, _INVALID, expected_absent=True)
-    dynamic_book = book_txt_rel(store)
-    book_state = stage7_runs.target_state(
-        ctx, journal, dynamic_book, expected_absent=True)
-    if 'baseline' in (formal_state, invalid_state, book_state):
-        _assert_rename_prepared_current(ctx, prepared)
-        with store.history_transaction(REL, dynamic_book):
-            if book_state == 'baseline':
-                _retire_book_txt(store)
-            if formal_state == 'baseline' or invalid_state == 'baseline':
-                store.write(REL, artifact)
-            _assert_rename_prepared_current(ctx, prepared)
-            landed = verify_rename_delivery(ctx, prepared, artifact)
-    else:
-        landed = verify_rename_delivery(ctx, prepared, artifact)
-
-    landed_payload = landed.model_dump(by_alias=True, mode='json')
-    _assert_rename_prepared_current(ctx, prepared)
-    purpose, attempt_id = stage7_runs.restore_commit_adoption(ctx, journal)
-    if (purpose != ctx.node or attempt_id != terminal.attempt_id):
-        raise ProvenanceRefused(
-            'stage7.rename commit adoption 不等于最终 accepted attempt')
-    _note_rename_adoption(
-        ctx, artifact=landed, purpose=purpose, attempt_id=attempt_id)
-    _assert_rename_prepared_current(ctx, prepared)
-    stage7_runs.mark_committed(
-        ctx,
-        primary_payload=landed_payload,
-        finalization_payload=finalization,
-        landed_payloads={REL: landed_payload},
-    )
-    _assert_rename_prepared_current(ctx, prepared)
-    committed = stage7_runs.committed(ctx)
-    if committed is None:
-        raise ProvenanceRefused(
-            'stage7.rename mark_committed 后没有 committed journal')
-    stage7_runs.verify_committed_delivery(
-        ctx,
-        committed,
-        primary_payload=landed_payload,
-        finalization_payload=finalization,
-        landed_payloads={REL: landed_payload},
-    )
-    if terminal._batch.restored_acceptance is not None:
-        _finish_restored_rename_session(
-            ctx,
-            terminal._batch.restored_acceptance,
-            delivery_state='delivered',
-        )
-    return _auto_seal_name_map(ctx, ArtifactStore(ctx), landed)
-
-
 def _write_or_reuse_terminal_invalid(
         ctx: RunContext, prepared: RenameCandidateContext,
         artifact: NameMap,
@@ -2083,41 +1743,6 @@ def finalize_rename_candidate(
             f'finalize_rename_candidate 只接受 stage7.rename，实得 {ctx.node!r}')
     _assert_rename_evaluation(ctx, source, prepared, evaluation)
     _assert_rename_prepared_current(ctx, prepared)
-
-    if evaluation._batch.agent_mode:
-        from novel.llm import stage7_runs
-        with stage7_runs.commit_ownership(ctx.novel_dir):
-            stage7_runs.refuse_foreign_commit_reservations(ctx)
-            existing = stage7_runs.committed(ctx) or stage7_runs.prepared(ctx)
-            if existing is not None:
-                provisional_payload = evaluation.candidate.model_dump(
-                    by_alias=True, mode='json')
-                provisional_finalization = _rename_finalization_payload(
-                    prepared, evaluation)
-                if (not stage7_runs.verify_commit_primary(
-                        existing, provisional_payload)
-                        or not stage7_runs.verify_commit_finalization(
-                            existing, provisional_finalization)):
-                    raise ProvenanceRefused(
-                        'stage7.rename 既有 commit journal 与 provisional 人物表/输入漂移')
-            terminal = _terminal_rename_evaluation(
-                ctx, prepared, evaluation)
-            if terminal.hard_rules:
-                if existing is not None:
-                    raise ProvenanceRefused(
-                        'stage7.rename 业务 HARD 候选不应拥有正式 commit journal')
-                _landed, path = _write_or_reuse_terminal_invalid(
-                    ctx, prepared, terminal.candidate)
-                raise GateBlocked(
-                    f'这份映射表在 agent 总轮次耗尽后仍有阻断级问题'
-                    f'（{list(terminal.hard_rules)}）——不该拿它去替换正文。'
-                    f'最后 accepted 问题稿在 {path}',
-                    invalid_path=str(path),
-                    hint='stage7.rename --apply-edit <name_map_edit.json 路径> 改一行，'
-                         '或 stage7.rename --revalidate --actor system:invalid-revalidate --reason <audit>'
-                         '（0 LLM、同轮重判并留不可变审计）')
-            return _finalize_agent_rename_formal(
-                ctx, prepared, terminal)
 
     terminal = _terminal_rename_evaluation(ctx, prepared, evaluation)
     if terminal.hard_rules:
