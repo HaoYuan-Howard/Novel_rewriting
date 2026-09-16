@@ -637,25 +637,26 @@ def _run_stage6(ctx: RunContext, flags: list[str]) -> int:
     tokens = set(N.flag_tokens(flags))
 
     if ctx.node == 'stage6.prepare':
-        from contracts.artifacts import STAGE6_PREPARE_EDIT, STAGE6_PREPARE_REVIEW_DECISIONS
+        from contracts.artifacts import STAGE6_PREPARE_EDIT
         from contracts.schema import encode_artifact
         from novel.stages.stage6 import prepare
         from novel.store import ArtifactStore
         store = ArtifactStore(ctx)
         if '--dry-run' in tokens:
             print(prepare.build_prompt(ctx))
-        elif '--emit-review-workpack' in tokens:
-            print(prepare.review_workpack(store).model_dump_json(by_alias=True))
-        elif '--emit-review-template' in tokens:
-            print(json.dumps(encode_artifact(STAGE6_PREPARE_REVIEW_DECISIONS,
-                prepare.review_template(store).model_dump(mode='json')), ensure_ascii=False))
+        elif '--emit-review-workpack' in tokens or '--emit-review-template' in tokens:
+            raise TerminalState(
+                'stage6.prepare 的 --emit-review-* 已退役（批次 B4）；'
+                '机械校验通过即自动接受，请用 --revalidate / --recover-edit / '
+                '--recover-prepared')
         elif '--emit-edit-template' in tokens:
             print(json.dumps(encode_artifact(STAGE6_PREPARE_EDIT,
                 prepare.review_workpack(store).edit_template.model_dump(mode='json')), ensure_ascii=False))
-        elif '--apply-edit' in tokens:
-            prepare.run_apply_edit(ctx, _valued(flags, '--apply-edit') or '')
-        elif '--review-decisions' in tokens:
-            prepare.run_review_decisions(ctx, _valued(flags, '--review-decisions') or '')
+        elif '--apply-edit' in tokens or '--review-decisions' in tokens:
+            raise TerminalState(
+                'stage6.prepare 的 --apply-edit / --review-decisions 已退役'
+                '（批次 B4）；机械校验通过即自动接受，免费恢复请用 '
+                '--recover-edit / --recover-prepared / --revalidate')
         elif '--recover-edit' in tokens:
             prepare.run_recover_edit(ctx)
         elif '--recover-prepared' in tokens:
@@ -663,7 +664,7 @@ def _run_stage6(ctx: RunContext, flags: list[str]) -> int:
                 source_run_id=_valued(flags, '--recover-prepared') or '',
                 subject_sha256=_valued(flags, '--subject-sha256') or '')
         elif '--revalidate' in tokens:
-            report = prepare.run_check_only(ctx)
+            report = prepare.run_revalidate(ctx)
             print(render(report))
             return X.OK if report.passed else X.CHECK_FAILED
         else:
@@ -1379,23 +1380,6 @@ def _run_stage7(ctx: RunContext, flags: list[str]) -> int:
         print('  ✓ 已按原完成组补齐人名表提交与采纳尾账（0 模型）')
         return X.OK
 
-    if ctx.node == 'stage7.approve':
-        actor = _valued(flags, '--actor')
-        reason = _valued(flags, '--reason')
-        review_token = _valued(flags, '--review-token')
-        if not actor or not reason or not review_token:
-            raise TerminalState(
-                'stage7.approve 必须显式给 --actor、--reason 和 '
-                '--review-token；actor 是自报身份，opaque token 防旧页面误批')
-        _art, report = rename.run_approve(
-            ctx,
-            actor=actor,
-            reason=reason,
-            review_token=review_token,
-        )
-        print(render(report))
-        return X.OK if report.passed else X.CHECK_FAILED
-
     if ctx.node == 'stage7.assemble':
         path, art, report = assemble.run_assemble(ctx)
         bt = art.book_txt
@@ -1403,6 +1387,11 @@ def _run_stage7(ctx: RunContext, flags: list[str]) -> int:
               + (f'（{bt.chars} 字 / {bt.chapters} 章）' if bt else ''))
         print(render(report))
         return X.OK if report.passed else X.CHECK_FAILED
+
+    if ctx.node == 'stage7.approve':
+        raise TerminalState(
+            'stage7.approve 已退役（批次 B4）；人名表由 stage7.rename '
+            '在机械校验通过后自动 seal，请改跑 stage7.rename / --recheck')
 
     if '--emit-edit-template' in tokens:
         print(rename.edit_template_json())
@@ -1471,7 +1460,7 @@ def _run_stage7(ctx: RunContext, flags: list[str]) -> int:
     # 付费路：遵循 AGENTS.md 的付费与正文外发授权边界。
     client = _llm_client(ctx)
     rename.run_rename(ctx, client)
-    print('  ✓ stage7 人物表已落盘——跑 `stage7.approve` 定稿，再 `stage7.assemble` 成书')
+    print('  ✓ stage7 人物表已落盘并自动定稿——可继续 `stage7.assemble` 成书')
     return X.OK
 
 

@@ -142,8 +142,7 @@ _PRIMARY_OPERATIONS = {
         '--wontfix', '--check-only',
     }),
     'stage6.prepare': frozenset({
-        '--dry-run', '--revalidate', '--emit-edit-template', '--emit-review-template',
-        '--emit-review-workpack', '--apply-edit', '--review-decisions',
+        '--dry-run', '--revalidate', '--emit-edit-template',
         '--recover-edit', '--recover-prepared',
     }),
     'stage6.hook': frozenset({

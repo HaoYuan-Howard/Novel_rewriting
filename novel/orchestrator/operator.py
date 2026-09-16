@@ -374,7 +374,13 @@ def _review_state_projection(approval_doc: ApprovalDoc | None) -> list[dict[str,
         for key in life.approval_projection:
             value = value.get(key) if isinstance(value, dict) else None
         status = ('accepted' if value else 'not_accepted') if isinstance(value, bool) else value
-        rows.append({'node': node, 'scope': life.approval_bindings[0][1],
+        # 批次 B4：部分节点仍有 approval_projection（gate/prepare 读面），
+        # 但人工 approval_bindings 已空；scope 回退到投影末键。
+        if life.approval_bindings:
+            scope = life.approval_bindings[0][1]
+        else:
+            scope = life.approval_projection[-1]
+        rows.append({'node': node, 'scope': scope,
                      'state': status if isinstance(status, str) else 'unknown'})
     return rows
 

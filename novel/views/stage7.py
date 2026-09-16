@@ -121,8 +121,9 @@ def stage7_approval_workpack(
     from novel.stages.stage7.rename import approval_workpack
 
     novel_dir = paths.resolve_novel_dir(base, sid)
+    # 批次 B4：stage7.approve 已退役；只读工作包挂在现役 rename 节点。
     store = ArtifactStore(readonly_ctx(
-        novel_dir, 'stage7.approve', prov.code_version()))
+        novel_dir, 'stage7.rename', prov.code_version()))
     live_legacy = legacy_stage5_paths(store)
     if live_legacy:
         raise HumanEditProtected(

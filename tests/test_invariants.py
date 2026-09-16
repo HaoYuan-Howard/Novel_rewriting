@@ -169,11 +169,9 @@ def test_operator_redo_strategies_are_closed_and_explicit_per_node():
         for node, strategy in registered.items()
         if strategy == 'canonical'
     )
-    assert all(
-        inv.NODES[node].operator_redo is None
-        # stage0.approve / stage0.edit 已移入 RETIRED_NODES（2026-09-15 全自动裁决）。
-        for node in ('stage6.approve', 'stage7.approve')
-    )
+    assert inv.NODES['stage6.approve'].operator_redo is None
+    # stage7.approve 已移入 RETIRED_NODES（批次 B4）；不再出现在 NODES。
+    assert 'stage7.approve' not in inv.NODES
 
 
 def test_unmeasured_nodes_keep_the_default_high_effort():
@@ -206,11 +204,11 @@ def test_the_three_pinned_models_are_exactly_the_decided_exceptions():
 
 def test_free_nodes_are_the_ones_without_llm():
     free = {node for node, spec in inv.NODES.items() if not spec.paid}
-    # stage0.approve / stage0.edit 已退役（2026-09-15 全自动裁决）：NODES 20 → 17。
+    # stage0.approve/edit（B1）与 stage7.approve（B4）退役后：NODES 17 → 16。
     assert free == {
         'stage0.remove',
         'stage1.partition', 'stage4.context', 'stage5.review',
-        'stage6.approve', 'stage7.assemble', 'stage7.approve',
+        'stage6.approve', 'stage7.assemble',
     }
 
 
@@ -394,7 +392,8 @@ def test_node_lifecycle_covers_real_nodes_and_preserves_boundaries():
 
     # stage6.semantic 已退役（2026-09-15）：20 → 19
     # stage0.approve / stage0.edit 退役（2026-09-15 全自动裁决）：19 → 17
-    assert len(NODES) == 17
+    # stage7.approve 退役（批次 B4）：17 → 16
+    assert len(NODES) == 16
     assert all(spec.lifecycle is not None for spec in NODES.values())
     for node, spec in NODES.items():
         life = spec.lifecycle

@@ -48,7 +48,7 @@ Hook 和 A/B 的 `judged` 只记录实际下发的连续开篇章稿；最终文
 
 ```text
 stage6/prepare.json          原文案事实支持与连续开篇范围，独立 E/C 生命周期
-stage6/prepare_review.json   对当前 Prepare 完整字节的独立接受
+stage6/prepare_review.json   对当前 Prepare 完整字节的接受（批次 B4：机械通过即 system:stage6-prepare-auto）
 stage6/prepare_edit.json     段引用形式的免费完整修订请求
 stage6/prepare_review_decisions.json  当前主体的 accept/rework/uncertain 原决定
 stage6/prepare_commit.json   内部 prepared/completed 提交记录，不是创作知识库
@@ -283,7 +283,7 @@ hook 并形成一轮新的局部人工修订，改字后旧批准按字节绑定
 | 判据 | 级别 | 作用 |
 |---|---|---|
 | `prepare_evidence_valid` | HARD | 准备事实的证据与连续开篇范围可从当前来源机械回证 |
-| `prepare_semantic_review` | unver/semantic | 当前 Prepare 的事实支持与开篇范围已独立语义接受；机械通过不能替代接受 |
+| `prepare_semantic_review` | unver/semantic | 当前 Prepare 的事实支持与开篇范围已接受（批次 B4 起为机械自动接受）；机械通过即接受，语义质量进披露 |
 | `hook_empty` | HARD | 至少 20 个内容字符 |
 | `hook_truncated` | HARD | 以完整句末标点收束 |
 | `hook_reuses_source` | HARD | 与原作文案无任何相同 20 内容字窗口 |

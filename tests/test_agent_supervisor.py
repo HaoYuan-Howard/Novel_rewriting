@@ -56,14 +56,14 @@ def _current(*, state: str, waiting_on: str | None = None,
 # ── 人工审批闸：非确定性 blocked 停止 parent，不启动任何模型进程 ───────────
 
 def test_non_deterministic_blocked_stops_at_human_approval_gate():
-    """审批闸属于人工：exit 2 stopped，reason 指明过闸后续跑，无 callback 启动。"""
+    """批次 B4：HUMAN_NODES 已空；非登记 blocker 停在阻断面，指引恢复后续跑。"""
     events = []
     closed = []
     current = _current(state='blocked', waiting_on='stage0.approve')
 
     supervisor = RunSupervisor(
         run_id='run-human-gate', append_event=events.append,
-        make_epoch=lambda *_args: pytest.fail('人工闸不滚新 epoch'),
+        make_epoch=lambda *_args: pytest.fail('阻断面不滚新 epoch'),
         open_epoch=lambda _epoch: None,
         close_epoch=lambda epoch, turn: (
             closed.append((epoch.epoch_id, turn.exit_code)) or 'drained'),
@@ -71,10 +71,10 @@ def test_non_deterministic_blocked_stops_at_human_approval_gate():
         cancel_active=lambda: True,
         initial_epoch=_epoch('epoch-human-gate', 1, 'initial'),
         read_operator_next=lambda _epoch: current,
-        run_ready_action=lambda *_args: pytest.fail('人工闸不得执行 ready'),
-        run_blocked_action=lambda *_args: pytest.fail('人工闸不得执行恢复动作'),
+        run_ready_action=lambda *_args: pytest.fail('阻断面不得执行 ready'),
+        run_blocked_action=lambda *_args: pytest.fail('阻断面不得执行恢复动作'),
         deterministic_blockers=frozenset({'recovery:stage4-design-action'}),
-        finalize_run=lambda *_args: pytest.fail('人工闸不做交付终验'))
+        finalize_run=lambda *_args: pytest.fail('阻断面不做交付终验'))
 
     result = supervisor.run()
 
@@ -84,7 +84,7 @@ def test_non_deterministic_blocked_stops_at_human_approval_gate():
     assert result.turn.continue_ready is False
     assert result.turn.outcome.state == 'stopped'
     assert result.turn.outcome.reason == (
-        '停在人工审批闸：stage0.approve；在 Stage 页面完成裁决后用原配置续跑')
+        '停在阻断面：stage0.approve；按该 waiting_on 对应恢复入口收口后用原配置续跑')
     assert closed == [('epoch-human-gate', 2)]
     assert [event.kind for event in events] == ['epoch_closed']
 

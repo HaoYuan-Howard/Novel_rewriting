@@ -41,7 +41,7 @@ describe('Stage7Screen download', () => {
     vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined)
 
     renderRoute(<Stage7Screen />, `/n/${PLOT_SAMPLE_SID}/stage7`)
-    expect(await screen.findByText((text) => text.startsWith('当前审批：' + view.approved!.actor))).toHaveTextContent(
+    expect(await screen.findByText((text) => text.startsWith('当前定稿：' + view.approved!.actor))).toHaveTextContent(
       view.approved!.reason,
     )
     // 按钮文案带成书文件名 ⇒ 期望值取**服务端下发的那个字段**，不在测试里手拼一份。
@@ -120,7 +120,7 @@ describe('Stage7Screen download', () => {
     expect(screen.queryByText('旧成书正文')).not.toBeInTheDocument()
   })
 
-  it('previews and submits an auditable opaque-token name-map approval', async () => {
+  it('shows readonly auto-seal messaging and keeps workpack evidence without approve UI', async () => {
     const fixture = await mockApi.getStage7(PLOT_SAMPLE_SID)
     const workpack = await mockApi.getStage7ApprovalWorkpack(PLOT_SAMPLE_SID)
     const subject = 'a'.repeat(64)
@@ -138,62 +138,24 @@ describe('Stage7Screen download', () => {
         confidence: 'low', unit: '李管家', suggest: null }],
     })
     vi.spyOn(api, 'getJobs').mockResolvedValue({ jobs: [], running: null })
-    const preview = vi.spyOn(api, 'previewJob').mockImplementation(async (req) => ({
-      argv: `python -m novel.cli ${req.kind} ${req.extra?.join(' ')}`,
-      paid: false,
-      label: req.label,
-      kind: req.kind,
-      steps: [],
-    }))
-    const approve = vi.spyOn(api, 'approveNames').mockResolvedValue({
-      id: 'stage7-approve-test',
-      kind: 'stage7.approve',
-      label: '人名表定稿',
-      argv: 'python -m novel.cli stage7.approve',
-      state: 'ok',
-      paid: false,
-      started: 1,
-      finished: 2,
-      sid: PLOT_SAMPLE_SID,
-      ordinal: null,
-    })
 
-    renderRoute(
-      <>
-        <Stage7Screen />
-        <ConfirmDialog />
-      </>,
-      `/n/${PLOT_SAMPLE_SID}/stage7`,
-    )
+    renderRoute(<Stage7Screen />, `/n/${PLOT_SAMPLE_SID}/stage7`)
     const character = workpack.characters[0]
     expect(await screen.findByText(
       `${character.old_canonical} → ${character.new_canonical} · 实际命中 ${character.hits}`,
     )).toBeVisible()
-    expect(screen.getByText(/逐章 \+ hook 单次扫描真实替换命中/)).toBeVisible()
+    expect(screen.getAllByText(/system:stage7-auto/).length).toBeGreaterThan(0)
+    expect(screen.queryByRole('button', { name: /定稿人物表/ })).not.toBeInTheDocument()
+    expect(screen.queryByLabelText(/自报身份/)).not.toBeInTheDocument()
     expect(workpack.kept.length).toBeGreaterThan(0)
     const evidence = within(screen.getByText(/hash-bound 人名终审包/).closest('details')!)
     expect(evidence.getByText(workpack.kept.join('、'))).toBeVisible()
     expect(screen.getByText('李管家躬身离去。')).toBeVisible()
     expect(screen.getByText(`decision ${subject}`)).toBeVisible()
     expect(screen.queryByText(`decision ${viewOnlySubject}`)).not.toBeInTheDocument()
-    fireEvent.change(await screen.findByLabelText(/自报身份/), {
-      target: { value: 'reviewer-seven' },
-    })
-    fireEvent.change(screen.getByLabelText(/编辑理由/), {
-      target: { value: '已逐项核对别称、亲属后缀与高置信残留' },
-    })
-    fireEvent.click(screen.getByRole('button', { name: /定稿人物表/ }))
-
-    await waitFor(() => expect(preview).toHaveBeenCalled())
-    fireEvent.click(await screen.findByRole('button', { name: '发起' }))
-    await waitFor(() => expect(approve).toHaveBeenCalledWith(PLOT_SAMPLE_SID, {
-      actor: 'reviewer-seven',
-      reason: '已逐项核对别称、亲属后缀与高置信残留',
-      review_token: workpack.review_token,
-    }))
   })
 
-  it('shows already_current and disables the default Stage7 approval action', async () => {
+  it('shows already_current auto seal and keeps residual adoption as the write surface', async () => {
     const fixture = await mockApi.getStage7(PLOT_SAMPLE_SID)
     const current = await mockApi.getStage7ApprovalWorkpack(PLOT_SAMPLE_SID)
     vi.spyOn(api, 'getStage7').mockResolvedValue({
@@ -204,27 +166,23 @@ describe('Stage7Screen download', () => {
       ...current,
       disposition: 'already_current',
       current_approval: {
-        actor: 'reviewer-seven',
-        reason: '已逐项核对人物表',
+        actor: 'system:stage7-auto',
+        reason: '机械校验通过后自动定稿',
         subject_sha256: current.decision_subject_sha256,
         workpack_sha256: current.workpack_sha256,
         review_identity_sha256: current.review_identity_sha256,
       },
     })
     vi.spyOn(api, 'getJobs').mockResolvedValue({ jobs: [], running: null })
-    const approve = vi.spyOn(api, 'approveNames')
 
     renderRoute(<Stage7Screen />, `/n/${PLOT_SAMPLE_SID}/stage7`)
 
-    const button = await screen.findByRole('button', { name: /当前工作包已批准 · 跳过/ })
-    expect(button).toBeDisabled()
+    expect(await screen.findByText('人物表已自动定稿')).toBeVisible()
+    expect(screen.getAllByText(/system:stage7-auto/).length).toBeGreaterThan(0)
+    expect(screen.queryByRole('button', { name: /定稿人物表/ })).not.toBeInTheDocument()
     expect(current.check_basis).toBe('name_map_without_approval_or_delivery')
     const evidence = within(screen.getByText(/hash-bound 人名终审包/).closest('details')!)
     expect(evidence.getByText(/机械核验以未附审批和交付记录的人物表为基准/)).toBeVisible()
-    const unapproved = current.check.attention.find((row) => row.rule === 'rn_not_approved')!
-    expect(unapproved.why).toBeTruthy()
-    expect(evidence.getByText(unapproved.why!)).toBeVisible()
-    expect(approve).not.toHaveBeenCalled()
   })
 
   it('previews and submits explicit high-confidence residual adoption', async () => {
@@ -294,8 +252,8 @@ describe('Stage7Screen download', () => {
       ...pack,
       disposition: 'already_current' as const,
       current_approval: {
-        actor: 'reviewer-seven',
-        reason: '已逐项核对人物表',
+        actor: 'system:stage7-auto',
+        reason: '机械校验通过后自动定稿',
         subject_sha256: pack.decision_subject_sha256,
         workpack_sha256: pack.workpack_sha256,
         review_identity_sha256: pack.review_identity_sha256,
@@ -306,7 +264,7 @@ describe('Stage7Screen download', () => {
     vi.spyOn(api, 'getJobs').mockResolvedValue({ jobs: [], running: null })
 
     const { queryClient } = renderRoute(<Stage7Screen />, `/n/${PLOT_SAMPLE_SID}/stage7`)
-    expect(await screen.findByText('人物表已定稿')).toBeVisible()
+    expect(await screen.findByText('人物表已自动定稿')).toBeVisible()
 
     let rejectRefresh!: (error: Error) => void
     getWorkpack.mockImplementation(() => new Promise((_resolve, reject) => {
@@ -319,20 +277,13 @@ describe('Stage7Screen download', () => {
       })
     })
     await waitFor(() => {
-      expect(screen.queryByText('人物表已定稿')).not.toBeInTheDocument()
-      expect(screen.getByRole('button', { name: /重新定稿/ })).toBeDisabled()
+      expect(screen.queryByText('人物表已自动定稿')).not.toBeInTheDocument()
     })
-    expect(screen.getByRole('button', { name: /重新定稿/ }).parentElement)
-      .toHaveAttribute('title', '正在读取或刷新当前终审工作包')
+    expect(screen.queryByRole('button', { name: /定稿人物表/ })).not.toBeInTheDocument()
     await act(async () => rejectRefresh(new Error('refresh failed')))
     await waitFor(() => {
-      expect(screen.queryByText('人物表已定稿')).not.toBeInTheDocument()
-      expect(screen.getByRole('button', { name: /重新定稿/ }).parentElement)
-        .toHaveAttribute(
-          'title',
-          '当前终审工作包读取失败，不能绑定本轮审批',
-        )
+      expect(screen.queryByText('人物表已自动定稿')).not.toBeInTheDocument()
+      expect(screen.getByText(/终审工作包读取失败/)).toBeVisible()
     })
-    expect(screen.getByRole('button', { name: /重新定稿/ })).toBeDisabled()
   })
 })

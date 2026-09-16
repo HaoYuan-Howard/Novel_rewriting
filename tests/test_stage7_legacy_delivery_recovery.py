@@ -139,8 +139,12 @@ def test_prepared_recovers_original_bytes_cost_and_adoption_without_client(
         rename.recover_prepared_rename(resumed, proof_sha256='0' * 64)
     landed = rename.recover_prepared_rename(
         resumed, source_run_id=projection.source_run_id, proof_sha256=projection.proof_sha256)
-    assert landed.model_dump(by_alias=True, mode='json') == proof['target_payload']
-    assert ArtifactStore(resumed).full_sha256_or_none(rename.REL) == proof['target_sha256']
+    # 批次 B4：未采纳尾恢复会 auto seal；已采纳路径保留历史字节（可能尚无 approved）。
+    decision = landed.model_copy(update={'approved': None, 'book_txt': None})
+    assert decision.model_dump(by_alias=True, mode='json') == proof['target_payload']
+    if landed.approved is not None:
+        assert landed.approved.origin == 'auto'
+        assert landed.approved.actor == 'system:stage7-auto'
     assert ledger_path(tmp_path).read_bytes() == costs
     assert budget.used == int(not cached) and not budget.unfinished_content_ids()
     assert rename.inspect_prepared_recovery(observed).state == 'complete'
@@ -253,7 +257,7 @@ def test_completed_original_acceptance_survives_real_approval_and_changed_inputs
     else:
         rename.run_rename(ctx, first)
     original = ArtifactStore(ctx).full_sha256_or_none(rename.REL)
-    approve_ctx = _ctx(ctx.novel_dir, 'stage7.approve', paid=False)
+    approve_ctx = _ctx(ctx.novel_dir, 'stage7.rename', paid=False)
     pack = rename.approval_workpack(ArtifactStore(approve_ctx))
     approved, _report = rename.run_approve(
         approve_ctx, actor='测试审阅者', reason='已核对实际合成改名工作包', review_token=pack.review_token)

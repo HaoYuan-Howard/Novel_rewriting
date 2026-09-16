@@ -2,9 +2,9 @@
   "prepare": {
     "state": {
       "state": "accepted",
-      "reason": "全文与原钩子核对，来信支持与首章连续范围成立",
+      "reason": "机械校验通过后自动接受文案准备",
       "subject_sha256": "da1a0b197e019eb85c904644ef96645c9baa7de761c2fe72afa2bfefb11fe30f",
-      "review_token": "s6p1_3a8beb5aafbeb96dfe207ac43df76a2bbbd266740a1e4a598e2e00c8a965f576",
+      "review_token": "s6p1_cbac4f5906617ff8e6ab209b9081be7158e86604d2509e8ae9c40852aa91f506",
       "prepare": {
         "source_blurb": {
           "facts": [
@@ -78,12 +78,12 @@
         }
       },
       "review": {
-        "actor": "test:独立文案准备审阅者",
-        "reason": "全文与原钩子核对，来信支持与首章连续范围成立",
+        "actor": "system:stage6-prepare-auto",
+        "reason": "机械校验通过后自动接受文案准备",
         "source_sha256": "da1a0b197e019eb85c904644ef96645c9baa7de761c2fe72afa2bfefb11fe30f",
-        "request_sha256": "0581be281f1a3be6114b951252da3a98cb702aaf6920680971346b984383f235",
+        "request_sha256": "2c470084921ad91e79c8f7b78cfb037bf0f6dfd8bd1d6060a3a0d4bfac6ff005",
         "decision": "accept",
-        "at": "2026-09-16T02:00:56.931083+00:00"
+        "at": "2026-09-16T06:57:28.273981+00:00"
       },
       "pending_commit": false
     },
@@ -107,7 +107,7 @@
     "edit_template": {
       "actor": "operator",
       "reason": "请填写本次原文核对结论",
-      "review_token": "s6p1_3a8beb5aafbeb96dfe207ac43df76a2bbbd266740a1e4a598e2e00c8a965f576",
+      "review_token": "s6p1_cbac4f5906617ff8e6ab209b9081be7158e86604d2509e8ae9c40852aa91f506",
       "source_sha256": "da1a0b197e019eb85c904644ef96645c9baa7de761c2fe72afa2bfefb11fe30f",
       "main_text_sha256": "6ace0b1e2048ec3193f0d9595a740d5c37c572f441dbac92e9dfd991b0df006c",
       "hook_copy_sha256": "bcb04e32665861d445b523c0cd11761cb27b5f6af92b700c068ba21db4b6e76a",
@@ -139,7 +139,7 @@
     "decision_template": {
       "actor": "operator",
       "reason": "请填写本次原文核对结论",
-      "review_token": "s6p1_3a8beb5aafbeb96dfe207ac43df76a2bbbd266740a1e4a598e2e00c8a965f576",
+      "review_token": "s6p1_cbac4f5906617ff8e6ab209b9081be7158e86604d2509e8ae9c40852aa91f506",
       "source_sha256": "da1a0b197e019eb85c904644ef96645c9baa7de761c2fe72afa2bfefb11fe30f",
       "decision": "uncertain",
       "edit": null
@@ -153,10 +153,10 @@
     "kind": "stage6",
     "sid": "123",
     "review_contract_version": "stage6-final-review-v5",
-    "review_identity_sha256": "fd171ff6c0189dd9eeed3f5688a0ebd6463e5d3000f297de07de3c33b1ebba7b",
-    "validation_seal_sha256": "54b3e19002a2d38cc6c5f4317576dced5e6ceeecca12dc4f8b7d248ed9a9d1ac",
-    "review_token": "s6r4_5b061ceff712cb6b3cdd8c805d32d12f476969098e2dd5ad40baa42fdee08168",
-    "artifact_subject_sha256": "da479930eff2909c3b8ba49bf6eb0475d27bce35f822e44b3cfa7cbdf06d2a0e",
+    "review_identity_sha256": "3b1aa726ef8ad233cca69b85f7756cfb5a624d08fa395d8982cc3b7a65880cbd",
+    "validation_seal_sha256": "3cb4617b9f948413f1e62162b4d50628e3735607fdb1e410b84436a8fad36ce8",
+    "review_token": "s6r4_ede054a4a6820c3f6168a0fefcf0043016c179b1bc3220812e187a4c7af4e749",
+    "artifact_subject_sha256": "a3977f4c1427d0b33504c9e646dbbe3134aac06c7c8a2d6e91baae627953dee7",
     "rationale": "分别呈现回城来信、母亲知情与账房日常。",
     "materials": {
       "prepare_subject_sha256": "37dfd5b51348d6cbea64852f76d312d3c7ae3640ddd4f95a96fb8e808705c619",
@@ -251,8 +251,8 @@
             "key": "stage4/writer_context.json",
             "state": "fresh",
             "reason": "match",
-            "recorded_file": "11e7b5552f",
-            "now_file": "11e7b5552f",
+            "recorded_file": "f63b8215ad",
+            "now_file": "f63b8215ad",
             "recorded_consumed": "3d7c6675b1",
             "now_consumed": "3d7c6675b1"
           },
@@ -958,7 +958,7 @@
         ]
       }
     ],
-    "workpack_sha256": "5b061ceff712cb6b3cdd8c805d32d12f476969098e2dd5ad40baa42fdee08168",
+    "workpack_sha256": "ede054a4a6820c3f6168a0fefcf0043016c179b1bc3220812e187a4c7af4e749",
     "disposition": "already_current",
     "current_slot": "c1",
     "current_approval": {
@@ -966,8 +966,8 @@
       "reason": "合成候选与原文、全书成稿已对照",
       "subject_sha256": "f6d8274494e5f1eaec8d2bb0b51855ff1a2f8aa58524fa85ed0a1a8a9b87d339",
       "basis": "human_selection",
-      "workpack_sha256": "5b061ceff712cb6b3cdd8c805d32d12f476969098e2dd5ad40baa42fdee08168",
-      "review_identity_sha256": "fd171ff6c0189dd9eeed3f5688a0ebd6463e5d3000f297de07de3c33b1ebba7b"
+      "workpack_sha256": "ede054a4a6820c3f6168a0fefcf0043016c179b1bc3220812e187a4c7af4e749",
+      "review_identity_sha256": "3b1aa726ef8ad233cca69b85f7756cfb5a624d08fa395d8982cc3b7a65880cbd"
     }
   },
   "rename": {
@@ -975,10 +975,10 @@
     "kind": "stage7",
     "sid": "123",
     "review_contract_version": "stage7-final-review-v4",
-    "review_identity_sha256": "96d6c91c547fbde985d7a5fa0452f30f30f1aa135aabf6b90ffa136e96970de8",
-    "validation_seal_sha256": "851540cd9d00290cc629304f2f2da57f2d90408216ddad395b14331fde3d1d2b",
-    "review_token": "s7r3_ccb7358ca33f0d3de8a37d6338f447af47f454916b45b777e2b936c2ebad2141",
-    "artifact_subject_sha256": "4f513de32b390cadc35d02372b7b96cb13165a2428e60889f493a9c85f855c80",
+    "review_identity_sha256": "2ba2b87453eb8f6a47e29b484d944059558a6ae3206873714897577e8b52a6d7",
+    "validation_seal_sha256": "49856f61ed20eaa7cedd7a67180596540559b6ae158671a8a5230d82096f5ac1",
+    "review_token": "s7r3_d699b568a56bd216b8eedf68e5887f8564d667a81abea8d573ffaf6f3e58b72c",
+    "artifact_subject_sha256": "58573597ecda071951890a1f0a0b971c12901a840ced1a58eaed82e39e84fa3d",
     "decision_subject_sha256": "1b3b7a14b101cc67424ee1322ea2b85fa4c9e5bede06b49060727c403006033c",
     "check_basis": "name_map_without_approval_or_delivery",
     "check": {
@@ -1025,8 +1025,8 @@
             "key": "stage4/plan_chapters.json",
             "state": "fresh",
             "reason": "match",
-            "recorded_file": "102b406ee7",
-            "now_file": "102b406ee7",
+            "recorded_file": "313b98b7c5",
+            "now_file": "313b98b7c5",
             "recorded_consumed": "9ef50cc82a",
             "now_consumed": "9ef50cc82a"
           },
@@ -1034,8 +1034,8 @@
             "key": "stage4/writer_context.json",
             "state": "fresh",
             "reason": "match",
-            "recorded_file": "11e7b5552f",
-            "now_file": "11e7b5552f",
+            "recorded_file": "f63b8215ad",
+            "now_file": "f63b8215ad",
             "recorded_consumed": "f7636c4de9",
             "now_consumed": "f7636c4de9"
           },
@@ -1043,8 +1043,8 @@
             "key": "stage6/hook.json",
             "state": "fresh",
             "reason": "match",
-            "recorded_file": "01319a0c37",
-            "now_file": "01319a0c37",
+            "recorded_file": "6eba87efa0",
+            "now_file": "6eba87efa0",
             "recorded_consumed": "dee146a0eb",
             "now_consumed": "dee146a0eb"
           }
@@ -1124,7 +1124,7 @@
           "remediation": "human",
           "fix": null,
           "findings": [],
-          "why": "映射表在盘上但没有人拍板——跑 stage7.approve（0 成本）。新名的时代感与雅俗没有确定性判据，人定稿是这一维唯一的闸门",
+          "why": "映射表在盘上但尚未机械定稿——跑 stage7.rename --recheck（0 成本）；无 HARD 时 rename producer 会以 system:stage7-auto 自动 seal。新名的时代感与雅俗没有确定性判据，定稿不证明新名好",
           "scanned": "产物的 approved 键",
           "baseline": null,
           "note": "本条由复检产出，不落产物。⚠ 与 stage6 不同：本层的定稿是给整份人物表盖章，没有候选序号；但 stage7.approve 仍强制提交 actor/reason 与当前 decision-surface SHA-256。盘上三本都已定稿 ⇒ 0 命中"
@@ -1437,15 +1437,15 @@
         "新名好不好——没有确定性判据，现役闸门是人定稿"
       ]
     },
-    "workpack_sha256": "ccb7358ca33f0d3de8a37d6338f447af47f454916b45b777e2b936c2ebad2141",
+    "workpack_sha256": "d699b568a56bd216b8eedf68e5887f8564d667a81abea8d573ffaf6f3e58b72c",
     "disposition": "already_current",
     "current_approval": {
-      "actor": "test:改名审阅者",
-      "reason": "合成角色姓名替换与亲属关系已复核",
+      "actor": "system:stage7-auto",
+      "reason": "机械校验通过后自动定稿；残留按规则披露或已安全采纳",
       "subject_sha256": "1b3b7a14b101cc67424ee1322ea2b85fa4c9e5bede06b49060727c403006033c",
-      "origin": "human",
-      "workpack_sha256": "ccb7358ca33f0d3de8a37d6338f447af47f454916b45b777e2b936c2ebad2141",
-      "review_identity_sha256": "96d6c91c547fbde985d7a5fa0452f30f30f1aa135aabf6b90ffa136e96970de8"
+      "origin": "auto",
+      "workpack_sha256": "d699b568a56bd216b8eedf68e5887f8564d667a81abea8d573ffaf6f3e58b72c",
+      "review_identity_sha256": "2ba2b87453eb8f6a47e29b484d944059558a6ae3206873714897577e8b52a6d7"
     }
   }
 }

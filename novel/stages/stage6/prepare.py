@@ -1,7 +1,8 @@
-"""独立文案准备 owner：已购回答先耐久，免费编辑/决定整体预检后按冻结目标补尾。
+"""独立文案准备 owner：已购回答先耐久，机械通过即自动接受。
 
 Prepare 只读取 MainText 和 HookCopy。其接受不修改 gate.s6；Hook 每次消费都复核
-当前材料与独立决定。一个 owner 锁同时保护 E 发布、人工编辑、审阅及恢复。
+当前材料与独立决定。人工 --review-decisions / --apply-edit 写面已退役；保留
+recover-edit / recover-prepared / revalidate。
 """
 from __future__ import annotations
 
@@ -402,6 +403,33 @@ def apply_edit(ctx, edit: PrepareEdit):
         return _finish_journal(ctx, _start_journal(ctx, edit, candidate))
 
 
+def _auto_accept_prepare(ctx) -> Stage6PrepareReview | None:
+    """机械 checks 通过即自动 accept；已 accepted 幂等；opening 非 proposed 或 issues 不接受。"""
+    store = ArtifactStore(ctx)
+    state = view_state(store)
+    if state.state == 'accepted':
+        return state.review
+    if state.state != 'pending' or state.prepare is None:
+        return None
+    if state.pending_commit:
+        return None
+    if (state.review_token is None or state.subject_sha256 is None
+            or state.prepare.source_blurb.opening.kind != 'proposed'):
+        return None
+    issues = _issues(state.prepare, _inputs(store))
+    if issues:
+        return None
+    decision = PrepareDecision(
+        actor='system:stage6-prepare-auto',
+        reason='机械校验通过后自动接受文案准备',
+        source_sha256=state.subject_sha256,
+        review_token=state.review_token,
+        decision='accept',
+        edit=None,
+    )
+    return submit_review(ctx, decision)
+
+
 def submit_review(ctx, decision: PrepareDecision):
     with ownership(ctx):
         store = ArtifactStore(ctx)
@@ -513,6 +541,7 @@ def _publish_checkpoint(ctx, checkpoint, prepared, source_run_id, live_client=No
             baselines = agent_runs.initial_artifact_sha256s(restored.context, runs.run_spec())
             landed = _finish_journal(ctx, _start_journal(ctx, source, artifact, baselines=baselines, hard_issues=issues), live_client)
     if issues: raise GateBlocked('Prepare 证据编译失败：' + '；'.join(issues), invalid_path=store.path(INVALID))
+    _auto_accept_prepare(ctx)
     return landed
 
 
@@ -612,3 +641,10 @@ def run_check_only(ctx):
     _artifact, _sha256, rel = _current(store)
     return build(sid=ctx.sid, node=NODE, freshness=store.freshness(rel), invalid=rel == INVALID,
         outcomes=check_outcomes(store))
+
+
+def run_revalidate(ctx):
+    """0 成本：机械通过则自动 accept；已 accepted 幂等。"""
+    report = run_check_only(ctx)
+    _auto_accept_prepare(ctx)
+    return report

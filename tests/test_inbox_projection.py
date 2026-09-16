@@ -111,9 +111,11 @@ def test_final_approval_inbox_commands_bind_the_same_fresh_workpack():
     assert '--subject-sha256' not in verification[0].how
     assert '--workpack-sha256' not in verification[0].how
     by_rule = {row.rule: row for row in approvals}
-    assert set(by_rule) == {'stage6.approve', 'stage7.approve'}
+    # 批次 B4：stage7.approve 退役；人名表未定稿投影为 rename 验证项。
+    assert set(by_rule) == {'stage6.approve', 'stage7.rename'}
     assert '--review-token s6r3_' + 'b' * 64 in by_rule['stage6.approve'].how
-    assert '--review-token s7r3_' + 'c' * 64 in by_rule['stage7.approve'].how
+    assert 'stage7.rename --recheck' in by_rule['stage7.rename'].how
+    assert 'system:stage7-auto' in by_rule['stage7.rename'].how
 
 
 def test_final_approval_inbox_omits_already_current_actions():

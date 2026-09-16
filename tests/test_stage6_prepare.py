@@ -84,7 +84,8 @@ def _assert_prepare_session_closed(ctx, delivery_state):
     return record
 
 
-def test_real_executor_then_external_decision_opens_independent_consumer(tmp_path):
+def test_real_executor_then_auto_accept_opens_independent_consumer(tmp_path):
+    """B4：正式生成机械通过即 system:stage6-prepare-auto；Hook 可独立消费。"""
     ctx, driver, artifact = seed_prepare(tmp_path)
     assert len(driver.calls) == 1
     _assert_prepare_session_closed(ctx, 'delivered')
@@ -96,16 +97,10 @@ def test_real_executor_then_external_decision_opens_independent_consumer(tmp_pat
             assert prompt.count(paragraph) == 1
     assert prompt.count('此信由旧友送来。') == 1
     assert [fact.kind for fact in artifact.source_blurb.facts] == ['supported', 'hook_supported', 'unresolved']
-    assert prepare.view_state(ArtifactStore(ctx)).state == 'pending'
-    with pytest.raises(ProvenanceRefused, match='未接受'):
-        prepare.require_accepted(ArtifactStore(ctx))
-    free = _free_ctx(ctx)
-    decision = decision_for(free)
-    path = tmp_path / 'review.json'
-    path.write_text(json.dumps(encode_artifact(prepare.DECISIONS, decision.model_dump(mode='json')),
-                               ensure_ascii=False), encoding='utf-8')
-    prepare.run_review_decisions(free, str(path))
-    assert prepare.view_state(ArtifactStore(free)).state == 'accepted'
+    state = prepare.view_state(ArtifactStore(ctx))
+    assert state.state == 'accepted'
+    assert state.review is not None
+    assert state.review.actor == 'system:stage6-prepare-auto'
     consumer = _free_ctx(ctx)
     consumer.node = 'stage6.hook'
     assert prepare.require_accepted(ArtifactStore(consumer)) == artifact
@@ -357,7 +352,11 @@ def test_raw_response_repair_preserves_four_call_budget_and_original_stdout(tmp_
     assert ctx.ledger.path.read_bytes() == ledger_before
     budget = work_units.budget_for(ctx, scope='book')
     assert budget.used == 4 and budget.remaining == 0
-    assert prepare.view_state(ArtifactStore(ctx)).state == 'pending'
+    # 批次 B4：recover_prepared 落合法候选后机械通过即 auto accept。
+    state = prepare.view_state(ArtifactStore(ctx))
+    assert state.state == 'accepted'
+    assert state.review is not None
+    assert state.review.actor == 'system:stage6-prepare-auto'
 
 
 def test_free_wal_cannot_change_candidate_or_acceptance_after_request_is_frozen(tmp_path, monkeypatch):

@@ -76,7 +76,7 @@ import type {
 import type { CharacterRegistryView, CharactersEditRequest } from './characters'
 import type { AnalyzeDraftView, AnalyzeDraftOwner, AnalyzeDraftEditRequest } from './analyzeDraft'
 import type {
-  PrepareView, PrepareWorkpack, PrepareEditRequest, PrepareEditPreview, PrepareDecisionRequest,
+  PrepareView, PrepareWorkpack,
 } from './prepare'
 
 export interface Api {
@@ -118,9 +118,6 @@ export interface Api {
   getStage6(sid: string): Promise<Stage6Response>
   getStage6Prepare(sid: string): Promise<PrepareView>
   getStage6PrepareWorkpack(sid: string): Promise<PrepareWorkpack>
-  previewStage6PrepareEdit(sid: string, req: PrepareEditRequest): Promise<PrepareEditPreview>
-  applyStage6PrepareEdit(sid: string, req: PrepareEditRequest): Promise<Job>
-  reviewStage6Prepare(sid: string, req: PrepareDecisionRequest): Promise<Job>
   getStage7(sid: string): Promise<Stage7Response>
   getStage7Chapter(sid: string, ordinal: number): Promise<Stage7Response>
   getStage7Book(sid: string): Promise<string>
@@ -216,11 +213,6 @@ export interface Api {
       reason: string
       review_token: string
     },
-  ): Promise<Job>
-  /** 人名表定稿：自报身份/理由 + immutable workpack token。 */
-  approveNames(
-    sid: string,
-    req: { actor: string; reason: string; review_token: string },
   ): Promise<Job>
   /** 显式采纳当前可安全应用的 high residual；后端仍会重新校验冲突。 */
   adoptResidual(sid: string, req: { confidence: 'high' }): Promise<Job>

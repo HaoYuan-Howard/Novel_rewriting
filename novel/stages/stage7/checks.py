@@ -569,8 +569,9 @@ def check(*, findings: list[Finding], scanned: str, baseline_line: str,
     else:
         out.append(unverifiable(
             'rn_not_approved',
-            '映射表在盘上但**没有人拍板**——跑 `stage7.approve`（0 成本）。'
-            '新名的时代感与雅俗没有确定性判据，人定稿是这一维唯一的闸门',
+            '映射表在盘上但**尚未机械定稿**——跑 `stage7.rename --recheck`（0 成本）；'
+            '无 HARD 时 rename producer 会以 system:stage7-auto 自动 seal。'
+            '新名的时代感与雅俗没有确定性判据，定稿不证明新名好',
             scanned='产物的 `approved` 键'))
 
     out.append(unverifiable('rn_body_stale',

@@ -61,7 +61,16 @@ def _prepare_report(base: Path, *, broken: bool):
     store = ArtifactStore(ctx)
     assert store.exists(prepare.INVALID) is broken
     assert store.exists(prepare.REL) is (not broken)
-    assert not store.exists(prepare.REVIEW), '机械绿底不能自行获得语义接受'
+    # 批次 B4：机械校验通过即 auto accept；绿底必须落 REVIEW，坏证据不得接受。
+    if broken:
+        assert not store.exists(prepare.REVIEW), '坏证据不得获得 Prepare 接受'
+    else:
+        from contracts.schema.stage6_prepare import Stage6PrepareReview
+        assert store.exists(prepare.REVIEW), '机械绿底必须由 producer auto accept'
+        review = store.read_own(Stage6PrepareReview, prepare.REVIEW)[0]
+        assert review.decision == 'accept'
+        assert review.actor == 'system:stage6-prepare-auto'
+        assert prepare.view_state(store).state == 'accepted'
     report = prepare.run_check_only(_free_ctx(ctx))
     assert len(driver.calls) == 1, '免费重验不能再购买回答'
     return report

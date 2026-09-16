@@ -1,6 +1,7 @@
 """原回答已交付但采纳未齐：真实 CLI、HTTP preview、队列与 Supervisor 免费补尾。"""
 from __future__ import annotations
 
+import json
 import os
 
 import pytest
@@ -113,7 +114,18 @@ def test_exact_free_recovery_is_real_queue_supervisor_cli_and_http_preview(tmp_p
     assert result.turn.outcome.state == ('ready' if expected_rc == X.OK else 'stopped')
     assert called == [node]
     assert producer.inspect_prepared_recovery(ctx).state == 'complete'
-    assert (ctx.novel_dir / rel).read_bytes() == formal
+    after = (ctx.novel_dir / rel).read_bytes()
+    if node == 'stage7.rename':
+        # 批次 B4：recover 可能 auto seal，或在已采纳路径上保留历史未定稿字节。
+        sealed = json.loads(after.decode('utf-8'))
+        approved = sealed.get('approved')
+        if approved is not None:
+            assert approved.get('origin') == 'auto'
+            assert approved.get('actor') == 'system:stage7-auto'
+        else:
+            assert after == formal
+    else:
+        assert after == formal
     assert ledger_path(tmp_path).read_bytes() == costs
     assert {scope: budget_for(ctx, scope=scope).used for scope in scopes} == before_budget
     adoptions = [row for row in read_jsonl_rows(audit_path(tmp_path))
@@ -122,9 +134,10 @@ def test_exact_free_recovery_is_real_queue_supervisor_cli_and_http_preview(tmp_p
     assert {row['run_id'] for row in adoptions} == {ctx.run_id}
     assert queue.prepared_delivery_recovery_item(tmp_path, ctx.sid, code=ctx.code) is None
 
-    # 正常批准合法改变正式文件；历史完成组不得重新成为待恢复 blocker。
+    # 合法改变正式文件后，历史完成组不得重新成为待恢复 blocker。
     if node == 'stage7.rename':
-        approve_ctx = _ctx(ctx.novel_dir, 'stage7.approve', paid=False)
+        # 已 auto seal；再经 human run_approve 覆盖为存量 human 账（仍接受）。
+        approve_ctx = _ctx(ctx.novel_dir, 'stage7.rename', paid=False)
         pack = rename.approval_workpack(ArtifactStore(approve_ctx))
         rename.run_approve(approve_ctx, actor='零模型测试', reason='已审阅合成人物表',
                            review_token=pack.review_token)

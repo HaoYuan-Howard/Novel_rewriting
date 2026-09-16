@@ -202,7 +202,9 @@ def test_assembly_refuses_an_approval_bound_to_an_older_decision_surface(monkeyp
             ApprovalRequired, match='批准不再绑定当前决策面') as blocked:
         assemble._require_mapping_current(
             SimpleNamespace(), _Store(), art, _upstreams())
-    assert '--review-token' in (blocked.value.hint or '')
+    # 批次 B4：恢复口是 rename --recheck → auto seal，不再要人交 review-token。
+    assert 'stage7.rename --recheck' in (blocked.value.hint or '')
+    assert '--review-token' not in (blocked.value.hint or '')
     assert '--subject-sha256' not in (blocked.value.hint or '')
 
 

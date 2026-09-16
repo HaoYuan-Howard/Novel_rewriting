@@ -184,8 +184,6 @@
   "--apply-edit",
   "--wontfix",
   "--emit-edit-template",
-  "--emit-review-workpack",
-  "--emit-review-template",
   "--adopt-residual",
   "--validate-edit",
   "--rebind-review"
@@ -747,9 +745,6 @@
   "--identity": "恒等基线：拿原作自己的东西跑整套判据，看判据有没有把合法情况排除在外",
   "--apply-edit": "把人工改过的内容落成新的一轮",
   "--preview-edit": "只读预检 Stage5 人工稿，不调用模型、不写盘",
-  "--review-decisions": "应用带 actor、理由和 subject hash 乐观锁的独立 typed 复核决策",
-  "--emit-review-template": "向 stdout 输出绑定当前主体 hash/evidence 的审阅模板，不写盘",
-  "--emit-review-workpack": "向 stdout 输出逐项证据包；只辅助人工核验，不自动做决定",
   "--recover-edit": "免费补齐本 owner 已耐久的原编辑或复核决定，不重新审阅、不调用模型",
   "--wontfix": "把一条「这条我不修」记进 <stage>/wontfix.json，纯记账、不调用",
   "--auto": "stage6.approve 默认定稿跑法：按固定槽位序自动定稿（0 成本）",
@@ -791,7 +786,6 @@
   "--preview-edit": "只读预检 Stage5 人工整章稿；与 --apply-edit 共用归一、判据与preview subject 算法；相对路径相对书目录，不写产物",
   "--response-repair": "结构化拒绝响应恢复模式；当前只接受 `agent`。可修复响应先隔离并停给外层受托 agent，同闸复验失败才继续采样",
   "--review-token": "人工审阅动作的 opaque immutable-workpack token；内部内容、证据、validation 与 execution 摘要不再由 Commander 散装搬运",
-  "--review-decisions": "Stage6 Prepare 独立 typed 复核决定路径（必填；服务进程放在 `<base>/_service/edits/` 的可信上传路径）",
   "--apply-binding": "完整人工 Stage4 EvidenceBinding 路径（必填；相对路径相对书目录，也接受书目录内的绝对路径）",
   "--emit-prepared-recovery-workpack": "要审计的旧 Stage5 source run_id；输出绑定当前 target run/code 的只读工作包",
   "--recover-prepared": "要零调用收口的 source run_id；Stage5 为全部 unresolved prepared，Stage6 为主体摘要锁定的原 Hook 或双盲审判完成组",
@@ -865,7 +859,8 @@
   "stage3.style",
   "stage6.semantic",
   "stage0.approve",
-  "stage0.edit"
+  "stage0.edit",
+  "stage7.approve"
  ],
  "retired_stages": [
   "stage3"
@@ -912,7 +907,6 @@
   "stage6.hook",
   "stage6.approve",
   "stage7.rename",
-  "stage7.approve",
   "stage7.assemble"
  ],
  "progress_phases": [
@@ -1469,10 +1463,6 @@
     "--dry-run",
     "--revalidate",
     "--emit-edit-template",
-    "--emit-review-template",
-    "--emit-review-workpack",
-    "--apply-edit",
-    "--review-decisions",
     "--recover-edit",
     "--recover-prepared",
     "--subject-sha256",
@@ -1485,33 +1475,25 @@
     "unit_kind": "book",
     "input_workpack": "完整源正文、原钩子与独立准备产物",
     "generation_mode": "executor",
-    "review_mode": "human",
-    "review_scope": "事实支持与连续开篇范围独立接受",
+    "review_mode": "deterministic",
+    "review_scope": "机械校验通过即自动接受",
     "repair_actions": [
-     "accept",
-     "typed_edit",
+     "recompute",
      "stop"
     ],
     "repair_owners": [
      "stage6.prepare"
     ],
-    "session_scope": "executor:book / human:prepare",
+    "session_scope": "executor:book",
     "recovery_entries": [
      "--revalidate",
-     "--apply-edit",
-     "--review-decisions",
      "--recover-edit",
      "--recover-prepared",
      "saved_response",
      "prepared_commit"
     ],
     "executor_content_limit": 4,
-    "approval_bindings": [
-     [
-      "approval:stage6-prepare",
-      "prepare"
-     ]
-    ],
+    "approval_bindings": [],
     "approval_projection": [
      "prepare",
      "state"
@@ -1644,8 +1626,8 @@
     "unit_kind": "book",
     "input_workpack": "全书人物、别名与已闭合正文",
     "generation_mode": "executor",
-    "review_mode": "none",
-    "review_scope": "人名表交独立定稿",
+    "review_mode": "deterministic",
+    "review_scope": "机械校验通过即 auto 定稿",
     "repair_actions": [
      "typed_edit",
      "targeted_rework",
@@ -1665,47 +1647,6 @@
     ],
     "executor_content_limit": 4,
     "approval_bindings": [],
-    "approval_projection": []
-   }
-  },
-  "stage7.approve": {
-   "label": "stage7 人名表定稿",
-   "paid": false,
-   "stage": "stage7",
-   "section": "R-10",
-   "flags": [
-    "--actor",
-    "--reason",
-    "--review-token"
-   ],
-   "produces": [
-    "stage7/name_map.json"
-   ],
-   "lifecycle": {
-    "unit_kind": "book",
-    "input_workpack": "人物表与真实替换、残留扫描工作包",
-    "generation_mode": "human_submission",
-    "review_mode": "human",
-    "review_scope": "当前人名与替换表",
-    "repair_actions": [
-     "accept",
-     "stop"
-    ],
-    "repair_owners": [
-     "stage7.rename"
-    ],
-    "session_scope": "human:rename_approval",
-    "recovery_entries": [
-     "typed_replay",
-     "--review-token"
-    ],
-    "executor_content_limit": 0,
-    "approval_bindings": [
-     [
-      "stage7.approve",
-      "rename"
-     ]
-    ],
     "approval_projection": [
      "gate",
      "s7"
@@ -2889,58 +2830,6 @@
   },
   {
    "kind": "stage6.prepare",
-   "label": "stage6 文案准备 --emit-review-template",
-   "extra": [
-    "--emit-review-template"
-   ],
-   "paid": false,
-   "free_flag": "--emit-review-template",
-   "writes": "stage6/prepare.json",
-   "writes_disk": true,
-   "needs_value": null,
-   "required_inputs": []
-  },
-  {
-   "kind": "stage6.prepare",
-   "label": "stage6 文案准备 --emit-review-workpack",
-   "extra": [
-    "--emit-review-workpack"
-   ],
-   "paid": false,
-   "free_flag": "--emit-review-workpack",
-   "writes": "stage6/prepare.json",
-   "writes_disk": true,
-   "needs_value": null,
-   "required_inputs": []
-  },
-  {
-   "kind": "stage6.prepare",
-   "label": "stage6 文案准备 --apply-edit",
-   "extra": [
-    "--apply-edit"
-   ],
-   "paid": false,
-   "free_flag": "--apply-edit",
-   "writes": "把人工稿落成新的一版，上一版归档进 _rounds/",
-   "writes_disk": true,
-   "needs_value": "人工改好的候选稿路径（必填；相对路径相对**书目录**；绝对路径由节点校验，Stage5 额外接受服务上传的 _service/edits 路径）",
-   "required_inputs": []
-  },
-  {
-   "kind": "stage6.prepare",
-   "label": "stage6 文案准备 --review-decisions",
-   "extra": [
-    "--review-decisions"
-   ],
-   "paid": false,
-   "free_flag": "--review-decisions",
-   "writes": "stage6/prepare.json",
-   "writes_disk": true,
-   "needs_value": "Stage6 Prepare 独立 typed 复核决定路径（必填；服务进程放在 `<base>/_service/edits/` 的可信上传路径）",
-   "required_inputs": []
-  },
-  {
-   "kind": "stage6.prepare",
    "label": "stage6 文案准备 --recover-edit",
    "extra": [
     "--recover-edit"
@@ -3355,30 +3244,6 @@
    "writes_disk": true,
    "needs_value": "结构化拒绝响应恢复模式；当前只接受 `agent`。可修复响应先隔离并停给外层受托 agent，同闸复验失败才继续采样",
    "required_inputs": []
-  },
-  {
-   "kind": "stage7.approve",
-   "label": "stage7 人名表定稿",
-   "extra": null,
-   "paid": false,
-   "free_flag": null,
-   "writes": "stage7/name_map.json",
-   "writes_disk": true,
-   "needs_value": null,
-   "required_inputs": [
-    {
-     "flag": "--actor",
-     "description": "人工决定的自报身份（不是认证身份）"
-    },
-    {
-     "flag": "--reason",
-     "description": "人工决定的非空理由"
-    },
-    {
-     "flag": "--review-token",
-     "description": "人工审阅动作的 opaque immutable-workpack token；内部内容、证据、validation 与 execution 摘要不再由 Commander 散装搬运"
-    }
-   ]
   },
   {
    "kind": "stage7.assemble",

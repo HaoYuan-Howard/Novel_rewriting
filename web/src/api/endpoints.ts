@@ -1,5 +1,5 @@
 import type { RunMetrics } from '@/types/runMetrics'
-import type { PrepareView, PrepareWorkpack, PrepareEditPreview } from '@/types/prepare'
+import type { PrepareView, PrepareWorkpack } from '@/types/prepare'
 import type { PlotEdit, PlotEditPreview } from '@/types/plot.generated'
 import type { GlobalEdit, GlobalEditPreview } from '@/types/globalEdit'
 /**
@@ -404,12 +404,6 @@ export const realApi: Api = {
   getStage6: (sid) => get<Stage6Response>(n(sid) + '/stage6'),
   getStage6Prepare: (sid) => get<PrepareView>(n(sid) + '/stage6/prepare'),
   getStage6PrepareWorkpack: (sid) => get<PrepareWorkpack>(n(sid) + '/stage6/prepare/workpack'),
-  previewStage6PrepareEdit: (sid, req) =>
-    post<PrepareEditPreview>(n(sid) + '/stage6/prepare/edit/preview', req),
-  applyStage6PrepareEdit: async (sid, req) =>
-    adaptJob(await post<BackendJobRecord>(n(sid) + '/stage6/prepare/edit', req)),
-  reviewStage6Prepare: async (sid, req) =>
-    adaptJob(await post<BackendJobRecord>(n(sid) + '/stage6/prepare/review', req)),
   getStage7: (sid) => get<Stage7Response>(n(sid) + '/stage7'),
   getStage7Chapter: (sid, o) => get<Stage7Response>(n(sid) + '/stage7/' + o),
   getStage7Book: (sid) => getText(n(sid) + '/stage7/book.txt'),
@@ -544,8 +538,6 @@ export const realApi: Api = {
       n(sid) + '/stage5/trim/retain-pretrim-batch', req)),
   approveHook: async (sid, req) =>
     adaptJob(await post<BackendJobRecord>(n(sid) + '/stage6/approve', req)),
-  approveNames: async (sid, req) =>
-    adaptJob(await post<BackendJobRecord>(n(sid) + '/stage7/approve', req)),
   adoptResidual: async (sid, req) =>
     adaptJob(await post<BackendJobRecord>(n(sid) + '/stage7/adopt-residual', req)),
   uploadCorpus: async (file) => {

@@ -65,19 +65,6 @@ def _stage6_semantic_rels(book: str) -> tuple[str, ...]:
         and a.rel.removeprefix('stage6/semantic_').removesuffix('.json').isdigit()))
 
 
-def _name_approval_body(box) -> dict[str, str]:
-    from novel.store import ArtifactStore
-    ctx = RunContext.open(
-        str(box.root), box.sid, 'stage7.approve', paid=False,
-        write_ledger=False)
-    pack = rename.approval_workpack(ArtifactStore(ctx))
-    return {
-        'actor': 'reviewer',
-        'reason': 'reviewed the complete name decision surface',
-        'review_token': pack.review_token,
-    }
-
-
 @pytest.fixture(autouse=True)
 def no_api_key(monkeypatch):
     monkeypatch.delenv('DEEPSEEK_API_KEY', raising=False)
@@ -597,27 +584,31 @@ def test_a_zero_pick_is_422_from_the_carrier(validation_client):
 
 # ───────────────────────── 三、人名定稿 ─────────────────────────
 
+def _name_map_auto_seal(box) -> dict:
+    """批次 B4：rename --recheck 机械通过即 auto seal，盖上 s7。"""
+    ctx = RunContext.open(
+        str(box.root), box.sid, 'stage7.rename', paid=False, write_ledger=False)
+    sealed, _report = rename.run_recheck(ctx)
+    assert sealed.approved is not None
+    assert sealed.approved.origin == 'auto'
+    assert sealed.approved.actor == 'system:stage7-auto'
+    after = json.loads((box.dir / 'stage7' / 'name_map.json').read_text(encoding='utf-8'))
+    assert after['approved']['origin'] == 'auto'
+    return after
+
+
 def test_approving_the_name_map_stamps_s7_and_assembly_keeps_it_current(
     client, box, monkeypatch,
 ):
-    """API 定稿盖 `s7`；正常组装只写派生交付账，不能撤销同一批准。"""
+    """rename auto seal 盖 `s7`；正常组装只写派生交付账，不能撤销同一批准。"""
     from novel.stages.stage6 import semantic
 
-    # ⚠ 本条要经 `stage7.approve` 把批准写回 `stage7/name_map.json`，而那条路明写
-    #   「`_provenance` 一个字都不动」⇒ 映射一旦相对上游过期，写回的就是一份过期账，
-    #   写盘口后置条件当场 `ProvenanceRefused`（退出码 3），断言红在退出码上而不是
-    #   它要验的「定稿盖 s7」。一份当前的映射是本条的**输入**，不是它的结论。
+    # ⚠ 本条经 `stage7.rename --recheck` auto seal 写回批准；映射一旦相对上游过期，
+    #   写盘口后置条件当场 `ProvenanceRefused`。一份当前的映射是本条的**输入**。
     corpus.requires_current(box.book, 'stage7/name_map.json',
                             produced_by='stage7.rename --recheck', cost='0 成本')
     _stamp_chain(box, 's6')
-    body = _name_approval_body(box)
-    r = client.post(f'/api/novels/{box.sid}/stage7/approve', json=body)
-    assert r.status_code == 200, r.text[:300]
-    assert r.json()['exit_code'] in (0, 1), r.text[:300]
-    after = json.loads((box.dir / 'stage7' / 'name_map.json').read_text(encoding='utf-8'))
-    assert after['approved']['origin'] == 'human'
-    assert after['approved']['actor'] == body['actor']
-    assert after['approved']['reason'] == body['reason']
+    after = _name_map_auto_seal(box)
     assert after['approved']['review_identity_sha256']
     assert client.get(f'/api/novels/{box.sid}/approvals').json()['gate']['s7'] is True
 
@@ -630,32 +621,10 @@ def test_approving_the_name_map_stamps_s7_and_assembly_keeps_it_current(
     assert client.get(f'/api/novels/{box.sid}/approvals').json()['gate']['s7'] is True
 
 
-def test_approving_names_with_an_old_review_token_fails_without_stamping(client, box):
-    before = (box.dir / 'stage7' / 'name_map.json').read_bytes()
-    body = _name_approval_body(box)
-    body['review_token'] = 's7r3_' + '0' * 64
-
-    r = client.post(f'/api/novels/{box.sid}/stage7/approve', json=body)
-
-    assert r.status_code == 200 and r.json()['state'] == 'failed'
-    assert r.json()['exit_code'] >= 2
-    assert (box.dir / 'stage7' / 'name_map.json').read_bytes() == before
-    assert client.get(f'/api/novels/{box.sid}/approvals').json()['gate']['s7'] is False
-
-
-def test_approving_names_without_a_name_map_fails(client, box):
-    _stamp_chain(box, 's6')
-    body = _name_approval_body(box)
-    (box.dir / 'stage7' / 'name_map.json').unlink()
-    r = client.post(f'/api/novels/{box.sid}/stage7/approve', json=body)
-    assert r.status_code == 200 and r.json()['state'] == 'failed'
-    assert r.json()['exit_code'] >= 2
-    assert client.get(f'/api/novels/{box.sid}/approvals').json()['gate']['s7'] is False
-
-
-def test_approving_names_requires_all_hash_bound_credentials(validation_client):
+def test_stage7_approve_http_endpoint_is_retired(validation_client):
+    """批次 B4：POST /stage7/approve 已删；载体不再接受定稿请求体。"""
     assert validation_client.post(
-        '/api/novels/422/stage7/approve', json={}).status_code == 422
+        '/api/novels/422/stage7/approve', json={}).status_code == 405
 
 
 def test_residual_adoption_api_only_accepts_explicit_high(validation_client):
@@ -895,18 +864,28 @@ def final_gate_book(tmp_path, monkeypatch):
 
 
 def _final_gate_cli(box, gate):
-    node = 'stage6.approve' if gate == 's6' else 'stage7.approve'
-    module = box.hook if gate == 's6' else rename
-    ctx = RunContext.open(box.root, box.sid, node, paid=False, write_ledger=False)
-    pack = module.approval_workpack(box.ArtifactStore(ctx))
-    argv = ['run', node, box.sid, '--base', str(box.root),
-            '--actor', 'cli-final-reviewer', '--reason', '核对完整测试工作包后定稿',
-            '--review-token', pack.review_token]
     if gate == 's6':
-        argv += ['--pick', '1']
-    assert box.cli.main(argv) in (0, 1)
-    current, _ = box.ArtifactStore(ctx).read_own(box.models[gate], module.REL)
+        ctx = RunContext.open(
+            box.root, box.sid, 'stage6.approve', paid=False, write_ledger=False)
+        pack = box.hook.approval_workpack(box.ArtifactStore(ctx))
+        argv = [
+            'run', 'stage6.approve', box.sid, '--base', str(box.root),
+            '--actor', 'cli-final-reviewer', '--reason', '核对完整测试工作包后定稿',
+            '--review-token', pack.review_token, '--pick', '1',
+        ]
+        assert box.cli.main(argv) in (0, 1)
+        current, _ = box.ArtifactStore(ctx).read_own(box.models['s6'], box.hook.REL)
+        assert current.approved is not None
+        return current
+    # 批次 B4：s7 由 rename --recheck → auto seal，不再走 stage7.approve。
+    assert box.cli.main([
+        'run', 'stage7.rename', box.sid, '--base', str(box.root), '--recheck',
+    ]) in (0, 1)
+    ctx = RunContext.open(
+        box.root, box.sid, 'stage7.rename', paid=False, write_ledger=False)
+    current, _ = box.ArtifactStore(ctx).read_own(box.models['s7'], rename.REL)
     assert current.approved is not None
+    assert current.approved.origin == 'auto'
     return current
 
 
@@ -1040,7 +1019,8 @@ def test_zero_cost_recheck_preserves_same_typed_final_decision_without_backfill(
     original = json.loads((box.dir / module.REL).read_text(encoding='utf-8'))['approved']
     raw_before = box.approvals._path(box.root, box.sid).read_bytes()
     def current_pack():
-        ctx = RunContext.open(box.root, box.sid, f'stage{gate[1:]}.approve',
+        node = 'stage6.approve' if gate == 's6' else 'stage7.rename'
+        ctx = RunContext.open(box.root, box.sid, node,
                               paid=False, write_ledger=False)
         return module.approval_workpack(box.ArtifactStore(ctx))
 

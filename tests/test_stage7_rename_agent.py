@@ -345,6 +345,9 @@ def _patch_business(monkeypatch) -> SimpleNamespace:
     monkeypatch.setattr(rename, '_assert_rename_prepared_current', assert_current)
     monkeypatch.setattr(rename, '_build', build)
     monkeypatch.setattr(rename, '_verify_rename_artifact', verify)
+    # 合成载体没有 residual/extra_subs；agent 协议纵切不测 auto seal 形状。
+    monkeypatch.setattr(
+        rename, '_auto_seal_name_map', lambda _ctx, _store, art: art)
     return SimpleNamespace(
         Store=_Store,
         history_calls=history_calls,

@@ -172,18 +172,47 @@ FinalizeRun = Callable[
 
 
 def _human_gate_turn(waiting_on: str) -> ExecutionTurnResult:
+    """现役全自动后不应再停在人工审批闸；精确区分故障面。
+
+    - ``approval:*``：编排 bug（闸已退役却仍发出）→ failed
+    - ``human:*`` / ``inbox:*`` / ``resume:*``：精确故障话术 → stopped
+    - 其余（含 Stage5 机械闭合等）：保留可续跑指引 → stopped
+    pause/stop 不经本函数。
+    """
+    if waiting_on.startswith('approval:'):
+        return ExecutionTurnResult(
+            exit_code=1,
+            continue_ready=False,
+            outcome=AgentDeliveryOutcome(
+                state='failed', checked_at=int(time.time()),
+                reason=(
+                    f'编排错误：现役队列不应再发出已退役审批闸 `{waiting_on}`；'
+                    '请修复调度后再跑')))
     if waiting_on == queue.WAITING_ON_STAGE5_CLOSURE:
-        # 批次 B3：Stage5 闭合已机械自动化。走到这里的唯一原因是工作包仍有
-        # 缺章/.INVALID/阻断级判定等正文阻断——它们有各自的恢复面，不是等人
-        # 过闸；给出精确指引而不是「人工审批闸」的旧话术。
         reason = (
             f'停在 Stage5 机械闭合闸：{waiting_on}；工作包仍有正文阻断'
             '（缺章/.INVALID/阻断级判定），先按各恢复面收口并零成本重跑 '
             'stage5.review，机械闭合回执会自动落账')
+    elif waiting_on.startswith('human:'):
+        reason = (
+            f'停在人工恢复面：{waiting_on}；按该 blocker 对应的 typed 恢复'
+            '入口收口后用原配置续跑（不是 Stage 页审批闸）')
+    elif waiting_on.startswith('inbox:'):
+        reason = (
+            f'停在待人工清单：{waiting_on}；处理 inbox 中的 INVALID/阻断项'
+            '后用原配置续跑')
+    elif waiting_on.startswith('resume:'):
+        reason = (
+            f'停在续跑裁决：{waiting_on}；队列不会把 REDO/UNKNOWN 猜成命令，'
+            '请人工决定下一步后用原配置续跑')
+    elif waiting_on == 'stage6.prepare':
+        reason = (
+            f'等待 `{waiting_on}` 机械通过并由 system:stage6-prepare-auto '
+            '自动接受；完成后用原配置续跑')
     else:
         reason = (
-            '停在人工审批闸：'
-            f'{waiting_on}；在 Stage 页面完成裁决后用原配置续跑')
+            f'停在阻断面：{waiting_on}；按该 waiting_on 对应恢复入口收口后'
+            '用原配置续跑')
     return ExecutionTurnResult(
         exit_code=2,
         continue_ready=False,

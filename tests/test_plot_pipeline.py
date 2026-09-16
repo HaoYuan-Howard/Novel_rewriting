@@ -78,10 +78,7 @@ def complete_stage5(book):
 
 
 def complete_stage6_prepare(book):
-    """真实 Prepare session/落盘/独立接受；只替换模型传输，保留未接受阻断。"""
-    import pytest
-    from contracts.schema.stage6_prepare import PrepareDecision
-    from novel.errors import ProvenanceRefused
+    """真实 Prepare session/落盘；B4 机械通过即 system:stage6-prepare-auto。"""
     from novel.orchestrator.node_agents import Stage6PrepareAgent
     from novel.stages.stage6 import hook, prepare
     from tests.test_stage2_global_agent import _Driver, _profile
@@ -105,17 +102,12 @@ def complete_stage6_prepare(book):
     assert request.count('李宝珠收到父亲已经回城的来信。') == 1
     assert 'entities' not in request and 'arc_secrets' not in request
 
-    with pytest.raises(ProvenanceRefused, match='Prepare 未接受'):
-        hook.build_prompt(_ctx(book, 'stage6.hook', paid=False))
-    review_ctx = _ctx(book, 'stage6.prepare', paid=False)
-    pack = prepare.approval_workpack(ArtifactStore(review_ctx))
-    assert pack.state.state == 'pending'
-    assert not approvals.get(book.parent, ctx.sid).gate['s6']
-    decision = PrepareDecision(
-        review_token=pack.state.review_token, source_sha256=pack.state.subject_sha256,
-        decision='accept', actor='test:独立文案准备审阅者',
-        reason='全文与原钩子核对，来信支持与首章连续范围成立', edit=None)
-    prepare.submit_review(review_ctx, decision)
+    state = prepare.view_state(ArtifactStore(_ctx(book, 'stage6.prepare', paid=False)))
+    assert state.state == 'accepted'
+    assert state.review is not None
+    assert state.review.actor == 'system:stage6-prepare-auto'
+    assert not approvals.get(book.parent, ctx.sid).gate['s6'], 'Prepare 接受不得代替最终文案接受'
+    hook.build_prompt(_ctx(book, 'stage6.hook', paid=False))
     prepare_report = prepare.run_check_only(_ctx(book, 'stage6.prepare', paid=False))
     assert prepare_report.passed and prepare_report.node == 'stage6.prepare'
     assert {row.rule for row in prepare_report.rules} == {
@@ -123,8 +115,7 @@ def complete_stage6_prepare(book):
     assert prepare_report.counts.skipped == 0
     reloaded = ArtifactStore(_ctx(book, 'stage6.hook', paid=False))
     assert prepare.require_accepted(reloaded).source_blurb.opening.through_chapter == 1
-    assert not approvals.get(book.parent, ctx.sid).gate['s6'], 'Prepare 接受不得代替最终文案接受'
-    assert len(driver.calls) == 1, '免费审阅和重启读回不得重购原准备回答'
+    assert len(driver.calls) == 1, '重启读回不得重购原准备回答'
     return result.artifact
 
 
@@ -177,10 +168,11 @@ def complete_stage7(book):
     rename_client, rename_wire = _client(rename_ctx, rename_characters)
     rename.run_rename(rename_ctx, rename_client)
     assert len(rename_wire.calls) == 1
-    approve_ctx = _ctx(book, 'stage7.approve', paid=False)
-    pack = rename.approval_workpack(ArtifactStore(approve_ctx))
-    rename.run_approve(approve_ctx, actor='test:改名审阅者',
-                       reason='合成角色姓名替换与亲属关系已复核', review_token=pack.review_token)
+    # 批次 B4：rename 正式成功后 auto seal，无需 stage7.approve
+    sealed = ArtifactStore(_ctx(book, 'stage7.rename', paid=False)).read_own(
+        __import__('contracts.schema.stage7', fromlist=['NameMap']).NameMap,
+        'stage7/name_map.json')[0]
+    assert sealed.approved is not None and sealed.approved.origin == 'auto'
     assembled_ctx = _ctx(book, 'stage7.assemble', paid=False)
     path, _map, report = assemble.run_assemble(assembled_ctx)
     assert report.passed, report.model_dump_json()

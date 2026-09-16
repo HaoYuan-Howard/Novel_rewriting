@@ -118,21 +118,27 @@ def test_an_unknown_stage_is_refused_not_silently_empty():
 
 
 def test_human_nodes_are_exactly_the_ones_a_person_does():
-    """stage6.approve 不算人工闸（默认槽位序自动定稿是队列的普通 todo）；
-    stage0.approve / stage0.edit 已移入 RETIRED_NODES（2026-09-15 全自动裁决，
-    stage0 机械通过即自动接受）。现役人工闸只剩 stage7.approve（批次 B4 处理）。"""
-    assert Q.HUMAN_NODES == {'stage7.approve'}
+    """批次 B4：全部人工审批闸退役；HUMAN_NODES 为空。"""
+    from contracts.invariants import RETIRED_NODES
+    assert Q.HUMAN_NODES == frozenset()
+    assert 'stage7.approve' in RETIRED_NODES
+
+
+def test_human_gate_satisfied_is_always_false_after_b4(queue_base):
+    """HUMAN_NODES 为空后不再读盘判 current；恒 False。"""
+    assert Q._human_gate_satisfied(queue_base, 'book-a', 'stage7.approve') is False
+    assert Q._human_gate_satisfied(queue_base, 'book-a', 'stage6.approve') is False
 
 
 @pytest.mark.parametrize(
     ('node', 'module_name'),
     [
-        ('stage7.approve', 'novel.stages.stage7.rename'),
+        ('stage6.approve', 'novel.stages.stage6.hook'),
     ],
 )
-def test_human_gate_uses_the_production_current_workpack_classifier(
+def test_stage6_approval_current_uses_production_classifier(
         queue_base, monkeypatch, node, module_name):
-    """盘上有旧 ``approved`` 不等于仍绑定当前代码/规则/证据工作包。"""
+    """stage6.approve 仍走 production approval_is_current（自动定稿）。"""
     import importlib
 
     artifact = SimpleNamespace(approved=object())
@@ -148,7 +154,7 @@ def test_human_gate_uses_the_production_current_workpack_classifier(
         lambda got_store, got_artifact: calls.append(
             (got_store, got_artifact)) or False)
 
-    assert Q._human_gate_satisfied(queue_base, 'book-a', node) is False
+    assert Q._stage6_approval_current(queue_base, 'book-a') is False
     assert calls == [(store, artifact)]
 
 
@@ -159,7 +165,7 @@ def test_unapproved_hook_lands_an_auto_approve_todo_instead_of_a_blocker(
     (queue_base / 'book-a').mkdir()      # build_steps 解析书目录即可，无需产物
     monkeypatch.setattr(
         Q, 'nodes_up_to',
-        lambda _until: ['stage6.approve', 'stage7.approve', 'stage7.assemble'])
+        lambda _until: ['stage6.approve', 'stage7.assemble'])
     overview = SimpleNamespace(stages=[
         SimpleNamespace(
             stage='stage6',
@@ -177,9 +183,6 @@ def test_unapproved_hook_lands_an_auto_approve_todo_instead_of_a_blocker(
             (Q.st.RESUME_RUN, '成书缺失')
             if node == 'stage7.assemble'
             else (Q.st.RESUME_SKIP, '产物已存在')))
-    monkeypatch.setattr(
-        Q, '_human_gate_satisfied',
-        lambda _base, _sid, node: node == 'stage7.approve')
     monkeypatch.setattr(
         Q.approvals, 'stage5_closure_view',
         lambda *_args: SimpleNamespace(state='closed'))
@@ -238,10 +241,10 @@ def test_current_stage6_approval_stays_skipped_and_downstream_runs(
 
 def test_upstream_stuck_never_builds_downstream_human_commands(
         queue_base, monkeypatch):
-    """上游阻塞传播到人工节点时只报等待，不索取尚不存在的必填裁决。"""
+    """上游阻塞传播时只报等待；HUMAN_NODES 已空，仍不构造无关 argv。"""
     monkeypatch.setattr(
         Q, 'nodes_up_to',
-        lambda _until: ['stage5.write', 'stage6.approve', 'stage7.approve'])
+        lambda _until: ['stage5.write', 'stage6.approve', 'stage7.assemble'])
     monkeypatch.setattr(
         Q.st, 'overview', lambda _base, _sid: SimpleNamespace(stages=[
             SimpleNamespace(stage='stage5', artifacts=[], review_state='stale')]))
@@ -254,8 +257,6 @@ def test_upstream_stuck_never_builds_downstream_human_commands(
 
     def guarded_build_steps(node, *args, **kwargs):
         built.append(node)
-        if node in Q.HUMAN_NODES:
-            raise AssertionError('上游 stuck 后不应构造人工节点 argv')
         return real_build_steps(node, *args, **kwargs)
 
     monkeypatch.setattr(Q, 'build_steps', guarded_build_steps)
@@ -265,15 +266,11 @@ def test_upstream_stuck_never_builds_downstream_human_commands(
 
     assert todo == []
     assert [item.node for item in blocked] == [
-        'stage5.write', 'stage6.approve', 'stage7.approve']
+        'stage5.write', 'stage6.approve', 'stage7.assemble']
     assert all(
         item.waiting_on == Q.WAITING_ON_REVIEW for item in blocked)
-    # stage6.approve 已是自动定稿节点（0 成本、无人工凭据），上游 stuck 时
-    # 仍可冻结其 argv；真正不许构造的是仍需人给 pick/actor/reason 的人工节点。
     by_node = {item.node: item for item in blocked}
     assert by_node['stage5.write'].steps == []
-    assert by_node['stage7.approve'].steps == []
-    assert 'stage7.approve' not in built
 
 
 @pytest.mark.parametrize(

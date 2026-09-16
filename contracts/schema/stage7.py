@@ -146,14 +146,15 @@ class ExtraSub(StrictModel):
     #: 实测某本 4 条 `孙家/孙府/宋家/宋府` 全是这么来的，产物里却说是人一条条敲的。
     #:
     #: · `human` —— 人在 `name_map_edit.json` 里手写的。
-    #: · `adopted` —— 人跑 `--adopt-residual high` 批量采纳的探针高置信建议。
+    #: · `adopted` —— 机械安全采纳（confidence=high + 唯一 suggest + 不覆盖
+    #:   已有 subs）：rename producer 在 auto seal 前自动写入，或 CLI
+    #:   `--adopt-residual high` 作免费重放。
     #:
     #: ⚠ **两者在判定上同权，这是有意的**：`rn_new_collide_human` /
     #: `rn_shared_surface_human` 豁免的语义是「**有人看过并决定这么做**」与
-    #: 「没人看过」必须分得开，而 `--adopt-residual` 是人显式敲的一条 CLI，
-    #: 不是静默自动路。把 `adopted` 降回 HARD，唯一出路会变成撤销一个对的决定
-    #: （正是 `rn_new_collide_human` 那条 note 记着的失败形状）。
-    #: 这一格分开记的是**审计**，不是权限。
+    #: 「没人看过」必须分得开；机械安全采纳与显式 CLI 重放同权，把
+    #: `adopted` 降回 HARD 会撤销一个对的决定（正是 `rn_new_collide_human`
+    #: 那条 note 记着的失败形状）。这一格分开记的是**审计**，不是权限。
     origin: Literal['human', 'adopted']
 
 class AppliedFace(StrictModel):
@@ -250,13 +251,17 @@ class StemBaseline(StrictModel):
 
 
 class ApprovedNameMap(HashBoundHumanApproval):
-    """人工定稿；凭据绑定审批时看到的决策 surface。没有 auto approve。"""
+    """人名表定稿；凭据绑定当时决策 surface。
 
-    origin: Literal['human']
-    #: 终审人实际看到的紧凑工作包；旧批准缺失时只保留历史可读性，不能视为
+    现役只写 ``origin='auto'``（机械校验通过后由 rename producer seal）；
+    ``origin='human'`` 仅存量书可读，不再由现役写面产生。
+    """
+
+    origin: Literal['auto', 'human']
+    #: 终审时看到的紧凑工作包；旧批准缺失时只保留历史可读性，不能视为
     #: 当前工作包已审。
     workpack_sha256: Sha256 | None = None
-    #: 与 ``workpack_sha256`` 的 TOCTOU 身份分开：本字段只覆盖人实际看到的
+    #: 与 ``workpack_sha256`` 的 TOCTOU 身份分开：本字段只覆盖当时看到的
     #: 决策、finding 与显式审阅契约，用于跨 execution epoch 的适用性。
     review_identity_sha256: Sha256 | None = None
 

@@ -16,7 +16,6 @@ import { CompareRows } from '@/components/compare/CompareRows'
 import { QueryStates } from '@/components/state/QueryStates'
 import { ErrorHint, HatchNote, LoadFailed } from '@/components/state/States'
 import { ActionButton } from '@/components/ui/ActionButton'
-import { ActorReasonFields } from '@/components/ui/ActorReasonFields'
 import { ChapterStrip } from '@/components/ui/ChapterStrip'
 import { HighlightedText } from '@/components/ui/HighlightedText'
 import { Mono } from '@/components/ui/Mono'
@@ -32,12 +31,12 @@ import type { Stage7ApprovalWorkpack } from '@/types/approvals'
  */
 const ORIGIN_LABEL: Record<string, string> = {
   human: '人加的',
-  adopted: '批量采纳的',
+  adopted: '机械/批量采纳',
 }
 
 /**
  * 人名替换 + 成书。
- * 新旧人名表并排 + 逐章替换前后对照，人定稿。
+ * 新旧人名表并排 + 逐章替换对照；定稿由 rename 机械 seal（只读）。
  * 「漏网叫法候选」是唯一能发现人名表本身漏了人的地方 —— 放在最上面。
  */
 export function Stage7Screen() {
@@ -53,8 +52,6 @@ export function Stage7Screen() {
   const ordinal = o ? Number(o) : null
   const { hasSample, defaultOrdinal } = useSampleCoverage()
   const [bookOpen, setBookOpen] = useState(false)
-  const [actor, setActor] = useState('')
-  const [reason, setReason] = useState('')
 
   const q = useQuery({ queryKey: qk.stage7(sid), queryFn: () => api.getStage7(sid), retry: false })
   const workpackQ = useQuery({
@@ -64,9 +61,6 @@ export function Stage7Screen() {
   })
   const workpackSettled =
     !workpackQ.isLoading && !workpackQ.isFetching && !workpackQ.isError
-  const workpackReady = Boolean(
-    workpackSettled && workpackQ.data?.disposition === 'review_required',
-  )
   const workpackCurrent = Boolean(
     workpackSettled && workpackQ.data?.disposition === 'already_current',
   )
@@ -101,23 +95,6 @@ export function Stage7Screen() {
     },
   })
 
-  const approve = useMutation({
-    mutationFn: (req: {
-      actor: string
-      reason: string
-      review_token: string
-    }) =>
-      api.approveNames(sid, req),
-    onSuccess: (job) => {
-      if (job.state !== 'failed') notify('人名表已定稿')
-      void qc.invalidateQueries({ queryKey: qk.stage7(sid) })
-      void qc.invalidateQueries({ queryKey: qk.check(sid, 'stage7') })
-      void qc.invalidateQueries({ queryKey: qk.approvals(sid) })
-      void qc.invalidateQueries({ queryKey: qk.finalApprovalWorkpack(sid, 'stage7') })
-      void qc.invalidateQueries({ queryKey: qk.jobs(sid) })
-    },
-  })
-
   const adoptResidual = useMutation({
     mutationFn: () => api.adoptResidual(sid, { confidence: 'high' }),
     onSuccess: (job) => {
@@ -129,29 +106,6 @@ export function Stage7Screen() {
       void qc.invalidateQueries({ queryKey: qk.jobs(sid) })
     },
   })
-
-  const askApprove = () => {
-    const workpack = workpackQ.data
-    if (!workpackReady || !workpack) return
-    askConfirm({
-      req: {
-        kind: 'stage7.approve',
-        label: '人名表定稿（绑定当前 decision surface）',
-        extra: [
-          '--actor', actor.trim(),
-          '--reason', reason.trim(),
-          '--review-token', workpack.review_token,
-        ],
-        sid,
-        ordinal: null,
-      },
-      run: () => approve.mutateAsync({
-        actor: actor.trim(),
-        reason: reason.trim(),
-        review_token: workpack.review_token,
-      }),
-    })
-  }
 
   const askAdoptResidual = () =>
     askConfirm({
@@ -169,17 +123,14 @@ export function Stage7Screen() {
     <ScreenFrame screen="stage7">
       {/*
         ⚠⚠ **这一层的产出入口必须在这一屏上，否则浏览器里走不到成书。**
-        `stage6.approve` 会自己盖上 s6 的章 ⇒ 闸门那颗按钮当场变「已确认」并禁用，
-        而 `stage7.rename` 正是挂在它 spawn 上的 ⇒ 那条发起路再也不会被走到。
-        与此同时本屏 404 的原话是「先跑产它的那一层」，却没给任何地方能跑它。
-        两件事叠起来就是：文案定稿之后，整条链在浏览器里断在这里。
+        定稿已由 rename 机械 seal；本屏负责发起 rename / assemble。
       */}
       {isNotRunYet(q.error) ? (
         <Panel className="mx-30 mt-20 flex flex-wrap items-center gap-12 px-18 py-14">
           <div className="flex min-w-0 flex-col gap-3">
             <span className="text-body font-semibold">还没跑人名替换</span>
             <span className="text-tag text-ink-4">
-              stage6 文案已定稿。这一层要先产出 stage7/name_map.json，才能审人名、再拼装成书。
+              stage6 文案已定稿。这一层要先产出 stage7/name_map.json；机械通过后自动定稿再拼装成书。
             </span>
           </div>
           <ActionButton
@@ -213,7 +164,7 @@ export function Stage7Screen() {
                 <div className="flex flex-col gap-5">
                   <h1 className="m-0 text-screen font-semibold">人名替换 + 成书 · stage7</h1>
                   <div className="text-body text-ink-3">
-                    新旧人名表并排看，确认没漏人；再看逐章替换前后对照，最后拼成书。
+                    新旧人名表并排看；机械校验通过后由系统自动定稿，再拼成书。
                   </div>
                 </div>
                 <div className="flex items-center gap-10">
@@ -226,20 +177,14 @@ export function Stage7Screen() {
                     }
                   >
                     {approvalCurrent
-                      ? '人物表已定稿'
+                      ? '人物表已自动定稿'
                       : d.approved
-                        ? '旧定稿未绑定当前工作包 · 需重审'
+                        ? '旧定稿未绑定当前工作包 · 需 --recheck'
                         : '人物表还没定稿'}
                   </span>
                 </div>
               </header>
 
-              {approve.isError ? (
-                <div className="rounded-card border border-warn-line bg-warn-bg px-18 py-12 text-body text-warn-ink">
-                  定稿失败：{errorBody(approve.error)}
-                  <ErrorHint error={approve.error} />
-                </div>
-              ) : null}
               {workpackQ.isError ? (
                 <div className="rounded-card border border-warn-line bg-warn-bg px-18 py-12 text-body text-warn-ink">
                   终审工作包读取失败：{errorBody(workpackQ.error)}
@@ -247,59 +192,25 @@ export function Stage7Screen() {
                 </div>
               ) : null}
 
-              <ActorReasonFields
-                actor={actor}
-                reason={reason}
-                onActor={setActor}
-                onReason={setReason}
-                note={
-                  <>
-                    <div>
-                      定稿绑定当前姓氏映射、角色决定与人工补充替换的 SHA-256；表面变化后旧审批自动失效。
-                    </div>
-                    {currentApproval ? (
-                      <div className="text-ink-3">
-                        当前审批：{currentApproval.actor} · {currentApproval.reason} · subject{' '}
-                        <Mono className="text-micro">
-                          {currentApproval.subject_sha256.slice(0, 16)}…
-                        </Mono>
-                      </div>
-                    ) : d.approved ? (
-                      <div className="text-ink-3">
-                        盘上仍可追溯旧审批，但它没有通过当前 workpack 证明，不能充当交付闸。
-                      </div>
-                    ) : null}
-                  </>
-                }
-                actions={
-                  <ActionButton
-                    action={{ kind: 'stage7.approve', extra: null, paid: false }}
-                    onClick={askApprove}
-                    disabled={
-                      !actor.trim() || !reason.trim() || !workpackReady
-                    }
-                    disabledReason={
-                      workpackCurrent
-                        ? '当前代码、规则和人物主体的工作包已经批准，无需重复整读'
-                        : workpackQ.isError
-                          ? '当前终审工作包读取失败，不能绑定本轮审批'
-                          : workpackQ.isFetching
-                            ? '正在读取或刷新当前终审工作包'
-                        : !workpackQ.data
-                          ? '正在读取当前终审工作包'
-                          : workpackQ.data.disposition !== 'review_required'
-                            ? '服务端返回了未知的终审工作包处置态'
-                          : '请先填写自报身份与定稿理由'
-                    }
-                  >
-                    {workpackCurrent
-                      ? '当前工作包已批准 · 跳过'
-                      : d.approved
-                        ? '重新定稿'
-                        : '定稿人物表'}
-                  </ActionButton>
-                }
-              />
+              <Panel className="px-18 py-14">
+                <div className="prose-cn text-body text-ink-3">
+                  定稿由 rename producer 在机械校验通过后自动写入（system:stage7-auto）。
+                  本页只读；残留可安全采纳时仍可用下方按钮免费重放。
+                </div>
+                {currentApproval ? (
+                  <div className="mt-8 text-tag text-ink-3">
+                    当前定稿：{currentApproval.actor} · {currentApproval.reason} · subject{' '}
+                    <Mono className="text-micro">
+                      {currentApproval.subject_sha256.slice(0, 16)}…
+                    </Mono>
+                  </div>
+                ) : d.approved ? (
+                  <div className="mt-8 text-tag text-ink-3">
+                    盘上仍可追溯旧审批，但它没有通过当前 workpack 证明，不能充当交付闸。
+                    请运行 stage7.rename --recheck。
+                  </div>
+                ) : null}
+              </Panel>
 
               {workpackQ.data ? <Stage7WorkpackEvidence workpack={workpackQ.data} /> : null}
 
@@ -526,11 +437,8 @@ export function Stage7Screen() {
                       </div>
                     ) : (
                       /*
-                        ⚠⚠ **最后一步的发起入口，和上面 rename 那条是同一个病。**
-                        `stage7.approve` 一落盘就自己盖上 s7 的章 ⇒ 闸门那颗
-                        「确认并成书」当场变成「已经确认过了」并禁用，
-                        而 `stage7.assemble` 恰恰挂在它的 spawn 上 ⇒ 拼装再也发不起来。
-                        人物表已定稿、书却永远组装不出来，是这条链在浏览器里的终点。
+                        ⚠⚠ **最后一步的发起入口。** rename 机械 seal 后 s7 闸打开，
+                        本屏提供 assemble 入口；人物表已定稿却永不拼装是旧 spawn 病。
                       */
                       <div className="mt-3 flex flex-wrap items-center gap-10">
                         <ActionButton

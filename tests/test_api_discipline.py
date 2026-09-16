@@ -411,12 +411,9 @@ def test_job_conflict_maps_and_returns_409(monkeypatch):
         '/api/novels/{sid}/review/{ordinal}/edit',
         '/api/novels/{sid}/review/{ordinal}/edit/preview',
         # （stage5 trim retain-pretrim 两端点已随批次 B3 trim 三选一退役。）
-        # Prepare 独立预检/编辑/接受；均为免费 POST，仍通过全局 CSRF。
-        '/api/novels/{sid}/stage6/prepare/edit/preview',
-        '/api/novels/{sid}/stage6/prepare/edit',
-        '/api/novels/{sid}/stage6/prepare/review',
+        # Prepare 独立写面（edit/review）与 stage7.approve 已随批次 B4 退役。
         '/api/novels/{sid}/stage6/approve',
-        '/api/novels/{sid}/stage7/approve',
+        '/api/novels/{sid}/stage7/adopt-residual',
         '/api/novels/{sid}/stage7/adopt-residual',
         '/api/novels/{sid}/stage2/global/edit',
         '/api/novels/{sid}/stage2/global/edit/preview',
@@ -456,9 +453,9 @@ def test_job_conflict_maps_and_returns_409(monkeypatch):
         with TestClient(app) as client:
             core_posts = {
                 path for path in posts
-                if '/stage6/prepare/' in path or path.endswith('/stage2/analyze-draft')
+                if path.endswith('/stage2/analyze-draft')
             }
-            assert len(core_posts) == 4
+            assert len(core_posts) == 1
             for path in sorted(core_posts):
                 refused = client.post(path.replace('{sid}', sid), json={})
                 assert refused.status_code == 403, (path, refused.text)

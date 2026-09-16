@@ -76,8 +76,8 @@ def _require_mapping_current(
     if art.approved is None:
         raise ApprovalRequired(
             '人物映射还没定稿',
-            hint='先读取当前 Stage7 approval workpack，再运行 stage7.approve '
-                 '--actor <id> --reason <why> --review-token <当前工作包 token>')
+            hint='先 stage7.rename --recheck（0 成本）或付费重建；'
+                 '机械校验通过后 rename producer 会自动 seal')
     freshness = store.freshness(REL)
     # ⚠ **`stale` 与 `unknown` 抛的不是同一条**：前者是一句可复算的断言（哪条边变了），
     #   后者只是「来源账证明不了」。合成一句 `!= fresh`，报告就会替一件算不出来的事
@@ -97,9 +97,9 @@ def _require_mapping_current(
     current_subject = approval_subject_sha256(art)
     if art.approved.subject_sha256 != current_subject:
         raise ApprovalRequired(
-            '人物映射的人工批准不再绑定当前决策面',
-            hint='先读取当前 Stage7 approval workpack，再运行 stage7.approve '
-                 '--actor <id> --reason <why> --review-token <当前工作包 token>')
+            '人物映射的批准不再绑定当前决策面',
+            hint='先 stage7.rename --recheck（0 成本）；'
+                 '机械校验通过后 rename producer 会自动 seal')
     hard = stored_blocking_rules(art)
     if hard:
         raise BlockingFindingsUnresolved(
@@ -142,12 +142,13 @@ def _require_mapping_current(
             missing=up.missing, hook_unapproved=not up.hook_text,
             hint='；'.join(todo))
 
-    # 工作包绑定是最后一道人工授权闸，而不是诊断遮罩：HARD、上游漂移、缺章等
+    # 工作包绑定是最后一道定稿闸，而不是诊断遮罩：HARD、上游漂移、缺章等
     # 已有 typed 恢复路必须先把真实问题报全；所有分支通过后仍须在写盘前证明当前批准。
     if approval_proof_sha256(store, art) is None:
         raise ApprovalRequired(
             '人物映射旧批准没有绑定当前代码/规则/人物证据工作包',
-            hint='刷新 Stage7 approval workpack 后重跑 stage7.approve（0 成本）')
+            hint='先 stage7.rename --recheck（0 成本）；'
+                 '机械校验通过后 rename producer 会自动 seal')
 
 
 def require_stage2_delivery_approved(ctx: RunContext) -> None:

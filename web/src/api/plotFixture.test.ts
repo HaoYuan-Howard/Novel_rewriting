@@ -62,16 +62,12 @@ describe('现役整链录制样本', () => {
 
   it('只读样本不会伪造编辑、批准和恢复作业', async () => {
     const pack = await mockApi.getStage6PrepareWorkpack(PLOT_SAMPLE_SID)
-    const request = { review_token: pack.state.review_token!, actor: 'test', reason: '测试只读边界',
-      source_blurb: pack.edit_template.source_blurb }
-    await expect(mockApi.previewStage6PrepareEdit(PLOT_SAMPLE_SID, request)).rejects.toMatchObject({ status: 501 })
-    await expect(mockApi.applyStage6PrepareEdit(PLOT_SAMPLE_SID, request)).rejects.toMatchObject({ status: 501 })
-    await expect(mockApi.reviewStage6Prepare(PLOT_SAMPLE_SID, { ...request, decision: 'accept', edit: null }))
-      .rejects.toMatchObject({ status: 501 })
     await expect(mockApi.approveHook(PLOT_SAMPLE_SID, { review_token: 'current', actor: 'test', reason: '测试', pick: 1 }))
       .rejects.toMatchObject({ status: 501 })
-    await expect(mockApi.approveNames(PLOT_SAMPLE_SID, { review_token: 'current', actor: 'test', reason: '测试' }))
-      .rejects.toMatchObject({ status: 501 })
+    // 批次 B4：prepare review/edit 与 stage7.approve 已从 Api 退役，mock 亦无对应方法。
+    expect('previewStage6PrepareEdit' in mockApi).toBe(false)
+    expect('reviewStage6Prepare' in mockApi).toBe(false)
+    expect('approveNames' in mockApi).toBe(false)
     expect((await mockApi.getStage6Prepare(PLOT_SAMPLE_SID)).status).toEqual(pack.state)
   })
 })

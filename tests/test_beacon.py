@@ -40,8 +40,8 @@ def _ev(ts, node, phase, exit_code=None, sid='42', note=None, *,
 def test_pipeline_steps_match_the_skill_table():
     """进度节点逐项来自 NODES；贵贱仍只有 `is_paid` 一处算。"""
     assert PIPELINE_STEPS == tuple(NODES)
-    assert PIPELINE_STEPS[-3:] == (
-        'stage7.rename', 'stage7.approve', 'stage7.assemble')
+    # 批次 B4：stage7.approve 退役；rename 后直接 assemble。
+    assert PIPELINE_STEPS[-2:] == ('stage7.rename', 'stage7.assemble')
     assert {n for n in PIPELINE_STEPS if N.is_paid(n, ())} == {
         n for n in NODES if N.is_paid(n, ())}
 

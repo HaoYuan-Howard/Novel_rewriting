@@ -23,7 +23,7 @@ queue.py —— 批量队列（`R-13`）。**一次排入多本书，人只在�
 from __future__ import annotations
 
 from contracts.artifacts import (
-    STAGE2_GLOBAL_EDIT, STAGE6_HOOK, STAGE7_NAME_MAP,
+    STAGE2_GLOBAL_EDIT, STAGE6_HOOK,
 )
 
 import json
@@ -45,7 +45,6 @@ from contracts.schema.orchestration import (
     QueueLaneCounts, QueuePlan, QueueRun, QueueStart,
 )
 from contracts.schema.stage6 import Hook
-from contracts.schema.stage7 import NameMap
 from contracts.artifacts import STAGE4_BLIND_CANDIDATE
 from novel import paths, prov
 from novel.appendlog import append_line
@@ -64,11 +63,9 @@ from novel.store import ArtifactStore
 #: 人做的那几个动作。**队列永不自动排它们**——「人看过之后的裁决」机器替不了。
 #: ⚠ 它们进 `blocked` 而不是被跳过：被跳过的闸门在界面上与「不需要它」长得一样。
 #: ⚠ `stage6.approve` 不算人工闸（2026-09-15 全自动裁决）：默认槽位序自动定稿是
-#:   队列的普通 todo，由下方 `_stage6_approval_current` 特判，进 HUMAN_NODES 会把
-#:   自动定稿误报成「在等人」。`stage0.approve` / `stage0.edit` 已整体移出 NODES
-#:   （RETIRED_NODES），机械通过即自动接受；现役只剩 `stage7.approve`（批次 B4 处理）。
-HUMAN_NODES: frozenset[str] = frozenset(
-    {n for n in NODES if n.endswith('.approve')} - {'stage6.approve'})
+#:   队列的普通 todo。`stage0.approve` / `stage0.edit` / `stage7.approve` 与
+#:   prepare 接受闸均已退役（批次 B1/B4）；现役 ``HUMAN_NODES`` 为空。
+HUMAN_NODES: frozenset[str] = frozenset()
 
 #: 待人工清单非空时挡队列的那个理由（`INBOX_KIND` 的 `invalid`）。
 WAITING_ON_INBOX = 'inbox:invalid'
@@ -107,6 +104,9 @@ WAITING_ON_STAGE4_DESIGN_REPAIR_COMMIT = \
 WAITING_ON_WRITING_APPROVAL = 'approval:stage5-writing'
 WAITING_ON_REVIEW = 'stage5:review-currentness'
 WAITING_ON_STAGE5_CLOSURE = 'approval:stage5-closure'
+# ⚠⚠ stage6.prepare 接受闸已随批次 B4 退役：机械校验通过即
+#   `system:stage6-prepare-auto` 自动 accept。常量 ``WAITING_ON_STAGE6_PREPARE``
+#   只读保留供历史账解码，现役队列不再发出。
 WAITING_ON_STAGE6_PREPARE = 'approval:stage6-prepare'
 WAITING_ON_STAGE6_PREPARE_COMMIT = 'recovery:stage6-prepare-edit'
 WAITING_ON_STAGE5_REVIEWER_REWRITE = 'recovery:stage5-reviewer-rewrite'
@@ -315,27 +315,9 @@ def _gate_is_reachable(ov, stage: str) -> bool:
 def _human_gate_satisfied(base: str | os.PathLike[str], sid: str, node: str) -> bool:
     """Read the gate's existing typed artifact; do not invent a queue verdict.
 
-    These three fields are the same fields consumed by their downstream
-    stages.  Reading them here keeps the queue from permanently blocking an
-    already approved book while still leaving the actual decision to a human.
+    批次 B4 后 ``HUMAN_NODES`` 为空；本函数仅保留给历史调用方，恒 False。
     """
-    model_rel = {
-        'stage7.approve': (NameMap, STAGE7_NAME_MAP),
-    }.get(node)
-    if model_rel is None:
-        return False
-    model, rel = model_rel
-    try:
-        novel_dir = paths.resolve_novel_dir(base, sid)
-        store = ArtifactStore(st.readonly_ctx(
-            novel_dir, node, approvals.projection_code()))
-        artifact, _ = store.read_own(model, rel)
-        if node == 'stage7.approve':
-            from novel.stages.stage7 import rename
-            return rename.approval_is_current(store, artifact)
-    except TerminalState:
-        return False
-    raise AssertionError(f'未登记的人工闸门 current 判定：{node}')
+    return False
 
 
 def _stage6_approval_current(
@@ -560,6 +542,7 @@ def plan_book_from_overview(
         stage4_design_replan_flags: tuple[str, ...] | None = None
         stage5_reviewer_rewrite_flags: tuple[str, ...] | None = None
         stage5_reviewer_rewrite_no_action = False
+        prepare_auto_accept = False
         stage2_rework = None
         projection_recovery = (
             node == 'stage2.characters'
@@ -757,12 +740,42 @@ def plan_book_from_overview(
             if node == 'stage6.prepare':
                 if current_prepare.state == 'accepted':
                     continue
-                if current_prepare.state != 'missing':
-                    why_blocked = (WAITING_ON_STAGE6_PREPARE
-                        if current_prepare.state in {'pending', 'invalid', 'stale'}
-                        else WAITING_ON_PREPARED_DELIVERY_UNKNOWN)
-            elif current_prepare.state != 'accepted' or any(row.node == 'stage6.prepare' for row in todo):
-                why_blocked = WAITING_ON_STAGE6_PREPARE
+                if current_prepare.pending_commit:
+                    why_blocked = WAITING_ON_STAGE6_PREPARE_COMMIT
+                elif current_prepare.state == 'missing':
+                    pass  # 可排付费 prepare
+                elif current_prepare.state == 'pending':
+                    # 机械产物已在盘、尚未 auto-accept：0 成本 --revalidate 触发接受
+                    prepare_auto_accept = True
+                    verdict, why = st.RESUME_RUN, (
+                        '文案准备机械通过但尚未自动接受——'
+                        '零成本 --revalidate 触发 system:stage6-prepare-auto')
+                elif current_prepare.state == 'stale':
+                    # 材料已变：重新购买 prepare（不 auto-accept 旧稿）
+                    verdict, why = st.RESUME_RUN, (
+                        '文案准备材料已变——重新购买 stage6.prepare')
+                elif current_prepare.state == 'invalid':
+                    why_blocked = WAITING_ON_INBOX
+                    why = ('文案准备仍有机械问题（INVALID/编译失败）；'
+                           '先修复或重跑 stage6.prepare，不能自动接受')
+                else:
+                    why_blocked = WAITING_ON_PREPARED_DELIVERY_UNKNOWN
+            elif (current_prepare.state != 'accepted'
+                    or any(row.node == 'stage6.prepare' for row in todo)):
+                # 下游等 prepare 闭合；不发已退役的 approval:stage6-prepare
+                if current_prepare.pending_commit:
+                    why_blocked = WAITING_ON_STAGE6_PREPARE_COMMIT
+                elif current_prepare.state == 'invalid':
+                    why_blocked = WAITING_ON_INBOX
+                    why = ('上游文案准备仍有机械问题；'
+                           '先修复或重跑 stage6.prepare')
+                elif current_prepare.state == 'unknown':
+                    why_blocked = WAITING_ON_PREPARED_DELIVERY_UNKNOWN
+                else:
+                    why_blocked = 'stage6.prepare'
+                    why = (
+                        f'等待 stage6.prepare 机械通过并自动接受'
+                        f'（当前 {current_prepare.state}）')
         review_follows_planned_write = (
             node == 'stage5.review'
             and stage5_write_will_run
@@ -823,6 +836,8 @@ def plan_book_from_overview(
             if projection_recovery
             else ['--renormalize']
             if knowledge_rebind
+            else ['--revalidate']
+            if prepare_auto_accept
             else []
         )
         if node == 'stage4.plan' and why_blocked is None and not flags:
@@ -983,7 +998,15 @@ def _blocked_why(
         return (
             '续跑结论要求人工决定，队列不会把 REDO/UNKNOWN 猜成可执行命令；'
             f'{verdict_why}')
-    return f'在等 `{waiting_on}`——这一步是人做的裁决，机器替不了；{verdict_why}'
+    if waiting_on == 'stage6.prepare':
+        return (
+            '等待 stage6.prepare 机械通过并由 system:stage6-prepare-auto '
+            f'自动接受；{verdict_why}')
+    if waiting_on.startswith('approval:'):
+        return (
+            f'编排错误：现役队列不应再发出已退役审批闸 `{waiting_on}`；'
+            f'{verdict_why}')
+    return f'在等 `{waiting_on}`——{verdict_why}'
 
 
 def plan(base: str | os.PathLike[str], sids: Sequence[str], *, until_stage: str,

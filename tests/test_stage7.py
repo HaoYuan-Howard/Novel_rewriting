@@ -120,12 +120,18 @@ def _check(box: sandbox.Sandbox):
 
 
 def _approve(box: sandbox.Sandbox):
-    ctx = _ctx(box, 'stage7.approve')
+    """存量 human 定稿路（run_approve 仍可供测试/迁移）；现役是 auto seal。"""
+    ctx = _ctx(box, 'stage7.rename')
     pack = rename.approval_workpack(ArtifactStore(ctx))
     return rename.run_approve(
         ctx, actor='reviewer',
         reason='reviewed the complete name decision surface',
         review_token=pack.review_token)
+
+
+def _auto_seal(box: sandbox.Sandbox):
+    """批次 B4：rename --recheck → system:stage7-auto。"""
+    return rename.run_recheck(_ctx(box, 'stage7.rename'))
 
 
 def _revalidate(box: sandbox.Sandbox):
@@ -372,11 +378,10 @@ def test_the_downsend_face_and_the_probe_share_one_universe(box):
 
 @pytest.mark.usefixtures('box_current_map')
 def test_approve_leaves_provenance_alone(box):
-    """`stage7.approve` **`_provenance` 一个字都不动**（`stage7.md` 事实⑦）。
+    """存量 human `run_approve` **`_provenance` 一个字都不动**（`stage7.md` 事实⑦）。
 
-    原型的四条 0 成本路走同一个保存函数，它无条件盖上**当前**的 prompt 指纹
-    ——而 `stage7.approve` 根本不重判。盘上 11 份产物 `code` 全是同一个值，
-    `N9_SYS` 却取过**三个**，那是逐字节的铁证。
+    现役定稿是 rename auto seal（origin=auto）；本条保留 human 路径，钉住
+    「定稿不得改写来源账」——与 auto seal 同一约束。
     """
     before = box.read('stage7/name_map.json')['_provenance']
     art, _rep = _approve(box)
@@ -384,6 +389,19 @@ def test_approve_leaves_provenance_alone(box):
     assert art.approved.actor == 'reviewer'
     assert art.approved.subject_sha256 == rename.approval_subject_sha256(art)
     assert box.read('stage7/name_map.json')['_provenance'] == before
+
+
+def test_auto_seal_writes_system_actor_without_rewriting_model_prompts(box):
+    """批次 B4：recheck → origin=auto / system:stage7-auto。"""
+    before = box.read('stage7/name_map.json')['_provenance']
+    art, _rep = _auto_seal(box)
+    assert art.approved is not None
+    assert art.approved.origin == 'auto'
+    assert art.approved.actor == 'system:stage7-auto'
+    # recheck 会 rewrite_provenance（partial_rewrite），但 prompts/model 继承。
+    after = box.read('stage7/name_map.json')['_provenance']
+    assert after.get('prompts') == before.get('prompts')
+    assert after.get('model') == before.get('model')
 
 
 def test_approve_refuses_while_a_hard_rule_is_still_hit(box):
@@ -414,7 +432,7 @@ def test_approve_rejects_a_stale_review_token_before_any_write_or_archive(box):
     before = {p.relative_to(box.dir).as_posix(): p.read_bytes()
               for p in box.dir.rglob('*') if p.is_file()}
     with pytest.raises(TerminalState, match='审批工作包已变化'):
-        ctx = _ctx(box, 'stage7.approve')
+        ctx = _ctx(box, 'stage7.rename')
         rename.run_approve(
             ctx, actor='reviewer',
             reason='reviewed an earlier decision surface',

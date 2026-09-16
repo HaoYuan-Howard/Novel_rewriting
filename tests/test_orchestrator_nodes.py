@@ -152,9 +152,9 @@ def test_the_matrix_actually_has_rows():
     """参数化表算空时，下面几十条会**全绿**——而那正是最坏的情况。"""
     assert len(CASES) > 25, f'node × flag 只铺出 {len(CASES)} 行，节点表多半被清空了'
     # Stage3 已退役；人物独立抽取新增一个 Executor，不新增 Commander。
-    # stage6.semantic 判官（A1）与 stage0.approve/edit（B1）、stage6.semantic
-    # 语义节点（批次 0 前置）相继退役后现役节点数是 17。
-    assert len(NODES) == 17, f'节点数变成 {len(NODES)} 了——是有意加的就来改这个数'
+    # stage6.semantic / stage0.approve|edit / stage7.approve（批次 B4）相继退役后
+    # 现役节点数是 16。
+    assert len(NODES) == 16, f'节点数变成 {len(NODES)} 了——是有意加的就来改这个数'
 
 
 # ───────────────────────── 贵贱（R-11.7 · Q-10） ─────────────────────────
@@ -694,16 +694,15 @@ def test_a_node_refuses_to_build_a_command_that_is_missing_a_required_flag():
     `preview` 照着摊开，而 skill 的工作流契约明写「逐字执行 preview 的全部步骤」。
     ⇒ 拒收挪到 `validate_run`（展示与执行共用的那一处）。
     """
-    # stage0.approve 已随批次 B1 退役；同一「缺必填当场拒」改用现役
-    # stage7.approve（--actor/--reason/--review-token 无条件必填）钉住。
-    with pytest.raises(UnsupportedRunMode, match='缺必填'):
+    # stage0/stage7.approve 已退役；未知节点拒收钉住退役面，
+    # 现役必填用 stage7.rename --revalidate 的条件必填钉住。
+    with pytest.raises(UnsupportedRunMode, match='未知节点'):
         N.build_argv('stage7.approve', SID, base=BASE)
     with pytest.raises(UnsupportedRunMode, match='缺必填'):
-        N.build_argv('stage7.approve', SID, ['--actor', '我'], base=BASE)
-    argv = N.build_argv('stage7.approve', SID,
-                        ['--review-token', 's7ar1_' + 'a' * 64,
-                         '--actor', '我', '--reason', '零命中'], base=BASE)
-    assert argv[argv.index('--review-token') + 1] == 's7ar1_' + 'a' * 64
+        N.build_argv('stage7.rename', SID, ['--revalidate'], base=BASE)
+    argv = N.build_argv(
+        'stage7.rename', SID,
+        ['--revalidate', '--actor', '我', '--reason', '零命中'], base=BASE)
     assert argv[argv.index('--actor') + 1] == '我'
     assert argv[argv.index('--reason') + 1] == '零命中'
 
@@ -732,17 +731,19 @@ def test_preview_fills_required_flags_with_placeholders_that_never_run():
       · 只拒不填 ⇒ preview 直接抛异常，人连命令长什么样都看不到；
       · 只填不拒 ⇒ `待填·actor` 会被当自报身份写进人工凭据，那条账没人能反查。
     """
-    # stage0.approve 已随批次 B1 退役；同一占位符语义改用现役 stage7.approve。
-    steps = N.build_steps('stage7.approve', SID, base=BASE, placeholders=True)
+    # stage7.approve 已退役；占位符语义改用 stage7.rename --revalidate。
+    steps = N.build_steps(
+        'stage7.rename', SID, ['--revalidate'],
+        base=BASE, placeholders=True, follow_check=False)
     argv = steps[0].argv
-    assert argv[argv.index('--review-token') + 1] == '待填·review-token'
     assert argv[argv.index('--actor') + 1] == '待填·actor'
     assert argv[argv.index('--reason') + 1] == '待填·reason'
     assert '占位符' in (steps[0].note or '')
     with pytest.raises(UnsupportedRunMode, match='占位符'):
-        N.build_argv('stage7.approve', SID,
-                     ['--review-token', 's7ar1_' + 'a' * 64,
-                      '--actor', '待填·actor', '--reason', '真理由'], base=BASE)
+        N.build_argv(
+            'stage7.rename', SID,
+            ['--revalidate', '--actor', '待填·actor', '--reason', '真理由'],
+            base=BASE)
 
     revalidate = N.build_steps(
         'stage7.rename', SID, ['--revalidate'],

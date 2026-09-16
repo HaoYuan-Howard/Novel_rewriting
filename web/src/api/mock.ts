@@ -902,8 +902,6 @@ function mockStage1View(): Stage1View {
 /** mock 的静态镜像；真实响应由后端直接从 NODES 派生。 */
 const PIPELINE_STEPS: { node: string; label: string; paid: boolean }[] = [
   { node: 'stage0.remove', label: 'stage0 非正文剔除', paid: false },
-  { node: 'stage0.approve', label: 'stage0 人工批准', paid: false },
-  { node: 'stage0.edit', label: 'stage0 人工编辑', paid: false },
   { node: 'stage1.partition', label: 'stage1 分章', paid: false },
   { node: 'stage2.global', label: 'stage2 全书级抽取', paid: true },
   { node: 'stage2.blueprint', label: 'stage2 逐章抽取', paid: true },
@@ -912,10 +910,10 @@ const PIPELINE_STEPS: { node: string; label: string; paid: boolean }[] = [
   { node: 'stage4.context', label: 'stage4 写作上下文组装', paid: false },
   { node: 'stage5.write', label: 'stage5 逐章写作', paid: true },
   { node: 'stage5.review', label: 'stage5 全书验收', paid: false },
+  { node: 'stage6.prepare', label: 'stage6 文案准备', paid: true },
   { node: 'stage6.hook', label: 'stage6 开篇文案', paid: true },
   { node: 'stage6.approve', label: 'stage6 文案定稿', paid: false },
   { node: 'stage7.rename', label: 'stage7 人名表', paid: true },
-  { node: 'stage7.approve', label: 'stage7 人名表定稿', paid: false },
   { node: 'stage7.assemble', label: 'stage7 替换与成书', paid: false },
 ]
 
@@ -1213,9 +1211,6 @@ export const mockApi: Api = {
 
   getStage6Prepare: (sid) => plotRead(sid, 'stage6/prepare', true),
   getStage6PrepareWorkpack: (sid) => plotRead(sid, 'stage6/prepare/workpack', true),
-  previewStage6PrepareEdit: (sid) => readonlyPlot('/novels/' + sid + '/stage6/prepare/edit/preview'),
-  applyStage6PrepareEdit: (sid) => readonlyPlot('/novels/' + sid + '/stage6/prepare/edit'),
-  reviewStage6Prepare: (sid) => readonlyPlot('/novels/' + sid + '/stage6/prepare/review'),
   getStage6: (sid) => plotRead(sid, 'stage6', true),
   getStage7: (sid) => plotRead(sid, 'stage7', true),
   getStage7Chapter: (sid, ordinal) => plotRead(sid, 'stage7/' + ordinal, true, 'chapter'),
@@ -1567,7 +1562,6 @@ export const mockApi: Api = {
   },
 
   approveHook: (sid) => readonlyPlot('/novels/' + sid + '/stage6/approve'),
-  approveNames: (sid) => readonlyPlot('/novels/' + sid + '/stage7/approve'),
   adoptResidual: (sid) => readonlyPlot('/novels/' + sid + '/stage7/adopt-residual'),
 
   uploadCorpus: (file) => {

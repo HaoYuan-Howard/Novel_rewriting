@@ -155,7 +155,6 @@ describe('BookLayout approval source', () => {
     })
     const backfill = vi.spyOn(api, 'backfillApprovals')
     const approveHook = vi.spyOn(api, 'approveHook')
-    const approveNames = vi.spyOn(api, 'approveNames')
     renderRoute(<><BookLayout /><CurrentPath /></>)
 
     const review = await screen.findByRole('button', { name: '查看' + label })
@@ -165,7 +164,7 @@ describe('BookLayout approval source', () => {
     expect(await screen.findByText('/n/book-1/' + stage)).toBeVisible()
     expect(backfill).not.toHaveBeenCalled()
     expect(approveHook).not.toHaveBeenCalled()
-    expect(approveNames).not.toHaveBeenCalled()
+    expect('approveNames' in api).toBe(false)
   })
 
   it('Stage7 已有产物而最终闸级联暂停时提示检查前置，不声称需要重新签字', async () => {

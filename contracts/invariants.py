@@ -240,9 +240,8 @@ STAGE5_REVIEWER_REWRITE_DIRECTIVE_CODES: Final = (
 STAGE5_CLOSED_EXEMPT_FLAGS: Final = (
     '--dry-run', '--check-only', '--identity', '--recheck',
     '--revalidate', '--apply-edit', '--wontfix',
-    # stage6.prepare 的三个 stdout 只读证据输出：人要先把材料看清楚，
-    # 才能对 stage6 审阅做决定；打印模板/workpack 不产生任何写效果。
-    '--emit-edit-template', '--emit-review-workpack', '--emit-review-template',
+    # stage6.prepare 的 stdout 只读 edit 模板仍保留；审阅写面已退役。
+    '--emit-edit-template',
     '--adopt-residual', '--validate-edit', '--rebind-review',
 )
 
@@ -1680,10 +1679,9 @@ FREE_ENTRIES: Final = {
     '--identity': '恒等基线：拿原作自己的东西跑整套判据，看判据有没有把合法情况排除在外',
     '--apply-edit': '把人工改过的内容落成新的一轮',
     '--preview-edit': '只读预检 Stage5 人工稿，不调用模型、不写盘',
-    '--review-decisions': '应用带 actor、理由和 subject hash 乐观锁的独立 typed 复核决策',
-    '--emit-review-template': ('向 stdout 输出绑定当前主体 hash/evidence 的审阅模板，不写盘'),
-    '--emit-review-workpack': ('向 stdout 输出逐项证据包；只辅助人工核验，不自动做决定'),
     '--recover-edit': '免费补齐本 owner 已耐久的原编辑或复核决定，不重新审阅、不调用模型',
+    # （`--review-decisions` / `--emit-review-template` / `--emit-review-workpack`
+    #   已随批次 B4 从 stage6.prepare 退役删除。）
     # ⚠⚠ **它是 2026-08-15 补的，而漏它的后果正是本表开头那条**：
     #   `--wontfix` 原来只挂在 `stage5.review` 上，而那是个 `paid=False` 节点
     #   ⇒ 不进本表也判不出付费，注释因此写着「它是参数不是入口 ⇒ 不进 FREE_ENTRIES」。
@@ -1809,10 +1807,9 @@ VALUED_FLAGS: Final = {
                          '可修复响应先隔离并停给外层受托 agent，同闸复验失败才继续采样',
     '--review-token': ('人工审阅动作的 opaque immutable-workpack token；内部内容、'
                        '证据、validation 与 execution 摘要不再由 Commander 散装搬运'),
-    '--review-decisions': ('Stage6 Prepare 独立 typed 复核决定路径（必填；服务进程放在'
-                           ' `<base>/_service/edits/` 的可信上传路径）'),
     '--apply-binding': ('完整人工 Stage4 EvidenceBinding 路径（必填；相对路径相对书目录，'
                         '也接受书目录内的绝对路径）'),
+    # （`--review-decisions` 已随批次 B4 从 stage6.prepare 退役删除。）
     '--emit-prepared-recovery-workpack': (
         '要审计的旧 Stage5 source run_id；输出绑定当前 target run/code 的只读工作包'),
     '--recover-prepared': (
@@ -2035,9 +2032,9 @@ class NodeLifecycleSpec(NamedTuple):
 
     ``approval_bindings`` 把审批 blocker 映射到 (属主节点, scope)：它登记
     「这道闸属于哪个节点的工作面」，供历史 reviewer 工作单元只读解码使用。
-    Stage4 四道闸与 Stage5 写作授权/闭合回执已随 2026-09-15 全自动裁决
-    （批次 B2/B3）整体退役——现役 ``NODES`` 只保留 stage6.prepare/hook、
-    stage6.approve 与 stage7.approve 的人工面（批次 B4 收敛）。
+    Stage4 四道闸、Stage5 写作授权/闭合回执、stage6.prepare 接受闸与
+    stage7.approve 已随 2026-09-15 全自动裁决（批次 B2/B3/B4）整体退役——
+    现役 ``NODES`` 只保留 stage6.approve 的人工改选面（不阻塞下游）。
     """
 
     unit_kind: str
@@ -2120,12 +2117,9 @@ class NodeSpec(NamedTuple):
 #: ⇒ `stage4.context` / `stage7.assemble` 空：它们**本身**就是那个动作，
 #:   `stage4.context` / `stage7.assemble` 本身就是动作，因此没有同义 flag。
 #: ⇒ 三层 `*.approve` 的结论不一样：`stage6.approve` 确实有一个
-#:   候选序号 ⇒ F1 补成 `('--pick',)`；`stage7.approve` 没有候选序号
-#:   （一本书只有一份人物表，定稿是给整份盖章），但仍必须提交统一的
-#:   `--actor/--reason` 与当前 decision-surface `--subject-sha256` 凭据。
-#:   `stage0.approve` 同样给整份剔除报告盖章，没有候选参数；但它**有**人工凭据
-#:   （`--actor` / `--reason`，节点函数缺一个就 `TerminalState`）⇒ 那两个是跑法 flag，
-#:   而且是 `required_flags`。「没有候选参数」与「没有 flag」是两件事。
+#:   候选序号 ⇒ F1 补成 `('--pick',)`；`stage7.approve` 已退役（移入
+#:   RETIRED_NODES）：机械校验通过后由 rename producer auto seal。
+#:   `stage0.approve` 同样已退役。
 #:
 #: 未登记的 flag 会由命令构造器直接拒收，节点表只描述当前真实入口。
 #: 【`required_flags` 那一列：少一个就拼不出可执行 argv 的 flag】它是 `flags` 的**子集**，
@@ -2303,10 +2297,18 @@ NODES: Final[dict[str, NodeSpec]] = {
     #   而结论池是复检算出来的。⚠⚠ 本层的两条语义判据此前**没有任何人工闭环**，
     #   而待人工清单在建议人去跑一个这一层根本没有的 flag（见 `orchestrator/inbox_projection.py::_human_how`）。
     'stage6.prepare':   NodeSpec('stage6', 'R-9', True, 'stage6 文案准备',
-                                 lifecycle=NodeLifecycleSpec('book', '完整源正文、原钩子与独立准备产物', 'executor', 'human', '事实支持与连续开篇范围独立接受', ('accept', 'typed_edit', 'stop'), ('stage6.prepare',), 'executor:book / human:prepare', ('--revalidate', '--apply-edit', '--review-decisions', '--recover-edit', '--recover-prepared', 'saved_response', 'prepared_commit'), approval_bindings=(('approval:stage6-prepare', 'prepare'),), approval_projection=('prepare', 'state')),
+                                 lifecycle=NodeLifecycleSpec(
+                                     'book', '完整源正文、原钩子与独立准备产物',
+                                     'executor', 'deterministic',
+                                     '机械校验通过即自动接受',
+                                     ('recompute', 'stop'), ('stage6.prepare',),
+                                     'executor:book',
+                                     ('--revalidate', '--recover-edit',
+                                      '--recover-prepared', 'saved_response',
+                                      'prepared_commit'),
+                                     approval_projection=('prepare', 'state')),
                                  flags=('--dry-run', '--revalidate', '--emit-edit-template',
-                                        '--emit-review-template', '--emit-review-workpack',
-                                        '--apply-edit', '--review-decisions', '--recover-edit',
+                                        '--recover-edit',
                                         '--recover-prepared', '--subject-sha256', '--response-repair'),
                                  produces=(artifact_paths.STAGE6_PREPARE,),
                                  operator_redo='canonical'),
@@ -2335,7 +2337,16 @@ NODES: Final[dict[str, NodeSpec]] = {
     #   不照 stage6——那一层一次产三份，拦的是「一条干净候选都没有」），
     #   而**闸门是我们自己加的，不给一条 0 成本提升路，一次付费产出就被永久锁死**。
     'stage7.rename':    NodeSpec('stage7', 'R-10', True,  'stage7 人名表',
-                                  lifecycle=NodeLifecycleSpec('book', '全书人物、别名与已闭合正文', 'executor', 'none', '人名表交独立定稿', ('typed_edit', 'targeted_rework', 'stop'), ('stage7.rename',), 'executor:rename', ('--revalidate', '--apply-edit', '--adopt-residual', '--recover-prepared', 'saved_response', 'prepared_commit')),
+                                  lifecycle=NodeLifecycleSpec(
+                                      'book', '全书人物、别名与已闭合正文',
+                                      'executor', 'deterministic',
+                                      '机械校验通过即 auto 定稿',
+                                      ('typed_edit', 'targeted_rework', 'stop'),
+                                      ('stage7.rename',), 'executor:rename',
+                                      ('--revalidate', '--apply-edit',
+                                       '--adopt-residual', '--recover-prepared',
+                                       'saved_response', 'prepared_commit'),
+                                      approval_projection=('gate', 's7')),
                                   flags=('--dry-run', '--check-only', '--identity',
                                          '--recheck', '--apply-edit', '--revalidate',
                                           '--emit-edit-template', '--adopt-residual',
@@ -2344,14 +2355,9 @@ NODES: Final[dict[str, NodeSpec]] = {
                                          '--actor', '--reason', '--response-repair'),
                                   produces=(artifact_paths.STAGE7_NAME_MAP,),
                                   operator_redo='canonical'),
-    # ⚠⚠ 本层没有候选序号：一本书只有一份人物表，定稿是「给整份盖章」。
-    #   但审批动作必须携带统一人工凭据，并用 decision-surface SHA-256 防旧页面误批。
-    'stage7.approve':   NodeSpec('stage7', 'R-10', False, 'stage7 人名表定稿',
-                                  lifecycle=NodeLifecycleSpec('book', '人物表与真实替换、残留扫描工作包', 'human_submission', 'human', '当前人名与替换表', ('accept', 'stop'), ('stage7.rename',), 'human:rename_approval', ('typed_replay', '--review-token'), 0, approval_bindings=(('stage7.approve', 'rename'),), approval_projection=('gate', 's7')),
-                                  flags=('--actor', '--reason', '--review-token'),
-                                  required_flags=('--actor', '--reason',
-                                                  '--review-token'),
-                                  produces=(artifact_paths.STAGE7_NAME_MAP,)),
+    # ⚠ `stage7.approve` 已随批次 B4（2026-09-15 全自动裁决）退役：移入
+    #   RETIRED_NODES；binding 进 RETIRED_APPROVAL_BINDINGS。正式 NameMap
+    #   机械校验通过后由 rename producer 自动 seal（origin='auto'）。
     # 成书只能消费已批准的人名表；声明顺序同时是队列和进度屏的唯一顺序权威。
     'stage7.assemble':  NodeSpec('stage7', 'R-10', False, 'stage7 替换与成书',
                                  lifecycle=NodeLifecycleSpec('book', '已批准人名表、文案与 canonical 正文', 'deterministic', 'none', '机械替换与交付对账', ('recompute', 'stop'), ('stage7.rename', 'stage7.assemble'), 'none', ('canonical',), 0),
@@ -2398,11 +2404,12 @@ def approval_scope_allowed(node: str, scope: str) -> bool:
         | {value for _, value in RETIRED_APPROVAL_BINDINGS.get(node, ())})
 
 
-#: Stage4 四道人工闸与 Stage5 写作授权/闭合回执退役（2026-09-15 全自动裁决，
-#: 批次 B2/B3）后的历史只读归属。现役 ``NODES`` 不再登记这些 binding；这里
-#: 唯一消费者是存量书 reviewer 工作单元与 Commander 账的只读解码
-#: （``novel/work_units.py``）。stage5-closure 的现役后继是 Review 机械判定
-#: 自动闭合（`system:stage5-auto`），不在这张表里产生新账。
+#: Stage4 四道人工闸、Stage5 写作授权/闭合回执、stage6.prepare 接受闸与
+#: stage7.approve 人名表定稿退役（2026-09-15 全自动裁决，批次 B2/B3/B4）后的
+#: 历史只读归属。现役 ``NODES`` 不再登记这些 binding；这里唯一消费者是存量书
+#: reviewer 工作单元与 Commander 账的只读解码（``novel/work_units.py``）。
+#: stage5-closure 的现役后继是 Review 机械判定自动闭合（`system:stage5-auto`）；
+#: prepare / rename 的现役后继分别是 producer 机械 auto-accept / auto seal。
 RETIRED_APPROVAL_BINDINGS: Final[Mapping[str, tuple[tuple[str, str], ...]]] = {
     'stage4.design': (
         ('approval:stage4-design-review', 'design'),
@@ -2417,6 +2424,12 @@ RETIRED_APPROVAL_BINDINGS: Final[Mapping[str, tuple[tuple[str, str], ...]]] = {
     ),
     'stage5.review': (
         ('approval:stage5-closure', 'closure'),
+    ),
+    'stage6.prepare': (
+        ('approval:stage6-prepare', 'prepare'),
+    ),
+    'stage7.rename': (
+        ('stage7.approve', 'rename'),
     ),
 }
 
@@ -2500,7 +2513,10 @@ STAGES: Final = ('stage0', 'stage1', 'stage2', 'stage4', 'stage5', 'stage6', 'st
 
 # 只供 append-only 作业/队列历史解码。它们不进 NODES/STAGES，因此不能 preview、
 # 调度或创建新队列；删除这两个名字会让既有 jobs.jsonl / queues.jsonl 整流不可读。
-RETIRED_NODES: Final = ('stage3.style', 'stage6.semantic', 'stage0.approve', 'stage0.edit')
+RETIRED_NODES: Final = (
+    'stage3.style', 'stage6.semantic', 'stage0.approve', 'stage0.edit',
+    'stage7.approve',
+)
 RETIRED_STAGES: Final = ('stage3',)
 
 #: `stage` → 它的需求节。**从 `NODES` 派生，不许手抄。**

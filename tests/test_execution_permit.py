@@ -352,8 +352,6 @@ def test_policy_tables_are_closed_and_paid_rows_are_exactly_profiled():
         # （stage5.review 的 trim manifest 外部输入已随批次 B3 退役。）
         ('stage5.write', '--reviewer-rewrite'),
         ('stage6.hook', '--apply-edit'),
-        ('stage6.prepare', '--apply-edit'),
-        ('stage6.prepare', '--review-decisions'),
         ('stage7.rename', '--apply-edit'),
         ('stage7.rename', '--validate-edit'),
     }

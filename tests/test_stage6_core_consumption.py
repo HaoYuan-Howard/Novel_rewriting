@@ -129,17 +129,15 @@ def test_lead_loader_reads_only_opening_but_default_loader_retains_fullbook(tmp_
     assert invalids == ['stage5/ch03.INVALID.json']
 
 
-@pytest.mark.parametrize('accepted', [False, True])
-def test_prepare_recheck_has_exact_owner_scope_and_reads_independent_decision(tmp_path, capsys, accepted):
+def test_prepare_recheck_has_exact_owner_scope_and_reads_independent_decision(tmp_path, capsys):
+    """B4：正式生成后已 auto accept；免费重验只读独立决定证明。"""
     from novel.cli import main as cli
     from novel.orchestrator import approvals
     from novel.stages.stage6 import prepare
     from novel.store import ArtifactStore
-    from tests.test_stage6_prepare import seed_prepare, decision_for, _free_ctx
+    from tests.test_stage6_prepare import seed_prepare, _free_ctx
 
     ctx, driver, _ = seed_prepare(tmp_path)
-    if accepted:
-        prepare.submit_review(_free_ctx(ctx), decision_for(_free_ctx(ctx)))
     free = _free_ctx(ctx)
     store = ArtifactStore(free)
     before = {rel: store.full_sha256_or_none(rel)
@@ -153,9 +151,9 @@ def test_prepare_recheck_has_exact_owner_scope_and_reads_independent_decision(tm
     assert mechanical.status == 'ok' and mechanical.scanned == '4'
     semantic, = [row for row in report.rules if row.rule == 'prepare_semantic_review']
     assert semantic.status == 'unver'
-    assert ('当前 Prepare 已经独立接受' if accepted else '未独立接受（pending）') in semantic.why
+    assert '当前 Prepare 已经独立接受' in semantic.why
     assert {rel: store.full_sha256_or_none(rel) for rel in before} == before
-    assert store.exists(prepare.REVIEW) is accepted
+    assert store.exists(prepare.REVIEW)
     assert not approvals.get(tmp_path, ctx.sid).gate['s6']
     assert not store.exists('stage6/hook.json') and len(driver.calls) == 1
     capsys.readouterr()

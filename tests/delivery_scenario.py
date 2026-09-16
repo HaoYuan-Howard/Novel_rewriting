@@ -197,9 +197,10 @@ def build(base):
                 print('RENAME_OK', len(wire.calls), flush=True)
             stage7 = _get(http, '/approvals/stage7/workpack')
             if stage7['disposition'] != 'already_current':
-                post(http, '/stage7/approve', {
-                    'actor': 'human-ui', 'reason': '合成改名逐项核实；实际替换、保留与残留均已查看',
-                    'review_token': stage7['review_token']})
+                # 批次 B4：rename 正式成功后应已 auto seal；否则 0 成本 recheck 补 seal。
+                _run_free_next(http, node='stage7.rename', flags=['--recheck'])
+                stage7 = _get(http, '/approvals/stage7/workpack')
+                assert stage7['disposition'] == 'already_current', stage7
             if not (book / paths.book_txt_rel(book)).is_file():
                 _run_free_next(http, node='stage7.assemble', flags=[])
             result = _get(http, '/stage7')

@@ -113,7 +113,7 @@ def _seed_final(base: Path, monkeypatch) -> None:
     store7.write(rename.REL, art)
 
 
-@pytest.mark.parametrize('node', ['stage6.approve', 'stage7.approve'])
+@pytest.mark.parametrize('node', ['stage6.approve'])
 def test_final_producer_approval_requires_original_token_and_exact_statement(
     tmp_path, monkeypatch, node,
 ):
@@ -121,8 +121,8 @@ def test_final_producer_approval_requires_original_token_and_exact_statement(
     _seed_final(base, monkeypatch)
     ctx = _ctx(base, node)
     store = ArtifactStore(ctx)
-    module = hook if node == 'stage6.approve' else rename
-    model = Hook if node == 'stage6.approve' else NameMap
+    module = hook
+    model = Hook
     pack = module.approval_workpack(store)
     flags = (('--pick', '1') if node == 'stage6.approve' else ()) + (
         '--actor', ACTOR, '--reason', REASON, '--review-token', pack.review_token)
@@ -137,20 +137,18 @@ def test_final_producer_approval_requires_original_token_and_exact_statement(
         wrong = list(flags)
         wrong[wrong.index(key) + 1] = value
         assert not _landed(base, node, tuple(wrong))
-    if node == 'stage6.approve':
-        assert not _landed(base, node, ('--pick', '2', *flags[2:]))
-        assert pack.review_token.startswith('s6r4_')
-        old = list(flags)
-        old[old.index('--review-token') + 1] = pack.review_token.replace('s6r4_', 's6r3_', 1)
-        assert not _landed(base, node, tuple(old)), '相同 workpack 摘要不能认领旧契约令牌'
+    assert not _landed(base, node, ('--pick', '2', *flags[2:]))
+    assert pack.review_token.startswith('s6r4_')
+    old = list(flags)
+    old[old.index('--review-token') + 1] = pack.review_token.replace('s6r4_', 's6r3_', 1)
+    assert not _landed(base, node, tuple(old)), '相同 workpack 摘要不能认领旧契约令牌'
 
     art, _ = store.read_own(model, module.REL)
-    approval = art.approved.resolution if node == 'stage6.approve' else art.approved
+    approval = art.approved.resolution
     for field, value in (('workpack_sha256', None), ('review_identity_sha256', None),
                          ('subject_sha256', 'f' * 64)):
         changed = approval.model_copy(update={field: value})
-        approved = (art.approved.model_copy(update={'resolution': changed})
-                    if node == 'stage6.approve' else changed)
+        approved = art.approved.model_copy(update={'resolution': changed})
         store.write(module.REL, art.model_copy(update={'approved': approved}))
         assert not _landed(base, node, flags)
     store.write(module.REL, art)
@@ -162,6 +160,7 @@ def test_final_producer_approval_requires_original_token_and_exact_statement(
 
 def test_unsupported_missing_or_incomplete_node_action_is_read_only(tmp_path):
     assert not _landed(tmp_path, 'stage5.review', ())
+    # 批次 B4：stage7.approve 已退役；landed 探测对未知/退役节点恒 False。
     assert not _landed(tmp_path, 'stage7.approve', ())
     flags = ('--actor', ACTOR, '--reason', REASON, '--review-token', 's7r3_' + 'a' * 64)
     assert not _landed(tmp_path, 'stage7.approve', flags)

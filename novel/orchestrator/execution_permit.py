@@ -71,7 +71,6 @@ _STAGE5_CLOSURE = queue.WAITING_ON_STAGE5_CLOSURE
 _STAGE5_REVIEWER_REWRITE = queue.WAITING_ON_STAGE5_REVIEWER_REWRITE
 _PREPARED_DELIVERY = queue.WAITING_ON_PREPARED_DELIVERY
 _STAGE6_APPROVE = 'stage6.approve'
-_STAGE7_APPROVE = 'stage7.approve'
 
 _W0 = frozenset({_INBOX, _RESUME})
 # stage2 恢复入口只认统一机械准入 blockers；节点写权仍按知识生产节点登记。
@@ -79,8 +78,9 @@ _W2 = frozenset({_INBOX, _RESUME})
 _W4 = frozenset({_INBOX, _RESUME})
 _W5 = frozenset({_INBOX, _RESUME, _STAGE5_REVIEW, _STAGE5_CLOSURE})
 _W6 = frozenset({_INBOX, _RESUME, _STAGE5_CLOSURE, _STAGE6_APPROVE})
-_W6_PREPARE = _W6 | frozenset({queue.WAITING_ON_STAGE6_PREPARE})
-_W7 = frozenset({_INBOX, _RESUME, _STAGE7_APPROVE})
+# prepare 接受闸已退役；现役允许在 stage6.prepare 等待面与恢复面下跑免费路。
+_W6_PREPARE = _W6 | frozenset({'stage6.prepare', queue.WAITING_ON_STAGE6_PREPARE_COMMIT})
+_W7 = frozenset({_INBOX, _RESUME})
 
 
 #: 首批恢复闭集。这里登记的是**全部 flag token**，不是只登记主操作；
@@ -186,10 +186,6 @@ RECOVERY_RUN_POLICIES: Final[tuple[RecoveryRunPolicy, ...]] = (
 
     RecoveryRunPolicy('stage6.prepare', _t('--revalidate'), _W6_PREPARE),
     RecoveryRunPolicy('stage6.prepare', _t('--emit-edit-template'), _W6_PREPARE),
-    RecoveryRunPolicy('stage6.prepare', _t('--emit-review-template'), _W6_PREPARE),
-    RecoveryRunPolicy('stage6.prepare', _t('--emit-review-workpack'), _W6_PREPARE),
-    RecoveryRunPolicy('stage6.prepare', _t('--apply-edit'), _W6_PREPARE),
-    RecoveryRunPolicy('stage6.prepare', _t('--review-decisions'), _W6_PREPARE),
     RecoveryRunPolicy('stage6.prepare', _t('--recover-edit'), frozenset({queue.WAITING_ON_STAGE6_PREPARE_COMMIT})),
     RecoveryRunPolicy('stage6.prepare', _t('--recover-prepared', '--subject-sha256'), frozenset({_PREPARED_DELIVERY})),
     RecoveryRunPolicy('stage6.hook', _t('--check-only'), _W6),
@@ -222,11 +218,6 @@ RECOVERY_RUN_POLICIES: Final[tuple[RecoveryRunPolicy, ...]] = (
     RecoveryRunPolicy('stage7.rename', _t('--validate-edit'), _W7),
     RecoveryRunPolicy('stage7.rename', _t('--adopt-residual'), _W7),
     RecoveryRunPolicy('stage7.rename', _t('--rebind-review'), _W7),
-    RecoveryRunPolicy(
-        'stage7.approve',
-        _t('--actor', '--reason', '--review-token'),
-        frozenset({_STAGE7_APPROVE}),
-    ),
 
     # 付费恢复只开放 executor 已完整迁移且另有 typed 授权的两族；
     # stage4.design 的人工 typed 恢复动作已随四道闸退役。
@@ -276,8 +267,6 @@ EXTERNAL_INPUT_POLICIES: Final[
     #   trim 三选一退役删除。）
     ('stage5.write', '--reviewer-rewrite'): 'book',
     ('stage6.hook', '--apply-edit'): 'book',
-    ('stage6.prepare', '--apply-edit'): 'book_or_service_edit',
-    ('stage6.prepare', '--review-decisions'): 'book_or_service_edit',
     ('stage7.rename', '--apply-edit'): 'book',
     ('stage7.rename', '--validate-edit'): 'book',
 }

@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-rename.py —— `stage7.rename` 与 `stage7.approve` 的节点函数。**唯一一处 `ask_json`。**
+rename.py —— `stage7.rename` 的节点函数。**唯一一处 `ask_json`。**
 
 〔这是 `R-10.1` 那一行「谁在查」标的代码落点：**本模块没有任何一处往上游目录写**，
 产物只落 `stage7/`。〕
 
-九条路：`--check-only` · `--dry-run` · `--identity` · `--recheck` · `--apply-edit` ·
-`--revalidate` · `--recover-prepared` · 付费主路 · `stage7.approve`。
-**八条 0 成本，一条付费。**
+现役路：`--check-only` · `--dry-run` · `--identity` · `--recheck` · `--apply-edit` ·
+`--revalidate` · `--adopt-residual` · `--recover-prepared` · 付费主路。
+机械校验通过后 producer 自动 seal（`origin='auto'`）；`stage7.approve` 已退役。
+`run_approve` 仅保留供历史测试迁移。
 """
 from __future__ import annotations
 
@@ -729,7 +730,7 @@ def run_recheck(ctx: RunContext) -> tuple[NameMap, CheckReport]:
         ctx.rewrite_provenance(art.provenance, by='--recheck'))
     # 只有「旧映射的真实模型输入仍被证明 fresh」时，未变化的映射决定才可继续
     # 沿用批准。stale/unknown 都清空批准，但新映射已由 recheck 免费重建并落盘，
-    # 人仍可直接走 ``stage7.approve`` 零模型重批。
+    # 人仍可直接走 ``stage7.rename --recheck`` 后再由 auto seal 零模型定稿。
     # 旧交付物无论如何都绑定的是重判前的上游，必须退出 live 路径。
     approval = _approval_after_free_rewrite(art, new_art, input_freshness)
     new_art = new_art.model_copy(update={
@@ -739,7 +740,8 @@ def run_recheck(ctx: RunContext) -> tuple[NameMap, CheckReport]:
         # The retirement and replacement map are one logical commit.  A late
         # archive/write/freshness failure restores both live byte surfaces.
         _retire_book_txt(store)
-    return new_art, _report(ctx, store, _judge(ctx, store, new_art, up), new_art)
+    sealed = _auto_seal_name_map(ctx, store, new_art)
+    return sealed, _report(ctx, store, _judge(ctx, store, sealed, up), sealed)
 
 
 def _prepare_edit(ctx: RunContext, edit_path: str = ''):
@@ -806,7 +808,8 @@ def run_apply_edit(ctx: RunContext, edit_path: str = '') -> tuple[NameMap, Check
             with store.history_transaction(REL, book_txt_rel(store)):
                 store.write_round(REL, new_art)
                 _retire_book_txt(store)
-            return new_art, _report(ctx, store, _judge(ctx, store, new_art, up), new_art)
+            sealed = _auto_seal_name_map(ctx, store, new_art)
+            return sealed, _report(ctx, store, _judge(ctx, store, sealed, up), sealed)
     with store.history_transaction(REL, book_txt_rel(store)):
         if prev is not None:
             store.write_round(REL, new_art)
@@ -815,63 +818,123 @@ def run_apply_edit(ctx: RunContext, edit_path: str = '') -> tuple[NameMap, Check
         # Also retire an orphaned delivery when the formal/INVALID map is absent.
         # The outer transaction makes the replacement and retirement indivisible.
         _retire_book_txt(store)
-    return new_art, _report(ctx, store, _judge(ctx, store, new_art, up), new_art)
+    sealed = _auto_seal_name_map(ctx, store, new_art)
+    return sealed, _report(ctx, store, _judge(ctx, store, sealed, up), sealed)
+
+
+def _safe_residual_adoptions(art: NameMap) -> dict[str, str]:
+    """可安全机械采纳的 residual：confidence=high + 唯一 suggest + 不覆盖已有。"""
+    existing = {item.old: item.new for item in art.extra_subs}
+    suggestions: dict[str, set[str]] = {}
+    for item in art.residual:
+        if item.confidence != 'high' or not item.unit or not item.suggest:
+            continue
+        if item.unit in existing or item.unit in art.subs:
+            continue
+        suggestions.setdefault(item.unit, set()).add(item.suggest)
+    return {
+        old: next(iter(targets))
+        for old, targets in suggestions.items()
+        if len(targets) == 1
+    }
+
+
+def _rebuild_with_residual_adoptions(
+    ctx: RunContext, store: ArtifactStore, art: NameMap,
+    adopted: Mapping[str, str], *, by: str,
+) -> tuple[NameMap, list]:
+    """把 adopted 并入 extra_subs 后重放确定性链；不写盘。"""
+    up = _Upstreams(ctx, store)
+    extra = [item.model_dump(mode='json', by_alias=True) for item in art.extra_subs]
+    extra.extend(
+        ExtraSub(old=old, new=new, origin='adopted').model_dump(
+            mode='json', by_alias=True)
+        for old, new in sorted(adopted.items())
+    )
+    model_out = {
+        'surname_map': dict(art.surname_map),
+        'characters': [
+            item.model_dump(mode='json', by_alias=True)
+            for item in art.characters
+        ],
+    }
+    rebuilt, _fs, _hook_new = _build(
+        ctx, up, model_out, extra,
+        ctx.rewrite_provenance(art.provenance, by=by),
+    )
+    rebuilt = rebuilt.model_copy(update={
+        'approved': None, 'book_txt': None, 'identity': art.identity,
+    })
+    return rebuilt, _judge(ctx, store, rebuilt, up)
+
+
+def _try_auto_adopt_residuals(
+    ctx: RunContext, store: ArtifactStore, art: NameMap,
+) -> NameMap:
+    """安全 residual 自动采纳；无候选 no-op；HARD 不改正式稿。"""
+    adopted = _safe_residual_adoptions(art)
+    if not adopted:
+        return art
+    rebuilt, outcomes = _rebuild_with_residual_adoptions(
+        ctx, store, art, adopted, by='--adopt-residual')
+    if _blocking(outcomes):
+        return art
+    with store.history_transaction(REL, book_txt_rel(store)):
+        store.write_round(REL, rebuilt)
+        _retire_book_txt(store)
+    return rebuilt
+
+
+def _auto_seal_name_map(
+    ctx: RunContext, store: ArtifactStore, art: NameMap,
+) -> NameMap:
+    """机械校验通过后第二次写：先安全采纳 residual，再 auto seal。
+
+    正式生成路径的 verify/finalize 仍拒绝带 approved 的新表；本函数只在
+    其后作为第二次写。HARD 存在时不 seal，残留无安全候选时 no-op 采纳。
+    """
+    art = _try_auto_adopt_residuals(ctx, store, art)
+    if approval_is_current(store, art):
+        return art
+    hard = stored_blocking_rules(art)
+    if hard:
+        return art
+    pack, _report = _approval_workpack_snapshot(store, art)
+    subject = approval_subject_sha256(art)
+    sealed = art.model_copy(update={
+        'approved': ApprovedNameMap(
+            origin='auto',
+            actor='system:stage7-auto',
+            reason='机械校验通过后自动定稿；残留按规则披露或已安全采纳',
+            subject_sha256=subject,
+            workpack_sha256=pack.workpack_sha256,
+            review_identity_sha256=pack.review_identity_sha256,
+        ),
+        'book_txt': None,
+    })
+    with store.history_transaction(REL, book_txt_rel(store)):
+        _retire_book_txt(store)
+        store.write(REL, sealed)
+    return sealed
 
 
 @_commit_owned
 def run_adopt_residual(
     ctx: RunContext, confidence: str,
 ) -> tuple[NameMap, CheckReport]:
-    """Explicitly adopt safe residual suggestions and replay the full deterministic chain."""
+    """CLI ``--adopt-residual``：显式重放安全采纳；空集合仍抛 TerminalState。"""
     if confidence != 'high':
         raise TerminalState('--adopt-residual 当前只接受 high')
     store = ArtifactStore(ctx)
     if not store.exists(REL):
         raise UpstreamMissing(f'{REL} 不在盘上——先跑 stage7.rename')
-    up = _Upstreams(ctx, store)
     art, _raw = store.read_own(NameMap, REL)
-
-    existing = {item.old: item.new for item in art.extra_subs}
-    suggestions: dict[str, set[str]] = {}
-    for item in art.residual:
-        if item.confidence != confidence or not item.unit or not item.suggest:
-            continue
-        if item.unit in existing or item.unit in art.subs:
-            continue
-        suggestions.setdefault(item.unit, set()).add(item.suggest)
-    adopted = {
-        old: next(iter(targets))
-        for old, targets in suggestions.items()
-        if len(targets) == 1
-    }
+    adopted = _safe_residual_adoptions(art)
     if not adopted:
-        raise TerminalState('没有可安全采纳的 high residual：空建议、冲突和已覆盖项均已跳过')
-
-    extra = [item.model_dump(mode='json', by_alias=True) for item in art.extra_subs]
-    # ⚠ `origin='adopted'`，**不是 `'human'`**：这几条是残留探针算出来的
-    #   `unit → suggest`，人做的决定是「采纳这一批」而不是逐条敲的字。
-    #   记成 `human` 会让产物说假话——盘上某本 4 条 `孙家/孙府/宋家/宋府` 就是那么记的，
-    #   而 `ExtraSub.origin` 的注释本人预言过「一旦有第二条来源，这一格就是唯一能分开的地方」。
-    #   ⚠ 判定上两者同权（见那一格的注释），这里分开的是**审计**。
-    extra.extend(
-        ExtraSub(old=old, new=new, origin='adopted').model_dump(mode='json', by_alias=True)
-        for old, new in sorted(adopted.items())
-    )
-    model_out = {
-        'surname_map': dict(art.surname_map),
-        'characters': [item.model_dump(mode='json', by_alias=True) for item in art.characters],
-    }
-    rebuilt, _fs, _hook_new = _build(
-        ctx, up, model_out, extra,
-        ctx.rewrite_provenance(art.provenance, by='--adopt-residual'),
-    )
-    rebuilt = rebuilt.model_copy(update={
-        'approved': None, 'book_txt': None, 'identity': art.identity,
-    })
-    outcomes = _judge(ctx, store, rebuilt, up)
-    # ⚠ **不是 `GateBlocked`**：这一条什么都没落盘（正式稿仍在 live 路径上，也没有
-    #   `.INVALID` 可指）。此前写成 `GateBlocked` 且漏了它必填的 `invalid_path`
-    #   ⇒ 真走到这条路抛的是 `TypeError`，退出码 70「崩了，结论未知」。
+        raise TerminalState(
+            '没有可安全采纳的 high residual：空建议、冲突和已覆盖项均已跳过')
+    rebuilt, outcomes = _rebuild_with_residual_adoptions(
+        ctx, store, art, adopted, by='--adopt-residual')
     blocking = _blocking_rules(outcomes)
     if blocking:
         raise BlockingFindingsUnresolved(
@@ -882,7 +945,9 @@ def run_adopt_residual(
     with store.history_transaction(REL, book_txt_rel(store)):
         store.write_round(REL, rebuilt)
         _retire_book_txt(store)
-    return rebuilt, _report(ctx, store, outcomes, rebuilt)
+    sealed = _auto_seal_name_map(ctx, store, rebuilt)
+    return sealed, _report(ctx, store, _judge(
+        ctx, store, sealed, _Upstreams(ctx, store)), sealed)
 
 
 @_commit_owned
@@ -921,7 +986,8 @@ def run_revalidate(
             artifact_override=rebuilt)
         _retire_book_txt(store)
     promoted = store.read_own(NameMap, REL)[0]
-    return True, _report(ctx, store, _judge(ctx, store, promoted, up), promoted)
+    sealed = _auto_seal_name_map(ctx, store, promoted)
+    return True, _report(ctx, store, _judge(ctx, store, sealed, up), sealed)
 
 
 class _NameMapResponseSource(Protocol):
@@ -1786,6 +1852,8 @@ def _restore_legacy_rename_delivery(
             if changed:
                 anchor.retire_group_producer_recovery(proof)
                 return None
+        # 已采纳：保留盘上历史字节（含 human/auto 定稿）。不得再 auto seal
+        # 覆盖——输入漂移时 currentness 由现役闸另判，恢复不改历史事实。
         return artifact
 
     if prepared is None:
@@ -1829,7 +1897,7 @@ def _restore_legacy_rename_delivery(
         budget.mark_adopted(turn_id)
     anchor.mark_artifact_committed(REL, fingerprint)
     anchor.complete_group_producer_recovery(proof)
-    return landed
+    return _auto_seal_name_map(ctx, store, landed)
 
 
 def inspect_prepared_recovery(ctx: RunContext) -> PreparedRecovery | None:
@@ -1974,7 +2042,7 @@ def _finalize_agent_rename_formal(
             terminal._batch.restored_acceptance,
             delivery_state='delivered',
         )
-    return landed
+    return _auto_seal_name_map(ctx, ArtifactStore(ctx), landed)
 
 
 def _write_or_reuse_terminal_invalid(
@@ -2094,17 +2162,10 @@ def run_rename(ctx: RunContext, client: LlmClient) -> NameMap:
 def run_approve(
     ctx: RunContext, *, actor: str, reason: str, review_token: str,
 ) -> tuple[NameMap, CheckReport]:
-    """`stage7.approve`：**人定稿**。0 成本。
+    """历史 `stage7.approve` 人工定稿入口；节点已退役，仅供测试迁移。
 
-    ⚠⚠ **它不带候选序号，而这与 stage6 的 `--pick N` 不同。**
-    本层一本书只有**一份**人物表，定稿是「给整份盖章」不是「从三条候选里选一条」；
-    但 actor/reason 与当前 decision-surface SHA-256 三项人工凭据全部必填。
-
-    ⚠ **还有 HARD 时拒绝定稿**（显式终态）——人被挡住，而不是被静默放行。
-    ⚠ **`_provenance` 一个字都不动**：不走 `llm_provenance`（0 成本的跑不许现造一份
-    声称模型产了它的账），**也不走 `rewrite_provenance`**——定稿没有改任何 LLM 产的字节。
-    ⚠ **不归档**：`stage7.approve` 不改任何判定，归档一份逐字段相同的拷贝只是噪声。
-    ⚠ 「什么时候定的稿」**不加字段**：落点是作业事件流，产物里再记一份就是第二个落点。
+    现役定稿由 ``_auto_seal_name_map``（origin='auto'）在 rename 正式成功后写入。
+    本函数仍接受 human actor/token，行为与退役前一致。
     """
     store = ArtifactStore(ctx)
     if not store.exists(REL):
@@ -2250,7 +2311,8 @@ def _approval_workpack_snapshot_uncached(
     up = _Upstreams(store.ctx, store)
     report = _report(
         store.ctx, store, _judge(store.ctx, store, subject, up), subject,
-        report_node='stage7.approve')
+        # stage7.approve 已退役；终审包判据分母固定在现役 rename 节点。
+        report_node='stage7.rename')
     replacement_hits: dict[str, int] = {}
     for face in [*subject.applied.chapters.values(), subject.applied.hook]:
         for old, count in face.counts.items():

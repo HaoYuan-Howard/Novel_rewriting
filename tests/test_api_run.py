@@ -150,14 +150,14 @@ def test_run_projects_current_review_states_and_only_current_role_recovery(clien
         # 历史 commander 行保留只读解码，但不得进入当前恢复动作面。
         row('stage7.rename', 'commander', 'book'),
         row('stage6.hook', 'executor', 'book')])
-    # 人工审批闸：next_handler=human，任何模型工作单元都不投影恢复动作。
+    # 阻断面：next_handler=human，任何模型工作单元都不投影恢复动作。
     frontier = RunResumeFrontierView(
-        state='blocked', node='stage7.approve', seq=list(NODES).index('stage7.approve') + 1,
-        label=NODES['stage7.approve'].label, resume_verdict='run', why='等人名表定稿',
-        waiting_on='stage7.approve', paid=False, writes='NameMap',
+        state='blocked', node='stage7.rename', seq=list(NODES).index('stage7.rename') + 1,
+        label=NODES['stage7.rename'].label, resume_verdict='run', why='等人名表恢复',
+        waiting_on='inbox:invalid', paid=False, writes='NameMap',
         next_handler='human', review_states=reviews,
-        verified_skipped_nodes=list(NODES)[:list(NODES).index('stage7.approve')],
-        verified_skipped_count=list(NODES).index('stage7.approve'))
+        verified_skipped_nodes=list(NODES)[:list(NODES).index('stage7.rename')],
+        verified_skipped_count=list(NODES).index('stage7.rename'))
     monkeypatch.setattr(operator, 'progress_read_snapshot',
                         lambda *_args: nullcontext((SimpleNamespace(stages=[]), frontier)))
     response = c.get('/api/novels/42/run')

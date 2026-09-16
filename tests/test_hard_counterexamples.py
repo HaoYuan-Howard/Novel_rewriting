@@ -53,8 +53,10 @@ def test_prepare_evidence_green_control_checks_all_facts_and_opening(tmp_path):
         'prepare_evidence_valid', 'prepare_semantic_review'}
     assert report.passed and report.badge == 'amber' and report.counts.skipped == 0
     semantic = next(line for line in report.rules if line.rule == 'prepare_semantic_review')
-    assert semantic.status == 'unver', '机械证据通过不能替代独立语义接受'
-    assert '未独立接受（pending）' in semantic.why
+    # 批次 B4：机械通过即 auto accept；UNVER 仍披露「语义质量未审」，
+    # 不得把 auto accept 升格为语义绿。
+    assert semantic.status == 'unver', 'auto accept 不能替代语义质量未审披露'
+    assert '已经独立接受' in semantic.why
     from novel.orchestrator import approvals
     assert not approvals.get(tmp_path, report.sid).gate['s6'], '节点两规则通过不代表最终文案已接受'
 

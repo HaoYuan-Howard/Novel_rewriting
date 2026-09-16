@@ -26,13 +26,13 @@ payload 继续使用正式 dict 形状；本批 NameMap v3 改为独立 Characte
 |---|---|---|
 | `surname_map` | `dict[str,str]` | 原姓到新姓。口径是**本书全部改名角色的姓**；【姓氏族群】先按完整字面排除纯关系/官职/位号，再以有据同姓且 ≥2 人聚类，只是其中必须共姓的子集，单人映射合法 |
 | `characters` | `NameDecision[]` | 每个 `char_id` 恰好一条的完整决定；逐角色 `aliases[].old` 必须与实际下发 alias 精确对应，不漏、不多、不重复、不串角色。⚠ `renamed=true` 时 `not_renamed_reason` **只准是 `null`**，且 visible canonical 或该角色实际收到的至少一条 alias 必须真实变化；描述 canonical 恒等、带姓 alias 真改合法，全恒等的账面假改名由 `rn_llm_shape` 阻断。`renamed=false` 时 canonical/alias 必须全恒等 |
-| `extra_subs` | `ExtraSub[]` | 补充映射。`origin` 分 `human`（人手写）与 `adopted`（`--adopt-residual` 批量采纳），**判定同权，分开只为审计** |
+| `extra_subs` | `ExtraSub[]` | 补充映射。`origin` 分 `human`（人手写）与 `adopted`（机械安全采纳或 `--adopt-residual` 重放），**判定同权，分开只为审计** |
 | `subs` | `dict[str,str]` | 代码展开后的完整替换表 |
 | `kept` | `str[]` | 必须保持原样的称呼 |
 | `applied` | `Applied` | 正文与文案各映射的命中次数 |
 | `residual` | `Residual[]` | 旧姓字残留候选 |
 | `baselines` | `dict[str,StemBaseline]` | 旧姓字覆盖率基线 |
-| `approved` | `ApprovedNameMap｜null` | 人工定稿状态 |
+| `approved` | `ApprovedNameMap｜null` | 定稿状态；现役写 `origin=auto`，`human` 仅存量 |
 | `book_txt` | `BookTxt｜null` | 已组装交付物的指纹与规模 |
 | `judged` | `dict[str,JudgedDraft]` | 实际消费的逐章成稿及投影指纹 |
 | `hook_sha1` | `fp10｜null` | 文案产物文件指纹 |
@@ -79,7 +79,7 @@ predicate 与 setting.era。人物 role / alias 归属及时代、关系变化�
 - `Residual` 必填 `stem`、`where`、`hit`、`context`、`confidence=high｜low`、
   `unit`、`suggest`。
 - `StemBaseline` 必填 `total`、`covered`、`residual`、`ratio`；`ratio` 可为 `null`。
-- `ApprovedNameMap` 必填 `origin=human`、自报 `actor`、非空 `reason` 与服务端解析得到的
+- `ApprovedNameMap` 现役写 `origin=auto`（rename producer 机械 seal）；`origin=human` 仅存量可读。必填自报 `actor`、非空 `reason` 与服务端解析得到的
   `subject_sha256`；新决定另存 `review_identity_sha256` 和刚读工作包的 `workpack_sha256`。
   调用方不手搬这些 SHA，只提交工作包给出的 `review_token`。长期适用性只绑定人实际看见的
   `surname_map`、`characters`、`extra_subs`、可见 finding 与显式审阅契约；代码、规则、
@@ -178,7 +178,7 @@ v1 骨架为：
 - 替换器按长度优先构造单一 alternation；`subs` 与 `kept` 同时参与，防止子串跨界。
 - 正文和已定稿文案使用同一替换器；书名只作为人工不可验证项报告。
 - 成书前要求每个输出章恰有一份正式成稿、没有 `.INVALID` 成稿，并且 Stage 6 文案已定稿。
-- 成书只能在当前 `name_map` 已人工批准、批准的 subject 仍精确等于当前决策面、provenance fresh、正文/文案消费指纹均未漂移时写入；写入后，其 sha1、字符数与章节数进入 `book_txt`。映射编辑、`--identity` 与重判都会清空旧 `book_txt`，并将旧 txt 移到内容寻址的 `_rounds/` 归档。映射编辑始终清空旧批准；`--identity` / 重判只有在重写 provenance **之前**证明旧模型消费投影仍 fresh、且决策面未变时才保留批准，输入 stale / unknown 时清空批准并保留零模型 `stage7.approve` 重批路。
+- 成书只能在当前 `name_map` 已定稿（`ApprovedNameMap`，批次 B4 后由 rename auto seal 写入 `origin=auto`）、批准的 subject 仍精确等于当前决策面、provenance fresh、正文/文案消费指纹均未漂移时写入；写入后，其 sha1、字符数与章节数进入 `book_txt`。映射编辑、`--identity` 与重判都会清空旧 `book_txt`，并将旧 txt 移到内容寻址的 `_rounds/` 归档。映射编辑始终清空旧批准；`--identity` / 重判只有在重写 provenance **之前**证明旧模型消费投影仍 fresh、且决策面未变时才保留批准，输入 stale / unknown 时清空批准并由 rename 再次机械 seal（`stage7.approve` 已退役）。
 - 预览/下载端点经 `novel/orchestrator/delivery.py::read_deliverable_book` 共用后端终验，复核当前审批、Stage2 generation-safe、阻塞待办、成书指纹/规模与确定性逐字重建，前后 surface 或代码漂移拒绝。自动收尾和 Stage7 页面消费同一结论；没有 Markdown 报告要求。
 
 ## 五、当前入口
@@ -193,7 +193,7 @@ v1 骨架为：
 | `--apply-edit <路径>` | 0 | 应用严格人工编辑输入并开新人工修订轮。路径相对**书目录**，也接受书目录内的绝对路径；目录外（含 `..` 穿越）是显式终态（`novel/paths.py::edit_rel`，stage2/4/6/7 共用） |
 | `--adopt-residual high` | 0 | 把当前高置信残留作为新决策输入重判；其他参数关闭式拒绝 |
 | `--revalidate --actor <id> --reason <text>` | 0 | 对 `.INVALID` 做强审计，记录 hash 差异并在合格后提升；不开新生成轮 |
-| `stage7.approve --actor <id> --reason <text> --review-token <s7r3_…>` | 0 | 人工定稿；opaque token 绑定刚读的公开 v3 工作包，内部决策主体、代码/规则与机械复检面由服务端重建；公开包不输出 `code_version` / `rules_fingerprint`，旧 v2 包只读 |
+| `stage7.rename` 正式成功后 auto seal | 0 | 批次 B4：机械校验通过后第二次写 `ApprovedNameMap(origin=auto)`；`stage7.approve` 已退役 |
 | `stage7.assemble` | 0 | 在前置条件满足时写成书 |
 | `--check-only` | 0 | 只读复检当前正式产物 |
 

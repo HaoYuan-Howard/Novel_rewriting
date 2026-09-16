@@ -22,7 +22,7 @@ from contracts.schema.api import (
     AnalyzeDraftEditRequest,
     CharactersEditRequest, GlobalEdit, GlobalEditPreview,
     DraftEditPreview, DraftEditPreviewRequest, DraftEditRequest,
-    HookApproveRequest, NameMapApproveRequest,
+    HookApproveRequest,
     ResidualAdoptionRequest,
 )
 from contracts.schema.orchestration import JobRecord
@@ -336,25 +336,6 @@ def _enqueue_hook_rebuild(base: str, sid: str, request: HookApproveRequest) -> N
             f'改选重建链异常（见 {novel_paths.rebuild_intents_path(base, sid).name}）：'
             f'{type(exc).__name__}: {exc}',
             RuntimeWarning, stacklevel=2)
-
-
-@router.post('/{sid}/stage7/approve', response_model=JobRecord)
-def approve_names(
-    request: NameMapApproveRequest,
-    sid: str = Depends(checked_sid),
-    base: str = Depends(get_base),
-) -> JobRecord:
-    '''人名表定稿：actor/reason + opaque workpack token 乐观锁。
-
-    后端会在任何归档/写盘前复核 token，并拒绝仍有 HARD 的人物表；
-    公开 s7 现场读取正式 typed 定稿的 current 证明，不另写服务检查单。
-    '''
-    record = jobs.run(
-        base, 'stage7.approve', sid,
-        ['--actor', request.actor,
-         '--reason', request.reason,
-         '--review-token', request.review_token])
-    return record
 
 
 @router.post('/{sid}/stage7/adopt-residual', response_model=JobRecord)

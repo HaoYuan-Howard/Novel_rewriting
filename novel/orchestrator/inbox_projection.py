@@ -227,12 +227,13 @@ def inbox_from_snapshot(
         novel_dir, 'stage6.prepare', code)))
     if prepare_state.state not in {'missing', 'accepted'}:
         items.append(InboxItem(
-            kind='approval' if prepare_state.state == 'pending' else 'verification',
+            kind='verification',
             stage='stage6', chapter=None, rule='stage6.prepare',
-            what=('独立文案准备待补提交：' if prepare_state.pending_commit else '独立文案准备待审阅：') + prepare_state.reason,
+            what=('独立文案准备待补提交：' if prepare_state.pending_commit else '独立文案准备待自动接受：') + prepare_state.reason,
             how=('运行 stage6.prepare --recover-edit 免费补齐原决定'
                  if prepare_state.pending_commit else
-                 '读取 stage6.prepare --emit-review-workpack，对照正文和原钩子后提交独立 typed 决定或编辑；不替代最终文案批准')))
+                 '运行 stage6.prepare --revalidate（0 成本）触发机械自动接受；'
+                 '材料已变则重跑 stage6.prepare')))
     items += _stage2_projection_recovery_items(ov)
     items += _trim_verification_items(novel_dir, code, audits=trim_audits)
     stage6_workpack = _stage6_workpack_or_none(novel_dir, code)
@@ -582,7 +583,7 @@ def _stage7_workpack_or_none(
     """只建一次与真正 approve 同 node/code 的 Stage7 fresh 工作包。"""
     from novel.stages.stage7 import rename
 
-    store = ArtifactStore(readonly_ctx(novel_dir, 'stage7.approve', code))
+    store = ArtifactStore(readonly_ctx(novel_dir, 'stage7.rename', code))
     if not store.exists(STAGE7_NAME_MAP):
         return None
     try:
@@ -657,14 +658,10 @@ def _approval_items(
     if (stage7_workpack is not None
             and stage7_workpack.disposition != 'already_current'):
         out.append(InboxItem(
-            kind='approval', stage='stage7', chapter=None, rule='stage7.approve',
-            what=('人名映射当前代码/规则/人物证据工作包还没有有效人工定稿——'
-                  '定稿是给整份盖章'),
-            how=('核对同一工作包的新旧对照、实际命中、明确保留与残留上下文后跑 '
-                 '`stage7.approve --actor <自报身份> --reason <理由> '
-                 f'--review-token {stage7_workpack.review_token}`；'
-                 '人物决定或可见证据变化会拒绝旧决定；仅 execution epoch '
-                 '代码漂移不会要求重新签字')))
+            kind='verification', stage='stage7', chapter=None, rule='stage7.rename',
+            what=('人名映射尚未机械定稿——rename producer 在校验通过后自动 seal'),
+            how=('运行 stage7.rename --recheck（0 成本）或付费重建；'
+                 '无 HARD 时 producer 会以 system:stage7-auto 自动定稿')))
     return out
 
 

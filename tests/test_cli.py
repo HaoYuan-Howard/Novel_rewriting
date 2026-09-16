@@ -121,36 +121,18 @@ def test_stage5_review_cli_uses_current_minimal_review_shape(monkeypatch, capsys
     assert '全书验收：1 章' in output and '当前判据报告' in output
 
 
-def test_stage7_approve_cli_forwards_the_opaque_review_token(monkeypatch):
-    """预览列出的 opaque token 必须真的穿过 CLI。"""
+def test_stage7_approve_cli_is_retired(monkeypatch):
+    """批次 B4：stage7.approve 节点已退役；CLI 明确拒绝并指向 rename auto seal。"""
     from novel.cli import main as M
-    from novel.stages.stage7 import rename
+    from novel.errors import TerminalState
 
-    captured = {}
-    report = SimpleNamespace(passed=True)
-
-    def approve(actual_ctx, **kwargs):
-        captured.update(ctx=actual_ctx, **kwargs)
-        return object(), report
-
-    monkeypatch.setattr(rename, 'run_approve', approve)
-    monkeypatch.setattr(M, 'render', lambda actual: 'REPORT' if actual is report else '')
     ctx = SimpleNamespace(node='stage7.approve')
     flags = [
         '--actor', 'reviewer-a', '--reason', '逐项核验完成',
         '--review-token', 's7r3_' + 'b' * 64,
     ]
-
-    assert M._run_stage7(ctx, flags) == X.OK
-    assert captured == {
-        'ctx': ctx,
-        'actor': 'reviewer-a',
-        'reason': '逐项核验完成',
-        'review_token': 's7r3_' + 'b' * 64,
-    }
-
-    with pytest.raises(TerminalState, match='--review-token'):
-        M._run_stage7(ctx, flags[:-2])
+    with pytest.raises(TerminalState, match='stage7.approve 已退役'):
+        M._run_stage7(ctx, flags)
 
 
 def test_stage6_and_stage7_rebind_flags_dispatch_only_to_zero_wire_recovery(

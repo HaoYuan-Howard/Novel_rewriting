@@ -479,8 +479,9 @@ def test_cli_json_keeps_blocked_and_complete_at_exit_zero(
     action = None
     if state == 'blocked':
         action = OperatorAction(
-            node='stage7.approve', flags=[], resume_verdict='run', why='等人批准',
-            waiting_on='stage7.approve', paid=False,
+            node='stage7.rename', flags=['--recheck'], resume_verdict='run',
+            why='人名表需 0 成本重验后 auto seal',
+            waiting_on='stage7.rename', paid=False,
             writes='stage7/name_map.json', action_sha256='c' * 64)
     result = OperatorNext(
         base=str(tmp_path), sid='book-1', code_version='code-v1',

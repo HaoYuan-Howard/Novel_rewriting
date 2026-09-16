@@ -2,11 +2,9 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '@/api/endpoints'
-import { ApiError } from '@/api/errors'
 import { qk } from '@/api/queryKeys'
 import { missingPrepareState } from '@/test/prepare'
 import type { PrepareWorkpack, PrepareState } from '@/types/prepare'
-import type { Job } from '@/types/jobs'
 import { PreparePanel } from './PreparePanel'
 
 const host = vi.hoisted(() => ({
@@ -36,7 +34,7 @@ function pack(): PrepareWorkpack {
     sid: SID, title: '准备测试', review_contract: 'stage6-prepare-review-v1',
     main_text: [{ chapter_ordinal: 1, text: '她收拾行李，搬离旧宅。' }], hook_copy: { text: '三年后，她终于走出旧宅。' },
     state: {
-      state: 'pending', reason: '尚无准备接受', subject_sha256: hash('a'), review_token: 's6p1_' + hash('b'),
+      state: 'pending', reason: '等待机械自动接受', subject_sha256: hash('a'), review_token: 's6p1_' + hash('b'),
       review: null, pending_commit: false,
       prepare: { main_text_sha256: hash('c'), hook_copy_sha256: hash('d'),
         _provenance: { root_clean_sha1: '0'.repeat(40) },
@@ -62,11 +60,6 @@ function renderPanel() {
   return { ...result, qc }
 }
 
-function job(): Job {
-  return { id: 'prepare-edit', sid: SID, kind: 'stage6.prepare', label: '准备修订', ordinal: null,
-    argv: 'opaque backend command', paid: false, state: 'ok', started: 1, finished: 2 }
-}
-
 beforeEach(() => {
   vi.restoreAllMocks()
   host.ask.mockClear()
@@ -78,15 +71,17 @@ beforeEach(() => {
 })
 
 describe('独立文案准备', () => {
-  it('无 Hook 时仍区分三类支持与未决开篇，不默认接受', async () => {
+  it('只读展示三类支持与未决开篇，不提供人工接受面', async () => {
     renderPanel()
-    expect(await screen.findByText('待接受')).toBeInTheDocument()
+    expect(await screen.findByText('待自动接受')).toBeInTheDocument()
     expect(screen.getByText('f1 · 正文支持')).toBeInTheDocument()
     expect(screen.getByText('f2 · 原钩子独立支持')).toBeInTheDocument()
     expect(screen.getByText('f3 · 未决事实')).toBeInTheDocument()
     expect(screen.getByText(/范围未决：需要核对/)).toBeInTheDocument()
-    expect(await screen.findByRole('button', { name: '提交准备决定（不调用模型）' })).toBeDisabled()
-    expect(api.getStage6PrepareWorkpack).toHaveBeenCalledWith(SID)
+    expect(screen.getByText(/机械校验通过后由系统自动接受/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /提交准备决定/ })).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('准备决定')).not.toBeInTheDocument()
+    expect(api.getStage6PrepareWorkpack).not.toHaveBeenCalled()
     expect(host.ask).not.toHaveBeenCalled()
   })
 
@@ -100,63 +95,34 @@ describe('独立文案准备', () => {
     expect(screen.queryByLabelText('准备决定')).not.toBeInTheDocument()
   })
 
-  it('只提交同包 opaque token 与显式决定，HTTP 成功后仍显示后端待接受', async () => {
-    const review = vi.spyOn(api, 'reviewStage6Prepare').mockResolvedValue(job())
+  it('已接受状态只读展示最近决定，不提供编辑写面', async () => {
+    const status: PrepareState = {
+      ...pack().state,
+      state: 'accepted',
+      reason: 'system:stage6-prepare-auto 已接受',
+      review: {
+        actor: 'system:stage6-prepare-auto', reason: '机械通过自动接受',
+        source_sha256: hash('a'), request_sha256: hash('e'), decision: 'accept',
+        at: '2026-09-15T00:00:00Z',
+      },
+    }
+    vi.mocked(api.getStage6Prepare).mockResolvedValue({ sid: SID, title: '准备测试', status })
     renderPanel()
-    fireEvent.change(await screen.findByLabelText('准备审阅理由'), { target: { value: '已逐条核对原文' } })
-    fireEvent.change(screen.getByLabelText('准备决定'), { target: { value: 'accept' } })
-    fireEvent.click(screen.getByRole('button', { name: '提交准备决定（不调用模型）' }))
-    await waitFor(() => expect(review).toHaveBeenCalledWith(SID, {
-      review_token: pack().state.review_token, actor: 'human-ui', reason: '已逐条核对原文', decision: 'accept', edit: null,
-    }))
-    await waitFor(() => expect(api.getStage6Prepare).toHaveBeenCalledTimes(2))
-    expect(screen.getByText('待接受')).toBeInTheDocument()
-    expect(screen.queryByText('准备已接受')).not.toBeInTheDocument()
-    expect(host.ask).not.toHaveBeenCalled()
+    expect(await screen.findByText('准备已接受')).toBeInTheDocument()
+    expect(screen.getAllByText(/system:stage6-prepare-auto/).length).toBeGreaterThan(0)
+    expect(screen.queryByRole('button', { name: /修订事实支持/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /写回准备修订/ })).not.toBeInTheDocument()
   })
 
-  it('预检后改字会禁用写回，再预检原样提交快照且刷新材料', async () => {
-    const preview = vi.spyOn(api, 'previewStage6PrepareEdit').mockResolvedValue({ would_apply: true, findings: [], source_blurb: pack().state.prepare!.source_blurb })
-    const apply = vi.spyOn(api, 'applyStage6PrepareEdit').mockResolvedValue(job())
-    renderPanel()
-    fireEvent.change(await screen.findByLabelText('准备审阅理由'), { target: { value: '订正主张表述' } })
-    fireEvent.click(screen.getByRole('button', { name: '修订事实支持或开篇范围' }))
-    const write = screen.getByRole('button', { name: '写回准备修订（不调用模型）' })
-    expect(write).toBeDisabled()
-    fireEvent.click(screen.getByRole('button', { name: '免费预检准备修订' }))
-    await waitFor(() => expect(write).toBeEnabled())
-    fireEvent.change(screen.getByLabelText('准备主张 f1'), { target: { value: '她独自搬离旧宅' } })
-    expect(write).toBeDisabled()
-    expect(screen.getByText('内容已改变，请重新预检。')).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: '免费预检准备修订' }))
-    await waitFor(() => expect(write).toBeEnabled())
-    fireEvent.click(write)
-    await waitFor(() => expect(apply).toHaveBeenCalledWith(SID, preview.mock.calls[1][1]))
-    await waitFor(() => expect(api.getStage6Prepare).toHaveBeenCalledTimes(2))
-  })
-
-  it('过期 token 的 409 保留后端原因与恢复提示，不显示接受', async () => {
-    vi.spyOn(api, 'reviewStage6Prepare').mockRejectedValue(new ApiError('server', '/prepare/review', {
-      status: 409, message: '准备材料或决定已变化', hint: '重新读取当前工作包', backendKind: 'SourceConflict',
-    }))
-    renderPanel()
-    fireEvent.change(await screen.findByLabelText('准备审阅理由'), { target: { value: '核对旧材料' } })
-    fireEvent.change(screen.getByLabelText('准备决定'), { target: { value: 'accept' } })
-    fireEvent.click(screen.getByRole('button', { name: '提交准备决定（不调用模型）' }))
-    expect(await screen.findByText('准备材料或决定已变化')).toBeInTheDocument()
-    expect(screen.getByText('重新读取当前工作包')).toBeInTheDocument()
-    expect(screen.queryByText('准备已接受')).not.toBeInTheDocument()
-  })
-
-  it('提交待补尾时隐藏缓存旧表单，仅消费后端给出的免费恢复动作', async () => {
+  it('提交待补尾时仅消费后端给出的免费恢复动作', async () => {
     const { qc } = renderPanel()
-    await screen.findByLabelText('准备决定')
+    await screen.findByText('待自动接受')
     const status: PrepareState = { ...pack().state, pending_commit: true, reason: '等待原提交补尾' }
     vi.mocked(api.getStage6Prepare).mockResolvedValue({ sid: SID, title: '准备测试', status })
     const action = { kind: 'stage6.prepare', label: '恢复准备修订', extra: ['--recover-edit'] }
     host.doc.spawns.s5 = [action]
     await qc.invalidateQueries({ queryKey: qk.stage6Prepare(SID), exact: true })
-    await waitFor(() => expect(screen.queryByLabelText('准备决定')).not.toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText(/已有保存的修订等待恢复/)).toBeInTheDocument())
     fireEvent.click(screen.getByRole('button', { name: /恢复准备修订/ }))
     expect(host.ask).toHaveBeenCalledWith({ ...action, sid: SID, ordinal: null, required_inputs: undefined })
   })
