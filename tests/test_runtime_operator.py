@@ -17,7 +17,7 @@ from contracts.schema.api import (
     ExecutionPermit, InboxView, OperatorAction, OperatorNext,
 )
 from contracts.schema.orchestration import (
-    AgentExecutorBackend, AgentProfile, NovelOverview, OverviewSummary,
+    LegacyExecutorBackend, LegacyLlmProfile, NovelOverview, OverviewSummary,
     PipelineAgentProfiles,
 )
 from novel.orchestrator.operator import canonical_sha256
@@ -77,11 +77,11 @@ def test_run_step_closes_execution_with_crash_when_node_spawn_raises(
 
 
 def _executor_profiles() -> PipelineAgentProfiles:
-    """schema v3 executor-only：不再有 commander 字段。"""
+    """schema v3 executor-only；C2a 起执行面 legacy-only。"""
     return PipelineAgentProfiles(
-        executor_default=AgentExecutorBackend(profile=AgentProfile(
-            driver='codex', model='gpt-5.6-sol',
-            reasoning_effort='high', execution_mode='standard')),
+        executor_default=LegacyExecutorBackend(profile=LegacyLlmProfile(
+            provider='deepseek', model='deepseek-v4-pro',
+            reasoning_effort='high', thinking_mode='on')),
         executor_overrides={},
     )
 

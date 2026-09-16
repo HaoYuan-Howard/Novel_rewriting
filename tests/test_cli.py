@@ -709,41 +709,19 @@ def test_stage4_replan_casts_infeasible_scope_and_refreshes_only_a(
     assert cast == [(tmp_path, '123')]
 
 
-def test_profiled_stage4_replan_passes_the_resolved_scope_to_agent(
+def test_dispatch_refuses_legacy_executor_profile_projection(
         monkeypatch, tmp_path):
-    from novel.orchestrator import node_agents
+    """C2b：调度不再调用 build_node_agent——旧 executor_profile 投影在派发层
+    即退役拒绝（scope 铸造与 producer 消费由 legacy 路径等价测试覆盖）。"""
     from novel.cli import main as M
-    from novel.orchestrator import approvals
+    from novel.errors import RetiredExecutorBackend
 
-    profile = AgentProfile(
-        driver='codex', model='gpt-5.6-sol', reasoning_effort='high')
     ctx = SimpleNamespace(
         node='stage4.design', cache=object(), novel_dir=tmp_path / 'book',
-        sid='123', executor_profile=profile)
-    scope = SimpleNamespace(strategy_replan=True, decision_sha256='d' * 64)
-    captured = []
-
-    monkeypatch.setattr(
-        approvals, 'cast_infeasible_replan_scope',
-        lambda base, sid: scope)
-    monkeypatch.setattr(
-        M.N, 'resolve_executor_profile',
-        lambda _node, _flags, got: got)
-
-    class Agent:
-        def run(self):
-            return SimpleNamespace(
-                artifact=object(), report=None, passed=True, turns=1)
-
-    monkeypatch.setattr(
-        node_agents, 'build_node_agent',
-        lambda _ctx, **kwargs: captured.append(kwargs) or Agent())
-
-    assert M._dispatch('stage4.design', ctx, ['--replan']) == X.OK
-    assert captured == [{
-        'concurrency': DEFAULT_CONCURRENCY,
-        'repair_scope': scope,
-    }]
+        sid='123', executor_profile=AgentProfile(
+            driver='codex', model='gpt-5.6-sol', reasoning_effort='high'))
+    with pytest.raises(RetiredExecutorBackend):
+        M._dispatch('stage4.design', ctx, ['--replan'])
 
 
 def test_retired_design_credential_flags_are_rejected_before_dispatch(
@@ -1467,148 +1445,56 @@ def node_agents_module():
     return node_agents
 
 
-def test_profiled_dispatch_renders_report_and_maps_passed_false_to_exit_one(
+def test_dispatch_refuses_agent_profile_before_node_agent(
         monkeypatch, capsys):
-    """agent 的 artifact/report 是两轴；红报告已落盘，必须显示且 exit 1。"""
-    from contracts.schema.common import Finding
-    from contracts.schema.report import (
-        CheckReport, ProvenanceSection, RuleLine, StatusCounts,
-    )
-    from novel.orchestrator import node_agents
+    """C2b：调度唯一入口是直连 stage runner；agent profile 投影先被退役拒绝。
+
+    历史上该测试保护「agent 的 artifact/report 两轴与 exit 1 映射」；该映射
+    随调度唯一化消亡，红报告/退出码职责由各 legacy stage runner 测试承担。
+    """
     from novel.cli import main as M
-    from novel.llm import stage5_runs
-
-    finding = Finding(
-        rule='SYNTHETIC-HARD', sev='hard', item='合成阻断项',
-        detail='用于验证 CLI agent report seam。', evidence=['ch1'],
-        evidence_key='ch1', owner='stage5', actionable=False,
-        identity_hit=False, converge='new', unresolved_rounds=0,
-    )
-    line = RuleLine(
-        rule=finding.rule, sev='hard', status='hit', item=finding.item,
-        requirement='合成要求', findings=[finding],
-    )
-    report = CheckReport(
-        sid='book-1', node='stage5.write', stage='stage5',
-        provenance=ProvenanceSection(
-            freshness='unknown', reason='no_inputs'),
-        rules=[line], badge='fail', passed=False,
-        counts=StatusCounts.of([line]),
-    )
-    rendered = []
-    monkeypatch.setattr(
-        M, 'render', lambda actual: rendered.append(actual) or 'SYNTHETIC REPORT')
-
-    class Agent:
-        def run(self):
-            return SimpleNamespace(
-                artifact=object(), report=report, passed=False, turns=3)
-
-    built = []
-
-    def build_agent(_ctx, **kwargs):
-        built.append(kwargs)
-        return Agent()
-
-    monkeypatch.setattr(node_agents, 'build_node_agent', build_agent)
-    monkeypatch.setattr(
-        stage5_runs, 'refuse_foreign_prepared_before_wire',
-        lambda _ctx, _chapters: None,
-    )
-    ctx = SimpleNamespace(node='stage5.write', executor_profile=AgentProfile(
-        driver='codex', model='gpt-5.6-sol', reasoning_effort='high'))
-
-    rc = M._dispatch('stage5.write', ctx, [])
-
-    assert rc == X.CHECK_FAILED and X.landed(rc)
-    assert built == [{
-        'concurrency': DEFAULT_CONCURRENCY,
-        'chapters': None, 'revise': False, 'reviewer_rewrite': None}]
-    assert rendered == [report]
-    out = capsys.readouterr().out
-    assert 'SYNTHETIC REPORT' in out
-    assert '落盘负结论' in out and '3 turn' in out
-
-
-def test_profiled_stage4_infeasible_is_landed_exit_one(
-        tmp_path, monkeypatch, capsys):
-    """Stage4B typed negative 不是假报告，也不是没跑成的 exit 2。"""
-    from contracts.schema.stage4 import (
-        BindingConcern, BindingInfeasibilityWitness, EvidenceBinding,
-    )
+    from novel.errors import RetiredExecutorBackend
     from novel.orchestrator import node_agents
+
+    monkeypatch.setattr(
+        node_agents, 'build_node_agent',
+        lambda _ctx, **_kwargs: pytest.fail('C2b 后调度不得再构造 node agent'))
+    ctx = SimpleNamespace(
+        node='stage2.global', novel_dir=None, sid='123', executor_profile=AgentProfile(
+            driver='codex', model='gpt-5.6-sol', reasoning_effort='high'))
+    with pytest.raises(RetiredExecutorBackend):
+        M._dispatch('stage2.global', ctx, [])
+
+
+def test_dispatch_refuses_agent_profile_for_stage4_plan(
+        monkeypatch, tmp_path):
+    """C2b：Stage4B typed infeasible 的落盘与 exit 1 由 legacy producer 承接
+    （plan.run_plan 的 response.status=='infeasible' 分支）；agent 派发面退役。"""
     from novel.cli import main as M
-    from novel.orchestrator import approvals
+    from novel.errors import RetiredExecutorBackend
 
-    binding = EvidenceBinding.model_construct(
-        status='infeasible', candidate_sha256='a' * 64,
-        chapters=None,
-        binding_concerns=[BindingConcern(
-            constraint_code='future_leak', chapter_ordinal=2,
-            scenes=['c02s01'], reason='候选只能依赖未来证据。',
-            closed_refs=['c02s01'])],
-        infeasibility_proof=[BindingInfeasibilityWitness(
-            chapter_ordinal=2, scenes=['c02s01'],
-            constraint_code='missing_chapter_catalog',
-            closed_refs=['c02s01'], proof_basis='b' * 64)])
-
-    class Agent:
-        def run(self):
-            # 即使 producer result 的通用 passed 默认真，typed negative 仍由 CLI
-            # 按 artifact 自身的权威状态收成 landed-red。
-            return SimpleNamespace(
-                artifact=binding, report=None, passed=True, turns=1)
-
-    monkeypatch.setattr(
-        node_agents, 'build_node_agent', lambda _ctx, **_kwargs: Agent())
-    monkeypatch.setattr(
-        M, 'render', lambda _report: pytest.fail(
-            'Stage4 infeasible 不得伪造 CheckReport'))
     ctx = SimpleNamespace(
         node='stage4.plan', novel_dir=tmp_path / 'book', sid='123',
         executor_profile=AgentProfile(
             driver='codex', model='gpt-5.6-sol', reasoning_effort='high'))
-
-    rc = M._dispatch('stage4.plan', ctx, [])
-
-    assert rc == X.CHECK_FAILED and X.landed(rc)
-    out = capsys.readouterr().out
-    assert 'typed infeasible' in out and 'missing_chapter_catalog' in out
-    assert '预算内自动重采 Stage4A' in out
+    with pytest.raises(RetiredExecutorBackend):
+        M._dispatch('stage4.plan', ctx, [])
 
 
-@pytest.mark.parametrize('flags', [
-    ['--check-only'],
-    ['--revalidate', '--actor', 'reviewer', '--reason', '同轮复核'],
-    ['--apply-edit', 'plan.json'],
-    ['--dry-run'],
-])
-def test_profiled_stage4_zero_cost_recovery_never_requires_design_review(
-        tmp_path, monkeypatch, flags):
-    """即使未来接入 executor，旧 Plan 的免费恢复也不能追溯要求 A 人审。"""
-    from novel.orchestrator import node_agents
+def test_dispatch_refuses_agent_profile_for_zero_cost_recovery(
+        monkeypatch, tmp_path):
+    """C2b：免费恢复不要求 A 人审的职责由 legacy 直连派发天然满足
+    （不经审阅闸）；agent 派发面退役,不再为其保留例外语义。"""
     from novel.cli import main as M
-    from novel.orchestrator import approvals
+    from novel.errors import RetiredExecutorBackend
 
-    profile = AgentProfile(
-        driver='codex', model='gpt-5.6-sol', reasoning_effort='high')
     ctx = SimpleNamespace(
         node='stage4.plan', novel_dir=tmp_path / 'book', sid='123',
-        executor_profile=profile)
-
-    monkeypatch.setattr(
-        M.N, 'resolve_executor_profile',
-        lambda _node, _flags, got: got)
-
-    class Agent:
-        def run(self):
-            return SimpleNamespace(
-                artifact=None, report=None, passed=True, turns=0)
-
-    monkeypatch.setattr(
-        node_agents, 'build_node_agent', lambda _ctx, **_kwargs: Agent())
-
-    assert M._dispatch('stage4.plan', ctx, flags) == X.OK
+        executor_profile=AgentProfile(
+            driver='codex', model='gpt-5.6-sol', reasoning_effort='high'))
+    for flags in (['--check-only'], ['--revalidate', '--actor', 'reviewer', '--reason', '同轮复核']):
+        with pytest.raises(RetiredExecutorBackend):
+            M._dispatch('stage4.plan', ctx, flags)
 
 
 def test_profiled_gate_blocked_remains_exit_two_without_a_stack(

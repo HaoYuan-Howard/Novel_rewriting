@@ -629,12 +629,12 @@ def test_executor_backend_is_identical_in_preview_and_start(
 
 def test_profiled_preview_can_show_denied_egress_but_post_cannot_start(
         client, base):
+    # C2a/C2b：执行面 legacy-only——egress 拒绝职责改由 legacy backend 承担。
     request = {
         'sid': '42', 'node': 'stage2.global', 'flags': [],
-        'executor_profile': {
-            'driver': 'codex', 'model': 'gpt-5.6-sol',
-            'reasoning_effort': 'high',
-        },
+        'executor_backend': {'kind': 'legacy', 'profile': {
+            'provider': 'deepseek', 'model': 'deepseek-v4-pro',
+            'reasoning_effort': 'high', 'thinking_mode': 'on'}},
     }
 
     preview = client.post('/api/jobs/preview', json=request)

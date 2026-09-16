@@ -407,81 +407,20 @@ def runnable_stages() -> frozenset[str]:
 
 def _dispatch(node: str, ctx: RunContext, flags: list[str]) -> int:
     """跑一个当前节点；`NODES` 与 `_runners` 的覆盖关系由契约测试钉住。"""
-    # discriminator 是不可降级的执行决定：只有 ``kind=agent`` 进入短生命周期
-    # node agent；``kind=legacy`` 由 stage runner 里的 provider factory 构造 API client。
+    # 单 Executor 架构（C2a/C2b）：执行面唯一——``kind=legacy`` 由 stage runner
+    # 里的 provider factory 构造直连 API client；agent backend 在 CLI wire 解析层
+    # 已被 retired_formats 拒绝，不存在第二套派发。
     backend = getattr(ctx, 'executor_backend', None)
     if backend is None:
         # 只兼容升级前的 Python RunContext/fake；CLI wire 一旦解析出 backend 就会
         # 走上面的显式字段。这里不能把 profile=None 解释成 legacy。
         old_profile = getattr(ctx, 'executor_profile', None)
         if old_profile is not None:
-            backend = AgentExecutorBackend(profile=old_profile)
+            from novel.orchestrator.retired_formats import raise_retired_agent_backend
+            raise_retired_agent_backend('RunContext 的旧 executor_profile 投影')
     if isinstance(backend, AgentExecutorBackend):
-        resolved = N.resolve_executor_backend(node, flags, backend)
-        assert isinstance(resolved, AgentExecutorBackend)
-        ctx.executor_backend = resolved
-        ctx.executor_profile = resolved.profile
-        from novel.orchestrator.node_agents import build_node_agent
-
-        kwargs: dict[str, object] = {}
-        if node in {'stage2.blueprint', 'stage4.design', 'stage4.plan', 'stage5.write'}:
-            # 逐章 agent pool 必须消费与 legacy LLM 客户端同一份并发配置；
-            # 各节点仍可在自己的 pool 内再施加更低的稳定性上限。
-            from novel.config import load_config
-            kwargs['concurrency'] = load_config().concurrency_for(node)
-        if node == 'stage4.design' and '--replan' in N.flag_tokens(flags):
-            # stage4 人工闸退役（2026-09-15 全自动裁决）：策略重采不再消费
-            # 人工 typed 决定；唯一入口是 B 的 typed infeasible 终态铸成的
-            # 机器 scope。这条命令仍只产 A。
-            from novel.orchestrator import approvals
-            kwargs['repair_scope'] = approvals.cast_infeasible_replan_scope(
-                ctx.novel_dir.parent, ctx.sid)
-            from novel.llm.cache import CachePolicy
-            ctx.cache = CachePolicy.refresh()
-        if node == 'stage5.write':
-            # Stage5 的两个付费入口与定向章集都是业务身份的一部分；通用
-            # executor 分流发生在 `_run_stage5` 之前，必须在这里显式交给
-            # Stage5WriteAgent，不能把 flag 吞掉后误跑默认全书写作。
-            # foreign prepared 又必须比 ``build_node_agent``（driver factory）更早
-            # 拒绝；legacy `_run_stage5` 另调同一 guard，两个真实入口都不留缝。
-            from novel.llm import stage5_runs
-            reviewer_rewrite_rel = _valued(flags, '--reviewer-rewrite')
-            if reviewer_rewrite_rel is not None:
-                _require_stage5_reviewer_rewrite_ready(
-                    ctx, reviewer_rewrite_rel)
-            else:
-                stage5_runs.refuse_foreign_prepared_before_wire(
-                    ctx, _valued(flags, '--chapters'))
-            kwargs.update({
-                'chapters': _valued(flags, '--chapters'),
-                'revise': '--revise' in N.flag_tokens(flags),
-                'reviewer_rewrite': _valued(flags, '--reviewer-rewrite'),
-            })
-        result = build_node_agent(ctx, **kwargs).run()
-        artifact = result.artifact
-        report = result.report
-        from contracts.schema.report import CheckReport
-        from contracts.schema.stage4 import EvidenceBinding
-        if isinstance(report, CheckReport):
-            print(render(report))
-        passed = result.passed
-        if isinstance(artifact, EvidenceBinding):
-            if artifact.status != 'infeasible':
-                raise RefusedByStructure(
-                    'stage4.plan agent 返回了未编译的 bound EvidenceBinding')
-            passed = False
-            print('  ✗ Stage4B 已落盘 typed infeasible 证据结论，'
-                  '未生成或覆盖正式计划')
-            for witness in artifact.infeasibility_proof or []:
-                print(f'    ch{witness.chapter_ordinal} · {witness.constraint_code} · '
-                      f'{len(witness.scenes)} scene / '
-                      f'{len(witness.closed_refs)} closed ref')
-            print('  → 只有代码铸造的 typed proof 能到达本终态；'
-                  '下一轮队列将预算内自动重采 Stage4A（--replan）')
-        print(
-            f'  {"✓" if passed else "✗"} {node} executor agent 已提交并终验'
-            f'{"正式产物" if passed else "落盘负结论"}（{result.turns} turn）')
-        return X.OK if passed else X.CHECK_FAILED
+        from novel.orchestrator.retired_formats import raise_retired_agent_backend
+        raise_retired_agent_backend(f'节点 {node} 的 CLI 派发')
     return _runners()[NODES[node].stage](ctx, flags)
 
 
