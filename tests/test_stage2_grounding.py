@@ -178,3 +178,29 @@ def test_compile_refuses_candidate_outside_the_actual_source_table(pair, charact
     raw['setting']['era_evidence_refs'] = ['e999999']
     with pytest.raises(ValueError, match='本次下发闭集'):
         grounding.compile_response(KnowledgeResponse.model_validate(raw), prepared.table, registry)
+
+
+def test_materialize_world_rule_extract_builds_single_version_with_domain_defaults():
+    from contracts.schema.knowledge import KnowledgeExtract, WorldRuleExtract
+
+    extract = KnowledgeExtract.model_validate({
+        'setting': {'era': None, 'social_context': None,
+                    'era_evidence_refs': [], 'social_context_evidence_refs': []},
+        'world_rules': [WorldRuleExtract.model_validate({
+            'rule_ref': 'w1', 'kind': 'social_norm',
+            'desc': '传统乡村社会视无子为绝户',
+            'revealed_from': 3, 'evidence_refs': ['e000001'],
+        }).model_dump(mode='json')],
+        'relations': [], 'arc_secrets': [],
+    })
+    draft = grounding.materialize_knowledge_extract(extract)
+    rule = draft.world_rules[0]
+    assert rule.kind == 'social_norm'
+    assert len(rule.versions) == 1
+    version = rule.versions[0]
+    assert version.version_ref == 'v1'
+    assert version.desc == '传统乡村社会视无子为绝户'
+    assert version.effective_from == grounding.BACKGROUND_RULE_EFFECTIVE_FROM
+    assert version.effective_until is None
+    assert version.revealed_from == 3
+    assert version.evidence_refs == ['e000001']

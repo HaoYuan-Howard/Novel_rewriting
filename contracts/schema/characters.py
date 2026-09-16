@@ -30,6 +30,14 @@ class RegisteredCharacter(StrictModel, Generic[EvidenceT]):
     role_evidence_refs: list[EvidenceT] = Field(min_length=1)
     name_distinctiveness: Literal[NAME_DISTINCTIVENESS]
 
+    @field_validator('name_distinctiveness', mode='before')
+    @classmethod
+    def _normalize_name_distinctiveness(cls, value):
+        # 模型常写 low；闭集只有 high/medium/common，低辨识度同义 common。
+        if value == 'low':
+            return 'common'
+        return value
+
     @model_validator(mode='after')
     def _unique_names(self):
         names = [row.surface for row in self.aliases]

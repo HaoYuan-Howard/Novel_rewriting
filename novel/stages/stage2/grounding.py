@@ -8,7 +8,8 @@ from typing import Any, Iterable, Mapping
 from contracts.artifacts import STAGE2_CHARACTERS, STAGE2_GLOBAL_GROUNDING
 from contracts.schema.characters import CharacterRegistry
 from contracts.schema.knowledge import (
-    CharacterKnowledgeReference, KnowledgeDraft, KnowledgeGrounding, GlobalProvenance,
+    CharacterKnowledgeReference, KnowledgeDraft, KnowledgeExtract, KnowledgeGrounding,
+    GlobalProvenance, WorldRuleDraft, WorldRuleExtract, WorldRuleVersionDraft,
 )
 from novel.consumption import character_knowledge_reference
 from novel.errors import ProvenanceRefused, UpstreamStale
@@ -124,6 +125,36 @@ def _allocate(rows, field: str, prefix: str, frozen: Mapping[str, str], namespac
         result[key] = bound
         used.add(bound)
     return result
+
+
+#: 背景规则在故事开篇前已成立时的领域默认生效章（Analyze Extract→Draft）。
+BACKGROUND_RULE_EFFECTIVE_FROM = 1
+
+
+def materialize_world_rule_extract(row: WorldRuleExtract) -> WorldRuleDraft:
+    """语义 Extract → 持久化 Draft：单版本壳、生效章按领域约定默认第 1 章。"""
+    return WorldRuleDraft(
+        rule_ref=row.rule_ref,
+        kind=row.kind,
+        versions=[WorldRuleVersionDraft(
+            version_ref='v1',
+            desc=row.desc,
+            effective_from=BACKGROUND_RULE_EFFECTIVE_FROM,
+            effective_until=None,
+            revealed_from=row.revealed_from,
+            evidence_refs=list(row.evidence_refs),
+        )],
+    )
+
+
+def materialize_knowledge_extract(extract: KnowledgeExtract) -> KnowledgeDraft:
+    """Analyze LLM 面 → 现役 KnowledgeDraft；独立 Global 修订仍直接交 Draft。"""
+    return KnowledgeDraft(
+        setting=extract.setting,
+        world_rules=[materialize_world_rule_extract(row) for row in extract.world_rules],
+        relations=list(extract.relations),
+        arc_secrets=list(extract.arc_secrets),
+    )
 
 
 def allocate_global_ids(response: KnowledgeDraft, *, id_map: Mapping[str, str] | None = None,

@@ -19,6 +19,9 @@ def test_all_current_prompt_arms_are_rendered():
     assert '不可增改人物身份' in knowledge_prompts.SYSTEM
     # JSON Schema 的 $defs/$ref 是正式引用，不是未渲染模板。
     assert '$' not in knowledge_prompts.SYSTEM + characters.SYSTEM + analyze.SYSTEM + prompts.BLUEPRINT_SYSTEM
+    assert '不要输出 versions[]' in analyze.SYSTEM
+    assert '"desc": "传统乡村社会视无子为绝户' in analyze.SYSTEM
+    assert 'versions[] 每项字段' not in analyze.SYSTEM
 
 
 def test_character_prompt_uses_the_complete_pronoun_contract_and_retired_arms_are_absent():

@@ -187,6 +187,9 @@ class DeepSeekLegacyDriver(LegacyLlmDriver):
             backoff_base=cfg.backoff_base,
             concurrency=cfg.concurrency_for(ctx.node),
             concurrency_policy=cfg.concurrency_policy,
+            # 2026-09-16：全链 Flash 真跑——显式选中的 legacy 模型不得再静默
+            # Flash→Pro 兜底；要 Pro 必须在 profile 里选 deepseek-v4-pro。
+            enable_model_fallback=False,
         )
 
 

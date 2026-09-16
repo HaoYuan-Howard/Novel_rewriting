@@ -5,13 +5,14 @@ prepared 后两份 owner 保持冻结；恢复只补目标、审阅与独立采�
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from contracts.artifacts import (
     STAGE1_MAIN_TEXT, STAGE2_ANALYZE_RECEIPT, STAGE2_ANALYZE_RECOVERY,
     STAGE2_CHARACTERS, STAGE2_GLOBAL_GROUNDING,
 )
-from contracts.schema.analyze import AnalyzeReceipt
+from contracts.schema.analyze import AnalyzeReceipt, AnalyzeResponse
 from contracts.schema.analyze_recovery import AnalyzeRecoveryJournal
 from contracts.schema.characters import CharacterRegistry
 from contracts.schema.common import LlmProvenance, SharedAnalysisSource
@@ -20,7 +21,7 @@ from contracts.schema.stage1 import MainText
 from novel import paths, prov
 from novel.errors import GateBlocked, ProvenanceRefused, TerminalState
 from novel.llm import agent_runs, stage2_global_runs
-from novel.llm.ledger import ledger_path
+from novel.llm.ledger import ledger_path, read_strict_jsonl_objects
 from novel.run import RunContext
 from novel.stages.stage2 import analyze, characters, checks, grounding
 from novel.stages.stage2.global_evidence_candidates import GlobalEvidenceCandidateTable
@@ -69,6 +70,9 @@ def original_source(ctx: RunContext, store: ArtifactStore):
     table = GlobalEvidenceCandidateTable.build(rows)
     prepared = analyze.PreparedAnalyze(rows, source_sha, table, f'书名：{ctx.title}\n\n{table.render()}',
         agent_runs.canonical_sha256(dict(node=analyze.NODE, main_text_sha256=source_sha, table_sha256=table.sha256())))
+    run_file = paths.stage2_analyze_run_path(ctx.novel_dir, receipt.run_id) / agent_runs.RUN_FILE
+    if not run_file.exists():
+        return _original_source_legacy(ctx, store, receipt, receipt_sha, prepared)
     restored = agent_runs.restore_historical_run(ctx, analyze.run_spec(), source_run_id=receipt.run_id,
         **prepared.request(), ledger_source_path=ledger_path(ctx.novel_dir.parent))
     checkpoint = restored.checkpoint
@@ -86,6 +90,90 @@ def original_source(ctx: RunContext, store: ArtifactStore):
             or checkpoint.state_payload['character_handles'] != receipt.character_handles
             or checkpoint.state_payload['global_handles'] != receipt.global_handles):
         raise ProvenanceRefused('原 GlobalDraft 的回答/局部映射/来源回执不一致')
+    return receipt, receipt_sha, restored, prepared
+
+
+def _legacy_checkpoint_path(novel_dir: Path) -> Path:
+    return analyze.legacy_checkpoint_path(novel_dir)
+
+
+def _load_legacy_analyze_response(ctx: RunContext, receipt: AnalyzeReceipt) -> AnalyzeResponse:
+    """从 legacy 侧车或 work_unit recovery 取回已购 AnalyzeResponse。"""
+    sidecar = _legacy_checkpoint_path(ctx.novel_dir)
+    if sidecar.is_file():
+        raw = json.loads(sidecar.read_text(encoding='utf-8'))
+        if (raw.get('kind') != 'stage2-analyze-legacy-v1'
+                or raw.get('attempt_id') != receipt.attempt_id
+                or raw.get('response_sha256') != receipt.response_sha256
+                or raw.get('checkpoint_sha256') != receipt.checkpoint_sha256):
+            raise ProvenanceRefused('legacy Analyze 侧车与回执不一致')
+        return AnalyzeResponse.model_validate(raw['response'])
+
+    # 当前 CLI run 的内存 ledger 未必认领原 analyze attempt；对账书级 ledger。
+    book_identity = None
+    for row in read_strict_jsonl_objects(ledger_path(ctx.novel_dir.parent), label='legacy analyze'):
+        if row.get('attempt_id') == receipt.attempt_id and row.get('sid') == ctx.sid:
+            book_identity = row
+            break
+    if book_identity is None:
+        raise ProvenanceRefused('legacy Analyze 书级成本账缺少原 attempt')
+    if book_identity.get('response_sha256') != receipt.response_sha256:
+        raise ProvenanceRefused('legacy Analyze 账上回答摘要与回执不一致')
+    if book_identity.get('request_fingerprint') != receipt.request_sha256:
+        raise ProvenanceRefused('legacy Analyze 账上请求指纹与回执不一致')
+
+    wu_root = Path(ctx.novel_dir.parent) / '_service' / 'runs' / ctx.sid / 'work_units'
+    if not wu_root.is_dir():
+        raise ProvenanceRefused('legacy Analyze 缺少 work_units，无法免费取回原回答')
+    for unit in sorted(wu_root.iterdir()):
+        ledger_file = unit / 'ledger.json'
+        if not ledger_file.is_file():
+            continue
+        ledger = json.loads(ledger_file.read_text(encoding='utf-8'))
+        for turn in ledger.get('turns') or []:
+            attempts = turn.get('attempts') or []
+            if not any(row.get('attempt_id') == receipt.attempt_id for row in attempts):
+                continue
+            recovery_sha = turn.get('recovery_sha256')
+            if not recovery_sha:
+                raise ProvenanceRefused('legacy Analyze 原轮次缺少 recovery 证明')
+            blob = json.loads((unit / f'{recovery_sha}.json').read_text(encoding='utf-8'))
+            payload = blob.get('payload') or {}
+            if payload.get('attempt_id') != receipt.attempt_id:
+                raise ProvenanceRefused('legacy Analyze recovery 与 attempt 不一致')
+            if payload.get('ledger_response_sha256') != receipt.response_sha256:
+                raise ProvenanceRefused('legacy Analyze recovery 回答摘要漂移')
+            text = payload.get('normalized_text')
+            if not isinstance(text, str) or not text.strip():
+                raise ProvenanceRefused('legacy Analyze recovery 缺 normalized_text')
+            return AnalyzeResponse.model_validate(json.loads(text))
+    raise ProvenanceRefused('legacy Analyze 未找到对应 attempt 的已购回答')
+
+
+def _original_source_legacy(ctx, store, receipt, receipt_sha, prepared):
+    """DeepSeek legacy 首抽无 agent run.json；用回执 + 已购 recovery 证明原草稿。"""
+    from types import SimpleNamespace
+
+    if receipt.input_sha256 != prepared.input_sha256:
+        raise ProvenanceRefused('原联合回答的输入身份已改变')
+    response = _load_legacy_analyze_response(ctx, receipt)
+    refs = {row.character_ref for row in response.characters}
+    if set(receipt.character_handles) != refs:
+        raise ProvenanceRefused('legacy Analyze 人物句柄与回执不一致')
+    checkpoint = SimpleNamespace(
+        checkpoint_sha256=receipt.checkpoint_sha256,
+        value=response,
+        acceptance={'attempt_id': receipt.attempt_id},
+        state_payload={
+            'character_handles': receipt.character_handles,
+            'global_handles': receipt.global_handles,
+        },
+    )
+    restored = SimpleNamespace(
+        checkpoint=checkpoint,
+        run_sha256=receipt_sha,
+        context=ctx,
+    )
     return receipt, receipt_sha, restored, prepared
 
 
@@ -112,7 +200,9 @@ def pending_compilation_issue(base: str | Path, sid: str, *, code: str | None = 
     if not _mapping_is_current(receipt, registry):
         return '原人物句柄已经删除或合并；须在 Global 草稿中显式订正身份绑定，不能按名称猜回'
     try:
-        grounding.compile_global_draft(restored.checkpoint.value.global_draft, prepared.table, registry,
+        grounding.compile_global_draft(
+            grounding.materialize_knowledge_extract(restored.checkpoint.value.global_draft),
+            prepared.table, registry,
             provenance=GlobalProvenance.model_validate({
                 **receipt.provenance.model_dump(mode='json'), 'evidence_locator_failures': []}),
             character_handle_map=receipt.character_handles, id_map=receipt.global_handles)
@@ -175,7 +265,8 @@ def recover(ctx: RunContext) -> KnowledgeGrounding:
             if store.exists(GLOBAL) or store.exists(INVALID):
                 raise ProvenanceRefused('已有 Global 主体，不能用原联合草稿覆盖')
             try:
-                candidate = grounding.compile_global_draft(restored.checkpoint.value.global_draft,
+                candidate = grounding.compile_global_draft(
+                    grounding.materialize_knowledge_extract(restored.checkpoint.value.global_draft),
                     prepared.table, registry, provenance=expected_source, character_handle_map=receipt.character_handles,
                     id_map=receipt.global_handles)
             except ValueError as exc:
@@ -191,7 +282,9 @@ def recover(ctx: RunContext) -> KnowledgeGrounding:
                 source_run_sha256=restored.run_sha256, characters_sha256=characters_sha,
                 target_rel=target, target_sha256=target_sha, candidate=candidate, hard_hits=hits)
             store.write(REL, journal)
-        rebuilt = grounding.compile_global_draft(restored.checkpoint.value.global_draft, prepared.table,
+        rebuilt = grounding.compile_global_draft(
+            grounding.materialize_knowledge_extract(restored.checkpoint.value.global_draft),
+            prepared.table,
             registry, provenance=candidate.provenance, character_handle_map=receipt.character_handles,
             id_map=receipt.global_handles)
         hits = analyze._hard(checks.check_global(rebuilt.model_dump(mode='json', by_alias=True),

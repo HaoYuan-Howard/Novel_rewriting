@@ -809,7 +809,10 @@ def _run_stage2(ctx: RunContext, flags: list[str]) -> int:
             print(analyze.SYSTEM)
             print(analyze.prepare(ctx).user)
             return X.OK
-        raise TerminalState('stage2.analyze 需要已登记的 Executor agent profile；不静默切换模型')
+        receipt = analyze.run_legacy(ctx, _llm_client(ctx))
+        formal = sum(1 for row in receipt.materializations if row.state == 'formal')
+        print(f'  ✓ stage2.analyze legacy 已落盘回执；两侧 formal={formal}/2')
+        return X.OK
 
     if ctx.node == 'stage2.characters':
         from contracts.artifacts import STAGE2_CHARACTERS_EDIT

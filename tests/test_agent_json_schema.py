@@ -388,6 +388,30 @@ def test_dynamic_business_maps_use_keyed_rows_on_wire_and_round_trip_to_dict():
         'relations': [], 'world_rules': [], 'arc_secrets': [],
     }})
     assert AnalyzeResponse.model_validate(joint.model_dump(mode='json', by_alias=True)) == joint
+    analyze_schema = agent_json_schema(AnalyzeResponse)
+    world_rule = analyze_schema['$defs']['WorldRuleExtract']['properties']
+    assert set(world_rule) == {'rule_ref', 'kind', 'desc', 'revealed_from', 'evidence_refs'}
+    assert 'versions' not in world_rule
+    assert 'WorldRuleDraft' in agent_json_schema(KnowledgeResponse)['$defs']
+    AnalyzeResponse.model_validate({**joint.model_dump(mode='json', by_alias=True),
+                                    'global': {**joint.global_draft.model_dump(mode='json'),
+                                               'world_rules': [{
+                                                   'rule_ref': 'w1', 'kind': 'social_norm',
+                                                   'desc': '无子家庭会被乡里轻视',
+                                                   'revealed_from': 1,
+                                                   'evidence_refs': ['e000001'],
+                                               }]}})
+    with pytest.raises(ValidationError):
+        AnalyzeResponse.model_validate({**joint.model_dump(mode='json', by_alias=True),
+                                        'global': {**joint.global_draft.model_dump(mode='json'),
+                                                   'world_rules': [{
+                                                       'rule_ref': 'w1', 'kind': 'social_norm',
+                                                       'versions': [{
+                                                           'version_ref': 'v1', 'desc': '旧壳',
+                                                           'effective_from': 1, 'effective_until': None,
+                                                           'revealed_from': 1, 'evidence_refs': ['e000001'],
+                                                       }],
+                                                   }]}})
     assert CharactersResponse.model_validate(registry.model_dump(mode='json')) == registry
     renamed = NameMapResponse.model_validate({
         'surname_map': [{'old_surname': '沈', 'new_surname': '林'}],

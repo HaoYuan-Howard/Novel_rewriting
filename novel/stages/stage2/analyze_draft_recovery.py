@@ -102,7 +102,8 @@ def _bound_request(ctx: RunContext, store: ArtifactStore):
     if side.state not in ('draft_invalid', 'awaiting_characters'):
         raise TerminalState('该 owner 已有正式或 INVALID 初稿，使用现有 typed 编辑入口')
     draft = (CharactersResponse(characters=restored.checkpoint.value.characters)
-             if ctx.node == 'stage2.characters' else restored.checkpoint.value.global_draft)
+             if ctx.node == 'stage2.characters'
+             else grounding.materialize_knowledge_extract(restored.checkpoint.value.global_draft))
     request = AnalyzeOwnerDraftEdit(owner=ctx.node, source_receipt_sha256=receipt_sha,
         source_draft_sha256=agent_runs.canonical_sha256(draft.model_dump(mode='json')),
         source_mapping_sha256=agent_runs.canonical_sha256(dict(

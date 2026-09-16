@@ -2084,17 +2084,9 @@ class NodeSpec(NamedTuple):
     effort: str | None = None
     # 本节点钉死的模型 id；'' = 跟随全局默认（`novel/config.py::DEFAULT_MODEL`，
     # 可被 `DEEPSEEK_MODEL` 覆盖——A/B 换臂的显式口）。
-    # ⚠ **只有「产品裁决过、不许被环境变量静默翻转」的节点才许填非空**：
-    #   2026-08-19/20 用户裁决「除语义判官外全链 flash」，而例外必须长成形状
-    #   而不是纪律——此前靠每条命令记得带 `DEEPSEEK_MODEL`，忘一次就静默烧成
-    #   flash 判官，账本事后才看得出来。
-    # ⚠⚠ 钉死值现只剩 stage4 两个（stage6.semantic 判官随语义审判退役，
-    #   2026-09-15），理由不许互相援引：
-    #   · `stage4.design` = 小型整书策略 + 逐章私有 session；
-    #     `stage4.plan` = 机械 baseline + 仅歧义章私有 session（最多 4 并发）。
-    #     它们的模型默认是产品裁决，不得再用「两相各一次全书调用」
-    #     解释；B 的新恢复粒度是歧义 unit，零歧义章零模型调用。
-    #   两条实测依据都在 `docs/DECISIONS.md`。
+    # ⚠ **只有「产品裁决过、不许被环境变量静默翻转」的节点才许填非空**。
+    #   2026-09-16 用户裁决：全链 DeepSeek Flash，取消 stage4 Pro 钉死；
+    #   现役付费节点 ``model=''``，跟随全局默认（``DEFAULT_MODEL`` / ``DEEPSEEK_MODEL``）。
     model: str = ''
     # AgentRun 的 operator 每执行一个动作就重新采完整快照，因此只有它可以在
     # ``redo`` 已被证明来自 declared consumed projection 变化时，按这里登记的
@@ -2202,13 +2194,11 @@ NODES: Final[dict[str, NodeSpec]] = {
                                          '--response-repair'),
                                   produces=(artifact_paths.STAGE2_CHAPTER_BLUEPRINTS,),
                                   operator_redo='canonical'),
-    # ⚠⚠ Stage4 两个付费相仍沿用 `deepseek-v4-pro`，但调用拓扑已分开：
+    # ⚠⚠ Stage4 两个付费相：调用拓扑仍分开（A=整书策略+N 章；B=歧义章惰性），
+    #   2026-09-16 用户裁决取消 Pro 钉死，与其余 executor 同用 DeepSeek Flash。
     #   A = 一条小型整书策略 + N 条逐章私有 session，代码聚合后跑整书 HARD；
     #   B = 机械 baseline 先消除唯一解，只对真歧义章开私有 session（最多 4 并发），
-    #   零歧义章 0-wire 确定性编译（不伪造模型 checkpoint）。当前 B 默认模型的证据面包含历史
-    #   whole-book B 样本与现役歧义 unit，不再声称「一次重采就是整本书」。
-    #   架构改变本身不静默翻默认；后续须在同一 unit 契约下比较首交率、
-    #   HARD、token 与墙钟再裁决。
+    #   零歧义章 0-wire 确定性编译（不伪造模型 checkpoint）。
     'stage4.design':    NodeSpec('stage4', 'R-5',  True,  'stage4 盲场景设计',
                                   lifecycle=NodeLifecycleSpec('strategy_and_chapter', '去序盲事实与独立章工作包', 'executor', 'none', '机械准入通过即自动执行；B 的 typed infeasible 触发预算内自动重采', ('stop',), ('stage2.blueprint', 'stage4.design'), 'executor:strategy/chapter', ('--replan', '--reaggregate', '--recover-responses', '--recover-prepared', '--recover-repair-aggregate', '--source-journal-sha256', '--source-commit-sha256', 'saved_response', 'prepared_commit')),
                                    flags=('--dry-run', '--replan', '--reaggregate', '--recover-responses',
@@ -2218,7 +2208,6 @@ NODES: Final[dict[str, NodeSpec]] = {
                                           '--source-commit-sha256',
                                           '--response-repair'),
                                   produces=(artifact_paths.STAGE4_BLIND_CANDIDATE,),
-                                  model='deepseek-v4-pro',
                                   operator_redo='canonical'),
     'stage4.plan':      NodeSpec('stage4', 'R-5',  True,  'stage4 证据绑定与计划编译',
                                   lifecycle=NodeLifecycleSpec('ambiguous_chapter', '已接受 A 与本章关闭目录、机械基线', 'executor_or_deterministic', 'none', '机械准入通过即自动执行；typed infeasible 唯一后继是预算内自动重采 A', ('typed_edit', 'stop'), ('stage2.blueprint', 'stage4.design', 'stage4.plan'), 'executor:ambiguous_chapter', ('--revalidate', '--apply-binding', '--apply-edit', '--reaggregate', '--recover-prepared', 'saved_response', 'prepared_commit')),
@@ -2230,7 +2219,6 @@ NODES: Final[dict[str, NodeSpec]] = {
                                          '--response-repair'),
                                   produces=(artifact_paths.STAGE4_EVIDENCE_BINDING,
                                             artifact_paths.STAGE4_PLAN_CHAPTERS),
-                                  model='deepseek-v4-pro',
                                   operator_redo='canonical'),
     # ⚠ `flags=()` 在这一格是【终态】不是待定：本节点**本身**就是那个动作
     #   `stage4.context` 本身就是该动作，因此不再另设同义 flag。
@@ -2459,9 +2447,10 @@ AGENT_EXECUTOR_NODES: Final = (
 #: run/checkpoint/会话审计闭环），legacy 直连 API 客户端没有等价实现；
 #: legacy driver 的 capability 不得宣称这些节点，legacy 默认选择必须为它们
 #: 配 agent 覆盖（单向豁免，2026-09-15 用户裁决：legacy 整书跑通）。
-#: 补齐 legacy 执行器后把节点从这里移走，capability 与混用豁免同步收窄。
+#: 2026-09-16：``stage2.analyze`` 已补 legacy（``run_legacy`` + LlmClient），
+#: 从本集合移除；``stage6.prepare`` 仍待补齐后移出。
 AGENT_ONLY_EXECUTOR_NODES: Final = frozenset({
-    'stage2.analyze', 'stage6.prepare',
+    'stage6.prepare',
 })
 
 #: `(节点, 触发 flag)` → 这条跑法**额外**必填的 flag。`NodeSpec.required_flags` 的补集：

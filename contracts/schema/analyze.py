@@ -9,12 +9,12 @@ from pydantic import Field, model_validator
 from contracts.schema.base import StrictModel
 from contracts.schema.characters import CharacterCandidateRow
 from contracts.schema.common import LlmProvenance, Sha256
-from contracts.schema.knowledge import KnowledgeDraft
+from contracts.schema.knowledge import KnowledgeExtract
 
 
 class AnalyzeResponse(StrictModel):
     characters: list[CharacterCandidateRow] = Field(min_length=1)
-    global_draft: KnowledgeDraft = Field(alias='global')
+    global_draft: KnowledgeExtract = Field(alias='global')
 
     @model_validator(mode='after')
     def _unique_handles(self):

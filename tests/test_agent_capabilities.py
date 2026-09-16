@@ -36,7 +36,7 @@ def test_executor_nodes_cover_all_paid_llm_nodes():
     }
     # agent-only 集合必须落在 executor 面内；legacy driver 与混用豁免都消费它。
     assert AGENT_ONLY_EXECUTOR_NODES <= set(AGENT_EXECUTOR_NODES)
-    assert AGENT_ONLY_EXECUTOR_NODES == {'stage2.analyze', 'stage6.prepare'}
+    assert AGENT_ONLY_EXECUTOR_NODES == {'stage6.prepare'}
 
 
 def _legacy_profile(*, model: str = 'deepseek-v4-pro',
@@ -76,59 +76,46 @@ def test_pipeline_profiles_reject_mixed_executor_modes():
     # 同模式内的逐节点差异仍合法，但 legacy 默认下 agent-only 节点没有
     # legacy 执行器：漏配 agent 覆盖的选择在 validate_pipeline_profiles
     # 就被拒（见下一条专项测试的完整正例）。
+    # 2026-09-16：stage4 取消 Pro 钉死、analyze 已有 legacy，纯 Flash 默认只需
+    # 为剩余 AGENT_ONLY（prepare）补 agent 覆盖；此处故意漏配以钉住拒绝面。
     flash_default = PipelineAgentProfiles(
         commander=_profile(),
         executor_default=LegacyExecutorBackend(
             profile=_legacy_profile(model='deepseek-flash')),
-        executor_overrides={
-            node: LegacyExecutorBackend(profile=_legacy_profile())
-            for node in AGENT_EXECUTOR_NODES
-            if NODES[node].model == 'deepseek-v4-pro'
-        },
+        executor_overrides={},
     )
     assert not flash_default.executor_overrides.keys() & AGENT_ONLY_EXECUTOR_NODES
-    with pytest.raises(capabilities.AgentProfileRefused, match='stage2.analyze'):
+    with pytest.raises(capabilities.AgentProfileRefused, match='stage6.prepare'):
         capabilities.validate_pipeline_profiles(flash_default)
 
 
 def test_legacy_default_accepts_agent_overrides_only_for_agent_only_nodes():
     """legacy 默认 + agent-only 节点 agent 覆盖可构造、可校验、可启动冻结。
 
-    其余节点（含同为 stage2 的 blueprint）不豁免；漏配 agent-only 覆盖时
-    ``validate_pipeline_profiles`` 在设置保存/preview 期即拒绝，不能等
-    第一个付费节点跑到一半才 exit 2。
+    其余节点（含同为 stage2 的 blueprint / analyze）不豁免也不要求 agent；
+    漏配 agent-only 覆盖时 ``validate_pipeline_profiles`` 在设置保存/preview
+    期即拒绝，不能等第一个付费节点跑到一半才 exit 2。
     """
     profiles = PipelineAgentProfiles(
         commander=_profile(),
         executor_default=LegacyExecutorBackend(
             profile=_legacy_profile(model='deepseek-flash')),
         executor_overrides={
-            **{
-                node: AgentExecutorBackend(profile=_profile())
-                for node in sorted(AGENT_ONLY_EXECUTOR_NODES)
-            },
-            **{
-                node: LegacyExecutorBackend(profile=_legacy_profile())
-                for node in AGENT_EXECUTOR_NODES
-                if NODES[node].model == 'deepseek-v4-pro'
-            },
+            node: AgentExecutorBackend(profile=_profile())
+            for node in sorted(AGENT_ONLY_EXECUTOR_NODES)
         },
     )
     resolved = capabilities.validate_pipeline_profiles(profiles)
-    assert resolved.executor_overrides['stage2.analyze'].kind == 'agent'
+    assert 'stage2.analyze' not in resolved.executor_overrides
     assert resolved.executor_overrides['stage6.prepare'].kind == 'agent'
     # agent-only 节点不在任何 legacy 模型的 capability 面内：漏配覆盖时，
     # 默认 legacy 被逐节点校验拒绝，错误指向该节点。
-    with pytest.raises(capabilities.AgentProfileRefused, match='stage2.analyze'):
+    with pytest.raises(capabilities.AgentProfileRefused, match='stage6.prepare'):
         capabilities.validate_pipeline_profiles(PipelineAgentProfiles(
             commander=_profile(),
             executor_default=LegacyExecutorBackend(
                 profile=_legacy_profile(model='deepseek-flash')),
-            executor_overrides={
-                node: LegacyExecutorBackend(profile=_legacy_profile())
-                for node in AGENT_EXECUTOR_NODES
-                if NODES[node].model == 'deepseek-v4-pro'
-            },
+            executor_overrides={},
         ))
 
 
@@ -228,12 +215,10 @@ def test_registry_publishes_exact_ids_labels_and_model_specific_options():
     ]
     # agent-only 节点没有 legacy 执行器：两个 legacy 模型都不得在 capability
     # 里宣称，否则前端物化会让纯 legacy 选择漏配覆盖直到真跑才 exit 2。
+    # 2026-09-16：取消 stage4 Pro 钉死后，Flash 与 Pro 的节点面相同（都只排除
+    # AGENT_ONLY）；Pro 仍可作为显式模型选择保留在 registry。
     assert set(deepseek.models[0].executor_nodes) == (
-        set(AGENT_EXECUTOR_NODES)
-        - {node for node in AGENT_EXECUTOR_NODES
-           if NODES[node].model == 'deepseek-v4-pro'}
-        - AGENT_ONLY_EXECUTOR_NODES
-    )
+        set(AGENT_EXECUTOR_NODES) - AGENT_ONLY_EXECUTOR_NODES)
     assert set(deepseek.models[1].executor_nodes) == (
         set(AGENT_EXECUTOR_NODES) - AGENT_ONLY_EXECUTOR_NODES)
 
@@ -275,8 +260,8 @@ def test_executor_overrides_reject_code_and_approval_nodes():
 
 
 def test_legacy_backend_is_closed_over_provider_model_thinking_effort_and_node():
-    # stage6.semantic 的 pro 钉死例外已随判官退役移除；现役钉死值只剩
-    # stage4.design / stage4.plan 两个（NODES 各格的 model 列）。
+    # 2026-09-16：取消 stage4 Pro 钉死；Flash 与 Pro 均可跑 design/plan。
+    # Pro 仍保留在 registry，供显式选择，不再因节点契约拒 Flash。
     pro = LegacyExecutorBackend(profile=LegacyLlmProfile(
         provider='deepseek', model='deepseek-v4-pro',
         reasoning_effort='high', thinking_mode='on'))
@@ -286,8 +271,8 @@ def test_legacy_backend_is_closed_over_provider_model_thinking_effort_and_node()
     flash = LegacyExecutorBackend(profile=LegacyLlmProfile(
         provider='deepseek', model='deepseek-flash',
         reasoning_effort='high', thinking_mode='on'))
-    with pytest.raises(capabilities.AgentProfileRefused, match='钉死 deepseek-v4-pro'):
-        capabilities.validate_executor_backend(flash, node='stage4.design')
+    assert capabilities.validate_executor_backend(
+        flash, node='stage4.design') == flash
     with pytest.raises(capabilities.AgentProfileRefused, match='reasoning_effort'):
         capabilities.validate_executor_backend(
             LegacyExecutorBackend(profile=LegacyLlmProfile(

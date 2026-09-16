@@ -1151,13 +1151,11 @@ def test_a_model_ladder_that_runs_out_is_a_terminal_state_not_a_crash(
         % len(fake.calls))
 
 
-def test_the_pinned_nodes_keep_their_model_over_the_global_default(monkeypatch):
+def test_paid_nodes_follow_the_global_default_model_without_pins(monkeypatch):
     """⭐ `_llm_client` 是全链唯一的 client 构造口：`NodeSpec.model` 在这里生效。
 
-    「除例外外全链 flash」必须长成形状而不是纪律：两个钉死节点（stage4 A/B）
-    ⇒ `DEEPSEEK_MODEL` / 全局默认 flash 都换不掉它们；其余节点 `''` = 跟随
-    全局默认（flash）。判官的 pro 钉死例外已随 stage6.semantic 退役移除。
-    ⚠ Stage4 A/B 两相共用 pro 的全书重采风险；但**接线只有这一条**。
+    2026-09-16 用户裁决：取消 stage4 Pro 钉死；现役付费节点 ``model=''``，
+    一律跟随 ``DEEPSEEK_MODEL`` / 全局默认（flash）。
     """
     import tempfile
     from pathlib import Path
@@ -1179,9 +1177,9 @@ def test_the_pinned_nodes_keep_their_model_over_the_global_default(monkeypatch):
     other = M._llm_client(RunContext.open(
         base, '123', 'stage2.global', paid=True, write_ledger=False))
 
-    assert design.model == 'deepseek-v4-pro', 'stage4.design 的 pro 是钉死的'
-    assert plan.model == 'deepseek-v4-pro', 'stage4.plan 的 pro 是钉死的，环境变量换不掉'
-    assert other.model == 'deepseek-flash' == config.DEFAULT_MODEL
+    assert design.model == 'deepseek-flash' == config.DEFAULT_MODEL
+    assert plan.model == 'deepseek-flash'
+    assert other.model == 'deepseek-flash'
 
 
 @pytest.mark.corpus

@@ -325,9 +325,9 @@ readback、current/fresh 终验和 accepted-attempt adoption。`kind=agent` 的�
 client 构造，不能静默回退直接 API。
 
 Legacy backend 不借用 Agent 的 flag 矩阵，而由 `LegacyLlmDriver` 对 provider/model/thinking/effort/node
-关闭式校验，并继续服从节点本身的合法 flags、schema、HARD 与提交契约。当前 DeepSeek V4.1 Flash 不支持
-契约钉死 Pro 的 `stage4.design`、`stage4.plan`、`stage6.semantic`；V4 Pro 支持现役九个 executor 节点。
-两种 backend 任一失败都不自动切换。
+关闭式校验，并继续服从节点本身的合法 flags、schema、HARD 与提交契约。2026-09-16 起取消 Stage4
+Pro 钉死：DeepSeek Flash 与 Pro 均承接除 `AGENT_ONLY`（现役仅 `stage6.prepare`）外的现役
+executor 节点。两种 backend 任一失败都不自动切换。
 
 direct `PreviewRequest.egress_authorized` 默认 false（不要与上方 outer `AgentRunRequest` 当前默认 true
 混读）；resolved backend 非空时 builder 必须收到显式 bool，并将它同源冻结进 `JobStart` 和付费

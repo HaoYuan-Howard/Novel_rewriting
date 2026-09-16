@@ -126,6 +126,15 @@ KnowledgeDraft 使用局部 c1 人物端点、r1 relation_ref、w1 rule_ref、v1
 secret_ref；正式 char/rel/wr/secret ID 和版本 ID 由编译器生成。独立修订提供当前 draft
 和冻结映射，重排不改既有 ID，新增只分配尚未占用的 ID；不另建全局 ID 管理服务。
 
+**Analyze LLM 面**使用 `KnowledgeExtract`：`world_rules[]` 为单状态
+`WorldRuleExtract{rule_ref,kind,desc,revealed_from,evidence_refs}`，不交 `versions[]`。
+代码经 `materialize_knowledge_extract` 编译为 `WorldRuleDraft`（固定 `version_ref=v1`，
+背景规则 `effective_from=1`、`effective_until=null`，`desc`/`revealed_from`/证据来自 Extract）。
+多版本演变（`changes[]`）后置；独立 Global 修订与 typed 编辑仍直接使用 `KnowledgeDraft`。
+
+**边界原则**：Stage2 的 LLM 输出默认是语义 Extract；正式 artifact / IR 只经确定性
+compile。按字段痛点渐进削薄 wire，不预建 `semantic/`/`canonical/`/`compile/` 空包目录。
+
 人工编辑 evidence_refs 可复用当前 ev 引用，或提交 `{chapter_ordinal,locator}`。定位必须
 在指定章唯一命中（exact 后 normalized）；非法章、零命中、多命中写盘前拒绝。正式锚点的
 坐标或摘要漂移保持 HARD，不自动搬移、跨章猜测或清空证据。失败候选及已购草稿保留给原
@@ -133,8 +142,8 @@ owner 免费编辑与重验，不能以重新购买掩盖恢复缺口。
 
 ### 1.4 联合首抽与独立修订
 
-全空冷启动由 `stage2.analyze` 一次响应产生 CharacterDraft 与 KnowledgeDraft，再独立编译、
-校验和提交两份产物。共同实际请求、响应、schema 与 checkpoint 保存在原运行记录，
+全空冷启动由 `stage2.analyze` 一次响应产生 CharacterDraft 与 KnowledgeExtract（world_rules
+为单状态 Extract），代码物化为 KnowledgeDraft 后再独立编译、校验和提交两份产物。共同实际请求、响应、schema 与 checkpoint 保存在原运行记录，
 不可变 AnalyzeReceipt 以各自摘要绑定这些来源、唯一账务 attempt 与两侧首次物化目标；双方
 _provenance.shared_analysis_source 引用回执，usage=null，账只认同一次调用。真实生成时看过
 完整共同材料，不声称首抽只读窄人物投影；未来 Global freshness 仅绑定实际业务所需人物

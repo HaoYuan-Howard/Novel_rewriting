@@ -577,14 +577,15 @@ def test_explicit_legacy_backend_freezes_provider_profile_into_argv_and_step():
     assert '--allow-egress' in step.argv
 
 
-def test_legacy_flash_refuses_nodes_whose_contract_pins_pro():
+def test_legacy_flash_accepts_stage4_after_pro_pin_removal():
+    """2026-09-16：取消 Pro 钉死后 Flash 可冻结 stage4.design argv。"""
     backend = LegacyExecutorBackend(profile=LegacyLlmProfile(
         provider='deepseek', model='deepseek-flash',
         reasoning_effort='high', thinking_mode='on'))
-    with pytest.raises(UnsupportedRunMode, match='钉死 deepseek-v4-pro'):
-        N.build_steps(
-            'stage4.design', SID, base=BASE,
-            executor_backend=backend, egress_authorized=True)
+    [step] = N.build_steps(
+        'stage4.design', SID, base=BASE,
+        executor_backend=backend, egress_authorized=True)
+    assert step.argv[step.argv.index('--legacy-model') + 1] == 'deepseek-flash'
 
 
 def test_no_current_node_takes_a_mode_and_stage5_rejects_retired_flags():

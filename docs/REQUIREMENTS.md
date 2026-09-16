@@ -14,6 +14,13 @@
 Stage 只读、Stage6 改选、上传幂等开跑）；TODO-50 已关闭。仍打开的是 TODO-21 corpus
 基线、TODO-51 Gate B/C 真书验收、TODO-28 fixture 登记与 TODO-49 性能/成稿未验项。
 
+**2026-09-16 DeepSeek Flash 全链真跑（进行中）**：取消 stage4 Pro 钉死；`stage2.analyze`
+已补 legacy 并从 `AGENT_ONLY` 移除（`stage6.prepare` 仍待）；Analyze `world_rules` 改为
+`WorldRuleExtract`→compiler→`WorldRuleDraft`；legacy `--recover-analyze` 可从 work_unit
+recovery 取回原回答。样本根 `E:\_novel_flash\fujun_extract`：characters/global 已正式落盘；
+`stage2.blueprint` 已过传输（prompt 含 json），卡在章级 PlotBlueprint 校验（ActorRef /
+states）。产品 UI 一点开始即双授权（CLI 保留 `--yes`）。
+
 ## P0 · 当前工程实施
 
 ### TODO-51 · Stage2 联合分析、独立产物与分阶段验收

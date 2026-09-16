@@ -206,6 +206,19 @@ class WorldRuleDraft(StrictModel):
         return self
 
 
+class WorldRuleExtract(StrictModel):
+    """Analyze LLM 面：单状态语义主张；versions 壳由代码编译。
+
+    多版本演变（changes[]）后置；当前默认一条规则对应一个贯穿全文的静态状态。
+    """
+
+    rule_ref: Annotated[str, Field(pattern=r'^w\d+$')]
+    kind: Literal[WORLD_RULE_KINDS]
+    desc: NonEmpty
+    revealed_from: Chapter
+    evidence_refs: list[CoreEvidenceCandidateRef] = Field(min_length=1)
+
+
 class RelationFactDraftRef(StrictModel):
     kind: Literal['relation']
     relation_ref: Annotated[str, Field(pattern=r'^r\d+$')]
@@ -241,6 +254,24 @@ class ArcSecretDraft(StrictModel):
 class KnowledgeDraft(StrictModel):
     setting: GlobalSetting[CoreEvidenceCandidateRef]
     world_rules: list[WorldRuleDraft] = Field(min_length=0)
+    relations: list[RelationDraft] = Field(min_length=0)
+    arc_secrets: list[ArcSecretDraft] = Field(min_length=0)
+
+    @model_validator(mode='after')
+    def _unique_handles(self):
+        for rows, field in ((self.relations, 'relation_ref'),
+                            (self.world_rules, 'rule_ref'), (self.arc_secrets, 'secret_ref')):
+            refs = [getattr(row, field) for row in rows]
+            if len(refs) != len(set(refs)):
+                raise ValueError(f'{field} 局部句柄不得重复')
+        return self
+
+
+class KnowledgeExtract(StrictModel):
+    """Analyze 联合首抽的 LLM 语义面；world_rules 为 Extract，其余与 Draft 同形。"""
+
+    setting: GlobalSetting[CoreEvidenceCandidateRef]
+    world_rules: list[WorldRuleExtract] = Field(min_length=0)
     relations: list[RelationDraft] = Field(min_length=0)
     arc_secrets: list[ArcSecretDraft] = Field(min_length=0)
 
