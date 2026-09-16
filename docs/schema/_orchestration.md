@@ -142,13 +142,13 @@ direct job 另有一条正交授权链：`PreviewRequest.egress_authorized` 默�
 允许 0 成本 preview 摊开不可执行命令，真 start 与手敲 CLI 会在 job/driver/probe/wire 前拒绝；无
 backend 时 false 归一为 `null`，true 反而拒绝。它不是 `NodeSpec.flags`，也不能由 `--yes` 推导。
 公开 agent run 的非空 `PipelineAgentProfiles` 只描述 executor 选择；受托 Commander 审阅已退役
-（2026-09-15），审批闸一律人工。preview/start/batch 共用一份 plan；规范化 base、完整 resolved profiles
+（2026-09-15）。全自动裁决（批次 B0–D）后 `HUMAN_NODES` 为空：命中 `approval:*` waiting_on 为
+编排 bug（fail-closed）；Stage6 `--pick` 改选不阻塞。preview/start/batch 共用一份 plan；规范化 base、完整 resolved profiles
 与两项授权冻结进 `RunContractV2`，起始代码、执行契约、admission 与 provider session 冻结进可滚动
 `ExecutionEpoch`。`profiles=null` 只保留旧请求形状，当前无服务端默认时关闭式拒绝。
 页面从 capability 动态构造默认 executor 与逐节点 override，成功 preview 保存的完整请求
-对象就是 start 唯一可消费的快照；配置、授权或 capability 变化会使它失效，不重新取默认。命中人工
-审批闸时 Supervisor 以 exit 2 stopped 停下（reason「停在人工审批闸：{blocker}；在 Stage 页面完成裁决后
-用原配置续跑」），`next_handler='human'`；child executor 经 parent contract SHA 与 current epoch identity
+对象就是 start 唯一可消费的快照；配置、授权或 capability 变化会使它失效，不重新取默认。
+child executor 经 parent contract SHA 与 current epoch identity
 复核快照，`run_step.py` 再按 exact node/flags 选择 executor backend。现有结论来自 fake driver、本机零模型
 CLI 检查与非 corpus 回归，**真实 provider 模型请求仍为 0，没有质量、速度、entitlement 或
 current-schema corpus 实证**。
@@ -287,7 +287,8 @@ argv 的形态是：
 
 agent 代跑不是 `NODES` 中的流水线节点，不能塞进 `JobStart`；它使用独立的
 `Output/_service/agent_runs.jsonl` append-only 事件流。RunSupervisor 只是 orchestrator 内的确定性
-状态机，不调用模型；模型角色只有 Executor（受托 Commander 已于 2026-09-15 退役，审批闸一律人工）。
+状态机，不调用模型；模型角色只有 Executor（受托 Commander 已于 2026-09-15 退役；
+全自动裁决后 `HUMAN_NODES` 为空，`approval:*` fail-closed）。
 `started` 保存稳定 parent contract，
 `epoch_opened` 保存本 epoch 的可执行身份：
 
@@ -378,10 +379,9 @@ admission id 写 `opened`，并在 v2 行中把 `lifecycle_run_id` 固化为该 
 必拒，close 前成功 claim 必留在 active 集合里等待 release。双面 drain 正常闭合后追加 `drained`；
 RunSupervisor 随后重读 `operator next`：仍 ready 时由确定性主路直接消费同快照 execution token；
 命中 `DETERMINISTIC_RECOVERY_WAITING_ON` 的 blocker 时现场铸 exact recovery permit 并直接交
-Executor；其余审批闸 blocker 不再进入任何模型审阅席——受托 Commander reviewer 已退役
-（2026-09-15），Supervisor 以 exit 2 `stopped`（reason「停在人工审批闸：{blocker}；在 Stage 页面
-完成裁决后用原配置续跑」）停下并投影 `next_handler='human'`，用户在现有人工 Stage 页面过闸后
-原配置续跑。只有显式、hash-bound 的孤儿恢复才追加 `reconciled`。
+Executor；其余非 deterministic-recovery 的 blocker：`approval:*` 为编排 bug（failed）；
+`human:*` / inbox / resume:manual-decision 走精确故障或披露停机话术（批次 B4）。
+只有显式、hash-bound 的孤儿恢复才追加 `reconciled`。
 
 其中 `recovery:stage4-design-repair-aggregate-commit` 是一条 FREE/0-wire 的确定性
 producer 补尾：编排上的 `next_handler=executor` 只表示由 child execution 消费，并不构造模型
@@ -459,9 +459,9 @@ lock 内截回 committed prefix、fsync，并分别追加 `authorized / applied`
 global review 的 generation-safe 面（blocking 逐项 PASS，或仅含已显式完整组隔离的
 secret 组 UNVER；关系与规则不允许隔离，前者仍是 disclosure-ready 而不是 PASS）、当前可下载成书、阻塞待办与
 启动/结束代码指纹；不解析 agent 自述。两轴不许互推，尤其 `state=ok` 不推出可交付。
-审批闸 turn 以 exit 2 `stopped` 结束（reason「停在人工审批闸：{blocker}；在 Stage 页面完成裁决后
-用原配置续跑」）后，RunSupervisor 等 `operator next` 变化：过闸后 ready 交确定性 execution-token 主路，
-其余审批闸 blocker 仍是人工。所有模型节点按 `NODES.lifecycle` 的工作单元划分 E/C 身份；同一 Executor 单元
+阻断面 turn 以 exit 2 `stopped` 结束（精确恢复/披露话术，见批次 B4）后，RunSupervisor 等
+`operator next` 变化：恢复后 ready 交确定性 execution-token 主路；`approval:*` 不得再投影为
+正常人工推进态。所有模型节点按 `NODES.lifecycle` 的工作单元划分 E/C 身份；同一 Executor 单元
 连续生成/自修，局部返修的 surface 或候选变化不重置预算。Stage4 A/B 分别隔离，
 Stage6 双盲 judge 分别隔离；这些业务边界不因共用基础设施而合并。
 

@@ -24,9 +24,8 @@ export interface PendingConfirm {
   /** 发起成功后要做的事；通用作业会带回真实 job，专用同步写回传 null。 */
   after?: (job: Job | null) => void
   /**
-   * 执行覆盖：三条人工写回走**专用路由**（review/:o/edit、stage6/approve、
-   * stage7/approve），不走通用 POST /jobs。确认框仍然先 preview 同一个
-   * (node, flags) 的服务端计划（R-11.8：显示与执行同一份），确认后跑这个。
+   * 执行覆盖：历史专用写回路由已随全自动只读面退役；现役确认框若仍带 run，
+   * 须先 preview 同一服务端计划（R-11.8），再跑该覆盖。Stage6 改选走 approveHook。
    */
   run?: () => Promise<unknown>
 }

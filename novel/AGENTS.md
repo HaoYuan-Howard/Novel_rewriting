@@ -30,8 +30,9 @@
 
 ## 调度与模型边界
 
-- RunSupervisor 只执行 planner 的冻结 action；审批闸一律人工（Commander 受托审阅已退役，2026-09-15），
-  run 停闸等过闸后续跑。Executor 在校验过的空 cwd 中运行；
+- RunSupervisor 只执行 planner 的冻结 action；`HUMAN_NODES` 为空（2026-09-15 全自动裁决，
+  批次 B4），命中 `approval:*` waiting_on 为编排 bug（fail-closed）；Stage6 `--pick` 改选不阻塞。
+  run 停在精确恢复/披露面后续跑。Executor 在校验过的空 cwd 中运行；
   不要把工程指南、skill 或额外盘上材料加入模型上下文。
 - 业务工作单元、execution epoch 与 provider session 分开；代码 漂移走新 epoch，原 profiles 与累计额度保留。
   连续会话绑定原目录和输出 schema 字节，不静默切模型或 effort。

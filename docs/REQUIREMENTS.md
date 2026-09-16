@@ -10,6 +10,10 @@
 `--require-corpus` 对精确匹配的无正文 manifest 与盘面完成验收后，才可以称“全量语料绿”；
 此前的通过结果只能称“非 corpus 回归”。
 
+**2026-09-16 全自动裁决进度**：批次 B0–E 与收尾 F 已合入工程基线（全自动单模式、
+Stage 只读、Stage6 改选、上传幂等开跑）；TODO-50 已关闭。仍打开的是 TODO-21 corpus
+基线、TODO-51 Gate B/C 真书验收、TODO-28 fixture 登记与 TODO-49 性能/成稿未验项。
+
 ## P0 · 当前工程实施
 
 ### TODO-51 · Stage2 联合分析、独立产物与分阶段验收
@@ -59,13 +63,12 @@ Executor 与历史轮的 Commander 固定 `claude-code-glm / glm-5.3-flash[1M] /
 不可变回答与唯一 ledger attempt 取证。证据/审计另列，未知保持 unver；无同配置旧基线不报
 相对性能改善。单书 Gate 语义验收、工程回归与项目 golden set 分开结论。
 
-### TODO-50 · Stage6/7 人工前端免费编辑范围待裁决
+### TODO-50 · Stage6/7 人工前端免费编辑 —— 已关闭（2026-09-16 全自动裁决）
 
-开发 harness、操作 skill 退役、运行身份、无 Markdown 交付及前端统计已闭合，规则归所属指南与契约。
-尚未确定的扩展是 Stage6 文案编辑、Stage7 人物表编辑：`docs/schema/_api.md` 五j 与
-`novel/api/routes/edits.py` 仍明确限定为 CLI。已向用户建议撤回旧限制，尚未收到该范围的裁决。
-若纳入，服务只暂存同书 typed 请求，由 CLI 按当前主体校验、归档和写盘；编辑后重新审批，
-验证页面编辑、旧批准失效、重新批准、下载及重启读回。此扩展不阻塞现有自动跑书验收。
+~~原待裁决：Stage6 文案编辑、Stage7 人物表前端免费编辑是否放开。~~
+用户 2026-09-15 全自动裁决 + 批次 B4/D：Stage 页只读监控；prepare/rename 人工编辑与
+`stage7.approve` 写面退役；Stage6 仅保留三候选 `--pick` 改选。本条不再扩展人工编辑范围，
+编号保留空缺引用。
 
 ### TODO-49 · 小说流水线 token 与耗时优化
 
@@ -128,9 +131,9 @@ producer 从来源完整生成、且与盘面精确匹配的无正文 manifest�
 
 **工作**：
 
-- 通过前端自动跑书，在隔离输出与独立空缓存中，对
-  `CURRENT_CORPUS_BOOKS` 从来源运行 Stage0～Stage7；人工闸与 typed review 必须留下真实决定，
-  不批量盖章，不给旧产物补字段或版本冒充当前 producer。
+- 通过前端上传幂等自动开跑，在隔离输出与独立空缓存中，对
+  `CURRENT_CORPUS_BOOKS` 从来源运行 Stage0～Stage7；自动路径须留下可复核的机械决定与
+  Stage6 定稿（默认 auto 或显式 `--pick`），不批量盖章，不给旧产物补字段或版本冒充当前 producer。
 - 生成并提交无正文 manifest。逐书记录 sid、source hash、章节数、预期产物及当前版本、代码身份、
   冻结 dispatch、ledger 聚合与精确 skip allowlist；成本只取 `<base>/_service/ledger.jsonl`。
 - 对同一盘面运行 `--require-corpus` 的 `corpus or not corpus` 完整套件。

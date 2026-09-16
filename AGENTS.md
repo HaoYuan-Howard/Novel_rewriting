@@ -20,7 +20,8 @@ agent 负责维护工程上下文、实现与验证，关键取舍和结果直�
 
 后端固定使用 conda 环境 `novel_refactor`，不要用 base；安装、启动与诊断命令见
 `docs/OPERATIONS.md`。前端为 React/Vite/TypeScript，开发命令见 `web/AGENTS.md`。
-产品仅有前端自动跑书和人工逐 Stage 两种模式；确定性调度、执行、恢复与交付检查由运行代码负责。
+产品为全自动单模式：上传即授权开跑，Stage 页只读监控；Stage6 保留三候选改选（不阻塞
+stage7）。确定性调度、执行、恢复与交付检查由运行代码负责。
 
 ## 开工与协作
 
@@ -31,9 +32,10 @@ agent 负责维护工程上下文、实现与验证，关键取舍和结果直�
 4. 同一行为的契约、producer、consumer、恢复、API/UI、测试和文档同批闭合；完成要检查真实消费者与
    最终盘面，不能只凭函数存在、编译或单测通过。
 
-自动跑书由 RunSupervisor 推进；人工模式由用户在 Stage 页面选择推进动作。受托 Commander/Reviewer
-（含 `<immutable-workpack>`）只消费本轮裁决契约与材料；Executor 使用独立 prompt/schema。
-这些模型工作单元不加载工程 AGENTS、运维手册或额外盘上小说来补充材料。
+自动跑书由确定性 RunSupervisor 推进；Stage 页只读监控，Stage6 保留三候选改选
+（不阻塞下游）。历史受托 Commander/Reviewer（含 `<immutable-workpack>`）与人工逐 Stage
+过闸模式已退役，材料只供存量解码。Executor 使用独立 prompt/schema，不加载工程 AGENTS、
+运维手册或额外盘上小说来补充材料。
 
 ## 跨模块边界
 

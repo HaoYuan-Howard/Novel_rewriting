@@ -638,7 +638,6 @@ _SERVICE_MUTATORS = {
     ('uploads', 'save_upload'),
     ('uploads', 'save_edit_plan'),
     ('uploads', 'save_draft_edit'),
-    ('uploads', 'save_prepare_input'),
     ('uploads', 'discard_edit_plan'),
     ('approvals', 'approve_gate'),
     ('approvals', 'reset'),
