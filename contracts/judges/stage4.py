@@ -13,7 +13,7 @@ PLAN_PROMPT_SURFACE = REGISTRY.register_prompt_surface(PromptSurface(
         'evidence_anchors', 'relations', 'secrets', 'settings', 'states', 'world_rules',
     ),
 ))
-_HUMAN_FIX = ('人工可改 `.INVALID` 后用 `--revalidate --actor <id> --reason <why>` '
+_HUMAN_FIX = ('live `.INVALID` 由队列以 `--revalidate --actor system:invalid-revalidate` '
               '0 LLM 重判；writer context 用 `stage4.context` 0 成本重建。')
 
 

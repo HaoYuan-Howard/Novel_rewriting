@@ -67,12 +67,19 @@ def require_approved_clear(store: ArtifactStore, art: Hook) -> None:
     校准 PASS 漂移兜底），随自动放行门与判官一起消失。留下的这一条没有变松：
     ``subject_sha256`` 的字节绑定与 ``review_identity_sha256`` 的证据绑定
     才是真正在拦人的两道——改一个字或换一份证据，旧 resolution 立即失效。
+
+    批次 C 交付终验：``basis`` 必须 ∈ {``default_policy``, ``human_selection``}；
+    旧 ``human_verification`` 不进现役写路径，存量半程书需重跑 stage6。
     """
     if art.approved is None:
         raise TerminalState(
             '开篇文案还没定稿——stage6.approve 的自动定稿未执行或未落盘；'
             '人工改选用 stage6.approve --pick N')
     resolution = art.approved.resolution
+    if resolution.basis not in ('default_policy', 'human_selection'):
+        raise TerminalState(
+            f'开篇文案定稿 basis={resolution.basis!r} 不在现役取值面'
+            f'{{default_policy, human_selection}}——存量书需重跑 stage6.approve')
     actual = text_sha256(art.approved.text)
     if resolution.subject_sha256 != actual:
         raise TerminalState('定稿 resolution 绑定的不是当前文本字节')

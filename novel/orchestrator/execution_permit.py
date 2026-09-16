@@ -63,6 +63,7 @@ _INBOX = queue.WAITING_ON_INBOX
 _RESUME = queue.WAITING_ON_RESUME_DECISION
 _STAGE2_EDIT_COMMIT = queue.WAITING_ON_STAGE2_EDIT_COMMIT
 _STAGE2_EDIT_REVALIDATE = queue.WAITING_ON_STAGE2_EDIT_REVALIDATE
+_INVALID_REVALIDATE = queue.WAITING_ON_INVALID_REVALIDATE
 # Stage4 四道人工闸 blocker 已退役（2026-09-15 全自动裁决）；只剩
 # repair/replan prepared 尾窗的免费恢复面仍登记专属 waiter。
 _STAGE4_DESIGN_REPAIR_COMMIT = queue.WAITING_ON_STAGE4_DESIGN_REPAIR_COMMIT
@@ -74,13 +75,13 @@ _STAGE6_APPROVE = 'stage6.approve'
 
 _W0 = frozenset({_INBOX, _RESUME})
 # stage2 恢复入口只认统一机械准入 blockers；节点写权仍按知识生产节点登记。
-_W2 = frozenset({_INBOX, _RESUME})
-_W4 = frozenset({_INBOX, _RESUME})
-_W5 = frozenset({_INBOX, _RESUME, _STAGE5_REVIEW, _STAGE5_CLOSURE})
-_W6 = frozenset({_INBOX, _RESUME, _STAGE5_CLOSURE, _STAGE6_APPROVE})
+_W2 = frozenset({_INBOX, _RESUME, _INVALID_REVALIDATE})
+_W4 = frozenset({_INBOX, _RESUME, _INVALID_REVALIDATE})
+_W5 = frozenset({_INBOX, _RESUME, _STAGE5_REVIEW, _STAGE5_CLOSURE, _INVALID_REVALIDATE})
+_W6 = frozenset({_INBOX, _RESUME, _STAGE5_CLOSURE, _STAGE6_APPROVE, _INVALID_REVALIDATE})
 # prepare 接受闸已退役；现役允许在 stage6.prepare 等待面与恢复面下跑免费路。
 _W6_PREPARE = _W6 | frozenset({'stage6.prepare', queue.WAITING_ON_STAGE6_PREPARE_COMMIT})
-_W7 = frozenset({_INBOX, _RESUME})
+_W7 = frozenset({_INBOX, _RESUME, _INVALID_REVALIDATE})
 
 
 #: 首批恢复闭集。这里登记的是**全部 flag token**，不是只登记主操作；

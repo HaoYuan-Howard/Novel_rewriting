@@ -1180,7 +1180,7 @@ def _require_fresh_json(store: ArtifactStore, rel: str) -> str:
         raise GateBlocked(
             f'{rel} has an unadjudicated INVALID sibling; an approval cannot bind to it',
             invalid_path=str(invalid),
-            hint=f'<producing node> --revalidate --actor <id> --reason <why>, or '
+            hint=f'<producing node> --revalidate --actor system:invalid-revalidate --reason <audit>, or '
                  f'--apply-edit to fix {rel} first (both cost nothing)')
     if not path.is_file():
         raise UpstreamMissing(f'{rel} is required before approval')
@@ -1209,7 +1209,7 @@ def _require_current_text(novel_dir: Path, rel: str) -> str:
         raise GateBlocked(
             f'{rel} has an unadjudicated INVALID sibling; an approval cannot bind to it',
             invalid_path=str(invalid),
-            hint=f'<producing node> --revalidate --actor <id> --reason <why>, or '
+            hint=f'<producing node> --revalidate --actor system:invalid-revalidate --reason <audit>, or '
                  f'--apply-edit to fix {rel} first (both cost nothing)')
     try:
         raw = path.read_bytes()
@@ -2508,7 +2508,7 @@ def _require_stage5_complete(
             f'stage5 still has blocked INVALID chapter drafts: {blocked}; an '
             f'approval cannot bind to them',
             invalid_path=str(novel_dir / 'stage5'),
-            hint='stage5.write --revalidate --actor <id> --reason <why>, '
+            hint='stage5.write --revalidate --actor system:invalid-revalidate --reason <audit>, '
                  'or --apply-edit to fix those chapters first (both cost nothing)')
 
 

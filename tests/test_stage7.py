@@ -539,7 +539,7 @@ def test_the_gate_blocks_a_dirty_map_and_revalidate_promotes_it_after_the_fix(bo
     ctx = RunContext.open(str(box.root), box.sid, 'stage7.rename', paid=True)
     with pytest.raises(GateBlocked, match='阻断级') as blocked:
         rename.run_rename(ctx, _fake_client(ctx, dirty))
-    assert ('stage7.rename --revalidate --actor <id> --reason <why>'
+    assert ('stage7.rename --revalidate --actor system:invalid-revalidate --reason <audit>'
             in (blocked.value.hint or ''))
     assert '--revalidate' not in str(blocked.value)
     invalid = box.dir / paths.invalid_of('stage7/name_map.json')

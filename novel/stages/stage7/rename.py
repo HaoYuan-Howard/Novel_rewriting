@@ -2114,7 +2114,7 @@ def finalize_rename_candidate(
                     f'最后 accepted 问题稿在 {path}',
                     invalid_path=str(path),
                     hint='stage7.rename --apply-edit <name_map_edit.json 路径> 改一行，'
-                         '或 stage7.rename --revalidate --actor <id> --reason <why>'
+                         '或 stage7.rename --revalidate --actor system:invalid-revalidate --reason <audit>'
                          '（0 LLM、同轮重判并留不可变审计）')
             return _finalize_agent_rename_formal(
                 ctx, prepared, terminal)
@@ -2131,7 +2131,7 @@ def finalize_rename_candidate(
             f'——不该拿它去替换正文。问题稿在 {path}',
             invalid_path=str(path),
             hint='stage7.rename --apply-edit <name_map_edit.json 路径> 改一行，'
-                 '或 stage7.rename --revalidate --actor <id> --reason <why>'
+                 '或 stage7.rename --revalidate --actor system:invalid-revalidate --reason <audit>'
                  '（0 LLM、同轮重判并留不可变审计）')
     from novel.llm import stage7_runs
     with stage7_runs.commit_ownership(ctx.novel_dir):

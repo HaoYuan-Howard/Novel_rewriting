@@ -141,9 +141,14 @@ def _human_how(stage: str, rule: str | None = None) -> str:
 
 
 def _revalidate_how(node: str) -> str:
-    """Copyable strong-audit promotion, never the old credential-free form."""
-    return (f'`{node} --revalidate --actor <id> --reason <why>`：0 LLM、同轮重判、'
-            '写入不可变审计；不是新一轮人工改写')
+    """Auto 0-wire promotion path; human Stage 页不再发布该用户入口。"""
+    from contracts.invariants import (
+        SYSTEM_INVALID_REVALIDATE_ACTOR, SYSTEM_INVALID_REVALIDATE_REASON,
+    )
+    return (
+        f'队列/自动恢复将跑 `{node} --revalidate --actor '
+        f'{SYSTEM_INVALID_REVALIDATE_ACTOR} --reason <audit>`（0 LLM、同轮重判）；'
+        f'固定理由：{SYSTEM_INVALID_REVALIDATE_REASON}；不是新一轮人工改写')
 
 
 def _invalid_recovery_how(
@@ -230,10 +235,10 @@ def inbox_from_snapshot(
             kind='verification',
             stage='stage6', chapter=None, rule='stage6.prepare',
             what=('独立文案准备待补提交：' if prepare_state.pending_commit else '独立文案准备待自动接受：') + prepare_state.reason,
-            how=('运行 stage6.prepare --recover-edit 免费补齐原决定'
-                 if prepare_state.pending_commit else
-                 '运行 stage6.prepare --revalidate（0 成本）触发机械自动接受；'
-                 '材料已变则重跑 stage6.prepare')))
+                how=('运行 stage6.prepare --recover-edit 免费补齐原决定'
+                     if prepare_state.pending_commit else
+                     '队列将跑 stage6.prepare --revalidate（0 成本）触发机械自动接受；'
+                     '材料已变则重跑 stage6.prepare')))
     items += _stage2_projection_recovery_items(ov)
     items += _trim_verification_items(novel_dir, code, audits=trim_audits)
     stage6_workpack = _stage6_workpack_or_none(novel_dir, code)
@@ -284,21 +289,22 @@ def _stage2_projection_recovery_items(ov) -> list[InboxItem]:
         kind='repairable', stage='stage2', chapter=None,
         rule='blueprint_character_projection',
         what='Blueprint 称名投影缺失、损坏或未绑定当前人物登记',
-        how=('跑 `stage2.characters --revalidate --actor <id> --reason <why>`：'
-             '从当前人物登记免费重建称名投影；不会重采人物或知识'),
+        how=('队列将跑 `stage2.characters --revalidate --actor '
+             'system:projection-recovery`：从当前人物登记免费重建称名投影；'
+             '不会重采人物或知识'),
     )]
 
 
 def _classify(item: InboxItem) -> InboxItem:
     """把正交两轴物化；不因“看起来像人工项”猜一份不存在的裁决。
 
-    ⚠ **这是 `delivery_effect` 的唯一物化口**。Stage2 语义审阅退役后不再有
-    审阅义务待办：Stage2 机械阻断保持 blocking，语义未审只经报告 ``unver``
-    与交付披露表达，不在 inbox 里分级。
+    ⚠ **这是 `delivery_effect` 的唯一物化口**。批次 C：``verification`` 全转
+    披露类（质量/未审面），不再挡交付；机械阻断仍走 invalid/rejected/stalled/
+    repairable/upstream/approval。Stage2 语义未审只经报告 ``unver`` 与交付披露。
     """
     disclosure = (
         item.kind == 'human_only'
-        or (item.kind == 'verification' and item.stage == 'stage6' and item.rule != 'stage6.prepare')
+        or item.kind == 'verification'
     )
     return item.model_copy(update={
         'delivery_effect': 'disclosure' if disclosure else 'blocking',
@@ -553,12 +559,9 @@ def _trim_verification_items(novel_dir, code: str, *, audits=None) -> list[Inbox
             rule=f'trim_audit_ch{ordinal:02d}',
             what=(f'第 {ordinal} 章超上限且本仓没有自动收缩路径：{audit.reason}；'
                   f'超限根因附注：{context}'),
-            how=('当前保留 pretrim 原稿；这是 0 次 LLM 调用的人工销账，'
-                 '人工确认保留原稿可跑 `stage5.review --retain-pretrim '
-                 f'--chapters {ordinal} --actor <自报身份> --reason <理由>`；'
-                 '确需改写则 `stage5.write --apply-edit <路径>`（同样 0 次调用）。'
-                 'resolution 同时绑定当前正式章路径/正文 SHA-256、audit 完整 SHA-256 '
-                 '与 before hash，任一变化即失效')))
+            how=('超限事实随交付披露（Q-13 / degradable）；批次 B3 后由 '
+                 '`stage5.review` producer 机械处置（预算内改写或机械保留），'
+                 '不再等人提交 retain-pretrim')))
     return out
 
 
@@ -621,12 +624,12 @@ def _hook_verification_items(
             rule=f'reference_boundary:{candidate.slot}',
             what=(f'候选 {candidate.index}（{candidate.approach}）当前为 '
                   f'{candidate.semantic_state}：{candidate.semantic_reason}'),
-            how=(f'人工读完同一终审工作包的 A/B 与机械证据后跑 '
+            how=('开篇候选未决属质量披露面（Q-13）；流水线默认 '
+                 '`stage6.approve --auto` 按固定槽位序定稿。人工改选随时可做：'
                  f'`stage6.approve --pick {candidate.index} '
                  f'--actor <自报身份> --reason <理由> '
-                 f'--review-token {workpack.review_token}`；'
-                 'token 在内部绑定 exact 工作包，长期决定只绑定实际可见内容与'
-                 '显式审阅契约；候选或可见证据变化会拒绝旧决定')))
+                 f'--review-token {workpack.review_token}`（不阻塞下游）'))
+        )
     return out
 
 
@@ -660,8 +663,9 @@ def _approval_items(
         out.append(InboxItem(
             kind='verification', stage='stage7', chapter=None, rule='stage7.rename',
             what=('人名映射尚未机械定稿——rename producer 在校验通过后自动 seal'),
-            how=('运行 stage7.rename --recheck（0 成本）或付费重建；'
-                 '无 HARD 时 producer 会以 system:stage7-auto 自动定稿')))
+            how=('运行 stage7.rename --recheck（0 成本）触发机械 seal；'
+                 '无 HARD 时 producer 会以 system:stage7-auto 自动定稿；'
+                 '本项为披露，不挡交付终验以外的机械准入')))
     return out
 
 

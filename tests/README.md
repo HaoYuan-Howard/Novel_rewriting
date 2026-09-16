@@ -30,6 +30,14 @@
 记录删除对象、原职责、现役依据及等价替代；前后用例数分开报告，不把清理后的较小分母写成旧集合全绿。
 涉及支持范围或公开契约的变化先说明具体取舍；局部可证的冗余可直接清理。
 
+### 分母变化登记（批次 C · 2026-09-15）
+
+| 变更 | 原职责 | 现役依据 | 等价替代 / 分母影响 |
+|---|---|---|---|
+| `POST /stage2/analyze-draft` 人工写面 | HTTP 提交 owner 草稿订正 | 全自动裁决：用户修复写面退役 | 内部 CLI `--repair-analyze-draft` / `--recover-analyze-draft` 保留；`test_stage2_analyze_draft_http` 改断言 POST 405（读 GET 仍在） |
+| enums.actions 隐藏 `--revalidate` 等 | Stage 页一键提升 INVALID | 队列以 `system:invalid-revalidate` 自动排入 | `test_orchestrator_queue` 的 live-INVALID 用例从 blocked 改为 todo 自动 revalidate；`Stage5Screen.request.test` 断言 actions 中无 `--revalidate` |
+| Inbox `verification` → disclosure | 部分 verification 挡交付 | Q-13 质量类披露 | `test_inbox_projection` trim/verification 断言 `delivery_effect=disclosure`；交付终验只计 blocking |
+
 Stage3 文风迁移、Stage6 旧定性包 A/B 与 Stage2 旧五轮实验退出当前测试维护范围。
 历史由 Git 和既存实验记录保存，不新增测试归档目录；旧解释器不能接受当前报告的守卫仍保留。
 从旧实验中抽出的现役 Hook/Retry 夹具归 `tests/factories.py`，不再让当前测试依赖退役实验模块。

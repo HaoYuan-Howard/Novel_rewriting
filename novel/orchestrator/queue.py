@@ -38,6 +38,7 @@ from pathlib import Path
 
 from contracts.invariants import (
     LEGACY_STAGE5_MODES, NODES, RETIRED_NODES, RETIRED_STAGES, STAGES,
+    SYSTEM_INVALID_REVALIDATE_ACTOR, SYSTEM_INVALID_REVALIDATE_REASON,
 )
 from contracts.schema.api import ApprovalDoc
 from contracts.schema.orchestration import (
@@ -75,6 +76,11 @@ WAITING_ON_INBOX = 'inbox:invalid'
 WAITING_ON_STAGE2_EDIT_COMMIT = 'recovery:stage2-global-edit-commit'
 WAITING_ON_STAGE2_EDIT_REVALIDATE = (
     'recovery:stage2-global-edit-revalidate')
+#: 批次 C：live `.INVALID` 的 0-wire 自动提升。常量进入
+#: ``DETERMINISTIC_RECOVERY_WAITING_ON``，由 Supervisor 铸 recovery permit
+#: 后交给 Executor；不再等人填 actor/reason，也不把提升做成普通 ready todo
+#: （避免无书目录时 ``build_steps`` 误伤规划）。
+WAITING_ON_INVALID_REVALIDATE = 'recovery:invalid-revalidate'
 WAITING_ON_ANALYZE_RESPONSE_REPAIR = 'human:stage2-analyze-response-repair'
 WAITING_ON_ANALYZE_RESPONSE_TERMINAL = 'human:stage2-analyze-response-terminal'
 WAITING_ON_ANALYZE_SOURCE = 'human:stage2-analyze-source-unavailable'
@@ -123,6 +129,7 @@ WAITING_ON_REPLAN = 'queue:plan-changed'
 DETERMINISTIC_RECOVERY_WAITING_ON: frozenset[str] = frozenset({
     WAITING_ON_STAGE2_EDIT_COMMIT,
     WAITING_ON_STAGE2_EDIT_REVALIDATE,
+    WAITING_ON_INVALID_REVALIDATE,
     WAITING_ON_STAGE4_DESIGN_REPAIR_COMMIT,
     WAITING_ON_STAGE5_REVIEWER_REWRITE,
     WAITING_ON_PREPARED_DELIVERY,
@@ -543,6 +550,7 @@ def plan_book_from_overview(
         stage5_reviewer_rewrite_flags: tuple[str, ...] | None = None
         stage5_reviewer_rewrite_no_action = False
         prepare_auto_accept = False
+        invalid_auto_revalidate = False
         stage2_rework = None
         projection_recovery = (
             node == 'stage2.characters'
@@ -706,10 +714,17 @@ def plan_book_from_overview(
             and stage2_rework is None
         ):
             # ``resume_verdict`` 必须如实描述“默认重跑会发生什么”，但 queue 不能
-            # 把这句警告继续冻结成一条付费 argv。活动 INVALID 先停在已登记的
-            # 0 LLM recovery 面；若该节点没有安全恢复路，也保持 blocked 交给人，
-            # 绝不把“没实现恢复”解释成“同意再付一次钱”。
-            why_blocked = WAITING_ON_INBOX
+            # 把这句警告继续冻结成一条付费 argv。批次 C：有 ``--revalidate`` 的
+            # 节点由队列以固定 system 审计身份自动排 0-wire 提升；没有该入口的
+            # 节点仍 blocked，绝不把“没实现恢复”解释成“同意再付一次钱”。
+            if '--revalidate' in spec.flags:
+                invalid_auto_revalidate = True
+                why_blocked = WAITING_ON_INVALID_REVALIDATE
+                verdict, why = st.RESUME_RUN, (
+                    '本层有 live .INVALID——零成本 --revalidate（'
+                    f'{SYSTEM_INVALID_REVALIDATE_ACTOR}）同轮重判并留不可变审计')
+            else:
+                why_blocked = WAITING_ON_INBOX
         # Stage4 人工闸已退役（2026-09-15 全自动裁决）：design 落盘（机械有效）
         # 即自动进入 plan（上方统一机械准入），plan 落盘（机械有效）即自动
         # 进入 context。context 的机械准入单独判，理由精确到产物。
@@ -838,6 +853,9 @@ def plan_book_from_overview(
             if knowledge_rebind
             else ['--revalidate']
             if prepare_auto_accept
+            else ['--revalidate', '--actor', SYSTEM_INVALID_REVALIDATE_ACTOR,
+                  '--reason', SYSTEM_INVALID_REVALIDATE_REASON]
+            if invalid_auto_revalidate
             else []
         )
         if node == 'stage4.plan' and why_blocked is None and not flags:
@@ -887,23 +905,25 @@ def plan_book_from_overview(
             # 章，旧 Review 绑定的是旧正文，不能反向卡住重建；新章落盘后下一
             # 轮自然会免费重算 Review。其余上游 stuck / legacy / REDO / UNKNOWN
             # 已在上面占住 blocker。
-            if why_blocked is None and has_live_invalid:
-                # canonical 与更新的 INVALID 可并存；默认写作只补缺章，无法处理
-                # 这份候选，反而会以“没有要写的章”结束。actor/reason 又只能由
-                # 人提供，所以队列停在 0 LLM revalidate 入口，不冻结一条假命令。
+            if why_blocked is None and has_live_invalid and not invalid_auto_revalidate:
+                # 通用 live-INVALID 分支未接手时（例如缺 --revalidate），仍 blocked。
                 why_blocked = WAITING_ON_INBOX
             if why_blocked is None and review_blocks_paid_write:
                 why_blocked = WAITING_ON_REVIEW
             if (stage5_reviewer_rewrite_flags is None
-                    and (has_live_invalid or review_blocks_paid_write)):
+                    and ((has_live_invalid and not invalid_auto_revalidate)
+                         or review_blocks_paid_write)):
                 steps = []
 
         if why_blocked in (
             WAITING_ON_INBOX,
             WAITING_ON_STAGE5_CLOSURE,
+            WAITING_ON_INVALID_REVALIDATE,
         ):
             # 人审/相位决定完成前，当前队列快照里不放下游付费 argv。状态改变后
             # 必须重新 plan，不能把旧快照重解释为新授权。
+            # INVALID 自动提升的 exact argv 由 flags 携带，steps 留给 Supervisor
+            # 铸 recovery permit 后再冻结——规划期不解析书目录。
             steps = []
         if (why_blocked == WAITING_ON_STAGE5_REVIEWER_REWRITE
                 and node != 'stage5.write'):
@@ -960,10 +980,16 @@ def plan_book_from_overview(
 def _blocked_why(
     waiting_on: str, verdict_why: str,
 ) -> str:
+    if waiting_on == WAITING_ON_INVALID_REVALIDATE:
+        return (
+            '本层 live `.INVALID` 待 0-wire 自动提升：Supervisor 将以 '
+            f'`{SYSTEM_INVALID_REVALIDATE_ACTOR}` 重放 `--revalidate`；'
+            f'{verdict_why}')
     if waiting_on == WAITING_ON_INBOX:
         return (
-            '上游或本层有被闸门拦下的稿要人处理（0 LLM 提升路是 '
-            '`--revalidate --actor <id> --reason <why>`，同轮重判并留不可变审计）；'
+            '上游或本层有被闸门拦下的稿：有 ``--revalidate`` 的节点由队列以 '
+            f'`{SYSTEM_INVALID_REVALIDATE_ACTOR}` 自动 0-wire 提升；本项仍 blocked '
+            '表示当前节点没有可自动排入的提升路或另有机械准入阻断；'
             f'{verdict_why}')
     if waiting_on == WAITING_ON_STAGE5_CLOSURE:
         return (

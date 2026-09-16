@@ -396,7 +396,7 @@ def require_accepted_review(ctx: RunContext, store: ArtifactStore | None = None)
         raise GateBlocked(
             f'Stage5 仍有 {len(invalids)} 份 `.INVALID` 未裁决，不能进入正式下游',
             invalid_path=str(store.path('stage5')),
-            hint='stage5.write --revalidate --actor <id> --reason <why>（0 成本提升），'
+            hint='stage5.write --revalidate --actor system:invalid-revalidate --reason <audit>（0 成本提升），'
                  '或 stage5.write --apply-edit <chNN.json 路径> 继续人工修复')
 
     missing = missing_draft_ordinals(status.review)

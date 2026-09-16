@@ -192,7 +192,7 @@ v1 骨架为：
 | `--emit-edit-template` | 0 | stdout-only 输出 registry 绑定的 `NameMapEdit` v1 骨架，不写盘 |
 | `--apply-edit <路径>` | 0 | 应用严格人工编辑输入并开新人工修订轮。路径相对**书目录**，也接受书目录内的绝对路径；目录外（含 `..` 穿越）是显式终态（`novel/paths.py::edit_rel`，stage2/4/6/7 共用） |
 | `--adopt-residual high` | 0 | 把当前高置信残留作为新决策输入重判；其他参数关闭式拒绝 |
-| `--revalidate --actor <id> --reason <text>` | 0 | 对 `.INVALID` 做强审计，记录 hash 差异并在合格后提升；不开新生成轮 |
+| `--revalidate --actor system:invalid-revalidate --reason <text>` | 0 | 对 `.INVALID` 做强审计，记录 hash 差异并在合格后提升；批次 C 起由队列自动排入，Stage 页不再发布用户入口；不开新生成轮 |
 | `stage7.rename` 正式成功后 auto seal | 0 | 批次 B4：机械校验通过后第二次写 `ApprovedNameMap(origin=auto)`；`stage7.approve` 已退役 |
 | `stage7.assemble` | 0 | 在前置条件满足时写成书 |
 | `--check-only` | 0 | 只读复检当前正式产物 |

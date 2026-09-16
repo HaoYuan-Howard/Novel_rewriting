@@ -546,7 +546,7 @@ def test_the_gate_blocks_only_when_no_candidate_is_clean(box):
     ctx2 = RunContext.open(str(box.root), box.sid, 'stage6.hook', paid=True)
     with pytest.raises(GateBlocked, match='每一条') as blocked:
         hook.run_hook(ctx2, _fake_client(ctx2, _samples(box, truncated=[True, True, True])))
-    assert ('stage6.hook --revalidate --actor <id> --reason <why>'
+    assert ('stage6.hook --revalidate --actor system:invalid-revalidate --reason <audit>'
             in str(blocked.value))
     assert ArtifactStore(ctx2).exists('stage6/hook.INVALID.json')
 

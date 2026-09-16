@@ -1187,8 +1187,9 @@ export const mockApi: Api = {
   getAnalyzeDraft: (sid) => fail(new ApiError('nosample', `/novels/${sid}/stage2/analyze-draft`, {
     scope: 'book', message: '冻结样本不含待修复联合草稿，请连接真实后端读取。',
   })),
-  editAnalyzeDraft: (sid) => fail(new ApiError('server', `/novels/${sid}/stage2/analyze-draft`, {
-    status: 501, message: '草稿订正请使用真实后端写回', backendKind: 'MockCapabilityUnavailable',
+  editAnalyzeDraft: (sid) => fail(new ApiError('unsupported', `/novels/${sid}/stage2/analyze-draft`, {
+    status: 405,
+    message: 'analyze-draft 人工提交面已退役；草稿修复由自动/恢复路径处理',
   })),
   editCharacters: (sid) => fail(new ApiError('server', `/novels/${sid}/stage2/characters/edit`, {
     status: 501, message: '人物订正请使用真实后端写回', backendKind: 'MockCapabilityUnavailable',

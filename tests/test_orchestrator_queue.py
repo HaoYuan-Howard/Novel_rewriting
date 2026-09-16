@@ -389,15 +389,21 @@ def test_closed_stage5_closure_allows_stage6_planning(queue_base, monkeypatch):
 @pytest.mark.parametrize(
     ('node', 'artifact_key'),
     [
-        ('stage4.design', 'stage4.blind_candidate'),
         ('stage6.hook', 'stage6.hook'),
         ('stage7.rename', 'stage7.name_map'),
     ],
 )
-def test_live_invalid_blocks_default_paid_rerun_without_freezing_argv(
+def test_live_invalid_schedules_zero_cost_system_revalidate(
         queue_base, monkeypatch, node, artifact_key):
-    """generic INVALID 先停 recovery，绝不把 resume 的警告做成付费命令。"""
+    """批次 C：generic INVALID 排 recovery:invalid-revalidate + system flags。
+
+    不含 stage4.design：空 overview 会先被统一机械准入挡住（WAITING_ON_INBOX），
+    与本用例要钉的 live-INVALID 自动提升无关。
+    """
     from contracts.artifacts import ARTIFACT_PATHS
+    from contracts.invariants import (
+        SYSTEM_INVALID_REVALIDATE_ACTOR, SYSTEM_INVALID_REVALIDATE_REASON,
+    )
 
     monkeypatch.setattr(Q, 'nodes_up_to', lambda _until: [node])
     # 只隔离到达本节点前的 typed 闸；本用例要验证的是 live INVALID 本身
@@ -418,8 +424,13 @@ def test_live_invalid_blocks_default_paid_rerun_without_freezing_argv(
         queue_base, 'book-a', until_stage=NODES[node].stage, follow_check=False)
 
     assert todo == [] and len(blocked) == 1
-    assert blocked[0].waiting_on == Q.WAITING_ON_INBOX
+    assert blocked[0].waiting_on == Q.WAITING_ON_INVALID_REVALIDATE
+    assert blocked[0].flags == [
+        '--revalidate', '--actor', SYSTEM_INVALID_REVALIDATE_ACTOR,
+        '--reason', SYSTEM_INVALID_REVALIDATE_REASON,
+    ]
     assert blocked[0].steps == []
+    assert blocked[0].waiting_on in Q.DETERMINISTIC_RECOVERY_WAITING_ON
 
 
 def test_queue_blocks_blueprint_and_downstream_on_failed_admission(
@@ -495,9 +506,16 @@ def test_queue_materializes_missing_projection_without_paid_characters(
         queue_base, 'book-a', until_stage='stage2', follow_check=False)
 
     if invalid:
+        from contracts.invariants import (
+            SYSTEM_INVALID_REVALIDATE_ACTOR, SYSTEM_INVALID_REVALIDATE_REASON,
+        )
         assert todo == [] and len(blocked) == 1
+        assert blocked[0].waiting_on == Q.WAITING_ON_INVALID_REVALIDATE
+        assert blocked[0].flags == [
+            '--revalidate', '--actor', SYSTEM_INVALID_REVALIDATE_ACTOR,
+            '--reason', SYSTEM_INVALID_REVALIDATE_REASON,
+        ]
         assert blocked[0].steps == []
-        assert blocked[0].waiting_on == Q.WAITING_ON_INBOX
         return
     assert blocked == [] and len(todo) == 1
     item = todo[0]
@@ -511,7 +529,10 @@ def test_queue_materializes_missing_projection_without_paid_characters(
 
 def test_queue_stops_naming_blocked_projection_at_human_zero_llm_recovery(
         queue_base, monkeypatch):
-    """称名不可信时不 renormalize、不重采，并把阻塞传播给 Blueprint。"""
+    """称名不可信时不 renormalize、不重采；live INVALID 先自动 0-wire revalidate。"""
+    from contracts.invariants import (
+        SYSTEM_INVALID_REVALIDATE_ACTOR, SYSTEM_INVALID_REVALIDATE_REASON,
+    )
     monkeypatch.setattr(
         Q, 'nodes_up_to',
         lambda _until: ['stage2.characters', 'stage2.blueprint'])
@@ -547,10 +568,14 @@ def test_queue_stops_naming_blocked_projection_at_human_zero_llm_recovery(
     assert todo == []
     assert [item.node for item in blocked] == [
         'stage2.characters', 'stage2.blueprint']
-    assert all(item.waiting_on == Q.WAITING_ON_INBOX for item in blocked)
+    assert blocked[0].waiting_on == Q.WAITING_ON_INVALID_REVALIDATE
+    assert blocked[0].flags == [
+        '--revalidate', '--actor', SYSTEM_INVALID_REVALIDATE_ACTOR,
+        '--reason', SYSTEM_INVALID_REVALIDATE_REASON,
+    ]
+    # 上游 live INVALID 的自动提升 blocker 向下游传播；下游不另造付费 argv。
+    assert blocked[1].waiting_on == Q.WAITING_ON_INVALID_REVALIDATE
     assert all(item.steps == [] for item in blocked)
-    assert '--apply-edit' in blocked[0].why and '--revalidate' in blocked[0].why
-    assert '不得用 `--renormalize`' in blocked[0].why
 
 
 @pytest.mark.parametrize('readable', [False, True])
@@ -629,7 +654,8 @@ def test_queue_does_not_paid_rerun_global_invalid_after_projection_is_ready(
     assert todo == []
     assert [item.node for item in blocked] == ['stage2.global', 'stage2.blueprint']
     assert all(item.steps == [] for item in blocked)
-    assert blocked[0].waiting_on == Q.WAITING_ON_INBOX
+    assert blocked[0].waiting_on == Q.WAITING_ON_INVALID_REVALIDATE
+    assert blocked[1].waiting_on == Q.WAITING_ON_INVALID_REVALIDATE
 
 
 def test_knowledge_rebind_free_step_precedes_stale_blueprint_redo(
@@ -1310,9 +1336,13 @@ def test_operator_lane_derives_stage5_rewrite_flags_and_ignores_old_review(
     assert todo[0].waiting_on is None
 
 
-def test_stage5_live_invalid_stops_at_the_zero_cost_revalidation_entry(
+def test_stage5_live_invalid_schedules_zero_cost_system_revalidate(
         queue_base, monkeypatch):
-    """默认 writer 只补缺章，不能拿一条无效付费命令冒充 INVALID 恢复。"""
+    """批次 C：默认 writer 不补缺章冒充恢复；排 recovery:invalid-revalidate。"""
+    from contracts.invariants import (
+        SYSTEM_INVALID_REVALIDATE_ACTOR, SYSTEM_INVALID_REVALIDATE_REASON,
+    )
+
     stage5 = SimpleNamespace(
         stage='stage5', artifacts=[SimpleNamespace(invalid=True)],
         review_state='missing')
@@ -1326,9 +1356,12 @@ def test_stage5_live_invalid_stops_at_the_zero_cost_revalidation_entry(
     todo, blocked = Q.plan_book(queue_base, 'book-a', until_stage='stage5')
 
     assert todo == [] and len(blocked) == 1
-    assert blocked[0].waiting_on == Q.WAITING_ON_INBOX
+    assert blocked[0].waiting_on == Q.WAITING_ON_INVALID_REVALIDATE
+    assert blocked[0].flags == [
+        '--revalidate', '--actor', SYSTEM_INVALID_REVALIDATE_ACTOR,
+        '--reason', SYSTEM_INVALID_REVALIDATE_REASON,
+    ]
     assert blocked[0].steps == []
-    assert '--revalidate' in blocked[0].why
 
 
 def test_stage5_write_plans_without_writing_approval_gate(

@@ -397,7 +397,7 @@ def _read_main_text(store: ArtifactStore) -> list[dict[str, Any]] | None:
         if hard:
             raise BlockingFindingsUnresolved(
                 '人物正式登记仍有 HARD；先由 stage2.characters 修复，不购买知识重试',
-                rules=hard, hint='stage2.characters --revalidate --actor <id> --reason <why>（0 LLM）')
+                rules=hard, hint='stage2.characters --revalidate --actor system:invalid-revalidate --reason <audit>（0 LLM）')
     return [s.model_dump(by_alias=True) for s in art.root]
 
 
@@ -406,7 +406,7 @@ def _require_blueprint_character_projection(
 ) -> tuple[BlueprintCharacterProjection, dict[str, Any]]:
     """Blueprint 的唯一称名输入；缺/坏/stale 都关闭并指向 0-LLM 恢复。"""
     recovery = (
-        'stage2.characters --revalidate --actor <id> --reason <why>（0 LLM）'
+        'stage2.characters --revalidate --actor system:invalid-revalidate --reason <audit>（0 LLM）'
         '从当前人物登记与 MainText 重建该投影')
     projection_exists = store.exists(BLUEPRINT_CHARACTER_REL)
     try:
@@ -422,7 +422,7 @@ def _require_blueprint_character_projection(
         raise ProvenanceRefused(
             '最新人物登记仍有会改变 Blueprint 称名闭集的 HARD；'
             '先走 stage2.characters typed edit / '
-            '`--revalidate --actor <id> --reason <why>`（0 LLM）。'
+            '`--revalidate --actor system:invalid-revalidate --reason <audit>`（0 LLM）。'
             '在称名面收口前不得启动付费 Blueprint')
     if not projection_exists:
         raise UpstreamMissing(
@@ -2181,7 +2181,7 @@ def finalize_global_candidate(
         raise GateBlocked(
             f'stage2.global 落盘闸门命中 {list(terminal.hard_hits)}。问题稿已存 '
             f'{_GLOBAL_INVALID}，正式产物没有被覆盖。改好后跑 '
-            '`stage2.global --revalidate --actor <id> --reason <why>`'
+            '`stage2.global --revalidate --actor system:invalid-revalidate --reason <audit>`'
             '（0 LLM、同轮重判并留不可变审计）。',
             invalid_path=path,
         )
@@ -3066,7 +3066,7 @@ def finalize_blueprint_candidate(
         raise GateBlocked(
             f'stage2.blueprint 落盘闸门命中 {list(hits)}{suffix}。问题稿已存 '
             f'{_INVALID}，正式产物没有被覆盖。改好后跑 '
-            '`stage2.blueprint --revalidate --actor <id> --reason <why>`'
+            '`stage2.blueprint --revalidate --actor system:invalid-revalidate --reason <audit>`'
             '（0 LLM、同轮重判并留不可变审计）。',
             invalid_path=str(path),
         )
@@ -4863,7 +4863,7 @@ def run_apply_edit(ctx: RunContext, edit_path: str = '') -> tuple[GlobalGroundin
                 f'问题稿在 {path}，**正式全书底座没有被覆盖**；'
                 f'改完编辑文件重跑 `--apply-edit`，'
                 f'或直接改 `.INVALID` 后跑 '
-                f'`{ctx.node} --revalidate --actor <id> --reason <why>`'
+                f'`{ctx.node} --revalidate --actor system:invalid-revalidate --reason <audit>`'
                 f'（0 LLM、同轮重判并留不可变审计）',
                 invalid_path=path)
 

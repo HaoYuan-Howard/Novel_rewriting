@@ -20,7 +20,6 @@ import { cx } from '@/lib/cx'
 import type { GlobalTimeWindow } from '@/types/stages'
 import { CharactersPanel } from './CharactersPanel'
 import { GlobalEditPanel } from './GlobalEditPanel'
-import { AnalyzeDraftPanel } from './AnalyzeDraftPanel'
 import { CoreEvidence, SharedAnalysisSource } from './CoreEvidence'
 
 type Tab = 'setting' | 'rels' | 'rules' | 'secrets'
@@ -103,7 +102,6 @@ export function GlobalScreen() {
         </p>
         <CharactersPanel key={sid} sid={sid} />
         <GlobalEditPanel key={'edit:' + sid} sid={sid} />
-        <AnalyzeDraftPanel key={'analyze:' + sid} sid={sid} />
         {blueprintAction ? (
           <div role="group" aria-label="机械准入通过后生成逐章骨架">
             <Panel className="flex flex-wrap items-center justify-between gap-14 px-18 py-14">

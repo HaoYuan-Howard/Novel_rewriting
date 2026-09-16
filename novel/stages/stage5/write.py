@@ -3817,7 +3817,7 @@ def _run_group_parallel(
         raise GateBlocked(
             f'这一批 {len(todo)} 章全部没落成正式稿：' + '；'.join(blocked)
             + '。人修好对应 `.INVALID` 后跑 `stage5.write '
-              '--revalidate --actor <id> --reason <why>`'
+              '--revalidate --actor system:invalid-revalidate --reason <audit>`'
               '（0 LLM、同轮重判并留不可变审计）',
             invalid_path=str(store.path('stage5')))
     return report

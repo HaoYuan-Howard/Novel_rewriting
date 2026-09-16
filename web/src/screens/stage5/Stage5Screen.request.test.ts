@@ -39,15 +39,12 @@ describe('Stage5 dynamic chapter request', () => {
     expect(command.match(/--chapters/g)).toHaveLength(1)
   })
 
-  it('offers one canonical revalidate action with audit inputs and no credential-only buttons', async () => {
+  it('hides canonical revalidate from Stage5 user action catalog (batch C)', async () => {
     const enums = await mockApi.getEnums()
     const actions = stage5WriteActions(enums.actions)
     const revalidate = actions.filter((action) => action.extra?.includes('--revalidate'))
 
-    expect(revalidate).toHaveLength(1)
-    expect(revalidate.every((action) =>
-      action.required_inputs?.map((input) => input.flag).join(',') === '--actor,--reason',
-    )).toBe(true)
+    expect(revalidate).toHaveLength(0)
     expect(actions.some((action) =>
       action.extra?.some((flag) => ['--actor', '--reason'].includes(flag)),
     )).toBe(false)

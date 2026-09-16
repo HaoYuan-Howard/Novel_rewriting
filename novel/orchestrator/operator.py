@@ -101,10 +101,14 @@ def _stage2_commit_recovery_surface(
             counts[kind] = 1
             return lane, InboxView(items=[InboxItem(kind=kind, stage='stage2', chapter=None,
                 rule='analyze_owner_draft_repair' if draft_repair else 'analyze_response_repair', what=item.why,
-                how=('导出原 owner 草稿模板，语义订正后使用 --repair-analyze-draft 免费编译'
+                how=('原 owner 草稿编译失败：自动/恢复路径使用 '
+                     '`--emit-analyze-draft-template` / `--repair-analyze-draft` / '
+                     '`--recover-analyze-draft`（人工 HTTP 写面已退役）'
                      if draft_repair else
-                     '通过 response-repair 封存唯一修复决定，再使用原 --recover-analyze-run 免费恢复'
-                     if kind == 'repairable' else '保留原响应、费用与 owner，先解决已明确的终态或来源缺口'))],
+                     '结构化响应修复由 agent/自动恢复路径经 response-repair 封存后 '
+                     '`--recover-analyze-run` 免费恢复（人工 Stage 页提交面已退役）'
+                     if kind == 'repairable' else '保留原响应、费用与 owner，先核对 ledger/会话审计再决定；'
+                     '付费状态未知时不重发付费请求'))],
                 counts=counts, total=1, wontfix=0)
         return lane, InboxView(items=[], counts=counts, total=0, wontfix=0)
     recovery_flags = state.stage2_edit_commit_recovery_flags(

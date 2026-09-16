@@ -71,7 +71,7 @@ def _require_mapping_current(
         raise GateBlocked(
             f'{_INVALID} 仍在盘上；当前人物表有未裁决问题，不能交付',
             invalid_path=str(store.path(_INVALID)),
-            hint='stage7.rename --revalidate --actor <id> --reason <why>（0 成本提升），'
+            hint='stage7.rename --revalidate --actor system:invalid-revalidate --reason <audit>（0 成本提升），'
                  '或先 --apply-edit <name_map_edit.json 路径> 改一行')
     if art.approved is None:
         raise ApprovalRequired(

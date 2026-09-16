@@ -845,13 +845,13 @@ def resume_verdict(
             '`unknown/global_naming_blocked`；先运行 '
             '`stage2.characters --apply-edit <stage2/characters_edit.json>` 修正称名，'
             '或人工确认后运行 '
-            '`stage2.characters --revalidate --actor <id> --reason <why>`（均为 0 LLM）。'
+            '`stage2.characters --revalidate --actor system:invalid-revalidate --reason <audit>`（均为 0 LLM）。'
             '不得用 `--renormalize` 洗成可消费投影，也不得重采付费人物登记')
     if node == 'stage2.characters' and stage2_projection_recovery_needed(ov):
         return RESUME_RUN, (
             f'{STAGE2_BLUEPRINT_CHARACTER_PROJECTION} 缺失、损坏或未绑定当前称名底座；'
             '当前人物登记已足够确定性重建它，运行 '
-            '`stage2.characters --revalidate --actor <id> --reason <why>`（0 LLM）')
+            '`stage2.characters --revalidate --actor system:invalid-revalidate --reason <audit>`（0 LLM）')
     if node == 'stage2.characters':
         unproven = stage2_projection_source_unproven(ov)
         if unproven is not None:
@@ -864,7 +864,7 @@ def resume_verdict(
             and stage2_blueprint_invalid_recovery_needed(ov)):
         return RESUME_RUN, (
             '盘上有 live `stage2/chapter_blueprints.INVALID.json`；只先运行 '
-            '`stage2.blueprint --revalidate --actor <id> --reason <why>`（0 LLM）'
+            '`stage2.blueprint --revalidate --actor system:invalid-revalidate --reason <audit>`（0 LLM）'
             '按当前判据重判。队列不得构造默认付费 Blueprint argv；'
             '免费提升仍失败时再由人决定是否定向重生成')
 
@@ -924,7 +924,7 @@ def resume_verdict(
                 f'盘上有被闸门拦下的稿：'
                 f'{", ".join(invalid_rels)}。'
                 '先尝试 0 LLM 提升路 '
-                '`--revalidate --actor <id> --reason <why>`；'
+                '`--revalidate --actor system:invalid-revalidate --reason <audit>`；'
                 '它会按当前判据关闭式重判，不能提升时再决定是否付费重写')
         stale = [a for a in st.artifacts if a.freshness == 'stale']
         if stale:
@@ -993,7 +993,7 @@ def resume_verdict(
             f'{", ".join(paths.invalid_of(a.rel) for a in invalid)}。'
             f'⚠ 队列会按原命令**重跑本节点**（付费节点=重新付费）；'
             '想先省钱就手动跑 0 LLM 提升路 '
-            '`--revalidate --actor <id> --reason <why>`（同轮重判并留不可变审计），'
+            '`--revalidate --actor system:invalid-revalidate --reason <audit>`（同轮重判并留不可变审计），'
             '或确认后再排队')
     unreadable = [a for a in mine if not a.readable]
     if unreadable:

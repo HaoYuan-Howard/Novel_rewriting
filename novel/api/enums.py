@@ -86,6 +86,11 @@ _WITHHELD: dict[str, str] = {
         '是后端执行许可的逐字比对值，不是前端取值面'),
     'STAGE2_LEGACY_REVALIDATE_REASON': (
         '同上的固定复验理由；只写进审计与执行许可，不是前端取值面'),
+    'SYSTEM_INVALID_REVALIDATE_ACTOR': (
+        '批次 C：live .INVALID 由队列自动排入 0-wire --revalidate 的固定审计身份；'
+        '不是前端取值面或按钮文案'),
+    'SYSTEM_INVALID_REVALIDATE_REASON': (
+        '同上的固定复验理由；只写进队列 argv 与审计，不是前端取值面'),
     'STAGE5_REVIEWER_REWRITE_DIRECTIVE_CODES': (
         '只随 Commander immutable submission option 与 Stage5 writer 固定 prompt 下发；'
         '当前浏览器没有该 delegated rewrite 表单，单独发布会制造未接线的第二消费面'),
@@ -446,6 +451,14 @@ def actions() -> list[dict[str, Any]]:
         '--recover-reviewer-rewrite-prepared',
         '--retire-reviewer-rewrite-request',
     }
+    # 批次 C：人工修复写面退役——内部 0-wire revalidate / draft repair 仍可由
+    # 队列与 CLI 恢复路径复用，但 enums.actions 不再向 Stage 页发布这些用户入口。
+    internal_recovery_flags = {
+        '--revalidate',
+        '--repair-analyze-draft',
+        '--emit-analyze-draft-template',
+        '--response-repair',
+    }
 
     def required_inputs(node: str, flags: Sequence[str]) -> list[dict[str, str]]:
         """调用方在执行前必须收齐的缺失值。
@@ -461,7 +474,10 @@ def actions() -> list[dict[str, Any]]:
 
     out: list[dict[str, Any]] = []
     for node, spec in NODES.items():
-        independent = [f for f in spec.flags if f not in credential_flags]
+        independent = [
+            f for f in spec.flags
+            if f not in credential_flags and f not in internal_recovery_flags
+        ]
         for flags in [()] + [(f,) for f in independent]:
             out.append({
                     'kind': node,

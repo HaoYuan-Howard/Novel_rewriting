@@ -157,36 +157,18 @@ def test_every_action_is_unique_and_buildable(paid_payload):
         assert ('--yes' in argv) == action['paid']
 
 
-def test_revalidate_actions_collect_audit_values_without_credential_buttons(paid_payload):
+def test_revalidate_is_hidden_from_user_action_catalog(paid_payload):
+    """批次 C：enums.actions 不再发布 --revalidate 用户入口；job_kinds 仍登记。"""
     actions = paid_payload['actions']
-    credentials = {
-        '--actor', '--reason', '--subject-sha256', '--review-token',
-        '--expected-revision-id',
-        '--current-chapter-sha256', '--preview-subject-sha256',
-        '--edit-confirmation',
-    }
-
     assert not [
         action for action in actions
-        if set(action['extra'] or ()) <= credentials and action['extra']
-    ], 'audit credentials are action inputs, never standalone operations'
-
-    expected = {node for node, spec in NODES.items() if '--revalidate' in spec.flags}
-    revalidate = {
-        action['kind']: action
-        for action in actions
         if action['extra'] == ['--revalidate']
-    }
-    assert set(revalidate) == expected
-    # stage6.prepare --revalidate 是纯只读复检，不写盘也不动审计，无需人工凭据；
-    # 其余节点的 --revalidate 都要提升/写回，必须收 actor/reason。
-    credential_free = {'stage6.prepare'}
-    for kind, action in revalidate.items():
-        expected_inputs = [] if kind in credential_free else [
-            {'flag': '--actor', 'description': VALUED_FLAGS['--actor']},
-            {'flag': '--reason', 'description': VALUED_FLAGS['--reason']},
-        ]
-        assert action['required_inputs'] == expected_inputs
+    ]
+    kinds = paid_payload['job_kinds']
+    expected = {node for node, spec in NODES.items() if '--revalidate' in spec.flags}
+    assert expected
+    for node in expected:
+        assert '--revalidate' in kinds[node]['flags']
 
 
 def test_stage5_edit_publishes_one_complete_action_not_three_credential_actions(

@@ -1673,7 +1673,9 @@ FREE_ENTRIES: Final = {
     '--dry-run': '只打印将要发出去的东西，不调用、不写盘',
     '--check-only': '按当前判据复检存量产物，纯读不写盘；报 FAIL 退出码非零',
     '--recheck': '按当前判据重判存量产物并写回指标',
-    '--revalidate': '按当前判据对 .INVALID 稿做 0 LLM 同轮重判，必填 actor/reason 并留不可变审计，合格才提升',
+    '--revalidate': '按当前判据对 .INVALID 稿做 0 LLM 同轮重判；批次 C 起由队列以 '
+                    'system:invalid-revalidate 自动排入，必填 actor/reason 并留不可变审计，'
+                    '合格才提升；Stage 页不再发布该用户入口',
     '--renormalize': '按当前契约重算代码派生字段与原文定位',
     '--names-only': '只产逐章可用名册（stage4），不产计划',
     '--identity': '恒等基线：拿原作自己的东西跑整套判据，看判据有没有把合法情况排除在外',
@@ -2595,6 +2597,12 @@ STAGE2_LEGACY_REVALIDATE_ACTOR: Final = (
     'system:stage2-legacy-invalid-recovery')
 STAGE2_LEGACY_REVALIDATE_REASON: Final = (
     'legacy reviewed-edit INVALID passes current canonical HARD rules')
+#: 批次 C：live `.INVALID` 的 0-wire ``--revalidate`` 由队列/Supervisor 自动排入，
+#: 不再等人填 actor/reason。固定审计身份避免伪装成人类决定；人类 Stage 页与
+#: enums.actions 不再发布该用户入口（内部 RecoveryRunPolicy / CLI 仍可复用）。
+SYSTEM_INVALID_REVALIDATE_ACTOR: Final = 'system:invalid-revalidate'
+SYSTEM_INVALID_REVALIDATE_REASON: Final = (
+    'live INVALID passes current canonical HARD rules; auto 0-wire revalidate')
 #: 同一席位内的真实 CLI 进程尝试种类：``launch`` 是新进程首发，``resume`` 是
 #: 用供应商 exact session id 续接同一 provider 会话。两者都不新开席位。
 COMMANDER_ATTEMPT_KINDS: Final = ('launch', 'resume')

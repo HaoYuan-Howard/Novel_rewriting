@@ -197,7 +197,7 @@ def test_stage7_book_endpoint_never_bypasses_the_current_delivery_gate(
         (BlockingFindingsUnresolved('仍有阻断级问题', rules=['rn_ambiguous'],
                                     hint='stage7.rename --apply-edit <路径>'), 409, None),
         (GateBlocked('有一份没裁决的废稿', invalid_path='stage7/name_map.INVALID.json',
-                     hint='stage7.rename --revalidate --actor <id> --reason <why>'),
+                     hint='stage7.rename --revalidate --actor system:invalid-revalidate --reason <audit>'),
          409, 'stage7/name_map.INVALID.json'),
         (UpstreamMissing('book.txt 不在盘上'), 404, None),
     ]

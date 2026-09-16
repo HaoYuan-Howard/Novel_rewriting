@@ -384,7 +384,7 @@ A 接受、B 最终结构接受和 writing proof 是独立授权，已有文件�
 | R-8.7 | 「这条我不修」要**理由必填**，且豁免只挂在它真正豁免的那一条结论上 | `载体`（`contracts/schema/common.py::WontFix` 的 `why` 最小长度 + 键↔条目的收敛键一致性断言。⚠ 模型已从 `stage5.py` 搬到 `common.py`：语义豁免闭环把它变成跨层机制，形状必须只有一份） |
 | R-8.7b | 不给**不存在的**结论发豁免（该层**当前结论池**里没有那条 ⇒ 显式终态）；豁免**不删结论**，只是不再进修复、不再占待办，并**单独计数** | `结构`（`novel/wontfix.py::mark` 先在结论池里反查，查不到 / 同一 (章,判据) 有多条而没写出证据键 ⇒ 显式终态；落进 `Finding.wontfix` 由 `novel/wontfix.py::applied` **只降 `actionable` 不删结论**） |
 | R-8.7c | **持久豁免要跨层共用同一个闭环**。身份 = `(层, 章\|book, 判据, 证据键)`，层由 `<stage>/wontfix.json` 路径承载；产物版本只进审计账 `at`、不参与匹配，失效由当前证据键保证。现役 Stage5 结论池只有 0 成本机械验收；语义结论只在 Stage6 文案层进同一闭环 | `结构`（`novel/wontfix.py` 是全链唯一机制落点；结论池分别由 `novel/stages/stage5/review.py::mark_wontfix` 与 `novel/stages/stage6/hook.py::run_wontfix` 交出） |
-| R-8.8 | 待办清单聚合八类，**只读盘、不重判**：`invalid` / `rejected` / `stalled` / `human_only` / `repairable` / `verification` / `upstream` / `approval`。`repairable` 仅表示本层有结构化修复路，不再冒充「只能人修」；`verification` 只收有明确人工消解路的 UNVER。固有盲区仍不制造永远清不空的待办 | `结构`（`novel/orchestrator/inbox_projection.py::inbox_view` 只读正式产物、审批、语义决定与 durable trim audit/resolution；`INBOX_KIND` 八键始终全出，不调用模型） |
+| R-8.8 | 待办清单聚合八类，**只读盘、不重判**：`invalid` / `rejected` / `stalled` / `human_only` / `repairable` / `verification` / `upstream` / `approval`。`repairable` 仅表示本层有结构化修复路，不再冒充「只能人修」；`verification`（批次 C）一律 `delivery_effect=disclosure`（质量/未审面），不再挡交付；机械阻断仍走 invalid/rejected/stalled/repairable/upstream/approval。固有盲区仍不制造永远清不空的待办 | `结构`（`novel/orchestrator/inbox_projection.py::inbox_view` / `::_classify`；`INBOX_KIND` 八键始终全出，不调用模型） |
 | R-8.9 | 词表类判据**必须报出它的基线命中率** | `结构`（`contracts/rules.py::_validate` 第 ⑤ 条：`wordlist` 不填 `baseline` 当场拒绝注册） |
 | R-8.9b | **探针自己的基线读数**要无条件报出：未揭示秘密在全书成稿里的出现分布 · 全书自造称谓与撞名的名字面。⚠ 后者原来只在**命中时**才产出 ⇒「全书 0 个自造称谓」这个读数永远说不出来，而「查过、干净」与「根本没在查」在报告上长得一模一样 | `度量` |
 | R-8.10 | **历史关闭说明**：Stage5 曾有独立付费的两相书级语义审判；它已连节点、产物与判据一并下线，现役 Stage5 只产 0 成本机械 Review，不得宣称仍有一层书级语义守卫 | `结构`（`contracts/invariants.py::NODES`；转授与历史依据见 `R-7.18b` / `R-7.18c` 与 `B-15`） |
@@ -818,7 +818,7 @@ reasoning 已含在 completion 中时不再累加。
 |---|---|---|---|
 | deterministic | 代码 | 运行 Rule.fix 指向的同层免费节点与 flag，注册期验证路由真实存在 | 一次免费命令 |
 | llm | stage5 写手 | 只接受 `repair == UNIQUE` 且 `unresolved_rounds < 2`；directive 从 Rule 唯一派生 | 每章每判据最多两轮付费 |
-| human | 人 | 真人工路由为 human_only / upstream / approval / verification；通过 typed apply-edit、pick 或 wontfix 收口（Stage4 的 hash-bound design resolution、Stage5 的 trim 三选一与闭合回执已随 2026-09-15 全自动裁决退役） | 无自动费用 |
+| human | 人 | 真人工路由为 human_only / upstream / approval；`verification` 批次 C 起转披露（不挡交付）。通过 typed apply-edit、pick 或 wontfix 收口（Stage4 的 hash-bound design resolution、Stage5 的 trim 三选一与闭合回执、analyze-draft/response-repair/INVALID revalidate 用户写面已随 2026-09-15 全自动裁决退役；内部 0-wire revalidate 由队列以 `system:invalid-revalidate` 自动排入） | 无自动费用 |
 | none | 无 | metric 只报告读数 | 无 |
 
 处理顺序：首轮生成 → 机械检查 → deterministic 先修 → UNIQUE 才可付费修 → 连续两轮未消转人 →

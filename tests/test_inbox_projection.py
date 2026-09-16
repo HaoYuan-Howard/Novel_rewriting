@@ -259,16 +259,16 @@ def test_an_invalid_without_formal_is_invalid_and_with_formal_is_rejected(box):
     assert rejected[0].rule == 'stage6.hook'
     # UG-12 的锚：被驳回之后的下一条恢复路径写在 how 里——归档指针 + 0 成本出路。
     assert '_rounds' in rejected[0].how and '--revalidate' in rejected[0].how
-    assert '--actor <id>' in rejected[0].how and '--reason <why>' in rejected[0].how
-    assert '0 LLM、同轮重判、写入不可变审计' in rejected[0].how
+    assert 'system:invalid-revalidate' in rejected[0].how
+    assert '0 LLM' in rejected[0].how
 
     formal.unlink()
     view2 = inbox_view(str(box.root), box.sid)
     invalid = [it for it in view2.items if it.kind == 'invalid' and it.stage == 'stage6']
     assert len(invalid) == 1
     assert '--revalidate' in invalid[0].how
-    assert '--actor <id>' in invalid[0].how and '--reason <why>' in invalid[0].how
-    assert '0 LLM、同轮重判、写入不可变审计' in invalid[0].how
+    assert 'system:invalid-revalidate' in invalid[0].how
+    assert '0 LLM' in invalid[0].how
     assert not [it for it in view2.items if it.kind == 'rejected' and it.stage == 'stage6']
 
 
@@ -379,16 +379,35 @@ def test_the_fallback_how_only_names_commands_that_can_actually_be_built():
     assert checked, '正则一条 `node --flag` 都没匹配到——文案格式漂了，这条守卫已经静默失效'
 
 
-def test_every_revalidate_inbox_instruction_requires_audit_credentials():
-    from contracts.invariants import NODES
+def test_verification_rows_are_disclosure_not_blocking():
+    """批次 C：verification 全转披露，不挡交付终验。"""
+    from contracts.schema.api import InboxItem
+    from novel.orchestrator import inbox_projection as I
+
+    item = InboxItem(
+        kind='verification', stage='stage5', chapter=1,
+        rule='trim_audit_ch01', what='超限披露', how='机械处置')
+    classified = I._classify(item)
+    assert classified.delivery_effect == 'disclosure'
+    blocking = I._classify(InboxItem(
+        kind='invalid', stage='stage6', chapter=None,
+        rule='stage6.hook', what='INVALID', how='auto revalidate'))
+    assert blocking.delivery_effect == 'blocking'
+
+
+def test_every_revalidate_inbox_instruction_points_at_system_auto_path():
+    from contracts.invariants import (
+        NODES, SYSTEM_INVALID_REVALIDATE_ACTOR, SYSTEM_INVALID_REVALIDATE_REASON,
+    )
     from novel.orchestrator.inbox_projection import _revalidate_how
 
     nodes = [node for node, spec in NODES.items() if '--revalidate' in spec.flags]
     assert nodes
     for node in nodes:
         text = _revalidate_how(node)
-        assert f'{node} --revalidate --actor <id> --reason <why>' in text
-        assert '0 LLM、同轮重判、写入不可变审计' in text
+        assert f'{node} --revalidate --actor {SYSTEM_INVALID_REVALIDATE_ACTOR}' in text
+        assert SYSTEM_INVALID_REVALIDATE_REASON in text
+        assert '0 LLM' in text
 
 
 class _InvalidStore:
@@ -427,7 +446,8 @@ def test_generic_invalid_checks_the_producer_revalidate_flag_before_schema_versi
     assert len(rows) == 1 and rows[0].kind == 'rejected'
     assert rows[0].rule == 'stage6.hook'
     assert '_rounds/' in rows[0].how
-    assert '`stage6.hook --revalidate --actor <id> --reason <why>`' in rows[0].how
+    assert 'system:invalid-revalidate' in rows[0].how
+    assert 'stage6.hook --revalidate' in rows[0].how
 
 
 def test_every_human_only_row_offers_something_the_operator_can_actually_run():
@@ -583,9 +603,7 @@ def test_an_over_length_trim_audit_is_a_verification_row(box):
     #   别照旧文案把 `after=` 加回产地。
     assert f'audit before={before}' in seeded.what
 
-    # `how` 里那句「未采用收缩候选」同批消失（收缩候选这个东西已经不存在）。
-    # 今天这一格要说的是两件事：保留 pretrim 的现状、以及那条 0 成本销账口；
-    # 命令连 `--chapters` 一起断，是因为它必须点名**本章**才能直接粘去跑。
-    assert '当前保留 pretrim 原稿' in seeded.how and '0 次 LLM 调用' in seeded.how
-    assert (f'stage5.review --retain-pretrim --chapters {ordinal} '
-            f'--actor <自报身份> --reason <理由>') in seeded.how
+    # 批次 C：trim 超限转披露；不再指向已退役的人工 retain-pretrim 写面。
+    assert '披露' in seeded.how and '机械处置' in seeded.how
+    assert '--retain-pretrim' not in seeded.how
+    assert seeded.delivery_effect == 'disclosure'

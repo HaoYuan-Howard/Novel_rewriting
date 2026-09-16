@@ -1228,7 +1228,7 @@ def _gate_blocked_text(evaluation: PlanCandidateEvaluation) -> str:
         f'关闭式路由停止后仍命中：{list(evaluation.hard_hits)}。'
         f'{owner_line}最后 accepted 问题稿已存 '
         f'`{_INVALID}`，旧正式计划与上下文未覆盖；用 '
-        '`stage4.plan --revalidate --actor <id> --reason <why>` '
+        '`stage4.plan --revalidate --actor system:invalid-revalidate --reason <audit>` '
         '走 0 成本恢复')
 
 
@@ -1526,7 +1526,7 @@ def _gate_and_write(ctx: RunContext, store: ArtifactStore, data: dict[str, Any],
         raise GateBlocked(
             f'{len(hits)} 条阻断级判据命中：{hits}。问题稿已存 `{_INVALID}`，'
             f'**正式产物没有被覆盖**。⚠ 这次不必再付费：手改那几行，'
-            f'`stage4.plan --revalidate --actor <id> --reason <why>` 提升即可'
+            f'`stage4.plan --revalidate --actor system:invalid-revalidate --reason <audit>` 提升即可'
             f'（0 LLM、同轮重判并留不可变审计）',
             invalid_path=str(path))
     _write_producer_artifact(

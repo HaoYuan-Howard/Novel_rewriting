@@ -412,14 +412,13 @@ def test_job_conflict_maps_and_returns_409(monkeypatch):
         '/api/novels/{sid}/review/{ordinal}/edit/preview',
         # （stage5 trim retain-pretrim 两端点已随批次 B3 trim 三选一退役。）
         # Prepare 独立写面（edit/review）与 stage7.approve 已随批次 B4 退役。
+        # analyze-draft 人工提交面已随批次 C 退役（POST 405；内部 CLI 保留）。
         '/api/novels/{sid}/stage6/approve',
         '/api/novels/{sid}/stage7/adopt-residual',
         '/api/novels/{sid}/stage7/adopt-residual',
         '/api/novels/{sid}/stage2/global/edit',
         '/api/novels/{sid}/stage2/global/edit/preview',
         '/api/novels/{sid}/stage2/characters/edit',
-        # 已购联合回答按 owner 免费修复，不另起付费首抽。
-        '/api/novels/{sid}/stage2/analyze-draft',
         # Blueprint 有据修订由 Stage2 持有；普通分场仍留在 Stage4。
         '/api/novels/{sid}/stage2/blueprint/edit',
         '/api/novels/{sid}/stage2/blueprint/edit/preview',
@@ -451,19 +450,16 @@ def test_job_conflict_maps_and_returns_409(monkeypatch):
     J.REGISTRY.acquire(key, holder)
     try:
         with TestClient(app) as client:
-            core_posts = {
-                path for path in posts
-                if path.endswith('/stage2/analyze-draft')
-            }
-            assert len(core_posts) == 1
-            for path in sorted(core_posts):
-                refused = client.post(path.replace('{sid}', sid), json={})
-                assert refused.status_code == 403, (path, refused.text)
-                assert refused.json()['kind'] == 'CsrfRefused'
             response = client.post(
                 f'/api/novels/{sid}/stage1/partition',
                 headers={UI_HEADER: '1'},
             )
+            retired = client.post(
+                f'/api/novels/{sid}/stage2/analyze-draft',
+                headers={UI_HEADER: '1'},
+                json={},
+            )
+            assert retired.status_code == 405, retired.text
     finally:
         J.REGISTRY.release(key, holder)
     assert response.status_code == 409

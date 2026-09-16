@@ -87,6 +87,9 @@ def _read_delivery(base: str | Path, sid: str, current_code: str
     book_ctx = readonly_ctx(novel_dir, 'stage7.assemble', current_code)
     text = assemble.read_current_book(book_ctx)
 
+    # 交付终验：机械准入已在 assemble 闸内复验；此处再钉 basis 取值面与
+    # Q-13 披露分层——ready_with_disclosures 只装质量类（verification /
+    # human_only / semantic_unreviewed），完整性 unknown 不得经披露绕过。
     inbox = inbox_view(base, sid)
     blocking = [item for item in inbox.items if item.delivery_effect == 'blocking']
     if blocking:
@@ -94,18 +97,25 @@ def _read_delivery(base: str | Path, sid: str, current_code: str
                           for item in blocking[:5])
         return None, _outcome(
             'stopped', f'仍有 {len(blocking)} 条交付阻塞待办：{sample}')
-    if gate.semantic_unreviewed:
+    disclosures = [
+        item for item in inbox.items if item.delivery_effect == 'disclosure'
+    ]
+    if gate.semantic_unreviewed or disclosures:
+        parts: list[str] = []
+        if gate.semantic_unreviewed:
+            parts.append(admission.SEMANTIC_UNREVIEWED_NOTE)
+            if gate.disclosures:
+                parts.append('; '.join(gate.disclosures))
+        if disclosures:
+            parts.append(
+                f'另有 {len(disclosures)} 条质量类披露'
+                f'（verification/human_only 等，不挡下载）')
         return text, _outcome(
             'ready_with_disclosures',
-            f'成书与机械准入均通过；{admission.SEMANTIC_UNREVIEWED_NOTE}'
-            + (f'（{"; ".join(gate.disclosures)}）' if gate.disclosures else ''))
-    if inbox.items:
-        return text, _outcome(
-            'ready_with_disclosures',
-            f'成书与机械准入均通过；仍保留 {len(inbox.items)} 条非阻塞人工披露')
+            '成书与机械准入均通过；' + '；'.join(parts))
     return text, _outcome(
         'ready',
-        '成书当前可下载、无待办余额；Stage2 语义未审限制在交付说明中披露')
+        '成书当前可下载、无质量披露余额')
 
 
 def read_deliverable_book(base: str | Path, sid: str) -> str:

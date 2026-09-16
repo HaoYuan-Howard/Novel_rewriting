@@ -19,7 +19,6 @@ import warnings
 from fastapi import APIRouter, Depends, Query
 
 from contracts.schema.api import (
-    AnalyzeDraftEditRequest,
     CharactersEditRequest, GlobalEdit, GlobalEditPreview,
     DraftEditPreview, DraftEditPreviewRequest, DraftEditRequest,
     HookApproveRequest,
@@ -185,19 +184,6 @@ def edit_characters(request: CharactersEditRequest, sid: str = Depends(checked_s
         return jobs.run(base, 'stage2.characters', sid,
                         ['--apply-edit', str(path), '--actor', request.actor, '--reason', request.reason],
                         follow_check=False)
-    finally:
-        uploads.discard_edit_plan(base, path)
-
-
-@router.post('/{sid}/stage2/analyze-draft', response_model=JobRecord)
-def edit_analyze_draft(request: AnalyzeDraftEditRequest, sid: str = Depends(checked_sid),
-                       base: str = Depends(get_base)) -> JobRecord:
-    """服务仅暂存 typed 输入；免费 CLI 校验原回执并提交单 owner 修复 WAL。"""
-    path = uploads.save_analyze_draft_edit(base, sid, request.edit)
-    try:
-        return jobs.run(base, request.edit.owner, sid,
-            ['--repair-analyze-draft', str(path), '--actor', request.actor, '--reason', request.reason],
-            follow_check=False)
     finally:
         uploads.discard_edit_plan(base, path)
 

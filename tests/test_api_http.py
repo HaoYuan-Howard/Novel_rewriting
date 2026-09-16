@@ -402,7 +402,7 @@ def test_the_published_surface_is_exactly_the_current_surface(app):
         '/api/novels/{sid}/stage0/segments': ['GET'],
         '/api/novels/{sid}/stage1': ['GET'],
         '/api/novels/{sid}/stage1/partition': ['POST'],
-        '/api/novels/{sid}/stage2/analyze-draft': ['GET', 'POST'],
+        '/api/novels/{sid}/stage2/analyze-draft': ['GET'],
         '/api/novels/{sid}/stage2/blueprint-reading-workpack': ['GET'],
         '/api/novels/{sid}/stage2/blueprint/edit': ['POST'],
         '/api/novels/{sid}/stage2/blueprint/edit/preview': ['POST'],

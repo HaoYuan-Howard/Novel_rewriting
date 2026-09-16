@@ -593,7 +593,7 @@ def run_revalidate(
     if duplicate_slots:
         raise GateBlocked(
             f'候选归一后仍有重复槽位 {duplicate_slots}；请改好 {_INVALID} 中至少一条文本后'
-            f'重新运行 `stage6.hook --revalidate --actor <id> --reason <why>`',
+            f'重新运行 `stage6.hook --revalidate --actor system:invalid-revalidate --reason <audit>`',
             invalid_path=str(ctx.novel_dir / _INVALID))
     outcomes = _judge_artifact(rebuilt, up, store)
     if _blocking(outcomes):
@@ -2178,7 +2178,7 @@ def finalize_hook_candidate(
                 raise GateBlocked(
                     f'候选经标点、引号与分段归一后出现重复槽位 {duplicates}——'
                     f'没有交出三条不同的正式候选。问题稿在 {path}，改好其中至少一条后跑 '
-                    '`stage6.hook --revalidate --actor <id> --reason <why>`'
+                    '`stage6.hook --revalidate --actor system:invalid-revalidate --reason <audit>`'
                     '（0 LLM、同轮重判并留不可变审计）',
                     invalid_path=str(path),
                 )
@@ -2186,7 +2186,7 @@ def finalize_hook_candidate(
                 f'三条候选**每一条**都有阻断级问题'
                 f'（{list(terminal.dirty_slots)}）——没有一条能拿去定稿。'
                 f'问题稿在 {path}，改完跑 '
-                '`stage6.hook --revalidate --actor <id> --reason <why>`'
+                '`stage6.hook --revalidate --actor system:invalid-revalidate --reason <audit>`'
                 '（0 LLM、同轮重判并留不可变审计）',
                 invalid_path=str(path),
             )
@@ -2293,7 +2293,7 @@ def run_apply_edit(ctx: RunContext, edit_path: str = '') -> tuple[Hook, CheckRep
         raise TerminalState(
             f'{REL} 不在盘上——`--apply-edit` 的基线只认正式产物。'
             f'被闸门拦下的问题稿走另一条路：直接改 `.INVALID` 文件，'
-            f'`stage6.hook --revalidate --actor <id> --reason <why>` 提升'
+            f'`stage6.hook --revalidate --actor system:invalid-revalidate --reason <audit>` 提升'
             f'（0 LLM、同轮重判并留不可变审计）' if store.exists(_INVALID) else
             f'{REL} 不在盘上——先跑 stage6.hook（付费）')
     art, _raw = store.read_own(Hook, REL)

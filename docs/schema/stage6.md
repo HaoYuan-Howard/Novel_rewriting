@@ -255,7 +255,7 @@ A/B 双盲审判已退役（见 §2.2）；本层定稿是**默认自动、人�
 不改变既有报告的 `review_identity_sha256`；批准动作本身不能使授权它的审阅身份失效。
 review identity 的可见证据面自判官退役后只剩机械检查与候选主体。
 
-`--revalidate --actor <id> --reason <why>` 与 `--apply-edit` 不能互换：前者对活动 `.INVALID`
+`--revalidate --actor system:invalid-revalidate --reason <audit>` 与 `--apply-edit` 不能互换：前者对活动 `.INVALID`
 重建派生字段、重判并强审计提升，保留原 prompts/model/inputs 与生成轮次，记录 raw/canonical
 SHA-256、RFC 6901 改动路径和 `edited_by_human`；后者消费 v2 `hook_edit.json`，归档当前正式
 hook 并形成一轮新的局部人工修订，改字后旧批准按字节绑定自动失效。两条都是 0 次 LLM
