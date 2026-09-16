@@ -13,13 +13,28 @@ import { RunScreen } from '@/screens/run/RunScreen'
 import { ChromeProvider } from '@/hooks/useChrome'
 import { useRunProgress } from './useRunProgress'
 import { useAgentRuns } from './useAgentRuns'
-import { useApprovals } from './useApprovals'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { invalidateBookReadModels } from './bookReadModels'
 import { READY_PROFILES } from '@/test/agent'
 import { CHECK_KINDS, type CheckReport } from '@/types/stages'
 import type { AgentRunRecord } from '@/types/agent'
 import type { RunProgress } from '@/types/run'
 import type { ApprovalDoc } from '@/types/approvals'
+import type { Job } from '@/types/jobs'
 import type { ReactElement } from 'react'
+
+const HOOK_JOB: Job = {
+  id: 'job-stage6.approve',
+  kind: 'stage6.approve',
+  label: '文案定稿',
+  argv: 'novel stage6.approve --pick 1',
+  state: 'ok',
+  paid: false,
+  started: 1,
+  finished: 2,
+  sid: SAMPLE_SID,
+  ordinal: null,
+}
 
 const SID = SAMPLE_SID
 
@@ -148,12 +163,23 @@ function ScreenAndRail({ manual = false }: { manual?: boolean }) {
 }
 
 function ApproveButton() {
-  // stage4 逐章结构审批已退役；用仍现役的 Stage5 闭合回执驱动同一条人工审批失效口。
-  const { approveStage5Closure } = useApprovals()
-  return <button onClick={() => approveStage5Closure.mutate({
-    actor: '测试审阅者', review_token: 's5cr1_' + 'a'.repeat(64), reason: '已读完整闭合工作包',
-    must_appear: [], group_acks: [],
-  })}>提交审批回执</button>
+  // Stage6 approveHook 是现役唯一人工写口；成功后走同一书级读模型失效。
+  const qc = useQueryClient()
+  const m = useMutation({
+    mutationFn: () => api.approveHook(SID, {
+      pick: 1,
+      actor: '测试审阅者',
+      reason: '已读完整工作包',
+      review_token: 's6_' + 'a'.repeat(64),
+    }),
+    onSuccess: async () => {
+      // Job 本身不含审批投影；取最新只读投影写入缓存，再失效其余书级读模型。
+      const doc = await api.getApprovals(SID)
+      qc.setQueryData(qk.approvals(SID), doc)
+      await invalidateBookReadModels(qc, SID, { currentKeys: [qk.approvals(SID)] })
+    },
+  })
+  return <button onClick={() => { void m.mutateAsync() }}>提交审批回执</button>
 }
 
 async function settled(qc: QueryClient) {
@@ -252,9 +278,9 @@ describe('Agent 进展驱动书级读模型刷新', () => {
 
   it('手动审批回执复用同一失效口，无需等运行轮询或 API Job', async () => {
     const live = await source()
-    const approve = vi.spyOn(api, 'approveStage5Closure').mockImplementation(async () => {
+    const approve = vi.spyOn(api, 'approveHook').mockImplementation(async () => {
       live.setFresh()
-      return live.freshApprovals
+      return HOOK_JOB
     })
     const { qc } = atBook(<ScreenAndRail manual />)
     expect(await screen.findByText('hard 1 · info 2 · unver 6')).toBeVisible()
@@ -265,7 +291,7 @@ describe('Agent 进展驱动书级读模型刷新', () => {
     expect(await screen.findByText('hard 0 · info 2 · unver 6')).toBeVisible()
     expect(await screen.findByRole('button', { name: '计划↔上下文，已确认' })).toBeVisible()
     expect(approve).toHaveBeenCalledOnce()
-    expect(live.getApprovals).toHaveBeenCalledTimes(reads)
+    expect(live.getApprovals).toHaveBeenCalledTimes(reads + 1)
     expect(live.getProgress).toHaveBeenCalledTimes(polls)
     expect(live.getJobs).not.toHaveBeenCalled()
   })
@@ -360,8 +386,8 @@ describe('Agent 进展驱动书级读模型刷新', () => {
     qc.setQueryData(qk.approvals(other), otherDoc)
     qc.setQueryData(qk.check(SID, 'stage4'), live.oldReport)
     qc.setQueryData(qk.check(other, 'stage4'), live.oldReport)
-    let finishApproval!: (value: ApprovalDoc) => void
-    const submit = vi.spyOn(api, 'approveStage5Closure').mockImplementation(() => new Promise((resolve) => {
+    let finishApproval!: (value: Job) => void
+    const submit = vi.spyOn(api, 'approveHook').mockImplementation(() => new Promise((resolve) => {
       finishApproval = resolve
     }))
     function Books() {
@@ -377,7 +403,10 @@ describe('Agent 进展驱动书级读模型刷新', () => {
     expect(submit.mock.calls[0][0]).toBe(SID)
     fireEvent.click(screen.getByRole('button', { name: '切换书' }))
     expect(await screen.findByRole('button', { name: '计划↔上下文，需处理' })).toBeVisible()
-    await act(async () => finishApproval(live.freshApprovals))
+    await act(async () => {
+      live.setFresh()
+      finishApproval(HOOK_JOB)
+    })
     await waitFor(() => expect(qc.isMutating()).toBe(0))
     expect(qc.getQueryData(qk.approvals(SID))).toEqual(live.freshApprovals)
     expect(qc.getQueryData(qk.approvals(other))).toEqual(otherDoc)

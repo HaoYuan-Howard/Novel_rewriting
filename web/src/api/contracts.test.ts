@@ -3,7 +3,6 @@ import { qk } from './queryKeys'
 import { adaptNovel, realApi, splitLog } from './endpoints'
 import { projectGlobalSpoilers, SPOILER_PLACEHOLDER } from './spoilers'
 import type { Stage2Global } from '@/types/stages'
-import type { BackendJobRecord } from '@/types/jobs'
 import { READY_PROFILES } from '@/test/agent'
 import { mockApi, SAMPLE_SID, stage2CoreFixture } from './mock'
 
@@ -17,38 +16,6 @@ function globalFixture(): Stage2Global {
   return value
 }
 
-function backendJobRecord(node: string, flags: string[]): BackendJobRecord {
-  return {
-    job_id: 'job-' + node,
-    start: {
-      sid: 'book /1',
-      node,
-      flags,
-      steps: [{
-        argv: ['python', '-m', 'novel.cli', node, ...flags],
-        cwd: 'E:/repo',
-        label: node,
-        paid: false,
-        writes: '人工审计账',
-        note: null,
-        executor_backend: null,
-        egress_authorized: null,
-      }],
-      python: 'python',
-      code: 'abc123',
-      paid: false,
-      writes: true,
-      executor_backend: null,
-      egress_authorized: null,
-    },
-    started: 1,
-    ended: 2,
-    exit_code: 0,
-    state: 'ok',
-    steps_started: 1,
-    note: null,
-  }
-}
 
 describe('request-shaped cache and diagnostics', () => {
   it('历史事实样例不再提供当前阅读、分场或蓝图检查结论', async () => {
@@ -71,119 +38,7 @@ describe('request-shaped cache and diagnostics', () => {
   // stage4 design/structure workpack、模板与 POST 写面已随 2026-09-15 全自动裁决退役；
   // 对应的两条 Stage4 人工审阅 HTTP 缝用例一并退役，Stage4 只剩只读审批投影。
 
-  it('sends Stage5 edit through read-only preview then exact audited double-SHA apply', async () => {
-    const segments = [{ slot: 's01', text: '改稿正文。' }]
-    const preview = {
-      output_ordinal: 3,
-      current_chapter_sha256: '1'.repeat(64),
-      preview_subject_sha256: '2'.repeat(64),
-      normalized_segments: segments,
-      findings: [],
-      current_hard_findings: [],
-      introduced_hard_findings: [],
-      resolved_hard_findings: [],
-      required_confirmation: 'formal',
-    }
-    const apply = {
-      segments: preview.normalized_segments,
-      actor: 'reviewer-a',
-      reason: '已核对本次改稿',
-      current_chapter_sha256: preview.current_chapter_sha256,
-      preview_subject_sha256: preview.preview_subject_sha256,
-      confirmation: 'formal' as const,
-    }
-    const send = vi.spyOn(globalThis, 'fetch')
-      .mockResolvedValueOnce(new Response(
-        JSON.stringify(preview),
-        { status: 200, headers: { 'Content-Type': 'application/json' } },
-      ))
-      .mockResolvedValueOnce(new Response(
-        JSON.stringify(backendJobRecord('stage5.write', ['--apply-edit'])),
-        { status: 200, headers: { 'Content-Type': 'application/json' } },
-      ))
-
-    await expect(realApi.previewDraftEdit('book /1', 3, { segments })).resolves.toEqual(preview)
-    expect(send).toHaveBeenNthCalledWith(
-      1,
-      '/api/novels/book%20%2F1/review/3/edit/preview',
-      expect.objectContaining({ method: 'POST', body: JSON.stringify({ segments }) }),
-    )
-    await expect(realApi.saveDraftEdit('book /1', 3, apply)).resolves.toMatchObject({
-      id: 'job-stage5.write',
-      kind: 'stage5.write',
-      state: 'ok',
-    })
-    expect(send).toHaveBeenNthCalledWith(
-      2,
-      '/api/novels/book%20%2F1/review/3/edit',
-      expect.objectContaining({ method: 'POST', body: JSON.stringify(apply) }),
-    )
-  })
-
-  it('uses the Stage5 closure template/apply endpoints and batch trim body without recomputing SHA', async () => {
-    const template = {
-      actor: '',
-      reason: '',
-      review_token: 's5cr1_' + '3'.repeat(64),
-      workpack_sha256: '3'.repeat(64),
-      review_sha256: '4'.repeat(64),
-      must_appear: [],
-      group_acks: [],
-    }
-    const closure = {
-      actor: 'commander-a',
-      reason: '全书已复核',
-      review_token: template.review_token,
-      must_appear: [],
-      group_acks: [],
-    }
-    const trim = {
-      actor: 'commander-a',
-      reason: '逐章保留 pretrim',
-      items: [{
-        output_ordinal: 3,
-        audit_sha256: '5'.repeat(64),
-        chapter_sha256: '6'.repeat(64),
-        reason: '',
-      }],
-    }
-    const response = { marker: 'approval-doc' }
-    const send = vi.spyOn(globalThis, 'fetch')
-      .mockResolvedValueOnce(new Response(
-        JSON.stringify(template),
-        { status: 200, headers: { 'Content-Type': 'application/json' } },
-      ))
-      .mockResolvedValueOnce(new Response(
-        JSON.stringify(response),
-        { status: 200, headers: { 'Content-Type': 'application/json' } },
-      ))
-      .mockResolvedValueOnce(new Response(
-        JSON.stringify(backendJobRecord('stage5.review', ['--retain-pretrim-batch'])),
-        { status: 200, headers: { 'Content-Type': 'application/json' } },
-      ))
-
-    await expect(realApi.getStage5ClosureTemplate('book /1')).resolves.toEqual(template)
-    expect(send).toHaveBeenNthCalledWith(
-      1,
-      '/api/novels/book%20%2F1/approvals/stage5/template',
-      undefined,
-    )
-    await expect(realApi.approveStage5Closure('book /1', closure)).resolves.toEqual(response)
-    expect(send).toHaveBeenNthCalledWith(
-      2,
-      '/api/novels/book%20%2F1/approvals/stage5',
-      expect.objectContaining({ method: 'POST', body: JSON.stringify(closure) }),
-    )
-    await expect(realApi.retainPretrimBatch('book /1', trim)).resolves.toMatchObject({
-      kind: 'stage5.review',
-      state: 'ok',
-    })
-    expect(send).toHaveBeenNthCalledWith(
-      3,
-      '/api/novels/book%20%2F1/stage5/trim/retain-pretrim-batch',
-      expect.objectContaining({ method: 'POST', body: JSON.stringify(trim) }),
-    )
-  })
+  // Stage5 改稿 / 闭合 / batch trim 写面已退役；对应 HTTP 缝用例不再维护。
 
   it('includes runtime chapter args in preview cache identity', () => {
     const base = { kind: 'stage5.write', label: '写', extra: null, sid: 's' }

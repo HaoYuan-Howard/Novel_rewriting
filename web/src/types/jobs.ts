@@ -1,5 +1,9 @@
 import type { JobState } from '@/constants/vocabulary'
-import type { ExecutorBackend } from '@/types/agent'
+import type {
+  AgentRunRecord,
+  ExecutorBackend,
+  PipelineAgentProfiles,
+} from '@/types/agent'
 
 /**
  * 作业抽屉的展示投影，由 api/endpoints.ts 适配后端 JobRecord。
@@ -91,9 +95,40 @@ export interface JobLogStreamSink {
   onError(error: unknown): void
 }
 
+/** 与后端 UploadResult.autostart 同形（R-11.28）。 */
+export type UploadAutostartOutcome =
+  | 'started'
+  | 'skipped_stage0_failed'
+  | 'replay'
+
 export interface UploadResponse {
   sid: string
   job: Job
+  /** 上传后自动启动的 run 记录；stage0 失败或未授权路径可能缺席。 */
+  run?: AgentRunRecord | null
+  /** 自动开跑结局；省略表示仅 stage0 或书锁暂忙。 */
+  autostart?: UploadAutostartOutcome | null
+  /** 回显本次上传幂等键。 */
+  idempotency_key?: string
+}
+
+export interface UploadCorpusOptions {
+  idempotencyKey: string
+  authorized: boolean
+  egressAuthorized: boolean
+  profiles: PipelineAgentProfiles
+}
+
+/** Stage6 改选后的重建状态（GET /stage6/rebuild）。 */
+export interface Stage6RebuildStatus {
+  pending: boolean
+  published: boolean
+  /** 未闭合重建意图条数；无排队时为 0。 */
+  queue_depth?: number
+  /** 最新排队意图上的期望文案指纹；已发布且无排队时可能缺席。 */
+  expected_approved_text_sha1?: string | null
+  expected_candidates_sha1?: string | null
+  expected_slot?: 'c1' | 'c2' | 'c3' | null
 }
 
 export interface JobLogResponse {

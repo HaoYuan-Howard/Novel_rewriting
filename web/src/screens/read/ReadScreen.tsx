@@ -7,12 +7,10 @@ import { ErrorHint } from '@/components/state/States'
 import { ChapterStrip } from '@/components/ui/ChapterStrip'
 import { Panel, PaneHeader } from '@/components/ui/Panel'
 import { useReadScreen } from './useReadScreen'
-import { BlueprintEditPanel } from './BlueprintEditPanel'
 import type { ActorRef, PlotBlueprint } from '@/types/plot.generated'
 
 /**
- * 完整剧情与原文并排的只读对照；Stage2 语义审阅已退役，
- * 机械可用性看校验报告，编辑入口由 BlueprintEditPanel 单独提供。
+ * 完整剧情与原文并排的只读对照；Stage2 语义审阅与蓝图编辑写面已退役。
  */
 export function ReadScreen() {
   const vm = useReadScreen()
@@ -55,7 +53,6 @@ export function ReadScreen() {
                 蓝图尚不可读。{vm.query.data?.blueprint_state.reason}
               </p>}
             </PaneScroll></Panel>} />)}
-        <BlueprintEditPanel key={vm.sid + ':' + vm.ordinal} sid={vm.sid} ordinal={vm.ordinal} />
       </section>}
     </QueryStates>
   </ScreenFrame>

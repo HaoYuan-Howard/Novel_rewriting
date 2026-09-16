@@ -1,7 +1,5 @@
 import type { RunMetrics } from '@/types/runMetrics'
 import type { PrepareView, PrepareWorkpack } from '@/types/prepare'
-import type { PlotEdit, PlotEditPreview } from '@/types/plot.generated'
-import type { GlobalEdit, GlobalEditPreview } from '@/types/globalEdit'
 /**
  * 唯一的数据缝。屏与组件只认这个文件导出的 `api`。
  *
@@ -22,15 +20,9 @@ import type {
   AgentRunsResponse,
 } from '@/types/agent'
 import type {
-  ApprovalBackfillResult,
   ApprovalDoc,
-  BatchTrimResolutionRequest,
-  GateKey,
-  Stage5ClosureRequest,
-  Stage5ClosureTemplate,
   Stage6ApprovalWorkpack,
   Stage7ApprovalWorkpack,
-  WritingApprovalRequest,
 } from '@/types/approvals'
 import type { EnumsResponse } from '@/types/enums'
 import type {
@@ -46,6 +38,9 @@ import type {
   JobPreview,
   JobRequest,
   JobsResponse,
+  Stage6RebuildStatus,
+  UploadCorpusOptions,
+  UploadResponse,
 } from '@/types/jobs'
 import type { Artifact, NovelOverview, NovelsResponse } from '@/types/novels'
 import type { TrashNovelResult } from '@/types/novels'
@@ -60,9 +55,6 @@ import type {
 import type {
   CheckReport,
   BlueprintReadingWorkpack,
-  DraftEditPreview,
-  DraftEditPreviewRequest,
-  DraftEditRequest,
   InboxResponse,
   ReadingResponse,
   ReviewResponse,
@@ -368,35 +360,16 @@ export const realApi: Api = {
 
   getStage0Report: (sid) => get<Stage0Report>(n(sid) + '/stage0/report'),
   getStage0Segments: (sid) => get<Stage0Segments>(n(sid) + '/stage0/segments'),
-  // stage0 的人工编辑/批准/候选三选一端点已随 2026-09-15 全自动裁决退役；
-  // 机械校验通过即自动接受，Stage0 只剩只读展示，stage1.partition 直接可跑。
-  partitionStage1: async (sid) =>
-    adaptJob(await post<BackendJobRecord>(n(sid) + '/stage1/partition')),
+  // stage0 人工写面与手动 partition 已退役；Stage 页只读，上传后自动开跑。
   getStage1: (sid) => get<Stage1View>(n(sid) + '/stage1'),
   getReading: (sid, o) => get<ReadingResponse>(n(sid) + '/reading/' + o),
   getBlueprintReadingWorkpack: (sid, scope) =>
     get<BlueprintReadingWorkpack>(n(sid) + '/stage2/blueprint-reading-workpack'
       + (scope ? '?scope=' + encodeURIComponent(scope) : '')),
-  getBlueprintEditTemplate: (sid, ordinal) =>
-    get<PlotEdit>(n(sid) + '/stage2/blueprint/edit/template?chapter_ordinal=' + ordinal),
-  previewBlueprintEdit: (sid, request) =>
-    post<PlotEditPreview>(n(sid) + '/stage2/blueprint/edit/preview', request),
-  applyBlueprintEdit: async (sid, request) =>
-    adaptJob(await post<BackendJobRecord>(n(sid) + '/stage2/blueprint/edit', request)),
   getGlobal: async (sid, revealSpoilers = false) =>
     projectGlobalSpoilers(await get<Stage2Global>(n(sid) + '/stage2/global'), revealSpoilers),
-  getGlobalEditTemplate: (sid) =>
-    get<GlobalEdit>(n(sid) + '/stage2/global/edit/template'),
-  previewGlobalEdit: (sid, request) =>
-    post<GlobalEditPreview>(n(sid) + '/stage2/global/edit/preview', request),
-  applyGlobalEdit: async (sid, request) =>
-    adaptJob(await post<BackendJobRecord>(n(sid) + '/stage2/global/edit', request)),
   getCharacters: (sid) => get<CharacterRegistryView>(n(sid) + '/stage2/characters'),
   getAnalyzeDraft: (sid, owner) => get<AnalyzeDraftView>(n(sid) + '/stage2/analyze-draft?owner=' + encodeURIComponent(owner)),
-  editAnalyzeDraft: async (sid, request) =>
-    adaptJob(await post<BackendJobRecord>(n(sid) + '/stage2/analyze-draft', request)),
-  editCharacters: async (sid, request) =>
-    adaptJob(await post<BackendJobRecord>(n(sid) + '/stage2/characters/edit', request)),
   getStage4: (sid, o) => get<Stage4Response>(n(sid) + '/stage4/' + o),
   getStage5: (sid, o) => get<Stage5Response>(n(sid) + '/stage5/' + o),
   getReview: (sid, o) => get<ReviewResponse>(n(sid) + '/review/' + o),
@@ -404,6 +377,7 @@ export const realApi: Api = {
   getStage6: (sid) => get<Stage6Response>(n(sid) + '/stage6'),
   getStage6Prepare: (sid) => get<PrepareView>(n(sid) + '/stage6/prepare'),
   getStage6PrepareWorkpack: (sid) => get<PrepareWorkpack>(n(sid) + '/stage6/prepare/workpack'),
+  getStage6Rebuild: (sid) => get<Stage6RebuildStatus>(n(sid) + '/stage6/rebuild'),
   getStage7: (sid) => get<Stage7Response>(n(sid) + '/stage7'),
   getStage7Chapter: (sid, o) => get<Stage7Response>(n(sid) + '/stage7/' + o),
   getStage7Book: (sid) => getText(n(sid) + '/stage7/book.txt'),
@@ -515,37 +489,35 @@ export const realApi: Api = {
     get<Stage6ApprovalWorkpack>(n(sid) + '/approvals/stage6/workpack'),
   getStage7ApprovalWorkpack: (sid) =>
     get<Stage7ApprovalWorkpack>(n(sid) + '/approvals/stage7/workpack'),
-  getStage5ClosureTemplate: (sid) =>
-    get<Stage5ClosureTemplate>(n(sid) + '/approvals/stage5/template'),
-  approveStage5Closure: (sid, request: Stage5ClosureRequest) =>
-    post<ApprovalDoc>(n(sid) + '/approvals/stage5', request),
-  approveGate: (sid, key: GateKey) => post<ApprovalDoc>(n(sid) + '/approvals/gate/' + key),
-  backfillApprovals: (sid) =>
-    post<ApprovalBackfillResult>(n(sid) + '/approvals/backfill'),
-  startWriting: (sid, request: WritingApprovalRequest) =>
-    post<ApprovalDoc>(n(sid) + '/approvals/writing', request),
   resetBook: (sid) => post<ApprovalDoc>(n(sid) + '/approvals/reset'),
 
-  previewDraftEdit: (sid, o, req: DraftEditPreviewRequest) =>
-    post<DraftEditPreview>(n(sid) + '/review/' + o + '/edit/preview', req),
-  saveDraftEdit: async (sid, o, req: DraftEditRequest) =>
-    adaptJob(await post<BackendJobRecord>(n(sid) + '/review/' + o + '/edit', req)),
-  retainPretrim: async (sid, o, req) =>
-    adaptJob(await post<BackendJobRecord>(
-      n(sid) + '/stage5/trim/' + o + '/retain-pretrim', req)),
-  retainPretrimBatch: async (sid, req: BatchTrimResolutionRequest) =>
-    adaptJob(await post<BackendJobRecord>(
-      n(sid) + '/stage5/trim/retain-pretrim-batch', req)),
   approveHook: async (sid, req) =>
     adaptJob(await post<BackendJobRecord>(n(sid) + '/stage6/approve', req)),
-  adoptResidual: async (sid, req) =>
-    adaptJob(await post<BackendJobRecord>(n(sid) + '/stage7/adopt-residual', req)),
-  uploadCorpus: async (file) => {
-    const raw = await postRaw<{ sid: string; job: BackendJobRecord }>(
-      '/upload?filename=' + encodeURIComponent(file.name),
+  uploadCorpus: async (file, options: UploadCorpusOptions) => {
+    const params = new URLSearchParams({
+      filename: file.name,
+      authorized: options.authorized ? 'true' : 'false',
+      egress_authorized: options.egressAuthorized ? 'true' : 'false',
+      profiles: JSON.stringify(options.profiles),
+    })
+    const raw = await postRaw<{
+      sid: string
+      job: BackendJobRecord
+      run?: UploadResponse['run']
+      autostart?: UploadResponse['autostart']
+      idempotency_key?: string
+    }>(
+      '/upload?' + params.toString(),
       file,
+      { 'X-Novel-Idempotency-Key': options.idempotencyKey },
     )
-    return { sid: raw.sid, job: adaptJob(raw.job, raw.sid) }
+    return {
+      sid: raw.sid,
+      job: adaptJob(raw.job, raw.sid),
+      run: raw.run ?? null,
+      autostart: raw.autostart ?? null,
+      idempotency_key: raw.idempotency_key ?? options.idempotencyKey,
+    }
   },
   trashNovel: (sid, expectedTitle) =>
     post<TrashNovelResult>(n(sid) + '/trash', { expected_title: expectedTitle }),

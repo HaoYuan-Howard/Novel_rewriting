@@ -171,24 +171,32 @@ def test_approve_route_enqueues_rebuild_intent_after_ok_pick(tmp_path, monkeypat
 
 
 def test_rebuild_status_endpoint_reflects_pending_and_published(tmp_path, caplog):
-    """只读状态缝：pending 意图或未发布都呈现 pending，供前端明示旧版本仍可下载。"""
+    """只读状态缝：pending 意图或未发布都呈现 pending，并带期望版本指纹。"""
     from novel.api.routes import edits as route
-    from novel.orchestrator.state import readonly_ctx  # noqa: F401  确认可导入
 
-    _requested(tmp_path, '422', 'hook-c2-1')
-    monkey_pending = True
-    monkeypatch_pub = {'published': False}
+    evt = _requested(tmp_path, '422', 'hook-c2-1')
     import unittest.mock as mock
-    with mock.patch.object(rebuild, 'pending_intents', lambda *_a: monkey_pending), \
-            mock.patch.object(rebuild, 'publication_current',
-                              lambda *_a: monkeypatch_pub['published']):
+    with mock.patch.object(rebuild, 'publication_current', lambda *_a: False):
         doc = route.hook_rebuild_status(sid='422', base=str(tmp_path))
-    assert doc == {'pending': True, 'published': False}
-    monkeypatch_pub['published'] = True
+    assert doc == {
+        'pending': True,
+        'published': False,
+        'queue_depth': 1,
+        'expected_approved_text_sha1': evt.approved_text_sha1,
+        'expected_candidates_sha1': evt.candidates_sha1,
+        'expected_slot': 'c2',
+    }
     with mock.patch.object(rebuild, 'pending_intents', lambda *_a: []), \
             mock.patch.object(rebuild, 'publication_current', lambda *_a: True):
         doc = route.hook_rebuild_status(sid='422', base=str(tmp_path))
-    assert doc == {'pending': False, 'published': True}
+    assert doc == {
+        'pending': False,
+        'published': True,
+        'queue_depth': 0,
+        'expected_approved_text_sha1': None,
+        'expected_candidates_sha1': None,
+        'expected_slot': None,
+    }
 
 
 def test_startup_reconcile_drains_pending_intents(tmp_path, monkeypatch):

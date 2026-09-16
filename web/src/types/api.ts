@@ -1,6 +1,4 @@
 import type { RunMetrics } from './runMetrics'
-import type { PlotEdit, PlotEditPreview } from '@/types/plot.generated'
-import type { GlobalEdit, GlobalEditPreview } from './globalEdit'
 /**
  * 唯一的数据缝。
  *
@@ -9,15 +7,9 @@ import type { GlobalEdit, GlobalEditPreview } from './globalEdit'
  * 组件与屏从不 fetch，只经 hooks → api.*。
  */
 import type {
-  ApprovalBackfillResult,
   ApprovalDoc,
-  BatchTrimResolutionRequest,
-  GateKey,
-  Stage5ClosureRequest,
-  Stage5ClosureTemplate,
   Stage6ApprovalWorkpack,
   Stage7ApprovalWorkpack,
-  WritingApprovalRequest,
 } from './approvals'
 import type {
   AgentCapabilitiesResponse,
@@ -40,6 +32,8 @@ import type {
   JobPreview,
   JobRequest,
   JobsResponse,
+  Stage6RebuildStatus,
+  UploadCorpusOptions,
   UploadResponse,
 } from './jobs'
 import type { NovelOverview, NovelsResponse } from './novels'
@@ -56,9 +50,6 @@ import type {
   CheckKind,
   CheckReport,
   BlueprintReadingWorkpack,
-  DraftEditPreview,
-  DraftEditPreviewRequest,
-  DraftEditRequest,
   InboxResponse,
   ReadingResponse,
   ReviewResponse,
@@ -70,11 +61,10 @@ import type {
   Stage5Response,
   Stage6Response,
   Stage7Response,
-  TrimResolutionRequest,
 } from './stages'
 
-import type { CharacterRegistryView, CharactersEditRequest } from './characters'
-import type { AnalyzeDraftView, AnalyzeDraftOwner, AnalyzeDraftEditRequest } from './analyzeDraft'
+import type { CharacterRegistryView } from './characters'
+import type { AnalyzeDraftView, AnalyzeDraftOwner } from './analyzeDraft'
 import type {
   PrepareView, PrepareWorkpack,
 } from './prepare'
@@ -92,25 +82,15 @@ export interface Api {
 
   getStage0Report(sid: string): Promise<Stage0Report>
   getStage0Segments(sid: string): Promise<Stage0Segments>
-  // stage0 的人工编辑/批准/候选三选一已随 2026-09-15 全自动裁决退役；
-  // 机械校验通过即自动接受，Stage0 面只剩只读展示。
-  partitionStage1(sid: string): Promise<Job>
+  // stage0 的人工编辑/批准/候选三选一与手动 partition 已随全自动裁决退役；
+  // Stage0/1 面只剩只读展示，上传后由后端自动开跑。
   getStage1(sid: string): Promise<Stage1View>
   getReading(sid: string, ordinal: number): Promise<ReadingResponse>
   /** Stage2 语义审阅退役后的原文↔蓝图只读阅读工作包；不携带审阅或接受语义。 */
   getBlueprintReadingWorkpack(sid: string, scope?: string): Promise<BlueprintReadingWorkpack>
-  getBlueprintEditTemplate(sid: string, ordinal: number): Promise<PlotEdit>
-  previewBlueprintEdit(sid: string, request: PlotEdit): Promise<PlotEditPreview>
-  applyBlueprintEdit(sid: string, request: PlotEdit): Promise<Job>
   getGlobal(sid: string, revealSpoilers?: boolean): Promise<Stage2Global>
-  /** Stage2 全局事实 typed 编辑；独立预检 + 应用，语义未审随交付披露。 */
-  getGlobalEditTemplate(sid: string): Promise<GlobalEdit>
-  previewGlobalEdit(sid: string, request: GlobalEdit): Promise<GlobalEditPreview>
-  applyGlobalEdit(sid: string, request: GlobalEdit): Promise<Job>
   getCharacters(sid: string): Promise<CharacterRegistryView>
-  editCharacters(sid: string, request: CharactersEditRequest): Promise<Job>
   getAnalyzeDraft(sid: string, owner: AnalyzeDraftOwner): Promise<AnalyzeDraftView>
-  editAnalyzeDraft(sid: string, request: AnalyzeDraftEditRequest): Promise<Job>
   getStage4(sid: string, ordinal: number): Promise<Stage4Response>
   getStage5(sid: string, ordinal: number): Promise<Stage5Response>
   getReview(sid: string, ordinal: number): Promise<ReviewResponse>
@@ -118,6 +98,8 @@ export interface Api {
   getStage6(sid: string): Promise<Stage6Response>
   getStage6Prepare(sid: string): Promise<PrepareView>
   getStage6PrepareWorkpack(sid: string): Promise<PrepareWorkpack>
+  /** Stage6 改选后的重建排队 / 成书对齐状态。 */
+  getStage6Rebuild(sid: string): Promise<Stage6RebuildStatus>
   getStage7(sid: string): Promise<Stage7Response>
   getStage7Chapter(sid: string, ordinal: number): Promise<Stage7Response>
   getStage7Book(sid: string): Promise<string>
@@ -170,41 +152,19 @@ export interface Api {
   /** 谁在跑、谁在排、闸开多大。排队部分只在内存，服务重启即清空。 */
   getAgentQueue(): Promise<AgentQueueView>
 
-  /* 人工验收记录 */
+  /* 只读审批投影 */
   getApprovals(sid: string): Promise<ApprovalDoc>
-  // stage4 design/structure workpack、模板与 POST 写面已随 2026-09-15 全自动裁决退役；
-  // Stage4 人工闸只剩 GET /approvals 的只读投影，机械准入是唯一打开条件。
+  // stage4/5 人工闸与通用 gate 写面已退役；Stage 页只读监控。
   /** Stage6 候选 + A/B 原始证据 + 机械异常的 hash-bound 紧凑终审包。 */
   getStage6ApprovalWorkpack(sid: string): Promise<Stage6ApprovalWorkpack>
   /** Stage7 人物决策 + 实际替换命中 + 残留上下文的 hash-bound 紧凑终审包。 */
   getStage7ApprovalWorkpack(sid: string): Promise<Stage7ApprovalWorkpack>
-  /** 当前盘面确定性生成的 Stage5 关闭式回执模板；只读、0 成本。 */
-  getStage5ClosureTemplate(sid: string): Promise<Stage5ClosureTemplate>
-  /** 原子提交当前 Stage5 Commander 回执；不启动任何付费作业。 */
-  approveStage5Closure(sid: string, request: Stage5ClosureRequest): Promise<ApprovalDoc>
-  approveGate(sid: string, key: GateKey): Promise<ApprovalDoc>
-  backfillApprovals(sid: string): Promise<ApprovalBackfillResult>
-  startWriting(sid: string, request: WritingApprovalRequest): Promise<ApprovalDoc>
   resetBook(sid: string): Promise<ApprovalDoc>
 
-  /* 写（三条人工写回走专用路由，返回真实作业记录——真实模式不写 localStorage 充成功） */
-  /** 章节改稿只读预检：与 apply 共用归一、判据与双 SHA 主体，不写盘。 */
-  previewDraftEdit(
-    sid: string,
-    ordinal: number,
-    req: DraftEditPreviewRequest,
-  ): Promise<DraftEditPreview>
-  /** 章节改稿：只接受 preview 归一稿、人工审计、双 SHA 与服务端要求的确认语义。 */
-  saveDraftEdit(
-    sid: string,
-    ordinal: number,
-    req: DraftEditRequest,
-  ): Promise<Job>
-  /** Resolve one current trim verification by retaining pretrim; candidate adoption is impossible here. */
-  retainPretrim(sid: string, ordinal: number, req: TrimResolutionRequest): Promise<Job>
-  /** 整批预检后按章幂等销账；identity 逐项原样来自 closure workpack。 */
-  retainPretrimBatch(sid: string, req: BatchTrimResolutionRequest): Promise<Job>
-  /** 文案定稿：序号 + 自报身份/理由 + immutable workpack token。 */
+  /**
+   * 文案定稿 / 三候选改选：序号 + 自报身份/理由 + immutable workpack token。
+   * Stage 页唯一保留的人工写动作。
+   */
   approveHook(
     sid: string,
     req: {
@@ -214,9 +174,10 @@ export interface Api {
       review_token: string
     },
   ): Promise<Job>
-  /** 显式采纳当前可安全应用的 high residual；后端仍会重新校验冲突。 */
-  adoptResidual(sid: string, req: { confidence: 'high' }): Promise<Job>
-  uploadCorpus(file: File): Promise<UploadResponse>
+  /**
+   * 上传并自动开跑。Header 带幂等键；授权与 profiles 走 query；body 仍是文件字节。
+   */
+  uploadCorpus(file: File, options: UploadCorpusOptions): Promise<UploadResponse>
   /** 可恢复删除：整本项目移入 `_service/trash/`，确认绑定当前书名。 */
   trashNovel(sid: string, expectedTitle: string): Promise<TrashNovelResult>
 

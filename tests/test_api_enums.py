@@ -109,6 +109,8 @@ def test_operator_telemetry_and_judge_internals_are_not_frontend_choices(
     assert not {
         'stage2_legacy_revalidate_actor',
         'stage2_legacy_revalidate_reason',
+        'system_invalid_revalidate_actor',
+        'system_invalid_revalidate_reason',
         'stage6_judge_roles',
         'operator_phases',
         'operator_phase_event_kinds',

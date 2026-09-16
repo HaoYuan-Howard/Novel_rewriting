@@ -63,7 +63,7 @@ describe('Stage0Screen 新书起跑入口', () => {
     )
   })
 
-  it('stage0 机械接受后直接切分 stage1：没有编辑/批准两步', async () => {
+  it('stage0 只读：无切分按钮，partitionStage1 已从 Api 退役', async () => {
     vi.spyOn(api, 'getStage0Report').mockResolvedValue({
       original_filename: 'book.txt',
       total_code_points: 300,
@@ -77,18 +77,7 @@ describe('Stage0Screen 新书起跑入口', () => {
       reason: null,
       segments: [],
     })
-    const partition = vi.spyOn(api, 'partitionStage1').mockResolvedValue({
-      id: 'partition',
-      kind: 'stage1.partition',
-      label: '切分 Stage1',
-      argv: 'partition',
-      state: 'landed_red',
-      paid: false,
-      started: 2,
-      finished: 3,
-      sid: 'book-1',
-      ordinal: null,
-    })
+    expect('partitionStage1' in api).toBe(false)
 
     renderRoute(
       <>
@@ -99,12 +88,8 @@ describe('Stage0Screen 新书起跑入口', () => {
     )
 
     expect(screen.queryByLabelText('自报身份 actor')).not.toBeInTheDocument()
-    fireEvent.click(await screen.findByRole('button', { name: /^切分并进入 stage1/ }))
-
-    await waitFor(() => expect(partition).toHaveBeenCalledTimes(1))
-    expect(partition).toHaveBeenCalledWith('book-1')
-    await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent('/n/book-1/stage1'))
-    expect(screen.queryByText('没有进入 Stage 1')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /切分并进入 stage1/ })).not.toBeInTheDocument()
+    expect(screen.getByTestId('location')).toHaveTextContent('/n/book-1/stage0')
   })
 })
 

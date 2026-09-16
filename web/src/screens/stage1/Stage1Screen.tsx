@@ -9,7 +9,6 @@ import { Mono } from '@/components/ui/Mono'
 import { ChapterGrid } from '@/components/ui/ChapterGrid'
 import { Panel, PaneHeader } from '@/components/ui/Panel'
 import { CheckPanel } from '@/components/check/CheckPanel'
-import { GateBar } from '@/components/gate/GateBar'
 import { cx } from '@/lib/cx'
 import type { ChapterLabelAnomaly } from '@/types/stages'
 
@@ -37,7 +36,7 @@ export function Stage1Screen() {
   }
 
   return (
-    <ScreenFrame screen={'stage1'} showCheck={false} showGate={false}>
+    <ScreenFrame screen={'stage1'} showCheck={false}>
       <section className={'flex flex-col gap-16 px-30 py-24'}>
         <header className={'flex items-start justify-between gap-24'}>
           <h1 className={'m-0 text-screen font-semibold'}>正文切分 · stage1</h1>
@@ -50,7 +49,7 @@ export function Stage1Screen() {
 
         <div
           role={'group'}
-          aria-label={'Stage1 校验与切分确认'}
+          aria-label={'Stage1 校验'}
           className={'overflow-hidden rounded-card border border-line bg-card'}
         >
           <CheckPanel
@@ -58,7 +57,6 @@ export function Stage1Screen() {
             onJumpChapter={scrollTo}
             allowRerun={false}
             embedded
-            headerAction={<GateBar screen={'stage1'} actionOnly />}
           />
         </div>
 

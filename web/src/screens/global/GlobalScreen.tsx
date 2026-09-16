@@ -5,12 +5,10 @@ import { api } from '@/api/endpoints'
 import { qk } from '@/api/queryKeys'
 import { MASKED_SECRET_ID } from '@/api/spoilers'
 import { MUTED, SPOILER_ON } from '@/constants/vocabulary'
-import { useApprovals } from '@/hooks/useApprovals'
 import { useEnums } from '@/hooks/useEnums'
 import { useSampleCoverage } from '@/hooks/useSample'
 import { useSid } from '@/hooks/useRouteParams'
 import { ScreenFrame } from '@/components/app/ScreenFrame'
-import { GateBar } from '@/components/gate/GateBar'
 import { QueryStates } from '@/components/state/QueryStates'
 import { EmptyIsSuspicious } from '@/components/state/States'
 import { LinkButton } from '@/components/ui/ActionButton'
@@ -19,7 +17,6 @@ import { Panel } from '@/components/ui/Panel'
 import { cx } from '@/lib/cx'
 import type { GlobalTimeWindow } from '@/types/stages'
 import { CharactersPanel } from './CharactersPanel'
-import { GlobalEditPanel } from './GlobalEditPanel'
 import { CoreEvidence, SharedAnalysisSource } from './CoreEvidence'
 
 type Tab = 'setting' | 'rels' | 'rules' | 'secrets'
@@ -32,13 +29,11 @@ function TimeWindow({ value }: { value: GlobalTimeWindow }) {
 }
 
 /**
- * Stage2 语义审阅已退役：本屏只做查看与免费订正，下一动作只消费后端 s1 spawns
- * （机械准入通过后由服务端下发逐章骨架生成）；页面单独披露语义未审限制。
+ * Stage2 语义审阅已退役：本屏只做只读监控。
  */
 export function GlobalScreen() {
   const sid = useSid()
   const nav = useNavigate()
-  const { doc } = useApprovals()
   const { defaultOrdinal } = useSampleCoverage()
   const [spoilers, setSpoilers] = useState(false)
   const [tab, setTab] = useState<Tab>('setting')
@@ -52,12 +47,9 @@ export function GlobalScreen() {
   const maskNote =
     enums.data?.spoiler_disclosure?.notice ??
     '仅在屏幕展示层隐藏跨章秘密；服务端仍全量下发，关系、规则及浏览器网络与缓存仍可能透露相同信息。'
-  const blueprintAction = doc?.spawns.s1?.find(
-    (action) => action.kind === 'stage2.blueprint',
-  )
 
   return (
-    <ScreenFrame screen="global" showGate={!blueprintAction} onJumpChapter={(n) => nav('/n/' + sid + '/read/' + n)}>
+    <ScreenFrame screen="global" onJumpChapter={(n) => nav('/n/' + sid + '/read/' + n)}>
       <section className="flex flex-col gap-16 px-30 py-24">
         <header className="flex items-start justify-between gap-24">
           <div className="flex flex-col gap-5">
@@ -98,24 +90,14 @@ export function GlobalScreen() {
           </div>
         </header>
         <p className="text-body text-ink-3" role="note">
-          Stage2 语义未审：机械检查不证明人物完整、主张获原文支持或剧情抽取正确。
+          Stage2 语义未审：机械检查不证明人物完整、主张获原文支持或剧情抽取正确。本屏只读。
         </p>
         <CharactersPanel key={sid} sid={sid} />
-        <GlobalEditPanel key={'edit:' + sid} sid={sid} />
-        {blueprintAction ? (
-          <div role="group" aria-label="机械准入通过后生成逐章骨架">
-            <Panel className="flex flex-wrap items-center justify-between gap-14 px-18 py-14">
-              <div className="flex max-w-[760px] flex-col gap-4">
-                <span className="text-body-lg font-semibold text-ink-2">机械准入通过后生成逐章骨架</span>
-                <span className="text-body text-ink-4">
-                  {blueprintAction.label}。人物、全局、原文与称名投影的机械可用性由统一准入判定；
-                  语义未审以校验报告 unver 披露，下一动作只消费服务端下发内容。
-                </span>
-              </div>
-              <GateBar screen="stage1" actionOnly />
-            </Panel>
-          </div>
-        ) : null}
+        <div className="flex flex-wrap items-center gap-10">
+          <LinkButton onClick={() => nav('/n/' + sid + '/read/' + defaultOrdinal(sid))}>
+            打开逐章对照
+          </LinkButton>
+        </div>
         <QueryStates q={q} loadingLabel="读全局设定" missing={{ title: '全局设定 · stage2' }}>
         {(d) => {
           const tabs: { key: Tab; label: string; n: number | null }[] = [

@@ -96,6 +96,11 @@ def rebuild_intents_path(base: str | os.PathLike[str], sid: str) -> Path:
     return service_runs_dir(base) / check_sid(sid) / 'rebuild_intents.jsonl'
 
 
+def upload_autostart_intents_path(base: str | os.PathLike[str]) -> Path:
+    """上传即自动开跑意图账（base 级全局 append-only JSONL，按幂等键折叠）。"""
+    return service_dir(base) / 'upload_autostart_intents.jsonl'
+
+
 def derive_source_meta(path_or_name: str) -> tuple[str, str, str | None]:
     """`<platform?>_<title>[_<id>]` → `(source_id, title, platform)`。
 

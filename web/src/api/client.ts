@@ -90,10 +90,18 @@ export function post<T>(path: string, body?: unknown): Promise<T> {
 }
 
 /** 上传正文时保留原始字节；JSON 化 File 只会得到一个空对象。 */
-export function postRaw<T>(path: string, body: BodyInit): Promise<T> {
+export function postRaw<T>(
+  path: string,
+  body: BodyInit,
+  extraHeaders?: Record<string, string>,
+): Promise<T> {
   return request<T>(path, {
     method: 'POST',
-    headers: { ...UI_HEADER, 'Content-Type': 'application/octet-stream' },
+    headers: {
+      ...UI_HEADER,
+      'Content-Type': 'application/octet-stream',
+      ...extraHeaders,
+    },
     body,
   })
 }

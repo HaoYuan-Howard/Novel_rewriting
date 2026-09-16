@@ -156,6 +156,21 @@ def _drain_pending_rebuilds(base: str) -> None:
                 RuntimeWarning, stacklevel=2)
 
 
+def _drain_pending_upload_autostarts(base: str) -> None:
+    """启动时消费未闭合的上传自动开跑意图；失败不阻断服务起来。"""
+    import warnings
+
+    from novel.orchestrator import upload_autostart
+    if not upload_autostart.pending_autostarts(base):
+        return
+    try:
+        upload_autostart.drain(base)
+    except Exception as exc:  # noqa: BLE001 - 启动 reconcile 失败不拦服务
+        warnings.warn(
+            f'启动上传自动开跑 reconcile 失败：{type(exc).__name__}: {exc}',
+            RuntimeWarning, stacklevel=2)
+
+
 def create_app(base: str | os.PathLike[str],
                *, ui_dist: str | os.PathLike[str] | None = None) -> FastAPI:
     """建一个服务实例。`base` = 语料根目录（`Output/`）。
@@ -184,6 +199,9 @@ def create_app(base: str | os.PathLike[str],
         # 改选重建意图的启动 reconcile（2026-09-15 全自动裁决）：崩溃留在
         # requested 的意图在此续消费；只进确定性白名单节点，0 模型。
         _drain_pending_rebuilds(app.state.base)
+        # 上传自动开跑意图的启动 reconcile（R-11.28）：stage0 已成功但尚未
+        # run_started 的意图在此补一次 agent.start；stage0 失败不开付费 run。
+        _drain_pending_upload_autostarts(app.state.base)
         yield
 
     app = FastAPI(title='novel-rewriting', docs_url=None, redoc_url=None,

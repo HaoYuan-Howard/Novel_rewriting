@@ -13,6 +13,11 @@ import { CHAPTERED_SCREENS, SPEND_INK } from '@/constants/vocabulary'
 import { useSampleCoverage } from '@/hooks/useSample'
 import { AgentRunDialog } from '@/components/agent/AgentRunDialog'
 import { AgentBatchDialog } from '@/components/agent/AgentBatchDialog'
+import {
+  UploadAuthDialog,
+  toUploadOptions,
+  type UploadAuthConfirm,
+} from '@/components/agent/UploadAuthDialog'
 import { DeleteBookDialog } from '@/components/corpus/DeleteBookDialog'
 import { MaintenanceDialog } from '@/components/corpus/MaintenanceDialog'
 import { useAgentQueue } from '@/hooks/useAgentRuns'
@@ -28,6 +33,8 @@ function validateFile(file: File): string | null {
 interface UploadedBook {
   sid: string
   title: string
+  /** 与 UploadResponse.autostart 同形；仅展示是否已触发自动开跑。 */
+  autostarted?: boolean
 }
 
 interface UploadFailure {
@@ -43,8 +50,14 @@ interface UploadBatchResult {
 
 interface AgentTarget {
   sid: string
-  /** 上传单本后弹出的确认框关闭时，直接落到这本书的人工 Stage0。 */
   closeToStage0: boolean
+}
+
+interface PendingUpload {
+  files: File[]
+  /** 每个文件一份幂等键；网络重试复用同一批键。 */
+  keys: string[]
+  auth: UploadAuthConfirm
 }
 
 /**
@@ -71,6 +84,8 @@ export function CorpusScreen() {
   const [deleteBook, setDeleteBook] = useState<UploadedBook | null>(null)
   const [maintenanceOpen, setMaintenanceOpen] = useState(false)
   const [filter, setFilter] = useState('')
+  const [authOpen, setAuthOpen] = useState(false)
+  const [pendingUpload, setPendingUpload] = useState<PendingUpload | null>(null)
   const input = useRef<HTMLInputElement>(null)
   const queue = useAgentQueue()
   const { defaultOrdinal } = useSampleCoverage()
@@ -122,8 +137,8 @@ export function CorpusScreen() {
   }
 
   const upload = useMutation({
-    mutationFn: async () => {
-      const selected = [...files]
+    mutationFn: async (pending: PendingUpload) => {
+      const selected = pending.files
       const books: UploadedBook[] = []
       const failures: UploadFailure[] = []
       setUploadProgress({ done: 0, total: selected.length, current: selected[0]?.name ?? '' })
@@ -131,18 +146,25 @@ export function CorpusScreen() {
       // 逐本上传，不把 N 本原始字节同时塞进浏览器和服务端内存；失败不回滚成功项。
       for (let index = 0; index < selected.length; index += 1) {
         const current = selected[index]
-        if (!current) continue
+        const key = pending.keys[index]
+        if (!current || !key) continue
         setUploadProgress({ done: index, total: selected.length, current: current.name })
         try {
-          const result = await api.uploadCorpus(current)
+          const result = await api.uploadCorpus(current, toUploadOptions(pending.auth, key))
           if (result.job.state !== 'ok') {
             throw new Error(
               'Stage 0 扫描没有完成：' + result.job.state + '。请查看这本书的作业日志。',
             )
           }
-          // 同一个 sid 在一批里只交给 agent 一次；服务端仍逐次处理每个上传请求。
           if (!books.some((book) => book.sid === result.sid)) {
-            books.push({ sid: result.sid, title: current.name })
+            books.push({
+              sid: result.sid,
+              title: current.name,
+              autostarted:
+                result.autostart === 'started' ||
+                result.autostart === 'replay' ||
+                Boolean(result.run),
+            })
           }
         } catch (error) {
           failures.push({ filename: current.name, message: errorBody(error) })
@@ -154,25 +176,47 @@ export function CorpusScreen() {
     onSuccess: (result) => {
       setUploadProgress(null)
       setUploadResult(result)
+      setPendingUpload(null)
+      setAuthOpen(false)
       void qc.invalidateQueries({ queryKey: qk.novels() })
       result.books.forEach(({ sid }) => {
         void qc.invalidateQueries({ queryKey: qk.stage0Report(sid) })
         void qc.invalidateQueries({ queryKey: qk.stage0Segments(sid) })
         void qc.invalidateQueries({ queryKey: qk.jobs(sid) })
+        void qc.invalidateQueries({ queryKey: qk.agentRuns(sid) })
       })
       setFiles([])
       if (input.current) input.current.value = ''
 
       if (result.selectedCount === 1 && result.books.length === 1 && !result.failures.length) {
-        setAgentTarget({ sid: result.books[0]!.sid, closeToStage0: true })
+        nav('/n/' + result.books[0]!.sid + '/run')
         return
       }
 
       setPicked(result.books.map((book) => book.sid))
-      if (result.books.length && !result.failures.length) setBatchBooks(result.books)
+      // 批量：已带授权自动开跑，不再弹 AgentBatchDialog；失败项保留供核对。
+      if (result.books.length && result.failures.length) {
+        // 部分失败：已成功项已开跑，不强制跳转
+      }
     },
     onError: () => setUploadProgress(null),
   })
+
+  const beginUpload = () => {
+    if (!files.length) return
+    setAuthOpen(true)
+  }
+
+  const confirmUpload = (auth: UploadAuthConfirm) => {
+    const selected = [...files]
+    const keys = pendingUpload && pendingUpload.files.length === selected.length
+      && pendingUpload.files.every((file, i) => file === selected[i])
+      ? pendingUpload.keys
+      : selected.map(() => crypto.randomUUID())
+    const pending: PendingUpload = { files: selected, keys, auth }
+    setPendingUpload(pending)
+    upload.mutate(pending)
+  }
 
   const showUpload =
     uploadOpen || files.length > 0 || upload.isPending || !!uploadResult ||
@@ -309,7 +353,7 @@ export function CorpusScreen() {
               <button
                 type="button"
                 disabled={!files.length || upload.isPending}
-                onClick={() => upload.mutate()}
+                onClick={beginUpload}
                 className={
                   'flex-none whitespace-nowrap rounded-btn border-none bg-ink px-18 py-9 text-body-lg font-semibold text-card ' +
                   (!files.length || upload.isPending
@@ -318,19 +362,19 @@ export function CorpusScreen() {
                 }
               >
                 {upload.isPending
-                  ? `上传并扫描 ${uploadProgress?.done ?? 0}/${uploadProgress?.total ?? files.length}`
+                  ? `上传并开跑 ${uploadProgress?.done ?? 0}/${uploadProgress?.total ?? files.length}`
                   : files.length > 1
-                    ? `上传并扫描这 ${files.length} 本`
+                    ? `授权后上传这 ${files.length} 本`
                     : files.length === 1
-                      ? '上传并扫非正文（Stage0）'
+                      ? '授权后上传并自动开跑'
                       : '先选择文件'}
               </button>
               <span className="text-tag text-ink-4">
                 {upload.isPending
                   ? `正在处理：${uploadProgress?.current ?? '…'}`
                   : files.length > 1
-                    ? '逐本顺序上传；成功项不因另一本失败而回滚。'
-                    : 'Stage0 扫描不调 LLM、不花钱；成功后立刻建 sid。'}
+                    ? '逐本顺序上传；每本独立幂等键，同一批共用授权与 profiles。'
+                    : '上传前确认授权与 profiles；成功后自动开跑并进入进度屏。'}
               </span>
             </div>
             {fileError || upload.isError ? (
@@ -353,7 +397,7 @@ export function CorpusScreen() {
                 )}
               >
                 <div className="text-body font-semibold text-ink-2">
-                  Stage0 扫描：成功 {uploadResult.books.length} 本
+                  上传：成功 {uploadResult.books.length} 本
                   {uploadResult.failures.length
                     ? ` · 失败 ${uploadResult.failures.length} 本`
                     : ' · 全部完成'}
@@ -366,16 +410,17 @@ export function CorpusScreen() {
                 {uploadResult.books.length ? (
                   <div className="flex flex-wrap items-center gap-9">
                     <span className="text-tag text-ink-4">
-                      成功项已进入语料库，也可以逐本打开 Stage0 人工审校。
+                      成功项已按授权自动开跑；可打开进度屏查看，Stage 页仅只读监控。
                     </span>
-                    <button
-                      type="button"
-                      onClick={() => setBatchBooks(uploadResult.books)}
-                      className="ml-auto cursor-pointer rounded-btn border border-line-btn bg-card px-13 py-7 text-body font-semibold hover:border-accent-line-2"
-                      style={{ color: SPEND_INK }}
-                    >
-                      交给 agent 跑成功的 {uploadResult.books.length} 本
-                    </button>
+                    {uploadResult.books.length === 1 ? (
+                      <button
+                        type="button"
+                        onClick={() => nav('/n/' + uploadResult.books[0]!.sid + '/run')}
+                        className="ml-auto cursor-pointer rounded-btn border border-line-btn bg-card px-13 py-7 text-body font-semibold"
+                      >
+                        打开进度屏
+                      </button>
+                    ) : null}
                   </div>
                 ) : null}
               </div>
@@ -412,7 +457,7 @@ export function CorpusScreen() {
           vm.books.length === 0 ? (
             <NotRunYet
               title="一本书都还没有"
-              body="这台机器上的 Output 目录里没有任何一本书。把一个 .txt 丢进上面的上传口，Stage0 会先免费扫番外；扫描后可以直接交给 agent，也可以人工审校后再做确定性分章。"
+              body="这台机器上的 Output 目录里没有任何一本书。把一个 .txt 丢进上面的上传口，确认授权与 profiles 后上传会自动开跑；Stage 页用于只读监控，Stage6 可改选候选。"
               action={<LinkButton onClick={() => setUploadOpen(true)}>选择第一本原作</LinkButton>}
             />
           ) : (
@@ -444,6 +489,19 @@ export function CorpusScreen() {
           )
         }
       </QueryStates>
+
+      {authOpen ? (
+        <UploadAuthDialog
+          fileCount={files.length || pendingUpload?.files.length || 0}
+          pending={upload.isPending}
+          error={upload.error}
+          onClose={() => {
+            if (upload.isPending) return
+            setAuthOpen(false)
+          }}
+          onConfirm={confirmUpload}
+        />
+      ) : null}
 
       {agentTarget ? (
         <AgentRunDialog

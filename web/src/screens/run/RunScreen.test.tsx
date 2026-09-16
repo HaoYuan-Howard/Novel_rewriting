@@ -20,6 +20,49 @@ beforeEach(() => {
 })
 
 describe('RunScreen 交付终验', () => {
+  it('展示 Stage6 改选重建排队与成书对齐状态', async () => {
+    const run = await mockApi.getRunProgress(SAMPLE_SID)
+    vi.spyOn(api, 'getRunProgress').mockResolvedValue(run)
+    vi.spyOn(api, 'getCheck').mockResolvedValue(null)
+    vi.spyOn(api, 'getAgentRuns').mockResolvedValue({ runs: [] })
+    const rebuild = vi.spyOn(api, 'getStage6Rebuild').mockResolvedValue({
+      pending: true,
+      published: false,
+      queue_depth: 1,
+      expected_slot: 'c2',
+      expected_approved_text_sha1: 'abcdef0123',
+      expected_candidates_sha1: 'fedcba9876',
+    })
+    const { unmount } = renderRoute(<RunScreen />, `/n/${SAMPLE_SID}/run`)
+    await waitFor(() => {
+      expect(screen.getByTestId('stage6-rebuild')).toHaveTextContent('重建排队中')
+    })
+    expect(rebuild).toHaveBeenCalledWith(SAMPLE_SID)
+    expect(screen.getByTestId('stage6-rebuild')).toHaveTextContent(
+      '当前下载对应旧版本；新选择正在生成。',
+    )
+    expect(screen.getByTestId('rebuild-queue-depth')).toHaveTextContent('1')
+    expect(screen.getByTestId('rebuild-expected-version')).toHaveTextContent('c2')
+    expect(screen.getByTestId('rebuild-published-version')).toHaveTextContent('否')
+    unmount()
+
+    rebuild.mockResolvedValue({
+      pending: false,
+      published: true,
+      queue_depth: 0,
+      expected_slot: null,
+      expected_approved_text_sha1: null,
+      expected_candidates_sha1: null,
+    })
+    renderRoute(<RunScreen />, `/n/${SAMPLE_SID}/run`)
+    await waitFor(() => {
+      expect(screen.getByTestId('stage6-rebuild')).toHaveTextContent('无待办重建')
+    })
+    expect(screen.getByTestId('stage6-rebuild')).toHaveTextContent('已对齐当前选择。')
+    expect(screen.getByTestId('rebuild-published-version')).toHaveTextContent('是')
+  })
+
+
   it('显示后端当前审批与恢复，历史工作单元不决定下一角色', async () => {
     const run = await mockApi.getRunProgress(SAMPLE_SID)
     vi.spyOn(api, 'getRunProgress').mockResolvedValue({
@@ -39,7 +82,7 @@ describe('RunScreen 交付终验', () => {
     vi.spyOn(api, 'getCheck').mockResolvedValue(null)
     vi.spyOn(api, 'getAgentRuns').mockResolvedValue({ runs: [] })
     renderRoute(<RunScreen />, `/n/${SAMPLE_SID}/run`)
-    expect(await screen.findByText('下一处理者：人工审批（在 Stage 页面过闸后可原配置续跑）')).toBeVisible()
+    expect(await screen.findByText('下一处理者：人工（Stage6 改选等只读监控面上的例外动作）')).toBeVisible()
     expect(screen.getByText('stage2.global · book：accepted')).toBeVisible()
     expect(screen.getByText('stage2.blueprint · book：uncertain')).toBeVisible()
     expect(screen.getByText('当前恢复：book: replay_response')).toBeVisible()
@@ -172,21 +215,21 @@ describe('RunScreen 交付终验', () => {
 
   it('真实 exit2/stopped 默认展示停点理由并只导航回后端当前阶段', async () => {
     const run = await mockApi.getRunProgress(SAMPLE_SID)
-    const stage0Approve = run.steps.find((step) => step.node === 'stage0.approve')
-    if (!stage0Approve) throw new Error('mock pipeline 缺 stage0.approve')
+    const stopStep = run.steps.find((step) => step.node === 'stage0.remove') ?? run.steps[0]
+    if (!stopStep) throw new Error('mock pipeline 缺可用停点节点')
     run.resume_frontier = {
       state: 'blocked',
-      node: stage0Approve.node,
-      seq: stage0Approve.seq,
-      label: stage0Approve.label,
+      node: stopStep.node,
+      seq: stopStep.seq,
+      label: stopStep.label,
       resume_verdict: 'run',
-      why: '停在人工审批闸：stage0.approve；在 Stage 页面完成裁决后用原配置续跑',
-      waiting_on: 'stage0.approve',
+      why: '同进程租约停点；可在进度屏继续或熄火',
+      waiting_on: stopStep.node,
       paid: false,
       writes: 'approval',
       next_handler: 'human',
-      verified_skipped_nodes: ['stage0.remove'],
-      verified_skipped_count: 1,
+      verified_skipped_nodes: [],
+      verified_skipped_count: 0,
     }
     vi.spyOn(api, 'getRunProgress').mockResolvedValue(run)
     vi.spyOn(api, 'getCheck').mockResolvedValue(null)
@@ -212,7 +255,7 @@ describe('RunScreen 交付终验', () => {
         note: null,
         outcome: {
           state: 'stopped',
-          reason: '停在人工审批闸：stage0.approve；在 Stage 页面完成裁决后用原配置续跑',
+          reason: '同进程租约停点；可在进度屏继续或熄火',
           checked_at: 3,
         },
         allowed_controls: [],
@@ -226,13 +269,13 @@ describe('RunScreen 交付终验', () => {
     })
     expect(toggle).toHaveAttribute('aria-expanded', 'true')
     expect(await screen.findByTestId('delivery-reason')).toHaveTextContent(
-      '停在人工审批闸：stage0.approve',
+      '同进程租约停点',
     )
     expect(screen.getByText('stopped 安全停点')).toBeVisible()
     expect(screen.queryByText('failed 失败')).not.toBeInTheDocument()
     expect(screen.getByText(/exit 2/)).toBeVisible()
     const back = screen.getByTestId('stopped-stage-link')
-    expect(back).toHaveTextContent(`返回当前阶段：${stage0Approve.label}`)
+    expect(back).toHaveTextContent(`返回当前阶段：${stopStep.label}`)
     expect(back).toHaveAttribute('href', `/n/${SAMPLE_SID}/stage0`)
     expect(screen.queryByRole('button', { name: '继续' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '暂停' })).not.toBeInTheDocument()
@@ -454,7 +497,7 @@ describe('RunScreen check composition', () => {
     const frontier = await screen.findByTestId('resume-frontier')
     expect(frontier).toHaveTextContent(/下一节点：stage4 写作上下文组装/)
     expect(frontier).toHaveTextContent('当前执行：stage4 重构计划（stage4.plan）')
-    expect(frontier).toHaveTextContent('下一处理者：人工审批（在 Stage 页面过闸后可原配置续跑）')
+    expect(frontier).toHaveTextContent('下一处理者：人工（Stage6 改选等只读监控面上的例外动作）')
     expect(screen.getByRole('button', { name: '跳到下一节点' })).toBeEnabled()
     expect(screen.queryAllByTitle('stage0.remove')).toHaveLength(0)
 

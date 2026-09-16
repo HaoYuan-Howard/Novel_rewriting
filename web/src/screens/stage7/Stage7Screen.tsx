@@ -7,7 +7,7 @@ import { qk } from '@/api/queryKeys'
 import { lookupAction } from '@/constants/actions'
 import { DELIVERY_LABEL, FRESH, SCRIM, SEV } from '@/constants/vocabulary'
 import { useSampleCoverage } from '@/hooks/useSample'
-import { useChrome, useAskJob } from '@/hooks/useChrome'
+import { useAskJob } from '@/hooks/useChrome'
 import { useEnums } from '@/hooks/useEnums'
 import { useSid } from '@/hooks/useRouteParams'
 import { invalidateBookReadModels } from '@/hooks/bookReadModels'
@@ -41,7 +41,6 @@ const ORIGIN_LABEL: Record<string, string> = {
  */
 export function Stage7Screen() {
   const sid = useSid()
-  const { askConfirm, notify } = useChrome()
   const ask = useAskJob()
   const enums = useEnums()
   const renameAction = lookupAction(enums.data, { kind: 'stage7.rename', extra: null })
@@ -71,7 +70,7 @@ export function Stage7Screen() {
     retry: false,
   })
   const deliveryReady = !q.isFetching && !q.isError &&
-    (q.data?.delivery.state === 'ready' || q.data?.delivery.state === 'ready_with_disclosures')
+    (q.data?.delivery?.state === 'ready' || q.data?.delivery?.state === 'ready_with_disclosures')
   const bookQ = useQuery({
     queryKey: qk.stage7book(sid),
     queryFn: () => api.getStage7Book(sid),
@@ -94,30 +93,6 @@ export function Stage7Screen() {
       URL.revokeObjectURL(url)
     },
   })
-
-  const adoptResidual = useMutation({
-    mutationFn: () => api.adoptResidual(sid, { confidence: 'high' }),
-    onSuccess: (job) => {
-      if (job.state !== 'failed') notify('已采纳可安全应用的 high 候选')
-      void qc.invalidateQueries({ queryKey: qk.stage7(sid) })
-      void qc.invalidateQueries({ queryKey: qk.check(sid, 'stage7') })
-      void qc.invalidateQueries({ queryKey: qk.approvals(sid) })
-      void qc.invalidateQueries({ queryKey: qk.finalApprovalWorkpack(sid, 'stage7') })
-      void qc.invalidateQueries({ queryKey: qk.jobs(sid) })
-    },
-  })
-
-  const askAdoptResidual = () =>
-    askConfirm({
-      req: {
-        kind: 'stage7.rename',
-        label: '采纳可安全应用的 high 漏网叫法候选',
-        extra: ['--adopt-residual', 'high'],
-        sid,
-        ordinal: null,
-      },
-      run: () => adoptResidual.mutateAsync(),
-    })
 
   return (
     <ScreenFrame screen="stage7">
@@ -195,7 +170,7 @@ export function Stage7Screen() {
               <Panel className="px-18 py-14">
                 <div className="prose-cn text-body text-ink-3">
                   定稿由 rename producer 在机械校验通过后自动写入（system:stage7-auto）。
-                  本页只读；残留可安全采纳时仍可用下方按钮免费重放。
+                  本页只读；安全 high 残留由流水线自动采纳，不提供人工写按钮。
                 </div>
                 {currentApproval ? (
                   <div className="mt-8 text-tag text-ink-3">
@@ -224,33 +199,11 @@ export function Stage7Screen() {
                   title="漏网叫法候选"
                   meta={d.residual.length + ' 条'}
                   right={
-                    <div className="flex items-center gap-10">
-                      <span className="prose-cn text-tag text-ink-4">
-                        这是全链唯一能发现「人物表本身漏了人」的通道——按置信度从上往下看
-                      </span>
-                      <ActionButton
-                        action={{
-                          kind: 'stage7.rename',
-                          extra: ['--adopt-residual', 'high'],
-                          paid: false,
-                        }}
-                        size="sm"
-                        onClick={askAdoptResidual}
-                        disabled={!d.residual.some((item) =>
-                          item.confidence === 'high' && !!item.unit && !!item.suggest)}
-                        disabledReason="当前没有可提交给后端复核的 high 建议"
-                      >
-                        采纳安全 high 候选
-                      </ActionButton>
-                    </div>
+                    <span className="prose-cn text-tag text-ink-4">
+                      漏网候选只读展示；安全 high 候选由流水线自动采纳。
+                    </span>
                   }
                 />
-                {adoptResidual.isError ? (
-                  <div className="border-b border-warn-line bg-warn-bg px-18 py-10 text-body text-warn-ink">
-                    采纳失败：{errorBody(adoptResidual.error)}
-                    <ErrorHint error={adoptResidual.error} />
-                  </div>
-                ) : null}
                 {d.residual.length ? (
                   d.residual.map((r, i) => (
                     <div key={i} className="flex flex-col gap-6 border-b border-line-row px-18 py-12">

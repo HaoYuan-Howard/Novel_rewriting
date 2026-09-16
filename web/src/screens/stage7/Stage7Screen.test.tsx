@@ -2,7 +2,6 @@ import { api } from '@/api/endpoints'
 import { ApiError } from '@/api/errors'
 import { mockApi, PLOT_SAMPLE_SID } from '@/api/mock'
 import { qk } from '@/api/queryKeys'
-import { ConfirmDialog } from '@/components/job/ConfirmDialog'
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { renderRoute } from '@/test/render'
@@ -185,64 +184,18 @@ describe('Stage7Screen download', () => {
     expect(evidence.getByText(/机械核验以未附审批和交付记录的人物表为基准/)).toBeVisible()
   })
 
-  it('previews and submits explicit high-confidence residual adoption', async () => {
+  it('只读：不提供采纳安全 high 候选的人工写按钮', async () => {
     const fixture = await mockApi.getStage7(PLOT_SAMPLE_SID)
-    vi.spyOn(api, 'getStage7').mockResolvedValue({
-      ...fixture,
-      residual: [{
-        stem: '温', where: 'chapter:1', hit: '温兄', context: '她向温兄道谢。',
-        confidence: 'high',
-        unit: '温兄',
-        suggest: '顾兄',
-      }],
-    })
-    vi.spyOn(api, 'getJobs').mockResolvedValue({ jobs: [], running: null })
-    const preview = vi.spyOn(api, 'previewJob').mockImplementation(async (req) => ({
-      argv: `python -m novel.cli ${req.kind} ${req.extra?.join(' ')}`,
-      paid: false,
-      label: req.label,
-      kind: req.kind,
-      steps: [],
-    }))
-    const adopt = vi.spyOn(api, 'adoptResidual').mockResolvedValue({
-      id: 'stage7-adopt-test',
-      kind: 'stage7.rename',
-      label: '采纳 high 漏网叫法',
-      argv: 'python -m novel.cli stage7.rename --adopt-residual high',
-      state: 'ok',
-      paid: false,
-      started: 1,
-      finished: 2,
-      sid: PLOT_SAMPLE_SID,
-      ordinal: null,
-    })
-
-    const { queryClient } = renderRoute(
-      <>
-        <Stage7Screen />
-        <ConfirmDialog />
-      </>,
-      `/n/${PLOT_SAMPLE_SID}/stage7`,
+    vi.spyOn(api, 'getStage7').mockResolvedValue(fixture)
+    vi.spyOn(api, 'getStage7ApprovalWorkpack').mockResolvedValue(
+      await mockApi.getStage7ApprovalWorkpack(PLOT_SAMPLE_SID),
     )
-    const invalidate = vi.spyOn(queryClient, 'invalidateQueries')
-    queryClient.setQueryData(qk.approvals(PLOT_SAMPLE_SID), await mockApi.getApprovals(PLOT_SAMPLE_SID))
-    expect(queryClient.getQueryState(qk.approvals(PLOT_SAMPLE_SID))?.isInvalidated).toBe(false)
+    vi.spyOn(api, 'getJobs').mockResolvedValue({ jobs: [], running: null })
+    expect('adoptResidual' in api).toBe(false)
 
-    fireEvent.click(await screen.findByRole('button', { name: /采纳安全 high 候选/ }))
-    await waitFor(() => expect(preview).toHaveBeenCalledWith(expect.objectContaining({
-      kind: 'stage7.rename',
-      extra: ['--adopt-residual', 'high'],
-    })))
-    fireEvent.click(await screen.findByRole('button', { name: '发起' }))
-    await waitFor(() => expect(adopt).toHaveBeenCalledWith(
-      PLOT_SAMPLE_SID, { confidence: 'high' },
-    ))
-    await waitFor(() => {
-      expect(queryClient.getQueryState(qk.approvals(PLOT_SAMPLE_SID))?.isInvalidated).toBe(true)
-    })
-    expect(invalidate).toHaveBeenCalledWith({
-      queryKey: qk.finalApprovalWorkpack(PLOT_SAMPLE_SID, 'stage7'),
-    })
+    renderRoute(<Stage7Screen />, `/n/${PLOT_SAMPLE_SID}/stage7`)
+    expect(await screen.findByText('漏网候选只读展示；安全 high 候选由流水线自动采纳。')).toBeVisible()
+    expect(screen.queryByRole('button', { name: /采纳安全 high 候选/ })).not.toBeInTheDocument()
   })
 
   it('does not present stale already_current during refresh or after refresh failure', async () => {

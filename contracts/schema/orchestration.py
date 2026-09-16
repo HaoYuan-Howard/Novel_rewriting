@@ -960,6 +960,10 @@ class RunContractV2(FrozenModel):
     ``legacy_*`` 四格只负责解码本功能落地期间已经写出的早期 v2 started 行；
     它们在序列化和 contract hash 面上均被排除。新 writer 把首次启动审计快照
     放在同一 started 事件的 ``start`` 兼容投影中，不再污染 parent identity。
+
+    ``source_sha256`` / ``rules_fingerprint`` / ``book_budget_ceiling`` 是新启动
+    必须冻结的输入身份（R-11.28）；历史行缺省为 ``None``，序列化省略以保持
+    旧 contract hash 面。
     """
 
     wire_version: Literal[2] = 2
@@ -971,6 +975,10 @@ class RunContractV2(FrozenModel):
 
     continuation: RunContinuationSource | None = None
     pause_before_node: Literal[tuple(NODES)] | None = None
+    source_sha256: str | None = Field(
+        default=None, pattern=r'^[0-9a-f]{64}$')
+    rules_fingerprint: str | None = Field(default=None, min_length=1)
+    book_budget_ceiling: int | None = Field(default=None, ge=1)
 
     @model_serializer(mode='wrap')
     def _preserve_original_contract_identity(self, handler: Any) -> dict[str, Any]:
@@ -979,6 +987,12 @@ class RunContractV2(FrozenModel):
             result.pop('continuation', None)
         if self.pause_before_node is None:
             result.pop('pause_before_node', None)
+        if self.source_sha256 is None:
+            result.pop('source_sha256', None)
+        if self.rules_fingerprint is None:
+            result.pop('rules_fingerprint', None)
+        if self.book_budget_ceiling is None:
+            result.pop('book_budget_ceiling', None)
         return result
 
     legacy_argv: list[str] | None = Field(
@@ -2562,4 +2576,40 @@ class RebuildEventV1(FrozenModel):
     def _closed_events_carry_reason(self) -> 'RebuildEventV1':
         if self.event == 'failed' and not self.reason.strip():
             raise ValueError('failed 事件必须说明原因')
+        return self
+
+
+class UploadAutostartEventV1(FrozenModel):
+    """上传即授权自动开跑的意图账（append-only outbox，R-11.28）。
+
+    【它回答什么】「上传+自动开跑意图已接受」与「agent.start 已成功」分开：
+    在 stage0 / agent.start 之前先按客户端幂等键耐久；崩溃后 drain 只对
+    stage0 已成功的意图补一次 unpaid-complete 的 agent.start；stage0 失败
+    绝不开付费 run。
+
+    账是 base 级全局文件（键在 sid 已知之前由客户端给出），不是 per-sid。
+    """
+
+    schema_version: Literal[1] = 1
+    event: Literal['requested', 'stage0_failed', 'run_started', 'abandoned']
+    idempotency_key: str = Field(pattern=r'^[a-zA-Z0-9_-]{8,128}$')
+    sid: str = Field(min_length=1)
+    source_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    filename: str = Field(min_length=1)
+    authorized: bool
+    egress_authorized: bool
+    profiles: PipelineAgentProfiles
+    stage0_job_id: str | None = None
+    run_id: str | None = None
+    created_at: int = Field(ge=0)
+    reason: str = Field(default='', max_length=2000)
+
+    @model_validator(mode='after')
+    def _terminal_shape(self) -> 'UploadAutostartEventV1':
+        if self.event == 'stage0_failed' and not self.reason.strip():
+            raise ValueError('stage0_failed 事件必须说明原因')
+        if self.event == 'run_started' and not self.run_id:
+            raise ValueError('run_started 事件必须携带 run_id')
+        if self.event == 'abandoned' and not self.reason.strip():
+            raise ValueError('abandoned 事件必须说明原因')
         return self

@@ -119,7 +119,7 @@ Prompt 选型完成后，`prompt_variants`、`prompt_defaults` 与 `--prompt-var
 | `GET /api/queues/:id` | `QueueRun` | **复用** `_orchestration.md` |
 | `POST /api/queues/:id/resume` | `QueueRun`（202；请求体 `QueueResumeRequest`，剩余付费命令要求 `confirmed=true`） | **复用** `_orchestration.md` |
 | `POST /api/queues/:id/items/:index/cancel` | `QueueRun`（只取消尚未开始项） | **复用** `_orchestration.md` |
-| `POST /api/upload?filename=` | `UploadResult`（请求体为原始字节） | 新 |
+| `POST /api/upload?filename=` | `UploadResult`（请求体为原始字节；`authorized=true` 时须幂等键，可附 `run`/`autostart`，见 R-11.28） | 新 |
 | `POST /api/novels/:sid/trash` | `TrashNovelResult`（请求体 `TrashNovelRequest.expected_title`；整本项目移入 `_service/trash/`） | 新 |
 | `POST /api/maintenance/retention/preview` / `apply` | `RetentionPlanView` / `RetentionApplyResultView`；apply 原样回传完整 plan + `confirmed=true` | 新 |
 | `POST /api/maintenance/trash/restore/preview` / `apply` | `TrashRestorePlanView` / `TrashRestoreResultView`；apply 原样回传完整 plan + `confirmed=true`，真实移动走 CLI child | 新 |

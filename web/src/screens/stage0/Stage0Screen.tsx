@@ -1,23 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { api } from '@/api/endpoints'
-import { errorBody } from '@/api/errors'
-import { ErrorHint } from '@/components/state/States'
 import { qk } from '@/api/queryKeys'
-import { lookupAction } from '@/constants/actions'
-import { useChrome } from '@/hooks/useChrome'
-import { useEnums } from '@/hooks/useEnums'
 import { useSid } from '@/hooks/useRouteParams'
 import { QueryStates } from '@/components/state/QueryStates'
 import { AgentRunDialog } from '@/components/agent/AgentRunDialog'
-import { ActionButton } from '@/components/ui/ActionButton'
 import { Mono } from '@/components/ui/Mono'
 import { Panel, PaneHeader } from '@/components/ui/Panel'
 import { SPEND_INK } from '@/constants/vocabulary'
 import { cx } from '@/lib/cx'
-import type { Job } from '@/types/jobs'
 
 /** 一版是怎么来的。取值面在后端，这里只负责把它显示成中文。
  *  ⚠ `human_edit` / `human_adopt` 只在存量书（2026-09-15 全自动裁决之前）出现。 */
@@ -27,18 +20,9 @@ const REVISION_ORIGIN_LABEL: Record<string, string> = {
   human_adopt: '人工采纳机器结果',
 }
 
-function requireLanded(job: Job): void {
-  if (job.state !== 'ok' && job.state !== 'landed_red') {
-    throw new Error(job.label + '没有落盘：' + job.state + '。作业日志里有完整输出。')
-  }
-}
-
 export function Stage0Screen() {
   const sid = useSid()
   const nav = useNavigate()
-  const qc = useQueryClient()
-  const { openDrawer } = useChrome()
-  const enums = useEnums()
   const [sourceOpen, setSourceOpen] = useState(true)
   const [agentOpen, setAgentOpen] = useState(false)
   const segmentScroll = useRef<HTMLDivElement>(null)
@@ -53,7 +37,7 @@ export function Stage0Screen() {
     retry: false,
   })
 
-  // 阅读序固定为服务端给出的分区；stage0 人工重选已随 2026-09-15 全自动裁决退役。
+  // 阅读序固定为服务端给出的分区；stage0 人工重选与手动 partition 已退役。
   const view = segments.data?.segments ?? []
   const segmentVirtualizer = useVirtualizer({
     count: view.length,
@@ -73,37 +57,6 @@ export function Stage0Screen() {
     [view],
   )
   const removedChars = removed.reduce((sum, item) => sum + item.chars, 0)
-
-  const run = useMutation({
-    mutationFn: async () => {
-      // 机械校验通过即自动接受（system:stage0-auto）：没有编辑/批准两步，
-      // stage1.partition 直接可跑。landed_red = Stage1 两份材料已经落盘，只是
-      // 校验有硬红。红项审阅面就在 Stage1；把它挡在 Stage0 会让用户反而
-      // 进不了唯一的恢复入口。
-      requireLanded(await api.partitionStage1(sid))
-    },
-    onSuccess: async () => {
-      openDrawer()
-      await Promise.all([
-        qc.invalidateQueries({ queryKey: qk.stage0Report(sid) }),
-        qc.invalidateQueries({ queryKey: qk.stage0Segments(sid) }),
-        qc.invalidateQueries({ queryKey: qk.stage1(sid) }),
-        qc.invalidateQueries({ queryKey: qk.jobs(sid) }),
-        qc.invalidateQueries({ queryKey: qk.approvals(sid) }),
-        qc.invalidateQueries({ queryKey: qk.novel(sid) }),
-        qc.invalidateQueries({ queryKey: qk.novels() }),
-      ])
-      nav('/n/' + sid + '/stage1')
-    },
-    onError: async () => {
-      openDrawer()
-      await Promise.all([
-        qc.invalidateQueries({ queryKey: qk.stage0Report(sid) }),
-        qc.invalidateQueries({ queryKey: qk.stage0Segments(sid) }),
-        qc.invalidateQueries({ queryKey: qk.jobs(sid) }),
-      ])
-    },
-  })
 
   return (
     <>
@@ -164,40 +117,15 @@ export function Stage0Screen() {
                       <div className={'ml-auto flex items-center gap-9'}>
                         <button
                           type="button"
-                          disabled={run.isPending}
                           onClick={() => setAgentOpen(true)}
                           title="查看完整命令与授权后，让 Agent 从当前盘面代跑"
-                          className="cursor-pointer rounded-btn border border-line-btn bg-card px-12 py-7 text-body font-semibold hover:border-accent-line-2 disabled:cursor-not-allowed disabled:opacity-40"
+                          className="cursor-pointer rounded-btn border border-line-btn bg-card px-12 py-7 text-body font-semibold hover:border-accent-line-2"
                           style={{ color: SPEND_INK }}
                         >
                           Agent 代跑
                         </button>
-                        <ActionButton
-                          action={lookupAction(
-                            enums.data,
-                            { kind: 'stage1.partition', extra: null },
-                          )}
-                          disabled={run.isPending}
-                          disabledReason={run.isPending ? '作业正在运行' : undefined}
-                          onClick={() => run.mutate()}
-                        >
-                          {run.isPending ? '切分中…' : '切分并进入 stage1'}
-                        </ActionButton>
                       </div>
                     </Panel>
-
-                    {run.isError ? (
-                      <Panel className={'border-warn-line bg-warn-bg px-18 py-14'}>
-                        <div className={'text-body font-semibold text-warn'}>没有进入 Stage 1</div>
-                        <div className={'prose-cn mt-5 text-body text-ink-2'}>
-                          {errorBody(run.error)}
-                          <ErrorHint error={run.error} />
-                        </div>
-                        <div className={'mt-4 text-tag text-ink-4'}>
-                          作业抽屉已展开，可查看子进程日志。
-                        </div>
-                      </Panel>
-                    ) : null}
 
                     <div
                       className={'grid items-start gap-16'}

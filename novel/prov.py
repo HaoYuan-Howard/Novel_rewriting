@@ -91,6 +91,18 @@ def rules_fingerprint(stage: str) -> str:
     return fingerprint(repr(rows))
 
 
+def pipeline_rules_fingerprint() -> str:
+    """全流水线判据注册表的确定性指纹；冻结进 RunContractV2（R-11.28）。"""
+    from contracts.rules import REGISTRY
+
+    rules = sorted(REGISTRY.all(), key=lambda rule: rule.rule)
+    rows = tuple(
+        tuple(getattr(rule, name) for name in rule.__dataclass_fields__)
+        for rule in rules
+    )
+    return fingerprint(repr(rows))
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 二、`code` —— 完整提交 + 工作树差异摘要，全链一个实现
 # ─────────────────────────────────────────────────────────────────────────────

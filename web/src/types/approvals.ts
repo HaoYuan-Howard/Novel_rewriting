@@ -5,7 +5,7 @@ import type { Finding, RuleLine } from './common'
  *
  * 在真产品里这是服务端的东西（人点了哪些确认、是否已经批准开写）。
  * mock 版本里它由 mock.ts 存在 localStorage —— 但**取数路径和真实响应完全一样**：
- * 走 api.getApprovals() / api.approveGate()，
+ * 走 api.getApprovals() 只读投影；写面仅 Stage6 approveHook，
  * 屏与组件从不直接碰传输层。
  *
  * 这些字段合成一份文档而不是各存一张 map：一份文档、一次写、一个生命周期。

@@ -6,7 +6,7 @@ from pathlib import Path
 
 from contracts.schema.api import AgentRunContinuationView
 from contracts.schema.orchestration import AgentRunEvent, PipelineAgentProfiles, RunContinuationSource
-from novel import run_identity, work_units
+from novel import prov, run_identity, work_units
 from novel.errors import TerminalState
 from novel.llm.ledger import read_strict_jsonl_objects
 from novel.orchestrator import admission, beacon
@@ -41,9 +41,19 @@ def inspect(base: str | Path, run_id: str) -> AgentRunContinuationView:
         stop = admission.readonly_snapshot(base, checked)
         if stop.active_claims or stop.opened and stop.terminal_kind is None or beacon.open_executions(base, checked):
             raise TerminalState('原 owner 的 admission 或子执行尚未闭合')
-        source = RunContinuationSource(run_id=checked, source_sha256=work_units._digest({
-            'run': [row.model_dump(mode='json') for row in own], 'stop': asdict(stop),
-            'profiles': profiles.model_dump(mode='json')}))
+        contract = run.contract
+        digest_payload = {
+            'run': [row.model_dump(mode='json') for row in own],
+            'stop': asdict(stop),
+            'profiles': profiles.model_dump(mode='json'),
+        }
+        if contract is not None:
+            digest_payload['source_sha256'] = contract.source_sha256
+            digest_payload['rules_fingerprint'] = contract.rules_fingerprint
+            digest_payload['book_budget_ceiling'] = contract.book_budget_ceiling
+        source = RunContinuationSource(
+            run_id=checked,
+            source_sha256=work_units._digest(digest_payload))
         # 配置尚在契约内但供应商已经不支持时，仍显示历史快照与明确拒因。
         try:
             resolved = agent._freeze_profiles(profiles)
@@ -52,6 +62,21 @@ def inspect(base: str | Path, run_id: str) -> AgentRunContinuationView:
                 reason=str(exc), profiles=profiles, pause_before_node=boundary)
         if resolved != profiles:
             raise TerminalState('当前 profile 解析会改变历史配置，拒绝静默改写')
+        if contract is not None:
+            if contract.rules_fingerprint is not None:
+                current_rules = prov.pipeline_rules_fingerprint()
+                if current_rules != contract.rules_fingerprint:
+                    return AgentRunContinuationView(
+                        run_id=checked, sid=run.start.sid, available=False,
+                        reason='原运行冻结的判据指纹与当前流水线不一致，不能静默续跑',
+                        profiles=profiles, pause_before_node=boundary)
+            if contract.source_sha256 is not None:
+                current_source = agent.resolve_source_sha256(base, run.start.sid)
+                if current_source != contract.source_sha256:
+                    return AgentRunContinuationView(
+                        run_id=checked, sid=run.start.sid, available=False,
+                        reason='原运行冻结的原文内容地址已漂移，不能静默续跑',
+                        profiles=profiles, pause_before_node=boundary)
         return AgentRunContinuationView(run_id=checked, sid=run.start.sid, available=True,
             reason='复用原默认执行者与逐节点覆盖（profiles v3 起无 Commander 字段，'
                    '历史行读边界自动丢弃）；重新明确本次两项授权',

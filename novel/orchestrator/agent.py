@@ -166,6 +166,9 @@ class AgentRunPlan:
     profiles: PipelineAgentProfiles
     continuation: RunContinuationSource | None = None
     pause_before_node: OperatorNode | None = None
+    source_sha256: str | None = None
+    rules_fingerprint: str | None = None
+    book_budget_ceiling: int | None = None
 
 
 class _UnspecifiedRunBoundary:
@@ -175,20 +178,93 @@ class _UnspecifiedRunBoundary:
 _RUN_BOUNDARY_UNSPECIFIED = _UnspecifiedRunBoundary()
 
 
+def resolve_source_sha256(base: str | os.PathLike[str], sid: str) -> str | None:
+    """从 stage0 来源引用或 uploads 内容地址解析原文 SHA-256；缺席返回 None。"""
+    import hashlib
+
+    from novel.core.source import resolve_recorded_source
+    from novel.orchestrator.state import readonly_ctx
+    from novel.stages.stage0 import revisions as rev
+    from novel.store import ArtifactStore
+
+    novel_dir = paths.find_novel_dir(base, sid)
+    if novel_dir is not None:
+        try:
+            store = ArtifactStore(
+                readonly_ctx(novel_dir, 'stage0.remove', prov.code_version()))
+            log = rev.read(store)
+            if log is not None:
+                ref = log.source.source_ref
+                if getattr(ref, 'kind', None) == 'managed_upload':
+                    return ref.blob_sha256
+                found = resolve_recorded_source(ref, base)
+                if found is not None and found.is_file():
+                    return hashlib.sha256(found.read_bytes()).hexdigest()
+        except Exception:  # noqa: BLE001 - 缺产物时回落 uploads
+            pass
+    uploads = paths.uploads_dir(base)
+    if uploads.is_dir():
+        for digest_dir in uploads.iterdir():
+            if not digest_dir.is_dir():
+                continue
+            digest = digest_dir.name
+            if len(digest) != 64:
+                continue
+            for candidate in digest_dir.iterdir():
+                if not candidate.is_file():
+                    continue
+                try:
+                    meta_sid, _title, _platform = paths.derive_source_meta(candidate.name)
+                except Exception:  # noqa: BLE001
+                    continue
+                if meta_sid == sid:
+                    return digest
+    return None
+
+
+def _freeze_run_identity(
+        base: str | os.PathLike[str], sid: str,
+) -> tuple[str | None, str, int]:
+    """新 start 必须冻结的输入身份：原文 SHA、全流水线判据指纹、整书预算上限。"""
+    from contracts.invariants import BOOK_CONTENT_CALL_CEILING_DEFAULT
+    from novel import work_units
+
+    source = resolve_source_sha256(base, sid)
+    rules = prov.pipeline_rules_fingerprint()
+    budget = work_units.read_book_budget(base, sid)
+    ceiling = budget.ceiling if budget is not None else BOOK_CONTENT_CALL_CEILING_DEFAULT
+    return source, rules, ceiling
+
+
 def _plan_resolved(
         base: str | os.PathLike[str], sid: str, *, authorized: bool,
         egress_authorized: bool, profiles: PipelineAgentProfiles,
         code_version: str | None = None,
-        pause_before_node: OperatorNode | None = None) -> AgentRunPlan:
+        pause_before_node: OperatorNode | None = None,
+        source_sha256: str | None = None,
+        rules_fingerprint: str | None = None,
+        book_budget_ceiling: int | None = None) -> AgentRunPlan:
     base_abs = os.path.abspath(os.fspath(base))
     frozen = _copy_profiles(profiles)
     code = code_version or prov.code_version()
     if pause_before_node is not None and pause_before_node not in NODES:
         raise UnsupportedRunMode('运行范围上界必须是当前已登记节点')
+    if source_sha256 is None or rules_fingerprint is None or book_budget_ceiling is None:
+        resolved_source, resolved_rules, resolved_ceiling = _freeze_run_identity(
+            base_abs, sid)
+        if source_sha256 is None:
+            source_sha256 = resolved_source
+        if rules_fingerprint is None:
+            rules_fingerprint = resolved_rules
+        if book_budget_ceiling is None:
+            book_budget_ceiling = resolved_ceiling
     return AgentRunPlan(
         base=base_abs, sid=sid, authorized=authorized,
         egress_authorized=egress_authorized, code_version=code,
-        profiles=frozen, pause_before_node=pause_before_node)
+        profiles=frozen, pause_before_node=pause_before_node,
+        source_sha256=source_sha256,
+        rules_fingerprint=rules_fingerprint,
+        book_budget_ceiling=book_budget_ceiling)
 
 
 def plan(
@@ -213,6 +289,18 @@ def plan(
         base, sid, authorized=authorized,
         egress_authorized=egress_authorized,
         profiles=_freeze_profiles(profiles), pause_before_node=pause_before_node)
+    if continuation is not None:
+        # 续跑继承原契约冻结字段，不拿今日默认覆盖。
+        source_events = [
+            event for event in read_events(base) if event.run_id == continuation.run_id]
+        source_runs = [row for row in fold(source_events) if row.run_id == continuation.run_id]
+        if len(source_runs) == 1 and source_runs[0].contract is not None:
+            prior = source_runs[0].contract
+            planned = replace(
+                planned,
+                source_sha256=prior.source_sha256,
+                rules_fingerprint=prior.rules_fingerprint,
+                book_budget_ceiling=prior.book_budget_ceiling)
     return replace(planned, continuation=continuation)
 
 
@@ -1286,7 +1374,10 @@ def _start_planned(plan: AgentRunPlan, *,
         authorized=plan.authorized,
         egress_authorized=plan.egress_authorized,
         profiles=plan.profiles, continuation=plan.continuation,
-        pause_before_node=plan.pause_before_node)
+        pause_before_node=plan.pause_before_node,
+        source_sha256=plan.source_sha256,
+        rules_fingerprint=plan.rules_fingerprint,
+        book_budget_ceiling=plan.book_budget_ceiling)
     initial_epoch = ExecutionEpoch(
         epoch_id=run_id, ordinal=1, reason='initial',
         argv=None, prompt_sha256=None,

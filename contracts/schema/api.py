@@ -441,8 +441,25 @@ class Stage1View(StrictModel):
 
 
 class UploadResult(StrictModel):
+    """上传响应；自动开跑路径可附带幂等键、run 与 autostart 结局（R-11.28）。"""
+
     sid: str = Field(min_length=1)
     job: JobRecord
+    run: AgentRunRecord | None = None
+    idempotency_key: str | None = Field(
+        default=None, pattern=r'^[a-zA-Z0-9_-]{8,128}$')
+    autostart: Literal['started', 'skipped_stage0_failed', 'replay'] | None = None
+
+    @model_serializer(mode='wrap')
+    def _omit_absent_autostart(self, handler: Any) -> dict[str, Any]:
+        result = handler(self)
+        if self.run is None:
+            result.pop('run', None)
+        if self.idempotency_key is None:
+            result.pop('idempotency_key', None)
+        if self.autostart is None:
+            result.pop('autostart', None)
+        return result
 
 
 class TrashNovelRequest(StrictModel):

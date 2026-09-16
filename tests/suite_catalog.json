@@ -1451,6 +1451,12 @@
     "stage5"
    ]
   },
+  "tests/test_upload_autostart.py": {
+   "layer": "unit_contract",
+   "stages": [
+    "stage0"
+   ]
+  },
   "tests/test_unit_session_pool.py": {
    "layer": "unit_contract",
    "stages": []

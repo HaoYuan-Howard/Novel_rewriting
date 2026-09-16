@@ -23,31 +23,31 @@ import type {
   AgentRunsResponse,
 } from '@/types/agent'
 import {
-  GATE_KEYS,
   type ActionRef,
   type ApprovalDoc,
-  type BatchTrimResolutionRequest,
   type GateKey,
   type Stage5ClosureDecision,
-  type Stage5FindingGroup,
-  type Stage5ClosureRequest,
-  type Stage5ClosureTemplate,
   type Stage5ClosureWorkpack,
   type Stage6ApprovalWorkpack,
   type Stage7ApprovalWorkpack,
   type StructureApprovalDecision,
-  type WritingApprovalRequest,
 } from '@/types/approvals'
 import type { EnumsResponse } from '@/types/enums'
-import type { Job, JobLogResponse, JobPreview, JobRequest, JobsResponse } from '@/types/jobs'
+import type {
+  Job,
+  JobLogResponse,
+  JobPreview,
+  JobRequest,
+  JobsResponse,
+  Stage6RebuildStatus,
+  UploadCorpusOptions,
+  UploadResponse,
+} from '@/types/jobs'
 import type { Artifact, NovelOverview, NovelsResponse } from '@/types/novels'
 import type { RunProgress } from '@/types/run'
 import type {
   CheckKind,
   CheckReport,
-  DraftEditPreview,
-  DraftEditPreviewRequest,
-  DraftEditRequest,
   InboxResponse,
   ReviewResponse,
   Stage0Extras,
@@ -1122,17 +1122,7 @@ export const mockApi: Api = {
   getStage0Segments: (sid) =>
     bookOnly(sid, `/novels/${sid}/stage0/segments`, () => mockStage0Segments(sid)),
 
-  // stage0 的人工编辑/批准/候选三选一已随 2026-09-15 全自动裁决退役：
-  // 机械校验通过即自动接受（system:stage0-auto），mock 不再模拟这些写动作。
-
-  partitionStage1: (sid) =>
-    later(finish({
-      kind: 'stage1.partition',
-      label: 'stage1 分章',
-      extra: null,
-      sid,
-      ordinal: null,
-    })),
+  // stage0 人工写面与手动 partition 已退役；mock 只提供只读展示。
 
   getStage1: (sid) => sid === PLOT_SAMPLE_SID ? plotRead(sid, 'stage1')
     : bookOnly(sid, `/novels/${sid}/stage1`, mockStage1View),
@@ -1149,24 +1139,6 @@ export const mockApi: Api = {
     status: 501,
     message: '阅读工作包需要当前源文与 Blueprint 的完整只读材料，请连接真实后端',
     backendKind: 'MockCapabilityUnavailable',
-  })),
-  getBlueprintEditTemplate: (sid) => fail(new ApiError('server', `/novels/${sid}/stage2/blueprint/edit/template`, {
-    status: 501, message: '旧示例没有当前完整剧情身份，编辑请连接真实后端', backendKind: 'MockCapabilityUnavailable',
-  })),
-  previewBlueprintEdit: (sid) => fail(new ApiError('server', `/novels/${sid}/stage2/blueprint/edit/preview`, {
-    status: 501, message: '示例不执行剧情编辑预检，请连接真实后端', backendKind: 'MockCapabilityUnavailable',
-  })),
-  getGlobalEditTemplate: (sid) => fail(new ApiError('server', `/novels/${sid}/stage2/global/edit/template`, {
-    status: 501, message: '示例没有当前全局事实底座，编辑请连接真实后端', backendKind: 'MockCapabilityUnavailable',
-  })),
-  previewGlobalEdit: (sid) => fail(new ApiError('server', `/novels/${sid}/stage2/global/edit/preview`, {
-    status: 501, message: '示例不执行全局编辑预检，请连接真实后端', backendKind: 'MockCapabilityUnavailable',
-  })),
-  applyGlobalEdit: (sid) => fail(new ApiError('server', `/novels/${sid}/stage2/global/edit`, {
-    status: 501, message: '示例不写入全局订正，请连接真实后端', backendKind: 'MockCapabilityUnavailable',
-  })),
-  applyBlueprintEdit: (sid) => fail(new ApiError('server', `/novels/${sid}/stage2/blueprint/edit`, {
-    status: 501, message: '示例不写入剧情蓝图，请连接真实后端', backendKind: 'MockCapabilityUnavailable',
   })),
 
   getGlobal: (sid, revealSpoilers = false) => {
@@ -1187,13 +1159,7 @@ export const mockApi: Api = {
   getAnalyzeDraft: (sid) => fail(new ApiError('nosample', `/novels/${sid}/stage2/analyze-draft`, {
     scope: 'book', message: '冻结样本不含待修复联合草稿，请连接真实后端读取。',
   })),
-  editAnalyzeDraft: (sid) => fail(new ApiError('unsupported', `/novels/${sid}/stage2/analyze-draft`, {
-    status: 405,
-    message: 'analyze-draft 人工提交面已退役；草稿修复由自动/恢复路径处理',
-  })),
-  editCharacters: (sid) => fail(new ApiError('server', `/novels/${sid}/stage2/characters/edit`, {
-    status: 501, message: '人物订正请使用真实后端写回', backendKind: 'MockCapabilityUnavailable',
-  })),
+
 
   getStage4: (sid, o) => sid === PLOT_SAMPLE_SID ? plotRead(sid, 'stage4/' + o, false, 'chapter') :
     fail(new ApiError('server', `/novels/${sid}/stage4/${o}`, {
@@ -1212,6 +1178,14 @@ export const mockApi: Api = {
 
   getStage6Prepare: (sid) => plotRead(sid, 'stage6/prepare', true),
   getStage6PrepareWorkpack: (sid) => plotRead(sid, 'stage6/prepare/workpack', true),
+  getStage6Rebuild: (_sid): Promise<Stage6RebuildStatus> => later({
+    pending: false,
+    published: true,
+    queue_depth: 0,
+    expected_approved_text_sha1: null,
+    expected_candidates_sha1: null,
+    expected_slot: null,
+  }),
   getStage6: (sid) => plotRead(sid, 'stage6', true),
   getStage7: (sid) => plotRead(sid, 'stage7', true),
   getStage7Chapter: (sid, ordinal) => plotRead(sid, 'stage7/' + ordinal, true, 'chapter'),
@@ -1375,198 +1349,22 @@ export const mockApi: Api = {
   getStage6ApprovalWorkpack: (sid) => plotRead(sid, 'approvals/stage6/workpack', true),
   getStage7ApprovalWorkpack: (sid) => plotRead(sid, 'approvals/stage7/workpack', true),
 
-  getStage5ClosureTemplate: (sid): Promise<Stage5ClosureTemplate> => {
-    const workpack = loadDoc(sid).closure.workpack
-    if (!workpack) {
-      return fail(new ApiError('server', '/novels/' + sid + '/approvals/stage5/template', {
-        message: '当前盘面还不能生成 Stage5 闭合工作包',
-      }))
-    }
-    const template: Stage5ClosureTemplate = {
-      actor: '(填写执行人)',
-      reason: '(填写整书闭合理由)',
-      review_token: workpack.review_token,
-      workpack_sha256: workpack.workpack_sha256,
-      review_sha256: workpack.review_sha256,
-      must_appear: workpack.must_appear.map((row) => ({
-        chapter_ordinal: row.chapter_ordinal,
-        evidence_key: row.evidence_key,
-        finding_sha256: row.finding_sha256,
-        chapter_sha256: row.chapter_sha256,
-        ruling: '',
-        reason: '',
-        placeholder: true,
-        template_token: workpack.workpack_sha256.slice(0, 8) + '-' + row.finding_sha256.slice(0, 8),
-      })),
-      group_acks: [workpack.fact_group, workpack.unver_group]
-        .filter((group): group is Stage5FindingGroup => group !== null)
-        .map((group) => ({
-          group: group.group,
-          findings_sha256: group.findings_sha256,
-          items: group.items,
-          placeholder: true,
-          template_token: workpack.workpack_sha256.slice(0, 8) + '-' + group.group,
-        })),
-    }
-    return later(template)
-  },
 
-  approveStage5Closure: (sid, request: Stage5ClosureRequest) => {
-    const doc = loadDoc(sid)
-    const workpack = doc.closure.workpack
-    const invalid = !workpack
-      || request.review_token !== workpack.review_token
-      || request.must_appear.length !== workpack.must_appear.length
-      || request.must_appear.some((row) => !workpack.must_appear.some((current) => (
-        current.chapter_ordinal === row.chapter_ordinal
-        && current.evidence_key === row.evidence_key
-      )))
-      || request.group_acks.some((row) => row.acknowledged !== true)
-    if (invalid) {
-      return fail(new ApiError('server', '/novels/' + sid + '/approvals/stage5', {
-        message: 'Stage5 闭合模板已过期或仍含未确认 placeholder',
-      }))
-    }
-    const decision: Stage5ClosureDecision = {
-      ...request,
-      decision_sha256: '4'.repeat(64),
-      decided_at: new Date().toISOString(),
-    }
-    return later(saveDoc({
-      ...doc,
-      gate: { ...doc.gate, s5: true },
-      closure: {
-        state: 'closed',
-        workpack,
-        next_step: null,
-        current_decision: decision,
-        history: [...doc.closure.history, decision],
-      },
-    }))
-  },
 
-  approveGate: (sid, key: GateKey) => {
-    if (key === 's4' || key === 's5') {
-      return fail(new ApiError('server', '/novels/' + sid + '/approvals/gate/' + key, {
-        message: key === 's4'
-          ? 'gate.s4 已退役：Stage4 的唯一打开条件是统一机械准入，不再接受任何审批写面'
-          : 'Stage5 只接受绑定当前工作包的 Commander 闭合回执',
-      }))
-    }
-    const doc = loadDoc(sid)
-    return later(saveDoc({ ...doc, gate: { ...doc.gate, [key]: true } }))
-  },
 
-  backfillApprovals: (sid) => {
-    const doc = loadDoc(sid)
-    // 历史书缺当前 stage2 产物与 Core 证据，不能借独立合成书的材料补批；
-    // stage4 入口已改由统一机械准入衔接，补录只覆盖 s0/s1 两个人工闸。
-    const backfillable = GATE_KEYS.slice(0, 2)
-    const backfilled = backfillable.filter((key) => !doc.gate[key])
-    const approvals = saveDoc({
-      ...doc,
-      gate: {
-        ...doc.gate,
-        ...Object.fromEntries(backfillable.map((key) => [key, true])),
-      },
-      writing: doc.gate.s4 ? doc.writing : false,
-    })
-    return later({ approvals, backfilled })
-  },
 
-  startWriting: (sid, request: WritingApprovalRequest) => {
-    const doc = loadDoc(sid)
-    if (request.review_token !== doc.writing_approval.review_token) {
-      return fail(new ApiError('server', '/novels/' + sid + '/approvals/writing', {
-        message: 'Stage5 写作授权对象已变化；请刷新后重试',
-      }))
-    }
-    const decision = {
-      ...request,
-      decided_at: new Date().toISOString(),
-    }
-    return later(saveDoc({
-      ...doc,
-      writing: true,
-      writing_approval: {
-        ...doc.writing_approval,
-        current_decision: decision,
-        history: [...doc.writing_approval.history, decision],
-      },
-    }))
-  },
 
   resetBook: (sid) => later(saveDoc(freshDoc(sid))),
 
-  previewDraftEdit: (sid, ordinal, req: DraftEditPreviewRequest) => {
-    const current = currentMockReview().chapter.findings.filter((finding) => finding.sev === 'hard')
-    const preview = {
-      output_ordinal: ordinal,
-      current_chapter_sha256: '3'.repeat(64),
-      preview_subject_sha256: '4'.repeat(64),
-      normalized_segments: req.segments.map((segment) => ({
-        ...segment,
-        text: segment.text.trim(),
-      })),
-      findings: currentMockReview().chapter.findings,
-      current_hard_findings: current,
-      introduced_hard_findings: [],
-      resolved_hard_findings: [],
-      required_confirmation: 'formal',
-    } satisfies DraftEditPreview
-    lsWrite(`edit-preview.${sid}.${ordinal}`, { ...preview, at: Date.now() })
-    return later(preview)
-  },
 
-  saveDraftEdit: (sid, ordinal, req: DraftEditRequest) => {
-    lsWrite(`edits.${sid}.${ordinal}`, { ...req, at: Date.now() })
-    return later(finish({
-      kind: 'stage5.write',
-      label: '章节改稿（人工稿落成新一轮）',
-      extra: ['--apply-edit'],
-      sid,
-      ordinal,
-    }))
-  },
 
-  retainPretrim: (sid, ordinal, req) => {
-    lsWrite(`trim-resolution.${sid}.${ordinal}`, { ...req, action: 'retain_pretrim' })
-    return later(finish({
-      kind: 'stage5.review',
-      label: '保留 pretrim 原稿',
-      extra: [
-        '--retain-pretrim', '--chapters', String(ordinal),
-        '--actor', req.actor, '--reason', req.reason,
-      ],
-      sid,
-      ordinal,
-    }))
-  },
 
-  retainPretrimBatch: (sid, req: BatchTrimResolutionRequest) => {
-    for (const item of req.items) {
-      lsWrite(`trim-resolution.${sid}.${item.output_ordinal}`, {
-        actor: req.actor,
-        reason: item.reason.trim() || req.reason,
-        action: 'retain_pretrim',
-        audit_sha256: item.audit_sha256,
-        chapter_sha256: item.chapter_sha256,
-      })
-    }
-    return later(finish({
-      kind: 'stage5.review',
-      label: '批量保留 pretrim 原稿',
-      extra: ['--retain-pretrim-batch', '(mock manifest)'],
-      sid,
-      ordinal: null,
-    }))
-  },
 
   approveHook: (sid) => readonlyPlot('/novels/' + sid + '/stage6/approve'),
-  adoptResidual: (sid) => readonlyPlot('/novels/' + sid + '/stage7/adopt-residual'),
 
-  uploadCorpus: (file) => {
-    // mock 里只有这一本真书。上传等于把它重置回第 0 步。
+  uploadCorpus: (file, options: UploadCorpusOptions): Promise<UploadResponse> => {
+    // mock 里只有这一本真书。上传等于把它重置回第 0 步；授权只回显，不真开跑。
+    void options.profiles
     saveDoc(freshDoc(SAMPLE_SID))
     const job = finish(
       {
@@ -1578,8 +1376,17 @@ export const mockApi: Api = {
       },
       'stage0 番外扫描',
     )
-    return later({ sid: SAMPLE_SID, job })
+    return later({
+      sid: SAMPLE_SID,
+      job,
+      run: null,
+      // mock 不真开跑：授权路径回显 started，未授权保持 null。
+      autostart:
+        options.authorized && options.egressAuthorized ? 'started' : null,
+      idempotency_key: options.idempotencyKey,
+    })
   },
+
   // 冻结样本不提供可恢复的目录移动，明确答 nosample，不伪装已经删除。
   trashNovel: (sid) => noBook('/novels/' + sid + '/trash'),
   // service 生命周期维护只属于真实本地服务；mock 不伪造 preview token 或删除结果。

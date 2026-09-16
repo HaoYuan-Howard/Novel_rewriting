@@ -155,7 +155,7 @@ export function Rail({
             const stage = SCREEN_STAGE[r.screen]
             const stageDone = stage ? overview.data?.stage_done?.[stage] : undefined
             const hasArtifact = !!stage && overview.data?.stage_reviewable[stage] === true
-            // 已有真实产物时允许只读审阅；继续运行和定稿仍由 GateBar 按审批记录拦住。
+            // 已有真实产物时允许只读审阅；Stage 页只读监控；运行控制与 Stage6 改选分别在进度屏 / Stage6。
             const locked = !!(doc && lock && !doc.gate[lock.need] && !hasArtifact)
             const reviewable = hasArtifact && !ok
             const reviewState = stageDone === false ? '需处理' : '待审'

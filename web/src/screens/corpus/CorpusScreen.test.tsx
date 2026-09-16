@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { api } from '@/api/endpoints'
 import type { UploadResponse } from '@/types/jobs'
 import type { Artifact, NovelRow } from '@/types/novels'
-import { agentCapabilities, previewOf, READY_PROFILES } from '@/test/agent'
+import { agentCapabilities, READY_PROFILES } from '@/test/agent'
 import { CorpusScreen } from './CorpusScreen'
 
 function uploaded(sid: string): UploadResponse {
@@ -55,6 +55,7 @@ function renderCorpus(novels: NovelRow[] = []) {
         <Routes>
           <Route path="/" element={<CorpusScreen />} />
           <Route path="/n/:sid/stage0" element={<div>Stage0 人工审校落点</div>} />
+          <Route path="/n/:sid/run" element={<div>Run 进度落点</div>} />
           <Route path="/n/:sid/stage5/:ordinal" element={<div>Stage5 未知状态落点</div>} />
         </Routes>
       </MemoryRouter>
@@ -108,6 +109,18 @@ function compactBook(): NovelRow {
       latest_mtime: 1,
     },
   }
+}
+
+
+async function confirmUploadAuth() {
+  expect(await screen.findByTestId('upload-auth-dialog')).toBeVisible()
+  expect(screen.getByText('上传并自动开跑')).toBeVisible()
+  const boxes = screen.getAllByRole('checkbox')
+  fireEvent.click(boxes[0]!)
+  fireEvent.click(boxes[1]!)
+  const confirm = await screen.findByRole('button', { name: '确认上传并开跑' })
+  await waitFor(() => expect(confirm).toBeEnabled())
+  fireEvent.click(confirm)
 }
 
 function choose(files: File[]) {
@@ -170,40 +183,44 @@ describe('CorpusScreen 批量开书', () => {
     expect(await screen.findByText('Stage5 未知状态落点')).toBeVisible()
   })
 
-  it('单本扫描成功后立即弹出 agent 确认，返回时直接进入这本书的 Stage0', async () => {
-    vi.spyOn(api, 'uploadCorpus').mockResolvedValue(uploaded('fq-a-1001'))
+  it('单本：上传前授权，成功后带幂等键 uploadCorpus 并进入进度屏', async () => {
+    const upload = vi.spyOn(api, 'uploadCorpus').mockResolvedValue({
+      ...uploaded('fq-a-1001'),
+      autostart: 'started',
+      idempotency_key: 'key-1',
+      run: null,
+    })
     vi.spyOn(api, 'getAgentCapabilities').mockResolvedValue(agentCapabilities())
-    const preview = vi.spyOn(api, 'previewAgentRun').mockImplementation(async (req) => ({
-      ...previewOf(req.profiles, req.authorized, req.egress_authorized),
-      prompt: '从当前 Stage0 盘面续跑',
-    }))
 
     renderCorpus()
     await screen.findByText('一本书都还没有')
-    expect(screen.queryByRole('button', { name: '重新读取' })).not.toBeInTheDocument()
 
     choose([new File(['第一本正文'], 'FQ_甲_1001.txt', { type: 'text/plain' })])
-    fireEvent.click(screen.getByRole('button', { name: '上传并扫非正文（Stage0）' }))
+    fireEvent.click(screen.getByRole('button', { name: '授权后上传并自动开跑' }))
 
-    expect(await screen.findByText('让 agent 跑这本书')).toBeVisible()
-    await waitFor(() =>
-      expect(preview).toHaveBeenCalledWith({
-        sid: 'fq-a-1001',
-        authorized: false,
-        egress_authorized: true,
-        profiles: READY_PROFILES,
-      }),
-    )
+    await confirmUploadAuth()
 
-    fireEvent.click(screen.getByRole('button', { name: '返回' }))
-    expect(await screen.findByText('Stage0 人工审校落点')).toBeVisible()
+    await waitFor(() => expect(upload).toHaveBeenCalledTimes(1))
+    const [file, options] = upload.mock.calls[0]!
+    expect(file).toBeInstanceOf(File)
+    expect(file.name).toBe('FQ_甲_1001.txt')
+    expect(options).toMatchObject({
+      authorized: true,
+      egressAuthorized: true,
+      profiles: READY_PROFILES,
+    })
+    expect(typeof options.idempotencyKey).toBe('string')
+    expect(options.idempotencyKey.length).toBeGreaterThan(8)
+    expect(await screen.findByText('Run 进度落点')).toBeVisible()
+    expect(screen.queryByText('让 agent 跑这本书')).not.toBeInTheDocument()
   })
 
-  it('逐本顺序上传，全部成功后自动打开整批 agent 授权', async () => {
+  it('批量：共享授权与 profiles，每本独立幂等键', async () => {
     const upload = vi
       .spyOn(api, 'uploadCorpus')
-      .mockResolvedValueOnce(uploaded('fq-a-1001'))
-      .mockResolvedValueOnce(uploaded('fq-b-1002'))
+      .mockResolvedValueOnce({ ...uploaded('fq-a-1001'), autostart: 'started' })
+      .mockResolvedValueOnce({ ...uploaded('fq-b-1002'), autostart: 'started' })
+    vi.spyOn(api, 'getAgentCapabilities').mockResolvedValue(agentCapabilities())
 
     renderCorpus()
     await screen.findByText('一本书都还没有')
@@ -214,22 +231,36 @@ describe('CorpusScreen 批量开书', () => {
 
     expect(input).toHaveAttribute('multiple')
     expect(screen.getByText('已选择 2 本原作')).toBeVisible()
-    fireEvent.click(screen.getByRole('button', { name: '上传并扫描这 2 本' }))
+    fireEvent.click(screen.getByRole('button', { name: '授权后上传这 2 本' }))
 
-    expect(await screen.findByText('让 agent 跑这 2 本')).toBeVisible()
-    expect(upload).toHaveBeenNthCalledWith(1, first)
-    expect(upload).toHaveBeenNthCalledWith(2, second)
-    expect(screen.getByText('FQ_甲_1001.txt')).toBeVisible()
-    expect(screen.getByText('FQ_乙_1002.txt')).toBeVisible()
-    expect(screen.getByText(/付费授权/)).toBeVisible()
-    expect(screen.getByText(/正文外发授权/)).toBeVisible()
+    await confirmUploadAuth()
+
+    await waitFor(() => expect(upload).toHaveBeenCalledTimes(2))
+    expect(upload.mock.calls[0]![0]).toBe(first)
+    expect(upload.mock.calls[1]![0]).toBe(second)
+    const key1 = upload.mock.calls[0]![1].idempotencyKey
+    const key2 = upload.mock.calls[1]![1].idempotencyKey
+    expect(key1).not.toEqual(key2)
+    expect(upload.mock.calls[0]![1]).toMatchObject({
+      authorized: true,
+      egressAuthorized: true,
+      profiles: READY_PROFILES,
+    })
+    expect(upload.mock.calls[1]![1]).toMatchObject({
+      authorized: true,
+      egressAuthorized: true,
+      profiles: READY_PROFILES,
+      idempotencyKey: key2,
+    })
+    expect(screen.queryByText('让 agent 跑这 2 本')).not.toBeInTheDocument()
   })
 
-  it('一本失败不回滚成功项，并允许只把成功项交给 agent', async () => {
+  it('一本失败不回滚成功项；不再二次弹出 agent 批跑框', async () => {
     const upload = vi
       .spyOn(api, 'uploadCorpus')
-      .mockResolvedValueOnce(uploaded('fq-a-1001'))
+      .mockResolvedValueOnce({ ...uploaded('fq-a-1001'), autostart: 'started' })
       .mockRejectedValueOnce(new Error('文件名无法建立 sid'))
+    vi.spyOn(api, 'getAgentCapabilities').mockResolvedValue(agentCapabilities())
 
     renderCorpus()
     await screen.findByText('一本书都还没有')
@@ -237,17 +268,16 @@ describe('CorpusScreen 批量开书', () => {
     const first = new File(['第一本正文'], 'FQ_甲_1001.txt', { type: 'text/plain' })
     const second = new File(['第二本正文'], '命名错误.txt', { type: 'text/plain' })
     choose([first, second])
-    fireEvent.click(screen.getByRole('button', { name: '上传并扫描这 2 本' }))
+    fireEvent.click(screen.getByRole('button', { name: '授权后上传这 2 本' }))
+
+    await confirmUploadAuth()
 
     expect(await screen.findByText(/成功 1 本 · 失败 1 本/)).toBeVisible()
     expect(screen.getByText('命名错误.txt')).toBeVisible()
     expect(screen.getByText(/文件名无法建立 sid/)).toBeVisible()
+    expect(screen.getByText(/成功项已按授权自动开跑/)).toBeVisible()
     expect(screen.queryByText('让 agent 跑这 1 本')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /交给 agent/ })).not.toBeInTheDocument()
     expect(upload).toHaveBeenCalledTimes(2)
-
-    fireEvent.click(screen.getByRole('button', { name: '交给 agent 跑成功的 1 本' }))
-
-    await waitFor(() => expect(screen.getByText('让 agent 跑这 1 本')).toBeVisible())
-    expect(screen.getByText('FQ_甲_1001.txt')).toBeVisible()
   })
 })

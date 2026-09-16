@@ -279,15 +279,25 @@ def hook_rebuild_status(
     sid: str = Depends(checked_sid),
     base: str = Depends(get_base),
 ) -> dict:
-    '''改选重建状态（只读）：`pending` = 有排队意图或成书尚不对应当前选择。
+    '''改选重建状态（只读）：排队深度 + 期望/已发布指纹，供 RunScreen 明示版本差。
 
-    前端据此呈现「新选择生成中；当前下载对应旧版本」，不自行推断新鲜度。
+    `pending` = 有排队意图或成书尚不对应当前选择；`published` = 盘上成书与当前
+    期望逐字节一致。期望指纹取自最新未闭合意图（审计面），已发布时与盘面一致。
     '''
     from novel.orchestrator import rebuild
-    pending = bool(rebuild.pending_intents(base, sid))
+    pendings = rebuild.pending_intents(base, sid)
     published = rebuild.publication_current(base, sid)
-    return {'pending': pending or not published,
-            'published': published}
+    latest = pendings[-1] if pendings else None
+    return {
+        'pending': bool(pendings) or not published,
+        'published': published,
+        'queue_depth': len(pendings),
+        'expected_approved_text_sha1': (
+            latest.approved_text_sha1 if latest is not None else None),
+        'expected_candidates_sha1': (
+            latest.candidates_sha1 if latest is not None else None),
+        'expected_slot': latest.approved_slot if latest is not None else None,
+    }
 
 
 def _enqueue_hook_rebuild(base: str, sid: str, request: HookApproveRequest) -> None:

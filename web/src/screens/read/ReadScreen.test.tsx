@@ -166,16 +166,16 @@ describe('Blueprint 章级与跨章阅读', () => {
   })
 })
 
-describe('mock 阅读工作包与补录契约', () => {
-  it('离线样本不伪造阅读工作包，补录只覆盖 s0/s1 两个人工闸', async () => {
+describe('mock 阅读工作包与只读审批投影', () => {
+  it('离线样本不伪造阅读工作包；审批投影是 ApprovalDoc 而非补录信封', async () => {
     await mockApi.resetBook(SID)
     await expect(mockApi.getBlueprintReadingWorkpack(SID)).rejects.toMatchObject({ status: 501 })
-    const filled = await mockApi.backfillApprovals(SID)
-    // 历史示例没有当前 stage2 产物，不能套用新合成书的材料。
-    expect(filled.backfilled).toEqual(['s0', 's1'])
-    expect(filled.approvals.gate).toMatchObject({ s0: true, s1: true, s4: false })
-    expect(filled.approvals.v).toBe(9)
-    expect(filled.approvals).not.toHaveProperty('seen')
-    expect(filled.approvals).not.toHaveProperty('stage2_reviews')
+    const filled = await mockApi.getApprovals(SID)
+    expect(filled.v).toBe(9)
+    expect(filled.sid).toBe(SID)
+    expect(filled.gate).toMatchObject({ s0: expect.any(Boolean), s1: expect.any(Boolean) })
+    expect(filled).not.toHaveProperty('backfilled')
+    expect(filled).not.toHaveProperty('seen')
+    expect(filled).not.toHaveProperty('stage2_reviews')
   })
 })

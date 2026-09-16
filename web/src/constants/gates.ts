@@ -5,7 +5,7 @@
  *                     └─ 统一机械准入衔接，语义未审以报告 unver 披露 ─┘ ─► stage4 计划
  *                   ─► Stage5 写作授权 ─► stage5 ─► stage6 ─► stage7
  *
- * GateBar 只展示仍使用通用确认的页面；Stage6/7 已由专用 typed 审批面负责。
+ * 通用 GateBar 已随人工逐 Stage 模式退役；Stage6 改选走专用 approveHook。
  * 审批、后续作业与最终交付分别读取后端证明，不能从 gate 推导成书或自动发起状态。
  * Stage2 语义审阅已退役：read 屏不再挂 gate，global 屏的下一动作只消费 s1 spawns。
  */
