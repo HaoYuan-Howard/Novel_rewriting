@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from typing import Final
 
 from contracts.invariants import (
-    AGENT_EXECUTOR_NODES, AGENT_ONLY_EXECUTOR_NODES, LegacyLlmProvider, NODES,
+    AGENT_EXECUTOR_NODES, LegacyLlmProvider, NODES,
 )
 from contracts.schema.orchestration import LegacyExecutorBackend, LegacyLlmProfile
 from novel.errors import UnsupportedRunMode
@@ -78,9 +78,6 @@ _PINNED_PRO_NODES: Final = tuple(
     node for node in AGENT_EXECUTOR_NODES
     if NODES[node].model == 'deepseek-v4-pro'
 )
-#: agent-only 节点没有 legacy 执行器（producer 只实现 SessionAgentClient 的
-#: node-executor/v1 acceptance），任何 legacy 模型都不得在 capability 里宣称。
-_LEGACY_UNSUPPORTED: Final = tuple(sorted(AGENT_ONLY_EXECUTOR_NODES))
 
 
 class DeepSeekLegacyDriver(LegacyLlmDriver):
@@ -96,16 +93,13 @@ class DeepSeekLegacyDriver(LegacyLlmDriver):
                 thinking_modes=_DEEPSEEK_THINKING,
                 executor_nodes=tuple(
                     node for node in AGENT_EXECUTOR_NODES
-                    if node not in _PINNED_PRO_NODES
-                    and node not in _LEGACY_UNSUPPORTED),
+                    if node not in _PINNED_PRO_NODES),
             ),
             LegacyModelSpec(
                 id='deepseek-v4-pro',
                 label='DeepSeek V4 Pro',
                 thinking_modes=_DEEPSEEK_THINKING,
-                executor_nodes=tuple(
-                    node for node in AGENT_EXECUTOR_NODES
-                    if node not in _LEGACY_UNSUPPORTED),
+                executor_nodes=AGENT_EXECUTOR_NODES,
             ),
         ),
     )

@@ -1667,7 +1667,7 @@ def test_cli_refuses_profiled_flags_and_unmigrated_nodes_before_context(
     err = capsys.readouterr().err
     assert 'Traceback' not in err
     if node == 'stage4.context':
-        assert '尚未接入 executor agent' in err
+        assert '不再接受 executor agent' in err
     else:
         assert '尚未迁移 flag 组合' in err
 

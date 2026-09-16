@@ -117,9 +117,9 @@ _WITHHELD: dict[str, str] = {
         '唯一公开口是动态 `GET /api/agent/capabilities`；'
         '再经 `/api/enums` 发一份会造成两个可漂移的节点清单'),
     'AGENT_ONLY_EXECUTOR_NODES': (
-        'agent-only 节点集合已由 capability 的 legacy executor_nodes 取补集表达，'
-        '前端按「默认 legacy 时仅 legacy 不承接的节点可用 agent 覆盖」派生；'
-        '再经 `/api/enums` 发一份会造成两个可漂移的节点清单'),
+        'agent-only 例外集合已随 stage6.prepare 直连 producer 落地清空；'
+        'legacy capability 现在覆盖全部 executor 节点，不存在「默认 legacy 时'
+        '需补 agent 覆盖」的节点'),
     'RETENTION_CANDIDATE_KINDS': (
         'retention preview 已随每条候选返回服务端判定出的 kind；它不是维护策略选项，'
         '浏览器不得据此重算是否应清理，另经 `/api/enums` 发布会制造第二个消费面'),

@@ -1,4 +1,4 @@
-"""Prepare 的真实 E、独立决定、严格证据与跨 run 免费恢复；只替换模型运输。"""
+"""Prepare 直连 producer 的真实付费、机械验收与免费恢复；只替换模型运输。"""
 from __future__ import annotations
 
 import copy
@@ -10,20 +10,22 @@ from pydantic import ValidationError
 from contracts.artifacts import STAGE1_MAIN_TEXT, STAGE1_HOOK_COPY, STAGE6_HOOK
 from contracts.schema import encode_artifact
 from contracts.schema.stage1 import MainText, HookCopy
-from contracts.schema.stage6_prepare import PrepareDraft, PrepareEdit, PrepareDecision, Stage6Prepare, PrepareMutationJournal
-from novel import paths
-from novel.agents import session_audit as agent_session_audit
+from contracts.schema.stage6_prepare import (PrepareDraft, PrepareEdit, PrepareDecision,
+    Stage6Prepare, PrepareMutationJournal)
+from novel import prov
 from novel.errors import GateBlocked, ProvenanceRefused, TerminalState
-from novel.llm import agent_runs, stage6_prepare_runs
-from novel.orchestrator.node_agents import Stage6PrepareAgent
+from novel.llm.cache import CachePolicy, ResponseCache
+from novel.llm.client import LlmClient, LlmFailed
+from novel.llm.ledger import CostLedger, ledger_path
+from novel.llm.transport import ChatResponse, FakeTransport
+from novel.run import RunContext
 from novel.stages.stage6 import prepare
 from novel.store import ArtifactStore
 from tests.test_stage2 import main_text
-from tests.test_stage2_global_agent import _ctx as _upstream_ctx, _free_ctx, _Driver
 
 
 class ProcessExit(BaseException):
-    """模拟进程退出，跳过普通异常的会话收尾。"""
+    """模拟进程退出，跳过普通异常的收尾。"""
 
 
 def response():
@@ -39,19 +41,61 @@ def response():
             'boundary_evidence': {'chapter_ordinal': 1, 'start_para': 6, 'end_para': 6}}}}
 
 
-def prepare_ctx(base):
-    ctx = _upstream_ctx(base, with_characters=False)
-    ctx.node = prepare.NODE
+def _wire(payload):
+    return json.dumps(payload if isinstance(payload, dict) else response(),
+                      ensure_ascii=False)
+
+
+def _ok(payload):
+    return ChatResponse(
+        content=_wire(payload), finish_reason='stop',
+        usage={'prompt_tokens': 10, 'completion_tokens': 20, 'reasoning_tokens': 5},
+        model='test-model')
+
+
+def prepare_ctx(base, *, run_id=None):
+    """直连付费 context：带 stage1 两材料与真实盘上账，不接任何 agent profile。"""
+    from novel.work_units import initialize_workflow
+    initialize_workflow(base)
+    book = base / 'agent纵切_2042'
+    book.mkdir(exist_ok=True)
+    clean = book / 'stage0/clean_text.txt'
+    clean.parent.mkdir(parents=True, exist_ok=True)
+    if not clean.exists():
+        clean.write_text('synthetic stage0 root\n', encoding='utf-8', newline='')
+    resolved = run_id
+    ledger = CostLedger(path=ledger_path(base)) if resolved is None else \
+        CostLedger(path=ledger_path(base), run_id=resolved)
+    ctx = RunContext(
+        novel_dir=book, node=prepare.NODE, paid=True,
+        code=prov.code_version(), cache=CachePolicy.default(), ledger=ledger)
+    ArtifactStore(ctx).write(STAGE1_MAIN_TEXT, MainText.model_validate(main_text()))
     ArtifactStore(ctx).write(STAGE1_HOOK_COPY, HookCopy(text='此信由旧友送来。'))
     return ctx
 
 
+def _client(ctx, responder):
+    transport = FakeTransport(responder=responder)
+    client = LlmClient(
+        ctx, transport, cache=ResponseCache(), model='test-model',
+        max_retries=0, concurrency=2,
+        budget_checker=lambda *_args, **_kwargs: None)
+    return client, transport
+
+
+def _generate(ctx, payloads):
+    """按剧本依次应答的直连生成；返回 (client, transport)。"""
+    script = list(payloads)
+    client, transport = _client(
+        ctx, lambda _req, index: _ok(script[index]) if index < len(script) else _ok(response()))
+    artifact = prepare.run_prepare(ctx, client)
+    return artifact, client, transport
+
+
 def seed_prepare(base, payload=None):
     ctx = prepare_ctx(base)
-    driver = _Driver([json.dumps(payload or response(), ensure_ascii=False)], ctx.novel_dir,
-                     session_id=ctx.run_id)
-    result = Stage6PrepareAgent(ctx, driver=driver).run()
-    return ctx, driver, result.artifact
+    artifact, client, transport = _generate(ctx, [payload or response()])
+    return ctx, transport, artifact
 
 
 def decision_for(ctx, choice='accept', *, edit=None):
@@ -69,29 +113,24 @@ def edit_for(ctx, payload=None):
 
 
 def _run_files(ctx):
-    folder = paths.stage6_prepare_run_path(ctx.novel_dir, ctx.run_id)
-    return {p.relative_to(folder).as_posix(): p.read_bytes() for p in folder.rglob('*') if p.is_file()}
+    """已购来源耐久面：legacy checkpoint 侧车；_rounds 历史轮随提交增长，不在此列。"""
+    path = prepare.legacy_checkpoint_path(ctx.novel_dir)
+    return {path.name: path.read_bytes()} if path.is_file() else {}
 
 
-def _assert_prepare_session_closed(ctx, delivery_state):
-    events = agent_session_audit.read_events(ctx.novel_dir.parent)
-    # 整份审计账必须能被后续 Commander 折叠；不能先按当前角色过滤掉坏账。
-    records = agent_session_audit.fold(events)
-    record, = [row for row in records if row.start.node == prepare.NODE]
-    assert record.end is not None and record.end.delivery_state == delivery_state
-    assert sum(event.kind == 'ended' and event.session_run_id == record.start.session_run_id
-               for event in events) == 1
-    return record
+def _paid_cost_rows(ledger_path_):
+    from novel.llm.ledger import read_strict_jsonl_objects
+    return [row for row in read_strict_jsonl_objects(ledger_path_, label='测试账')
+            if row.get('kind') in ('cost', 'usage', 'cost_line')]
 
 
-def test_real_executor_then_auto_accept_opens_independent_consumer(tmp_path):
-    """B4：正式生成机械通过即 system:stage6-prepare-auto；Hook 可独立消费。"""
-    ctx, driver, artifact = seed_prepare(tmp_path)
-    assert len(driver.calls) == 1
-    _assert_prepare_session_closed(ctx, 'delivered')
+def test_direct_prepare_then_auto_accept_opens_independent_consumer(tmp_path):
+    """正式生成机械通过即 system:stage6-prepare-auto；Hook 可独立消费。"""
+    ctx, transport, artifact = seed_prepare(tmp_path)
+    assert len(transport.calls) == 1
     assert set(artifact.provenance.inputs) == {STAGE1_MAIN_TEXT, STAGE1_HOOK_COPY}
     assert artifact.provenance.usage.calls_made == 1
-    prompt = driver.calls[0][1].prompt
+    prompt = transport.calls[0].user
     for row in main_text():
         for paragraph in row['text'].split('\n\n'):
             assert prompt.count(paragraph) == 1
@@ -101,76 +140,128 @@ def test_real_executor_then_auto_accept_opens_independent_consumer(tmp_path):
     assert state.state == 'accepted'
     assert state.review is not None
     assert state.review.actor == 'system:stage6-prepare-auto'
-    consumer = _free_ctx(ctx)
-    consumer.node = 'stage6.hook'
+    checkpoint = json.loads(prepare.legacy_checkpoint_path(ctx.novel_dir).read_text(encoding='utf-8'))
+    assert checkpoint['kind'] == 'stage6-prepare-legacy-v1'
+    consumer = RunContext(
+        novel_dir=ctx.novel_dir, node='stage6.hook', paid=False,
+        code=prov.code_version(), cache=CachePolicy.default(),
+        ledger=CostLedger(path=ctx.ledger.path))
     assert prepare.require_accepted(ArtifactStore(consumer)) == artifact
     assert set(consumer.edges) == {prepare.REL}, '审阅闸读取全文不得变成 Hook 实际输入'
     assert not ArtifactStore(ctx).exists(STAGE6_HOOK), '独立接受不生成或定稿 Hook'
-    assert len(driver.calls) == 1
 
 
-@pytest.mark.parametrize('bad', ['paragraph', 'chapter', 'boundary'])
-def test_invalid_paid_candidate_free_edit_and_accept_preserve_original_source(tmp_path, bad):
+def test_single_bounded_narrow_repair_recovers_then_refuses_second_round(tmp_path):
+    """机械失败先交回一轮窄修复；修复通过即提交，两稿仍失败即 INVALID 终态。"""
     ctx = prepare_ctx(tmp_path)
-    payload = response()
-    if bad == 'paragraph': payload['source_blurb']['facts'][0]['evidence']['end_para'] = 99
-    elif bad == 'chapter': payload['source_blurb']['facts'][0]['evidence']['chapter_ordinal'] = 99
-    else: payload['source_blurb']['opening']['through_chapter'] = 2
-    driver = _Driver([json.dumps(payload, ensure_ascii=False)], ctx.novel_dir, session_id=ctx.run_id)
-    with pytest.raises(GateBlocked): Stage6PrepareAgent(ctx, driver=driver).run()
-    _assert_prepare_session_closed(ctx, 'blocked')
+    bad = response()
+    bad['source_blurb']['facts'][0]['evidence']['end_para'] = 99
+    artifact, _unused, transport = _generate(ctx, [bad, response()])
+    assert len(transport.calls) == 2
+    assert prepare.REPAIR_INSTRUCTION.split('{')[0] in transport.calls[1].user
+    assert ArtifactStore(ctx).exists(prepare.REL)
+    assert prepare.view_state(ArtifactStore(ctx)).state == 'accepted'
+    assert artifact.provenance.usage.calls_made == 2
+
+    ctx2 = prepare_ctx(tmp_path / 'blocked')
+    worse = copy.deepcopy(bad)
+    client2, transport2 = _client(ctx2, lambda _req, index: _ok([bad, worse][index] if index < 2 else response()))
+    with pytest.raises(GateBlocked):
+        prepare.run_prepare(ctx2, client2)
+    assert len(transport2.calls) == 2
+    store = ArtifactStore(ctx2)
+    assert store.exists(prepare.INVALID) and not store.exists(prepare.REL)
+    assert prepare.view_state(store).state == 'invalid'
+    report = prepare.run_check_only(RunContext(
+        novel_dir=ctx2.novel_dir, node=prepare.NODE, paid=False,
+        code=prov.code_version(), cache=CachePolicy.default(),
+        ledger=CostLedger(path=ctx2.ledger.path)))
+    assert next(row for row in report.rules if row.rule == 'prepare_evidence_valid').status == 'hit'
+
+
+def test_invalid_paid_candidate_free_edit_and_accept_preserve_original_source(tmp_path):
+    ctx = prepare_ctx(tmp_path)
+    bad = response()
+    bad['source_blurb']['facts'][0]['evidence']['end_para'] = 99
+    client, transport = _client(ctx, lambda _req, index: _ok(bad))
+    with pytest.raises(GateBlocked):
+        prepare.run_prepare(ctx, client)
+    assert len(transport.calls) == 2
     store = ArtifactStore(ctx)
     assert store.exists(prepare.INVALID) and not store.exists(prepare.REL)
     assert prepare.view_state(store).state == 'invalid'
-    report = prepare.run_check_only(_free_ctx(ctx))
-    assert next(row for row in report.rules if row.rule == 'prepare_evidence_valid').status == 'hit'
+    free = RunContext(
+        novel_dir=ctx.novel_dir, node=prepare.NODE, paid=False,
+        code=prov.code_version(), cache=CachePolicy.default(),
+        ledger=CostLedger(path=ctx.ledger.path))
     original = _run_files(ctx)
-    free = _free_ctx(ctx)
     edit = edit_for(free)
     candidate = prepare.preflight_edit(free, edit)
     assert store.exists(prepare.INVALID) and not store.exists(prepare.REL), '预检无持久改写'
     prepared = prepare.apply_edit(free, edit)
     assert prepared.source_blurb == candidate.source_blurb
     assert store.exists(prepare.REL) and not store.exists(prepare.INVALID)
-    prepare.submit_review(_free_ctx(ctx), decision_for(_free_ctx(ctx)))
+    prepare.submit_review(free, decision_for(free))
     assert prepare.view_state(store).state == 'accepted'
-    assert _run_files(ctx) == original and len(driver.calls) == 1
+    assert _run_files(ctx) == original
 
 
 def test_unresolved_opening_is_retained_but_cannot_be_accepted(tmp_path):
     payload = response()
     payload['source_blurb']['opening'] = {'kind': 'unresolved', 'reason': '缺少明确连续落点'}
-    ctx, driver, _ = seed_prepare(tmp_path, payload)
+    ctx, _transport, _ = seed_prepare(tmp_path, payload)
     with pytest.raises(TerminalState, match='范围'):
-        prepare.submit_review(_free_ctx(ctx), decision_for(_free_ctx(ctx)))
+        prepare.submit_review(_free(ctx), decision_for(_free(ctx)))
     assert prepare.view_state(ArtifactStore(ctx)).state == 'pending'
     assert not ArtifactStore(ctx).exists(prepare.REVIEW)
-    edit = edit_for(_free_ctx(ctx))
-    prepare.submit_review(_free_ctx(ctx), decision_for(_free_ctx(ctx), edit=edit.model_dump(mode='json')))
+    edit = edit_for(_free(ctx))
+    prepare.submit_review(_free(ctx), decision_for(_free(ctx), edit=edit.model_dump(mode='json')))
     assert prepare.view_state(ArtifactStore(ctx)).state == 'accepted'
-    assert len(driver.calls) == 1
+
+
+def _free(ctx, *, node=None):
+    return RunContext(
+        novel_dir=ctx.novel_dir, node=node or ctx.node, paid=False,
+        code=prov.code_version(), cache=CachePolicy.default(),
+        ledger=CostLedger(path=ctx.ledger.path))
+
+
+_free_ctx = _free
+
+def direct_prepare(ctx, payload, *, expect_blocked=False):
+    """测试共享：直连 client 按固定响应生成 Prepare；blocked 剧本返回 (None, transport)。"""
+    from novel.llm.transport import ChatResponse
+    wire = json.dumps(payload, ensure_ascii=False)
+    client, transport = _client(ctx, lambda _req, _index: ChatResponse(
+        content=wire, finish_reason='stop',
+        usage={'prompt_tokens': 10, 'completion_tokens': 20}, model='test-model'))
+    if expect_blocked:
+        with pytest.raises(GateBlocked):
+            prepare.run_prepare(ctx, client)
+        return None, transport
+    return prepare.run_prepare(ctx, client), transport
 
 
 def test_new_negative_review_invalidates_old_edit_and_accept_token(tmp_path):
     ctx, _, _ = seed_prepare(tmp_path)
-    stale_edit, stale_accept = edit_for(_free_ctx(ctx)), decision_for(_free_ctx(ctx))
+    stale_edit, stale_accept = edit_for(_free(ctx)), decision_for(_free(ctx))
     source_before = ArtifactStore(ctx).full_sha256_or_none(prepare.REL)
-    prepare.submit_review(_free_ctx(ctx), decision_for(_free_ctx(ctx), 'rework'))
+    prepare.submit_review(_free(ctx), decision_for(_free(ctx), 'rework'))
     assert ArtifactStore(ctx).full_sha256_or_none(prepare.REL) == source_before
     with pytest.raises(ProvenanceRefused, match='token'):
-        prepare.apply_edit(_free_ctx(ctx), stale_edit)
+        prepare.apply_edit(_free(ctx), stale_edit)
     with pytest.raises(ProvenanceRefused, match='token'):
-        prepare.submit_review(_free_ctx(ctx), stale_accept)
+        prepare.submit_review(_free(ctx), stale_accept)
     assert prepare.view_state(ArtifactStore(ctx)).state == 'pending'
 
 
 @pytest.mark.parametrize('window', ['edit', 'decision', 'candidate', 'review', 'completed'])
 def test_frozen_free_commit_recovers_across_new_run_without_rebuy(tmp_path, monkeypatch, window):
-    ctx, driver, _ = seed_prepare(tmp_path)
+    ctx, _transport, _ = seed_prepare(tmp_path)
     original_source = _run_files(ctx)
     raw = response()
     raw['source_blurb']['facts'][2]['reason'] = '原文核验后仍无地契支持'
-    decision = decision_for(_free_ctx(ctx), edit=edit_for(_free_ctx(ctx), raw).model_dump(mode='json'))
+    decision = decision_for(_free(ctx), edit=edit_for(_free(ctx), raw).model_dump(mode='json'))
     sparse, rounded = ArtifactStore.write_sparse_input, ArtifactStore.write_round
     fired = False
     def after_sparse(self, rel, value):
@@ -193,98 +284,108 @@ def test_frozen_free_commit_recovers_across_new_run_without_rebuy(tmp_path, monk
     with monkeypatch.context() as patch:
         patch.setattr(ArtifactStore, 'write_sparse_input', after_sparse)
         patch.setattr(ArtifactStore, 'write_round', after_round)
-        with pytest.raises(ProcessExit): prepare.submit_review(_free_ctx(ctx), decision)
+        with pytest.raises(ProcessExit): prepare.submit_review(_free(ctx), decision)
     store = ArtifactStore(ctx)
     journal = store.read_own(PrepareMutationJournal, prepare.COMMIT)[0]
     assert fired and journal.state == 'prepared' and journal.request == decision
     assert prepare.view_state(store).pending_commit
-    prepare.run_recover_edit(_free_ctx(ctx))
+    prepare.run_recover_edit(_free(ctx))
     assert prepare.view_state(store).state == 'accepted'
     assert store.read_own(PrepareMutationJournal, prepare.COMMIT)[0].request_sha256 == journal.request_sha256
-    assert _run_files(ctx) == original_source and len(driver.calls) == 1
+    assert _run_files(ctx) == original_source
     committed = store.full_sha256_or_none(prepare.COMMIT)
-    prepare.submit_review(_free_ctx(ctx), decision)
+    prepare.submit_review(_free(ctx), decision)
     assert store.full_sha256_or_none(prepare.COMMIT) == committed
 
 
 def test_paid_checkpoint_recovery_keeps_request_and_raw_bytes(tmp_path, monkeypatch):
     ctx = prepare_ctx(tmp_path)
-    driver = _Driver([json.dumps(response(), ensure_ascii=False)], ctx.novel_dir, session_id=ctx.run_id)
+    client, transport = _client(ctx, lambda _req, _index: _ok(response()))
     with monkeypatch.context() as patch:
         patch.setattr(prepare, '_publish_checkpoint', lambda *_args: (_ for _ in ()).throw(ProcessExit()))
-        with pytest.raises(ProcessExit): Stage6PrepareAgent(ctx, driver=driver).run()
+        with pytest.raises(ProcessExit): prepare.run_prepare(ctx, client)
     before = _run_files(ctx)
     assert not ArtifactStore(ctx).exists(prepare.REL)
-    recovery = prepare.inspect_prepared_recovery(_free_ctx(ctx))
+    recovery = prepare.inspect_prepared_recovery(_free(ctx))
     assert recovery.state == 'recoverable' and recovery.source_run_id == ctx.run_id
-    restored = prepare.recover_prepared(_free_ctx(ctx), ctx.run_id, recovery.proof_sha256)
+    restored = prepare.recover_prepared(_free(ctx), ctx.run_id, recovery.proof_sha256)
     assert restored.provenance.usage.calls_made == 1
-    assert _run_files(ctx) == before and len(driver.calls) == 1
-    assert prepare.inspect_prepared_recovery(_free_ctx(ctx)).state == 'complete'
-    _assert_prepare_session_closed(ctx, 'delivered')
+    assert len(transport.calls) == 1, '免费恢复不得新增任何模型调用'
+    assert _run_files(ctx) == before
+    assert prepare.inspect_prepared_recovery(_free(ctx)).state == 'complete'
 
 
-@pytest.mark.parametrize('window', ['before_source_finish', 'after_session_ended'])
-def test_paid_adoption_failure_leaves_exact_wal_for_free_tail(tmp_path, monkeypatch, window):
+def test_free_recovery_never_calls_provider_and_never_adds_paid_row(tmp_path, monkeypatch):
+    """免费恢复的关闭式反例：0 次 ask_json + 0 行新付费账。"""
     ctx = prepare_ctx(tmp_path)
-    driver = _Driver([json.dumps(response(), ensure_ascii=False)], ctx.novel_dir, session_id=ctx.run_id)
+    client, transport = _client(ctx, lambda _req, _index: _ok(response()))
+    with monkeypatch.context() as patch:
+        patch.setattr(prepare, '_publish_checkpoint', lambda *_args: (_ for _ in ()).throw(ProcessExit()))
+        with pytest.raises(ProcessExit): prepare.run_prepare(ctx, client)
+    ledger_before = _paid_cost_rows(ctx.ledger.path)
+    transport_calls = len(transport.calls)
+    free = _free(ctx)
+    recovery = prepare.inspect_prepared_recovery(free)
+    assert recovery.state == 'recoverable'
+    prepare.recover_prepared(free, ctx.run_id, recovery.proof_sha256)
+    assert len(transport.calls) == transport_calls
+    assert _paid_cost_rows(ctx.ledger.path) == ledger_before
+
+
+def test_paid_adoption_failure_leaves_exact_wal_for_free_tail(tmp_path, monkeypatch):
+    ctx = prepare_ctx(tmp_path)
+    client, transport = _client(ctx, lambda _req, _index: _ok(response()))
     original = prepare._finish_paid_source
-    def interrupted(*args):
-        if window == 'after_session_ended':
-            original(*args)
+    def interrupted(*args, **kwargs):
         raise ProcessExit()
     with monkeypatch.context() as patch:
         patch.setattr(prepare, '_finish_paid_source', interrupted)
-        with pytest.raises(ProcessExit): Stage6PrepareAgent(ctx, driver=driver).run()
-    assert ArtifactStore(ctx).exists(prepare.REL)
-    assert prepare.view_state(ArtifactStore(ctx)).pending_commit
-    events = agent_session_audit.read_events(tmp_path)
-    record, = agent_session_audit.fold(events)
-    assert (record.end is not None) is (window == 'after_session_ended')
+        with pytest.raises(ProcessExit): prepare.run_prepare(ctx, client)
+    store = ArtifactStore(ctx)
+    assert store.exists(prepare.REL)
+    assert prepare.view_state(store).pending_commit
     source_before = _run_files(ctx)
     original_write = ArtifactStore.write_round
     completed = []
     def write(self, rel, value):
         if rel == prepare.COMMIT and value.state == 'completed':
-            # 两条路径都须先闭合原 session，不能 completed 以后才留下孤儿审计。
-            _assert_prepare_session_closed(ctx, 'delivered')
             completed.append(rel)
         return original_write(self, rel, value)
     with monkeypatch.context() as patch:
         patch.setattr(ArtifactStore, 'write_round', write)
-        prepare.run_recover_edit(_free_ctx(ctx))
+        prepare.run_recover_edit(_free(ctx))
     assert completed == [prepare.COMMIT]
-    assert not prepare.view_state(ArtifactStore(ctx)).pending_commit
-    _assert_prepare_session_closed(ctx, 'delivered')
-    audit_before = agent_session_audit.read_events(tmp_path)
-    prepare.run_recover_edit(_free_ctx(ctx))
-    assert agent_session_audit.read_events(tmp_path) == audit_before
-    assert _run_files(ctx) == source_before and len(driver.calls) == 1
+    assert not prepare.view_state(store).pending_commit
+    audit_before = _run_files(ctx)
+    prepare.run_recover_edit(_free(ctx))
+    assert _run_files(ctx) == audit_before
+    assert _run_files(ctx) == source_before
+    assert len(transport.calls) == 1
 
 
 def test_whole_commit_preflight_refuses_third_party_change(tmp_path, monkeypatch):
     ctx, _, _ = seed_prepare(tmp_path)
-    decision = decision_for(_free_ctx(ctx), edit=edit_for(_free_ctx(ctx)).model_dump(mode='json'))
+    decision = decision_for(_free(ctx), edit=edit_for(_free(ctx)).model_dump(mode='json'))
     with monkeypatch.context() as patch:
         patch.setattr(prepare, '_finish_journal', lambda *_args: (_ for _ in ()).throw(ProcessExit()))
-        with pytest.raises(ProcessExit): prepare.submit_review(_free_ctx(ctx), decision)
+        with pytest.raises(ProcessExit): prepare.submit_review(_free(ctx), decision)
     store = ArtifactStore(ctx)
     foreign = decision.model_copy(update={'reason': '另一位操作者的决定',
         'edit': decision.edit.model_copy(update={'reason': '另一位操作者的决定'})})
     store.write_sparse_input(prepare.DECISIONS, foreign)
     before = {rel: store.full_sha256_or_none(rel) for rel in prepare._baselines(store)}
     with pytest.raises(ProvenanceRefused, match='第三方'):
-        prepare.run_recover_edit(_free_ctx(ctx))
+        prepare.run_recover_edit(_free(ctx))
     assert {rel: store.full_sha256_or_none(rel) for rel in before} == before
 
 
 def test_material_change_keeps_free_workpack_and_explicit_unresolved_locator(tmp_path):
-    ctx, driver, _ = seed_prepare(tmp_path)
-    prepare.submit_review(_free_ctx(ctx), decision_for(_free_ctx(ctx)))
+    ctx, _transport, _ = seed_prepare(tmp_path)
+    prepare.submit_review(_free(ctx), decision_for(_free(ctx)))
     changed = copy.deepcopy(main_text())
     changed[0]['text'] = '改写后的源章，原证据已不存在。'
     ArtifactStore(ctx).write(STAGE1_MAIN_TEXT, MainText.model_validate(changed))
-    free = _free_ctx(ctx)
+    free = _free(ctx)
     pack = prepare.approval_workpack(ArtifactStore(free))
     assert pack.state.state == 'stale'
     assert pack.edit_template.source_blurb.facts[0].kind == 'unresolved'
@@ -293,7 +394,7 @@ def test_material_change_keeps_free_workpack_and_explicit_unresolved_locator(tmp
     journal_sha = ArtifactStore(ctx).full_sha256_or_none(prepare.COMMIT)
     for choice in ('rework', 'uncertain'):
         with pytest.raises(TerminalState, match='同批提交 edit'):
-            prepare.submit_review(_free_ctx(ctx), decision_for(_free_ctx(ctx), choice))
+            prepare.submit_review(_free(ctx), decision_for(_free(ctx), choice))
         assert ArtifactStore(ctx).full_sha256_or_none(prepare.COMMIT) == journal_sha
         assert not prepare.view_state(ArtifactStore(ctx)).pending_commit
     candidate = pack.edit_template.model_dump(mode='json')
@@ -301,7 +402,6 @@ def test_material_change_keeps_free_workpack_and_explicit_unresolved_locator(tmp
         'rationale': '当前源章足以承接悬念', 'boundary_evidence': {'chapter_ordinal': 1, 'start_para': 1, 'end_para': 1}}
     prepare.apply_edit(free, PrepareEdit.model_validate(candidate))
     assert prepare.view_state(ArtifactStore(free)).state == 'pending'
-    assert len(driver.calls) == 1
 
 
 def test_forged_review_without_original_decision_never_opens_hook(tmp_path):
@@ -319,52 +419,43 @@ def test_no_prior_prepare_run_inspection_does_not_require_main_text(tmp_path):
     ctx = prepare_ctx(tmp_path)
     # 与尚未分章的新书一致；该纯读入口只看是否有已购来源。
     ArtifactStore(ctx).path(STAGE1_MAIN_TEXT).unlink()
-    assert prepare.inspect_prepared_recovery(_free_ctx(ctx)).state == 'complete'
+    assert prepare.inspect_prepared_recovery(_free(ctx)).state == 'complete'
 
 
-@pytest.mark.parametrize('raw', ['{broken JSON', '{"source_blurb":{"opening":null}}'])
-def test_raw_response_repair_preserves_four_call_budget_and_original_stdout(tmp_path, raw):
-    from novel.errors import ResponseRepairRequired
-    from novel.llm import response_repair
-    from novel.llm.client import LlmFailed
-    from novel import work_units
+def test_broken_wire_never_materializes_and_free_recovery_refuses_silence(tmp_path):
+    """4 采预算内全是坏 JSON：付费事实只留在账上；免费恢复不重买也不猜。"""
     ctx = prepare_ctx(tmp_path)
-    driver = _Driver([raw] * 4, ctx.novel_dir, session_id=ctx.run_id)
-    with pytest.raises(LlmFailed, match='4'): Stage6PrepareAgent(ctx, driver=driver).run()
-    assert len(driver.calls) == 4
+    client, transport = _client(ctx, lambda _req, _index: ChatResponse(
+        content='{broken JSON', finish_reason='stop',
+        usage={'prompt_tokens': 10, 'completion_tokens': 20}, model='test-model'))
+    with pytest.raises(LlmFailed):
+        prepare.run_prepare(ctx, client)
+    assert 1 <= len(transport.calls) <= 4
     ledger_before = ctx.ledger.path.read_bytes()
-    with pytest.raises(ResponseRepairRequired) as caught:
-        prepare.recover_prepared(_free_ctx(ctx), ctx.run_id)
-    record = response_repair.find_attempt(ctx.novel_dir, caught.value.attempt_id)
-    raw_sha = agent_runs.canonical_sha256(raw.encode('utf-8'))
-    assert record.rejection['resume_flags'] == ['--recover-prepared', ctx.run_id, '--subject-sha256', raw_sha]
-    original = (record.root / response_repair.ORIGINAL_FILE).read_bytes()
-    (record.root / response_repair.CANDIDATE_FILE).write_text(json.dumps(response()), encoding='utf-8')
-    response_repair.submit(ctx.novel_dir, record.attempt_id, actor='test', reason='依据原文修复原schema形状')
-    (record.root / response_repair.CANDIDATE_FILE).write_text('{}', encoding='utf-8')
-    artifact = prepare.recover_prepared(_free_ctx(ctx), ctx.run_id, raw_sha)
-    checkpoint = agent_runs.restore_checkpoint(ctx, stage6_prepare_runs.run_spec(), **prepare.prepare(ctx).request())
-    assert checkpoint.response_repair is not None
-    assert checkpoint.acceptance['accepted_text'] == raw
-    assert checkpoint.acceptance['accepted_turn_index'] == 4
-    assert artifact.provenance.usage.calls_made == 4
-    assert (record.root / response_repair.ORIGINAL_FILE).read_bytes() == original
+    free = _free(ctx)
+    recovery = prepare.inspect_prepared_recovery(free)
+    assert recovery.state == 'recoverable'
+    with pytest.raises(ProvenanceRefused):
+        prepare.recover_prepared(free, ctx.run_id, recovery.proof_sha256)
+    assert not ArtifactStore(ctx).exists(prepare.REL)
+    assert not ArtifactStore(ctx).exists(prepare.INVALID)
     assert ctx.ledger.path.read_bytes() == ledger_before
-    budget = work_units.budget_for(ctx, scope='book')
-    assert budget.used == 4 and budget.remaining == 0
-    # 批次 B4：recover_prepared 落合法候选后机械通过即 auto accept。
-    state = prepare.view_state(ArtifactStore(ctx))
-    assert state.state == 'accepted'
-    assert state.review is not None
-    assert state.review.actor == 'system:stage6-prepare-auto'
+
+
+def test_run_prepare_refuses_second_paid_generation_after_materialization(tmp_path):
+    ctx, _transport, _artifact = seed_prepare(tmp_path)
+    client, transport2 = _client(ctx, lambda _req, _index: _ok(response()))
+    with pytest.raises(ProvenanceRefused, match='已有正式或 INVALID'):
+        prepare.run_prepare(ctx, client)
+    assert transport2.calls == []
 
 
 def test_free_wal_cannot_change_candidate_or_acceptance_after_request_is_frozen(tmp_path, monkeypatch):
     ctx, _, _ = seed_prepare(tmp_path)
-    decision = decision_for(_free_ctx(ctx), edit=edit_for(_free_ctx(ctx)).model_dump(mode='json'))
+    decision = decision_for(_free(ctx), edit=edit_for(_free(ctx)).model_dump(mode='json'))
     with monkeypatch.context() as patch:
         patch.setattr(prepare, '_finish_journal', lambda *_args: (_ for _ in ()).throw(ProcessExit()))
-        with pytest.raises(ProcessExit): prepare.submit_review(_free_ctx(ctx), decision)
+        with pytest.raises(ProcessExit): prepare.submit_review(_free(ctx), decision)
     store = ArtifactStore(ctx)
     journal = store.read_own(PrepareMutationJournal, prepare.COMMIT)[0]
     candidate_raw = journal.candidate.model_dump(mode='json', by_alias=True)
@@ -377,36 +468,35 @@ def test_free_wal_cannot_change_candidate_or_acceptance_after_request_is_frozen(
     store.write(prepare.COMMIT, forged)
     before = store.full_sha256_or_none(prepare.REL)
     with pytest.raises(ProvenanceRefused, match='原 typed 请求'):
-        prepare.run_recover_edit(_free_ctx(ctx))
+        prepare.run_recover_edit(_free(ctx))
     assert store.full_sha256_or_none(prepare.REL) == before
 
 
 def test_evidence_only_edit_reopens_review_but_keeps_hook_semantic_input(tmp_path):
     from novel.consumption import prepare_projection
-    ctx, driver, initial = seed_prepare(tmp_path)
-    prepare.submit_review(_free_ctx(ctx), decision_for(_free_ctx(ctx)))
+    ctx, _transport, initial = seed_prepare(tmp_path)
+    prepare.submit_review(_free(ctx), decision_for(_free(ctx)))
     payload = response()
     payload['source_blurb']['facts'][0]['evidence']['start_para'] = 4
-    amended = prepare.apply_edit(_free_ctx(ctx), edit_for(_free_ctx(ctx), payload))
+    amended = prepare.apply_edit(_free(ctx), edit_for(_free(ctx), payload))
     assert prepare_projection(initial.model_dump(mode='json', by_alias=True)) == prepare_projection(
         amended.model_dump(mode='json', by_alias=True))
     assert prepare.subject_sha256(initial) == prepare.subject_sha256(amended)
     assert prepare.view_state(ArtifactStore(ctx)).state == 'pending'
-    assert len(driver.calls) == 1
 
 
-def test_submitted_commander_action_requires_exact_completed_source_and_targets(tmp_path, monkeypatch):
+def test_submitted_decision_requires_exact_completed_source_and_targets(tmp_path, monkeypatch):
     ctx, _, _ = seed_prepare(tmp_path)
-    decision = decision_for(_free_ctx(ctx))
+    decision = decision_for(_free(ctx))
     encoded = encode_artifact(prepare.DECISIONS, decision.model_dump(mode='json'))
     assert not prepare.submitted_decision_is_current(tmp_path, ctx.sid, encoded, code=ctx.code)
     with monkeypatch.context() as patch:
         patch.setattr(prepare, '_finish_journal', lambda *_args: (_ for _ in ()).throw(ProcessExit()))
-        with pytest.raises(ProcessExit): prepare.submit_review(_free_ctx(ctx), decision)
+        with pytest.raises(ProcessExit): prepare.submit_review(_free(ctx), decision)
     assert not prepare.submitted_decision_is_current(tmp_path, ctx.sid, encoded, code=ctx.code)
-    prepare.run_recover_edit(_free_ctx(ctx))
+    prepare.run_recover_edit(_free(ctx))
     assert prepare.submitted_decision_is_current(tmp_path, ctx.sid, encoded, code=ctx.code)
-    prepare.submit_review(_free_ctx(ctx), decision_for(_free_ctx(ctx), 'rework'))
+    prepare.submit_review(_free(ctx), decision_for(_free(ctx), 'rework'))
     assert not prepare.submitted_decision_is_current(tmp_path, ctx.sid, encoded, code=ctx.code)
 
 

@@ -747,13 +747,10 @@ def final_gate_book(tmp_path, monkeypatch):
     # Stage6 prepare 是 Hook 定稿的新前置：经真实 producer + 免费独立接受建立。
     import json as _json
 
-    from novel.orchestrator.node_agents import Stage6PrepareAgent
-    from tests.test_stage2_global_agent import _Driver as _PrepareDriver
-    from tests.test_stage2_global_agent import _profile as _prepare_profile
+    from tests.test_stage6_prepare import direct_prepare
 
     prepare_ctx = RunContext.open(
         tmp_path, sid, 'stage6.prepare', paid=True, write_ledger=False)
-    prepare_ctx.executor_profile = _prepare_profile()
     prepare_response = {'source_blurb': {
         'facts': [{'kind': 'supported', 'claim_id': 'hook_001',
                    'claim': '沈月来到门前。',
@@ -763,11 +760,8 @@ def final_gate_book(tmp_path, monkeypatch):
                     'boundary_evidence': {'chapter_ordinal': 1, 'start_para': 1,
                                           'end_para': 1}},
     }}
-    prepare_driver = _PrepareDriver(
-        [_json.dumps(prepare_response, ensure_ascii=False)], book,
-        session_id=f'final-gate-prepare-{prepare_ctx.run_id}')
-    prepare_result = Stage6PrepareAgent(prepare_ctx, driver=prepare_driver).run()
-    assert prepare_result.passed and prepare_result.turns == 1
+    prepare_result, _prepare_transport = direct_prepare(prepare_ctx, prepare_response)
+    assert prepare_result is not None
     from novel.stages.stage6 import prepare as prepare_node
     prepare_store = ArtifactStore(RunContext.open(
         tmp_path, sid, 'stage6.prepare', paid=False, write_ledger=False))

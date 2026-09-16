@@ -2573,24 +2573,6 @@ class Stage5WriteAgent(NodeExecutorAgent[CheckReport]):
         return result
 
 
-class Stage6PrepareAgent(NodeExecutorAgent[BaseModel]):
-    """独立准备单元；正式产物落盘后交 Commander，不隐式批准。"""
-
-    node = 'stage6.prepare'
-
-    def run(self) -> NodeAgentResult[BaseModel]:
-        from novel.stages.stage6 import prepare
-        try:
-            artifact = prepare.run_prepare(self.ctx, self.client)
-            self.client.finish(process_state='ok', delivery_state='delivered')
-            return NodeAgentResult(artifact=artifact, turns=self.client.turns_used, passed=True)
-        except Exception as exc:
-            self._finish_exception(exc)
-            raise
-        finally:
-            self.client.close()
-
-
 class Stage6HookAgent(NodeExecutorAgent[Hook]):
     """单 session 完整 replacement 循环；代码判定并提交正式 Hook。"""
 
@@ -2713,7 +2695,6 @@ EXECUTOR_FACTORIES: dict[str, Callable[..., NodeExecutorAgent[BaseModel]]] = {
     'stage4.design': Stage4DesignAgent,
     'stage4.plan': Stage4PlanAgent,
     'stage5.write': Stage5WriteAgent,
-    'stage6.prepare': Stage6PrepareAgent,
     'stage6.hook': Stage6HookAgent,
     'stage7.rename': Stage7RenameAgent,
 }
@@ -2736,7 +2717,7 @@ def build_node_agent(
     factory = EXECUTOR_FACTORIES.get(ctx.node)
     if factory is None:
         raise ValueError(
-            f'{ctx.node} 尚未按迁移顺序接入 executor agent；拒绝静默回退 DeepSeek')
+            f'{ctx.node} 不再提供 executor agent 生产臂；现役唯一入口是直连 LLM producer')
     if review_token is not None and ctx.node != 'stage4.design':
         raise ValueError(f'{ctx.node} 不接受 review_token 参数')
     if (ctx.node != 'stage4.design'

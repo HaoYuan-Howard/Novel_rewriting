@@ -37,27 +37,17 @@ def _prepare_report(base: Path, *, broken: bool):
     """只替换 E 运输；证据编译、INVALID 落盘和免费判据均执行生产入口。"""
     import json
 
-    from novel.errors import GateBlocked
-    from novel.orchestrator.node_agents import Stage6PrepareAgent
     from novel.stages.stage6 import prepare
     from novel.store import ArtifactStore
-    from tests.test_stage6_prepare import prepare_ctx, response
-    from tests.test_stage2_global_agent import _Driver, _free_ctx
+    from tests.test_stage6_prepare import direct_prepare, prepare_ctx, response
+    from tests.test_stage2_global_agent import _free_ctx
 
     ctx = prepare_ctx(base)
     payload = response()
     if broken:
         # 只破坏正文支持的段终点；章、支持类型与连续开篇边界仍合法。
         payload['source_blurb']['facts'][0]['evidence']['end_para'] = 99
-    driver = _Driver([json.dumps(payload, ensure_ascii=False)], ctx.novel_dir,
-                     session_id=ctx.run_id)
-    try:
-        Stage6PrepareAgent(ctx, driver=driver).run()
-    except GateBlocked:
-        if not broken:
-            raise
-    else:
-        assert not broken, '越界段落不能被 Prepare 正式发布'
+    _artifact, driver = direct_prepare(ctx, payload, expect_blocked=broken)
     store = ArtifactStore(ctx)
     assert store.exists(prepare.INVALID) is broken
     assert store.exists(prepare.REL) is (not broken)
@@ -72,7 +62,8 @@ def _prepare_report(base: Path, *, broken: bool):
         assert review.actor == 'system:stage6-prepare-auto'
         assert prepare.view_state(store).state == 'accepted'
     report = prepare.run_check_only(_free_ctx(ctx))
-    assert len(driver.calls) == 1, '免费重验不能再购买回答'
+    # 直连窄修复：坏证据先交回一轮修复再判 INVALID；免费重验本身 0 调用。
+    assert len(driver.calls) == (2 if broken else 1), '免费重验不能再购买回答'
     return report
 
 

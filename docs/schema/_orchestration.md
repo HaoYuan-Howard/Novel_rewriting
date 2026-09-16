@@ -83,9 +83,8 @@ DeepSeek base URL 后继续复用它的模型回退、tokenizer、thinking wire 
 `executor_default` 与全部 `executor_overrides` 的 `kind` 必须一致——整跑要么纯 `agent`、
 要么纯 `legacy`，混用两种模式在构造期即被拒绝；同模式内的逐节点差异（模型、effort、thinking）
 不受影响。单向豁免（2026-09-15 用户裁决：legacy 整书跑通）：默认 `legacy` 时，仅
-`AGENT_ONLY_EXECUTOR_NODES`（producer 只实现 agent node-executor/v1 acceptance、legacy 无
-执行器的付费节点，当前为 `stage2.analyze` 与 `stage6.prepare`）允许 `agent` 覆盖；默认
-`agent` 时无任何豁免；补齐 legacy 执行器后豁免集合随之收窄。⚠ 这是**新选择的准入规则**，不是重放判据：append-only 代跑账里存着裁决前合法写入的
+`AGENT_ONLY_EXECUTOR_NODES` 允许 `agent` 覆盖；默认 `agent` 时无任何豁免。2026-09-16：
+`stage2.analyze` 与 `stage6.prepare` 均已补直连执行面，豁免集合收窄为空集，回到纯禁令。⚠ 这是**新选择的准入规则**，不是重放判据：append-only 代跑账里存着裁决前合法写入的
 混用选择，历史行只经 `AgentRunEvent.replay_validate` 读回，准入校验不重审判历史；
 新写入（preview、启动、设置保存、CLI）永远走 `model_validate`，豁免不生效。
 一次整书代跑用 `PipelineAgentProfiles` v3（2026-09-15 用户裁决：删除 Commander 角色，审批一律人工）：
@@ -94,7 +93,7 @@ DeepSeek base URL 后继续复用它的模型回退、tokenizer、thinking wire 
 |---|---|---|---|---|
 | `schema_version` | `3` | **是** | v1 的裸 `AgentProfile` 只在读边界无损迁移为 `kind=agent`；v1/v2 行的 `commander` 字段在读边界直接丢弃（原始 append-only 字节不动，需要原 commander 配置比对的历史证明关闭式拒绝）；所有新写入只发 v3 | **契·码** |
 | `executor_default` | `ExecutorBackend` | **是** | 所有未覆盖付费 executor 节点的默认 backend；其 `kind` 是本次选择的唯一 executor 模式 | **契·码** |
-| `executor_overrides` | `{node: ExecutorBackend}` | 否；默认 `{}` | 只写同模式内的逐节点差异；键严格属于 `AGENT_EXECUTOR_NODES`，值的 `kind` 必须与 `executor_default` 一致。stage 名、代码节点、退役节点与跨模式混用一律拒绝；唯一例外是默认 `legacy` 时 `AGENT_ONLY_EXECUTOR_NODES` 节点允许 `agent` 覆盖（单向豁免） | **契·码** |
+| `executor_overrides` | `{node: ExecutorBackend}` | 否；默认 `{}` | 只写同模式内的逐节点差异；键严格属于 `AGENT_EXECUTOR_NODES`，值的 `kind` 必须与 `executor_default` 一致。stage 名、代码节点、退役节点与跨模式混用一律拒绝；唯一例外是默认 `legacy` 时 `AGENT_ONLY_EXECUTOR_NODES` 节点允许 `agent` 覆盖（单向豁免；该集合 2026-09-16 起为空） | **契·码** |
 | `concurrency` | `PipelineConcurrency` | 否 | 显式冻结逐节点并发与整书、同根供应商总上限；未配置时序列化省略，保留既有 profiles 的字节身份 | **契·码** |
 
 `PipelineConcurrency.node_overrides` 只接受 `PIPELINE_PARALLEL_NODES` 中的节点和
@@ -117,8 +116,8 @@ Executor 调用；不把不同输出根或不同供应商混算。节点并发�
 
 Agent 矩阵之外的 direct 组合仍关闭式拒绝。Legacy backend 则按 provider registry 发布的精确
 model/node 能力关闭式校验：2026-09-16 起取消 Stage4 Pro 钉死，DeepSeek V4.1 Flash 与
-V4 Pro 均承接除 `AGENT_ONLY_EXECUTOR_NODES`（现役仅 `stage6.prepare`）外的全部
-executor 节点；`stage2.analyze` 已提供 LlmClient legacy 入口。
+V4 Pro 均承接全部 executor 节点；`stage2.analyze` 走 `run_legacy`，`stage6.prepare`
+走直连 producer（单轮窄修复），`AGENT_ONLY_EXECUTOR_NODES` 为空集。
 
 两种 backend 共用一条身份链：`preview/start` → `Step/JobStart` → `argv` → `CLI` → `RunContext` →
 按 `kind` 选择的 executor。Agent registry 在 argv builder 边界物化 `execution_mode`；Legacy registry

@@ -503,7 +503,7 @@ def test_profiled_nodes_refuse_every_unmigrated_single_flag(node, flags):
 
 
 def test_executor_profile_refuses_unmigrated_nodes_and_unknown_capability_pairs():
-    with pytest.raises(UnsupportedRunMode, match='尚未接入 executor agent'):
+    with pytest.raises(UnsupportedRunMode, match='不再接受 executor agent'):
         N.build_steps(
             'stage4.context', SID, base=BASE,
             executor_profile=EXECUTOR_PROFILE,
@@ -525,14 +525,15 @@ def test_executor_runtime_registries_close_over_the_same_nodes():
     """能力公开面、跑法矩阵与真实 factory 缺任何一边都必须响亮地红。"""
     from novel.orchestrator.node_agents import EXECUTOR_FACTORIES
 
-    expected = set(AGENT_EXECUTOR_NODES)
-    # stage6.semantic 判官退役（2026-09-15）后现役 executor 面是 10 个节点。
-    assert len(expected) == len(N.EXECUTOR_PROFILED_RUNS) == 10
+    # 2026-09-16 单 Executor 架构 C1：stage6.prepare 的 agent 生产臂退役，
+    # 现役 agent executor 面从 10 收敛为 9 个节点；prepare 只由直连 LLM 执行。
+    expected = set(AGENT_EXECUTOR_NODES) - {'stage6.prepare'}
+    assert len(expected) == len(N.EXECUTOR_PROFILED_RUNS) == 9
     # 15 = 现役登记的付费组合总数；stage2 三节点的 `--review-token` 组合
     # 已随语义审阅退役移除（2026-09）；stage6.semantic 的默认组合已随判官
     # 节点退役移除（2026-09-15），stage4 的 `--close-review` 组合已随批次
-    # B2 四道闸退役移除，不再留豁免。
-    assert sum(len(rows) for rows in N.EXECUTOR_PROFILED_RUNS.values()) == 15
+    # B2 四道闸退役移除，prepare 的默认组合随其 agent 生产臂退役移除。
+    assert sum(len(rows) for rows in N.EXECUTOR_PROFILED_RUNS.values()) == 14
     assert set(EXECUTOR_FACTORIES) == set(N.EXECUTOR_PROFILED_RUNS) == expected
 
 

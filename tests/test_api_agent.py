@@ -200,20 +200,28 @@ def test_missing_pipeline_profiles_are_closed_while_default_is_null(
 
 
 def test_invalid_executor_profile_combination_is_refused(client):
-    """legacy 默认不再配 agent 覆盖 ⇒ 构造期就 400，不能等真跑才炸。"""
+    """AGENT_ONLY 豁免清空后：legacy 默认零覆盖合法；混入 agent 覆盖构造期 422。"""
     c, _ = client
-    bad = {
+    legacy_default = {
         'schema_version': 3,
         'executor_default': {'kind': 'legacy', 'profile': {
             'provider': 'deepseek', 'model': 'deepseek-v4-pro',
             'reasoning_effort': 'high', 'thinking_mode': 'on'}},
         'executor_overrides': {},
     }
+    ok = c.post('/api/agent/runs/preview', json={
+        'sid': '42', 'profiles': legacy_default,
+    }, headers=UI)
+    assert ok.status_code == 200, ok.text
+    bad = dict(legacy_default, executor_overrides={
+        'stage6.prepare': {'kind': 'agent', 'profile': dict(_PROFILE)},
+    })
     response = c.post('/api/agent/runs/preview', json={
         'sid': '42', 'profiles': bad,
     }, headers=UI)
-    assert response.status_code == 400
-    assert response.json()['kind'] == 'UnsupportedRunMode'
+    assert response.status_code == 422
+    assert '混用模式' in response.text
+    assert 'stage6.prepare' in response.text
 
 
 # ── 启动 / 列表 / 日志 / 熄火闸 ────────────────────────────────────────

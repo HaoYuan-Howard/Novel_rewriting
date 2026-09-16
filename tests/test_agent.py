@@ -298,20 +298,19 @@ def test_history_mixed_executor_modes_still_fold_but_new_inputs_stay_refused(bas
         PipelineAgentProfiles.model_validate(started['profiles'])
 
 
-def test_agent_only_exemption_still_admits_legacy_default_runs(base):
-    """agent-only 节点的单向豁免仍准入 legacy 默认 + agent 覆盖的新构造。"""
-    profiles = PipelineAgentProfiles(
-        executor_default=LegacyExecutorBackend(profile=LegacyLlmProfile(
-            provider='deepseek', model='deepseek-v4-pro',
-            reasoning_effort='high', thinking_mode='on')),
-        executor_overrides={
-            node: _CODEX for node in AGENT_ONLY_EXECUTOR_NODES})
-    planned = agent.plan(
-        base, '42', authorized=False, egress_authorized=False,
-        profiles=profiles)
-    assert planned.profiles.executor_default.kind == 'legacy'
-    assert planned.profiles.executor_overrides[
-        next(iter(AGENT_ONLY_EXECUTOR_NODES))].profile == _CODEX
+def test_agent_only_exemption_retirement_refuses_mixed_legacy_default_runs(base):
+    """旧豁免形状（legacy 默认 + agent-only 节点 agent 覆盖）显式拒绝。
+
+    2026-09-16 analyze/prepare 直连执行面补齐后 AGENT_ONLY_EXECUTOR_NODES
+    为空集：历史上的「legacy 默认 + prepare agent 覆盖」新构造在 schema
+    构造期即拒绝，豁免不得被悄悄复活；agent 默认下的 legacy 覆盖同样拒绝。
+    """
+    with pytest.raises(ValidationError, match='混用模式'):
+        PipelineAgentProfiles(
+            executor_default=LegacyExecutorBackend(profile=LegacyLlmProfile(
+                provider='deepseek', model='deepseek-v4-pro',
+                reasoning_effort='high', thinking_mode='on')),
+            executor_overrides={'stage6.prepare': _CODEX})
     with pytest.raises(ValidationError):
         PipelineAgentProfiles(
             executor_default=_CLAUDE,

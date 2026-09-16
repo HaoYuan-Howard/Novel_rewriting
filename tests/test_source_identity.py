@@ -13,7 +13,7 @@ from contracts.schema.knowledge import KnowledgeGrounding
 from contracts.schema.stage1 import MainText, HookCopy
 from contracts.schema.stage6_prepare import Stage6Prepare, PrepareMutationJournal
 from novel.errors import ProvenanceRefused, TerminalState, UpstreamStale
-from novel.orchestrator.node_agents import Stage2AnalyzeAgent, Stage6PrepareAgent
+from novel.orchestrator.node_agents import Stage2AnalyzeAgent
 from novel.stages.stage0 import removal
 from novel.stages.stage1.partition import run_partition
 from novel.stages.stage6 import prepare
@@ -72,9 +72,8 @@ def seed_core(book):
 
 def seed_source_prepare(book):
     ctx = _ctx(book, prepare.NODE)
-    ctx.executor_profile = _profile()
-    driver = _Driver([json.dumps(response(), ensure_ascii=False)], book, session_id=ctx.run_id)
-    original = Stage6PrepareAgent(ctx, driver=driver).run().artifact
+    from tests.test_stage6_prepare import direct_prepare
+    original, driver = direct_prepare(ctx, response())
     free = _free_ctx(ctx)
     prepare.submit_review(free, decision_for(free))
     return ctx, driver, original

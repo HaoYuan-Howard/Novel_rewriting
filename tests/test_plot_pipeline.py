@@ -78,13 +78,11 @@ def complete_stage5(book):
 
 
 def complete_stage6_prepare(book):
-    """真实 Prepare session/落盘；B4 机械通过即 system:stage6-prepare-auto。"""
-    from novel.orchestrator.node_agents import Stage6PrepareAgent
+    """真实 Prepare 直连生产/落盘；机械通过即 system:stage6-prepare-auto。"""
     from novel.stages.stage6 import hook, prepare
-    from tests.test_stage2_global_agent import _Driver, _profile
+    from tests.test_stage6_prepare import direct_prepare
 
     ctx = _ctx(book, 'stage6.prepare')
-    ctx.executor_profile = _profile()
     response = {'source_blurb': {
         'facts': [{'kind': 'supported', 'claim_id': 'hook_001',
                    'claim': '李宝珠收到父亲已经回城的来信。',
@@ -93,11 +91,9 @@ def complete_stage6_prepare(book):
                     'rationale': '首章来信与收信行动完整承接原钩子，次章另起清晨场景',
                     'boundary_evidence': {'chapter_ordinal': 1, 'start_para': 5, 'end_para': 6}},
     }}
-    driver = _Driver([json.dumps(response, ensure_ascii=False)], book,
-                     session_id=f'prepare-{ctx.run_id}')
-    result = Stage6PrepareAgent(ctx, driver=driver).run()
-    assert result.passed and result.turns == len(driver.calls) == 1
-    request = driver.calls[0][1].prompt
+    artifact, driver = direct_prepare(ctx, response)
+    assert artifact is not None and len(driver.calls) == 1
+    request = driver.calls[0].user
     assert request.count('春风吹过老宅的院墙。') == 1
     assert request.count('李宝珠收到父亲已经回城的来信。') == 1
     assert 'entities' not in request and 'arc_secrets' not in request
@@ -116,7 +112,7 @@ def complete_stage6_prepare(book):
     reloaded = ArtifactStore(_ctx(book, 'stage6.hook', paid=False))
     assert prepare.require_accepted(reloaded).source_blurb.opening.through_chapter == 1
     assert len(driver.calls) == 1, '重启读回不得重购原准备回答'
-    return result.artifact
+    return artifact
 
 
 def complete_stage6(book):

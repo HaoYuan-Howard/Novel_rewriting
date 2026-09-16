@@ -249,7 +249,8 @@ class PipelineAgentProfiles(FrozenModel):
         时，仅 ``AGENT_ONLY_EXECUTOR_NODES``（producer 只实现 agent
         acceptance 协议、legacy 无执行器的节点）允许 ``agent`` 覆盖；其余
         节点仍禁止混用。默认为 ``agent`` 时不存在豁免，legacy 覆盖一律拒绝。
-        补齐这些节点的 legacy 执行器后，豁免集合随之收窄直至回到纯禁令。
+        2026-09-16：analyze/prepare 直连执行面补齐后豁免集合已收窄为空集，
+        回到纯禁令；保留判据只为防豁免被悄悄加回。
 
         ⚠ 这是**新选择的准入规则**，不是重放判据：append-only 历史账里存着
         规则生效前合法写入的混用选择（``AgentRunEvent.replay_validate``），

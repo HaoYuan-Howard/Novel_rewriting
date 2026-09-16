@@ -86,7 +86,8 @@ EXECUTOR_PROFILED_RUNS: dict[str, tuple[frozenset[str], ...]] = {
         frozenset({'--revise', '--chapters'}),
         frozenset({'--reviewer-rewrite'}),
     ),
-    'stage6.prepare': (frozenset(),),
+    # stage6.prepare 的 agent 生产臂已随单 Executor 架构退役（2026-09-16）：
+    # 它只由直连 LLM producer 执行，不再接受 executor profile/agent backend。
     'stage6.hook': (frozenset(),),
     # stage6.semantic 已随判官节点退役（2026-09-15），不再有 executor 跑法。
     'stage7.rename': (frozenset(),),
@@ -770,12 +771,13 @@ def step_label(node: str, flags: Sequence[str] = ()) -> str:
 def resolve_executor_profile(
     node: str, flags: Sequence[str], profile: AgentProfile | None,
 ) -> AgentProfile | None:
-    """校验并物化直接节点 executor；迁移未完成的组合关闭式拒绝。"""
+    """校验并物化直接节点 executor；已退役或未迁移的组合关闭式拒绝。"""
     if profile is None:
         return None
     if node not in EXECUTOR_PROFILED_NODES:
         raise UnsupportedRunMode(
-            f'{node} 尚未接入 executor agent；不能接受 profile 后静默回退 DeepSeek')
+            f'{node} 不再接受 executor agent（生产臂已退役或尚未迁移）；'
+            '它由直连 LLM 执行，不能接受 profile 后静默回退另一套执行面')
     tokens = frozenset(flag_tokens(flags))
     if tokens not in EXECUTOR_PROFILED_RUNS[node]:
         supported = [sorted(item) for item in EXECUTOR_PROFILED_RUNS[node]]

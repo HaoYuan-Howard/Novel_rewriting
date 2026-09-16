@@ -2442,16 +2442,12 @@ AGENT_EXECUTOR_NODES: Final = (
     'stage7.rename',
 )
 
-#: 只支持 agent executor 的付费节点。这些节点的 producer 直接消费
-#: ``SessionAgentClient`` 的 node-executor/v1 acceptance（agent_runs 的
-#: run/checkpoint/会话审计闭环），legacy 直连 API 客户端没有等价实现；
-#: legacy driver 的 capability 不得宣称这些节点，legacy 默认选择必须为它们
-#: 配 agent 覆盖（单向豁免，2026-09-15 用户裁决：legacy 整书跑通）。
-#: 2026-09-16：``stage2.analyze`` 已补 legacy（``run_legacy`` + LlmClient），
-#: 从本集合移除；``stage6.prepare`` 仍待补齐后移出。
-AGENT_ONLY_EXECUTOR_NODES: Final = frozenset({
-    'stage6.prepare',
-})
+#: 只支持 agent executor 的付费节点：2026-09-16 单 Executor 架构起为空集。
+#: ``stage2.analyze``（run_legacy + LlmClient）与 ``stage6.prepare``
+#: （直连 producer + 单轮窄修复）均已补齐直连执行面，legacy driver 的
+#: capability 可以宣称全部 ``AGENT_EXECUTOR_NODES``；保留常量只为让
+#: 「曾经存在 agent-only 例外」这件事在退役窗口内可检索。
+AGENT_ONLY_EXECUTOR_NODES: Final = frozenset()
 
 #: `(节点, 触发 flag)` → 这条跑法**额外**必填的 flag。`NodeSpec.required_flags` 的补集：
 #: 那一列管无条件必填，这张表管「跟着另一条跑法才必填」。

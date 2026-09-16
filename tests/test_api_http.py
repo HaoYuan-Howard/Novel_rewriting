@@ -521,7 +521,8 @@ _EXECUTOR_PROFILE_HTTP_CASES = (
     ('stage5.write', ('--chapters', '1'), 1),
     ('stage5.write', ('--revise',), 1),
     ('stage5.write', ('--revise', '--chapters', '1'), 1),
-    ('stage6.prepare', (), 1),
+    # stage6.prepare 的 agent 生产臂已退役（2026-09-16）：agent 纵切不再
+    # 覆盖它；直连 legacy 跑法由 stage6 prepare 直连测试单独闭合。
     ('stage6.hook', (), 2),
     ('stage7.rename', (), 2),
 )
@@ -681,7 +682,7 @@ def test_http_executor_profile_refuses_flags_and_unmigrated_nodes(
     assert response.status_code == 400
     assert response.json()['kind'] == 'UnsupportedRunMode'
     assert ('尚未迁移 flag 组合' in response.json()['message']
-            or '尚未接入 executor agent' in response.json()['message'])
+            or '不再接受 executor agent' in response.json()['message'])
 
 
 def test_preview_request_shape_rejects_retired_mode_field(client):

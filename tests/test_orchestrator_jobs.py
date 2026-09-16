@@ -631,7 +631,7 @@ def test_frozen_steps_cannot_smuggle_a_profile_into_an_unmigrated_node(base):
         executor_profile=EXECUTOR_PROFILE,
     )
 
-    with pytest.raises(UnsupportedRunMode, match='尚未接入 executor agent'):
+    with pytest.raises(UnsupportedRunMode, match='不再接受 executor agent'):
         J.plan_start(
             'stage4.context', SID, base=base, steps=[smuggled])
 

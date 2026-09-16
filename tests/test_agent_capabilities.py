@@ -35,8 +35,9 @@ def test_executor_nodes_cover_all_paid_llm_nodes():
         node for node, spec in NODES.items() if spec.paid
     }
     # agent-only 集合必须落在 executor 面内；legacy driver 与混用豁免都消费它。
+    # 2026-09-16 单 Executor 架构：stage6.prepare 直连 producer 落地后清空。
     assert AGENT_ONLY_EXECUTOR_NODES <= set(AGENT_EXECUTOR_NODES)
-    assert AGENT_ONLY_EXECUTOR_NODES == {'stage6.prepare'}
+    assert AGENT_ONLY_EXECUTOR_NODES == frozenset()
 
 
 def _legacy_profile(*, model: str = 'deepseek-v4-pro',
@@ -73,11 +74,10 @@ def test_pipeline_profiles_reject_mixed_executor_modes():
                 'stage5.write': LegacyExecutorBackend(profile=_legacy_profile()),
             },
         )
-    # 同模式内的逐节点差异仍合法，但 legacy 默认下 agent-only 节点没有
-    # legacy 执行器：漏配 agent 覆盖的选择在 validate_pipeline_profiles
-    # 就被拒（见下一条专项测试的完整正例）。
-    # 2026-09-16：stage4 取消 Pro 钉死、analyze 已有 legacy，纯 Flash 默认只需
-    # 为剩余 AGENT_ONLY（prepare）补 agent 覆盖；此处故意漏配以钉住拒绝面。
+    # 同模式内的逐节点差异仍合法；全部付费节点现都有 legacy 执行面。
+    # 2026-09-16：analyze/prepare 直连执行面补齐、AGENT_ONLY 清空后，
+    # 纯 Flash 默认零覆盖即可通过校验；legacy 默认下 prepare 的 agent
+    # 覆盖回到「混用模式」禁令（豁免集合已收窄到空）。
     flash_default = PipelineAgentProfiles(
         commander=_profile(),
         executor_default=LegacyExecutorBackend(
@@ -85,38 +85,44 @@ def test_pipeline_profiles_reject_mixed_executor_modes():
         executor_overrides={},
     )
     assert not flash_default.executor_overrides.keys() & AGENT_ONLY_EXECUTOR_NODES
-    with pytest.raises(capabilities.AgentProfileRefused, match='stage6.prepare'):
-        capabilities.validate_pipeline_profiles(flash_default)
+    resolved = capabilities.validate_pipeline_profiles(flash_default)
+    assert resolved.executor_overrides == {}
+    with pytest.raises(ValidationError, match='混用模式'):
+        PipelineAgentProfiles(
+            commander=_profile(),
+            executor_default=LegacyExecutorBackend(
+                profile=_legacy_profile(model='deepseek-flash')),
+            executor_overrides={
+                'stage6.prepare': AgentExecutorBackend(profile=_profile()),
+            },
+        )
 
 
-def test_legacy_default_accepts_agent_overrides_only_for_agent_only_nodes():
-    """legacy 默认 + agent-only 节点 agent 覆盖可构造、可校验、可启动冻结。
+def test_legacy_default_needs_no_agent_overrides_after_agent_only_retired():
+    """agent-only 豁免清空后：legacy 默认零覆盖即可启动，混用一律拒绝。
 
-    其余节点（含同为 stage2 的 blueprint / analyze）不豁免也不要求 agent；
-    漏配 agent-only 覆盖时 ``validate_pipeline_profiles`` 在设置保存/preview
-    期即拒绝，不能等第一个付费节点跑到一半才 exit 2。
+    历史上该测试保护「prepare 漏配 agent 覆盖即拒」；2026-09-16 起 prepare
+    有直连执行面，豁免集合为空，等价职责收敛为「豁免不再复活」的反例。
     """
     profiles = PipelineAgentProfiles(
         commander=_profile(),
         executor_default=LegacyExecutorBackend(
             profile=_legacy_profile(model='deepseek-flash')),
-        executor_overrides={
-            node: AgentExecutorBackend(profile=_profile())
-            for node in sorted(AGENT_ONLY_EXECUTOR_NODES)
-        },
+        executor_overrides={},
     )
     resolved = capabilities.validate_pipeline_profiles(profiles)
-    assert 'stage2.analyze' not in resolved.executor_overrides
-    assert resolved.executor_overrides['stage6.prepare'].kind == 'agent'
-    # agent-only 节点不在任何 legacy 模型的 capability 面内：漏配覆盖时，
-    # 默认 legacy 被逐节点校验拒绝，错误指向该节点。
-    with pytest.raises(capabilities.AgentProfileRefused, match='stage6.prepare'):
-        capabilities.validate_pipeline_profiles(PipelineAgentProfiles(
+    assert resolved.executor_overrides == {}
+    # 豁免集合已清空：任何 legacy 默认下的 agent 覆盖（含 stage6.prepare）
+    # 都在构造期以「混用模式」拒绝，单向豁免不能被悄悄加回。
+    with pytest.raises(ValidationError, match='混用模式'):
+        PipelineAgentProfiles(
             commander=_profile(),
             executor_default=LegacyExecutorBackend(
                 profile=_legacy_profile(model='deepseek-flash')),
-            executor_overrides={},
-        ))
+            executor_overrides={
+                'stage6.prepare': AgentExecutorBackend(profile=_profile()),
+            },
+        )
 
 
 def test_concurrency_capability_and_full_profiles_roundtrip_preserve_exact_trial():

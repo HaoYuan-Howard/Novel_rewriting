@@ -17,14 +17,16 @@ from contracts.artifacts import STAGE1_HOOK_COPY
 from contracts.schema.stage1 import HookCopy
 from contracts.schema.stage6_prepare import Stage6Prepare, PrepareMutationJournal
 from novel.api.app import UI_HEADER, create_app
-from novel.orchestrator.node_agents import Stage6PrepareAgent
 from novel.orchestrator import jobs
+from novel.llm.cache import ResponseCache
+from novel.llm.client import LlmClient
+from novel.llm.transport import ChatResponse, FakeTransport
 from novel.stages.stage6 import prepare
 from novel.store import ArtifactStore
 from tests.test_plot_design import produce_through_first_chapter
 from tests.test_plot_pipeline import complete_stage5, grounded_global
 from tests.test_stage2_generation import _ctx
-from tests.test_stage2_global_agent import _Driver, _free_ctx, _profile
+from tests.test_stage2_global_agent import _free_ctx
 from tests.test_stage6_prepare import ProcessExit, edit_for, response
 
 
@@ -42,14 +44,18 @@ def test_prepare_http_readonly_auto_accept_and_retired_write_surfaces(
         grounding=grounded_global(), real_code_identity=True)
     complete_stage5(book)
     ctx = _ctx(book, 'stage6.prepare')
-    ctx.executor_profile = _profile()
     initial = response()
     source_hook = ArtifactStore(ctx).read_own(HookCopy, STAGE1_HOOK_COPY)[0].text.strip()
     initial['source_blurb']['facts'][1]['claim'] = source_hook
-    driver = _Driver([json.dumps(initial, ensure_ascii=False)], book,
-                     session_id=ctx.run_id)
-    original = Stage6PrepareAgent(ctx, driver=driver).run().artifact
-    assert len(driver.calls) == 1
+    transport = FakeTransport(responder=lambda _req, _index: ChatResponse(
+        content=json.dumps(initial, ensure_ascii=False), finish_reason='stop',
+        usage={'prompt_tokens': 10, 'completion_tokens': 20},
+        model='test-model'))
+    client = LlmClient(ctx, transport, cache=ResponseCache(),
+        model='test-model', max_retries=0, concurrency=2,
+        budget_checker=lambda *_args, **_kwargs: None)
+    original = prepare.run_prepare(ctx, client)
+    assert len(transport.calls) == 1
     ledger_before = ctx.ledger.path.read_bytes()
 
     with TestClient(create_app(str(book.parent))) as http:
@@ -117,4 +123,4 @@ def test_prepare_http_readonly_auto_accept_and_retired_write_surfaces(
 
     final = ArtifactStore(_free_ctx(ctx)).read_own(Stage6Prepare, prepare.REL)[0]
     assert final.provenance.usage == original.provenance.usage
-    assert len(driver.calls) == 1 and ctx.ledger.path.read_bytes() == ledger_before
+    assert len(transport.calls) == 1 and ctx.ledger.path.read_bytes() == ledger_before
