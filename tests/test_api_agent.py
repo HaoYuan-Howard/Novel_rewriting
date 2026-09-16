@@ -43,9 +43,15 @@ _PROFILE = {
     'execution_mode': 'standard',
 }
 #: schema v3：只有 executor backend，没有 commander 字段。
+#: C2a 起执行面 legacy-only：互斥/批次/锁等职责 fixtures 一律用 legacy default。
+_LEGACY_DEFAULT = {
+    'kind': 'legacy', 'profile': {
+        'provider': 'deepseek', 'model': 'deepseek-v4-pro',
+        'reasoning_effort': 'high', 'thinking_mode': 'on'},
+}
 _PIPELINE_PROFILES = {
     'schema_version': 3,
-    'executor_default': {'kind': 'agent', 'profile': _PROFILE},
+    'executor_default': _LEGACY_DEFAULT,
     'executor_overrides': {},
 }
 
