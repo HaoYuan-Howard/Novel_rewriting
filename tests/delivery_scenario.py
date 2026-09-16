@@ -120,37 +120,16 @@ def build(base):
                 ctx = _ctx(base, 'stage4.design', paid=True)
                 client, wire = _client(ctx, design_response(bp_json))
                 plan.run_design(ctx, client)
-            if _get(http, '/approvals')['design_review']['state'] != 'accepted':
-                response = http.get(PREFIX + '/approvals/design/template', params={
-                    'actor': 'human-ui', 'reviewer_kind': 'human', 'review_run_id': 'offline-design',
-                    'reason': '仅合成链验证，明确接受完整剧情与分场结构'})
-                assert response.status_code == 200, response.text
-                template = response.json()
-                post(http, '/approvals/design', {
-                    'actor': template['actor'], 'reviewer_kind': template['reviewer_kind'],
-                    'review_run_id': template['review_run_id'], 'general_reason': template['general_reason'],
-                    'review_token': template['review_token'], 'strategy': {'decision': 'accept', 'reason': '保留完整剧情语义'},
-                    'chapters': [{'output_ordinal': row['output_ordinal'], 'decision': 'accept', 'reason': '完整节点的联合呈现、归因与披露一致'} for row in template['chapters']]})
+            # 批次 B2：Stage4 design/structure 审阅写面退役——A 落盘（机械有效）
+            # 即由统一机械准入放行 B，B 落盘放行 context。
             if not (book / plan.REL).is_file():
                 route = _get(http, '/operator-next')
                 print('PLAN_ACTION', route['action'], flush=True)
                 _run_free_next(http, node='stage4.plan', flags=route['action']['flags'])
-            if _get(http, '/approvals')['structure']['state'] != 'accepted':
-                pack = _get(http, '/approvals/structure/workpack')
-                post(http, '/approvals/structure', {
-                    'actor': 'human-ui', 'reason': '合成联调逐章确认节点、证据和分场结构',
-                    'review_token': pack['review_token'],
-                    'chapters': [{'output_ordinal': ordinal, 'decision': 'accept',
-                                  'reason': '完整节点联合呈现，无新增剧情或提前披露，原章顺序保留'}
-                                 for ordinal in pack['chapter_ordinals']]})
             if not (book / plan.CTX_REL).is_file():
                 _run_free_next(http, node='stage4.context', flags=[])
             print('STAGE4_OK', flush=True)
-            approved = _get(http, '/approvals')
-            if not approved['writing']:
-                post(http, '/approvals/writing', {
-                    'actor': 'human-ui', 'reason': '明确授权合成模型测试，不调用外部模型',
-                    'review_token': approved['writing_approval']['review_token']})
+            # 批次 B3：写作授权并入 run 启动授权，不需要任何签票步骤。
             ctx = _ctx(base, 'stage5.write', paid=True)
             store = ArtifactStore(ctx)
             planned = store.read_own(PlanChapters, plan.REL)[0]
@@ -174,17 +153,13 @@ def build(base):
                 report = write.run_write(writer, client, chapters=str(ordinal))
                 assert report.passed, report.model_dump(mode='json')
                 print('DRAFT_OK', ordinal, len(wire.calls), flush=True)
+            # 批次 B3：闭合回执由 stage5.review producer 机械落账（无阻断工作包
+            # 即自动闭合）；这里只负责把 0 成本 review 重算跑到位。
             if not _get(http, '/approvals')['gate']['s5']:
                 route = _get(http, '/operator-next')
-                if route['state'] == 'ready':
-                    _run_free_next(http, node='stage5.review', flags=route['action']['flags'])
-                template = _get(http, '/approvals/stage5/template')
-                assert not template['must_appear'], template['must_appear']
-                post(http, '/approvals/stage5', {
-                    'actor': 'human-ui', 'reason': '合成联调核对完整剧情、归因与揭示；统计与语义未知仍披露',
-                    'review_token': template['review_token'], 'must_appear': [],
-                    'group_acks': [{'group': row['group'], 'acknowledged': True}
-                                   for row in template['group_acks']]})
+                assert route['state'] == 'ready' and route['action']['node'] == 'stage5.review', route
+                _run_free_next(http, node='stage5.review', flags=route['action']['flags'])
+                assert _get(http, '/approvals')['gate']['s5'], '机械闭合未自动落账'
             if not (book / 'stage6/prepare.json').is_file():
                 # 独立文案准备（Stage6 前置）：真实 Prepare session + 人工接受。
                 from tests.test_plot_pipeline import complete_stage6_prepare
@@ -280,7 +255,11 @@ def automatic(base):
             assert record.state == 'ok', (record.model_dump(mode='json'), agent.run_log_path(base, run_id).read_text(encoding='utf-8'))
             assert record.outcome.state in {'ready', 'ready_with_disclosures'}
             assert all(epoch.identity_version == 2 and epoch.skill_sha256 is None for epoch in record.epochs)
-            assert dispatched and all('novel.orchestrator.run_step' in argv for argv in dispatched)
+            # 批次 A2b 的确定性重建 drain 可能在服务启动时已免费补跑
+            # stage7.assemble（不经过 supervisor dispatch）；本段钉死的
+            # 是「自动免费收尾零购买」：任何派发都必须是免费的
+            # stage7.assemble（only_free_assembly 已断言），且整轮 ok 收官。
+            assert all('novel.orchestrator.run_step' in argv for argv in dispatched)
             assert target.read_bytes() == content
             assert ledger_path(base).read_bytes() == ledger
             assert not list(book.rglob('*.md'))

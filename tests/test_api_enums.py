@@ -319,7 +319,8 @@ def test_job_kinds_is_keyed_by_current_node_id(paid_payload):
 
 def test_reviewer_rewrite_internal_actions_are_not_job_form_buttons(paid_payload):
     internal = {
-        '--request-reviewer-rewrite', '--reviewer-rewrite',
+        # （--request-reviewer-rewrite 已随批次 B3 trim 三选一退役删除。）
+        '--reviewer-rewrite',
         '--recover-reviewer-rewrite-prepared', '--retire-reviewer-rewrite-request',
         '--reviewer-rewrite-request-sha256',
         '--reviewer-rewrite-recovery-target-run-id',

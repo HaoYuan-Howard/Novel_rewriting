@@ -139,8 +139,7 @@ _PRIMARY_OPERATIONS = {
         '--retire-reviewer-rewrite-request',
     }),
     'stage5.review': frozenset({
-        '--retain-pretrim', '--retain-pretrim-batch',
-        '--request-reviewer-rewrite', '--wontfix', '--check-only',
+        '--wontfix', '--check-only',
     }),
     'stage6.prepare': frozenset({
         '--dry-run', '--revalidate', '--emit-edit-template', '--emit-review-template',
@@ -418,11 +417,8 @@ def validate_run(node: str, flags: Sequence[str] = (), *,
         raise UnsupportedRunMode(
             'stage5.write --subject-sha256 只绑定 --recover-prepared 工作包；'
             '不能把孤立 subject 静默忽略后落到默认付费写作')
-    if node == 'stage5.review' and '--request-reviewer-rewrite' in tokens:
-        if set(tokens) != {'--request-reviewer-rewrite'}:
-            raise UnsupportedRunMode(
-                'stage5.review --request-reviewer-rewrite 只接受一份 typed request；'
-                '不得与 retain/wontfix/check 或人工 flag 混用')
+    # （stage5.review --request-reviewer-rewrite 校验分支已随批次 B3 trim 三选一
+    #   退役删除；该 flag 不再属于任何节点，validate_run 直接拒收。）
     stage4_recovery_credentials = {
         '--source-journal-sha256', '--source-commit-sha256',
     }

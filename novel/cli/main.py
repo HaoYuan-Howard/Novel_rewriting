@@ -258,8 +258,8 @@ def _parser() -> argparse.ArgumentParser:
     approval_backfill.add_argument('--base', required=True)
 
     approval_gate = approval_sub.add_parser(
-        'gate', help='批准当前 s0/s1；s4 已随 Stage4 人工闸退役，'
-                     's5 只接受 typed stage5 apply')
+        'gate', help='批准当前 s0/s1；s4/s5 已随全自动裁决退役'
+                     '（s4=机械准入，s5=机械闭合回执）')
     approval_gate.add_argument('gate', choices=('s0', 's1'))
     approval_gate.add_argument('sid')
     approval_gate.add_argument('--base', required=True)
@@ -271,26 +271,9 @@ def _parser() -> argparse.ArgumentParser:
     approval_workpack.add_argument('sid')
     approval_workpack.add_argument('--base', required=True)
 
-    approval_template = approval_sub.add_parser(
-        'template', help='只读生成绑定当前 subject 的审批模板'
-                         '（Stage4 design/structure 模板已随人工闸退役）')
-    approval_template.add_argument(
-        'surface', choices=('writing', 'stage5'))
-    approval_template.add_argument('sid')
-    approval_template.add_argument('--base', required=True)
-    approval_template.add_argument('--actor', required=True)
-    approval_template.add_argument('--reason', required=True)
-
-    approval_apply = approval_sub.add_parser(
-        'apply', help='提交 typed 审批 JSON；只写审批账，不启动作业'
-                      '（Stage4 design/structure apply 已随人工闸退役）')
-    approval_apply.add_argument(
-        'surface', choices=('writing', 'stage5'))
-    approval_apply.add_argument('sid')
-    approval_apply.add_argument('--base', required=True)
-    approval_apply.add_argument(
-        '--input', required=True,
-        help='模板 JSON 文件；传 - 时从 stdin 读取（正文不进入 argv）')
+    # ⚠ `approval template/apply` 的 writing/stage5 面已随批次 B3（2026-09-15
+    #   全自动裁决）退役删除：写作授权并入 run 启动授权，闭合回执由
+    #   `stage5.review` producer 机械落账。
 
     workflow = sub.add_parser('workflow', help='工作流契约的显式离线维护（0 成本）')
     workflow_sub = workflow.add_subparsers(dest='workflow_cmd', required=True)
@@ -1196,77 +1179,16 @@ def _run_stage5(ctx: RunContext, flags: list[str]) -> int:
     ⚠ 写作节点**没有 `--check-only`**：机械复检由 `stage5.review` 承担 ⇒ 对外 check 节点是 review。
     ⚠ `stage5.semantic`（书级语义审判）于 2026-08-17 整节点下线，本函数不再有那一支。
     """
-    from novel.stages.stage5 import review, trim_resolution, write
+    from novel.stages.stage5 import review, write
 
     tokens = set(N.flag_tokens(flags))
     chapters = _valued(flags, '--chapters')
 
     if ctx.node == 'stage5.review':
-        if '--request-reviewer-rewrite' in tokens:
-            request_path = _valued(flags, '--request-reviewer-rewrite')
-            if not request_path:
-                raise TerminalState(
-                    '--request-reviewer-rewrite 必须给 trusted input JSON 路径')
-            input_arg = Path(request_path)
-            input_abs = (
-                input_arg if input_arg.is_absolute()
-                else Path(ctx.novel_dir) / input_arg
-            ).resolve()
-            from novel.stages.stage5 import reviewer_rewrite
-            request = reviewer_rewrite.record_reviewer_rewrite_request(
-                ctx, input_abs)
-            print('  ✓ Stage5 Reviewer 批量改写 request 已落盘并 typed readback：'
-                  f'{request.target_ordinals} · {request.request_sha256}')
-            return X.OK
-        if '--retain-pretrim' in tokens:
-            selected = _chapters_of(chapters)
-            if len(selected) != 1:
-                raise TerminalState('--retain-pretrim 必须用 --chapters 指定恰好一章')
-            actor = _valued(flags, '--actor')
-            reason = _valued(flags, '--reason')
-            if not actor or not actor.strip() or not reason or not reason.strip():
-                raise TerminalState(
-                    '--retain-pretrim 必须显式给 --actor 与 --reason；'
-                    '这是 hash-bound 人工销账，不能留下匿名决定')
-            resolution = trim_resolution.retain_pretrim(
-                ctx, selected[0],
-                actor=actor,
-                reason=reason,
-            )
-            print(f'  ✓ ch{resolution.output_ordinal:02d} 已明确保留 pretrim 原稿；'
-                  'hash-bound resolution 已落盘，未采用收缩候选')
-            return X.OK
-        if '--retain-pretrim-batch' in tokens:
-            from contracts.schema.api import BatchTrimResolutionRequest
-            manifest_path = _valued(flags, '--retain-pretrim-batch')
-            if not manifest_path:
-                raise TerminalState(
-                    '--retain-pretrim-batch 必须给 manifest JSON 路径'
-                    '（相对路径按书目录解释；绝对路径原样使用；'
-                    'actor/reason 在 manifest 内）')
-            # API 依 R-11.3 把一次性 manifest 放在书外 `_service/edits/<sid>`。
-            # 相对路径仍按书目录解释；绝对路径保持 producer 既有语义。Commander
-            # 的更窄信任边界由 execution permit 统一收在当前书或 service edit 目录。
-            manifest_arg = Path(manifest_path)
-            manifest_abs = (
-                manifest_arg if manifest_arg.is_absolute()
-                else Path(ctx.novel_dir) / manifest_arg
-            ).resolve()
-            raw = manifest_abs.read_text(encoding='utf-8')
-            try:
-                request = BatchTrimResolutionRequest.model_validate_json(raw)
-            except ValidationError as exc:
-                raise TerminalState(
-                    f'批量销账 manifest 不符合 typed 契约：{exc}') from exc
-            written = trim_resolution.retain_pretrim_batch(ctx, request)
-            print(f'  ✓ 批量销账完成：{len(written)} 章'
-                  f'（{[row.output_ordinal for row in written]}）'
-                  '；hash-bound resolution 已按章落盘，未采用收缩候选')
-            return X.OK
-        stray = {'--chapters', '--actor', '--reason'} & tokens
-        if stray:
-            raise TerminalState(
-                f'{sorted(stray)} 只与 --retain-pretrim 成组使用，不能静默落到默认 review')
+        # ⚠ trim 三选一人工 CLI 面（--retain-pretrim(-batch) /
+        # --request-reviewer-rewrite）已随批次 B3（2026-09-15 全自动裁决）
+        # 退役：超限章由 `run_review` 内的机械处置自动落账——预算内自动
+        # 落 typed 定向改写 request，预算耗尽后机械保留并披露交付。
         if '--wontfix' in tokens:
             report = review.mark_wontfix(ctx, _valued(flags, '--wontfix') or '')
             print(render(report))
@@ -1277,6 +1199,11 @@ def _run_stage5(ctx: RunContext, flags: list[str]) -> int:
             report = review.run_check_only(ctx)
             print(render(report))
             return X.OK if report.passed else X.CHECK_FAILED
+        stray = tokens - {'--wontfix', '--check-only'}
+        if stray:
+            raise TerminalState(
+                f'stage5.review 不接受 {sorted(stray)}；trim 三选一人工面已随'
+                '批次 B3 退役，超限章由 run_review 的机械处置自动落账')
         rev, report = review.run_review(ctx)
         print(f'  ✓ 全书验收：{len(rev.chapters)} 章 · 书级 {len(rev.book)} 条')
         print(render(report))
@@ -2285,16 +2212,8 @@ def _cmd_response_repair_admitted(a: argparse.Namespace) -> int:
     return X.OK
 
 
-def _approval_input(path: str) -> str:
-    """读正式审批请求；支持 stdin，避免大 JSON 与隐私内容进入 argv。"""
-    try:
-        return sys.stdin.read() if path == '-' else Path(path).read_text(encoding='utf-8')
-    except (OSError, UnicodeDecodeError) as exc:
-        raise TerminalState(f'审批输入不可读：{exc}') from exc
-
-
 _APPROVAL_WRITE_ACTIONS = frozenset({
-    'backfill', 'seen', 'gate', 'close-stage2', 'apply',
+    'backfill', 'seen', 'gate', 'close-stage2',
 })
 
 
@@ -2317,15 +2236,12 @@ def _cmd_approval(a: argparse.Namespace) -> int:
 
 
 def _cmd_approval_admitted(a: argparse.Namespace) -> int:
-    """可审计审批 CLI：template/show 只读，apply 只落审批账且绝不拉作业。
+    """可审计审批 CLI：只读 show/workpack + backfill/gate(s0,s1)。
 
-    Stage4 design/structure 工作包、模板与 typed apply 已随四道人工闸退役
-    （2026-09-15 全自动裁决）；本入口只保留 show/backfill/gate(s0,s1) 与
-    stage5/6/7 的人工面。
+    Stage4 design/structure 工作包、模板与 typed apply 已随四道人工闸退役；
+    Stage5 writing/闭合（closure）人工面已随批次 B3（2026-09-15 全自动裁决）
+    退役——闭合由 `stage5.review` producer 以 system:stage5-auto 机械落账。
     """
-    from contracts.schema.api import (
-        Stage5ClosureRequest, WritingApprovalRequest,
-    )
     from novel.orchestrator import approvals
 
     if a.approval_action == 'show':
@@ -2344,32 +2260,8 @@ def _cmd_approval_admitted(a: argparse.Namespace) -> int:
         else:
             from novel.views.stage7 import stage7_approval_workpack
             result = stage7_approval_workpack(a.base, a.sid)
-    elif a.approval_action == 'template':
-        try:
-            if a.surface == 'stage5':
-                result = approvals.stage5_closure_template(a.base, a.sid)
-            else:
-                result = approvals.writing_template(
-                    a.base, a.sid, actor=a.actor, reason=a.reason)
-        except ValidationError as exc:
-            raise TerminalState(
-                f'{a.surface} 审批模板身份不符合 typed 契约：{exc}') from exc
     else:
-        raw = _approval_input(a.input)
-        model = {
-            'writing': WritingApprovalRequest,
-            'stage5': Stage5ClosureRequest,
-        }[a.surface]
-        try:
-            request = model.model_validate_json(raw)
-        except ValidationError as exc:
-            raise TerminalState(f'{a.surface} 审批 JSON 不符合 typed 契约：{exc}') from exc
-        if a.surface == 'stage5':
-            result = approvals.approve_stage5_closure(a.base, a.sid, request)
-        else:
-            # Commander 只有这一条入口：request 只搬 opaque token 与
-            # actor/reason，多摘要一律由服务端现场重建。
-            result = approvals.approve_writing(a.base, a.sid, request)
+        raise TerminalState(f'未登记的审批动作：{a.approval_action!r}')
     print(result.model_dump_json(indent=2))
     return X.OK
 

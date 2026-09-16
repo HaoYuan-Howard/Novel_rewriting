@@ -2828,7 +2828,13 @@ class Stage5ClosureWorkpack(FrozenModel):
         return self
 
     def blockers(self) -> list[str]:
-        """当前不可提交回执的原因；空列表 = 可以提交。"""
+        """当前不可提交回执的原因；空列表 = 可以提交。
+
+        ⚠ trim 不再是 blocker（批次 B3，2026-09-15 全自动裁决）：
+        ``paragraph_budget_missed`` 是登记的可降级目标偏差（`Rule.degradable`，
+        契约 §七），超限未消的章按预定义规则由机械保留并披露交付；
+        ``unresolved_trim_*`` 仍作为事实与披露面保留在本工作包上。
+        """
         blockers: list[str] = []
         if self.missing_chapters:
             blockers.append(f'缺正式章稿 {self.missing_chapters}')
@@ -2836,8 +2842,6 @@ class Stage5ClosureWorkpack(FrozenModel):
             blockers.append(f'仍有 .INVALID {self.invalid_chapters}')
         if self.hard_findings:
             blockers.append(f'阻断级判定 {sorted(set(self.hard_findings))}')
-        if self.unresolved_trim_chapters:
-            blockers.append(f'trim 待销账 {self.unresolved_trim_chapters}')
         return blockers
 
 

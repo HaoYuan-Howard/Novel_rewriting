@@ -1,13 +1,11 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends
 
 from contracts.schema.api import (
     ApprovalBackfillResult, ApprovalDoc, GateKey,
-    Stage5ClosureRequest, Stage5ClosureTemplate,
     Stage6ApprovalWorkpack, Stage7ApprovalWorkpack,
-    WritingApprovalRequest,
 )
 from novel.api.deps import checked_sid, get_base
 from novel.orchestrator import approvals, inspection
@@ -42,42 +40,10 @@ def get_stage7_workpack(
     return stage7_approval_workpack(base, sid)
 
 
-@router.get('/stage5/template', response_model=Stage5ClosureTemplate)
-def get_stage5_closure_template(
-    sid: str = Depends(checked_sid), base: str = Depends(get_base),
-) -> Stage5ClosureTemplate:
-    """按当前盘面生成 Stage5 闭合工作包模板；只读、0 成本、不代签。"""
-    return approvals.stage5_closure_template(base, sid)
-
-
-@router.post('/stage5', response_model=ApprovalDoc)
-def approve_stage5_closure(
-    request: Stage5ClosureRequest,
-    sid: str = Depends(checked_sid), base: str = Depends(get_base),
-) -> ApprovalDoc:
-    """原子提交 Stage5 闭合回执；通过即打开 gate.s5，不启动任何付费作业。"""
-    details = {
-        'actor': request.actor,
-        'review_token': request.review_token,
-        'must_appear': [
-            {
-                'chapter_ordinal': row.chapter_ordinal,
-                'evidence_key': row.evidence_key,
-                'ruling': row.ruling,
-            }
-            for row in request.must_appear
-        ],
-        'group_acks': [
-            {
-                'group': row.group,
-                'acknowledged': row.acknowledged,
-            }
-            for row in request.group_acks
-        ],
-    }
-    with operation_scope(
-            base, sid, operation='approval-stage5', details=details):
-        return approvals.approve_stage5_closure(base, sid, request)
+# ⚠ Stage5 写作授权与闭合回执的人工写面已随批次 B3（2026-09-15 全自动裁决）
+#   退役：`POST /writing`、`POST /stage5`、`GET /stage5/template` 删除。
+#   闭合由 `stage5.review` producer 以 system:stage5-auto 自动落账；
+#   写作授权并入 run 启动授权（上传即授权本书全部付费节点）。
 
 
 @router.post('/gate/{key}', response_model=ApprovalDoc)
@@ -95,21 +61,6 @@ def backfill_approvals(
 ) -> ApprovalBackfillResult:
     with operation_scope(base, sid, operation='approval-backfill'):
         return approvals.backfill_from_disk(base, sid)
-
-
-@router.post('/writing', response_model=ApprovalDoc)
-def approve_writing(
-    request: WritingApprovalRequest,
-    sid: str = Depends(checked_sid), base: str = Depends(get_base),
-) -> ApprovalDoc:
-    """typed token 授权只写审批账；不启动任何付费作业。"""
-    details = {
-        'actor': request.actor,
-        'review_token': request.review_token,
-    }
-    with operation_scope(
-            base, sid, operation='approval-writing', details=details):
-        return approvals.approve_writing(base, sid, request)
 
 
 @router.post('/reset', response_model=ApprovalDoc)

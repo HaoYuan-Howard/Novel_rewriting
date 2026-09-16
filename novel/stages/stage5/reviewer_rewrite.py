@@ -2,23 +2,26 @@
 # -*- coding: utf-8 -*-
 """Stage5 formal reviewer rewrite request 的唯一物化与 queue 查询口。
 
-这条路把“Commander 认为某个 current 超长章需要语义整章改写”先冻结成一份
-canonical、hash-bound 请求，再由 ``stage5.write`` 付费执行。request 本身不等于
+这条路把「某个 current 超长章需要语义整章改写」先冻结成一份 canonical、
+hash-bound 请求，再由 ``stage5.write`` 付费执行。request 本身不等于
 执行状态：正文被 HARD 拦成 ``.INVALID`` 或被 regression 拒绝时 canonical 旧章不变，
 仍须靠 append-only execution journal 证明这份请求已经消费，禁止下一 parent 再买席。
+
+⚠ 批次 B3（2026-09-15 全自动裁决）：trim 三选一人工面退役。request 的唯一
+物化方是 `stage5.review` producer 的机械判定（`record_mechanical_rewrite_request`，
+actor=`system:stage5-auto`，权威绑定决定所消费的 fresh Review 原字节，business
+沿用 `stage5-top-review-business-v3` 稳定身份）；外部 trusted-JSON 人工提交口
+（``--request-reviewer-rewrite``）删除，存量 request 仍按原形状只读解码。
 """
 from __future__ import annotations
 
 import hashlib
-import json
 from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
 
-from pydantic import ValidationError
-
 from contracts.artifacts import STAGE5_REVIEWER_REWRITE_REQUEST, artifact_rel
-from contracts.schema.api import Stage5ReviewerRewriteRequest
+from contracts.invariants import STOP_REWRITE_AFTER
 from contracts.schema.common import RoundLlmProvenance
 from contracts.schema.evaluation import TrimAudit
 from contracts.schema.stage5 import (
@@ -46,34 +49,6 @@ def _file_sha256(path: Path, *, label: str) -> str:
         return hashlib.sha256(path.read_bytes()).hexdigest()
     except OSError as exc:
         raise ArtifactUnreadable(f'{label} {path} 不可读：{exc}') from exc
-
-
-def _load_trusted_input(path: Path) -> ReviewerRewriteBatchTrustedInput:
-    """外部临时输入也拒绝 duplicate keys/NaN，不让 JSON parser 静默覆盖身份。"""
-    def reject_constant(value: str) -> None:
-        raise ValueError(f'JSON 不接受 {value}')
-
-    def reject_duplicate(pairs: list[tuple[str, object]]) -> dict[str, object]:
-        out: dict[str, object] = {}
-        for key, value in pairs:
-            if key in out:
-                raise ValueError(f'JSON object 含重复键 {key!r}')
-            out[key] = value
-        return out
-
-    try:
-        payload = json.loads(
-            path.read_text(encoding='utf-8'),
-            parse_constant=reject_constant,
-            object_pairs_hook=reject_duplicate,
-        )
-        return ReviewerRewriteBatchTrustedInput.model_validate(payload)
-    except FileNotFoundError:
-        raise ProvenanceRefused(f'reviewer rewrite trusted input 不存在：{path}') from None
-    except (OSError, UnicodeError, ValueError, json.JSONDecodeError,
-            ValidationError) as exc:
-        raise ArtifactUnreadable(
-            f'reviewer rewrite trusted input 不符合 typed 契约：{exc}') from exc
 
 
 def load_reviewer_rewrite_batch(
@@ -873,9 +848,11 @@ def _unit_execution_state(
     """每章仍按独立九态证明执行；整批只聚合，不压平未知与部分成功。"""
     store = ArtifactStore(ctx)
     from novel.orchestrator import reviewer_action_evidence
-    if not reviewer_action_evidence.reviewer_rewrite_authority_sealed(
-            Path(ctx.novel_dir).parent, ctx.sid,
-            request.reviewer_action_record_sha256):
+    # 机械请求没有 Commander seal 文件；其权威直接复验 fresh Review 绑定。
+    if (not reviewer_action_evidence.is_mechanical_rewrite_request(request)
+            and not reviewer_action_evidence.reviewer_rewrite_authority_sealed(
+                Path(ctx.novel_dir).parent, ctx.sid,
+                request.reviewer_action_record_sha256)):
         return ReviewerRewriteExecutionState(
             request_rel=request_rel,
             request_file_sha256=request_file_sha256,
@@ -1231,14 +1208,18 @@ def _current_batch_from_input(
 
 
 def _record_trusted_request(
-        ctx: RunContext, trusted: ReviewerRewriteBatchTrustedInput,
+        ctx: RunContext, trusted: ReviewerRewriteBatchTrustedInput, *,
+        mechanical: bool,
 ) -> ReviewerRewriteBatchRequest:
+    """canonical request 的唯一写入舞步；权威面由调用方按 mechanical 选择。"""
     if ctx.paid:
         raise ProvenanceRefused('formal reviewer rewrite request 必须由 free node 物化')
-    from novel.orchestrator import reviewer_action_evidence
-    reviewer_action_evidence.require_reviewer_rewrite_authority(
-        Path(ctx.novel_dir).parent, ctx.sid, trusted,
-        current_parent_run_id=ctx.parent_run_id)
+    if not mechanical:
+        # 人工 trusted-JSON 提交面已随批次 B3 退役；这里保留关闭式拒绝，
+        # 不让旧调用方借内部写入舞步绕过机械判定。
+        raise ProvenanceRefused(
+            'reviewer rewrite request 的唯一物化方是 stage5.review 机械判定；'
+            '人工提交面已退役')
     store = ArtifactStore(ctx)
     rel = STAGE5_REVIEWER_REWRITE_REQUEST
     existing = load_reviewer_rewrite_batch(ctx) if store.exists(rel) else None
@@ -1264,28 +1245,89 @@ def _record_trusted_request(
         return landed
 
 
-def record_reviewer_rewrite_request(
-        ctx: RunContext, input_path: Path,
-) -> ReviewerRewriteBatchRequest:
-    return _record_trusted_request(ctx, _load_trusted_input(Path(input_path)))
+def mechanical_trim_rewrite_reason(pack: Any) -> str:
+    """机械定向改写决定的可复算理由；引用超限事实与预算规则。"""
+    ordinals = [row.output_ordinal for row in pack.unresolved_trim_items]
+    return (
+        '机械 trim 处置（2026-09-15 全自动裁决）：fresh Review 判定第 '
+        f'{ordinals} 章仍超篇幅上限；改写轮次预算（STOP_REWRITE_AFTER='
+        f'{STOP_REWRITE_AFTER}）未耗尽，自动落预算内定向改写 request；'
+        '超限事实与处置结果照常随 Review/交付披露')
 
 
-def request_reviewer_rewrite(
-        ctx: RunContext, value: Stage5ReviewerRewriteRequest, *,
-        reviewer_action_record_sha256: str, business_sha256: str,
-        reviewer_contract_sha256: str, reviewer_session_run_id: str,
-        reviewer_seat_turn_id: str, provider_response_sha256: str,
+def _reviewer_contract_text() -> str:
+    """本批决定所绑 Reviewer 契约全文；与 `_require_current_…` 复验同源。"""
+    from novel.orchestrator import queue, reviewer_legacy
+    return reviewer_legacy.for_blocker(queue.WAITING_ON_STAGE5_CLOSURE)
+
+
+def _target_file_sha256(store: ArtifactStore, ordinal: int) -> str:
+    """目标章完整 JSON 文件 SHA；与 trusted 契约的 current 复验同一口径。"""
+    _chapter, file_sha256 = store.read_own_with_sha256(
+        Chapter, artifact_rel('stage5.chapter', nn=ordinal),
+        require_current=True)
+    return file_sha256
+
+
+def record_mechanical_rewrite_request(
+        ctx: RunContext, targets: 'dict[int, tuple[ReviewerRewriteDirective, ...]]',
+        *, reason: str,
 ) -> ReviewerRewriteBatchRequest:
-    typed = Stage5ReviewerRewriteRequest.model_validate(value)
-    trusted = ReviewerRewriteBatchTrustedInput(
-        **typed.model_dump(mode='json'),
-        reviewer_action_record_sha256=reviewer_action_record_sha256,
-        business_sha256=business_sha256,
-        reviewer_contract_sha256=reviewer_contract_sha256,
-        reviewer_session_run_id=reviewer_session_run_id,
-        reviewer_seat_turn_id=reviewer_seat_turn_id,
-        provider_response_sha256=provider_response_sha256)
-    return _record_trusted_request(ctx, trusted)
+    """trim 三选一退役后 typed request 的唯一物化入口（机械判定）。
+
+    形状与人审时代完全一致（ReviewerRewriteBatchRequest v2）；差异只在
+    authority：actor=`system:stage5-auto`，authority record / provider response
+    都绑定本批决定所消费的 fresh Review 原字节，不伪造任何 provider session
+    或成本账。`targets` 的逐字 evidence 由 `_current_request_from_input`
+    按 current frontier 逐一复验。
+    """
+    if ctx.node != 'stage5.review' or ctx.paid:
+        raise ProvenanceRefused(
+            'mechanical trim rewrite request 只能由 free stage5.review 物化')
+    from novel.orchestrator import reviewer_action_evidence
+    store = ArtifactStore(ctx)
+    pack = closure.closure_workpack(store)
+    if not pack.unresolved_trim_items:
+        raise ProvenanceRefused('current trim frontier 为空；无需机械改写 request')
+    missing = sorted(
+        {row.output_ordinal for row in pack.unresolved_trim_items}
+        - set(targets))
+    if missing:
+        raise ProvenanceRefused(
+            f'mechanical rewrite targets 必须覆盖完整 current trim frontier：缺 {missing}')
+    contract = hashlib.sha256(
+        _reviewer_contract_text().encode('utf-8')).hexdigest()
+    shared = {
+        'actor': reviewer_action_evidence.STAGE5_AUTO_ACTOR,
+        'reason': reason,
+        'review_sha256': pack.review_sha256,
+        'unresolved_trim_items': [
+            row.model_dump(by_alias=True, mode='json')
+            for row in pack.unresolved_trim_items],
+        'reviewer_action_record_sha256': pack.review_sha256,
+        'business_sha256': (
+            reviewer_action_evidence.top_review_business_sha256(
+                review_sha256=pack.review_sha256,
+                unresolved_trim_items=pack.unresolved_trim_items,
+                reviewer_contract_sha256=contract)),
+        'reviewer_contract_sha256': contract,
+        'reviewer_session_run_id': ctx.run_id,
+        'reviewer_seat_turn_id': f'{pack.review_rel}:mechanical',
+        'provider_response_sha256': pack.review_sha256,
+    }
+    trusted = ReviewerRewriteBatchTrustedInput.model_validate({
+        **shared,
+        'targets': [
+            {
+                'target_ordinal': ordinal,
+                'target_chapter_file_sha256': _target_file_sha256(
+                    store, ordinal),
+                'directives': [row.model_dump(by_alias=True, mode='json')
+                               for row in targets[ordinal]],
+            }
+            for ordinal in sorted(targets)],
+    })
+    return _record_trusted_request(ctx, trusted, mechanical=True)
 
 
 def retire_expired_reviewer_rewrite_request(
@@ -1350,9 +1392,9 @@ __all__ = [
     'current_reviewer_rewrite_request',
     'load_reviewer_rewrite_request',
     'matching_reviewer_rewrite_recovery_source',
-    'record_reviewer_rewrite_request',
     'retire_expired_reviewer_rewrite_request',
-    'request_reviewer_rewrite',
+    'record_mechanical_rewrite_request',
+    'mechanical_trim_rewrite_reason',
     'require_current_reviewer_rewrite_request',
     'reviewer_rewrite_execution_state',
 ]

@@ -12,7 +12,6 @@ from contracts.schema.api import (
     ApprovalDoc,
     StructureApprovalRequest,
     StructureApprovalView,
-    WritingApprovalRequest,
 )
 from novel.cli import main as cli
 from novel import exit_codes as X
@@ -81,75 +80,15 @@ def test_headless_generic_gate_never_exposes_s4():
         ])
 
 
-def test_approval_template_forwards_required_identity_and_prints_typed_json(
-        monkeypatch, capsys, tmp_path):
-    """Stage4 design/structure 模板退役后，template 只暴露 writing/stage5。"""
-    captured = {}
-
-    def template(base, sid, *, actor, reason):
-        captured.update(base=base, sid=sid, actor=actor, reason=reason)
-        return WritingApprovalRequest(
-            actor=actor,
-            reason=reason,
-            review_token=f's5wr1_{SUBJECT}',
-        )
-
-    monkeypatch.setattr(approvals, 'writing_template', template)
-    with pytest.raises(SystemExit):
-        cli._parser().parse_args([
-            'approval', 'template', 'structure', SID,
-            '--base', str(tmp_path), '--actor', 'commander',
-            '--reason', '待逐章核验',
-        ])
-    rc = cli.main([
-        'approval', 'template', 'writing', SID,
-        '--base', str(tmp_path), '--actor', 'commander', '--reason', '待整书授权',
-    ])
-
-    assert rc == X.OK
-    body = WritingApprovalRequest.model_validate_json(capsys.readouterr().out)
-    assert body.review_token == f's5wr1_{SUBJECT}'
-    assert captured['actor'] == 'commander' and captured['reason'] == '待整书授权'
-
-
-def test_approval_apply_reads_typed_writing_body_and_never_uses_legacy_branch(
-        monkeypatch, capsys, tmp_path):
-    request = WritingApprovalRequest(
-        actor='commander', reason='已核对完整 current subject',
-        review_token=f's5wr1_{SUBJECT}')
-    source = tmp_path / 'writing-approval.json'
-    source.write_text(request.model_dump_json(indent=2), encoding='utf-8')
-    captured = {}
-
-    def apply(base, sid, parsed):
-        captured.update(base=base, sid=sid, request=parsed)
-        return _doc()
-
-    monkeypatch.setattr(approvals, 'approve_writing', apply)
-    monkeypatch.setattr(
-        approvals, 'begin_writing',
-        lambda *_args: (_ for _ in ()).throw(
-            AssertionError('Commander CLI 不得调用匿名旧 UI 兼容缝')))
-
-    rc = cli.main([
-        'approval', 'apply', 'writing', SID,
-        '--base', str(tmp_path), '--input', str(source),
-    ])
-
-    assert rc == X.OK
-    assert json.loads(capsys.readouterr().out)['sid'] == SID
-    assert captured['request'] == request
-
-
-def test_approval_apply_rejects_malformed_json_as_an_explicit_terminal_state(
-        capsys, tmp_path):
-    source = tmp_path / 'bad.json'
-    source.write_text('{"actor":"anonymous"}', encoding='utf-8')
-
-    rc = cli.main([
-        'approval', 'apply', 'writing', SID,
-        '--base', str(tmp_path), '--input', str(source),
-    ])
-
-    assert rc == X.TERMINAL_STATE
-    assert 'typed 契约' in capsys.readouterr().err
+def test_retired_writing_and_stage5_apply_surfaces_are_rejected():
+    """批次 B3：writing/stage5 模板与 apply 随写作授权/机械闭合退役。"""
+    for argv in (
+        ['approval', 'template', 'writing', SID, '--base', '.',
+         '--actor', 'commander', '--reason', 'x'],
+        ['approval', 'template', 'stage5', SID, '--base', '.',
+         '--actor', 'commander', '--reason', 'x'],
+        ['approval', 'apply', 'writing', SID, '--base', '.', '--input', 'x'],
+        ['approval', 'apply', 'stage5', SID, '--base', '.', '--input', 'x'],
+    ):
+        with pytest.raises(SystemExit):
+            cli._parser().parse_args(argv)

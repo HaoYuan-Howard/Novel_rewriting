@@ -152,8 +152,9 @@ def test_the_matrix_actually_has_rows():
     """参数化表算空时，下面几十条会**全绿**——而那正是最坏的情况。"""
     assert len(CASES) > 25, f'node × flag 只铺出 {len(CASES)} 行，节点表多半被清空了'
     # Stage3 已退役；人物独立抽取新增一个 Executor，不新增 Commander。
-    # stage6.semantic 判官节点退役（2026-09-15）后现役节点数是 19。
-    assert len(NODES) == 19, f'节点数变成 {len(NODES)} 了——是有意加的就来改这个数'
+    # stage6.semantic 判官（A1）与 stage0.approve/edit（B1）、stage6.semantic
+    # 语义节点（批次 0 前置）相继退役后现役节点数是 17。
+    assert len(NODES) == 17, f'节点数变成 {len(NODES)} 了——是有意加的就来改这个数'
 
 
 # ───────────────────────── 贵贱（R-11.7 · Q-10） ─────────────────────────
@@ -262,9 +263,7 @@ def test_node_specific_write_effects_keep_all_three_identity_behaviors_distinct(
             '按原完成组补 stage6/hook.json、原 run 采纳审计及工作单元提交状态（0 模型）',
         ('stage7.rename', '--recover-prepared'):
             '按原完成组补 name_map.json、原 run 采纳及工作单元提交状态（0 模型）',
-        # Stage2 语义审阅退役：两个 stage2 节点的 `--close-review` 特例随审阅席位一并删除。
-        ('stage4.design', '--close-review'): '_service/approvals/<sid>.json（完整继承当前 A 策略与逐章有效决定，不新增语义接受）',
-        ('stage4.plan', '--close-review'): '_service/approvals/<sid>.json（完整继承当前 B 逐章有效决定并闭合结构闸）',
+        # Stage2/Stage4 的 `--close-review` 特例已随批次 B1/B2 审阅/闸退役一并删除。
         ('stage4.plan', '--identity'): '',
         ('stage6.hook', '--identity'): '',
         ('stage7.rename', '--identity'): 'stage7/name_map.json',
@@ -529,10 +528,11 @@ def test_executor_runtime_registries_close_over_the_same_nodes():
     expected = set(AGENT_EXECUTOR_NODES)
     # stage6.semantic 判官退役（2026-09-15）后现役 executor 面是 10 个节点。
     assert len(expected) == len(N.EXECUTOR_PROFILED_RUNS) == 10
-    # 16 = 现役登记的付费组合总数；stage2 三节点的 `--review-token` 组合
+    # 15 = 现役登记的付费组合总数；stage2 三节点的 `--review-token` 组合
     # 已随语义审阅退役移除（2026-09）；stage6.semantic 的默认组合已随判官
-    # 节点退役移除（2026-09-15），不再留豁免。
-    assert sum(len(rows) for rows in N.EXECUTOR_PROFILED_RUNS.values()) == 16
+    # 节点退役移除（2026-09-15），stage4 的 `--close-review` 组合已随批次
+    # B2 四道闸退役移除，不再留豁免。
+    assert sum(len(rows) for rows in N.EXECUTOR_PROFILED_RUNS.values()) == 15
     assert set(EXECUTOR_FACTORIES) == set(N.EXECUTOR_PROFILED_RUNS) == expected
 
 
@@ -613,26 +613,8 @@ def test_stage5_rebuild_draft_is_retired():
 
 @pytest.mark.parametrize(('node', 'flags'), [
     ('stage5.review', ['--check-only', '--wontfix', 'book|draft_missing=人工接受']),
-    ('stage5.review', [
-        '--check-only', '--retain-pretrim', '--chapters', '3',
-        '--actor', '复核员', '--reason', '保留原稿',
-    ]),
-    ('stage5.review', [
-        '--wontfix', 'book|draft_missing=人工接受', '--retain-pretrim',
-        '--chapters', '3', '--actor', '复核员', '--reason', '保留原稿',
-    ]),
-    ('stage5.review', [
-        '--check-only', '--retain-pretrim-batch', 'manifest.json',
-    ]),
-    ('stage5.review', [
-        '--wontfix', 'book|draft_missing=人工接受',
-        '--retain-pretrim-batch', 'manifest.json',
-    ]),
-    ('stage5.review', [
-        '--retain-pretrim', '--chapters', '3', '--actor', '复核员',
-        '--reason', '保留原稿',
-        '--retain-pretrim-batch', 'manifest.json',
-    ]),
+    # （--retain-pretrim(-batch) 各互斥行已随批次 B3 trim 三选一退役删除——
+    #   flag 不再属于任何节点，validate_run 直接拒收。）
     ('stage5.write', ['--recheck', '--revise']),
     ('stage5.write', [
         '--revalidate', '--actor', '复核员', '--reason', '按当前闸门重判',
@@ -645,19 +627,15 @@ def test_stage5_primary_operations_are_mutually_exclusive(node, flags):
         N.build_argv(node, SID, flags, base=BASE)
 
 
-def test_stage5_trim_batch_is_free_writing_and_has_no_executor_profile() -> None:
-    flags = ['--retain-pretrim-batch', 'manifest.json']
-    argv = N.build_argv('stage5.review', SID, flags, base=BASE)
-
-    assert '--retain-pretrim-batch' in argv
-    assert N.is_paid('stage5.review', flags) is False
-    assert N.would_write('stage5.review', flags) is True
-    assert N.write_effect('stage5.review', flags) == \
-        WRITE_EFFECTS['--retain-pretrim-batch']
-    with pytest.raises(UnsupportedRunMode, match='executor agent|profile'):
-        N.build_steps(
-            'stage5.review', SID, flags, base=BASE,
-            executor_profile=EXECUTOR_PROFILE)
+def test_retired_trim_faces_are_not_registered_anywhere() -> None:
+    """批次 B3：trim 三选一 flag 已全部退役，节点表/写效果表/付费表均不再登记。"""
+    for flag in ('--retain-pretrim', '--retain-pretrim-batch',
+                 '--request-reviewer-rewrite'):
+        assert all(flag not in spec.flags for spec in NODES.values())
+        assert flag not in N.WRITE_EFFECTS
+        assert flag not in N.VALUED_FLAGS
+        with pytest.raises(UnsupportedRunMode, match='不接受'):
+            N.build_argv('stage5.review', SID, [flag, 'x'], base=BASE)
 
 
 def test_stage5_reviewer_rewrite_routes_are_closed_paid_and_free_actions() -> None:
@@ -716,31 +694,27 @@ def test_a_node_refuses_to_build_a_command_that_is_missing_a_required_flag():
     `preview` 照着摊开，而 skill 的工作流契约明写「逐字执行 preview 的全部步骤」。
     ⇒ 拒收挪到 `validate_run`（展示与执行共用的那一处）。
     """
+    # stage0.approve 已随批次 B1 退役；同一「缺必填当场拒」改用现役
+    # stage7.approve（--actor/--reason/--review-token 无条件必填）钉住。
     with pytest.raises(UnsupportedRunMode, match='缺必填'):
-        N.build_argv('stage0.approve', SID, base=BASE)
+        N.build_argv('stage7.approve', SID, base=BASE)
     with pytest.raises(UnsupportedRunMode, match='缺必填'):
-        N.build_argv('stage0.approve', SID, ['--actor', '我'], base=BASE)
-    argv = N.build_argv('stage0.approve', SID,
-                        ['--expected-revision-id', 'a' * 64,
+        N.build_argv('stage7.approve', SID, ['--actor', '我'], base=BASE)
+    argv = N.build_argv('stage7.approve', SID,
+                        ['--review-token', 's7ar1_' + 'a' * 64,
                          '--actor', '我', '--reason', '零命中'], base=BASE)
-    assert argv[argv.index('--expected-revision-id') + 1] == 'a' * 64
+    assert argv[argv.index('--review-token') + 1] == 's7ar1_' + 'a' * 64
     assert argv[argv.index('--actor') + 1] == '我'
     assert argv[argv.index('--reason') + 1] == '零命中'
 
 
 def test_the_conditional_required_flags_only_fire_with_their_trigger():
     """跟着另一条跑法才必填的那些，不带触发 flag 时**不该**被要求。"""
-    assert N.build_argv('stage0.edit', SID,
-                        ['--apply-edit-plan', 'p.json'], base=BASE)
-    with pytest.raises(UnsupportedRunMode, match='缺必填'):
-        N.build_argv('stage0.edit', SID, ['--apply-edit', 'e.json'], base=BASE)
-    assert N.missing_required('stage5.review', ['--retain-pretrim']) == (
-        '--chapters', '--actor', '--reason')
-    assert N.missing_required(
-        'stage5.review',
-        ['--retain-pretrim', '--chapters', '3', '--actor', '复核员', '--reason', '保留原稿'],
-    ) == ()
+    # （stage0.edit 条件必填行已随批次 B1 退役；stage5.review
+    #   --retain-pretrim 行已随批次 B3 trim 三选一退役。）
     assert N.missing_required('stage5.review', ['--check-only']) == ()
+    assert N.missing_required('stage5.write', ['--recover-prepared']) == (
+        '--actor', '--reason', '--subject-sha256')
     revalidate_nodes = (
         'stage2.global', 'stage2.blueprint', 'stage4.plan',
         'stage5.write', 'stage6.hook', 'stage7.rename',
@@ -758,24 +732,17 @@ def test_preview_fills_required_flags_with_placeholders_that_never_run():
       · 只拒不填 ⇒ preview 直接抛异常，人连命令长什么样都看不到；
       · 只填不拒 ⇒ `待填·actor` 会被当自报身份写进人工凭据，那条账没人能反查。
     """
-    steps = N.build_steps('stage0.approve', SID, base=BASE, placeholders=True)
+    # stage0.approve 已随批次 B1 退役；同一占位符语义改用现役 stage7.approve。
+    steps = N.build_steps('stage7.approve', SID, base=BASE, placeholders=True)
     argv = steps[0].argv
-    assert argv[argv.index('--expected-revision-id') + 1] == \
-        '待填·expected-revision-id'
+    assert argv[argv.index('--review-token') + 1] == '待填·review-token'
     assert argv[argv.index('--actor') + 1] == '待填·actor'
     assert argv[argv.index('--reason') + 1] == '待填·reason'
     assert '占位符' in (steps[0].note or '')
     with pytest.raises(UnsupportedRunMode, match='占位符'):
-        N.build_argv('stage0.approve', SID,
-                     ['--expected-revision-id', 'a' * 64,
+        N.build_argv('stage7.approve', SID,
+                     ['--review-token', 's7ar1_' + 'a' * 64,
                       '--actor', '待填·actor', '--reason', '真理由'], base=BASE)
-
-    retain = N.build_steps(
-        'stage5.review', SID, ['--retain-pretrim'],
-        base=BASE, placeholders=True, follow_check=False)[0]
-    assert retain.argv[retain.argv.index('--chapters') + 1] == '待填·chapters'
-    assert retain.argv[retain.argv.index('--actor') + 1] == '待填·actor'
-    assert retain.argv[retain.argv.index('--reason') + 1] == '待填·reason'
 
     revalidate = N.build_steps(
         'stage7.rename', SID, ['--revalidate'],

@@ -98,6 +98,12 @@ WAITING_ON_STAGE4_REPLAN = WAITING_ON_STAGE4_BINDING_RESOLUTION
 # （`stage4.design --recover-repair-aggregate`）。
 WAITING_ON_STAGE4_DESIGN_REPAIR_COMMIT = \
     'recovery:stage4-design-repair-aggregate-commit'
+# ⚠⚠ Stage5 两道人工闸已随批次 B3 退役（2026-09-15 全自动裁决）：
+#   `approval:stage5-writing`（写作授权）并入 run 启动授权（上传即授权本书
+#   全部付费节点），队列不再为 stage5.write 索取任何授权 blocker；
+#   `approval:stage5-closure`（闭合回执）由 Review 机械判定自动闭合
+#   （producer 以 `system:stage5-auto` 落账）。常量仅为历史账只读解码保留，
+#   见 `_blocked_why` 与 `reviewer_legacy` 的历史投影。
 WAITING_ON_WRITING_APPROVAL = 'approval:stage5-writing'
 WAITING_ON_REVIEW = 'stage5:review-currentness'
 WAITING_ON_STAGE5_CLOSURE = 'approval:stage5-closure'
@@ -482,6 +488,9 @@ def plan_book_from_overview(
     # 验收”。这格只记本次 plan 已经真正排入的 runnable writer；
     # blocked writer 仍由 ``stuck`` 传递，不伪装成会在本次改变主体。
     stage5_write_will_run = False
+    #: 批次 B3：机械闭合回执待落账时本 lane 已排入 0 成本 review 补算项；
+    #  stage6 在同一快照内必须等它完成后再重新规划。
+    closure_relearn_planned = False
     planned_nodes = nodes_up_to(until_stage)
     if 'stage2.analyze' in planned_nodes:
         from novel.stages.stage2 import analyze
@@ -492,6 +501,24 @@ def plan_book_from_overview(
         else:
             planned_nodes.remove('stage2.analyze')
     reviewer_rewrite_execution = None
+    closure_state = 'unreadable'
+    if 'stage5.review' in planned_nodes or any(
+            NODES[node].stage == 'stage6' for node in planned_nodes):
+        # Stage5 机械闭合视图一次读取（批次 B3）：review 节点的闭合补算与
+        # stage6 闸消费同一份结论，不在 lane 内各自重判。
+        if approval_doc is not None:
+            closure_view = approval_doc.closure
+        else:
+            try:
+                closure_view = approvals.stage5_closure_view(base, sid)
+            except (
+                ApprovalRequired, UpstreamMissing, ArtifactUnreadable,
+                GateBlocked, UpstreamStale, UpstreamUnproven,
+                BlockingFindingsUnresolved,
+            ):
+                closure_view = None
+        closure_state = (
+            'unreadable' if closure_view is None else closure_view.state)
     if 'stage5.write' in planned_nodes:
         # canonical request 是已完成 Commander 决定的唯一消费入口。它必须在
         # stage5.write 的普通 SKIP、旧 Review currentness 与写作授权之前读取；
@@ -711,24 +738,13 @@ def plan_book_from_overview(
                 why_blocked = WAITING_ON_INBOX
                 why = '统一机械准入未通过：' + '；'.join(gate.blocking)
         if why_blocked is None and spec.stage == 'stage6':
-            # Stage5 Review 通过仍不等于 Commander 已逐项闭合。只消费审批服务
-            # 的 current view；缺回执、旧主体、blocked workpack 与 read failure
-            # 全部关闭式停在 Stage6 之前。若本次 lane 还会写 Stage5，盘上旧 closed
-            # 也必然会被新主体作废，不能拿来提前放行同一批下游。
-            if approval_doc is not None:
-                closure_view = approval_doc.closure
-            else:
-                try:
-                    closure_view = approvals.stage5_closure_view(base, sid)
-                except (
-                    ApprovalRequired, UpstreamMissing, ArtifactUnreadable,
-                    GateBlocked, UpstreamStale, UpstreamUnproven,
-                    BlockingFindingsUnresolved,
-                ):
-                    closure_view = None
-            closure_state = (
-                'unreadable' if closure_view is None else closure_view.state)
-            if stage5_write_will_run or closure_state != 'closed':
+            # Stage5 机械闭合闸（批次 B3）：只消费审批服务按机械闭合回执折出的
+            # current view——回执由 `stage5.review` producer 自动落账，queue 不
+            # 制造第二个判定。ready/expired（工作包可闭合、只差落账）时上方
+            # stage5.review 已排入 0 成本机械闭合补算，本次 lane 先停 stage6；
+            # 其余状态先走各自恢复面（stuck 已在上游传播）。
+            if (stage5_write_will_run or closure_relearn_planned
+                    or closure_state not in ('closed', 'ready', 'expired')):
                 why_blocked = WAITING_ON_STAGE5_CLOSURE
         if why_blocked is None and spec.stage == 'stage6':
             if approval_doc is not None:
@@ -751,8 +767,14 @@ def plan_book_from_overview(
             node == 'stage5.review'
             and stage5_write_will_run
             and verdict == st.RESUME_SKIP)
+        closure_relearn_needed = (
+            node == 'stage5.review'
+            and not stage5_write_will_run
+            and verdict == st.RESUME_SKIP
+            and closure_state in ('ready', 'expired'))
         if (why_blocked is None and verdict == st.RESUME_SKIP
-                and not review_follows_planned_write):
+                and not review_follows_planned_write
+                and not closure_relearn_needed):
             continue                                 # 已存在即跳过
         if why_blocked is None and review_follows_planned_write:
             # 当前 Review 即使 fresh，前一项 writer 落盘后也必须按新主体
@@ -760,6 +782,13 @@ def plan_book_from_overview(
             # “停在那里”仍会让这一项 not_run。
             verdict = st.RESUME_RUN
             why = 'stage5.write 已排入本次队列；落盘后必须按新 canonical 主体零成本重算 Review'
+        if why_blocked is None and closure_relearn_needed:
+            # 机械闭合回执（批次 B3）由 review producer 自动落账；工作包已可
+            # 闭合而回执未落（ready/expired）时，唯一缺的就是一次 0 成本重算。
+            verdict = st.RESUME_RUN
+            closure_relearn_planned = True
+            why = ('Stage5 机械闭合待落账：零成本重算 Review，producer 以 '
+                   'system:stage5-auto 自动落机械闭合回执后再放行 Stage6')
 
         if why_blocked is None and verdict == st.RESUME_LEGACY:
             why_blocked = WAITING_ON_LEGACY
@@ -836,17 +865,13 @@ def plan_book_from_overview(
                 and stage5_state.review_state not in (None, 'missing', 'fresh'))
             review_blocks_paid_write = bool(
                 review_not_current and deterministic_redo_flags is None)
-            writing_not_current = not (
-                bool(approval_doc.writing and approval_doc.gate['s4'])
-                if approval_doc is not None
-                else approvals.writing_is_current(base, sid)
-            )
 
-            # 本层三个闸的顺序是恢复成本顺序：先处理 0 LLM INVALID；普通续写再
-            # 免费重跑旧 Review；最后才向人索取付费写作授权。若 operator 已证明
-            # 上游 consumed-change 并导出精确重写章，旧 Review 绑定的是旧正文，
-            # 不能反向卡住重建；新章落盘后下一轮自然会免费重算 Review。
-            # 其余上游 stuck / legacy / REDO / UNKNOWN 已在上面占住 blocker。
+            # 本层两道闸按恢复成本排序（批次 B3：独立写作授权已并入 run 启动
+            # 授权，队列不再索取）：先处理 0 LLM INVALID；普通续写再免费重跑
+            # 旧 Review。若 operator 已证明上游 consumed-change 并导出精确重写
+            # 章，旧 Review 绑定的是旧正文，不能反向卡住重建；新章落盘后下一
+            # 轮自然会免费重算 Review。其余上游 stuck / legacy / REDO / UNKNOWN
+            # 已在上面占住 blocker。
             if why_blocked is None and has_live_invalid:
                 # canonical 与更新的 INVALID 可并存；默认写作只补缺章，无法处理
                 # 这份候选，反而会以“没有要写的章”结束。actor/reason 又只能由
@@ -854,14 +879,8 @@ def plan_book_from_overview(
                 why_blocked = WAITING_ON_INBOX
             if why_blocked is None and review_blocks_paid_write:
                 why_blocked = WAITING_ON_REVIEW
-            if why_blocked is None and writing_not_current:
-                # Stage5 v2 只有一条全书 canonical 闭卷写作命令。授权是独立人工决定；
-                # 队列不从「默认全书」反推出同意花钱。
-                why_blocked = WAITING_ON_WRITING_APPROVAL
             if (stage5_reviewer_rewrite_flags is None
-                    and (has_live_invalid
-                         or review_blocks_paid_write
-                         or writing_not_current)):
+                    and (has_live_invalid or review_blocks_paid_write)):
                 steps = []
 
         if why_blocked in (
@@ -931,15 +950,12 @@ def _blocked_why(
             '上游或本层有被闸门拦下的稿要人处理（0 LLM 提升路是 '
             '`--revalidate --actor <id> --reason <why>`，同轮重判并留不可变审计）；'
             f'{verdict_why}')
-    if waiting_on == WAITING_ON_WRITING_APPROVAL:
-        return ('还没有当前 Stage5 全书闭卷写作授权；先在 Stage5 空状态明确授权，'
-                f'队列不会从默认路径反推同意花钱；{verdict_why}')
     if waiting_on == WAITING_ON_STAGE5_CLOSURE:
         return (
-            'Stage5 顶部闭合卡尚未 closed：Review/章稿漂移、工作包阻断或缺回执都会'
-            '停在这里。blocked 且只有 trim 时先通读整批正文与超限事实，再由 Commander '
-            '选择整批保留、冻结多章改写批请求或停止；未选章仍待处理。其他 blocker 先走各自恢复面。只有重新构造的 '
-            'closure workpack 已 ready/expired 时才提供 typed closure 回执；'
+            'Stage5 机械闭合未落账：闭合由 Review 机械判定自动完成（批次 B3，'
+            'producer 以 system:stage5-auto 落回执），没有人工回执路径。缺章/'
+            '.INVALID/阻断级判定先走各自恢复面；工作包可闭合（ready/expired）'
+            '时零成本重跑 `stage5.review` 即自动落账；'
             f'{verdict_why}')
     if waiting_on == WAITING_ON_STAGE5_REVIEWER_REWRITE:
         return (
@@ -1671,13 +1687,11 @@ def _run_lane(base: str | os.PathLike[str], queue_id: str, sid: str, *,
                     note=reason)
             try:
                 prepare = None
-                # Stage4 三相的人工审批授权已随四道闸退役（2026-09-15 全自动
-                # 裁决）；打开条件唯一化为统一机械准入，由 plan 与 producer
-                # 自身的关闭式校验把守。stage5 写作授权仍保留（B4 再收）。
-                if entry.item.node == 'stage5.write':
-                    chapters = chapters_from_flags(entry.item.flags)
-                    prepare = lambda chapters=chapters: approvals.authorize_writing(
-                        base, entry.item.sid, chapters)
+                # Stage4 三相与 Stage5 写作的人工审批授权均已随 2026-09-15
+                # 全自动裁决退役（批次 B2/B3）：付费打开条件唯一化为机械事实
+                # 与 run 启动授权（上传即授权本书全部付费节点），由 plan 与
+                # producer 自身的关闭式校验把守；executor 内的机械授权仍由
+                # `novel/api/routes/jobs.py` 的 prepare 面执行。
                 jobs.start(
                     base, entry.item.node, entry.item.sid, entry.item.flags,
                     steps=entry.item.steps,

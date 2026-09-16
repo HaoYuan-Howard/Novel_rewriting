@@ -41,6 +41,7 @@ from contracts.schema.stage5 import (
     JudgedDraft, Review, ReviewChapter, ReviewProvenance,
 )
 from novel import prov, wontfix
+from contracts.invariants import STOP_REWRITE_AFTER
 from novel.core.evidence import without_global_evidence
 from novel.core.measure import body_style_metrics, measure_body
 from novel.core.naming import project_character_names
@@ -885,7 +886,12 @@ def _report_of_review(ctx: RunContext, store: ArtifactStore, rev: Review,
 
 
 def run_review(ctx: RunContext) -> tuple[Review, CheckReport]:
-    """默认路：算一份新的验收报告并落盘。**0 成本，不调 LLM。**"""
+    """默认路：算一份新的验收报告并落盘。**0 成本，不调 LLM。**
+
+    ⚠ 批次 B3（2026-09-15 全自动裁决）：落盘后随即执行 trim 机械处置与
+    机械闭合（:func:`_auto_dispose_and_close`）——trim 三选一与闭合回执的
+    人工面已退役，本 producer 是它们唯一的现役落点。
+    """
     with stage5_runs.book_commit_ownership(ctx.novel_dir):
         store = ArtifactStore(ctx)
         legacy = M.legacy_stage5_paths(store)
@@ -898,7 +904,117 @@ def run_review(ctx: RunContext) -> tuple[Review, CheckReport]:
         rev = build_review(ctx, store, book)
         n = (review_seqs(store)[-1] + 1) if review_seqs(store) else 1
         store.write(REVIEW_TPL.format(n=n), rev)
+        _auto_dispose_and_close(ctx, store)
         return rev, _report_of_review(ctx, store, rev, book)
+
+
+#: 机械保留（预算耗尽后的披露交付）的统一理由模板。
+_AUTO_RETAIN_REASON = (
+    '机械 trim 处置（2026-09-15 全自动裁决）：第 {ordinal} 章第 {rounds} 次'
+    '落成超限稿，预算内定向改写预算（STOP_REWRITE_AFTER='
+    '{budget}）已耗尽；`paragraph_budget_missed` 为登记的可降级目标偏差'
+    '（契约 §七），按预定义规则保留 pretrim 原稿，超限事实随 Review 与'
+    '交付披露，不再等待人工三选一')
+
+#: 无诚实逐字锚点时的机械保留理由（不伪造改写指令，也不悬置闭合）。
+_AUTO_RETAIN_NO_ANCHOR_REASON = (
+    '机械 trim 处置（2026-09-15 全自动裁决）：第 {ordinal} 章改写预算未耗尽，'
+    '但给不出满足逐字锚点契约的压缩指令；按披露交付规则保留 pretrim 原稿，'
+    '不伪造语义指令')
+
+
+def _over_limit_rounds(store: ArtifactStore, ordinal: int) -> int:
+    """本章累计第几次落成超限稿 = 1 + 盘上归档的 trim audit 轮数。
+
+    trim 三选一退役后的**唯一预算信号**：每次改写重落正式稿时旧 audit 归档
+    （`_retire_trim_state`），新 audit 只在新稿仍超限时才存在。归档轮数因此
+    就是「已为超限花过的改写次数」，不需要也不伪造任何工作单元外读数。
+    """
+    from novel import paths
+    rel = artifact_rel('stage5.trim_audit', nn=ordinal)
+    archived = paths.archived_rounds(
+        store.path(paths.rounds_dir_of(rel)), paths.stem_of(rel))
+    return 1 + len(archived)
+
+
+def _mechanical_trim_directive(text: str):
+    """预定义锚点规则：全章最长段落的首个唯一完整句作为压缩指令的逐字证据。
+
+    指令的职责是**把决定绑定到 current 正文**（任何漂移即 request 过期），
+    不语义化正文；锚点必须全文恰命中一次，找不到合法锚点则放弃本章改写。
+    """
+    import re
+    from contracts.schema.stage5 import ReviewerRewriteDirective
+    paragraphs = [p.strip() for p in text.split('\n') if p.strip()]
+    if not paragraphs:
+        return None
+    longest = max(paragraphs, key=len)
+    for sentence in re.split(r'(?<=[。！？!?])', longest):
+        candidate = sentence.strip()
+        if 8 <= len(candidate) <= 240 and text.count(candidate) == 1:
+            return ReviewerRewriteDirective(
+                code='compress_exposition', current_text_evidence=candidate)
+    return None
+
+
+def _auto_dispose_and_close(ctx: RunContext, store: ArtifactStore) -> None:
+    """trim 机械处置（预算内定向改写 / 预算耗尽披露交付）+ 机械闭合。
+
+    trim 三选一与闭合回执人工面已随批次 B3 退役，本函数是它们的现役落点：
+
+    · 预算内（`_over_limit_rounds` ≤ `STOP_REWRITE_AFTER`）的超限章由
+      producer 以 `system:stage5-auto` 落 typed 定向改写 request（形状与
+      人审时代一致，权威绑定本份 fresh Review 原字节），由既有
+      deterministic recovery 链付费执行；
+    · 预算耗尽或给不出诚实逐字锚点的超限章机械保留（hash-bound resolution）
+      并披露交付；
+    · trim 面处置干净且工作包无缺章/.INVALID/阻断级判定时，自动落机械
+      闭合回执打开 `gate.s5`。
+    """
+    from novel.stages.stage5 import closure, reviewer_rewrite, trim_resolution
+    from novel.orchestrator import approvals, reviewer_action_evidence
+    unresolved = trim_resolution.current_unresolved_audits(store)
+    if unresolved:
+        exhausted = sorted(
+            ordinal for ordinal in unresolved
+            if _over_limit_rounds(store, ordinal) > STOP_REWRITE_AFTER)
+        for ordinal in exhausted:
+            trim_resolution.retain_pretrim(
+                ctx, ordinal,
+                actor=reviewer_action_evidence.STAGE5_AUTO_ACTOR,
+                reason=_AUTO_RETAIN_REASON.format(
+                    ordinal=ordinal,
+                    rounds=_over_limit_rounds(store, ordinal),
+                    budget=STOP_REWRITE_AFTER))
+        remaining = sorted(set(unresolved) - set(exhausted))
+        execution = reviewer_rewrite.reviewer_rewrite_execution_state(ctx)
+        can_land = execution is None or execution.state == 'consumed_resolved'
+        if remaining and can_land:
+            targets: dict[int, tuple] = {}
+            from contracts.schema.stage5 import Chapter
+            for ordinal in remaining:
+                chapter, _raw = store.read_own(
+                    Chapter, artifact_rel('stage5.chapter', nn=ordinal),
+                    require_current=True)
+                directive = _mechanical_trim_directive(chapter.text)
+                if directive is not None:
+                    targets[ordinal] = (directive,)
+            # 找不到诚实逐字锚点的章不能伪造指令，也不允许无限期悬置：
+            # 按同一披露交付规则机械保留。
+            for ordinal in sorted(set(remaining) - set(targets)):
+                trim_resolution.retain_pretrim(
+                    ctx, ordinal,
+                    actor=reviewer_action_evidence.STAGE5_AUTO_ACTOR,
+                    reason=_AUTO_RETAIN_NO_ANCHOR_REASON.format(ordinal=ordinal))
+            if targets:
+                pack = closure.closure_workpack(store)
+                reviewer_rewrite.record_mechanical_rewrite_request(
+                    ctx, targets,
+                    reason=reviewer_rewrite.mechanical_trim_rewrite_reason(pack))
+    # 机械闭合：trim 面已处置干净（无待改写 frontier）且工作包无阻断项。
+    pack = closure.closure_workpack(store)
+    if not pack.unresolved_trim_items and not pack.blockers():
+        approvals.record_stage5_auto_closure(ctx.novel_dir.parent, ctx.sid)
 
 
 def run_check_only(ctx: RunContext) -> CheckReport:

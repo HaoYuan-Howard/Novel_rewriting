@@ -438,9 +438,7 @@ def produce_through_first_chapter(tmp_path, monkeypatch, *, distributed=False, g
         assert 'source_materials' not in material and 'required_facts' not in material
         assert writer_book.source_text[entry['output_ordinal']] not in material
         assert all(material.count(beat['content']) == 1 for beat in entry['beats'])
-    writing = approvals.writing_template(book.parent, ctx.sid, actor='test:写作授权者',
-                                         reason='授权当前合成全书逐章写作')
-    approvals.approve_writing(book.parent, ctx.sid, writing)
+    # 批次 B3：写作授权并入 run 启动授权；贯通夹具不再签任何写作票。
     from novel.stages.stage5 import write
     from contracts.schema.stage5 import Chapter
     # 实际章级 producer 与 canonical 读回；不把合成响应当作模型质量验收。

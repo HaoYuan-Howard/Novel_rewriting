@@ -385,11 +385,10 @@ def test_the_published_surface_is_exactly_the_current_surface(app):
         # 2026-09-15 全自动裁决整体退役；打开条件唯一化为统一机械准入。
         '/api/novels/{sid}/approvals/gate/{key}': ['POST'],
         '/api/novels/{sid}/approvals/reset': ['POST'],
-        '/api/novels/{sid}/approvals/stage5': ['POST'],
-        '/api/novels/{sid}/approvals/stage5/template': ['GET'],
+        # Stage5 写作授权/闭合回执的 template/apply 面已随批次 B3（2026-09-15
+        # 全自动裁决）退役；闭合由 stage5.review producer 机械落账。
         '/api/novels/{sid}/approvals/stage6/workpack': ['GET'],
         '/api/novels/{sid}/approvals/stage7/workpack': ['GET'],
-        '/api/novels/{sid}/approvals/writing': ['POST'],
         '/api/novels/{sid}/check/{kind}': ['GET'],
         '/api/novels/{sid}/inbox': ['GET'],
         '/api/novels/{sid}/operator-next': ['GET'],
@@ -415,8 +414,7 @@ def test_the_published_surface_is_exactly_the_current_surface(app):
         '/api/novels/{sid}/stage2/global/edit/preview': ['POST'],
         '/api/novels/{sid}/stage2/global/edit/template': ['GET'],
         '/api/novels/{sid}/stage4/{ordinal}': ['GET'],
-        '/api/novels/{sid}/stage5/trim/retain-pretrim-batch': ['POST'],
-        '/api/novels/{sid}/stage5/trim/{ordinal}/retain-pretrim': ['POST'],
+        # （stage5 trim retain-pretrim 两端点已随批次 B3 trim 三选一退役。）
         '/api/novels/{sid}/stage5/{ordinal}': ['GET'],
         '/api/novels/{sid}/stage6': ['GET'],
         '/api/novels/{sid}/stage6/approve': ['POST'],

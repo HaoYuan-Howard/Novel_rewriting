@@ -338,31 +338,10 @@ def save_stage5_trim_batch(
     sid: str,
     request: 'BatchTrimResolutionRequest',
 ) -> Path:
-    """Persist a one-shot Stage5 batch trim manifest outside the artifact tree."""
-    try:
-        paths.check_sid(sid)
-    except PathRefused as exc:
-        raise SourcePathRejected(f'批量销账 manifest 的书 id 不合法：{exc}') from exc
-    root = service_dir(base) / EDITS_DIRNAME / sid
-    root.mkdir(parents=True, exist_ok=True)
-    target = root / f'stage5-trim-batch-{uuid.uuid4().hex}.json'
-    tmp = target.with_suffix('.tmp')
-    try:
-        payload = request.model_dump(mode='json', by_alias=True)
-        tmp.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + NL,
-            encoding='utf-8')
-        os.replace(tmp, target)
-    except OSError as exc:
-        raise ArtifactUnreadable(f'写不了批量销账 manifest：{exc!r}') from exc
-    finally:
-        # 保存失败发生在 contextmanager yield 之前，不能指望调用方 finally
-        # 清理这份含人工逐章理由的临时文件。
-        try:
-            tmp.unlink(missing_ok=True)
-        except OSError:
-            pass
-    return target.resolve()
+    """已随批次 B3 trim 三选一退役；保留形状仅为历史导入兼容，不得新调用。"""
+    raise NotImplementedError(
+        'stage5 trim 批量销账人工提交面已退役（2026-09-15 全自动裁决）：'
+        '超限章由 stage5.review producer 机械处置')
 
 
 def load_reviewer_actions(

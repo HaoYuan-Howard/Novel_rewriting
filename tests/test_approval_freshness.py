@@ -225,9 +225,16 @@ def current_book(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path,
     return tmp_path, book
 
 
-def _approve_writing(base: Path) -> None:
-    """人工结构票退役后，写作授权只剩独立的 typing 授权与机械前置。"""
-    approvals.begin_writing(base, SID)
+def _approve_writing(base: Path, book: Path) -> None:
+    """批次 B3 后写作授权写面退役：直写一份带 writing proof 的 v9 存量账。
+
+    消费这些夹具的用例此后验证的是**存量书只读投影**——effective fold 对旧
+    proof 的机械复验仍在；现役已没有任何路径能产生新的写作授权。
+    """
+    record = approvals._read_raw(base, SID)
+    proof = approvals._proof_for_writing(book)
+    approvals._write(base, record.model_copy(update={
+        'writing': True, 'writing_proof': proof}))
 
 
 def _queue_stage5(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -242,8 +249,8 @@ def _queue_stage5(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_current_writing_proof_binds_stage1_plan_and_context_without_s3(
     current_book, monkeypatch,
 ):
-    base, _book = current_book
-    _approve_writing(base)
+    base, book = current_book
+    _approve_writing(base, book)
 
     raw = json.loads(approvals._path(base, SID).read_text(encoding='utf-8'))
     public = approvals.get(base, SID)
@@ -252,8 +259,11 @@ def test_current_writing_proof_binds_stage1_plan_and_context_without_s3(
     assert set(raw['writing_proof']['artifacts']) == {
         MAIN_REL, PLAN_REL, STAGE4_WRITER_CONTEXT}
     assert raw['writing_proof']['decision_sha256']
+    # 存量 writing 账只读保留：投影仍机械复验其 proof；has_record 只回答
+    # 「盘上有没有审批账」，不再推断任何当前授权。
     assert public.writing and approvals.has_record(base, SID)
 
+    # 批次 B3：队列不再消费写作授权——机械前置满足即普通付费 todo。
     _queue_stage5(monkeypatch)
     todo, blocked = Q.plan_book(base, SID, until_stage='stage5')
     assert blocked == [] and len(todo) == 1
@@ -264,20 +274,13 @@ def test_current_writing_proof_binds_stage1_plan_and_context_without_s3(
 def test_retired_v6_with_current_typed_histories_is_not_migrated(
     current_book,
 ):
-    """已有可对证的写作与结构历史，也不能跳过版本边界重新签入当前工作流。"""
-    base, _book = current_book
-    _approve_writing(base)
-    request = approvals.writing_template(
-        base,
-        SID,
-        actor='legacy-writer-reviewer',
-        reason='旧 v6 已核对写作主体',
-    )
-    approvals.approve_writing(base, SID, request)
+    """已有可对证的存量写作账，也不能跳过版本边界重新签入当前工作流。"""
+    base, book = current_book
+    _approve_writing(base, book)
 
     before = approvals._read_raw(base, SID)
-    # s4 结构票已退役；可对证的人工历史只剩写作授权决定。
-    assert before.writing_decision is not None
+    # 批次 B3 后写作授权写面退役；这里只验证存量 proof 账的版本边界。
+    assert before.writing and before.writing_proof is not None
     payload = before.model_dump(
         mode='json', exclude={'closure_history', 'closure_decision'})
     payload['v'] = 6
@@ -294,7 +297,7 @@ def test_retired_v6_with_current_typed_histories_is_not_migrated(
 @pytest.mark.parametrize('mutation', ['root', 'main', 'plan', 'blueprint', 'context', 'invalid'])
 def test_current_subject_changes_revoke_writing(current_book, monkeypatch, mutation):
     base, book = current_book
-    _approve_writing(base)
+    _approve_writing(base, book)
     original: bytes | None = None
 
     if mutation == 'root':
@@ -333,47 +336,47 @@ def test_current_subject_changes_revoke_writing(current_book, monkeypatch, mutat
         changed.write_bytes((book / PLAN_REL).read_bytes())
 
     assert not approvals.get(base, SID).writing
-    assert not approvals.has_record(base, SID)
     raw = approvals._read_raw(base, SID)
     assert raw.writing and raw.writing_proof is not None
     assert not raw.gate['s4'], 's4 人工闸退役后不再有可写面'
 
+    # 批次 B3：队列不消费写作授权——存量账是否“当前”只影响只读投影。
     _queue_stage5(monkeypatch)
     todo, blocked = Q.plan_book(base, SID, until_stage='stage5')
-    assert todo == [] and len(blocked) == 1
-    assert blocked[0].waiting_on == Q.WAITING_ON_WRITING_APPROVAL
-    assert blocked[0].steps == []
+    assert blocked == [] and len(todo) == 1
+    assert todo[0].node == 'stage5.write' and todo[0].flags == []
 
     if original is None:
         changed.unlink()
     else:
         changed.write_bytes(original)
     assert approvals.get(base, SID).writing
-    assert approvals.has_record(base, SID)
 
 
-def test_writing_opened_mechanically_still_queues_only_after_approval(
+def test_queue_plans_stage5_write_regardless_of_legacy_writing_record(
     current_book, monkeypatch,
 ):
-    """s4 结构票退役后：机械前置满足即开写作授权；队列仍等显式授权。
+    """批次 B3：写作授权并入 run 启动授权；队列不再读任何写作授权票。
 
-    人工闸退役不改变「队列不会从默认路径反推同意花钱」：写作授权仍是
-    独立 typed 决定（批次 B4 再收），只是本层不再要求结构票。
+    付费授权由 R-13.3 的整批 `--yes`/`confirmed` 面负责；存量 writing 账
+    有或没有，队列都按机械前置排出同一条 canonical 写作 todo。
     """
-    base, _book = current_book
-    approvals.begin_writing(base, SID)
-    assert approvals.get(base, SID).writing
-
+    base, book = current_book
     _queue_stage5(monkeypatch)
     todo, blocked = Q.plan_book(base, SID, until_stage='stage5')
-    # 机械前置满足且显式授权后，队列按普通付费 todo 排 stage5.write。
     assert blocked == [] and len(todo) == 1
     assert todo[0].node == 'stage5.write' and todo[0].flags == []
 
+    _approve_writing(base, book)
+    assert approvals.get(base, SID).writing
+    todo, blocked = Q.plan_book(base, SID, until_stage='stage5')
+    assert blocked == [] and len(todo) == 1
+    assert todo[0].model_dump() == todo[0].model_dump()
+
 
 def test_measurement_contract_change_revokes_writing(current_book, monkeypatch):
-    base, _book = current_book
-    _approve_writing(base)
+    base, book = current_book
+    _approve_writing(base, book)
     original = approvals.STYLE_MEASUREMENT_CONTRACT
     monkeypatch.setattr(
         approvals, 'STYLE_MEASUREMENT_CONTRACT', 'stage3-measurable-v999')
@@ -390,7 +393,7 @@ def test_retired_stage3_bytes_do_not_participate_in_current_v5(current_book):
     legacy = book / 'stage3' / 'style_grounding.json'
     legacy.parent.mkdir()
     legacy.write_text('{"historical":true}', encoding='utf-8')
-    _approve_writing(base)
+    _approve_writing(base, book)
 
     legacy.write_text('{"historical":"changed"}', encoding='utf-8')
     assert approvals.get(base, SID).writing
@@ -408,12 +411,15 @@ def test_backfill_never_manufactures_typed_s4_and_invalid_revokes_explicit_decis
     assert first.backfilled == []
     assert not first.approvals.gate['s4']
 
-    _approve_writing(base)
+    _approve_writing(base, book)
     assert approvals.has_record(base, SID)
     (book / 'stage4' / 'plan_chapters.INVALID.json').write_bytes(
         (book / PLAN_REL).read_bytes())
 
-    assert not approvals.has_record(base, SID)
+    # 批次 B3：has_record 只回答「审批账是否存在」；INVALID 撤销的是
+    # effective 投影里的存量 writing，不再让“账是否存在”说谎。
+    assert approvals.has_record(base, SID)
+    assert not approvals.get(base, SID).writing
     second = approvals.backfill_from_disk(base, SID)
     assert second.backfilled == []
     assert not second.approvals.gate['s4']
@@ -423,7 +429,7 @@ def test_backfill_rejects_legacy_arm_layout_and_does_not_stamp_stage5(
     current_book, monkeypatch,
 ):
     base, book = current_book
-    _approve_writing(base)
+    _approve_writing(base, book)
     for mode in ('deep', 'shallow'):
         path = book / 'stage5' / mode / 'ch01.json'
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -439,7 +445,7 @@ def test_backfill_rejects_legacy_arm_layout_and_does_not_stamp_stage5(
 def test_v1_or_corrupt_service_record_never_authorizes_queue(
     current_book, monkeypatch,
 ):
-    base, _book = current_book
+    base, book = current_book
     path = approvals._path(base, SID)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({
@@ -449,7 +455,8 @@ def test_v1_or_corrupt_service_record_never_authorizes_queue(
         'deep': [1], 'writing': True, 'spawns': {},
     }), encoding='utf-8')
 
-    assert not approvals.has_record(base, SID)
+    # 批次 B3：has_record 只回答「审批账是否存在」；旧版本账存在但仍拒绝投影。
+    assert approvals.has_record(base, SID)
     with pytest.raises(approvals.HumanEditProtected, match='当前 v8'):
         approvals.get(base, SID)
     with pytest.raises(approvals.HumanEditProtected, match='均不迁移'):
@@ -458,19 +465,16 @@ def test_v1_or_corrupt_service_record_never_authorizes_queue(
     _queue_stage5(monkeypatch)
     original = path.read_bytes()
     todo, blocked = Q.plan_book(base, SID, until_stage='stage5')
-    # 损坏的 v1 记录不再被读成有效审批；队列不授权 stage5 写作，
-    # 而是停在现役的写作审批阻塞面（原「审批记录损坏」专用标签已随
-    # 旧读路退役，拒绝职责由 approvals 读面自身承担）。
-    assert todo == []
-    assert blocked[0].waiting_on == Q.WAITING_ON_WRITING_APPROVAL
-    assert blocked[0].steps == []
+    # 批次 B3：队列不读写作授权——损坏/旧版本审批账不再拦住机械前置
+    # 满足的付费 todo；审批账自身的损坏由 approvals 读面关闭式报错。
+    assert blocked == [] and len(todo) == 1
+    assert todo[0].node == 'stage5.write'
     assert path.read_bytes() == original
 
     path.write_text('{broken', encoding='utf-8')
-    assert not approvals.has_record(base, SID)
     todo, blocked = Q.plan_book(base, SID, until_stage='stage5')
-    assert todo == [] and blocked[0].waiting_on == Q.WAITING_ON_WRITING_APPROVAL
-    assert blocked[0].steps == [] and path.read_text(encoding='utf-8') == '{broken'
+    assert blocked == [] and len(todo) == 1
+    assert path.read_text(encoding='utf-8') == '{broken'
 
 
 def _write_legacy_v2(base: Path, *, deep: list[int]) -> None:
@@ -500,7 +504,7 @@ def _write_legacy_v2(base: Path, *, deep: list[int]) -> None:
 def test_retired_v2_keeps_old_stage3_and_writing_proofs_unmodified(
     current_book, deep,
 ):
-    base, _book = current_book
+    base, book = current_book
     _write_legacy_v2(base, deep=deep)
 
     path = approvals._path(base, SID)
@@ -508,4 +512,7 @@ def test_retired_v2_keeps_old_stage3_and_writing_proofs_unmodified(
     with pytest.raises(approvals.HumanEditProtected, match='均不迁移'):
         approvals.backfill_from_disk(base, SID)
     assert path.read_bytes() == before
-    assert not approvals.has_record(base, SID)
+    # 批次 B3：has_record 只回答「审批账是否存在」；旧版本账存在但仍拒绝投影。
+    assert approvals.has_record(base, SID)
+    with pytest.raises(approvals.HumanEditProtected, match='均不迁移'):
+        approvals.get(base, SID)

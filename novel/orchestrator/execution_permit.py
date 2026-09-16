@@ -163,13 +163,9 @@ RECOVERY_RUN_POLICIES: Final[tuple[RecoveryRunPolicy, ...]] = (
     RecoveryRunPolicy('stage5.review', _t(), _W5),
     RecoveryRunPolicy('stage5.review', _t('--check-only'), _W5),
     RecoveryRunPolicy('stage5.review', _t('--wontfix'), _W5),
-    RecoveryRunPolicy(
-        'stage5.review',
-        _t('--retain-pretrim', '--chapters', '--actor', '--reason'), _W5),
-    RecoveryRunPolicy('stage5.review', _t('--retain-pretrim-batch'), _W5),
-    RecoveryRunPolicy(
-        'stage5.review', _t('--request-reviewer-rewrite'),
-        frozenset({_STAGE5_CLOSURE})),
+    # ⚠ `--retain-pretrim(-batch)` / `--request-reviewer-rewrite` 恢复策略已随
+    #   批次 B3 trim 三选一退役删除；stage5.review 无参重算即机械闭合补算路，
+    #   它在 _STAGE5_CLOSURE blocker 下同样被本表放行（_W5 含闭合闸）。
     RecoveryRunPolicy(
         'stage5.write',
         _t('--recover-reviewer-rewrite-prepared',
@@ -276,8 +272,8 @@ EXTERNAL_INPUT_POLICIES: Final[
     ('stage4.plan', '--apply-binding'): 'book',
     ('stage5.write', '--preview-edit'): 'book_or_service_edit',
     ('stage5.write', '--apply-edit'): 'book_or_service_edit',
-    ('stage5.review', '--retain-pretrim-batch'): 'book_or_service_edit',
-    ('stage5.review', '--request-reviewer-rewrite'): 'book_or_service_edit',
+    # （stage5.review 的 trim manifest / reviewer-input 两条外部输入随批次 B3
+    #   trim 三选一退役删除。）
     ('stage5.write', '--reviewer-rewrite'): 'book',
     ('stage6.hook', '--apply-edit'): 'book',
     ('stage6.prepare', '--apply-edit'): 'book_or_service_edit',

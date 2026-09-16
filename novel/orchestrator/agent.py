@@ -691,6 +691,8 @@ def _reconcile_landed_stage5_reviewer_rewrite_action(
     归档而非删除，保证 queue/permit/paid/recovery 始终能重验 Commander 来源；
     active→archive 任一硬杀窗都可由下一 parent 幂等补完，scanner 不会把已被
     canonical request 精确引用的回答再次当作未执行 action。
+    ⚠ 批次 B3：机械 trim 改写 request（system:stage5-auto）的权威即其绑定的
+    fresh Review 原字节，没有也不需要 Commander authority seal——直接跳过。
     """
     from novel.stages.stage5 import reviewer_rewrite
 
@@ -700,6 +702,8 @@ def _reconcile_landed_stage5_reviewer_rewrite_action(
         return
     request, request_file_sha256 = (
         reviewer_rewrite.load_reviewer_rewrite_batch(ctx))
+    if reviewer_action_evidence.is_mechanical_rewrite_request(request):
+        return
     reviewer_action_evidence.seal_reviewer_rewrite_authority(
         base, sid, request, request_file_sha256,
         current_parent_run_id=current_parent_run_id or '')

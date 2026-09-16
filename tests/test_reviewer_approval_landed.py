@@ -12,7 +12,7 @@ from contracts.artifacts import STAGE4_WRITER_CONTEXT
 from novel.errors import HumanEditProtected
 from novel.orchestrator import approvals
 from tests.test_approval_freshness import (
-    SID, _approve_writing, current_book as writing_current_book,
+    SID, current_book as writing_current_book,
 )
 from tests.test_stage4_approval_landed import landed_source as stage4_source
 from tests.test_stage5_closure import (
@@ -174,10 +174,20 @@ def source(request, monkeypatch):
     surface = request.param
     if surface == 'writing':
         base, book = request.getfixturevalue('writing_current_book')
-        _approve_writing(base)
-        typed = approvals.writing_template(
-            base, SID, actor='fixture-commander', reason='已核对当前完整写作工作包')
-        approvals.approve_writing(base, SID, typed)
+        # 批次 B3：写作授权写面退役——存量账（含可对证的 history/proof）
+        # 按只读形状直写，供历史提交证明解码面继续消费。
+        subject, _proof = approvals._current_writing_subject(book)
+        typed = approvals.WritingApprovalRequest(
+            actor='fixture-commander', reason='已核对当前完整写作工作包',
+            review_token=f's5wr1_{subject}')
+        stored = approvals._StoredWritingDecision(
+            actor=typed.actor, reason=typed.reason, subject_sha256=subject,
+            decided_at='2026-09-01T00:00:00+00:00',
+            proof=approvals._proof_for_writing_decision(book, typed))
+        record = approvals._read_raw(base, SID).model_copy(update={
+            'writing': True, 'writing_proof': approvals._proof_for_writing(book),
+            'writing_history': [stored], 'writing_decision': stored})
+        approvals._write(base, record)
         sid = SID
         changed_path = book / STAGE4_WRITER_CONTEXT
     else:
@@ -187,7 +197,7 @@ def source(request, monkeypatch):
 
         _use_exact_closure_proof(monkeypatch)
         typed = _ruling_request(store)
-        approvals.approve_stage5_closure(base, sid, typed)
+        approvals._commit_stage5_closure(base, sid, typed)
         changed_path = store.path('stage5/ch01.json')
     return SimpleNamespace(base=base, sid=sid, book=book, surface=surface,
                            payload=typed.model_dump(mode='json'),
@@ -227,7 +237,7 @@ def test_closure_requires_every_original_ruling_and_ack(closure_rig, monkeypatch
     typed = _ruling_request(store)
     # 与上面的真实闭合 producer 一致，使用本次工作包实际读到的摘要。
     _use_exact_closure_proof(monkeypatch)
-    approvals.approve_stage5_closure(base, sid, typed)
+    approvals._commit_stage5_closure(base, sid, typed)
     for field in ('must_appear', 'group_acks'):
         assert typed.model_dump(mode='json')[field]
         payload = typed.model_dump(mode='json')

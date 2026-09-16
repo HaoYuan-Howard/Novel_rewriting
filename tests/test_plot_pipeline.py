@@ -73,9 +73,8 @@ def complete_stage5(book):
     rev, report = review.run_review(_ctx(book, 'stage5.review', paid=False))
     assert report.passed, report.model_dump_json()
     assert len(rev.chapters) == 3
-    from tests.test_stage5_closure import _ruling_request
-    closure = _ruling_request(ArtifactStore(_ctx(book, 'stage5.review', paid=False)))
-    assert approvals.approve_stage5_closure(book.parent, ctx.sid, closure).gate['s5']
+    # 批次 B3：闭合回执由 run_review 的机械闭合自动落账（system:stage5-auto）。
+    assert approvals.get(book.parent, ctx.sid).gate['s5'] is True
 
 
 def complete_stage6_prepare(book):

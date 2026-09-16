@@ -106,10 +106,12 @@ def _touch(box: sandbox.Sandbox, rel: str) -> None:
 
 
 def _approve_for_writing(box: sandbox.Sandbox) -> None:
-    # Stage2 已读/接受与 s2 gate 已随语义审阅退役；Stage4 结构票亦已随
-    # 2026-09-15 全自动裁决退役。写作前提只剩机械事实（fresh 计划与
-    # writer context），由 begin_writing 的前置校验承接。
-    approvals.begin_writing(box.root, box.sid)
+    """批次 B3 后写作授权写面退役：只复验机械前置（fresh 计划与 context）。
+
+    付费授权由 run 启动授权承接；`authorize_writing` 保留为 paid 作业前的
+    机械事实校验，不再读任何审批票。
+    """
+    approvals.authorize_writing(box.root, box.sid, None)
 
 
 def _approved_name_artifact():
@@ -491,12 +493,12 @@ def test_legacy_stage5_is_explicit_and_cannot_authorize_or_approve():
     box = _box()
     try:
         _approve_for_writing(box)
-        approvals.begin_writing(box.root, box.sid)
         _touch(box, 'stage5/deep/ch01.json')
         assert state.stage5_legacy_paths(box.dir) == ['stage5/deep']
         with pytest.raises(HumanEditProtected, match='legacy_incompatible'):
             approvals.authorize_writing(box.root, box.sid, None)
-        with pytest.raises(HumanEditProtected, match='legacy_incompatible'):
+        # 批次 B3：s5 人工盖章面退役，只接受机械闭合。
+        with pytest.raises(ApprovalRequired, match='人工盖章'):
             approvals.approve_gate(box.root, box.sid, 's5')
     finally:
         box.close()
@@ -508,9 +510,9 @@ def test_legacy_stage5_is_explicit_and_cannot_authorize_or_approve():
     'stage5/trim_audit_ch01.json',
     'stage5/trim_resolution_ch01.json',
 ])
-def test_begin_and_authorize_reject_every_legacy_stage5_subject_before_bool_gates(
+def test_authorize_rejects_every_legacy_stage5_subject_before_planned_reads(
         tmp_path, monkeypatch, legacy_rel):
-    """旧目录、Review v1、trim v1 共用 review_status，且拒绝前不改审批账。"""
+    """旧目录、Review v1、trim v1 共用 review_status，且拒绝前不读计划/审批账。"""
     from novel.work_units import initialize_workflow
     initialize_workflow(tmp_path)
     book = tmp_path / '书名_123'
@@ -531,8 +533,8 @@ def test_begin_and_authorize_reject_every_legacy_stage5_subject_before_bool_gate
         approvals, '_planned',
         lambda *_args: pytest.fail('legacy 必须在计划与 bool gate 之前终止'))
 
-    with pytest.raises(HumanEditProtected, match='legacy_incompatible'):
-        approvals.begin_writing(tmp_path, '123')
+    # 批次 B3：begin_writing 已随写作授权写面退役；机械前置复验仍在
+    # authorize_writing 内先于计划读取执行。
     with pytest.raises(HumanEditProtected, match='legacy_incompatible'):
         approvals.authorize_writing(tmp_path, '123', None)
 
@@ -587,14 +589,9 @@ def test_stage5_job_api_rejects_retired_mode_and_accepts_canonical_scopes(monkey
                 'flags': ['--deep', '1,2,3', '--shallow-rest'],
             })
             assert retired_flags.status_code == 400
-            assert not approvals.get(box.root, box.sid).writing
 
-            unauthorized = client.post('/api/jobs', headers=headers, json={
-                'sid': box.sid, 'node': 'stage5.write', 'flags': [],
-            })
-            assert unauthorized.status_code == 409
-            approvals.begin_writing(box.root, box.sid)
-
+            # 批次 B3：写作授权并入 run 启动授权——机械前置满足即 202，
+            # 不再有「未授权」409 或 begin_writing 签票步骤。
             whole = client.post('/api/jobs', headers=headers, json={
                 'sid': box.sid, 'node': 'stage5.write', 'flags': [],
             })

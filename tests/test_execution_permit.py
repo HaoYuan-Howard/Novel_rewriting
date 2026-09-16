@@ -349,8 +349,7 @@ def test_policy_tables_are_closed_and_paid_rows_are_exactly_profiled():
         ('stage4.plan', '--apply-binding'),
         ('stage5.write', '--preview-edit'),
         ('stage5.write', '--apply-edit'),
-        ('stage5.review', '--retain-pretrim-batch'),
-        ('stage5.review', '--request-reviewer-rewrite'),
+        # （stage5.review 的 trim manifest 外部输入已随批次 B3 退役。）
         ('stage5.write', '--reviewer-rewrite'),
         ('stage6.hook', '--apply-edit'),
         ('stage6.prepare', '--apply-edit'),
@@ -545,28 +544,23 @@ def test_claim_side_revalidation_rejects_active_surface_drift(
         P.revalidate_active_execution_surface(minted)
 
 
-def test_stage5_trim_batch_manifest_is_bound_only_in_book_or_service_edit(
+def test_retired_stage5_trim_manifest_recovery_combos_are_rejected(
         monkeypatch, tmp_path):
+    """批次 B3：trim 三选一恢复面退役，flag 组合不再有任何 policy。"""
     _stable(monkeypatch)
     novel_dir = tmp_path / f'平台_测试书_{SID}'
     novel_dir.mkdir()
     current = _next(
         tmp_path, state='blocked', node='stage6.hook',
         waiting_on=Q.WAITING_ON_STAGE5_CLOSURE)
-    outside = tmp_path / 'foreign-trim-batch.json'
-    outside.write_bytes(b'{}\n')
-    with pytest.raises(UnsupportedRunMode, match='当前书'):
-        P.permit_from_next(
-            current, 'stage5.review',
-            ['--retain-pretrim-batch', str(outside)])
-
-    service = tmp_path / '_service' / 'edits' / SID / 'trim-batch.json'
-    service.parent.mkdir(parents=True)
-    service.write_bytes(b'{"items":[]}\n')
-    got = P.permit_from_next(
-        current, 'stage5.review',
-        ['--retain-pretrim-batch', str(service)])
-    assert Path(got.external_inputs[0].resolved_path) == service.resolve()
+    for flags in (
+        ['--retain-pretrim-batch', 'batch.json'],
+        ['--retain-pretrim', '--chapters', '2', '--actor', 'a', '--reason', 'r'],
+        ['--request-reviewer-rewrite', 'reviewer-input.json'],
+    ):
+        # validate_run 先按 NODES flag 表拒收（trim 三选一 flag 已退役）。
+        with pytest.raises(UnsupportedRunMode, match='不接受'):
+            P.permit_from_next(current, 'stage5.review', flags)
 
 
 def test_stage5_prepared_rewrite_permit_binds_target_wal_and_request_raw_bytes(

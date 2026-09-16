@@ -118,9 +118,6 @@ _WITHHELD: dict[str, str] = {
     'RETENTION_CANDIDATE_KINDS': (
         'retention preview 已随每条候选返回服务端判定出的 kind；它不是维护策略选项，'
         '浏览器不得据此重算是否应清理，另经 `/api/enums` 发布会制造第二个消费面'),
-    'STAGE6_JUDGE_ROLES': (
-        '判官已随 stage6.semantic 退役（2026-09-15）；登记保留只为说明'
-        '该枚举不再存在，避免有人以为这是漏发'),
     'OPERATOR_PHASES': (
         'operator telemetry 只由本地 skill/脚本写读，不是 HTTP/UI 取值面'),
     'OPERATOR_PHASE_EVENT_KINDS': '同上，append-only 事件种类不由前端构造',
@@ -444,7 +441,8 @@ def actions() -> list[dict[str, Any]]:
         '--reviewer-rewrite-recovery-journal-sha256',
         # Supervisor 的内部 hash-bound action 不能由普通作业表单发起；
         # HTTP job 入口也明确拒绝，不能把它们发布成不可执行的按钮。
-        '--request-reviewer-rewrite', '--reviewer-rewrite',
+        # （--request-reviewer-rewrite 已随批次 B3 trim 三选一退役删除。）
+        '--reviewer-rewrite',
         '--recover-reviewer-rewrite-prepared',
         '--retire-reviewer-rewrite-request',
     }

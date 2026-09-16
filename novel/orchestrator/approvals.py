@@ -60,10 +60,11 @@ from contracts.schema.api import (
     DesignStructureEvidence,
     Stage5ClosureDecision,
     Stage5ClosureRequest,
-    Stage5ClosureTemplate,
     Stage5ClosureView,
     Stage5FindingGroupAck,
+    Stage5FindingGroupRuling,
     Stage5MustAppearDecision,
+    Stage5MustAppearRulingInput,
     StructureChapterDecision,
     StructureApprovalDecision,
     StructureApprovalRequest,
@@ -699,24 +700,17 @@ def get(
                 operator_projection=operator_projection)
 
 
-def writing_is_current(base: str | os.PathLike[str], sid: str) -> bool:
-    """是否有一份绑定当前 Stage1 正文、Stage4 计划与测量契约的写作授权。"""
+def has_record(base: str | os.PathLike[str], sid: str) -> bool:
+    """是否有 durable 审批记录文件（含存量书历史账）。
+
+    独立 writing 授权已随批次 B3 退役；本谓词只剩「盘上有没有审批账」
+    这一个诚实读数，不再推断任何当前授权状态。
+    """
     with _LOCK:
         try:
-            if not _path(base, sid).is_file():
-                paths.resolve_novel_dir(base, sid)
-                return False
-            record = _read_current(base, sid)
-        except (NovelError, OSError, UnicodeDecodeError, ValidationError):
+            return _path(base, sid).is_file()
+        except (NovelError, OSError):
             return False
-        # gate.s4 已随 Stage4 人工闸退役（2026-09-15 全自动裁决）；写作授权的
-        # Stage4 前置是机械事实，由 effective 投影对写作 proof（含 fresh 计划
-        # 与 writer context 字节）的复验承接。
-        return bool(record.writing)
-
-
-def has_record(base: str | os.PathLike[str], sid: str) -> bool:
-    return writing_is_current(base, sid)
 
 
 _GATE_ARTIFACTS = {
@@ -2090,31 +2084,71 @@ def stage5_closure_view(base: str | os.PathLike[str], sid: str) -> Stage5Closure
         return _closure_view(novel_dir, record)
 
 
-def stage5_closure_template(
+# ⚠ `stage5_closure_template` / `approve_writing` / `begin_writing` /
+#    `writing_template` 已随批次 B3（2026-09-15 全自动裁决）退役删除：
+#    闭合由 `record_stage5_auto_closure` 机械落账，写作授权并入 run 启动
+#    授权；历史回执与授权只经 `_writing_view` / `_closure_view` 只读投影。
+
+
+#: Stage5 写作授权退役（2026-09-15 全自动裁决，批次 B3）后的机械自报身份。
+#: 写作授权并入 run 启动授权（上传即授权本书全部付费节点）；本身份只出现在
+#: 机械闭合与机械 trim 处置的 typed 账里，绝不伪造任何人的决定。
+STAGE5_AUTO_ACTOR = 'system:stage5-auto'
+
+
+def record_stage5_auto_closure(
     base: str | os.PathLike[str], sid: str,
-) -> Stage5ClosureTemplate:
-    """按当前盘面生成闭合工作包模板；只读、0 成本、不代签。"""
-    with _LOCK:
-        paths.resolve_novel_dir(base, sid)
-        _read_current(base, sid)
-        # gate.s4 已退役；闭合模板的 Stage4 前置改为机械事实：当前计划
-        # 与 fresh writer context 必须在盘（与 `_writing_prerequisites` 同一把尺子）。
-        planned = _planned(base, sid)
-        if planned is None:
-            raise UpstreamMissing(f'{STAGE4_PLAN_CHAPTERS} is required before stage5 closure')
-        if not planned:
-            raise ApprovalRequired('stage4 plan contains no output chapters')
-        _require_fresh_json(_store_for(paths.resolve_novel_dir(base, sid)),
-                            STAGE4_WRITER_CONTEXT)
-        novel_dir = paths.resolve_novel_dir(base, sid)
-        from novel.stages.stage5.closure import closure_template as _build
-        return _build(_store_for(novel_dir))
+) -> ApprovalDoc:
+    """批次 B3 机械闭合：fresh Review 工作包无阻断项时自动落 typed 回执。
+
+    落点选 **producer 内机械闭合**（`stage5.review` 落 fresh 报告后调用）：
+    单一落点、可随时幂等重放，queue/UI/gate 消费的仍是同一份 `gate.s5`
+    闭合凭证。actor 用 `system:stage5-auto` 自报身份；must_appear 缺项按
+    预定义规则落 `accepted_exception`（披露交付），fact/unver 整组按披露
+    确认——确认不改写任何机械结论，报告与盘面照常携带全部事实。
+    """
+    from novel.stages.stage5.closure import closure_workpack
+    novel_dir = paths.resolve_novel_dir(base, sid)
+    store = _store_for(novel_dir)
+    # 先做一次只读预检给出精确理由；真正的阻断复验与原子提交都发生在
+    # `_commit_stage5_closure` 的书锁 + 审批文件锁内（锁不可重入，这里不占）。
+    pack = closure_workpack(store)
+    if blockers := pack.blockers():
+        raise GateBlocked(
+            'Stage5 机械闭合被当前工作包阻断：' + '；'.join(blockers)
+            + '。缺章/.INVALID/阻断级判定先按各恢复面收口，再零成本重跑 '
+            'stage5.review',
+            invalid_path=str(store.path('stage5')))
+    request = Stage5ClosureRequest(
+        actor=STAGE5_AUTO_ACTOR,
+        reason=(
+            '机械闭合（2026-09-15 全自动裁决）：fresh Review 无缺章/'
+            '.INVALID/阻断级判定，trim 面已按 degradable 预定义规则处置'
+            f'（workpack {pack.workpack_sha256[:12]}）；可降级目标偏差与'
+            '语义盲区随交付披露'),
+        review_token=pack.review_token,
+        must_appear=[
+            Stage5MustAppearRulingInput(
+                chapter_ordinal=row.chapter_ordinal,
+                evidence_key=row.evidence_key,
+                ruling='accepted_exception',
+                reason='机械闭合披露：缺项按 Q-13 随交付披露，不再逐项人工裁决',
+            )
+            for row in sorted(
+                pack.must_appear,
+                key=lambda row: (row.chapter_ordinal, row.evidence_key))],
+        group_acks=[
+            Stage5FindingGroupRuling(group=group.group, acknowledged=True)
+            for group in (pack.fact_group, pack.unver_group)
+            if group is not None],
+    )
+    return _commit_stage5_closure(base, sid, request)
 
 
-def approve_stage5_closure(
+def _commit_stage5_closure(
     base: str | os.PathLike[str], sid: str, request: Stage5ClosureRequest,
 ) -> ApprovalDoc:
-    """原子提交 Stage5 闭合回执；通过即打开 ``gate.s5``，不启动任何付费作业。"""
+    """闭合回执的唯一原子提交；人工写面已退役，现役调用方只有机械闭合。"""
     from novel.stages.stage5.closure import (
         closure_workpack, materialize_closure_request,
         validate_closure_request,
@@ -2414,15 +2448,12 @@ def _effective_record(novel_dir: Path, record: _ApprovalRecordV8) -> _ApprovalRe
     })
     for gate in _POST_WRITING_GATES:
         # s6/s7 的正式事实在 Hook/NameMap 的 typed 决定中。HTTP 旧附加章只是
-        # 检查单，不能让同一票因来自 CLI/Agent 而变成未审；s5 仍必须有原回执。
+        # 检查单，不能让同一票因来自 CLI/Agent 而变成未审；s5 由机械闭合回执
+        # 打开（批次 B3），不再依赖任何写作授权。
         final_gate = gate in ('s6', 's7')
         if not final_gate and not gates[gate]:
             continue
         if any(not gates[key] for key in _GATE_REQUIREMENTS.get(gate, ())):
-            gates[gate] = False
-            gate_proofs[gate] = None
-            continue
-        if gate == 's5' and not writing:
             gates[gate] = False
             gate_proofs[gate] = None
             continue
@@ -2969,9 +3000,12 @@ def approve_gate(base: str | os.PathLike[str], sid: str, gate: str) -> ApprovalD
             'gate.s4 已退役：Stage4 的唯一打开条件是统一机械准入'
             '（novel/orchestrator/mechanical_admission.py），不再接受任何审批写面')
     if gate == 's5':
+        # 人工回执写面已随批次 B3 退役（2026-09-15 全自动裁决）；s5 唯一的
+        # 打开方式是 `stage5.review` producer 的机械闭合（system:stage5-auto）。
         raise ApprovalRequired(
-            's5 不接受匿名通用盖章；请经 `approval template stage5` / API 生成闭合'
-            '工作包模板，由 Commander 逐项裁决后提交 typed 回执')
+            'gate.s5 不接受人工盖章：Stage5 闭合由 Review 机械判定自动落账'
+            '（approvals.record_stage5_auto_closure）；缺章/.INVALID/阻断级'
+            '判定先走各自恢复面，再零成本重跑 stage5.review')
     with approval_file_lock(base, sid):
         raw, record = _read_state(base, sid)
         if missing := [
@@ -3085,7 +3119,7 @@ def _has_stage5_work(novel_dir: Path) -> bool:
 def _writing_prerequisites(
     base: str | os.PathLike[str], sid: str, record: _ApprovalRecordV8,
 ) -> tuple[Path, str, _ApprovalProof]:
-    """写作 template/apply 共用的 current subject 判据；不写盘、不启动作业。"""
+    """写作授权主体的 current 判据；人工写面已退役，仅剩历史 proof 复验消费。"""
     novel_dir = paths.resolve_novel_dir(base, sid)
     _require_stage5_contract_compatible(novel_dir, action='授权新作业')
     # stage4 人工结构票已退役（2026-09-15 全自动裁决）：写作前置只认机械事实——
@@ -3101,94 +3135,6 @@ def _writing_prerequisites(
     return novel_dir, subject, proof
 
 
-def writing_template(
-    base: str | os.PathLike[str], sid: str, *, actor: str, reason: str,
-) -> WritingApprovalRequest:
-    """生成绑定当前 Stage1/Stage4/契约的 typed 写作授权模板；全程只读。"""
-    with _LOCK:
-        record = _read_current(base, sid)
-        _novel_dir, subject, _proof = _writing_prerequisites(base, sid, record)
-        return WritingApprovalRequest(
-            actor=actor, reason=reason, review_token=f's5wr1_{subject}')
-
-
-def approve_writing(
-    base: str | os.PathLike[str], sid: str, request: WritingApprovalRequest,
-) -> ApprovalDoc:
-    """保存 Stage5 typed 写作授权；不启动模型、作业或任何 continuation。"""
-    with approval_file_lock(base, sid):
-        raw, record = _read_state(base, sid)
-        novel_dir, current_subject, current_proof = _writing_prerequisites(
-            base, sid, record)
-        if request.review_token != f's5wr1_{current_subject}':
-            raise HumanEditProtected(
-                'Stage5 写作审批 opaque review_token 与当前 immutable workpack '
-                '不符；请刷新模板后重审')
-        decision_proof = _proof_for_writing_decision(novel_dir, request)
-
-        # template 与 apply 之间允许停很久，但 apply 自己的多次读取也不能把两个
-        # 时刻的字节拼成一张立即过期的授权。第二次完整计算与第一次必须一致。
-        after_subject, after_proof = _current_writing_subject(novel_dir)
-        after_decision_proof = _proof_for_writing_decision(novel_dir, request)
-        if (
-            after_subject != current_subject
-            or after_proof != current_proof
-            or after_decision_proof != decision_proof
-        ):
-            raise HumanEditProtected('Stage5 写作主体在授权提交期间发生变化；请刷新模板后重审')
-
-        latest = raw.writing_decision
-        if (
-            latest is not None
-            and _writing_decision_payload(
-                _public_writing_decision(latest)) == _writing_decision_payload(request)
-            and _same_proof(latest.proof, decision_proof)
-        ):
-            if record.writing and _same_proof(record.writing_proof, current_proof):
-                return _view(base, record)
-            return _write(base, raw.model_copy(update={
-                'writing': True,
-                'writing_proof': current_proof,
-            }))
-
-        public = WritingApprovalDecision(
-            actor=request.actor,
-            reason=request.reason,
-            review_token=request.review_token,
-            decided_at=_now(),
-        )
-        stored = _StoredWritingDecision(
-            actor=request.actor, reason=request.reason,
-            subject_sha256=current_subject, decided_at=public.decided_at,
-            proof=decision_proof)
-        return _write(base, raw.model_copy(update={
-            'writing': True,
-            'writing_proof': current_proof,
-            'writing_history': [*raw.writing_history, stored],
-            'writing_decision': stored,
-        }))
-
-
-def begin_writing(
-    base: str | os.PathLike[str], sid: str,
-) -> ApprovalDoc:
-    """旧 UI 的空-body 兼容缝；Commander/CLI 不得调用这一匿名入口。
-
-    它保留既有业务语义与旧 v5 盘面，不伪造 actor/reason，也不把匿名旧决定
-    塞进 typed history。正式 agent 路径只暴露 ``writing_template`` +
-    ``approve_writing``。
-    """
-    with approval_file_lock(base, sid):
-        raw, record = _read_state(base, sid)
-        _novel_dir, _subject, proof = _writing_prerequisites(base, sid, record)
-        if record.writing:
-            return _view(base, record)
-        return _write(base, raw.model_copy(update={
-            'writing': True,
-            'writing_proof': proof,
-        }))
-
-
 def authorize_writing(
     base: str | os.PathLike[str],
     sid: str,
@@ -3197,18 +3143,17 @@ def authorize_writing(
     requires_fresh_review: bool = False,
     reviewer_rewrite_request_rel: str | None = None,
 ) -> None:
-    """启动付费 Stage5 作业前的只读授权校验；不替人自动签字。"""
+    """启动付费 Stage5 作业前的机械授权校验；不再替人签字，也不再读任何审批票。
+
+    独立 writing 授权已随批次 B3（2026-09-15 全自动裁决）并入 run 启动授权
+    （上传即授权本书全部付费节点）。这里保留的是**机械事实**部分：writer
+    context 必须由当前正式计划免费重建且字节未漂移，章集必须在计划内，
+    revise 必须有 fresh Review，reviewer rewrite 只能整批精确授权。
+    """
     with _LOCK:
-        record = _read_current(base, sid)
         novel_dir = paths.resolve_novel_dir(base, sid)
         store, current_review = _require_stage5_contract_compatible(
             novel_dir, action='触发新付费作业')
-        # ``_read_current`` 已把旧 subject / 旧计划 / 旧代码下的 proof
-        # 折成无效态；这里仍将两张独立通行证逐张点名。
-        # stage4 结构票已退役（2026-09-15 全自动裁决）：Stage4 前置改为机械
-        # 事实——writer context 必须由当前正式计划免费重建且字节未漂移。
-        if not record.writing or record.writing_proof is None:
-            raise ApprovalRequired('authorize current Stage5 whole-book writing first')
         _require_fresh_json(_store_for(novel_dir), STAGE4_WRITER_CONTEXT)
         planned = _planned(base, sid)
         if planned is None:
@@ -3247,20 +3192,16 @@ def authorize_prepared_recovery(
 ) -> None:
     """授权 Stage5 initial-write prepared 的 0-wire 尾窗恢复。
 
-    它复用 ``_read_current`` 对 s4 与 writing proof 的即时投影，因此 Stage1、
-    Plan、Context、measurement 或写作契约任一漂移都会关闭式失败。与新付费写作
-    唯一不同的是不要求既有 Stage5 Review fresh：canonical 尾窗未收口时，旧 Review
-    正常就会 stale，反向拿它堵恢复会让已经付费的 checkpoint 永久悬空。
+    独立 writing 授权已随批次 B3 退役；机械事实即前置——writer context
+    必须由当前正式计划免费重建且字节未漂移，章集必须在计划内。与新付费
+    写作唯一不同的是不要求既有 Stage5 Review fresh：canonical 尾窗未收口
+    时，旧 Review 正常就会 stale，反向拿它堵恢复会让已经付费的 checkpoint
+    永久悬空。
     """
     with _LOCK:
-        record = _read_current(base, sid)
         novel_dir = paths.resolve_novel_dir(base, sid)
         _require_stage5_contract_compatible(
             novel_dir, action='收口 prepared checkpoint')
-        # stage4 结构票已退役；机械事实（fresh writer context）即前置。
-        if not record.writing or record.writing_proof is None:
-            raise ApprovalRequired(
-                'prepared recovery 仍需当前 Stage5 whole-book writing 授权')
         _require_fresh_json(_store_for(novel_dir), STAGE4_WRITER_CONTEXT)
         planned = _planned(base, sid)
         if planned is None:

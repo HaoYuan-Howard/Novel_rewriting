@@ -1,20 +1,17 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-closure.py —— Stage5 的唯一、强制、hash-bound Commander 闭合回执（P0-2）。
+closure.py —— Stage5 的唯一、强制、hash-bound 机械闭合凭证（P0-2；B3 全自动化）。
 
 背景：Stage5 的验收面是分散的——Review 的 HARD/INFO、逐章 TrimAudit 的销账、
-``must_appear_missing`` 的证据、UNVER 的盲区披露散在报告、inbox 与审批三个地方，
-而 ``gate.s5`` 走的是一条「只查 writing 授权 + 有没有产物」的匿名通用盖章路。
-实测代价：5 条 actionable ``must_appear_missing`` 可以完全不进入任何审核面，
-Commander 面对的是十几处分散操作。
-
+``must_appear_missing`` 的证据、UNVER 的盲区披露散在报告、inbox 与审批三个地方。
 本模块把「Stage5 做完了吗」收成一份**确定性可重算**的只读工作包
-（:class:`Stage5ClosureWorkpack`）+ 一份**逐项裁决、原子提交**的 typed 回执：
+（:class:`Stage5ClosureWorkpack`）+ 一份 typed 回执：
 
-    模板（服务端按当前盘面生成，只读、0 成本）
-      → Commander 逐项裁决（must_appear 两种终态；fact/UNVER 整组确认）
-      → ``approve_stage5_closure``（服务端按**当前** workpack 复核后原子落盘）
+    fresh Review（0 成本 stage5.review）
+      → producer 按当前盘面重算 workpack，无缺章/.INVALID/阻断级判定即
+        以 `system:stage5-auto` 身份自动落机械闭合回执（批次 B3，
+        2026-09-15 全自动裁决；人工三选一与闭合模板面退役）
       → ``gate.s5`` 打开；Stage6/7 的所有真实执行入口消费同一份回执。
 
 四条硬约束：
@@ -24,11 +21,11 @@ Commander 面对的是十几处分散操作。
    生成失败，绝不静默遗漏。
 2. **hash-bound**。回执绑定 workpack SHA、Review/wontfix 完整文件 SHA、全部
    current trim audit/resolution SHA、每条 must_appear finding SHA 与当章
-   canonical 正文 SHA。任何一处漂移 ⇒ 过期，只能重新生成模板重新裁决；
-   旧批准永不静默继承。
-3. **「需要修改」不是终态**。它只跳转到逐章改稿；改完重算 Review 后再裁决。
+   canonical 正文 SHA。任何一处漂移 ⇒ 过期；重跑一次 0 成本 review 即重算。
+3. **「需要修改」不是终态**。它只跳转到逐章改稿；改完重算 Review 后再闭合。
 4. **确认不改写结论**。整组确认不会把 UNVER 变成 PASS，也不会删任何条目；
-   wontfix 豁免照旧只降 ``actionable``。
+   must_appear 缺项按预定义规则落 `accepted_exception` 披露交付，
+   超限（trim）按 `paragraph_budget_missed` 的 degradable 规则披露交付。
 """
 from __future__ import annotations
 
@@ -38,7 +35,6 @@ from typing import Any
 from contracts.rules import REGISTRY
 from contracts.schema.api import (
     Stage5ChapterSubject, Stage5ClosureMaterialized, Stage5ClosureRequest,
-    Stage5ClosureTemplate,
     Stage5ClosureView, Stage5ClosureWorkpack, Stage5FindingGroup,
     Stage5MustAppearRow, Stage5TrimSubject, Stage5TrimWorkItem,
 )
@@ -51,7 +47,7 @@ from novel.store import ArtifactStore
 #: 防止判定读泄漏成 provenance 输入。
 __all__ = [
     'closure_workpack', 'closure_view', 'require_stage5_closed',
-    'closure_template', 'validate_closure_request',
+    'validate_closure_request',
     'materialize_closure_request',
     'review_file_sha256', 'finding_sha256',
 ]
@@ -386,42 +382,10 @@ def closure_workpack(
 
 # ── 模板与提交复核 ───────────────────────────────────────────────────────────
 
-def closure_template(store: ArtifactStore) -> Stage5ClosureTemplate:
-    """把当前工作包铸成关闭式模板：每条待裁决都带 placeholder 与一次性 token。"""
-    pack = closure_workpack(store)
-    token_source = pack.workpack_sha256
-    rows = [
-        {
-            'chapter_ordinal': row.chapter_ordinal,
-            'evidence_key': row.evidence_key,
-            'finding_sha256': row.finding_sha256,
-            'chapter_sha256': row.chapter_sha256,
-            'ruling': 'confirmed_present',
-            'reason': '',
-            'placeholder': True,
-            'template_token': f'{token_source[:8]}-{row.finding_sha256[:8]}',
-        }
-        for row in pack.must_appear
-    ]
-    acks = [
-        {
-            'group': group.group,
-            'findings_sha256': group.findings_sha256,
-            'items': group.items,
-            'placeholder': True,
-            'template_token': f'{token_source[:8]}-{group.group}',
-        }
-        for group in (pack.fact_group, pack.unver_group) if group is not None
-    ]
-    return Stage5ClosureTemplate(
-        actor='(填写执行人)',
-        reason='(填写整书闭合理由)',
-        workpack_sha256=pack.workpack_sha256,
-        review_sha256=pack.review_sha256,
-        review_token=pack.review_token,
-        must_appear=rows,
-        group_acks=acks,
-    )
+# ⚠ `closure_template`（Commander 闭合模板面）已随批次 B3 退役删除；
+#    `validate_closure_request` / `materialize_closure_request` 保留为机械
+#    闭合提交（`approvals.record_stage5_auto_closure` → `_commit_stage5_closure`）
+#    的唯一复核/物化路径。
 
 
 def _require_submittable(
@@ -431,8 +395,8 @@ def _require_submittable(
     if blockers:
         raise GateBlocked(
             'Stage5 闭合回执当前不可提交：' + '；'.join(blockers)
-            + '。纯 trim 先销账并按同一份 fresh Review 重新生成模板；'
-            '正文/HARD 修复才须零成本重跑 stage5.review 后再生成模板',
+            + '。缺章/.INVALID/HARD 先按各自恢复面收口；正文修复后须零成本'
+            '重跑 stage5.review 再落机械闭合',
             invalid_path=str(store.path('stage5')))
 
 
@@ -516,11 +480,12 @@ def require_stage5_closed(store: ArtifactStore) -> Stage5ClosureWorkpack:
     """Stage6 / Stage7 / assembly / UI / CLI 的统一闭合闸。
 
     在 :func:`review.require_accepted_review` 的全部产物级结论之上，再要求
-    ``gate.s5`` 由一份绑定**当前**盘面的 typed 回执打开。没有回执、回执过期
-    或 gate 未开，都是关闭式拒绝并给出 0 成本恢复命令。
+    ``gate.s5`` 由一份绑定**当前**盘面的机械闭合回执打开（批次 B3：Review
+    机械判定自动闭合，actor=`system:stage5-auto`）。没有回执、回执过期或
+    gate 未开，都是关闭式拒绝并给出 0 成本恢复命令。
     """
     status = review.require_accepted_review(store.ctx, store)
-    del status  # 产物级闸已通过；下面是服务级 typed 回执闸
+    del status  # 产物级闸已通过；下面是服务级机械闭合凭证闸
     from novel.orchestrator import approvals
     base = store.ctx.novel_dir.parent
     sid = store.ctx.sid
@@ -529,14 +494,15 @@ def require_stage5_closed(store: ArtifactStore) -> Stage5ClosureWorkpack:
         detail = {
             'missing': '还没有任何闭合回执',
             'review_required': '最终 Review 缺失、过期或无法证明 current',
-            'blocked': '工作包仍有阻断项',
-            'ready': '工作包可提交但 Commander 尚未提交回执',
-            'expired': '已有回执但盘面在提交后发生了变化',
+            'blocked': '工作包仍有缺章/.INVALID/阻断级判定',
+            'ready': '机械闭合条件已满足但回执尚未落账（重跑一次 stage5.review 即自动闭合）',
+            'expired': '已有回执但盘面在回执之后发生了变化',
         }[view.state]
         raise TerminalState(
             f'Stage5 尚未闭合（{detail}）。'
-            '请经 `approval template stage5` / API 生成模板，由 Commander 逐项裁决后提交；'
-            '该闸没有匿名或跳过路径')
+            '该闸已无人工路径：按恢复面收口缺章/.INVALID/阻断级判定后，'
+            '零成本重跑 `stage5.review`，由 producer 以 system:stage5-auto '
+            '身份自动落机械闭合回执')
     return closure_workpack(store)
 
 
@@ -561,7 +527,8 @@ def closure_view(
                 state='review_required',
                 next_step=(
                     'Stage5 已有章稿、处置状态或历史回执，但当前没有最终 Review。'
-                    '多次改稿完成后只需零成本运行一次 stage5.review，再生成闭合模板'),
+                    '多次改稿完成后只需零成本运行一次 stage5.review，'
+                    '机械闭合会自动落账'),
                 history=history,
             )
         return Stage5ClosureView(state='missing', history=history)
@@ -571,28 +538,21 @@ def closure_view(
             state='review_required',
             next_step=(
                 f'Stage5 Review 当前状态是 {status.state}：{reason}。'
-                '多次改稿完成后只需零成本运行一次 stage5.review，再生成闭合模板'),
+                '多次改稿完成后只需零成本运行一次 stage5.review，'
+                '机械闭合会自动落账'),
             history=list(record_history or []),
         )
     pack = closure_workpack(store)
     # blocker 是当前盘面事实，优先级高于任何历史/异常决定。即使旧盘坏记录或
-    # 人工篡改碰巧声称绑定同一 workpack，也不能把 INVALID/trim/HARD 画成 closed。
+    # 人工篡改碰巧声称绑定同一 workpack，也不能把缺章/.INVALID/HARD 画成 closed。
+    # ⚠ trim 不在 blocker 里（批次 B3）：超限按 degradable 预定义规则披露交付，
+    #   它的处置状态留在 workpack 的 trim 面上如实携带。
     if pack.blockers():
-        pure_trim = bool(
-            pack.unresolved_trim_items
-            and not pack.missing_chapters
-            and not pack.invalid_chapters
-            and not pack.hard_findings)
-        next_step = (
-            '通读全部待销账章的 current 正文与 TrimAudit，提交一份 hash-bound '
-            'retain-pretrim batch；销账后沿用同一份 fresh Review 重新生成 closure'
-            if pure_trim else
-            '先修复缺章、.INVALID 或 HARD 等正文阻断；正文主体改变后零成本重跑 '
-            'stage5.review，再生成 closure（并存 trim 留待新章/新 Review 后重算）'
-        )
         return Stage5ClosureView(
             state='blocked', workpack=pack,
-            next_step=next_step,
+            next_step=(
+                '先修复缺章、.INVALID 或 HARD 等正文阻断；正文主体改变后零成本'
+                '重跑 stage5.review，机械闭合随之自动重算'),
             history=list(record_history or []))
     if (record_current is not None
             and record_current_workpack_sha256 == pack.workpack_sha256):
@@ -605,4 +565,4 @@ def closure_view(
             history=list(record_history or []))
     return Stage5ClosureView(
         state='ready', workpack=pack,
-        next_step='生成模板并逐项裁决 must_appear / 整组确认后提交回执')
+        next_step='机械闭合条件已满足；零成本重跑 stage5.review 即自动落账')

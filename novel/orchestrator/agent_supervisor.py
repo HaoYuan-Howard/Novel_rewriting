@@ -27,6 +27,7 @@ from contracts.schema.api import OperatorNext, OperatorNode
 from contracts.schema.orchestration import (
     AgentDeliveryOutcome, AgentRunEvent, AgentRunExitOrigin, ExecutionEpoch,
 )
+from novel.orchestrator import queue
 from novel.orchestrator.jobs import JobConflict
 
 
@@ -171,14 +172,24 @@ FinalizeRun = Callable[
 
 
 def _human_gate_turn(waiting_on: str) -> ExecutionTurnResult:
+    if waiting_on == queue.WAITING_ON_STAGE5_CLOSURE:
+        # 批次 B3：Stage5 闭合已机械自动化。走到这里的唯一原因是工作包仍有
+        # 缺章/.INVALID/阻断级判定等正文阻断——它们有各自的恢复面，不是等人
+        # 过闸；给出精确指引而不是「人工审批闸」的旧话术。
+        reason = (
+            f'停在 Stage5 机械闭合闸：{waiting_on}；工作包仍有正文阻断'
+            '（缺章/.INVALID/阻断级判定），先按各恢复面收口并零成本重跑 '
+            'stage5.review，机械闭合回执会自动落账')
+    else:
+        reason = (
+            '停在人工审批闸：'
+            f'{waiting_on}；在 Stage 页面完成裁决后用原配置续跑')
     return ExecutionTurnResult(
         exit_code=2,
         continue_ready=False,
         outcome=AgentDeliveryOutcome(
             state='stopped', checked_at=int(time.time()),
-            reason=(
-                '停在人工审批闸：'
-                f'{waiting_on}；在 Stage 页面完成裁决后用原配置续跑')))
+            reason=reason))
 
 
 class RunSupervisor:

@@ -53,7 +53,7 @@ def test_stage4_closure_includes_downstream_but_not_upstream_or_retired_stage():
 def test_mixed_stage_module_keeps_pure_contract_out_of_stage_layer():
     catalog = S.load_catalog()
     assert S.case_layer('tests/test_stage01.py::test_stage01_packages_are_in_the_explicit_wheel_manifest', catalog)[0] == 'unit_contract'
-    assert S.case_layer('tests/test_stage01.py::test_disk_path_blocks_before_approval_then_writes_current_bytes[case]', catalog)[0] == 'stage'
+    assert S.case_layer('tests/test_stage01.py::test_r114_writes_all_artifacts_and_then_reports_failure', catalog)[0] == 'stage'
     assert S.case_layer('tests/test_stage7_subs.py::test_unlisted_new_case', catalog)[0] == 'unit_contract'
     assert S.case_layer('tests/test_stage5_generation.py::test_apply_edit_cannot_formalize_a_paragraph_budget_hard', catalog)[0] == 'unit_contract'
     assert catalog['modules']['tests/test_plot_edit_http.py']['stages'] == ['stage2']
@@ -142,7 +142,7 @@ def test_real_pytest_selects_only_stage_cases_and_reports_exact_collection(tmp_p
     assert isinstance(data['code_unchanged'], bool)
     assert all(row['layer'] == 'stage' and not row['corpus'] for row in data['items'])
     ids = [row['nodeid'] for row in data['items']]
-    assert any('test_disk_path_blocks_before_approval' in node for node in ids)
+    assert any('test_r114_writes_all_artifacts' in node for node in ids)
     assert not any('test_stage01_packages' in node or 'test_plot_pipeline' in node for node in ids)
 
 

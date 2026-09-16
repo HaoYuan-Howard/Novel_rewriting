@@ -97,10 +97,12 @@ landed_rejected / in_flight_or_unknown / recoverable_* / ready_paid` 都不能�
 
 ### Reviewer 改写授权与执行
 
-受托 Commander 审阅已退役（2026-09-15）：顶部卡的 rewrite/retain/stop 三出口现由人工在 Stage 页面
-提交同一 typed schema；本节描述的 rewrite 授权封存与执行链（`ReviewerRewriteBatchRequest`、authority
-receipt、`recovery:stage5-reviewer-rewrite` 恢复与逐章执行）原样保留，继续消费已封存的历史决定并约束
-新人工提交的 rewrite 请求的执行侧。
+受托 Commander 审阅与 trim 三选一人工提交均已退役（2026-09-15，批次 B3）：typed rewrite request
+的唯一物化方是 `stage5.review` producer 的机械判定（`record_mechanical_rewrite_request`，
+actor=`system:stage5-auto`），预算内自动落地、预算耗尽后机械保留并披露交付（`R-7.13`）。本节描述的
+rewrite 授权与执行链（`ReviewerRewriteBatchRequest`、authority 复验、`recovery:stage5-reviewer-rewrite`
+恢复与逐章执行）原样保留；机械请求没有 Commander seal 文件，其 authority 复验绑定决定所消费的
+fresh Review 原字节，历史人审请求的 sealed authority 仍按原状只读解码。
 
 `R-7.31` 的字段载体为 `contracts/schema/stage5.py::ReviewerRewriteBatchRequest`；
 关闭式 directive 只允许删除重复、压缩解释、修复措辞和顺接过渡，具体枚举由载体发布。
@@ -274,28 +276,29 @@ currentness 出口。状态取值：
 
 `require_fresh_review` 关闭式守住付费 `--revise` 与 wontfix；它只回答“这份结论是否当前”。
 `require_accepted_review` 在此之上拒绝活动 `.INVALID`、缺正式章和任何当前 HARD，是闭合回执
-可以提交的产物级前置。Stage6、Stage7 与最终交付还必须经过 `require_stage5_closed`，证明
-`gate.s5` 来自一份绑定当前 workpack 的 typed closure；accepted Review 不能替代人工回执。
+可以落账的产物级前置。Stage6、Stage7 与最终交付还必须经过 `require_stage5_closed`，证明
+`gate.s5` 来自一份绑定当前 workpack 的闭合回执；批次 B3 后回执由 `run_review` 末尾的机械闭合
+自动落账（actor=`system:stage5-auto`），accepted Review 配上无阻断工作包即自动闭合。
 旧报告不得驱动新付费动作。正文、HARD 或 canonical 章集合真的改变后，必须在全部改稿完成时
-零成本重跑一次最终 `stage5.review`，再重新生成闭合模板；`retain_pretrim` 只落 hash-bound
-人工处置、不改正文或 Review 主体，因此纯 trim 销账保留同一份 fresh Review，只重建当前 closure
-workpack/token，不能为“保险”再买一席或重跑 Review。旧 Review v1 仍含
+零成本重跑一次最终 `stage5.review`，机械闭合随之重算；`retain_pretrim` 只落 hash-bound
+处置、不改正文或 Review 主体，因此机械保留保留同一份 fresh Review，只重建当前 closure
+workpack/token。旧 Review v1 仍含
 `mode/mode_dir`；当前 v3 另删除来源状态、计数及章节展示副本，由 producer 免费重建，不做迁移。
 
 ## 四、审批与人工服务账：HTTP v8，盘上 v8
 
 ### 4.1 审批版本与职责
 
-`ApprovalDoc.v=8` 是 HTTP 公共视图版本，字段为 `sid`、完整 `gate`、完整 `seen`、
+`ApprovalDoc.v=9` 是 HTTP 公共视图版本（盘上记录同为 v=9），字段为 `sid`、完整 `gate`、
 `writing`、typed `design_review`、typed `structure`、typed `writing_approval`、typed `closure` 与
-`spawns`；它不再暴露 `deep`。前三份 typed 决定分别服务 Stage4A、最终结构和写作授权，不能
-互相推出；`closure` 服务 Stage5 成稿后的整书人工闭合。`gate.s4=true` 只可能来自当前结构主体的
-全章 `accept`，`gate.s5=true` 只可能来自当前 `closed` closure。匿名 `approve_gate('s5')`、
-`POST .../approvals/deep` 和 `DeepSelectionRequest` 都关闭式拒绝或已退役。
+`spawns`。Stage4 与 Stage5 的人工决定写面已随 2026-09-15 全自动裁决（批次 B2/B3）退役：
+`gate.s4` 键只为存量书读投影保留，写作授权并入 run 启动授权，`gate.s5=true` 只可能来自
+producer 机械落账的当前 `closed` closure（actor=`system:stage5-auto`），匿名 `approve_gate('s5')`
+关闭式拒绝。存量 typed 决定与 `writing/writing_proof` 账只读保留，不迁移。
 
 `<base>/_service/approvals/<sid>.json` 不是产物，现役内部记录是
-`_ApprovalRecordV8(v=8)`：无 s3 的完整 gate/seen，design/structure/writing 的 current typed 决定与
-history/proof，以及 `closure_decision/closure_history`。proof 绑定根 `clean_text` SHA-1、正式主体
+`_ApprovalRecordV8`（盘上 `v=9`）：无 s3 的完整 gate，design/structure/writing 的 current typed 决定与
+history/proof（批次 B2/B3 后只读保留），以及 `closure_decision/closure_history`。proof 绑定根 `clean_text` SHA-1、正式主体
 完整 SHA-256 与决定面规范 SHA-256；bool 必须与 proof/typed 决定逐格闭合。结构或写作主体变化会
 关闭依赖 gate；Review、章节、finding 或 trim 身份变化会使 closure 进入 `review_required/expired`，
 旧决定只留 history。
@@ -312,22 +315,19 @@ typed 决定。新 base 必须依次取得当前 A 审阅、B producer 的 curre
 workpack 是从 current 盘面确定性重算的只读工作面，不是又一份产物。它只接受 fresh Review；
 只有 Stage5 尚无任何工作或回执历史时才是 `missing`。Stage5 已有稿件/历史但 Review 缺失，
 或 Review 为 stale/unknown/legacy/unreadable 时，都是 `review_required`：不发布 current
-workpack/decision，但不擦除 history。fresh Review 下先看 blockers：任一存在即 `blocked`；
-无 blocker 且已有决定精确绑定同一 workpack SHA 时才是 `closed`，旧决定不再 current
-时只留 history 并投影为 `expired`，其余可提交面为 `ready`。
+workpack/decision，但不擦除 history。fresh Review 下先看 blockers（批次 B3 起只有缺章、
+活动 `.INVALID` 与当前 HARD；trim 不是 blocker，其处置状态留在 trim 披露面）：
+任一存在即 `blocked`；无 blocker 且已有决定精确绑定同一 workpack SHA 时才是 `closed`，
+旧决定不再 current 时只留 history 并投影为 `expired`，其余可落账面为 `ready`。
 
 构包前后重走唯一 Review freshness，并对 Review 字节、全部 canonical 章、活动
 `.INVALID`、trim/wontfix 处置面做完整双采样；两次不同就拒绝返回混合工作包，由读方重试。
 
-`approval:stage5-closure` 是一张状态感知的顶部卡，不是永远只收 closure 回执。fresh Review 下若
-唯一 blocker 是 `unresolved_trim_items[]`，同一卡的一席 Reviewer 只发布三类互斥出口：覆盖全部待销账
-章的 `stage5.review --retain-pretrim-batch @reviewer-input`、每章各一份但回答只能选择其中一份的
-`stage5.review --request-reviewer-rewrite @reviewer-input`、以及 typed stop；它不发布 closure approval，
-也不默认替人选 retain/rewrite。若缺章、活动 `.INVALID` 或 HARD 与 trim 并存，构包前
-直接 stopped/2 并指向各自正式恢复面，不为必然不可执行的批次开席。只有 `ready/expired` 才发布
-closure receipt。trim 两出口共用 `action_mode=trim_disposition` 和同一席位，closure receipt 独立使用
-`action_mode=closure_receipt`；旧 closure 席位/回答不得复用成 trim 决定，retain/rewrite 也不得按同一
-Review/frontier 拆成两席。
+批次 B3 后 `approval:stage5-closure` 不再是人工顶部卡：fresh Review 下 trim（`unresolved_trim_items[]`）
+不是 blocker，由 producer 按 `R-7.13` 机械处置（预算内自动落定向改写 request、预算耗尽后机械保留）；
+处置干净且工作包无缺章/`.INVALID`/HARD 时，`run_review` 末尾自动落机械闭合回执。trim 改写 request 与
+closure receipt 的稳定 business 分别使用 `action_mode=trim_disposition` / `closure_receipt`；旧人工席位
+与回执按历史只读解码，机械请求不产生 seat/cost 席位账。
 
 | 字段 | 类型 | 必填 | 取值面 / 语义 | 证据 |
 |---|---|---:|---|---|

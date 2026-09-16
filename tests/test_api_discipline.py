@@ -403,18 +403,14 @@ def test_job_conflict_maps_and_returns_409(monkeypatch):
         '/api/novels/{sid}/stage1/partition',
         '/api/novels/{sid}/approvals/gate/{key}',
         '/api/novels/{sid}/approvals/backfill',
-        '/api/novels/{sid}/approvals/design',
-        # Stage5 闭合回执提交：只写 _service 审批账，不启动任何付费作业。
-        '/api/novels/{sid}/approvals/stage5',
-        '/api/novels/{sid}/approvals/structure',
-        '/api/novels/{sid}/approvals/writing',
+        # Stage4 design/structure 与 Stage5 writing/stage5 闭合回执的人工
+        # 提交端点已随 2026-09-15 全自动裁决（批次 B2/B3）退役。
         '/api/novels/{sid}/approvals/reset',
         '/api/upload',
         # 第二阶段批 3 · 人工写回（行为在 `tests/test_api_edits.py`）
         '/api/novels/{sid}/review/{ordinal}/edit',
         '/api/novels/{sid}/review/{ordinal}/edit/preview',
-        '/api/novels/{sid}/stage5/trim/{ordinal}/retain-pretrim',
-        '/api/novels/{sid}/stage5/trim/retain-pretrim-batch',
+        # （stage5 trim retain-pretrim 两端点已随批次 B3 trim 三选一退役。）
         # Prepare 独立预检/编辑/接受；均为免费 POST，仍通过全局 CSRF。
         '/api/novels/{sid}/stage6/prepare/edit/preview',
         '/api/novels/{sid}/stage6/prepare/edit',

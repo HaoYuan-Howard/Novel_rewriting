@@ -103,8 +103,9 @@ def test_default_approval_value_is_not_mistaken_for_a_saved_human_choice(
     doc = approvals.get(tmp_path, '123')
     assert doc.v == 9 and not doc.writing
     assert 'deep' not in type(doc).model_fields, '公开账不得重新暴露已退役的双臂决定'
-    assert not approvals.has_record(tmp_path, '123')
 
-    # 盘上即使已有一份当前记录，writing 没有当前 subject proof 仍不是花钱授权。
+    # 批次 B3：has_record 只回答「审批账是否存在」，不再推断当前授权；
+    # fresh 记录（writing=False）也不会被读成任何人的已存决定。
     approvals._write(tmp_path, approvals._fresh_record('123', [1, 2, 3]))
-    assert not approvals.has_record(tmp_path, '123')
+    assert approvals.has_record(tmp_path, '123')
+    assert not approvals.get(tmp_path, '123').writing

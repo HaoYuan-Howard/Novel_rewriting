@@ -92,10 +92,9 @@ def uploaded(tmp_path, monkeypatch):
         assert uploaded.status_code == 200, uploaded.text
         assert uploaded.json()['job']['state'] == 'ok'
         report = _get(client, '/stage0/report')
-        approved = client.post(PREFIX + '/stage0/approve', json={
-            'expected_revision_id': report['revision_id'], 'actor': 'test:source-reviewer',
-            'reason': '确认本例合成文案与三章正文完整保留'})
-        assert approved.status_code == 200 and approved.json()['state'] == 'ok', approved.text
+        assert report['revision_id'], report
+        # 批次 B1：stage0.approve 已退役——机械校验通过即由 producer 写入
+        # auto 批准（system:stage0-auto），不存在人工 approve 端点。
         partitioned = client.post(PREFIX + '/stage1/partition')
         assert partitioned.status_code == 200 and partitioned.json()['state'] == 'ok', partitioned.text
         ctx = _ctx(tmp_path, 'stage2.characters', paid=True, agent=True)

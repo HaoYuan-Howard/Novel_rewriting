@@ -709,6 +709,34 @@ def _trusted_from_request(
     return request.trusted()
 
 
+def top_review_business_sha256(
+    *,
+    review_sha256: str,
+    unresolved_trim_items: list | tuple,
+    reviewer_contract_sha256: str,
+) -> str:
+    """stage5 顶部 trim 处置决定的稳定 business identity（人审与机械共用）。"""
+    return canonical_sha256({
+        'kind': 'stage5-top-review-business-v3',
+        'waiting_on': queue.WAITING_ON_STAGE5_CLOSURE,
+        'action_mode': 'trim_disposition',
+        'review_sha256': review_sha256,
+        'unresolved_trim_items': [
+            row.model_dump(mode='json') for row in unresolved_trim_items
+        ],
+        'reviewer_contract_sha256': reviewer_contract_sha256,
+    })
+
+
+def _top_review_business_sha256(
+    trusted: ReviewerRewriteBatchTrustedInput,
+) -> str:
+    return top_review_business_sha256(
+        review_sha256=trusted.review_sha256,
+        unresolved_trim_items=trusted.unresolved_trim_items,
+        reviewer_contract_sha256=trusted.reviewer_contract_sha256)
+
+
 def _require_record_binding(
     record: ReviewerActionRecord,
     trusted: ReviewerRewriteBatchTrustedInput,
@@ -741,19 +769,61 @@ def _require_record_binding(
         if trusted.reviewer_contract_sha256 != current_contract_sha256:
             raise reviewer_legacy.ReviewerTaskError(
                 'reviewer rewrite authority 所绑 Reviewer contract 已非 current')
-    expected_business = canonical_sha256({
-        'kind': 'stage5-top-review-business-v3',
-        'waiting_on': queue.WAITING_ON_STAGE5_CLOSURE,
-        'action_mode': 'trim_disposition',
-        'review_sha256': trusted.review_sha256,
-        'unresolved_trim_items': [
-            row.model_dump(mode='json') for row in trusted.unresolved_trim_items
-        ],
-        'reviewer_contract_sha256': trusted.reviewer_contract_sha256,
-    })
-    if trusted.business_sha256 != expected_business:
+    if trusted.business_sha256 != _top_review_business_sha256(trusted):
         raise reviewer_legacy.ReviewerTaskError(
             'reviewer rewrite trusted input 的稳定 business identity 不闭合')
+
+
+# ── 批次 B3：机械 trim 改写 authority（2026-09-15 全自动裁决）──────────────
+#
+# trim 三选一人工面退役后，typed rewrite request 的权威不再是 Commander 席位，
+# 而是「决定所绑那份 fresh Review 的原字节」：Review 文件按序号只增不改、
+# 内容寻址，可随时重验。机械请求的全部 authority 字段都从这份事实派生，
+# 不伪造任何 provider session、seat 或成本账。
+
+#: 机械处置的统一自报身份（闭合回执与 trim 改写 request 共用）。
+STAGE5_AUTO_ACTOR = 'system:stage5-auto'
+
+
+def is_mechanical_rewrite_request(
+    request: ReviewerRewriteBatchRequest | ReviewerRewriteRequest,
+) -> bool:
+    first = (
+        request.requests[0]
+        if isinstance(request, ReviewerRewriteBatchRequest) else request)
+    return first.actor == STAGE5_AUTO_ACTOR
+
+
+def require_mechanical_rewrite_authority(
+    request: ReviewerRewriteBatchRequest, *,
+    require_current_contract: bool,
+) -> None:
+    """机械 trim 改写 authority 的关闭式复验；与 sealed 人审闸同点消费。"""
+    first = request.requests[0]
+    problems: list[str] = []
+    if first.reviewer_action_record_sha256 != first.review_sha256:
+        problems.append('authority record SHA 必须绑定决定所消费的 fresh Review 原字节')
+    if first.provider_response_sha256 != first.review_sha256:
+        problems.append('provider response SHA 必须等于该 fresh Review 原字节')
+    if first.reviewer_seat_turn_id != f'{first.review_rel}:mechanical':
+        problems.append('seat turn 必须是 `<review_rel>:mechanical`')
+    if not first.reviewer_session_run_id.strip():
+        problems.append('session run 必须是落这轮 fresh Review 的真实 free run')
+    if problems:
+        raise reviewer_legacy.ReviewerTaskError(
+            'mechanical trim rewrite authority 不闭合：' + '；'.join(problems))
+    trusted = _trusted_from_request(request)
+    if trusted.business_sha256 != _top_review_business_sha256(trusted):
+        raise reviewer_legacy.ReviewerTaskError(
+            'mechanical trim rewrite 的稳定 business identity 不闭合')
+    if require_current_contract:
+        current_contract_sha256 = hashlib.sha256(
+            reviewer_legacy.for_blocker(
+                queue.WAITING_ON_STAGE5_CLOSURE).encode('utf-8')
+        ).hexdigest()
+        if trusted.reviewer_contract_sha256 != current_contract_sha256:
+            raise reviewer_legacy.ReviewerTaskError(
+                'mechanical trim rewrite authority 所绑 contract 已非 current')
 
 
 def _closed_evidence_hashes(
@@ -955,9 +1025,17 @@ def reviewer_rewrite_authority_sealed(
 def require_sealed_reviewer_rewrite_authority(
     base: str | os.PathLike[str], sid: str,
     request: ReviewerRewriteBatchRequest, request_file_sha256: str,
-) -> ReviewerActionRecord:
-    """付费、恢复、terminal probe 共用的 immutable authority 读闸。"""
+) -> ReviewerActionRecord | None:
+    """付费、恢复、terminal probe 共用的 immutable authority 读闸。
+
+    批次 B3：机械请求（actor=`system:stage5-auto`）没有 Commander 席位，
+    权威复验走 `require_mechanical_rewrite_authority` 并返回 ``None``。
+    """
     _require_request_file(base, sid, request, request_file_sha256)
+    if is_mechanical_rewrite_request(request):
+        require_mechanical_rewrite_authority(
+            request, require_current_contract=False)
+        return None
     digest = request.requests[0].reviewer_action_record_sha256
     if not reviewer_rewrite_authority_sealed(base, sid, digest):
         raise ReviewerRewriteAuthorityPending(
@@ -981,10 +1059,14 @@ def require_sealed_reviewer_rewrite_authority(
 def require_current_sealed_reviewer_rewrite_authority(
     base: str | os.PathLike[str], sid: str,
     request: ReviewerRewriteBatchRequest, request_file_sha256: str,
-) -> ReviewerActionRecord:
+) -> ReviewerActionRecord | None:
     """执行层 authority：历史 seal 完整，且 Reviewer contract 仍 current。"""
     record = require_sealed_reviewer_rewrite_authority(
         base, sid, request, request_file_sha256)
+    if record is None:
+        require_mechanical_rewrite_authority(
+            request, require_current_contract=True)
+        return None
     _require_record_binding(
         record, _trusted_from_request(request),
         require_current_contract=True)
@@ -997,6 +1079,10 @@ def seal_reviewer_rewrite_authority(
     current_parent_run_id: str,
 ) -> ReviewerRewriteAuthorityReceipt:
     """在真实 Agent parent 内把 active action 两相封成永久 authority。"""
+    if is_mechanical_rewrite_request(request):
+        raise reviewer_legacy.ReviewerTaskError(
+            'mechanical trim rewrite request 的权威即其绑定的 fresh Review'
+            '原字节，不需要也不允许 Commander authority seal')
     if not current_parent_run_id:
         raise reviewer_legacy.ReviewerTaskError(
             'reviewer rewrite authority seal 缺真实 current parent')
@@ -1183,9 +1269,12 @@ def require_reviewer_rewrite_authority(
 
 __all__ = [
     'ReviewerRewriteAuthorityPending',
+    'STAGE5_AUTO_ACTOR',
+    'is_mechanical_rewrite_request',
     'load_reviewer_rewrite_authority',
     'record_owner_guard',
     'recorded_response_sha256',
+    'require_mechanical_rewrite_authority',
     'require_sealed_reviewer_rewrite_authority',
     'require_current_sealed_reviewer_rewrite_authority',
     'require_reviewer_rewrite_authority',

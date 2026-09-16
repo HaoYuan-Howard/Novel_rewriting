@@ -19,11 +19,11 @@ import warnings
 from fastapi import APIRouter, Depends, Query
 
 from contracts.schema.api import (
-    AnalyzeDraftEditRequest, BatchTrimResolutionRequest,
+    AnalyzeDraftEditRequest,
     CharactersEditRequest, GlobalEdit, GlobalEditPreview,
     DraftEditPreview, DraftEditPreviewRequest, DraftEditRequest,
     HookApproveRequest, NameMapApproveRequest,
-    ResidualAdoptionRequest, TrimResolutionRequest,
+    ResidualAdoptionRequest,
 )
 from contracts.schema.orchestration import JobRecord
 from contracts.schema.plot_edit import PlotEdit, PlotEditPreview
@@ -256,41 +256,11 @@ def apply_global_edit(
                 RuntimeWarning, stacklevel=2)
 
 
-@router.post('/{sid}/stage5/trim/{ordinal}/retain-pretrim', response_model=JobRecord)
-def retain_pretrim(
-    ordinal: int,
-    request: TrimResolutionRequest,
-    sid: str = Depends(checked_sid),
-    base: str = Depends(get_base),
-) -> JobRecord:
-    """Close one current trim verification without adopting its candidate."""
-    return jobs.run(
-        base, 'stage5.review', sid,
-        ['--retain-pretrim', '--chapters', str(ordinal),
-         '--actor', request.actor, '--reason', request.reason],
-        follow_check=False,
-    )
-
-
-@router.post('/{sid}/stage5/trim/retain-pretrim-batch', response_model=JobRecord)
-def retain_pretrim_batch(
-    request: BatchTrimResolutionRequest,
-    sid: str = Depends(checked_sid),
-    base: str = Depends(get_base),
-) -> JobRecord:
-    """一次整批销账多章 trim：整批预检、按章幂等写 hash-bound resolution。"""
-    path = uploads.save_stage5_trim_batch(base, sid, request)
-    try:
-        return jobs.run(
-            base, 'stage5.review', sid,
-            ['--retain-pretrim-batch', str(path)], follow_check=False)
-    finally:
-        try:
-            uploads.discard_edit_plan(base, path)
-        except NovelError as exc:
-            warnings.warn(
-                f'批量销账作业已结束，但一次性 manifest 清理失败：{exc}',
-                RuntimeWarning, stacklevel=2)
+# ⚠ Stage5 trim 三选一人工写面已随批次 B3（2026-09-15 全自动裁决）退役：
+#   `POST /{sid}/stage5/trim/{ordinal}/retain-pretrim` 与
+#   `POST /{sid}/stage5/trim/retain-pretrim-batch` 删除。超限章由
+#   `stage5.review` producer 机械处置（预算内自动定向改写；预算耗尽后
+#   机械保留并披露交付），不再接受人工销账提交。
 
 
 @router.post('/{sid}/stage6/approve', response_model=JobRecord)

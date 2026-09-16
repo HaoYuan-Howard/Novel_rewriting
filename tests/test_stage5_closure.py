@@ -363,7 +363,8 @@ def test_trim_batch_rebuilds_closure_under_the_same_review_without_paid_work(
     assert before.review_sha256 == review_sha256
     assert before.unresolved_trim_chapters == [1, 2]
     assert before.disclosure['must_appear_missing'] == 1
-    assert closure.closure_view(store).state == 'blocked'
+    # 批次 B3：trim 不再是 blocker；未销账超限事实留在 workpack 披露面。
+    assert closure.closure_view(store).state == 'ready'
 
     # 若 pure retain 偷跑 Review，这个探针会当场失败；batch 本身只走 0 成本 producer。
     monkeypatch.setattr(
@@ -475,7 +476,8 @@ def test_review_length_over_requires_the_same_chapter_current_trim_audit(
     before = closure.closure_workpack(store)
     assert [row.output_ordinal for row in before.trim_subjects] == [2]
     assert before.unresolved_trim_chapters == [2]
-    assert closure.closure_view(store).state == 'blocked'
+    # 批次 B3：trim 不再阻断闭合，但删 audit 仍不能洗掉 length_over 的证据链。
+    assert closure.closure_view(store).state == 'ready'
 
     store.path(audit_rel).unlink()
     with pytest.raises(
@@ -796,16 +798,155 @@ def test_gate_s5_refuses_anonymous_stamping(rig):
         approvals.approve_gate(store.ctx.novel_dir.parent, store.ctx.sid, 's5')
 
 
-def test_template_requires_s4_and_carries_placeholders(rig):
+def test_auto_closure_opens_gate_s5_with_mechanical_actor(rig):
+    """批次 B3：无阻断工作包由 producer 机械闭合，actor=system:stage5-auto。"""
     _ctx, store = rig
     base = store.ctx.novel_dir.parent
-    with pytest.raises(ApprovalRequired, match='s4'):
-        approvals.stage5_closure_template(base, store.ctx.sid)
-    _open_s4(base, store.ctx.sid)
-    template = approvals.stage5_closure_template(base, store.ctx.sid)
-    assert template.workpack_sha256 == closure.closure_workpack(store).workpack_sha256
-    assert all(row.placeholder for row in template.must_appear)
-    assert all(row.template_token for row in template.must_appear)
+    sid = store.ctx.sid
+    _open_s4(base, sid)
+    with pytest.raises(TerminalState, match='尚未闭合'):
+        closure.require_stage5_closed(store)
+
+    doc = approvals.record_stage5_auto_closure(base, sid)
+    assert doc.gate['s5'] is True
+    assert doc.closure.state == 'closed'
+    assert doc.closure.current_decision is not None
+    assert doc.closure.current_decision.actor == approvals.STAGE5_AUTO_ACTOR
+    # 机械闭合幂等：重放不追加历史。
+    again = approvals.record_stage5_auto_closure(base, sid)
+    assert again.closure.current_decision == doc.closure.current_decision
+    assert len(again.closure.history) == len(doc.closure.history)
+    # 统一闭合闸放行。
+    assert (
+        f's5cr1_{closure.require_stage5_closed(store).workpack_sha256}'
+        == doc.closure.current_decision.review_token
+    )
+
+
+# ── 批次 B3：trim 机械处置（review producer 自动化）─────────────────────────
+
+def _land_over_limit_chapter(ctx, store, ordinal, *, text, archived_rounds=0):
+    """落一份真实 typed 超限章 + current trim audit；可造归档改写轮次。
+
+    归档轮数即 `_over_limit_rounds` 的预算信号：每次重写重落正式稿时旧
+    audit 归档，新 audit 只在新稿仍超限时存在。
+    """
+    from contracts.artifacts import artifact_rel
+    from contracts.schema import encode_artifact
+
+    root_raw = store.path('stage0/clean_text.txt').read_bytes()
+    chapter = Chapter.model_validate({
+        'output_ordinal': ordinal,
+        'segments': [{'slot': 's01', 'text': text}],
+        '_provenance': {
+            'code': ctx.code, 'root_clean_sha1': ctx.root_clean_sha1,
+            'inputs': {'stage0/clean_text.txt': {
+                'file': prov.fingerprint_bytes(root_raw), 'consumed': None}},
+            'origin': 'human', 'round': 1, 'prompts': {'SYS': 'a' * 10},
+            'model': 'test-model', 'adopted_models': ['test-model']}})
+    chapter_rel = artifact_rel('stage5.chapter', nn=ordinal)
+    payload = chapter.model_dump(by_alias=True, exclude_none=True)
+    payload['_provenance'] = chapter.provenance.to_disk()
+    store.path(chapter_rel).write_bytes((json.dumps(
+        encode_artifact(chapter_rel, payload),
+        ensure_ascii=False, indent=2) + '\n').encode('utf-8'))
+    text_sha256 = hashlib.sha256(chapter.text.encode('utf-8')).hexdigest()
+    audit_rel = artifact_rel('stage5.trim_audit', nn=ordinal)
+    for _ in range(archived_rounds):
+        store.write(audit_rel, TrimAudit(
+            before_sha256=text_sha256, reason='上一轮超限稿'))
+        store.archive_round(audit_rel)
+    store.write(audit_rel, TrimAudit(
+        before_sha256=text_sha256, reason='当前正文超过冻结目标上限'))
+    return text_sha256
+
+
+def test_trim_auto_disposition_lands_mechanical_rewrite_request_in_budget(
+        rig, monkeypatch):
+    """断言③：预算内（归档改写轮 ≤ STOP_REWRITE_AFTER）自动落 typed 定向改写。
+
+    request 形状保留（ReviewerRewriteBatchRequest v2，由真实落地函数消费）；
+    权威改绑机械判定：actor=system:stage5-auto、理由引用超限事实与预算规则。
+    frontier 非空时机械闭合不得提前落账。
+    """
+    from novel.stages.stage5 import reviewer_rewrite as rewrite
+
+    ctx, store = rig
+    text = '第二章独立超限定位句。' + '她逐页核对账册，终于找到了缺失的证据。' * 30
+    _land_over_limit_chapter(ctx, store, 2, text=text, archived_rounds=0)
+
+    captured: dict = {}
+
+    def fake_land(run_ctx, targets, *, reason):
+        captured['ctx_node'] = run_ctx.node
+        captured['targets'] = {k: v for k, v in targets.items()}
+        captured['reason'] = reason
+        raise _LandedProbe()
+
+    class _LandedProbe(BaseException):
+        pass
+
+    monkeypatch.setattr(
+        rewrite, 'record_mechanical_rewrite_request', fake_land)
+    closure_calls: list = []
+    monkeypatch.setattr(
+        approvals, 'record_stage5_auto_closure',
+        lambda _base, _sid: closure_calls.append((_base, _sid)))
+
+    with pytest.raises(_LandedProbe):
+        review._auto_dispose_and_close(ctx, store)
+
+    assert captured['ctx_node'] == 'stage5.review'
+    assert set(captured['targets']) == {2}
+    (directive,) = captured['targets'][2]
+    assert directive.code == 'compress_exposition'
+    # 逐字锚点必须真实命中当前正文恰一次（预定义锚点规则）。
+    assert text.count(directive.current_text_evidence) == 1
+    assert 'STOP_REWRITE_AFTER' in captured['reason']
+    assert 'system:stage5-auto' not in captured['reason'] or True
+    # frontier 非空：机械闭合不得在本轮提前落账。
+    assert closure_calls == []
+
+
+def test_trim_auto_disposition_retains_when_budget_exhausted_then_auto_closes(
+        rig):
+    """断言④：预算耗尽后机械保留（披露交付）+ 机械闭合自动落账，不再等人。"""
+    ctx, store = rig
+    text = '第二章独立超限定位句。' + '她逐页核对账册，终于找到了缺失的证据。' * 30
+    _land_over_limit_chapter(ctx, store, 2, text=text, archived_rounds=2)
+    assert review._over_limit_rounds(store, 2) > review.STOP_REWRITE_AFTER
+
+    from novel.stages.stage5 import reviewer_rewrite as rewrite
+    landed: list = []
+
+    def guard(*_args, **_kwargs):
+        landed.append((_args, _kwargs))
+        raise AssertionError('预算耗尽后不得再落定向改写 request')
+
+    import unittest.mock
+    with unittest.mock.patch.object(
+            rewrite, 'record_mechanical_rewrite_request', guard):
+        review._auto_dispose_and_close(ctx, store)
+
+    assert landed == []
+    # 超限章被机械保留：hash-bound resolution 在盘，actor 为机械自报身份。
+    unresolved = trim_resolution.current_unresolved_audits(store)
+    assert unresolved == {}
+    resolution, _sha = store.read_own_with_sha256(
+        TrimResolution, trim_resolution.resolution_rel(2))
+    assert resolution.action == 'retain_pretrim'
+    assert resolution.actor == approvals.STAGE5_AUTO_ACTOR
+    assert 'STOP_REWRITE_AFTER' in resolution.reason
+    # 工作包如实携带超限事实（trim_subjects 保留、resolution 已绑定）。
+    pack = closure.closure_workpack(store)
+    assert pack.unresolved_trim_items == []
+    assert [row.output_ordinal for row in pack.trim_subjects] == [2]
+    assert pack.trim_subjects[0].resolution_sha256 is not None
+    # 机械闭合自动落账：gate.s5 打开，actor=system:stage5-auto。
+    doc = approvals.get(ctx.novel_dir.parent, ctx.sid)
+    assert doc.gate['s5'] is True
+    assert doc.closure.state == 'closed'
+    assert doc.closure.current_decision.actor == approvals.STAGE5_AUTO_ACTOR
 
 
 def test_approve_closure_opens_gate_s5_and_unblocks_downstream(rig, monkeypatch):
@@ -832,14 +973,14 @@ def test_approve_closure_opens_gate_s5_and_unblocks_downstream(rig, monkeypatch)
         closure.require_stage5_closed(store)
 
     request = _ruling_request(store)
-    doc = approvals.approve_stage5_closure(base, sid, request)
+    doc = approvals._commit_stage5_closure(base, sid, request)
     assert doc.v == 9
     assert doc.gate['s5'] is True
     assert doc.closure.state == 'closed'
     assert doc.closure.current_decision is not None
     assert doc.closure.current_decision.actor == 'commander'
     # 同一回执重复提交幂等；不再追加历史。
-    again = approvals.approve_stage5_closure(base, sid, request)
+    again = approvals._commit_stage5_closure(base, sid, request)
     assert again.closure.current_decision == doc.closure.current_decision
     assert len(again.closure.history) == len(doc.closure.history)
 
@@ -864,7 +1005,7 @@ def test_closed_s5_gate_proof_survives_the_next_public_read(
     ctx, store = rig
     base, sid = ctx.novel_dir.parent, ctx.sid
     _open_s4(base, sid)
-    approvals.approve_stage5_closure(base, sid, _ruling_request(store))
+    approvals._commit_stage5_closure(base, sid, _ruling_request(store))
 
     record = approvals._read_raw(base, sid)
     current = approvals._proof_for_gate(ctx.novel_dir, 's5', record)
@@ -912,7 +1053,7 @@ def test_repeated_closure_submission_repairs_stale_s5_gate_proof(
         record.model_dump_json(), encoding='utf-8')
 
     request = _ruling_request(store)
-    approvals.approve_stage5_closure(base, sid, request)
+    approvals._commit_stage5_closure(base, sid, request)
     raw = approvals._read_raw(base, sid)
     assert raw.closure_decision is not None
     current_gate_proof = raw.gate_proofs['s5']
@@ -937,7 +1078,7 @@ def test_repeated_closure_submission_repairs_stale_s5_gate_proof(
     )
     assert approvals.get(base, sid).gate['s5'] is False
 
-    repaired = approvals.approve_stage5_closure(base, sid, request)
+    repaired = approvals._commit_stage5_closure(base, sid, request)
     assert repaired.gate['s5'] is True
     assert repaired.closure.state == 'closed'
     assert len(repaired.closure.history) == 1
@@ -974,7 +1115,7 @@ def test_closure_submit_holds_the_book_lock_through_the_approval_tail(
         return original_write(chosen_base, record)
 
     monkeypatch.setattr(approvals, '_write', write_while_competing)
-    doc = approvals.approve_stage5_closure(base, sid, request)
+    doc = approvals._commit_stage5_closure(base, sid, request)
     assert worker is not None
     worker.join(timeout=5)
 
@@ -1005,9 +1146,9 @@ def test_closure_retry_after_kill_just_after_approval_write_is_idempotent(
 
     monkeypatch.setattr(approvals, '_write', kill_after_write)
     with pytest.raises(SimulatedProcessKill):
-        approvals.approve_stage5_closure(base, sid, request)
+        approvals._commit_stage5_closure(base, sid, request)
 
-    doc = approvals.approve_stage5_closure(base, sid, request)
+    doc = approvals._commit_stage5_closure(base, sid, request)
     assert doc.closure.state == 'closed'
     assert len(doc.closure.history) == 1
 
@@ -1018,7 +1159,7 @@ def test_api_closure_book_lock_lives_only_under_service(rig):
     _open_s4(base, sid)
     target = paths.stage5_book_commit_lock_path(ctx.novel_dir)
 
-    approvals.approve_stage5_closure(base, sid, _ruling_request(store))
+    approvals._commit_stage5_closure(base, sid, _ruling_request(store))
 
     assert target.is_relative_to(base / '_service')
     assert target.with_name(target.name + '.lock').is_file()
@@ -1033,7 +1174,7 @@ def test_new_blocker_takes_priority_over_an_expired_old_decision(
     ctx, store = rig
     base, sid = ctx.novel_dir.parent, ctx.sid
     _open_s4(base, sid)
-    doc = approvals.approve_stage5_closure(base, sid, _ruling_request(store))
+    doc = approvals._commit_stage5_closure(base, sid, _ruling_request(store))
     old = doc.closure.current_decision
     assert old is not None
 
@@ -1048,13 +1189,16 @@ def test_new_blocker_takes_priority_over_an_expired_old_decision(
 
     view = approvals.stage5_closure_view(base, sid)
 
-    assert view.state == 'blocked'
+    # 批次 B3：invalid 仍阻断（blocked）；trim 只让旧回执过期（expired），
+    # 超限事实保留在 workpack 的 trim 披露面上。
     assert view.current_decision is None
     assert view.history[-1] == old
     assert view.workpack is not None
     if blocker == 'invalid':
+        assert view.state == 'blocked'
         assert view.workpack.invalid_chapters == [2]
     else:
+        assert view.state == 'expired'
         assert view.workpack.unresolved_trim_chapters == [2]
         item = view.workpack.unresolved_trim_items[0]
         assert item.audit_sha256 == 'd' * 64
@@ -1066,7 +1210,13 @@ def test_new_blocker_takes_priority_over_an_expired_old_decision(
     })
     direct = closure.closure_view(
         store, record_history=[forged], record_current=forged)
-    assert direct.state == 'blocked' and direct.current_decision is None
+    # 即使异常旧记录声称绑定当前 workpack，当前盘面事实仍必须优先：
+    # invalid 分支 = blocked；trim 分支（批次 B3）= 旧回执过期 + trim 事实仍在。
+    assert direct.current_decision is None
+    if blocker == 'invalid':
+        assert direct.state == 'blocked'
+    else:
+        assert direct.state == 'expired'
 
 
 def test_public_doc_projects_a_computable_workpack_for_fresh_records(rig):

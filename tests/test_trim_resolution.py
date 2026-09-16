@@ -294,27 +294,17 @@ def test_revalidate_failure_restores_chapter_trim_and_all_history(tmp_path, monk
     assert after == before
 
 
-def test_cli_and_api_paths_are_zero_cost_and_only_retain_pretrim(tmp_path, monkeypatch):
+def test_retired_cli_and_api_trim_faces_are_rejected(tmp_path, monkeypatch):
+    """批次 B3：trim 三选一的 CLI/API 人工提交面已整体退役。"""
     base, book = _book(tmp_path)
     _write_audit(book, _audit())
     monkeypatch.delenv('DEEPSEEK_API_KEY', raising=False)
-    refused = main([
-        'run', 'stage5.review', '42', '--retain-pretrim', '--chapters', '3',
-        '--actor', '   ', '--reason', '不能留空白身份',
-        '--base', str(base),
-    ])
-    assert refused == X.TERMINAL_STATE
-    rc = main([
-        'run', 'stage5.review', '42', '--retain-pretrim', '--chapters', '3',
-        '--actor', 'cli-reviewer', '--reason', 'CLI 核对后保留原稿',
-        '--base', str(base),
-    ])
-    assert rc == X.OK
-    assert _trim_rows(str(base)) == []
-
-    # A new audit makes the CLI decision stale; the API must invoke the same
-    # zero-cost CLI boundary rather than writing an artifact in the web process.
-    _write_audit(book, _audit(reason='API 前审计更新'))
+    with pytest.raises(SystemExit):
+        main([
+            'run', 'stage5.review', '42', '--retain-pretrim', '--chapters', '3',
+            '--actor', 'cli-reviewer', '--reason', 'CLI 核对后保留原稿',
+            '--base', str(base),
+        ])
     fastapi = pytest.importorskip('fastapi')
     from fastapi.testclient import TestClient
     from novel.api.app import UI_HEADER, create_app
@@ -325,12 +315,6 @@ def test_cli_and_api_paths_are_zero_cost_and_only_retain_pretrim(tmp_path, monke
             headers={UI_HEADER: '1'},
             json={'actor': 'api-reviewer', 'reason': 'API 核对后保留原稿'},
         )
-        assert response.status_code == 200, response.text
-        assert response.json()['state'] == 'ok', response.text
-        invalid = client.post(
-            '/api/novels/42/stage5/trim/3/retain-pretrim',
-            headers={UI_HEADER: '1'},
-            json={'actor': '   ', 'reason': '不能是空白身份'},
-        )
-        assert invalid.status_code == 422
-    assert _trim_rows(str(base)) == []
+        assert response.status_code in (404, 405), response.text
+    # 人工面全关后，超限事实未被任何匿名销账洗掉。
+    assert _trim_rows(str(base)) != []

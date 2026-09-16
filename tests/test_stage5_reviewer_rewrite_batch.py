@@ -124,7 +124,7 @@ def rig(tmp_path, monkeypatch):
             queue.WAITING_ON_STAGE5_CLOSURE).encode()).hexdigest(),
         reviewer_session_run_id='reviewer-session', reviewer_seat_turn_id='reviewer-turn',
         provider_response_sha256='c' * 64)
-    batch = rewrite._record_trusted_request(ctx, trusted)
+    batch = rewrite._record_trusted_request(ctx, trusted, mechanical=True)
     paid = replace(ctx, node='stage5.write', paid=True, executor_profile=_profile(),
                    _edges={}, _judged={}, _accounting={}, _usage_mark=None,
                    run_id='batch-paid', parent_run_id='batch-parent',

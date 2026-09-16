@@ -1695,13 +1695,9 @@ FREE_ENTRIES: Final = {
     # stage6.approve 的默认跑法（2026-09-15 全自动裁决）：固定槽位序自动定稿，
     # 0 成本、0 模型；显式声明使 argv 自述「这是一次自动定稿」。
     '--auto': 'stage6.approve 默认定稿跑法：按固定槽位序自动定稿（0 成本）',
-    '--retain-pretrim': ('人工确认保留当前 trim audit 对应的原稿；只写 hash-bound resolution，'
-                         '0 次 LLM 调用（不是 0 人工成本）'),
-    '--retain-pretrim-batch': ('按显式 manifest 一次销账多章 trim；整批预检、按章幂等写'
-                               'hash-bound resolution，0 次 LLM 调用'),
-    '--request-reviewer-rewrite': (
-        '把 Commander 对 current pure-trim frontier 的单章关闭式改写决定写成 '
-        'hash-bound canonical request；不调用写手模型'),
+    # ⚠ `--retain-pretrim(-batch)` / `--request-reviewer-rewrite` 已随批次 B3
+    #   （2026-09-15 全自动裁决）退役：trim 三选一人工面删除，自动路径由
+    #   `stage5.review` producer 内部落机械 resolution / typed rewrite request。
     '--emit-edit-template': ('向 stdout 输出带当前 schema version 的人工编辑骨架；'
                              '适用于 Stage2 GlobalEdit、Blueprint 与 Stage7，不写盘'),
     '--recover-repair-aggregate': (
@@ -1834,11 +1830,8 @@ VALUED_FLAGS: Final = {
     '--validate-edit': ('要预检的 Stage2 关系集、Stage4A 完整章或 '
                         'Stage7 人工稿路径'
                         '（与所属节点 --apply-edit 同路径规则，不写盘）'),
-    '--retain-pretrim-batch': ('批量销账 manifest 路径（必填；相对路径相对书目录，'
-                               '也接受书目录内的绝对路径）；actor/reason 在 manifest 内'),
-    '--request-reviewer-rewrite': (
-        'Stage5 Reviewer 单章改写 typed request 路径（必填；相对路径相对书目录，'
-        '也接受服务进程物化的 _service/edits 路径）'),
+    # （`--retain-pretrim-batch` / `--request-reviewer-rewrite` 两格已随批次 B3
+    #   trim 三选一退役删除。）
     '--reviewer-rewrite': (
         'current canonical Stage5 Reviewer 改写 request 路径（必填；只接受书目录内路径）'),
     '--recover-reviewer-rewrite-prepared': (
@@ -1949,13 +1942,9 @@ WRITE_EFFECTS: Final = {
     #   stage5 挂在 `stage5.review` 上、stage6 挂在 `stage6.hook` 上，两边都是
     #   「写自己那一层的 `wontfix.json`，不产本节点 `produces` 里那一份」⇒ 一句话说得下。
     '--wontfix': '把一条豁免记进 <stage>/wontfix.json（**本节点的正式产物一份都不产**）',
-    '--retain-pretrim': ('写 stage5/trim_resolution_chNN.json；旧 resolution 归档，'
-                         '不改正文、不采用收缩候选'),
-    '--retain-pretrim-batch': ('按 manifest 逐章写 trim_resolution；已销账章幂等跳过，'
-                               '不改正文、不采用收缩候选'),
-    '--request-reviewer-rewrite': (
-        '写 stage5/reviewer_rewrite_request.json；只登记 Commander 的 hash-bound '
-        '单章改写决定，不调用写手、不改正文'),
+    # ⚠ `--retain-pretrim(-batch)` / `--request-reviewer-rewrite` 的写盘效果
+    #   随批次 B3 trim 三选一人工面退役一并删除；机械自动路径写同样的产物，
+    #   但它属于 `stage5.review` 默认路径（produces / book 级写效果），不再单列。
     '--reviewer-rewrite': (
         '按 canonical request 调写手，写目标 stage5/chNN.json 或其 INVALID/拒稿终态、'
         'trim audit 与 append-only reviewer rewrite execution journal'),
@@ -2046,11 +2035,9 @@ class NodeLifecycleSpec(NamedTuple):
 
     ``approval_bindings`` 把审批 blocker 映射到 (属主节点, scope)：它登记
     「这道闸属于哪个节点的工作面」，供历史 reviewer 工作单元只读解码使用。
-    Commander 受托审阅退役（2026-09-15）后这些闸由人工在 Stage 页面过；
-    Stage4 四道闸亦已整体退役（同日全自动裁决）——``stage4.design`` /
-    ``stage4.plan`` 的 ``approval_bindings`` 清空，唯一打开条件是统一机械
-    准入（``novel/orchestrator/mechanical_admission.py``）。现役仅剩
-    stage5/6/7 与 stage7.approve 的人工面（批次 B4 收敛）。
+    Stage4 四道闸与 Stage5 写作授权/闭合回执已随 2026-09-15 全自动裁决
+    （批次 B2/B3）整体退役——现役 ``NODES`` 只保留 stage6.prepare/hook、
+    stage6.approve 与 stage7.approve 的人工面（批次 B4 收敛）。
     """
 
     unit_kind: str
@@ -2256,8 +2243,11 @@ NODES: Final[dict[str, NodeSpec]] = {
     # ⚠ `--revise` 挪过来之后**不再需要 `paid_flags`**：那一列的定义是
     #   「能把一个 **0 成本节点**变成付费的 flag」，而本节点的默认路径本来就付费。
     #   留着它是一格永远不起作用的声明——`is_paid` 早在 `spec.paid` 那一步就判完了。
+    # ⚠ 独立 writing 授权已随 2026-09-15 全自动裁决（批次 B3）并入 run 启动授权：
+    #   上传即授权本书全部付费节点；stage5.write 的打开条件只剩机械事实
+    #   （当前计划、fresh writer context、非 stale Review）。
     'stage5.write':     NodeSpec('stage5', 'R-7',  True,  'stage5 全书闭卷写作',
-                                  lifecycle=NodeLifecycleSpec('chapter', '当前 Context、计划与独立 writing 授权', 'executor', 'human', '独立 writing 授权；产出交机械 Review 与整书 closure', ('typed_edit', 'targeted_rework', 'stop'), ('stage4.design', 'stage5.write'), 'executor:chapter / human:writing', ('--revalidate', '--apply-edit', '--recover-prepared', '--recover-reviewer-rewrite-prepared'), approval_bindings=(('approval:stage5-writing', 'writing'),), approval_projection=('writing',)),
+                                  lifecycle=NodeLifecycleSpec('chapter', '当前 Context 与计划', 'executor', 'none', '产出交机械 Review 与机械闭合', ('typed_edit', 'targeted_rework', 'stop'), ('stage4.design', 'stage5.write'), 'executor:chapter', ('--revalidate', '--apply-edit', '--recover-prepared', '--recover-reviewer-rewrite-prepared')),
                                   flags=('--dry-run', '--recheck', '--revalidate',
                                          '--preview-edit', '--apply-edit', '--revise',
                                          '--reviewer-rewrite',
@@ -2280,12 +2270,15 @@ NODES: Final[dict[str, NodeSpec]] = {
     #   这一列的消费方是 `state.required_artifacts`（「这一层跑完了盘上该有哪几份」），
     #   而豁免那一份是**可选**的——没人豁免过任何东西时它就不该存在（盘上 3/3 本都没有）。
     #   把它登记进来会让每一本书**永远差一份产物**。⇒ 它的写盘效应登记在 `WRITE_EFFECTS`。
+    # ⚠ Stage5 闭合已随批次 B3（2026-09-15 全自动裁决）改为 Review 机械判定自动
+    #   闭合：`stage5.review` 落 fresh 报告且工作包无缺章/.INVALID/阻断级判定、
+    #   trim 面已按 `paragraph_budget_missed`（degradable）预定义规则处置后，
+    #   由 producer 以 `system:stage5-auto` 身份落机械闭合回执并打开 gate.s5。
+    #   trim 三选一（retain/rewrite/stop）人工面退役：预算内定向改写由机械判定
+    #   自动落 typed rewrite request（形状保留），预算耗尽后机械保留并披露交付。
     'stage5.review':    NodeSpec('stage5', 'R-8',  False, 'stage5 全书验收',
-                                 lifecycle=NodeLifecycleSpec('book', '全章 canonical、计划与 trim 处置', 'deterministic', 'human', '独立 closure 或 trim disposition 工作包', ('accept', 'typed_edit', 'targeted_rework', 'stop'), ('stage5.write', 'stage5.review'), 'human:closure/disposition', ('--check-only', '--retain-pretrim-batch', 'typed_replay'), 0, approval_bindings=(('approval:stage5-closure', 'closure'),), approval_projection=('closure', 'state')),
-                                 flags=('--check-only', '--wontfix', '--retain-pretrim',
-                                        '--retain-pretrim-batch',
-                                        '--request-reviewer-rewrite',
-                                        '--chapters', '--actor', '--reason'),
+                                 lifecycle=NodeLifecycleSpec('book', '全章 canonical 与计划', 'deterministic', 'none', '机械判定 + trim 自动处置 + 机械闭合', ('accept', 'typed_edit', 'targeted_rework'), ('stage5.write', 'stage5.review'), 'none', ('--check-only', 'typed_replay'), 0),
+                                 flags=('--check-only', '--wontfix'),
                                  produces=(artifact_paths.STAGE5_REVIEW,),
                                  operator_redo='review'),
     # ⚠⚠ **`stage5.semantic` 已于 2026-08-17 整节点下线**（用户裁决，见
@@ -2377,8 +2370,9 @@ def approval_work_unit(waiting_on: str) -> tuple[str, str] | None:
 
     历史上这是 Commander 审阅工作单元的预算属主投影；Commander 退役
     （2026-09-15）后它继续回答「这道闸属于谁的工作面」，供存量书 reviewer
-    工作单元的只读解码使用。Stage4 四道闸同日整体退役，现役
-    ``approval_bindings`` 已清空；它们的归属只保留在下方历史只读表里。
+    工作单元的只读解码使用。Stage4 四道闸与 Stage5 写作/闭合两道闸同日
+    整体退役，现役 ``approval_bindings`` 已不含它们；归属只保留在下方
+    历史只读表里。
     """
     found = [(node, scope) for node, spec in NODES.items()
              for blocker, scope in spec.lifecycle.approval_bindings
@@ -2404,9 +2398,11 @@ def approval_scope_allowed(node: str, scope: str) -> bool:
         | {value for _, value in RETIRED_APPROVAL_BINDINGS.get(node, ())})
 
 
-#: Stage4 四道人工闸退役（2026-09-15 全自动裁决）后的历史只读归属。
-#: 现役 ``NODES`` 不再登记这些 binding；这里唯一消费者是存量书 reviewer
-#: 工作单元与 Commander 账的只读解码（``novel/work_units.py``）。
+#: Stage4 四道人工闸与 Stage5 写作授权/闭合回执退役（2026-09-15 全自动裁决，
+#: 批次 B2/B3）后的历史只读归属。现役 ``NODES`` 不再登记这些 binding；这里
+#: 唯一消费者是存量书 reviewer 工作单元与 Commander 账的只读解码
+#: （``novel/work_units.py``）。stage5-closure 的现役后继是 Review 机械判定
+#: 自动闭合（`system:stage5-auto`），不在这张表里产生新账。
 RETIRED_APPROVAL_BINDINGS: Final[Mapping[str, tuple[tuple[str, str], ...]]] = {
     'stage4.design': (
         ('approval:stage4-design-review', 'design'),
@@ -2415,6 +2411,12 @@ RETIRED_APPROVAL_BINDINGS: Final[Mapping[str, tuple[tuple[str, str], ...]]] = {
     ),
     'stage4.plan': (
         ('approval:stage4-structure-review', 'structure'),
+    ),
+    'stage5.write': (
+        ('approval:stage5-writing', 'writing'),
+    ),
+    'stage5.review': (
+        ('approval:stage5-closure', 'closure'),
     ),
 }
 
@@ -2467,7 +2469,7 @@ CONDITIONAL_REQUIRED_FLAGS: Final[dict[tuple[str, str], tuple[str, ...]]] = {
         '--preview-subject-sha256', '--edit-confirmation'),
     ('stage5.write', '--recover-prepared'): (
         '--actor', '--reason', '--subject-sha256'),
-    ('stage5.review', '--retain-pretrim'): ('--chapters', '--actor', '--reason'),
+    # (`stage5.review --retain-pretrim` 那格已随批次 B3 trim 三选一退役删除。)
     ('stage6.hook', '--revalidate'): ('--actor', '--reason'),
     ('stage4.plan', '--recover-prepared'): ('--subject-sha256',),
     ('stage4.design', '--recover-prepared'): ('--subject-sha256',),
