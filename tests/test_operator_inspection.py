@@ -149,8 +149,9 @@ def test_approval_projection_reuses_snapshot_overview_and_code_without_fallback(
     monkeypatch.setattr(mechanical_admission, 'blueprint_generation_ready',
                         lambda *_args: mechanical_admission.AdmissionCheck(
                             'stage2.blueprint', ok=False))
-    monkeypatch.setattr(mechanical_admission, 'stage4_ready',
-                        lambda *_args: mechanical_admission.AdmissionCheck('stage4', ok=False))
+    monkeypatch.setattr(mechanical_admission, 'stage4_plan_ready',
+                        lambda *_args: mechanical_admission.AdmissionCheck('stage4.plan', ok=False))
+    monkeypatch.setattr(A, 'current_infeasible_binding', lambda _store: None)
     import novel.stages.stage6.prepare as prepare_stage6
     monkeypatch.setattr(
         prepare_stage6, 'view_state', lambda _store: SimpleNamespace(
@@ -182,64 +183,11 @@ def test_approval_projection_reuses_snapshot_overview_and_code_without_fallback(
 
     assert A.get(
         tmp_path, 'book-1', overview=overview, code='code-v1') == 'approval-doc'
-    # _spawns 先用解析后的书目录建 ctx；外层审批投影仍用 base 本身。
+    # _spawns 先用解析后的书目录建 ctx（含 s4 的 infeasible 只读检查）；
+    # 外层审批投影仍用 base 本身。
     assert contexts == [(tmp_path / 'book_1', 'stage0.remove', 'code-v1'),
+                        (tmp_path / 'book_1', 'stage0.remove', 'code-v1'),
                         (tmp_path, 'stage0.remove', 'code-v1')]
-    assert A._READ_CODE.get() is None
-    assert A._READ_OVERVIEW.get() is None
-
-
-def test_structure_workpack_reuses_the_snapshot_stage4_report_and_code(
-        monkeypatch, tmp_path):
-    overview = SimpleNamespace(sid='book-1')
-    report = SimpleNamespace(
-        sid='book-1', stage='stage4', node='stage4.plan')
-    subject = SimpleNamespace(
-        subject_sha256='a' * 64,
-        chapter_ordinals=[1],
-        chapter_subject_sha256={1: 'b' * 64},
-        plan=SimpleNamespace(output_chapters=[]),
-        concerns=[],
-        binding_input_contract=None,
-        blueprints=SimpleNamespace(blueprints=[]),
-        plan_payload_sha256='c' * 64,
-        binding_payload_sha256='d' * 64,
-        blueprint_payload_sha256='e' * 64,
-        chapter_materials={},
-    )
-    # 这里只隔离快照编排，完整业务载荷由 Stage4 纵切覆盖；替身仍须明确
-    # 携带全部快照身份，避免新增字段时绕过真实快照的前后比较面。
-    assert set(vars(subject)) == set(A._StructureWorkpackSnapshot.model_fields)
-    reports: list[object] = []
-
-    monkeypatch.setattr(A, '_read_current', lambda *_args: object())
-    monkeypatch.setattr(
-        A.paths, 'resolve_novel_dir', lambda *_args: tmp_path)
-
-    def snapshot(_novel_dir, *, with_materials):
-        assert with_materials is True
-        assert A._projection_code() == 'code-v1'
-        return subject
-
-    monkeypatch.setattr(A, '_structure_workpack_snapshot', snapshot)
-    monkeypatch.setattr(
-        A, '_structure_workpack_groups',
-        lambda *_args, report, **_kwargs: reports.append(report) or [])
-    monkeypatch.setattr(
-        A, '_structure_view',
-        lambda *_args: SimpleNamespace(state='missing', current_decision=None))
-    monkeypatch.setattr(
-        A, 'ApprovalWorkpack', lambda **values: SimpleNamespace(**values))
-    monkeypatch.setattr(
-        A.prov, 'code_version',
-        lambda: pytest.fail('预计算工作包不得再取 code_version'))
-
-    workpack = A.structure_workpack(
-        tmp_path, 'book-1', overview=overview, code='code-v1',
-        check_report=report)
-
-    assert workpack.subject_sha256 == 'a' * 64
-    assert reports == [report]
     assert A._READ_CODE.get() is None
     assert A._READ_OVERVIEW.get() is None
 

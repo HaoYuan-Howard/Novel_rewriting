@@ -25,6 +25,88 @@ def _change_claim(book, ordinal, suffix='；这次先望向院门再行动'):
     return raw
 
 
+def _parent_epoch(book, parent) -> str:
+    """与 `design_rebuild._constraint_snapshot` 同一公式：候选身份 → strategy epoch。"""
+    from contracts.invariants import DESIGN_REVIEW_CONTRACT
+    from novel.source_identity import artifact_body_root
+    from novel.stages.stage4.design_evolution import strategy_epoch_sha256
+    store = ArtifactStore(_ctx(book, 'stage4.design'))
+    return strategy_epoch_sha256({
+        'review_contract': DESIGN_REVIEW_CONTRACT,
+        'root_clean_sha1': artifact_body_root(store, STAGE2_CHAPTER_BLUEPRINTS),
+        'truth_sha256': parent.truth_sha256,
+        'alias_algorithm': parent.alias_algorithm},
+        parent.reconstruction_strategy)
+
+
+def _seed_repair_history(book, sid, parent, *, ordinal, constraint, reason) -> str:
+    """把一条 request_repair 决定以现役 slim 形状写进审批历史（存量书形状）。"""
+    from contracts.artifacts import STAGE4_BLIND_CANDIDATE
+    from contracts.schema.api import (
+        DesignReviewRepairCapability, DesignReviewRequest,
+    )
+    from novel.orchestrator import approvals
+    epoch = _parent_epoch(book, parent)
+    request = DesignReviewRequest(
+        actor='存量审阅者', reviewer_kind='human', review_run_id='repair-history-1',
+        review_token='s4dr1_' + 'a' * 64,
+        general_reason='逐章核对后要求定向修订',
+        strategy={'decision': 'accept', 'reason': '策略保持不变'},
+        chapters=[{'output_ordinal': ordinal, 'decision': 'request_repair',
+                   'reason': reason, 'constraints': [constraint.model_dump(mode='json')]}],
+    )
+    candidate_sha = 'b' * 64
+    payload = {
+        'kind': 'stage4_design_review_slim_v1',
+        'request': request.model_dump(mode='json'),
+        'candidate_sha256': candidate_sha,
+        'aggregate_subject_sha256': 'a' * 64,
+        'strategy_subject_sha256': 'c' * 64,
+        'strategy_epoch_sha256': epoch,
+        'chapter_subject_sha256': {ordinal: 'd' * 64},
+        'repair_capability': DesignReviewRepairCapability(
+            agent_repairable=True, agent_reason_code='same_strategy_epoch_ready',
+            full_chapter_editable=True,
+            full_chapter_edit_reason_code='current_typed_decision',
+            chapters=[{'output_ordinal': ordinal, 'committed_rounds': 0,
+                       'agent_repair_available': True,
+                       'full_chapter_edit_available': True}]).model_dump(mode='json'),
+        'binding_infeasibility': None,
+    }
+    digest = approvals._decision_sha256(payload)
+    stored = approvals._StoredDesignDecisionSlim(
+        request=request, candidate_sha256=candidate_sha,
+        aggregate_subject_sha256='a' * 64, strategy_subject_sha256='c' * 64,
+        strategy_epoch_sha256=epoch,
+        chapter_subject_sha256={ordinal: 'd' * 64},
+        repair_capability=DesignReviewRepairCapability(
+            agent_repairable=True, agent_reason_code='same_strategy_epoch_ready',
+            full_chapter_editable=True,
+            full_chapter_edit_reason_code='current_typed_decision',
+            chapters=[{'output_ordinal': ordinal, 'committed_rounds': 0,
+                       'agent_repair_available': True,
+                       'full_chapter_edit_available': True}]),
+        binding_infeasibility=None, decision_sha256=digest,
+        decided_at='2026-09-15T00:00:00+00:00',
+        proof=approvals._ApprovalProof(
+            root_clean_sha1='0' * 40,
+            artifacts={STAGE4_BLIND_CANDIDATE: candidate_sha},
+            decision_sha256=digest))
+    record = approvals._fresh_record(sid, [1]).model_copy(update={
+        'design_history': [stored], 'design_decision': stored})
+    target = approvals._path(book.parent, sid)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(record.model_dump_json() + '\n', encoding='utf-8')
+    return epoch
+
+
+def _freeze_catalogs(book, sid, parent, ordinals):
+    from novel.orchestrator import approvals
+    epoch = _parent_epoch(book, parent)
+    return approvals.freeze_design_constraint_history(
+        book.parent, sid, epoch=epoch, ordinals=ordinals)
+
+
 def _rebuild(book, raw, expected):
     ctx = _ctx(book, 'stage4.design')
     calls = []
@@ -134,24 +216,24 @@ def test_changed_chapter_rebuild_keeps_legal_parent_and_survives_next_rebuild(tm
 
 def test_upstream_rebuild_carries_active_constraints(tmp_path, monkeypatch):
     import json
-    from contracts.schema.api import DesignRepairConstraint
+    from contracts.schema.api import (
+        DesignRepairConstraint, DesignReviewRepairCapability, DesignReviewRequest,
+    )
     from novel.orchestrator import approvals
-    from tests.test_design_review import _accept_all
     from tests.test_stage4_binding_input_recovery_integration import _configure_boundary
     _configure_boundary(monkeypatch)
     _admit_synthetic_stage2(monkeypatch)
     book = _book(tmp_path)
     raw = _seed_current_stage2(book).model_dump(mode='json', by_alias=True)
     original, parent = _land_design(book, raw)
-    template = approvals.design_template(tmp_path, original.sid, actor='审阅者', reviewer_kind='human',
-        review_run_id='before-rebuild', reason='核对具体章内目标')
-    request = _accept_all(template)
+    # 人工审阅写面已退役：直接构造与现役 schema 同形的 slim 历史行，
+    # 为第 2 章落下一条 request_repair 累计约束（存量书历史账形状）。
     scene = parent.output_chapters[1].scenes[0]
     constraint = DesignRepairConstraint(code='scene_goal', scene_refs=[scene.candidate_scene_id],
         opaque_aliases=[parent.output_chapters[1].beat_placements[0].beat_alias])
-    request.chapters[1] = request.chapters[1].model_copy(update={
-        'decision': 'request_repair', 'constraints': [constraint], 'reason': '场景目标应明确落下本事实'})
-    approvals.approve_design(tmp_path, original.sid, request)
+    _seed_repair_history(
+        book, original.sid, parent, ordinal=2, constraint=constraint,
+        reason='场景目标应明确落下本事实')
     raw = _change_claim(book, 2)
     ctx = _ctx(book, 'stage4.design')
     answer = _split_a_responder(raw)
@@ -172,7 +254,8 @@ def test_upstream_rebuild_carries_active_constraints(tmp_path, monkeypatch):
     finally:
         pool.close()
     assert len(seen) == 1
-    assert approvals.design_constraint_catalog(tmp_path, ctx.sid)['2']['items']
+    frozen = _freeze_catalogs(book, ctx.sid, parent, [2])
+    assert frozen['catalogs']['2']['items']
     # 以后继续核验原新稿时，来源消费者仍读取冻结前缀，而非重新解释当前历史。
     _, sources = stage4_runs.load_committed_design_sources(ctx, parent_run_id=ctx.run_id,
         parent_candidate_sha256=agent_runs.canonical_sha256(result.model_dump(mode='json', by_alias=True)))
@@ -224,26 +307,21 @@ def _nineteen_book(tmp_path, monkeypatch):
 
 
 def test_nineteen_chapters_change_seventeen_only_reopens_its_model(tmp_path, monkeypatch):
-    from novel.orchestrator import approvals
-    from tests.test_design_review import _accept_all
     from tests.test_stage4_binding_input_recovery_integration import _configure_boundary
     _configure_boundary(monkeypatch)
     _admit_synthetic_stage2(monkeypatch)
     book, raw = _nineteen_book(tmp_path, monkeypatch)
     initial, parent = _land_design(book, raw)
 
-    template = approvals.design_template(tmp_path, initial.sid, actor='合成审阅',
-        reviewer_kind='human', review_run_id='initial-review', reason='核对各章测试事实')
-    approvals.approve_design(tmp_path, initial.sid, _accept_all(template))
     changed = _change_claim(book, 17)
     target, result, sources = _rebuild(book, changed, [17])
     assert all(result.output_chapters[n - 1] == parent.output_chapters[n - 1]
                for n in range(1, 20) if n != 17)
     assert sum(row.source_run_id == target.run_id for row in sources) == 1
-    template = approvals.design_template(tmp_path, target.sid, actor='复核',
-        reviewer_kind='human', review_run_id='changed-review', reason='复核变化章')
-    assert template.strategy.source_decision_sha256 is not None
-    assert [row.output_ordinal for row in template.chapters if row.source_decision_sha256 is None] == [17]
+    # 人工审阅票退役后，重建只受机械事实与冻结历史前缀约束；
+    # 空历史（无 typed 决定）不再构成任何语义义务。
+    frozen = _freeze_catalogs(book, target.sid, result, [17])
+    assert frozen['history_prefix'] == []
 
 
 @pytest.mark.parametrize('free_cli', [False, True])

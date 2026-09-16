@@ -83,32 +83,33 @@ def test_headless_generic_gate_never_exposes_s4():
 
 def test_approval_template_forwards_required_identity_and_prints_typed_json(
         monkeypatch, capsys, tmp_path):
+    """Stage4 design/structure 模板退役后，template 只暴露 writing/stage5。"""
     captured = {}
 
     def template(base, sid, *, actor, reason):
         captured.update(base=base, sid=sid, actor=actor, reason=reason)
-        return StructureApprovalRequest(
+        return WritingApprovalRequest(
             actor=actor,
             reason=reason,
-            review_token=f's4sr1_{SUBJECT}',
-            chapters=[{
-                'output_ordinal': 1,
-                'decision': 'request_replan',
-                'reason': '关闭式模板',
-            }],
+            review_token=f's5wr1_{SUBJECT}',
         )
 
-    monkeypatch.setattr(approvals, 'structure_template', template)
+    monkeypatch.setattr(approvals, 'writing_template', template)
+    with pytest.raises(SystemExit):
+        cli._parser().parse_args([
+            'approval', 'template', 'structure', SID,
+            '--base', str(tmp_path), '--actor', 'commander',
+            '--reason', '待逐章核验',
+        ])
     rc = cli.main([
-        'approval', 'template', 'structure', SID,
-        '--base', str(tmp_path), '--actor', 'commander', '--reason', '待逐章核验',
+        'approval', 'template', 'writing', SID,
+        '--base', str(tmp_path), '--actor', 'commander', '--reason', '待整书授权',
     ])
 
     assert rc == X.OK
-    body = StructureApprovalRequest.model_validate_json(capsys.readouterr().out)
-    assert body.review_token == f's4sr1_{SUBJECT}'
-    assert body.chapters[0].decision == 'request_replan'
-    assert captured['actor'] == 'commander' and captured['reason'] == '待逐章核验'
+    body = WritingApprovalRequest.model_validate_json(capsys.readouterr().out)
+    assert body.review_token == f's5wr1_{SUBJECT}'
+    assert captured['actor'] == 'commander' and captured['reason'] == '待整书授权'
 
 
 def test_approval_apply_reads_typed_writing_body_and_never_uses_legacy_branch(

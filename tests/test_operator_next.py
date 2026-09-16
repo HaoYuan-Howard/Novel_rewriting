@@ -231,14 +231,14 @@ def test_next_uses_one_snapshot_and_the_shared_queue_lane(monkeypatch, tmp_path)
     calls = _wire(
         monkeypatch, snapshot,
         todo=[_ready('stage2.global')],
-        blocked=[_blocked('stage0.approve', 'stage0.approve')])
+        blocked=[_blocked('stage1.partition', Q.WAITING_ON_INBOX)])
 
     got = O.next_action(tmp_path, 'book-1')
 
     assert got.state == 'blocked'
     assert got.action is not None
-    assert got.action.node == 'stage0.approve'
-    assert got.action.waiting_on == 'stage0.approve'
+    assert got.action.node == 'stage1.partition'
+    assert got.action.waiting_on == Q.WAITING_ON_INBOX
     assert got.overview == snapshot.overview
     assert len([call for call in calls if call[0] == 'capture']) == 1
     assert ('inbox', snapshot) in calls
@@ -341,18 +341,13 @@ def test_no_lane_item_is_pipeline_complete_not_delivery_ready(monkeypatch, tmp_p
     [
         (
             _blocked(
-                'stage4.context', Q.WAITING_ON_STAGE4_STRUCTURE_REPLAN),
-            'human',
+                'stage5.write', Q.WAITING_ON_STAGE5_REVIEWER_REWRITE),
+            'executor',
         ),
         (
-            QueueItem(
-                sid='book-1', node='stage4.design',
-                flags=['--review-token', 's4rr1_' + 'a' * 64],
-                steps=[_step('stage4.design')],
-                why='已有 current typed A 修订决定',
-                waiting_on=Q.WAITING_ON_STAGE4_DESIGN_ACTION,
-            ),
-            'executor',
+            _blocked(
+                'stage6.hook', Q.WAITING_ON_STAGE5_CLOSURE),
+            'human',
         ),
     ],
 )
@@ -378,7 +373,7 @@ def test_progress_snapshot_projects_authoritative_frontier_and_handler(
 def test_resume_frontier_rejects_a_frontend_invented_node_label():
     with pytest.raises(ValidationError, match='label 必须来自 NODES'):
         RunResumeFrontierView(
-            state='ready', node='stage1.partition', seq=4,
+            state='ready', node='stage1.partition', seq=2,
             label='前端自造标签', resume_verdict='run', why='产物缺失',
             paid=False, writes='stage1/main_text.json', next_handler='code',
             verified_skipped_nodes=list(NODES)[:3],
@@ -484,9 +479,9 @@ def test_cli_json_keeps_blocked_and_complete_at_exit_zero(
     action = None
     if state == 'blocked':
         action = OperatorAction(
-            node='stage0.approve', flags=[], resume_verdict='run', why='等人批准',
-            waiting_on='stage0.approve', paid=False,
-            writes='stage0/revisions.json', action_sha256='c' * 64)
+            node='stage7.approve', flags=[], resume_verdict='run', why='等人批准',
+            waiting_on='stage7.approve', paid=False,
+            writes='stage7/name_map.json', action_sha256='c' * 64)
     result = OperatorNext(
         base=str(tmp_path), sid='book-1', code_version='code-v1',
         surface_seal='a' * 64, state=state,

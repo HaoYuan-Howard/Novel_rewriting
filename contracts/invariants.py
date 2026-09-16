@@ -1683,7 +1683,6 @@ FREE_ENTRIES: Final = {
     '--review-decisions': '应用带 actor、理由和 subject hash 乐观锁的独立 typed 复核决策',
     '--emit-review-template': ('向 stdout 输出绑定当前主体 hash/evidence 的审阅模板，不写盘'),
     '--emit-review-workpack': ('向 stdout 输出逐项证据包；只辅助人工核验，不自动做决定'),
-    '--close-review': '核验当前节点所需的 typed 接受覆盖，零模型补齐审批（Stage4 现役；Stage2 已退役）',
     '--recover-edit': '免费补齐本 owner 已耐久的原编辑或复核决定，不重新审阅、不调用模型',
     # ⚠⚠ **它是 2026-08-15 补的，而漏它的后果正是本表开头那条**：
     #   `--wontfix` 原来只挂在 `stage5.review` 上，而那是个 `paid=False` 节点
@@ -1994,10 +1993,6 @@ NODE_WRITE_EFFECTS: Final = {
         '原 producer 已停止后，以独立免费 committer 补完 Stage4B 聚合与原采用尾账',
     ('stage6.hook', '--recover-prepared'):
         '按原完成组补 stage6/hook.json、原 run 采纳审计及工作单元提交状态（0 模型）',
-    ('stage4.design', '--close-review'):
-        '_service/approvals/<sid>.json（完整继承当前 A 策略与逐章有效决定，不新增语义接受）',
-    ('stage4.plan', '--close-review'):
-        '_service/approvals/<sid>.json（完整继承当前 B 逐章有效决定并闭合结构闸）',
     ('stage4.plan', '--identity'): '',
     ('stage7.rename', '--recover-prepared'):
         '按原完成组补 name_map.json、原 run 采纳及工作单元提交状态（0 模型）',
@@ -2050,9 +2045,12 @@ class NodeLifecycleSpec(NamedTuple):
     """节点职责登记；运行状态和剩余预算必须读取持久工作单元账。
 
     ``approval_bindings`` 把审批 blocker 映射到 (属主节点, scope)：它登记
-    「这道闸属于哪个节点的工作面」，供 operator 审批状态投影与历史 reviewer
-    工作单元解码使用。Commander 受托审阅退役（2026-09-15）后这些闸由人工
-    在 Stage 页面过，映射本身保留——blocker 的存在性与归属不随审阅者变化。
+    「这道闸属于哪个节点的工作面」，供历史 reviewer 工作单元只读解码使用。
+    Commander 受托审阅退役（2026-09-15）后这些闸由人工在 Stage 页面过；
+    Stage4 四道闸亦已整体退役（同日全自动裁决）——``stage4.design`` /
+    ``stage4.plan`` 的 ``approval_bindings`` 清空，唯一打开条件是统一机械
+    准入（``novel/orchestrator/mechanical_admission.py``）。现役仅剩
+    stage5/6/7 与 stage7.approve 的人工面（批次 B4 收敛）。
     """
 
     unit_kind: str
@@ -2224,21 +2222,19 @@ NODES: Final[dict[str, NodeSpec]] = {
     #   架构改变本身不静默翻默认；后续须在同一 unit 契约下比较首交率、
     #   HARD、token 与墙钟再裁决。
     'stage4.design':    NodeSpec('stage4', 'R-5',  True,  'stage4 盲场景设计',
-                                  lifecycle=NodeLifecycleSpec('strategy_and_chapter', '去序盲事实与独立章工作包', 'executor', 'human', 'A 设计及本轮明确变更', ('accept', 'typed_edit', 'targeted_rework', 'replan', 'stop'), ('stage2.blueprint', 'stage4.design'), 'executor:strategy/chapter / human:design', ('--apply-edit', '--recover-repair-aggregate', '--recover-prepared', '--close-review', '--reaggregate', '--recover-responses', 'saved_response', 'prepared_commit'), approval_bindings=(('approval:stage4-design-review', 'design'), ('approval:stage4-binding-resolution', 'design'), ('approval:stage4-structure-replan', 'design')), approval_projection=('design_review', 'state')),
-                                   flags=('--dry-run', '--replan', '--review-token', '--close-review', '--reaggregate', '--recover-responses',
+                                  lifecycle=NodeLifecycleSpec('strategy_and_chapter', '去序盲事实与独立章工作包', 'executor', 'none', '机械准入通过即自动执行；B 的 typed infeasible 触发预算内自动重采', ('stop',), ('stage2.blueprint', 'stage4.design'), 'executor:strategy/chapter', ('--replan', '--reaggregate', '--recover-responses', '--recover-prepared', '--recover-repair-aggregate', '--source-journal-sha256', '--source-commit-sha256', 'saved_response', 'prepared_commit')),
+                                   flags=('--dry-run', '--replan', '--reaggregate', '--recover-responses',
                                           '--recover-prepared', '--subject-sha256',
-                                          '--validate-edit',
-                                          '--apply-edit',
                                           '--recover-repair-aggregate',
                                           '--source-journal-sha256',
                                           '--source-commit-sha256',
-                                          '--actor', '--reason', '--response-repair'),
+                                          '--response-repair'),
                                   produces=(artifact_paths.STAGE4_BLIND_CANDIDATE,),
                                   model='deepseek-v4-pro',
                                   operator_redo='canonical'),
     'stage4.plan':      NodeSpec('stage4', 'R-5',  True,  'stage4 证据绑定与计划编译',
-                                  lifecycle=NodeLifecycleSpec('ambiguous_chapter', '已接受 A 与本章关闭目录、机械基线', 'executor_or_deterministic', 'human', '独立 B 结构及证据绑定', ('accept', 'typed_edit', 'targeted_rework', 'stop'), ('stage2.blueprint', 'stage4.design', 'stage4.plan'), 'executor:ambiguous_chapter / human:structure', ('--revalidate', '--apply-binding', '--apply-edit', '--reaggregate', '--recover-prepared', '--close-review', 'saved_response', 'prepared_commit'), approval_bindings=(('approval:stage4-structure-review', 'structure'),), approval_projection=('structure', 'state')),
-                                  flags=('--dry-run', '--check-only', '--reaggregate', '--close-review',
+                                  lifecycle=NodeLifecycleSpec('ambiguous_chapter', '已接受 A 与本章关闭目录、机械基线', 'executor_or_deterministic', 'none', '机械准入通过即自动执行；typed infeasible 唯一后继是预算内自动重采 A', ('typed_edit', 'stop'), ('stage2.blueprint', 'stage4.design', 'stage4.plan'), 'executor:ambiguous_chapter', ('--revalidate', '--apply-binding', '--apply-edit', '--reaggregate', '--recover-prepared', 'saved_response', 'prepared_commit')),
+                                  flags=('--dry-run', '--check-only', '--reaggregate',
                                          '--recover-prepared', '--subject-sha256',
                                          '--revalidate', '--names-only', '--identity',
                                          '--apply-edit', '--apply-binding',
@@ -2380,20 +2376,47 @@ def approval_work_unit(waiting_on: str) -> tuple[str, str] | None:
     """审批 blocker 到 (属主节点, scope) 的唯一投影；未知 blocker 不归属任何节点。
 
     历史上这是 Commander 审阅工作单元的预算属主投影；Commander 退役
-    （2026-09-15）后它继续回答「这道闸属于谁的工作面」，供 operator 审批
-    状态投影与存量书 reviewer 工作单元的只读解码使用。
+    （2026-09-15）后它继续回答「这道闸属于谁的工作面」，供存量书 reviewer
+    工作单元的只读解码使用。Stage4 四道闸同日整体退役，现役
+    ``approval_bindings`` 已清空；它们的归属只保留在下方历史只读表里。
     """
     found = [(node, scope) for node, spec in NODES.items()
              for blocker, scope in spec.lifecycle.approval_bindings
              if blocker == waiting_on]
+    found.extend(
+        (node, scope)
+        for node, bindings in RETIRED_APPROVAL_BINDINGS.items()
+        for blocker, scope in bindings
+        if blocker == waiting_on)
     if len(found) > 1:
         raise ValueError(f'审批 blocker 重复登记：{waiting_on}')
     return found[0] if found else None
 
 
 def approval_scope_allowed(node: str, scope: str) -> bool:
-    """审批 scope 只由节点登记派生；未登记的 scope 不属于该节点的审批面。"""
-    return scope in {value for _, value in NODES[node].lifecycle.approval_bindings}
+    """审批 scope 只由节点登记派生；未登记的 scope 不属于该节点的审批面。
+
+    已退役闸的 scope 仍按历史只读表放行，仅供存量书历史解码，不构成
+    任何现役写面。
+    """
+    return scope in (
+        {value for _, value in NODES[node].lifecycle.approval_bindings}
+        | {value for _, value in RETIRED_APPROVAL_BINDINGS.get(node, ())})
+
+
+#: Stage4 四道人工闸退役（2026-09-15 全自动裁决）后的历史只读归属。
+#: 现役 ``NODES`` 不再登记这些 binding；这里唯一消费者是存量书 reviewer
+#: 工作单元与 Commander 账的只读解码（``novel/work_units.py``）。
+RETIRED_APPROVAL_BINDINGS: Final[Mapping[str, tuple[tuple[str, str], ...]]] = {
+    'stage4.design': (
+        ('approval:stage4-design-review', 'design'),
+        ('approval:stage4-binding-resolution', 'design'),
+        ('approval:stage4-structure-replan', 'design'),
+    ),
+    'stage4.plan': (
+        ('approval:stage4-structure-review', 'structure'),
+    ),
+}
 
 #: 允许配置 executor agent 的现役节点。这里只列**真正调用生成/审判模型**的九个
 #: 付费节点；``stage4.context``、人工 approve 与机械 review 仍由代码执行，不能在

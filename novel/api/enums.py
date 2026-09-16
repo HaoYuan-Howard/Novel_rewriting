@@ -74,6 +74,9 @@ _WITHHELD: dict[str, str] = {
     'BOOK_CONTENT_CALL_CEILING_DEFAULT': '整书付费总闸默认值只由后端 reserve 时强制；前端显示工作单元预算投影，不自行判断余量',
     'DETERMINISTIC_REBUILD_NODES': '自动重建白名单是后端调度边界（R-11.27）；前端只消费 operator 给出的具体动作，不自行推导重建范围',
     'WORK_UNIT_MAX_DELIVERY_ATTEMPTS': '网络尝试上限只由工作单元底座执行，前端显示后端预算投影',
+    'RETIRED_APPROVAL_BINDINGS': (
+        'Stage4 已退役人工闸的历史只读归属；仅服务存量书 reviewer 账解码，'
+        '不是前端取值面'),
     'LEGACY_STAGE2_COMMANDER_SEAT_PURPOSES': '退役预审与终审只供历史审计解码',
     'LEGACY_STAGE2_COMMANDER_MAX_SEATS': '冻结旧席账的历史预算，不参与新工作单元',
     'LEGACY_STAGE2_COMMANDER_MAX_EDIT_SEAT': '冻结旧席账的历史编辑上限',

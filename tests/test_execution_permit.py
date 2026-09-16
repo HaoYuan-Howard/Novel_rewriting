@@ -126,20 +126,13 @@ def test_blocked_recovery_gets_a_new_permit_not_the_blocker_hash(
     assert got.permit_sha256 != current.action.action_sha256
 
 
-@pytest.mark.parametrize(
-    'waiting_on',
-    [
-        Q.WAITING_ON_STAGE4_DESIGN_REVIEW,
-        Q.WAITING_ON_STAGE4_BINDING_RESOLUTION,
-        Q.WAITING_ON_STAGE4_STRUCTURE_REVIEW,
-    ],
-)
-def test_blueprint_workpack_remains_reachable_for_stage4_gate_bootstrap(
-        waiting_on, monkeypatch, tmp_path):
-    """Stage2 收口后补 seen.read 时，纯读工作包不能被 Stage4 blocker 锁死。"""
+def test_blueprint_workpack_recovery_survives_a_generic_downstream_blocker(
+        monkeypatch, tmp_path):
+    """Stage4 人工闸 blocker 已退役；同族纯读工作包只按通用 blocker 恢复。"""
     _stable(monkeypatch)
     current = _next(
-        tmp_path, state='blocked', node='stage4.plan', waiting_on=waiting_on)
+        tmp_path, state='blocked', node='stage4.plan',
+        waiting_on=Q.WAITING_ON_INBOX)
 
     got = P.permit_from_next(
         current, 'stage2.blueprint', ['--emit-edit-template'])
@@ -147,7 +140,7 @@ def test_blueprint_workpack_remains_reachable_for_stage4_gate_bootstrap(
     assert got.kind == 'recovery'
     assert got.paid is False
     assert got.writes == ''
-    assert got.waiting_on == waiting_on
+    assert got.waiting_on == Q.WAITING_ON_INBOX
     assert got.node == 'stage2.blueprint'
     assert got.flags == ['--emit-edit-template']
 
@@ -182,34 +175,19 @@ def test_pipeline_complete_and_unregistered_paid_recovery_fail_closed(
         P.permit_from_next(blocked, 'stage2.global', ['--resample'])
 
 
-@pytest.mark.parametrize(
-    ('node', 'flags', 'expected'),
-    [
-        ('stage4.design', [
-            '--replan', '--review-token', 's4rr1_' + 'd' * 64], 'replan'),
-        ('stage4.design', [
-            '--review-token', 's4rr1_' + 'd' * 64], 'repair'),
-    ],
-)
-def test_paid_stage4_recovery_reuses_the_typed_production_authorizer(
-        node, flags, expected, monkeypatch, tmp_path):
+def test_retired_stage4_typed_recovery_flags_are_unregistered(
+        monkeypatch, tmp_path):
+    """人工闸退役后 design 的 review-token 恢复路整体注销，不允许任何 paid 恢复。"""
     _stable(monkeypatch)
     current = _next(
         tmp_path, state='blocked', node='stage4.design',
-        waiting_on=Q.WAITING_ON_STAGE4_DESIGN_ACTION)
-    calls = []
-    monkeypatch.setattr(
-        P.approvals, 'resolve_design_action',
-        lambda base, sid, sha, *, expected: calls.append(
-            (base, sid, sha, expected)) or object())
-
-    got = P.permit_from_next(current, node, flags)
-
-    assert got.paid is True and got.kind == 'recovery'
-    assert calls == [(
-        str(tmp_path.resolve()), SID,
-        's4rr1_' + 'd' * 64, expected,
-    )]
+        waiting_on=Q.WAITING_ON_INBOX)
+    for flags in (
+        ['--replan', '--review-token', 's4rr1_' + 'd' * 64],
+        ['--review-token', 's4rr1_' + 'd' * 64],
+    ):
+        with pytest.raises(UnsupportedRunMode):
+            P.permit_from_next(current, 'stage4.design', flags)
 
 
 def test_external_input_hash_binds_raw_bytes_and_changes_the_permit(
@@ -220,8 +198,8 @@ def test_external_input_hash_binds_raw_bytes_and_changes_the_permit(
     edit.parent.mkdir(parents=True)
     edit.write_bytes(b'{"value":1}\n')
     current = _next(
-        tmp_path, state='blocked', node='stage4.context',
-        waiting_on=Q.WAITING_ON_STAGE4_STRUCTURE_REVIEW)
+        tmp_path, state='blocked', node='stage4.plan',
+        waiting_on=Q.WAITING_ON_INBOX)
 
     first = P.permit_from_next(
         current, 'stage4.plan', ['--apply-edit', 'stage4/plan_edit.json'])
@@ -238,26 +216,26 @@ def test_external_input_hash_binds_raw_bytes_and_changes_the_permit(
     assert first.permit_sha256 != second.permit_sha256
 
 
-@pytest.mark.parametrize('flag', ['--validate-edit', '--apply-edit'])
-def test_stage4_chapter_edit_binds_book_request_raw_bytes(
-        flag, monkeypatch, tmp_path):
+def test_stage4_plan_edit_binds_book_request_raw_bytes(
+        monkeypatch, tmp_path):
+    """permit 只绑路径字符串不够：外部编辑文件必须绑原始字节。"""
     _stable(monkeypatch)
     novel_dir = tmp_path / f'平台_测试书_{SID}'
-    edit = novel_dir / 'stage4' / 'blind_chapter_edit.json'
+    edit = novel_dir / 'stage4' / 'plan_edit.json'
     edit.parent.mkdir(parents=True)
-    edit.write_bytes(b'{"review_token":"s4er1_draft"}\n')
+    edit.write_bytes(b'{"value":1}\n')
     current = _next(
         tmp_path, state='blocked', node='stage4.plan',
-        waiting_on=Q.WAITING_ON_STAGE4_DESIGN_REVIEW)
+        waiting_on=Q.WAITING_ON_INBOX)
 
     permit = P.permit_from_next(
-        current, 'stage4.design', [flag, str(edit)])
+        current, 'stage4.plan', ['--apply-edit', str(edit)])
 
     assert len(permit.external_inputs) == 1
     bound = permit.external_inputs[0]
-    assert bound.flag == flag
+    assert bound.flag == '--apply-edit'
     assert bound.sha256 == hashlib.sha256(edit.read_bytes()).hexdigest()
-    edit.write_bytes(b'{"review_token":"s4er1_changed"}\n')
+    edit.write_bytes(b'{"value":2}\n')
     with pytest.raises(ArtifactUnreadable, match='外部输入'):
         P.revalidate_active_execution_surface(permit)
 
@@ -354,9 +332,9 @@ def test_policy_tables_are_closed_and_paid_rows_are_exactly_profiled():
     assert all(row.node in NODES and row.tokens <= set(NODES[row.node].flags)
                for row in P.RECOVERY_RUN_POLICIES)
     paid = {(row.node, row.tokens) for row in P.RECOVERY_RUN_POLICIES if row.paid}
+    # stage4.design 的人工 typed 恢复动作已随四道闸退役（2026-09-15 全自动
+    # 裁决）；--replan 只作为普通付费 todo 经 ready permit 执行。
     assert paid == {
-        ('stage4.design', frozenset({'--replan', '--review-token'})),
-        ('stage4.design', frozenset({'--review-token'})),
         ('stage5.write', frozenset({'--revise'})),
         ('stage5.write', frozenset({'--revise', '--chapters'})),
         ('stage5.write', frozenset({'--reviewer-rewrite'})),
@@ -366,8 +344,6 @@ def test_policy_tables_are_closed_and_paid_rows_are_exactly_profiled():
         ('stage2.global', '--apply-edit'),
         ('stage2.blueprint', '--validate-edit'),
         ('stage2.blueprint', '--apply-edit'),
-        ('stage4.design', '--validate-edit'),
-        ('stage4.design', '--apply-edit'),
         ('stage4.design', '--recover-repair-aggregate'),
         ('stage4.plan', '--apply-edit'),
         ('stage4.plan', '--apply-binding'),

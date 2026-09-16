@@ -281,7 +281,7 @@ def test_blind_keeps_two_faces_in_same_beat_and_never_inherits_hidden_role():
 
 def prepare_complete_book(tmp_path, *, grounding=None):
     """贯通 fixture 从真实摄入/批准/分章产生来源链，不跳过 Stage0/1 闸门。"""
-    from novel.stages.stage0.removal import run_source, run_approve, _context
+    from novel.stages.stage0.removal import run_source, _context
     from novel.stages.stage1.partition import run_partition
     from tests.test_stage2 import main_text
     from tests.test_stage2_generation import _ctx, _client, _ok, _accept_fixture_global
@@ -293,9 +293,7 @@ def prepare_complete_book(tmp_path, *, grounding=None):
         f"{row['chapter_ordinal']}\n\n{row['text']}" for row in main_text())
     source.write_text(body, encoding='utf-8', newline='\n')
     book, _, _ = run_source(source, tmp_path / 'output')
-    _, report = run_approve(_context(book, 'stage0.approve'),
-                            actor='test:源文审阅者', reason='已核对合成全书来源与保留范围')
-    assert report.passed
+    # B1：stage0 approve 退役——run_source 落盘即写 auto 批准。
     _, report = run_partition(_context(book, 'stage1.partition'))
     assert report.passed
     generate_characters(_ctx(book, 'stage2.characters'), view=grounding)
@@ -307,7 +305,7 @@ def prepare_complete_book(tmp_path, *, grounding=None):
 
 
 def produce_through_first_chapter(tmp_path, monkeypatch, *, distributed=False, grounding=None,
-                                  stop_at_review=None, capture=None, blueprint_mutator=None,
+                                  capture=None, blueprint_mutator=None,
                                   real_code_identity=False):
     from contracts.schema.stage4 import BlindCandidate
     from novel.stages.stage4 import plan, prompts
@@ -383,25 +381,8 @@ def produce_through_first_chapter(tmp_path, monkeypatch, *, distributed=False, g
     assert landed == candidate
     assert 'fact_aliases' not in raw
     assert store.freshness(plan.CANDIDATE_REL).state == 'fresh'
-    workpack = approvals.design_workpack(book.parent, ctx.sid)
-    if capture is not None:
-        capture['design_workpack'] = workpack.model_dump(mode='json')
-    rendered = workpack.model_dump_json()
-    assert 'beat_placements' in rendered and 'fact_aliases' not in rendered
-    if stop_at_review == 'design':
-        return book
-    from tests.test_design_review import _accept_all
-    template = approvals.design_template(book.parent, ctx.sid, actor='test:设计审阅者',
-        reviewer_kind='human', review_run_id='plot-design-review', reason='合成设计语义审阅')
-    if capture is not None:
-        capture['design_template'] = template.model_dump(mode='json')
-    # 审阅闸人工（Commander 退役）：模板是人在 Stage 页面读到的关闭式材料，
-    # 每章必须带非空 beats，且不得把事实别名泄露进人审投影。
-    assert all(row.subject.blind_truth.beats for row in template.chapters)
-    assert 'fact_aliases' not in template.model_dump_json()
-    submission = _accept_all(template)
-    decision = approvals.approve_design(book.parent, ctx.sid, submission)
-    assert decision.design_review.state == 'accepted'
+    # 2026-09-15 全自动裁决：design workpack/模板/typed 审阅写面退役；
+    # A 落盘即机械准入放行 B，不再有人工审阅票。
     from novel.stages.stage4.plot_binding import (
         build_evidence_catalog, construct_feasible_binding_witness, merge_evidence_bindings,
     )
@@ -418,7 +399,6 @@ def produce_through_first_chapter(tmp_path, monkeypatch, *, distributed=False, g
     rendered = json.dumps(context, ensure_ascii=False)
     assert all(key not in rendered for key in ('fact_atoms', 'required_facts', 'source_context_refs'))
     assert all(row['beats'] for row in context['chapters'])
-    approvals.authorize_plan(book.parent, ctx.sid)
     binding_ctx = _ctx(book, 'stage4.plan')
     def bind_chapter(req, _index):
         assert distributed, '无歧义的合成绑定不能购买模型响应'
@@ -446,22 +426,8 @@ def produce_through_first_chapter(tmp_path, monkeypatch, *, distributed=False, g
         assert placement.deliveries[0].evidence_refs == placement.deliveries[1].evidence_refs
         assert next(a for a in formal.output_chapters[0].anchor_bindings
                     if a.ref == 'st01_01').scene_ref == 's02'
-    structure = approvals.structure_workpack(book.parent, ctx.sid)
-    if capture is not None:
-        capture['structure_workpack'] = structure.model_dump(mode='json')
-    coverage = next(group for group in structure.groups if group.group == 'coverage')
-    assert len(coverage.items) == 3
-    assert all(item.reading.materials.blueprint.beats for item in coverage.items)
-    assert all(item.reading.materials.source_materials for item in coverage.items)
-    if stop_at_review == 'structure':
-        return book
-    from contracts.schema.api import StructureApprovalRequest
-    template = approvals.structure_template(book.parent, ctx.sid, actor='test:结构审阅者',
-                                            reason='合成全章联合呈现与证据已复核')
-    payload = template.model_dump(mode='json')
-    for row in payload['chapters']:
-        row.update(decision='accept', reason='合成完整节点、证据和端点一致')
-    approvals.approve_structure(book.parent, ctx.sid, StructureApprovalRequest.model_validate(payload))
+    # structure workpack/模板/typed 审阅写面已随人工闸退役；计划落盘即机械
+    # 准入放行 0 成本 Context 组装。
     context_report = plan.run_context(_ctx(book, 'stage4.context', paid=False))
     assert context_report.passed
     from novel.stages.stage5 import review as write_review, prompts as write_prompts
@@ -519,7 +485,7 @@ def produce_through_first_chapter(tmp_path, monkeypatch, *, distributed=False, g
             assert reply.status_code == 200, reply.text
             capture['api:enums'] = reply.json()
         design_view = http.get(f'/api/novels/{ctx.sid}/stage4/1').json()
-        assert design_view['structure_subject_sha256'] == structure.subject_sha256
+        assert design_view['structure_subject_sha256'], '视图仍投影结构主体身份'
         assert design_view['plan_chapter']['beat_placements']
         with monkeypatch.context() as probe:
             probe.setattr(plot_materials, 'chapter_materials',

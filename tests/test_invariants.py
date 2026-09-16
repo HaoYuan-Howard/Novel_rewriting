@@ -254,9 +254,13 @@ def test_stage4_replan_is_an_explicit_paid_design_action_only():
     assert '--replan' not in inv.FREE_ENTRIES
 
 
-def test_stage4_targeted_repair_uses_one_opaque_token_and_is_not_publicly_chaptered():
-    assert '--review-token' in inv.VALUED_FLAGS
-    assert '--review-token' in inv.NODES['stage4.design'].flags
+def test_stage4_human_credential_flags_are_retired_and_recovery_flags_stay():
+    """人工闸退役后 stage4 不再有 review-token/close-review 凭据面；
+    免费恢复与 0-wire 编辑入口保持登记。"""
+    for retired in ('--review-token', '--close-review', '--validate-edit'):
+        assert retired not in inv.NODES['stage4.design'].flags
+        assert retired not in inv.NODES['stage4.plan'].flags
+    assert '--replan' in inv.NODES['stage4.design'].flags
     assert '--repair-decision' not in inv.PAID_FLAGS
     assert '--repair-decision' not in inv.VALUED_FLAGS
     assert '--repair-decision' not in inv.NODES['stage4.design'].flags

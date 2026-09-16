@@ -1082,8 +1082,10 @@ def test_backfill_does_not_write_final_stamps_or_manufacture_other_gate_facts(fi
     before = box.approvals._path(box.root, box.sid).read_bytes()
     with TestClient(create_app(box.root)) as client:
         doc = _get_final_gate_doc(client, box)
+        # B2 起 gate 链不再经过 s4（现役 {s1←s0, s6←s5, s7←s6}），s6/s7
+        # 不再传递依赖 s1；「GET 不自动补前置格」仍由 s1 保持 False 钉住。
         assert doc['gate']['s1'] is False
-        assert doc['gate']['s6'] is doc['gate']['s7'] is False
+        assert doc['gate']['s6'] is doc['gate']['s7'] is True
     assert box.approvals._path(box.root, box.sid).read_bytes() == before
 
 

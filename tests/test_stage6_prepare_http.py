@@ -20,6 +20,7 @@ from tests.test_plot_design import produce_through_first_chapter
 from tests.test_plot_pipeline import complete_stage5, grounded_global
 from tests.test_stage2_generation import _ctx
 from tests.test_stage2_global_agent import _Driver, _free_ctx, _profile
+from tests.factories import stage0_machine_revise
 from tests.test_stage6_prepare import ProcessExit, edit_for, response
 
 
@@ -63,24 +64,20 @@ def _accept(http, base):
 
 
 def _revise_source_hook(book, edit_path, new_text):
-    """从正式 Stage0 编辑、批准再分章；MainText 字节保持原样。"""
-    from novel.stages.stage0.removal import _context, run_edit, run_approve
+    """源钩子换稿（现役机器语义）再分章；MainText 字节保持原样。
+
+    ⚠ 人工编辑/批准入口已随 stage0.edit/approve 退役（2026-09-15）：换稿走
+    `stage0_machine_revise`（机器稿直接替换 + auto 批准）；旧「源文编辑撤销
+    批准 → s0_approval 待批阻断」的断言随人工闸一并退役。
+    """
+    from novel.stages.stage0.removal import _context
     from novel.stages.stage1.partition import run_partition
-    read = ArtifactStore(_context(book, 'stage0.edit'))
+    read = ArtifactStore(_context(book, 'stage0.remove'))
     old_hook = read.read_own(HookCopy, STAGE1_HOOK_COPY)[0].text
     before = read.full_sha256_or_none(STAGE1_MAIN_TEXT)
     clean = read.read_text(STAGE0_CLEAN_TEXT)
     assert clean.startswith(old_hook)
-    edit_path.write_text(new_text + '\n\n' + clean[len(old_hook):], encoding='utf-8', newline='')
-    _, edited = run_edit(_context(book, 'stage0.edit'), edit_path,
-        actor='test:源钩子订正者', reason='仅修订源钩子措辞，章节正文保持不变')
-    # 源文编辑会主动撤销旧批准；这里只允许预期的待批准阻断。
-    assert not edited.passed
-    assert [row.rule for row in edited.rules if row.sev == 'hard' and row.status == 'hit'] == ['s0_approval']
-    assert not any(row.status == 'skipped' for row in edited.rules)
-    _, approved = run_approve(_context(book, 'stage0.approve'),
-        actor='test:源钩子审阅者', reason='已核对新钩子及未变更的全部章节')
-    assert approved.passed, approved.model_dump_json()
+    stage0_machine_revise(book, new_text + '\n\n' + clean[len(old_hook):])
     _, partitioned = run_partition(_context(book, 'stage1.partition'))
     assert partitioned.passed, partitioned.model_dump_json()
     assert ArtifactStore(_context(book, 'stage1.partition')).full_sha256_or_none(STAGE1_MAIN_TEXT) == before

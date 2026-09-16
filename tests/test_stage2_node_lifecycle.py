@@ -12,7 +12,7 @@ import pytest
 
 
 @pytest.mark.parametrize('legacy', [False, True])
-@pytest.mark.parametrize('entry', ['gate', 'design', 'structure', 'backfill', 'raw'])
+@pytest.mark.parametrize('entry', ['gate', 'writing', 'backfill', 'raw'])
 def test_all_approval_write_entries_require_existing_manifest_before_lock(tmp_path, entry, legacy):
     if legacy:
         old = tmp_path / '书_123' / 'stage2'
@@ -23,9 +23,9 @@ def test_all_approval_write_entries_require_existing_manifest_before_lock(tmp_pa
     from novel.work_units import WorkUnitRefused
     calls = {
         'gate': lambda: approvals.approve_gate(tmp_path, '123', 's0'),
-        # 请求解码属于 API/CLI；这里验证业务入口在任何主体读取及锁副作用前挡旧 base。
-        'design': lambda: approvals.approve_design(tmp_path, '123', None),
-        'structure': lambda: approvals.approve_structure(tmp_path, '123', None),
+        # Stage4 design/structure typed apply 已随人工闸退役；
+        # 现役人工写面只剩 writing/stage5。旧 base 拦截在任何锁副作用前。
+        'writing': lambda: approvals.approve_writing(tmp_path, '123', None),
         'backfill': lambda: approvals.backfill_from_disk(tmp_path, '123'),
         'raw': lambda: approvals._write(tmp_path, None),
     }

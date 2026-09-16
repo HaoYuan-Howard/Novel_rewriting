@@ -100,38 +100,13 @@ def start_job(req: PreviewRequest, base: str = Depends(get_base)) -> JobRecord:
     # stage2.blueprint / stage4 / stage7.assemble 等付费与正文外的准入由
     # CLI validate_run 统一执行，preview 不走这里，始终可用。
     tokens = nodes.flag_tokens(req.flags)
-    # A 的付费返修/重规划必须消费当前 hash-bound typed 决定；默认首次设计没有
-    # 这张票。占住书锁后先解析一次可执行 scope，CLI 仍在 subprocess 内终验。
-    if req.node == 'stage4.design' and (
-        '--review-token' in tokens or '--replan' in tokens
-    ):
+    # Stage4 人工闸已退役（2026-09-15 全自动裁决）：打开条件唯一化为统一
+    # 机械准入，producer 在 subprocess 内终验；API 不再铸任何审批授权。
+    # A 的策略重采只认 B 的 typed infeasible 终态铸成的机器 scope。
+    if req.node == 'stage4.design' and '--replan' in tokens:
         if sid is None:
-            raise UnsupportedRunMode('stage4.design repair requires a novel sid')
-        review_token = nodes.flag_value(req.flags, '--review-token')
-        if '--replan' not in tokens:
-            prepares.append(lambda review_token=review_token: (
-                approvals.resolve_design_action(
-                    base, sid, review_token, expected='repair')))
-        else:
-            prepares.append(lambda review_token=review_token: (
-                approvals.resolve_design_action(
-                    base, sid, review_token, expected='replan')))
-    elif req.node == 'stage4.design' and not tokens:
-        if sid is None:
-            raise UnsupportedRunMode('stage4.design requires a novel sid')
-        prepares.append(lambda: approvals.authorize_design_initial(base, sid))
-    # Stage4B 的两条“产新 Plan”入口共用 A all-accept 票；check/revalidate/
-    # apply-edit/dry-run 是旧 Plan 的零成本恢复/诊断，不得被 A 反向堵死。
-    if req.node == 'stage4.plan' and (
-        not tokens or '--apply-binding' in tokens
-    ):
-        if sid is None:
-            raise UnsupportedRunMode('stage4.plan requires a novel sid')
-        prepares.append(lambda: approvals.authorize_plan(base, sid))
-    if req.node == 'stage4.context':
-        if sid is None:
-            raise UnsupportedRunMode('stage4.context requires a novel sid')
-        prepares.append(lambda: approvals.authorize_context(base, sid))
+            raise UnsupportedRunMode('stage4.design --replan requires a novel sid')
+        prepares.append(lambda: approvals.cast_infeasible_replan_scope(base, sid))
     # writing 授权保护的是正文外发 / 付费 LLM 调用。Stage5 同一节点下还有
     # rebuild/recheck/revalidate/dry-run 等零成本恢复路；若也绑 writing，恢复路
     # 会在入口处被自己堵死。`planned.paid` 与 preview 展示的是同一份折叠结论，

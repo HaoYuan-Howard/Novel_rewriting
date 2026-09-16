@@ -27,7 +27,7 @@ from contracts.invariants import (
 from contracts.rules import REGISTRY
 from contracts.schema.api import (
     AgentCapabilitiesResponse, AgentDriverCapability, AgentModelCapability,
-    AgentRunRequest, AgentRunList, ApprovalDoc, ApprovalWorkpack, BlueprintReadingWorkpack, DesignReviewTemplate,
+    AgentRunRequest, AgentRunList, ApprovalDoc, BlueprintReadingWorkpack,
     CharacterRegistryView, DraftAlignView, DraftView, ErrorBody, GlobalView, NovelOverview,
     JobList, LogChunk, LogStreamEvent, NovelList, PreviewRequest, ReadingView,
     LegacyModelCapability, LegacyProviderCapability, LegacyThinkingCapability,
@@ -123,9 +123,7 @@ def test_plot_flow_fixtures_are_closed_current_http_and_review_views():
     captured = json.loads((ROOT / 'web/src/fixtures/plot_v1/flow.json').read_text(
         encoding='utf-8'))
     models = {
-        'design_workpack': ApprovalWorkpack,
-        'design_template': DesignReviewTemplate,
-        'structure_workpack': ApprovalWorkpack,
+        # Stage4 design/structure 工作包已随人工闸退役（2026-09-15 全自动裁决）。
         **{f'http:reading/{ordinal}': ReadingView for ordinal in range(1, 4)},
         **{f'http:stage4/{ordinal}': Stage4View for ordinal in range(1, 4)},
         'http:stage5/1': Stage5View,
@@ -155,8 +153,6 @@ def test_plot_flow_fixtures_are_closed_current_http_and_review_views():
         'final:http:stage7': Stage7View,
         'final:http:approvals/stage6/workpack': Stage6ApprovalWorkpack,
         'final:http:approvals/stage7/workpack': Stage7ApprovalWorkpack,
-        'final:http:approvals/design/workpack': ApprovalWorkpack,
-        'final:http:approvals/structure/workpack': ApprovalWorkpack,
         'final:http:check/stage4': CheckReport,
         'final:http:check/stage6': CheckReport,
         'final:http:check/stage7': CheckReport,

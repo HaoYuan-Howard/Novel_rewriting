@@ -18,13 +18,10 @@ def test_gate_spawns_follow_the_same_disk_resume_verdict(monkeypatch, tmp_path):
         approvals.paths, 'resolve_novel_dir', lambda _base, _sid: novel_dir)
     monkeypatch.setattr(approvals, '_planned', lambda _base, _sid: [1, 2, 3])
     monkeypatch.setattr(approvals.state, 'overview', lambda _base, _sid: sentinel)
+    monkeypatch.setattr(approvals, 'current_infeasible_binding', lambda _s: None)
     monkeypatch.setattr(
         approvals.state, 'resume_verdict',
         lambda overview, node: (verdicts.get(node, approvals.state.RESUME_RUN), node))
-    design_review = {'accepted': False}
-    monkeypatch.setattr(
-        approvals, 'design_review_is_current',
-        lambda _base, _sid: design_review['accepted'])
 
     fresh = approvals.get(tmp_path, '123')
     assert [action.kind for action in fresh.spawns['s1']] == ['stage2.global']
@@ -37,8 +34,8 @@ def test_gate_spawns_follow_the_same_disk_resume_verdict(monkeypatch, tmp_path):
     monkeypatch.setattr(mechanical_admission, 'blueprint_generation_ready',
                         lambda *_args: mechanical_admission.AdmissionCheck(
                             'stage2.blueprint', ok=admission_state['ready']))
-    monkeypatch.setattr(mechanical_admission, 'stage4_ready',
-                        lambda *_args: mechanical_admission.AdmissionCheck('stage4', ok=True))
+    monkeypatch.setattr(mechanical_admission, 'stage4_plan_ready',
+                        lambda *_args: mechanical_admission.AdmissionCheck('stage4.plan', ok=True))
     verdicts['stage2.global'] = approvals.state.RESUME_SKIP
     global_done = approvals.get(tmp_path, '123')
     assert global_done.spawns['s1'] == [], '机械准入未过不下发 Blueprint'
@@ -51,10 +48,7 @@ def test_gate_spawns_follow_the_same_disk_resume_verdict(monkeypatch, tmp_path):
     assert stage2_done.spawns['s1'] == []
 
     verdicts['stage4.plan'] = approvals.state.RESUME_RUN
-    missing = approvals.get(tmp_path, '123')
-    assert missing.spawns['s4'] == [], 'A 候选落盘不等于 A 人审已通过'
-
-    design_review['accepted'] = True
+    # s4 人工闸退役：A 候选落盘且机械准入过 → 直接下发 B，不再等人工审阅。
     missing = approvals.get(tmp_path, '123')
     assert [action.kind for action in missing.spawns['s4']] == ['stage4.plan']
 
@@ -62,6 +56,28 @@ def test_gate_spawns_follow_the_same_disk_resume_verdict(monkeypatch, tmp_path):
     both = approvals.get(tmp_path, '123')
     assert [action.kind for action in both.spawns['s4']] == ['stage4.design'], (
         'A/B 必须各自确认；A 未完成时不能把两次付费调用塞进一个 GateBar 动作')
+
+
+def test_infeasible_terminal_state_spawns_budgeted_auto_replan(
+        monkeypatch, tmp_path):
+    """B 的 typed infeasible 终态在盘 → s4 spawn 是预算内自动重采 A。"""
+    novel_dir = tmp_path / 'book_123'
+    novel_dir.mkdir()
+    monkeypatch.setattr(
+        approvals.paths, 'resolve_novel_dir', lambda _base, _sid: novel_dir)
+    monkeypatch.setattr(approvals, '_planned', lambda _base, _sid: [1, 2, 3])
+    monkeypatch.setattr(approvals.state, 'overview', lambda _base, _sid: object())
+    monkeypatch.setattr(
+        approvals.state, 'resume_verdict',
+        lambda _overview, node: (
+            (approvals.state.RESUME_SKIP, node)
+            if node == 'stage4.design' else (approvals.state.RESUME_RUN, node)))
+    monkeypatch.setattr(approvals, 'current_infeasible_binding', lambda _s: object())
+
+    doc = approvals.get(tmp_path, '123')
+    assert [action.kind for action in doc.spawns['s4']] == ['stage4.design']
+    assert doc.spawns['s4'][0].extra == ['--replan']
+    assert '预算内' in doc.spawns['s4'][0].label
 
 
 def test_default_approval_value_is_not_mistaken_for_a_saved_human_choice(

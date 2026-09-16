@@ -20,8 +20,8 @@ from uuid import uuid4
 from pydantic import BaseModel
 
 from contracts.invariants import (
-    BOOK_CONTENT_CALL_CEILING_DEFAULT, NODES, approval_work_unit,
-    approval_scope_allowed,
+    BOOK_CONTENT_CALL_CEILING_DEFAULT, NODES, RETIRED_APPROVAL_BINDINGS,
+    approval_work_unit, approval_scope_allowed,
 )
 from contracts.schema.workflow import (
     BookBudgetGrantV1, BookContentBudgetV1, WorkflowManifestV6,
@@ -368,9 +368,11 @@ class WorkUnitBudget:
         spec = NODES[node].lifecycle
         if role == 'commander':
             # 原 ``spec.commander_content_limit == 4`` 的准入面随字段退役；
-            # 历史解码以现存的审批登记（approval_bindings）为等价准入证据。
+            # 历史解码以现存的审批登记（approval_bindings）与已退役闸的
+            # 历史只读表（RETIRED_APPROVAL_BINDINGS）为等价准入证据。
             allowed_scope = approval_scope_allowed(node, scope)
-            allowed_role = bool(spec.approval_bindings)
+            allowed_role = (
+                bool(spec.approval_bindings) or node in RETIRED_APPROVAL_BINDINGS)
         else:
             allowed_role = spec.executor_content_limit == 4
             chapter_scope = bool(re.fullmatch(r'chapter:[1-9][0-9]*', scope))

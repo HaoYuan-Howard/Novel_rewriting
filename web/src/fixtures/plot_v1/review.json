@@ -4,7 +4,7 @@
       "state": "accepted",
       "reason": "全文与原钩子核对，来信支持与首章连续范围成立",
       "subject_sha256": "da1a0b197e019eb85c904644ef96645c9baa7de761c2fe72afa2bfefb11fe30f",
-      "review_token": "s6p1_f4f326bae963c879a442b34ee1b1c995a3e0771b9cf98ff51f3d9c5e67e45da8",
+      "review_token": "s6p1_4b29e58fd4770a00ce1d5f79a72b114884e195a2604282abe5135e3a4b562f9c",
       "prepare": {
         "source_blurb": {
           "facts": [
@@ -83,7 +83,7 @@
         "source_sha256": "da1a0b197e019eb85c904644ef96645c9baa7de761c2fe72afa2bfefb11fe30f",
         "request_sha256": "0581be281f1a3be6114b951252da3a98cb702aaf6920680971346b984383f235",
         "decision": "accept",
-        "at": "2026-09-14T18:33:15.028740+00:00"
+        "at": "2026-09-15T23:01:40.985272+00:00"
       },
       "pending_commit": false
     },
@@ -107,7 +107,7 @@
     "edit_template": {
       "actor": "operator",
       "reason": "请填写本次原文核对结论",
-      "review_token": "s6p1_f4f326bae963c879a442b34ee1b1c995a3e0771b9cf98ff51f3d9c5e67e45da8",
+      "review_token": "s6p1_4b29e58fd4770a00ce1d5f79a72b114884e195a2604282abe5135e3a4b562f9c",
       "source_sha256": "da1a0b197e019eb85c904644ef96645c9baa7de761c2fe72afa2bfefb11fe30f",
       "main_text_sha256": "6ace0b1e2048ec3193f0d9595a740d5c37c572f441dbac92e9dfd991b0df006c",
       "hook_copy_sha256": "bcb04e32665861d445b523c0cd11761cb27b5f6af92b700c068ba21db4b6e76a",
@@ -139,7 +139,7 @@
     "decision_template": {
       "actor": "operator",
       "reason": "请填写本次原文核对结论",
-      "review_token": "s6p1_f4f326bae963c879a442b34ee1b1c995a3e0771b9cf98ff51f3d9c5e67e45da8",
+      "review_token": "s6p1_4b29e58fd4770a00ce1d5f79a72b114884e195a2604282abe5135e3a4b562f9c",
       "source_sha256": "da1a0b197e019eb85c904644ef96645c9baa7de761c2fe72afa2bfefb11fe30f",
       "decision": "uncertain",
       "edit": null
@@ -153,10 +153,10 @@
     "kind": "stage6",
     "sid": "123",
     "review_contract_version": "stage6-final-review-v5",
-    "review_identity_sha256": "217b4e966ecf4dae3c9fc201f10d6547b0edf5af63541c56150e9cd5f17e7a54",
-    "validation_seal_sha256": "f7f082b25d838eb3d4af3d31bfaccc18fce349bd68026577a768296dadacf757",
-    "review_token": "s6r4_e91b4d0958d5e3c416ed7b8b26d2b184e8aa0abd9a1d67763f25b6738dc957df",
-    "artifact_subject_sha256": "b840b9ab82b91502504c93393760a4b6061f3a39766b6960eee8ca25e14af324",
+    "review_identity_sha256": "2e783066985436326c3a236b60fae430657a1b6ab8f229f241e566f2406b004f",
+    "validation_seal_sha256": "6c85d26611f298ebe314ffe5241a93ac1a35bcec0105c9d5fceb5b2729553c0e",
+    "review_token": "s6r4_ebb7fd0dd218cb67d5a3b7e516c03b2ccbfc1b6ab59e62f736310527463659c3",
+    "artifact_subject_sha256": "1c40c2e239e608fb2a943b7b1c6378ba70dfea6dc7b2f3e265089168f0672e47",
     "rationale": "分别呈现回城来信、母亲知情与账房日常。",
     "materials": {
       "prepare_subject_sha256": "37dfd5b51348d6cbea64852f76d312d3c7ae3640ddd4f95a96fb8e808705c619",
@@ -208,11 +208,11 @@
     },
     "check_basis": "candidate_without_approval",
     "check": {
-      "rules_scanned": 25,
+      "rules_scanned": 22,
       "counts": {
-        "ok": 18,
-        "hit": 2,
-        "unver": 5,
+        "ok": 17,
+        "hit": 1,
+        "unver": 4,
         "skipped": 0
       },
       "provenance": {
@@ -251,8 +251,8 @@
             "key": "stage4/writer_context.json",
             "state": "fresh",
             "reason": "match",
-            "recorded_file": "32fe791c42",
-            "now_file": "32fe791c42",
+            "recorded_file": "95b5afc7cb",
+            "now_file": "95b5afc7cb",
             "recorded_consumed": "3d7c6675b1",
             "now_consumed": "3d7c6675b1"
           },
@@ -958,7 +958,7 @@
         ]
       }
     ],
-    "workpack_sha256": "e91b4d0958d5e3c416ed7b8b26d2b184e8aa0abd9a1d67763f25b6738dc957df",
+    "workpack_sha256": "ebb7fd0dd218cb67d5a3b7e516c03b2ccbfc1b6ab59e62f736310527463659c3",
     "disposition": "already_current",
     "current_slot": "c1",
     "current_approval": {
@@ -966,8 +966,8 @@
       "reason": "合成候选与原文、全书成稿已对照",
       "subject_sha256": "f6d8274494e5f1eaec8d2bb0b51855ff1a2f8aa58524fa85ed0a1a8a9b87d339",
       "basis": "human_selection",
-      "workpack_sha256": "e91b4d0958d5e3c416ed7b8b26d2b184e8aa0abd9a1d67763f25b6738dc957df",
-      "review_identity_sha256": "217b4e966ecf4dae3c9fc201f10d6547b0edf5af63541c56150e9cd5f17e7a54"
+      "workpack_sha256": "ebb7fd0dd218cb67d5a3b7e516c03b2ccbfc1b6ab59e62f736310527463659c3",
+      "review_identity_sha256": "2e783066985436326c3a236b60fae430657a1b6ab8f229f241e566f2406b004f"
     }
   },
   "rename": {
@@ -975,10 +975,10 @@
     "kind": "stage7",
     "sid": "123",
     "review_contract_version": "stage7-final-review-v4",
-    "review_identity_sha256": "e691c46a983c42ed725a662011429eebb7dd8e9d98245bff42a577e1ada68281",
-    "validation_seal_sha256": "54a67128915d1cb1222006bac2f03d02964b5ac87b80c9299f384a10a3a160e8",
-    "review_token": "s7r3_7bd6f56b20d241fa1a95cf779714f8f020793185c91da0cf6e3f406b6c1b2320",
-    "artifact_subject_sha256": "1d72f8af7c8a861e33d02bcc04338d36739eb4276c6e93b902960fb8ee977aff",
+    "review_identity_sha256": "ccb81f54fd5e089e5149a8d721b653f29b78a6056d14b9bddd93f8fe42ac3f51",
+    "validation_seal_sha256": "af7593578b3759124a72db29d0a7e87bf3d25083232f25931269bd97b3d58570",
+    "review_token": "s7r3_30ae78746c54e7d34d01850831a2238b4eab6a20d6bb328d316df01ec3066f20",
+    "artifact_subject_sha256": "bd8bf21e32d9ca16632b0b4b92287f2b9f70a4d1902caf23fec3d6e62881667a",
     "decision_subject_sha256": "1b3b7a14b101cc67424ee1322ea2b85fa4c9e5bede06b49060727c403006033c",
     "check_basis": "name_map_without_approval_or_delivery",
     "check": {
@@ -1025,8 +1025,8 @@
             "key": "stage4/plan_chapters.json",
             "state": "fresh",
             "reason": "match",
-            "recorded_file": "d22fc49e15",
-            "now_file": "d22fc49e15",
+            "recorded_file": "f0309a2880",
+            "now_file": "f0309a2880",
             "recorded_consumed": "9ef50cc82a",
             "now_consumed": "9ef50cc82a"
           },
@@ -1034,8 +1034,8 @@
             "key": "stage4/writer_context.json",
             "state": "fresh",
             "reason": "match",
-            "recorded_file": "32fe791c42",
-            "now_file": "32fe791c42",
+            "recorded_file": "95b5afc7cb",
+            "now_file": "95b5afc7cb",
             "recorded_consumed": "f7636c4de9",
             "now_consumed": "f7636c4de9"
           },
@@ -1043,10 +1043,10 @@
             "key": "stage6/hook.json",
             "state": "fresh",
             "reason": "match",
-            "recorded_file": "4acaa6e9fb",
-            "now_file": "4acaa6e9fb",
-            "recorded_consumed": "6a4ac27ec7",
-            "now_consumed": "6a4ac27ec7"
+            "recorded_file": "1875645361",
+            "now_file": "1875645361",
+            "recorded_consumed": "dee146a0eb",
+            "now_consumed": "dee146a0eb"
           }
         ],
         "invalid": false,
@@ -1064,7 +1064,7 @@
           "remediation": "human",
           "fix": null,
           "findings": [],
-          "why": "逐份成稿的 consumed 投影都对得上、文案定稿文本也没变过。⚠ 它仍然登记为「查不了」而不是绿灯：整文件 sha1 只作审计，而投影只覆盖本层真正消费的那几个字段",
+          "why": "逐份成稿的 consumed 投影都对得上、候选集也没变过（候选之间改选不改变本投影，组装由 assemble 免费重放）。⚠ 它仍然登记为「查不了」而不是绿灯：整文件 sha1 只作审计，而投影只覆盖本层真正消费的那几个字段",
           "scanned": "3 份成稿 + 文案",
           "baseline": null,
           "note": "⚠ 口径同 stage6 的 hook_body_stale（两层同形，合成一套）：judged[].consumed（字段投影）判过期、整文件 sha1 只作审计；没有 consumed ⇒ 说不清，不是 fresh 也不是 stale。sha1 是整文件指纹，而新契约裁过 stage5 产物的字段 ⇒ 迁移后它必然对不上"
@@ -1094,7 +1094,7 @@
           "remediation": "human",
           "fix": null,
           "findings": [],
-          "why": "开篇文案的定稿状态由 hook_consumed.present 记着；文案未定稿时 stage7.assemble 会直接拒写 txt（那道闸在组装那一步，不在这里）。⚠ 正因为那道闸挡在前面，「成书里没有文案」这一态结构上不可达",
+          "why": "开篇文案的定稿状态由 hook_consumed.present 记着（自动定稿或人工改选均算已定稿）；文案未定稿时 stage7.assemble 会直接拒写 txt（那道闸在组装那一步，不在这里）。⚠ 正因为那道闸挡在前面，「成书里没有文案」这一态结构上不可达",
           "scanned": "hook_consumed 一格",
           "baseline": null,
           "note": "⚠ 根因第一嫌疑层其实是 stage6（文案没定稿是上一层的账），而 owner 仍然留 None —— 全链的口径是 owner is None ⟺ 它不是一条结论（metric/unver 恒 None，由规则注册器统一校验）。给一条 unver 填 owner 会让那条口径出现第一个例外，而它买不到任何东西。它是 R-10.14 四类拒写里的一类，而正因为这道闸挡在前面，book_txt.has_hook=false 结构上不可达 ⇒ 那个字段已按待决④ 裁掉"
@@ -1437,15 +1437,15 @@
         "新名好不好——没有确定性判据，现役闸门是人定稿"
       ]
     },
-    "workpack_sha256": "7bd6f56b20d241fa1a95cf779714f8f020793185c91da0cf6e3f406b6c1b2320",
+    "workpack_sha256": "30ae78746c54e7d34d01850831a2238b4eab6a20d6bb328d316df01ec3066f20",
     "disposition": "already_current",
     "current_approval": {
       "actor": "test:改名审阅者",
       "reason": "合成角色姓名替换与亲属关系已复核",
       "subject_sha256": "1b3b7a14b101cc67424ee1322ea2b85fa4c9e5bede06b49060727c403006033c",
       "origin": "human",
-      "workpack_sha256": "7bd6f56b20d241fa1a95cf779714f8f020793185c91da0cf6e3f406b6c1b2320",
-      "review_identity_sha256": "e691c46a983c42ed725a662011429eebb7dd8e9d98245bff42a577e1ada68281"
+      "workpack_sha256": "30ae78746c54e7d34d01850831a2238b4eab6a20d6bb328d316df01ec3066f20",
+      "review_identity_sha256": "ccb81f54fd5e089e5149a8d721b653f29b78a6056d14b9bddd93f8fe42ac3f51"
     }
   }
 }

@@ -9,7 +9,6 @@ from types import SimpleNamespace
 import pytest
 
 from contracts.schema import encode_artifact
-from contracts.schema.api import StructureApprovalRequest
 from contracts.schema.stage1 import MainText
 from contracts.schema.stage2 import BlueprintProvenance, ChapterBlueprints
 from contracts.schema.stage4 import (
@@ -25,7 +24,10 @@ from novel.orchestrator import queue as Q
 from novel.run import RunContext
 from novel.store import ArtifactStore
 from novel.stages.stage4.plot_design import candidate_subject_sha256
-from tests.test_design_review import FACT, PERSON, _subjects
+from contracts.invariants import BLIND_ALIAS_ALGORITHM
+
+FACT = 'a_' + '1' * 16
+PERSON = 'a_' + '2' * 16
 
 
 SID = '123'
@@ -71,19 +73,18 @@ def _plan(ctx: RunContext) -> PlanChapters:
 
 def _binding(ctx: RunContext) -> EvidenceBinding:
     """合成绑定仍保留完整两章身份和真实上游读取边。"""
-    from tests.test_design_review import _mixed_repair_subjects
-    subjects = _mixed_repair_subjects()
+    # 审阅票退役后，夹具只需要一个自洽的候选业务身份；绑定不再指向
+    # 任何人工决定，只作为 B 的正式机械产物参与 freshness/proof 绑定。
     candidate = {
-        'alias_algorithm': subjects.strategy.basis.alias_algorithm,
-        'truth_sha256': approvals._decision_sha256([
-            row.blind_truth.model_dump(mode='json') for row in subjects.chapters]),
+        'alias_algorithm': BLIND_ALIAS_ALGORITHM,
+        'truth_sha256': hashlib.sha256(b'fixture-blind-truth').hexdigest(),
         'subject_aliases': {FACT: {'kind': 'beat', 'ref': 'b01_01'},
                             PERSON: {'kind': 'character', 'ref': 'char_001',
                                      'actor': {'char_id': 'char_001', 'presentation_ref': None}}},
         'endpoint_aliases': {}, 'participant_aliases': {
             PERSON: {'char_id': 'char_001', 'presentation_ref': None}},
-        'reconstruction_strategy': subjects.strategy.reconstruction_strategy,
-        'output_chapters': [row.chapter.model_dump(mode='json') for row in subjects.chapters],
+        'reconstruction_strategy': '按事实义务重新组织场景，不沿用原文段落。',
+        'output_chapters': [],
     }
     candidate_sha = candidate_subject_sha256(candidate)
     return EvidenceBinding(status='bound', candidate_sha256=candidate_sha,
@@ -210,7 +211,7 @@ def current_book(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path,
     context_store.write(STAGE4_WRITER_CONTEXT, WriterContext.model_validate({**payload,
         '_provenance': context_ctx.free_provenance(CtxProvenance)}))
 
-    monkeypatch.setitem(approvals._GATE_REQUIREMENTS, 's4', ())
+    # s4 人工闸已退役：写作前置只由机械事实（fresh 计划与 writer context）承接。
     monkeypatch.setattr(approvals.prov, 'code_version', lambda: 'fixture-readonly-code')
     monkeypatch.setattr(approvals, '_spawns', lambda _base, _sid: {})
     require_fresh_json = approvals._require_fresh_json
@@ -225,26 +226,7 @@ def current_book(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path,
 
 
 def _approve_writing(base: Path) -> None:
-    template = approvals.structure_template(
-        base,
-        SID,
-        actor='freshness-reviewer',
-        reason='核对当前结构主体与精确章集',
-    )
-    approvals.approve_structure(
-        base,
-        SID,
-        StructureApprovalRequest(
-            actor=template.actor,
-            reason=template.reason,
-            review_token=template.review_token,
-            chapters=[{
-                'output_ordinal': row.output_ordinal,
-                'decision': 'accept',
-                'reason': f'第 {row.output_ordinal} 章结构已逐项核对',
-            } for row in template.chapters],
-        ),
-    )
+    """人工结构票退役后，写作授权只剩独立的 typing 授权与机械前置。"""
     approvals.begin_writing(base, SID)
 
 
@@ -294,7 +276,7 @@ def test_retired_v6_with_current_typed_histories_is_not_migrated(
     approvals.approve_writing(base, SID, request)
 
     before = approvals._read_raw(base, SID)
-    assert before.structure_decision is not None
+    # s4 结构票已退役；可对证的人工历史只剩写作授权决定。
     assert before.writing_decision is not None
     payload = before.model_dump(
         mode='json', exclude={'closure_history', 'closure_decision'})
@@ -354,7 +336,7 @@ def test_current_subject_changes_revoke_writing(current_book, monkeypatch, mutat
     assert not approvals.has_record(base, SID)
     raw = approvals._read_raw(base, SID)
     assert raw.writing and raw.writing_proof is not None
-    assert raw.gate['s4'] and raw.gate_proofs['s4'] is not None
+    assert not raw.gate['s4'], 's4 人工闸退役后不再有可写面'
 
     _queue_stage5(monkeypatch)
     todo, blocked = Q.plan_book(base, SID, until_stage='stage5')
@@ -370,18 +352,23 @@ def test_current_subject_changes_revoke_writing(current_book, monkeypatch, mutat
     assert approvals.has_record(base, SID)
 
 
-def test_writing_requires_current_typed_s4_only(current_book, monkeypatch):
+def test_writing_opened_mechanically_still_queues_only_after_approval(
+    current_book, monkeypatch,
+):
+    """s4 结构票退役后：机械前置满足即开写作授权；队列仍等显式授权。
+
+    人工闸退役不改变「队列不会从默认路径反推同意花钱」：写作授权仍是
+    独立 typed 决定（批次 B4 再收），只是本层不再要求结构票。
+    """
     base, _book = current_book
-    with pytest.raises(
-            approvals.ApprovalRequired,
-            match=r'stage4\.context|final structure'):
-        approvals.begin_writing(base, SID)
+    approvals.begin_writing(base, SID)
+    assert approvals.get(base, SID).writing
 
     _queue_stage5(monkeypatch)
     todo, blocked = Q.plan_book(base, SID, until_stage='stage5')
-    assert todo == [] and len(blocked) == 1
-    assert blocked[0].waiting_on == Q.WAITING_ON_WRITING_APPROVAL
-    assert blocked[0].steps == []
+    # 机械前置满足且显式授权后，队列按普通付费 todo 排 stage5.write。
+    assert blocked == [] and len(todo) == 1
+    assert todo[0].node == 'stage5.write' and todo[0].flags == []
 
 
 def test_measurement_contract_change_revokes_writing(current_book, monkeypatch):

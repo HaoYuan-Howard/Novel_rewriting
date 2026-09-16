@@ -7,9 +7,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from contracts.schema.api import StructureApprovalRequest
 from contracts.schema.stage7 import ApprovedNameMap
-from novel.errors import ApprovalRequired, GateBlocked, HumanEditProtected, UpstreamMissing
+from novel.errors import ApprovalRequired, HumanEditProtected, UpstreamMissing
 from novel.orchestrator import approvals, jobs, state
 from novel.stages.stage7 import rename
 from tests import corpus, sandbox
@@ -107,25 +106,10 @@ def _touch(box: sandbox.Sandbox, rel: str) -> None:
 
 
 def _approve_for_writing(box: sandbox.Sandbox) -> None:
-    # Stage2 已读/接受与 s2 gate 已随语义审阅退役；写作前提只剩
-    # s0/s1 通用闸与逐章 typed 结构裁决。
-    approvals.approve_gate(box.root, box.sid, 's0')
-    approvals.approve_gate(box.root, box.sid, 's1')
-    subject, chapters = approvals._current_structure_subject_and_chapters(box.dir)
-    approvals.approve_structure(
-        box.root,
-        box.sid,
-        StructureApprovalRequest(
-            actor='corpus-approval-test',
-            reason='逐章核对 current Stage4 结构主体后批准写作前提',
-            subject_sha256=subject,
-            chapters=[{
-                'output_ordinal': ordinal,
-                'decision': 'accept',
-                'reason': f'第 {ordinal} 章当前结构已核对',
-            } for ordinal in chapters],
-        ),
-    )
+    # Stage2 已读/接受与 s2 gate 已随语义审阅退役；Stage4 结构票亦已随
+    # 2026-09-15 全自动裁决退役。写作前提只剩机械事实（fresh 计划与
+    # writer context），由 begin_writing 的前置校验承接。
+    approvals.begin_writing(box.root, box.sid)
 
 
 def _approved_name_artifact():

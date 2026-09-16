@@ -381,17 +381,14 @@ def test_the_published_surface_is_exactly_the_current_surface(app):
         '/api/novels/{sid}': ['GET'],
         '/api/novels/{sid}/approvals': ['GET'],
         '/api/novels/{sid}/approvals/backfill': ['POST'],
-        '/api/novels/{sid}/approvals/design': ['POST'],
-        '/api/novels/{sid}/approvals/design/template': ['GET'],
-        '/api/novels/{sid}/approvals/design/workpack': ['GET'],
+        # Stage4 design/structure 的 workpack/template/typed apply 已随
+        # 2026-09-15 全自动裁决整体退役；打开条件唯一化为统一机械准入。
         '/api/novels/{sid}/approvals/gate/{key}': ['POST'],
         '/api/novels/{sid}/approvals/reset': ['POST'],
         '/api/novels/{sid}/approvals/stage5': ['POST'],
         '/api/novels/{sid}/approvals/stage5/template': ['GET'],
         '/api/novels/{sid}/approvals/stage6/workpack': ['GET'],
         '/api/novels/{sid}/approvals/stage7/workpack': ['GET'],
-        '/api/novels/{sid}/approvals/structure': ['POST'],
-        '/api/novels/{sid}/approvals/structure/workpack': ['GET'],
         '/api/novels/{sid}/approvals/writing': ['POST'],
         '/api/novels/{sid}/check/{kind}': ['GET'],
         '/api/novels/{sid}/inbox': ['GET'],
@@ -521,9 +518,10 @@ _EXECUTOR_PROFILE_HTTP_CASES = (
     ('stage2.characters', (), 1),
     ('stage2.global', (), 1),
     ('stage2.blueprint', (), 2),
+    # stage4 人工闸退役：--review-token 跑法随审阅票移出注册表；
+    # --replan 是预算内自动重采的付费跑法。
     ('stage4.design', (), 1),
-    ('stage4.design', ('--replan', '--review-token', 's4rr1_' + 'a' * 64), 1),
-    ('stage4.design', ('--review-token', 's4rr1_' + 'a' * 64), 1),
+    ('stage4.design', ('--replan',), 1),
     ('stage4.plan', (), 2),
     ('stage5.write', (), 1),
     ('stage5.write', ('--chapters', '1'), 1),
@@ -576,8 +574,11 @@ def test_executor_backend_is_identical_in_preview_and_start(
     def start_without_thread(
             run_base, node, sid, run_flags, *, steps,
             executor_backend=None, egress_authorized=None, prepare=None):
-        # Stage2 复核闸退役：只剩 stage4/5 的授权闸还产生 prepare。
-        assert (prepare is not None) == (node.split('.')[0] in {'stage4', 'stage5'})
+        # Stage2 复核闸与 Stage4 人工闸退役：只剩 stage5 写作授权闸与
+        # stage4.design --replan 的机器 scope 铸造产生 prepare。
+        assert (prepare is not None) == (
+            node.split('.')[0] == 'stage5'
+            or (node, tuple(run_flags)) == ('stage4.design', ('--replan',)))
         captured['executor_backend'] = executor_backend
         captured['egress_authorized'] = egress_authorized
         captured['steps'] = steps
@@ -868,29 +869,16 @@ def test_paid_blueprint_job_starts_without_a_semantic_review_gate(
     assert response.json()['start']['paid'] is True
 
 
-@pytest.mark.parametrize('node', [
-    'stage4.design', 'stage4.context', 'stage6.hook', 'stage7.assemble',
-])
-def test_consumer_authorization_runs_under_the_book_lock(
-        client, monkeypatch, node):
-    """Stage2 复核闸退役后，consumer 只保留各自的授权闸（design/context）。"""
-    contexts: list[str] = []
-    initial_designs: list[str] = []
-
-    monkeypatch.setattr(
-        JOB_API.approvals, 'authorize_context',
-        lambda _base, sid: contexts.append(sid))
-    monkeypatch.setattr(
-        JOB_API.approvals, 'authorize_design_initial',
-        lambda _base, sid: initial_designs.append(sid))
+@pytest.mark.parametrize('node', ['stage4.design', 'stage4.context'])
+def test_stage4_jobs_need_no_approval_prepare_any_more(client, monkeypatch, node):
+    """人工闸退役后 stage4 作业不再铸任何审批授权 prepare。"""
+    prepares: list[str] = []
 
     def start_without_thread(
             run_base, run_node, sid, run_flags, *, steps,
             executor_backend=None, egress_authorized=None, prepare=None):
-        assert (prepare is not None) is (run_node in ('stage4.design', 'stage4.context'))
-        assert executor_backend is None
-        assert egress_authorized is None
         if prepare is not None:
+            prepares.append(run_node)
             prepare()
         return _started_record(run_base, run_node, sid, run_flags, steps)
 
@@ -901,23 +889,41 @@ def test_consumer_authorization_runs_under_the_book_lock(
     })
 
     assert response.status_code == 202, response.text
-    assert contexts == (['42'] if node == 'stage4.context' else [])
-    assert initial_designs == (['42'] if node == 'stage4.design' else [])
+    assert prepares == [], 'stage4 的唯一打开条件是统一机械准入'
 
 
-@pytest.mark.parametrize(('flags', 'requires_design'), [
-    ([], True),
-    (['--apply-binding', 'binding.json'], True),
-    (['--check-only'], False),
-    (['--revalidate', '--actor', 'reviewer', '--reason', '同轮复核'], False),
-    (['--apply-edit', 'plan.json'], False),
-])
-def test_stage4_plan_new_outputs_require_design_review_but_recovery_does_not(
-        client, monkeypatch, flags, requires_design):
+def test_stage4_plan_new_outputs_need_no_approval_any_more(client, monkeypatch):
+    """B 的打开条件是机械准入（queue/operator 判定），不再有审批 prepare。"""
     authorized: list[str] = []
+    for name in ('authorize_plan', 'authorize_context',
+                 'authorize_design_initial'):
+        monkeypatch.setattr(
+            JOB_API.approvals, name,
+            lambda _base, sid, _name=name: authorized.append(_name),
+            raising=False)
+
+    def start_without_thread(
+            run_base, node, sid, run_flags, *, steps,
+            executor_backend=None, egress_authorized=None, prepare=None):
+        assert prepare is None, 'stage4 不再铸审批 prepare'
+        return _started_record(run_base, node, sid, run_flags, steps)
+
+    monkeypatch.setattr(JOB_API.jobs, 'start', start_without_thread)
+    for flags in ([], ['--apply-binding', 'binding.json']):
+        response = client.post('/api/jobs', json={
+            'sid': '42', 'node': 'stage4.plan', 'flags': flags,
+        })
+        assert response.status_code == 202, response.text
+    assert authorized == []
+
+
+def test_stage4_design_replan_casts_scope_under_the_job_lock(
+        client, monkeypatch):
+    """--replan 的机器 scope 在占住书锁后、启动前现铸一次。"""
+    cast: list[str] = []
     monkeypatch.setattr(
-        JOB_API.approvals, 'authorize_plan',
-        lambda _base, sid: authorized.append(sid))
+        JOB_API.approvals, 'cast_infeasible_replan_scope',
+        lambda _base, sid: cast.append(sid))
 
     def start_without_thread(
             run_base, node, sid, run_flags, *, steps,
@@ -928,46 +934,11 @@ def test_stage4_plan_new_outputs_require_design_review_but_recovery_does_not(
 
     monkeypatch.setattr(JOB_API.jobs, 'start', start_without_thread)
     response = client.post('/api/jobs', json={
-        'sid': '42', 'node': 'stage4.plan', 'flags': flags,
+        'sid': '42', 'node': 'stage4.design', 'flags': ['--replan'],
     })
 
     assert response.status_code == 202, response.text
-    assert authorized == (['42'] if requires_design else [])
-
-
-@pytest.mark.parametrize(('flags', 'expected'), [
-    ([], None),
-    (['--review-token', 's4rr1_' + 'a' * 64],
-     ('s4rr1_' + 'a' * 64, 'repair')),
-    (['--replan', '--review-token', 's4rr1_' + 'a' * 64],
-     ('s4rr1_' + 'a' * 64, 'replan')),
-])
-def test_stage4_design_recovery_decision_is_resolved_under_the_job_lock(
-        client, monkeypatch, flags, expected):
-    resolved: list[tuple[str | None, str]] = []
-    initials: list[str] = []
-    monkeypatch.setattr(
-        JOB_API.approvals, 'resolve_design_action',
-        lambda _base, _sid, sha, *, expected: resolved.append((sha, expected)))
-    monkeypatch.setattr(
-        JOB_API.approvals, 'authorize_design_initial',
-        lambda _base, sid: initials.append(sid))
-
-    def start_without_thread(
-            run_base, node, sid, run_flags, *, steps,
-            executor_backend=None, egress_authorized=None, prepare=None):
-        if prepare is not None:
-            prepare()
-        return _started_record(run_base, node, sid, run_flags, steps)
-
-    monkeypatch.setattr(JOB_API.jobs, 'start', start_without_thread)
-    response = client.post('/api/jobs', json={
-        'sid': '42', 'node': 'stage4.design', 'flags': flags,
-    })
-
-    assert response.status_code == 202, response.text
-    assert resolved == ([] if expected is None else [expected])
-    assert initials == (['42'] if expected is None else [])
+    assert cast == ['42']
 
 
 def test_paid_stage5_job_authorizes_selected_chapters_before_start(

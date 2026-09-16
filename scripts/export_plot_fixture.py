@@ -29,7 +29,6 @@ def capture_final(book: Path, captured: dict) -> None:
                     'stage2/global', 'stage2/characters',
                     'stage6/prepare', 'stage6/prepare/workpack', 'stage6', 'stage7',
                     'approvals/stage6/workpack', 'approvals/stage7/workpack',
-                    'approvals/design/workpack', 'approvals/structure/workpack',
                     'stage2/blueprint-reading-workpack?scope=chapter%3A1',
                     'stage2/blueprint-reading-workpack?scope=cross_chapter',
                     'check/stage2', 'check/stage4', 'check/stage5', 'check/stage6', 'check/stage7']

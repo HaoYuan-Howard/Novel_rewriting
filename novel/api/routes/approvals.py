@@ -4,11 +4,10 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query
 
 from contracts.schema.api import (
-    ApprovalBackfillResult, ApprovalDoc, ApprovalWorkpack, DesignReviewerKind,
-    DesignReviewRequest, DesignReviewTemplate, GateKey,
+    ApprovalBackfillResult, ApprovalDoc, GateKey,
     Stage5ClosureRequest, Stage5ClosureTemplate,
     Stage6ApprovalWorkpack, Stage7ApprovalWorkpack,
-    StructureApprovalRequest, WritingApprovalRequest,
+    WritingApprovalRequest,
 )
 from novel.api.deps import checked_sid, get_base
 from novel.orchestrator import approvals, inspection
@@ -27,24 +26,6 @@ def get_approvals(
         return approvals.get(base, sid, overview=overview, code=code)
 
 
-@router.get('/design/workpack', response_model=ApprovalWorkpack)
-def get_design_workpack(
-    sid: str = Depends(checked_sid), base: str = Depends(get_base),
-) -> ApprovalWorkpack:
-    """当前 Stage4A subject 的只读全章审阅包；不代签、不启动 B。"""
-    with inspection.approval_read_snapshot(base, sid) as (overview, code):
-        return approvals.design_workpack(base, sid, overview=overview, code=code)
-
-
-@router.get('/structure/workpack', response_model=ApprovalWorkpack)
-def get_structure_workpack(
-    sid: str = Depends(checked_sid), base: str = Depends(get_base),
-) -> ApprovalWorkpack:
-    """当前 Stage4B 结构 subject 的只读全章审批包；不组装 Context。"""
-    with inspection.approval_read_snapshot(base, sid) as (overview, code):
-        return approvals.structure_workpack(base, sid, overview=overview, code=code)
-
-
 @router.get('/stage6/workpack', response_model=Stage6ApprovalWorkpack)
 def get_stage6_workpack(
     sid: str = Depends(checked_sid), base: str = Depends(get_base),
@@ -59,54 +40,6 @@ def get_stage7_workpack(
 ) -> Stage7ApprovalWorkpack:
     """当前 Stage7 人物决策面的紧凑、真实命中与机械检查绑定终审包。"""
     return stage7_approval_workpack(base, sid)
-
-
-@router.get('/design/template', response_model=DesignReviewTemplate)
-def get_design_review_template(
-    actor: str = Query(min_length=1),
-    reviewer_kind: DesignReviewerKind = Query(),
-    review_run_id: str = Query(
-        pattern=r'^[a-z0-9][a-z0-9_-]{0,127}$'),
-    reason: str = Query(min_length=1),
-    sid: str = Depends(checked_sid),
-    base: str = Depends(get_base),
-) -> DesignReviewTemplate:
-    """按当前 A 候选生成关闭式全书盲审模板；只读且不代签。"""
-    return approvals.design_template(
-        base, sid,
-        actor=actor,
-        reviewer_kind=reviewer_kind,
-        review_run_id=review_run_id,
-        reason=reason,
-    )
-
-
-@router.post('/design', response_model=ApprovalDoc)
-def approve_design_review(
-    request: DesignReviewRequest,
-    sid: str = Depends(checked_sid),
-    base: str = Depends(get_base),
-) -> ApprovalDoc:
-    """原子保存 Stage4A typed 盲审；不启动修订或 Stage4B。"""
-    details = {
-        'actor': request.actor,
-        'reviewer_kind': request.reviewer_kind,
-        'review_run_id': request.review_run_id,
-        'review_token': request.review_token,
-        'strategy': {
-            'decision': request.strategy.decision,
-        },
-        'chapters': [
-            {
-                'output_ordinal': row.output_ordinal,
-                'decision': row.decision,
-            }
-            for row in request.chapters
-        ],
-    }
-    with operation_scope(
-            base, sid, operation='approval-design', details=details):
-        return approvals.approve_design(base, sid, request)
 
 
 @router.get('/stage5/template', response_model=Stage5ClosureTemplate)
@@ -154,29 +87,6 @@ def approve_gate(
     with operation_scope(
             base, sid, operation='approval-gate', details={'key': key}):
         return approvals.approve_gate(base, sid, key)
-
-
-@router.post('/structure', response_model=ApprovalDoc)
-def approve_structure(
-    request: StructureApprovalRequest,
-    sid: str = Depends(checked_sid),
-    base: str = Depends(get_base),
-) -> ApprovalDoc:
-    """保存 hash-bound 逐章结构裁决；不在服务进程触发任何重规划作业。"""
-    details = {
-        'actor': request.actor,
-        'review_token': request.review_token,
-        'chapters': [
-            {
-                'output_ordinal': row.output_ordinal,
-                'decision': row.decision,
-            }
-            for row in request.chapters
-        ],
-    }
-    with operation_scope(
-            base, sid, operation='approval-structure', details=details):
-        return approvals.approve_structure(base, sid, request)
 
 
 @router.post('/backfill', response_model=ApprovalBackfillResult)

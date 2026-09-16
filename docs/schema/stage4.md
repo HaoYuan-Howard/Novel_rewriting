@@ -4,8 +4,10 @@ Stage4 规划呈现，不重新抽取剧情。Beat.content 只有一份，BeatPl
 可编辑映射；少数节点可用多个同章 delivery 共同呈现。普通分场不修改 Blueprint，不重开章审，
 不新增固定模型工位。字段职责与拆分规则见 [plot_blueprint.md](./plot_blueprint.md)。
 
-执行顺序是 stage4.design → 设计审阅 → stage4.plan → 结构审阅 → stage4.context。
-A 与章级 B 使用独立授权和 session；Context 独立零调用生成。Stage5 仍一次写整章。
+执行顺序是 stage4.design → stage4.plan → stage4.context；四道人工审阅闸已随 2026-09-15
+全自动裁决整体退役，A 落盘（机械有效）即由统一机械准入放行 B，B 落盘即放行 Context，
+B 的 typed infeasible 终态触发预算内自动 `stage4.design --replan`（见 BACKEND_CONTRACT R-5.20）。
+A 与章级 B 使用独立 session；Context 独立零调用生成。Stage5 仍一次写整章。
 
 历史 Commander 审阅曾使用 `novel-stage4-reviewer-rulings-v3` 运输契约（已随 2026-09-15 角色退役，
 账上历史行只读解码）：每章完整引用目录映射为局部
@@ -126,18 +128,16 @@ unit checkpoint 不是正式 artifact。只有策略和全部章节齐全，代�
 单章动态闸与整书全部 HARD。通过后才由 commit journal 原子写 `blind_candidate.json`；中断、缺章、
 聚合失败或 HARD 命中都不得留下部分正式文件，也不得覆盖旧正式候选。
 
-### 2.4 正式 A 设计审阅与收敛修订
+### 2.4 A 设计审阅与收敛修订（已退役 2026-09-15 全自动裁决）
 
-DESIGN_REVIEW_CONTRACT=stage4-design-review-v6。设计审阅同时阅读父节点及全部 delivery，
-检查联合完整性、重复呈现、施受关系、truth/belief/claim 性质、因果与知识边界；不生成逐节点
-或逐 delivery 正向回执，不因指标、证据重叠或合法倒叙自动判失败。
+DESIGN_REVIEW_CONTRACT 的现役写面已随四道人工闸退役：设计审阅工作包、模板、typed
+accept/repair/replan 与 review token 不再有生产者；历史决定与契约只读解码。机械准入只消费
+产物 freshness、INVALID 与 infeasible 终态等机械事实。B 的 typed infeasible 终态由
+`approvals.cast_infeasible_replan_scope` 铸成 `replace_reconstruction_strategy` 关闭式约束，
+队列发布预算内自动重采；预算耗尽即 `WorkUnitBudgetExhausted` 终态。
 
-当前工作包的 opaque token 绑定当次可见材料。章节决定只复用实际依赖、审阅契约均未变的历史接受；
-同主体较新否定遮住较早接受。request_repair 只改当前被拒章，request_replan 才涉及策略，
-关闭式修复约束保留历史处置。普通换场、分段表现和已有端点绑定均留在 Stage4。
-
-完整章免费编辑先 preview，再由同一 compiler 应用当前 token 的完整设计；不能通过字段 patch
-偷偷创造子事实。更新 placement、指令、顺序或端点使相应 Stage4 接受失效，不回写上游章审。
+普通换场、分段表现和已有端点绑定均留在 Stage4。更新 placement、指令、顺序或端点使相应
+Stage4 产物按 freshness 失效，不回写上游章审。
 设计接受只授权 B，不打开最终 s4，也不顺带生成 Context。
 
 ## 三、Stage4B：evidence_binding.json v5
@@ -176,15 +176,12 @@ chapter_rewrite_brief、scenes、beat_placements 与 anchor_bindings；来源身
 场景保存 slot、purpose、role、delivery、transition、budget_chars、context_beat_refs、turn_beat_ref。
 具体类型为 contracts/schema/stage4.py 与 contracts/schema/plot.py，不维护 fact 分配或第二份映射。
 
-### 4.3 结构向量与审批主体
+### 4.3 结构向量与审批主体（已退役 2026-09-15 全自动裁决）
 
-STRUCTURE_REVIEW_CONTRACT=stage4-structure-review-v4。结构包包含父节点、逐场呈现安排、
-必要证据、状态、约束、知识及当前 B concerns。每章独立审阅联合语义，当前全部章明确 accept
-才打开 s4。证据位置、重叠、成员闭合只证明结构，不证明剧情完整或隐含知识未泄漏。
-
-较新 request_replan 不允许旧接受覆盖。现有 A resolution 路径由人工在 Stage 页面交叉核验具体损害后
-提交新的 typed A repair/replan；只读指标不足以触发付费。当前同主体仅允许 exact replay 或
-provenance 变化后的同语义 proof rebound，不能用旧 token 改票。完整规则见 BACKEND_CONTRACT R-5.20。
+STRUCTURE_REVIEW_CONTRACT 与结构 subject/逐章 subject 身份保留为存量书历史解码与展示投影；
+不再产生新的结构决定，s4 键无现役写面。证据位置、重叠、成员闭合只证明结构，不证明剧情完整
+或隐含知识未泄漏；这些语义结论继续以 `unver`/INFO 披露常驻，随交付披露。B 的 typed
+infeasible 终态是唯一机械负结论，其后继是预算内自动重采（BACKEND_CONTRACT R-5.20/R-5.26）。
 
 ### 4.4 PlanProvenance
 
@@ -279,12 +276,10 @@ source_contexts 数量/证据重叠/场景数量不能作为语义完整或重�
 | 状态 | 允许的恢复 | 禁止的捷径 | 证据 |
 |---|---|---|---|
 | A 的策略或单章响应暂停/拒收 | 同一 `run_id` 恢复，只补失败/缺失 unit；已保存回答可免费重判并聚合，旧整书拒稿采用入口已退役 | 重发已验 unit、公开 `--chapters`、拿旧整书入口冒充 unit adoption、补字段或部分聚合冒充正式候选 | 码·契 |
-| A 正式审阅逐章拒绝 | 当前 opaque `--review-token` 由服务端展开决定；Supervisor 在执行前打开 fresh producer epoch、重读 exact action 且不再调用 Reviewer，只返修 request_repair 章；每个 repair epoch 最多两轮，累计约束不可遗忘；耗尽后可新开同策略 repair epoch或走完整章 preview/apply | 在修前 producer run 内续写、把单章耗尽自动升级成整书 replan、把默认模板理由当真实反馈、字段 patch、无决定随机重采整书 | 码·契 |
-| A 正式审阅策略拒绝 | 同样先切 fresh producer epoch；`--replan` 携 typed 累计策略/章节失败反馈和 accepted 章约束，只重跑 effective 输入变化的章 | 在原 aggregate 的 producer run 内 replan、丢掉失败史重新采样、让未变已验章重发 wire、把自由文本 reason 当执行约束 | 码·契 |
+| B 落盘 typed infeasible 终态（人工审阅票已退役） | 队列把预算内 `stage4.design --replan` 排成普通付费 todo；`approvals.cast_infeasible_replan_scope` 铸 `replace_reconstruction_strategy` 关闭式约束，生产者走同一 typed 链、checkpoint 与机械复验，只重发 effective 输入变化的章；预算耗尽即 `WorkUnitBudgetExhausted` 终态 | 在修前 producer run 内续写、把单章耗尽自动升级成整书 replan、把默认模板理由当真实反馈、字段 patch、无 witness 随机重采整书 | 码·契 |
 | A repair/replan aggregate 已 prepared，source producer 已结束 | operator 只发布 raw/self 双 SHA 绑定的 `--recover-repair-aggregate`；新 recovery run 在任一写前复核 source 生命周期/账/响应与当前 compiler/HARD，幂等补 candidate/adoption/audit/committed | 重解 stale review token、重唤 Reviewer/Executor、续旧 provider、按 newest 挑 journal、从多份/双副本/第三态中猜 winner、先改候选再验账 | 码·契 |
 | B 章池遇到可恢复交付失败 | 当前 run 由严格 `delivery_recovery.json` 系统暂停并只补 pending；已 ended 的旧 run 由新 run 逐章严格复验后采用，允许多来源和全部采用；prepared 尾窗优先免费补尾 | 预提交全部章节、把普通 exit 2 洗成 paused、复活 ended parent、复制 checkpoint、续旧 provider session、在冲突业务回答间猜一个、把未知来源当未命中、漏记历史 usage | 码·契 |
 | 模型声称 B `infeasible` | 同 session 结构化反馈要求 bound；真实代码 witness 可落正式终态；亦可提交 `--apply-binding` 或完整 v5 人工计划 | 信任模型自证、B 私改 A、自动生成 A2、要求已有 Plan 才给首次恢复 | 码·契 |
-| 最终 Structure 人审 `request_replan` | 独立 resolution Reviewer 交叉读 B 决定与 current A；有具体 coverage 语义损害才提交非 all-accept typed A resolution，仅有 read-only 理由则 typed stop 安全停机；review contract/subject 变化后再审 | 用同 token 覆盖 B、把 metric/INFO/UNVER/binding concern 变成 A constraint、强迫 all-accept 或无依据付费返工 | 人·契 |
 | 计划落 `.INVALID` | 修订 v5 `plan_edit.json` 后 `--apply-edit`，或 `--revalidate --actor --reason` | 改名提升、绕过 schema/判据/归档 | 三源 |
 | Context 缺失或 stale | 最终结构全章 accept 后用 `stage4.context` 免费重建 | B/计划修复时提前代写，或用旧上下文继续写 | 三源 |
 | 旧版本 | 从 producer 重建；人工稿重写为 v5 | 迁移、猜字段、手补版本号 | 码·契 |

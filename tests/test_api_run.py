@@ -133,8 +133,8 @@ def test_run_projects_current_review_states_and_only_current_role_recovery(clien
     os.mkdir(os.path.join(base, '测试书_42'))
     actual = c.get('/api/novels/42/run').json()
     reviews = actual['resume_frontier']['review_states']
-    # stage0.approve 人工闸退役（2026-09-15）：human 审阅面 8 → 7。
-    assert len(reviews) == 7
+    # stage0.approve（B1）与 stage4.design/plan 双审（B2）退役：human 审阅面 8 → 5。
+    assert len(reviews) == 5
     assert {row['node'] for row in reviews} == {
         node for node, spec in NODES.items() if spec.lifecycle.review_mode == 'human'}
     # Stage2 语义审阅退役：run 面不再有 stage2 审批状态行。
@@ -145,18 +145,18 @@ def test_run_projects_current_review_states_and_only_current_role_recovery(clien
                     content_used=1, content_limit=4, content_remaining=3, state='delivered',
                     recovery_action='replay_response')
     monkeypatch.setattr(run.work_units, 'list_unit_views', lambda *_args: [
-        row('stage4.plan', 'executor', 'structure'),
+        row('stage7.rename', 'executor', 'book'),
         # 历史 commander 行保留只读解码，但不得进入当前恢复动作面。
-        row('stage4.plan', 'commander', 'structure'),
-        row('stage4.design', 'executor', 'design')])
+        row('stage7.rename', 'commander', 'book'),
+        row('stage6.hook', 'executor', 'book')])
     # 人工审批闸：next_handler=human，任何模型工作单元都不投影恢复动作。
     frontier = RunResumeFrontierView(
-        state='blocked', node='stage4.plan', seq=list(NODES).index('stage4.plan') + 1,
-        label=NODES['stage4.plan'].label, resume_verdict='run', why='等结构审阅人工裁决',
-        waiting_on='approval:stage4-structure-review', paid=False, writes='PlanChapters',
+        state='blocked', node='stage7.approve', seq=list(NODES).index('stage7.approve') + 1,
+        label=NODES['stage7.approve'].label, resume_verdict='run', why='等人名表定稿',
+        waiting_on='stage7.approve', paid=False, writes='NameMap',
         next_handler='human', review_states=reviews,
-        verified_skipped_nodes=list(NODES)[:list(NODES).index('stage4.plan')],
-        verified_skipped_count=list(NODES).index('stage4.plan'))
+        verified_skipped_nodes=list(NODES)[:list(NODES).index('stage7.approve')],
+        verified_skipped_count=list(NODES).index('stage7.approve'))
     monkeypatch.setattr(operator, 'progress_read_snapshot',
                         lambda *_args: nullcontext((SimpleNamespace(stages=[]), frontier)))
     response = c.get('/api/novels/42/run')
@@ -165,12 +165,13 @@ def test_run_projects_current_review_states_and_only_current_role_recovery(clien
     assert response.json()['current_recovery_actions'] == []
     # executor lane：只有与 next_handler 同角色的当前节点工作单元进入恢复动作。
     frontier = RunResumeFrontierView(
-        state='blocked', node='stage4.design', seq=list(NODES).index('stage4.design') + 1,
-        label=NODES['stage4.design'].label, resume_verdict='run', why='A 修订待续跑',
-        waiting_on='recovery:stage4-design-action', paid=True, writes='BlindCandidate',
+        state='blocked', node='stage7.rename', seq=list(NODES).index('stage7.rename') + 1,
+        label=NODES['stage7.rename'].label, resume_verdict='run', why='人名表待重采',
+        waiting_on='resume:manual-decision', paid=True, writes='NameMap',
         next_handler='executor', review_states=reviews,
-        verified_skipped_nodes=list(NODES)[:list(NODES).index('stage4.design')],
-        verified_skipped_count=list(NODES).index('stage4.design'))
+        verified_skipped_nodes=list(NODES)[:list(NODES).index('stage7.rename')],
+        verified_skipped_count=list(NODES).index('stage7.rename'))
     response = c.get('/api/novels/42/run')
     assert response.status_code == 200
-    assert response.json()['current_recovery_actions'] == ['design: replay_response']
+    # 恢复动作标签 = scope: recovery_action；只有当前节点 executor 轮进入。
+    assert response.json()['current_recovery_actions'] == ['book: replay_response']

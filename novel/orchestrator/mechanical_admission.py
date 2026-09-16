@@ -215,7 +215,7 @@ def _global_mechanical(novel_dir: Path, code: str) -> tuple[tuple[str, ...], tup
 
 
 def stage4_ready(base: str | os.PathLike[str], sid: str) -> AdmissionCheck:
-    """Stage4 起的统一机械准入：完整 Blueprint 及 Stage2 全部必要产物。
+    """Stage4A 生成前的统一机械准入：完整 Blueprint 及 Stage2 全部必要产物。
 
     完整 Stage2 检查覆盖全部必要产物；任何一项机械不可判都阻断。
     """
@@ -253,6 +253,63 @@ def stage4_ready(base: str | os.PathLike[str], sid: str) -> AdmissionCheck:
     return AdmissionCheck('stage4', not blocking, blocking=tuple(blocking),
                           semantic_unreviewed=bool(disclosures),
                           disclosures=disclosures)
+
+
+def stage4_plan_ready(base: str | os.PathLike[str], sid: str) -> AdmissionCheck:
+    """Stage4B 生成前的统一机械准入（2026-09-15 全自动裁决后唯一打开条件）。
+
+    Stage2 底座仍须机械可用，且当前 Stage4A 盲候选可读、有效、无未恢复
+    INVALID。人工 all-accept 票不再是条件；「候选与当前 Stage2 投影漂移、
+    构造性绑定预检不闭合」等由 producer 在任何 wire 前关闭式复验。
+    当前存在 fresh typed infeasible 终态时不在此阻断——队列把预算内
+    `stage4.design --replan` 排成 todo，B 的早退由 producer 守住。
+    """
+    from contracts.artifacts import STAGE4_BLIND_CANDIDATE
+    from novel.orchestrator.approvals import projection_code
+    base_ready = stage4_ready(base, sid)
+    blocking = list(base_ready.blocking)
+    disclosures = list(base_ready.disclosures)
+    if blocking:
+        return AdmissionCheck('stage4.plan', False, blocking=tuple(blocking),
+                              semantic_unreviewed=bool(disclosures),
+                              disclosures=disclosures)
+    rows = _artifact_rows(_overview(base, sid))
+    blocking.extend(_artifact_blocking(
+        rows, STAGE4_BLIND_CANDIDATE, label='Stage4A 盲候选'))
+    return AdmissionCheck('stage4.plan', not blocking, blocking=tuple(blocking),
+                          semantic_unreviewed=bool(disclosures),
+                          disclosures=disclosures)
+
+
+def stage4_context_ready(base: str | os.PathLike[str], sid: str) -> AdmissionCheck:
+    """stage4.context（免费）组装前的统一机械准入。
+
+    B 的证据绑定与正式计划可读、当前、无未恢复 INVALID，且当前候选没有
+    fresh typed infeasible 终态——组装只认一份可执行的 bound 计划。
+    「机械检查过」由计划落盘闸保证：正式 `plan_chapters.json` 在盘即代表
+    它已通过生成/提升时同一把联合 HARD（`.INVALID` 只在闸门拦下时存在）。
+    逐章 all-accept 结构票已随人工闸退役。
+    """
+    from contracts.artifacts import STAGE4_EVIDENCE_BINDING, STAGE4_PLAN_CHAPTERS
+    from novel.orchestrator.approvals import projection_code
+    from novel.stages.stage4 import current_infeasible_binding
+    blocking: list[str] = []
+    rows = _artifact_rows(_overview(base, sid))
+    for rel, label in (
+        (STAGE4_EVIDENCE_BINDING, 'Stage4B 证据绑定'),
+        (STAGE4_PLAN_CHAPTERS, 'Stage4B 正式计划'),
+    ):
+        blocking.extend(_artifact_blocking(rows, rel, label=label))
+    if blocking:
+        return AdmissionCheck('stage4.context', False, blocking=tuple(blocking))
+    code = projection_code()
+    novel_dir = Path(paths.resolve_novel_dir(base, sid))
+    store = ArtifactStore(st.readonly_ctx(novel_dir, 'stage4.plan', code))
+    if current_infeasible_binding(store) is not None:
+        return AdmissionCheck('stage4.context', False, blocking=(
+            '当前候选存在 fresh typed infeasible 终态；先由预算内 '
+            '`stage4.design --replan` 重采 Stage4A，再重跑 Stage4B',))
+    return AdmissionCheck('stage4.context', True)
 
 
 def semantic_unreviewed_disclosure() -> str:

@@ -53,7 +53,7 @@ from novel import exit_codes as X
 from novel.exit_codes import CRASH
 from novel.errors import (
     ApprovalRequired, ArtifactUnreadable, BlockingFindingsUnresolved,
-    GateBlocked, HumanEditProtected, QueueConflict, TerminalState, UpstreamMissing, UpstreamStale,
+    GateBlocked, QueueConflict, TerminalState, UpstreamMissing, UpstreamStale,
     UpstreamUnproven,
 )
 from novel.orchestrator import approvals, jobs, state as st
@@ -82,16 +82,22 @@ WAITING_ON_ANALYZE_RESPONSE_REPAIR = 'human:stage2-analyze-response-repair'
 WAITING_ON_ANALYZE_RESPONSE_TERMINAL = 'human:stage2-analyze-response-terminal'
 WAITING_ON_ANALYZE_SOURCE = 'human:stage2-analyze-source-unavailable'
 WAITING_ON_ANALYZE_DRAFT_REPAIR = 'human:stage2-analyze-owner-draft-repair'
+# ⚠⚠ Stage4 四道人工闸已整体退役（2026-09-15 全自动裁决）：design 落盘
+# （机械有效）即自动进入 plan，plan 落盘即自动进入 context，唯一打开条件是
+# 统一机械准入（`novel/orchestrator/mechanical_admission.py`）。下列常量不再
+# 由本模块作为 blocker 发出；仅保留名字供历史账只读解码
+# （`novel/orchestrator/reviewer_legacy.py`）引用。
 WAITING_ON_STAGE4_DESIGN_REVIEW = 'approval:stage4-design-review'
 WAITING_ON_STAGE4_BINDING_RESOLUTION = 'approval:stage4-binding-resolution'
 WAITING_ON_STAGE4_STRUCTURE_REPLAN = 'approval:stage4-structure-replan'
-WAITING_ON_STAGE4_DESIGN_ACTION = 'recovery:stage4-design-action'
-WAITING_ON_STAGE4_DESIGN_REPAIR_COMMIT = \
-    'recovery:stage4-design-repair-aggregate-commit'
 WAITING_ON_STAGE4_STRUCTURE_REVIEW = 'approval:stage4-structure-review'
-# 兼容只 import 常量名的旧调用者；值已收敛到两张真实决定面。
+# 兼容只 import 常量名的旧调用者；同一退役裁决下的只读别名。
 WAITING_ON_STAGE4_PHASE_APPROVAL = WAITING_ON_STAGE4_DESIGN_REVIEW
 WAITING_ON_STAGE4_REPLAN = WAITING_ON_STAGE4_BINDING_RESOLUTION
+# 仍是现役免费恢复面：repair/replan prepared 尾窗的 0-wire 补尾
+# （`stage4.design --recover-repair-aggregate`）。
+WAITING_ON_STAGE4_DESIGN_REPAIR_COMMIT = \
+    'recovery:stage4-design-repair-aggregate-commit'
 WAITING_ON_WRITING_APPROVAL = 'approval:stage5-writing'
 WAITING_ON_REVIEW = 'stage5:review-currentness'
 WAITING_ON_STAGE5_CLOSURE = 'approval:stage5-closure'
@@ -111,7 +117,6 @@ WAITING_ON_REPLAN = 'queue:plan-changed'
 DETERMINISTIC_RECOVERY_WAITING_ON: frozenset[str] = frozenset({
     WAITING_ON_STAGE2_EDIT_COMMIT,
     WAITING_ON_STAGE2_EDIT_REVALIDATE,
-    WAITING_ON_STAGE4_DESIGN_ACTION,
     WAITING_ON_STAGE4_DESIGN_REPAIR_COMMIT,
     WAITING_ON_STAGE5_REVIEWER_REWRITE,
     WAITING_ON_PREPARED_DELIVERY,
@@ -350,7 +355,12 @@ def _stage6_approval_current(
 
 
 def _stage4_replan_required(base: str | os.PathLike[str], sid: str) -> bool:
-    """B 已对当前 A 落下 fresh 负结论时，队列只能停给显式 A 重规划。"""
+    """B 已对当前 A 落下 fresh typed infeasible 终态时，唯一后继是 A 重采。
+
+    2026-09-15 全自动裁决后这不再是人工闸：队列直接把预算内
+    `stage4.design --replan` 排成普通 todo；预算耗尽由工作单元
+    WorkUnitBudgetExhausted 给出终态。
+    """
     novel_dir = paths.resolve_novel_dir(base, sid)
     store = ArtifactStore(st.readonly_ctx(
         novel_dir, 'stage4.plan', approvals.projection_code()))
@@ -520,7 +530,7 @@ def plan_book_from_overview(
     for node in planned_nodes:
         spec = NODES[node]
         blueprint_repair_reason = None
-        stage4_design_action_flags: tuple[str, ...] | None = None
+        stage4_design_replan_flags: tuple[str, ...] | None = None
         stage5_reviewer_rewrite_flags: tuple[str, ...] | None = None
         stage5_reviewer_rewrite_no_action = False
         stage2_rework = None
@@ -560,14 +570,19 @@ def plan_book_from_overview(
             # 两种状态都已有可恢复的问题稿，且下一步需要人提供 typed 决策。
             # 队列不能替人造 actor/reason，更不能把 RUN 解释成默认再付一次钱。
             why_blocked = WAITING_ON_INBOX
-        # Blueprint 与 Stage4 由统一机械准入衔接：必要产物可读、当前、无
-        # 未恢复 INVALID，且所需机械检查全部通过（语义未审只披露不阻断）。
-        # ⚠ 先于通用 upstream-invalid 分类：Stage2 的 `.INVALID` 是明确的
+        # Blueprint 与 Stage4 付费相由统一机械准入衔接：必要产物可读、当前、
+        # 无未恢复 INVALID，且所需机械检查全部通过（语义未审只披露不阻断）。
+        # 2026-09-15 全自动裁决后 stage4.plan 的打开条件同样是机械准入；
+        # stage4.context（免费）在下方单独判同一族机械条件。
+        # ⚠ 先于通用 upstream-invalid 分类：Stage2/Stage4 的 `.INVALID` 是明确的
         # 准入阻断，理由要精确到产物。
-        if why_blocked is None and node in ('stage2.blueprint', 'stage4.design') and spec.paid:
+        if why_blocked is None and spec.paid and node in (
+                'stage2.blueprint', 'stage4.design', 'stage4.plan'):
             from novel.orchestrator import mechanical_admission as admission
             gate = (admission.blueprint_generation_ready(base, sid)
                     if node == 'stage2.blueprint'
+                    else admission.stage4_plan_ready(base, sid)
+                    if node == 'stage4.plan'
                     else admission.stage4_ready(base, sid))
             if not gate.ok:
                 why_blocked = WAITING_ON_INBOX
@@ -663,39 +678,16 @@ def plan_book_from_overview(
                 raise ArtifactUnreadable(
                     f'未知 Reviewer rewrite execution state：{execution.state!r}')
         if (why_blocked is None and node == 'stage4.design'
-                and verdict == st.RESUME_SKIP):
-            # A 候选仍 current 不代表 A 相已经结束：若最新 typed 决定要求 repair /
-            # replan，真正下一步是按 opaque action token 精确恢复 A。这个状态此前会
-            # 被通用 SKIP 吞掉，随后 planner 前移到 B/结构人审，续跑便反复唤醒
-            # Commander。operator 路复用冻结审批投影；普通 queue 入口只读补取一份。
-            design_doc = approval_doc
-            if design_doc is None:
-                try:
-                    design_doc = approvals.get(
-                        base, sid, include_spawns=False,
-                        operator_projection=True)
-                except (
-                    ApprovalRequired, UpstreamMissing, ArtifactUnreadable,
-                    GateBlocked, UpstreamStale, UpstreamUnproven,
-                    BlockingFindingsUnresolved,
-                ):
-                    # 普通多步 queue 入口的残缺/混合盘面仍沿既有 plan 阻塞面；
-                    # operator 已传冻结投影，不会走到这一兼容分支。
-                    design_doc = None
-            design_view = (
-                None if design_doc is None else design_doc.design_review)
-            if design_view is not None and design_view.state in (
-                    'repair_requested', 'strategy_replan_requested'):
-                token = design_view.action_review_token
-                if token is None:
-                    raise ArtifactUnreadable(
-                        'Stage4A typed 修订态缺 action review token')
-                stage4_design_action_flags = (
-                    ('--replan', '--review-token', token)
-                    if design_view.state == 'strategy_replan_requested'
-                    else ('--review-token', token)
-                )
-                why_blocked = WAITING_ON_STAGE4_DESIGN_ACTION
+                and verdict == st.RESUME_SKIP
+                and _stage4_replan_required(base, sid)):
+            # B 的 typed infeasible 已是正式终态：2026-09-15 全自动裁决后不再
+            # 等人工 resolution，唯一后继是预算内自动整书重采 A（普通付费
+            # todo）。生产者按机器铸造的 typed scope 消费它；预算耗尽时该
+            # 工作单元以 WorkUnitBudgetExhausted 终态失败。
+            stage4_design_replan_flags = ('--replan',)
+            verdict = st.RESUME_RUN
+            why = ('Stage4B 已对当前候选落盘 typed infeasible；预算内自动整书'
+                   '重采 Stage4A，预算耗尽即本工作单元 WorkUnitBudgetExhausted 终态')
         if (
             why_blocked is None
             and verdict == st.RESUME_RUN
@@ -708,65 +700,16 @@ def plan_book_from_overview(
             # 0 LLM recovery 面；若该节点没有安全恢复路，也保持 blocked 交给人，
             # 绝不把“没实现恢复”解释成“同意再付一次钱”。
             why_blocked = WAITING_ON_INBOX
-        if why_blocked is None and node == 'stage4.plan':
-            if _stage4_replan_required(base, sid):
-                # B 的负结论已经是正式终态；这份队列不得继续暴露同一个 B argv，
-                # 更不能把旧的一次性授权解释成重采 A。恢复须另行 preview/confirm。
-                why_blocked = WAITING_ON_STAGE4_BINDING_RESOLUTION
-            else:
-                design_verdict, _design_why = st.resume_verdict(ov, 'stage4.design')
-            if (why_blocked is None
-                    and design_verdict != st.RESUME_SKIP):
-                # A 还没有一份当前候选时，本次队列只能确认并执行 A。
-                # B 必须等 A 落盘、人看过候选后重新 plan/preview/--yes；
-                # 否则“队列一次确认”会偷偷合并产品明定的两次付费决定。
-                why_blocked = WAITING_ON_STAGE4_DESIGN_REVIEW
-            if why_blocked is None:
-                if approval_doc is not None:
-                    design_current = approval_doc.design_review.state == 'accepted'
-                else:
-                    design_current = approvals.design_review_is_current(base, sid)
-                if not design_current:
-                    why_blocked = WAITING_ON_STAGE4_DESIGN_REVIEW
-        if why_blocked is None and node == 'stage4.context':
-            context_approval_doc = approval_doc
-            if context_approval_doc is None:
-                # 普通 queue 入口不像 operator 那样自带冻结审批投影，但仍要
-                # 区分「B 尚未审」与「B 已明确 request_replan」。只调用
-                # authorize_context 会把两者都压成 ApprovalRequired，随后又把
-                # 后者错送回同一份 B 给 Commander 重审。
-                try:
-                    context_approval_doc = approvals.get(
-                        base, sid, include_spawns=False,
-                        operator_projection=True)
-                except (
-                    ApprovalRequired, UpstreamMissing, ArtifactUnreadable,
-                    GateBlocked, UpstreamStale, UpstreamUnproven,
-                ):
-                    context_approval_doc = None
-            context_current = (
-                context_approval_doc is not None
-                and context_approval_doc.gate['s4']
-                and context_approval_doc.structure.state == 'accepted'
-            )
-            if context_approval_doc is None:
-                try:
-                    approvals.authorize_context(base, sid)
-                    context_current = True
-                except (
-                    ApprovalRequired, UpstreamMissing, ArtifactUnreadable,
-                    GateBlocked, UpstreamStale, UpstreamUnproven,
-                ):
-                    context_current = False
-            if why_blocked is None and not context_current:
-                structure_state = (
-                    context_approval_doc.structure.state
-                    if context_approval_doc is not None else None)
-                why_blocked = (
-                    WAITING_ON_STAGE4_STRUCTURE_REPLAN
-                    if structure_state == 'replan_requested'
-                    else WAITING_ON_STAGE4_STRUCTURE_REVIEW
-                )
+        # Stage4 人工闸已退役（2026-09-15 全自动裁决）：design 落盘（机械有效）
+        # 即自动进入 plan（上方统一机械准入），plan 落盘（机械有效）即自动
+        # 进入 context。context 的机械准入单独判，理由精确到产物。
+        if why_blocked is None and node == 'stage4.context' \
+                and verdict != st.RESUME_SKIP:
+            from novel.orchestrator import mechanical_admission as admission
+            gate = admission.stage4_context_ready(base, sid)
+            if not gate.ok:
+                why_blocked = WAITING_ON_INBOX
+                why = '统一机械准入未通过：' + '；'.join(gate.blocking)
         if why_blocked is None and spec.stage == 'stage6':
             # Stage5 Review 通过仍不等于 Commander 已逐项闭合。只消费审批服务
             # 的 current view；缺回执、旧主体、blocked workpack 与 read failure
@@ -833,18 +776,6 @@ def plan_book_from_overview(
             # ``allow`` 打开并不放宽 file_changed/unreadable/INVALID 等关闭式分支。
             why_blocked = WAITING_ON_RESUME_DECISION
 
-        close_owner = {
-            WAITING_ON_STAGE4_DESIGN_REVIEW: 'stage4.design',
-            WAITING_ON_STAGE4_STRUCTURE_REVIEW: 'stage4.plan',
-        }.get(why_blocked)
-        if close_owner is not None and not todo and not blocked:
-            if approvals.stage4_review_closure_available(base, sid, node=close_owner):
-                close_flags = ['--close-review']
-                return [QueueItem(
-                    sid=sid, node=close_owner, flags=close_flags,
-                    steps=build_steps(close_owner, sid, close_flags, base=base, follow_check=False),
-                    why='当前待审义务为空；免费核验历史决定覆盖并闭合审批', waiting_on=None)], []
-
         # 称名投影只由人物 producer 拥有，缺失时沿同一免费复验入口恢复；
         # 人物独立登记改变后，Global 沿免费 `--renormalize` 重验引用并重绑来源。
         flags: list[str] = (
@@ -852,8 +783,8 @@ def plan_book_from_overview(
             if node == 'stage2.global' and edit_commit
             else list(edit_commit_flags or ())
             if node == 'stage2.global' and edit_revalidate
-            else list(stage4_design_action_flags)
-            if stage4_design_action_flags is not None
+            else list(stage4_design_replan_flags)
+            if stage4_design_replan_flags is not None
             else list(stage5_reviewer_rewrite_flags)
             if stage5_reviewer_rewrite_flags is not None
             else list(deterministic_redo_flags)
@@ -935,19 +866,10 @@ def plan_book_from_overview(
 
         if why_blocked in (
             WAITING_ON_INBOX,
-            WAITING_ON_STAGE4_DESIGN_REVIEW,
-            WAITING_ON_STAGE4_BINDING_RESOLUTION,
-            WAITING_ON_STAGE4_STRUCTURE_REPLAN,
-            WAITING_ON_STAGE4_STRUCTURE_REVIEW,
             WAITING_ON_STAGE5_CLOSURE,
         ):
             # 人审/相位决定完成前，当前队列快照里不放下游付费 argv。状态改变后
             # 必须重新 plan，不能把旧快照重解释为新授权。
-            steps = []
-        if (why_blocked == WAITING_ON_STAGE4_DESIGN_ACTION
-                and node != 'stage4.design'):
-            # 只有当前 A 恢复动作本身携带 exact argv；同一 blocker 向下游传播时
-            # 仍不得提前冻结 B/写作等命令或把它们计入本轮付费面。
             steps = []
         if (why_blocked == WAITING_ON_STAGE5_REVIEWER_REWRITE
                 and node != 'stage5.write'):
@@ -1025,38 +947,6 @@ def _blocked_why(
             'hash-bound request；当前只允许按 execution journal 发布 exact paid '
             'writer 或 0-wire prepared recovery，不再调用 Commander，也不退回默认'
             f'写作。执行终态后重新规划并免费重算 Review；{verdict_why}')
-    if waiting_on == WAITING_ON_STAGE4_DESIGN_REVIEW:
-        return (
-            'Stage4A 尚无当前全书 all-accept typed 盲审；若候选尚未落盘，本次'
-            '队列只能跑 A。A 落盘后请完成策略与逐章审阅，再重新预览并明确批准'
-            '付费 Stage4B；'
-            f'{verdict_why}')
-    if waiting_on == WAITING_ON_STAGE4_BINDING_RESOLUTION:
-        return (
-            'Stage4B 已对当前 Stage4A 候选落盘 fresh typed infeasible 结论；'
-            '队列不会再次暴露或执行同一个 B，也不会替人猜 repair/replan。'
-            '请先提交当前 hash-bound design resolution，执行对应 A 修订后再单独确认 B；'
-            f'{verdict_why}')
-    if waiting_on == WAITING_ON_STAGE4_STRUCTURE_REPLAN:
-        return (
-            'Stage4B 当前最终结构决定已有 request_replan；不能再次审同一份 B，'
-            '也不能把结构理由直接当模型指令。先由 Commander 在当前 A 工作包上交叉核证：'
-            '若能独立确认具体 scene/fact/goal 结构损害，提交新的 non-all-accept typed '
-            'request_repair/request_replan 决定，之后只由 Executor 按 opaque token 精确恢复 '
-            'Stage4A；若只有 read-only INFO/metric/UNVER/binding concern，提交同包 typed '
-            'stop 并以 exit 2 停机，不写审批、不铸 permit、不调用 Executor；'
-            f'{verdict_why}')
-    if waiting_on == WAITING_ON_STAGE4_DESIGN_ACTION:
-        return (
-            'Stage4A 已有当前 hash-bound typed 修订决定；不再调用 Commander。'
-            '下一步只按该决定发布的 opaque token 启动 Executor 精确 repair/replan，'
-            '完成后再重新规划并单独确认 Stage4B；'
-            f'{verdict_why}')
-    if waiting_on == WAITING_ON_STAGE4_STRUCTURE_REVIEW:
-        return (
-            'Stage4B 的最终 Plan 尚未在当前主体上逐章 all-accept；免费 '
-            '`stage4.context` 也必须等这张最终结构票，审批后重新预览才会出现；'
-            f'{verdict_why}')
     if waiting_on == WAITING_ON_STAGE2_EDIT_COMMIT:
         return (
             'Stage2 typed 编辑已留下 hash-bound prepared journal；当前只能由 '
@@ -1781,16 +1671,10 @@ def _run_lane(base: str | os.PathLike[str], queue_id: str, sid: str, *,
                     note=reason)
             try:
                 prepare = None
-                if entry.item.node == 'stage4.design' and not entry.item.flags:
-                    prepare = lambda: approvals.authorize_design_initial(
-                        base, entry.item.sid)
-                elif entry.item.node == 'stage4.plan':
-                    prepare = lambda: approvals.authorize_plan(
-                        base, entry.item.sid)
-                elif entry.item.node == 'stage4.context':
-                    prepare = lambda: approvals.authorize_context(
-                        base, entry.item.sid)
-                elif entry.item.node == 'stage5.write':
+                # Stage4 三相的人工审批授权已随四道闸退役（2026-09-15 全自动
+                # 裁决）；打开条件唯一化为统一机械准入，由 plan 与 producer
+                # 自身的关闭式校验把守。stage5 写作授权仍保留（B4 再收）。
+                if entry.item.node == 'stage5.write':
                     chapters = chapters_from_flags(entry.item.flags)
                     prepare = lambda chapters=chapters: approvals.authorize_writing(
                         base, entry.item.sid, chapters)
@@ -2092,7 +1976,6 @@ __all__ = [
     'WAITING_ON_STAGE4_DESIGN_REPAIR_COMMIT',
     'WAITING_ON_STAGE4_BINDING_RESOLUTION',
     'WAITING_ON_STAGE4_STRUCTURE_REPLAN',
-    'WAITING_ON_STAGE4_DESIGN_ACTION',
     'WAITING_ON_STAGE4_STRUCTURE_REVIEW',
     'WAITING_ON_STAGE4_PHASE_APPROVAL', 'WAITING_ON_STAGE4_REPLAN',
     'WAITING_ON_WRITING_APPROVAL', 'WAITING_ON_REVIEW',

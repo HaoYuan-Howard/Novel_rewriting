@@ -801,20 +801,22 @@ def test_unregistered_deterministic_blocker_keeps_epoch_and_parent_end_in_sync(
     assert '停在人工审批闸' in ended.outcome.reason
 
 
-@pytest.mark.parametrize('flags', [
-    ['--review-token', 's4rr1_' + '1' * 64],
-    ['--replan', '--review-token', 's4rr1_' + '2' * 64],
-], ids=['targeted-repair', 'strategy-replan'])
-def test_stage4_design_action_child_uses_fresh_epoch_as_producer_run(
-        base, corpus, monkeypatch, tmp_path, flags):
-    """生产 Supervisor 主路先换 epoch、重读/CAS，再把新 session_run_id 交给子进程。"""
-    marker = tmp_path / 'stage4-producer-run.txt'
+def test_fresh_epoch_blocker_child_uses_fresh_epoch_as_producer_run(
+        base, corpus, monkeypatch, tmp_path):
+    """生产 Supervisor 主路先换 epoch、重读/CAS，再把新 session_run_id 交给子进程。
+
+    Stage4 design action 的 typed 人工恢复已随四道闸退役（2026-09-15 全自动
+    裁决）；本组改用仍登记在 ``fresh_epoch_blockers`` 里的 stage5 reviewer
+    rewrite blocker 验证同一机制。
+    """
+    flags = ['--reviewer-rewrite', 'stage5/reviewer_rewrite_request.json']
+    marker = tmp_path / 'fresh-epoch-producer-run.txt'
     reads: list[str] = []
     runner_epochs: list[ExecutionEpoch] = []
     live = {'recovered': False}
     action = SimpleNamespace(
-        node='stage4.design', flags=flags,
-        waiting_on=agent.queue.WAITING_ON_STAGE4_DESIGN_ACTION,
+        node='stage5.write', flags=flags,
+        waiting_on=agent.queue.WAITING_ON_STAGE5_REVIEWER_REWRITE,
         action_sha256='a' * 64)
 
     def next_action(_base, _sid, *, code):
@@ -836,7 +838,7 @@ def test_stage4_design_action_child_uses_fresh_epoch_as_producer_run(
         # 第一次只发现旧 epoch 的 action；换代后必须重读，才允许铸权。
         assert reads == ['before', 'before']
         assert current.action is action
-        assert node == 'stage4.design'
+        assert node == 'stage5.write'
         assert actual_flags == flags
         return SimpleNamespace(node=node, flags=list(actual_flags))
 
@@ -844,8 +846,8 @@ def test_stage4_design_action_child_uses_fresh_epoch_as_producer_run(
         agent.execution_permit, 'permit_from_next', permit_from_next)
 
     def run_step_argv(_base, _sid, epoch, permit, *, stem):
-        assert stem == 'recovery-stage4.design'
-        assert permit.node == 'stage4.design'
+        assert stem == 'recovery-stage5.write'
+        assert permit.node == 'stage5.write'
         runner_epochs.append(epoch)
         live['recovered'] = True
         script = (
@@ -885,7 +887,7 @@ def test_stage4_design_action_child_uses_fresh_epoch_as_producer_run(
     assert agent_session_audit.read_events(base) == []
 
 
-def test_stage4_permit_code_drift_rolls_and_freshens_new_exact_action(
+def test_fresh_epoch_permit_code_drift_rolls_and_freshens_new_exact_action(
         base, corpus, monkeypatch):
     """permit 的 pre-Popen CAS 漂移滚 code_change；H1/H2 各自只建一次 fresh 边界。"""
     code = {'value': 'stage4-code-1'}
@@ -909,9 +911,9 @@ def test_stage4_permit_code_drift_rolls_and_freshens_new_exact_action(
         return SimpleNamespace(
             state='blocked', code_version=code,
             action=SimpleNamespace(
-                node='stage4.design',
-                flags=['--review-token', 's4rr1_' + '3' * 64],
-                waiting_on=agent.queue.WAITING_ON_STAGE4_DESIGN_ACTION,
+                node='stage5.write',
+                flags=['--reviewer-rewrite', 'stage5/reviewer_rewrite_request.json'],
+                waiting_on=agent.queue.WAITING_ON_STAGE5_REVIEWER_REWRITE,
                 action_sha256=action_sha),
             execution_token=None)
 
@@ -923,13 +925,13 @@ def test_stage4_permit_code_drift_rolls_and_freshens_new_exact_action(
         if current.action.action_sha256 == h1:
             code['value'] = 'stage4-code-2'
             raise RuntimeError('模拟 permit CAS 期间代码漂移')
-        return SimpleNamespace(node='stage4.design', flags=list(flags))
+        return SimpleNamespace(node='stage5.write', flags=list(flags))
 
     monkeypatch.setattr(
         agent.execution_permit, 'permit_from_next', permit_from_next)
 
     def run_step_argv(_base, _sid, epoch, _permit, *, stem):
-        assert stem == 'recovery-stage4.design'
+        assert stem == 'recovery-stage5.write'
         runner_epochs.append(epoch)
         live['recovered'] = True
         return [sys.executable, '-c', 'raise SystemExit(0)']

@@ -138,50 +138,6 @@ def test_final_approval_inbox_omits_already_current_actions():
         stage7_workpack=stage7_pack, workpacks_checked=True) == []
 
 
-def test_unavailable_design_does_not_publish_a_or_b_approval():
-    """当前候选读不回来时，不发布虚假的 A/B 审批待办。"""
-    from novel.orchestrator import inbox_projection as I
-
-    doc = SimpleNamespace(
-        design_review=SimpleNamespace(
-            state='unavailable', current_decision=None),
-        structure=SimpleNamespace(
-            state='missing', current_decision=None),
-    )
-
-    assert I._stage4_approval_items(
-        '.', 'book-1', object(), approval_doc=doc) == []
-
-
-def test_structure_replan_inbox_publishes_typed_resolution_or_stop(monkeypatch):
-    """B 拒绝后的清单必须同时呈现真实修订与安全停机两条出口。"""
-    from novel.errors import ApprovalRequired
-    from novel.orchestrator import inbox_projection as I
-
-    doc = SimpleNamespace(
-        design_review=SimpleNamespace(
-            state='accepted', current_decision=SimpleNamespace()),
-        structure=SimpleNamespace(
-            state='replan_requested',
-            current_decision=SimpleNamespace(chapters=[SimpleNamespace(
-                output_ordinal=3, decision='request_replan')])),
-    )
-    monkeypatch.setattr(
-        I.approvals, 'structure_workpack',
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            ApprovalRequired('测试在状态清单后停止')),
-    )
-
-    rows = I._stage4_approval_items(
-        '.', 'book-1', object(), approval_doc=doc)
-
-    assert len(rows) == 1
-    assert rows[0].what == 'Stage4B 当前结构决定要求重规划章 [3]'
-    assert 'non-all-accept typed A repair/replan' in rows[0].how
-    assert 'typed stop' in rows[0].how
-    assert 'stop 也不授权执行' in rows[0].how
-
-
 def test_missing_blueprint_projection_inbox_points_only_to_free_materialization():
     """待办文案不能把缺伴生产物说成要重新付费抽 Global。"""
     from novel.orchestrator import inbox_projection as I

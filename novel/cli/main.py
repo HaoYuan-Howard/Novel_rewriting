@@ -50,7 +50,7 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from contracts.invariants import (
-    DESIGN_REVIEWER_KINDS, FREE_ENTRIES, NODES,
+    FREE_ENTRIES, NODES,
     PAID_FLAGS, PROGRESS_PHASES,
     STAGES, STAGE5_CLOSED_EXEMPT_FLAGS, VALUED_FLAGS,
 )
@@ -58,17 +58,16 @@ from contracts.schema.orchestration import (
     AgentExecutorBackend, AgentProfile, ExecutorBackend, LegacyExecutorBackend,
     LegacyLlmProfile, ProgressEvent,
 )
-from novel import paths, prov, run_identity
+from novel import paths, run_identity
 from novel.orchestrator import execution_context
 from novel import exit_codes as X
 from novel.errors import (
-    ApprovalRequired, ArtifactUnreadable, RefusedByStructure, TerminalState,
+    ApprovalRequired, RefusedByStructure, TerminalState,
     UnsupportedRunMode, UpstreamMissing,
 )
 from novel.orchestrator import admission, beacon
 from novel.orchestrator import nodes as N
 from novel.orchestrator import queue as Q
-from novel.orchestrator import state as S
 from novel.report import render
 from novel.run import RunContext
 
@@ -259,38 +258,34 @@ def _parser() -> argparse.ArgumentParser:
     approval_backfill.add_argument('--base', required=True)
 
     approval_gate = approval_sub.add_parser(
-        'gate', help='批准当前 s0/s1/s2；s4 只接受 typed structure apply，'
+        'gate', help='批准当前 s0/s1；s4 已随 Stage4 人工闸退役，'
                      's5 只接受 typed stage5 apply')
     approval_gate.add_argument('gate', choices=('s0', 's1'))
     approval_gate.add_argument('sid')
     approval_gate.add_argument('--base', required=True)
 
     approval_workpack = approval_sub.add_parser(
-        'workpack', help='只读输出当前 Stage4/6/7 审批工作包')
-    approval_workpack.add_argument(
-        'surface', choices=('design', 'structure', 'stage6', 'stage7'))
+        'workpack', help='只读输出当前 Stage6/7 审批工作包'
+                         '（Stage4 design/structure 工作包已随人工闸退役）')
+    approval_workpack.add_argument('surface', choices=('stage6', 'stage7'))
     approval_workpack.add_argument('sid')
     approval_workpack.add_argument('--base', required=True)
 
     approval_template = approval_sub.add_parser(
-        'template', help='只读生成绑定当前 subject 的审批模板')
+        'template', help='只读生成绑定当前 subject 的审批模板'
+                         '（Stage4 design/structure 模板已随人工闸退役）')
     approval_template.add_argument(
-        'surface', choices=('design', 'structure', 'writing', 'stage5'))
+        'surface', choices=('writing', 'stage5'))
     approval_template.add_argument('sid')
     approval_template.add_argument('--base', required=True)
     approval_template.add_argument('--actor', required=True)
     approval_template.add_argument('--reason', required=True)
-    approval_template.add_argument(
-        '--reviewer-kind', choices=DESIGN_REVIEWER_KINDS,
-        help='design 模板必填：human 或 delegated_operator；不从 actor 猜')
-    approval_template.add_argument(
-        '--review-run-id', type=_run_id_arg,
-        help='design 模板必填：本次真实审阅会话 id；服务不会静默生成')
 
     approval_apply = approval_sub.add_parser(
-        'apply', help='提交 typed 审批 JSON；只写审批账，不启动作业')
+        'apply', help='提交 typed 审批 JSON；只写审批账，不启动作业'
+                      '（Stage4 design/structure apply 已随人工闸退役）')
     approval_apply.add_argument(
-        'surface', choices=('design', 'structure', 'writing', 'stage5'))
+        'surface', choices=('writing', 'stage5'))
     approval_apply.add_argument('sid')
     approval_apply.add_argument('--base', required=True)
     approval_apply.add_argument(
@@ -450,50 +445,20 @@ def _dispatch(node: str, ctx: RunContext, flags: list[str]) -> int:
         from novel.orchestrator.node_agents import build_node_agent
 
         kwargs: dict[str, object] = {}
-        if node == 'stage4.plan' and (
-            not N.flag_tokens(flags)
-            or '--apply-binding' in N.flag_tokens(flags)
-        ):
-            # executor 分流发生在 ``_run_stage4`` 之前；A 的正式审阅票必须在
-            # 构造 agent/driver、更不能说首个 wire 之前验证，不能只守 legacy 客户端。
-            # 零成本 check/revalidate/apply-edit/dry-run 仍须允许旧 Plan 恢复，
-            # 与 jobs prepare 和 legacy dispatch 使用同一边界。
-            from novel.orchestrator import approvals
-            approvals.authorize_plan(ctx.novel_dir.parent, ctx.sid)
         if node in {'stage2.blueprint', 'stage4.design', 'stage4.plan', 'stage5.write'}:
             # 逐章 agent pool 必须消费与 legacy LLM 客户端同一份并发配置；
             # 各节点仍可在自己的 pool 内再施加更低的稳定性上限。
             from novel.config import load_config
             kwargs['concurrency'] = load_config().concurrency_for(node)
-        if node == 'stage4.design':
-            design_tokens = N.flag_tokens(flags)
-            if not design_tokens:
-                from novel.orchestrator import approvals
-                approvals.authorize_design_initial(
-                    ctx.novel_dir.parent, ctx.sid)
-            review_token = _valued(flags, '--review-token')
-            repair_scope = None
-            if review_token is not None and '--replan' not in design_tokens:
-                from novel.orchestrator import approvals
-                repair_scope = approvals.resolve_design_action(
-                    ctx.novel_dir.parent, ctx.sid, review_token, expected='repair')
-                kwargs.update({
-                    'repair_decision_sha256': repair_scope.decision_sha256,
-                    'repair_scope': repair_scope,
-                })
-            if '--replan' in design_tokens:
-                from novel.orchestrator import approvals
-                repair_scope = approvals.resolve_design_action(
-                    ctx.novel_dir.parent, ctx.sid, review_token, expected='replan')
-                kwargs.update({
-                    # replan 的决定身份已经封装在 typed scope 内；这个独立
-                    # 参数只属于 targeted repair。把它同时传给 replan 会被
-                    # ``run_design`` 正确地视为两种恢复模式混用并关闭式拒绝。
-                    'repair_decision_sha256': None,
-                    'repair_scope': repair_scope,
-                })
-                from novel.llm.cache import CachePolicy
-                ctx.cache = CachePolicy.refresh()
+        if node == 'stage4.design' and '--replan' in N.flag_tokens(flags):
+            # stage4 人工闸退役（2026-09-15 全自动裁决）：策略重采不再消费
+            # 人工 typed 决定；唯一入口是 B 的 typed infeasible 终态铸成的
+            # 机器 scope。这条命令仍只产 A。
+            from novel.orchestrator import approvals
+            kwargs['repair_scope'] = approvals.cast_infeasible_replan_scope(
+                ctx.novel_dir.parent, ctx.sid)
+            from novel.llm.cache import CachePolicy
+            ctx.cache = CachePolicy.refresh()
         if node == 'stage5.write':
             # Stage5 的两个付费入口与定向章集都是业务身份的一部分；通用
             # executor 分流发生在 `_run_stage5` 之前，必须在这里显式交给
@@ -533,7 +498,7 @@ def _dispatch(node: str, ctx: RunContext, flags: list[str]) -> int:
                       f'{len(witness.scenes)} scene / '
                       f'{len(witness.closed_refs)} closed ref')
             print('  → 只有代码铸造的 typed proof 能到达本终态；'
-                  '请按当前 design review 决定另行修订，系统不会自动生成第二候选')
+                  '下一轮队列将预算内自动重采 Stage4A（--replan）')
         print(
             f'  {"✓" if passed else "✗"} {node} executor agent 已提交并终验'
             f'{"正式产物" if passed else "落盘负结论"}（{result.turns} turn）')
@@ -1022,23 +987,16 @@ def _report_exit(report: object) -> int:
 def _run_stage4(ctx: RunContext, flags: list[str]) -> int:
     """Stage4 v4：两个独立付费相 + 一条 0 成本上下文组装路。
 
-    `stage4.design` 与 `stage4.plan` 必须由人分别批准执行；前者成功只落盲候选，
-    不在同一命令里静默触发后者。派发按 **stage** 分，先按 node 分岔。
+    2026-09-15 全自动裁决后 stage4 的唯一打开条件是统一机械准入：A 落盘
+    （机械有效）即自动进入 B，B 落盘即自动进入 context；本函数只保留
+    免费恢复面与付费生成路，不再有审批授权与 close-review 收口。
     ⚠ `stage4.context` 的 `flags=()` 是终态：它本身就是那个动作。
     """
     from novel.stages.stage4 import plan
 
     tokens = set(N.flag_tokens(flags))
 
-    if ctx.node in {'stage4.design', 'stage4.plan'} and '--close-review' in tokens:
-        from novel.orchestrator import approvals
-        approvals.close_stage4_review(ctx.novel_dir.parent, ctx.sid, node=ctx.node)
-        print('  ✓ 当前审阅义务已由有效历史决定完整覆盖（0 模型）')
-        return X.OK
-
     if ctx.node == 'stage4.context':
-        from novel.orchestrator import approvals
-        approvals.authorize_context(ctx.novel_dir.parent, ctx.sid)
         report = plan.run_context(ctx)
         print(f'  ✓ 写作上下文已重建：{plan.CTX_REL}（0 成本）')
         print(render(report))
@@ -1074,21 +1032,7 @@ def _run_stage4(ctx: RunContext, flags: list[str]) -> int:
             print(
                 '  ✓ Stage4A repair/replan prepared 提交尾窗已按 '
                 f'raw/self 双 SHA 补齐：{len(artifact.output_chapters)} 章'
-                '（0 次模型调用，未解析旧 review token）')
-            return X.OK
-        if '--validate-edit' in tokens:
-            evaluation = plan.validate_design_chapter_edit(
-                ctx, _valued(flags, '--validate-edit') or '')
-            print(
-                f'  ✓ Stage4A 完整章 edit preview 通过：'
-                f'ch{evaluation.request.output_ordinal}（0 次调用，未写盘）')
-            return X.OK
-        if '--apply-edit' in tokens:
-            artifact = plan.run_apply_design_chapter_edit(
-                ctx, _valued(flags, '--apply-edit') or '')
-            print(
-                f'  ✓ Stage4A 完整章 edit 已经同一 preview/HARD '
-                f'尺子落盘：{len(artifact.output_chapters)} 章（0 次调用）')
+                '（0 次模型调用）')
             return X.OK
         if '--dry-run' in tokens:
             system, user = plan.build_design_prompt(ctx)
@@ -1098,39 +1042,24 @@ def _run_stage4(ctx: RunContext, flags: list[str]) -> int:
             print(f'── system（{len(system)} 字）──\n{system}')
             print(f'\n── user（{len(user)} 字；不含原文/源序/beat/材料）──\n{user}')
             return X.OK
-        review_token = _valued(flags, '--review-token')
         repair_scope = None
-        if not tokens:
-            from novel.orchestrator import approvals
-            approvals.authorize_design_initial(
-                ctx.novel_dir.parent, ctx.sid)
-        if review_token is not None and '--replan' not in tokens:
-            from novel.orchestrator import approvals
-            repair_scope = approvals.resolve_design_action(
-                ctx.novel_dir.parent, ctx.sid, review_token, expected='repair')
         if '--replan' in tokens:
-            # 整书策略重采也必须消费一份当前正式的策略驳回，不能把旧的
-            # ``--replan`` 留成无反馈随机刷新按钮。这条命令仍只产 A。
+            # 人工闸退役后策略重采只认 B 的 typed infeasible 终态铸成的
+            # 机器 scope；不再有 review token。
             from novel.orchestrator import approvals
-            repair_scope = approvals.resolve_design_action(
-                ctx.novel_dir.parent, ctx.sid, review_token, expected='replan')
+            repair_scope = approvals.cast_infeasible_replan_scope(
+                ctx.novel_dir.parent, ctx.sid)
             from novel.llm.cache import CachePolicy
             ctx.cache = CachePolicy.refresh()
         artifact = plan.run_design(
             ctx,
             _llm_client(ctx),
-            repair_decision_sha256=(
-                repair_scope.decision_sha256
-                if repair_scope is not None and not repair_scope.strategy_replan
-                else None),
             repair_scope=repair_scope,
         )
-        if review_token is not None and '--replan' not in tokens:
-            action = f'已按 review token {review_token[:18]}… 定向返修并落盘'
-        else:
-            action = '已按策略驳回整书重采并落盘' if '--replan' in tokens else '已落盘'
+        action = '已按 typed infeasible 终态预算内自动重采并落盘' \
+            if '--replan' in tokens else '已落盘'
         print(f'  ✓ Stage4A 盲结构候选{action}：{len(artifact.output_chapters)} 章。'
-              '下一步请先人工检查候选，再单独预览并批准 stage4.plan')
+              '机械准入通过后 stage4.plan 自动执行')
         return X.OK
 
     if '--recover-prepared' in tokens:
@@ -1146,8 +1075,6 @@ def _run_stage4(ctx: RunContext, flags: list[str]) -> int:
         return _report_exit(outcome)
 
     if '--reaggregate' in tokens:
-        from novel.orchestrator import approvals
-        approvals.authorize_plan(ctx.novel_dir.parent, ctx.sid)
         outcome = plan.run_reaggregate(ctx)
         from contracts.schema.stage4 import EvidenceBinding
         if isinstance(outcome, EvidenceBinding):
@@ -1202,8 +1129,6 @@ def _run_stage4(ctx: RunContext, flags: list[str]) -> int:
         return X.OK if report.passed else X.CHECK_FAILED
 
     if '--apply-binding' in tokens:
-        from novel.orchestrator import approvals
-        approvals.authorize_plan(ctx.novel_dir.parent, ctx.sid)
         outcome = plan.run_apply_binding(
             ctx, _valued(flags, '--apply-binding') or '')
         from contracts.schema.stage4 import EvidenceBinding
@@ -1216,9 +1141,8 @@ def _run_stage4(ctx: RunContext, flags: list[str]) -> int:
               '写作上下文须在最终结构审批后单独重建')
         return X.OK if outcome.passed else X.CHECK_FAILED
 
-    # Stage4B 付费路：只绑定已经冻结的 A 候选，不能重规划。
-    from novel.orchestrator import approvals
-    approvals.authorize_plan(ctx.novel_dir.parent, ctx.sid)
+    # Stage4B 付费路：只绑定已经冻结的 A 候选，不能重规划；打开条件是
+    # 统一机械准入（queue/operator 已判），producer 在任何 wire 前再复验。
     client = _llm_client(ctx)
     outcome = plan.run_plan(ctx, client)
     # B 的 ``infeasible`` 是一份已落盘、可审计的 typed 负结论，
@@ -1234,8 +1158,8 @@ def _run_stage4(ctx: RunContext, flags: list[str]) -> int:
         for witness in outcome.infeasibility_proof or []:
             print(f'    ch{witness.chapter_ordinal} · {witness.constraint_code} · '
                   f'{len(witness.scenes)} scene / {len(witness.closed_refs)} closed ref')
-        print('  → 只有代码给出的 typed proof 可到达本终态；按 proof 进入正式 '
-              'Stage4A 返修审阅，系统不会自动重采候选')
+        print('  → 只有代码给出的 typed proof 可到达本终态；'
+              '下一轮队列将预算内自动重采 Stage4A（--replan）')
         return X.CHECK_FAILED
     report = outcome
     print('  ✓ Stage4B 证据绑定与计划编译已完成；下一步是最终逐章结构审批，'
@@ -1637,18 +1561,6 @@ def _cmd_preview(a: argparse.Namespace) -> int:
     flags = _flags_of(a)
     executor_backend = N.resolve_executor_backend(
         a.node, flags, _executor_backend_of(a))
-    if a.node == 'stage4.design' and '--review-token' in N.flag_tokens(flags):
-        if a.sid is None:
-            raise TerminalState(
-                'stage4.design --review-token preview 必须给已有书 sid')
-        from novel.stages.stage4 import plan
-        preview_ctx = S.readonly_ctx(
-            paths.resolve_novel_dir(a.base, a.sid), a.node, prov.code_version())
-        preview_ctx.executor_backend = executor_backend
-        preview_ctx.executor_profile = (
-            executor_backend.profile
-            if isinstance(executor_backend, AgentExecutorBackend) else None)
-        plan.require_targeted_design_executor(preview_ctx)
     # ⚠ `placeholders=True` **只在这一趟**：preview 要摊开的是一条形状完整的命令。
     # 缺必填项时渲染占位符并标注，而不是摊开一条真跑必然 exit 2 的半截命令
     # （2026-08-16 复盘 §六.1）。占位符本身在真跑那一趟仍会被 `validate_run` 拒。
@@ -2405,11 +2317,14 @@ def _cmd_approval(a: argparse.Namespace) -> int:
 
 
 def _cmd_approval_admitted(a: argparse.Namespace) -> int:
-    """可审计审批 CLI：template/show 只读，apply 只落审批账且绝不拉作业。"""
+    """可审计审批 CLI：template/show 只读，apply 只落审批账且绝不拉作业。
+
+    Stage4 design/structure 工作包、模板与 typed apply 已随四道人工闸退役
+    （2026-09-15 全自动裁决）；本入口只保留 show/backfill/gate(s0,s1) 与
+    stage5/6/7 的人工面。
+    """
     from contracts.schema.api import (
-        DesignReviewRequest,
-        Stage5ClosureRequest, StructureApprovalRequest,
-        WritingApprovalRequest,
+        Stage5ClosureRequest, WritingApprovalRequest,
     )
     from novel.orchestrator import approvals
 
@@ -2420,14 +2335,10 @@ def _cmd_approval_admitted(a: argparse.Namespace) -> int:
     elif a.approval_action == 'gate':
         if a.gate == 's4':  # argparse 已关闭；保留服务调用前的纵深防线。
             raise ApprovalRequired(
-                's4 只接受带 subject/逐章决定的 typed structure apply')
+                'gate.s4 已退役：Stage4 唯一打开条件是统一机械准入')
         result = approvals.approve_gate(a.base, a.sid, a.gate)
     elif a.approval_action == 'workpack':
-        if a.surface == 'design':
-            result = approvals.design_workpack(a.base, a.sid)
-        elif a.surface == 'structure':
-            result = approvals.structure_workpack(a.base, a.sid)
-        elif a.surface == 'stage6':
+        if a.surface == 'stage6':
             from novel.views.stage6 import stage6_approval_workpack
             result = stage6_approval_workpack(a.base, a.sid)
         else:
@@ -2435,20 +2346,7 @@ def _cmd_approval_admitted(a: argparse.Namespace) -> int:
             result = stage7_approval_workpack(a.base, a.sid)
     elif a.approval_action == 'template':
         try:
-            if a.surface == 'design':
-                if a.reviewer_kind is None or a.review_run_id is None:
-                    raise TerminalState(
-                        'design 审阅模板必须显式给 --reviewer-kind 与 --review-run-id')
-                result = approvals.design_template(
-                    a.base, a.sid,
-                    actor=a.actor,
-                    reviewer_kind=a.reviewer_kind,
-                    review_run_id=a.review_run_id,
-                    reason=a.reason)
-            elif a.surface == 'structure':
-                result = approvals.structure_template(
-                    a.base, a.sid, actor=a.actor, reason=a.reason)
-            elif a.surface == 'stage5':
+            if a.surface == 'stage5':
                 result = approvals.stage5_closure_template(a.base, a.sid)
             else:
                 result = approvals.writing_template(
@@ -2459,8 +2357,6 @@ def _cmd_approval_admitted(a: argparse.Namespace) -> int:
     else:
         raw = _approval_input(a.input)
         model = {
-            'design': DesignReviewRequest,
-            'structure': StructureApprovalRequest,
             'writing': WritingApprovalRequest,
             'stage5': Stage5ClosureRequest,
         }[a.surface]
@@ -2468,11 +2364,7 @@ def _cmd_approval_admitted(a: argparse.Namespace) -> int:
             request = model.model_validate_json(raw)
         except ValidationError as exc:
             raise TerminalState(f'{a.surface} 审批 JSON 不符合 typed 契约：{exc}') from exc
-        if a.surface == 'design':
-            result = approvals.approve_design(a.base, a.sid, request)
-        elif a.surface == 'structure':
-            result = approvals.approve_structure(a.base, a.sid, request)
-        elif a.surface == 'stage5':
+        if a.surface == 'stage5':
             result = approvals.approve_stage5_closure(a.base, a.sid, request)
         else:
             # Commander 只有这一条入口：request 只搬 opaque token 与

@@ -54,27 +54,9 @@ def _landed(base: Path, node: str, flags: tuple[str, ...]) -> bool:
         assert _tree(base) == before, '已落查询不得改审批、产物、工作单元或费用/会话账'
 
 
-def test_stage0_real_approval_requires_exact_revision_actor_reason(tmp_path):
-    base = _base(tmp_path)
-    ctx = _ctx(base, 'stage0.approve')
-    log = revisions.read(ArtifactStore(ctx))
-    flags = ('--expected-revision-id', log.current.revision_id,
-             '--actor', ACTOR, '--reason', REASON)
-    assert not _landed(base, ctx.node, flags)
-    removal.run_approve(ctx, actor=ACTOR, reason=REASON,
-                        expected_revision_id=log.current.revision_id)
-    assert _landed(base, ctx.node, flags)
-    for index, value in ((1, 'f' * 64), (3, '另一位'), (5, '另一决定')):
-        wrong = list(flags)
-        wrong[index] = value
-        assert not _landed(base, ctx.node, tuple(wrong))
-    # 自证链损坏必须保留未知，不把同 revision 字面当成充分证明。
-    path = ArtifactStore(ctx).path(revisions.REVISIONS_REL)
-    path.write_text('{"v":', encoding='utf-8')
-    with pytest.raises(ArtifactUnreadable):
-        _landed(base, ctx.node, flags)
-
-
+# ⚠ `test_stage0_real_approval_requires_exact_revision_actor_reason` 已随
+#   stage0.approve 节点退役删除（2026-09-15 B1）：历史 stage0 审批账的 landed
+#   解码仍受 support，但不再有现役 producer 可真实构造该事件。
 def _seed_final(base: Path, monkeypatch) -> None:
     """给定合成前置；真实 ArtifactStore、批准 producer、workpack/identity 均不替换。"""
     ctx1 = _ctx(base, 'stage1.partition')

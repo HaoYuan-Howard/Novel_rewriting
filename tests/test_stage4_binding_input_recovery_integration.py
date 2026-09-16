@@ -28,7 +28,7 @@ from contracts.artifacts import (
 from contracts.invariants import (
     STAGE4_BINDING_INPUT_CONTRACT, STAGE4_BINDING_INPUT_RECEIPT_KEY,
 )
-from contracts.schema.api import OperatorNext, StructureApprovalRequest
+from contracts.schema.api import OperatorNext
 from contracts.schema.characters import CharacterRegistry, CharactersProvenance
 from contracts.schema.stage1 import MainText
 from contracts.schema.stage2 import BlueprintCharacterProjection, ChapterBlueprints
@@ -38,12 +38,10 @@ from contracts.schema.stage4 import (
 )
 from novel import prov
 from novel.orchestrator.node_agents import Stage4PlanSessionPool
-from novel.orchestrator import approvals, operator, queue, state
+from novel.orchestrator import approvals, queue, state
 from novel.stages.stage4 import binding_input_contract, plan
 from novel.stages.stage4.measure import structure_review_subject_sha256
 from novel.store import ArtifactStore
-from novel.views.stage4 import stage4_view
-from tests.test_design_review import _accept_all
 from tests.test_stage2 import main_text
 from tests.frozen_tree import FrozenTree
 from tests.test_stage4_agent_boundary import _ctx as _agent_ctx
@@ -51,7 +49,7 @@ from tests.test_stage4_plan_chapters import (
     _DeliveryRecoveryDriver, _inject_stage_ambiguities,
 )
 from tests.test_stage4_v3_integration import (
-    CODE, _book, _bound_b_response, _client, _ctx, _design,
+    CODE, _book, _client, _ctx, _design,
 )
 
 SID = '742'
@@ -80,9 +78,8 @@ def _seed_stage2(book: Path):
     novel_dir, _result, _report = removal.run_source(
         source, book.parent, expected_sid=SID)
     assert novel_dir == book
-    removal.run_approve(
-        removal._context(book, 'stage0.approve'),
-        actor='fixture-reviewer', reason='确认合成源文与三章正文完整保留')
+    # B1：stage0 approve 人工闸退役——run_source 落盘即写 auto 批准
+    # （system:stage0-auto），不需要也不存在独立批准入口。
     assert partition.run_partition(_ctx(book, 'stage1.partition', paid=False))[0].main_text
 
     chars_ctx = _ctx(book, 'stage2.characters')
@@ -182,14 +179,10 @@ def _build_legacy_book(tmp_path, monkeypatch) -> _Book:
     book = _book(tmp_path)
     blueprints = _seed_stage2(book)
     _a_ctx, _a_client, a_transport, candidate, _truth, _mapping = _design(book, blueprints)
-    # Stage2 语义审阅退役：s0/s1 检查单经真实审批口盖章，Stage4 由机械准入放行。
+    # Stage2 语义审阅与 Stage4 人工闸均已退役：B 由机械准入放行，
+    # s0/s1 检查单仍经真实审批口盖章。
     approvals.approve_gate(tmp_path, SID, 's0')
     approvals.approve_gate(tmp_path, SID, 's1')
-    template = approvals.design_template(
-        tmp_path, SID, actor='fixture-reviewer', reviewer_kind='human',
-        review_run_id='fixture-design-accepted', reason='合成夹具逐章设计已核对')
-    accepted = approvals.approve_design(tmp_path, SID, _accept_all(template))
-    assert accepted.design_review.state == 'accepted'
 
     ctx = _ctx(book, 'stage4.plan')
     from tests.test_stage4_legacy_chapter_budget import _one_ambiguous, _answer
@@ -279,19 +272,15 @@ def _assert_display_subject_is_not_approval(case: _Book) -> None:
         assert doc['structure']['current_subject_sha256'] is None
         assert doc['structure']['review_token'] is None
         assert not doc['gate']['s4']
-        # 即使自行重算旧计划的业务 hash，HTTP producer 仍拒绝其审批权限。
-        request = StructureApprovalRequest.model_validate({
-            'actor': 'fixture-stale-display', 'reason': '验证展示身份没有审批权',
-            'review_token': f's4sr1_{subject}',
-            'chapters': [
-                {'output_ordinal': ordinal, 'decision': 'accept',
-                 'reason': '测试尝试把旧展示身份冒充当前审批主体'}
-                for ordinal in view['chapters']],
-        })
+        # structure typed apply 端点已随人工闸整体退役：任何提交都是 404。
         rejected = client.post(
             f'/api/novels/{SID}/approvals/structure',
-            json=request.model_dump(mode='json'), headers={UI_HEADER: '1'})
-        assert rejected.status_code == 409, rejected.text
+            json={'actor': 'fixture', 'reason': '退役端点',
+                  'review_token': f's4sr1_{subject}', 'chapters': []},
+            headers={UI_HEADER: '1'})
+        # Starlette 对无路由路径的 POST 回 405/404（按路由折叠顺序）；
+        # 关闭式语义只要求「不再是可写的审批面」。
+        assert rejected.status_code in (404, 405), rejected.text
     finally:
         client.close()
 
@@ -311,7 +300,6 @@ def _rebuild_with_current_chapter_producer(case: _Book, monkeypatch):
     real_build = plan.build_mechanical_baseline
     monkeypatch.setattr(
         plan, 'build_mechanical_baseline', _inject_stage_ambiguities(real_build, (1,)))
-    assert approvals.authorize_plan(case.base, SID) is not None
     ctx = _agent_ctx(case.book, 'stage4.plan')
     driver = _DeliveryRecoveryDriver(1, session_id=f'new-input-{ctx.run_id}')
     pool = Stage4PlanSessionPool(ctx, driver_factory=lambda _purpose, _chapter: driver)
@@ -346,7 +334,8 @@ def test_old_binding_is_readonly_redo_then_real_producer_stops_repeating(
     assert next_step.action.flags == ['--reaggregate'] and not next_step.action.paid
     assert next_step.action.waiting_on is None and next_step.execution_token
     assert state.operator_redo_flags(next_step.overview, 'stage4.plan') == ()
-    assert approvals.get(case.base, SID).design_review.state == 'accepted'
+    # 人工闸退役：没有任何 typed design 决定被消费或需要。
+    assert approvals._read_raw(case.base, SID).design_decision is None
     assert _frozen_bytes(case) == old_bytes and case.calls == calls
 
     from novel.cli.main import main
@@ -356,117 +345,12 @@ def test_old_binding_is_readonly_redo_then_real_producer_stops_repeating(
     _assert_pair_contract(case, 'fresh', None)
     after = _http_next(case)
     assert after.action.node == 'stage4.context'
-    assert after.action.waiting_on == queue.WAITING_ON_STAGE4_STRUCTURE_REVIEW
+    assert after.action.waiting_on is None, 'plan 落盘即机械放行 context'
     assert state.resume_verdict(after.overview, 'stage4.plan')[0] == state.RESUME_SKIP
     assert state.operator_redo_flags(after.overview, 'stage4.plan') is None
     assert case.store.path(STAGE4_BLIND_CANDIDATE).read_bytes() == old_a
     assert approvals._read_raw(case.base, SID).design_decision == old_decision
     assert case.calls == calls
-
-
-@pytest.mark.parametrize('owner', ['stage4.design', 'stage4.plan'])
-def test_unchanged_review_obligations_close_via_http_permit_cli_and_reopen(
-        legacy_book, monkeypatch, owner):
-    """正式文件仅排版改变：复用业务决定，完整新字节仍由 CLI 重新绑定 proof。"""
-    from novel.cli.main import main
-    from novel.orchestrator import execution_permit
-    from contracts.schema.stage4 import BlindCandidate
-
-    case = legacy_book
-    build = _agent_ctx(case.book, 'stage4.plan')
-    assert main(['--run-id', build.run_id, 'run', 'stage4.plan', SID,
-                 '--base', str(case.base), '--reaggregate']) == 0
-    template = approvals.structure_template(case.base, SID, actor='fixture', reason='已逐章核对')
-    request = StructureApprovalRequest.model_validate({
-        **template.model_dump(mode='json'), 'chapters': [
-            {**row.model_dump(mode='json'), 'decision': 'accept', 'reason': '当前事实与结构已核对'}
-            for row in template.chapters],
-    })
-    approvals.approve_structure(case.base, SID, request)
-    rel, model = ((STAGE4_BLIND_CANDIDATE, BlindCandidate) if owner == 'stage4.design'
-                  else (STAGE4_PLAN_CHAPTERS, PlanChapters))
-    artifact = case.store.read_own(model, rel)[0]
-    old_bytes = case.store.path(rel).read_bytes()
-    old_render = ArtifactStore._render
-    with monkeypatch.context() as patch:
-        def render(store, path, value):
-            encoded = old_render(store, path, value)
-            return json.dumps(json.loads(encoded), ensure_ascii=False, indent=4).encode('utf-8')
-        patch.setattr(ArtifactStore, '_render', render)
-        case.store.write(rel, artifact)
-    assert case.store.path(rel).read_bytes() != old_bytes
-    assert case.store.freshness(rel).state == 'fresh'
-    route = _http_next(case)
-    assert route.state == 'ready' and route.action.node == owner
-    assert route.action.flags == ['--close-review'] and route.action.paid is False
-    permit = execution_permit.parse_execution_permit(route.execution_token)
-    assert permit.paid is False
-    before_calls = case.calls
-    before_ledger = case.base.joinpath('_service/ledger.jsonl').read_bytes()
-    run = _agent_ctx(case.book, owner)
-    assert main(['--run-id', run.run_id, 'run', owner, SID, '--base', str(case.base),
-                 '--close-review']) == 0
-    # 新只读实例模拟进程重启；不复用审批投影缓存或 CLI 返回对象。
-    current = approvals.get(case.base, SID)
-    view = current.design_review if owner == 'stage4.design' else current.structure
-    assert view.state == 'accepted'
-    assert case.calls == before_calls
-    assert case.base.joinpath('_service/ledger.jsonl').read_bytes() == before_ledger
-
-
-def test_new_receipt_changes_book_and_chapter_review_identity_preserving_negative_history(
-        legacy_book, monkeypatch):
-    case = legacy_book
-    with _historical_contract(monkeypatch):
-        old_template = approvals.structure_template(
-            case.base, SID, actor='fixture-reviewer', reason='旧 B 材料未证明结构可用')
-        old_request = StructureApprovalRequest.model_validate({
-            **old_template.model_dump(mode='json'),
-            'chapters': [
-                {**row.model_dump(mode='json'), 'reason': '合成夹具旧 B 结构需重规划'}
-                for row in old_template.chapters],
-        })
-        approvals.approve_structure(case.base, SID, old_request)
-        old_raw = approvals._read_raw(case.base, SID)
-        old_decision = old_raw.structure_decision
-        old_chapter_subjects = approvals._current_structure_chapter_subject_sha256(case.book)
-        old_view = stage4_view(case.base, SID, 1)
-    old_plan = case.store.read_own(PlanChapters, STAGE4_PLAN_CHAPTERS)[0]
-    old_concerns = case.binding.binding_concerns
-    approval_bytes = approvals._path(case.base, SID).read_bytes()
-    _assert_display_subject_is_not_approval(case)
-    routed = _http_next(case)
-    assert routed.state == 'ready' and routed.action.node == 'stage4.plan'
-    assert routed.action.waiting_on is None
-    assert approvals._path(case.base, SID).read_bytes() == approval_bytes
-
-    binding, _driver = _rebuild_with_current_chapter_producer(case, monkeypatch)
-    new_plan = case.store.read_own(PlanChapters, STAGE4_PLAN_CHAPTERS)[0]
-    assert new_plan.model_dump(exclude={'provenance'}) == old_plan.model_dump(
-        exclude={'provenance'})
-    assert binding.binding_concerns == old_concerns
-    current = approvals.structure_template(
-        case.base, SID, actor='fixture-reviewer', reason='新输入契约材料完成逐章复核')
-    assert current.review_token != old_template.review_token
-    new_chapter_subjects = approvals._current_structure_chapter_subject_sha256(case.book)
-    assert new_chapter_subjects.keys() == old_chapter_subjects.keys()
-    assert all(new_chapter_subjects[n] != old_chapter_subjects[n]
-               for n in old_chapter_subjects)
-    assert stage4_view(case.base, SID, 1).structure_subject_sha256 != old_view.structure_subject_sha256
-    accepted = StructureApprovalRequest.model_validate({
-        **current.model_dump(mode='json'),
-        'chapters': [
-            {**row.model_dump(mode='json'), 'decision': 'accept',
-             'reason': '新契约完整输入下的当前结构已核实'}
-            for row in current.chapters],
-    })
-    doc = approvals.approve_structure(case.base, SID, accepted)
-    assert doc.gate['s4']
-    saved = approvals._read_raw(case.base, SID)
-    assert len(saved.structure_history) == 2
-    assert saved.structure_history[0] == old_decision
-    assert all(row.decision == 'request_replan' for row in saved.structure_history[0].chapters)
-    assert all(row.decision == 'accept' for row in saved.structure_decision.chapters)
 
 
 @pytest.mark.parametrize('origin', ('human', 'compiled'))
@@ -489,7 +373,7 @@ def test_non_chapter_model_binding_without_receipt_remains_fresh(legacy_book, mo
     next_step = _http_next(case)
     assert state.resume_verdict(next_step.overview, 'stage4.plan')[0] == state.RESUME_SKIP
     assert next_step.action.node == 'stage4.context'
-    assert next_step.action.waiting_on == queue.WAITING_ON_STAGE4_STRUCTURE_REVIEW
+    assert next_step.action.waiting_on is None
     assert _frozen_bytes(case) == before and case.calls == calls
 
 

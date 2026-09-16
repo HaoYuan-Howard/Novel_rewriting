@@ -135,14 +135,9 @@ Prompt 选型完成后，`prompt_variants`、`prompt_defaults` 与 `--prompt-var
 | `GET /api/novels/:sid/approvals` | `ApprovalDoc` | 新 |
 | `GET /api/novels/:sid/approvals/stage5/template` | `Stage5ClosureTemplate` | 只读、0 成本；按当前整书主体生成带 placeholder/token 的关闭式模板，不代签 |
 | `POST /api/novels/:sid/approvals/stage5` | `ApprovalDoc`（请求体 `Stage5ClosureRequest`：actor/reason + opaque `review_token` + typed must-appear/group rulings） | 服务端重建当前完整 closure workpack 后原子保存回执；成功才打开 `gate.s5`，不启动作业 |
-| `GET /api/novels/:sid/approvals/design/workpack` | `ApprovalWorkpack` v2（绑定 current A candidate + 完整 design subject；异常优先，只读、0 LLM） | 新；人工/前端审阅入口，不预填决定 |
-| `GET /api/novels/:sid/approvals/design/template?actor=&reviewer_kind=&review_run_id=&reason=` | `DesignReviewTemplate` | 四项 query 均必填；按当前 A 生成关闭式全书模板，可逐章复用仍完全绑定的历史 accept，但不代签；fresh B infeasible 时发布当前证明并禁止复用旧 accept |
-| `POST /api/novels/:sid/approvals/design` | `ApprovalDoc`（请求体 `DesignReviewRequest`：actor/reviewer/run/reason + opaque `review_token` + 策略/逐章 typed rulings） | 服务端重建当前 Design workpack 与内部全部 SHA 后原子保存；不启动修订、B 或任何作业 |
-| `POST /api/novels/:sid/approvals/gate/:key` | `ApprovalDoc` | 新；key 只接受 `s0/s1/s4/s5/s6/s7`（gate.s2 与 seen 记录已随 Stage2 语义审阅退役） |
-| `GET /api/novels/:sid/approvals/structure/workpack` | `ApprovalWorkpack` v2（绑定 current structure subject；异常优先，只读、0 LLM） | 新；完整披露 B concern / INFO / metric / UNVER，不自动裁决 |
+| `POST /api/novels/:sid/approvals/gate/:key` | `ApprovalDoc` | 新；key 只接受 `s0/s1`（gate.s2 与 seen 记录已随 Stage2 语义审阅退役；gate.s4 已随 Stage4 四道人工闸退役，`POST /approvals/design*` 与 `/approvals/structure*` 全部端点同步移除） |
 | `GET /api/novels/:sid/approvals/stage6/workpack` | `Stage6ApprovalWorkpack` v4（绑定 current review identity、独立准备材料、opaque validation seal 与 A/B 完整证据；只读、0 LLM） | 定稿前唯一 `s6r4_` opaque-token 阅读面，不自动 pick；旧包只读 |
 | `GET /api/novels/:sid/approvals/stage7/workpack` | `Stage7ApprovalWorkpack` v3（绑定 current review identity、opaque validation seal 与完整替换证据；只读、0 LLM；不输出 code/rules 原料） | 定稿前唯一 `s7r3_` opaque-token 阅读面，不自动批准；旧 v2 包只读 |
-| `POST /api/novels/:sid/approvals/structure` | `ApprovalDoc`（请求体 `StructureApprovalRequest`：actor/reason + opaque `review_token` + 恰好覆盖全书的逐章 `accept / request_replan`） | 服务端在同书锁内重建 current structure subject；typed 裁决不启动作业 |
 | `POST /api/novels/:sid/approvals/writing` | `ApprovalDoc`（请求体 `WritingApprovalRequest`：actor/reason + opaque `review_token`） | 服务端重建当前 Stage1/Plan/WriterContext/测量契约主体；不接受空 body 或 caller 自算 subject，不启动作业 |
 | `POST /api/novels/:sid/approvals/reset` | `ApprovalDoc` | 新 |
 | `POST /api/novels/:sid/approvals/backfill` | `ApprovalBackfillResult`（按盘面显式补录，不在 GET 时静默发生） | 新 |
@@ -195,6 +190,8 @@ Prompt 选型完成后，`prompt_variants`、`prompt_defaults` 与 `--prompt-var
 > `WorkpackItem` 只投影服务端已算事实：`code`、`rule`、`sev`、`status`、
 > `chapter_ordinal`、`scene_refs`、`refs`、`repair_owner`、`detail`、`effect`、
 > `allowed_actions`、`changed`、`historical_accept_reusable`、`source_decision_sha256`、`review_token`、`reading`。
+> **Stage4 design/structure 审阅工作包已随 2026-09-15 全自动裁决整体退役**（写面、模板、
+> `--close-review` 与 Inbox 余额投影一并移除）；以下 workpack 通用形状仅描述 Stage5/6/7。
 > `allowed_actions` 是关闭集 `accept / request_repair / request_replan`，
 > 不是 argv；INFO、metric、UNVER、skipped 和非 blocking/coverage effect 恒为空。coverage 恰覆盖
 > `chapter_ordinals`，changed 章在前、段内按章号升序；changed 与 exact historical accept reuse

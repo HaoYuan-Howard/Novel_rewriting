@@ -12,15 +12,11 @@ from typing import Any
 
 import pytest
 
-from contracts.artifacts import (
-    STAGE4_BLIND_CANDIDATE, STAGE4_BLIND_CHAPTER_EDIT,
-)
-from contracts.schema.api import (
-    DesignRepairChapterScope, DesignRepairConstraint, DesignRepairScope,
-)
-from contracts.schema.stage4 import (
-    BlindBookStrategyResponse, BlindCandidate, BlindChapterEditRequest,
-)
+from contracts.artifacts import STAGE4_BLIND_CANDIDATE
+from contracts.schema.api import DesignRepairConstraint, DesignRepairScope
+
+from contracts.schema.stage4 import BlindBookStrategyResponse, BlindCandidate
+
 from novel import paths, prov
 from novel.agents import AgentRequest
 from novel.llm import stage4_runs
@@ -29,7 +25,6 @@ from novel.llm.ledger import CostLedger
 from novel.orchestrator.node_agents import Stage4DesignSessionPool
 from novel.run import RunContext
 from novel.stages.stage4 import plan
-from novel.store import ArtifactStore
 from tests.test_stage4_agent_boundary import (
     _RequestDriver, _ctx, _land_design,
 )
@@ -277,128 +272,3 @@ def test_targeted_repair_prompt_carries_entire_unclosed_constraint_lineage(
     assert repaired.output_chapters[2] == parent.output_chapters[2]
     assert repaired.provenance.architecture \
         == 'book_strategy_targeted_repair_v1'
-
-
-def test_full_chapter_edit_preview_apply_is_zero_wire_and_non_target_exact(
-    tmp_path: Path, monkeypatch,
-) -> None:
-    book = _book(tmp_path)
-    blueprints = _seed_current_stage2(book)
-    _parent_ctx, parent = _land_design(
-        book, blueprints.model_dump(by_alias=True, mode='json'))
-    preview_ctx = _free_ctx(book)
-    _prepared, contexts = _current_design_contexts(preview_ctx, parent)
-    target_context = next(row for row in contexts if row.chapter_ordinal == 2)
-    constraint = DesignRepairConstraint(
-        code='scene_goal',
-        scene_refs=[parent.output_chapters[1].scenes[0].candidate_scene_id],
-        opaque_aliases=[parent.output_chapters[1].scenes[0].turn_beat_alias],
-    )
-    constraint_sha = plan._canonical_sha256({
-        'kind': 'stage4-design-repair-constraint-set-v1',
-        'strategy_epoch_sha256': target_context.strategy_epoch_sha256,
-        'output_ordinal': 2,
-        'constraints': [constraint.model_dump(mode='json')],
-    })
-    chapter = parent.output_chapters[1].model_dump(mode='json')
-    chapter['chapter_rewrite_brief'] += ' 人工复核后完整替换。'
-    for scene in chapter['scenes']:
-        scene.pop('candidate_scene_id')
-    request = BlindChapterEditRequest.model_validate({
-        'actor': 'human:reviewer',
-        'reason': '两轮 repair 后按 typed 约束提交完整章',
-        'review_token': 's4er1_' + 'b' * 64,
-        'output_ordinal': 2,
-        'chapter': chapter,
-    })
-    scope = DesignRepairChapterScope(
-        output_ordinal=2,
-        subject_sha256='e' * 64,
-        new_constraints=[constraint],
-        accumulated_constraints=[constraint],
-        constraint_set_sha256=constraint_sha,
-    )
-    authorization = SimpleNamespace(
-        review_token=request.review_token,
-        scope=scope,
-        candidate_sha256=hashlib.sha256(
-            (book / STAGE4_BLIND_CANDIDATE).read_bytes()).hexdigest(),
-        decision_sha256='d' * 64,
-        chapter_subject_sha256=scope.subject_sha256,
-        strategy_epoch_sha256=target_context.strategy_epoch_sha256,
-        chapter_strategy_sha256=target_context.chapter_strategy_sha256,
-    )
-    from novel.orchestrator import approvals
-    monkeypatch.setattr(
-        approvals, 'resolve_design_edit_action',
-        lambda _base, _sid, supplied: authorization
-        if supplied == request else (_ for _ in ()).throw(
-            AssertionError('edit resolver 收到的不是已登记 typed request')),
-    )
-    ArtifactStore(preview_ctx).write(
-        STAGE4_BLIND_CHAPTER_EDIT, request)
-    before_bytes = (book / STAGE4_BLIND_CANDIDATE).read_bytes()
-    before_business = parent.model_dump(
-        mode='json', by_alias=True, exclude={'provenance'})
-
-    preview = plan.validate_design_chapter_edit(preview_ctx)
-    assert (book / STAGE4_BLIND_CANDIDATE).read_bytes() == before_bytes
-    assert preview.artifact.output_chapters[1].chapter_rewrite_brief.endswith(
-        '人工复核后完整替换。')
-
-    apply_ctx = _free_ctx(book)
-    applied = plan.run_apply_design_chapter_edit(apply_ctx)
-    after_business = applied.model_dump(
-        mode='json', by_alias=True, exclude={'provenance'})
-    assert after_business['output_chapters'][0] \
-        == before_business['output_chapters'][0]
-    assert after_business['output_chapters'][2] \
-        == before_business['output_chapters'][2]
-    assert after_business['output_chapters'][1] \
-        != before_business['output_chapters'][1]
-    assert applied.provenance.origin == 'human'
-    disk = json.loads(
-        (book / STAGE4_BLIND_CANDIDATE).read_text(encoding='utf-8'))
-    provenance = disk['_provenance']
-    assert provenance['origin'] == 'human'
-    for forbidden in ('model', 'adopted_models', 'prompts', 'usage', 'provider'):
-        assert forbidden not in provenance
-    journal_path = (
-        paths.stage4_run_path(book, apply_ctx.run_id, 'stage4.design')
-        / stage4_runs.DESIGN_HUMAN_EVOLUTION_COMMIT_FILE
-    )
-    assert journal_path.is_file()
-    journal = json.loads(journal_path.read_text(encoding='utf-8'))
-    assert journal['state'] == 'committed'
-    edited_row = next(
-        row for row in journal['sources'] if row['chapter'] == 2)
-    assert edited_row['origin'] == 'human'
-    assert edited_row['attempt_id'] is None
-    assert edited_row['model'] is None
-    current_file_sha = hashlib.sha256(
-        (book / STAGE4_BLIND_CANDIDATE).read_bytes()).hexdigest()
-    capability = stage4_runs.inspect_design_repair_capability(
-        apply_ctx,
-        candidate_payload=applied.model_dump(by_alias=True, mode='json'),
-        candidate_file_sha256=current_file_sha,
-    )
-    assert capability.repairable
-    assert capability.parent_run_id == apply_ctx.run_id
-    _parent, sources = stage4_runs.load_committed_design_sources(
-        apply_ctx, parent_run_id=apply_ctx.run_id,
-        parent_candidate_sha256=plan._canonical_sha256(
-            applied.model_dump(by_alias=True, mode='json')),
-    )
-    edited_source = next(row for row in sources if row.chapter == 2)
-    assert edited_source.origin == 'human'
-    assert edited_source.attempt_id is None
-    assert edited_source.model is None
-
-    # 随后变更别章事实：普通重建仍以人工后继为父，不得取回修前模型回答。
-    from tests.test_stage4_design_rebuild import _change_claim, _rebuild
-    changed = _change_claim(book, 1)
-    _rebuilt_ctx, rebuilt, next_sources = _rebuild(book, changed, [1])
-    assert rebuilt.output_chapters[1:] == applied.output_chapters[1:]
-    kept = next(row for row in next_sources if row.chapter == 2)
-    assert kept.origin == 'human' and kept.source_run_id == apply_ctx.run_id
-    assert kept.response_payload == edited_source.response_payload

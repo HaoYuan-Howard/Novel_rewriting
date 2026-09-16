@@ -1,95 +1,178 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Stage4 已落盘回执退休证据：正式当前/历史、exact payload 与坏证据拒绝。"""
+"""Stage4 已落盘回执退休证据：正式当前/历史、exact payload 与坏证据拒绝。
+
+2026-09-15 全自动裁决后 design/structure typed 回执不再有现役写面；本文件
+只服务**存量书历史账的只读解码**（``stage4_review_payload_landed``），
+夹具直接构造合法 v9 记录与 typed 决定，不再调用任何审批写入口。
+"""
 from __future__ import annotations
 
 import copy
 import json
+import tempfile
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-from contracts.artifacts import STAGE4_BLIND_CANDIDATE
-from contracts.schema.api import DesignReviewRequest
+from contracts.artifacts import (
+    STAGE4_BLIND_CANDIDATE, STAGE4_EVIDENCE_BINDING, STAGE4_PLAN_CHAPTERS,
+)
+from contracts.schema.api import (
+    DesignReviewRepairCapability, DesignReviewRequest,
+    StructureApprovalRequest,
+)
 from novel.errors import HumanEditProtected
 from novel.orchestrator import approvals
-from tests.test_design_review import (
-    FACT, SID, _accept_all, _subjects, _template, isolated as design_isolated,
-)
-from tests.test_structure_approval import (
-    SUBJECT_B, _request as structure_request, isolated as structure_isolated,
-)
+
+SID = '123'
+AGGREGATE = 'a' * 64
 
 
-def _design_request(base):
-    payload = _accept_all(_template(base)).model_dump(mode='json')
-    payload['chapters'][0].update({
-        'decision': 'request_repair', 'reason': '当前章的具体入口事实需要重新安放',
-        'constraints': [{'code': 'entry_anchor', 'scene_refs': [],
-                         'opaque_aliases': [FACT]}],
-    })
-    return DesignReviewRequest.model_validate(payload)
+def _root() -> str:
+    return 'c' * 40
 
 
-@pytest.fixture(params=['design_slim', 'design_full', 'structure'])
+def _sha(value: object) -> str:
+    return approvals._decision_sha256(value)
+
+
+def _design_request(**overrides) -> DesignReviewRequest:
+    """人工写面退役后，历史回执由 ruling 形状直接构造（主体只在 workpack）。"""
+    request = DesignReviewRequest(
+        actor='存量审阅者', reviewer_kind='human', review_run_id='legacy-review-1',
+        review_token=f's4dr1_{AGGREGATE}',
+        general_reason='已完成逐章与跨章复核',
+        strategy={'decision': 'accept', 'reason': '策略与逐章复核一致'},
+        chapters=[{'output_ordinal': 1, 'decision': 'accept',
+                   'reason': '第 1 章已逐项核对'}],
+    )
+    data = request.model_dump(mode='json')
+    data.update(copy.deepcopy(overrides))
+    return DesignReviewRequest.model_validate(data)
+
+
+def _design_capability() -> DesignReviewRepairCapability:
+    return DesignReviewRepairCapability(
+        agent_repairable=True, agent_reason_code='same_strategy_epoch_ready',
+        full_chapter_editable=True,
+        full_chapter_edit_reason_code='current_typed_decision',
+        chapters=[{'output_ordinal': 1, 'committed_rounds': 0,
+                   'agent_repair_available': True,
+                   'full_chapter_edit_available': True}],
+    )
+
+
+def _design_stored(request: DesignReviewRequest, aggregate: str, candidate: str):
+    """slim 历史行的主体字段只作身份快照；解码自洽性由 digest 闭合。"""
+    epoch = _sha('fixture-strategy-epoch')
+    payload = {
+        'kind': 'stage4_design_review_slim_v1',
+        'request': request.model_dump(mode='json'),
+        'candidate_sha256': candidate,
+        'aggregate_subject_sha256': aggregate,
+        'strategy_subject_sha256': _sha('fixture-strategy-subject'),
+        'strategy_epoch_sha256': epoch,
+        'chapter_subject_sha256': {1: _sha('fixture-chapter-subject')},
+        'repair_capability': _design_capability().model_dump(mode='json'),
+        'binding_infeasibility': None,
+    }
+    digest = _sha(payload)
+    proof = approvals._ApprovalProof(
+        root_clean_sha1=_root(),
+        artifacts={STAGE4_BLIND_CANDIDATE: candidate},
+        decision_sha256=digest)
+    return approvals._StoredDesignDecisionSlim(
+        request=request,
+        candidate_sha256=candidate,
+        aggregate_subject_sha256=aggregate,
+        strategy_subject_sha256=_sha('fixture-strategy-subject'),
+        strategy_epoch_sha256=epoch,
+        chapter_subject_sha256={1: _sha('fixture-chapter-subject')},
+        repair_capability=_design_capability(),
+        binding_infeasibility=None,
+        decision_sha256=digest, decided_at='2026-09-15T00:00:00+00:00',
+        proof=proof)
+
+
+def _structure_request(subject: str = 'b' * 64, decision: str = 'accept',
+                       chapters=(1, 2)) -> StructureApprovalRequest:
+    return StructureApprovalRequest(
+        actor='存量结构审阅者', reason='逐章核对计划与证据绑定',
+        review_token=f's4sr1_{subject}',
+        chapters=[{'output_ordinal': ordinal, 'decision': decision,
+                   'reason': f'第 {ordinal} 章结构已逐项核对'}
+                  for ordinal in chapters])
+
+
+def _structure_stored(request: StructureApprovalRequest, artifact_rel):
+    digest = _sha(approvals._structure_decision_payload(request))
+    proof = approvals._ApprovalProof(
+        root_clean_sha1=_root(), artifacts={artifact_rel: 'd' * 64},
+        decision_sha256=digest)
+    return approvals._StoredStructureDecision(
+        actor=request.actor, reason=request.reason,
+        subject_sha256=request.review_token.removeprefix('s4sr1_'),
+        chapters=request.chapters, decided_at='2026-09-15T00:00:00+00:00',
+        proof=proof, chapter_subject_sha256={})
+
+
+@pytest.fixture(params=['design_slim', 'structure'])
 def landed_source(request):
-    kind = request.param
-    if kind.startswith('design'):
-        base, state = request.getfixturevalue('design_isolated')
-        # 旧隔离夹具为了区分业务/currentness，默认 proof 使用不同 SHA；本测试
-        # 明确模拟真实 producer 的同一次候选文件读取，不能以简化假账证明已提交。
-        state['candidate_proof_sha256'] = state['subjects'].candidate_sha256
-        typed = _design_request(base)
-        approvals.approve_design(base, SID, typed)
-        if kind == 'design_full':
-            materialized = approvals._materialize_design_request(typed, state['subjects'])
-            digest = approvals._decision_sha256(approvals._design_decision_payload(materialized))
-            slim = state['record'].design_decision
-            full = approvals._StoredDesignDecision(
-                **materialized.model_dump(mode='json'), decision_sha256=digest,
-                decided_at=slim.decided_at,
-                proof=slim.proof.model_copy(update={'decision_sha256': digest}))
-            state['record'] = state['record'].model_copy(update={
-                'design_history': [full], 'design_decision': full})
+    if request.param == 'design_slim':
+        typed = _design_request()
+        stored = _design_stored(typed, AGGREGATE, 'e' * 64)
+        payload = stored.request.model_dump(mode='json')
         surface = 'design'
     else:
-        base, _book, state = request.getfixturevalue('structure_isolated')
-        typed = structure_request('accept', 'request_replan')
-        approvals.approve_structure(base, SID, typed)
+        typed = _structure_request()
+        stored = _structure_stored(typed, STAGE4_PLAN_CHAPTERS)
+        payload = typed.model_dump(mode='json')
         surface = 'structure'
-    target = approvals._path(base, SID)
+    tmp = Path(tempfile.mkdtemp(prefix='landed-'))
+    (tmp / 'book_123').mkdir()
+    target = approvals._path(tmp, SID)
+    record = approvals._fresh_record(SID, [1])
+    record = record.model_copy(update={
+        f'{surface}_history': [stored], f'{surface}_decision': stored})
 
     def persist():
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(state['record'].model_dump_json() + '\n', encoding='utf-8')
+        target.write_text(record.model_dump_json() + '\n', encoding='utf-8')
+
+    def read_record():
+        return approvals._ApprovalRecordV8.model_validate_json(
+            target.read_text(encoding='utf-8'))
+
+    def write_record(value):
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(value.model_dump_json() + '\n', encoding='utf-8')
 
     def append_history():
         if surface == 'design':
-            state['subjects'] = _subjects(brief='修后场景已改变，旧审批只属于历史')
-            template = _template(base)
-            payload = _accept_all(template).model_dump(mode='json')
-            for row in payload['chapters']:
-                catalog = template.constraint_catalog[row['output_ordinal']]
-                if catalog.items:
-                    row['constraint_operations'] = {
-                        'expected_constraint_set_sha256': catalog.expected_constraint_set_sha256,
-                        'items': [{'kind': 'keep', 'constraint_sha256': item.constraint_sha256,
-                                   'reason': '原义务仍有效，已核对修后候选满足，可明确接受',
-                                   'replacements': []} for item in catalog.items],
-                    }
-            next_request = DesignReviewRequest.model_validate(payload)
-            approvals.approve_design(base, SID, next_request)
+            newer_aggregate = 'f' * 64
+            newer_request = _design_request(
+                general_reason='修后候选的第二次已提交回执',
+                review_token=f's4dr1_{newer_aggregate}')
+            newer = _design_stored(newer_request, newer_aggregate, '9' * 64)
+            payload_new = newer.request.model_dump(mode='json')
         else:
-            state['subject'] = SUBJECT_B
-            next_request = structure_request('accept', 'accept', subject=SUBJECT_B)
-            approvals.approve_structure(base, SID, next_request)
-        persist()
-        return next_request.model_dump(mode='json')
+            newer_request = _structure_request(
+                subject='c' * 64, decision='request_replan')
+            newer = _structure_stored(newer_request, STAGE4_PLAN_CHAPTERS)
+            payload_new = newer_request.model_dump(mode='json')
+        current = read_record()
+        write_record(current.model_copy(update={
+            f'{surface}_history': [
+                *current.__getattribute__(f'{surface}_history'), newer],
+            f'{surface}_decision': newer}))
+        return payload_new
 
     persist()
     return SimpleNamespace(
-        base=base, state=state, surface=surface, payload=typed.model_dump(mode='json'),
-        path=target, persist=persist, append_history=append_history)
+        base=tmp, surface=surface, payload=payload, path=target,
+        persist=persist, append_history=append_history, record=record)
 
 
 def landed(source, payload=None):
@@ -120,33 +203,21 @@ def test_same_subject_or_similar_text_never_substitutes_for_exact_payload(landed
     if change == 'actor':
         payload['actor'] = '另一个审阅者'
     elif change == 'reason':
-        payload['general_reason' if s.surface == 'design' else 'reason'] += '额外结论'
+        key = 'general_reason' if s.surface == 'design' else 'reason'
+        payload[key] += '额外结论'
     elif change == 'chapter_reason':
         payload['chapters'][0]['reason'] += '额外结论'
     elif change == 'decision':
-        payload['chapters'][0]['decision'] = (
-            'accept' if s.surface == 'design' else 'request_replan')
         if s.surface == 'design':
-            payload['chapters'][0]['constraints'] = []
+            payload['strategy']['decision'] = 'accept'
+            payload['strategy']['reason'] = '同票改判策略'
+        else:
+            payload['chapters'][0]['decision'] = 'request_replan'
     elif change == 'token':
         payload['review_token'] = payload['review_token'][:6] + '9' * 64
     elif change == 'chapters':
         payload['chapters'][-1]['output_ordinal'] += 10
     assert not landed(s, payload)
-
-
-def test_full_constraints_are_part_of_the_landed_identity(design_isolated):
-    base, state = design_isolated
-    state['candidate_proof_sha256'] = state['subjects'].candidate_sha256
-    typed = _design_request(base)
-    approvals.approve_design(base, SID, typed)
-    path = approvals._path(base, SID)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(state['record'].model_dump_json(), encoding='utf-8')
-    payload = typed.model_dump(mode='json')
-    payload['chapters'][0]['constraints'][0]['code'] = 'ending_anchor'
-    assert not approvals.stage4_review_payload_landed(
-        base, SID, surface='design', payload=payload)
 
 
 @pytest.mark.parametrize('damage', ['json', 'proof_missing', 'proof_digest', 'proof_artifact', 'wrong_sid'])
@@ -195,20 +266,28 @@ def test_disappearing_formal_file_does_not_fall_back_to_a_fresh_record(
         landed(s)
 
 
-def test_design_token_and_original_candidate_proof_must_agree(design_isolated):
-    base, state = design_isolated
-    state['candidate_proof_sha256'] = state['subjects'].candidate_sha256
-    request = _design_request(base)
-    approvals.approve_design(base, SID, request)
-    stored = state['record'].design_decision
-    proof = stored.proof.model_copy(update={
-        'artifacts': {STAGE4_BLIND_CANDIDATE: '9' * 64}})
-    stored = stored.model_copy(update={'proof': proof})
-    record = state['record'].model_copy(update={
-        'design_history': [stored], 'design_decision': stored})
-    path = approvals._path(base, SID)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(record.model_dump_json(), encoding='utf-8')
+def test_design_token_and_original_candidate_proof_must_agree(landed_source):
+    s = landed_source
+    if s.surface != 'design':
+        pytest.skip('token/候选 proof 联结只属于 design 面')
+    raw = json.loads(s.path.read_text('utf-8'))
+    stored = raw['design_history'][0]
+    stored['proof']['artifacts'] = {STAGE4_BLIND_CANDIDATE: '9' * 64}
+    raw['design_decision'] = stored
+    s.path.write_text(json.dumps(raw, ensure_ascii=False), encoding='utf-8')
     with pytest.raises(HumanEditProtected, match='主体/proof'):
-        approvals.stage4_review_payload_landed(
-            base, SID, surface='design', payload=request.model_dump(mode='json'))
+        landed(s)
+
+
+def test_structure_proof_accepts_plan_only_or_plan_plus_binding(landed_source):
+    """结构回执 proof 允许 plan-only 或 plan+binding 两种历史形状。"""
+    s = landed_source
+    if s.surface != 'structure':
+        pytest.skip('结构 proof 形状只属于 structure 面')
+    assert landed(s)
+    raw = json.loads(s.path.read_text('utf-8'))
+    stored = raw['structure_history'][0]
+    stored['proof']['artifacts'][STAGE4_EVIDENCE_BINDING] = 'd' * 64
+    raw['structure_decision'] = stored
+    s.path.write_text(json.dumps(raw, ensure_ascii=False), encoding='utf-8')
+    assert landed(s)

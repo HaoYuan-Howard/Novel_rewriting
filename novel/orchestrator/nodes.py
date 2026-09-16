@@ -72,10 +72,11 @@ EXECUTOR_PROFILED_RUNS: dict[str, tuple[frozenset[str], ...]] = {
     'stage2.characters': (frozenset(),),
     'stage2.global': (frozenset(),),
     'stage2.blueprint': (frozenset(),),
+    # 人工闸退役（2026-09-15 全自动裁决）：--review-token 跑法随审阅票退役；
+    # --replan 保留为显式付费重采（预算内自动执行的唯一 A 恢复路）。
     'stage4.design': (
         frozenset(),
-        frozenset({'--replan', '--review-token'}),
-        frozenset({'--review-token'}),
+        frozenset({'--replan'}),
     ),
     'stage4.plan': (frozenset(),),
     'stage5.write': (
@@ -119,13 +120,16 @@ _PRIMARY_OPERATIONS = {
         '--revalidate', '--emit-edit-template',
         '--validate-edit', '--apply-edit',
     }),
+    # stage4 人工闸退役（2026-09-15 全自动裁决）：close-review 随之退役；
+    # --replan 是付费主操作，与只预览的 --dry-run 互斥。
     'stage4.design': frozenset({
-        '--dry-run', '--replan', '--close-review', '--reaggregate', '--recover-prepared', '--recover-responses',
-        '--validate-edit', '--apply-edit', '--recover-repair-aggregate',
+        '--dry-run', '--replan', '--reaggregate', '--recover-prepared',
+        '--recover-responses', '--recover-repair-aggregate',
     }),
     'stage4.plan': frozenset({
         '--dry-run', '--check-only', '--revalidate', '--names-only',
-        '--identity', '--apply-edit', '--apply-binding', '--reaggregate', '--recover-prepared', '--close-review',
+        '--identity', '--apply-edit', '--apply-binding', '--reaggregate',
+        '--recover-prepared',
     }),
     'stage5.write': frozenset({
         '--dry-run', '--recheck', '--revalidate', '--preview-edit',
@@ -237,9 +241,6 @@ def validate_run(node: str, flags: Sequence[str] = (), *,
             f'现有 {len(NODES)} 个：{", ".join(sorted(NODES))}')
     spec = NODES[node]
     tokens = flag_tokens(flags)
-    if node in {'stage2.global', 'stage2.blueprint', 'stage4.design', 'stage4.plan'} and '--close-review' in tokens:
-        if set(tokens) != {'--close-review'}:
-            raise UnsupportedRunMode('--close-review 只核验历史覆盖，不接受模型或新裁决参数')
     if node == 'stage4.design' and '--reaggregate' in tokens and set(tokens) != {'--reaggregate'}:
         raise UnsupportedRunMode('Stage4A --reaggregate 只免费汇合已保存来源，不接受新的生成参数')
     if node == 'stage4.design' and '--recover-responses' in tokens and set(tokens) != {'--recover-responses'}:

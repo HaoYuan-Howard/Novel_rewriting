@@ -840,7 +840,6 @@ _CROSS_STAGE_DEEP_GRANDFATHER = frozenset({
     ('novel/orchestrator/approvals.py', 'novel.stages.stage4.plan'),
     ('novel/orchestrator/approvals.py', 'novel.stages.stage4.plot_design'),
     ('novel/orchestrator/approvals.py', 'novel.stages.stage4.plot_materials'),
-    ('novel/orchestrator/approvals.py', 'novel.stages.stage4.reading'),
     ('novel/orchestrator/approvals.py', 'novel.stages.stage5.closure'),
     ('novel/orchestrator/approvals.py', 'novel.stages.stage5.review'),
     ('novel/orchestrator/approvals.py', 'novel.stages.stage7.rename'),
@@ -941,7 +940,9 @@ def test_cross_stage_imports_stay_on_the_package_surface():
         f'以下深边已消失，请同步从冻结清单删除（消化须在提交说明给理由）：{sorted(stale)}')
     # 守卫的守卫：扫描器必须看得见冻结清单里的已知边，否则红的是探测器。
     assert ('novel/views/stage4.py', 'novel.stages.stage5.prompts') in current
-    assert len(_CROSS_STAGE_DEEP_GRANDFATHER) == 67
+    # Stage4 人工闸退役批次：approvals 的 stage4.reading 深边随 design/structure
+    # workpack 退役一并消失，分母 67→66。
+    assert len(_CROSS_STAGE_DEEP_GRANDFATHER) == 66
 
 
 

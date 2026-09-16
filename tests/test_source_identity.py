@@ -22,6 +22,7 @@ from tests.stage2_fixtures import character_response
 from tests.test_stage2 import main_text
 from tests.test_stage2_generation import _ctx
 from tests.test_stage2_global_agent import _Driver, _free_ctx, _profile
+from tests.factories import stage0_force_pending, stage0_machine_revise
 from tests.test_stage6_prepare import ProcessExit, decision_for, edit_for, response
 
 
@@ -31,10 +32,9 @@ def source_book(tmp_path, *, approved=True):
         f"{row['chapter_ordinal']}\n{row['text']}\n" for row in main_text()), encoding='utf-8', newline='')
     book, _, _ = removal.run_source(source, tmp_path / 'Output')
     if not approved:
+        # 存量 pending 形状（旧代码产物；现役 producer 首跑即 auto 批准）。
+        stage0_force_pending(book)
         return book
-    _, report = removal.run_approve(removal._context(book, 'stage0.approve'),
-        actor='test:源审阅者', reason='已核完整源文')
-    assert report.passed
     _, report = run_partition(removal._context(book, 'stage1.partition'))
     assert report.passed
     return book
@@ -48,13 +48,11 @@ def change_source(book, tmp_path, *, kind='hook', approve=True, partition=True):
         changed = clean.replace('她把信折好收进袖中。', '她把信放在桌上。')
     else:
         changed = clean.replace('\n1\n', '\n第一章\n')
-    target = tmp_path / 'edit_source.txt'
-    target.write_text(changed, encoding='utf-8', newline='')
-    removal.run_edit(removal._context(book, 'stage0.edit'), target,
-        actor='test:源编辑者', reason='显式修订源文')
-    if approve:
-        removal.run_approve(removal._context(book, 'stage0.approve'),
-            actor='test:源审阅者', reason='核对本次源修订')
+    # 人工编辑/批准入口已随 stage0.edit/approve 退役；换稿走现役机器语义
+    # （直接替换 + auto 批准）。approve=False 构造存量 pending 形状。
+    stage0_machine_revise(book, changed)
+    if not approve:
+        stage0_force_pending(book)
     if partition:
         _, report = run_partition(removal._context(book, 'stage1.partition'))
         assert report.passed
@@ -248,19 +246,17 @@ def test_hook_revision_preserves_real_blind_request_and_existing_body_approvals(
     def surfaces():
         current = readonly_ctx(book, 'stage4.design', ctx.code)
         system, user, _store, _up, truth, mapping, projection = plan._design_request(current)
-        return ((system, user, truth, mapping, projection),
-            approvals.design_workpack(base, sid).model_dump(mode='json'),
-            approvals.structure_workpack(base, sid).model_dump(mode='json'))
+        # design/structure workpack 已随 B2 退役；现役的「只读材料面」是
+        # 盲审请求本身 + 审批账字节（不被源钩子修订改写）。
+        return (system, user, truth, mapping, projection)
 
     old = surfaces()
-    assert approvals.get(base, sid).gate['s4'] and approvals.get(base, sid).gate['s5']
     approval_bytes = approvals._path(base, sid).read_bytes()
     body_bytes = {rel: raw for rel, raw in snapshot(book).items()
                   if rel.split('/')[0] in {'stage2', 'stage4', 'stage5'}}
     ledger = ctx.ledger.path.read_bytes()
     _revise_source_hook(book, tmp_path / 'hook_change.txt', '父亲已经回城的消息随信送到。')
     assert surfaces() == old
-    assert approvals.get(base, sid).gate['s4'] and approvals.get(base, sid).gate['s5']
     assert approvals._path(base, sid).read_bytes() == approval_bytes
     assert {rel: raw for rel, raw in snapshot(book).items()
             if rel.split('/')[0] in {'stage2', 'stage4', 'stage5'}} == body_bytes

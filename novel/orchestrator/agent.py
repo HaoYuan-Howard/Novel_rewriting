@@ -1679,8 +1679,9 @@ def _start_planned(plan: AgentRunPlan, *,
         run_ready_action=_run_ready_action,
         run_blocked_action=_run_blocked_action,
         deterministic_blockers=queue.DETERMINISTIC_RECOVERY_WAITING_ON,
+        # stage4 design action 的人工 typed 恢复已随四道闸退役；
+        # fresh-epoch 保护只剩 stage5 reviewer rewrite。
         fresh_epoch_blockers=frozenset({
-            queue.WAITING_ON_STAGE4_DESIGN_ACTION,
             queue.WAITING_ON_STAGE5_REVIEWER_REWRITE,
         }),
         finalize_run=_finalize_run,

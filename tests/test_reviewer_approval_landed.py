@@ -14,12 +14,10 @@ from novel.orchestrator import approvals
 from tests.test_approval_freshness import (
     SID, _approve_writing, current_book as writing_current_book,
 )
-from tests.test_design_review import isolated as design_isolated
 from tests.test_stage4_approval_landed import landed_source as stage4_source
 from tests.test_stage5_closure import (
     _accepted_structure_view, _review as _closure_review, _ruling_request,
 )
-from tests.test_structure_approval import isolated as structure_isolated
 
 
 _GATES = approvals.APPROVAL_GATES

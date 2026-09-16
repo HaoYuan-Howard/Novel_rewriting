@@ -63,12 +63,9 @@ _INBOX = queue.WAITING_ON_INBOX
 _RESUME = queue.WAITING_ON_RESUME_DECISION
 _STAGE2_EDIT_COMMIT = queue.WAITING_ON_STAGE2_EDIT_COMMIT
 _STAGE2_EDIT_REVALIDATE = queue.WAITING_ON_STAGE2_EDIT_REVALIDATE
-_STAGE4_DESIGN = queue.WAITING_ON_STAGE4_DESIGN_REVIEW
-_STAGE4_BINDING = queue.WAITING_ON_STAGE4_BINDING_RESOLUTION
-_STAGE4_STRUCTURE_REPLAN = queue.WAITING_ON_STAGE4_STRUCTURE_REPLAN
-_STAGE4_DESIGN_ACTION = queue.WAITING_ON_STAGE4_DESIGN_ACTION
+# Stage4 四道人工闸 blocker 已退役（2026-09-15 全自动裁决）；只剩
+# repair/replan prepared 尾窗的免费恢复面仍登记专属 waiter。
 _STAGE4_DESIGN_REPAIR_COMMIT = queue.WAITING_ON_STAGE4_DESIGN_REPAIR_COMMIT
-_STAGE4_STRUCTURE = queue.WAITING_ON_STAGE4_STRUCTURE_REVIEW
 _STAGE5_REVIEW = queue.WAITING_ON_REVIEW
 _STAGE5_CLOSURE = queue.WAITING_ON_STAGE5_CLOSURE
 _STAGE5_REVIEWER_REWRITE = queue.WAITING_ON_STAGE5_REVIEWER_REWRITE
@@ -79,10 +76,7 @@ _STAGE7_APPROVE = 'stage7.approve'
 _W0 = frozenset({_INBOX, _RESUME})
 # stage2 恢复入口只认统一机械准入 blockers；节点写权仍按知识生产节点登记。
 _W2 = frozenset({_INBOX, _RESUME})
-_W4 = frozenset({
-    _INBOX, _RESUME, _STAGE4_DESIGN, _STAGE4_BINDING,
-    _STAGE4_STRUCTURE_REPLAN, _STAGE4_DESIGN_ACTION, _STAGE4_STRUCTURE,
-})
+_W4 = frozenset({_INBOX, _RESUME})
 _W5 = frozenset({_INBOX, _RESUME, _STAGE5_REVIEW, _STAGE5_CLOSURE})
 _W6 = frozenset({_INBOX, _RESUME, _STAGE5_CLOSURE, _STAGE6_APPROVE})
 _W6_PREPARE = _W6 | frozenset({queue.WAITING_ON_STAGE6_PREPARE})
@@ -121,8 +115,6 @@ RECOVERY_RUN_POLICIES: Final[tuple[RecoveryRunPolicy, ...]] = (
     RecoveryRunPolicy(
         'stage2.blueprint', _t('--apply-edit'), _W2 | _W4),
 
-    RecoveryRunPolicy('stage4.design', _t('--validate-edit'), _W4),
-    RecoveryRunPolicy('stage4.design', _t('--apply-edit'), _W4),
     RecoveryRunPolicy(
         'stage4.design',
         _t('--recover-repair-aggregate', '--source-journal-sha256',
@@ -132,8 +124,6 @@ RECOVERY_RUN_POLICIES: Final[tuple[RecoveryRunPolicy, ...]] = (
     RecoveryRunPolicy('stage4.plan', _t('--reaggregate'), _W4),
     RecoveryRunPolicy('stage4.design', _t('--reaggregate'), _W4),
     RecoveryRunPolicy('stage4.design', _t('--recover-responses'), _W4),
-    RecoveryRunPolicy('stage4.design', _t('--close-review'), _W4),
-    RecoveryRunPolicy('stage4.plan', _t('--close-review'), _W4),
     RecoveryRunPolicy(
         'stage4.plan', _t('--recover-prepared', '--subject-sha256'),
         frozenset({_PREPARED_DELIVERY})),
@@ -242,11 +232,8 @@ RECOVERY_RUN_POLICIES: Final[tuple[RecoveryRunPolicy, ...]] = (
         frozenset({_STAGE7_APPROVE}),
     ),
 
-    # 付费恢复只开放 executor 已完整迁移且另有 typed 授权的三族。
-    RecoveryRunPolicy(
-        'stage4.design', _t('--replan', '--review-token'), _W4, paid=True),
-    RecoveryRunPolicy(
-        'stage4.design', _t('--review-token'), _W4, paid=True),
+    # 付费恢复只开放 executor 已完整迁移且另有 typed 授权的两族；
+    # stage4.design 的人工 typed 恢复动作已随四道闸退役。
     RecoveryRunPolicy('stage5.write', _t('--revise'), _W5, paid=True),
     RecoveryRunPolicy(
         'stage5.write', _t('--revise', '--chapters'), _W5, paid=True),
@@ -284,8 +271,6 @@ EXTERNAL_INPUT_POLICIES: Final[
     # 因此现役真实路径只能在书目录内。未接 HTTP upload 前不能
     # 在 permit 层谎称 `_service/edits` 可达，否则 token 会放行一条
     # producer 必然拒绝的伪恢复路。
-    ('stage4.design', '--validate-edit'): 'book',
-    ('stage4.design', '--apply-edit'): 'book',
     ('stage4.design', '--recover-repair-aggregate'): 'stage4_repair_journal',
     ('stage4.plan', '--apply-edit'): 'book',
     ('stage4.plan', '--apply-binding'): 'book',
@@ -576,16 +561,6 @@ def _require_paid_recovery_authorized(
     current: OperatorNextDecision, node: str, flags: tuple[str, ...],
 ) -> None:
     tokens = set(flag_tokens(flags))
-    if node == 'stage4.design':
-        review_token = flag_value(flags, '--review-token')
-        if '--replan' not in tokens:
-            approvals.resolve_design_action(
-                current.base, current.sid,
-                review_token, expected='repair')
-        else:
-            approvals.resolve_design_action(
-                current.base, current.sid, review_token, expected='replan')
-        return
     if node == 'stage5.write' and '--revise' in tokens:
         chapters = queue.chapters_from_flags(flags)
         approvals.authorize_writing(

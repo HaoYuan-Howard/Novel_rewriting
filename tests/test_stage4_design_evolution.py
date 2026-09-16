@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 import copy
-from types import SimpleNamespace
 
 import pytest
 from pydantic import ValidationError
@@ -30,7 +29,7 @@ from novel.stages.stage4.plot_placements import compile_placements, required_end
 from novel.stages.stage4.plot_measure import constraint_and_stage_readings
 from tests.plot_fixtures import blueprint as fixture_blueprint
 from tests.test_plot_blueprint import blueprint as two_beat_blueprint
-from tests.test_plot_design import design_response, inputs, planner_characters, planner_main
+from tests.test_plot_design import design_response, planner_characters, planner_main
 
 
 A, B, C = 'b01_01', 'b01_02', 'b01_03'
@@ -131,7 +130,6 @@ def test_strategy_epoch_excludes_other_chapter_weights_but_chapter_digest_does_n
         chapter_strategy_sha256(epoch, 1, 'CH_EVEN')
 
 
-
 def test_strategy_epoch_keeps_local_truth_changes_out_but_preserves_global_changes():
     basis = _basis()
     current = strategy_epoch_sha256(basis, '冻结宏观策略')
@@ -200,31 +198,6 @@ def test_constraint_operations_bind_epoch_chapter_and_exact_active_set(operation
     with pytest.raises(HumanEditProtected, match='精确覆盖'):
         approvals._apply_design_constraint_operations(active, ops.model_copy(update={'items': []}),
                                                        epoch=epoch, ordinal=1)
-
-
-def test_semantic_repair_can_only_reference_registered_constraint_or_endpoint():
-    from contracts.schema.stage4 import BlindCandidateChapter
-    from novel.stages.stage4.plot_design import compile_blind_chapter_design
-    from contracts.schema.plot_planning import PlannerChapter
-    from tests.test_plot_blueprint import chapter_response
-    response = chapter_response()
-    response['constraints'] = [{'constraint_key': 'c1', 'kind': 'response_to',
-        'before_beat_ref': 'b1', 'after_beat_ref': 'b2', 'observer': None,
-        'evidence': [{'start_para': 1, 'end_para': 2}]}]
-    _bp, truth, mapping, public, private = inputs(response)
-    raw = compile_blind_chapter_design(design_response(public), private, mapping,
-        truth_chapter=truth['chapters'][0], chapter_weight='CH_EVEN')
-    chapter = BlindCandidateChapter.model_validate(raw)
-    planner = PlannerChapter.model_validate(truth['chapters'][0])
-    def request(alias):
-        constraint = DesignRepairConstraint(code='semantic_constraint', opaque_aliases=[alias])
-        return SimpleNamespace(chapters=[SimpleNamespace(output_ordinal=1, constraints=[constraint],
-            subject=SimpleNamespace(chapter=chapter, blind_truth=planner))])
-    approvals._require_design_constraint_refs(request(planner.constraints[0].alias))
-    for alias in (planner.beats[0].alias, 'a_' + 'f' * 16):
-        with pytest.raises(HumanEditProtected, match='已登记约束|越界'):
-            approvals._require_design_constraint_refs(request(alias))
-    assert planner.constraints[0].kind == 'response_to'
 
 
 @pytest.mark.parametrize('relations', [

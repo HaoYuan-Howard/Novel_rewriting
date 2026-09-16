@@ -27,3 +27,8 @@ Pydantic 当前 schema 的产物。
 `unknown`/`missing` 都是**产出层的 `unver` 臂**，
 不是判据的级别。⇒ 基准齐、边对得上的那几本，徽章就是绿的。
 """
+
+
+from novel.stages.stage4.phase_state import current_infeasible_binding
+
+__all__ = ['current_infeasible_binding']
