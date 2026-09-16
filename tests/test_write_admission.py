@@ -11,7 +11,8 @@ from pathlib import Path
 import pytest
 
 from contracts.schema.orchestration import (
-    AgentProfile, AgentRunEvent, AgentRunStart, PipelineAgentProfiles,
+    AgentRunEvent, AgentRunStart, LegacyExecutorBackend, LegacyLlmProfile,
+    PipelineAgentProfiles,
 )
 from novel.orchestrator import operator_telemetry as telemetry
 from novel.orchestrator import execution_context
@@ -26,11 +27,13 @@ PHASE = '22222222-2222-4222-8222-222222222222'
 
 
 def _profiles() -> PipelineAgentProfiles:
-    profile = AgentProfile(
-        driver='codex', model='gpt-5.6-sol', reasoning_effort='high',
-        execution_mode='standard')
+    """C2a 起执行面 legacy-only：parent run fixtures 一律用 legacy backend。"""
+    profile = LegacyLlmProfile(
+        provider='deepseek', model='deepseek-v4-pro',
+        reasoning_effort='high', thinking_mode='on')
     return PipelineAgentProfiles(
-        commander=profile, executor_default=profile, executor_overrides={})
+        executor_default=LegacyExecutorBackend(profile=profile),
+        executor_overrides={})
 
 
 def _install_commander(base: Path, monkeypatch, *, run_id: str = PARENT) -> str:

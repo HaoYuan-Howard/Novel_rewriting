@@ -1060,8 +1060,16 @@ class ExecutionEpoch(FrozenModel):
     resume_provider_session_id: str | None = Field(default=None, min_length=1)
 
 
-    #: v1 只解释历史 skill 身份；v2 由 code/prompt/schema/input 覆盖运行资源。
-    identity_version: Literal[1, 2] = 1
+    #: 唯一执行引擎。v3 新 epoch 必填且恒为 ``direct_llm``；v1/v2 历史 epoch
+    #: 无此字段（当时还存在 Agent CLI executor，不重新解释历史）。
+    engine_kind: Literal['direct_llm'] | None = Field(default=None, min_length=1)
+    #: 执行引擎实现版本；v3 新 epoch 必填。历史 epoch 原值保留只读。
+    engine_version: str | None = Field(default=None, min_length=1)
+
+    #: v1 只解释历史 skill 身份；v2 由 code/prompt/schema/input 覆盖运行资源；
+    #: v3（2026-09-16 单 Executor 架构）显式登记 direct_llm 引擎与
+    #: ``llm-executor/v1`` 协议，历史 ≤v2 只读原语义。
+    identity_version: Literal[1, 2, 3] = 1
 
     @model_serializer(mode='wrap')
     def _identity_wire(self, handler):
@@ -1072,12 +1080,28 @@ class ExecutionEpoch(FrozenModel):
             payload.pop('argv', None)
         if self.prompt_sha256 is None:
             payload.pop('prompt_sha256', None)
+        if self.engine_kind is None:
+            payload.pop('engine_kind', None)
+        if self.engine_version is None:
+            payload.pop('engine_version', None)
         return payload
 
     @model_validator(mode='after')
     def _runtime_identity(self):
         if self.identity_version == 2 and self.skill_sha256 is not None:
             raise ValueError('当前运行身份不接受 skill 指纹；旧值只保留在原记录')
+        if self.identity_version == 3:
+            if self.engine_kind != 'direct_llm':
+                raise ValueError(
+                    'v3 执行身份必须显式登记唯一引擎 direct_llm；'
+                    '退役的 Agent CLI executor 不得作为新 epoch 引擎')
+            if self.protocol_version != 'llm-executor/v1':
+                raise ValueError(
+                    'v3 执行身份只接受 protocol_version=llm-executor/v1')
+            if not self.engine_version:
+                raise ValueError('v3 执行身份缺 engine_version')
+            if self.skill_sha256 is not None:
+                raise ValueError('当前运行身份不接受 skill 指纹；旧值只保留在原记录')
         return self
 
 

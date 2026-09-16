@@ -327,10 +327,14 @@ def _load_from_environment(
     if profile_snapshot is None:
         raise TerminalState('Commander started 事件没有 resolved profiles；历史运行不能猜成今天的默认')
     identity = epoch if epoch is not None else start
-    if identity.identity_version != 2 or identity.skill_sha256 is not None:
+    if identity.identity_version not in (2, 3) or identity.skill_sha256 is not None:
         raise TerminalState(
             '旧 skill 运行身份只供历史读取；须关闭旧 owner 并由当前代码打开新 epoch，'
             '不能重签旧记录或继续旧供应商会话')
+    # C2a 退役边界：执行上下文不接受 agent backend（含 agent 的历史 run 显式
+    # 410，不静默降级）；v2 在途纯 legacy run 可续，v3 新执行为唯一写入口。
+    from novel.orchestrator import retired_formats
+    retired_formats.refuse_agent_profiles('执行上下文', profile_snapshot)
     profiles = validate_pipeline_profiles(profile_snapshot)
     if profiles != profile_snapshot:
         raise TerminalState('Commander started 事件中的 profiles 不是完整 resolved 快照')

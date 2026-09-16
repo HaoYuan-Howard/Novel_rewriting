@@ -9,7 +9,9 @@ from pathlib import Path
 
 import pytest
 
-from contracts.schema.orchestration import AgentProfile, PipelineAgentProfiles
+from contracts.schema.orchestration import (
+    LegacyExecutorBackend, LegacyLlmProfile, PipelineAgentProfiles,
+)
 from novel.errors import (
     ApprovalFrozen, BookTrashFailed, SourceConflict, UpstreamMissing,
 )
@@ -17,9 +19,10 @@ from novel.orchestrator import admission, agent, approvals, jobs, trash
 from novel.orchestrator.jobs import JobConflict
 
 
-_PROFILE = AgentProfile(
-    driver='codex', model='gpt-5.6-sol', reasoning_effort='high',
-    execution_mode='standard')
+#: C2a 起执行面 legacy-only：agent run fixtures 一律用 legacy backend。
+_PROFILE = LegacyExecutorBackend(profile=LegacyLlmProfile(
+    provider='deepseek', model='deepseek-v4-pro',
+    reasoning_effort='high', thinking_mode='on'))
 #: schema v3：只有 executor backend，没有 commander 字段。
 _PROFILES = PipelineAgentProfiles(
     executor_default=_PROFILE, executor_overrides={})

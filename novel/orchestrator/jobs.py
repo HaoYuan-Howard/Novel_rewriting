@@ -623,6 +623,10 @@ def plan_start(node: str, sid: str | None, flags: Sequence[str] = (), *,
     if executor_backend is None and step_backends:
         executor_backend = step_backends[0]
     if executor_backend is not None:
+        # C2a 退役边界：作业执行面不再接受 agent backend（preview 与 start
+        # 同闸；冻结 steps[] 携带的历史 backend 同样命中）。
+        from novel.orchestrator import retired_formats
+        retired_formats.refuse_agent_backend('作业执行', executor_backend)
         executor_backend = resolve_executor_backend(
             node, flags, executor_backend)
         if any(backend != executor_backend for backend in step_backends):

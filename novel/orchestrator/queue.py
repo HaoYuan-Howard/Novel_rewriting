@@ -1585,6 +1585,12 @@ def _auto_resume_block_reason(
     if prior_start.code != prov.code_version():
         return (f'代码身份漂移：原 run 是 {prior_start.code}，当前是 '
                 f'{prov.code_version()}；恢复必须 replan，不自动续跑')
+    from novel.orchestrator import retired_formats
+    if retired_formats.detect_retired_agent_backend(
+            prior_start.model_dump(mode='json', by_alias=True)):
+        return ('原 execution 属于已退役的 Agent CLI executor'
+                '（retired_executor_backend）；不自动续跑、不静默降级，'
+                '历史账原样保留只读')
     step_backends = [
         step.executor_backend for step in entry.item.steps
         if step.executor_backend is not None]

@@ -1262,37 +1262,75 @@ _PROFILED_RUN_CASES = (
 )
 
 
+LEGACY_EXECUTOR_ARGS = (
+    '--executor-backend', 'legacy',
+    '--legacy-provider', 'deepseek',
+    '--legacy-model', 'deepseek-v4-pro',
+    '--legacy-effort', 'high',
+    '--legacy-thinking', 'on',
+)
+
+
 @pytest.mark.parametrize(('node', 'flags', '_agent_kwargs'), _PROFILED_RUN_CASES)
 def test_profiled_preview_prints_the_exact_resolved_agent_argv(
         tmp_path, capsys, node, flags, _agent_kwargs):
-    profile = AgentProfile(
-        driver='codex', model='gpt-5.6-sol', reasoning_effort='high')
+    """C2a 起执行面 legacy-only：preview 形状职责由 legacy backend 承担；
+    agent backend 的 preview 现在是退役拒绝（见下一条负例）。"""
+    profile = LegacyLlmProfile(
+        provider='deepseek', model='deepseek-v4-pro',
+        reasoning_effort='high', thinking_mode='on')
     steps = N.build_steps(
         node, 'book-1', flags, base=tmp_path,
-        executor_profile=profile,
+        executor_backend=LegacyExecutorBackend(profile=profile),
         egress_authorized=True)
 
     rc = _run(
-        'preview', node, 'book-1', *flags, *EXECUTOR_PROFILE_ARGS,
+        'preview', node, 'book-1', *flags, *LEGACY_EXECUTOR_ARGS,
         '--allow-egress',
         '--base', str(tmp_path))
 
     assert rc == X.OK
     out = capsys.readouterr().out
     assert all(N.shell_line(step.argv) in out for step in steps)
-    assert steps[0].executor_profile is not None
-    assert steps[0].executor_profile.execution_mode == 'standard'
+    assert steps[0].executor_backend is not None
+    assert steps[0].executor_backend.kind == 'legacy'
     assert steps[0].egress_authorized is True
     assert '--allow-egress' in steps[0].argv
     for follow in steps[1:]:
-        assert follow.executor_profile is None
+        assert follow.executor_backend is None
         assert not any(
-            token.startswith('--executor-') for token in follow.argv)
+            token.startswith('--legacy-') for token in follow.argv)
 
 
 @pytest.mark.parametrize(('node', 'flags', '_agent_kwargs'), _PROFILED_RUN_CASES)
-def test_profiled_argv_round_trips_through_cli_into_run_context(
-        tmp_path, monkeypatch, node, flags, _agent_kwargs):
+def test_agent_executor_backend_is_retired_at_cli_parse(
+        tmp_path, capsys, monkeypatch, node, flags, _agent_kwargs):
+    """C2a 退役边界：CLI wire 的 agent backend 在解析层即 410 语义终态。"""
+    from novel.cli import main as M
+
+    opened = []
+    monkeypatch.setattr(
+        M, 'RunContext',
+        SimpleNamespace(open=lambda *_args, **_kwargs: opened.append(_kwargs)))
+    rc = _run(
+        'preview', node, 'book-1', *flags, *EXECUTOR_PROFILE_ARGS,
+        '--allow-egress', '--base', str(tmp_path))
+    assert rc == X.TERMINAL_STATE
+    assert opened == []
+    err = capsys.readouterr().err
+    assert '退役' in err and 'agent' in err
+    assert 'Traceback' not in err
+
+
+@pytest.mark.parametrize(('node', 'flags', '_agent_kwargs'), _PROFILED_RUN_CASES)
+def test_agent_argv_never_round_trips_through_cli_into_run_context(
+        tmp_path, monkeypatch, capsys, node, flags, _agent_kwargs):
+    """C2a 退役边界：agent argv 在 RunContext 构造前即被拒，不再进入执行。
+
+    历史上这条测试保护 agent profile 经 CLI 解析、registry 校验后无损到达
+    RunContext；该职责现由 legacy 版 round-trip 承担，agent 形状等价的
+    职责收敛为「解析层退役拒绝」。
+    """
     from novel.cli import main as M
 
     profile = AgentProfile(
@@ -1331,11 +1369,14 @@ def test_profiled_argv_round_trips_through_cli_into_run_context(
     monkeypatch.setattr(
         approvals, 'authorize_writing', lambda *_args, **_kwargs: None)
 
-    assert _run(*cli_argv) == X.OK
-    resolved = captured['executor_profile']
-    assert resolved.execution_mode == 'standard'
-    assert captured['dispatch'] == (node, resolved, list(flags))
-    assert resolved == N.resolve_executor_profile(node, flags, profile)
+    rc = _run(*cli_argv)
+    assert rc == X.TERMINAL_STATE
+    assert 'executor_backend' not in captured
+    err = capsys.readouterr().err
+    assert '退役' in err
+    # 纯函数层（build_argv/registry）仍能解析该形状（死代码保留到 C3 硬切），
+    # 但它不再构成任何可执行入口。
+    assert N.resolve_executor_profile(node, flags, profile) is not None
 
 
 def test_explicit_legacy_argv_round_trips_without_becoming_an_agent_profile(
@@ -1396,66 +1437,34 @@ def test_legacy_backend_uses_provider_factory_instead_of_implicit_deepseek(
 @pytest.mark.parametrize(
     ('node', 'flags', 'expected_agent_kwargs'), _PROFILED_RUN_CASES)
 def test_profiled_dispatch_never_constructs_a_deepseek_client(
-        tmp_path, monkeypatch, node, flags, expected_agent_kwargs):
+        tmp_path, monkeypatch, capsys, node, flags, expected_agent_kwargs):
+    """C2a：agent argv 在 CLI 解析层退役拒绝——任何 client 都不会被构造，
+    「不静默回退 DeepSeek」由更早的一格关闭。"""
     from novel.cli import main as M
-    from novel.orchestrator import node_agents
 
-    contexts = []
-    seen = []
-    built = []
-
-    def open_context(_base, _sid, actual_node, **kwargs):
-        ctx = _dispatch_context(
-            tmp_path, node=actual_node,
-            run_id='profiled-stage2-cli',
-            novel_dir=tmp_path / 'book', sid='book-1',
-            executor_profile=kwargs['executor_profile'],
-        )
-        contexts.append(ctx)
-        return ctx
-
-    class FakeNodeAgent:
-        def __init__(self, ctx, kwargs):
-            self.ctx = ctx
-            self.kwargs = kwargs
-
-        def run(self):
-            seen.append(self.ctx.executor_profile)
-            return SimpleNamespace(
-                artifact=object(), report=None, passed=True, turns=2)
-
-    def deepseek_would_be_a_downgrade(_ctx):
-        raise AssertionError('显式 executor_profile 绝不能构造 DeepSeek client')
-
-    monkeypatch.setattr(M, 'RunContext', SimpleNamespace(open=open_context))
-    monkeypatch.setattr(M, '_llm_client', deepseek_would_be_a_downgrade)
-    def build_agent(actual, **kwargs):
-        built.append((actual, kwargs))
-        return FakeNodeAgent(actual, kwargs)
-
-    monkeypatch.setattr(node_agents, 'build_node_agent', build_agent)
-    from novel.orchestrator import mechanical_admission
-    monkeypatch.setattr(mechanical_admission, 'blueprint_generation_ready',
-                        lambda *_args: mechanical_admission.AdmissionCheck(
-                            'stage2.blueprint', ok=True))
-    monkeypatch.setattr(mechanical_admission, 'stage4_ready',
-                        lambda *_args: mechanical_admission.AdmissionCheck(
-                            'stage4', ok=True))
-    from novel.stages.stage5 import closure as stage5_closure
-    monkeypatch.setattr(stage5_closure, 'require_stage5_closed', lambda _store: None)
-    from novel.orchestrator import approvals
+    opened = []
     monkeypatch.setattr(
-        approvals, 'authorize_writing', lambda *_args, **_kwargs: None)
+        M, 'RunContext',
+        SimpleNamespace(open=lambda *_args, **_kwargs: opened.append(_kwargs)))
+    monkeypatch.setattr(
+        M, '_llm_client',
+        lambda _ctx: pytest.fail('退役 backend 不得构造任何 LLM client'))
+    monkeypatch.setattr(
+        node_agents_module(), 'build_node_agent',
+        lambda _ctx, **_kwargs: pytest.fail('退役 backend 不得构造 node agent'))
 
-    assert _run(
+    rc = _run(
         'run', node, 'book-1', *flags, *EXECUTOR_PROFILE_ARGS,
-        '--allow-egress', '--base', str(tmp_path), '--yes') == X.OK
-    assert len(contexts) == 1
-    assert built == [(contexts[0], expected_agent_kwargs)]
-    assert seen == [contexts[0].executor_profile]
-    assert seen[0] == N.resolve_executor_profile(
-        node, flags, AgentProfile(
-            driver='codex', model='gpt-5.6-sol', reasoning_effort='high'))
+        '--allow-egress', '--base', str(tmp_path), '--yes')
+
+    assert rc == X.TERMINAL_STATE
+    assert opened == []
+    assert '退役' in capsys.readouterr().err
+
+
+def node_agents_module():
+    from novel.orchestrator import node_agents
+    return node_agents
 
 
 def test_profiled_dispatch_renders_report_and_maps_passed_false_to_exit_one(
@@ -1627,13 +1636,15 @@ def test_profiled_gate_blocked_remains_exit_two_without_a_stack(
         M, '_llm_client', lambda _ctx: pytest.fail(
             '显式 executor GateBlocked 不得回退 DeepSeek'))
 
+    # C2a：agent argv 在解析层退役拒绝；GateBlocked→exit 2 的映射职责由
+    # legacy 直连付费跑法的同类测试承担，这里钉住更早的一格。
     rc = _run(
         'run', 'stage2.global', 'book-1', *EXECUTOR_PROFILE_ARGS,
         '--allow-egress', '--base', str(tmp_path), '--yes')
 
     assert rc == X.TERMINAL_STATE and not X.landed(rc)
     err = capsys.readouterr().err
-    assert '合成 agent 候选被代码闸拦下' in err
+    assert '退役' in err
     assert 'Traceback' not in err
 
 
@@ -1662,14 +1673,12 @@ def test_cli_refuses_profiled_flags_and_unmigrated_nodes_before_context(
         'run', node, 'book-1', *flags, *EXECUTOR_PROFILE_ARGS,
         '--base', str(tmp_path), '--yes')
 
+    # C2a：agent backend 在 CLI 解析层即退役拒绝，先于节点/flag 组合校验。
     assert rc == X.TERMINAL_STATE
     assert opened == []
     err = capsys.readouterr().err
     assert 'Traceback' not in err
-    if node == 'stage4.context':
-        assert '不再接受 executor agent' in err
-    else:
-        assert '尚未迁移 flag 组合' in err
+    assert '退役' in err
 
 
 def test_cli_refuses_a_partial_executor_profile_before_preview(tmp_path, capsys):
@@ -1677,21 +1686,23 @@ def test_cli_refuses_a_partial_executor_profile_before_preview(tmp_path, capsys)
         'preview', 'stage2.global', 'book-1',
         '--executor-driver', 'codex', '--base', str(tmp_path))
 
+    # C2a：不完整的 agent profile 同样在解析层走退役拒绝（agent 形状已整体
+    # 退役，不再需要为它报「缺参数」）。
     assert rc == X.TERMINAL_STATE
     err = capsys.readouterr().err
-    assert '必须同时给' in err and '--executor-model' in err
+    assert '退役' in err
     assert 'Traceback' not in err
 
 
 def test_profiled_preview_without_egress_approval_is_visible_but_not_executable(
         tmp_path, capsys):
     rc = _run(
-        'preview', 'stage2.global', 'book-1', *EXECUTOR_PROFILE_ARGS,
+        'preview', 'stage2.global', 'book-1', *LEGACY_EXECUTOR_ARGS,
         '--base', str(tmp_path))
 
     assert rc == X.OK
     out = capsys.readouterr().out
-    assert '--executor-driver' in out
+    assert '--legacy-provider' in out
     assert '--allow-egress' not in out
 
 
@@ -1716,7 +1727,7 @@ def test_profiled_cli_run_without_egress_approval_refuses_before_context(
         lambda _ctx: pytest.fail('外发授权拒绝后不得构造 executor driver'))
 
     rc = _run(
-        'run', 'stage2.global', 'book-1', *EXECUTOR_PROFILE_ARGS,
+        'run', 'stage2.global', 'book-1', *LEGACY_EXECUTOR_ARGS,
         '--base', str(tmp_path), '--yes')
 
     assert rc == X.TERMINAL_STATE

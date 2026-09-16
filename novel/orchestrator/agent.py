@@ -65,7 +65,7 @@ from novel.errors import (
 from novel.model_slots import MODEL_BOOK_DIR_ENV
 from novel.orchestrator import (
     admission, execution_permit, jobs, operator, queue,
-    reviewer_action_evidence, service_lifecycle, state,
+    retired_formats, reviewer_action_evidence, service_lifecycle, state,
 )
 from novel.orchestrator.agent_supervisor import (
     ExecutionTurnResult, LaunchTicket, PrelaunchIdentityDrift, RunSupervisor,
@@ -110,9 +110,13 @@ _ACTION_FAILURE_TAIL_BYTES = 16 * 1024
 _ACTION_FAILURE_DETAIL_CHARS = 4096
 
 #: executor-only epoch 的协议身份。历史 epoch 的 protocol_version 锚定 Commander
-#: driver wire；Commander 退役后新 epoch 没有顶层 provider 协议，这一格只登记
-#: Supervisor→executor 派发契约自身，供只读投影与哈希链继续覆盖。
-_EPOCH_PROTOCOL_VERSION = 'supervisor-executor-v1'
+#: driver wire；`supervisor-executor-v1` 是 Commander 退役后的过渡身份；
+#: 2026-09-16 单 Executor 架构起新 epoch 一律 ``llm-executor/v1``（v3 身份），
+#: 并显式登记唯一执行引擎 ``direct_llm``。
+_EPOCH_PROTOCOL_VERSION = 'llm-executor/v1'
+_EPOCH_ENGINE_KIND = 'direct_llm'
+_EPOCH_ENGINE_VERSION = 'direct-llm-executor/1'
+_EPOCH_IDENTITY_VERSION = 3
 
 _THREADS_LOCK = threading.Lock()
 _THREADS: dict[str, threading.Thread] = {}
@@ -132,10 +136,15 @@ RESTART_NOTE = ('服务重启前它是死是活我们不知道——'
 
 def _freeze_profiles(profiles: PipelineAgentProfiles | None,
                      ) -> PipelineAgentProfiles:
-    """关闭式解析并深复制；``FrozenModel`` 本身不会冻结嵌套 dict。"""
+    """关闭式解析并深复制；``FrozenModel`` 本身不会冻结嵌套 dict。
+
+    C2a 退役边界：新代跑选择一律不得携带 agent backend；命中即
+    ``retired_executor_backend``（410），不做静默降级。
+    """
     if profiles is None:
         raise UnsupportedRunMode(
             '服务端尚未设置默认 agent profiles；请显式选择默认 executor 与逐节点覆盖')
+    retired_formats.refuse_agent_profiles('整书代跑 executor 选择', profiles)
     try:
         resolved = validate_pipeline_profiles(profiles)
     except AgentProfileRefused as exc:
@@ -1383,7 +1392,9 @@ def _start_planned(plan: AgentRunPlan, *,
         argv=None, prompt_sha256=None,
         protocol_version=_EPOCH_PROTOCOL_VERSION,
         cli_version=None, code_version=code_version,
-        identity_version=2, session_run_id=session_run_id)
+        identity_version=_EPOCH_IDENTITY_VERSION,
+        engine_kind=_EPOCH_ENGINE_KIND, engine_version=_EPOCH_ENGINE_VERSION,
+        session_run_id=session_run_id)
     key = jobs.acquire_agent_writer(
         base, sid, run_id, admit=_admit, registry=registry)
     owner_guard = admission.owner_lease(base, run_id)
@@ -1489,7 +1500,10 @@ def _start_planned(plan: AgentRunPlan, *,
             argv=None, prompt_sha256=None,
             protocol_version=_EPOCH_PROTOCOL_VERSION,
             cli_version=None, code_version=current_code,
-            identity_version=2, session_run_id=session_run_id)
+            identity_version=_EPOCH_IDENTITY_VERSION,
+            engine_kind=_EPOCH_ENGINE_KIND,
+            engine_version=_EPOCH_ENGINE_VERSION,
+            session_run_id=session_run_id)
 
     def _close_epoch(epoch: ExecutionEpoch, turn: ExecutionTurnResult) -> str:
         drain_state = epoch_drain_states.get(
@@ -1504,7 +1518,7 @@ def _start_planned(plan: AgentRunPlan, *,
     def _epoch_identity_current(epoch: ExecutionEpoch) -> bool:
         try:
             return (
-                epoch.identity_version == 2
+                epoch.identity_version >= 2
                 and epoch.skill_sha256 is None
                 and epoch.code_version != prov.CODE_UNKNOWN
                 and prov.code_version() == epoch.code_version)

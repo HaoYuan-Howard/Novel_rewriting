@@ -647,6 +647,19 @@
    "layer": "unit_contract",
    "stages": []
   },
+  "tests/test_retired_formats.py": {
+   "cases": {
+    "test_detect_and_refuse_raw_json_shapes": "unit_contract",
+    "test_agent_backend_error_maps_to_410": "unit_contract",
+    "test_agent_run_listing_survives_and_continuation_preflight_refuses": "unit_contract",
+    "test_jobs_start_refuses_agent_backend": "unit_contract",
+    "test_agent_run_request_keeps_retired_payload_in_error": "unit_contract",
+    "test_queue_continuation_recheck_flags_retired_prior_execution": "unit_contract",
+    "test_http_agent_backend_is_gone": "unit_contract"
+   },
+   "layer": "regression",
+   "stages": []
+  },
   "tests/test_reviewer_approval_landed.py": {
    "layer": "unit_contract",
    "stages": [

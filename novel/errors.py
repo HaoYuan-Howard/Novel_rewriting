@@ -67,6 +67,15 @@ class TerminalState(NovelError):
     """
 
 
+class RetiredExecutorBackend(TerminalState):
+    """持久或在途格式属于已退役的 Agent CLI executor（单 Executor 架构）。
+
+    与「尚未迁移」不同：这不是等一等就能跑的输入错误，而是格式已经退役——
+    新开跑与续跑都无法再进入该 backend，也不做静默降级。HTTP 侧固定 410
+    （ Gone），CLI 侧按显式终态退出；机器码统一 `retired_executor_backend`。
+    """
+
+
 class ArtifactSubmittedReviewPending(NovelError):
     """正式候选已落盘，接受尚未提交；应重放耐久决定，不重新调用模型。"""
 

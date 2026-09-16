@@ -373,13 +373,9 @@ def _executor_backend_of(a: argparse.Namespace) -> ExecutorBackend | None:
                 'legacy profile 必须显式给 --executor-backend legacy')
         return None
     if kind == 'agent':
-        if has_legacy:
-            raise UnsupportedRunMode('agent backend 不能夹带 --legacy-* 参数')
-        profile = _executor_profile_of(a)
-        if profile is None:
-            raise UnsupportedRunMode(
-                'agent backend 必须携带完整 --executor-driver/model/effort')
-        return AgentExecutorBackend(profile=profile)
+        # C2a 退役边界：CLI wire 不再接受 agent backend（retired_executor_backend）。
+        from novel.orchestrator.retired_formats import raise_retired_agent_backend
+        raise_retired_agent_backend('CLI --executor-backend agent')
     if has_agent:
         raise UnsupportedRunMode('legacy backend 不能夹带 --executor-driver/model/effort/mode')
     missing = [name for name, value in legacy_values.items() if not value]

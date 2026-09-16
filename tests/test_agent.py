@@ -46,9 +46,17 @@ _CODEX = AgentProfile(
 _CLAUDE = AgentProfile(
     driver='claude-code', model='claude-opus-5', reasoning_effort='max',
     execution_mode='standard')
+_LEGACY = LegacyExecutorBackend(profile=LegacyLlmProfile(
+    provider='deepseek', model='deepseek-v4-pro',
+    reasoning_effort='high', thinking_mode='on'))
+_LEGACY_FLASH = LegacyExecutorBackend(profile=LegacyLlmProfile(
+    provider='deepseek', model='deepseek-flash',
+    reasoning_effort='high', thinking_mode='on'))
 #: schema v3：只有 executor backend，没有 commander 字段。
+#: C2a 退役边界：整书代跑编排现役唯一模式是 direct legacy——共享 fixtures
+#: 一律用它；agent default 只出现在「退役拒绝」负例里。
 _PROFILES = PipelineAgentProfiles(
-    executor_default=_CLAUDE,
+    executor_default=_LEGACY,
     executor_overrides={})
 
 
@@ -200,17 +208,27 @@ def _wait_marker(path: Path, timeout: float = 10.0) -> None:
 
 def test_plan_deep_freezes_nested_profile_overrides(base):
     requested = PipelineAgentProfiles(
-        executor_default=_CODEX,
-        executor_overrides={'stage5.write': _CLAUDE})
+        executor_default=_LEGACY,
+        executor_overrides={'stage5.write': _LEGACY_FLASH})
     planned = agent.plan(
         base, '42', authorized=False, egress_authorized=False,
         profiles=requested)
 
-    requested.executor_overrides['stage5.write'] = _CODEX
+    requested.executor_overrides['stage5.write'] = _LEGACY
     frozen = planned.profiles.executor_overrides['stage5.write']
-    assert frozen.kind == 'agent' and frozen.profile == _CLAUDE
+    assert frozen.kind == 'legacy' and frozen.profile.model == 'deepseek-flash'
     assert planned.profiles.schema_version == 3
     assert 'commander' not in planned.profiles.model_dump(mode='json')
+
+
+def test_plan_refuses_agent_executor_selection(base):
+    """C2a：纯 agent default 在 plan 层 410；混用 override 在构造期更早拒绝。"""
+    from novel.errors import RetiredExecutorBackend
+    requested = PipelineAgentProfiles(
+        executor_default=_CODEX, executor_overrides={})
+    with pytest.raises(RetiredExecutorBackend):
+        agent.plan(base, '42', authorized=False, egress_authorized=False,
+                   profiles=requested)
 
 
 def test_plan_refuses_missing_profiles_while_preview_remains_zero_cost(base):
@@ -648,7 +666,10 @@ def test_ready_token_runs_the_canonical_child_and_new_epochs_have_no_commander_c
     opened = [row.epoch for row in events if row.kind == 'epoch_opened']
     assert len(opened) == 1
     assert opened[0].argv is None and opened[0].prompt_sha256 is None
-    assert opened[0].protocol_version == 'supervisor-executor-v1'
+    assert opened[0].protocol_version == 'llm-executor/v1'
+    assert opened[0].identity_version == 3
+    assert opened[0].engine_kind == 'direct_llm'
+    assert opened[0].engine_version is not None
     [ended] = [row for row in events if row.kind == 'ended']
     assert ended.exit_code == 2
     assert ended.outcome is not None and ended.outcome.state == 'stopped'
@@ -1079,17 +1100,18 @@ def test_the_queue_starts_the_next_book_when_one_ends(
     monkeypatch.setattr(agent, 'MAX_CONCURRENT', 1)
     box = _dispatch(monkeypatch, tmp_path, blocking=True)
     requested = PipelineAgentProfiles(
-        executor_default=_CODEX,
-        executor_overrides={'stage5.write': _CLAUDE})
+        executor_default=_LEGACY,
+        executor_overrides={'stage5.write': _LEGACY_FLASH})
     view = agent.enqueue(base, ['42', '43'], authorized=True,
                          egress_authorized=True, profiles=requested)
     assert [r.start.sid for r in view.running] == ['42']
     assert [p.sid for p in view.pending] == ['43'] and view.pending[0].position == 1
     pending_backend = view.pending[0].profiles.executor_overrides['stage5.write']
-    assert pending_backend.kind == 'agent' and pending_backend.profile == _CLAUDE
+    assert (pending_backend.kind == 'legacy'
+            and pending_backend.profile.model == 'deepseek-flash')
     # response model 也不得与内部 pending plan 共享可变 overrides。
-    view.pending[0].profiles.executor_overrides['stage5.write'] = _CODEX
-    requested.executor_overrides['stage5.write'] = _CODEX
+    view.pending[0].profiles.executor_overrides['stage5.write'] = _LEGACY
+    requested.executor_overrides['stage5.write'] = _LEGACY
     # 入队后 registry/default 即使漂移也不得在出队时重解析。
     monkeypatch.setattr(
         agent, 'validate_pipeline_profiles',
@@ -1108,7 +1130,8 @@ def test_the_queue_starts_the_next_book_when_one_ends(
     second = next(r for r in agent.records(base) if r.start.sid == '43')
     assert second.start.profiles is not None
     second_backend = second.start.profiles.executor_overrides['stage5.write']
-    assert second_backend.kind == 'agent' and second_backend.profile == _CLAUDE
+    assert (second_backend.kind == 'legacy'
+            and second_backend.profile.model == 'deepseek-flash')
     for rec in agent.records(base):
         agent.wait(rec.run_id, 15)
 
@@ -1521,8 +1544,8 @@ def test_original_profiles_continue_through_http_after_restart(
 
     box = _dispatch(monkeypatch, tmp_path)
     profiles = PipelineAgentProfiles(
-        executor_default=_CLAUDE,
-        executor_overrides={'stage5.write': _CODEX},
+        executor_default=_LEGACY,
+        executor_overrides={'stage5.write': _LEGACY_FLASH},
         concurrency=PipelineConcurrency(
             node_overrides={'stage5.write': 6}, per_book=6, per_provider=8))
     profiles = agent._freeze_profiles(profiles)
@@ -1571,7 +1594,8 @@ def test_original_profile_start_rechecks_source_under_writer(
                          profiles=view.profiles, continuation=view.source)
     if damage == 'profiles':
         planned = replace(planned, profiles=PipelineAgentProfiles(
-            executor_default=_CODEX, executor_overrides={}))
+            executor_default=_LEGACY_FLASH,
+            executor_overrides={}))
     elif damage == 'sid':
         planned = replace(planned, sid='41')
     elif damage == 'events':

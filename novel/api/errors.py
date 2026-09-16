@@ -44,6 +44,7 @@ from novel.errors import (
     PartitionInputMismatch,
     ProvenanceRefused,
     QueueConflict,
+    RetiredExecutorBackend,
     ResidualNonbody,
     SourceConflict,
     SourceDecodeFailed,
@@ -130,6 +131,9 @@ STATUS: dict[type[NovelError], int] = {
     AgentProfileSettingsConflict: 409,
     #: 人敲了一条这个节点没有的跑法 ⇒ 产地是**客户端**。
     UnsupportedRunMode: 400,
+    #: 退役执行格式（Agent CLI executor）。格式曾经合法、现在永久关闭：
+    #: 不是客户端拼错（400）也不是流程冲突（409），语义正是 410 Gone。
+    RetiredExecutorBackend: 410,
     # ── 代码自相矛盾（`RefusedByStructure`）。**是 bug，栈要留全** ──
     #: ⚠ 500 的响应体里**只出类名与一句人话，不出栈**——那份正文是不外流的版权内容，
     #: 而栈里可能带着它。栈留在服务端日志里（`R-11.1` 第四条理由）。

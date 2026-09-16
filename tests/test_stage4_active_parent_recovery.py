@@ -10,7 +10,8 @@ import pytest
 
 from contracts.artifacts import STAGE4_BLIND_CANDIDATE
 from contracts.schema.orchestration import (
-    AgentRunEvent, AgentRunStart, ExecutionEpoch, PipelineAgentProfiles, RunContractV2,
+    AgentRunEvent, AgentRunStart, ExecutionEpoch, LegacyExecutorBackend,
+    LegacyLlmProfile, PipelineAgentProfiles, RunContractV2,
 )
 from novel.orchestrator import execution_context
 from novel.errors import ProvenanceRefused, TerminalState
@@ -30,9 +31,12 @@ def _parent_context(book, run_id):
 
 
 def _open_successor(source, target, monkeypatch, *, drain='drained', claim=True):
+    # C2a 起执行面 legacy-only：parent run fixtures 一律用 legacy backend。
+    legacy = LegacyExecutorBackend(profile=LegacyLlmProfile(
+        provider='deepseek', model='deepseek-v4-pro',
+        reasoning_effort='high', thinking_mode='on'))
     profiles = PipelineAgentProfiles(
-        commander=source.executor_profile, executor_default=source.executor_profile,
-        executor_overrides={})
+        executor_default=legacy, executor_overrides={})
     start = AgentRunStart(
         sid=source.sid, base=str(source.novel_dir.parent.resolve()),
         argv=['commander', '-'], prompt='恢复已保存成果', authorized=True,

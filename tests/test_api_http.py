@@ -555,13 +555,16 @@ def test_executor_matrix_guard_detects_a_missing_public_combination(monkeypatch)
 )
 def test_executor_backend_is_identical_in_preview_and_start(
         client, base, monkeypatch, node, flags, step_count):
+    # C2a 起执行面 legacy-only：形状一致性职责改由 legacy backend 承担；
+    # agent backend 的 preview/start 现在是 retired_executor_backend（410），
+    # 由 test_executor_backend_agent_variant_is_gone 单独钉住。
     profile = {
-        'driver': 'codex', 'model': 'gpt-5.6-sol',
-        'reasoning_effort': 'high',
+        'provider': 'deepseek', 'model': 'deepseek-v4-pro',
+        'reasoning_effort': 'high', 'thinking_mode': 'on',
     }
     request = {
         'sid': '42', 'node': node, 'flags': list(flags),
-        'executor_backend': {'kind': 'agent', 'profile': profile},
+        'executor_backend': {'kind': 'legacy', 'profile': profile},
         'egress_authorized': True,
     }
     captured = {}
@@ -593,8 +596,8 @@ def test_executor_backend_is_identical_in_preview_and_start(
     assert started_start == preview_start
     resolved = preview_start['executor_backend']
     assert resolved == {
-        'kind': 'agent',
-        'profile': {**profile, 'execution_mode': 'standard'},
+        'kind': 'legacy',
+        'profile': profile,
     }
     assert len(preview_start['steps']) == step_count
     assert preview_start['steps'][0]['executor_backend'] == resolved
@@ -612,10 +615,10 @@ def test_executor_backend_is_identical_in_preview_and_start(
     assert [step.model_dump(mode='json') for step in expected_steps] == \
         preview_start['steps']
     argv = preview_start['steps'][0]['argv']
-    assert argv[argv.index('--executor-driver') + 1] == 'codex'
-    assert argv[argv.index('--executor-model') + 1] == 'gpt-5.6-sol'
-    assert argv[argv.index('--executor-effort') + 1] == 'high'
-    assert argv[argv.index('--executor-mode') + 1] == 'standard'
+    assert argv[argv.index('--legacy-provider') + 1] == 'deepseek'
+    assert argv[argv.index('--legacy-model') + 1] == 'deepseek-v4-pro'
+    assert argv[argv.index('--legacy-effort') + 1] == 'high'
+    assert argv[argv.index('--legacy-thinking') + 1] == 'on'
     assert '--allow-egress' in argv
     for follow in preview_start['steps'][1:]:
         assert follow['executor_backend'] is None

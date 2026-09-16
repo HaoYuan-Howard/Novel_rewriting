@@ -305,6 +305,11 @@ def _main(argv: list[str] | None = None) -> int:
                         )
                         else AgentExecutorBackend(profile=legacy_value)
                     )
+                # C2a 退役边界：执行面命中 agent backend 即显式终态——
+                # 这是含 agent 的历史执行 token 在执行时最后被拦下的一格。
+                from novel.orchestrator import retired_formats
+                retired_formats.refuse_agent_backend(
+                    f'节点 {args.node} 的执行', executor_backend)
                 supported = node_planner.EXECUTOR_PROFILED_RUNS.get(args.node, ())
                 if (isinstance(executor_backend, AgentExecutorBackend)
                         and tokens not in supported):
