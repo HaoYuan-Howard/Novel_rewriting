@@ -18,8 +18,9 @@ Stage 只读、Stage6 改选、上传幂等开跑）；TODO-50 已关闭。仍�
 已补 legacy 并从 `AGENT_ONLY` 移除（`stage6.prepare` 仍待）；Analyze `world_rules` 改为
 `WorldRuleExtract`→compiler→`WorldRuleDraft`；legacy `--recover-analyze` 可从 work_unit
 recovery 取回原回答。样本根 `E:\_novel_flash\fujun_extract`：characters/global 已正式落盘；
-`stage2.blueprint` 已过传输（prompt 含 json），卡在章级 PlotBlueprint 校验（ActorRef /
-states）。产品 UI 一点开始即双授权（CLI 保留 `--yes`）。
+`stage2.blueprint`：ActorRef 闭集（含空 surfaces 第一人称）、states XOR/holder、constraints
+observer 已对齐 wire；`fujun_extract` 11 章 Flash 蓝图已正式落盘（ch1 经免费 XOR 订正）。
+产品 UI 一点开始即双授权（CLI 保留 `--yes`）。
 
 ## P0 · 当前工程实施
 

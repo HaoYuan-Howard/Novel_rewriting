@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 
 import pytest
+from pydantic import ValidationError
 
 from contracts.schema.plot import (
     PlotAnchorBinding, PlotBlueprint, PlotChapterArrangement, PlotChapterResponse,
@@ -197,6 +198,46 @@ def test_literal_is_evidenced_and_claim_is_not_world_state():
     response['states'][0]['holder'] = None
     with pytest.raises(ValueError, match='明确持有者'):
         blueprint(response=response)
+
+
+def test_plot_state_response_rejects_content_global_ref_xor_violations():
+    from contracts.schema.plot import PlotStateResponse
+    base = {
+        'state_key': 'st1', 'modality': 'world', 'holder': None,
+        'established_at': {'kind': 'at_beat', 'beat_ref': 'b1'}, 'ended_at': None,
+        'supersedes_state_refs': [], 'evidence': [{'start_para': 1, 'end_para': 1}],
+    }
+    with pytest.raises(ValidationError, match='正文或共享主体引用之一'):
+        PlotStateResponse.model_validate({
+            **base, 'content': '两边都写', 'global_ref': {'kind': 'world_rule', 'ref': 'wr_01/v01'},
+        })
+    with pytest.raises(ValidationError, match='正文或共享主体引用之一'):
+        PlotStateResponse.model_validate({**base, 'content': None, 'global_ref': None})
+    with pytest.raises(ValidationError, match='客观状态不能带信念持有者'):
+        PlotStateResponse.model_validate({
+            **base, 'content': '客观事实', 'global_ref': None,
+            'holder': {'char_id': 'char_001'},
+        })
+
+
+def test_plot_relation_constraint_response_observer_only_for_observes():
+    from contracts.schema.plot import PlotRelationConstraintResponse
+    base = {
+        'constraint_key': 'c1', 'before_beat_ref': 'b1', 'after_beat_ref': 'b2',
+        'evidence': [{'start_para': 1, 'end_para': 1}],
+    }
+    with pytest.raises(ValidationError, match='仅观察约束携带明确观察者'):
+        PlotRelationConstraintResponse.model_validate({
+            **base, 'kind': 'response_to', 'observer': {'char_id': 'char_001'},
+        })
+    with pytest.raises(ValidationError, match='仅观察约束携带明确观察者'):
+        PlotRelationConstraintResponse.model_validate({
+            **base, 'kind': 'observes', 'observer': None,
+        })
+    ok = PlotRelationConstraintResponse.model_validate({
+        **base, 'kind': 'response_to', 'observer': None,
+    })
+    assert ok.observer is None
 
 
 def test_goals_require_correct_explicit_delivery():

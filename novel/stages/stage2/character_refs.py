@@ -119,8 +119,18 @@ def visible_character_refs_with_drops(
             and (not isinstance(characters[cid].get('first_chapter'), int)
                  or characters[cid]['first_chapter'] <= ordinal)
         }
+        # 已到首次出场章、但登记名尚未字面出现（常见于第一人称「我」）：
+        # 仍进入 ActorRef 闭集，surfaces 为空——可引用 char_id，不可造未证实的 binding surface。
+        for cid, row in characters.items():
+            first = row.get('first_chapter')
+            if cid in present:
+                continue
+            if isinstance(first, int) and first <= ordinal:
+                present[cid] = []
         by_signature: dict[frozenset[str], list[str]] = {}
         for cid, surfaces in present.items():
+            if not surfaces:
+                continue
             by_signature.setdefault(
                 frozenset(norm(surface) for surface in surfaces), []).append(cid)
         collisions = [sorted(cids) for cids in by_signature.values()

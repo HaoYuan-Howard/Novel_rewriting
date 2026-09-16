@@ -55,6 +55,52 @@ def test_visible_character_refs_never_leak_a_future_surface():
         'char_001': ['李宝珠'], 'char_002': ['母亲']}
 
 
+def test_first_person_enters_closed_set_with_empty_surfaces_before_name_attests():
+    """已到 first_chapter、登记名未字面出现：仍进 ActorRef 闭集，surfaces=[]。"""
+    characters = {
+        'char_001': {
+            'canonical': '芸娘', 'name_distinctiveness': 'distinct',
+            'first_chapter': 1,
+            'aliases': [{'surface': '芸娘', 'by': 'narration',
+                         'context': 'reference', 'identity_revealed_from': 1}],
+            'role': '略', 'fate': None,
+        },
+        'char_002': {
+            'canonical': '夫君', 'name_distinctiveness': 'generic',
+            'first_chapter': 1,
+            'aliases': [{'surface': '夫君', 'by': 'narration',
+                         'context': 'reference', 'identity_revealed_from': 1}],
+            'role': '略', 'fate': None,
+        },
+    }
+    mt = [
+        {'chapter_ordinal': 1, 'text': '我坐在床边，看着夫君叹气。'},
+        {'chapter_ordinal': 2, 'text': '夫君唤我一声芸娘。'},
+    ]
+    visible = visible_character_refs(characters, mt)
+    assert visible[1] == {'char_001': [], 'char_002': ['夫君']}
+    assert visible[2] == {'char_001': ['芸娘'], 'char_002': ['夫君']}
+
+
+def test_empty_surface_closed_set_member_survives_projection_roundtrip():
+    from novel.stages.stage2.character_refs import (
+        materialize_blueprint_character_projection,
+        blueprint_inventory_from_projection,
+    )
+    characters = {
+        'char_001': {
+            'canonical': '芸娘', 'name_distinctiveness': 'distinct',
+            'first_chapter': 1,
+            'aliases': [{'surface': '芸娘', 'identity_revealed_from': 1}],
+            'role': '略', 'fate': None,
+        },
+    }
+    mt = [{'chapter_ordinal': 1, 'text': '我推开门。'}]
+    projection = materialize_blueprint_character_projection(characters, mt)
+    inventory = blueprint_inventory_from_projection(projection)
+    assert inventory['visible_character_refs'][1] == {'char_001': []}
+    assert inventory['character_bindings'][1] == {'char_001': []}
+
 
 def test_visible_refs_do_not_grant_a_future_owner_of_an_already_seen_surface():
     """字面出现过不等于挂这个字面的所有人都已经可见。"""

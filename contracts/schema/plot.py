@@ -559,6 +559,18 @@ class PlotStateResponse(StrictModel):
     supersedes_state_refs: list[NonEmpty]
     evidence: list[ParagraphRange] = Field(min_length=1)
 
+    @model_validator(mode='after')
+    def _meaning(self) -> Self:
+        if (self.content is None) == (self.global_ref is None):
+            raise ValueError('持续状态只保存正文或共享主体引用之一')
+        if self.modality in ('belief', 'claim') and self.holder is None:
+            raise ValueError('相信或声称必须明确持有者')
+        if self.modality == 'world' and self.holder is not None:
+            raise ValueError('客观状态不能带信念持有者')
+        if self.ended_at is not None and self.ended_at.kind == 'at_entry':
+            raise ValueError('当前章的状态解除须指向具体节点')
+        return self
+
 
 class PlotRelationConstraintResponse(StrictModel):
     constraint_key: LocalConstraintKey
@@ -567,6 +579,14 @@ class PlotRelationConstraintResponse(StrictModel):
     after_beat_ref: LocalBeatKey
     observer: ActorRefResponse | None
     evidence: list[ParagraphRange] = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _observer(self) -> Self:
+        if (self.kind == 'observes') != (self.observer is not None):
+            raise ValueError('仅观察约束携带明确观察者')
+        if self.before_beat_ref == self.after_beat_ref:
+            raise ValueError('节点内部关系写在 content 中，不建立自环约束')
+        return self
 
 
 class PlotValueConstraintResponse(StrictModel):

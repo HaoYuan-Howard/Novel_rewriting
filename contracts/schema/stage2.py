@@ -485,8 +485,9 @@ class BlueprintCharacterBinding(StrictModel):
 
 
 class BlueprintCharacterProjectionChapter(StrictModel):
-    """某一章真正交给 Blueprint 的已现称名闭集。
+    """某一章真正交给 Blueprint 的 ActorRef 闭集与称名候选。
 
+    含已到 first_chapter、但登记名尚未字面出现的实体（surfaces 可为空）。
     只保存 Characters 中真实 prompt/validator 消费的称谓及身份映射时点。
     role、关系、秘密、设定与证据不进入本投影；审阅另按实际支持材料建立依赖。
     """

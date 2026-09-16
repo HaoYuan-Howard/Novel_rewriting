@@ -70,6 +70,14 @@ def owner_stop_proof(budget: work_units.WorkUnitBudget, ledger: WorkUnitLedgerV2
             if len(matches) != 1:
                 raise work_units.WorkUnitRefused('成本 owner 与原 producer 的 execution epoch 不闭合')
         if not turn.session_run_id:
+            # legacy 直连不建 agent session；内容轮已终态失败时仍须允许人工追加，
+            # 否则 Flash CLI 耗尽 4 次后会被永久卡住。在途/未知仍 fail-closed。
+            if turn.state in ('failed', 'rejected'):
+                if any(item.outcome in ('started', 'unknown', 'interrupted')
+                       for item in turn.attempts):
+                    raise work_units.WorkUnitRefused(
+                        '内容轮仍有未知或未结束的网络尝试，须先对账')
+                continue
             if any(item.outcome != 'not_started' for item in turn.attempts):
                 raise work_units.WorkUnitRefused('真实调用缺原会话身份，不能证明已安全结束')
             continue

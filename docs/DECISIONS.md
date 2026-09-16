@@ -7,6 +7,7 @@
 
 | 裁决时间 | 保留的决定与缘由 | 证据边界 / 当前落点 |
 |---|---|---|
+| 2026-09-16 | **Blueprint Flash 形状对齐**：已到 `first_chapter` 但登记名未字面出现的实体仍进 ActorRef 闭集（`surfaces=[]`，常见第一人称）；`PlotStateResponse`/`PlotRelationConstraintResponse` 与正式主体同判 XOR、holder、observer；legacy 直连耗尽后允许对终态 `failed` 轮追加额度（不要求 agent `session_run_id`）。`fujun_extract` 11 章 Flash 蓝图已落盘 | `novel/stages/stage2/{character_refs,plot_prompts}.py`；`contracts/schema/plot.py`；`novel/orchestrator/work_unit_evidence.py` |
 | 2026-09-16 | **Stage2 边界原则（字段渐进，不大拆目录）**：LLM 面默认语义 Extract；canonical IR 仅经确定性 compile。新字段按此加；`semantic/`/`canonical/`/`compile/` 整包重组留到 stage0–7 贯通且再撞过同类边界之后。已落地：`WorldRuleExtract`；legacy analyze 无 agent run 时 `--recover-analyze` 从 work_unit recovery/侧车取回原回答 | `docs/schema/stage2.md`；`novel/stages/stage2/{analyze,analyze_recovery,grounding}.py` |
 | 2026-09-16 | **Analyze world_rules：LLM Extract ≠ 持久化 Draft**：联合首抽 wire 改为 `WorldRuleExtract`（`kind/desc/revealed_from/evidence`），代码编译单版本 `WorldRuleDraft`（`effective_from=1` 领域默认）；多版本 `changes[]` 与窄 repair/normalizer 遇真实失败再加。正式 Global / typed 编辑仍用 Draft。同批：`name_distinctiveness` 接受模型同义 `low`→`common` | `contracts/schema/{knowledge,analyze,characters}.py`；`novel/stages/stage2/{grounding,analyze}.py` |
 | 2026-09-16 | **DeepSeek Flash 全链真跑开工**：取消 stage4 Pro 钉死；`stage2.analyze` 补 LlmClient legacy 并从 `AGENT_ONLY` 移除（`stage6.prepare` 仍 agent-only）；产品 UI 一点开始即双授权（CLI 保留单一 `--yes`）；《夫君的报恩》独立根 CLI 逐 stage 迭代至 stage0–7 贯通 | `contracts/invariants.py`；`novel/stages/stage2/analyze.py::run_legacy`；`docs/schema/{_orchestration,_api}.md` |
