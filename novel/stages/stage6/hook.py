@@ -666,8 +666,6 @@ class HookCandidateBatch:
     requested_model: str
     adopted_models: tuple[str, ...]
     adoptions: tuple[tuple[str, str], ...]
-    restored_acceptance: Mapping[str, Any] | None
-    agent_mode: bool
     _batch_sha256: str
 
 
@@ -829,8 +827,6 @@ def _batch(
         *, response: HookResponse, initially_dirty: Sequence[str],
         retry_history: Sequence[Mapping[str, object]], requested_model: str,
         adopted_models: Sequence[str], adoptions: Sequence[tuple[str, str]],
-        restored_acceptance: Mapping[str, Any] | None,
-        agent_mode: bool,
 ) -> HookCandidateBatch:
     payload = {
         'response': response.model_dump(by_alias=True, mode='json'),
@@ -839,10 +835,6 @@ def _batch(
         'requested_model': requested_model,
         'adopted_models': sorted(set(adopted_models)),
         'adoptions': [list(row) for row in adoptions],
-        'restored_acceptance': (
-            None if restored_acceptance is None
-            else dict(restored_acceptance)),
-        'agent_mode': agent_mode,
     }
     return HookCandidateBatch(
         response=response.model_copy(deep=True),
@@ -851,10 +843,6 @@ def _batch(
         requested_model=requested_model,
         adopted_models=tuple(sorted(set(adopted_models))),
         adoptions=tuple(adoptions),
-        restored_acceptance=(
-            None if restored_acceptance is None
-            else dict(restored_acceptance)),
-        agent_mode=agent_mode,
         _batch_sha256=_canonical_sha256(payload),
     )
 
@@ -1061,8 +1049,6 @@ def _legacy_hook_sequence(
         requested_model=source.model,
         adopted_models=adopted_models,
         adoptions=adoptions,
-        restored_acceptance=None,
-        agent_mode=False,
     )
 
 
@@ -1235,154 +1221,15 @@ def _write_agent_checkpoint(
     )
 
 
-def _agent_hook_candidates(
-        ctx: RunContext, source: _HookResponseSource,
-        prepared: HookCandidateContext,
-) -> HookCandidateBatch:
-    """Agent：同一 session/schema/purpose 逐槽接代码反馈并回完整 replacement。"""
-    required = (
-        'accepted_checkpoint', 'restore_checkpoint_acceptance',
-        'accepted_attempt', 'accepted_models',
-        'queue_code_validation_feedback',
-        'queue_restored_code_validation_feedback',
-    )
-    missing = [name for name in required if not callable(getattr(source, name, None))]
-    if missing:
-        raise ProvenanceRefused(
-            f'stage6.hook agent source 缺 checkpoint/session bridge {missing}；'
-            '已在首个 wire 前停止')
-    queue_feedback = getattr(source, 'queue_code_validation_feedback', None)
-    queue_restored_feedback = getattr(
-        source, 'queue_restored_code_validation_feedback', None)
-    from novel.llm import stage6_hook_runs
-
-    stage6_hook_runs.ensure_run(
-        ctx,
-        input_sha256=prepared.input_sha256,
-        system=prepared.system,
-        user=prepared.user,
-        response_model=HookResponse,
-        max_tokens=MAX_TOKENS,
-    )
-    restored = _restore_agent_checkpoint(ctx, source, prepared)
-    restored_only = restored is not None
-    restored_acceptance: dict[str, Any] | None = None
-    if restored is None:
-        current = source.ask_json(
-            prepared.system,
-            prepared.user,
-            model_cls=HookResponse,
-            purpose=ctx.node,
-            max_tokens=MAX_TOKENS,
-            recovery_policy=AGENT_RECOVERY_POLICY,
-        )
-        initial_rows = _normalized_candidate_rows(current, prepared._up)
-        dirty_indices = [
-            index for index, row in enumerate(initial_rows)
-            if _hard_candidate_findings(
-                row['findings'])  # type: ignore[arg-type]
-        ]
-        initially_dirty = tuple(
-            slot_of(index + 1) for index in dirty_indices)
-        _write_agent_checkpoint(
-            ctx, source, prepared, current,
-            initially_dirty=initially_dirty, revision_key='initial')
-    else:
-        current, initially_dirty = restored
-        restored_acceptance = dict(source.accepted_checkpoint(ctx.node))
-
-    # Agent 的轮次上限由 SessionAgentClient 统一掌管；producer 只关心总 HARD
-    # 是否继续严格下降。目标槽修掉一条 HARD 后若仍有 HARD，会在下一轮继续成为
-    # 最靠前的目标；legacy 局部 schema 同样只由共享内容预算与严格改善决定继续。
-    while True:
-        current_rows = _normalized_candidate_rows(current, prepared._up)
-        index = next((
-            position for position, row in enumerate(current_rows)
-            if _hard_candidate_findings(
-                row['findings'])  # type: ignore[arg-type]
-        ), None)
-        if index is None:
-            break
-        before = _hard_candidate_findings(
-            current_rows[index]['findings'])  # type: ignore[arg-type]
-        slot = slot_of(index + 1)
-        feedback = _agent_feedback(slot=slot, findings=before)
-        # checkpoint 只恢复 adoption 与已花轮次，绝不把历史 provider id 冒充
-        # live session。仍有预算时，以“完整旧 stdout + 安全规则元数据”为新
-        # provider session 首轮；普通进程内循环才 resume 当前 session。
-        queued = (
-            queue_restored_feedback(feedback, purpose=ctx.node)
-            if restored_only else
-            queue_feedback(feedback, purpose=ctx.node)
-        )
-        # SessionAgentClient 的恢复反馈桥已在新 provider start 前幂等结束旧
-        # session 为 ok/blocked；它此后不能再被正式交付分支结束第二次。
-        if restored_only:
-            restored_acceptance = None
-        if not queued:
-            break
-        try:
-            current = source.ask_json(
-                prepared.system,
-                prepared.user,
-                model_cls=HookResponse,
-                purpose=ctx.node,
-                max_tokens=MAX_TOKENS,
-                validator=_replacement_validator(
-                    current, target_index=index, up=prepared._up),
-                recovery_policy=AGENT_RECOVERY_POLICY,
-            )
-        except LlmFailed:
-            # wire/schema/dynamic validator 用尽剩余总预算时，最后一份已接受
-            # checkpoint 仍是唯一可终态化候选；driver 或尚有预算的异常不能
-            # 被旧候选掩盖，继续向 executor 抛出。
-            turns_used = getattr(source, 'turns_used', None)
-            max_semantic_turns = getattr(
-                source, 'max_semantic_turns', None)
-            exhausted = (
-                getattr(source, 'content_budget_exhausted', False) is True
-                or isinstance(turns_used, int) and not isinstance(turns_used, bool)
-                and isinstance(max_semantic_turns, int)
-                and not isinstance(max_semantic_turns, bool)
-                and turns_used >= max_semantic_turns
-            )
-            if bool(getattr(source, 'driver_failed', False)) or not exhausted:
-                raise
-            break
-        except (TerminalState, TransportError):
-            # SessionAgentClient 已把 schema/validator 失败留在成本与 gate 账；
-            # 这里保留上一份完整、可终态化的 replacement。
-            break
-        restored_only = False
-        _write_agent_checkpoint(
-            ctx, source, prepared, current,
-            initially_dirty=initially_dirty,
-            revision_key=f'repair:{slot}')
-
-    attempt_id = _accepted_attempt(source, ctx.node)
-    if attempt_id is None:
-        raise ProvenanceRefused(
-            'stage6.hook agent 完整 replacement 缺 accepted attempt')
-    return _batch(
-        response=current,
-        initially_dirty=initially_dirty,
-        retry_history=(),
-        requested_model=source.model,
-        adopted_models=source.accepted_models(ctx.node),
-        adoptions=((ctx.node, attempt_id),),
-        restored_acceptance=restored_acceptance,
-        agent_mode=True,
-    )
-
-
 def request_hook_candidates(
         ctx: RunContext, source: _HookResponseSource,
         prepared: HookCandidateContext,
 ) -> HookCandidateBatch:
-    """取得完整候选；全过程只在内存，不写 formal/INVALID、不结算 usage。"""
+    """取得完整候选；全过程只在内存，不写 formal/INVALID、不结算 usage。
+
+    直连路径:重放已完成的整组/逐槽内容进度,再继续尚未完成的机械修订。
+    """
     _assert_prepared_current(ctx, prepared)
-    if ctx.executor_profile is not None:
-        return _agent_hook_candidates(ctx, source, prepared)
     return _legacy_hook_candidates(ctx, source, prepared)
 
 
@@ -1394,10 +1241,6 @@ def _batch_identity(batch: HookCandidateBatch) -> str:
         'requested_model': batch.requested_model,
         'adopted_models': list(batch.adopted_models),
         'adoptions': [list(row) for row in batch.adoptions],
-        'restored_acceptance': (
-            None if batch.restored_acceptance is None
-            else dict(batch.restored_acceptance)),
-        'agent_mode': batch.agent_mode,
     })
 
 
@@ -1420,23 +1263,15 @@ def _materialize_hook_evaluation(
         'HOOK_SYS': prepared.system,
         'RULES': prov.rules_fingerprint('stage6'),
     }
-    if batch.initially_dirty and not batch.agent_mode:
+    if batch.initially_dirty:
         prompt_accounting['HOOK_RETRY_SYS'] = prompts.hook_retry_system()
-    params = (
-        HookParams(
-            max_tokens=MAX_TOKENS,
-            prompt_json_layout=prepared.prompt_json_layout,
-            candidate_retry_limit=0,
-        )
-        if batch.agent_mode else
-        HookParams(
-            max_tokens=MAX_TOKENS,
-            prompt_json_layout=prepared.prompt_json_layout,
-            candidate_retry_max_tokens=CANDIDATE_RETRY_MAX_TOKENS,
-            candidate_retry_limit=CANDIDATE_RETRY_LIMIT,
-            candidate_retry_effort=CANDIDATE_RETRY_RUNGS[0][0],
-            candidate_retry_thinking=CANDIDATE_RETRY_RUNGS[0][1],
-        )
+    params = HookParams(
+        max_tokens=MAX_TOKENS,
+        prompt_json_layout=prepared.prompt_json_layout,
+        candidate_retry_max_tokens=CANDIDATE_RETRY_MAX_TOKENS,
+        candidate_retry_limit=CANDIDATE_RETRY_LIMIT,
+        candidate_retry_effort=CANDIDATE_RETRY_RUNGS[0][0],
+        candidate_retry_thinking=CANDIDATE_RETRY_RUNGS[0][1],
     )
     artifact = Hook(
         lead_upto=prepared._up.upto,
@@ -1787,7 +1622,7 @@ def _restore_legacy_hook_delivery(
     batch = _batch(
         **{**proof['batch'], 'response': HookResponse.model_validate(proof['batch']['response']),
            'adoptions': [tuple(row) for row in proof['batch']['adoptions']]},
-        restored_acceptance=None, agent_mode=False)
+)
     if batch._batch_sha256 != proof['batch_sha256']:
         raise ProvenanceRefused('Hook 完成批次内容身份漂移')
     target_json = proof.get('target_json')
@@ -2018,98 +1853,6 @@ def _formal_target_state(
             ctx, journal, REL, expected_file_sha256=expected_sha)
 
 
-def _finalize_agent_formal(
-        ctx: RunContext, prepared: HookCandidateContext,
-        terminal: HookCandidateEvaluation,
-) -> Hook:
-    """prepared→write→readback→adoption→committed 的可恢复正式尾窗。"""
-    from novel.llm import stage6_hook_runs
-
-    artifact = terminal.candidate
-    payload = artifact.model_dump(by_alias=True, mode='json')
-    finalization = _hook_finalization_payload(prepared, terminal)
-    store = ArtifactStore(ctx)
-    journal = stage6_hook_runs.committed(ctx)
-    if journal is None:
-        journal = stage6_hook_runs.prepared(ctx)
-    if journal is None:
-        touched = [REL]
-        if store.exists(_INVALID):
-            touched.append(_INVALID)
-        attempt_id = (
-            terminal.adoptions[0][1]
-            if len(terminal.adoptions) == 1
-            and terminal.adoptions[0][0] == ctx.node else None)
-        if attempt_id is None:
-            raise ProvenanceRefused(
-                'stage6.hook 正式 agent 候选必须恰有当前 purpose adoption')
-        journal = stage6_hook_runs.prepare_commit(
-            ctx,
-            primary_payload=payload,
-            finalization_payload=finalization,
-            touched_paths=touched,
-            attempt_id=attempt_id,
-        )
-    elif (not stage6_hook_runs.verify_commit_primary(journal, payload)
-          or not stage6_hook_runs.verify_commit_finalization(
-              journal, finalization)):
-        raise ProvenanceRefused(
-            'stage6.hook commit journal 与最终候选/冻结输入漂移')
-
-    _assert_prepared_current(ctx, prepared)
-    formal_state = _formal_target_state(ctx, store, journal, artifact)
-    touched_paths = tuple(str(rel) for rel in journal['touched_paths'])
-    if _INVALID in touched_paths:
-        invalid_state = stage6_hook_runs.target_state(
-            ctx, journal, _INVALID, expected_absent=True)
-    else:
-        invalid_state = 'expected'
-        if store.exists(_INVALID):
-            raise ProvenanceRefused(
-                f'{_INVALID} 在 prepared 后由第三方出现；拒绝无 journal 删除')
-
-    if formal_state == 'baseline' or invalid_state == 'baseline':
-        _assert_prepared_current(ctx, prepared)
-        with store.history_transaction(REL):
-            store.write(REL, artifact)
-            _assert_prepared_current(ctx, prepared)
-            landed = verify_hook_delivery(ctx, prepared, artifact)
-    else:
-        landed = verify_hook_delivery(ctx, prepared, artifact)
-
-    landed_payload = landed.model_dump(by_alias=True, mode='json')
-    _assert_prepared_current(ctx, prepared)
-    adoption = stage6_hook_runs.restore_commit_adoption(ctx, journal)
-    _note_hook_adoptions(
-        ctx, rel=REL, artifact=landed, adoptions=(adoption,))
-    _assert_prepared_current(ctx, prepared)
-    stage6_hook_runs.mark_committed(
-        ctx,
-        primary_payload=landed_payload,
-        finalization_payload=finalization,
-        landed_payloads={REL: landed_payload},
-    )
-    _assert_prepared_current(ctx, prepared)
-    committed = stage6_hook_runs.committed(ctx)
-    if committed is None:
-        raise ProvenanceRefused(
-            'stage6.hook mark_committed 后没有 committed journal')
-    stage6_hook_runs.verify_committed_delivery(
-        ctx,
-        committed,
-        primary_payload=landed_payload,
-        finalization_payload=finalization,
-        landed_payloads={REL: landed_payload},
-    )
-    if terminal._batch.restored_acceptance is not None:
-        _finish_restored_hook_session(
-            ctx,
-            terminal._batch.restored_acceptance,
-            delivery_state='delivered',
-        )
-    return landed
-
-
 def finalize_hook_candidate(
         ctx: RunContext, source: _HookResponseSource,
         prepared: HookCandidateContext,
@@ -2126,37 +1869,11 @@ def finalize_hook_candidate(
         raise ProvenanceRefused('stage6.hook 评估后 requested model 漂移')
     if evaluation._batch._batch_sha256 != _batch_identity(evaluation._batch):
         raise ProvenanceRefused('stage6.hook 评估后的 candidate batch 被修改')
-    if evaluation._batch.agent_mode:
-        expected_attempt = (
-            evaluation.adoptions[0][1]
-            if len(evaluation.adoptions) == 1 else None)
-        if _accepted_attempt(source, ctx.node) != expected_attempt:
-            raise ProvenanceRefused(
-                'stage6.hook agent 最终完整 replacement 的 accepted attempt 漂移')
-        if source.accepted_models(ctx.node) != evaluation.adopted_models:
-            raise ProvenanceRefused(
-                'stage6.hook agent 最终完整 replacement 的 accepted model 漂移')
-
     from novel.llm import stage6_hook_runs
 
     with stage6_hook_runs.commit_ownership(ctx.novel_dir):
         stage6_hook_runs.refuse_foreign_commit_reservations(ctx)
         _assert_prepared_current(ctx, prepared)
-        if evaluation._batch.agent_mode:
-            existing = stage6_hook_runs.committed(ctx)
-            if existing is None:
-                existing = stage6_hook_runs.prepared(ctx)
-            provisional_payload = evaluation.candidate.model_dump(
-                by_alias=True, mode='json')
-            provisional_finalization = _hook_finalization_payload(
-                prepared, evaluation)
-            if (existing is not None
-                    and (not stage6_hook_runs.verify_commit_primary(
-                        existing, provisional_payload)
-                    or not stage6_hook_runs.verify_commit_finalization(
-                        existing, provisional_finalization))):
-                raise ProvenanceRefused(
-                    'stage6.hook 既有 commit journal 与 provisional 候选/输入漂移')
         terminal = _terminal_hook_evaluation(ctx, prepared, evaluation)
         artifact = terminal.candidate
         store = ArtifactStore(ctx)
@@ -2190,10 +1907,6 @@ def finalize_hook_candidate(
                 '（0 LLM、同轮重判并留不可变审计）',
                 invalid_path=str(path),
             )
-
-        if terminal._batch.agent_mode:
-            return _finalize_agent_formal(
-                ctx, prepared, terminal)
 
         _prepare_legacy_hook_delivery(ctx, source, prepared, terminal, store)
         with store.history_transaction(REL):

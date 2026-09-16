@@ -55,4 +55,5 @@ def test_hook_formal_provenance_has_an_explicit_layout_arm():
         max_tokens=1, prompt_json_layout='compact-v1').model_dump(
             mode='json')['prompt_json_layout'] == 'compact-v1'
     producer = inspect.getsource(hook._materialize_hook_evaluation)
-    assert producer.count('prompt_json_layout=prepared.prompt_json_layout') == 2
+    # C2b:agent/legacy 双 HookParams 分支收敛为直连单形后恰一次。
+    assert producer.count('prompt_json_layout=prepared.prompt_json_layout') == 1

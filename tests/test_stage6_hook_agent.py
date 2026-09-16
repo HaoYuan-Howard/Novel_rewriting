@@ -203,81 +203,6 @@ def _audit_rows(base: Path) -> list[dict]:
     ]
 
 
-def test_agent_replaces_full_response_in_one_session_and_commits(monkeypatch, tmp_path):
-    _patch_business(monkeypatch)
-    ctx = _ctx(tmp_path)
-    driver = _Driver([
-        _response('坏二候选甲'),
-        _response('修好候选甲。', rationale='修复后仍保持三槽各自身份。'),
-    ])
-
-    result = Stage6HookAgent(ctx, driver=driver, max_turns=3).run()
-
-    assert result.turns == 2
-    assert [kind for kind, _sid, _request in driver.calls] == ['start', 'resume']
-    assert driver.calls[1][1] == driver.session_id
-    assert driver.calls[0][2].cwd == driver.calls[1][2].cwd
-    assert driver.calls[0][2].system is not None
-    assert driver.calls[1][2].system is None
-    feedback = json.loads(driver.calls[1][2].prompt)
-    assert feedback['kind'] == 'code_validation_failed'
-    assert {tuple(sorted(row)) for row in feedback['failures']} == {
-        ('count', 'item', 'requirement', 'rule', 'slot')}
-    encoded = json.dumps(feedback, ensure_ascii=False)
-    assert '秘密甲' not in encoded and '秘密乙' not in encoded
-    assert 'detail' not in encoded and 'evidence' not in encoded
-
-    artifact = result.artifact
-    assert artifact.candidates[0].text == '修好候选甲。'
-    assert artifact.rationale == '修复后仍保持三槽各自身份。'
-    assert artifact.provenance.params.candidate_retry_limit == 0
-    assert artifact.provenance.candidate_retries == []
-    assert 'HOOK_RETRY_SYS' not in artifact.provenance.prompts
-    assert tuple(artifact.provenance.adopted_models) == ('gpt-5.6-sol',)
-    assert artifact.provenance.usage is not None
-    assert artifact.provenance.usage.calls_made == 2
-    assert len(_checkpoint_paths(ctx)) == 2
-    committed = stage6_hook_runs.committed(ctx)
-    assert committed is not None and committed['state'] == 'committed'
-    assert (ctx.novel_dir / hook.REL).is_file()
-    assert not (ctx.novel_dir / hook._INVALID).exists()
-    assert driver.close_calls == 1
-
-
-def test_agent_commit_preserves_non_idempotent_normalization_account(
-        monkeypatch, tmp_path):
-    upstream = _patch_business(monkeypatch)
-    upstream.src_hook = '「原作文案」。'
-
-    def production_normalize(text: str, _up) -> tuple[str, Mech, list]:
-        normalized, mech = hook.normalize_hook(
-            text, src_hook=upstream.src_hook)
-        return normalized, mech, []
-
-    monkeypatch.setattr(hook, '_normalize_and_judge', production_normalize)
-    raw_candidates = ('“候选甲”。', '“候选乙”。', '“候选丙”。')
-    normalized, first_mech, _findings = production_normalize(
-        raw_candidates[0], upstream)
-    again, second_mech, _findings = production_normalize(normalized, upstream)
-    assert normalized == again == '「候选甲」。'
-    assert first_mech.quotes_fixed == 2
-    assert second_mech.quotes_fixed == 0
-
-    ctx = _ctx(tmp_path)
-    driver = _Driver([_response(*raw_candidates)])
-    result = Stage6HookAgent(ctx, driver=driver, max_turns=1).run()
-
-    assert [candidate.text for candidate in result.artifact.candidates] == [
-        '「候选甲」。', '「候选乙」。', '「候选丙」。']
-    assert [candidate.mech.quotes_fixed
-            for candidate in result.artifact.candidates] == [2, 2, 2]
-    assert (ctx.novel_dir / hook.REL).is_file()
-    assert not (ctx.novel_dir / hook._INVALID).exists()
-    committed = stage6_hook_runs.committed(ctx)
-    assert committed is not None and committed['state'] == 'committed'
-    assert driver.close_calls == 1
-
-
 def test_full_replacement_validator_freezes_other_slots_and_requires_progress(
         monkeypatch):
     upstream = _patch_business(monkeypatch)
@@ -309,223 +234,6 @@ def test_full_replacement_validator_freezes_other_slots_and_requires_progress(
         validate(duplicate, SimpleNamespace()))
 
 
-def test_dirty_checkpoint_starts_new_provider_session_without_resetting_turns(
-        monkeypatch, tmp_path):
-    _patch_business(monkeypatch)
-    ctx = _ctx(tmp_path)
-    first_driver = _Driver([_response('坏二候选甲')], session_id='provider-old')
-    original_queue = SessionAgentClient.queue_code_validation_feedback
-
-    def crash_after_checkpoint(*_args, **_kwargs):
-        raise _SimulatedProcessExit('模拟 checkpoint 后、业务反馈入队前崩溃')
-
-    monkeypatch.setattr(
-        SessionAgentClient, 'queue_code_validation_feedback',
-        crash_after_checkpoint)
-    with pytest.raises(_SimulatedProcessExit, match='checkpoint 后'):
-        Stage6HookAgent(ctx, driver=first_driver, max_turns=3).run()
-    assert len(_checkpoint_paths(ctx)) == 1
-    assert not (ctx.novel_dir / hook.REL).exists()
-    assert not (ctx.novel_dir / hook._INVALID).exists()
-    assert not [
-        event for event in agent_session_audit.read_events(tmp_path)
-        if event.kind == 'ended'
-    ]
-    monkeypatch.setattr(
-        SessionAgentClient, 'queue_code_validation_feedback', original_queue)
-
-    # 第二次进程只走到 restored rejection 已幂等补账、尚未启动新 provider 就崩。
-    # 第三次再恢复时会补同一决定，但盘上必须仍只有一行。
-    replay = _ctx(tmp_path, run_id=ctx.run_id)
-    replay_driver = _Driver([], forbid_wire=True)
-    original_ask = SessionAgentClient.ask_json
-
-    def crash_after_restored_queue(*_args, **_kwargs):
-        raise RuntimeError('模拟 restored feedback 后、新 session 首轮前崩溃')
-
-    monkeypatch.setattr(
-        SessionAgentClient, 'ask_json', crash_after_restored_queue)
-    with pytest.raises(RuntimeError, match='新 session 首轮前'):
-        Stage6HookAgent(replay, driver=replay_driver, max_turns=3).run()
-    rejected = [
-        row for row in _audit_rows(tmp_path)
-        if row.get('kind') == 'gate_decision'
-        and row.get('node') == 'stage6.hook'
-        and row.get('decision') == 'rejected'
-        and row.get('gate') == 'validator'
-    ]
-    assert len(rejected) == 1 and rejected[0].get('gate_decision_id')
-    assert replay_driver.probe_calls == 0 and replay_driver.calls == []
-    assert replay_driver.close_calls == 1
-    old_ended = [
-        event for event in agent_session_audit.read_events(tmp_path)
-        if event.kind == 'ended'
-    ]
-    assert len(old_ended) == 1
-    assert (old_ended[0].provider_session_id,
-            old_ended[0].process_state,
-            old_ended[0].delivery_state,
-            old_ended[0].error_kind) == (
-                'provider-old', 'ok', 'blocked',
-                'checkpoint_business_rejected')
-    monkeypatch.setattr(SessionAgentClient, 'ask_json', original_ask)
-
-    restarted = _ctx(tmp_path, run_id=ctx.run_id)
-    second_driver = _Driver(
-        [_response('恢复后修好候选甲。')], session_id='provider-new')
-    result = Stage6HookAgent(
-        restarted, driver=second_driver, max_turns=3).run()
-
-    assert result.turns == 2, '历史已花的一轮不能在新 provider session 中重置'
-    assert [kind for kind, _sid, _request in first_driver.calls] == ['start']
-    assert [kind for kind, _sid, _request in second_driver.calls] == ['start']
-    recovery = json.loads(second_driver.calls[0][2].prompt)
-    assert recovery['kind'] == 'checkpoint_recovery_task'
-    assert isinstance(recovery['original_task'], str) and recovery['original_task']
-    feedback = recovery['recovery']
-    assert feedback['kind'] == 'checkpoint_recovery_validation_failed'
-    assert json.loads(feedback['previous_candidate'])['candidates'][0]['text'] == '坏二候选甲'
-    safe = json.dumps(feedback['failures'], ensure_ascii=False)
-    assert '秘密' not in safe and 'detail' not in safe and 'evidence' not in safe
-    assert len(_checkpoint_paths(restarted)) == 2
-    assert result.artifact.candidates[0].text == '恢复后修好候选甲。'
-    rejected_after_replay = [
-        row for row in _audit_rows(tmp_path)
-        if row.get('kind') == 'gate_decision'
-        and row.get('node') == 'stage6.hook'
-        and row.get('decision') == 'rejected'
-        and row.get('gate') == 'validator'
-    ]
-    assert len(rejected_after_replay) == 1
-    ended = [
-        event for event in agent_session_audit.read_events(tmp_path)
-        if event.kind == 'ended'
-    ]
-    assert len(ended) == 2
-    assert sum(event.provider_session_id == 'provider-old' for event in ended) == 1
-    assert next(
-        event for event in ended
-        if event.provider_session_id == 'provider-new'
-    ).delivery_state == 'delivered'
-    assert first_driver.close_calls == second_driver.close_calls == 1
-
-
-def test_prepared_commit_tail_recovers_without_probe_or_model_call(
-        monkeypatch, tmp_path):
-    _patch_business(monkeypatch)
-    ctx = _ctx(tmp_path)
-    first_driver = _Driver([_response('一次即合格候选甲。')])
-    real_mark = stage6_hook_runs.mark_committed
-
-    def crash_before_committed(*_args, **_kwargs):
-        raise _SimulatedProcessExit('模拟 adoption 后、committed 前崩溃')
-
-    monkeypatch.setattr(stage6_hook_runs, 'mark_committed', crash_before_committed)
-    with pytest.raises(_SimulatedProcessExit, match='committed 前'):
-        Stage6HookAgent(ctx, driver=first_driver, max_turns=2).run()
-    assert (ctx.novel_dir / hook.REL).is_file()
-    assert stage6_hook_runs.prepared(ctx) is not None
-    assert not [
-        event for event in agent_session_audit.read_events(tmp_path)
-        if event.kind == 'ended'
-    ]
-    monkeypatch.setattr(stage6_hook_runs, 'mark_committed', real_mark)
-
-    restarted = _ctx(tmp_path, run_id=ctx.run_id)
-    forbidden = _Driver([], forbid_wire=True)
-    result = Stage6HookAgent(
-        restarted, driver=forbidden, max_turns=2).run()
-
-    assert result.turns == 1
-    assert forbidden.probe_calls == 0 and forbidden.calls == []
-    assert forbidden.close_calls == 1
-    assert stage6_hook_runs.prepared(restarted) is None
-    assert stage6_hook_runs.committed(restarted) is not None
-    adoptions = [
-        row for row in _audit_rows(tmp_path)
-        if row.get('kind') == 'artifact_adoption'
-        and row.get('node') == 'stage6.hook'
-    ]
-    assert len(adoptions) == 1, '尾窗重跑必须按 adoption_id 幂等'
-    ended = [
-        event for event in agent_session_audit.read_events(tmp_path)
-        if event.kind == 'ended'
-    ]
-    assert len(ended) == 1
-    assert (ended[0].provider_session_id, ended[0].process_state,
-            ended[0].delivery_state, ended[0].error_kind) == (
-                'provider-hook', 'ok', 'delivered', None)
-
-    # committed 尾窗再恢复一次只复核公共 bridge，不重复 adoption/ended。
-    replayed = _ctx(tmp_path, run_id=ctx.run_id)
-    second_forbidden = _Driver([], forbid_wire=True)
-    Stage6HookAgent(
-        replayed, driver=second_forbidden, max_turns=2).run()
-    assert second_forbidden.probe_calls == 0 and second_forbidden.calls == []
-    assert len([
-        event for event in agent_session_audit.read_events(tmp_path)
-        if event.kind == 'ended'
-    ]) == 1
-
-
-def test_exhausted_bad_candidates_write_only_invalid_and_end_blocked(
-        monkeypatch, tmp_path):
-    _patch_business(monkeypatch)
-    ctx = _ctx(tmp_path)
-    driver = _Driver([_response(
-        '坏候选甲', '坏候选乙', '坏候选丙')])
-
-    with pytest.raises(GateBlocked, match='每一条'):
-        Stage6HookAgent(ctx, driver=driver, max_turns=1).run()
-
-    assert not (ctx.novel_dir / hook.REL).exists()
-    assert (ctx.novel_dir / hook._INVALID).is_file()
-    assert len(_checkpoint_paths(ctx)) == 1
-    assert not (paths.stage6_hook_run_path(
-        ctx.novel_dir, ctx.run_id) / agent_runs.COMMIT_FILE).exists()
-    assert not [
-        row for row in _audit_rows(tmp_path)
-        if row.get('kind') == 'artifact_adoption'
-    ]
-    ended = [
-        event for event in agent_session_audit.read_events(tmp_path)
-        if event.kind == 'ended'
-    ]
-    assert len(ended) == 1
-    assert (ended[0].process_state, ended[0].delivery_state,
-            ended[0].error_kind) == (
-                'ok', 'blocked', 'artifact_validation')
-    assert driver.close_calls == 1
-
-
-def _hook_envelope(ctx: RunContext, *, state: str) -> dict:
-    record = {key: None for key in agent_runs._COMMIT_FIELDS}
-    record.update({
-        'version': agent_runs.VERSION,
-        'state': state,
-        'prepared_at': 'test',
-        'committed_at': ('test' if state == 'committed' else None),
-        'run_id': ctx.run_id,
-        'sid': ctx.sid,
-        'node': 'stage6.hook',
-        'code': ctx.code,
-        'run_sha256': 'a' * 64,
-        'primary_artifact': hook.REL,
-        'primary_payload_sha256': 'b' * 64,
-        'primary_payload_fingerprint': 'c' * 10,
-        'finalization_sha256': 'd' * 64,
-        'touched_paths': [hook.REL],
-        'baselines': {hook.REL: None},
-        'purpose': 'stage6.hook',
-        'attempt_id': 'a' * 16,
-        'request_identity': {},
-        'landed_payload_sha256s': None,
-        'post_file_sha256s': None,
-    })
-    record['commit_sha256'] = agent_runs._commit_hash(record)
-    return record
-
-
 def test_hook_refuses_foreign_prepared_and_damage_but_ignores_committed(tmp_path):
     """另一 hook run 的 prepared 尾窗必须先由原 run 补完；committed 不挡、损坏拒绝。
 
@@ -553,3 +261,30 @@ def test_hook_refuses_foreign_prepared_and_damage_but_ignores_committed(tmp_path
     with stage6_hook_runs.commit_ownership(ctx.novel_dir):
         with pytest.raises(ArtifactUnreadable, match='哈希不闭合'):
             stage6_hook_runs.refuse_foreign_commit_reservations(ctx)
+
+def _hook_envelope(ctx: RunContext, *, state: str) -> dict:
+    record = {key: None for key in agent_runs._COMMIT_FIELDS}
+    record.update({
+        'version': agent_runs.VERSION,
+        'state': state,
+        'prepared_at': 'test',
+        'committed_at': ('test' if state == 'committed' else None),
+        'run_id': ctx.run_id,
+        'sid': ctx.sid,
+        'node': 'stage6.hook',
+        'code': ctx.code,
+        'run_sha256': 'a' * 64,
+        'primary_artifact': hook.REL,
+        'primary_payload_sha256': 'b' * 64,
+        'primary_payload_fingerprint': 'c' * 10,
+        'finalization_sha256': 'd' * 64,
+        'touched_paths': [hook.REL],
+        'baselines': {hook.REL: None},
+        'purpose': 'stage6.hook',
+        'attempt_id': 'a' * 16,
+        'request_identity': {},
+        'landed_payload_sha256s': None,
+        'post_file_sha256s': None,
+    })
+    record['commit_sha256'] = agent_runs._commit_hash(record)
+    return record
