@@ -1,13 +1,11 @@
-import { missingPrepareState } from '@/test/prepare'
 import { api } from '@/api/endpoints'
-import { screen, within } from '@testing-library/react'
+import { screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { renderRoute } from '@/test/render'
-import type { ApprovalDoc } from '@/types/approvals'
 import { Stage1Screen } from './Stage1Screen'
 
 describe('Stage1Screen 信息与操作布局', () => {
-  it('只展示一份开篇文案，并把校验与确认合并到正文之前', async () => {
+  it('只读展示切分结果与校验，不提供确认切分写面', async () => {
     vi.spyOn(api, 'getStage1').mockResolvedValue({
       segments: [
         {
@@ -37,53 +35,15 @@ describe('Stage1Screen 信息与操作布局', () => {
       ],
       anomaly_count: 0,
     })
-    vi.spyOn(api, 'getApprovals').mockResolvedValue({
-      v: 9, prepare: missingPrepareState(),
-      sid: 'book-1',
-      gate: {
-        s0: true,
-        s1: false,
-        s4: false,
-        s5: false,
-        s6: false,
-        s7: false,
-      },
-      writing: false,
-      design_review: {
-        state: 'unavailable', candidate_sha256: null, aggregate_subject_sha256: null,
-        current_decision: null, history: [], binding_infeasibility: null,
-        preflight: null, repair_capability: null,
-      },
-      structure: {
-        state: 'unavailable', current_subject_sha256: null,
-        current_decision: null, history: [], binding_concerns: [],
-      },
-      writing_approval: {
-        available: false, current_subject_sha256: null, current_decision: null, history: [],
-      },
-      closure: {
-        state: 'missing', workpack: null, next_step: null, current_decision: null, history: [],
-      },
-      spawns: {},
-    } satisfies ApprovalDoc)
     renderRoute(<Stage1Screen />, '/n/book-1/stage1')
 
     expect(await screen.findByText('原文切分结果')).toBeVisible()
     expect(screen.getAllByText('开篇文案')).toHaveLength(1)
-    expect(screen.queryByText('完整 clean_text')).not.toBeInTheDocument()
-    expect(screen.queryByText(/这里是 Stage 0 批准后的完整/)).not.toBeInTheDocument()
-    expect(screen.queryByText(/input sha1/)).not.toBeInTheDocument()
-    expect(screen.queryByText(/服务端连续分区/)).not.toBeInTheDocument()
-    expect(screen.queryByText(/没有前端二次切字/)).not.toBeInTheDocument()
-    expect(screen.queryByText('这一层的判据全部验过且通过。')).not.toBeInTheDocument()
-    expect(screen.queryByText(/每条都带「扫过什么」/)).not.toBeInTheDocument()
-    expect(screen.queryByText('确认后会发起：')).not.toBeInTheDocument()
+    expect(screen.getByText('只读切分结果')).toBeVisible()
+    expect(screen.getByRole('group', { name: 'Stage1 校验' })).toBeVisible()
+    expect(screen.queryByRole('button', { name: '确认切分' })).not.toBeInTheDocument()
     expect(screen.queryByText('这一刀切对了吗？')).not.toBeInTheDocument()
-
-    const controls = screen.getByRole('group', { name: 'Stage1 校验与切分确认' })
-    expect(await within(controls).findByRole('button', { name: '确认切分' })).toBeVisible()
-    const result = screen.getByText('原文切分结果')
-    expect(controls.compareDocumentPosition(result) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect('partitionStage1' in api).toBe(false)
   })
 
   it('把重号、缺号与倒退作为显式章号异常提示，不折进查过没问题', async () => {
@@ -112,28 +72,6 @@ describe('Stage1Screen 信息与操作布局', () => {
       ],
       anomaly_count: 3,
     })
-    vi.spyOn(api, 'getApprovals').mockResolvedValue({
-      v: 9, prepare: missingPrepareState(),
-      sid: 'book-1',
-      gate: { s0: true, s1: false, s4: false, s5: false, s6: false, s7: false },
-      writing: false,
-      design_review: {
-        state: 'unavailable', candidate_sha256: null, aggregate_subject_sha256: null,
-        current_decision: null, history: [], binding_infeasibility: null,
-        preflight: null, repair_capability: null,
-      },
-      structure: {
-        state: 'unavailable', current_subject_sha256: null,
-        current_decision: null, history: [], binding_concerns: [],
-      },
-      writing_approval: {
-        available: false, current_subject_sha256: null, current_decision: null, history: [],
-      },
-      closure: {
-        state: 'missing', workpack: null, next_step: null, current_decision: null, history: [],
-      },
-      spawns: {},
-    } satisfies ApprovalDoc)
 
     renderRoute(<Stage1Screen />, '/n/book-1/stage1')
 
@@ -143,35 +81,13 @@ describe('Stage1Screen 信息与操作布局', () => {
     expect(screen.getByText('章号倒退（差值 -2）')).toBeVisible()
   })
 
-  it('正文接口失败时仍保留校验与确认恢复面', async () => {
+  it('正文接口失败时仍保留只读校验面', async () => {
     vi.spyOn(api, 'getStage1').mockRejectedValue(new Error('正文接口读取失败'))
-    vi.spyOn(api, 'getApprovals').mockResolvedValue({
-      v: 9, prepare: missingPrepareState(),
-      sid: 'book-1',
-      gate: { s0: true, s1: false, s4: false, s5: false, s6: false, s7: false },
-      writing: false,
-      design_review: {
-        state: 'unavailable', candidate_sha256: null, aggregate_subject_sha256: null,
-        current_decision: null, history: [], binding_infeasibility: null,
-        preflight: null, repair_capability: null,
-      },
-      structure: {
-        state: 'unavailable', current_subject_sha256: null,
-        current_decision: null, history: [], binding_concerns: [],
-      },
-      writing_approval: {
-        available: false, current_subject_sha256: null, current_decision: null, history: [],
-      },
-      closure: {
-        state: 'missing', workpack: null, next_step: null, current_decision: null, history: [],
-      },
-      spawns: {},
-    } satisfies ApprovalDoc)
 
     renderRoute(<Stage1Screen />, '/n/book-1/stage1')
 
-    const controls = screen.getByRole('group', { name: 'Stage1 校验与切分确认' })
-    expect(await within(controls).findByRole('button', { name: '确认切分' })).toBeVisible()
+    expect(screen.getByRole('group', { name: 'Stage1 校验' })).toBeVisible()
+    expect(screen.queryByRole('button', { name: '确认切分' })).not.toBeInTheDocument()
     expect(await screen.findByText(/正文接口读取失败/)).toBeVisible()
   })
 })

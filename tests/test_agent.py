@@ -653,7 +653,7 @@ def test_ready_token_runs_the_canonical_child_and_new_epochs_have_no_commander_c
     [ended] = [row for row in events if row.kind == 'ended']
     assert ended.exit_code == 2
     assert ended.outcome is not None and ended.outcome.state == 'stopped'
-    assert '停在人工审批闸' in ended.outcome.reason
+    assert '停在阻断面' in ended.outcome.reason
     # Commander 行不再写入：executor-only 派发不落 commander 会话/成本行。
     assert agent_session_audit.read_events(base) == []
     ledger = Path(base) / '_service' / 'ledger.jsonl'
@@ -679,7 +679,8 @@ def test_approval_gate_stop_reports_the_blocker_and_human_next_handler(
     assert done.exit_code == 2 and done.state == 'stopped'
     assert done.outcome is not None and done.outcome.state == 'stopped'
     assert done.outcome.reason == (
-        '停在人工审批闸：stage0.approve；在 Stage 页面完成裁决后用原配置续跑')
+        '停在阻断面：stage0.approve；按该 waiting_on 对应恢复入口收口后'
+        '用原配置续跑')
     events = [row for row in agent.read_events(base) if row.run_id == rec.run_id]
     [closed] = [row for row in events if row.kind == 'epoch_closed']
     assert closed.exit_code == 2 and closed.drain_state == 'drained'
@@ -798,7 +799,7 @@ def test_unregistered_deterministic_blocker_keeps_epoch_and_parent_end_in_sync(
     [ended] = [row for row in events if row.kind == 'ended']
     assert closed.exit_code == ended.exit_code == 2
     assert ended.outcome is not None and ended.outcome.state == 'stopped'
-    assert '停在人工审批闸' in ended.outcome.reason
+    assert '停在阻断面' in ended.outcome.reason
 
 
 def test_fresh_epoch_blocker_child_uses_fresh_epoch_as_producer_run(

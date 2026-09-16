@@ -234,11 +234,13 @@ def test_start_list_log_and_stop_gate(client, monkeypatch, tmp_path):
     run_id = started['run_id']
     assert agent.wait(run_id, 15)
 
-    # 单个 ready 动作跑完后，盘面停在人工审批闸 ⇒ exit 2 stopped。
+    # 单个 ready 动作跑完后，盘面停在阻断面（现役 HUMAN_NODES 为空；
+    # stage0.approve 等旧闸名只作 waiting_on 标签，走恢复入口而非人工审批话术）。
     runs = c.get('/api/agent/runs?sid=42').json()['runs']
     assert [row['state'] for row in runs] == ['stopped']
     assert runs[0]['exit_code'] == 2
-    assert '停在人工审批闸' in runs[0]['outcome']['reason']
+    assert '停在阻断面' in runs[0]['outcome']['reason']
+    assert '停在人工审批闸' not in runs[0]['outcome']['reason']
     assert c.get('/api/agent/runs?sid=other').json()['runs'] == []
 
     log = c.get(f'/api/agent/runs/{run_id}/log?offset=0').json()

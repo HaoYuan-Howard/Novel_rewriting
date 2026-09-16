@@ -236,7 +236,6 @@ def test_hook_revision_preserves_real_blind_request_and_existing_body_approvals(
     from novel.stages.stage4 import plan
     from tests.test_plot_design import produce_through_first_chapter
     from tests.test_plot_pipeline import complete_stage5, grounded_global
-    from tests.test_stage6_prepare_http import _revise_source_hook
 
     book = produce_through_first_chapter(tmp_path, monkeypatch, distributed=True, grounding=grounded_global())
     complete_stage5(book)
@@ -255,7 +254,8 @@ def test_hook_revision_preserves_real_blind_request_and_existing_body_approvals(
     body_bytes = {rel: raw for rel, raw in snapshot(book).items()
                   if rel.split('/')[0] in {'stage2', 'stage4', 'stage5'}}
     ledger = ctx.ledger.path.read_bytes()
-    _revise_source_hook(book, tmp_path / 'hook_change.txt', '父亲已经回城的消息随信送到。')
+    # prepare HTTP 的源钩子修订 helper 已随 edit 写面退役；改走现役机器换稿。
+    change_source(book, tmp_path)
     assert surfaces() == old
     assert approvals._path(base, sid).read_bytes() == approval_bytes
     assert {rel: raw for rel, raw in snapshot(book).items()

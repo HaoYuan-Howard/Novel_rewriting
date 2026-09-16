@@ -7022,6 +7022,11 @@
       "resume",
       "stop"
     ],
+    "upload_autostart_outcomes": [
+      "started",
+      "skipped_stage0_failed",
+      "replay"
+    ],
     "agent_run_exit_origins": [
       "novel_cli",
       "commander",
@@ -7654,7 +7659,7 @@
       "--dry-run": "只打印将要发出去的东西，不调用、不写盘",
       "--check-only": "按当前判据复检存量产物，纯读不写盘；报 FAIL 退出码非零",
       "--recheck": "按当前判据重判存量产物并写回指标",
-      "--revalidate": "按当前判据对 .INVALID 稿做 0 LLM 同轮重判，必填 actor/reason 并留不可变审计，合格才提升",
+      "--revalidate": "按当前判据对 .INVALID 稿做 0 LLM 同轮重判；批次 C 起由队列以 system:invalid-revalidate 自动排入，必填 actor/reason 并留不可变审计，合格才提升；Stage 页不再发布该用户入口",
       "--renormalize": "按当前契约重算代码派生字段与原文定位",
       "--names-only": "只产逐章可用名册（stage4），不产计划",
       "--identity": "恒等基线：拿原作自己的东西跑整套判据，看判据有没有把合法情况排除在外",
@@ -8715,19 +8720,6 @@
       },
       {
         "kind": "stage2.analyze",
-        "label": "stage2 联合语义分析（共享首抽） --response-repair",
-        "extra": [
-          "--response-repair"
-        ],
-        "paid": true,
-        "free_flag": null,
-        "writes": "stage2/analyze_receipt.json",
-        "writes_disk": true,
-        "needs_value": "结构化拒绝响应恢复模式；当前只接受 `agent`。可修复响应先隔离并停给外层受托 agent，同闸复验失败才继续采样",
-        "required_inputs": []
-      },
-      {
-        "kind": "stage2.analyze",
         "label": "stage2 联合语义分析（共享首抽） --recover-analyze-run",
         "extra": [
           "--recover-analyze-run"
@@ -8762,28 +8754,6 @@
         "writes_disk": false,
         "needs_value": null,
         "required_inputs": []
-      },
-      {
-        "kind": "stage2.characters",
-        "label": "stage2 静态人物登记 --revalidate",
-        "extra": [
-          "--revalidate"
-        ],
-        "paid": false,
-        "free_flag": "--revalidate",
-        "writes": "必填 actor/reason；0 LLM 同轮重判并留不可变审计，合格的 .INVALID 才提升，旧稿归档进 _rounds/",
-        "writes_disk": true,
-        "needs_value": null,
-        "required_inputs": [
-          {
-            "flag": "--actor",
-            "description": "人工决定的自报身份（不是认证身份）"
-          },
-          {
-            "flag": "--reason",
-            "description": "人工决定的非空理由"
-          }
-        ]
       },
       {
         "kind": "stage2.characters",
@@ -8835,41 +8805,6 @@
       },
       {
         "kind": "stage2.characters",
-        "label": "stage2 静态人物登记 --emit-analyze-draft-template",
-        "extra": [
-          "--emit-analyze-draft-template"
-        ],
-        "paid": false,
-        "free_flag": "--emit-analyze-draft-template",
-        "writes": "",
-        "writes_disk": false,
-        "needs_value": null,
-        "required_inputs": []
-      },
-      {
-        "kind": "stage2.characters",
-        "label": "stage2 静态人物登记 --repair-analyze-draft",
-        "extra": [
-          "--repair-analyze-draft"
-        ],
-        "paid": false,
-        "free_flag": "--repair-analyze-draft",
-        "writes": "保存独立 owner 草稿修复 WAL 并物化正式或 INVALID 产物",
-        "writes_disk": true,
-        "needs_value": "当前书或 SID 服务目录中的 AnalyzeOwnerDraftEdit v1 文件",
-        "required_inputs": [
-          {
-            "flag": "--actor",
-            "description": "人工决定的自报身份（不是认证身份）"
-          },
-          {
-            "flag": "--reason",
-            "description": "人工决定的非空理由"
-          }
-        ]
-      },
-      {
-        "kind": "stage2.characters",
         "label": "stage2 静态人物登记 --recover-analyze-draft",
         "extra": [
           "--recover-analyze-draft"
@@ -8879,19 +8814,6 @@
         "writes": "按原 owner 草稿修复 WAL 补齐当前目标和审阅",
         "writes_disk": true,
         "needs_value": null,
-        "required_inputs": []
-      },
-      {
-        "kind": "stage2.characters",
-        "label": "stage2 静态人物登记 --response-repair",
-        "extra": [
-          "--response-repair"
-        ],
-        "paid": true,
-        "free_flag": null,
-        "writes": "stage2/characters.json · stage2/blueprint_character_projection.json",
-        "writes_disk": true,
-        "needs_value": "结构化拒绝响应恢复模式；当前只接受 `agent`。可修复响应先隔离并停给外层受托 agent，同闸复验失败才继续采样",
         "required_inputs": []
       },
       {
@@ -8933,28 +8855,6 @@
       },
       {
         "kind": "stage2.global",
-        "label": "stage2 全书级抽取 --revalidate",
-        "extra": [
-          "--revalidate"
-        ],
-        "paid": false,
-        "free_flag": "--revalidate",
-        "writes": "必填 actor/reason；0 LLM 同轮重判并留不可变审计，合格的 .INVALID 才提升，旧稿归档进 _rounds/",
-        "writes_disk": true,
-        "needs_value": null,
-        "required_inputs": [
-          {
-            "flag": "--actor",
-            "description": "人工决定的自报身份（不是认证身份）"
-          },
-          {
-            "flag": "--reason",
-            "description": "人工决定的非空理由"
-          }
-        ]
-      },
-      {
-        "kind": "stage2.global",
         "label": "stage2 全书级抽取 --apply-edit",
         "extra": [
           "--apply-edit"
@@ -8981,41 +8881,6 @@
       },
       {
         "kind": "stage2.global",
-        "label": "stage2 全书级抽取 --emit-analyze-draft-template",
-        "extra": [
-          "--emit-analyze-draft-template"
-        ],
-        "paid": false,
-        "free_flag": "--emit-analyze-draft-template",
-        "writes": "",
-        "writes_disk": false,
-        "needs_value": null,
-        "required_inputs": []
-      },
-      {
-        "kind": "stage2.global",
-        "label": "stage2 全书级抽取 --repair-analyze-draft",
-        "extra": [
-          "--repair-analyze-draft"
-        ],
-        "paid": false,
-        "free_flag": "--repair-analyze-draft",
-        "writes": "保存独立 owner 草稿修复 WAL 并物化正式或 INVALID 产物",
-        "writes_disk": true,
-        "needs_value": "当前书或 SID 服务目录中的 AnalyzeOwnerDraftEdit v1 文件",
-        "required_inputs": [
-          {
-            "flag": "--actor",
-            "description": "人工决定的自报身份（不是认证身份）"
-          },
-          {
-            "flag": "--reason",
-            "description": "人工决定的非空理由"
-          }
-        ]
-      },
-      {
-        "kind": "stage2.global",
         "label": "stage2 全书级抽取 --recover-analyze-draft",
         "extra": [
           "--recover-analyze-draft"
@@ -9038,19 +8903,6 @@
         "writes": "",
         "writes_disk": false,
         "needs_value": null,
-        "required_inputs": []
-      },
-      {
-        "kind": "stage2.global",
-        "label": "stage2 全书级抽取 --response-repair",
-        "extra": [
-          "--response-repair"
-        ],
-        "paid": true,
-        "free_flag": null,
-        "writes": "stage2/global_grounding.json",
-        "writes_disk": true,
-        "needs_value": "结构化拒绝响应恢复模式；当前只接受 `agent`。可修复响应先隔离并停给外层受托 agent，同闸复验失败才继续采样",
         "required_inputs": []
       },
       {
@@ -9153,41 +9005,6 @@
         "writes": "把人工稿落成新的一版，上一版归档进 _rounds/",
         "writes_disk": true,
         "needs_value": "人工改好的候选稿路径（必填；相对路径相对**书目录**；绝对路径由节点校验，Stage5 额外接受服务上传的 _service/edits 路径）",
-        "required_inputs": []
-      },
-      {
-        "kind": "stage2.blueprint",
-        "label": "stage2 逐章抽取 --revalidate",
-        "extra": [
-          "--revalidate"
-        ],
-        "paid": false,
-        "free_flag": "--revalidate",
-        "writes": "必填 actor/reason；0 LLM 同轮重判并留不可变审计，合格的 .INVALID 才提升，旧稿归档进 _rounds/",
-        "writes_disk": true,
-        "needs_value": null,
-        "required_inputs": [
-          {
-            "flag": "--actor",
-            "description": "人工决定的自报身份（不是认证身份）"
-          },
-          {
-            "flag": "--reason",
-            "description": "人工决定的非空理由"
-          }
-        ]
-      },
-      {
-        "kind": "stage2.blueprint",
-        "label": "stage2 逐章抽取 --response-repair",
-        "extra": [
-          "--response-repair"
-        ],
-        "paid": true,
-        "free_flag": null,
-        "writes": "stage2/chapter_blueprints.json",
-        "writes_disk": true,
-        "needs_value": "结构化拒绝响应恢复模式；当前只接受 `agent`。可修复响应先隔离并停给外层受托 agent，同闸复验失败才继续采样",
         "required_inputs": []
       },
       {
@@ -9294,19 +9111,6 @@
         ]
       },
       {
-        "kind": "stage4.design",
-        "label": "stage4 盲场景设计 --response-repair",
-        "extra": [
-          "--response-repair"
-        ],
-        "paid": true,
-        "free_flag": null,
-        "writes": "stage4/blind_candidate.json",
-        "writes_disk": true,
-        "needs_value": "结构化拒绝响应恢复模式；当前只接受 `agent`。可修复响应先隔离并停给外层受托 agent，同闸复验失败才继续采样",
-        "required_inputs": []
-      },
-      {
         "kind": "stage4.plan",
         "label": "stage4 证据绑定与计划编译",
         "extra": null,
@@ -9376,28 +9180,6 @@
       },
       {
         "kind": "stage4.plan",
-        "label": "stage4 证据绑定与计划编译 --revalidate",
-        "extra": [
-          "--revalidate"
-        ],
-        "paid": false,
-        "free_flag": "--revalidate",
-        "writes": "必填 actor/reason；0 LLM 同轮重判并留不可变审计，合格的 .INVALID 才提升，旧稿归档进 _rounds/",
-        "writes_disk": true,
-        "needs_value": null,
-        "required_inputs": [
-          {
-            "flag": "--actor",
-            "description": "人工决定的自报身份（不是认证身份）"
-          },
-          {
-            "flag": "--reason",
-            "description": "人工决定的非空理由"
-          }
-        ]
-      },
-      {
-        "kind": "stage4.plan",
         "label": "stage4 证据绑定与计划编译 --names-only",
         "extra": [
           "--names-only"
@@ -9449,19 +9231,6 @@
         "required_inputs": []
       },
       {
-        "kind": "stage4.plan",
-        "label": "stage4 证据绑定与计划编译 --response-repair",
-        "extra": [
-          "--response-repair"
-        ],
-        "paid": true,
-        "free_flag": null,
-        "writes": "stage4/evidence_binding.json · stage4/plan_chapters.json",
-        "writes_disk": true,
-        "needs_value": "结构化拒绝响应恢复模式；当前只接受 `agent`。可修复响应先隔离并停给外层受托 agent，同闸复验失败才继续采样",
-        "required_inputs": []
-      },
-      {
         "kind": "stage4.context",
         "label": "stage4 写作上下文组装",
         "extra": null,
@@ -9508,28 +9277,6 @@
         "writes_disk": true,
         "needs_value": null,
         "required_inputs": []
-      },
-      {
-        "kind": "stage5.write",
-        "label": "stage5 全书闭卷写作 --revalidate",
-        "extra": [
-          "--revalidate"
-        ],
-        "paid": false,
-        "free_flag": "--revalidate",
-        "writes": "必填 actor/reason；0 LLM 同轮重判并留不可变审计，合格的 .INVALID 才提升，旧稿归档进 _rounds/",
-        "writes_disk": true,
-        "needs_value": null,
-        "required_inputs": [
-          {
-            "flag": "--actor",
-            "description": "人工决定的自报身份（不是认证身份）"
-          },
-          {
-            "flag": "--reason",
-            "description": "人工决定的非空理由"
-          }
-        ]
       },
       {
         "kind": "stage5.write",
@@ -9644,19 +9391,6 @@
         ]
       },
       {
-        "kind": "stage5.write",
-        "label": "stage5 全书闭卷写作 --response-repair",
-        "extra": [
-          "--response-repair"
-        ],
-        "paid": true,
-        "free_flag": null,
-        "writes": "stage5/ch{nn}.json",
-        "writes_disk": true,
-        "needs_value": "结构化拒绝响应恢复模式；当前只接受 `agent`。可修复响应先隔离并停给外层受托 agent，同闸复验失败才继续采样",
-        "required_inputs": []
-      },
-      {
         "kind": "stage5.review",
         "label": "stage5 全书验收",
         "extra": null,
@@ -9719,19 +9453,6 @@
       },
       {
         "kind": "stage6.prepare",
-        "label": "stage6 文案准备 --revalidate",
-        "extra": [
-          "--revalidate"
-        ],
-        "paid": false,
-        "free_flag": "--revalidate",
-        "writes": "",
-        "writes_disk": false,
-        "needs_value": null,
-        "required_inputs": []
-      },
-      {
-        "kind": "stage6.prepare",
         "label": "stage6 文案准备 --emit-edit-template",
         "extra": [
           "--emit-edit-template"
@@ -9773,19 +9494,6 @@
             "description": "人工决定乐观锁定的完整内容 SHA-256"
           }
         ]
-      },
-      {
-        "kind": "stage6.prepare",
-        "label": "stage6 文案准备 --response-repair",
-        "extra": [
-          "--response-repair"
-        ],
-        "paid": true,
-        "free_flag": null,
-        "writes": "stage6/prepare.json",
-        "writes_disk": true,
-        "needs_value": "结构化拒绝响应恢复模式；当前只接受 `agent`。可修复响应先隔离并停给外层受托 agent，同闸复验失败才继续采样",
-        "required_inputs": []
       },
       {
         "kind": "stage6.hook",
@@ -9852,28 +9560,6 @@
       },
       {
         "kind": "stage6.hook",
-        "label": "stage6 开篇文案 --revalidate",
-        "extra": [
-          "--revalidate"
-        ],
-        "paid": false,
-        "free_flag": "--revalidate",
-        "writes": "必填 actor/reason；0 LLM 同轮重判并留不可变审计，合格的 .INVALID 才提升，旧稿归档进 _rounds/",
-        "writes_disk": true,
-        "needs_value": null,
-        "required_inputs": [
-          {
-            "flag": "--actor",
-            "description": "人工决定的自报身份（不是认证身份）"
-          },
-          {
-            "flag": "--reason",
-            "description": "人工决定的非空理由"
-          }
-        ]
-      },
-      {
-        "kind": "stage6.hook",
         "label": "stage6 开篇文案 --apply-edit",
         "extra": [
           "--apply-edit"
@@ -9928,19 +9614,6 @@
             "description": "人工决定乐观锁定的完整内容 SHA-256"
           }
         ]
-      },
-      {
-        "kind": "stage6.hook",
-        "label": "stage6 开篇文案 --response-repair",
-        "extra": [
-          "--response-repair"
-        ],
-        "paid": true,
-        "free_flag": null,
-        "writes": "stage6/hook.json",
-        "writes_disk": true,
-        "needs_value": "结构化拒绝响应恢复模式；当前只接受 `agent`。可修复响应先隔离并停给外层受托 agent，同闸复验失败才继续采样",
-        "required_inputs": []
       },
       {
         "kind": "stage6.approve",
@@ -10057,28 +9730,6 @@
       },
       {
         "kind": "stage7.rename",
-        "label": "stage7 人名表 --revalidate",
-        "extra": [
-          "--revalidate"
-        ],
-        "paid": false,
-        "free_flag": "--revalidate",
-        "writes": "必填 actor/reason；0 LLM 同轮重判并留不可变审计，合格的 .INVALID 才提升，旧稿归档进 _rounds/",
-        "writes_disk": true,
-        "needs_value": null,
-        "required_inputs": [
-          {
-            "flag": "--actor",
-            "description": "人工决定的自报身份（不是认证身份）"
-          },
-          {
-            "flag": "--reason",
-            "description": "人工决定的非空理由"
-          }
-        ]
-      },
-      {
-        "kind": "stage7.rename",
         "label": "stage7 人名表 --emit-edit-template",
         "extra": [
           "--emit-edit-template"
@@ -10145,19 +9796,6 @@
         "writes": "",
         "writes_disk": false,
         "needs_value": "要预检的 Stage2 关系集、Stage4A 完整章或 Stage7 人工稿路径（与所属节点 --apply-edit 同路径规则，不写盘）",
-        "required_inputs": []
-      },
-      {
-        "kind": "stage7.rename",
-        "label": "stage7 人名表 --response-repair",
-        "extra": [
-          "--response-repair"
-        ],
-        "paid": true,
-        "free_flag": null,
-        "writes": "stage7/name_map.json",
-        "writes_disk": true,
-        "needs_value": "结构化拒绝响应恢复模式；当前只接受 `agent`。可修复响应先隔离并停给外层受托 agent，同闸复验失败才继续采样",
         "required_inputs": []
       },
       {

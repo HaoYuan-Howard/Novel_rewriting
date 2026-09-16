@@ -107,6 +107,11 @@
   "resume",
   "stop"
  ],
+ "upload_autostart_outcomes": [
+  "started",
+  "skipped_stage0_failed",
+  "replay"
+ ],
  "agent_run_exit_origins": [
   "novel_cli",
   "commander",

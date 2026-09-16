@@ -64,6 +64,11 @@ def test_stage5_real_delivery_tail_refuses_foreign_bytes_and_recovers_without_mo
     ctx, client, wire, requested = stage5_writer(book)
     original_record = write._record_legacy_chapter_delivery
 
+    # 先完整落盘第 2 章，再单独打断第 3 章交付账：并行写 2,3 时第 2 章
+    # 也可能停在 pending，续跑会重写而非「没有要写的章」，验收意图被竞态冲掉。
+    write.run_write(ctx, client, chapters='2')
+    assert 2 in requested and (book / 'stage5' / 'ch02.json').is_file()
+
     def interrupted(*args, **kwargs):
         if kwargs['ordinal'] == 3:
             raise OSError('合成提交故障：正式章已写，采纳账未闭合')
@@ -71,7 +76,7 @@ def test_stage5_real_delivery_tail_refuses_foreign_bytes_and_recovers_without_mo
 
     monkeypatch.setattr(write, '_record_legacy_chapter_delivery', interrupted)
     with pytest.raises(OSError, match='合成提交故障'):
-        write.run_write(ctx, client, chapters='2,3')
+        write.run_write(ctx, client, chapters='3')
     assert sorted(requested) == [2, 3] and len(wire.calls) == 2
     formal = book / 'stage5' / 'ch03.json'
     frozen = formal.read_bytes()

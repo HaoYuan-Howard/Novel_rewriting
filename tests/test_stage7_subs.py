@@ -690,6 +690,15 @@ class _AdoptionStore:
 
 
 class _RebuiltMap(SimpleNamespace):
+    def __init__(self, **values):
+        defaults = dict(
+            extra_subs=[], residual=[], subs={},
+            surname_map={}, characters=[],
+            approved=None, book_txt=None, identity=None,
+        )
+        defaults.update(values)
+        super().__init__(**defaults)
+
     def model_copy(self, *, update):
         values = vars(self) | update
         return _RebuiltMap(**values)
@@ -732,9 +741,17 @@ def _adoption_harness(monkeypatch, residual, *, fail_write=False):
         captured.update(model_out=model_out, extra=extra, provenance=provenance)
         return _RebuiltMap(
             approved='stale', book_txt='stale', identity=None,
+            extra_subs=[], residual=[], subs={},
+            surname_map={}, characters=[],
         ), [], None
 
     monkeypatch.setattr(rename, '_build', fake_build)
+    # CLI adopt 之后仍走 auto seal；本 harness 只钉采纳写盘，seal 收口另测。
+    monkeypatch.setattr(
+        rename, '_auto_seal_name_map',
+        lambda _ctx, _store, art: art.model_copy(update={
+            'approved': SimpleNamespace(origin='auto', actor='system:stage7-auto'),
+        }))
     ctx = SimpleNamespace(
         novel_dir=Path('synthetic-book'),
         rewrite_provenance=lambda provenance, *, by: (provenance, by),
@@ -753,7 +770,7 @@ def test_adopt_residual_only_commits_unambiguous_uncovered_high_suggestions(monk
         _residual(unit='汤兄', suggest='赵兄'),
     ])
 
-    rebuilt, report = rename.run_adopt_residual(ctx, 'high')
+    landed, report = rename.run_adopt_residual(ctx, 'high')
 
     assert report == 'report'
     assert captured['provenance'] == ('old-provenance', '--adopt-residual')
@@ -764,12 +781,13 @@ def test_adopt_residual_only_commits_unambiguous_uncovered_high_suggestions(monk
         {'old': '沈家', 'new': '林家', 'origin': 'human'},
         {'old': '温兄', 'new': '顾兄', 'origin': 'adopted'},
     ]
-    assert rebuilt.approved is None and rebuilt.book_txt is None
-    assert rebuilt.identity == 'identity-baseline'
+    assert landed.approved is not None and landed.approved.origin == 'auto'
+    assert landed.book_txt is None
+    assert landed.identity == 'identity-baseline'
     assert retired == [True]
     assert store.events == ['archive', 'write', 'retire']
     assert store.archives == [(rename.REL, True)]
-    assert store.writes == [(rename.REL, rebuilt)]
+    assert len(store.writes) == 1 and store.writes[0][0] == rename.REL
 
 
 def test_adopt_residual_with_no_safe_candidate_is_a_no_write_terminal_state(monkeypatch):
@@ -928,6 +946,9 @@ def _atomic_harness(
         retired.append(True)
 
     monkeypatch.setattr(rename, '_retire_book_txt', retire)
+    # recheck 后的 auto seal 另测；本 harness 钉写盘原子性与批准继承。
+    monkeypatch.setattr(
+        rename, '_auto_seal_name_map', lambda _ctx, _store, art: art)
     ctx = SimpleNamespace(
         novel_dir='novel-dir',
         rewrite_provenance=lambda provenance, *, by: (provenance, by),

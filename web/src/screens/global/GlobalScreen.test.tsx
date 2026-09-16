@@ -105,7 +105,7 @@ afterEach(() => {
 })
 
 describe('GlobalScreen disclosure', () => {
-  it('机械准入通过后渲染服务端下发的逐章骨架生成动作', async () => {
+  it('只读监控：不渲染逐章骨架生成写动作', async () => {
     const blueprint = {
       kind: 'stage2.blueprint',
       label: '机械准入通过后生成 stage2 逐章骨架',
@@ -117,11 +117,10 @@ describe('GlobalScreen disclosure', () => {
 
     renderRoute(<GlobalScreen />, '/n/book-1/global')
 
-    const continuation = await screen.findByRole('group', { name: '机械准入通过后生成逐章骨架' })
-    expect(continuation).toHaveTextContent('机械准入通过后生成逐章骨架')
-    expect(continuation).toHaveTextContent('统一准入')
-    expect(screen.getByRole('button', { name: '继续下一步' })).toBeVisible()
-    expect(screen.getByText(/Stage2 语义未审：机械检查不证明人物完整、主张获原文支持或剧情抽取正确/)).toBeVisible()
+    expect(await screen.findByRole('heading', { name: /全局设定/ })).toBeVisible()
+    expect(screen.queryByRole('group', { name: '机械准入通过后生成逐章骨架' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '继续下一步' })).not.toBeInTheDocument()
+    expect(screen.getByText(/Stage2 语义未审：/)).toBeVisible()
   })
 
   it('is present while stage2 is loading', async () => {

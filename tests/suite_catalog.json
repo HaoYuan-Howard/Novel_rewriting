@@ -1340,8 +1340,6 @@
   },
   "tests/test_stage6_prepare_workflow.py": {
    "cases": {
-    "test_actual_cli_templates_are_free_and_canonical_prepare_requires_stage5": "unit_contract",
-    "test_canonical_durable_prepare_decision_replays_and_uses_same_service_input": "unit_contract",
     "test_pending_decision_exposes_exact_free_recovery_and_preserves_budget": "unit_contract"
    },
    "layer": "stage",

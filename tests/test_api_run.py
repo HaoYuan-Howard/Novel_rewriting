@@ -133,11 +133,12 @@ def test_run_projects_current_review_states_and_only_current_role_recovery(clien
     os.mkdir(os.path.join(base, '测试书_42'))
     actual = c.get('/api/novels/42/run').json()
     reviews = actual['resume_frontier']['review_states']
-    # stage0.approve（B1）、stage4.design/plan 双审（B2）与 stage5 写作/闭合
-    # 双闸（B3）退役：human 审阅面 8 → 3。
-    assert len(reviews) == 3
+    # 批次 B4 后：仍有 approval_projection 的现役节点投影到 run 面
+    # （prepare 状态 / s6 闸 / s7 闸读面），不再等于 review_mode==human。
     assert {row['node'] for row in reviews} == {
-        node for node, spec in NODES.items() if spec.lifecycle.review_mode == 'human'}
+        node for node, spec in NODES.items()
+        if spec.lifecycle.approval_projection}
+    assert len(reviews) == 3
     # Stage2 语义审阅退役：run 面不再有 stage2 审批状态行。
     assert not [row for row in reviews if row['node'].startswith('stage2.')]
     assert operator._review_state_projection(None) is None

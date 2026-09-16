@@ -164,6 +164,11 @@ AGENT_RUN_STATE: Final = (
 #: 没有 Supervisor，因此只能 stop；v2 pending/running 才有 pause，paused 才有 resume。
 AGENT_RUN_CONTROLS: Final = ('pause', 'resume', 'stop')
 
+#: 上传响应里的自动开跑结局（R-11.28）。API ``UploadResult.autostart`` 与
+#: 前端类型共用这一份；不得在 schema 里再抄字面量。
+UPLOAD_AUTOSTART_OUTCOMES: Final = (
+    'started', 'skipped_stage0_failed', 'replay')
+
 #: parent ended 所保留退出码的来源；外部 CLI 的同值数字不继承小说产物语义。
 #: 旧事件缺来源时保持未知，不从理由或诊断文字补推。
 AGENT_RUN_EXIT_ORIGINS: Final = ('novel_cli', 'commander', 'supervisor')

@@ -793,13 +793,13 @@ not_run: M  它后面那些，一步都没跑
 
 | 情形 | `waiting_on` |
 |---|---|
-| stage0 未批准（`APPROVAL_STATE != 'approved'`） | `stage0.approve` |
-| stage5 尚未授权 current canonical 全书写作 | `approval:stage5-writing` |
+| stage0 机械批准尚未成立（存量 pending；现役由 remove auto seal） | 排 `stage0.remove` 等 0 成本补算；`stage0.approve` 已退役 |
 | Stage5 Review 不是 `missing/fresh`，且本次不是已证明的上游 consumed-change 精确重写；旧结论不能驱动普通写作续跑 | `stage5:review-currentness` |
 | 发现旧 `stage5/deep|shallow/` 布局 | `legacy_incompatible` |
-| 文案未定稿 | `stage6.approve` |
-| 人名表未定稿 | `stage7.approve` |
-| inbox 非空（包括本层 current `.INVALID`、被驳回、连续未消） | `inbox:<kind>` |
+| Prepare pending_commit | `recovery:stage6-prepare-edit`（`WAITING_ON_STAGE6_PREPARE` 已停发） |
+| 文案未定稿（默认 auto；人工 `--pick` 不阻塞） | 排 `stage6.approve --auto`；不进 HUMAN_NODES |
+| 人名表未定稿（rename auto seal 后仍无效） | 排 `stage7.rename --recheck` 等 0 成本恢复；`stage7.approve` 已退役 |
+| inbox 非空（包括本层 current `.INVALID`、被驳回、连续未消） | `inbox:<kind>`（质量类可进交付披露，见批次 C） |
 | 普通队列的 `redo/unknown`，或 operator 无法证明唯一 canonical REDO 命令 | `resume:manual-decision` |
 | 服务重启后旧快照仍含付费项、等人重新确认 | `queue:restart-confirmation` |
 | 当前命令面与创建时快照不同、必须重建队列 | `queue:plan-changed` |

@@ -803,7 +803,7 @@ def test_default_collection_keeps_schema_gates_and_carrier_regressions(
         'test_the_current_system_prompt_is_the_rendered_prompt',
         'test_an_illegal_edit_body_is_422_from_the_carrier',
         'test_a_zero_pick_is_422_from_the_carrier',
-        'test_approving_names_requires_all_hash_bound_credentials',
+        'test_stage7_approve_http_endpoint_is_retired',
         'test_an_unknown_book_is_404_on_every_screen',
         'test_an_illegal_sid_is_400_because_the_client_sent_it',
         'test_a_non_integer_ordinal_is_422_from_the_carrier',

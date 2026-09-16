@@ -303,6 +303,13 @@ _JSON_READ_ALLOWED = {
         '`_stage*_runs/<run_id>/` 的恢复目录；当前来源重新闭合'
         'profile/prompt/schema/code/ledger/session audit。正式 artifact 仍只能由 stage producer '
         '经 ArtifactStore 读写'),
+    'novel/api/routes/ingest.py': (
+        '只解析上传请求里的 profiles 查询参数 JSON（用户/设置面，不是小说产物）；'
+        '正式 profiles 校验走 validate_pipeline_profiles，产物仍经 Store'),
+    'novel/orchestrator/upload_autostart.py': (
+        '上传+自动开跑意图账**不是产物**：`_service/upload_autostart.jsonl` 是 '
+        'append-only 编排事件（先耐久再 stage0/agent.start），不进来源账/ARTIFACTS；'
+        '与 jobs.jsonl 一样只容忍被 kill 截断的最后一行'),
 }
 
 
@@ -709,10 +716,6 @@ def test_service_mutations_are_narrowly_owned_by_mutation_routes():
         'novel/api/routes/edits.py': {
             ('jobs', 'run'), ('uploads', 'save_draft_edit'),
             ('uploads', 'discard_edit_plan'),
-        },
-        'novel/api/routes/stage6_prepare.py': {
-            # 只保存内容寻址的免费输入；正式 Prepare/Review 仍交 CLI 子进程。
-            ('jobs', 'run'), ('uploads', 'save_prepare_input'),
         },
         'novel/api/routes/maintenance.py': {
             ('trash', 'run'), ('trash', 'run_restore'),

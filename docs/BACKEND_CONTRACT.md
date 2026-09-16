@@ -37,12 +37,12 @@
 系统单人、本机使用，将中文小说处理为保留情节骨架的重写新书。界面与人工验收范围见
 `web/AGENTS.md`，工程运维见 `docs/OPERATIONS.md`。
 
-产品只有两种跑书模式：前端 Agent 自动模式由确定性 RunSupervisor 推进，Executor 生成，审批一律
-人工——自动跑书在登记的人工审批闸停止（exit 2 `stopped`，`next_handler='human'`），用户在现有人工
-Stage 页面过闸后用原配置续跑，每本书约 8–11 个人工触点；受托 Commander 审阅角色已于 2026-09-15
-退役（见 `docs/DECISIONS.md`）。人工模式由用户在各 Stage 页面选择生成、编辑、
-审阅与下一动作，仍受同一后端前置、授权、freshness 和提交校验约束。开发维护 agent 不作为
-第三个流水线角色。执行与恢复归运行代码，最终交付不生成或依赖 Markdown 报告，状态与证据在前端查看。
+产品为全自动单模式（2026-09-15 全自动裁决，批次 B0–D）：上传即授权开跑，确定性
+RunSupervisor 推进，Executor 生成；Stage 页只读监控。`HUMAN_NODES` 为空；命中 `approval:*`
+waiting_on 视为编排 bug（fail-closed）。Stage6 保留三候选人工改选（`--pick`，不阻塞
+stage7，承诺范围内零模型）。受托 Commander 审阅角色已退役（见 `docs/DECISIONS.md`）。
+开发维护 agent 不作为流水线角色。执行与恢复归运行代码，最终交付不生成或依赖 Markdown
+报告，状态与证据在前端查看。
 
 - `chapter_ordinal` 是阅读序整数；输出章号恒等于源章号，不合并、不删除、不拆分、不重排。
 - stage 表示产物/schema/报告层，node 表示作业，二者不是一一对应。节点唯一登记在

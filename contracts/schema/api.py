@@ -114,6 +114,7 @@ from contracts.invariants import (
     STAGE1_SEGMENT_KINDS,
     TIME_LAYERS,
     TEMPORAL_LINKS,
+    UPLOAD_AUTOSTART_OUTCOMES,
     STAGE5_CLOSURE_GROUPS, STAGE5_CLOSURE_STATES,
     STAGE5_EDIT_CONFIRMATIONS,
     STAGE5_MUST_APPEAR_RULINGS,
@@ -448,7 +449,7 @@ class UploadResult(StrictModel):
     run: AgentRunRecord | None = None
     idempotency_key: str | None = Field(
         default=None, pattern=r'^[a-zA-Z0-9_-]{8,128}$')
-    autostart: Literal['started', 'skipped_stage0_failed', 'replay'] | None = None
+    autostart: Literal[UPLOAD_AUTOSTART_OUTCOMES] | None = None
 
     @model_serializer(mode='wrap')
     def _omit_absent_autostart(self, handler: Any) -> dict[str, Any]:
