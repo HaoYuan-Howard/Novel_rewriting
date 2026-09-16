@@ -1,92 +1,38 @@
-import { useState } from 'react'
 import { errorBody } from '@/api/errors'
-import { lookupAction } from '@/constants/actions'
 import { useApprovals } from '@/hooks/useApprovals'
-import { useAskJob, useChrome } from '@/hooks/useChrome'
-import { useEnums } from '@/hooks/useEnums'
 import type {
-  DesignChapterReview,
-  DesignConstraintCatalog,
-  DesignConstraintOperation,
-  DesignConstraintOperations,
-  DesignReviewMaterialized,
-  DesignRepairConstraint,
-  DesignStrategyReview,
-  DesignReviewTemplate,
-  DesignReviewTemplateQuery,
+  BindingInfeasibilityWitness,
+  DesignChapterRepairCapability,
+  DesignReviewHistoryEntry,
+  DesignReviewRepairCapability,
+  DesignReviewView,
 } from '@/types/approvals'
 import { ErrorHint } from '@/components/state/States'
-import { ActionButton, LinkButton } from '@/components/ui/ActionButton'
 import { Mono } from '@/components/ui/Mono'
 import { Panel } from '@/components/ui/Panel'
 import { GateMark } from '@/components/vocab/Badges'
-import { useDesignReview } from './useDesignReview'
-import { ApprovalWorkpackEvidence } from './ApprovalWorkpackPanel'
-import { useApprovalWorkpack } from '@/hooks/useApprovalWorkpack'
-
-interface ConstraintInputDomain {
-  arity: Record<string, [number, number]>
-}
-
-function constraintComplete(
-  constraint: DesignRepairConstraint, chapter: DesignChapterReview,
-  codes: string[], domain: ConstraintInputDomain,
-): boolean {
-  const arity = domain.arity[constraint.code]
-  if (!codes.includes(constraint.code) || !arity || arity.length !== 2
-    || !arity.every((value) => Number.isInteger(value) && value >= 0)) return false
-  const scenes = chapter.subject.chapter.scenes.map((scene) => scene.candidate_scene_id)
-  const truth = chapter.subject.blind_truth
-  const aliases = [...truth.beats.map((beat) => beat.alias), ...truth.characters.map((person) => person.alias),
-    ...truth.states.map((s) => s.alias), ...truth.inherited_states.map((s) => s.alias),
-    ...truth.constraints.map((c) => c.alias), ...truth.global_subjects.map((g) => g.alias),
-    ...truth.endpoints.map((e) => e.endpoint_alias)]
-  if (constraint.scene_refs.length < arity[0] || constraint.opaque_aliases.length < arity[1]
-    || new Set(constraint.scene_refs).size !== constraint.scene_refs.length
-    || new Set(constraint.opaque_aliases).size !== constraint.opaque_aliases.length
-    || !constraint.scene_refs.every((scene) => scenes.includes(scene))
-    || !constraint.opaque_aliases.every((alias) => aliases.includes(alias))) return false
-  if (Object.keys(constraint).some((key) => !['code', 'scene_refs', 'opaque_aliases'].includes(key))) return false
-  if (constraint.code === 'semantic_constraint') {
-    const allowed = [...truth.constraints.map((c) => c.alias), ...truth.endpoints.map((e) => e.endpoint_alias)]
-    return constraint.opaque_aliases.every((alias) => allowed.includes(alias))
-  }
-  return true
-}
-
-function reviewRunId(): string {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return crypto.randomUUID().toLowerCase()
-  }
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (token) => {
-    const value = Math.floor(Math.random() * 16)
-    return (token === 'x' ? value : (value & 0x3) | 0x8).toString(16)
-  })
-}
 
 function stateLabel(state: string): string {
   switch (state) {
     case 'unavailable': return '当前没有可审阅候选'
     case 'missing': return '当前候选尚未审阅'
-    case 'repair_requested': return '当前候选已要求逐章返修'
-    case 'strategy_replan_requested': return '当前候选已要求整书重规划'
-    case 'accepted': return '当前候选已正式接受'
+    case 'repair_requested': return '历史候选曾要求逐章返修'
+    case 'strategy_replan_requested': return '历史候选曾要求整书重规划'
+    case 'accepted': return '历史候选曾被正式接受'
     case 'expired': return '历史审阅已过期'
     default: return '服务端状态 ' + state
   }
 }
 
-/** Stage4A 候选的正式人审；与 Stage4B 最终计划审批严格分票。 */
+/**
+ * Stage4A 设计审阅的历史只读投影。
+ *
+ * 四道人工闸已随 2026-09-15 全自动裁决退役：workpack、关闭式模板与
+ * accept/request_repair/request_replan 写面全部删除，推进只认统一机械准入。
+ * 这里不再有任何表单、token 提交或 workpack 轮询，只照画服务端的历史账。
+ */
 export function DesignReviewPanel() {
   const approvals = useApprovals()
-  const enums = useEnums()
-  const ask = useAskJob()
-  const [actor, setActor] = useState('')
-  const [reason, setReason] = useState('')
-  const [runId, setRunId] = useState(reviewRunId)
-  const [query, setQuery] = useState<DesignReviewTemplateQuery | null>(null)
-  const review = useDesignReview(query)
-  const workpack = useApprovalWorkpack('design')
 
   if (approvals.isLoading) {
     return <Panel className="mx-30 mt-20 mb-4 px-20 py-16 text-body text-ink-4">读取 Stage4A 审阅记录…</Panel>
@@ -103,52 +49,19 @@ export function DesignReviewPanel() {
   if (!doc) return null
 
   const view = doc.design_review
-  const humanReviewer = enums.data?.design_reviewer_kinds.find((value) => value === 'human') ?? ''
-  const alreadyCurrent = workpack.data?.disposition === 'already_current'
-  const workpackReviewable = Boolean(
-    !workpack.isLoading && !workpack.isFetching && !workpack.isError &&
-    workpack.data?.disposition === 'review_required',
-  )
-  const workpackDisabledReason = alreadyCurrent
-    ? '同一当前 Stage4A 工作包已有正式接受决定，无需重复整读'
-    : workpack.isError
-      ? '当前 Stage4A 工作包读取失败，不能绑定本轮审阅'
-      : workpack.isFetching
-        ? '正在读取或刷新当前 Stage4A 工作包'
-        : !workpack.data
-          ? '服务端未返回当前 Stage4A 工作包'
-          : workpack.data.disposition !== 'review_required'
-            ? '服务端返回了未知的 Stage4A 工作包处置态'
-            : ''
-  const canStart = Boolean(
-    actor.trim() && reason.trim() && humanReviewer && !enums.isLoading && workpackReviewable,
-  )
-  const reset = () => {
-    setQuery(null)
-    setReason('')
-    setRunId(reviewRunId())
-  }
-  // Stage4 的下一动作（B continuation、返修/replan）全部由服务端挂在 s4，
-  // 这里只渲染服务端已经给出的动作面，不按盘面或决定内容自行推导下一步。
-  const followups = doc.spawns.s4 ?? []
-  const actions = followups.map((ref) => ({
-    ref,
-    action: lookupAction(enums.data, ref),
-  }))
-
   return (
     <Panel className="mx-30 mt-20 mb-4 overflow-hidden">
-      <div className="flex items-start gap-12 border-b border-line-row px-20 py-16">
+      <div className="flex items-start gap-12 px-20 py-16">
         <GateMark ok={view.state === 'accepted'} />
         <div className="flex min-w-0 flex-1 flex-col gap-5">
           <div className="flex flex-wrap items-baseline gap-10">
-            <span className="text-read font-semibold">Stage4A 正式设计审阅</span>
+            <span className="text-read font-semibold">Stage4A 设计审阅 · 历史只读</span>
             <Mono className="rounded-tag bg-inset px-7 py-2 text-micro">{view.state}</Mono>
             <span className="text-tag text-ink-4">{stateLabel(view.state)}</span>
           </div>
           <span className="prose-cn text-sm2 text-ink-4">
-            本票只裁决盲候选能否进入 Stage4B。它不会批准最终计划、不会打开 s4，
-            也不会在保存后静默启动付费重规划或定向返修。
+            Stage4 人工审阅已退役：设计候选由机械准入放行，B 的 typed infeasible 终态
+            触发预算内自动重规划。本面板只呈现服务端保留的历史审阅账，不提供任何决定入口。
           </span>
           <div className="grid gap-5 text-tag text-ink-4 md:grid-cols-2">
             <span>
@@ -161,978 +74,133 @@ export function DesignReviewPanel() {
             </span>
           </div>
           <span className="text-tag text-ink-4">历史正式审阅 {view.history.length} 次</span>
+          {view.history.length ? <HistoryTable history={view.history} /> : null}
         </div>
-        {view.state === 'accepted' ? (
-          <div className="rounded-btn border border-gate-ok-line bg-gate-ok-bg px-12 py-9 text-body font-semibold text-gate-ok-ink">
-            服务端判定：当前 A 已接受，可进入 Stage4B；最终计划仍须独立审批
-          </div>
-        ) : null}
       </div>
 
-      <ApprovalWorkpackEvidence kind="design" query={workpack} />
-
+      {view.current_decision ? <CurrentDecisionSummary view={view} /> : null}
       {view.binding_infeasibility ? (
         <BindingInfeasibilityEvidence evidence={view.binding_infeasibility} />
       ) : null}
-      {query === null && view.repair_capability ? (
-        <RepairCapabilitySummary capability={view.repair_capability} />
-      ) : null}
-
-      {actions.length ? (
-        <div className="flex flex-wrap items-center gap-10 border-b border-line-row bg-sunken-2 px-20 py-12">
-          <span className="mr-auto text-sm2 text-ink-4">后续动作由服务端按当前正式审阅下发，点击后仍需预览确认。</span>
-          {actions.map(({ ref, action }) => (
-            <ActionButton
-              key={ref.kind + ':' + JSON.stringify(ref.extra)}
-              action={action}
-              onClick={() => ask({
-                kind: ref.kind,
-                label: ref.label,
-                extra: ref.extra,
-                required_inputs: action?.required_inputs,
-                sid: doc.sid,
-                ordinal: null,
-              })}
-            >
-              {ref.label}
-            </ActionButton>
-          ))}
-        </div>
-      ) : null}
-
-      {query === null ? (
-        <div className="flex flex-col gap-12 px-20 py-16">
-          <div className="prose-cn text-sm2 text-ink-4">
-            先建立一次人工审阅会话，再从服务端读取关闭式模板。模板未核实项默认 request，
-            本界面不提供“一键全收”。
-          </div>
-          <div className="grid gap-12 md:grid-cols-2">
-            <label className="flex flex-col gap-4 text-tag text-ink-3">
-              自报身份 actor
-              <input
-                aria-label="Stage4A 自报身份 actor"
-                value={actor}
-                onChange={(event) => setActor(event.target.value)}
-                className="rounded-btn border border-line-btn bg-card px-10 py-8 text-body font-normal text-ink"
-              />
-            </label>
-            <label className="flex flex-col gap-4 text-tag text-ink-3">
-              本轮审阅总理由 reason
-              <input
-                aria-label="Stage4A 本轮审阅总理由 reason"
-                value={reason}
-                onChange={(event) => setReason(event.target.value)}
-                placeholder="说明本轮将核对哪些策略、场景和证据"
-                className="rounded-btn border border-line-btn bg-card px-10 py-8 text-body font-normal text-ink"
-              />
-            </label>
-          </div>
-          <div className="flex flex-wrap items-center gap-10">
-            <span className="text-tag text-ink-4">reviewer_kind</span>
-            <Mono className="rounded-tag bg-inset px-7 py-2 text-mini">{humanReviewer || '（取值面未就绪）'}</Mono>
-            <span className="text-tag text-ink-4">review_run_id</span>
-            <Mono className="break-all text-mini text-ink-2">{runId}</Mono>
-            <ActionButton
-              action={{ kind: 'approval.design.template', extra: null, paid: false, writes_disk: false }}
-              disabled={!canStart}
-              disabledReason={
-                !workpackReviewable
-                  ? workpackDisabledReason
-                  : enums.isLoading
-                  ? '正在读取服务端审阅取值面'
-                  : enums.error
-                    ? '服务端审阅取值面读取失败'
-                    : !humanReviewer
-                      ? '服务端未发布 human 审阅者类型'
-                      : 'actor 与本轮总理由都必须填写'
-              }
-              onClick={() => setQuery({
-                actor: actor.trim(),
-                reviewer_kind: humanReviewer,
-                review_run_id: runId,
-                reason: reason.trim(),
-              })}
-            >
-              读取关闭式审阅模板
-            </ActionButton>
-          </div>
-          {enums.error ? (
-            <div className="text-sm2 text-warn-ink">
-              Stage4A 审阅取值面读取失败：{errorBody(enums.error)}
-              <ErrorHint error={enums.error} />
-            </div>
-          ) : null}
-        </div>
-      ) : review.template.isLoading ? (
-        <div className="px-20 py-16 text-body text-ink-4">读取当前候选的关闭式审阅模板…</div>
-      ) : review.template.isError ? (
-        <div className="flex items-start gap-12 border-warn-line bg-warn-bg px-20 py-16 text-body text-warn-ink">
-          <div className="min-w-0 flex-1">
-            模板读取失败：{errorBody(review.template.error)}
-            <ErrorHint error={review.template.error} />
-          </div>
-          <LinkButton onClick={reset}>开始新一轮审阅</LinkButton>
-        </div>
-      ) : review.template.data ? (
-        <DesignReviewForm
-          key={review.template.data.aggregate_subject_sha256 + ':' + review.template.data.review_run_id}
-          template={review.template.data}
-          strategyDecisions={enums.data?.design_strategy_decisions ?? []}
-          chapterDecisions={enums.data?.design_chapter_decisions ?? []}
-          repairCodes={enums.data?.design_repair_codes ?? []}
-          operationKinds={enums.data?.design_constraint_operation_kinds ?? []}
-          constraintDomain={{
-            arity: enums.data?.design_repair_constraint_arity ?? {},
-          }}
-          submit={review.submit}
-          onReset={reset}
-          workpackReviewable={workpackReviewable}
-          workpackDisabledReason={workpackDisabledReason}
-        />
-      ) : null}
+      {view.repair_capability ? <RepairCapabilitySummary capability={view.repair_capability} /> : null}
     </Panel>
   )
 }
 
-function DesignReviewForm({
-  template,
-  strategyDecisions,
-  chapterDecisions,
-  repairCodes,
-  operationKinds,
-  constraintDomain,
-  submit,
-  onReset,
-  workpackReviewable,
-  workpackDisabledReason,
-}: {
-  template: DesignReviewTemplate
-  strategyDecisions: string[]
-  chapterDecisions: string[]
-  repairCodes: string[]
-  operationKinds: string[]
-  constraintDomain: ConstraintInputDomain
-  submit: ReturnType<typeof useDesignReview>['submit']
-  onReset: () => void
-  workpackReviewable: boolean
-  workpackDisabledReason: string
-}) {
-  const { notify } = useChrome()
-  const [draft, setDraft] = useState(template)
-  const acceptedChapter = chapterDecisions.find((value) => value === 'accept') ?? ''
-  const repairChapter = chapterDecisions.find((value) => value === 'request_repair') ?? ''
-  const repairByOrdinal = new Map(
-    draft.repair_capability.chapters.map((row) => [row.output_ordinal, row]),
-  )
-
-  const setStrategy = (patch: Partial<DesignStrategyReview>) => {
-    setDraft((current) => ({
-      ...current,
-      strategy: {
-        ...current.strategy,
-        ...patch,
-        placeholder: true,
-        source_decision_sha256: null,
-      },
-    }))
-  }
-  const confirmStrategy = (confirmed: boolean) => {
-    setDraft((current) => ({
-      ...current,
-      strategy: {
-        ...current.strategy,
-        placeholder: !confirmed,
-        template_token: confirmed ? null : current.strategy.template_token,
-        source_decision_sha256: confirmed
-          ? current.strategy.source_decision_sha256
-          : null,
-      },
-    }))
-  }
-  const setChapter = (ordinal: number, update: (chapter: DesignChapterReview) => DesignChapterReview) => {
-    setDraft((current) => ({
-      ...current,
-      chapters: current.chapters.map((chapter) => (
-        chapter.output_ordinal === ordinal
-          ? {
-              ...update(chapter),
-              placeholder: true,
-              source_decision_sha256: null,
-            }
-          : chapter
-      )),
-    }))
-  }
-  const confirmChapter = (ordinal: number, confirmed: boolean) => {
-    setDraft((current) => ({
-      ...current,
-      chapters: current.chapters.map((chapter) => (
-        chapter.output_ordinal === ordinal
-          ? {
-              ...chapter,
-              placeholder: !confirmed,
-              template_token: confirmed ? null : chapter.template_token,
-              source_decision_sha256: confirmed
-                ? chapter.source_decision_sha256
-                : null,
-            }
-          : chapter
-      )),
-    }))
-  }
-  const setChapterDecision = (chapter: DesignChapterReview, decision: string) => ({
-    ...chapter,
-    decision,
-    constraints: decision === acceptedChapter ? [] : chapter.constraints,
-  })
-  const toggleConstraint = (
-    chapter: DesignChapterReview,
-    code: string,
-    checked: boolean,
-  ): DesignChapterReview => {
-    const byCode = new Map(chapter.constraints.map((constraint) => [constraint.code, constraint]))
-    if (checked) byCode.set(code, byCode.get(code) ?? { code, scene_refs: [], opaque_aliases: [] })
-    else byCode.delete(code)
-    return {
-      ...chapter,
-      constraints: repairCodes.flatMap((name) => {
-        const hit = byCode.get(name)
-        return hit ? [hit] : []
-      }),
-    }
-  }
-  const toggleScope = (
-    chapter: DesignChapterReview,
-    code: string,
-    field: 'scene_refs' | 'opaque_aliases',
-    value: string,
-    checked: boolean,
-    canonicalOptions: string[],
-  ): DesignChapterReview => ({
-    ...chapter,
-    constraints: chapter.constraints.map((constraint) => {
-      if (constraint.code !== code) return constraint
-      const selected = new Set(constraint[field])
-      if (checked) selected.add(value)
-      else selected.delete(value)
-      return { ...constraint, [field]: canonicalOptions.filter((option) => selected.has(option)) }
-    }),
-  })
-
-  const enumsReady = strategyDecisions.length > 0
-    && chapterDecisions.length > 0
-    && repairCodes.length > 0
-    && acceptedChapter
-    && repairChapter
-  const complete = Boolean(
-    enumsReady
-    && draft.actor.trim()
-    && draft.reviewer_kind
-    && draft.review_run_id
-    && draft.general_reason.trim()
-    && strategyDecisions.includes(draft.strategy.decision)
-    && draft.strategy.reason.trim()
-    && !draft.strategy.placeholder
-    && draft.strategy.template_token === null
-    && draft.chapters.length > 0
-    && draft.chapters.every((chapter) => (
-      chapterDecisions.includes(chapter.decision)
-      && chapter.reason.trim()
-      && !chapter.placeholder
-      && chapter.template_token === null
-      && constraintOperationsComplete(
-        chapter.constraint_operations, template.constraint_catalog?.[chapter.output_ordinal], operationKinds,
-        chapter, repairCodes, constraintDomain,
-      )
-      && (chapter.decision === acceptedChapter
-        ? chapter.constraints.length === 0 && !chapter.constraint_operations?.items.some(
-          (item) => item.kind === 'supersede',
-        )
-        : chapter.decision === repairChapter
-          && repairByOrdinal.get(chapter.output_ordinal)?.request_repair_available === true
-          && (chapter.constraints.length > 0 || chapter.constraint_operations?.items.some(
-            (item) => item.kind === 'keep' || (item.kind === 'supersede' && item.replacements.length > 0),
-          ))
-          && chapter.constraints.every((constraint) => constraintComplete(
-            constraint, chapter, repairCodes, constraintDomain,
-          )))
-    )),
-  )
-
+function HistoryTable({ history }: { history: DesignReviewHistoryEntry[] }) {
   return (
-    <div className="flex flex-col">
-      <div className="flex flex-col gap-7 border-b border-line-row bg-sunken-2 px-20 py-14">
-        <RepairCapabilitySummary capability={draft.repair_capability} embedded />
-        <div className="flex flex-wrap items-center gap-8">
-          <span className="text-body font-semibold">当前整书策略候选</span>
-          <Mono className="rounded-tag bg-inset px-7 py-2 text-mini">{draft.strategy.subject_sha256}</Mono>
-        </div>
-        <div className="prose-cn text-section text-ink-2">
-          {draft.strategy.subject.reconstruction_strategy}
-        </div>
-        <div className="flex flex-wrap gap-6">
-          {draft.strategy.subject.chapter_weights.map((row) => (
-            <Mono key={row.chapter_ordinal} className="rounded-tag bg-card px-7 py-2 text-mini">
-              第 {row.chapter_ordinal} 章 · {row.weight}
-            </Mono>
-          ))}
-        </div>
-        <div className="grid gap-4 text-micro text-ink-4 md:grid-cols-2">
-          <span>review_contract　<Mono>{draft.strategy.subject.basis.review_contract}</Mono></span>
-          <span>alias_algorithm　<Mono>{draft.strategy.subject.basis.alias_algorithm}</Mono></span>
-          <span>root_clean_sha1　<Mono className="break-all">{draft.strategy.subject.basis.root_clean_sha1}</Mono></span>
-          <span>truth_sha256　<Mono className="break-all">{draft.strategy.subject.basis.truth_sha256}</Mono></span>
-        </div>
-        <div className="grid gap-10 md:grid-cols-2">
-          <label className="flex flex-col gap-4 text-tag text-ink-3">
-            整书策略裁决
-            <select
-              aria-label="Stage4A 整书策略裁决"
-              value={draft.strategy.decision}
-              disabled={!strategyDecisions.length || submit.isPending}
-              onChange={(event) => setStrategy({ decision: event.target.value })}
-              className="rounded-btn border border-line-btn bg-card px-10 py-8 font-mono text-body font-normal text-ink"
-            >
-              {strategyDecisions.map((decision) => (
-                <option key={decision} value={decision}>{decision}</option>
-              ))}
-            </select>
-          </label>
-          <label className="flex flex-col gap-4 text-tag text-ink-3">
-            整书策略裁决理由
-            <input
-              aria-label="Stage4A 整书策略裁决理由"
-              value={draft.strategy.reason}
-              disabled={submit.isPending}
-              onChange={(event) => setStrategy({ reason: event.target.value })}
-              className="rounded-btn border border-line-btn bg-card px-10 py-8 text-body font-normal text-ink"
-            />
-          </label>
-        </div>
-        <ReviewConfirmation
-          label="Stage4A 整书策略已核对"
-          checked={!draft.strategy.placeholder}
-          disabled={submit.isPending}
-          sourceDecision={draft.strategy.source_decision_sha256}
-          onChange={confirmStrategy}
-        />
-      </div>
-
-      <div className="flex flex-col divide-y divide-line-row">
-        {draft.chapters.map((chapter) => {
-          const repairCapability = repairByOrdinal.get(chapter.output_ordinal) ?? null
-          return (
-            <ChapterReviewEditor
-              key={chapter.output_ordinal}
-              chapter={chapter}
-              chapterDecisions={chapterDecisions}
-              repairCodes={repairCodes}
-              operationKinds={operationKinds}
-              constraintCatalog={template.constraint_catalog?.[chapter.output_ordinal]}
-              onOperations={(operations) => setChapter(
-                chapter.output_ordinal,
-                (current) => ({ ...current, constraint_operations: operations }),
-              )}
-              acceptedDecision={acceptedChapter}
-              repairDecision={repairChapter}
-              repairCapability={repairCapability}
-              candidateRepairable={draft.repair_capability.repairable}
-              capabilityReason={draft.repair_capability.reason_code}
-              disabled={submit.isPending}
-              onConfirmed={(confirmed) => confirmChapter(chapter.output_ordinal, confirmed)}
-              onDecision={(decision) => {
-                if (
-                  decision === repairChapter
-                  && repairCapability?.request_repair_available !== true
-                ) return
-                setChapter(
-                  chapter.output_ordinal,
-                  (current) => setChapterDecision(current, decision),
-                )
-              }}
-              onReason={(value) => setChapter(
-                chapter.output_ordinal,
-                (current) => ({ ...current, reason: value }),
-              )}
-              onConstraint={(code, checked) => setChapter(
-                chapter.output_ordinal,
-                (current) => toggleConstraint(current, code, checked),
-              )}
-              onScope={(code, field, value, checked, options) => setChapter(
-                chapter.output_ordinal,
-                (current) => toggleScope(current, code, field, value, checked, options),
-              )}
-            />
-          )
-        })}
-      </div>
-
-      <div className="flex flex-wrap items-start gap-12 border-t border-line-row px-20 py-16">
-        <div className="flex min-w-0 flex-1 flex-col gap-5 text-tag text-ink-4">
-          <span>actor　<Mono className="text-ink-2">{draft.actor}</Mono></span>
-          <span>reviewer_kind　<Mono className="text-ink-2">{draft.reviewer_kind}</Mono></span>
-          <span>review_run_id　<Mono className="break-all text-ink-2">{draft.review_run_id}</Mono></span>
-          <span>general_reason　<span className="prose-cn text-ink-2">{draft.general_reason}</span></span>
-          <span>
-            提交绑定服务端模板给出的 candidate / aggregate / strategy / chapter 完整 subject；
-            前端不重算 current、hash 或是否可进 B。
-          </span>
-        </div>
-        <div className="flex flex-wrap gap-8">
-          <LinkButton disabled={submit.isPending} onClick={onReset}>开始新一轮审阅</LinkButton>
-          <ActionButton
-            action={{ kind: 'approval.design', extra: null, paid: false, writes_disk: true }}
-            disabled={!complete || submit.isPending || !workpackReviewable}
-            disabledReason={
-              !workpackReviewable
-                ? workpackDisabledReason
-                : !enumsReady
-                  ? '服务端 Stage4A 审阅取值面未就绪'
-                : !complete
-                  ? '策略与每章须显式核对；历史约束须逐条处置，request_repair 须有有效约束'
-                  : ''
-            }
-            onClick={() => submit.mutate({
-              actor: draft.actor,
-              reviewer_kind: draft.reviewer_kind,
-              review_run_id: draft.review_run_id,
-              general_reason: draft.general_reason.trim(),
-              review_token: draft.review_token,
-              strategy: {
-                decision: draft.strategy.decision,
-                reason: draft.strategy.source_decision_sha256 ? draft.strategy.reason : draft.strategy.reason.trim(),
-                replan_constraints: draft.strategy.replan_constraints.map((row) => ({
-                  kind: row.kind,
-                  chapter_ordinals: row.chapter_ordinals,
-                })),
-                ...(draft.strategy.source_decision_sha256
-                  ? { source_decision_sha256: draft.strategy.source_decision_sha256 } : {}),
-              },
-              chapters: draft.chapters.map((chapter) => ({
-                output_ordinal: chapter.output_ordinal,
-                decision: chapter.decision,
-                reason: chapter.source_decision_sha256 ? chapter.reason : chapter.reason.trim(),
-                constraints: chapter.constraints,
-                ...(chapter.source_decision_sha256
-                  ? { source_decision_sha256: chapter.source_decision_sha256 } : {}),
-                ...(chapter.constraint_operations ? { constraint_operations: chapter.constraint_operations } : {}),
-              })),
-            }, {
-              onSuccess: (next) => notify(
-                next.design_review.state === 'accepted'
-                  ? 'Stage4A 正式审阅已保存；服务端判定可进入 B，最终计划仍须独立审批'
-                  : 'Stage4A 正式审阅已保存；未自动发起付费作业',
-              ),
-            })}
-          >
-            {submit.isPending ? '保存 Stage4A 审阅中…' : '保存 Stage4A 正式审阅'}
-          </ActionButton>
-        </div>
-        {submit.isError ? (
-          <div className="basis-full text-sm2 text-warn-ink">
-            Stage4A 审阅保存失败：{errorBody(submit.error)}
-            <ErrorHint error={submit.error} />
-          </div>
-        ) : null}
-      </div>
-    </div>
-  )
-}
-
-function ChapterReviewEditor({
-  chapter,
-  chapterDecisions,
-  repairCodes,
-  operationKinds,
-  constraintCatalog,
-  onOperations,
-  acceptedDecision,
-  repairDecision,
-  repairCapability,
-  candidateRepairable,
-  capabilityReason,
-  disabled,
-  onConfirmed,
-  onDecision,
-  onReason,
-  onConstraint,
-  onScope,
-}: {
-  chapter: DesignChapterReview
-  chapterDecisions: string[]
-  repairCodes: string[]
-  operationKinds: string[]
-  constraintCatalog: DesignConstraintCatalog | undefined
-  onOperations: (operations: DesignConstraintOperations) => void
-  acceptedDecision: string
-  repairDecision: string
-  repairCapability: DesignReviewMaterialized['repair_capability']['chapters'][number] | null
-  candidateRepairable: boolean
-  capabilityReason: string
-  disabled: boolean
-  onConfirmed: (confirmed: boolean) => void
-  onDecision: (decision: string) => void
-  onReason: (reason: string) => void
-  onConstraint: (code: string, checked: boolean) => void
-  onScope: (
-    code: string,
-    field: 'scene_refs' | 'opaque_aliases',
-    value: string,
-    checked: boolean,
-    canonicalOptions: string[],
-  ) => void
-}) {
-  const candidate = chapter.subject.chapter
-  const semanticAliases = [...chapter.subject.blind_truth.constraints.map((c) => c.alias),
-    ...chapter.subject.blind_truth.endpoints.map((e) => e.endpoint_alias)]
-  const sceneOptions = candidate.scenes.map((scene) => scene.candidate_scene_id).sort()
-  const aliasDescriptions = new Map<string, string>()
-  const truth = chapter.subject.blind_truth
-  truth.beats.forEach((beat) => {
-    aliasDescriptions.set(beat.alias, beat.content)
-  })
-  truth.characters.forEach((person) => aliasDescriptions.set(person.alias, person.surfaces.join('、')))
-  for (const row of [...truth.states, ...truth.inherited_states]) {
-    aliasDescriptions.set(row.alias, row.content ?? '共享状态主体')
-  }
-  truth.constraints.forEach((c) => aliasDescriptions.set(c.alias, '约束 · ' + c.kind))
-  truth.global_subjects.forEach((g) => aliasDescriptions.set(g.alias, '共享主体 · ' + g.kind))
-  truth.endpoints.forEach((e) => aliasDescriptions.set(e.endpoint_alias, '端点 · ' + e.endpoint))
-  const aliasEntries = [...aliasDescriptions.entries()]
-    .sort(([left], [right]) => left.localeCompare(right))
-  const aliasOptions = aliasEntries.map(([alias]) => alias)
-  const constraints = new Map(chapter.constraints.map((constraint) => [constraint.code, constraint]))
-
-  return (
-    <div className="flex flex-col gap-12 px-20 py-16">
-      <div className="grid gap-14" style={{ gridTemplateColumns: 'minmax(0,1.35fr) minmax(0,1fr)' }}>
-        <div className="flex min-w-0 flex-col gap-8">
-          <div className="flex flex-wrap items-center gap-7">
-            <Mono className="rounded-tag bg-inset px-7 py-2 text-mini">第 {chapter.output_ordinal} 章</Mono>
-            <Mono className="rounded-tag bg-accent-bg px-7 py-2 text-mini text-accent-ink">
-              {candidate.structure_decision.mode}
-            </Mono>
-            <Mono className="rounded-tag bg-inset px-7 py-2 text-mini">权重 {candidate.weight}</Mono>
-          </div>
-          <div className="prose-cn text-body text-ink-2">{candidate.structure_decision.reason}</div>
-          <div className="flex flex-wrap gap-6 text-micro text-ink-4">
-            <span>声明变化</span>
-            {candidate.structure_decision.declared_change_kinds.map((kind) => (
-              <Mono key={kind} className="rounded-tag bg-inset px-6 py-1">{kind}</Mono>
-            ))}
-          </div>
-          <div className="prose-cn rounded-btn bg-inset px-10 py-8 text-sm2 text-ink-2">
-            <span className="text-tag text-ink-4">改写任务　</span>{candidate.chapter_rewrite_brief}
-          </div>
-          <div className="grid gap-6 text-sm2 md:grid-cols-3">
-            <GoalEvidence label="本章目标" goal={candidate.chapter_goal} />
-            <GoalEvidence label="开篇钩子" goal={candidate.open_hook_goal} />
-            <GoalEvidence label="收尾钩子" goal={candidate.end_hook_goal} />
-          </div>
-        </div>
-
-        <div className="flex min-w-0 flex-col gap-8">
-          <label className="flex flex-col gap-4 text-tag text-ink-3">
-            第 {chapter.output_ordinal} 章设计裁决
-            <select
-              aria-label={'第 ' + chapter.output_ordinal + ' 章 Stage4A 设计裁决'}
-              value={chapter.decision}
-              disabled={disabled || !chapterDecisions.length}
-              onChange={(event) => onDecision(event.target.value)}
-              className="rounded-btn border border-line-btn bg-card px-10 py-8 font-mono text-body font-normal text-ink"
-            >
-              {chapterDecisions.map((decision) => (
-                <option
-                  key={decision}
-                  value={decision}
-                  disabled={
-                    decision === repairDecision
-                    && repairCapability?.request_repair_available !== true
-                  }
-                >
-                  {decision}
-                </option>
-              ))}
-            </select>
-          </label>
-          <ChapterRepairCapability
-            capability={repairCapability}
-            candidateRepairable={candidateRepairable}
-            reasonCode={capabilityReason}
-          />
-          <label className="flex flex-col gap-4 text-tag text-ink-3">
-            第 {chapter.output_ordinal} 章设计裁决理由
-            <input
-              aria-label={'第 ' + chapter.output_ordinal + ' 章 Stage4A 裁决理由'}
-              value={chapter.reason}
-              disabled={disabled}
-              onChange={(event) => onReason(event.target.value)}
-              className="rounded-btn border border-line-btn bg-card px-10 py-8 text-body font-normal text-ink"
-            />
-          </label>
-          <ReviewConfirmation
-            label={'第 ' + chapter.output_ordinal + ' 章 Stage4A 已核对'}
-            checked={!chapter.placeholder}
-            disabled={disabled}
-            sourceDecision={chapter.source_decision_sha256}
-            onChange={onConfirmed}
-          />
-          <span className="text-micro text-ink-4">章审阅主体 SHA-256</span>
-          <Mono className="break-all text-mini text-ink-2">{chapter.subject_sha256}</Mono>
-        </div>
-      </div>
-
-      <div className="flex flex-col gap-7 rounded-block border border-line-row bg-sunken-2 px-14 py-12">
-        <span className="text-tag text-ink-4">候选场景</span>
-        {candidate.scenes.map((scene) => (
-          <div key={scene.candidate_scene_id} className="flex flex-col gap-5 rounded-btn bg-card px-12 py-10">
+    <details className="rounded-btn border border-line-row bg-card px-10 py-8">
+      <summary className="cursor-pointer text-sm2 font-semibold text-ink-2">历史审阅摘要</summary>
+      <div className="flex flex-col divide-y divide-line-row pt-6">
+        {history.map((entry, index) => (
+          <div key={entry.decision_sha256 + ':' + index} className="flex flex-col gap-3 py-6 text-sm2">
             <div className="flex flex-wrap items-center gap-6">
-              <Mono className="rounded-tag bg-inset px-6 py-1 text-mini">{scene.candidate_scene_id}</Mono>
-              <Mono className="text-micro text-ink-4">{scene.weight}</Mono>
-              <span className="text-micro text-ink-4">{scene.role} · {scene.delivery} · {scene.transition}</span>
+              <Mono className="rounded-tag bg-inset px-6 py-1 text-micro">
+                {entry.strategy_decision}
+              </Mono>
+              <span className="text-tag text-ink-4">{entry.actor}</span>
+              <Mono className="text-micro text-ink-4">{entry.decided_at}</Mono>
             </div>
-            <span className="prose-cn text-sm2 text-ink-2">{scene.purpose}</span>
-            <div className="prose-cn text-micro text-ink-4">
-              背景节点：{scene.context_beat_aliases.join('、') || '（无）'}；转折节点：{scene.turn_beat_alias}
-            </div>
-            <div className="prose-cn text-micro text-ink-4">
-              {candidate.beat_placements.flatMap((p) => p.deliveries.filter((d) => d.scene_ref === scene.scene_ref)
-                .map((d) => <p key={p.beat_alias}>节点 {p.beat_alias}：{d.presentation_instruction ?? '完整呈现'}</p>))}
-              {candidate.anchor_bindings.filter((b) => b.scene_ref === scene.scene_ref)
-                .map((b) => <p key={b.endpoint_alias}>端点 {b.endpoint_alias}</p>)}
-            </div>
+            <span className="prose-cn text-ink-2">{entry.general_reason}</span>
+            <span className="text-micro text-ink-4">
+              逐章：{Object.entries(entry.chapter_decisions)
+                .map(([ordinal, decision]) => '第 ' + ordinal + ' 章 ' + decision)
+                .join('、') || '（无）'}
+            </span>
           </div>
         ))}
       </div>
+    </details>
+  )
+}
 
-      <div className="grid gap-10 md:grid-cols-2">
-        <BlindTruthEvidence truth={chapter.subject.blind_truth} />
-        <StructureEvidence evidence={chapter.subject.structure_evidence} />
+function CurrentDecisionSummary({ view }: { view: DesignReviewView }) {
+  const decision = view.current_decision!
+  return (
+    <div className="flex flex-col gap-5 border-t border-line-row bg-sunken-2 px-20 py-14">
+      <div className="flex flex-wrap items-center gap-8">
+        <span className="text-body font-semibold">最近一次历史决定</span>
+        <Mono className="rounded-tag bg-inset px-7 py-2 text-mini">{decision.strategy.decision}</Mono>
+        <Mono className="break-all text-micro text-ink-4">{decision.decision_sha256}</Mono>
+        <span className="ml-auto text-tag text-ink-4">{decision.decided_at}</span>
       </div>
+      <span className="prose-cn text-sm2 text-ink-2">{decision.strategy.reason}</span>
+      <div className="flex flex-wrap gap-4">
+        {decision.chapters.map((chapter) => (
+          <Mono key={chapter.output_ordinal} className="rounded-tag bg-card px-7 py-2 text-mini text-ink-3">
+            第 {chapter.output_ordinal} 章 · {chapter.decision}
+          </Mono>
+        ))}
+      </div>
+    </div>
+  )
+}
 
-      {constraintCatalog && constraintCatalog.items.length > 0 ? (
-        <ConstraintHistoryEditor
-          ordinal={chapter.output_ordinal}
-          catalog={constraintCatalog}
-          operations={chapter.constraint_operations}
-          operationKinds={operationKinds}
-          semanticAliases={semanticAliases}
-          repairCodes={repairCodes}
-          sceneOptions={sceneOptions}
-          aliasEntries={aliasEntries}
-          aliasOptions={aliasOptions}
-          disabled={disabled}
-          onChange={onOperations}
-        />
-      ) : null}
+function capabilityLabel(value: boolean | null | undefined): string {
+  return value === null || value === undefined ? '（无）' : value ? '可用' : '不可用'
+}
 
-      <div className="flex flex-col gap-8 rounded-block border border-line-row px-14 py-12">
-        <div className="flex flex-wrap items-baseline gap-8">
-          <span className="text-body font-semibold">定向返修约束</span>
-          <span className="text-tag text-ink-4">
-            以下只填写本次新增约束；保留或替换的历史约束也会进入本轮返修
+function RepairCapabilitySummary({ capability }: {
+  capability: DesignReviewRepairCapability
+}) {
+  const legacy = capability.repairable !== null && capability.repairable !== undefined
+  const current = capability.agent_repairable !== null && capability.agent_repairable !== undefined
+  return (
+    <div className="flex flex-col gap-5 border-t border-line-row bg-sunken-2 px-20 py-14">
+      <div className="flex flex-wrap items-center gap-7">
+        <span className="text-body font-semibold">候选恢复能力（服务端结论，只读）</span>
+        {legacy ? (
+          <Mono className={
+            'rounded-tag px-7 py-2 text-mini '
+            + (capability.repairable ? 'bg-gate-ok-bg text-gate-ok-ink' : 'bg-warn-bg text-warn-ink')
+          }>
+            legacy repairable：{capability.repairable ? 'repairable' : 'not_repairable'}
+          </Mono>
+        ) : null}
+        {legacy && capability.reason_code ? (
+          <span className="text-tag text-ink-4">reason_code　<Mono className="text-mini text-ink-2">{capability.reason_code}</Mono></span>
+        ) : null}
+      </div>
+      {current ? (
+        <div className="grid gap-5 text-tag text-ink-4 md:grid-cols-2">
+          <span>
+            agent 定向返修　
+            <Mono className="text-mini text-ink-2">{capabilityLabel(capability.agent_repairable)}</Mono>
+            {capability.agent_reason_code ? ' · ' + capability.agent_reason_code : ''}
+          </span>
+          <span>
+            完整章替换　
+            <Mono className="text-mini text-ink-2">{capabilityLabel(capability.full_chapter_editable)}</Mono>
+            {capability.full_chapter_edit_reason_code ? ' · ' + capability.full_chapter_edit_reason_code : ''}
           </span>
         </div>
-        {chapter.decision === acceptedDecision ? (
-          <span className="text-sm2 text-ink-4">本章为 accept，返修约束为空。</span>
-        ) : (
-          <>
-            <div className="flex flex-wrap gap-9">
-              {repairCodes.map((code) => (
-                <label key={code} className="flex items-center gap-5 text-sm2 text-ink-2">
-                  <input
-                    type="checkbox"
-                    aria-label={'第 ' + chapter.output_ordinal + ' 章返修码 ' + code}
-                    checked={constraints.has(code)}
-                    disabled={disabled || (code === 'semantic_constraint' && !semanticAliases.length)}
-                    onChange={(event) => onConstraint(code, event.target.checked)}
-                  />
-                  <Mono>{code}</Mono>
-                </label>
-              ))}
-            </div>
-            {!semanticAliases.length && repairCodes.includes('semantic_constraint') ? (
-              <span className="text-sm2 text-ink-4">本章没有可引用的语义约束或端点，相关返修保持禁用。</span>
-            ) : null}
-            {chapter.constraints.map((constraint) => (
-              <ConstraintScope
-                key={constraint.code}
-                ordinal={chapter.output_ordinal}
-                constraint={constraint}
-                sceneOptions={sceneOptions}
-                aliasEntries={aliasEntries}
-                aliasOptions={aliasOptions}
-                disabled={disabled}
-                semanticAliases={semanticAliases}
-                onScope={onScope}
-              />
-            ))}
-          </>
-        )}
-      </div>
-    </div>
-  )
-}
-
-function constraintOperationsComplete(
-  operations: DesignConstraintOperations | undefined,
-  catalog: DesignConstraintCatalog | undefined,
-  kinds: string[],
-  chapter: DesignChapterReview, codes: string[], domain: ConstraintInputDomain,
-): boolean {
-  if (!catalog?.items.length) return true
-  return Boolean(operations
-    && operations.expected_constraint_set_sha256 === catalog.expected_constraint_set_sha256
-    && operations.items.length === catalog.items.length
-    && catalog.items.every((source) => {
-      const rows = operations.items.filter((item) => item.constraint_sha256 === source.constraint_sha256)
-      return rows.length === 1 && kinds.includes(rows[0].kind) && rows[0].reason.trim()
-        && (rows[0].kind === 'supersede'
-          ? rows[0].replacements.length > 0 && rows[0].replacements.every(
-            (constraint) => constraintComplete(constraint, chapter, codes, domain),
-          )
-          : rows[0].replacements.length === 0)
-    }))
-}
-
-function ConstraintHistoryEditor({
-  ordinal, catalog, operations, operationKinds, repairCodes, semanticAliases,
-  sceneOptions, aliasEntries, aliasOptions, disabled, onChange,
-}: {
-  ordinal: number
-  catalog: DesignConstraintCatalog
-  semanticAliases: string[]
-  operations: DesignConstraintOperations | undefined
-  operationKinds: string[]
-  repairCodes: string[]
-  sceneOptions: string[]
-  aliasEntries: [string, string][]
-  aliasOptions: string[]
-  disabled: boolean
-  onChange: (operations: DesignConstraintOperations) => void
-}) {
-  const update = (sha: string, patch: Partial<DesignConstraintOperation>) => {
-    const previous = operations?.items.find((item) => item.constraint_sha256 === sha)
-    const next: DesignConstraintOperation = {
-      kind: '', constraint_sha256: sha, reason: '', replacements: [], ...previous, ...patch,
-    }
-    const bySha = new Map((operations?.items ?? []).map((item) => [item.constraint_sha256, item]))
-    if (next.kind) bySha.set(sha, next)
-    else bySha.delete(sha)
-    onChange({
-      expected_constraint_set_sha256: catalog.expected_constraint_set_sha256,
-      items: catalog.items.flatMap((item) => {
-        const chosen = bySha.get(item.constraint_sha256)
-        return chosen ? [chosen] : []
-      }),
-    })
-  }
-  const labels: Record<string, string> = { keep: '保留', withdraw: '撤销', supersede: '替换' }
-  return (
-    <div className="flex flex-col gap-10 rounded-block border border-line-row bg-sunken-2 px-14 py-12">
-      <span className="text-body font-semibold">历史返修约束</span>
-      <p className="text-sm2 text-ink-3">
-        逐条核对实际执行过的要求，明确保留、撤销或替换并填写理由。接受本章会结束本章的返修义务。
-      </p>
-      {catalog.items.map((source, index) => {
-        const operation = operations?.items.find((item) => item.constraint_sha256 === source.constraint_sha256)
-        const prefix = '第 ' + ordinal + ' 章历史约束 ' + (index + 1)
-        return (
-          <div key={source.constraint_sha256} className="flex flex-col gap-8 rounded-btn bg-card px-12 py-10">
-            <span className="text-sm2 text-ink-2">
-              <Mono>{source.constraint.code}</Mono> · 场景 {source.constraint.scene_refs.join('、') || '（无）'}
-            </span>
-            <span className="text-sm2 text-ink-3">
-              {source.constraint.opaque_aliases.map((alias) => (
-                aliasEntries.find(([value]) => value === alias)?.[1] ?? alias
-              )).join('；')}
-            </span>
-            <details className="text-micro text-ink-4">
-              <summary>查看约束与来源</summary>
-              <pre className="whitespace-pre-wrap break-all">{JSON.stringify(source, null, 2)}</pre>
-            </details>
-            <label className="flex flex-col gap-4 text-tag text-ink-3">
-              处置
-              <select
-                aria-label={prefix + '处置'}
-                value={operation?.kind ?? ''}
-                disabled={disabled || !operationKinds.length}
-                onChange={(event) => update(source.constraint_sha256, {
-                  kind: event.target.value, replacements: [],
-                })}
-                className="rounded-btn border border-line-btn bg-card px-10 py-8 text-body text-ink"
-              >
-                <option value="">请选择</option>
-                {operationKinds.map((kind) => <option key={kind} value={kind}>{labels[kind] ?? kind}</option>)}
-              </select>
-            </label>
-            <label className="flex flex-col gap-4 text-tag text-ink-3">
-              处置理由
-              <input
-                aria-label={prefix + '理由'}
-                value={operation?.reason ?? ''}
-                disabled={disabled || !operation?.kind}
-                onChange={(event) => update(source.constraint_sha256, { reason: event.target.value })}
-                className="rounded-btn border border-line-btn bg-card px-10 py-8 text-body text-ink"
-              />
-            </label>
-            {operation?.kind === 'supersede' ? (
-              <>
-                <span className="text-tag text-ink-3">填写替代约束</span>
-                <div className="flex flex-wrap gap-9">
-                  {repairCodes.map((code) => (
-                    <label key={code} className="flex items-center gap-5 text-sm2 text-ink-2">
-                      <input type="checkbox" aria-label={prefix + '替代码 ' + code}
-                        checked={operation.replacements.some((item) => item.code === code)}
-                        disabled={disabled || (code === 'semantic_constraint' && !semanticAliases.length)}
-                        onChange={(event) => update(source.constraint_sha256, {
-                          replacements: (event.target.checked
-                            ? [...operation.replacements, { code, scene_refs: [], opaque_aliases: [] }]
-                            : operation.replacements.filter((item) => item.code !== code))
-                            .sort((left, right) => left.code.localeCompare(right.code)),
-                        })}
-                      />
-                      <Mono>{code}</Mono>
-                    </label>
-                  ))}
-                </div>
-                {!semanticAliases.length && repairCodes.includes('semantic_constraint') ? (
-                  <span className="text-sm2 text-ink-4">本章没有可引用的语义约束或端点，相关替换保持禁用。</span>
-                ) : null}
-                {operation.replacements.map((constraint) => (
-                  <ConstraintScope
-                    key={constraint.code} ordinal={ordinal} constraint={constraint}
-                    sceneOptions={sceneOptions} aliasEntries={aliasEntries} aliasOptions={aliasOptions} disabled={disabled}
-                    semanticAliases={semanticAliases}
-                    onScope={(code, field, value, checked, options) => update(source.constraint_sha256, {
-                      replacements: operation.replacements.map((item) => {
-                        if (item.code !== code) return item
-                        const selected = new Set(item[field])
-                        if (checked) selected.add(value)
-                        else selected.delete(value)
-                        return { ...item, [field]: options.filter((option) => selected.has(option)) }
-                      }),
-                    })}
-                  />
-                ))}
-              </>
-            ) : null}
-          </div>
-        )
-      })}
-    </div>
-  )
-}
-
-function ReviewConfirmation({
-  label,
-  checked,
-  disabled,
-  sourceDecision,
-  onChange,
-}: {
-  label: string
-  checked: boolean
-  disabled: boolean
-  sourceDecision: string | null
-  onChange: (confirmed: boolean) => void
-}) {
-  return (
-    <div className="flex flex-col gap-4 rounded-btn border border-line-row bg-card px-10 py-8">
-      <label className="flex items-center gap-7 text-sm2 font-semibold text-ink-2">
-        <input
-          type="checkbox"
-          aria-label={label}
-          checked={checked}
-          disabled={disabled}
-          onChange={(event) => onChange(event.target.checked)}
-        />
-        {label}
-      </label>
-      <span className={checked ? 'text-micro text-gate-ok-ink' : 'text-micro text-warn-ink'}>
-        {checked
-          ? sourceDecision
-            ? '已核对：沿用服务端验证过的同主体历史 accept'
-            : '已核对：将作为本轮正式人工反馈提交'
-          : '未核对：编辑不会自动确认；修改已确认内容会回到此状态'}
-      </span>
-      {!checked ? (
-        <span className="prose-cn text-micro text-ink-4">
-          请先写入真实裁决与理由，再显式勾选。服务端会拒绝原样提交关闭式默认反馈。
-        </span>
       ) : null}
+      <details className="rounded-btn border border-line-row bg-card px-10 py-8">
+        <summary className="cursor-pointer text-sm2 font-semibold text-ink-2">逐章能力</summary>
+        <div className="flex flex-col divide-y divide-line-row pt-4">
+          {capability.chapters.map((row) => (
+            <ChapterCapabilityRow key={row.output_ordinal} row={row} />
+          ))}
+        </div>
+      </details>
     </div>
   )
 }
 
-function RepairCapabilitySummary({
-  capability,
-  embedded = false,
-}: {
-  capability: DesignReviewMaterialized['repair_capability']
-  embedded?: boolean
-}) {
+function ChapterCapabilityRow({ row }: { row: DesignChapterRepairCapability }) {
   return (
-    <div className={
-      'flex flex-col gap-5 px-20 py-12 '
-      + (embedded ? 'rounded-btn border border-line-row bg-card' : 'border-b border-line-row bg-sunken-2')
-    }>
-      <div className="flex flex-wrap items-center gap-7">
-        <span className="text-body font-semibold">Stage4A 定向返修可执行性</span>
-        <Mono className={
-          'rounded-tag px-7 py-2 text-mini '
-          + (capability.repairable
-            ? 'bg-gate-ok-bg text-gate-ok-ink'
-            : 'bg-warn-bg text-warn-ink')
-        }>
-          {capability.repairable ? 'repairable' : 'not_repairable'}
-        </Mono>
-        <span className="text-tag text-ink-4">服务端 reason_code</span>
-        <Mono className="text-mini text-ink-2">{capability.reason_code}</Mono>
-      </div>
-      <span className="prose-cn text-micro text-ink-4">
-        每章能否选择 request_repair 只读服务端下发的布尔结论；已提交轮次仅作审计展示，界面不按数值重算额度。
-      </span>
-    </div>
-  )
-}
-
-function ChapterRepairCapability({
-  capability,
-  candidateRepairable,
-  reasonCode,
-}: {
-  capability: DesignReviewMaterialized['repair_capability']['chapters'][number] | null
-  candidateRepairable: boolean
-  reasonCode: string
-}) {
-  if (!capability) {
-    return (
-      <div className="rounded-btn border border-warn-line bg-warn-bg px-10 py-8 text-sm2 text-warn-ink">
-        服务端未给出本章返修可执行性；request_repair 保持禁用。
-      </div>
-    )
-  }
-  const message = capability.request_repair_available
-    ? '服务端判定：本章 request_repair 可用'
-    : candidateRepairable
-      ? '服务端判定：本章返修轮次已耗尽，request_repair 不可再选'
-      : '服务端判定：当前候选不能执行定向返修，request_repair 不可选'
-  return (
-    <div
-      aria-label={'第 ' + capability.output_ordinal + ' 章定向返修能力'}
-      className={
-        'flex flex-col gap-3 rounded-btn border px-10 py-8 text-sm2 '
-        + (capability.request_repair_available
-          ? 'border-gate-ok-line bg-gate-ok-bg text-gate-ok-ink'
-          : 'border-warn-line bg-warn-bg text-warn-ink')
-      }
-    >
-      <span className="font-semibold">{message}</span>
-      <span className="text-micro">
-        committed_rounds <Mono>{capability.committed_rounds}</Mono>
-        {' · '}reason_code <Mono>{reasonCode}</Mono>
-      </span>
+    <div className="flex flex-wrap items-center gap-8 py-5 text-sm2 text-ink-2">
+      <Mono className="rounded-tag bg-inset px-6 py-1 text-micro">第 {row.output_ordinal} 章</Mono>
+      <span className="text-micro text-ink-4">committed_rounds <Mono>{row.committed_rounds}</Mono></span>
+      {row.request_repair_available !== null && row.request_repair_available !== undefined ? (
+        <span className="text-micro text-ink-4">request_repair：{capabilityLabel(row.request_repair_available)}</span>
+      ) : null}
+      {row.agent_repair_available !== null && row.agent_repair_available !== undefined ? (
+        <span className="text-micro text-ink-4">agent 返修：{capabilityLabel(row.agent_repair_available)}</span>
+      ) : null}
+      {row.full_chapter_edit_available !== null && row.full_chapter_edit_available !== undefined ? (
+        <span className="text-micro text-ink-4">完整章替换：{capabilityLabel(row.full_chapter_edit_available)}</span>
+      ) : null}
     </div>
   )
 }
@@ -1140,16 +208,21 @@ function ChapterRepairCapability({
 function BindingInfeasibilityEvidence({
   evidence,
 }: {
-  evidence: NonNullable<DesignReviewMaterialized['binding_infeasibility']>
+  evidence: {
+    candidate_sha256: string
+    binding_concerns: { constraint_code: string; reason: string }[]
+    infeasibility_proof: BindingInfeasibilityWitness[]
+  }
 }) {
   return (
-    <div className="flex flex-col gap-9 border-b border-warn-line bg-warn-bg px-20 py-14">
+    <div className="flex flex-col gap-9 border-t border-warn-line bg-warn-bg px-20 py-14">
       <div className="flex flex-wrap items-center gap-7">
-        <span className="text-body font-semibold text-warn-ink">当前 Stage4B 不可行证明</span>
+        <span className="text-body font-semibold text-warn-ink">Stage4B 不可行证明（历史账）</span>
         <Mono className="break-all text-mini text-warn-ink">{evidence.candidate_sha256}</Mono>
       </div>
       <span className="prose-cn text-sm2 text-warn-ink">
-        这里只转录服务端已判定为 current / fresh、并由代码铸造的证明；模型 concern 不会被前端升级成不可行结论。
+        这里只转录服务端判定并由代码铸造的证明；模型 concern 不会被前端升级成不可行结论。
+        现役链上这一终态由预算内自动重规划消费，不再等待人工裁决。
       </span>
       {evidence.infeasibility_proof.map((witness, index) => (
         <div key={witness.proof_basis + ':' + index} className="rounded-btn border border-warn-line bg-card px-11 py-9">
@@ -1173,146 +246,6 @@ function BindingInfeasibilityEvidence({
           ))}
         </div>
       ) : null}
-    </div>
-  )
-}
-
-function GoalEvidence({
-  label,
-  goal,
-}: {
-  label: string
-  goal: { intent: string; subject_aliases: string[]; anchor_scene_ref: string }
-}) {
-  return (
-    <div className="flex flex-col gap-3 rounded-btn border border-line-row px-9 py-7">
-      <span className="text-tag text-ink-4">{label} · {goal.intent}</span>
-      <Mono className="break-all text-micro text-ink-2">{goal.subject_aliases.join('、') + ' · ' + goal.anchor_scene_ref}</Mono>
-    </div>
-  )
-}
-
-function BlindTruthEvidence({ truth }: { truth: DesignChapterReview['subject']['blind_truth'] }) {
-  return <div className="flex min-w-0 flex-col gap-8 rounded-btn bg-inset px-11 py-9">
-    <span className="text-tag text-ink-4">规划剧情 · {truth.chapter_function}</span>
-    {truth.beats.map((beat) => <div key={beat.alias} className="border-b border-line-row pb-8">
-      <Mono className="text-micro">{beat.alias}</Mono><p className="prose-cn">{beat.content}</p>
-    </div>)}
-    <details><summary>持续状态、约束与端点</summary>
-      <pre className="overflow-auto whitespace-pre-wrap text-sm2">{JSON.stringify({
-        states: truth.states, inherited_states: truth.inherited_states,
-        constraints: truth.constraints, endpoints: truth.endpoints,
-        entry_state_aliases: truth.entry_state_aliases, carry_out_aliases: truth.carry_out_aliases,
-        global_subjects: truth.global_subjects, background_beats: truth.background_beats,
-      }, null, 2)}</pre>
-    </details>
-  </div>
-}
-
-function StructureEvidence({
-  evidence,
-}: {
-  evidence: DesignChapterReview['subject']['structure_evidence']
-}) {
-  const vectors = [
-    ['声明变化', evidence.declared_change_kinds],
-    ['代码复算', evidence.computed_change_kinds],
-    ['已实现声明', evidence.realized_declared],
-    ['未实现声明', evidence.unrealized_declared],
-    ['未声明实变', evidence.undeclared_actual],
-  ] as const
-  return (
-    <div className="flex min-w-0 flex-col gap-6 rounded-btn bg-inset px-11 py-9">
-      <div className="flex flex-wrap items-center gap-6">
-        <span className="text-tag text-ink-4">结构机械证据</span>
-        <Mono className="rounded-tag bg-card px-6 py-1 text-micro">{evidence.state}</Mono>
-        <Mono className="text-micro text-ink-4">{evidence.metric_contract}</Mono>
-      </div>
-      {vectors.map(([label, values]) => (
-        <div key={label} className="flex flex-wrap gap-5 text-micro text-ink-4">
-          <span>{label}</span>
-          {values.length ? values.map((value) => (
-            <Mono key={value} className="rounded-tag bg-card px-5 py-1 text-ink-2">{value}</Mono>
-          )) : <span>（无）</span>}
-        </div>
-      ))}
-      <div className="flex flex-col gap-3 border-t border-line-row pt-5">
-        {Object.entries(evidence.readings).map(([key, value]) => (
-          <div key={key} className="grid gap-5 text-micro" style={{ gridTemplateColumns: 'minmax(0,1fr) minmax(0,0.7fr)' }}>
-            <Mono className="break-all text-ink-4">{key}</Mono>
-            <Mono className="break-all text-ink-2">{value === null ? 'null' : String(value)}</Mono>
-          </div>
-        ))}
-      </div>
-    </div>
-  )
-}
-
-function ConstraintScope({
-  ordinal,
-  constraint,
-  sceneOptions,
-  aliasEntries,
-  aliasOptions,
-  disabled,
-  onScope,
-  semanticAliases,
-}: {
-  ordinal: number
-  constraint: DesignRepairConstraint
-  sceneOptions: string[]
-  aliasEntries: [string, string][]
-  aliasOptions: string[]
-  disabled: boolean
-  semanticAliases: string[]
-  onScope: (
-    code: string,
-    field: 'scene_refs' | 'opaque_aliases',
-    value: string,
-    checked: boolean,
-    canonicalOptions: string[],
-  ) => void
-}) {
-  const choices = constraint.code === 'semantic_constraint'
-    ? aliasEntries.filter(([alias]) => semanticAliases.includes(alias)) : aliasEntries
-  const options = constraint.code === 'semantic_constraint' ? choices.map(([alias]) => alias) : aliasOptions
-  return (
-    <div className="grid gap-10 border-t border-line-row pt-9 md:grid-cols-2">
-      <div className="flex flex-col gap-5">
-        <Mono className="text-mini font-semibold">{constraint.code} · scene_refs</Mono>
-        {sceneOptions.length ? sceneOptions.map((scene) => (
-          <label key={scene} className="flex items-center gap-5 text-sm2 text-ink-2">
-            <input
-              type="checkbox"
-              aria-label={'第 ' + ordinal + ' 章 ' + constraint.code + ' 场景 ' + scene}
-              checked={constraint.scene_refs.includes(scene)}
-              disabled={disabled}
-              onChange={(event) => onScope(
-                constraint.code, 'scene_refs', scene, event.target.checked, sceneOptions,
-              )}
-            />
-            <Mono>{scene}</Mono>
-          </label>
-        )) : <span className="text-sm2 text-ink-4">当前章没有候选场景引用</span>}
-      </div>
-      <div className="flex flex-col gap-5">
-        <Mono className="text-mini font-semibold">{constraint.code} · opaque_aliases</Mono>
-        {choices.length ? choices.map(([alias, ref]) => (
-          <label key={alias} className="flex min-w-0 items-center gap-5 text-sm2 text-ink-2">
-            <input
-              type="checkbox"
-              aria-label={'第 ' + ordinal + ' 章 ' + constraint.code + ' alias ' + alias}
-              checked={constraint.opaque_aliases.includes(alias)}
-              disabled={disabled}
-              onChange={(event) => onScope(
-                constraint.code, 'opaque_aliases', alias, event.target.checked, options,
-              )}
-            />
-            <Mono className="break-all">{alias}</Mono>
-            <span className="min-w-0 break-all text-micro text-ink-4">{ref}</span>
-          </label>
-        )) : <span className="text-sm2 text-ink-4">当前章没有 opaque alias</span>}
-      </div>
     </div>
   )
 }

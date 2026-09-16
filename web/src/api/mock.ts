@@ -26,12 +26,7 @@ import {
   GATE_KEYS,
   type ActionRef,
   type ApprovalDoc,
-  type ApprovalWorkpack,
   type BatchTrimResolutionRequest,
-  type DesignReviewDecision,
-  type DesignReviewRequest,
-  type DesignReviewTemplate,
-  type DesignReviewTemplateQuery,
   type GateKey,
   type Stage5ClosureDecision,
   type Stage5FindingGroup,
@@ -41,7 +36,6 @@ import {
   type Stage6ApprovalWorkpack,
   type Stage7ApprovalWorkpack,
   type StructureApprovalDecision,
-  type StructureApprovalRequest,
   type WritingApprovalRequest,
 } from '@/types/approvals'
 import type { EnumsResponse } from '@/types/enums'
@@ -358,11 +352,8 @@ function lsWrite(key: string, v: unknown): void {
 const MOCK_STRUCTURE_SUBJECT = 'f'.repeat(64)
 const MOCK_DESIGN_CANDIDATE = 'e'.repeat(64)
 const MOCK_DESIGN_AGGREGATE = 'd'.repeat(64)
-const MOCK_DESIGN_STRATEGY = 'c'.repeat(64)
-const MOCK_DESIGN_CHAPTER = 'b'.repeat(64)
 const MOCK_STAGE5_WORKPACK = '7'.repeat(64)
 const MOCK_STAGE5_REVIEW = '6'.repeat(64)
-const MOCK_DESIGN_REVIEW_TOKEN = 's4dr1_' + MOCK_DESIGN_AGGREGATE
 const MOCK_STRUCTURE_REVIEW_TOKEN = 's4sr1_' + MOCK_STRUCTURE_SUBJECT
 const MOCK_WRITING_REVIEW_TOKEN = 's5wr1_' + MOCK_STRUCTURE_SUBJECT
 const MOCK_STAGE5_REVIEW_TOKEN = 's5cr1_' + MOCK_STAGE5_WORKPACK
@@ -428,217 +419,35 @@ function seededStructureDecision(): StructureApprovalDecision {
   }
 }
 
-function mockDesignReviewTemplate(query: DesignReviewTemplateQuery): DesignReviewTemplate {
-  const sample = plotFlowFixture().design_template.chapters.find((c) => c.output_ordinal === SAMPLE_ORDINAL)!.subject
+/**
+ * Stage4A 审阅投影的现役形状（与录制样本一致）：历史账只读、无新决定。
+ * workpack/模板与 typed 决定写面已随 2026-09-15 全自动裁决退役。
+ */
+function mockDesignReviewProjection() {
   return {
-    actor: query.actor,
-    reviewer_kind: query.reviewer_kind,
-    review_run_id: query.review_run_id,
-    general_reason: query.reason,
+    state: enumAt(enums().design_review_states, 1, 'A 审阅状态'),
     candidate_sha256: MOCK_DESIGN_CANDIDATE,
     aggregate_subject_sha256: MOCK_DESIGN_AGGREGATE,
-    review_token: MOCK_DESIGN_REVIEW_TOKEN,
+    action_review_token: null,
+    current_decision: null,
+    history: [],
     binding_infeasibility: null,
-    preflight: {
-      status: enumAt(enums().design_preflight_statuses, 0, 'A 预检状态'),
-      candidate_sha256: MOCK_DESIGN_CANDIDATE,
-      blueprint_sha256: '6'.repeat(64),
-      review_contract: 'stage4-design-review-v2',
-      code_version: 'mock-code-v1',
-      blocked_owners: [],
-      failures: [],
-      infeasibility: [],
-    },
+    preflight: null,
     repair_capability: {
-      repairable: true,
-      reason_code: 'ready',
+      repairable: null,
+      reason_code: null,
+      agent_repairable: false,
+      agent_reason_code: 'legacy_or_untracked_candidate',
+      full_chapter_editable: true,
+      full_chapter_edit_reason_code: 'current_typed_decision',
       chapters: [{
         output_ordinal: SAMPLE_ORDINAL,
         committed_rounds: 0,
-        request_repair_available: true,
+        request_repair_available: null,
+        agent_repair_available: false,
+        full_chapter_edit_available: true,
       }],
     },
-    strategy: {
-      subject: {
-        basis: {
-          review_contract: 'stage4-design-review-v2',
-          root_clean_sha1: 'a'.repeat(40),
-          truth_sha256: '1'.repeat(64),
-          alias_algorithm: 'hmac-sha256-v1',
-        },
-        reconstruction_strategy: '打散原章顺序，以因果揭示次序重组场景。',
-        chapter_weights: [{ chapter_ordinal: SAMPLE_ORDINAL, weight: 'medium' }],
-      },
-      subject_sha256: MOCK_DESIGN_STRATEGY,
-      placeholder: true,
-      template_token: '7'.repeat(64),
-      decision: enumAt(enums().design_strategy_decisions, 1, 'A 策略审阅决定'),
-      reason: '关闭式模板：尚未核实整书策略，保持 request_replan',
-      replan_constraints: [],
-      source_decision_sha256: null,
-    },
-    chapters: [{
-      output_ordinal: SAMPLE_ORDINAL,
-      subject: {
-        strategy_subject_sha256: MOCK_DESIGN_STRATEGY,
-        blind_truth: sample.blind_truth,
-        chapter: sample.chapter,
-        structure_evidence: sample.structure_evidence,
-      },
-      subject_sha256: MOCK_DESIGN_CHAPTER,
-      placeholder: true,
-      template_token: '6'.repeat(64),
-      decision: enumAt(enums().design_chapter_decisions, 1, 'A 逐章审阅决定'),
-      reason: '关闭式模板：尚未核实本章候选，保持 request_repair',
-      constraints: [{
-        code: enumAt(enums().design_repair_codes, 0, 'A 返修码'),
-        scene_refs: [],
-        // `structure_delta` 退役后首个 active 码是 entry_anchor（arity 0,1）：
-        // 泛化重排指令不再可作为不带证据的默认脚手架。
-        opaque_aliases: [sample.blind_truth.beats[0].alias],
-      }],
-      source_decision_sha256: null,
-    }],
-  }
-}
-
-function mockApprovalWorkpack(
-  sid: string,
-  kind: 'design' | 'structure',
-): ApprovalWorkpack {
-  const empty = (group: ApprovalWorkpack['groups'][number]['group'], scanned: string) => ({
-    group,
-    scanned,
-    items: [],
-  })
-  return {
-    v: 2,
-    sid,
-    kind,
-    candidate_sha256: kind === 'design' ? MOCK_DESIGN_CANDIDATE : null,
-    subject_sha256: kind === 'design' ? MOCK_DESIGN_AGGREGATE : MOCK_STRUCTURE_SUBJECT,
-    review_token: kind === 'design'
-      ? MOCK_DESIGN_REVIEW_TOKEN
-      : MOCK_STRUCTURE_REVIEW_TOKEN,
-    chapter_ordinals: [SAMPLE_ORDINAL],
-    groups: [
-      empty('blocking', '已扫描当前主体的全部 HARD 与预检见证'),
-      {
-        group: 'semantic_attention',
-        scanned: '已扫描全章语义关注面',
-        items: [{
-          code: 'temporal_binding_unknown',
-          rule: 'temporal_binding_unknown',
-          sev: 'unver',
-          status: 'unver',
-          chapter_ordinal: SAMPLE_ORDINAL,
-          scene_refs: ['c03s01'],
-          refs: ['a_' + '1'.repeat(16)],
-          repair_owner: 'human',
-          detail: '第 3 章的倒叙入口仍需人工确认时间层绑定。',
-          effect: 'attention',
-          allowed_actions: [],
-          changed: false,
-          historical_accept_reusable: false,
-          source_decision_sha256: null,
-        }],
-      },
-      {
-        group: 'disclosure',
-        scanned: '已完整投影 INFO 与绑定关注项',
-        items: [{
-          code: 'stage_signature_conflict',
-          rule: 'stage_signature_conflict',
-          sev: 'info',
-          status: 'hit',
-          chapter_ordinal: SAMPLE_ORDINAL,
-          scene_refs: ['c03s01'],
-          refs: ['a_' + '2'.repeat(16)],
-          repair_owner: null,
-          detail: '同一材料在当前章存在多个时空签名，作为完整披露保留。',
-          effect: 'disclose',
-          allowed_actions: [],
-          changed: false,
-          historical_accept_reusable: false,
-          source_decision_sha256: null,
-        }],
-      },
-      empty('metric_only', '已扫描当前主体全部 metric 读数'),
-      empty('phase_deferred', '已登记必须等 stage4.context 后才能判定的规则'),
-      {
-        group: 'coverage',
-        scanned: '全章覆盖：1 / 1',
-        items: [{
-          code: 'chapter_coverage',
-          rule: null,
-          sev: null,
-          status: null,
-          chapter_ordinal: SAMPLE_ORDINAL,
-          scene_refs: [],
-          refs: [],
-          repair_owner: null,
-          detail: '第 3 章已进入本次工作包。',
-          effect: 'coverage',
-          allowed_actions: ['accept'],
-          changed: false,
-          historical_accept_reusable: true,
-          source_decision_sha256: '9'.repeat(64),
-        }],
-      },
-    ],
-    disposition: kind === 'design'
-      ? loadDoc(sid).design_review.state === 'accepted'
-        ? 'already_current'
-        : 'review_required'
-      : loadDoc(sid).structure.state === 'accepted' ? 'already_current' : 'review_required',
-    current_decision_sha256: kind === 'design'
-      ? loadDoc(sid).design_review.current_decision?.decision_sha256 ?? null
-      : loadDoc(sid).structure.current_decision ? '8'.repeat(64) : null,
-  }
-}
-
-function seededDesignReviewDecision(): DesignReviewDecision {
-  const request = mockDesignReviewTemplate({
-    actor: 'mock-reviewer',
-    reviewer_kind: enumAt(enums().design_reviewer_kinds, 0, 'A 审阅者类型'),
-    review_run_id: '00000000-0000-4000-8000-000000000001',
-    reason: 'mock 样本已核对 Stage4A 候选',
-  })
-  return {
-    ...request,
-    strategy: {
-      ...request.strategy,
-      placeholder: false,
-      template_token: null,
-      decision: enums().design_strategy_decisions[0]!,
-      reason: 'mock 已逐项核对当前整书策略',
-    },
-    chapters: request.chapters.map((chapter) => ({
-      ...chapter,
-      placeholder: false,
-      template_token: null,
-      decision: enums().design_chapter_decisions[0]!,
-      reason: 'mock 已逐项核对当前章设计',
-      constraints: [],
-    })),
-    decision_sha256: '9'.repeat(64),
-    decided_at: '2026-08-28T00:00:00+00:00',
-  }
-}
-
-function mockDesignHistoryEntry(decision: DesignReviewDecision) {
-  return {
-    actor: decision.actor,
-    reviewer_kind: decision.reviewer_kind,
-    review_run_id: decision.review_run_id,
-    general_reason: decision.general_reason,
-    review_token: MOCK_DESIGN_REVIEW_TOKEN,
-    strategy_decision: decision.strategy.decision,
-    chapter_decisions: Object.fromEntries(
-      decision.chapters.map((row) => [row.output_ordinal, row.decision]),
-    ),
-    decision_sha256: decision.decision_sha256,
-    decided_at: decision.decided_at,
   }
 }
 
@@ -694,24 +503,14 @@ function freshDoc(sid: string): ApprovalDoc {
  */
 function seededDoc(sid: string): ApprovalDoc {
   const decision = seededStructureDecision()
-  const designDecision = seededDesignReviewDecision()
   return {
     v: 9,
     sid,
     prepare: freshDoc(sid).prepare,
     gate: { s0: true, s1: true, s4: true, s5: true, s6: false, s7: false },
     writing: true,
-    design_review: {
-      state: enumAt(enums().design_review_states, 4, 'A 审阅状态'),
-      candidate_sha256: MOCK_DESIGN_CANDIDATE,
-      aggregate_subject_sha256: MOCK_DESIGN_AGGREGATE,
-      action_review_token: null,
-      current_decision: designDecision,
-      history: [mockDesignHistoryEntry(designDecision)],
-      binding_infeasibility: null,
-      preflight: designDecision.preflight,
-      repair_capability: designDecision.repair_capability,
-    },
+    // Stage4A 人工审阅已退役：样本按现役投影呈现无决定、无历史的历史账。
+    design_review: mockDesignReviewProjection(),
     structure: {
       state: enumAt(enums().structure_approval_states, 2, '结构审批状态'),
       current_subject_sha256: MOCK_STRUCTURE_SUBJECT,
@@ -1574,10 +1373,9 @@ export const mockApi: Api = {
 
   getApprovals: (sid) => sid === PLOT_SAMPLE_SID ? plotRead(sid, 'approvals', true) : later(loadDoc(sid)),
 
-  getDesignApprovalWorkpack: (sid) => sid === PLOT_SAMPLE_SID
-    ? plotRead(sid, 'approvals/design/workpack', true) : later(mockApprovalWorkpack(sid, 'design')),
-  getStructureApprovalWorkpack: (sid) => sid === PLOT_SAMPLE_SID
-    ? plotRead(sid, 'approvals/structure/workpack', true) : later(mockApprovalWorkpack(sid, 'structure')),
+  // stage4 design/structure workpack、模板与 typed 决定写面已随 2026-09-15 全自动
+  // 裁决退役：mock 不再模拟这些读/写端点，Stage4 人工闸只剩只读审批投影。
+
   getStage6ApprovalWorkpack: (sid) => plotRead(sid, 'approvals/stage6/workpack', true),
   getStage7ApprovalWorkpack: (sid) => plotRead(sid, 'approvals/stage7/workpack', true),
 
@@ -1651,197 +1449,16 @@ export const mockApi: Api = {
     }))
   },
 
-  getDesignReviewTemplate: (sid, query: DesignReviewTemplateQuery) => {
-    const doc = loadDoc(sid)
-    const template = mockDesignReviewTemplate(query)
-    const current = doc.design_review.current_decision
-    if (
-      current
-      && current.candidate_sha256 === template.candidate_sha256
-      && current.aggregate_subject_sha256 === template.aggregate_subject_sha256
-    ) {
-      const acceptedStrategy = enumAt(
-        enums().design_strategy_decisions, 0, 'A 策略审阅决定',
-      )
-      return later({
-        ...template,
-        strategy: current.strategy.decision === acceptedStrategy
-          ? {
-              ...template.strategy,
-              decision: current.strategy.decision,
-              reason: current.strategy.reason,
-              placeholder: false,
-              template_token: null,
-              source_decision_sha256: current.decision_sha256,
-            }
-          : template.strategy,
-        chapters: template.chapters.map((chapter) => {
-          const prior = current.chapters.find((row) => row.output_ordinal === chapter.output_ordinal)
-          return prior?.decision === enums().design_chapter_decisions[0]
-            ? {
-                ...chapter,
-                decision: prior.decision,
-                reason: prior.reason,
-                constraints: [],
-                placeholder: false,
-                template_token: null,
-                source_decision_sha256: current.decision_sha256,
-              }
-            : chapter
-        }),
-      })
-    }
-    return later(template)
-  },
-
-  approveDesignReview: (sid, request: DesignReviewRequest) => {
-    const doc = loadDoc(sid)
-    const materialized = mockDesignReviewTemplate({
-      actor: request.actor,
-      reviewer_kind: request.reviewer_kind,
-      review_run_id: request.review_run_id,
-      reason: request.general_reason,
-    })
-    if (request.review_token !== materialized.review_token) {
-      return fail(new ApiError('server', '/novels/' + sid + '/approvals/design', {
-        message: 'Stage4A 审阅对象已变化；请刷新关闭式模板后重审',
-      }))
-    }
-    const acceptedStrategy = enumAt(enums().design_strategy_decisions, 0, 'A 策略审阅决定')
-    const acceptedChapter = enumAt(enums().design_chapter_decisions, 0, 'A 逐章审阅决定')
-    const requestRepair = enumAt(enums().design_chapter_decisions, 1, 'A 逐章审阅决定')
-    const invalidChapter = request.chapters.some((chapter) => (
-      (chapter.decision === acceptedChapter && (chapter.constraints.length > 0
-        || chapter.constraint_operations?.items.some((item) => item.kind === 'supersede')))
-      || (chapter.decision === requestRepair && chapter.constraints.length === 0
-        && !chapter.constraint_operations?.items.some((item) => (
-          item.kind === 'keep' || (item.kind === 'supersede' && item.replacements.length > 0)
-        )))
-      || (
-        chapter.decision === requestRepair
-        && !materialized.repair_capability.chapters.find(
-          (row) => row.output_ordinal === chapter.output_ordinal,
-        )?.request_repair_available
-      )
-    ))
-    if (invalidChapter) {
-      return fail(new ApiError('server', '/novels/' + sid + '/approvals/design', {
-        message: 'accept 章不得带返修约束；request_repair 必须可执行且至少选择一个返修码',
-      }))
-    }
-    const decision: DesignReviewDecision = {
-      ...materialized,
-      actor: request.actor,
-      reviewer_kind: request.reviewer_kind,
-      review_run_id: request.review_run_id,
-      general_reason: request.general_reason,
-      strategy: {
-        ...materialized.strategy,
-        placeholder: false,
-        template_token: null,
-        decision: request.strategy.decision,
-        reason: request.strategy.reason,
-        replan_constraints: request.strategy.replan_constraints.map((row) => ({
-          ...row,
-          subject_sha256: materialized.strategy.subject_sha256,
-        })),
-      },
-      chapters: materialized.chapters.map((chapter) => {
-        const ruling = request.chapters.find(
-          (row) => row.output_ordinal === chapter.output_ordinal,
-        )!
-        return {
-          ...chapter,
-          placeholder: false,
-          template_token: null,
-          decision: ruling.decision,
-          reason: ruling.reason,
-          constraints: ruling.constraints,
-          ...(ruling.constraint_operations ? { constraint_operations: ruling.constraint_operations } : {}),
-        }
-      }),
-      decision_sha256: '8'.repeat(64),
-      decided_at: new Date().toISOString(),
-    }
-    const stateIndex = request.strategy.decision !== acceptedStrategy
-      ? 3
-      : request.chapters.some((chapter) => chapter.decision !== acceptedChapter)
-        ? 2
-        : 4
-    return later(saveDoc({
-      ...doc,
-      design_review: {
-        state: enumAt(enums().design_review_states, stateIndex, 'A 审阅状态'),
-        candidate_sha256: materialized.candidate_sha256,
-        aggregate_subject_sha256: materialized.aggregate_subject_sha256,
-        action_review_token: stateIndex === 4 ? null : 's4rr1_' + decision.decision_sha256,
-        current_decision: decision,
-        history: [...doc.design_review.history, mockDesignHistoryEntry(decision)],
-        binding_infeasibility: materialized.binding_infeasibility,
-        preflight: materialized.preflight,
-        repair_capability: materialized.repair_capability,
-      },
-    }))
-  },
-
   approveGate: (sid, key: GateKey) => {
     if (key === 's4' || key === 's5') {
-      return fail(new ApiError('server', '/novels/' + sid + '/approvals/gate/s4', {
+      return fail(new ApiError('server', '/novels/' + sid + '/approvals/gate/' + key, {
         message: key === 's4'
-          ? 'Stage4 只接受带完整 subject 与逐章理由的专用结构裁决'
+          ? 'gate.s4 已退役：Stage4 的唯一打开条件是统一机械准入，不再接受任何审批写面'
           : 'Stage5 只接受绑定当前工作包的 Commander 闭合回执',
       }))
     }
     const doc = loadDoc(sid)
     return later(saveDoc({ ...doc, gate: { ...doc.gate, [key]: true } }))
-  },
-
-  approveStructure: (sid, request: StructureApprovalRequest) => {
-    const doc = loadDoc(sid)
-    const subject = doc.structure.current_subject_sha256
-    const expectedChapters = doc.structure.current_decision?.chapters
-      .map((row) => row.output_ordinal) ?? [SAMPLE_ORDINAL]
-    const submittedChapters = request.chapters.map((row) => row.output_ordinal)
-    if (subject === null || request.review_token !== doc.structure.review_token) {
-      return fail(new ApiError('server', '/novels/' + sid + '/approvals/structure', {
-        message: 'Stage4 结构审批对象已变化；请刷新后重审',
-      }))
-    }
-    if (JSON.stringify(submittedChapters) !== JSON.stringify(expectedChapters)) {
-      return fail(new ApiError('server', '/novels/' + sid + '/approvals/structure', {
-        message: '结构裁决章集必须精确等于当前计划',
-      }))
-    }
-    const accepted = enumAt(enums().structure_approval_decisions, 0, '结构审批决定')
-    const allAccepted = request.chapters.every((row) => row.decision === accepted)
-    const decision: StructureApprovalDecision = {
-      ...request,
-      chapters: request.chapters.map((row) => ({ ...row })),
-      decided_at: new Date().toISOString(),
-    }
-    const gate = { ...doc.gate, s4: allAccepted }
-    if (!allAccepted) {
-      gate.s5 = false
-      gate.s6 = false
-      gate.s7 = false
-    }
-    return later(saveDoc({
-      ...doc,
-      gate,
-      writing: allAccepted ? doc.writing : false,
-      structure: {
-        state: enumAt(
-          enums().structure_approval_states,
-          allAccepted ? 2 : 3,
-          '结构审批状态',
-        ),
-        current_subject_sha256: subject,
-        review_token: MOCK_STRUCTURE_REVIEW_TOKEN,
-        current_decision: decision,
-        history: [...doc.structure.history, decision],
-        binding_concerns: doc.structure.binding_concerns,
-      },
-    }))
   },
 
   backfillApprovals: (sid) => {
@@ -1982,9 +1599,6 @@ import plotFlowSample from '@/fixtures/plot_v1/flow.json'
 export const PLOT_SAMPLE_SID = plotFlowSample['http:overview'].sid
 export function plotFlowFixture() {
   return structuredClone(plotFlowSample) as unknown as {
-    design_template: import('@/types/approvals').DesignReviewTemplate
-    design_workpack: import('@/types/approvals').ApprovalWorkpack
-    structure_workpack: import('@/types/approvals').ApprovalWorkpack
     'http:reading/1': import('@/types/stages').ReadingResponse
     'http:reading/2': import('@/types/stages').ReadingResponse
     'http:reading/3': import('@/types/stages').ReadingResponse

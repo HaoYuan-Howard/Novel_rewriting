@@ -2,7 +2,6 @@ import type { CheckKind } from '@/types/stages'
 import type { JobRequest } from '@/types/jobs'
 import type { AgentRunRequest } from '@/types/agent'
 import type { AnalyzeDraftOwner } from '@/types/analyzeDraft'
-import type { DesignReviewTemplateQuery } from '@/types/approvals'
 
 /**
  * 所有 query key 都以 sid 开头（除了语料库与 enums）。
@@ -71,10 +70,6 @@ export const qk = {
   /** workpack SHA 是模板的精确身份；盘面漂移必须换 key、重新读取关闭式模板。 */
   stage5ClosureTemplate: (sid: string, workpackSha256: string | null) =>
     ['approvals', sid, 'stage5', 'template', workpackSha256] as const,
-  approvalWorkpack: (sid: string, kind: 'design' | 'structure') =>
-    ['approvals', sid, kind, 'workpack'] as const,
   finalApprovalWorkpack: (sid: string, kind: 'stage6' | 'stage7') =>
     ['approvals', sid, kind, 'workpack'] as const,
-  designReviewTemplate: (sid: string, query: DesignReviewTemplateQuery | null) =>
-    ['approvals', sid, 'design', 'template', query] as const,
 }

@@ -5,13 +5,14 @@ import type { Finding, RuleLine } from './common'
  *
  * 在真产品里这是服务端的东西（人点了哪些确认、是否已经批准开写）。
  * mock 版本里它由 mock.ts 存在 localStorage —— 但**取数路径和真实响应完全一样**：
- * 走 api.getApprovals() / api.approveGate() / api.approveDesignReview() /
- * api.approveStructure()，
+ * 走 api.getApprovals() / api.approveGate()，
  * 屏与组件从不直接碰传输层。
  *
  * 这些字段合成一份文档而不是各存一张 map：一份文档、一次写、一个生命周期。
  * Stage2 语义审阅退役后（v9），stage2 的推进只认统一机械准入与后端 spawns；
  * 页面分别展示机械可用性与「Stage2 语义未审」，不再保存已读/逐节点接受记录。
+ * Stage4 四道人工闸也已退役（2026-09-15 全自动裁决）：design/structure 的
+ * workpack、模板与 POST 写面全部删除，这里只剩 GET /approvals 的只读投影。
  */
 
 export type GateKey = 's0' | 's1' | 's4' | 's5' | 's6' | 's7'
@@ -95,53 +96,38 @@ export interface DesignConstraintOperations {
   items: DesignConstraintOperation[]
 }
 
-export interface DesignConstraintCatalog {
-  expected_constraint_set_sha256: string
-  items: {
-    constraint_sha256: string
-    constraint: DesignRepairConstraint
-    source_decision_sha256s: string[]
-  }[]
-}
-
 export interface DesignStrategyReplanConstraint {
   kind: string
   subject_sha256: string
   chapter_ordinals: number[]
 }
 
-export interface DesignStrategyReplanRuling {
-  kind: string
-  chapter_ordinals: number[]
-}
-
+/**
+ * 历史策略审阅行的只读解码形状。四道人工闸退役后不再有新的 GET 模板与
+ * POST 决定；`placeholder` / `template_token` 只在存量历史决定上出现。
+ */
 export interface DesignStrategyReview {
   subject: DesignStrategySubject
   subject_sha256: string
-  /** true = 服务端关闭式模板尚未被审阅者逐项确认；正式决定必须为 false。 */
   placeholder: boolean
-  /** GET 模板身份；显式确认后必须清空，正式决定永远为 null。 */
   template_token: string | null
   decision: string
   reason: string
   replan_constraints: DesignStrategyReplanConstraint[]
-  /** 复用旧 accept 时由服务端填；前端原样回传，不自行寻找历史决定。 */
   source_decision_sha256: string | null
 }
 
+/** 历史逐章审阅行的只读解码形状；生产者已随四道人工闸退役。 */
 export interface DesignChapterReview {
   output_ordinal: number
   subject: DesignChapterSubject
   subject_sha256: string
-  /** true = 服务端关闭式模板尚未被审阅者逐章确认；正式决定必须为 false。 */
   placeholder: boolean
-  /** GET 模板身份；显式确认后必须清空，正式决定永远为 null。 */
   template_token: string | null
   decision: string
   reason: string
   constraints: DesignRepairConstraint[]
   constraint_operations?: DesignConstraintOperations
-  /** 复用旧 accept 时由服务端填；前端原样回传。 */
   source_decision_sha256: string | null
 }
 
@@ -175,55 +161,15 @@ export interface DesignReviewMaterialized {
   aggregate_subject_sha256: string
   /** 服务端只在当前 fresh B=infeasible 时给出；前端不得据候选或 concern 自行构造。 */
   binding_infeasibility: DesignBindingInfeasibility | null
-  /** 服务端 A→formal 零调用预检结论；前端只呈现并原样回传。 */
+  /** 服务端 A→formal 零调用预检结论；前端只呈现。 */
   preflight: DesignPreflightSummary | null
-  /** 当前候选的定向返修执行面；完整回传，不由前端按轮数重算。 */
+  /** 当前候选的恢复能力结论（历史决定只读解码）。 */
   repair_capability: DesignReviewRepairCapability
   strategy: DesignStrategyReview
   chapters: DesignChapterReview[]
 }
 
-export interface DesignStrategyRuling {
-  decision: string
-  reason: string
-  replan_constraints: DesignStrategyReplanRuling[]
-  source_decision_sha256?: string | null
-}
-
-export interface DesignChapterRuling {
-  output_ordinal: number
-  decision: string
-  reason: string
-  constraints: DesignRepairConstraint[]
-  constraint_operations?: DesignConstraintOperations
-  source_decision_sha256?: string | null
-}
-
-/** POST 只搬一枚 opaque token 与 typed 裁决；subject 由服务端现场重建。 */
-export interface DesignReviewRequest {
-  actor: string
-  reviewer_kind: string
-  review_run_id: string
-  general_reason: string
-  review_token: string
-  strategy: DesignStrategyRuling
-  chapters: DesignChapterRuling[]
-}
-
-/** GET 返回完整只读材料；它不是可原样 POST 的写入载荷。 */
-export interface DesignReviewTemplate extends DesignReviewMaterialized {
-  review_token: string
-  constraint_catalog?: Record<string, DesignConstraintCatalog>
-}
-
-/** GET template 的四个必填审阅会话参数；reason 会投影为响应 general_reason。 */
-export interface DesignReviewTemplateQuery {
-  actor: string
-  reviewer_kind: string
-  review_run_id: string
-  reason: string
-}
-
+/** 服务端已落盘的历史 A 决定（只读）；正式 POST 决定入口已随四道人工闸退役。 */
 export interface DesignReviewDecision extends DesignReviewMaterialized {
   decision_sha256: string
   decided_at: string
@@ -248,13 +194,13 @@ export interface DesignReviewView {
   aggregate_subject_sha256: string | null
   current_decision: DesignReviewDecision | null
   history: DesignReviewHistoryEntry[]
-  /** 新服务端必给；可选只为读取旧前端缓存/fixture，动作仍关闭式要求真 token。 */
+  /** 旧决定铸出的定向续作 token（历史账只读解码；无现役消费）。 */
   action_review_token?: string | null
   /** 当前、fresh 且由代码铸造的 Stage4B 不可行证据；其余状态一律为 null。 */
   binding_infeasibility: DesignBindingInfeasibility | null
   /** 当前候选的 A→formal 生产预检；不可用态为 null。 */
   preflight: DesignPreflightSummary | null
-  /** unavailable 时为 null；其余状态是服务端当前候选的唯一返修能力结论。 */
+  /** unavailable 时为 null；其余状态是服务端当前候选的唯一恢复能力结论。 */
   repair_capability: DesignReviewRepairCapability | null
 }
 
@@ -272,22 +218,31 @@ export interface DesignBindingInfeasibility {
   infeasibility_proof: BindingInfeasibilityWitness[]
 }
 
+/**
+ * 历史决定的恢复能力结论（只读解码）。v1/v2 人工返修布尔与 v3
+ * agent/完整章替换两组字段按服务端下发原样呈现；前端不重算可用性。
+ */
 export interface DesignChapterRepairCapability {
   output_ordinal: number
   committed_rounds: number
-  /** 服务端给出的唯一可执行性结论；前端不得从轮次数值重算。 */
-  request_repair_available: boolean
+  request_repair_available?: boolean | null
+  agent_repair_available?: boolean | null
+  full_chapter_edit_available?: boolean | null
 }
 
 export interface DesignReviewRepairCapability {
-  repairable: boolean
-  reason_code: string
+  repairable?: boolean | null
+  reason_code?: string | null
+  agent_repairable?: boolean | null
+  agent_reason_code?: string | null
+  full_chapter_editable?: boolean | null
+  full_chapter_edit_reason_code?: string | null
   chapters: DesignChapterRepairCapability[]
 }
 
 /**
- * Stage4 结构审批的取值面来自 `/api/enums.structure_approval_decisions`。
- * 这里刻意用 string，不在 TypeScript 再抄一份服务端枚举。
+ * 历史结构裁决行的只读解码形状（取值面曾是
+ * `/api/enums.structure_approval_decisions`）；不再产生新的结构决定。
  */
 export interface StructureChapterApproval {
   output_ordinal: number
@@ -296,14 +251,12 @@ export interface StructureChapterApproval {
   source_decision_sha256?: string | null
 }
 
-export interface StructureApprovalRequest {
+/** 服务端已落盘的一次结构裁决（只读）；POST 写面已随四道人工闸退役。 */
+export interface StructureApprovalDecision {
   actor: string
   reason: string
   review_token: string
   chapters: StructureChapterApproval[]
-}
-
-export interface StructureApprovalDecision extends StructureApprovalRequest {
   decided_at: string
 }
 
@@ -319,11 +272,11 @@ export interface StructureApprovalView {
   /** 取值面来自 `/api/enums.structure_approval_states`。 */
   state: string
   current_subject_sha256: string | null
-  /** 新服务端必给；旧只读快照缺失时按 unavailable 处理。 */
+  /** 历史账只读解码；写面已随四道人工闸退役。 */
   review_token?: string | null
   current_decision: StructureApprovalDecision | null
   history: StructureApprovalDecision[]
-  /** Stage4B 下发的非阻断关注项；只展示给人审，不由前端改判。 */
+  /** Stage4B 下发的非阻断关注项；只展示，不由前端改判。 */
   binding_concerns: StructureBindingConcern[]
 }
 
@@ -600,9 +553,9 @@ export interface ApprovalDoc {
   prepare: import('./prepare').PrepareState
   /** 是否已经批准全书闭卷开写。 */
   writing: boolean
-  /** Stage4A 候选的正式 hash-bound 审阅；accepted 也不会打开最终 s4 闸。 */
+  /** Stage4A 候选的历史审阅投影（只读；写面已随四道人工闸退役）。 */
   design_review: DesignReviewView
-  /** 独立于 writing 的、绑定当前完整 Stage4 计划字节的逐章结构裁决。 */
+  /** 当前完整 Stage4 计划的历史结构裁决投影（只读）。 */
   structure: StructureApprovalView
   /** 当前写作主体与 typed 授权历史；旧匿名记录不会被补造成人工决定。 */
   writing_approval: WritingApprovalView
@@ -619,80 +572,4 @@ export interface ApprovalBackfillResult {
   approvals: ApprovalDoc
   /** 这些章来自盘面补录，不伪装成用户逐屏点击。 */
   backfilled: GateKey[]
-}
-
-/** Commander 审阅工作包固定的异常优先分组；顺序由服务端响应保证。 */
-export type ApprovalWorkpackGroupKind =
-  | 'blocking'
-  | 'semantic_attention'
-  | 'disclosure'
-  | 'metric_only'
-  | 'phase_deferred'
-  | 'coverage'
-
-/** 条目对当前审批的影响只照画服务端结论，不由前端按 rule/severity 重算。 */
-export type ApprovalWorkpackEffect =
-  | 'block_b'
-  | 'block_context'
-  | 'attention'
-  | 'disclose'
-  | 'read_only'
-  | 'phase_deferred'
-  | 'coverage'
-
-export type ApprovalWorkpackSeverity = 'hard' | 'info' | 'metric' | 'unver'
-export type ApprovalWorkpackStatus = 'ok' | 'hit' | 'unver' | 'skipped'
-export type ApprovalWorkpackAction = 'accept' | 'request_repair' | 'request_replan'
-
-export interface ApprovalWorkpackItem {
-  code: string
-  rule: string | null
-  sev?: ApprovalWorkpackSeverity | null
-  status?: ApprovalWorkpackStatus | null
-  chapter_ordinal: number | null
-  scene_refs: string[]
-  refs: string[]
-  repair_owner: string | null
-  detail: string
-  effect: ApprovalWorkpackEffect
-  /** typed 入口名，只展示；空数组明确表示服务端没有给可执行动作。 */
-  allowed_actions: ApprovalWorkpackAction[]
-  changed: boolean
-  historical_accept_reusable: boolean
-  source_decision_sha256?: string | null
-  inherited_structure_decision?: StructureChapterApproval | null
-  /** Stage4A 完整章 edit 的单一 TOCTOU 票；只在当前 repair 决定行出现。 */
-  review_token?: string | null
-  /** v2：coverage 行的逐章裁决材料，服务端确定性渲染；页面只折叠呈现，不自算。 */
-  reading?: WorkpackChapterReading | null
-}
-
-export type StructureChapterReading = import('./plot.generated').StructureChapterReading
-
-export type DesignChapterReading = import('./plot.generated').DesignChapterReading
-
-export type WorkpackChapterReading = DesignChapterReading | StructureChapterReading
-
-/** 工作包顶层只出现一次的字段说明与整书材料。 */
-export type WorkpackReading = import('./plot.generated').WorkpackReading
-
-export interface ApprovalWorkpackGroup {
-  group: ApprovalWorkpackGroupKind
-  scanned: string
-  items: ApprovalWorkpackItem[]
-}
-
-/** Stage4 A/B 共用的只读、hash-bound 审阅工作包 façade v2（coverage 行携 reading）。 */
-export interface ApprovalWorkpack {
-  v: 2
-  sid: string
-  kind: 'design' | 'structure'
-  candidate_sha256?: string | null
-  subject_sha256: string
-  review_token: string
-  chapter_ordinals: number[]
-  groups: ApprovalWorkpackGroup[]
-  disposition: 'review_required' | 'already_current'
-  current_decision_sha256: string | null
-  reading?: WorkpackReading | null
 }

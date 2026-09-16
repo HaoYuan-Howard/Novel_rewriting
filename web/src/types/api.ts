@@ -11,13 +11,8 @@ import type { GlobalEdit, GlobalEditPreview } from './globalEdit'
 import type {
   ApprovalBackfillResult,
   ApprovalDoc,
-  ApprovalWorkpack,
   BatchTrimResolutionRequest,
-  DesignReviewRequest,
-  DesignReviewTemplate,
-  DesignReviewTemplateQuery,
   GateKey,
-  StructureApprovalRequest,
   Stage5ClosureRequest,
   Stage5ClosureTemplate,
   Stage6ApprovalWorkpack,
@@ -180,10 +175,8 @@ export interface Api {
 
   /* 人工验收记录 */
   getApprovals(sid: string): Promise<ApprovalDoc>
-  /** Stage4 A 当前候选的异常优先只读工作包；不预填任何审批决定。 */
-  getDesignApprovalWorkpack(sid: string): Promise<ApprovalWorkpack>
-  /** Stage4 B 当前结构主体的异常优先只读工作包；不预填任何审批决定。 */
-  getStructureApprovalWorkpack(sid: string): Promise<ApprovalWorkpack>
+  // stage4 design/structure workpack、模板与 POST 写面已随 2026-09-15 全自动裁决退役；
+  // Stage4 人工闸只剩 GET /approvals 的只读投影，机械准入是唯一打开条件。
   /** Stage6 候选 + A/B 原始证据 + 机械异常的 hash-bound 紧凑终审包。 */
   getStage6ApprovalWorkpack(sid: string): Promise<Stage6ApprovalWorkpack>
   /** Stage7 人物决策 + 实际替换命中 + 残留上下文的 hash-bound 紧凑终审包。 */
@@ -192,16 +185,7 @@ export interface Api {
   getStage5ClosureTemplate(sid: string): Promise<Stage5ClosureTemplate>
   /** 原子提交当前 Stage5 Commander 回执；不启动任何付费作业。 */
   approveStage5Closure(sid: string, request: Stage5ClosureRequest): Promise<ApprovalDoc>
-  /** Stage4A 当前候选的关闭式审阅模板；全拒默认由服务端生成。 */
-  getDesignReviewTemplate(
-    sid: string,
-    query: DesignReviewTemplateQuery,
-  ): Promise<DesignReviewTemplate>
-  /** 保存 Stage4A 正式审阅；只写审批记录，不隐式启动 B 或付费返修。 */
-  approveDesignReview(sid: string, request: DesignReviewRequest): Promise<ApprovalDoc>
   approveGate(sid: string, key: GateKey): Promise<ApprovalDoc>
-  /** Stage4 的专用全书 typed 裁决；只写审批记录，不启动重规划作业。 */
-  approveStructure(sid: string, request: StructureApprovalRequest): Promise<ApprovalDoc>
   backfillApprovals(sid: string): Promise<ApprovalBackfillResult>
   startWriting(sid: string, request: WritingApprovalRequest): Promise<ApprovalDoc>
   resetBook(sid: string): Promise<ApprovalDoc>

@@ -148,11 +148,12 @@ function ScreenAndRail({ manual = false }: { manual?: boolean }) {
 }
 
 function ApproveButton() {
-  const { approveStructure } = useApprovals()
-  return <button onClick={() => approveStructure.mutate({
-    actor: '测试审阅者', review_token: 's4sr1_' + 'a'.repeat(64), reason: '已读完整结构',
-    chapters: [{ output_ordinal: 1, decision: 'accept', reason: '明确接受' }],
-  })}>提交结构审批</button>
+  // stage4 逐章结构审批已退役；用仍现役的 Stage5 闭合回执驱动同一条人工审批失效口。
+  const { approveStage5Closure } = useApprovals()
+  return <button onClick={() => approveStage5Closure.mutate({
+    actor: '测试审阅者', review_token: 's5cr1_' + 'a'.repeat(64), reason: '已读完整闭合工作包',
+    must_appear: [], group_acks: [],
+  })}>提交审批回执</button>
 }
 
 async function settled(qc: QueryClient) {
@@ -249,9 +250,9 @@ describe('Agent 进展驱动书级读模型刷新', () => {
     expect(live.getCheck).toHaveBeenCalledTimes(reads)
   })
 
-  it('手动结构审批复用同一失效口，无需等运行轮询或 API Job', async () => {
+  it('手动审批回执复用同一失效口，无需等运行轮询或 API Job', async () => {
     const live = await source()
-    const approve = vi.spyOn(api, 'approveStructure').mockImplementation(async () => {
+    const approve = vi.spyOn(api, 'approveStage5Closure').mockImplementation(async () => {
       live.setFresh()
       return live.freshApprovals
     })
@@ -260,7 +261,7 @@ describe('Agent 进展驱动书级读模型刷新', () => {
     await settled(qc)
     const reads = live.getApprovals.mock.calls.length
     const polls = live.getProgress.mock.calls.length
-    fireEvent.click(screen.getByRole('button', { name: '提交结构审批' }))
+    fireEvent.click(screen.getByRole('button', { name: '提交审批回执' }))
     expect(await screen.findByText('hard 0 · info 2 · unver 6')).toBeVisible()
     expect(await screen.findByRole('button', { name: '计划↔上下文，已确认' })).toBeVisible()
     expect(approve).toHaveBeenCalledOnce()
@@ -360,7 +361,7 @@ describe('Agent 进展驱动书级读模型刷新', () => {
     qc.setQueryData(qk.check(SID, 'stage4'), live.oldReport)
     qc.setQueryData(qk.check(other, 'stage4'), live.oldReport)
     let finishApproval!: (value: ApprovalDoc) => void
-    const submit = vi.spyOn(api, 'approveStructure').mockImplementation(() => new Promise((resolve) => {
+    const submit = vi.spyOn(api, 'approveStage5Closure').mockImplementation(() => new Promise((resolve) => {
       finishApproval = resolve
     }))
     function Books() {
@@ -371,7 +372,7 @@ describe('Agent 进展驱动书级读模型刷新', () => {
         <Rail sid={sid} screen="run" ordinal={1} collapsed={false} onToggle={() => {}} /></>
     }
     atBook(<Books />, qc)
-    fireEvent.click(screen.getByRole('button', { name: '提交结构审批' }))
+    fireEvent.click(screen.getByRole('button', { name: '提交审批回执' }))
     await waitFor(() => expect(submit).toHaveBeenCalledOnce())
     expect(submit.mock.calls[0][0]).toBe(SID)
     fireEvent.click(screen.getByRole('button', { name: '切换书' }))

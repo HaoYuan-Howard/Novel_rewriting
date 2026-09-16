@@ -5,7 +5,6 @@ import type {
   ApprovalDoc,
   GateKey,
   Stage5ClosureRequest,
-  StructureApprovalRequest,
   WritingApprovalRequest,
 } from '@/types/approvals'
 import { useSid } from './useRouteParams'
@@ -50,13 +49,6 @@ export function useApprovals(sidOverride?: string) {
     mutationFn: () => api.backfillApprovals(sid),
     onSuccess: (result) => put(result.approvals),
   })
-  const approveStructure = useMutation({
-    mutationFn: (request: StructureApprovalRequest) => api.approveStructure(sid, request),
-    onSuccess: (doc) => {
-      // 专用结构裁决只写 `_service/approvals`，明确不触发作业。
-      return cache(doc)
-    },
-  })
   const approveStage5Closure = useMutation({
     mutationFn: (request: Stage5ClosureRequest) => api.approveStage5Closure(sid, request),
     onSuccess: (doc) => {
@@ -77,7 +69,6 @@ export function useApprovals(sidOverride?: string) {
     error: q.error,
     refetch: q.refetch,
     approve,
-    approveStructure,
     approveStage5Closure,
     backfill,
     startWriting,

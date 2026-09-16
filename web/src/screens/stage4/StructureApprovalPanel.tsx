@@ -1,63 +1,31 @@
-import { useState } from 'react'
 import { errorBody } from '@/api/errors'
-import { lookupAction, type ClassifiableAction } from '@/constants/actions'
 import { useApprovals } from '@/hooks/useApprovals'
-import { useAskJob, useChrome } from '@/hooks/useChrome'
-import { useEnums } from '@/hooks/useEnums'
 import type {
-  ApprovalDoc,
-  ActionRef,
-  StructureApprovalDecision,
-  StructureChapterApproval,
-} from '@/types/approvals'
-import type { Stage4IndexRow } from '@/types/stages'
+  Stage4IndexRow,
+} from '@/types/stages'
+import type { StructureApprovalDecision, StructureBindingConcern } from '@/types/approvals'
 import { ErrorHint } from '@/components/state/States'
-import { ActionButton, LinkButton } from '@/components/ui/ActionButton'
-import { ActorReasonFields } from '@/components/ui/ActorReasonFields'
 import { Mono } from '@/components/ui/Mono'
 import { Panel } from '@/components/ui/Panel'
 import { GateMark } from '@/components/vocab/Badges'
-import { ApprovalWorkpackEvidence } from './ApprovalWorkpackPanel'
-import { useApprovalWorkpack } from '@/hooks/useApprovalWorkpack'
-
-interface DraftDecision {
-  decision: string
-  reason: string
-  source_decision_sha256?: string | null
-}
 
 /**
- * Stage4B 的专用最终计划审批面。
+ * Stage4B 结构裁决的历史只读投影与当前计划的逐章结构决定。
  *
- * 通用 GateBar 只有一个 bool，无法携带 subject / actor / 全章 typed 决定，因此 s4
- * 必须在这里原子提交。这里也不出现「授权写作」按钮：writing 是 Stage5 的另一项授权。
+ * 逐章 typed 审批（accept/request_replan + review token）已随 2026-09-15 全自动
+ * 裁决退役：不渲染任何表单、token 提交或工作包轮询；s4 的唯一打开条件是统一
+ * 机械准入。这里只照画服务端历史账与 stage4 view 下发的逐章结构决定。
  */
-export function StructureApprovalPanel({
-  rows,
-  identity,
-  viewSubject,
-  onRefreshView,
-}: {
-  rows: Stage4IndexRow[]
-  identity: boolean
-  /** `rows` 所属的同份 Stage4 view 主体；不得从 approvals 反推。 */
-  viewSubject: string | null
-  /** 强制重读 Stage4 view；审批记录由本面板同时重读。 */
-  onRefreshView: () => unknown | Promise<unknown>
-}) {
+export function StructureApprovalPanel({ rows }: { rows: Stage4IndexRow[] }) {
   const approvals = useApprovals()
-  const enums = useEnums()
-  const ask = useAskJob()
-  const [refreshing, setRefreshing] = useState(false)
-  const workpack = useApprovalWorkpack('structure')
 
   if (approvals.isLoading) {
-    return <Panel className="mx-30 mt-20 mb-4 px-20 py-16 text-body text-ink-4">读取 Stage4B 最终计划审批记录…</Panel>
+    return <Panel className="mx-30 mt-20 mb-4 px-20 py-16 text-body text-ink-4">读取 Stage4B 结构裁决记录…</Panel>
   }
   if (approvals.isError) {
     return (
       <Panel className="mx-30 mt-20 mb-4 border-warn-line bg-warn-bg px-20 py-16 text-body text-warn-ink">
-        Stage4B 最终计划审批记录读取失败：{errorBody(approvals.error)}
+        Stage4B 结构裁决记录读取失败：{errorBody(approvals.error)}
         <ErrorHint error={approvals.error} />
       </Panel>
     )
@@ -65,269 +33,26 @@ export function StructureApprovalPanel({
   const doc = approvals.doc
   if (!doc) return null
 
-  // A 是否 current、是否全收只认服务端 design_review.state；不按决定或 hash 复算。
-  // 未得到 current accepted 前，不呈现 B 的最终审批表单，保持 A → B 串行。
-  if (doc.design_review.state !== 'accepted') {
-    return (
-      <Panel className="mx-30 mt-20 mb-4 flex items-start gap-12 px-20 py-16">
-        <GateMark ok={false} />
-        <div className="flex flex-col gap-5">
-          <span className="text-read font-semibold">Stage4B 最终计划审批正在等待 A</span>
-          <span className="prose-cn text-sm2 text-ink-4">
-            服务端当前 A 审阅状态为 <Mono>{doc.design_review.state}</Mono>。
-            只有服务端返回 accepted，才会在这里呈现 B 的全书计划审批；
-            历史 accept 或前端自行比对 hash 都不能代开。
-          </span>
-        </div>
-      </Panel>
-    )
-  }
-
-  // 是否存在付费恢复只认服务端 action；界面不根据 plan/binding 自己猜。
-  // 因而 B=infeasible 即使没有正式 plan subject，也仍能走同一条预览确认缝。
-  const structureSpawns = doc.spawns.s4 ?? []
-  const replanSpawn = structureSpawns.length === 1 ? structureSpawns[0] : null
-  const replanAction = lookupAction(enums.data, replanSpawn)
-  const startReplan = () => {
-    if (!replanSpawn) return
-    ask({
-      kind: replanSpawn.kind,
-      label: replanSpawn.label,
-      extra: replanSpawn.extra,
-      required_inputs: replanAction?.required_inputs,
-      sid: doc.sid,
-      ordinal: null,
-    })
-  }
-  const subject = doc.structure.current_subject_sha256
-  if (identity) {
-    return (
-      <Panel className="mx-30 mt-20 mb-4 flex items-start gap-12 px-20 py-16">
-        <GateMark ok={false} />
-        <div className="flex flex-col gap-5">
-          <span className="text-read font-semibold">正式 Stage4 计划还不能审批</span>
-          <span className="prose-cn text-sm2 text-ink-4">
-            当前展示的是恒等基线，不是服务端可绑定的结构主体。先生成并校验正式计划；
-            没有完整 subject SHA-256 时，界面不会编一个批准对象。
-          </span>
-          {replanSpawn ? (
-            <span className="prose-cn text-sm2 text-warn-ink">
-              Stage4B 已落下当前 typed infeasible 结论。保存结论本身没有发起作业；
-              请另行预览并确认重跑 Stage4A，完成后仍需单独确认 Stage4B。
-            </span>
-          ) : null}
-        </div>
-        {replanSpawn ? (
-          <ActionButton action={replanAction} onClick={startReplan}>
-            {replanSpawn.label}
-          </ActionButton>
-        ) : null}
-      </Panel>
-    )
-  }
-
-  // Stage4 view 与 approvals 是两个独立查询。仅靠提交时的后端乐观锁，
-  // 会允许审核人看着旧 rows，却把决定绑到 approvals 刚读到的新主体。
-  // 因此这里先闭合“展示表面”：两份完整 hash 不相等就连表单都不开。
-  if (viewSubject === null || subject === null || viewSubject !== subject) {
-    const refreshBoth = async () => {
-      setRefreshing(true)
-      try {
-        await Promise.all([
-          Promise.resolve(onRefreshView()),
-          approvals.refetch(),
-        ])
-      } finally {
-        setRefreshing(false)
-      }
-    }
-    return (
-      <Panel className="mx-30 mt-20 mb-4 flex items-start gap-12 border-warn-line bg-warn-bg px-20 py-16">
-        <GateMark ok={false} />
-        <div className="flex min-w-0 flex-1 flex-col gap-6">
-          <span className="text-read font-semibold text-warn-ink">结构审批对象已变化</span>
-          <span className="prose-cn text-sm2 text-warn-ink">
-            页面逐章 rows 所属的计划与审批服务当前主体不同。
-            提交已禁用；请同时重读两份数据，再按刷新后的 rows 逐章重审。
-          </span>
-          <span className="text-tag text-warn-ink">页面计划主体 SHA-256</span>
-          <Mono className="break-all text-mini text-warn-ink">{viewSubject ?? '（没有）'}</Mono>
-          <span className="text-tag text-warn-ink">审批服务主体 SHA-256</span>
-          <Mono className="break-all text-mini text-warn-ink">{subject ?? '（没有）'}</Mono>
-          <div className="flex flex-wrap gap-8 pt-4">
-            <LinkButton
-              disabled={refreshing}
-              title={refreshing ? '正在同时重读结构与审批记录' : undefined}
-              onClick={() => { void refreshBoth() }}
-            >
-              {refreshing ? '重新读取中…' : '重新读取结构与审批'}
-            </LinkButton>
-            <ActionButton
-              action={{
-                kind: 'approval.structure',
-                extra: null,
-                paid: false,
-                writes_disk: false,
-              }}
-              disabled
-              disabledReason="页面结构主体与审批服务当前主体不一致"
-            >
-              保存全书结构裁决
-            </ActionButton>
-          </div>
-        </div>
-      </Panel>
-    )
-  }
-
-  const existing = doc.structure.current_decision
-  const sameWorkpackSubject = workpack.data?.subject_sha256 === subject
-  const alreadyCurrent = sameWorkpackSubject && workpack.data?.disposition === 'already_current'
-  const workpackReviewable = Boolean(
-    !workpack.isLoading && !workpack.isFetching && !workpack.isError &&
-    sameWorkpackSubject && workpack.data?.disposition === 'review_required',
-  )
-  const workpackDisabledReason = alreadyCurrent
-    ? '同一当前 Stage4B 工作包已有全章接受决定，无需重复整读'
-    : workpack.isError
-        ? '当前 Stage4B 工作包读取失败，不能绑定本轮审批'
-      : workpack.isFetching
-        ? '正在读取或刷新当前 Stage4B 工作包'
-        : !workpack.data
-          ? '服务端未返回当前 Stage4B 工作包'
-          : !sameWorkpackSubject
-            ? '结构工作包与页面当前主体不一致，请刷新后再提交'
-          : !workpackReviewable
-            ? '服务端返回了未知的 Stage4B 工作包处置态'
-            : ''
-  const formKey = [
-    subject,
-    existing?.decided_at ?? 'undecided',
-    rows.map((row) => row.output_ordinal).join(','),
-    workpack.data?.review_token ?? '',
-    workpack.data?.groups.flatMap((group) => group.items.map((item) => item.source_decision_sha256 ?? '')).join(','),
-  ].join(':')
-  return (
-    <StructureApprovalForm
-      key={formKey}
-      doc={doc}
-      rows={rows}
-      subject={viewSubject}
-      existing={existing}
-      decisions={enums.data?.structure_approval_decisions ?? []}
-      enumsLoading={enums.isLoading}
-      enumsError={enums.error}
-      submit={approvals.approveStructure}
-      replanSpawn={replanSpawn}
-      replanAction={replanAction}
-      onReplan={startReplan}
-      alreadyCurrent={alreadyCurrent}
-      workpackReviewable={workpackReviewable}
-      workpackDisabledReason={workpackDisabledReason}
-      workpackQuery={workpack}
-    />
-  )
-}
-
-function StructureApprovalForm({
-  doc,
-  rows,
-  subject,
-  existing,
-  decisions,
-  enumsLoading,
-  enumsError,
-  submit,
-  replanSpawn,
-  replanAction,
-  onReplan,
-  alreadyCurrent,
-  workpackReviewable,
-  workpackDisabledReason,
-  workpackQuery,
-}: {
-  doc: ApprovalDoc
-  rows: Stage4IndexRow[]
-  subject: string
-  existing: StructureApprovalDecision | null
-  decisions: string[]
-  enumsLoading: boolean
-  enumsError: unknown
-  submit: ReturnType<typeof useApprovals>['approveStructure']
-  replanSpawn: ActionRef | null
-  replanAction: ClassifiableAction | null
-  onReplan: () => void
-  alreadyCurrent: boolean
-  workpackReviewable: boolean
-  workpackDisabledReason: string
-  workpackQuery: ReturnType<typeof useApprovalWorkpack>
-}) {
-  const { notify } = useChrome()
-  const existingByChapter = new Map(
-    (existing?.chapters ?? []).map((row) => [row.output_ordinal, row]),
-  )
-  const inheritedByChapter = new Map(
-    (workpackQuery.data?.groups ?? []).flatMap((group) => group.items.flatMap((item) =>
-      item.inherited_structure_decision
-        ? [[item.inherited_structure_decision.output_ordinal, item.inherited_structure_decision] as const] : [])),
-  )
+  const view = doc.structure
   const orderedRows = [...rows].sort((a, b) => a.output_ordinal - b.output_ordinal)
-  const [actor, setActor] = useState(existing?.actor ?? '')
-  const [reason, setReason] = useState(existing?.reason ?? '')
-  const [drafts, setDrafts] = useState<Record<number, DraftDecision>>(() =>
-    Object.fromEntries(orderedRows.map((row) => {
-      const previous = existingByChapter.get(row.output_ordinal) ?? inheritedByChapter.get(row.output_ordinal)
-      return [row.output_ordinal, {
-        decision: previous?.decision ?? '',
-        reason: previous?.reason ?? '',
-        ...(previous?.source_decision_sha256 ? { source_decision_sha256: previous.source_decision_sha256 } : {}),
-      }]
-    })),
-  )
-
-  const chapters: StructureChapterApproval[] = orderedRows.map((row) => ({
-    output_ordinal: row.output_ordinal,
-    decision: drafts[row.output_ordinal]?.decision ?? '',
-    reason: drafts[row.output_ordinal]?.reason ?? '',
-    ...(drafts[row.output_ordinal]?.source_decision_sha256
-      ? { source_decision_sha256: drafts[row.output_ordinal].source_decision_sha256 } : {}),
-  }))
-  const enumReady = decisions.length > 0
-  const complete = Boolean(
-    actor.trim() &&
-    reason.trim() &&
-    enumReady &&
-    chapters.length > 0 &&
-    chapters.every((row) => decisions.includes(row.decision) && row.reason.trim()),
-  )
-
-  const setChapter = (ordinal: number, patch: Partial<DraftDecision>) => {
-    setDrafts((current) => {
-      const previous = current[ordinal] ?? { decision: '', reason: '' }
-      return { ...current, [ordinal]: { ...previous, ...patch, source_decision_sha256: undefined } }
-    })
-  }
-
   return (
     <Panel className="mx-30 mt-20 mb-4 overflow-hidden">
       <div className="flex items-start gap-12 border-b border-line-row px-20 py-16">
         <GateMark ok={doc.gate.s4} />
         <div className="flex min-w-0 flex-1 flex-col gap-5">
           <div className="flex flex-wrap items-baseline gap-10">
-            <span className="text-read font-semibold">Stage4B 最终计划审批</span>
-            <Mono className="rounded-tag bg-inset px-7 py-2 text-micro">
-              服务端状态 {doc.structure.state}
-            </Mono>
+            <span className="text-read font-semibold">Stage4B 结构裁决 · 历史只读</span>
+            <Mono className="rounded-tag bg-inset px-7 py-2 text-micro">{view.state}</Mono>
           </div>
           <span className="prose-cn text-sm2 text-ink-4">
-            A 当前 accepted 只准许进入 B，不等于批准本计划。一次提交必须覆盖当前计划的全部章节。
-            任一章要求重规划，只会保存 typed 决定并关闭 s4；
-            不会静默发起付费重规划，也不会授予 Stage5 写作权限。
+            逐章结构审批已退役：机械准入放行计划后即可组装写作上下文，typed infeasible
+            终态由预算内自动重规划消费。本面板只呈现服务端保留的历史裁决账，
+            不提供保存或重规划入口。
           </span>
-          <span className="text-tag text-ink-4">
-            结构主体 SHA-256
-          </span>
-          <Mono className="break-all text-mini text-ink-2">{subject}</Mono>
+          <span className="text-tag text-ink-4">结构主体 SHA-256</span>
+          <Mono className="break-all text-mini text-ink-2">
+            {view.current_subject_sha256 ?? '（没有）'}
+          </Mono>
         </div>
         <div className="flex flex-col items-end gap-4 text-tag text-ink-4">
           <span>{doc.gate.s4 ? 's4 已打开' : 's4 未打开'}</span>
@@ -335,198 +60,128 @@ function StructureApprovalForm({
         </div>
       </div>
 
-      <ApprovalWorkpackEvidence kind="structure" query={workpackQuery} />
-
-      {replanSpawn ? (
-        <div className="flex items-center gap-14 border-b border-warn-line bg-warn-bg px-20 py-14">
-          <div className="flex min-w-0 flex-1 flex-col gap-4">
-            <span className="text-body font-semibold text-warn-ink">结构重规划请求已保存</span>
-            <span className="prose-cn text-sm2 text-warn-ink">
-              保存决定本身没有发起作业。请另行预览并确认 Stage4A；完成后仍需单独确认 Stage4B。
-            </span>
-          </div>
-          <ActionButton
-            action={replanAction}
-            disabled={submit.isPending}
-            disabledReason="正在保存结构裁决"
-            onClick={onReplan}
-          >
-            {replanSpawn.label}
-          </ActionButton>
-        </div>
+      {view.binding_concerns.length ? (
+        <ConcernList concerns={view.binding_concerns} />
       ) : null}
 
-      {doc.structure.binding_concerns.length ? (
-        <div className="flex flex-col gap-8 border-b border-warn-line bg-warn-bg px-20 py-14">
-          <div className="flex flex-wrap items-baseline gap-8">
-            <span className="text-body font-semibold text-warn-ink">Stage4B 绑定关注项</span>
-            <span className="text-tag text-warn-ink">非阻断但需人审；数量不会自动改变逐章裁决</span>
-          </div>
-          {doc.structure.binding_concerns.map((concern, index) => (
-            <div
-              key={concern.constraint_code + ':' + concern.chapter_ordinal + ':' + index}
-              className="grid gap-8 rounded-btn border border-warn-line bg-card px-12 py-10 text-sm2"
-              style={{ gridTemplateColumns: 'minmax(0,0.7fr) minmax(0,1.3fr)' }}
-            >
-              <div className="flex min-w-0 flex-col gap-4 text-warn-ink">
-                <Mono className="font-semibold">{concern.constraint_code}</Mono>
-                <span>{concern.chapter_ordinal === null ? '全书关注项' : '第 ' + concern.chapter_ordinal + ' 章'}</span>
-                <span>场景：{concern.scenes.join('、') || '（无）'}</span>
-              </div>
-              <div className="flex min-w-0 flex-col gap-4 text-ink-2">
-                <span className="prose-cn">{concern.reason}</span>
-                <span className="text-micro text-ink-4">
-                  closed_refs：{concern.closed_refs.join('、') || '（无）'}
-                </span>
-              </div>
-            </div>
-          ))}
-        </div>
-      ) : null}
-
-      <div className="flex flex-col divide-y divide-line-row">
-        {orderedRows.map((row) => {
-          const draft = drafts[row.output_ordinal] ?? { decision: '', reason: '' }
-          const plan = row.structure_decision
-          return (
-            <div
-              key={row.output_ordinal}
-              className="grid gap-14 px-20 py-15"
-              style={{ gridTemplateColumns: 'minmax(0,1.35fr) minmax(0,1fr)' }}
-            >
-              <div className="flex min-w-0 flex-col gap-7">
-                <div className="flex flex-wrap items-center gap-8">
-                  <Mono className="rounded-tag bg-inset px-7 py-2 text-mini">
-                    第 {row.output_ordinal} 章
-                  </Mono>
-                  <Mono className="rounded-tag bg-accent-bg px-7 py-2 text-mini text-accent-ink">
-                    {plan.mode}
-                  </Mono>
-                </div>
-                <span className="prose-cn text-body text-ink-2">{plan.reason}</span>
-                {draft.source_decision_sha256 ? (
-                  <span className="text-micro text-ink-4">沿用有效历史裁决；修改决定或理由后按新裁决提交。</span>
-                ) : null}
-                <div className="flex flex-wrap gap-6 text-micro text-ink-4">
-                  <span>声明变化</span>
-                  {plan.declared_change_kinds.length
-                    ? plan.declared_change_kinds.map((kind) => (
-                        <Mono key={'declared-' + kind} className="rounded-tag bg-inset px-6 py-1">{kind}</Mono>
-                      ))
-                    : <span>（无）</span>}
-                </div>
-                <div className="flex flex-wrap gap-6 text-micro text-ink-4">
-                  <span>代码复算</span>
-                  {plan.computed_change_kinds.length
-                    ? plan.computed_change_kinds.map((kind) => (
-                        <Mono key={'computed-' + kind} className="rounded-tag bg-inset px-6 py-1">{kind}</Mono>
-                      ))
-                    : <span>（无）</span>}
-                </div>
-              </div>
-
-              <div className="flex min-w-0 flex-col gap-8">
-                <label className="flex flex-col gap-4 text-tag text-ink-3">
-                  第 {row.output_ordinal} 章结构裁决
-                  <select
-                    aria-label={'第 ' + row.output_ordinal + ' 章结构裁决'}
-                    value={draft.decision}
-                    disabled={!enumReady || submit.isPending}
-                    onChange={(event) => setChapter(row.output_ordinal, {
-                      decision: event.target.value,
-                    })}
-                    className="rounded-btn border border-line-btn bg-card px-10 py-8 font-mono text-body font-normal text-ink"
-                  >
-                    <option value="">请选择服务端下发的决定</option>
-                    {decisions.map((decision) => (
-                      <option key={decision} value={decision}>{decision}</option>
-                    ))}
-                  </select>
-                </label>
-                <label className="flex flex-col gap-4 text-tag text-ink-3">
-                  第 {row.output_ordinal} 章裁决理由
-                  <input
-                    aria-label={'第 ' + row.output_ordinal + ' 章裁决理由'}
-                    value={draft.reason}
-                    disabled={submit.isPending}
-                    onChange={(event) => setChapter(row.output_ordinal, {
-                      reason: event.target.value,
-                    })}
-                    placeholder="说明核对了哪些结构变化，或为何要求重规划"
-                    className="rounded-btn border border-line-btn bg-card px-10 py-8 text-body font-normal text-ink"
-                  />
-                </label>
-              </div>
-            </div>
-          )
-        })}
-      </div>
+      {orderedRows.length ? <PlanDecisionRows rows={orderedRows} /> : null}
 
       <div className="border-t border-line-row px-20 py-16">
-        <ActorReasonFields
-          actor={actor}
-          reason={reason}
-          onActor={setActor}
-          onReason={setReason}
-          reasonPlaceholder="说明逐章核对了什么，以及为何接受或要求重规划"
-          note={
-            <>
-              本次决定绑定上方完整 subject SHA-256 与全部逐章理由。结构审批和写作授权是两项独立动作；
-              后者仍只在 Stage5 的付费写作确认流中授予。
-            </>
-          }
-          actions={
-            <ActionButton
-              action={{
-                kind: 'approval.structure',
-                extra: null,
-                paid: false,
-                writes_disk: false,
-              }}
-              disabled={!complete || submit.isPending || !workpackReviewable}
-              disabledReason={
-                alreadyCurrent
-                  ? '同一当前 Stage4B 工作包已有全章接受决定，无需重复整读'
-                  : !workpackReviewable
-                    ? workpackDisabledReason
-                  : enumsLoading
-                  ? '正在读取服务端结构审批取值面'
-                  : enumsError
-                    ? '服务端结构审批取值面读取失败'
-                    : !complete
-                      ? 'actor、全书理由、每章决定与每章理由都必须填写'
-                      : ''
-              }
-              onClick={() => submit.mutate({
-                actor: actor.trim(),
-                reason: reason.trim(),
-                review_token: workpackQuery.data?.review_token ?? '',
-                chapters: chapters.map((row) => row.source_decision_sha256 ? row : { ...row, reason: row.reason.trim() }),
-              }, {
-                onSuccess: (next) => notify(
-                  next.gate.s4
-                    ? '全章结构裁决已保存，s4 已打开；Stage5 写作仍需单独授权'
-                    : '结构重规划请求已保存，s4 已关闭；未自动发起付费作业',
-                ),
-              })}
-            >
-              {submit.isPending ? '保存结构裁决中…' : '保存全书结构裁决'}
-            </ActionButton>
-          }
-        />
-        {enumsError ? (
-          <div className="mt-10 text-sm2 text-warn-ink">
-            结构审批取值面读取失败：{errorBody(enumsError)}
-            <ErrorHint error={enumsError} />
-          </div>
-        ) : null}
-        {submit.isError ? (
-          <div className="mt-10 text-sm2 text-warn-ink">
-            结构裁决保存失败：{errorBody(submit.error)}
-            <ErrorHint error={submit.error} />
-          </div>
-        ) : null}
+        <div className="flex flex-col gap-5 text-tag text-ink-4">
+          <span>历史结构裁决 {view.history.length} 次</span>
+          {view.current_decision ? <DecisionSummary decision={view.current_decision} /> : null}
+          {view.history.length ? <HistoryTable history={view.history} /> : null}
+        </div>
       </div>
     </Panel>
+  )
+}
+
+function ConcernList({ concerns }: { concerns: StructureBindingConcern[] }) {
+  return (
+    <div className="flex flex-col gap-8 border-b border-warn-line bg-warn-bg px-20 py-14">
+      <div className="flex flex-wrap items-baseline gap-8">
+        <span className="text-body font-semibold text-warn-ink">Stage4B 绑定关注项（历史账）</span>
+        <span className="text-tag text-warn-ink">只展示；语义结论以披露常驻，不改判计划</span>
+      </div>
+      {concerns.map((concern, index) => (
+        <div
+          key={concern.constraint_code + ':' + concern.chapter_ordinal + ':' + index}
+          className="grid gap-8 rounded-btn border border-warn-line bg-card px-12 py-10 text-sm2"
+          style={{ gridTemplateColumns: 'minmax(0,0.7fr) minmax(0,1.3fr)' }}
+        >
+          <div className="flex min-w-0 flex-col gap-4 text-warn-ink">
+            <Mono className="font-semibold">{concern.constraint_code}</Mono>
+            <span>{concern.chapter_ordinal === null ? '全书关注项' : '第 ' + concern.chapter_ordinal + ' 章'}</span>
+            <span>场景：{concern.scenes.join('、') || '（无）'}</span>
+          </div>
+          <div className="flex min-w-0 flex-col gap-4 text-ink-2">
+            <span className="prose-cn">{concern.reason}</span>
+            <span className="text-micro text-ink-4">
+              closed_refs：{concern.closed_refs.join('、') || '（无）'}
+            </span>
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function PlanDecisionRows({ rows }: { rows: Stage4IndexRow[] }) {
+  return (
+    <div className="flex flex-col divide-y divide-line-row">
+      {rows.map((row) => {
+        const plan = row.structure_decision
+        return (
+          <div key={row.output_ordinal} className="flex flex-col gap-7 px-20 py-15">
+            <div className="flex flex-wrap items-center gap-8">
+              <Mono className="rounded-tag bg-inset px-7 py-2 text-mini">第 {row.output_ordinal} 章</Mono>
+              <Mono className="rounded-tag bg-accent-bg px-7 py-2 text-mini text-accent-ink">
+                {plan.mode}
+              </Mono>
+            </div>
+            <span className="prose-cn text-body text-ink-2">{plan.reason}</span>
+            <div className="flex flex-wrap gap-6 text-micro text-ink-4">
+              <span>声明变化</span>
+              {plan.declared_change_kinds.length
+                ? plan.declared_change_kinds.map((kind) => (
+                    <Mono key={'declared-' + kind} className="rounded-tag bg-inset px-6 py-1">{kind}</Mono>
+                  ))
+                : <span>（无）</span>}
+            </div>
+            <div className="flex flex-wrap gap-6 text-micro text-ink-4">
+              <span>代码复算</span>
+              {plan.computed_change_kinds.length
+                ? plan.computed_change_kinds.map((kind) => (
+                    <Mono key={'computed-' + kind} className="rounded-tag bg-inset px-6 py-1">{kind}</Mono>
+                  ))
+                : <span>（无）</span>}
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function DecisionSummary({ decision }: { decision: StructureApprovalDecision }) {
+  return (
+    <div className="flex flex-col gap-4 rounded-btn border border-line-row bg-card px-12 py-10 text-sm2">
+      <div className="flex flex-wrap items-center gap-6">
+        <span className="text-body font-semibold text-ink-2">最近一次历史裁决</span>
+        <span className="text-tag text-ink-4">{decision.actor}</span>
+        <Mono className="text-micro text-ink-4">{decision.decided_at}</Mono>
+      </div>
+      <span className="prose-cn text-ink-2">{decision.reason}</span>
+      <span className="text-micro text-ink-4">
+        逐章：{decision.chapters
+          .map((row) => '第 ' + row.output_ordinal + ' 章 ' + row.decision)
+          .join('、') || '（无）'}
+      </span>
+    </div>
+  )
+}
+
+function HistoryTable({ history }: { history: StructureApprovalDecision[] }) {
+  return (
+    <details className="mt-4 rounded-btn border border-line-row bg-card px-10 py-8">
+      <summary className="cursor-pointer text-sm2 font-semibold text-ink-2">历史裁决摘要</summary>
+      <div className="flex flex-col divide-y divide-line-row pt-4">
+        {history.map((decision, index) => (
+          <div key={decision.decided_at + ':' + index} className="flex flex-col gap-3 py-6 text-sm2">
+            <div className="flex flex-wrap items-center gap-6">
+              <span className="text-tag text-ink-4">{decision.actor}</span>
+              <Mono className="text-micro text-ink-4">{decision.decided_at}</Mono>
+            </div>
+            <span className="prose-cn text-ink-2">{decision.reason}</span>
+            <span className="text-micro text-ink-4">
+              逐章：{decision.chapters
+                .map((row) => '第 ' + row.output_ordinal + ' 章 ' + row.decision)
+                .join('、') || '（无）'}
+            </span>
+          </div>
+        ))}
+      </div>
+    </details>
   )
 }

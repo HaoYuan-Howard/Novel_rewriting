@@ -24,13 +24,8 @@ import type {
 import type {
   ApprovalBackfillResult,
   ApprovalDoc,
-  ApprovalWorkpack,
   BatchTrimResolutionRequest,
-  DesignReviewRequest,
-  DesignReviewTemplate,
-  DesignReviewTemplateQuery,
   GateKey,
-  StructureApprovalRequest,
   Stage5ClosureRequest,
   Stage5ClosureTemplate,
   Stage6ApprovalWorkpack,
@@ -520,10 +515,8 @@ export const realApi: Api = {
   getAgentQueue: () => get<AgentQueueView>('/agent/runs/queue'),
 
   getApprovals: (sid) => get<ApprovalDoc>(n(sid) + '/approvals'),
-  getDesignApprovalWorkpack: (sid) =>
-    get<ApprovalWorkpack>(n(sid) + '/approvals/design/workpack'),
-  getStructureApprovalWorkpack: (sid) =>
-    get<ApprovalWorkpack>(n(sid) + '/approvals/structure/workpack'),
+  // stage4 design/structure workpack、模板与 POST 写面已随 2026-09-15 全自动裁决退役；
+  // Stage4 人工闸只剩只读审批投影，机械准入是唯一打开条件。
   getStage6ApprovalWorkpack: (sid) =>
     get<Stage6ApprovalWorkpack>(n(sid) + '/approvals/stage6/workpack'),
   getStage7ApprovalWorkpack: (sid) =>
@@ -532,22 +525,7 @@ export const realApi: Api = {
     get<Stage5ClosureTemplate>(n(sid) + '/approvals/stage5/template'),
   approveStage5Closure: (sid, request: Stage5ClosureRequest) =>
     post<ApprovalDoc>(n(sid) + '/approvals/stage5', request),
-  getDesignReviewTemplate: (sid, query: DesignReviewTemplateQuery) => {
-    const params = new URLSearchParams({
-      actor: query.actor,
-      reviewer_kind: query.reviewer_kind,
-      review_run_id: query.review_run_id,
-      reason: query.reason,
-    })
-    return get<DesignReviewTemplate>(
-      n(sid) + '/approvals/design/template?' + params.toString(),
-    )
-  },
-  approveDesignReview: (sid, request: DesignReviewRequest) =>
-    post<ApprovalDoc>(n(sid) + '/approvals/design', request),
   approveGate: (sid, key: GateKey) => post<ApprovalDoc>(n(sid) + '/approvals/gate/' + key),
-  approveStructure: (sid, request: StructureApprovalRequest) =>
-    post<ApprovalDoc>(n(sid) + '/approvals/structure', request),
   backfillApprovals: (sid) =>
     post<ApprovalBackfillResult>(n(sid) + '/approvals/backfill'),
   startWriting: (sid, request: WritingApprovalRequest) =>

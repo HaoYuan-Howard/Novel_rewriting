@@ -84,7 +84,6 @@ export function useStage4Screen() {
   const knownBudgets = d?.index.every((r) => r.budget_chars !== null)
   return {
     query, sid, ordinal, chapters: d?.chapters ?? [ordinal], identity,
-    structureSubject: d?.structure_subject_sha256 ?? null,
     subjectUnavailable: d?.structure_subject_unavailable_reason ?? null,
     ctxMissing: !!d && ctx === null, selScene,
     toggleScene: (i: number) => setSelScene((cur) => cur === i ? null : i),

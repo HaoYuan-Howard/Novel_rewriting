@@ -81,10 +81,10 @@ export function Stage4Screen() {
               </div>
               {vm.identity ? (
                 <div className="prose-cn text-tag text-ink-4">
-                  恒等基线不是重构计划：这是按源节点列出的参考组织，不代表已经接受新的设计。
+                  恒等基线不是重构计划：这是按源节点列出的参考组织，不代表已有正式设计。
                 </div>
               ) : null}
-              {vm.subjectUnavailable ? <p role="alert">结构审阅身份不可用：{vm.subjectUnavailable}</p> : null}
+              {vm.subjectUnavailable ? <p role="alert">结构主体不可用：{vm.subjectUnavailable}</p> : null}
               {vm.ctxMissing ? (
                 <div className="prose-cn text-tag text-ink-4">
                   当前没有可用写作上下文；可对照蓝图与分场安排，尚不能据此开写。
@@ -185,7 +185,8 @@ export function Stage4Screen() {
                     ))}
 
                     <div className="prose-cn text-micro text-ink-5">
-                      普通分场只调整呈现安排。联合呈现是否完整、归因是否保持、是否提前揭示，由设计与结构审阅核对。
+                      普通分场只调整呈现安排。联合呈现是否完整、归因是否保持、是否提前揭示，
+                      属语义结论，以 unver/INFO 披露常驻并随交付披露；Stage4 推进只认统一机械准入。
                     </div>
                   </PaneScroll>
                 </Panel>
@@ -196,14 +197,7 @@ export function Stage4Screen() {
         </QueryStates>
       </ScreenFrame>
       <DesignReviewPanel />
-      {vm.query.data ? (
-        <StructureApprovalPanel
-          rows={vm.structureRows}
-          identity={vm.identity}
-          viewSubject={vm.structureSubject}
-          onRefreshView={vm.query.refetch}
-        />
-      ) : null}
+      {vm.query.data ? <StructureApprovalPanel rows={vm.structureRows} /> : null}
     </>
   )
 }
