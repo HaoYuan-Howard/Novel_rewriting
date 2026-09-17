@@ -122,7 +122,7 @@ def generate_characters(ctx: RunContext, *, view=None):
     client = LlmClient(
         child, transport, cache=ResponseCache(), model='test-characters', max_retries=0,
         budget_checker=lambda *_args, **_kwargs: None)
-    return characters.run_legacy(child, client)
+    return characters.run(child, client)
 
 
 def seed_character_registry(ctx: RunContext):

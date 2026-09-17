@@ -780,7 +780,7 @@ def _run_stage2(ctx: RunContext, flags: list[str]) -> int:
         if '--resample' in tokens:
             characters.run_resample(ctx, _llm_client(ctx))
         else:
-            characters.run_legacy(ctx, _llm_client(ctx))
+            characters.run(ctx, _llm_client(ctx))
         print('  ✓ 静态人物登记已落盘；语义未审以报告 unver 披露')
         return X.OK
 

@@ -834,15 +834,11 @@
    "cases": {
     "test_character_address_hard_gate_and_free_repair_share_the_real_producer": "stage",
     "test_character_edit_preflight_is_readonly_and_exact_candidate_commits": "stage",
-    "test_characters_changed_source_refuses_saved_answer_without_repurchase": "stage",
     "test_characters_edit_preserves_evidence_and_is_idempotent": "stage",
     "test_exhausted_character_candidate_stays_invalid_and_revalidation_cannot_bless": "stage",
     "test_frozen_character_baseline_is_read_from_exact_archived_bytes": "stage",
-    "test_independent_characters_generate_through_real_agent_and_store": "stage",
-    "test_old_saved_answer_cannot_overwrite_a_later_human_edit": "stage",
-    "test_raw_character_answer_before_checkpoint_is_recovered_without_wire": "stage",
-    "test_saved_character_answer_and_formal_recover_without_new_wire": "stage",
-    "test_static_hard_failure_resumes_same_session_without_global_write": "stage"
+    "test_independent_characters_generate_through_real_producer_and_store": "stage",
+    "test_static_hard_failure_lands_invalid_once_without_global_write": "stage"
    },
    "layer": "unit_contract",
    "stages": [
@@ -958,12 +954,6 @@
    ]
   },
   "tests/test_stage2_opening.py": {
-   "layer": "unit_contract",
-   "stages": [
-    "stage2"
-   ]
-  },
-  "tests/test_stage2_owner_candidate_recovery.py": {
    "layer": "unit_contract",
    "stages": [
     "stage2"

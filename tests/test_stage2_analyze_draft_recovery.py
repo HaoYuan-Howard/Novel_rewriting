@@ -216,10 +216,9 @@ def test_full_character_revision_retires_removed_ids_without_inheriting_human_ac
     _generate(ctx)
     removed = char_response()
     removed['characters'] = removed['characters'][:1]
-    deletion_ctx = _new_run_ctx(ctx)
-    deletion = Stage2CharactersAgent(deletion_ctx,
-        driver=_Driver([json.dumps(removed, ensure_ascii=False)], ctx.novel_dir,
-                       session_id='delete-' + deletion_ctx.run_id)).run().artifact
+    # C2b:直连 revision 生成——prepare 从盘上正式稿读修订基线,retired 身份
+    # 不再进入 identity_map,恢复人时自动分配新持久 ID。
+    deletion, _deleted_transport = _generate(ctx, [removed])
     assert deletion.provenance.retired_character_ids == ['char_002']
     assert deletion.provenance.characters_edit is None
     template = characters.edit_template(_free_ctx(ctx))
@@ -227,10 +226,7 @@ def test_full_character_revision_retires_removed_ids_without_inheriting_human_ac
     with pytest.raises(ValidationError, match='char_id'):
         characters.apply_edit(_free_ctx(ctx), CharactersEdit.model_validate({
             'source_sha256': template['source_sha256'], 'operations': [op]}), actor='test', reason='不能复用已退休身份')
-    addition_ctx = _new_run_ctx(ctx)
-    restored = Stage2CharactersAgent(addition_ctx,
-        driver=_Driver([json.dumps(char_response(), ensure_ascii=False)], ctx.novel_dir,
-                       session_id='add-' + addition_ctx.run_id)).run().artifact
+    restored, _restored_transport = _generate(ctx, [char_response()])
     assert set(restored.characters) == {'char_001', 'char_003'}
     assert restored.provenance.retired_character_ids == ['char_002']
     assert restored.provenance.characters_edit is None

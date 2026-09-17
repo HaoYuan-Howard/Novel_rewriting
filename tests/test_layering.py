@@ -212,6 +212,13 @@ _JSON_READ_ALLOWED = {
         '（拒绝重复键）与 _service 公开协议日志的完整失败信封，供存量书'
         '只读解码与 owner 停止证明；不读取盘上小说产物，不形成 provenance 输入'),
     'novel/work_units.py': '只读 _service 工作单元账和已保存响应，不读小说产物。',
+    'novel/stages/stage2/analyze_recovery.py': (
+        'legacy Analyze 的免费恢复只解码自己的 sidecar（stage2/analyze_legacy_checkpoint.json）、'
+        '书级 ledger 行与 work_units recovery 证明；不读 canonical 小说产物，'
+        '人物/Global 产物仍经 ArtifactStore 读取'),
+    'novel/stages/stage6/prepare.py': (
+        '直连 producer 的已购回答 sidecar（stage6/prepare_legacy_checkpoint.json）'
+        '与免费恢复账只由本 owner 解码；canonical 产物仍全部经 Store 读写'),
     'novel/orchestrator/work_unit_recovery.py': (
         'JSON 解码只将内存中的失败恢复证据规范化为落盘重放的嵌套形状；'
         '原账、成本、session 与 owner 证明走各自权威读路，不读取小说产物'),
@@ -349,6 +356,12 @@ _WRITE_ALLOWED = {
         '写前校验代码与 permit、执行期还需有效 claim，既有不同字节拒绝覆盖。'
         '该导出不是小说产物、费用账或授权来源；小说修改仍由受控 CLI 经 Store 完成'),
     'novel/work_units.py': '只写 _service 运行预算、内容寻址回答和恢复证明，不写小说产物。',
+    'novel/stages/stage2/analyze.py': (
+        'legacy Analyze 的已购回答 sidecar（stage2/analyze_legacy_checkpoint.json）'
+        '是免费恢复的唯一耐久面，与回执同事务落盘；不写 canonical 小说产物'),
+    'novel/stages/stage6/prepare.py': (
+        '直连 producer 的已购回答 sidecar（stage6/prepare_legacy_checkpoint.json）'
+        '先于 WAL 提交落盘，是「已购回答先耐久」的免费半边；不写 canonical 产物'),
     'novel/orchestrator/reviewer_action_evidence.py': (
         '只在 _service/runs 下写内容寻址的不可变 Reviewer authority receipt；'
         '以跨进程锁、原字节 CAS 和正式证据复核封口，不写 canonical 小说产物'),

@@ -1,5 +1,10 @@
 # -*- coding: utf-8 -*-
-"""人物独立 producer 的真实 session、持久提交与人工恢复边界。"""
+"""人物独立 producer 的直连生成、持久提交与人工恢复边界。
+
+C2b:agent session 生产臂退役后,本文件一律驱动直连 LlmClient 路径;
+session 内返工与 agent checkpoint 恢复不再存在,问题候选一次请求即落
+INVALID 并走免费 revalidate / typed 编辑。
+"""
 from __future__ import annotations
 
 import copy
@@ -11,20 +16,31 @@ from pydantic import ValidationError
 from contracts.artifacts import STAGE1_MAIN_TEXT, STAGE2_GLOBAL_GROUNDING
 from contracts.schema.characters import CharactersEdit, CharactersResponse
 from novel.errors import GateBlocked, ProvenanceRefused, TerminalState
-from novel.llm import agent_runs
-from novel.orchestrator.node_agents import Stage2CharactersAgent, build_node_agent
 from novel.stages.stage2 import characters
 from novel.store import ArtifactStore
 from tests.stage2_fixtures import character_response
 from tests.test_stage2_global_agent import (
-    _ctx as _global_ctx, _Driver, _free_ctx, _new_run_ctx, _resume_ctx,
+    _ctx as _global_ctx, _direct_ctx, _free_ctx,
 )
 
 
 def _ctx(base):
+    """共享盘面夹具:保留 executor_profile 供同文件族的 global/plot agent 测试。"""
     ctx = _global_ctx(base, with_characters=False)
     ctx.node = characters.NODE
     return ctx
+
+
+def _dctx(ctx):
+    """直连生成投影:剥掉 agent profile;盘上账同路,内存刻度全新。"""
+    from novel.llm.ledger import CostLedger
+    from novel.run import RunContext
+    return RunContext(
+        novel_dir=ctx.novel_dir, node=ctx.node, paid=ctx.paid, code=ctx.code,
+        cache=ctx.cache,
+        ledger=CostLedger(path=ctx.ledger.path, run_id=ctx.run_id,
+                          parent_run_id=ctx.parent_run_id),
+        run_id=ctx.run_id, parent_run_id=ctx.parent_run_id)
 
 
 def _response():
@@ -35,83 +51,55 @@ def _wire(value=None):
     return json.dumps(_response() if value is None else value, ensure_ascii=False)
 
 
-def _generate(ctx):
-    driver = _Driver([_wire()], ctx.novel_dir, session_id=f'characters-{ctx.run_id}')
-    result = build_node_agent(ctx, driver=driver).run()
-    return result.artifact, driver
+def _generate(ctx, script=None, *, expect_blocked=False):
+    """直连生成;script 为响应剧本(逐请求一份 dict)。
+
+    返回 (artifact, transport);多个 stage2 测试文件依赖这一 2 元组签名。
+    """
+    from tests.test_stage2_generation import _client, _ok
+    plan = list(script) if script is not None else [_response()]
+
+    def respond(_request, index):
+        item = plan[index] if index < len(plan) else plan[-1]
+        return _ok(item)
+
+    run_ctx = _dctx(ctx)
+    client, transport = _client(run_ctx, respond)
+    if expect_blocked:
+        with pytest.raises(GateBlocked):
+            characters.run(run_ctx, client)
+        return None, transport
+    return characters.run(run_ctx, client), transport
 
 
-def test_independent_characters_generate_through_real_agent_and_store(tmp_path):
+def test_independent_characters_generate_through_real_producer_and_store(tmp_path):
     ctx = _ctx(tmp_path)
-    artifact, driver = _generate(ctx)
-    assert len(driver.calls) == 1
+    artifact, transport = _generate(ctx)
+    assert len(transport.calls) == 1
     store = ArtifactStore(ctx)
     assert store.exists(characters.REL)
     assert not store.exists(STAGE2_GLOBAL_GROUNDING)
     assert store.freshness(characters.REL).state == 'fresh'
     assert set(artifact.provenance.inputs) == {STAGE1_MAIN_TEXT}
     assert all(not hasattr(row, 'fate') for row in artifact.characters.values())
-    assert agent_runs.commit_state(ctx, characters.commit_spec())['state'] == 'committed'
     assert 'source_blurb' not in characters.SYSTEM
 
 
-def test_static_hard_failure_resumes_same_session_without_global_write(tmp_path):
+def test_static_hard_failure_lands_invalid_once_without_global_write(tmp_path):
+    """C2b:session 内返工随 agent 臂退役——问题候选一次请求即落 INVALID。"""
     ctx = _ctx(tmp_path)
     bad = _response()
     bad['characters'][1]['role'] = '最终遇害'
-    driver = _Driver([_wire(bad), _wire()], ctx.novel_dir)
-    result = Stage2CharactersAgent(ctx, driver=driver).run()
-    assert result.passed
-    assert [kind for kind, _ in driver.calls] == ['start', 'resume']
-    assert result.artifact.provenance.usage.calls_made == 2
-
-
-@pytest.mark.parametrize('window', ['before_commit', 'after_formal'])
-def test_saved_character_answer_and_formal_recover_without_new_wire(tmp_path, monkeypatch, window):
-    ctx = _ctx(tmp_path)
-    if window == 'before_commit':
-        target, name = characters, '_commit'
-    else:
-        target, name = agent_runs, 'mark_committed'
-    original = getattr(target, name)
-
-    def interrupted(*args, **kwargs):
-        raise ProvenanceRefused('模拟中断')
-
-    monkeypatch.setattr(target, name, interrupted)
-    first = _Driver([_wire()], ctx.novel_dir)
-    with pytest.raises(ProvenanceRefused, match='模拟中断'):
-        Stage2CharactersAgent(ctx, driver=first).run()
-    monkeypatch.setattr(target, name, original)
-    resumed = _resume_ctx(ctx)
-    no_calls = _Driver([], ctx.novel_dir)
-    result = Stage2CharactersAgent(resumed, driver=no_calls).run()
-    assert result.passed
-    assert not no_calls.calls
-    assert result.artifact.provenance.usage.calls_made == 1
-    assert agent_runs.commit_state(resumed, characters.commit_spec())['state'] == 'committed'
-    assert not list((ctx.novel_dir / 'stage2/_rounds').glob('characters.r*'))
-
-
-def test_characters_changed_source_refuses_saved_answer_without_repurchase(tmp_path, monkeypatch):
-    ctx = _ctx(tmp_path)
-    original = characters._commit
-    monkeypatch.setattr(characters, '_commit', lambda *a, **k: (_ for _ in ()).throw(
-        ProvenanceRefused('中断')))
-    with pytest.raises(ProvenanceRefused):
-        _generate(ctx)
-    monkeypatch.setattr(characters, '_commit', original)
-    source = ArtifactStore(ctx).path(STAGE1_MAIN_TEXT)
-    source.write_text(source.read_text(encoding='utf-8') + '\n', encoding='utf-8')
-    no_calls = _Driver([], ctx.novel_dir)
-    with pytest.raises(ProvenanceRefused):
-        Stage2CharactersAgent(_resume_ctx(ctx), driver=no_calls).run()
-    assert not no_calls.calls
+    artifact, transport = _generate(ctx, [bad], expect_blocked=True)
+    assert artifact is None and len(transport.calls) == 1
+    store = ArtifactStore(ctx)
+    assert store.exists(characters.INVALID) and not store.exists(characters.REL)
+    assert not store.exists(STAGE2_GLOBAL_GROUNDING)
 
 
 def test_characters_edit_preserves_evidence_and_is_idempotent(tmp_path):
     ctx = _ctx(tmp_path)
-    previous, _ = _generate(ctx)
+    previous, _transport = _generate(ctx)
     free = _free_ctx(ctx)
     template = characters.edit_template(free)
     row = template['operations'][0]
@@ -154,10 +142,8 @@ def test_exhausted_character_candidate_stays_invalid_and_revalidation_cannot_ble
     ctx = _ctx(tmp_path)
     bad = _response()
     bad['characters'][0]['role'] = '最终遇害'
-    driver = _Driver([_wire(bad)] * 4, ctx.novel_dir)
-    with pytest.raises(GateBlocked):
-        Stage2CharactersAgent(ctx, driver=driver).run()
-    assert len(driver.calls) == 4
+    _artifact, transport = _generate(ctx, [bad], expect_blocked=True)
+    assert len(transport.calls) == 1
     store = ArtifactStore(ctx)
     assert store.exists(characters.INVALID) and not store.exists(characters.REL)
     passed, _ = characters.revalidate(_free_ctx(ctx), actor='human-test', reason='按原文复检')
@@ -173,85 +159,11 @@ def test_exhausted_character_candidate_stays_invalid_and_revalidation_cannot_ble
     assert store.exists(characters.REL) and not store.exists(characters.INVALID)
 
 
-def test_bad_candidate_then_parse_exhaustion_keeps_all_paid_attempts(tmp_path):
-    ctx = _ctx(tmp_path)
-    bad = _response()
-    bad['characters'][0]['role'] = '最终遇害'
-    driver = _Driver([_wire(bad), '{', '{', '{'], ctx.novel_dir)
-    with pytest.raises(GateBlocked):
-        Stage2CharactersAgent(ctx, driver=driver).run()
-    from contracts.schema.characters import CharacterRegistry
-    invalid = ArtifactStore(ctx).read_own(CharacterRegistry, characters.INVALID)[0]
-    assert invalid.provenance.usage.calls_made == 4
-    assert len(driver.calls) == 4
-
-
-def test_old_saved_answer_cannot_overwrite_a_later_human_edit(tmp_path, monkeypatch):
-    ctx = _ctx(tmp_path)
-    _generate(ctx)
-    second = _new_run_ctx(ctx)
-    original = characters._commit
-
-    def interrupted(*_args, **_kwargs):
-        raise ProvenanceRefused('尚未 prepared')
-
-    monkeypatch.setattr(characters, '_commit', interrupted)
-    with pytest.raises(ProvenanceRefused, match='尚未 prepared'):
-        _generate(second)
-    monkeypatch.setattr(characters, '_commit', original)
-    free = _free_ctx(ctx)
-    template = characters.edit_template(free)
-    row = template['operations'][0]
-    row['character']['role'] += '，为家事操持'
-    current = characters.apply_edit(
-        free, CharactersEdit.model_validate({**template, 'operations': [row]}),
-        actor='human-test', reason='补齐静态身份')
-    no_calls = _Driver([], ctx.novel_dir)
-    with pytest.raises(ProvenanceRefused, match='其他写口修改'):
-        Stage2CharactersAgent(_resume_ctx(second), driver=no_calls).run()
-    assert not no_calls.calls
-    assert ArtifactStore(ctx).read_own(type(current), characters.REL)[0] == current
-
-
-def test_raw_character_answer_before_checkpoint_is_recovered_without_wire(tmp_path, monkeypatch):
-    ctx = _ctx(tmp_path)
-    original = agent_runs.write_checkpoint
-
-    def interrupted(*_args, **_kwargs):
-        raise ProvenanceRefused('回答已落盘，checkpoint 尚未写入')
-
-    monkeypatch.setattr(agent_runs, 'write_checkpoint', interrupted)
-    with pytest.raises(ProvenanceRefused, match='checkpoint 尚未'):
-        _generate(ctx)
-    monkeypatch.setattr(agent_runs, 'write_checkpoint', original)
-    no_calls = _Driver([], ctx.novel_dir)
-    result = Stage2CharactersAgent(_resume_ctx(ctx), driver=no_calls).run()
-    assert result.passed and not no_calls.calls
-    assert result.artifact.provenance.usage.calls_made == 1
-
-
-def test_repeated_blocked_checkpoint_does_not_create_another_invalid_round(tmp_path):
-    ctx = _ctx(tmp_path)
-    bad = _response()
-    bad['characters'][0]['role'] = '最终遇害'
-    with pytest.raises(GateBlocked):
-        Stage2CharactersAgent(ctx, driver=_Driver([_wire(bad)] * 4, ctx.novel_dir)).run()
-    before = ArtifactStore(ctx).path(characters.INVALID).read_bytes()
-    no_calls = _Driver([], ctx.novel_dir)
-    with pytest.raises(GateBlocked):
-        Stage2CharactersAgent(_resume_ctx(ctx), driver=no_calls).run()
-    assert ArtifactStore(ctx).path(characters.INVALID).read_bytes() == before
-    assert not no_calls.calls
-    assert not list((ctx.novel_dir / 'stage2/_rounds').glob('characters.INVALID.r*'))
-
-
-def test_explicit_legacy_backend_runs_the_same_static_contract(tmp_path):
+def test_explicit_backend_runs_the_same_static_contract(tmp_path):
     from tests.test_stage2_generation import _client, _ok
-    ctx = _ctx(tmp_path)
-    ctx.executor_backend = None
-    ctx.executor_profile = None
+    ctx = _dctx(_ctx(tmp_path))
     client, transport = _client(ctx, lambda _request, _index: _ok(_response()))
-    artifact = characters.run_legacy(ctx, client)
+    artifact = characters.run(ctx, client)
     assert len(transport.calls) == 1
     assert artifact.provenance.model == 'test-model'
     assert ArtifactStore(ctx).freshness(characters.REL).state == 'fresh'
@@ -285,7 +197,7 @@ def test_character_edit_invalid_target_preserves_formal_projection_and_cost(tmp_
 
 def test_character_add_compiles_stable_ids_avoids_retired_and_replays_without_cost(tmp_path):
     ctx = _ctx(tmp_path)
-    previous, _ = _generate(ctx)
+    previous, _transport = _generate(ctx)
     store = ArtifactStore(ctx)
     ledger = ctx.ledger.path.read_bytes()
     template = characters.edit_template(_free_ctx(ctx))
@@ -457,7 +369,7 @@ def test_character_edit_preflight_is_readonly_and_exact_candidate_commits(tmp_pa
 
 def test_frozen_character_baseline_is_read_from_exact_archived_bytes(tmp_path):
     ctx = _ctx(tmp_path)
-    previous, _ = _generate(ctx)
+    previous, _transport = _generate(ctx)
     store = ArtifactStore(ctx)
     old_sha = store.full_sha256_or_none(characters.REL)
     template = characters.edit_template(_free_ctx(ctx))

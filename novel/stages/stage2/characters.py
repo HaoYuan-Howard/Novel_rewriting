@@ -30,12 +30,11 @@ from contracts.schema.stage1 import MainText
 from contracts.schema.stage2 import BlueprintCharacterProjection
 from contracts.schema.report import CheckReport
 from novel import paths, prov
-from novel.agents import session_audit as agent_session_audit
-from novel.agents.session_client import SessionAgentClient
 from novel.appendlog import process_append_lock
 from novel.errors import GateBlocked, ProvenanceRefused, TerminalState, UpstreamMissing
 from novel.llm import agent_runs
 from novel.llm.client import LlmClient, LlmFailed
+from novel.llm.execution import canonical_sha256
 from novel.llm.prompts import fill
 from novel.llm.transport import ChatResponse
 from novel.report import build
@@ -71,27 +70,10 @@ role 只写人物首次公开的身份，不写后续经历、结局、隐藏身
 role_evidence_refs 支持该身份。未知身份用原文支持的最低限度描述，不编补、不重复人名。
 name_distinctiveness 从 $NAME_DISTINCT 选择。全部 evidence_refs 只引用所给 e000001…候选，
 每组至少一条，证据须支持对应主张；正式锚点由代码生成。不输出 fate、动态状态或人物知情表。
-人物齐全、称谓归属和证据语义由 Commander 核验，本回答不替审阅盖章。""")
+人物齐全、称谓归属和证据语义由机械校验与独立验收记录核验，本回答不替审阅盖章。""")
+_LOCKS: dict[str, threading.RLock] = {}
 _LOCKS: dict[str, threading.RLock] = {}
 _LOCKS_GUARD = threading.Lock()
-
-
-def run_spec() -> agent_runs.SingleSessionRunSpec:
-    return agent_runs.SingleSessionRunSpec(
-        label='Stage2 人物登记', node=NODE, session_owner=NODE, purpose=NODE,
-        chapter=None, phase='characters', recovery_policy=RECOVERY_POLICY,
-        session_isolation='per-node',
-        initial_artifacts=(REL, INVALID, PROJECTION),
-        run_path=lambda ctx: paths.stage2_characters_run_path(ctx.novel_dir, ctx.run_id),
-        checkpoint_dir=lambda ctx: paths.stage2_characters_run_path(
-            ctx.novel_dir, ctx.run_id) / 'checkpoints')
-
-
-def commit_spec() -> agent_runs.CommitBundleSpec:
-    return agent_runs.CommitBundleSpec(
-        run=run_spec(), commit_path=lambda ctx: paths.stage2_characters_run_path(
-            ctx.novel_dir, ctx.run_id) / agent_runs.COMMIT_FILE,
-        primary_artifact=REL, allowed_touched=((REL, INVALID, PROJECTION),), nonformal_paths=(INVALID,))
 
 
 @contextmanager
@@ -162,12 +144,7 @@ def prepare(ctx: RunContext) -> PreparedCharacters:
     reserved_ids: tuple[str, ...] = ()
     baseline = None
     with ctx.validation_reads():
-        if ctx.executor_profile is not None and (run_spec().run_path(ctx) / agent_runs.RUN_FILE).exists():
-            frozen = agent_runs.initial_artifact_sha256s(ctx, run_spec())
-            baseline_rel = INVALID if frozen[INVALID] is not None else REL
-            if frozen[baseline_rel] is not None:
-                baseline = store.read_own_by_sha256(CharacterRegistry, baseline_rel, frozen[baseline_rel])
-        elif store.exists(INVALID) or store.exists(REL):
+        if store.exists(INVALID) or store.exists(REL):
             baseline = store.read_own(CharacterRegistry, INVALID if store.exists(INVALID) else REL,
                                       require_current=True)[0]
     if baseline is not None:
@@ -187,7 +164,7 @@ def prepare(ctx: RunContext) -> PreparedCharacters:
     return PreparedCharacters(
         main_text=tuple(main), source_sha256=before, table=table, user=user,
         identity_map=identity_map, reserved_ids=reserved_ids,
-        input_sha256=agent_runs.canonical_sha256({
+        input_sha256=canonical_sha256({
             'node': NODE, 'main_text_sha256': before, 'table_sha256': table.sha256(),
             'identity_map': identity_map,
             'reserved_ids': reserved_ids,
@@ -266,7 +243,7 @@ def _hits(outcomes: list[Outcome]) -> list[str]:
 
 
 def _materialize(
-        ctx: RunContext, client: SessionAgentClient | LlmClient,
+        ctx: RunContext, client: LlmClient,
         prepared: PreparedCharacters, response: CharactersResponse, *, settle: bool = False,
 ) -> tuple[CharacterRegistry, list[Outcome]]:
     compiled = compile_response(response, prepared.table, identity_map=prepared.identity_map,
@@ -305,146 +282,12 @@ def _publish_projection(store: ArtifactStore, prepared: PreparedCharacters,
     return current
 
 
-def _commit(ctx: RunContext, prepared: PreparedCharacters,
-            artifact: CharacterRegistry, attempt_id: str) -> CharacterRegistry:
-    store = ArtifactStore(ctx)
-    spec = commit_spec()
-    payload = artifact.model_dump(mode='json', by_alias=True)
-    projection = _projection(prepared, artifact)
-    finalization = {'input_sha256': prepared.input_sha256}
-    with ownership(ctx, allow_current=True):
-        assert_current(ctx, prepared)
-        journal = agent_runs.commit_state(ctx, spec)
-        if journal is None:
-            baselines = agent_runs.initial_artifact_sha256s(ctx, spec.run)
-            if any(store.full_sha256_or_none(rel) != sha for rel, sha in baselines.items()):
-                raise ProvenanceRefused('人物回答保存后目标被其他写口修改，拒绝覆盖')
-            journal = agent_runs.prepare_commit(
-                ctx, spec, primary_payload=payload, finalization_payload=finalization,
-                touched_paths=(REL, INVALID, PROJECTION), attempt_id=attempt_id)
-        if (not agent_runs.verify_commit_primary(journal, payload)
-                or not agent_runs.verify_commit_finalization(journal, finalization)):
-            raise ProvenanceRefused('人物 prepared 与当前候选或输入不一致')
-        state = agent_runs.target_state(
-            ctx, spec, journal, REL,
-            expected_file_sha256=hashlib.sha256(store._render(REL, artifact)).hexdigest())
-        invalid_state = agent_runs.target_state(ctx, spec, journal, INVALID, expected_absent=True)
-        projection_state = agent_runs.target_state(
-            ctx, spec, journal, PROJECTION, expected_file_sha256=hashlib.sha256(
-                store._render(PROJECTION, projection)).hexdigest())
-        if state == 'baseline':
-            store.write_round(REL, artifact)
-        elif invalid_state == 'baseline':
-            store.retire_invalid(REL)
-        if projection_state == 'baseline':
-            _publish_projection(store, prepared, artifact)
-        assert_current(ctx, prepared)
-        landed, _ = store.read_own(CharacterRegistry, REL, require_current=True)
-        if landed != artifact or store.freshness(REL).state != 'fresh':
-            raise ProvenanceRefused('人物正式读回或来源新鲜度不闭合')
-        purpose, restored_attempt = agent_runs.restore_commit_adoption(ctx, spec, journal)
-        if purpose != NODE or restored_attempt != attempt_id:
-            raise ProvenanceRefused('人物提交的响应采用身份漂移')
-        ctx.ledger.note_adoption(
-            sid=ctx.sid, node=NODE, purpose=NODE, attempt_id=attempt_id,
-            artifact=REL, artifact_fingerprint=prov.projection_fingerprint(payload), chapter=None)
-        agent_runs.mark_committed(
-            ctx, spec, primary_payload=payload, finalization_payload=finalization,
-            landed_payloads={REL: payload, PROJECTION: projection.model_dump(mode='json')})
-        committed = agent_runs.commit_state(ctx, spec)
-        agent_runs.verify_committed_delivery(
-            ctx, spec, committed, primary_payload=payload,
-            finalization_payload=finalization,
-            landed_payloads={REL: payload, PROJECTION: projection.model_dump(mode='json')})
-        assert_current(ctx, prepared)
-        return landed
-
-
-def run(ctx: RunContext, client: SessionAgentClient) -> CharacterRegistry:
-    prepared = prepare(ctx)
-    spec = run_spec()
-    with ownership(ctx, allow_current=True):
-        agent_runs.ensure_run(ctx, spec, **prepared.request())
-    restored = agent_runs.restore_checkpoint(
-        ctx, spec, **prepared.request(), validator=_validator(prepared))
-    response = None
-    if restored is not None:
-        if restored.state_payload != {'input_sha256': prepared.input_sha256}:
-            raise ProvenanceRefused('人物 checkpoint 状态与本次输入不一致')
-        client.restore_checkpoint_acceptance(
-            NODE, restored.acceptance, system=SYSTEM, user=prepared.user,
-            max_tokens=MAX_TOKENS, recovery_policy=RECOVERY_POLICY)
-        response = restored.value
-    last_bad = None
-    while True:
-        assert_current(ctx, prepared)
-        if response is None:
-            try:
-                response = client.ask_json(
-                    SYSTEM, prepared.user, model_cls=CharactersResponse, purpose=NODE,
-                    max_tokens=MAX_TOKENS, recovery_policy=RECOVERY_POLICY,
-                    validator=_validator(prepared), retain_validator_rejection=True)
-            except LlmFailed:
-                if last_bad is not None and not client.driver_failed and not client.can_resume:
-                    artifact, _ = _materialize(ctx, client, prepared, last_bad[0], settle=True)
-                    _land_invalid(ctx, prepared, artifact, last_bad[1])
-                raise
-            acceptance = client.accepted_checkpoint(NODE)
-            agent_runs.write_checkpoint(
-                ctx, spec, **prepared.request(),
-                response_payload=response.model_dump(mode='json'), acceptance=acceptance,
-                revision_key=f'candidate:{acceptance["accepted_turn_index"]}',
-                state_payload={'input_sha256': prepared.input_sha256})
-        artifact, outcomes = _materialize(ctx, client, prepared, response)
-        hits = _hits(outcomes)
-        if hits:
-            last_bad = (response, hits)
-            feedback = [
-                {'rule': row.rule, 'details': [finding.detail for finding in row.findings],
-                 'unknown': row.unver_why}
-                for row in outcomes if row.rule in hits]
-            resumed = (client.queue_restored_code_validation_feedback if restored else
-                       client.queue_code_validation_feedback)(feedback, purpose=NODE)
-            restored = None
-            if resumed:
-                response = None
-                continue
-            artifact, _ = _materialize(ctx, client, prepared, response, settle=True)
-            _land_invalid(ctx, prepared, artifact, hits)
-        artifact, _ = _materialize(ctx, client, prepared, response, settle=True)
-        attempt = client.accepted_attempt(NODE)
-        if attempt is None:
-            raise ProvenanceRefused('人物交付缺真实 accepted attempt')
-        landed = _commit(ctx, prepared, artifact, attempt)
-        if restored is not None:
-            agent_session_audit.finish_restored_session(
-                ctx.novel_dir.parent, restored.acceptance, process_state='ok',
-                delivery_state='delivered', error_kind=None,
-                end_code_version=prov.code_version(), only_if_open=True)
-        return landed
-
-
 def _land_invalid(ctx: RunContext, prepared: PreparedCharacters,
                   artifact: CharacterRegistry, hits: list[str]) -> NoReturn:
     with ownership(ctx):
         assert_current(ctx, prepared)
         store = ArtifactStore(ctx)
-        reusable = False
-        if ctx.executor_profile is not None:
-            baselines = agent_runs.initial_artifact_sha256s(ctx, run_spec())
-            if store.full_sha256_or_none(REL) != baselines[REL]:
-                raise ProvenanceRefused('人物回答保存后正式目标已改变，拒绝重新写入旧问题稿')
-            if store.exists(INVALID):
-                existing = store.read_own(CharacterRegistry, INVALID, require_current=True)[0]
-                expected = artifact.model_copy(update={'provenance': artifact.provenance.model_copy(update={
-                    'gates_skipped': existing.provenance.gates_skipped,
-                    'invalid_baseline_sha256': existing.provenance.invalid_baseline_sha256,
-                })})
-                reusable = expected == existing
-            if not reusable and store.full_sha256_or_none(INVALID) != baselines[INVALID]:
-                raise ProvenanceRefused('人物回答保存后 INVALID 被其他写口修改，拒绝覆盖')
-        target = store.path(INVALID) if reusable else store.write_invalid(
-            REL, artifact, gates_skipped=[])
+        target = store.write_invalid(REL, artifact, gates_skipped=[])
     raise GateBlocked(
         f'人物候选被 {hits} 拦截，问题稿已保存；可 typed 编辑或免费 --revalidate',
         invalid_path=target)
@@ -504,7 +347,7 @@ def _edit_candidate(ctx: RunContext, prepared: PreparedCharacters, previous: Cha
                                       (set(before) - set(normalized))),
         'characters_edit': CharactersEditReceipt(
             actor=actor, reason=reason, at=at or datetime.now(timezone.utc).isoformat(),
-            source_sha256=sha, edit_sha256=agent_runs.canonical_sha256(edit.model_dump(mode='json')),
+            source_sha256=sha, edit_sha256=canonical_sha256(edit.model_dump(mode='json')),
             deleted_character_ids=sorted(set(receipt.deleted_character_ids if receipt else []) |
                                          {op.char_id for op in edit.operations
                                           if isinstance(op, CharacterDelete)}),
@@ -618,10 +461,10 @@ def run_resample(ctx: RunContext, client: LlmClient) -> CharacterRegistry:
     if not ArtifactStore(ctx).exists(INVALID):
         raise UpstreamMissing('人物 --resample 需要已有 INVALID；首次生成使用默认入口')
     ctx.cache = CachePolicy.refresh()
-    return run_legacy(ctx, client)
+    return run(ctx, client)
 
 
-def run_legacy(ctx: RunContext, client: LlmClient) -> CharacterRegistry:
+def run(ctx: RunContext, client: LlmClient) -> CharacterRegistry:
     """显式 legacy backend 使用原 transport/cache/额度契约，不能接管 agent 回答。"""
     if ctx.executor_profile is not None:
         raise ProvenanceRefused('人物 legacy 入口不能接管 agent profile')
