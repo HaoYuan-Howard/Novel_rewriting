@@ -206,7 +206,7 @@ def build_blind_projection(blueprints: object, *, root_clean_sha1: str,
                 character = character_rows[actor.char_id]
                 binding = catalog.bindings.get(actor.presentation_ref)
                 if binding:
-                    surfaces = binding['surfaces']
+                    surfaces = list(binding['surfaces'])
                     if any(s not in {a['surface'] for a in character['aliases']} for s in surfaces):
                         raise BlindPlanError('表面身份使用未登记称谓')
                     state = catalog.states.get(binding['public_state_ref'])
@@ -216,7 +216,11 @@ def build_blind_projection(blueprints: object, *, root_clean_sha1: str,
                                        if a['identity_revealed_from'] <= scope})
                     role = character['role'] if character['first_chapter'] <= scope else None
                 if not surfaces:
-                    raise BlindPlanError('规划人物没有可辨认呈现，不能回退 canonical')
+                    # Stage2 允许 first_chapter 已到、登记名尚未字面证成的闭集成员
+                    # （surfaces=[]，典型第一人称「我」）。盲材料只发 opaque alias，
+                    # 禁止回退 canonical；未到出场章仍关闭式拒绝。
+                    if character['first_chapter'] > scope:
+                        raise BlindPlanError('规划人物没有可辨认呈现，不能回退 canonical')
                 character_material.append({'alias': token, 'surfaces': surfaces, 'role': role})
                 continue
             if ref['kind'] in {'beat', 'state', 'constraint', 'chapter_boundary'}:

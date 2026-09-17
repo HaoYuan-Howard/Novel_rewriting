@@ -151,6 +151,47 @@ def test_blind_projection_is_order_invariant_and_hides_formal_ids_from_a():
     assert re.fullmatch(r'[0-9a-f]{64}', mapping['truth_sha256'])
 
 
+def test_blind_projection_allows_empty_surfaces_for_present_first_person():
+    """first_chapter 已到、登记名尚未揭示：盲材料 surfaces=[]，不回退 canonical。"""
+    characters = planner_characters()
+    characters['characters']['char_001'] = {
+        **characters['characters']['char_001'],
+        'canonical': '芸娘',
+        'aliases': [{'surface': '芸娘', 'identity_revealed_from': 4, 'evidence_refs': []}],
+    }
+    raw = _blueprints(1)
+    # 去掉本章 binding，迫使走 null presentation_ref → alias 回退。
+    raw['blueprints'][0]['actor_bindings'] = [
+        b for b in raw['blueprints'][0].get('actor_bindings', [])
+        if b.get('char_id') != 'char_001']
+    truth, _mapping = build_blind_projection(
+        raw, root_clean_sha1=ROOT, characters=characters, global_g=GLOBAL,
+        main_text=[{'chapter_ordinal': 1, 'text': SOURCE}])
+    rows = [c for c in truth['chapters'][0]['characters'] if not c['surfaces']]
+    assert rows, '应保留空 surfaces 的第一人称闭集成员'
+    assert all(c.get('alias') for c in rows)
+    wire = json.dumps(truth, ensure_ascii=False)
+    assert '芸娘' not in wire and 'char_001' not in wire
+
+
+def test_blind_projection_still_refuses_empty_surfaces_before_first_chapter():
+    characters = planner_characters()
+    characters['characters']['char_001'] = {
+        **characters['characters']['char_001'],
+        'first_chapter': 2,
+        'canonical': '芸娘',
+        'aliases': [{'surface': '芸娘', 'identity_revealed_from': 4, 'evidence_refs': []}],
+    }
+    raw = _blueprints(1)
+    raw['blueprints'][0]['actor_bindings'] = [
+        b for b in raw['blueprints'][0].get('actor_bindings', [])
+        if b.get('char_id') != 'char_001']
+    with pytest.raises(BlindPlanError, match='可辨认呈现|不能回退 canonical'):
+        build_blind_projection(
+            raw, root_clean_sha1=ROOT, characters=characters, global_g=GLOBAL,
+            main_text=[{'chapter_ordinal': 1, 'text': SOURCE}])
+
+
 def test_executor_projection_preserves_registered_constraints_without_upgrading_unknown_relations():
     raw = _blueprints()
     raw['blueprints'][0]['constraints'] = [{

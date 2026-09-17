@@ -6,6 +6,7 @@ from pydantic import Field, JsonValue, model_validator
 from contracts.schema.base import FrozenModel
 
 OpaqueAlias = Annotated[str, Field(pattern=r'^[au]_[0-9a-f]{6,64}$')]
+NonEmpty = Annotated[str, Field(min_length=1)]
 
 
 class PlannerBeat(FrozenModel):
@@ -15,8 +16,13 @@ class PlannerBeat(FrozenModel):
 
 
 class PlannerCharacter(FrozenModel):
+    """盲投影人物材料。
+
+    ``surfaces`` 可为合法空：Stage2 闭集允许 first_chapter 已到、登记名尚未字面
+    证成的成员（典型第一人称）；此时只发 opaque alias，不得填 canonical。
+    """
     alias: OpaqueAlias
-    surfaces: list[str] = Field(min_length=1)
+    surfaces: list[NonEmpty] = Field(default_factory=list)
     role: str | None
 
 
