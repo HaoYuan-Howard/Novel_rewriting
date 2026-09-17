@@ -817,7 +817,7 @@ assert tuple(LAYER_CN) == tuple(LAYER_GLOSS) == TIME_LAYERS, \
 #:   （env `NOVEL_STAGE2_BLUEPRINT_CONTRACT`）。
 #: · `extraction-ir-v1` → 并入 `extraction-ir-v1.1`（2026-08-21）：**再放宽一格，
 #:   同样不升版**。ir1.1 与 ir1 的差别**只有 blueprint system 里 place 那一段措辞**
-#:   （响应模型 / 编译器 / 投影函数逐个共用，见 `novel/stages/stage2/contract.py`）
+#:   （响应模型 / 编译器 / 投影函数逐个共用，见 `novel/stages/stage2/blueprint/contract.py`）
 #:   ⇒ 产物形状与语义都不变，两臂可并存于 A/B 的不同 base 之间。
 #:   起因是 ir1 的地点填充率相对 v3 掉了一半以上，而 `docs/stage2_contract_experiment.md`
 #:   §十一 实测**两个模型上都掉**（Pro −60% / Flash −28%）⇒ 那是契约的独立责任，

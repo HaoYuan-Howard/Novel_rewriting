@@ -41,6 +41,7 @@ from novel.core.evidence import iter_global_evidence_slots
 from novel.run import RunContext
 from novel.run_identity import new_run_id
 from novel.stages.stage2 import extract
+from novel.stages.stage2.blueprint import producer as blueprint_producer
 from novel.stages.stage2.shared.normalize import (
     EvidenceLocatorCorrection, normalize_global,
 )
@@ -666,7 +667,7 @@ def _stopped_blueprint_request(tmp_path, monkeypatch, *, reasoning=False):
     with monkeypatch.context() as patch:
         def stop(*_args, **_kwargs):
             raise RuntimeError('响应已经检查，准备聚合前中断')
-        patch.setattr(extract, 'finish_blueprints', stop)
+        patch.setattr(blueprint_producer, 'finish_blueprints', stop)
         with pytest.raises(RuntimeError, match='准备聚合前'):
             extract.run_blueprint(ctx, client)
     assert len(wire.calls) == len(main_text())
@@ -750,19 +751,36 @@ def test_blueprint_reasoning_checkpoint_requires_original_answer_lost_evidence(
 
 
 def test_blueprint_missing_checkpoint_cannot_borrow_other_matching_payloads(tmp_path, monkeypatch):
-    """只接受已登记 run/章路径；内容相同的旁路副本不填补依赖链缺口。"""
+    """只接受已登记 run/章路径；内容相同的旁路副本不填补依赖链缺口。
+
+    S2-7：并行恢复下缺登记检查点的章可重新购买；不得把 copy_*.json 当成
+    ``checkpoints/<phase>-chNNNN.json`` 采用。
+    """
     ctx, _first = _stopped_blueprint_request(tmp_path, monkeypatch)
     checkpoint = stage2_runs.paths.stage2_blueprint_checkpoint_path(
         ctx.novel_dir, ctx.run_id, 'blueprint', 1)
     original = checkpoint.read_bytes()
+    copies = []
     for suffix in ('copy_a.json', 'copy_b.json'):
-        checkpoint.with_name(suffix).write_bytes(original)
+        side = checkpoint.with_name(suffix)
+        side.write_bytes(original)
+        copies.append(side)
     checkpoint.unlink()
-    resumed, client, wire = _resume_stopped_blueprint(ctx)
-    with pytest.raises(ProvenanceRefused, match='缺检查点'):
-        extract.run_blueprint(resumed, client)
-    assert not wire.calls
-    assert not ArtifactStore(resumed).exists(extract.BLUEPRINT_REL)
+    resumed = _disk_blueprint_ctx(ctx.novel_dir, ctx.ledger.path,
+                                  paid=True, run_id=ctx.run_id)
+    rows = _response_blueprints()
+
+    def answer(req, _index):
+        ordinal = json.loads(req.user.split('\n', 1)[0])['chapter_ordinal']
+        return _ok({'blueprints': [rows[ordinal]]})
+
+    client, wire = _client(resumed, answer)
+    assert extract.run_blueprint(resumed, client).passed
+    assert len(wire.calls) == 1
+    assert json.loads(wire.calls[0].user.split('\n', 1)[0])['chapter_ordinal'] == 1
+    assert checkpoint.is_file()
+    for side in copies:
+        assert side.read_bytes() == original
 
 
 def test_stage2_refuses_stale_stage1_before_the_client_can_be_called(tmp_path):
@@ -1036,7 +1054,7 @@ def test_blueprint_resume_after_prepare_before_formal_uses_sealed_candidate(
         def respond(req: ChatRequest, _index: int) -> ChatResponse:
             return _respond_blueprints(req, by_ordinal)
 
-        real_write = extract._write_formal
+        real_write = blueprint_producer._write_formal
 
         def crash_before_formal(*_args, **_kwargs):
             raise RuntimeError('synthetic crash before formal write')
@@ -1048,10 +1066,10 @@ def test_blueprint_resume_after_prepare_before_formal_uses_sealed_candidate(
             model='test-model', max_retries=0, concurrency=3,
             budget_checker=lambda *_args, **_kwargs: None,
         )
-        monkeypatch.setattr(extract, '_write_formal', crash_before_formal)
+        monkeypatch.setattr(blueprint_producer, '_write_formal', crash_before_formal)
         with pytest.raises(RuntimeError, match='before formal write'):
             extract.run_blueprint(first, first_client)
-        monkeypatch.setattr(extract, '_write_formal', real_write)
+        monkeypatch.setattr(blueprint_producer, '_write_formal', real_write)
 
         from novel.llm import stage2_runs
         if stale_formal:

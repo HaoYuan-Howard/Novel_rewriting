@@ -294,10 +294,14 @@ _JSON_READ_ALLOWED = {
     'novel/stages/stage2/analyze/purchase.py': (
         '只把 SessionAgentClient 已验证来源的内存 normalized_text 解码为原回答修复候选；'
         '这是已购模型 stdout 的格式诊断，不裸读正式产物；编译、证据、来源与正式写盘仍走 Store'),
-    'novel/stages/stage2/extract.py': (
+    'novel/stages/stage2/knowledge/producer.py': (
+        '只读 `_service/runs` 下当前 global/knowledge run 的 request_policy 与 custody 判别，'
+        '用于拒绝直连 producer 接管已退役 agent 状态；不是正式产物读路，'
+        '正式 Global 仍经 ArtifactStore'),
+    'novel/stages/stage2/blueprint/producer.py': (
         '只读 `_service/runs` 下当前 blueprint run.json 的 request_policy 判别格，'
         '用于拒绝直连 producer 接管已退役 agent 状态；不是正式产物读路，'
-        '正式蓝图/人物/Global 仍经 ArtifactStore'),
+        '正式蓝图仍经 ArtifactStore'),
     'novel/stages/stage6/prepare_recovery.py': (
         '只解码已购回答验收记录中的内存 normalized_text，保留格式错误的原模型候选；'
         '来源 custody 由 SessionAgentClient 验证，正式 Prepare 仍由 producer 经 ArtifactStore 写入'),
@@ -974,6 +978,37 @@ def test_cross_stage_imports_stay_on_the_package_surface():
     # STR-03 knowledge/（产品 stage2.global；包名避 Python 关键字）+ shared 证据原语：71→77。
     assert len(_CROSS_STAGE_DEEP_GRANDFATHER) == 77
 
+
+
+def test_stage2_owner_shims_cannot_return():
+    """STR-02：旧顶层 shim（plot_* / grounding / …）已删；不得再以同名模块回流。
+
+    ``extract`` 保留为 knowledge+blueprint producer 的薄公开面（无业务实现），
+    不算 shim 回流。
+    """
+    import importlib.util
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1] / 'novel' / 'stages' / 'stage2'
+    banned = [
+        'plot_checks', 'plot_compile', 'plot_continuity', 'plot_diagnostics',
+        'plot_edit', 'plot_inputs', 'plot_prompts', 'plot_recovery',
+        'plot_recovery_policy', 'plot_repair', 'plot_sequence', 'run_state',
+        'contract', 'paragraphs', 'character_refs', 'character_checks',
+        'character_rebind', 'analyze_recovery', 'analyze_draft_recovery',
+        'grounding', 'global_contract', 'global_normalize',
+        'global_evidence_candidates', 'knowledge_prompts', 'source_blurb',
+        'core_evidence', 'normalize',
+    ]
+    present = [name for name in banned if (root / f'{name}.py').exists()]
+    assert not present, f'Stage2 顶层 shim 回流：{present}'
+    for name in banned:
+        spec = importlib.util.find_spec(f'novel.stages.stage2.{name}')
+        assert spec is None, f'仍可解析已删 shim 模块 novel.stages.stage2.{name}'
+    assert (root / 'blueprint').is_dir()
+    assert (root / 'knowledge' / 'producer.py').is_file()
+    assert (root / 'blueprint' / 'producer.py').is_file()
+    assert (root / 'extract.py').is_file()
 
 
 def test_the_api_layer_has_no_second_argv_builder():

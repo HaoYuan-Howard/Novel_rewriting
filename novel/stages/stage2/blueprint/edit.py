@@ -61,7 +61,7 @@ def _token(store, artifact) -> str:
 
 def edit_template(ctx) -> dict:
     from contracts.schema.stage1 import MainText
-    from novel.stages.stage2 import extract
+    from novel.stages.stage2.blueprint import producer as extract
     store = ArtifactStore(ctx)
     _, artifact = _current(store)
     sources = {row.chapter_ordinal: row.text for row in store.read(MainText, extract.MAIN_TEXT).root}
@@ -170,7 +170,7 @@ class PreparedPlotEdit:
 
 def prepare_edit(ctx, request: PlotEdit, *, allow_unchanged: bool = False) -> PreparedPlotEdit:
     from contracts.schema.knowledge import KnowledgeGrounding
-    from novel.stages.stage2 import extract
+    from novel.stages.stage2.blueprint import producer as extract
     from novel.stages.stage2.shared.character_refs import blueprint_inventory_from_projection
     store = ArtifactStore(ctx)
     main = extract._read_main_text(store)
@@ -234,7 +234,7 @@ def validate_edit(ctx, edit_path: str = '') -> PlotEditPreview:
 
 def apply_edit(ctx, edit_path: str = ''):
     from novel.llm import stage2_runs
-    from novel.stages.stage2 import extract
+    from novel.stages.stage2.blueprint import producer as extract
     store = ArtifactStore(ctx)
     with stage2_runs.repair_ownership_lock(ctx.novel_dir):
         request = _read_request(store, ctx, edit_path)

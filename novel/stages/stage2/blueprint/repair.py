@@ -51,7 +51,7 @@ def _finalization(ctx, store, *, chapters, review_token, candidate, live_before)
 
 def finish_commit(ctx, *, chapters=(), review_token=None):
     """封存候选可在正式替换前后免费恢复；不能覆盖期间新出现的人工修改。"""
-    from novel.stages.stage2 import extract
+    from novel.stages.stage2.blueprint import producer as extract
     journal = stage2_runs.commit_state(ctx)
     if journal is None:
         return None
@@ -109,7 +109,7 @@ def finish_commit(ctx, *, chapters=(), review_token=None):
 
 def request_inputs(ctx, *, chapters, store, main_text, character_projection):
     """预览与执行共用同一只读构造器；调用前不会生成新章或接受任何语义。"""
-    from novel.stages.stage2 import extract
+    from novel.stages.stage2.blueprint import producer as extract
     _, previous = plot_edit._current(store)
     template = PlotEdit.model_validate(decode_artifact(
         plot_edit.REQUEST_REL, plot_edit.edit_template(ctx)).payload)
@@ -145,7 +145,7 @@ def build_prompt(ctx, *, chapters=(), review_token=None):
         raise TerminalState(
             'Stage2 语义审阅已退役：旧审阅返工票不再可用；'
             '请按 --chapters 指定目标章重新发起定向修订')
-    from novel.stages.stage2 import extract
+    from novel.stages.stage2.blueprint import producer as extract
     store = ArtifactStore(ctx)
     main = extract._read_main_text(store)
     _, projection = extract._require_blueprint_character_projection(store)
@@ -158,7 +158,7 @@ def build_prompt(ctx, *, chapters=(), review_token=None):
 
 
 def run(ctx, client, *, chapters, store, main_text, character_projection, review_token=None):
-    from novel.stages.stage2 import extract
+    from novel.stages.stage2.blueprint import producer as extract
     if review_token is not None:
         raise TerminalState(
             'Stage2 语义审阅已退役：旧审阅返工票不再可用；'

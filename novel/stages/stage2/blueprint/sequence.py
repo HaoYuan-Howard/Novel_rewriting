@@ -63,7 +63,7 @@ def request_validator(user: str, source: str):
 def execute(ctx, client, requests, *, main_text, character_inventory,
             global_projections, checkpoints: bool, restore_checkpoints: bool):
     """全书章请求一次提交给现有章并发池；Continuity 不在此串行等待。"""
-    from novel.stages.stage2.extract import _run_chapter_requests
+    from novel.stages.stage2.blueprint.producer import _run_chapter_requests
 
     sources = {row['chapter_ordinal']: row['text'] for row in main_text}
     ordinals = [ordinal for ordinal, _system, _user in requests]

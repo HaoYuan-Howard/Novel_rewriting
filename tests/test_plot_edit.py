@@ -9,7 +9,9 @@ from contracts.schema import decode_artifact, encode_artifact
 from contracts.schema.plot_edit import PlotEdit
 from contracts.schema.stage2 import ChapterBlueprints
 from novel.errors import ProvenanceRefused, TerminalState
-from novel.stages.stage2 import extract, plot_edit
+from novel.stages.stage2 import extract
+import novel.stages.stage2.blueprint.edit as plot_edit
+from novel.stages.stage2.blueprint import producer as blueprint_producer
 from novel.store import ArtifactStore
 from tests.test_plot_producer import prepare_book, generate_plot, plot_contract
 from tests.test_stage2_generation import _ctx
@@ -42,12 +44,12 @@ def test_wording_edit_keeps_ids_and_unrelated_chapters_and_replays_after_commit(
     assert not before.provenance.plot_revisions
     assert not ArtifactStore(ctx).read_own(ChapterBlueprints, extract.BLUEPRINT_REL)[0].provenance.plot_revisions
     supplied = save_request(ctx, request)
-    original_write = extract._write_formal
+    original_write = blueprint_producer._write_formal
     def interrupted(*args, **kwargs):
         original_write(*args, **kwargs)
         raise RuntimeError('正式写回后的尾窗中断')
     with monkeypatch.context() as patch:
-        patch.setattr(extract, '_write_formal', interrupted)
+        patch.setattr(blueprint_producer, '_write_formal', interrupted)
         with pytest.raises(RuntimeError, match='尾窗中断'):
             plot_edit.apply_edit(ctx, supplied)
     replay = _ctx(book, 'stage2.blueprint', paid=False)
@@ -109,7 +111,7 @@ def test_replay_retires_only_the_original_invalid_after_formal_replace(tmp_path,
         store._write_formal(rel, artifact, retire_invalid=False)
         raise RuntimeError('formal 已替换，INVALID 尚未归档')
     with monkeypatch.context() as patch:
-        patch.setattr(extract, '_write_formal', interrupted)
+        patch.setattr(blueprint_producer, '_write_formal', interrupted)
         with pytest.raises(RuntimeError, match='尚未归档'):
             plot_edit.apply_edit(ctx, supplied)
     assert store.exists(extract._INVALID)

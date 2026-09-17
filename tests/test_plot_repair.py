@@ -8,7 +8,9 @@ import pytest
 from contracts.schema.stage2 import ChapterBlueprints
 from novel.llm import stage2_runs
 from novel.llm.cache import CachePolicy
-from novel.stages.stage2 import extract, plot_repair
+from novel.stages.stage2 import extract
+import novel.stages.stage2.blueprint.repair as plot_repair
+from novel.stages.stage2.blueprint import producer as blueprint_producer
 from novel.store import ArtifactStore
 from tests.test_plot_producer import prepare_book, generate_plot, plot_contract
 from tests.test_stage2_generation import _ctx, _client, _ok, _disk_blueprint_ctx
@@ -39,11 +41,11 @@ def test_targeted_revision_and_both_commit_windows_resume_without_rebuy(tmp_path
                 raise RuntimeError('提交候选封存后中断')
             patch.setattr(stage2_runs, 'prepare_commit', interrupt)
         else:
-            original = extract._write_formal
+            original = blueprint_producer._write_formal
             def interrupt(*args, **kwargs):
                 original(*args, **kwargs)
                 raise RuntimeError('正式稿写回后中断')
-            patch.setattr(extract, '_write_formal', interrupt)
+            patch.setattr(blueprint_producer, '_write_formal', interrupt)
         with pytest.raises(RuntimeError, match='中断'):
             extract.run_blueprint(ctx, client, chapters=(1,))
     assert len(transport.calls) == 1

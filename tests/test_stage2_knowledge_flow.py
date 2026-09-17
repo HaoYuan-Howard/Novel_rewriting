@@ -16,7 +16,8 @@ from contracts.schema.knowledge import KnowledgeGrounding
 from contracts.schema.stage2 import GlobalEdit
 from novel import paths
 from novel.errors import UpstreamMissing
-from novel.stages.stage2 import extract, grounding
+from novel.stages.stage2 import extract
+import novel.stages.stage2.knowledge.grounding as grounding
 from novel.store import ArtifactStore
 from tests.test_stage2_characters import _ctx, _generate
 from tests.test_stage2_global_agent import _direct_ctx, _free_ctx

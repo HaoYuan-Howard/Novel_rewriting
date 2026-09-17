@@ -494,7 +494,7 @@ def test_terminal_punct_has_one_home():
 # ⚠⚠ 这里曾经有一整节「`span` 锚点的 `recover` 臂」（6 条用例，钉着
 #    `walk_spans` / `_find_or_recover` 的双门槛与淘汰顺序）。那套装置随
 #    `bounded-fidelity-v3` 整批删除：`stage2.blueprint` 的模型**不再转写原文**，
-#    beat 的区间由 `novel/stages/stage2/paragraphs.py` 的段落表查出来。
+#    beat 的区间由 `novel/stages/stage2/shared/paragraphs.py` 的段落表查出来。
 #    ⇒ 用例跟着删，只留下面那条**反向守卫**（梯子不许悄悄回来），
 #    形态与 `tests/test_artifact_versions.py` 里那条「迁移梯子不许回来」一致。
 #    ⚠ 「原样字节优先于内容空间」这条实测教训没有丢，它搬到了 hinge 的段内定位上

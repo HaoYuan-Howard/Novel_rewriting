@@ -63,7 +63,7 @@ from novel.stages.stage1.partition import partition_text  # noqa: E402
 from novel.stages.stage1.audit import audit_surface  # noqa: E402
 from novel.stages.stage2 import extract as stage2_extract  # noqa: E402
 from novel.stages.stage2 import characters as stage2_characters  # noqa: E402
-from novel.stages.stage2.global_evidence_candidates import GlobalEvidenceCandidateTable  # noqa: E402
+from novel.stages.stage2.shared.evidence_candidates import GlobalEvidenceCandidateTable  # noqa: E402
 from novel.stages.stage4.prompts import (  # noqa: E402
     BLIND_BOOK_STRATEGY_MAX_TOKENS,
     BLIND_CHAPTER_DESIGN_MAX_TOKENS,

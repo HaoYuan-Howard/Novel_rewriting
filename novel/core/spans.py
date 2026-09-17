@@ -24,7 +24,7 @@ spans.py —— 正式 `SourceSpan` 的**校验与读取**，以及内容字符�
 `walk_spans`（首尾 locator 的游标行走）/ `_find_or_recover`（锚点被改掉一两个字时按最长
 公共子串救一次）/ `_find_exact_raw` / `extend_punct` / `HINGE_LCS_MIN` 全部随
 `bounded-fidelity-v3` 下线：`stage2.blueprint` 的模型**不再转写原文**，它交段号，
-区间由 `novel/stages/stage2/paragraphs.py` 的段落表查出来 ⇒ 那套装置**零生产消费方**。
+区间由 `novel/stages/stage2/shared/paragraphs.py` 的段落表查出来 ⇒ 那套装置**零生产消费方**。
 ⚠ 留着它不是「以防万一」，是留一条有测试、看起来还活着的死路
 （`CLAUDE.md`：被本次改动作废的路径要跟着删）。
 ⚠ **`lcs` 不在删除之列**：stage5 的 `must_appear_missing` 与 stage6 都在用它，

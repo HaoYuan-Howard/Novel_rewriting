@@ -47,7 +47,7 @@ terminal 等待人工后继时存活，不计作阶段输出：
 ## 人物订正后的免费知识重绑
 
 静态人物的实际知识投影发生变化时，消费者拒绝拼接两代材料，状态页保持知识 stale。
-`novel/stages/stage2/character_rebind.py::prepare_if_changed` 是队列与 producer 共用
+`novel/stages/stage2/characters/rebind.py::prepare_if_changed` 是队列与 producer 共用
 的证明：只有人物边明确变更、其余实际输入边仍 fresh、原来源完整且人物外键闭合时，才提供
 `stage2.global --renormalize`。源文或来源不明不能顺带追认。执行前后复验完整输入及
 正式/INVALID 身份，归档旧知识、保留原 model/prompts/usage，以 partial_rewrite 标明新输入依据；
@@ -410,5 +410,5 @@ Core 的 `global_core_contract`、`global_temporal_contract`、
 判据的权威定义在 `contracts/judges/stage2.py`，注册期会验证规则 id 唯一、严重度、需求落点、
 节点与 flag 的存在性。报告形状见 [`_report.md`](./_report.md)。
 
-现役 Blueprint 的选择口与字段修复能力见 `novel/stages/stage2/contract.py`；
+现役 Blueprint 的选择口与字段修复能力见 `novel/stages/stage2/blueprint/contract.py`；
 旧逐事实 --patch 和关系编辑接口退役；完整章 typed 编辑走同一身份和证据编译器。

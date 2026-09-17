@@ -24,7 +24,7 @@ def read_input_digests(store) -> dict[str, str]:
     from contracts.schema.knowledge import KnowledgeGrounding
     from contracts.schema.stage1 import MainText
     from novel.errors import HumanEditProtected
-    from novel.stages.stage2 import extract
+    from novel.stages.stage2.blueprint import producer as extract
     from novel.stages.stage2.shared.character_refs import blueprint_inventory_from_projection
 
     rels = (extract.MAIN_TEXT, extract.BLUEPRINT_CHARACTER_REL, extract.GLOBAL_REL)

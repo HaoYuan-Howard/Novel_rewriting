@@ -46,10 +46,10 @@ ledger 成本权威。改变产品语义前须用户裁决，并同步 BACKEND_C
 
 - [x] 目录 / 模块命名对齐目标词典：权威包 `novel/stages/stage2/blueprint/` + `shared/`。
 - [x] 公开面与内部实现分离；生产深 import 改权威 path；跨 Stage 深路径 import 不得新增。
-- [x] 旧 `plot_*` / `contract` / `run_state` / `paragraphs` / `character_refs` 顶层路径为薄 shim；见下方 adapter 表。
-- [ ] 补最小 contract / unit 反例，证明旧耦合无法回流（随 shim 删除批闭合）。
+- [x] 旧 `plot_*` / `contract` / `run_state` / `paragraphs` / `character_refs` 顶层 shim 已删除。
+- [x] 最小反例：`tests/test_layering.py::test_stage2_owner_shims_cannot_return`。
 
-**验收**：blueprint 新 path 为权威；shim 有删除条件；样板可被 analyze/characters/global 复用。
+**验收**：blueprint 新 path 为权威；样板已被 analyze/characters/knowledge 复用。
 
 ### STR-03 · 按 Stage 逐节点绞杀
 
@@ -59,7 +59,7 @@ ledger 成本权威。改变产品语义前须用户裁决，并同步 BACKEND_C
 |---|---|---|---|
 | stage0 | 未开始 | — | — |
 | stage1 | 未开始 | — | — |
-| stage2（analyze / characters / global / blueprint） | blueprint + analyze + characters + knowledge 权威；extract facade 待拆 | `blueprint/`、`analyze/`、`characters/`、`knowledge/`、`shared/` | 见 adapter 表 |
+| stage2（analyze / characters / global / blueprint） | **权威闭合** | `blueprint/`、`analyze/`、`characters/`、`knowledge/`、`shared/`；双臂生产在 `*/producer.py`；`extract.py` 仅薄转发 | 顶层 shim 已清零 |
 | stage4（design / plan / context） | 未开始 | — | — |
 | stage5（write / review） | 未开始 | — | — |
 | stage6（prepare / hook / approve） | 未开始 | — | — |
@@ -71,9 +71,10 @@ ledger 成本权威。改变产品语义前须用户裁决，并同步 BACKEND_C
 
 ### STR-04 · 契约与文档随权威 path 收口
 
-- [ ] 每个切换权威的节点同步 `docs/schema/` 与必要的 BACKEND_CONTRACT 条目。
+- [x] Stage2：`docs/schema/stage2.md`、`docs/BACKEND_CONTRACT.md`、相关注释改权威 owner path（批次 6）。
+- [ ] 其余 Stage 切换权威时同步 `docs/schema/` 与必要的 BACKEND_CONTRACT 条目。
 - [ ] 退役路径进入 retired 登记；禁止为旧测试恢复废弃耦合（I-52）。
-- [ ] 子目录 `AGENTS.md`（contracts / novel / tests / web）按需要补局部细则，不复制根不变量全文。
+- [x] Stage2 局部 `AGENTS.md` 已补；其余子目录按需要补，不复制根不变量全文。
 
 ### STR-05 · 工程基线与质量验收（权威链闭合后）
 
@@ -83,14 +84,11 @@ ledger 成本权威。改变产品语义前须用户裁决，并同步 BACKEND_C
 
 ## Compatibility adapter 登记
 
+Stage2 顶层 shim 已在批次 5 清零。后续节点的 adapter 在此追加。
+
 | adapter 路径 | 服务的旧消费者 | 删除条件 | 目标删除批次 |
 |---|---|---|---|
-| `novel/stages/stage2/plot_*.py`、`contract.py`、`run_state.py`（薄 re-export → `blueprint/`） | 过渡期测试与未改完的深 import | 消费者清零；`test_layering` 不再允许旧路径；定向 plot/blueprint 测试改权威 import | stage2 批次 5（拆 extract 同批） |
-| `novel/stages/stage2/paragraphs.py`、`character_refs.py`（薄 re-export → `shared/`） | 同上 | 同上 | stage2 批次 5 |
-| `novel/stages/stage2/analyze_recovery.py`、`analyze_draft_recovery.py`（薄 re-export → `analyze/`） | 过渡期 CLI/测试 | 消费者清零后删除 | stage2 批次 5 |
-| `novel/stages/stage2/character_checks.py`、`character_rebind.py`（薄 re-export → `characters/`） | 过渡期 | 消费者清零后删除 | stage2 批次 5 |
-| `novel/stages/stage2/grounding.py`、`global_*.py`、`knowledge_prompts.py`、`source_blurb.py`（→ `knowledge/`） | 过渡期 | 消费者清零后删除 | stage2 批次 5 |
-| `novel/stages/stage2/core_evidence.py`、`normalize.py`、`global_evidence_candidates.py`（→ `shared/`） | 过渡期 | 消费者清零后删除 | stage2 批次 5 |
+| — | — | — | — |
 
 ## 条目生命周期
 

@@ -8,7 +8,9 @@ from pydantic import ValidationError
 
 from contracts.invariants import BARE_PRONOUNS, NARRATIVE_PERSON, TIME_LAYERS, WORLD_RULE_KINDS
 from contracts.schema.knowledge import KnowledgeAgentTurnResponse, KnowledgeResponse
-from novel.stages.stage2 import analyze, characters, knowledge_prompts, plot_prompts as prompts
+from novel.stages.stage2 import analyze, characters
+import novel.stages.stage2.knowledge.prompts as knowledge_prompts
+import novel.stages.stage2.blueprint.prompts as prompts
 from contracts.schema.plot import PlotBlueprintResponse
 from tests.test_plot_blueprint import chapter_response
 

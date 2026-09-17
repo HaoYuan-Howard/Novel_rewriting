@@ -53,7 +53,7 @@ def rebuild(artifact: ChapterBlueprints, main_text: list[dict]) -> ChapterBluepr
 
 
 def revalidate(ctx, store, main_text, *, actor: str, reason: str):
-    from novel.stages.stage2 import extract
+    from novel.stages.stage2.blueprint import producer as extract
     if not store.exists(extract._INVALID):
         raise UpstreamMissing('没有待重验的 Blueprint INVALID')
     extract._require_blueprint_character_projection(store)
@@ -77,7 +77,7 @@ def revalidate(ctx, store, main_text, *, actor: str, reason: str):
 
 
 def renormalize(ctx, store, main_text):
-    from novel.stages.stage2 import extract
+    from novel.stages.stage2.blueprint import producer as extract
     source_rel = extract._INVALID if store.exists(extract._INVALID) else extract.BLUEPRINT_REL
     if not store.exists(source_rel):
         raise UpstreamMissing('没有可重新编译证据的 Blueprint')

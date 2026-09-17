@@ -1696,14 +1696,16 @@ def test_plot_failure_after_declined_batch_cannot_pause_again_or_reset_budget(tm
     first_client, first_wire = client(first)
     with pytest.raises(ResponseRepairBatchRequired) as paused:
         extract.request_blueprints(first, first_client)
-    assert len(first_wire.calls) == 1
-    assert len(paused.value.attempts) == 1 and paused.value.run_id == run_id
+    # R-3.19 / S2-7：同波次全书章收尾后再打包（concurrency=1 仍顺序跑完全部章）
+    chapter_count = 3
+    assert len(first_wire.calls) == chapter_count
+    assert len(paused.value.attempts) == chapter_count and paused.value.run_id == run_id
     manifest = Path(paused.value.manifest_path)
     decisions = tmp_path / 'plot-decisions.json'
     decisions.write_text(json.dumps({'decisions': [{
-        'attempt_id': paused.value.attempts[0], 'action': 'decline',
+        'attempt_id': attempt_id, 'action': 'decline',
         'reason': '空响应没有可修复剧情，进入原批次的定向恢复。',
-    }]}, ensure_ascii=False), encoding='utf-8')
+    } for attempt_id in paused.value.attempts]}, ensure_ascii=False), encoding='utf-8')
     resolution = stage2_runs.submit_batch(book, manifest, decisions, actor='operator')
     before = manifest.read_bytes()
 
@@ -1711,7 +1713,9 @@ def test_plot_failure_after_declined_batch_cannot_pause_again_or_reset_budget(tm
     resumed_client, resumed_wire = client(resumed)
     with pytest.raises(LlmFailed, match='均未拿到可用 JSON'):
         extract.request_blueprints(resumed, resumed_client)
-    assert [req.model for req in resumed_wire.calls] == [FLASH_MODEL, PRO_FALLBACK_MODEL]
+    # 每章：定向修复 flash → 兜底 pro
+    assert [req.model for req in resumed_wire.calls] == (
+        [FLASH_MODEL, PRO_FALLBACK_MODEL] * chapter_count)
     assert budget_for(resumed, scope='chapter:1').used == 3
     assert not stage2_runs.paths.stage2_blueprint_checkpoint_path(
         book, run_id, 'blueprint', 1).exists()
@@ -1720,8 +1724,9 @@ def test_plot_failure_after_declined_batch_cannot_pause_again_or_reset_budget(tm
     assert list(manifest.parent.glob(stage2_runs.RESOLUTION_FILE)) == [resolution]
     records = [json.loads(path.read_text('utf-8')) for path in book.glob(
         f'{response_repair.paths.REJECTED_RESPONSE_DIRNAME}/*/*/{response_repair.REJECTION_FILE}')]
-    assert len(records) == 3
-    assert sum(row.get('repair_eligible') is True for row in records) == 1
+    # 首波拒绝 + 定向修复拒绝 + 兜底拒绝，每章 3 份
+    assert len(records) == chapter_count * 3
+    assert sum(row.get('repair_eligible') is True for row in records) == chapter_count
 
 
 @pytest.mark.parametrize('tamper', ['run', 'rejection'])

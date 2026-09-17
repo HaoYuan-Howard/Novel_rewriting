@@ -50,7 +50,7 @@
 | 2026-08-25～26 | 原子事实 → Stage4 盲设计/证据绑定 → canonical 闭卷整章写作；收走源序自由拼装与重复持久投影 | 各 stage 的当前 schema；这是架构裁决，不能以工程测试证明叙事质量提高 |
 | 2026-08-26 | Stage3 持久产物层退役，Stage5/6 即时消费机械测量 | `novel/core/measure.py`、`novel/consumption.py`；不恢复定性文风包或 s3 门 |
 | 2026-08-24 | Stage3→Stage6 定性包消融统计未决，随后按独立产品门槛删除 | 历史冻结批 20 wire/60 candidates，盲评 A:B 为 6:4，严重事实错误 8:8；后续产品认可不能改写成预登记统计阳性 |
-| 2026-08-23～24 | Blueprint 降耗必须先过召回与事实质量门，旧 v3/v3.1/v2.1 实验曾因质量或落盘失败被否决 | 旧两书 v2.1 的 hinge 召回仅为配对 v2 的 69.1%/59.5%；历史架构并非当前入口，当前选择见 `novel/stages/stage2/contract.py` |
+| 2026-08-23～24 | Blueprint 降耗必须先过召回与事实质量门，旧 v3/v3.1/v2.1 实验曾因质量或落盘失败被否决 | 旧两书 v2.1 的 hinge 召回仅为配对 v2 的 69.1%/59.5%；历史架构并非当前入口，当前选择见 `novel/stages/stage2/blueprint/contract.py` |
 | 2026-08-23 | 钩子候选的单次耗时/输出存在明显方差，字面结构距离不作为审美门 | 历史同模型同 prompt 三次 completion 为 16,035/8,220/10,085；n=1 书/评审，不外推稳定收益 |
 | 2026-08-22 | 空 content、reasoning 救回与结构化拒因分开留证，不把所有失败混为 parse | `novel/llm/transport.py`、`novel/llm/ledger.py`；11 wire 对照只支持有限结论，不复用旧模型默认 |
 | 2026-08-17 | Stage5 语义节点下线，暴露边界交证据与人工复核 | `contracts/judges/stage5.py`；多一层模型审判不等于可靠真值，不恢复旧节点 |
