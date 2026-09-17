@@ -250,38 +250,22 @@ STAGE5_CLOSED_EXEMPT_FLAGS: Final = (
     '--adopt-residual', '--validate-edit', '--rebind-review',
 )
 
-#: agent 运行配置的四个基础取值域。它们刻意做成类型别名而不是新的
-#: ``AGENT_*`` 自动发布常量：浏览器需要的是「driver → model → effort / mode」的
-#: **组合能力矩阵**，不是四张可以任意笛卡尔积的平面枚举。唯一发布口是动态的
-#: ``GET /api/agent/capabilities``；那里还会附上本机 CLI 的可用性与版本。
-#:
-#: ``unknown`` 只用于探针无法下结论；``missing`` 是 PATH 中没有 CLI；
-#: ``unauthenticated`` 留给能够在不发模型请求的前提下明确识别登录态的 driver。
-AgentDriver = Literal['claude-code', 'claude-code-glm', 'codex']
-AgentAvailability = Literal['ready', 'missing', 'unknown', 'unauthenticated']
+#: 常用 executor 配置（``PipelineAgentProfiles``）在盘上的三态；与整书代跑
+#: ``AgentRun`` 无关。唯一发布口仍是 ``GET /api/agent/capabilities``（路径保留，
+#: C3 起只回 legacy providers 面）与 ``/settings/agent-profiles``。
 AgentProfileSettingsState = Literal['unset', 'configured', 'unreadable']
 
 #: accepted checkpoint 采用模型身份的两种证据来源。``provider-reported``
-#: 表示 CLI/provider 明确回显且与请求精确相等；``driver-enforced`` 表示该
-#: driver 的受测 argv 把唯一模型显式钉死、禁止 fallback，但公开结果协议没有
-#: actual model 字段。后者绝不允许把 ledger/session 的 unknown 改写成已知。
+#: 表示 provider 明确回显且与请求精确相等；``driver-enforced`` 保留给历史
+#: Agent CLI 账只读解码（C3 起新写入不再产生该证据）。
 AgentModelEvidence = Literal['provider-reported', 'driver-enforced']
 
-#: executor 是本地 agent CLI 还是直接 LLM API。这里只冻结稳定 provider id；
-#: provider → model / effort / thinking 的组合能力仍由动态 capability registry 发布，
-#: 不能把四张平面枚举交给浏览器任意做笛卡尔积。新增 GLM 等 legacy provider 时，
-#: 必须同时补 provider driver、预算闸、传输层与 capability，不能只扩这个 Literal。
-ExecutorBackendKind = Literal['agent', 'legacy']
+#: 现役唯一 executor wire kind。C3 硬切后本地 Agent CLI（``kind=agent``）已退役；
+#: 新写入只认直接 LLM API。稳定 provider id；provider → model / effort / thinking
+#: 的组合能力由动态 capability registry 发布，不能把平面枚举交给浏览器任意做
+#: 笛卡尔积。新增 GLM 等 provider 时必须同时补 driver、预算闸、传输层与 capability。
+ExecutorBackendKind = Literal['legacy']
 LegacyLlmProvider = Literal['deepseek']
-
-#: ``ultra`` 不是 reasoning effort。它若将来开放，必须作为执行模式由具体
-#: model capability 显式列出；不能塞进 effort 后再由某个 driver 静默翻译。
-AgentReasoningEffort = Literal['none', 'low', 'medium', 'high', 'xhigh', 'max']
-
-#: execution mode 故意不做平面 Literal：它是否可用是 driver/model 组合能力。
-#: profile 在载体层保留字符串，registry 当前只声明 ``standard``；未来只有在真实
-#: CLI 映射有受测实现之后，才会把 ``ultra`` 加进对应 model capability。
-AgentExecutionMode = str
 
 #: 作业记录是一串**事件**，`JOB_STATE` 是它们折叠出来的**视图**（`_orchestration.md` §2.1）。
 #:
@@ -2428,26 +2412,19 @@ RETIRED_APPROVAL_BINDINGS: Final[Mapping[str, tuple[tuple[str, str], ...]]] = {
     ),
 }
 
-#: 允许配置 executor agent 的现役节点。这里只列**真正调用生成/审判模型**的九个
+#: 允许配置直接 LLM executor 的现役节点。这里只列**真正调用生成/审判模型**的
 #: 付费节点；``stage4.context``、人工 approve 与机械 review 仍由代码执行，不能在
 #: API 上挂一份看似生效、实际无人消费的 executor override。
 #:
 #: 本表显式列值而不从 ``NODES`` 现算，配套闭合测试守 ``spec.paid`` 双向一致：
-#: 新增付费节点却没接 agent、或代码节点误标 paid，两种漂移都必须响亮地红。
-AGENT_EXECUTOR_NODES: Final = (
+#: 新增付费节点却没接 executor、或代码节点误标 paid，两种漂移都必须响亮地红。
+LLM_EXECUTOR_NODES: Final = (
     'stage2.analyze', 'stage2.characters', 'stage2.global', 'stage2.blueprint',
     'stage4.design', 'stage4.plan',
     'stage5.write',
     'stage6.prepare', 'stage6.hook',
     'stage7.rename',
 )
-
-#: 只支持 agent executor 的付费节点：2026-09-16 单 Executor 架构起为空集。
-#: ``stage2.analyze``（run_legacy + LlmClient）与 ``stage6.prepare``
-#: （直连 producer + 单轮窄修复）均已补齐直连执行面，legacy driver 的
-#: capability 可以宣称全部 ``AGENT_EXECUTOR_NODES``；保留常量只为让
-#: 「曾经存在 agent-only 例外」这件事在退役窗口内可检索。
-AGENT_ONLY_EXECUTOR_NODES: Final = frozenset()
 
 #: `(节点, 触发 flag)` → 这条跑法**额外**必填的 flag。`NodeSpec.required_flags` 的补集：
 #: 那一列管无条件必填，这张表管「跟着另一条跑法才必填」。

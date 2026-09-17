@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""用户常用 Agent profiles：_service 持久化、CAS 与 HTTP 消费链。"""
+"""用户常用 executor profiles：_service 持久化、CAS 与 HTTP 消费链（C3：仅 legacy）。"""
 from __future__ import annotations
 
 import json
@@ -8,32 +8,28 @@ from pathlib import Path
 
 import pytest
 
-from contracts.invariants import AGENT_ONLY_EXECUTOR_NODES
 from contracts.schema.orchestration import (
-    AgentExecutorBackend, AgentProfile, LegacyExecutorBackend, LegacyLlmProfile,
-    PipelineAgentProfiles,
+    LegacyExecutorBackend, LegacyLlmProfile, PipelineAgentProfiles,
 )
 from novel import paths
 from novel.errors import AgentProfileSettingsConflict
 from novel.orchestrator import agent_settings
 
 
-def _profile(*, driver: str = 'codex', model: str = 'gpt-5.6-sol',
-             effort: str = 'high') -> AgentProfile:
-    return AgentProfile(
-        driver=driver,
-        model=model,
-        reasoning_effort=effort,
-        execution_mode=None,
+def _profile(*, model: str = 'deepseek-v4-pro',
+             effort: str = 'high', thinking: str = 'on') -> LegacyLlmProfile:
+    return LegacyLlmProfile(
+        provider='deepseek', model=model,
+        reasoning_effort=effort, thinking_mode=thinking,
     )
 
 
 def _profiles() -> PipelineAgentProfiles:
     return PipelineAgentProfiles(
-        executor_default=AgentExecutorBackend(profile=_profile()),
+        executor_default=LegacyExecutorBackend(profile=_profile()),
         executor_overrides={
-            'stage7.rename': AgentExecutorBackend(
-                profile=_profile(model='gpt-5.6-terra', effort='max')),
+            'stage7.rename': LegacyExecutorBackend(
+                profile=_profile(model='deepseek-flash')),
         },
     )
 
@@ -52,8 +48,8 @@ def test_settings_are_explicit_three_state_snapshots_and_materialize_profiles(tm
     )
     assert saved.state == 'configured'
     assert saved.profiles is not None
-    assert saved.profiles.executor_default.kind == 'agent'
-    assert saved.profiles.executor_default.profile.execution_mode == 'standard'
+    assert saved.profiles.executor_default.kind == 'legacy'
+    assert saved.profiles.executor_default.profile.model == 'deepseek-v4-pro'
     assert saved.updated_at is not None
     assert saved.revision != initial.revision
     assert agent_settings.read(tmp_path) == saved
@@ -75,17 +71,10 @@ def test_settings_are_explicit_three_state_snapshots_and_materialize_profiles(tm
 
 def test_settings_persist_an_explicit_legacy_backend_without_provider_secrets(tmp_path):
     initial = agent_settings.read(tmp_path)
-    backend = LegacyExecutorBackend(profile=LegacyLlmProfile(
-        provider='deepseek', model='deepseek-v4-pro',
-        reasoning_effort='high', thinking_mode='on'))
+    backend = LegacyExecutorBackend(profile=_profile())
     requested = PipelineAgentProfiles(
         executor_default=backend,
-        # agent-only 节点没有 legacy 执行器：legacy 默认必须逐节点配 agent
-        # 覆盖（2026-09-15 单向豁免），否则保存即被拒。
-        executor_overrides={
-            node: AgentExecutorBackend(profile=_profile())
-            for node in sorted(AGENT_ONLY_EXECUTOR_NODES)
-        },
+        executor_overrides={},
     )
 
     saved = agent_settings.update(
@@ -162,8 +151,8 @@ def test_agent_profile_settings_http_is_csrf_guarded_and_does_not_change_product
         assert saved.status_code == 200, saved.text
         assert saved.json()['state'] == 'configured'
         executor = saved.json()['profiles']['executor_default']
-        assert executor['kind'] == 'agent'
-        assert executor['profile']['execution_mode'] == 'standard'
+        assert executor['kind'] == 'legacy'
+        assert executor['profile']['provider'] == 'deepseek'
 
         stale = client.post(
             '/api/settings/agent-profiles',
@@ -179,24 +168,36 @@ def test_agent_profile_settings_http_is_csrf_guarded_and_does_not_change_product
         capabilities = client.get('/api/agent/capabilities')
         assert capabilities.status_code == 200
         assert capabilities.json()['default_profiles'] is None
+        assert 'drivers' not in capabilities.json() or \
+            capabilities.json().get('drivers') in (None, [])
 
     assert paths.agent_profile_settings_path(tmp_path).is_file()
 
 
-def test_v2_settings_are_read_without_rewrite_and_next_save_upgrades_to_v3(tmp_path):
-    """v2 含 commander 的历史设置：读边界迁到 v3（丢 commander 键），不重写盘上字节。"""
+def test_v3_settings_with_agent_override_discard_on_read_without_rewrite(tmp_path):
+    """v3 含 agent 覆盖：读边界丢弃覆盖并升 v4；不重写盘上字节。"""
     target = paths.agent_profile_settings_path(tmp_path)
     target.parent.mkdir(parents=True)
-    v2_profiles = _profiles().model_dump(mode='json')
-    v2_profiles['schema_version'] = 2
-    v2_profiles['commander'] = {
-        'driver': 'claude-code', 'model': 'claude-opus-5',
-        'reasoning_effort': 'xhigh', 'execution_mode': None,
+    v3_profiles = {
+        'schema_version': 3,
+        'executor_default': {
+            'kind': 'legacy',
+            'profile': _profile().model_dump(mode='json'),
+        },
+        'executor_overrides': {
+            'stage5.write': {
+                'kind': 'agent',
+                'profile': {
+                    'driver': 'codex', 'model': 'gpt-5.6-sol',
+                    'reasoning_effort': 'high',
+                },
+            },
+        },
     }
     target.write_text(
         json.dumps({
-            'schema_version': 2,
-            'profiles': v2_profiles,
+            'schema_version': 3,
+            'profiles': v3_profiles,
             'updated_at': 1,
         }, ensure_ascii=False),
         encoding='utf-8',
@@ -206,8 +207,9 @@ def test_v2_settings_are_read_without_rewrite_and_next_save_upgrades_to_v3(tmp_p
     loaded = agent_settings.read(tmp_path)
     assert loaded.state == 'configured'
     assert loaded.profiles is not None
-    assert loaded.profiles.schema_version == 3
-    assert loaded.profiles.executor_default.kind == 'agent'
+    assert loaded.profiles.schema_version == 4
+    assert loaded.profiles.executor_default.kind == 'legacy'
+    assert 'stage5.write' not in loaded.profiles.executor_overrides
     assert target.read_bytes() == before, '只读迁移不得偷偷改写用户设置'
 
     saved = agent_settings.update(
@@ -215,8 +217,6 @@ def test_v2_settings_are_read_without_rewrite_and_next_save_upgrades_to_v3(tmp_p
         profiles=loaded.profiles,
         expected_revision=loaded.revision,
     )
-    assert saved.profiles is not None and saved.profiles.schema_version == 3
+    assert saved.profiles is not None and saved.profiles.schema_version == 4
     raw = json.loads(target.read_text(encoding='utf-8'))
-    assert raw['schema_version'] == 3
-    assert 'commander' not in raw['profiles']
-    assert raw['profiles']['executor_default']['kind'] == 'agent'
+    assert raw['schema_version'] == 4

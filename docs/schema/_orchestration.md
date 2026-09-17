@@ -46,114 +46,35 @@
 
 ---
 
-## 零、executor backend —— 模式由判别字段决定
+## 零、executor backend —— C3 仅 legacy 直连 LLM
 
-`AgentProfile` 只记录一次选择，不自己声明“哪些组合可用”。可选 driver、角色、model、
-reasoning effort 与 execution mode 的唯一公开来源是 `GET /api/agent/capabilities`；组合校验由
-`novel/agents/capabilities.py` 的同一份 registry 完成，前端与 argv builder 都不能各抄一张表。
+现役唯一 wire 是 `ExecutorBackend = {kind:'legacy', profile:LegacyLlmProfile}`。
+本地 Agent CLI（`kind=agent` / `AgentProfile`）已从契约删除；历史账经
+`HistoricalAgentBackend` + `novel/orchestrator/retired_formats.py` 只读拒绝。
+可选 provider/model/thinking/effort 的唯一公开来源是 `GET /api/agent/capabilities`
+（路径保留，只回 legacy providers）；组合校验由 `novel/llm/providers.py` 与
+`novel/orchestrator/executor_capabilities.py` 完成。
 
-| `AgentProfile` 字段 | 类型 | 必填 | 内容 | 证据 |
-|---|---|---|---|---|
-| `driver` | `str` | **是** | 可执行 driver id；当前取值由 registry 发布，不拿供应商名代替 | **契·码** |
-| `model` | `str` | **是** | 进入 argv 与审计账的精确 model id；展示 label 是 capability 的另一格 | **契·码** |
-| `reasoning_effort` | `str` | **是** | 必须属于该 driver + model 发布的 effort，不在前端维护全局联合类型 | **契·码** |
-| `execution_mode` | `str \| null` | **是（可空）** | 与 effort 正交；`null` 交给 registry 使用普通执行模式，显式值仍须由该 model 发布。当前只宣称 `standard`，不宣称 `ultra` | **契·码** |
-
-直接 LLM API 使用另一份不含密钥的 `LegacyLlmProfile`。`legacy` 在这里表示“本进程直接调用
-LLM API”，不是“无契约旧代码”；provider 的模型、thinking、effort、节点适用面与 client 工厂统一
-登记在 `novel/llm/providers.py::LegacyLlmDriver`。以后接入 GLM 必须新增完整 driver，不能只换
-DeepSeek base URL 后继续复用它的模型回退、tokenizer、thinking wire 或预算规则。
+直接 LLM API 使用不含密钥的 `LegacyLlmProfile`。`legacy` 表示“本进程直接调用
+LLM API”；provider 的模型、thinking、effort、节点适用面与 client 工厂统一登记在
+`novel/llm/providers.py`。以后接入 GLM 必须新增完整 driver。
 
 | `LegacyLlmProfile` 字段 | 类型 | 必填 | 内容 | 证据 |
 |---|---|---|---|---|
-| `provider` | `str` | **是** | 稳定 adapter id；当前只发布 `deepseek`，不拿 URL 代替 provider 身份 | **契·码** |
+| `provider` | `str` | **是** | 稳定 adapter id；当前只发布 `deepseek` | **契·码** |
 | `model` | `str` | **是** | provider 发布的精确模型 id | **契·码** |
 | `reasoning_effort` | `str` | **是** | 必须属于该 model + thinking mode 的能力组合 | **契·码** |
-| `thinking_mode` | `str` | **是** | provider 自己定义并发布的思考协议；不得套用 Agent execution mode | **契·码** |
+| `thinking_mode` | `str` | **是** | provider 自己定义并发布的思考协议 | **契·码** |
 
-`ExecutorBackend` 是唯一模式选择器：
+`ExecutorBackend` 现役只认：
 
 | `kind` | `profile` | 执行边界 |
 |---|---|---|
-| `agent` | `AgentProfile` | 经 `AgentDriver` / 节点 agent 执行；当前可扩展 Claude Code 与 Codex |
-| `legacy` | `LegacyLlmProfile` | 经 `LegacyLlmDriver` / 直接 API client 执行；当前为 DeepSeek，未来 GLM 独立登记 |
+| `legacy` | `LegacyLlmProfile` | 经 DirectLlmExecutor / 直接 API client 执行 |
 
-两种 variant 都必须同时携带 `kind + profile`，不得再用“有没有 AgentProfile”推断模式，也不得自动
-降级到另一种 backend。一次整书选择内 executor 只允许一种模式（2026-09-14 用户裁决）：
-`executor_default` 与全部 `executor_overrides` 的 `kind` 必须一致——整跑要么纯 `agent`、
-要么纯 `legacy`，混用两种模式在构造期即被拒绝；同模式内的逐节点差异（模型、effort、thinking）
-不受影响。单向豁免（2026-09-15 用户裁决：legacy 整书跑通）：默认 `legacy` 时，仅
-`AGENT_ONLY_EXECUTOR_NODES` 允许 `agent` 覆盖；默认 `agent` 时无任何豁免。2026-09-16：
-`stage2.analyze` 与 `stage6.prepare` 均已补直连执行面，豁免集合收窄为空集，回到纯禁令。⚠ 这是**新选择的准入规则**，不是重放判据：append-only 代跑账里存着裁决前合法写入的
-混用选择，历史行只经 `AgentRunEvent.replay_validate` 读回，准入校验不重审判历史；
-新写入（preview、启动、设置保存、CLI）永远走 `model_validate`，豁免不生效。
-一次整书代跑用 `PipelineAgentProfiles` v3（2026-09-15 用户裁决：删除 Commander 角色，审批一律人工）：
-
-| 字段 | 类型 | 必填 | 内容 | 证据 |
-|---|---|---|---|---|
-| `schema_version` | `3` | **是** | v1 的裸 `AgentProfile` 只在读边界无损迁移为 `kind=agent`；v1/v2 行的 `commander` 字段在读边界直接丢弃（原始 append-only 字节不动，需要原 commander 配置比对的历史证明关闭式拒绝）；所有新写入只发 v3 | **契·码** |
-| `executor_default` | `ExecutorBackend` | **是** | 所有未覆盖付费 executor 节点的默认 backend；其 `kind` 是本次选择的唯一 executor 模式 | **契·码** |
-| `executor_overrides` | `{node: ExecutorBackend}` | 否；默认 `{}` | 只写同模式内的逐节点差异；键严格属于 `AGENT_EXECUTOR_NODES`，值的 `kind` 必须与 `executor_default` 一致。stage 名、代码节点、退役节点与跨模式混用一律拒绝；唯一例外是默认 `legacy` 时 `AGENT_ONLY_EXECUTOR_NODES` 节点允许 `agent` 覆盖（单向豁免；该集合 2026-09-16 起为空） | **契·码** |
-| `concurrency` | `PipelineConcurrency` | 否 | 显式冻结逐节点并发与整书、同根供应商总上限；未配置时序列化省略，保留既有 profiles 的字节身份 | **契·码** |
-
-`PipelineConcurrency.node_overrides` 只接受 `PIPELINE_PARALLEL_NODES` 中的节点和
-`PIPELINE_CONCURRENCY_TRIALS` 档位。默认逐节点并发为 4，显式对照可选 6/8；其他节点保持原配置。
-`per_book` 默认 4，`per_provider` 默认 8，均为 1～32 的整数。两个总槽作用于同一输出根的实际
-Executor 调用；不把不同输出根或不同供应商混算。节点并发提高后仍受两个总槽约束。
-服务端 capability 发布节点、档位、默认与范围；设置、preview/start、batch、历史和原配置续跑
-完整保留这一字段。旧 profiles 缺失该字段不回填历史测量值。
-
-总槽由 `novel/model_slots.py::pipeline_model_slot` 在实际 wire 前取得；同书等待者归还已取得的
-供应商槽，取消或配置拒绝不产生模型费用。模型单次 latency 从取得槽后计时，排队仍属于节点墙钟。
-容量变更先占有全部旧槽，尚有活跃 wire 时拒绝；配置损坏不按默认重建。锁持有者退出后由 OS 释放。
-
-`None` / `null` 只服务旧历史与迁移期尚未指定的请求，**不表示 capability 数组第一项**。
-服务端 capability 的 `default_profiles=null` 表示当前还没有通过 TODO-45 真实整书验收的**产品预置
-配置**；它不是 Agent/Legacy 模式开关。UI 已消费该响应，但仍必须显式选择。用户在设置页保存的
-常用配置与产品预置分开，既可以选择 Agent，也可以选择 Legacy。Agent backend 的 direct executor
-合法节点与 flags 唯一登记于 `novel/orchestrator/nodes.py::EXECUTOR_PROFILED_RUNS`，
-能力接口与执行校验共同消费该登记，本文件不复制机械矩阵。
-
-Agent 矩阵之外的 direct 组合仍关闭式拒绝。Legacy backend 则按 provider registry 发布的精确
-model/node 能力关闭式校验：2026-09-16 起取消 Stage4 Pro 钉死，DeepSeek V4.1 Flash 与
-V4 Pro 均承接全部 executor 节点；`stage2.analyze` 走 `run_legacy`，`stage6.prepare`
-走直连 producer（单轮窄修复），`AGENT_ONLY_EXECUTOR_NODES` 为空集。
-
-两种 backend 共用一条身份链：`preview/start` → `Step/JobStart` → `argv` → `CLI` → `RunContext` →
-按 `kind` 选择的 executor。Agent registry 在 argv builder 边界物化 `execution_mode`；Legacy registry
-同样校验 provider/model/effort/thinking/node。Stage2 global Executor 复用一条 logical session；blueprint 按
-phase/purpose/chapter 隔离；Stage5 按章隔离；Stage6 semantic 管理 A/B 两条独立 session；其余 Phase5
-节点均按 node 隔离。agent 只交 fixed typed 候选，代码掌握 schema / HARD、结构化反馈、正式归一、
-checkpoint、提交 journal/readback/adoption 与终验。显式 Agent backend 不得落回 Legacy；显式 Legacy
-backend 也不得改走 Agent。
-
-**三根运行身份轴**：`JobStart.run_id` 是**业务 run**——同一业务节点从
-首跑、恢复到聚合始终不变，账本行、agent session 审计、`_stage*_runs/<run_id>/`
-checkpoint 与 run 目录都以它为键；`job_id`（进度行里的 `execution_id`）是**本次进程
-attempt**，每次启动唯一。恢复续跑（队列重启确认或原授权自动续跑）= 新 `job_id` +
-`JobStart.recovered_from_job_id` 联结 + **原 `run_id`** 经 `NOVEL_RUN_ID` 传给 CLI/
-ledger/session/checkpoint。旧盘记录没有这三列（可缺、不回填、不按时间猜）；新 writer
-必填。旧 orphan attempt 永久保持 `reconciled/unknown`，不根据新 execution 伪造旧
-`ended`。整书 headless 路在此之外再有稳定 `parent_run_id` 与可滚动 `execution_epoch`：代码、执行契约、
-provider session 和 admission 属于 epoch，不得反向写进稳定 parent contract。
-
-direct job 另有一条正交授权链：`PreviewRequest.egress_authorized` 默认 false，backend 非空的新计划必须
-显式冻结 bool 到 `JobStart` 与付费 executor `Step`；只有 true 才在 argv 加 `--allow-egress`。false
-允许 0 成本 preview 摊开不可执行命令，真 start 与手敲 CLI 会在 job/driver/probe/wire 前拒绝；无
-backend 时 false 归一为 `null`，true 反而拒绝。它不是 `NodeSpec.flags`，也不能由 `--yes` 推导。
-公开 agent run 的非空 `PipelineAgentProfiles` 只描述 executor 选择；受托 Commander 审阅已退役
-（2026-09-15）。全自动裁决（批次 B0–D）后 `HUMAN_NODES` 为空：命中 `approval:*` waiting_on 为
-编排 bug（fail-closed）；Stage6 `--pick` 改选不阻塞。preview/start/batch 共用一份 plan；规范化 base、完整 resolved profiles
-与两项授权冻结进 `RunContractV2`，起始代码、执行契约、admission 与 provider session 冻结进可滚动
-`ExecutionEpoch`。`profiles=null` 只保留旧请求形状，当前无服务端默认时关闭式拒绝。
-页面从 capability 动态构造默认 executor 与逐节点 override，成功 preview 保存的完整请求
-对象就是 start 唯一可消费的快照；配置、授权或 capability 变化会使它失效，不重新取默认。
-child executor 经 parent contract SHA 与 current epoch identity
-复核快照，`run_step.py` 再按 exact node/flags 选择 executor backend。现有结论来自 fake driver、本机零模型
-CLI 检查与非 corpus 回归，**真实 provider 模型请求仍为 0，没有质量、速度、entitlement 或
-current-schema corpus 实证**。
-
----
+`PipelineAgentProfiles.schema_version=4`：只含 `executor_default + executor_overrides + concurrency`；
+加载 v1–v3 丢弃 commander 与全部 agent 条目；覆盖键属于 `LLM_EXECUTOR_NODES`。
+合法节点与 flags 唯一登记于 `novel/orchestrator/nodes.py::PROFILED_LLM_RUNS`。
 
 ## 一、`Step` —— 一条将要执行的命令
 
@@ -1086,7 +1007,7 @@ wire v2 在 v1 字段集之上只新增 ended 事件的提交诊断四元组，�
 | 轴 | 现役约束 |
 |---|---|
 | 事件 | `kind=started / turn / ended`。turn 必须有正整数 `turn_index`、`attempt_id` 与 `provider_session_id`；started / turn 绑定 prompt 与 schema hash；ended 显式封存两条终态轴 |
-| 身份 | `role=commander / executor`（commander 仅历史行解码）；commander 不带 node/chapter，其 `parent_run_id` 指外层 AgentRun；executor 的 node 只接受 `AGENT_EXECUTOR_NODES`，其 `parent_run_id` 指 checkpoint/ledger 共用的 producer run。整书归因经 AgentRun started 事件登记的 epoch `session_run_id` 集合闭合，不按时间猜。新写入必须有 subject SHA-256 与已解析 `AgentProfile`，requested model/effort 必须与 profile 相等 |
+| 身份 | `role=commander / executor`（commander 仅历史行解码）；commander 不带 node/chapter，其 `parent_run_id` 指外层 AgentRun；executor 的 node 只接受 `LLM_EXECUTOR_NODES`，其 `parent_run_id` 指 checkpoint/ledger 共用的 producer run。整书归因经 AgentRun started 事件登记的 epoch `session_run_id` 集合闭合，不按时间猜。新写入必须有 subject SHA-256 与已解析 `AgentProfile`，requested model/effort 必须与 profile 相等 |
 | 实际执行 | requested 与 actual model/effort 分格，CLI 与 protocol 版本分格；每个新事件带启动代码版本，ended 另带结束版本，代码漂移时不能声明 delivered。缺失事实留 `null` / `unknown`，不能把 requested 冒充 actual。checkpoint 的 adopted model 是另一格：actual 非空时须精确相等；actual 缺失时只接受 capability registry 登记的 `driver-enforced` 单模型无 fallback argv，并要求 turn 留有 CLI 版本 |
 | 成本 | `usage` 的 prompt、cache hit/miss、completion、reasoning、total token 均可为 `null`；`null` 是未观测，不是 0 |
 | 终态 | `process_state=ok / failed / stopped / unknown` 与 `delivery_state=delivered / blocked / failed / unknown` 正交；进程退出不推出产物已交付 |
@@ -1116,7 +1037,7 @@ legacy thinking 或 provider max tokens。
 写入与恢复都必须把 accepted attempt 唯一联到 `_service/agent_sessions.jsonl` 的 current wire
 `started + turn`，逐项核 parent run、node/chapter、profile、subject、provider session、turn index、
 prompt/schema 与 requested/actual model/effort，再与 ledger 的 attempt/fingerprint/response SHA 闭合。
-模型证据统一由 `novel/agents/model_identity.py` 重算：回显 actual 必须精确等于 profile；未回显只允许
+模型证据统一由 `novel/llm/model_identity.py` 重算：回显 actual 必须精确等于 profile；未回显只允许
 registry 登记的 `driver-enforced`，且该 session turn 必须有 CLI 版本。后一种 checkpoint 的 `model`
 记录 adopted identity，但 session actual 仍为 `null`、ledger model 仍为 `unknown`；恢复、历史采用、
 聚合和 commit 均不得把它们倒填为已回显。未登记 driver、缺 CLI 版本或任何非空冲突一律拒绝。
@@ -1216,7 +1137,7 @@ artifact adoption → committed` 收口；foreign prepared 序号不能被 legac
 
 Stage2 Global、Stage4 design/plan、Stage5 write、Stage6 hook 与 Stage7 rename 不另造 acceptance
 协议；都复用
-`novel/llm/agent_runs.py` 的 `node-executor/v1`、append-only revision checkpoint 与
+`novel/llm/run_journal.py` 的 `node-executor/v1`、append-only revision checkpoint 与
 `prepared / committed` journal。各薄 adapter 只登记路径、purpose、recovery policy、session isolation、
 允许触碰的正式/伴生路径和同书 foreign prepared 排斥：Global 是 `stage2-knowledge-v2` 且 per-node；
 Stage4 分别是 `stage4-design-v1` / `stage4-plan-v1` 且 per-node；Stage5 是 `stage5-write-v2` 且

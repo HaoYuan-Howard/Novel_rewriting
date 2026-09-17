@@ -41,18 +41,6 @@
    "layer": "unit_contract",
    "stages": []
   },
-  "tests/test_agent_capacity_failures.py": {
-   "layer": "unit_contract",
-   "stages": []
-  },
-  "tests/test_agent_drivers.py": {
-   "layer": "unit_contract",
-   "stages": []
-  },
-  "tests/test_agent_json_schema.py": {
-   "layer": "unit_contract",
-   "stages": []
-  },
   "tests/test_agent_model_identity.py": {
    "layer": "unit_contract",
    "stages": []
@@ -76,15 +64,7 @@
     "stage7"
    ]
   },
-  "tests/test_agent_runs.py": {
-   "layer": "unit_contract",
-   "stages": []
-  },
   "tests/test_agent_session_audit.py": {
-   "layer": "unit_contract",
-   "stages": []
-  },
-  "tests/test_agent_session_client.py": {
    "layer": "unit_contract",
    "stages": []
   },
@@ -393,10 +373,6 @@
    "layer": "unit_contract",
    "stages": []
   },
-  "tests/test_glm_drivers.py": {
-   "layer": "unit_contract",
-   "stages": []
-  },
   "tests/test_golden_set.py": {
    "layer": "unit_contract",
    "stages": []
@@ -429,10 +405,6 @@
    ]
   },
   "tests/test_invariants.py": {
-   "layer": "unit_contract",
-   "stages": []
-  },
-  "tests/test_jsonl_runner.py": {
    "layer": "unit_contract",
    "stages": []
   },
@@ -878,17 +850,6 @@
     "stage2"
    ]
   },
-  "tests/test_stage2_global_agent.py": {
-   "cases": {
-    "test_direct_global_producer_distinguishes_explicit_empty_from_missing_or_null": "stage",
-    "test_global_direct_hard_candidate_lands_once_without_agent_checkpoint": "stage",
-    "test_global_success_uses_only_direct_finalize_and_no_agent_journal": "stage"
-   },
-   "layer": "unit_contract",
-   "stages": [
-    "stage2"
-   ]
-  },
   "tests/test_stage2_global_candidate_contract.py": {
    "cases": {
     "test_global_provider_has_one_direct_candidate_contract_and_schema": "unit_contract"
@@ -1028,12 +989,6 @@
     "stage4"
    ]
   },
-  "tests/test_stage4_agent_runs.py": {
-   "layer": "unit_contract",
-   "stages": [
-    "stage4"
-   ]
-  },
   "tests/test_stage4_approval_landed.py": {
    "layer": "unit_contract",
    "stages": [
@@ -1130,12 +1085,6 @@
     "stage5"
    ]
   },
-  "tests/test_stage5_agent_runs.py": {
-   "layer": "unit_contract",
-   "stages": [
-    "stage5"
-   ]
-  },
   "tests/test_stage5_closure.py": {
    "layer": "unit_contract",
    "stages": [
@@ -1208,12 +1157,6 @@
     "stage5"
    ]
   },
-  "tests/test_stage5_write_agent.py": {
-   "layer": "unit_contract",
-   "stages": [
-    "stage5"
-   ]
-  },
   "tests/test_stage5_write_agent_boundary.py": {
    "layer": "unit_contract",
    "stages": [
@@ -1234,12 +1177,6 @@
    "layer": "unit_contract",
    "stages": [
     "stage5",
-    "stage6"
-   ]
-  },
-  "tests/test_stage6_hook_agent.py": {
-   "layer": "unit_contract",
-   "stages": [
     "stage6"
    ]
   },
@@ -1381,14 +1318,6 @@
     "stage0"
    ]
   },
-  "tests/test_unit_session_pool.py": {
-   "layer": "unit_contract",
-   "stages": []
-  },
-  "tests/test_verify_agent_e2e.py": {
-   "layer": "unit_contract",
-   "stages": []
-  },
   "tests/test_views_stage2.py": {
    "cases": {
     "test_a_malformed_artifact_is_409_material_not_404": "stage",
@@ -1478,6 +1407,12 @@
   "tests/test_c2b_import_gate.py": {
    "layer": "unit_contract",
    "stages": []
+  },
+  "tests/test_stage2_global_agent.py": {
+   "layer": "unit_contract",
+   "stages": [
+    "stage2"
+   ]
   }
  },
  "version": 1

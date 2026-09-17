@@ -32,9 +32,9 @@ from typing import Any, Generic, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
-from contracts.schema.orchestration import AgentProfile
+from contracts.schema.orchestration import LegacyLlmProfile
 from novel import paths, prov, work_units
-from novel.orchestrator.executor_capabilities import validate_profile
+from novel.llm.providers import validate_legacy_profile as validate_profile
 from novel.llm import session_audit as agent_session_audit
 from novel.llm.execution import canonical_bytes, canonical_sha256
 from novel.llm.json_schema_util import agent_json_schema
@@ -194,7 +194,7 @@ class _HistoricalContext:
     novel_dir: Path
     node: str
     code: str
-    executor_profile: AgentProfile
+    executor_profile: LegacyLlmProfile
     run_id: str
     ledger: CostLedger
     _sid: str
@@ -338,7 +338,7 @@ def _resolved_profile(ctx: Any, value: object, *, label: str) -> dict[str, Any]:
         raise ProvenanceRefused(f'{label} 缺 resolved agent profile 对象')
     try:
         resolved = validate_profile(
-            AgentProfile.model_validate(value))
+            LegacyLlmProfile.model_validate(value))
     except (ValidationError, ValueError) as exc:
         raise ProvenanceRefused(f'{label} 的 agent profile 不可执行：{exc}') from exc
     normalized = resolved.model_dump(mode='json')
@@ -1361,7 +1361,7 @@ def _historical_run_context(
         raise ArtifactUnreadable(f'{run_path} 缺历史 code/resolved profile')
     try:
         profile = validate_profile(
-            AgentProfile.model_validate(profile_payload))
+            LegacyLlmProfile.model_validate(profile_payload))
     except (ValidationError, ValueError) as exc:
         raise ProvenanceRefused(f'{run_path} 历史 executor profile 不可执行：{exc}') from exc
     if profile.model_dump(mode='json') != profile_payload:

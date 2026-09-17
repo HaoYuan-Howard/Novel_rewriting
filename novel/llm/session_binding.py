@@ -11,7 +11,7 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from contracts.schema.orchestration import AgentProfile
+from contracts.schema.orchestration import LegacyLlmProfile
 from novel.errors import AgentModelIdentityRefused, ProvenanceRefused
 from novel.llm import session_audit
 from novel.llm.model_identity import resolve_agent_model_identity
@@ -38,7 +38,7 @@ def _canonical_sha256(value: object) -> str:
 
 def agent_request_fingerprint(
     *,
-    profile: AgentProfile | Mapping[str, object],
+    profile: LegacyLlmProfile | Mapping[str, object],
     subject_sha256: str,
     provider_session_id: str | None,
     system_sha256: str | None,
@@ -49,7 +49,7 @@ def agent_request_fingerprint(
 ) -> str:
     """agent executor 每一轮真实请求指纹的唯一公式。"""
     profile_payload = (
-        profile.model_dump() if isinstance(profile, AgentProfile)
+        profile.model_dump() if isinstance(profile, LegacyLlmProfile)
         else dict(profile)
     )
     return _canonical_sha256({

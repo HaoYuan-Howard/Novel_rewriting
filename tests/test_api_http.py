@@ -35,7 +35,7 @@ from novel.orchestrator import admission as A      # noqa: E402
 from novel.orchestrator import jobs as J           # noqa: E402
 from novel.orchestrator import queue as Q          # noqa: E402
 from novel.orchestrator.nodes import (             # noqa: E402
-    EXECUTOR_PROFILED_RUNS,
+    PROFILED_LLM_RUNS,
     build_steps,
     flag_tokens,
 )
@@ -536,7 +536,7 @@ def test_executor_backend_http_matrix_covers_current_run_registry():
     # Supervisor 专属改写由 HTTP 拒绝测试覆盖；与正向组合共同闭合注册表。
     covered['stage5.write'].append(frozenset({'--reviewer-rewrite'}))
     assert {node: tuple(token_sets) for node, token_sets in covered.items()} == \
-        EXECUTOR_PROFILED_RUNS
+        PROFILED_LLM_RUNS
 
 
 def test_executor_matrix_guard_detects_a_missing_public_combination(monkeypatch):

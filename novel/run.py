@@ -31,7 +31,7 @@ from contracts.invariants import NODES
 from contracts.schema import InputEdge, Provenance, Usage
 from contracts.schema.common import FreeProvenance, LlmProvenance
 from contracts.schema.orchestration import (
-    AgentExecutorBackend, AgentProfile, ExecutorBackend, LegacyExecutorBackend,
+    LegacyLlmProfile, ExecutorBackend, LegacyExecutorBackend,
     LegacyLlmProfile,
 )
 from contracts.artifacts import STAGE0_CLEAN_TEXT
@@ -69,7 +69,7 @@ class RunContext:
 
     #: 旧节点 agent 实现的只读/构造兼容投影。``__post_init__`` 会与
     #: ``executor_backend`` 归一并校验；顶层分流不得再以本格是否为空判模式。
-    executor_profile: AgentProfile | None = None
+    executor_profile: LegacyLlmProfile | None = None
 
     #: 这一次跑的跨进程联结键。它只进运行时账/观测/恢复状态，
     #: 不进正式 provenance、cache key 或 node flags。手搭 context 也必须
@@ -130,15 +130,15 @@ class RunContext:
 
     def __post_init__(self) -> None:
         if self.executor_profile is not None:
-            old_backend = AgentExecutorBackend(profile=self.executor_profile)
+            old_backend = LegacyExecutorBackend(profile=self.executor_profile)
             if self.executor_backend is None:
                 self.executor_backend = old_backend
             elif self.executor_backend != old_backend:
                 raise ValueError(
                     'RunContext 的 executor_backend 与旧 executor_profile 不一致')
-        if isinstance(self.executor_backend, AgentExecutorBackend):
+        if isinstance(self.executor_backend, LegacyExecutorBackend):
             self.executor_profile = self.executor_backend.profile
-        elif isinstance(self.executor_backend, LegacyExecutorBackend):
+        else:
             self.executor_profile = None
         # 手搭 context 常先构造 ``CostLedger()``；未显式给 run_id 时
         # 直接沿用那本账已有的身份，不在同一次跑里再生第二个。
@@ -510,7 +510,7 @@ class RunContext:
              ledger: CostLedger | None = None, write_ledger: bool = True,
              repair_rejected_responses: bool = False,
              executor_backend: ExecutorBackend | None = None,
-             executor_profile: AgentProfile | None = None,
+             executor_profile: LegacyLlmProfile | None = None,
              run_id: str | None = None,
              parent_run_id: str | None = None) -> RunContext:
         """按 `<Output>` + 书 id 开一次跑。**找不到书目录 ⇒ 显式终态**（`UpstreamMissing`）。

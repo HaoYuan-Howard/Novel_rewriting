@@ -29,14 +29,13 @@ from pydantic import Field, StrictInt, ValidationInfo, model_serializer, model_v
 
 from contracts.invariants import (
     AGENT_DELIVERY_OUTCOME,
-    AGENT_EXECUTOR_NODES, AGENT_ONLY_EXECUTOR_NODES, AGENT_RUN_CONTROLS, AGENT_RUN_EVENT_KINDS,
+    LLM_EXECUTOR_NODES, AGENT_RUN_CONTROLS, AGENT_RUN_EVENT_KINDS,
     PIPELINE_CONCURRENCY_TRIALS, PIPELINE_PARALLEL_NODES,
     PIPELINE_BOOK_CONCURRENCY, PIPELINE_PROVIDER_CONCURRENCY,
     PIPELINE_TOTAL_CONCURRENCY_MIN, PIPELINE_TOTAL_CONCURRENCY_MAX,
     AGENT_RUN_EVENT_V2_KINDS, AGENT_RUN_EXIT_ORIGINS, AGENT_RUN_STATE,
     ARTIFACT_CONDITION, ARTIFACT_DISPLAY, BEACON_STATES,
     COMMANDER_ADMISSION_EVENT_KINDS, COMMANDER_ADMISSION_TAIL_REPAIR_KINDS,
-    AgentDriver, AgentExecutionMode, AgentReasoningEffort,
     LegacyLlmProvider,
     FRESHNESS, FRESHNESS_REASON, JOB_EVENT_KINDS, JOB_STATE, NODES,
     OPERATOR_DURATION_SOURCES, OPERATOR_PHASE_EVENT_KINDS, OPERATOR_PHASES,
@@ -84,35 +83,15 @@ RunResumeVerdict = Literal[RESUME_VERDICTS]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 零、agent 运行配置 —— 一次选择的精确快照
+# 零、executor 运行配置 —— 一次选择的精确快照（C3：仅 legacy 直连 LLM）
 # ─────────────────────────────────────────────────────────────────────────────
-
-class AgentProfile(FrozenModel):
-    """一个 agent 进程的精确运行配置。
-
-    ``driver`` 是本机交互式 CLI，不拿供应商名冒充可执行入口；``model`` 保存
-    稳定 id，界面文案由 capability 的独立 ``label`` 给出。这里只守字段形状，
-    driver / role / model / effort / mode 的组合由
-    ``novel.orchestrator.executor_capabilities::validate_profile`` 对照唯一 registry
-    关闭式校验。
-    """
-
-    driver: AgentDriver
-    model: str = Field(min_length=1)
-    reasoning_effort: AgentReasoningEffort
-
-    #: ``None`` = 让 registry 选择普通 ``standard``；显式字符串与 reasoning
-    #: effort 正交，且仍须由具体 model capability 准入。当前不宣称支持 ``ultra``。
-    execution_mode: AgentExecutionMode | None = None
-
 
 class LegacyLlmProfile(FrozenModel):
     """一个直接 LLM API executor 的精确、无密钥运行配置。
 
     ``provider`` 是稳定 adapter id，不是 base URL；密钥、代理、超时与重试仍由
     provider 自己的安全运行配置管理，不能写进设置或历史事件。model / effort /
-    thinking 的组合由 ``novel.llm.providers`` 关闭式校验，使未来 GLM driver 不会
-    意外继承 DeepSeek 的模型兜底、tokenizer 或请求参数。
+    thinking 的组合由 ``novel.llm.providers`` 关闭式校验。
     """
 
     provider: LegacyLlmProvider
@@ -121,38 +100,59 @@ class LegacyLlmProfile(FrozenModel):
     thinking_mode: str = Field(min_length=1)
 
 
-class AgentExecutorBackend(FrozenModel):
-    """由本地 Agent CLI 承接 executor。"""
-
-    kind: Literal['agent'] = 'agent'
-    profile: AgentProfile
-
-
 class LegacyExecutorBackend(FrozenModel):
-    """由直接 LLM API adapter 承接 executor。"""
+    """由直接 LLM API adapter 承接 executor（现役唯一 wire）。"""
 
     kind: Literal['legacy'] = 'legacy'
     profile: LegacyLlmProfile
 
 
-ExecutorBackend = Annotated[
-    AgentExecutorBackend | LegacyExecutorBackend,
+#: 现役唯一 executor backend；新写入 / Step / JobStart / Preview 只认它。
+#: wire 名保留 ``legacy`` / ``LegacyLlmProfile``（C3 硬切后不再有 ``kind=agent``）。
+ExecutorBackend = LegacyExecutorBackend
+
+
+class HistoricalAgentBackend(FrozenModel):
+    """append-only 历史账里的已退役 Agent CLI wire；仅 ``replay_validate`` 可读。
+
+    ``profile`` 保持 opaque dict，不做现役 ``AgentProfile`` 重建（该类型已删）。
+    新写入与 settings 加载不得构造本类型。
+    """
+
+    kind: Literal['agent'] = 'agent'
+    profile: dict[str, Any] = Field(default_factory=dict)
+
+
+#: PipelineAgentProfiles / AgentRun 契约快照在历史重放时可能仍含 agent wire。
+_PersistedExecutorBackend = Annotated[
+    LegacyExecutorBackend | HistoricalAgentBackend,
     Field(discriminator='kind'),
 ]
 
 
-def _backend_from_legacy_profile(value: Any) -> Any:
-    """旧 ``AgentProfile`` wire → 显式 agent backend；只做无损形状迁移。"""
-    if isinstance(value, AgentProfile):
-        return AgentExecutorBackend(profile=value)
-    if isinstance(value, Mapping) and 'kind' not in value and 'driver' in value:
-        return {'kind': 'agent', 'profile': dict(value)}
+def _legacy_backend_from_wire(value: Any) -> Any:
+    """裸 ``LegacyLlmProfile`` / 无 kind 的 provider 形 → ``kind=legacy``；不迁 agent。"""
+    if isinstance(value, LegacyLlmProfile):
+        return LegacyExecutorBackend(profile=value)
+    if isinstance(value, Mapping) and 'kind' not in value and 'provider' in value:
+        return {'kind': 'legacy', 'profile': dict(value)}
     return value
 
 
+def _is_agent_backend_wire(value: Any) -> bool:
+    if isinstance(value, HistoricalAgentBackend):
+        return True
+    if isinstance(value, Mapping):
+        if value.get('kind') == 'agent':
+            return True
+        # 旧裸 AgentProfile（有 driver、无 kind）——C3 起视为已退役条目，加载丢弃。
+        if 'kind' not in value and 'driver' in value:
+            return True
+    return False
+
+
 #: ``AgentRunEvent.replay_validate`` 携带的 validation context 标记：这行数据来自
-#: append-only 历史账，构造期准入规则（如混用禁令）不得以今日规则重审判历史。
-#: 想再往历史账里嵌新模型并加跨字段准入规则时，同样要走这个豁免，否则账一旧就 500。
+#: append-only 历史账，构造期准入规则不得以今日规则重审判历史。
 _HISTORY_REPLAY_CONTEXT: dict[str, bool] = {'history_replay': True}
 
 
@@ -179,25 +179,20 @@ class PipelineConcurrency(FrozenModel):
 
 
 class PipelineAgentProfiles(FrozenModel):
-    """一次整书代跑的显式 executor backend 选择（schema v3，executor-only）。
+    """一次整书代跑的显式 executor 配置（schema v4，仅 legacy）。
 
-    ``schema_version=3`` 起不再有 Commander 角色（2026-09-15 用户裁决：删除
-    commander，审批一律人工，自动跑书停在闸前等过闸后续跑）：v1/v2 的
-    ``commander`` 字段在读边界直接丢弃，原始 append-only 字节不动，历史身份
-    由退役解码路径承接。executor 侧语义自 v2 延续：``agent`` 携
-    ``AgentProfile``，``legacy`` 携 ``LegacyLlmProfile``，旧 v1 裸 profile
-    只会被无损包成 ``kind=agent``。
+    类型名暂留（=executor 配置）。``schema_version=4`` 起硬切 Agent CLI：
+    新写入只接受 ``kind=legacy``；读取 v1–v3 时丢弃 commander 与全部 agent
+    条目（含旧裸 ``driver`` profile）。历史 ``AgentRunEvent.replay_validate``
+    仍可原样保留 ``HistoricalAgentBackend``，不做降级改写。
 
-    默认 backend 覆盖付费 executor 节点；节点覆盖只写差异，且**只允许同一种
-    模式**：全部 backend 的 ``kind`` 必须与 ``executor_default`` 一致，整跑要么
-    纯 agent、要么纯 legacy，混用两种模式在构造期即被拒绝。键必须属于
-    ``AGENT_EXECUTOR_NODES``，不能拿 stage 名、代码节点或退役节点冒充。
-    backend/profile 的组合仍由 registry 校验。
+    默认 backend 覆盖付费 executor 节点；节点覆盖只写差异。键必须属于
+    ``LLM_EXECUTOR_NODES``。backend/profile 的组合仍由 registry 校验。
     """
 
-    schema_version: Literal[3] = 3
-    executor_default: ExecutorBackend
-    executor_overrides: dict[str, ExecutorBackend] = Field(default_factory=dict)
+    schema_version: Literal[4] = 4
+    executor_default: _PersistedExecutorBackend
+    executor_overrides: dict[str, _PersistedExecutorBackend] = Field(default_factory=dict)
     concurrency: PipelineConcurrency | None = None
 
     @model_serializer(mode='wrap')
@@ -209,69 +204,56 @@ class PipelineAgentProfiles(FrozenModel):
 
     @model_validator(mode='before')
     @classmethod
-    def _migrate_v1_agent_profiles(cls, value: Any) -> Any:
+    def _migrate_to_v4(cls, value: Any, info: ValidationInfo) -> Any:
         if not isinstance(value, Mapping):
             return value
         data = dict(value)
-        if data.get('schema_version') in (None, 1, 2):
-            # v3 起没有 commander 字段：读取旧行时丢弃（原始字节仍留在账上），
-            # 不无损重建一个已退役的角色身份。
+        history = _is_history_replay(info)
+        # v1/v2 commander、v3 agent 混用面：读边界丢弃；原始 append-only 字节不动。
+        if data.get('schema_version') in (None, 1, 2, 3):
             data.pop('commander', None)
-            data['schema_version'] = 3
+            data['schema_version'] = 4
         if 'executor_default' in data:
-            data['executor_default'] = _backend_from_legacy_profile(
-                data['executor_default'])
+            default = data['executor_default']
+            if not history and _is_agent_backend_wire(default):
+                raise ValueError(
+                    'executor_default 的 Agent CLI backend 已退役；'
+                    '请改选 legacy 直连 LLM（加载丢弃 agent 条目）')
+            data['executor_default'] = _legacy_backend_from_wire(default)
         overrides = data.get('executor_overrides')
         if isinstance(overrides, Mapping):
-            data['executor_overrides'] = {
-                str(node): _backend_from_legacy_profile(profile)
-                for node, profile in overrides.items()
-            }
+            cleaned: dict[str, Any] = {}
+            for node, profile in overrides.items():
+                if not history and _is_agent_backend_wire(profile):
+                    # 加载丢弃 agent 覆盖；不静默包成 agent。
+                    continue
+                cleaned[str(node)] = _legacy_backend_from_wire(profile)
+            data['executor_overrides'] = cleaned
         return data
 
     @model_validator(mode='after')
     def _overrides_are_current_nodes(self) -> PipelineAgentProfiles:
-        unknown = sorted(set(self.executor_overrides) - set(AGENT_EXECUTOR_NODES))
+        unknown = sorted(set(self.executor_overrides) - set(LLM_EXECUTOR_NODES))
         if unknown:
             raise ValueError(
                 f'executor_overrides 含非 executor 节点 {unknown}；'
-                f'只接受 {list(AGENT_EXECUTOR_NODES)}')
+                f'只接受 {list(LLM_EXECUTOR_NODES)}')
         return self
 
     @model_validator(mode='after')
-    def _single_executor_kind(self, info: ValidationInfo) -> PipelineAgentProfiles:
-        """一次选择内 executor 只允许一种模式（2026-09-14 用户裁决）。
-
-        ``executor_default`` 与全部 ``executor_overrides`` 必须同 ``kind``：
-        整跑要么纯 ``agent``、要么纯 ``legacy``，不得逐节点混用两种模式。
-        同模式内的逐节点差异（模型、effort、thinking）不受影响。
-
-        单向豁免（2026-09-15 用户裁决：legacy 整书跑通）：默认为 ``legacy``
-        时，仅 ``AGENT_ONLY_EXECUTOR_NODES``（producer 只实现 agent
-        acceptance 协议、legacy 无执行器的节点）允许 ``agent`` 覆盖；其余
-        节点仍禁止混用。默认为 ``agent`` 时不存在豁免，legacy 覆盖一律拒绝。
-        2026-09-16：analyze/prepare 直连执行面补齐后豁免集合已收窄为空集，
-        回到纯禁令；保留判据只为防豁免被悄悄加回。
-
-        ⚠ 这是**新选择的准入规则**，不是重放判据：append-only 历史账里存着
-        规则生效前合法写入的混用选择（``AgentRunEvent.replay_validate``），
-        重放不得以今日规则改判或丢弃历史，否则代跑记录、续跑与恢复全部 500。
-        """
+    def _refuse_live_agent_backends(self, info: ValidationInfo) -> PipelineAgentProfiles:
+        """新写入只认 legacy；历史重放可保留 agent wire 原样。"""
         if _is_history_replay(info):
             return self
-        default_kind = self.executor_default.kind
+        if isinstance(self.executor_default, HistoricalAgentBackend):
+            raise ValueError('executor_default 不得为已退役的 agent backend')
         mixed = sorted(
             node for node, backend in self.executor_overrides.items()
-            if backend.kind != default_kind
-            and not (default_kind == 'legacy' and backend.kind == 'agent'
-                     and node in AGENT_ONLY_EXECUTOR_NODES)
+            if isinstance(backend, HistoricalAgentBackend)
         )
         if mixed:
             raise ValueError(
-                f'executor_overrides 不允许与 executor_default 混用模式：'
-                f'节点 {mixed} 的 backend 不是 {default_kind!r}；'
-                '一次整书选择内 executor 必须统一为 agent 或 legacy'
-                '（默认 legacy 时仅 agent-only 节点可用 agent 覆盖）')
+                f'executor_overrides 含已退役的 agent backend：{mixed}')
         return self
 
 
@@ -316,33 +298,14 @@ class Step(FrozenModel):
     #: 这一步的特别提醒（例：追跑的那条 `--check-only` 为什么在）。`None` = 键不在。
     note: str | None = None
 
-    #: 本步真正解析后的 executor backend。旧 ``steps.executor_profile`` 会在读取
-    #: 边界无损包成 ``kind=agent``；旧 legacy 记录两格都缺，只能保持 unknown，
-    #: 不得拿当前默认值倒推历史。新 AgentRun 执行在 builder 边界显式补齐。
+    #: 本步真正解析后的 executor backend（仅 legacy）。旧盘若带 agent / 旧
+    #: ``executor_profile``，由 ``retired_formats`` 在读取边界关闭式拒绝，
+    #: 本模型不再做 agent 迁移。
     executor_backend: ExecutorBackend | None = None
 
     #: 本步是否拿到独立的正文外发授权。旧记录没有这一格时为 ``None``；新 executor
     #: 步必须显式冻结 bool，未接 executor 的代码/兼容步则不得伪造授权快照。
     egress_authorized: bool | None = None
-
-    @model_validator(mode='before')
-    @classmethod
-    def _migrate_executor_profile(cls, value: Any) -> Any:
-        if not isinstance(value, Mapping) or 'executor_profile' not in value:
-            return value
-        data = dict(value)
-        old = data.pop('executor_profile')
-        if old is not None:
-            if data.get('executor_backend') is not None:
-                raise ValueError('Step 不能同时携带 executor_backend 与旧 executor_profile')
-            data['executor_backend'] = _backend_from_legacy_profile(old)
-        return data
-
-    @property
-    def executor_profile(self) -> AgentProfile | None:
-        """旧 Python 消费方的只读投影；分流必须改看 ``executor_backend.kind``。"""
-        backend = self.executor_backend
-        return backend.profile if isinstance(backend, AgentExecutorBackend) else None
 
     @model_validator(mode='after')
     def _executor_egress_shape(self) -> Step:
@@ -390,8 +353,8 @@ class JobStart(StrictModel):
     paid: bool
     writes: bool
 
-    #: 本次直接节点作业的 executor 选择。旧 ``executor_profile`` 只读迁移成
-    #: agent backend；新执行须把解析后的 backend 同时快照到本格与 ``steps[]``。
+    #: 本次直接节点作业的 executor 选择（仅 legacy）。旧 ``executor_profile`` /
+    #: agent backend 不再在本模型迁移；由 ``retired_formats`` 关闭式拒绝。
     executor_backend: ExecutorBackend | None = None
 
     #: 与付费 executor Step 同源的正文外发授权快照。旧记录缺字段时为 ``None``；
@@ -406,25 +369,6 @@ class JobStart(StrictModel):
     #: 本次 execution 是从哪个旧 job 恢复的。新 job 必有**新** ``job_id``；
     #: 恢复续跑必须同时携带原 ``run_id``，两个身份不得互相冒充。
     recovered_from_job_id: str | None = Field(default=None, min_length=1)
-
-    @model_validator(mode='before')
-    @classmethod
-    def _migrate_executor_profile(cls, value: Any) -> Any:
-        if not isinstance(value, Mapping) or 'executor_profile' not in value:
-            return value
-        data = dict(value)
-        old = data.pop('executor_profile')
-        if old is not None:
-            if data.get('executor_backend') is not None:
-                raise ValueError('JobStart 不能同时携带 executor_backend 与旧 executor_profile')
-            data['executor_backend'] = _backend_from_legacy_profile(old)
-        return data
-
-    @property
-    def executor_profile(self) -> AgentProfile | None:
-        """旧 Python 消费方的只读 agent 投影。"""
-        backend = self.executor_backend
-        return backend.profile if isinstance(backend, AgentExecutorBackend) else None
 
     @model_validator(mode='after')
     def _postconditions(self) -> JobStart:

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-from contracts.schema.orchestration import AgentProfile
+from contracts.schema.orchestration import LegacyLlmProfile
 from novel import paths
 from novel.errors import ArtifactUnreadable, ProvenanceRefused, TerminalState
 from novel.llm import run_journal as agent_runs, aggregate_runs, design_adoption, stage4_runs
@@ -56,7 +56,7 @@ def _source_context(ctx: RunContext, record: Mapping[str, Any]) -> RunContext:
         unit = paths.stage4_design_unit_run_path(source.novel_dir, source.run_id, None) / 'run.json'
         original = agent_runs._read_json(unit, label='Stage4A 原策略请求')
         try:
-            source.executor_profile = AgentProfile.model_validate(original['request_policy']['profile'])
+            source.executor_profile = LegacyLlmProfile.model_validate(original['request_policy']['profile'])
         except (KeyError, TypeError, ValueError) as exc:
             raise ProvenanceRefused('Stage4A 原完整 profile 无法恢复') from exc
         agent_runs._validate_run_record(source, stage4_runs.design_unit_run_spec(None), original)

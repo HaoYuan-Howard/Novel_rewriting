@@ -10,7 +10,7 @@ agent_session_audit.py —— commander / executor agent 会话的 append-only �
 最终交付判断。两者的身份、生命周期和折叠粒度都不同，硬塞在一起会再次把
 「进程退出」与「产物可交付」混成一个状态。
 
-``profile`` 直接复用公开 ``AgentProfile`` 契约；账不能再收一份与 API 同名不同形的
+``profile`` 直接复用公开 ``LegacyLlmProfile`` 契约；账不能再收一份与 API 同名不同形的
 自由 JSON。事件载体仍留在 runtime，是因为它只属于 `_service` append log，并非公开
 HTTP schema；取值域则全部来自 contracts 的唯一落点。
 
@@ -34,10 +34,10 @@ from pathlib import Path
 from typing import Any
 
 from contracts.invariants import (
-    AGENT_EXECUTOR_NODES, AGENT_SESSION_DELIVERY_STATE,
+    LLM_EXECUTOR_NODES, AGENT_SESSION_DELIVERY_STATE,
     AGENT_SESSION_PROCESS_STATE, STAGE5_COMMIT_PHASES,
 )
-from contracts.schema.orchestration import AgentProfile
+from contracts.schema.orchestration import LegacyLlmProfile
 from novel import run_identity
 from novel.llm.model_identity import (
     AgentModelIdentityRefused, validate_checkpoint_model_identity,
@@ -165,15 +165,15 @@ def sanitize_failure_detail(value: object) -> str | None:
     return text
 
 
-def _profile(value: object) -> AgentProfile | None:
+def _profile(value: object) -> LegacyLlmProfile | None:
     if value is None:
         return None
-    if isinstance(value, AgentProfile):
+    if isinstance(value, LegacyLlmProfile):
         return value
     try:
-        return AgentProfile.model_validate(value)
+        return LegacyLlmProfile.model_validate(value)
     except Exception as exc:  # noqa: BLE001 —— 对外统一成审计 wire 错误
-        raise ValueError(f'profile 不符合 AgentProfile：{exc}') from exc
+        raise ValueError(f'profile 不符合 LegacyLlmProfile：{exc}') from exc
 
 
 @dataclass(frozen=True)
@@ -221,7 +221,7 @@ class AgentSessionEvent:
     node: str | None = None
     chapter: int | None = None
     subject_sha256: str | None = None
-    profile: AgentProfile | None = None
+    profile: LegacyLlmProfile | None = None
     provider_session_id: str | None = None
     turn_index: int | None = None
     attempt_id: str | None = None
@@ -387,15 +387,15 @@ class AgentSessionEvent:
         if self.role not in AGENT_SESSION_ROLES:
             raise ValueError('新写入事件必须带 commander/executor role')
         if self.role == 'executor':
-            if self.node not in AGENT_EXECUTOR_NODES:
+            if self.node not in LLM_EXECUTOR_NODES:
                 raise ValueError(
-                    f'executor node 必须属于 {list(AGENT_EXECUTOR_NODES)}')
+                    f'executor node 必须属于 {list(LLM_EXECUTOR_NODES)}')
         elif self.node is not None or self.chapter is not None:
             raise ValueError('commander 不能冒充 node/chapter executor')
         if self.subject_sha256 is None:
             raise ValueError('新写入事件必须带 subject_sha256')
         if self.profile is None:
-            raise ValueError('新写入事件必须带 resolved AgentProfile')
+            raise ValueError('新写入事件必须带 resolved LegacyLlmProfile')
         if self.requested_model != self.profile.model:
             raise ValueError('requested_model 必须等于 profile.model')
         if self.requested_effort != self.profile.reasoning_effort:

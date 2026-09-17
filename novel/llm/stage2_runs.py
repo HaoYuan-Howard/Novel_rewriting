@@ -27,9 +27,9 @@ from typing import Any, Iterable, Mapping, NamedTuple, Sequence
 
 from pydantic import BaseModel, ValidationError
 
-from contracts.schema.orchestration import AgentProfile
+from contracts.schema.orchestration import LegacyLlmProfile
 from novel import paths, work_units
-from novel.orchestrator.executor_capabilities import validate_profile
+from novel.llm.providers import validate_legacy_profile as validate_profile
 from novel.llm import session_audit as agent_session_audit
 from novel.llm.json_schema_util import agent_json_schema
 from novel.llm.model_identity import (
@@ -175,7 +175,7 @@ def _materialized_profile_dict(value: Any, *, label: str) -> dict[str, Any]:
         raise ProvenanceRefused(f'{label} 缺 resolved agent profile 对象')
     try:
         resolved = validate_profile(
-            AgentProfile.model_validate(value))
+            LegacyLlmProfile.model_validate(value))
     except (ValidationError, ValueError) as exc:
         raise ProvenanceRefused(f'{label} 的 agent profile 不可执行：{exc}') from exc
     normalized = resolved.model_dump(mode='json')

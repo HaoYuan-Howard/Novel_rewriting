@@ -7,10 +7,9 @@
 多标签页不能靠最后写入者静默覆盖。文件若被手工改坏，读取返回显式
 ``unreadable`` 与原始字节 revision，设置页仍可基于这枚 revision 覆盖修复。
 
-这里只保存显式 ``agent`` / ``legacy`` executor profile（schema v3，Commander 角色
-已退役：读取 v1/v2 历史设置时丢弃 ``commander`` 键）。
-API key、CLI 登录态、付费授权和正文外发授权都不进这份文件：前两者仍归供应商
-安全配置，后两者必须逐次运行确认。
+这里只保存 ``kind=legacy`` executor profile（schema v4）。读取 v1–v3 时丢弃
+``commander`` 与全部 agent 条目；含 agent default 的旧文件变为 ``unreadable``。
+API key、付费授权和正文外发授权都不进这份文件。
 """
 from __future__ import annotations
 
@@ -34,15 +33,13 @@ from novel.appendlog import path_transaction_lock
 from novel.errors import AgentProfileSettingsConflict
 
 
-_SCHEMA_VERSION = 3
+_SCHEMA_VERSION = 4
 _ABSENT_REVISION_BYTES = b'agent-profile-settings:absent:v2'
 
 
 class _StoredAgentProfileSettings(StrictModel):
-    #: v1 的 executor_default/overrides 是裸 AgentProfile；v2 另含已退役的
-    #: ``commander`` 键。读取不重写磁盘：嵌套模型把它们无损迁到 v3
-    #: （丢 commander），下一次 CAS 保存才统一落 v3。
-    schema_version: Literal[1, 2, 3] = 3
+    #: v1–v3 → 读边界丢弃 agent 后升 v4；含 agent default 的旧文件 → unreadable。
+    schema_version: Literal[1, 2, 3, 4] = 4
     profiles: PipelineAgentProfiles | None
     updated_at: float = Field(ge=0)
 

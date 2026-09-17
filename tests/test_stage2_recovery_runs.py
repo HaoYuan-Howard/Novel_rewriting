@@ -18,14 +18,12 @@ import pytest
 from pydantic import BaseModel, Field
 
 from contracts.schema.base import StrictModel
-from contracts.schema.orchestration import AgentProfile
+from contracts.schema.orchestration import LegacyLlmProfile
 from novel import paths
-from novel.agents import session_audit as agent_session_audit
-from novel.agents.base import render_structured_agent_stdin
-from novel.agents import AgentTurn, AgentUsage
-from novel.agents.session_client import (
-    AgentDeliveryUnavailable, agent_json_schema, agent_request_fingerprint,
-)
+from novel.llm import session_audit as agent_session_audit
+from novel.llm.structured_stdin import render_structured_agent_stdin
+from novel.llm.json_schema_util import agent_json_schema
+from novel.errors import AgentDeliveryUnavailable
 from novel.errors import (
     ArtifactUnreadable, ProvenanceRefused, ResponseRepairBatchRequired,
     ResponseRepairRequired, TerminalState,
@@ -202,7 +200,7 @@ class _ResumingChapterClient(_SyntheticChapterClient):
 
 def _ctx(
         tmp_path: Path, run_id: str, *, observer=None, repair: bool = False,
-        executor_profile: AgentProfile | None = None,
+        executor_profile: LegacyLlmProfile | None = None,
         code: str = 'test-stage2-runs',
         parent_run_id: str | None = None,
 ) -> RunContext:
@@ -252,17 +250,17 @@ def _test_request_policy(
     }
 
 
-_AGENT_PROFILE = AgentProfile(
-    driver='codex', model='gpt-5.6-sol', reasoning_effort='high',
-    execution_mode='standard')
-_CLAUDE_AGENT_PROFILE = AgentProfile(
-    driver='claude-code', model='claude-opus-5', reasoning_effort='high',
-    execution_mode='standard')
+_AGENT_PROFILE = LegacyLlmProfile(
+    provider='deepseek', model='deepseek-v4-pro', reasoning_effort='high',
+    thinking_mode='on')
+_CLAUDE_AGENT_PROFILE = LegacyLlmProfile(
+    provider='deepseek', model='deepseek-flash', reasoning_effort='high',
+    thinking_mode='on')
 _ACTUAL_FROM_PROFILE = object()
 
 
 def _agent_request_policy(
-        *, profile: AgentProfile = _AGENT_PROFILE,
+        *, profile: LegacyLlmProfile = _AGENT_PROFILE,
         max_tokens: int = 64_000,
 ) -> dict[str, object]:
     return {
@@ -715,7 +713,7 @@ def test_claude_checkpoint_audit_hashes_the_final_structured_stdin(tmp_path):
         event for event in agent_session_audit.read_events(tmp_path)
         if event.kind == 'started']
     expected_stdin = render_structured_agent_stdin(
-        'SYSTEM', 'USER', driver='claude-code')
+        'SYSTEM', 'USER', provider='deepseek')
     assert started.prompt_sha256 == hashlib.sha256(
         expected_stdin.encode('utf-8')).hexdigest()
 
@@ -745,9 +743,9 @@ def test_agent_checkpoint_write_rejects_each_unclosed_identity(tmp_path, case):
         ctx, purpose=purpose, system='SYSTEM', user='USER',
         texts=[('3' * 16, text)], max_tokens=2048)
     if case == 'profile':
-        acceptance['profile'] = AgentProfile(
-            driver='codex', model='gpt-5.6-terra', reasoning_effort='high',
-            execution_mode='standard').model_dump(mode='json')
+        acceptance['profile'] = LegacyLlmProfile(
+            provider='deepseek', model='gpt-5.6-terra', reasoning_effort='high',
+            thinking_mode='on').model_dump(mode='json')
     elif case == 'actual_model':
         acceptance['model'] = 'gpt-5.6-terra'
     elif case == 'subject':

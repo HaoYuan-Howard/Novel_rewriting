@@ -1,24 +1,18 @@
 # -*- coding: utf-8 -*-
-"""Agent accepted model 的供应商中立证据判定。
+"""Legacy LLM accepted model 的供应商中立证据判定。
 
-``AgentTurn.model``、session ``actual_model`` 与 ledger ``model`` 始终只表示
-CLI/provider 真正回显的 actual；没有回显就分别保留 ``None`` / ``unknown``。
-checkpoint 的 ``model`` 表示本次可采用的模型身份：要么由 actual 精确回显证明，
-要么由 capability registry 中显式登记的单模型、无 fallback driver 契约证明。
-
-这层不能读取 CLI 私有 rollout，也不能把 requested 倒填进 actual。恢复和提交会
-用同一判定重新核 session + ledger，因此只改 checkpoint 自签名不能换掉证据来源。
+checkpoint 的 ``model`` 表示本次可采用的模型身份：由 provider actual 精确回显
+证明。C3 起 Agent CLI ``driver-enforced`` 路径已退役；没有回显就关闭式拒绝。
+恢复和提交会用同一判定重新核 session + ledger。
 """
 from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from contracts.invariants import AgentDriver, AgentModelEvidence
-from contracts.schema.orchestration import AgentProfile
-from novel.orchestrator.executor_capabilities import (
-    reported_model_matches, unreported_model_evidence_for_driver, validate_profile,
-)
+from contracts.invariants import AgentModelEvidence
+from contracts.schema.orchestration import LegacyLlmProfile
+from novel.llm.providers import validate_legacy_profile
 from novel.errors import AgentModelIdentityRefused
 
 
@@ -31,39 +25,37 @@ class ResolvedAgentModelIdentity:
     actual_model: str | None
 
 
-def _profile_fields(
-        profile: AgentProfile | Mapping[str, object],
-) -> tuple[AgentDriver, str]:
+def _resolved_model(profile: LegacyLlmProfile | Mapping[str, object]) -> str:
     try:
         materialized = (
             profile
-            if isinstance(profile, AgentProfile)
-            else AgentProfile.model_validate(dict(profile))
+            if isinstance(profile, LegacyLlmProfile)
+            else LegacyLlmProfile.model_validate(dict(profile))
         )
-        resolved = validate_profile(materialized)
+        resolved = validate_legacy_profile(materialized)
     except (TypeError, ValueError) as exc:
         raise AgentModelIdentityRefused(
-            'resolved profile 缺 driver/model，不能判定 accepted model',
+            'resolved profile 缺 provider/model，不能判定 accepted model',
             loc='profile', kind='invalid_resolved_profile') from exc
-    return resolved.driver, resolved.model
+    return resolved.model
 
 
 def resolve_agent_model_identity(
-        profile: AgentProfile | Mapping[str, object],
+        profile: LegacyLlmProfile | Mapping[str, object],
         actual_model: object,
         *,
         cli_version: object | None = None,
         require_driver_version: bool = False,
 ) -> ResolvedAgentModelIdentity:
-    """由 provider actual 或登记过的 driver 强制请求解析可采用模型身份。"""
-    driver, requested_model = _profile_fields(profile)
+    """由 provider actual 解析可采用模型身份；无回显关闭式拒绝。"""
+    del cli_version, require_driver_version
+    requested_model = _resolved_model(profile)
     if actual_model is not None:
         if not isinstance(actual_model, str) or not actual_model.strip():
             raise AgentModelIdentityRefused(
                 'provider actual model 不是非空字符串',
                 loc='actual_model', kind='invalid_provider_metadata')
-        materialized = profile if isinstance(profile, AgentProfile) else AgentProfile.model_validate(profile)
-        if not reported_model_matches(materialized, actual_model):
+        if actual_model != requested_model:
             raise AgentModelIdentityRefused(
                 f'provider actual model={actual_model!r} 与 requested '
                 f'model={requested_model!r}（resolved profile）不一致',
@@ -73,26 +65,13 @@ def resolve_agent_model_identity(
             evidence='provider-reported',
             actual_model=actual_model,
         )
-
-    evidence = unreported_model_evidence_for_driver(driver)
-    if evidence != 'driver-enforced':
-        raise AgentModelIdentityRefused(
-            f'driver={driver!r} 未回显 actual model，且未登记单模型无 fallback 证据',
-            loc='actual_model', kind='missing_actual_model')
-    if require_driver_version and (
-            not isinstance(cli_version, str) or not cli_version.strip()):
-        raise AgentModelIdentityRefused(
-            f'driver={driver!r} 未回显 actual model，且缺 CLI 版本证据',
-            loc='cli_version', kind='missing_cli_version')
-    return ResolvedAgentModelIdentity(
-        model=requested_model,
-        evidence=evidence,
-        actual_model=None,
-    )
+    raise AgentModelIdentityRefused(
+        'legacy provider 未回显 actual model，不能签发 accepted model',
+        loc='actual_model', kind='missing_actual_model')
 
 
 def resolve_ledger_model_identity(
-        profile: AgentProfile | Mapping[str, object],
+        profile: LegacyLlmProfile | Mapping[str, object],
         ledger_model: object,
         *,
         cli_version: object | None = None,
@@ -108,7 +87,7 @@ def resolve_ledger_model_identity(
 
 
 def validate_checkpoint_model_identity(
-        profile: AgentProfile | Mapping[str, object],
+        profile: LegacyLlmProfile | Mapping[str, object],
         *,
         checkpoint_model: object,
         actual_model: object,

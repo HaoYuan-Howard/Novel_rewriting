@@ -21,7 +21,7 @@ from contracts.schema.common import (
     InputEdge, PreparedCheckpointAdoption, RoundFreeProvenance,
     RoundLlmProvenance, Usage,
 )
-from contracts.schema.orchestration import AgentProfile
+from contracts.schema.orchestration import LegacyLlmProfile
 from contracts.schema.stage5 import (
     Chapter, ChapterSegment, PreparedRecoveryAction,
     PreparedRecoveryChapter,
@@ -30,8 +30,8 @@ from contracts.schema.stage5 import (
     PreparedRecoveryWorkpack,
 )
 from novel.errors import ArtifactUnreadable, ProvenanceRefused, UnsupportedRunMode
-from novel.agents import session_audit as agent_session_audit
-from novel.llm import agent_runs, stage5_runs
+# REMOVED novel.agents import session_audit as agent_session_audit
+from novel.llm import run_journal, stage5_runs
 from novel.llm.cache import CachePolicy
 from novel.llm.ledger import CostLedger, ledger_path
 from novel.orchestrator import nodes as N
@@ -44,9 +44,9 @@ TARGET_RUN_ID = 'target-run-2'
 SHA = 'a' * 64
 OTHER_SHA = 'b' * 64
 ATTEMPT_ID = '1' * 16
-PROFILE = AgentProfile(
-    driver='codex', model='gpt-5.6-sol', reasoning_effort='high',
-    execution_mode='standard',
+PROFILE = LegacyLlmProfile(
+    provider='deepseek', model='deepseek-v4-pro',
+    reasoning_effort='high', thinking_mode='on',
 )
 
 
@@ -916,7 +916,7 @@ def test_recovery_zero_wire_refuses_unclosed_persistent_tail(tmp_path):
 @pytest.mark.parametrize('revise', [False, True])
 def test_retired_stage5_write_agent_refuses_before_factory_probe_turn_or_accounts(
         tmp_path, monkeypatch, revise):
-    from novel.orchestrator.node_agents import Stage5WriteAgent
+    # REMOVED node_agents import Stage5WriteAgent
 
     book = tmp_path / 'prepared直连执行者_2007780338055790990'
     book.mkdir()

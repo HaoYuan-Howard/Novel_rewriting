@@ -6,7 +6,7 @@ import pytest
 
 from novel import paths, runtime_layout
 from novel.errors import ProvenanceRefused
-from novel.llm import agent_runs, stage2_global_runs, stage4_runs, stage5_runs
+from novel.llm import run_journal, stage2_global_runs, stage4_runs, stage5_runs
 from novel.llm import stage6_hook_runs, stage7_runs
 from tests.test_agent_runs import _Answer, _ctx, _INPUT_SHA, _MAX_TOKENS, _SYSTEM, _USER
 

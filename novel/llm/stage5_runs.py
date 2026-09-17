@@ -1484,7 +1484,7 @@ def verify_historical_reviewer_rewrite_terminal(
     profile_payload = policy.get('profile') if isinstance(policy, dict) else None
     try:
         profile = agent_runs.validate_profile(
-            agent_runs.AgentProfile.model_validate(profile_payload))
+            agent_runs.LegacyLlmProfile.model_validate(profile_payload))
     except (ValidationError, ValueError, TypeError) as exc:
         raise ProvenanceRefused(
             f'reviewer rewrite historical profile 不可验证：{exc}') from exc

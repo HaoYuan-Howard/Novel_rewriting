@@ -22,7 +22,7 @@ from novel import paths, prov, run_identity
 from novel.orchestrator import execution_context
 from contracts.schema.api import ExecutionPermit
 from contracts.schema.orchestration import (
-    AgentExecutorBackend, LegacyExecutorBackend,
+    LegacyExecutorBackend,
 )
 from novel import exit_codes as X
 from novel.errors import TerminalState
@@ -294,24 +294,24 @@ def _main(argv: list[str] | None = None) -> int:
                 if backend_of is not None:
                     executor_backend = backend_of(args.node)
                 else:
-                    # v1 CommanderContext / 测试桩只公开 AgentProfile。只允许
+                    # v1 CommanderContext / 测试桩只公开 LegacyLlmProfile。只允许
                     # 无损包成 agent，绝不把 profile 缺席解释成 legacy。
                     legacy_value = context.executor_profile(args.node)
                     executor_backend = (
                         legacy_value
                         if isinstance(
                             legacy_value,
-                            (AgentExecutorBackend, LegacyExecutorBackend),
+                            (LegacyExecutorBackend),
                         )
-                        else AgentExecutorBackend(profile=legacy_value)
+                        else LegacyExecutorBackend(profile=legacy_value)
                     )
                 # C2a 退役边界：执行面命中 agent backend 即显式终态——
                 # 这是含 agent 的历史执行 token 在执行时最后被拦下的一格。
                 from novel.orchestrator import retired_formats
                 retired_formats.refuse_agent_backend(
                     f'节点 {args.node} 的执行', executor_backend)
-                supported = node_planner.EXECUTOR_PROFILED_RUNS.get(args.node, ())
-                if (isinstance(executor_backend, AgentExecutorBackend)
+                supported = node_planner.PROFILED_LLM_RUNS.get(args.node, ())
+                if (isinstance(executor_backend, LegacyExecutorBackend)
                         and tokens not in supported):
                     raise TerminalState(
                         f'Commander 不允许 agent 执行尚未迁移的付费跑法 '

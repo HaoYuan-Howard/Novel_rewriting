@@ -27,7 +27,7 @@ from novel.errors import ArtifactUnreadable, TerminalState, UnsupportedRunMode
 from novel.orchestrator import execution_permit as P
 from novel.orchestrator import operator as O
 from novel.orchestrator import queue as Q
-from novel.orchestrator.nodes import EXECUTOR_PROFILED_RUNS
+from novel.orchestrator.nodes import PROFILED_LLM_RUNS
 from novel.orchestrator import nodes as NODE_POLICY
 from novel.llm import stage4_runs
 
@@ -339,7 +339,7 @@ def test_policy_tables_are_closed_and_paid_rows_are_exactly_profiled():
         ('stage5.write', frozenset({'--revise', '--chapters'})),
         ('stage5.write', frozenset({'--reviewer-rewrite'})),
     }
-    assert all(tokens in EXECUTOR_PROFILED_RUNS[node] for node, tokens in paid)
+    assert all(tokens in PROFILED_LLM_RUNS[node] for node, tokens in paid)
     expected_files = {
         ('stage2.global', '--apply-edit'),
         ('stage2.blueprint', '--validate-edit'),

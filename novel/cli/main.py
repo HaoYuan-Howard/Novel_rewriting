@@ -55,7 +55,7 @@ from contracts.invariants import (
     STAGES, STAGE5_CLOSED_EXEMPT_FLAGS, VALUED_FLAGS,
 )
 from contracts.schema.orchestration import (
-    AgentExecutorBackend, AgentProfile, ExecutorBackend, LegacyExecutorBackend,
+    ExecutorBackend, LegacyExecutorBackend,
     LegacyLlmProfile, ProgressEvent,
 )
 from novel import paths, run_identity
@@ -119,17 +119,10 @@ def _parser() -> argparse.ArgumentParser:
                                help=FREE_ENTRIES.get(f) or PAID_FLAGS.get(f))
         # executor backend 是运行控制面，不是 NodeSpec flag：它不改变节点身份、
         # 贵贱或写盘语义，也绝不能混进 ``_flags_of``。组合只由 capability 校验。
+        # C3：只认 legacy 直连 LLM；Agent CLI flags 已删。
         p.add_argument(
-            '--executor-backend', choices=('agent', 'legacy'), default=None,
-            help='显式 executor 类型；agent 与 legacy 各自携一套 profile')
-        p.add_argument('--executor-driver', default=None,
-                       help='executor driver 精确 id（与 model/effort 成组）')
-        p.add_argument('--executor-model', default=None,
-                       help='executor model 精确 id（不是展示 label）')
-        p.add_argument('--executor-effort', default=None,
-                       help='该 model capability 发布的 reasoning effort')
-        p.add_argument('--executor-mode', default=None,
-                       help='可选 execution mode；省略时由 registry 物化普通模式')
+            '--executor-backend', choices=('legacy', 'agent'), default=None,
+            help='显式 executor 类型（现役仅 legacy；agent 在解析层退役拒绝）')
         p.add_argument('--legacy-provider', default=None,
                        help='legacy LLM adapter 稳定 id（当前为 deepseek）')
         p.add_argument('--legacy-model', default=None,
@@ -325,59 +318,28 @@ def _flags_of(a: argparse.Namespace) -> list[str]:
     return out
 
 
-def _executor_profile_of(a: argparse.Namespace) -> AgentProfile | None:
-    """把四个 CLI 控制参数收成一份 profile；半份选择关闭式拒绝。"""
-    values = {
-        'driver': getattr(a, 'executor_driver', None),
-        'model': getattr(a, 'executor_model', None),
-        'reasoning_effort': getattr(a, 'executor_effort', None),
-        'execution_mode': getattr(a, 'executor_mode', None),
-    }
-    if not any(value is not None for value in values.values()):
-        return None
-    missing = [name for name in ('driver', 'model', 'reasoning_effort')
-               if not values[name]]
-    if missing:
-        raise UnsupportedRunMode(
-            'executor profile 必须同时给 --executor-driver / --executor-model / '
-            f'--executor-effort；缺少 {missing}')
-    try:
-        return AgentProfile(**values)  # type: ignore[arg-type]
-    except ValueError as exc:
-        raise UnsupportedRunMode(f'executor profile 形状无效：{exc}') from exc
-
-
 def _executor_backend_of(a: argparse.Namespace) -> ExecutorBackend | None:
-    """解析 CLI 的显式判别联合；两套 profile 不得混用或半填。"""
+    """解析 CLI 的 legacy executor；agent wire 在 argparse choices 层已拒。"""
     kind = getattr(a, 'executor_backend', None)
-    agent_values = {
-        'driver': getattr(a, 'executor_driver', None),
-        'model': getattr(a, 'executor_model', None),
-        'reasoning_effort': getattr(a, 'executor_effort', None),
-        'execution_mode': getattr(a, 'executor_mode', None),
-    }
+    # 兼容旧粘贴命令：若仍带已删的 agent flag 名，argparse 会先 unrecognized；
+    # 此处再挡显式 kind=agent（测试/程序化 Namespace）。
+    if kind == 'agent':
+        from novel.orchestrator.retired_formats import raise_retired_agent_backend
+        raise_retired_agent_backend('CLI --executor-backend agent')
     legacy_values = {
         'provider': getattr(a, 'legacy_provider', None),
         'model': getattr(a, 'legacy_model', None),
         'reasoning_effort': getattr(a, 'legacy_effort', None),
         'thinking_mode': getattr(a, 'legacy_thinking', None),
     }
-    has_agent = any(value is not None for value in agent_values.values())
     has_legacy = any(value is not None for value in legacy_values.values())
-    # 旧复制命令只有四个 agent flag；它的语义无歧义，可以无损补 discriminator。
-    if kind is None and has_agent and not has_legacy:
-        kind = 'agent'
     if kind is None:
         if has_legacy:
             raise UnsupportedRunMode(
                 'legacy profile 必须显式给 --executor-backend legacy')
         return None
-    if kind == 'agent':
-        # C2a 退役边界：CLI wire 不再接受 agent backend（retired_executor_backend）。
-        from novel.orchestrator.retired_formats import raise_retired_agent_backend
-        raise_retired_agent_backend('CLI --executor-backend agent')
-    if has_agent:
-        raise UnsupportedRunMode('legacy backend 不能夹带 --executor-driver/model/effort/mode')
+    if kind != 'legacy':
+        raise UnsupportedRunMode(f'未知 --executor-backend {kind!r}；当前只接受 legacy')
     missing = [name for name, value in legacy_values.items() if not value]
     if missing:
         raise UnsupportedRunMode(
@@ -407,28 +369,25 @@ def runnable_stages() -> frozenset[str]:
 
 def _dispatch(node: str, ctx: RunContext, flags: list[str]) -> int:
     """跑一个当前节点；`NODES` 与 `_runners` 的覆盖关系由契约测试钉住。"""
-    # 单 Executor 架构（C2a/C2b）：执行面唯一——``kind=legacy`` 由 stage runner
-    # 里的 provider factory 构造直连 API client；agent backend 在 CLI wire 解析层
-    # 已被 retired_formats 拒绝，不存在第二套派发。
+    # 单 Executor 架构（C3）：执行面唯一——``kind=legacy`` 由 stage runner
+    # 里的 provider factory 构造直连 API client；agent backend 在 CLI wire /
+    # retired_formats 层拒绝，不存在第二套派发。
     backend = getattr(ctx, 'executor_backend', None)
     if backend is None:
-        # 只兼容升级前的 Python RunContext/fake；CLI wire 一旦解析出 backend 就会
-        # 走上面的显式字段。这里不能把 profile=None 解释成 legacy。
         old_profile = getattr(ctx, 'executor_profile', None)
         if old_profile is not None:
             from novel.orchestrator.retired_formats import raise_retired_agent_backend
             raise_retired_agent_backend('RunContext 的旧 executor_profile 投影')
-    if isinstance(backend, AgentExecutorBackend):
-        from novel.orchestrator.retired_formats import raise_retired_agent_backend
-        raise_retired_agent_backend(f'节点 {node} 的 CLI 派发')
+    from novel.orchestrator.retired_formats import refuse_agent_backend
+    refuse_agent_backend(f'节点 {node} 的 CLI 派发', backend)
     return _runners()[NODES[node].stage](ctx, flags)
 
 
 def _llm_client(ctx: RunContext):
     """运行期 LLM 客户端的唯一构造口；所有 CLI 节点共用配置与持久化缓存。"""
     backend = getattr(ctx, 'executor_backend', None)
-    if isinstance(backend, AgentExecutorBackend):
-        raise AssertionError('agent backend 不得进入 legacy LLM client 构造口')
+    from novel.orchestrator.retired_formats import refuse_agent_backend
+    refuse_agent_backend('legacy LLM client 构造口', backend)
     if isinstance(backend, LegacyExecutorBackend):
         from novel.llm.providers import create_legacy_client
         return create_legacy_client(ctx, backend.profile)
@@ -1503,8 +1462,8 @@ def _require_execution_permit(
     root_tokens = frozenset(N.flag_tokens(permit.flags))
     if N.is_paid(permit.node, permit.flags):
         root_backend = parent_context.executor_backend(permit.node)
-        if (isinstance(root_backend, AgentExecutorBackend)
-                and root_tokens not in N.EXECUTOR_PROFILED_RUNS.get(permit.node, ())):
+        if (isinstance(root_backend, LegacyExecutorBackend)
+                and root_tokens not in N.PROFILED_LLM_RUNS.get(permit.node, ())):
             raise TerminalState(
                 f'permit 根动作 {permit.node} {sorted(root_tokens)} 尚未接入 executor agent')
         root_backend = N.resolve_executor_backend(
@@ -1564,8 +1523,8 @@ def _cmd_run(a: argparse.Namespace) -> int:
         tokens = frozenset(N.flag_tokens(flags))
         if N.is_paid(a.node, flags):
             expected_backend = parent_context.executor_backend(a.node)
-            if (isinstance(expected_backend, AgentExecutorBackend)
-                    and tokens not in N.EXECUTOR_PROFILED_RUNS.get(a.node, ())):
+            if (isinstance(expected_backend, LegacyExecutorBackend)
+                    and tokens not in N.PROFILED_LLM_RUNS.get(a.node, ())):
                 raise TerminalState(
                     f'Commander 不允许 agent 执行尚未迁移的付费跑法 '
                     f'{a.node} {sorted(tokens)}')
@@ -1641,7 +1600,7 @@ def _cmd_run(a: argparse.Namespace) -> int:
         executor_backend=executor_backend,
         executor_profile=(
             executor_backend.profile
-            if isinstance(executor_backend, AgentExecutorBackend) else None),
+            if isinstance(executor_backend, LegacyExecutorBackend) else None),
         run_id=producer_run_id,
         parent_run_id=parent_run_id)
     if N.would_write(a.node, flags):

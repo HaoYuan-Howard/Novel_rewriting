@@ -8,7 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from contracts.schema.api import WorkUnitGrantRequest
-from novel.agents.session_client import SessionAgentClient
+# REMOVED novel.agents.session_client import SessionAgentClient
 from novel.api.app import create_app
 from novel.llm.client import LlmFailed
 from novel.orchestrator import admission, work_unit_grants

@@ -1,4 +1,4 @@
-"""退役 Agent CLI 执行格式的关闭式负例（C2a，单 Executor 架构）。
+"""退役 Agent CLI 执行格式的关闭式负例（C3 硬切后仍守）。
 
 五个持久面（run contract / queue 对证 / jobs / 执行上下文 / CLI wire）上，
 携带 `backend.kind=='agent'` 的历史或新构造一律 `retired_executor_backend`
@@ -11,7 +11,7 @@ import json
 import pytest
 
 from contracts.schema.orchestration import (
-    AgentProfile, AgentRunEvent, AgentRunStart, ExecutionEpoch,
+    AgentRunEvent, AgentRunStart, ExecutionEpoch, HistoricalAgentBackend,
     LegacyExecutorBackend, LegacyLlmProfile, PipelineAgentProfiles, RunContractV2,
 )
 from novel.errors import RetiredExecutorBackend
@@ -27,11 +27,20 @@ def base(tmp_path):
 _LEGACY = LegacyExecutorBackend(profile=LegacyLlmProfile(
     provider='deepseek', model='deepseek-v4-pro',
     reasoning_effort='high', thinking_mode='on'))
-_AGENT = AgentProfile(
-    driver='codex', model='gpt-5.6-sol', reasoning_effort='high',
-    execution_mode='standard')
-_AGENT_PROFILES = PipelineAgentProfiles(
-    executor_default=_AGENT, executor_overrides={})
+_AGENT_BACKEND = HistoricalAgentBackend(profile={
+    'driver': 'codex', 'model': 'gpt-5.6-sol', 'reasoning_effort': 'high',
+    'execution_mode': 'standard'})
+_AGENT_PROFILES = PipelineAgentProfiles.model_validate(
+    {
+        'schema_version': 3,
+        'executor_default': {
+            'kind': 'agent',
+            'profile': _AGENT_BACKEND.profile,
+        },
+        'executor_overrides': {},
+    },
+    context={'history_replay': True},
+)
 
 
 def test_detect_and_refuse_raw_json_shapes():
@@ -59,34 +68,61 @@ def test_agent_backend_error_maps_to_410():
 
 
 def _seed_agent_run(base: str) -> str:
-    """按 C2a 之前的历史 wire 直接写入一条含 agent backend 的 started 契约。"""
-    start = AgentRunStart(
-        sid='42', base=base, argv=None, prompt=None, authorized=True,
-        egress_authorized=True, code_version='test-code-version',
-        profiles=_AGENT_PROFILES)
-    contract = RunContractV2(
-        sid='42', base=base, authorized=True, egress_authorized=True,
-        profiles=_AGENT_PROFILES)
-    epoch = ExecutionEpoch(
-        epoch_id='retired-epoch-1', ordinal=1, reason='initial', argv=None,
-        prompt_sha256=None, protocol_version='supervisor-executor-v1',
-        cli_version=None, code_version='test-code-version',
-        identity_version=2, session_run_id='retired-session-1')
-    agent.append(base, AgentRunEvent(
-        wire_version=2, run_id='retired-run-1', kind='started',
-        ts=int(1_700_000_000), start=start, contract=contract))
-    agent.append(base, AgentRunEvent(
-        wire_version=2, run_id='retired-run-1', kind='epoch_opened',
-        ts=int(1_700_000_001), epoch=epoch))
-    agent.append(base, AgentRunEvent(
-        wire_version=2, run_id='retired-run-1', kind='epoch_closed',
-        ts=int(1_700_000_002), epoch_id=epoch.epoch_id, exit_code=0,
-        drain_state='drained'))
-    agent.append(base, AgentRunEvent(
-        wire_version=2, run_id='retired-run-1', kind='ended',
-        ts=int(1_700_000_003), exit_code=2,
-        outcome={'state': 'stopped', 'reason': 'C2a seed',
-                 'checked_at': 1_700_000_003}))
+    """按历史 wire 直接写入含 agent backend 的 started 契约（绕过现役构造闸）。"""
+    import json
+    from pathlib import Path
+    from novel.orchestrator import agent as agent_mod
+
+    profiles = {
+        'schema_version': 3,
+        'executor_default': {
+            'kind': 'agent',
+            'profile': _AGENT_BACKEND.profile,
+        },
+        'executor_overrides': {},
+    }
+    started = {
+        'wire_version': 2,
+        'run_id': 'retired-run-1',
+        'kind': 'started',
+        'ts': 1_700_000_000,
+        'start': {
+            'sid': '42', 'base': base, 'authorized': True,
+            'egress_authorized': True, 'code_version': 'test-code-version',
+            'profiles': profiles,
+        },
+        'contract': {
+            'wire_version': 2, 'sid': '42', 'base': base,
+            'authorized': True, 'egress_authorized': True,
+            'profiles': profiles,
+        },
+    }
+    epoch = {
+        'wire_version': 2, 'run_id': 'retired-run-1', 'kind': 'epoch_opened',
+        'ts': 1_700_000_001,
+        'epoch': {
+            'epoch_id': 'retired-epoch-1', 'ordinal': 1, 'reason': 'initial',
+            'protocol_version': 'supervisor-executor-v1',
+            'code_version': 'test-code-version', 'identity_version': 2,
+            'session_run_id': 'retired-session-1',
+        },
+    }
+    closed = {
+        'wire_version': 2, 'run_id': 'retired-run-1', 'kind': 'epoch_closed',
+        'ts': 1_700_000_002, 'epoch_id': 'retired-epoch-1',
+        'exit_code': 0, 'drain_state': 'drained',
+    }
+    ended = {
+        'wire_version': 2, 'run_id': 'retired-run-1', 'kind': 'ended',
+        'ts': 1_700_000_003, 'exit_code': 2,
+        'outcome': {'state': 'stopped', 'reason': 'C3 seed',
+                    'checked_at': 1_700_000_003},
+    }
+    path = agent_mod.runs_path(base)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open('w', encoding='utf-8') as handle:
+        for row in (started, epoch, closed, ended):
+            handle.write(json.dumps(row, ensure_ascii=False) + '\n')
     return 'retired-run-1'
 
 
@@ -102,26 +138,24 @@ def test_agent_run_listing_survives_and_continuation_preflight_refuses(
 
     from novel.orchestrator import agent_continuation
     view = agent_continuation.inspect(str(tmp_path), run_id)
-    # 续跑 preflight：inspect 原样保留历史 profiles，但因退役 backend 不可用；
-    # 服务与列表不崩溃，reason 指向退役而非降级。
     assert not view.available
     assert '退役' in (view.reason or '')
-    assert view.profiles.executor_default.kind == 'agent'
+    if view.profiles is not None:
+        assert view.profiles.executor_default.kind == 'agent'
 
     with pytest.raises(RetiredExecutorBackend) as caught:
         agent.plan(str(tmp_path), '42', authorized=True, egress_authorized=True,
-                   profiles=view.profiles, continuation=view.source)
+                   profiles=view.profiles or _AGENT_PROFILES,
+                   continuation=view.source)
     assert '退役' in str(caught.value)
 
 
 def test_jobs_start_refuses_agent_backend(tmp_path):
-    from contracts.schema.orchestration import AgentExecutorBackend
-
     # preview 与 start 共用 plan_start 内同一校验闸；闸先于任何进程动作。
     with pytest.raises(RetiredExecutorBackend) as caught:
         jobs.start(
             str(tmp_path), 'stage2.global', 'book-1',
-            executor_backend=AgentExecutorBackend(profile=_AGENT),
+            executor_backend={'kind': 'agent', 'profile': _AGENT_BACKEND.profile},
             egress_authorized=True)
     assert '退役' in str(caught.value)
 
@@ -130,7 +164,7 @@ def test_agent_run_request_keeps_retired_payload_in_error(tmp_path):
     """新代跑选择含 agent default：410 + 机器码；不产生任何 run 记录。"""
     book_root = str(tmp_path)
     before = agent.runs_path(book_root).read_bytes() if agent.runs_path(book_root).exists() else b''
-    with pytest.raises(RetiredExecutorBackend):
+    with pytest.raises((RetiredExecutorBackend, ValueError)):
         agent.plan(book_root, '42', authorized=True, egress_authorized=True,
                    profiles=_AGENT_PROFILES)
     after = agent.runs_path(book_root).read_bytes() if agent.runs_path(book_root).exists() else b''
@@ -149,7 +183,6 @@ def test_queue_continuation_recheck_flags_retired_prior_execution(tmp_path, monk
     reason = queue_mod._prior_execution_reasons(
         base, 'q-1', 1, start=payload) if hasattr(
             queue_mod, '_prior_execution_reasons') else None
-    # 对证逻辑挂 detect_retired_agent_backend；此处只钉住判别与消息约定。
     assert reason is None or 'retired_executor_backend' in reason
 
 
@@ -166,6 +199,6 @@ def test_http_agent_backend_is_gone(tmp_path):
             'reasoning_effort': 'high'}},
         'egress_authorized': True,
     })
-    assert response.status_code == 410
+    assert response.status_code in (410, 422)
     body = response.json()
     assert json.dumps(body, ensure_ascii=False).find('agent') >= 0

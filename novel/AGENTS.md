@@ -12,7 +12,7 @@
 | 本层生成、重验或人工编辑 | `novel/stages/` 对应 stage 的 producer 与恢复模块；对应 `docs/schema/` |
 | 下一动作、授权、并发与暂停 | `novel/orchestrator/operator.py`、`novel/orchestrator/execution_permit.py`、`novel/orchestrator/agent_supervisor.py` |
 | 历史审阅决定的解码与执行 | `novel/orchestrator/reviewer_legacy.py`（Commander 退役后的迁入地）、`novel/orchestrator/reviewer_action_evidence.py` |
-| Executor、传输与成本 | `novel/agents/base.py`、`novel/agents/unit_session_pool.py`、`novel/llm/`、`novel/work_units.py` |
+| Executor、传输与成本 | `novel/llm/providers.py`、`novel/llm/run_journal.py`、`novel/llm/`、`novel/work_units.py` |
 | CLI、HTTP 与展示不一致 | `novel/cli/` → `novel/api/` → `novel/views/`，继续追到前端真实消费者 |
 
 模块头解释局部机制；按问题查相关测试和 `docs/LESSONS.md`，不为一次修改通读所有阶段历史。

@@ -112,14 +112,10 @@ _WITHHELD: dict[str, str] = {
         '前端按响应分支渲染，另发枚举只会制造第二个消费面'),
     'WORKPACK_CLOSED_REF_KINDS': (
         'B concern closed_ref 的解析分类随 reading 逐条下发；不是前端选项'),
-    'AGENT_EXECUTOR_NODES': (
-        'agent 执行节点属于 driver/model/effort/mode 组合能力面，'
+    'LLM_EXECUTOR_NODES': (
+        '付费 LLM executor 节点属于 provider/model/effort/thinking 组合能力面，'
         '唯一公开口是动态 `GET /api/agent/capabilities`；'
         '再经 `/api/enums` 发一份会造成两个可漂移的节点清单'),
-    'AGENT_ONLY_EXECUTOR_NODES': (
-        'agent-only 例外集合已随 stage6.prepare 直连 producer 落地清空；'
-        'legacy capability 现在覆盖全部 executor 节点，不存在「默认 legacy 时'
-        '需补 agent 覆盖」的节点'),
     'RETENTION_CANDIDATE_KINDS': (
         'retention preview 已随每条候选返回服务端判定出的 kind；它不是维护策略选项，'
         '浏览器不得据此重算是否应清理，另经 `/api/enums` 发布会制造第二个消费面'),

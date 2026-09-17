@@ -8,7 +8,7 @@ token；blocked action 只描述 blocker，恢复命令的 exact node + 全部 f
 许可还绑定代码、读面、贵贱、写盘效应，以及已登记外部输入文件的原始字节摘要。
 
 本模块不写服务账、不启动进程、不发请求。付费恢复只调用现役审批层的只读授权口，
-并且必须已经出现在 ``EXECUTOR_PROFILED_RUNS``；未完成 executor 迁移的 paid flag
+并且必须已经出现在 ``PROFILED_LLM_RUNS``；未完成 executor 迁移的 paid flag
 即使 CLI 认识，也在这里关闭式拒绝。
 """
 from __future__ import annotations
@@ -36,7 +36,7 @@ from novel.errors import (
 from novel.orchestrator import approvals, queue
 from novel.orchestrator.inspection import read_surface_seal
 from novel.orchestrator.nodes import (
-    EXECUTOR_PROFILED_RUNS, REPO_ROOT, flag_tokens, flag_value,
+    PROFILED_LLM_RUNS, REPO_ROOT, flag_tokens, flag_value,
     is_paid, validate_run, write_effect,
 )
 
@@ -534,7 +534,7 @@ def _require_recovery_policy(
         raise UnsupportedRunMode(
             f'execution recovery policy 贵贱漂移：登记 paid={row.paid}，当前判定={paid}')
     if paid:
-        profiled = EXECUTOR_PROFILED_RUNS.get(node, ())
+        profiled = PROFILED_LLM_RUNS.get(node, ())
         if row.tokens not in profiled:
             raise UnsupportedRunMode(
                 f'{node} {sorted(row.tokens)} 尚未完成 executor profile 迁移，'

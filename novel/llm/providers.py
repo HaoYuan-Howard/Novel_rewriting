@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from typing import Final
 
 from contracts.invariants import (
-    AGENT_EXECUTOR_NODES, LegacyLlmProvider, NODES,
+    LLM_EXECUTOR_NODES, LegacyLlmProvider, NODES,
 )
 from contracts.schema.orchestration import LegacyExecutorBackend, LegacyLlmProfile
 from novel.errors import UnsupportedRunMode
@@ -75,7 +75,7 @@ _DEEPSEEK_THINKING: Final = (
         id='off', label='关闭思考', reasoning_efforts=('low',)),
 )
 _PINNED_PRO_NODES: Final = tuple(
-    node for node in AGENT_EXECUTOR_NODES
+    node for node in LLM_EXECUTOR_NODES
     if NODES[node].model == 'deepseek-v4-pro'
 )
 
@@ -92,14 +92,14 @@ class DeepSeekLegacyDriver(LegacyLlmDriver):
                 label='DeepSeek V4.1 Flash',
                 thinking_modes=_DEEPSEEK_THINKING,
                 executor_nodes=tuple(
-                    node for node in AGENT_EXECUTOR_NODES
+                    node for node in LLM_EXECUTOR_NODES
                     if node not in _PINNED_PRO_NODES),
             ),
             LegacyModelSpec(
                 id='deepseek-v4-pro',
                 label='DeepSeek V4 Pro',
                 thinking_modes=_DEEPSEEK_THINKING,
-                executor_nodes=AGENT_EXECUTOR_NODES,
+                executor_nodes=LLM_EXECUTOR_NODES,
             ),
         ),
     )

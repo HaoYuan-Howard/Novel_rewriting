@@ -37,7 +37,7 @@ from typing import BinaryIO
 
 from contracts.invariants import LEGACY_STAGE5_MODES
 from contracts.schema.orchestration import (
-    AgentExecutorBackend, AgentProfile, ExecutorBackend,
+    LegacyExecutorBackend, LegacyLlmProfile, ExecutorBackend,
     JobEvent, JobRecord, JobStart, ProgressEvent, Step,
 )
 from novel import prov, run_identity
@@ -586,7 +586,7 @@ def new_job_id(now: float | None = None) -> str:
 def plan_start(node: str, sid: str | None, flags: Sequence[str] = (), *,
                base: str | os.PathLike[str],
                executor_backend: ExecutorBackend | None = None,
-               executor_profile: AgentProfile | None = None,
+               executor_profile: LegacyLlmProfile | None = None,
                egress_authorized: bool | None = None,
                follow_check: bool = True,
                placeholders: bool = False,
@@ -604,28 +604,26 @@ def plan_start(node: str, sid: str | None, flags: Sequence[str] = (), *,
     ⚠ `paid` / `writes` 在这里逐步折叠一次，而 `JobStart` 的后置条件会**反过来断言**
     它等于逐步折出来的——两处一致才构造得出来（`R-11.7`：贵贱只有一处算）。
     """
+    from novel.orchestrator import retired_formats
+    if executor_profile is not None:
+        old_backend = LegacyExecutorBackend(profile=executor_profile)
+        if executor_backend is None:
+            executor_backend = old_backend
+        elif executor_backend != old_backend:
+            raise ValueError('executor_backend 与旧 executor_profile 不一致')
+    retired_formats.refuse_agent_backend('作业执行', executor_backend)
     plan = list(steps) if steps is not None else build_steps(
         node, sid, flags, base=base, follow_check=follow_check,
         executor_backend=executor_backend,
-        executor_profile=executor_profile,
         egress_authorized=egress_authorized,
         placeholders=placeholders)
     step_backends = [
         step.executor_backend for step in plan
         if step.executor_backend is not None
     ]
-    if executor_profile is not None:
-        old_backend = AgentExecutorBackend(profile=executor_profile)
-        if executor_backend is None:
-            executor_backend = old_backend
-        elif executor_backend != old_backend:
-            raise ValueError('executor_backend 与旧 executor_profile 不一致')
     if executor_backend is None and step_backends:
         executor_backend = step_backends[0]
     if executor_backend is not None:
-        # C2a 退役边界：作业执行面不再接受 agent backend（preview 与 start
-        # 同闸；冻结 steps[] 携带的历史 backend 同样命中）。
-        from novel.orchestrator import retired_formats
         retired_formats.refuse_agent_backend('作业执行', executor_backend)
         executor_backend = resolve_executor_backend(
             node, flags, executor_backend)
@@ -727,7 +725,7 @@ def _append_progress(base: str | os.PathLike[str], sid: str | None, node: str,
 
 def run(base: str | os.PathLike[str], node: str, sid: str | None, flags: Sequence[str] = (), *,
         executor_backend: ExecutorBackend | None = None,
-        executor_profile: AgentProfile | None = None,
+        executor_profile: LegacyLlmProfile | None = None,
         egress_authorized: bool | None = None,
         follow_check: bool = True,
         spawn: Spawn = default_spawn, registry: JobRegistry = REGISTRY,
@@ -744,10 +742,13 @@ def run(base: str | os.PathLike[str], node: str, sid: str | None, flags: Sequenc
 
     ⚠ 任一步非零即停（`R-13.4` 在单个作业内的样子）：后面那些步一步都不跑。
     """
+    from novel.orchestrator import retired_formats
+    if executor_profile is not None and executor_backend is None:
+        executor_backend = LegacyExecutorBackend(profile=executor_profile)
+    retired_formats.refuse_agent_backend('作业执行', executor_backend)
     plan = list(steps) if steps is not None else build_steps(
         node, sid, flags, base=base, follow_check=follow_check,
         executor_backend=executor_backend,
-        executor_profile=executor_profile,
         egress_authorized=egress_authorized)
     start_meta = _resolve_run_identity(plan_start(
         node, sid, flags, base=base, steps=plan,
@@ -814,7 +815,7 @@ def start(
     flags: Sequence[str] = (),
     *,
     executor_backend: ExecutorBackend | None = None,
-    executor_profile: AgentProfile | None = None,
+    executor_profile: LegacyLlmProfile | None = None,
     egress_authorized: bool | None = None,
     follow_check: bool = True,
     spawn: Spawn = default_spawn,
@@ -830,10 +831,13 @@ def start(
         for finished_id, finished in list(_THREADS.items()):
             if not finished.is_alive():
                 _THREADS.pop(finished_id, None)
+    from novel.orchestrator import retired_formats
+    if executor_profile is not None and executor_backend is None:
+        executor_backend = LegacyExecutorBackend(profile=executor_profile)
+    retired_formats.refuse_agent_backend('作业执行', executor_backend)
     plan = list(steps) if steps is not None else build_steps(
         node, sid, flags, base=base, follow_check=follow_check,
         executor_backend=executor_backend,
-        executor_profile=executor_profile,
         egress_authorized=egress_authorized)
     start_meta = _resolve_run_identity(plan_start(
         node, sid, flags, base=base, steps=plan,

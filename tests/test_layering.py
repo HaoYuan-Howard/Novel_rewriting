@@ -196,9 +196,6 @@ def _runtime_files() -> tuple[str, ...]:
 
 #: 允许裸读 JSON 的白名单。每一条都要写得出理由。
 _JSON_READ_ALLOWED = {
-    'novel/agents/glm.py': (
-        '只读取 Claude CLI 用户 settings.json 中的非敏感接收端配置，不读取小说产物；'
-        '智谱接收端必须精确匹配，密钥仍由 CLI 自己消费，不进入模型输入或审计'),
     'novel/output_root.py': (
         '只读根外的离线归档围栏、清单和提交回执；不解析旧 artifact，'
         '新根须有同事务的 committed 证明，服务/CLI/Store 共用这一判定'),
@@ -844,8 +841,6 @@ _CROSS_STAGE_DEEP_GRANDFATHER = frozenset({
     ('novel/llm/stage2_global_runs.py', 'novel.stages.stage2.analyze_draft_recovery'),
     ('novel/llm/stage4_runs.py', 'novel.stages.stage4.design_rebuild'),
     ('novel/llm/stage4_runs.py', 'novel.stages.stage4.plot_design'),
-    ('novel/orchestrator/node_agents.py', 'novel.stages.stage2.contract'),
-    ('novel/orchestrator/node_agents.py', 'novel.stages.stage2.plot_sequence'),
     ('novel/orchestrator/agent.py', 'novel.stages.stage4.design_rebuild'),
     ('novel/orchestrator/approvals.py', 'novel.stages.stage0.eligibility'),
     ('novel/orchestrator/approvals.py', 'novel.stages.stage1.audit'),

@@ -28,7 +28,7 @@ from contracts.invariants import (
 )
 from contracts.schema import decode_artifact
 from contracts.schema.orchestration import (
-    AgentProfile, LegacyExecutorBackend, LegacyLlmProfile,
+    LegacyExecutorBackend, LegacyLlmProfile,
 )
 from contracts.schema.stage7 import NameMapEdit
 from novel import exit_codes as X
@@ -607,9 +607,7 @@ def test_stage4_design_and_plan_are_two_independent_paid_dispatches(
 def test_stage4_repair_aggregate_recovery_dispatches_before_any_model_surface(
         monkeypatch, tmp_path, capsys):
     """prepared 补交是 FREE producer；不解析旧票，不构造 agent/client。"""
-    from novel.orchestrator import node_agents
     from novel.cli import main as M
-    from novel.orchestrator import approvals
     from novel.stages.stage4 import plan
 
     source = 'source-run-1'
@@ -629,9 +627,6 @@ def test_stage4_repair_aggregate_recovery_dispatches_before_any_model_surface(
     monkeypatch.setattr(
         M, '_llm_client',
         lambda _ctx: pytest.fail('prepared 补交不得构造 LLM client'))
-    monkeypatch.setattr(
-        node_agents, 'build_node_agent',
-        lambda *_args, **_kwargs: pytest.fail('prepared 补交不得构造 executor agent'))
     monkeypatch.setattr(
         plan, 'run_design_repair_aggregate_recovery',
         lambda got_ctx, **kwargs: captured.append((got_ctx, kwargs))
@@ -718,8 +713,9 @@ def test_dispatch_refuses_legacy_executor_profile_projection(
 
     ctx = SimpleNamespace(
         node='stage4.design', cache=object(), novel_dir=tmp_path / 'book',
-        sid='123', executor_profile=AgentProfile(
-            driver='codex', model='gpt-5.6-sol', reasoning_effort='high'))
+        sid='123', executor_profile=LegacyLlmProfile(
+            provider='deepseek', model='deepseek-v4-pro', reasoning_effort='high',
+        thinking_mode='on'))
     with pytest.raises(RetiredExecutorBackend):
         M._dispatch('stage4.design', ctx, ['--replan'])
 
@@ -799,7 +795,7 @@ def test_stage4_cli_handler_refuses_repeating_current_infeasible_without_wire(
         tmp_path, monkeypatch):
     """手敲 paid B 也必须落到 producer 的同一前置，而不是只靠浏览器隐藏。"""
     from novel.cli import main as M
-    from novel.orchestrator import approvals
+    from novel.llm.client import LlmClient
     from novel.stages.stage4 import plan
 
     store = object()
@@ -808,7 +804,10 @@ def test_stage4_cli_handler_refuses_repeating_current_infeasible_without_wire(
         plan, 'current_infeasible_binding',
         lambda got: SimpleNamespace(status='infeasible') if got is store else None)
 
-    class NoWireClient:
+    class NoWireClient(LlmClient):
+        def __init__(self):
+            pass
+
         def ask_json(self, *_args, **_kwargs):
             pytest.fail('CLI 不得为同一 current infeasible 再发 B wire')
 
@@ -1199,10 +1198,9 @@ def test_a_terminal_state_prints_no_stack(box, capsys):
 
 # ───────────────────── `R-11.8`：展示与执行同一条 ─────────────────────
 
-EXECUTOR_PROFILE_ARGS = (
-    '--executor-driver', 'codex',
-    '--executor-model', 'gpt-5.6-sol',
-    '--executor-effort', 'high',
+#: C3：旧 Agent CLI wire；解析层应收口为退役终态（非 argparse 未识别）。
+RETIRED_AGENT_BACKEND_ARGS = (
+    '--executor-backend', 'agent',
 )
 
 
@@ -1291,7 +1289,7 @@ def test_agent_executor_backend_is_retired_at_cli_parse(
         M, 'RunContext',
         SimpleNamespace(open=lambda *_args, **_kwargs: opened.append(_kwargs)))
     rc = _run(
-        'preview', node, 'book-1', *flags, *EXECUTOR_PROFILE_ARGS,
+        'preview', node, 'book-1', *flags, *RETIRED_AGENT_BACKEND_ARGS,
         '--allow-egress', '--base', str(tmp_path))
     assert rc == X.TERMINAL_STATE
     assert opened == []
@@ -1311,50 +1309,17 @@ def test_agent_argv_never_round_trips_through_cli_into_run_context(
     """
     from novel.cli import main as M
 
-    profile = AgentProfile(
-        driver='codex', model='gpt-5.6-sol', reasoning_effort='high')
-    argv = N.build_argv(
-        node, 'book-1', flags, base=tmp_path,
-        executor_profile=profile,
-        egress_authorized=True)
-    cli_argv = argv[argv.index('run'):]
-    captured = {}
-
-    def open_context(base, sid, node, **kwargs):
-        captured.update(base=base, sid=sid, node=node, **kwargs)
-        return _dispatch_context(
-            tmp_path, node=node,
-            run_id='profile-round-trip',
-            executor_profile=kwargs['executor_profile'],
-        )
-
-    def dispatch(node, ctx, flags):
-        captured['dispatch'] = (node, ctx.executor_profile, list(flags))
-        return X.OK
-
-    monkeypatch.setattr(M, 'RunContext', SimpleNamespace(open=open_context))
-    monkeypatch.setattr(M, '_dispatch', dispatch)
-    from novel.orchestrator import mechanical_admission
-    monkeypatch.setattr(mechanical_admission, 'blueprint_generation_ready',
-                        lambda *_args: mechanical_admission.AdmissionCheck(
-                            'stage2.blueprint', ok=True))
-    monkeypatch.setattr(mechanical_admission, 'stage4_ready',
-                        lambda *_args: mechanical_admission.AdmissionCheck(
-                            'stage4', ok=True))
-    from novel.stages.stage5 import closure as stage5_closure
-    monkeypatch.setattr(stage5_closure, 'require_stage5_closed', lambda _store: None)
-    from novel.orchestrator import approvals
+    opened = []
     monkeypatch.setattr(
-        approvals, 'authorize_writing', lambda *_args, **_kwargs: None)
-
-    rc = _run(*cli_argv)
+        M, 'RunContext',
+        SimpleNamespace(open=lambda *_a, **_k: opened.append(_k)))
+    rc = _run(
+        'run', node, 'book-1', *flags, *RETIRED_AGENT_BACKEND_ARGS,
+        '--allow-egress', '--yes', '--base', str(tmp_path))
     assert rc == X.TERMINAL_STATE
-    assert 'executor_backend' not in captured
+    assert opened == []
     err = capsys.readouterr().err
-    assert '退役' in err
-    # 纯函数层（build_argv/registry）仍能解析该形状（死代码保留到 C3 硬切），
-    # 但它不再构成任何可执行入口。
-    assert N.resolve_executor_profile(node, flags, profile) is not None
+    assert '退役' in err and 'agent' in err
 
 
 def test_explicit_legacy_argv_round_trips_without_becoming_an_agent_profile(
@@ -1374,8 +1339,8 @@ def test_explicit_legacy_argv_round_trips_without_becoming_an_agent_profile(
         return _dispatch_context(
             tmp_path, node=node,
             run_id='legacy-round-trip',
-            executor_backend=kwargs['executor_backend'],
-            executor_profile=kwargs['executor_profile'],
+            executor_backend=kwargs.get('executor_backend'),
+            executor_profile=kwargs.get('executor_profile'),
         )
 
     def dispatch(node, ctx, flags):
@@ -1388,9 +1353,9 @@ def test_explicit_legacy_argv_round_trips_without_becoming_an_agent_profile(
 
     assert _run(*argv[argv.index('run'):]) == X.OK
     assert captured['executor_backend'] == backend
-    assert captured['executor_profile'] is None
+    assert captured['executor_profile'] == backend.profile
     assert captured['dispatch'] == (
-        'stage2.global', backend, None, [])
+        'stage2.global', backend, backend.profile, [])
 
 
 def test_legacy_backend_uses_provider_factory_instead_of_implicit_deepseek(
@@ -1416,8 +1381,7 @@ def test_legacy_backend_uses_provider_factory_instead_of_implicit_deepseek(
     ('node', 'flags', 'expected_agent_kwargs'), _PROFILED_RUN_CASES)
 def test_profiled_dispatch_never_constructs_a_deepseek_client(
         tmp_path, monkeypatch, capsys, node, flags, expected_agent_kwargs):
-    """C2a：agent argv 在 CLI 解析层退役拒绝——任何 client 都不会被构造，
-    「不静默回退 DeepSeek」由更早的一格关闭。"""
+    """C3：agent argv 在 CLI 解析层退役拒绝——任何 client 都不会被构造。"""
     from novel.cli import main as M
 
     opened = []
@@ -1427,298 +1391,14 @@ def test_profiled_dispatch_never_constructs_a_deepseek_client(
     monkeypatch.setattr(
         M, '_llm_client',
         lambda _ctx: pytest.fail('退役 backend 不得构造任何 LLM client'))
-    monkeypatch.setattr(
-        node_agents_module(), 'build_node_agent',
-        lambda _ctx, **_kwargs: pytest.fail('退役 backend 不得构造 node agent'))
 
     rc = _run(
-        'run', node, 'book-1', *flags, *EXECUTOR_PROFILE_ARGS,
+        'run', node, 'book-1', *flags, *RETIRED_AGENT_BACKEND_ARGS,
         '--allow-egress', '--base', str(tmp_path), '--yes')
 
     assert rc == X.TERMINAL_STATE
     assert opened == []
     assert '退役' in capsys.readouterr().err
-
-
-def node_agents_module():
-    from novel.orchestrator import node_agents
-    return node_agents
-
-
-def test_dispatch_refuses_agent_profile_before_node_agent(
-        monkeypatch, capsys):
-    """C2b：调度唯一入口是直连 stage runner；agent profile 投影先被退役拒绝。
-
-    历史上该测试保护「agent 的 artifact/report 两轴与 exit 1 映射」；该映射
-    随调度唯一化消亡，红报告/退出码职责由各 legacy stage runner 测试承担。
-    """
-    from novel.cli import main as M
-    from novel.errors import RetiredExecutorBackend
-    from novel.orchestrator import node_agents
-
-    monkeypatch.setattr(
-        node_agents, 'build_node_agent',
-        lambda _ctx, **_kwargs: pytest.fail('C2b 后调度不得再构造 node agent'))
-    ctx = SimpleNamespace(
-        node='stage2.global', novel_dir=None, sid='123', executor_profile=AgentProfile(
-            driver='codex', model='gpt-5.6-sol', reasoning_effort='high'))
-    with pytest.raises(RetiredExecutorBackend):
-        M._dispatch('stage2.global', ctx, [])
-
-
-def test_dispatch_refuses_agent_profile_for_stage4_plan(
-        monkeypatch, tmp_path):
-    """C2b：Stage4B typed infeasible 的落盘与 exit 1 由 legacy producer 承接
-    （plan.run_plan 的 response.status=='infeasible' 分支）；agent 派发面退役。"""
-    from novel.cli import main as M
-    from novel.errors import RetiredExecutorBackend
-
-    ctx = SimpleNamespace(
-        node='stage4.plan', novel_dir=tmp_path / 'book', sid='123',
-        executor_profile=AgentProfile(
-            driver='codex', model='gpt-5.6-sol', reasoning_effort='high'))
-    with pytest.raises(RetiredExecutorBackend):
-        M._dispatch('stage4.plan', ctx, [])
-
-
-def test_dispatch_refuses_agent_profile_for_zero_cost_recovery(
-        monkeypatch, tmp_path):
-    """C2b：免费恢复不要求 A 人审的职责由 legacy 直连派发天然满足
-    （不经审阅闸）；agent 派发面退役,不再为其保留例外语义。"""
-    from novel.cli import main as M
-    from novel.errors import RetiredExecutorBackend
-
-    ctx = SimpleNamespace(
-        node='stage4.plan', novel_dir=tmp_path / 'book', sid='123',
-        executor_profile=AgentProfile(
-            driver='codex', model='gpt-5.6-sol', reasoning_effort='high'))
-    for flags in (['--check-only'], ['--revalidate', '--actor', 'reviewer', '--reason', '同轮复核']):
-        with pytest.raises(RetiredExecutorBackend):
-            M._dispatch('stage4.plan', ctx, flags)
-
-
-def test_profiled_gate_blocked_remains_exit_two_without_a_stack(
-        tmp_path, monkeypatch, capsys):
-    """agent 把候选写成 `.INVALID` 后抛 GateBlocked：没正式交付，仍是 exit 2。"""
-    from novel.orchestrator import node_agents
-    from novel.cli import main as M
-    from novel.errors import GateBlocked
-
-    def open_context(_base, _sid, node, **kwargs):
-        return _dispatch_context(
-            tmp_path, node=node, run_id='profiled-gate-blocked',
-            executor_profile=kwargs['executor_profile'])
-
-    class Agent:
-        def run(self):
-            raise GateBlocked(
-                '合成 agent 候选被代码闸拦下',
-                invalid_path='stage2/global_grounding.INVALID.json')
-
-    monkeypatch.setattr(M, 'RunContext', SimpleNamespace(open=open_context))
-    monkeypatch.setattr(
-        node_agents, 'build_node_agent', lambda _ctx, **_kwargs: Agent())
-    monkeypatch.setattr(
-        M, '_llm_client', lambda _ctx: pytest.fail(
-            '显式 executor GateBlocked 不得回退 DeepSeek'))
-
-    # C2a：agent argv 在解析层退役拒绝；GateBlocked→exit 2 的映射职责由
-    # legacy 直连付费跑法的同类测试承担，这里钉住更早的一格。
-    rc = _run(
-        'run', 'stage2.global', 'book-1', *EXECUTOR_PROFILE_ARGS,
-        '--allow-egress', '--base', str(tmp_path), '--yes')
-
-    assert rc == X.TERMINAL_STATE and not X.landed(rc)
-    err = capsys.readouterr().err
-    assert '退役' in err
-    assert 'Traceback' not in err
-
-
-@pytest.mark.parametrize(('node', 'flags'), [
-    ('stage2.global', ['--purge-role']),
-    ('stage2.blueprint', ['--chapters', '1']),
-    ('stage4.context', []),
-])
-def test_cli_refuses_profiled_flags_and_unmigrated_nodes_before_context(
-        tmp_path, monkeypatch, capsys, node, flags):
-    from novel.cli import main as M
-
-    opened = []
-    monkeypatch.setattr(
-        M, 'RunContext',
-        SimpleNamespace(open=lambda *_args, **_kwargs: opened.append(_kwargs)))
-
-    if '--purge-role' in flags:
-        with pytest.raises(SystemExit) as error:
-            _run('run', node, 'book-1', *flags, *EXECUTOR_PROFILE_ARGS,
-                 '--base', str(tmp_path), '--yes')
-        assert error.value.code == 2 and opened == []
-        assert 'unrecognized arguments' in capsys.readouterr().err
-        return
-    rc = _run(
-        'run', node, 'book-1', *flags, *EXECUTOR_PROFILE_ARGS,
-        '--base', str(tmp_path), '--yes')
-
-    # C2a：agent backend 在 CLI 解析层即退役拒绝，先于节点/flag 组合校验。
-    assert rc == X.TERMINAL_STATE
-    assert opened == []
-    err = capsys.readouterr().err
-    assert 'Traceback' not in err
-    assert '退役' in err
-
-
-def test_cli_refuses_a_partial_executor_profile_before_preview(tmp_path, capsys):
-    rc = _run(
-        'preview', 'stage2.global', 'book-1',
-        '--executor-driver', 'codex', '--base', str(tmp_path))
-
-    # C2a：不完整的 agent profile 同样在解析层走退役拒绝（agent 形状已整体
-    # 退役，不再需要为它报「缺参数」）。
-    assert rc == X.TERMINAL_STATE
-    err = capsys.readouterr().err
-    assert '退役' in err
-    assert 'Traceback' not in err
-
-
-def test_profiled_preview_without_egress_approval_is_visible_but_not_executable(
-        tmp_path, capsys):
-    rc = _run(
-        'preview', 'stage2.global', 'book-1', *LEGACY_EXECUTOR_ARGS,
-        '--base', str(tmp_path))
-
-    assert rc == X.OK
-    out = capsys.readouterr().out
-    assert '--legacy-provider' in out
-    assert '--allow-egress' not in out
-
-
-def test_profiled_cli_run_without_egress_approval_refuses_before_context(
-        tmp_path, monkeypatch, capsys):
-    from novel.cli import main as M
-    from novel.orchestrator import node_agents
-
-    opened = []
-    dispatched = []
-    monkeypatch.setattr(
-        M, 'RunContext',
-        SimpleNamespace(open=lambda *_args, **_kwargs: opened.append(_kwargs)))
-    monkeypatch.setattr(
-        M, '_dispatch',
-        lambda *_args: dispatched.append(True) or X.OK)
-    monkeypatch.setattr(
-        M, '_llm_client',
-        lambda _ctx: pytest.fail('外发授权拒绝后不得构造 LLM client'))
-    monkeypatch.setattr(
-        node_agents, 'build_node_agent',
-        lambda _ctx: pytest.fail('外发授权拒绝后不得构造 executor driver'))
-
-    rc = _run(
-        'run', 'stage2.global', 'book-1', *LEGACY_EXECUTOR_ARGS,
-        '--base', str(tmp_path), '--yes')
-
-    assert rc == X.TERMINAL_STATE
-    assert opened == [] and dispatched == []
-    err = capsys.readouterr().err
-    assert '正文外发' in err and '--allow-egress' in err
-    assert 'Traceback' not in err
-
-
-def test_cli_refuses_egress_authorization_without_executor_before_context(
-        tmp_path, monkeypatch, capsys):
-    from novel.cli import main as M
-
-    opened = []
-    monkeypatch.setattr(
-        M, 'RunContext',
-        SimpleNamespace(open=lambda *_args, **_kwargs: opened.append(_kwargs)))
-
-    rc = _run(
-        'run', 'stage2.global', 'book-1', '--allow-egress',
-        '--base', str(tmp_path), '--yes')
-
-    assert rc == X.TERMINAL_STATE and opened == []
-    err = capsys.readouterr().err
-    assert '没有 executor_profile' in err and 'Traceback' not in err
-
-@pytest.mark.corpus
-def test_preview_prints_exactly_the_command_that_would_run(box, capsys):
-    """⭐ 摊开的那条 argv 必须与 `build_argv` **逐字节相同**。
-
-    ⚠ 原型有一处裂缝别抄：前端用 `argv.slice(4)` 硬编码切掉解释器前缀来渲染，
-    `build_argv` 的前缀长度一变它就**静默错位**。渲染也只许有一个落点。
-    """
-    assert _run('preview', 'stage1.partition', box.sid, '--check-only',
-                '--base', str(box.root)) == X.OK
-    printed = capsys.readouterr().out
-    want = N.shell_line(N.build_argv('stage1.partition', box.sid, ['--check-only'],
-                                     base=str(box.root)))
-    assert want in printed, printed
-
-
-def test_preview_quotes_values_that_a_shell_would_otherwise_split():
-    """⭐ 摊开的命令要能**逐字粘进 shell**，不只是「长得像那条命令」。
-
-    `build_argv` 产的是词元序列。此前渲染是 `' '.join(argv)`，于是
-    `--reason "fix present_names_invented"` 打出来是三个裸词——照抄执行时后两个词
-    会被解析成位置参数，而 `build_argv` 上方的注释明写着「粘进终端也不会再问一遍」。
-    ⚠ 这条不断言实现长什么样，断言的是**往返**：POSIX `shlex` 拆回来必须等于原 argv。
-    """
-    argv = ['python', '-m', 'novel.cli', 'run', 'stage2.blueprint', '424242',
-            '--actor', 'agent-operator', '--reason', 'fix present_names_invented',
-            '--reason-cn', '修复锚点', '--base', r'E:\out dir\书']
-    assert shlex.split(N.shell_line(argv)) == argv
-    assert "'fix present_names_invented'" in N.shell_line(argv)
-
-
-def test_shell_line_leaves_plain_tokens_bare():
-    """引号只加在真需要的地方——整行全引会让人读不出哪一段是取值。"""
-    assert N.shell_line(['run', 'stage1.partition', '--check-only']) == \
-        'run stage1.partition --check-only'
-
-
-@pytest.mark.corpus
-def test_preview_says_both_whether_it_costs_and_whether_it_writes(box, capsys):
-    """**「0 成本」不等于「不写盘」** —— 两个维度都要摆出来。"""
-    _run('preview', 'stage1.partition', box.sid, '--base', str(box.root))
-    out = capsys.readouterr().out
-    assert '花钱   : 否' in out
-    assert '写盘   : stage1/main_text.json + stage1/hook_copy.json' in out, out
-
-
-# ───────────────────── 其余两个子命令 ─────────────────────
-
-def test_state_joins_the_authoritative_check_badge_without_changing_overview(
-        monkeypatch, capsys):
-    import importlib
-
-    cli = importlib.import_module('novel.cli.main')
-    inspection = importlib.import_module('novel.orchestrator.inspection')
-    overview = SimpleNamespace(
-        title='合成书', sid='123',
-        stages=[SimpleNamespace(
-            done=True, stage='stage5', artifacts=[], chapters_done={})],
-    )
-    report = SimpleNamespace(
-        badge='amber',
-        counts=SimpleNamespace(unver=2, skipped=1),
-        rules=[
-            SimpleNamespace(sev='hard', status='hit'),
-            SimpleNamespace(sev='hard', status='ok'),
-            SimpleNamespace(sev='info', status='hit'),
-            SimpleNamespace(sev='info', status='hit'),
-            SimpleNamespace(sev='unver', status='unver'),
-        ],
-    )
-    snapshot = SimpleNamespace(
-        overview=overview,
-        check=lambda _stage: SimpleNamespace(for_view=lambda: report),
-    )
-    monkeypatch.setattr(
-        inspection, 'capture_operator_snapshot', lambda _base, _sid: snapshot)
-
-    assert cli._cmd_state(SimpleNamespace(base='outputs', sid='123')) == X.OK
-    out = capsys.readouterr().out
-    assert '✓ stage5  [check AMBER · hard 1 · info 2 · unver 3]' in out
 
 
 def test_state_marks_an_unavailable_check_as_unknown_instead_of_looking_green(

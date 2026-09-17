@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""C2b 硬出口：生产代码不得再 import agent 包 / node_agents / agent_runs。"""
+"""C3：agent 执行包已删除；生产不得再 import 已删路径。"""
 from __future__ import annotations
 
 import re
@@ -8,21 +8,18 @@ from pathlib import Path
 
 import pytest
 
-ROOT = Path(__file__).resolve().parents[1] / 'novel'
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_c3_agent_packages_deleted() -> None:
+    assert not (ROOT / 'novel' / 'agents').exists()
+    assert not (ROOT / 'novel' / 'orchestrator' / 'node_agents.py').exists()
+    assert not (ROOT / 'novel' / 'llm' / 'agent_runs.py').exists()
+    assert not (ROOT / 'tools' / 'verify_agent_e2e.py').exists()
 
 
 def _production_py_files() -> list[Path]:
-    out: list[Path] = []
-    for path in ROOT.rglob('*.py'):
-        rel = path.relative_to(ROOT.parent).as_posix()
-        if rel.startswith('novel/agents/'):
-            continue
-        if rel.endswith('novel/orchestrator/node_agents.py'):
-            continue
-        if rel.endswith('novel/llm/agent_runs.py'):
-            continue
-        out.append(path)
-    return out
+    return list((ROOT / 'novel').rglob('*.py'))
 
 
 def _hits(pattern: str) -> list[str]:
@@ -31,7 +28,7 @@ def _hits(pattern: str) -> list[str]:
     for path in _production_py_files():
         text = path.read_text(encoding='utf-8')
         if rx.search(text):
-            found.append(path.relative_to(ROOT.parent).as_posix())
+            found.append(path.relative_to(ROOT).as_posix())
     return found
 
 
@@ -43,6 +40,6 @@ def _hits(pattern: str) -> list[str]:
         ('agent_runs', r'novel\.llm\.agent_runs|from novel\.llm import agent_runs'),
     ],
 )
-def test_c2b_production_import_gate(label: str, pattern: str) -> None:
+def test_c3_production_import_gate(label: str, pattern: str) -> None:
     found = _hits(pattern)
-    assert found == [], f'C2b 生产仍引用 {label}: {found}'
+    assert found == [], f'C3 生产仍引用 {label}: {found}'

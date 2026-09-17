@@ -35,12 +35,11 @@ from contracts.invariants import (
     WRITE_EFFECTS,
 )
 from contracts.schema.orchestration import (
-    AgentExecutorBackend, AgentProfile, ExecutorBackend, LegacyExecutorBackend,
-    Step,
+    ExecutorBackend, LegacyExecutorBackend, LegacyLlmProfile, Step,
 )
 from novel import paths as novel_paths, run_identity
 from novel.orchestrator.executor_capabilities import (
-    AgentProfileRefused, validate_executor_backend, validate_profile,
+    AgentProfileRefused, validate_executor_backend,
 )
 from novel.errors import UnsupportedRunMode
 
@@ -59,14 +58,14 @@ CLI_MODULE = 'novel.cli'
 #: ⇒ 凡是写盘的付费节点，跑完自动追一次复检，两个结论并排显示。
 FOLLOW_CHECK_NOTE = '自动追跑：退出码 0 也可能是残缺产物'
 
-#: 已完成真实「profile → CLI driver → session loop → 代码提交」纵切的付费跑法。
+#: 已完成真实「profile → DirectLlmExecutor → 代码提交」纵切的付费跑法。
 #:
 #: 节点名不够表达执行边界：``stage5.write --revise`` 与默认写作都付费，
 #: ``stage4.design --replan`` 也是同一 producer 的显式重采；反过来，``--dry-run`` /
 #: ``--revalidate`` 等 0 成本路径绝不能因为节点在名单里就拿到 executor profile。
 #: 因此唯一判据是 ``(node, flag token set)``，值只列**已经完整迁移**的组合。
 #: 带值参数只以 token 入表，值仍由 ``validate_run`` 与 producer 校验。
-EXECUTOR_PROFILED_RUNS: dict[str, tuple[frozenset[str], ...]] = {
+PROFILED_LLM_RUNS: dict[str, tuple[frozenset[str], ...]] = {
     'stage2.analyze': (frozenset(),),
     # Stage2 语义审阅退役：stage2 三节点不再有 `--review-token` 跑法。
     'stage2.characters': (frozenset(),),
@@ -93,7 +92,7 @@ EXECUTOR_PROFILED_RUNS: dict[str, tuple[frozenset[str], ...]] = {
     'stage7.rename': (frozenset(),),
 }
 
-EXECUTOR_PROFILED_NODES = tuple(EXECUTOR_PROFILED_RUNS)
+PROFILED_LLM_NODES = tuple(PROFILED_LLM_RUNS)
 
 #: 各节点的“主操作”。其余 ``--chapters`` / ``--actor`` /
 #: ``--reason`` 都只是这些操作的参数，不参与互斥。Stage4A
@@ -634,7 +633,6 @@ def child_env(env: Mapping[str, str] | None = None) -> dict[str, str]:
 def build_argv(node: str, sid: str | None, flags: Sequence[str] = (), *,
                base: str | os.PathLike[str],
                executor_backend: ExecutorBackend | None = None,
-               executor_profile: AgentProfile | None = None,
                egress_authorized: bool | None = None,
                placeholders: bool = False) -> list[str]:
     """那条命令。**preview 与真跑共用这一个函数**（`R-11.8`）。
@@ -658,8 +656,6 @@ def build_argv(node: str, sid: str | None, flags: Sequence[str] = (), *,
             filled += [flag, placeholder_for(flag)]
         flags = filled
     tokens = validate_run(node, flags, allow_placeholders=placeholders)
-    executor_backend = _coalesce_executor_backend(
-        executor_backend, executor_profile)
     executor_backend = resolve_executor_backend(node, flags, executor_backend)
     egress_authorized = resolve_executor_egress(
         executor_backend, egress_authorized)
@@ -674,21 +670,7 @@ def build_argv(node: str, sid: str | None, flags: Sequence[str] = (), *,
     if sid is not None:
         argv.append(sid)
     argv += list(flags)
-    if isinstance(executor_backend, AgentExecutorBackend):
-        executor_profile = executor_backend.profile
-        if executor_profile.execution_mode is None:  # pragma: no cover —— registry 后置条件
-            raise AssertionError('resolved executor_profile 缺 execution_mode')
-        argv += [
-            '--executor-backend', 'agent',
-            '--executor-driver', executor_profile.driver,
-            '--executor-model', executor_profile.model,
-            '--executor-effort', executor_profile.reasoning_effort,
-            '--executor-mode', executor_profile.execution_mode,
-        ]
-        if egress_authorized:
-            # 运行控制参数，不属于 NodeSpec flag：它不改变节点身份、贵贱或写盘语义。
-            argv.append('--allow-egress')
-    elif isinstance(executor_backend, LegacyExecutorBackend):
+    if isinstance(executor_backend, LegacyExecutorBackend):
         profile = executor_backend.profile
         argv += [
             '--executor-backend', 'legacy',
@@ -768,59 +750,23 @@ def step_label(node: str, flags: Sequence[str] = ()) -> str:
     return f'{label} {" ".join(tokens)}' if tokens else label
 
 
-def resolve_executor_profile(
-    node: str, flags: Sequence[str], profile: AgentProfile | None,
-) -> AgentProfile | None:
-    """校验并物化直接节点 executor；已退役或未迁移的组合关闭式拒绝。"""
-    if profile is None:
-        return None
-    if node not in EXECUTOR_PROFILED_NODES:
-        raise UnsupportedRunMode(
-            f'{node} 不再接受 executor agent（生产臂已退役或尚未迁移）；'
-            '它由直连 LLM 执行，不能接受 profile 后静默回退另一套执行面')
-    tokens = frozenset(flag_tokens(flags))
-    if tokens not in EXECUTOR_PROFILED_RUNS[node]:
-        supported = [sorted(item) for item in EXECUTOR_PROFILED_RUNS[node]]
-        raise UnsupportedRunMode(
-            f'{node} 的 executor agent 尚未迁移 flag 组合 {sorted(tokens)}；'
-            f'当前只接受 {supported}，拒绝静默回退 DeepSeek')
-    if not is_paid(node, flags):  # pragma: no cover —— 当前空 flags 纵切均为付费
-        raise UnsupportedRunMode('executor_profile 只属于真正付费生成步，0 成本恢复步不接 agent')
-    try:
-        return validate_profile(profile)
-    except AgentProfileRefused as exc:
-        raise UnsupportedRunMode(f'executor_profile 不可执行：{exc}') from exc
-
-
-def _coalesce_executor_backend(
-    backend: ExecutorBackend | None,
-    legacy_profile: AgentProfile | None,
-) -> ExecutorBackend | None:
-    """兼容旧 Python 调用签名；新调用不得同时交两份事实。"""
-    if legacy_profile is None:
-        return backend
-    old = AgentExecutorBackend(profile=legacy_profile)
-    if backend is None:
-        return old
-    if backend != old:
-        raise UnsupportedRunMode(
-            '不能同时提交 executor_backend 与不一致的旧 executor_profile')
-    return backend
-
-
 def resolve_executor_backend(
     node: str, flags: Sequence[str], backend: ExecutorBackend | None,
 ) -> ExecutorBackend | None:
-    """按 discriminator 校验 executor；不再用 profile 是否为空推断模式。"""
+    """校验 legacy executor；未登记组合与 agent wire 关闭式拒绝。"""
     if backend is None:
         return None
-    if isinstance(backend, AgentExecutorBackend):
-        # 继续复用 agent 纵切的精确 node/flag 契约及拒绝文案；这既保护旧调用方，
-        # 也避免先用宽泛的“0 成本”错误吞掉真正的“该 flag 尚未迁移”证据。
-        profile = resolve_executor_profile(node, flags, backend.profile)
-        assert profile is not None
-        return AgentExecutorBackend(profile=profile)
-    if not is_paid(node, flags):
+    if node not in PROFILED_LLM_NODES:
+        raise UnsupportedRunMode(
+            f'{node} 不再接受显式 executor profile（生产臂已退役或尚未迁移）；'
+            '它由直连 LLM 执行，不能接受 profile 后静默回退另一套执行面')
+    tokens = frozenset(flag_tokens(flags))
+    if tokens not in PROFILED_LLM_RUNS[node]:
+        supported = [sorted(item) for item in PROFILED_LLM_RUNS[node]]
+        raise UnsupportedRunMode(
+            f'{node} 的 executor 尚未迁移 flag 组合 {sorted(tokens)}；'
+            f'当前只接受 {supported}，拒绝静默回退')
+    if not is_paid(node, flags):  # pragma: no cover —— 当前空 flags 纵切均为付费
         raise UnsupportedRunMode(
             'executor_backend 只属于真正付费生成步，0 成本恢复步不接 executor')
     try:
@@ -830,18 +776,16 @@ def resolve_executor_backend(
 
 
 def resolve_executor_egress(
-    backend: ExecutorBackend | AgentProfile | None,
+    backend: ExecutorBackend | None,
     egress_authorized: bool | None,
 ) -> bool | None:
     """把请求默认收成执行快照；正文外发授权不能脱离 executor backend。"""
-    if isinstance(backend, AgentProfile):
-        backend = AgentExecutorBackend(profile=backend)
     if backend is None:
         if egress_authorized is None or egress_authorized is False:
             return None
         raise UnsupportedRunMode(
-            '--allow-egress 只授权显式 executor；没有 executor_profile / '
-            'executor_backend 时不能伪造外发授权')
+            '--allow-egress 只授权显式 executor；没有 executor_backend 时'
+            '不能伪造外发授权')
     if type(egress_authorized) is not bool:
         raise UnsupportedRunMode(
             'executor_backend 必须显式给 bool 正文外发授权；预览可给 false，执行必须为 true')
@@ -851,7 +795,6 @@ def resolve_executor_egress(
 def _step(node: str, sid: str | None, flags: Sequence[str], *, base: str | os.PathLike[str],
           note: str | None = None,
           executor_backend: ExecutorBackend | None = None,
-          executor_profile: AgentProfile | None = None,
           egress_authorized: bool | None = None,
           placeholders: bool = False) -> Step:
     # ⚠ **一个 Step 的四格必须出自同一份 flags。** argv 补了占位符而 `paid`/`writes`/
@@ -866,10 +809,9 @@ def _step(node: str, sid: str | None, flags: Sequence[str], *, base: str | os.Pa
                          for f in missing)
         said = f'必填项已渲染成占位符，执行前逐个替换：{said}'
         note = f'{note}\n    ⚠ {said}' if note else said
-    resolved_backend = resolve_executor_backend(
-        node, filled,
-        _coalesce_executor_backend(executor_backend, executor_profile),
-    )
+    from novel.orchestrator import retired_formats
+    retired_formats.refuse_agent_backend('build_steps', executor_backend)
+    resolved_backend = resolve_executor_backend(node, filled, executor_backend)
     resolved_egress = resolve_executor_egress(
         resolved_backend, egress_authorized)
     return Step(
@@ -891,7 +833,6 @@ def _step(node: str, sid: str | None, flags: Sequence[str], *, base: str | os.Pa
 def build_steps(node: str, sid: str | None, flags: Sequence[str] = (), *,
                 base: str | os.PathLike[str],
                 executor_backend: ExecutorBackend | None = None,
-                executor_profile: AgentProfile | None = None,
                 egress_authorized: bool | None = None,
                 follow_check: bool = True,
                 placeholders: bool = False) -> list[Step]:
@@ -909,7 +850,6 @@ def build_steps(node: str, sid: str | None, flags: Sequence[str] = (), *,
     first = _step(
         node, sid, flags, base=base,
         executor_backend=executor_backend,
-        executor_profile=executor_profile,
         egress_authorized=egress_authorized,
         placeholders=placeholders)
     steps = [first]

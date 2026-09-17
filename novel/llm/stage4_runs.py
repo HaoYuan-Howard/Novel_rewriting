@@ -34,12 +34,12 @@ from contracts.artifacts import (
 from contracts.invariants import STAGE4_DESIGN_MAX_CONCURRENCY
 from contracts.schema import Usage, decode_artifact
 from contracts.schema.api import DesignRepairScope
-from contracts.schema.orchestration import AgentProfile, AgentRunEvent
+from contracts.schema.orchestration import LegacyLlmProfile, AgentRunEvent
 from contracts.schema.stage4 import (
     BlindBookStrategyResponse, BlindCandidate, BlindChapterDesignResponse,
 )
 from novel import paths, prov
-from novel.orchestrator.executor_capabilities import validate_profile
+from novel.llm.providers import validate_legacy_profile as validate_profile
 from novel.llm import session_audit as agent_session_audit
 from novel.llm.model_identity import validate_checkpoint_model_identity
 from novel.llm.session_binding import (
@@ -4747,12 +4747,12 @@ def require_design_repair_recovery_target_clean(ctx: Any) -> None:
     _require_design_repair_recovery_target_identity_clean(ctx, ctx.run_id)
 
 
-def _repair_source_profile(run: Mapping[str, Any], *, purpose: str) -> AgentProfile:
+def _repair_source_profile(run: Mapping[str, Any], *, purpose: str) -> LegacyLlmProfile:
     policy = run.get('request_policy')
     raw = policy.get('profile') if isinstance(policy, dict) else None
     try:
         profile = validate_profile(
-            AgentProfile.model_validate(raw))
+            LegacyLlmProfile.model_validate(raw))
     except (ValidationError, ValueError) as exc:
         raise ProvenanceRefused(
             f'{purpose}: source run 的 executor profile 不可执行：{exc}') from exc
@@ -4949,7 +4949,7 @@ def validate_design_repair_recovery_historical_input(
 def _validate_repair_source_session(
         ctx: Any, *, source_run_id: str, chapter: int | None,
         run: Mapping[str, Any], checkpoint: Mapping[str, Any],
-        profile: AgentProfile,
+        profile: LegacyLlmProfile,
 ) -> None:
     purpose = design_unit_purpose(chapter)
     raw_rows = _strict_jsonl_objects(

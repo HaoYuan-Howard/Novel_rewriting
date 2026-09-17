@@ -50,7 +50,7 @@ _LEGACY_DEFAULT = {
         'reasoning_effort': 'high', 'thinking_mode': 'on'},
 }
 _PIPELINE_PROFILES = {
-    'schema_version': 3,
+    'schema_version': 4,
     'executor_default': _LEGACY_DEFAULT,
     'executor_overrides': {},
 }
@@ -206,10 +206,10 @@ def test_missing_pipeline_profiles_are_closed_while_default_is_null(
 
 
 def test_invalid_executor_profile_combination_is_refused(client):
-    """AGENT_ONLY 豁免清空后：legacy 默认零覆盖合法；混入 agent 覆盖构造期 422。"""
+    """C3：legacy 默认零覆盖合法；agent 覆盖在加载时丢弃，agent default 才 422。"""
     c, _ = client
     legacy_default = {
-        'schema_version': 3,
+        'schema_version': 4,
         'executor_default': {'kind': 'legacy', 'profile': {
             'provider': 'deepseek', 'model': 'deepseek-v4-pro',
             'reasoning_effort': 'high', 'thinking_mode': 'on'}},
@@ -219,15 +219,22 @@ def test_invalid_executor_profile_combination_is_refused(client):
         'sid': '42', 'profiles': legacy_default,
     }, headers=UI)
     assert ok.status_code == 200, ok.text
-    bad = dict(legacy_default, executor_overrides={
+    discarded = dict(legacy_default, executor_overrides={
         'stage6.prepare': {'kind': 'agent', 'profile': dict(_PROFILE)},
     })
+    soft = c.post('/api/agent/runs/preview', json={
+        'sid': '42', 'profiles': discarded,
+    }, headers=UI)
+    assert soft.status_code == 200, soft.text
+    assert soft.json()['profiles']['executor_overrides'] == {}
     response = c.post('/api/agent/runs/preview', json={
-        'sid': '42', 'profiles': bad,
+        'sid': '42', 'profiles': {
+            'schema_version': 4,
+            'executor_default': {'kind': 'agent', 'profile': dict(_PROFILE)},
+            'executor_overrides': {},
+        },
     }, headers=UI)
     assert response.status_code == 422
-    assert '混用模式' in response.text
-    assert 'stage6.prepare' in response.text
 
 
 # ── 启动 / 列表 / 日志 / 熄火闸 ────────────────────────────────────────

@@ -22,11 +22,11 @@ from pydantic import ValidationError
 
 import contracts.judges.stage5  # noqa: F401  # 注册现役 Stage5 判据供 fixture 对账
 from contracts.invariants import (
-    AGENT_EXECUTOR_NODES, APPROVAL_GATES, RETENTION_CANDIDATE_KINDS,
+    LLM_EXECUTOR_NODES, APPROVAL_GATES, RETENTION_CANDIDATE_KINDS,
 )
 from contracts.rules import REGISTRY
 from contracts.schema.api import (
-    AgentCapabilitiesResponse, AgentDriverCapability, AgentModelCapability,
+    AgentCapabilitiesResponse,
     AgentRunRequest, AgentRunList, ApprovalDoc, BlueprintReadingWorkpack,
     CharacterRegistryView, DraftAlignView, DraftView, ErrorBody, GlobalView, NovelOverview,
     JobList, LogChunk, LogStreamEvent, NovelList, PreviewRequest, ReadingView,
@@ -40,7 +40,8 @@ from contracts.schema.api import (
 )
 from contracts.schema.plot import SourceContext
 from contracts.schema.orchestration import (
-    AgentProfile, AgentRunStart, ArtifactState, JobStart, RunProgressView, Step,
+    LegacyExecutorBackend, LegacyLlmProfile,
+    AgentRunStart, ArtifactState, JobStart, RunProgressView, Step,
 )
 from contracts.schema.report import CheckReport
 from contracts.schema.run_metrics import RunMetricsView
@@ -283,10 +284,10 @@ def test_old_job_and_agent_records_keep_missing_profiles_as_unknown():
         authorized=False, egress_authorized=True,
     )
 
-    assert PreviewRequest(sid='old', node='stage0.remove').executor_profile is None
+    assert PreviewRequest(sid='old', node='stage0.remove').executor_backend is None
     assert PreviewRequest(sid='old', node='stage0.remove').egress_authorized is False
     assert AgentRunRequest(sid='old').profiles is None
-    assert step.executor_profile is None and job.executor_profile is None
+    assert step.executor_backend is None and job.executor_backend is None
     assert step.egress_authorized is None and job.egress_authorized is None
     assert agent.profiles is None
 
@@ -318,19 +319,19 @@ def test_artifact_state_invalid_source_fields_are_paired_and_never_leak_to_forma
 
 
 def test_executor_egress_snapshots_distinguish_old_unknown_from_new_bool():
-    profile = AgentProfile(
-        driver='codex', model='gpt-5.6-sol', reasoning_effort='high',
-        execution_mode='standard')
+    profile = LegacyLlmProfile(
+        provider='deepseek', model='deepseek-v4-pro', reasoning_effort='high',
+        thinking_mode='on')
     step_fields = dict(
         argv=['python'], cwd='E:/repo', label='executor', paid=True, writes='artifact')
 
     # Phase2/3 的 append-only 记录没有新格：字段缺席只能读成 unknown，不能倒推。
-    old_step = Step(**step_fields, executor_profile=profile)
+    old_step = Step(**step_fields, executor_backend=LegacyExecutorBackend(profile=profile))
     old_job = JobStart(
         sid='old', node='stage2.global', steps=[old_step], python='3.11', code='old',
-        paid=True, writes=True, executor_profile=profile)
+        paid=True, writes=True, executor_backend=LegacyExecutorBackend(profile=profile))
     assert old_step.executor_backend is not None
-    assert old_step.executor_backend.kind == 'agent'
+    assert old_step.executor_backend.kind == 'legacy'
     assert 'executor_profile' not in old_step.model_dump(mode='json')
     assert old_step.model_dump(mode='json')['executor_backend']['profile'] == \
         profile.model_dump(mode='json')
@@ -342,60 +343,47 @@ def test_executor_egress_snapshots_distinguish_old_unknown_from_new_bool():
     assert old_round_trip.egress_authorized is None
     assert old_round_trip.steps[0].egress_authorized is None
     with pytest.raises(ValidationError, match='不能携带正文外发授权'):
-        Step(**step_fields, executor_profile=None, egress_authorized=False)
+        Step(**step_fields, executor_backend=None, egress_authorized=False)
     with pytest.raises(ValidationError, match='与 argv'):
-        Step(**step_fields, executor_profile=profile, egress_authorized=True)
+        Step(**step_fields, executor_backend=LegacyExecutorBackend(profile=profile), egress_authorized=True)
 
     current_step = Step(
-        **step_fields, executor_profile=profile, egress_authorized=False)
+        **step_fields, executor_backend=LegacyExecutorBackend(profile=profile), egress_authorized=False)
     current_job = JobStart(
         sid='new', node='stage2.global', steps=[current_step], python='3.11', code='new',
-        paid=True, writes=True, executor_profile=profile, egress_authorized=False)
+        paid=True, writes=True, executor_backend=LegacyExecutorBackend(profile=profile), egress_authorized=False)
     assert current_job.egress_authorized is False
     with pytest.raises(ValidationError, match=r'steps\[\] 不一致'):
         JobStart(
             sid='new', node='stage2.global', steps=[current_step],
             python='3.11', code='new', paid=True, writes=True,
-            executor_profile=profile, egress_authorized=True)
+            executor_backend=LegacyExecutorBackend(profile=profile), egress_authorized=True)
 
 
-def test_agent_capability_response_keeps_ids_labels_and_options_separate():
-    model = AgentModelCapability(
-        id='gpt-5.6-sol', label='GPT-5.6 Sol',
-        reasoning_efforts=['none', 'high'], execution_modes=['standard'],
-    )
-    # Commander 角色退役：driver 只承接 executor，``roles`` 不再是发布面，
-    # 多余输入必须被 schema 拒绝而不是静默吞掉。
-    driver = AgentDriverCapability(
-        id='codex', provider='openai', label='Codex',
-        availability='unknown', availability_reason='只做了本机版本探针',
-        models=[model],
-    )
-    with pytest.raises(ValidationError, match='roles'):
-        AgentDriverCapability(
-            id='codex', provider='openai', label='Codex', roles=['executor'],
-            availability='unknown', availability_reason='只做了本机版本探针',
-            models=[model],
-        )
+def test_agent_capability_response_is_legacy_only_and_keeps_ids_labels_separate():
     legacy = LegacyProviderCapability(
         id='deepseek', label='DeepSeek API', models=[LegacyModelCapability(
             id='deepseek-v4-pro', label='DeepSeek V4 Pro',
             thinking_modes=[LegacyThinkingCapability(
                 id='on', label='开启思考', reasoning_efforts=['high'])],
-            executor_nodes=list(AGENT_EXECUTOR_NODES),
+            executor_nodes=list(LLM_EXECUTOR_NODES),
         )],
     )
     response = AgentCapabilitiesResponse(
-        drivers=[driver], legacy_providers=[legacy],
-        executor_nodes=list(AGENT_EXECUTOR_NODES))
+        legacy_providers=[legacy],
+        executor_nodes=list(LLM_EXECUTOR_NODES))
 
-    assert response.drivers[0].models[0].id == 'gpt-5.6-sol'
-    assert response.drivers[0].models[0].label == 'GPT-5.6 Sol'
-    assert response.drivers[0].provider == 'openai'
+    assert response.legacy_providers[0].models[0].id == 'deepseek-v4-pro'
+    assert response.legacy_providers[0].models[0].label == 'DeepSeek V4 Pro'
+    assert not hasattr(response, 'drivers') or 'drivers' not in response.model_fields
     with pytest.raises(ValidationError, match='不得重复'):
         AgentCapabilitiesResponse(
-            drivers=[driver, driver], legacy_providers=[legacy],
-            executor_nodes=list(AGENT_EXECUTOR_NODES))
+            legacy_providers=[legacy, legacy],
+            executor_nodes=list(LLM_EXECUTOR_NODES))
+    with pytest.raises(ValidationError):
+        AgentCapabilitiesResponse(
+            legacy_providers=[legacy],
+            executor_nodes=list(LLM_EXECUTOR_NODES)[:-1])
 
 
 def test_stage0_continuous_view_rejects_a_gap_and_duplicate_ids():

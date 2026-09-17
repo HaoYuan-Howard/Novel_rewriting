@@ -20,7 +20,7 @@ import pytest
 
 from contracts.invariants import NODES
 from contracts.schema.orchestration import (
-    AgentProfile, JobEvent, JobStart, LegacyExecutorBackend, LegacyLlmProfile, Step,
+    JobEvent, JobStart, LegacyExecutorBackend, LegacyLlmProfile, Step,
 )
 from novel import run_identity
 from novel.errors import ApprovalRequired, UnsupportedRunMode
@@ -32,11 +32,7 @@ SID = '7615069877019300633'
 LEGACY_BACKEND = LegacyExecutorBackend(profile=LegacyLlmProfile(
     provider='deepseek', model='deepseek-v4-pro',
     reasoning_effort='high', thinking_mode='on'))
-EXECUTOR_PROFILE = AgentProfile(
-    driver='codex',
-    model='gpt-5.6-sol',
-    reasoning_effort='high',
-)
+EXECUTOR_BACKEND = LEGACY_BACKEND
 
 
 def _executor_flags(node: str, tokens: frozenset[str]) -> list[str]:
@@ -67,7 +63,7 @@ EXECUTOR_RUN_CASES = [
         2 if node in _FOLLOW_CHECK_EXECUTORS else 1,
         id=f'{node}:{"+".join(sorted(tokens)) or "default"}',
     )
-    for node, combinations in N.EXECUTOR_PROFILED_RUNS.items()
+    for node, combinations in N.PROFILED_LLM_RUNS.items()
     for tokens in combinations
 ]
 
@@ -631,21 +627,37 @@ def test_profiled_job_without_egress_approval_never_starts(
 
 
 def test_frozen_steps_cannot_smuggle_an_agent_backend_into_any_node(base):
-    """C2b：agent backend 在解析层已退役；冻结 steps 夹带在任何节点都被拒。"""
-    from novel.errors import RetiredExecutorBackend
+    """C3：Step 契约硬切后不能再构造 agent backend；plan_start 对伪造 steps 也 fail-closed。"""
+    from pydantic import ValidationError
+    from novel.errors import RetiredExecutorBackend, UnsupportedRunMode
 
-    smuggled = Step(
+    with pytest.raises(ValidationError):
+        Step(
+            argv=['python', '-m', 'novel.cli', 'run', 'stage4.context'],
+            cwd='.',
+            label='伪造步骤',
+            paid=True,
+            writes='stage4/writer_context.json',
+            executor_backend={'kind': 'agent', 'profile': {
+                'driver': 'codex', 'model': 'x', 'reasoning_effort': 'high',
+            }},
+        )
+
+    # 即便用 model_construct 绕过 Step 校验，plan_start 仍须拒绝。
+    smuggled = Step.model_construct(
         argv=['python', '-m', 'novel.cli', 'run', 'stage4.context'],
         cwd='.',
         label='伪造步骤',
         paid=True,
         writes='stage4/writer_context.json',
-        executor_profile=EXECUTOR_PROFILE,
+        executor_backend=type('Agentish', (), {
+            'kind': 'agent', 'profile': {},
+        })(),
+        egress_authorized=True,
+        note=None,
     )
-
-    with pytest.raises(RetiredExecutorBackend):
-        J.plan_start(
-            'stage4.context', SID, base=base, steps=[smuggled])
+    with pytest.raises((RetiredExecutorBackend, UnsupportedRunMode, TypeError, ValidationError)):
+        J.plan_start('stage4.context', SID, base=base, steps=[smuggled])
 
 
 # ───────────────────── 真的起一个子进程（那条缝自己验不了自己） ─────────────────────

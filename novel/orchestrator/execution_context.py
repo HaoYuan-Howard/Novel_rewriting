@@ -25,7 +25,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from contracts.schema.orchestration import (
-    AgentExecutorBackend, AgentProfile, AgentRunRecord, AgentRunStart,
+    LegacyLlmProfile, AgentRunRecord, AgentRunStart,
     ExecutionEpoch, ExecutorBackend, PipelineAgentProfiles, RunContractV2,
 )
 from novel import prov, run_identity
@@ -199,12 +199,12 @@ class ExecutionContext:
         return self.profiles.executor_overrides.get(
             node, self.profiles.executor_default)
 
-    def executor_profile(self, node: str) -> AgentProfile:
+    def executor_profile(self, node: str) -> LegacyLlmProfile:
         """旧 operator 测试/调用方投影；legacy backend 必须改走显式方法。"""
         backend = self.executor_backend(node)
-        if not isinstance(backend, AgentExecutorBackend):
+        if not isinstance(backend, LegacyExecutorBackend):
             raise TerminalState(
-                f'{node} 配置的是 legacy executor，不能投影成 AgentProfile')
+                f'{node} 配置的是 legacy executor，不能投影成 LegacyLlmProfile')
         return backend.profile
 
 

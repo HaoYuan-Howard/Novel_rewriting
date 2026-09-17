@@ -45,7 +45,7 @@ from contracts.schema.api import ExecutionPermit, OperatorNext, OperatorNode
 from contracts.schema.orchestration import (
     AgentDeliveryOutcome, AgentPending, AgentQueueView, AgentRejected,
     AgentRunEvent, AgentRunExitOrigin,
-    AgentExecutorBackend, AgentRunRecord, AgentRunStart, RunContinuationSource,
+    AgentRunRecord, AgentRunStart, RunContinuationSource,
     ExecutionEpoch, PipelineAgentProfiles, RunContractV2,
 )
 from novel import paths, prov, run_identity
@@ -1709,7 +1709,7 @@ def _start_planned(plan: AgentRunPlan, *,
         from novel.llm.ledger import CostLedger
         ctx.ledger = CostLedger(path=None, run_id=ctx.run_id, parent_run_id=ctx.parent_run_id)
         backend = plan.profiles.executor_overrides.get(action.node, plan.profiles.executor_default)
-        if isinstance(backend, AgentExecutorBackend):
+        if isinstance(backend, LegacyExecutorBackend):
             ctx.executor_profile = backend.profile
         return producer_requires_new_run(ctx)
 

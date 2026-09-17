@@ -9,7 +9,8 @@ import importlib
 import pytest
 
 from contracts.schema.orchestration import (
-    AgentDeliveryOutcome, AgentProfile, AgentRunEvent, AgentRunStart,
+    AgentDeliveryOutcome, LegacyExecutorBackend, LegacyLlmProfile,
+    AgentRunEvent, AgentRunStart,
     CommanderAdmissionEvent, ExecutionEpoch, PipelineAgentProfiles,
     ProgressEvent, RunContractV2,
 )
@@ -23,13 +24,13 @@ def _started(
         epoch_id='epoch-reconcile-v2', admission_id=None,
         open_admission=True,
 ):
-    profile = AgentProfile(
-        driver='codex', model='gpt-5.6-sol', reasoning_effort='high',
-        execution_mode='standard')
+    backend = LegacyExecutorBackend(profile=LegacyLlmProfile(
+        provider='deepseek', model='deepseek-v4-pro', reasoning_effort='high',
+        thinking_mode='on'))
     profiles = PipelineAgentProfiles(
-        commander=profile, executor_default=profile, executor_overrides={})
+        executor_default=backend, executor_overrides={})
     start = AgentRunStart(
-        sid=sid, base=str(base), argv=['codex', 'exec'], prompt='测试',
+        sid=sid, base=str(base), argv=['python', '-c', 'pass'], prompt='测试',
         authorized=True, egress_authorized=True, code_version='code-v1',
         skill_sha256='1' * 64, profiles=profiles)
     contract = RunContractV2(

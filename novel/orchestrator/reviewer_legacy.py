@@ -43,7 +43,7 @@ from pydantic import TypeAdapter, ValidationError
 from contracts.invariants import REVIEWER_APPROVAL_SURFACES
 from contracts.schema.common import Sha256
 from contracts.schema.orchestration import (
-    AgentProfile, AgentRunRecord, ReviewerSchemaRecoveryProof,
+    LegacyLlmProfile, AgentRunRecord, ReviewerSchemaRecoveryProof,
     ReviewerSeatLedger, ReviewerSeatTurn,
 )
 from novel import paths
@@ -778,7 +778,7 @@ def rejection_stream(
 
 def inspect_rejection(
     base: str, sid: str, *, ledger: ReviewerSeatLedger,
-    parent: AgentRunRecord, log_path: Path, profile: AgentProfile,
+    parent: AgentRunRecord, log_path: Path, profile: LegacyLlmProfile,
     replacement_schema_sha256: str, validation_code_version: str,
     replacement_subject_sha256: str,
 ) -> ReviewerSchemaRecoveryProof | None:
@@ -888,7 +888,7 @@ def inspect_rejection(
 
 def inspect_work_unit_rejection(
     base: str, sid: str, *, budget: Any, parent: AgentRunRecord,
-    log_path: Path, profile: AgentProfile, replacement_schema_sha256: str,
+    log_path: Path, profile: LegacyLlmProfile, replacement_schema_sha256: str,
     validation_code_version: str, replacement_subject_sha256: str,
     source_turn_id: str | None = None,
 ) -> ReviewerSchemaRecoveryProof | None:

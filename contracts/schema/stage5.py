@@ -61,7 +61,7 @@ from contracts.schema.common import (
     Finding, FreeProvenance, HashBoundHumanApproval, LlmProvenance,
     RoundFreeProvenance, RoundLlmProvenance, Sha256,
 )
-from contracts.schema.orchestration import AgentProfile
+from contracts.schema.orchestration import LegacyLlmProfile
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 一、`stage5/chNN.json`
@@ -825,7 +825,7 @@ class PreparedRecoveryChapter(FrozenModel):
     response_schema_sha256: Sha256
     response_model: str = Field(min_length=1)
     requested_output_token_ceiling: int = Field(gt=0)
-    profile: AgentProfile
+    profile: LegacyLlmProfile
     candidate_sha256: Sha256
     touched_paths: tuple[str, ...] = Field(min_length=1)
     source_baselines: dict[str, Sha256 | None]

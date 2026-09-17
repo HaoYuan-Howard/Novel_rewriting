@@ -6385,13 +6385,13 @@ class _PlanRecoveryPool:
 
 def _restore_plan_original_profile(ctx: RunContext) -> None:
     # 同 run 补尾只读取原不可变配置；不使用 settings 或当前默认 profile。
-    from contracts.schema.orchestration import AgentProfile
+    from contracts.schema.orchestration import LegacyLlmProfile
     from novel.llm import run_journal as agent_runs
     path = paths.stage4_run_path(ctx.novel_dir, ctx.run_id, ctx.node) / 'run.json'
     if path.is_file():
         record = agent_runs._read_json(path, label='Stage4B 原配置')
         try:
-            original_profile = AgentProfile.model_validate(record['request_policy']['profile'])
+            original_profile = LegacyLlmProfile.model_validate(record['request_policy']['profile'])
         except (KeyError, TypeError, ValueError) as exc:
             raise ProvenanceRefused('Stage4B 原请求配置损坏；不能使用默认配置代替') from exc
         ctx.executor_profile = original_profile

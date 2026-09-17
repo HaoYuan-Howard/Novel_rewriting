@@ -28,24 +28,24 @@ import pytest
 from pydantic import ValidationError
 
 from contracts.invariants import (
-    AGENT_EXECUTOR_NODES, AGENT_ONLY_EXECUTOR_NODES, AGENT_RUN_EXIT_ORIGINS,
+    LLM_EXECUTOR_NODES, AGENT_RUN_EXIT_ORIGINS,
 )
 from contracts.schema.orchestration import (
-    AgentDeliveryOutcome, AgentProfile, AgentRunEvent, AgentRunRecord, AgentRunStart,
+    AgentDeliveryOutcome, AgentRunEvent, AgentRunRecord, AgentRunStart,
     ExecutionEpoch, LegacyExecutorBackend, LegacyLlmProfile,
     PipelineAgentProfiles, ProgressEvent, RunContractV2, Step,
 )
-from novel.agents import session_audit as agent_session_audit
+from novel.llm import session_audit as agent_session_audit
 from novel.llm import ledger as cost_ledger
 from novel.orchestrator import admission, agent, beacon, jobs
 from novel.orchestrator.jobs import JobConflict
 
-_CODEX = AgentProfile(
-    driver='codex', model='gpt-5.6-sol', reasoning_effort='high',
-    execution_mode='standard')
-_CLAUDE = AgentProfile(
-    driver='claude-code', model='claude-opus-5', reasoning_effort='max',
-    execution_mode='standard')
+_CODEX = LegacyExecutorBackend(profile=LegacyLlmProfile(
+    provider='deepseek', model='deepseek-v4-pro',
+    reasoning_effort='high', thinking_mode='on'))
+_CLAUDE = LegacyExecutorBackend(profile=LegacyLlmProfile(
+    provider='deepseek', model='deepseek-flash',
+    reasoning_effort='high', thinking_mode='on'))
 _LEGACY = LegacyExecutorBackend(profile=LegacyLlmProfile(
     provider='deepseek', model='deepseek-v4-pro',
     reasoning_effort='high', thinking_mode='on'))
@@ -114,7 +114,7 @@ def _legacy_profiles_v2() -> dict:
     """2026-09-15 前合法写入的 v2 形状：schema_version=2 且携带 commander。"""
     return {
         'schema_version': 2,
-        'commander': _CODEX.model_dump(mode='json'),
+        'commander': {'driver': 'codex', 'model': 'gpt-5.6-sol', 'reasoning_effort': 'high'},
         'executor_default': {
             'kind': 'legacy',
             'profile': LegacyLlmProfile(
@@ -122,7 +122,7 @@ def _legacy_profiles_v2() -> dict:
                 reasoning_effort='high', thinking_mode='on').model_dump(mode='json'),
         },
         'executor_overrides': {
-            'stage4.design': {'kind': 'agent', 'profile': _CLAUDE.model_dump(mode='json')},
+            'stage4.design': {'kind': 'agent', 'profile': {'driver': 'codex', 'model': 'x', 'reasoning_effort': 'high'}},
         },
     }
 
@@ -217,18 +217,23 @@ def test_plan_deep_freezes_nested_profile_overrides(base):
     requested.executor_overrides['stage5.write'] = _LEGACY
     frozen = planned.profiles.executor_overrides['stage5.write']
     assert frozen.kind == 'legacy' and frozen.profile.model == 'deepseek-flash'
-    assert planned.profiles.schema_version == 3
+    assert planned.profiles.schema_version == 4
     assert 'commander' not in planned.profiles.model_dump(mode='json')
 
 
 def test_plan_refuses_agent_executor_selection(base):
-    """C2a：纯 agent default 在 plan 层 410；混用 override 在构造期更早拒绝。"""
-    from novel.errors import RetiredExecutorBackend
-    requested = PipelineAgentProfiles(
-        executor_default=_CODEX, executor_overrides={})
-    with pytest.raises(RetiredExecutorBackend):
-        agent.plan(base, '42', authorized=False, egress_authorized=False,
-                   profiles=requested)
+    """C3：agent wire 在 PipelineAgentProfiles 构造期即拒绝，进不了 plan。"""
+    with pytest.raises(ValidationError):
+        PipelineAgentProfiles(
+            executor_default={
+                'kind': 'agent',
+                'profile': {
+                    'driver': 'codex', 'model': 'gpt-5.6-sol',
+                    'reasoning_effort': 'high',
+                },
+            },
+            executor_overrides={},
+        )
 
 
 def test_plan_refuses_missing_profiles_while_preview_remains_zero_cost(base):
@@ -261,32 +266,41 @@ def test_v2_history_rows_fold_to_v3_and_drop_the_commander_key(base):
 
     [rec] = agent.fold(agent.read_events(base))
     assert rec.run_id == 'v2-history'
-    assert rec.start.profiles.schema_version == 3
+    assert rec.start.profiles.schema_version == 4
     assert rec.start.profiles.executor_default.kind == 'legacy'
     assert set(rec.start.profiles.executor_overrides) == {'stage4.design'}
     dumped = rec.start.profiles.model_dump(mode='json')
-    assert 'commander' not in dumped and dumped['schema_version'] == 3
+    assert 'commander' not in dumped and dumped['schema_version'] == 4
     # 原始 append-only 字节不动：历史行的 commander 字段仍在盘上。
     raw = agent.runs_path(base).read_text(encoding='utf-8')
     assert 'commander' in raw
 
 
 def test_new_profile_construction_refuses_the_retired_commander_key(base):
-    """显式 v3 输入携带 commander 是构造错误；legacy 形状才走读入丢弃。"""
-    with pytest.raises(ValidationError, match='commander'):
+    """显式 v4 输入携带 commander / agent default 都是构造错误。"""
+    with pytest.raises(ValidationError):
         PipelineAgentProfiles.model_validate({
-            'schema_version': 3,
-            'commander': _CODEX.model_dump(mode='json'),
-            'executor_default': {'kind': 'agent', 'profile': _CLAUDE.model_dump(mode='json')},
+            'schema_version': 4,
+            'commander': {'driver': 'codex', 'model': 'gpt-5.6-sol', 'reasoning_effort': 'high'},
+            'executor_default': {
+                'kind': 'legacy',
+                'profile': {
+                    'provider': 'deepseek', 'model': 'deepseek-v4-pro',
+                    'reasoning_effort': 'high', 'thinking_mode': 'on',
+                },
+            },
             'executor_overrides': {},
         })
-    # 无 schema_version 的输入按历史行读入：commander 键被丢弃，不再重建角色。
-    folded = PipelineAgentProfiles.model_validate({
-        'commander': _CODEX.model_dump(mode='json'),
-        'executor_default': {'kind': 'agent', 'profile': _CLAUDE.model_dump(mode='json')},
-        'executor_overrides': {}})
-    assert folded.schema_version == 3
-    assert 'commander' not in folded.model_dump(mode='json')
+    # 无 schema_version：读边界丢弃 commander；agent default 仍拒绝。
+    with pytest.raises(ValidationError):
+        PipelineAgentProfiles.model_validate({
+            'commander': {'driver': 'codex', 'model': 'gpt-5.6-sol', 'reasoning_effort': 'high'},
+            'executor_default': {
+                'kind': 'agent',
+                'profile': {'driver': 'codex', 'model': 'x', 'reasoning_effort': 'high'},
+            },
+            'executor_overrides': {},
+        })
 
 
 def test_history_mixed_executor_modes_still_fold_but_new_inputs_stay_refused(base):
@@ -312,30 +326,51 @@ def test_history_mixed_executor_modes_still_fold_but_new_inputs_stay_refused(bas
     assert rec.start.profiles.executor_overrides['stage4.design'].kind == 'agent'
     assert agent.queue_view(base).running == []
 
-    with pytest.raises(ValidationError, match='混用模式'):
-        PipelineAgentProfiles.model_validate(started['profiles'])
+    # C3：非历史重放加载丢弃 agent 覆盖；不再以「混用」文案拒绝。
+    cleaned = PipelineAgentProfiles.model_validate(started['profiles'])
+    assert cleaned.executor_default.kind == 'legacy'
+    assert cleaned.executor_overrides == {}
 
 
 def test_agent_only_exemption_retirement_refuses_mixed_legacy_default_runs(base):
-    """旧豁免形状（legacy 默认 + agent-only 节点 agent 覆盖）显式拒绝。
-
-    2026-09-16 analyze/prepare 直连执行面补齐后 AGENT_ONLY_EXECUTOR_NODES
-    为空集：历史上的「legacy 默认 + prepare agent 覆盖」新构造在 schema
-    构造期即拒绝，豁免不得被悄悄复活；agent 默认下的 legacy 覆盖同样拒绝。
-    """
-    with pytest.raises(ValidationError, match='混用模式'):
-        PipelineAgentProfiles(
-            executor_default=LegacyExecutorBackend(profile=LegacyLlmProfile(
-                provider='deepseek', model='deepseek-v4-pro',
-                reasoning_effort='high', thinking_mode='on')),
-            executor_overrides={'stage6.prepare': _CODEX})
+    """C3：agent 覆盖在加载时丢弃；纯 legacy 覆盖仍合法；agent default 拒绝。"""
+    cleaned = PipelineAgentProfiles.model_validate({
+        'executor_default': {
+            'kind': 'legacy',
+            'profile': {
+                'provider': 'deepseek', 'model': 'deepseek-v4-pro',
+                'reasoning_effort': 'high', 'thinking_mode': 'on',
+            },
+        },
+        'executor_overrides': {
+            'stage6.prepare': {
+                'kind': 'agent',
+                'profile': {
+                    'driver': 'codex', 'model': 'x',
+                    'reasoning_effort': 'high',
+                },
+            },
+        },
+    })
+    assert cleaned.executor_overrides == {}
     with pytest.raises(ValidationError):
-        PipelineAgentProfiles(
-            executor_default=_CLAUDE,
-            executor_overrides={'stage5.write': LegacyExecutorBackend(
-                profile=LegacyLlmProfile(
-                    provider='deepseek', model='deepseek-v4-pro',
-                    reasoning_effort='high', thinking_mode='on'))})
+        PipelineAgentProfiles.model_validate({
+            'executor_default': {
+                'kind': 'agent',
+                'profile': {
+                    'driver': 'codex', 'model': 'x',
+                    'reasoning_effort': 'high',
+                },
+            },
+            'executor_overrides': {},
+        })
+    ok = PipelineAgentProfiles(
+        executor_default=_CLAUDE,
+        executor_overrides={'stage5.write': LegacyExecutorBackend(
+            profile=LegacyLlmProfile(
+                provider='deepseek', model='deepseek-v4-pro',
+                reasoning_effort='high', thinking_mode='on'))})
+    assert ok.executor_overrides['stage5.write'].kind == 'legacy'
 
 
 def test_preview_can_show_unknown_code_but_start_refuses_before_spawn_or_audit(

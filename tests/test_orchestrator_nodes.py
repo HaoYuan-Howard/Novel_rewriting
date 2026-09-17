@@ -17,22 +17,21 @@ import sys
 import pytest
 
 from contracts.invariants import (
-    AGENT_EXECUTOR_NODES, FREE_ENTRIES, NODES, NODE_WRITE_EFFECTS, STAGES,
+    LLM_EXECUTOR_NODES, FREE_ENTRIES, NODES, NODE_WRITE_EFFECTS, STAGES,
     VALUED_FLAGS, WRITE_EFFECTS,
 )
 from contracts.schema.orchestration import (
-    AgentProfile, LegacyExecutorBackend, LegacyLlmProfile,
+    LegacyExecutorBackend, LegacyLlmProfile,
 )
 from novel.errors import UnsupportedRunMode
 from novel.orchestrator import nodes as N
 
 BASE = os.path.join('E:', os.sep, 'somewhere', 'Output')
 SID = '7615069877019300633'
-EXECUTOR_PROFILE = AgentProfile(
-    driver='codex',
-    model='gpt-5.6-sol',
-    reasoning_effort='high',
-)
+EXECUTOR_BACKEND = LegacyExecutorBackend(profile=LegacyLlmProfile(
+    provider='deepseek', model='deepseek-v4-pro',
+    reasoning_effort='high', thinking_mode='on',
+))
 
 CASES = [
     (node, flag) for node, spec in NODES.items() for flag in spec.flags
@@ -126,7 +125,7 @@ EXECUTOR_RUN_CASES = [
         2 if node in _FOLLOW_CHECK_EXECUTORS else 1,
         id=f'{node}:{"+".join(sorted(tokens)) or "default"}',
     )
-    for node, combinations in N.EXECUTOR_PROFILED_RUNS.items()
+    for node, combinations in N.PROFILED_LLM_RUNS.items()
     for tokens in combinations
 ]
 
@@ -140,7 +139,7 @@ UNMIGRATED_EXECUTOR_FLAG_CASES = [
          else _args(flag, node)),
         id=f'{node}:{flag}',
     )
-    for node, combinations in N.EXECUTOR_PROFILED_RUNS.items()
+    for node, combinations in N.PROFILED_LLM_RUNS.items()
     for flag in NODES[node].flags
     if frozenset({flag}) not in combinations
 ]
@@ -389,7 +388,7 @@ def test_stage4_repair_aggregate_recovery_is_one_exact_free_unprofiled_action():
     with pytest.raises(UnsupportedRunMode, match='尚未迁移 flag 组合'):
         N.build_argv(
             'stage4.design', SID, flags, base=BASE,
-            executor_profile=EXECUTOR_PROFILE,
+            executor_backend=EXECUTOR_BACKEND,
         )
 
 
@@ -431,35 +430,36 @@ def test_every_profiled_executor_run_has_one_resolved_argv_and_step_snapshot(
     """11 节点的现役付费组合共用 builder；自动复检永远不继承 agent/egress。"""
     steps = N.build_steps(
         node, SID, flags, base=BASE,
-        executor_profile=EXECUTOR_PROFILE,
+        executor_backend=EXECUTOR_BACKEND,
         egress_authorized=True,
     )
 
     assert len(steps) == step_count
     producer = steps[0]
-    assert producer.executor_profile is not None
-    assert producer.executor_profile.execution_mode == 'standard'
+    assert producer.executor_backend is not None
+    assert producer.executor_backend.kind == 'legacy'
     assert producer.paid is True
     assert producer.argv == N.build_argv(
         node, SID, flags, base=BASE,
-        executor_profile=EXECUTOR_PROFILE,
+        executor_backend=EXECUTOR_BACKEND,
         egress_authorized=True,
     )
-    assert producer.argv[producer.argv.index('--executor-driver') + 1] == \
-        producer.executor_profile.driver
-    assert producer.argv[producer.argv.index('--executor-model') + 1] == \
-        producer.executor_profile.model
-    assert producer.argv[producer.argv.index('--executor-effort') + 1] == \
-        producer.executor_profile.reasoning_effort
-    assert producer.argv[producer.argv.index('--executor-mode') + 1] == \
-        producer.executor_profile.execution_mode
+    assert producer.argv[producer.argv.index('--executor-backend') + 1] == 'legacy'
+    assert producer.argv[producer.argv.index('--legacy-provider') + 1] == \
+        producer.executor_backend.profile.provider
+    assert producer.argv[producer.argv.index('--legacy-model') + 1] == \
+        producer.executor_backend.profile.model
+    assert producer.argv[producer.argv.index('--legacy-effort') + 1] == \
+        producer.executor_backend.profile.reasoning_effort
+    assert producer.argv[producer.argv.index('--legacy-thinking') + 1] == \
+        producer.executor_backend.profile.thinking_mode
     assert '--yes' in producer.argv
     assert producer.egress_authorized is True
     assert '--allow-egress' in producer.argv
 
     if step_count == 2:
         follow = steps[1]
-        assert follow.executor_profile is None
+        assert follow.executor_backend is None
         assert follow.egress_authorized is None
         assert follow.paid is False
         assert follow.argv == N.build_argv(
@@ -474,7 +474,7 @@ def test_every_profiled_executor_run_has_one_resolved_argv_and_step_snapshot(
 def test_profiled_preview_can_freeze_denied_egress_but_cannot_execute_that_argv():
     steps = N.build_steps(
         'stage2.global', SID, base=BASE,
-        executor_profile=EXECUTOR_PROFILE,
+        executor_backend=EXECUTOR_BACKEND,
         egress_authorized=False)
 
     assert steps[0].egress_authorized is False
@@ -485,8 +485,8 @@ def test_executor_egress_must_be_explicit_and_cannot_exist_without_a_profile():
     with pytest.raises(UnsupportedRunMode, match='必须显式给 bool'):
         N.build_steps(
             'stage2.global', SID, base=BASE,
-            executor_profile=EXECUTOR_PROFILE)
-    with pytest.raises(UnsupportedRunMode, match='没有 executor_profile'):
+            executor_backend=EXECUTOR_BACKEND)
+    with pytest.raises(UnsupportedRunMode, match='没有 executor_backend'):
         N.build_steps(
             'stage2.global', SID, base=BASE,
             egress_authorized=True)
@@ -498,59 +498,38 @@ def test_profiled_nodes_refuse_every_unmigrated_single_flag(node, flags):
     with pytest.raises(UnsupportedRunMode, match='尚未迁移 flag 组合'):
         N.build_steps(
             node, SID, flags, base=BASE,
-            executor_profile=EXECUTOR_PROFILE,
+            executor_backend=EXECUTOR_BACKEND,
         )
 
 
 def test_executor_profile_refuses_unmigrated_nodes_and_unknown_capability_pairs():
-    with pytest.raises(UnsupportedRunMode, match='不再接受 executor agent'):
+    with pytest.raises(UnsupportedRunMode, match='不再接受显式 executor'):
         N.build_steps(
             'stage4.context', SID, base=BASE,
-            executor_profile=EXECUTOR_PROFILE,
+            executor_backend=EXECUTOR_BACKEND,
         )
 
-    unknown_model = AgentProfile(
-        driver='codex',
-        model='claude-opus-5',
+    unknown_model = LegacyLlmProfile(
+        provider='deepseek',
+        model='not-a-real-model',
         reasoning_effort='high',
+        thinking_mode='on',
     )
     with pytest.raises(UnsupportedRunMode, match='不可执行'):
         N.build_steps(
             'stage2.global', SID, base=BASE,
-            executor_profile=unknown_model,
+            executor_backend=LegacyExecutorBackend(profile=unknown_model),
         )
 
 
 def test_executor_runtime_registries_close_over_the_same_nodes():
-    """能力公开面、跑法矩阵与真实 factory 缺任何一边都必须响亮地红。"""
-    from novel.orchestrator.node_agents import EXECUTOR_FACTORIES
+    """能力公开面、跑法矩阵缺任何一边都必须响亮地红。"""
+    # stage6.prepare 只由直连 LLM 执行，不进 PROFILED_LLM_RUNS。
+    expected = set(LLM_EXECUTOR_NODES) - {'stage6.prepare'}
+    assert len(expected) == len(N.PROFILED_LLM_RUNS) == 9
+    assert sum(len(rows) for rows in N.PROFILED_LLM_RUNS.values()) == 14
+    assert set(N.PROFILED_LLM_RUNS) == expected
 
-    # 2026-09-16 单 Executor 架构 C1：stage6.prepare 的 agent 生产臂退役，
-    # 现役 agent executor 面从 10 收敛为 9 个节点；prepare 只由直连 LLM 执行。
-    expected = set(AGENT_EXECUTOR_NODES) - {'stage6.prepare'}
-    assert len(expected) == len(N.EXECUTOR_PROFILED_RUNS) == 9
-    # 15 = 现役登记的付费组合总数；stage2 三节点的 `--review-token` 组合
-    # 已随语义审阅退役移除（2026-09）；stage6.semantic 的默认组合已随判官
-    # 节点退役移除（2026-09-15），stage4 的 `--close-review` 组合已随批次
-    # B2 四道闸退役移除，prepare 的默认组合随其 agent 生产臂退役移除。
-    assert sum(len(rows) for rows in N.EXECUTOR_PROFILED_RUNS.values()) == 14
-    assert set(EXECUTOR_FACTORIES) == set(N.EXECUTOR_PROFILED_RUNS) == expected
-
-
-def test_node_agent_result_cannot_silently_green_a_red_report():
-    """报告与 CLI 退出判定是同一事实；`passed` 不得再靠默认值猜。"""
-    from contracts.schema.report import CheckReport
-    from novel.orchestrator.node_agents import NodeAgentResult
-
-    report = CheckReport.model_construct(passed=False)
-    assert inspect.signature(NodeAgentResult).parameters['passed'].default \
-        is inspect.Parameter.empty
-    with pytest.raises(ValueError, match='report.passed 精确一致'):
-        NodeAgentResult(
-            artifact=report, turns=1, passed=True, report=report)
-    with pytest.raises(ValueError, match='必须同时放进 report'):
-        NodeAgentResult(
-            artifact=report, turns=1, passed=False)
 
 
 def test_absent_executor_profile_preserves_the_legacy_argv_shape():
@@ -568,7 +547,7 @@ def test_explicit_legacy_backend_freezes_provider_profile_into_argv_and_step():
         executor_backend=backend, egress_authorized=True)
 
     assert step.executor_backend == backend
-    assert step.executor_profile is None, 'legacy 不得伪装成 AgentProfile'
+    assert step.executor_backend is not None and step.executor_backend.kind == 'legacy'
     assert step.argv[step.argv.index('--executor-backend') + 1] == 'legacy'
     assert step.argv[step.argv.index('--legacy-provider') + 1] == 'deepseek'
     assert step.argv[step.argv.index('--legacy-model') + 1] == 'deepseek-v4-pro'

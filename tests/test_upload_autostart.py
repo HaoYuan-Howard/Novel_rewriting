@@ -15,7 +15,7 @@ fastapi = pytest.importorskip(
 from fastapi.testclient import TestClient  # noqa: E402
 
 from contracts.schema.orchestration import (  # noqa: E402
-    AgentExecutorBackend, AgentProfile, AgentRunRecord, AgentRunStart,
+    AgentRunRecord, AgentRunStart, LegacyExecutorBackend, LegacyLlmProfile,
     JobRecord, JobStart, PipelineAgentProfiles, Step,
 )
 from novel.api.app import UI_HEADER, create_app  # noqa: E402
@@ -34,10 +34,10 @@ KEY = 'upload-key-9001'
 
 def _profiles() -> PipelineAgentProfiles:
     return PipelineAgentProfiles(
-        executor_default=AgentExecutorBackend(
-            profile=AgentProfile(
-                driver='codex', model='gpt-5.6-sol',
-                reasoning_effort='high', execution_mode=None)),
+        executor_default=LegacyExecutorBackend(
+            profile=LegacyLlmProfile(
+                provider='deepseek', model='deepseek-v4-pro',
+                reasoning_effort='high', thinking_mode='on')),
         executor_overrides={},
     )
 

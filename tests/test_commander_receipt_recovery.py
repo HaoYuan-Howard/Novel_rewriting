@@ -3,7 +3,7 @@ from dataclasses import replace
 
 import pytest
 
-from novel.agents import session_audit as audit
+# REMOVED novel.agents import session_audit as audit
 from novel.errors import ProvenanceRefused
 from novel.llm import ledger
 from tests.test_agent_session_audit import _end, _start, _turn

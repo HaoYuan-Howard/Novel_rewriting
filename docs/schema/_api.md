@@ -278,14 +278,14 @@ preview/start 都携相同 `RunContinuationSource` 并由后端复验。运行�
 
 | 模型 | 字段 | 约束 |
 |---|---|---|
-| `AgentCapabilitiesResponse` | `drivers[]` · `legacy_providers[]` · `executor_nodes[]` · `legacy_model_pins{node: model}` · `default_profiles` | `executor_nodes` 按 `AGENT_EXECUTOR_NODES` 完整有序发布，前端不维护第二份节点表。`legacy_model_pins` 发布产品契约钉死的 legacy 模型（`NODES[node].model`，质量裁决）：钉死的是**模型**不是 agent/legacy 模式，被钉节点在 legacy 下经覆盖选该模型即可纯 legacy 整跑；键⊆executor 节点，值必须是已发布的 legacy 模型 id。legacy 模型的 `executor_nodes[]` 覆盖全部现役 executor 节点（2026-09-16 起 `AGENT_ONLY_EXECUTOR_NODES` 为空集，不再有「必须配 agent 覆盖」的节点），前端从「executor 节点减 legacy 承接面」派生，不另抄清单。`default_profiles` 是经整书验收后才可发布的产品预置配置，不是 backend 模式选择器；当前明确为 `null`，不能取任一数组首项猜 |
+| `AgentCapabilitiesResponse` | `legacy_providers[]` · `executor_nodes[]` · `legacy_model_pins{node: model}` · `default_profiles` | `executor_nodes` 按 `LLM_EXECUTOR_NODES` 完整有序发布，前端不维护第二份节点表。`legacy_model_pins` 发布产品契约钉死的 legacy 模型（`NODES[node].model`，质量裁决）：钉死的是**模型**不是 agent/legacy 模式，被钉节点在 legacy 下经覆盖选该模型即可纯 legacy 整跑；键⊆executor 节点，值必须是已发布的 legacy 模型 id。legacy 模型的 `executor_nodes[]` 覆盖全部现役 executor 节点（2026-09-16 起 `AGENT_ONLY_EXECUTOR_NODES` 为空集，不再有「必须配 agent 覆盖」的节点），前端从「executor 节点减 legacy 承接面」派生，不另抄清单。`default_profiles` 是经整书验收后才可发布的产品预置配置，不是 backend 模式选择器；当前明确为 `null`，不能取任一数组首项猜 |
 | `AgentDriverCapability` | `id` · `provider` · `label` · `availability` · `availability_reason` · `version` · `models[]` | `id` 是可执行 driver 身份，`provider` 只是供应商元数据，`label` 只展示。可用性四态为 `ready / missing / unknown / unauthenticated`；Commander 角色退役（2026-09-15）后 driver 只承接 executor，`roles` 字段随角色概念删除 |
 | `AgentModelCapability` | `id` · `label` · `reasoning_efforts[]` · `execution_modes[]` | 精确 `id` 进入 argv/审计，label 可改；effort 与 execution mode 正交，只能提交该 model 实际发布的组合 |
 | `AgentProfile` | `driver` · `model` · `reasoning_effort` · `execution_mode` | schema 只承载选择；driver/model/effort/mode 的组合由同一个 capability registry 关闭式校验，客户端不得自造笛卡尔积 |
 | `LegacyProviderCapability` | `id` · `label` · `models[]` | 直接 LLM API adapter 的稳定身份；当前只发布 DeepSeek，模型能力里继续给出 thinking/effort 与精确 `executor_nodes[]`，前端不得按模型名猜节点适用面 |
 | `LegacyLlmProfile` | `provider` · `model` · `reasoning_effort` · `thinking_mode` | 只保存改变模型行为的稳定选择，不保存 API key、base URL、代理、超时或缓存目录 |
-| `ExecutorBackend` | `{kind:'agent',profile:AgentProfile}` 或 `{kind:'legacy',profile:LegacyLlmProfile}` | `kind` 是唯一模式选择器；两套 profile 不得混搭，运行中也不得自动降级到另一种 backend |
-| `PipelineAgentProfiles` | `schema_version=3` · `executor_default` · `executor_overrides{node: backend}` · `concurrency` | 默认 executor 和逐节点覆盖使用 `ExecutorBackend`。override 键只接受响应中的 executor 节点，值的 `kind` 必须与 `executor_default` 一致——一次选择内 executor 只允许一种模式。v1/v2 行的 `commander` 字段在读边界丢弃，原始账字节不动 |
+| `ExecutorBackend` | `{kind:'legacy',profile:LegacyLlmProfile}` | C3 起唯一现役 backend；`kind=agent` 由 retired_formats 关闭式拒绝 |
+| `PipelineAgentProfiles` | `schema_version=4` · `executor_default` · `executor_overrides{node: backend}` · `concurrency` | 仅 legacy。override 键∈`LLM_EXECUTOR_NODES`。加载 v1–v3 丢弃 commander 与 agent 条目 |
 | `PipelineConcurrency` | `node_overrides{node: int}` · `per_book` · `per_provider` | `PipelineAgentProfiles.concurrency` 的可选精确配置；随常用配置、preview/start、batch 与原配置续跑保留。缺失时省略序列化，不改写旧身份 |
 | `PipelineConcurrencyCapability` | `nodes[]` · `node_choices[]` · `default_node` · `defaults` · `total_min` · `total_max` · `scope` | `AgentCapabilitiesResponse.concurrency` 发布的唯一选择面；当前总槽作用域为同一输出根。界面不复制节点、档位和数值边界 |
 
@@ -316,7 +316,7 @@ API key、CLI 登录态、base URL、代理、付费授权、正文外发
 公开响应和新请求不再发旧字段。独立旧 CLI/客户端省略 backend 的 DeepSeek 路只作兼容，新 AgentRun、
 设置页和新 preview/start 都不得靠字段缺失猜 Legacy。
 
-Agent backend 的合法节点与 flags 唯一登记于 `novel/orchestrator/nodes.py::EXECUTOR_PROFILED_RUNS`，
+Agent backend 的合法节点与 flags 唯一登记于 `novel/orchestrator/nodes.py::PROFILED_LLM_RUNS`，
 API capability 从同一登记派生；本文件不复制能力矩阵。
 
 各 producer 固定 typed 完整 replacement；
@@ -407,7 +407,7 @@ parent/epoch 与 session 只用于关联，不从日志文字或时间接近补�
 请求外壳是 strict，任何旧 `mode` 键都返回 422；老
 `jobs.jsonl` 的兼容解码只在服务内部磁盘边界发生，不进入本请求或公开响应模型。
 旧客户端提交 `executor_profile` 时只无损迁移成 `kind=agent`，新响应不再发旧字段。Agent variant 只允许
-`novel/orchestrator/nodes.py::EXECUTOR_PROFILED_RUNS` 的登记组合；Legacy variant 按 provider/model/node 能力表关闭式
+`novel/orchestrator/nodes.py::PROFILED_LLM_RUNS` 的登记组合；Legacy variant 按 provider/model/node 能力表关闭式
 校验。自动追跑的 `--check-only` Step 不继承 backend。非空 backend 必须显式携带 bool egress：false
 允许预览但真启动返回 `ApprovalRequired`，true 才进入 argv；无 backend 时 false 归一成响应快照
 `null`，true 拒绝。
