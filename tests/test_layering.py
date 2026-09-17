@@ -209,7 +209,7 @@ _JSON_READ_ALLOWED = {
         '（拒绝重复键）与 _service 公开协议日志的完整失败信封，供存量书'
         '只读解码与 owner 停止证明；不读取盘上小说产物，不形成 provenance 输入'),
     'novel/work_units.py': '只读 _service 工作单元账和已保存响应，不读小说产物。',
-    'novel/stages/stage2/analyze_recovery.py': (
+    'novel/stages/stage2/analyze/recovery.py': (
         'legacy Analyze 的免费恢复只解码自己的 sidecar（stage2/analyze_legacy_checkpoint.json）、'
         '书级 ledger 行与 work_units recovery 证明；不读 canonical 小说产物，'
         '人物/Global 产物仍经 ArtifactStore 读取'),
@@ -291,7 +291,7 @@ _JSON_READ_ALLOWED = {
     'novel/stages/stage2/blueprint/repair.py': (
         '只解码内存章节请求 metadata 来附 baseline_identities；'
         '修前蓝图、原文和修订模板均已通过 ArtifactStore/typed 路径读取，不打开盘上 JSON'),
-    'novel/stages/stage2/analyze.py': (
+    'novel/stages/stage2/analyze/purchase.py': (
         '只把 SessionAgentClient 已验证来源的内存 normalized_text 解码为原回答修复候选；'
         '这是已购模型 stdout 的格式诊断，不裸读正式产物；编译、证据、来源与正式写盘仍走 Store'),
     'novel/stages/stage2/extract.py': (
@@ -358,7 +358,7 @@ _WRITE_ALLOWED = {
         '写前校验代码与 permit、执行期还需有效 claim，既有不同字节拒绝覆盖。'
         '该导出不是小说产物、费用账或授权来源；小说修改仍由受控 CLI 经 Store 完成'),
     'novel/work_units.py': '只写 _service 运行预算、内容寻址回答和恢复证明，不写小说产物。',
-    'novel/stages/stage2/analyze.py': (
+    'novel/stages/stage2/analyze/purchase.py': (
         'legacy Analyze 的已购回答 sidecar（stage2/analyze_legacy_checkpoint.json）'
         '是免费恢复的唯一耐久面，与回执同事务落盘；不写 canonical 小说产物'),
     'novel/stages/stage6/prepare.py': (
@@ -838,10 +838,11 @@ _CROSS_STAGE_DEEP_GRANDFATHER = frozenset({
     ('novel/api/errors.py', 'novel.stages.stage4.plot_refs'),
     ('novel/api/routes/edits.py', 'novel.stages.stage2.extract'),
     ('novel/api/routes/edits.py', 'novel.stages.stage2.blueprint'),
+    ('novel/cli/main.py', 'novel.stages.stage2.analyze'),
     ('novel/cli/main.py', 'novel.stages.stage2.blueprint.edit'),
     ('novel/llm/client.py', 'novel.stages.stage2.blueprint.recovery_policy'),
     ('novel/llm/stage2_global_runs.py', 'novel.stages.stage2.analyze'),
-    ('novel/llm/stage2_global_runs.py', 'novel.stages.stage2.analyze_draft_recovery'),
+    ('novel/llm/stage2_global_runs.py', 'novel.stages.stage2.analyze.draft_recovery'),
     ('novel/llm/stage2_runs.py', 'novel.stages.stage2.blueprint'),
     ('novel/llm/stage4_runs.py', 'novel.stages.stage4.design_rebuild'),
     ('novel/llm/stage4_runs.py', 'novel.stages.stage4.plot_design'),
@@ -861,6 +862,8 @@ _CROSS_STAGE_DEEP_GRANDFATHER = frozenset({
     ('novel/orchestrator/approvals.py', 'novel.stages.stage7.rename'),
     # ('novel/orchestrator/queue.py', 'novel.stages.stage0.eligibility'):
     # stage0.approve 人工闸退役（2026-09-15）后 queue 不再读 eligibility。
+    ('novel/orchestrator/inspection.py', 'novel.stages.stage2.analyze'),
+    ('novel/orchestrator/queue.py', 'novel.stages.stage2.analyze'),
     ('novel/orchestrator/queue.py', 'novel.stages.stage2.blueprint.diagnostics'),
     ('novel/orchestrator/queue.py', 'novel.stages.stage4.phase_state'),
     ('novel/orchestrator/state.py', 'novel.stages.stage2.character_rebind'),
@@ -890,7 +893,7 @@ _CROSS_STAGE_DEEP_GRANDFATHER = frozenset({
     ('novel/views/blueprint_progress.py', 'novel.stages.stage2.blueprint.inputs'),
     ('novel/views/ingest.py', 'novel.stages.stage0.eligibility'),
     ('novel/views/ingest.py', 'novel.stages.stage1.audit'),
-    ('novel/views/stage2.py', 'novel.stages.stage2.analyze_draft_recovery'),
+    ('novel/views/stage2.py', 'novel.stages.stage2.analyze.draft_recovery'),
     ('novel/views/stage2.py', 'novel.stages.stage2.core_evidence'),
     ('novel/views/stage4.py', 'novel.stages.stage2.grounding'),
     ('novel/views/stage4.py', 'novel.stages.stage4.beats'),
@@ -961,7 +964,8 @@ def test_cross_stage_imports_stay_on_the_package_surface():
     # workpack 退役一并消失，分母 67→66；C3 删 agents/node_agents 再消化 2 条，66→64。
     # STR-02 Stage2 blueprint/shared 路径更名：显式登记既有 llm/client、views、
     # stage2_runs、edits→blueprint 深边，分母 64→68。
-    assert len(_CROSS_STAGE_DEEP_GRANDFATHER) == 68
+    # STR-03 analyze 包迁入：cli/inspection/queue → analyze 包深边，68→71。
+    assert len(_CROSS_STAGE_DEEP_GRANDFATHER) == 71
 
 
 

@@ -47,6 +47,12 @@ stage2/
 
 ## 现役公开面（批次演进中）
 
-权威包路径随绞杀更新；过渡期旧模块名可为薄 re-export shim，删除条件见
+| Owner | 权威 path |
+|---|---|
+| blueprint | `novel/stages/stage2/blueprint/` |
+| analyze | `novel/stages/stage2/analyze/`（`purchase` / `recovery` / `draft_recovery`） |
+| shared | `novel/stages/stage2/shared/`（`paragraphs` / `character_refs`） |
+
+过渡期旧模块名可为薄 re-export shim，删除条件见
 `docs/REQUIREMENTS.md` adapter 表。下游跨 Stage 应优先消费正式 artifact 与登记投影，
 禁止依赖 semantic / recovery 中间态（S2-1）。

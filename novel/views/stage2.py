@@ -90,7 +90,7 @@ def character_registry_view(base: str | os.PathLike[str], sid: str) -> Character
 
 def analyze_draft_view(base: str | os.PathLike[str], sid: str, owner: str) -> AnalyzeDraftView:
     """编译前候选只由其 producer 证明来源，不借正式人物/知识视图伪造状态。"""
-    from novel.stages.stage2.analyze_draft_recovery import workpack
+    from novel.stages.stage2.analyze.draft_recovery import workpack
     return AnalyzeDraftView(sid=sid, **workpack(base, sid, owner))
 
 

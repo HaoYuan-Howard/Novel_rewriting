@@ -22,7 +22,7 @@ from tests.test_stage2_analyze import _awaiting_global, _ctx
 
 def test_fixed_characters_route_saved_global_draft_to_free_recovery(tmp_path):
     """人物侧已修复时，队列把 saved Global 草稿指向免费 --recover-analyze。"""
-    from novel.stages.stage2 import analyze_recovery
+    from novel.stages.stage2.analyze import recovery as analyze_recovery
     ctx = _ctx(tmp_path)
     free = _awaiting_global(ctx)
     ledger = ctx.ledger.path.read_bytes()

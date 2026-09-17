@@ -17,7 +17,9 @@ from novel import paths
 from novel.cli.main import _run_stage2
 from novel.errors import GateBlocked, ProvenanceRefused, TerminalState
 from novel.orchestrator import nodes
-from novel.stages.stage2 import analyze, analyze_draft_recovery as recovery, analyze_recovery, characters
+from novel.stages.stage2 import analyze, characters
+from novel.stages.stage2.analyze import draft_recovery as recovery
+from novel.stages.stage2.analyze import recovery as analyze_recovery
 from novel.store import ArtifactStore
 from tests.test_stage2_analyze import _ctx, _generate, _response
 from tests.test_stage2_global_agent import _free_ctx

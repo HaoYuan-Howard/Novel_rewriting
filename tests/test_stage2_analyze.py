@@ -124,7 +124,7 @@ def test_joint_first_call_creates_two_independent_products_and_single_cost(tmp_p
 
 
 def test_repaired_characters_materialize_original_global_draft_without_new_cost(tmp_path):
-    from novel.stages.stage2 import analyze_recovery
+    from novel.stages.stage2.analyze import recovery as analyze_recovery
 
     ctx = _ctx(tmp_path)
     target = _awaiting_global(ctx)
@@ -150,7 +150,8 @@ def test_repaired_characters_materialize_original_global_draft_without_new_cost(
 def test_global_draft_recovery_prepared_windows_are_free_and_block_other_owner(
         tmp_path, monkeypatch, window):
     from contracts.schema.analyze_recovery import AnalyzeRecoveryJournal
-    from novel.stages.stage2 import analyze_recovery, characters
+    from novel.stages.stage2.analyze import recovery as analyze_recovery
+    from novel.stages.stage2 import characters
 
     ctx = _ctx(tmp_path)
     target = _awaiting_global(ctx)
@@ -186,7 +187,8 @@ def test_global_draft_recovery_prepared_windows_are_free_and_block_other_owner(
 
 def test_original_global_draft_never_guesses_deleted_character_mapping(tmp_path):
     from contracts.schema.characters import CharactersEdit
-    from novel.stages.stage2 import analyze_recovery, characters
+    from novel.stages.stage2.analyze import recovery as analyze_recovery
+    from novel.stages.stage2 import characters
 
     ctx = _ctx(tmp_path)
     target = _awaiting_global(ctx)
@@ -213,7 +215,7 @@ def test_original_global_draft_never_guesses_deleted_character_mapping(tmp_path)
 
 
 def test_original_global_draft_hard_is_saved_once_for_independent_free_edit(tmp_path):
-    from novel.stages.stage2 import analyze_recovery
+    from novel.stages.stage2.analyze import recovery as analyze_recovery
 
     ctx = _ctx(tmp_path)
     target = _awaiting_global(ctx, revealed_from=99)
@@ -314,7 +316,7 @@ def test_missing_formal_files_with_prior_run_never_start_joint_call(tmp_path):
 
 
 def test_sidecar_tamper_closes_free_global_draft_recovery(tmp_path):
-    from novel.stages.stage2 import analyze_recovery
+    from novel.stages.stage2.analyze import recovery as analyze_recovery
 
     ctx = _ctx(tmp_path)
     target = _awaiting_global(ctx)

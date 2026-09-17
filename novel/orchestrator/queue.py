@@ -251,7 +251,11 @@ def analyze_initial_recovery_surface(base, sid: str, source_run: str, *, code: s
 
 def stage2_core_recovery_item(base, sid: str, *, code: str | None = None) -> QueueItem | None:
     """先完成已保存的恢复事实；部分提交不能被重新抽取遮蔽。"""
-    from novel.stages.stage2 import analyze, analyze_draft_recovery, analyze_recovery
+    from novel.stages.stage2 import analyze
+    from novel.stages.stage2.analyze import (
+        draft_recovery as analyze_draft_recovery,
+        recovery as analyze_recovery,
+    )
     book = paths.find_novel_dir(base, sid)
     if book is None:
         return None

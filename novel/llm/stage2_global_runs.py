@@ -163,7 +163,7 @@ def _refuse_commit_reservations(
         ctx: Any, *, include_current: bool,
 ) -> None:
     _require_ownership(ctx)
-    from novel.stages.stage2.analyze_draft_recovery import refuse_pending
+    from novel.stages.stage2.analyze.draft_recovery import refuse_pending
     refuse_pending(ctx.novel_dir)
     from novel.stages.stage2.analyze import refuse_pending_analysis
     refuse_pending_analysis(ctx.novel_dir,

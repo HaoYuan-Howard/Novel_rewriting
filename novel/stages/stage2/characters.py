@@ -79,13 +79,13 @@ _LOCKS_GUARD = threading.Lock()
 @contextmanager
 def ownership(ctx: RunContext, *, allow_current: bool = False,
               allow_analysis_recovery: bool = False) -> Iterator[None]:
-    from novel.stages.stage2.analyze_draft_recovery import refuse_pending
+    from novel.stages.stage2.analyze.draft_recovery import refuse_pending
     refuse_pending(ctx.novel_dir)
     from novel.stages.stage2.analyze import refuse_pending_analysis
     refuse_pending_analysis(ctx.novel_dir,
                             allow_run_id=ctx.run_id if ctx.node == 'stage2.analyze' else None)
     if not allow_analysis_recovery:
-        from novel.stages.stage2.analyze_recovery import refuse_pending_recovery
+        from novel.stages.stage2.analyze.recovery import refuse_pending_recovery
         refuse_pending_recovery(ctx.novel_dir)
     lock_path = paths.stage2_characters_commit_lock_path(ctx.novel_dir)
     key = str(lock_path.resolve()).casefold()

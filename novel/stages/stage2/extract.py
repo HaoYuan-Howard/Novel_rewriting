@@ -976,7 +976,7 @@ def ensure_global_agent_run(
     # foreign prepared 代表另一 run 已写正式 bundle、只差 adoption/committed 尾窗。
     # 必须在任何 provider turn 前拒绝新 run，不能先花钱再到 finalize 才发现所有权冲突。
     with stage2_global_runs.commit_ownership(ctx.novel_dir):
-        from novel.stages.stage2.analyze_recovery import refuse_pending_recovery
+        from novel.stages.stage2.analyze.recovery import refuse_pending_recovery
         refuse_pending_recovery(ctx.novel_dir)
         stage2_global_runs.refuse_foreign_commit_reservations(ctx)
     stage2_global_runs.ensure_run(
@@ -1799,7 +1799,7 @@ def _write_formal(
 ) -> None:
     """提交正式产物；审阅已退役，失败/提交 sidecar 与 formal 同一写回集合。"""
     if rel == GLOBAL_REL:
-        from novel.stages.stage2.analyze_recovery import refuse_pending_recovery
+        from novel.stages.stage2.analyze.recovery import refuse_pending_recovery
         refuse_pending_recovery(store.ctx.novel_dir)
     if rel == GLOBAL_REL and store.exists(GLOBAL_EDIT_INPUT_COMMIT):
         raise ProvenanceRefused(
@@ -1850,7 +1850,7 @@ def _write_invalid(
 ) -> str:
     """保存失败候选并保留前稿；付费草稿不能被其他owner覆盖。"""
     if rel == GLOBAL_REL:
-        from novel.stages.stage2.analyze_recovery import refuse_pending_recovery
+        from novel.stages.stage2.analyze.recovery import refuse_pending_recovery
         refuse_pending_recovery(store.ctx.novel_dir)
     if rel != GLOBAL_REL:
         return str(store.write_invalid(rel, artifact, gates_skipped=[]))

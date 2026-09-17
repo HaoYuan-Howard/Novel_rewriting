@@ -677,7 +677,7 @@ def _run_stage2(ctx: RunContext, flags: list[str]) -> int:
         from contracts.artifacts import STAGE2_ANALYZE_OWNER_DRAFT_EDIT
         from contracts.schema import encode_artifact
         from contracts.schema.analyze_draft import AnalyzeOwnerDraftEdit
-        from novel.stages.stage2 import analyze_draft_recovery
+        from novel.stages.stage2.analyze import draft_recovery as analyze_draft_recovery
         if '--emit-analyze-draft-template' in tokens:
             print(json.dumps(encode_artifact(STAGE2_ANALYZE_OWNER_DRAFT_EDIT,
                 analyze_draft_recovery.edit_template(ctx)), ensure_ascii=False, indent=2))
@@ -695,7 +695,7 @@ def _run_stage2(ctx: RunContext, flags: list[str]) -> int:
     if ctx.node == 'stage2.analyze':
         from novel.stages.stage2 import analyze
         if '--recover-analyze-run' in tokens:
-            from novel.stages.stage2 import analyze_recovery
+            from novel.stages.stage2.analyze import recovery as analyze_recovery
             analyze_recovery.recover_initial(ctx, _valued(flags, '--recover-analyze-run') or '')
             print('  ✓ 已按原冻结目标补齐共享首抽提交（0 模型）')
             return X.OK
@@ -745,7 +745,7 @@ def _run_stage2(ctx: RunContext, flags: list[str]) -> int:
 
     if ctx.node == 'stage2.global':
         if '--recover-analyze' in tokens:
-            from novel.stages.stage2 import analyze_recovery
+            from novel.stages.stage2.analyze import recovery as analyze_recovery
             analyze_recovery.recover(ctx)
             print('  ✓ 已从原共享首抽回答免费物化 Global')
             return X.OK

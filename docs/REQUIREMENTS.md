@@ -59,7 +59,7 @@ ledger 成本权威。改变产品语义前须用户裁决，并同步 BACKEND_C
 |---|---|---|---|
 | stage0 | 未开始 | — | — |
 | stage1 | 未开始 | — | — |
-| stage2（analyze / characters / global / blueprint） | blueprint 权威；其余未开始 | `novel/stages/stage2/blueprint/`、`shared/{paragraphs,character_refs}` | 见 adapter 表 STR-02 shim |
+| stage2（analyze / characters / global / blueprint） | blueprint + analyze 权威；characters/global 未开始 | `blueprint/`、`analyze/`、`shared/{paragraphs,character_refs}` | 见 adapter 表 |
 | stage4（design / plan / context） | 未开始 | — | — |
 | stage5（write / review） | 未开始 | — | — |
 | stage6（prepare / hook / approve） | 未开始 | — | — |
@@ -87,6 +87,7 @@ ledger 成本权威。改变产品语义前须用户裁决，并同步 BACKEND_C
 |---|---|---|---|
 | `novel/stages/stage2/plot_*.py`、`contract.py`、`run_state.py`（薄 re-export → `blueprint/`） | 过渡期测试与未改完的深 import | 消费者清零；`test_layering` 不再允许旧路径；定向 plot/blueprint 测试改权威 import | stage2 批次 5（拆 extract 同批） |
 | `novel/stages/stage2/paragraphs.py`、`character_refs.py`（薄 re-export → `shared/`） | 同上 | 同上 | stage2 批次 5 |
+| `novel/stages/stage2/analyze_recovery.py`、`analyze_draft_recovery.py`（薄 re-export → `analyze/`） | 过渡期 CLI/测试 | 消费者清零后删除 | stage2 批次 5 |
 
 ## 条目生命周期
 

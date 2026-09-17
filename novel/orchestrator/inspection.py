@@ -233,7 +233,8 @@ def read_surface_seal(
         digest.update(approval_head)
     else:
         digest.update(b'approval-head\0missing')
-    from novel.stages.stage2 import analyze, analyze_draft_recovery
+    from novel.stages.stage2 import analyze
+    from novel.stages.stage2.analyze import draft_recovery as analyze_draft_recovery
     for path in analyze_draft_recovery.source_paths(novel_dir, code=code):
         if path.exists():
             _update_entry(digest, base_path, path)

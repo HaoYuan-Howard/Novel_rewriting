@@ -94,7 +94,7 @@ def test_uncompilable_owner_draft_blocks_paid_dispatch_and_offers_free_template(
 def test_prepared_owner_draft_dispatch_binds_exact_journal_and_never_buys_again(
         tmp_path, monkeypatch):
     from contracts.schema.analyze_draft import AnalyzeOwnerDraftEdit
-    from novel.stages.stage2 import analyze_draft_recovery
+    from novel.stages.stage2.analyze import draft_recovery as analyze_draft_recovery
     from novel.store import ArtifactStore
 
     ctx = _ctx(tmp_path)
