@@ -34,7 +34,10 @@ Continuity Pass 已落地：首次 blueprint 章并发 + compile 期 0-LLM 缝�
 `stage4_ready` 机械准入 ok（语义 unver 仅披露）。Stage4A 盲投影已允许空 surfaces
 （第一人称未揭示登记名）；同拍 ended 幂等；同 surfaces 多绑定取最早。
 Stage4 design/plan/context 与 Stage5 11 章写稿已在 Flash 路径落盘（章级 length
-抬 ceiling + 第一人称空 surfaces）；下一步 `stage6.prepare`/`hook` 真跑与 Stage7。
+抬 ceiling + 第一人称空 surfaces）；`stage6.prepare`/`hook` 与 `stage7.rename`/
+`assemble` 已在 `fujun_extract` 贯通：prepare 免费补提交已购回答、hook auto c1、
+rename auto seal、成书 `stage7/夫君的报恩_rewriting.txt`（约 1 万字 / 11 章）已导出。
+工程过程通过不等于 Gate B/C 真书质量验收或 golden set。
 产品 UI 一点开始即双授权（CLI 保留 `--yes`）。
 
 ## P0 · 当前工程实施
