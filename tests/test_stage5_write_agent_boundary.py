@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Stage5 每章 executor 的纯候选/同 session/拒稿边界；全程零真实模型。"""
+"""Stage5 直连逐章候选、拒稿与提交边界；全程零真实模型。"""
 from __future__ import annotations
 
 import json
-from contextlib import contextmanager, nullcontext
+from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from contracts.schema.report import finding
+from novel.errors import ProvenanceRefused
+from novel.llm.client import LlmClient
 from novel.stages.stage5 import write
 
 
@@ -77,8 +79,6 @@ class _Source:
         self.attempt = 'attempt-0'
         self.actual_model = 'actual-model'
         self.request_fp = 'f' * 64
-        self.queue_results = []
-        self.restored_turn = 0
 
     def ask_json(self, system, user, **kwargs):
         self.calls.append((system, user, dict(kwargs)))
@@ -98,58 +98,34 @@ class _Source:
     def accepted_request_fingerprint(self, _purpose):
         return self.request_fp
 
-    def accepted_checkpoint(self, _purpose):
-        return {
-            'request_fingerprint': self.request_fp,
-            'accepted_turn_index': max(
-                1, self.restored_turn + len(self.calls)),
-        }
-
-    def restore_checkpoint_acceptance(self, _purpose, record, **_kwargs):
-        self.attempt = str(record['attempt_id'])
-        self.actual_model = str(record['model'])
-        self.request_fp = str(record['request_fingerprint'])
-        self.restored_turn = int(record['accepted_turn_index'])
-
-    def queue_code_validation_feedback(self, rows, *, purpose=None):
-        self.feedback.append((purpose, list(rows)))
-        return self.queue_results.pop(0) if self.queue_results else False
-
-    def queue_restored_code_validation_feedback(self, rows, *, purpose=None):
-        self.feedback.append((purpose, list(rows)))
-        return self.queue_results.pop(0) if self.queue_results else False
-
-    def purpose_can_resume(self, _purpose):
-        return self.restored_turn + len(self.calls) < 4
-
-    def purpose_driver_failed(self, _purpose):
-        return False
-
-    def finish_chapter_session(self, _chapter, *, outcome):
-        assert outcome in {
-            'delivered', 'blocked', 'response_failed',
-            'artifact_failed', 'executor_failed',
-        }
-
-    def prepare_initial_sessions(self, _chapters):
-        return None
-
-
-def _patch_agent_run_boundary(monkeypatch):
-    checkpoints = []
-    monkeypatch.setattr(write.stage5_runs, 'ensure_run', lambda *_args, **_kwargs: {})
-    monkeypatch.setattr(
-        write.stage5_runs, 'restore_checkpoint', lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(
-        write.stage5_runs, 'write_checkpoint',
-        lambda *_args, **kwargs: checkpoints.append(dict(kwargs)))
-    return checkpoints
-
-
 def _identity_normalization(monkeypatch):
     monkeypatch.setattr(
         write, '_normalize_segments',
         lambda segments, _book: (segments, write.M.NormalizeAccount()))
+
+
+def test_paid_entry_refuses_agent_profile_before_wire(tmp_path):
+    ctx = SimpleNamespace(
+        novel_dir=tmp_path / 'book', run_id='run-profile',
+        executor_profile=object())
+
+    with pytest.raises(ProvenanceRefused, match='不能接管 agent profile'):
+        write._require_direct_llm_entry(ctx, object.__new__(LlmClient))
+
+
+@pytest.mark.parametrize('legacy', [False, True])
+def test_paid_entry_refuses_current_run_agent_directory(tmp_path, legacy):
+    book = tmp_path / 'book'
+    root = (
+        write.paths.legacy_stage_runs_dir(book, 'stage5')
+        if legacy else write.paths.service_stage_runs_dir(book, 'stage5')
+    )
+    (root / 'run-agent' / 'ch01').mkdir(parents=True)
+    ctx = SimpleNamespace(
+        novel_dir=book, run_id='run-agent', executor_profile=None)
+
+    with pytest.raises(ProvenanceRefused, match='已有 agent 状态'):
+        write._require_direct_llm_entry(ctx, object.__new__(LlmClient))
 
 
 def test_prepare_is_closed_book_and_has_no_previous_chapter_draft(monkeypatch):
@@ -231,55 +207,6 @@ def test_material_feedback_does_not_open_other_rules_or_missing_given():
         [other], (), given='原话')[0].to_dict()
 
 
-def test_agent_hard_resumes_same_chapter_purpose_without_refresh(monkeypatch):
-    _patch_prompt_boundary(monkeypatch)
-    _identity_normalization(monkeypatch)
-    checkpoints = _patch_agent_run_boundary(monkeypatch)
-    secret = '只在校验器里可见的原文证据'
-    hard = finding(
-        'verbatim_missing', detail=f'缺少：{secret}', evidence=[secret])
-
-    def judge(text, *_args, **_kwargs):
-        return (([hard], ['[verbatim_missing] 缺失'], [])
-                if '第一版' in text else ([], [], []))
-
-    monkeypatch.setattr(write, '_judge', judge)
-    monkeypatch.setattr(
-        write, 'assert_chapter_candidate_current',
-        lambda *_args, **_kwargs: None)
-    source = _Source([
-        write.ChapterResponse(
-            segments=[write.ChapterSegment(slot='s01', text='第一版。')]),
-        write.ChapterResponse(
-            segments=[write.ChapterSegment(slot='s01', text='第二版合格。')]),
-    ])
-    source.queue_results = [True]
-
-    generated = write._generate_chapter(
-        _entry(),
-        _book(),
-        source,
-        revise=None,
-        system='WRITE-SYS',
-        progress=SimpleNamespace(),
-        ctx=SimpleNamespace(node='stage5.write'),
-        agent_sessions=True,
-    )
-
-    evaluation = generated['evaluation']
-    assert evaluation.passed and evaluation.text == '第二版合格。'
-    purposes = [call[2]['purpose'] for call in source.calls]
-    assert purposes == ['stage5.write·ch1', 'stage5.write·ch1']
-    assert all('cache_policy' not in call[2] for call in source.calls)
-    assert all(
-        call[2]['recovery_policy'] == 'stage5-write-v2'
-        for call in source.calls)
-    assert [row['state_payload']['outcome'] for row in checkpoints] == [
-        'hard', 'passed']
-    assert source.feedback[0][0] == 'stage5.write·ch1'
-    assert secret not in json.dumps(source.feedback, ensure_ascii=False)
-
-
 def test_exhausted_revision_writes_only_rejected_evidence(
         monkeypatch, tmp_path):
     _patch_prompt_boundary(monkeypatch)
@@ -333,80 +260,6 @@ def test_exhausted_revision_writes_only_rejected_evidence(
     assert store.docs['stage5/ch01.json'].text == old_text
 
 
-def test_dirty_checkpoint_queues_safe_feedback_before_new_candidate(monkeypatch):
-    _patch_prompt_boundary(monkeypatch)
-    _identity_normalization(monkeypatch)
-    monkeypatch.setattr(
-        write, 'assert_chapter_candidate_current',
-        lambda *_args, **_kwargs: None)
-    secret = '只能留在代码校验器里的源文证据'
-    hard = finding(
-        'verbatim_missing', detail=f'缺少：{secret}', evidence=[secret])
-
-    def judge(text, *_args, **_kwargs):
-        return (([hard], ['[verbatim_missing] 缺失'], [])
-                if '旧坏候选' in text else ([], [], []))
-
-    monkeypatch.setattr(write, '_judge', judge)
-    prepared = write.prepare_chapter_candidate(
-        _entry(), _book(), revision=None, system='WRITE-SYS')
-    old_response = write.ChapterResponse(
-        segments=[write.ChapterSegment(slot='s01', text='旧坏候选。')])
-    source = _Source([
-        write.ChapterResponse(
-            segments=[write.ChapterSegment(slot='s01', text='新合格候选。')]),
-    ])
-    source.attempt = 'old-attempt'
-    source.request_fp = 'a' * 64
-    old_evaluation = write.evaluate_chapter_candidate(
-        source, prepared, old_response)
-    old_state = write._chapter_checkpoint_state(
-        prepared, old_evaluation, accepted_turn_index=1)
-    restored = SimpleNamespace(
-        value=old_response,
-        acceptance={
-            'attempt_id': 'old-attempt',
-            'model': 'actual-model',
-            'request_fingerprint': 'a' * 64,
-            'accepted_turn_index': 1,
-        },
-        state_payload=old_state,
-    )
-    checkpoints = []
-    monkeypatch.setattr(
-        write.stage5_runs, 'ensure_run', lambda *_args, **_kwargs: {})
-    monkeypatch.setattr(
-        write.stage5_runs, 'restore_checkpoint',
-        lambda *_args, **_kwargs: restored)
-    monkeypatch.setattr(
-        write.stage5_runs, 'write_checkpoint',
-        lambda *_args, **kwargs: checkpoints.append(dict(kwargs)))
-    source.queue_results = [True]
-
-    generated = write._generate_chapter_with_agent(
-        SimpleNamespace(node='stage5.write'),
-        prepared,
-        source,
-        progress=SimpleNamespace(),
-    )
-
-    evaluation = generated['evaluation']
-    assert evaluation.passed
-    assert evaluation.text == '新合格候选。'
-    assert [item.model_dump() for item in evaluation.attempts] == [
-        {'segments': [{'slot': 's01', 'text': '旧坏候选。'}]},
-        {'segments': [{'slot': 's01', 'text': '新合格候选。'}]},
-    ]
-    assert len(source.calls) == 1
-    assert source.calls[0][2]['recovery_policy'] == 'stage5-write-v2'
-    assert source.feedback[0][0] == prepared.purpose
-    assert secret not in json.dumps(source.feedback, ensure_ascii=False)
-    assert checkpoints[0]['state_payload']['accepted_turn_index'] == 2
-    assert checkpoints[0]['state_payload']['prior_attempts'] == [
-        {'segments': [{'slot': 's01', 'text': '旧坏候选。'}]},
-    ]
-
-
 def test_formal_journal_preflight_covers_every_transaction_path(monkeypatch):
     prepared = SimpleNamespace(ordinal=4, mode='write')
     store = SimpleNamespace()
@@ -437,70 +290,3 @@ def test_formal_journal_preflight_covers_every_transaction_path(monkeypatch):
         (4, write.artifact_rel('stage5.trim_resolution', nn=4), {
             'mode': 'write', 'expected_file_sha256': None, 'expected_absent': True}),
     ]
-
-
-def test_batch_waits_for_session_isolation_before_any_formal_write(monkeypatch):
-    prepared = {
-        chapter: object.__new__(write.ChapterCandidateContext)
-        for chapter in (1, 2)
-    }
-    evaluations = {
-        chapter: object.__new__(write.ChapterCandidateEvaluation)
-        for chapter in (1, 2)
-    }
-
-    class Pool:
-        model = 'requested-model'
-        concurrency = 2
-        isolation_failed = True
-
-        def __init__(self):
-            self.finished = []
-
-        def prepare_initial_sessions(self, chapters):
-            assert tuple(chapters) == (1, 2)
-
-        def finish_chapter_session(self, chapter, *, outcome,
-                                   delivery_attempts=None,
-                                   same_run_recovered=None,
-                                   first_failure_phase=None,
-                                   first_failure_detail=None):
-            self.finished.append(
-                (chapter, outcome, delivery_attempts, same_run_recovered,
-                 first_failure_phase, first_failure_detail))
-
-    pool = Pool()
-    monkeypatch.setattr(
-        write, '_generate_chapter',
-        lambda entry, *_args, **_kwargs: {
-            'prepared': prepared[int(entry['output_ordinal'])],
-            'evaluation': evaluations[int(entry['output_ordinal'])],
-        },
-    )
-    monkeypatch.setattr(
-        write, 'finalize_chapter_candidate',
-        lambda *_args, **_kwargs: pytest.fail(
-            '全批 provider/session 身份闭合前不得写任何正式章'),
-    )
-    monkeypatch.setattr(
-        write, '_report', lambda *_args, **_kwargs: SimpleNamespace())
-    store = SimpleNamespace(path=lambda rel: Path(rel))
-    ctx = SimpleNamespace(
-        node='stage5.write',
-        executor_profile=object(),
-        observe=lambda *_args, **_kwargs: None,
-    )
-
-    with pytest.raises(write.GateBlocked, match='全部没落成正式稿'):
-        write._run_group_parallel(
-            ctx,
-            store,
-            SimpleNamespace(),
-            [{'output_ordinal': 1}, {'output_ordinal': 2}],
-            pool,
-            revise=None,
-        )
-
-    assert sorted(pool.finished) == [
-        (1, 'artifact_failed', None, None, None, None),
-        (2, 'artifact_failed', None, None, None, None)]

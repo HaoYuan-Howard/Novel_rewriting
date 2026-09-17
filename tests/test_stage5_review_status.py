@@ -23,6 +23,7 @@ from novel.errors import (
     ArtifactUnreadable, BlockingFindingsUnresolved, GateBlocked, TerminalState,
     UpstreamMissing, UpstreamStale, UpstreamUnproven,
 )
+from novel.llm.client import LlmClient
 from novel.prov import FreshnessReport
 from novel.run import RunContext
 from novel.stages.stage5 import measure as M, review, write
@@ -431,8 +432,11 @@ def test_wontfix_revise_and_s5_approval_proof_all_refuse_stale_review(
         review.mark_wontfix(status_rig.ctx, '1|draft_too_short=旧结论不得豁免')
 
     monkeypatch.setattr(write, 'ArtifactStore', lambda _ctx: status_rig.store)
+    monkeypatch.setattr(
+        write, '_reconcile_legacy_chapter_deliveries',
+        lambda *_args, **_kwargs: None)
     with pytest.raises(TerminalState, match='Review 当前状态是 stale'):
-        write.run_revise(status_rig.ctx, object())
+        write.run_revise(status_rig.ctx, object.__new__(LlmClient))
 
     from novel.orchestrator import approvals
     monkeypatch.setattr(approvals, '_require_stage5_complete', lambda *_args: None)

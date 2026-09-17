@@ -1308,7 +1308,9 @@ def test_paid_write_refuses_legacy_before_loading_upstream(monkeypatch):
         )
         with pytest.raises(TerminalState, match='legacy_incompatible'):
             write.run_write(
-                SimpleNamespace(novel_dir=root, executor_profile=None), object())
+                SimpleNamespace(
+                    novel_dir=root, executor_profile=None, run_id='direct-run'),
+                object.__new__(LlmClient))
         assert loaded == [], '旧盘面在终态前不应读取上游，更不能进入付费写作'
     finally:
         shutil.rmtree(root, ignore_errors=True)
@@ -1318,7 +1320,7 @@ def test_legacy_direct_write_holds_the_shared_book_lock_through_the_wire(
         tmp_path, monkeypatch):
     """无 agent journal 的直 CLI 路必须把输入快照到最终提交整段串行化。"""
     ctx = SimpleNamespace(
-        novel_dir=tmp_path / 'book', executor_profile=None)
+        novel_dir=tmp_path / 'book', executor_profile=None, run_id='direct-run')
     store = SimpleNamespace()
     monkeypatch.setattr(write, 'ArtifactStore', lambda _ctx: store)
     monkeypatch.setattr(write, 'require_canonical_layout', lambda _store: None)
@@ -1327,6 +1329,9 @@ def test_legacy_direct_write_holds_the_shared_book_lock_through_the_wire(
         lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
         write.review, 'load_book', lambda *_args: SimpleNamespace())
+    monkeypatch.setattr(
+        write, '_reconcile_legacy_chapter_deliveries',
+        lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
         write, '_chapters_of', lambda *_args, **_kwargs: [{'output_ordinal': 1}])
     started = threading.Event()
@@ -1350,7 +1355,7 @@ def test_legacy_direct_write_holds_the_shared_book_lock_through_the_wire(
 
     monkeypatch.setattr(write, '_run_group', fake_group)
 
-    assert write.run_write(ctx, object()) is result
+    assert write.run_write(ctx, object.__new__(LlmClient)) is result
     assert worker is not None
     worker.join(timeout=5)
     assert crossed_wire == [False]

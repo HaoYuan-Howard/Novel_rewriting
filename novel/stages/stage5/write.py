@@ -117,21 +117,6 @@ _REVIEWER_REWRITE_PROMPT_CONTRACT = json.dumps(
 _STAGE5_VALIDATION_LOCK = threading.RLock()
 
 
-@dataclass(frozen=True)
-class _CommitOutcomeDiagnostics:
-    """一次终态收口要写进 session ended 的提交诊断投影。
-
-    ``attempts`` 是本章发生过的正式提交调用数（首次 1、sweep 恢复后 2）；
-    ``recovered=True`` 表示首次提交异常后 same-run 重放成功。它们只描述
-    已发生的提交史，不参与判定。
-    """
-
-    attempts: int
-    recovered: bool
-    failure_phase: str | None
-    failure_detail: str | None
-
-
 @dataclass
 class _CommitDiagnostics:
     """一次正式提交调用的阶段诊断，喂给 session audit wire v2 的 ended 事件。
@@ -181,57 +166,16 @@ def _commit_phase(
 
 
 class _ChapterResponseSource(Protocol):
-    """逐章候选循环真正消费的窄面。
-
-    agent 路径由节点层提供按 ``purpose/chapter`` 路由的 pool；pool 背后每章必须是
-    独立 ``SessionAgentClient``。producer 不接触 driver，也不持有跨章会话表。
-    legacy ``LlmClient`` 仍可满足首轮请求与 accepted identity 那一半接口。
-    """
+    """候选评估与历史恢复共同消费的最小来源身份接口。"""
 
     model: str
     concurrency: int
-
-    def ask_json(self, system: str, user: str, **kwargs: Any) -> Any: ...
 
     def accepted_attempt(self, purpose: str) -> str | None: ...
 
     def accepted_model(self, purpose: str) -> str | None: ...
 
-    def accepted_models(self, *purposes: str) -> tuple[str, ...]: ...
-
     def accepted_request_fingerprint(self, purpose: str) -> str | None: ...
-
-    def accepted_checkpoint(self, purpose: str) -> dict[str, Any]: ...
-
-    def restore_checkpoint_acceptance(
-        self, purpose: str, record: Mapping[str, Any], **kwargs: Any,
-    ) -> None: ...
-
-    def queue_code_validation_feedback(
-        self,
-        rows: Sequence[Mapping[str, object]],
-        *,
-        purpose: str | None = None,
-    ) -> bool: ...
-
-    def queue_restored_code_validation_feedback(
-        self,
-        rows: Sequence[Mapping[str, object]],
-        *,
-        purpose: str | None = None,
-    ) -> bool: ...
-
-    def purpose_can_resume(self, purpose: str) -> bool: ...
-
-    def purpose_driver_failed(self, purpose: str) -> bool: ...
-
-    def finish_chapter_session(
-        self, chapter: int, *, outcome: str,
-        delivery_attempts: int | None = None,
-        same_run_recovered: bool | None = None,
-        first_failure_phase: str | None = None,
-        first_failure_detail: str | None = None,
-    ) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -1201,210 +1145,6 @@ def _evaluation_payload(evaluation: ChapterCandidateEvaluation) -> dict[str, obj
         },
         'input_sha256': evaluation._input_sha256,
     }
-
-
-def _hard_rule_ids(
-    evaluation: ChapterCandidateEvaluation,
-) -> list[str]:
-    return sorted({
-        finding.rule for finding in evaluation.findings
-        if REGISTRY.get(finding.rule).sev == 'hard'
-    })
-
-
-def _checkpoint_outcome(
-    *, hard_rules: Sequence[str], regressions: Sequence[str],
-) -> str:
-    if hard_rules and regressions:
-        return 'hard_and_regressed'
-    if hard_rules:
-        return 'hard'
-    if regressions:
-        return 'regressed'
-    return 'passed'
-
-
-def _chapter_checkpoint_state(
-    prepared: ChapterCandidateContext,
-    evaluation: ChapterCandidateEvaluation,
-    *,
-    accepted_turn_index: int,
-) -> dict[str, object]:
-    """Stage5 checkpoint 只补业务判定；wire/ledger/session 身份归通用 core。"""
-    hard_rules = _hard_rule_ids(evaluation)
-    regressions = list(evaluation.regressions)
-    return {
-        'version': 2,
-        'mode': prepared.mode,
-        'outcome': _checkpoint_outcome(
-            hard_rules=hard_rules, regressions=regressions),
-        'input_sha256': prepared._input_sha256,
-        'candidate_sha256': evaluation._candidate_sha256,
-        'accepted_turn_index': accepted_turn_index,
-        # 当前响应已由 generic checkpoint 的 accepted_text/response_payload 保存；
-        #这里只携带前序业务候选，供 revision 拒稿在 crash 后恢复首轮与终轮正文。
-        'prior_attempts': [
-            item.model_dump(mode='json') for item in evaluation.attempts[:-1]
-        ],
-        'hard_rules': hard_rules,
-        'regressions': regressions,
-        **({
-            'reviewer_rewrite_request_sha256':
-                prepared._reviewer_rewrite_request.request_sha256,
-            'reviewer_rewrite_request_file_sha256':
-                prepared._reviewer_rewrite_request_file_sha256,
-        } if prepared._reviewer_rewrite_request is not None else {}),
-    }
-
-
-def _accepted_turn_index(
-    source: _ChapterResponseSource,
-    purpose: str,
-) -> tuple[int, dict[str, Any]]:
-    record = source.accepted_checkpoint(purpose)
-    turn = record.get('accepted_turn_index')
-    if not isinstance(turn, int) or isinstance(turn, bool) or turn < 1:
-        raise ProvenanceRefused(
-            f'{purpose}: accepted checkpoint 缺正整数 turn index')
-    return turn, record
-
-
-def _write_chapter_checkpoint(
-    ctx: RunContext,
-    source: _ChapterResponseSource,
-    prepared: ChapterCandidateContext,
-    evaluation: ChapterCandidateEvaluation,
-) -> None:
-    turn, acceptance = _accepted_turn_index(source, prepared.purpose)
-    target = stage5_runs.write_checkpoint(
-        ctx,
-        chapter=prepared.ordinal,
-        input_sha256=prepared._input_sha256,
-        system=prepared.system,
-        user=prepared.user,
-        response_model=ChapterResponse,
-        max_tokens=MAX_TOKENS,
-        response_payload=evaluation._response.model_dump(
-            by_alias=True, mode='json'),
-        acceptance=acceptance,
-        state_payload=_chapter_checkpoint_state(
-            prepared, evaluation, accepted_turn_index=turn),
-        mode=prepared.mode,
-        reviewer_rewrite_request_sha256=(
-            None if prepared._reviewer_rewrite_request is None
-            else prepared._reviewer_rewrite_request.request_sha256),
-        reviewer_rewrite_request_file_sha256=(
-            prepared._reviewer_rewrite_request_file_sha256 or None),
-    )
-    if prepared.mode == 'reviewer_rewrite':
-        digest = stage5_runs.read_checkpoint_sha256(target)
-        request = prepared._reviewer_rewrite_request
-        assert request is not None
-        stage5_runs.record_reviewer_rewrite_execution(
-            ctx, chapter=prepared.ordinal,
-            request_rel=STAGE5_REVIEWER_REWRITE_REQUEST,
-            request_file_sha256=prepared._reviewer_rewrite_request_file_sha256,
-            request_sha256=request.request_sha256,
-            input_sha256=prepared._input_sha256,
-            event='checkpointed', checkpoint_sha256=digest,
-        )
-
-
-def _restore_chapter_checkpoint(
-    ctx: RunContext,
-    source: _ChapterResponseSource,
-    prepared: ChapterCandidateContext,
-) -> ChapterCandidateEvaluation | None:
-    """零 wire 恢复最新验证后候选；恢复记录只终态化，不伪造 provider resume。"""
-    restored = stage5_runs.restore_checkpoint(
-        ctx,
-        chapter=prepared.ordinal,
-        input_sha256=prepared._input_sha256,
-        system=prepared.system,
-        user=prepared.user,
-        response_model=ChapterResponse,
-        max_tokens=MAX_TOKENS,
-        validator=lambda obj, wire: _response_problem(
-            obj, wire, prepared._entry),
-        mode=prepared.mode,
-        reviewer_rewrite_request_sha256=(
-            None if prepared._reviewer_rewrite_request is None
-            else prepared._reviewer_rewrite_request.request_sha256),
-        reviewer_rewrite_request_file_sha256=(
-            prepared._reviewer_rewrite_request_file_sha256 or None),
-    )
-    if restored is None:
-        return None
-    restore = getattr(source, 'restore_checkpoint_acceptance', None)
-    if not callable(restore):
-        raise ProvenanceRefused(
-            f'{prepared.purpose}: agent source 缺 checkpoint acceptance 恢复口')
-    restore(
-        prepared.purpose,
-        restored.acceptance,
-        system=prepared.system,
-        user=prepared.user,
-        max_tokens=MAX_TOKENS,
-        recovery_policy=stage5_runs.recovery_policy_of(prepared.mode),
-    )
-    prior_attempts = tuple(
-        RejectedAttempt.model_validate(item)
-        for item in restored.state_payload['prior_attempts']
-    )
-    evaluation = evaluate_chapter_candidate(
-        source,
-        prepared,
-        restored.value,
-        accepted_purpose=prepared.purpose,
-        prior_attempts=prior_attempts,
-    )
-    turn = restored.acceptance.get('accepted_turn_index')
-    assert isinstance(turn, int)
-    expected_state = _chapter_checkpoint_state(
-        prepared, evaluation, accepted_turn_index=turn)
-    if expected_state != restored.state_payload:
-        raise ProvenanceRefused(
-            f'Stage5 第 {prepared.ordinal} 章恢复候选的当前业务判定与 checkpoint 漂移')
-    if prepared.mode == 'reviewer_rewrite':
-        request = prepared._reviewer_rewrite_request
-        assert request is not None
-        stage5_runs.record_reviewer_rewrite_execution(
-            ctx, chapter=prepared.ordinal,
-            request_rel=STAGE5_REVIEWER_REWRITE_REQUEST,
-            request_file_sha256=prepared._reviewer_rewrite_request_file_sha256,
-            request_sha256=request.request_sha256,
-            input_sha256=prepared._input_sha256,
-            event='checkpointed',
-            checkpoint_sha256=restored.checkpoint_sha256,
-        )
-    return evaluation
-
-
-def _record_reviewer_retry_started(
-        ctx: RunContext, prepared: ChapterCandidateContext,
-) -> None:
-    """在每次后续 ask 前 durable 标出“旧 checkpoint 已不能自动采用”。"""
-    if prepared.mode != 'reviewer_rewrite':
-        return
-    request = prepared._reviewer_rewrite_request
-    if request is None:
-        raise ProvenanceRefused('reviewer rewrite retry intent 缺 formal request')
-    chain = stage5_runs.reviewer_rewrite_execution_chain(
-        ctx, run_id=ctx.run_id, chapter=prepared.ordinal)
-    if not chain or chain[-1].event != 'checkpointed':
-        raise ProvenanceRefused(
-            'reviewer rewrite 后续 wire 只能从 exact checkpointed tail 开始')
-    checkpoint_sha256 = chain[-1].checkpoint_sha256
-    if checkpoint_sha256 is None:
-        raise ProvenanceRefused('reviewer rewrite retry intent 缺 checkpoint SHA')
-    stage5_runs.record_reviewer_rewrite_execution(
-        ctx, chapter=prepared.ordinal,
-        request_rel=STAGE5_REVIEWER_REWRITE_REQUEST,
-        request_file_sha256=prepared._reviewer_rewrite_request_file_sha256,
-        request_sha256=request.request_sha256,
-        input_sha256=prepared._input_sha256,
-        event='retry_started', checkpoint_sha256=checkpoint_sha256,
-    )
 
 
 def _latest_reviewer_execution_checkpoint(
@@ -2441,19 +2181,15 @@ def run_write(ctx: RunContext, client: LlmClient,
     ⚠ 连贯性靠**上一章的计划**传递，**不给上一章的成稿**——否则写手会顺着自己刚写的续，
     偏差沿章累积，章与章也变成串行依赖（`prompts.prev_context`）。
     """
-    # 现役 agent profile 有逐章 checkpoint 主体与锁内 currentness 复核，模型请求不占锁；
-    # legacy LlmClient 没有可复核的候选 journal，只能把它从盘面快照到最后一章提交
+    _require_direct_llm_entry(ctx, client)
+    # 直连 LlmClient 没有 agent checkpoint 主体，只能把盘面快照到最后一章提交
     # 整段纳入书锁，不能在长请求后盲盖并发人工稿。
-    ownership = (
-        nullcontext() if _uses_agent_sessions(ctx)
-        else stage5_runs.book_commit_ownership(ctx.novel_dir)
-    )
-    with ownership:
+    with stage5_runs.book_commit_ownership(ctx.novel_dir):
         store = ArtifactStore(ctx)
         require_canonical_layout(store)
         # 生产入口本身必须挡 foreign prepared。CLI/build_node_agent 只是更早反馈；
         # legacy 形状先由零调用 canonical-layout 闸给出更精确终态，之后仍早于
-        # load_book、_run_group 以及 direct Stage5WriteAgent 的 driver/probe/session。
+        # load_book、_run_group 与首个直连 wire。
         stage5_runs.refuse_foreign_prepared_before_wire(ctx, chapters)
         book = review.load_book(ctx, store)
         _reconcile_legacy_chapter_deliveries(ctx, store, book, client)
@@ -3001,176 +2737,22 @@ def run_prepared_recovery(
         book=book, judged=judged)
 
 
-def _uses_agent_sessions(ctx: RunContext) -> bool:
-    """执行协议只由一次 run 冻结的显式 profile 决定，不靠 client 猜。"""
-    return getattr(ctx, 'executor_profile', None) is not None
-
-
-def _require_agent_chapter_source(source: _ChapterResponseSource) -> None:
-    required = (
-        'ask_json', 'accepted_attempt', 'accepted_checkpoint',
-        'restore_checkpoint_acceptance', 'queue_code_validation_feedback',
-        'queue_restored_code_validation_feedback',
-        'purpose_can_resume', 'purpose_driver_failed',
-        'finish_chapter_session',
+def _require_direct_llm_entry(ctx: RunContext, client: LlmClient) -> None:
+    """付费生产只接直连客户端，不接管旧 profile 或同 run 的 agent 状态。"""
+    if not isinstance(client, LlmClient):
+        raise ProvenanceRefused('Stage5 写作生产入口只接受 LlmClient')
+    if getattr(ctx, 'executor_profile', None) is not None:
+        raise ProvenanceRefused('Stage5 写作生产入口不能接管 agent profile')
+    run_id = getattr(ctx, 'run_id', None)
+    if not isinstance(run_id, str) or not run_id:
+        return
+    roots = (
+        paths.service_stage_runs_dir(ctx.novel_dir, 'stage5') / run_id,
+        paths.legacy_stage_runs_dir(ctx.novel_dir, 'stage5') / run_id,
     )
-    missing = [name for name in required if not callable(getattr(source, name, None))]
-    if not (callable(getattr(source, 'accepted_model', None))
-            or callable(getattr(source, 'accepted_models', None))):
-        missing.append('accepted_model(s)')
-    if not (callable(getattr(source, 'accepted_request_fingerprint', None))
-            or callable(getattr(source, 'accepted_checkpoint', None))):
-        missing.append('accepted_request_fingerprint/checkpoint')
-    if missing:
+    if any(root.exists() for root in roots):
         raise ProvenanceRefused(
-            f'stage5.write agent source 缺逐章 bridge {missing}；已在首个 wire 前停止')
-
-
-def _record_reflow_shadow(
-    ctx: RunContext,
-    prepared: ChapterCandidateContext,
-    evaluation: ChapterCandidateEvaluation,
-) -> None:
-    """P1-1 的 reflow shadow：只在观测层记录 whitespace-only 重排的判据差异。
-
-    段落 HARD 命中时，按 `paragraph_slot_plan` 的目标段数对候选做一次
-    shadow 重排，并用同一张判据表重判，把「可行与否 / HARD 前后差」写进
-    observer 事件流。**它不写任何产物、不改变 evaluation 的任何结论**——
-    在 TODO-21 语料标定完成前，reflow 不得被默认启用。
-    """
-    if not any(f.rule == 'paragraph_budget_missed' for f in evaluation.findings):
-        return
-    try:
-        plan = M.paragraph_slot_plan(prepared._entry, prepared._book)
-    except Exception:
-        return
-    target = sum(plan)
-    shadow_text = M.reflow_shadow(evaluation.text, target=target)
-    detail: dict[str, Any] = {
-        'chapter': prepared.ordinal,
-        'target_paragraphs': target,
-        'actual_paragraphs': sum(
-            1 for line in evaluation.text.split(M.NL) if line.strip()),
-        'feasible': shadow_text is not None,
-    }
-    if shadow_text is not None:
-        _findings, errors, _warnings = _judge(
-            shadow_text,
-            prepared._entry,
-            prepared._book,
-            mat=prepared.given,
-            account=M.NormalizeAccount(),
-            segments=[segment.model_dump() for segment in evaluation.segments],
-        )
-        detail['hard_before'] = len(evaluation.errors)
-        detail['hard_after'] = len(errors)
-    ctx.observe('reflow_shadow', **detail)
-
-
-def _generate_chapter_with_agent(
-    ctx: RunContext,
-    prepared: ChapterCandidateContext,
-    source: _ChapterResponseSource,
-    *,
-    progress: RequestProgress,
-) -> dict[str, Any]:
-    """同一章同一 purpose 内循环；schema/dynamic/code HARD 都复用 provider session。"""
-    _require_agent_chapter_source(source)
-    assert_chapter_candidate_current(ctx, prepared)
-    stage5_runs.ensure_run(
-        ctx,
-        chapter=prepared.ordinal,
-        input_sha256=prepared._input_sha256,
-        system=prepared.system,
-        user=prepared.user,
-        response_model=ChapterResponse,
-        max_tokens=MAX_TOKENS,
-        mode=prepared.mode,
-    )
-    restored = _restore_chapter_checkpoint(ctx, source, prepared)
-    last_rejected: ChapterCandidateEvaluation | None = None
-    if restored is not None:
-        if restored.passed:
-            return {
-                'prepared': prepared,
-                'evaluation': restored,
-                'restored_checkpoint': True,
-            }
-        # 旧 provider session 不假定仍在线。pool 只在确有业务 HARD 且尚有总轮次
-        # 预算时新建 driver/session；恢复 acceptance 后把安全反馈排为新 session 首轮，
-        # subject 仍绑定原 system/user，prior turns/attempt links 不会重置。
-        assert_chapter_candidate_current(ctx, prepared)
-        queued = source.queue_restored_code_validation_feedback(
-            restored.feedback_rows(), purpose=prepared.purpose)
-        if not queued:
-            return {
-                'prepared': prepared,
-                'evaluation': restored,
-                'restored_checkpoint': True,
-            }
-        last_rejected = restored
-        prior_attempts = restored.attempts
-    else:
-        prior_attempts = ()
-    while True:
-        # 输入漂移不能再花一轮后才发现。SessionAgentClient 另会在 wire 前复核代码/root；
-        # 这里补的是 Stage5 私有判据真正消费的正文、secret、Review 与旧正式稿。
-        assert_chapter_candidate_current(ctx, prepared)
-        if last_rejected is not None:
-            _record_reviewer_retry_started(ctx, prepared)
-        try:
-            response = source.ask_json(
-                prepared.system,
-                prepared.user,
-                model_cls=ChapterResponse,
-                purpose=prepared.purpose,
-                max_tokens=MAX_TOKENS,
-                validator=lambda obj, wire: _response_problem(
-                    obj, wire, prepared._entry),
-                progress=progress,
-                recovery_policy=stage5_runs.recovery_policy_of(prepared.mode),
-            )
-        except ResponseRepairRequired as exc:
-            return {'response_repair_required': exc}
-        except LlmFailed as exc:
-            # 业务坏候选已经是 wire/schema 合格且已 checkpoint 的事实。后续
-            # parse/schema/dynamic 返工耗尽时，用它走一次既有 INVALID/rejected
-            # 终态；driver/protocol 失败仍保留为未知，不能拿旧候选掩盖进程失败。
-            if (prepared.mode != 'reviewer_rewrite'
-                    and last_rejected is not None
-                    and not source.purpose_driver_failed(prepared.purpose)
-                    and not source.purpose_can_resume(prepared.purpose)):
-                return {
-                    'prepared': prepared,
-                    'evaluation': last_rejected,
-                    'response_validation_exhausted': True,
-                }
-            # reviewer rewrite 已在本轮 wire 前 durable 落 ``retry_started``；
-            # 没有随后 exact checkpoint 就可能已经外发/扣费。即便客户端认为
-            # 返工耗尽，也不能拿上一候选落终态掩盖这一未知窗。
-            return {'error': str(exc).splitlines()[0]}
-        evaluation = evaluate_chapter_candidate(
-            source,
-            prepared,
-            response,
-            prior_attempts=prior_attempts,
-        )
-        # 每一份通过 wire/schema/dynamic validator 的候选都先进入 append-only
-        # checkpoint，再决定继续反馈还是终态提交；崩溃不会迫使同章重复付费。
-        assert_chapter_candidate_current(ctx, prepared)
-        _record_reflow_shadow(ctx, prepared, evaluation)
-        _write_chapter_checkpoint(ctx, source, prepared, evaluation)
-        if evaluation.passed:
-            return {'prepared': prepared, 'evaluation': evaluation}
-        last_rejected = evaluation
-        assert_chapter_candidate_current(ctx, prepared)
-        if source.queue_code_validation_feedback(
-                evaluation.feedback_rows(), purpose=prepared.purpose):
-            prior_attempts = evaluation.attempts
-            continue
-        # turn budget 用尽是本章终态：revision 保留旧正式稿并落拒稿证据；普通写作
-        # 最后一份 HARD 候选交给 finalize 一次写 INVALID。两者都不在这里写盘。
-        return {'prepared': prepared, 'evaluation': evaluation}
+            '当前 Stage5 写作 run 已有 agent 状态，必须走冻结旧代码或现役免费恢复')
 
 
 def _generate_chapter(
@@ -3181,27 +2763,9 @@ def _generate_chapter(
     revise: dict[int, tuple[str, list[list[str]], str]] | None,
     system: str,
     progress: RequestProgress,
-    ctx: RunContext | None = None,
-    agent_sessions: bool = False,
-    prepared_context: ChapterCandidateContext | None = None,
 ) -> dict[str, Any]:
     ordinal = int(entry['output_ordinal'])
-    if agent_sessions:
-        if ctx is None:
-            raise ValueError('Stage5 agent 逐章候选循环缺 RunContext')
-        if prepared_context is None:
-            revision = None if revise is None else revise[ordinal]
-            prepared = prepare_chapter_candidate(
-                entry, book, revision=revision, system=system)
-        else:
-            prepared = prepared_context
-            if prepared.ordinal != ordinal:
-                raise ProvenanceRefused(
-                    '预建 Stage5 candidate context 与目标章号漂移')
-        return _generate_chapter_with_agent(
-            ctx, prepared, client, progress=progress)
-
-    # legacy LlmClient 的单轮/唯一一次 refresh 重采样语义逐字保留。它不伪装成
+    # LlmClient 的单轮/唯一一次 refresh 重采样语义逐字保留。它不伪装成
     # provider session，也不创建 agent checkpoint 或 adoption sidecar。
     mat = prompts.build_material(entry, book)
     if revise is not None:
@@ -3357,7 +2921,7 @@ def _reconcile_legacy_chapter_deliveries(
         ctx: RunContext, store: ArtifactStore, book: M.Book, client: LlmClient,
 ) -> None:
     """默认增量筛章前补原候选的提交账；文件存在本身不构成采纳证明。"""
-    if _uses_agent_sessions(ctx) or not callable(getattr(client, 'save_producer_recovery', None)):
+    if not callable(getattr(client, 'save_producer_recovery', None)):
         return
     from novel.work_units import budget_for
 
@@ -3445,54 +3009,13 @@ def _run_group_parallel(
     client: LlmClient,
     *,
     revise: dict[int, tuple[str, list[list[str]], str]] | None,
-    prepared_contexts: Mapping[int, ChapterCandidateContext] | None = None,
 ) -> CheckReport:
     system = prompts.write_system(revise=revise is not None)
-    agent_sessions = _uses_agent_sessions(ctx)
     judged: dict[int, list] = {}
     written_by: dict[int, str] = {}
     blocked_by: dict[int, str] = {}
-    agent_candidates: dict[
-        int, tuple[ChapterCandidateContext, ChapterCandidateEvaluation],
-    ] = {}
     ordinals = [int(entry['output_ordinal']) for entry in todo]
     tracker = ChapterProgressTracker(ctx.observe, ordinals)
-    if agent_sessions:
-        # reviewer rewrite 的 durable ``started`` 必须先于 driver factory/probe/wire。
-        # run.json 同样在这里先闭合；工作线程里的 ensure_run 仅作幂等复验。
-        for ordinal in ordinals:
-            prepared = (
-                None if prepared_contexts is None
-                else prepared_contexts.get(ordinal))
-            if prepared is None:
-                continue
-            with _reviewer_unit_ownership(ctx, prepared):
-                assert_chapter_candidate_current(ctx, prepared)
-                stage5_runs.ensure_run(
-                    ctx, chapter=ordinal,
-                    input_sha256=prepared._input_sha256,
-                    system=prepared.system, user=prepared.user,
-                    response_model=ChapterResponse, max_tokens=MAX_TOKENS,
-                    mode=prepared.mode,
-                )
-                if prepared.mode == 'reviewer_rewrite':
-                    request = prepared._reviewer_rewrite_request
-                    assert request is not None
-                    stage5_runs.record_reviewer_rewrite_execution(
-                        ctx, chapter=ordinal,
-                        request_rel=STAGE5_REVIEWER_REWRITE_REQUEST,
-                        request_file_sha256=(
-                            prepared._reviewer_rewrite_request_file_sha256),
-                        request_sha256=request.request_sha256,
-                        input_sha256=prepared._input_sha256,
-                        event='started',
-                    )
-        prepare_sessions = getattr(client, 'prepare_initial_sessions', None)
-        if not callable(prepare_sessions):
-            raise ProvenanceRefused(
-                'stage5.write agent pool 缺 prepare_initial_sessions；'
-                '不能在部分章节已 start 后才发现跨章 driver 复用')
-        prepare_sessions(tuple(ordinals))
     workers = min(
         STAGE5_WRITE_MAX_CONCURRENCY,
         max(1, int(getattr(client, 'concurrency', DEFAULT_CONCURRENCY))),
@@ -3500,45 +3023,11 @@ def _run_group_parallel(
     )
     fatal: Exception | None = None
 
-    def finish_agent_session(
-        ordinal: int, outcome: str, *,
-        delivery_attempts: int | None = None,
-        same_run_recovered: bool | None = None,
-        first_failure_phase: str | None = None,
-        first_failure_detail: str | None = None,
-    ) -> None:
-        """ended 审计失败只阻断最终返回，不取消尚在运行的兄弟章。"""
-        nonlocal fatal
-        if not agent_sessions:
-            return
-        try:
-            client.finish_chapter_session(
-                ordinal, outcome=outcome,
-                delivery_attempts=delivery_attempts,
-                same_run_recovered=same_run_recovered,
-                first_failure_phase=first_failure_phase,
-                first_failure_detail=first_failure_detail,
-            )
-        except Exception as exc:
-            if fatal is None:
-                fatal = exc
-            blocked_by.setdefault(
-                ordinal,
-                f'第 {ordinal} 章 session 终态审计失败：'
-                f'{type(exc).__name__}: {str(exc).splitlines()[0]}',
-            )
-
     def generate(entry: dict[str, Any]) -> dict[str, Any]:
         ordinal = int(entry['output_ordinal'])
-        prepared = (None if prepared_contexts is None
-                    else prepared_contexts.get(ordinal))
-        lease = (nullcontext() if prepared is None
-                 else _reviewer_unit_ownership(ctx, prepared))
-        with lease:
-            return _generate_chapter(
-                entry, book, client, revise=revise, system=system,
-                progress=tracker.request(ordinal), ctx=ctx,
-                agent_sessions=agent_sessions, prepared_context=prepared)
+        return _generate_chapter(
+            entry, book, client, revise=revise, system=system,
+            progress=tracker.request(ordinal))
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {
@@ -3550,7 +3039,6 @@ def _run_group_parallel(
             try:
                 generated = future.result()
             except CancelledError:
-                finish_agent_session(ordinal, 'executor_failed')
                 blocked_by[ordinal] = (
                     f'第 {ordinal} 章因同批网络故障在发请求前取消')
                 tracker.finish(
@@ -3559,11 +3047,9 @@ def _run_group_parallel(
             except Exception as exc:
                 if fatal is None:
                     fatal = exc
-                    if not agent_sessions:
-                        for pending in futures:
-                            if pending is not future:
-                                pending.cancel()
-                finish_agent_session(ordinal, 'executor_failed')
+                    for pending in futures:
+                        if pending is not future:
+                            pending.cancel()
                 blocked_by[ordinal] = (
                     f'第 {ordinal} 章网络级失败：{type(exc).__name__}: '
                     f'{str(exc).splitlines()[0]}')
@@ -3572,7 +3058,6 @@ def _run_group_parallel(
                 continue
 
             if error := generated.get('error'):
-                finish_agent_session(ordinal, 'response_failed')
                 blocked_by[ordinal] = (
                     f'第 {ordinal} 章没拿到正文' if error == '没有拿到正文'
                     else f'第 {ordinal} 章没拿到完整正文：{error}')
@@ -3585,30 +3070,9 @@ def _run_group_parallel(
                 blocked_by[ordinal] = (
                     f'第 {ordinal} 章已停在下一采之前，等待受托响应修复：'
                     f'{str(repair_pause).splitlines()[0]}')
-                finish_agent_session(ordinal, 'response_failed')
                 tracker.finish(
                     ordinal, outcome='failed',
                     detail='等待受托响应修复；同批其他章节继续')
-                continue
-
-            if agent_sessions:
-                prepared = generated.get('prepared')
-                evaluation = generated.get('evaluation')
-                if (not isinstance(prepared, ChapterCandidateContext)
-                        or not isinstance(evaluation, ChapterCandidateEvaluation)):
-                    exc = ProvenanceRefused(
-                        f'第 {ordinal} 章 agent producer 没有返回 typed prepared/evaluation')
-                    if fatal is None:
-                        fatal = exc
-                    finish_agent_session(ordinal, 'executor_failed')
-                    blocked_by[ordinal] = str(exc)
-                    tracker.finish(
-                        ordinal, outcome='failed', detail=str(exc).splitlines()[0])
-                    continue
-                # 先等全批 model futures 都完成，才允许任一章正式落盘。否则第二章
-                # 稍晚回显了与第一章相同的 provider session id 时，第一章可能已经
-                # 被误写成 formal。候选已各自 checkpoint，延后这里只增加确定性终验。
-                agent_candidates[ordinal] = (prepared, evaluation)
                 continue
 
             if rejected := generated.get('rejected'):
@@ -3681,132 +3145,6 @@ def _run_group_parallel(
                         else (trim_notes[0] if trim_notes else None)),
             )
 
-    if agent_sessions:
-        if bool(getattr(client, 'isolation_failed', False)):
-            # provider/driver 跨章共享污染的是会话身份，不是某一条业务 finding。
-            # 本批任何候选都不先落 formal；checkpoint 留给修好 factory 后恢复。
-            for ordinal in sorted(agent_candidates):
-                finish_agent_session(ordinal, 'artifact_failed')
-                blocked_by[ordinal] = (
-                    f'第 {ordinal} 章候选已 checkpoint，但同批 session 隔离失败；'
-                    '本次未写正式章')
-                tracker.finish(
-                    ordinal, outcome='failed', detail='同批 session 隔离失败')
-        else:
-            first_pass_failures: dict[int, tuple[_CommitDiagnostics, Exception]] = {}
-
-            def settle_delivery(
-                ordinal: int,
-                delivery: ChapterCandidateDelivery,
-                *,
-                commit: _CommitOutcomeDiagnostics | None,
-            ) -> None:
-                """一次终态 delivery 的唯一收口：报告行 + tracker + ended 审计。
-
-                ``commit`` 非 None 表示本章经历过提交重放并成功；首次提交即
-                成功也如实记 ``delivery_attempts=1/same_run_recovered=False``。
-                只有从未进入提交链的章（隔离失败、发请求前取消）才留 None。
-                session 只在这里落一次终态。
-                """
-                judged[ordinal] = list(delivery.findings)
-                if delivery.outcome == 'rejected_revision':
-                    artifact = delivery.artifact
-                    assert isinstance(artifact, RejectedRevision)
-                    finish_agent_session(
-                        ordinal, 'blocked',
-                        delivery_attempts=1 if commit is None else commit.attempts,
-                        same_run_recovered=False if commit is None else commit.recovered,
-                        first_failure_phase=commit.failure_phase if commit else None,
-                        first_failure_detail=(
-                            commit.failure_detail if commit else None),
-                    )
-                    line = (
-                        f'第 {ordinal} 章 agent 修订候选终态仍相对旧稿退化，'
-                        f'旧正式稿未覆盖；证据 → {delivery.where}'
-                        f'（{"；".join(artifact.why)}）')
-                    blocked_by[ordinal] = line
-                    tracker.finish(
-                        ordinal, outcome='blocked', detail=artifact.why[0])
-                    return
-                line = (
-                    f'第 {ordinal} 章 → {delivery.where}'
-                    + (f'（{len(delivery.errors)} 条阻断级）'
-                       if delivery.errors else '')
-                    + (f'　⚠ {"；".join(delivery.trim_notes)}'
-                       if delivery.trim_notes else ''))
-                finish_agent_session(
-                    ordinal,
-                    'blocked' if delivery.errors else 'delivered',
-                    delivery_attempts=1 if commit is None else commit.attempts,
-                    same_run_recovered=False if commit is None else commit.recovered,
-                    first_failure_phase=commit.failure_phase if commit else None,
-                    first_failure_detail=(
-                        commit.failure_detail if commit else None),
-                )
-                (blocked_by if delivery.errors else written_by)[ordinal] = line
-                tracker.finish(
-                    ordinal,
-                    outcome='blocked' if delivery.errors else 'ok',
-                    detail=(delivery.errors[0] if delivery.errors
-                            else (delivery.trim_notes[0]
-                                  if delivery.trim_notes else None)),
-                )
-
-            # ── 第一次提交：逐章走完整提交链。提交异常**不**立即结束 session，
-            # 也不落 blocked；失败章与失败阶段留给下面的 same-run sweep。
-            for ordinal in sorted(agent_candidates):
-                prepared, evaluation = agent_candidates[ordinal]
-                diagnostics = _CommitDiagnostics()
-                try:
-                    delivery = finalize_chapter_candidate(
-                        ctx, client, prepared, evaluation,
-                        diagnostics=diagnostics)
-                except Exception as exc:
-                    first_pass_failures[ordinal] = (diagnostics, exc)
-                    continue
-                settle_delivery(ordinal, delivery, commit=None)
-
-            # ── same-run deterministic sweep：每个失败章一次有界重放。
-            # finalize_chapter_candidate 本身零 wire（不建 driver/probe/session、
-            # 不查缓存、不发模型请求），重放体与首次提交完全相同，因此这里
-            # 天然是 deterministic 的；不再叠加第二次重试，防止把内容缺陷
-            # 掩成基础设施抖动。
-            for ordinal, (first_box, first_exc) in sorted(first_pass_failures.items()):
-                prepared, evaluation = agent_candidates[ordinal]
-                retry_box = _CommitDiagnostics()
-                try:
-                    delivery = finalize_chapter_candidate(
-                        ctx, client, prepared, evaluation,
-                        diagnostics=retry_box,
-                        same_run_replay=True)
-                except Exception:
-                    if fatal is None:
-                        fatal = first_exc
-                    finish_agent_session(
-                        ordinal, 'artifact_failed',
-                        delivery_attempts=2,
-                        same_run_recovered=False,
-                        first_failure_phase=first_box.failure_phase,
-                        first_failure_detail=first_box.detail,
-                    )
-                    blocked_by[ordinal] = (
-                        f'第 {ordinal} 章终态提交在 {first_box.phase} 失败，'
-                        f'same-run 重放仍未恢复：{type(first_exc).__name__}: '
-                        f'{str(first_exc).splitlines()[0]}')
-                    tracker.finish(
-                        ordinal, outcome='failed',
-                        detail=str(first_exc).splitlines()[0])
-                    continue
-                settle_delivery(
-                    ordinal, delivery,
-                    commit=_CommitOutcomeDiagnostics(
-                        attempts=2,
-                        recovered=True,
-                        failure_phase=first_box.failure_phase,
-                        failure_detail=first_box.detail,
-                    ),
-                )
-
     written = [written_by[key] for key in sorted(written_by)]
     blocked = [blocked_by[key] for key in sorted(blocked_by)]
     if fatal is not None:
@@ -3826,11 +3164,8 @@ def _run_group_parallel(
 def _run_group(ctx: RunContext, store: ArtifactStore, book: M.Book,
                todo: list[dict[str, Any]], client: LlmClient, *,
                revise: dict[int, tuple[str, list[list[str]], str]] | None,
-               prepared_contexts: Mapping[int, ChapterCandidateContext] | None = None,
                ) -> CheckReport:
-    return _run_group_parallel(
-        ctx, store, book, todo, client, revise=revise,
-        prepared_contexts=prepared_contexts)
+    return _run_group_parallel(ctx, store, book, todo, client, revise=revise)
 
 
 def _fix_lines(fixes: list[list[str]]) -> list[str]:
@@ -3899,11 +3234,8 @@ def revise_targets(store: ArtifactStore
 def run_revise(ctx: RunContext, client: LlmClient,
                chapters: str | None = None) -> CheckReport:
     """`--revise`：把可反哺的结论连同上一轮成稿发回写手。**付费。**"""
-    ownership = (
-        nullcontext() if _uses_agent_sessions(ctx)
-        else stage5_runs.book_commit_ownership(ctx.novel_dir)
-    )
-    with ownership:
+    _require_direct_llm_entry(ctx, client)
+    with stage5_runs.book_commit_ownership(ctx.novel_dir):
         store = ArtifactStore(ctx)
         require_canonical_layout(store)
         # 与 initial write 共用同一 producer 级 pre-wire reservation guard；
@@ -3945,6 +3277,7 @@ def run_reviewer_rewrite(
         request_rel: str = STAGE5_REVIEWER_REWRITE_REQUEST,
 ) -> CheckReport:
     """整批持有 lease；逐章先 claim，再按写作并发上限生成，全部完成后统一审阅。"""
+    _require_direct_llm_entry(ctx, client)
     if not ctx.paid:
         raise ProvenanceRefused('reviewer rewrite paid runner 必须持显式付费授权')
     batch, digest = reviewer_rewrite.load_reviewer_rewrite_batch(ctx, request_rel)
@@ -3957,19 +3290,16 @@ def run_reviewer_rewrite(
         require_canonical_layout(store)
         book = review.load_book(ctx, store)
         entries: list[dict[str, Any]] = []
-        prepared_contexts: dict[int, ChapterCandidateContext] = {}
         for request in batch.requests:
             if request.target_ordinal not in targets:
                 continue
             with stage5_runs.reviewer_rewrite_execution_ownership(
                     ctx.novel_dir, request.request_sha256):
-                entry, prepared = _preclaim_reviewer_rewrite_unit(
+                entry, _prepared = _preclaim_reviewer_rewrite_unit(
                     ctx, store, book, request, digest, request_rel)
             entries.append(entry)
-            prepared_contexts[request.target_ordinal] = prepared
         return _run_group(
-            ctx, store, book, entries, client, revise=None,
-            prepared_contexts=prepared_contexts)
+            ctx, store, book, entries, client, revise=None)
 
 
 def _preclaim_reviewer_rewrite_unit(

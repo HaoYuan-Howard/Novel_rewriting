@@ -914,7 +914,7 @@ def test_recovery_zero_wire_refuses_unclosed_persistent_tail(tmp_path):
 
 
 @pytest.mark.parametrize('revise', [False, True])
-def test_direct_stage5_write_agent_refuses_before_factory_probe_turn_or_accounts(
+def test_retired_stage5_write_agent_refuses_before_factory_probe_turn_or_accounts(
         tmp_path, monkeypatch, revise):
     from novel.orchestrator.node_agents import Stage5WriteAgent
 
@@ -940,14 +940,13 @@ def test_direct_stage5_write_agent_refuses_before_factory_probe_turn_or_accounts
     monkeypatch.setattr(
         stage5_runs,
         'refuse_foreign_prepared_before_wire',
-        lambda got, chapters: (_ for _ in ()).throw(
-            ProvenanceRefused(
-                f'foreign prepared pre-wire: {got.run_id}/{chapters}')),
+        lambda *_args, **_kwargs: pytest.fail(
+            '退役 agent source 必须在 prepared guard 前拒绝'),
     )
     agent = Stage5WriteAgent(
         ctx, driver_factory=factory, chapters='2', revise=revise)
 
-    with pytest.raises(ProvenanceRefused, match='foreign prepared pre-wire'):
+    with pytest.raises(ProvenanceRefused, match='只接受 LlmClient'):
         agent.run()
 
     assert factory_calls == []
