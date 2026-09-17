@@ -5,7 +5,7 @@
 """
 from __future__ import annotations
 
-from typing import Annotated, Literal, Self
+from typing import Annotated, Any, Literal, Self
 
 from pydantic import Field, model_validator
 
@@ -548,9 +548,15 @@ class BeatMomentResponse(StrictModel):
 
 
 class PlotStateResponse(StrictModel):
+    """Blueprint wire：语义主张 + 可选共享主体提示；XOR 由编译器落地。
+
+    仍接受旧 content/global_ref 双写形状（before 规范化），避免已购候选与测试
+    夹具在升版瞬间全红。正式 PlotState 仍是 content XOR global_ref。
+    """
+
     state_key: LocalStateKey
-    content: NonEmpty | None
-    global_ref: GlobalSubjectRefResponse | None
+    semantic: NonEmpty
+    canonical_ref_hint: GlobalSubjectRefResponse | None = None
     modality: Literal['world', 'belief', 'claim', 'unresolved']
     holder: ActorRefResponse | None
     established_at: BeatMomentResponse
@@ -559,10 +565,32 @@ class PlotStateResponse(StrictModel):
     supersedes_state_refs: list[NonEmpty]
     evidence: list[ParagraphRange] = Field(min_length=1)
 
+    @model_validator(mode='before')
+    @classmethod
+    def _legacy_xor_to_extract(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        row = dict(data)
+        if 'semantic' in row:
+            row.pop('content', None)
+            row.pop('global_ref', None)
+            return row
+        content = row.pop('content', None)
+        global_ref = row.pop('global_ref', None)
+        if content is not None and global_ref is not None:
+            row['semantic'] = content
+            row['canonical_ref_hint'] = global_ref
+        elif global_ref is not None:
+            ref = global_ref.get('ref') if isinstance(global_ref, dict) else None
+            row['semantic'] = str(ref or 'shared_subject')
+            row['canonical_ref_hint'] = global_ref
+        elif content is not None:
+            row['semantic'] = content
+            row['canonical_ref_hint'] = None
+        return row
+
     @model_validator(mode='after')
     def _meaning(self) -> Self:
-        if (self.content is None) == (self.global_ref is None):
-            raise ValueError('持续状态只保存正文或共享主体引用之一')
         if self.modality in ('belief', 'claim') and self.holder is None:
             raise ValueError('相信或声称必须明确持有者')
         if self.modality == 'world' and self.holder is not None:

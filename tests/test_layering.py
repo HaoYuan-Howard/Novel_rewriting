@@ -285,8 +285,9 @@ _JSON_READ_ALLOWED = {
         '它们不是正式产物，当前版本、自哈希和输入身份不闭合即 unver，'
         '与 producer 共用载体协议，不含模型执行或 paid-response 恢复权威'),
     'novel/stages/stage2/plot_sequence.py': (
-        '只解码调用方已构造在内存的章节请求 metadata，添加 entry_states 并冻结'
-        '本轮 compiler 允许引用的主体；原文/Global/状态来自已记账 producer 输入，不裸读产物'),
+        '只解码调用方已构造在内存的章节请求 metadata 并冻结本轮 compiler '
+        '允许引用的主体；首次抽取并发提交各章（空 entry_states），跨章 Continuity '
+        '在 compile 期缝合；原文/Global 来自已记账 producer 输入，不裸读产物'),
     'novel/stages/stage2/plot_repair.py': (
         '只解码内存章节请求 metadata 来附 baseline_identities；'
         '修前蓝图、原文和修订模板均已通过 ArtifactStore/typed 路径读取，不打开盘上 JSON'),

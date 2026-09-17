@@ -186,7 +186,8 @@ _hard('scope_violation', '每次逻辑抽取只返回请求章节', 'R-3.16b',
       note='scope_violations 必须显式记录，缺失不能当作空列表。')
 _info('pronoun_surface_unattested', '叙述者自称字面有本章原文依据', 'R-3.14b')
 _metric('plot_shape', '完整节点、状态、约束与共享证据数量', 'R-3.13',
-        note='只报告实际规模，不设节点配额，不把辅助结构变回事实数据库。')
+        note='只报告实际规模（含 carry_out / same_beat_ended 读数），不设节点配额，'
+             '不把辅助结构变回事实数据库。')
 _metric('context_scope', '实际逐章抽取契约与正文边界', 'R-3.16b')
 _unver('plot_semantics', '完整剧情、归因、因果与揭示的语义核验', 'R-3.13',
        disclosable_unver=True,

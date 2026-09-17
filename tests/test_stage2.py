@@ -205,6 +205,8 @@ def test_real_stage2_report_separates_instance_detail_from_stable_rule_notes():
     assert '不以覆盖率证明' not in anchor.findings[0].detail
     assert '不以覆盖率证明' in anchor.note
     assert shape.findings and 'beats' in shape.findings[0].detail
+    assert 'carry_out' in shape.findings[0].detail
+    assert 'same_beat_ended' in shape.findings[0].detail
     assert '不设节点配额' in shape.note
     rendered = render(report)
     assert f'说明：{anchor.note}' in rendered and f'说明：{shape.note}' in rendered

@@ -102,6 +102,16 @@ def check_plot(c: Any) -> list[Outcome]:
         'states': sum(len(row.states) for row in typed),
         'constraints': sum(len(row.constraints) for row in typed),
         'evidence_anchors': sum(len(row.evidence_anchors) for row in typed),
+        'carry_out': sum(len(row.carry_out_refs) for row in typed),
+        'same_beat_ended': sum(
+            1 for chapter in typed for state in chapter.states
+            if state.ended_at is not None
+            and state.established_at.kind == 'at_beat'
+            and state.ended_at.kind == 'at_beat'
+            and state.established_at.beat_ref == state.ended_at.beat_ref),
+        'chapter_local_ended': sum(
+            1 for chapter in typed for state in chapter.states
+            if state.ended_at is not None),
     }
     out = [ran(rule, findings[rule], scanned=f'{len(c.bps)} 章')
            for rule in RULES if rule not in ('plot_shape', 'context_scope', 'plot_semantics')]

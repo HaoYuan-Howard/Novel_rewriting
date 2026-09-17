@@ -88,7 +88,13 @@ def test_plot_blueprint_real_producer_commits_v10_and_reads_back(tmp_path):
     artifact, raw = store.read_own(ChapterBlueprints, extract.BLUEPRINT_REL)
     assert len(artifact.blueprints) == len(main_text()) == 3
     assert len(transport.calls) == 3
-    assert (transport.calls[0].system, transport.calls[0].user) == preview
+    ch1 = next(
+        call for call in transport.calls
+        if json.loads(call.user.split('\n', 1)[0])['chapter_ordinal'] == 1)
+    assert (ch1.system, ch1.user) == preview
+    assert all(
+        json.loads(call.user.split('\n', 1)[0])['entry_states'] == []
+        for call in transport.calls)
     assert all(beat.content for chapter in artifact.blueprints for beat in chapter.beats)
     assert 'fact_atoms' not in json.dumps(raw)
     assert not store.exists(extract._INVALID)
@@ -124,27 +130,20 @@ def test_real_requests_receive_sparse_state_ids_from_previous_verified_chapter(t
     }]
     by_chapter[1]['carry_out_refs'] = ['st1']
     for ordinal in (2, 3):
-        by_chapter[ordinal]['entry_state_refs'] = ['st01_01']
-        by_chapter[ordinal]['carry_out_refs'] = ['st01_01']
+        # 并行抽取：后章 wire 不抄正式 ID；Continuity Pass 注入 entry/carry。
+        by_chapter[ordinal]['entry_state_refs'] = []
+        by_chapter[ordinal]['carry_out_refs'] = []
     order = []
     def respond(req, _index):
         metadata = json.loads(req.user.split('\n', 1)[0])
         ordinal = metadata['chapter_ordinal']
         order.append(ordinal)
-        if ordinal == 1:
-            assert metadata['entry_states'] == []
-        else:
-            incoming = metadata['entry_states']
-            assert len(incoming) == 1
-            assert incoming[0]['state']['state_id'] == 'st01_01'
-            assert incoming[0]['state']['modality'] == 'world'
-            assert incoming[0]['source_sha256']
-            assert incoming[0]['evidence_anchors'][0]['start_para'] == 5
+        assert metadata['entry_states'] == []
         return _ok({'blueprints': [by_chapter[ordinal]]})
     client, transport = _client(ctx, respond)
     report = extract.run_blueprint(ctx, client)
     assert report.passed
-    assert order == [1, 2, 3] and len(transport.calls) == 3
+    assert set(order) == {1, 2, 3} and len(transport.calls) == 3
     artifact, _ = ArtifactStore(ctx).read_own(ChapterBlueprints, extract.BLUEPRINT_REL)
     assert sum(len(row.states) for row in artifact.blueprints) == 1
     assert artifact.blueprints[2].entry_state_refs == ['st01_01']
@@ -166,25 +165,21 @@ def test_real_requests_carry_only_used_actor_binding_with_original_evidence(tmp_
         'supersedes_state_refs': [], 'evidence': [{'start_para': 3, 'end_para': 4}]}]
     by_chapter[1]['carry_out_refs'] = ['st1']
     for ordinal, chapter in by_chapter.items():
-        ref = 'a1' if ordinal == 1 else 'ap01_01'
         for beat in chapter['beats']:
             for actor in beat['participants']:
                 if actor['char_id'] == 'char_001':
-                    actor['presentation_ref'] = ref
-        chapter['narration'][0]['focalizer']['presentation_ref'] = ref
+                    # 并行抽取后章不得依赖历史 presentation 句柄；章内 null 即可。
+                    actor['presentation_ref'] = 'a1' if ordinal == 1 else None
+        chapter['narration'][0]['focalizer']['presentation_ref'] = (
+            'a1' if ordinal == 1 else None)
         if ordinal > 1:
-            chapter['entry_state_refs'] = ['st01_01']
-            chapter['carry_out_refs'] = ['st01_01']
+            chapter['entry_state_refs'] = []
+            chapter['carry_out_refs'] = []
 
     def respond(req, _index):
         metadata = json.loads(req.user.split('\n', 1)[0])
+        assert metadata['entry_states'] == []
         ordinal = metadata['chapter_ordinal']
-        if ordinal > 1:
-            support = metadata['entry_states'][0]['actor_bindings']
-            assert len(support) == 1
-            assert support[0]['chapter_ordinal'] == 1
-            assert support[0]['binding']['presentation_id'] == 'ap01_01'
-            assert support[0]['evidence_anchors'][0]['start_para'] == 2
         return _ok({'blueprints': [by_chapter[ordinal]]})
 
     client, transport = _client(ctx, respond)
@@ -192,7 +187,9 @@ def test_real_requests_carry_only_used_actor_binding_with_original_evidence(tmp_
     artifact, _ = ArtifactStore(ctx).read_own(ChapterBlueprints, extract.BLUEPRINT_REL)
     assert len(transport.calls) == 3
     assert [len(row.actor_bindings) for row in artifact.blueprints] == [1, 0, 0]
-    assert artifact.blueprints[2].narration[0].focalizer.presentation_ref == 'ap01_01'
+    assert artifact.blueprints[2].entry_state_refs == ['st01_01']
+    assert artifact.blueprints[2].narration[0].focalizer.presentation_ref is None
+    assert artifact.blueprints[2].beats[0].participants[0].presentation_ref is None
 
 
 @pytest.mark.parametrize('route', ['revalidate', 'renormalize'])

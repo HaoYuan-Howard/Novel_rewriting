@@ -537,6 +537,12 @@
     "stage4"
    ]
   },
+  "tests/test_plot_continuity.py": {
+   "layer": "unit_contract",
+   "stages": [
+    "stage2"
+   ]
+  },
   "tests/test_plot_design.py": {
    "cases": {
     "test_blind_distributed_design_and_human_roundtrip": "stage",

@@ -19,8 +19,14 @@ EvidenceAnchor 由段号响应编译，含证据 ID、起止段及零起点半�
 PlotState 保存 state_id、content 或 global_ref（二选一）、modality、
 holder（ActorRef）、established_at、ended_at、supersedes_state_refs、evidence_refs。
 modality 为 world、belief、claim、unresolved；belief/claim 明确持有者；
-world 不得带 holder。wire 响应（PlotStateResponse）与正式主体同判。
+world 不得带 holder。wire 响应（PlotStateResponse）是 Extract 形：必填
+`semantic` + 可选 `canonical_ref_hint`；正式 XOR 由
+`plot_compile.resolve_state_extract` 落地（hint 命中闭集→global_ref，否则
+semantic→content）。仍接受旧 content/global_ref 双写并在 before 规范化。
 状态性质不描述传播权限。成立可在章首或节点，解除须有节点锚点。
+**准入（prompt，非数量 HARD）**：只登记跨过当前 beat 仍成立、且后章仍会消费
+或必须解除的状态；拍内即时结果只进 beat.content。`plot_shape` 另报
+`carry_out` / `same_beat_ended` / `chapter_local_ended` 读数，不设配额。
 章间状态复用原 ID；章末不能携出已结束状态，不复制上章正文。
 上章携入的状态在本章解除时，inherited_state_endings 只保存 state_ref、
 at_beat_ref 和 evidence_refs，不回写旧章正文。被取代状态的结束锚点由新状态的
@@ -34,18 +40,20 @@ at_beat_ref 和 evidence_refs，不回写旧章正文。被取代状态的结束
 ## 人物呈现与内部身份
 
 所有参与者、在场者、状态持有者、叙述者、视点、观察者统一为
-`ActorRef {char_id, presentation_ref?}`。`presentation_ref` 只引用本章或实际携入的
-ActorBinding；不存在、错归属或存在多个可选呈现而未指定时，保留错误交 owner 免费订正。
+`ActorRef {char_id, presentation_ref?}`。`presentation_ref` **只引用本章**
+`actor_bindings` 的局部句柄；历史章正式 ID（如 `ap05_01`）不得作为本章引用。
+编译器在 `char_id` 合法时把历史句柄确定性压成 `null`（0 LLM），不按全书目录
+碰巧解析。需要特定表面身份时在本章新建 binding。
+`presentation_ref` 缺失、错归属或同章多呈现未指定时，保留错误交 owner 免费订正。
 逐章 ActorRef 闭集来自 Blueprint 称名投影：已到 `first_chapter` 的实体即使登记名
 尚未字面出现（常见第一人称「我」）也进入闭集，`surfaces` 可为空——可引用
 `char_id`，不可伪造未证实的 `actor_bindings.surfaces`；裸代词走
 `narration.pronoun_surfaces`。
-唯一绑定允许省略，但本章已出现绑定外称谓、且任一相关同人映射尚未披露时，默认引用仍有歧义；
-不能将旧身份吸入新身份，也不能仅因只登记旧绑定便排除新身份。此前已公开的普通同人称谓可共用唯一绑定。
+唯一绑定允许省略 presentation_ref；晚章新增绑定不改写旧章已解析身份。
 历史 State 按其原始使用章解析，后章新增绑定不改写此前默认身份。
-默认候选域只含本章声明与上一章 `carry_out_refs` 实际提供的 State 呈现闭包；未携入的历史绑定
-不扩大当前选择，也不能直接用其正式 ID。历史 State 的默认引用若在原章唯一解析到绑定，
-携入时附上该绑定和证据，保留原 State 的引用字段；历史 Beat 则在实际消费时按原章解析。
+entry_states 可附带历史绑定与证据供 Continuity / 定向修订阅读，但**不得**把历史
+`presentation_id` 当作本章 ActorRef 句柄；本章引用只用 `char_id` 或本章新建 binding。
+首次抽取并行时请求内 `entry_states` 为空，正式 entry/carry 由 Continuity Pass 缝合。
 同 Beat 可以含同 char_id 的两个不同 presentation，不能先按 char_id 去重。
 
 ActorBinding 保存 `presentation_id`、`char_id`、登记字面 `surfaces`、本章 `evidence_refs`

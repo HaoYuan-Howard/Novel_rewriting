@@ -1146,10 +1146,18 @@ class LlmClient:
 
         def worth_content_recovery(
                 resp: ChatResponse, *, gate: str, model_index: int,
+                why: str | None = None,
         ) -> bool:
-            """Stage2 只留 Flash 定向恢复 + Pro 重建各一次；其余节点保持旧策略。"""
+            """Stage2 只留 Flash 定向恢复 + Pro 重建各一次；其余节点保持旧策略。
+
+            schema/validator 上可确定性消化的失败（A/B）不触发同档付费重采。
+            """
             if recovery_policy != 'stage2-blueprint-v1':
                 return _worth_resampling(resp)
+            from novel.stages.stage2.plot_recovery_policy import (
+                blueprint_failure_is_deterministic)
+            if blueprint_failure_is_deterministic(gate=gate, why=why):
+                return False
             # 显式把主模型配置成 Pro 时没有 Flash→Pro 的第二个 model slot；首采
             # 被拒后仍保留一次**同 Pro、不同 request mode** 的 constraint rebuild。
             # 这不是同配置重采，answer_lost/length 也直接进入这一动作。
@@ -1843,7 +1851,8 @@ class LlmClient:
                                     sample < MAX_SAMPLES_PER_RUNG
                                     and worth_content_recovery(
                                         cached_resp, gate=cached_gate,
-                                        model_index=model_index)))
+                                        model_index=model_index,
+                                        why=cached_why)))
                             cache_pending = (
                                 cached_record is not None and cached_record.eligible
                                 and cached_record.resolution is None)
@@ -1852,7 +1861,7 @@ class LlmClient:
                                 and sample < MAX_SAMPLES_PER_RUNG
                                 and worth_content_recovery(
                                     cached_resp, gate=cached_gate,
-                                    model_index=model_index))
+                                    model_index=model_index, why=cached_why))
                             self._settle_gate(
                                 purpose=purpose, attempt_id=cached_attempt,
                                 source='cache', accepted=False, gate=cached_gate,
@@ -1985,7 +1994,7 @@ class LlmClient:
                         would_resample=(sample < MAX_SAMPLES_PER_RUNG
                                         and worth_content_recovery(
                                             resp, gate=gate,
-                                            model_index=model_index))))
+                                            model_index=model_index, why=why))))
                     repair_pending = (
                         repair_record is not None and repair_record.eligible
                         and repair_record.resolution is None)
@@ -1993,7 +2002,7 @@ class LlmClient:
                                 and sample < MAX_SAMPLES_PER_RUNG
                                 and worth_content_recovery(
                                     resp, gate=gate,
-                                    model_index=model_index))
+                                    model_index=model_index, why=why))
                     self._settle_gate(
                         purpose=purpose, attempt_id=attempt_id, source='wire',
                         accepted=False, gate=gate, rungs=active_rungs, index=i,

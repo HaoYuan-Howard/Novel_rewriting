@@ -97,6 +97,12 @@ def test_source_boundaries_are_semantic_not_forced_evidence_partition():
     assert '同一段可支持多个节点' in system
     assert '只读全部 content' in system
     assert 'modality 不授予他人知情或读者披露' in system
+    assert '跨过当前 beat 仍成立' in system
+    assert '拍内即时结果、姿态、一次性反应只写 beat.content' in system
+    assert '不得把「关键检查」扩成拍内事件复述' in system
+    assert '不要为拍内已写进 beat.content 的动作再复制证据行' in system
+    assert '跨章持续状态由程序 Continuity Pass 缝合' in system
+    assert '不要抄写他章正式 state_id' in system
 
 
 def test_the_prompt_asks_for_paragraph_numbers_not_transcribed_source():

@@ -2582,10 +2582,10 @@ def _run_blueprint_repair(ctx, client, **kwargs) -> CheckReport:
 def request_blueprints(ctx: RunContext, client: _BlueprintRequestSource, *,
                        chapters: tuple[int, ...] = (),
                        checkpoints: bool = True) -> dict[str, Any]:
-    """按阅读序发出全书首次请求，后章消费已经验证的持续状态。
+    """全书首次请求：各章空 entry_states 并行购买，Continuity 在 compile 期缝合。
 
     不支持跳章首次抽取；定向修订必须走现有蓝图的编辑/返修入口。
-    正式 producer 始终写 checkpoint，checkpoint 记录实际下发状态后的请求身份。
+    正式 producer 始终写 checkpoint，checkpoint 记录实际下发请求身份。
     Blueprint 生成前的机械准入由统一 ``novel.orchestrator.mechanical_admission`` 在调度入口判定。
     """
     _require_direct_stage2_entry(ctx, client, node='stage2.blueprint')

@@ -18,6 +18,37 @@ def source_digest(text: str) -> str:
     return hashlib.sha256(text.encode('utf-8')).hexdigest()
 
 
+def resolve_state_extract(
+    row: Mapping[str, Any], *,
+    allowed_global_refs: frozenset[tuple[str, str]],
+    allowed_char_ids: frozenset[str],
+) -> dict[str, Any]:
+    """PlotStateResponse Extract → 正式 content XOR global_ref（局部 key 阶段）。
+
+    hint 命中本轮闭集才落地为 global_ref；否则保留 semantic 为 content，
+    不因模型多写 hint 而付费重采。
+    """
+    result = dict(row)
+    semantic = result.pop('semantic', None)
+    hint = result.pop('canonical_ref_hint', None)
+    if semantic is None:
+        raise ValueError('持续状态缺少 semantic 主张')
+    if hint is not None:
+        kind = hint.get('kind') if isinstance(hint, Mapping) else None
+        ref = hint.get('ref') if isinstance(hint, Mapping) else None
+        allowed = (
+            isinstance(kind, str) and isinstance(ref, str)
+            and ((kind, ref) in allowed_global_refs
+                 or (kind == 'character' and ref in allowed_char_ids)))
+        if allowed:
+            result['content'] = None
+            result['global_ref'] = dict(hint)
+            return result
+    result['content'] = semantic
+    result['global_ref'] = None
+    return result
+
+
 def compile_chapter(
     response: PlotChapterResponse, source: str, *,
     allowed_char_ids: frozenset[str],
@@ -31,6 +62,12 @@ def compile_chapter(
     """分配正式标识；编辑/重抽可传入从历史计算的单调 ID 游标，禁止复用退役 ID。"""
     ordinal = response.chapter_ordinal
     payload = response.model_dump(mode='json')
+    payload['states'] = [
+        resolve_state_extract(
+            row, allowed_global_refs=allowed_global_refs,
+            allowed_char_ids=allowed_char_ids)
+        for row in payload['states']
+    ]
     mapping: dict[str, str] = {}
     starts = dict(next_ids or {})
     for collection, key, prefix in (
@@ -61,6 +98,27 @@ def compile_chapter(
             return [transform(item) for item in value]
         if not isinstance(value, dict):
             return value
+        # ActorRef：presentation_ref 是章内局部句柄。历史携入 ID 不得保留为
+        # 本章引用（否则会出现 ap05_* 出现在 ch7 这类 stale handle）；char_id 合法
+        # 时确定性压成 null，0 LLM。
+        if set(value) == {'char_id', 'presentation_ref'}:
+            char_id = value['char_id']
+            if char_id not in allowed_char_ids:
+                raise ValueError(f'ActorRef 引用了请求未提供的人物：{char_id}')
+            pref = value.get('presentation_ref')
+            if pref is None:
+                return {'char_id': char_id, 'presentation_ref': None}
+            if pref in mapping:
+                return {'char_id': char_id, 'presentation_ref': mapping[pref]}
+            inherited_row = inherited_bindings.get(pref)
+            if inherited_row is not None:
+                inherited_cid = (
+                    inherited_row.char_id if isinstance(inherited_row, ActorBinding)
+                    else inherited_row['char_id'])
+                if inherited_cid != char_id:
+                    raise ValueError('人物呈现绑定缺失、未提供或与实体不符')
+                return {'char_id': char_id, 'presentation_ref': None}
+            raise ValueError(f'局部或章首引用不存在：{pref}')
         if value.get('kind') == 'relation' and 'relation_actors' in value:
             if ('relation', value['ref']) not in allowed_global_refs:
                 raise ValueError('关系呈现引用请求未提供的 Global 关系')
@@ -91,8 +149,18 @@ def compile_chapter(
             elif key in id_fields:
                 result[id_fields[key]] = ref(item)
             elif key in ('beat_ref', 'before_beat_ref', 'after_beat_ref',
-                         'target_beat_ref', 'state_ref', 'at_beat_ref', 'presentation_ref', 'public_state_ref'):
+                         'target_beat_ref', 'state_ref', 'at_beat_ref', 'public_state_ref'):
                 result[key] = None if item is None else ref(item)
+            elif key == 'presentation_ref':
+                # 非 ActorRef 字典内的 presentation_ref 不应出现；防御性拒绝历史句柄直通。
+                if item is None:
+                    result[key] = None
+                elif item in mapping:
+                    result[key] = mapping[item]
+                elif item in inherited_bindings:
+                    result[key] = None
+                else:
+                    raise ValueError(f'局部或章首引用不存在：{item}')
             elif key in ('entry_state_refs', 'carry_out_refs', 'supersedes_state_refs', 'beat_refs'):
                 result[key] = [ref(v) for v in item]
             elif key == 'global_ref' and item is not None:
@@ -147,12 +215,19 @@ def validate_actors(chapter: PlotBlueprint, source: str, *,
                     character_bindings: Mapping[str, Sequence[Mapping[str, Any]]] | None = None,
                     inherited: Mapping[str, Any] | None = None,
                     check_registered: bool = True) -> None:
-    bindings = {key: value if isinstance(value, ActorBinding) else ActorBinding.model_validate(value)
-                for key, value in (inherited or {}).items()}
+    """校验本章 ActorRef / ActorBinding。
+
+    ``presentation_ref`` 只能指向本章 ``actor_bindings``。历史携入绑定仍可经
+    ``inherited`` 参与「唯一默认 vs 多表面歧义」判断材料，但不能作为句柄被引用；
+    编译期已把历史句柄压成 null。
+    """
+    inherited_bindings = {
+        key: (value if isinstance(value, ActorBinding) else ActorBinding.model_validate(value))
+        for key, value in (inherited or {}).items()
+    }
     local = {row.presentation_id: row for row in chapter.actor_bindings}
-    if bindings.keys() & local.keys():
+    if inherited_bindings.keys() & local.keys():
         raise ValueError('本章表面身份不能覆盖携入定义')
-    bindings.update(local)
     anchors = {row.evidence_id: row for row in chapter.evidence_anchors}
     for binding in local.values():
         if allowed_char_ids is not None and binding.char_id not in allowed_char_ids:
@@ -171,11 +246,13 @@ def validate_actors(chapter: PlotBlueprint, source: str, *,
         if allowed_char_ids is not None and actor.char_id not in allowed_char_ids:
             raise ValueError('人物使用位置引用未提供的实体')
         if actor.presentation_ref is not None:
-            binding = bindings.get(actor.presentation_ref)
+            binding = local.get(actor.presentation_ref)
             if binding is None or binding.char_id != actor.char_id:
-                raise ValueError('人物呈现绑定缺失、未提供或与实体不符')
+                raise ValueError(
+                    '人物呈现绑定必须是本章 actor_bindings，不能引用历史 presentation_id')
+            used_bindings.add(actor.presentation_ref)
         else:
-            choices = [row for row in bindings.values() if row.char_id == actor.char_id]
+            choices = [row for row in local.values() if row.char_id == actor.char_id]
             if len(choices) > 1:
                 raise ValueError('同一实体存在多个表面身份，必须明确 presentation_ref')
             names = list((character_bindings or {}).get(actor.char_id, []))
@@ -383,8 +460,9 @@ def compile_plot_response(raw: dict[str, Any], main_text: list[dict[str, Any]], 
                           character_inventory: Mapping[str, Any],
                           global_projections: Mapping[str, list[dict[str, Any]]] | None = None,
                           **_unused: Any) -> tuple[dict[str, Any], dict[str, Any]]:
-    """正式章节 producer 的编译接口；不构造任何旧事实或 hinge 适配器。"""
+    """正式章节 producer 的编译接口；Continuity Pass 在此按阅读序缝合 entry/carry。"""
     from contracts.schema.plot import PlotBlueprintResponse
+    from novel.stages.stage2.plot_continuity import prepare_chapter_for_continuity
     response = PlotBlueprintResponse.model_validate(raw)
     sources = {row['chapter_ordinal']: row['text'] for row in main_text}
     visible = character_inventory['visible_character_refs']
@@ -394,14 +472,15 @@ def compile_plot_response(raw: dict[str, Any], main_text: list[dict[str, Any]], 
     for chapter in sorted(response.blueprints, key=lambda row: row.chapter_ordinal):
         if chapter.chapter_ordinal not in sources:
             raise ValueError('抽取响应越出当前原文章域')
+        materials = state_materials(compiled_typed, sorted(carried)) if carried else []
+        prepared = prepare_chapter_for_continuity(chapter, materials)
         result = compile_chapter(
-            chapter, sources[chapter.chapter_ordinal],
+            prepared, sources[chapter.chapter_ordinal],
             allowed_char_ids=frozenset(visible.get(chapter.chapter_ordinal, {})),
             allowed_entry_state_refs=carried,
             character_bindings=character_inventory.get('character_bindings', {}).get(chapter.chapter_ordinal),
             allowed_actor_bindings={row['binding']['presentation_id']: row['binding']
-                for material in state_materials(compiled_typed, sorted(carried))
-                for row in material['actor_bindings']} if compiled else {},
+                for material in materials for row in material['actor_bindings']},
             allowed_global_refs=frozenset(
                 (row['kind'], row['ref']) for row in
                 (global_projections or {}).get(str(chapter.chapter_ordinal), [])),
@@ -451,4 +530,13 @@ def response_projection(raw: dict[str, Any], source: str) -> dict[str, Any]:
                     result[target] = project(item)
         return result
     projected = project(chapter.model_dump(mode='json'))
+    for state in projected.get('states', []):
+        content = state.pop('content', None)
+        global_ref = state.pop('global_ref', None)
+        if global_ref is not None:
+            state['semantic'] = content or str(global_ref.get('ref') or 'shared_subject')
+            state['canonical_ref_hint'] = global_ref
+        else:
+            state['semantic'] = content
+            state['canonical_ref_hint'] = None
     return PlotChapterResponse.model_validate(projected).model_dump(mode='json')

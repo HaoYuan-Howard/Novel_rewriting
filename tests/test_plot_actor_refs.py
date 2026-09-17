@@ -195,15 +195,72 @@ def test_inherited_state_free_request_compiler_receives_exact_binding_closure():
     later['entry_state_refs'] = ['st01_01']
     later['carry_out_refs'] = ['st01_01']
     later['beats'] = [later['beats'][0]]
+    # 抄写历史正式句柄：编译器压成 null（chapter-local），不保留 ap01_01。
     later['beats'][0]['participants'][0]['presentation_ref'] = 'ap01_01'
     user = build_plot_user('合成', SOURCE, 2, character_refs={cid: [row['surface'] for row in names]
         for cid, names in INVENTORY.items()}, character_bindings=INVENTORY, global_projection=[])
     compiler = request_compiler(with_entry_states(user, materials), SOURCE)
     second = compiler(PlotChapterResponse.model_validate(later))
-    assert second.beats[0].participants[0].presentation_ref == 'ap01_01'
+    assert second.beats[0].participants[0].presentation_ref is None
     validate_book([first, second], {1: SOURCE, 2: SOURCE})
     with pytest.raises(ValueError):
         request_compiler(with_entry_states(user, []), SOURCE)(PlotChapterResponse.model_validate(later))
+
+
+def test_ch7_style_foreign_presentation_refs_canonicalize_to_null():
+    """fujun ch7 形态：本章只声明本地 binding，却引用他章 ap0N_* —— 编译压成 null。"""
+    first = compiled(response(1))
+    inherited = {row.presentation_id: row for row in first.actor_bindings}
+    later = response(2)
+    later['actor_bindings'] = [{
+        'presentation_key': 'a1', 'char_id': 'char_002', 'surfaces': ['娘子'],
+        'evidence': [{'start_para': 1, 'end_para': 1}], 'public_state_ref': None,
+    }]
+    later['beats'] = [{
+        'beat_key': 'b1', 'content': '娘子与新邻居同席。',
+        'participants': [
+            {'char_id': 'char_001', 'presentation_ref': 'ap01_01'},
+            {'char_id': 'char_002', 'presentation_ref': 'a1'},
+        ],
+        'evidence': [{'start_para': 1, 'end_para': 1}], 'source_contexts': [{
+            'evidence': [{'start_para': 1, 'end_para': 1}],
+            'time_layer': 'present', 'place': None,
+            'present': [
+                {'char_id': 'char_001', 'presentation_ref': 'ap01_02'},
+                {'char_id': 'char_002', 'presentation_ref': 'a1'},
+            ],
+        }],
+    }]
+    later['states'] = []
+    later['constraints'] = []
+    later['entry_state_refs'] = []
+    later['carry_out_refs'] = []
+    later['narration'] = [{
+        'grammatical_person': 'third',
+        'narrator': None,
+        'focalizer': {'char_id': 'char_002', 'presentation_ref': None},
+        'pronoun_surfaces': [], 'beat_refs': [],
+        'evidence': [{'start_para': 1, 'end_para': 1}],
+    }]
+    second = compile_chapter(
+        PlotChapterResponse.model_validate(later), SOURCE,
+        allowed_char_ids=CHARS, character_bindings=INVENTORY,
+        allowed_actor_bindings=inherited)
+    assert second.actor_bindings[0].presentation_id == 'ap02_01'
+    assert second.beats[0].participants[0].presentation_ref is None
+    assert second.beats[0].participants[1].presentation_ref == 'ap02_01'
+    assert second.beats[0].source_contexts[0].present[0].presentation_ref is None
+    assert second.beats[0].source_contexts[0].present[1].presentation_ref == 'ap02_01'
+    validate_actors(second, SOURCE, allowed_char_ids=CHARS, character_bindings=INVENTORY,
+                    inherited=inherited)
+    # 历史句柄 + 错误 char_id：拒绝，不能碰巧解析。
+    later['beats'][0]['participants'][0] = {
+        'char_id': 'char_002', 'presentation_ref': 'ap01_01'}
+    with pytest.raises(ValueError, match='与实体不符'):
+        compile_chapter(
+            PlotChapterResponse.model_validate(later), SOURCE,
+            allowed_char_ids=CHARS, character_bindings=INVENTORY,
+            allowed_actor_bindings=inherited)
 
 
 @pytest.mark.parametrize('declare_current', [False, True])
@@ -248,6 +305,7 @@ def test_carried_default_state_includes_its_original_unique_binding_without_rewr
     later = response(2)
     later['actor_bindings'] = later['actor_bindings'][:1]
     later['beats'] = later['beats'][:1]
+    # 章内句柄规则：无本章多表面绑定时，只用 char_id（null）合法；不要求复用 ap01_01。
     later['beats'][0]['participants'][0]['presentation_ref'] = None
     later['entry_state_refs'] = ['st01_01']
     later['carry_out_refs'] = []
@@ -255,8 +313,8 @@ def test_carried_default_state_includes_its_original_unique_binding_without_rewr
         character_refs={cid: [row['surface'] for row in names] for cid, names in INVENTORY.items()},
         character_bindings=INVENTORY, global_projection=[])
     compiler = request_compiler(with_entry_states(user, carried), SOURCE)
-    with pytest.raises(ValueError, match='多个表面身份'):
-        compiler(PlotChapterResponse.model_validate(later))
+    second = compiler(PlotChapterResponse.model_validate(later))
+    assert second.beats[0].participants[0].presentation_ref is None
     later['beats'][0]['participants'][0]['presentation_ref'] = 'a1'
     second = compiler(PlotChapterResponse.model_validate(later))
     assert set(available_actor_bindings([first, second], 2)) == {'ap01_01', 'ap02_01'}

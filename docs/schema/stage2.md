@@ -134,6 +134,8 @@ secret_ref；正式 char/rel/wr/secret ID 和版本 ID 由编译器生成。独�
 
 **边界原则**：Stage2 的 LLM 输出默认是语义 Extract；正式 artifact / IR 只经确定性
 compile。按字段痛点渐进削薄 wire，不预建 `semantic/`/`canonical/`/`compile/` 空包目录。
+已落地：`WorldRuleExtract`；Blueprint `PlotStateResponse`（`semantic` + 可选
+`canonical_ref_hint` → compile XOR）。
 
 人工编辑 evidence_refs 可复用当前 ev 引用，或提交 `{chapter_ordinal,locator}`。定位必须
 在指定章唯一命中（exact 后 normalized）；非法章、零命中、多命中写盘前拒绝。正式锚点的
@@ -357,8 +359,9 @@ GlobalEdit v1～v5 不迁移；人工免费获取 v6 模板后重新核对。旧
   （独立预检 `POST /{sid}/stage2/global/edit/preview` 与 apply 共用同一候选判据；
   见 §三之二）。称名投影独归人物 producer，Global 写口不补建或采用它。
 - stage2.blueprint：默认 plot-blueprint-v1，一章一次逻辑请求，原文一次、必要 Global 和人物
-  投影及前章稀疏携带状态。初次按实际携带依赖顺序执行，独立 session、并发上限、验证后
-  checkpoint 与全章原子提交保留。状态依赖尚未闭合不预先并行购买后章。
+  投影。首次抽取各章空 entry_states、独立 session，在并发上限内并行购买；跨章
+  entry/carry 与精确主张去重由 0-LLM Continuity Pass 在 compile 期按阅读序缝合。
+  验证后 checkpoint 与全章原子提交保留。定向修订仍可注入携入状态材料。
   推理通道采纳的响应在 checkpoint 写入及恢复时均核验原始 answer_lost 字节、成本账和
   唯一审计指针；重算 checkpoint 摘要不能替代供应商留证。正式提交后新出现的问题稿，
   不能由旧批次 prepared 尾窗自动清除；冲突保留原字节供当前 owner 处理。

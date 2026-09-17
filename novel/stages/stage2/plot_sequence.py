@@ -1,7 +1,9 @@
-"""按持续状态依赖推进章节；每章仍只有一个逻辑请求和独立 session。
+"""按章并发抽取；跨章持续状态由 Continuity Pass（compile 期）缝合。
 
-后章不能引用模型从未见过的前章 State ID。并发额度仍由现有执行器控制，
-同书有依赖的章节按阅读序解锁；不增加额外抽取/聚合模型工位。
+首次抽取不再把前章 carry_out 注入后章 prompt。各章独立 session、空
+entry_states，在既有并发上限内并行购买；正式 entry/carry/去重由
+``plot_continuity.prepare_chapter_for_continuity`` + ``compile_plot_response``
+按阅读序确定性落地。定向修订（plot_repair）仍可串行注入 entry 材料。
 """
 from __future__ import annotations
 
@@ -9,13 +11,13 @@ import json
 from typing import Any
 
 from contracts.schema.plot import PlotBlueprintResponse
-from novel import paths
 from novel.errors import ProvenanceRefused
 from novel.observability import ChapterProgressTracker
-from novel.stages.stage2.plot_compile import compile_chapter, state_materials
+from novel.stages.stage2.plot_compile import compile_chapter
 
 
 def with_entry_states(user: str, states: list[dict[str, Any]]) -> str:
+    """测试 / 定向修订仍可显式注入 entry_states；首次并发抽取保持空列表。"""
     metadata, source = user.split('\n', 1)
     payload = json.loads(metadata)
     payload['entry_states'] = states
@@ -60,43 +62,24 @@ def request_validator(user: str, source: str):
 
 def execute(ctx, client, requests, *, main_text, character_inventory,
             global_projections, checkpoints: bool, restore_checkpoints: bool):
+    """全书章请求一次提交给现有章并发池；Continuity 不在此串行等待。"""
     from novel.stages.stage2.extract import _run_chapter_requests
 
     sources = {row['chapter_ordinal']: row['text'] for row in main_text}
     ordinals = [ordinal for ordinal, _system, _user in requests]
     if ordinals != sorted(sources):
         raise ProvenanceRefused('完整剧情首次抽取必须覆盖全部源章；定向修订使用已有蓝图的编辑/返修入口')
-    if restore_checkpoints:
-        gap = False
-        for ordinal in ordinals:
-            exists = paths.stage2_blueprint_checkpoint_path(
-                ctx.novel_dir, ctx.run_id, 'blueprint', ordinal).exists()
-            if exists and gap:
-                raise ProvenanceRefused('持续状态依赖链中间缺检查点，后章来源无法核验；不能先购买缺章')
-            gap = gap or not exists
-    raw, violations, errors, actual_requests = [], [], [], []
+    # 并行抽取不再依赖前缀 checkpoint 才能构造后章 prompt；缺章只影响整书提交，
+    # 由 finish / Continuity 闭合，不在此因「中间洞」拒恢复已验章。
+    actual_requests = list(requests)
+    validators = {
+        ordinal: request_validator(user, sources[ordinal])
+        for ordinal, _system, user in actual_requests
+    }
     tracker = ChapterProgressTracker(ctx.observe, ordinals)
-    compiled = []
-    carried: frozenset[str] = frozenset()
-    for ordinal, system, seed_user in requests:
-        entry = state_materials(compiled, sorted(carried))
-        user = with_entry_states(seed_user, entry)
-        actual_requests.append((ordinal, system, user))
-
-        compile_current = request_compiler(user, sources[ordinal])
-        validate = request_validator(user, sources[ordinal])
-
-        rows, problems, failures = _run_chapter_requests(ctx, client,
-            [(ordinal, system, user)], model_cls=PlotBlueprintResponse,
-            validator_of=lambda _ordinal: validate, phase='blueprint',
-            architecture='plot-blueprint-v1', checkpoints=checkpoints,
-            restore_checkpoints=restore_checkpoints, progress_tracker=tracker)
-        raw.extend(rows)
-        violations.extend(problems)
-        errors.extend(failures)
-        if failures or not rows:
-            break
-        chapter = compile_current(PlotBlueprintResponse.model_validate({'blueprints': rows}).blueprints[0])
-        compiled.append(chapter)
-        carried = frozenset(chapter.carry_out_refs)
-    return raw, violations, errors, actual_requests
+    rows, problems, failures = _run_chapter_requests(
+        ctx, client, actual_requests, model_cls=PlotBlueprintResponse,
+        validator_of=lambda ordinal: validators[ordinal], phase='blueprint',
+        architecture='plot-blueprint-v1', checkpoints=checkpoints,
+        restore_checkpoints=restore_checkpoints, progress_tracker=tracker)
+    return rows, problems, failures, actual_requests

@@ -200,22 +200,43 @@ def test_literal_is_evidenced_and_claim_is_not_world_state():
         blueprint(response=response)
 
 
-def test_plot_state_response_rejects_content_global_ref_xor_violations():
+def test_plot_state_response_extract_accepts_legacy_dual_write_and_rejects_empty():
     from contracts.schema.plot import PlotStateResponse
+    from novel.stages.stage2.plot_compile import resolve_state_extract
+
     base = {
         'state_key': 'st1', 'modality': 'world', 'holder': None,
         'established_at': {'kind': 'at_beat', 'beat_ref': 'b1'}, 'ended_at': None,
         'supersedes_state_refs': [], 'evidence': [{'start_para': 1, 'end_para': 1}],
     }
-    with pytest.raises(ValidationError, match='正文或共享主体引用之一'):
-        PlotStateResponse.model_validate({
-            **base, 'content': '两边都写', 'global_ref': {'kind': 'world_rule', 'ref': 'wr_01/v01'},
-        })
-    with pytest.raises(ValidationError, match='正文或共享主体引用之一'):
+    dual = PlotStateResponse.model_validate({
+        **base, 'content': '两边都写', 'global_ref': {'kind': 'world_rule', 'ref': 'wr_01/v01'},
+    })
+    assert dual.semantic == '两边都写'
+    assert dual.canonical_ref_hint is not None
+    assert dual.canonical_ref_hint.ref == 'wr_01/v01'
+
+    hit = resolve_state_extract(
+        dual.model_dump(mode='json'),
+        allowed_global_refs=frozenset({('world_rule', 'wr_01/v01')}),
+        allowed_char_ids=frozenset(),
+    )
+    assert hit['content'] is None
+    assert hit['global_ref']['ref'] == 'wr_01/v01'
+
+    miss = resolve_state_extract(
+        dual.model_dump(mode='json'),
+        allowed_global_refs=frozenset(),
+        allowed_char_ids=frozenset(),
+    )
+    assert miss['content'] == '两边都写'
+    assert miss['global_ref'] is None
+
+    with pytest.raises(ValidationError):
         PlotStateResponse.model_validate({**base, 'content': None, 'global_ref': None})
     with pytest.raises(ValidationError, match='客观状态不能带信念持有者'):
         PlotStateResponse.model_validate({
-            **base, 'content': '客观事实', 'global_ref': None,
+            **base, 'semantic': '客观事实', 'canonical_ref_hint': None,
             'holder': {'char_id': 'char_001'},
         })
 
@@ -339,3 +360,17 @@ def test_response_projection_does_not_rewrite_prose_matching_a_formal_id():
     assert wire['beats'][0]['content'] == 'b01_01'
     assert wire['beats'][0]['source_contexts'][0]['place'] == 'b01_02'
     assert wire['chapter_function'] == 'b01_01'
+
+
+def test_blueprint_failure_grading_blocks_paid_resample_for_deterministic_why():
+    from novel.stages.stage2.plot_recovery_policy import (
+        blueprint_failure_is_deterministic)
+
+    assert blueprint_failure_is_deterministic(
+        gate='schema', why='持续状态只保存正文或共享主体引用之一')
+    assert blueprint_failure_is_deterministic(
+        gate='validator', why='人物呈现绑定必须是本章 actor_bindings，不能引用历史')
+    assert not blueprint_failure_is_deterministic(
+        gate='schema', why='相信或声称必须明确持有者')
+    assert not blueprint_failure_is_deterministic(
+        gate='answer_lost', why='持续状态只保存正文或共享主体引用之一')

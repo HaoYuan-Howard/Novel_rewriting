@@ -23,8 +23,13 @@ Stage6 Prepare / Stage7 交付验收；本批只闭合工程单 Executor，不�
 已补 legacy 并从 `AGENT_ONLY` 移除（`stage6.prepare` 仍待）；Analyze `world_rules` 改为
 `WorldRuleExtract`→compiler→`WorldRuleDraft`；legacy `--recover-analyze` 可从 work_unit
 recovery 取回原回答。样本根 `E:\_novel_flash\fujun_extract`：characters/global 已正式落盘；
-`stage2.blueprint`：ActorRef 闭集（含空 surfaces 第一人称）、states XOR/holder、constraints
-observer 已对齐 wire；`fujun_extract` 11 章 Flash 蓝图已正式落盘（ch1 经免费 XOR 订正）。
+`stage2.blueprint`：ActorRef 闭集（含空 surfaces）、constraints observer 已对齐 wire；
+states 改为 Extract（`semantic` + 可选 `canonical_ref_hint`）→compiler XOR；
+`presentation_ref` 改为章内句柄（历史 ID 编译压 null）；schema/wire 可确定性消化
+失败不触发同档付费重采。states/evidence 已收紧 prompt 准入（跨 beat + 后章消费；
+拍内不建 state）；`plot_shape` 增补 carry/same_beat 读数（无配额）。
+Continuity Pass 已落地：首次 blueprint 章并发 + compile 期 0-LLM 缝合 entry/carry。
+`fujun_extract` 11 章 Flash 蓝图已落盘（存量 ch7 跨章句柄待免费重编译）。
 产品 UI 一点开始即双授权（CLI 保留 `--yes`）。
 
 ## P0 · 当前工程实施
