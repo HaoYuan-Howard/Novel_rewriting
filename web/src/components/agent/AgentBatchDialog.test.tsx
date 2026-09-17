@@ -69,7 +69,7 @@ describe('AgentBatchDialog', () => {
     )
 
     expect(await screen.findByText(/尚未保存常用 Agent 配置/)).toBeVisible()
-    expect(screen.getByRole('combobox', { name: '默认执行者 后端' })).toHaveValue('')
+    expect(screen.getByRole('combobox', { name: '默认模型执行配置 Provider' })).toHaveValue('')
     const button = screen.getByRole('button', {
       name: '需先授权模型调用费用',
     })
@@ -110,19 +110,11 @@ describe('AgentBatchDialog', () => {
       '/n/book-1/stage0',
     )
 
-    await screen.findByRole('combobox', { name: '默认执行者 · Agent CLI 模型' })
+    await screen.findByRole('combobox', { name: '默认模型执行配置 Model' })
     await user.click(screen.getByRole('checkbox', { name: '单独配置 node.dynamic-b' }))
     await user.selectOptions(
-      screen.getByRole('combobox', { name: 'node.dynamic-b 执行者 · Agent CLI 模型' }),
-      OVERRIDE_PROFILE.model,
-    )
-    await user.selectOptions(
-      screen.getByRole('combobox', { name: 'node.dynamic-b 执行者 · Agent CLI 思考强度' }),
+      screen.getByRole('combobox', { name: 'node.dynamic-b 模型执行配置 Effort' }),
       OVERRIDE_PROFILE.reasoning_effort,
-    )
-    await user.selectOptions(
-      screen.getByRole('combobox', { name: 'node.dynamic-b 执行者 · Agent CLI 执行模式' }),
-      OVERRIDE_PROFILE.execution_mode ?? '',
     )
     await user.click(screen.getByRole('checkbox', { name: /允许这一批产生外部模型调用费用/ }))
     await user.click(screen.getByRole('checkbox', { name: /允许把这几本的正文/ }))
@@ -146,11 +138,10 @@ describe('AgentBatchDialog', () => {
     })
     expect(request?.profiles).not.toBe(defaults)
 
-    if (defaults.executor_default.kind !== 'agent') throw new Error('fixture 必须是 agent')
     defaults.executor_default.profile.model = 'later-default-drift'
     expect(request?.profiles.executor_default).toMatchObject({
-      kind: 'agent',
-      profile: { model: 'executor-model-v7' },
+      kind: 'legacy',
+      profile: { model: 'deepseek-v4-pro' },
     })
     expect(await screen.findByText(/本批受理时的冻结配置/)).toBeVisible()
     expect(screen.getByTestId('agent-profiles-snapshot')).toHaveTextContent('node.dynamic-b')

@@ -13,7 +13,7 @@ import type {
   AgentRunRequest,
   PipelineAgentProfiles,
 } from '@/types/agent'
-import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { renderRoute } from '@/test/render'
@@ -41,30 +41,6 @@ function runningRecord(req: AgentRunRequest): AgentRunRecord {
     note: null,
     outcome: null,
     allowed_controls: ['stop'],
-  }
-}
-
-function fourStateCapabilities(): AgentCapabilitiesResponse {
-  const base = agentCapabilities(null)
-  return {
-    ...base,
-    drivers: [
-      ...base.drivers,
-      ...(['missing', 'unknown', 'unauthenticated'] as const).map((availability) => ({
-        id: 'driver-' + availability,
-        provider: 'provider-' + availability,
-        label: '驱动-' + availability,
-        availability,
-        availability_reason: '探针原因-' + availability,
-        version: null,
-        models: [{
-          id: 'model-' + availability,
-          label: '模型-' + availability,
-          reasoning_efforts: ['effort-' + availability],
-          execution_modes: ['mode-' + availability],
-        }],
-      })),
-    ],
   }
 }
 
@@ -167,14 +143,14 @@ describe('AgentRunDialog', () => {
 
   it('用户常用配置优先于产品默认，并作为本次 preview 的完整快照', async () => {
     const savedProfiles: PipelineAgentProfiles = {
-      schema_version: 3,
+      schema_version: 4,
       executor_default: {
-        kind: 'agent',
+        kind: 'legacy',
         profile: {
-          driver: 'executor-dynamic',
-          model: 'executor-model-v8',
-          reasoning_effort: 'fast-dynamic',
-          execution_mode: 'worker-dynamic',
+          provider: 'deepseek',
+          model: 'deepseek-v4-pro',
+          reasoning_effort: 'max',
+          thinking_mode: 'on',
         },
       },
       executor_overrides: {},
@@ -198,9 +174,7 @@ describe('AgentRunDialog', () => {
 
     expect(await screen.findByText(/已载入设置页保存的常用配置/)).toBeVisible()
     await waitFor(() => expect(preview).toHaveBeenCalledTimes(1))
-    expect(screen.getByRole('combobox', { name: '默认执行者 · Agent CLI 模型' })).toHaveValue(
-      'executor-model-v8',
-    )
+    expect(screen.getByRole('combobox', { name: '默认模型执行配置 Effort' })).toHaveValue('max')
     expect(preview.mock.calls[0]?.[0].profiles).toEqual(savedProfiles)
   })
 
@@ -225,17 +199,16 @@ describe('AgentRunDialog', () => {
 
     act(() => resolveCapabilities(agentCapabilities()))
     await waitFor(() => expect(preview).toHaveBeenCalledTimes(1))
-    expect(screen.getByRole('combobox', { name: '默认执行者 · Agent CLI 模型' })).toHaveValue(
-      'executor-model-v7',
+    expect(screen.getByRole('combobox', { name: '默认模型执行配置 Model' })).toHaveValue(
+      'deepseek-v4-pro',
     )
     expect(screen.getByRole('button', {
       name: '需先授权模型调用费用',
     })).toBeDisabled()
   })
 
-  it('default_profiles=null 时不猜选项，四态均可见且非 ready driver 不可选', async () => {
-    const capabilities = fourStateCapabilities()
-    const capabilityCall = vi.spyOn(api, 'getAgentCapabilities').mockResolvedValue(capabilities)
+  it('default_profiles=null 时不猜选项，Provider 保持空选', async () => {
+    const capabilityCall = vi.spyOn(api, 'getAgentCapabilities').mockResolvedValue(agentCapabilities(null))
     const preview = vi.spyOn(api, 'previewAgentRun')
 
     renderRoute(
@@ -249,21 +222,7 @@ describe('AgentRunDialog', () => {
     expect(screen.getByRole('button', {
       name: '需先授权模型调用费用',
     })).toBeDisabled()
-
-    // 表单不再代选任何后端；显式选择 Agent CLI 后才进入 driver 选择面。
-    fireEvent.change(screen.getByRole('combobox', { name: '默认执行者 后端' }), {
-      target: { value: 'agent' },
-    })
-    const executor = screen.getByRole('combobox', { name: '默认执行者 · Agent CLI driver' })
-    expect(executor).toHaveValue('')
-    expect(within(executor).getByRole('option', { name: '驱动-missing · 未安装' })).toBeDisabled()
-    expect(within(executor).getByRole('option', { name: '驱动-unknown · 状态未知' })).toBeDisabled()
-    expect(within(executor).getByRole('option', { name: '驱动-unauthenticated · 未登录' })).toBeDisabled()
-    const states = screen.getByTestId('agent-executor-default-agent-availability')
-    expect(states).toHaveTextContent(/驱动-missing · 未安装.*探针原因-missing/)
-    expect(states).toHaveTextContent(/驱动-unknown · 状态未知.*探针原因-unknown/)
-    expect(states).toHaveTextContent(/驱动-unauthenticated · 未登录.*探针原因-unauthenticated/)
-    expect(states).toHaveTextContent(/动态执行 CLI · 可用.*动态执行探针通过/)
+    expect(screen.getByRole('combobox', { name: '默认模型执行配置 Provider' })).toHaveValue('')
   })
 
   it('动态选项、逐节点覆盖与授权变化都重新 preview，start 复用最后成功 preview 的同一深快照', async () => {
@@ -283,54 +242,30 @@ describe('AgentRunDialog', () => {
     await screen.findByText(/界面不会猜第一项/)
 
     await user.selectOptions(
-      screen.getByRole('combobox', { name: '默认执行者 后端' }),
-      'agent',
+      screen.getByRole('combobox', { name: '默认模型执行配置 Provider' }),
+      'deepseek',
     )
     await user.selectOptions(
-      screen.getByRole('combobox', { name: '默认执行者 · Agent CLI driver' }),
-      'executor-dynamic',
+      screen.getByRole('combobox', { name: '默认模型执行配置 Model' }),
+      'deepseek-v4-pro',
     )
     await user.selectOptions(
-      screen.getByRole('combobox', { name: '默认执行者 · Agent CLI 模型' }),
-      'executor-model-v7',
+      screen.getByRole('combobox', { name: '默认模型执行配置 Thinking' }),
+      'on',
     )
     await user.selectOptions(
-      screen.getByRole('combobox', { name: '默认执行者 · Agent CLI 思考强度' }),
-      'deep-dynamic',
-    )
-    await user.selectOptions(
-      screen.getByRole('combobox', { name: '默认执行者 · Agent CLI 执行模式' }),
-      'worker-dynamic',
+      screen.getByRole('combobox', { name: '默认模型执行配置 Effort' }),
+      'high',
     )
 
     await waitFor(() => expect(preview).toHaveBeenCalledTimes(1))
     expect(preview.mock.calls[0]?.[0].profiles).toEqual(READY_PROFILES)
-    expect(screen.getByText('动态执行模型七')).toBeVisible()
 
     await user.click(screen.getByRole('checkbox', { name: '单独配置 node.dynamic-a' }))
     await waitFor(() => expect(preview).toHaveBeenCalledTimes(2))
     await user.selectOptions(
-      screen.getByRole('combobox', { name: 'node.dynamic-a 执行者 · Agent CLI 模型' }),
-      'executor-model-v8',
-    )
-    // 模型切换后 effort/mode 已清空；这份半成品不准触发下一次 preview。
-    expect(screen.getByRole('combobox', {
-      name: 'node.dynamic-a 执行者 · Agent CLI 思考强度',
-    })).toHaveValue('')
-    expect(screen.getByRole('combobox', {
-      name: 'node.dynamic-a 执行者 · Agent CLI 执行模式',
-    })).toHaveValue('')
-    expect(screen.getByRole('button', {
-      name: '需先授权模型调用费用',
-    })).toBeDisabled()
-
-    await user.selectOptions(
-      screen.getByRole('combobox', { name: 'node.dynamic-a 执行者 · Agent CLI 思考强度' }),
-      'fast-dynamic',
-    )
-    await user.selectOptions(
-      screen.getByRole('combobox', { name: 'node.dynamic-a 执行者 · Agent CLI 执行模式' }),
-      'worker-dynamic',
+      screen.getByRole('combobox', { name: 'node.dynamic-a 模型执行配置 Effort' }),
+      'max',
     )
     await waitFor(() => expect(preview).toHaveBeenCalledTimes(3))
 
@@ -347,10 +282,11 @@ describe('AgentRunDialog', () => {
       profiles: {
         executor_overrides: {
           'node.dynamic-a': {
-            kind: 'agent',
+            kind: 'legacy',
             profile: {
-              model: 'executor-model-v8',
-              reasoning_effort: 'fast-dynamic',
+              model: 'deepseek-v4-pro',
+              reasoning_effort: 'max',
+              thinking_mode: 'on',
             },
           },
         },
@@ -385,35 +321,23 @@ describe('AgentRunDialog', () => {
     await waitFor(() => expect(preview).toHaveBeenCalledTimes(1))
 
     await user.selectOptions(
-      screen.getByRole('combobox', { name: '默认执行者 · Agent CLI 模型' }),
-      'executor-model-v8',
-    )
-    expect(screen.getByRole('combobox', { name: '默认执行者 · Agent CLI 思考强度' })).toHaveValue('')
-    expect(screen.getByRole('button', {
-      name: '需先授权模型调用费用',
-    })).toBeDisabled()
-    await user.selectOptions(
-      screen.getByRole('combobox', { name: '默认执行者 · Agent CLI 思考强度' }),
-      'fast-dynamic',
-    )
-    await user.selectOptions(
-      screen.getByRole('combobox', { name: '默认执行者 · Agent CLI 执行模式' }),
-      'worker-dynamic',
+      screen.getByRole('combobox', { name: '默认模型执行配置 Effort' }),
+      'max',
     )
     await waitFor(() => expect(preview).toHaveBeenCalledTimes(2))
     expect(preview.mock.calls.at(-1)?.[0].profiles).toMatchObject({
-      executor_default: { kind: 'agent', profile: { model: 'executor-model-v8' } },
+      executor_default: { kind: 'legacy', profile: { reasoning_effort: 'max' } },
     })
 
     current = agentCapabilities()
-    current.drivers[0].models = current.drivers[0].models.filter(
-      (model) => model.id !== 'executor-model-v8',
+    current.legacy_providers[0].models = current.legacy_providers[0].models.filter(
+      (model) => model.id !== 'deepseek-v4-pro',
     )
     await act(async () => {
       await queryClient.invalidateQueries({ queryKey: qk.agentCapabilities() })
     })
-    await waitFor(() => expect(screen.getByText(/executor-model-v8 不属于当前 driver/)).toBeVisible())
-    expect(screen.getByRole('combobox', { name: '默认执行者 · Agent CLI 模型' })).toHaveValue('')
+    await waitFor(() => expect(screen.getByText(/deepseek-v4-pro 不属于/)).toBeVisible())
+    expect(screen.getByRole('combobox', { name: '默认模型执行配置 Model' })).toHaveValue('')
     expect(screen.getByRole('button', {
       name: '需先授权模型调用费用',
     })).toBeDisabled()

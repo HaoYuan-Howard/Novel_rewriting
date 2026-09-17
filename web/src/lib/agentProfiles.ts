@@ -1,7 +1,5 @@
 import type {
   AgentCapabilitiesResponse,
-  AgentDriverCapability,
-  AgentProfile,
   ExecutorBackend,
   LegacyLlmProfile,
   LegacyProviderCapability,
@@ -10,13 +8,6 @@ import type {
 } from '@/types/agent'
 
 /** 浏览器草稿允许半成品；只有 materialize 成功后的对象才准进入 preview/start。 */
-export interface AgentProfileDraft {
-  driver: string
-  model: string
-  reasoning_effort: string
-  execution_mode: string
-}
-
 export interface LegacyLlmProfileDraft {
   provider: string
   model: string
@@ -24,10 +15,10 @@ export interface LegacyLlmProfileDraft {
   thinking_mode: string
 }
 
+/** 单一 LLM executor；kind 固定为 legacy（与 C3 wire 对齐），草稿只编辑 profile。 */
 export interface ExecutorBackendDraft {
-  kind: '' | 'agent' | 'legacy'
-  agent_profile: AgentProfileDraft
-  legacy_profile: LegacyLlmProfileDraft
+  kind: 'legacy'
+  profile: LegacyLlmProfileDraft
 }
 
 export interface PipelineAgentProfilesDraft {
@@ -42,19 +33,14 @@ export interface MaterializedProfiles {
   errors: string[]
 }
 
-export function emptyAgentProfileDraft(): AgentProfileDraft {
-  return { driver: '', model: '', reasoning_effort: '', execution_mode: '' }
-}
-
 export function emptyLegacyLlmProfileDraft(): LegacyLlmProfileDraft {
   return { provider: '', model: '', reasoning_effort: '', thinking_mode: '' }
 }
 
 export function emptyExecutorBackendDraft(): ExecutorBackendDraft {
   return {
-    kind: '',
-    agent_profile: emptyAgentProfileDraft(),
-    legacy_profile: emptyLegacyLlmProfileDraft(),
+    kind: 'legacy',
+    profile: emptyLegacyLlmProfileDraft(),
   }
 }
 
@@ -62,15 +48,6 @@ export function emptyPipelineAgentProfilesDraft(): PipelineAgentProfilesDraft {
   return {
     executor_default: emptyExecutorBackendDraft(),
     executor_overrides: {},
-  }
-}
-
-export function profileDraftOf(profile: AgentProfile): AgentProfileDraft {
-  return {
-    driver: profile.driver,
-    model: profile.model,
-    reasoning_effort: profile.reasoning_effort,
-    execution_mode: profile.execution_mode ?? '',
   }
 }
 
@@ -84,17 +61,10 @@ export function legacyProfileDraftOf(profile: LegacyLlmProfile): LegacyLlmProfil
 }
 
 export function executorBackendDraftOf(backend: ExecutorBackend): ExecutorBackendDraft {
-  return backend.kind === 'agent'
-    ? {
-        kind: 'agent',
-        agent_profile: profileDraftOf(backend.profile),
-        legacy_profile: emptyLegacyLlmProfileDraft(),
-      }
-    : {
-        kind: 'legacy',
-        agent_profile: emptyAgentProfileDraft(),
-        legacy_profile: legacyProfileDraftOf(backend.profile),
-      }
+  return {
+    kind: 'legacy',
+    profile: legacyProfileDraftOf(backend.profile),
+  }
 }
 
 /** null 明确生成全空草稿，绝不拿 capability 数组第一项伪造默认。 */
@@ -112,32 +82,6 @@ export function pipelineDraftOf(
       ]),
     ),
   }
-}
-
-/** 切换 backend 只切 discriminator；两边草稿独立保留，避免来回试配丢输入。 */
-export function withBackendKind(
-  draft: ExecutorBackendDraft,
-  kind: ExecutorBackendDraft['kind'],
-): ExecutorBackendDraft {
-  return { ...draft, kind }
-}
-
-/** driver 变化使 model/effort/mode 全部失去判定域。 */
-export function withProfileDriver(
-  draft: AgentProfileDraft,
-  driver: string,
-): AgentProfileDraft {
-  if (driver === draft.driver) return draft
-  return { driver, model: '', reasoning_effort: '', execution_mode: '' }
-}
-
-/** model 变化使 effort/mode 失去判定域；不能沿用前一个模型的同名字面量。 */
-export function withProfileModel(
-  draft: AgentProfileDraft,
-  model: string,
-): AgentProfileDraft {
-  if (model === draft.model) return draft
-  return { ...draft, model, reasoning_effort: '', execution_mode: '' }
 }
 
 export function withLegacyProvider(
@@ -162,13 +106,6 @@ export function withLegacyThinking(
 ): LegacyLlmProfileDraft {
   if (thinkingMode === draft.thinking_mode) return draft
   return { ...draft, thinking_mode: thinkingMode, reasoning_effort: '' }
-}
-
-export function driverForDraft(
-  capabilities: AgentCapabilitiesResponse,
-  draft: AgentProfileDraft,
-): AgentDriverCapability | null {
-  return capabilities.drivers.find((driver) => driver.id === draft.driver) ?? null
 }
 
 export function legacyProviderForDraft(
@@ -200,7 +137,7 @@ export function legacyModelLabelById(
 }
 
 /**
- * 同一 provider 内真正承接该节点的 legacy 模型：优先产品钉死模型
+ * 同一 provider 内真正承接该节点的模型：优先产品钉死模型
  * （`legacy_model_pins`，质量裁决），没有钉死时取第一个可承接的。
  */
 function legacyModelIdServingNode(
@@ -243,24 +180,25 @@ function clampLegacyThinking(
 }
 
 /**
- * 勾选节点覆盖时的初始草稿：默认执行者的副本，但当默认 legacy 模型承接不了
+ * 勾选节点覆盖时的初始草稿：默认执行者的副本，但当默认模型承接不了
  * 该节点时，换成同 provider 内可承接的模型（优先产品钉死），并把思考档位
- * 夹回新模型的判定域。否则「覆盖=复制默认」会让钉死节点在勾选后继续报错，
- * 用户只能误以为必须切换 Agent 模式。
+ * 夹回新模型的判定域。
  */
 export function executorBackendDraftForNode(
   capabilities: AgentCapabilitiesResponse,
   base: ExecutorBackendDraft,
   node: string,
 ): ExecutorBackendDraft {
-  if (base.kind !== 'legacy') return { ...base }
-  const provider = base.legacy_profile.provider
+  if (legacyDraftServesNode(capabilities, base.profile, node)) {
+    return { ...base, profile: { ...base.profile } }
+  }
+  const provider = base.profile.provider
   const served = legacyModelIdServingNode(capabilities, provider, node)
-  if (!served || served === base.legacy_profile.model) return { ...base }
-  const clamped = clampLegacyThinking(capabilities, provider, served, base.legacy_profile)
+  if (!served) return { ...base, profile: { ...base.profile } }
+  const clamped = clampLegacyThinking(capabilities, provider, served, base.profile)
   return {
-    ...base,
-    legacy_profile: { ...base.legacy_profile, ...clamped, model: served },
+    kind: 'legacy',
+    profile: { ...base.profile, ...clamped, model: served },
   }
 }
 
@@ -279,10 +217,8 @@ function legacyDraftServesNode(
 }
 
 /**
- * 默认执行者变化后的整份草稿：凡「继承默认」的节点若默认 legacy 模型承接
- * 不了（产品钉死），自动补成显式覆盖并预选可承接模型。继承在本就不可行，
- * 与其让保存报错把人推向 Agent 模式，不如把唯一合法配置直接摆上盘面
- * （列表里看得到、可改，取消勾选会回到明确的报错）。已有覆盖不碰。
+ * 默认执行者变化后的整份草稿：凡「继承默认」的节点若默认模型承接
+ * 不了（产品钉死），自动补成显式覆盖并预选可承接模型。已有覆盖不碰。
  */
 export function withExecutorDefault(
   capabilities: AgentCapabilitiesResponse,
@@ -290,92 +226,16 @@ export function withExecutorDefault(
   executorDefault: ExecutorBackendDraft,
 ): PipelineAgentProfilesDraft {
   const next: PipelineAgentProfilesDraft = { ...value, executor_default: executorDefault }
-  if (executorDefault.kind !== 'legacy') return next
   let overrides = next.executor_overrides
   for (const node of capabilities.executor_nodes) {
     if (overrides[node] !== undefined) continue
-    if (legacyDraftServesNode(capabilities, executorDefault.legacy_profile, node)) continue
+    if (legacyDraftServesNode(capabilities, executorDefault.profile, node)) continue
     overrides = {
       ...overrides,
-      // 任何 legacy 模型都不承接（agent-only）的节点唯一合法配置是 Agent
-      // 覆盖；预置可见可改的空 Agent 草稿（不替用户猜 driver/model），
-      // 不塞一份注定失败的 legacy 副本。
-      [node]: legacyServesNodeAnywhere(capabilities, node)
-        ? executorBackendDraftForNode(capabilities, executorDefault, node)
-        : {
-          kind: 'agent',
-          agent_profile: emptyAgentProfileDraft(),
-          legacy_profile: { ...executorDefault.legacy_profile },
-        },
+      [node]: executorBackendDraftForNode(capabilities, executorDefault, node),
     }
   }
   return { ...next, executor_overrides: overrides }
-}
-
-/**
- * 任何 provider 的任何 legacy 模型都不承接该节点 ⇒ agent-only：
- * Legacy 默认下它的唯一合法配置是 Agent 覆盖（与后端单向豁免同口径）。
- */
-function legacyServesNodeAnywhere(
-  capabilities: AgentCapabilitiesResponse,
-  node: string,
-): boolean {
-  return capabilities.legacy_providers.some((provider) =>
-    provider.models.some((model) => model.executor_nodes.includes(node)))
-}
-
-function materializeProfile(
-  capabilities: AgentCapabilitiesResponse,
-  draft: AgentProfileDraft,
-  label: string,
-): { profile: AgentProfile | null; errors: string[] } {
-  const errors: string[] = []
-  if (!draft.driver) {
-    errors.push(`${label}：请选择 driver`)
-    return { profile: null, errors }
-  }
-  const driver = driverForDraft(capabilities, draft)
-  if (driver === null) {
-    errors.push(`${label}：driver ${draft.driver} 已不在当前 capability 中`)
-    return { profile: null, errors }
-  }
-  if (driver.availability !== 'ready') {
-    errors.push(`${label}：${driver.label} 当前为 ${driver.availability}：${driver.availability_reason}`)
-  }
-  if (!draft.model) {
-    errors.push(`${label}：请选择模型`)
-    return { profile: null, errors }
-  }
-  const model = driver.models.find((candidate) => candidate.id === draft.model) ?? null
-  if (model === null) {
-    errors.push(`${label}：模型 ${draft.model} 不属于当前 driver`)
-    return { profile: null, errors }
-  }
-  if (!draft.reasoning_effort) errors.push(`${label}：请选择思考强度`)
-  else if (!model.reasoning_efforts.includes(draft.reasoning_effort)) {
-    errors.push(`${label}：思考强度 ${draft.reasoning_effort} 不属于当前模型`)
-  }
-
-  let executionMode: string | null = null
-  if (model.execution_modes.length > 0) {
-    if (!draft.execution_mode) errors.push(`${label}：请选择执行模式`)
-    else if (!model.execution_modes.includes(draft.execution_mode)) {
-      errors.push(`${label}：执行模式 ${draft.execution_mode} 不属于当前模型`)
-    } else executionMode = draft.execution_mode
-  } else if (draft.execution_mode) {
-    errors.push(`${label}：当前模型没有可显式选择的执行模式`)
-  }
-
-  if (errors.length > 0) return { profile: null, errors }
-  return {
-    profile: {
-      driver: driver.id,
-      model: model.id,
-      reasoning_effort: draft.reasoning_effort,
-      execution_mode: executionMode,
-    },
-    errors: [],
-  }
 }
 
 function materializeLegacyProfile(
@@ -386,47 +246,45 @@ function materializeLegacyProfile(
 ): { profile: LegacyLlmProfile | null; errors: string[] } {
   const errors: string[] = []
   if (!draft.provider) {
-    errors.push(`${label}：请选择 API provider`)
+    errors.push(`${label}：请选择 Provider`)
     return { profile: null, errors }
   }
   const provider = legacyProviderForDraft(capabilities, draft)
   if (!provider) {
-    errors.push(`${label}：provider ${draft.provider} 已不在当前 capability 中`)
+    errors.push(`${label}：Provider ${draft.provider} 已不在当前 capability 中`)
     return { profile: null, errors }
   }
   if (!draft.model) {
-    errors.push(`${label}：请选择模型`)
+    errors.push(`${label}：请选择 Model`)
     return { profile: null, errors }
   }
   const model = provider.models.find((candidate) => candidate.id === draft.model) ?? null
   if (!model) {
-    errors.push(`${label}：模型 ${draft.model} 不属于 ${provider.label}`)
+    errors.push(`${label}：Model ${draft.model} 不属于 ${provider.label}`)
     return { profile: null, errors }
   }
   if (node && !model.executor_nodes.includes(node)) {
     const pin = capabilities.legacy_model_pins[node]
     errors.push(
-      !legacyServesNodeAnywhere(capabilities, node)
-        ? `${label}：节点 ${node} 需要 Agent 执行者（Legacy 不支持该节点），请为该节点配置 Agent 覆盖`
-        : pin
-          ? `${label}：${model.label} 无法承接节点 ${node}（产品契约钉死 ${legacyModelLabel(capabilities, pin)}）；请为该节点启用覆盖并选择 ${legacyModelLabel(capabilities, pin)}`
-          : `${label}：${model.label} 不支持节点 ${node}，请为该节点选择支持的模型`,
+      pin
+        ? `${label}：${model.label} 无法承接节点 ${node}（产品契约钉死 ${legacyModelLabel(capabilities, pin)}）；请为该节点启用覆盖并选择 ${legacyModelLabel(capabilities, pin)}`
+        : `${label}：${model.label} 不支持节点 ${node}，请为该节点选择支持的模型`,
     )
   }
   if (!draft.thinking_mode) {
-    errors.push(`${label}：请选择思考模式`)
+    errors.push(`${label}：请选择 Thinking`)
     return { profile: null, errors }
   }
   const thinking = model.thinking_modes.find(
     (candidate) => candidate.id === draft.thinking_mode,
   ) ?? null
   if (!thinking) {
-    errors.push(`${label}：思考模式 ${draft.thinking_mode} 不属于当前模型`)
+    errors.push(`${label}：Thinking ${draft.thinking_mode} 不属于当前模型`)
     return { profile: null, errors }
   }
-  if (!draft.reasoning_effort) errors.push(`${label}：请选择思考强度`)
+  if (!draft.reasoning_effort) errors.push(`${label}：请选择 Effort`)
   else if (!thinking.reasoning_efforts.includes(draft.reasoning_effort)) {
-    errors.push(`${label}：思考强度 ${draft.reasoning_effort} 不属于当前思考模式`)
+    errors.push(`${label}：Effort ${draft.reasoning_effort} 不属于当前 Thinking`)
   }
   if (errors.length > 0) return { profile: null, errors }
   return {
@@ -446,18 +304,8 @@ function materializeBackend(
   label: string,
   node?: string,
 ): { backend: ExecutorBackend | null; errors: string[] } {
-  if (!draft.kind) return { backend: null, errors: [`${label}：请选择 Agent 或 Legacy API`] }
-  if (draft.kind === 'agent') {
-    const result = materializeProfile(
-      capabilities, draft.agent_profile, label,
-    )
-    return {
-      backend: result.profile ? { kind: 'agent', profile: result.profile } : null,
-      errors: result.errors,
-    }
-  }
   const result = materializeLegacyProfile(
-    capabilities, draft.legacy_profile, label, node,
+    capabilities, draft.profile, label, node,
   )
   return {
     backend: result.profile ? { kind: 'legacy', profile: result.profile } : null,
@@ -471,19 +319,11 @@ export function materializePipelineAgentProfiles(
   draft: PipelineAgentProfilesDraft,
 ): MaterializedProfiles {
   const executorDefault = materializeBackend(
-    capabilities, draft.executor_default, '默认执行者',
+    capabilities, draft.executor_default, '默认模型执行配置',
   )
   const errors = [...executorDefault.errors]
   const overrides: Record<string, ExecutorBackend> = {}
   const knownNodes = new Set(capabilities.executor_nodes)
-  // 任何 legacy 模型都不承接的节点 = agent-only：默认 legacy 时这些节点的
-  // agent 覆盖是唯一合法出路（与后端 AGENT_ONLY_EXECUTOR_NODES 单向豁免同口径，
-  // 从 capability 派生，不另抄节点清单）。
-  const legacyServedNodes = new Set(
-    capabilities.legacy_providers.flatMap((provider) =>
-      provider.models.flatMap((model) => model.executor_nodes),
-    ),
-  )
   if (draft.concurrency) {
     const policy = draft.concurrency
     const allowed = capabilities.concurrency
@@ -505,28 +345,16 @@ export function materializePipelineAgentProfiles(
   for (const node of capabilities.executor_nodes) {
     const override = draft.executor_overrides[node]
     if (override) {
-      const result = materializeBackend(capabilities, override, `节点 ${node}`, node)
+      const result = materializeBackend(
+        capabilities, override, `节点 ${node} 模型执行配置`, node,
+      )
       errors.push(...result.errors)
       if (result.backend) overrides[node] = result.backend
-      if (
-        executorDefault.backend !== null
-        && result.backend !== null
-        && result.backend.kind !== executorDefault.backend.kind
-      ) {
-        const agentOnlyOverride = executorDefault.backend.kind === 'legacy'
-          && result.backend.kind === 'agent'
-          && !legacyServedNodes.has(node)
-        if (!agentOnlyOverride) {
-          errors.push(
-            `节点 ${node}：执行者必须与默认执行者同一模式；默认 Legacy 时仅 Legacy 不支持的节点可用 Agent 覆盖，不允许其余混用`,
-          )
-        }
-      }
       continue
     }
-    if (executorDefault.backend?.kind === 'legacy') {
+    if (executorDefault.backend) {
       const inherited = materializeLegacyProfile(
-        capabilities, draft.executor_default.legacy_profile, '默认执行者', node,
+        capabilities, draft.executor_default.profile, '默认模型执行配置', node,
       )
       errors.push(...inherited.errors)
     }
@@ -538,7 +366,7 @@ export function materializePipelineAgentProfiles(
   }
   return {
     profiles: {
-      schema_version: 3,
+      schema_version: 4,
       ...concurrencySnapshot(draft.concurrency),
       executor_default: executorDefault.backend,
       executor_overrides: overrides,
@@ -547,14 +375,8 @@ export function materializePipelineAgentProfiles(
   }
 }
 
-export function cloneAgentProfile(profile: AgentProfile): AgentProfile {
-  return { ...profile }
-}
-
 export function cloneExecutorBackend(backend: ExecutorBackend): ExecutorBackend {
-  return backend.kind === 'agent'
-    ? { kind: 'agent', profile: cloneAgentProfile(backend.profile) }
-    : { kind: 'legacy', profile: { ...backend.profile } }
+  return { kind: 'legacy', profile: { ...backend.profile } }
 }
 
 /** 手写深拷贝避免 JSON 序列化把未来显式 null/字段语义压扁。 */
@@ -562,7 +384,7 @@ export function clonePipelineAgentProfiles(
   profiles: PipelineAgentProfiles,
 ): PipelineAgentProfiles {
   return {
-    schema_version: 3,
+    schema_version: 4,
     ...concurrencySnapshot(profiles.concurrency),
     executor_default: cloneExecutorBackend(profiles.executor_default),
     executor_overrides: Object.fromEntries(
@@ -587,25 +409,11 @@ function concurrencyEqual(left: PipelineConcurrency | undefined, right: Pipeline
     node === others[index] && left.node_overrides[node] === right.node_overrides[node])
 }
 
-function profileEqual(left: AgentProfile, right: AgentProfile): boolean {
-  return left.driver === right.driver
-    && left.model === right.model
-    && left.reasoning_effort === right.reasoning_effort
-    && left.execution_mode === right.execution_mode
-}
-
 function backendEqual(left: ExecutorBackend, right: ExecutorBackend): boolean {
-  if (left.kind !== right.kind) return false
-  if (left.kind === 'agent' && right.kind === 'agent') {
-    return profileEqual(left.profile, right.profile)
-  }
-  if (left.kind === 'legacy' && right.kind === 'legacy') {
-    return left.profile.provider === right.profile.provider
-      && left.profile.model === right.profile.model
-      && left.profile.reasoning_effort === right.profile.reasoning_effort
-      && left.profile.thinking_mode === right.profile.thinking_mode
-  }
-  return false
+  return left.profile.provider === right.profile.provider
+    && left.profile.model === right.profile.model
+    && left.profile.reasoning_effort === right.profile.reasoning_effort
+    && left.profile.thinking_mode === right.profile.thinking_mode
 }
 
 /** preview 必须逐格回显同一份配置；键序不同不算漂移，增删/改值都算。 */

@@ -21,108 +21,6 @@
     "total_max": 32,
     "scope": "output_root"
   },
-  "drivers": [
-    {
-      "id": "claude-code",
-      "provider": "anthropic",
-      "label": "Claude Code",
-      "availability": "ready",
-      "availability_reason": "mock：CLI 可执行且版本探针成功；未发模型请求",
-      "version": "2.1.237 (mock)",
-      "models": [
-        {
-          "id": "claude-opus-5",
-          "label": "Claude Opus 5",
-          "reasoning_efforts": [
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-            "max"
-          ],
-          "execution_modes": [
-            "standard"
-          ]
-        },
-        {
-          "id": "claude-sonnet-5",
-          "label": "Claude Sonnet 5",
-          "reasoning_efforts": [
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-            "max"
-          ],
-          "execution_modes": [
-            "standard"
-          ]
-        }
-      ]
-    },
-    {
-      "id": "codex",
-      "provider": "openai",
-      "label": "Codex",
-      "availability": "ready",
-      "availability_reason": "mock：CLI 可执行且版本探针成功；未发模型请求",
-      "version": "0.148.0 (mock)",
-      "models": [
-        {
-          "id": "gpt-5.6-sol",
-          "label": "GPT-5.6 Sol",
-          "reasoning_efforts": [
-            "none",
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-            "max"
-          ],
-          "execution_modes": [
-            "standard"
-          ]
-        },
-        {
-          "id": "gpt-5.6-terra",
-          "label": "GPT-5.6 Terra",
-          "reasoning_efforts": [
-            "none",
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-            "max"
-          ],
-          "execution_modes": [
-            "standard"
-          ]
-        }
-      ]
-    },
-    {
-      "id": "claude-code-glm",
-      "provider": "bigmodel",
-      "label": "Claude Code · 智谱 GLM",
-      "availability": "ready",
-      "availability_reason": "mock：CLI 可执行且版本探针成功；未发模型请求",
-      "version": "2.1.259 (mock)",
-      "models": [
-        {
-          "id": "glm-5.3-flash[1M]",
-          "label": "GLM 5.3 Flash · 1M",
-          "reasoning_efforts": [
-            "low",
-            "high",
-            "max"
-          ],
-          "execution_modes": [
-            "standard"
-          ]
-        }
-      ]
-    }
-  ],
   "legacy_providers": [
     {
       "id": "deepseek",
@@ -200,5 +98,9 @@
     "stage6.hook",
     "stage7.rename"
   ],
+  "legacy_model_pins": {
+    "stage4.design": "deepseek-v4-pro",
+    "stage4.plan": "deepseek-v4-pro"
+  },
   "default_profiles": null
 }

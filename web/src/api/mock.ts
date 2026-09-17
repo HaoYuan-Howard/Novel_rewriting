@@ -1030,11 +1030,9 @@ let mockAgentProfileSettings: AgentProfileSettingsView = {
 function cloneMockProfiles(profiles: AgentProfileSettingsView['profiles']) {
   if (profiles === null) return null
   const cloneBackend = (backend: typeof profiles.executor_default) =>
-    backend.kind === 'agent'
-      ? { kind: 'agent' as const, profile: { ...backend.profile } }
-      : { kind: 'legacy' as const, profile: { ...backend.profile } }
+    ({ kind: 'legacy' as const, profile: { ...backend.profile } })
   return {
-    schema_version: 3 as const,
+    schema_version: 4 as const,
     executor_default: cloneBackend(profiles.executor_default),
     executor_overrides: Object.fromEntries(
       Object.entries(profiles.executor_overrides).map(([node, backend]) => [

@@ -99,7 +99,6 @@ describe('request-shaped cache and diagnostics', () => {
 
   it('gets agent capabilities through the single HTTP seam', async () => {
     const capabilities = {
-      drivers: [],
       legacy_providers: [],
       executor_nodes: [],
       legacy_model_pins: {},

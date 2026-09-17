@@ -3,16 +3,9 @@
  * 与 run.ts / jobs.ts 的 Backend* 同款做法：数据缝只做适配，不改名。
  */
 /**
- * Agent 组合由后端 capability registry 发布。driver/model/effort/mode 都保留为
- * 字符串，前端不能用联合类型复制一份供应商能力表。
+ * C3/C4：Executor 仅直连 LLM。provider/model/effort/thinking 保留为字符串，
+ * 前端不能用联合类型复制一份供应商能力表。
  */
-export interface AgentProfile {
-  driver: string
-  model: string
-  reasoning_effort: string
-  execution_mode: string | null
-}
-
 export interface LegacyLlmProfile {
   provider: string
   model: string
@@ -20,17 +13,11 @@ export interface LegacyLlmProfile {
   thinking_mode: string
 }
 
-export interface AgentExecutorBackend {
-  kind: 'agent'
-  profile: AgentProfile
-}
-
-export interface LegacyExecutorBackend {
+/** 现役唯一 executor backend；wire 名保留 kind=legacy（与 C3 契约一致）。 */
+export interface ExecutorBackend {
   kind: 'legacy'
   profile: LegacyLlmProfile
 }
-
-export type ExecutorBackend = AgentExecutorBackend | LegacyExecutorBackend
 
 export interface PipelineConcurrency {
   node_overrides: Record<string, number>
@@ -49,40 +36,17 @@ export interface PipelineConcurrencyCapability {
 }
 
 /**
- * v3：Commander 受托审阅角色退役（2026-09-15 用户裁决）后只剩执行者维度；
- * 旧 v1/v2 行里的 commander 键由后端读入时直接丢弃。
+ * v4：仅 legacy 直连 LLM。类型名暂留（=executor 配置）。
+ * 旧 v1–v3 行里的 commander / agent 键由后端读入时丢弃。
  */
 export interface PipelineAgentProfiles {
-  schema_version: 3
+  schema_version: 4
   executor_default: ExecutorBackend
   /**
-   * 键同样由 capability 响应的 executor_nodes 给出，前端不保存节点副本。
-   * 值的 kind 必须与 executor_default 一致：executor 整跑只允许一种模式，
-   * 不允许 Agent / Legacy 混用（后端在构造期关闭式拒绝）。
+   * 键由 capability 响应的 executor_nodes 给出，前端不保存节点副本。
    */
   executor_overrides: Record<string, ExecutorBackend>
   concurrency?: PipelineConcurrency
-}
-
-export type AgentAvailability = 'ready' | 'missing' | 'unknown' | 'unauthenticated'
-
-export interface AgentModelCapability {
-  /** 进入 argv 与审计账的精确模型 id；与展示文案分开。 */
-  id: string
-  label: string
-  reasoning_efforts: string[]
-  execution_modes: string[]
-}
-
-export interface AgentDriverCapability {
-  id: string
-  /** 供应商元数据，不等于可执行 driver id。 */
-  provider: string
-  label: string
-  availability: AgentAvailability
-  availability_reason: string
-  version: string | null
-  models: AgentModelCapability[]
 }
 
 export interface LegacyThinkingCapability {
@@ -106,12 +70,10 @@ export interface LegacyProviderCapability {
 }
 
 export interface AgentCapabilitiesResponse {
-  drivers: AgentDriverCapability[]
   legacy_providers: LegacyProviderCapability[]
   executor_nodes: string[]
   /**
-   * 节点 → 产品契约钉死的 legacy 模型 id。钉死的是「模型」不是 agent/legacy
-   * 模式：被钉节点在 legacy 下必须经覆盖选该模型，agent 下不受影响。
+   * 节点 → 产品契约钉死的模型 id。被钉节点必须经覆盖选该模型。
    * 没有钉死的节点不出现。
    */
   legacy_model_pins: Record<string, string>

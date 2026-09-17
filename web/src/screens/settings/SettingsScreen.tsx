@@ -217,11 +217,11 @@ export function SettingsScreen() {
             </div>
           </div>
           <div>
-            <div className="text-body font-semibold text-ink-2">两类 Executor</div>
+            <div className="text-body font-semibold text-ink-2">模型执行配置</div>
             <div className="mt-4 text-body text-ink-4">
-              Agent CLI 支持 Claude Code、Codex，以及通过 Claude Code 使用智谱 GLM；Legacy API 当前发布 DeepSeek。
-              每个默认与节点覆盖都保存显式 <Mono>kind + profile</Mono>，运行时不会再靠
-              profile 是否为空猜模式。可选模型与思考档位由后端 capability 提供。
+              默认与逐节点覆盖只选 Provider / Model / Effort（及 Thinking）。
+              选项与可承接节点由后端 capability 提供；保存的是显式 profile 快照，
+              运行时不会再猜。
             </div>
           </div>
           {capabilities.data.default_profiles === null ? (

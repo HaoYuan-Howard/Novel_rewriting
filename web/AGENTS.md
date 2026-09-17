@@ -61,9 +61,9 @@ npm run build                       # web/dist，供后端同源托管
   完整剧情链的现役模拟数据放 `web/src/fixtures/plot_v1/`；历史 Stage2 证据和旧检查退出运行包，
   不作为新链接受依据。两类材料只由 `web/src/api/mock.ts` 接入，不让组件直接消费。
   模拟延迟、作业与 localStorage 覆盖仅服务离线开发，不作为真实链路证据。
-- 动作、枚举、费用、写盘语义来自后端；driver/model/effort/执行模式来自 capability，不能手抄节点数量或能力矩阵。
+- 动作、枚举、费用、写盘语义来自后端；Provider/Model/Effort/Thinking 来自 capability，不能手抄节点数量或能力矩阵。
   `default_profiles=null` 不从数组首项代选；用户偏好与产品默认、已受理 run 分开，不保存凭据或两项授权。
-  capability 的不可用/未知原因及 settings 读取失败、CAS 冲突都显式呈现；只读 CLI 探针不证明账号或模型已验证。
+  capability 的不可用/未知原因及 settings 读取失败、CAS 冲突都显式呈现；只读探针不证明账号或模型已验证。
 - 自动 Agent、普通 Job 与人工写回共用书级刷新。首次真实进度快照后复验相关读模型，并取消未返回的旧材料请求；
   后续按真实快照变化刷新，不因 elapsed 等时间噪声反复失效。run、日志与 preview 不进入读缓存失效循环。
   invalidate 不等于已经 refetch；测试须在不重挂页面时验证产物、check、审批与 inbox 更新。
@@ -77,7 +77,7 @@ npm run build                       # web/dist，供后端同源托管
 | 路由 | 屏幕职责 |
 |---|---|
 | `/` | 语料库、顺序批量上传（上传前授权并自动开跑）、逐书状态与批量代跑；维护/回收站入口。书名为打开入口，筛选在页头，卡片保持紧凑 |
-| `/settings` | 当前 output base 的 Commander、默认 Executor 和节点覆盖偏好；只消费 capability，保存/清空走 revision CAS |
+| `/settings` | 当前 output base 的默认模型执行配置与节点覆盖偏好；只消费 capability，保存/清空走 revision CAS |
 | `/n/:sid` | 重定向到 Stage0；已有产物可从左栏直达对应层 |
 | `/n/:sid/run` | 全链进度、Blueprint 生成/正式提交/有效章审/跨章状态、Stage6 改选重建状态、事件、工作单元耗时/token 与累计额度；可选择本次运行或跨运行累计，展开尝试和所属日志；节点顺序、续跑前沿、下一处理者和可用动作全部来自后端 |
 | `/n/:sid/stage0` | 整本剔除只读监控；完整原文默认展开。上传已自动开跑时通常不需在此发起作业 |

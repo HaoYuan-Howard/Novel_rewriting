@@ -46,17 +46,10 @@ describe('SettingsScreen', () => {
 
     expect(await screen.findByText('已配置')).toBeVisible()
     expect(screen.getByText(/产品默认仍为 null/)).toBeVisible()
+    expect(screen.getByText('模型执行配置')).toBeVisible()
     await user.selectOptions(
-      screen.getByRole('combobox', { name: '默认执行者 · Agent CLI 模型' }),
-      'executor-model-v8',
-    )
-    await user.selectOptions(
-      screen.getByRole('combobox', { name: '默认执行者 · Agent CLI 思考强度' }),
-      'fast-dynamic',
-    )
-    await user.selectOptions(
-      screen.getByRole('combobox', { name: '默认执行者 · Agent CLI 执行模式' }),
-      'worker-dynamic',
+      screen.getByRole('combobox', { name: '默认模型执行配置 Effort' }),
+      'max',
     )
     await user.click(screen.getByRole('button', { name: '保存常用配置' }))
 
@@ -64,12 +57,14 @@ describe('SettingsScreen', () => {
     expect(save.mock.calls[0]?.[0]).toMatchObject({
       expected_revision: 'a'.repeat(64),
       profiles: {
+        schema_version: 4,
         executor_default: {
-          kind: 'agent',
+          kind: 'legacy',
           profile: {
-            model: 'executor-model-v8',
-            reasoning_effort: 'fast-dynamic',
-            execution_mode: 'worker-dynamic',
+            provider: 'deepseek',
+            model: 'deepseek-v4-pro',
+            reasoning_effort: 'max',
+            thinking_mode: 'on',
           },
         },
       },
@@ -93,16 +88,8 @@ describe('SettingsScreen', () => {
     renderRoute(<SettingsScreen />, '/n/book-1/settings')
     await screen.findByText('已配置')
     await user.selectOptions(
-      screen.getByRole('combobox', { name: '默认执行者 · Agent CLI 模型' }),
-      'executor-model-v8',
-    )
-    await user.selectOptions(
-      screen.getByRole('combobox', { name: '默认执行者 · Agent CLI 思考强度' }),
-      'fast-dynamic',
-    )
-    await user.selectOptions(
-      screen.getByRole('combobox', { name: '默认执行者 · Agent CLI 执行模式' }),
-      'worker-dynamic',
+      screen.getByRole('combobox', { name: '默认模型执行配置 Effort' }),
+      'max',
     )
     await user.click(screen.getByRole('button', { name: '保存常用配置' }))
 
@@ -110,7 +97,7 @@ describe('SettingsScreen', () => {
     expect(save.mock.calls[0]?.[0].expected_revision).toBe('a'.repeat(64))
   })
 
-  it('可把默认 Executor 显式切到 Legacy DeepSeek 并保存独立 profile', async () => {
+  it('可把默认模型切到 Flash，并为钉死节点保留 Pro 覆盖后保存', async () => {
     const user = userEvent.setup()
     const save = vi.spyOn(api, 'saveAgentProfileSettings').mockImplementation(async (req) =>
       saved(req),
@@ -119,62 +106,44 @@ describe('SettingsScreen', () => {
     renderRoute(<SettingsScreen />, '/n/book-1/settings')
     await screen.findByText('已配置')
     await user.selectOptions(
-      screen.getByRole('combobox', { name: '默认执行者 后端' }),
-      'legacy',
+      screen.getByRole('combobox', { name: '默认模型执行配置 Model' }),
+      'deepseek-flash',
     )
     await user.selectOptions(
-      screen.getByRole('combobox', { name: '默认执行者 · Legacy API provider' }),
-      'deepseek',
-    )
-    await user.selectOptions(
-      screen.getByRole('combobox', { name: '默认执行者 · Legacy API 模型' }),
-      'deepseek-v4-pro',
-    )
-    await user.selectOptions(
-      screen.getByRole('combobox', { name: '默认执行者 · Legacy API 思考模式' }),
+      screen.getByRole('combobox', { name: '默认模型执行配置 Thinking' }),
       'on',
     )
     await user.selectOptions(
-      screen.getByRole('combobox', { name: '默认执行者 · Legacy API 思考强度' }),
+      screen.getByRole('combobox', { name: '默认模型执行配置 Effort' }),
       'high',
     )
-    // 切到 legacy 后表单自动补覆盖：钉死节点预选 Pro；agent-only 节点预置空
-    // Agent 草稿，需要显式选 driver/模型/强度后保存才解锁。
-    await user.selectOptions(
-      screen.getByRole('combobox', { name: 'node.agent-only 执行者 · Agent CLI driver' }),
-      'executor-dynamic',
-    )
-    await user.selectOptions(
-      screen.getByRole('combobox', { name: 'node.agent-only 执行者 · Agent CLI 模型' }),
-      'executor-model-v7',
-    )
-    await user.selectOptions(
-      screen.getByRole('combobox', { name: 'node.agent-only 执行者 · Agent CLI 思考强度' }),
-      'deep-dynamic',
-    )
-    await user.selectOptions(
-      screen.getByRole('combobox', { name: 'node.agent-only 执行者 · Agent CLI 执行模式' }),
-      'worker-dynamic',
-    )
+    await waitFor(() => expect(
+      screen.getByRole('combobox', { name: 'node.dynamic-b 模型执行配置 Model' }),
+    ).toHaveValue('deepseek-v4-pro'))
     await user.click(screen.getByRole('button', { name: '保存常用配置' }))
 
     await waitFor(() => expect(save).toHaveBeenCalledTimes(1))
     expect(save.mock.calls[0]?.[0]).toMatchObject({
       profiles: {
-        schema_version: 3,
+        schema_version: 4,
         executor_default: {
           kind: 'legacy',
           profile: {
             provider: 'deepseek',
-            model: 'deepseek-v4-pro',
+            model: 'deepseek-flash',
             reasoning_effort: 'high',
             thinking_mode: 'on',
           },
         },
         executor_overrides: {
-          'node.agent-only': {
-            kind: 'agent',
-            profile: { driver: 'executor-dynamic', model: 'executor-model-v7' },
+          'node.dynamic-b': {
+            kind: 'legacy',
+            profile: {
+              provider: 'deepseek',
+              model: 'deepseek-v4-pro',
+              thinking_mode: 'on',
+              reasoning_effort: 'low',
+            },
           },
         },
       },
