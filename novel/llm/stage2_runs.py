@@ -50,7 +50,7 @@ from novel.run_identity import check_run_id
 
 # 包级形式访问 stage2 公开面（M5：不深路径 import stage 内部模块）；
 # 本地别名保留原调用点写法。
-from novel.stages.stage2 import run_state as _rs
+from novel.stages.stage2.blueprint import run_state as _rs
 VERSION = _rs.VERSION
 RUN_FILE = _rs.RUN_FILE
 _canonical_bytes = _rs.canonical_bytes

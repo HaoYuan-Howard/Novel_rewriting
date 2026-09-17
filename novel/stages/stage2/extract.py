@@ -69,7 +69,7 @@ from novel.report import build
 from novel.report.findings import Outcome
 from novel.run import RunContext
 from novel.stages.stage2 import checks
-from novel.stages.stage2.character_refs import (
+from novel.stages.stage2.shared.character_refs import (
     blueprint_inventory_from_projection,
     materialize_blueprint_character_projection,
 )
@@ -645,7 +645,7 @@ def run_revalidate(
 
     if ctx.node != 'stage2.blueprint':
         raise TerminalState(f'{ctx.node} 不是 stage2 的可提升节点')
-    from novel.stages.stage2.plot_recovery import revalidate
+    from novel.stages.stage2.blueprint.recovery import revalidate
     return revalidate(ctx, store, main_text, actor=actor, reason=reason)
 
 
@@ -679,7 +679,7 @@ def build_prompts(
     character_inventory = blueprint_inventory_from_projection(projection)
     spec = _active_spec()
     from novel.consumption import plot_global_projection
-    from novel.stages.stage2.plot_prompts import build_plot_user
+    from novel.stages.stage2.blueprint.prompts import build_plot_user
     if global_projections is None:
         knowledge = store.read(KnowledgeGrounding, GLOBAL_REL).model_dump(
             mode='json', by_alias=True)
@@ -694,7 +694,7 @@ def build_prompts(
 
 def _active_spec():
     """本次运行选用的 blueprint 契约（整跑用；修复按基线架构另选）。"""
-    from novel.stages.stage2.contract import active_contract
+    from novel.stages.stage2.blueprint.contract import active_contract
     return active_contract()
 
 
@@ -715,7 +715,7 @@ def build_prompt(ctx: RunContext, *, chapters: tuple[int, ...] = (),
     预览与付费路共用同一个构造入口，因此这里看到的边界就是真实模型可见边界。
     """
     if ctx.node == 'stage2.blueprint' and (chapters or review_token is not None):
-        from novel.stages.stage2.plot_repair import build_prompt as revision_prompt
+        from novel.stages.stage2.blueprint.repair import build_prompt as revision_prompt
         return revision_prompt(ctx, chapters=chapters, review_token=review_token)
     _ordinal, system, user = build_prompts(ctx, chapters=chapters)[0]
     return system, user
@@ -2575,7 +2575,7 @@ def _finish_full_commit_tail(
 
 
 def _run_blueprint_repair(ctx, client, **kwargs) -> CheckReport:
-    from novel.stages.stage2.plot_repair import run
+    from novel.stages.stage2.blueprint.repair import run
     return run(ctx, client, **kwargs)
 
 
@@ -2630,7 +2630,7 @@ def request_blueprints(ctx: RunContext, client: _BlueprintRequestSource, *,
                       spec.prefers_content_over_reasoning_salvage)]
     if checkpoints:
         from novel.llm import stage2_runs
-        from novel.stages.stage2.plot_inputs import input_digests
+        from novel.stages.stage2.blueprint.inputs import input_digests
         stage2_runs.ensure_run(
             ctx, architecture=spec.architecture, topology=spec.topology,
             requests=requests,
@@ -2642,7 +2642,7 @@ def request_blueprints(ctx: RunContext, client: _BlueprintRequestSource, *,
     # checkpoint 不是 `.llm_cache`：普通 cache 即使在内部测试里 disabled，
     # 同 run 的已验证章节仍应恢复。只有明确要求新采样的 refresh-write 绕过旧 checkpoint。
     use_checkpoints = checkpoints and ctx.cache.name != 'refresh-write'
-    from novel.stages.stage2.plot_sequence import execute
+    from novel.stages.stage2.blueprint.sequence import execute
     raw, violations, errors, actual_requests = execute(ctx, client, requests,
         main_text=main_text, character_inventory=character_inventory,
         global_projections=global_projections, checkpoints=checkpoints,
@@ -2723,7 +2723,7 @@ def _materialize_blueprint_evaluation(
     tuple[tuple[str, int | None], ...], list[dict[str, Any]], dict[str, Any],
 ]:
     """同一批响应的唯一 compile/provenance/HARD 口。"""
-    from novel.stages.stage2.contract import contract_for
+    from novel.stages.stage2.blueprint.contract import contract_for
 
     store = ArtifactStore(ctx)
     main_text = copy.deepcopy(batch['main_text'])
@@ -3031,7 +3031,7 @@ def run_blueprint(
 ) -> CheckReport:
     """Stage2 Blueprint 现役唯一生产入口：LlmClient 逐章直连。"""
     _require_direct_stage2_entry(ctx, client, node='stage2.blueprint')
-    from novel.stages.stage2.plot_repair import finish_commit
+    from novel.stages.stage2.blueprint.repair import finish_commit
     recovered = finish_commit(ctx, chapters=chapters, review_token=review_token)
     if recovered is not None:
         return recovered
@@ -3140,7 +3140,7 @@ def run_renormalize(ctx: RunContext) -> CheckReport:
 
     if ctx.node != 'stage2.blueprint':
         raise TerminalState(f'{ctx.node} 不是 stage2 的可重新归一节点')
-    from novel.stages.stage2.plot_recovery import renormalize
+    from novel.stages.stage2.blueprint.recovery import renormalize
     return renormalize(ctx, store, main_text)
 
 

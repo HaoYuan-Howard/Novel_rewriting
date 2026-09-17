@@ -16,7 +16,7 @@ import pytest
 from contracts.schema.stage4 import BindingConcern
 from contracts.schema.plot import PlotSubjectRef
 from novel.errors import ProvenanceRefused, RefusedByStructure
-from novel.stages.stage2.plot_compile import source_digest
+from novel.stages.stage2.blueprint.compile import source_digest
 from novel.stages.stage4 import plan
 from novel.stages.stage4.plot_binding import apply_chapter_resolutions, build_mechanical_baseline
 from novel.stages.stage4.plot_design import build_blind_projection, compile_blind_candidate

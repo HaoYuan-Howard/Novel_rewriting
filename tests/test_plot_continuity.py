@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from contracts.schema.plot import PlotChapterResponse
-from novel.stages.stage2.plot_continuity import (
+from novel.stages.stage2.blueprint.continuity import (
     formal_claim_key, prepare_chapter_for_continuity, wire_claim_key,
 )
 

@@ -6,8 +6,8 @@ import pytest
 from pydantic import ValidationError
 from contracts.schema.plot import PlotChapterResponse
 from contracts.schema.plot_edit import PlotEdit
-from novel.stages.stage2.plot_compile import compile_chapter
-from novel.stages.stage2 import plot_edit
+from novel.stages.stage2.blueprint.compile import compile_chapter
+from novel.stages.stage2.blueprint import edit as plot_edit
 from novel.stages.stage4.plot_design import build_blind_projection
 from novel.errors import ProvenanceRefused, TerminalState
 from tests.test_plot_blueprint import chapter_response, SOURCE, CHARS

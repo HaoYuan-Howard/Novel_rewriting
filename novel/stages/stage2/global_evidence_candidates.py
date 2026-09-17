@@ -18,7 +18,7 @@ from types import MappingProxyType
 from typing import Any, Mapping, Sequence
 
 from contracts.schema.stage2 import SourceSpan
-from novel.stages.stage2.paragraphs import paragraph_spans
+from novel.stages.stage2.shared.paragraphs import paragraph_spans
 
 
 EVIDENCE_CANDIDATE_FORMAT = '<{evidence_candidate_id}> {text}'

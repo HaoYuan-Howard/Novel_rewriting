@@ -153,7 +153,7 @@ def current_book(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path,
     blueprint_store = ArtifactStore(blueprint_ctx)
     blueprint_store.read(MainText, MAIN_REL)
     from contracts.schema.plot import PlotChapterResponse
-    from novel.stages.stage2.plot_compile import compile_chapter
+    from novel.stages.stage2.blueprint.compile import compile_chapter
     chapters = []
     for chapter in main.root:
         ordinal, text = chapter.chapter_ordinal, chapter.text

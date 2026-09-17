@@ -44,7 +44,7 @@ from novel.stages.stage2 import character_checks as checks
 from novel.stages.stage2.core_evidence import compile_evidence_refs, compile_manual_evidence_refs
 from novel.stages.stage2.global_evidence_candidates import GlobalEvidenceCandidateTable
 from novel.stages.stage2.normalize import normalize_characters
-from novel.stages.stage2.character_refs import materialize_blueprint_character_projection
+from novel.stages.stage2.shared.character_refs import materialize_blueprint_character_projection
 from novel.store import ArtifactStore
 
 

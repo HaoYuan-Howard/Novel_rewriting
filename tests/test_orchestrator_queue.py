@@ -61,7 +61,7 @@ def queue_base(tmp_path, monkeypatch):
                         lambda *_args: _ready('stage2.blueprint'))
     monkeypatch.setattr(mechanical_admission, 'stage4_ready',
                         lambda *_args: _ready('stage4'))
-    from novel.stages.stage2 import plot_diagnostics
+    from novel.stages.stage2.blueprint import diagnostics as plot_diagnostics
     monkeypatch.setattr(plot_diagnostics, 'read_repair_diagnostics',
                         lambda *_args, **_kwargs: None)
     return tmp_path

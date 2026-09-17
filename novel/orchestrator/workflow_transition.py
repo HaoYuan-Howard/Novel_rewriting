@@ -284,7 +284,7 @@ def _projection_target(base: Path, sid: str, code: str) -> tuple[bytes, str, str
     from contracts.schema.characters import CharacterRegistry
     from contracts.schema.stage1 import MainText
     from novel.orchestrator.state import readonly_ctx
-    from novel.stages.stage2.character_refs import materialize_blueprint_character_projection
+    from novel.stages.stage2.shared.character_refs import materialize_blueprint_character_projection
     from novel.store import ArtifactStore
     store = ArtifactStore(readonly_ctx(paths.resolve_novel_dir(base, sid), 'stage2.characters', code))
     registry, char_sha = store.read_own_with_sha256(CharacterRegistry, STAGE2_CHARACTERS)

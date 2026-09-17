@@ -166,7 +166,7 @@ def test_unconsumed_character_does_not_change_chapter_alias_payload():
 def test_dynamic_state_keeps_its_alias_without_replacing_relation_participants():
     import hashlib
     from contracts.schema.plot import PlotChapterResponse
-    from novel.stages.stage2.plot_compile import compile_chapter
+    from novel.stages.stage2.blueprint.compile import compile_chapter
     from tests.test_plot_blueprint import CHARS, SOURCE
     response = chapter_response()
     endpoints = {'subject': {'char_id': 'char_001'}, 'object': {'char_id': 'char_002'}}

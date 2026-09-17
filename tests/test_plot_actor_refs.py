@@ -5,14 +5,14 @@ import pytest
 
 from contracts.schema.plot import PlotChapterResponse, PlotSubjectRef
 from contracts.schema.plot_edit import PlotChapterEdit
-from novel.stages.stage2 import plot_edit
-from novel.stages.stage2.character_refs import blueprint_character_prompt_inventory
-from novel.stages.stage2.plot_compile import (
+from novel.stages.stage2.blueprint import edit as plot_edit
+from novel.stages.stage2.shared.character_refs import blueprint_character_prompt_inventory
+from novel.stages.stage2.blueprint.compile import (
     available_actor_bindings, compile_chapter, response_projection, state_materials,
     validate_actors, validate_book,
 )
-from novel.stages.stage2.plot_sequence import request_compiler, with_entry_states
-from novel.stages.stage2.plot_prompts import build_plot_user
+from novel.stages.stage2.blueprint.sequence import request_compiler, with_entry_states
+from novel.stages.stage2.blueprint.prompts import build_plot_user
 
 SOURCE = '新邻居向娘子点头。\n\n门开了，新邻居竟是裴书远。'
 INVENTORY = {'char_001': [
@@ -265,7 +265,7 @@ def test_ch7_style_foreign_presentation_refs_canonicalize_to_null():
 
 def test_formal_blueprint_renormalize_canonicalizes_foreign_presentation_refs():
     """存量正式稿上的跨章句柄：免费 rebuild 压 null，不付费重抽。"""
-    from novel.stages.stage2.plot_recovery import canonicalize_presentation_refs
+    from novel.stages.stage2.blueprint.recovery import canonicalize_presentation_refs
 
     first = compiled(response(1))
     later = response(2)

@@ -20,7 +20,7 @@ from contracts.schema.stage2 import ChapterBlueprints
 from novel.orchestrator.mechanical_admission import SEMANTIC_UNREVIEWED_RULES
 from novel.llm.run_journal import canonical_sha256
 from novel.stages.stage2 import checks
-from novel.stages.stage2.plot_compile import compile_chapter, validate_book
+from novel.stages.stage2.blueprint.compile import compile_chapter, validate_book
 from novel.stages.stage2.characters import compile_response
 from novel.stages.stage2.grounding import compile_global_draft
 from novel.stages.stage2.global_evidence_candidates import GlobalEvidenceCandidateTable

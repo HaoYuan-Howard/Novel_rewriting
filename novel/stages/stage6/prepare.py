@@ -29,7 +29,7 @@ from novel.llm.execution import canonical_sha256
 from novel.llm.ledger import ledger_path, read_strict_jsonl_objects
 from novel.llm.prompts import with_json_shape
 from novel.store import ArtifactStore
-from novel.stages.stage2.paragraphs import render_numbered
+from novel.stages.stage2.shared.paragraphs import render_numbered
 from novel.stages.stage6.prepare_compile import compile_draft, validate_grounding, draft_of
 
 NODE = 'stage6.prepare'

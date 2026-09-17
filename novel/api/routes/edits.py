@@ -34,7 +34,7 @@ from novel.errors import (
 )
 from novel.orchestrator import jobs, uploads
 from novel.run import RunContext
-from novel.stages.stage2 import plot_edit
+from novel.stages.stage2.blueprint import edit as plot_edit
 from novel.stages.stage5 import write
 
 router = APIRouter(prefix='/novels')

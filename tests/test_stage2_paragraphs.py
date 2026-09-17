@@ -11,7 +11,7 @@ from __future__ import annotations
 import pytest
 
 from novel.core.spans import content_only
-from novel.stages.stage2.paragraphs import (
+from novel.stages.stage2.shared.paragraphs import (
     LINE_FORMAT,
     ParagraphIndexError,
     paragraph_at,

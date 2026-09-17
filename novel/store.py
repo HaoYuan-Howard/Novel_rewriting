@@ -1870,7 +1870,7 @@ class ArtifactStore:
                     'unknown', 'global_naming_blocked', (edge,))
             if recorded is None:
                 return FreshnessReport('unknown', 'no_provenance')
-            from novel.stages.stage2.character_refs import (
+            from novel.stages.stage2.shared.character_refs import (
                 materialize_blueprint_character_projection,
             )
             expected = materialize_blueprint_character_projection(

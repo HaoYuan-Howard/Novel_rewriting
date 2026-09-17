@@ -15,8 +15,8 @@ from novel.store import ArtifactStore
 
 
 def get(base: str, sid: str, units: list[dict] | None) -> BlueprintRunProgress:
-    from novel.stages.stage2 import run_state
-    from novel.stages.stage2.plot_inputs import read_input_digests
+    from novel.stages.stage2.blueprint import run_state
+    from novel.stages.stage2.blueprint.inputs import read_input_digests
 
     missing = BlueprintRunProgress(artifact_state='unreadable', chapters=[])
     try:

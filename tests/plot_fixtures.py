@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from contracts.schema.plot import PlotChapterResponse
-from novel.stages.stage2.plot_compile import compile_chapter
+from novel.stages.stage2.blueprint.compile import compile_chapter
 
 TEXT = '甲收到入住邀请。\n\n乙在门口拒绝甲。\n\n甲决定留下。'
 MAIN = [{'chapter_ordinal': 1, 'text': TEXT}]

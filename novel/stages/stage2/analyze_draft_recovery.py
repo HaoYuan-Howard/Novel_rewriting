@@ -22,7 +22,7 @@ from novel.errors import GateBlocked, ProvenanceRefused, TerminalState, Upstream
 from novel.llm import run_journal as agent_runs, stage2_global_runs
 from novel.run import RunContext
 from novel.stages.stage2 import analyze, analyze_recovery, characters, checks, grounding
-from novel.stages.stage2.character_refs import materialize_blueprint_character_projection
+from novel.stages.stage2.shared.character_refs import materialize_blueprint_character_projection
 from novel.store import ArtifactStore
 
 OWNERS = ('stage2.characters', 'stage2.global')

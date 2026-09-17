@@ -12,8 +12,8 @@ import json
 from contracts.schema.plot import ActorRef, PlotBlueprint, PlotSubjectRef
 from novel.errors import RefusedByStructure
 from novel.core.text import norm
-from novel.stages.stage2.character_refs import null_binding_conflict
-from novel.stages.stage2.plot_compile import available_actor_bindings
+from novel.stages.stage2.shared.character_refs import null_binding_conflict
+from novel.stages.stage2.blueprint.compile import available_actor_bindings
 
 
 def _payload(value):

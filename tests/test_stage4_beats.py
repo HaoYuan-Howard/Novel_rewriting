@@ -13,7 +13,7 @@ from contracts.schema.plot import (
     PlotBlueprint, PlotChapterArrangement, PlotChapterResponse,
 )
 from contracts.schema.stage4 import BlindSceneResponse, PlanChapter
-from novel.stages.stage2.plot_compile import compile_chapter
+from novel.stages.stage2.blueprint.compile import compile_chapter
 from novel.stages.stage4 import checks, plot_checks
 from novel.stages.stage4.beats import beat_index
 from novel.stages.stage4.measure import (

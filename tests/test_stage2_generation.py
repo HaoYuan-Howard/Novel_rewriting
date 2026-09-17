@@ -47,7 +47,7 @@ from novel.stages.stage2.normalize import (
 from novel.stages.stage2.global_evidence_candidates import (
     GlobalEvidenceCandidateTable,
 )
-from novel.stages.stage2.paragraphs import paragraph_spans
+from novel.stages.stage2.shared.paragraphs import paragraph_spans
 from novel.store import ArtifactStore
 from tests.test_stage2 import global_grounding, main_text
 from tests.stage2_fixtures import plot_blueprints as blueprints
@@ -851,11 +851,11 @@ def test_stage2_generation_reaches_a_reloadable_jointly_checked_artifact():
         assert stored.provenance.usage.calls_made == 3
         context = stored.provenance.context
         # 产地必须如实记下本次运行选中的契约。
-        from novel.stages.stage2.contract import active_contract
+        from novel.stages.stage2.blueprint.contract import active_contract
         assert context.architecture == active_contract().architecture
         assert context.architecture == 'plot-blueprint-v1'
         assert context.source_format == 'numbered-paragraphs-v1'
-        from novel.stages.stage2.plot_compile import validate_evidence
+        from novel.stages.stage2.blueprint.compile import validate_evidence
         for blueprint in stored.blueprints:
             validate_evidence(blueprint, main_text()[blueprint.chapter_ordinal - 1]['text'])
         assert not ArtifactStore(blueprint_ctx).exists(extract._INVALID)
@@ -1956,8 +1956,8 @@ def test_exact_legacy_keys_never_hide_a_changed_global_upstream(
 
 def test_blueprint_context_keeps_current_full_and_only_attested_subjects():
     from novel.consumption import plot_global_projection
-    from novel.stages.stage2.character_refs import blueprint_character_prompt_inventory
-    from novel.stages.stage2.plot_prompts import build_plot_user
+    from novel.stages.stage2.shared.character_refs import blueprint_character_prompt_inventory
+    from novel.stages.stage2.blueprint.prompts import build_plot_user
     sections = [{'chapter_ordinal': o, 'text': f'BEGIN-{o}|' + chr(64 + o) * 4800 + f'|TAIL-{o}'}
                 for o in range(1, 7)]
     sections[1]['text'] = '甲乙抱着包裹进了城。' + sections[1]['text']
@@ -2005,7 +2005,7 @@ def test_past_attested_surfaces_only_hand_out_past_attested_forms():
 
 def test_stage2_renormalize_rejects_wire_shaped_formal_artifact(tmp_path):
     from tests.test_plot_producer import prepare_book, generate_plot
-    from novel.stages.stage2.plot_compile import response_projection
+    from novel.stages.stage2.blueprint.compile import response_projection
     book = prepare_book(tmp_path)
     ctx, wire = generate_plot(book)
     path = book / extract.BLUEPRINT_REL

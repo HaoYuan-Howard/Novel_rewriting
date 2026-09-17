@@ -18,7 +18,7 @@ from novel.core.spans import (
     content_only, exact_span, locate_unique_span,
 )
 from novel.core.text import norm
-from novel.stages.stage2.paragraphs import (
+from novel.stages.stage2.shared.paragraphs import (
     paragraph_range_of,
 )
 

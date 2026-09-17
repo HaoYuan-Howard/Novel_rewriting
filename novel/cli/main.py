@@ -781,13 +781,13 @@ def _run_stage2(ctx: RunContext, flags: list[str]) -> int:
 
     # ── `stage2.blueprint` ────────────────────────────────────────────────
     if '--emit-edit-template' in tokens:
-        from novel.stages.stage2.plot_edit import edit_template_json
+        from novel.stages.stage2.blueprint.edit import edit_template_json
 
         print(edit_template_json(ctx), end='')
         return X.OK
 
     if '--validate-edit' in tokens:
-        from novel.stages.stage2.plot_edit import validate_edit
+        from novel.stages.stage2.blueprint.edit import validate_edit
 
         preview = validate_edit(
             ctx, _valued(flags, '--validate-edit') or '')
@@ -800,7 +800,7 @@ def _run_stage2(ctx: RunContext, flags: list[str]) -> int:
         return X.OK
 
     if '--apply-edit' in tokens:
-        from novel.stages.stage2.plot_edit import apply_edit
+        from novel.stages.stage2.blueprint.edit import apply_edit
 
         artifact, report = apply_edit(
             ctx, _valued(flags, '--apply-edit') or '')

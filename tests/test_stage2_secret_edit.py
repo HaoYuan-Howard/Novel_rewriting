@@ -598,7 +598,7 @@ def test_a_wrong_reveal_chapter_is_corrected_and_the_downstream_turns_stale():
         assert ArtifactStore(bp_ctx).freshness(extract.BLUEPRINT_REL).state == 'fresh', \
             '底座还没动，下游就已经 stale？那这条测试后面什么也证明不了'
 
-        from novel.stages.stage2.plot_inputs import read_input_digests
+        from novel.stages.stage2.blueprint.inputs import read_input_digests
         inputs_before = read_input_digests(ArtifactStore(bp_ctx))
         blueprint_before = ArtifactStore(bp_ctx).read_own(ChapterBlueprints, extract.BLUEPRINT_REL)[0]
         ledger_before = bp_ctx.ledger.path.read_bytes()

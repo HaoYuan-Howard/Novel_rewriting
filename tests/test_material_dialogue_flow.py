@@ -10,7 +10,7 @@ import pytest
 from pydantic import ValidationError
 from contracts.schema.plot import PlotChapterResponse, PlotBlueprint
 from contracts.schema.stage4 import CtxChapter
-from novel.stages.stage2.plot_compile import compile_chapter, response_projection, recompile_evidence
+from novel.stages.stage2.blueprint.compile import compile_chapter, response_projection, recompile_evidence
 from novel.stages.stage4.plot_placements import compile_placements
 from novel.stages.stage5 import checks, measure, prompts
 from tests.factories import stage5_book

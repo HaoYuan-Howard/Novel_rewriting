@@ -1154,7 +1154,7 @@ class LlmClient:
             """
             if recovery_policy != 'stage2-blueprint-v1':
                 return _worth_resampling(resp)
-            from novel.stages.stage2.plot_recovery_policy import (
+            from novel.stages.stage2.blueprint.recovery_policy import (
                 blueprint_failure_is_deterministic)
             if blueprint_failure_is_deterministic(gate=gate, why=why):
                 return False

@@ -151,7 +151,7 @@ def seed_character_registry(ctx: RunContext):
     人物 producer 的真实链由 generate_characters 及人物专用测试覆盖。本函数
     仅接受固定合成正文，其 provenance 模型名明确标为 fixture。
     """
-    from novel.stages.stage2.character_refs import materialize_blueprint_character_projection
+    from novel.stages.stage2.shared.character_refs import materialize_blueprint_character_projection
 
     child = RunContext(
         novel_dir=ctx.novel_dir, node=characters.NODE, paid=True, code=prov.code_version(),
@@ -175,7 +175,7 @@ def seed_character_registry(ctx: RunContext):
 def plot_blueprints() -> dict:
     """以同一三章原文编译当前正式形状；只供纯契约/消费投影测试。"""
     from contracts.schema.plot import PlotChapterResponse
-    from novel.stages.stage2.plot_compile import compile_chapter
+    from novel.stages.stage2.blueprint.compile import compile_chapter
     from tests.test_plot_producer import responses
     sources = {row['chapter_ordinal']: row['text'] for row in main_text()}
     return {

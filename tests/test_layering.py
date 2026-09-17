@@ -280,15 +280,15 @@ _JSON_READ_ALLOWED = {
         '离线迁移只解码 `_service/` 的 workflow manifest、prepared/completed 与运行账，'
         '用于显式版本、全字段、原字节 CAS 和下游未启动证明；这些是服务控制账而非小说产物。'
         '人物/正文投影仍经 ArtifactStore 读取，迁移不能补造旧审批或小说知识'),
-    'novel/stages/stage2/run_state.py': (
+    'novel/stages/stage2/blueprint/run_state.py': (
         '只读解码 _service/runs 下的 Stage2 运行记录与验证后检查点；'
         '它们不是正式产物，当前版本、自哈希和输入身份不闭合即 unver，'
         '与 producer 共用载体协议，不含模型执行或 paid-response 恢复权威'),
-    'novel/stages/stage2/plot_sequence.py': (
+    'novel/stages/stage2/blueprint/sequence.py': (
         '只解码调用方已构造在内存的章节请求 metadata 并冻结本轮 compiler '
         '允许引用的主体；首次抽取并发提交各章（空 entry_states），跨章 Continuity '
         '在 compile 期缝合；原文/Global 来自已记账 producer 输入，不裸读产物'),
-    'novel/stages/stage2/plot_repair.py': (
+    'novel/stages/stage2/blueprint/repair.py': (
         '只解码内存章节请求 metadata 来附 baseline_identities；'
         '修前蓝图、原文和修订模板均已通过 ArtifactStore/typed 路径读取，不打开盘上 JSON'),
     'novel/stages/stage2/analyze.py': (
@@ -837,9 +837,12 @@ def _import_targets_stage(node) -> bool:
 _CROSS_STAGE_DEEP_GRANDFATHER = frozenset({
     ('novel/api/errors.py', 'novel.stages.stage4.plot_refs'),
     ('novel/api/routes/edits.py', 'novel.stages.stage2.extract'),
-    ('novel/cli/main.py', 'novel.stages.stage2.plot_edit'),
+    ('novel/api/routes/edits.py', 'novel.stages.stage2.blueprint'),
+    ('novel/cli/main.py', 'novel.stages.stage2.blueprint.edit'),
+    ('novel/llm/client.py', 'novel.stages.stage2.blueprint.recovery_policy'),
     ('novel/llm/stage2_global_runs.py', 'novel.stages.stage2.analyze'),
     ('novel/llm/stage2_global_runs.py', 'novel.stages.stage2.analyze_draft_recovery'),
+    ('novel/llm/stage2_runs.py', 'novel.stages.stage2.blueprint'),
     ('novel/llm/stage4_runs.py', 'novel.stages.stage4.design_rebuild'),
     ('novel/llm/stage4_runs.py', 'novel.stages.stage4.plot_design'),
     ('novel/orchestrator/agent.py', 'novel.stages.stage4.design_rebuild'),
@@ -858,32 +861,33 @@ _CROSS_STAGE_DEEP_GRANDFATHER = frozenset({
     ('novel/orchestrator/approvals.py', 'novel.stages.stage7.rename'),
     # ('novel/orchestrator/queue.py', 'novel.stages.stage0.eligibility'):
     # stage0.approve 人工闸退役（2026-09-15）后 queue 不再读 eligibility。
-    ('novel/orchestrator/queue.py', 'novel.stages.stage2.plot_diagnostics'),
+    ('novel/orchestrator/queue.py', 'novel.stages.stage2.blueprint.diagnostics'),
     ('novel/orchestrator/queue.py', 'novel.stages.stage4.phase_state'),
     ('novel/orchestrator/state.py', 'novel.stages.stage2.character_rebind'),
     ('novel/orchestrator/state.py', 'novel.stages.stage5.measure'),
     ('novel/orchestrator/state.py', 'novel.stages.stage5.review'),
-    ('novel/orchestrator/workflow_transition.py', 'novel.stages.stage2.character_refs'),
+    ('novel/orchestrator/workflow_transition.py', 'novel.stages.stage2.shared.character_refs'),
     ('novel/source_identity.py', 'novel.stages.stage1.audit'),
     ('novel/source_identity.py', 'novel.stages.stage1.partition'),
     ('novel/stages/stage1/partition.py', 'novel.stages.stage0.eligibility'),
-    ('novel/stages/stage4/actors.py', 'novel.stages.stage2.character_refs'),
-    ('novel/stages/stage4/actors.py', 'novel.stages.stage2.plot_compile'),
-    ('novel/stages/stage4/beats.py', 'novel.stages.stage2.plot_compile'),
+    ('novel/stages/stage4/actors.py', 'novel.stages.stage2.shared.character_refs'),
+    ('novel/stages/stage4/actors.py', 'novel.stages.stage2.blueprint.compile'),
+    ('novel/stages/stage4/beats.py', 'novel.stages.stage2.blueprint.compile'),
     ('novel/stages/stage6/hook.py', 'novel.stages.stage5.review'),
     ('novel/stages/stage6/measure.py', 'novel.stages.stage5.measure'),
-    ('novel/stages/stage6/prepare.py', 'novel.stages.stage2.paragraphs'),
-    ('novel/stages/stage6/prepare_compile.py', 'novel.stages.stage2.paragraphs'),
+    ('novel/stages/stage6/prepare.py', 'novel.stages.stage2.shared.paragraphs'),
+    ('novel/stages/stage6/prepare_compile.py', 'novel.stages.stage2.shared.paragraphs'),
     ('novel/stages/stage7/assemble.py', 'novel.stages.stage5.closure'),
     ('novel/stages/stage7/measure.py', 'novel.stages.stage5.measure'),
     ('novel/stages/stage7/rename.py', 'novel.stages.stage5.measure'),
     ('novel/stages/stage7/rename.py', 'novel.stages.stage5.review'),
     ('novel/store.py', 'novel.stages.stage1.audit'),
-    ('novel/store.py', 'novel.stages.stage2.character_refs'),
+    ('novel/store.py', 'novel.stages.stage2.shared.character_refs'),
     ('novel/store.py', 'novel.stages.stage2.grounding'),
     ('novel/store.py', 'novel.stages.stage4.binding_input_contract'),
     ('novel/store.py', 'novel.stages.stage4.phase_binding'),
-    ('novel/views/blueprint_progress.py', 'novel.stages.stage2.plot_inputs'),
+    ('novel/views/blueprint_progress.py', 'novel.stages.stage2.blueprint'),
+    ('novel/views/blueprint_progress.py', 'novel.stages.stage2.blueprint.inputs'),
     ('novel/views/ingest.py', 'novel.stages.stage0.eligibility'),
     ('novel/views/ingest.py', 'novel.stages.stage1.audit'),
     ('novel/views/stage2.py', 'novel.stages.stage2.analyze_draft_recovery'),
@@ -955,7 +959,9 @@ def test_cross_stage_imports_stay_on_the_package_surface():
     assert ('novel/views/stage4.py', 'novel.stages.stage5.prompts') in current
     # Stage4 人工闸退役批次：approvals 的 stage4.reading 深边随 design/structure
     # workpack 退役一并消失，分母 67→66；C3 删 agents/node_agents 再消化 2 条，66→64。
-    assert len(_CROSS_STAGE_DEEP_GRANDFATHER) == 64
+    # STR-02 Stage2 blueprint/shared 路径更名：显式登记既有 llm/client、views、
+    # stage2_runs、edits→blueprint 深边，分母 64→68。
+    assert len(_CROSS_STAGE_DEEP_GRANDFATHER) == 68
 
 
 

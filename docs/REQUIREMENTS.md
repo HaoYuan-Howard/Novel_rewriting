@@ -40,16 +40,16 @@ ledger 成本权威。改变产品语义前须用户裁决，并同步 BACKEND_C
 
 **验收**：agent 开工只从本文件取未完成项；不变量冲突时优先根 AGENTS + BACKEND_CONTRACT。
 
-### STR-02 · 术语与包边界样板（先选一个节点做通）
+### STR-02 · 术语与包边界样板（Stage2 blueprint）
 
-选定首个绞杀节点（建议从职责边界最清晰的免费确定性段，或用户指定的节点），建立可复制样板：
+样板节点：`stage2.blueprint`（局部不变量见 `novel/stages/stage2/AGENTS.md` S2-1～S2-8）。
 
-- [ ] 目录 / 模块命名对齐目标词典（compiler、validator、repository 边界可见）。
-- [ ] 公开面与内部实现分离；跨 Stage 深路径 import 不得新增。
-- [ ] 若引入 adapter：登记路径、消费者、删除条件（消费者清零 + 测试退役）。
-- [ ] 补最小 contract / unit 反例，证明旧耦合无法回流。
+- [x] 目录 / 模块命名对齐目标词典：权威包 `novel/stages/stage2/blueprint/` + `shared/`。
+- [x] 公开面与内部实现分离；生产深 import 改权威 path；跨 Stage 深路径 import 不得新增。
+- [x] 旧 `plot_*` / `contract` / `run_state` / `paragraphs` / `character_refs` 顶层路径为薄 shim；见下方 adapter 表。
+- [ ] 补最小 contract / unit 反例，证明旧耦合无法回流（随 shim 删除批闭合）。
 
-**验收**：该节点新 path 为权威；旧 path 有删除条件；样板可被下一节点复用。
+**验收**：blueprint 新 path 为权威；shim 有删除条件；样板可被 analyze/characters/global 复用。
 
 ### STR-03 · 按 Stage 逐节点绞杀
 
@@ -59,7 +59,7 @@ ledger 成本权威。改变产品语义前须用户裁决，并同步 BACKEND_C
 |---|---|---|---|
 | stage0 | 未开始 | — | — |
 | stage1 | 未开始 | — | — |
-| stage2（analyze / characters / global / blueprint） | 未开始 | — | — |
+| stage2（analyze / characters / global / blueprint） | blueprint 权威；其余未开始 | `novel/stages/stage2/blueprint/`、`shared/{paragraphs,character_refs}` | 见 adapter 表 STR-02 shim |
 | stage4（design / plan / context） | 未开始 | — | — |
 | stage5（write / review） | 未开始 | — | — |
 | stage6（prepare / hook / approve） | 未开始 | — | — |
@@ -85,7 +85,8 @@ ledger 成本权威。改变产品语义前须用户裁决，并同步 BACKEND_C
 
 | adapter 路径 | 服务的旧消费者 | 删除条件 | 目标删除批次 |
 |---|---|---|---|
-| （尚无） | — | — | — |
+| `novel/stages/stage2/plot_*.py`、`contract.py`、`run_state.py`（薄 re-export → `blueprint/`） | 过渡期测试与未改完的深 import | 消费者清零；`test_layering` 不再允许旧路径；定向 plot/blueprint 测试改权威 import | stage2 批次 5（拆 extract 同批） |
+| `novel/stages/stage2/paragraphs.py`、`character_refs.py`（薄 re-export → `shared/`） | 同上 | 同上 | stage2 批次 5 |
 
 ## 条目生命周期
 

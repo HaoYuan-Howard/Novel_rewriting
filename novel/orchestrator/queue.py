@@ -606,7 +606,7 @@ def plan_book_from_overview(
                 why_blocked = WAITING_ON_INBOX
                 blueprint_repair_reason = '统一机械准入未通过：' + '；'.join(gate.blocking)
             elif node == 'stage2.blueprint':
-                from novel.stages.stage2.plot_diagnostics import read_repair_diagnostics
+                from novel.stages.stage2.blueprint.diagnostics import read_repair_diagnostics
                 try:
                     diagnostic = read_repair_diagnostics(base, sid, code=approvals.projection_code())
                 except (ArtifactUnreadable, UpstreamMissing, UpstreamStale, UpstreamUnproven) as exc:

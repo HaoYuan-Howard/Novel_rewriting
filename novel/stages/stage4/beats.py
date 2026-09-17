@@ -8,7 +8,7 @@ def beat_index(blueprints: dict[str, Any],
                main_text: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     """索引完整剧情及共享证据；源章篇幅取原文一次，不累加重叠证据。"""
     from contracts.schema.plot import PlotBlueprint
-    from novel.stages.stage2.plot_compile import validate_evidence
+    from novel.stages.stage2.blueprint.compile import validate_evidence
     texts = {m['chapter_ordinal']: m['text'] for m in main_text}
     if len(texts) != len(main_text):
         raise ValueError('原文章号重复')

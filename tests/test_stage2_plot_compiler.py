@@ -9,8 +9,8 @@ import json
 import pytest
 from pydantic import ValidationError
 from contracts.schema.plot import PlotChapterResponse, PlotBlueprint
-from novel.stages.stage2.character_refs import visible_character_refs
-from novel.stages.stage2.plot_compile import compile_chapter, validate_evidence, recompile_evidence, evidence_texts
+from novel.stages.stage2.shared.character_refs import visible_character_refs
+from novel.stages.stage2.blueprint.compile import compile_chapter, validate_evidence, recompile_evidence, evidence_texts
 from tests.test_plot_blueprint import chapter_response, CHARS, SOURCE
 
 
@@ -83,7 +83,7 @@ def test_first_person_enters_closed_set_with_empty_surfaces_before_name_attests(
 
 
 def test_empty_surface_closed_set_member_survives_projection_roundtrip():
-    from novel.stages.stage2.character_refs import (
+    from novel.stages.stage2.shared.character_refs import (
         materialize_blueprint_character_projection,
         blueprint_inventory_from_projection,
     )
@@ -154,7 +154,7 @@ def _two_maids_one_name():
 
 def test_indistinguishable_char_ids_remain_candidates_for_semantic_review():
     """同名字面保留两实体，不以丢失人物代替归属审阅。"""
-    from novel.stages.stage2.character_refs import visible_character_refs_with_drops
+    from novel.stages.stage2.shared.character_refs import visible_character_refs_with_drops
 
     characters, main = _two_maids_one_name()
     refs, dropped = visible_character_refs_with_drops(characters, main)
@@ -166,7 +166,7 @@ def test_indistinguishable_char_ids_remain_candidates_for_semantic_review():
 
 def test_a_distinguishable_pair_is_still_offered():
     """只要还有一个字面能分开，就不该剔——剔多了是另一个方向的错。"""
-    from novel.stages.stage2.character_refs import visible_character_refs_with_drops
+    from novel.stages.stage2.shared.character_refs import visible_character_refs_with_drops
 
     characters, main = _two_maids_one_name()
     characters['C002']['aliases'].append(
@@ -182,7 +182,7 @@ def test_a_distinguishable_pair_is_still_offered():
 
 def test_the_plain_helper_and_the_accounted_one_agree():
     """三个调用点必须看到逐字相同的一份，否则模型的合法答案会在编译期炸。"""
-    from novel.stages.stage2.character_refs import (
+    from novel.stages.stage2.shared.character_refs import (
         visible_character_refs, visible_character_refs_with_drops,
     )
 

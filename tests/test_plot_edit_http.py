@@ -57,7 +57,7 @@ def test_blueprint_edit_reaches_cli_and_survives_service_restart(tmp_path):
 @pytest.mark.parametrize('damage', ['missing', 'wrong_owner', 'ambiguous'])
 def test_unusable_actor_binding_is_409_and_free_cli_edit_retains_original_subject(tmp_path, damage):
     from contracts.schema.plot import ActorRef, ActorBinding
-    from novel.stages.stage2.plot_diagnostics import read_repair_diagnostics
+    from novel.stages.stage2.blueprint.diagnostics import read_repair_diagnostics
     from novel.orchestrator import approvals
     book = prepare_book(tmp_path)
     producer, transport = generate_plot(book)

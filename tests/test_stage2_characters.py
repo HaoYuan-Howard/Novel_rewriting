@@ -336,7 +336,7 @@ def test_same_surface_multiple_entities_is_allowed_but_each_binding_needs_owners
 
 
 def test_identity_reveal_does_not_ban_a_previously_visible_surface():
-    from novel.stages.stage2.character_refs import visible_character_refs
+    from novel.stages.stage2.shared.character_refs import visible_character_refs
     inventory = {'char_001': {'canonical': '裴书远', 'aliases': [
         {'surface': '新邻居', 'identity_revealed_from': 11},
         {'surface': '裴书远', 'identity_revealed_from': 11}]}}

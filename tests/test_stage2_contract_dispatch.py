@@ -18,9 +18,9 @@ from novel.llm.cache import CachePolicy
 from novel.llm.client import LlmFailed, MAX_SAMPLES_PER_RUNG
 from novel.llm.transport import ChatResponse
 from novel.stages.stage2 import extract
-from novel.stages.stage2.contract import CONTRACTS, active_contract, contract_for
-from novel.stages.stage2.plot_compile import compile_chapter, response_projection
-from novel.stages.stage2.plot_prompts import response_system
+from novel.stages.stage2.blueprint.contract import CONTRACTS, active_contract, contract_for
+from novel.stages.stage2.blueprint.compile import compile_chapter, response_projection
+from novel.stages.stage2.blueprint.prompts import response_system
 from novel.store import ArtifactStore
 from tests.test_plot_producer import prepare_book, generate_plot, responses, plot_contract
 from tests.test_stage2 import main_text
@@ -63,10 +63,14 @@ def test_build_preview_matches_current_real_single_chapter_requests(tmp_path):
         by_ordinal[json.loads(req.user.split('\n', 1)[0])['chapter_ordinal']]]}))
     assert extract.run_blueprint(ctx, client).passed
     assert len(wire.calls) == len(main_text()) == 3
-    assert [(r.system, r.user) for r in wire.calls] == [(s, u) for _o, s, u in preview]
+    preview_by_user = {u: s for _o, s, u in preview}
+    assert {(r.system, r.user) for r in wire.calls} == {
+        (s, u) for _o, s, u in preview}
+    assert len(preview_by_user) == 3
     for row in wire.calls:
         metadata = json.loads(row.user.split('\n', 1)[0])
         ordinal = metadata['chapter_ordinal']
+        assert row.system == preview_by_user[row.user]
         source = main_text()[ordinal - 1]['text']
         for paragraph in source.split('\n\n'):
             assert row.user.count(paragraph) == 1
@@ -120,7 +124,10 @@ def test_current_producer_adopts_reasoning_only_without_extra_wire(tmp_path):
 
 
 @pytest.mark.parametrize('damage', ['wrong_chapter', 'unknown_character', 'bad_evidence'])
-def test_rejected_initial_answer_stops_dependents_before_more_calls(tmp_path, damage):
+def test_rejected_initial_answer_isolates_chapters_and_lands_no_formal(tmp_path, damage):
+    """坏答案不得落正式稿；章并行下不因一章失败取消已起跑章（R-3.19 / S2-7）。"""
+    from collections import Counter
+
     book = prepare_book(tmp_path)
     ctx = _ctx(book, 'stage2.blueprint')
     row = responses()[1]
@@ -133,9 +140,10 @@ def test_rejected_initial_answer_stops_dependents_before_more_calls(tmp_path, da
     client, wire = _client(ctx, lambda _r, _i: _ok({'blueprints': [row]}))
     with pytest.raises(LlmFailed):
         extract.run_blueprint(ctx, client)
-    # max_retries=0 只关闭网络重试；合法送达的坏答案仍按内容策略同档重采。
-    assert len(wire.calls) == MAX_SAMPLES_PER_RUNG
-    assert {json.loads(r.user.split('\n', 1)[0])['chapter_ordinal'] for r in wire.calls} == {1}
+    ordinals = [
+        json.loads(r.user.split('\n', 1)[0])['chapter_ordinal'] for r in wire.calls]
+    assert set(ordinals) == {1, 2, 3}
+    assert all(n <= MAX_SAMPLES_PER_RUNG for n in Counter(ordinals).values())
     assert not ArtifactStore(ctx).exists(extract.BLUEPRINT_REL)
 
 

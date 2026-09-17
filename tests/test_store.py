@@ -641,7 +641,7 @@ def _write_grounding_projection_subject(
     else:
         _write_payload(book, STAGE2_GLOBAL_GROUNDING, grounding)
     if node == 'stage2.blueprint':
-        from novel.stages.stage2.character_refs import (
+        from novel.stages.stage2.shared.character_refs import (
             materialize_blueprint_character_projection,
         )
         projection = materialize_blueprint_character_projection(
@@ -1051,7 +1051,7 @@ def test_blueprint_grounding_projection_tracks_every_attested_name(edited: str):
 def test_blueprint_consumer_closes_when_characters_changed_but_projection_write_interrupted():
     """普通 freshness 不递归特殊投影；真实 consumer 必须补上这道承重闸。"""
     from novel.stages.stage2 import extract
-    from novel.stages.stage2.character_refs import (
+    from novel.stages.stage2.shared.character_refs import (
         materialize_blueprint_character_projection,
     )
 
@@ -1158,7 +1158,7 @@ def test_blueprint_character_inventory_survives_malformed_upstream(malformed: ob
     而 freshness 恰恰必须在这种情况下仍能回答（`novel/consumption.py` 文件头）。
     抛出去会让 `state` 查询整个崩掉，那比 `unknown` 坏得多。
     """
-    from novel.stages.stage2.character_refs import character_ref_inventory
+    from novel.stages.stage2.shared.character_refs import character_ref_inventory
 
     entities = malformed.get('entities') if isinstance(malformed, dict) else None
     characters = entities.get('characters') if isinstance(entities, dict) else None
@@ -1173,7 +1173,7 @@ def test_blueprint_character_inventory_survives_malformed_upstream(malformed: ob
 def test_blueprint_character_inventory_marks_missing_character_maps_empty(
     malformed: object,
 ):
-    from novel.stages.stage2.character_refs import character_ref_inventory
+    from novel.stages.stage2.shared.character_refs import character_ref_inventory
 
     entities = malformed.get('entities') if isinstance(malformed, dict) else None
     characters = entities.get('characters') if isinstance(entities, dict) else None

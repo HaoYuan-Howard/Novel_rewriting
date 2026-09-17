@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from contracts.schema.stage2 import SourceBlurbGrounding, FactEvidence, HookFactEvidence
 from contracts.schema.stage6_prepare import PrepareDraft
-from novel.stages.stage2.paragraphs import span_of, paragraph_spans
+from novel.stages.stage2.shared.paragraphs import span_of, paragraph_spans
 
 
 def compile_draft(draft: PrepareDraft, main_text: list[dict], hook_text: str):

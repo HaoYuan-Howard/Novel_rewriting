@@ -10,7 +10,7 @@ from contracts.schema.plot import (
     PlotAnchorBinding, PlotBlueprint, PlotChapterArrangement, PlotChapterResponse,
     PlotGoalAnchor,
 )
-from novel.stages.stage2.plot_compile import (
+from novel.stages.stage2.blueprint.compile import (
     compile_chapter, validate_book, validate_evidence,
 )
 from novel.stages.stage4.plot_placements import (
@@ -202,7 +202,7 @@ def test_literal_is_evidenced_and_claim_is_not_world_state():
 
 def test_plot_state_response_extract_accepts_legacy_dual_write_and_rejects_empty():
     from contracts.schema.plot import PlotStateResponse
-    from novel.stages.stage2.plot_compile import resolve_state_extract
+    from novel.stages.stage2.blueprint.compile import resolve_state_extract
 
     base = {
         'state_key': 'st1', 'modality': 'world', 'holder': None,
@@ -339,7 +339,7 @@ def test_inherited_state_can_end_without_rewriting_previous_chapter():
 
 
 def test_plot_response_projection_keeps_semantics_and_shared_paragraph_evidence():
-    from novel.stages.stage2.plot_compile import response_projection
+    from novel.stages.stage2.blueprint.compile import response_projection
     compiled = blueprint()
     wire = response_projection(compiled.model_dump(mode='json'), SOURCE)
     restored = compile_chapter(
@@ -349,7 +349,7 @@ def test_plot_response_projection_keeps_semantics_and_shared_paragraph_evidence(
 
 
 def test_response_projection_does_not_rewrite_prose_matching_a_formal_id():
-    from novel.stages.stage2.plot_compile import response_projection
+    from novel.stages.stage2.blueprint.compile import response_projection
     chapter = blueprint().model_dump(mode='json')
     # 人物说出编号等内容时，正文和地点恰好等于标识也仍然是原文语义。
     chapter['beats'][0]['content'] = 'b01_01'
@@ -363,7 +363,7 @@ def test_response_projection_does_not_rewrite_prose_matching_a_formal_id():
 
 
 def test_blueprint_failure_grading_blocks_paid_resample_for_deterministic_why():
-    from novel.stages.stage2.plot_recovery_policy import (
+    from novel.stages.stage2.blueprint.recovery_policy import (
         blueprint_failure_is_deterministic)
 
     assert blueprint_failure_is_deterministic(

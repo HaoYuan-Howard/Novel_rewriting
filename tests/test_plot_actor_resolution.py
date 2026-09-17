@@ -8,9 +8,9 @@ from contracts.schema.knowledge import KnowledgeGrounding
 from contracts.schema.plot import PlotBlueprint
 from contracts.schema.stage1 import MainText
 from contracts.schema.stage2 import ChapterBlueprints
-from novel.stages.stage2.character_refs import blueprint_character_prompt_inventory
-from novel.stages.stage2.paragraphs import span_of
-from novel.stages.stage2.plot_compile import source_digest, validate_actors, validate_evidence
+from novel.stages.stage2.shared.character_refs import blueprint_character_prompt_inventory
+from novel.stages.stage2.shared.paragraphs import span_of
+from novel.stages.stage2.blueprint.compile import source_digest, validate_actors, validate_evidence
 from novel.stages.stage4.plot_design import build_blind_projection
 from novel.stages.stage4.plot_materials import chapter_materials, chapter_materials_identity
 from tests.plot_fixtures import GLOBAL, MAIN, REGISTRY, blueprint
@@ -104,8 +104,8 @@ def presented():
     bp = bps['blueprints'][0]
     text = '甲和新客收到入住邀请。\n\n乙在门口拒绝甲。\n\n新客决定留下。'
     main = [{'chapter_ordinal': 1, 'text': text}]
-    from novel.stages.stage2.plot_compile import source_digest
-    from novel.stages.stage2.paragraphs import span_of
+    from novel.stages.stage2.blueprint.compile import source_digest
+    from novel.stages.stage2.shared.paragraphs import span_of
     bp['source_sha256'] = source_digest(text)
     for anchor in bp['evidence_anchors']:
         anchor['start'], anchor['end'] = span_of(text, anchor['start_para'], anchor['end_para'])
