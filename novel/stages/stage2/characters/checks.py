@@ -7,7 +7,7 @@ from contracts.invariants import BARE_PRONOUNS, FATE_WORDS
 from contracts.schema.report import finding
 from novel.core.text import norm
 from novel.report.findings import Outcome, ran, unverifiable
-from novel.stages.stage2.core_evidence import evidence_snippet, validate_evidence_anchors
+from novel.stages.stage2.shared.core_evidence import evidence_snippet, validate_evidence_anchors
 
 
 #: check_characters 恰好产出的规则全集。联合报告在缺 MainText 时按同集出 unver

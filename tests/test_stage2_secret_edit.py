@@ -23,7 +23,7 @@ apply 入口被显式拒绝，journal 的 global_review 两格只是空壳兼容
 """
 from __future__ import annotations
 
-from novel.stages.stage2 import grounding as grounding_io
+from novel.stages.stage2.knowledge import grounding as grounding_io
 
 import copy
 import json

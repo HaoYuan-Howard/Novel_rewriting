@@ -234,7 +234,7 @@ def check_global(global_g: dict[str, Any] | None, main_text: list[dict[str, Any]
     """Global 生成、Analyze、人工编辑与免费复验共用的机械尺子；不消费 Blueprint。"""
     from pydantic import ValidationError
     from contracts.schema.knowledge import KnowledgeCore
-    from novel.stages.stage2.core_evidence import validate_evidence_anchors
+    from novel.stages.stage2.shared.core_evidence import validate_evidence_anchors
     if global_g is None:
         return [unverifiable(rule, _NO_GLOBAL) for rule in GLOBAL_RULES]
     problems: dict[str, list[str]] = {rule: [] for rule in GLOBAL_RULES if rule != 'secrets_absent'}

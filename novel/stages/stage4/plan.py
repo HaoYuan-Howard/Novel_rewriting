@@ -163,7 +163,7 @@ class _Upstreams:
         self.characters = store.read(CharacterRegistry, STAGE2_CHARACTERS).model_dump(by_alias=True, mode='json')
         self.global_g: dict[str, Any] | None = None
         if need_grounding:
-            from novel.stages.stage2 import grounding as stage2_grounding
+            from novel.stages.stage2.knowledge import grounding as stage2_grounding
             self.global_g = stage2_grounding.read(store).model_dump(by_alias=True)
         self.bidx = beat_index(self.blueprints, self.main_text)
 
@@ -177,7 +177,7 @@ class _DesignUpstream:
         self.blueprints = store.read(
             ChapterBlueprints, BLUEPRINTS).model_dump(by_alias=True)
         self.main_text = store.read(MainText, MAIN_TEXT).model_dump(mode='json')
-        from novel.stages.stage2 import grounding
+        from novel.stages.stage2.knowledge import grounding
         self.global_g = grounding.read(store).model_dump(by_alias=True)
         from contracts.schema.characters import CharacterRegistry
         self.characters = store.read(CharacterRegistry, STAGE2_CHARACTERS).model_dump(by_alias=True, mode='json')

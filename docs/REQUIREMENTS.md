@@ -59,7 +59,7 @@ ledger 成本权威。改变产品语义前须用户裁决，并同步 BACKEND_C
 |---|---|---|---|
 | stage0 | 未开始 | — | — |
 | stage1 | 未开始 | — | — |
-| stage2（analyze / characters / global / blueprint） | blueprint + analyze + characters 权威；global 未开始 | `blueprint/`、`analyze/`、`characters/`、`shared/` | 见 adapter 表 |
+| stage2（analyze / characters / global / blueprint） | blueprint + analyze + characters + knowledge 权威；extract facade 待拆 | `blueprint/`、`analyze/`、`characters/`、`knowledge/`、`shared/` | 见 adapter 表 |
 | stage4（design / plan / context） | 未开始 | — | — |
 | stage5（write / review） | 未开始 | — | — |
 | stage6（prepare / hook / approve） | 未开始 | — | — |
@@ -89,6 +89,8 @@ ledger 成本权威。改变产品语义前须用户裁决，并同步 BACKEND_C
 | `novel/stages/stage2/paragraphs.py`、`character_refs.py`（薄 re-export → `shared/`） | 同上 | 同上 | stage2 批次 5 |
 | `novel/stages/stage2/analyze_recovery.py`、`analyze_draft_recovery.py`（薄 re-export → `analyze/`） | 过渡期 CLI/测试 | 消费者清零后删除 | stage2 批次 5 |
 | `novel/stages/stage2/character_checks.py`、`character_rebind.py`（薄 re-export → `characters/`） | 过渡期 | 消费者清零后删除 | stage2 批次 5 |
+| `novel/stages/stage2/grounding.py`、`global_*.py`、`knowledge_prompts.py`、`source_blurb.py`（→ `knowledge/`） | 过渡期 | 消费者清零后删除 | stage2 批次 5 |
+| `novel/stages/stage2/core_evidence.py`、`normalize.py`、`global_evidence_candidates.py`（→ `shared/`） | 过渡期 | 消费者清零后删除 | stage2 批次 5 |
 
 ## 条目生命周期
 

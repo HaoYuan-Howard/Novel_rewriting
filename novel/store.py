@@ -1650,7 +1650,7 @@ class ArtifactStore:
         if ordinary.state != 'fresh':
             return ordinary
         from contracts.schema.characters import CharacterRegistry
-        from novel.stages.stage2.grounding import knowledge_reference_sha256
+        from novel.stages.stage2.knowledge.grounding import knowledge_reference_sha256
         recorded = data.get('characters_reference_sha256')
         try:
             if self.exists(paths.invalid_of(STAGE2_CHARACTERS)):

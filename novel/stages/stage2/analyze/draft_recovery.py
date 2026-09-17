@@ -22,7 +22,8 @@ from novel.errors import GateBlocked, ProvenanceRefused, TerminalState, Upstream
 from novel.llm import run_journal as agent_runs, stage2_global_runs
 from novel.run import RunContext
 from novel.stages.stage2.analyze import purchase as analyze
-from novel.stages.stage2 import characters, checks, grounding
+from novel.stages.stage2 import characters, checks
+from novel.stages.stage2.knowledge import grounding
 from novel.stages.stage2.analyze import recovery as analyze_recovery
 from novel.stages.stage2.shared.character_refs import materialize_blueprint_character_projection
 from novel.store import ArtifactStore

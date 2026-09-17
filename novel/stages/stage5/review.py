@@ -84,7 +84,7 @@ def load_book(ctx: RunContext, store: ArtifactStore) -> M.Book:
         if not store.exists(rel):
             raise UpstreamMissing(f'{rel} 不在盘上——先跑 {rel.split("/")[0]}')
     main = store.read(_main_text_model(), MAIN_TEXT)
-    from novel.stages.stage2 import grounding as stage2_grounding
+    from novel.stages.stage2.knowledge import grounding as stage2_grounding
     gg = stage2_grounding.read(store)
     wc = store.read(WriterContext, WRITER_CONTEXT)
     measurable = body_style_metrics(measure_body(main))

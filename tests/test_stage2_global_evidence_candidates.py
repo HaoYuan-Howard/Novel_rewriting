@@ -10,10 +10,10 @@ import pytest
 
 from contracts.schema.core_evidence import CoreEvidenceAnchor
 from contracts.schema.knowledge import KnowledgeAgentTurnResponse, KnowledgeResponse
-from novel.stages.stage2 import grounding
-from novel.stages.stage2.core_evidence import evidence_id, evidence_slots
+from novel.stages.stage2.knowledge import grounding
+from novel.stages.stage2.shared.core_evidence import evidence_id, evidence_slots
 from tests.test_stage2_characters import _ctx, _generate
-from novel.stages.stage2.global_evidence_candidates import (
+from novel.stages.stage2.shared.evidence_candidates import (
     EVIDENCE_CANDIDATE_FORMAT,
     build_global_evidence_candidates,
 )

@@ -15,7 +15,7 @@ view 不编名字：编出来的名字比一个看得出来的 id 更坏（它�
 """
 from __future__ import annotations
 
-from novel.stages.stage2 import grounding as grounding_io
+from novel.stages.stage2.knowledge import grounding as grounding_io
 
 import os
 
@@ -44,7 +44,7 @@ MAIN_TEXT = STAGE1_MAIN_TEXT
 def _core_evidence_snippets(store: ArtifactStore, anchors) -> dict[str, str | None]:
     """Python 坐标只由后端读取；无当前原文或摘要漂移保持未知，不让 UI 猜定位。"""
     from novel.errors import NovelError
-    from novel.stages.stage2.core_evidence import evidence_snippet
+    from novel.stages.stage2.shared.core_evidence import evidence_snippet
     try:
         main = store.read_own(MainText, MAIN_TEXT, require_current=True)[0].model_dump(mode='json')
     except NovelError:

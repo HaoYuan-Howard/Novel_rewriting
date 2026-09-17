@@ -41,9 +41,9 @@ from novel.report import build
 from novel.report.findings import Outcome
 from novel.run import RunContext
 from novel.stages.stage2.characters import checks
-from novel.stages.stage2.core_evidence import compile_evidence_refs, compile_manual_evidence_refs
-from novel.stages.stage2.global_evidence_candidates import GlobalEvidenceCandidateTable
-from novel.stages.stage2.normalize import normalize_characters
+from novel.stages.stage2.shared.core_evidence import compile_evidence_refs, compile_manual_evidence_refs
+from novel.stages.stage2.shared.evidence_candidates import GlobalEvidenceCandidateTable
+from novel.stages.stage2.shared.normalize import normalize_characters
 from novel.stages.stage2.shared.character_refs import materialize_blueprint_character_projection
 from novel.store import ArtifactStore
 

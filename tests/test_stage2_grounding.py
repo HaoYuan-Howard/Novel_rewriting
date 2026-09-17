@@ -13,7 +13,8 @@ from contracts.schema.characters import CharacterRegistry
 from contracts.schema.knowledge import GlobalProvenance, KnowledgeGrounding, KnowledgeResponse
 from contracts.schema.stage2 import GlobalEdit
 from novel.errors import ProvenanceRefused
-from novel.stages.stage2 import characters, grounding
+from novel.stages.stage2 import characters
+from novel.stages.stage2.knowledge import grounding
 from tests.test_stage2_characters import _ctx, _generate
 from tests.stage2_fixtures import knowledge_response
 

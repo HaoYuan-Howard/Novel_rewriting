@@ -3,7 +3,7 @@
 """Stage2 生成侧的零成本闭环测试。"""
 from __future__ import annotations
 
-from novel.stages.stage2 import grounding as grounding_io
+from novel.stages.stage2.knowledge import grounding as grounding_io
 
 import copy
 from functools import partial
@@ -41,10 +41,10 @@ from novel.core.evidence import iter_global_evidence_slots
 from novel.run import RunContext
 from novel.run_identity import new_run_id
 from novel.stages.stage2 import extract
-from novel.stages.stage2.normalize import (
+from novel.stages.stage2.shared.normalize import (
     EvidenceLocatorCorrection, normalize_global,
 )
-from novel.stages.stage2.global_evidence_candidates import (
+from novel.stages.stage2.shared.evidence_candidates import (
     GlobalEvidenceCandidateTable,
 )
 from novel.stages.stage2.shared.paragraphs import paragraph_spans
@@ -1992,7 +1992,7 @@ def test_blueprint_context_keeps_current_full_and_only_attested_subjects():
 
 
 def test_past_attested_surfaces_only_hand_out_past_attested_forms():
-    from novel.stages.stage2.normalize import past_attested_surfaces
+    from novel.stages.stage2.shared.normalize import past_attested_surfaces
     from tests.stage2_fixtures import formal_subjects
     registry, _ = formal_subjects(global_grounding())
     table = past_attested_surfaces(

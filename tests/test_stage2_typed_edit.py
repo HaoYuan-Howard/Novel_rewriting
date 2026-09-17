@@ -430,7 +430,7 @@ def _book_file_snapshot(book: Path) -> dict[str, bytes]:
 
 def _grounding_raw(book: Path) -> dict:
     """经正式 producer 落盘的当前 Global 业务视图（by_alias）。"""
-    from novel.stages.stage2 import grounding as grounding_io
+    from novel.stages.stage2.knowledge import grounding as grounding_io
     from novel.store import ArtifactStore
     return grounding_io.read(ArtifactStore(
         _ctx(book, 'stage2.global', paid=False))).model_dump(mode='json', by_alias=True)
@@ -463,7 +463,7 @@ def test_collection_delete_refuses_a_dangling_fact_ref_and_keeps_input_unchanged
 
 
 def grounding_io_read(ctx):
-    from novel.stages.stage2 import grounding as grounding_io
+    from novel.stages.stage2.knowledge import grounding as grounding_io
     from novel.store import ArtifactStore
     return grounding_io.read(ArtifactStore(ctx))
 
@@ -642,7 +642,7 @@ def test_candidate_shape_rejection_hashes_dynamic_validation_location(
     book.mkdir()
     _seed(book)
     ctx = _ctx(book, 'stage2.global', paid=False)
-    from novel.stages.stage2 import grounding as grounding_io
+    from novel.stages.stage2.knowledge import grounding as grounding_io
     from novel.store import ArtifactStore
     previous = grounding_io.read(ArtifactStore(ctx))
     raw = previous.model_dump(mode='json', by_alias=True)
@@ -681,7 +681,7 @@ def test_candidate_normalization_terminal_is_business_but_io_is_unknown(
     book.mkdir()
     _seed(book)
     ctx = _ctx(book, 'stage2.global', paid=False)
-    from novel.stages.stage2 import grounding as grounding_io
+    from novel.stages.stage2.knowledge import grounding as grounding_io
     from novel.store import ArtifactStore
     previous = grounding_io.read(ArtifactStore(ctx))
     raw = previous.model_dump(mode='json', by_alias=True)

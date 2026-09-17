@@ -348,7 +348,7 @@ def test_prompts_only_expose_the_reading_ordinal():
     """原文章号是 Stage1 人工诊断，不进入任何模型输入。"""
     from novel.core.text import render_book
     from novel.stages.stage2.extract import build_global_request
-    from novel.stages.stage2.global_contract import active_contract
+    from novel.stages.stage2.knowledge.contract import active_contract
 
     main = MainText.model_validate([
         {'chapter_ordinal': i + 1, 'text': f'第{i + 1}段正文。'}

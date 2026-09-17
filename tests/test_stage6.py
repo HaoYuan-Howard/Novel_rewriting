@@ -645,7 +645,7 @@ def test_paid_hook_prompt_excludes_global_source_spans(monkeypatch):
     import json
     from types import SimpleNamespace
 
-    from novel.stages.stage2 import grounding as stage2_grounding
+    from novel.stages.stage2.knowledge import grounding as stage2_grounding
     from contracts.schema.knowledge import KnowledgeGrounding
     from novel.stages.stage5 import review as stage5_review
     from tests.plot_fixtures import REGISTRY, GLOBAL

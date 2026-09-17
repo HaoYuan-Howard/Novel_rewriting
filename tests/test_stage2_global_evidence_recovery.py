@@ -13,8 +13,8 @@ import hashlib
 import pytest
 
 from novel.stages.stage2 import checks
-from novel.stages.stage2.core_evidence import validate_evidence_anchors
-from novel.stages.stage2.global_normalize import normalize_global
+from novel.stages.stage2.shared.core_evidence import validate_evidence_anchors
+from novel.stages.stage2.knowledge.normalize import normalize_global
 
 
 def _chapters(*, ch1: str | None = None, ch2: str | None = None,

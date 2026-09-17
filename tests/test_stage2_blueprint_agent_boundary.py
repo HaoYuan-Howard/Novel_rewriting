@@ -3,7 +3,7 @@
 """Stage2 blueprint 的候选评估、单次终态与交付终验边界。"""
 from __future__ import annotations
 
-from novel.stages.stage2 import grounding as grounding_io
+from novel.stages.stage2.knowledge import grounding as grounding_io
 
 import json
 from pathlib import Path

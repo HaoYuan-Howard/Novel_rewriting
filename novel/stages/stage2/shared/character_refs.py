@@ -148,7 +148,7 @@ def blueprint_character_prompt_inventory(
     """global 中真正改变逐章请求字节的人物称名投影。"""
     # 局部导入避免让 normalize 的其余实现变成本纯函数模块的
     # import-time 依赖；这里仍调用 prompt 真实使用的唯一函数。
-    from novel.stages.stage2.normalize import past_attested_surfaces
+    from novel.stages.stage2.shared.normalize import past_attested_surfaces
 
     visible, _dropped = visible_character_refs_with_drops(characters, main_text)
     inventory, _ = character_ref_inventory(characters)

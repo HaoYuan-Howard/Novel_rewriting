@@ -849,7 +849,7 @@ _CROSS_STAGE_DEEP_GRANDFATHER = frozenset({
     ('novel/orchestrator/agent.py', 'novel.stages.stage4.design_rebuild'),
     ('novel/orchestrator/approvals.py', 'novel.stages.stage0.eligibility'),
     ('novel/orchestrator/approvals.py', 'novel.stages.stage1.audit'),
-    ('novel/orchestrator/approvals.py', 'novel.stages.stage2.grounding'),
+    ('novel/orchestrator/approvals.py', 'novel.stages.stage2.knowledge.grounding'),
     ('novel/orchestrator/approvals.py', 'novel.stages.stage4.binding_input_contract'),
     ('novel/orchestrator/approvals.py', 'novel.stages.stage4.design_evolution'),
     ('novel/orchestrator/approvals.py', 'novel.stages.stage4.measure'),
@@ -876,17 +876,21 @@ _CROSS_STAGE_DEEP_GRANDFATHER = frozenset({
     ('novel/stages/stage4/actors.py', 'novel.stages.stage2.shared.character_refs'),
     ('novel/stages/stage4/actors.py', 'novel.stages.stage2.blueprint.compile'),
     ('novel/stages/stage4/beats.py', 'novel.stages.stage2.blueprint.compile'),
+    ('novel/stages/stage4/plan.py', 'novel.stages.stage2.knowledge'),
+    ('novel/stages/stage5/review.py', 'novel.stages.stage2.knowledge'),
+    ('novel/stages/stage6/hook.py', 'novel.stages.stage2.knowledge'),
     ('novel/stages/stage6/hook.py', 'novel.stages.stage5.review'),
     ('novel/stages/stage6/measure.py', 'novel.stages.stage5.measure'),
     ('novel/stages/stage6/prepare.py', 'novel.stages.stage2.shared.paragraphs'),
     ('novel/stages/stage6/prepare_compile.py', 'novel.stages.stage2.shared.paragraphs'),
     ('novel/stages/stage7/assemble.py', 'novel.stages.stage5.closure'),
     ('novel/stages/stage7/measure.py', 'novel.stages.stage5.measure'),
+    ('novel/stages/stage7/rename.py', 'novel.stages.stage2.knowledge'),
     ('novel/stages/stage7/rename.py', 'novel.stages.stage5.measure'),
     ('novel/stages/stage7/rename.py', 'novel.stages.stage5.review'),
     ('novel/store.py', 'novel.stages.stage1.audit'),
     ('novel/store.py', 'novel.stages.stage2.shared.character_refs'),
-    ('novel/store.py', 'novel.stages.stage2.grounding'),
+    ('novel/store.py', 'novel.stages.stage2.knowledge.grounding'),
     ('novel/store.py', 'novel.stages.stage4.binding_input_contract'),
     ('novel/store.py', 'novel.stages.stage4.phase_binding'),
     ('novel/views/blueprint_progress.py', 'novel.stages.stage2.blueprint'),
@@ -894,8 +898,10 @@ _CROSS_STAGE_DEEP_GRANDFATHER = frozenset({
     ('novel/views/ingest.py', 'novel.stages.stage0.eligibility'),
     ('novel/views/ingest.py', 'novel.stages.stage1.audit'),
     ('novel/views/stage2.py', 'novel.stages.stage2.analyze.draft_recovery'),
-    ('novel/views/stage2.py', 'novel.stages.stage2.core_evidence'),
-    ('novel/views/stage4.py', 'novel.stages.stage2.grounding'),
+    ('novel/views/stage2.py', 'novel.stages.stage2.knowledge'),
+    ('novel/views/stage2.py', 'novel.stages.stage2.shared.core_evidence'),
+    ('novel/views/stage4.py', 'novel.stages.stage2.knowledge'),
+    ('novel/views/stage4.py', 'novel.stages.stage2.knowledge.grounding'),
     ('novel/views/stage4.py', 'novel.stages.stage4.beats'),
     ('novel/views/stage4.py', 'novel.stages.stage4.context'),
     ('novel/views/stage4.py', 'novel.stages.stage4.measure'),
@@ -965,7 +971,8 @@ def test_cross_stage_imports_stay_on_the_package_surface():
     # STR-02 Stage2 blueprint/shared 路径更名：显式登记既有 llm/client、views、
     # stage2_runs、edits→blueprint 深边，分母 64→68。
     # STR-03 analyze 包迁入：cli/inspection/queue → analyze 包深边，68→71。
-    assert len(_CROSS_STAGE_DEEP_GRANDFATHER) == 71
+    # STR-03 knowledge/（产品 stage2.global；包名避 Python 关键字）+ shared 证据原语：71→77。
+    assert len(_CROSS_STAGE_DEEP_GRANDFATHER) == 77
 
 
 

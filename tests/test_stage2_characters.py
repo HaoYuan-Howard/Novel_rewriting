@@ -206,7 +206,7 @@ def test_character_add_compiles_stable_ids_avoids_retired_and_replays_without_co
     characters.apply_edit(_free_ctx(ctx), CharactersEdit.model_validate({**template, 'operations': [
         {'kind': 'delete', 'char_id': retired_id, 'reason': '验证退休身份不会再分配'}]}),
         actor='test:human', reason='独立删除')
-    from novel.stages.stage2.core_evidence import evidence_slots, evidence_snippet
+    from novel.stages.stage2.shared.core_evidence import evidence_slots, evidence_snippet
     from tests.test_stage2 import main_text
     for _path, owner, field in evidence_slots(row['character']):
         owner[field] = [{'chapter_ordinal': previous.evidence_anchors[ref].chapter_ordinal,
@@ -234,7 +234,7 @@ def test_character_add_local_handles_cannot_repeat_or_supply_persistent_ids():
     character = character_response()['characters'][0].copy()
     del character['character_ref']
     # schema 层采用合法证据 ID；本例只验证身份权责，不跳过真实 producer 的证据检查。
-    from novel.stages.stage2.core_evidence import evidence_slots
+    from novel.stages.stage2.shared.core_evidence import evidence_slots
     for _path, owner, field in evidence_slots(character):
         owner[field] = ['ev_' + 'a' * 24]
     operation = {'kind': 'add', 'character_ref': 'c1', 'character': character}
@@ -309,7 +309,7 @@ def test_character_address_hard_gate_and_free_repair_share_the_real_producer(
 
 def test_local_character_ids_are_frozen_and_evidence_deduplicates():
     from tests.test_stage2 import main_text
-    from novel.stages.stage2.global_evidence_candidates import GlobalEvidenceCandidateTable
+    from novel.stages.stage2.shared.evidence_candidates import GlobalEvidenceCandidateTable
     table = GlobalEvidenceCandidateTable.build(main_text())
     response = CharactersResponse.model_validate(_response())
     compiled = characters.compile_response(response, table, identity_map={'c1': 'char_017'},

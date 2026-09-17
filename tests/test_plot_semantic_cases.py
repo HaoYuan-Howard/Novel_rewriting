@@ -22,8 +22,8 @@ from novel.llm.run_journal import canonical_sha256
 from novel.stages.stage2 import checks
 from novel.stages.stage2.blueprint.compile import compile_chapter, validate_book
 from novel.stages.stage2.characters import compile_response
-from novel.stages.stage2.grounding import compile_global_draft
-from novel.stages.stage2.global_evidence_candidates import GlobalEvidenceCandidateTable
+from novel.stages.stage2.knowledge.grounding import compile_global_draft
+from novel.stages.stage2.shared.evidence_candidates import GlobalEvidenceCandidateTable
 from novel.stages.stage4.measure import identity_plan
 from novel.stages.stage4.plot_context import build_writer_context
 

@@ -8,7 +8,7 @@ from contracts.schema.knowledge import (
     KnowledgeResponse as GlobalGroundingCandidateResponse,
 )
 from novel.stages.stage2 import extract
-from novel.stages.stage2.global_contract import CONTRACT, active_contract
+from novel.stages.stage2.knowledge.contract import CONTRACT, active_contract
 
 
 def test_global_provider_has_one_direct_candidate_contract_and_schema():

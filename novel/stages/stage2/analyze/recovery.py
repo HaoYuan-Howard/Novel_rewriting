@@ -24,8 +24,9 @@ from novel.llm import run_journal as agent_runs, stage2_global_runs
 from novel.llm.ledger import ledger_path, read_strict_jsonl_objects
 from novel.run import RunContext
 from novel.stages.stage2.analyze import purchase as analyze
-from novel.stages.stage2 import characters, checks, grounding
-from novel.stages.stage2.global_evidence_candidates import GlobalEvidenceCandidateTable
+from novel.stages.stage2 import characters, checks
+from novel.stages.stage2.knowledge import grounding
+from novel.stages.stage2.shared.evidence_candidates import GlobalEvidenceCandidateTable
 from novel.store import ArtifactStore
 
 REL = STAGE2_ANALYZE_RECOVERY

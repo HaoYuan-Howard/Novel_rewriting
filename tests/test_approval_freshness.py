@@ -99,7 +99,7 @@ def _seed_core(base: Path, main: MainText):
     """合成有据人物及合法空知识；独立正式写入，不伪造模型或语义接受。"""
     from contracts.schema.characters import CharacterRegistry, CharactersProvenance
     from contracts.schema.knowledge import KnowledgeGrounding, GlobalProvenance
-    from novel.stages.stage2.grounding import knowledge_reference_sha256
+    from novel.stages.stage2.knowledge.grounding import knowledge_reference_sha256
     from tests.plot_fixtures import GLOBAL
 
     character_ctx = RunContext.open(base, SID, 'stage2.characters', paid=True, write_ledger=False)

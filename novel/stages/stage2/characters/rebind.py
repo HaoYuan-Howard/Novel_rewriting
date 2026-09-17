@@ -18,7 +18,7 @@ from contracts.schema.analyze import AnalyzeReceipt
 from novel.llm.execution import canonical_sha256
 from novel import paths
 from novel.errors import ProvenanceRefused, ArtifactUnreadable
-from novel.stages.stage2 import grounding
+from novel.stages.stage2.knowledge import grounding
 
 if TYPE_CHECKING:
     from novel.store import ArtifactStore

@@ -108,7 +108,7 @@ class _Upstreams:
             if not store.exists(rel):
                 raise UpstreamMissing(f'{rel} 不在盘上——先跑 {rel.split("/")[0]}')
         preparation = prepare.require_accepted(store)
-        from novel.stages.stage2 import grounding as stage2_grounding
+        from novel.stages.stage2.knowledge import grounding as stage2_grounding
         gg = stage2_grounding.read(store)
         registry = store.read(CharacterRegistry, STAGE2_CHARACTERS)
         wc = store.read(WriterContext, WRITER_CONTEXT)

@@ -202,11 +202,11 @@ def _identity(store: ArtifactStore, blueprints: dict):
                 f'{rel} 不在盘上——没跑过 stage4 时本屏显示恒等基线，'
                 f'而基线也要吃 stage1 与 stage2 的产出')
     main_raw = store.read(MainText, MAIN_TEXT).model_dump(by_alias=True)
-    from novel.stages.stage2 import grounding as stage2_grounding
+    from novel.stages.stage2.knowledge import grounding as stage2_grounding
     gg_raw = stage2_grounding.read(store).model_dump(by_alias=True)
     bidx = beat_index(blueprints, main_raw)
     plan_raw = identity_plan(blueprints, main_raw, bidx)
-    from novel.stages.stage2.grounding import read_registry
+    from novel.stages.stage2.knowledge.grounding import read_registry
     characters = read_registry(store).model_dump(mode='json', by_alias=True)
     asm = build_writer_context(plan_raw, gg_raw, blueprints, main_raw,
                                characters=characters)

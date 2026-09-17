@@ -184,7 +184,7 @@ def test_characters_delete_and_add_use_real_cli_and_keep_deletion_receipt(tmp_pa
         before = client.get(endpoint).json()
         saved = copy.deepcopy(before['edit_template']['operations'][-1])
         cid = saved['char_id']
-        from novel.stages.stage2.core_evidence import evidence_slots, evidence_snippet
+        from novel.stages.stage2.shared.core_evidence import evidence_slots, evidence_snippet
         from tests.test_stage2 import main_text
         for _path, owner, field in evidence_slots(saved['character']):
             owner[field] = [{'chapter_ordinal': before['registry']['evidence_anchors'][ref]['chapter_ordinal'],

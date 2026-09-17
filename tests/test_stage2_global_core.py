@@ -9,8 +9,8 @@ from contracts.schema.knowledge import GlobalProvenance, KnowledgeCore, Knowledg
 from contracts.schema.stage2 import GlobalEdit
 from novel.stages.stage2 import checks, grounding, characters
 from novel.stages.stage2.extract import _build_global_edit_candidate, GlobalEditCandidateRejected
-from novel.stages.stage2.global_evidence_candidates import GlobalEvidenceCandidateTable
-from novel.stages.stage2.global_normalize import normalize_global
+from novel.stages.stage2.shared.evidence_candidates import GlobalEvidenceCandidateTable
+from novel.stages.stage2.knowledge.normalize import normalize_global
 
 
 @pytest.fixture

@@ -37,9 +37,10 @@ from novel.llm.execution import canonical_sha256
 from novel.llm.ledger import ledger_path, read_strict_jsonl_objects
 from novel.llm.prompts import fill
 from novel.run import RunContext
-from novel.stages.stage2 import characters, checks, grounding
+from novel.stages.stage2 import characters, checks
+from novel.stages.stage2.knowledge import grounding
 from novel.stages.stage2.shared.character_refs import materialize_blueprint_character_projection
-from novel.stages.stage2.global_evidence_candidates import GlobalEvidenceCandidateTable
+from novel.stages.stage2.shared.evidence_candidates import GlobalEvidenceCandidateTable
 from novel.store import ArtifactStore
 
 

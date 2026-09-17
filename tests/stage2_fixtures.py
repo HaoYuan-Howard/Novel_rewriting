@@ -23,7 +23,7 @@ from novel.llm.ledger import CostLedger
 from novel.llm.transport import ChatResponse, FakeTransport
 from novel.run import RunContext
 from novel.stages.stage2 import characters
-from novel.stages.stage2.global_evidence_candidates import GlobalEvidenceCandidateTable
+from novel.stages.stage2.shared.evidence_candidates import GlobalEvidenceCandidateTable
 from novel.store import ArtifactStore
 from tests.test_stage2 import global_grounding, main_text
 
@@ -192,7 +192,7 @@ def plot_blueprints() -> dict:
 def formal_subjects(view: dict):
     """从显式合成样例编译两份独立正式core；不把旧领域形状直接标记为新版。"""
     from contracts.schema.knowledge import GlobalProvenance
-    from novel.stages.stage2.grounding import compile_global_draft
+    from novel.stages.stage2.knowledge.grounding import compile_global_draft
     source = main_text()
     table = GlobalEvidenceCandidateTable.build(source)
     provenance = dict(code='fixture', root_clean_sha1='0' * 40, inputs={},

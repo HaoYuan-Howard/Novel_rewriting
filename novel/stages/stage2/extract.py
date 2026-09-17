@@ -53,7 +53,7 @@ from contracts.schema.stage2 import (
     GlobalProvenance,
 )
 from novel import paths, prov
-from novel.stages.stage2 import grounding as grounding_io
+from novel.stages.stage2.knowledge import grounding as grounding_io
 from novel.config import MAX_CONCURRENCY
 from novel.errors import (
     ArtifactUnreadable, BlockingFindingsUnresolved, GateBlocked, PathRefused, ProvenanceRefused,
@@ -73,11 +73,11 @@ from novel.stages.stage2.shared.character_refs import (
     blueprint_inventory_from_projection,
     materialize_blueprint_character_projection,
 )
-from novel.stages.stage2.global_contract import GlobalEvidenceContractSpec
-from novel.stages.stage2.global_evidence_candidates import (
+from novel.stages.stage2.knowledge.contract import GlobalEvidenceContractSpec
+from novel.stages.stage2.shared.evidence_candidates import (
     GlobalEvidenceCandidateTable,
 )
-from novel.stages.stage2.global_normalize import (
+from novel.stages.stage2.knowledge.normalize import (
     EvidenceLocatorCorrection, GlobalNormalizationAccounting, normalize_global,
 )
 from novel.store import ArtifactStore
@@ -700,7 +700,7 @@ def _active_spec():
 
 def _active_global_spec() -> GlobalEvidenceContractSpec:
     """本次运行选用的 global evidence wire 契约。"""
-    from novel.stages.stage2.global_contract import active_contract
+    from novel.stages.stage2.knowledge.contract import active_contract
     return active_contract()
 
 

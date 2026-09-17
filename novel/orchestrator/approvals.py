@@ -1673,7 +1673,7 @@ def _structure_snapshot_from_artifacts(
     from novel.stages.stage4.plot_materials import (
         chapter_materials, chapter_materials_identity, material_identity,
     )
-    from novel.stages.stage2.grounding import read_own as read_grounding, read_registry
+    from novel.stages.stage2.knowledge.grounding import read_own as read_grounding, read_registry
     _grounding, _raw = read_grounding(store)
     global_g = _grounding.model_dump(by_alias=True, mode='json')
     characters = read_registry(store).model_dump(by_alias=True, mode='json')

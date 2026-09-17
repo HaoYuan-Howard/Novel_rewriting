@@ -26,17 +26,17 @@ Canonical = truth → Projection = expose → Validator = enforce。
 
 ```text
 stage2/
-  analyze/      # 联合语义购买与双侧 draft custody（绞杀目标）
+  analyze/      # 联合语义购买与双侧 draft custody
   characters/   # 人物 owner：compile / edit / checks / projection 发布
-  global/       # 知识 owner：compile / edit / renormalize / checks
+  knowledge/    # 知识 owner（产品节点 stage2.global；包名避 Python 关键字）
   blueprint/    # 剧情 owner：章语义 / continuity / compile / checks / recovery
   shared/       # 多 owner 无状态原语
 ```
 
 - 正式 schema 只在 `contracts/schema/`（及 `docs/schema/`）；stage2 不复制 schema truth。
 - `shared/` 准入：被 ≥2 个 Stage2 owner 使用，且自身不拥有业务状态。
-  - 可进：evidence 原语、paragraph addressing、ref helpers。
-  - 禁进：characters 专属归一、global rebind、blueprint continuity。
+  - 可进：evidence 原语、paragraph addressing、ref helpers、locator normalize。
+  - 禁进：characters 专属 rebind、blueprint continuity、knowledge 专属业务编译。
 - 不为对称铺 `semantic/` / `resolve/` / `canonical/` 空目录树；公式落在各 owner 内部模块。
 
 ## Admission 边界
@@ -52,7 +52,8 @@ stage2/
 | blueprint | `novel/stages/stage2/blueprint/` |
 | analyze | `novel/stages/stage2/analyze/`（`purchase` / `recovery` / `draft_recovery`） |
 | characters | `novel/stages/stage2/characters/`（`registry` / `checks` / `rebind`） |
-| shared | `novel/stages/stage2/shared/`（`paragraphs` / `character_refs`） |
+| knowledge | `novel/stages/stage2/knowledge/`（产品 `stage2.global`；`grounding` / `contract` / …） |
+| shared | `novel/stages/stage2/shared/`（`paragraphs` / `character_refs` / `core_evidence` / `normalize` / `evidence_candidates`） |
 
 过渡期旧模块名可为薄 re-export shim，删除条件见
 `docs/REQUIREMENTS.md` adapter 表。下游跨 Stage 应优先消费正式 artifact 与登记投影，
