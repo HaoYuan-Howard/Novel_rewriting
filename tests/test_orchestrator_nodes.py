@@ -524,10 +524,10 @@ def test_executor_profile_refuses_unmigrated_nodes_and_unknown_capability_pairs(
 
 def test_executor_runtime_registries_close_over_the_same_nodes():
     """能力公开面、跑法矩阵缺任何一边都必须响亮地红。"""
-    # stage6.prepare 只由直连 LLM 执行，不进 PROFILED_LLM_RUNS。
-    expected = set(LLM_EXECUTOR_NODES) - {'stage6.prepare'}
-    assert len(expected) == len(N.PROFILED_LLM_RUNS) == 9
-    assert sum(len(rows) for rows in N.PROFILED_LLM_RUNS.values()) == 14
+    # stage6.prepare 已迁入 PROFILED_LLM_RUNS（空 flags 付费走 legacy profile）。
+    expected = set(LLM_EXECUTOR_NODES)
+    assert len(expected) == len(N.PROFILED_LLM_RUNS) == 10
+    assert sum(len(rows) for rows in N.PROFILED_LLM_RUNS.values()) == 15
     assert set(N.PROFILED_LLM_RUNS) == expected
 
 

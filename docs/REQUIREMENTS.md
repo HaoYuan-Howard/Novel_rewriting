@@ -20,7 +20,8 @@ invariant 与术语扫尾。TODO-51 Gate B/C **口径不变**：仍是真书 Blu
 Stage6 Prepare / Stage7 交付验收；本批只闭合工程单 Executor，不声称 Gate B/C 真书通过。
 
 **2026-09-16 DeepSeek Flash 全链真跑（进行中）**：取消 stage4 Pro 钉死；`stage2.analyze`
-已补 legacy 并从 `AGENT_ONLY` 移除（`stage6.prepare` 仍待）；Analyze `world_rules` 改为
+已补 legacy 并从 `AGENT_ONLY` 移除；`stage6.prepare` 已迁入 `PROFILED_LLM_RUNS`（空 flags
+付费走 legacy profile，关 model fallback）；Analyze `world_rules` 改为
 `WorldRuleExtract`→compiler→`WorldRuleDraft`；legacy `--recover-analyze` 可从 work_unit
 recovery 取回原回答。样本根 `E:\_novel_flash\fujun_extract`：characters/global 已正式落盘；
 `stage2.blueprint`：ActorRef 闭集（含空 surfaces）、constraints observer 已对齐 wire；
@@ -32,9 +33,8 @@ Continuity Pass 已落地：首次 blueprint 章并发 + compile 期 0-LLM 缝�
 `fujun_extract`：`--renormalize` 已免费压掉 ch7 跨章 `presentation_ref`（41→0）；
 `stage4_ready` 机械准入 ok（语义 unver 仅披露）。Stage4A 盲投影已允许空 surfaces
 （第一人称未揭示登记名）；同拍 ended 幂等；同 surfaces 多绑定取最早。
-付费 `stage4.design` Flash（run `712adac2`）已过机械闸并开跑：策略 + 部分章 checkpoint
-已保；ch3/4/5/6/9/10 因 `finish=length` / 截断 JSON 耗尽重试 exit 70——下一步优先免费
-续补已购 checkpoint，再针对性收紧章响应或 token。
+Stage4 design/plan/context 与 Stage5 11 章写稿已在 Flash 路径落盘（章级 length
+抬 ceiling + 第一人称空 surfaces）；下一步 `stage6.prepare`/`hook` 真跑与 Stage7。
 产品 UI 一点开始即双授权（CLI 保留 `--yes`）。
 
 ## P0 · 当前工程实施

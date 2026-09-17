@@ -85,8 +85,9 @@ PROFILED_LLM_RUNS: dict[str, tuple[frozenset[str], ...]] = {
         frozenset({'--revise', '--chapters'}),
         frozenset({'--reviewer-rewrite'}),
     ),
-    # stage6.prepare 的 agent 生产臂已随单 Executor 架构退役（2026-09-16）：
-    # 它只由直连 LLM producer 执行，不再接受 executor profile/agent backend。
+    # stage6.prepare 已迁入直连 LLM（2026-09-17）：空 flags 付费生产走 legacy profile；
+    # agent session 生产臂仍退役，不再接受 agent backend。
+    'stage6.prepare': (frozenset(),),
     'stage6.hook': (frozenset(),),
     # stage6.semantic 已随判官节点退役（2026-09-15），不再有 executor 跑法。
     'stage7.rename': (frozenset(),),

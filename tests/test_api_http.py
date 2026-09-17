@@ -521,8 +521,8 @@ _EXECUTOR_PROFILE_HTTP_CASES = (
     ('stage5.write', ('--chapters', '1'), 1),
     ('stage5.write', ('--revise',), 1),
     ('stage5.write', ('--revise', '--chapters', '1'), 1),
-    # stage6.prepare 的 agent 生产臂已退役（2026-09-16）：agent 纵切不再
-    # 覆盖它；直连 legacy 跑法由 stage6 prepare 直连测试单独闭合。
+    # stage6.prepare 已迁入 PROFILED_LLM_RUNS（2026-09-17）：空 flags 付费走 legacy。
+    ('stage6.prepare', (), 1),
     ('stage6.hook', (), 2),
     ('stage7.rename', (), 2),
 )
