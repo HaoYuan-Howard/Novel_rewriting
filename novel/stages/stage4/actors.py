@@ -141,12 +141,16 @@ class ActorCatalog:
             surfaces = [row['surface'] for row in self.attested_aliases(actor.char_id)
                         if row['identity_revealed_from'] <= self.ordinal]
             if not surfaces:
-                raise RefusedByStructure('人物没有当前可辨认的公开呈现；不得回退 canonical')
+                # 与盲设计材料一致：first_chapter 已到、登记名尚未公开（典型第一人称）
+                # 时 surfaces 可为空；未到出场章仍关闭式拒绝，禁止回退 canonical。
+                if character['first_chapter'] > self.ordinal:
+                    raise RefusedByStructure('人物没有当前可辨认的公开呈现；不得回退 canonical')
             role = character['role'] if character['first_chapter'] <= self.ordinal else None
             role_slots = allowed_slots if role is not None else []
         if role is None or not role_slots:
             role, role_slots = None, []
-        return {'actor_ref': self.token(actor), 'display_name': surfaces[0],
+        display = surfaces[0] if surfaces else ''
+        return {'actor_ref': self.token(actor), 'display_name': display,
                 'surfaces': surfaces, 'surface_allowed_slots': {s: list(allowed_slots) for s in surfaces},
                 'role': role, 'role_allowed_slots': role_slots,
                 'allowed_slots': allowed_slots}

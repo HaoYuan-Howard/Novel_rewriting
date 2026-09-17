@@ -95,7 +95,7 @@ from novel.stages.stage5 import reviewer_rewrite
 from novel.store import ArtifactStore
 
 #: 一次逐章调用的上限。⚠ 它进 `_provenance.params`——换了这个数，产物里说得出来。
-MAX_TOKENS = 16000
+MAX_TOKENS = 64_000
 
 # formal reviewer rewrite 的 code→指令只在这里渲染一次；schema/transport 的取值
 # 域均直接消费 invariant 常量。actor/reason 是审计信息，刻意不进入任何 prompt。

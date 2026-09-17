@@ -2326,7 +2326,19 @@ class LlmClient:
             self._accepted_checkpoints_by_attempt[attempt_id] = deepcopy(payload)
         bound = self._work_requests.get(attempt_id)
         if bound is not None:
-            bound[0].save_recovery(bound[1].turn_id, payload)
+            budget, reservation = bound
+            turn = budget.turn(reservation.turn_id)
+            if turn.recovery_sha256 is not None:
+                # 同指纹 restore 后再验收：保留原 durable 证明，禁止用新组装 payload 覆盖。
+                existing = budget.recovery_proof(reservation.turn_id)
+                if str(existing.get('attempt_id')) != attempt_id:
+                    raise ProvenanceRefused(
+                        f'{purpose}: 已有恢复证明 attempt 与当前 accepted 不一致')
+                with self._adopt_lock:
+                    self._accepted_checkpoint[purpose] = deepcopy(existing)
+                    self._accepted_checkpoints_by_attempt[attempt_id] = deepcopy(existing)
+            else:
+                budget.save_recovery(reservation.turn_id, payload)
 
     def save_producer_recovery(self, attempt_id: str, payload: dict[str, Any]) -> bool:
         """只将真实模型轮次绑定 producer 提交目标；缓存不制造内容消耗。"""

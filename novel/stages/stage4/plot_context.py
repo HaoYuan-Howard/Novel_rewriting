@@ -334,6 +334,9 @@ def build_writer_context(plan: dict[str, Any], global_g: dict[str, Any],
             # 称谓能出现与其真实归属已揭示是两回事；只按已出现原文及实际 Beat 呈现定位。
             if norm(surface) in previous_source:
                 return set(slots)
+            # 章叙述声明的第一人称代词是本章声音表面，不要求再绑到某个 beat 证据 span。
+            if any(surface in (segment.pronoun_surfaces or []) for segment in bp.narration):
+                return set(slots)
             support = [slot for beat in bp.beats if any(norm(surface) in norm(
                 texts[ordinal][anchor_ranges[ref].start:anchor_ranges[ref].end])
                 for ref in beat.evidence_refs) for slot in beat_slots(beat.beat_id)]
@@ -346,11 +349,27 @@ def build_writer_context(plan: dict[str, Any], global_g: dict[str, Any],
             descriptions = [source_catalog.describe(a, allowed_slots=[s for s in slots if s in allowed],
                 public_states=role_state_slots) for source_catalog, a, allowed in entries.values() if allowed]
             surfaces = list(dict.fromkeys(s for d in descriptions for s in d['surfaces']))
+            if not surfaces:
+                # 登记名尚未公开时，用本章叙述代词作为唯一合法公开表面（如「我」）。
+                surfaces = list(dict.fromkeys(
+                    pronoun for row in narration
+                    if row.get('narrator') == token or row.get('focalizer') == token
+                    for pronoun in (row.get('pronoun_surfaces') or [])))
+            if not surfaces:
+                raise RefusedByStructure(
+                    '人物没有当前可辨认的公开呈现或叙述代词；不得回退 canonical')
             roles = {d['role'] for d in descriptions if d['role'] is not None}
             if len(roles) > 1:
                 raise RefusedByStructure('同一公开人物有多个不同角色描述；须由 Blueprint owner 明确当前公开状态，不能取首项')
-            permitted_surfaces = {name: [s for s in slots if s in surface_slots(name) and any(
-                s in d['surface_allowed_slots'].get(name, []) for d in descriptions)] for name in surfaces}
+            permitted_surfaces: dict[str, list[str]] = {}
+            for name in surfaces:
+                base = surface_slots(name)
+                if any(name in d['surface_allowed_slots'] for d in descriptions):
+                    permitted_surfaces[name] = [s for s in slots if s in base and any(
+                        s in d['surface_allowed_slots'].get(name, []) for d in descriptions)]
+                else:
+                    # 叙述代词回填：describe 无登记表面，整章叙述声音可用。
+                    permitted_surfaces[name] = [s for s in slots if s in base]
             if any(not allowed for allowed in permitted_surfaces.values()):
                 raise RefusedByStructure('人物称谓支持场与实际人物呈现无交集；须由 Blueprint owner 免费订正')
             roster.append({'actor_ref': token, 'display_name': surfaces[0], 'surfaces': surfaces,

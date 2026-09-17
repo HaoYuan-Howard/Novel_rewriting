@@ -13,8 +13,10 @@ from contracts.invariants import (
 from novel.llm.prompts import with_json_shape
 
 # 宏观策略与逐章设计使用独立请求及输出预算。
+# 章设计 64k：high thinking 曾把 24k 整段吃成 length/空正文；抬 ceiling 给 JSON 留位。
+# 注意：max_tokens 进请求指纹，改值会使旧 work unit delivered 无法同指纹零 wire 复用。
 BLIND_BOOK_STRATEGY_MAX_TOKENS = 16_000
-BLIND_CHAPTER_DESIGN_MAX_TOKENS = 24_000
+BLIND_CHAPTER_DESIGN_MAX_TOKENS = 64_000
 EVIDENCE_BIND_MAX_TOKENS = 48_000
 
 

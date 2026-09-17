@@ -1927,7 +1927,37 @@ def _design_chapter_contexts(
     return tuple(contexts)
 
 
-def _design_chapter_unit(chapter: DesignChapterContext) -> Any:
+def _delivered_chapter_design_max_tokens(ctx: RunContext, chapter: int) -> int | None:
+    """若该章 work unit 已有 delivered 回答，取其原 max_tokens 以便同指纹零 wire 复用。
+
+    抬高 ``BLIND_CHAPTER_DESIGN_MAX_TOKENS`` 后，旧 delivered 会挡住 ``reserve``；
+    新购缺口章用新 ceiling，已购章必须回读原请求 ceiling 才能恢复。
+    """
+    from novel.llm import stage4_runs
+    from novel.work_units import budget_for, executor_scope
+    purpose = stage4_runs.design_unit_purpose(chapter)
+    budget = budget_for(
+        ctx, scope=executor_scope(ctx.node, purpose, {'chapter': chapter}))
+    for turn in reversed(budget._read().turns):
+        if turn.state != 'delivered' or not turn.response_sha256:
+            continue
+        payload = budget.request_payload(turn.turn_id)
+        request = payload.get('request') if isinstance(payload, dict) else None
+        if not isinstance(request, dict):
+            continue
+        raw = request.get('max_tokens')
+        if isinstance(raw, int) and not isinstance(raw, bool) and raw >= 1:
+            return raw
+    return None
+
+
+def _chapter_design_max_tokens(ctx: RunContext, chapter: int) -> int:
+    return (
+        _delivered_chapter_design_max_tokens(ctx, chapter)
+        or prompts.BLIND_CHAPTER_DESIGN_MAX_TOKENS)
+
+
+def _design_chapter_unit(chapter: DesignChapterContext, *, max_tokens: int | None = None) -> Any:
     from novel.llm import stage4_runs
     return stage4_runs.DesignUnitRequest(
         chapter=chapter.chapter_ordinal,
@@ -1935,7 +1965,9 @@ def _design_chapter_unit(chapter: DesignChapterContext) -> Any:
         system=chapter.system,
         user=chapter.user,
         response_model=BlindChapterDesignResponse,
-        max_tokens=prompts.BLIND_CHAPTER_DESIGN_MAX_TOKENS,
+        max_tokens=(
+            max_tokens if max_tokens is not None
+            else prompts.BLIND_CHAPTER_DESIGN_MAX_TOKENS),
     )
 
 
@@ -1974,11 +2006,12 @@ def _request_design_chapters(
 
     def one(chapter: DesignChapterContext) -> BlindChapterDesignResponse:
         purpose = stage4_runs.design_unit_purpose(chapter.chapter_ordinal)
+        max_tokens = _chapter_design_max_tokens(ctx, chapter.chapter_ordinal)
         response = source.ask_json(
             chapter.system, chapter.user,
             model_cls=BlindChapterDesignResponse,
             purpose=purpose,
-            max_tokens=prompts.BLIND_CHAPTER_DESIGN_MAX_TOKENS,
+            max_tokens=max_tokens,
             validator=chapter.validator)
         compiled = chapter.validator.compiled
         if compiled is None:
@@ -2053,7 +2086,10 @@ def request_design_candidate(
                     raise ProvenanceRefused(f'Stage4A 历史章不能按当前材料编译：{why}')
                 return _design_chapter_checkpoint_state(response, current.validator.compiled)
             previous = design_adoption.select(
-                ctx, _design_chapter_unit(chapter), validator=chapter.validator,
+                ctx, _design_chapter_unit(
+                    chapter,
+                    max_tokens=_chapter_design_max_tokens(ctx, chapter.chapter_ordinal)),
+                validator=chapter.validator,
                 state_payload=compiled_state, persist=not ctx.readonly)
             if previous is not None:
                 historical[chapter.chapter_ordinal] = previous
