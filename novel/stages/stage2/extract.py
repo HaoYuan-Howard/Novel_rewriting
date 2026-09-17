@@ -1495,10 +1495,11 @@ def _require_direct_stage2_entry(
         ctx: RunContext, client: Any | None, *, node: str,
 ) -> None:
     """现役付费生产只接直连客户端，不接管 profile 或 agent run 状态。"""
+    from novel.llm.execution import refuse_agent_executor_takeover
+
     if client is not None and not isinstance(client, LlmClient):
         raise ProvenanceRefused(f'{node} 生产入口只接受 LlmClient')
-    if getattr(ctx, 'executor_profile', None) is not None:
-        raise ProvenanceRefused(f'{node} 生产入口不能接管 agent profile')
+    refuse_agent_executor_takeover(ctx, where=f'{node} 生产入口')
     run_id = getattr(ctx, 'run_id', None)
     if not isinstance(run_id, str) or not run_id:
         return

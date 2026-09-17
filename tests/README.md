@@ -38,6 +38,15 @@
 | enums.actions 隐藏 `--revalidate` 等 | Stage 页一键提升 INVALID | 队列以 `system:invalid-revalidate` 自动排入 | `test_orchestrator_queue` 的 live-INVALID 用例从 blocked 改为 todo 自动 revalidate；`Stage5Screen.request.test` 断言 actions 中无 `--revalidate` |
 | Inbox `verification` → disclosure | 部分 verification 挡交付 | Q-13 质量类披露 | `test_inbox_projection` trim/verification 断言 `delivery_effect=disclosure`；交付终验只计 blocking |
 
+### 分母变化登记（C5 · 2026-09-17 单 Executor 退役边界）
+
+| 变更 | 原职责 | 现役依据 | 等价替代 / 分母影响 |
+|---|---|---|---|
+| `test_agent_drivers` / `test_agent_session_client` / `test_agent_runs` / `test_jsonl_runner` / `test_glm_drivers` / `test_verify_agent_e2e` 等（C3 已删） | Agent CLI driver / session / JSONL 子进程成功路径 | Agent CLI 硬切 | `tests/test_retired_formats.py` 负例 + `test_retired_surface_scan.py` 静态闸；ledger 永久 fixture `tests/fixtures/ledger/agent_era_ledger.jsonl` |
+| `test_stage2_recovery_runs` 中 agent checkpoint 零线恢复组（C5 删） | node-executor/v1 + driver 形 session/ledger 闭环恢复 | 单 Executor；agent checkpoint 成功路径退出维护 | 同文件 legacy 零线用例保留；新增 `test_current_entry_refuses_agent_era_driver_profile_in_request_policy`；登记见本表 |
+| `test_agent_session_audit` 改写 | 原 `AgentProfile`(driver) 会话账 | 现役 `LegacyLlmProfile` | 同文件职责保留：append-only / fold / provider session 互斥；profile 字段改为 provider/model/effort/thinking |
+| 零付费恢复 | prepare / `--recover-analyze` 等 0 wire | C1 反例 + C5 invariant | `tests/test_zero_paid_call_invariants.py` 登记闸；禁止裸删表内用例 |
+
 Stage3 文风迁移、Stage6 旧定性包 A/B 与 Stage2 旧五轮实验退出当前测试维护范围。
 历史由 Git 和既存实验记录保存，不新增测试归档目录；旧解释器不能接受当前报告的守卫仍保留。
 从旧实验中抽出的现役 Hook/Retry 夹具归 `tests/factories.py`，不再让当前测试依赖退役实验模块。

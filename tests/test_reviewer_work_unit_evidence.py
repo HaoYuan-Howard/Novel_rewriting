@@ -23,7 +23,7 @@ def seed_commander_response(base, *, sid='42', node='stage5.review', scope='clos
                             business_sha256='2' * 64, profile=None):
     """保存真实 request/raw/receipt、会话与成本，供新工作单元恢复消费。"""
     from dataclasses import replace
-    # REMOVED novel.agents import session_audit as audit
+    from novel.llm import session_audit as audit
     from novel.llm import ledger
     from tests.test_agent_session_audit import _start, _turn
 
@@ -39,8 +39,8 @@ def seed_commander_response(base, *, sid='42', node='stage5.review', scope='clos
                       requested_effort=profile.reasoning_effort)
     start = replace(_start(session_run_id=session_run_id, prompt_sha256=prompt_sha), **common)
     turn = replace(_turn(session_run_id=session_run_id, prompt_sha256=prompt_sha,
-                         actual_model=profile.model if profile else 'gpt-5.6-sol',
-                         actual_effort=profile.reasoning_effort if profile else 'max'), **common)
+                         actual_model=profile.model if profile else 'deepseek-v4-pro',
+                         actual_effort=profile.reasoning_effort if profile else 'high'), **common)
     attempt = replace(turn, kind='attempt', turn_index=None, delivery_attempts=1)
     # commander 新账构造已关闭；历史证据播种按生产解码同款 read_only 身份打开
     # 预算账（其 reserve/save 系列仍写历史行，与存量书盘面同形）。

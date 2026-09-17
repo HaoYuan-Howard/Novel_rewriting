@@ -18,6 +18,26 @@ from novel.errors import ProvenanceRefused
 M = TypeVar('M')
 
 
+def refuse_agent_executor_takeover(ctx: Any, *, where: str) -> None:
+    """现役直连只接受 ``LegacyLlmProfile``；其它 profile / HistoricalAgent 视为退役接管。
+
+    ``RunContext.executor_profile`` 在 legacy backend 下会投影为非空
+    ``LegacyLlmProfile``（见 ``novel/run.py``）；顶层分流不得再以「本格是否为空」
+    判 agent 模式。
+    """
+    from contracts.schema.orchestration import (
+        HistoricalAgentBackend, LegacyLlmProfile,
+    )
+
+    backend = getattr(ctx, 'executor_backend', None)
+    if isinstance(backend, HistoricalAgentBackend):
+        raise ProvenanceRefused(f'{where}不能接管 agent profile')
+    profile = getattr(ctx, 'executor_profile', None)
+    if profile is None or isinstance(profile, LegacyLlmProfile):
+        return
+    raise ProvenanceRefused(f'{where}不能接管 agent profile')
+
+
 def canonical_bytes(value: object) -> bytes:
     try:
         return json.dumps(
@@ -68,8 +88,7 @@ def execute_structured_llm(ctx, client, *, system: str, user: str,
     from novel.llm.client import LlmClient
     if not isinstance(client, LlmClient):
         raise ProvenanceRefused('直连执行只接受 LlmClient')
-    if getattr(ctx, 'executor_profile', None) is not None:
-        raise ProvenanceRefused('直连执行不能接管 agent profile')
+    refuse_agent_executor_takeover(ctx, where='直连执行')
     response = client.ask_json(system, user, model_cls=model_cls,
                                purpose=purpose, max_tokens=max_tokens)
     checkpoint = client.accepted_checkpoint(purpose)

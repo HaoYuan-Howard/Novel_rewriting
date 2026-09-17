@@ -101,10 +101,10 @@ def test_identity_edit_free_rebind_http_cli_restart_preserves_knowledge_cost(tmp
 
     def seed_knowledge(tmp_path):
         from tests.test_stage2_analyze import _ctx as analyze_ctx, _generate
-        from tests.stage2_fixtures import character_response, knowledge_response
+        from tests.stage2_fixtures import character_response, knowledge_extract_response
         ctx = analyze_ctx(tmp_path)
         response = {'characters': character_response()['characters'],
-                    'global': knowledge_response()}
+                    'global': knowledge_extract_response()}
         _generate(ctx, response)
         ctx.node = 'stage2.global'
         return ctx

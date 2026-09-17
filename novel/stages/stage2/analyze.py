@@ -451,10 +451,11 @@ def run(ctx: RunContext, client: Any) -> AnalyzeReceipt:
     """
     from novel.llm.client import LlmClient
 
+    from novel.llm.execution import refuse_agent_executor_takeover
+
     if not isinstance(client, LlmClient):
         raise ProvenanceRefused('联合首抽生产入口只接受 LlmClient')
-    if ctx.executor_profile is not None:
-        raise ProvenanceRefused('联合首抽生产入口不能接管 agent profile')
+    refuse_agent_executor_takeover(ctx, where='联合首抽生产入口')
     with ownership(ctx):
         if paths.stage2_analyze_run_path(ctx.novel_dir, ctx.run_id).exists():
             raise ProvenanceRefused('当前联合首抽 run 已有 agent 状态，必须用原 profile 恢复')

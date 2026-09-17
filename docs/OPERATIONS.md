@@ -105,27 +105,20 @@ token/耗时优化前的工程基线是 `24e4cf42c76309adaf1f4ee4df0dca3cdbea4d3
 
 ## AgentRun 与流水线恢复
 
-自动运行的暂停、恢复、停止和按原配置继续使用跑书页；人工生成、编辑、审批使用各 Stage 页面。
-工程诊断先查询 `python -m novel.cli --help` 和目标子命令 `--help`。内部执行入口为
+自动运行的暂停、恢复、停止和按原配置继续使用跑书页；Stage 页只读监控（Stage6 三候选
+改选除外）。工程诊断先查询 `python -m novel.cli --help` 和目标子命令 `--help`。内部执行入口为
 `novel/orchestrator/run_step.py`；命名 scratch
 诊断在 `novel/orchestrator/preflight.py`。这些模块均可用 `python -m <模块名> --help` 查看参数。
-运行代码和 workpack 身份覆盖必要资源；当前 start/epoch 使用 `identity_version=2`，不再计算 skill 整树摘要。
+运行代码和 workpack 身份覆盖必要资源；当前 start/epoch 使用 `identity_version=3`（引擎
+`direct_llm` / `llm-executor/v1`），历史 ≤v2 epoch 只读原语义。
 旧身份只作历史证据读取，不能补新摘要重签；旧 owner 排空后才可开当前 epoch，不续旧供应商会话。
 
-Agent driver 与显式 legacy LLM transport 共用同一条 Stage0～Stage7 主链。付费节点由判别联合
-`executor_backend` 决定：`kind=agent` 携 `AgentProfile`，`kind=legacy` 携 `LegacyLlmProfile`；不得再用
-profile 是否存在推断模式。任一模式失败都不得自动降级到另一模式。当前 Legacy provider 为 DeepSeek；
-如需 GLM 的直接 HTTP transport，仍须独立接入，不能复用 DeepSeek 的预算与 thinking 语义。
+现役唯一 executor 是直连 LLM（wire `kind=legacy` + `LegacyLlmProfile`：provider/model/
+effort/thinking）。本地 Agent CLI（`kind=agent` / driver / execution_mode）已退役：命中即
+`retired_executor_backend`（HTTP 410），不做静默降级。UI「模型执行配置」只消费
+`/api/agent/capabilities` 的 legacy providers 面。当前 Legacy provider 为 DeepSeek；
+如需其他 HTTP transport，须独立接入，不能复用 DeepSeek 的预算与 thinking 语义。
 正文外发授权与费用确认彼此独立。
-
-Claude CLI 的智谱路线使用独立 `claude-code-glm` driver，provider 为 `bigmodel`。开发维护者先在
-Claude CLI 用户配置中设置 `ANTHROPIC_BASE_URL=https://open.bigmodel.cn/api/anthropic` 及认证；
-运行代码检查并固定该接收端，不复制密钥或修改用户设置。当前发布 `glm-5.3-flash[1M]`，
-支持 `low/high/max` 三档；当前 Stage2 Core 验收两角色固定 `high`，以 `TODO-51` 的授权配置为准。
-`[1M]` 是上下文窗口请求后缀，
-只接受登记的同模型回显；实际模型、实际 effort 和用量未回显时仍保持未知，不能用请求值倒填。
-切换供应商或模型要在旧 owner 排空后显式开新配置的运行；原配置继续入口不承担换模型，
-工作单元额度与已购成果仍保留。版本探针不证明网络、账号或模型权限。
 
 无回答的传输失败（历史 Commander 工作单元；角色已退役，仅存量书收口）可由开发维护 agent 免费收口：先用
 `python -m novel.orchestrator.work_unit_recovery --base <根> --sid <sid> --unit-id <id> --turn-id <id>`
@@ -135,27 +128,9 @@ Claude CLI 用户配置中设置 `ANTHROPIC_BASE_URL=https://open.bigmodel.cn/ap
 存在已购回答或证据缺失时继续阻断，先恢复原结果；同一请求重放幂等。该入口不是产品跑书步骤；
 admission 账沿用历史命名（`commander_admissions.jsonl`），现役 executor 同一入口收口。
 
-对实际结束的 agent-only 整书做关闭式、0 模型请求验收：
-
-```powershell
-conda run -n novel_refactor python -X utf8 tools/verify_agent_e2e.py `
-  --base <Output目录> --sid <sid> --run-id <agent-run-id>
-```
-
-默认 `fresh` 验收仍要求九个付费 Agent 节点均在指定 run 中有完整采纳证据。
-续跑可加 `--resume`：七层 current 产物、强闸、typed 定稿与交付检查不变，
-费用/session/adoption 只核本轮实际调用，报告显式标为 `mode=resume`，
-不能据此宣称九个节点在本轮重新执行。两种模式均逐 attempt 核对独立执行席位
-（席位重试上限按退役前值本地保留）；
-Stage6/7 定稿复用 production current proof，不把 API 审批检查单当第二套人工决定。
-同时核对公开 gate 与该 proof 的一致性，不能用 producer 真值掩盖 API 的错误状态。
-同席瞬态失败不从账本删除，也不要求失败 attempt 伪装成成功：验收须将每次成本行与
-attempt、实际存在的 provider turn 逐项联结，并证明同席有界重试最终成功；未观察到
-provider 身份的尝试保留实际 usage，不伪造 turn，也不由此推断没有付费。未恢复、
-非重试失败、身份冲突与未知状态仍拒绝，未知用量保留为未知。
-v2 生命周期核对持久 epoch 开闭和 drain，旧 host phase 遥测仅用于 v1。
-零模型调用的续跑从 durable started/epoch 核对唯一干净代码身份，报告仍明确
-`experiment_valid=false`；没有模型执行不能冒充一次性能实验，也不要求伪造成本账行。
+历史 Agent CLI 整书验收工具 `tools/verify_agent_e2e.py` 与 `claude-code-glm` driver 已随
+单 Executor 硬切删除；存量 `ledger.jsonl` 仍全行可读（含历史 `error_kind` 词表），不重建
+运行时对象。现役关闭式验收改走定向 pytest / 交付终验，不另维护 agent-only 九节点报告。
 
 ### 小说流水线成本与耗时配对观测
 

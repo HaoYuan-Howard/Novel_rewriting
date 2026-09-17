@@ -4,6 +4,10 @@
 使用 conda 环境 `novel_refactor`；Python 保留类型标注、4 空格、snake_case/PascalCase。
 安装、服务启动与诊断见 `docs/OPERATIONS.md`；运行或修改测试先读 `tests/AGENTS.md`。
 
+**术语**：本目录路径名里的 `agent`（如 `orchestrator/agent.py`、`/api/agent/*`）指**整书代跑
+编排**，不是 LLM executor。现役付费执行唯一走直连 LLM（`kind:"legacy"`）；退役 Agent CLI
+表面由 `tests/test_retired_surface_scan.py` 与 `retired_formats` 守门。
+
 ## 按调用链定位
 
 | 问题 | 入口 |

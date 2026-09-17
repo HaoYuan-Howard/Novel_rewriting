@@ -291,6 +291,7 @@ def test_agent_profile_is_not_a_current_production_input(tmp_path):
     from tests.test_stage2_generation import _client, _ok
 
     ctx = _ctx(tmp_path)
+    ctx.executor_profile = object()  # 非 LegacyLlmProfile ⇒ 退役 agent 接管
     client, transport = _client(ctx, lambda _request, _index: _ok(_response()))
     with pytest.raises(ProvenanceRefused, match='不能接管 agent profile'):
         analyze.run(ctx, client)

@@ -60,7 +60,7 @@ describe('JobDrawer 作业概览', () => {
     )
     fireEvent.click(screen.getByRole('button', { name: '查看“Stage0 扫描”日志' }))
 
-    expect(screen.getByText(/executor-model-v7/)).toBeVisible()
+    expect(screen.getByText(/deepseek-v4-pro/)).toBeVisible()
     expect(screen.getByText('正文外发：未授权')).toBeVisible()
     expect(await screen.findByText('stderr: 分章器失败')).toBeVisible()
     expect(screen.getByText('恢复命令：python -m novel.cli state')).toBeVisible()

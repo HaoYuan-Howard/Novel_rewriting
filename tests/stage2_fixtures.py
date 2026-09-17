@@ -108,6 +108,26 @@ def knowledge_response(*, view=None) -> dict:
     return KnowledgeResponse.model_validate(payload).model_dump(mode='json')
 
 
+def knowledge_extract_response(*, view=None) -> dict:
+    """Analyze 联合首抽 LLM 面：world_rules 为 Extract（无 versions 壳）。"""
+    from contracts.schema.knowledge import KnowledgeExtract
+
+    draft = knowledge_response(view=view)
+    rules = []
+    for rule in draft['world_rules']:
+        version = rule['versions'][0]
+        rules.append({
+            'rule_ref': rule['rule_ref'],
+            'kind': rule['kind'],
+            'desc': version['desc'],
+            'revealed_from': version['revealed_from'],
+            'evidence_refs': version['evidence_refs'],
+        })
+    return KnowledgeExtract.model_validate({
+        **draft, 'world_rules': rules,
+    }).model_dump(mode='json')
+
+
 def generate_characters(ctx: RunContext, *, view=None):
     """用独立 run 的真实 legacy producer 生成静态上游，费用不串入被测 Global run。"""
     child = RunContext(

@@ -15,7 +15,7 @@ agent_session_audit.py —— commander / executor agent 会话的 append-only �
 HTTP schema；取值域则全部来自 contracts 的唯一落点。
 
 【隐私边界】账里只有 prompt / skill / schema 的 SHA-256，不写 prompt、响应正文、
-CLI stdout/stderr。``profile`` 只有 driver/model/effort/mode 四个公开配置字段，不能
+CLI stdout/stderr。``profile`` 只有 provider/model/effort/thinking 四个公开配置字段，不能
 成为绕过上述边界的暗门。
 
 读旧行时，缺失事实只投影为 ``unknown`` / ``None``，绝不从 requested 倒推 actual、
@@ -174,6 +174,11 @@ def _profile(value: object) -> LegacyLlmProfile | None:
         return LegacyLlmProfile.model_validate(value)
     except Exception as exc:  # noqa: BLE001 —— 对外统一成审计 wire 错误
         raise ValueError(f'profile 不符合 LegacyLlmProfile：{exc}') from exc
+
+
+def _provider_namespace(profile: LegacyLlmProfile) -> str:
+    """供应商会话命名空间：现役用 LegacyLlmProfile.provider（原 Agent CLI driver）。"""
+    return profile.provider
 
 
 @dataclass(frozen=True)
@@ -593,8 +598,8 @@ def _append_claimed_provider_turn(
             if record.start.role not in AGENT_SESSION_ROLES or profile is None:
                 continue
             for provider_session_id in record.provider_session_ids:
-                owners[(profile.driver, provider_session_id)] = record.session_run_id
-        key = (event.profile.driver, event.provider_session_id)
+                owners[(_provider_namespace(profile), provider_session_id)] = record.session_run_id
+        key = (_provider_namespace(event.profile), event.provider_session_id)
         owner = owners.get(key)
         conflict = owner if owner is not None and owner != event.session_run_id else None
         landed = (
@@ -845,7 +850,8 @@ def fold(events: Iterable[AgentSessionEvent]) -> list[AgentSessionRecord]:
         if (provider_session_id is not None
                 and event.wire_version == SESSION_AUDIT_WIRE_VERSION
                 and event.role in AGENT_SESSION_ROLES and event.profile is not None):
-            provider_key = (event.profile.driver, provider_session_id)
+            provider_key = (
+                _provider_namespace(event.profile), provider_session_id)
             owner = provider_session_owners.get(provider_key)
             if reuse_evidence:
                 if owner is None or owner == session_run_id:
@@ -854,12 +860,11 @@ def fold(events: Iterable[AgentSessionEvent]) -> list[AgentSessionRecord]:
                         'agent logical session owner')
             elif owner is not None and owner != session_run_id:
                 raise ValueError(
-                    f'{event.profile.driver} provider_session_id='
+                    f'{_provider_namespace(event.profile)} provider_session_id='
                     f'{provider_session_id!r} 同时属于两个 agent logical sessions：'
                     f'{owner} / {session_run_id}')
             else:
                 provider_session_owners[provider_key] = session_run_id
-
         for name in ('actual_model', 'actual_effort'):
             value = getattr(event, name)
             if not _explicit(value):

@@ -1413,6 +1413,18 @@
    "stages": [
     "stage2"
    ]
+  },
+  "tests/test_retired_surface_scan.py": {
+   "layer": "unit_contract",
+   "stages": []
+  },
+  "tests/test_agent_era_ledger.py": {
+   "layer": "unit_contract",
+   "stages": []
+  },
+  "tests/test_zero_paid_call_invariants.py": {
+   "layer": "unit_contract",
+   "stages": []
   }
  },
  "version": 1

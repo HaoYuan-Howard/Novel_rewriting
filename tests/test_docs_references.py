@@ -90,6 +90,9 @@ _DECLARED_ABSENT: dict[str, str] = {
         '只消费已删除的 workflow_metrics 冻结报告，随同退役（见 docs/DECISIONS.md）'),
     'tools/stage2_acceptance.py': (
         '旧五轮实验解释器已退出维护并删除；docs 引用它的段落只解释历史边界'),
+    'tools/verify_agent_e2e.py': (
+        '随单 Executor 硬切删除（C3/C5）；docs 引用它的段落说明 Agent CLI '
+        '整书验收工具与 claude-code-glm driver 已退役，不重建运行时对象'),
     'novel/stages/stage2/core_edits.py': (
         '统一双 owner typed 编辑批次已随 Stage2 语义审阅退役；'
         '独立 CharactersEdit/GlobalEdit 是唯一 typed 编辑入口'),

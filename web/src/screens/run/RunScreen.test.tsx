@@ -432,9 +432,9 @@ describe('RunScreen 交付终验', () => {
     renderRoute(<RunScreen />, `/n/${SAMPLE_SID}/run`)
 
     const snapshot = await screen.findByTestId('agent-profiles-snapshot')
-    expect(snapshot).toHaveTextContent('executor-model-v7')
+    expect(snapshot).toHaveTextContent('deepseek-v4-pro')
     expect(snapshot).toHaveTextContent('node.dynamic-a')
-    expect(snapshot).toHaveTextContent('effort=deep-dynamic')
+    expect(snapshot).toHaveTextContent('effort=high')
     expect(screen.getByTestId('agent-epoch')).toHaveTextContent(
       '当前执行 epoch：#2 · code_drift · code-after-r',
     )

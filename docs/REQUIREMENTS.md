@@ -14,6 +14,11 @@
 Stage 只读、Stage6 改选、上传幂等开跑）；TODO-50 已关闭。仍打开的是 TODO-21 corpus
 基线、TODO-51 Gate B/C 真书验收、TODO-28 fixture 登记与 TODO-49 性能/成稿未验项。
 
+**2026-09-17 单 Executor 收口（C1–C5）**：Agent CLI executor 已硬切；现役唯一执行模型为
+直连 LLM（wire `kind:"legacy"`）。C5 固化退役扫描、历史 ledger 可读、零付费恢复
+invariant 与术语扫尾。TODO-51 Gate B/C **口径不变**：仍是真书 Blueprint 机械准入与
+Stage6 Prepare / Stage7 交付验收；本批只闭合工程单 Executor，不声称 Gate B/C 真书通过。
+
 **2026-09-16 DeepSeek Flash 全链真跑（进行中）**：取消 stage4 Pro 钉死；`stage2.analyze`
 已补 legacy 并从 `AGENT_ONLY` 移除（`stage6.prepare` 仍待）；Analyze `world_rules` 改为
 `WorldRuleExtract`→compiler→`WorldRuleDraft`；legacy `--recover-analyze` 可从 work_unit

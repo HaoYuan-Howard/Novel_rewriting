@@ -1,23 +1,62 @@
 # -*- coding: utf-8 -*-
-"""现役 executor、来源采用与免费尾窗不得接入旧书内运行记录。"""
+"""现役 executor、来源采用与免费尾窗不得接入旧书内运行记录（C5：无 agent_runs 测试夹具）。"""
 from __future__ import annotations
 
-import pytest
+from pathlib import Path
 
-from novel import paths, runtime_layout
+import pytest
+from pydantic import BaseModel, ConfigDict
+
+from contracts.schema.orchestration import LegacyExecutorBackend, LegacyLlmProfile
+from novel import paths, prov, runtime_layout
 from novel.errors import ProvenanceRefused
 from novel.llm import run_journal, stage2_global_runs, stage4_runs, stage5_runs
 from novel.llm import stage6_hook_runs, stage7_runs
-from tests.test_agent_runs import _Answer, _ctx, _INPUT_SHA, _MAX_TOKENS, _SYSTEM, _USER
+from novel.llm.cache import CachePolicy
+from novel.llm.ledger import CostLedger, ledger_path
+from novel.run import RunContext
+from novel.work_units import initialize_workflow
+
+_SYSTEM = 'SYSTEM'
+_USER = 'USER'
+_INPUT_SHA = 'a' * 64
+_MAX_TOKENS = 2048
+
+
+class _Answer(BaseModel):
+    model_config = ConfigDict(extra='forbid', strict=True)
+    value: int
+
+
+def _ctx(base: Path) -> RunContext:
+    initialize_workflow(base)
+    novel_dir = base / '运行布局_4242'
+    novel_dir.mkdir(exist_ok=True)
+    profile = LegacyLlmProfile(
+        provider='deepseek', model='deepseek-v4-pro',
+        reasoning_effort='high', thinking_mode='on')
+    return RunContext(
+        novel_dir=novel_dir,
+        node='stage4.design',
+        paid=True,
+        code=prov.code_version(),
+        cache=CachePolicy.default(),
+        ledger=CostLedger(path=ledger_path(base)),
+        executor_backend=LegacyExecutorBackend(profile=profile),
+    )
 
 
 def _snapshot(root):
-    return {str(p.relative_to(root)): p.read_bytes() for p in root.rglob('*') if p.is_file()}
+    return {
+        str(p.relative_to(root)): p.read_bytes()
+        for p in root.rglob('*') if p.is_file()
+    }
 
 
 @pytest.mark.parametrize('stage', ['stage2', 'stage4', 'stage5', 'stage6', 'stage7'])
 @pytest.mark.parametrize('contents', [None, b'', b'{"unproven":'])
-def test_retired_layout_keeps_empty_missing_and_corrupt_records_closed(tmp_path, stage, contents):
+def test_retired_layout_keeps_empty_missing_and_corrupt_records_closed(
+        tmp_path, stage, contents):
     book = tmp_path / '运行布局_4242'
     book.mkdir()
     current = paths.service_stage_runs_dir(book, stage)
@@ -40,7 +79,8 @@ def test_retired_layout_keeps_empty_missing_and_corrupt_records_closed(tmp_path,
     lambda: stage5_runs._run_spec(1),
     stage6_hook_runs._run_spec, stage7_runs._run_spec,
 ])
-def test_actual_single_session_adapters_refuse_old_state_before_any_current_write(tmp_path, factory):
+def test_actual_single_session_adapters_refuse_old_state_before_any_current_write(
+        tmp_path, factory):
     ctx = _ctx(tmp_path)
     spec = factory()
     ctx.node = spec.node
@@ -49,15 +89,20 @@ def test_actual_single_session_adapters_refuse_old_state_before_any_current_writ
     (old / 'untrusted-checkpoint.json').write_bytes(b'{"current-looking":true}\n')
     before = _snapshot(tmp_path)
     with pytest.raises(ProvenanceRefused, match='旧运行目录已退役'):
-        agent_runs.ensure_run(ctx, spec, input_sha256=_INPUT_SHA, system=_SYSTEM, user=_USER,
-                              response_model=_Answer, max_tokens=_MAX_TOKENS)
+        run_journal.ensure_run(
+            ctx, spec, input_sha256=_INPUT_SHA, system=_SYSTEM, user=_USER,
+            response_model=_Answer, max_tokens=_MAX_TOKENS)
     assert _snapshot(tmp_path) == before
     assert not spec.run_path(ctx).exists()
     assert not spec.checkpoint_dir(ctx).exists()
 
 
-@pytest.mark.parametrize('entry', ['chapter', 'reviewer', 'manifest', 'design_run', 'design_checkpoint'])
-def test_free_recovery_and_historical_source_readers_share_the_layout_guard(tmp_path, entry):
+@pytest.mark.parametrize(
+    'entry',
+    ['chapter', 'reviewer', 'manifest', 'design_run', 'design_checkpoint'],
+)
+def test_free_recovery_and_historical_source_readers_share_the_layout_guard(
+        tmp_path, entry):
     ctx = _ctx(tmp_path)
     stage = 'stage4' if entry.startswith('design') else 'stage5'
     ctx.node = stage + ('.design' if stage == 'stage4' else '.write')
@@ -69,7 +114,8 @@ def test_free_recovery_and_historical_source_readers_share_the_layout_guard(tmp_
         if entry == 'chapter':
             stage5_runs.recovery_state(ctx, 1)
         elif entry == 'reviewer':
-            stage5_runs.reviewer_rewrite_recovery_state(ctx, run_id=ctx.run_id, chapter=1)
+            stage5_runs.reviewer_rewrite_recovery_state(
+                ctx, run_id=ctx.run_id, chapter=1)
         elif entry == 'manifest':
             stage5_runs._recovery_manifest_path(ctx.novel_dir, ctx.run_id)
         elif entry == 'design_run':

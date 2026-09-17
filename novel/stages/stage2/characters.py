@@ -466,8 +466,9 @@ def run_resample(ctx: RunContext, client: LlmClient) -> CharacterRegistry:
 
 def run(ctx: RunContext, client: LlmClient) -> CharacterRegistry:
     """显式 legacy backend 使用原 transport/cache/额度契约，不能接管 agent 回答。"""
-    if ctx.executor_profile is not None:
-        raise ProvenanceRefused('人物 legacy 入口不能接管 agent profile')
+    from novel.llm.execution import refuse_agent_executor_takeover
+
+    refuse_agent_executor_takeover(ctx, where='人物 legacy 入口')
     with ownership(ctx):
         if paths.stage2_characters_run_path(ctx.novel_dir, ctx.run_id).exists():
             raise ProvenanceRefused('当前人物 run 已有 agent 状态，必须用原 profile 恢复')

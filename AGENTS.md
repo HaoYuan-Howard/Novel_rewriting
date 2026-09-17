@@ -23,6 +23,10 @@ agent 负责维护工程上下文、实现与验证，关键取舍和结果直�
 产品为全自动单模式：上传即授权开跑，Stage 页只读监控；Stage6 保留三候选改选（不阻塞
 stage7）。确定性调度、执行、恢复与交付检查由运行代码负责。
 
+**术语不变量**：文中 **Agent** 仅指整书代跑编排（`/agent/runs`、RunSupervisor）；禁止指
+LLM executor、CLI driver、session 或 provider。现役唯一 executor 是直连 LLM（wire
+`kind:"legacy"`）；UI 称「模型执行配置」。Agent CLI executor 已退役。
+
 ## 开工与协作
 
 1. 先看 `git status --short`，保留已有改动；只处理本任务涉及的内容。

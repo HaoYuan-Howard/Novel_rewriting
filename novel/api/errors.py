@@ -202,6 +202,10 @@ UNREACHABLE_OVER_HTTP: dict[str, str] = {
                                    '它只在付费 CLI 子进程内抛出，HTTP 父进程只看到终态退出码',
     'AgentDeliveryUnavailable': 'Agent CLI 没有形成可采纳回答；它只由付费节点子进程抛出。'
                                 '父进程只看到退出码，并另验 Stage2 的同 run 恢复凭据',
+    'AgentConfigurationError': (
+        '结构化 schema / stdin 配置在发起模型调用前就不成立（现役仍由 '
+        '`json_schema_util` / `structured_stdin` 使用）。它只在付费 LLM 子进程内抛出，'
+        'HTTP 父进程只看到终态退出码'),
     'LlmFailed': '主模型与允许的兜底模型均没拿到可用结果。它在**子进程**里抛，父进程只看到退出码',
     'TransportError': '一次请求没发成功（429/5xx/超时）。同上——服务进程结构上发不出请求',
     'MissingApiKey': '要发真请求了而没有 key。⚠ 它恰恰**证明**了那条边界：'

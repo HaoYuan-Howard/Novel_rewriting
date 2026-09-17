@@ -2739,10 +2739,11 @@ def run_prepared_recovery(
 
 def _require_direct_llm_entry(ctx: RunContext, client: LlmClient) -> None:
     """付费生产只接直连客户端，不接管旧 profile 或同 run 的 agent 状态。"""
+    from novel.llm.execution import refuse_agent_executor_takeover
+
     if not isinstance(client, LlmClient):
         raise ProvenanceRefused('Stage5 写作生产入口只接受 LlmClient')
-    if getattr(ctx, 'executor_profile', None) is not None:
-        raise ProvenanceRefused('Stage5 写作生产入口不能接管 agent profile')
+    refuse_agent_executor_takeover(ctx, where='Stage5 写作生产入口')
     run_id = getattr(ctx, 'run_id', None)
     if not isinstance(run_id, str) or not run_id:
         return

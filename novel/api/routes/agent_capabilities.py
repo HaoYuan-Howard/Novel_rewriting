@@ -1,4 +1,4 @@
-﻿"""``GET /api/agent/capabilities``：executor 选择面（C3：仅 legacy providers）。"""
+"""``GET /api/agent/capabilities``：executor 选择面（C3：仅 legacy providers）。"""
 from __future__ import annotations
 
 from fastapi import APIRouter, Response

@@ -24,6 +24,8 @@ from tools import current_corpus_paid_preview as P
 #: 44 条逻辑请求，B 仍为 2 条，现役基础数因此为 **136**。公开付费 dispatch
 #: 仍是每书 A/B 各一条，不随内部逻辑拓扑增加。
 #: 独立人物节点为双书各增加一条整书请求，现役基础数为 138。
+#: 2026-09-16 Flash 全链取消 stage4 Pro 钉死后，138 条全部走 Flash→Pro 模型链
+#: （不再拆 92 Flash + 46 Pro）。
 #: `_logical_topology` 从现役契约派生；这里钉 138 是在守当前默认真实 consumer，
 #: 翻默认时要随生产拓扑一起改，不能把预算预览留在旧臂。
 #: ⚠ 2026-08-18 阶梯由 4 档降到 3 档（删掉被服务端静默映射回 `high` 的 `medium`，
@@ -49,11 +51,8 @@ def test_workflow_role_budget_matches_current_seats_and_ambiguous_units():
 _FLASH_MODELS = len(P.models_for(P.config.DEFAULT_MODEL))
 _PRO_MODELS = len(P.models_for(PRO_FALLBACK_MODEL))
 
-# 138 条非语义逻辑请求里，双书 Stage4 A（18+26）/B（1+1）共
-# 46 条钉死 Pro；其余 92 条默认 Flash 并各带一次 Pro 兜底。
-# stage6.semantic 判官退役（2026-09-15）后付费面不再有语义逻辑请求。
-_BASE_WIRE = (92 * _FLASH_MODELS + 46 * _PRO_MODELS) \
-    * _RUNGS * MAX_SAMPLES_PER_RUNG
+# 138 条非语义逻辑请求全部走 Flash→Pro；stage6.semantic 判官退役后无语义逻辑请求。
+_BASE_WIRE = 138 * _FLASH_MODELS * _RUNGS * MAX_SAMPLES_PER_RUNG
 _HOOK_RETRY_WIRE = 6 * _FLASH_MODELS * MAX_SAMPLES_PER_RUNG
 
 #: 当前语料范围的 wire 硬上限：基础 138 按各自模型链放大、
@@ -226,15 +225,11 @@ def test_commands_use_production_builder_and_freeze_env_without_execution(tmp_pa
         assert '--execute' not in argv and '--effort' not in argv
         env = row['frozen_environment']
         # 冻结环境钉的是**全局默认模型**（`FIXED_MODEL = config.DEFAULT_MODEL`，派生）。
-        # 2026-08-19/20 起默认 = flash；语义判官不因此翻臂——`NODES` 里钉死 pro
-        #（`contracts/invariants.py::NodeSpec.model` 优先于环境变量）。
+        # 2026-09-16 Flash 全链取消 stage4 Pro 钉死后，付费节点统一 Flash→Pro 链。
         assert env['DEEPSEEK_MODEL'] == P.config.DEFAULT_MODEL
         assert env['DEEPSEEK_THINKING'] == 'on'
         assert env['DEEPSEEK_MAX_RETRIES'] == '0'
-        if row['node'] in {'stage4.design', 'stage4.plan'}:
-            assert row['models'] == [PRO_FALLBACK_MODEL]
-        else:
-            assert row['models'] == [P.config.DEFAULT_MODEL, PRO_FALLBACK_MODEL]
+        assert row['models'] == [P.config.DEFAULT_MODEL, PRO_FALLBACK_MODEL]
         caches.add(env['NOVEL_CACHE_DIR'])
     assert len(caches) == 2
     write = next(row for row in plan['dispatches'] if row['node'] == 'stage5.write')

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-test_agent_session_audit.py —— commander / per-node executor 的零成本会话账。
+test_agent_session_audit.py —— 整书代跑会话账（session_audit）的零成本边界；profile 现役为 LegacyLlmProfile。
 
 这里钉三条不能靠调用方自觉的边界：
 1. 每行稳定字段齐全，但 prompt/content 只留 SHA，不进正文；
@@ -14,7 +14,7 @@ import json
 
 import pytest
 
-# REMOVED novel.agents import session_audit as A
+from novel.llm import session_audit as A
 
 
 _SHA_A = 'a' * 64
@@ -47,17 +47,17 @@ def _start(*, session_run_id: str = 'session-1', ts: int = 10,
         chapter=7,
         subject_sha256=_SHA_A,
         profile={
-            'driver': 'codex',
-            'model': 'gpt-5.6-sol',
-            'reasoning_effort': 'max',
-            'execution_mode': 'standard',
+            'provider': 'deepseek',
+            'model': 'deepseek-v4-pro',
+            'reasoning_effort': 'high',
+            'thinking_mode': 'on',
         },
         kind='started',
         ts=ts,
-        requested_model='gpt-5.6-sol',
-        requested_effort='max',
-        cli_version='codex-cli/1.2.3',
-        protocol_version='agent-session/v1',
+        requested_model='deepseek-v4-pro',
+        requested_effort='high',
+        cli_version='legacy-llm/test',
+        protocol_version='node-executor/v1',
         start_code_version='code-start',
         skill_sha256=_SHA_B,
         prompt_sha256=prompt_sha256,
@@ -69,7 +69,7 @@ def _turn(*, session_run_id: str = 'session-1', turn_index: int = 1,
           ts: int = 20, prompt_sha256: str = _SHA_C,
           schema_sha256: str = _SHA_D,
           attempt_id: str | None = None,
-          actual_model: str | None = 'gpt-5.6-sol-2026-08-20',
+          actual_model: str | None = 'deepseek-v4-pro',
           actual_effort: str | None = 'high') -> A.AgentSessionEvent:
     return A.AgentSessionEvent(
         session_run_id=session_run_id,
@@ -79,22 +79,22 @@ def _turn(*, session_run_id: str = 'session-1', turn_index: int = 1,
         chapter=7,
         subject_sha256=_SHA_A,
         profile={
-            'driver': 'codex',
-            'model': 'gpt-5.6-sol',
-            'reasoning_effort': 'max',
-            'execution_mode': 'standard',
+            'provider': 'deepseek',
+            'model': 'deepseek-v4-pro',
+            'reasoning_effort': 'high',
+            'thinking_mode': 'on',
         },
         kind='turn',
         ts=ts,
         provider_session_id='provider-thread-99/abc',
         turn_index=turn_index,
         attempt_id=attempt_id or f'attempt-{turn_index}',
-        requested_model='gpt-5.6-sol',
+        requested_model='deepseek-v4-pro',
         actual_model=actual_model,
-        requested_effort='max',
+        requested_effort='high',
         actual_effort=actual_effort,
-        cli_version='codex-cli/1.2.3',
-        protocol_version='agent-session/v1',
+        cli_version='legacy-llm/test',
+        protocol_version='node-executor/v1',
         start_code_version='code-start',
         skill_sha256=_SHA_B,
         prompt_sha256=prompt_sha256,
@@ -121,20 +121,20 @@ def _end(*, session_run_id: str = 'session-1', ts: int = 30,
         chapter=7,
         subject_sha256=_SHA_A,
         profile={
-            'driver': 'codex',
-            'model': 'gpt-5.6-sol',
-            'reasoning_effort': 'max',
-            'execution_mode': 'standard',
+            'provider': 'deepseek',
+            'model': 'deepseek-v4-pro',
+            'reasoning_effort': 'high',
+            'thinking_mode': 'on',
         },
         kind='ended',
         ts=ts,
         provider_session_id='provider-thread-99/abc',
-        requested_model='gpt-5.6-sol',
-        actual_model='gpt-5.6-sol-2026-08-20',
-        requested_effort='max',
+        requested_model='deepseek-v4-pro',
+        actual_model='deepseek-v4-pro',
+        requested_effort='high',
         actual_effort='high',
-        cli_version='codex-cli/1.2.3',
-        protocol_version='agent-session/v1',
+        cli_version='legacy-llm/test',
+        protocol_version='node-executor/v1',
         start_code_version='code-start',
         end_code_version='code-start',
         skill_sha256=_SHA_B,
@@ -149,7 +149,7 @@ def _end(*, session_run_id: str = 'session-1', ts: int = 30,
 def _acceptance(*, attempt_id: str = 'attempt-1', turn_index: int = 1,
                 prompt_sha256: str = _SHA_C,
                 schema_sha256: str = _SHA_D,
-                model: str = 'gpt-5.6-sol-2026-08-20') -> dict[str, object]:
+                model: str = 'deepseek-v4-pro') -> dict[str, object]:
     return {
         'session_run_id': 'session-1',
         'attempt_id': attempt_id,
@@ -157,10 +157,10 @@ def _acceptance(*, attempt_id: str = 'attempt-1', turn_index: int = 1,
         'accepted_turn_index': turn_index,
         'subject_sha256': _SHA_A,
         'profile': {
-            'driver': 'codex',
-            'model': 'gpt-5.6-sol',
-            'reasoning_effort': 'max',
-            'execution_mode': 'standard',
+            'provider': 'deepseek',
+            'model': 'deepseek-v4-pro',
+            'reasoning_effort': 'high',
+            'thinking_mode': 'on',
         },
         'model': model,
         'accepted_prompt_sha256': prompt_sha256,
@@ -204,7 +204,8 @@ def test_append_is_stable_append_only_and_only_writes_service(tmp_path):
     assert len(rows) == 3
     assert all(set(row) == _WIRE_KEYS for row in rows)
     assert rows[0]['wire_version'] == A.SESSION_AUDIT_WIRE_VERSION
-    assert rows[0]['profile']['driver'] == 'codex'
+    assert rows[0]['profile']['provider'] == 'deepseek'
+    assert rows[0]['profile']['model'] == 'deepseek-v4-pro'
     assert rows[1]['attempt_id'] == 'attempt-1'
     assert rows[1]['usage']['prompt_cache_hit_tokens'] == 80
     assert rows[2]['process_state'] == 'ok'
@@ -239,9 +240,9 @@ def test_read_and_fold_preserve_turns_provider_sessions_and_orthogonal_end(tmp_p
     assert record.process_state == 'ok'
     assert record.delivery_state == 'blocked'
     assert record.error_kind == 'artifact_validation'
-    assert record.turns[0].requested_model == 'gpt-5.6-sol'
-    assert record.turns[0].actual_model == 'gpt-5.6-sol-2026-08-20'
-    assert record.turns[0].requested_effort == 'max'
+    assert record.turns[0].requested_model == 'deepseek-v4-pro'
+    assert record.turns[0].actual_model == 'deepseek-v4-pro'
+    assert record.turns[0].requested_effort == 'high'
     assert record.turns[0].actual_effort == 'high'
 
 
@@ -473,11 +474,11 @@ def test_current_wire_cannot_use_legacy_missing_field_rules():
 def test_finish_restored_session_is_idempotent_and_rejects_conflicting_end(tmp_path):
     A.append_event(tmp_path, _start())
     A.append_event(tmp_path, _turn(
-        actual_model='gpt-5.6-sol', actual_effort='max'))
+        actual_model='deepseek-v4-pro', actual_effort='high'))
 
     assert A.finish_restored_session(
         tmp_path,
-        _acceptance(model='gpt-5.6-sol'),
+        _acceptance(model='deepseek-v4-pro'),
         process_state='ok',
         delivery_state='blocked',
         error_kind='artifact_validation',
@@ -485,7 +486,7 @@ def test_finish_restored_session_is_idempotent_and_rejects_conflicting_end(tmp_p
     ) is True
     assert A.finish_restored_session(
         tmp_path,
-        _acceptance(model='gpt-5.6-sol'),
+        _acceptance(model='deepseek-v4-pro'),
         process_state='ok',
         delivery_state='blocked',
         error_kind='artifact_validation',
@@ -495,18 +496,18 @@ def test_finish_restored_session_is_idempotent_and_rejects_conflicting_end(tmp_p
     events = A.read_events(tmp_path)
     assert [event.kind for event in events] == ['started', 'turn', 'ended']
     assert events[-1].provider_session_id == 'provider-thread-99/abc'
-    assert events[-1].actual_model == 'gpt-5.6-sol'
+    assert events[-1].actual_model == 'deepseek-v4-pro'
     with pytest.raises(ValueError, match='冲突 ended'):
         A.finish_restored_session(
             tmp_path,
-            _acceptance(model='gpt-5.6-sol'),
+            _acceptance(model='deepseek-v4-pro'),
             process_state='ok',
             delivery_state='delivered',
             end_code_version='code-start',
         )
     assert A.finish_restored_session(
         tmp_path,
-        _acceptance(model='gpt-5.6-sol'),
+        _acceptance(model='deepseek-v4-pro'),
         process_state='ok',
         delivery_state='delivered',
         end_code_version='code-start',
@@ -519,9 +520,9 @@ def test_finish_restored_session_is_idempotent_and_rejects_conflicting_end(tmp_p
 def test_finish_restored_session_requires_acceptance_to_match_real_turn(tmp_path):
     A.append_event(tmp_path, _start())
     A.append_event(tmp_path, _turn(
-        actual_model='gpt-5.6-sol', actual_effort='max'))
+        actual_model='deepseek-v4-pro', actual_effort='high'))
 
-    bad = _acceptance(model='gpt-5.6-sol')
+    bad = _acceptance(model='deepseek-v4-pro')
     bad['provider_session_id'] = 'made-up-provider-session'
     with pytest.raises(ValueError, match='turn/provider session'):
         A.finish_restored_session(
@@ -547,20 +548,20 @@ def _attempt(*, session_run_id: str = 'session-1', ordinal: int = 1,
         chapter=7,
         subject_sha256=_SHA_A,
         profile={
-            'driver': 'codex',
-            'model': 'gpt-5.6-sol',
-            'reasoning_effort': 'max',
-            'execution_mode': 'standard',
+            'provider': 'deepseek',
+            'model': 'deepseek-v4-pro',
+            'reasoning_effort': 'high',
+            'thinking_mode': 'on',
         },
         kind='attempt',
         ts=ts,
         provider_session_id=provider_session_id,
         attempt_id=attempt_id or f'attempt-{ordinal}',
         delivery_attempts=ordinal,
-        requested_model='gpt-5.6-sol',
-        requested_effort='max',
-        cli_version='codex-cli/1.2.3',
-        protocol_version='agent-session/v1',
+        requested_model='deepseek-v4-pro',
+        requested_effort='high',
+        cli_version='legacy-llm/test',
+        protocol_version='node-executor/v1',
         start_code_version='code-start',
         skill_sha256=_SHA_B,
         prompt_sha256=_SHA_C,

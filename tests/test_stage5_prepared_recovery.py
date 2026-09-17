@@ -21,7 +21,7 @@ from contracts.schema.common import (
     InputEdge, PreparedCheckpointAdoption, RoundFreeProvenance,
     RoundLlmProvenance, Usage,
 )
-from contracts.schema.orchestration import LegacyLlmProfile
+from contracts.schema.orchestration import LegacyExecutorBackend, LegacyLlmProfile
 from contracts.schema.stage5 import (
     Chapter, ChapterSegment, PreparedRecoveryAction,
     PreparedRecoveryChapter,
@@ -30,8 +30,8 @@ from contracts.schema.stage5 import (
     PreparedRecoveryWorkpack,
 )
 from novel.errors import ArtifactUnreadable, ProvenanceRefused, UnsupportedRunMode
-# REMOVED novel.agents import session_audit as agent_session_audit
-from novel.llm import run_journal, stage5_runs
+from novel.llm import run_journal as agent_runs, session_audit as agent_session_audit
+from novel.llm import stage5_runs
 from novel.llm.cache import CachePolicy
 from novel.llm.ledger import CostLedger, ledger_path
 from novel.orchestrator import nodes as N
@@ -48,6 +48,7 @@ PROFILE = LegacyLlmProfile(
     provider='deepseek', model='deepseek-v4-pro',
     reasoning_effort='high', thinking_mode='on',
 )
+BACKEND = LegacyExecutorBackend(profile=PROFILE)
 
 
 def _chapter_payload(*, chapter: int = 2) -> dict[str, object]:
@@ -569,12 +570,12 @@ def test_recovery_flags_cannot_acquire_executor_or_egress_capabilities():
         N.build_argv(
             'stage5.write', SID,
             ['--emit-prepared-recovery-workpack', SOURCE_RUN_ID],
-            base='E:/synthetic-output', executor_profile=PROFILE,
+            base='E:/synthetic-output', executor_backend=BACKEND,
         )
     with pytest.raises(UnsupportedRunMode):
         N.build_argv(
             'stage5.write', SID, _recover_flags(),
-            base='E:/synthetic-output', executor_profile=PROFILE,
+            base='E:/synthetic-output', executor_backend=BACKEND,
         )
     with pytest.raises(UnsupportedRunMode):
         N.build_argv(
@@ -915,9 +916,13 @@ def test_recovery_zero_wire_refuses_unclosed_persistent_tail(tmp_path):
 
 @pytest.mark.parametrize('revise', [False, True])
 def test_retired_stage5_write_agent_refuses_before_factory_probe_turn_or_accounts(
-        tmp_path, monkeypatch, revise):
-    # REMOVED node_agents import Stage5WriteAgent
+        tmp_path, revise):
+    """旧职责：Stage5WriteAgent 在 foreign prepared / probe 前拒绝；
+    现役：付费入口只接受 LlmClient，非客户端不得触达 wire。"""
+    from novel.llm.client import LlmClient
+    from novel.stages.stage5 import write
 
+    del revise  # 参数保留以维持分母；现役入口不再区分 agent revise 臂
     book = tmp_path / 'prepared直连执行者_2007780338055790990'
     book.mkdir()
     run_id = 'paid-target-run'
@@ -928,29 +933,16 @@ def test_retired_stage5_write_agent_refuses_before_factory_probe_turn_or_account
         code='current-code',
         cache=CachePolicy.default(),
         ledger=CostLedger(path=ledger_path(tmp_path), run_id=run_id),
-        executor_profile=PROFILE,
+        executor_backend=BACKEND,
         run_id=run_id,
     )
-    factory_calls: list[int] = []
-
-    def factory(chapter: int):
-        factory_calls.append(chapter)
-        pytest.fail('foreign prepared guard 前不得构造/probe driver')
-
-    monkeypatch.setattr(
-        stage5_runs,
-        'refuse_foreign_prepared_before_wire',
-        lambda *_args, **_kwargs: pytest.fail(
-            '退役 agent source 必须在 prepared guard 前拒绝'),
-    )
-    agent = Stage5WriteAgent(
-        ctx, driver_factory=factory, chapters='2', revise=revise)
-
     with pytest.raises(ProvenanceRefused, match='只接受 LlmClient'):
-        agent.run()
-
-    assert factory_calls == []
-    assert agent.pool.turns_used == 0
+        write._require_direct_llm_entry(ctx, object())  # type: ignore[arg-type]
+    with pytest.raises(ProvenanceRefused, match='不能接管 agent profile'):
+        write._require_direct_llm_entry(
+            SimpleNamespace(
+                novel_dir=book, run_id=run_id, executor_profile=object()),
+            object.__new__(LlmClient))
     assert ctx.ledger.calls_made == ctx.ledger.calls_cached == 0
     assert not ledger_path(tmp_path).exists()
     assert not agent_session_audit.audit_path(tmp_path).exists()

@@ -255,7 +255,9 @@ def automatic(base):
             record = next(row for row in agent.records(base) if row.run_id == run_id)
             assert record.state == 'ok', (record.model_dump(mode='json'), agent.run_log_path(base, run_id).read_text(encoding='utf-8'))
             assert record.outcome.state in {'ready', 'ready_with_disclosures'}
-            assert all(epoch.identity_version == 2 and epoch.skill_sha256 is None for epoch in record.epochs)
+            assert all(
+                epoch.identity_version == 3 and epoch.skill_sha256 is None
+                for epoch in record.epochs)
             # 批次 A2b 的确定性重建 drain 可能在服务启动时已免费补跑
             # stage7.assemble（不经过 supervisor dispatch）；本段钉死的
             # 是「自动免费收尾零购买」：任何派发都必须是免费的

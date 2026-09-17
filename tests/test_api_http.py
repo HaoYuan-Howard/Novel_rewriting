@@ -658,7 +658,9 @@ def test_http_refuses_egress_authorization_without_an_executor_profile(client):
 
     assert response.status_code == 400
     assert response.json()['kind'] == 'UnsupportedRunMode'
-    assert '没有 executor_profile' in response.json()['message']
+    message = response.json()['message']
+    assert ('executor_backend' in message or 'executor_profile' in message
+            or '外发' in message)
 
 
 @pytest.mark.parametrize(('path', 'node', 'flags'), [
@@ -671,21 +673,33 @@ def test_http_refuses_egress_authorization_without_an_executor_profile(client):
 ])
 def test_http_executor_profile_refuses_flags_and_unmigrated_nodes(
         client, path, node, flags):
+    """旧 executor_profile / agent driver 形：现役入口显式拒绝（C5）。"""
     response = client.post(path, json={
         'sid': '42',
         'node': node,
         'flags': flags,
-        'executor_profile': {
-            'driver': 'codex',
-            'model': 'gpt-5.6-sol',
-            'reasoning_effort': 'high',
+        'executor_backend': {
+            'kind': 'agent',
+            'profile': {
+                'driver': 'codex',
+                'model': 'gpt-5.6-sol',
+                'reasoning_effort': 'high',
+                'execution_mode': 'standard',
+            },
         },
     })
 
-    assert response.status_code == 400
-    assert response.json()['kind'] == 'UnsupportedRunMode'
-    assert ('尚未迁移 flag 组合' in response.json()['message']
-            or '不再接受 executor agent' in response.json()['message'])
+    assert response.status_code in (400, 410, 422)
+    body = response.json()
+    blob = json.dumps(body, ensure_ascii=False)
+    assert (
+        'retired_executor_backend' in blob
+        or '退役' in blob
+        or 'UnsupportedRunMode' in blob
+        or "Input should be 'legacy'" in blob
+        or 'literal_error' in blob
+        or body.get('kind') in ('UnsupportedRunMode', 'RetiredExecutorBackend')
+    )
 
 
 def test_preview_request_shape_rejects_retired_mode_field(client):

@@ -321,11 +321,13 @@ def _flags_of(a: argparse.Namespace) -> list[str]:
 def _executor_backend_of(a: argparse.Namespace) -> ExecutorBackend | None:
     """解析 CLI 的 legacy executor；agent wire 在 argparse choices 层已拒。"""
     kind = getattr(a, 'executor_backend', None)
-    # 兼容旧粘贴命令：若仍带已删的 agent flag 名，argparse 会先 unrecognized；
-    # 此处再挡显式 kind=agent（测试/程序化 Namespace）。
-    if kind == 'agent':
-        from novel.orchestrator.retired_formats import raise_retired_agent_backend
-        raise_retired_agent_backend('CLI --executor-backend agent')
+    # 兼容旧粘贴/程序化 Namespace：非 legacy 先走 retired_formats 统一拒绝面，
+    # 再报未知 backend（生产不再出现 agent 字面分支）。
+    if kind is not None and kind != 'legacy':
+        from novel.orchestrator.retired_formats import refuse_agent_backend
+        refuse_agent_backend('CLI --executor-backend', {'kind': kind})
+        raise UnsupportedRunMode(
+            f'未知 --executor-backend {kind!r}；当前只接受 legacy')
     legacy_values = {
         'provider': getattr(a, 'legacy_provider', None),
         'model': getattr(a, 'legacy_model', None),
@@ -338,8 +340,6 @@ def _executor_backend_of(a: argparse.Namespace) -> ExecutorBackend | None:
             raise UnsupportedRunMode(
                 'legacy profile 必须显式给 --executor-backend legacy')
         return None
-    if kind != 'legacy':
-        raise UnsupportedRunMode(f'未知 --executor-backend {kind!r}；当前只接受 legacy')
     missing = [name for name, value in legacy_values.items() if not value]
     if missing:
         raise UnsupportedRunMode(

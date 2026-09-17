@@ -89,7 +89,7 @@ LLM API”；provider 的模型、thinking、effort、节点适用面与 client 
 | `paid` | `bool` | **是** | 这一步会不会花钱。**唯一落点 `novel/orchestrator/nodes.py::is_paid`**（`R-11.7`：贵贱只有一处算） | **盘·码** |
 | `writes` | `str` | **是** | ⭐ 这一步会往盘上写什么。**空串 = 不写盘。** 见 §1.2 | **设计** |
 | `note` | `str \| 键不在` | 否 | 这一步的特别提醒（例：追跑的那条 `--check-only` 为什么在） | **契·码** |
-| `executor_backend` | `ExecutorBackend \| null` | 否；旧盘可缺 | 本步真正解析后的 executor 快照。付费 producer Step 可非空；自动追跑的 0 成本 `--check-only` Step 必须为 `null`。旧 `executor_profile` 只在读边界包成 `kind=agent`；新序列化不再发旧字段。两格都缺只能显示 unknown，不按今天默认倒推昨天身份 | **契·码** |
+| `executor_backend` | `ExecutorBackend \| null` | 否；旧盘可缺 | 本步真正解析后的 executor 快照。付费 producer Step 可非空；自动追跑的 0 成本 `--check-only` Step 必须为 `null`。现役唯一 wire 是 `kind=legacy` + `LegacyLlmProfile`；旧盘若仍带 `kind=agent` 由 `retired_formats` 拒绝续跑，列表只读不崩溃。新序列化不再发旧 `executor_profile` / `--executor-driver` 字段 | **契·码** |
 | `egress_authorized` | `bool \| null` | 否；旧盘可缺 | 独立正文外发授权快照。新付费 executor Step 必须为 bool，并与 argv 是否含 `--allow-egress` 逐字一致；backend 为空的兼容/代码/追跑 Step 必须为 `null`。旧盘 `null` 只表示未记录，不倒推 | **契·码** |
 
 ### 1.1 ⚠ `--base` 用绝对路径，但 `-m novel.cli` 仍然吃 cwd
@@ -98,16 +98,14 @@ argv 的形态是：
 
 ```
 <sys.executable> -X utf8 -u -m novel.cli run <node> <sid> [flags…]
-  [--executor-backend agent
-   --executor-driver <id> --executor-model <id> --executor-effort <id> --executor-mode <id>]
   [--executor-backend legacy
    --legacy-provider <id> --legacy-model <id> --legacy-effort <id> --legacy-thinking <id>]
   [--allow-egress] --base <绝对路径> [--yes]
 ```
 
-两个 backend 参数组互斥，builder 只生成其中一组；CLI 不接受半份选择或混搭参数。旧复制命令若只有
-完整的四个 `--executor-*` 参数，可在读边界无损解释为 `kind=agent`，但所有新命令都显式写
-`--executor-backend`。`--allow-egress` 只可跟在非空 backend 后，且只在独立授权为 true 时出现；它与
+现役只生成 legacy 参数组；旧复制命令若仍带 `--executor-backend agent` 或
+`--executor-driver/--executor-mode`，在 CLI/API/jobs 入口统一 `retired_executor_backend`
+拒绝。`--allow-egress` 只可跟在非空 backend 后，且只在独立授权为 true 时出现；它与
 `--yes` 分别回答正文能否外发、能否付费。
 
 `--base` 用绝对路径是原型定下来的，理由是「**好让 argv 与 cwd 无关**」。
@@ -1047,11 +1045,10 @@ registry 登记的 `driver-enforced`，且该 session turn 必须有 CLI 版本�
 联合 HARD、正式 artifact/`.INVALID`、commit journal 与 readback 终验仍只由 producer 代码决定。
 该 checkpoint 会保存被接受的 stdout；上方 session audit 仍只存 hash 与计量，两者不能混读。
 
-Agent CLI 的 delivery attempt 与上述语义 turn 正交：实现中分别命名为
+Agent CLI 的 delivery attempt 与语义 turn 正交——**该双轨仅存量账解码**；现役直连 LLM
+不再维护独立 delivery attempt 臂。历史材料中分别命名为
 `max_delivery_retries`（默认 3 次重试，即首发在内共 `max_attempts=4`）和
-`max_semantic_turns`（默认最多 4 轮候选/纠错）。首轮语义请求走 `start`；已有可信 provider session 后的
-语义纠错走同一 session 的 `resume`，不是独立重采。交付失败发生在取得可采纳回答之前，只消耗 delivery
-attempt，不消耗第二个 semantic turn，也不建立可恢复的 provider turn。
+`max_semantic_turns`（默认最多 4 轮候选/纠错）。存量说明见 Git；新代码勿再按此双轨分支。
 
 429、408/425/5xx、已识别连接/timeout，以及
 `403 Request not allowed` 且供应商 token 明确全为 0 时，首发失败后最多按 2/4/8 秒再发三次；每次

@@ -39,8 +39,9 @@ reasoning 不重复加到 completion，缺失用量显示 unknown。默认追加
 待提交均不能追加。只在现有 ledger 的 grants 末尾记录不可变 `BudgetGrant`；原轮次与费用
 完整保留。相同 intent_id 的原内容重试返回同一授权；改金额、理由或 token 必须拒绝。
 授权自身不发模型、不改变 typed 决定、不解除无进展停点。后续模型调用仍经过独立付费与正文
-外发授权。每个 role/scope 的额度互不流转，SessionAgentClient 恢复同一 logical request 时
-接受累计额度和全部历史 attempt links，不把第五次当成新的首次调用。
+外发授权。每个 role/scope 的额度互不流转；直连 `LlmClient` / `WorkUnitBudget` 恢复同一
+logical request 时接受累计额度和全部历史 attempt links，不把第五次当成新的首次调用。
+（历史 Agent CLI `SessionAgentClient` 已退役，仅见于只读账与 fixtures。）
 
 已购 Blueprint、Stage6/7 审阅以实际主体、裁决契约和义务维护业务身份；临时 review token
 仍用于提交竞态，代码版本仍记入 epoch 与审计。恢复先核原工作单元的请求、回答、成本、
@@ -91,6 +92,7 @@ waiting_on 的被拒原回答及拒因，供新 provider 会话自足定位错�
 # 按原配置继续
 
 `GET /api/agent/runs/:run_id/continuation` 返回历史完整 profiles、来源 hash、可用性及原因。
+此处 **Agent** 仅指整书代跑编排；profiles 现役唯一 wire 为 `kind:"legacy"`。
 默认 Executor 和全部逐节点覆盖必须完整；缺失、冲突、模型已不支持或原执行
 未排空均不得用当前 settings/default 补齐。只读能力查询不会产生模型请求。
 

@@ -115,7 +115,7 @@ describe('ConfirmDialog', () => {
     const command = await screen.findByText(/--chapters 11/)
     expect(command).toBeVisible()
     expect(command.textContent?.match(/--chapters/g)).toHaveLength(1)
-    expect(screen.getByText(/executor-model-v7/)).toBeVisible()
+    expect(screen.getByText(/deepseek-v4-pro/)).toBeVisible()
     expect(screen.getByText('正文外发：未授权')).toBeVisible()
     expect(previewSpy).toHaveBeenCalledWith(request)
     fireEvent.click(screen.getByRole('button', { name: '确认发起（花钱）' }))
