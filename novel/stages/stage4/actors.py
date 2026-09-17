@@ -88,7 +88,13 @@ class ActorCatalog:
             return actor
         matches = [b for b in self.available_bindings.values() if b['char_id'] == actor.char_id]
         if len(matches) > 1:
-            raise RefusedByStructure('人物存在多个表面身份，当前位置必须明确 presentation_ref')
+            # 同 surfaces 的携入/本章绑定视为同一公开身份；异 surfaces 才必须显式句柄。
+            surface_sets = {tuple(sorted(b['surfaces'])) for b in matches}
+            if len(surface_sets) > 1:
+                raise RefusedByStructure('人物存在多个表面身份，当前位置必须明确 presentation_ref')
+            matches = [min(matches, key=lambda b: (
+                self.binding_origins.get(b['presentation_id'], self.ordinal),
+                b['presentation_id']))]
         names = self.attested_aliases(actor.char_id)
         if matches:
             if null_binding_conflict(names, matches[0]['surfaces'], chapter_ordinal=self.ordinal):

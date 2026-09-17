@@ -7,6 +7,7 @@
 
 | 裁决时间 | 保留的决定与缘由 | 证据边界 / 当前落点 |
 |---|---|---|
+| 2026-09-17 | **Stage4 ActorCatalog 同 surfaces 多绑定**：null `presentation_ref` 遇到携入多条同 surfaces 绑定时取最早原章，异 surfaces 仍拒。renormalize 压 null 后的 fujun ch7 char_002 | `actors.ActorCatalog.resolve` |
 | 2026-09-17 | **Stage4 端点同拍幂等**：`required_endpoints` 对同拍重复的 `ended`（`ended_at` 与 `supersedes` 同时声明）幂等放行，异拍仍拒。fujun ch5 `st05_02` | `plot_placements.required_endpoints` |
 | 2026-09-17 | **Stage4A 盲投影允许空 surfaces**：`first_chapter` 已到、登记名尚未字面证成时（典型第一人称），`PlannerCharacter.surfaces=[]` + opaque alias，禁止回退 canonical；未到出场章仍拒。对齐 Stage2 闭集 | `plot_design.build_blind_projection`；`contracts/schema/plot_planning.py::PlannerCharacter` |
 | 2026-09-17 | **fujun Blueprint 免费重编译**：`--renormalize` 的 `rebuild` 对正式稿做章内 `presentation_ref` 规范化（跨章句柄→null，0 LLM）。`fujun_extract` ch7 41 处清零；`stage4_ready` 通过 | `plot_recovery.canonicalize_presentation_refs` / `rebuild` |

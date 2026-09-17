@@ -377,3 +377,23 @@ def test_required_endpoints_still_refuses_conflicting_end_beats():
     raw['carry_out_refs'].append('st01_99')
     with pytest.raises(ValueError, match='重复的语义端点主体'):
         required_endpoints(PlotBlueprint.model_validate(raw))
+
+
+def test_actor_catalog_collapses_same_surface_matches():
+    """同 surfaces 多绑定取最早原章；异 surfaces 仍拒（fujun ch7 形态）。"""
+    from novel.errors import RefusedByStructure
+    from novel.stages.stage4.actors import ActorCatalog
+    from tests.plot_fixtures import REGISTRY, TEXT, blueprint as fx
+
+    cat = ActorCatalog(REGISTRY, fx(), chapter_ordinal=1, source_text=TEXT, seed='a' * 40)
+    cat.available_bindings = {
+        'ap01_01': {'presentation_id': 'ap01_01', 'char_id': 'char_001',
+                    'surfaces': ['甲'], 'evidence_refs': [], 'public_state_ref': None},
+        'ap02_01': {'presentation_id': 'ap02_01', 'char_id': 'char_001',
+                    'surfaces': ['甲'], 'evidence_refs': [], 'public_state_ref': None},
+    }
+    cat.binding_origins = {'ap01_01': 1, 'ap02_01': 2}
+    assert cat.resolve({'char_id': 'char_001'}).presentation_ref == 'ap01_01'
+    cat.available_bindings['ap02_01']['surfaces'] = ['甲公子']
+    with pytest.raises(RefusedByStructure, match='多个表面身份'):
+        cat.resolve({'char_id': 'char_001'})
