@@ -64,7 +64,7 @@ from novel.errors import (
     ApprovalRequired, ArtifactUnreadable, GateBlocked,
     RefusedByStructure,
     TerminalState, UpstreamMissing, UpstreamStale, UpstreamUnproven,
-    ProvenanceRefused,
+    ProvenanceRefused, UnsupportedRunMode,
 )
 from novel.report import build
 from novel.report.findings import Outcome
@@ -103,8 +103,7 @@ from novel.stages.stage4.phase_binding import verify_plan_phase_artifacts
 from novel.stages.stage4.phase_state import current_infeasible_binding
 from novel.llm import response_repair, typed_failures
 from novel.llm import stage4_runs
-from novel.agents.session_client import AgentDeliveryUnavailable
-from novel.llm.client import LlmFailed, judge_payload
+from novel.llm.client import LlmClient, LlmFailed, judge_payload
 from novel.llm.ledger import combine_usage, read_strict_jsonl_objects
 from novel.llm.prompts import required_top_level
 from novel.llm.transport import ChatResponse
@@ -607,13 +606,11 @@ def _require_design_action_subject(
     return candidate
 
 
-def require_targeted_design_executor(ctx: RunContext) -> None:
-    """公开 token-bound 定向返修的执行能力前置；legacy client 不可假装可跑。"""
-    if not _uses_agent_runs(ctx):
-        raise TerminalState(
-            'stage4.design --review-token 定向返修只支持带 executor profile 的 '
-            'Stage4DesignAgent：它需要逐章私有 session、durable checkpoint 与 '
-            '跨 run lineage；legacy 单 LlmClient 在 preview/启动前即拒绝')
+def _refuse_targeted_design_repair() -> NoReturn:
+    """定向 agent 返修已退役；不能把旧 checkpoint 协议伪装成直连能力。"""
+    raise UnsupportedRunMode(
+        'stage4.design --review-token 的 agent 定向返修已退役；'
+        '请使用现役免费 reaggregate，或清理当前失败候选后执行全量直连重跑')
 
 
 def _blind_chapter_problems(
@@ -1244,7 +1241,7 @@ def _keep_business_witness(
     ``repair_eligible=False``：这不是通用 JSON 修复面，收口走 ``--revalidate`` /
     decision-bound repair / hash-bound replacement；封存见证只供该工作单元恢复。
     """
-    if not evaluation.typed_failures or not _uses_agent_runs(ctx):
+    if not evaluation.typed_failures:
         return
     payload: dict[str, Any] = {
         'sid': ctx.sid, 'node': ctx.node, 'purpose': ctx.node,
@@ -1537,19 +1534,15 @@ def _gate_and_write(ctx: RunContext, store: ArtifactStore, data: dict[str, Any],
         ctx, store, final_outcomes, art.provenance.model_dump(by_alias=True))
 
 
-def _uses_agent_runs(ctx: RunContext) -> bool:
-    return getattr(ctx, 'executor_profile', None) is not None
-
-
 def _canonical_sha256(value: object) -> str:
     from novel.llm.agent_runs import canonical_sha256
     return canonical_sha256(value)
 
 
 def _live_code_guard(ctx: RunContext, *, where: str) -> None:
-    # legacy LlmClient 历史测试/人工运行允许显式 code 标签；不存在
-    # 可跨进程恢复的 agent journal，也不能拿 git 现值反过来否定它。
-    if not _uses_agent_runs(ctx):
+    # 直连 LlmClient 不持有可跨进程恢复的 agent journal；只有免费读取旧
+    # checkpoint 时才需要核当前代码身份。
+    if getattr(ctx, 'executor_profile', None) is None:
         return
     current = prov.code_version()
     if current != ctx.code:
@@ -1573,39 +1566,6 @@ def _accepted_identity(
     return attempt_id, models
 
 
-def _require_agent_bridge(ctx: RunContext, source: Any) -> None:
-    required = (
-        'accepted_checkpoint', 'restore_checkpoint_acceptance',
-        'accepted_attempt', 'accepted_models',
-    )
-    missing = [name for name in required if not callable(getattr(source, name, None))]
-    if missing:
-        raise ProvenanceRefused(
-            f'{ctx.node} agent source 缺 checkpoint bridge {missing}；'
-            '已在首个 wire 前停止')
-    if not hasattr(source, 'provider_session_id'):
-        raise ProvenanceRefused(
-            f'{ctx.node} agent source 不暴露 provider_session_id；'
-            '无法区分 live resume 与 durable-checkpoint 恢复')
-
-
-def _require_design_agent_bridge(source: Any) -> None:
-    """Stage4A 是多 session pool，不能拿单 session 的 provider id 当节点身份。"""
-    required = (
-        'accepted_checkpoint', 'restore_checkpoint_acceptance',
-        'accepted_attempt', 'accepted_models', 'prepare_initial_sessions',
-    )
-    missing = [name for name in required if not callable(getattr(source, name, None))]
-    if missing:
-        raise ProvenanceRefused(
-            f'stage4.design agent pool 缺 unit checkpoint bridge {missing}；'
-            '已在首个 wire 前停止')
-    concurrency = getattr(source, 'concurrency', None)
-    if (not isinstance(concurrency, int) or isinstance(concurrency, bool)
-            or concurrency < 1):
-        raise ProvenanceRefused('stage4.design agent pool 缺合法 concurrency')
-
-
 def _finish_restored_agent_session(
         ctx: RunContext, source: Any, *, delivery_state: str,
         error_kind: str | None,
@@ -1620,7 +1580,7 @@ def _finish_restored_agent_session(
     * 当前进程已建立 provider session 时不经此口，交给节点
       agent 的 ``SessionAgentClient.finish`` 记录真实最后一轮。
     """
-    if not _uses_agent_runs(ctx):
+    if getattr(ctx, 'executor_profile', None) is None:
         return False
     if getattr(source, 'plan_chapter_pool', False):
         # 批次 4 章级池：live 章由 pool.finish 记录真实最后一轮；本进程
@@ -1678,9 +1638,8 @@ def _refuse_foreign_before_wire(
 ) -> None:
     """legacy/agent 共用正式路径，不能踩过另一 run 的 prepared。"""
     from novel.llm import stage4_runs
-    if (not _uses_agent_runs(ctx)
-            and not any(root.is_dir() for root in runtime_layout.stage_run_roots(
-                ctx.novel_dir, 'stage4'))):
+    if not any(root.is_dir() for root in runtime_layout.stage_run_roots(
+            ctx.novel_dir, 'stage4')):
         return
     with (nullcontext() if ctx.readonly else stage4_runs.commit_ownership(ctx.novel_dir)):
         stage4_runs.refuse_foreign_commit_reservations(
@@ -1766,7 +1725,7 @@ def prepare_design_candidate(
     rebuild_parent = None
     if not _existing_candidate_authorized:
         own_tail = None
-        if _uses_agent_runs(ctx) or ctx.paid is False:
+        if ctx.paid is False:
             from novel.llm import stage4_runs
             with (nullcontext() if ctx.readonly else stage4_runs.commit_ownership(ctx.novel_dir)):
                 own_tail = stage4_runs.design_aggregate_state(ctx)
@@ -1814,9 +1773,6 @@ def prepare_design_candidate(
                     feedback, ensure_ascii=False, sort_keys=True, separators=(',', ':')),
                 strategy_input_sha256=_design_strategy_input_sha(projection, feedback))
     _assert_design_current(ctx, prepared)
-    if _uses_agent_runs(ctx) and ensure_strategy_unit and not ctx.readonly:
-        from novel.llm import stage4_runs
-        stage4_runs.ensure_design_unit_run(ctx, _design_strategy_unit(prepared))
     return prepared
 
 
@@ -1870,10 +1826,6 @@ def _prepare_design_replan_candidate(
         strategy_feedback=prompt_feedback,
     )
     _assert_design_current(ctx, prepared)
-    if _uses_agent_runs(ctx) and ensure_strategy_unit:
-        from novel.llm import stage4_runs
-        stage4_runs.ensure_design_unit_run(
-            ctx, _design_strategy_unit(prepared))
     return prepared
 
 
@@ -1972,11 +1924,6 @@ def _design_chapter_contexts(
     if prepared.rebuild_parent is not None:
         from novel.stages.stage4.design_rebuild import chapter_request
         contexts = [chapter_request(prepared, chapter) for chapter in contexts]
-    if _uses_agent_runs(ctx) and ensure_units:
-        from novel.llm import stage4_runs
-        for chapter in contexts:
-            stage4_runs.ensure_design_unit_run(
-                ctx, _design_chapter_unit(chapter))
     return tuple(contexts)
 
 
@@ -2005,37 +1952,6 @@ def _request_design_strategy(
                 or historical.checkpoint.state_payload != _design_strategy_checkpoint_state(response)):
             raise ProvenanceRefused('Stage4A 历史策略的响应/编译状态不闭合')
         return response
-    if _uses_agent_runs(ctx):
-        restored = stage4_runs.restore_design_unit_checkpoint(
-            ctx, unit, validator=prepared.validator)
-        if restored is not None:
-            response = BlindBookStrategyResponse.model_validate(restored.value)
-            if (restored.revision_key != 'terminal'
-                    or restored.state_payload
-                    != _design_strategy_checkpoint_state(response)):
-                raise ProvenanceRefused(
-                    'stage4.design strategy checkpoint 的业务状态不闭合')
-            source.restore_checkpoint_acceptance(
-                purpose, restored.acceptance,
-                system=prepared.system, user=prepared.user,
-                max_tokens=prompts.BLIND_BOOK_STRATEGY_MAX_TOKENS,
-                recovery_policy=stage4_runs.DESIGN_UNIT_RECOVERY_POLICY)
-            return response
-        source.prepare_initial_sessions(((purpose, None),))
-        _assert_design_current(ctx, prepared)
-        response = source.ask_json(
-            prepared.system, prepared.user,
-            model_cls=BlindBookStrategyResponse,
-            purpose=purpose,
-            max_tokens=prompts.BLIND_BOOK_STRATEGY_MAX_TOKENS,
-            validator=prepared.validator,
-            recovery_policy=stage4_runs.DESIGN_UNIT_RECOVERY_POLICY)
-        stage4_runs.write_design_unit_checkpoint(
-            ctx, unit,
-            response_payload=response.model_dump(by_alias=True, mode='json'),
-            acceptance=source.accepted_checkpoint(purpose),
-            state_payload=_design_strategy_checkpoint_state(response))
-        return response
     return source.ask_json(
         prepared.system, prepared.user,
         model_cls=BlindBookStrategyResponse,
@@ -2054,90 +1970,23 @@ def _request_design_chapters(
     requested = {chapter.chapter_ordinal for chapter in chapters}
     if not set(historical_by).issubset(requested):
         raise ProvenanceRefused('stage4.design historical checkpoint 章集合越界')
-    restored_values: dict[int, BlindChapterDesignResponse] = {}
     missing: list[DesignChapterContext] = list(chapters)
-    if _uses_agent_runs(ctx):
-        # 先串行完整复验所有现存 checkpoint；任一损坏时，本批零新 wire。
-        missing = []
-        failures: list[Exception] = []
-        for chapter in chapters:
-            unit = _design_chapter_unit(chapter)
-            purpose = stage4_runs.design_unit_purpose(chapter.chapter_ordinal)
-            try:
-                restored = stage4_runs.restore_design_unit_checkpoint(
-                    ctx, unit, validator=chapter.validator)
-                if restored is not None:
-                    response = BlindChapterDesignResponse.model_validate(restored.value)
-                    compiled = chapter.validator.compiled
-                    if (compiled is None or restored.revision_key != 'terminal'
-                            or restored.state_payload
-                            != _design_chapter_checkpoint_state(response, compiled)):
-                        raise ProvenanceRefused(
-                            f'{purpose} checkpoint 的业务状态不闭合')
-                    source.restore_checkpoint_acceptance(
-                        purpose, restored.acceptance,
-                        system=chapter.system, user=chapter.user,
-                        max_tokens=prompts.BLIND_CHAPTER_DESIGN_MAX_TOKENS,
-                        recovery_policy=stage4_runs.DESIGN_UNIT_RECOVERY_POLICY)
-                    restored_values[chapter.chapter_ordinal] = response
-                    continue
-                historical_run = historical_by.get(chapter.chapter_ordinal)
-                if historical_run is not None:
-                    response = BlindChapterDesignResponse.model_validate(
-                        historical_run.checkpoint.value)
-                    why = chapter.validator(response, None)
-                    compiled = chapter.validator.compiled
-                    if (why is not None or compiled is None
-                            or historical_run.checkpoint.revision_key != 'terminal'
-                            or historical_run.checkpoint.state_payload
-                            != _design_chapter_checkpoint_state(response, compiled)):
-                        raise ProvenanceRefused(
-                            f'{purpose} historical checkpoint 的业务状态不闭合')
-                    # 历史 provider session 永不注册进当前 pool，也不调用
-                    # restore_checkpoint_acceptance；它只作为 manifest-bound 响应值。
-                    restored_values[chapter.chapter_ordinal] = response
-                    continue
-                missing.append(chapter)
-            except Exception as exc:
-                failures.append(exc)
-        if failures:
-            if len(failures) == 1:
-                raise failures[0]
-            raise ExceptionGroup(
-                'stage4.design 章节 checkpoint preflight 失败，未启动新 wire',
-                failures)
-        source.prepare_initial_sessions(tuple(
-            (stage4_runs.design_unit_purpose(chapter.chapter_ordinal),
-             chapter.chapter_ordinal)
-            for chapter in missing))
 
     def one(chapter: DesignChapterContext) -> BlindChapterDesignResponse:
         purpose = stage4_runs.design_unit_purpose(chapter.chapter_ordinal)
-        kwargs: dict[str, Any] = {}
-        if _uses_agent_runs(ctx):
-            kwargs['recovery_policy'] = stage4_runs.DESIGN_UNIT_RECOVERY_POLICY
         response = source.ask_json(
             chapter.system, chapter.user,
             model_cls=BlindChapterDesignResponse,
             purpose=purpose,
             max_tokens=prompts.BLIND_CHAPTER_DESIGN_MAX_TOKENS,
-            validator=chapter.validator,
-            **kwargs)
+            validator=chapter.validator)
         compiled = chapter.validator.compiled
         if compiled is None:
             raise ProvenanceRefused(
                 f'{purpose} source 返回候选但未经唯一 validator')
-        if _uses_agent_runs(ctx):
-            stage4_runs.write_design_unit_checkpoint(
-                ctx, _design_chapter_unit(chapter),
-                response_payload=response.model_dump(
-                    by_alias=True, mode='json'),
-                acceptance=source.accepted_checkpoint(purpose),
-                state_payload=_design_chapter_checkpoint_state(
-                    response, compiled))
         return response
 
-    results = dict(restored_values)
+    results: dict[int, BlindChapterDesignResponse] = {}
     failures: dict[int, Exception] = {}
     if missing:
         max_workers = min(
@@ -2170,8 +2019,6 @@ def request_design_candidate(
 ) -> DesignCandidateResponses:
     """先取宏观策略，再并发取逐章设计；任一章通过即私有 checkpoint。"""
     _assert_design_current(ctx, prepared)
-    if _uses_agent_runs(ctx):
-        _require_design_agent_bridge(source)
     from novel.llm import design_adoption, stage4_runs
     from novel.stages.stage4.design_rebuild import dependencies, strategy_dependency
     historical: dict[int | None, Any] = {}
@@ -2181,7 +2028,7 @@ def request_design_candidate(
         strategy = BlindBookStrategyResponse.model_validate(next(
             row.response_payload for row in parent.sources if row.chapter is None))
     else:
-        if (_uses_agent_runs(ctx) or not ctx.paid) and not stage4_runs.design_unit_checkpoint_exists(ctx, None):
+        if not ctx.paid and not stage4_runs.design_unit_checkpoint_exists(ctx, None):
             previous = design_adoption.select(
                 ctx, _design_strategy_unit(prepared), validator=prepared.validator,
                 state_payload=_design_strategy_checkpoint_state, persist=not ctx.readonly)
@@ -2195,7 +2042,7 @@ def request_design_candidate(
     preserved_by = {row.chapter: row for row in preserved}
     if any(stage4_runs.design_unit_checkpoint_exists(ctx, chapter) for chapter in preserved_by):
         raise ProvenanceRefused('Stage4A 当前 run 的 checkpoint 与父候选保留源重叠')
-    if _uses_agent_runs(ctx) or not ctx.paid:
+    if not ctx.paid:
         # 全部来源先完成 preflight；任一章未知都不能先购买其余缺失章。
         for chapter in chapters:
             if chapter.chapter_ordinal in preserved_by or stage4_runs.design_unit_checkpoint_exists(ctx, chapter.chapter_ordinal):
@@ -2294,16 +2141,6 @@ def _materialize_design_candidate(
             truth_sha256=str(prepared.mapping['truth_sha256']), sources_sha256=_canonical_sha256(rows),
             design_dependencies=actual_dependencies)
         return BlindCandidate.model_validate({**business, '_provenance': provenance})
-    usage_kwargs: dict[str, Any] = {}
-    if _uses_agent_runs(ctx):
-        from novel.llm import stage4_runs
-        units = (
-            _design_strategy_unit(prepared),
-            *(_design_chapter_unit(chapter) for chapter in chapter_contexts),
-        )
-        usage_kwargs['usage_override'] = \
-            stage4_runs.design_aggregate_usage(ctx, units, historical=dict(responses.historical),
-                                              preserved=responses.preserved)
     provenance = ctx.llm_provenance(
         BlindCandidateProvenance,
         prompts={
@@ -2319,7 +2156,6 @@ def _materialize_design_candidate(
         truth_sha256=str(prepared.mapping['truth_sha256']),
         architecture='book_strategy_chapters_v1',
         design_dependencies=actual_dependencies,
-        **usage_kwargs,
     )
     return BlindCandidate.model_validate({
         **business,
@@ -2485,7 +2321,7 @@ def finalize_design_candidate(
     """A 的唯一 settle/aggregate/write/readback/N+1 adoption/commit 边界。"""
     _assert_design_evaluation(ctx, source, prepared, evaluation)
     _assert_design_current(ctx, prepared)
-    if not _uses_agent_runs(ctx) and not evaluation.responses.historical and not evaluation.responses.preserved:
+    if not evaluation.responses.historical and not evaluation.responses.preserved:
         artifact = _materialize_design_candidate(
             ctx, source, prepared, evaluation.responses, settle=True)
         if artifact.model_dump(by_alias=True, mode='json') != \
@@ -3021,8 +2857,7 @@ def _design_repair_finalization(
 def _run_design_repair(
         ctx: RunContext, source: Any, scope: DesignRepairScope,
 ) -> BlindCandidate:
-    if not _uses_agent_runs(ctx):
-        raise ProvenanceRefused('targeted design repair 只接受可恢复 executor run')
+    _refuse_targeted_design_repair()
     if getattr(source, 'max_turns', None) != 2:
         raise ProvenanceRefused('targeted design repair 每目标章必须硬封顶 2 content turns')
     (
@@ -3247,8 +3082,9 @@ def _run_design_replan(
     ctx: RunContext, source: Any, scope: DesignRepairScope,
 ) -> BlindCandidate:
     """typed strategy replan：只 wire 宏观策略与 effective input 真变化章。"""
-    if not _uses_agent_runs(ctx):
-        raise ProvenanceRefused('typed strategy replan 只接受可恢复 executor run')
+    raise UnsupportedRunMode(
+        'stage4.design 的 agent strategy replan 已退役；'
+        '请使用现役免费 reaggregate，或清理当前失败候选后执行全量直连重跑')
     current = _require_design_action_subject(ctx, scope)
     current_payload = current.model_dump(by_alias=True, mode='json')
     store = ArtifactStore(ctx)
@@ -3898,12 +3734,32 @@ def run_design_repair_aggregate_recovery(
             return landed
 
 
+def _require_direct_llm_entry(ctx: RunContext, client: LlmClient, *, node: str) -> None:
+    """付费生产只接直连客户端，不接管旧 profile 或同 run 的 agent 状态。"""
+    if not isinstance(client, LlmClient):
+        raise ProvenanceRefused(f'{node} 生产入口只接受 LlmClient')
+    if getattr(ctx, 'executor_profile', None) is not None:
+        raise ProvenanceRefused(f'{node} 生产入口不能接管 agent profile')
+    run_id = getattr(ctx, 'run_id', None)
+    if not isinstance(run_id, str) or not run_id:
+        return
+    roots = (
+        paths.service_stage_runs_dir(ctx.novel_dir, 'stage4') / run_id,
+        paths.legacy_stage_runs_dir(ctx.novel_dir, 'stage4') / run_id,
+    )
+    if any(root.exists() for root in roots):
+        raise ProvenanceRefused(
+            f'当前 {node} run 已有 agent 状态；'
+            '必须使用冻结旧代码读取，或走现役免费 reaggregate')
+
+
 def run_design(
         ctx: RunContext, client: Any, *,
         repair_decision_sha256: str | None = None,
         repair_scope: DesignRepairScope | None = None,
 ) -> BlindCandidate:
-    """Stage4A 单一入口：首次整书、typed replan 或 targeted repair。"""
+    """Stage4A 现役唯一生产入口：LlmClient 全量直连生成。"""
+    _require_direct_llm_entry(ctx, client, node='stage4.design')
     if repair_decision_sha256 is None and repair_scope is None:
         prepared = prepare_design_candidate(ctx)
         response = request_design_candidate(ctx, client, prepared)
@@ -3911,15 +3767,16 @@ def run_design(
         return finalize_design_candidate(ctx, client, prepared, evaluation)
     if (repair_scope is not None and repair_scope.strategy_replan
             and repair_decision_sha256 is None):
-        return _run_design_replan(ctx, client, repair_scope)
+        raise UnsupportedRunMode(
+            'stage4.design 的 agent strategy replan 已退役；'
+            '请使用现役免费 reaggregate，或清理当前失败候选后执行全量直连重跑')
     if (repair_decision_sha256 is None or repair_scope is None
             or repair_scope.strategy_replan
             or repair_scope.decision_sha256 != repair_decision_sha256):
         raise ProvenanceRefused(
             'targeted repair 的 repair_decision_sha256 与已解析 '
             'DesignRepairScope 必须同时给、完全相等且 strategy_replan=false')
-    require_targeted_design_executor(ctx)
-    return _run_design_repair(ctx, client, repair_scope)
+    _refuse_targeted_design_repair()
 
 
 class _DesignAdoptionSource:
@@ -3971,7 +3828,7 @@ def _assert_plan_current(
 
 
 def _own_stage4_tail(ctx: RunContext) -> Mapping[str, Any] | None:
-    if not _uses_agent_runs(ctx):
+    if getattr(ctx, 'executor_profile', None) is None:
         return None
     from novel.llm import stage4_runs
     with (nullcontext() if ctx.readonly else stage4_runs.commit_ownership(ctx.novel_dir)):
@@ -3991,10 +3848,11 @@ def prepare_plan_candidate(
         raise TerminalState(
             'Stage4 v4 不接受 --chapters；重规划须整书重走 '
             'stage4.design → stage4.plan')
-    uses_agent = _uses_agent_runs(ctx)
-    # legacy 的历史早退比 RunContext 其余字段更早；单元测试与
+    recovering_saved_agent_result = (
+        getattr(ctx, 'executor_profile', None) is not None and not ctx.paid)
+    # 直连的历史早退比 RunContext 其余字段更早；单元测试与
     # 真实 CLI 都依赖它在 prompt/lock/transport 之前停止。
-    if (not uses_agent
+    if (not recovering_saved_agent_result
             and current_infeasible_binding(ArtifactStore(ctx)) is not None):
         raise TerminalState(
             'Stage4B 已对当前 Stage4A 候选落盘 fresh typed infeasible 结论；'
@@ -4009,7 +3867,7 @@ def prepare_plan_candidate(
     _refuse_foreign_before_wire(ctx)
     # 只有本 run 的 prepared/committed 尾窗可穿过这条早退：它是零 wire
     # 收尾，不是对同一 A 再付费。
-    if (uses_agent and tail is None
+    if (recovering_saved_agent_result and tail is None
             and current_infeasible_binding(ArtifactStore(ctx)) is not None):
         raise TerminalState(
             'Stage4B 已对当前 Stage4A 候选落盘 fresh typed infeasible 结论；'
@@ -4054,16 +3912,6 @@ def prepare_plan_candidate(
         ),
     )
     _assert_plan_current(ctx, prepared)
-    if _uses_agent_runs(ctx) and not ctx.readonly:
-        from novel.llm import stage4_runs
-        stage4_runs.ensure_run(
-            ctx,
-            input_sha256=input_sha256,
-            system=system,
-            user=user,
-            response_model=EvidenceBindingResponse,
-            max_tokens=prompts.EVIDENCE_BIND_MAX_TOKENS,
-        )
     return prepared
 
 
@@ -4767,7 +4615,7 @@ def finalize_plan_candidate(
     """B 的唯一 settle/write/readback/adoption/committed 边界。"""
     _assert_plan_evaluation(ctx, source, prepared, evaluation)
     _assert_plan_current(ctx, prepared)
-    if not _uses_agent_runs(ctx) and not isinstance(source, _PlanChapterAggregateSource):
+    if not isinstance(source, _PlanChapterAggregateSource):
         binding, compiled = _materialize_binding(
             ctx, source, prepared, evaluation.response, settle=True,
             architecture=evaluation.architecture,
@@ -5852,45 +5700,9 @@ def _write_plan_delivery_pause(
         historical_chapters: Iterable[int],
         historical_adoption_file_sha256: str | None,
 ) -> bool:
-    """若且仅若本批全是 typed 同 run 可恢复失败，落凭据并返回 True。"""
-    delivery = [
-        (chapter, exc) for chapter, exc in errors
-        if isinstance(exc, AgentDeliveryUnavailable)
-        and exc.same_run_resumable]
-    if not errors or len(delivery) != len(errors):
-        stage4_runs.clear_plan_delivery_recovery(ctx)
-        return False
-    failed = {chapter for chapter, _exc in delivery}
-    deferred = set(int(chapter) for chapter in deferred_chapters)
-    completed = set(int(chapter) for chapter in completed_chapters)
-    expected_completed = set(all_chapters) - failed - deferred
-    if completed != expected_completed:
-        raise ProvenanceRefused(
-            'Stage4B delivery pause 的 completed/pending 计算不闭合')
-    recovery = stage4_runs.write_plan_delivery_recovery(
-        ctx,
-        candidate_subject_sha256=prepared.subject_sha256,
-        requests=requests,
-        completed_chapters=completed,
-        failures=[{
-            'chapter': chapter,
-            'error_kind': exc.error_kind,
-            'status': exc.status,
-            'attempts': exc.attempts,
-        } for chapter, exc in delivery],
-        deferred_chapters=deferred,
-        historical_chapters=(set(historical_chapters) & completed),
-        historical_adoption_file_sha256=
-            historical_adoption_file_sha256,
-    )
-    ctx.observe(
-        'stage4_plan_delivery_waiting',
-        completed_chapters=recovery['completed_chapters'],
-        pending_chapters=recovery['pending_chapters'],
-        failure_kinds=sorted({
-            row['error_kind'] for row in recovery['failures']}),
-    )
-    return True
+    """新生产不再写 agent delivery pause；旧结果只允许完整免费汇合。"""
+    stage4_runs.clear_plan_delivery_recovery(ctx)
+    return False
 
 
 def _raise_plan_batch_error(
@@ -5898,31 +5710,22 @@ def _raise_plan_batch_error(
 ) -> NoReturn:
     """混合失败不让可恢复 delivery 异常遮住业务/来源/代码失败。"""
     candidates = list(errors)
-    if not delivery_paused:
-        non_delivery = [
-            row for row in candidates
-            if not (isinstance(row[1], AgentDeliveryUnavailable)
-                    and row[1].same_run_resumable)
-        ]
-        if non_delivery:
-            candidates = non_delivery
     first = sorted(candidates, key=lambda row: row[0])[0][1]
     if isinstance(first, _PlanChapterRepairPending):
         raise TerminalState(str(first)) from first
     raise first
 
 
-def _run_plan_with_chapters(
+def _run_saved_plan_reaggregate(
         ctx: RunContext, pool: Any, prepared: PlanCandidateContext,
 ) -> CheckReport | EvidenceBinding | _PlanAggregatePreview:
-    """批次 4 的章级 B 拓扑（公开仍是一个 stage4.plan、一次授权）。
+    """只读/免费汇合旧章 checkpoint；不得进入模型生产。
 
-    机械章 0 wire（绑定由冻结输入确定性重算）；歧义章各自私有 session
-    （每章 max 4 turns、checkpoint、反馈只回本章）；全部章闭合后聚合一份
-    EvidenceBindingResponse，过同一 compiler 与联合 HARD——typed 失败按
-    ``repair_owner`` 路由：B owner 且带章号 → 只回该章 session；A/Stage2/
-    code owner → 首轮即停；同一 fingerprint 集连续两轮未闭合 → 提前终止。
+    该路径只承接已经购买并落下的旧 agent 结果；缺失来源时关闭式停止，
+    不构造 driver/session，也不允许通过 ``run_plan`` 变成新生产分支。
     """
+    if ctx.paid:
+        raise ProvenanceRefused('Stage4B 保存结果汇合只接受免费执行')
     baseline = build_mechanical_baseline(
         prepared.candidate_raw, prepared.upstream.blueprints)
     _note_mechanical_plan_progress(ctx, prepared, baseline)
@@ -6173,18 +5976,14 @@ def _run_plan_with_chapters(
                         worker=lambda chapter: _reask_plan_chapter_unit(
                             ctx, pool, prepared,
                             baseline.chapter(chapter), units[chapter]),
-                        stop_on_error=lambda exc: (
-                            isinstance(exc, AgentDeliveryUnavailable)
-                            or not isinstance(
-                                exc, (_PlanChapterRepairPending, LlmFailed))),
+                        stop_on_error=lambda exc: not isinstance(
+                            exc, (_PlanChapterRepairPending, LlmFailed)),
                     )
                 hard_errors: list[tuple[int, Exception]] = []
                 for chapter, exc in reask_errors:
                     if isinstance(exc, _PlanChapterRepairPending):
                         pending_wire_replacements.add(chapter)
                         exhausted_chapters.add(chapter)
-                    elif isinstance(exc, AgentDeliveryUnavailable):
-                        hard_errors.append((chapter, exc))
                     elif isinstance(exc, LlmFailed):
                         exhausted_chapters.add(chapter)
                     else:
@@ -6476,10 +6275,10 @@ def _note_mechanical_plan_progress(ctx: RunContext, prepared: PlanCandidateConte
                 evidence_sha256=_canonical_sha256(chapter.binding_rows()))
 
 
-def _run_legacy_plan_with_chapters(
+def _run_direct_plan_with_chapters(
         ctx: RunContext, client: Any, prepared: PlanCandidateContext,
 ) -> CheckReport | EvidenceBinding:
-    """共用机械基线、章内 wire 闸和整书 HARD，返工只回有权限的歧义章。"""
+    """直连共用机械基线、章内 wire 闸和整书 HARD，返工只回歧义章。"""
     baseline = build_mechanical_baseline(
         prepared.candidate_raw, prepared.upstream.blueprints)
     _note_mechanical_plan_progress(ctx, prepared, baseline)
@@ -6567,17 +6366,9 @@ class _PlanRecoveryPool:
         return None
 
     def restore_chapter(self, chapter: int, request: Any, *, validator: Any) -> Any:
-        from novel.agents.session_client import validate_checkpoint_acceptance
         restored = stage4_runs.restore_plan_chapter_checkpoint(self.ctx, request, validator=validator)
         if restored is None:
             raise TerminalState(f'免费汇合缺少第 {chapter} 章的已保存回答')
-        if not self.ctx.readonly:
-            validate_checkpoint_acceptance(
-                self.ctx, self.ctx.executor_profile, chapter=chapter,
-                max_semantic_turns=self.max_turns,
-                purpose=stage4_runs.plan_chapter_purpose(chapter), record=restored.acceptance,
-                system=request.system, user=request.user, max_tokens=request.max_tokens,
-                recovery_policy=stage4_runs.PLAN_CHAPTER_RECOVERY_POLICY)
         self._restored[chapter] = restored
         return restored
 
@@ -6614,7 +6405,7 @@ def run_reaggregate(ctx: RunContext) -> CheckReport | EvidenceBinding:
     _restore_plan_original_profile(ctx)
     prepared = prepare_plan_candidate(ctx)
     pool = _PlanRecoveryPool(ctx)
-    return _run_plan_with_chapters(ctx, pool, prepared)
+    return _run_saved_plan_reaggregate(ctx, pool, prepared)
 
 
 def run_plan(ctx: RunContext, client: Any, *,
@@ -6625,16 +6416,9 @@ def run_plan(ctx: RunContext, client: Any, *,
     ``EvidenceBinding`` 交给 CLI 报 landed-red；它不是“什么都没
     产生”的 ``TerminalState``，也绝不会编译或覆盖最终计划。
     """
+    _require_direct_llm_entry(ctx, client, node='stage4.plan')
     prepared = prepare_plan_candidate(ctx, chapters=chapters)
-    if not _uses_agent_runs(ctx):
-        return _run_legacy_plan_with_chapters(ctx, client, prepared)
-    if _uses_agent_runs(ctx) and hasattr(client, 'prepare_chapters'):
-        # 批次 4：章级 session 池（Stage4PlanSessionPool）——机械章 0 wire，
-        # 歧义章私有 session；聚合仍过同一 compiler 与联合 HARD。
-        return _run_plan_with_chapters(ctx, client, prepared)
-    raise ProvenanceRefused(
-        'Stage4B Agent 生成必须通过 Stage4PlanSessionPool 分发实际章节；'
-        '全书单会话已退出新请求路径')
+    return _run_direct_plan_with_chapters(ctx, client, prepared)
 
 
 def run_identity(ctx: RunContext) -> tuple[int, CheckReport]:

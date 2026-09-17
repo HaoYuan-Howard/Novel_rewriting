@@ -8,6 +8,7 @@ import pytest
 from contracts.artifacts import STAGE4_BLIND_CANDIDATE, STAGE4_EVIDENCE_BINDING
 from contracts.schema.stage4 import BlindCandidate, EvidenceBinding
 from novel.errors import TerminalState
+from novel.llm.client import LlmClient
 from novel.stages.stage4 import phase_state, plan
 
 
@@ -73,9 +74,5 @@ def test_plan_producer_refuses_repeated_b_before_prompt_or_wire(monkeypatch):
         plan, '_binding_request',
         lambda _ctx: pytest.fail('关闭式前置必须发生在 prompt 构造之前'))
 
-    class NoWireClient:
-        def ask_json(self, *_args, **_kwargs):
-            pytest.fail('同一 current infeasible 不得再发 B wire')
-
     with pytest.raises(TerminalState, match=r'stage4\.design --replan'):
-        plan.run_plan(SimpleNamespace(), NoWireClient())
+        plan.run_plan(SimpleNamespace(), object.__new__(LlmClient))

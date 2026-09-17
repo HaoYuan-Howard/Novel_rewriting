@@ -58,7 +58,7 @@ def _inspect_source(ctx: RunContext, record: Mapping[str, Any]):
         source, source.run_id, expected_parent_run_id=source.parent_run_id)
     prepared = plan.prepare_plan_candidate(source)
     pool = plan._PlanRecoveryPool(source)
-    preview = plan._run_plan_with_chapters(source, pool, prepared)
+    preview = plan._run_saved_plan_reaggregate(source, pool, prepared)
     if not isinstance(preview, plan._PlanAggregatePreview):
         raise ProvenanceRefused('Stage4B 只读预览越过了聚合边界')
     evaluation = preview.evaluation
@@ -136,7 +136,8 @@ def reaggregate_available(ctx: RunContext) -> bool:
                 return False
             return isinstance(plan.run_design_reaggregate(ctx), plan.DesignCandidateEvaluation)
         prepared = plan.prepare_plan_candidate(ctx)
-        preview = plan._run_plan_with_chapters(ctx, plan._PlanRecoveryPool(ctx), prepared)
+        preview = plan._run_saved_plan_reaggregate(
+            ctx, plan._PlanRecoveryPool(ctx), prepared)
     except TerminalState:
         return False
     if not isinstance(preview, plan._PlanAggregatePreview):

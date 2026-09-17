@@ -3,10 +3,12 @@ from __future__ import annotations
 
 import json
 import threading
+from typing import Any
 
 import pytest
 
 from contracts.schema.stage4 import EvidenceBinding
+from novel.stages.stage4 import plot_binding as baseline_mod
 from novel.stages.stage4 import plan
 from novel.store import ArtifactStore
 from novel.work_units import budget_for
@@ -22,9 +24,43 @@ def _seed(tmp_path):
 
 def _one_ambiguous(monkeypatch, ordinals=(1,)):
     # 此处只验证预算与恢复调度；真实舞台歧义由 test_plot_binding 单独验证。
-    from tests.test_stage4_plan_chapters import _inject_stage_ambiguities
     monkeypatch.setattr(plan, 'build_mechanical_baseline',
                         _inject_stage_ambiguities(plan.build_mechanical_baseline, ordinals))
+
+
+def _inject_stage_ambiguities(real_build, ordinals: tuple[int, ...]):
+    """把指定章第一场的真实舞台引用留给 B 选择，验证直连调度与恢复。"""
+    import copy
+    from novel.stages.stage4.plot_binding import BaselineAmbiguity, ChapterBaseline
+
+    def injected(candidate_raw: dict[str, Any], bp_raw: dict[str, Any]):
+        baseline = real_build(candidate_raw, bp_raw)
+        chapters = []
+        for chapter in baseline.chapters:
+            if chapter.chapter_ordinal not in ordinals:
+                chapters.append(chapter)
+                continue
+            scenes = copy.deepcopy(chapter.scenes)
+            first = scenes[0]
+            delivery = first['deliveries'][0]
+            choices = tuple(delivery['source_context_refs'])
+            assert choices, '调度 fixture 必须有原文支持的舞台候选'
+            delivery['source_context_refs'] = []
+            chapters.append(ChapterBaseline(
+                chapter_ordinal=chapter.chapter_ordinal,
+                scenes=scenes,
+                ambiguities=(BaselineAmbiguity(
+                    ambiguity_id=f'{chapter.chapter_ordinal:016x}',
+                    kind='source_context_selection',
+                    chapter_ordinal=chapter.chapter_ordinal,
+                    candidate_scene_id=first['candidate_scene_id'],
+                    beat_ref=delivery['beat_ref'],
+                    candidates=choices,
+                ),),
+            ))
+        return baseline_mod.MechanicalBaseline(chapters=tuple(chapters))
+
+    return injected
 
 
 def _answer(request):

@@ -8,7 +8,6 @@ from novel import paths, runtime_layout
 from novel.errors import ProvenanceRefused
 from novel.llm import agent_runs, stage2_global_runs, stage4_runs, stage5_runs
 from novel.llm import stage6_hook_runs, stage7_runs
-from novel.stages.stage2 import characters
 from tests.test_agent_runs import _Answer, _ctx, _INPUT_SHA, _MAX_TOKENS, _SYSTEM, _USER
 
 
@@ -35,7 +34,7 @@ def test_retired_layout_keeps_empty_missing_and_corrupt_records_closed(tmp_path,
 
 
 @pytest.mark.parametrize('factory', [
-    characters.run_spec, stage2_global_runs._run_spec,
+    stage2_global_runs._run_spec,
     lambda: stage4_runs.design_unit_run_spec(None),
     lambda: stage4_runs.plan_chapter_run_spec(1),
     lambda: stage5_runs._run_spec(1),

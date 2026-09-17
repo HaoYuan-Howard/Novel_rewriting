@@ -1033,18 +1033,6 @@
     "stage4"
    ]
   },
-  "tests/test_stage4_active_parent_recovery.py": {
-   "layer": "unit_contract",
-   "stages": [
-    "stage4"
-   ]
-  },
-  "tests/test_stage4_agent_boundary.py": {
-   "layer": "unit_contract",
-   "stages": [
-    "stage4"
-   ]
-  },
   "tests/test_stage4_agent_runs.py": {
    "layer": "unit_contract",
    "stages": [
@@ -1081,12 +1069,6 @@
     "stage4"
    ]
   },
-  "tests/test_stage4_binding_input_recovery_integration.py": {
-   "layer": "unit_contract",
-   "stages": [
-    "stage4"
-   ]
-  },
   "tests/test_stage4_blind.py": {
    "layer": "unit_contract",
    "stages": [
@@ -1094,12 +1076,6 @@
    ]
   },
   "tests/test_stage4_context.py": {
-   "layer": "unit_contract",
-   "stages": [
-    "stage4"
-   ]
-  },
-  "tests/test_stage4_design_adoption.py": {
    "layer": "unit_contract",
    "stages": [
     "stage4"
@@ -1117,13 +1093,7 @@
     "stage4"
    ]
   },
-  "tests/test_stage4_design_rebuild.py": {
-   "layer": "unit_contract",
-   "stages": [
-    "stage4"
-   ]
-  },
-  "tests/test_stage4_design_session_pool.py": {
+  "tests/test_stage4_direct_boundary.py": {
    "layer": "unit_contract",
    "stages": [
     "stage4"
@@ -1141,49 +1111,13 @@
     "stage4"
    ]
   },
-  "tests/test_stage4_plan_chapters.py": {
-   "layer": "unit_contract",
-   "stages": [
-    "stage4"
-   ]
-  },
-  "tests/test_stage4_plan_sessions.py": {
-   "layer": "unit_contract",
-   "stages": [
-    "stage4"
-   ]
-  },
-  "tests/test_stage4_preflight.py": {
-   "layer": "unit_contract",
-   "stages": [
-    "stage4"
-   ]
-  },
   "tests/test_stage4_repair.py": {
    "layer": "unit_contract",
    "stages": [
     "stage4"
    ]
   },
-  "tests/test_stage4_repair_prepared_recovery.py": {
-   "layer": "unit_contract",
-   "stages": [
-    "stage4"
-   ]
-  },
-  "tests/test_stage4_runtime_v3.py": {
-   "layer": "unit_contract",
-   "stages": [
-    "stage4"
-   ]
-  },
   "tests/test_stage4_structure_metrics.py": {
-   "layer": "unit_contract",
-   "stages": [
-    "stage4"
-   ]
-  },
-  "tests/test_stage4_typed_failures.py": {
    "layer": "unit_contract",
    "stages": [
     "stage4"

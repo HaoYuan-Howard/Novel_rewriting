@@ -10,6 +10,7 @@ from pydantic import ValidationError
 
 from contracts.schema.stage4 import PlanProvenance
 from novel.errors import TerminalState
+from novel.llm.client import LlmClient
 from novel.stages.stage4 import plan
 
 
@@ -28,11 +29,9 @@ def _provenance(*, origin: str = 'human', **extra: object) -> dict:
 @pytest.mark.parametrize('entry', [plan.run_plan, plan.build_prompt])
 def test_stage4_v4_refuses_chapter_scoped_paid_replanning_before_transport(entry):
     """结构变更只能整书重走 A→B，旧 ``--chapters`` 不能暗中恢复。"""
-    client = SimpleNamespace(
-        ask_json=lambda *_args, **_kwargs: pytest.fail('不应进入付费 transport'))
     kwargs = {'chapters': (2,)}
     if entry is plan.run_plan:
-        kwargs['client'] = client
+        kwargs['client'] = object.__new__(LlmClient)
 
     with pytest.raises(TerminalState, match='Stage4 v4 不接受 --chapters'):
         entry(object(), **kwargs)
