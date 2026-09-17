@@ -337,3 +337,43 @@ def test_human_full_chapter_cannot_bypass_closed_placement_identity(defect):
     with pytest.raises((BlindPlanError, ValidationError)):
         compile_blind_chapter_edit(response, mapping,
             truth_chapter=truth['chapters'][0], expected_weight='CH_EVEN')
+
+
+def test_required_endpoints_idempotent_when_ended_at_matches_supersede_beat():
+    """同拍 ended_at 与 supersedes 同时声明时幂等（fujun ch5 st05_02/st05_06）。"""
+    raw = copy.deepcopy(fixture_blueprint()['blueprints'][0])
+    first = raw['states'][0]
+    end_beat = raw['beats'][-1]['beat_id']
+    first['ended_at'] = {'kind': 'at_beat', 'beat_ref': end_beat}
+    raw['carry_out_refs'] = [r for r in raw.get('carry_out_refs', []) if r != first['state_id']]
+    raw['states'].append({
+        **{k: v for k, v in first.items() if k != 'state_id'},
+        'state_id': 'st01_99',
+        'content': '替换前态',
+        'established_at': {'kind': 'at_beat', 'beat_ref': end_beat},
+        'ended_at': None,
+        'supersedes_state_refs': [first['state_id']],
+    })
+    raw['carry_out_refs'].append('st01_99')
+    eps = required_endpoints(PlotBlueprint.model_validate(raw))
+    assert eps[('state', first['state_id'], 'ended')] == end_beat
+
+
+def test_required_endpoints_still_refuses_conflicting_end_beats():
+    raw = copy.deepcopy(fixture_blueprint()['blueprints'][0])
+    first = raw['states'][0]
+    beats = raw['beats']
+    assert len(beats) >= 2
+    first['ended_at'] = {'kind': 'at_beat', 'beat_ref': beats[0]['beat_id']}
+    raw['carry_out_refs'] = [r for r in raw.get('carry_out_refs', []) if r != first['state_id']]
+    raw['states'].append({
+        **{k: v for k, v in first.items() if k != 'state_id'},
+        'state_id': 'st01_99',
+        'content': '异拍替换',
+        'established_at': {'kind': 'at_beat', 'beat_ref': beats[1]['beat_id']},
+        'ended_at': None,
+        'supersedes_state_refs': [first['state_id']],
+    })
+    raw['carry_out_refs'].append('st01_99')
+    with pytest.raises(ValueError, match='重复的语义端点主体'):
+        required_endpoints(PlotBlueprint.model_validate(raw))

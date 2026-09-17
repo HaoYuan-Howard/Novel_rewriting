@@ -32,7 +32,11 @@ def required_endpoints(
     result: dict[EndpointKey, str] = {}
 
     def put(key: EndpointKey, beat: str) -> None:
-        if key in result:
+        prior = result.get(key)
+        if prior is not None:
+            # 同拍重复（如 ended_at 与 supersedes 同时声明）幂等；异拍才是真冲突。
+            if prior == beat:
+                return
             raise ValueError(f'重复的语义端点主体：{key}')
         result[key] = beat
 
