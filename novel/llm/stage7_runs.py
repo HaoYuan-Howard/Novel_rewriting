@@ -3,7 +3,7 @@
 
 本模块只声明 ``stage7.rename`` 特有的 purpose、append-only checkpoint、动态
 成书路径与正式提交所有权。acceptance/stdout/ledger/session-audit 的逐字段闭环
-全部复用 :mod:`novel.llm.agent_runs`，这里不复制第二份协议。
+全部复用 :mod:`novel.llm.run_journal`，这里不复制第二份协议。
 """
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ from contracts.artifacts import STAGE7_NAME_MAP
 from novel import paths
 from novel.appendlog import process_append_lock
 from novel.errors import ProvenanceRefused
-from novel.llm import agent_runs
+from novel.llm import run_journal as agent_runs
 from novel.llm.transport import ChatResponse
 
 

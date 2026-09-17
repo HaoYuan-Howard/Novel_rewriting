@@ -20,7 +20,7 @@ from contracts.schema.knowledge import GlobalProvenance, KnowledgeGrounding
 from contracts.schema.stage1 import MainText
 from novel import paths, prov
 from novel.errors import GateBlocked, ProvenanceRefused, TerminalState
-from novel.llm import agent_runs, stage2_global_runs
+from novel.llm import run_journal as agent_runs, stage2_global_runs
 from novel.llm.ledger import ledger_path, read_strict_jsonl_objects
 from novel.run import RunContext
 from novel.stages.stage2 import analyze, characters, checks, grounding

@@ -3,7 +3,7 @@
 
 本模块只声明 hook 特有的路径、purpose、完整 replacement revision 与正式
 ``hook.json`` bundle；acceptance/stdout/ledger/session-audit 的逐字段校验全部
-复用 ``novel.llm.agent_runs``，不在这里复制第二份协议。
+复用 ``novel.llm.run_journal``，不在这里复制第二份协议。
 """
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ from pydantic import BaseModel
 from contracts.artifacts import STAGE6_HOOK
 from novel import paths
 from novel.errors import ProvenanceRefused
-from novel.llm import agent_runs
+from novel.llm import run_journal as agent_runs
 from novel.appendlog import process_append_lock
 from novel.llm.transport import ChatResponse
 from novel import runtime_layout

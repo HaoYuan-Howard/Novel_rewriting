@@ -19,7 +19,7 @@ from contracts.schema.common import SharedAnalysisSource
 from contracts.schema.knowledge import GlobalProvenance, KnowledgeGrounding
 from novel import paths, prov
 from novel.errors import GateBlocked, ProvenanceRefused, TerminalState, UpstreamMissing
-from novel.llm import agent_runs, stage2_global_runs
+from novel.llm import run_journal as agent_runs, stage2_global_runs
 from novel.run import RunContext
 from novel.stages.stage2 import analyze, analyze_recovery, characters, checks, grounding
 from novel.stages.stage2.character_refs import materialize_blueprint_character_projection
@@ -67,7 +67,7 @@ def pending(novel_dir: Path, *, code: str | None = None) -> list[str]:
 
 def source_paths(novel_dir: Path, *, code: str | None = None) -> tuple[Path, ...]:
     """仅当前草稿来源及未闭合 journal；不把无关历史目录放入 dispatch seal。"""
-    from novel.llm import agent_runs
+    from novel.llm import run_journal as agent_runs
     from novel.orchestrator.queue import analyze_initial_recovery_surface
 
     store = _store(novel_dir, code=code)

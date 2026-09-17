@@ -11,7 +11,7 @@ from typing import Any, Mapping
 from contracts.schema.orchestration import AgentProfile
 from novel import paths
 from novel.errors import ArtifactUnreadable, ProvenanceRefused, TerminalState
-from novel.llm import agent_runs, aggregate_runs, design_adoption, stage4_runs
+from novel.llm import run_journal as agent_runs, aggregate_runs, design_adoption, stage4_runs
 from novel.llm.ledger import CostLedger, ledger_path
 from novel.run import RunContext
 from novel.run_identity import check_run_id

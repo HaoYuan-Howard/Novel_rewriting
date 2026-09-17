@@ -3,7 +3,7 @@
 
 这里仅冻结 ``stage2.global`` 的恢复策略、路径集合与跨 run 正式提交所有权。
 stdout/acceptance/ledger/session-audit 的逐字段闭环全部复用
-:mod:`novel.llm.agent_runs`，正式 artifact 仍只能由 Stage2 producer 写入。
+:mod:`novel.llm.run_journal`，正式 artifact 仍只能由 Stage2 producer 写入。
 """
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ from contracts.artifacts import (
 from novel import paths
 from novel.appendlog import process_append_lock
 from novel.errors import ProvenanceRefused
-from novel.llm import agent_runs
+from novel.llm import run_journal as agent_runs
 from novel.llm.transport import ChatResponse
 
 

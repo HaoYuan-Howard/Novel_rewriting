@@ -32,7 +32,7 @@ from contracts.schema.report import CheckReport
 from novel import paths, prov
 from novel.appendlog import process_append_lock
 from novel.errors import GateBlocked, ProvenanceRefused, TerminalState, UpstreamMissing
-from novel.llm import agent_runs
+from novel.llm import run_journal as agent_runs
 from novel.llm.client import LlmClient, LlmFailed
 from novel.llm.execution import canonical_sha256
 from novel.llm.prompts import fill

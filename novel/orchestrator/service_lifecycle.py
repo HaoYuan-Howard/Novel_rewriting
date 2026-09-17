@@ -596,7 +596,7 @@ def _checkpoint_proof(
         ttl_seconds: int, max_entries: int,
 ) -> dict[str, object] | None:
     """只接受 generic committed + 当前正式字节 + delivered 三面闭合的目录。"""
-    from novel.llm import agent_runs
+    from novel.llm import run_journal as agent_runs
 
     commit = checkpoint_dir.parent / 'committed.json'
     if not commit.is_file() or commit.is_symlink():

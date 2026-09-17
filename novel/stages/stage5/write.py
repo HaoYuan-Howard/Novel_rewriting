@@ -57,7 +57,7 @@ from contracts.invariants import (
     STAGE5_COMMIT_PHASES, STAGE5_EDIT_CONFIRMATIONS, STAGE5_WRITE_MAX_CONCURRENCY,
     STAGE5_REVIEWER_REWRITE_DIRECTIVE_CODES, STOP_REWRITE_AFTER,
 )
-from novel.agents.session_audit import sanitize_failure_detail
+from novel.llm.session_audit import sanitize_failure_detail
 from novel.config import MAX_CONCURRENCY, DEFAULT_CONCURRENCY
 from contracts.rules import REGISTRY
 from contracts.schema.common import (

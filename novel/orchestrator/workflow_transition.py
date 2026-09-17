@@ -432,7 +432,7 @@ _SOURCE_PROOF = r'''
 import hashlib, json, sys
 from pathlib import Path
 from novel import paths, work_units
-from novel.agents import session_audit as agent_session_audit
+from novel.llm import session_audit as agent_session_audit
 from contracts.schema import workflow as workflow_schema
 from contracts.schema.workflow import WorkUnitRegistryV1, WorkUnitLedgerV2
 from novel.orchestrator import admission, agent, approvals, beacon, jobs, queue

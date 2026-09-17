@@ -13,7 +13,7 @@ from typing import Any, Mapping
 from contracts.artifacts import STAGE2_CHAPTER_BLUEPRINTS, STAGE4_BLIND_CANDIDATE
 from contracts.schema.stage4 import BlindCandidate, BlindBookStrategyResponse, DesignDependencies
 from novel.errors import ArtifactUnreadable, ProvenanceRefused, UpstreamStale, UpstreamUnproven
-from novel.llm import agent_runs, stage4_runs
+from novel.llm import run_journal as agent_runs, stage4_runs
 from novel.store import ArtifactStore
 
 

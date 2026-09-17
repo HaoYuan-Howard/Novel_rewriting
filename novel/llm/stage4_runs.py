@@ -5,7 +5,7 @@
 strategy + ch1..N 各一条 ``SingleSessionRunSpec``，单元通过后就落
 append-only checkpoint，最后由本模块的 aggregate journal 冻结 N+1 份
 adoption 与整书候选。通用 profile/prompt/schema/stdout/ledger/session-audit
-闭环仍由 ``novel.llm.agent_runs`` 唯一实现。
+闭环仍由 ``novel.llm.run_journal`` 唯一实现。
 
 typed infeasible 只有 binding；bound bundle 只含 plan，context 由独立节点组装；同书任一
 foreign ``prepared`` 都阻止另一 run/node 写正式路径。
@@ -39,16 +39,16 @@ from contracts.schema.stage4 import (
     BlindBookStrategyResponse, BlindCandidate, BlindChapterDesignResponse,
 )
 from novel import paths, prov
-from novel.agents import session_audit as agent_session_audit
 from novel.orchestrator.executor_capabilities import validate_profile
-from novel.agents.model_identity import validate_checkpoint_model_identity
-from novel.agents.session_client import (
-    SESSION_PROTOCOL_VERSION, validate_agent_session_request_binding,
+from novel.llm import session_audit as agent_session_audit
+from novel.llm.model_identity import validate_checkpoint_model_identity
+from novel.llm.session_binding import (
+    SAME_RUN_RESUMABLE_AGENT_FAILURES, SESSION_PROTOCOL_VERSION,
+    validate_agent_session_request_binding,
 )
-from novel.agents.session_client import SAME_RUN_RESUMABLE_AGENT_FAILURES
 from novel.appendlog import process_append_lock
 from novel.errors import ArtifactUnreadable, ProvenanceRefused
-from novel.llm import agent_runs, aggregate_runs
+from novel.llm import run_journal as agent_runs, aggregate_runs
 from novel.llm import ledger as ledger_module
 from novel.llm.json_text import normalize_json_text
 from novel.llm.ledger import CostLedger, combine_usage

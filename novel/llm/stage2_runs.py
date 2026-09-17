@@ -29,16 +29,17 @@ from pydantic import BaseModel, ValidationError
 
 from contracts.schema.orchestration import AgentProfile
 from novel import paths, work_units
-from novel.agents import session_audit as agent_session_audit
 from novel.orchestrator.executor_capabilities import validate_profile
-from novel.agents.model_identity import (
+from novel.llm import session_audit as agent_session_audit
+from novel.llm.json_schema_util import agent_json_schema
+from novel.llm.model_identity import (
     resolve_ledger_model_identity, validate_checkpoint_model_identity,
 )
-from novel.agents.base import render_structured_agent_stdin_bytes
-from novel.agents.session_client import (
-    SESSION_PROTOCOL_VERSION, SAME_RUN_RESUMABLE_AGENT_FAILURES, agent_json_schema,
+from novel.llm.session_binding import (
+    SAME_RUN_RESUMABLE_AGENT_FAILURES, SESSION_PROTOCOL_VERSION,
     validate_agent_session_request_binding,
 )
+from novel.llm.structured_stdin import render_structured_agent_stdin_bytes
 from novel.config import ENV_KEYS
 from novel.appendlog import process_append_lock
 from novel.errors import (

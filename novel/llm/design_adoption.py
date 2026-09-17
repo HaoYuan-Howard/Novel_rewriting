@@ -16,7 +16,7 @@ from pydantic import BaseModel
 from novel import paths
 from novel.appendlog import process_append_lock
 from novel.errors import ArtifactUnreadable, ProvenanceRefused
-from novel.llm import agent_runs, stage4_runs
+from novel.llm import run_journal as agent_runs, stage4_runs
 from novel.llm.ledger import ledger_path, read_strict_jsonl_objects
 
 
@@ -39,61 +39,22 @@ def pending_response(ctx: Any, unit: stage4_runs.DesignUnitRequest, source_run_i
 
 def recover_response_checkpoint(ctx: Any, unit: stage4_runs.DesignUnitRequest, source_run_id: str,
                                 *, validator: Callable, state_payload: Callable) -> bool:
-    """在原 producer 身份下补 checkpoint，再由正常历史采用读取；零 driver。"""
+    """在原 producer 身份下补 checkpoint，再由正常历史采用读取；零 driver。
+
+    Agent SessionClient 路径已退役：缺 checkpoint 的原回答不能再经 agent client
+    补写；调用方须走已有 checkpoint 的历史采用或显式重跑。
+    """
     pending = pending_response(ctx, unit, source_run_id)
     if pending is None:
         return False
     if ctx.readonly:
         return False
-    from novel.agents.session_client import SessionAgentClient
-    from novel.observability import RequestProgress
-    from novel.run import RunContext
-    from novel.llm.ledger import CostLedger
-    _budget, _turn, raw = pending
-    receipt = raw.get('prepared_receipt')
-    if not isinstance(receipt, dict) or receipt.get('run_id') != source_run_id:
-        raise ProvenanceRefused('Stage4A 原回答缺 producer/费用回执')
-    historical, _record, _path = agent_runs._historical_run_context(
-        ctx, stage4_runs.design_unit_run_spec(unit.chapter), source_run_id=source_run_id,
-        ledger_source_path=ledger_path(ctx.novel_dir.parent))
-    if historical.code != ctx.code:
-        raise ProvenanceRefused('Stage4A 未 checkpoint 的原回答须按原代码恢复')
-    source = RunContext(novel_dir=ctx.novel_dir, node=ctx.node, paid=False, code=historical.code,
-        run_id=source_run_id, parent_run_id=receipt['parent_run_id'], cache=ctx.cache,
-        executor_profile=historical.executor_profile,
-        ledger=CostLedger(path=ledger_path(ctx.novel_dir.parent), run_id=source_run_id,
-                          parent_run_id=receipt['parent_run_id']))
-    with stage4_runs.require_design_repair_recovery_source_stopped(
-            ctx, source_run_id, producer_parent_run_id=source.parent_run_id):
-        # 两个恢复者可能先后拿到 owner 停止锁；后拿锁者必须重新读取，不能
-        # 对已采纳回答再造 checkpoint，也不能采用预览之后换掉的响应。
-        if stage4_runs._source_has_design_checkpoint(ctx, source_run_id, unit.chapter):
-            restore(ctx, unit, source_run_id, validator=validator, state_payload=state_payload)
-            return True
-        current = pending_response(ctx, unit, source_run_id)
-        if current is None or current[1] != _turn or current[2] != raw:
-            raise ProvenanceRefused('Stage4A 原回答在恢复锁内复验时漂移')
-        match = agent_runs.match_historical_request(
-            ctx, stage4_runs.design_unit_run_spec(unit.chapter), source_run_id=source_run_id,
-            input_sha256=unit.input_sha256, system=unit.system, user=unit.user,
-            response_model=unit.response_model, max_tokens=unit.max_tokens,
-            use_source_profile=ctx.paid is False)
-        if not match.matches:
-            raise ProvenanceRefused('Stage4A 原回答的实际请求已不适用')
-        client = SessionAgentClient(source, historical.executor_profile, None, chapter=unit.chapter)
-        try:
-            response = client.ask_json(unit.system, unit.user, model_cls=unit.response_model,
-                purpose=stage4_runs.design_unit_purpose(unit.chapter), max_tokens=unit.max_tokens,
-                validator=validator, recovery_policy=stage4_runs.DESIGN_UNIT_RECOVERY_POLICY,
-                progress=(None if unit.chapter is None else RequestProgress(chapter=unit.chapter, index=1, total=1)))
-            stage4_runs.write_design_unit_checkpoint(source, unit,
-                response_payload=response.model_dump(mode='json', by_alias=True),
-                acceptance=client.accepted_checkpoint(stage4_runs.design_unit_purpose(unit.chapter)),
-                state_payload=state_payload(response))
-            client.finish(process_state='ok', delivery_state='blocked')
-        finally:
-            client.close()
-    return True
+    if stage4_runs._source_has_design_checkpoint(ctx, source_run_id, unit.chapter):
+        restore(ctx, unit, source_run_id, validator=validator, state_payload=state_payload)
+        return True
+    raise ProvenanceRefused(
+        'Stage4A 原回答缺 checkpoint；agent SessionClient 恢复路径已退役，'
+        '不能在生产路径补造')
 
 
 def source_row(unit: stage4_runs.DesignUnitRequest,

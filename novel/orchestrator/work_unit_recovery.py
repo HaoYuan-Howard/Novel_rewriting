@@ -24,10 +24,10 @@ from contracts.schema.work_unit_recovery import (
 )
 from contracts.schema.workflow import WorkUnitBlobV1, WorkUnitContentTurn, WorkUnitLedgerV2
 from novel import prov, work_units
-from novel.agents import session_audit as agent_session_audit
+from novel.llm import session_audit as agent_session_audit
 from novel.orchestrator import execution_context
 from novel.appendlog import path_transaction_lock
-from novel.agents.base import decode_wire_json
+from novel.llm.json_text import decode_wire_json
 from novel.errors import NovelError
 from novel.orchestrator import admission, approvals, jobs
 from novel.orchestrator.work_unit_evidence import (

@@ -13,7 +13,7 @@ from contracts.schema.knowledge import (
 )
 from novel.consumption import character_knowledge_reference
 from novel.errors import ProvenanceRefused, UpstreamStale
-from novel.llm.agent_runs import canonical_sha256
+from novel.llm.execution import canonical_sha256
 from novel.stages.stage2.global_evidence_candidates import GlobalEvidenceCandidateTable
 from novel.stages.stage2.core_evidence import compile_evidence_refs
 

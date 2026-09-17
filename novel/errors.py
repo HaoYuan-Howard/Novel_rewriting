@@ -420,6 +420,24 @@ class ProvenanceRefused(RefusedByStructure):
     """
 
 
+class AgentDeliveryUnavailable(TerminalState):
+    """Agent 交付未形成；调用方可据 typed 字段决定是否保留同 run。"""
+
+    def __init__(
+        self, message: str, *, error_kind: str, attempts: int,
+        status: int | None, same_run_resumable: bool,
+    ) -> None:
+        super().__init__(message)
+        self.error_kind = error_kind
+        self.attempts = attempts
+        self.status = status
+        self.same_run_resumable = same_run_resumable
+
+
+class AgentConfigurationError(NovelError):
+    """Agent 请求配置在发起子进程前就不成立。"""
+
+
 class AgentModelIdentityRefused(ProvenanceRefused):
     """Agent accepted model 的 actual / driver 证据不足或互相冲突。"""
 

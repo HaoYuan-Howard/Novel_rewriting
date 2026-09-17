@@ -13,7 +13,7 @@ from typing import Any
 from contracts.schema.stage4 import BlindBookStrategyResponse
 from novel import paths
 from novel.errors import ProvenanceRefused, TerminalState
-from novel.llm import agent_runs, design_adoption, stage4_runs
+from novel.llm import run_journal as agent_runs, design_adoption, stage4_runs
 from novel.run import RunContext
 
 

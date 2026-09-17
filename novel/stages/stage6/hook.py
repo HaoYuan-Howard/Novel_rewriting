@@ -49,7 +49,7 @@ from contracts.schema.stage6 import (
     HookCandidateRetryResponse, HookProvenance, HookResponse, HookSources, Mech,
 )
 from novel import paths, prov, wontfix
-from novel.agents import session_audit as agent_session_audit
+from novel.llm import session_audit as agent_session_audit
 from novel.consumption import prepare_projection, stage6_characters, stage6_grounding
 from novel.core.measure import hook_style_metrics, measure
 from novel.errors import (

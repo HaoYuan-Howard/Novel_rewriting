@@ -47,8 +47,8 @@ from contracts.schema.orchestration import (
     ReviewerSeatLedger, ReviewerSeatTurn,
 )
 from novel import paths
-from novel.agents import session_audit as agent_session_audit
-from novel.agents.base import decode_wire_json
+from novel.llm import session_audit as agent_session_audit
+from novel.llm.json_text import decode_wire_json
 from novel.appendlog import path_transaction_lock
 from novel.errors import PathRefused
 from novel.llm.ledger import ledger_path as cost_ledger_path, read_jsonl_rows

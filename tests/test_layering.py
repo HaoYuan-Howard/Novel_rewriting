@@ -249,7 +249,7 @@ _JSON_READ_ALLOWED = {
         'Commander 子执行准入账**不是产物**：'
         '`_service/commander_admissions.jsonl` 是 append-only 生命周期事件，'
         '需以 LF 作提交标记并关闭式解析；它不进来源账或 ARTIFACTS'),
-    'novel/agents/session_audit.py': (
+    'novel/llm/session_audit.py': (
         'commander / executor 会话审计**不是产物**：'
         '`_service/agent_sessions.jsonl` 是 append-only 事件流，'
         '只记 profile/session/usage/指纹与双轴终态，不进来源账或 ARTIFACTS；'
@@ -296,6 +296,10 @@ _JSON_READ_ALLOWED = {
     'novel/stages/stage2/analyze.py': (
         '只把 SessionAgentClient 已验证来源的内存 normalized_text 解码为原回答修复候选；'
         '这是已购模型 stdout 的格式诊断，不裸读正式产物；编译、证据、来源与正式写盘仍走 Store'),
+    'novel/stages/stage2/extract.py': (
+        '只读 `_service/runs` 下当前 blueprint run.json 的 request_policy 判别格，'
+        '用于拒绝直连 producer 接管已退役 agent 状态；不是正式产物读路，'
+        '正式蓝图/人物/Global 仍经 ArtifactStore'),
     'novel/stages/stage6/prepare_recovery.py': (
         '只解码已购回答验收记录中的内存 normalized_text，保留格式错误的原模型候选；'
         '来源 custody 由 SessionAgentClient 验证，正式 Prepare 仍由 producer 经 ArtifactStore 写入'),
@@ -304,7 +308,7 @@ _JSON_READ_ALLOWED = {
         '它们在 `_service/runs/<sid>/stage2/` 按书、run_id 关闭式恢复，读取后仍须重跑'
         '当前 schema/validator/scope/HARD；旧书内运行目录关闭式拒绝。'
         '单独成模块正是为了不给 extract.py/client.py 开裸 IO 豁免'),
-    'novel/llm/agent_runs.py': (
+    'novel/llm/run_journal.py': (
         '逐节点 executor 的通用 run/checkpoint/commit journal 不是正式产物；'
         '它只向 `_service/runs/<sid>/stageN/<run_id>/` 追加；关闭式拒绝旧书内'
         '`_stage*_runs/<run_id>/` 的恢复目录；当前来源重新闭合'
@@ -400,7 +404,7 @@ _WRITE_ALLOWED = {
         '只写 `_service/runs/<sid>/stage2/<run_id>/blueprint/`，旧书内路径只读；'
         '正式采纳仍回 producer 的完整编译/HARD/写盘口。'
         '单独成模块是为了不把 extract.py/client.py 整体加入写盘白名单'),
-    'novel/llm/agent_runs.py': (
+    'novel/llm/run_journal.py': (
         '逐节点 executor 的 provider-neutral 恢复核心只原子写 '
         '`_service/runs/<sid>/stageN/<run_id>/run.json`、append-only checkpoint revision 与 '
         'commit journal；旧书内 `_stage*_runs` 只读接入；'

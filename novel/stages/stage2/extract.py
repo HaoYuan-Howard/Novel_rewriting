@@ -2338,7 +2338,7 @@ def _run_chapter_requests(
     violations.sort(key=lambda row: (
         BlueprintScopeViolation.model_validate_json(row).batch, row))
     if checkpoints:
-        from novel.agents.session_client import AgentDeliveryUnavailable
+        from novel.errors import AgentDeliveryUnavailable
         from novel.llm import stage2_runs
         concrete_chapters = [ordinal for ordinal, _system, _user in concrete]
         recoverable = (

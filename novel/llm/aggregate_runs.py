@@ -17,7 +17,7 @@ from contracts.schema import artifact_spec, decode_artifact
 from novel import prov
 from novel.appendlog import process_append_lock
 from novel.errors import ArtifactUnreadable, ProvenanceRefused
-from novel.llm import agent_runs
+from novel.llm import run_journal as agent_runs
 from novel.run_identity import check_run_id
 
 

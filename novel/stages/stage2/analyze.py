@@ -29,10 +29,10 @@ from contracts.schema.knowledge import GlobalProvenance, KnowledgeGrounding
 from contracts.schema.stage1 import MainText
 from contracts.schema.stage2 import BlueprintCharacterProjection
 from novel import paths, prov, runtime_layout
-from novel.agents.session_client import agent_json_schema
+from novel.llm.json_schema_util import agent_json_schema
 from novel.appendlog import process_append_lock
 from novel.errors import GateBlocked, ProvenanceRefused, UpstreamMissing
-from novel.llm import agent_runs, stage2_global_runs
+from novel.llm import run_journal as agent_runs, stage2_global_runs
 from novel.llm.execution import canonical_sha256
 from novel.llm.ledger import ledger_path, read_strict_jsonl_objects
 from novel.llm.prompts import fill

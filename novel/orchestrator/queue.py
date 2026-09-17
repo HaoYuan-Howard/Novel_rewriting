@@ -182,7 +182,7 @@ class AnalyzeInitialRecoverySurface:
 def analyze_initial_recovery_surface(base, sid: str, source_run: str, *, code: str | None = None
                                      ) -> AnalyzeInitialRecoverySurface:
     from novel import work_units
-    from novel.llm import agent_runs, response_repair
+    from novel.llm import run_journal as agent_runs, response_repair
     from novel.llm.ledger import ledger_path
     from novel.stages.stage2 import analyze
     book = paths.resolve_novel_dir(base, sid)

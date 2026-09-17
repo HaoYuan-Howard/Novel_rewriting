@@ -1474,6 +1474,10 @@
   "tests/test_commander_receipt_recovery.py": {
    "layer": "unit_contract",
    "stages": []
+  },
+  "tests/test_c2b_import_gate.py": {
+   "layer": "unit_contract",
+   "stages": []
   }
  },
  "version": 1

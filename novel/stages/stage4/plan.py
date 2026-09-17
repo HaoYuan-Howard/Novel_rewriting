@@ -1535,7 +1535,7 @@ def _gate_and_write(ctx: RunContext, store: ArtifactStore, data: dict[str, Any],
 
 
 def _canonical_sha256(value: object) -> str:
-    from novel.llm.agent_runs import canonical_sha256
+    from novel.llm.execution import canonical_sha256
     return canonical_sha256(value)
 
 
@@ -1586,7 +1586,7 @@ def _finish_restored_agent_session(
         # 批次 4 章级池：live 章由 pool.finish 记录真实最后一轮；本进程
         # 零新 wire（全部 restored）时逐章幂等收口旧 session，语义与单
         # client 路一致，不把任一章的历史 provider id 冒充可 resume。
-        from novel.agents import session_audit as agent_session_audit
+        from novel.llm import session_audit as agent_session_audit
         closed_any = False
         if isinstance(source._pool, _PlanRecoveryPool):
             for restored in source._pool._restored.values():
@@ -1622,7 +1622,7 @@ def _finish_restored_agent_session(
         return False
     checkpoint = source.accepted_checkpoint(ctx.node)
     _live_code_guard(ctx, where=f'{ctx.node}.finish_restored_session')
-    from novel.agents import session_audit as agent_session_audit
+    from novel.llm import session_audit as agent_session_audit
     return agent_session_audit.finish_restored_session(
         ctx.novel_dir.parent,
         checkpoint,
@@ -2338,7 +2338,7 @@ def finalize_design_candidate(
                 chapter=adoption.chapter)
         return landed
 
-    from novel.llm import agent_runs, stage4_runs
+    from novel.llm import run_journal as agent_runs, stage4_runs
     chapter_contexts = _design_chapter_contexts(
         ctx, prepared, evaluation.responses.strategy)
     units = (
@@ -2941,7 +2941,7 @@ def _run_design_repair(
         candidate_sha256=_canonical_sha256(
             provisional.model_dump(by_alias=True, mode='json')),
     )
-    from novel.llm import agent_runs
+    from novel.llm import run_journal as agent_runs
     with stage4_runs.commit_ownership(ctx.novel_dir):
         _assert_design_current(ctx, prepared)
         stage4_runs.require_design_historical_adoption_file(ctx, history_sha)
@@ -3090,7 +3090,7 @@ def _run_design_replan(
     store = ArtifactStore(ctx)
     _same, current_file_sha = store.read_own_with_sha256(
         BlindCandidate, CANDIDATE_REL, require_current=True)
-    from novel.llm import agent_runs, stage4_runs
+    from novel.llm import run_journal as agent_runs, stage4_runs
     parent_run_id, parent_payload, inherited = \
         stage4_runs.resolve_committed_design_sources(
             ctx,
@@ -3604,7 +3604,7 @@ def run_design_repair_aggregate_recovery(
     if ctx.node != 'stage4.design':
         raise ProvenanceRefused(
             'design repair aggregate recovery 只接受 stage4.design')
-    from novel.llm import agent_runs, stage4_runs
+    from novel.llm import run_journal as agent_runs, stage4_runs
 
     # 先在短提交锁中只读冻结 source→producer owner；Agent source
     # 还必须在后续整个真正提交事务上持 stopped lease。不能只在
@@ -4133,7 +4133,7 @@ def _plan_finalization_payload(
         binding: EvidenceBinding, compiled: Mapping[str, Any] | None,
         *, hard_hits: tuple[str, ...] = (),
 ) -> dict[str, Any]:
-    from novel.llm import agent_runs
+    from novel.llm import run_journal as agent_runs
     status = binding.status
     if status == 'infeasible' and hard_hits:
         raise ProvenanceRefused(
@@ -4177,7 +4177,7 @@ def _plan_finalization_payload(
 def _assert_preserved_infeasible(
         ctx: RunContext, finalization: Mapping[str, Any],
 ) -> None:
-    from novel.llm import agent_runs
+    from novel.llm import run_journal as agent_runs
     expected = finalization.get('preserved_file_sha256s')
     if (not isinstance(expected, Mapping)
             or set(expected) != {REL, CTX_REL, _INVALID}):
@@ -4193,7 +4193,7 @@ def _assert_preserved_plan_hard(
         ctx: RunContext, finalization: Mapping[str, Any],
 ) -> None:
     """bound-HARD 只落问题稿，不得碰旧正式 plan/context。"""
-    from novel.llm import agent_runs
+    from novel.llm import run_journal as agent_runs
 
     expected = finalization.get('preserved_file_sha256s')
     if (not isinstance(expected, Mapping)
@@ -4209,7 +4209,7 @@ def _assert_preserved_plan_hard(
 def _assert_preserved_context(
         ctx: RunContext, finalization: Mapping[str, Any]) -> None:
     """stage4.plan 的任何写路都不得代写 stage4.context。"""
-    from novel.llm import agent_runs
+    from novel.llm import run_journal as agent_runs
     expected = finalization.get('preserved_file_sha256s')
     if not isinstance(expected, Mapping) or CTX_REL not in expected:
         raise ProvenanceRefused('stage4.plan finalization 缺 writer_context 保留指纹')
@@ -4373,7 +4373,7 @@ def _verify_plan_hard_delivery(
         finalization: Mapping[str, Any],
 ) -> tuple[EvidenceBinding, PlanChapters]:
     """bound-HARD 的 binding/INVALID typed readback 与旧正式 byte set 终验。"""
-    from novel.llm import agent_runs
+    from novel.llm import run_journal as agent_runs
 
     _assert_plan_current(ctx, prepared)
     if not expected_hits:
@@ -4439,7 +4439,7 @@ def _land_bound_hard_bundle(
         commit_spec: Any | None = None,
 ) -> PlanChapters:
     """按 prepared journal 补齐 ``binding + plan.INVALID``，绝不碰旧正式计划。"""
-    from novel.llm import agent_runs, stage4_runs
+    from novel.llm import run_journal as agent_runs, stage4_runs
 
     _assert_preserved_plan_hard(ctx, finalization)
     if binding_state == 'baseline':
@@ -4484,7 +4484,7 @@ def _land_bound_bundle(
     进程 kill 不会跑 Python rollback；那条路由 prepared journal 逐路径
     识别 baseline/expected 继续，所以二者不互相冒充。
     """
-    from novel.llm import agent_runs, stage4_runs
+    from novel.llm import run_journal as agent_runs, stage4_runs
     _assert_preserved_context(ctx, finalization)
     with prepared.store.history_transaction(BINDING_REL, REL):
         if binding_state == 'baseline':
@@ -4656,7 +4656,7 @@ def finalize_plan_candidate(
             chapter_adoptions(binding)
         return result
 
-    from novel.llm import agent_runs, stage4_runs
+    from novel.llm import run_journal as agent_runs, stage4_runs
     with stage4_runs.commit_ownership(ctx.novel_dir):
         _assert_plan_current(ctx, prepared)
         stage4_runs.refuse_foreign_commit_reservations(ctx)
@@ -6386,7 +6386,7 @@ class _PlanRecoveryPool:
 def _restore_plan_original_profile(ctx: RunContext) -> None:
     # 同 run 补尾只读取原不可变配置；不使用 settings 或当前默认 profile。
     from contracts.schema.orchestration import AgentProfile
-    from novel.llm import agent_runs
+    from novel.llm import run_journal as agent_runs
     path = paths.stage4_run_path(ctx.novel_dir, ctx.run_id, ctx.node) / 'run.json'
     if path.is_file():
         record = agent_runs._read_json(path, label='Stage4B 原配置')

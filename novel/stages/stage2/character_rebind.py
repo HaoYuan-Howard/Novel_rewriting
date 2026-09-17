@@ -15,7 +15,7 @@ from contracts.artifacts import (
 from contracts.schema.knowledge import GlobalGroundingView, KnowledgeGrounding
 from contracts.schema.characters import CharacterRegistry
 from contracts.schema.analyze import AnalyzeReceipt
-from novel.llm.agent_runs import canonical_sha256
+from novel.llm.execution import canonical_sha256
 from novel import paths
 from novel.errors import ProvenanceRefused, ArtifactUnreadable
 from novel.stages.stage2 import grounding

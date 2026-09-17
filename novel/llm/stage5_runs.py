@@ -43,10 +43,10 @@ from contracts.schema.stage5 import (
     reviewer_rewrite_successor_journal_sha256,
 )
 from novel import paths, prov
-from novel.agents import session_audit as agent_session_audit
+from novel.llm import session_audit as agent_session_audit
 from novel.appendlog import process_append_lock
 from novel.errors import ArtifactUnreadable, ProvenanceRefused
-from novel.llm import agent_runs, ledger as ledger_module
+from novel.llm import run_journal as agent_runs, ledger as ledger_module
 from novel.llm.transport import ChatResponse
 from novel.run_identity import check_run_id
 

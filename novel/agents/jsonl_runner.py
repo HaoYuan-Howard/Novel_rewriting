@@ -83,14 +83,6 @@ class StreamedProcess:
     unparsed_lines: int
 
 
-def decode_wire_json(text: str) -> Any:
-    """解析 CLI wire JSON，与 ``ArtifactStore`` 的盘上产物读取明确分界。
-
-    分层守卫把 ``json.load(s)`` 保留给 store；这里处理的是子进程 stdout，不是上游
-    artifact，因此用 decoder 的协议入口，避免两种证据源在代码形状上被混为一谈。
-    """
-    return json.JSONDecoder().decode(text)
-
 
 def _tagged_log(log: BinaryIO, label: str, payload: bytes) -> None:
     """把两条流明确分栏并即时 flush；空块不伪造一段日志。"""

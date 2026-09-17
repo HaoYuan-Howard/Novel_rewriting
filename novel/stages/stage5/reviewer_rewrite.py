@@ -38,7 +38,7 @@ from novel.errors import (
     ArtifactUnreadable, ProvenanceRefused, UpstreamMissing, UpstreamStale,
     UpstreamUnproven,
 )
-from novel.llm import agent_runs, stage5_runs
+from novel.llm import run_journal as agent_runs, stage5_runs
 from novel.run import RunContext
 from novel.stages.stage5 import closure, review
 from novel.store import ArtifactStore

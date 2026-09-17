@@ -26,12 +26,7 @@ from pydantic import BaseModel, ValidationError
 
 from contracts.schema.orchestration import AgentProfile
 from novel import prov, work_units
-from novel.agents import session_audit
 from novel.orchestrator.executor_capabilities import validate_profile
-from novel.agents.model_identity import (
-    AgentModelIdentityRefused, resolve_agent_model_identity,
-    resolve_ledger_model_identity, validate_checkpoint_model_identity,
-)
 from novel.agents import (
     AgentBusyError, AgentCommandError, AgentConfigurationError, AgentDriver,
     AgentError, AgentProbe, AgentRequest, AgentTurn, AgentUsage,
@@ -39,8 +34,18 @@ from novel.agents import (
     validate_agent_output_schema,
 )
 from novel.config import DEFAULT_BACKOFF_BASE, DEFAULT_MAX_RETRIES
-from novel.errors import ProvenanceRefused
+from novel.errors import AgentDeliveryUnavailable, ProvenanceRefused
+from novel.llm import session_audit
 from novel.llm.client import LlmFailed
+from novel.llm.json_schema_util import agent_json_schema
+from novel.llm.model_identity import (
+    AgentModelIdentityRefused, resolve_agent_model_identity,
+    resolve_ledger_model_identity, validate_checkpoint_model_identity,
+)
+from novel.llm.session_binding import (
+    SAME_RUN_RESUMABLE_AGENT_FAILURES, SESSION_PROTOCOL_VERSION,
+    agent_request_fingerprint, validate_agent_session_request_binding,
+)
 from novel.llm.json_text import normalize_json_text
 from novel.llm.prompts import missing_required_fields, required_top_level
 from novel.llm.transport import ChatResponse
@@ -50,28 +55,7 @@ from novel.run import RunContext
 
 
 M = TypeVar('M', bound=BaseModel)
-SESSION_PROTOCOL_VERSION = 'node-executor/v1'
 
-# 这些失败没有形成一份可交付模型响应；同 run 的 checkpoint 仍可在外部状态
-# 恢复后继续消费。未知 CLI/protocol 错误不在这里，避免把代码 bug 冒充网络波动。
-SAME_RUN_RESUMABLE_AGENT_FAILURES = frozenset({
-    'authentication', 'connection', 'provider_transient', 'rate_limit',
-    'server_error', 'timeout', 'usage_limit',
-})
-
-
-class AgentDeliveryUnavailable(LlmFailed):
-    """Agent 交付未形成；调用方可据 typed 字段决定是否保留同 run。"""
-
-    def __init__(
-        self, message: str, *, error_kind: str, attempts: int,
-        status: int | None, same_run_resumable: bool,
-    ) -> None:
-        super().__init__(message)
-        self.error_kind = error_kind
-        self.attempts = attempts
-        self.status = status
-        self.same_run_resumable = same_run_resumable
 
 # 恢复策略与会话隔离是一对冻结语义，不能只把新 policy 名字塞进 allowlist 后
 # 继续沿用 Stage2 的逐章含义。逐章写作、Stage6 的 A/B 判官，以及书级单节点
@@ -128,335 +112,6 @@ def _canonical_sha256(value: object) -> str:
         value, ensure_ascii=False, sort_keys=True,
         separators=(',', ':'), allow_nan=False,
     ).encode('utf-8'))
-
-
-def agent_request_fingerprint(
-    *,
-    profile: AgentProfile | Mapping[str, object],
-    subject_sha256: str,
-    provider_session_id: str | None,
-    system_sha256: str | None,
-    prompt_sha256: str,
-    schema_sha256: str,
-    purpose: str,
-    turn_index: int,
-) -> str:
-    """agent executor 每一轮真实请求指纹的唯一公式。"""
-    profile_payload = (
-        profile.model_dump() if isinstance(profile, AgentProfile)
-        else dict(profile)
-    )
-    return _canonical_sha256({
-        'protocol_version': SESSION_PROTOCOL_VERSION,
-        'profile': profile_payload,
-        'subject_sha256': subject_sha256,
-        'provider_session_id': provider_session_id,
-        'system_sha256': system_sha256,
-        'prompt_sha256': prompt_sha256,
-        'schema_sha256': schema_sha256,
-        'purpose': purpose,
-        'turn_index': turn_index,
-    })
-
-
-def validate_agent_session_request_binding(
-    events: Sequence[session_audit.AgentSessionEvent],
-    acceptance: Mapping[str, object],
-    *,
-    purpose: str,
-    profile: Mapping[str, object],
-    original_prompt_sha256: str,
-    original_schema_sha256: str,
-) -> session_audit.AgentSessionRecord:
-    """把 checkpoint 当前 session 的 prompt/schema/turn 绑回成本账。
-
-    正常首发的第 1 轮必须等于冻结原请求；只有新 session
-    继承了旧 checkpoint 轮次时，它的首轮才可是 recovery envelope。
-    无论哪一支，当前 session 每个 turn 都必须用生产同一公式复算
-    ledger request fingerprint；因而同时改 started/turn/acceptance SHA 也
-    不能自洽过闸。
-    """
-    session_run_id = acceptance.get('session_run_id')
-    matches = [
-        record for record in session_audit.fold(events)
-        if record.session_run_id == session_run_id
-    ]
-    if len(matches) != 1 or not matches[0].turns:
-        raise ProvenanceRefused(
-            f'{purpose}: accepted logical session 缺唯一可折叠 turn 链')
-    record = matches[0]
-    all_turns = list(record.turns)
-    accepted_index = acceptance.get('accepted_turn_index')
-    if not isinstance(accepted_index, int) or isinstance(accepted_index, bool):
-        raise ProvenanceRefused(f'{purpose}: accepted turn_index 不合法')
-    # acceptance 可合法指向较早的可物化候选；其后 malformed
-    # patch/parse/schema 失败的 turns 仍留在成本与 session 账，但不得被
-    # 硬塞进该 acceptance 的 attempt_links。
-    turns = [
-        turn for turn in all_turns
-        if isinstance(turn.turn_index, int) and turn.turn_index <= accepted_index
-    ]
-    if not turns:
-        raise ProvenanceRefused(
-            f'{purpose}: accepted turn 早于 current session 首轮')
-    indices = [turn.turn_index for turn in turns]
-    if any(not isinstance(index, int) or isinstance(index, bool) or index < 1
-           for index in indices):
-        raise ProvenanceRefused(f'{purpose}: current session turn_index 不合法')
-    numeric_indices = [int(index) for index in indices]
-    first_index = numeric_indices[0]
-    accepted_attempt = acceptance.get('attempt_id')
-    if (numeric_indices != list(range(first_index, accepted_index + 1))
-            or turns[-1].attempt_id != accepted_attempt):
-        raise ProvenanceRefused(
-            f'{purpose}: current session turns 与 accepted turn 不连续')
-
-    # trailing rejected turn 不属于该 acceptance，但仍在同一 logical
-    # subject/provider session 内；schema 因此对整条 session 恒定。
-    if any(turn.schema_sha256 != original_schema_sha256 for turn in all_turns):
-        raise ProvenanceRefused(
-            f'{purpose}: current session response schema 与冻结请求漂移')
-    if (first_index == 1
-            and turns[0].prompt_sha256 != original_prompt_sha256):
-        raise ProvenanceRefused(
-            f'{purpose}: 正常首发 stdin 与冻结原请求漂移')
-
-    links = acceptance.get('attempt_links')
-    recovery = acceptance.get('recovery_from_attempts')
-    if (not isinstance(links, list) or not isinstance(recovery, list)
-            or any(not isinstance(link, dict) for link in links)
-            or any(not isinstance(item, str) for item in recovery)):
-        raise ProvenanceRefused(
-            f'{purpose}: checkpoint 恢复链缺 attempt links')
-    link_ids = [link.get('attempt_id') for link in links]
-    current_ids = [turn.attempt_id for turn in turns]
-    if (any(not isinstance(item, str) or not item for item in link_ids)
-            or any(not isinstance(item, str) or not item for item in current_ids)
-            or len(link_ids) != len(set(link_ids))
-            or not set(current_ids).issubset(set(link_ids))):
-        raise ProvenanceRefused(
-            f'{purpose}: turn/recovery/attempt_links 与 current session 不闭合')
-    linked_turns = [
-        event for event in events
-        if event.kind == 'turn' and event.attempt_id in set(link_ids)
-    ]
-    linked_turn_ids = [event.attempt_id for event in linked_turns]
-    if (len(linked_turns) != len(link_ids)
-            or set(linked_turn_ids) != set(link_ids)):
-        raise ProvenanceRefused(
-            f'{purpose}: attempt_links 没有逐项联到唯一 session turn')
-    for linked_turn in linked_turns:
-        if linked_turn.requested_model != profile.get('model'):
-            raise ProvenanceRefused(
-                f'{purpose}: session turn requested model 与 resolved profile 漂移')
-        try:
-            identity = resolve_agent_model_identity(
-                profile, linked_turn.actual_model,
-                cli_version=linked_turn.cli_version,
-                require_driver_version=True,
-            )
-        except AgentModelIdentityRefused as exc:
-            raise ProvenanceRefused(
-                f'{purpose}: session turn 模型证据不成立：{exc}') from exc
-        if linked_turn.attempt_id == accepted_attempt \
-                and acceptance.get('model') != identity.model:
-            raise ProvenanceRefused(
-                f'{purpose}: checkpoint adopted model 与 accepted session turn 不闭合')
-    prior_ids = set(link_ids) - set(current_ids)
-    if len(prior_ids) != first_index - 1:
-        raise ProvenanceRefused(
-            f'{purpose}: checkpoint 历史 attempts 与新 session turn offset 不闭合')
-    if first_index > 1:
-        if (not prior_ids or not prior_ids.issubset(set(recovery))
-                or acceptance.get('request_mode') != 'agent_session_resume'):
-            raise ProvenanceRefused(
-                f'{purpose}: 非首轮 session 缺 dirty-checkpoint 恢复证据')
-        audit_prior_ids = {
-            event.attempt_id for event in events
-            if (event.kind == 'turn'
-                and event.session_run_id != session_run_id)
-        }
-        if not prior_ids.issubset(audit_prior_ids):
-            raise ProvenanceRefused(
-                f'{purpose}: dirty-checkpoint prior attempts 缺历史 session turn')
-    elif prior_ids:
-        raise ProvenanceRefused(f'{purpose}: 正常首发不应携带 prior session')
-
-    binding = acceptance.get('accepted_request')
-    system_sha256 = (
-        binding.get('system_sha256') if isinstance(binding, dict) else None)
-    provider_session_id = acceptance.get('provider_session_id')
-    subject_sha256 = acceptance.get('subject_sha256')
-    if (not isinstance(system_sha256, str)
-            or not isinstance(provider_session_id, str)
-            or not isinstance(subject_sha256, str)):
-        raise ProvenanceRefused(
-            f'{purpose}: checkpoint 缺 fingerprint 所需 session/subject 身份')
-    link_by_id = {str(link['attempt_id']): link for link in links}
-    for position, turn in enumerate(turns):
-        assert turn.turn_index is not None and turn.attempt_id is not None
-        assert turn.prompt_sha256 is not None and turn.schema_sha256 is not None
-        expected_fingerprint = agent_request_fingerprint(
-            profile=profile,
-            subject_sha256=subject_sha256,
-            provider_session_id=(None if position == 0 else provider_session_id),
-            system_sha256=(system_sha256 if position == 0 else None),
-            prompt_sha256=turn.prompt_sha256,
-            schema_sha256=turn.schema_sha256,
-            purpose=purpose,
-            turn_index=turn.turn_index,
-        )
-        # restore 时 CostLedger 尚未 claim prior attempts；先与 hash-bound
-        # checkpoint link 对账，调用方随后会 claim 并把每条 link 与盘上
-        # ledger 精确比较，两步合起来仍是真实成本账绑定。
-        linked_identity = link_by_id[turn.attempt_id]
-        if linked_identity.get('request_fingerprint') != expected_fingerprint:
-            raise ProvenanceRefused(
-                f'{purpose}: session turn 与 ledger request fingerprint 不闭合')
-    return record
-
-
-def _share_agent_enum_definitions(schema: dict[str, Any]) -> dict[str, Any]:
-    """完全相同的枚举载体只声明一次，保留全部约束与注解。
-
-    provider 的枚举数上限按整份 schema 累计。同一个 code/decision/kind 在每章
-    复制一次也会耗尽上限；这里按完整载体内容寻址复用，只替换叶子枚举节点，
-    不合并不同 pattern/范围/描述，也不把 enum 扩成自由字符串或内联引用目标。
-    """
-    counts: dict[str, int] = {}
-    bodies: dict[str, dict[str, Any]] = {}
-
-    def enum_key(node: object, *, names: bool) -> str | None:
-        if (names or not isinstance(node, dict) or 'enum' not in node
-                or any(key in node for key in (
-                    '$ref', '$defs', 'properties', 'items', 'anyOf'))):
-            return None
-        return json.dumps(node, ensure_ascii=False, sort_keys=True,
-                          separators=(',', ':'), allow_nan=False)
-
-    def collect(node: object, *, names: bool = False) -> None:
-        key = enum_key(node, names=names)
-        if key is not None:
-            counts[key] = counts.get(key, 0) + 1
-            assert isinstance(node, dict)
-            bodies[key] = node
-        if isinstance(node, dict):
-            for name, value in node.items():
-                collect(value, names=not names and name in ('$defs', 'properties'))
-        elif isinstance(node, list):
-            for value in node:
-                collect(value)
-
-    collect(schema)
-    shared = {
-        key: 'AgentSharedEnum_' + hashlib.sha256(key.encode('utf-8')).hexdigest()
-        for key, count in counts.items() if count > 1
-    }
-    if not shared:
-        return schema
-    existing = schema.get('$defs', {})
-    if not isinstance(existing, dict) or any(name in existing for name in shared.values()):
-        raise AgentConfigurationError('agent 枚举共享定义与原 $defs 身份冲突')
-
-    def replace(node: object, *, names: bool = False) -> Any:
-        key = enum_key(node, names=names)
-        if key in shared:
-            return {'$ref': '#/$defs/' + shared[key]}
-        if isinstance(node, dict):
-            return {
-                name: replace(value, names=not names and name in ('$defs', 'properties'))
-                for name, value in node.items()
-            }
-        if isinstance(node, list):
-            return [replace(value) for value in node]
-        return node
-
-    result = replace(schema)
-    result.setdefault('$defs', {}).update({name: bodies[key] for key, name in shared.items()})
-    return result
-
-
-def agent_json_schema(model_cls: type) -> dict:
-    """交给 agent CLI 的响应 JSON Schema。**全仓唯一构造口。**
-
-    ⚠ **必须剥掉 `discriminator`。** pydantic 为 discriminated union 发这一格
-    （Stage2 global 那份响应里就有 3 处：`KnowledgeEventResponse.subject`、
-    `RelationResponse.visibility`、`SecretResponse.setup`），而 Claude CLI 的
-    `--json-schema` 走 AJV **strict 模式**，遇到词表外的关键字直接拒收整份 schema：
-    `unknown keyword: "discriminator"` ⇒ CLI exit=1，**一次模型都没调就整节点终态**。
-    这是 2026-08-28 第一次用 main 的 agent 路真跑整书时当场撞到的第一堵墙。
-
-    ⚠ **剥掉它不放宽任何约束**：`discriminator` 只是给校验器的分支提示；
-    Pydantic 同时发出的 `oneOf` 归一成公共子集支持的 `anyOf`，联合分支本身一格没动；
-    单值 `const` 等价改写为单元素 `enum`。`default` 只是注解，wire 必须把对应
-    nullable/空集合键显式交回，所以删除注解并把每层 `properties` 全量写进
-    `required`。真正的判定权从来不在
-    provider 侧——响应回来仍要过 `novel/llm/client.py::judge_payload` 的四道闸，
-    其中 schema 那一道用的是 pydantic 模型本身，不是这份下发的 schema。
-    ⇒ 这里改的是「怎么把契约讲给 CLI 听」，不是「契约是什么」。
-
-    ``$ref`` 必须独占它所在的 schema object。Pydantic 会为命名类型引用补
-    ``title`` / ``description``，这在 JSON Schema 中合法，却会被 Codex 原生
-    strict schema 拒绝。只删除引用旁的这两种注解，保留命名 ``$defs`` 和引用，
-    不展开大闭集；其余 sibling 可能是业务约束，必须由公共预检关闭式拒绝，
-    不能跟着注解一起丢掉。完全相同的叶子枚举经内容寻址共用一份定义，避免
-    逐章重复的 code/decision/kind 膨胀成超过 provider 上限的枚举总数。
-
-    动态键 object 不能靠删关键字修成合法 schema：调用点必须先把 provider wire 设计成
-    显式键值行数组，再由 Pydantic 确定性还原为内部映射。归一完成后还要经过公共严格
-    子集预检；因此未来新增不兼容响应会在任何 Claude/Codex 子进程前显式失败。
-
-    ⚠ 归一在**构造口**而不是某个 driver 里：identity、`schema_sha256` 与真正发出去的
-    字节必须是同一份。放进 driver 会让账上记的 schema 与 wire 上的那份分家。
-    """
-    def normalize(node: object, *, names: bool = False) -> object:
-        if isinstance(node, dict):
-            if names:
-                return {
-                    key: normalize(value)
-                    for key, value in node.items()
-                }
-            if 'oneOf' in node and 'anyOf' in node:
-                raise AgentConfigurationError(
-                    'agent response schema 同层同时出现 oneOf/anyOf，无法等价归一')
-            if 'const' in node and 'enum' in node:
-                raise AgentConfigurationError(
-                    'agent response schema 同层同时出现 const/enum，无法等价归一')
-            out: dict[str, object] = {}
-            for key, value in node.items():
-                if key in ('default', 'discriminator'):
-                    continue
-                if '$ref' in node and key in ('title', 'description'):
-                    continue
-                if key == 'const':
-                    # OpenAI 的公开严格子集登记 enum，不登记 const；单值枚举与
-                    # Pydantic Literal 发出的 const 约束等价，Claude AJV 也接受。
-                    out['enum'] = [normalize(value)]
-                else:
-                    normalized_key = 'anyOf' if key == 'oneOf' else key
-                    out[normalized_key] = normalize(
-                        value,
-                        names=key in ('$defs', 'properties'),
-                    )
-            properties = out.get('properties')
-            type_value = out.get('type')
-            if (isinstance(properties, dict)
-                    and (type_value == 'object'
-                         or (isinstance(type_value, list)
-                             and 'object' in type_value))):
-                # OpenAI strict 要求所有键显式返回；nullable 用 anyOf/null 表达，
-                # 空列表也必须返回 []，不能靠省键触发 Pydantic default。
-                out['required'] = list(properties)
-            return out
-        if isinstance(node, list):
-            return [normalize(item) for item in node]
-        return node
-
-    schema = normalize(model_cls.model_json_schema(by_alias=True))
-    assert isinstance(schema, dict)
-    schema = _share_agent_enum_definitions(schema)
-    validate_agent_output_schema(schema)
-    return schema
 
 
 _CHECKPOINT_ACCEPTANCE_FIELDS = frozenset({
