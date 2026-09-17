@@ -302,7 +302,7 @@ def check_global(global_g: dict[str, Any] | None, main_text: list[dict[str, Any]
 
 
 def check_characters(registry: dict[str, Any], main_text: list[dict[str, Any]]) -> list[Outcome]:
-    from novel.stages.stage2.character_checks import check_characters as run
+    from novel.stages.stage2.characters.checks import check_characters as run
     return run(registry, main_text)
 
 
@@ -321,7 +321,7 @@ def blueprint_projection_blockers(*, global_g, main_text):
 
 
 def check(*, global_g, blueprints, main_text, characters=None) -> list[Outcome]:
-    from novel.stages.stage2.character_checks import CHARACTER_RULES
+    from novel.stages.stage2.characters.checks import CHARACTER_RULES
     from novel.stages.stage2.blueprint.checks import check_plot
     context = _Ctx(global_g, blueprints, main_text, characters=characters)
     rows = [*_alignment(context), *check_global(global_g, main_text, characters=characters)]

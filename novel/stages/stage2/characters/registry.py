@@ -40,7 +40,7 @@ from novel.llm.transport import ChatResponse
 from novel.report import build
 from novel.report.findings import Outcome
 from novel.run import RunContext
-from novel.stages.stage2 import character_checks as checks
+from novel.stages.stage2.characters import checks
 from novel.stages.stage2.core_evidence import compile_evidence_refs, compile_manual_evidence_refs
 from novel.stages.stage2.global_evidence_candidates import GlobalEvidenceCandidateTable
 from novel.stages.stage2.normalize import normalize_characters

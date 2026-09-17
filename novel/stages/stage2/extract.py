@@ -3086,7 +3086,7 @@ def run_renormalize(ctx: RunContext) -> CheckReport:
 
     if ctx.node == 'stage2.global':
         from novel.llm import stage2_global_runs
-        from novel.stages.stage2.character_rebind import prepare_if_changed
+        from novel.stages.stage2.characters.rebind import prepare_if_changed
 
         with stage2_global_runs.mutation_ownership(ctx):
             source_rel = (

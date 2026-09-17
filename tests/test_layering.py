@@ -866,7 +866,7 @@ _CROSS_STAGE_DEEP_GRANDFATHER = frozenset({
     ('novel/orchestrator/queue.py', 'novel.stages.stage2.analyze'),
     ('novel/orchestrator/queue.py', 'novel.stages.stage2.blueprint.diagnostics'),
     ('novel/orchestrator/queue.py', 'novel.stages.stage4.phase_state'),
-    ('novel/orchestrator/state.py', 'novel.stages.stage2.character_rebind'),
+    ('novel/orchestrator/state.py', 'novel.stages.stage2.characters.rebind'),
     ('novel/orchestrator/state.py', 'novel.stages.stage5.measure'),
     ('novel/orchestrator/state.py', 'novel.stages.stage5.review'),
     ('novel/orchestrator/workflow_transition.py', 'novel.stages.stage2.shared.character_refs'),

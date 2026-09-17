@@ -767,7 +767,7 @@ def stage2_knowledge_rebind_needed(
     book = paths.find_novel_dir(base, sid)
     if book is None:
         return False
-    from novel.stages.stage2.character_rebind import prepare_if_changed
+    from novel.stages.stage2.characters.rebind import prepare_if_changed
     try:
         ctx = readonly_ctx(book, 'stage2.global', prov.code_version())
         return prepare_if_changed(ArtifactStore(ctx), STAGE2_GLOBAL_GROUNDING) is not None

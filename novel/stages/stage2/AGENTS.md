@@ -51,6 +51,7 @@ stage2/
 |---|---|
 | blueprint | `novel/stages/stage2/blueprint/` |
 | analyze | `novel/stages/stage2/analyze/`（`purchase` / `recovery` / `draft_recovery`） |
+| characters | `novel/stages/stage2/characters/`（`registry` / `checks` / `rebind`） |
 | shared | `novel/stages/stage2/shared/`（`paragraphs` / `character_refs`） |
 
 过渡期旧模块名可为薄 re-export shim，删除条件见
