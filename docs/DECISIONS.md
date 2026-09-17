@@ -7,6 +7,7 @@
 
 | 裁决时间 | 保留的决定与缘由 | 证据边界 / 当前落点 |
 |---|---|---|
+| 2026-09-17 | **干净绞杀式重构开工**：根 `AGENTS.md` 改为架构不变量（I-\*/S-\*）+ 目标角色词典（orchestrator/compiler/validator/repository/semantic unit）；**Agent** 仍仅指整书代跑编排。`docs/REQUIREMENTS.md` 活动账重置：旧 TODO-21～54 退出活动面（全文留 Git），新编号 STR-\* 管逐节点绞杀、adapter 与删除条件。产品语义默认保持全自动单模式直至另裁；`kind:"legacy"` 仍是直连 LLM 稳定 wire 名，≠ legacy 实现。术语与目录/符号在绞杀中统一到目标名，不以旧名继续扩展 | 根 `AGENTS.md`；`docs/REQUIREMENTS.md` STR-01～05；旧 TODO 见 `git log -- docs/REQUIREMENTS.md` |
 | 2026-09-17 | **stage6.prepare 迁入 PROFILED_LLM_RUNS**：空 flags 付费走 legacy profile（`enable_model_fallback=False`），避免无 profile 默认 client 静默回退 Pro；system 用 `with_json_shape` 满足 DeepSeek `json_object`。agent 生产臂仍退役。`fujun_extract` prepare/hook 已落盘并 auto approve c1 | `novel/orchestrator/nodes.py::PROFILED_LLM_RUNS`；`novel/stages/stage6/prepare.py` |
 | 2026-09-17 | **Stage4 ActorCatalog 同 surfaces 多绑定**：null `presentation_ref` 遇到携入多条同 surfaces 绑定时取最早原章，异 surfaces 仍拒。renormalize 压 null 后的 fujun ch7 char_002 | `actors.ActorCatalog.resolve` |
 | 2026-09-17 | **Stage4 端点同拍幂等**：`required_endpoints` 对同拍重复的 `ended`（`ended_at` 与 `supersedes` 同时声明）幂等放行，异拍仍拒。fujun ch5 `st05_02` | `plot_placements.required_endpoints` |

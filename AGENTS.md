@@ -23,33 +23,118 @@ agent 负责维护工程上下文、实现与验证，关键取舍和结果直�
 产品为全自动单模式：上传即授权开跑，Stage 页只读监控；Stage6 保留三候选改选（不阻塞
 stage7）。确定性调度、执行、恢复与交付检查由运行代码负责。
 
-**术语不变量**：文中 **Agent** 仅指整书代跑编排（`/agent/runs`、RunSupervisor）；禁止指
-LLM executor、CLI driver、session 或 provider。现役唯一 executor 是直连 LLM（wire
-`kind:"legacy"`）；UI 称「模型执行配置」。Agent CLI executor 已退役。
+## 目标角色词典
+
+绞杀式重构以语义最确切的名字为准；代码与文档逐步统一，不以历史别名继续扩展。
+
+| 目标名 | 职责 | 过渡期可能仍出现的旧名 |
+|---|---|---|
+| **orchestrator** | 只编排节点与许可，不承载业务语义 | RunSupervisor、queue、operator |
+| **compiler** | 确定性转换与归一；不做新的语义推断 | producer 内的 compile / renormalize |
+| **validator** | 只验证并报告；不偷偷修复或改写输入 | judge 机械臂、check、preflight |
+| **repository** | 只处理持久化与路径；不决定业务状态 | store、paths |
+| **semantic unit** | LLM 负责的语义判断与生成 | LLM executor / profiled run |
+| **Agent** | 仅指整书代跑编排（`/agent/runs`） | 禁止指 executor、CLI driver、session、provider |
+
+现役付费执行唯一走直连 LLM。wire 字段 `kind:"legacy"` 是**稳定传输名**，不是「旧实现」；
+UI 称「模型执行配置」。禁止把「不得依赖 legacy implementation」误读成禁用该 wire。
+
+## 架构不变量
+
+等级：`HARD` 必须遵守；`GOAL` 是绞杀目标，过渡例外须在 `docs/REQUIREMENTS.md` 登记删除条件。
+产品行为、R/Q/B 与可执行守卫仍以 `docs/BACKEND_CONTRACT.md` 与 `contracts/` 为准；
+本表管代码形状、依赖与真相源。冲突先核实，改产品语义或公开契约前取得用户裁决。
+
+### 职责与依赖
+
+| 编号 | 等级 | 规则 |
+|---|---|---|
+| I-01 | HARD | 一个模块有一个主要职责；禁止把「读输入 + LLM + schema 修复 + 落盘 + 状态更新」缠在同一抽象层。允许薄编排按固定阶段调用纯函数。 |
+| I-02 | HARD | orchestrator 只编排；compiler 只做确定性转换；validator 只验证；repository 只持久化。 |
+| I-03 | HARD | 依赖单向；禁止循环依赖。上层可依赖下层抽象，下层禁止反向 import 上层。 |
+| I-04 | HARD | Stage N 不得 import Stage N+1 实现。跨 Stage 只经正式 contract / artifact，禁止直接调用对方内部函数。 |
+| I-05 | HARD | shared/common 不得反向依赖具体 Stage。禁止为复用一个函数把本应独立的模块耦合起来。 |
+
+### 数据契约与真相源
+
+| 编号 | 等级 | 规则 |
+|---|---|---|
+| I-10 | HARD | Stage 间接口以 schema/contract 为边界，不以 Python 内部对象为边界。 |
+| I-11 | HARD | 每类正式产物有唯一 canonical schema；禁止多模块各自定义「几乎一样」的同一领域模型。 |
+| I-12 | HARD | 下游不得依赖上游 debug、prompt 临时字段或 LLM reasoning 中间字段。 |
+| I-13 | HARD | schema 变化必须显式版本化，或提供登记过的迁移层；本仓无隐式通用迁移。 |
+| I-14 | HARD | optional 字段不得充当隐式控制流。 |
+| I-15 | HARD | 可机械推导的派生字段由 compiler 计算，不让 LLM 重复生成。 |
+| I-16 | HARD | 每类信息只有一个 authoritative source。cache、compiled view、index、debug artifact 皆为派生物，不得反向覆盖 canonical。 |
+| I-17 | HARD | 同一状态不得由数据库、JSON 文件与内存状态各自决定。成本权威是 `<base>/_service/ledger.jsonl`；其它统计只能派生。 |
+
+### 语义、确定性与副作用
+
+| 编号 | 等级 | 规则 |
+|---|---|---|
+| I-20 | HARD | LLM 负责语义判断；能用排序、映射、聚合、引用解析、schema normalization 完成的工作不得交给 LLM。 |
+| I-21 | HARD | LLM 不生成可机械推导的 ID、ordinal、统计量、路径、hash。compiler 不得根据自然语言猜测缺失语义。 |
+| I-22 | HARD | semantic output 与 canonical output 必须区分。 |
+| I-23 | HARD | 核心 domain 函数尽量 pure。文件写入、网络、LLM API 等副作用集中在明确边界。 |
+| I-24 | HARD | import 时禁止执行业务副作用；helper 禁止偷偷落盘；validator 禁止修改输入对象。 |
+| I-25 | HARD | 一个 artifact 有明确唯一 writer。 |
+
+### 执行、失败与可观测
+
+| 编号 | 等级 | 规则 |
+|---|---|---|
+| I-30 | HARD | Stage 应支持 idempotent rerun。确定性段：相同正式输入 + 相同配置 → 语义等价正式输出。付费语义段允许在相同请求身份下历史采用，不要求逐字复现。 |
+| I-31 | HARD | 重试不得产生重复业务实体。partial failure 必须定位到明确 node/item，不得污染整条 pipeline 状态。 |
+| I-32 | HARD | Stage 状态机必须显式。盘上「文件是否存在」只作 I/O 事实，不得单独充当多分支业务状态。 |
+| I-33 | HARD | 业务逻辑不得依赖调用顺序之外的隐藏全局状态。 |
+| I-34 | HARD | contract violation fail fast。禁止 `except Exception: pass`。未知失败保持 unknown，不得吞成通过。 |
+| I-35 | HARD | fallback 必须显式、可观测。repair 是独立步骤（FREE entry / recovery），不得混入 validator。 |
+| I-36 | HARD | mechanical validation 与 semantic judgment 分离。错误须保留 stage/node/item/context，不能只有字符串 traceback。 |
+| I-37 | HARD | 昂贵节点须可观测：输入、输出、provider/model、耗时、token/cost、failure kind。logging 不得改变业务行为。 |
+| I-38 | HARD | observability metadata 不进入核心领域 schema，除非本身是领域事实。debug artifact 不得成为下游正式依赖。 |
+
+### 产品跨模块边界（现役）
+
+| 编号 | 等级 | 规则 |
+|---|---|---|
+| I-40 | HARD | 章唯一键是阅读序整数 `chapter_ordinal`；输出章号等于源章号；不合并、不删除、不拆分、不重排。 |
+| I-41 | HARD | 契约单向流入运行时；产物 I/O 经 repository（现 `novel/store.py`），路径经 `novel/paths.py`。服务只写 `_service/`，由 CLI 子进程改产物；服务不能发付费模型请求；前端消费唯一后端判定。 |
+| I-42 | HARD | unknown、未运行、缺失、合法空值、失败与通过必须分开；未经标定的语义保持 `unver` 或人工裁决。新增硬闸须同时提供免费重验、人工编辑或等价恢复入口。 |
+| I-43 | HARD | 付费与正文外发分别授权；付费命令显式 `--yes`。缓存命中单列，未知不作零，reasoning 不重复计入。 |
+
+### 测试
+
+| 编号 | 等级 | 规则 |
+|---|---|---|
+| I-50 | HARD | contract test 保护 Stage 边界；unit test 保护 deterministic compiler / validator；stage / regression 保护跨 Stage 行为；golden set 保护成书质量。 |
+| I-51 | HARD | 测试不得依赖真实线上 LLM，除非明确属于 integration / evaluation / golden 套件。 |
+| I-52 | HARD | 不能为让旧测试通过而恢复已废弃的架构耦合。新架构的 contract 优先于旧实现细节。 |
+
+### 绞杀式重构闸门
+
+进度、迁移批次、adapter 清单与删除条件只写在 `docs/REQUIREMENTS.md`，不进本文件。
+
+| 编号 | 等级 | 规则 |
+|---|---|---|
+| S-01 | HARD | 新代码不得依赖 legacy **实现**内部结构；可经登记过的 compatibility 层消费旧盘面。 |
+| S-02 | HARD | legacy 可暂时适配新 contract；新系统不得反向适配 legacy 内部结构。 |
+| S-03 | HARD | compatibility 逻辑必须集中；禁止兼容逻辑散落各模块。每个 adapter 须有明确删除条件。 |
+| S-04 | HARD | 禁止为迁移方便新增双写真相源。禁止新旧两条主路径永久并存。 |
+| S-05 | HARD | 新实现成为 authoritative path 后，旧 path 进入 deprecation → removal，禁止继续扩展功能。 |
 
 ## 开工与协作
 
 1. 先看 `git status --short`，保留已有改动；只处理本任务涉及的内容。
 2. 用户已指定的任务直接推进；未指定时从 `docs/REQUIREMENTS.md` 的未完成项选取，不另造活动计划。
-3. 现役依据依次为 `docs/BACKEND_CONTRACT.md`、`contracts/` 与 `docs/schema/`、`web/AGENTS.md`。实现只是证据；冲突先核实，改变产品语义、公开契约或架构归属前取得用户裁决。
-   `docs/DECISIONS.md` 解释历史缘由，不覆盖现役契约；`docs/LESSONS.md` 按问题或编号检索。
-4. 同一行为的契约、producer、consumer、恢复、API/UI、测试和文档同批闭合；完成要检查真实消费者与
+3. 现役依据依次为根不变量、`docs/BACKEND_CONTRACT.md`、`contracts/` 与 `docs/schema/`、`web/AGENTS.md`。
+   实现只是证据；冲突先核实。`docs/DECISIONS.md` 解释历史缘由，不覆盖现役契约；
+   `docs/LESSONS.md` 按问题或编号检索。
+4. 同一行为的契约、producer/compiler、consumer、恢复、API/UI、测试和文档同批闭合；完成要检查真实消费者与
    最终盘面，不能只凭函数存在、编译或单测通过。
 
-自动跑书由确定性 RunSupervisor 推进；Stage 页只读监控，Stage6 保留三候选改选
-（不阻塞下游）。历史受托 Commander/Reviewer（含 `<immutable-workpack>`）与人工逐 Stage
-过闸模式已退役，材料只供存量解码。Executor 使用独立 prompt/schema，不加载工程 AGENTS、
-运维手册或额外盘上小说来补充材料。
-
-## 跨模块边界
-
-- 章唯一键是阅读序整数 `chapter_ordinal`，输出章号等于源章号；不合并、不删除、不拆分、不重排。
-- 契约单向流入运行时；产物 I/O 只经 `novel/store.py`，路径只经 `novel/paths.py`。服务只写
-  `_service/`，由 CLI 子进程修改产物；服务不能发付费模型请求，前端消费唯一后端判定。
-- unknown、未运行、缺失、合法空值、失败与通过必须分开；未经标定的语义保持 `unver` 或人工裁决。
-  新增硬闸要同时提供免费重验、人工编辑或等价恢复入口，不用重买结果掩盖恢复缺口。
-- 付费与正文外发分别授权，沿用会话中已获授权的范围；付费命令显式 `--yes`。成本只认
-  `<base>/_service/ledger.jsonl`，缓存命中单列，未知不作零，reasoning 不重复计入。
+自动跑书由确定性 orchestrator 推进；Stage 页只读监控，Stage6 保留三候选改选（不阻塞下游）。
+历史受托 Commander/Reviewer（含 `<immutable-workpack>`）与人工逐 Stage 过闸模式已退役，材料只供存量解码。
+semantic unit 使用独立 prompt/schema，不加载工程 AGENTS、运维手册或额外盘上小说来补充材料。
 
 ## 测试选择与批次验收
 
@@ -64,58 +149,33 @@ LLM executor、CLI driver、session 或 provider。现役唯一 executor 是直�
 
 stage 测试覆盖现役 stage0、stage1、stage2、stage4～stage7；stage3 已退役，不补造占位流程。
 stage 测试验证过程正确性，golden set 验证最终结果正确性与阅读质量，两者不能相互替代。
-回归是对已有用例的选择与复用，不要求为四层复制用例或按目录机械隔离。
-实际入口：pytest 的 `--test-layer` / `--test-stage` / `--affected` / `--changed` 选择工程测试，
-`python -m tests.golden` 独立执行 golden set；分类目录表、覆盖证据与用法统一见 `tests/README.md`。
+实际入口：pytest 的 `--test-layer` / `--test-stage` / `--affected` / `--changed`；
+`python -m tests.golden` 独立执行 golden set。细则见 `tests/README.md`。
 
-golden set 源语料固定使用 `E:\practice_group\Novel_rewriting\Test_data\Workbench`，按现有工具约定通过
-`NOVEL_DATA` / `NOVEL_CORPUS` 显式提供；生成产物由 `NOVEL_OUTPUT` 指向独立输出根，不能覆盖源语料。
-golden set 用于整个项目的最终质量验收；日常小改和单个 stage 重构不默认运行。冻结样本、质量评价与
-现有 corpus 检查的关系见 `tests/README.md`；付费与正文外发仍分别沿用已获授权的范围。
-
-批次是同一目标的一组相关修改，可以有多个检查点提交；提交、局部修复交付、单个 stage 重构交付、
-同一本书再次续跑，都不单独触发全仓回归或 golden set。
+golden set 源语料固定使用 `E:\practice_group\Novel_rewriting\Test_data\Workbench`，经
+`NOVEL_DATA` / `NOVEL_CORPUS` 显式提供；产物由 `NOVEL_OUTPUT` 指向独立输出根，不能覆盖源语料。
+日常小改与单个 stage 重构不默认运行 golden set。
 
 | 改动范围 | 本轮验证 |
 |---|---|
-| 说明、注释、测试记录，未改可执行契约 | `git diff --check` 与相关文档校验；不跑完整回归或前端四件套 |
-| 边界明确的小改、局部 bug | 先复现目标反例，只跑受影响的定向单元 / contract 测试；涉及阶段行为、消费或恢复路径时补对应 stage 测试 |
-| 单个 stage 重构、提示或阶段职责变化 | 跑该 stage 的单元 / contract 与 stage 测试，再按实际依赖补受影响 stage、API/UI 和恢复消费者；上游可复用不可变 fixture，不默认重跑所有 stage |
-| R/Q/B、schema、节点、API 形状 | 形状稳定后跑契约 §9.5 五文件及受影响消费链；涉及前端时补其验证，契约继续变化才重跑五文件 |
-| 前端或其消费的 API | 受影响测试与 typecheck；数据缝、路由变化补 seams，构建配置、依赖变化补 build |
-| 整个项目最终验收 | 先完成工程回归，再使用 golden set 评价最终成书；分别报告过程验证和结果质量结论 |
+| 说明、注释、测试记录，未改可执行契约 | `git diff --check` 与相关文档校验 |
+| 边界明确的小改、局部 bug | 先复现目标反例，只跑受影响的定向单元 / contract；涉及阶段行为、消费或恢复时补 stage 测试 |
+| 单个 stage 绞杀或职责变化 | 该 stage 的 unit/contract 与 stage 测试，再补受影响下游、API/UI 与恢复消费者 |
+| R/Q/B、schema、节点、API 形状 | 形状稳定后跑契约 §9.5 五文件及受影响消费链；涉及前端时补其验证 |
+| 前端或其消费的 API | 受影响测试与 typecheck；数据缝/路由变化补 seams；构建配置变化补 build |
+| 整个项目最终验收 | 先工程回归，再 golden set；分别报告过程验证与结果质量 |
 
-选择范围前检查 producer、consumer、共享模块与恢复路径，说明受影响范围；不能只按文件名或修改行数选测试。
-已有测试无法覆盖目标职责时补最小有效反例，不把缺失覆盖当作无需验证。
-
-含生产代码、可执行契约或测试基础设施变化的批次，在以下门槛按最终改动集合跑一次默认非 corpus 回归：
-
-- 整个项目最终工程验收，或新工作流首次进行全链工程验收、需要建立完整基线。
-- 合入／覆盖 main、冻结发布或性能实验候选；同时完成前端 test/build/seams/typecheck。
-- 共享持久化、身份、调度、额度、权限、测试基础设施的影响不能由定向测试闭合，或出现范围不明的跨模块失败。
-
-启动完整回归前说明触发条件和定向尚未覆盖的范围；集中修复已知问题，失败后先定向修复，批次稳定再补整轮。
-不得并行启动共享同一 basetemp/cache 的 pytest。已通过且相关内容未变的检查不重复执行。
-
-真实验收中途的局部修复，在受影响验证通过、固定代码并遵循旧 owner 停止／新 epoch 规则后，
-可以继续已授权验收；原配置续跑不视为新发布，付费、外发与追加额度的授权边界不变。
-最终切 main 或发布前仍须闭合整批门槛。
-
-记录测试层级、实际覆盖范围、命令、结果与代码基线；完整回归后只有说明变化可复用结果，生产代码再变时
-旧结果只作基线，新增定向结果单列。现有 corpus 检查验证冻结语料与产物的工程约束，不能单凭其通过声称
-golden set 质量验收通过。普通回归、corpus 与真实模型质量／性能结论分别报告，不删现役职责反例、缩验收分母或放宽判据。
-退役及等价重复测试可以按 `tests/README.md` 的删除规则清理，同步登记与消费者，并说明分母变化。
+选择范围前检查 producer/compiler、consumer、共享模块与恢复路径。含生产代码、可执行契约或测试基础设施变化的批次，在整项目验收、合入 main/冻结发布、或共享基础设施影响无法由定向测试闭合时，按最终改动集合跑一次默认非 corpus 回归；涉及前端时补 test/build/seams/typecheck。
+不得并行启动共享同一 basetemp/cache 的 pytest。不得删现役职责反例、缩验收分母或放宽判据来提速。
 
 ## 文档职责
 
-- 开发方式由根及所属目录 AGENTS 维护；仅在存在独立开发/验证流程时新增指南，不按目录数量铺文件。
-- 关键行为、跨层约束和守卫归属在 `docs/BACKEND_CONTRACT.md`；字段及消费形状在 `docs/schema/` 和代码。
-  修改行为时同步负责文档，保留对应反例，不在契约里重复字段手册和退役过程。
-- 未完成事项在 `docs/REQUIREMENTS.md`；仍影响选择的理由在 `docs/DECISIONS.md`，复用经验在 `docs/LESSONS.md`。
-  临时进度不进 AGENTS，已完成过程保留 Git，不另建同义计划或交接账。
-- 操作方法在 `docs/OPERATIONS.md`，产品/界面与人工验收职责在 `web/AGENTS.md`，测试分层与 corpus 规程在
-  `tests/README.md`。只更新对应负责文档，不复制多套命令或状态。
-- 引用使用稳定编号或 `仓内路径::符号`；删改文档先查代码读取、链接与测试，修复全部实际消费者。
+- 开发方式与架构不变量由根及所属目录 AGENTS 维护；仅在存在独立开发/验证流程时新增指南。
+- 可执行行为、跨层守卫归属在 `docs/BACKEND_CONTRACT.md`；字段及消费形状在 `docs/schema/` 和代码。
+- 绞杀进度、迁移批次、adapter 与删除条件在 `docs/REQUIREMENTS.md`；历史裁决在 `docs/DECISIONS.md`；
+  复用经验在 `docs/LESSONS.md`。临时进度不进 AGENTS。
+- 操作方法在 `docs/OPERATIONS.md`；测试分层与 corpus 在 `tests/README.md`。
+- 引用使用稳定编号（I-\* / S-\* / R-\*）或 `仓内路径::符号`。
 
 ## 交付与维护
 
