@@ -20,7 +20,7 @@ from dataclasses import dataclass, replace
 from functools import wraps
 
 from contracts.artifacts import (
-    STAGE1_MAIN_TEXT, STAGE2_CHARACTERS, STAGE2_GLOBAL_GROUNDING, STAGE4_PLAN_CHAPTERS,
+    STAGE1_MAIN_TEXT, STAGE2_CHARACTERS, STAGE2_GLOBAL_GROUNDING, STAGE4_BLIND_CANDIDATE,
     STAGE4_WRITER_CONTEXT, STAGE6_HOOK, STAGE7_NAME_MAP, STAGE7_NAME_MAP_EDIT,
 )
 
@@ -33,7 +33,7 @@ from contracts.schema.common import Finding
 from contracts.schema.api import NameDecisionLine, Stage7ApprovalWorkpack
 from contracts.schema.report import CheckReport
 from contracts.schema.characters import CharacterRegistry
-from contracts.schema.stage4 import PlanChapters, WriterContext
+from contracts.schema.stage4 import BlindCandidate, WriterContext
 from contracts.schema.stage5 import ContextSource
 from contracts.schema import encode_artifact
 from contracts.schema.stage7 import (
@@ -64,7 +64,7 @@ REL = STAGE7_NAME_MAP
 EDIT = STAGE7_NAME_MAP_EDIT
 MAIN_TEXT = STAGE1_MAIN_TEXT
 GLOBAL_GROUNDING = STAGE2_GLOBAL_GROUNDING
-PLAN_CHAPTERS = STAGE4_PLAN_CHAPTERS
+PLAN_CHAPTERS = STAGE4_BLIND_CANDIDATE
 WRITER_CONTEXT = STAGE4_WRITER_CONTEXT
 HOOK = STAGE6_HOOK
 
@@ -263,7 +263,7 @@ class _Upstreams:
         gg = stage2_grounding.read(store)
         characters = store.read(CharacterRegistry, STAGE2_CHARACTERS)
         main_text = store.read(paths_model(MAIN_TEXT), MAIN_TEXT)
-        plan_art = store.read(PlanChapters, PLAN_CHAPTERS)
+        plan_art = store.read(BlindCandidate, PLAN_CHAPTERS)
         writer_context = store.read(WriterContext, WRITER_CONTEXT)
         plan = plan_art.model_dump(by_alias=True)
 
@@ -278,8 +278,7 @@ class _Upstreams:
         # ⚠ `MainText` 顶层是**数组**（`RootModel`），所以要走 `.root`。
         self.source_text: str = '\n'.join(c.text or '' for c in main_text.root)
 
-        # Stage7 只消费当前 Stage4 契约。计划提供章数分母，writer_context 提供
-        # 来源边；缺失或 schema 不合法都由 ArtifactStore 显式终止。
+        # Stage7 章集分母改读 Design（STR-03-S4）；writer_context 提供来源边。
         self.planned_chapters = len(plan_art.output_chapters)
         self.ctx_code = writer_context.provenance.code
 

@@ -376,7 +376,9 @@ class PlotSubjectRef(_PresentedSubjectRef):
 class PresentationDelivery(StrictModel):
     scene_ref: SceneId
     # 单场整体呈现显式 null；分场必须给出指令，不是子剧情正文。
-    presentation_instruction: NonEmpty | None
+    presentation_instruction: NonEmpty | None = None
+    delivery_focus: NonEmpty | None = None
+    delivery_ref: str | None = Field(default=None, pattern=r'^d\d{2,}_\d{2,}$')
     evidence_refs: list[EvidenceId] = Field(min_length=1)
     source_context_refs: list[str] = Field(default_factory=list)
 
@@ -394,8 +396,9 @@ class BeatPlacement(StrictModel):
     def _distributed(self) -> Self:
         unique([r.scene_ref for r in self.deliveries], '节点的场景映射')
         if len(self.deliveries) > 1 and any(
-                r.presentation_instruction is None for r in self.deliveries):
-            raise ValueError('分场呈现必须说明每场承担的任务')
+                (r.presentation_instruction is None and r.delivery_focus is None)
+                for r in self.deliveries):
+            raise ValueError('分场呈现必须说明每场承担的任务（delivery_focus 或 presentation_instruction）')
         return self
 
 

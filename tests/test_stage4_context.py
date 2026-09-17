@@ -9,11 +9,15 @@ from typing import get_origin, get_type_hints
 
 import pytest
 
+from contracts.artifacts import STAGE4_BLIND_CANDIDATE, STAGE4_EVIDENCE_BINDING
 from contracts.schema.stage4 import CtxScene, WriterContext
 from novel.errors import RefusedByStructure
+from novel.orchestrator.state import readonly_ctx
+from novel.store import ArtifactStore
 from novel.stages.stage4.context import (
     Assembly, build_writer_context,
 )
+from novel.stages.stage4.plan import compile_plan_view
 from novel.core.naming import display_names, display_names_at, name_collisions
 from tests import corpus
 
@@ -49,7 +53,16 @@ def _load_corpus() -> None:
                   for sid, raw in characters.items()}
     GG = {sid: KnowledgeGrounding.model_validate(raw).model_dump(by_alias=True)
           for sid, raw in knowledge.items()}
-    PLANS = _by('stage4/plan_chapters.json')
+    from novel import prov
+    candidates = _by('stage4/blind_candidate.json')
+    bindings = _by('stage4/evidence_binding.json')
+    PLANS = {}
+    for sid in sorted(set(candidates) & set(bindings)):
+        book_dir = next(a.book_dir for a in corpus.iter_artifacts()
+                        if a.source_id == sid and a.rel == STAGE4_BLIND_CANDIDATE)
+        ctx = readonly_ctx(corpus.corpus_root() / book_dir, 'stage4.context', prov.code_version())
+        _plan, plan_raw = compile_plan_view(ArtifactStore(ctx))
+        PLANS[sid] = plan_raw
     CTX = _by('stage4/writer_context.json')
     BOOKS = sorted(set(MAIN) & set(BPS) & set(GG) & set(PLANS) & set(CTX))
     assert set(BOOKS) <= set(LINKS), '当前语料缺少正式知识关联，不能跳过披露验收'
@@ -150,7 +163,10 @@ def test_the_assembler_reproduces_every_context_on_disk():
 def test_the_rebuilt_context_passes_the_carrier():
     """重组出来的那份要**过得了新契约**——差异 0 只说明与盘上一样，不说明它合法。"""
     prov = {'code': '0' * 10, 'root_clean_sha1': '0' * 40,
-            'inputs': {'stage4/plan_chapters.json': {'file': '1' * 10, 'consumed': '2' * 10}}}
+            'inputs': {
+                STAGE4_BLIND_CANDIDATE: {'file': '1' * 10, 'consumed': '2' * 10},
+                STAGE4_EVIDENCE_BINDING: {'file': '3' * 10, 'consumed': '4' * 10},
+            }}
     for sid in BOOKS:
         asm = build_writer_context(PLANS[sid], GG[sid], BPS[sid], MAIN[sid],
                                    knowledge_links=LINKS[sid], characters=CHARACTERS[sid])

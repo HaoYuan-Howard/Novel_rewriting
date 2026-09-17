@@ -250,6 +250,11 @@ STAGE5_CLOSED_EXEMPT_FLAGS: Final = (
     '--adopt-residual', '--validate-edit', '--rebind-review',
 )
 
+#: 历史 Agent CLI 测试/恢复栈仍消费的 driver 与 effort 取值面；现役写入只走 legacy。
+AgentDriver = Literal['claude-code', 'claude-code-glm', 'codex']
+AgentReasoningEffort = Literal['none', 'low', 'medium', 'high', 'xhigh', 'max']
+AgentExecutionMode = str
+
 #: 常用 executor 配置（``PipelineAgentProfiles``）在盘上的三态；与整书代跑
 #: ``AgentRun`` 无关。唯一发布口仍是 ``GET /api/agent/capabilities``（路径保留，
 #: C3 起只回 legacy providers 面）与 ``/settings/agent-profiles``。
@@ -2201,8 +2206,7 @@ NODES: Final[dict[str, NodeSpec]] = {
                                          '--apply-edit', '--apply-binding',
                                          '--actor', '--reason',
                                          '--response-repair'),
-                                  produces=(artifact_paths.STAGE4_EVIDENCE_BINDING,
-                                            artifact_paths.STAGE4_PLAN_CHAPTERS),
+                                  produces=(artifact_paths.STAGE4_EVIDENCE_BINDING,),
                                   operator_redo='canonical'),
     # ⚠ `flags=()` 在这一格是【终态】不是待定：本节点**本身**就是那个动作
     #   `stage4.context` 本身就是该动作，因此不再另设同义 flag。
@@ -2425,6 +2429,9 @@ LLM_EXECUTOR_NODES: Final = (
     'stage6.prepare', 'stage6.hook',
     'stage7.rename',
 )
+#: 历史 Agent session 栈与 ``LLM_EXECUTOR_NODES`` 同面；测试/恢复仍引用旧名。
+AGENT_EXECUTOR_NODES: Final = LLM_EXECUTOR_NODES
+AgentAvailability = Literal['ready', 'missing', 'unknown', 'unauthenticated']
 
 #: `(节点, 触发 flag)` → 这条跑法**额外**必填的 flag。`NodeSpec.required_flags` 的补集：
 #: 那一列管无条件必填，这张表管「跟着另一条跑法才必填」。

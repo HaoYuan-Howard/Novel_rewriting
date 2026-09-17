@@ -272,17 +272,18 @@ def _legacy_ghosts(artifacts: list[ArtifactState]) -> list[str]:
 
 
 def planned_chapters(store: ArtifactStore) -> list[int] | None:
-    """计划里的输出章号。**读不回来就返回 `None`**（不是空列表）。
+    """Design 正式产物中的输出章号。**读不回来就返回 `None`**（不是空列表）。
 
-    ⚠ 这两个返回值不许混：`[]` 是「计划里一章都没有」（那是一份坏计划），
-    `None` 是「我们不知道该有几章」。stage5 的完成度整个挂在这个区别上。
+    STR-03-S4：章集分母改读 BlindCandidate / presentation graph，不再依赖
+    已退役的 ``plan_chapters.json``。
     """
     try:
-        plan, _raw = store.read_own(ARTIFACTS[STAGE4_PLAN_CHAPTERS],
-                                    STAGE4_PLAN_CHAPTERS)
+        from contracts.artifacts import STAGE4_BLIND_CANDIDATE
+        design, _raw = store.read_own(ARTIFACTS[STAGE4_BLIND_CANDIDATE],
+                                      STAGE4_BLIND_CANDIDATE)
     except (ArtifactUnreadable, UpstreamMissing):
         return None
-    out = getattr(plan, 'output_chapters', None)
+    out = getattr(design, 'output_chapters', None)
     if out is None:
         return None
     return sorted(int(c.output_ordinal) for c in out)

@@ -4,9 +4,9 @@
 stage4.py —— S-07「计划 ↔ 写作上下文」那一屏（`GET /api/novels/:sid/stage4/:o`）。
 
 【三态，`04_delivery.md:133` 钉死的那一条】
-  · 计划在盘上 ⇒ 真计划 + 盘上 ctx（ctx 缺席/读不回 ⇒ 右半边 `null`，
-    `ctx_state` 说明处境——计划这一侧不陪葬）；
-  · 计划不在 ⇒ **恒等基线**：`identity_plan` + `build_writer_context`
+  · Design + bound Grounding 在盘上 ⇒ 内存编译计划视图 + 盘上 ctx（ctx 缺席/读不回
+    ⇒ 右半边 `null`，`ctx_state` 说明处境——计划这一侧不陪葬）；
+  · 尚无正式 Design/Grounding ⇒ **恒等基线**：`identity_plan` + `build_writer_context`
     同一对纯函数**现算不落盘**——「如果计划什么都不改，写手手里会有什么」。
     与 `--identity` 那条跑法共用内核，view 不写第二个组装器；
   · 恒等也算不出（stage1/stage2 缺）⇒ 404（`UpstreamMissing`）。
@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from contracts.artifacts import (
     STAGE1_MAIN_TEXT, STAGE2_CHAPTER_BLUEPRINTS, STAGE2_GLOBAL_GROUNDING,
-    STAGE4_EVIDENCE_BINDING, STAGE4_PLAN_CHAPTERS, STAGE4_WRITER_CONTEXT,
+    STAGE4_BLIND_CANDIDATE, STAGE4_EVIDENCE_BINDING, STAGE4_WRITER_CONTEXT,
 )
 
 import os
@@ -30,7 +30,7 @@ from contracts.schema.api import (
 from contracts.schema.stage1 import MainText
 from contracts.schema.stage2 import ChapterBlueprints, GlobalGrounding
 from contracts.schema.stage4 import (
-    CtxChapter, EvidenceBinding, PlanChapters, WriterContext,
+    CtxChapter, EvidenceBinding, WriterContext,
 )
 from novel import paths, prov
 from novel.errors import ArtifactUnreadable, UpstreamMissing, NovelError, SourceConflict
@@ -46,7 +46,8 @@ from novel.stages.stage5.measure import chapter_basis
 from novel.store import ArtifactStore, readonly_snapshot_memo
 
 NODE = 'stage4.plan'
-PLAN_REL = STAGE4_PLAN_CHAPTERS
+PLAN_REL = STAGE4_BLIND_CANDIDATE
+BINDING_REL = STAGE4_EVIDENCE_BINDING
 CTX_REL = STAGE4_WRITER_CONTEXT
 MAIN_TEXT = STAGE1_MAIN_TEXT
 BLUEPRINTS = STAGE2_CHAPTER_BLUEPRINTS
@@ -71,6 +72,7 @@ def _stage4_view(novel_dir: Path, ordinal: int, code: str) -> Stage4View:
     store = ArtifactStore(readonly_ctx(novel_dir, NODE, code))
 
     plan_state = artifact_state(store, PLAN_REL)
+    binding_state = artifact_state(store, BINDING_REL)
     ctx_state = artifact_state(store, CTX_REL)
     unavailable = None
     blueprint_art, blueprint_raw = store.read_own(ChapterBlueprints, BLUEPRINTS)
@@ -80,31 +82,31 @@ def _stage4_view(novel_dir: Path, ordinal: int, code: str) -> Stage4View:
         for row in blueprints['blueprints']
     }
 
-    if plan_state.exists:
-        # 在而读不回 ⇒ `ArtifactUnreadable` 一路上抛成 409——「坏了」不是「没跑」。
-        plan_art, _raw = store.read_own(PlanChapters, PLAN_REL)
-        # rows / 章详情 / subject 必须由同一个已读入的 plan 快照派生。
-        # 不另读一次路径，否则计划在两次读之间被替换时，
-        # 屏幕会把旧 rows 冒充成新 subject 的审批表面。
-        binding, _binding_raw = store.read_own(
-            EvidenceBinding, STAGE4_EVIDENCE_BINDING)
-        if binding.status != 'bound':
-            raise ArtifactUnreadable(
-                '正式 Plan 的最终结构审阅面要求 status=bound EvidenceBinding')
-        from novel.orchestrator.approvals import _structure_snapshot_from_artifacts
-        try:
-            snapshot = _structure_snapshot_from_artifacts(
-                store, (plan_art, _raw), (binding, _binding_raw),
-                (blueprint_art, blueprint_raw))
-        except NovelError as exc:
-            structure_subject = None
-            unavailable = str(exc)
+    if plan_state.exists and binding_state.exists:
+        binding, _binding_raw = store.read_own(EvidenceBinding, BINDING_REL)
+        if binding.status == 'bound':
+            from novel.stages.stage4.plan import compile_plan_view
+            from novel.orchestrator.approvals import _structure_snapshot_from_artifacts
+            plan_art, plan_raw = compile_plan_view(store)
+            try:
+                snapshot = _structure_snapshot_from_artifacts(
+                    store, (plan_art, plan_raw), (binding, _binding_raw),
+                    (blueprint_art, blueprint_raw))
+            except NovelError as exc:
+                structure_subject = None
+                unavailable = str(exc)
+            else:
+                structure_subject = snapshot.subject_sha256
+            identity = False
+            plan_prov = plan_art.provenance
+            ctx_chapters, ctx_prov = _ctx_from_disk(store)
         else:
-            structure_subject = snapshot.subject_sha256
-        plan_raw = plan_art.model_dump(by_alias=True)
-        identity = False
-        plan_prov = plan_art.provenance
-        ctx_chapters, ctx_prov = _ctx_from_disk(store)
+            plan_raw, ctx_chapters = _identity(store, blueprints)
+            structure_subject = None
+            unavailable = '证据绑定尚未 bound，尚无正式已审计划'
+            identity = True
+            plan_prov = None
+            ctx_prov = None
     else:
         plan_raw, ctx_chapters = _identity(store, blueprints)
         structure_subject = None

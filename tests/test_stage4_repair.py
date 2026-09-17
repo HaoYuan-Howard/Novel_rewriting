@@ -8,8 +8,8 @@ from types import SimpleNamespace
 import pytest
 from pydantic import ValidationError
 
-from contracts.schema.stage4 import PlanProvenance
-from novel.errors import TerminalState
+from contracts.schema.stage4 import EvidenceBinding, PlanProvenance
+from novel.errors import TerminalState, UnsupportedRunMode
 from novel.llm.client import LlmClient
 from novel.stages.stage4 import plan
 
@@ -51,71 +51,26 @@ def test_plan_provenance_has_no_legacy_paid_chapter_repair_surface():
     assert compiled.evidence_binding_sha256 == '3' * 64
 
 
-def test_apply_edit_is_a_free_human_round_and_clears_a_b_lineage(monkeypatch):
-    """人工修订吃 v4 业务形；同闸重判，不伪造一次模型修复。"""
-    edit = SimpleNamespace(model_dump=lambda **_kwargs: {'edited': True})
-
-    class Store:
-        @staticmethod
-        def exists(rel: str) -> bool:
-            return rel in {'stage4/plan_edit.json', plan.REL}
-
-        @staticmethod
-        def read(_model, rel: str):
-            assert rel == 'stage4/plan_edit.json'
-            return edit
-
-        @staticmethod
-        def read_own(_model, rel: str):
-            assert rel == plan.REL
-            return object(), {}
-
-    captured: dict[str, object] = {}
-
-    class Ctx:
-        novel_dir = SimpleNamespace()
-
-        @staticmethod
-        def free_provenance(model_cls, **kwargs):
-            captured['model_cls'] = model_cls
-            captured['free_kwargs'] = kwargs
-            return 'FREE-PROVENANCE'
-
-    monkeypatch.setattr(plan, 'ArtifactStore', lambda _ctx: Store())
-    monkeypatch.setattr(plan.paths, 'edit_rel', lambda *_args: 'stage4/plan_edit.json')
-    monkeypatch.setattr(plan, '_Upstreams', lambda *_args: object())
-
-    def gate(_ctx, _store, data, _up, *, provenance, archive=False):
-        captured.update(data=data, provenance=provenance, archive=archive)
-        return 'REPORT'
-
-    monkeypatch.setattr(plan, '_gate_and_write', gate)
-
-    assert plan.run_apply_edit(Ctx()) == 'REPORT'
-    assert captured['model_cls'] is PlanProvenance
-    assert captured['free_kwargs'] == {
-        'origin': 'human',
-        'blind_candidate_sha256': None,
-        'evidence_binding_sha256': None,
-    }
-    assert captured['provenance'] == 'FREE-PROVENANCE'
-    assert captured['archive'] is True
+def test_apply_edit_is_retired_after_plan_chapters_cutover():
+    """STR-03-S4：正式 plan_chapters 退役后 `--apply-edit` 关闭。"""
+    with pytest.raises(UnsupportedRunMode, match='plan_chapters 已退役'):
+        plan.run_apply_edit(object())
 
 
 def test_revalidate_promotes_only_plan_without_llm_or_context(monkeypatch):
     """HARD 问题稿的恢复口是当前判据 + hash-bound 人工提升。"""
     provenance = SimpleNamespace(model_dump=lambda **_kwargs: {'origin': 'compiled'})
-    artifact = SimpleNamespace(provenance=provenance)
+    artifact = SimpleNamespace(provenance=provenance, status='bound')
     promoted: list[tuple[str, object, str, str, object]] = []
 
     class Store:
         @staticmethod
         def exists(rel: str) -> bool:
-            return rel == plan._INVALID
+            return rel in {plan._INVALID, plan.CANDIDATE_REL}
 
         @staticmethod
         def read_own(_model, rel: str):
-            assert rel in {plan._INVALID, plan.REL}
+            assert rel == plan._INVALID
             return artifact, {'candidate': True}
 
         @staticmethod
@@ -125,6 +80,10 @@ def test_revalidate_promotes_only_plan_without_llm_or_context(monkeypatch):
     ctx = object()
     monkeypatch.setattr(plan, 'ArtifactStore', lambda _ctx: Store())
     monkeypatch.setattr(plan, '_Upstreams', lambda *_args: object())
+    monkeypatch.setattr(
+        plan, 'compile_plan_view',
+        lambda *_args, **_kwargs: (object(), {'output_chapters': []}),
+    )
     monkeypatch.setattr(plan, '_judge', lambda *_args, **_kwargs: [])
     monkeypatch.setattr(
         plan, 'run_context',
@@ -135,5 +94,5 @@ def test_revalidate_promotes_only_plan_without_llm_or_context(monkeypatch):
         ctx, actor='reviewer', reason='修正了闭合失败',
     ) == 'CURRENT-REPORT'
     assert promoted == [(
-        plan.REL, plan.PlanChapters, 'reviewer', '修正了闭合失败', artifact,
+        plan.BINDING_REL, EvidenceBinding, 'reviewer', '修正了闭合失败', artifact,
     )]

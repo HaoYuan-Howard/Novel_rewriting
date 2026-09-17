@@ -284,20 +284,18 @@ def stage4_plan_ready(base: str | os.PathLike[str], sid: str) -> AdmissionCheck:
 def stage4_context_ready(base: str | os.PathLike[str], sid: str) -> AdmissionCheck:
     """stage4.context（免费）组装前的统一机械准入。
 
-    B 的证据绑定与正式计划可读、当前、无未恢复 INVALID，且当前候选没有
-    fresh typed infeasible 终态——组装只认一份可执行的 bound 计划。
-    「机械检查过」由计划落盘闸保证：正式 `plan_chapters.json` 在盘即代表
-    它已通过生成/提升时同一把联合 HARD（`.INVALID` 只在闸门拦下时存在）。
-    逐章 all-accept 结构票已随人工闸退役。
+    STR-03-S4：正式计划 ``plan_chapters.json`` 已退役。准入只要求 Design 候选与
+    Stage4B 证据绑定可读、当前、无未恢复 INVALID，且无 fresh typed infeasible。
+    Context 从 Design + Grounding + SourceView 确定性编译 Writer IR。
     """
-    from contracts.artifacts import STAGE4_EVIDENCE_BINDING, STAGE4_PLAN_CHAPTERS
+    from contracts.artifacts import STAGE4_BLIND_CANDIDATE, STAGE4_EVIDENCE_BINDING
     from novel.orchestrator.approvals import projection_code
     from novel.stages.stage4 import current_infeasible_binding
     blocking: list[str] = []
     rows = _artifact_rows(_overview(base, sid))
     for rel, label in (
+        (STAGE4_BLIND_CANDIDATE, 'Stage4A Design 候选'),
         (STAGE4_EVIDENCE_BINDING, 'Stage4B 证据绑定'),
-        (STAGE4_PLAN_CHAPTERS, 'Stage4B 正式计划'),
     ):
         blocking.extend(_artifact_blocking(rows, rel, label=label))
     if blocking:

@@ -31,8 +31,7 @@ from contracts.invariants import NODES
 from contracts.schema import InputEdge, Provenance, Usage
 from contracts.schema.common import FreeProvenance, LlmProvenance
 from contracts.schema.orchestration import (
-    LegacyLlmProfile, ExecutorBackend, LegacyExecutorBackend,
-    LegacyLlmProfile,
+    AgentProfile, ExecutorBackend, LegacyExecutorBackend, LegacyLlmProfile,
 )
 from contracts.artifacts import STAGE0_CLEAN_TEXT
 from novel import paths, prov, run_identity
@@ -69,7 +68,7 @@ class RunContext:
 
     #: 旧节点 agent 实现的只读/构造兼容投影。``__post_init__`` 会与
     #: ``executor_backend`` 归一并校验；顶层分流不得再以本格是否为空判模式。
-    executor_profile: LegacyLlmProfile | None = None
+    executor_profile: LegacyLlmProfile | AgentProfile | None = None
 
     #: 这一次跑的跨进程联结键。它只进运行时账/观测/恢复状态，
     #: 不进正式 provenance、cache key 或 node flags。手搭 context 也必须

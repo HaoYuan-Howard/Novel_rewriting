@@ -4,18 +4,14 @@
 plan.py —— Stage4 v4 的三个节点。策略/逐章设计、按歧义章绑定、确定性上下文组装。
 
   · `stage4.design`（付费，`R-5`）→ `stage4/blind_candidate.json`
-  · `stage4.plan`（付费，`R-5`）  → `stage4/evidence_binding.json` + 编译计划
+  · `stage4.plan`（付费，`R-5`）  → `stage4/evidence_binding.json`
   · `stage4.context`（0 成本，`R-6`）→ `stage4/writer_context.json`
 
 【落盘闸门照退役 Stage3 的成例，不照 stage6】本层一次产**一份** ⇒ **任何一条 hard 就 `.INVALID`**。
 （stage6 一次产三条候选，拦的是「一条干净候选都没有」。）配套 `--revalidate`。
 
-⚠⚠ **`writer_context._provenance.inputs` 里那条 `stage4/plan_chapters.json` 是全仓
-唯一一处「自己这一层的产物记成上游边」**，而它是**故意的**：`context_link` 那条 HARD
-问的就是「写手手里这份上下文，是不是照盘上这份计划组的」。
-代价已经付过一次——某轮 23 章成稿与盘上任何一版上下文都配不上（匹配 1/23），
-**配对关系永久丢失**。
-⇒ 所以组装那一条走 `store.read(...)` 而不是 `read_own(...)`：它读的确实是**别的节点**产的东西。
+STR-03-S4：正式 ``plan_chapters.json`` 已退役。Context 的 provenance 绑定
+Design + Grounding；内存 PlanChapters 仅作 HARD/组装编译视图。
 """
 from __future__ import annotations
 
@@ -127,8 +123,9 @@ BLUEPRINTS = STAGE2_CHAPTER_BLUEPRINTS
 EDIT = STAGE4_PLAN_EDIT
 DESIGN_EDIT = STAGE4_BLIND_CHAPTER_EDIT
 
-#: 被闸门拦下的那一份。**从 `REL` 派生，不手写第二个字符串。**
-_INVALID = paths.invalid_of(REL)
+#: STR-03-S4：正式计划退役后，业务 HARD / 恢复面挂在绑定侧 INVALID。
+#: ``REL`` 仅作退役路径常量（拒读/历史对照），禁止再作为正式写盘目标。
+_INVALID = paths.invalid_of(BINDING_REL)
 _CANDIDATE_INVALID = paths.invalid_of(CANDIDATE_REL)
 
 
@@ -323,31 +320,30 @@ class PlanCandidateEvaluation:
 # ── 判定与报告 ──────────────────────────────────────────────────────────────
 
 def _ctx_link(store: ArtifactStore, plan_raw: dict[str, Any]) -> tuple[str, str]:
-    """写作上下文照的是不是盘上这份计划。**四态。**
+    """写作上下文照的是不是盘上 Design + Grounding。**四态。**
 
-    ⚠ 判据在 `checks.check` 那一侧，这里只负责把**事实**摆出来：
-    上下文在不在场 · 它记没记这条边 · 记的那个指纹与盘上这份计划对不对得上。
+    STR-03-S4：``plan_chapters.json`` 退役后，context_link 核对候选与绑定两边。
     """
     if not store.exists(CTX_REL):
         return 'missing', f'{CTX_REL} 不在盘上 —— 写手还没有可吃的上下文。跑 `stage4.context` 组一份'
     try:
         ctx_art, _raw = store.read_own(WriterContext, CTX_REL)
     except Exception as e:                                  # noqa: BLE001
-        return 'unknown', f'{CTX_REL} 读不回来（{type(e).__name__}）⇒ 说不清它照的是哪一版计划'
-    edge = (ctx_art.provenance.inputs or {}).get(paths.input_key(REL))
-    if edge is None:
-        return 'unknown', (f'{CTX_REL} 的来源账里没有 `{REL}` 这条边 ⇒ **说不清**它照的是哪一版计划。'
-                           f'⚠ 这条边是全仓唯一一处「自己这一层的产物记成上游」，'
-                           f'它存在的全部理由就是回答这个问题')
-    if not store.exists(REL):
-        return 'unknown', f'{REL} 不在盘上 ⇒ 拿不到指纹，无从比对'
-    now = prov.fingerprint_bytes(store._read_bytes(REL))
-    was = edge.file if hasattr(edge, 'file') else (edge or {}).get('file')
-    if was != now:
-        return 'stale', (f'{CTX_REL} 照的是**另一版**计划（它记的是 `{was}`，'
-                         f'盘上这份是 `{now}`）⇒ 两处各存一份 goals 已经分家。'
-                         f'跑 `stage4.context` 重建，0 成本')
-    return 'ok', '对得上'
+        return 'unknown', f'{CTX_REL} 读不回来（{type(e).__name__}）⇒ 说不清它照的是哪一版 Design/Grounding'
+    inputs = ctx_art.provenance.inputs or {}
+    for rel, label in ((CANDIDATE_REL, 'Design'), (BINDING_REL, 'Grounding')):
+        key = paths.input_key(rel)
+        edge = inputs.get(key)
+        if edge is None:
+            return 'unknown', (f'{CTX_REL} 的来源账里没有 `{rel}` 这条边 ⇒ **说不清**它照的是哪一版 {label}')
+        if not store.exists(rel):
+            return 'unknown', f'{rel} 不在盘上 ⇒ 拿不到指纹，无从比对'
+        now = prov.fingerprint_bytes(store._read_bytes(rel))
+        was = edge.file if hasattr(edge, 'file') else (edge or {}).get('file')
+        if was != now:
+            return 'stale', (f'{CTX_REL} 照的是**另一版** {label}（它记的是 `{was}`，'
+                             f'盘上这份是 `{now}`）⇒ 跑 `stage4.context` 重建，0 成本')
+    return 'ok', f'{CTX_REL} 与盘上 Design+Grounding 一致'
 
 
 def _ctx_source_line(store: ArtifactStore) -> str:
@@ -454,14 +450,14 @@ def _accounting_of(prov_d: dict) -> dict:
 
 def _report(ctx: RunContext, store: ArtifactStore, outcomes: list[Outcome],
             prov_d: dict, *, judged_rel: str | None = None) -> CheckReport:
-    """⚠ **新鲜度判的是「这份报告在说哪个文件」**，而那不总是 `REL`。
+    """⚠ **新鲜度判的是「这份报告在说哪个文件」**，而那不总是正式 binding。
 
     第一次付费跑就被闸门拦下时，盘上**只有 `.INVALID`**（正式稿本来就还不存在）。
-    此时拿 `REL` 去判新鲜度会抛「不在盘上」——于是 `--revalidate` 这条唯一的
-    0 成本出路在**最需要它的那一刻**跑不动。（这条 bug 是 stage7 上撞出来、
-    回头发现 stage6 同形的，本层从一开始就照着写。）
+    此时拿正式 binding 去判新鲜度会抛「不在盘上」——于是 `--revalidate` 这条唯一的
+    0 成本出路在**最需要它的那一刻**跑不动。
     """
-    judged_rel = judged_rel or (REL if store.exists(REL) else _INVALID)
+    judged_rel = judged_rel or (
+        BINDING_REL if store.exists(BINDING_REL) else _INVALID)
     return build(
         sid=ctx.sid, node=ctx.node, freshness=store.freshness(judged_rel),
         outcomes=outcomes, accounting=_accounting_of(prov_d),
@@ -472,27 +468,30 @@ def _report(ctx: RunContext, store: ArtifactStore, outcomes: list[Outcome],
 # ── 七条路 ──────────────────────────────────────────────────────────────────
 
 def run_check_only(ctx: RunContext) -> CheckReport:
-    """0 成本复检盘上那份计划。**不写盘、不发请求。**
+    """0 成本复检当前 Design+Grounding 编译视图。**不写盘、不发请求。**
 
-    ⚠ 计划读不回来时**照常抛**（载体拒收）——盘上真有这么一本：
-    它的 `plan_chapters.json` 根本没有 `_provenance`，因为 0 成本提升路把来源账整个丢了。
-    **不许静默降级成一份「PASS」**：那份产物存在的意义就是提醒人这条路会丢账。
-
-    ⚠⚠ **正式稿不在时判活动 `.INVALID`**（照退役 Stage3 的成例）。首跑就被落盘闸拦下时
-    盘上只有 `.INVALID`，而本层的 `.INVALID` **不带 findings**（schema 里没有这个字段）
-    ⇒ 此前那一刻全链没有任何只读入口能拿到「错在哪几条」：终态只给 rule id，
-    `--check-only` 直接 exit 2，人只能回去读 `checks.py` 自己复算判据。
-    报告第一节会打「⚠ 判的这一份是 .INVALID 稿」，不会把它冒充成正式结论。
-    两份并存（修复稿被驳回）时仍判正式稿——那才是下游在消费的那一份。
+    STR-03-S4：正式计划退役；有正式 binding 时编译内存计划视图再判；
+    仅有绑定侧 INVALID 时用 INVALID binding 编译后判。
     """
     store = ArtifactStore(ctx)
-    judged = REL if store.exists(REL) else _INVALID
+    judged = BINDING_REL if store.exists(BINDING_REL) else _INVALID
     if not store.exists(judged):
-        raise UpstreamMissing(f'{REL} 与 {_INVALID} 都不在盘上——先跑 stage4.plan')
-    art, raw = store.read_own(PlanChapters, judged)
+        raise UpstreamMissing(
+            f'{BINDING_REL} 与 {_INVALID} 都不在盘上——先跑 stage4.plan')
+    binding, _raw = store.read_own(EvidenceBinding, judged)
     up = _Upstreams(ctx, store)
-    return _report(ctx, store, _judge(store, raw, up, with_ctx_link=False),
-                   art.provenance.model_dump(by_alias=True), judged_rel=judged)
+    if binding.status != 'bound':
+        return _report(
+            ctx, store, [],
+            binding.provenance.model_dump(by_alias=True),
+            judged_rel=judged)
+    if judged == _INVALID and not store.exists(CANDIDATE_REL):
+        raise UpstreamMissing(f'{CANDIDATE_REL} 不在盘上——无法编译计划视图')
+    _plan, plan_raw = compile_plan_view(
+        store, binding=binding if judged == _INVALID else None)
+    return _report(
+        ctx, store, _judge(store, plan_raw, up, with_ctx_link=False),
+        binding.provenance.model_dump(by_alias=True), judged_rel=judged)
 
 
 def _design_strategy_user(projection: Mapping[str, Any]) -> str:
@@ -1399,6 +1398,45 @@ def _assert_budget_basis(up: _Upstreams) -> None:
             f'再回来跑 stage4.plan。尚未调用 LLM')
 
 
+def compile_plan_view(
+        store: ArtifactStore,
+        *,
+        binding: EvidenceBinding | None = None,
+) -> tuple[PlanChapters, dict[str, Any]]:
+    """STR-03-S4：从 Design + Grounding 内存编译 PlanChapters 视图，不落盘。
+
+    ``binding`` 可传入 INVALID 侧读出的绑定；缺省读正式 ``evidence_binding.json``。
+    """
+    candidate, _ = store.read_own(BlindCandidate, CANDIDATE_REL)
+    if binding is None:
+        binding, _ = store.read_own(EvidenceBinding, BINDING_REL)
+    if binding.status != 'bound':
+        raise TerminalState('证据绑定非 bound 终态，不能编译计划视图')
+    blueprints = store.read(ChapterBlueprints, BLUEPRINTS).model_dump(by_alias=True)
+    main_text = store.read(MainText, MAIN_TEXT).model_dump(by_alias=True)
+    cand_raw = candidate.model_dump(by_alias=True, exclude={'provenance'})
+    bind_raw = binding.model_dump(
+        by_alias=True, exclude={'provenance', 'infeasibility_proof'})
+    catalog = build_evidence_catalog(blueprints)
+    plan_raw = merge_evidence_bindings(cand_raw, bind_raw, catalog)
+    adopt_plan_response(plan_raw, blueprints, beat_index(blueprints, main_text))
+    candidate_sha = store.full_sha256_or_none(CANDIDATE_REL)
+    binding_sha = (
+        store.full_sha256_or_none(BINDING_REL)
+        if store.exists(BINDING_REL) else store.full_sha256_or_none(_INVALID))
+    if candidate_sha is None or binding_sha is None:
+        raise ArtifactUnreadable('Design 或 Grounding 缺少完整 SHA-256，不能编译计划视图')
+    plan_raw.pop('_provenance', None)
+    provenance = store.ctx.free_provenance(
+        PlanProvenance,
+        origin='compiled',
+        blind_candidate_sha256=candidate_sha,
+        evidence_binding_sha256=binding_sha,
+    )
+    plan = PlanChapters.model_validate({**plan_raw, '_provenance': provenance})
+    return plan, plan.model_dump(by_alias=True)
+
+
 def context_ctx(ctx: RunContext) -> RunContext:
     """组装写作上下文那一次跑，**必须记在 `stage4.context` 名下**。
 
@@ -1421,61 +1459,85 @@ def context_ctx(ctx: RunContext) -> RunContext:
 
 
 def run_context(ctx: RunContext) -> CheckReport:
-    """`stage4.context`（0 成本节点）：从盘上那份计划重建写作上下文。
+    """`stage4.context`（0 成本节点）：从 Design + Grounding 重建写作上下文。
 
-    ⚠⚠ **这一条走 `store.read` 而不是 `read_own`**：`plan_chapters.json` 是
-    **另一个节点**（`stage4.plan`）产的，把它记成上游边**正是 `context_link` 要的东西**。
-    人工结构票已随四道闸退役（2026-09-15 全自动裁决）；机械前置是：正式计划
-    在盘且当前候选没有 fresh typed infeasible 终态。
+    STR-03-S4：不再读取正式 ``plan_chapters.json``；内存中由 A+B 编译视图组装
+    Writer Context，provenance 绑定 Design 与 EvidenceBinding 字节。
     """
     ctx = context_ctx(ctx)
     store = ArtifactStore(ctx)
-    if not store.exists(REL):
-        raise UpstreamMissing(f'{REL} 不在盘上——先跑 stage4.plan')
+    if not store.exists(CANDIDATE_REL):
+        raise UpstreamMissing(f'{CANDIDATE_REL} 不在盘上——先跑 stage4.design')
+    if not store.exists(BINDING_REL):
+        raise UpstreamMissing(f'{BINDING_REL} 不在盘上——先跑 stage4.plan')
     if current_infeasible_binding(store) is not None:
         raise TerminalState(
             '当前候选存在 fresh typed infeasible 终态；不能组装写作上下文。'
             '先由预算内 `stage4.design --replan` 重采 Stage4A，再重跑 Stage4B')
     up = _Upstreams(ctx, store)
-    plan = store.read(PlanChapters, REL)
-    plan_raw = plan.model_dump(by_alias=True)
+    from contracts.schema.stage4 import BlindCandidate, EvidenceBinding
+    from novel.stages.stage4.plot_binding import (
+        build_evidence_catalog, merge_evidence_bindings,
+    )
+    candidate = store.read(BlindCandidate, CANDIDATE_REL)
+    binding = store.read(EvidenceBinding, BINDING_REL)
+    if binding.status != 'bound':
+        raise TerminalState('证据绑定非 bound 终态，不能组装写作上下文')
+    cand_raw = candidate.model_dump(by_alias=True)
+    bind_raw = binding.model_dump(by_alias=True)
+    catalog = build_evidence_catalog(up.blueprints)
+    plan_raw = merge_evidence_bindings(cand_raw, bind_raw, catalog)
+    from novel.stages.stage4.measure import adopt_plan_response
+    adopt_plan_response(plan_raw, up.blueprints, up.bidx)
     assert up.global_g is not None
     asm = build_writer_context(plan_raw, up.global_g, up.blueprints, up.main_text, characters=up.characters)
-    # ⚠ **必须显式给 `CtxProvenance`**：默认的 `FreeProvenance` 过不了 `WriterContext` 的载体。
-    #   这一层的来源账**没有 `prompts` 也没有 `model`**（确定性组装，无 LLM 参与）。
     art = WriterContext.model_validate(
         {**asm.ctx, '_provenance': ctx.free_provenance(CtxProvenance)})
     _write_producer_artifact(store, CTX_REL, art)
     return _report(ctx, store, _judge(store, plan_raw, up, with_ctx_link=True),
-                   plan.provenance.model_dump(by_alias=True))
+                   binding.provenance.model_dump(by_alias=True))
 
 
 def run_revalidate(
     ctx: RunContext, *, actor: str, reason: str,
 ) -> CheckReport:
-    """0 成本提升路：按**当前**判据重判被闸门拦下的 `.INVALID` 稿，合格即提升。
+    """0 成本提升路：按**当前**判据重判绑定侧 `.INVALID`，合格即提升或撤标记。
 
-    ⚠⚠ **闸门是我们自己加的，不给一条 0 成本提升路，一次付费产出就被永久锁死。**
-    提升只落计划；``stage4.context`` 是唯一 writer_context producer，
-    必须在计划人审通过后另行调用。
+    STR-03-S4：INVALID 挂在 ``evidence_binding``。若正式 binding 已在盘上，
+    复验只编译 Design+binding 的计划视图；HARD 清空后退休 INVALID 标记。
+    若仅有 INVALID，合格后 ``promote_invalid`` 升为正式 binding。
+    ``stage4.context`` 仍须另行组装。
     """
     store = ArtifactStore(ctx)
     if not store.exists(_INVALID):
         raise UpstreamMissing(f'{_INVALID} 不在盘上——没有被拦下的稿可提升')
-    art, raw = store.read_own(PlanChapters, _INVALID)
+    art, _raw = store.read_own(EvidenceBinding, _INVALID)
     up = _Upstreams(ctx, store)
-    outcomes = _judge(store, raw, up, with_ctx_link=False)
+    if art.status != 'bound':
+        return _report(
+            ctx, store, [],
+            art.provenance.model_dump(by_alias=True),
+            judged_rel=_INVALID)
+    if not store.exists(CANDIDATE_REL):
+        raise UpstreamMissing(f'{CANDIDATE_REL} 不在盘上——无法复验编译视图')
+    binding_for_view = art
+    if store.exists(BINDING_REL):
+        formal, _ = store.read_own(EvidenceBinding, BINDING_REL)
+        if formal.status == 'bound':
+            binding_for_view = formal
+    _plan, plan_raw = compile_plan_view(store, binding=binding_for_view)
+    outcomes = _judge(store, plan_raw, up, with_ctx_link=False)
     if _hard_hits(outcomes):
-        # 复验判的是活动 INVALID；盘上即使还留着 shape-break 前的旧正式稿，
-        # 报告 freshness 也不能回头绑定那份旧稿，否则真正的内容 findings 会被
-        # ArtifactVersionError 覆盖，0 成本恢复路等于没有诊断出口。
         return _report(
             ctx, store, outcomes, art.provenance.model_dump(by_alias=True),
             judged_rel=_INVALID,
         )
-    store.promote_invalid(
-        REL, PlanChapters, actor=actor, reason=reason,
-        artifact_override=art)
+    if store.exists(BINDING_REL):
+        store.retire_invalid(BINDING_REL)
+    else:
+        store.promote_invalid(
+            BINDING_REL, EvidenceBinding, actor=actor, reason=reason,
+            artifact_override=art)
     return run_check_only(ctx)
 
 
@@ -1502,12 +1564,10 @@ def write_plan(ctx: RunContext, store: ArtifactStore, data: dict[str, Any], up: 
 
 def _gate_and_write(ctx: RunContext, store: ArtifactStore, data: dict[str, Any],
                     up: _Upstreams, *, provenance: Any, archive: bool = False) -> CheckReport:
-    """`write_plan` 的场景编译之后那一半——`--apply-edit` 直接从这里进。
+    """联合 HARD 闸门；STR-03-S4 起不再落盘 ``plan_chapters.json``。
 
-    人编辑的是盘上那份**已经编译完成**的正式计划，带 producer-owned 的语义契约、slot
-    与整数预算；它不是模型响应形，不能再走一次响应编译。两条路在编译点分岔，在
-    **闸门与写盘**上合流（同一把尺子）。
-    `archive=True`：写盘前把旧正式稿归档进 `_rounds/`（人工修订「落成新的一轮」）。
+    计划视图仅作内存校验；正式产物是已写入的 ``evidence_binding.json``。
+    hard 命中时写入绑定侧 INVALID 标记语义失败（绑定已落盘则由上层处理）。
     """
     data.pop('_provenance', None)
     assert up.global_g is not None
@@ -1517,17 +1577,12 @@ def _gate_and_write(ctx: RunContext, store: ArtifactStore, data: dict[str, Any],
     outcomes = _judge(store, {**data, '_provenance': provenance.model_dump(by_alias=True)},
                       up, with_ctx_link=False)
     if (hits := _hard_hits(outcomes)):
-        # ⚠ `gates_skipped=[]` —— **空列表也要写**：「这一次没有闸门跑不成」
-        #   与「压根没记这笔账」是 `Q-2` 要求必须能区分的两件事。
-        path = store.write_invalid(REL, art, gates_skipped=[])
         raise GateBlocked(
-            f'{len(hits)} 条阻断级判据命中：{hits}。问题稿已存 `{_INVALID}`，'
-            f'**正式产物没有被覆盖**。⚠ 这次不必再付费：手改那几行，'
-            f'`stage4.plan --revalidate --actor system:invalid-revalidate --reason <audit>` 提升即可'
-            f'（0 LLM、同轮重判并留不可变审计）',
-            invalid_path=str(path))
-    _write_producer_artifact(
-        store, REL, art, archive_current=archive)
+            f'{len(hits)} 条阻断级判据命中：{hits}。'
+            f'关闭式路由停止 / STR-03-S4：正式计划已退役；请修复 Design/绑定后重跑 Stage4B'
+            f'（绑定若已落盘可经 freshness/INVALID 面恢复）',
+            invalid_path=BINDING_REL)
+    # 正式计划文件已退役：校验通过即返回；binding 由调用方负责写入。
     final_outcomes = _judge(
         store, art.model_dump(by_alias=True), up, with_ctx_link=False)
     return _report(
@@ -4190,21 +4245,18 @@ def _plan_finalization_payload(
         'hard_hits': list(hard_hits),
     }
     if status == 'infeasible':
-        # typed infeasible 不得借机改动旧 plan/context/INVALID。这三条不是
-        # touched，但作为「必须原样」的终态投影写入 journal。
+        # typed infeasible 不得借机改动旧 context/INVALID。
         payload['preserved_file_sha256s'] = {
             rel: agent_runs.file_sha256(ctx, rel)
-            for rel in (REL, CTX_REL, _INVALID)
+            for rel in (CTX_REL, _INVALID)
         }
     elif hard_hits:
-        # bound-HARD 只允许写 binding 与 plan.INVALID；既有正式 plan/context
-        # 是下游当前仍消费的 byte set，必须从 prepare 到 committed 始终逐字不变。
+        # bound-HARD 只允许写 binding 与 binding.INVALID；旧 context 必须逐字不变。
         payload['preserved_file_sha256s'] = {
-            rel: agent_runs.file_sha256(ctx, rel)
-            for rel in (REL, CTX_REL)
+            CTX_REL: agent_runs.file_sha256(ctx, CTX_REL),
         }
     else:
-        # 干净 plan 也不是 context producer；旧 context 保持原字节并自然变 stale。
+        # 干净 binding 也不是 context producer；旧 context 保持原字节并自然变 stale。
         payload['preserved_file_sha256s'] = {
             CTX_REL: agent_runs.file_sha256(ctx, CTX_REL),
         }
@@ -4217,30 +4269,30 @@ def _assert_preserved_infeasible(
     from novel.llm import run_journal as agent_runs
     expected = finalization.get('preserved_file_sha256s')
     if (not isinstance(expected, Mapping)
-            or set(expected) != {REL, CTX_REL, _INVALID}):
+            or set(expected) != {CTX_REL, _INVALID}):
         raise ProvenanceRefused(
             'stage4.plan infeasible finalization 缺 preserved byte set')
     current = {rel: agent_runs.file_sha256(ctx, rel) for rel in expected}
     if current != dict(expected):
         raise ProvenanceRefused(
-            'stage4.plan typed infeasible 路径改动了旧 plan/context/INVALID')
+            'stage4.plan typed infeasible 路径改动了旧 context/INVALID')
 
 
 def _assert_preserved_plan_hard(
         ctx: RunContext, finalization: Mapping[str, Any],
 ) -> None:
-    """bound-HARD 只落问题稿，不得碰旧正式 plan/context。"""
+    """bound-HARD 只落 binding(+INVALID)，不得碰旧 context。"""
     from novel.llm import run_journal as agent_runs
 
     expected = finalization.get('preserved_file_sha256s')
     if (not isinstance(expected, Mapping)
-            or set(expected) != {REL, CTX_REL}):
+            or set(expected) != {CTX_REL}):
         raise ProvenanceRefused(
             'stage4.plan bound-HARD finalization 缺 preserved byte set')
     current = {rel: agent_runs.file_sha256(ctx, rel) for rel in expected}
     if current != dict(expected):
         raise ProvenanceRefused(
-            'stage4.plan bound-HARD 路径改动了旧正式 plan/context')
+            'stage4.plan bound-HARD 路径改动了旧 writer_context')
 
 
 def _assert_preserved_context(
@@ -4255,12 +4307,11 @@ def _assert_preserved_context(
 
 
 def _expected_context_artifact(ctx: RunContext) -> WriterContext:
-    """从已落稳的 plan 用 context 产地身份组出确定性期望字节。"""
+    """从已落稳的 Design+Grounding 用 context 产地身份组出确定性期望字节。"""
     cctx = context_ctx(ctx)
     store = ArtifactStore(cctx)
     up = _Upstreams(cctx, store)
-    plan = store.read(PlanChapters, REL)
-    plan_raw = plan.model_dump(by_alias=True)
+    _plan, plan_raw = compile_plan_view(store)
     assert up.global_g is not None
     asm = build_writer_context(
         plan_raw, up.global_g, up.blueprints, up.main_text, characters=up.characters)
@@ -4276,7 +4327,7 @@ def verify_plan_delivery(
         expected_plan: PlanChapters | None,
 ) -> tuple[EvidenceBinding, PlanChapters | None, WriterContext | None,
            CheckReport | None]:
-    """B primary 与可选 plan 的 typed/fresh/HARD 终验。"""
+    """B primary 终验；计划视图仅内存对照，不读盘上 plan_chapters。"""
     _assert_plan_current(ctx, prepared)
     store = ArtifactStore(ctx)
     with ctx.validation_reads():
@@ -4300,29 +4351,26 @@ def verify_plan_delivery(
             f'stage4.plan clean bound 正式终验仍有 live {_INVALID}')
     if expected_plan is None:
         raise ProvenanceRefused('bound binding 缺 expected compiled plan')
-    with ctx.validation_reads():
-        plan, plan_raw = store.read_own(
-            PlanChapters, REL, require_current=True)
-        plan_freshness = store.freshness(REL)
-    if plan.model_dump(by_alias=True, mode='json') != expected_plan.model_dump(
-            by_alias=True, mode='json'):
+    _compiled, plan_raw = compile_plan_view(store)
+    expected_payload = expected_plan.model_dump(by_alias=True, mode='json')
+    expected_payload.pop('_provenance', None)
+    landed_payload = dict(plan_raw)
+    landed_payload.pop('_provenance', None)
+    if landed_payload != expected_payload:
         raise ProvenanceRefused(
-            'stage4.plan compiled plan readback 与本 run 期望不完全相等')
-    if plan_freshness.state != 'fresh':
-        raise ProvenanceRefused(
-            'stage4.plan readback 不 fresh：'
-            f'plan={plan_freshness.state}/{plan_freshness.reason}')
+            'stage4.plan 内存编译视图与本 run 期望不完全相等')
     outcomes = _judge(store, plan_raw, prepared.upstream, with_ctx_link=False)
     if hits := _hard_hits(outcomes):
         raise ProvenanceRefused(
-            f'stage4.plan 正式 readback 仍有 HARD：{hits}')
+            f'stage4.plan 编译视图仍有 HARD：{hits}')
     report = _report(
         ctx,
         store,
         outcomes,
-        plan.provenance.model_dump(by_alias=True),
+        binding.provenance.model_dump(by_alias=True),
+        judged_rel=BINDING_REL,
     )
-    return binding, plan, None, report
+    return binding, None, None, report
 
 
 def _compiled_plan_artifact(
@@ -4341,13 +4389,12 @@ def _compiled_plan_artifact(
 
 
 def _render_expected_invalid(
-        store: ArtifactStore, artifact: PlanChapters,
+        store: ArtifactStore, artifact: EvidenceBinding,
 ) -> tuple[bytes, str]:
     """用 ``ArtifactStore`` 的唯一 renderer 预演 ``write_invalid`` 最终字节。
 
     journal 必须在写前知道 live INVALID 的 expected SHA，才能识别进程崩在
-    ``write_invalid`` 之后的合法恢复态。这里不复制 JSON 编码或路径算法；只复用
-    ``write_invalid`` 明示的两步 provenance 定位键变换，真正渲染仍由 store 完成。
+    ``write_invalid`` 之后的合法恢复态。
     """
     source = artifact.provenance
     pending = source.model_copy(update={
@@ -4367,34 +4414,20 @@ def _render_expected_invalid(
 
 
 def _render_expected_invalid_bytes(
-        store: ArtifactStore, artifact: PlanChapters,
+        store: ArtifactStore, artifact: EvidenceBinding,
 ) -> bytes:
     return _render_expected_invalid(store, artifact)[0]
 
 
 def _write_prepared_invalid(
-        store: ArtifactStore, artifact: PlanChapters,
+        store: ArtifactStore, artifact: EvidenceBinding,
 ) -> None:
     """用可重放的 copy→snapshot→atomic-replace 落 prepared INVALID。
 
-    ``ArtifactStore.write_invalid`` 的常规路会先把旧 live INVALID
-    **move** 进 ``_rounds``。Python 异常可由 history transaction 回滚，
-    但进程在 move 与新 live replace 之间被 kill 时，盘上会短暂
-    没有 live；commit journal 既不是 baseline 也不是 expected，只能把
-    自己的半步误报成第三方漂移。
-
-    agent prepared 路已有书级 ownership，因而可以把同一语义改成：
-
-    1. 旧 live 只 **copy** 入它自己的不可变 round（重放严格同字节）；
-    2. 新 INVALID 的 content-addressed baseline 先幂等写稳；
-    3. 最后一次同目录 atomic replace 切换 live。
-
-    任意 kill 点下 live 都是 journal 认得的 baseline 或 expected；
-    不复制 JSON 编码，render/round/baseline/atomic replace 仍全部由
-    ``ArtifactStore`` 的唯一落点执行。
+    STR-03-S4：INVALID 载体为 EvidenceBinding（绑定侧），不再写退役计划文件。
     """
     data, locator = _render_expected_invalid(store, artifact)
-    store._verify_round_trip(_INVALID, PlanChapters, data)
+    store._verify_round_trip(_INVALID, EvidenceBinding, data)
     if store.exists(_INVALID):
         store.archive_round(_INVALID, keep=True)
     baseline = store.path(store._revalidation_baseline_rel(_INVALID, locator))
@@ -4405,11 +4438,11 @@ def _write_prepared_invalid(
 def _verify_plan_hard_delivery(
         ctx: RunContext, prepared: PlanCandidateContext,
         expected_binding: EvidenceBinding,
-        expected_invalid: PlanChapters,
+        expected_invalid: EvidenceBinding,
         expected_hits: tuple[str, ...],
         finalization: Mapping[str, Any],
-) -> tuple[EvidenceBinding, PlanChapters]:
-    """bound-HARD 的 binding/INVALID typed readback 与旧正式 byte set 终验。"""
+) -> tuple[EvidenceBinding, EvidenceBinding]:
+    """bound-HARD 的 binding/INVALID typed readback 与旧 context byte set 终验。"""
     from novel.llm import run_journal as agent_runs
 
     _assert_plan_current(ctx, prepared)
@@ -4419,8 +4452,8 @@ def _verify_plan_hard_delivery(
     with ctx.validation_reads():
         binding, _binding_raw = store.read_own(
             EvidenceBinding, BINDING_REL, require_current=True)
-        invalid, invalid_raw = store.read_own(
-            PlanChapters, _INVALID, require_current=True)
+        invalid, _invalid_raw = store.read_own(
+            EvidenceBinding, _INVALID, require_current=True)
         binding_freshness = store.freshness(BINDING_REL)
         invalid_freshness = store.freshness(_INVALID)
     if binding.model_dump(by_alias=True, mode='json') != expected_binding.model_dump(
@@ -4451,18 +4484,13 @@ def _verify_plan_hard_delivery(
         raise ProvenanceRefused(
             'stage4.plan bound-HARD INVALID 正式字节与预演结果不等')
 
-    candidate_hits, _feedback = _candidate_bundle_verdict(
-        invalid_raw, prepared.upstream)
-    if candidate_hits != expected_hits:
-        raise ProvenanceRefused(
-            'stage4.plan bound-HARD INVALID 在 typed readback 后的联合判据漂移：'
-            f'expected={list(expected_hits)}, landed={list(candidate_hits)}')
+    _plan, plan_raw = compile_plan_view(store)
     formal_hits = tuple(_hard_hits(_judge(
-        store, invalid_raw, prepared.upstream, with_ctx_link=False)))
-    unexpected = sorted(set(formal_hits) - set(expected_hits))
-    if unexpected:
+        store, plan_raw, prepared.upstream, with_ctx_link=False)))
+    if formal_hits != expected_hits:
         raise ProvenanceRefused(
-            f'stage4.plan bound-HARD INVALID 新增正式字节/引用 HARD：{unexpected}')
+            'stage4.plan bound-HARD 编译视图联合判据漂移：'
+            f'expected={list(expected_hits)}, landed={list(formal_hits)}')
     _assert_preserved_plan_hard(ctx, finalization)
     return binding, invalid
 
@@ -4474,10 +4502,11 @@ def _land_bound_hard_bundle(
         expected_binding_sha: str,
         finalization: Mapping[str, Any],
         commit_spec: Any | None = None,
-) -> PlanChapters:
-    """按 prepared journal 补齐 ``binding + plan.INVALID``，绝不碰旧正式计划。"""
+) -> EvidenceBinding:
+    """按 prepared journal 补齐 ``binding + binding.INVALID`` 标记。"""
     from novel.llm import run_journal as agent_runs, stage4_runs
 
+    del compiled  # HARD 标记挂在绑定；编译视图仅终验时重算
     _assert_preserved_plan_hard(ctx, finalization)
     if binding_state == 'baseline':
         _assert_plan_current(ctx, prepared)
@@ -4489,9 +4518,7 @@ def _land_bound_hard_bundle(
     if binding_file_sha != expected_binding_sha:
         raise ProvenanceRefused(
             'stage4.plan bound-HARD binding 字节与 prepared 期望不等')
-    invalid_artifact = _compiled_plan_artifact(
-        ctx, prepared, compiled,
-        binding_file_sha256=binding_file_sha)
+    invalid_artifact = binding
     expected_invalid_sha = agent_runs.canonical_sha256(
         _render_expected_invalid_bytes(prepared.store, invalid_artifact))
     invalid_state = stage4_runs.target_state(
@@ -4516,17 +4543,12 @@ def _land_bound_bundle(
         expected_binding_sha: str, finalization: Mapping[str, Any],
         commit_spec: Any | None = None,
 ) -> PlanChapters:
-    """在一个普通异常可回滚的字节集中补完 bound bundle。
-
-    进程 kill 不会跑 Python rollback；那条路由 prepared journal 逐路径
-    识别 baseline/expected 继续，所以二者不互相冒充。
-    """
+    """补完 bound binding；计划视图只做内存 HARD，不落盘 plan_chapters。"""
     from novel.llm import run_journal as agent_runs, stage4_runs
     _assert_preserved_context(ctx, finalization)
-    with prepared.store.history_transaction(BINDING_REL, REL):
+    with prepared.store.history_transaction(BINDING_REL):
         if binding_state == 'baseline':
-            for rel in (REL, _INVALID):
-                stage4_runs.target_state(ctx, journal, rel, spec=commit_spec)
+            stage4_runs.target_state(ctx, journal, _INVALID, spec=commit_spec)
             _assert_plan_current(ctx, prepared)
             _write_producer_artifact(prepared.store, BINDING_REL, binding)
         _assert_plan_current(ctx, prepared)
@@ -4539,24 +4561,14 @@ def _land_bound_bundle(
         plan_artifact = _compiled_plan_artifact(
             ctx, prepared, compiled,
             binding_file_sha256=binding_file_sha)
-        expected_plan_sha = agent_runs.canonical_sha256(
-            prepared.store._render(REL, plan_artifact))
-        plan_state = stage4_runs.target_state(
-            ctx, journal, REL, expected_file_sha256=expected_plan_sha,
-            spec=commit_spec)
-        if plan_state == 'baseline':
-            stage4_runs.target_state(ctx, journal, _INVALID, spec=commit_spec)
-            _assert_plan_current(ctx, prepared)
-            _gate_and_write(
-                ctx, prepared.store, compiled, prepared.upstream,
-                provenance=plan_artifact.provenance)
+        _gate_and_write(
+            ctx, prepared.store, compiled, prepared.upstream,
+            provenance=plan_artifact.provenance)
         invalid_state = stage4_runs.target_state(
             ctx, journal, _INVALID, expected_absent=True, spec=commit_spec)
         if invalid_state == 'baseline':
-            # 崩溃可能发生在 plan/context 已落、但 store.write 尚未来得及退休
-            # 旧 INVALID 的窄窗；恢复必须补完这一步，不能把 baseline 当成 absent。
             _assert_plan_current(ctx, prepared)
-            prepared.store.retire_invalid(REL)
+            prepared.store.retire_invalid(BINDING_REL)
         stage4_runs.target_state(
             ctx, journal, _INVALID, expected_absent=True,
             spec=commit_spec)
@@ -4581,8 +4593,7 @@ def _plan_commit_spec(
     return aggregate_runs.AggregateCommitSpec(
         node='stage4.plan', primary_artifact=BINDING_REL,
         commit_path=lambda run: paths.stage4_plan_aggregate_path(run.novel_dir, run.run_id),
-        allowed_touched=((BINDING_REL,), (BINDING_REL, _INVALID),
-                         (BINDING_REL, REL, _INVALID)),
+        allowed_touched=((BINDING_REL,), (BINDING_REL, _INVALID)),
         nonformal_paths=(_INVALID,),
         primary_file_text=prepared.store._render(BINDING_REL, evaluation.binding).decode('utf-8'),
         sources={
@@ -4736,11 +4747,7 @@ def finalize_plan_candidate(
                 if expected_binding.status != 'bound' or compiled is None:
                     raise ProvenanceRefused(
                         'stage4.plan committed bound-HARD 缺 binding/compiled')
-                _same_binding, binding_file_sha = ArtifactStore(
-                    ctx).read_with_sha256(EvidenceBinding, BINDING_REL)
-                expected_invalid = _compiled_plan_artifact(
-                    ctx, prepared, compiled,
-                    binding_file_sha256=binding_file_sha)
+                expected_invalid = expected_binding
                 landed_binding, _landed_invalid = _verify_plan_hard_delivery(
                     ctx, prepared, expected_binding, expected_invalid,
                     evaluation.hard_hits, finalization)
@@ -4766,9 +4773,13 @@ def finalize_plan_candidate(
                 )
             expected_plan: PlanChapters | None = None
             if evaluation.binding.status == 'bound':
-                with ctx.validation_reads():
-                    expected_plan, _raw = ArtifactStore(ctx).read_own(
-                        PlanChapters, REL, require_current=True)
+                if compiled is None:
+                    raise ProvenanceRefused('bound binding 缺 compiled 计划视图')
+                _same_binding, binding_file_sha = ArtifactStore(
+                    ctx).read_with_sha256(EvidenceBinding, BINDING_REL)
+                expected_plan = _compiled_plan_artifact(
+                    ctx, prepared, compiled,
+                    binding_file_sha256=binding_file_sha)
             landed_binding, landed_plan, landed_ctx, report = verify_plan_delivery(
                 ctx, prepared, evaluation.binding, expected_plan)
             finalization = _plan_finalization_payload(
@@ -4780,8 +4791,8 @@ def finalize_plan_candidate(
                 BINDING_REL: landed_binding.model_dump(
                     by_alias=True, mode='json')}
             if landed_plan is not None:
-                landed_payloads[REL] = landed_plan.model_dump(
-                    by_alias=True, mode='json')
+                raise ProvenanceRefused(
+                    'stage4.plan 终验不得落盘退役 plan_chapters')
             if landed_ctx is not None:
                 raise ProvenanceRefused(
                     'stage4.plan 终验意外产生 writer_context')
@@ -4823,7 +4834,7 @@ def finalize_plan_candidate(
         touched = (
             (BINDING_REL,) if binding.status == 'infeasible'
             else ((BINDING_REL, _INVALID) if evaluation.hard_hits
-                  else (BINDING_REL, REL, _INVALID)))
+                  else (BINDING_REL, _INVALID)))
         journal = stage4_runs.prepare_commit(
             ctx,
             primary_artifact=BINDING_REL,
@@ -4924,10 +4935,12 @@ def finalize_plan_candidate(
         _assert_plan_current(ctx, prepared)
         landed_binding, landed_plan, landed_ctx, report = verify_plan_delivery(
             ctx, prepared, binding, plan_artifact)
-        assert landed_plan is not None and landed_ctx is None and report is not None
+        if landed_plan is not None:
+            raise ProvenanceRefused(
+                'stage4.plan 终验不得落盘退役 plan_chapters')
+        assert landed_ctx is None and report is not None
         landed_payloads = {
             BINDING_REL: landed_binding.model_dump(by_alias=True, mode='json'),
-            REL: landed_plan.model_dump(by_alias=True, mode='json'),
         }
         _assert_preserved_context(ctx, finalization)
         _assert_plan_current(ctx, prepared)
@@ -6288,7 +6301,7 @@ def _legacy_plan_delivery_recovery(
             binding.model_dump(exclude={'provenance', 'infeasibility_proof'})), None)
         if why is not None:
             raise ProvenanceRefused(f'legacy B 恢复绑定未通过当前动态闸：{why}')
-        current_plan, _plan_raw = prepared.store.read_own(PlanChapters, REL, require_current=True)
+        current_plan, _plan_raw = compile_plan_view(prepared.store)
         if (current_plan.provenance.evidence_binding_sha256 != proof['binding_sha256']
                 or current_plan.provenance.blind_candidate_sha256 != prepared.candidate_file_sha256
                 or current_plan.provenance.origin != 'compiled'):
@@ -6595,40 +6608,11 @@ def run_apply_binding(
 
 
 def run_apply_edit(ctx: RunContext, edit_path: str = '') -> CheckReport:
-    """`--apply-edit`：把人手改好的一份计划落成新的一轮（0 成本）。
+    """STR-03-S4：``plan_chapters`` 正式读写已退役；本入口关闭。
 
-    与生成稿**同一道**闸门与写盘（`_gate_and_write`）：HARD ⇒ `.INVALID` 不覆盖
-    正式稿；合格 ⇒ 旧轮进 `_rounds/`、落盘。writer_context 由人审通过后的
-    ``stage4.context`` 另行重建。
-
-    v4 计划本身是 A+B 的确定性编译物，不能让人工改过结构的计划继续绑定旧候选并
-    冒充编译结果。人工路因此铸一份 ``origin=human`` 的免费来源账，明确清空 A/B hash；
-    typed edit、当前 Stage1/2 与旧计划仍由普通输入边如实记录。
-    ⚠ **无前稿（正式或 `.INVALID` 皆无）⇒ 显式终态**：这是修订路，不是生成路。
+    结构修订请走 ``stage4.design`` 编辑/重采，再跑 ``stage4.plan`` 重绑。
     """
-    store = ArtifactStore(ctx)
-    rel = paths.edit_rel(ctx.novel_dir, edit_path, EDIT)
-    if not store.exists(rel):
-        raise TerminalState(
-            f'{rel} 不在盘上。⚠ `--apply-edit` 吃的是**人写的决策集**（整份计划替换，'
-            f'形状 = 盘上 `plan_chapters.json` 的 `output_chapters` 业务键），把它放到这本书的 '
-            f'`stage4/` 下（缺省文件名 `plan_edit.json`）')
-    edit = store.read(PlanEdit, rel)
-
-    prev_rel = REL if store.exists(REL) else (_INVALID if store.exists(_INVALID) else None)
-    if prev_rel is None:
-        raise TerminalState(
-            '盘上既无正式计划也无 `.INVALID` 问题稿——`--apply-edit` 是修订路，'
-            '不是生成路；先跑一次 stage4.plan（付费）')
-    store.read_own(PlanChapters, prev_rel)
-
-    up = _Upstreams(ctx, store)
-    data = edit.model_dump(by_alias=True)
-    report = _gate_and_write(
-        ctx, store, data, up,
-        provenance=ctx.free_provenance(
-            PlanProvenance, origin='human',
-            blind_candidate_sha256=None, evidence_binding_sha256=None,
-        ),
-        archive=True)
-    return report
+    del edit_path
+    raise UnsupportedRunMode(
+        'STR-03-S4：正式计划 plan_chapters 已退役；'
+        '`--apply-edit` 不再落盘。请改 Design（stage4.design）后重跑 stage4.plan')

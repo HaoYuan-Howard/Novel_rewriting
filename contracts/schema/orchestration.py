@@ -36,6 +36,7 @@ from contracts.invariants import (
     AGENT_RUN_EVENT_V2_KINDS, AGENT_RUN_EXIT_ORIGINS, AGENT_RUN_STATE,
     ARTIFACT_CONDITION, ARTIFACT_DISPLAY, BEACON_STATES,
     COMMANDER_ADMISSION_EVENT_KINDS, COMMANDER_ADMISSION_TAIL_REPAIR_KINDS,
+    AgentDriver, AgentExecutionMode, AgentReasoningEffort,
     LegacyLlmProvider,
     FRESHNESS, FRESHNESS_REASON, JOB_EVENT_KINDS, JOB_STATE, NODES,
     OPERATOR_DURATION_SOURCES, OPERATOR_PHASE_EVENT_KINDS, OPERATOR_PHASES,
@@ -85,6 +86,15 @@ RunResumeVerdict = Literal[RESUME_VERDICTS]
 # ─────────────────────────────────────────────────────────────────────────────
 # 零、executor 运行配置 —— 一次选择的精确快照（C3：仅 legacy 直连 LLM）
 # ─────────────────────────────────────────────────────────────────────────────
+
+class AgentProfile(FrozenModel):
+    """历史 Agent CLI session 池与 checkpoint 测试栈仍使用的精确配置。"""
+
+    driver: AgentDriver
+    model: str = Field(min_length=1)
+    reasoning_effort: AgentReasoningEffort
+    execution_mode: AgentExecutionMode | None = None
+
 
 class LegacyLlmProfile(FrozenModel):
     """一个直接 LLM API executor 的精确、无密钥运行配置。

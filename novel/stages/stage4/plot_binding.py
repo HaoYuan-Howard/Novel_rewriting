@@ -60,12 +60,16 @@ class BaselineAmbiguity:
     candidate_scene_id: str
     beat_ref: str
     candidates: tuple[str, ...]
+    delivery_ref: str | None = None
 
     def to_payload(self) -> dict:
-        return {'ambiguity_id': self.ambiguity_id, 'kind': self.kind,
+        body = {'ambiguity_id': self.ambiguity_id, 'kind': self.kind,
                 'chapter_ordinal': self.chapter_ordinal,
                 'candidate_scene_id': self.candidate_scene_id,
                 'beat_ref': self.beat_ref, 'candidates': list(self.candidates)}
+        if self.delivery_ref:
+            body['delivery_ref'] = self.delivery_ref
+        return body
 
 
 @dataclass(frozen=True)
@@ -133,43 +137,76 @@ def build_mechanical_baseline(candidate: dict, blueprints: dict) -> MechanicalBa
                                   'deliveries': []} for s in chapter['scenes']}
         ambiguities = []
         seen = set()
-        for placement in chapter['beat_placements']:
-            beat_ref = _beat_ref(candidate, placement['beat_alias'], number)
-            if beat_ref not in beats or beat_ref in seen:
-                raise BlindPlanError('候选 placement 缺失或重复父节点')
-            seen.add(beat_ref)
+        # 优先走 compiler 物化的 steps（含 delivery_ref）；否则回退 beat_placements
+        step_rows: list[tuple[str, str, dict]] = []
+        if any(s.get('steps') for s in chapter['scenes']):
+            for scene in chapter['scenes']:
+                for step in scene.get('steps') or []:
+                    raw_beat = step['beat_ref']
+                    beat_ref = raw_beat if str(raw_beat).startswith('b') else _beat_ref(
+                        candidate, raw_beat, number)
+                    step_rows.append((scene['scene_ref'], beat_ref, {
+                        'scene_ref': scene['scene_ref'],
+                        'delivery_ref': step['delivery_ref'],
+                        'presentation_instruction': step.get('delivery_focus'),
+                        'delivery_focus': step.get('delivery_focus'),
+                    }))
+        else:
+            seq = 1
+            for placement in chapter['beat_placements']:
+                beat_ref = _beat_ref(candidate, placement['beat_alias'], number)
+                for delivery in placement['deliveries']:
+                    dref = delivery.get('delivery_ref') or f'd{number:02d}_{seq:02d}'
+                    seq += 1
+                    delivery = {**delivery, 'delivery_ref': dref}
+                    step_rows.append((delivery['scene_ref'], beat_ref, delivery))
+
+        for scene_ref, beat_ref, delivery in step_rows:
+            if beat_ref not in beats:
+                raise BlindPlanError('候选 placement 缺失父节点')
+            # 同一 beat 允许多 delivery；seen 只防完全重复的 delivery_ref
+            delivery_ref = delivery.get('delivery_ref')
+            if not delivery_ref:
+                raise BlindPlanError('Design 正式产物缺少 delivery_ref；须经 compiler 发号')
+            if beat_ref not in seen:
+                seen.add(beat_ref)
             beat = beats[beat_ref]
             contexts = sorted(ref for ref, context in entry['source_contexts'].items()
                               if context['beat_ref'] == beat_ref)
-            multi = len(placement['deliveries']) > 1
-            slots = [d['scene_ref'] for d in placement['deliveries']]
-            if len(slots) != len(set(slots)):
-                raise BlindPlanError('同一节点同一场景重复呈现')
-            for delivery in placement['deliveries']:
-                if delivery['scene_ref'] not in by_slot:
-                    raise BlindPlanError('呈现引用不存在的场景')
-                scene = by_slot[delivery['scene_ref']]
-                binding = {'beat_ref': beat_ref, 'evidence_refs': sorted(beat.evidence_refs),
-                           'source_context_refs': contexts}
-                def uncertain(kind, candidates, field):
-                    body = {'kind': kind, 'chapter_ordinal': number,
-                            'candidate_scene_id': scene['candidate_scene_id'],
-                            'beat_ref': beat_ref, 'candidates': tuple(candidates),
-                            'presentation_instruction': delivery['presentation_instruction']}
-                    ambiguities.append(BaselineAmbiguity(
-                        ambiguity_id=_sha256(body)[:16], kind=kind, chapter_ordinal=number,
-                        candidate_scene_id=scene['candidate_scene_id'],
-                        beat_ref=beat_ref, candidates=tuple(candidates)))
-                    binding[field] = []
-                if multi and len(beat.evidence_refs) > 1:
-                    uncertain('delivery_evidence', sorted(beat.evidence_refs), 'evidence_refs')
-                if len({_signature(entry['source_contexts'][ref]) for ref in contexts}) > 1:
-                    uncertain('source_context_selection', contexts, 'source_context_refs')
-                scene['deliveries'].append(binding)
+            same_beat_count = sum(1 for _, b, _ in step_rows if b == beat_ref)
+            multi = same_beat_count > 1
+            if scene_ref not in by_slot:
+                raise BlindPlanError('呈现引用不存在的场景')
+            scene = by_slot[scene_ref]
+            binding = {
+                'delivery_ref': delivery_ref,
+                'beat_ref': beat_ref,
+                'evidence_refs': sorted(beat.evidence_refs),
+                'source_context_refs': contexts,
+            }
+
+            def uncertain(kind, candidates, field):
+                body = {'kind': kind, 'chapter_ordinal': number,
+                        'candidate_scene_id': scene['candidate_scene_id'],
+                        'delivery_ref': delivery_ref,
+                        'beat_ref': beat_ref, 'candidates': tuple(candidates),
+                        'presentation_instruction': delivery.get('presentation_instruction')
+                        or delivery.get('delivery_focus')}
+                ambiguities.append(BaselineAmbiguity(
+                    ambiguity_id=_sha256(body)[:16], kind=kind, chapter_ordinal=number,
+                    candidate_scene_id=scene['candidate_scene_id'],
+                    beat_ref=beat_ref, candidates=tuple(candidates),
+                    delivery_ref=delivery_ref))
+                binding[field] = []
+            if multi and len(beat.evidence_refs) > 1:
+                uncertain('delivery_evidence', sorted(beat.evidence_refs), 'evidence_refs')
+            if len({_signature(entry['source_contexts'][ref]) for ref in contexts}) > 1:
+                uncertain('source_context_selection', contexts, 'source_context_refs')
+            scene['deliveries'].append(binding)
         if seen != set(beats) or any(not s['deliveries'] for s in by_slot.values()):
             raise BlindPlanError('B 基线不能为漏节点或空场设计伪造绑定')
         for scene in by_slot.values():
-            scene['deliveries'].sort(key=lambda r: r['beat_ref'])
+            scene['deliveries'].sort(key=lambda r: r['delivery_ref'])
         chapters.append(ChapterBaseline(number, tuple(by_slot.values()), tuple(ambiguities)))
     return MechanicalBaseline(tuple(sorted(chapters, key=lambda c: c.chapter_ordinal)))
 
@@ -258,8 +295,12 @@ def apply_chapter_resolutions(chapter: ChapterBaseline, resolutions: list[dict],
         raise BlindPlanError('B 当前场景身份漂移')
     for key, refs in selected.items():
         ambiguity = expected[key]
-        delivery = next(r for r in by_id[ambiguity.candidate_scene_id]['deliveries']
-                        if r['beat_ref'] == ambiguity.beat_ref)
+        deliveries = by_id[ambiguity.candidate_scene_id]['deliveries']
+        if ambiguity.delivery_ref:
+            delivery = next(r for r in deliveries
+                            if r.get('delivery_ref') == ambiguity.delivery_ref)
+        else:
+            delivery = next(r for r in deliveries if r['beat_ref'] == ambiguity.beat_ref)
         field = {'delivery_evidence': 'evidence_refs',
                  'source_context_selection': 'source_context_refs'}[ambiguity.kind]
         delivery[field] = refs
@@ -285,16 +326,34 @@ def _binding_closure(candidate: dict, response: dict, catalog: dict[int, dict]) 
             entry = catalog[number]
             parents = {r['beat_id']: r for r in entry['blueprint']['beats']}
             scene_by_slot = {s['scene_ref']: s['candidate_scene_id'] for s in chapter['scenes']}
-            expected = {(scene_by_slot[d['scene_ref']], _beat_ref(candidate, p['beat_alias'], number))
-                        for p in chapter['beat_placements'] for d in p['deliveries']}
+            expected_by_delivery: dict[str, tuple[str, str]] = {}
+            expected_legacy: set[tuple[str, str]] = set()
+            for p in chapter['beat_placements']:
+                beat = _beat_ref(candidate, p['beat_alias'], number)
+                for d in p['deliveries']:
+                    sid = scene_by_slot[d['scene_ref']]
+                    if d.get('delivery_ref'):
+                        expected_by_delivery[d['delivery_ref']] = (sid, beat)
+                    else:
+                        expected_legacy.add((sid, beat))
             bound = {}
             for scene in by_chapter[number].scenes:
                 if scene.candidate_scene_id not in scene_by_slot.values():
                     raise BlindPlanError('B 场景属于其他章或旧候选')
                 for delivery in scene.deliveries:
-                    key = (scene.candidate_scene_id, delivery.beat_ref)
-                    if key not in expected or key in bound:
-                        raise BlindPlanError('B 不能新增、删除、移动或重复呈现')
+                    dref = delivery.delivery_ref
+                    if dref and dref in expected_by_delivery:
+                        key: str | tuple[str, str] = dref
+                        if key in bound:
+                            raise BlindPlanError('B 不能重复 delivery_ref')
+                        sid, expect_beat = expected_by_delivery[dref]
+                        if (sid != scene.candidate_scene_id
+                                or delivery.beat_ref != expect_beat):
+                            raise BlindPlanError('B 不能新增、删除、移动或重复呈现')
+                    else:
+                        key = (scene.candidate_scene_id, delivery.beat_ref)
+                        if key not in expected_legacy or key in bound:
+                            raise BlindPlanError('B 不能新增、删除、移动或重复呈现')
                     parent = parents[delivery.beat_ref]
                     if not set(delivery.evidence_refs) <= set(parent['evidence_refs']):
                         raise BlindPlanError('B 证据不属于父节点')
@@ -302,13 +361,13 @@ def _binding_closure(candidate: dict, response: dict, catalog: dict[int, dict]) 
                     for ref in delivery.source_context_refs:
                         if ref not in contexts or contexts[ref]['beat_ref'] != delivery.beat_ref:
                             raise BlindPlanError('B 舞台不属于父节点有据上下文')
-                    # 没有 source_contexts 是未知舞台；存在舞台时不得用空集合丢弃。
                     required_contexts = {k for k, v in contexts.items()
                                          if v['beat_ref'] == delivery.beat_ref}
                     if required_contexts and not delivery.source_context_refs:
                         raise BlindPlanError('B 不能丢掉已有舞台上下文')
                     bound[key] = delivery.model_dump(mode='json')
-            if set(bound) != expected:
+            expect_n = len(expected_by_delivery) + len(expected_legacy)
+            if len(bound) != expect_n:
                 raise BlindPlanError('B 必须绑定 A 的全部呈现')
             result[number] = bound
         except (BlindPlanError, ValueError, KeyError) as exc:
@@ -337,10 +396,19 @@ def merge_evidence_bindings(candidate: dict, response: dict, catalog: dict[int, 
             ref = beat(placement['beat_alias'])
             deliveries = []
             for delivery in placement['deliveries']:
-                evidence = bound[number][(scene_ids[delivery['scene_ref']], ref)]
-                deliveries.append({**copy.deepcopy(delivery),
+                dref = delivery.get('delivery_ref')
+                if dref and dref in bound[number]:
+                    evidence = bound[number][dref]
+                else:
+                    evidence = bound[number][(scene_ids[delivery['scene_ref']], ref)]
+                row = {**copy.deepcopy(delivery),
                     'evidence_refs': evidence['evidence_refs'],
-                    'source_context_refs': evidence['source_context_refs']})
+                    'source_context_refs': evidence['source_context_refs']}
+                if dref:
+                    row['delivery_ref'] = dref
+                elif evidence.get('delivery_ref'):
+                    row['delivery_ref'] = evidence['delivery_ref']
+                deliveries.append(row)
             placements.append({'beat_ref': ref, 'deliveries': deliveries})
         anchors = [{**candidate['endpoint_aliases'][r['endpoint_alias']],
                     'scene_ref': r['scene_ref']} for r in chapter['anchor_bindings']]

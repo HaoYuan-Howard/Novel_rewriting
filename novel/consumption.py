@@ -26,7 +26,7 @@ from contracts.artifacts import (
     STAGE2_GLOBAL_EDIT, STAGE2_GLOBAL_GROUNDING,
     STAGE4_BLIND_CANDIDATE,
     STAGE4_BLIND_CHAPTER_EDIT, STAGE4_EVIDENCE_BINDING,
-    STAGE4_PLAN_CHAPTERS, STAGE4_PLAN_EDIT,
+    STAGE4_PLAN_EDIT,
     STAGE4_WRITER_CONTEXT, STAGE5_REVIEW, STAGE5_TRIM_AUDIT,
     STAGE6_HOOK, STAGE6_HOOK_EDIT, STAGE6_PREPARE,
     STAGE7_NAME_MAP_EDIT,
@@ -339,9 +339,13 @@ def stage7_main_text(data: object) -> object:
 
 
 def stage7_plan(data: object) -> object:
-    """改名从计划只消费输出章号，作为缺章判定分母。"""
+    """改名从 Design 只消费输出章号，作为缺章判定分母（STR-03-S4）。"""
     if not isinstance(data, dict):
-        return None
+        chapters = getattr(data, 'output_chapters', None)
+        if chapters is None:
+            return None
+        return sorted(int(getattr(c, 'output_ordinal', c.get('output_ordinal')))
+                      for c in chapters)
     return sorted((c or {}).get('output_ordinal')
                   for c in (data.get('output_chapters') or []))
 
@@ -462,7 +466,8 @@ CONSUMED_PROJECTIONS: Final[dict[str, dict[str, Projection]]] = {
         STAGE1_MAIN_TEXT: stage4_main_text,
         STAGE2_CHAPTER_BLUEPRINTS: stage4_context_blueprints,
         STAGE2_GLOBAL_GROUNDING: stage4_grounding,
-        STAGE4_PLAN_CHAPTERS: artifact_payload,
+        STAGE4_BLIND_CANDIDATE: artifact_payload,
+        STAGE4_EVIDENCE_BINDING: artifact_payload,
     },
     'stage5.write': {
         STAGE2_CHARACTERS: stage5_characters,
@@ -494,7 +499,7 @@ CONSUMED_PROJECTIONS: Final[dict[str, dict[str, Projection]]] = {
         STAGE2_CHARACTERS: stage7_characters,
         STAGE1_MAIN_TEXT: stage7_main_text,
         STAGE2_GLOBAL_GROUNDING: stage7_grounding,
-        STAGE4_PLAN_CHAPTERS: stage7_plan,
+        STAGE4_BLIND_CANDIDATE: stage7_plan,
         STAGE4_WRITER_CONTEXT: stage7_context,
         STAGE6_HOOK: stage7_hook,
         STAGE7_NAME_MAP_EDIT: artifact_payload,

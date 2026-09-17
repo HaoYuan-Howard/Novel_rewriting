@@ -1025,6 +1025,12 @@
     "stage4"
    ]
   },
+  "tests/test_stage4_binding_input_recovery_integration.py": {
+   "layer": "unit_contract",
+   "stages": [
+    "stage4"
+   ]
+  },
   "tests/test_stage4_blind.py": {
    "layer": "unit_contract",
    "stages": [
@@ -1055,6 +1061,12 @@
     "stage4"
    ]
   },
+  "tests/test_stage4_ir_contract.py": {
+   "layer": "unit_contract",
+   "stages": [
+    "stage4"
+   ]
+  },
   "tests/test_stage4_legacy_chapter_budget.py": {
    "layer": "unit_contract",
    "stages": [
@@ -1067,6 +1079,12 @@
     "stage4"
    ]
   },
+  "tests/test_stage4_plan_chapters.py": {
+   "layer": "unit_contract",
+   "stages": [
+    "stage4"
+   ]
+  },
   "tests/test_stage4_repair.py": {
    "layer": "unit_contract",
    "stages": [
@@ -1074,6 +1092,12 @@
    ]
   },
   "tests/test_stage4_structure_metrics.py": {
+   "layer": "unit_contract",
+   "stages": [
+    "stage4"
+   ]
+  },
+  "tests/test_stage4_typed_failures.py": {
    "layer": "unit_contract",
    "stages": [
     "stage4"

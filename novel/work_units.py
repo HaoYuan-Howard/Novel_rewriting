@@ -25,7 +25,7 @@ from contracts.invariants import (
 )
 from contracts.schema.workflow import (
     BookBudgetGrantV1, BookContentBudgetV1, WorkflowManifestV6,
-    WorkflowManifestV7, WorkUnitAttempt, WorkUnitBlobV1,
+    WorkflowManifestV7, WorkflowManifestV8, WorkUnitAttempt, WorkUnitBlobV1,
     WorkUnitContentTurn, WorkUnitGroupBlobV1, WorkUnitLedgerV2,
     WorkUnitRegistryV1, WorkUnitProcessing,
 )
@@ -208,17 +208,22 @@ def _read(base: str | os.PathLike[str], path: Path, model: type[BaseModel]) -> A
         raise WorkUnitRefused(f'工作单元账缺失或不符合当前契约：{target.name}') from exc
 
 
-def workflow_manifest(base: str | os.PathLike[str]) -> WorkflowManifestV7 | None:
+def workflow_manifest(base: str | os.PathLike[str]) -> WorkflowManifestV7 | WorkflowManifestV8 | None:
     path = _safe(base, paths.workflow_manifest_path(base))
     if not path.exists():
         if paths.workflow_transition_pending_path(base).exists():
             raise WorkUnitRefused('已有迁移 prepared 但 manifest 缺失；禁止初始化新任务')
         return None
-    manifest = _read(base, path, WorkflowManifestV7)
-    from novel.orchestrator.workflow_transition import require_transition_completed
     with _open_snapshot(path) as stream:
         raw = stream.read()
-    if WorkflowManifestV7.model_validate_json(raw) != manifest:
+    try:
+        version = json.loads(raw)['schema_version']
+    except (TypeError, ValueError, KeyError) as exc:
+        raise WorkUnitRefused('工作流 manifest 版本不可读') from exc
+    model = WorkflowManifestV8 if version == 8 else WorkflowManifestV7
+    manifest = _read(base, path, model)
+    from novel.orchestrator.workflow_transition import require_transition_completed
+    if model.model_validate_json(raw) != manifest:
         raise WorkUnitRefused('读取工作流 manifest 时身份变化')
     require_transition_completed(Path(base), manifest, raw)
     return manifest
@@ -255,7 +260,7 @@ def check_workflow_write(base: str | os.PathLike[str]) -> None:
         _require_clean_base(base)
 
 
-def initialize_workflow(base: str | os.PathLike[str]) -> WorkflowManifestV7:
+def initialize_workflow(base: str | os.PathLike[str]) -> WorkflowManifestV8:
     """仅空 base 可初始化；旧书不能靠删账或换代码获得新额度。"""
     target = _safe(base, paths.workflow_manifest_path(base))
     # 拒绝存量 base 必须零写；锁本身会创建父目录，因此先作只读预检。
@@ -264,15 +269,18 @@ def initialize_workflow(base: str | os.PathLike[str]) -> WorkflowManifestV7:
     with path_transaction_lock(target):
         existing = workflow_manifest(base)
         if existing is not None:
+            if not isinstance(existing, WorkflowManifestV8):
+                raise WorkUnitRefused(
+                    '存量 workflow manifest 不是 v8；STR-03-S4 不迁移，请使用 clean base')
             return existing
         _require_clean_base(base)
-        manifest = WorkflowManifestV7(task_id=hashlib.sha256(uuid4().bytes).hexdigest(),
+        manifest = WorkflowManifestV8(task_id=hashlib.sha256(uuid4().bytes).hexdigest(),
                                       created_at=int(time.time()))
         _write(base, target, manifest)
         return manifest
 
 
-def require_workflow(base: str | os.PathLike[str]) -> WorkflowManifestV7:
+def require_workflow(base: str | os.PathLike[str]) -> WorkflowManifestV7 | WorkflowManifestV8:
     manifest = workflow_manifest(base)
     if manifest is None:
         return initialize_workflow(base)

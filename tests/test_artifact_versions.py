@@ -174,22 +174,6 @@ _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
         '由 stage2.blueprint --emit-edit-template 免费取得当前完整章模板，人工依据当前材料填写，'
         '--apply-edit 同尺编译并保存身份历史及待审义务；旧 v1 不改版本号继承 token 或审批',
     ),
-    'stage4/plan_chapters.json': (
-        7,
-        '三次破坏。2026-08-25 v2 删除 `PlanBeat`/`segments`/`from_beats`，改为原子事实 '
-        '`semantic_contract` + `scenes`。2026-08-25 v3 把源序可见的一次规划拆成 '
-        '`stage4.design` 盲设计与 `stage4.plan` 证据绑定，逐章新增 retain/reconstruct '
-        '决定与声明/代码复算变化；2026-08-26 v4 删除展示/过程/派生字段：goal rationale、'
-        '权重、reconstruction_strategy、semantic_contract、FactRef.chapter、PlanParams、'
-        'provenance params 与持久化 computed_change_kinds；2026-09-12 v5 以 BeatPlacement '
-        '作为节点到场景唯一映射，分场 delivery 保留父节点身份，并显式绑定知识、状态和约束端点。'
-        'v6 PlanGoal 的人物主体与关系两端保留完整 ActorRef，披露端点含呈现身份，不再以 char_id 唯一代表人物使用。'
-        'v7（2026-09）随 KnowledgeLinks 退役删除逐场知识事件端点与传播许可；计划只保留 '
-        'ActorRef 主体、EvidenceAnchor 证据与显式状态端点',
-        '旧 v1～v6 仅在配对旧根/旧代码恢复；新空根在 Blueprint v10 闭合后由 stage4.design '
-        '和章级 stage4.plan 重建，保留两次正式审阅。Context 免费重编译，Stage5 按实际消费变化失效；'
-        '普通分场不触发 Stage2 重抽或重开已有效接受的章审',
-    ),
     'stage4/plan_edit.json': (
         7,
         '三次破坏：v2 改为语义契约 + scenes；v3 与正式计划同步新增章级结构决定及代码复算变化；'
@@ -200,16 +184,18 @@ _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
         '重新填写，重新核验真实依赖与受影响的 Stage4 接受',
     ),
     'stage4/blind_candidate.json': (
-        6,
+        7,
         'v2 删除三个 goal 的 rationale；v3 删除退役整书拒稿采用来源，'
         '策略/单章架构改为必填，旧候选快照不得冒充当前 unit lineage；2026-09-12 v4 '
         '规划完整剧情及呈现分配，使用人物语义目录与 opaque alias，退役事实 alias 和逐事实落场。'
         'v5 participant_aliases 值为 ActorRef；subject_aliases 保留人物及关系两端呈现，'
         '同实体不同表面身份分别映射，规划知识端点可指向全部实际主体 alias。'
         'v6（2026-09）随 KnowledgeLinks 退役删除逐场知识事件分配与传播许可，'
-        '呈现分配只绑 ActorRef 与 EvidenceAnchor',
-        '旧 v1～v5 仅配对旧根/旧代码恢复；新根由 stage4.design 策略及章级 producer '
-        '在原授权内重建 v6，并重新完成设计审阅。当前 schema 的已保存回答和 prepared 按正式身份免费恢复',
+        '呈现分配只绑 ActorRef 与 EvidenceAnchor。'
+        'v7（STR-03-S4）compiler 物化 scenes[].steps[] 与 delivery_ref（呈现序权威）；'
+        '正式产物可携 delivery_focus；plan_chapters 正式读写退役',
+        '旧 v1～v6 仅配对旧根/旧代码恢复；新 clean root 由 stage4.design 重建 v7；'
+        'Context 改消费 Design+Grounding，章集分母改读本文件',
     ),
     'stage4/blind_chapter_edit.json': (
         3,
@@ -220,7 +206,7 @@ _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
         '重新填写 v3，由 stage4.design 免费完整章编辑编译，设计审阅仍核验当前主体、局部 alias 及依赖身份',
     ),
     'stage4/evidence_binding.json': (
-        6,
+        7,
         '2026-08-26 v2 删除 participant_refs；2026-08-28 v3 把模型 infeasible '
         '降为待核证主张，新增非阻断 binding_concerns、代码铸造的 '
         'infeasibility_proof 与 human/llm 判别来源账；2026-09-08 v4 为按章 legacy B '
@@ -228,11 +214,11 @@ _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
         '删除整书及缺省架构兼容，章模型必须有明确来源，正式绑定必须完整覆盖章集；'
         '2026-09-12 v5 按已接受章级设计绑定 delivery 的 EvidenceAnchor 和有据舞台，'
         '不修改 A 的呈现分配、顺序、目标及端点，也不把证据重叠当作剧情重复。'
-        'v6（2026-09）随 KnowledgeLinks 退役只绑定现存主体与共享锚点，无知识事件端点',
+        'v6（2026-09）随 KnowledgeLinks 退役只绑定现存主体与共享锚点，无知识事件端点。'
+        'v7（STR-03-S4）绑定键为 delivery_ref；可选扁平 bindings；'
+        'status 增加 ambiguous / input_insufficient（缺上游不触发 Design 重采）',
         '旧 base 使用冻结旧代码保留证据；当前 producer 只在新 clean base 从原始材料及 '
-        '当前 A 接受后由 stage4.plan 重建，机械章零模型；可显式 --apply-binding 提交当前 '
-        'EvidenceBindingResponse。旧 v1～v4 不原地迁移、不伪造工作单元来源、不手补版本号；'
-        '旧根只配对其冻结旧代码恢复，绑定后保留独立结构审阅',
+        '当前 A 后由 stage4.plan 重建；正式下游只消费 bound 结果',
     ),
     'stage4/writer_context.json': (
         10,

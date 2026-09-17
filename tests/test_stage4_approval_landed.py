@@ -106,10 +106,14 @@ def _structure_request(subject: str = 'b' * 64, decision: str = 'accept',
                   for ordinal in chapters])
 
 
-def _structure_stored(request: StructureApprovalRequest, artifact_rel):
+def _structure_stored(request: StructureApprovalRequest, artifacts: dict[str, str] | None = None):
     digest = _sha(approvals._structure_decision_payload(request))
+    proof_artifacts = artifacts or {
+        STAGE4_BLIND_CANDIDATE: 'c' * 64,
+        STAGE4_EVIDENCE_BINDING: 'd' * 64,
+    }
     proof = approvals._ApprovalProof(
-        root_clean_sha1=_root(), artifacts={artifact_rel: 'd' * 64},
+        root_clean_sha1=_root(), artifacts=proof_artifacts,
         decision_sha256=digest)
     return approvals._StoredStructureDecision(
         actor=request.actor, reason=request.reason,
@@ -127,7 +131,7 @@ def landed_source(request):
         surface = 'design'
     else:
         typed = _structure_request()
-        stored = _structure_stored(typed, STAGE4_PLAN_CHAPTERS)
+        stored = _structure_stored(typed)
         payload = typed.model_dump(mode='json')
         surface = 'structure'
     tmp = Path(tempfile.mkdtemp(prefix='landed-'))
@@ -160,7 +164,7 @@ def landed_source(request):
         else:
             newer_request = _structure_request(
                 subject='c' * 64, decision='request_replan')
-            newer = _structure_stored(newer_request, STAGE4_PLAN_CHAPTERS)
+            newer = _structure_stored(newer_request)
             payload_new = newer_request.model_dump(mode='json')
         current = read_record()
         write_record(current.model_copy(update={
@@ -279,15 +283,29 @@ def test_design_token_and_original_candidate_proof_must_agree(landed_source):
         landed(s)
 
 
-def test_structure_proof_accepts_plan_only_or_plan_plus_binding(landed_source):
-    """结构回执 proof 允许 plan-only 或 plan+binding 两种历史形状。"""
+def test_structure_proof_accepts_historical_and_current_artifact_sets(landed_source):
+    """结构回执 proof 允许历史 plan 形与现役 Design+Binding 形。"""
     s = landed_source
     if s.surface != 'structure':
         pytest.skip('结构 proof 形状只属于 structure 面')
     assert landed(s)
     raw = json.loads(s.path.read_text('utf-8'))
     stored = raw['structure_history'][0]
-    stored['proof']['artifacts'][STAGE4_EVIDENCE_BINDING] = 'd' * 64
+    # 历史 plan-only
+    stored['proof']['artifacts'] = {STAGE4_PLAN_CHAPTERS: 'd' * 64}
+    raw['structure_decision'] = stored
+    s.path.write_text(json.dumps(raw, ensure_ascii=False), encoding='utf-8')
+    assert landed(s)
+    # 历史 plan + binding
+    stored['proof']['artifacts'][STAGE4_EVIDENCE_BINDING] = 'e' * 64
+    raw['structure_decision'] = stored
+    s.path.write_text(json.dumps(raw, ensure_ascii=False), encoding='utf-8')
+    assert landed(s)
+    # 现役 Design + Binding
+    stored['proof']['artifacts'] = {
+        STAGE4_BLIND_CANDIDATE: 'c' * 64,
+        STAGE4_EVIDENCE_BINDING: 'd' * 64,
+    }
     raw['structure_decision'] = stored
     s.path.write_text(json.dumps(raw, ensure_ascii=False), encoding='utf-8')
     assert landed(s)

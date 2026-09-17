@@ -463,9 +463,47 @@ def validate_chapter(chapter: dict, source: dict) -> dict:
 def _compile_chapter(raw: dict, source: dict) -> dict:
     typed = BlindChapterResponse.model_validate(raw)
     row = typed.model_dump(mode='json')
+    ordinal = row['output_ordinal']
     for index, scene in enumerate(row['scenes'], 1):
-        scene['candidate_scene_id'] = f'c{row["output_ordinal"]:02d}s{index:02d}'
-    return validate_chapter(row, source)
+        scene['candidate_scene_id'] = f'c{ordinal:02d}s{index:02d}'
+    # Design 快照内确定性发 delivery_ref，并物化 scenes[].steps[]（呈现序权威）
+    seq = 1
+    for scene in row['scenes']:
+        steps = []
+        for placement in row['beat_placements']:
+            for delivery in placement['deliveries']:
+                if delivery['scene_ref'] != scene['scene_ref']:
+                    continue
+                delivery_ref = delivery.get('delivery_ref') or f'd{ordinal:02d}_{seq:02d}'
+                seq += 1
+                delivery['delivery_ref'] = delivery_ref
+                focus = delivery.get('delivery_focus')
+                if not focus and delivery.get('presentation_instruction'):
+                    focus = delivery['presentation_instruction']
+                steps.append({
+                    'delivery_ref': delivery_ref,
+                    'beat_ref': placement['beat_alias'] if str(
+                        placement['beat_alias']).startswith('b') else placement['beat_alias'],
+                    'delivery_focus': focus,
+                })
+        # beat_alias 可能仍是 opaque；validate_chapter 前已应映成正式 beat_ref
+        # 若仍是 a_/u_，在 validate 后二次回填 beat_ref
+        scene['steps'] = steps
+    row = validate_chapter(row, source)
+    # validate 后 placement 的 beat_alias 已是正式 beat_ref 形；回填 steps.beat_ref
+    by_delivery = {}
+    for placement in row['beat_placements']:
+        beat_ref = placement['beat_alias']
+        if not str(beat_ref).startswith('b'):
+            # 正式候选应已是 bNN_MM；保留原值供排查
+            pass
+        for delivery in placement['deliveries']:
+            by_delivery[delivery['delivery_ref']] = beat_ref
+    for scene in row['scenes']:
+        for step in scene.get('steps') or []:
+            if step['delivery_ref'] in by_delivery:
+                step['beat_ref'] = by_delivery[step['delivery_ref']]
+    return row
 
 
 def compile_blind_chapter_design(response: object, local_mapping: object,

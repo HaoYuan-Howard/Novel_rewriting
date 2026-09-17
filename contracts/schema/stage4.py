@@ -316,10 +316,12 @@ class BlindLocalGoalResponse(BlindGoalResponse):
 
 
 class BlindPresentationDelivery(StrictModel):
-    """A 只决定呈现任务；证据由 B 绑定，不在盲请求里伪造证据。"""
+    """A 只决定呈现任务；证据由 B 绑定。delivery_ref 由 compiler 发号，不入 LLM wire。"""
 
     scene_ref: str = Field(pattern=r'^s\d{2,4}$')
-    presentation_instruction: str | None
+    presentation_instruction: str | None = None
+    delivery_focus: str | None = Field(default=None, max_length=80)
+    delivery_ref: str | None = Field(default=None, pattern=r'^d\d{2,}_\d{2,}$')
 
 
 class BlindBeatPlacement(StrictModel):
@@ -331,11 +333,12 @@ class BlindBeatPlacement(StrictModel):
         refs = [row.scene_ref for row in self.deliveries]
         if len(refs) != len(set(refs)):
             raise ValueError('同一节点在同一场景只能有一条呈现安排')
-        if len(refs) > 1 and any(
-            not row.presentation_instruction or not row.presentation_instruction.strip()
+        multi = len(self.deliveries) > 1
+        if multi and any(
+            not (row.delivery_focus or row.presentation_instruction or '').strip()
             for row in self.deliveries
         ):
-            raise ValueError('分场节点的每条 delivery 必须说明呈现任务')
+            raise ValueError('同一 beat 多 delivery 时须提供 delivery_focus（或过渡期 presentation_instruction）')
         return self
 
 
@@ -428,6 +431,8 @@ class BlindPlanResponse(StrictModel):
 
 class BlindCandidateScene(BlindSceneResponse):
     candidate_scene_id: str = Field(pattern=_CANDIDATE_SCENE_PATTERN)
+    #: compiler 物化的呈现序；wire 响应无此字段。
+    steps: list[dict] = Field(default_factory=list)
 
 
 class BlindCandidateChapter(BlindChapterResponse):
@@ -438,6 +443,12 @@ class BlindCandidateChapter(BlindChapterResponse):
         ids = [scene.candidate_scene_id for scene in self.scenes]
         if len(ids) != len(set(ids)):
             raise ValueError('candidate_scene_id 不能重复')
+        delivery_refs = [
+            step.get('delivery_ref') for scene in self.scenes for step in (scene.steps or [])
+            if isinstance(step, dict) and step.get('delivery_ref')
+        ]
+        if delivery_refs and len(delivery_refs) != len(set(delivery_refs)):
+            raise ValueError('同章 delivery_ref 必须唯一')
         return self
 
 
@@ -608,11 +619,12 @@ class BlindCandidate(BlindReferenceMaps):
 # ── Stage4B：证据绑定响应与中间产物 ──────────────────────────────────────────
 
 class EvidenceDeliveryBinding(StrictModel):
-    """B 只为 A 已登记的呈现补证据与有据舞台，不修改呈现任务。"""
+    """B 只为 A 已登记的 delivery 补证据；键为 Design 快照内的 delivery_ref。"""
 
+    delivery_ref: str = Field(pattern=r'^d\d{2,}_\d{2,}$')
     beat_ref: str = Field(pattern=r'^b\d{2,}_\d{2,}$')
     evidence_refs: list[str] = Field(min_length=1)
-    source_context_refs: list[str]
+    source_context_refs: list[str] = Field(default_factory=list)
 
     @model_validator(mode='after')
     def _unique_refs(self):
@@ -628,18 +640,27 @@ class EvidenceSceneBinding(StrictModel):
 
     @model_validator(mode='after')
     def _unique_parents(self):
-        refs = [r.beat_ref for r in self.deliveries]
+        refs = [r.delivery_ref for r in self.deliveries]
         if len(refs) != len(set(refs)):
-            raise ValueError('同场同节点只能绑定一条呈现')
+            raise ValueError('同场 delivery_ref 只能绑定一次')
         return self
 
 
 class EvidenceChapterBinding(StrictModel):
     output_ordinal: int = Field(ge=1)
-    scenes: list[EvidenceSceneBinding] = Field(min_length=1)
+    #: v7：扁平 delivery 绑定；scenes 仅兼容读旧形，新写只填 bindings。
+    bindings: list[EvidenceDeliveryBinding] = Field(default_factory=list)
+    scenes: list[EvidenceSceneBinding] = Field(default_factory=list)
 
     @model_validator(mode='after')
-    def _scene_bindings_are_unique(self):
+    def _binding_surface(self):
+        if self.bindings:
+            refs = [b.delivery_ref for b in self.bindings]
+            if len(refs) != len(set(refs)):
+                raise ValueError('同章 delivery_ref 不能重复绑定')
+            return self
+        if not self.scenes:
+            raise ValueError('章级绑定必须提供 bindings 或兼容 scenes')
         ids = [scene.candidate_scene_id for scene in self.scenes]
         if len(ids) != len(set(ids)):
             raise ValueError('同章 candidate_scene_id 不能重复绑定')
@@ -718,7 +739,7 @@ class BindingInfeasibilityWitness(StrictModel):
 
 
 class EvidenceBindingResponse(StrictModel):
-    status: Literal['bound', 'infeasible']
+    status: Literal['bound', 'infeasible', 'ambiguous', 'input_insufficient']
     candidate_sha256: Sha256
     chapters: list[EvidenceChapterBinding] | None = None
     binding_concerns: list[BindingConcern] = Field(default_factory=list)
@@ -728,13 +749,16 @@ class EvidenceBindingResponse(StrictModel):
         if self.status == 'bound':
             if not self.chapters:
                 raise ValueError('bound 必须返回非空 chapters')
-        else:
+        elif self.status == 'infeasible':
             if self.chapters is not None:
                 raise ValueError('infeasible 不得返回部分绑定冒充可编译结果')
             if not self.binding_concerns:
                 raise ValueError(
                     'infeasible 模型声称必须给非空 binding_concerns；'
                     '它仍须由代码独立证明')
+        elif self.status in ('ambiguous', 'input_insufficient'):
+            # 执行诊断面；正式下游只消费 bound
+            pass
         return self
 
 

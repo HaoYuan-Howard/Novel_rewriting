@@ -39,11 +39,19 @@ def chapter_facts(entry: dict[str, Any], slot_plan: list[int] | None = None) -> 
         task = dict(scene)
         if slot_plan is not None:
             task['paragraph_target'] = slot_plan[index]
+        # STR-03-S4：若 Design 已物化有序 steps，写手必须按该序呈现，不得重排
+        if scene.get('steps'):
+            task['steps'] = scene['steps']
+            task.pop('deliveries', None)
         rows.append(task)
-    return ('按 slot 顺序完成下面全部场景；delivery 只安排呈现，不增加子事实。\n'
-            '每场按 presentation_instruction 使用父节点，不能把完整父节点在多场重复讲一遍。\n'
+    return ('按 slot 顺序完成下面全部场景；delivery / steps 只安排呈现，不增加子事实。\n'
+            '若场景含 steps[]，数组顺序即正式呈现序，禁止按 beat_ref 或证据位置重排。\n'
+            '每场按 delivery_focus / presentation_instruction 使用父节点，'
+            '不能把完整父节点在多场重复讲一遍。\n'
             'context_beat_refs 只用于承接已经完整呈现的背景。\n'
             'stages 的 null 表示未知，present=[] 表示有据的无人在场；不推断被提及的人在场。\n'
+            'facts[].permission 为表达许可：world_fact / claim_only / belief_only / '
+            'must_preserve_unresolved / forbidden；不得升级为未授权揭示。\n'
             + compact(rows) + '\n叙述视角：' + compact(entry['narration']))
 
 

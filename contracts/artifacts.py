@@ -46,7 +46,6 @@ ARTIFACT_PATHS: Final[dict[str, str]] = {
     'stage4.blind_candidate': 'stage4/blind_candidate.json',
     'stage4.blind_chapter_edit': 'stage4/blind_chapter_edit.json',
     'stage4.evidence_binding': 'stage4/evidence_binding.json',
-    'stage4.plan_chapters': 'stage4/plan_chapters.json',
     'stage4.plan_edit': 'stage4/plan_edit.json',
     'stage4.writer_context': 'stage4/writer_context.json',
     'stage5.chapter': 'stage5/ch{nn}.json',
@@ -82,6 +81,8 @@ RETIRED_ARTIFACT_PATHS: Final[dict[str, str]] = {
     'stage2.global_review': 'stage2/global_review.json',
     'stage2.global_review_decisions': 'stage2/global_review_decisions.json',
     'stage3.style_grounding': 'stage3/style_grounding.json',
+    # STR-03-S4：正式计划退役；章集/预算/对账边拆入 Design + Context provenance。
+    'stage4.plan_chapters': 'stage4/plan_chapters.json',
 }
 
 
@@ -150,7 +151,7 @@ RETIRED_STAGE3_STYLE_GROUNDING = RETIRED_ARTIFACT_PATHS['stage3.style_grounding'
 STAGE4_BLIND_CANDIDATE = artifact_rel('stage4.blind_candidate')
 STAGE4_BLIND_CHAPTER_EDIT = artifact_rel('stage4.blind_chapter_edit')
 STAGE4_EVIDENCE_BINDING = artifact_rel('stage4.evidence_binding')
-STAGE4_PLAN_CHAPTERS = artifact_rel('stage4.plan_chapters')
+STAGE4_PLAN_CHAPTERS = RETIRED_ARTIFACT_PATHS['stage4.plan_chapters']
 STAGE4_PLAN_EDIT = artifact_rel('stage4.plan_edit')
 STAGE4_WRITER_CONTEXT = artifact_rel('stage4.writer_context')
 STAGE5_CHAPTER = artifact_rel('stage5.chapter')

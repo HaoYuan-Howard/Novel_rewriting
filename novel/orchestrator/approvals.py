@@ -5,7 +5,7 @@ from contracts.artifacts import (
     STAGE0_CLEAN_TEXT, STAGE0_REVISIONS, STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT,
     STAGE2_CHAPTER_BLUEPRINTS,
     STAGE4_BLIND_CANDIDATE, STAGE4_EVIDENCE_BINDING,
-    STAGE4_PLAN_CHAPTERS, STAGE4_WRITER_CONTEXT,
+    STAGE4_PLAN_CHAPTERS, STAGE4_WRITER_CONTEXT,  # plan_chapters 仅历史 proof 复验
     STAGE6_HOOK, STAGE7_NAME_MAP, artifact_rel,
 )
 
@@ -716,7 +716,7 @@ def has_record(base: str | os.PathLike[str], sid: str) -> bool:
 _GATE_ARTIFACTS = {
     's0': (STAGE0_REVISIONS,),
     's1': (STAGE1_MAIN_TEXT, STAGE1_HOOK_COPY),
-    's4': (STAGE4_PLAN_CHAPTERS,),
+    's4': (STAGE4_BLIND_CANDIDATE, STAGE4_EVIDENCE_BINDING),
     's6': (STAGE6_HOOK,),
     's7': (STAGE7_NAME_MAP,),
 }
@@ -1632,14 +1632,18 @@ def _structure_workpack_snapshot(
 ) -> _StructureWorkpackSnapshot:
     """从同一组 typed 对象铸造 B subject/coverage，并保留精确载荷摘要。"""
     store = _store_for(novel_dir)
-    _require_fresh_json(store, STAGE4_PLAN_CHAPTERS)
-    plan, plan_raw = store.read_own(PlanChapters, STAGE4_PLAN_CHAPTERS)
+    _require_fresh_json(store, STAGE4_BLIND_CANDIDATE)
     _require_fresh_json(store, STAGE4_EVIDENCE_BINDING)
     binding, binding_raw = store.read_own(
         EvidenceBinding, STAGE4_EVIDENCE_BINDING)
+    if binding.status != 'bound':
+        raise ApprovalRequired(
+            '最终结构审批只接受当前 status=bound 的 EvidenceBinding')
     _require_fresh_json(store, STAGE2_CHAPTER_BLUEPRINTS)
     blueprints, blueprints_raw = store.read_own(
         ChapterBlueprints, STAGE2_CHAPTER_BLUEPRINTS)
+    from novel.stages.stage4.plan import compile_plan_view
+    plan, plan_raw = compile_plan_view(store)
     return _structure_snapshot_from_artifacts(
         store, (plan, plan_raw), (binding, binding_raw), (blueprints, blueprints_raw),
         with_materials=with_materials)
@@ -1757,7 +1761,7 @@ def _proof_for_structure(
 ) -> _ApprovalProof:
     """绑定正文根、完整计划/B/蓝图字节与逐章 typed 决定。"""
     return _make_proof(
-        novel_dir, (STAGE4_PLAN_CHAPTERS, STAGE4_EVIDENCE_BINDING,
+        novel_dir, (STAGE4_BLIND_CANDIDATE, STAGE4_EVIDENCE_BINDING,
                     STAGE2_CHAPTER_BLUEPRINTS),
         _structure_decision_payload(decision),
     )
@@ -1783,7 +1787,7 @@ def _proof_for_writing_decision(
     """绑定正文根、Stage1/Plan/Context 字节与 actor/reason/current SHA。"""
     return _make_proof(
         novel_dir, (
-            STAGE1_MAIN_TEXT, STAGE4_PLAN_CHAPTERS, STAGE4_WRITER_CONTEXT,
+            STAGE1_MAIN_TEXT, STAGE4_BLIND_CANDIDATE, STAGE4_WRITER_CONTEXT,
         ),
         _writing_decision_payload(decision),
     )
@@ -2269,7 +2273,7 @@ def _writing_proof_payload() -> dict[str, str]:
 def _proof_for_writing(novel_dir: Path) -> _ApprovalProof:
     return _make_proof(
         novel_dir, (
-            STAGE1_MAIN_TEXT, STAGE4_PLAN_CHAPTERS, STAGE4_WRITER_CONTEXT,
+            STAGE1_MAIN_TEXT, STAGE4_BLIND_CANDIDATE, STAGE4_WRITER_CONTEXT,
         ),
         _writing_proof_payload(),
     )
@@ -2487,7 +2491,8 @@ def _require_stage5_complete(
 ) -> None:
     planned = _planned(base, sid)
     if planned is None:
-        raise UpstreamMissing(f'{STAGE4_PLAN_CHAPTERS} is required before stage5 approval')
+        raise UpstreamMissing(
+            f'{STAGE4_BLIND_CANDIDATE} (Design) is required before stage5 approval')
     novel_dir = paths.resolve_novel_dir(base, sid)
     _require_stage5_contract_compatible(novel_dir, action='盖 s5 审批章')
     done = set(state.chapters_done(novel_dir))
@@ -2595,7 +2600,8 @@ def stage4_review_payload_landed(
             # 获得当前 B 放行权；当前批准仍由 _structure_view 的 freshness 决定。
             if (set(stored.proof.artifacts) not in (
                     {STAGE4_PLAN_CHAPTERS},
-                    {STAGE4_PLAN_CHAPTERS, STAGE4_EVIDENCE_BINDING})
+                    {STAGE4_PLAN_CHAPTERS, STAGE4_EVIDENCE_BINDING},
+                    {STAGE4_BLIND_CANDIDATE, STAGE4_EVIDENCE_BINDING})
                     or stored.proof.decision_sha256 != _decision_sha256(
                         _structure_decision_payload(stored))):
                 raise HumanEditProtected('匹配的 Stage4B 已落盘回执与原主体/proof 不闭合')
@@ -2651,8 +2657,9 @@ def reviewer_approval_payload_landed(
                 subject_proof = stored.proof.model_copy(update={
                     'decision_sha256': _decision_sha256(_writing_proof_payload()),
                 })
-                if (set(stored.proof.artifacts) != {
-                        STAGE1_MAIN_TEXT, STAGE4_PLAN_CHAPTERS, STAGE4_WRITER_CONTEXT}
+                if (set(stored.proof.artifacts) not in (
+                        {STAGE1_MAIN_TEXT, STAGE4_PLAN_CHAPTERS, STAGE4_WRITER_CONTEXT},
+                        {STAGE1_MAIN_TEXT, STAGE4_BLIND_CANDIDATE, STAGE4_WRITER_CONTEXT})
                         or stored.proof.decision_sha256 != _decision_sha256(
                             _writing_decision_payload(stored))
                         or _writing_subject_sha256(subject_proof) != stored.subject_sha256):
@@ -3127,7 +3134,8 @@ def _writing_prerequisites(
     # `_require_fresh_json` 关闭式冻结进写作 proof。
     planned = _planned(base, sid)
     if planned is None:
-        raise UpstreamMissing(f'{STAGE4_PLAN_CHAPTERS} is required before writing')
+        raise UpstreamMissing(
+            f'{STAGE4_BLIND_CANDIDATE} (Design) is required before writing')
     if not planned:
         raise ApprovalRequired('stage4 plan contains no output chapters')
     _require_fresh_json(_store_for(novel_dir), STAGE4_WRITER_CONTEXT)
@@ -3157,7 +3165,8 @@ def authorize_writing(
         _require_fresh_json(_store_for(novel_dir), STAGE4_WRITER_CONTEXT)
         planned = _planned(base, sid)
         if planned is None:
-            raise UpstreamMissing(f'{STAGE4_PLAN_CHAPTERS} is required before writing')
+            raise UpstreamMissing(
+            f'{STAGE4_BLIND_CANDIDATE} (Design) is required before writing')
         requested_list = planned if chapters is None else list(chapters)
         if (requested_list != sorted(set(requested_list))
                 or any(value < 1 for value in requested_list)):
@@ -3206,7 +3215,7 @@ def authorize_prepared_recovery(
         planned = _planned(base, sid)
         if planned is None:
             raise UpstreamMissing(
-                f'{STAGE4_PLAN_CHAPTERS} is required before prepared recovery')
+                f'{STAGE4_BLIND_CANDIDATE} (Design) is required before prepared recovery')
         requested = list(chapters)
         if (not requested
                 or requested != sorted(set(requested))

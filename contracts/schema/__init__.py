@@ -322,20 +322,19 @@ ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
     # v3 退役整书拒稿采用及无架构来源；由新根内当前策略/单章 producer 重建。
     # v6 随 KnowledgeLinks 退役删除 PlannerKnowledge 与 knowledge 端点；
     # 存量由 stage4.design 重跑（付费）重建，不迁移。
-    STAGE4_BLIND_CANDIDATE: ArtifactSpec(BlindCandidate, 6),
+    # v7：compiler 物化 scenes[].steps[] + delivery_ref（呈现序权威）。
+    STAGE4_BLIND_CANDIDATE: ArtifactSpec(BlindCandidate, 7),
     # v1：外部 hash-bound 完整章替换请求；只被 Stage4A CLI/API 读取，
     # 不是 Executor 产物，也不进入正式产物展示面。
     STAGE4_BLIND_CHAPTER_EDIT: ArtifactSpec(BlindChapterEditRequest, 3),
     # v2 删除可由绑定舞台 present 唯一推出的 participant_refs。
     # v6 随 KnowledgeLinks 退役删除章级证据闭包中的 knowledge_events。
-    STAGE4_EVIDENCE_BINDING: ArtifactSpec(EvidenceBinding, 6),
-    # v4 删除 A 相过程字段、Stage2 重复契约、派生结构向量与编译参数快照。
-    STAGE4_PLAN_CHAPTERS: ArtifactSpec(PlanChapters, 7),
+    # v7：delivery_ref 主键；可选扁平 bindings；失败三分 ambiguous/input_insufficient。
+    STAGE4_EVIDENCE_BINDING: ArtifactSpec(EvidenceBinding, 7),
+    # STR-03-S4：PlanChapters 退役；内存编译视图仍用 schema 类，不进正式 registry。
     STAGE4_PLAN_EDIT: ArtifactSpec(PlanEdit, 7),
-    # v5 删除文学 arc；由免费 context 节点从当前上游重建。
-    # v6：场景知识与披露许可由独立知识关联导出；0 成本 stage4.context 重建。
-    # v7 删除同号源章、总预算与源字数副本；仍由免费 context 节点重建。
     # v10 随 KnowledgeLinks 退役删除 WriterKnowledgeEvent 与逐场 knowledge_event_refs。
+    # STR-03-S4：Context 上游改为 Design+Grounding；载体形状仍为 CtxChapter 直至 Stage5 reader 切 Writer IR。
     STAGE4_WRITER_CONTEXT: ArtifactSpec(WriterContext, 10),
     # ⚠ 2026-08-24 单臂折平：删除 `mode`，路径改为
     #   `stage5/chNN.json`。存量双臂稿是只读历史证据，不做迁移；

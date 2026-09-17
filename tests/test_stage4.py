@@ -85,9 +85,9 @@ def test_the_model_response_only_ever_enters_through_the_scene_compiler():
               / 'novel' / 'stages' / 'stage4' / 'plan.py').read_text(encoding='utf-8')
     for retired in ('expand_plan_beats(', 'group_beats(', 'group_map('):
         assert retired not in source
-    # 批次 2：第三处是 `preflight_binding_candidate` 的零调用构造性绑定——
-    # 同一编译入口的只读复用，模型响应仍只经场景编译器进入。
-    assert source.count('adopt_plan_response(') == 3
+    # STR-03-S4：除预验/落盘闸外，compile_plan_view 与 context 组装也走同一入口。
+    assert source.count('adopt_plan_response(') >= 3
+    assert 'compile_plan_view(' in source
 
 
 def test_book_band_can_fail_while_the_chapter_stays_in_its_wider_band():
@@ -149,7 +149,7 @@ def test_pre_context_gate_does_not_pair_a_new_candidate_with_old_context(monkeyp
 
 
 @pytest.mark.parametrize('rel', [
-    plan.BINDING_REL, plan.REL, plan.CTX_REL,
+    plan.BINDING_REL, plan.CTX_REL,
 ])
 def test_stage4_producers_replace_an_all_legacy_live_surface(rel):
     class LegacyStore:
@@ -180,15 +180,23 @@ def test_revalidate_failure_reports_the_invalid_subject(monkeypatch):
             assert by_alias is True
             return {'node': 'stage4.plan'}
 
-    artifact = type('Artifact', (), {'provenance': Provenance()})()
+    artifact = type('Artifact', (), {
+        'provenance': Provenance(),
+        'status': 'bound',
+    })()
     store = type('Store', (), {
-        'exists': staticmethod(lambda rel: rel == plan._INVALID),
+        'exists': staticmethod(
+            lambda rel: rel in {plan._INVALID, plan.CANDIDATE_REL}),
         'read_own': staticmethod(lambda *_args, **_kwargs: (artifact, {'candidate': True})),
     })()
     outcomes = [object()]
     captured = {}
     monkeypatch.setattr(plan, 'ArtifactStore', lambda _ctx: store)
     monkeypatch.setattr(plan, '_Upstreams', lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(
+        plan, 'compile_plan_view',
+        lambda *_args, **_kwargs: (object(), {'output_chapters': []}),
+    )
     monkeypatch.setattr(plan, '_judge', lambda *_args, **_kwargs: outcomes)
     monkeypatch.setattr(plan, '_hard_hits', lambda _outcomes: ['placement_ref'])
     monkeypatch.setattr(

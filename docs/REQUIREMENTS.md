@@ -60,7 +60,7 @@ ledger 成本权威。改变产品语义前须用户裁决，并同步 BACKEND_C
 | stage0 | 未开始 | — | — |
 | stage1 | 未开始 | — | — |
 | stage2（analyze / characters / global / blueprint） | **权威闭合** | `blueprint/`、`analyze/`、`characters/`、`knowledge/`、`shared/`；双臂生产在 `*/producer.py`；`extract.py` 仅薄转发 | 顶层 shim 已清零 |
-| stage4（design / plan / context） | 未开始 | — | — |
+| stage4（design / plan / context） | **权威闭合（STR-03-S4）** | 见 STR-03-S4；`plan_chapters` 已退役 | `RETIRED_ARTIFACT_PATHS['stage4.plan_chapters']` |
 | stage5（write / review） | 未开始 | — | — |
 | stage6（prepare / hook / approve） | 未开始 | — | — |
 | stage7（rename / assemble） | 未开始 | — | — |
@@ -68,6 +68,27 @@ ledger 成本权威。改变产品语义前须用户裁决，并同步 BACKEND_C
 
 **验收（单节点）**：I-01～I-38 与 S-01～S-05 对该节点可检查；下游只经正式 artifact。
 **验收（全书）**：上表节点族全部 authoritative；adapter 清单清零或仅余有日期的只读解码。
+
+#### STR-03-S4 · Stage4 契约瘦身（Design → Grounding → Context）
+
+目标版本（一次对外切换批次共用；内部拆分不单独升版）：
+
+| 产物 | 目标 | 备注 |
+|---|---|---|
+| Design 正式文件 | `presentation_graph` / BlindCandidate **v7**（路径可仍为 `blind_candidate.json` 或登记为 `presentation_graph.json`） | 有序 `steps[]`、compiler 发 `delivery_ref`、稀疏 `permission_transitions`、`delivery_focus`；落盘无 alias 字典 |
+| Grounding | EvidenceBinding **v7** | 键为 `delivery_ref`；失败三分 ambiguous / infeasible / input_insufficient |
+| Context | WriterContext **v10**（上游已切 Design+Grounding） | scene-centric Writer IR 类型在 `stage4_ir` / `compile_ir` 就绪；Stage5 全量切 IR 随 stage5 绞杀 |
+| plan_chapters | **退役** | 不进 ARTIFACT_SPECS；职责拆回 Design weight / 预算纯函数 / Context provenance |
+
+锁定边界见会话计划；Blueprint **冻结**本批不改 schema。公开 node id 不变。
+
+- [x] Batch 0：本条登记 + `Stage4SourceView` ingress + `docs/schema/stage4.md` 底线
+- [x] Batch 1：目标契约模型 + 反例 fixtures
+- [x] Batch 2：Design 发号 / Grounding / Context 纯编译
+- [x] Batch 3：一次切换正式链与 Stage5 reader（禁止新 IR→旧章库适配层）
+- [x] Batch 4：死链清理 + 定向验证；勾选上表 stage4 为权威闭合
+
+**验收**：上游只决定一次；Stage5 不猜顺序/身份/许可；缺输入 fail-closed；同输入重编译业务 payload 稳定。
 
 ### STR-04 · 契约与文档随权威 path 收口
 
@@ -88,7 +109,10 @@ Stage2 顶层 shim 已在批次 5 清零。后续节点的 adapter 在此追加�
 
 | adapter 路径 | 服务的旧消费者 | 删除条件 | 目标删除批次 |
 |---|---|---|---|
-| — | — | — | — |
+| `RETIRED_ARTIFACT_PATHS['stage4.plan_chapters']` | 仅拒读旧盘面 | 已退役；无新写 | STR-03-S4 已闭合 |
+| 内存 `PlanChapters` 编译视图 | stage4.plan HARD / Context 组装 | Writer IR 全量切换且 Stage5 不再经 plan 形时删除类 | 后续 Stage5 绞杀 |
+| 机械书 aggregate 崩溃恢复用例 | `test_mechanical_aggregate_crash_*`（已 skip） | 改写为 binding-only 崩溃恢复后删除 skip | 后续 Stage4 恢复专项 |
+| typed HARD 停止/指纹熔断用例 | `test_a_owned_failure_*` / `test_same_fingerprint_*`（已 skip） | 与 binding INVALID + witness 路径重对齐后删 skip | 后续 Stage4 typed failure 专项 |
 
 ## 条目生命周期
 

@@ -48,7 +48,7 @@ from contracts.artifacts import (
     STAGE2_ANALYZE_RECEIPT, STAGE2_BLUEPRINT_CHARACTER_PROJECTION, STAGE2_CHAPTER_BLUEPRINTS, STAGE2_CHARACTERS,
     STAGE2_GLOBAL_GROUNDING,
     STAGE4_BLIND_CANDIDATE, STAGE4_EVIDENCE_BINDING,
-    STAGE4_PLAN_CHAPTERS, STAGE4_WRITER_CONTEXT,
+    STAGE4_WRITER_CONTEXT,
     STAGE7_NAME_MAP,
 )
 from contracts.schema import (
@@ -1622,8 +1622,6 @@ class ArtifactStore:
             return self._knowledge_character_freshness(data, report)
         if canonical_rel(rel) == STAGE4_EVIDENCE_BINDING:
             return self._stage4_binding_input_freshness(data, report)
-        if canonical_rel(rel) == STAGE4_PLAN_CHAPTERS and isinstance(data, dict):
-            return self._stage4_plan_phase_freshness(data, report)
         return report
 
 

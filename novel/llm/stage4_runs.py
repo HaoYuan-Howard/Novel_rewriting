@@ -29,7 +29,6 @@ from pydantic import BaseModel, ValidationError
 
 from contracts.artifacts import (
     STAGE4_BLIND_CANDIDATE, STAGE4_EVIDENCE_BINDING,
-    STAGE4_PLAN_CHAPTERS,
 )
 from contracts.invariants import STAGE4_DESIGN_MAX_CONCURRENCY
 from contracts.schema import Usage, decode_artifact
@@ -171,7 +170,7 @@ _LEDGER_IDENTITY_FIELDS = {
     'response_sha256',
 }
 
-_PLAN_INVALID = paths.invalid_of(STAGE4_PLAN_CHAPTERS)
+_PLAN_INVALID = paths.invalid_of(STAGE4_EVIDENCE_BINDING)
 _OWNERSHIP_REGISTRY_LOCK = threading.Lock()
 _OWNERSHIP_THREAD_LOCKS: dict[str, threading.RLock] = {}
 _OWNERSHIP_LOCAL = threading.local()
@@ -1757,7 +1756,6 @@ def plan_chapter_commit_spec(chapter: int) -> agent_runs.CommitBundleSpec:
     allowed = (
         (primary,),
         (primary, _PLAN_INVALID),
-        (primary, STAGE4_PLAN_CHAPTERS, _PLAN_INVALID),
     )
     return agent_runs.CommitBundleSpec(
         run=plan_chapter_run_spec(chapter),
@@ -1782,7 +1780,6 @@ def _commit_spec(node: str) -> agent_runs.CommitBundleSpec:
         allowed = (
             (primary,),
             (primary, _PLAN_INVALID),
-            (primary, STAGE4_PLAN_CHAPTERS, _PLAN_INVALID),
         )
         nonformal = (_PLAN_INVALID,)
     return agent_runs.CommitBundleSpec(
