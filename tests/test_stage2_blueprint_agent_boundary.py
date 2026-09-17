@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from novel.stages.stage2 import grounding as grounding_io
 
+import json
 from pathlib import Path
 
 import pytest
@@ -18,6 +19,7 @@ from contracts.schema.plot import PlotBlueprintResponse
 from novel import paths, prov
 from novel.errors import GateBlocked, ProvenanceRefused, TerminalState
 from novel.llm import stage2_runs
+from novel.llm.client import LlmClient
 from novel.llm.transport import ChatRequest, ChatResponse
 from novel.stages.stage2 import extract
 from novel.store import ArtifactStore
@@ -56,6 +58,54 @@ def _blueprint_client(ctx, by_ordinal):
         return _respond_blueprints(request, by_ordinal)
 
     return _client(ctx, respond)
+
+
+def test_blueprint_production_rejects_agent_client_and_profile_before_inputs(
+        tmp_path, monkeypatch,
+) -> None:
+    book = tmp_path / '蓝图直连入口_500'
+    book.mkdir()
+    ctx = _ctx(book, 'stage2.blueprint')
+    monkeypatch.setattr(
+        extract,
+        '_read_main_text',
+        lambda *_args, **_kwargs: pytest.fail('agent 必须在读取 producer 输入前拒绝'),
+    )
+    with pytest.raises(ProvenanceRefused, match='只接受 LlmClient'):
+        extract.request_blueprints(ctx, object())  # type: ignore[arg-type]
+
+    ctx.executor_profile = object()
+    with pytest.raises(ProvenanceRefused, match='不能接管 agent profile'):
+        extract.request_blueprints(ctx, object.__new__(LlmClient))
+
+
+@pytest.mark.parametrize('legacy', [False, True])
+def test_blueprint_production_rejects_existing_agent_run_before_inputs(
+        tmp_path, monkeypatch, legacy,
+) -> None:
+    book = tmp_path / f'蓝图旧Agent拒绝_{legacy}_500'
+    book.mkdir()
+    ctx = _ctx(book, 'stage2.blueprint')
+    root = (
+        paths.legacy_stage2_blueprint_run_path(ctx.novel_dir, ctx.run_id)
+        if legacy else paths.stage2_blueprint_run_path(
+            ctx.novel_dir, ctx.run_id)
+    )
+    root.mkdir(parents=True)
+    if not legacy:
+        (root / 'run.json').write_text(json.dumps({
+            'request_policy': {
+                'protocol_version': 'node-executor/v1',
+            },
+        }), encoding='utf-8', newline='\n')
+    monkeypatch.setattr(
+        extract,
+        '_read_main_text',
+        lambda *_args, **_kwargs: pytest.fail('旧 agent 状态必须在输入前拒绝'),
+    )
+
+    with pytest.raises(ProvenanceRefused, match='agent'):
+        extract.run_blueprint(ctx, object.__new__(LlmClient))
 
 
 def test_chapter_request_surface_supports_one_private_client_per_chapter():

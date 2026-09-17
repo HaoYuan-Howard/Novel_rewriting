@@ -812,12 +812,6 @@
     "stage2"
    ]
   },
-  "tests/test_stage2_blueprint_agent.py": {
-   "layer": "unit_contract",
-   "stages": [
-    "stage2"
-   ]
-  },
   "tests/test_stage2_blueprint_agent_boundary.py": {
    "layer": "unit_contract",
    "stages": [
@@ -886,7 +880,9 @@
   },
   "tests/test_stage2_global_agent.py": {
    "cases": {
-    "test_direct_global_producer_distinguishes_explicit_empty_from_missing_or_null": "stage"
+    "test_direct_global_producer_distinguishes_explicit_empty_from_missing_or_null": "stage",
+    "test_global_direct_hard_candidate_lands_once_without_agent_checkpoint": "stage",
+    "test_global_success_uses_only_direct_finalize_and_no_agent_journal": "stage"
    },
    "layer": "unit_contract",
    "stages": [
@@ -895,10 +891,9 @@
   },
   "tests/test_stage2_global_candidate_contract.py": {
    "cases": {
-    "test_global_provider_has_one_candidate_only_contract_and_schema": "unit_contract",
-    "test_knowledge_agent_schema_only_accepts_complete_knowledge_candidates": "unit_contract"
+    "test_global_provider_has_one_direct_candidate_contract_and_schema": "unit_contract"
    },
-   "layer": "stage",
+   "layer": "unit_contract",
    "stages": [
     "stage2"
    ]
@@ -936,10 +931,10 @@
   "tests/test_stage2_knowledge_flow.py": {
    "cases": {
     "test_free_knowledge_edit_changes_no_static_or_blueprint_projection": "stage",
-    "test_global_refuses_missing_static_registry_before_driver": "stage",
-    "test_knowledge_recovery_reuses_saved_result_at_every_commit_window": "stage",
-    "test_knowledge_validator_custody_replays_sealed_replacement_without_wire": "stage",
-    "test_unused_character_change_during_recovery_requires_no_second_purchase": "stage"
+    "test_global_refuses_missing_static_registry_before_wire": "stage",
+    "test_global_wire_and_disk_have_no_static_character_copy": "stage",
+    "test_knowledge_commit_does_not_own_missing_character_projection": "stage",
+    "test_saved_knowledge_cannot_overwrite_character_identity": "stage"
    },
    "layer": "unit_contract",
    "stages": [

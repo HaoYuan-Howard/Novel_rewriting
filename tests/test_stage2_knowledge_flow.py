@@ -1,25 +1,27 @@
 # -*- coding: utf-8 -*-
-"""人物 → Global 事实 → 下游视图的真实 producer 消费链；不发付费请求。"""
+"""人物 → Global 事实 → 下游视图的直连 producer 消费链。"""
 from __future__ import annotations
 
-import json
 import copy
+from types import SimpleNamespace
 
 import pytest
 
 from contracts.artifacts import (
-    STAGE2_BLUEPRINT_CHARACTER_PROJECTION, STAGE2_CHARACTERS, STAGE2_GLOBAL_GROUNDING,
+    STAGE2_BLUEPRINT_CHARACTER_PROJECTION,
+    STAGE2_CHARACTERS,
+    STAGE2_GLOBAL_GROUNDING,
 )
-from contracts.schema.characters import CharactersEdit
 from contracts.schema.knowledge import KnowledgeGrounding
 from contracts.schema.stage2 import GlobalEdit
-from novel.errors import ProvenanceRefused, UpstreamMissing
-from novel.orchestrator.node_agents import Stage2GlobalAgent
-from novel.stages.stage2 import characters, extract, grounding
+from novel import paths
+from novel.errors import UpstreamMissing
+from novel.stages.stage2 import extract, grounding
 from novel.store import ArtifactStore
 from tests.test_stage2_characters import _ctx, _generate
-from tests.test_stage2_global_agent import _Driver, _free_ctx, _resume_ctx
+from tests.test_stage2_global_agent import _direct_ctx, _free_ctx
 from tests.test_stage2_grounding import _knowledge_response
+from tests.test_stage2_generation import _client, _ok
 
 
 def _prepared(tmp_path):
@@ -30,27 +32,33 @@ def _prepared(tmp_path):
 
 
 def _run(ctx):
-    wire = json.dumps({'payload': {'kind': 'full_candidate',
-                                  'candidate': _knowledge_response().model_dump(mode='json')}},
-                      ensure_ascii=False)
-    driver = _Driver([wire], ctx.novel_dir, session_id='knowledge-flow')
-    result = Stage2GlobalAgent(ctx, driver=driver).run()
-    return result, driver
+    """兼容上传链夹具签名；内部始终剥掉历史 profile 后走直连。"""
+    direct = _direct_ctx(ctx, same_run=True)
+    client, transport = _client(
+        direct,
+        lambda _request, _index: _ok(
+            _knowledge_response().model_dump(mode='json')),
+    )
+    artifact = extract.run_global(direct, client)
+    return SimpleNamespace(artifact=artifact, passed=True, turns=1), transport
 
 
 def test_global_wire_and_disk_have_no_static_character_copy(tmp_path):
     ctx, registry = _prepared(tmp_path)
     store = ArtifactStore(ctx)
     character_sha = store.full_sha256_or_none(STAGE2_CHARACTERS)
-    prepared = extract.prepare_global_candidate(ctx, agent_envelope=True)
+    prepared = extract.prepare_global_candidate(_direct_ctx(ctx, same_run=True))
     assert 'role_evidence' not in prepared.user
     assert 'from_chapter' not in prepared.user
     assert 'role_fate_patch' not in prepared.system
-    result, driver = _run(ctx)
-    assert result.passed
-    assert [kind for kind, _request in driver.calls] == ['start']
-    artifact = store.read_own(KnowledgeGrounding, STAGE2_GLOBAL_GROUNDING)[0]
-    assert artifact.characters_reference_sha256 == grounding.knowledge_reference_sha256(registry)
+
+    result, transport = _run(ctx)
+
+    assert result.passed and len(transport.calls) == 1
+    artifact = store.read_own(
+        KnowledgeGrounding, STAGE2_GLOBAL_GROUNDING)[0]
+    assert artifact.characters_reference_sha256 == \
+        grounding.knowledge_reference_sha256(registry)
     assert 'characters' not in artifact.model_dump(mode='json')
     assert 'entities' not in artifact.model_dump(mode='json')
     assert store.full_sha256_or_none(STAGE2_CHARACTERS) == character_sha
@@ -59,194 +67,109 @@ def test_global_wire_and_disk_have_no_static_character_copy(tmp_path):
     assert grounding.read_registry(store, own=True) == registry
 
 
-def test_global_refuses_missing_static_registry_before_driver(tmp_path):
+def test_global_refuses_missing_static_registry_before_wire(tmp_path):
     from tests.test_stage2_global_agent import _ctx as global_ctx
+
     ctx = global_ctx(tmp_path, with_characters=False)
-    driver = _Driver([], ctx.novel_dir, session_id='missing-registry')
-    with pytest.raises(UpstreamMissing) as caught:
-        Stage2GlobalAgent(ctx, driver=driver).run()
-    assert 'characters' in str(caught.value)
-    assert not driver.calls
+    client, transport = _client(
+        ctx, lambda *_args: pytest.fail('缺人物登记不得触发 wire'))
+    with pytest.raises(UpstreamMissing, match='characters'):
+        extract.run_global(ctx, client)
+    assert transport.calls == []
 
 
 def test_knowledge_commit_does_not_own_missing_character_projection(tmp_path):
     ctx, _ = _prepared(tmp_path)
     store = ArtifactStore(ctx)
     store.archive_round(STAGE2_BLUEPRINT_CHARACTER_PROJECTION)
-    result, driver = _run(ctx)
-    assert result.passed and len(driver.calls) == 1
+
+    result, transport = _run(ctx)
+
+    assert result.passed and len(transport.calls) == 1
     assert not store.exists(STAGE2_BLUEPRINT_CHARACTER_PROJECTION)
-    from novel.llm import stage2_global_runs
-    journal = stage2_global_runs.committed(ctx)
-    assert STAGE2_BLUEPRINT_CHARACTER_PROJECTION not in json.dumps(journal)
+    assert not paths.stage2_global_run_path(
+        ctx.novel_dir, ctx.run_id).exists()
 
 
 def test_saved_knowledge_cannot_overwrite_character_identity(tmp_path):
     ctx, registry = _prepared(tmp_path)
     result, _ = _run(ctx)
     store = ArtifactStore(ctx)
-    original = {rel: store.path(rel).read_bytes() for rel in (
-        STAGE2_CHARACTERS, STAGE2_GLOBAL_GROUNDING, STAGE2_BLUEPRINT_CHARACTER_PROJECTION)}
+    original = {
+        rel: store.path(rel).read_bytes()
+        for rel in (
+            STAGE2_CHARACTERS,
+            STAGE2_GLOBAL_GROUNDING,
+            STAGE2_BLUEPRINT_CHARACTER_PROJECTION,
+        )
+    }
     mixed = result.artifact.model_dump(mode='json', by_alias=True)
     mixed['characters'] = {'char_001': {'role': '越权修改'}}
     with pytest.raises(ValueError, match='Extra inputs'):
         KnowledgeGrounding.model_validate(mixed)
-    from novel.views.stage2 import global_view
-    from contracts.schema.api import GlobalView
+
     from contracts.schema import ARTIFACT_SPECS
+    from contracts.schema.api import GlobalView
+    from novel.views.stage2 import global_view
+
     view = global_view(ctx.novel_dir.parent, ctx.sid)
     assert type(view) is GlobalView
     assert all(spec.model is not GlobalView for spec in ARTIFACT_SPECS.values())
     displayed = view.model_dump(mode='json', by_alias=True)
     assert 'characters' not in displayed
     displayed['relations'][0]['subject']['display'] = '只改展示副本'
-    assert global_view(ctx.novel_dir.parent, ctx.sid).relations[0].subject.display == registry.characters['char_001'].canonical
-    assert {rel: store.path(rel).read_bytes() for rel in original} == original
+    assert global_view(
+        ctx.novel_dir.parent, ctx.sid).relations[0].subject.display == \
+        registry.characters['char_001'].canonical
+    assert {
+        rel: store.path(rel).read_bytes() for rel in original
+    } == original
     assert grounding.read_registry(store, own=True) == registry
 
 
-@pytest.mark.parametrize('window', ['answer', 'checkpoint', 'formal'])
-def test_knowledge_recovery_reuses_saved_result_at_every_commit_window(tmp_path, monkeypatch, window):
-    from novel.llm import stage2_global_runs
-    ctx, _ = _prepared(tmp_path)
-    owner, name = {
-        'answer': (extract, 'write_global_agent_checkpoint'),
-        'checkpoint': (extract, '_finalize_agent_global_formal'),
-        'formal': (stage2_global_runs, 'mark_committed'),
-    }[window]
-    original = getattr(owner, name)
-    def stop(*args, **kwargs):
-        raise RuntimeError('模拟提交窗口中断')
-    monkeypatch.setattr(owner, name, stop)
-    with pytest.raises(RuntimeError, match='模拟提交窗口'):
-        _run(ctx)
-    monkeypatch.setattr(owner, name, original)
-    resumed = _resume_ctx(ctx)
-    driver = _Driver([], resumed.novel_dir, session_id='no-second-purchase')
-    result = Stage2GlobalAgent(resumed, driver=driver).run()
-    assert result.passed and not driver.calls
-    assert ArtifactStore(resumed).read_own(KnowledgeGrounding, STAGE2_GLOBAL_GROUNDING)[0]
-    assert stage2_global_runs.committed(resumed)['state'] == 'committed'
-
-
-def _edit_unused_character_evidence(free):
-    """补入父亲翻账的真实旁证段，不改 canonical/surfaces/role 的知识依赖。"""
-    from contracts.schema.stage1 import MainText
-    from novel.stages.stage2.core_evidence import evidence_snippet
-    store = ArtifactStore(free)
-    registry = grounding.read_registry(store, own=True)
-    main = store.read_own(MainText, extract.MAIN_TEXT)[0].model_dump(mode='json')
-    edit = characters.edit_template(free)
-    edit['operations'] = edit['operations'][:1]
-    operation = edit['operations'][0]
-    previous = registry.characters[operation['char_id']]
-    anchor = registry.evidence_anchors[previous.role_evidence_refs[0]]
-    extra_locator = '她忽然想起父亲从前也这样翻账。'
-    assert previous.canonical == '李宝珠' and '替父亲掌管家中账目' in previous.role
-    chapter = next(row for row in main if row['chapter_ordinal'] == 3)
-    assert extra_locator in chapter['text']
-    assert extra_locator not in evidence_snippet(anchor, main)
-    operation['character']['role_evidence_refs'] = [*previous.role_evidence_refs, {
-        'chapter_ordinal': 3, 'locator': extra_locator}]
-    updated = characters.apply_edit(free, CharactersEdit.model_validate(edit),
-        actor='test:editor', reason='补入父亲翻账旁证段，保留既有角色事实')
-    assert grounding.knowledge_reference_sha256(updated) == grounding.knowledge_reference_sha256(registry)
-    assert updated.evidence_anchors != registry.evidence_anchors
-    return updated
-
-
-@pytest.mark.parametrize('window', ['answer', 'checkpoint', 'formal'])
-def test_unused_character_change_during_recovery_requires_no_second_purchase(tmp_path, monkeypatch, window):
-    from novel.llm import stage2_global_runs
-    ctx, _ = _prepared(tmp_path)
-    owner, name = {
-        'answer': (extract, 'write_global_agent_checkpoint'),
-        'checkpoint': (extract, '_finalize_agent_global_formal'),
-        'formal': (stage2_global_runs, 'mark_committed'),
-    }[window]
-    original = getattr(owner, name)
-    def stop(*args, **kwargs):
-        raise RuntimeError('人物订正前模拟知识提交中断')
-    monkeypatch.setattr(owner, name, stop)
-    with pytest.raises(RuntimeError, match='人物订正前'):
-        _run(ctx)
-    monkeypatch.setattr(owner, name, original)
-    free = _free_ctx(ctx)
-    free.node = characters.NODE
-    updated = _edit_unused_character_evidence(free)
-    resumed = _resume_ctx(ctx)
-    driver = _Driver([], resumed.novel_dir, session_id='unused-character-recovery')
-    result = Stage2GlobalAgent(resumed, driver=driver).run()
-    assert result.passed and not driver.calls
-    assert 'characters' not in result.artifact.model_dump(mode='json')
-    assert grounding.read_registry(ArtifactStore(resumed), own=True) == updated
-    assert ArtifactStore(resumed).freshness(STAGE2_GLOBAL_GROUNDING).state == 'fresh'
-
-
-def test_free_knowledge_edit_changes_no_static_or_blueprint_projection(tmp_path):
+def test_free_knowledge_edit_changes_no_static_or_blueprint_projection(
+        tmp_path,
+):
     ctx, _ = _prepared(tmp_path)
     result, _ = _run(ctx)
     store = ArtifactStore(ctx)
-    hashes = {rel: store.full_sha256_or_none(rel) for rel in (
-        STAGE2_CHARACTERS, STAGE2_BLUEPRINT_CHARACTER_PROJECTION)}
+    hashes = {
+        rel: store.full_sha256_or_none(rel)
+        for rel in (
+            STAGE2_CHARACTERS,
+            STAGE2_BLUEPRINT_CHARACTER_PROJECTION,
+        )
+    }
     setting = copy.deepcopy(result.artifact.setting.model_dump(mode='json'))
     setting['era'] = '中国古代架空时代'
-    # 新主张显式同交当前有据 refs；验证回写不会改人物或称名投影。
-    edit = GlobalEdit.model_validate({'setting': setting})
     free = _free_ctx(ctx)
-    ArtifactStore(free).write_sparse_input(extract.GLOBAL_EDIT, edit)
+    ArtifactStore(free).write_sparse_input(
+        extract.GLOBAL_EDIT, GlobalEdit.model_validate({'setting': setting}))
+
     changed, _report = extract.run_apply_edit(free, extract.GLOBAL_EDIT)
+
     assert changed.setting.era == '中国古代架空时代'
-    assert {rel: store.full_sha256_or_none(rel) for rel in hashes} == hashes
+    assert {
+        rel: store.full_sha256_or_none(rel) for rel in hashes
+    } == hashes
     assert store.freshness(STAGE2_GLOBAL_GROUNDING).state == 'fresh'
-    assert 'characters' not in store.read_own(KnowledgeGrounding, STAGE2_GLOBAL_GROUNDING)[0].model_dump(mode='json')
 
 
 def test_static_mutations_are_rejected_by_knowledge_edit_schema():
     from pydantic import ValidationError
+
     for edit in (
         {'characters': [{'char_id': 'char_001', 'role': '越权身份'}]},
-        {'addresses': [{'char_id': 'char_001', 'address_index': 0, 'context': 'reference'}]},
+        {'addresses': [{
+            'char_id': 'char_001',
+            'address_index': 0,
+            'context': 'reference',
+        }]},
         {'characters_replace': {}},
-        {'collection_edits': [{'collection': 'characters', 'expected_collection_sha256': '0' * 64}]},
+        {'collection_edits': [{
+            'collection': 'characters',
+            'expected_collection_sha256': '0' * 64,
+        }]},
     ):
         with pytest.raises(ValidationError):
             GlobalEdit.model_validate(edit)
-
-
-@pytest.mark.parametrize('window', ['none', 'checkpoint', 'outcome'])
-def test_knowledge_validator_custody_replays_sealed_replacement_without_wire(tmp_path, monkeypatch, window):
-    from novel.llm import response_repair, stage2_global_runs
-    from novel.llm.client import LlmFailed
-    ctx, _ = _prepared(tmp_path)
-    prepared = extract.prepare_global_candidate(ctx, agent_envelope=True)
-    candidate = _knowledge_response().model_dump(mode='json', by_alias=True)
-    wrong = copy.deepcopy(candidate)
-    wrong['setting']['era_evidence_refs'] = ['e999999']
-    def wire(value):
-        return json.dumps({'payload': {'kind': 'full_candidate', 'candidate': value}}, ensure_ascii=False)
-    driver = _Driver([wire(wrong)], ctx.novel_dir, session_id='knowledge-rejected')
-    with pytest.raises(LlmFailed):
-        Stage2GlobalAgent(ctx, driver=driver, max_turns=1).run()
-    assert len(driver.calls) == 1
-    assert not ArtifactStore(ctx).exists(STAGE2_GLOBAL_GROUNDING)
-    records = response_repair.records_for_chain(
-        ctx.novel_dir, extract._global_validator_custody_chain(ctx, prepared))
-    [record] = records
-    response_repair.candidate_path(record).write_text(wire(candidate), encoding='utf-8')
-    response_repair.submit(ctx.novel_dir, record.attempt_id, actor='test:editor', reason='按原文修正知识证据候选')
-    resumed = _resume_ctx(ctx)
-    no_wire = _Driver([], resumed.novel_dir, session_id='knowledge-custody-resume')
-    if window != 'none':
-        owner, name = ((stage2_global_runs, 'write_checkpoint') if window == 'checkpoint'
-                       else (extract, '_note_global_custody_terminal_outcome'))
-        original = getattr(owner, name)
-        def stop(*args, **kwargs):
-            raise RuntimeError('模拟 sealed 知识恢复中断')
-        monkeypatch.setattr(owner, name, stop)
-        with pytest.raises(RuntimeError, match='sealed 知识'):
-            Stage2GlobalAgent(resumed, driver=no_wire, max_turns=1).run()
-        monkeypatch.setattr(owner, name, original)
-    result = Stage2GlobalAgent(_resume_ctx(ctx), driver=no_wire, max_turns=1).run()
-    assert result.passed and not no_wire.calls
-    assert response_repair.find_attempt(ctx.novel_dir, record.attempt_id).outcome['decision'] == 'accepted'

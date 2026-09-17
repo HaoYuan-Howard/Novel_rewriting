@@ -109,7 +109,7 @@ BLUEPRINT_MAX_TOKENS = 256_000
 
 
 class _GlobalResponseSource(Protocol):
-    """全局 producer 真正依赖的最小来源面；旧 LlmClient 与 session client 同形。"""
+    """全局 producer 真正依赖的直连 LlmClient 窄面。"""
 
     model: str
 
@@ -127,9 +127,8 @@ class _GlobalResponseSource(Protocol):
 class _BlueprintRequestSource(_GlobalResponseSource, Protocol):
     """blueprint 扇出真正消费的客户端窄面。
 
-    agent 路径应由节点层提供一个按 ``(phase, chapter)`` 路由的聚合器；聚合器背后
-    每格必须是独立 ``SessionAgentClient``。这里不持有 driver，也不另造 checkpoint
-    或 adoption 状态，只继续消费既有 ``stage2_runs`` 所要求的桥接方法。
+    这里只消费直连 ``LlmClient`` 已有的逐章 checkpoint / adoption 桥，不持有
+    driver，也不另造第二套恢复状态。
     """
 
     concurrency: int
@@ -1079,10 +1078,18 @@ def custody_global_validator_rejection(
     why = str(rejected.get('why') or 'candidate membership validator rejected')
     detail = rejected.get('detail')
     safe_detail = [dict(row) for row in detail] if isinstance(detail, list) else []
+    effort = getattr(source, 'effort', None)
+    if effort is None:
+        rungs = getattr(source, '_rungs', None)
+        if rungs:
+            effort = rungs[0][0]
+    if effort is None:
+        profile = getattr(ctx, 'executor_profile', None)
+        effort = getattr(profile, 'reasoning_effort', None) if profile is not None else None
     failure = response_repair.failure_signature(
         request_fingerprint=str(acceptance.get('request_fingerprint') or ''),
         model=str(rejected.get('model') or source.model),
-        reasoning_effort=str(ctx.executor_profile.reasoning_effort),
+        reasoning_effort=str(effort or 'high'),
         thinking=False,
         request_mode=str(acceptance.get('request_mode') or 'original'),
         finish_reason=None,
@@ -1484,9 +1491,60 @@ def _read_global_downstream_guard(
     )
 
 
+def _require_direct_stage2_entry(
+        ctx: RunContext, client: Any | None, *, node: str,
+) -> None:
+    """现役付费生产只接直连客户端，不接管 profile 或 agent run 状态。"""
+    if client is not None and not isinstance(client, LlmClient):
+        raise ProvenanceRefused(f'{node} 生产入口只接受 LlmClient')
+    if getattr(ctx, 'executor_profile', None) is not None:
+        raise ProvenanceRefused(f'{node} 生产入口不能接管 agent profile')
+    run_id = getattr(ctx, 'run_id', None)
+    if not isinstance(run_id, str) or not run_id:
+        return
+    if node == 'stage2.global':
+        roots = (
+            paths.stage2_global_run_path(ctx.novel_dir, run_id),
+            paths.legacy_stage2_global_run_path(ctx.novel_dir, run_id),
+        )
+        if any(root.exists() for root in roots):
+            raise ProvenanceRefused(
+                '当前 stage2.global run 已有 agent 状态；'
+                '必须使用冻结旧代码读取，不能由直连 producer 接管')
+        return
+    if node != 'stage2.blueprint':
+        raise ValueError(f'未知 Stage2 直连生产节点：{node!r}')
+
+    # Blueprint 的 current run 根同时承载现役 LlmClient checkpoint；只有
+    # node-executor/v1 policy（或无法判别的残缺目录）属于已退役 agent 状态。
+    current = paths.stage2_blueprint_run_path(ctx.novel_dir, run_id)
+    legacy = paths.legacy_stage2_blueprint_run_path(ctx.novel_dir, run_id)
+    if legacy.exists():
+        raise ProvenanceRefused(
+            '当前 stage2.blueprint run 存在旧 agent 状态；'
+            '必须使用冻结旧代码读取，不能由直连 producer 接管')
+    if not current.exists():
+        return
+    run_file = current / 'run.json'
+    if not run_file.is_file():
+        raise ProvenanceRefused(
+            '当前 stage2.blueprint run 目录缺可判别的直连 run.json；'
+            '按退役 agent 状态关闭式拒绝')
+    try:
+        record = json.loads(run_file.read_text(encoding='utf-8'))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ProvenanceRefused(
+            '当前 stage2.blueprint run.json 不可判别；'
+            '按退役 agent 状态关闭式拒绝') from exc
+    policy = record.get('request_policy') if isinstance(record, dict) else None
+    if not isinstance(policy, dict) or 'protocol_version' in policy:
+        raise ProvenanceRefused(
+            '当前 stage2.blueprint run 已有 agent request policy；'
+            '必须使用冻结旧代码读取，不能由直连 producer 接管')
+
+
 def prepare_global_candidate(
-    ctx: RunContext, *, agent_envelope: bool = False,
-    review_token: str | None = None,
+    ctx: RunContext, *, review_token: str | None = None,
 ) -> GlobalCandidateContext:
     """冻结一次 global 候选循环的 prompt、正文与下游差分基线。
 
@@ -1497,15 +1555,13 @@ def prepare_global_candidate(
     if ctx.node != 'stage2.global':
         raise ValueError(
             f'prepare_global_candidate 只接受 stage2.global，实得 {ctx.node!r}')
+    _require_direct_stage2_entry(ctx, None, node=ctx.node)
     from novel.llm import stage2_global_runs
 
-    # 所有 provider 入口共用的首个 wire 前所有权闸。agent 同 run 的 prepared
-    # 必须允许幂等补尾；legacy LlmClient 不会消费 agent journal，因此连同 run
-    # prepared/committed 也必须拒绝，不能绕过 journal 直接覆盖正式字节。
+    # 直连 LlmClient 不消费 agent journal；同 run 的任何 agent 状态均已在上面
+    # 拒绝，foreign prepared 仍由书级所有权闸保护。
     with stage2_global_runs.commit_ownership(ctx.novel_dir):
         stage2_global_runs.refuse_foreign_commit_reservations(ctx)
-        if not agent_envelope:
-            stage2_global_runs.refuse_current_agent_state_for_legacy(ctx)
     store = ArtifactStore(ctx)
     main_text_sha256 = store.full_sha256_or_none(MAIN_TEXT)
     if main_text_sha256 is None:
@@ -1521,18 +1577,11 @@ def prepare_global_candidate(
     spec = _active_global_spec()
     system, user, evidence_candidates = build_global_request(
         ctx.title, main_text, spec,
-        character_reference=reference, agent_envelope=agent_envelope)
+        character_reference=reference)
     global_id_map: dict[str, str] = {}
     previous = None
     with ctx.validation_reads():
-        from novel.llm import agent_runs
-        run_spec = stage2_global_runs._run_spec()
-        if ctx.executor_profile is not None and (run_spec.run_path(ctx) / agent_runs.RUN_FILE).exists():
-            frozen = agent_runs.initial_artifact_sha256s(ctx, run_spec)
-            source_rel = _GLOBAL_INVALID if frozen[_GLOBAL_INVALID] is not None else GLOBAL_REL
-            if frozen[source_rel] is not None:
-                previous = store.read_own_by_sha256(KnowledgeGrounding, source_rel, frozen[source_rel])
-        elif store.exists(_GLOBAL_INVALID) or store.exists(GLOBAL_REL):
+        if store.exists(_GLOBAL_INVALID) or store.exists(GLOBAL_REL):
             source_rel = _GLOBAL_INVALID if store.exists(_GLOBAL_INVALID) else GLOBAL_REL
             previous = store.read_own(KnowledgeGrounding, source_rel, require_current=True)[0]
     if previous is not None:
@@ -1829,41 +1878,6 @@ def _write_invalid(
     return str(path)
 
 
-def _equal_global_invalid_payload(
-        expected: GlobalGrounding, landed: GlobalGrounding,
-) -> bool:
-    """忽略 ``write_invalid`` 唯一负责补入的两格 provenance 后比较候选。"""
-    left = expected.model_dump(by_alias=True, mode='json')
-    right = landed.model_dump(by_alias=True, mode='json')
-    left_prov = left.get('_provenance')
-    right_prov = right.get('_provenance')
-    if isinstance(left_prov, dict) and isinstance(right_prov, dict):
-        left_prov['gates_skipped'] = right_prov.get('gates_skipped')
-        left_prov['invalid_baseline_sha256'] = right_prov.get(
-            'invalid_baseline_sha256')
-    return left == right
-
-
-def _write_or_reuse_global_invalid(
-        ctx: RunContext,
-        prepared: GlobalCandidateContext,
-        artifact: GlobalGrounding,
-) -> str:
-    """Agent 同一 accepted checkpoint 的 blocked 终态最多产生一个问题轮次。
-
-    legacy 路径没有可证明为同一轮的 durable checkpoint；每次 ``--resample``
-    都是新的付费请求，必须交给 ``write_invalid`` 归档上一轮问题产物。
-    """
-    store = ArtifactStore(ctx)
-    if ctx.executor_profile is not None and store.exists(_GLOBAL_INVALID):
-        with ctx.validation_reads():
-            existing, _ = grounding_io.read_own(store, _GLOBAL_INVALID, require_current=True)
-        if _equal_global_invalid_payload(artifact, existing):
-            assert_global_main_text_current(ctx, prepared)
-            return str(store.path(_GLOBAL_INVALID))
-    return _write_invalid(store, GLOBAL_REL, artifact)
-
-
 def _note_evidence_locator_corrections(
     ctx: RunContext,
     store: ArtifactStore,
@@ -1973,143 +1987,13 @@ def verify_global_delivery(
     return landed
 
 
-def _global_finalization_payload(
-        prepared: GlobalCandidateContext,
-        terminal: GlobalCandidateEvaluation,
-) -> dict[str, object]:
-    return {
-        'artifact': GLOBAL_REL,
-        'input_sha256': prepared.input_sha256,
-        'main_text_sha256': prepared.main_text_sha256,
-        'evidence_candidates_sha256': prepared.evidence_candidates_sha256,
-        'contract_name': prepared.contract_name,
-        'response_sha256': terminal.response_sha256,
-        'hard_hits': list(terminal.hard_hits),
-        'evidence_locator_corrections': [
-            {
-                'claim_path': correction.claim_path,
-                'original_chapter': correction.original_chapter,
-                'resolved_chapter': correction.resolved_chapter,
-                'recovery': correction.recovery,
-            }
-            for correction in terminal._evidence_locator_corrections
-        ],
-    }
-
-
-def _global_bundle_readback(
-        ctx: RunContext,
-) -> dict[str, dict[str, Any]]:
-    store = ArtifactStore(ctx)
-    with ctx.validation_reads():
-        global_g, _ = grounding_io.read_own(store, GLOBAL_REL, require_current=True)
-    return {
-        GLOBAL_REL: grounding_io.payload(store, global_g),
-    }
-
-
-def _finalize_agent_global_formal(
-        ctx: RunContext,
-        prepared: GlobalCandidateContext,
-        terminal: GlobalCandidateEvaluation,
-) -> GlobalGrounding:
-    """封存知识与采用账；语义未审随报告 ``unver`` 披露，不再刷新审阅面。
-
-    人物未被知识请求消费的字段不再触发任何审阅刷新，也不改写已购买知识的
-    来源身份。模型提交只拥有知识与 INVALID。
-    """
-    from novel.llm import stage2_global_runs
-
-    artifact = terminal.candidate
-    store = ArtifactStore(ctx)
-    payload = grounding_io.payload(store, artifact)
-    finalization = _global_finalization_payload(prepared, terminal)
-    if terminal.source_attempt_id is None:
-        raise ProvenanceRefused('stage2.global 正式 agent 候选缺 accepted attempt')
-    with stage2_global_runs.commit_ownership(ctx.novel_dir):
-        stage2_global_runs.refuse_foreign_commit_reservations(ctx)
-        journal = stage2_global_runs.committed(ctx) or stage2_global_runs.prepared(ctx)
-        if journal is None:
-            _assert_global_guard_current(ctx, prepared)
-            journal = stage2_global_runs.prepare_commit(
-                ctx, primary_payload=payload, finalization_payload=finalization,
-                touched_paths=(GLOBAL_REL, _GLOBAL_INVALID),
-                attempt_id=terminal.source_attempt_id)
-        else:
-            if not stage2_global_runs.verify_commit_finalization(journal, finalization):
-                raise ProvenanceRefused('知识提交 journal 与当前回答/输入身份漂移')
-            if not stage2_global_runs.verify_commit_primary(journal, payload):
-                # 只有已经精确命中本 journal 的正式文件可以保留原来源账；
-                # 缺失或第三方修改都不能借业务相似性冒领这份回答。
-                owned, _ = store.read_own(KnowledgeGrounding, GLOBAL_REL, require_current=True)
-                owned_payload = owned.model_dump(mode='json', by_alias=True)
-                if (not stage2_global_runs.verify_commit_primary(journal, owned_payload)
-                        or {k: v for k, v in owned_payload.items() if k != '_provenance'}
-                        != {k: v for k, v in payload.items() if k != '_provenance'}):
-                    raise ProvenanceRefused('知识提交 journal 与正式文件或当前候选业务内容漂移')
-                # 当前请求与旧文件均已通过 actual-input freshness；完整业务值
-                # 相等并不能替代来源守卫，故这里仍要求非输入来源账逐字段相等。
-                old_prov = dict(owned_payload['_provenance'])
-                new_prov = dict(payload['_provenance'])
-                old_prov.pop('inputs', None)
-                new_prov.pop('inputs', None)
-                if old_prov != new_prov:
-                    raise ProvenanceRefused('知识恢复的非输入来源账变化，拒绝混用两次产出')
-                payload = owned_payload
-                artifact = grounding_io.compose(grounding_io.read_registry(store, own=True), owned)
-
-        assert_global_main_text_current(ctx, prepared)
-        expected = grounding_io.for_write(store, artifact)
-        state = stage2_global_runs.target_state(
-            ctx, journal, GLOBAL_REL,
-            expected_file_sha256=store.prospective_sha256(GLOBAL_REL, expected))
-        invalid_state = stage2_global_runs.target_state(
-            ctx, journal, _GLOBAL_INVALID, expected_absent=True)
-        if state == 'baseline':
-            if any(store.exists(rel) for rel in (GLOBAL_EDIT_INPUT_COMMIT, GLOBAL_EDIT_FAILURE)):
-                raise ProvenanceRefused('人工知识订正尚未收敛，不能由模型提交覆盖')
-            if store.exists(GLOBAL_EDIT_COMMIT):
-                edit_commit = store.read_own(GlobalEditCommit, GLOBAL_EDIT_COMMIT)[0]
-                if edit_commit.state == 'prepared':
-                    raise ProvenanceRefused('人工知识 prepared 尚未收敛，不能由模型提交覆盖')
-            with store.history_transaction(GLOBAL_REL, GLOBAL_EDIT_COMMIT):
-                store.write_round(GLOBAL_REL, expected)
-                if store.exists(GLOBAL_EDIT_COMMIT):
-                    store.archive_round(GLOBAL_EDIT_COMMIT)
-        elif invalid_state == 'baseline':
-            _retire_invalid_for_matching_formal(store, GLOBAL_REL, artifact)
-        assert_global_main_text_current(ctx, prepared)
-        landed_payloads = _global_bundle_readback(ctx)
-        if landed_payloads[GLOBAL_REL] != payload or store.exists(_GLOBAL_INVALID):
-            raise ProvenanceRefused('知识 readback 未精确闭合当前提交目标')
-        _note_evidence_locator_corrections(
-            ctx, store, terminal._evidence_locator_corrections, rel=GLOBAL_REL)
-        purpose, attempt_id = stage2_global_runs.restore_commit_adoption(ctx, journal)
-        if purpose != ctx.node or attempt_id != terminal.source_attempt_id:
-            raise ProvenanceRefused('知识 adoption 与 accepted attempt 不一致')
-        _note_restored_adoptions(
-            ctx, rel=GLOBAL_REL, candidate=payload,
-            adoptions=((purpose, None, attempt_id),))
-        assert_global_main_text_current(ctx, prepared)
-        stage2_global_runs.mark_committed(
-            ctx, primary_payload=payload, finalization_payload=finalization,
-            landed_payloads=landed_payloads)
-        committed = stage2_global_runs.committed(ctx)
-        if committed is None:
-            raise ProvenanceRefused('知识 mark_committed 后 journal 缺失')
-        stage2_global_runs.verify_committed_delivery(
-            ctx, committed, primary_payload=payload,
-            finalization_payload=finalization, landed_payloads=landed_payloads)
-        return verify_global_delivery(ctx, prepared, artifact)
-
-
 def finalize_global_candidate(
         ctx: RunContext,
         source: _GlobalResponseSource,
         prepared: GlobalCandidateContext,
         evaluation: GlobalCandidateEvaluation,
 ) -> GlobalGrounding:
-    """把 agent 循环选定的最后一份候选提交一次；中间候选不得调用本函数。
+    """把直连响应的唯一候选提交一次。
 
     通过候选走 global + review 的既有事务、readback 与 adoption；失败候选只在这里
     写一次 ``.INVALID`` 并抛现有 ``GateBlocked``，因而 ``--revalidate`` /
@@ -2168,12 +2052,10 @@ def finalize_global_candidate(
         # HARD 候选的 INVALID/projection 仍属于 Global bundle。provider 返回后
         # 另一 run 可能才落下 prepared；这里必须与 formal 写口共用同书所有权，
         # 否则旁路问题稿会让原 journal 的 target_state 变成第三方漂移。
-        with stage2_global_runs.mutation_ownership(
-                ctx, legacy_wire=ctx.executor_profile is None):
+        with stage2_global_runs.mutation_ownership(ctx, legacy_wire=True):
             _assert_global_guard_current(ctx, prepared)
             assert_global_main_text_current(ctx, prepared)
-            path = _write_or_reuse_global_invalid(
-                ctx, prepared, artifact)
+            path = _write_invalid(store, GLOBAL_REL, artifact)
             assert_global_main_text_current(ctx, prepared)
             _note_evidence_locator_corrections(
                 ctx, store, terminal._evidence_locator_corrections,
@@ -2186,13 +2068,9 @@ def finalize_global_candidate(
             invalid_path=path,
         )
 
-    if ctx.executor_profile is not None:
-        return _finalize_agent_global_formal(
-            ctx, prepared, terminal)
-
     from novel.llm import stage2_global_runs
 
-    # legacy direct 路没有 commit journal；写前必须在同一所有权临界区二次检查，
+    # 直连路径没有 agent commit journal；写前必须在同一所有权临界区二次检查，
     # 关闭“准备完成后另一 run 才落 prepared”的 TOCTOU。foreign committed 不阻断，
     # 但本 run 若已有 agent journal，direct 路没有资格接管。
     with stage2_global_runs.commit_ownership(ctx.novel_dir):
@@ -2215,7 +2093,8 @@ def finalize_global_candidate(
 def run_global(
     ctx: RunContext, client: LlmClient, *, review_token: str | None = None,
 ) -> GlobalGrounding:
-    """旧 LlmClient 单轮入口；agent 多轮必须显式用 prepare/evaluate/finalize 三段。"""
+    """Stage2 Global 现役唯一生产入口：LlmClient 单轮直连。"""
+    _require_direct_stage2_entry(ctx, client, node='stage2.global')
     prepared = prepare_global_candidate(ctx, review_token=review_token)
     response = client.ask_json(
         prepared.system,
@@ -2708,6 +2587,7 @@ def request_blueprints(ctx: RunContext, client: _BlueprintRequestSource, *,
     正式 producer 始终写 checkpoint，checkpoint 记录实际下发状态后的请求身份。
     Blueprint 生成前的机械准入由统一 ``novel.orchestrator.mechanical_admission`` 在调度入口判定。
     """
+    _require_direct_stage2_entry(ctx, client, node='stage2.blueprint')
     store = ArtifactStore(ctx)
     main_text = _read_main_text(store)
     assert main_text is not None
@@ -3136,7 +3016,7 @@ def finish_blueprints(
     client: _GlobalResponseSource,
     batch: dict[str, Any],
 ) -> CheckReport:
-    """旧单轮终态入口；agent 循环显式调用 evaluate/finalize 两段。"""
+    """直连批次的唯一终态入口。"""
     evaluation = evaluate_blueprint_candidate(ctx, client, batch)
     return finalize_blueprint_candidate(ctx, client, batch, evaluation)
 
@@ -3148,6 +3028,8 @@ def run_blueprint(
     chapters: tuple[int, ...] = (),
     review_token: str | None = None,
 ) -> CheckReport:
+    """Stage2 Blueprint 现役唯一生产入口：LlmClient 逐章直连。"""
+    _require_direct_stage2_entry(ctx, client, node='stage2.blueprint')
     from novel.stages.stage2.plot_repair import finish_commit
     recovered = finish_commit(ctx, chapters=chapters, review_token=review_token)
     if recovered is not None:

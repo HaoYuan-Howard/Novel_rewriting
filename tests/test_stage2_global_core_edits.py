@@ -7,16 +7,17 @@ from contracts.schema import decode_artifact, encode_artifact
 from contracts.schema.knowledge import KnowledgeGrounding
 from contracts.schema.stage2 import GlobalEditCommit
 from novel.errors import GateBlocked
-from novel.orchestrator.node_agents import Stage2GlobalAgent
 from novel.stages.stage2 import extract
 from novel.store import ArtifactStore
-from tests.test_stage2_global_agent import _ctx, _free_ctx, _Driver, _full, _response_global
+from tests.test_stage2_global_agent import _ctx, _free_ctx, _response_global
+from tests.test_stage2_generation import _client, _ok
 
 
 def seed(tmp_path):
     ctx = _ctx(tmp_path)
-    result = Stage2GlobalAgent(ctx, driver=_Driver([_full(_response_global())], ctx.novel_dir)).run()
-    return ctx, result.artifact
+    client, _transport = _client(
+        ctx, lambda _request, _index: _ok(_response_global()))
+    return ctx, extract.run_global(ctx, client)
 
 
 def write_edit(ctx, value):
@@ -190,8 +191,9 @@ def test_full_owner_revision_preserves_retired_ids_and_allocates_new_identity(
     else:
         removal[collection] = []
     remove_ctx = _new_run_ctx(ctx)
-    removed = Stage2GlobalAgent(remove_ctx, driver=_Driver(
-        [_full(removal)], ctx.novel_dir, session_id='global-remove-' + remove_ctx.run_id)).run().artifact
+    remove_client, _ = _client(
+        remove_ctx, lambda _request, _index: _ok(removal))
+    removed = extract.run_global(remove_ctx, remove_client)
     assert identity_key in removed.provenance.retired_global_ids
     assert identity_key not in removed.identity_keys()
 
@@ -202,8 +204,9 @@ def test_full_owner_revision_preserves_retired_ids_and_allocates_new_identity(
         new_candidate['world_rules'][0]['versions'].append({
             **first, 'version_ref': 'v2', 'effective_from': 2, 'effective_until': None})
     add_ctx = _new_run_ctx(ctx)
-    added = Stage2GlobalAgent(add_ctx, driver=_Driver(
-        [_full(new_candidate)], ctx.novel_dir, session_id='global-add-' + add_ctx.run_id)).run().artifact
+    add_client, _ = _client(
+        add_ctx, lambda _request, _index: _ok(new_candidate))
+    added = extract.run_global(add_ctx, add_client)
     assert new_id in added.identity_keys()
     assert identity_key not in added.identity_keys()
     assert identity_key in added.provenance.retired_global_ids

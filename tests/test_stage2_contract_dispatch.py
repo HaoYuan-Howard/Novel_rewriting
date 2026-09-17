@@ -11,7 +11,7 @@ import json
 import pytest
 
 from contracts.invariants import BLUEPRINT_ARCHITECTURES
-from contracts.schema.plot import ActorRefResponse, PlotBlueprintResponse, PlotChapterResponse
+from contracts.schema.plot import PlotBlueprintResponse, PlotChapterResponse
 from contracts.schema.stage2 import ChapterBlueprints
 from novel.config import load_config
 from novel.llm.cache import CachePolicy
@@ -200,27 +200,3 @@ def test_first_extraction_refuses_partial_book_before_any_request(tmp_path):
     with pytest.raises(ProvenanceRefused, match='全部源章'):
         extract.request_blueprints(ctx, client, chapters=(2,))
     assert not wire.calls
-
-
-def test_current_agent_uses_chapter_sessions_and_frozen_revision_validator(tmp_path):
-    from novel.orchestrator.node_agents import Stage2BlueprintAgent
-    from tests.test_stage2_blueprint_agent import _ctx as agent_ctx, _Factory
-    book = prepare_book(tmp_path)
-    ctx = agent_ctx(tmp_path, book)
-    factory = _Factory(book, {(o, 1): [row] for o, row in responses().items()})
-    agent = Stage2BlueprintAgent(ctx, driver_factory=factory)
-    result = agent.run()
-    assert result.passed and result.turns == 3
-    assert {chapter for _phase, _purpose, chapter, _index, _driver in factory.created} == {1, 2, 3}
-    assert all(len(driver.calls) == 1 for *_head, driver in factory.created)
-    projection, raw_projection = extract._require_blueprint_character_projection(ArtifactStore(ctx))
-    batch = {'contract': 'plot-blueprint-v1', 'main_text': main_text(),
-             'requests': extract.build_prompts(ctx), 'character_projection': raw_projection}
-    spec = agent._revision_specs(batch, (1,))[1]
-    current = PlotBlueprintResponse.model_validate({'blueprints': [responses()[1]]})
-    assert spec.validator(current, None) is None
-    current.blueprints[0].beats[0].participants = [ActorRefResponse(char_id='char_999')]
-    assert spec.validator(current, None)
-    current = PlotBlueprintResponse.model_validate({'blueprints': [responses()[1]]})
-    current.blueprints[0].beats[0].evidence[0].end_para = 999
-    assert spec.validator(current, None)
