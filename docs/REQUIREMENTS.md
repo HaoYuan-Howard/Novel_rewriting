@@ -31,7 +31,10 @@ states 改为 Extract（`semantic` + 可选 `canonical_ref_hint`）→compiler X
 Continuity Pass 已落地：首次 blueprint 章并发 + compile 期 0-LLM 缝合 entry/carry。
 `fujun_extract`：`--renormalize` 已免费压掉 ch7 跨章 `presentation_ref`（41→0）；
 `stage4_ready` 机械准入 ok（语义 unver 仅披露）。Stage4A 盲投影已允许空 surfaces
-（第一人称未揭示登记名）。下一步 CLI 付费 `stage4.design` Flash。
+（第一人称未揭示登记名）；同拍 ended 幂等；同 surfaces 多绑定取最早。
+付费 `stage4.design` Flash（run `712adac2`）已过机械闸并开跑：策略 + 部分章 checkpoint
+已保；ch3/4/5/6/9/10 因 `finish=length` / 截断 JSON 耗尽重试 exit 70——下一步优先免费
+续补已购 checkpoint，再针对性收紧章响应或 token。
 产品 UI 一点开始即双授权（CLI 保留 `--yes`）。
 
 ## P0 · 当前工程实施
