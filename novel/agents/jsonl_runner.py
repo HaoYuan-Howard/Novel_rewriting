@@ -22,14 +22,14 @@ from __future__ import annotations
 import io
 import json
 import os
-import signal
 import subprocess
 import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, BinaryIO, Literal
+
+from novel.orchestrator.process_tree import signal_process_tree
 
 
 TimeoutKind = Literal['first_event', 'idle', 'total']
@@ -90,55 +90,6 @@ def decode_wire_json(text: str) -> Any:
     artifact，因此用 decoder 的协议入口，避免两种证据源在代码形状上被混为一谈。
     """
     return json.JSONDecoder().decode(text)
-
-
-def _windows_taskkill_path() -> str:
-    """使用系统目录中的 taskkill，避免工作目录里的同名程序劫持取消路径。"""
-    system_root = os.environ.get('SystemRoot', r'C:\Windows')
-    return str(Path(system_root) / 'System32' / 'taskkill.exe')
-
-
-def signal_process_tree(process: subprocess.Popen[Any], *, force: bool) -> bool:
-    """只终止 ``process`` 建立的进程组/树；进程不存在时返回 False。
-
-    Windows 没有可移植的 ``killpg``，沿用本仓已经实跑验证的 ``taskkill /T``；
-    POSIX 则依赖 ``start_new_session=True`` 建立的 pgid。任何 fallback 也只触碰
-    手里这一只 Popen 根进程，不扫描名字或系统进程表。
-    """
-    if os.name == 'nt':
-        if process.poll() is not None:
-            return False
-        try:
-            killed = subprocess.run(
-                [_windows_taskkill_path(), '/PID', str(process.pid), '/T', '/F'],
-                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT, check=False,
-                creationflags=subprocess.CREATE_NO_WINDOW)
-        except OSError:
-            killed = None
-        if killed is not None and killed.returncode == 0:
-            return True
-        if process.poll() is not None:
-            return False
-        # taskkill 被策略阻断时仍不能放任付费根进程；这条 fallback 不声称孙进程
-        # 已停，上层会继续以未完成而失败。
-        process.kill() if force else process.terminate()
-        return True
-
-    signum = signal.SIGKILL if force else signal.SIGTERM
-    try:
-        # ``start_new_session`` 保证 pgid 就是 leader pid；leader 已退出但仍有孙进程
-        # 持有管道时，按已知 pgid 发信号仍能把余下成员收掉。
-        os.killpg(process.pid, signum)
-        return True
-    except ProcessLookupError:
-        return False
-    except OSError:
-        # 极端平台若不支持 process group，最多退回当前 Popen，仍不扩大杀伤面。
-        if process.poll() is not None:
-            return False
-        process.kill() if force else process.terminate()
-        return True
 
 
 def _tagged_log(log: BinaryIO, label: str, payload: bytes) -> None:

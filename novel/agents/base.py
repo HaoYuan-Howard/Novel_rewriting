@@ -20,8 +20,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import signal
-import shutil
 import subprocess
 import threading
 from abc import ABC, abstractmethod
@@ -34,8 +32,11 @@ from contracts.schema.orchestration import AgentProfile
 from novel.agents.jsonl_runner import (
     JsonlProcessRunner, ProcessTimeout, RunnerBusyError,
     RunnerCancelledBeforeStart, RunnerClosedError, decode_wire_json,
-    signal_process_tree,
 )
+from novel.orchestrator.cli_probe import (
+    CliEntryResolutionError, resolve_cli_entry as _resolve_cli_entry,
+)
+from novel.orchestrator.process_tree import signal_process_tree
 
 
 PLAIN_DELIVERY = 'plain'
@@ -668,41 +669,12 @@ class _SubprocessRunner:
 _signal_process_tree = signal_process_tree
 
 
-# npm 生成的 Windows shim 常见形状：``"%dp0%\path\tool.exe" %*``；
-# ``%~dp0`` 是同义变体。只认双引号包住的 exe，不执行 shim 中的其他命令。
-_WINDOWS_SHIM_EXE = re.compile(
-    r'"%(?:~)?dp0%\\?(?P<relative>[^"\r\n]+\.exe)"', re.IGNORECASE)
-
-
-def _entry_from_windows_shim(shim: Path) -> str | None:
-    try:
-        text = shim.read_text(encoding='utf-8', errors='replace')
-    except OSError:
-        return None
-    match = _WINDOWS_SHIM_EXE.search(text)
-    if match is None:
-        return None
-    target = shim.parent / match.group('relative').lstrip('\\/')
-    return str(target.resolve()) if target.is_file() else None
-
-
 def resolve_cli_entry(command: str, executable: str | None = None) -> str:
-    """解析能被 ``CreateProcess`` 直接执行的入口，绝不构造 shell 命令。
-
-    显式入口也要经过 ``which``：Windows 上传入 ``claude`` 时，PATH 返回的通常
-    是 npm ``.cmd`` shim。解析不了的批处理文件不是「也许能跑」，而是会重新引入
-    多行参数截断风险，因此在任何模型调用前就拒绝。
-    """
-    requested = executable or command
-    found = shutil.which(requested)
-    candidate = Path(found or requested)
-    if candidate.suffix.lower() not in ('.cmd', '.bat'):
-        return str(candidate)
-    direct = _entry_from_windows_shim(candidate)
-    if direct is None:
-        raise AgentConfigurationError(
-            f'无法从 Windows shim 解析 {command} 的原生可执行入口：{candidate}')
-    return direct
+    """兼容旧 API，并把中性解析错误映射为 driver 配置错误。"""
+    try:
+        return _resolve_cli_entry(command, executable)
+    except CliEntryResolutionError as exc:
+        raise AgentConfigurationError(str(exc)) from exc
 
 
 def compact_schema(schema: Mapping[str, Any] | None) -> str | None:

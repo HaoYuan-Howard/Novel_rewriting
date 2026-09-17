@@ -40,7 +40,7 @@ from contracts.schema.stage4 import (
 )
 from novel import paths, prov
 from novel.agents import session_audit as agent_session_audit
-from novel.agents.capabilities import validate_profile
+from novel.orchestrator.executor_capabilities import validate_profile
 from novel.agents.model_identity import validate_checkpoint_model_identity
 from novel.agents.session_client import (
     SESSION_PROTOCOL_VERSION, validate_agent_session_request_binding,

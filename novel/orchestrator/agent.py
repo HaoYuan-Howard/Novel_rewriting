@@ -17,7 +17,8 @@ append-only 理由：永不读-改-写，被 kill 最坏只损坏最后一行）
 deterministic recovery 与交付终验；走到人工审批闸时 parent 以 exit 2 停止，
 等用户在 Stage 页面过闸后用原配置续跑。executor 子进程的 argv、stdin 与
 进程树取消在 ``novel/agents`` 与 ``run_step``；历史 commander 会话行、
-reviewer 席位账与成本行仍按 append-only 原字节只读解码。
+reviewer 席位账与成本行仍按 append-only 原字节只读解码。进程树终止由本目录的
+``process_tree`` 提供，agent driver 只消费该中性边界。
 
 【冻结边界】preview / 单本 start / batch 入队共用 ``plan``。profile 在那里关闭式
 校验并深拷贝；排队项携带整份 plan，出队不再读取默认或重新解释请求。当前服务没有
@@ -48,7 +49,7 @@ from contracts.schema.orchestration import (
     ExecutionEpoch, PipelineAgentProfiles, RunContractV2,
 )
 from novel import paths, prov, run_identity
-from novel.agents.capabilities import (
+from novel.orchestrator.executor_capabilities import (
     AgentProfileRefused, validate_pipeline_profiles,
 )
 from novel.appendlog import (
@@ -58,7 +59,7 @@ from novel.exit_codes import CRASH, landed
 from novel.orchestrator.execution_context import (
     env_with_context, action_admission_id_belongs_to_epoch,
 )
-from novel.agents.base import _signal_process_tree
+from novel.orchestrator.process_tree import signal_process_tree
 from novel.errors import (
     ApprovalRequired, TerminalState, UnsupportedRunMode, UpstreamMissing,
 )
@@ -689,7 +690,7 @@ def _cancel_action_owner(run_id: str) -> bool:
         process = _ACTIONS.get(run_id)
     if process is None or process.poll() is not None:
         return False
-    return _signal_process_tree(process, force=True)
+    return signal_process_tree(process, force=True)
 
 
 def _write_scratch_bytes(path: Path, payload: bytes) -> None:
@@ -1602,7 +1603,7 @@ def _start_planned(plan: AgentRunPlan, *,
                     shell=False, **options)
                 with _ACTIONS_LOCK:
                     if run_id in _ACTIONS:
-                        _signal_process_tree(process, force=True)
+                        signal_process_tree(process, force=True)
                         raise JobConflict(
                             f'run_id={run_id!r} 已有 canonical action owner')
                     _ACTIONS[run_id] = process
@@ -1610,7 +1611,7 @@ def _start_planned(plan: AgentRunPlan, *,
                 rc = int(process.wait())
         except BaseException:
             if process is not None and process.poll() is None:
-                _signal_process_tree(process, force=True)
+                signal_process_tree(process, force=True)
                 process.wait()
             raise
         finally:

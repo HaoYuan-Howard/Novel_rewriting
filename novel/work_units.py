@@ -1052,7 +1052,7 @@ def reconcile_commander_response(
         budget: WorkUnitBudget, turn_id: str, *, read_only: bool = False) -> None:
     """原始回答的成本/会话尾账必须闭合后才能消费 typed 决定。"""
     from novel.agents import session_audit as agent_session_audit
-    from novel.agents.capabilities import reported_model_matches
+    from novel.orchestrator.executor_capabilities import reported_model_matches
     from novel.llm.ledger import reconcile_commander_call
 
     row = budget.turn(turn_id)

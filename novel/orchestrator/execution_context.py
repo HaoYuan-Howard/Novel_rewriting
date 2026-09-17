@@ -29,7 +29,7 @@ from contracts.schema.orchestration import (
     ExecutionEpoch, ExecutorBackend, PipelineAgentProfiles, RunContractV2,
 )
 from novel import prov, run_identity
-from novel.agents.capabilities import validate_pipeline_profiles
+from novel.orchestrator.executor_capabilities import validate_pipeline_profiles
 from novel.errors import TerminalState
 
 

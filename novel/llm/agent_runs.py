@@ -35,7 +35,7 @@ from pydantic import BaseModel, ValidationError
 from contracts.schema.orchestration import AgentProfile
 from novel import paths, prov, work_units
 from novel.agents import session_audit as agent_session_audit
-from novel.agents.capabilities import validate_profile
+from novel.orchestrator.executor_capabilities import validate_profile
 from novel.agents.model_identity import (
     resolve_ledger_model_identity, validate_checkpoint_model_identity,
 )

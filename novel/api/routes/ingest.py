@@ -25,7 +25,9 @@ from contracts.schema.api import (
     UploadResult,
 )
 from contracts.schema.orchestration import JobRecord, PipelineAgentProfiles
-from novel.agents.capabilities import AgentProfileRefused, validate_pipeline_profiles
+from novel.orchestrator.executor_capabilities import (
+    AgentProfileRefused, validate_pipeline_profiles,
+)
 from novel.api.deps import checked_sid, get_base
 from novel.errors import (
     SourcePathRejected,

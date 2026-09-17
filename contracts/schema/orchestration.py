@@ -93,7 +93,8 @@ class AgentProfile(FrozenModel):
     ``driver`` 是本机交互式 CLI，不拿供应商名冒充可执行入口；``model`` 保存
     稳定 id，界面文案由 capability 的独立 ``label`` 给出。这里只守字段形状，
     driver / role / model / effort / mode 的组合由
-    ``novel.agents.capabilities::validate_profile`` 对照唯一 registry 关闭式校验。
+    ``novel.orchestrator.executor_capabilities::validate_profile`` 对照唯一 registry
+    关闭式校验。
     """
 
     driver: AgentDriver
