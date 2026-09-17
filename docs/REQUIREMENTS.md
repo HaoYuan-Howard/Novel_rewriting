@@ -29,7 +29,8 @@ states 改为 Extract（`semantic` + 可选 `canonical_ref_hint`）→compiler X
 失败不触发同档付费重采。states/evidence 已收紧 prompt 准入（跨 beat + 后章消费；
 拍内不建 state）；`plot_shape` 增补 carry/same_beat 读数（无配额）。
 Continuity Pass 已落地：首次 blueprint 章并发 + compile 期 0-LLM 缝合 entry/carry。
-`fujun_extract` 11 章 Flash 蓝图已落盘（存量 ch7 跨章句柄待免费重编译）。
+`fujun_extract`：`--renormalize` 已免费压掉 ch7 跨章 `presentation_ref`（41→0）；
+`stage4_ready` 机械准入 ok（语义 unver 仅披露）。下一步可 CLI 开 Stage4 Flash。
 产品 UI 一点开始即双授权（CLI 保留 `--yes`）。
 
 ## P0 · 当前工程实施

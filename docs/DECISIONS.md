@@ -7,6 +7,7 @@
 
 | 裁决时间 | 保留的决定与缘由 | 证据边界 / 当前落点 |
 |---|---|---|
+| 2026-09-17 | **fujun Blueprint 免费重编译**：`--renormalize` 的 `rebuild` 对正式稿做章内 `presentation_ref` 规范化（跨章句柄→null，0 LLM）。`fujun_extract` ch7 41 处清零；`stage4_ready` 通过 | `plot_recovery.canonicalize_presentation_refs` / `rebuild` |
 | 2026-09-17 | **Blueprint Continuity Pass 解锁章并发**：首次抽取各章空 `entry_states` 并行购买；`plot_continuity.prepare_chapter_for_continuity` 在 `compile_plot_response` 按阅读序注入 entry/carry，并对精确主张重复的本地 state 折叠到携入正式 ID。不另起 Continuity LLM；定向修订仍可串行注入材料。R-3.16b 同步 | `plot_sequence.execute`；`plot_continuity.py`；`plot_compile.compile_plot_response` |
 | 2026-09-17 | **Blueprint 薄化 state/evidence（prompt + 读数）**：states 准入改为「跨 beat 仍成立 ∧ 后章消费/须解除」；拍内结果只进 beat.content；禁止为拍内动作复制证据行。`plot_shape` 增补 `carry_out` / `same_beat_ended` / `chapter_local_ended`，不设配额、不加 HARD | `plot_prompts.py::BLUEPRINT_SYSTEM`；`plot_checks.py::check_plot`；R-3.9 / R-3.13 |
 | 2026-09-17 | **Blueprint PlotState Extract→Compiler XOR**：wire 改为 `semantic` + 可选 `canonical_ref_hint`；正式 `content XOR global_ref` 由 `resolve_state_extract` 落地（hint 命中闭集才引用，否则 semantic→content）。旧 dual-write 经 before 规范化。schema/wire 可确定性消化失败不触发同档付费重采（`plot_recovery_policy`） | `contracts/schema/plot.py::PlotStateResponse`；`plot_compile.resolve_state_extract`；`plot_recovery_policy.py`；`plot_prompts.py` |

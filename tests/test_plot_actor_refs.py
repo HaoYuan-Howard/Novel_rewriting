@@ -263,6 +263,52 @@ def test_ch7_style_foreign_presentation_refs_canonicalize_to_null():
             allowed_actor_bindings=inherited)
 
 
+def test_formal_blueprint_renormalize_canonicalizes_foreign_presentation_refs():
+    """存量正式稿上的跨章句柄：免费 rebuild 压 null，不付费重抽。"""
+    from novel.stages.stage2.plot_recovery import canonicalize_presentation_refs
+
+    first = compiled(response(1))
+    later = response(2)
+    later['actor_bindings'] = [{
+        'presentation_key': 'a1', 'char_id': 'char_002', 'surfaces': ['娘子'],
+        'evidence': [{'start_para': 1, 'end_para': 1}], 'public_state_ref': None,
+    }]
+    later['beats'] = [{
+        'beat_key': 'b1', 'content': '娘子与新邻居同席。',
+        'participants': [
+            {'char_id': 'char_001', 'presentation_ref': None},
+            {'char_id': 'char_002', 'presentation_ref': 'a1'},
+        ],
+        'evidence': [{'start_para': 1, 'end_para': 1}], 'source_contexts': [{
+            'evidence': [{'start_para': 1, 'end_para': 1}],
+            'time_layer': 'present', 'place': None,
+            'present': [{'char_id': 'char_002', 'presentation_ref': 'a1'}],
+        }],
+    }]
+    later['states'] = []
+    later['constraints'] = []
+    later['entry_state_refs'] = []
+    later['carry_out_refs'] = []
+    later['narration'] = [{
+        'grammatical_person': 'third', 'narrator': None,
+        'focalizer': {'char_id': 'char_002', 'presentation_ref': 'a1'},
+        'pronoun_surfaces': [], 'beat_refs': [],
+        'evidence': [{'start_para': 1, 'end_para': 1}],
+    }]
+    second = compile_chapter(
+        PlotChapterResponse.model_validate(later), SOURCE,
+        allowed_char_ids=CHARS, character_bindings=INVENTORY)
+    # 模拟旧正式稿：手写塞入跨章句柄
+    dumped = second.model_dump(mode='json')
+    dumped['beats'][0]['participants'][0]['presentation_ref'] = 'ap01_01'
+    from contracts.schema.plot import PlotBlueprint
+    stale = PlotBlueprint.model_validate(dumped)
+    fixed = canonicalize_presentation_refs(stale)
+    assert fixed.beats[0].participants[0].presentation_ref is None
+    assert fixed.beats[0].participants[1].presentation_ref == second.beats[0].participants[1].presentation_ref
+    validate_actors(fixed, SOURCE, allowed_char_ids=CHARS, character_bindings=INVENTORY)
+
+
 @pytest.mark.parametrize('declare_current', [False, True])
 def test_unconsumed_historical_bindings_do_not_enter_current_executor_candidates(declare_current):
     import json

@@ -1,10 +1,37 @@
-"""V10 的免费坐标重算与 INVALID 提升；不修改剧情，也不生成语义接受。"""
+"""V10 的免费坐标重算与 INVALID 提升；不修改剧情，也不生成语义接受。
+
+存量 Blueprint 若仍带跨章 ``presentation_ref`` 正式句柄，免费 ``--renormalize``
+会按现役章内句柄规则压成 ``null``（与 compile 期一致，0 LLM）。
+"""
 from __future__ import annotations
 
+from typing import Any
+
+from contracts.schema.plot import PlotBlueprint
 from contracts.schema.stage2 import ChapterBlueprints
 from contracts.schema.knowledge import KnowledgeGrounding
 from novel.errors import ProvenanceRefused, UpstreamMissing
 from novel.stages.stage2.plot_compile import recompile_evidence, validate_book
+
+
+def canonicalize_presentation_refs(chapter: PlotBlueprint) -> PlotBlueprint:
+    """正式稿上的章内句柄规范化：非本章 actor_bindings 的 presentation_ref → null。"""
+    local = {row.presentation_id for row in chapter.actor_bindings}
+    raw = chapter.model_dump(mode='json')
+
+    def walk(value: Any) -> Any:
+        if isinstance(value, list):
+            return [walk(item) for item in value]
+        if not isinstance(value, dict):
+            return value
+        if set(value) == {'char_id', 'presentation_ref'}:
+            pref = value.get('presentation_ref')
+            if pref is not None and pref not in local:
+                return {'char_id': value['char_id'], 'presentation_ref': None}
+            return value
+        return {key: walk(item) for key, item in value.items()}
+
+    return PlotBlueprint.model_validate(walk(raw))
 
 
 def rebuild(artifact: ChapterBlueprints, main_text: list[dict]) -> ChapterBlueprints:
@@ -14,7 +41,8 @@ def rebuild(artifact: ChapterBlueprints, main_text: list[dict]) -> ChapterBluepr
         if chapter.chapter_ordinal not in sources:
             raise ProvenanceRefused('问题稿含当前原文之外的章节')
         try:
-            chapters.append(recompile_evidence(chapter, sources[chapter.chapter_ordinal]))
+            normalized = canonicalize_presentation_refs(chapter)
+            chapters.append(recompile_evidence(normalized, sources[chapter.chapter_ordinal]))
         except ValueError as exc:
             raise ProvenanceRefused(str(exc)) from exc
     try:
