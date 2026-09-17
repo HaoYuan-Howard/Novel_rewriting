@@ -13,7 +13,6 @@ from contracts.schema.knowledge import KnowledgeGrounding
 from contracts.schema.stage1 import MainText, HookCopy
 from contracts.schema.stage6_prepare import Stage6Prepare, PrepareMutationJournal
 from novel.errors import ProvenanceRefused, TerminalState, UpstreamStale
-from novel.orchestrator.node_agents import Stage2AnalyzeAgent
 from novel.stages.stage0 import removal
 from novel.stages.stage1.partition import run_partition
 from novel.stages.stage6 import prepare
@@ -21,7 +20,7 @@ from novel.store import ArtifactStore
 from tests.stage2_fixtures import character_response
 from tests.test_stage2 import main_text
 from tests.test_stage2_generation import _ctx
-from tests.test_stage2_global_agent import _Driver, _free_ctx, _profile
+from tests.test_stage2_global_agent import _free_ctx, _profile
 from tests.factories import stage0_force_pending, stage0_machine_revise
 from tests.test_stage6_prepare import ProcessExit, decision_for, edit_for, response
 
@@ -65,9 +64,9 @@ def seed_core(book):
     payload = {'characters': character_response(source=source)['characters'], 'global': {
         'setting': {'era': None, 'social_context': None, 'era_evidence_refs': [], 'social_context_evidence_refs': []},
         'world_rules': [], 'relations': [], 'arc_secrets': []}}
-    driver = _Driver([json.dumps(payload, ensure_ascii=False)], book, session_id=ctx.run_id)
-    Stage2AnalyzeAgent(ctx, driver=driver).run()
-    return ctx, driver
+    from tests.test_stage2_analyze import _generate
+    _receipt, transport = _generate(ctx, payload)
+    return ctx, transport
 
 
 def seed_source_prepare(book):

@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """一次全文分析、两份独立物化；已购来源及首次提交不可被后续修订重开。
 
-首抽在 wire 前冻结两个 owner 的目标基线。回答由 agent client 先 durable，
-checkpoint 冻结局部句柄和编译结果；短回执只认领该次来源与调用。业务 HARD
-按侧保存，绝不为了修一侧重新购买联合扫描。提交窗口由同一 prepared journal 补尾。
+现役首抽由直连 LlmClient 一次请求并落盘回答侧车；短回执只认领该次来源与调用。
+业务 HARD 按侧保存，绝不为了修一侧重新购买联合扫描。历史 agent checkpoint 与
+prepared journal 仅供旧盘免费恢复，不再进入生产调用路径。
 """
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ import itertools
 import json
 import threading
 from contextlib import contextmanager
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -29,10 +29,11 @@ from contracts.schema.knowledge import GlobalProvenance, KnowledgeGrounding
 from contracts.schema.stage1 import MainText
 from contracts.schema.stage2 import BlueprintCharacterProjection
 from novel import paths, prov, runtime_layout
-from novel.agents.session_client import SessionAgentClient, agent_json_schema
+from novel.agents.session_client import agent_json_schema
 from novel.appendlog import process_append_lock
-from novel.errors import GateBlocked, ProvenanceRefused, ResponseRepairRequired, TerminalState, UpstreamMissing
+from novel.errors import GateBlocked, ProvenanceRefused, UpstreamMissing
 from novel.llm import agent_runs, stage2_global_runs
+from novel.llm.execution import canonical_sha256
 from novel.llm.ledger import ledger_path, read_strict_jsonl_objects
 from novel.llm.prompts import fill
 from novel.run import RunContext
@@ -262,7 +263,7 @@ def prepare(ctx: RunContext) -> PreparedAnalyze:
         raise ProvenanceRefused('联合分析读取期间 MainText 改变')
     table = GlobalEvidenceCandidateTable.build(main)
     return PreparedAnalyze(main, before, table, f'书名：{ctx.title}\n\n{table.render()}',
-        agent_runs.canonical_sha256(dict(node=NODE, main_text_sha256=before, table_sha256=table.sha256())))
+        canonical_sha256(dict(node=NODE, main_text_sha256=before, table_sha256=table.sha256())))
 
 
 def _assert_current(ctx: RunContext, prepared: PreparedAnalyze) -> None:
@@ -281,8 +282,8 @@ def compile_drafts(ctx: RunContext, prepared: PreparedAnalyze, response: Analyze
                    client: Any, *, source: LlmProvenance | None = None) -> dict[str, Any]:
     """两侧独立编译；候选引用异常保留 durable wire，不挪用另一侧调用额度。
 
-    ``client`` 只需提供 ``model`` 与 ``accepted_models(purpose)``（SessionAgentClient
-    或 LlmClient）；业务 HARD 与句柄分配不依赖 executor 种类。
+    ``client`` 只需提供 ``model`` 与 ``accepted_models(purpose)``；业务 HARD
+    与句柄分配不依赖传输实现。
     """
     if source is None:
         source = ctx.llm_provenance(LlmProvenance, prompts={'ANALYZE_SYS': SYSTEM},
@@ -305,7 +306,7 @@ def compile_drafts(ctx: RunContext, prepared: PreparedAnalyze, response: Analyze
         state['characters'] = registry.model_dump(mode='json', by_alias=True)
         state['materializations'].append(dict(owner='stage2.characters', state='invalid' if hits else 'formal',
             target_rel=CHARACTERS_INVALID if hits else CHARACTERS,
-            core_sha256=agent_runs.canonical_sha256(compiled.characters), issues=hits))
+            core_sha256=canonical_sha256(compiled.characters), issues=hits))
     except (ValueError, ValidationError) as exc:
         state['materializations'].append(dict(owner='stage2.characters', state='draft_invalid',
             target_rel=None, core_sha256=None, issues=[str(exc)]))
@@ -331,7 +332,7 @@ def compile_drafts(ctx: RunContext, prepared: PreparedAnalyze, response: Analyze
                                         characters=state['characters']))
         core = {key: state['global_candidate'][key] for key in ('setting', 'world_rules', 'relations', 'arc_secrets')}
         state['materializations'].append(dict(owner='stage2.global', state='invalid' if hits else 'formal',
-            target_rel=GLOBAL_INVALID if hits else GLOBAL, core_sha256=agent_runs.canonical_sha256(core), issues=hits))
+            target_rel=GLOBAL_INVALID if hits else GLOBAL, core_sha256=canonical_sha256(core), issues=hits))
     except (ValueError, ValidationError) as exc:
         state['global_candidate'] = None
         state['materializations'].append(dict(owner='stage2.global', state='draft_invalid',
@@ -352,7 +353,7 @@ def receipt_from_checkpoint(ctx, prepared, checkpoint, source: LlmProvenance) ->
         source_sha256=prepared.source_sha256, input_sha256=prepared.input_sha256,
         request_sha256=identity['request_fingerprint'],
         response_sha256=identity['response_sha256'],
-        schema_sha256=agent_runs.canonical_sha256(agent_json_schema(AnalyzeResponse)),
+        schema_sha256=canonical_sha256(agent_json_schema(AnalyzeResponse)),
         checkpoint_sha256=checkpoint.checkpoint_sha256,
         character_handles=checkpoint.state_payload['character_handles'],
         global_handles=checkpoint.state_payload['global_handles'],
@@ -441,152 +442,19 @@ def _commit(ctx, prepared, checkpoint, receipt: AnalyzeReceipt) -> AnalyzeReceip
         return receipt
 
 
-def recover_raw_checkpoint(ctx: RunContext, prepared: PreparedAnalyze):
-    """原 run 的已购 stdout → 同 schema → checkpoint；无 raw 绝不续买。"""
-    from novel.llm import response_repair
-    from novel.llm.client import judge_payload
-    from novel.llm.prompts import required_top_level
-    from novel.llm.transport import ChatResponse
-    if ctx.paid or ctx.executor_profile is None:
-        raise ProvenanceRefused('原 raw 编译只接受免费且配置已验证的原 run')
-    if agent_runs.own_request_changed(ctx, run_spec(), **prepared.request()) is not False:
-        raise ProvenanceRefused('原 raw 编译请求与原 run 不一致')
-    _assert_current(ctx, prepared)
-    client = SessionAgentClient(ctx, ctx.executor_profile, None, max_semantic_turns=4)
-    try:
-        saved = client.recover_saved_response(SYSTEM, prepared.user, model_cls=AnalyzeResponse,
-            purpose=NODE, max_tokens=MAX_TOKENS, recovery_policy=RECOVERY_POLICY)
-        if saved is None:
-            raise ProvenanceRefused('原 Analyze 尚无完整已保存响应；保留原 owner，禁止自动重新购买')
-        turn, attempt = saved
-        acceptance = client.accepted_checkpoint(NODE)
-        response, why, gate, details = judge_payload(turn.content,
-            ChatResponse(content=turn.content, model=acceptance['model']),
-            require=required_top_level(AnalyzeResponse), model_cls=AnalyzeResponse, validator=None)
-        binding = None
-        record = None
-        if response is None or why is not None:
-            identity = agent_runs.response_repair_identity(ctx, run_spec(), acceptance)
-            chain = agent_runs.canonical_sha256(identity)
-            try:
-                draft = json.loads(acceptance['normalized_text'])
-            except (ValueError, TypeError):
-                draft = {}
-            _rel, error = response_repair.keep_rejection(ctx.novel_dir, chain_id=chain,
-                attempt_id=attempt, original=turn.content, candidate=draft, payload={
-                    'sid': ctx.sid, 'node': NODE, 'purpose': NODE, 'run_id': ctx.run_id, 'code': ctx.code,
-                    'model': acceptance['model'], 'model_index': 0, 'sample': acceptance['accepted_turn_index'],
-                    'request_fingerprint': acceptance['request_fingerprint'], 'gate': gate,
-                    'why': why, 'reject_detail': details, 'repair_eligible': True,
-                    'eligibility_reason': '已购 Analyze 原响应的免费形状修复；同一原 schema 与 HARD 仍须重验',
-                    'response_model': 'AnalyzeResponse', 'required_top_level': required_top_level(AnalyzeResponse),
-                    'agent_response_repair_identity': identity,
-                    'resume_node': NODE, 'resume_flags': ['--recover-analyze-run', ctx.run_id]})
-            if error is not None:
-                raise ProvenanceRefused('原 Analyze 响应隔离未完整落盘；禁止继续请求')
-            records = response_repair.records_for_chain(ctx.novel_dir, chain)
-            if len(records) != 1:
-                raise ProvenanceRefused('原 Analyze 响应隔离链存在多个候选，拒绝挑选')
-            record = records[0]
-            if (record.rejection.get('agent_response_repair_identity') != identity
-                    or agent_runs.canonical_sha256((record.root / response_repair.ORIGINAL_FILE).read_bytes())
-                    != acceptance['ledger_response_sha256']):
-                raise ProvenanceRefused('原 Analyze 隔离来源被修改')
-            hint = (f'编辑 {record.root / response_repair.CANDIDATE_FILE} 后用 response-repair {ctx.sid} '
-                    f'--base "{ctx.novel_dir.parent}" --attempt {attempt} --actor <id> --reason <why> 封存，'
-                    f'再免费运行 stage2.analyze --recover-analyze-run {ctx.run_id}；不加 --yes、不改原配置')
-            if record.resolution is None:
-                raise ResponseRepairRequired('原 Analyze stdout 未通过原 schema，已建立免费修复工作项',
-                    attempt_id=attempt, candidate_path=str(record.root / response_repair.CANDIDATE_FILE),
-                    original_path=str(record.root / response_repair.ORIGINAL_FILE), hint=hint)
-            if record.resolution.get('action') == 'decline':
-                if record.outcome is None:
-                    response_repair.write_outcome(record, decision='declined', gate=None, detail=None,
-                        why='操作者放弃原 Analyze 响应的唯一免费修复')
-                raise TerminalState('原 Analyze 响应修复已放弃，保留原 owner 与已购证据；禁止自动重新购买')
-            binding = agent_runs.response_repair_binding(ctx, run_spec(), acceptance, record)
-            text = json.dumps(record.resolution['candidate'], ensure_ascii=False)
-            response, why, gate, details = judge_payload(text,
-                ChatResponse(content=text, model=acceptance['model']),
-                require=required_top_level(AnalyzeResponse), model_cls=AnalyzeResponse, validator=None)
-            if response is None or why is not None:
-                if record.outcome is None:
-                    response_repair.write_outcome(record, decision='rejected', gate=gate,
-                        detail=details, why=why or '修复候选未通过原 schema')
-                raise TerminalState('封存的 Analyze 修复候选未通过原 schema；保留原响应，禁止自动重新购买')
-        # 此处的免费 context 已核原 run/request/profile 与完整 custody/ledger。
-        # 原费用由后继来源回执认领；不能把 ctx 改为 paid 或冒充本轮新模型调用。
-        source = LlmProvenance(code=ctx.code, root_clean_sha1=ctx.root_clean_sha1,
-            inputs=ctx.edges, prompts={'ANALYZE_SYS': prov.fingerprint(SYSTEM)},
-            model=ctx.executor_profile.model, adopted_models=client.accepted_models(NODE), usage=None)
-        state = compile_drafts(ctx, prepared, response, client, source=source)
-        agent_runs.write_checkpoint(ctx, run_spec(), **prepared.request(),
-            response_payload=response.model_dump(mode='json', by_alias=True), acceptance=acceptance,
-            revision_key=f'candidate:{acceptance["accepted_turn_index"]}', state_payload=state,
-            response_repair=binding)
-        checkpoint = agent_runs.restore_checkpoint(ctx, run_spec(), **prepared.request())
-        if checkpoint is None:
-            raise ProvenanceRefused('原 Analyze raw 编译后 checkpoint 未闭合')
-        if record is not None and record.outcome is None:
-            response_repair.write_outcome(record, decision='accepted', gate=None, detail=None,
-                why='封存修复通过原 AnalyzeResponse；两侧业务 HARD 在原 owner 提交时分别处理')
-        return checkpoint
-    finally:
-        client.close()
+def run(ctx: RunContext, client: Any) -> AnalyzeReceipt:
+    """现役唯一生产入口：直连一次 ask_json，两侧独立编译并直接落盘。
 
-
-def run(ctx: RunContext, client: SessionAgentClient) -> AnalyzeReceipt:
-    prepared = prepare(ctx)
-    spec = run_spec()
-    with ownership(ctx):
-        existing = paths.stage2_analyze_run_path(ctx.novel_dir, ctx.run_id) / agent_runs.RUN_FILE
-        had_run = existing.exists()
-        if not had_run:
-            reason = cold_start_reason(ctx.novel_dir, current_run_id=ctx.run_id)
-            if reason is not None:
-                raise ProvenanceRefused(reason)
-        agent_runs.ensure_run(ctx, spec, **prepared.request())
-    checkpoint = agent_runs.restore_checkpoint(ctx, spec, **prepared.request())
-    if checkpoint is None and had_run:
-        checkpoint = recover_raw_checkpoint(replace(ctx, paid=False), prepared)
-    if checkpoint is None:
-        response = client.ask_json(SYSTEM, prepared.user, model_cls=AnalyzeResponse,
-            purpose=NODE, max_tokens=MAX_TOKENS, recovery_policy=RECOVERY_POLICY)
-        _assert_current(ctx, prepared)
-        state = compile_drafts(ctx, prepared, response, client)
-        acceptance = client.accepted_checkpoint(NODE)
-        agent_runs.write_checkpoint(ctx, spec, **prepared.request(),
-            response_payload=response.model_dump(mode='json', by_alias=True), acceptance=acceptance,
-            revision_key=f'candidate:{acceptance["accepted_turn_index"]}', state_payload=state)
-        checkpoint = agent_runs.restore_checkpoint(ctx, spec, **prepared.request())
-    else:
-        client.restore_checkpoint_acceptance(NODE, checkpoint.acceptance, system=SYSTEM,
-            user=prepared.user, max_tokens=MAX_TOKENS, recovery_policy=RECOVERY_POLICY)
-    if checkpoint is None or checkpoint.state_payload['input_sha256'] != prepared.input_sha256:
-        raise ProvenanceRefused('联合回答 checkpoint 缺失或输入身份漂移')
-    receipt = _commit(ctx, prepared, checkpoint, _receipt(ctx, prepared, checkpoint, client))
-    failures = [row for row in receipt.materializations if row.state != 'formal']
-    if failures:
-        target = next((row.target_rel for row in failures if row.target_rel is not None), REL)
-        raise GateBlocked('共享首抽已保存；问题侧按独立 owner 免费修订/恢复：' +
-            '；'.join(f'{row.owner}: {row.state}' for row in failures), invalid_path=store_path(ctx, target))
-    refresh_review(ctx)
-    return receipt
-
-
-def run_legacy(ctx: RunContext, client: Any) -> AnalyzeReceipt:
-    """显式 DeepSeek legacy：一次 ask_json，两侧独立编译后直接落盘。
-
-    不接管 agent 的 node-executor/v1 run 目录；已有 agent analyze run 必须用原
-    profile 恢复。回执与 SharedAnalysisSource 形状与 agent 路相同，便于下游
+    本入口不接管历史 node-executor/v1 run 目录；已有 agent analyze run 必须
+    继续走冻结旧代码的免费恢复。回执与 SharedAnalysisSource 保持原形状，供
     characters/global owner 消费。
     """
     from novel.llm.client import LlmClient
 
     if not isinstance(client, LlmClient):
-        raise ProvenanceRefused('联合首抽 legacy 入口只接受 LlmClient')
+        raise ProvenanceRefused('联合首抽生产入口只接受 LlmClient')
     if ctx.executor_profile is not None:
-        raise ProvenanceRefused('联合首抽 legacy 入口不能接管 agent profile')
+        raise ProvenanceRefused('联合首抽生产入口不能接管 agent profile')
     with ownership(ctx):
         if paths.stage2_analyze_run_path(ctx.novel_dir, ctx.run_id).exists():
             raise ProvenanceRefused('当前联合首抽 run 已有 agent 状态，必须用原 profile 恢复')
@@ -605,7 +473,7 @@ def run_legacy(ctx: RunContext, client: Any) -> AnalyzeReceipt:
     source = ctx.llm_provenance(
         LlmProvenance, prompts={'ANALYZE_SYS': SYSTEM},
         model=client.model, adopted_models=client.accepted_models(NODE), settle=True)
-    checkpoint_sha = agent_runs.canonical_sha256(dict(
+    checkpoint_sha = canonical_sha256(dict(
         kind='stage2-analyze-legacy-v1',
         attempt_id=attempt_id,
         input_sha256=prepared.input_sha256,
@@ -617,7 +485,7 @@ def run_legacy(ctx: RunContext, client: Any) -> AnalyzeReceipt:
         source_sha256=prepared.source_sha256, input_sha256=prepared.input_sha256,
         request_sha256=identity['request_fingerprint'],
         response_sha256=identity['response_sha256'],
-        schema_sha256=agent_runs.canonical_sha256(agent_json_schema(AnalyzeResponse)),
+        schema_sha256=canonical_sha256(agent_json_schema(AnalyzeResponse)),
         checkpoint_sha256=checkpoint_sha,
         character_handles=state['character_handles'],
         global_handles=state['global_handles'],

@@ -16,12 +16,11 @@ from contracts.schema.knowledge import KnowledgeGrounding
 from novel import paths
 from novel.cli.main import _run_stage2
 from novel.errors import GateBlocked, ProvenanceRefused, TerminalState
-from novel.orchestrator.node_agents import Stage2AnalyzeAgent, Stage2CharactersAgent
 from novel.orchestrator import nodes
 from novel.stages.stage2 import analyze, analyze_draft_recovery as recovery, analyze_recovery, characters
 from novel.store import ArtifactStore
-from tests.test_stage2_analyze import _ctx, _driver, _response
-from tests.test_stage2_global_agent import _free_ctx, _new_run_ctx, _Driver
+from tests.test_stage2_analyze import _ctx, _generate, _response
+from tests.test_stage2_global_agent import _free_ctx
 
 
 def seed(tmp_path, owner):
@@ -33,10 +32,8 @@ def seed(tmp_path, owner):
         draft['global']['relations'] = [dict(relation_ref='r1', subject_ref='c1', object_ref='c999',
             predicate='母女', effective_from=1, effective_until=None, revealed_from=2,
             evidence_refs=['e000011'])]
-    driver = _driver(ctx, draft)
-    with pytest.raises(GateBlocked):
-        Stage2AnalyzeAgent(ctx, driver=driver).run()
-    assert len(driver.calls) == 1
+    _receipt, transport = _generate(ctx, draft, expect_blocked=True)
+    assert len(transport.calls) == 1
     free = _free_ctx(ctx)
     free.node = owner
     return ctx, free
@@ -54,7 +51,8 @@ def fixed_request(ctx):
 def original_bytes(ctx):
     store = ArtifactStore(ctx)
     result = {store.path(analyze.REL): store.path(analyze.REL).read_bytes()}
-    result.update({path: path.read_bytes() for path in analyze.run_spec().run_path(ctx).rglob('*') if path.is_file()})
+    sidecar = analyze.legacy_checkpoint_path(ctx.novel_dir)
+    result[sidecar] = sidecar.read_bytes()
     result[ctx.ledger.path] = ctx.ledger.path.read_bytes()
     return result
 

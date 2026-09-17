@@ -11,52 +11,13 @@
 - 「同一决定新增人物并被关系引用」的组合由两次独立编辑表达，不再有跨 owner 批次。
 
 这里只保留两例与双 owner 无关、但原本只在本文件覆盖的现役职责：
-联合首抽（stage2.analyze）的队列冷启动与半边提交恢复仍必须经真实
-queue/operator/execution_permit 面零模型闭合。
+联合首抽（stage2.analyze）的历史 agent 半边提交职责已随生产臂退役；
+这里只保留人物修复后从直连回答侧车免费物化 Global 的现役路由。
 """
 from __future__ import annotations
 
-import pytest
-
-from novel.orchestrator.node_agents import Stage2AnalyzeAgent
-from novel.orchestrator import execution_permit, operator, queue
-from novel.store import ArtifactStore
-from tests.test_stage2_analyze import _awaiting_global, _ctx, _driver
-
-
-def test_queue_cold_start_uses_initial_recovery_and_partial_submit_keeps_exact_run(tmp_path, monkeypatch):
-    """analyze 冷启动中断后，队列/operator/许可只指向免费 --recover-analyze-run。"""
-    from novel.stages.stage2 import analyze, analyze_recovery
-    from tests.test_stage2_global_agent import _free_ctx
-    ctx = _ctx(tmp_path)
-    todo, blocked = queue.plan_book(tmp_path, ctx.sid, until_stage='stage2')
-    nodes = [row.node for row in [*todo, *blocked]]
-    assert 'stage2.analyze' in nodes
-    assert 'stage2.characters' not in nodes and 'stage2.global' not in nodes
-    original_write = ArtifactStore.write_round
-    def stop_global(store, rel, value):
-        if rel == analyze.GLOBAL:
-            raise KeyboardInterrupt('首次联合提交人物后硬杀')
-        return original_write(store, rel, value)
-    monkeypatch.setattr(ArtifactStore, 'write_round', stop_global)
-    with pytest.raises(KeyboardInterrupt):
-        Stage2AnalyzeAgent(ctx, driver=_driver(ctx)).run()
-    ledger = ctx.ledger.path.read_bytes()
-    recovery = queue.stage2_core_recovery_item(tmp_path, ctx.sid)
-    assert recovery.node == analyze.NODE
-    assert recovery.flags == ['--recover-analyze-run', ctx.run_id]
-    current = operator.next_action(tmp_path, ctx.sid)
-    assert current.state == 'ready' and current.action.node == analyze.NODE
-    assert current.action.flags == recovery.flags and current.action.paid is False
-    permit = operator.permit(tmp_path, ctx.sid, analyze.NODE, recovery.flags)
-    assert permit.paid is False
-    execution_permit.revalidate_active_execution_surface(permit, flags=recovery.flags)
-    monkeypatch.setattr(ArtifactStore, 'write_round', original_write)
-    free = _free_ctx(ctx)
-    analyze_recovery.recover_initial(free, ctx.run_id)
-    assert queue.stage2_core_recovery_item(tmp_path, ctx.sid) is None
-    assert ctx.ledger.path.read_bytes() == ledger
-    assert analyze.cold_start_reason(ctx.novel_dir) is not None
+from novel.orchestrator import queue
+from tests.test_stage2_analyze import _awaiting_global, _ctx
 
 
 def test_fixed_characters_route_saved_global_draft_to_free_recovery(tmp_path):

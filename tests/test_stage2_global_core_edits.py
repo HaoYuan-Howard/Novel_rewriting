@@ -81,9 +81,8 @@ def test_real_cli_free_edit_reports_current_core_and_replays_without_rebuy(tmp_p
 def test_joint_half_invalid_has_free_cli_template_edit_and_pending_review(
         tmp_path, capsys, monkeypatch, stop_rel):
     from novel.cli.main import _run_stage2
-    from novel.orchestrator.node_agents import Stage2AnalyzeAgent
     from novel.stages.stage2 import analyze
-    from tests.test_stage2_analyze import _ctx as analyze_ctx, _driver, _response
+    from tests.test_stage2_analyze import _ctx as analyze_ctx, _generate, _response
 
     ctx = analyze_ctx(tmp_path)
     response = _response()
@@ -92,9 +91,7 @@ def test_joint_half_invalid_has_free_cli_template_edit_and_pending_review(
         'predicate': '母女', 'effective_from': 1, 'effective_until': None,
         'revealed_from': 99, 'evidence_refs': ['e000011'],
     }]
-    driver = _driver(ctx, response)
-    with pytest.raises(GateBlocked):
-        Stage2AnalyzeAgent(ctx, driver=driver).run()
+    _receipt, transport = _generate(ctx, response, expect_blocked=True)
     free = _free_ctx(ctx)
     free.node = 'stage2.global'
     store = ArtifactStore(free)
@@ -105,7 +102,7 @@ def test_joint_half_invalid_has_free_cli_template_edit_and_pending_review(
     unchanged = {rel: store.path(rel).read_bytes() for rel in (
         STAGE2_CHARACTERS, analyze.REL, analyze.PROJECTION)}
     ledger = ctx.ledger.path.read_bytes()
-    original_calls = len(driver.calls)
+    original_calls = len(transport.calls)
     capsys.readouterr()
     assert _run_stage2(free, ['--emit-edit-template']) == 0
     template = decode_artifact(
@@ -141,7 +138,7 @@ def test_joint_half_invalid_has_free_cli_template_edit_and_pending_review(
     for rel, content in unchanged.items():
         assert store.path(rel).read_bytes() == content
     assert ctx.ledger.path.read_bytes() == ledger
-    assert len(driver.calls) == original_calls == 1
+    assert len(transport.calls) == original_calls == 1
     before_replay = snapshot(ctx)
     assert _run_stage2(free, flags) == 0
     assert snapshot(ctx) == before_replay

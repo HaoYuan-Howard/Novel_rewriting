@@ -67,6 +67,9 @@ def pending(novel_dir: Path, *, code: str | None = None) -> list[str]:
 
 def source_paths(novel_dir: Path, *, code: str | None = None) -> tuple[Path, ...]:
     """仅当前草稿来源及未闭合 journal；不把无关历史目录放入 dispatch seal。"""
+    from novel.llm import agent_runs
+    from novel.orchestrator.queue import analyze_initial_recovery_surface
+
     store = _store(novel_dir, code=code)
     rows = status(novel_dir, code=code)
     if not rows:
@@ -77,11 +80,17 @@ def source_paths(novel_dir: Path, *, code: str | None = None) -> tuple[Path, ...
                   if row['state'] == 'prepared')
     run_path = paths.stage2_analyze_run_path(novel_dir, receipt.run_id)
     result.extend(sorted(path for path in run_path.rglob('*') if path.is_file()))
-    # 原 raw/request/custody 保存在持久工作单元目录；复用同一来源闭集，
-    # 不能只 seal checkpoint 而漏掉恢复时必须对证的原始回答。
-    from novel.orchestrator.queue import analyze_initial_recovery_surface
-    result.extend(analyze_initial_recovery_surface(novel_dir.parent, paths.derive_source_meta(novel_dir.name)[0],
-        receipt.run_id, code=code).source_paths)
+    run_file = run_path / agent_runs.RUN_FILE
+    if run_file.is_file():
+        # 历史 agent run：原 raw/request/custody 在持久工作单元目录，复用同一来源闭集。
+        result.extend(analyze_initial_recovery_surface(
+            novel_dir.parent, paths.derive_source_meta(novel_dir.name)[0],
+            receipt.run_id, code=code).source_paths)
+    else:
+        # 现役直连：侧车是已购 AnalyzeResponse 的唯一耐久面。
+        sidecar = analyze.legacy_checkpoint_path(novel_dir)
+        if sidecar.is_file():
+            result.append(sidecar)
     return tuple(sorted(set(result)))
 
 

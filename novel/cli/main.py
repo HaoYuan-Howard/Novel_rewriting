@@ -744,9 +744,9 @@ def _run_stage2(ctx: RunContext, flags: list[str]) -> int:
             print(analyze.SYSTEM)
             print(analyze.prepare(ctx).user)
             return X.OK
-        receipt = analyze.run_legacy(ctx, _llm_client(ctx))
+        receipt = analyze.run(ctx, _llm_client(ctx))
         formal = sum(1 for row in receipt.materializations if row.state == 'formal')
-        print(f'  ✓ stage2.analyze legacy 已落盘回执；两侧 formal={formal}/2')
+        print(f'  ✓ stage2.analyze 已落盘回执；两侧 formal={formal}/2')
         return X.OK
 
     if ctx.node == 'stage2.characters':

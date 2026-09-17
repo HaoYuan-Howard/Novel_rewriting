@@ -100,13 +100,12 @@ def test_identity_edit_free_rebind_http_cli_restart_preserves_knowledge_cost(tmp
     monkeypatch.delenv('DEEPSEEK_API_KEY', raising=False)
 
     def seed_knowledge(tmp_path):
-        from tests.test_stage2_analyze import _ctx as analyze_ctx, _driver
+        from tests.test_stage2_analyze import _ctx as analyze_ctx, _generate
         from tests.stage2_fixtures import character_response, knowledge_response
-        from novel.orchestrator.node_agents import Stage2AnalyzeAgent
         ctx = analyze_ctx(tmp_path)
         response = {'characters': character_response()['characters'],
                     'global': knowledge_response()}
-        Stage2AnalyzeAgent(ctx, driver=_driver(ctx, response)).run()
+        _generate(ctx, response)
         ctx.node = 'stage2.global'
         return ctx
 

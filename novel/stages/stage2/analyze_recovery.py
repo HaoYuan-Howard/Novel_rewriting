@@ -331,7 +331,7 @@ def _assert_sources(ctx, store, main_sha, receipt_sha, characters_sha):
 
 
 def recover_initial(ctx: RunContext, source_run_id: str) -> AnalyzeReceipt:
-    """同代码下排空旧 owner；原 raw 可免费编译 checkpoint，不请求或续会话。"""
+    """同代码下排空已有 checkpoint 的旧 owner；不请求、不续会话、不编译 raw。"""
     if ctx.node != analyze.NODE or ctx.paid:
         raise ProvenanceRefused('联合初始补尾只接受 stage2.analyze 免费入口')
     if ctx.run_id == source_run_id:
@@ -341,18 +341,19 @@ def recover_initial(ctx: RunContext, source_run_id: str) -> AnalyzeReceipt:
         source_run_id=source_run_id, ledger_source_path=ctx.ledger.path)
     if historical.code != ctx.code or prov.code_version() != ctx.code:
         raise ProvenanceRefused('原 Analyze 代码与当前代码不同；须用冻结原代码排空旧 owner，不能重买')
-    # 原 run 的可写 context 只用于原 raw/checkpoint/提交尾窗；禁止 driver 与新内容轮。
+    # 原 run 的可写 context 只用于已有 checkpoint/提交尾窗；禁止 driver 与新内容轮。
     source_ctx = RunContext(novel_dir=ctx.novel_dir, node=analyze.NODE, paid=False, code=ctx.code,
         cache=ctx.cache, ledger=historical.ledger, run_id=source_run_id,
         executor_profile=historical.executor_profile)
     source_prepared = analyze.prepare(source_ctx)
     if source_prepared.request() != prepared.request():
         raise ProvenanceRefused('原 Analyze 补尾请求与本次核验来源不一致')
-    # 先完整验证原请求，再决定是否补 typed checkpoint；从不靠异常字符串判缺失。
+    # agent 生产臂已退役：这里只接受旧代码已经落下的 typed checkpoint。
     checkpoint = agent_runs.restore_checkpoint(source_ctx, analyze.run_spec(), **source_prepared.request())
     if checkpoint is None:
-        with analyze.ownership(source_ctx):
-            analyze.recover_raw_checkpoint(source_ctx, source_prepared)
+        raise ProvenanceRefused(
+            '原 Analyze agent run 缺少 typed checkpoint；现役代码不再编译 agent raw，'
+            '须用冻结旧代码恢复')
     restored = agent_runs.restore_historical_run(ctx, analyze.run_spec(), source_run_id=source_run_id,
         **prepared.request(), ledger_source_path=ctx.ledger.path)
     source_store = ArtifactStore(source_ctx)

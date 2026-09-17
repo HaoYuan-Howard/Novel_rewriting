@@ -73,6 +73,8 @@ _CORE_KEYS = frozenset({
     'stage2.global_edit_failure', 'stage2.global_edit_input_commit', 'stage2.global_edit_commit',
     'stage2.blueprint_character_projection',
 })
+# 直连首抽的已购回答侧车：不进 ARTIFACT_PATHS，但仍是 Stage2 Core 恢复证据。
+_CORE_RECOVERY_SIDECARS = frozenset({'analyze_legacy_checkpoint'})
 _CORE_NODES = frozenset({'stage2.analyze', 'stage2.characters', 'stage2.global'})
 _ACTIVE_TRANSITION: ContextVar[tuple[str, str, str] | None] = ContextVar('workflow_transition_owner', default=None)
 
@@ -351,7 +353,7 @@ def _assert_downstream_empty(base: Path, files: dict[str, str], *, source_versio
     # ⚠ v4 根允许合法持有随后退役的 Core 材料（global_review 等）；
     # 它们的落点在 RETIRED_ARTIFACT_PATHS，不能因退役而从白名单消失。
     allowed = {Path(ARTIFACT_PATHS.get(key) or RETIRED_ARTIFACT_PATHS[key]).stem
-               for key in _CORE_KEYS}
+               for key in _CORE_KEYS} | set(_CORE_RECOVERY_SIDECARS)
     forbidden = {'stage3', 'stage4', 'stage5', 'stage6', 'stage7', '_stage4_runs',
                  '_stage5_runs', '_stage6_runs', '_stage7_runs', 'blueprint', 'blueprints',
                  'knowledge_links'}

@@ -99,10 +99,9 @@ def frozen_core(tmp_path_factory, legacy_source):
     base = tmp_path_factory.mktemp('transition-core')
     with pytest.MonkeyPatch.context() as identity:
         identity.setattr(prov, 'code_version', lambda: CODE)
-        from tests.test_stage2_analyze import _ctx, _driver
-        from novel.orchestrator.node_agents import Stage2AnalyzeAgent
+        from tests.test_stage2_analyze import _ctx, _generate
         ctx = _ctx(base)
-        Stage2AnalyzeAgent(ctx, driver=_driver(ctx)).run()
+        _generate(ctx)
         _write_legacy_stage2_acceptance(base, ctx.sid)
         (ctx.novel_dir / 'stage2' / 'global_review.json').write_bytes(
             work_units._bytes({'generation_safety': {
