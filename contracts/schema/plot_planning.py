@@ -18,12 +18,12 @@ class PlannerBeat(FrozenModel):
 class PlannerCharacter(FrozenModel):
     """盲投影人物材料。
 
-    ``surfaces`` 可为合法空：Stage2 闭集允许 first_chapter 已到、登记名尚未字面
+    ``surfaces`` 可为合法空：Stage2 闭集允许 first_mention_chapter 已到、登记名尚未字面
     证成的成员（典型第一人称）；此时只发 opaque alias，不得填 canonical。
+    身份语义来自 Blueprint State，本投影不携带 Characters.role。
     """
     alias: OpaqueAlias
     surfaces: list[NonEmpty] = Field(default_factory=list)
-    role: str | None
 
 
 class PlannerBackgroundBeat(PlannerBeat):

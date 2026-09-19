@@ -99,24 +99,59 @@ def _seed_core(base: Path, main: MainText):
     """合成有据人物及合法空知识；独立正式写入，不伪造模型或语义接受。"""
     from contracts.schema.characters import CharacterRegistry, CharactersProvenance
     from contracts.schema.knowledge import KnowledgeGrounding, GlobalProvenance
+    from novel.stages.stage2.characters.candidates import mention_id_for
     from novel.stages.stage2.knowledge.grounding import knowledge_reference_sha256
+    from novel.stages.stage2.shared.core_evidence import evidence_id
     from tests.plot_fixtures import GLOBAL
 
     character_ctx = RunContext.open(base, SID, 'stage2.characters', paid=True, write_ledger=False)
     character_store = ArtifactStore(character_ctx)
     character_store.read(MainText, MAIN_REL)
     text = main.root[0].text
-    evidence = 'ev_' + hashlib.sha256(text.encode('utf-8')).hexdigest()[:24]
-    registry = CharacterRegistry.model_validate({'characters': {'char_001': {
-        'canonical': '核账人', 'aliases': [{'surface': '核账人', 'identity_revealed_from': 1,
-            'evidence_refs': [evidence]}], 'first_chapter': 1,
-        'first_appearance_evidence_refs': [evidence], 'role': '核对计划的人',
-        'role_evidence_refs': [evidence], 'name_distinctiveness': 'common'}},
-        'evidence_anchors': {evidence: {'chapter_ordinal': 1, 'start': 0, 'end': len(text),
-            'text_sha256': hashlib.sha256(text.encode('utf-8')).hexdigest()}},
-        '_provenance': character_ctx.llm_provenance(CharactersProvenance,
-            model='fixture-model', adopted_models=('fixture-model',),
-            prompts={'FIXTURE_ONLY': '合成有据人物；未发模型'})})
+    surface = '核账人'
+    start = text.index(surface)
+    end = start + len(surface)
+    mid = mention_id_for(chapter_ordinal=1, start=start, end=end, surface=surface)
+    anchor = {
+        'chapter_ordinal': 1, 'start': start, 'end': end,
+        'text_sha256': hashlib.sha256(text[start:end].encode('utf-8')).hexdigest(),
+    }
+    eid = evidence_id(anchor)
+    registry = CharacterRegistry.model_validate({
+        'characters': {
+            'char_001': {
+                'canonical_surface': surface,
+                'status': 'confirmed',
+                'first_mention_chapter': 1,
+                'name_usable_from': 1,
+                'surfaces': [{
+                    'surface': surface, 'kind': 'proper_name',
+                    'identity_revealed_from': 1,
+                }],
+                'name_distinctiveness': 'common',
+            },
+        },
+        'mentions': {
+            mid: {
+                'mention_id': mid,
+                'chapter_ordinal': 1,
+                'start': start,
+                'end': end,
+                'surface': surface,
+                'kind': 'proper_name',
+                'disposition': 'bound',
+                'char_id': 'char_001',
+                'exclude_reason': None,
+                'reveals_identity': True,
+                'evidence_refs': [eid],
+            },
+        },
+        'evidence_anchors': {eid: anchor},
+        '_provenance': character_ctx.llm_provenance(
+            CharactersProvenance, model='fixture-model',
+            adopted_models=('fixture-model',),
+            prompts={'FIXTURE_ONLY': '合成有据人物；未发模型'}),
+    })
     character_store.write(STAGE2_CHARACTERS, registry)
     global_ctx = RunContext.open(base, SID, 'stage2.global', paid=True, write_ledger=False)
     global_store = ArtifactStore(global_ctx)
@@ -168,7 +203,7 @@ def current_book(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path,
                           'focalizer': None, 'pronoun_surfaces': [], 'beat_refs': [],
                           'evidence': [{'start_para': 1, 'end_para': 1}]}]})
         chapters.append(compile_chapter(response, text, allowed_char_ids=frozenset(registry.characters),
-            character_bindings={cid: [row.model_dump(mode='json') for row in character.aliases]
+            character_bindings={cid: [row.model_dump(mode='json') for row in character.surfaces]
                                 for cid, character in registry.characters.items()}).model_dump(mode='json'))
     blueprint_artifact = ChapterBlueprints(
         blueprints=chapters,

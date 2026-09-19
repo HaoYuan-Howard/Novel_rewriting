@@ -282,8 +282,10 @@ ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
     STAGE2_ANALYZE_OWNER_DRAFT_EDIT: ArtifactSpec(AnalyzeOwnerDraftEdit),
     STAGE2_ANALYZE_CHARACTERS_DRAFT_REPAIR: ArtifactSpec(AnalyzeDraftRepairJournal),
     STAGE2_ANALYZE_GLOBAL_DRAFT_REPAIR: ArtifactSpec(AnalyzeDraftRepairJournal),
-    STAGE2_CHARACTERS: ArtifactSpec(CharacterRegistry, 2),
-    STAGE2_CHARACTERS_EDIT: ArtifactSpec(CharactersEdit, 2),
+    # v3：lexicon Resolve + occurrence 展开；删除 role / first_chapter / aliases。
+    # 存量由 ``stage2.characters`` 整跑（付费）重建，拒读 v2，无通用迁移。
+    STAGE2_CHARACTERS: ArtifactSpec(CharacterRegistry, 3),
+    STAGE2_CHARACTERS_EDIT: ArtifactSpec(CharactersEdit, 3),
     STAGE2_GLOBAL_GROUNDING: ArtifactSpec(KnowledgeGrounding, 7),
     # ⚠ 人产的 Stage2 typed 订正决策集（`stage2.global --apply-edit` 吃它）——
     #   与下面三份 `*_edit.json` 同一类：不是节点产的，但落在产物目录、
@@ -299,9 +301,10 @@ ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
     # reviewed 额外绑定 failure/workpack，generic INVALID 提升可显式表达没有
     # action-owned edit identity / formal baseline；不进入 NodeSpec.produces。
     STAGE2_GLOBAL_EDIT_COMMIT: ArtifactSpec(GlobalEditCommit, 3),
-    # v2：由独立人物登记免费物化；缺/坏时由人物 owner 免费重验重建。
+    # v3：随 Characters v3 派生（first_mention / name_usable / surfaces）；
+    # 缺/坏时由人物 owner 免费重验重建；拒读 v2。
     STAGE2_BLUEPRINT_CHARACTER_PROJECTION: ArtifactSpec(
-        BlueprintCharacterProjection, 2),
+        BlueprintCharacterProjection, 3),
     # ⚠⚠ 2026-08-19 首次破坏：beat 区间改由**段号**算出，升 v2。
     #   2026-08-23 第二次破坏：`BlueprintContext.architecture` 从七值收窄为
     #   v1.1/v2/v3.1 三值，升 v3；2026-08-24 再收成 v2/v3.1 两值，升 v4。

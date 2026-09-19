@@ -486,13 +486,9 @@ def plan_book_from_overview(
     closure_relearn_planned = False
     planned_nodes = nodes_up_to(until_stage)
     if 'stage2.analyze' in planned_nodes:
-        from novel.stages.stage2 import analyze
-        book = paths.find_novel_dir(base, sid)
-        joint = book is None or analyze.cold_start_reason(book) is None
-        if joint:
-            planned_nodes = [node for node in planned_nodes if node not in {'stage2.characters', 'stage2.global'}]
-        else:
-            planned_nodes.remove('stage2.analyze')
+        # Characters v3：冷启动永不优先联合 analyze；人物/知识走独立 producer。
+        # pending analyze recovery 仍由上方 stage2_core_recovery_item 单独处理。
+        planned_nodes.remove('stage2.analyze')
     reviewer_rewrite_execution = None
     closure_state = 'unreadable'
     if 'stage5.review' in planned_nodes or any(

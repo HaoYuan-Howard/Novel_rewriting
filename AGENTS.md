@@ -13,7 +13,7 @@ agent 负责维护工程上下文、实现与验证，关键取舍和结果直�
 | 工作范围 | 入口与职责 |
 |---|---|
 | 契约定义 | [contracts/AGENTS.md](contracts/AGENTS.md)：节点、schema、判据与版本变更 |
-| 后端实现 | [novel/AGENTS.md](novel/AGENTS.md)：产物、调度、模型调用、服务与恢复；Stage2 局部见 [novel/stages/stage2/AGENTS.md](novel/stages/stage2/AGENTS.md) |
+| 后端实现 | [novel/AGENTS.md](novel/AGENTS.md)：产物、调度、模型调用、服务与恢复；Stage0 局部见 [novel/stages/stage0/AGENTS.md](novel/stages/stage0/AGENTS.md)；Stage2 局部见 [novel/stages/stage2/AGENTS.md](novel/stages/stage2/AGENTS.md) |
 | 前端实现 | [web/AGENTS.md](web/AGENTS.md)：页面、数据访问、交互与前端验证 |
 | 运行或修改后端测试 | [tests/AGENTS.md](tests/AGENTS.md)：环境、fixture、并行与 corpus |
 | 环境、诊断、备份与工程恢复 | [docs/OPERATIONS.md](docs/OPERATIONS.md)：开发维护 agent 按故障定位入口 |

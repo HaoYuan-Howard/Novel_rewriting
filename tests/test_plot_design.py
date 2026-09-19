@@ -22,10 +22,17 @@ from tests.plot_fixtures import GLOBAL
 
 def planner_characters():
     return {'characters': {
-        cid: {'canonical': label, 'role': role, 'first_chapter': 1,
-              'name_distinctiveness': 'common', 'first_appearance_evidence_refs': [],
-              'role_evidence_refs': [], 'aliases': [
-                  {'surface': label, 'identity_revealed_from': 1, 'evidence_refs': []}]}
+        cid: {
+            'canonical_surface': label,
+            'canonical': label,
+            'first_mention_chapter': 1,
+            'first_chapter': 1,
+            'name_distinctiveness': 'common',
+            'surfaces': [{'surface': label, 'kind': 'proper_name', 'identity_revealed_from': 1}],
+            'aliases': [{'surface': label, 'identity_revealed_from': 1, 'evidence_refs': []}],
+            'first_appearance_evidence_refs': [],
+            'role_evidence_refs': [],
+        }
         for cid, label, role in [('char_001', '娘子', '施救者与决定离开的人'),
                                   ('char_002', '夫君', '被救者与挽留的人')]
     }, 'evidence_anchors': {}}
@@ -259,8 +266,16 @@ def test_schema_rejects_old_fact_wire_and_duplicate_delivery():
 def test_blind_keeps_two_faces_in_same_beat_and_never_inherits_hidden_role():
     from tests.test_plot_actor_refs import compiled, INVENTORY, SOURCE as identity_source
     people = {'characters': {cid: {
-        'canonical': rows[-1]['surface'], 'first_chapter': 1,
-        'role': '真实身份下的隐藏经历', 'aliases': [dict(row, evidence_refs=[]) for row in rows],
+        'canonical_surface': rows[-1]['surface'],
+        'canonical': rows[-1]['surface'],
+        'first_mention_chapter': 1,
+        'first_chapter': 1,
+        'surfaces': [
+            {'surface': row['surface'], 'kind': 'proper_name',
+             'identity_revealed_from': row.get('identity_revealed_from', 1)}
+            for row in rows
+        ],
+        'aliases': [dict(row, evidence_refs=[]) for row in rows],
     } for cid, rows in INVENTORY.items()}}
     bp = compiled().model_dump(mode='json')
     truth, mapping = build_blind_projection([bp], root_clean_sha1='a' * 40,

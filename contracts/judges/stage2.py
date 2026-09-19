@@ -53,7 +53,8 @@ def _unver(rule: str, item: str, requirement: str, *, who_checks: str = 'INFO', 
     """查不了的：**永远输出**，不是「还没写完」。
 
     ⚠ 本层两条的前件形状**不同**，别合成一个：
-      · `role_fate_unverifiable` —— **无条件**产出（这一维根本没有确定性防线）；
+      · `character_semantics_unverifiable` —— **无条件**产出（人物齐全 / 同名 /
+        identity 语义根本没有确定性防线；身份描述改由 Blueprint State 承担）；
       · `secrets_absent` —— **判定前提不成立**时出声（这本书一条秘密都没有）。
     """
     return REGISTRY.register(Rule(rule=rule, stage=STAGE, item=item, sev='unver',
@@ -105,47 +106,25 @@ _hard('address_bare_pronoun', '称谓整条不是代词', 'R-2.3', fix=FIX_CHARA
 
 _hard('address_unlocatable', '唯一称谓绑定具有包含该字面的归属证据', 'R-2.2', fix=FIX_CHARACTERS)
 
-# ═══ 三、身份与结局（5 HARD · 1 INFO · 1 度量 · 1 查不了）════════════════════════
+# ═══ 三、身份语义与登记闭合（Characters v3：无自由文本 role）═════════════════
 
-_hard('role_missing', '人物登记具有有据身份描述', 'R-2.6', fix=FIX_CHARACTERS)
-
-_hard('role_leaks_fate', '静态身份里没有结局词', 'R-2.6', wordlist=True,
+_hard('hedge_words', 'canonical_surface / 登记称谓里没有模棱语', 'R-2.6', wordlist=True,
       fix=FIX_CHARACTERS,
-      baseline='⭐ **盘上 2/3 命中**（头牌 2 处 · 三岁 5 处）。'
-               '⚠⚠ **词表只抓转抄式**：`(最终/后被/而死/下狱/被处死/走向/结局/沦为)` '
-               '在头牌上命中 **0/17 而人读真违规 6/17**——`char_009.role` 写着'
-               '「…**后成为**李宝珠的下属」，**差一个字避开了 `后被`**。'
-               '⇒ 「没报违规」在这一维上不等于「没问题」，那半边由 `role_fate_unverifiable` '
-               '常驻说出来',
-      note='拆 role/fate 两个字段的**唯一理由**就是只下发 role——写手提前知道谁最后会死，'
-           '第 1 章的伏笔就写过明。⇒ 结局漏回 role 就是把这次拆分白做了。'
-           '静态人物可由独立 producer 定向返工；人工核对后的新 `role` 另可走 '
-           '`stage2.characters --apply-edit <书内json>`（0 LLM）')
-
-_hard('role_repeats_name', '静态身份不与显示名完全同字', 'R-2.6', fix=FIX_CHARACTERS,
-      note='同字的话写手拿到的下发面是「李宝珠：李宝珠」——一条零信息的介绍。盘上 0/3')
-
-_hard('hedge_words', '身份 / 显示名里没有模棱语', 'R-2.6', wordlist=True,
-      fix=FIX_CHARACTERS,
-      baseline='旧裸子串基线 **2/3 命中**，两处都在 `fate`；拆出 fate 后'
-               '`role/canonical` 基线为 **0/3**。',
+      baseline='Characters v3：`canonical_surface` 基线期望 0 命中；残留 `role` 键亦记入本条。',
       note='模棱语（可能 / 疑似 / 大概 / 或许…）落在下发字段上意味着'
            '**抽取没抽到底**。⚠ 「不可能」是确定判断，匹配器不再把它当成「可能」；'
-           '「不太可能 / 并非不可能」仍是不确定并继续命中')
+           '「不太可能 / 并非不可能」仍是不确定并继续命中。'
+           'Characters v3 正式人物不得携带 `role`；残留 role 键亦记入本条。')
 
+_hard('global_evidence_unlocated', '共享证据引用闭合且坐标与原文摘要一致', 'R-2.20', fix=FIX_RENORMALIZE_G, note='Characters 与 Global 分别验证自己的表；来源失败不以移动正式锚点或清空证据消解。')
 
-
-_unver('role_fate_unverifiable', '改写式结局泄漏有确定性防线', 'R-2.6',
+_unver('character_semantics_unverifiable',
+       '人物齐全、同名分区与 identity 语义有确定性防线', 'R-2.6',
        who_checks='HUMAN', disclosable_unver=True,
-       note='⚠⚠ **本仓改成无条件产出**（同 F4-6 对 `name_surface_survey` 的处置）。'
-            '原型把它挂在 `if not leaky` 那一支上——`role_leaks_fate` 命中的那两本'
-            '**根本走不到它**，于是「这一维没有确定性防线」这句话'
-            '在最需要说的两本上反而不说。'
-            '⇒ 本条与 `role_leaks_fate` 报绿灯还是红灯无关，**每本每次都产**：'
-            '词表只挡转抄式（实测头牌命中 0/17 而人读真违规 6/17），'
-            '改写式泄漏仍须人读；人工核对后的 typed `role` 可用 '
-            '`stage2.characters --apply-edit` 0 LLM 写回。'
-            '⚠ 它是本层徽章到不了 `pass` 的主因，**而那是对的**（Stage2 语义未审披露）')
+       note='Characters v3 删除自由文本 role；机械检查只证明 mention/surface/'
+            '锚点闭合，不能证明人物齐全、同名分区或 identity 语义。'
+            '公开身份描述改由 Blueprint State（`public_state_ref`）承担。'
+            '本条与 HARD 绿灯无关，**每本每次都产**，登记于统一准入的语义未审披露。')
 
 
 # ═══ 四、世界规则 · 秘密 · 关系（5 HARD · 3 INFO · 1 度量 · 1 查不了）═════
@@ -164,8 +143,6 @@ _unver('secrets_absent', '长线秘密覆盖完整性的语义核验', 'R-2.9b',
 
 _hard('relation_dangling', '长期关系两端属于独立人物登记', 'R-2.8', fix=FIX_RESAMPLE)
 
-
-_hard('global_evidence_unlocated', '共享证据引用闭合且坐标与原文摘要一致', 'R-2.20', fix=FIX_RENORMALIZE_G, note='Characters 与 Global 分别验证自己的表；来源失败不以移动正式锚点或清空证据消解。')
 
 # ═══ 五、连续开篇范围（1 HARD）═══════════════════════════════════════════
 

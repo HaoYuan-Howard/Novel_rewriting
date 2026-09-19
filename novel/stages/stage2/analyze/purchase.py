@@ -15,19 +15,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator
 
-from pydantic import ValidationError
-
 from contracts.artifacts import (
     STAGE1_MAIN_TEXT, STAGE2_ANALYZE_RECEIPT, STAGE2_CHARACTERS,
     STAGE2_BLUEPRINT_CHARACTER_PROJECTION, STAGE2_GLOBAL_GROUNDING,
 )
 from contracts.rules import REGISTRY
-from contracts.schema.analyze import AnalyzeMaterialization, AnalyzeReceipt, AnalyzeResponse
-from contracts.schema.characters import CharacterRegistry, CharactersProvenance, CharactersResponse
+from contracts.schema.analyze import AnalyzeReceipt, AnalyzeResponse
+from contracts.schema.characters import CharactersResponse
 from contracts.schema.common import LlmProvenance, SharedAnalysisSource
-from contracts.schema.knowledge import GlobalProvenance, KnowledgeGrounding
+from contracts.schema.knowledge import KnowledgeGrounding
 from contracts.schema.stage1 import MainText
-from contracts.schema.stage2 import BlueprintCharacterProjection
 from novel import paths, prov, runtime_layout
 from novel.llm.json_schema_util import agent_json_schema
 from novel.appendlog import process_append_lock
@@ -37,9 +34,8 @@ from novel.llm.execution import canonical_sha256
 from novel.llm.ledger import ledger_path, read_strict_jsonl_objects
 from novel.llm.prompts import fill
 from novel.run import RunContext
-from novel.stages.stage2 import characters, checks
+from novel.stages.stage2 import characters
 from novel.stages.stage2.knowledge import grounding
-from novel.stages.stage2.shared.character_refs import materialize_blueprint_character_projection
 from novel.stages.stage2.shared.evidence_candidates import GlobalEvidenceCandidateTable
 from novel.store import ArtifactStore
 
@@ -281,64 +277,37 @@ def _hard(outcomes) -> list[str]:
 
 def compile_drafts(ctx: RunContext, prepared: PreparedAnalyze, response: AnalyzeResponse,
                    client: Any, *, source: LlmProvenance | None = None) -> dict[str, Any]:
-    """两侧独立编译；候选引用异常保留 durable wire，不挪用另一侧调用额度。
+    """两侧登记物化去向；Characters v3 正式写盘已交给独立 producer。
 
-    ``client`` 只需提供 ``model`` 与 ``accepted_models(purpose)``；业务 HARD
-    与句柄分配不依赖传输实现。
+    ``client`` / ``source`` 保留签名供恢复调用方；本函数不再铸 CharactersProvenance
+    或 KnowledgeGrounding 候选。
     """
-    if source is None:
-        source = ctx.llm_provenance(LlmProvenance, prompts={'ANALYZE_SYS': SYSTEM},
-            model=client.model, adopted_models=client.accepted_models(NODE),
-            usage_override=None, settle=False)
+    del ctx, client, source
     character_draft = CharactersResponse(characters=response.characters)
     global_draft = grounding.materialize_knowledge_extract(response.global_draft)
-    state: dict[str, Any] = dict(input_sha256=prepared.input_sha256, characters=None,
+    return dict(
+        input_sha256=prepared.input_sha256,
+        characters=None,
         global_candidate=None,
         character_handles=characters.allocate_character_ids(character_draft, prepared.table),
-        global_handles=grounding.allocate_global_ids(global_draft), materializations=[])
-    registry = None
-    try:
-        compiled = characters.compile_response(character_draft, prepared.table,
-            identity_map=state['character_handles'])
-        registry = CharacterRegistry(characters=compiled.characters, evidence_anchors=compiled.evidence_anchors,
-            _provenance=CharactersProvenance.model_validate(source.model_dump(mode='json')))
-        state['character_handles'] = compiled.character_ids
-        hits = _hard(checks.check_characters(registry.model_dump(mode='json', by_alias=True), prepared.main_text))
-        state['characters'] = registry.model_dump(mode='json', by_alias=True)
-        state['materializations'].append(dict(owner='stage2.characters', state='invalid' if hits else 'formal',
-            target_rel=CHARACTERS_INVALID if hits else CHARACTERS,
-            core_sha256=canonical_sha256(compiled.characters), issues=hits))
-    except (ValueError, ValidationError) as exc:
-        state['materializations'].append(dict(owner='stage2.characters', state='draft_invalid',
-            target_rel=None, core_sha256=None, issues=[str(exc)]))
-    if registry is None or state['materializations'][0]['state'] != 'formal':
-        state['materializations'].append(dict(owner='stage2.global', state='awaiting_characters',
-            target_rel=None, core_sha256=None, issues=['人物修复后从原 GlobalDraft 免费编译']))
-        return state
-    try:
-        knowledge = grounding.compile_global_draft(global_draft, prepared.table, registry,
-            provenance=GlobalProvenance.model_validate({**source.model_dump(mode='json'), 'evidence_locator_failures': []}),
-            character_handle_map=state['character_handles'], id_map=state['global_handles'])
-        state['global_candidate'] = knowledge.model_dump(mode='json', by_alias=True)
-        mapping = state['global_handles']
-        for draft, row in zip(global_draft.relations, knowledge.relations, strict=True):
-            mapping['relation:' + draft.relation_ref] = row.relation_id
-        for draft, row in zip(global_draft.world_rules, knowledge.world_rules, strict=True):
-            mapping['rule:' + draft.rule_ref] = row.rule_id
-            for version, formal in zip(draft.versions, row.versions, strict=True):
-                mapping['version:' + draft.rule_ref + ':' + version.version_ref] = formal.version_id
-        for draft, row in zip(global_draft.arc_secrets, knowledge.arc_secrets, strict=True):
-            mapping['secret:' + draft.secret_ref] = row.secret_id
-        hits = _hard(checks.check_global(state['global_candidate'], prepared.main_text,
-                                        characters=state['characters']))
-        core = {key: state['global_candidate'][key] for key in ('setting', 'world_rules', 'relations', 'arc_secrets')}
-        state['materializations'].append(dict(owner='stage2.global', state='invalid' if hits else 'formal',
-            target_rel=GLOBAL_INVALID if hits else GLOBAL, core_sha256=canonical_sha256(core), issues=hits))
-    except (ValueError, ValidationError) as exc:
-        state['global_candidate'] = None
-        state['materializations'].append(dict(owner='stage2.global', state='draft_invalid',
-            target_rel=None, core_sha256=None, issues=[str(exc)]))
-    return state
+        global_handles=grounding.allocate_global_ids(global_draft),
+        materializations=[
+            dict(
+                owner='stage2.characters',
+                state='deferred',
+                target_rel=None,
+                core_sha256=None,
+                issues=['Characters v3 由 stage2.characters 独立 Extract→Resolve 生产'],
+            ),
+            dict(
+                owner='stage2.global',
+                state='awaiting_characters',
+                target_rel=None,
+                core_sha256=None,
+                issues=['人物独立 producer 完成后从原 GlobalDraft 免费编译'],
+            ),
+        ],
+    )
 
 
 def _receipt(ctx, prepared, checkpoint, client) -> AnalyzeReceipt:
@@ -389,19 +358,17 @@ def _commit(ctx, prepared, checkpoint, receipt: AnalyzeReceipt) -> AnalyzeReceip
         models: dict[str, Any] = {REL: receipt}
         touched = [REL]
         for row in receipt.materializations:
-            raw = checkpoint.state_payload['characters' if row.owner == 'stage2.characters' else 'global_candidate']
+            if row.owner == 'stage2.characters':
+                # Characters v3 正式产物由独立 producer 写盘；联合首抽绝不落 CHARACTERS/PROJECTION。
+                continue
+            raw = checkpoint.state_payload['global_candidate']
             if row.target_rel is None:
                 continue
-            cls = CharacterRegistry if row.owner == 'stage2.characters' else KnowledgeGrounding
-            artifact = cls.model_validate(raw)
+            artifact = KnowledgeGrounding.model_validate(raw)
             artifact = artifact.model_copy(update={'provenance': artifact.provenance.model_copy(
                 update={'shared_analysis_source': shared})})
             models[row.target_rel] = artifact
-            if row.owner == 'stage2.characters' and row.state == 'formal':
-                touched.extend((CHARACTERS, CHARACTERS_INVALID, PROJECTION))
-                models[PROJECTION] = materialize_blueprint_character_projection(
-                    artifact.model_dump(mode='json')['characters'], prepared.main_text)
-            elif row.owner == 'stage2.global' and row.state == 'formal':
+            if row.state == 'formal':
                 touched.extend((GLOBAL, GLOBAL_INVALID))
             else:
                 touched.append(row.target_rel)
@@ -495,7 +462,11 @@ def run(ctx: RunContext, client: Any) -> AnalyzeReceipt:
         _provenance=source,
     )
     receipt = _commit_legacy(ctx, prepared, state, receipt, response=response)
-    failures = [row for row in receipt.materializations if row.state != 'formal']
+    # deferred / awaiting_characters 是 Characters v3 分流后的正常态，不记作问题侧。
+    failures = [
+        row for row in receipt.materializations
+        if row.state in ('invalid', 'draft_invalid')
+    ]
     if failures:
         target = next((row.target_rel for row in failures if row.target_rel is not None), REL)
         raise GateBlocked('共享首抽已保存；问题侧按独立 owner 免费修订/恢复：' +
@@ -520,19 +491,17 @@ def _commit_legacy(
             run_id=receipt.run_id, attempt_id=receipt.attempt_id)
         models: dict[str, Any] = {REL: receipt}
         for row in receipt.materializations:
-            raw = state['characters' if row.owner == 'stage2.characters' else 'global_candidate']
+            if row.owner == 'stage2.characters':
+                continue
+            raw = state['global_candidate']
             if row.target_rel is None:
                 continue
-            cls = CharacterRegistry if row.owner == 'stage2.characters' else KnowledgeGrounding
-            artifact = cls.model_validate(raw)
+            artifact = KnowledgeGrounding.model_validate(raw)
             artifact = artifact.model_copy(update={
                 'provenance': artifact.provenance.model_copy(
                     update={'shared_analysis_source': shared}),
             })
             models[row.target_rel] = artifact
-            if row.owner == 'stage2.characters' and row.state == 'formal':
-                models[PROJECTION] = materialize_blueprint_character_projection(
-                    artifact.model_dump(mode='json')['characters'], prepared.main_text)
         expected = {
             rel: (store.prospective_invalid_sha256(paths.formal_of(rel), artifact, gates_skipped=[])
                   if paths.is_invalid(rel) else store.prospective_sha256(rel, artifact))

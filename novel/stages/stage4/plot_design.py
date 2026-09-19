@@ -22,6 +22,7 @@ from contracts.schema.stage4 import (
 )
 from novel.consumption import plot_global_projection
 from novel.errors import RefusedByStructure
+from novel.stages.stage2.shared.character_refs import _first_mention, _surface_rows
 from novel.stages.stage4.plot_placements import required_endpoints
 
 BLIND_CONTRACT = 'stage4-plot-truth-v2'
@@ -205,23 +206,30 @@ def build_blind_projection(blueprints: object, *, root_clean_sha1: str,
                 actor = resolve_actor(ref['actor'], scope)
                 character = character_rows[actor.char_id]
                 binding = catalog.bindings.get(actor.presentation_ref)
+                registered = {
+                    str(row.get('surface') or '')
+                    for row in _surface_rows(character)
+                }
                 if binding:
                     surfaces = list(binding['surfaces'])
-                    if any(s not in {a['surface'] for a in character['aliases']} for s in surfaces):
+                    if any(s not in registered for s in surfaces):
                         raise BlindPlanError('表面身份使用未登记称谓')
-                    state = catalog.states.get(binding['public_state_ref'])
-                    role = state['content'] if state else None
                 else:
-                    surfaces = sorted({a['surface'] for a in character['aliases']
-                                       if a['identity_revealed_from'] <= scope})
-                    role = character['role'] if character['first_chapter'] <= scope else None
+                    surfaces = sorted({
+                        str(row.get('surface') or '')
+                        for row in _surface_rows(character)
+                        if (row.get('identity_revealed_from') or 0) <= scope
+                        and str(row.get('surface') or '')
+                    })
                 if not surfaces:
-                    # Stage2 允许 first_chapter 已到、登记名尚未字面证成的闭集成员
+                    # Stage2 允许 first_mention 已到、登记名尚未字面证成的闭集成员
                     # （surfaces=[]，典型第一人称「我」）。盲材料只发 opaque alias，
-                    # 禁止回退 canonical；未到出场章仍关闭式拒绝。
-                    if character['first_chapter'] > scope:
+                    # 禁止回退 canonical；未到首次提及章仍关闭式拒绝。
+                    first = _first_mention(character)
+                    if first is None or first > scope:
                         raise BlindPlanError('规划人物没有可辨认呈现，不能回退 canonical')
-                character_material.append({'alias': token, 'surfaces': surfaces, 'role': role})
+                # PlannerCharacter 不携带 role；身份语义由 Blueprint State 承担。
+                character_material.append({'alias': token, 'surfaces': surfaces})
                 continue
             if ref['kind'] in {'beat', 'state', 'constraint', 'chapter_boundary'}:
                 continue

@@ -61,14 +61,11 @@ def _seed_stage2(book: Path):
     ``run_partition`` 落 main/hook（新鲜度可判），人物、Global、Blueprint
     各自经真实 producer 落盘，供准入与 Stage4 消费。
     """
-    from contracts.schema.characters import CharactersResponse
     from novel.stages.stage0 import removal
     from novel.stages.stage1 import partition
-    from novel.stages.stage2 import characters as stage2_characters
     from novel.stages.stage2 import extract
     from novel.stages.stage2.shared.character_refs import materialize_blueprint_character_projection
-    from novel.stages.stage2.shared.evidence_candidates import GlobalEvidenceCandidateTable
-    from tests.stage2_fixtures import character_response, knowledge_response
+    from tests.stage2_fixtures import build_v3_registry_payload, knowledge_response
 
     text = '李宝珠收到父亲已经回城的来信。\n\n' + ''.join(
         f'{row["chapter_ordinal"]}\n\n{row["text"]}\n\n' for row in main_text())
@@ -84,20 +81,18 @@ def _seed_stage2(book: Path):
     chars_ctx = _ctx(book, 'stage2.characters')
     store = ArtifactStore(chars_ctx)
     rows = store.read(MainText, STAGE1_MAIN_TEXT).model_dump(mode='json')
-    compiled = stage2_characters.compile_response(
-        CharactersResponse.model_validate(character_response(source=rows)),
-        GlobalEvidenceCandidateTable.build(rows))
-    artifact = CharacterRegistry(
-        characters=compiled.characters,
-        evidence_anchors=compiled.evidence_anchors,
-        _provenance=chars_ctx.llm_provenance(
+    payload, _refs = build_v3_registry_payload(rows)
+    artifact = CharacterRegistry.model_validate({
+        **payload,
+        '_provenance': chars_ctx.llm_provenance(
             CharactersProvenance, model='fixture-characters',
             adopted_models=('fixture-characters',),
-            prompts={'SYSTEM': '测试预置人物输入；未执行模型'}))
+            prompts={'SYSTEM': '测试预置人物输入；未执行模型'}).model_dump(mode='json'),
+    })
     store.write(STAGE2_CHARACTERS, artifact)
     store.write(STAGE2_BLUEPRINT_CHARACTER_PROJECTION,
                 materialize_blueprint_character_projection(
-                    compiled.characters, rows))
+                    artifact.model_dump(mode='json')['characters'], rows))
 
     global_ctx = _ctx(book, 'stage2.global')
     global_client, _ = _client(global_ctx, knowledge_response())

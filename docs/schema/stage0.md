@@ -56,6 +56,8 @@ Stage0 把原始 txt 变成只含文案和正文的文本；机械校验（含�
 
 ## 五、判据与重建
 
-注册表仍 13 条（`contracts/judges/stage0.py`）。`s0_approval` 查 mechanical admission；
-`s0_revision_chain` 复算 `transform_id` 与 clean 投影一致性。版本破坏升版、拒读旧版，
-无通用迁移。
+当前注册表共 **13 条**：**11 hard、1 info、1 unver**。
+
+判据名：`s0_approval`、`s0_body_ratio`、`s0_correctness`、`s0_decode`、`s0_dir_roundtrip`、`s0_hashes`、`s0_human_preserved`、`s0_nonbody_shared`、`s0_normalization`、`s0_removal_ledger`、`s0_revision_chain`、`s0_source_identity`、`s0_warnings`。
+
+`s0_approval` 查 mechanical admission；`s0_revision_chain` 复算 `transform_id` 与 clean 投影一致性。版本破坏升版、拒读旧版，无通用迁移。

@@ -48,11 +48,19 @@ def build_stage4_source_view(
     if not chapters_raw:
         raise SourceViewError('input_insufficient', ['blueprints.chapters'])
 
-    char_rows = {
-        row['char_id']: row
-        for row in (characters.get('characters') or [])
-        if isinstance(row, dict) and row.get('char_id')
-    }
+    raw_characters = characters.get('characters') or {}
+    if isinstance(raw_characters, dict):
+        char_rows = {
+            cid: {**row, 'char_id': cid} if isinstance(row, dict) else row
+            for cid, row in raw_characters.items()
+            if isinstance(cid, str) and isinstance(row, dict)
+        }
+    else:
+        char_rows = {
+            row['char_id']: row
+            for row in raw_characters
+            if isinstance(row, dict) and row.get('char_id')
+        }
     global_index = _index_global(global_g)
 
     out_chapters: list[SourceChapter] = []
@@ -130,18 +138,47 @@ def build_stage4_source_view(
                 continue
             seen.add(cid)
             base = char_rows.get(cid, {})
+            surface_rows = base.get('surfaces')
+            if not isinstance(surface_rows, list):
+                surface_rows = base.get('aliases') or []
+            surfaces: list[str] = []
             revealed = None
-            for alias in base.get('aliases') or []:
-                if isinstance(alias, dict) and alias.get('identity_revealed_from') is not None:
-                    revealed = int(alias['identity_revealed_from'])
-                    break
-            if isinstance(actor, dict) and actor.get('identity_revealed_from') is not None:
-                revealed = int(actor['identity_revealed_from'])
+            for row in surface_rows:
+                if not isinstance(row, dict):
+                    if isinstance(row, str) and row.strip():
+                        surfaces.append(row.strip())
+                    continue
+                surface = str(row.get('surface') or '').strip()
+                if surface:
+                    surfaces.append(surface)
+                if revealed is None and row.get('identity_revealed_from') is not None:
+                    revealed = int(row['identity_revealed_from'])
+            if isinstance(actor, dict):
+                for row in actor.get('surfaces') or []:
+                    if isinstance(row, str) and row.strip() and row.strip() not in surfaces:
+                        surfaces.append(row.strip())
+                    elif isinstance(row, dict):
+                        surface = str(row.get('surface') or '').strip()
+                        if surface and surface not in surfaces:
+                            surfaces.append(surface)
+                        if revealed is None and row.get('identity_revealed_from') is not None:
+                            revealed = int(row['identity_revealed_from'])
+                if actor.get('identity_revealed_from') is not None:
+                    revealed = int(actor['identity_revealed_from'])
+            first_mention = (
+                base.get('first_mention_chapter')
+                or base.get('first_chapter')
+                or (actor.get('first_mention_chapter') if isinstance(actor, dict) else None)
+                or ordinal
+            )
+            name_usable = base.get('name_usable_from')
+            if name_usable is None and isinstance(actor, dict):
+                name_usable = actor.get('name_usable_from')
             chapter_chars.append(SourceCharacter(
                 char_id=cid,
-                surfaces=list(base.get('surfaces') or actor.get('surfaces') or []),
-                role=base.get('role') or actor.get('role'),
-                first_chapter=int(base.get('first_chapter') or ordinal),
+                surfaces=surfaces,
+                first_mention_chapter=int(first_mention),
+                name_usable_from=int(name_usable) if name_usable is not None else None,
                 identity_revealed_from=revealed,
             ))
 

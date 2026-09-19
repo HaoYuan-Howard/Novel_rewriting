@@ -26,7 +26,11 @@ class AnalyzeResponse(StrictModel):
 
 class AnalyzeMaterialization(StrictModel):
     owner: Literal['stage2.characters', 'stage2.global']
-    state: Literal['formal', 'invalid', 'awaiting_characters', 'draft_invalid']
+    #: ``deferred``：Characters v3 由独立 ``stage2.characters`` producer 物化，
+    #: 联合首抽不再写 ``characters.json`` / 称名投影。
+    state: Literal[
+        'formal', 'invalid', 'awaiting_characters', 'draft_invalid', 'deferred',
+    ]
     target_rel: str | None
     core_sha256: Sha256 | None
     issues: list[str]

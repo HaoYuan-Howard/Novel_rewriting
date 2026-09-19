@@ -487,9 +487,9 @@ class BlueprintCharacterBinding(StrictModel):
 class BlueprintCharacterProjectionChapter(StrictModel):
     """某一章真正交给 Blueprint 的 ActorRef 闭集与称名候选。
 
-    含已到 first_chapter、但登记名尚未字面出现的实体（surfaces 可为空）。
+    含已到 first_mention_chapter、但登记名尚未字面出现的实体（surfaces 可为空）。
     只保存 Characters 中真实 prompt/validator 消费的称谓及身份映射时点。
-    role、关系、秘密、设定与证据不进入本投影；审阅另按实际支持材料建立依赖。
+    自由文本 role、关系、秘密、设定与证据不进入本投影；审阅另按实际支持材料建立依赖。
     """
 
     chapter_ordinal: ChapterOrdinal
@@ -513,7 +513,7 @@ class BlueprintCharacterProjection(StrictModel):
 
     本产物没有通用 ``_provenance``：它的全部业务字节就是确定性投影本身，freshness
     由当前最新 schema-valid Characters（formal 或 INVALID）与 MainText 重算后
-    逐值对账。加入输入文件指纹反而会让一次 role-only 修订改动本产物字节，重新制造
+    逐值对账。加入输入文件指纹反而会让一次无关修订改动本产物字节，重新制造
     本产物要消除的无效 stale。
     """
 

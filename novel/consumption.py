@@ -57,22 +57,38 @@ def stage2_main_text(data: object) -> object:
 def character_knowledge_reference(data: object) -> object:
     """知识请求只读的人物身份；请求、引用 SHA 和 freshness 共用同一投影。
 
-    只传名称闭集与静态身份来解析原文人物，不发送称呼者、语境、生效时点或证据
-    原文。那些字段的独立修改不得重新购买未消费它们的知识抽取。
+    只传名称闭集与登记字面，不发送称呼者、语境、生效时点、证据原文或 role。
     """
     if not isinstance(data, dict) or not isinstance(data.get('characters'), dict):
         return None
     rows = {}
     for cid, value in sorted(data['characters'].items()):
-        if not isinstance(value, dict) or not isinstance(value.get('aliases'), list):
+        if not isinstance(value, dict):
             return None
-        surfaces = []
-        for address in value['aliases']:
-            if not isinstance(address, dict) or not isinstance(address.get('surface'), str):
-                return None
-            surfaces.append(address['surface'])
-        rows[cid] = {'canonical': value.get('canonical'), 'role': value.get('role'),
-                     'surfaces': sorted(set(surfaces))}
+        canonical = value.get('canonical_surface') or value.get('canonical')
+        if not isinstance(canonical, str) or not canonical.strip():
+            return None
+        surface_rows = value.get('surfaces')
+        if isinstance(surface_rows, list):
+            surfaces = []
+            for address in surface_rows:
+                if not isinstance(address, dict) or not isinstance(address.get('surface'), str):
+                    return None
+                surfaces.append(address['surface'])
+        elif isinstance(value.get('aliases'), list):
+            surfaces = []
+            for address in value['aliases']:
+                if not isinstance(address, dict) or not isinstance(address.get('surface'), str):
+                    return None
+                surfaces.append(address['surface'])
+        else:
+            return None
+        if not surfaces:
+            return None
+        rows[cid] = {
+            'canonical_surface': canonical,
+            'surfaces': sorted(set(surfaces)),
+        }
     return rows
 
 
@@ -166,11 +182,16 @@ def stage4_design_main_text(data: object, *, characters: object = None) -> objec
         raise ValueError('盲规划称谓投影缺少当前人物形状')
     names = {}
     for cid, person in people.items():
-        aliases = person.get('aliases') if isinstance(person, dict) else None
-        if (not isinstance(aliases, list) or any(not isinstance(row, dict)
-                or not isinstance(row.get('surface'), str) or not row['surface'] for row in aliases)):
+        if not isinstance(person, dict):
             raise ValueError('盲规划称谓投影含不可解释的登记称谓')
-        names[cid] = sorted({row['surface'] for row in aliases})
+        surfaces = person.get('surfaces')
+        if not isinstance(surfaces, list):
+            surfaces = person.get('aliases')
+        if (not isinstance(surfaces, list) or any(not isinstance(row, dict)
+                or not isinstance(row.get('surface'), str) or not row['surface']
+                for row in surfaces)):
+            raise ValueError('盲规划称谓投影含不可解释的登记称谓')
+        names[cid] = sorted({row['surface'] for row in surfaces})
     chapters = {}
     for row in data:
         if (not isinstance(row, dict) or type(row.get('chapter_ordinal')) is not int
@@ -388,10 +409,28 @@ def stage4_plan_characters(data: object) -> object:
 def stage5_characters(data: object) -> object:
     if not isinstance(data, dict):
         return None
-    return {cid: {'canonical': row['canonical'],
-                  'surfaces': sorted({a['surface'] for a in row['aliases']}),
-                  'name_distinctiveness': row['name_distinctiveness']}
-            for cid, row in sorted(data['characters'].items())}
+
+    def _surfaces(row: dict) -> list[str]:
+        surfaces = row.get('surfaces')
+        if isinstance(surfaces, list):
+            return sorted({
+                a['surface'] for a in surfaces
+                if isinstance(a, dict) and isinstance(a.get('surface'), str)
+            })
+        aliases = row.get('aliases') or []
+        return sorted({
+            a['surface'] for a in aliases
+            if isinstance(a, dict) and isinstance(a.get('surface'), str)
+        })
+
+    return {
+        cid: {
+            'canonical': row.get('canonical_surface') or row.get('canonical'),
+            'surfaces': _surfaces(row),
+            'name_distinctiveness': row['name_distinctiveness'],
+        }
+        for cid, row in sorted(data['characters'].items())
+    }
 
 
 def stage6_characters(data: object) -> object:
@@ -404,11 +443,28 @@ def stage7_characters(data: object) -> object:
     """改名材料及确定性姓名检测的业务目录，不消费披露时点或定位证据。"""
     if not isinstance(data, dict):
         return None
-    return {cid: {'canonical': row.get('canonical'),
-                  'surfaces': sorted({a['surface'] for a in row.get('aliases', [])}),
-                  'role': row.get('role'),
-                  'name_distinctiveness': row.get('name_distinctiveness')}
-            for cid, row in sorted(data.get('characters', {}).items())}
+
+    def _surfaces(row: dict) -> list[str]:
+        surfaces = row.get('surfaces')
+        if isinstance(surfaces, list):
+            return sorted({
+                a['surface'] for a in surfaces
+                if isinstance(a, dict) and isinstance(a.get('surface'), str)
+            })
+        aliases = row.get('aliases') or []
+        return sorted({
+            a['surface'] for a in aliases
+            if isinstance(a, dict) and isinstance(a.get('surface'), str)
+        })
+
+    return {
+        cid: {
+            'canonical': row.get('canonical_surface') or row.get('canonical'),
+            'surfaces': _surfaces(row),
+            'name_distinctiveness': row.get('name_distinctiveness'),
+        }
+        for cid, row in sorted(data.get('characters', {}).items())
+    }
 
 
 # 每一格的键都是 ArtifactStore 写进 ``_provenance.inputs`` 的两级相对路径。

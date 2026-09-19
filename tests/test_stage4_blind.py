@@ -152,11 +152,14 @@ def test_blind_projection_is_order_invariant_and_hides_formal_ids_from_a():
 
 
 def test_blind_projection_allows_empty_surfaces_for_present_first_person():
-    """first_chapter 已到、登记名尚未揭示：盲材料 surfaces=[]，不回退 canonical。"""
+    """first_mention_chapter 已到、登记名尚未揭示：盲材料 surfaces=[]，不回退 canonical。"""
     characters = planner_characters()
     characters['characters']['char_001'] = {
         **characters['characters']['char_001'],
+        'canonical_surface': '芸娘',
         'canonical': '芸娘',
+        'first_mention_chapter': 1,
+        'surfaces': [{'surface': '芸娘', 'kind': 'proper_name', 'identity_revealed_from': 4}],
         'aliases': [{'surface': '芸娘', 'identity_revealed_from': 4, 'evidence_refs': []}],
     }
     raw = _blueprints(1)
@@ -178,8 +181,11 @@ def test_blind_projection_still_refuses_empty_surfaces_before_first_chapter():
     characters = planner_characters()
     characters['characters']['char_001'] = {
         **characters['characters']['char_001'],
+        'first_mention_chapter': 2,
         'first_chapter': 2,
+        'canonical_surface': '芸娘',
         'canonical': '芸娘',
+        'surfaces': [{'surface': '芸娘', 'kind': 'proper_name', 'identity_revealed_from': 4}],
         'aliases': [{'surface': '芸娘', 'identity_revealed_from': 4, 'evidence_refs': []}],
     }
     raw = _blueprints(1)

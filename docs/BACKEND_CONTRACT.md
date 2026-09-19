@@ -67,7 +67,7 @@ stage7，承诺范围内零模型）。受托 Commander 审阅角色已退役（
 |---|---|---|
 | R-0.1 | 自动剔除用的是 `R-1.7` 的同一套判据与同一张 `NONBODY_KINDS`——**只有一份** | `HARD` |
 | R-0.2 | 剔除逐段只记不可再生的决定与最小定位证据：类型、标记行、原文码点区间、来源。行号、字数与预览从原文和 span 现算；**番外体不进产物目录** | `HARD` |
-| R-0.3a | **【v3 收窄】** 剔除语义正确性仍无人可机械证明（见 `R-0.7` / Q-13）。闸门不再是人工 `approved`，而是 transform 的 **mechanical admission**（`status=passed`）。公开检查单从当前 transform、执行资格与 freshness 只读投影。API 仍可投影 `revision_id`（= `transform_id`）供兼容读面 | **机械** + `B-20` 披露面 |
+| R-0.3a | **【v3 收窄】** 剔除语义正确性仍无人可机械证明（见 `R-0.7` / Q-13）。闸门不再是人工 `approved`，而是 transform 的 **mechanical admission**（`status=passed`）。公开检查单从当前 transform、执行资格与 freshness 只读投影。API 仍可投影 `revision_id`（= `transform_id`）供兼容读面 | `结构`（`novel/stages/stage0/eligibility.py::is_stage0_executable`）+ `B-20` 披露面 |
 | R-0.3b | **未获 mechanical admission 的书，stage1 必须拒绝启动**；执行资格的唯一落点是 `novel/stages/stage0/eligibility.py::is_stage0_executable`，消费方一律 import、**不许复述条件**。v3 首跑即写入 admission；缺 transform / 损坏盘面须重跑 `stage0.remove` | `HARD` |
 | R-0.4 | 【已退役 2026-09-15】人工编辑剔除范围随 `stage0.edit` 退役；判据漏掉的那类（语义误剔/漏剔）转为 `R-0.7` 的交付披露，不再有人工修正入口 | `不适用`（退役条款） |
 | R-0.5 | transform 自证（判据 `s0_revision_chain` 复算 `transform_id`），`clean_text.txt` 是当前 transform 的唯一物化投影。无多修订祖先链 | `HARD` |
@@ -117,19 +117,27 @@ stage7，承诺范围内零模型）。受托 Commander 审阅角色已退役（
 
 ### R-2 · 全书人物与必要知识（stage2）
 
-首次由 `stage2.analyze` 一次语义分析产生两份草稿，Characters 与 Global 分别编译并保持独立的产物、证据、编辑和恢复生命周期；后续修订由所属 producer 处理。Blueprint 生成前由统一机械准入（`novel/orchestrator/mechanical_admission.py::blueprint_generation_ready`）检查人物、Global、原文与称名投影可读、当前且机械检查全过；Stage2 语义审阅（Global 逐项审阅、Blueprint 章审与跨章复核）已整体退役，机械检查不能证明的语义维度以报告 unver 行常驻披露，不产生审批待办。字段与材料范围见 `docs/schema/stage2.md`。
+Characters v3：新书人物唯一 writer 是 `stage2.characters`（lexicon Extract → 字面回填 →
+Resolve → Compiler）；`stage2.analyze` **不再**为新书写 Characters，cold-start 编排为
+`characters → global`，再由统一机械准入放行 Blueprint。存量 analyze 联合首抽仅服务历史
+receipt / draft repair 解码，删除条件见 `docs/REQUIREMENTS.md` STR-03-S2-CH。
+Global 仍可独立修订；Blueprint 生成前由统一机械准入
+（`novel/orchestrator/mechanical_admission.py::blueprint_generation_ready`）检查人物、
+Global、原文与称名投影可读、当前且机械检查全过；Stage2 语义审阅已整体退役，机械检查
+不能证明的语义维度以报告 unver 行常驻披露，不产生审批待办。字段见 `docs/schema/characters.md`
+与 `docs/schema/stage2.md`。
 
 | # | 要求 | 谁在查 |
 |---|---|---|
-| R-2.1 | canonical 是登记身份，必须在本实体去重 aliases 中恰好出现一次；真实重名允许跨实体共享字面，以稳定 char_id 与独立归属证据区分，不自造消歧词，也不把登记名当作写作许可。归属与消歧的语义正确性不因机械闭合而获证，随 Stage2 语义未审披露。 | `结构`（`contracts/schema/characters.py::RegisteredCharacter`） |
-| R-2.2 | 人物 first_chapter 须有该章首次出场锚点；每个称谓须由所属人物的证据支持，机械检查按规范化字面核验包含关系，正式锚点仍须逐字 SHA 与坐标闭合。代码不以字面命中代替语义归属，不模糊合并异写；归属语义随 Stage2 语义未审披露。 | `HARD`（`novel/stages/stage2/characters/checks.py::check_characters`）+ `novel/stages/stage2/core_evidence.py::validate_evidence_anchors` |
+| R-2.1 | `canonical_surface` 是登记身份字面；同一实体的 book-level `surfaces` 内 surface 唯一。真实重名允许跨实体共享字面，以稳定 char_id 与独立 mention/归属证据区分，不自造消歧词，也不把登记名当作写作许可。归属与消歧的语义正确性不因机械闭合而获证，随 Stage2 语义未审披露（`character_semantics_unverifiable`）。 | `结构`（`contracts/schema/characters.py::RegisteredCharacter`） |
+| R-2.2 | 人物 `first_mention_chapter` 须有该章 bound mention；每个 book-level surface 须由所属人物的归属证据支持，机械检查按规范化字面核验包含关系，正式锚点仍须逐字 SHA 与坐标闭合。代码不以字面命中代替语义归属，不模糊合并异写；归属语义随 Stage2 语义未审披露。 | `HARD`（`novel/stages/stage2/characters/checks.py::check_characters`）+ `novel/stages/stage2/shared/core_evidence.py::validate_evidence_anchors` |
 | R-2.3 | 称谓整条不得等于已登记的裸代词；判断使用 BARE_PRONOUNS 闭集，不能把所有含代词的有据称谓一概拒绝。人物登记不承担对白施受或局部称呼许可。 | `HARD`（`novel/stages/stage2/characters/checks.py::check_characters` + `contracts/invariants.py::BARE_PRONOUNS`） |
-| R-2.4 | 称谓绑定只保存 surface、identity_revealed_from、evidence_refs；不存逐次 by/context、施受关系、知情矩阵或场景称呼表，也不再有同章披露节点或身份映射许可。完整 Beat/State 承担各自消费职责。 | `结构`（`contracts/schema/characters.py::CharacterNameBinding` / `RegisteredCharacter`） |
-| R-2.5 | first_chapter 与 identity_revealed_from 必须是当前 MainText 阅读序章号。后者只表示称谓与实体的身份映射何时向读者揭示，不能解释为称谓字面何时可出现；证据位置、字面首现和身份揭示各自独立，揭示时点的语义恰当性保持未审披露。 | `HARD`（`novel/stages/stage2/characters/checks.py::check_characters`） |
-| R-2.5b | 每个人物至少有一个有据称谓，每实体每个不同 surface 只登记一次；人物集合完整性不由机械检查证明，匿名关键个体不能漏、无名背景群体不伪造实体的语义维度随 Stage2 语义未审披露。不再报告逐次 address 自称或出现次数读数。 | `结构`（`contracts/schema/characters.py::RegisteredCharacter`） |
-| R-2.6 | role 只描述首次公开身份：非空、不等于 canonical、不含已登记结局词或模棱语。role/canonical 的机械命中仍为 HARD；零命中不能证明未泄底，`role_fate_unverifiable` 无条件记录该语义维度为 UNVER（登记于统一准入的语义未审披露），身份支持性和后文经历混入同属未审维度。模棱语按完整短语匹配，确定判断“不可能”不因子串“可能”误报。 | `HARD` + `INFO`（`novel/stages/stage2/characters/checks.py::check_characters`；INFO 记录 UNVER，不产生审批待办） |
-| R-2.6b | 匿名关键人物使用原文有据的亲属称谓、排行或头衔登记；同名不是强制改名的理由。首次及新增人物稳定 ID 由代码分配，修订保留身份，不按数组位置重编号。 | `结构`（`novel/stages/stage2/characters.py::compile_response` + `contracts/schema/characters.py::CharactersEdit`） |
-| R-2.7 | Characters 与 Global core 不保存 fate/character_states；后续经历、结局与动态状态留在剧情状态，长线隐藏真相按 arc_secret 准入。不得为接住结局而恢复角色结局字段，role 泄漏继续由 R-2.6 的机械检查与语义未审披露守卫。 | `结构`（`contracts/schema/characters.py::CharacterRegistry` + `contracts/schema/knowledge.py::KnowledgeCore`） |
+| R-2.4 | Characters v3 **保存**逐次 mention 绑定（坐标、surface、kind、disposition、可选 char_id / identity 揭示）；book-level `surfaces` 只存 surface、kind、`identity_revealed_from`。不存 by/context、施受关系、知情矩阵或场景称呼表。完整 Beat/State 承担公开身份与情节消费职责。 | `结构`（`contracts/schema/characters.py::MentionRecord` / `SurfaceRecord` / `RegisteredCharacter`） |
+| R-2.5 | `first_mention_chapter`、`name_usable_from` 与各 surface 的 `identity_revealed_from` 必须是当前 MainText 阅读序章号（后两者可为 null）。三投影互不替代：首次提及 ≠ 姓名类可用 ≠ 身份映射揭示；证据位置、字面首现和身份揭示各自独立，揭示时点的语义恰当性保持未审披露。 | `HARD`（`novel/stages/stage2/characters/checks.py::check_characters`） |
+| R-2.5b | 每个人物至少有一条 bound mention；每实体每个不同 book-level surface 只登记一次；人物集合完整性不由机械检查证明，匿名关键个体不能漏、无名背景群体不伪造实体的语义维度随 Stage2 语义未审披露。bound mention 下限由 R-2.2 的 `character_unattested` 覆盖。 | `结构`（`contracts/schema/characters.py::RegisteredCharacter`） |
+| R-2.6 | Characters **不**保存自由文本 `role`。公开身份描述由 Blueprint State（经 `public_state_ref`）承担。`canonical_surface` / 登记称谓的模棱语机械命中仍为 HARD（`hedge_words`）；残留 `role` 键亦拒。人物齐全、同名分区与 identity 语义不能由机械证明，`character_semantics_unverifiable` 无条件记录为 UNVER（登记于统一准入的语义未审披露）。模棱语按完整短语匹配，确定判断“不可能”不因子串“可能”误报。 | `HARD` + `UNVER`（`novel/stages/stage2/characters/checks.py::check_characters`；UNVER 不产生审批待办） |
+| R-2.6b | 匿名关键人物使用原文有据的亲属称谓、排行或头衔登记；同名不是强制改名的理由。首次及新增人物稳定 ID 由代码分配，修订保留身份，不按数组位置重编号。 | `结构`（`novel/stages/stage2/characters/` compile + `contracts/schema/characters.py::CharactersEdit`） |
+| R-2.7 | Characters 与 Global core 不保存 fate/character_states；后续经历、结局与动态状态留在剧情状态，长线隐藏真相按 arc_secret 准入。不得为接住结局而恢复角色结局字段或自由文本 role。 | `结构`（`contracts/schema/characters.py::CharacterRegistry` + `contracts/schema/knowledge.py::KnowledgeCore`） |
 | R-2.8 | 关系属于跨章长期知识，两端引用独立人物登记。`effective_from` 与 `effective_until` 描述世界内成立区间，末章包含在内，持续至书末为 null；`revealed_from` 独立描述读者首次获知。全部章号合法，起止有序。 | `HARD`（relation_dangling/global_core_contract） |
 | R-2.9 | 长线秘密以 `setup_chapters` 与 `revealed_from` 分开表达铺垫和读者揭示；无铺垫明确填 []。铺垫不得晚于揭示，同章不同情节单元的先后属语义维度，随 Stage2 语义未审披露，Stage2 不虚构分场或坐标作机械拒绝。归一不得裁剪、排序改写或清空模型的铺垫意图。 | 载体（`contracts/schema/knowledge.py::GlobalArcSecret`） |
 | R-2.9b | 合法空秘密集合和无铺垫秘密都保留原样；数量不证明覆盖齐全。漏掉的长线真相及错误提升的局部状态不由机械检查证明，随 Stage2 语义未审披露（`secrets_absent` 常驻 UNVER），不产生审批待办。 | `INFO`（secrets_absent 明示 `UNVER`） |
@@ -143,10 +151,10 @@ stage7，承诺范围内零模型）。受托 Commander 审阅角色已退役（
 | R-2.14 | Global 不消费 HookCopy，不保存源文案事实或开篇范围；源文案与文案创作归既有 Stage6。不能为填充新core加入 source_blurb 空壳，也不能用文案断言替正文向长期事实注入无据内容。 | 载体（`contracts/schema/knowledge.py::KnowledgeGrounding`）+ producer 真实输入与 schema 边界 |
 | R-2.15 | 【已退役 2026-09】Stage2 GlobalReview 模板、工作包、决定集、义务继承与免费刷新随语义审阅整体退役；`stage2/global_review.json` 与 `stage2/global_review_decisions.json` 进 `contracts/artifacts.py::RETIRED_ARTIFACT_PATHS`，旧字节只配对冻结旧代码读取，不迁移、不继承审批。Stage2 下游前置由统一机械准入与语义未审披露承接（见 `R-2.16`）。 | `不适用`（退役条款，无可执行机械义务） |
 | R-2.16 | 新 clean base 上 `stage2.blueprint` 的串行前置由统一机械准入唯一判定：当前 Characters、Global、MainText 与称名投影必须可读、当前有效、无未恢复 INVALID，且所需机械检查全部通过；机械检查缺失、未运行或不可判仍阻断，不依据 CheckReport.passed。登记于语义未审披露的 unver 行只披露不阻断。`blueprint_character_projection.json` 只由当前 CharacterRegistry 与 MainText 确定性物化，由 `stage2.characters` 发布与免费复验恢复，只投影称名所需字段。人物称名 inventory 改变后现有 Blueprint 依生产 consumed projection 失效，未消费字段变化不扩大重建范围。恢复按实际 owner 先走人物或知识 typed edit/revalidate，再重新过准入；不能绕过准入先生成 Blueprint。 | `结构`（`novel/orchestrator/mechanical_admission.py::blueprint_generation_ready` + `novel/stages/stage2/shared/character_refs.py::materialize_blueprint_character_projection` + `novel/store.py::_blueprint_character_projection_freshness` + `novel/orchestrator/queue.py::plan_book_from_overview` + state/queue/CLI/API/Stage7 消费边）+ formal/INVALID 物化、schema-invalid/legacy unknown/额外键形/上游漂移反例、0-LLM 恢复、freshness/投影/API/下载回归 |
-| R-2.17 | 【已退役 2026-09】原统一审阅覆盖矩阵（人物集合完整性、身份及首次出场、称谓归属、role、name_distinctiveness 与 Global 逐项覆盖）随语义审阅退役，不再构成生成前置或义务分母。这些语义维度按登记的 unver 行披露：`role_fate_unverifiable`、`secrets_absent`、`plot_semantics`；表外语义维度随最终交付说明 Stage2 语义未审限制。 | `不适用`（退役条款，无可执行机械义务） |
+| R-2.17 | 【已退役 2026-09】原统一审阅覆盖矩阵（人物集合完整性、身份及首次出场、称谓归属、role、name_distinctiveness 与 Global 逐项覆盖）随语义审阅退役，不再构成生成前置或义务分母。这些语义维度按登记的 unver 行披露：`character_semantics_unverifiable`、`secrets_absent`、`plot_semantics`；表外语义维度随最终交付说明 Stage2 语义未审限制。 | `不适用`（退役条款，无可执行机械义务） |
 | R-2.18 | 每条 arc_secret 只表达一个原子长线真相。fact 与 fact_ref 必须恰好选一支：独立fact必须举证；已由关系或规则版本表达的真相只用 fact_ref 精确引用 relation_id 或 rule_id+version_id，evidence_refs=[]并复用权威事实的证据，revealed_from必须相同。删改目标必须同时修订引用者；不得维护重复事实正文。 | 见 `R-2.20`（global_core_contract）；精确引用反例同时覆盖本条 |
 | R-2.19 | 关系及规则版本的世界内成立窗口与读者首次揭示独立。effective_until包含末章；读者晚知不改变事实实际成立时间。规则更替版本区间不能重叠；机械检查不要求揭示晚于生效或早于失效。消费端须区分当前有效状态与已经结束的历史事实：当前状态受成立窗口限制，历史事实在揭示后仍可陈述，但不得伪装为当前状态。精细逐章消费由 Gate B 验收，不再使用 via_secret 或人名启发式制造第二套闸。 | `HARD`（global_temporal_contract；仅成立窗口）；揭示时点语义保持未审披露 |
-| R-2.20 | Characters v2 与 KnowledgeGrounding v7 各自保存 evidence_anchors 共享表，锚点为章号、左闭右开坐标及原文片段SHA，主体只留evidence_refs。模型只返回局部实体句柄与同轮关闭候选表中的e000001式证据ID，代码编译稳定正式ID及精确引用；相同锚点在一份artifact只保存一次。未建立的setting值为null且refs=[]；有值必须有据。正式锚点漂移、悬空ref、原文摘要变化不得被归一移动或默认值掩盖。人工locator必须在声明章内唯一回取，失败写前拒绝并保留原编辑；已购草稿保存于checkpoint/custody，形状拒收不丢响应、不靠重买恢复。Global模型与人工恢复继续校验冻结MainText、候选表、实际人物投影、session/ledger和完整prepared提交集合；新版本不假兼容旧字段，旧epoch须配旧代码排空或归档。运行时事实投影剥离共享证据，证据修订重开机械复验而不无条件扩大写作freshness。 | `HARD`（global_core_contract/global_evidence_unlocated）+ core_evidence纯编译/恢复反例 |
+| R-2.20 | Characters v3 与 KnowledgeGrounding v7 各自保存 evidence_anchors 共享表，锚点为章号、左闭右开坐标及原文片段SHA，主体只留evidence_refs。人物 mention 与 Global 主张分别引用本产物锚点；相同锚点在一份artifact只保存一次。未建立的setting值为null且refs=[]；有值必须有据。正式锚点漂移、悬空ref、原文摘要变化不得被归一移动或默认值掩盖。人工locator必须在声明章内唯一回取，失败写前拒绝并保留原编辑；已购草稿保存于checkpoint/custody，形状拒收不丢响应、不靠重买恢复。Global模型与人工恢复继续校验冻结MainText、候选表、实际人物投影、session/ledger和完整prepared提交集合；新版本不假兼容旧字段，旧epoch须配旧代码排空或归档。运行时事实投影剥离共享证据，证据修订重开机械复验而不无条件扩大写作freshness。 | `HARD`（global_core_contract/global_evidence_unlocated）+ core_evidence纯编译/恢复反例 |
 | R-2.21 | Global 全部成立起止、读者揭示、铺垫与共享证据章号必须落在当前MainText阅读序章集合，生成、免费复验和人工编辑同判。未知/越界不是“以后再生效”，也不能被归一裁成合法空值。 | `HARD`（canon_chapter_refs_dangling）+ 当前MainText对齐 |
 | R-2.22 | 【已退役 2026-09】原 GlobalReview kind 的 blocking/disclosure 分级、generation-safe 面与 quarantine_or_fix 处置随语义审阅退役，不再构成生成或交付前置；`GLOBAL_REVIEW_*` 常量只服务历史字节识别。成书与交付的 Stage2 前置改为统一机械准入（`R-2.16`、`R-10.14`），语义未审随交付披露。 | `不适用`（退役条款，无可执行机械义务） |
 
@@ -155,11 +163,12 @@ stage7，承诺范围内零模型）。受托 Commander 审阅角色已退役（
 
 Stage2 语义审阅（Global 逐项审阅、Blueprint 章审与跨章复核、问题义务与审批继承）已整体退役：
 机械检查只证明形状、引用与证据闭合，不证明人物完整、主张获原文支持或剧情抽取正确。
-登记在 `novel/orchestrator/mechanical_admission.py::SEMANTIC_UNREVIEWED_RULES` 的 `role_fate_unverifiable`、`secrets_absent`
-与 `plot_semantics` 以 unver 行常驻披露且不阻断准入；表外语义维度随最终交付披露 Stage2 语义未审
-限制，不产生审批待办。统一准入由 CLI、调度、最低读取边界和交付检查共用，任何一方不复述第二套条件。
-载体和消费约定见 `docs/schema/stage2.md`；源文案与恢复反例见现役 stage2 测试面
-（原 source-blurb 与 Commander 审阅载体专项测试已随语义审阅与角色退役删除）。
+登记在 `novel/orchestrator/mechanical_admission.py::SEMANTIC_UNREVIEWED_RULES` 的
+`character_semantics_unverifiable`、`secrets_absent` 与 `plot_semantics` 以 unver 行常驻披露
+且不阻断准入；表外语义维度随最终交付披露 Stage2 语义未审限制，不产生审批待办。统一准入由
+CLI、调度、最低读取边界和交付检查共用，任何一方不复述第二套条件。
+载体和消费约定见 `docs/schema/stage2.md` / `docs/schema/characters.md`；源文案与恢复反例见
+现役 stage2 测试面（原 source-blurb 与 Commander 审阅载体专项测试已随语义审阅与角色退役删除）。
 
 ### R-3 · 逐章 Blueprint 抽取（stage2）
 
@@ -557,7 +566,7 @@ freshness 唯一入口是 `novel/stages/stage5/review.py::review_status`，实�
 
 | # | 要求 | 谁在查 |
 |---|---|---|
-| R-12.1 | **编排只表达真实生产依赖与接受边界。** 满足 cold-start 证明的新书先由一次 Analyze Executor 联合生成两份草稿，各自编译为独立人物与知识产物；Blueprint 由统一机械准入放行后免费汇合进入 Stage4。已有任一侧产物、历史回答、checkpoint 或 prepared 时先恢复或修订对应 owner，不能仅凭正式文件缺失重新首抽。独立 Global 修订请求消费必要人物 canonical/surfaces/role 投影；联合首抽来源如实绑定完整联合请求，不把它假称窄投影调用，也不把整个响应挂为后续可变人物依赖。Blueprint 在 driver/cache/wire 前要求统一机械准入通过：当前人物、Global、MainText 与称名投影可读、当前有效、无未恢复 INVALID 且所需机械检查全部通过；语义结论随 Stage2 语义未审披露，不再要求审阅接受。编排按准入阻断原因把恢复指向对应 owner 的编辑/复验入口。人物实际知识投影改变时，只由 `novel/stages/stage2/characters/rebind.py::prepare_if_changed` 证明其余输入未变、来源完整且外键闭合后排 `stage2.global --renormalize` 免费重绑；原模型/成本保留，unknown 不追认。人物投影缺失或损坏、人物正式登记 current 时只排 `stage2.characters --revalidate` 免费重建；live INVALID 保持 unknown 并交同 owner 编辑/复验，不因缺投影默认付费重采。Stage4 首项要求统一机械准入通过（`stage4_ready`）且 Blueprint 联合 HARD 通过。Stage2 唯一显式 `--check-only` 仍是 Blueprint，机械测量由 Stage5/6 在真实消费点即时执行，不造队列节点。 | `结构`（`contracts/invariants.py::NODES` + `novel/orchestrator/mechanical_admission.py::blueprint_generation_ready` / `::stage4_plan_ready` / `::stage4_context_ready` + `novel/orchestrator/queue.py::plan_book_from_overview` + `novel/stages/stage2/analyze.py::cold_start_reason` + `novel/stages/stage2/grounding.py::read`）+ CLI/API 零 wire 早拒与联合复检回归 |
+| R-12.1 | **编排只表达真实生产依赖与接受边界。** 满足 cold-start 证明的新书先跑 `stage2.characters` 再跑 `stage2.global`（analyze **不再**为新书联合写 Characters）；Blueprint 由统一机械准入放行后免费汇合进入 Stage4。已有任一侧产物、历史回答、checkpoint 或 prepared 时先恢复或修订对应 owner，不能仅凭正式文件缺失重新首抽。存量 analyze receipt / draft repair 路径仅服务历史解码，删除条件见 STR-03-S2-CH。独立 Global 修订请求消费必要人物 canonical_surface/surfaces 投影（无 role）。Blueprint 在 driver/cache/wire 前要求统一机械准入通过：当前人物、Global、MainText 与称名投影可读、当前有效、无未恢复 INVALID 且所需机械检查全部通过；语义结论随 Stage2 语义未审披露，不再要求审阅接受。编排按准入阻断原因把恢复指向对应 owner 的编辑/复验入口。人物实际知识投影改变时，只由 `novel/stages/stage2/characters/rebind.py::prepare_if_changed` 证明其余输入未变、来源完整且外键闭合后排 `stage2.global --renormalize` 免费重绑；原模型/成本保留，unknown 不追认。人物投影缺失或损坏、人物正式登记 current 时只排 `stage2.characters --revalidate` 免费重建；live INVALID 保持 unknown 并交同 owner 编辑/复验，不因缺投影默认付费重采。Stage4 首项要求统一机械准入通过（`stage4_ready`）且 Blueprint 联合 HARD 通过。Stage2 唯一显式 `--check-only` 仍是 Blueprint，机械测量由 Stage5/6 在真实消费点即时执行，不造队列节点。 | `结构`（`contracts/invariants.py::NODES` + `novel/orchestrator/mechanical_admission.py::blueprint_generation_ready` / `::stage4_plan_ready` / `::stage4_context_ready` + `novel/orchestrator/queue.py::plan_book_from_overview` + `novel/stages/stage2/analyze/purchase.py::cold_start_reason` + `novel/stages/stage2/knowledge/grounding.py::read`）+ CLI/API 零 wire 早拒与联合复检回归 |
 | R-12.1b | 节点要诚实报出「这条规则本次没有跑，不是跑过没事」，且**流程里必须钉死一次 0 成本复检**。⚠ 别拿「这次补跑是绿的」当结论——那是运气，不是保证 | `HARD` |
 | R-12.1c | legacy LLM transport 的 Stage2 逐章抽取仍按章全量并发、硬上限 32；生产 Agent 路径改用独立逐章 session pool，实际取 `min(4, NOVEL_CONCURRENCY, 待跑章数)`。Blueprint pool 在统一机械准入通过后启动，准入未过不产生任何 Blueprint wire。Stage4A 是另一份节点级私有 session pool：策略请求串行先行，策略 checkpoint 后的逐章设计实际取 `min(4, NOVEL_CONCURRENCY, 待跑章数)`；配置可以把单书池下调但不能放大到 4 以上，也不复用/改写其他节点的产品上限。任何并发完成顺序都不得串错逐章 usage/provenance/checkpoint | `结构`（`contracts/invariants.py::STAGE2_BLUEPRINT_MAX_CONCURRENCY` / `::STAGE4_DESIGN_MAX_CONCURRENCY` + `novel/model_slots.py` + `novel/llm/run_journal.py` + `novel/llm/stage2_runs.py` + `novel/cli/main.py::_dispatch` + `novel/llm/stage4_runs.py::DESIGN_MAX_CONCURRENCY` + `novel/llm/ledger.py::chapter_usage`）+ 共享槽峰值/槽位归还/配置 1 串行/逐章账回归 |
 | R-12.1d | 供应商限流、账号 entitlement 与产品/节点并发闸必须分开陈述：legacy Stage2/5 transport 项目硬上限是 32，Stage2/Stage4 的 Agent 逐章 session pool 上限分别是 4/4；DeepSeek V4 Pro 当前官方账号级上限是 500。Agent pool 的 4 是当前 Claude executor 的**本进程、单书节点安全边界**，依据同一 executor 在 Stage2 真实整书 13 路首波出现快速 403 拒绝后的保守收敛，不冒充 Claude 账号级通用上限。HTTP 403 单码也不能推出五小时额度或账号总限：必须再区分明确用量窗口、登录过期、永久权限与“`Request not allowed` + 已确认 0 token”的瞬时拒绝。它只约束对应单书节点池；多书 agent 运行的总并发仍由独立的 `novel/orchestrator/agent.py::MAX_CONCURRENT` 管，不得把 4 写成账号总闸。正常产品路径不为制造 429/403 越过自身硬闸。真实观测必须显式确认付费、禁缓存、限制请求/重试/token，并保留逐次 ledger 与不含 prompt/响应正文的报告；429/瞬时 403 的重试/退避由可重复合成故障守卫 | `结构`（`tools/observe_provider_limits.py` + `novel/llm/providers.py` + `novel/model_slots.py` + `novel/llm/run_journal.py`）+ 2026-08-16 DeepSeek 真实 32 并发观测 + Stage2 Claude 13 路首波拒绝实证 + 合成 429/403/退避回归；DeepSeek 供应商口径见 [官方限速说明](https://api-docs.deepseek.com/zh-cn/quick_start/rate_limit) |
@@ -797,7 +806,7 @@ reasoning 已含在 completion 中时不再累加。
 |---|---|
 | 非正文剔除（`stage0`，**13 条现役**） | R-0 |
 | 分章（`stage1`，**9 条现役**） | R-1 |
-| 人物与 Blueprint（`stage2`，**29 条现役**） | R-2、R-3 |
+| 人物与 Blueprint（`stage2`，**26 条现役**） | R-2、R-3 |
 | 设计、绑定与上下文（`stage4`，**29 条现役**） | R-5、R-6，含 `R-3.3b`、`R-3.21b` 的跨层交付 |
 | 写作与验收（`stage5`，**52 条现役**） | R-7、R-8 |
 | 文案（`stage6`，**22 条现役**） | R-9 |

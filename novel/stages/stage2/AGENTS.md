@@ -51,7 +51,7 @@ stage2/
 |---|---|
 | blueprint | `novel/stages/stage2/blueprint/`（生产臂 `producer.py`） |
 | analyze | `novel/stages/stage2/analyze/`（`purchase` / `recovery` / `draft_recovery`） |
-| characters | `novel/stages/stage2/characters/`（`registry` / `checks` / `rebind`） |
+| characters | `novel/stages/stage2/characters/`（`registry` / `checks` / `rebind`；v3 试点 `candidates` / `compile_v3`，见 STR-03-S2-CH） |
 | knowledge | `novel/stages/stage2/knowledge/`（产品 `stage2.global`；生产臂 `producer.py`） |
 | shared | `novel/stages/stage2/shared/`（`paragraphs` / `character_refs` / `core_evidence` / `normalize` / `evidence_candidates` / `materialize`） |
 | 双臂 CLI 面 | `novel/stages/stage2/extract.py`（只转发 knowledge+blueprint producer，无业务实现） |

@@ -381,13 +381,26 @@ def _normalize_global_evidence(
 def normalize_characters(
         characters: dict[str, dict[str, Any]], main_text: list[dict[str, Any]],
 ) -> tuple[dict[str, Any], GlobalNormalizationAccounting]:
-    """仅整理空白；称谓归属、身份揭示时点和源文异写必须由有据裁决建立。"""
+    """仅整理空白；称谓归属、身份揭示时点和源文异写必须由有据裁决建立。
+
+    Characters v3 只触碰 ``canonical_surface`` / ``surfaces[].surface``；
+    若仍见存量 ``canonical`` / ``aliases`` / ``role`` 则同样剥空白，不补猜语义。
+    """
+    del main_text  # 签名保留；v3 归一不再回扫正文
     current = copy.deepcopy(characters)
     for character in current.values():
-        for field in ('canonical', 'role'):
-            character[field] = character[field].strip()
-        for binding in character.get('aliases', []):
-            binding['surface'] = binding['surface'].strip()
+        if not isinstance(character, dict):
+            continue
+        for field in ('canonical_surface', 'canonical', 'role'):
+            value = character.get(field)
+            if isinstance(value, str):
+                character[field] = value.strip()
+        rows = character.get('surfaces')
+        if not isinstance(rows, list):
+            rows = character.get('aliases') or []
+        for binding in rows:
+            if isinstance(binding, dict) and isinstance(binding.get('surface'), str):
+                binding['surface'] = binding['surface'].strip()
     return current, GlobalNormalizationAccounting(
         setup_chapters_pruned=[], evidence_locator_failures=[], evidence_locator_corrections=[])
 
@@ -425,8 +438,8 @@ def past_attested_surfaces(characters: dict[str, dict[str, Any]] | None,
     有界上下文架构（`bounded-fidelity-*`）把模型可见的前文收窄到窗口与尾摘之后，prompt 里
     「到目前为止的正文里出现过没有」这条判据模型就自证不了了（名字可能首现在
     窗口外）。这份清单把「已现与否」的判定收回代码侧：字面取自 registry
-    （canonical 剥区分词 + 全部 `address[].surface`，与 `surface_owners` 同一套
-    取值面），**出现性按第 1..N-1 章原文的 `norm` 子串命中判**——首现在本章
+    （`canonical_surface` / 存量 `canonical` + 全部 `surfaces[].surface` /
+    存量 `aliases[].surface`），**出现性按第 1..N-1 章原文的 `norm` 子串命中判**——首现在本章
     及以后的字面一律不进清单，所以它不带任何未来（对比 `extract.build_blueprint_user`
     docstring 里 global 整份不下发的理由）。
 
@@ -438,8 +451,22 @@ def past_attested_surfaces(characters: dict[str, dict[str, Any]] | None,
     """
     inventory: dict[str, str] = {}
     for char in (characters or {}).values():
-        names = [str((a or {}).get('surface') or '').strip()
-                 for a in ((char or {}).get('aliases') or [])]
+        if not isinstance(char, dict):
+            continue
+        names: list[str] = []
+        canon = str(
+            char.get('canonical_surface') or char.get('canonical') or ''
+        ).strip()
+        if canon:
+            names.append(canon)
+        rows = char.get('surfaces')
+        if not isinstance(rows, list):
+            rows = char.get('aliases') or []
+        for row in rows:
+            if isinstance(row, dict):
+                names.append(str(row.get('surface') or '').strip())
+            elif isinstance(row, str):
+                names.append(row.strip())
         for name in names:
             key = norm(name)
             if key and key not in inventory:

@@ -824,6 +824,12 @@
     "stage2"
    ]
   },
+  "tests/test_characters_v3_pilot.py": {
+   "layer": "unit_contract",
+   "stages": [
+    "stage2"
+   ]
+  },
   "tests/test_stage2_characters_http.py": {
    "cases": {
     "test_character_bad_locator_is_rejected_before_write_and_survives_http_cli_restart": "stage",

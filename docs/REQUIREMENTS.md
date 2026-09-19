@@ -59,7 +59,7 @@ ledger 成本权威。改变产品语义前须用户裁决，并同步 BACKEND_C
 |---|---|---|---|
 | stage0 | **进行中（STR-03-S0）** | `novel/stages/stage0/`；权威 `Stage0Transform` v3（路径仍 `stage0/revisions.json`） | 见 STR-03-S0；v2 链/approval 拒读，无 adapter 迁移 |
 | stage1 | 未开始 | — | — |
-| stage2（analyze / characters / global / blueprint） | **权威闭合**；Blueprint 契约 **STR-03-S2-BP v11** | `blueprint/`、`analyze/`、`characters/`、`knowledge/`、`shared/`；双臂生产在 `*/producer.py`；`extract.py` 仅薄转发 | 顶层 shim 已清零；V11 见 STR-03-S2-BP |
+| stage2（analyze / characters / global / blueprint） | **权威闭合**；Blueprint **STR-03-S2-BP v11**；Characters **STR-03-S2-CH v3（M1 契约/消费闭合）** | 同上；Characters v3 见 STR-03-S2-CH | analyze 联合首抽退役条件见 S2-CH；未到 M3 不得删除 |
 | stage4（design / plan / context） | **权威闭合（STR-03-S4）** | 见 STR-03-S4；`plan_chapters` 已退役 | `RETIRED_ARTIFACT_PATHS['stage4.plan_chapters']` |
 | stage5（write / review） | 未开始 | — | — |
 | stage6（prepare / hook / approve） | 未开始 | — | — |
@@ -134,6 +134,36 @@ ledger 成本权威。改变产品语义前须用户裁决，并同步 BACKEND_C
 - [x] Batch 4：展开差分测试 + shape-break/stale + §9.5；一次翻转 v11
 
 **验收**：展开(压缩(完整上下文)) 等价；Stage4 A 不因统一入口泄源序；v10 拒读；性能分列报告（模型 token / 正式字节 / 下游输入 / 重试 / 耗时）；states 质量观察单列。
+
+#### STR-03-S2-CH · Characters v3（身份解析 → 消费闭合）
+
+目标：先验证身份解析召回，再闭合 Global / Blueprint / Stage4～7 消费链。
+**不**与 Blueprint v11 / Stage0 改动回退绑定；正式切换前必须通过隔离小样本（M0）。
+
+链路：`MainText → 章 Extract（新 surface）→ 确定性字面回填 → 书 Resolver → Compiler → Characters v3`。
+
+| 里程碑 | 内容 | 杀停 / 准入 |
+|---|---|---|
+| **M0** | 草稿 schema + 回填/编译 + 合成反例；隔离输出根真机试跑（另授权） | 女儿仍漏 / 裴知远未绑定 / 关系称谓回填差 / 成本失控 → 不升 ARTIFACT_SPECS |
+| **M1** | Characters / Edit / 投影 v3 挂载；v2 拒读；R-2.4 翻转入契约 | 仍靠自由文本 role 做 claim⇔evidence → 回退 |
+| **M2** | Blueprint `mention_uses` 分档义务；断 Stage4 `characters.role` 回退 | 仍能「ActorRef 合法但漏人」→ 不切默认 |
+| **M3** | Stage5～7 / API/UI；新书默认 v3；analyze 退役条件闭合 | 恢复仍可能重复付费/实体 → 不关旧 path |
+
+纳入谓词（不用次数）：专名/稳定称谓个体、情节参与者、必要前史因果、跨章 continuity 实体；排除无名群体与一次性背景集合。大儒与女儿均纳入。
+
+三投影互不替代：`first_mention_chapter` / `identity_revealed_from` / 姓名类 `name_usable_from`。
+删除 `role` 与旧 `first_chapter`；`name_distinctiveness` 待 Stage7 替代后再删。
+`stage2.analyze` 联合首抽**不**与 M1 同批硬切。
+
+- [x] Batch 0：本条 + DECISIONS 方向；`contracts/schema/characters_v3.py` 草稿（**不** bump ARTIFACT_SPECS）
+- [x] M0 确定性：`candidates` 字面回填 + `compile_v3` + 合成反例测试
+- [x] M0 真机：冻结 11 章样书、独立输出根、基线 Flash、成本信封（`tools/characters_v3_m0_pilot.py --yes`；产物 `outputs/m0_ch_v3_20260919_181339/…/characters_v3_pilot/`；通过条件全绿；2 wire≈55k tokens）
+- [x] M1：正式 schema / checks / producer / 恢复；更新 BACKEND_CONTRACT R-2.*；Stage4 停止硬依赖 `role`/`first_chapter`/`aliases`；判据退役 `role_*` → `character_semantics_unverifiable`
+- [ ] M2：Blueprint mention_uses + 其余 Stage4～7 消费义务闭合
+- [ ] M3：下游与 UI；新书默认；analyze 删除条件勾选
+
+**验收（M0）**：合成反例绿；真机另列。小样本通过 ≠ golden set。
+**删除条件（analyze）**：新书默认 v3 + 旧 receipt/draft repair 消费者清零 + REQUIREMENTS 勾选后删除联合首抽 path。
 
 ### STR-04 · 契约与文档随权威 path 收口
 

@@ -458,7 +458,7 @@ delivery 终验未闭合时只运行`novel/orchestrator/delivery.py` 的确定�
 
 当前性能取证工具（`tools/workflow_metrics.py` 与 `tools/workflow_pairs.py`）已随 Stage2 语义
 审阅退役（2026-09，工作流 v7）：其读数主体是 Stage2 Commander 工作单元与审阅盘面，v7 不再
-存在该盘面。在 v7 上重建只读读数工具前，性能配对验收停在 `docs/REQUIREMENTS.md::TODO-49`
+存在该盘面。在 v7 上重建只读读数工具前，性能配对验收停在 `docs/REQUIREMENTS.md` 的 Stage4 性能未完成项
 的未验事项；`ledger`/`llm_audit.jsonl` 的 `run_id` 与 `parent_run_id` 归属纪律继续有效——
 精确 run 的成本只按显式身份筛，同 sid 旧 run、缺身份旧行与别的 run 全部排除，
 不能按时间窗口或当前 artifact 倒推归属。

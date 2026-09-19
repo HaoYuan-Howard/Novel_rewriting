@@ -12,7 +12,9 @@ import json
 from contracts.schema.plot import ActorRef, PlotBlueprint, PlotSubjectRef
 from novel.errors import RefusedByStructure
 from novel.core.text import norm
-from novel.stages.stage2.shared.character_refs import null_binding_conflict
+from novel.stages.stage2.shared.character_refs import (
+    _first_mention, _surface_rows, null_binding_conflict,
+)
 from novel.stages.stage2.blueprint.compile import available_actor_bindings
 
 
@@ -73,9 +75,12 @@ class ActorCatalog:
         except ValueError as exc:
             raise RefusedByStructure(str(exc)) from exc
 
-    def attested_aliases(self, char_id: str) -> list[dict]:
+    def attested_surfaces(self, char_id: str) -> list[dict]:
         text = norm(self.source_text)
-        return [row for row in self.characters[char_id]['aliases'] if norm(row['surface']) in text]
+        return [
+            row for row in _surface_rows(self.characters[char_id])
+            if norm(str(row.get('surface') or '')) in text
+        ]
 
     def resolve(self, value) -> ActorRef:
         actor = ActorRef.model_validate(_payload(value))
@@ -95,12 +100,13 @@ class ActorCatalog:
             matches = [min(matches, key=lambda b: (
                 self.binding_origins.get(b['presentation_id'], self.ordinal),
                 b['presentation_id']))]
-        names = self.attested_aliases(actor.char_id)
+        names = self.attested_surfaces(actor.char_id)
         if matches:
             if null_binding_conflict(names, matches[0]['surfaces'], chapter_ordinal=self.ordinal):
                 raise RefusedByStructure('唯一绑定与既有公开身份仍有歧义；须明确旧/新 presentation_ref')
             return ActorRef(char_id=actor.char_id, presentation_ref=matches[0]['presentation_id'])
-        if len(names) > 1 and any(row['identity_revealed_from'] >= self.ordinal for row in names):
+        if len(names) > 1 and any(
+                (row.get('identity_revealed_from') or 0) >= self.ordinal for row in names):
             raise RefusedByStructure('本章或未来才公开的多称谓映射必须明确表面身份，不能章首合并')
         return actor
 
@@ -111,9 +117,12 @@ class ActorCatalog:
         if presentation:
             # 两边均须有此前已公开的登记映射，不按内部 char_id 合并秘密身份。
             # 历史引用仍在其拥有章 resolve；公开 token 可使用当前章之前的已知等同。
-            aliases = {r['surface'] for r in public.characters[actor.char_id]['aliases']
-                       if r['identity_revealed_from'] < public.ordinal}
-            candidates = {key: set(row['surfaces']) & aliases for key, row in public.bindings.items()
+            known = {
+                str(r.get('surface') or '')
+                for r in _surface_rows(public.characters[actor.char_id])
+                if (r.get('identity_revealed_from') or 0) < public.ordinal
+            }
+            candidates = {key: set(row['surfaces']) & known for key, row in public.bindings.items()
                           if row['char_id'] == actor.char_id}
             if candidates.get(presentation):
                 presentation = min((key for key, names in candidates.items() if names),
@@ -126,27 +135,34 @@ class ActorCatalog:
         actor = self.resolve(value)
         character = self.characters[actor.char_id]
         binding = self.bindings.get(actor.presentation_ref)
-        aliases = {row['surface']: row for row in character['aliases']}
+        registered = {str(row.get('surface') or ''): row for row in _surface_rows(character)}
         if binding is not None:
             surfaces = binding['surfaces']
-            if any(surface not in aliases for surface in surfaces):
+            if any(surface not in registered for surface in surfaces):
                 raise RefusedByStructure('表面身份包含未登记称谓；保留候选交人物 owner 订正')
-            if len(surfaces) > 1 and any(aliases[s]['identity_revealed_from'] > self.ordinal for s in surfaces):
+            if len(surfaces) > 1 and any(
+                    (registered[s].get('identity_revealed_from') or 0) > self.ordinal
+                    for s in surfaces):
                 raise RefusedByStructure('未揭示的多个称谓不能被同一表面身份目录提前合并')
             # 映射尚未揭示也能出现这个表面称谓；公开状态才是其角色描述的来源。
             state_ref = binding['public_state_ref']
             role = self.states[state_ref]['content'] if state_ref in public_states else None
             role_slots = [s for s in allowed_slots if s in public_states.get(state_ref, [])]
         else:
-            surfaces = [row['surface'] for row in self.attested_aliases(actor.char_id)
-                        if row['identity_revealed_from'] <= self.ordinal]
+            surfaces = [
+                str(row.get('surface') or '')
+                for row in self.attested_surfaces(actor.char_id)
+                if (row.get('identity_revealed_from') or 0) <= self.ordinal
+            ]
             if not surfaces:
-                # 与盲设计材料一致：first_chapter 已到、登记名尚未公开（典型第一人称）
-                # 时 surfaces 可为空；未到出场章仍关闭式拒绝，禁止回退 canonical。
-                if character['first_chapter'] > self.ordinal:
+                # 与盲设计材料一致：first_mention 已到、登记名尚未公开（典型第一人称）
+                # 时 surfaces 可为空；未到首次提及章仍关闭式拒绝，禁止回退 canonical。
+                first = _first_mention(character)
+                if first is None or first > self.ordinal:
                     raise RefusedByStructure('人物没有当前可辨认的公开呈现；不得回退 canonical')
-            role = character['role'] if character['first_chapter'] <= self.ordinal else None
-            role_slots = allowed_slots if role is not None else []
+            # Characters v3 无自由文本 role；无 presentation 绑定时身份只来自
+            # Blueprint State（本分支无 public_state_ref），故 role 恒为 None。
+            role, role_slots = None, []
         if role is None or not role_slots:
             role, role_slots = None, []
         display = surfaces[0] if surfaces else ''

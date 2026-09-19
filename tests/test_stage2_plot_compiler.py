@@ -29,16 +29,23 @@ def _main_text(text: str = CH1, ordinal: int = 1) -> list[dict]:
 
 CHARACTERS = {
     'char_001': {
-        'canonical': '李宝珠', 'name_distinctiveness': 'distinct',
+        'canonical_surface': '李宝珠',
+        'canonical': '李宝珠',
+        'name_distinctiveness': 'distinct',
+        'first_mention_chapter': 1,
+        'surfaces': [{'surface': '李宝珠', 'kind': 'proper_name', 'identity_revealed_from': 1}],
         'aliases': [{'surface': '李宝珠', 'by': 'narration',
                      'context': 'reference', 'identity_revealed_from': 1}],
-        'role': '略', 'fate': None,
     },
     'char_002': {
-        'canonical': '母亲', 'name_distinctiveness': 'generic',
+        'canonical_surface': '母亲',
+        'canonical': '母亲',
+        'name_distinctiveness': 'generic',
+        'first_mention_chapter': 1,
+        # 松散夹具：省略 kind，避免 relational_address 被 inventory 跳过
+        'surfaces': [{'surface': '母亲', 'identity_revealed_from': 1}],
         'aliases': [{'surface': '母亲', 'by': 'narration',
                      'context': 'reference', 'identity_revealed_from': 1}],
-        'role': '略', 'fate': None,
     },
 }
 
@@ -56,21 +63,20 @@ def test_visible_character_refs_never_leak_a_future_surface():
 
 
 def test_first_person_enters_closed_set_with_empty_surfaces_before_name_attests():
-    """已到 first_chapter、登记名未字面出现：仍进 ActorRef 闭集，surfaces=[]。"""
+    """已到 first_mention_chapter、登记名未字面出现：仍进 ActorRef 闭集，surfaces=[]。"""
     characters = {
         'char_001': {
-            'canonical': '芸娘', 'name_distinctiveness': 'distinct',
-            'first_chapter': 1,
-            'aliases': [{'surface': '芸娘', 'by': 'narration',
-                         'context': 'reference', 'identity_revealed_from': 1}],
-            'role': '略', 'fate': None,
+            'canonical_surface': '芸娘', 'canonical': '芸娘',
+            'name_distinctiveness': 'distinct',
+            'first_mention_chapter': 1,
+            'name_usable_from': 2,
+            'surfaces': [{'surface': '芸娘', 'kind': 'proper_name', 'identity_revealed_from': 1}],
         },
         'char_002': {
-            'canonical': '夫君', 'name_distinctiveness': 'generic',
-            'first_chapter': 1,
-            'aliases': [{'surface': '夫君', 'by': 'narration',
-                         'context': 'reference', 'identity_revealed_from': 1}],
-            'role': '略', 'fate': None,
+            'canonical_surface': '夫君', 'canonical': '夫君',
+            'name_distinctiveness': 'generic',
+            'first_mention_chapter': 1,
+            'surfaces': [{'surface': '夫君', 'identity_revealed_from': 1}],
         },
     }
     mt = [
@@ -89,10 +95,10 @@ def test_empty_surface_closed_set_member_survives_projection_roundtrip():
     )
     characters = {
         'char_001': {
-            'canonical': '芸娘', 'name_distinctiveness': 'distinct',
-            'first_chapter': 1,
-            'aliases': [{'surface': '芸娘', 'identity_revealed_from': 1}],
-            'role': '略', 'fate': None,
+            'canonical_surface': '芸娘', 'canonical': '芸娘',
+            'name_distinctiveness': 'distinct',
+            'first_mention_chapter': 1,
+            'surfaces': [{'surface': '芸娘', 'kind': 'proper_name', 'identity_revealed_from': 1}],
         },
     }
     mt = [{'chapter_ordinal': 1, 'text': '我推开门。'}]
@@ -106,10 +112,16 @@ def test_visible_refs_do_not_grant_a_future_owner_of_an_already_seen_surface():
     """字面出现过不等于挂这个字面的所有人都已经可见。"""
     characters = copy.deepcopy(CHARACTERS)
     characters['char_003'] = {
-        'canonical': '后来者', 'name_distinctiveness': 'distinct', 'first_chapter': 2,
+        'canonical_surface': '后来者', 'canonical': '后来者',
+        'name_distinctiveness': 'distinct',
+        'first_mention_chapter': 2,
+        'first_chapter': 2,
+        'surfaces': [
+            {'surface': '后来者', 'kind': 'proper_name', 'identity_revealed_from': 2},
+            {'surface': '母亲', 'identity_revealed_from': 2},
+        ],
         'aliases': [{'surface': '后来者', 'identity_revealed_from': 2},
                     {'surface': '母亲', 'identity_revealed_from': 2}],
-        'role': '略', 'fate': None,
     }
     mt = [
         {'chapter_ordinal': 1, 'text': '母亲先在门边等着。'},
@@ -124,7 +136,9 @@ def test_visible_refs_do_not_grant_a_future_owner_of_an_already_seen_surface():
 def test_canonical_surface_shadows_the_same_address_clock():
     """身份映射晚揭示不禁止已在原文出现的称谓字面。"""
     characters = copy.deepcopy(CHARACTERS)
-    characters['char_002']['aliases'][0]['identity_revealed_from'] = 9
+    characters['char_002']['surfaces'][0]['identity_revealed_from'] = 9
+    if characters['char_002'].get('aliases'):
+        characters['char_002']['aliases'][0]['identity_revealed_from'] = 9
 
     visible = visible_character_refs(
         characters, [{'chapter_ordinal': 1, 'text': '母亲先在门边等着。'}])
@@ -140,12 +154,24 @@ def _two_maids_one_name():
     `strip_distinguisher` 会把它剥掉 —— 这就是碰撞的真实来路。
     """
     characters = {
-        'C001': {'canonical': '小宫女(打翻茶盏)',
-                 'aliases': [{'surface': '小宫女', 'identity_revealed_from': 1}]},
-        'C002': {'canonical': '小宫女(捧灯)',
-                 'aliases': [{'surface': '小宫女', 'identity_revealed_from': 1}]},
-        'C003': {'canonical': '黎玄',
-                 'aliases': [{'surface': '黎玄', 'identity_revealed_from': 1}]},
+        'C001': {
+            'canonical_surface': '小宫女(打翻茶盏)', 'canonical': '小宫女(打翻茶盏)',
+            'first_mention_chapter': 1,
+            'surfaces': [{'surface': '小宫女', 'identity_revealed_from': 1}],
+            'aliases': [{'surface': '小宫女', 'identity_revealed_from': 1}],
+        },
+        'C002': {
+            'canonical_surface': '小宫女(捧灯)', 'canonical': '小宫女(捧灯)',
+            'first_mention_chapter': 1,
+            'surfaces': [{'surface': '小宫女', 'identity_revealed_from': 1}],
+            'aliases': [{'surface': '小宫女', 'identity_revealed_from': 1}],
+        },
+        'C003': {
+            'canonical_surface': '黎玄', 'canonical': '黎玄',
+            'first_mention_chapter': 1,
+            'surfaces': [{'surface': '黎玄', 'identity_revealed_from': 1}],
+            'aliases': [{'surface': '黎玄', 'identity_revealed_from': 1}],
+        },
     }
     main = [{'chapter_ordinal': 1, 'text': '小宫女端着茶盏，黎玄看了一眼。'}]
     return characters, main
@@ -169,8 +195,9 @@ def test_a_distinguishable_pair_is_still_offered():
     from novel.stages.stage2.shared.character_refs import visible_character_refs_with_drops
 
     characters, main = _two_maids_one_name()
-    characters['C002']['aliases'].append(
-        {'surface': '捧灯宫女', 'identity_revealed_from': 1})
+    extra = {'surface': '捧灯宫女', 'identity_revealed_from': 1}
+    characters['C002']['surfaces'].append(extra)
+    characters['C002']['aliases'].append(extra)
     main = [{'chapter_ordinal': 1,
              'text': '小宫女端着茶盏，捧灯宫女跟在后面，黎玄看了一眼。'}]
     refs, dropped = visible_character_refs_with_drops(characters, main)

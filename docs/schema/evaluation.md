@@ -98,6 +98,6 @@ evaluation.py 中保留的类型仅作提交 journal 旧格式壳（空 `GlobalR
 
 Stage2 下游前置由统一机械准入承接（`novel/orchestrator/mechanical_admission.py`）：必要产物可读、当前、
 无未恢复 INVALID 且机械检查全部通过；人物完整、主张获原文支持与剧情抽取正确属
-「Stage2 语义未审」披露（`role_fate_unverifiable`、`secrets_absent`、`plot_semantics`），
+「Stage2 语义未审」披露（`character_semantics_unverifiable`、`secrets_absent`、`plot_semantics`），
 最终随交付披露该限制。人物与 Global 的 typed 订正分别走 CharactersEdit 与 GlobalEdit
 （独立预检 + apply），字段见 `docs/schema/stage2.md`。

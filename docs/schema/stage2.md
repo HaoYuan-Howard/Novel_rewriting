@@ -29,7 +29,7 @@ terminal 等待人工后继时存活，不计作阶段输出：
 | `stage2/analyze_characters_draft_repair.json` / `stage2/analyze_global_draft_repair.json` | `AnalyzeDraftRepairJournal` v1 | 单 owner 内部 WAL | 冻结来源、请求、编辑身份、精确目标；不是业务知识产物 |
 | `stage2/characters_edit.json` | `CharactersEdit` v2 | 人工输入 | 绑定原始 SHA 的人物 add/replace/delete，免费同尺校验及回执 |
 | `stage2/global_grounding.json` | `KnowledgeGrounding` v7 | `stage2.global` | 四类长期约束、共享证据表与必要人物投影 SHA；人物独立存储 |
-| `stage2/blueprint_character_projection.json` | `BlueprintCharacterProjection` v2 | `stage2.characters` | 人物注册与 MainText 确定性物化的逐章称名闭集；Global 无写权限 |
+| `stage2/blueprint_character_projection.json` | `BlueprintCharacterProjection` v3 | `stage2.characters` | 人物注册与 MainText 确定性物化的逐章称名闭集；Global 无写权限 |
 | `stage2/chapter_blueprints.json` | `ChapterBlueprints` v11 | `stage2.blueprint` | 完整剧情、持续状态、稀疏约束、人物呈现绑定、章内证据表（统一 resolve）、稀疏源语境与书级 narration_default |
 | `stage2/global_edit.json` | `GlobalEdit` v6 | 人工输入 | Stage2 typed 订正决策集（`stage2.global --emit-edit-template` 生成当前骨架，`--apply-edit` 消费） |
 | `stage2/blueprint_edit.json` | `PlotEdit` v2 | 人工输入 | 当前 token 绑定的完整指定章及 beats/states/constraints/actor_bindings 的 preserve/replace/add 身份操作，preview/apply 共用编译器 |
@@ -60,7 +60,7 @@ Stage2 下游不再有审阅停点：Blueprint 生成前由 `novel/orchestrator/
 检查人物登记、Global、原文与称名投影各自可读、当前、无未恢复 INVALID，且人物/Global
 机械检查全部通过；Stage4 起由 `stage4_ready` 再要求完整 Blueprint 与联合机械检查。
 机械检查缺失、未运行或不可判仍阻断（`skipped` 与机械类 `unver` 视为不可判）；
-登记过的语义类 `unver`（`SEMANTIC_UNREVIEWED_RULES`：`role_fate_unverifiable`、
+登记过的语义类 `unver`（`SEMANTIC_UNREVIEWED_RULES`：`character_semantics_unverifiable`、
 `secrets_absent`、`plot_semantics`）降为「Stage2 语义未审」披露，不阻断、不产生审批待办。
 CLI、调度、最低读取边界和交付检查共用同一结论；本章级揭示字段（如秘密 `revealed_from`）
 继续作为未审参考，同章安排由 Stage4 现有计划表达。
@@ -79,7 +79,7 @@ Stage6 Prepare 的独立生产、审阅及页面迁移仍由 Gate C 完成。
 | `relations` | `GlobalRelation[EvidenceId][]` | 两个人物实体间的长期有向关系 |
 | `arc_secrets` | `GlobalArcSecret[EvidenceId][]` | 影响跨章理解或披露的原子秘密 |
 | `evidence_anchors` | `{ev_<24hex>: CoreEvidenceAnchor}` | 本文件共享原文锚点；无主体引用的条目不保留 |
-| `characters_reference_sha256` | SHA-256 | 编译所需人物 canonical/surfaces/role 投影身份，由代码冻结 |
+| `characters_reference_sha256` | SHA-256 | 编译所需人物 `canonical_surface`/`surfaces` 投影身份，由代码冻结 |
 | `_provenance` | `GlobalProvenance` | 实际模型、输入、采用与免费改写来源；联合首抽保留共享回执 |
 
 人物登记见 `characters.md`，Global 不保存静态或动态人物副本。旧 entities/canon/fate/
@@ -187,7 +187,7 @@ prepared 载体和写入集合；两个 artifact 的版本、长期依赖与修�
 ## 一之二、`blueprint_character_projection.json`
 
 这是人物 producer 与 `stage2.blueprint` 之间的注册、版本化边界。由
-`novel/stages/stage2/characters.py::_projection` 从当前 MainText 和人物产物确定性重算；
+`novel/stages/stage2/characters/registry.py::_projection` 从当前 MainText 和人物产物确定性重算；
 Global 不写入该投影。投影存在与 Global 正式可用共同构成 Blueprint 生成的机械准入
 （`novel/orchestrator/mechanical_admission.py::blueprint_generation_ready`），不构成越过准入的许可。
 
@@ -386,7 +386,7 @@ GlobalEdit v1～v5 不迁移；人工免费获取 v6 模板后重新核对。旧
 
 ## 五、现行判据
 
-当前注册表共 **29 条**：**23 hard、1 info、2 metric、3 unver**。
+当前注册表共 **26 条**：**20 hard、1 info、2 metric、3 unver**。
 规则、严重度、修复 owner 以 `contracts/judges/stage2.py` 为唯一注册；本节摘要由契约测试对账。
 Core 的 `global_core_contract`、`global_temporal_contract`、
 `canon_chapter_refs_dangling`、`relation_dangling`、`global_evidence_unlocated` 只验证形状、
@@ -396,8 +396,8 @@ Core 的 `global_core_contract`、`global_temporal_contract`、
 
 | 范围 | 当前规则 ID |
 |---|---|
-| 人物出场、称谓与证据 | `character_unattested`、`address_from_out_of_range`、`address_bare_pronoun`、`address_unlocatable` |
-| 公开身份的机械探针 | `role_missing`、`role_leaks_fate`、`role_repeats_name`、`hedge_words`；改写式泄漏由 `role_fate_unverifiable` 明示不可机械判定 |
+| 人物出场、称谓与证据 | `character_unattested`、`address_from_out_of_range`、`address_bare_pronoun`、`address_unlocatable`、`global_evidence_unlocated`、`hedge_words` |
+| 人物语义未审 | `character_semantics_unverifiable`（常驻 UNVER；身份描述改由 Blueprint State） |
 | 蓝图输入与章对齐 | `upstream_missing`、`section_id_leak`、`chapter_coverage`、`chapter_order`、`scope_violation` |
 | 蓝图结构、引用与证据 | `plot_contract`、`plot_evidence`、`plot_state_continuity`、`plot_global_refs`、`present_ids_dangling` |
 | 蓝图提示与读数 | `pronoun_surface_unattested`、`plot_shape`、`context_scope`、`plot_semantics` |

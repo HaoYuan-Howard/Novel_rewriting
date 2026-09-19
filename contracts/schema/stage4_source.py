@@ -19,8 +19,8 @@ from contracts.schema.common import Sha256
 class SourceCharacter(FrozenModel):
     char_id: str = Field(pattern=r'^char_\d{3,}$')
     surfaces: list[str] = Field(default_factory=list)
-    role: str | None = None
-    first_chapter: int = Field(ge=1)
+    first_mention_chapter: int = Field(ge=1)
+    name_usable_from: int | None = Field(default=None, ge=1)
     identity_revealed_from: int | None = Field(default=None, ge=1)
 
 

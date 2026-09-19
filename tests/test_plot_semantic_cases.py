@@ -13,7 +13,7 @@ from types import SimpleNamespace
 import pytest
 
 from contracts.schema.plot import PlotChapterResponse
-from contracts.schema.characters import CharacterRegistry, CharactersProvenance, CharactersResponse
+from contracts.schema.characters import CharacterRegistry, CharactersProvenance
 from contracts.schema.knowledge import GlobalProvenance, KnowledgeResponse
 from contracts.schema.stage1 import MainText
 from contracts.schema.stage2 import ChapterBlueprints
@@ -21,7 +21,6 @@ from novel.orchestrator.mechanical_admission import SEMANTIC_UNREVIEWED_RULES
 from novel.llm.run_journal import canonical_sha256
 from novel.stages.stage2 import checks
 from novel.stages.stage2.blueprint.compile import compile_chapter, validate_book
-from novel.stages.stage2.characters import compile_response
 from novel.stages.stage2.knowledge.grounding import compile_global_draft
 from novel.stages.stage2.shared.evidence_candidates import GlobalEvidenceCandidateTable
 from novel.stages.stage4.measure import identity_plan
@@ -50,29 +49,55 @@ PROVENANCE = {'code': 'fixture', 'root_clean_sha1': '0' * 40, 'inputs': {},
 
 def core():
     """四章合成源文各自编译人物和知识；不复用另一份小说的候选坐标。"""
+    from contracts.schema.characters import (
+        BookExtractResponse, BookResolveResponse, ChapterSurfaceDiscover,
+    )
+    from novel.stages.stage2.characters.candidates import compile_book_candidates
+    from novel.stages.stage2.characters.compile_v3 import compile_registry_v3
+
     table = GlobalEvidenceCandidateTable.build(MAIN)
+
     def evidence(chapter, paragraph):
         quote = SOURCES[chapter - 1].split('\n\n')[paragraph - 1]
         return [next(row.evidence_candidate_id for row in table.rows
                      if row.chapter_ordinal == chapter and row.text == quote)]
-    rows = [('char_001', '芸娘', '回忆施救经历的女子', 1, 1),
-            ('char_002', '夫君', '叙述当下与芸娘为夫妻的男子', 1, 2),
-            ('char_003', '裴书远', '被夫君提及的男子', 2, 2)]
-    compiled_people = compile_response(CharactersResponse(characters=[{
-        'character_ref': f'c{index}', 'canonical': name, 'role': role,
-        'first_chapter': chapter, 'first_appearance_evidence_refs': evidence(chapter, para),
-        'role_evidence_refs': evidence(chapter, para), 'name_distinctiveness': 'high',
-        'aliases': [{'surface': name, 'identity_revealed_from': chapter,
-                     'evidence_refs': evidence(chapter, para)}],
-    } for index, (_cid, name, role, chapter, para) in enumerate(rows, 1)]), table)
-    registry = CharacterRegistry(characters=compiled_people.characters,
-        evidence_anchors=compiled_people.evidence_anchors, _provenance=CharactersProvenance(**PROVENANCE))
+
+    surfaces = ['芸娘', '夫君', '裴书远']
+    extract = BookExtractResponse(chapters=[
+        ChapterSurfaceDiscover(chapter_ordinal=n, surfaces=list(surfaces))
+        for n in range(1, 5)
+    ])
+    candidates, _lexicon, exclusions = compile_book_candidates(MAIN, extract)
+    resolve = BookResolveResponse.model_validate({
+        'characters': [
+            {'character_ref': 'c1', 'canonical_surface': '芸娘', 'status': 'confirmed'},
+            {'character_ref': 'c2', 'canonical_surface': '夫君', 'status': 'confirmed'},
+            {'character_ref': 'c3', 'canonical_surface': '裴书远', 'status': 'confirmed'},
+        ],
+        'surface_bindings': [
+            {'surface': '芸娘', 'disposition': 'bound', 'kind': 'proper_name',
+             'character_ref': 'c1', 'identity_revealed_from': 1},
+            {'surface': '夫君', 'disposition': 'bound', 'kind': 'social_address',
+             'character_ref': 'c2', 'identity_revealed_from': 1},
+            {'surface': '裴书远', 'disposition': 'bound', 'kind': 'proper_name',
+             'character_ref': 'c3', 'identity_revealed_from': 2},
+        ],
+    })
+    payload = compile_registry_v3(
+        main_text=MAIN, candidates=candidates, resolve=resolve,
+        nested_exclusions=exclusions)
+    registry = CharacterRegistry.model_validate({
+        **payload,
+        '_provenance': CharactersProvenance(**PROVENANCE).model_dump(mode='json'),
+    })
+    ordered = sorted(payload['characters'])
+    ref_to_id = {'c1': ordered[0], 'c2': ordered[1], 'c3': ordered[2]}
     knowledge = compile_global_draft(KnowledgeResponse.model_validate({
         'setting': {'era': '古时', 'era_evidence_refs': evidence(1, 1),
                     'social_context': None, 'social_context_evidence_refs': []},
         'world_rules': [], 'relations': [], 'arc_secrets': [],
     }), table, registry, provenance=GlobalProvenance(**PROVENANCE, evidence_locator_failures=[]),
-        character_handle_map=compiled_people.character_ids)
+        character_handle_map=ref_to_id)
     return registry, knowledge
 
 

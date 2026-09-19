@@ -4,14 +4,51 @@ import copy
 import pytest
 from pydantic import ValidationError
 from contracts.rules import REGISTRY
-from contracts.schema.characters import CharacterRegistry, CharactersProvenance, CharactersResponse
+from contracts.schema.characters import (
+    BookExtractResponse, BookResolveResponse, ChapterSurfaceDiscover,
+    CharacterRegistry, CharactersProvenance,
+)
 from contracts.schema.knowledge import GlobalProvenance, KnowledgeCore, KnowledgeDraft, KnowledgeGrounding
 from contracts.schema.stage2 import GlobalEdit
-from novel.stages.stage2 import checks, characters
+from novel.stages.stage2 import checks
 import novel.stages.stage2.knowledge.grounding as grounding
+from novel.stages.stage2.characters.candidates import compile_book_candidates
+from novel.stages.stage2.characters.compile_v3 import compile_registry_v3
 from novel.stages.stage2.extract import _build_global_edit_candidate, GlobalEditCandidateRejected
 from novel.stages.stage2.shared.evidence_candidates import GlobalEvidenceCandidateTable
 from novel.stages.stage2.knowledge.normalize import normalize_global
+
+
+def _v3_registry(main: list[dict], *, provenance: dict) -> tuple[CharacterRegistry, dict[str, str]]:
+    """两名合成人物的确定性 v3 registry（0-LLM）。"""
+    surfaces = ['沈青', '柳宁']
+    extract = BookExtractResponse(chapters=[
+        ChapterSurfaceDiscover(chapter_ordinal=int(section['chapter_ordinal']), surfaces=list(surfaces))
+        for section in main
+    ])
+    candidates, _lexicon, exclusions = compile_book_candidates(main, extract)
+    resolve = BookResolveResponse.model_validate({
+        'characters': [
+            {'character_ref': 'c1', 'canonical_surface': '沈青', 'status': 'confirmed'},
+            {'character_ref': 'c2', 'canonical_surface': '柳宁', 'status': 'confirmed'},
+        ],
+        'surface_bindings': [
+            {'surface': '沈青', 'disposition': 'bound', 'kind': 'proper_name',
+             'character_ref': 'c1', 'identity_revealed_from': 1},
+            {'surface': '柳宁', 'disposition': 'bound', 'kind': 'proper_name',
+             'character_ref': 'c2', 'identity_revealed_from': 1},
+        ],
+    })
+    payload = compile_registry_v3(
+        main_text=main, candidates=candidates, resolve=resolve,
+        nested_exclusions=exclusions)
+    registry = CharacterRegistry.model_validate({
+        **payload,
+        '_provenance': CharactersProvenance(**provenance).model_dump(mode='json'),
+    })
+    ordered = sorted(payload['characters'])
+    ref_to_id = {'c1': ordered[0], 'c2': ordered[1]}
+    return registry, ref_to_id
 
 
 @pytest.fixture
@@ -22,14 +59,7 @@ def core_case():
     table = GlobalEvidenceCandidateTable.build(main)
     provenance = dict(code='fixture', root_clean_sha1='0' * 40, inputs={},
                       prompts={'FIXTURE': '0' * 10}, model='fixture')
-    response = CharactersResponse(characters=[dict(character_ref=f'c{i}', canonical=name,
-        aliases=[dict(surface=name, identity_revealed_from=1, evidence_refs=['e000001'])],
-        first_chapter=1, first_appearance_evidence_refs=['e000001'], role=role,
-        role_evidence_refs=['e000001'], name_distinctiveness='high')
-        for i, name, role in ((1, '沈青', '守城人'), (2, '柳宁', '药师'))])
-    compiled = characters.compile_response(response, table)
-    registry = CharacterRegistry(characters=compiled.characters, evidence_anchors=compiled.evidence_anchors,
-                                  _provenance=CharactersProvenance(**provenance))
+    registry, ref_to_id = _v3_registry(main, provenance=provenance)
     draft = dict(setting=dict(era=None, social_context=None, era_evidence_refs=[], social_context_evidence_refs=[]),
         world_rules=[dict(rule_ref='w1', kind='social_norm', versions=[dict(version_ref='v1', desc='城门每晚关闭',
             effective_from=1, effective_until=None, revealed_from=1, evidence_refs=['e000002'])])],
@@ -39,7 +69,7 @@ def core_case():
                          setup_chapters=[2], revealed_from=3, evidence_refs=[])])
     artifact = grounding.compile_global_draft(KnowledgeDraft.model_validate(draft), table, registry,
         provenance=GlobalProvenance(**provenance, evidence_locator_failures=[]),
-        character_handle_map=compiled.character_ids)
+        character_handle_map=ref_to_id)
     return main, table, registry, draft, artifact
 
 

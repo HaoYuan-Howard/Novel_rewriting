@@ -575,19 +575,56 @@ def _stage4_grounding_payload() -> dict:
 
 
 def _character_subject(view: dict) -> dict:
-    """显式构造当前人物载体；不把动态知识写回静态 owner。"""
+    """显式构造当前人物 v3 载体；不把动态知识写回静态 owner。"""
     from contracts.schema.characters import CharactersProvenance
-    return {'characters': {
-        cid: {key: value for key, value in row.items() if key not in {'fate', 'fate_evidence'}}
-        for cid, row in view['entities']['characters'].items()},
+
+    characters: dict = {}
+    mentions: dict = {}
+    for index, (cid, row) in enumerate(view['entities']['characters'].items(), start=1):
+        surface = row.get('canonical_surface') or row.get('canonical') or '甲'
+        chapter = int(row.get('first_mention_chapter') or row.get('first_chapter') or 1)
+        mid = f'm_{index:015d}a'
+        characters[cid] = {
+            'canonical_surface': surface,
+            'status': 'confirmed',
+            'first_mention_chapter': chapter,
+            'name_usable_from': chapter,
+            'surfaces': [{
+                'surface': surface,
+                'kind': 'proper_name',
+                'identity_revealed_from': chapter,
+            }],
+            'name_distinctiveness': row.get('name_distinctiveness') or 'high',
+        }
+        mentions[mid] = {
+            'mention_id': mid,
+            'chapter_ordinal': chapter,
+            'start': 0,
+            'end': max(1, len(surface)),
+            'surface': surface,
+            'kind': 'proper_name',
+            'disposition': 'bound',
+            'char_id': cid,
+            'exclude_reason': None,
+            'reveals_identity': True,
+            'evidence_refs': ['ev_ffffffffffffffffffffffff'],
+        }
+    return {
+        'characters': characters,
+        'mentions': mentions,
         'evidence_anchors': {
-            'ev_ffffffffffffffffffffffff': {'chapter_ordinal': 1, 'start': 0, 'end': 12,
-                        'text_sha256': '5' * 64},
-            'ev_000000000000000000000001': {'chapter_ordinal': 1, 'start': 12, 'end': 24,
-                        'text_sha256': '6' * 64},
+            'ev_ffffffffffffffffffffffff': {
+                'chapter_ordinal': 1, 'start': 0, 'end': 12, 'text_sha256': '5' * 64,
+            },
+            'ev_000000000000000000000001': {
+                'chapter_ordinal': 1, 'start': 12, 'end': 24, 'text_sha256': '6' * 64,
+            },
         },
-        '_provenance': {key: value for key, value in view['_provenance'].items()
-                        if key in CharactersProvenance.model_fields}}
+        '_provenance': {
+            key: value for key, value in view['_provenance'].items()
+            if key in CharactersProvenance.model_fields
+        },
+    }
 
 
 def _write_character_subject(book: Path, view: dict) -> None:

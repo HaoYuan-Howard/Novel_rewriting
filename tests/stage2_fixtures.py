@@ -128,29 +128,146 @@ def knowledge_extract_response(*, view=None) -> dict:
     }).model_dump(mode='json')
 
 
+def build_v3_registry_payload(source: list[dict], *, view=None) -> tuple[dict, dict[str, str]]:
+    """从合成正文与旧领域样例确定性编译 v3 载荷（0-LLM）。
+
+    返回 (payload_without_provenance, character_ref→char_id)。
+    """
+    from contracts.schema.characters import (
+        BookExtractResponse, BookResolveResponse, ChapterSurfaceDiscover,
+    )
+    from novel.stages.stage2.characters.candidates import compile_book_candidates
+    from novel.stages.stage2.characters.compile_v3 import compile_registry_v3
+
+    legacy = character_response(source=source, view=view)
+    surfaces: list[str] = []
+    bindings: list[dict] = []
+    seeds: list[dict] = []
+    for row in legacy['characters']:
+        seeds.append({
+            'character_ref': row['character_ref'],
+            'canonical_surface': row['canonical'],
+            'status': 'confirmed',
+        })
+        for alias in row['aliases']:
+            surface = alias['surface']
+            if surface not in surfaces:
+                surfaces.append(surface)
+            kind = 'proper_name' if surface == row['canonical'] else 'short_name'
+            if len(surface) <= 2 and surface != row['canonical']:
+                kind = 'relational_address' if surface in {'嫂嫂', '女儿', '表弟'} else 'short_name'
+            bindings.append({
+                'surface': surface,
+                'disposition': 'bound',
+                'kind': kind if surface == row['canonical'] or kind != 'relational_address' else kind,
+                'character_ref': row['character_ref'],
+                'identity_revealed_from': alias['identity_revealed_from'],
+            })
+    # 去重：同 surface 多 binding 时保留首次（合成夹具无同名分区）
+    seen_surface: set[str] = set()
+    unique_bindings = []
+    for binding in bindings:
+        if binding['surface'] in seen_surface:
+            continue
+        seen_surface.add(binding['surface'])
+        unique_bindings.append(binding)
+
+    chapters = [
+        ChapterSurfaceDiscover(chapter_ordinal=int(section['chapter_ordinal']), surfaces=list(surfaces))
+        for section in source
+    ]
+    extract = BookExtractResponse(chapters=chapters)
+    candidates, _lexicon, exclusions = compile_book_candidates(source, extract)
+    resolve = BookResolveResponse.model_validate({
+        'characters': seeds,
+        'surface_bindings': unique_bindings,
+    })
+    payload = compile_registry_v3(
+        main_text=source, candidates=candidates, resolve=resolve,
+        nested_exclusions=exclusions)
+    ref_to_id = {
+        seeds[index]['character_ref']: cid
+        for index, cid in enumerate(sorted(payload['characters'], key=lambda x: int(x.split('_')[1])))
+    }
+    # compile 按 c1,c2 数值序分配 char_001...
+    ordered_refs = sorted(seeds, key=lambda row: int(row['character_ref'][1:]))
+    ref_to_id = {
+        row['character_ref']: f'char_{index:03d}'
+        for index, row in enumerate(ordered_refs, start=1)
+    }
+    return payload, ref_to_id
+
+
 def generate_characters(ctx: RunContext, *, view=None):
-    """用独立 run 的真实 legacy producer 生成静态上游，费用不串入被测 Global run。"""
+    """用独立 run 的真实 v3 producer（Extract+Resolve fake wire）生成上游。"""
     child = RunContext(
         novel_dir=ctx.novel_dir, node=characters.NODE, paid=True, code=prov.code_version(),
         cache=CachePolicy.default(), ledger=CostLedger(path=ctx.ledger.path))
     store = ArtifactStore(child)
-    source = store.read(MainText, STAGE1_MAIN_TEXT)
-    transport = FakeTransport(responder=lambda _req, _index: ChatResponse(
-        content=json.dumps(character_response(source=source.model_dump(mode='json'), view=view),
-                           ensure_ascii=False), finish_reason='stop',
-        usage={'prompt_tokens': 10, 'completion_tokens': 20}, model='test-characters'))
+    source = store.read(MainText, STAGE1_MAIN_TEXT).model_dump(mode='json')
+    payload, _refs = build_v3_registry_payload(source, view=view)
+    legacy = character_response(source=source, view=view)
+    surfaces = sorted({
+        alias['surface']
+        for row in legacy['characters']
+        for alias in row['aliases']
+    })
+    extract_wire = {
+        'chapters': [
+            {'chapter_ordinal': int(section['chapter_ordinal']), 'surfaces': surfaces}
+            for section in source
+        ],
+    }
+    # Resolve wire：与 build_v3_registry_payload 相同 bindings
+    _payload2, _ = build_v3_registry_payload(source, view=view)
+    from contracts.schema.characters import BookResolveResponse
+    # 重新构造 resolve JSON（与 helper 内部一致）
+    seeds = []
+    bindings = []
+    seen = set()
+    for row in legacy['characters']:
+        seeds.append({
+            'character_ref': row['character_ref'],
+            'canonical_surface': row['canonical'],
+            'status': 'confirmed',
+        })
+        for alias in row['aliases']:
+            surface = alias['surface']
+            if surface in seen:
+                continue
+            seen.add(surface)
+            kind = 'proper_name' if surface == row['canonical'] else 'short_name'
+            bindings.append({
+                'surface': surface,
+                'disposition': 'bound',
+                'kind': kind,
+                'character_ref': row['character_ref'],
+                'identity_revealed_from': alias['identity_revealed_from'],
+            })
+    resolve_wire = {'characters': seeds, 'surface_bindings': bindings}
+
+    responses = [
+        ChatResponse(
+            content=json.dumps(extract_wire, ensure_ascii=False), finish_reason='stop',
+            usage={'prompt_tokens': 10, 'completion_tokens': 20}, model='test-characters'),
+        ChatResponse(
+            content=json.dumps(resolve_wire, ensure_ascii=False), finish_reason='stop',
+            usage={'prompt_tokens': 10, 'completion_tokens': 20}, model='test-characters'),
+    ]
+    queue = iter(responses)
+
+    def responder(_req, _index):
+        return next(queue)
+
     client = LlmClient(
-        child, transport, cache=ResponseCache(), model='test-characters', max_retries=0,
+        child, FakeTransport(responder=responder), cache=ResponseCache(),
+        model='test-characters', max_retries=0,
         budget_checker=lambda *_args, **_kwargs: None)
     return characters.run(child, client)
 
 
 def seed_character_registry(ctx: RunContext):
-    """只测 Global 时显式预置独立人物输入，不制造模型调用或采用账。
-
-    人物 producer 的真实链由 generate_characters 及人物专用测试覆盖。本函数
-    仅接受固定合成正文，其 provenance 模型名明确标为 fixture。
-    """
+    """只测 Global 时显式预置独立人物输入，不制造模型调用或采用账。"""
     from novel.stages.stage2.shared.character_refs import materialize_blueprint_character_projection
 
     child = RunContext(
@@ -159,16 +276,20 @@ def seed_character_registry(ctx: RunContext):
     store = ArtifactStore(child)
     source = store.read(MainText, STAGE1_MAIN_TEXT).model_dump(mode='json')
     assert source == main_text(), '人物夹具必须绑定明确的合成正文'
-    compiled = characters.compile_response(CharactersResponse.model_validate(character_response(source=source)),
-                                            GlobalEvidenceCandidateTable.build(source))
-    rows = compiled.characters
-    artifact = CharacterRegistry(
-        characters=rows, evidence_anchors=compiled.evidence_anchors, _provenance=child.llm_provenance(
-            CharactersProvenance, model='fixture-characters', adopted_models=('fixture-characters',),
-            prompts={'SYSTEM': '测试预置人物输入；未执行模型'}))
+    payload, _refs = build_v3_registry_payload(source)
+    artifact = CharacterRegistry.model_validate({
+        **payload,
+        '_provenance': child.llm_provenance(
+            CharactersProvenance, model='fixture-characters',
+            adopted_models=('fixture-characters',),
+            prompts={'SYSTEM': '测试预置人物输入；未执行模型'},
+        ).model_dump(mode='json'),
+    })
     store.write(STAGE2_CHARACTERS, artifact)
-    store.write(STAGE2_BLUEPRINT_CHARACTER_PROJECTION,
-                materialize_blueprint_character_projection(rows, source))
+    store.write(
+        STAGE2_BLUEPRINT_CHARACTER_PROJECTION,
+        materialize_blueprint_character_projection(
+            artifact.model_dump(mode='json')['characters'], source))
     return artifact
 
 
@@ -197,11 +318,13 @@ def formal_subjects(view: dict):
     table = GlobalEvidenceCandidateTable.build(source)
     provenance = dict(code='fixture', root_clean_sha1='0' * 40, inputs={},
                       prompts={'FIXTURE_ONLY': '0' * 10}, model='fixture')
-    compiled = characters.compile_response(CharactersResponse.model_validate(
-        character_response(source=source, view=view)), table)
-    registry = CharacterRegistry(characters=compiled.characters, evidence_anchors=compiled.evidence_anchors,
-                                  _provenance=CharactersProvenance(**provenance))
-    knowledge = compile_global_draft(KnowledgeResponse.model_validate(knowledge_response(view=view)), table, registry,
+    payload, ref_to_id = build_v3_registry_payload(source, view=view)
+    registry = CharacterRegistry.model_validate({
+        **payload,
+        '_provenance': CharactersProvenance(**provenance).model_dump(mode='json'),
+    })
+    knowledge = compile_global_draft(
+        KnowledgeResponse.model_validate(knowledge_response(view=view)), table, registry,
         provenance=GlobalProvenance(**provenance, evidence_locator_failures=[]),
-        character_handle_map=compiled.character_ids)
+        character_handle_map=ref_to_id)
     return registry, knowledge

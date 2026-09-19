@@ -155,7 +155,7 @@ class WorkflowManifestV8(FrozenModel):
 class PipelineArtifactVersionsV9(FrozenModel):
     """STR-03-S2-BP：ChapterBlueprints v11 无损结构压缩。"""
 
-    characters: Literal[2] = 2
+    characters: Literal[3] = 3
     global_grounding: Literal[7] = 7
     analyze_receipt: Literal[1] = 1
     chapter_blueprints: Literal[11] = 11

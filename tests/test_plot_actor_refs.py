@@ -111,9 +111,20 @@ def test_relation_uses_bind_actual_presentations_without_inventing_a_state():
 
 
 def test_canonical_first_appearance_does_not_hide_earlier_registered_persona():
-    people = {'char_001': {'canonical': '芸娘', 'first_chapter': 1,
-        'aliases': [{'surface': '娘子', 'identity_revealed_from': 4},
-                    {'surface': '芸娘', 'identity_revealed_from': 4}]}}
+    people = {'char_001': {
+        'canonical_surface': '芸娘',
+        'canonical': '芸娘',
+        'first_mention_chapter': 1,
+        'first_chapter': 1,
+        'surfaces': [
+            {'surface': '娘子', 'kind': 'social_address', 'identity_revealed_from': 4},
+            {'surface': '芸娘', 'kind': 'proper_name', 'identity_revealed_from': 4},
+        ],
+        'aliases': [
+            {'surface': '娘子', 'identity_revealed_from': 4},
+            {'surface': '芸娘', 'identity_revealed_from': 4},
+        ],
+    }}
     inventory = blueprint_character_prompt_inventory(people, [
         {'chapter_ordinal': 1, 'text': '娘子，我等你。'}, {'chapter_ordinal': 4, 'text': '她名叫芸娘。'}])
     assert inventory['visible_character_refs'][1] == {'char_001': ['娘子']}

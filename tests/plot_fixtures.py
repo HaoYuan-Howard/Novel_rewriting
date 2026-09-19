@@ -7,9 +7,16 @@ from novel.stages.stage2.blueprint.compile import compile_chapter
 TEXT = '甲收到入住邀请。\n\n乙在门口拒绝甲。\n\n甲决定留下。'
 MAIN = [{'chapter_ordinal': 1, 'text': TEXT}]
 CHARACTERS = {
-    cid: {'canonical': name, 'role': role, 'name_distinctiveness': 'high', 'first_chapter': 1,
-          'aliases': [{'surface': name, 'identity_revealed_from': 1, 'evidence_refs': []}],
-          'first_appearance_evidence_refs': [], 'role_evidence_refs': []}
+    cid: {
+        'canonical_surface': name,
+        'canonical': name,  # character_refs 仍容忍
+        'name_distinctiveness': 'high',
+        'first_mention_chapter': 1,
+        'first_chapter': 1,
+        'surfaces': [{'surface': name, 'kind': 'proper_name', 'identity_revealed_from': 1}],
+        'aliases': [{'surface': name, 'identity_revealed_from': 1, 'evidence_refs': []}],
+        'first_appearance_evidence_refs': [], 'role_evidence_refs': [],
+    }
     for cid, name, role in [('char_001', '甲', '受邀住客'), ('char_002', '乙', '门口的住客')]
 }
 REGISTRY = {'characters': CHARACTERS, 'evidence_anchors': {}}

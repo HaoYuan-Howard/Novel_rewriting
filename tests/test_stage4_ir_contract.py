@@ -85,7 +85,7 @@ def test_permission_transition_sticky_mid_scene():
     source = SourceChapter(
         chapter_ordinal=1, chapter_function='揭晓',
         characters=[SourceCharacter(
-            char_id='char_001', surfaces=['芸娘'], first_chapter=1,
+            char_id='char_001', surfaces=['芸娘'], first_mention_chapter=1,
             identity_revealed_from=1)],
         beats=[
             SourceBeat(beat_ref='b01_01', content='陌生男子', participant_ids=['char_001']),
@@ -118,7 +118,7 @@ def test_transition_cannot_open_before_identity_revealed():
     source = SourceChapter(
         chapter_ordinal=1, chapter_function='x',
         characters=[SourceCharacter(
-            char_id='char_002', surfaces=['裴书远'], first_chapter=1,
+            char_id='char_002', surfaces=['裴书远'], first_mention_chapter=1,
             identity_revealed_from=5)],
         beats=[SourceBeat(beat_ref='b01_01', content='a', participant_ids=[])],
         states=[], entry_state_refs=[], carry_out_refs=[], constraints=[],
@@ -182,7 +182,7 @@ def test_writer_ir_preserves_design_step_order():
     )
     source = SourceChapter(
         chapter_ordinal=1, chapter_function='倒叙',
-        characters=[SourceCharacter(char_id='char_001', surfaces=['我'], first_chapter=1)],
+        characters=[SourceCharacter(char_id='char_001', surfaces=['我'], first_mention_chapter=1)],
         beats=[
             SourceBeat(beat_ref='b01_01', content='A', participant_ids=['char_001']),
             SourceBeat(beat_ref='b01_02', content='B', participant_ids=['char_001']),

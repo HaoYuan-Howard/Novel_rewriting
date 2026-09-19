@@ -108,8 +108,15 @@ def formal_writer_view(chapter, arrangement, chapters=None):
     current['anchor_bindings'] = [r.model_dump(mode='json') for r in arrangement.anchor_bindings]
     from tests.plot_fixtures import GLOBAL
     characters = {'characters': {
-        cid: {'canonical': name, 'role': role, 'name_distinctiveness': 'high', 'first_chapter': 1,
-              'aliases': [{'surface': name, 'identity_revealed_from': 1, 'evidence_refs': []}]}
+        cid: {
+            'canonical_surface': name,
+            'canonical': name,
+            'name_distinctiveness': 'high',
+            'first_mention_chapter': 1,
+            'first_chapter': 1,
+            'surfaces': [{'surface': name, 'kind': 'proper_name', 'identity_revealed_from': 1}],
+            'aliases': [{'surface': name, 'identity_revealed_from': 1, 'evidence_refs': []}],
+        }
         for cid, name, role in [('char_001', '我', '施救者'), ('char_002', '他', '被救者')]
     }, 'evidence_anchors': {}}
     return build_writer_context(plan, GLOBAL, bps, main,

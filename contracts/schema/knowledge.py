@@ -20,9 +20,10 @@ RefT = TypeVar('RefT')
 
 
 class CharacterKnowledgeReference(StrictModel):
-    canonical: NonEmpty
+    """Global 对 Characters 的只读业务投影（无 role；见 R-12.1）。"""
+
+    canonical_surface: NonEmpty
     surfaces: list[NonEmpty] = Field(min_length=1)
-    role: NonEmpty
 
 
 class GlobalSetting(StrictModel, Generic[RefT]):
