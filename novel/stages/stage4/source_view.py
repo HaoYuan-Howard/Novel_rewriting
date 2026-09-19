@@ -140,7 +140,7 @@ def build_stage4_source_view(
             base = char_rows.get(cid, {})
             surface_rows = base.get('surfaces')
             if not isinstance(surface_rows, list):
-                surface_rows = base.get('aliases') or []
+                surface_rows = []
             surfaces: list[str] = []
             revealed = None
             for row in surface_rows:
@@ -165,12 +165,13 @@ def build_stage4_source_view(
                             revealed = int(row['identity_revealed_from'])
                 if actor.get('identity_revealed_from') is not None:
                     revealed = int(actor['identity_revealed_from'])
-            first_mention = (
-                base.get('first_mention_chapter')
-                or base.get('first_chapter')
-                or (actor.get('first_mention_chapter') if isinstance(actor, dict) else None)
-                or ordinal
-            )
+            first_raw = base.get('first_mention_chapter')
+            if first_raw is None and isinstance(actor, dict):
+                first_raw = actor.get('first_mention_chapter')
+            if type(first_raw) is not int or first_raw < 1:
+                raise ValueError(
+                    f'{cid}: SourceCharacter 缺少 first_mention_chapter，拒绝 aliases/章号默认回退')
+            first_mention = first_raw
             name_usable = base.get('name_usable_from')
             if name_usable is None and isinstance(actor, dict):
                 name_usable = actor.get('name_usable_from')

@@ -2,10 +2,15 @@
 """Characters v3 prompt：稀疏 Extract + lexicon Resolve。
 
 Resolve 只裁决 surface 词表 / 歧义簇 / typo / 未决，不下发全部 occurrence。
+正式付费路径的 system 必须经 ``with_json_shape`` 挂上 schema（与 Global / M0 试点一致）；
+仅靠 ``json_object`` 模式时 Flash 可能返回缺顶层 ``chapters`` 的短 JSON。
 """
 from __future__ import annotations
 
-BOOK_EXTRACT_SYSTEM = """\
+from contracts.schema.characters import BookExtractResponse, BookResolveResponse
+from novel.llm.prompts import with_json_shape
+
+_BOOK_EXTRACT_BODY = """\
 你只做人物指称的 surface 发现，不写正式人物表，不编 char_id。
 
 对每一章返回 surfaces 列表：姓名、简称、关系称谓、社会称谓、异写、关键匿名指称。
@@ -15,9 +20,7 @@ BOOK_EXTRACT_SYSTEM = """\
 只返回指定 JSON。
 """
 
-CHAPTER_EXTRACT_SYSTEM = BOOK_EXTRACT_SYSTEM
-
-BOOK_RESOLVE_SYSTEM = """\
+_BOOK_RESOLVE_BODY = """\
 你是全书人物身份 Resolver。输入是 distinct surface 词表，以及每条 surface 的少量代表出现上下文。
 
 输出：
@@ -37,4 +40,17 @@ BOOK_RESOLVE_SYSTEM = """\
 只返回指定 JSON。
 """
 
-__all__ = ['BOOK_EXTRACT_SYSTEM', 'BOOK_RESOLVE_SYSTEM', 'CHAPTER_EXTRACT_SYSTEM']
+EXTRACT_SHAPE: dict[str, object] = BookExtractResponse.model_json_schema(by_alias=True)
+RESOLVE_SHAPE: dict[str, object] = BookResolveResponse.model_json_schema(by_alias=True)
+
+BOOK_EXTRACT_SYSTEM = with_json_shape(_BOOK_EXTRACT_BODY, EXTRACT_SHAPE)
+CHAPTER_EXTRACT_SYSTEM = BOOK_EXTRACT_SYSTEM
+BOOK_RESOLVE_SYSTEM = with_json_shape(_BOOK_RESOLVE_BODY, RESOLVE_SHAPE)
+
+__all__ = [
+    'BOOK_EXTRACT_SYSTEM',
+    'BOOK_RESOLVE_SYSTEM',
+    'CHAPTER_EXTRACT_SYSTEM',
+    'EXTRACT_SHAPE',
+    'RESOLVE_SHAPE',
+]

@@ -342,8 +342,18 @@ def _character_names(mat: Material) -> list[str]:
     for character in chars.values():
         if not isinstance(character, dict):
             continue
-        if canonical := str(character.get('canonical') or '').strip():
+        canonical = (
+            str(character.get('canonical_surface') or character.get('canonical') or '').strip())
+        if canonical:
             names.add(canonical)
+        surfaces = character.get('surfaces')
+        if isinstance(surfaces, list):
+            for address in surfaces:
+                if isinstance(address, dict) and (
+                        surface := str(address.get('surface') or '').strip()):
+                    names.add(surface)
+                elif isinstance(address, str) and address.strip():
+                    names.add(address.strip())
         for address in character.get('aliases') or []:
             if isinstance(address, dict) and (surface := str(address.get('surface') or '').strip()):
                 names.add(surface)

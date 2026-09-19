@@ -234,7 +234,10 @@ def test_material_carries_source_full_truth_story_map_and_minimal_hook_mechanica
         'world_rules': [], 'relations': [],
         'arc_secrets': [{'secret_id': 'secret_01', 'fact': '写信者是仇人。', 'revealed_from': 2}],
     }
-    characters = {'char_001': {'canonical': '阿宁', 'aliases': [{'surface': '阿宁'}]}}
+    characters = {'char_001': {
+        'canonical_surface': '阿宁',
+        'surfaces': [{'surface': '阿宁', 'kind': 'proper_name', 'identity_revealed_from': 1}],
+    }}
     preparation = {'facts': [{'kind': 'supported', 'claim_id': 'hook_001', 'claim': '她收到匿名信。'}], 'opening': {'kind': 'proposed', 'through_chapter': 1, 'rationale': '收到来信引出冲突'}}
     material = prompts.build_material(
         title='匿名信',
@@ -291,7 +294,10 @@ def test_weak_fact_attribution_metric_compares_gift_phrase_to_story_map():
     material = prompts.Material(
         blocks=('完整创作包。',),
         story_truth={'characters': {
-            'c1': {'canonical': '阿宁', 'aliases': [{'surface': '阿宁'}]},
+            'c1': {
+                'canonical_surface': '阿宁',
+                'surfaces': [{'surface': '阿宁', 'kind': 'proper_name', 'identity_revealed_from': 1}],
+            },
         }},
         story_map=({'chapter': 1,
                     'beats': [{'beat_ref': 'b01_01', 'content': '阿宁送给小禾玉佩。'}],

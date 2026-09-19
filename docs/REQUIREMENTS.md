@@ -59,7 +59,7 @@ ledger 成本权威。改变产品语义前须用户裁决，并同步 BACKEND_C
 |---|---|---|---|
 | stage0 | **进行中（STR-03-S0）** | `novel/stages/stage0/`；权威 `Stage0Transform` v3（路径仍 `stage0/revisions.json`） | 见 STR-03-S0；v2 链/approval 拒读，无 adapter 迁移 |
 | stage1 | 未开始 | — | — |
-| stage2（analyze / characters / global / blueprint） | **权威闭合**；Blueprint **STR-03-S2-BP v11**；Characters **STR-03-S2-CH v3（M1 契约/消费闭合）** | 同上；Characters v3 见 STR-03-S2-CH | analyze 联合首抽退役条件见 S2-CH；未到 M3 不得删除 |
+| stage2（analyze / characters / global / blueprint） | **权威闭合**；Blueprint **STR-03-S2-BP v11**；Characters **STR-03-S2-CH v3（M1–M3 消费闭合；analyze 保留）** | 同上；Characters v3 见 STR-03-S2-CH | analyze 联合首抽退役条件见 S2-CH；恢复双付费未审计前不得删除 |
 | stage4（design / plan / context） | **权威闭合（STR-03-S4）** | 见 STR-03-S4；`plan_chapters` 已退役 | `RETIRED_ARTIFACT_PATHS['stage4.plan_chapters']` |
 | stage5（write / review） | 未开始 | — | — |
 | stage6（prepare / hook / approve） | 未开始 | — | — |
@@ -159,11 +159,12 @@ ledger 成本权威。改变产品语义前须用户裁决，并同步 BACKEND_C
 - [x] M0 确定性：`candidates` 字面回填 + `compile_v3` + 合成反例测试
 - [x] M0 真机：冻结 11 章样书、独立输出根、基线 Flash、成本信封（`tools/characters_v3_m0_pilot.py --yes`；产物 `outputs/m0_ch_v3_20260919_181339/…/characters_v3_pilot/`；通过条件全绿；2 wire≈55k tokens）
 - [x] M1：正式 schema / checks / producer / 恢复；更新 BACKEND_CONTRACT R-2.*；Stage4 停止硬依赖 `role`/`first_chapter`/`aliases`；判据退役 `role_*` → `character_semantics_unverifiable`
-- [ ] M2：Blueprint mention_uses + 其余 Stage4～7 消费义务闭合
-- [ ] M3：下游与 UI；新书默认；analyze 删除条件勾选
+- [x] M2：Blueprint `mention_actor_coverage`（R-3.7e）+ 切断 Stage4/shared/consumption 的 v2 双读
+- [x] M3：Stage5～7 / views / naming / knowledge prompt / UI 只认 v3；新书默认 WorkflowManifestV9（`characters:3`）；**不**删除 analyze
+- [ ] analyze 删除条件：恢复双付费未审计（旧 receipt/draft repair 消费者清零前保持未勾）
 
 **验收（M0）**：合成反例绿；真机另列。小样本通过 ≠ golden set。
-**删除条件（analyze）**：新书默认 v3 + 旧 receipt/draft repair 消费者清零 + REQUIREMENTS 勾选后删除联合首抽 path。
+**删除条件（analyze）**：新书默认 v3 + 旧 receipt/draft repair 消费者清零 + 恢复双付费审计通过 + REQUIREMENTS 勾选后删除联合首抽 path。当前 M3 已默认 v3，但恢复双付费未审计，删除条件保持未勾。
 
 ### STR-04 · 契约与文档随权威 path 收口
 

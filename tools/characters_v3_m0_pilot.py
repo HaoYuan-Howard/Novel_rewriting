@@ -36,7 +36,6 @@ from contracts.schema.characters import (  # noqa: E402
     RegisteredCharacter,
 )
 from novel import config, paths, prov  # noqa: E402
-from novel.llm.prompts import with_json_shape  # noqa: E402
 from novel.llm.providers import create_legacy_client, default_legacy_backend  # noqa: E402
 from novel.run import RunContext  # noqa: E402
 from novel.stages.stage2.characters.candidates import (  # noqa: E402
@@ -59,9 +58,6 @@ DEFAULT_SOURCE_BASE = ROOT / 'outputs' / 'acceptance_fujun'
 DEFAULT_PILOT_BASE = ROOT / 'outputs' / 'm0_characters_v3_pilot'
 EXTRACT_MAX_TOKENS = 32_768
 RESOLVE_MAX_TOKENS = 64_000
-
-EXTRACT_SHAPE = BookExtractResponse.model_json_schema()
-RESOLVE_SHAPE = BookResolveResponse.model_json_schema()
 
 
 def _sha(text: str) -> str:
@@ -333,7 +329,8 @@ def run_pilot(
         )
         client = create_legacy_client(ctx, backend.profile)
 
-        system = with_json_shape(BOOK_EXTRACT_SYSTEM, EXTRACT_SHAPE)
+        # BOOK_*_SYSTEM 已在 prompts_v3 挂 schema，勿再次 with_json_shape。
+        system = BOOK_EXTRACT_SYSTEM
         user = build_extract_user(TITLE, main_text)
         purpose = 'characters_v3_m1_extract_book'
         _write_json(out / 'requests' / 'extract_book.json', {
@@ -355,7 +352,7 @@ def run_pilot(
             main_text, extract)
         _write_candidates(out, candidates, lexicon, nested_exclusions)
 
-        resolve_system = with_json_shape(BOOK_RESOLVE_SYSTEM, RESOLVE_SHAPE)
+        resolve_system = BOOK_RESOLVE_SYSTEM
         resolve_user = build_resolve_user(
             TITLE, main_text,
             lexicon=lexicon,

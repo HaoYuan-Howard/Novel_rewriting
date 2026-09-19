@@ -143,9 +143,25 @@ def strip_distinguisher(canonical: str | None) -> str:
 
 
 def registered_surfaces(character: dict | None) -> tuple[str, ...]:
-    """当前注册表的全部有据表面称谓；不推断首次出现，也不展开同人披露图。"""
-    return tuple(row['surface'] for row in (character or {}).get('aliases', [])
-                 if isinstance(row, dict) and isinstance(row.get('surface'), str) and row['surface'])
+    """当前注册表的全部有据表面称谓；只认 v3 ``surfaces``，不回退 aliases。"""
+    rows = (character or {}).get('surfaces')
+    if not isinstance(rows, list):
+        return ()
+    out: list[str] = []
+    for row in rows:
+        if isinstance(row, dict):
+            surface = row.get('surface')
+            if isinstance(surface, str) and surface:
+                out.append(surface)
+        elif isinstance(row, str) and row:
+            out.append(row)
+    return tuple(out)
+
+
+def _canonical_label(character: dict | None) -> str:
+    row = character or {}
+    raw = row.get('canonical_surface') or row.get('canonical') or ''
+    return str(raw) if isinstance(raw, str) else ''
 
 
 def display_names(characters: dict[str, dict] | None, book_text: str
@@ -156,7 +172,7 @@ def display_names(characters: dict[str, dict] | None, book_text: str
     substitutions: dict[str, str] = {}
     unattested: list[tuple[str, object]] = []
     for char_id, character in (characters or {}).items():
-        raw = (character or {}).get('canonical') or ''
+        raw = _canonical_label(character)
         canonical = strip_distinguisher(raw)
         if canonical and canonical in book_text:
             display[char_id] = canonical
@@ -205,7 +221,7 @@ def display_names_at(characters: dict[str, dict] | None, text_upto: str) -> dict
 
     display: dict[str, str] = {}
     for char_id, character in (characters or {}).items():
-        canonical = strip_distinguisher((character or {}).get('canonical') or '')
+        canonical = strip_distinguisher(_canonical_label(character))
         if canonical and canonical in text_upto:
             display[char_id] = canonical
             continue
@@ -228,8 +244,10 @@ def name_collisions(display: dict[str, str], characters: dict[str, dict] | None
     for char_id, name in (display or {}).items():
         seen.setdefault(name, []).append(char_id)
     return [
-        (name, ids, [((characters or {}).get(char_id) or {}).get('canonical')
-                     for char_id in ids])
+        (name, ids, [
+            _canonical_label((characters or {}).get(char_id))
+            for char_id in ids
+        ])
         for name, ids in seen.items() if len(ids) > 1
     ]
 
@@ -306,7 +324,7 @@ def attested_surname(char: dict | None, book_text: str,
     """
     if (char or {}).get('name_distinctiveness') == 'common':
         return None
-    canon = strip_distinguisher((char or {}).get('canonical') or '')
+    canon = strip_distinguisher(_canonical_label(char))
     if not (2 <= len(canon) <= 3) or canon not in (book_text or ''):
         return None
     if _STEM_KINSHIP.match(canon):              # 「婆母」「表哥」「堂姐」：首字不是姓

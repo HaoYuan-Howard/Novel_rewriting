@@ -233,13 +233,14 @@ def test_writer_context_excludes_every_global_source_span_byte():
 # ── 三、名字表的三个方向 ─────────────────────────────────────────────────
 
 def test_a_fabricated_canonical_is_replaced_by_an_attested_appellation():
-    """⭐ `canonical` 在原文里出现 **0 次**时退回出现最多的那个有据叫法。
-
-    实测某本 5 个角色的 canonical 原文 0 次（`苏父` `苏母` …），其中 3 个**已经写进了成品**。
-    原文里从没有人管他叫「苏父」——那是 registry 的记账标签，不是这本书的语言。
-    """
-    chars = {'char_001': {'canonical': '苏父',
-                          'aliases': [{'surface': '爹爹'}, {'surface': '老爷'}]}}
+    """⭐ `canonical_surface` 在原文里出现 **0 次**时退回出现最多的那个有据叫法。"""
+    chars = {'char_001': {
+        'canonical_surface': '苏父',
+        'surfaces': [
+            {'surface': '爹爹', 'kind': 'relational_address', 'identity_revealed_from': 1},
+            {'surface': '老爷', 'kind': 'social_address', 'identity_revealed_from': 1},
+        ],
+    }}
     book = '爹爹说了算。爹爹又说。老爷回来了。'
     disp, subs, unattested = display_names(chars, book)
     assert disp == {'char_001': '爹爹'} and subs == {'苏父': '爹爹'} and not unattested
@@ -248,19 +249,16 @@ def test_a_fabricated_canonical_is_replaced_by_an_attested_appellation():
 def test_a_character_with_no_attested_appellation_is_a_terminal_state():
     from tests import plot_fixtures as fixture
     registry = deepcopy(fixture.REGISTRY)
-    registry['characters']['char_001'].update(canonical='春江阁女子', aliases=[])
+    registry['characters']['char_001'].update(
+        canonical_surface='春江阁女子', surfaces=[])
     with pytest.raises(RefusedByStructure, match='没有当前可辨认'):
         build_writer_context(fixture.plan(), fixture.GLOBAL, fixture.blueprint(), fixture.MAIN,
                              characters=registry)
 
 
 def test_the_chapter_level_table_withholds_a_name_the_book_level_one_would_give():
-    """⭐ **章级表是书级表的纯粹外推，而两者的结论必须不同。**
-
-    书级表用全书正文判有据，于是一个到第 4 章才被指名的人，**在第 1 章就有了名字**。
-    实测某本 10/12 人的 display_name 在 ch1 尚未出现。
-    """
-    chars = {'char_003': {'canonical': '岑亦', 'aliases': []}}
+    """⭐ **章级表是书级表的纯粹外推，而两者的结论必须不同。**"""
+    chars = {'char_003': {'canonical_surface': '岑亦', 'surfaces': []}}
     whole = '第一章里没有名字。\n第四章：岑亦终于露面。'
     upto1 = '第一章里没有名字。'
     assert display_names(chars, whole)[0] == {'char_003': '岑亦'}
@@ -268,12 +266,10 @@ def test_the_chapter_level_table_withholds_a_name_the_book_level_one_would_give(
 
 
 def test_a_collision_is_made_visible_not_resolved():
-    """⚠ **不在这里替它选一个**：原文若本就管两个人都叫这个，改写照样叫才是保真的。
-
-    `canonical 全书唯一` 守的是**注册键**，而写手拿到的是它的**派生值**——
-    区分词恰恰是为消歧加的，派生时又把它剥回去，**而两边的检查各自都是绿的**。
-    """
-    chars = {'char_a': {'canonical': '李嬷嬷(慧贵妃宫)'}, 'char_b': {'canonical': '李嬷嬷(长公主府)'}}
+    chars = {
+        'char_a': {'canonical_surface': '李嬷嬷(慧贵妃宫)', 'surfaces': []},
+        'char_b': {'canonical_surface': '李嬷嬷(长公主府)', 'surfaces': []},
+    }
     disp = {'char_a': '李嬷嬷', 'char_b': '李嬷嬷'}
     cols = name_collisions(disp, chars)
     assert len(cols) == 1 and cols[0][0] == '李嬷嬷' and sorted(cols[0][1]) == ['char_a', 'char_b']
@@ -291,7 +287,7 @@ def test_registry_label_never_replaces_distinct_presentations_in_writer_text():
     """旧全树替换已退役；称谓归属必须由显式 ActorRef 保护，不能按字串改写别人的身份。"""
     from tests.test_plot_actor_resolution import presented
     bps, main, registry, old, new = presented()
-    registry['characters']['char_001']['canonical'] = '内部登记标签'
+    registry['characters']['char_001']['canonical_surface'] = '内部登记标签'
     ctx = _compile_view(bps, main, registry)
     assert '内部登记标签' not in str(ctx)
     roster = ctx['chapters'][0]['characters']

@@ -386,7 +386,7 @@ GlobalEdit v1～v5 不迁移；人工免费获取 v6 模板后重新核对。旧
 
 ## 五、现行判据
 
-当前注册表共 **26 条**：**20 hard、1 info、2 metric、3 unver**。
+当前注册表共 **27 条**：**21 hard、1 info、2 metric、3 unver**。
 规则、严重度、修复 owner 以 `contracts/judges/stage2.py` 为唯一注册；本节摘要由契约测试对账。
 Core 的 `global_core_contract`、`global_temporal_contract`、
 `canon_chapter_refs_dangling`、`relation_dangling`、`global_evidence_unlocated` 只验证形状、
@@ -399,7 +399,7 @@ Core 的 `global_core_contract`、`global_temporal_contract`、
 | 人物出场、称谓与证据 | `character_unattested`、`address_from_out_of_range`、`address_bare_pronoun`、`address_unlocatable`、`global_evidence_unlocated`、`hedge_words` |
 | 人物语义未审 | `character_semantics_unverifiable`（常驻 UNVER；身份描述改由 Blueprint State） |
 | 蓝图输入与章对齐 | `upstream_missing`、`section_id_leak`、`chapter_coverage`、`chapter_order`、`scope_violation` |
-| 蓝图结构、引用与证据 | `plot_contract`、`plot_evidence`、`plot_state_continuity`、`plot_global_refs`、`present_ids_dangling` |
+| 蓝图结构、引用与证据 | `plot_contract`、`plot_evidence`、`plot_state_continuity`、`plot_global_refs`、`present_ids_dangling`、`mention_actor_coverage` |
 | 蓝图提示与读数 | `pronoun_surface_unattested`、`plot_shape`、`context_scope`、`plot_semantics` |
 
 机器修复只派给拥有对应字段的 producer。证据问题先免费编辑/复验；正文锚点不得漂移后

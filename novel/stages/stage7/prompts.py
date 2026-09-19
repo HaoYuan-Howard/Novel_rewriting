@@ -17,6 +17,12 @@ from novel.core.naming import registered_surfaces, strip_distinguisher
 from novel.llm.prompts import fill, with_json_shape
 from novel.stages.stage7.subs import surface_hits
 
+
+def _canonical_label_for_rename(character: dict | None) -> str:
+    row = character or {}
+    raw = row.get('canonical_surface') or row.get('canonical') or ''
+    return str(raw) if isinstance(raw, str) else ''
+
 #: 改名模型的现行 system prompt；六条规则的证据写在规则旁边。
 #: ⚠ 今天没有需要插值的枚举——但仍然走 `fill()`，理由见 `rename_system()`。
 RENAME_SYS = """\
@@ -122,25 +128,17 @@ def build_material(*, title: str, registry: dict[str, dict], relations: list[dic
     chars: dict[str, dict] = {}
     universe: set[str] = set()
     for cid, v in sorted((registry or {}).items()):
-        raw = (v or {}).get('canonical') or ''
+        raw = _canonical_label_for_rename(v)
         canon = strip_distinguisher(raw)
-        # Characters v2 每种有据字面只登记一次；canonical 有独立回答位，
-        # 其余别名必须逐项交代去向，共享称谓不因去重而合并不同人物。
+        # Characters v3：canonical_surface 有独立回答位，其余 surfaces 必须逐项交代。
         surs = sorted({surface for surface in registered_surfaces(v)
                        if surface not in (raw, canon)})
-        # ⚠ `universe` 收**剥掉区分词的** canonical，不收 `raw`：带区分词的形态
-        #   （`书童(陆明洲)`）是 registry 为满足键唯一造出来的，**按构造在正文里出现 0 次**，
-        #   拿它去查覆盖只会得到一条必然命中的假阳（实测两本各 2 条）。
-        #   `raw` 的替换由 `build_subs` 自动补一条，不需要模型表态。
         universe |= set(surs) | ({canon} if canon else set())
         chars[cid] = {
             'canonical': canon,
-            # 带区分词的原形也要给：它进不了正文，但**新人物表要显示它**，
-            # 而且模型据此知道「这个名字是记账标签不是真名」。
             **({'canonical_raw': raw} if raw != canon else {}),
             'aliases': surs,
-            'role': (v or {}).get('role'),
-            'attested': canon in (book_text or ''),   # canonical 在原文里有没有据
+            'attested': canon in (book_text or ''),
         }
     # 每个称呼在成品里出现几次——确定性派生的事实，帮模型分辨「这是名字还是一次性绰号」。
     # ⚠⚠ 走 `surface_hits`（单次扫描的**独立命中**），**绝不 `str.count`**：

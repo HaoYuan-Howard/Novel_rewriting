@@ -205,6 +205,61 @@ def actor_refs(value: Any) -> list[ActorRef]:
     return [ref for item in value.values() for ref in actor_refs(item)]
 
 
+def required_char_ids_from_mentions(
+        mentions: Mapping[str, Any] | Sequence[Any] | None,
+        chapter_ordinal: int,
+        *,
+        characters: Mapping[str, Any] | None = None,
+) -> frozenset[str]:
+    """本章 mention_uses HARD 义务：bound 且非 pronoun 的已确认人物必须进 ActorRef。
+
+    excluded / unresolved / 纯 pronoun 不产生义务。characters 若提供，仅
+    status=confirmed（或缺省视为 confirmed）计入；未提供时凡有 char_id 即计。
+    """
+    if mentions is None:
+        return frozenset()
+    rows: Sequence[Any]
+    if isinstance(mentions, Mapping):
+        rows = list(mentions.values())
+    else:
+        rows = list(mentions)
+    required: set[str] = set()
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        if row.get('disposition') != 'bound':
+            continue
+        if row.get('kind') == 'pronoun':
+            continue
+        if row.get('chapter_ordinal') != chapter_ordinal:
+            continue
+        cid = row.get('char_id')
+        if not isinstance(cid, str) or not cid:
+            continue
+        if characters is not None:
+            entity = characters.get(cid)
+            if not isinstance(entity, Mapping):
+                continue
+            status = entity.get('status', 'confirmed')
+            if status != 'confirmed':
+                continue
+        required.add(cid)
+    return frozenset(required)
+
+
+def missing_mention_actors(
+        chapter: PlotBlueprint,
+        mentions: Mapping[str, Any] | Sequence[Any] | None,
+        *,
+        characters: Mapping[str, Any] | None = None,
+) -> frozenset[str]:
+    """返回本章 ActorRef 未覆盖的 required mention 人物。"""
+    used = {actor.char_id for actor in actor_refs(chapter)}
+    required = required_char_ids_from_mentions(
+        mentions, chapter.chapter_ordinal, characters=characters)
+    return frozenset(sorted(required - used))
+
+
 def binding_catalog(chapters: Sequence[PlotBlueprint]) -> dict[str, ActorBinding]:
     result = {}
     for chapter in chapters:

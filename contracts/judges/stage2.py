@@ -159,6 +159,12 @@ _hard('plot_global_refs', '状态的共享主体引用属于本章实际提供�
       fix=FIX_REGEN)
 _hard('present_ids_dangling', '参与者、在场者及叙述身份均来自有据人物闭集', 'R-3.7b',
       fix=FIX_REGEN)
+_hard('mention_actor_coverage',
+      '本章 bound 非代词已确认人物必须出现在 ActorRef', 'R-3.7e',
+      fix=FIX_REGEN,
+      note='Characters.mentions 中 disposition=bound 且 kind≠pronoun 的 confirmed '
+           'char_id 必须进入本章 participant/present/narrator/holder/observer；'
+           'excluded/unresolved/纯 pronoun 不产生义务。')
 _hard('scope_violation', '每次逻辑抽取只返回请求章节', 'R-3.16b',
       note='scope_violations 必须显式记录，缺失不能当作空列表。')
 _info('pronoun_surface_unattested', '叙述者自称字面有本章原文依据', 'R-3.14b')

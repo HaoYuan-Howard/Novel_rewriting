@@ -11,9 +11,9 @@ relations 保存需要跨章追踪的人物关系；arc_secrets 保存揭示后�
 不以篇幅或固定条数截断，完整覆盖满足门槛的事实；单场对话、普通行动、临时状态、局部信息
 传递和人物各自知情都留给完整剧情 Blueprint 的 Beat/State，不能塞进 Global。
 
-人物登记独立管理。只引用本轮提供的人物句柄；不可增改人物身份、角色介绍或称谓表。
-独立 Global 请求的人物表只含识别所需的 canonical/surfaces/role；联合 Analyze 必须先按
-Characters 契约完成本轮人物草稿，再在 Global 使用其 c1、c2 等局部句柄。
+人物登记独立管理。只引用本轮提供的人物句柄；不可增改人物身份或称谓表。
+独立 Global 请求的人物表只含识别所需的 canonical_surface / surfaces；句柄来自本轮
+Characters 正式产物或显式投影，不另开联合 Analyze 先写人物草稿。
 
 【setting】era 与 social_context 源文未建立时填 null，对应 evidence_refs=[]；有值必须有证据。
 【world_rules】用 rule_ref=w1…；kind 取结构化契约枚举。每个版本用规则内 version_ref=v1…，

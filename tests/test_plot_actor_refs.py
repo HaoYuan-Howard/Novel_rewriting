@@ -113,16 +113,10 @@ def test_relation_uses_bind_actual_presentations_without_inventing_a_state():
 def test_canonical_first_appearance_does_not_hide_earlier_registered_persona():
     people = {'char_001': {
         'canonical_surface': '芸娘',
-        'canonical': '芸娘',
         'first_mention_chapter': 1,
-        'first_chapter': 1,
         'surfaces': [
             {'surface': '娘子', 'kind': 'social_address', 'identity_revealed_from': 4},
             {'surface': '芸娘', 'kind': 'proper_name', 'identity_revealed_from': 4},
-        ],
-        'aliases': [
-            {'surface': '娘子', 'identity_revealed_from': 4},
-            {'surface': '芸娘', 'identity_revealed_from': 4},
         ],
     }}
     inventory = blueprint_character_prompt_inventory(people, [
@@ -130,6 +124,53 @@ def test_canonical_first_appearance_does_not_hide_earlier_registered_persona():
     assert inventory['visible_character_refs'][1] == {'char_001': ['娘子']}
     assert inventory['character_bindings'][1]['char_001'] == [
         {'surface': '娘子', 'identity_revealed_from': 4}]
+
+
+def test_required_mention_actors_cover_bound_relational_not_pronoun():
+    from novel.stages.stage2.blueprint.compile import (
+        actor_refs, missing_mention_actors, required_char_ids_from_mentions,
+    )
+    from contracts.schema.plot import ActorRef
+
+    mentions = {
+        'm_aaaaaaaaaaaaaaaa': {
+            'mention_id': 'm_aaaaaaaaaaaaaaaa', 'chapter_ordinal': 1,
+            'surface': '女儿', 'kind': 'relational_address', 'disposition': 'bound',
+            'char_id': 'char_099',
+        },
+        'm_bbbbbbbbbbbbbbbb': {
+            'mention_id': 'm_bbbbbbbbbbbbbbbb', 'chapter_ordinal': 1,
+            'surface': '她', 'kind': 'pronoun', 'disposition': 'bound',
+            'char_id': 'char_098',
+        },
+        'm_cccccccccccccccc': {
+            'mention_id': 'm_cccccccccccccccc', 'chapter_ordinal': 1,
+            'surface': '路人', 'kind': 'proper_name', 'disposition': 'excluded',
+            'char_id': None,
+        },
+    }
+    characters = {
+        'char_099': {'status': 'confirmed', 'canonical_surface': '女儿'},
+        'char_098': {'status': 'confirmed', 'canonical_surface': '她'},
+    }
+    required = required_char_ids_from_mentions(mentions, 1, characters=characters)
+    assert required == frozenset({'char_099'})
+
+    chapter = compiled()
+    missing = missing_mention_actors(chapter, mentions, characters=characters)
+    assert missing == frozenset({'char_099'})
+
+    pronoun_only = {k: v for k, v in mentions.items() if k != 'm_aaaaaaaaaaaaaaaa'}
+    assert required_char_ids_from_mentions(
+        pronoun_only, 1, characters=characters) == frozenset()
+    assert missing_mention_actors(
+        chapter, pronoun_only, characters=characters) == frozenset()
+
+    chapter.beats[0].participants.append(
+        ActorRef(char_id='char_099', presentation_ref=None))
+    assert missing_mention_actors(
+        chapter, mentions, characters=characters) == frozenset()
+    assert 'char_098' not in {a.char_id for a in actor_refs(chapter)}
 
 
 def test_plain_public_nicknames_can_share_one_binding():

@@ -23,13 +23,10 @@ class BlueprintCharacterPromptInventory(TypedDict):
 
 
 def _surface_rows(character: Mapping[str, Any]) -> list[dict[str, Any]]:
-    """兼容 v3 ``surfaces`` 与存量 ``aliases`` 形状。"""
+    """只读 v3 ``surfaces``；缺字段视为无称谓行，不回退 ``aliases``。"""
     surfaces = character.get('surfaces')
     if isinstance(surfaces, list):
         return [row for row in surfaces if isinstance(row, dict)]
-    aliases = character.get('aliases')
-    if isinstance(aliases, list):
-        return [row for row in aliases if isinstance(row, dict)]
     return []
 
 
@@ -37,9 +34,6 @@ def _first_mention(character: Mapping[str, Any]) -> int | None:
     first = character.get('first_mention_chapter')
     if isinstance(first, int) and first > 0:
         return first
-    legacy = character.get('first_chapter')
-    if isinstance(legacy, int) and legacy > 0:
-        return legacy
     return None
 
 
@@ -75,7 +69,7 @@ def character_ref_inventory(
         surfaces: list[tuple[str, int | None]] = []
         for raw_address in _surface_rows(raw_character):
             kind = raw_address.get('kind')
-            # 关系称谓不进全书 alias 投影；存量 aliases 无 kind 时保留。
+            # 关系称谓不进全书称名投影。
             if kind == 'relational_address':
                 continue
             if kind is not None and kind not in BOOK_LEVEL_SURFACE_KINDS:

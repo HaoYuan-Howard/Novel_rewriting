@@ -273,7 +273,7 @@ def check_workflow_write(base: str | os.PathLike[str]) -> None:
         _require_clean_base(base)
 
 
-def initialize_workflow(base: str | os.PathLike[str]) -> WorkflowManifestV8:
+def initialize_workflow(base: str | os.PathLike[str]) -> WorkflowManifestV9:
     """仅空 base 可初始化；旧书不能靠删账或换代码获得新额度。"""
     target = _safe(base, paths.workflow_manifest_path(base))
     # 拒绝存量 base 必须零写；锁本身会创建父目录，因此先作只读预检。
@@ -282,18 +282,20 @@ def initialize_workflow(base: str | os.PathLike[str]) -> WorkflowManifestV8:
     with path_transaction_lock(target):
         existing = workflow_manifest(base)
         if existing is not None:
-            if not isinstance(existing, WorkflowManifestV8):
+            if not isinstance(existing, WorkflowManifestV9):
                 raise WorkUnitRefused(
-                    '存量 workflow manifest 不是 v8；STR-03-S4 不迁移，请使用 clean base')
+                    '存量 workflow manifest 不是 v9；STR-03-S2-CH 不迁移，请使用 clean base')
             return existing
         _require_clean_base(base)
-        manifest = WorkflowManifestV8(task_id=hashlib.sha256(uuid4().bytes).hexdigest(),
+        manifest = WorkflowManifestV9(task_id=hashlib.sha256(uuid4().bytes).hexdigest(),
                                       created_at=int(time.time()))
         _write(base, target, manifest)
         return manifest
 
 
-def require_workflow(base: str | os.PathLike[str]) -> WorkflowManifestV7 | WorkflowManifestV8:
+def require_workflow(
+        base: str | os.PathLike[str],
+) -> WorkflowManifestV7 | WorkflowManifestV8 | WorkflowManifestV9:
     manifest = workflow_manifest(base)
     if manifest is None:
         return initialize_workflow(base)

@@ -8,11 +8,15 @@ from pydantic import ValidationError
 from contracts.schema.plot import PlotBlueprint
 from novel.report.findings import Outcome, ran, unverifiable
 from novel.stages.stage2.shared.character_refs import blueprint_character_prompt_inventory
-from novel.stages.stage2.blueprint.compile import (validate_evidence, validate_entry_states,
-    validate_actors, actor_refs, available_actor_bindings)
+from novel.stages.stage2.blueprint.compile import (
+    validate_evidence, validate_entry_states,
+    validate_actors, actor_refs, available_actor_bindings,
+    missing_mention_actors,
+)
 
 RULES = ('plot_contract', 'plot_evidence', 'plot_state_continuity', 'plot_global_refs',
-         'present_ids_dangling', 'scope_violation', 'pronoun_surface_unattested',
+         'present_ids_dangling', 'mention_actor_coverage', 'scope_violation',
+         'pronoun_surface_unattested',
          'plot_shape', 'context_scope', 'plot_semantics')
 
 
@@ -86,6 +90,18 @@ def check_plot(c: Any) -> list[Outcome]:
         if visible is not None and not chars <= set(visible.get(ordinal, {})):
             fail('present_ids_dangling',
                  f'本章不可引用的人物：{sorted(chars - set(visible.get(ordinal, {})))}', ordinal)
+        registry = getattr(c, 'registry', None)
+        if isinstance(registry, dict):
+            mentions = registry.get('mentions')
+            char_map = registry.get('characters') if isinstance(
+                registry.get('characters'), dict) else c.chars
+            if isinstance(mentions, dict) and isinstance(char_map, dict):
+                missing = missing_mention_actors(
+                    chapter, mentions, characters=char_map)
+                if missing:
+                    fail('mention_actor_coverage',
+                         f'本章 bound 非代词人物未进 ActorRef：{sorted(missing)}',
+                         ordinal)
         if c.has_mt:
             for row in chapter.narration:
                 for surface in row.pronoun_surfaces:
@@ -122,6 +138,11 @@ def check_plot(c: Any) -> list[Outcome]:
     if visible is None:
         out = [unverifiable('present_ids_dangling', '缺少有据人物闭集，不能判定成员许可')
                if row.rule == 'present_ids_dangling' else row for row in out]
+    if getattr(c, 'registry', None) is None or not isinstance(
+            (getattr(c, 'registry', None) or {}).get('mentions'), dict):
+        out = [unverifiable('mention_actor_coverage',
+                            '缺少 Characters.mentions，不能判定 mention→ActorRef 覆盖')
+               if row.rule == 'mention_actor_coverage' else row for row in out]
     if not c.has_gg:
         out = [unverifiable('plot_global_refs', '缺少当前 Global 投影，不能判定共享引用')
                if row.rule == 'plot_global_refs' else row for row in out]

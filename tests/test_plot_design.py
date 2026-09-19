@@ -24,17 +24,12 @@ def planner_characters():
     return {'characters': {
         cid: {
             'canonical_surface': label,
-            'canonical': label,
             'first_mention_chapter': 1,
-            'first_chapter': 1,
             'name_distinctiveness': 'common',
+            'status': 'confirmed',
             'surfaces': [{'surface': label, 'kind': 'proper_name', 'identity_revealed_from': 1}],
-            'aliases': [{'surface': label, 'identity_revealed_from': 1, 'evidence_refs': []}],
-            'first_appearance_evidence_refs': [],
-            'role_evidence_refs': [],
         }
-        for cid, label, role in [('char_001', '娘子', '施救者与决定离开的人'),
-                                  ('char_002', '夫君', '被救者与挽留的人')]
+        for cid, label in [('char_001', '娘子'), ('char_002', '夫君')]
     }, 'evidence_anchors': {}}
 
 

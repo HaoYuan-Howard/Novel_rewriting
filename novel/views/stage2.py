@@ -112,7 +112,7 @@ def global_view(base: str | os.PathLike[str], sid: str) -> GlobalView:
 
     def ref(raw: str) -> NameRef:
         person = chars.get(raw)
-        return (NameRef(raw=raw, display=person.canonical, resolved=True)
+        return (NameRef(raw=raw, display=person.canonical_surface, resolved=True)
                 if person is not None else misses.unresolved(raw))
 
     relations = [GlobalRelationLine(

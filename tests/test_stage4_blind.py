@@ -157,10 +157,8 @@ def test_blind_projection_allows_empty_surfaces_for_present_first_person():
     characters['characters']['char_001'] = {
         **characters['characters']['char_001'],
         'canonical_surface': '芸娘',
-        'canonical': '芸娘',
         'first_mention_chapter': 1,
         'surfaces': [{'surface': '芸娘', 'kind': 'proper_name', 'identity_revealed_from': 4}],
-        'aliases': [{'surface': '芸娘', 'identity_revealed_from': 4, 'evidence_refs': []}],
     }
     raw = _blueprints(1)
     # 去掉本章 binding，迫使走 null presentation_ref → alias 回退。
@@ -182,17 +180,14 @@ def test_blind_projection_still_refuses_empty_surfaces_before_first_chapter():
     characters['characters']['char_001'] = {
         **characters['characters']['char_001'],
         'first_mention_chapter': 2,
-        'first_chapter': 2,
         'canonical_surface': '芸娘',
-        'canonical': '芸娘',
         'surfaces': [{'surface': '芸娘', 'kind': 'proper_name', 'identity_revealed_from': 4}],
-        'aliases': [{'surface': '芸娘', 'identity_revealed_from': 4, 'evidence_refs': []}],
     }
     raw = _blueprints(1)
     raw['blueprints'][0]['actor_bindings'] = [
         b for b in raw['blueprints'][0].get('actor_bindings', [])
         if b.get('char_id') != 'char_001']
-    with pytest.raises(BlindPlanError, match='可辨认呈现|不能回退 canonical'):
+    with pytest.raises(BlindPlanError, match='可辨认呈现|不能回退 canonical|first_mention_chapter'):
         build_blind_projection(
             raw, root_clean_sha1=ROOT, characters=characters, global_g=GLOBAL,
             main_text=[{'chapter_ordinal': 1, 'text': SOURCE}])

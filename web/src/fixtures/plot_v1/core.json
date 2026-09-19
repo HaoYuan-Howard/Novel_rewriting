@@ -175,44 +175,30 @@
     "registry": {
       "characters": {
         "char_001": {
-          "canonical": "李宝珠",
-          "aliases": [
+          "canonical_surface": "李宝珠",
+          "status": "confirmed",
+          "first_mention_chapter": 1,
+          "name_usable_from": 1,
+          "surfaces": [
             {
               "surface": "李宝珠",
-              "identity_revealed_from": 1,
-              "evidence_refs": [
-                "ev_1d1cfa982a454fa562201158"
-              ]
+              "kind": "proper_name",
+              "identity_revealed_from": 1
             }
-          ],
-          "first_chapter": 1,
-          "first_appearance_evidence_refs": [
-            "ev_1d1cfa982a454fa562201158"
-          ],
-          "role": "沈家的独女，替父亲掌管家中账目",
-          "role_evidence_refs": [
-            "ev_cc3ebbca1058af3ebccd0267"
           ],
           "name_distinctiveness": "high"
         },
         "char_002": {
-          "canonical": "母亲",
-          "aliases": [
+          "canonical_surface": "母亲",
+          "status": "confirmed",
+          "first_mention_chapter": 2,
+          "name_usable_from": 2,
+          "surfaces": [
             {
               "surface": "母亲",
-              "identity_revealed_from": 2,
-              "evidence_refs": [
-                "ev_353393cabf9cccf810c9487d"
-              ]
+              "kind": "proper_name",
+              "identity_revealed_from": 2
             }
-          ],
-          "first_chapter": 2,
-          "first_appearance_evidence_refs": [
-            "ev_353393cabf9cccf810c9487d"
-          ],
-          "role": "李宝珠的娘，管着老宅内院的日常",
-          "role_evidence_refs": [
-            "ev_353393cabf9cccf810c9487d"
           ],
           "name_distinctiveness": "medium"
         }
@@ -269,6 +255,38 @@
         ],
         "characters_edit": null,
         "retired_character_ids": []
+      },
+      "mentions": {
+        "m_0000000000000000": {
+          "mention_id": "m_0000000000000000",
+          "chapter_ordinal": 1,
+          "start": 0,
+          "end": 3,
+          "surface": "李宝珠",
+          "kind": "proper_name",
+          "disposition": "bound",
+          "char_id": "char_001",
+          "exclude_reason": null,
+          "reveals_identity": true,
+          "evidence_refs": [
+            "ev_1d1cfa982a454fa562201158"
+          ]
+        },
+        "m_0000000000000001": {
+          "mention_id": "m_0000000000000001",
+          "chapter_ordinal": 2,
+          "start": 0,
+          "end": 2,
+          "surface": "母亲",
+          "kind": "proper_name",
+          "disposition": "bound",
+          "char_id": "char_002",
+          "exclude_reason": null,
+          "reveals_identity": true,
+          "evidence_refs": [
+            "ev_353393cabf9cccf810c9487d"
+          ]
+        }
       }
     },
     "evidence_snippets": {
@@ -282,52 +300,14 @@
         {
           "kind": "replace",
           "char_id": "char_001",
-          "character": {
-            "canonical": "李宝珠",
-            "aliases": [
-              {
-                "surface": "李宝珠",
-                "identity_revealed_from": 1,
-                "evidence_refs": [
-                  "ev_1d1cfa982a454fa562201158"
-                ]
-              }
-            ],
-            "first_chapter": 1,
-            "first_appearance_evidence_refs": [
-              "ev_1d1cfa982a454fa562201158"
-            ],
-            "role": "沈家的独女，替父亲掌管家中账目",
-            "role_evidence_refs": [
-              "ev_cc3ebbca1058af3ebccd0267"
-            ],
-            "name_distinctiveness": "high"
-          }
+          "canonical_surface": "李宝珠",
+          "status": "confirmed"
         },
         {
           "kind": "replace",
           "char_id": "char_002",
-          "character": {
-            "canonical": "母亲",
-            "aliases": [
-              {
-                "surface": "母亲",
-                "identity_revealed_from": 2,
-                "evidence_refs": [
-                  "ev_353393cabf9cccf810c9487d"
-                ]
-              }
-            ],
-            "first_chapter": 2,
-            "first_appearance_evidence_refs": [
-              "ev_353393cabf9cccf810c9487d"
-            ],
-            "role": "李宝珠的娘，管着老宅内院的日常",
-            "role_evidence_refs": [
-              "ev_353393cabf9cccf810c9487d"
-            ],
-            "name_distinctiveness": "medium"
-          }
+          "canonical_surface": "母亲",
+          "status": "confirmed"
         }
       ]
     },

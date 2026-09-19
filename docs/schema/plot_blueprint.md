@@ -54,10 +54,13 @@ at_beat_ref 和 evidence_refs，不回写旧章正文。被取代状态的结束
 编译器在 `char_id` 合法时把历史句柄确定性压成 `null`（0 LLM），不按全书目录
 碰巧解析。需要特定表面身份时在本章新建 binding。
 `presentation_ref` 缺失、错归属或同章多呈现未指定时，保留错误交 owner 免费订正。
-逐章 ActorRef 闭集来自 Blueprint 称名投影：已到 `first_chapter` 的实体即使登记名
+逐章 ActorRef 闭集来自 Blueprint 称名投影：已到 `first_mention_chapter` 的实体即使登记名
 尚未字面出现（常见第一人称「我」）也进入闭集，`surfaces` 可为空——可引用
 `char_id`，不可伪造未证实的 `actor_bindings.surfaces`；裸代词走
 `narration.pronoun_surfaces`。
+**mention_uses（R-3.7e）**：本章 Characters.mentions 中 `disposition=bound` 且
+`kind≠pronoun` 的已确认人物，必须出现在本章 ActorRef（participant / present /
+narrator / holder / observer 任一）；excluded / unresolved / 纯 pronoun 不产生 HARD。
 唯一绑定允许省略 presentation_ref；晚章新增绑定不改写旧章已解析身份。
 历史 State 按其原始使用章解析，后章新增绑定不改写此前默认身份。
 entry_states 可附带历史绑定与证据供 Continuity / 定向修订阅读，但**不得**把历史

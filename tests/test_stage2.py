@@ -216,17 +216,17 @@ def test_real_stage2_report_separates_instance_detail_from_stable_rule_notes():
 def test_hedge_words_distinguish_definite_impossibility_and_field_effect():
     """「不可能」是确定判断；「不太可能」与双重否定重新打开可能性。"""
     chars = character_registry()
-    chars['characters']['char_001']['role'] = '家中长女，不太可能离开家业。'
-    chars['characters']['char_002']['canonical'] = '账房（疑似沈家的）'
+    chars['characters']['char_001']['canonical_surface'] = '不太可能离开家业'
+    chars['characters']['char_002']['canonical_surface'] = '账房（疑似沈家的）'
     outcomes = {outcome.rule: outcome for outcome in checks.check(
         global_g=knowledge_grounding(), blueprints=blueprints(),
         main_text=main_text(), characters=chars)}
     assert outcomes['hedge_words'].findings
 
     # 「不可能」不因子串「可能」误报；「或」的并列选择也不是模棱语。
-    for text in ('家中长女，不可能离开家业。', '御医建议过继或让父母再生。'):
+    for text in ('不可能离开家业', '过继或让父母再生'):
         chars = character_registry()
-        chars['characters']['char_001']['role'] = text
+        chars['characters']['char_001']['canonical_surface'] = text
         outcomes = {outcome.rule: outcome for outcome in checks.check(
             global_g=knowledge_grounding(), blueprints=blueprints(),
             main_text=main_text(), characters=chars)}
@@ -234,30 +234,24 @@ def test_hedge_words_distinguish_definite_impossibility_and_field_effect():
 
     # 双重否定把可能性打开，仍然是不确定。
     chars = character_registry()
-    chars['characters']['char_001']['role'] = '家中长女，并非不可能离开家业。'
+    chars['characters']['char_001']['canonical_surface'] = '并非不可能离开家业'
     outcomes = {outcome.rule: outcome for outcome in checks.check(
         global_g=knowledge_grounding(), blueprints=blueprints(),
         main_text=main_text(), characters=chars)}
     assert outcomes['hedge_words'].findings
 
 
-def test_role_fate_wordlist_remains_hard_because_role_reaches_writer():
-    from contracts.invariants import review_effect_of
-
+def test_residual_role_key_is_hard_because_v3_forbids_free_text_role():
+    """Characters v3 正式人物不得携带 role；残留键走 hedge_words HARD。"""
     chars = character_registry()
     chars['characters']['char_001']['role'] = '沈家账房，最终下狱'
-    outcome = next(outcome for outcome in checks.check(
+    outcomes = {outcome.rule: outcome for outcome in checks.check(
         global_g=knowledge_grounding(), blueprints=blueprints(),
-        main_text=main_text(), characters=chars)
-        if outcome.rule == 'role_leaks_fate')
-
-    rule = REGISTRY.get('role_leaks_fate')
-    assert outcome.findings, '转抄式结局词必须在进入 writer context 前阻断'
-    assert rule.sev == 'hard'
-    assert rule.fix == ('stage2.characters', '--resample')
-    assert 'role_leaks_fate' in _hard_hits(
+        main_text=main_text(), characters=chars)}
+    assert outcomes['hedge_words'].findings
+    assert 'hedge_words' in _hard_hits(
         knowledge_grounding(), chars, blueprints(), main_text())
-    assert review_effect_of('role') == 'blocking', '机械闸与 Stage4 前人审应共同保护 role'
+    assert outcomes['character_semantics_unverifiable'].unver_why
 
 
 def test_few_complete_beats_do_not_create_a_quota_or_semantic_pass():
@@ -265,7 +259,19 @@ def test_few_complete_beats_do_not_create_a_quota_or_semantic_pass():
     chapter = _ch(bp, 3)
     complete = '；'.join(row['content'] for row in chapter['beats'])
     evidence = sorted({ref for row in chapter['beats'] for ref in row['evidence_refs']})
-    chapter['beats'] = [{**chapter['beats'][0], 'content': complete, 'evidence_refs': evidence}]
+    # 合并参与者，避免折叠节点时误伤 mention→ActorRef 覆盖义务
+    participants = []
+    seen: set[str] = set()
+    for row in chapter['beats']:
+        for actor in row['participants']:
+            cid = actor['char_id']
+            if cid not in seen:
+                seen.add(cid)
+                participants.append(actor)
+    chapter['beats'] = [{
+        **chapter['beats'][0], 'content': complete, 'evidence_refs': evidence,
+        'participants': participants,
+    }]
     outcomes = {o.rule: o for o in checks.check(
         global_g=knowledge_grounding(), blueprints=bp, main_text=main_text(),
         characters=character_registry())}
@@ -341,8 +347,7 @@ def test_global_field_failures_route_to_their_typed_producers():
                         if rule.stage == 'stage2' and rule.fix == ('stage2.characters', '--resample')}
     assert character_routed == {
         'character_unattested', 'address_unlocatable', 'address_from_out_of_range',
-        'address_bare_pronoun', 'role_missing', 'role_repeats_name',
-        'role_leaks_fate', 'hedge_words',
+        'address_bare_pronoun', 'hedge_words',
     }
 
 
@@ -353,12 +358,12 @@ def test_the_two_unver_rules_always_speak():
     只披露不阻断；这里守的是「无论数据红绿，披露行都在」。
     """
     mutated = character_registry()
-    mutated['characters']['char_001']['role'] = '她最终沦为妾室'
+    mutated['characters']['char_001']['canonical_surface'] = '疑似沈家账房'
     for chars in (character_registry(), mutated):
         outs = {o.rule: o for o in checks.check(
             global_g=knowledge_grounding(), blueprints=blueprints(),
             main_text=main_text(), characters=chars)}
-        assert outs['role_fate_unverifiable'].unver_why
+        assert outs['character_semantics_unverifiable'].unver_why
         assert outs['secrets_absent'].unver_why
 
 
@@ -404,30 +409,23 @@ CASES: list[tuple[str, Mutator, str]] = [
      '少一章 blueprint'),
     ('chapter_order', _m(lambda g, r, b, m: b['blueprints'].reverse()),
      '章序倒过来。⚠ 集合对而顺序错，是分批产出年代的典型残留'),
-    # ── 二、独立人物登记 ────────────────────────────────────────────────
+    # ── 二、独立人物登记（Characters v3）────────────────────────────────
     ('character_unattested',
-     _m(lambda g, r, b, m: r['characters']['char_002'].__setitem__('first_chapter', 3)),
-     '首次出场章没有对应锚点 ⇒ 无法证明这个人物真的在原文出现过'),
+     _m(lambda g, r, b, m: r['characters']['char_002'].__setitem__(
+         'first_mention_chapter', 1)),
+     '首次出场章没有对应 bound mention ⇒ 无法证明这个人物真的在原文出现过'),
     ('address_from_out_of_range',
-     _m(lambda g, r, b, m: r['characters']['char_002']['aliases'][0]
+     _m(lambda g, r, b, m: r['characters']['char_002']['surfaces'][0]
         .__setitem__('identity_revealed_from', 99)),
      '称谓披露章指到正文集合外 ⇒ 这条称呼永不下发，产物里却看着一切正常'),
     ('address_unlocatable',
-     _m(lambda g, r, b, m: r['characters']['char_001']['aliases'][0]
+     _m(lambda g, r, b, m: r['characters']['char_001']['surfaces'][0]
         .__setitem__('surface', '原文没有的叫法')),
      '归属证据里找不到登记称谓 ⇒ 称谓与证据脱钩，下游拿到凭空的叫法'),
-    ('role_missing',
-     _m(lambda g, r, b, m: r['characters']['char_001'].__setitem__('role', '')),
-     '下游只下发 role，缺了写手不认识这个人。'
-     '⚠⚠ **这条反例只有在判据吃 dict 时才构造得出来**——载体上它是 `min_length=1`'),
-    ('role_repeats_name',
-     _m(lambda g, r, b, m: r['characters']['char_001'].__setitem__(
-         'role', r['characters']['char_001']['canonical'])),
-     'role 与 canonical 完全同字 ⇒ 写手拿到的是「李宝珠：李宝珠」'),
     ('hedge_words',
      _m(lambda g, r, b, m: r['characters']['char_001'].__setitem__(
-         'role', '疑似是沈家账房')),
-     'role 会下发写手，「疑似」说明静态身份没有抽到底'),
+         'canonical_surface', '疑似是沈家账房')),
+     'canonical_surface 会下发写手，「疑似」说明静态身份没有抽到底'),
     # ── 三、Global 四类知识与共享证据 ──────────────────────────────────
     ('global_core_contract',
      _m(lambda g, r, b, m: g['arc_secrets'][0].__setitem__('fact', None)),
@@ -472,6 +470,20 @@ CASES: list[tuple[str, Mutator, str]] = [
     ('present_ids_dangling', _m(lambda g, r, b, m: _ch(b, 1)['beats'][0].__setitem__(
          'participants', [{'char_id': 'char_999', 'presentation_ref': None}])),
      '不能引用当前人物闭集之外的人物，参与与在场必须分别建模'),
+    ('mention_actor_coverage',
+     _m(lambda g, r, b, m: r['mentions'].__setitem__('m_aaaaaaaaaaaaaaaa', {
+         'mention_id': 'm_aaaaaaaaaaaaaaaa',
+         'chapter_ordinal': 1,
+         'start': 0, 'end': 2,
+         'surface': '女儿',
+         'kind': 'relational_address',
+         'disposition': 'bound',
+         'char_id': 'char_002',
+         'exclude_reason': None,
+         'reveals_identity': False,
+         'evidence_refs': [],
+     })),
+     '章内 bound「女儿」等非代词人物必须进 ActorRef，否则合法漏人'),
     ('scope_violation', _m(lambda g, r, b, m: b['_provenance'].__setitem__(
          'scope_violations', ['批 1 被要求产 ch1，实际产了 ch1 与 ch5'])),
      '越章响应是显式失败；键缺失不能当作合法空列表'),
@@ -501,8 +513,8 @@ def test_every_hard_rule_without_a_disk_counterexample_has_a_synthetic_one():
     加一条 HARD 而不配样本，这条测试当场点名——
     否则那条新判据就又回到「从没见过反例」那一档，而它与一条不存在的判据长得一样。
     """
-    #: 两条 Global 规则保留已有 corpus 反例，正文语料验收与默认回归独立。
-    on_disk = {'address_bare_pronoun', 'role_leaks_fate'}
+    #: 代词整条称谓仍保留 corpus 反例；正文语料验收与默认回归独立。
+    on_disk = {'address_bare_pronoun'}
     hard = {r.rule for r in REGISTRY.all() if r.stage == 'stage2' and r.sev == 'hard'}
     covered = {c[0] for c in CASES}
     assert covered <= hard, f'CASES 里有不是 HARD 的：{sorted(covered - hard)}'

@@ -188,6 +188,7 @@ CLI、调度、最低读取边界和交付检查共用，任何一方不复述�
 | R-3.6c | 保留有据的现场、回忆、转述等时层，不按叙述语气推断时层，也不靠全书现场计数替代语义检查。 | `不适用`（时层与归因语义随 `plot_semantics` 披露，不产生审批待办） |
 | R-3.7 | 参与人、在场者、持有者、知情受众、叙述者、观察者和关系端点使用 ActorRef，内部 char_id 与可选 presentation_ref 分开。ActorBinding 只保存登记称谓、本章证据和可选公开 State；同一 Beat 的同一 char_id 可以有两个不同呈现，不按人物 ID 去重。 | `载体`（`contracts/schema/plot.py`） |
 | R-3.7b | ActorRef 按使用章解析；`presentation_ref` 只能指向**本章** `actor_bindings`，禁止保留他章正式句柄。历史句柄在 `char_id` 合法时由编译器压成 `null`（确定性，0 LLM）。多呈现必须明确本章绑定；缺失或归属歧义交 owner 免费订正，不取首项、不按全书历史碰巧解析。source_context 在场者仍与参与者、叙述者独立。 | `HARD`（`present_ids_dangling`）+ `novel/stages/stage2/blueprint/compile.py::compile_chapter` / `validate_actors` / `novel/stages/stage4/actors.py::ActorCatalog` |
+| R-3.7e | **mention_uses 覆盖义务（Characters v3 M2）**：对每一章，`CharacterRegistry.mentions` 中 `disposition=bound`、`kind≠pronoun`、且 `char_id` 指向 `status=confirmed` 的人物，必须出现在本章 `actor_refs`（participant / present / narrator / holder / observer 任一即可）。`excluded` / `unresolved` / 纯 `pronoun` 不产生 HARD。不要求每个 surface 字面单独占 ActorRef；ActorRef 仍须 ⊆ 称名闭集。 | `HARD`（`mention_actor_coverage`）+ `novel/stages/stage2/blueprint/compile.py::required_char_ids_from_mentions` / `novel/stages/stage2/blueprint/checks.py::check_plot` |
 | R-3.7c | 在场者不确定与合法无人分别表达；仅被提及、回忆、相信或转述的人物不自动视为当前在场。连续性与真实性的语义随 `plot_semantics` 披露。 | `不适用`（Stage2 语义未审，不产生审批待办） |
 | R-3.7d | 晚出现的名字、后台身份和结局不能被无据提前写入正文。人物称名仍守本章可见闭集；自由文本改写式后见之明由 Stage4 设计、结构审阅与最终人工验收核验。 | **`人`**（另见 `B-16`） |
 | R-3.8 | 章首、章尾及中间关键剧情均须完整抽取；证据范围覆盖全文不能证明语义完整，也不要求为了首末坐标覆盖生成空洞节点。剧情完整性随 `R-3.13` 的 `plot_semantics` 披露。 | `不适用`（Stage2 语义未审，不产生审批待办） |
@@ -806,7 +807,7 @@ reasoning 已含在 completion 中时不再累加。
 |---|---|
 | 非正文剔除（`stage0`，**13 条现役**） | R-0 |
 | 分章（`stage1`，**9 条现役**） | R-1 |
-| 人物与 Blueprint（`stage2`，**26 条现役**） | R-2、R-3 |
+| 人物与 Blueprint（`stage2`，**27 条现役**） | R-2、R-3 |
 | 设计、绑定与上下文（`stage4`，**29 条现役**） | R-5、R-6，含 `R-3.3b`、`R-3.21b` 的跨层交付 |
 | 写作与验收（`stage5`，**52 条现役**） | R-7、R-8 |
 | 文案（`stage6`，**22 条现役**） | R-9 |

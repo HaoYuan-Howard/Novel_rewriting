@@ -141,6 +141,40 @@ def test_lexicon_resolve_expands_typo_relational_and_name_license():
     )
 
 
+def test_knowledge_reference_falls_back_to_canonical_when_surfaces_empty():
+    """仅关系称谓登记时 book-level surfaces 可为空；Global 须仍能引用。"""
+    from novel.consumption import character_knowledge_reference
+
+    payload = {
+        'characters': {
+            'char_001': {
+                'canonical_surface': '女儿',
+                'status': 'confirmed',
+                'first_mention_chapter': 10,
+                'name_usable_from': None,
+                'surfaces': [],
+                'name_distinctiveness': 'common',
+            },
+            'char_002': {
+                'canonical_surface': '裴书远',
+                'status': 'confirmed',
+                'first_mention_chapter': 1,
+                'name_usable_from': 2,
+                'surfaces': [
+                    {'surface': '裴书远', 'kind': 'proper_name',
+                     'identity_revealed_from': 2},
+                ],
+                'name_distinctiveness': 'high',
+            },
+        },
+        'mentions': {},
+        'evidence_anchors': {},
+    }
+    ref = character_knowledge_reference(payload)
+    assert ref['char_001'] == {'canonical_surface': '女儿', 'surfaces': ['女儿']}
+    assert ref['char_002']['surfaces'] == ['裴书远']
+
+
 def test_ambiguous_same_surface_without_scopes_fails_closed():
     main_text = [_chapter(1, '嫂嫂来了。\n另一位嫂嫂也在。')]
     extract = BookExtractResponse(chapters=[

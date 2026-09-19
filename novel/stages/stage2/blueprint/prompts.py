@@ -13,6 +13,12 @@ character_refs / character_bindings 给出的 char_id 是本章唯一可用人�
 「我」等裸代词只放 narration.pronoun_surfaces。
 actor_bindings.surfaces 必须是 character_bindings 里已列字面，且证据段内有该字面。
 
+【mention→ActorRef 覆盖——违反即拒】
+本章原文中已确认归属（非代词）的人物，必须至少在一处 ActorRef 出现
+（participants / present / narrator / focalizer / holder / observer 任一即可）。
+不要只在 beat.content 里用名字提及却漏掉 ActorRef——那会判 HARD。
+纯代词、排除项、未决 surface 不要求进 ActorRef。
+
 【states——违反即拒】
 每条 state 写 semantic（必填语义主张）与可选 canonical_ref_hint。
 canonical_ref_hint 仅在本轮 global_subjects 已有对应主体时填写（kind/ref 原样抄写）；

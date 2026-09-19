@@ -439,15 +439,16 @@ def test_cli_preview_apply_and_completed_recover_are_reachable(setup, capsys):
     assert json.loads(capsys.readouterr().out) == applied
 
 
-def test_ordinary_workflow_rejects_v4_and_initializes_only_clean_v7(setup, tmp_path):
+def test_ordinary_workflow_rejects_v4_and_initializes_only_clean_v9(setup, tmp_path):
     raw = paths.workflow_manifest_path(setup['base']).read_bytes()
     with pytest.raises(TerminalState):
         work_units.require_workflow(setup['base'])
     assert paths.workflow_manifest_path(setup['base']).read_bytes() == raw
     current = work_units.initialize_workflow(tmp_path / 'clean')
-    assert current.schema_version == 7 and current.transition_ref is None
-    assert current.contract_version == 'stage2-mechanical-admission-v1'
-    assert current.artifact_versions.chapter_blueprints == 10
+    assert current.schema_version == 9 and current.transition_ref is None
+    assert current.contract_version == 'stage4-presentation-ir-v1'
+    assert current.artifact_versions.characters == 3
+    assert current.artifact_versions.chapter_blueprints == 11
     assert current.artifact_versions.writer_context == 10
     assert current.artifact_versions.stage6_prepare == 1
 

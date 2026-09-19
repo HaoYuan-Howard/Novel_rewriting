@@ -1,31 +1,77 @@
 import type { ArtifactState, CoreEvidenceAnchors, CoreEvidenceSnippets } from './stages'
 import type { Provenance } from './common'
 
-export interface CharacterNameBinding<Ref = string> {
+export type MentionKind =
+  | 'proper_name'
+  | 'short_name'
+  | 'name_bearing_address'
+  | 'relational_address'
+  | 'social_address'
+  | 'descriptive'
+  | 'pronoun'
+  | 'source_typo'
+
+export type MentionDisposition = 'bound' | 'excluded' | 'unresolved'
+
+export type CharacterIdentityStatus = 'confirmed' | 'unresolved_surface'
+
+export interface SurfaceRecord {
   surface: string
-  identity_revealed_from: number
-  evidence_refs: Ref[]
+  kind: MentionKind
+  identity_revealed_from: number | null
 }
 
-export interface RegisteredCharacter<Ref = string> {
-  canonical: string
-  aliases: CharacterNameBinding<Ref>[]
-  first_chapter: number
-  first_appearance_evidence_refs: Ref[]
-  role: string
-  role_evidence_refs: Ref[]
+export interface RegisteredCharacter {
+  canonical_surface: string
+  status: CharacterIdentityStatus
+  first_mention_chapter: number
+  name_usable_from: number | null
+  surfaces: SurfaceRecord[]
   name_distinctiveness: 'high' | 'medium' | 'common'
 }
 
-export type EditableCharacter = RegisteredCharacter<string | { chapter_ordinal: number; locator: string }>
+export interface MentionRecord {
+  mention_id: string
+  chapter_ordinal: number
+  start: number
+  end: number
+  surface: string
+  kind: MentionKind
+  disposition: MentionDisposition
+  char_id: string | null
+  exclude_reason: string | null
+  reveals_identity: boolean
+  evidence_refs: string[]
+}
+
+export type CharacterOperation =
+  | {
+      kind: 'add'
+      character_ref: string
+      canonical_surface: string
+      status?: CharacterIdentityStatus
+      seed_surface?: string | null
+      seed_kind?: MentionKind
+    }
+  | {
+      kind: 'replace'
+      char_id: string
+      canonical_surface: string
+      status?: CharacterIdentityStatus
+    }
+  | { kind: 'delete'; char_id: string; reason: string }
+  | {
+      kind: 'rebind_mentions'
+      mention_ids: string[]
+      disposition: MentionDisposition
+      char_id?: string | null
+      mention_kind: MentionKind
+      exclude_reason?: string | null
+    }
 
 export interface CharactersEdit {
   source_sha256: string
-  operations: (
-    | { kind: 'add'; character_ref: string; character: EditableCharacter }
-    | { kind: 'replace'; char_id: string; character: EditableCharacter }
-    | { kind: 'delete'; char_id: string; reason: string }
-  )[]
+  operations: CharacterOperation[]
 }
 
 export interface CharactersEditRequest {
@@ -53,6 +99,7 @@ export interface CharacterRegistryView {
   artifact: ArtifactState
   registry: {
     characters: Record<string, RegisteredCharacter>
+    mentions: Record<string, MentionRecord>
     evidence_anchors: CoreEvidenceAnchors
     _provenance: CharactersProvenance
   }

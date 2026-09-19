@@ -9,15 +9,12 @@ MAIN = [{'chapter_ordinal': 1, 'text': TEXT}]
 CHARACTERS = {
     cid: {
         'canonical_surface': name,
-        'canonical': name,  # character_refs 仍容忍
         'name_distinctiveness': 'high',
         'first_mention_chapter': 1,
-        'first_chapter': 1,
         'surfaces': [{'surface': name, 'kind': 'proper_name', 'identity_revealed_from': 1}],
-        'aliases': [{'surface': name, 'identity_revealed_from': 1, 'evidence_refs': []}],
-        'first_appearance_evidence_refs': [], 'role_evidence_refs': [],
+        'status': 'confirmed',
     }
-    for cid, name, role in [('char_001', '甲', '受邀住客'), ('char_002', '乙', '门口的住客')]
+    for cid, name in [('char_001', '甲'), ('char_002', '乙')]
 }
 REGISTRY = {'characters': CHARACTERS, 'evidence_anchors': {}}
 GLOBAL = {'relations': [], 'arc_secrets': [], 'world_rules': [], 'evidence_anchors': {},
