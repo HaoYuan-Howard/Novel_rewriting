@@ -57,9 +57,9 @@ ledger 成本权威。改变产品语义前须用户裁决，并同步 BACKEND_C
 
 | 节点族 | 状态 | 权威 path | adapter / 删除条件 |
 |---|---|---|---|
-| stage0 | 未开始 | — | — |
+| stage0 | **进行中（STR-03-S0）** | `novel/stages/stage0/`；权威 `Stage0Transform` v3（路径仍 `stage0/revisions.json`） | 见 STR-03-S0；v2 链/approval 拒读，无 adapter 迁移 |
 | stage1 | 未开始 | — | — |
-| stage2（analyze / characters / global / blueprint） | **权威闭合** | `blueprint/`、`analyze/`、`characters/`、`knowledge/`、`shared/`；双臂生产在 `*/producer.py`；`extract.py` 仅薄转发 | 顶层 shim 已清零 |
+| stage2（analyze / characters / global / blueprint） | **权威闭合**；Blueprint 契约 **STR-03-S2-BP v11** | `blueprint/`、`analyze/`、`characters/`、`knowledge/`、`shared/`；双臂生产在 `*/producer.py`；`extract.py` 仅薄转发 | 顶层 shim 已清零；V11 见 STR-03-S2-BP |
 | stage4（design / plan / context） | **权威闭合（STR-03-S4）** | 见 STR-03-S4；`plan_chapters` 已退役 | `RETIRED_ARTIFACT_PATHS['stage4.plan_chapters']` |
 | stage5（write / review） | 未开始 | — | — |
 | stage6（prepare / hook / approve） | 未开始 | — | — |
@@ -68,6 +68,18 @@ ledger 成本权威。改变产品语义前须用户裁决，并同步 BACKEND_C
 
 **验收（单节点）**：I-01～I-38 与 S-01～S-05 对该节点可检查；下游只经正式 artifact。
 **验收（全书）**：上表节点族全部 authoritative；adapter 清单清零或仅余有日期的只读解码。
+
+#### STR-03-S0 · Stage0 单次机械 transform（v3）
+
+目标：去掉 revision 链 / pending / 候选 / 人工编辑；权威一次 `Stage0Transform`，
+闸门为 mechanical `admission`；正文可从原文 − removed 重建。
+
+- [x] schema v3 + ARTIFACT_SPECS 升版拒读 v2
+- [x] `revisions.py`：make_transform / commit / ensure_materialized
+- [x] producer / eligibility / checks / CLI / views / source_identity 对齐
+- [ ] 定向回归闭合后勾选本行完成；存量书一律重建
+
+**验收**：同输入幂等；算法变则整份替换；手改 clean 关闭式拒绝；下游只经 transform + clean 投影。
 
 #### STR-03-S4 · Stage4 契约瘦身（Design → Grounding → Context）
 
@@ -80,7 +92,7 @@ ledger 成本权威。改变产品语义前须用户裁决，并同步 BACKEND_C
 | Context | WriterContext **v10**（上游已切 Design+Grounding） | scene-centric Writer IR 类型在 `stage4_ir` / `compile_ir` 就绪；Stage5 全量切 IR 随 stage5 绞杀 |
 | plan_chapters | **退役** | 不进 ARTIFACT_SPECS；职责拆回 Design weight / 预算纯函数 / Context provenance |
 
-锁定边界见会话计划；Blueprint **冻结**本批不改 schema。公开 node id 不变。
+锁定边界见会话计划；Blueprint **本批（S4）冻结**不改 schema（已由 STR-03-S2-BP 另开 Blueprint V11）。公开 node id 不变。
 
 - [x] Batch 0：本条登记 + `Stage4SourceView` ingress + `docs/schema/stage4.md` 底线
 - [x] Batch 1：目标契约模型 + 反例 fixtures
@@ -89,6 +101,39 @@ ledger 成本权威。改变产品语义前须用户裁决，并同步 BACKEND_C
 - [x] Batch 4：死链清理 + 定向验证；勾选上表 stage4 为权威闭合
 
 **验收**：上游只决定一次；Stage5 不猜顺序/身份/许可；缺输入 fail-closed；同输入重编译业务 payload 稳定。
+
+#### STR-03-S2-BP · Blueprint V11 无损结构压缩
+
+定位：**无损结构压缩 + 有明确边界的 states 抽取收紧**；不是尽量删字段。
+单独开闸（STR-03-S4 已闭合；本批解除其对 Blueprint schema 的冻结）。
+**不含** Stage5 全量切 Writer IR。
+
+目标产物：`chapter_blueprints` **10 → 11**（破坏形状；拒读 v10；无通用迁移）。
+版本钉与 schema/producer/consumer/恢复 **同一对外切换**；Batch 0 只登记、不单独发布未闭合 pin。
+
+| 项目 | 裁决 |
+|---|---|
+| 统一 evidence 解析与按引用切片 | **做**（第一优先） |
+| anchors 物理迁书级 | 可选次要（存储职责）；不当主要 token 收益 |
+| `source_contexts` 稀疏编码 | **做**；保留列表名与基数；不改名为 scene |
+| narration 默认值上提 | **做**；保留拍级 `beat_refs`；书级 default 不引用章级 `ap*` |
+| `public_state_ref` | **本批默认保留**；删除须职责接管 + 身份隔离/跨章携入/状态解除三反例 |
+| states 抽取收紧 | **做**；边界反例 + `plot_shape` 读数；禁止 HARD 配额；25–35 仅样本观察 |
+| `story_before` | 保留 kind；本批仅去**完全重复登记**；不做邻接折叠 |
+| `same_scene` / `relation_uses` / ActorRef·bindings | 保留（后两者第二阶段） |
+
+恢复二分：
+
+- **v11 内免费修复**：`revalidate` / `renormalize` 重算坐标或确定性展开视图；不改语义与来源身份。
+- **v10 → v11 重建**：拒读后由 `stage2.blueprint` **付费整跑**；不默认承诺 revalidate 升级。
+
+- [x] Batch 0：本条 + DECISIONS 登记（不 bump ARTIFACT_SPECS）
+- [x] Batch 1：统一 evidence resolve/切片；切齐 Stage2/4 消费者
+- [x] Batch 2：`source_contexts` 稀疏 + narration_default
+- [x] Batch 3：states 反例/读数；story_before 去重；public_state_ref 保留
+- [x] Batch 4：展开差分测试 + shape-break/stale + §9.5；一次翻转 v11
+
+**验收**：展开(压缩(完整上下文)) 等价；Stage4 A 不因统一入口泄源序；v10 拒读；性能分列报告（模型 token / 正式字节 / 下游输入 / 重试 / 耗时）；states 质量观察单列。
 
 ### STR-04 · 契约与文档随权威 path 收口
 

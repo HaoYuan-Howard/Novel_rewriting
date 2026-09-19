@@ -28,6 +28,12 @@ def build_writer_context(plan: dict[str, Any], global_g: dict[str, Any],
 
     validate_plan(plan, blueprints, global_g, characters=characters, main_text=main_text)
     bps = {row['chapter_ordinal']: PlotBlueprint.model_validate(row) for row in blueprints['blueprints']}
+    from contracts.schema.plot import NarrationDefault
+    from novel.stages.stage2.blueprint.narration import effective_narration
+    narration_default = None
+    raw_default = blueprints.get('narration_default') if isinstance(blueprints, dict) else None
+    if raw_default is not None:
+        narration_default = NarrationDefault.model_validate(raw_default)
     states = {state.state_id: state for bp in bps.values() for state in bp.states}
     all_beats = {beat.beat_id: beat for bp in bps.values() for beat in bp.beats}
     state_origins = {state.state_id: bp.chapter_ordinal for bp in bps.values() for state in bp.states}
@@ -320,22 +326,24 @@ def build_writer_context(plan: dict[str, Any], global_g: dict[str, Any],
                                  if r.kind == 'state' and r.scene_ref == slot],
                 'constraint_refs': sorted({r.ref for r in compiled.bindings if r.kind == 'constraint' and r.scene_ref == slot})})
         narration = []
-        for i, segment in enumerate(bp.narration):
+        narration_rows = effective_narration(bp, narration_default=narration_default)
+        for i, segment in enumerate(narration_rows):
             allowed = [slot for slot in slots if not segment.beat_refs
                        or any(slot in beat_slots(ref) for ref in segment.beat_refs)]
-            narration.append({'segment': '全章' if len(bp.narration) == 1 else f'第{i+1}段',
+            narration.append({'segment': '全章' if len(narration_rows) == 1 else f'第{i+1}段',
                 'grammatical_person': segment.grammatical_person, 'narrator': actor(segment.narrator, allowed),
                 'focalizer': actor(segment.focalizer, allowed), 'pronoun_surfaces': segment.pronoun_surfaces,
                 'beat_refs': segment.beat_refs, 'allowed_slots': allowed})
         roster = []
         previous_source = norm('\n'.join(texts[number] for number in sorted(texts) if number < ordinal))
-        anchor_ranges = {a.evidence_id: a for a in bp.evidence_anchors}
+        from novel.stages.stage2.blueprint.evidence import chapter_evidence_table
+        anchor_ranges = chapter_evidence_table(bp)
         def surface_slots(surface):
             # 称谓能出现与其真实归属已揭示是两回事；只按已出现原文及实际 Beat 呈现定位。
             if norm(surface) in previous_source:
                 return set(slots)
             # 章叙述声明的第一人称代词是本章声音表面，不要求再绑到某个 beat 证据 span。
-            if any(surface in (segment.pronoun_surfaces or []) for segment in bp.narration):
+            if any(surface in (segment.pronoun_surfaces or []) for segment in narration_rows):
                 return set(slots)
             support = [slot for beat in bp.beats if any(norm(surface) in norm(
                 texts[ordinal][anchor_ranges[ref].start:anchor_ranges[ref].end])

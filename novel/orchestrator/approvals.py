@@ -74,7 +74,7 @@ from contracts.schema.api import (
     WritingApprovalView,
 )
 from contracts.schema.orchestration import NovelOverview
-from contracts.schema.stage0 import Stage0Revisions
+from contracts.schema.stage0 import Stage0Transform
 from contracts.schema.stage1 import HookCopy, MainText
 from contracts.schema.stage2 import ChapterBlueprints
 from contracts.schema.stage4 import (
@@ -2212,23 +2212,25 @@ def _commit_stage5_closure(
 
 def _require_typed_gate_decision(store: ArtifactStore, gate: str) -> str | None:
     if gate == 's0':
+        from contracts.schema.stage0 import Stage0Transform
         from novel.stages.stage0 import revisions as stage0_revisions
-        revisions, _ = store.read_own(Stage0Revisions, STAGE0_REVISIONS)
-        stage0_revisions.verify_chain(revisions)
-        report = stage0_revisions.snapshot_of(revisions)
+        transform, _ = store.read_own(Stage0Transform, STAGE0_REVISIONS)
+        stage0_revisions.verify_transform(transform)
+        report = stage0_revisions.snapshot_of(transform)
         # 付费防线与 stage1 启动闸用同一个谓词（eligibility 是唯一落点），
-        # 不在这里复述批准条件——stage2 是第一个花钱的层，漏一处就是绕过闸门花钱。
+        # 不在这里复述条件——stage2 是第一个花钱的层，漏一处就是绕过闸门花钱。
         from novel.stages.stage0.eligibility import is_stage0_executable
         if not is_stage0_executable(report):
             raise ApprovalRequired(
-                'stage0 removal report has not actually been approved')
+                'stage0 mechanical admission has not passed')
     elif gate == 's1':
+        from contracts.schema.stage0 import Stage0Transform
         from novel.stages.stage0 import revisions as stage0_revisions
         from novel.stages.stage1.audit import audit_surface
 
-        revisions, _ = store.read_own(Stage0Revisions, STAGE0_REVISIONS)
-        stage0_revisions.verify_chain(revisions)
-        stage0 = stage0_revisions.snapshot_of(revisions)
+        transform, _ = store.read_own(Stage0Transform, STAGE0_REVISIONS)
+        stage0_revisions.verify_transform(transform)
+        stage0 = stage0_revisions.snapshot_of(transform)
         clean_text = store.read_own_text(STAGE0_CLEAN_TEXT)
         main_text, _ = store.read_own(MainText, STAGE1_MAIN_TEXT)
         hook_copy, _ = store.read_own(HookCopy, STAGE1_HOOK_COPY)

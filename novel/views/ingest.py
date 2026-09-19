@@ -198,13 +198,11 @@ def _stage0_segments(report: Stage0Snapshot, text: str, clean: str) -> list[Stag
     out.extend(_gap_segments(text, cursor, len(text), scan))
     reconstructed.append(text[cursor:])
     if ''.join(reconstructed) != clean:
+        # v3 只允许 machine transform；human_edit 分支为死路径，保留关闭式拒绝。
         if report.revision_origin == 'human_edit':
-            # 人可以直接改正文；此时 source 坐标已无法诚实映射到 current clean。
-            # 读屏仍展示当前正式正文，而不是因旧 source-minus-removed 恒等式崩掉。
-            # 新的剔除选择仍应基于一次明确的合并/编辑计划，不能猜坐标迁移。
             return _gap_segments(clean, 0, len(clean), scan_text(clean))
         raise ArtifactUnreadable(
-            '原文减去 current revision 的 removed[] 后不能逐字节重建 clean_text')
+            '原文减去当前 transform 的 removed[] 后不能逐字节重建 clean_text')
     if out:
         if out[0].start != 0 or out[-1].end != len(text):
             raise ArtifactUnreadable('stage0 分区没有覆盖完整原文')
@@ -218,10 +216,10 @@ def _stage0_segments(report: Stage0Snapshot, text: str, clean: str) -> list[Stag
 def stage0_segments(base: str | os.PathLike[str], sid: str) -> Stage0Segments:
     store = _store(base, sid, STAGE0_NODE)
     from novel.stages.stage0 import revisions as rev
-    log = rev.read(store)
-    if log is None:
-        raise UpstreamMissing('stage0 还没跑，盘上没有 revision 链')
-    report = rev.snapshot_of(log)
+    transform = rev.read(store)
+    if transform is None:
+        raise UpstreamMissing('stage0 还没跑，盘上没有 transform')
+    report = rev.snapshot_of(transform)
     text, reason = _original(report, base)
     if text is None:
         return Stage0Segments(
@@ -248,20 +246,21 @@ class _Stage1Material:
 def _stage1_material(base: str | os.PathLike[str], sid: str) -> _Stage1Material:
     store = _store(base, sid, STAGE1_NODE)
     from novel.stages.stage0 import revisions as rev
-    log = rev.read(store)
-    if log is None:
-        raise UpstreamMissing('stage0 还没跑，盘上没有 revision 链')
-    stage0 = rev.snapshot_of(log)
+    transform = rev.read(store)
+    if transform is None:
+        raise UpstreamMissing('stage0 还没跑，盘上没有 transform')
+    stage0 = rev.snapshot_of(transform)
     from novel.stages.stage0.eligibility import is_stage0_executable
     if not is_stage0_executable(stage0):
         raise ApprovalRequired(
-            f'stage0 当前状态为 {stage0.approval.status!r}；'
-            '先重跑 stage0.remove 完成机械接受，再启动 stage1')
+            f'stage0 当前状态为 {stage0.admission.status!r}/'
+            f'{stage0.admission.scope!r}；'
+            '先重跑 stage0.remove 完成机械 admission，再启动 stage1')
     clean = store.read_text(partition.CLEAN_TEXT)
     actual = prov.content_sha1(clean.encode('utf-8'))
     if actual != stage0.clean_sha1:
         raise PartitionInputMismatch(
-            f'clean_text 实际 sha1={actual}，stage0 批准的是 {stage0.clean_sha1}')
+            f'clean_text 实际 sha1={actual}，stage0 transform 记录的是 {stage0.clean_sha1}')
     main = store.read_own(MainText, partition.MAIN_TEXT)[0]
     hook = store.read_own(HookCopy, partition.HOOK_COPY)[0]
     audit = audit_surface(

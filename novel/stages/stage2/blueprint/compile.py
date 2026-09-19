@@ -133,6 +133,11 @@ def compile_chapter(
         result: dict[str, Any] = {}
         for key, item in value.items():
             if key == 'evidence':
+                if item is None:
+                    # 稀疏 source_contexts：evidence 省略/null → 正式侧保留 null，
+                    # 由 SourceContext 继承父 beat.evidence_refs（见 contracts）。
+                    result['evidence_refs'] = None
+                    continue
                 refs: list[str] = []
                 for span in item:
                     pair = (span['start_para'], span['end_para'])
@@ -313,8 +318,30 @@ class _ActorBindingScopes:
             else:
                 matches = [binding for binding in available.values() if binding.char_id == actor.char_id]
                 if len(matches) > 1:
-                    raise ValueError('携入 State 的原章默认人物呈现有歧义，须免费明确绑定')
-                if matches:
+                    # 「原章默认」优先：定义该 State 的那一章自己声明的表面身份。
+                    local_ids = {row.presentation_id for row in origin.actor_bindings}
+                    local_matches = [row for row in matches if row.presentation_id in local_ids]
+                    if len(local_matches) == 1:
+                        result.add(local_matches[0].presentation_id)
+                        continue
+                    if len(local_matches) > 1:
+                        raise ValueError('携入 State 的原章默认人物呈现有歧义，须免费明确绑定')
+                    # 无本地绑定时：同角色且表面称谓完全相同的多份携入视为同一身份，
+                    # 取定义章最晚的那份；表面不一致仍须免费明确绑定。
+                    surface_groups: dict[frozenset[str], list[ActorBinding]] = {}
+                    for row in matches:
+                        surface_groups.setdefault(frozenset(row.surfaces), []).append(row)
+                    if len(surface_groups) != 1:
+                        raise ValueError('携入 State 的原章默认人物呈现有歧义，须免费明确绑定')
+                    ranked = sorted(
+                        matches,
+                        key=lambda row: (
+                            self.bindings[row.presentation_id][0].chapter_ordinal,
+                            row.presentation_id,
+                        ),
+                    )
+                    result.add(ranked[-1].presentation_id)
+                elif matches:
                     result.add(matches[0].presentation_id)
         return result
 

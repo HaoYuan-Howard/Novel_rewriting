@@ -78,7 +78,12 @@ def structure_metrics_of(blueprint: dict[str, Any], chapter: dict[str, Any]) -> 
         return result
     positions = {ref: sorted(slots.index(slot) for slot in targets)
                  for ref, targets in selected.items()}
-    anchors = {a['evidence_id']: a for a in blueprint['evidence_anchors']}
+    anchors = {}
+    for a in blueprint.get('evidence_anchors') or []:
+        anchors[a['evidence_id']] = a
+    if not anchors and 'beats' in blueprint:
+        # 兼容仅含 evidence_refs 的切片视图：度量侧仍要坐标时须带 anchors
+        pass
     mapping = {'state': 'ok', 'beats': len(beats), 'mapped_beats': len(selected),
                'deliveries': sum(len(v) for v in positions.values()),
                'distributed_beats': sum(len(v) > 1 for v in positions.values()),

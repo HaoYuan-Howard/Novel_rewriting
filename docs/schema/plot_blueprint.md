@@ -1,20 +1,29 @@
-# 完整剧情与呈现契约（ChapterBlueprints v10）
+# 完整剧情与呈现契约（ChapterBlueprints v11）
 
 本契约使用完整剧情节点，替换逐谓词事实目录。普通分场不改变 Stage2
 语义主体；真实漏抽、错抽或必要知识边界缺失才修订上游。
 
+V11（STR-03-S2-BP）为**无损结构压缩**：统一 evidence 解析入口；`source_contexts`
+稀疏编码（保留列表基数）；书级 `narration_default`；`public_state_ref` 保留；
+`story_before` 仅去完全重复登记。拒读 v10；存量付费整跑重建。
+
 ## 正式蓝图
 
+`ChapterBlueprints` 保存 `blueprints[]`、可选书级 `narration_default` 与 provenance。
 PlotBlueprint 保存章号、源文 SHA-256、chapter_function、beats、
-evidence_anchors、states、inherited_state_endings、constraints、entry_state_refs、
-carry_out_refs、actor_bindings 和 narration。
+evidence_anchors（章内物化表；读取经 `blueprint.evidence` 统一入口）、states、
+inherited_state_endings、constraints、entry_state_refs、carry_out_refs、
+actor_bindings、relation_uses 和 narration（可空——空时须有书级 default）。
 
 PlotBeat 只在 content 保存完整剧情，另含稳定 beat_id、参与人物、
-evidence_refs、source_contexts。SourceContext 只有证据、时层、地点、
-实际在场者；null 表示未知，不能从参与者推断在场。
+evidence_refs、可选稀疏 `source_contexts`。SourceContext 稀疏语义：
+省略 evidence_refs≡beat；省略 time_layer≡已确定当下；省略 present≡participants；
+显式 null=未知；[]=明确空。列表整体省略≡一条默认 context；有显式条目则只用显式。
+`scx_*` 摘要基于规范化展开视图。
 
 EvidenceAnchor 由段号响应编译，含证据 ID、起止段及零起点半开字符区间。
 相同段范围去重；原文只在源产物保存。证据覆盖和重叠不是语义通过判据。
+消费者须经 resolve/slice，禁止把整书证据表下发 Stage4 A。
 
 PlotState 保存 state_id、content 或 global_ref（二选一）、modality、
 holder（ActorRef）、established_at、ended_at、supersedes_state_refs、evidence_refs。

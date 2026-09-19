@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from contracts.schema.report import CheckReport, finding
-from contracts.schema.stage0 import Stage0Revisions, Stage0Snapshot
+from contracts.schema.stage0 import Stage0Snapshot, Stage0Transform
 from contracts.schema.stage1 import HookCopy, MainText
 from novel.report.builder import build
 from novel.report.findings import Outcome, ran
@@ -49,8 +49,8 @@ def run_check_only(ctx: RunContext) -> CheckReport:
     """复检当前输入与 Stage1 两份材料，不写盘。"""
     store = ArtifactStore(ctx)
     from novel.stages.stage0 import revisions as stage0_revisions
-    stage0_log = store.read(Stage0Revisions, STAGE0_STATE)
-    stage0_revisions.verify_chain(stage0_log)
+    stage0_log = store.read(Stage0Transform, STAGE0_STATE)
+    stage0_revisions.verify_transform(stage0_log)
     stage0 = stage0_revisions.snapshot_of(stage0_log)
     clean_text = store.read_text(CLEAN_TEXT)
     main_text, _main_raw = store.read_own(MainText, MAIN_TEXT)

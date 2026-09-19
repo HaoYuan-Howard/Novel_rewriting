@@ -10,7 +10,7 @@ from contracts.artifacts import (
 )
 from contracts.invariants import BODY_RATIO_MIN, MIN_CHAPTERS
 from contracts.schema.report import CheckReport
-from contracts.schema.stage0 import Stage0Revisions
+from contracts.schema.stage0 import Stage0Transform
 from contracts.schema.stage1 import HookCopy, MainText, MainTextSection
 from novel import prov
 from novel.errors import (
@@ -75,28 +75,29 @@ def run_partition(
     *,
     dry_run: bool = False,
 ) -> tuple[PartitionResult, CheckReport | None]:
-    """读取 Stage0 当前批准轮，分章并落两份承重材料。"""
+    """读取 Stage0 当前机械 transform，分章并落两份承重材料。"""
     store = ArtifactStore(ctx)
     from novel.stages.stage0 import revisions as stage0_revisions
-    stage0_log = store.read(Stage0Revisions, STAGE0_STATE)
-    stage0_revisions.verify_chain(stage0_log)
+    stage0_log = store.read(Stage0Transform, STAGE0_STATE)
+    stage0_revisions.verify_transform(stage0_log)
     stage0 = stage0_revisions.snapshot_of(stage0_log)
     clean_text = store.read_text(CLEAN_TEXT)
     from novel.stages.stage0.eligibility import is_stage0_executable
     if not is_stage0_executable(stage0):
         raise ApprovalRequired(
-            f'stage0 当前状态为 {stage0.approval.status!r}；'
+            f'stage0 当前 admission 为 {stage0.admission.status!r}/'
+            f'{stage0.admission.scope!r}；'
             '先重跑 stage0.remove 完成机械接受，再启动 stage1')
     actual_input = prov.content_sha1(clean_text.encode('utf-8'))
     if actual_input != stage0.clean_sha1:
         raise PartitionInputMismatch(
-            f'clean_text 实际 sha1={actual_input}，stage0 批准的是 {stage0.clean_sha1}；'
-            '盘上正文已在批准后变化')
+            f'clean_text 实际 sha1={actual_input}，stage0 记录的是 {stage0.clean_sha1}；'
+            '盘上正文已在机械通过后变化')
     ratio = stage0.body_code_points / stage0.total_code_points
     if ratio < BODY_RATIO_MIN:
         raise Stage0BodyRejected(
             f'stage0 清理后只保留 {ratio:.1%} 正文，低于 {BODY_RATIO_MIN:.0%}，'
-            '即使人工点了批准也不能把疑似截断的文本送入下游')
+            '不能把疑似截断的文本送入下游')
 
     result = partition_text(clean_text)
     if dry_run:

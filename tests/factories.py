@@ -186,41 +186,22 @@ def stage6_hook(
 
 
 def stage0_machine_revise(book, new_clean: str):
-    """现役语义的换稿：机器稿直接替换当前机器稿并保持 auto 批准（`R-0.8`）。
+    """现役语义的换稿：直接替换当前 transform 并保持机械 admission。
 
-    替代已退役的 `removal.run_edit` + `run_approve` 组合；`removed` 账本沿用
-    当前稿（正文级换稿不动剔除账，与旧人工全量编辑的「整团一起变」不同——
-    那条路已随 stage0.edit 退役）。
+    `removed` 账本沿用当前稿（正文级换稿不动剔除账）。
     """
-    from contracts.schema.stage0 import Stage0RevisionContent
     from novel import prov
     from novel.stages.stage0 import removal, revisions as rev
     from novel.store import ArtifactStore
 
     store = ArtifactStore(removal._context(book, 'stage0.remove'))
-    log = rev.read(store)
-    current = rev.current_revision(log)
-    proposal = rev.make_revision(
-        parent_revision_id=current.revision_id, origin='machine',
-        actor=None, reason=None, code=prov.code_version(),
-        content=Stage0RevisionContent(clean_text=new_clean,
-                                      removed=current.content.removed))
-    published = rev.published(log, proposal, candidate_revision_id=None,
-                              approval=removal._auto_approval())
-    rev.commit(store, published)
-    return rev.snapshot_of(published)
-
-
-def stage0_force_pending(book):
-    """把当前稿退回存量 pending 形状（旧代码产物；现役 producer 不再产出）。"""
-    from contracts.schema.stage0 import PendingApproval
-    from novel.stages.stage0 import revisions as rev
-    from novel.store import ArtifactStore
-    from novel.stages.stage0 import removal
-
-    store = ArtifactStore(removal._context(book, 'stage0.remove'))
-    log = rev.read(store)
-    pending = log.model_copy(update={'current': log.current.model_copy(update={
-        'approval': PendingApproval(status='pending')})})
-    rev.commit(store, pending)
-    return rev.snapshot_of(pending)
+    current = rev.read(store)
+    if current is None:
+        raise RuntimeError(f'{book}: 没有 stage0 transform，无法换稿')
+    transform = rev.make_transform(
+        source=current.source,
+        code=prov.code_version(),
+        clean_text=new_clean,
+        removed=list(current.removed),
+    )
+    return rev.commit(store, transform, clean_text=new_clean)

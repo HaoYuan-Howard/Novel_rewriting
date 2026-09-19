@@ -27,7 +27,7 @@ from contracts.artifacts import (
 )
 from contracts.schema.workflow import (
     WorkflowManifestV4, WorkflowManifestV5, WorkflowManifestV6, WorkflowManifestV7,
-    WorkflowManifestV8,
+    WorkflowManifestV8, WorkflowManifestV9,
     WorkflowTransitionCompletedV1,
     WorkflowTransitionPendingV1, WorkflowTransitionPreparedV1, WorkflowTransitionProofV1,
     WorkflowTransitionPreparedV2, WorkflowTransitionProofV2,
@@ -45,7 +45,7 @@ class WorkflowTransitionRefused(TerminalState):
 # ⚠ v7 起删除 Stage2 语义审阅与 KnowledgeLinks，且**不登记 v6→v7 迁移**：
 # 旧 v4~v6 输出与成本账原样保留，由冻结旧代码读取；v7 只允许 clean base 初始化。
 _MANIFEST_MODELS = {4: WorkflowManifestV4, 5: WorkflowManifestV5, 6: WorkflowManifestV6,
-                    7: WorkflowManifestV7, 8: WorkflowManifestV8}
+                    7: WorkflowManifestV7, 8: WorkflowManifestV8, 9: WorkflowManifestV9}
 _TRANSITION_PAIRS = {4: (WorkflowManifestV5, WorkflowTransitionPreparedV1, WorkflowTransitionProofV1),
                      5: (WorkflowManifestV6, WorkflowTransitionPreparedV2, WorkflowTransitionProofV2)}
 

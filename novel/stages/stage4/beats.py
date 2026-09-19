@@ -9,6 +9,8 @@ def beat_index(blueprints: dict[str, Any],
     """索引完整剧情及共享证据；源章篇幅取原文一次，不累加重叠证据。"""
     from contracts.schema.plot import PlotBlueprint
     from novel.stages.stage2.blueprint.compile import validate_evidence
+    from novel.stages.stage2.blueprint.evidence import slice_evidence_map
+    from novel.stages.stage2.blueprint.source_contexts import expand_beat_contexts
     texts = {m['chapter_ordinal']: m['text'] for m in main_text}
     if len(texts) != len(main_text):
         raise ValueError('原文章号重复')
@@ -17,14 +19,13 @@ def beat_index(blueprints: dict[str, Any],
         bp = PlotBlueprint.model_validate(raw)
         source = texts[bp.chapter_ordinal]
         validate_evidence(bp, source)
-        anchors = {a.evidence_id: a.model_dump(mode='json') for a in bp.evidence_anchors}
         for beat in bp.beats:
             if beat.beat_id in result:
                 raise ValueError('剧情节点身份重复')
             result[beat.beat_id] = {
                 'ord': bp.chapter_ordinal, 'content': beat.content,
                 'source_chapter_chars': len(source),
-                'evidence': {ref: anchors[ref] for ref in beat.evidence_refs},
-                'source_contexts': [c.model_dump(mode='json') for c in beat.source_contexts],
+                'evidence': slice_evidence_map(bp, beat.evidence_refs),
+                'source_contexts': expand_beat_contexts(beat),
             }
     return result

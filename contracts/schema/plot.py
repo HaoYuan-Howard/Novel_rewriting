@@ -122,22 +122,40 @@ class PlotNarration(StrictModel):
     grammatical_person: Literal[NARRATIVE_PERSON]
     narrator: ActorRef | None
     focalizer: ActorRef | None
-    pronoun_surfaces: list[NonEmpty]
+    # V11：常规代词可由探针补；特殊自称仍可写。空列表合法。
+    pronoun_surfaces: list[NonEmpty] = Field(default_factory=list)
     # [] 明确表示全章；多个叙述片段须显式说明适用 Beat，不按列表位置猜范围。
     beat_refs: list[BeatId]
     evidence_refs: list[EvidenceId] = Field(min_length=1)
 
 
+class NarrationDefault(StrictModel):
+    """书级可跨章复用的叙述默认；不得携带章级 presentation_ref。"""
+
+    grammatical_person: Literal[NARRATIVE_PERSON]
+    narrator_char_id: CharacterId | None = None
+    focalizer_char_id: CharacterId | None = None
+
+
 class SourceContext(StrictModel):
-    evidence_refs: list[EvidenceId] = Field(min_length=1)
-    time_layer: Literal[TIME_LAYERS] | None
-    place: NonEmpty | None
-    # null 是未知；[] 是明确的空标注，不推断被提及的人在场。
-    present: list[ActorRef] | None
+    """稀疏源文上下文：省略字段表示已确定的默认，不是猜测。
+
+    - 省略 evidence_refs → 与父 beat.evidence_refs 相同
+    - 省略 time_layer → 已确定当下 present；显式 null → 未知
+    - 省略 present → 已确定与 participants 一致；null → 未知；[] → 明确空
+    """
+
+    evidence_refs: list[EvidenceId] | None = None
+    time_layer: Literal[TIME_LAYERS] | None = None
+    place: NonEmpty | None = None
+    present: list[ActorRef] | None = None
 
     @model_validator(mode='after')
     def _unique(self) -> Self:
-        unique(self.evidence_refs, '舞台证据')
+        if self.evidence_refs is not None:
+            if not self.evidence_refs:
+                raise ValueError('显式舞台证据不能为空列表')
+            unique(self.evidence_refs, '舞台证据')
         if self.present is not None:
             unique_actors(self.present, '在场人物')
         return self
@@ -148,17 +166,20 @@ class PlotBeat(StrictModel):
     content: NonEmpty
     participants: list[ActorRef]
     evidence_refs: list[EvidenceId] = Field(min_length=1)
-    source_contexts: list[SourceContext]
+    # None = 恰好一条默认 context；[] = 显式无舞台；非空 = 只用显式列表
+    source_contexts: list[SourceContext] | None = None
 
     @model_validator(mode='after')
     def _closed(self) -> Self:
         unique_actors(self.participants, '剧情参与人物')
         unique(self.evidence_refs, '剧情证据')
-        for context in self.source_contexts:
-            if not set(context.evidence_refs) <= set(self.evidence_refs):
-                raise ValueError('舞台证据必须属于父节点')
+        if self.source_contexts:
+            for context in self.source_contexts:
+                refs = (context.evidence_refs
+                        if context.evidence_refs is not None else self.evidence_refs)
+                if not set(refs) <= set(self.evidence_refs):
+                    raise ValueError('舞台证据必须属于父节点')
         return self
-
 
 class GlobalSubjectRef(_PresentedSubjectRef):
     kind: Literal['character', 'relation', 'world_rule', 'secret', 'setting']
@@ -264,7 +285,8 @@ class PlotBlueprint(StrictModel):
     # 上章状态引用原标识，不复制其正文。
     entry_state_refs: list[StateId]
     carry_out_refs: list[StateId]
-    narration: list[PlotNarration] = Field(min_length=1)
+    # V11：可空——空且书级 narration_default 存在时由 effective_narration 合成
+    narration: list[PlotNarration] = Field(default_factory=list)
 
     @model_validator(mode='after')
     def _closed(self) -> Self:
@@ -292,6 +314,17 @@ class PlotBlueprint(StrictModel):
             if not set(row.evidence_refs) <= set(anchors):
                 raise ValueError('证据引用不存在或越章')
             used_anchors.update(row.evidence_refs)
+        # 展开 source_contexts 计入锚点引用（稀疏省略的默认证据）
+        for beat in self.beats:
+            if beat.source_contexts is None:
+                used_anchors.update(beat.evidence_refs)
+            else:
+                for context in beat.source_contexts:
+                    refs = (context.evidence_refs
+                            if context.evidence_refs is not None else beat.evidence_refs)
+                    if not set(refs) <= set(anchors):
+                        raise ValueError('证据引用不存在或越章')
+                    used_anchors.update(refs)
         for narration in self.narration:
             unique(narration.beat_refs, '叙述范围')
             if not set(narration.beat_refs) <= set(beats):
@@ -519,16 +552,18 @@ class PlotNarrationResponse(StrictModel):
     grammatical_person: Literal[NARRATIVE_PERSON]
     narrator: ActorRefResponse | None
     focalizer: ActorRefResponse | None
-    pronoun_surfaces: list[NonEmpty]
+    pronoun_surfaces: list[NonEmpty] = Field(default_factory=list)
     beat_refs: list[LocalBeatKey]
     evidence: list[ParagraphRange] = Field(min_length=1)
 
 
 class SourceContextResponse(StrictModel):
-    evidence: list[ParagraphRange] = Field(min_length=1)
-    time_layer: Literal[TIME_LAYERS] | None
-    place: NonEmpty | None
-    present: list[ActorRefResponse] | None
+    """稀疏 wire：省略 evidence → 与父 beat 段范围相同；省略 time_layer → 当下。"""
+
+    evidence: list[ParagraphRange] | None = None
+    time_layer: Literal[TIME_LAYERS] | None = None
+    place: NonEmpty | None = None
+    present: list[ActorRefResponse] | None = None
 
 
 class PlotBeatResponse(StrictModel):
@@ -536,7 +571,8 @@ class PlotBeatResponse(StrictModel):
     content: NonEmpty
     participants: list[ActorRefResponse]
     evidence: list[ParagraphRange] = Field(min_length=1)
-    source_contexts: list[SourceContextResponse]
+    # None = 一条默认 context；[] = 无舞台；非空 = 显式列表
+    source_contexts: list[SourceContextResponse] | None = None
 
 
 class BeatMomentResponse(StrictModel):

@@ -93,14 +93,12 @@ _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
         'Stage0～7 减法完成后统一从头重建，不做迁移或手补字段',
     ),
     'stage0/revisions.json': (
-        2,
-        '2026-08-25 Stage0 减法：原文身份提升到根部；revision content 删除 '
-        '`original_filename/source_ref/normalized_source_sha1/source_encoding/text_norm/'
-        'total_code_points/clean_sha1/body_code_points/warnings` 派生或链级字段；'
-        '`removed[]` 删除 line_no/code_points/head_preview/tail_preview；'
-        '`removal_report.json` 整份下线，运行时 snapshot 现算',
-        '`stage0.remove --source <原文>` 免费重跑（零 LLM），随后人工重批。'
-        '用户已明确现有两本书留到 Stage0～7 减法完成后统一重建',
+        3,
+        '2026-09-18 STR-03-S0：权威从 revision 链 + approval 收成一次 '
+        '`Stage0Transform`；闸门为 mechanical admission；路径仍为 '
+        'stage0/revisions.json。v2 拒读，由 stage0.remove --source 重建',
+        '`stage0.remove --source <原文>` 免费重跑（零 LLM）；无人工重批。'
+        '存量 v2 书须废弃后重建，不做迁移',
     ),
     'stage1/hook_copy.json': (
         2,
@@ -148,7 +146,7 @@ _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
         '旧回执与原代码配对恢复；新 v6 typed 输入由 stage2.global --apply-edit 免费生成 v3 回执，不迁移旧提交',
     ),
     'stage2/chapter_blueprints.json': (
-        10,
+        11,
         '历次破坏。2026-08-19 bounded-fidelity-v2 → v3：beat 的区间改由段号'
         '算出，SourceSpan.recovery 去掉 lcs，BlueprintProvenance.verbatim_recovered '
         '删除。2026-08-23：BlueprintContext.architecture 从七值收窄为 '
@@ -162,10 +160,13 @@ _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
         '2026-09-12 v9 切换 plot-blueprint-v1：删除全量 fact_atoms/hinges 及事实关系网，'
         '完整剧情只保存在 beat.content；新增统一 EvidenceAnchor、稀疏状态、约束和显式状态端点。'
         'v10 在参与人、持有者、观察者、叙述者及关系端点统一 ActorRef；新增共享 actor_bindings '
-        '及只表达关系呈现的 relation_uses，不按 char_id 合并不同表面身份',
-        '旧根仅配对冻结旧代码恢复，不迁移旧事实、不沿用旧审批。新空根由 stage2.blueprint '
-        '在既有付费及外发授权下按章重建 v10，再完成章级及跨章审阅。旧版本的 INVALID、'
-        '回答和检查点不能冒充 v10 来源；当前 v10 已购结果依其正式身份免费恢复',
+        '及只表达关系呈现的 relation_uses，不按 char_id 合并不同表面身份。'
+        '2026-09-18 v11（STR-03-S2-BP）：无损结构压缩——source_contexts 稀疏编码（保留列表基数与'
+        'present/time_layer 三态语义）、书级 narration_default、统一 evidence 解析入口；'
+        'story_before 仅去完全重复登记；public_state_ref 保留',
+        '旧根仅配对冻结旧代码恢复，不迁移旧事实。新空根由 stage2.blueprint '
+        '在既有付费及外发授权下按章重建 v11；v10 正式文件/INVALID/检查点拒读，不能冒充 v11；'
+        '当前 v11 已购结果依其正式身份免费重算证据坐标（revalidate/renormalize），不改语义',
     ),
     'stage2/blueprint_edit.json': (
         2,

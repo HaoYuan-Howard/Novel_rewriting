@@ -8,7 +8,7 @@ from pathlib import Path
 
 from contracts.invariants import BODY_RATIO_MIN
 from contracts.schema.report import CheckReport, finding
-from contracts.schema.stage0 import Stage0Revisions, Stage0Snapshot
+from contracts.schema.stage0 import Stage0Snapshot, Stage0Transform
 from novel import paths, prov
 from novel.core.ingest import (
     DecodedSource,
@@ -33,11 +33,6 @@ def _hit(rule: str, detail: str, *evidence: str):
 
 def _source(report: Stage0Snapshot,
             base: str | os.PathLike[str]) -> tuple[DecodedSource | None, str | None]:
-    """复检要拿来对账的那份原文；取不到就把**理由**带出去（判据退成 unverifiable）。
-
-    ⚠ 记录的位置优先，只对界面上传的原文做 base 重锚（`novel/core/source.py`）。
-      外部语料被删没有回落——那是契约有意接受的代价，不是这里该"救"的事。
-    """
     path = resolve_recorded_source(report.source_ref, base)
     if path is None:
         return None, f'原始小说已不在记录位置：{describe_source(report.source_ref)}'
@@ -58,7 +53,7 @@ def check(
     source: DecodedSource | None,
     source_why: str | None = None,
     novel_dir: Path | None = None,
-    revisions: Stage0Revisions | None = None,
+    transform: Stage0Transform | None = None,
 ) -> list[Outcome]:
     '''核对运行时快照、正文、可选原文与书目录；每条注册判据返回一个 Outcome。'''
     out: list[Outcome] = []
@@ -96,20 +91,13 @@ def check(
                 f'{len(machine_segments)} 个机器标记',
     ))
 
-    ledger_problems: list[str] = []
-    if source is None and ledger_problems:
-        out.append(ran(
-            's0_removal_ledger',
-            [_hit('s0_removal_ledger', detail, detail) for detail in ledger_problems],
-            scanned=f'clean_text {len(clean_text)} 码点 · 原文不可用，span 未能回投',
-        ))
-    elif source is None:
+    if source is None:
         out.append(unverifiable(
             's0_removal_ledger',
             source_why or '没有原始小说，无法把 removed.span 回投到原文',
         ))
     else:
-        problems = ledger_problems
+        problems: list[str] = []
         spans = [segment.span for segment in report.removed]
         ordered_spans = sorted(spans)
         if any(ordered_spans[index][1] > ordered_spans[index + 1][0]
@@ -124,72 +112,62 @@ def check(
                 problems.append(f'removed[{index}].span={segment.span} 越过原文末尾')
                 continue
             piece = source.text[lo:hi]
-            marker_at = piece.find(segment.marker_line)
-            if marker_at < 0:
+            if piece.find(segment.marker_line) < 0:
                 problems.append(
                     f'removed[{index}] 的 span 内找不到 marker_line「{segment.marker_line}」')
-        machine_only = all(segment.origin == 'machine' for segment in report.removed)
-        if machine_only and report.removed:
+        if report.removed:
             if spans != sorted(spans) or any(
                     spans[i][1] != spans[i + 1][0] for i in range(len(spans) - 1)):
                 problems.append('机器剔除 span 没有按原文顺序首尾相接')
             first, last = spans[0][0], spans[-1][1]
             if last != len(source.text):
                 problems.append(f'机器剔除没有覆盖到原文末尾：最后止于 {last}')
-            if (report.revision_origin != 'human_edit'
-                    and clean_text != source.text[:first]):
+            if clean_text != source.text[:first]:
                 problems.append('机器轮 clean_text 不等于原文在首个剔除点之前的逐字前缀')
-        elif (machine_only and report.revision_origin != 'human_edit'
-                and clean_text != source.text):
-            problems.append('current 没有剔除、没有人工编辑，但 clean_text 与归一化原文不同')
+            rebuilt = rev.reconstruct_clean(source.text, list(report.removed))
+            if rebuilt != clean_text:
+                problems.append('clean_text 不是原文按 removed spans 的确定性重建')
+        elif clean_text != source.text:
+            problems.append('current 没有剔除，但 clean_text 与归一化原文不同')
         out.append(ran(
             's0_removal_ledger',
             [_hit('s0_removal_ledger', detail, detail) for detail in problems],
             scanned=f'{len(report.removed)} 个剔除段 · 原文 {len(source.text)} 码点',
         ))
 
-    approval_findings = []
     from novel.stages.stage0.eligibility import is_stage0_executable
+    admission_findings = []
     if not is_stage0_executable(report):
-        approval_findings.append(_hit(
+        admission_findings.append(_hit(
             's0_approval',
-            f'当前批准状态是 {report.approval.status!r}，stage1 不得启动',
-            report.approval.status,
+            f'当前机械 admission 是 {report.admission.status!r}/'
+            f'{report.admission.scope!r}，stage1 不得启动',
+            report.admission.status,
+            report.admission.scope,
         ))
-    out.append(ran('s0_approval', approval_findings, scanned='1 个批准状态'))
+    out.append(ran('s0_approval', admission_findings, scanned='1 个机械 admission'))
 
-    # ⚠ 2026-08-22 阶段 C：这条判据从「上一轮归档在不在盘上」换成「链自洽 + live 是它的
-    #   物化投影」。`_rounds/` 与不可覆盖审计链一起下线之后，它接管了两个洞：
-    #     ① 历史版本有没有被改过 —— 逐条复算 `revision_id`（前像含 parent ⇒ 哈希链）；
-    #     ② clean live 是不是 current 的投影 —— 那正是提交后物化前会出现的中间态，
-    #        而它可由「重跑一次任何 stage0 写路径」自愈，所以判据要说得出这句话。
-    if revisions is None:
+    if transform is None:
         out.append(unverifiable(
             's0_revision_chain',
-            '手上没有 stage0/revisions.json（合成样本直接对快照判据），无法复算链',
+            '手上没有 stage0/revisions.json（合成样本直接对快照判据），无法复算 transform',
         ))
     else:
         chain_problems: list[str] = []
-        for item in revisions.revisions:
-            expected = rev.revision_digest(
-                parent_revision_id=item.parent_revision_id, origin=item.origin,
-                actor=item.actor, reason=item.reason, content=item.content)
-            if expected != item.revision_id:
-                chain_problems.append(
-                    f'revision {item.revision_id[:12]}… 的 id 与内容对不上，'
-                    f'复算得到 {expected[:12]}…')
-        current = rev.current_revision(revisions)
-        if clean_text != current.content.clean_text:
+        try:
+            rev.verify_transform(transform, clean_text=clean_text)
+        except Exception as exc:  # noqa: BLE001 — 判据要把失败落成 finding
+            chain_problems.append(str(exc))
+        if clean_text and transform.clean_sha1 != prov.content_sha1(
+                clean_text.encode('utf-8')):
             chain_problems.append(
-                'clean_text.txt 不是 current 那一版的正文；重跑任一 stage0 写路径即可'
-                '重新物化自愈')
+                'clean_text.txt 不是当前 transform 的投影；重跑 stage0.remove 可重新物化')
         out.append(ran(
             's0_revision_chain',
             [_hit('s0_revision_chain', detail, detail) for detail in chain_problems],
-            scanned=f'{len(revisions.revisions)} 条 revision 逐条复算 id · '
-                    f'current={current.revision_id[:12]}… · '
-                    f'候选 {"1" if revisions.candidate_revision_id else "0"} 条 · '
-                    f'已否 {len(revisions.dismissed)} 条',
+            scanned=f'transform_id={transform.transform_id[:12]}… · '
+                    f'removed {len(transform.removed)} · admission='
+                    f'{transform.admission.status}/{transform.admission.scope}',
         ))
 
     actual_clean_sha1 = prov.content_sha1(clean_text.encode('utf-8'))
@@ -211,7 +189,8 @@ def check(
         hash_problems = []
         if report.normalized_source_sha1 != source.normalized_source_sha1:
             hash_problems.append(
-                f'normalized_source_sha1 记录 {report.normalized_source_sha1}，实际 {source.normalized_source_sha1}')
+                f'normalized_source_sha1 记录 {report.normalized_source_sha1}，'
+                f'实际 {source.normalized_source_sha1}')
         out.append(ran(
             's0_hashes',
             [_hit('s0_hashes', detail, detail) for detail in hash_problems],
@@ -221,17 +200,13 @@ def check(
     human_problems = []
     human_segments = [i for i, segment in enumerate(report.removed)
                       if segment.origin == 'human']
-    if human_segments and report.revision_origin != 'human_edit':
+    if human_segments:
         human_problems.append(
-            f'removed{human_segments} 标成 human，但这一版的起源是 '
-            f'{report.revision_origin}（只有 human_edit 那一支会产生人工圈选）')
-    if report.clean_sha1 != actual_clean_sha1:
-        human_problems.append(
-            '盘上 clean_text 已变化但 current revision 不一致；机器重跑不得覆盖人工状态')
+            f'removed{human_segments} 标成 human；v3 transform 禁止人工剔除段')
     out.append(ran(
         's0_human_preserved',
         [_hit('s0_human_preserved', detail, detail) for detail in human_problems],
-        scanned=f'{len(report.removed)} 个 origin · revision_origin={report.revision_origin}',
+        scanned=f'{len(report.removed)} 个 origin · revision_origin=machine',
     ))
 
     ratio = report.body_code_points / report.total_code_points
@@ -252,7 +227,7 @@ def check(
     out.append(ran(
         's0_warnings',
         warning_findings,
-        scanned=f'按 current revision 现算 {len(report.warnings)} 条可疑项',
+        scanned=f'按当前 transform 现算 {len(report.warnings)} 条可疑项',
     ))
 
     if source is None:
@@ -316,13 +291,13 @@ def check(
 
 
 def run_check_only(ctx: RunContext) -> CheckReport:
-    '''从当前书目录复检 stage0；不更新批准状态、不写任何产物。'''
+    '''从当前书目录复检 stage0；不写任何产物。'''
     store = ArtifactStore(ctx)
-    revisions = rev.read(store)
-    if revisions is None:
+    transform = rev.read(store)
+    if transform is None:
         from novel.errors import UpstreamMissing
-        raise UpstreamMissing('stage0 还没跑，盘上没有 revision 链')
-    report = rev.snapshot_of(revisions)
+        raise UpstreamMissing('stage0 还没跑，盘上没有 transform')
+    report = rev.snapshot_of(transform)
     clean_text = store.read_text(CLEAN_REL)
     source, why = _source(report, ctx.novel_dir.parent)
     outcomes = check(
@@ -331,7 +306,7 @@ def run_check_only(ctx: RunContext) -> CheckReport:
         source=source,
         source_why=why,
         novel_dir=ctx.novel_dir,
-        revisions=revisions,
+        transform=transform,
     )
     return build(
         sid=ctx.sid,

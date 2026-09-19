@@ -1621,29 +1621,28 @@ def test_json_artifacts_are_written_without_cr():
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _stage0_on_disk(book: Path, source: Path, source_bytes: bytes, clean_bytes: bytes) -> None:
-    """stage0 的权威 revision 链 + 唯一 clean 投影。"""
+    """stage0 的权威 transform + 唯一 clean 投影。"""
+    import hashlib
     (book / 'stage0').mkdir(exist_ok=True)
     (book / 'stage0' / 'clean_text.txt').write_bytes(clean_bytes)
-    source_identity = {
-        'source_ref': {'kind': 'external_file',
-                       'absolute_path': str(source.resolve())},
-        'normalized_source_sha1': prov.content_sha1(source_bytes),
-        'total_code_points': len(source_bytes.decode('utf-8')),
-    }
-    from contracts.schema.stage0 import Stage0RevisionContent
-    from novel.stages.stage0.revisions import make_revision
-    content = Stage0RevisionContent(clean_text=clean_bytes.decode('utf-8'), removed=[])
-    revision = make_revision(
-        parent_revision_id=None, origin='machine', actor=None, reason=None,
-        code='test-store', content=content,
+    from contracts.schema.stage0 import ExternalFileRef, Stage0Source
+    from novel.stages.stage0.revisions import make_transform
+    text = source_bytes.decode('utf-8')
+    clean = clean_bytes.decode('utf-8')
+    transform = make_transform(
+        source=Stage0Source(
+            source_ref=ExternalFileRef(
+                kind='external_file', absolute_path=str(source.resolve())),
+            raw_sha256=hashlib.sha256(source_bytes).hexdigest(),
+            encoding='utf-8',
+            normalized_source_sha1=prov.content_sha1(source_bytes),
+            total_code_points=len(text),
+        ),
+        code='test-store',
+        clean_text=clean,
+        removed=[],
     )
-    _write_payload(book, 'stage0/revisions.json', {
-        'source': source_identity,
-        'revisions': [revision.model_dump(mode='json')],
-        'current': {'revision_id': revision.revision_id, 'approval': {'status': 'pending'}},
-        'candidate_revision_id': None,
-        'dismissed': [],
-    })
+    _write_payload(book, 'stage0/revisions.json', transform.model_dump(mode='json'))
 
 
 def test_deterministic_artifacts_use_their_existing_content_fingerprints_for_freshness():

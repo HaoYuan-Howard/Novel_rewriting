@@ -215,7 +215,11 @@ def prepare_edit(ctx, request: PlotEdit, *, allow_unchanged: bool = False) -> Pr
     if not changed and not allow_unchanged:
         raise TerminalState('Blueprint 编辑没有改变任何主体')
     rewritten = ctx.rewrite_provenance(previous.provenance, by='--apply-edit').model_copy(update={'origin': 'human'})
-    artifact = ChapterBlueprints(blueprints=chapters, _provenance=rewritten)
+    from novel.stages.stage2.blueprint.narration import derive_narration_default
+    artifact = ChapterBlueprints(
+        blueprints=chapters,
+        narration_default=derive_narration_default(chapters),
+        _provenance=rewritten)
     record = PlotRevisionRecord(request_sha256=consumed_digest(request.model_dump(mode='json')),
         before_subject_sha256=subject(previous), result_subject_sha256=subject(artifact),
         actor=request.actor, reason=request.reason, changes=changes,

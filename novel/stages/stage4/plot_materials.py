@@ -145,11 +145,9 @@ def _compile_materials(ordinal: int, blueprints: dict, grounding: dict,
         return ref
 
     def blueprint_proof(chapter, refs):
-        table = {r.evidence_id: r for r in chapter.evidence_anchors}
+        from novel.stages.stage2.blueprint.evidence import resolve_evidence
         for ref in refs:
-            if ref not in table:
-                raise RefusedByStructure('必要 Blueprint 证据缺失')
-            row = table[ref]
+            row = resolve_evidence(chapter, ref)
             anchor(chapter.chapter_ordinal, row.start, row.end, ref)
 
     def project(value: Any, owner: str) -> Any:

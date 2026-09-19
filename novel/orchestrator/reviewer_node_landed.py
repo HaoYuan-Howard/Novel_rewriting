@@ -55,19 +55,8 @@ def approval_action_landed(
     store = ArtifactStore(readonly_ctx(book, node, code))
     actor, reason = values['--actor'].strip(), values['--reason'].strip()
     if node == 'stage0.approve':
-        from novel.stages.stage0 import removal, revisions
-
-        log = revisions.read(store)
-        if log is None or log.current.approval.status != 'approved':
-            return False
-        approval = log.current.approval
-        if (log.current.revision_id != values['--expected-revision-id']
-                or approval.by != actor or approval.reason != reason):
-            return False
-        removal._require_stage0_fresh(store)
-        if revisions.read(store) != log:
-            raise ArtifactUnreadable('Stage0 批准在已落查询期间变化，不能认领原决定')
-        return True
+        # stage0.approve 已退役；v3 transform 无 approval 格，历史认领路径关闭。
+        return False
 
     if node == 'stage6.approve':
         from novel.stages.stage6 import hook

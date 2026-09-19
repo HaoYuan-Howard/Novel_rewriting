@@ -264,9 +264,10 @@ def build_blind_projection(blueprints: object, *, root_clean_sha1: str,
                'global_subjects': clean_global(global_material)}
         projected.append(PlannerChapter.model_validate(row).model_dump(mode='json'))
     truth = {'blind_contract': BLIND_CONTRACT, 'chapters': projected}
+    from novel.stages.stage2.blueprint.evidence import evidence_ids_of
     formal_ids = {ref['ref'] for ref in subjects.values()} | set(character_rows)
     formal_ids.update(ref for (_kind, ref) in global_rows)
-    formal_ids.update(a.evidence_id for chapter in chapters for a in chapter.evidence_anchors)
+    formal_ids.update(eid for chapter in chapters for eid in evidence_ids_of(chapter))
     formal_ids.update(a.presentation_id for chapter in chapters for a in chapter.actor_bindings)
     patterns = [re.escape(ref) for ref in sorted(formal_ids) if re.search(r'[A-Za-z]+\d|_', ref)]
     pattern = re.compile(r'(?<![A-Za-z0-9_])(?:' + '|'.join(patterns) + r')(?![A-Za-z0-9_])')

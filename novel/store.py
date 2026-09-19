@@ -1900,19 +1900,13 @@ class ArtifactStore:
         return FreshnessReport(state, reason, edges)
 
     def _stage0_revisions_freshness(self) -> FreshnessReport:
-        """`stage0/revisions.json`：这条链是照盘上**现在这份原文**建的吗？
+        """`stage0/revisions.json`：这份 transform 是照盘上**现在这份原文**建的吗？
 
-        ⚠ **不给它补 `_provenance`。** 本层是全链源头、`inputs` 恒空，「这份产物照什么
-        产的」由链根 `source_ref` / `normalized_source_sha1` 答完（理由写在
-        `contracts/schema/stage0.py` 模块头）。
-        补一个 `inputs` 恒空的来源块只是为了让通用那条路走通，等于给同一件事记第二本账。
+        ⚠ **不给它补 `_provenance`。** 本层是全链源头；「照什么产的」由
+        `source.source_ref` / `normalized_source_sha1` 答完。
 
-        ⚠⚠ **只有原文这一条上游边。** `clean_text.txt` 是本格的物化投影，
-        在它下游——把投影当成自己的上游，就是让权威格拿自己的影子自证新鲜，
-        那种边永远 match，判别力是零。「clean live 是不是 `current` 的投影」由判据
-        `s0_revision_chain`（`R-0.5`）逐条复算，完成度只读它、不另造一份。
-
-        原文身份只在链根保存一次，不从任一 revision 反推。
+        ⚠⚠ **只有原文这一条上游边。** `clean_text.txt` 是本格的物化投影；
+        投影完整性由判据 `s0_revision_chain`（R-0.5）核对。
         """
         chain = self._freshness_payload(STAGE0_REVISIONS)
         if chain is None:
@@ -1931,19 +1925,9 @@ class ArtifactStore:
         if chain is None:
             return FreshnessReport('unknown', 'no_provenance')
         source = chain.get('source')
-        current = chain.get('current')
-        revisions = chain.get('revisions')
-        current_id = current.get('revision_id') if isinstance(current, dict) else None
-        if not isinstance(source, dict) or not isinstance(revisions, list) \
-                or not isinstance(current_id, str):
+        clean_was = chain.get('clean_sha1')
+        if not isinstance(source, dict) or not isinstance(clean_was, str):
             return FreshnessReport('unknown', 'no_provenance')
-        content = next(
-            (item.get('content') for item in revisions
-             if isinstance(item, dict) and item.get('revision_id') == current_id), None)
-        clean_text = content.get('clean_text') if isinstance(content, dict) else None
-        if not isinstance(clean_text, str):
-            return FreshnessReport('unknown', 'no_provenance')
-        clean_was = prov.content_sha1(clean_text.encode('utf-8'))
         clean_now = self._content_sha1_or_none(STAGE0_CLEAN_TEXT)
         clean_edge = self._content_edge(STAGE0_CLEAN_TEXT, clean_was, clean_now)
         source_edge = self._stage0_source_edge(
@@ -1993,15 +1977,15 @@ class ArtifactStore:
         旧实现只核 ``partition_report.input_sha1``，所以 main/hook 被单独篡改后仍会
         显示 fresh。现在 freshness 与复检、页面、审批共用 Stage1 唯一审计口。
         """
-        from contracts.schema.stage0 import Stage0Revisions
+        from contracts.schema.stage0 import Stage0Transform
         from contracts.schema.stage1 import HookCopy, MainText
         from novel.stages.stage0 import revisions as stage0_revisions
         from novel.stages.stage1.audit import audit_surface
 
         try:
-            revisions, _ = self.read_own(Stage0Revisions, STAGE0_REVISIONS)
-            stage0_revisions.verify_chain(revisions)
-            stage0 = stage0_revisions.snapshot_of(revisions)
+            transform, _ = self.read_own(Stage0Transform, STAGE0_REVISIONS)
+            stage0_revisions.verify_transform(transform)
+            stage0 = stage0_revisions.snapshot_of(transform)
             clean_text = self.read_own_text(STAGE0_CLEAN_TEXT)
             main_text = self.read_own(MainText, rel)[0] if rel == STAGE1_MAIN_TEXT else None
             hook_copy = self.read_own(HookCopy, rel)[0] if rel == STAGE1_HOOK_COPY else None

@@ -132,7 +132,9 @@ def test_two_chapter_compile_and_single_copy_writer_projection():
         assert set(pairs) == {(1, 1), (2, 2), (1, 2)}
         assert chapter.narration[0].evidence_refs == [chapter.evidence_anchors[2].evidence_id]
         assert 'text' not in chapter.evidence_anchors[0].model_dump()
-        assert chapter.beats[0].source_contexts[0].evidence_refs == chapter.beats[0].evidence_refs
+        from novel.stages.stage2.blueprint.source_contexts import expand_beat_contexts
+        expanded = expand_beat_contexts(chapter.beats[0])
+        assert expanded[0]['evidence_refs'] == chapter.beats[0].evidence_refs
 
 
 def test_distributed_presentation_keeps_parent_and_allows_shared_paragraph():

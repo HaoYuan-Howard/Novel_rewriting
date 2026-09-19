@@ -42,7 +42,7 @@ from contracts.artifacts import (  # noqa: E402
 from contracts.invariants import NODES, WORKFLOW_ROLE_CONTRACT  # noqa: E402
 from contracts.schema import artifact_spec, decode_artifact  # noqa: E402
 from contracts.schema.corpus import CURRENT_CORPUS_PAID_NODES  # noqa: E402
-from contracts.schema.stage0 import Stage0Revisions  # noqa: E402
+from contracts.schema.stage0 import Stage0Transform  # noqa: E402
 from contracts.schema.stage1 import HookCopy, MainText  # noqa: E402
 from novel import config, paths, prov  # noqa: E402
 from novel.llm.budget import (  # noqa: E402
@@ -249,13 +249,14 @@ def _stage1_book(book: BookSpec) -> dict[str, Any]:
         raise ValueError(
             f'{novel_dir} 必须只含 stage0/1；发现下游或未知目录/文件 {unexpected}')
     revisions = _read_current(
-        STAGE0_REVISIONS, novel_dir / STAGE0_REVISIONS, Stage0Revisions)
-    assert isinstance(revisions, Stage0Revisions)
-    stage0_revisions.verify_chain(revisions)
+        STAGE0_REVISIONS, novel_dir / STAGE0_REVISIONS, Stage0Transform)
+    assert isinstance(revisions, Stage0Transform)
+    stage0_revisions.verify_transform(revisions)
     report = stage0_revisions.snapshot_of(revisions)
-    if report.approval.status != 'approved':
+    if report.admission.status != 'passed':
         raise ValueError(
-            f'{novel_dir}: Stage0 状态 {report.approval.status!r}，不允许预览付费重建')
+            f'{novel_dir}: Stage0 admission {report.admission.status!r}/'
+            f'{report.admission.scope!r}，不允许预览付费重建')
     clean_path = novel_dir / STAGE0_CLEAN_TEXT
     try:
         clean = clean_path.read_text(encoding='utf-8')
@@ -263,7 +264,7 @@ def _stage1_book(book: BookSpec) -> dict[str, Any]:
         raise ValueError(f'{clean_path} 不可读：{exc}') from exc
     clean_sha1 = prov.content_sha1(clean.encode('utf-8'))
     if clean_sha1 != report.clean_sha1:
-        raise ValueError('Stage0 clean_text 与已批准 current revision 不一致')
+        raise ValueError('Stage0 clean_text 与当前 transform 不一致')
     main = _read_current(STAGE1_MAIN_TEXT, novel_dir / STAGE1_MAIN_TEXT, MainText)
     hook = _read_current(STAGE1_HOOK_COPY, novel_dir / STAGE1_HOOK_COPY, HookCopy)
     assert isinstance(main, MainText)

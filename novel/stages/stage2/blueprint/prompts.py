@@ -21,9 +21,16 @@ modality=world：holder 必须为 null。
 modality=belief / claim：holder 必须是闭集内 ActorRef。
 modality=unresolved：通常 holder=null；不要把待解事项写成客观 world。
 正式 content XOR global_ref 由程序编译；模型不要自己做二选一排版。
-准入合取：跨过当前 beat 仍成立，且后章仍会消费或必须在后章解除；
-拍内即时结果、姿态、一次性反应只写 beat.content，不要建 state。
-本章内成立又在本章结束、且不必让后章看到的，不要进 states / carry_out_refs。
+准入合取：跨过当前 beat 仍成立，且（后章仍会消费，或必须在后章解除，
+或本章后续 beat 仍依赖该持续事实）；拍内即时结果、姿态、一次性反应
+只写 beat.content，不要建 state。
+边界例子：
+- 「她打了他一巴掌」→ 通常只进 beat，不另建 state；
+- 「她从此误以为他背叛自己」→ 可能需要 belief state（影响后续行为）；
+- 「钥匙被她拿走」→ 动作进 beat；仅当后续开门/搜查/转交仍依赖归属时才建 state。
+不跨章 ≠ 无持续性：章内跨多个 beat 仍生效的伤势、误认、持有物可以保留。
+本章内成立又在本章结束、且不必让后章看到、也不被本章后拍依赖的，
+不要进 states / carry_out_refs。不设状态数量配额。
 
 【constraints——违反即拒】
 cause / story_before / response_to / same_scene：observer 必须为 null。
@@ -68,7 +75,13 @@ inherited_state_endings，取代写 supersedes_state_refs。既有状态先列�
 evidence 只覆盖支撑该持续主张的必要段；不要为拍内已写进 beat.content 的动作再复制证据行。
 constraints 仅登记必要跨节点因果/先后、回应、观察、必须同场或必要字面/数值/对象条件。
 普通内部因果和台词含义直接在 content 中表达，不再建边。
+同一对 beat 不要重复登记完全相同的 story_before（程序会去重）；故事先后与披露顺序不同，
+合法倒叙仍须保留真正的 story_before，不要靠「列表相邻」省略必要边。
 source_contexts 只记录有据的时层、地点和实际在场者；被提及不等于在场，无法确定写 null。
+可稀疏：与 beat.evidence 完全相同的 evidence 可省略；已确定在场者≡participants 时可省略 present；
+已确定为当下时可省略 time_layer。省略不是猜测——不能把「没填」写成「全员在场」。
+同一 beat 可有多条 source_contexts（如当下堂审与昨夜回忆）；不要为压缩拆碎完整认知转折。
+列表整体省略表示恰好一条默认 context；写出任意显式条目后只用显式、不再合成默认。
 原文证据只选编号的段范围，不能抄写正文或编造坐标、主张、人物编号。
 同一段可支持多个节点；证据重叠不等于语义重复，段范围也不证明剧情完整。
 人物位置统一 ActorRef(char_id, presentation_ref)。char_id 是内部身份，不能证明读者知道同人映射。

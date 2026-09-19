@@ -1258,18 +1258,22 @@ class BlueprintProvenance(LlmProvenance):
     # 编辑身份账随同一份蓝图原子提交；审阅/写作投影不下发 provenance。
     plot_revisions: list[PlotRevisionRecord] = Field(default_factory=list)
 
-from contracts.schema.plot import PlotBlueprint
+from contracts.schema.plot import NarrationDefault, PlotBlueprint
 
 
 class ChapterBlueprints(StrictModel):
-    """V10 完整剧情蓝图：每章一个逻辑抽取请求，齐章后原子提交。
+    """V11 完整剧情蓝图：每章一个逻辑抽取请求，齐章后原子提交。
 
     当前章原文、必要 Global 投影及持续状态是实际输入；后章只携带仍成立的状态，
     不累计全部历史动作。身份编辑账保存在 provenance，不下发给规划或写作模型。
+    书级 narration_default 由 compiler 确定性上提；章级 narration 保留拍级覆盖。
     """
 
     #: 长度等于源正文章数；跨产物检查逐章对应。
     blueprints: list[PlotBlueprint] = Field(min_length=1)
+
+    #: 可跨章复用的叙述默认；不得引用章级 presentation_id。
+    narration_default: NarrationDefault | None = None
 
     #: 实际消费的正文、人物与已接受 Global 投影由来源及请求账绑定。
     provenance: BlueprintProvenance = Field(alias='_provenance')
@@ -1285,6 +1289,10 @@ class ChapterBlueprints(StrictModel):
         if len(set(got)) != len(got):
             dup = sorted({o for o in got if got.count(o) > 1})
             raise ValueError(f'chapter_ordinal 重号：{dup}')
+        for chapter in self.blueprints:
+            if not chapter.narration and self.narration_default is None:
+                raise ValueError(
+                    f'第 {chapter.chapter_ordinal} 章缺少 narration 且无书级 narration_default')
         retired, known, requests = set(), set(), set()
         for revision in self.provenance.plot_revisions:
             if revision.request_sha256 in requests:

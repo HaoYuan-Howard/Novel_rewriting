@@ -333,50 +333,21 @@ def test_the_stage0_warning_union_covers_its_value_domain_exactly():
         assert describe(model(kind=kind, **fields)).strip()
 
 
-def test_the_approval_union_covers_its_value_domain_exactly():
-    """⭐ 审批判别联合的两个 `status` 字面量 vs `APPROVAL_STATE`。
+def test_stage0_admission_covers_mechanical_passed_shape():
+    """Stage0 v3 闸门是 `Stage0Admission`，不是 ApprovedApproval/PendingApproval。"""
+    import pydantic
+    from contracts.schema.stage0 import Stage0Admission
 
-    与 warning 那条同构、同一个理由：`Literal['pending']` 与元组之间没有任何语言级
-    联系。⚠ 更要紧的是这里还钉住**两个分支的字段集必须不一样**——
-    收成判别联合的全部意义就在这儿：`pending` 说不出批准时间/来源/批准人，
-    上一版用三个 `None` 表达它，于是「未批准却带着 approved_by」是个需要被拦下的
-    形态；现在它压根写不出来，而这条测试保证它继续写不出来。
-    """
-    import typing
-
-    from contracts.schema.stage0 import (
-        ApprovedApproval, PendingApproval, Stage0Approval,
-    )
-
-    members = typing.get_args(typing.get_args(Stage0Approval)[0])
-    got = {typing.get_args(m.model_fields['status'].annotation)[0] for m in members}
-    assert got == set(inv.APPROVAL_STATE)
-
-    assert set(PendingApproval.model_fields) == {'status'}
-    # ⚠ `reason` 是 2026-08-22 阶段 C 从审计条目搬进来的：审计链折叠进 revision 之后，
-    #   「批准」是唯一一件不改变正文因而不产生新 revision 的人工决定 ⇒ 理由没有别的落点。
-    # ⚠ **`origin` 不在里面**：`auto_zero_hit` 停产（2026-08-21）+ 存量产物随
-    #   removal_report 升到 v3 而本仓不迁移 ⇒ 该取值结构不可达，2026-08-22 与
-    #   `APPROVAL_STATE.not_run` 同一判据删除。这条断言防它长回来。
-    assert set(ApprovedApproval.model_fields) == {'status', 'at', 'by', 'reason'}
-
-    # 「没批却带着批准人」在类型上写不出来（StrictModel 拒未知字段）。
+    assert set(Stage0Admission.model_fields) == {'status', 'scope', 'at', 'by'}
+    ok = Stage0Admission(
+        status='passed', scope='mechanical', at='t', by='system:stage0-auto')
+    assert ok.status == 'passed' and ok.scope == 'mechanical'
+    with pytest.raises(pydantic.ValidationError):
+        Stage0Admission(status='approved', scope='mechanical', at='t', by='x')
+    with pytest.raises(pydantic.ValidationError):
+        Stage0Admission(status='passed', scope='semantic', at='t', by='x')
     with pytest.raises(Exception):
-        PendingApproval(status='pending', by='someone')
-    # 批准只有人一种来源 ⇒ `by` / `reason` 恒必填，且不许是空白串
-    # （`min_length=1` 拦不住 `'   '`，那条留在 validator 里）。
-    with pytest.raises(Exception):
-        ApprovedApproval(status='approved', at='t', by=None, reason='r')
-    with pytest.raises(Exception):
-        ApprovedApproval(status='approved', at='t', by='x', reason=None)
-    with pytest.raises(Exception):
-        ApprovedApproval(status='approved', at='t', by='  ', reason='r')
-    with pytest.raises(Exception):
-        ApprovedApproval(status='approved', at='t', by='x', reason='  ')
-    # 停产取值不许再被构造出来。
-    with pytest.raises(Exception):
-        ApprovedApproval(
-            status='approved', origin='auto_zero_hit', at='t', by='x', reason='r')
+        Stage0Admission(status='passed', scope='mechanical', at='t', by='  ')
 
 
 def test_node_lifecycle_covers_real_nodes_and_preserves_boundaries():

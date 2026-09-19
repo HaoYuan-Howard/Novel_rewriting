@@ -645,42 +645,36 @@ def test_residual_adoption_api_only_accepts_explicit_high(validation_client):
 # ─────────────── 默认套件：CLI typed 定稿 → 只读公开审批投影 ───────────────
 
 def _stage0_on_disk(book: Path, source: Path, source_bytes: bytes, clean_bytes: bytes) -> None:
-    """stage0 权威 revision 链 + 唯一 clean 投影（test_store 的最小本文件副本）。
-
-    原 tests.test_store 模块级还挂着已退役的 global_review 依赖，不能跨文件
-    复用；这里只复刻本夹具需要的 stage0 前置写入。
-    """
-    from contracts.schema.stage0 import Stage0RevisionContent
+    """stage0 权威 transform + 唯一 clean 投影（test_store 的最小本文件副本）。"""
+    import hashlib
+    from contracts.schema.stage0 import ExternalFileRef, Stage0Source
     from novel import prov
-    from novel.stages.stage0.revisions import make_revision
+    from novel.stages.stage0.revisions import make_transform
 
     (book / 'stage0').mkdir(parents=True, exist_ok=True)
     (book / 'stage0' / 'clean_text.txt').write_bytes(clean_bytes)
-    source_identity = {
-        'source_ref': {'kind': 'external_file',
-                       'absolute_path': str(source.resolve())},
-        'normalized_source_sha1': prov.content_sha1(source_bytes),
-        'total_code_points': len(source_bytes.decode('utf-8')),
-    }
-    content = Stage0RevisionContent(clean_text=clean_bytes.decode('utf-8'), removed=[])
-    revision = make_revision(
-        parent_revision_id=None, origin='machine', actor=None, reason=None,
-        code='test-api-edits', content=content,
+    text = source_bytes.decode('utf-8')
+    clean = clean_bytes.decode('utf-8')
+    transform = make_transform(
+        source=Stage0Source(
+            source_ref=ExternalFileRef(
+                kind='external_file', absolute_path=str(source.resolve())),
+            raw_sha256=hashlib.sha256(source_bytes).hexdigest(),
+            encoding='utf-8',
+            normalized_source_sha1=prov.content_sha1(source_bytes),
+            total_code_points=len(text),
+        ),
+        code='test-api-edits',
+        clean_text=clean,
+        removed=[],
     )
-    payload = {
-        'source': source_identity,
-        'revisions': [revision.model_dump(mode='json')],
-        'current': {'revision_id': revision.revision_id,
-                    'approval': {'status': 'pending'}},
-        'candidate_revision_id': None,
-        'dismissed': [],
-    }
     rel = 'stage0/revisions.json'
     target = book / rel
     target.parent.mkdir(parents=True, exist_ok=True)
     from contracts.schema import encode_artifact
     target.write_text(
-        json.dumps(encode_artifact(rel, payload), ensure_ascii=False),
+        json.dumps(encode_artifact(rel, transform.model_dump(mode='json')),
+                   ensure_ascii=False),
         encoding='utf-8', newline='',
     )
 

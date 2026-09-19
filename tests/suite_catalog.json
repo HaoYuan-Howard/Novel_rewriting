@@ -537,6 +537,13 @@
     "stage4"
    ]
   },
+  "tests/test_blueprint_v11_compression.py": {
+   "layer": "unit_contract",
+   "stages": [
+    "stage2",
+    "stage4"
+   ]
+  },
   "tests/test_plot_continuity.py": {
    "layer": "unit_contract",
    "stages": [

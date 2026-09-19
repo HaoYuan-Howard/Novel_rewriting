@@ -21,11 +21,11 @@ class BindingReferenceRefused(BlindPlanError):
 
 
 def source_context_catalog(blueprint: PlotBlueprint) -> dict[str, dict]:
+    from novel.stages.stage2.blueprint.source_contexts import expand_beat_contexts
     result = {}
     for beat in blueprint.beats:
-        for context in beat.source_contexts:
-            body = context.model_dump(mode='json')
-            identity = {'beat_ref': beat.beat_id, **body}
+        for context in expand_beat_contexts(beat):
+            identity = {'beat_ref': beat.beat_id, **context}
             ref = 'scx_' + _sha256(identity)[:16]
             if ref in result and result[ref] != identity:
                 raise BlindPlanError('证据舞台摘要碰撞')
@@ -34,6 +34,7 @@ def source_context_catalog(blueprint: PlotBlueprint) -> dict[str, dict]:
 
 
 def build_evidence_catalog(blueprints: object) -> dict[int, dict]:
+    from novel.stages.stage2.blueprint.evidence import evidence_ids_of
     rows = blueprints.get('blueprints') if isinstance(blueprints, dict) else blueprints
     if not isinstance(rows, list) or not rows:
         raise BlindPlanError('B 缺少完整蓝图证据表')
@@ -45,7 +46,7 @@ def build_evidence_catalog(blueprints: object) -> dict[int, dict]:
         contexts = source_context_catalog(bp)
         result[bp.chapter_ordinal] = {
             'blueprint': bp.model_dump(mode='json'),
-            'evidence_refs': frozenset(a.evidence_id for a in bp.evidence_anchors),
+            'evidence_refs': evidence_ids_of(bp),
             'source_context_refs': frozenset(contexts),
             'source_contexts': contexts,
         }

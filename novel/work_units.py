@@ -25,7 +25,7 @@ from contracts.invariants import (
 )
 from contracts.schema.workflow import (
     BookBudgetGrantV1, BookContentBudgetV1, WorkflowManifestV6,
-    WorkflowManifestV7, WorkflowManifestV8, WorkUnitAttempt, WorkUnitBlobV1,
+    WorkflowManifestV7, WorkflowManifestV8, WorkflowManifestV9, WorkUnitAttempt, WorkUnitBlobV1,
     WorkUnitContentTurn, WorkUnitGroupBlobV1, WorkUnitLedgerV2,
     WorkUnitRegistryV1, WorkUnitProcessing,
 )
@@ -130,7 +130,16 @@ def _replace_snapshot(source: Path, target: Path) -> None:
         _fields_ = [('flags', wintypes.DWORD), ('root_directory', wintypes.HANDLE),
                     ('filename_length', wintypes.DWORD), ('filename', wintypes.WCHAR * 1)]
 
-    filename = str(target.absolute()).encode('utf-16-le')
+    def _extended(path: str) -> str:
+        if path.startswith('\\\\?\\'):
+            return path
+        if path.startswith('\\\\'):
+            return '\\\\?\\UNC\\' + path[2:]
+        return '\\\\?\\' + path
+
+    # 目标也必须走扩展长度前缀：源句柄有 `\\?\` 而 FileName 仍是普通路径时，
+    # 绝对路径一过 MAX_PATH 就会 WinError 206，把「账已 reserved、blob 未落」的孤儿轮留下来。
+    filename = _extended(str(target.absolute())).encode('utf-16-le')
     # Win32 FILE_RENAME_INFO.FileName 仍要求 NUL 结尾；长度字段不计终止符。
     buffer = ctypes.create_string_buffer(RenameInfo.filename.offset + len(filename) + 2)
     info = ctypes.cast(buffer, ctypes.POINTER(RenameInfo)).contents
@@ -141,10 +150,7 @@ def _replace_snapshot(source: Path, target: Path) -> None:
     info.filename_length = len(filename)
     ctypes.memmove(ctypes.addressof(buffer) + RenameInfo.filename.offset,
                    filename, len(filename))
-    source_name = str(source.absolute())
-    if not source_name.startswith('\\\\?\\'):
-        source_name = ('\\\\?\\UNC\\' + source_name[2:] if source_name.startswith('\\\\')
-                       else '\\\\?\\' + source_name)
+    source_name = _extended(str(source.absolute()))
     handle = create_file(source_name, 0x10000, 0x1 | 0x2 | 0x4, None, 3, 0x80, None)
     if handle == ctypes.c_void_p(-1).value:
         raise ctypes.WinError(ctypes.get_last_error())
@@ -208,7 +214,8 @@ def _read(base: str | os.PathLike[str], path: Path, model: type[BaseModel]) -> A
         raise WorkUnitRefused(f'工作单元账缺失或不符合当前契约：{target.name}') from exc
 
 
-def workflow_manifest(base: str | os.PathLike[str]) -> WorkflowManifestV7 | WorkflowManifestV8 | None:
+def workflow_manifest(base: str | os.PathLike[str]) -> (
+        WorkflowManifestV7 | WorkflowManifestV8 | WorkflowManifestV9 | None):
     path = _safe(base, paths.workflow_manifest_path(base))
     if not path.exists():
         if paths.workflow_transition_pending_path(base).exists():
@@ -220,7 +227,13 @@ def workflow_manifest(base: str | os.PathLike[str]) -> WorkflowManifestV7 | Work
         version = json.loads(raw)['schema_version']
     except (TypeError, ValueError, KeyError) as exc:
         raise WorkUnitRefused('工作流 manifest 版本不可读') from exc
-    model = WorkflowManifestV8 if version == 8 else WorkflowManifestV7
+    model = {
+        9: WorkflowManifestV9,
+        8: WorkflowManifestV8,
+        7: WorkflowManifestV7,
+    }.get(version)
+    if model is None:
+        raise WorkUnitRefused(f'不支持的工作流 manifest schema_version={version!r}')
     manifest = _read(base, path, model)
     from novel.orchestrator.workflow_transition import require_transition_completed
     if model.model_validate_json(raw) != manifest:
@@ -551,7 +564,18 @@ class WorkUnitBudget:
                         'unit_ids': (*registry.unit_ids, self.unit_id)}))
             _write(self.base, self.path, updated)
             if request_payload is not None:
-                _write(self.base, self.directory / f'{digest}.json', blob)
+                try:
+                    _write(self.base, self.directory / f'{digest}.json', blob)
+                except BaseException:
+                    # 账已含 reserved；blob 落盘失败必须立刻关闭该轮，否则永久挡住新调用。
+                    self._replace(
+                        updated,
+                        turn.model_copy(update={
+                            'state': 'failed',
+                            'reason_code': 'request_payload_write_failed',
+                        }),
+                    )
+                    raise
             return ContentReservation(self.unit_id, turn.turn_id, turn.ordinal)
 
     def _processing(self, **values: Any) -> WorkUnitProcessing:

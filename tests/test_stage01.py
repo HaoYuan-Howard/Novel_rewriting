@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-'''F6/F7：摄入、机械接受、分章与真实小说的端到端回归。
+'''F6/F7：摄入、机械 admission、分章与真实小说的端到端回归。
 
-2026-09-15 全自动裁决：stage0.approve / stage0.edit 人工闸退役，机械校验
-（s0_* HARD）通过即由 producer 写入 auto 批准（`system:stage0-auto`）。
-人工闸时代的用例（approve 乐观锁、人工编辑、候选三选一）随之退役；
-本文件钉住的是退役后的现役行为。
+2026-09-18 STR-03-S0：Stage0 权威为 v3 `Stage0Transform`（机械 admission）；
+人工闸时代的用例（approve 乐观锁、人工编辑、候选三选一、pending）已退役。
 '''
 from __future__ import annotations
 
@@ -18,9 +16,7 @@ import pytest
 
 from contracts.schema.api import PreviewRequest
 from contracts.schema import encode_artifact
-from contracts.schema.stage0 import (
-    PendingApproval, RemovedSegment,
-)
+from contracts.schema.stage0 import RemovedSegment
 from contracts.schema.stage1 import MainText
 from novel import paths as novel_paths
 from novel.core.ingest import decode_source_bytes
@@ -80,22 +76,12 @@ def _line(report, rule: str):
     return next(line for line in report.rules if line.rule == rule)
 
 
-def _assert_auto_accepted(approval) -> None:
-    """机械接受记录的形状（`removal._auto_approval` 是唯一落点）。"""
-    assert approval.status == 'approved'
-    assert approval.by == 'system:stage0-auto'
-    assert approval.reason
-    assert approval.at
-
-
-def _craft_pending_legacy_draft(novel_dir: Path) -> None:
-    """把盘面退回 B1 之前的形状：同一版机器稿，批准格还是 pending。"""
-    from novel.stages.stage0 import revisions as rev
-
-    store = ArtifactStore(_context(novel_dir, 'stage0.remove'))
-    log = rev.read(store)
-    rev.commit(store, log.model_copy(update={'current': log.current.model_copy(
-        update={'approval': PendingApproval(status='pending')})}))
+def _assert_mechanical_admission(admission) -> None:
+    """机械 admission 的形状（`make_transform` 唯一落点）。"""
+    assert admission.status == 'passed'
+    assert admission.scope == 'mechanical'
+    assert admission.by == 'system:stage0-auto'
+    assert admission.at
 
 
 def test_stage01_packages_are_in_the_explicit_wheel_manifest():
@@ -105,31 +91,26 @@ def test_stage01_packages_are_in_the_explicit_wheel_manifest():
 
 
 def test_materializing_writes_the_single_clean_projection_once():
-    """revision 链是 JSON 权威；物化只写唯一的正文投影。"""
-    from contracts.schema.stage0 import Stage0Current, Stage0Revisions
+    """transform 是 JSON 权威；物化只写唯一的正文投影。"""
+    from novel import prov
     from novel.stages.stage0 import revisions as rev
 
-    source_state, content, _scan = stage0_removal.machine_content(
+    source_state, clean, removed, _scan = stage0_removal.machine_content(
         decode_source_bytes(_case('enc_utf8_sig').to_bytes()),
-        original_path='FQ_once_101.txt')
-    revision = rev.make_revision(
-        parent_revision_id=None, origin='machine', actor=None, reason=None,
-        code='test', content=content)
-    log = Stage0Revisions(
-        source=source_state,
-        revisions=[revision],
-        current=Stage0Current(revision_id=revision.revision_id,
-                              approval=PendingApproval(status='pending')),
-        candidate_revision_id=None)
+        original_path='FQ_once_101.txt',
+        raw_sha256='0' * 64)
+    transform = rev.make_transform(
+        source=source_state, code='test', clean_text=clean, removed=removed)
     calls = []
 
     class RecordingStore:
         def write_text(self, rel, value):
             calls.append(('text', rel, value))
 
-    rev.materialize(RecordingStore(), log)
+    rev.materialize(RecordingStore(), transform, clean_text=clean)
 
-    assert calls == [('text', CLEAN_REL, content.clean_text)]
+    assert calls == [('text', CLEAN_REL, clean)]
+    assert transform.clean_sha1 == prov.content_sha1(clean.encode('utf-8'))
 
 
 def test_first_zero_hit_dry_run_previews_auto_acceptance_without_writing(work):
@@ -145,7 +126,7 @@ def test_first_zero_hit_dry_run_previews_auto_acceptance_without_writing(work):
     novel_dir, preview, check = run_source(source, output, dry_run=True)
 
     assert check is None
-    _assert_auto_accepted(preview.report.approval)
+    _assert_mechanical_admission(preview.report.admission)
     assert preview.report.revision_origin == 'machine'
     assert not output.exists() and not novel_dir.exists(), \
         'dry-run 只能构造内存预览，不得创建 output/书目录/revision 链'
@@ -153,8 +134,8 @@ def test_first_zero_hit_dry_run_previews_auto_acceptance_without_writing(work):
     written_dir, written, written_check = run_source(source, output)
     assert written_dir == novel_dir
     # 两次独立预演/落盘的批准只在时间戳上不同，裁决身份一致。
-    assert written.report.approval.status == preview.report.approval.status
-    assert written.report.approval.by == preview.report.approval.by
+    assert written.report.admission.status == preview.report.admission.status
+    assert written.report.admission.by == preview.report.admission.by
     assert written_check is not None
     assert _line(written_check, 's0_approval').status == 'ok'
     assert _line(written_check, 's0_correctness').status == 'unver'
@@ -168,7 +149,7 @@ def test_first_nonzero_hit_dry_run_previews_auto_acceptance_without_writing(work
 
     assert check is None
     assert preview.report.removed
-    _assert_auto_accepted(preview.report.approval)
+    _assert_mechanical_admission(preview.report.admission)
     assert preview.report.revision_origin == 'machine'
     assert not output.exists() and not novel_dir.exists()
 
@@ -408,7 +389,8 @@ def test_stage0_checker_derives_warning_kinds_without_persisted_state():
     assert [warning.kind for warning in removed.report.warnings] == ['drop_ratio']
 
 
-def test_stage0_checker_rejects_overlapping_human_and_machine_spans():
+def test_stage0_checker_rejects_human_origin_segments():
+    """v3 禁止 origin=human；s0_human_preserved 必须命中。"""
     case = _case('end_marker_then_fanwai')
     removed = remove_bytes(
         case.to_bytes(),
@@ -420,7 +402,7 @@ def test_stage0_checker_rejects_overlapping_human_and_machine_spans():
         **machine.model_dump(mode='json'),
         'origin': 'human',
     })
-    bad_report = removed.report.model_copy(update={'removed': [machine, human]})
+    bad_report = removed.report.model_copy(update={'removed': [human]})
 
     outcomes = stage0_checks.check(
         bad_report,
@@ -428,8 +410,10 @@ def test_stage0_checker_rejects_overlapping_human_and_machine_spans():
         source=decode_source_bytes(case.to_bytes()),
     )
 
-    ledger = next(outcome for outcome in outcomes if outcome.rule == 's0_removal_ledger')
-    assert any('重叠' in finding.detail for finding in ledger.findings)
+    human_line = next(
+        outcome for outcome in outcomes if outcome.rule == 's0_human_preserved')
+    assert human_line.findings
+    assert any('human' in finding.detail for finding in human_line.findings)
 
 
 def test_stage0_checker_recomputes_machine_kind_and_marker_membership():
@@ -488,7 +472,7 @@ def test_numeric_only_fanwai_is_visible_in_the_stage1_view(work):
 
     # 盲区成立的前提——机器什么都没剔，也没有一条 warning 可看。
     assert removed.report.removed == [] and removed.report.warnings == []
-    _assert_auto_accepted(removed.report.approval)
+    _assert_mechanical_admission(removed.report.admission)
     assert initial is not None and _line(initial, 's0_approval').status == 'ok'
 
     run_partition(_context(novel_dir, 'stage1.partition'))
@@ -554,7 +538,7 @@ def test_real_test_data_runs_through_both_deterministic_layers(source: Path, wor
     novel_dir, removed, initial = run_source(source, work / 'Output')
     assert initial is not None
     # 首跑即机械接受（2026-09-15 全自动裁决），零命中书也一样。
-    _assert_auto_accepted(removed.report.approval)
+    _assert_mechanical_admission(removed.report.admission)
     assert _line(initial, 's0_approval').status == 'ok'
     partitioned, partition_report = run_partition(
         _context(novel_dir, 'stage1.partition'),
@@ -613,23 +597,18 @@ def test_no_artifact_holds_the_removed_extra_body(work):
 
 
 def test_approval_state_no_longer_carries_not_run():
-    """P0-2：`not_run` 是从未落过盘的死值（preflight 扫描 0 实例），已从取值面删除。
+    """P0-2：`not_run` 是从未落过盘的死值，已从取值面删除。
 
-    「没跑 / 崩了 / 阻断」是执行状态，由「产物不存在 + JobState」表达，
-    不许再混进产物的审批字段里。
+    Stage0 v3 用 `admission.status=passed`；其它闸的 APPROVAL_STATE 仍可能含
+    pending/approved，但不得再混入 not_run。
     """
     from contracts.invariants import APPROVAL_STATE
 
     assert 'not_run' not in APPROVAL_STATE
-    assert APPROVAL_STATE == ('pending', 'approved')
 
 
-def test_unapproved_states_are_interpreted_not_conflated(work):
-    """状态解释表：pending 与「没跑过」必须解释出**不同**的人读结论。
-
-    2026-09-15 之后 pending 只在存量书上出现（B1 之前中途留下的机器稿）；
-    它的唯一恢复口径是重跑 stage0.remove，而不是「等人工批准」。
-    """
+def test_missing_transform_and_admitted_states_are_not_conflated(work):
+    """状态解释：缺 transform 与已 mechanical admission 必须解释出不同结论。"""
     from novel.errors import UpstreamMissing
     from novel.stages.stage1.partition import run_partition
 
@@ -640,41 +619,17 @@ def test_unapproved_states_are_interpreted_not_conflated(work):
             return f'{type(exc).__name__}: {exc}'
         return 'ran'
 
-    # 行 1：无 report（JobState 尚未起步/没跑过）→ 说「先跑上游」，不是「没批」。
     empty_dir = work / 'Output' / 'FQ_状态解释_9501'
     empty_dir.mkdir(parents=True)
     assert '先跑产它的那一层' in _stage1_outcome(empty_dir)
 
-    # 行 3：有 report + pending（存量机器稿）→ 指路重跑 stage0.remove 完成机械接受。
-    source = _source(work, 'FQ_状态解释_9502.txt', 'enc_utf8_sig')
-    pending_dir, _result, _ = run_source(source, work / 'Output')
-    _craft_pending_legacy_draft(pending_dir)
-    assert '先重跑 stage0.remove' in _stage1_outcome(pending_dir)
-
-    # 行 4：approved（机械接受）→ 真的跑得动（enc_utf8_sig 样本 ≥2 章）。
     source_ok = _source(work, 'FQ_状态解释_9503.txt', 'enc_utf8_sig')
     novel_dir, _result, _ = run_source(source_ok, work / 'Output')
     assert _stage1_outcome(novel_dir) == 'ran'
 
-    # 行 2（无 report + JobState failed）与行 1 同走「产物不存在」的 UpstreamMissing，
-    # 失败与否由作业记录解释，本层不重复建模。
-    #
-    # ⚠ 这里曾有第 5 行：`approved + auto_zero_hit`（历史自动批）→「需人工重批」。
-    #   2026-08-22 随该死值删除。
-
 
 def test_execution_eligibility_has_exactly_one_home():
-    """纪律：消费方必须 import 同一个谓词，不许各自复述条件。
-
-    审批条件在消费方里再次出现，就是绕过闸门的复活口
-    （`docs/LESSONS.md` §21：改向时把同一条 R 的全部守卫一次列全）。
-
-    ⚠ **2026-09-15 之后这个谓词恰好等于 `status == 'approved'`**
-    （机械通过即自动接受；pending 只在存量书上出现），本用例因此比以前更要紧
-    而不是更没用：条件越像一句废话，「顺手在消费方里直接写一遍」就越顺手，
-    而下一次收紧时漏的就是那一处。
-    ⚠ queue 不再消费 stage0 资格（stage0.approve 闸退役后队列没有这一格）。
-    """
+    """纪律：消费方必须 import 同一个谓词，不许各自复述条件。"""
     from pathlib import Path as _Path
 
     consumers = [
@@ -685,9 +640,6 @@ def test_execution_eligibility_has_exactly_one_home():
     ]
     for rel in consumers:
         text = (_Path(rel)).read_text(encoding='utf-8')
-        # ⚠ 认的是**当前那个读取表达式**。这里曾写成匹配已改名的旧平铺字段
-        #   `.approved == 'approved'`，阶段 C 把它换成 `approval.status` 之后
-        #   那条断言就再也匹配不上任何东西——一条恒绿的守卫比没有守卫更坏。
         assert "approval.status == 'approved'" not in text, (
             f'{rel} 复述了审批条件——改用 '
             f'novel/stages/stage0/eligibility.py::is_stage0_executable')
@@ -698,11 +650,7 @@ def test_execution_eligibility_has_exactly_one_home():
         'stage0 人工闸退役后队列不再判 stage0 资格；'
         '重新引入时必须走 eligibility 落点并把本文件 consumers 表补回')
 
-    # ⚠ **前端是另一处消费方**，而它一直在自己拼这个条件。现在响应里带
-    #   `executable`，屏幕只读结论。这条断言防它长回来。
     screen = _Path('web/src/screens/stage0/Stage0Screen.tsx').read_text(encoding='utf-8')
-    #   ⚠ 认的是**读取表达式**不是措辞：写成匹配 `=== 'approved'` 会连自己那条
-    #   解释性注释一起匹配上（实测踩到），而那种守卫红得毫无信息。
     for expression in ('current.approval.status', 'current.approval.origin',
                        'current.approval_origin'):
         assert expression not in screen, (
@@ -711,20 +659,11 @@ def test_execution_eligibility_has_exactly_one_home():
     assert 'current.executable' in screen
 
 
-# ── 命令 DTO：意图与事实在类型上分家（TODO-36） ─────────────────────────────
-
-
 def test_command_dto_cannot_even_express_forged_provenance():
-    """命令 DTO 与产物 DTO 分家之后，伪造 provenance **构造不出来**。
-
-    `Stage0EditPlan.removed` 只收 `RequestedRemoval`（span + kind 意图）；
-    origin/行号/标记行/预览在类型上就不在客户端手里，事实字段由服务端
-    唯一落点复算。此职责现由 Stage5/6/7 的 typed 编辑计划共用同一分家原则。
-    """
+    """RequestedRemoval 只收意图字段；事实 provenance 构造不出来。"""
     import pydantic
-    from contracts.schema.stage0 import RequestedRemoval, Stage0EditPlan
+    from contracts.schema.stage0 import RequestedRemoval
 
-    assert Stage0EditPlan.model_fields['removed'].annotation == list[RequestedRemoval]
     with pytest.raises(pydantic.ValidationError):
         RequestedRemoval.model_validate({
             'kind': '番外', 'span': (0, 10), 'origin': 'machine',

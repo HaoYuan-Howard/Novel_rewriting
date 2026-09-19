@@ -1178,7 +1178,8 @@ def _chapter_binding_issue(
         if value['kind'] == 'character'}
     scene_ids = frozenset(s['candidate_scene_id'] for s in chapter['scenes'])
     issued = set(scene_ids) | used | set(materials.source_context_catalog)
-    issued.update(a.evidence_id for a in bp.evidence_anchors)
+    from novel.stages.stage2.blueprint.evidence import evidence_ids_of
+    issued.update(evidence_ids_of(bp))
     issued.update(a.evidence_ref for a in materials.evidence_anchors)
     issued.update(b.beat_id for b in bp.beats)
     issued.update(s.state_id for s in bp.states)

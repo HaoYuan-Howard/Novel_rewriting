@@ -444,7 +444,7 @@ def _run_stage0_source(
     print(
         f'  ✓ stage0 {action} {novel_dir}：保留 {result.report.body_code_points}/'
         f'{result.report.total_code_points} 码点，剔除 {len(result.report.removed)} 段，'
-        f'状态 {result.report.approval.status}',
+        f'状态 {result.report.admission.status}/{result.report.admission.scope}',
     )
     if result.report.warnings:
         print('  ⚠ 可疑项：' + '、'.join(w.kind for w in result.report.warnings))
@@ -452,8 +452,8 @@ def _run_stage0_source(
 
 
 def _run_stage0(ctx: RunContext, flags: list[str]) -> int:
-    '''stage0 只剩 remove：机械剔除 + 自动接受（人工 approve/edit 已退役）。'''
-    from contracts.schema.stage0 import Stage0Revisions
+    '''stage0 只剩 remove：机械剔除 + 机械 admission（人工 approve/edit 已退役）。'''
+    from contracts.schema.stage0 import Stage0Transform
     from novel.stages.stage0 import checks, removal
     from novel.store import ArtifactStore
 
@@ -469,8 +469,8 @@ def _run_stage0(ctx: RunContext, flags: list[str]) -> int:
     if source is None:
         store = ArtifactStore(ctx)
         from novel.stages.stage0 import revisions as stage0_revisions
-        log, _raw = store.read_own(Stage0Revisions, removal.REVISIONS_REL)
-        stage0_revisions.verify_chain(log)
+        log, _raw = store.read_own(Stage0Transform, removal.REVISIONS_REL)
+        stage0_revisions.verify_transform(log)
         previous = stage0_revisions.snapshot_of(log)
         # ⚠ 两支处置相反，而 `source_ref` 让它们在类型上就分得开：`managed_upload`
         #   跟着 base 走（Output 根搬家不影响它），`external_file` 找不到就是世界
@@ -489,7 +489,7 @@ def _run_stage0(ctx: RunContext, flags: list[str]) -> int:
     print(
         f'  ✓ stage0 {action} {novel_dir}：保留 {result.report.body_code_points}/'
         f'{result.report.total_code_points} 码点，剔除 {len(result.report.removed)} 段，'
-        f'状态 {result.report.approval.status}',
+        f'状态 {result.report.admission.status}/{result.report.admission.scope}',
     )
     return X.OK
 

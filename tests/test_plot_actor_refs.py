@@ -249,8 +249,10 @@ def test_ch7_style_foreign_presentation_refs_canonicalize_to_null():
     assert second.actor_bindings[0].presentation_id == 'ap02_01'
     assert second.beats[0].participants[0].presentation_ref is None
     assert second.beats[0].participants[1].presentation_ref == 'ap02_01'
-    assert second.beats[0].source_contexts[0].present[0].presentation_ref is None
-    assert second.beats[0].source_contexts[0].present[1].presentation_ref == 'ap02_01'
+    from novel.stages.stage2.blueprint.source_contexts import expand_beat_contexts
+    present = expand_beat_contexts(second.beats[0])[0]['present']
+    assert present[0]['presentation_ref'] is None
+    assert present[1]['presentation_ref'] == 'ap02_01'
     validate_actors(second, SOURCE, allowed_char_ids=CHARS, character_bindings=INVENTORY,
                     inherited=inherited)
     # 历史句柄 + 错误 char_id：拒绝，不能碰巧解析。

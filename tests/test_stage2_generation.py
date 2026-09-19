@@ -787,8 +787,9 @@ def test_stage2_refuses_stale_stage1_before_the_client_can_be_called(tmp_path):
     book = tmp_path / '旧上游_123'
     book.mkdir()
     ctx = _ctx(book, 'stage2.global')
-    from contracts.schema.stage0 import Stage0RevisionContent
-    from novel.stages.stage0.revisions import make_revision
+    import hashlib
+    from contracts.schema.stage0 import ExternalFileRef, Stage0Source
+    from novel.stages.stage0.revisions import make_transform
     from novel.stages.stage1.partition import partition_text
 
     clean_text = (
@@ -798,27 +799,28 @@ def test_stage2_refuses_stale_stage1_before_the_client_can_be_called(tmp_path):
         + '\n'
     )
     clean = book / 'stage0/clean_text.txt'
+    clean.parent.mkdir(parents=True, exist_ok=True)
     clean.write_text(clean_text, encoding='utf-8', newline='')
     source = tmp_path / 'FQ_旧上游_123.txt'
     source.write_text(clean_text, encoding='utf-8', newline='')
-    content = Stage0RevisionContent(clean_text=clean_text, removed=[])
-    revision = make_revision(
-        parent_revision_id=None, origin='machine', actor=None, reason=None,
-        code='test-stage2-generation', content=content,
+    raw = clean_text.encode('utf-8')
+    transform = make_transform(
+        source=Stage0Source(
+            source_ref=ExternalFileRef(
+                kind='external_file', absolute_path=str(source.resolve())),
+            raw_sha256=hashlib.sha256(raw).hexdigest(),
+            encoding='utf-8',
+            normalized_source_sha1=prov.content_sha1(raw),
+            total_code_points=len(clean_text),
+        ),
+        code='test-stage2-generation',
+        clean_text=clean_text,
+        removed=[],
     )
-    revisions = {
-        'source': {
-            'source_ref': {'kind': 'external_file', 'absolute_path': str(source.resolve())},
-            'normalized_source_sha1': prov.content_sha1(clean_text.encode('utf-8')),
-            'total_code_points': len(clean_text),
-        },
-        'revisions': [revision.model_dump(mode='json')],
-        'current': {'revision_id': revision.revision_id, 'approval': {'status': 'pending'}},
-        'candidate_revision_id': None,
-        'dismissed': [],
-    }
     (book / 'stage0/revisions.json').write_text(
-        json.dumps(encode_artifact('stage0/revisions.json', revisions), ensure_ascii=False),
+        json.dumps(encode_artifact(
+            'stage0/revisions.json', transform.model_dump(mode='json')),
+            ensure_ascii=False),
         encoding='utf-8', newline='',
     )
     store = ArtifactStore(ctx)

@@ -50,34 +50,39 @@ class SourceRevisionProof:
 
 
 def revision_proof(store, source_root: str) -> SourceRevisionProof:
-    """重新验证当前源及原根的真实祖先；返回审计证明，绝不缓存到下次请求。"""
+    """重新验证当前源与旧根是否同一 transform；返回审计证明，绝不缓存到下次请求。
+
+    Stage0 v3 无多修订祖先链：仅当 `source_root == 当前 clean_sha1` 时放行，
+    并以 `transform_id` 同时充当 ancestor / current 身份。
+    """
     from novel.stages.stage0 import revisions
     from novel.stages.stage1.audit import audit_surface, scan_partition
     from novel.stages.stage1.partition import partition_text
 
     # 所读内容仅用于来源证明，不能污染调用 owner 的业务输入。
     with store.ctx.validation_reads():
-        chain = revisions.read(store)
-        if chain is None or chain.current.approval.status != 'approved':
-            raise ProvenanceRefused('源修订采用要求已批准的 Stage0 revision 链')
+        transform = revisions.read(store)
+        if transform is None or transform.admission.status != 'passed':
+            raise ProvenanceRefused(
+                '源修订采用要求机械 admission 已 passed 的 Stage0 transform')
         if store.freshness(STAGE0_CLEAN_TEXT).state != 'fresh':
             raise ProvenanceRefused('源修订采用的原文件或 clean 物化不符合审计链')
-        current = revisions.current_revision(chain)
         clean = store.read_own_text(STAGE0_CLEAN_TEXT)
         target_root = prov.content_sha1(clean.encode('utf-8'))
-        indexed = {row.revision_id: row for row in chain.revisions}
-        ancestor = current
-        while prov.content_sha1(ancestor.content.clean_text.encode('utf-8')) != source_root:
-            if ancestor.parent_revision_id is None:
-                raise ProvenanceRefused('旧根不在当前同书 Stage0 的祖先链，拒绝混根')
-            ancestor = indexed[ancestor.parent_revision_id]
+        if source_root != target_root:
+            raise ProvenanceRefused(
+                'Stage0 v3 无多修订祖先链；旧根必须等于当前 transform 的 clean_sha1')
         main, _payload, main_raw = store._validated_read(MainText, STAGE1_MAIN_TEXT)
         hook = store.read_own(HookCopy, STAGE1_HOOK_COPY)[0]
-        audit = audit_surface(clean_text=clean, stage0=revisions.snapshot_of(chain),
-                              main_text=main, hook_copy=hook)
+        audit = audit_surface(
+            clean_text=clean,
+            stage0=revisions.snapshot_of(transform),
+            main_text=main,
+            hook_copy=hook,
+        )
         if audit.hard_findings or not audit.main_current or not audit.hook_current:
             raise ProvenanceRefused('源修订采用要求当前 MainText / HookCopy 与已审源逐字相符')
-        old_clean = ancestor.content.clean_text
+        old_clean = clean
         old_partition = partition_text(old_clean)
         # 同时钉源切片、正式版本化 MainText 原字节和真实 payload；只比较语义
         # 摘要会漏章标记、边界或盘上格式变动，不能替代这条完整来源证明。
@@ -85,8 +90,10 @@ def revision_proof(store, source_root: str) -> SourceRevisionProof:
             old_clean[scan_partition(old_clean).first_marker:] == clean[audit.partition.first_marker:]
             and old_partition.main_text == main
             and store._render(STAGE1_MAIN_TEXT, old_partition.main_text) == main_raw)
-        return SourceRevisionProof(source_root, target_root, ancestor.revision_id,
-            current.revision_id, hashlib.sha256(main_raw).hexdigest(),
+        tid = transform.transform_id
+        return SourceRevisionProof(
+            source_root, target_root, tid, tid,
+            hashlib.sha256(main_raw).hexdigest(),
             hashlib.sha256(store._render(STAGE1_HOOK_COPY, old_partition.hook_copy)).hexdigest(),
             same_body)
 

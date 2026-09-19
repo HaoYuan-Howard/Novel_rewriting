@@ -152,6 +152,37 @@ class WorkflowManifestV8(FrozenModel):
     transition_ref: WorkflowTransitionRefV1 | None = None
 
 
+class PipelineArtifactVersionsV9(FrozenModel):
+    """STR-03-S2-BP：ChapterBlueprints v11 无损结构压缩。"""
+
+    characters: Literal[2] = 2
+    global_grounding: Literal[7] = 7
+    analyze_receipt: Literal[1] = 1
+    chapter_blueprints: Literal[11] = 11
+    blind_candidate: Literal[7] = 7
+    blind_chapter_edit: Literal[3] = 3
+    evidence_binding: Literal[7] = 7
+    plan_edit: Literal[7] = 7
+    writer_context: Literal[10] = 10
+    stage6_prepare: Literal[1] = 1
+    stage6_prepare_edit: Literal[1] = 1
+    stage6_prepare_review: Literal[1] = 1
+    stage6_prepare_decision: Literal[1] = 1
+    hook: Literal[4] = 4
+    hook_semantic_review: Literal[3] = 3
+    name_map: Literal[3] = 3
+
+
+class WorkflowManifestV9(FrozenModel):
+    schema_version: Literal[9] = 9
+    contract_version: Literal['stage4-presentation-ir-v1'] = 'stage4-presentation-ir-v1'
+    pipeline_contract_epoch: Literal['stage4-presentation-ir-v1'] = 'stage4-presentation-ir-v1'
+    artifact_versions: PipelineArtifactVersionsV9 = Field(default_factory=PipelineArtifactVersionsV9)
+    task_id: Sha256
+    created_at: int
+    transition_ref: WorkflowTransitionRefV1 | None = None
+
+
 class WorkflowTransitionBookProofV1(FrozenModel):
     characters_sha256: Sha256
     global_sha256: Sha256

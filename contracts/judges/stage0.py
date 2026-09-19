@@ -22,10 +22,10 @@ def _info(rule: str, item: str, requirement: str, **kw) -> Rule:
 
 _hard('s0_nonbody_shared', '剔除与残留断言使用同一套非正文判据', 'R-0.1')
 _hard('s0_removal_ledger', '每段剔除都有可回到原文的完整账', 'R-0.2')
-_hard('s0_approval', 'stage0 已获批准（机械校验通过即自动接受）才可继续', 'R-0.3b')
-_hard('s0_revision_chain', 'revision 链逐条自证，两份 live 产物是它的物化投影', 'R-0.5')
+_hard('s0_approval', 'stage0 机械 admission 通过才可继续', 'R-0.3b')
+_hard('s0_revision_chain', 'transform 自证，clean_text 是其物化投影', 'R-0.5')
 _hard('s0_hashes', '原始正文与清理正文的两个指纹都对得上', 'R-0.6')
-_hard('s0_human_preserved', '人工编辑状态没有被机器重跑抹掉', 'R-0.8')
+_hard('s0_human_preserved', 'v3 禁止人工剔除段进入正式 transform', 'R-0.8')
 _hard('s0_body_ratio', '清理后正文至少保留六成', 'R-0.9')
 _info('s0_warnings', '可疑剔除逐项显式报出', 'R-0.10')
 _hard('s0_decode', '原始小说仍能按记录的编码无损解码', 'R-0.11')

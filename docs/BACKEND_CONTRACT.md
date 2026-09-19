@@ -67,13 +67,13 @@ stage7，承诺范围内零模型）。受托 Commander 审阅角色已退役（
 |---|---|---|
 | R-0.1 | 自动剔除用的是 `R-1.7` 的同一套判据与同一张 `NONBODY_KINDS`——**只有一份** | `HARD` |
 | R-0.2 | 剔除逐段只记不可再生的决定与最小定位证据：类型、标记行、原文码点区间、来源。行号、字数与预览从原文和 span 现算；**番外体不进产物目录** | `HARD` |
-| R-0.3a | **人工批准这个动作本身**——「这一段到底是不是番外」没有结构不变量可查，只能人看。**批准的唯一来源是人**：HTTP 与受托 Agent/CLI 均经 `stage0.approve` 的同一 typed producer；公开检查单从当前 revision 链、执行资格与 freshness 只读投影，不要求额外服务盖章。批准请求必须带本次实际审阅的完整 `expected_revision_id`；工作包 A 与提交之间若经 edit/adopt 变成 B，乐观锁关闭式拒绝，不能把 A 的人眼结论盖到 B。审批页显示完整原文、删除高亮与运行时 warnings；Agent Reviewer 的 immutable workpack 也必须逐字携带完整 current clean_text 与全部剔除段，首尾/词表/章号摘要只是导航，不能代替全文反查纯数字章号下的语义漏剔。首个章号前的非空片段是 `R-1.12` 要求下游保留的开篇文案：叙事性概述、提前呈现后文情节/对白或与正文形成重复钩子均不得仅凭“不是第一章正文”判为漏剔；只把书名/作者署名、平台网址、站内导航、更新订阅/票赏推广、作者站务元话语等不属于作品叙事文案的站务或元数据残留视为问题。发现误删/漏剔时必须有不写审批、不执行节点的 typed stop 出口，不得被唯一 approve option 逼成违心通过。正式分章对照在免费 Stage1 落盘后进行 | **`人`** + revision 乐观锁，见 `B-20` |
-| R-0.3b | **未获批准的书，stage1 必须拒绝启动**；执行资格的唯一落点是 `novel/stages/stage0/eligibility.py::is_stage0_executable`，消费方一律 import、**不许复述条件**。2026-09-15 起批准由机械校验通过自动写入；存量 pending 书重跑 stage0.remove 收口 | `HARD` |
+| R-0.3a | **【v3 收窄】** 剔除语义正确性仍无人可机械证明（见 `R-0.7` / Q-13）。闸门不再是人工 `approved`，而是 transform 的 **mechanical admission**（`status=passed`）。公开检查单从当前 transform、执行资格与 freshness 只读投影。API 仍可投影 `revision_id`（= `transform_id`）供兼容读面 | **机械** + `B-20` 披露面 |
+| R-0.3b | **未获 mechanical admission 的书，stage1 必须拒绝启动**；执行资格的唯一落点是 `novel/stages/stage0/eligibility.py::is_stage0_executable`，消费方一律 import、**不许复述条件**。v3 首跑即写入 admission；缺 transform / 损坏盘面须重跑 `stage0.remove` | `HARD` |
 | R-0.4 | 【已退役 2026-09-15】人工编辑剔除范围随 `stage0.edit` 退役；判据漏掉的那类（语义误剔/漏剔）转为 `R-0.7` 的交付披露，不再有人工修正入口 | `不适用`（退役条款） |
-| R-0.5 | revision 链逐条自证（判据 `s0_revision_chain` 逐条复算 `revision_id`），`clean_text.txt` 是 `current` 的唯一物化投影。历史 `origin=human` 稿保留只读；现役机器稿重算按 `R-0.8` 处置 | `HARD` |
-| R-0.6 | 必须能核对**两个内容身份**：链根保存 `normalized_source_sha1`（原始 txt 归一化文本，不是文件字节 digest）；`clean_sha1` 从 current `clean_text` 与 live 投影现算。Stage1 的真正输入身份是后者 | `HARD` |
+| R-0.5 | transform 自证（判据 `s0_revision_chain` 复算 `transform_id`），`clean_text.txt` 是当前 transform 的唯一物化投影。无多修订祖先链 | `HARD` |
+| R-0.6 | 必须能核对**两个内容身份**：`Stage0Source.normalized_source_sha1`（归一化原文）；`clean_sha1` 从 transform 与 live 投影现算。Stage1 的真正输入身份是后者 | `HARD` |
 | R-0.7 | 剔除的**正确性**——「这一段到底是不是番外」。2026-09-15 起人工确认入口退役，本维转为 Q-13 内容质量类披露随交付输出 | `人`→`披露`（`s0_correctness`；Q-13） |
-| R-0.8 | 重跑 stage0 的覆盖规则（2026-09-15 全自动裁决）：当前稿是机器稿（无论 pending 还是已批准）⇒ 直接替换为新算法结论并保持 auto 批准——剔除是确定性算法的输出；当前稿含人工内容（`origin=human` 存量）⇒ 关闭式 TerminalState 拒绝，指引显式废弃书目录重跑（`R-0.14`），不静默覆盖；原文变化连替换都不谈。历史「人否过的候选不复活」检查保留 | `HARD` |
+| R-0.8 | 重跑 stage0（v3）：同原文且算法结论相同 ⇒ 盘面不变；结论变化 ⇒ 整份替换 transform 并保持 mechanical admission。原文变化关闭式拒绝（`R-0.14`）。v3 无人工稿覆盖分支 | `HARD` |
 | R-0.9 | 剔除后正文占比 < 0.60 判失败——**红在花钱之前** | `HARD` |
 | R-0.10 | 可疑但不算错的按 current 内容现算为显式 `warnings[]` 视图（`STAGE0_WARNINGS` 三类），**不落 revision、不静默、不自动修正、不硬报错** | `INFO` |
 | R-0.11 | 解码：BOM 优先探测，无 BOM 时试 `utf-8` → `gb18030`。**解码失败入显式终态，绝不用替换字符** | `HARD` |
@@ -258,7 +258,7 @@ A 脱离源顺序设计，B 给冻结候选绑定证据，代码编译正式计�
 | R-5.10e | A/B 完整字节失配不等于一律需要人工：若同一条普通来源边已证明**声明消费投影**变化，freshness 汇总必须保留 `consumed_changed`，让登记 producer 按 canonical 动作重建；只有消费投影仍相同、而未消费字节或格式单独变化时才是 `file_changed`，继续关闭式停在人工决定。两类都仍由 `R-5.10d` 的 exact SHA 闸阻断，不得把“可确定重建”误报为“仍然 fresh” | `结构`（`novel/store.py::_stage4_plan_phase_freshness`）+ 业务投影变化/仅空白变化正反例回归 |
 | R-5.10f | Stage4B 输入契约只由 `inspect_binding_input_contract` 解释。仅已发行 `origin=llm`、`architecture=chapter_baseline_v1`、完整逐章来源与精确旧 system 指纹共同证明的缺回执，才是 `stale/binding_input_contract_obsolete`；未知架构、回执或来源形状保持 `unknown/binding_input_contract_unproven`。普通上游 freshness 原因优先保留，compiled Plan 在 exact A/B 边闭合后继承当前 B 的输入契约结论，不伪造消费投影变化。已知过时 B 在当前 A 已正式接受、现有 paid/egress/epoch 授权仍成立且产物可读无 INVALID 时，由原 `stage4.plan` producer 经 canonical queue 重建；未知来源不取得此特许。0 成本 `--apply-binding` 仍可提交同一 typed 业务形状，不能手补历史回执或用 `--revalidate` 冒充重新下发模型输入 。旧整书、缺省架构或不完整章来源不得解码成当前绑定，也不得取得自动重采权限。 | `结构`（`novel/stages/stage4/binding_input_contract.py::inspect_binding_input_contract` + `novel/store.py::_stage4_binding_input_freshness` / `::_stage4_plan_phase_freshness` + `novel/orchestrator/state.py::operator_redo_flags`）；Store/Operator/API 恢复正反例回归 |
 | R-5.11 | 编译参数、fact atom 数、源舞台数与结构算法版本均可由当前代码和上游现算，不进入计划或 provenance；结构读数必须现场计算，算法读数变化不得改写计划字节 | `载体`（strict schema + `novel/stages/stage4/measure.py::structure_metrics_of`） |
-| R-5.11b | 当前组合为 ChapterBlueprints v10、PlotEdit v2、BlindCandidate v7、BlindChapterEdit v3、EvidenceBinding v7、PlanEdit v7、WriterContext v10；登记在 workflow manifest v8；**PlanChapters 正式产物已退役**（STR-03-S4），内存编译视图仍可临时用于 HARD。人物 v2、Global v7 与 Blueprint v10 形状未变不升版；旧业务载体关闭式拒读，不手补产物。其余离线过渡与 Gate 规则同前。 | `载体`（`ARTIFACT_SPECS` + `contracts/schema/workflow.py`）+ `novel/orchestrator/workflow_transition.py` / CAS 恢复反例 |
+| R-5.11b | 当前组合为 ChapterBlueprints v11、PlotEdit v2、BlindCandidate v7、BlindChapterEdit v3、EvidenceBinding v7、PlanEdit v7、WriterContext v10；登记在 workflow manifest v9；**PlanChapters 正式产物已退役**（STR-03-S4），内存编译视图仍可临时用于 HARD。Blueprint v11（STR-03-S2-BP）为无损结构压缩：统一 evidence 解析、source_contexts 稀疏编码、narration_default；拒读 v10，存量由 stage2.blueprint 付费整跑重建。其余离线过渡与 Gate 规则同前。 | `载体`（`ARTIFACT_SPECS` + `contracts/schema/workflow.py`）+ `novel/orchestrator/workflow_transition.py` / CAS 恢复反例 |
 | R-5.12 | 每个完整节点必须有唯一 placement 且覆盖本章全部节点；少数节点可在多个同章场景分段表现，delivery 不成为上游可引用的新剧情主体。联合遗漏、重复和含义改变交既有设计与结构审阅。 | `结构`（`novel/stages/stage4/plot_placements.py::compile_placements`）+ **`人`** |
 | R-5.13 | 一场的预算不许被必须逐字写入的原话挤满：低于 2 倍只提示，不自动改场或改事实 | `INFO`（`verbatim_starved`） |
 | R-5.14 | 原话占场景预算的分布要无条件报出；阈值没有独立质量真值，读数不作放行门 | `度量`（`verbatim_share`） |

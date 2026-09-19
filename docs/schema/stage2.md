@@ -5,7 +5,7 @@ Stage2 语义审阅（Global 逐项审阅、Blueprint 章审与跨章复核、�
 下游前置由统一机械准入承接（`novel/orchestrator/mechanical_admission.py`）：必要产物可读、当前、无未恢复 INVALID
 且机械检查全部通过；语义结论只以报告 `unver` 行披露，最终随交付披露该限制。
 
-## Blueprint v10 剧情契约
+## Blueprint v11 剧情契约
 
 完整节点、稀疏状态/约束、共享证据和分场职责见 [plot_blueprint.md](./plot_blueprint.md)。
 普通对白的语义、施受关系和话语作用属于 beat.content；必要字面、数值和物件才成为约束。
@@ -30,7 +30,7 @@ terminal 等待人工后继时存活，不计作阶段输出：
 | `stage2/characters_edit.json` | `CharactersEdit` v2 | 人工输入 | 绑定原始 SHA 的人物 add/replace/delete，免费同尺校验及回执 |
 | `stage2/global_grounding.json` | `KnowledgeGrounding` v7 | `stage2.global` | 四类长期约束、共享证据表与必要人物投影 SHA；人物独立存储 |
 | `stage2/blueprint_character_projection.json` | `BlueprintCharacterProjection` v2 | `stage2.characters` | 人物注册与 MainText 确定性物化的逐章称名闭集；Global 无写权限 |
-| `stage2/chapter_blueprints.json` | `ChapterBlueprints` v10 | `stage2.blueprint` | 完整剧情、持续状态、稀疏约束、人物呈现绑定、共享证据表和有据源语境 |
+| `stage2/chapter_blueprints.json` | `ChapterBlueprints` v11 | `stage2.blueprint` | 完整剧情、持续状态、稀疏约束、人物呈现绑定、章内证据表（统一 resolve）、稀疏源语境与书级 narration_default |
 | `stage2/global_edit.json` | `GlobalEdit` v6 | 人工输入 | Stage2 typed 订正决策集（`stage2.global --emit-edit-template` 生成当前骨架，`--apply-edit` 消费） |
 | `stage2/blueprint_edit.json` | `PlotEdit` v2 | 人工输入 | 当前 token 绑定的完整指定章及 beats/states/constraints/actor_bindings 的 preserve/replace/add 身份操作，preview/apply 共用编译器 |
 | `stage2/global_edit_input_commit.json` | `GlobalEditInputCommit` v2 | `stage2.global` 内部 WAL | 在改 canonical edit/failure 前冻结 sparse target、运输身份及 edit/failure/formal-journal baseline |
@@ -211,7 +211,7 @@ Global 不写入该投影。投影存在与 Global 正式可用共同构成 Blue
 
 ## 二、`chapter_blueprints.json`
 
-ChapterBlueprints v10 顶层保存 blueprints 与 _provenance。每章唯一键 chapter_ordinal
+ChapterBlueprints v11 顶层保存 blueprints、可选 narration_default 与 _provenance。每章唯一键 chapter_ordinal
 仍与源章同号且顺序不变。完整字段、拆分规则、证据和状态生命周期见
 [plot_blueprint.md](./plot_blueprint.md)；类型源为 contracts/schema/plot.py。
 

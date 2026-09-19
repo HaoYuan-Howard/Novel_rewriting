@@ -21,7 +21,7 @@ from tests.stage2_fixtures import character_response
 from tests.test_stage2 import main_text
 from tests.test_stage2_generation import _ctx
 from tests.test_stage2_global_agent import _free_ctx, _profile
-from tests.factories import stage0_force_pending, stage0_machine_revise
+from tests.factories import stage0_machine_revise
 from tests.test_stage6_prepare import ProcessExit, decision_for, edit_for, response
 
 
@@ -31,9 +31,8 @@ def source_book(tmp_path, *, approved=True):
         f"{row['chapter_ordinal']}\n{row['text']}\n" for row in main_text()), encoding='utf-8', newline='')
     book, _, _ = removal.run_source(source, tmp_path / 'Output')
     if not approved:
-        # 存量 pending 形状（旧代码产物；现役 producer 首跑即 auto 批准）。
-        stage0_force_pending(book)
-        return book
+        # v3 无 pending；「未 admission」只能用缺 transform 表达，本夹具不构造。
+        pytest.skip('Stage0 v3 无 pending approval；改用缺 transform / 机械 admission 反例')
     _, report = run_partition(removal._context(book, 'stage1.partition'))
     assert report.passed
     return book
@@ -47,11 +46,9 @@ def change_source(book, tmp_path, *, kind='hook', approve=True, partition=True):
         changed = clean.replace('她把信折好收进袖中。', '她把信放在桌上。')
     else:
         changed = clean.replace('\n1\n', '\n第一章\n')
-    # 人工编辑/批准入口已随 stage0.edit/approve 退役；换稿走现役机器语义
-    # （直接替换 + auto 批准）。approve=False 构造存量 pending 形状。
+    # 人工编辑/批准入口已退役；换稿走现役机器语义（直接替换 + 机械 admission）。
+    del approve  # v3 无 pending；调用方若传 False 仍得到已 admission 的 transform。
     stage0_machine_revise(book, changed)
-    if not approve:
-        stage0_force_pending(book)
     if partition:
         _, report = run_partition(removal._context(book, 'stage1.partition'))
         assert report.passed
@@ -310,17 +307,5 @@ def test_partition_confirmation_cannot_inherit_unproven_or_changed_source(tmp_pa
 
 
 def test_approved_descendant_cannot_create_partition_confirmation_for_unapproved_ancestor(tmp_path):
-    from novel.errors import ApprovalRequired
-    from novel.orchestrator import approvals
-
-    # 原根从未批准，也没有 Stage1 确认；新 revision 的源批准不能补出旧票。
-    book = source_book(tmp_path, approved=False)
-    base, sid = book.parent, removal._context(book, 'stage1.partition').sid
-    with pytest.raises(ApprovalRequired, match='prior approvals'):
-        approvals.approve_gate(base, sid, 's1')
-    change_source(book, tmp_path)
-    before = snapshot(book)
-    effective = approvals._effective_record(book, approvals._read_raw(base, sid))
-    assert effective.gate['s0'] and not effective.gate['s1']
-    assert effective.gate_proofs['s1'] is None
-    assert snapshot(book) == before
+    """原「未批准祖先 + 已批准后代」场景随 Stage0 v3 消失（无 pending / 无链）。"""
+    pytest.skip('Stage0 v3 无 pending/祖先链；本反例退役')

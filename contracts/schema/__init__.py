@@ -145,13 +145,10 @@ from contracts.schema.report import (
     finding,
 )
 from contracts.schema.stage0 import (
-    ApprovedApproval, DropRatioWarning, EarlyCutWarning, ExternalFileRef,
-    LongMarkerWarning, ManagedUploadRef, PendingApproval, SourceRef,
-    Stage0Approval,
-    RemovedSegment, RequestedRemoval, Stage0Snapshot, Stage0Source,
-    Stage0CandidatePlan, Stage0Current, Stage0DismissedCandidate,
-    Stage0EditPlan, Stage0Revision, Stage0RevisionContent, Stage0Revisions,
-    Stage0Warning,
+    DropRatioWarning, EarlyCutWarning, ExternalFileRef,
+    LongMarkerWarning, ManagedUploadRef, SourceRef,
+    RemovedSegment, RequestedRemoval, Stage0Admission, Stage0Snapshot,
+    Stage0Source, Stage0Transform, Stage0Warning,
 )
 from contracts.schema.stage1 import HookCopy, MainText, MainTextSection
 from contracts.schema.stage2 import (
@@ -273,7 +270,7 @@ class DecodedArtifact:
 ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
     # v2（2026-08-25）：原文身份提到根部；revision 只留正文与最小剔除账。
     # 存量由 `stage0.remove` 免费重建并人工重批，不做迁移。
-    STAGE0_REVISIONS: ArtifactSpec(Stage0Revisions, 2),
+    STAGE0_REVISIONS: ArtifactSpec(Stage0Transform, 3),
     # v3（2026-08-25）：删除下游不应信任的 ``source_chapter_no``；原文章号由当前
     # clean_text 复扫，只在对照页显示。存量由 ``stage1.partition`` 免费重建；本次
     # Stage0～7 减法完成后，两本现役书统一从头重建，不做迁移或手补字段。
@@ -315,7 +312,7 @@ ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
     # v6 删除摘要、人物显示名、重复父键与无消费者 provenance 账；由
     # `stage2.blueprint` 整跑（付费）重建，不迁移或手补。称名投影
     # 只改通用 `inputs` 的运行时键，没改 BlueprintProvenance 载体形状，不升版。
-    STAGE2_CHAPTER_BLUEPRINTS: ArtifactSpec(ChapterBlueprints, 10),
+    STAGE2_CHAPTER_BLUEPRINTS: ArtifactSpec(ChapterBlueprints, 11),
     # v1：外部 hash-bound typed request；只被 CLI/API 读取，不是 producer 产物。
     STAGE2_BLUEPRINT_EDIT: ArtifactSpec(PlotEdit, 2),
     # v2 删除 goal rationale；A 仍保留重构策略与预算权重，供 B/编译器消费。
@@ -512,13 +509,10 @@ __all__ = [
     'Stage5ChapterSubject', 'Stage5TrimWorkItem',
     'ResidualAdoptionRequest',
     # 七个现役层（Stage3 已退役）
-    'Stage0Snapshot', 'Stage0Source', 'RemovedSegment', 'RequestedRemoval', 'Stage0EditPlan',
-    'Stage0CandidatePlan', 'Stage0Warning',
+    'Stage0Snapshot', 'Stage0Source', 'Stage0Transform', 'Stage0Admission',
+    'RemovedSegment', 'RequestedRemoval', 'Stage0Warning',
     'EarlyCutWarning', 'DropRatioWarning', 'LongMarkerWarning',
-    'Stage0Approval', 'PendingApproval', 'ApprovedApproval',
     'SourceRef', 'ExternalFileRef', 'ManagedUploadRef',
-    'Stage0Revisions', 'Stage0Revision', 'Stage0RevisionContent',
-    'Stage0Current', 'Stage0DismissedCandidate',
     'MainText', 'MainTextSection', 'HookCopy',
     'CharacterRegistry', 'CharactersEdit', 'KnowledgeGrounding',
     'GlobalGrounding', 'Entities', 'Character', 'Address', 'Relation', 'Canon',
