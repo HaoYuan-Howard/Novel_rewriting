@@ -110,7 +110,7 @@ class EventCoreNote(StrictModel):
 
     core_id: str = Field(min_length=1)
     summary: str = Field(min_length=1)
-    participants: tuple[str, ...] = Field(min_length=0)
+    participants: tuple[str, ...] = Field(default=(), min_length=0)
     # 必要因果的显式边（RC：起止都是 core_id；DAG 校验归 F4 Guard）
     requires_cores: tuple[str, ...] = Field(default=(), min_length=0)
 

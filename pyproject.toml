@@ -52,7 +52,7 @@ packages = ["contracts", "contracts.judges", "contracts.schema",
             "novel.stages.stage2.knowledge",
             "novel.stages.stage2.shared", "novel.stages.stage4",
             "novel.stages.stage5", "novel.stages.stage6",
-            "novel.stages.stage7",
+            "novel.stages.stage7", "novel.stages.str06",
             "novel.views"]
 
 [tool.setuptools.package-data]

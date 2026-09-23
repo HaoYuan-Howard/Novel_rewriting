@@ -356,8 +356,18 @@ owner 选择；保留源钩子事实及其源正文／源钩子证据；增加�
   `check_rel_family` 与 `family_input_key`（登记家族内三级准入、来源账键用完整
   路径；两级一般规则不变）；pyproject packages 同步；RC 契约文档与 F8 切换清单
   见 [str06.md](schema/str06.md)；定向 contract 测试 25 项通过。
-- [ ] F1 · 反例（下一批次）。
-- [ ] F2–F8 未完成。
+- [x] **F1 · 反例**（2026-09-23）：迁移期工作包 `novel/stages/str06/`（F8 分流后
+  删除；包内纪律由 AST 守卫钉住：只准依赖 contracts / novel.errors / 本包 /
+  标准库 / pydantic）。`checks.py` 跨产物机械判定器：Binding 分母一致（丢义务/
+  混入/身份不符三红一绿）、plan↔graph 完整性、receipt 三 hash 绑定（旧 PASS 配
+  新 Context/slice 拒绝）、窄修复两段计算（`directly_affected` 付费重写判定 +
+  `entry_sensitive_closure` 重投影闭包；扫描范围≠付费重跑范围）。`delivery.py`
+  确定性交付组装与 claimed/kept 残留判定（重放字节稳定、长名优先即契约、kept
+  不误报）。反例套件 `tests/test_str06_invariants.py`：Preserve 请求输入面隔离、
+  双视图 continuity_fact_view、Brief 因果保留无源拓扑、scene 作用域 effect、
+  跨章合并/拆分两 fixture 证明契约能力接通（能力接通≠生成质量，后者归 F8）、
+  同号异义不混淆、name_map 更换不触碰 Stage5 回执。
+- [ ] F2–F8 未完成。F2 的真书冒烟起为付费节点，须独立授权、显式 `--yes`。
 
 F6 不承担无关 Stage6/7 本体重构。跨章能力验证：F1/F4 用明确跨章布局的反例证明能力
 接通；F8 报告 Design 是否实际使用跨章自由度及对应证据，未使用时明确记录「真实生成中
