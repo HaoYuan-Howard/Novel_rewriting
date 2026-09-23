@@ -160,7 +160,7 @@ def test_guard_green_path():
                                 established_by='s01#scene'),),
         released=(SurfaceRelease(char_id='ch2', surfaces=('二郎',)),))
     problems = run_mechanical_guard(
-        binding=binding, context=context, graph=graph, folded_prefix_state=prefix)
+        binding=binding, context=context, graph=graph)
     assert problems == []
 
 
@@ -211,17 +211,17 @@ def test_m4_unreal_carriage_position():
 
 
 def test_m6_illegal_cast_member():
+    from novel.stages.str06.guard import appeared_chars, scene_order
     graph = _graph()
-    prefix = FoldedState()  # 此前未建立任何 char
-    # ce6：chX 未参与本场、未建立，却出现在 released_surfaces
+    order = scene_order(graph)
+    # ce6：chX 从未在任何拍出场，却出现在 released_surfaces
     context = _context('s02', released=(SurfaceRelease(char_id='chX', surfaces=('某',)),))
-    problems = check_cast_legality(context, graph, prefix)
+    problems = check_cast_legality(context, graph, appeared_chars(graph, order, 's02'))
     assert problems and problems[0].startswith('M6 在场合法性')
-    # 建立后即合法（累计合法在场）
-    prefix_established = fold_accepted_prefix(
-        (SceneExecutionPlan(scene_id='s01', establishments=(
-            _est(EffectDomain.CHARACTER, 'chX', '在场'),)),))
-    assert check_cast_legality(context, graph, prefix_established) == []
+    # 在先前场景出场后即合法（累计合法在场与 M5 引擎同源）
+    assert 'ch1' in appeared_chars(graph, order, 's02')
+    context_ok = _context('s02', released=(SurfaceRelease(char_id='ch1', surfaces=('某',)),))
+    assert check_cast_legality(context_ok, graph, appeared_chars(graph, order, 's02')) == []
 
 
 def test_guard_reports_do_not_mutate_inputs():
@@ -229,6 +229,5 @@ def test_guard_reports_do_not_mutate_inputs():
     binding = _binding(BindingEntry(obligation_id='ob1', scene_id='s01'))
     context = _context('s01', obligations=())
     before = context.model_dump_json()
-    run_mechanical_guard(binding=binding, context=context, graph=graph,
-                         folded_prefix_state=FoldedState())
+    run_mechanical_guard(binding=binding, context=context, graph=graph)
     assert context.model_dump_json() == before  # I-24：validator 不修改输入

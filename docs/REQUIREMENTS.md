@@ -401,20 +401,40 @@ owner 选择；保留源钩子事实及其源正文／源钩子证据；增加�
   引用 char_id、delta 域闭集、归章闭合；**wire 键白名单**——多余键（含
   source_ref 类混入）在 compile 入口报错，Q-1 不静默）；`SourceObligation`
   RC 增 `requires`（义务间必要因果，禁自指）。合成反例 7 项。
-  冒烟（4 次付费、50.5k+68.9k，`outputs/str06_f3_smoke_20260923_165735/`）：
-  obligations 83（82 必保；event_core 39／reveal 15／world_fact 8／
-  initial_state 8／arc 5／causal 5／identity 3）；Brief cores 39 零源坐标泄漏
-  （regex 实检）；Design 30 场 79 拍 11 章（场／章 1–4 重新分布）；
-  **跨章自由度证据：18 条义务 lineage 跨 2–4 个源章**（能力接通的真实
-  使用证据，最终质量仍归 F8 Golden 报告）；Binding 83 entries 全承载、
-  0 unbound（无必保丢失）；checkpoint 从 wire 确定性重建、分母与身份一致；
-  M4 全真实。Stage6/7 消费信息免费检查：
-  `consumption_projection_check.md`——world_view/character_exposure/
-  chapter_map/rename_materials 信息可得，body_access 及其依赖项**显式
-  未就绪**（F5 产物），不制造成功状态。
+  冒烟（**修订后基线 run `outputs/str06_f3_smoke_20260923_171800/`**，5 次付费、
+  68.7k+104.1k；首个 run 165735 的 Binding 因场景依赖成环被 F4 compile 拒绝
+  ——Bind prompt 未传义务 requires，承载分布违反拓扑；修订 = BIND_PROMPT 增
+  依赖序硬约束后重跑。**成本披露：重跑建了新目录致 Preserve/Design 未命中
+  断点缓存、多付 2 次调用；教训=续跑必须指向同一 run 目录**）：obligations 69
+  （必保为主；brief cores 30）；Brief 零源坐标泄漏（regex 实检）；Design 28 场
+  99 拍 11 章（场／章 2–4）；Binding 69 entries 全承载、0 unbound；
+  checkpoint 从 wire 确定性重建、分母与身份一致；M4 全真实。首个 run 的
+  跨章自由度证据（18 条义务跨 2–4 源章）仍有效（义务形状两 run 同源同分布）。
+  Stage6/7 消费信息免费检查：`consumption_projection_check.md`——
+  world_view/character_exposure/chapter_map/rename_materials 信息可得，
+  body_access 及其依赖项**显式未就绪**（F5 产物），不制造成功状态。
+- [x] **F4 · Execution IR 完成（2026-09-23，--no-prose 干跑零模型调用）**：
+  `compile.py`（四类执行语义：拍 delta→establishment+净终值 planned_delta、
+  必保非事件义务→constraint、requires×承载→跨场 dependency（同场不建、
+  场景级成环编译期拒绝）、reinforcement RC 空；`init_establishments`：
+  v4 initial_state+v12 world_constraints→T₀ init 锚，knowledge 型映射
+  `holder::key`）；`project.py`（双视图投影唯一产地：IR 含义务/entry 视图/
+  M5 surface 引擎（出场即释放、canonical 需 identity 承载）/
+  continuity_fact_view；brief 含任务/驱动/拍纲/约束/权重预算/口吻；
+  `execution_slice_sha256` 与 context/receipt 三处同源）。
+  `SceneExecutionPlan` RC 修正：establishments 允许同 (domain,key) 拍级覆盖
+  （F0 唯一性校验误拒合法时序语义，删除）。
+  **Guard M6 修正（干跑抓到真 bug）**：在场判定从 fold 状态键改为与 M5
+  引擎同源的 graph 参与序（`appeared_chars`）——状态键≠在场集合，混用产生
+  20 个假阳性。合成反例 4 项 + fold_guard 更新。
+  干跑（`outputs/str06_f4_dryrun_20260923_172702/`，零调用）：28 场 M1–M4/M6
+  零问题；planned continuity 重放一致；T₀ 21 条、终态 130 条；slice 身份
+  28/28 唯一；预算按权重分配；消费者投影 chapter_map 干跑输出、目标开篇
+  **显式未就绪**。
 - [ ] **F3b · 第二本 artifact-only smoke**：第二本书 Stage2 全链抽取＋F3 链
   （付费约 15+ 次），回答 schema 表达力多样性；待用户单独授权后执行。
-- [ ] F4–F8 未完成。
+  F4 的「两本干跑」中第二本同样依赖此授权。
+- [ ] F5–F8 未完成。
 
 F6 不承担无关 Stage6/7 本体重构。跨章能力验证：F1/F4 用明确跨章布局的反例证明能力
 接通；F8 报告 Design 是否实际使用跨章自由度及对应证据，未使用时明确记录「真实生成中
@@ -467,7 +487,8 @@ Downloads（用户本机 `~/Downloads`，不进仓）：
 | _tmp_vnext_writer.py | `f603361b72dd0c78974a67219be98586e16907210fddf3a2dea7dc5af8be202c` | 投影修复 + 成文 harness（口吻/禁补造规则、--prior-events） | 改写 → F4/F5 |
 | _tmp_calib_under_spec.py | `e602d5df1f175582cc11f2d20febcbfd8e7db2f1a183786588c6fc5b622a8186` | under_spec 定向合成探针（union 真不足用例） | 改写 → F1/F4 |
 | _tmp_str06_f2b_smoke.py | `0526526554ddf0767fd0737a031575e55e84186e74cf31434876d689898274af` | F2b 真书冒烟 harness（断点续跑；复用试点 prompt/证据切段；授权付费） | 改写 → F3 复用同一 SourceTruth |
-| _tmp_str06_f3_smoke.py | `25378c2b90b5043e1dbd0de189fd1759d60219b1d8a95b27d8921752c9bce442` | F3 冒烟 harness（Preserve/Design/Bind 三次付费 + source-blind 实检） | 改写 → F4/F5 |
+| _tmp_str06_f3_smoke.py | `06b83df858970cb6c62aeefdad42c4f7a56ff1d1aeb1a01e7b055ea16bdbdbd9` | F3 冒烟 harness（Preserve/Design/Bind 付费 + 依赖序硬约束修订版 + source-blind 实检） | 改写 → F4/F5 |
+| _tmp_str06_f4_dryrun.py | `77e8e69161131a2dd7e6bc63a52cbded4f5816025ff95527257bd9d854d6c4a8` | F4 --no-prose 干跑（零调用：Compile/投影/Guard/连续性/消费投影） | 改写 → F5 |
 | _tmp_str06_consume_check.py | `12b5357b9ae36e12731b1924b795a7cd9a45a308409ed2381317cfbd7740661f` | Stage6/7 消费投影信息闭合免费检查 | 改写 → F4 干跑 |
 | _tmp_vnext_probe.py | `f4fbd26b6ddb51f83b86c4c9b0e9bc35530496b5dea1ccf2a1e2f8fb41056ac4` | 现役盘面形状一次性探查 | 退役（一次性） |
 
@@ -485,7 +506,9 @@ outputs 冻结基线（目录身份为清单哈希）：
 | outputs/vnext_probe_b2 | `1fe3bf083401d3cc` / 4 | b2 定点修订档（三处 patch） | 参考 → F2（窄修复案例） |
 | outputs/review_stage4_c | `370bde60701dddf8` / 3 | 第三轮验收报告目录（下三件） | 知识来源 → F1/F5 |
 | outputs/str06_f2b_smoke_20260923_162444 | `b9947b7b74f7b972` / 15 | F2b 真书冒烟（v4/v12 canonical + wire 缓存 + report；loop 纪律与 stable 改写两披露） | F3 的 SourceTruth 基线 |
-| outputs/str06_f3_smoke_20260923_165735 | `242f804f20cfca9c` / 8 | F3 冒烟（checkpoint/Brief/graph/binding canonical + wire 缓存 + report + 消费投影检查） | F4 的 Target Semantics 基线 |
+| outputs/str06_f3_smoke_20260923_171800 | `00643d55abc21f2a` / 7 | F3 修订后基线（依赖序硬约束 Binding；F4 干跑输入） | F4 的 Target Semantics 基线 |
+| outputs/str06_f3_smoke_20260923_165735 | `ee538f40232b883d` / 7 | F3 首跑（Binding 场景成环，被 F4 compile 拒绝；保留为依赖序反例证据） | 反例 → F1 职责 |
+| outputs/str06_f4_dryrun_20260923_172702 | `3f9fa94c471a82cb` / 6 | F4 干跑（execution_plan/context 样例/Guard 报告/终态快照） | F5 的执行输入基线 |
 | ├ taxonomy.md | `017f6c42940e69d9f4c41927bb0326197ecda9638d6a5b11c3de212bad0e0e52` | 六列错误分类学 + 判据边界 + 成本台账 | 知识摘要母本 |
 | ├ labeled_assertions.json | `a4e0463f42fe1ad221095c1322b8c6bc3d26befee67d0638e2f647e04e348915` | 11 条 labeled 回归断言（正/负例） | 迁入 F5 |
 | └ judge_slim_report.json | `3d1d91988099ee0ec2b4f6ca64f2f1408b95cc590118da1e6a9b1228ad299256` | slim judge 判定原始报告 | 证据 |

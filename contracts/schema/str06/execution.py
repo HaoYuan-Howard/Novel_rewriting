@@ -88,7 +88,8 @@ class SceneExecutionPlan(StrictModel):
 
     `planned_delta` 只在场景**有效接受后**由 runtime 应用（Apply planned delta）；
     禁止从正文反抽 semantic delta——所以 delta 的唯一产地是本计划（Design+Bind
-    编译），runtime 只重放。
+    编译），runtime 只重放。establishments 允许同 (domain,key) 多次出现：
+    拍级覆盖是合法语义（fold 按序应用，后者生效），唯一性不是拍序的职责。
     """
 
     scene_id: str = Field(min_length=1)
@@ -97,13 +98,6 @@ class SceneExecutionPlan(StrictModel):
     dependencies: tuple[DependencyEdge, ...] = Field(default=(), min_length=0)
     reinforcements: tuple[Reinforcement, ...] = Field(default=(), min_length=0)
     planned_delta: tuple[Establishment, ...] = Field(default=(), min_length=0)
-
-    @model_validator(mode='after')
-    def _unique_establishments(self) -> 'SceneExecutionPlan':
-        keys = [(e.domain, e.key) for e in self.establishments]
-        if len(set(keys)) != len(keys):
-            raise ValueError(f'scene {self.scene_id!r} 内 establishment 的 (domain,key) 必须唯一')
-        return self
 
 
 class ExecutionPlan(StrictModel):

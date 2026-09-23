@@ -27,7 +27,7 @@ from typing import Mapping
 from contracts.schema.str06.context import WriterContext
 from contracts.schema.str06.design import PresentationGraph
 from contracts.schema.str06.grounding import SemanticBinding
-from contracts.schema.str06.execution import EffectDomain
+
 
 
 def scene_order(graph: PresentationGraph) -> dict[str, int]:
@@ -100,24 +100,34 @@ def check_binding_beat_refs(
 
 def check_cast_legality(
     context: WriterContext, graph: PresentationGraph,
-    folded_state,
+    appeared: set[str],
 ) -> list[str]:
-    """M6：released char ⊆ 累计合法在场（本场拍参与者 ∪ 已建立 CHARACTER 域）。
+    """M6：released char ⊆ 累计合法在场（本场拍参与者 ∪ 先前场景拍参与者）。
 
-    `folded_state` 是本场**之前**的 FoldedState（调用方先 fold 前缀再查本场）。
-    """
+    `appeared` 是「先前及本场拍 participants 并集」——与 M5 surface 引擎同一
+    来源（graph 参与序），不从 fold 状态键推：CHARACTER 域键是「状态」不是
+    「在场集合」，两者混用会造成 M5/M6 判定不同源（试点裁决：Guard/Judge
+    查同一引擎）。"""
     problems: list[str] = []
-    scene = next((s for s in graph.scenes if s.scene_id == context.scene_id), None)
-    participants = {p for b in scene.beats for p in b.participants} if scene else set()
     for release in context.verification_ir.released_surfaces:
-        if release.char_id in participants:
-            continue
-        if folded_state.value_of(EffectDomain.CHARACTER, release.char_id) is not None:
-            continue
-        problems.append(
-            f'M6 在场合法性：char {release.char_id!r} 既非本场拍参与者，'
-            f'也未在此前建立（累计合法在场）')
+        if release.char_id not in appeared:
+            problems.append(
+                f'M6 在场合法性：char {release.char_id!r} 既非本场拍参与者，'
+                f'也未在先前场景出场（累计合法在场）')
     return problems
+
+
+def appeared_chars(
+    graph: PresentationGraph, order: Mapping[str, int], upto_scene: str,
+) -> set[str]:
+    """upto_scene（含当场）之前出场过的 char 集合——M5/M6 共用的在场引擎。"""
+    current = order.get(upto_scene, 0)
+    appeared: set[str] = set()
+    for scene in graph.scenes:
+        if order.get(scene.scene_id, 0) <= current:
+            for beat in scene.beats:
+                appeared.update(beat.participants)
+    return appeared
 
 
 def run_mechanical_guard(
@@ -125,16 +135,18 @@ def run_mechanical_guard(
     binding: SemanticBinding,
     context: WriterContext,
     graph: PresentationGraph,
-    folded_prefix_state,
 ) -> list[str]:
     """写前机械 Guard 的聚合入口（M1/M2/M3/M4/M6；M5 见模块 docstring 留 F4）。
 
     只报告，不修改输入（I-24）；报告出口是 `stage4/acceptance/guard/` 机械报告。
+    M5 的「released == 引擎释放集」由 project（surface 引擎）与 M6 联合表达：
+    投影层保证 released 只含出场 char，M6 对投影结果复核。
     """
     order = scene_order(graph)
+    appeared = appeared_chars(graph, order, context.scene_id)
     return (
         check_obligation_coverage(binding, context)
         + check_entry_timing(context, order)
         + check_binding_beat_refs(binding, graph)
-        + check_cast_legality(context, graph, folded_prefix_state)
+        + check_cast_legality(context, graph, appeared)
     )
