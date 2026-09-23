@@ -61,9 +61,9 @@ ledger 成本权威。改变产品语义前须用户裁决，并同步 BACKEND_C
 | stage1 | 未开始 | — | — |
 | stage2（analyze / characters / global / blueprint） | **权威闭合**；Blueprint **STR-03-S2-BP v11**；Characters **STR-03-S2-CH v3（M1–M3 消费闭合；analyze 保留）** | 同上；Characters v3 见 STR-03-S2-CH | analyze 联合首抽退役条件见 S2-CH；恢复双付费未审计前不得删除 |
 | stage4（design / plan / context） | **权威闭合（STR-03-S4）** | 见 STR-03-S4；`plan_chapters` 已退役 | `RETIRED_ARTIFACT_PATHS['stage4.plan_chapters']` |
-| stage5（write / review） | 未开始 | — | — |
-| stage6（prepare / hook / approve） | 未开始 | — | — |
-| stage7（rename / assemble） | 未开始 | — | — |
+| stage5（write / review） | **整链由 STR-06-F5 接管**；旧链删除归 STR-06-F8 | 见 STR-06 | — |
+| stage6（prepare / hook / approve） | 未开始；消费适配由 STR-06-F6 承接，本体其余绞杀独立 | — | — |
+| stage7（rename / assemble） | 未开始；消费适配由 STR-06-F6 承接，本体其余绞杀独立 | — | — |
 | orchestrator / repository / LLM 传输共享面 | 随消费节点收敛 | — | — |
 
 **验收（单节点）**：I-01～I-38 与 S-01～S-05 对该节点可检查；下游只经正式 artifact。
@@ -161,7 +161,7 @@ ledger 成本权威。改变产品语义前须用户裁决，并同步 BACKEND_C
 - [x] M1：正式 schema / checks / producer / 恢复；更新 BACKEND_CONTRACT R-2.*；Stage4 停止硬依赖 `role`/`first_chapter`/`aliases`；判据退役 `role_*` → `character_semantics_unverifiable`
 - [x] M2：Blueprint `mention_actor_coverage`（R-3.7e）+ 切断 Stage4/shared/consumption 的 v2 双读
 - [x] M3：Stage5～7 / views / naming / knowledge prompt / UI 只认 v3；新书默认 WorkflowManifestV9（`characters:3`）；**不**删除 analyze
-- [ ] analyze 删除条件：恢复双付费未审计（旧 receipt/draft repair 消费者清零前保持未勾）
+- [ ] analyze 删除条件：恢复双付费未审计（旧 receipt/draft repair 消费者清零前保持未勾）。审计与替代工作由 STR-06 承接，删除归 STR-06-F8；不得提前勾选
 
 **验收（M0）**：合成反例绿；真机另列。小样本通过 ≠ golden set。
 **删除条件（analyze）**：新书默认 v3 + 旧 receipt/draft repair 消费者清零 + 恢复双付费审计通过 + REQUIREMENTS 勾选后删除联合首抽 path。当前 M3 已默认 v3，但恢复双付费未审计，删除条件保持未勾。
@@ -170,25 +170,347 @@ ledger 成本权威。改变产品语义前须用户裁决，并同步 BACKEND_C
 
 - [x] Stage2：`docs/schema/stage2.md`、`docs/BACKEND_CONTRACT.md`、相关注释改权威 owner path（批次 6）。
 - [ ] 其余 Stage 切换权威时同步 `docs/schema/` 与必要的 BACKEND_CONTRACT 条目。
+      STR-06 涉及部分指向 STR-06-F7/F8（版本收口与正式指南），其他范围保留。
 - [ ] 退役路径进入 retired 登记；禁止为旧测试恢复废弃耦合（I-52）。
+      STR-06 旧链退役登记与 retired 更新归 STR-06-F8。
 - [x] Stage2 局部 `AGENTS.md` 已补；其余子目录按需要补，不复制根不变量全文。
 
 ### STR-05 · 工程基线与质量验收（权威链闭合后）
 
 - [ ] 默认非 corpus 回归 + 前端 test/typecheck/seams/build（若波及 UI）。
+      STR-06 迁移的整批验收唯一指向 STR-06-F8，仍需独立付费授权。
 - [ ] 重建 current-schema corpus 基线（原 TODO-21 意图），再谈「全量语料绿」。
+      保持独立事项；STR-06 的两本 Golden 不代替 corpus 验收。
 - [ ] 真书 / golden set 质量验收单独授权、单独结论；工程绿 ≠ 成书质量通过。
 
+### STR-06 · Stage2–Stage5 终态架构迁移（F0–F8，全部未完成）
+
+来源：Stage2 vnext 契约三轮真实验证（《夫君的报恩》单书、约 36 次真实付费）+
+用户终态裁决「停止抽象、固定 contracts」。新链**完全替代现役 stage2–stage5**；
+试点 vnext 契约形状（tb.source_refs、机械 grounding full/bridge、execution_table、
+resolved_plan）**降为参考实现，不作冻结目标**——按旧形状迁移会引发第二轮 shape break。
+
+- **Architecture 冻结**职责、权威源、依赖方向、窄修复和失败归属；**字段级 schema 保持
+  RC**，经反例与真书验证后定版。
+- F0–F7 在隔离 migration worktree／branch 和独立输出根内推进；现役链继续按旧契约验收；
+  I-40、`R-5.2` 及相关公开契约的正式替代，归属 **F8 切换提交并一次合入生效**。候选内容
+  可以提前准备，但主仓不得出现两套现役定义。
+- 旧书保持 `legacy_incompatible`，在独立输出根按新工作流重建；不手补旧产物、不继承旧
+  批准、不清除旧 ledger。
+- 旧链切换前冻结新增依赖。旧测试先迁移仍有效的职责和独有反例，再删除，不按行数清理。
+
+#### 终态模型（冻结）
+
+四类 semantic truth，每类唯一职责：
+
+| Truth | 唯一职责 |
+|---|---|
+| Characters | 源人物身份、人物初始状态、稳定约束 |
+| Blueprint | 源事件、变化、揭示、因果及书级初始事实／约束 |
+| Target Design | 目标初始语义选择、场景、目标拍、戏剧驱动、目标章归属 |
+| Semantic Binding | Preservation 决定、source lineage、保留约束和目标承载 |
+
+Source initial facts 来自 Characters 与 Blueprint；Target initial choices 归 Design；
+Binding 约束这些选择，不维护第二份目标初始状态；`T₀ = Init(Compile(D,G))` 确定性派生。
+
+链路与关键规则：
+
+```text
+SourceTruth → Grounding.Preserve → durable Preserve checkpoint
+  → deterministic ReconstructionBrief → Target Design → Grounding.Bind
+  → 完整 SemanticBinding canonical publish → Compile → Context / Mechanical Guard
+  → Writer / Fidelity Judge → Accepted Prose
+```
+
+- Preserve 与 Bind 是同一 Grounding owner 内的独立请求。Preserve 只消费 SourceTruth、
+  版本化 Policy 和执行配置，不接收 Design 或 Bind 失败结果。Obligation 是有 source
+  lineage 的语义投影，可综合多个源主体；必保要求必须有实质满足条件，不被 reinforcement
+  的 `0..N` 稀释。Preserve 结果保存为校验过、hash-bound、可恢复的 paid checkpoint；
+  Grounding 确定性发布 Derived ReconstructionBrief；Design 不直接读 checkpoint 内部。
+- Bind 完成后一次发布完整 `semantic_binding.json`，obligations 必须与采用的 Preserve
+  结果一致；不发布半份 canonical Binding。unbound 保留原义务并返回正确 owner；Bind
+  不得删义务迁就 Design。Design 修订不自动重购 Preserve。
+- Design 只消费 ReconstructionBrief、IdentityProjection、OutputConstraints；Brief 保留
+  核心语义和必要因果，屏蔽源章分组、源拍序列、原叙述顺序及证据定位。稳定 `char_id`
+  合法；Target Design 不保存 source beat、evidence 或 binding refs。
+- 输出保持 N 个非空目标章、连续章号 `1..N`；源情节允许跨章重构。Scene 归章由 Design
+  决定，Compiler 只验证章数、归属、顺序和完整性。保留全书篇幅边界，按 Design 的章／场
+  权重分配目标预算，不对照同号源章长度。Effect 必须 mechanically applicable；保留
+  人物／关系、人物知情、世界事实、读者揭示等必要区别，不迁旧 PlotState ontology。
+  前史／倒叙不得按叙述顺序误改当前世界状态；unknown、解除、未运行、合法空值分别表达。
+  ExecutionPlan 编译为 establishment、constraint、dependency、reinforcement；语义等价
+  归上游判断，Compiler 不解释自然语言补猜事实。
+- WriterContext 是单份 Derived artifact，含 VerificationIR 与 WriterBrief，两者从同一
+  执行输入确定性投影。Guard 仅机械验证；Judge 验证正文实现，保留
+  `writer / upstream_ir / unverifiable` 归因，不编辑 truth。**Detection ≠ Ownership**：
+  下游发现的问题回到需要改变 canonical truth 或 deterministic transform 的 owner。
+- 同书严格串行，不做投机写作：`Project → Guard → Write → Judge → Commit acceptance →
+  Apply planned delta → 下一场`。只有有效接受后才应用 `E.scene.planned_delta`；禁止从
+  正文反抽 semantic delta；Writer 局部呈现细节要被后续情节依赖，必须由 Design 明确承接。
+- 接受回执最小接口：`scene_id / attempt_id / prose_sha256 / writer_context_sha256 /
+  execution_slice_sha256 / judge_contract_version / status`。`prose_sha256` 绑定替换
+  人名前的正文；Context／slice 摘要绑定本场实际消费的规范化业务内容及必要契约身份；
+  全书 plan hash、审计时间戳和无关 metadata 不作场景有效性硬匹配。入口、freshness、
+  历史采用与 receipt 共用登记消费投影；恢复从**连续有效 accepted prefix** 重放 planned
+  deltas；删除 runtime 后必须可重建相同前缀与 prose tail。
+- 不建设 Merkle DAG、event sourcing、全局失效 DAG 或事务协调系统。
+
+**窄修复**（一等不变量）：语义修复必须采用最小、可证明正确的 patch scope；无关已购
+结果和有效 accepted prefix 不得因实现方便而全量重跑。Canonical：owner 提交有基线身份
+的窄 patch，保留无关内容和稳定 ID。Derived：受影响 slice 失效并确定性重算。Prose：从
+首受影响场景重新投影、核验；输入未变的结果继续采用。必要全局校验可扫描全书，但不把
+扫描范围当付费重跑范围。只修第 9 场且前 8 场输入未变则前缀继续有效；实际改变前场约束
+时按真实影响处理。
+
+#### 产物与依赖
+
+保留按 owner 分包的 novel/stages/stageN/ 结构；正式 schema 唯一位于 `contracts/schema/`，
+局部 contract.py 不复制领域模型。路径机制按登记家族支持多级路径（三级子目录），并覆盖
+INVALID、归档、文本和来源账；正文与付费 checkpoint 不作可随意删除的缓存。
+
+| 家族 | 身份 |
+|---|---|
+| `stage2/characters/characters.json`（目标 v4）、`stage2/blueprints/chapter_blueprints.json`（目标 v12） | Canonical |
+| `stage2/compiled/`（evidence index；可选 source state cache）、`stage2/acceptance/` | Derived / 审计 |
+| 既有 checkpoint 存储 | 已购语义结果，不是下游读取接口 |
+| `stage4/grounding/reconstruction_brief.json` | Derived |
+| `stage4/design/presentation_graph.json`（目标 v1） | Canonical |
+| `stage4/grounding/semantic_binding.json`（目标 v1） | 完整 Canonical snapshot |
+| `stage4/compiled/execution_plan.json` | Derived |
+| `stage4/context/scene_{nnn}.json` | 双视图 Derived |
+| `stage4/acceptance/guard/scene_{nnn}.json` | 机械报告 |
+| `stage5/scenes/scene_{nnn}.txt`、`stage5/acceptance/fidelity/scene_{nnn}.json` | 候选正文 / 判定与接受回执 |
+| `stage5/rewritten_body.txt` | Stage5 最终正文，Assemble 唯一 producer |
+| `runtime/` | continuity、tail、progress、cache 派生状态 |
+
+依赖方向（AST layering 覆盖绝对和相对导入并保留分母自检；validator 输入不变和 truth
+writer 边界补行为测试；F6 验收清零本批 Stage6/7 相关深导入）：
+
+| 模块 | 允许 | 禁止 |
+|---|---|---|
+| contracts | 契约层内部合法依赖 | import novel |
+| Stage2 | 公共契约与底层设施 | import Stage4／5 |
+| Design | Brief／Identity／OutputConstraints 契约 | Grounding 实现、Blueprint internals、checkpoint 裸读 |
+| Grounding | SourceTruth 公共投影、TargetDesign 契约 | Design 实现、直接修改 Design |
+| Compile／Context／Continuity | 正式契约、登记投影、必要 runtime 输入 | LLM、语义补猜、producer 草稿 |
+| Stage5 | WriterContext／acceptance 契约 | Stage2 internals、Design／Grounding 实现 |
+| Stage6／7 | 正式契约、登记消费投影、accepted body 读取接口 | Stage2／4／5 internals |
+| Guard／Judge | 验证输入和报告出口 | 写 canonical semantic truth |
+| shared／repository | 通用原语及持久化边界 | 反向依赖具体 Stage 业务 |
+
+**Stage6/7 消费投影在 F0 提前登记 RC**：Era／setting／world rules／relations／secrets
+的新归属及目标有效视图；Characters 身份与称谓及目标实际建立／揭示／使用位置；
+Scene→target chapter 映射与目标章集分母；accepted body 完整读取与目标开篇读取；名称
+替换所需实体、关系、时代背景、候选文案及有效正文投影。源首次提及、身份揭示、姓名可用
+时点仍是源事实；目标时点由 Design／Binding／ExecutionPlan 的明确语义位置派生，不能
+直接换算源章号，也不能用 Binding lineage 猜缺失语义。F3 免费检查已有产物能否提供消费
+投影所需信息；F4 用真实 Compile 结果干跑 planned projections；尚无 accepted body 或
+Prepare 目标开篇时明确未就绪，不制造成功状态；F6 再验证真实完整消费链及付费语义质量。
+
+**Prepare 坐标分离**（本轮已确认的必要接口适配）：目标开篇范围仍由现有 Stage6 Prepare
+owner 选择；保留源钩子事实及其源正文／源钩子证据；增加基于 accepted target body 的
+目标开篇范围与目标定位；两种坐标分别表达，源 `through_chapter` 不直接控制目标材料；
+必要时显式升版现有 Prepare 契约，不新增节点或故事 truth；源文支持不自动等于目标文案
+可用，Prepare／Hook 按各自材料和职责核对，不反写目标故事事实。
+
+**接受正文与交付正文分离**：Stage5 receipt 绑定改名前正文；Stage7 根据有效 name_map、
+选定 Hook 和 accepted body 做确定性替换与组装，另行绑定交付身份。同一 accepted body、
+同一选定 Hook、同一有效替换／保留映射和组装契约，重放应得到相同交付字节；更换 name_map
+不使 Stage5 接受回执失效，只影响 Stage7 交付结果。残留检查沿用 `claimed/kept` 语义：
+拒绝未认领、应替换的残留；合法保留称谓及被认领区间内的字面不误报；不得用「所有源名
+字串都不能出现」替代现役判据。
+
+#### 迁移批次
+
+| 批次 | 实施及验收 |
+|---|---|
+| **F0 · 架构与 RC** | 建立最小 schema、Policy、Brief、场景消费身份、路径与依赖契约；登记 Stage6/7 投影、Prepare 坐标分离及 Golden rubric 迁移；准备 F8 契约切换清单 |
+| **F1 · 反例** | Preserve 隔离、必保满足、source-blind、typed effects、四类执行语义、双视图、局部身份和窄修复；补交付确定性、claimed/kept、改名前接受字节与交付字节分离反例 |
+| **F2 · Source Semantics** | Characters／Blueprints 抽取编译、Fold／query、owner 窄 patch 与已购恢复；定向 unit／contract、stage 和真书冒烟 |
+| **F3 · Target Semantics** | Preserve checkpoint→Brief→Design→Bind→完整发布；目标归章／权重／修复；第二本 artifact-only smoke，并免费检查 Stage6/7 消费信息闭合 |
+| **F4 · Execution IR** | Compile、Init／Apply、局部投影、双视图、机械 Guard 和预算；两本 `--no-prose` 加消费者投影干跑，只模拟 planned continuity |
+| **F5 · Realization** | Writer／Judge、场景回执、串行推进、恢复、历史采用、Assemble；迁入试点 labeled 反例，两本代表性成文冒烟；核对参考知识是否完整接管 |
+| **F6 · 下游闭合** | Stage6 Prepare／Hook 和 Stage7 Rename／Assemble 消费适配，必要契约升版；相关深导入清零；真书验证 Hook 三候选、目标开篇、改名质量、免费改选及交付重放 |
+| **F7 · 工作流与公开面** | 编排阶段依赖、窄修复与串行；API／Views／Frontend；RC 收口，版本、manifest、epoch 组合闭合；完成目标契约候选和 Golden 工具适配 |
+| **F8 · 验收与切换** | 删除已替代旧链、更新 retired 和正式指南；完成 I-40／`R-5.2` 等切换提交；契约 §9.5、默认非 corpus 回归和前端完整验证→Golden→一次合入切换 |
+
+F6 不承担无关 Stage6/7 本体重构。跨章能力验证：F1/F4 用明确跨章布局的反例证明能力
+接通；F8 报告 Design 是否实际使用跨章自由度及对应证据，未使用时明确记录「真实生成中
+的跨章质量未获验证」，不强迫模型为指标搬移情节。
+
+#### 待办精确归属
+
+| 原条目 | 处理 |
+|---|---|
+| STR-03 Stage0／Stage1 | 原样保留，不吸收 |
+| Stage2 analyze 删除条件 | 审计与替代工作由 STR-06 承接，删除归 F8；不得提前勾选 |
+| Stage4 遗留 adapter／恢复反例 | 分别迁入 F3–F5，删除归 F8 |
+| Stage5 整体绞杀 | 指向 STR-06-F5，旧链删除归 F8 |
+| Stage6／7 | 消费及必要接口适配由 F6 承接；节点本体的其余绞杀保持独立 |
+| STR-04 文档与 retired | STR-06 涉及部分指向 F7/F8，其他范围保留 |
+| STR-05 工程回归与 Golden | 本次迁移的验收唯一指向 F8，仍需独立付费授权 |
+| STR-05 current-schema corpus 基线 | 保持独立事项；两本 Golden 不代替 corpus 验收 |
+
+#### 参考件清单及迁移判定（参考非契约）
+
+以下材料均为**参考非契约**；不恢复旧 source-ref Design、统一 ExactlyOne、semantic
+Guard 或旧 adapter。报告中的调用估算与模型配置保留证据范围，不直接提升为全局政策。
+原始基线至少保留至 F5 验收及相关反例迁移闭合，本次不清理这些文件。目录身份用清单
+哈希（`find <dir> -type f | sort` 逐行「相对路径 字节数」的 SHA-256，取前 16 位）。
+
+Downloads（用户本机 `~/Downloads`，不进仓）：
+
+| 参考件 | SHA-256 | 用途 / 已知限制 | 判定 / 批次 |
+|---|---|---|---|
+| stage2_contracts_vnext.schema.json | `f67f77cfa66961c0840cd3710127986b1e56cf7ce410bad0f9cbed37866bc4f` | vnext Stage2 提案（characters surfaces 时间窗、blueprints effects/causal_edges + 确定性 fold）；形状≠终态 v4/v12 | 改写 → F2 |
+| presentation_graph.schema.json | `b3ff6a48ecd80a0e37cf3abe4ab887ac3aa642c3b8ad38fbe7c3d85e82314c4` | vnext Design 草案；含 tb.source_refs / split 禁用等旧形状，终态 Design source-blind | 退役（参考）→ F3 |
+| evidence_binding.schema.json | `be47c311fb90731791a60923b0e17e6d634c1716ac6d7f9f5da9dd731456606` | vnext Grounding 草案；终态改 Preserve+Bind 两职，形状不同 | 退役（参考）→ F3 |
+| writer_context_v1.schema.json | `0464b9538c1838a67812d1536c070e45ae2cf7bf722c669d2e42e58ca3bdf18` | 章粒度投影草案 | 退役（参考）→ F4 |
+| writer_context_v2.schema.json | `cde8ed0bf8d559faff805d87f2473bd6bd21260f3516a38c23d2aa9d479bd77` | 场景粒度单视图草案；终态改双视图 | 改写 → F4 |
+| writer_context_projection_spec.json | `3412a00829b95bccc83f8092e6bf886bb3805608ddfa9d0aec6e41b03c5b31c` | 8 步确定性投影说明 | 改写 → F4 |
+| stage4_contract_manifest.json | `f7b214e39cf1856171f8d97786ae78b49a577c3bd41bdc3cde6a84879fc75af` | 试点契约清单（stage4-v3）；非冻结 manifest | 退役（参考）→ F0 |
+
+工作区 harness（未跟踪 `_tmp_*`，保留至对应批次迁移闭合）：
+
+| 参考件 | SHA-256 | 用途 / 已知限制 | 判定 / 批次 |
+|---|---|---|---|
+| _tmp_vnext_run.py | `7b88931cfe5d38616b7590508aabda507effd0a796ab2dc40c03c8f8ba426be2` | M0 首轮 Stage2 vnext 重抽；断点续跑防重复付费 | 改写 → F2 |
+| _tmp_vnext_check.py | `86630c70972e3b276093c6e42917030c1c2686300ab7240bb8d3dfd5515f664a` | 契约公理机械检查器（C1–C9，与 Judge C1–C3 同名不同物） | 改写 → F2 |
+| _tmp_stage2_patch.py | `d24ced8c83bb12508b03a835c5e0a26c70c0033b25a4ed2985167df7173b1441` | Stage2 定点修订 patch receipt（窄修复案例载体；receipt 非第二 Source Truth） | 改写 → F2 |
+| _tmp_vnext_stage4.py | `90cf6194eae366ffc25bb9a82687bbd26eb0c9b1201f443f3326cb77a7c1f8f9` | Stage4 全链 harness，含 fold 引擎与 established_by 溯源 | 改写 → F3/F4 |
+| _tmp_vnext_stage4_check.py | `e910ee8af4f43360a25d548e98833fa57d8cc408428af0d388b649732c9d2d3b` | fixtures 回归（G1 越界/G2 首现颠倒/G3 丢内核/SPLIT/COV/R1） | 改写 → F1/F3 |
+| _tmp_vnext_guard.py | `9d32872566ac360d586f67436f14dec630a5a17ed554e63ae8e82186f5c6fd2b` | 机械 Guard M1–M6 + 语义三查 + r1 批量标定 + ce1–ce6 反例构造 | 改写 → F4 |
+| _tmp_vnext_judge.py | `954c9d363b2d41b0b2a79494975fe50e02d4ea36bede1737daa54c281b80ec81` | Judge 首版（含跨场回指误报史） | 参考 → F5 |
+| _tmp_vnext_judge_slim.py | `856ecb82d1e861fcaebaaf734c63aae9fe180b3950b8f53170e6abf036f1d78a` | slim Judge + C1–C3 + labeled 断言 | 改写 → F5 |
+| _tmp_vnext_writer.py | `f603361b72dd0c78974a67219be98586e16907210fddf3a2dea7dc5af8be202c` | 投影修复 + 成文 harness（口吻/禁补造规则、--prior-events） | 改写 → F4/F5 |
+| _tmp_calib_under_spec.py | `e602d5df1f175582cc11f2d20febcbfd8e7db2f1a183786588c6fc5b622a8186` | under_spec 定向合成探针（union 真不足用例） | 改写 → F1/F4 |
+| _tmp_vnext_probe.py | `f4fbd26b6ddb51f83b86c4c9b0e9bc35530496b5dea1ccf2a1e2f8fb41056ac4` | 现役盘面形状一次性探查 | 退役（一次性） |
+
+（`_tmp_prep_m1_run.py` 属 Characters v3 M1 冒烟准备，与 STR-06 无关，不登记。）
+
+outputs 冻结基线（目录身份为清单哈希）：
+
+| 参考件 | 清单哈希 / 文件数 | 用途 / 已知限制 | 判定 / 批次 |
+|---|---|---|---|
+| outputs/vnext_stage4_r1 | `ba79870da0140e92` / 43 | v2 形状全链 r1（12 场 79 拍；正文 b 档语境） | 参考 → F3 |
+| outputs/vnext_stage4_r2 | `4ee702aaa91b7a5d` / 76 | v3 前身 r2（60 拍、义务全量唯一 owner、span 预算） | 参考 → F3/F5 |
+| outputs/vnext_stage4_bbase | `746428d9dae517b0` / 15 | b 档确定性重投冻结对照 | 保留至 F5 |
+| outputs/vnext_probe_20260920_191609 | `5a642b9bf9849284` / 41 | 首轮 vnext probe + WriterContext v1 全书成文 | 参考 → F2/F4 |
+| outputs/vnext_probe_b | `b073d5e608f0878f` / 35 | B 档契约二轮重抽 | 参考 → F2 |
+| outputs/vnext_probe_b2 | `1fe3bf083401d3cc` / 4 | b2 定点修订档（三处 patch） | 参考 → F2（窄修复案例） |
+| outputs/review_stage4_c | `370bde60701dddf8` / 3 | 第三轮验收报告目录（下三件） | 知识来源 → F1/F5 |
+| ├ taxonomy.md | `017f6c42940e69d9f4c41927bb0326197ecda9638d6a5b11c3de212bad0e0e52` | 六列错误分类学 + 判据边界 + 成本台账 | 知识摘要母本 |
+| ├ labeled_assertions.json | `a4e0463f42fe1ad221095c1322b8c6bc3d26befee67d0638e2f647e04e348915` | 11 条 labeled 回归断言（正/负例） | 迁入 F5 |
+| └ judge_slim_report.json | `3d1d91988099ee0ec2b4f6ca64f2f1408b95cc590118da1e6a9b1228ad299256` | slim judge 判定原始报告 | 证据 |
+
+#### 参考知识摘要（逐项标注判定；避免重新购买同样的标定知识）
+
+**Guard 机械 M1–M6（写前、免费）——保留，迁 F4 机械 Guard**（字段名随新契约改写）：
+
+- M1 义务覆盖：本场 owner 的义务全部进入写作输入的 target_beats；
+- M2 提前揭示：entry_knowledge 某 holder 的 established_by 位置不得 ≥ 本场起点；
+- M3 提前效应：entry_state 键的 established_by 位置不得 ≥ 本场起点（或前缀折叠中不存在）；
+- M4 bridge 非法承载：bridge 拍不得携带任何义务；
+- M5 surface 时机：cast.available_surfaces 必须等于引擎释放集；
+- M6 cast 合法性：cast ⊆ 累计合法在场人物，且人人有已释放 surface。
+- 标定事实：两代 run 各 12 场机械全绿；6 个伪造反例（提前揭示/提前效应/义务缺失/
+  bridge 承载/提前 surface/非法 cast）全部各报一次；ce1–ce6 反例构造器随 harness 保留。
+
+**Judge 精度规则 C1–C3（写后）——保留，迁 F5 Fidelity Judge**（类级表述，不含实例）：
+
+- C1 时间精确性：义务给定的相对时间以义务为准；同句多类别分别核对 + 全量枚举；
+- C2 一般→个体推定禁令：一般性/背景性陈述不得推定为个体事实；
+- C3 POV 知情起点：POV 人物何时知道/醒来/察觉，以义务与 entry_knowledge 为准。
+- 标定事实：首轮无规则正例 3/6，加规则后 6/6；labeled 回归 11/11（正例全抓、负例零误报）。
+
+**语义 Guard 三查（conflicts / injection / under_spec）——改写（RC 证据）**：健康盘面
+9 条发现全 low confidence、6 场零发现、0 high ⇒ **不固化 always-on**；接异常路径
+（stage2 patch 后重投验证、design 变更验证、跨书新 fixture）。under_spec 的 union
+（brief+源事件+context）可恢复性判据是对的；union 真不足的合成探针已验证可触发
+（high confidence）。已知判据边界：「brief 级压缩误导」（试探丢宾语）在 union 层可
+恢复、写前不该报，错误发生在写手服从压缩 brief——若要写前拦截需另设 brief↔
+source_event 一致性检查（design_context_conflict 子类），**不放宽 under_spec 判据**
+（列入 F1 反例候选）。
+
+**已知误报／漏报清单——保留为反例资产，迁 F1/F5**：
+
+- 漏报：试探丢宾语（写前 union 可恢复；写后由人工发现，归属 design）。
+- 类命中非实例命中：河岸救人由 `design_free_text_injection` 类命中（引句落在姊妹注入）。
+- 误报根因与修复：judge 缺前场义务导致跨场回指误报（四条合法回指全中招）→ 根因修复
+  是输入加 continuity_fact_view，不是放宽判据；r1 s07 两条新增 deviated 经复核为旧版
+  漏报的真实压缩损失，登记为改进而非退化。
+- 枚举不稳定：同一场景多违规时单轮可能只报部分，需「列出全部违规」显式指令；labeled
+  集仍需多轮稳定性抽验。
+- 两臂互补：义务臂与 facts 臂任一命中即算（当天→次日由义务臂 deviated 抓、告老由
+  facts 臂抓）；slim r2 九场结果来自 C 首轮 prompt（未含 C1–C3），负例回归未复验
+  （约需 9 次付费，未跑）。
+
+**局部修复案例（origin → earliest observable layer → repair owner → minimal
+invalidation）——保留，窄修复不变量的实证**：借出方翻转（Stage2 b07_01 主客体错误）
+经 patch p02 修复后，request hash 差集实测 = {s07,s08,s09,s10}（断言 ⊇{s08}），只付费
+重写 s08（guard+rewrite+judge 共 3 次调用），s07/s09/s10 输入未变继续采用；重判
+14/15 fulfilled。三载同窗 patch 后重抽写手自行写对（0 次额外修复调用）。计划级
+Continuity 使措辞级改写不向后雪崩；「向你借」人称转换歧义最终以 Stage2 patch 消除——
+错误按归属处理，不做全量重跑。
+
+**截断配置经验——保留（调用工程规约）**：新组件付费调用一律 `max_tokens=65536` +
+宽容 JSON 提取（剥代码围栏）。本轮 3 次可避免浪费：guard 首跑 16k 被 thinking 吃满
+截断 ×2、未剥围栏解析失败 ×1。成本台账单列于 taxonomy.md（计划 28–29、实际 ≈36）。
+
+**旧原型形状知识——退役（防第二轮 shape break）**：tb.source_refs canonical 放置、
+scene.source_placement 单真相、split 禁用论证、execution_table 义务唯一 owner、
+resolved_plan、机械 grounding full/bridge 由 design 意图生成——这些属原型 v2/v3 形状，
+终态以 source-blind Design + Preserve/Bind + execution_plan + 语义四类执行语义取代；
+仅其反例与论证过程保留参考价值。WriterContext v1 章粒度 8 步投影、v2 场景粒度单视图
+由双视图（VerificationIR + WriterBrief）取代。`_tmp_vnext_check.py` 的契约公理 C1–C9
+（与 Judge C1–C3 同名不同物，迁移时防混淆）改写进 F2 正式 checks。
+
+#### 验收、Golden 与停止点
+
+必须验证（F8 汇总）：Preserve 恢复不重购；无半份 Binding；unbound 不删义务；Design
+实际输入无源叙述拓扑；合法跨章布局可编译、写作、接受并交付且章数/非空约束成立；局部
+修改只使真实受影响输入失效，前缀及无关已购结果保留；旧 PASS 配新正文／Context／slice
+拒绝；崩溃后可重建 accepted prefix；Guard 机械反例写前阻断；Judge 错误正确归属、未知
+不伪装通过；源章／目标章同号但语义不同的样例不能错误读取开篇或推导姓名许可；Prepare
+源证据与目标开篇分别有效；Hook／Rename 在新材料下过真实语义验收；Stage7 改名不回写
+Stage5、交付可确定性重放、残留判断遵守 claimed/kept。
+
+Golden 冻结：输入集、源版本、baseline 成书、rubric/version、评价方式、模型辅助评审的
+prompt／provider／model／参数、输出根和成本信封；沿用人工阅读验收，模型评分只作辅助；
+评价过程变化时重评双方现有成书，不因此重跑生成。样本至少两本代表性书、其中至少一本
+长篇或多线结构；不得临时缩减已有冻结 manifest 分母；书目在显式 `NOVEL_DATA/
+NOVEL_CORPUS` 下核实后冻结（本轮未据源正文确认代表性）。Structural Originality 以
+书／场景及语义承载关系比较，不要求同号章对应；源书、新书、baseline 的证据位置分别
+记录；「遵守源书阅读时序」判据随目标语义版本化改写，保留事实、因果、披露和改名质量
+覆盖。六维评价：Core Preservation、Structural Originality、Causal Continuity、
+Character Continuity、Natural Progression、Local Prose Coherence；未评或证据不足保持
+未验证。Golden 不代替 STR-05 的 current-schema corpus 验收。
+
+Cutover 条件：四类 truth、唯一 writer、依赖与完整消费链闭合；Preserve／Bind 隔离；
+窄修复和场景身份真实生效；恢复可重建 accepted prefix；交付可重放；工程回归及冻结过程
+下的逐书 Golden 验收通过。未实际验证的跨章质量范围必须随验收结论披露。
+
+成本与风险：基础调用估算 = Stage2 实际抽取 + Preserve 1 + Design 1 + Bind 1 +
+2 × 目标场景数 + Stage6/7 实际调用；修复、重写、重判、重试及未知成本分列；F4 与早期
+消费投影干跑为零模型调用。真实付费验证独立授权、显式 `--yes`、正文外发分别授权。
+持续登记：漏保／过保、源结构泄漏、under-spec、状态过建模、checklist prose、Judge
+误判、过度失效、下游语义材料不足、请求容量、Golden 成本。
+
+**本次（2026-09-23）只落盘本条与 DECISIONS 裁决，不改代码、不运行模型；落盘后仅运行
+`git diff --check`、`tests/test_docs_references.py`、`tests/test_coverage.py`。文档
+验收后停止，不启动 F0。**
+
 ## Compatibility adapter 登记
+
 
 Stage2 顶层 shim 已在批次 5 清零。后续节点的 adapter 在此追加。
 
 | adapter 路径 | 服务的旧消费者 | 删除条件 | 目标删除批次 |
 |---|---|---|---|
 | `RETIRED_ARTIFACT_PATHS['stage4.plan_chapters']` | 仅拒读旧盘面 | 已退役；无新写 | STR-03-S4 已闭合 |
-| 内存 `PlanChapters` 编译视图 | stage4.plan HARD / Context 组装 | Writer IR 全量切换且 Stage5 不再经 plan 形时删除类 | 后续 Stage5 绞杀 |
-| 机械书 aggregate 崩溃恢复用例 | `test_mechanical_aggregate_crash_*`（已 skip） | 改写为 binding-only 崩溃恢复后删除 skip | 后续 Stage4 恢复专项 |
-| typed HARD 停止/指纹熔断用例 | `test_a_owned_failure_*` / `test_same_fingerprint_*`（已 skip） | 与 binding INVALID + witness 路径重对齐后删 skip | 后续 Stage4 typed failure 专项 |
+| 内存 `PlanChapters` 编译视图 | stage4.plan HARD / Context 组装 | Writer IR 全量切换且 Stage5 不再经 plan 形时删除类 | STR-06-F5（旧链删除归 F8） |
+| 机械书 aggregate 崩溃恢复用例 | `test_mechanical_aggregate_crash_*`（已 skip） | 迁入 STR-06（F3–F5 反例迁移），改写为 binding-only 崩溃恢复后删除 skip | STR-06-F8 |
+| typed HARD 停止/指纹熔断用例 | `test_a_owned_failure_*` / `test_same_fingerprint_*`（已 skip） | 迁入 STR-06（F3–F5 反例迁移），与 binding INVALID + witness 路径重对齐后删 skip | STR-06-F8 |
 
 ## 条目生命周期
 
