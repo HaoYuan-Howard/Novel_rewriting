@@ -94,6 +94,22 @@ from contracts.schema.str06.receipt import (
     ReceiptStatus,
     SceneReceipt,
 )
+from contracts.schema.str06.source import (
+    Beat,
+    BlueprintsArtifactV12,
+    CausalEdge,
+    ChapterBlueprint,
+    CharacterEntry,
+    CharactersArtifactV4,
+    Effect,
+    EffectTarget,
+    InitialStateAtom,
+    KnowledgeSpec,
+    Reveal,
+    StateTarget,
+    SurfaceWindow,
+    WorldConstraint,
+)
 
 #: 本子包契约的 RC 版式身份。判官契约版本（`SceneReceipt.judge_contract_version`）
 #: 在 F5 定版前引用本常量，避免各处手写字符串漂移。

@@ -374,9 +374,23 @@ owner 选择；保留源钩子事实及其源正文／源钩子证据；增加�
   效应、M4 承载位置真实（新链无 bridge 拍，试点职责转译）、M6 在场合法性；
   M5 surface 时机依赖 surface 窗口引擎留 F4。试点 ce1–ce6 反例逐条迁移到新
   坐标（tests/test_str06_fold_guard.py），validator 输入不变有行为测试。
-- [ ] **F2b · Source Semantics 其余**：Characters v4／Blueprints v12 字段级 RC、
-  抽取 wire、确定性 compile、owner 窄 patch 与已购恢复、定向 stage 测试；
-  **真书冒烟为付费节点，须用户独立授权（显式 `--yes`），未授权不启动**。
+- [x] **F2b · Source Semantics 完成（2026-09-23，真书冒烟经用户授权）**：
+  `contracts/schema/str06/source.py` Characters v4／Blueprints v12 字段级 RC
+  （试点 B 档形状类型化：slug/beat/state/wc id 规则、surface 窗口、闭集、
+  open 必填、relation 禁自环、章号连续）；`source_compile.py` 确定性 compile
+  机械臂（book wire 分流两份 truth、章级跨产物闭合、knowledge_key 命题复用
+  一致、双 owner 检测、相邻因果边机械归一删除、跨章方向校验）与
+  `source_fold`／`initial_snapshot`（单一折叠实现，供 F3 Preserve 与逐章
+  prompt 共用）；合成反例 10 项。真书冒烟（《夫君的报恩》，16 次真实付费、
+  58.9k prompt + 164.1k completion，`outputs/str06_f2b_smoke_20260923_162444/`）：
+  两份 canonical 从盘面重载过自身 schema；participants/causal 引用零悬空；
+  knowledge_key 零命题漂移；fold 重放一致；surface until 全 null（纪律遵守）。
+  体量与 B 档同量级（beats 83/78、effects 85/67、reveals 26/30）。
+  **质量披露（不静默接受）**：①loop 开闭纪律退化——13 open 仅 2 close
+  （B 档 4/3），终章后 11 条悬念线未收束，loop 粒度过细（场内疑问被升格
+  全书悬念线）；属 prompt 标定问题非 schema 缺陷，F3 前收紧 loop 准入
+  （只收跨多章未决主线，场内疑问走 beat.event/reveals）。②fold 事件 1 条：
+  第 10 章 stable `wealth` 被改写，待人工对照源书复核（合理剧情或漏保信号）。
 - [ ] F3–F8 未完成。
 
 F6 不承担无关 Stage6/7 本体重构。跨章能力验证：F1/F4 用明确跨章布局的反例证明能力
@@ -429,6 +443,7 @@ Downloads（用户本机 `~/Downloads`，不进仓）：
 | _tmp_vnext_judge_slim.py | `856ecb82d1e861fcaebaaf734c63aae9fe180b3950b8f53170e6abf036f1d78a` | slim Judge + C1–C3 + labeled 断言 | 改写 → F5 |
 | _tmp_vnext_writer.py | `f603361b72dd0c78974a67219be98586e16907210fddf3a2dea7dc5af8be202c` | 投影修复 + 成文 harness（口吻/禁补造规则、--prior-events） | 改写 → F4/F5 |
 | _tmp_calib_under_spec.py | `e602d5df1f175582cc11f2d20febcbfd8e7db2f1a183786588c6fc5b622a8186` | under_spec 定向合成探针（union 真不足用例） | 改写 → F1/F4 |
+| _tmp_str06_f2b_smoke.py | `0526526554ddf0767fd0737a031575e55e84186e74cf31434876d689898274af` | F2b 真书冒烟 harness（断点续跑；复用试点 prompt/证据切段；授权付费） | 改写 → F3 复用同一 SourceTruth |
 | _tmp_vnext_probe.py | `f4fbd26b6ddb51f83b86c4c9b0e9bc35530496b5dea1ccf2a1e2f8fb41056ac4` | 现役盘面形状一次性探查 | 退役（一次性） |
 
 （`_tmp_prep_m1_run.py` 属 Characters v3 M1 冒烟准备，与 STR-06 无关，不登记。）
@@ -444,6 +459,7 @@ outputs 冻结基线（目录身份为清单哈希）：
 | outputs/vnext_probe_b | `b073d5e608f0878f` / 35 | B 档契约二轮重抽 | 参考 → F2 |
 | outputs/vnext_probe_b2 | `1fe3bf083401d3cc` / 4 | b2 定点修订档（三处 patch） | 参考 → F2（窄修复案例） |
 | outputs/review_stage4_c | `370bde60701dddf8` / 3 | 第三轮验收报告目录（下三件） | 知识来源 → F1/F5 |
+| outputs/str06_f2b_smoke_20260923_162444 | `b9947b7b74f7b972` / 15 | F2b 真书冒烟（v4/v12 canonical + wire 缓存 + report；loop 纪律与 stable 改写两披露） | F3 的 SourceTruth 基线 |
 | ├ taxonomy.md | `017f6c42940e69d9f4c41927bb0326197ecda9638d6a5b11c3de212bad0e0e52` | 六列错误分类学 + 判据边界 + 成本台账 | 知识摘要母本 |
 | ├ labeled_assertions.json | `a4e0463f42fe1ad221095c1322b8c6bc3d26befee67d0638e2f647e04e348915` | 11 条 labeled 回归断言（正/负例） | 迁入 F5 |
 | └ judge_slim_report.json | `3d1d91988099ee0ec2b4f6ca64f2f1408b95cc590118da1e6a9b1228ad299256` | slim judge 判定原始报告 | 证据 |
