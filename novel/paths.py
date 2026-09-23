@@ -346,6 +346,39 @@ def check_rel_deep(rel: str) -> str:
     return _check(rel, depth=None)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# STR-06 登记家族的多级路径（F0；见 contracts/schema/str06/families.py）
+# ─────────────────────────────────────────────────────────────────────────────
+
+def check_rel_family(rel: str) -> str:
+    """STR-06 新链产物的路径准入：三级路径**按登记家族**放行。
+
+    与 `check_rel_deep` 的区别就是「登记」二字：deep 是给归档/文本读取用的无限深，
+    本函数要求路径落在 `STR06_PATH_FAMILIES` 登记的前缀内，家族外的多级路径照样
+    拒——两级一般规则（`check_rel`）一寸不放。两级的 STR-06 特例
+    （`stage5/rewritten_body.txt`）仍走 `check_rel`。
+    """
+    from contracts.schema.str06.families import family_for
+
+    norm = _check(rel, depth=None)
+    if family_for(norm) is None:
+        raise PathRefused(
+            f'产物路径 {rel!r} 不在任何 STR-06 登记家族内；未登记的多级路径不予准入'
+            f'（登记表见 contracts/schema/str06/families.py::STR06_PATH_FAMILIES）')
+    return norm
+
+
+def family_input_key(rel: str) -> str:
+    """STR-06 登记家族内路径的来源账键：**完整相对路径**，不塌两级。
+
+    现役 `input_key` 塌两级的前提是全部产物都是两级；新链产物在三级子目录，
+    塌掉一级会把同一前缀下不同子目录的产物折叠成同一条边，反查必错。作用域
+    仍由 run 级实例边界给出（同 `input_key` 的论证）。只对家族内路径合法，
+    家族外调用是编程错误，直接拒绝。
+    """
+    return check_rel_family(rel)
+
+
 def _check(rel: str, *, depth: int | None) -> str:
     norm = str(rel).replace('\\', '/')
     if not norm or norm != norm.strip():

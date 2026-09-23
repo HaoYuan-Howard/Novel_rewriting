@@ -21,6 +21,10 @@
   "stage7": []
  },
  "modules": {
+  "tests/test_str06_contracts.py": {
+   "layer": "unit_contract",
+   "stages": []
+  },
   "tests/test_ab_compare.py": {
    "layer": "unit_contract",
    "stages": []

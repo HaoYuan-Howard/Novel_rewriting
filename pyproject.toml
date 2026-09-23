@@ -43,6 +43,7 @@ build-backend = "setuptools.build_meta"
 # 新增或删除子包同步此表；test_layering 对账实际子包集合，非 editable 安装验证正式入口。
 # 仅在仓内通过 import 不证明安装包完整，因为 pytest 的 pythonpath 会掩盖漏登记。
 packages = ["contracts", "contracts.judges", "contracts.schema",
+            "contracts.schema.str06",
             "novel", "novel.api", "novel.api.routes", "novel.cli", "novel.core",
             "novel.llm", "novel.orchestrator", "novel.quality", "novel.report", "novel.stages",
             "novel.stages.stage0", "novel.stages.stage1",

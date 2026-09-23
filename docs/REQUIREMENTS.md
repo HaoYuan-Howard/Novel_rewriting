@@ -77,7 +77,10 @@ ledger 成本权威。改变产品语义前须用户裁决，并同步 BACKEND_C
 - [x] schema v3 + ARTIFACT_SPECS 升版拒读 v2
 - [x] `revisions.py`：make_transform / commit / ensure_materialized
 - [x] producer / eligibility / checks / CLI / views / source_identity 对齐
-- [ ] 定向回归闭合后勾选本行完成；存量书一律重建
+- [ ] 定向回归闭合后勾选本行完成；存量书一律重建。
+      漏账（2026-09-23 F0 对账发现）：`tests/test_store.py` 仍 import 已删除的
+      `Stage0CandidatePlan`，整文件 collection error——Stage0 v3 切换未同步该
+      测试；随本行闭合一并修复
 
 **验收**：同输入幂等；算法变则整份替换；手改 clean 关闭式拒绝；下游只经 transform + clean 投影。
 
@@ -133,6 +136,12 @@ ledger 成本权威。改变产品语义前须用户裁决，并同步 BACKEND_C
 - [x] Batch 3：states 反例/读数；story_before 去重；public_state_ref 保留
 - [x] Batch 4：展开差分测试 + shape-break/stale + §9.5；一次翻转 v11
 
+- [ ] 漏账（2026-09-23 F0 对账发现）：blueprint 子包重组后 stage4 对
+      `novel.stages.stage2.blueprint.*` 的 10 条深导入边未进
+      `tests/test_layering.py::test_cross_stage_imports_stay_on_the_package_surface`
+      的 grandfather 清单（`novel/views/stage4.py` 对 `stage4.plan` 一条同理），
+      对账测试红；要么消化入包级公开导出，要么随 STR-06-F8 旧链删除消失，补登记者答清走向
+
 **验收**：展开(压缩(完整上下文)) 等价；Stage4 A 不因统一入口泄源序；v10 拒读；性能分列报告（模型 token / 正式字节 / 下游输入 / 重试 / 耗时）；states 质量观察单列。
 
 #### STR-03-S2-CH · Characters v3（身份解析 → 消费闭合）
@@ -162,6 +171,10 @@ ledger 成本权威。改变产品语义前须用户裁决，并同步 BACKEND_C
 - [x] M2：Blueprint `mention_actor_coverage`（R-3.7e）+ 切断 Stage4/shared/consumption 的 v2 双读
 - [x] M3：Stage5～7 / views / naming / knowledge prompt / UI 只认 v3；新书默认 WorkflowManifestV9（`characters:3`）；**不**删除 analyze
 - [ ] analyze 删除条件：恢复双付费未审计（旧 receipt/draft repair 消费者清零前保持未勾）。审计与替代工作由 STR-06 承接，删除归 STR-06-F8；不得提前勾选
+- [ ] M1 漏账（2026-09-23 F0 对账发现）：characters / characters_edit /
+      blueprint_character_projection 三条升到 v3 但未登记
+      `tests/test_artifact_versions.py` 的 `_SHAPE_BREAKS` 账本（「由谁重建」未答），
+      对账测试红；补账后恢复
 
 **验收（M0）**：合成反例绿；真机另列。小样本通过 ≠ golden set。
 **删除条件（analyze）**：新书默认 v3 + 旧 receipt/draft repair 消费者清零 + 恢复双付费审计通过 + REQUIREMENTS 勾选后删除联合首抽 path。当前 M3 已默认 v3，但恢复双付费未审计，删除条件保持未勾。
@@ -334,6 +347,18 @@ owner 选择；保留源钩子事实及其源正文／源钩子证据；增加�
 | **F7 · 工作流与公开面** | 编排阶段依赖、窄修复与串行；API／Views／Frontend；RC 收口，版本、manifest、epoch 组合闭合；完成目标契约候选和 Golden 工具适配 |
 | **F8 · 验收与切换** | 删除已替代旧链、更新 retired 和正式指南；完成 I-40／`R-5.2` 等切换提交；契约 §9.5、默认非 corpus 回归和前端完整验证→Golden→一次合入切换 |
 
+批次进度：
+
+- [x] **F0 · 架构与 RC**（2026-09-23，隔离分支内完成）：RC 契约子包
+  `contracts/schema/str06/`（policy / grounding / design / execution / context /
+  receipt / consumption / families / dependency；不进 ARTIFACT_SPECS 与 NODES，
+  反向守卫钉在 tests/test_str06_contracts.py）；`novel/paths.py` 新增
+  `check_rel_family` 与 `family_input_key`（登记家族内三级准入、来源账键用完整
+  路径；两级一般规则不变）；pyproject packages 同步；RC 契约文档与 F8 切换清单
+  见 [str06.md](schema/str06.md)；定向 contract 测试 25 项通过。
+- [ ] F1 · 反例（下一批次）。
+- [ ] F2–F8 未完成。
+
 F6 不承担无关 Stage6/7 本体重构。跨章能力验证：F1/F4 用明确跨章布局的反例证明能力
 接通；F8 报告 Design 是否实际使用跨章自由度及对应证据，未使用时明确记录「真实生成中
 的跨章质量未获验证」，不强迫模型为指标搬移情节。
@@ -496,9 +521,9 @@ Cutover 条件：四类 truth、唯一 writer、依赖与完整消费链闭合�
 持续登记：漏保／过保、源结构泄漏、under-spec、状态过建模、checklist prose、Judge
 误判、过度失效、下游语义材料不足、请求容量、Golden 成本。
 
-**本次（2026-09-23）只落盘本条与 DECISIONS 裁决，不改代码、不运行模型；落盘后仅运行
-`git diff --check`、`tests/test_docs_references.py`、`tests/test_coverage.py`。文档
-验收后停止，不启动 F0。**
+**文档落盘批次（2026-09-23）只运行了 `git diff --check`、`tests/test_docs_references.py`、
+`tests/test_coverage.py` 后停止。同日用户指令按 F0–F8 批次推进；F0 已完成（见批次进度），
+后续批次到付费节点（F2 真书冒烟起）须独立授权、显式 `--yes`，正文外发分别授权。**
 
 ## Compatibility adapter 登记
 

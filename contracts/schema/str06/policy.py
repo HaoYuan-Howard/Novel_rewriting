@@ -1,0 +1,52 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""policy —— PreservationPolicy：Grounding.Preserve 的版本化策略（F0 RC）。
+
+【为什么 Policy 是 Preserve 的独立输入】
+Preserve 只消费 SourceTruth、版本化 Policy 和执行配置；不接收 Design 或 Bind 的
+失败结果。把策略从 prompt / 运行时代码里提出来做成显式版本化对象，是为了让
+「同一份 SourceTruth + 同一版 Policy ⇒ 可恢复的 paid checkpoint」这句话有可校验的
+身份——checkpoint 记 `policy_id + policy_version`，重放与审计都对着它对账。
+
+【RC 边界】
+`PreserveKind` 闭集是初版（试点三轮的保存类别归纳）；F1 反例标定后允许增删，
+但**必须升 `version`**——类别集合的变化会改变 Preserve 结果，旧 checkpoint 的
+身份绑在旧版 Policy 上，不能被静默重解释。
+"""
+from __future__ import annotations
+
+from enum import Enum
+
+from pydantic import Field
+
+from contracts.schema.base import StrictModel
+
+
+class PreserveKind(str, Enum):
+    """保存语义类别的闭集（RC）。
+
+    Obligation 的 `kind` 取值域；「必保要求必须有实质满足条件，不能被
+    reinforcement 的 0..N 稀释」落在 `SourceObligation.must_preserve` 与
+    `satisfaction` 的搭配上（见 grounding.py），不在本枚举里分档。
+    """
+
+    EVENT_CORE = 'event_core'          # 事件内核（谁对谁做了什么、结果如何）
+    REVEAL = 'reveal'                  # 读者揭示时机
+    CHARACTER_ARC = 'character_arc'    # 人物内在变化
+    CAUSAL = 'causal'                  # 必要因果（前因后果不可断）
+    WORLD_FACT = 'world_fact'          # 世界事实 / 规则
+    IDENTITY = 'identity'              # 身份与称谓约束
+    INITIAL_STATE = 'initial_state'    # 书级初始事实（Source initial facts）
+
+
+class PreservationPolicy(StrictModel):
+    """一次 Preserve 请求携带的策略身份。
+
+    只有身份与类别闭集；**执行配置不进 Policy**——provider/model/请求身份记在
+    `PreserveCheckpoint` 的执行身份里，同一版 Policy 换模型重跑是可区分的两份
+    checkpoint，不能混作同一身份。
+    """
+
+    policy_id: str = Field(min_length=1)
+    version: int = Field(ge=1)
+    preserve_kinds: tuple[PreserveKind, ...] = Field(min_length=1)
