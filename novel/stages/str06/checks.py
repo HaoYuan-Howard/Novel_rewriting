@@ -17,6 +17,7 @@ REGISTRY——RC 期不注册现役判据）。
 from __future__ import annotations
 
 import hashlib
+import json
 from typing import Iterable, Mapping
 
 from pydantic import BaseModel
@@ -29,11 +30,12 @@ from contracts.schema.str06.context import WriterContext
 
 
 def canonical_sha256(model: BaseModel) -> str:
-    """规范化内容摘要：pydantic 字段序确定，`model_dump_json` 即规范字节。
+    """规范化内容摘要：JSON 对象键排序，数组保留业务顺序，不依赖进程 hash seed。
 
     receipt / slice / context 的内容绑定共用这一把尺子（单一身份来源，I-16）。
     """
-    payload = model.model_dump_json(exclude_none=False).encode('utf-8')
+    payload = json.dumps(model.model_dump(mode='json'), ensure_ascii=False,
+                         sort_keys=True, separators=(',', ':')).encode('utf-8')
     return hashlib.sha256(payload).hexdigest()
 
 
@@ -46,6 +48,8 @@ def check_binding_covers_checkpoint(
     丢失义务（既不在 entries 也不在 unbound）与混入 checkpoint 外的义务都报。
     """
     problems: list[str] = []
+    if binding.obligations != checkpoint.obligations:
+        problems.append('Binding 义务内容与采用的 Preserve 不一致')
     denominator = {o.obligation_id for o in checkpoint.obligations}
     bound = {e.obligation_id for e in binding.entries}
     returned = {u.obligation_id for u in binding.unbound}
@@ -85,6 +89,10 @@ def check_receipt_binding(
     problems: list[str] = []
     if receipt.scene_id != context.scene_id:
         problems.append(f"receipt 场景 {receipt.scene_id!r} 与 context 场景 {context.scene_id!r} 不一致")
+    if receipt.attempt_id != context.attempt_id:
+        problems.append('receipt attempt_id 与 Context 不一致')
+    if context.execution_slice_sha256 != execution_slice_sha256:
+        problems.append('Context 与当前 slice 身份不一致')
     actual_context = canonical_sha256(context)
     if receipt.writer_context_sha256 != actual_context:
         problems.append('writer_context_sha256 与当前 Context 内容不匹配（旧 PASS 配新 Context）')

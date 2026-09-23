@@ -1,22 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""grounding —— Preserve / Bind 两职的 RC 契约（F0）。
-
-【链路位置】
-SourceTruth → Preserve（本文件的 SourceObligation / PreserveCheckpoint）→ 确定性
-ReconstructionBrief → Target Design → Bind（SemanticBinding）。
-
-【三条冻结规则在这里的类型落点】
-  ① Preserve 隔离：`PreserveCheckpoint` 上不存在任何 Design / Bind 字段
-     （`extra='forbid'` 兜底）。它只锚 SourceTruth 与 Policy 身份。
-  ② Design 不读 checkpoint 内部：`ReconstructionBrief` 只携带 checkpoint 的
-     hash 身份（`preserve_checkpoint_sha256`），不携带 obligations 原文；Brief
-     模型上没有源章 / 源拍 / 叙述顺序 / 证据定位字段——source-blind 由
-     「没有这些字段 + forbid extra」双重保证，而不是靠 prompt 自觉。
-  ③ Bind 完整发布：`SemanticBinding` 是完整 snapshot，没有 partial / draft
-     字段；unbound 是显式列表（保留原义务 + 返回 owner），不是被删掉的沉默。
-     「obligations 必须与采用的 Preserve 结果一致」是跨产物不变量，归 F4
-     机械 Guard（本模型只保证自身自洽：entries 与 unbound 无交集、id 唯一）。
+"""Preserve/Brief/Bind RC2：Preserve 隔离于设计反馈，Brief 全语义去源坐标，
+Binding 发布完整义务与单一验收位置。paid checkpoint 不是下游读取接口。
+跨场复合义务通过较早支撑拍表达，不能把义务整体提前当成已成立事实。
 """
 from __future__ import annotations
 
@@ -24,6 +10,7 @@ from pydantic import Field, model_validator
 
 from contracts.schema.base import StrictModel
 from contracts.schema.str06.policy import PreserveKind
+from typing import Literal
 
 
 class SourceLineage(StrictModel):
@@ -109,11 +96,14 @@ class IdentityProjection(StrictModel):
     stable_constraints: tuple[str, ...] = Field(default=(), min_length=0)
 
 
-class EventCoreNote(StrictModel):
-    """Brief 中的事件内核：语义压缩后的「发生了什么」，无源章坐标。"""
+class BriefRequirement(StrictModel):
+    """Brief 中的保存要求：所有类别与满足条件，无源章坐标。"""
 
     core_id: str = Field(min_length=1)
     summary: str = Field(min_length=1)
+    kind: PreserveKind
+    must_preserve: bool
+    satisfaction: str
     participants: tuple[str, ...] = Field(default=(), min_length=0)
     # 必要因果的显式边（RC：起止都是 core_id；DAG 校验归 F4 Guard）
     requires_cores: tuple[str, ...] = Field(default=(), min_length=0)
@@ -128,16 +118,19 @@ class ReconstructionBrief(StrictModel):
     拓扑是 Preserve→Design 的冻结边界，字段缺失就是它的类型层表达。
     """
 
+    contract_version: Literal['str06-rc2'] = 'str06-rc2'
     brief_id: str = Field(min_length=1)
     preserve_checkpoint_sha256: str = Field(min_length=64, max_length=64)
-    event_cores: tuple[EventCoreNote, ...] = Field(min_length=1)
+    requirements: tuple[BriefRequirement, ...] = Field(min_length=1)
     book_constraints: tuple[str, ...] = Field(default=(), min_length=0)
 
     @model_validator(mode='after')
     def _unique_core_ids(self) -> 'ReconstructionBrief':
-        ids = [c.core_id for c in self.event_cores]
+        ids = [c.core_id for c in self.requirements]
         if len(set(ids)) != len(ids):
             raise ValueError('core_id 在 Brief 内必须唯一')
+        if any(set(c.requires_cores) - set(ids) for c in self.requirements):
+            raise ValueError('Brief 依赖必须闭合，非事件义务也必须投影')
         return self
 
 
@@ -157,13 +150,16 @@ class BindingEntry(StrictModel):
 
     obligation_id: str = Field(min_length=1)
     scene_id: str = Field(min_length=1)
-    beat_ref: str | None = None
+    beat_ref: str = Field(min_length=1)
+    supporting_beat_refs: tuple[str, ...] = ()
 
     @model_validator(mode='after')
     def _beat_ref_scene_consistent(self) -> 'BindingEntry':
         # beat_ref 若给出，必须指 scene 内的拍（`<scene_id>#<beat_id>`）。
-        if self.beat_ref is not None and not self.beat_ref.startswith(f'{self.scene_id}#'):
+        if not self.beat_ref.startswith(f'{self.scene_id}#'):
             raise ValueError(f'beat_ref {self.beat_ref!r} 必须落在所属场景 {self.scene_id!r} 内')
+        if len(set(self.supporting_beat_refs)) != len(self.supporting_beat_refs):
+            raise ValueError('支撑拍不得重复')
         return self
 
 
@@ -182,13 +178,18 @@ class SemanticBinding(StrictModel):
     一次）；跨产物「全分母 = 采用的 checkpoint obligations」归 F4 机械 Guard。
     """
 
+    contract_version: Literal['str06-rc2'] = 'str06-rc2'
     binding_id: str = Field(min_length=1)
     preserve_checkpoint_sha256: str = Field(min_length=64, max_length=64)
+    obligations: tuple[SourceObligation, ...] = Field(min_length=1)
     entries: tuple[BindingEntry, ...] = Field(min_length=0)
     unbound: tuple[UnboundEntry, ...] = Field(min_length=0)
 
     @model_validator(mode='after')
     def _no_double_bookkeeping(self) -> 'SemanticBinding':
+        ids = [o.obligation_id for o in self.obligations]
+        if len(ids) != len(set(ids)):
+            raise ValueError('Binding 完整义务内 ID 不得重复')
         bound = [e.obligation_id for e in self.entries]
         returned = [u.obligation_id for u in self.unbound]
         if len(set(bound)) != len(bound):

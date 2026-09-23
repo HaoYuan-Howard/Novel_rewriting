@@ -6,9 +6,8 @@
 v12）。语义判断归抽取 LLM；本模块只做确定性转换、跨产物闭合校验与归一：
   • book wire 分流：characters+initial_state → v4；world_constraints → v12；
   • 章级 wire → ChapterBlueprint：participants/recipients 闭合、knowledge_key
-    命题复用一致性、双 owner 检测、相邻因果边机械删除（先后已由 beats 序表达，
-    删除是归一不是修复）、跨章 from_beat 存在性；
-  • `source_fold`：initial_state 起底 + 逐章 effects 折叠 → 每章起点快照与
+    命题复用一致性、同拍双 owner 检测、因果边闭合验证（相邻顺序不能替代因果）、跨章 from_beat 存在性；
+  • `source_fold`：initial_state 起底 + 逐章 effects 折叠 → 每章末快照与
     事件（stable 改写、loop 重复 open/无 open 即 close）。F3 Preserve 与逐章
     抽取 prompt 的快照输入共用本函数——单一折叠实现，无第二套 fold。
 
@@ -17,10 +16,11 @@ validator 不修改输入：wire dict 原样进、错误聚合成列表出（I-2
 from __future__ import annotations
 
 from typing import Any, Iterable
+from copy import deepcopy
 
 from contracts.schema.str06.source import (
     Beat, BlueprintsArtifactV12, ChapterBlueprint, CharactersArtifactV4,
-    Effect, EffectTarget, Reveal,
+    WorldConstraint,
 )
 from pydantic import ValidationError
 
@@ -41,6 +41,8 @@ def compile_book(
     world_constraints 由调用方并入 Blueprints v12（compile_chapters 的聚合点）。
     """
     errors: list[str] = []
+    if set(wire) - {'characters', 'initial_state', 'world_constraints'}:
+        errors.append('book wire 携带未知字段')
     evidence = set(evidence_ids)
     raw_chars = wire.get('characters') or {}
     if not isinstance(raw_chars, dict) or not raw_chars:
@@ -71,29 +73,41 @@ def compile_book(
             initial_state=wire.get('initial_state') or [])
     except ValidationError as exc:
         return None, None, [f'characters v4 构造失败：{exc}']
+    try:
+        for wc in wcs:
+            WorldConstraint.model_validate(wc)
+    except ValidationError as exc:
+        return None, None, [f'世界约束构造失败：{exc}']
     return characters, wcs, []
 
-
-def _atom_refs(atom: dict[str, Any]) -> list[dict[str, Any]]:
-    return [atom]
 
 
 class ChapterCompiler:
     """逐章 compile 的跨章状态：已登记 beat、knowledge 命题、人物闭集。"""
 
-    def __init__(self, characters: CharactersArtifactV4):
+    def __init__(self, characters: CharactersArtifactV4, *, evidence_ids: Iterable[str]):
         self.chars = set(characters.characters)
+        self.evidence = frozenset(evidence_ids)
         self.known_beats: set[str] = set()
         #: knowledge_key -> statement（同一 key 的 statement 永不改写）
         self.statements: dict[str, str] = {}
 
+    def validate(self, wire: dict[str, Any], chapter: int) -> list[str]:
+        return deepcopy(self).compile(wire, chapter)[1]
+
     def compile(self, wire: dict[str, Any], chapter: int) -> tuple[ChapterBlueprint | None, list[str]]:
         errors: list[str] = []
+        if set(wire) - {'beats', 'causal_edges'}:
+            errors.append('chapter wire 携带未知字段')
+        statements = dict(self.statements)
         beats: list[Beat] = []
-        cur_no: dict[str, int] = {}
         char_toward: list[tuple[str, str]] = []
         rel_pairs: list[tuple[str, str]] = []
         for raw in wire.get('beats') or []:
+            char_toward, rel_pairs = [], []
+            for ev in raw.get('source_refs') or []:
+                if ev not in self.evidence:
+                    errors.append(f'source_ref 悬空：{ev}')
             for p in raw.get('participants') or []:
                 if p not in self.chars:
                     errors.append(f'participants 引用未知人物 {p}')
@@ -101,6 +115,9 @@ class ChapterCompiler:
                 errors.append(f'beat {raw.get("beat_id")} 缺 source_refs')
             for eff in raw.get('effects') or []:
                 t = eff.get('target') or {}
+                for name in ('char_id', 'subject', 'object'):
+                    if t.get(name) and t[name] not in self.chars:
+                        errors.append(f'effect 引用未知人物 {t[name]}')
                 if t.get('kind') == 'relation':
                     pair = (t.get('subject'), t.get('object'))
                     rel_pairs.append(pair)
@@ -110,34 +127,29 @@ class ChapterCompiler:
                     errors.append('位置统一用 whereabouts 单键')
             for rv in raw.get('reveals') or []:
                 key, stmt = rv.get('knowledge_key'), rv.get('statement')
-                registered = self.statements.get(key)
+                for recipient in rv.get('recipients') or []:
+                    if recipient not in self.chars | NON_CHAR_RECIPIENTS:
+                        errors.append(f'reveal recipient 引用未知人物 {recipient}')
+                registered = statements.get(key)
                 if registered is not None and stmt != registered:
                     errors.append(f'knowledge_key {key} 已登记命题「{registered}」，复用必须原样复制')
+                statements.setdefault(key, stmt)
             try:
-                beat = Beat(
-                    beat_id=raw['beat_id'], event=raw['event'],
-                    participants=tuple(raw.get('participants') or []),
-                    source_refs=tuple(raw.get('source_refs') or []),
-                    effects=_effects(raw.get('effects') or []),
-                    reveals=_reveals(raw.get('reveals') or []))
+                beat = Beat.model_validate(raw)
             except (ValidationError, KeyError) as exc:
                 errors.append(f'beat {raw.get("beat_id")} 构造失败：{exc}')
                 continue
             beats.append(beat)
             m = _beat_no(beat.beat_id, chapter)
-            if m is not None:
-                cur_no[beat.beat_id] = m
-        # 双 owner：同一语义变化不得在 character 与 relation 各写一遍
-        for cid, key in char_toward:
-            for subject, obj in rel_pairs:
-                if cid in (subject, obj):
-                    errors.append(f'同一语义变化双 owner：{key} 与 relation({subject},{obj}) 并存')
-        # 相邻因果边：机械删除（先后已由 beats 序表达）；跨章/跨距离保留
+            if m is None:
+                errors.append(f'beat_id {beat.beat_id} 不属于第 {chapter} 章')
+            for cid, key in char_toward:
+                for subject, obj in rel_pairs:
+                    if cid in (subject, obj):
+                        errors.append(f'同一语义变化双 owner：{key} 与 relation({subject},{obj}) 并存')
+        # 因果不等于相邻顺序；全部验证并保留，不静默删除。
         edges = []
         for raw in wire.get('causal_edges') or []:
-            f_no, t_no = cur_no.get(raw.get('from_beat')), cur_no.get(raw.get('to_beat'))
-            if f_no is not None and t_no is not None and t_no == f_no + 1:
-                continue  # 归一删除，不报错
             if raw.get('to_beat') not in {b.beat_id for b in beats}:
                 if raw.get('to_beat') not in self.known_beats:
                     errors.append(f'causal to_beat 未知：{raw.get("to_beat")}')
@@ -150,11 +162,12 @@ class ChapterCompiler:
             edges.append(raw)
         if errors:
             return None, errors
-        chapter_bp = ChapterBlueprint(
-            chapter=chapter, beats=tuple(beats),
-            causal_edges=tuple(
-                e for e in (
-                    _edge(r) for r in edges) if e is not None))
+        try:
+            chapter_bp = ChapterBlueprint(
+                chapter=chapter, beats=tuple(beats),
+                causal_edges=tuple(_edge(r) for r in edges))
+        except (ValidationError, KeyError) as exc:
+            return None, [f'章蓝图构造失败：{exc}']
         # 登记跨章状态
         for beat in beats:
             self.known_beats.add(beat.beat_id)
@@ -163,31 +176,9 @@ class ChapterCompiler:
         return chapter_bp, []
 
 
-def _effects(raw_list: list[dict[str, Any]]) -> tuple[Effect, ...]:
-    out: list[Effect] = []
-    for raw in raw_list:
-        t = raw['target']
-        out.append(Effect(
-            target=EffectTarget(
-                kind=t['kind'], char_id=t.get('char_id'), subject=t.get('subject'),
-                object=t.get('object'), loop_id=t.get('loop_id')),
-            key=raw['key'], op=raw['op'], value=raw.get('value')))
-    return tuple(out)
-
-
-def _reveals(raw_list: list[dict[str, Any]]) -> tuple[Reveal, ...]:
-    return tuple(
-        Reveal(knowledge_key=r['knowledge_key'], statement=r['statement'],
-               recipients=tuple(r['recipients']), mode=r['mode'])
-        for r in raw_list)
-
-
 def _edge(raw: dict[str, Any]):
     from contracts.schema.str06.source import CausalEdge
-    try:
-        return CausalEdge(from_beat=raw['from_beat'], to_beat=raw['to_beat'], kind=raw['kind'])
-    except ValidationError:
-        return None
+    return CausalEdge.model_validate(raw)
 
 
 def _beat_no(beat_id: str, chapter: int) -> int | None:
@@ -230,14 +221,14 @@ def initial_snapshot(characters: CharactersArtifactV4) -> list[str]:
     state: dict[tuple, dict] = {}
     for atom in characters.initial_state:
         state[(_tkey(_target_dict(atom.target)), atom.key)] = {
-            'value': atom.value, 'persistence': atom.persistence}
+            'value': deepcopy(atom.value), 'persistence': atom.persistence}
     return _render(state)
 
 
 def source_fold(
     characters: CharactersArtifactV4, blueprint: BlueprintsArtifactV12,
 ) -> tuple[dict[int, list[str]], list[str]]:
-    """确定性折叠：返回（每章起点的状态快照渲染，fold 事件）。
+    """确定性折叠：返回（每章末的状态快照渲染，fold 事件）。
 
     章内快照 = initial_state + 此前各章 effects 的累计结果；事件包含 stable
     改写、loop 重复 open、无 open 即 close。不修改输入。
@@ -248,15 +239,16 @@ def source_fold(
         k = (_tkey(_target_dict(atom.target)), atom.key)
         if k in state:
             events.append(f'[fold] 初始状态重复键 {k}，后者覆盖')
-        state[k] = {'value': atom.value, 'persistence': atom.persistence}
+        state[k] = {'value': deepcopy(atom.value), 'persistence': atom.persistence}
 
+    # 明确是章末快照：0 为初始，k 为第 k 章结束。输入下一章只能取 k。
     snapshots: dict[int, list[str]] = {0: _render(state)}
     for chapter_bp in sorted(blueprint.chapters, key=lambda c: c.chapter):
         for beat in chapter_bp.beats:
             for eff in beat.effects:
                 k = (_tkey(_target_dict(eff.target)), eff.key)
                 prev = state.get(k)
-                op, v = eff.op, eff.value
+                op, v = eff.op, deepcopy(eff.value)
                 if op == 'set':
                     if prev and prev['persistence'] == 'stable':
                         events.append(f'[fold] 第{chapter_bp.chapter}章 stable 事实被改写 {k}')
@@ -265,7 +257,7 @@ def source_fold(
                     state.pop(k, None)
                 elif op == 'add':
                     cur = (prev or {}).get('value')
-                    lst = cur if isinstance(cur, list) else ([] if cur is None else [cur])
+                    lst = list(cur) if isinstance(cur, list) else ([] if cur is None else [cur])
                     if v not in lst:
                         lst.append(v)
                     state[k] = {'value': lst, 'persistence': 'mutable'}
@@ -290,3 +282,13 @@ def source_fold(
 def _target_dict(target) -> dict[str, Any]:
     d = target.model_dump() if hasattr(target, 'model_dump') else dict(target)
     return {k: v for k, v in d.items() if v is not None}
+
+
+def chapter_input_snapshot(characters: CharactersArtifactV4,
+                           blueprint: BlueprintsArtifactV12, next_chapter: int) -> list[str]:
+    """严格消费连续前缀，禁止取不到章快照时退回初始态。"""
+    ordinals = [c.chapter for c in blueprint.chapters]
+    if ordinals != list(range(1, next_chapter)):
+        raise ValueError(f'第 {next_chapter} 章输入需要连续的 1..{next_chapter - 1} 章前缀')
+    snapshots, _ = source_fold(characters, blueprint)
+    return snapshots[next_chapter - 1]

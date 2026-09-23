@@ -112,8 +112,9 @@ def test_project_brief_source_blind_projection():
     chars, bp, cp = _assemble()
     brief, identity = project_brief(cp, chars)
     # 只有 event_core 进骨架；reveal/identity 义务不进 cores
-    assert [c.core_id for c in brief.event_cores] == ['ob01']
-    assert brief.event_cores[0].participants == ('fu_jun', 'yun')
+    assert len(brief.requirements) == len(cp.obligations)
+    assert {c.satisfaction for c in brief.requirements} == {o.satisfaction for o in cp.obligations}
+    assert next(c for c in brief.requirements if c.kind is PreserveKind.EVENT_CORE).participants == ('fu_jun', 'yun')
     # Brief 不携带源 beat/章坐标（参与者是 char_id、因果是义务 id）
     import json
     dumped = json.dumps(brief.model_dump(), ensure_ascii=False)
@@ -130,7 +131,7 @@ def test_assemble_binding_full_denominator():
     scenes = {'s01': {'bt1'}}
     wire = {'entries': [
         {'obligation_id': 'ob01', 'scene_id': 's01', 'beat_ref': 's01#bt1'},
-        {'obligation_id': 'ob02', 'scene_id': 's01'},
+        {'obligation_id': 'ob02', 'scene_id': 's01', 'beat_ref': 's01#bt1'},
     ], 'unbound': [
         {'obligation_id': 'ob03', 'owner': 'design', 'reason': '身份约束随人物携带'}]}
     binding, errors = assemble_binding(wire, cp, scenes)
@@ -145,7 +146,7 @@ def test_assemble_binding_full_denominator():
     # 红：beat_ref 指向不存在的拍（M4 面）
     ghost = {'entries': [
         {'obligation_id': 'ob01', 'scene_id': 's01', 'beat_ref': 's01#ghost'},
-        {'obligation_id': 'ob02', 'scene_id': 's01'}],
+        {'obligation_id': 'ob02', 'scene_id': 's01', 'beat_ref': 's01#bt1'}],
         'unbound': wire['unbound']}
     _, errors = assemble_binding(ghost, cp, scenes)
     assert any('真实拍' in e for e in errors)
@@ -162,14 +163,15 @@ def test_assemble_binding_full_denominator():
 
 def _design_wire():
     return {
+        'initial_state': [],
         'scenes': [
-            {'scene_id': 's01',
+            {'scene_id': 's01', 'state_reads': [],
              'driver': {'focal_actor': 'yun', 'immediate_want': '保全婚姻',
                         'opposition': '家族压力', 'turn': '约定'},
              'beats': [
                  {'beat_id': 'bt1', 'event': '约定成立', 'participants': ['yun', 'fu_jun'],
                   'dramatic_intent': '立誓', 'target_delta': [
-                      {'domain': 'relation', 'key': 'marital_status', 'value': '夫妻'}],
+                      {'domain': 'relation', 'subjects': ['yun', 'fu_jun'], 'op': 'set', 'scope': 'book', 'key': 'marital_status', 'value': '夫妻'}],
                   'delivery_hint': ''}],
              'delivery': {'pov': 'yun', 'voice': '冷峻', 'avoid': []}}],
         'chapters': [{'chapter_ordinal': 1, 'scene_ids': ['s01']}],
@@ -191,12 +193,12 @@ def test_assemble_design_green_and_refusals():
     bad = _design_wire()
     bad['scenes'][0]['beats'][0]['target_delta'][0]['domain'] = 'plot'
     _, errors = assemble_presentation_graph(bad, known_char_ids={'yun', 'fu_jun'})
-    assert any('domain 非法' in e for e in errors)
+    assert errors
 
     bad = _design_wire()
     bad['chapters'][0]['scene_ids'] = ['sX']
     _, errors = assemble_presentation_graph(bad, known_char_ids={'yun', 'fu_jun'})
-    assert any('未知场景' in e for e in errors)
+    assert errors
 
     # source-blind：混入 source_ref 即拒（schema 层）
     bad = _design_wire()

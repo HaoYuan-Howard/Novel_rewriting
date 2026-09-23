@@ -8,7 +8,40 @@ Stage6/7 消费投影、Prepare 坐标分离、Golden rubric 迁移与 F8 切换
 **RC 边界**：代码落点为 `contracts/schema/str06/` 子包。字段级 schema 保持 RC，
 经 F1 反例与 F2–F6 真书验证后定版。本子包**不进** `ARTIFACT_SPECS`、不注册
 `NODES`、不进判据注册表；现役链按旧契约验收，正式替代一次合入（F8）。
-RC 版式身份 `str06-rc1`。
+RC 版式身份 `str06-rc2`。RC1 目标产物不能直接加载；只能逐 owner 显式审阅 wire 后免费重编译。
+
+## RC2 修订与免费恢复
+
+2026-09-23 从 F2b/F3/F4 真书结果反推修订。架构仍为 Source → Preserve → Brief →
+Design → Bind → Compile/Context；字段变化不接入现役注册表，正式切换仍归 F8。
+
+| 边界 | RC2 可执行要求 |
+|---|---|
+| Brief | `requirements: BriefRequirement[]` 无损保留所有 kind、must、statement、satisfaction；确定性不透明 ID 排序，依赖闭合；无源坐标或源数组顺序 |
+| Binding | 携带采用的完整 `obligations`；每条单一 `beat_ref` 最终验收拍，可有严格较早的 `supporting_beat_refs`；unbound 必保阻止编译，但义务不删除 |
+| Design | 必填 `initial_state` 与每场 `state_reads`；`TargetDelta` 显式 domain/key/subjects/holder/op/value/scope/knowledge_mode；称谓由 initial_surfaces 和逐拍 surface_introductions 释放 |
+| 状态 | character 一个对象，relation 两个有序对象，knowledge 有真实 holder 与 known/suspected/heard 模式；set/unset/unknown/未建立分离；scene 覆盖退出后恢复 book 底值 |
+| Compile | 只消费 D/G，初始态来自 D，义务来自 G；检查完整分母、真实拍、前置与支撑拍序、DAG；实际状态读取亦生成依赖边；集合排序固定 |
+| Context | IR 携带完整义务与满足条件；WriterBrief 携带实质要求、POV、avoid、逐拍提示、局部 entry、明确前场支撑；不累计复制整书历史义务 |
+| 消费身份 | 绑定本场 D/G 内容、计划、状态、称谓、预算、完整义务语义和支撑拍；全书 checkpoint hash 与 attempt 不进入 slice；无关场内容变化不扩大失效 |
+| Source | 章末快照由 chapter_input_snapshot 严格转为下一章输入；所有证据/人物/recipient 引用闭合；相邻因果保留，坏边报错；validate 不改变跨章注册表 |
+
+`tools/str06_workflow.py` 是隔离链的真实入口。`--source-json` 接收显式的连续源章数组
+`[{chapter_ordinal,text}]`；不读取隐藏旧 Stage1 路径。`NOVEL_OUTPUT` 必填，`--run-dir`
+必须位于其中且续跑固定使用同一根。`--wire-dir` 免费采用逐 owner 的 `book_wire.json`、
+`chNN_wire.json`、`preserve_wire.json`、`design_wire.json`、`bind_wire.json`，每份记录字节摘要
+及校验结果。`--repair-manifest` 核对修订前后文件 SHA，变化则拒绝采用；原文件不被覆盖。
+
+缺同请求身份结果时，只有 `--yes --allow-source-export` 同时存在才新购一次。
+`novel/llm/str06_requests.py` 经现有 transport 直连，先保存原响应与用量，再解析、校验；
+形状错误免费恢复，不进行整份 JSON 付费修复。pending/unknown 保持阻断，不自动重购。
+请求身份含 provider、model、完整请求与执行参数；原响应采用与新调用均记入唯一
+`<NOVEL_OUTPUT>/_service/ledger.jsonl`，缓存命中单列，缺失 usage 保持未知。
+
+`runtime/workflow_status.json` 显式区分 running/failed/source_compiled/planned_validated；旧文件保留用于恢复，
+失败不会继承上次绿灯。`planned-only` 重放只证明编译与消费链，不签发 accepted receipt，
+不代表成文质量验收。`runtime/request_*.json` 是已购证据，禁止当普通派生缓存清理。
+RC2 的人工语义修订是显式外部输入，不是 compiler 自然语言猜测规则；质量仍需 F5/F8 验收。
 
 ## 四类 semantic truth
 

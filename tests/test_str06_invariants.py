@@ -38,7 +38,7 @@ from contracts.schema.str06 import (
     WriterBrief,
     WriterContext,
 )
-from contracts.schema.str06.grounding import EventCoreNote
+from contracts.schema.str06.grounding import BriefRequirement
 from novel.stages.str06.checks import (
     canonical_sha256,
     check_binding_covers_checkpoint,
@@ -80,11 +80,11 @@ def _checkpoint(*obligations: SourceObligation, sha: str = H64) -> PreserveCheck
 def _binding(cp: PreserveCheckpoint, entries=(), unbound=()) -> SemanticBinding:
     return SemanticBinding(
         binding_id='bd1', preserve_checkpoint_sha256=cp.checkpoint_sha256,
-        entries=tuple(entries), unbound=tuple(unbound))
+        obligations=cp.obligations, entries=tuple(entries), unbound=tuple(unbound))
 
 
 def _scene(scene_id: str) -> TargetScene:
-    return TargetScene(
+    return TargetScene(state_reads=(),
         scene_id=scene_id,
         driver=SceneDriver(focal_actor='ch1', immediate_want='w', opposition='o', turn='t'),
         beats=(TargetBeat(beat_id='bt1', event='e', participants=('ch1',),
@@ -93,7 +93,7 @@ def _scene(scene_id: str) -> TargetScene:
 
 
 def _graph(scenes, chapters) -> PresentationGraph:
-    return PresentationGraph(graph_id='g1', scenes=tuple(scenes), chapters=tuple(chapters))
+    return PresentationGraph(initial_state=(), graph_id='g1', scenes=tuple(scenes), chapters=tuple(chapters))
 
 
 def _plan(*scene_ids: str, deps: dict[str, list[str]] | None = None) -> ExecutionPlan:
@@ -124,7 +124,7 @@ def _context(scene_id: str) -> WriterContext:
     return WriterContext(
         scene_id=scene_id, attempt_id='a1', execution_slice_sha256=H64,
         verification_ir=VerificationIR(scene_id=scene_id, obligations=()),
-        writer_brief=WriterBrief(scene_id=scene_id, task='t', scene_driver_summary='d',
+        writer_brief=WriterBrief(pov='ch1', scene_id=scene_id, task='t', scene_driver_summary='d',
                                  beat_outlines=('b1',), length_budget=800, voice='v'))
 
 
@@ -134,22 +134,22 @@ def test_binding_covers_checkpoint_green_and_red():
     cp = _checkpoint(_obligation('ob1'), _obligation('ob2'), _obligation('ob3'))
     # 绿：全承载
     ok = _binding(cp, entries=(
-        BindingEntry(obligation_id='ob1', scene_id='s01'),
-        BindingEntry(obligation_id='ob2', scene_id='s02'),
+        BindingEntry(beat_ref=('s01' + '#bt1'), obligation_id='ob1', scene_id='s01'),
+        BindingEntry(beat_ref=('s02' + '#bt1'), obligation_id='ob2', scene_id='s02'),
     ), unbound=(UnboundEntry(obligation_id='ob3', owner='design', reason='目标无承载位'),))
     assert check_binding_covers_checkpoint(cp, ok) == []
 
     # 红：义务消失（半份 Binding 的可机检面）
     dropped = _binding(cp, entries=(
-        BindingEntry(obligation_id='ob1', scene_id='s01'),))
+        BindingEntry(beat_ref=('s01' + '#bt1'), obligation_id='ob1', scene_id='s01'),))
     problems = check_binding_covers_checkpoint(cp, dropped)
     assert any('消失' in p for p in problems)
 
     # 红：混入 checkpoint 外义务
     invented = _binding(cp, entries=(
-        BindingEntry(obligation_id='ob1', scene_id='s01'),
-        BindingEntry(obligation_id='ob2', scene_id='s02'),
-        BindingEntry(obligation_id='obX', scene_id='s03'),
+        BindingEntry(beat_ref=('s01' + '#bt1'), obligation_id='ob1', scene_id='s01'),
+        BindingEntry(beat_ref=('s02' + '#bt1'), obligation_id='ob2', scene_id='s02'),
+        BindingEntry(beat_ref=('s03' + '#bt1'), obligation_id='obX', scene_id='s03'),
     ), unbound=(UnboundEntry(obligation_id='ob3', owner='design', reason='r'),))
     problems = check_binding_covers_checkpoint(cp, invented)
     assert any('checkpoint 外' in p for p in problems)
@@ -294,8 +294,8 @@ def test_cross_chapter_merge_layout_passes_contract_chain():
     完整性判定全绿。能力接通 ≠ 真实生成质量（后者归 F8 Golden 报告）。"""
     cp = _checkpoint(_obligation('ob_a'), _obligation('ob_b'))  # 源：两章各一义务
     binding = _binding(cp, entries=(
-        BindingEntry(obligation_id='ob_a', scene_id='s01'),
-        BindingEntry(obligation_id='ob_b', scene_id='s01'),  # 同场承载两源章义务
+        BindingEntry(beat_ref=('s01' + '#bt1'), obligation_id='ob_a', scene_id='s01'),
+        BindingEntry(beat_ref=('s01' + '#bt1'), obligation_id='ob_b', scene_id='s01'),  # 同场承载两源章义务
     ))
     assert check_binding_covers_checkpoint(cp, binding) == []
     graph = _graph(
@@ -308,7 +308,7 @@ def test_cross_chapter_split_layout_passes_contract_chain():
     """一个源章的义务拆到两个目标章（拆分方向）：同样全绿；章数=2 连续非空。"""
     cp = _checkpoint(_obligation('ob_a'), _obligation('ob_b'))
     binding = _binding(cp, entries=(
-        BindingEntry(obligation_id='ob_a', scene_id='s01'),
+        BindingEntry(beat_ref=('s01' + '#bt1'), obligation_id='ob_a', scene_id='s01'),
         BindingEntry(obligation_id='ob_b', scene_id='s02', beat_ref='s02#bt1'),
     ))
     assert check_binding_covers_checkpoint(cp, binding) == []
@@ -373,7 +373,7 @@ def test_verification_ir_carries_continuity_fact_view():
     """IR 带 continuity_fact_view（试点 judge 跨场回指误报的根因修复输入）：
     前场义务以事实视图进入本场 IR，Judge 不需要读前场正文。"""
     ir = VerificationIR(
-        scene_id='s02', obligations=('ob2',),
+        scene_id='s02', obligations=(_obligation('ob2'),),
         continuity_fact_view=('s01 已接受：约定成立且为夫妻共同秘密',))
     assert ir.continuity_fact_view[0].startswith('s01')
 
@@ -381,12 +381,12 @@ def test_verification_ir_carries_continuity_fact_view():
 def test_brief_hides_source_topology_behaviorally():
     brief = ReconstructionBrief(
         brief_id='br1', preserve_checkpoint_sha256=H64,
-        event_cores=(
-            EventCoreNote(core_id='c1', summary='约定成立', participants=('ch1',)),
-            EventCoreNote(core_id='c2', summary='翻盘', requires_cores=('c1',)),
+        requirements=(
+            BriefRequirement(kind='event_core', must_preserve=False, satisfaction='', core_id='c1', summary='约定成立', participants=('ch1',)),
+            BriefRequirement(kind='event_core', must_preserve=False, satisfaction='', core_id='c2', summary='翻盘', requires_cores=('c1',)),
         ))
     # 因果保留（requires_cores），源拓扑不存在（无章节字段可读）
-    assert brief.event_cores[1].requires_cores == ('c1',)
+    assert brief.requirements[1].requires_cores == ('c1',)
     assert not any('chapter' in f for f in ReconstructionBrief.model_fields)
 
 
@@ -396,8 +396,8 @@ def test_scene_scoped_effect_expires_at_boundary():
     """scene 作用域的 establishment 只在本场有效——「场景局部状态无衰减」的
     试点缺陷在类型上以 scope 表达；跨场依赖必须由 Design 承接为 book 级。"""
     scene_plan = _scene_plan('s01', establishments=(
-        Establishment(domain='character', key='emotional_state', value='冷哼', scope='scene'),
-        Establishment(domain='world', key='season', value='秋', scope='book'),
+        Establishment(op='set', established_by='init', subjects=('ch1',), domain='character', key='emotional_state', value='冷哼', scope='scene'),
+        Establishment(op='set', established_by='init', domain='world', key='season', value='秋', scope='book'),
     ))
     assert {e.scope for e in scene_plan.establishments} == {'scene', 'book'}
 
@@ -412,7 +412,7 @@ def test_str06_migration_package_import_discipline():
     allowed_roots = ('contracts', 'novel.errors', 'novel.stages.str06')
     std_or_third = ('__future__', 'pydantic', 'typing', 'pathlib', 'hashlib',
                     'dataclasses', 'collections', 'functools', 'itertools',
-                    'enum', 'abc', 'datetime', 'json', 're', 'os', 'sys')
+                    'enum', 'abc', 'datetime', 'json', 're', 'os', 'sys', 'copy')
     for py in Path(pkg.__file__).parent.glob('*.py'):
         tree = ast.parse(py.read_text(encoding='utf-8'))
         for node in ast.walk(tree):

@@ -113,7 +113,7 @@ from contracts.schema.str06.source import (
 
 #: 本子包契约的 RC 版式身份。判官契约版本（`SceneReceipt.judge_contract_version`）
 #: 在 F5 定版前引用本常量，避免各处手写字符串漂移。
-STR06_RC_VERSION = 'str06-rc1'
+STR06_RC_VERSION = 'str06-rc2'
 
 __all__ = [
     'PROJECTION_COORDINATES',

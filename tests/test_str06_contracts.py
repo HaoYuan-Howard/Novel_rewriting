@@ -46,7 +46,7 @@ from contracts.schema.str06 import (
     WriterBrief,
     VerificationIR,
 )
-from contracts.schema.str06.grounding import EventCoreNote
+from contracts.schema.str06.grounding import BriefRequirement
 from contracts.schema.str06.design import (
     PresentationGraph, SceneDelivery, SceneDriver, TargetBeat, TargetScene,
 )
@@ -82,7 +82,7 @@ def _checkpoint(**over) -> dict:
 def _brief(**over) -> dict:
     base = dict(
         brief_id='br1', preserve_checkpoint_sha256=H64,
-        event_cores=(EventCoreNote(core_id='c1', summary='约定成立', participants=('ch1',)),),
+        requirements=(BriefRequirement(kind='event_core', must_preserve=False, satisfaction='', core_id='c1', summary='约定成立', participants=('ch1',)),),
     )
     base.update(over)
     return base
@@ -91,7 +91,8 @@ def _brief(**over) -> dict:
 def _binding(**over) -> dict:
     base = dict(
         binding_id='bd1', preserve_checkpoint_sha256=H64,
-        entries=(BindingEntry(obligation_id='ob1', scene_id='s01'),),
+        obligations=(SourceObligation(**_obligation()),),
+        entries=(BindingEntry(beat_ref=('s01' + '#bt1'), obligation_id='ob1', scene_id='s01'),),
         unbound=(),
     )
     base.update(over)
@@ -143,9 +144,9 @@ def test_reconstruction_brief_is_source_blind():
         with pytest.raises(ValidationError):
             ReconstructionBrief(**_brief(**{smuggled: 'ch07'}))
     with pytest.raises(ValidationError):
-        ReconstructionBrief(**_brief(event_cores=(
-            EventCoreNote(core_id='c1', summary='a'),
-            EventCoreNote(core_id='c1', summary='b'),
+        ReconstructionBrief(**_brief(requirements=(
+            BriefRequirement(kind='event_core', must_preserve=False, satisfaction='', core_id='c1', summary='a'),
+            BriefRequirement(kind='event_core', must_preserve=False, satisfaction='', core_id='c1', summary='b'),
         )))
 
 
@@ -171,8 +172,8 @@ def test_semantic_binding_is_complete_snapshot():
             obligation_id='ob1', owner='design', reason='x'),)))
     with pytest.raises(ValidationError):
         SemanticBinding(**_binding(entries=(
-            BindingEntry(obligation_id='ob1', scene_id='s01'),
-            BindingEntry(obligation_id='ob1', scene_id='s02'),
+            BindingEntry(beat_ref=('s01' + '#bt1'), obligation_id='ob1', scene_id='s01'),
+            BindingEntry(beat_ref=('s02' + '#bt1'), obligation_id='ob1', scene_id='s02'),
         )))
 
 
@@ -185,7 +186,7 @@ def test_binding_beat_ref_must_stay_inside_scene():
 # ───────────────────────── Design（source-blind + 归章自洽） ─────────────────────────
 
 def _scene(scene_id: str) -> TargetScene:
-    return TargetScene(
+    return TargetScene(state_reads=(),
         scene_id=scene_id,
         driver=SceneDriver(focal_actor='ch1', immediate_want='退婚', opposition='家族', turn='翻盘'),
         beats=(TargetBeat(beat_id='bt1', event='提亲', participants=('ch1',),
@@ -196,7 +197,7 @@ def _scene(scene_id: str) -> TargetScene:
 
 def _graph(**over) -> dict:
     base = dict(
-        graph_id='g1',
+        graph_id='g1', initial_state=(),
         scenes=(_scene('s01'), _scene('s02')),
         chapters=(ChapterAssignment(chapter_ordinal=1, scene_ids=('s01',)),
                   ChapterAssignment(chapter_ordinal=2, scene_ids=('s02',))),
@@ -253,9 +254,9 @@ def test_dependency_edge_rejects_self_loop():
 
 
 def test_establishment_scope_and_domain_closed():
-    Establishment(domain='character', key='whereabouts', value='陆家', scope='scene')
+    Establishment(op='set', established_by='init', subjects=('ch1',), domain='character', key='whereabouts', value='陆家', scope='scene')
     with pytest.raises(ValidationError):
-        Establishment(domain='character', key='k', value='v', scope='act')
+        Establishment(op='set', established_by='init', subjects=('ch1',), domain='character', key='k', value='v', scope='act')
     from contracts.schema.str06.execution import EffectDomain
     assert {d.value for d in EffectDomain} == {
         'character', 'relation', 'knowledge', 'world', 'reader'}
@@ -264,20 +265,20 @@ def test_establishment_scope_and_domain_closed():
 # ───────────────────────── WriterContext 双视图 ─────────────────────────
 
 def _ir(scene_id: str) -> VerificationIR:
-    return VerificationIR(scene_id=scene_id, obligations=('ob1',))
+    return VerificationIR(scene_id=scene_id, obligations=(SourceObligation(**_obligation()),))
 
 
 def test_writer_context_views_must_agree():
     WriterContext(
         scene_id='s01', attempt_id='a1', execution_slice_sha256=H64,
         verification_ir=_ir('s01'),
-        writer_brief=WriterBrief(scene_id='s01', task='写', scene_driver_summary='驱动',
+        writer_brief=WriterBrief(pov='ch1', scene_id='s01', task='写', scene_driver_summary='驱动',
                                  beat_outlines=('拍1',), length_budget=800, voice='冷峻'))
     with pytest.raises(ValidationError, match='同源'):
         WriterContext(
             scene_id='s01', attempt_id='a1', execution_slice_sha256=H64,
             verification_ir=_ir('s02'),
-            writer_brief=WriterBrief(scene_id='s01', task='写', scene_driver_summary='驱动',
+            writer_brief=WriterBrief(pov='ch1', scene_id='s01', task='写', scene_driver_summary='驱动',
                                      beat_outlines=('拍1',), length_budget=800, voice='冷峻'))
 
 

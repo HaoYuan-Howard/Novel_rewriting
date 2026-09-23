@@ -2524,3 +2524,50 @@ class ArtifactStore:
                     os.unlink(tmp)
                 except FileNotFoundError:
                     pass
+
+
+class Str06Repository:
+    """隔离 RC 产物的持久化口；不接现役注册表，不决定业务状态（F8 删除）。"""
+    def __init__(self, root: Path):
+        self.root = root.resolve()
+
+    def path(self, rel: str) -> Path:
+        return paths.str06_artifact_path(self.root, rel)
+
+    @staticmethod
+    def read_external(path: Path) -> Any:
+        def unique(pairs):
+            result = {}
+            for key, value in pairs:
+                if key in result:
+                    raise ValueError(f'JSON 重复键：{key}')
+                result[key] = value
+            return result
+        return json.loads(path.read_text(encoding='utf-8-sig'), object_pairs_hook=unique)
+
+    @staticmethod
+    def file_sha256(path: Path) -> str:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+
+    def read(self, rel: str) -> Any:
+        return self.read_external(self.path(rel))
+
+    def write(self, rel: str, value: Any) -> Path:
+        path = self.path(rel)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = value.model_dump(mode='json') if isinstance(value, BaseModel) else value
+        data = json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2,
+                          allow_nan=False).encode('utf-8')
+        # RC 与现役共用 OS 原子替换语义，不调用现役 Stage 实现或私有产物编排。
+        fd, temporary = tempfile.mkstemp(prefix='.rc-', suffix='.tmp', dir=path.parent)
+        try:
+            with os.fdopen(fd, 'wb') as stream:
+                stream.write(data)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, path)
+        finally:
+            Path(temporary).unlink(missing_ok=True)
+        if path.read_bytes() != data:
+            raise ValueError(f'RC 产物读回字节不一致：{rel}')
+        return path

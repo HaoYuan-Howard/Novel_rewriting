@@ -20,33 +20,21 @@ reinforcement 类型上没有 obligation_id 字段——0..N 强化天然不能�
 """
 from __future__ import annotations
 
-from enum import Enum
+from typing import Literal
 
 from pydantic import Field, model_validator
 
 from contracts.schema.base import StrictModel
+from contracts.schema.str06.state import EffectDomain, StateChange
 
 
-class EffectDomain(str, Enum):
-    """effect 作用域闭集：保留必要区别，不迁旧 PlotState ontology。"""
-
-    CHARACTER = 'character'    # 人物自身状态
-    RELATION = 'relation'      # 人物间关系
-    KNOWLEDGE = 'knowledge'    # 人物知情（谁知道什么）
-    WORLD = 'world'            # 世界事实
-    READER = 'reader'          # 读者揭示（叙事层信息）
-
-
-class Establishment(StrictModel):
+class Establishment(StateChange):
     """执行期建立：state/knowledge 的显式建立点（established_by 的锚）。"""
 
-    domain: EffectDomain
-    key: str = Field(min_length=1)
-    value: str = Field(min_length=1)
     #: 作用域：book（书级持续）| scene（场内有效，边界即失效——试点「场景局部
     #: 状态无衰减」缺陷的对策）。unknown/解除/未运行不在本类型上，它们是
     #: runtime 状态语义（F4 的 Init/Apply 表达）。
-    scope: str = Field(pattern=r'^(book|scene)$')
+    established_by: str = Field(min_length=1)
 
 
 class ConstraintSpec(StrictModel):
@@ -103,6 +91,8 @@ class SceneExecutionPlan(StrictModel):
 class ExecutionPlan(StrictModel):
     """全书执行计划（Derived；内容身份由 repository 记，模型不自持 hash）。"""
 
+    contract_version: Literal['str06-rc2'] = 'str06-rc2'
+    initial_establishments: tuple[Establishment, ...] = ()
     scenes: tuple[SceneExecutionPlan, ...] = Field(min_length=1)
 
     @model_validator(mode='after')

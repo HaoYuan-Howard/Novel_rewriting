@@ -20,14 +20,16 @@ from pydantic import Field, model_validator
 from contracts.schema.base import StrictModel
 from contracts.schema.str06.design import TargetDelta
 from contracts.schema.str06.execution import Establishment
+from contracts.schema.str06.state import StateAddress
+from contracts.schema.str06.grounding import SourceObligation
+from typing import Literal
 
 
-class StateEntry(StrictModel):
+class StateEntry(StateAddress):
     """IR 的 entry_state 原子：established_by 溯源（M2/M3 机械 Guard 的查询面）。"""
 
-    domain: str = Field(min_length=1)
-    key: str = Field(min_length=1)
-    value: str = Field(min_length=1)
+    value: str | None
+    status: Literal['set', 'unset', 'unknown'] = 'set'
     established_by: str = Field(min_length=1, description='建立位置锚（场景/拍级）')
 
 
@@ -37,6 +39,10 @@ class KnowledgeEntry(StrictModel):
     holder: str = Field(min_length=1)
     proposition: str = Field(min_length=1)
     established_by: str = Field(min_length=1)
+    subjects: tuple[str, ...] = ()
+    key: str = Field(min_length=1)
+    status: Literal['set', 'unset', 'unknown'] = 'set'
+    mode: Literal['known', 'suspected', 'heard']
 
 
 class SurfaceRelease(StrictModel):
@@ -50,7 +56,7 @@ class VerificationIR(StrictModel):
     """机械可查视图：Guard（写前）与 Judge（写后）的验证输入。"""
 
     scene_id: str = Field(min_length=1)
-    obligations: tuple[str, ...] = Field(min_length=0, description='本场 owner 的义务 id 集')
+    obligations: tuple[SourceObligation, ...] = Field(min_length=0, description='本场完整义务及满足条件')
     entry_state: tuple[StateEntry, ...] = Field(default=(), min_length=0)
     entry_knowledge: tuple[KnowledgeEntry, ...] = Field(default=(), min_length=0)
     released_surfaces: tuple[SurfaceRelease, ...] = Field(default=(), min_length=0)
@@ -70,11 +76,19 @@ class WriterBrief(StrictModel):
     constraints: tuple[str, ...] = Field(default=(), min_length=0)
     length_budget: int = Field(ge=1)
     voice: str = Field(min_length=1)
+    pov: str = Field(min_length=1)
+    avoid: tuple[str, ...] = ()
+    delivery_hints: tuple[str, ...] = ()
+    required_content: tuple[str, ...] = ()
+    entry_facts: tuple[str, ...] = ()
+    continuity: tuple[str, ...] = ()
+    usable_surfaces: tuple[SurfaceRelease, ...] = ()
 
 
 class WriterContext(StrictModel):
     """双视图载体：单份 Derived artifact（`stage4/context/scene_{nnn}.json`）。"""
 
+    contract_version: Literal['str06-rc2'] = 'str06-rc2'
     scene_id: str = Field(min_length=1)
     attempt_id: str = Field(min_length=1)
     execution_slice_sha256: str = Field(min_length=64, max_length=64)

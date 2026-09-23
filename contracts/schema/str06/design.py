@@ -20,6 +20,9 @@ from __future__ import annotations
 from pydantic import Field, model_validator
 
 from contracts.schema.base import StrictModel
+from contracts.schema.str06.state import StateAddress, StateChange, SurfaceIntroduction
+from typing import Literal
+import math
 
 
 class SceneDriver(StrictModel):
@@ -31,7 +34,7 @@ class SceneDriver(StrictModel):
     turn: str = Field(min_length=1)
 
 
-class TargetDelta(StrictModel):
+class TargetDelta(StateChange):
     """typed effect：目标拍的语义效果声明。
 
     domain 闭集保留「人物／关系、人物知情、世界事实、读者揭示」的必要区别，
@@ -39,9 +42,6 @@ class TargetDelta(StrictModel):
     （enum/受控词表），不是自由散文；具体取值面 F1 反例标定后收紧。
     """
 
-    domain: str = Field(min_length=1)
-    key: str = Field(min_length=1)
-    value: str = Field(min_length=1)
     #: 语义等价归上游判断；Compiler 不解释自然语言补猜事实——所以这里没有
     #: 「等价于源 XX」的备注字段，要写等价判断就升到 Design 上游的语义层。
 
@@ -53,6 +53,7 @@ class TargetBeat(StrictModel):
     dramatic_intent: str = Field(min_length=1)
     target_delta: tuple[TargetDelta, ...] = Field(default=(), min_length=0)
     delivery_hint: str = Field(default='', min_length=0)
+    surface_introductions: tuple[SurfaceIntroduction, ...] = ()
 
 
 class SceneDelivery(StrictModel):
@@ -69,6 +70,7 @@ class TargetScene(StrictModel):
     driver: SceneDriver
     beats: tuple[TargetBeat, ...] = Field(min_length=1)
     delivery: SceneDelivery
+    state_reads: tuple[StateAddress, ...]
 
     @model_validator(mode='after')
     def _unique_beat_ids(self) -> 'TargetScene':
@@ -94,7 +96,10 @@ class ChapterAssignment(StrictModel):
 class PresentationGraph(StrictModel):
     """完整 Target Design canonical artifact（目标 v1，RC）。"""
 
+    contract_version: Literal['str06-rc2'] = 'str06-rc2'
     graph_id: str = Field(min_length=1)
+    initial_state: tuple[TargetDelta, ...]
+    initial_surfaces: tuple[SurfaceIntroduction, ...] = ()
     scenes: tuple[TargetScene, ...] = Field(min_length=1)
     chapters: tuple[ChapterAssignment, ...] = Field(min_length=1)
     #: 章／场权重：目标预算分配的依据（不对照同号源章长度）
@@ -107,6 +112,12 @@ class PresentationGraph(StrictModel):
         if sorted(ordinals) != expected:
             raise ValueError(f'章号必须从 1 连续编号，实得 {sorted(ordinals)}')
         scene_ids = {s.scene_id for s in self.scenes}
+        if len(scene_ids) != len(self.scenes):
+            raise ValueError('scene_id 全书唯一')
+        if any('#' in b.beat_id for s in self.scenes for b in s.beats):
+            raise ValueError('canonical beat_id 必须为场内短 ID；完整引用由 compiler 组成')
+        if any(d.scope != 'book' for d in self.initial_state):
+            raise ValueError('目标初始状态必须为 book 作用域')
         assigned = [sid for c in self.chapters for sid in c.scene_ids]
         if len(set(assigned)) != len(assigned):
             raise ValueError('同一 scene 不得归入多章')
@@ -119,4 +130,13 @@ class PresentationGraph(StrictModel):
         unknown_w = set(self.chapter_weights) - scene_ids
         if unknown_w:
             raise ValueError(f'chapter_weights 引用了不存在的场景：{sorted(unknown_w)}')
+        if self.chapter_weights and (
+                set(self.chapter_weights) != scene_ids
+                or any(not math.isfinite(w) or w <= 0 for w in self.chapter_weights.values())
+                or not math.isclose(sum(self.chapter_weights.values()), 1.0, abs_tol=1e-6)):
+            raise ValueError('场权重必须完整、有限、为正且归一到 1')
+        ordered = [sid for c in sorted(self.chapters, key=lambda c: c.chapter_ordinal)
+                   for sid in c.scene_ids]
+        if ordered != [s.scene_id for s in self.scenes]:
+            raise ValueError('scenes 必须按目标章内阅读序排列')
         return self

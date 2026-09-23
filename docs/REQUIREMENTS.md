@@ -196,7 +196,7 @@ ledger 成本权威。改变产品语义前须用户裁决，并同步 BACKEND_C
       保持独立事项；STR-06 的两本 Golden 不代替 corpus 验收。
 - [ ] 真书 / golden set 质量验收单独授权、单独结论；工程绿 ≠ 成书质量通过。
 
-### STR-06 · Stage2–Stage5 终态架构迁移（F0–F8，全部未完成）
+### STR-06 · Stage2–Stage5 终态架构迁移（F0–F8，迁移进行中）
 
 来源：Stage2 vnext 契约三轮真实验证（《夫君的报恩》单书、约 36 次真实付费）+
 用户终态裁决「停止抽象、固定 contracts」。新链**完全替代现役 stage2–stage5**；
@@ -413,7 +413,7 @@ owner 选择；保留源钩子事实及其源正文／源钩子证据；增加�
   Stage6/7 消费信息免费检查：`consumption_projection_check.md`——
   world_view/character_exposure/chapter_map/rename_materials 信息可得，
   body_access 及其依赖项**显式未就绪**（F5 产物），不制造成功状态。
-- [x] **F4 · Execution IR 完成（2026-09-23，--no-prose 干跑零模型调用）**：
+- [x] **F4 · Execution IR 单书初版干跑（2026-09-23，RC1，问题由下述 RC2 修复）**：
   `compile.py`（四类执行语义：拍 delta→establishment+净终值 planned_delta、
   必保非事件义务→constraint、requires×承载→跨场 dependency（同场不建、
   场景级成环编译期拒绝）、reinforcement RC 空；`init_establishments`：
@@ -431,6 +431,30 @@ owner 选择；保留源钩子事实及其源正文／源钩子证据；增加�
   零问题；planned continuity 重放一致；T₀ 21 条、终态 130 条；slice 身份
   28/28 唯一；预算按权重分配；消费者投影 chapter_map 干跑输出、目标开篇
   **显式未就绪**。
+- [x] **F2–F4 · 真书审阅修复 RC2（2026-09-23）**：本次用户要求立即修复，覆盖上文
+  “第二轮再优化”的暂缓安排。RC1 完成记录只表示当时工程冒烟，不表示语义质量验收。
+  - Brief 改为全义务 requirements（含 satisfaction），去源坐标并消除数组源顺序；Binding
+    发布完整义务。D/G 是 Compile 与 Context 的唯一正式输入，不再读 Preserve checkpoint。
+  - Design 显式承担目标初始态、状态对象、知情主体/模式、作用域、实际读取与称谓释放；
+    Fold 只重放 accepted prefix 的 planned_delta，scene 覆盖不污染长期底值。
+  - 单一最终验收拍加较早支撑拍解决复合义务跨场，拒绝前置逆序与同场拍序错误；Context
+    只投影实质要求、局部状态及明确支撑，消费摘要覆盖 POV/avoid/hint/satisfaction 等实际内容。
+  - Source 校验补齐证据、effect 人物与 recipient 引用；最新章末快照严格串接；保留相邻实质
+    因果，坏边不吞；修复 diamond DAG 假环、完整 beat_ref 误拒和 set 遍历摘要不稳定。
+  - 新隔离入口 `tools/str06_workflow.py` 取代三个 `_tmp_str06_*` 执行 harness（历史文件仅作
+    参考，不能继续执行）。语义 prompts 迁入包内；沿用直连 transport，原响应先持久化，
+    请求身份缓存复用，机械失败免费恢复，无自动整份付费修复。成本仍唯一记 service ledger。
+  - 本书修订与证据：`outputs/str06_repair_20260923/`（不提交），原书全文对齐、修订前后
+    SHA manifest、独立 wires、逐 owner 采用记录与全部 28 场 Context；11 章、69 义务分母
+    保持，Guard 零问题，source fold 零告警。本轮没有新增模型调用。
+  - 临时 adapter：`Str06Repository` / `PaidRequestSession` / `tools.str06_workflow` 只服务隔离
+    RC 链，F8 接入正式 Store、节点调度与执行许可后分流/删除；不注册第二条现役路径。
+    RC1 缺失语义不自动迁移；显式 wire 审阅与 hash-bound manifest 是免费恢复入口。
+  - 验证记录：RC2 定向 96/96、契约与路径 484/484 通过；真书修改 ob55 满足条件只使
+    s27 消费身份变化，其余 27 场保持。JUnit、replay 与验收报告位于上述输出根。
+    边界检查剩一项旧主链深层 import 失败，Store 测试因旧 Stage0 缺失符号阻断收集；
+    涉及文件与 HEAD 一致，未算全仓通过。第二本、真实新购 token 对比与 Stage5 成文质量
+    保持未验证，不据零错误机械报告推进 F5/F8 验收。
 - [ ] **F3b · 第二本 artifact-only smoke**：第二本书 Stage2 全链抽取＋F3 链
   （付费约 15+ 次），回答 schema 表达力多样性；待用户单独授权后执行。
   F4 的「两本干跑」中第二本同样依赖此授权。

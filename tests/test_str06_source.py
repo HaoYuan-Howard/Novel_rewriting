@@ -69,7 +69,7 @@ def _chapter_wire(ch: int = 2) -> dict:
 def _compile_pair():
     chars, wcs, errors = compile_book(_book_wire(), evidence_ids=EVID)
     assert errors == [] and chars is not None and wcs is not None
-    compiler = ChapterCompiler(chars)
+    compiler = ChapterCompiler(chars, evidence_ids=EVID)
     ch1, errs = compiler.compile({
         'beats': [
             {'beat_id': 'b01_01', 'event': '开篇', 'participants': ['fu_jun'],
@@ -159,7 +159,7 @@ def test_chapter_compiler_rejects_unknown_participant_and_dual_owner():
     assert any('双 owner' in e for e in errs)
 
 
-def test_chapter_compiler_normalizes_adjacent_edges():
+def test_chapter_compiler_preserves_adjacent_causality():
     chars, _, compiler, _ = _compile_pair()
     wire = {
         'beats': [
@@ -168,13 +168,13 @@ def test_chapter_compiler_normalizes_adjacent_edges():
             {'beat_id': 'b02_02', 'event': 'b', 'participants': [], 'source_refs': ['e02_01'],
              'effects': [], 'reveals': []}],
         'causal_edges': [
-            {'from_beat': 'b02_01', 'to_beat': 'b02_02', 'kind': 'causes'},   # 相邻：删除
+            {'from_beat': 'b02_01', 'to_beat': 'b02_02', 'kind': 'causes'},   # 相邻因果同样保留
             {'from_beat': 'b01_01', 'to_beat': 'b02_02', 'kind': 'setup_payoff'},  # 跨章：保留
         ]}
     ch2, errs = compiler.compile(wire, 2)
     assert ch2 is not None and errs == []
-    assert len(ch2.causal_edges) == 1
-    assert ch2.causal_edges[0].from_beat == 'b01_01'
+    assert len(ch2.causal_edges) == 2
+    assert ch2.causal_edges[1].from_beat == 'b01_01'
 
 
 def test_chapter_compiler_rejects_reversed_cross_chapter_edge():

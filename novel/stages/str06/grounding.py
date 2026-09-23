@@ -9,8 +9,7 @@
     satisfaction——后者由 schema 构造期保证；checkpoint hash 由规范化字节
     计算）。
   • `project_brief`：checkpoint →（ReconstructionBrief, IdentityProjection）。
-    Brief 只从义务投影 event_core（去源坐标：participants 用 char_id，
-    requires 用义务 id）；IdentityProjection 从 Characters v4 公共投影。
+    Brief 投影全部类别及满足条件（去源坐标，引用改为不带源顺序的需求 ID）；IdentityProjection 从 Characters v4 公共投影。
     Design 拿到的是这两份 + OutputConstraints，**读不到 checkpoint 内部**。
   • `assemble_binding`：Bind wire → SemanticBinding（跨产物校验复用 F1 的
     check_binding_covers_checkpoint；完整发布，unbound 保留义务）。
@@ -30,7 +29,7 @@ from contracts.schema.str06.policy import PreserveKind
 from contracts.schema.str06.source import (
     BlueprintsArtifactV12, CharactersArtifactV4,
 )
-from contracts.schema.str06.grounding import EventCoreNote
+from contracts.schema.str06.grounding import BriefRequirement
 from novel.stages.str06.checks import check_binding_covers_checkpoint
 from pydantic import ValidationError
 
@@ -45,7 +44,7 @@ def _sha256_payload(obj: Any) -> str:
 _OBLIGATION_KEYS = frozenset({'obligation_id', 'kind', 'statement', 'lineage',
                               'must_preserve', 'satisfaction', 'requires'})
 _LINEAGE_KEYS = frozenset({'blueprint_refs', 'character_ids'})
-_ENTRY_KEYS = frozenset({'obligation_id', 'scene_id', 'beat_ref'})
+_ENTRY_KEYS = frozenset({'obligation_id', 'scene_id', 'beat_ref', 'supporting_beat_refs'})
 _UNBOUND_KEYS = frozenset({'obligation_id', 'owner', 'reason'})
 
 
@@ -65,6 +64,7 @@ def assemble_preserve(
     """Preserve wire（{'obligations': [...]}）→ checkpoint。确定性校验：
     id 唯一、requires 闭合无环、lineage 的 beat/char 引用真实。"""
     errors: list[str] = []
+    _reject_unknown_keys(errors, wire, frozenset({'obligations'}), 'Preserve')
     raw = wire.get('obligations') or []
     if not raw:
         return None, ['obligations 缺失或为空']
@@ -100,9 +100,11 @@ def assemble_preserve(
         stack = list(graph[start])
         while stack:
             node = stack.pop()
-            if node == start or node in seen:
+            if node == start:
                 errors.append(f'义务因果成环：{start} -> ... -> {node}')
                 break
+            if node in seen:
+                continue
             seen.add(node)
             stack.extend(graph.get(node, []))
     if errors:
@@ -142,26 +144,32 @@ def project_brief(
 ) -> tuple[ReconstructionBrief, tuple[IdentityProjection, ...]]:
     """checkpoint → (Brief, IdentityProjection)。Design 的全部语义输入。
 
-    Brief 的 cores 只来自 kind=EVENT_CORE 的义务；非事件义务（身份/揭示/
-    世界/因果约束类）由 Bind 直接对位到目标位置，不进事件骨架。
+    所有义务类型、must 与 satisfaction 无损进入 source-blind Brief；因果闭合。
     """
-    cores = tuple(
-        EventCoreNote(
-            core_id=o.obligation_id, summary=o.statement,
-            participants=tuple(o.lineage.character_ids),
-            requires_cores=tuple(o.requires))
-        for o in checkpoint.obligations if o.kind is PreserveKind.EVENT_CORE)
+    # 不以源义务序号暴露叙述顺序；所有类型与满足条件等量投影，依赖闭合。
+    core_ids = {o.obligation_id: 'req_' + hashlib.sha256(
+        o.obligation_id.encode('utf-8')).hexdigest()[:16] for o in checkpoint.obligations}
+    cores = tuple(sorted((
+        BriefRequirement(
+            core_id=core_ids[o.obligation_id], summary=o.statement,
+            kind=o.kind, must_preserve=o.must_preserve, satisfaction=o.satisfaction,
+            participants=tuple(sorted(o.lineage.character_ids)),
+            requires_cores=tuple(sorted(core_ids[r] for r in o.requires)))
+        for o in checkpoint.obligations), key=lambda c: c.core_id))
     brief = ReconstructionBrief(
         brief_id=f'brief_{checkpoint.checkpoint_id}',
         preserve_checkpoint_sha256=checkpoint.checkpoint_sha256,
-        event_cores=cores)
+        requirements=cores)
     identity = tuple(
         IdentityProjection(
             char_id=slug,
             identity_statement=(
                 f"{entry.canonical}（可用称呼："
                 + '、'.join(sorted({s.surface for s in entry.surfaces})) + '）'),
-            stable_constraints=())
+            stable_constraints=tuple(
+                f'{a.key}={a.value}' for a in characters.initial_state
+                if a.persistence == 'stable' and a.target.kind == 'character'
+                and a.target.char_id == slug))
         for slug, entry in characters.characters.items())
     return brief, identity
 
@@ -176,6 +184,7 @@ def assemble_binding(
     known_scene_beats: scene_id → 该场景真实 beat_id 集合（来自 Design graph）。
     """
     errors: list[str] = []
+    _reject_unknown_keys(errors, wire, frozenset({'entries', 'unbound'}), 'Bind')
     denominator = {o.obligation_id for o in checkpoint.obligations}
     for entry in wire.get('entries') or []:
         _reject_unknown_keys(errors, entry, _ENTRY_KEYS, 'entries')
@@ -183,11 +192,15 @@ def assemble_binding(
         if scene not in known_scene_beats:
             errors.append(f"entries 引用未知场景：{scene}")
             continue
-        beat_ref = entry.get('beat_ref')
-        if beat_ref is not None:
-            beat = beat_ref.split('#', 1)[1] if '#' in beat_ref else ''
-            if beat not in known_scene_beats[scene]:
-                errors.append(f'承载 beat_ref 不是 {scene!r} 的真实拍：{beat_ref}')
+        refs = [entry.get('beat_ref'), *(entry.get('supporting_beat_refs') or [])]
+        for ref in refs:
+            if not isinstance(ref, str) or '#' not in ref:
+                errors.append(f'承载位置必须显式给出真实拍：{ref}')
+                continue
+            sid, local = ref.split('#', 1)
+            known = {b.split('#', 1)[-1] for b in known_scene_beats.get(sid, set())}
+            if local not in known:
+                errors.append(f'承载 beat_ref 不是 {sid!r} 的真实拍：{ref}')
     for unbound in wire.get('unbound') or []:
         _reject_unknown_keys(errors, unbound, _UNBOUND_KEYS, 'unbound')
         if unbound.get('obligation_id') not in denominator:
@@ -200,7 +213,7 @@ def assemble_binding(
         binding = SemanticBinding(
             binding_id=f'bind_{checkpoint.checkpoint_id}',
             preserve_checkpoint_sha256=checkpoint.checkpoint_sha256,
-            entries=entries, unbound=unbound)
+            obligations=checkpoint.obligations, entries=entries, unbound=unbound)
     except (ValidationError, KeyError) as exc:
         return None, [f'binding 构造失败：{exc}']
     problems = check_binding_covers_checkpoint(checkpoint, binding)
@@ -213,7 +226,8 @@ def _binding_entry(raw: dict[str, Any]):
     from contracts.schema.str06.grounding import BindingEntry
     return BindingEntry(
         obligation_id=raw['obligation_id'], scene_id=raw['scene_id'],
-        beat_ref=raw.get('beat_ref'))
+        beat_ref=raw['beat_ref'],
+        supporting_beat_refs=tuple(raw.get('supporting_beat_refs') or ()))
 
 
 def _unbound_entry(raw: dict[str, Any]):

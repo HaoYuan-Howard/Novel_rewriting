@@ -23,27 +23,45 @@
  "modules": {
   "tests/test_str06_execution_ir.py": {
    "layer": "unit_contract",
-   "stages": []
+   "stages": [
+    "stage2",
+    "stage4"
+   ]
   },
   "tests/test_str06_target.py": {
    "layer": "unit_contract",
-   "stages": []
+   "stages": [
+    "stage2",
+    "stage4"
+   ]
   },
   "tests/test_str06_source.py": {
    "layer": "unit_contract",
-   "stages": []
+   "stages": [
+    "stage2",
+    "stage4"
+   ]
   },
   "tests/test_str06_fold_guard.py": {
    "layer": "unit_contract",
-   "stages": []
+   "stages": [
+    "stage2",
+    "stage4"
+   ]
   },
   "tests/test_str06_invariants.py": {
    "layer": "unit_contract",
-   "stages": []
+   "stages": [
+    "stage2",
+    "stage4"
+   ]
   },
   "tests/test_str06_contracts.py": {
    "layer": "unit_contract",
-   "stages": []
+   "stages": [
+    "stage2",
+    "stage4"
+   ]
   },
   "tests/test_ab_compare.py": {
    "layer": "unit_contract",
@@ -1492,6 +1510,23 @@
   "tests/test_zero_paid_call_invariants.py": {
    "layer": "unit_contract",
    "stages": []
+  },
+  "tests/test_str06_repairs.py": {
+   "layer": "unit_contract",
+   "stages": [
+    "stage2",
+    "stage4"
+   ]
+  },
+  "tests/test_str06_workflow.py": {
+   "layer": "unit_contract",
+   "stages": [
+    "stage2",
+    "stage4"
+   ],
+   "cases": {
+    "test_stage2_stage4_repository_replay_and_writer_consumer": "stage"
+   }
   }
  },
  "version": 1

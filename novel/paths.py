@@ -1457,3 +1457,15 @@ def stage5_trim_audit_ordinal(rel: str) -> int | None:
     if ordinal < 1 or artifact_rel('stage5.trim_audit', nn=ordinal) != rel:
         return None
     return ordinal
+
+
+def str06_artifact_path(root: Path, rel: str) -> Path:
+    """RC 产物仅接受已登记路径家族，并拒绝链接越过隔离根。"""
+    from contracts.schema.str06.families import family_for, STR06_TWO_LEVEL_PATHS
+    normalized = check_rel_family(rel)
+    if family_for(normalized) is None and normalized not in STR06_TWO_LEVEL_PATHS:
+        raise PathRefused('STR-06 路径未登记家族')
+    target = (root.resolve() / normalized).resolve()
+    if not target.is_relative_to(root.resolve()):
+        raise PathRefused('STR-06 产物路径越过隔离输出根')
+    return target
