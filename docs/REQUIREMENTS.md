@@ -367,7 +367,17 @@ owner 选择；保留源钩子事实及其源正文／源钩子证据；增加�
   双视图 continuity_fact_view、Brief 因果保留无源拓扑、scene 作用域 effect、
   跨章合并/拆分两 fixture 证明契约能力接通（能力接通≠生成质量，后者归 F8）、
   同号异义不混淆、name_map 更换不触碰 Stage5 回执。
-- [ ] F2–F8 未完成。F2 的真书冒烟起为付费节点，须独立授权、显式 `--yes`。
+- [x] **F2a · 确定性引擎前置（免费部分，2026-09-23）**：`fold.py` 确定性状态折叠
+  （T₀=Init、establishment 按场景序应用、scene 作用域边界过期、established_by
+  溯源、accepted prefix 重放重建；Guard/Judge/Context 共用同一引擎，无第二套
+  Fold）；`guard.py` 写前机械 Guard RC 版——M1 义务覆盖、M2 提前揭示、M3 提前
+  效应、M4 承载位置真实（新链无 bridge 拍，试点职责转译）、M6 在场合法性；
+  M5 surface 时机依赖 surface 窗口引擎留 F4。试点 ce1–ce6 反例逐条迁移到新
+  坐标（tests/test_str06_fold_guard.py），validator 输入不变有行为测试。
+- [ ] **F2b · Source Semantics 其余**：Characters v4／Blueprints v12 字段级 RC、
+  抽取 wire、确定性 compile、owner 窄 patch 与已购恢复、定向 stage 测试；
+  **真书冒烟为付费节点，须用户独立授权（显式 `--yes`），未授权不启动**。
+- [ ] F3–F8 未完成。
 
 F6 不承担无关 Stage6/7 本体重构。跨章能力验证：F1/F4 用明确跨章布局的反例证明能力
 接通；F8 报告 Design 是否实际使用跨章自由度及对应证据，未使用时明确记录「真实生成中

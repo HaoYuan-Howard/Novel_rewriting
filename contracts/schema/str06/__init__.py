@@ -48,7 +48,14 @@ from contracts.schema.str06.families import (
     PathFamily,
     family_for,
 )
-from contracts.schema.str06.context import VerificationIR, WriterBrief, WriterContext
+from contracts.schema.str06.context import (
+    KnowledgeEntry,
+    StateEntry,
+    SurfaceRelease,
+    VerificationIR,
+    WriterBrief,
+    WriterContext,
+)
 from contracts.schema.str06.design import (
     ChapterAssignment,
     PresentationGraph,
@@ -113,6 +120,7 @@ __all__ = [
     'FidelityFinding',
     'FidelityVerdict',
     'IdentityProjection',
+    'KnowledgeEntry',
     'OutputConstraints',
     'PathFamily',
     'PrepareMaterials',
@@ -131,6 +139,8 @@ __all__ = [
     'SourceHookEvidence',
     'SourceLineage',
     'SourceObligation',
+    'StateEntry',
+    'SurfaceRelease',
     'TargetBeat',
     'TargetDelta',
     'TargetOpening',
