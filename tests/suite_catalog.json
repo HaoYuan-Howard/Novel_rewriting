@@ -21,6 +21,10 @@
   "stage7": []
  },
  "modules": {
+  "tests/test_str06_target.py": {
+   "layer": "unit_contract",
+   "stages": []
+  },
   "tests/test_str06_source.py": {
    "layer": "unit_contract",
    "stages": []

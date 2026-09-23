@@ -386,12 +386,35 @@ owner 选择；保留源钩子事实及其源正文／源钩子证据；增加�
   两份 canonical 从盘面重载过自身 schema；participants/causal 引用零悬空；
   knowledge_key 零命题漂移；fold 重放一致；surface until 全 null（纪律遵守）。
   体量与 B 档同量级（beats 83/78、effects 85/67、reveals 26/30）。
-  **质量披露（不静默接受）**：①loop 开闭纪律退化——13 open 仅 2 close
-  （B 档 4/3），终章后 11 条悬念线未收束，loop 粒度过细（场内疑问被升格
-  全书悬念线）；属 prompt 标定问题非 schema 缺陷，F3 前收紧 loop 准入
-  （只收跨多章未决主线，场内疑问走 beat.event/reveals）。②fold 事件 1 条：
-  第 10 章 stable `wealth` 被改写，待人工对照源书复核（合理剧情或漏保信号）。
-- [ ] F3–F8 未完成。
+  **质量披露（不静默接受；2026-09-23 用户裁决：延后到全部接线完成、旧架构
+  退役后的第二轮迭代统一优化，F3 前不修）**：①loop 开闭纪律退化——13 open
+  仅 2 close（B 档 4/3），终章后 11 条悬念线未收束，loop 粒度过细（场内疑问
+  被升格全书悬念线）；属 prompt 标定问题非 schema 缺陷，收紧方向=只收跨多章
+  未决主线。②fold 事件 1 条：第 10 章 stable `wealth` 被改写，待人工对照
+  源书复核（合理剧情或漏保信号）。
+- [x] **F3 · Target Semantics 完成（2026-09-23，付费延续授权）**：
+  `novel/stages/str06/grounding.py`（assemble_preserve：义务 id 唯一／requires
+  闭合无环／lineage 引用真实 beat+char；checkpoint 内容 hash 稳定可重建；
+  project_brief：event_core 义务→cores、去源坐标投影、IdentityProjection 从
+  v4 公共投影；assemble_binding：beat_ref 真实拍＋分母一致复用 F1 checks）；
+  `design_compile.py`（Design wire→PresentationGraph v1：beat 唯一、participants
+  引用 char_id、delta 域闭集、归章闭合；**wire 键白名单**——多余键（含
+  source_ref 类混入）在 compile 入口报错，Q-1 不静默）；`SourceObligation`
+  RC 增 `requires`（义务间必要因果，禁自指）。合成反例 7 项。
+  冒烟（4 次付费、50.5k+68.9k，`outputs/str06_f3_smoke_20260923_165735/`）：
+  obligations 83（82 必保；event_core 39／reveal 15／world_fact 8／
+  initial_state 8／arc 5／causal 5／identity 3）；Brief cores 39 零源坐标泄漏
+  （regex 实检）；Design 30 场 79 拍 11 章（场／章 1–4 重新分布）；
+  **跨章自由度证据：18 条义务 lineage 跨 2–4 个源章**（能力接通的真实
+  使用证据，最终质量仍归 F8 Golden 报告）；Binding 83 entries 全承载、
+  0 unbound（无必保丢失）；checkpoint 从 wire 确定性重建、分母与身份一致；
+  M4 全真实。Stage6/7 消费信息免费检查：
+  `consumption_projection_check.md`——world_view/character_exposure/
+  chapter_map/rename_materials 信息可得，body_access 及其依赖项**显式
+  未就绪**（F5 产物），不制造成功状态。
+- [ ] **F3b · 第二本 artifact-only smoke**：第二本书 Stage2 全链抽取＋F3 链
+  （付费约 15+ 次），回答 schema 表达力多样性；待用户单独授权后执行。
+- [ ] F4–F8 未完成。
 
 F6 不承担无关 Stage6/7 本体重构。跨章能力验证：F1/F4 用明确跨章布局的反例证明能力
 接通；F8 报告 Design 是否实际使用跨章自由度及对应证据，未使用时明确记录「真实生成中
@@ -444,6 +467,8 @@ Downloads（用户本机 `~/Downloads`，不进仓）：
 | _tmp_vnext_writer.py | `f603361b72dd0c78974a67219be98586e16907210fddf3a2dea7dc5af8be202c` | 投影修复 + 成文 harness（口吻/禁补造规则、--prior-events） | 改写 → F4/F5 |
 | _tmp_calib_under_spec.py | `e602d5df1f175582cc11f2d20febcbfd8e7db2f1a183786588c6fc5b622a8186` | under_spec 定向合成探针（union 真不足用例） | 改写 → F1/F4 |
 | _tmp_str06_f2b_smoke.py | `0526526554ddf0767fd0737a031575e55e84186e74cf31434876d689898274af` | F2b 真书冒烟 harness（断点续跑；复用试点 prompt/证据切段；授权付费） | 改写 → F3 复用同一 SourceTruth |
+| _tmp_str06_f3_smoke.py | `25378c2b90b5043e1dbd0de189fd1759d60219b1d8a95b27d8921752c9bce442` | F3 冒烟 harness（Preserve/Design/Bind 三次付费 + source-blind 实检） | 改写 → F4/F5 |
+| _tmp_str06_consume_check.py | `12b5357b9ae36e12731b1924b795a7cd9a45a308409ed2381317cfbd7740661f` | Stage6/7 消费投影信息闭合免费检查 | 改写 → F4 干跑 |
 | _tmp_vnext_probe.py | `f4fbd26b6ddb51f83b86c4c9b0e9bc35530496b5dea1ccf2a1e2f8fb41056ac4` | 现役盘面形状一次性探查 | 退役（一次性） |
 
 （`_tmp_prep_m1_run.py` 属 Characters v3 M1 冒烟准备，与 STR-06 无关，不登记。）
@@ -460,6 +485,7 @@ outputs 冻结基线（目录身份为清单哈希）：
 | outputs/vnext_probe_b2 | `1fe3bf083401d3cc` / 4 | b2 定点修订档（三处 patch） | 参考 → F2（窄修复案例） |
 | outputs/review_stage4_c | `370bde60701dddf8` / 3 | 第三轮验收报告目录（下三件） | 知识来源 → F1/F5 |
 | outputs/str06_f2b_smoke_20260923_162444 | `b9947b7b74f7b972` / 15 | F2b 真书冒烟（v4/v12 canonical + wire 缓存 + report；loop 纪律与 stable 改写两披露） | F3 的 SourceTruth 基线 |
+| outputs/str06_f3_smoke_20260923_165735 | `242f804f20cfca9c` / 8 | F3 冒烟（checkpoint/Brief/graph/binding canonical + wire 缓存 + report + 消费投影检查） | F4 的 Target Semantics 基线 |
 | ├ taxonomy.md | `017f6c42940e69d9f4c41927bb0326197ecda9638d6a5b11c3de212bad0e0e52` | 六列错误分类学 + 判据边界 + 成本台账 | 知识摘要母本 |
 | ├ labeled_assertions.json | `a4e0463f42fe1ad221095c1322b8c6bc3d26befee67d0638e2f647e04e348915` | 11 条 labeled 回归断言（正/负例） | 迁入 F5 |
 | └ judge_slim_report.json | `3d1d91988099ee0ec2b4f6ca64f2f1408b95cc590118da1e6a9b1228ad299256` | slim judge 判定原始报告 | 证据 |

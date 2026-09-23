@@ -48,7 +48,8 @@ class SourceObligation(StrictModel):
 
     `must_preserve=True` 时 `satisfaction` 必填非空——「必保要求必须有实质满足
     条件」的构造期表达；可综合类（must_preserve=False）允许留空 satisfaction，
-    但 lineage 仍必填（没有来源就不是义务）。
+    但 lineage 仍必填（没有来源就不是义务）。`requires` 是义务间必要因果
+    （F3 起存在；DAG 校验归 compile/Guard，schema 只保无自指）。
     """
 
     obligation_id: str = Field(min_length=1)
@@ -57,12 +58,15 @@ class SourceObligation(StrictModel):
     lineage: SourceLineage
     must_preserve: bool
     satisfaction: str = ''
+    requires: tuple[str, ...] = Field(default=(), min_length=0)
 
     @model_validator(mode='after')
     def _must_preserve_needs_satisfaction(self) -> 'SourceObligation':
         if self.must_preserve and not self.satisfaction.strip():
             raise ValueError(
                 f'必保义务 {self.obligation_id!r} 必须给出实质满足条件（satisfaction）')
+        if self.obligation_id in self.requires:
+            raise ValueError(f'义务 {self.obligation_id!r} 的 requires 不得包含自身')
         return self
 
 
