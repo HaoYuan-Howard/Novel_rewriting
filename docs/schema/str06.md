@@ -1,17 +1,20 @@
 # STR-06 终态架构 RC 契约（Stage2–Stage7，Stage6 退役）
 
 本文件登记当前 RC4 实装与 Stage2–Stage7 扩容目标：四类 truth、Hook、按章正文、
-交付改名、路径与消费边界、阅读验收及 F8 切换清单。下文明确区分已实现契约和
+交付改名、路径与消费边界、阅读验收及 F8 切换／F9 合入条件。下文明确区分已实现契约和
 待实施目标；Stage6 整层退役是目标，不表示现役链已经切换。
 批次进度、必要证据索引与历史快照入口见 `docs/REQUIREMENTS.md` STR-06；架构裁决见
 `docs/DECISIONS.md` 2026-09-23／2026-09-24。
 
 **RC 边界**：代码落点为 `contracts/schema/str06/` 子包。字段级 schema 保持 RC，
 经反例与真书验证后定版。本子包**不进** `ARTIFACT_SPECS`、不注册
-`NODES`、不进判据注册表；现役链按旧契约验收，正式替代一次合入（F8）。
+`NODES`、不进判据注册表；现役链按旧契约验收。F7 通过显式候选契约接入正式设施，
+F8 在分支内切换并退役旧链，F9 书1 经正式入口成书、工程核验与用户人工验收通过后
+一次合入 main。Golden 排在 STR-06 关闭后的迭代优化轮之后，不属于本轮。
 当前代码版式身份为 `str06-rc4`（F5，2026-09-24）：Design 增导演说明与章节目的、
 双层 WriterIR、按章成文与章级回执、`stage4/ir`、`stage5/body`、
-`stage5/acceptance/body` 路径家族已实装（F5e 真书付费重跑除外）。
+`stage5/acceptance/body` 路径家族已实装，F5e 隔离入口真书重跑与开发性阅读已完成；
+这不表示 F7 正式接线、F8 切换或 F9 用户验收已经完成。
 Hook（`hook.py`）、NameMap v5、名称结构等未改变形状的契约**不**为统一标签
 机械升版，`contract_version` 仍为 `str06-rc3`。后续破坏形状须显式修订 RC 身份，
 不能靠文档更新默许旧载荷。RC1/RC2/RC3 目标产物不能直接加载：旧 RC3 Design 缺
@@ -50,7 +53,8 @@ Design → Bind → Compile/Context；字段变化不接入现役注册表，正
 `runtime/workflow_status.json` 显式区分 running/failed/source_compiled/planned_validated；旧文件保留用于恢复，
 失败不会继承上次绿灯。`planned-only` 重放只证明编译与消费链，不签发 accepted receipt，
 不代表成文质量验收。`runtime/request_*.json` 是已购证据，禁止当普通派生缓存清理。
-RC2 的人工语义修订是显式外部输入，不是 compiler 自然语言猜测规则；质量仍需 F5/F8 验收。
+RC2 的人工语义修订是显式外部输入，不是 compiler 自然语言猜测规则；F5e 的开发性阅读
+不替代 F9 用户验收或后续 Golden 的质量结论。
 
 ## 当前 RC 模块与路径（RC4）
 
@@ -80,13 +84,13 @@ RC2 的人工语义修订是显式外部输入，不是 compiler 自然语言猜
 分母必须与采用的 Preserve checkpoint 一致；ExecutionPlan 的依赖图无环；
 entry_state/knowledge 的 `established_by` 均早于本场起点（试点 M2/M3 的迁移）。
 
-当前三级路径按登记家族准入（`contracts/schema/str06/families.py`，15 个家族）；
+当前三级路径按登记家族准入（`contracts/schema/str06/families.py`，16 个家族）；
 家族外多级路径仍拒，两级一般规则不变。实现在 `novel/paths.py`：
 `check_rel_family`（准入）与 `family_input_key`（来源账键=完整路径）。
-INVALID 孪生名与 `_rounds/` 归档沿用现役机制。两级特例
-`stage5/rewritten_body.txt` 走现役两级准入。正文（`stage5/scenes/`）与付费
-checkpoint 不是可随意删除的缓存；kind 登记是删除政策的输入，F8 收口前不实现
-任何按 kind 的清理。
+家族路径的 INVALID 孪生名与 `_rounds/` 归档布局已登记；接通正式 Store 的版本、
+provenance、freshness 与归档事务归 F7a，不能把路径可用当作设施接入完成。
+正文（`stage5/body/`）、章回执与付费 checkpoint 不是可随意删除的缓存；kind 登记是
+删除政策的输入，F8 收口前不实现任何按 kind 的清理。
 
 原 F0–F4 的 Prepare 采用 `SourceHookEvidence + TargetOpening|null`，两套坐标分离，
 源 `through_chapter` 不控制目标材料；没有 accepted body 时目标开篇显式未就绪。
@@ -95,7 +99,31 @@ checkpoint 不是可随意删除的缓存；kind 登记是删除政策的输入�
 （hook_writer／hook_context／hook_design／naming／assembly／name_structure）已由
 AST 测试对真实模块执行（`tests/test_str06_hook.py`），不是纸面检查。
 
-## 扩容目标：四类 truth 与职责（待实施）
+## 正式设施接入与历史采用（F7 目标，待实施）
+
+候选节点、产物 schema／版本及 workflow／manifest／execution epoch 身份在接设施前
+定义，包含节点生命周期、付费属性、flags、产物与唯一 writer、免费复检及恢复入口。
+候选契约作为显式依赖传入运行上下文、Store、许可和预算设施；生产入口继续使用现役
+注册表。候选身份不借旧节点获得许可，不绕过版本校验，不修改全局注册表以启动隔离链。
+F8 激活同一套已验收定义为唯一现役契约，临时 adapter 随接管完成退役。
+
+Repository 接家族路径、完整相对路径来源账键、provenance／freshness、INVALID／_rounds
+和原子提交；付费边界接唯一 ledger、工作单元与书级额度，保持缓存先于新调用授权，
+pending／unknown 不自动重购或释放额度。F5e 原根只读保存，在独立候选输出根初始化
+新 workflow；通过登记的显式历史采用核对原请求、响应、来源摘要与原成本关联。
+同请求身份的合法结果可零新购采用，身份不匹配、证据损坏或状态未知时明确阻断。
+owner patch 保留原基线及修订来源；历史采用不复制缓存、不续旧 session、不重复计原实付。
+原证据字节保持不变，同输入交付文本字节一致；正式封装和 provenance 单独验证，
+不要求新旧元数据文件逐字相同。此通路尚待 F7a 实现，不能据本节原地升级 F5e 根。
+
+引擎按 Stage2 source／names、Stage4 preserve／body_design／hook_design／bind／compile、
+Stage5 body／hook、Stage7 naming／assemble 拆 owner runner；复检用 `--check-only`。
+`tools/str06_workflow.py` 退为薄驱动，源证据切分归 owner；Stage2 输入来自正式 Stage1
+章数组。目标章数等于源章数，书级正文篇幅从 MainText 确定性派生；Hook 长度和章篇幅带
+使用正式配置并绑定消费身份，正文篇幅预算与付费调用额度分开。Stage1 hook_copy 的
+消费或退役边界必须显式闭合。子批次、验收、红账及删除条件只在 REQUIREMENTS 维护。
+
+## 扩容目标：四类 truth 与职责（隔离实装，正式接线待 F7/F8）
 
 | Truth | 唯一职责 | 目标产物 |
 |---|---|---|
@@ -122,7 +150,7 @@ Binding 不维护第二份初始态。Identity 等必要材料只经明确公共
 producer 轮流改 canonical，不用空 Hook 默认值冒充完成。Bind 只给目标故事分配保留
 义务，Hook 不增加义务分母，也不作为正文漏保的替代承载。
 
-## F5 的导演说明、双层 WriterIR 与按章成文（RC4 已实装，真书验证归 F5e）
+## F5 的导演说明、双层 WriterIR 与按章成文（RC4 已实装，F5e 真书重跑完成）
 
 **导演说明由 Design 直接产生。**`TargetScene.realization_brief`（本场怎样演出来：
 场景重心、人物如何理解局面、展开与压缩、关键转折及收束点、邻场衔接）与
@@ -285,7 +313,7 @@ Stage5 receipt 绑定改名前正文；Stage7 用有效 NameMap、机械接受�
 body 替换组装，另行绑定交付身份。同一输入字节、映射和组装契约产生相同交付字节；
 换 NameMap 不使 Stage5 回执失效。接受状态、输入身份或 Body 未就绪时不得交付成功。
 
-## 目标产物与代码职责（Hook/Naming/Assembly 已实装，Body 成文归 F5）
+## 目标产物与代码职责（Body/Hook/Naming/Assembly 隔离链已实装）
 
 | 身份 | 目标产物或证据 |
 |---|---|
@@ -349,39 +377,58 @@ Hook Writer 禁 Body prose、源 Hook 和源小说。Stage7 只消费正式契�
 不能换算源章号或用 Binding lineage 猜缺失语义。F3/F4 原消费干跑的证据范围保留，
 新增投影与真实消费者闭合另验；不能把原五族可得误记为新 Hook/Naming 已通过。
 
-## 阅读验收与 Golden（目标保持）
+## 本轮终点：书1 人工验收（F9，迁移口径）
 
-六维仍为 Core Preservation、Structural Originality、Causal Continuity、Character
-Continuity、Natural Progression、Local Prose Coherence。人工阅读为主，模型评分辅助；
-至少两本代表性书，其中至少一本长篇或多线结构，冻结输入、baseline、rubric、评价方式
-与成本信封。工程绿、planned-only 干跑和机械回执都不替代成文质量，未评保持未验证。
+F9 由正式产品入口产出《夫君的报恩》，agent 完成工程核验后交用户通读。错章、漏章、
+改名残留、交付不一致、恢复失败等工程缺陷修到通过；文学质量意见逐条登记为下一轮
+迭代优化的输入，不阻塞 STR-06 迁移关闭。工程绿、planned-only 干跑和机械回执都不
+替代成文质量，语义未评保持未验证。F5e 为 agent 开发性阅读，不是用户验收或 Golden。
 
-F6 阅读检查 Hook 的冲突、信息升级、悬念及不提前兑现后文；F5e 先读连续三章再继续
-全书，完成后合读 Hook、正文开头及所选材料对应场景，检查重复、剧透、转场和
+阅读结论绑定实际交付的 manifest／成书 hash。F9 修复后成书变化，重新取得用户对该版
+的结论；字节未变可沿用已有阅读结论并核对身份关联。若修复改动生产代码、契约或测试
+基础设施，须按最终提交重跑工程验收；无此类修改可复用 F8d 证据。最终工程证据和用户
+验收同时有效后一次合入 main，不用旧候选的绿灯覆盖后续修改。
+
+F6 开发性阅读检查 Hook 的冲突、信息升级、悬念及不提前兑现后文；F5e 已先读连续三章
+再通读全书。F9 沿用这些阅读项，合读 Hook、正文开头及所选材料对应场景，检查重复、剧透、转场和
 叙述声音，再检查整书人物动机、因果推进、场景节奏、情感与结局回收。并具体检查：
 是否机械复述状态、每场重新开场、用旁白宣布 effects、压掉关键行动、对白和反应
 缺乏推进，以及导演 brief 指导下的展开与压缩是否有效。Hook 与正文开头、取材场景
-合读，检查重复、剧透、语气和悬念兑现；阅读属于开发验收，不新增产品逐章审批或
+合读，检查重复、剧透、语气和悬念兑现；F9 属本轮交付验收，不新增产品逐章审批或
 自动 taste Judge。新增质量读项沿用六维 rubric 和实际文本证据，
 不把“像小说”降成义务逐条复述，也不为结构原创指标强迫搬移情节。
 
 按目标语义位置评价事实、因果、披露与改名质量；Structural Originality 以书/场景及
-承载关系比较，不要求同号章对应。F1/F4 证明能力接通，F8 报告真实生成是否使用跨章
-自由度及证据；未使用则披露“真实生成中的跨章质量未获验证”。Golden 不代替独立的
-current-schema corpus 验收；范围外事项见 REQUIREMENTS，不再保留独立 STR-05 活动入口。
+承载关系比较，不要求同号章对应。F1/F4 证明能力接通，F9 如实报告书1 的真实生成是否
+使用跨章自由度及证据；未使用则披露“真实生成中的跨章质量未获验证”。第二本表达力、
+长篇／多线容量、前文增长及 NameMap v5 跨书赋值仍未验证，移交后续 Golden。
+
+## 后续 Golden（本轮之后）
+
+STR-06 关闭后先进行一轮新契约与流水线迭代优化，再执行 Golden，承接原 F3b 义务。
+六维仍为 Core Preservation、Structural Originality、Causal Continuity、Character
+Continuity、Natural Progression、Local Prose Coherence。人工阅读为主，模型评分辅助；
+至少两本代表性书，其中至少一本长篇或多线结构。冻结输入与源版本、baseline 成书、
+rubric/version、评价方式、模型辅助评审的 prompt／provider／model／参数、输出根与
+成本信封，已有冻结 manifest 分母不临时缩减；评价方式变化只重评双方已有成书，不因此
+重跑生成。源书、新书与 baseline 分别定位证据，未评或证据不足保持未验证。
+Golden 不代替独立的 current-schema corpus 验收；范围外事项见 REQUIREMENTS，
+不恢复独立 STR-05 活动入口，也不把多书验证重新放入 F7–F9。
 
 ## F8 契约切换清单（准备项）
 
-F8 一次合入时同步闭合，候选可提前准备但不得提前现役化：
+F8 在分支内切换时同步闭合，候选可提前准备但不得提前现役化；F9 验收后才一次合入 main：
 
 1. `ARTIFACT_SPECS` 翻转：characters v4、blueprints v12、graph/binding/plan、
    WriterBookIR（BookBrief/ChapterIR）、正文章文件/章级回执/Hook 回执、NameMap v5、
    交付及 runtime 家族；
    NameMap v4→v5 与旧 Stage2/4/5 形状断裂记入版本账本，旧书独立根重建。
-2. 公开契约改写：现役 I-40 与 `R-5.2` 本轮不改；目标 N 章连续非空及跨章重构的
+2. 公开契约改写：现役 I-40 与 `R-5.2` 在本次文档修订及 F7 期间不改；目标 N 章连续非空及跨章重构的
    规则在 F8 同批切换，不能只改措辞却仍保留旧判据；
    R-2.*（Characters v4）、R-3.*（Blueprints v12）、R-5/R-6（Stage4 新链）、
-   R-7/R-8（Stage5 新链，含章级提交与篇幅披露）、R-9/R-10 中消费旧产物的条款同步。
+   R-7/R-8（Stage5 新链，含章级提交与篇幅披露）、R-9/R-10 中消费旧产物的条款同步，
+   并核对 `R-5.11b`、`R-14.1` 及 R-11～R-14 的受影响条款；根、novel、web 等指南中
+   的章号恒等、Stage6 三候选／改选等旧产品边界同批更新。
 3. `NODES` 与编排：Stage2 抽取、Stage4 Preserve/Body Design/Hook Design/Bind、
    Stage5 按章 Body Write 与 Hook Write、Stage7 Naming/Assemble 及免费检查/恢复
    面闭合（生产正文 Judge 已取消，不注册判官节点）；
@@ -396,6 +443,14 @@ F8 一次合入时同步闭合，候选可提前准备但不得提前现役化�
 6. API/Views/前端消费新投影，删除 Stage6Screen 与旧操作面，重生 generated types；
    RC 包、Str06Repository、PaidRequestSession 和隔离 harness 接入正式设施后分流删除。
    先迁移仍有效的职责反例，不以删旧测试缩验收分母。
-7. 契约 §9.5 五文件、默认非 corpus 回归、前端 test/typecheck/seams/build、Golden
-   均按最终改动验收后一次合入；付费与正文外发独立授权。当前三份计划文档修订不改
-   AGENTS、BACKEND_CONTRACT、注册表或可执行代码。
+7. F7e 的旧 Stage2/4/5/7 补充退役登记与既有 Stage6 登记共同执行，覆盖编排、消费投影、
+   判据、API/UI、schema 文档及有效测试反例；grandfather 清零。本文内容分流到正式
+   schema 文档，STR-06 关闭时本文移出现役文档，历史留在 Git，引用同步更新。
+8. F8d 完成契约 §9.5 五文件、默认非 corpus 回归、前端 test/typecheck/seams/build 及真实
+   产品入口的 fake transport 全链、免费恢复和旧书拒读验收。最终现役零失败、零错误、
+   无未说明跳过或收集排除；既有红账按修复或职责接管后的退役证据逐项清偿，不能只要求
+   “新增失败为零”。冻结代码提交、测试证据与候选身份；F9 修复后的复验及用户验收按上节
+   绑定最终交付，一次合入 main。付费与正文外发分别授权；Golden 不属于本轮关闭条件。
+
+当前文档修订不修改 AGENTS、BACKEND_CONTRACT、注册表或可执行代码；以上接线、切换
+与验收准备项均待实施，进度唯一以 REQUIREMENTS 为准。

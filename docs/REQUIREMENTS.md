@@ -21,24 +21,44 @@ Stage2 负责源语义；Stage4 负责目标故事、Body/Hook 呈现设计与�
 选择必须进入正式 Design 并可重建 Context；源名称结构归 Characters，目标名字归
 NameMap。完整边界及目标产物布局只在 str06.md 维护，本文件不复制第二份字段契约。
 
-F0–F7 在隔离 worktree／branch 和独立输出根推进；现役链按旧契约验收。F8 同批切换
-I-40、`R-5.2` 等公开规则、新节点与产物注册、API/UI、正式指南；此前不提前退役 Stage6。
+**本轮终点（2026-09-24 调整）**：F7 新链接线 → F8 切换与旧链彻底退役 → F9
+《夫君的报恩》经正式产品入口成书并由用户人工验收，随后一次合入 main，关闭 STR-06。
+验收采用迁移口径：错章、漏章、改名残留、交付不一致、恢复失败等工程缺陷必须修到通过；
+文学质量意见逐条登记为下一轮迭代优化的输入，不阻塞本轮关闭。F5e 的 agent 开发性阅读
+不代替 F9 用户验收，机械全绿也不改写语义未评状态。
+
+F0–F7 在隔离 worktree／branch 和独立输出根推进；现役链按旧契约验收。F7 的候选定义
+只经显式依赖接入设施，生产入口继续使用现役注册表。F8 在分支内同批切换 I-40、`R-5.2`
+等公开规则、新节点与产物注册、API/UI、正式指南；此前不提前退役 Stage6。F8 可分步提交，
+合入 main 的时点为 F9 工程证据与用户验收同时有效后。
 旧书保持 `legacy_incompatible`，独立根重建，不手补旧产物、不继承旧批准、不清 ledger。
 
 F0–F7 子批次按实际修改验证隔离链、恢复与受影响消费者；契约形状稳定后补 §9.5 五文件。
 定向证据闭合即可交付子批次；不因提交、改计划或登记新测试重复全仓。默认非 corpus 回归归 F8
-最终候选验收；中途仅在命中根指南的完整回归门槛时提前执行，并记录具体原因。
+最终候选验收；中途仅在命中根指南的完整回归门槛时提前执行，并记录具体原因。F9 若再改
+生产代码、契约或测试基础设施，须按最终提交重新完成工程回归；无此类修改可复用 F8d 证据。
 `tests/suite_catalog.json` 的 `change_scopes.str06` 登记隔离链选测范围，与实际导入消费者取并集；
 F8 迁移包分流删除时同步删除此登记，并让正式 Stage 与其消费者承接测试范围。
 
-本轮范围外仅两项：
+本轮范围外：
 
 - Stage0/1 未吸收的整层重构延期；Stage0 v3 回归收尾归 F4R，Stage1 输入边界联调归 F7。
 - current-schema corpus 基线及其全量验收保持独立；两本 Golden 不等于“全量语料绿”。
+- F9 文学质量问题驱动的迭代优化轮，在 STR-06 关闭后另行立项。
+- 第二本验证与 Golden 排在迭代优化轮之后；长篇／多线容量及真实跨章重构质量的证据缺口
+  随切换结论披露，不因本轮迁移验收通过而视为已验证。
+
+### 撤销与移出
+
+F3b 第二本 artifact-only smoke 撤销，不再作为本轮待办或付费点。第二本表达力、IR 容量
+与前文增长、长篇／多线结构、NameMap v5 在非书1上的真实赋值等义务，连同两本 Golden
+移交后续 Golden 轮；不重新加回 F7–F9。Golden 的样本、六维评价、冻结 manifest 与成本
+要求保留，见“本轮之后”。F8 的免费反例仍须验证合法跨章布局可以编译、接受和交付。
 
 ## 当前状态与下一步
 
-**下一批：F3b（付费，待授权）。其后顺序：F7 → F8（F4R、F6、F5 全部完成）。**
+**下一批：F7a（免费，首项为候选契约及身份边界）。其后顺序：F7b–F7e → F8 → F9。**
+F4R、F6、F5 已完成各自登记范围；F7–F9 均待实施，本次文档修订不开始迁移实现。
 当前隔离链版式为 `str06-rc4`（F5 起 Design/WriterIR/章级回执新形状；Hook、NameMap
 等未变形状契约仍为 rc3 标签）；下表是既有证据摘要，不是本次重新运行或整书质量结论。
 
@@ -47,29 +67,29 @@ F8 迁移包分流删除时同步删除此登记，并让正式 Stage 与其消�
 | F0／F1／F2a | RC 契约、路径／依赖守卫、确定性 Fold／Guard、局部身份与窄修复反例已实现；F0 contract 25 项通过，详细记录见快照 |
 | F2b | 《夫君的报恩》Source Semantics 冒烟：16 次付费、58.9k prompt＋164.1k completion；源 v4/v12 重载、引用及 fold 检查；当时质量披露保留在快照 |
 | F3 | 单书 Preserve／Design／Bind 冒烟：5 次付费、68.7k＋104.1k tokens；69 义务、28 场、99 拍、11 章；换目录导致额外 2 次购买的教训保留 |
-| F4 | 单书 RC1 planned-only 干跑：28 场、零模型调用、计划连续性可重放；不是 accepted body 或阅读验收；第二本仍待 F3b |
+| F4 | 单书 RC1 planned-only 干跑：28 场、零模型调用、计划连续性可重放；不是 accepted body 或阅读验收；第二本未验证，现移交后续 Golden |
 | RC2 | Source／Brief／Design／Binding／Compile／Context 的真书审阅修复与隔离入口已落；11 章、69 义务、28 场，零新增模型调用；定向 96/96、契约与路径 484/484；仅改 ob55 满足条件时仅 s27 消费身份变化 |
 | F4R | 红账三项清偿（2026-09-24，零模型调用）：uploads 死引用删除后 test_store 恢复收集 161 项（HEAD 上是 collection error）；深导入 grandfather 补账 11 条（分母 77→88，stale 核对无消失边）；`_SHAPE_BREAKS` 补三条 v3 账。定向组合 485/485 绿（upload_autostart／layering／artifact_versions／stage0_revisions／stage01／stage2_characters）。test_store 87/161 绿，74 失败是修复收集后显形的既存夹具脱节（非本批引入），见 F4R 条目遗留登记 |
 | F6 | Hook 链与 Stage7 终态契约＋引擎＋免费反例（2026-09-24，F6c 另付 4 次）：RC3（Characters 增 name_structure、graph 必填 hook、投影族六族、家族 +stage5/hook、stage7/naming、stage7/final）；Hook 唯一 publisher、确定性 HookContext、hook_writer 机械验＋同 Context 有限重写、NameMap v5／ApplyNames／Assembly、Stage2 names 窄调用与名称投影、迁移包依赖规则 AST 真实执行、F6d 退役登记 106 项双向对账。定向 str06＋layering 171/171、契约 §9.5 五文件 426/426；RC2 wire 在 RC3 代码下重编译：28 场 WriterContext（去版本/身份）与 replay 盘面逐字一致、checkpoint sha 不变。全量非 corpus 回归 4902 通过、420 失败/错误与 HEAD 基线逐项一致（零新增失败，全部为分支既有账，含 test_store 74 与两个既有收集错误文件，已忽略不计入）。F6c 付费冒烟已完成（见批次勾选） |
-| F5a–F5d | 按章成文链免费面（2026-09-24，零模型调用）：RC4（Design 增 `realization_brief`/`purpose` 必填、双视图职责重划＋`BeatIR` 逐拍定位、`WriterBookIR`、`ChapterReceipt` 章级回执、家族 +stage4/ir、stage5/body、stage5/acceptance/body，删场景正文旧家族；生产正文 Judge 与场景回执/Fidelity 退役）；章预算 largest-remainder 确定性分配；确定性 renderer＋版本化 Writer 协议（六层阅读面、lineage 不进阅读面、完整 IR＋完整前文进请求、超限由精确 tokenizer 容量闸阻断）；`body_checks` 章级机械验（硬失败不能披露放行，只有篇幅带可披露）；按章 Writer 同输入有限重写＋确定性候选选择（偏差最小、平局取较晚）；工具层缓存先于授权、`--book-call-ceiling` 锁内准入、`--check-only`、`--body-chapter-limit`；Stage7 章回执链核对、TXT 先落盘 manifest 最后提交、全书 ±10% 偏差读数。str06 定向 156/156、契约 §9.5 五文件＋layering＋选测＋版本账全绿。真实成文与阅读验收归 F5e |
-| F5e | 真书重跑与按章成书（2026-09-24 完成，用户授权付费）：候选 run 固定 `outputs/str06_f5e_body_20260924/run`。11 章全部提交（23 场 69 义务 Guard 零错误）、交付就绪：成书 11461 字（全书偏差 +1.63%，逐章 414–1730 字全部带内、零篇幅披露）、改名 11 处零残留、manifest 与文件 hash 一致；同根重放零新购、交付字节一致。成本实付：成功新购 23 次（design×2 含 1 次 high 档截断浪费、bind、hook_design、hook_writer、正文 16 次＝11 基础＋5 次专名释放重写；naming/names/preserve/book/chNN 经核验输入一致免费采用）＋1 次 TransportError 空行；合计约 111 万 prompt＋23 万 completion tokens。工程修正见提交 67077990（`--reasoning-effort`、T₀ 非 set 等价归一、场内自建非 entry、pov/weights/mode 归一、body_chNN owner）。**阅读验收（开发性，非 Golden）**：楔子与 11 章通读——六维无硬伤；无机械复述状态、无逐场重开场、义务实际演出（坦白/下跪/称谓纪律/床底与房梁反转）、导演 brief 指定的展开压缩有效、楔子无提前兑现且结尾「嫂嫂，开门」与楔子悬念呼应；专名释放纪律在正文侧 5 次重写全部闭环。**限制披露**：章级机械检查不证明章内揭示位置与逐场义务兑现；正文 Judge 已取消，语义未评如实保留；单书短篇样本，长篇/多线的 IR 容量与前文增长（实测章 prompt 53.9k→60.9k tokens 线性增长）待 F3b 第二本验证；Golden 归 F8 |
+| F5a–F5d | 按章成文链免费面（2026-09-24，零模型调用）：RC4（Design 增 `realization_brief`/`purpose` 必填、双视图职责重划＋`BeatIR` 逐拍定位、`WriterBookIR`、`ChapterReceipt` 章级回执、家族 +stage4/ir、stage5/body、stage5/acceptance/body，删场景正文旧家族；生产正文 Judge 与场景回执/Fidelity 退役）；章预算 largest-remainder 确定性分配；确定性 renderer＋版本化 Writer 协议（六层阅读面、lineage 不进阅读面、完整 IR＋完整前文进请求、超限由精确 tokenizer 容量闸阻断）；`body_checks` 章级机械验（硬失败不能披露放行，只有篇幅带可披露）；按章 Writer 同输入有限重写＋确定性候选选择（偏差最小、平局取较晚）；工具层缓存先于授权、`--book-call-ceiling` 锁内准入、`--check-only`、`--body-chapter-limit`；Stage7 章回执链核对、TXT 先落盘 manifest 最后提交、全书 ±10% 偏差读数。str06 定向 156/156、契约 §9.5 五文件＋layering＋选测＋版本账全绿。真实成文与开发性阅读已由 F5e 完成，见下行 |
+| F5e | 真书重跑与按章成书（2026-09-24 完成，用户授权付费）：候选 run 固定 `outputs/str06_f5e_body_20260924/run`。11 章全部提交（23 场 69 义务 Guard 零错误）、交付就绪：成书 11461 字（全书偏差 +1.63%，逐章 414–1730 字全部带内、零篇幅披露）、改名 11 处零残留、manifest 与文件 hash 一致；同根重放零新购、交付字节一致。成本实付：成功新购 23 次（design×2 含 1 次 high 档截断浪费、bind、hook_design、hook_writer、正文 16 次＝11 基础＋5 次专名释放重写；naming/names/preserve/book/chNN 经核验输入一致免费采用）＋1 次 TransportError 空行；合计约 111 万 prompt＋23 万 completion tokens。工程修正见提交 67077990（`--reasoning-effort`、T₀ 非 set 等价归一、场内自建非 entry、pov/weights/mode 归一、body_chNN owner）。**阅读验收（agent 开发性，非用户验收／非 Golden）**：楔子与 11 章通读——六维无硬伤；无机械复述状态、无逐场重开场、义务实际演出（坦白/下跪/称谓纪律/床底与房梁反转）、导演 brief 指定的展开压缩有效、楔子无提前兑现且结尾「嫂嫂，开门」与楔子悬念呼应；专名释放纪律在正文侧 5 次重写全部闭环。**限制披露**：章级机械检查不证明章内揭示位置与逐场义务兑现；正文 Judge 已取消，语义未评如实保留；单书短篇样本，长篇/多线的 IR 容量与前文增长（实测章 prompt 53.9k→60.9k tokens 线性增长）仍未验证，现移交后续 Golden；F9 用户验收尚待完成 |
 
 RC2 修复覆盖此前“第二轮再优化”的暂缓安排，不能重新把已修问题记作待办。当前正式
 编译输入是 D/G；不从 Preserve checkpoint 裸读补语义。`tools/str06_workflow.py` 取代
 旧 `_tmp_str06_*` 执行 harness，旧脚本只作参考。RC1 形状不自动迁入 RC2。
 
-仍未验证：完整工程回归、test_store 既存夹具脱节的修复、第二本表达力与 IR 容量增长
-（F3b；书1 实测章级 prompt 53.9k→60.9k tokens 线性增长，未触容量闸）、F6c 的 Hook
-真实成文质量（机械通过不证明不剧透、遵守材料顺序、POV 正确或吸引人；F5e 成书已含
-同源 Hook 的连读检查）、NameMap v5 在非 F6c 书目上的真实赋值，及 Golden。原 Prepare
+仍未验证：正式入口与完整消费链、既存红账清偿后的工程回归、F9 用户对正式交付的验收。
+第二本表达力与 IR 容量增长（书1 实测章级 prompt 53.9k→60.9k tokens 线性增长，未触
+容量闸）、长篇／多线、NameMap v5 在非书1上的真实赋值移交后续 Golden。F6c 的 Hook
+机械通过不证明不剧透、遵守材料顺序、POV 正确或吸引人；F5e 成书中的同源 Hook 连读
+属于开发性阅读，不能当作用户验收或一般化质量结论。原 Prepare
 消费干跑和 Hook／Stage7 付费原型只能证明当时范围；F6c 冒烟的 RC3 design 产物在 RC4
 下拒读，不作为 F5e 输入。正文或章级回执不存在时，Assembly 明确未就绪，不制造成功状态。
 
 ## 批次交付与验收
 
-F5a–F5d 已闭合按章成文的契约、引擎与免费验证（正文接受与交付待 F5e 真书验证）；
-F3b 补第二本表达力与干跑，F8 仍须两本成书 Golden。下列勾选项除已完成的
-F4R／F6／F5a–F5d 外都是待实施，付费点分别授权。
+F5a–F5d 已闭合按章成文的契约、引擎与免费验证，F5e 已完成隔离入口真书成文与开发性
+阅读。下列 F4R／F6／F5 勾选保留原证据范围；F7–F9 待实施，F9 付费与正文外发分别授权。
 
 - [x] **F4R · 红账清偿与 Stage0 收尾（免费，先行）**（2026-09-24 完成，零模型调用）：
   - 修复 `novel/orchestrator/uploads.py`：删除对已删除 `Stage0CandidatePlan`／
@@ -126,7 +146,7 @@ F4R／F6／F5a–F5d 外都是待实施，付费点分别授权。
     名称位与源结构一致、纯称谓保留、11 处替换零残留；Assembly 显式 not_ready
     （body_not_implemented）。同根重放零新调用、10 份关键产物字节一致。
     **质量披露**：机械通过与人工核读不等于成书质量验收；楔子的冲突、信息升级、悬念与
-    不提前兑现已按 str06.md 阅读项核读，忠实性与开篇质量的整书结论归 F5/F8。真书证据
+    不提前兑现已按 str06.md 阅读项核读，F5e 已完成成书开发性阅读，用户验收归 F9，跨书质量结论归后续 Golden。真书证据
     修复一处：names wire 允许家族对象内与键一致的冗余 family_id（归一，不一致报错）。
   - [x] F6d 退役准备：`contracts/schema/str06/retirement.py` 登记 106 项（节点与编排、
     产物与版本账、批准绑定 s6/s6r4_/HookApprovalResolution、API/Views/前端 Stage6 面、
@@ -188,33 +208,92 @@ F4R／F6／F5a–F5d 外都是待实施，付费点分别授权。
     交付与恢复核验：manifest、hash、零残留、零新购重放全部通过。hook wire 一处
     stale withheld 按 fail-fast 纪律报错后走 owner patch（patch 注记
     `outputs/str06_f5e_body_20260924/wires/hook_design_patch_note.json`）。
-- [ ] **F3b · 第二本 artifact-only smoke**：第二本 Stage2 全链＋F3 链约 15+ 次付费，
-  独立授权；补 F4 第二本干跑并验证表达力多样性。选书须服务 F8 的长篇或多线覆盖，
-  具体书目经显式 corpus 路径核实；artifact-only 不算第二本成书验收。
-- [ ] **F7 · 工作流与公开面（免费实现）**：
-  - 预建 Stage2 抽取、Stage4 Preserve／Body Design／Hook Design／Bind、Compile／Context、
-    Stage5 Body／Hook、Stage7 Naming／Assembly 节点面；付费声明与 profiled executor
-    双向对账，复检统一 `--check-only`，不新造 check 节点，正式注册留给 F8。
-  - 接通串行与场景恢复、窄失效、付费许可、书级 budget、消费投影和机械准入；
-    Str06Repository 接正式 ArtifactStore 的家族路径／provenance／freshness，
-    PaidRequestSession 对齐 Q-10／Q-11 和 checkpoint 未知态，准备 adapter 分流删除。
-  - 审计 analyze 历史 receipt／draft repair 的重复付费、重复实体与提交补尾；新链接管
-    恢复职责后核对消费者清零，再签发 F8 删除条件。闭合 Stage5/7、consumption 与
-    core.naming 的名称结构消费，不能只因 Stage7 替代就删除 name_distinctiveness。
-  - API／Views／前端预建新 Characters／Blueprint、graph／binding、正文／Hook／回执、
-    NameMap／下载与 Run 节点图；Stage6 页面及改选等旧面 F8 退役。闭合 manifest／epoch／
-    版本组合、Stage1 引子与显式章数组边界、Golden 工具，冻结 F8 候选。
-- [ ] **F8 · 验收与一次切换**：
-  - 同批翻转 ARTIFACT_SPECS、节点／阶段／retired 注册、判据及 shape-break 账，
-    NameMap v4→v5；旧书 legacy_incompatible 独立根重建，不迁移旧接受或批准。
-  - I-40 与 `R-5.2` 同步改为 N 章连续非空、允许源情节跨章重构的目标语义；同步
-    `R-5.11b`、R-9/R-10、`R-14.1` 及其它受影响条款。完成度仍核对当前输入、
-    freshness 和有效回执，progress 不作独立业务权威。
-  - 新链分流至 stage2／4／5／7 正式包后删除迁移包／adapter／临时入口，删除已被接管
-    的旧实现、API/UI、fixtures 与测试；先迁移仍有效职责和独有反例，不缩验收分母。
-    清理仅限临时代码和可重建派生物，已购响应、checkpoint、采用证据及接受正文保留或归档。
-  - 契约 §9.5 五文件、默认非 corpus 回归、前端 test／typecheck／seams／build，随后
-    单独报价授权执行两本 Golden；通过后一次合入、更新正式指南并清账关闭 STR-06。
+- [ ] **F7 · 新链接线与免费验证**（旧链在分支上仍现役，新面不进现役注册表）：
+  - [ ] **F7a · 候选契约、正式设施与历史采用**，按以下三步依次完成：
+    1. 前置定义候选节点与产物 schema、workflow／manifest／execution epoch 身份和生命周期。
+       节点表包含 paid、lifecycle、flags、produces、免费复检与恢复入口，产物表包含家族、
+       版本与唯一 writer；核对 RunContext、ArtifactStore、许可与预算设施的实际准入边界。
+       候选契约通过显式依赖传入这些设施，生产入口仍使用现役注册表；不借旧节点身份执行
+       新业务、不绕过 schema／版本检查、不靠修改全局注册表打开隔离入口。F8 直接激活这套
+       已验收定义，候选接入 adapter 登记删除条件，避免生成永久双主路径。
+    2. Str06Repository 接正式 Store 的家族路径、完整相对路径来源账键、provenance、
+       freshness、INVALID／_rounds 和原子写；PaidRequestSession 接正式执行许可、唯一
+       ledger、工作单元及书级调用额度，遵守 Q-10／Q-11，保留缓存先于新调用授权的边界。
+       pending／unknown 不释放额度、不自动重购。修复 test_store 中与正式接口相关的
+       既有失败，保留有效职责和反例；其余红账逐项进入 F7e 登记。
+    3. F5e 原输出根只读保存，在独立候选输出根初始化新 workflow，经登记的显式历史采用
+       入口核对原请求、响应、来源摘要、provider／model 及原成本关联。只采用同请求身份的
+       合法已购结果；身份不匹配、来源损坏或付费状态未知时明确阻断，免费批次不补购。
+       owner patch 保留原基线、修订与采用证据，不伪装成未经修订的原始模型响应。
+       历史实付与本轮新增成本分列，历史采用不复制缓存或冒充新根 cache hit，也不重复计费。
+    **验收与盘面**：F5e 原证据字节不变；独立候选根的采用记录、来源及成本关联完整；
+    同输入交付文本字节一致、零新购、可免费续跑；正式封装与 provenance 的变化单独核对，
+    不要求新旧元数据文件逐字相同。候选节点可用、现役注册面不变，Store 有效反例通过。
+  - [ ] **F7b · owner runner 与薄驱动**：拆出 stage2 source（book＋chNN）／names，
+    stage4 preserve／body_design／hook_design／bind／compile（Guard＋WriterBookIR＋
+    HookContext），stage5 body／hook，stage7 naming／assemble。`build_evidence` 等
+    harness 逻辑归还 owner，`tools/str06_workflow.py` 退为薄驱动。消费 F7a 已定义的候选
+    节点表，与 profiled executor、产物家族及唯一 writer 双向对账；复检用 `--check-only`，
+    不新造 check 节点。**验收与盘面**：fake transport 下逐节点全链跑通，可单节点重跑和
+    续跑；F7a 历史采用后的候选根 `--check-only` 零新购，F5e 原根继续只读。
+  - [ ] **F7c · 输入、篇幅与恢复职责**：Stage2 改读正式 Stage1 章数组，去掉生产路径对
+    `--source-json` 的依赖；明确 Stage1 hook_copy 的新消费者或 F8 退役边界。书级正文
+    篇幅目标按“保留全书篇幅边界”从源 MainText 确定性派生，目标章数等于源章数；Hook
+    长度及章篇幅带有正式配置来源，与付费调用额度分开。迁移三条 Stage4 skip 的有效
+    职责：Binding INVALID＋typed witness、owner 停止、同指纹熔断；覆盖 binding-only
+    崩溃精确补尾和 public_state_ref 的身份隔离／跨章携入／状态解除三反例。审计 analyze
+    receipt／draft repair，防重复付费、重复实体或漏补提交；名称结构接管 Stage5/7、
+    consumption 与 core.naming 的 name_distinctiveness 消费。
+    **验收与盘面**：正式 Stage1 输入到新链可达；输入及配置进入请求／消费身份，变化不
+    误用旧结果；恢复反例通过且保留精确 owner，不把 F7a 同输入重放证明扩称为新输入可采用。
+  - [ ] **F7d · API／Views／前端候选面**：纯函数 views 覆盖 Characters v4、Blueprint v12、
+    graph／binding（含 Hook、导演说明、章目的）、WriterBookIR 导航、章正文与章回执
+    （机械范围、语义未评、篇幅披露）、Hook 与回执、NameMap v5、成书下载与 manifest、
+    Run 新节点图和 ledger 成本。前端只读监控页、types 和 fixtures 同批完成。
+    **验收与盘面**：候选 API 与页面消费一致，相关测试、typecheck 和 seams 通过；现役路由
+    及 Stage6 页保留至 F8，候选读面不伪装为已切换产品。
+  - [ ] **F7e · 退役登记、红账对账与候选冻结**：沿用 F6d 的 Stage6 登记，为旧 Stage2／4／
+    5／7、编排分支、consumption、core、quality、report 判据、views、API、前端、schema
+    文档及测试建立补充登记，覆盖 88 条 grandfather 依赖。逐项写明接管者、有效反例、
+    验收证据和删除条件，做双向对账。既有 420 项失败／错误、test_store 74 项及被忽略的
+    两个收集错误文件按原 JUnit／收集记录核对，标明重叠、所属职责、处置批次与最终证据，
+    不直接相加、不将缺失记录算作已清偿。复验 F7a 定义的 manifest／epoch／版本组合。
+    **验收与盘面**：候选完整消费链、恢复和现役隔离均有证据，退役及红账登记无未归属项，
+    冻结 F8 候选清单；此时不宣称旧链已退役或完整回归已通过。
+- [ ] **F8 · 分支内一次切换与旧链彻底退役**（免费；可分步提交，main 在 F9 后合入一次）：
+  - [ ] **F8a · 契约与公开规则翻转**：激活 F7 已验收的 ARTIFACT_SPECS、NODES／STAGES／
+    RETIRED_*、判据注册表（M1–M6 按新坐标正式化）及 shape-break 账，NameMap v4→v5。
+    BACKEND_CONTRACT 的 R-2～R-10 按新链改写；I-40 与 `R-5.2` 改为 N 章连续非空、允许
+    跨章重构，同步 `R-5.11b`、`R-14.1` 及 R-11～R-14 中受影响条款。完成度核对当前输入、
+    freshness 与有效回执，progress 不作独立业务权威。str06.md 的现役内容分流至正式
+    schema 文档，stage6.md 退役；根、novel、web 等指南同批更新。
+  - [ ] **F8b · 编排与服务翻转**：CLI runner、queue／state／operator／Agent supervisor／
+    execution_permit／admission／delivery／upload_autostart 改走新节点，API／Views／前端
+    路由同步激活；按登记删除 Stage6 分支。旧书只读识别为 `legacy_incompatible`，独立根
+    重建，不继承旧批准或接受记录。
+  - [ ] **F8c · 分流、删除与证据保护**：迁移包分流到正式 stage2／4／5／7 及 contracts
+    schema 包，按两张登记删除已被接管的旧实现、views、routes、前端页、fixtures 和测试。
+    先迁有效职责与独有反例，不缩验收分母；删除 harness、临时 adapter、`change_scopes.str06`
+    和已接管的 `_tmp_*` 代码，grandfather 清零。已购响应、checkpoint、采用记录、接受正文
+    及质量基线保留或归档；F5e 原证据保持只读。STR-06 关闭时 str06.md 移出现役文档，
+    历史保留于 Git，引用同步迁至正式文档。
+  - [ ] **F8d · 最终工程验收**：契约 §9.5 五文件、默认非 corpus 回归及前端
+    test／typecheck／seams／build 全部完成。最终现役测试必须**零失败、零错误、无未说明
+    跳过或收集排除**；不以“新增失败为零”替代合入门槛。F7e 的每项既有红账须修复，或在
+    职责与有效反例接管后按登记退役；test_store 的有效职责全部通过。经真实产品入口
+    （上传 → autostart → 编排 → stage7）用 fake transport 跑通全链，并验证零调用恢复、
+    `--check-only`、旧书拒读与最终交付。冻结代码提交、测试证据和候选身份，供 F9 使用。
+- [ ] **F9 · 书1 正式入口成书与用户人工验收**（本轮终点；付费与正文外发分别授权）：
+  - 在独立 `NOVEL_OUTPUT` 根经前端上传《夫君的报恩》，自动跑到 stage7；按实际节点、
+    配置和可采用结果重新报价。基础约 30 次、正文额外至多 22 次、Hook 额外至多 2 次的
+    口径见“成本与授权”；同请求身份已购结果只经 F7a 登记的历史采用通路复用。
+  - agent 先核验章连续非空、回执链、改名零残留、manifest／hash、零新购重放、Stage 页
+    与盘面一致及 ledger 成本，再请用户通读。工程缺陷修到通过，文学质量意见逐条进入
+    后续迭代输入；语义未评和跨章／长篇等未验证范围随交付披露。
+  - 若 F9 修改生产代码、契约或测试基础设施，按最终提交重新完成 F8d 的工程验收；无此类
+    修改则复用 F8d 证据。人工验收绑定实际交付的 manifest／成书 hash；成书变化后重新取得
+    用户对该版本的结论，字节未变可沿用已有阅读结论并复核身份关联。最终工程证据和用户
+    验收同时有效后，一次合入 main，清账关闭 STR-06。
 
 ## 恢复、替代与删除条件
 
@@ -223,42 +302,79 @@ F4R／F6／F5a–F5d 外都是待实施，付费点分别授权。
 
 | 对象／旧来源 | 关闭条件与验收归属 |
 |---|---|
-| analyze 联合首抽及 receipt／draft repair（原 STR-03-S2-CH） | F7 证明新书默认新 authoritative 链、旧消费者清零、恢复不重复付费或造实体；F8 勾选条件后删除。现役默认 v3 不是新链验收证据 |
-| 内存 `PlanChapters` | F5 的 WriterIR 全量接管，Stage5 不再消费旧 plan 形；保留机械守卫职责，F8 删除类与消费者。正式 plan_chapters 产物早已退役，只保留拒读登记 |
-| 旧 Blueprint `public_state_ref` | F5/F7 由新 IR／公共投影接管公开身份与表面角色职责；迁移身份隔离、跨章携入、状态解除三类反例后，F8 随旧链删除，不能凭样例全 null 直接去掉职责 |
-| `name_distinctiveness` | F6/F7 新名称结构接管有效职责；Stage5 的 Book.names/name_stems、consumption 的 stage5_characters/stage7_characters、core.naming 的 name_stems/attested_surname 消费全部清零，F8 再删；不复活首字猜姓 |
-| `test_mechanical_aggregate_crash_replays_exact_tail_without_wire` | F5 迁为 binding-only 崩溃恢复反例，验证精确补尾且不重购；F8 清除旧 skip 与替代后的旧夹具 |
-| `test_a_owned_failure_stops_first_round_without_more_wire`、`test_same_fingerprint_twice_terminates_early` | F5 迁入 Binding INVALID＋typed witness 路径，保留 owner 停止和相同指纹熔断职责；F8 删除 skip，不能直接丢弃反例 |
-| F4R 登记的既存跨 Stage 深导入 | 2026-09-24 补账 11 条，grandfather 总分母 77→88（stage4→blueprint evidence／source_contexts／narration、plot_design→shared.character_refs、views/stage4→stage4.plan）；保留准确分母和对应消费者；正式新链不得新增这些依赖，F8 随旧链整层删除时同步清零 |
-| `Str06Repository`／`PaidRequestSession`／`tools.str06_workflow` | F7 接正式 Store、执行许可、成本及恢复边界；F8 分流／删除，不注册两条现役主路径 |
-| `contracts/schema/str06/`、`novel/stages/str06/` | F7 目标形状与真实消费闭合；F8 分流至正式 Stage 包，版本／manifest／epoch／注册表同步后删除迁移包 |
-| `_tmp_*` harness 与旧链实现 | 有效职责与反例已迁移后删除代码；付费响应、checkpoint、采用证据、接受正文及质量基线保留或归档，不能当缓存清掉 |
-| 现役 Stage6 链整层（prepare/hook/approve、产物家族、批准绑定、API/Views/前端、判据、纯 Stage6 测试） | 唯一登记在 `contracts/schema/str06/retirement.py::STR06_F6D_RETIREMENT`（106 项，含接管者），`tests/test_str06_retirement.py` 双向对账守分母；F8 一次合入按表执行，先迁仍有效的独有反例，不缩分母 |
+| analyze 联合首抽及 receipt／draft repair（原 STR-03-S2-CH） | F7c 迁移恢复不重复付费或造实体的反例；F7e 登记旧消费者，F8b 新书默认新链、F8c 核对旧消费者清零后删除。现役默认 v3 不是新链验收证据 |
+| 内存 `PlanChapters` | F5 的 WriterIR 在隔离链接管；F7b/F7d 闭合 runner 与消费面，保留机械守卫职责，F8c 删除类与消费者。正式 plan_chapters 产物早已退役，只保留拒读登记 |
+| 旧 Blueprint `public_state_ref` | F7c 由新 IR／公共投影接管公开身份与表面角色职责，迁移身份隔离、跨章携入、状态解除三类反例；F8c 随旧链删除，不能凭样例全 null 去掉职责 |
+| `name_distinctiveness` | F6 的名称结构能力由 F7c 接通 Stage5 的 Book.names/name_stems、consumption 的 stage5_characters/stage7_characters、core.naming 的 name_stems/attested_surname；F8c 核对旧消费者清零后删除，不复活首字猜姓 |
+| `test_mechanical_aggregate_crash_replays_exact_tail_without_wire` | F7c 迁为 binding-only 崩溃恢复反例，验证精确补尾且不重购；F8c 清除旧 skip 与替代后的旧夹具 |
+| `test_a_owned_failure_stops_first_round_without_more_wire`、`test_same_fingerprint_twice_terminates_early` | F7c 迁入 Binding INVALID＋typed witness 路径，保留 owner 停止和相同指纹熔断职责；F8c 删除旧 skip，不能直接丢弃反例 |
+| F4R 登记的既存跨 Stage 深导入 | 2026-09-24 补账 11 条，grandfather 总分母 77→88（stage4→blueprint evidence／source_contexts／narration、plot_design→shared.character_refs、views/stage4→stage4.plan）；F7e 逐边对账，F8c 随旧链删除清零；正式新链不得新增这些依赖 |
+| `Str06Repository`／`PaidRequestSession`／`tools.str06_workflow` | F7a 前置候选契约并接正式 Store、许可、预算和历史采用，F7b 拆 runner／薄驱动；F8c 分流并删除临时 adapter，不保留两条现役主路径 |
+| `contracts/schema/str06/`、`novel/stages/str06/` | F7a 定义候选版本与身份，F7b–F7d 闭合真实消费，F7e 复验组合；F8a 激活注册，F8c 分流至正式包后删除迁移包 |
+| `_tmp_*` harness 与旧链实现 | F7e 登记有效职责与反例，F8c 接管完成后删除代码；付费响应、checkpoint、采用证据、接受正文及质量基线保留或归档 |
+| 现役 Stage6 链整层（prepare/hook/approve、产物家族、批准绑定、API/Views/前端、判据、纯 Stage6 测试） | 已登记于 `contracts/schema/str06/retirement.py::STR06_F6D_RETIREMENT`（106 项，含接管者），`tests/test_str06_retirement.py` 双向对账；F7e 复验、F8a–F8c 按表退役，先迁有效独有反例 |
+| 旧 Stage2／4／5／7 及跨层消费面 | F7e 建补充退役登记，与 Stage6 登记共同覆盖编排、consumption、core、quality、report、API/UI、schema 文档和测试；F8c 按接管证据删除，F8d 验证真实消费者 |
+| Stage1 `hook_copy` | F7c 明确新消费者或退役边界，覆盖 partition/check、节点产物、审批、source_identity 与 UI 的有效职责；F8 同批接线或退役，不留无消费者产物作为新链准入条件 |
+| 书级正文篇幅、Hook 长度与章篇幅带 | F7c 从正式 MainText 派生书级篇幅、固定目标章数为源章数，Hook／篇幅带有正式配置来源；移除生产路径的 harness 默认值依赖，配置变化进入实际消费身份 |
+| F5e 原输出根与已购证据 | F7a 原根只读、独立候选根显式历史采用，核对请求／响应／来源／成本及零新购同文本重放；F8c 保留或归档，F9 复用同一采用边界，不原地升级或伪造缓存命中 |
+| `tests/test_store.py` 的既存 74 项失败 | 保留 161 收集、87 通过及失败分类的历史记录；F7a 修正式接口相关项，F7e 登记其余接管者，F8d 有效职责全部通过；不以删除现役反例清零 |
+| F6 记录的 420 项失败／错误及被忽略的两个收集错误文件 | F7e 核对原 JUnit／收集记录及与 Store 74 项的重叠，逐项绑定修复或职责接管后的退役证据；F8d 现役零失败、零错误、无未说明跳过或收集排除 |
 
 历史响应先耐久再校验；同请求身份优先免费恢复，pending／unknown 不自动重购。
 语义修复核对 owner patch 的基线身份，验证无关 canonical 内容及稳定 ID 保持；
 derived 仅重算受影响 slice，不能以保护已购结果为由忽略真源写入保护。
-接受回执绑定改名前正文和本场实际消费身份；从连续有效 accepted prefix 重放 planned_delta，
-有限 prose tail 也由接受正文重建。输入未变的已购结果继续采用；扫描全书不等于付费重跑全书。
+RC4 章回执绑定改名前正文、全书 WriterIR、实际前文和请求身份；恢复核对连续有效章前缀，
+planned state 仍由正式计划确定性重放，完整前文从接受正文重建。全书 IR 的 Writer 可见
+变化须按新身份重验正文；第 k 章正文变化保留其前缀、后续章按实际请求重验。输入未变的
+已购结果继续采用；扫描全书不等于付费重跑全书。
 换 NameMap 只影响交付，Hook 窄改不使无关正文接受失效。
 
-## 全链验收、Golden 与授权
+## 全链验收与关闭条件
 
 必须验证（F8 汇总）：Preserve 恢复不重购；无半份 Binding；unbound 不删义务；Design
 实际输入无源叙述拓扑；合法跨章布局可编译、写作、接受并交付且章数/非空约束成立；局部
 修改只使真实受影响输入失效，前缀及无关已购结果保留；旧 PASS 配新正文／Context／slice
-拒绝；崩溃后可重建 accepted prefix；Guard 机械反例写前阻断；Judge 错误正确归属、未知
-不伪装通过；源章／目标章同号但语义不同的样例不能错误读取开篇或推导姓名许可。
+拒绝；崩溃后可重建 accepted prefix；Guard 机械反例写前阻断，失败正确归属 owner、未知
+不伪装通过；生产正文 Judge 已取消，章回执不能代签语义通过。源章／目标章同号但语义
+不同的样例不能错误读取开篇或推导姓名许可。
 扩容后补验：HookContext 仅凭正式输入可重建，冷开／隐藏身份／多视角有明确设计来源，
 只改 Hook 不使无关正文失效；命名结构、应改名覆盖、同姓／复姓／化名及合法保留有正反例；
 Stage7 改名不回写 Stage5，交付可确定性重放、残留判断遵守 claimed/kept；Stage6 退役
 实际到达节点、API/UI 和旧盘面拒读。旧 Prepare 坐标分离证据留在历史记录，不冒充新链验收。
 
 写作验收：Writer 在导演说明边界内落实可信的欲望、阻力、选择与后果；完整已提交
-前文辅助语言、动作与情绪衔接，不能从正文推导新语义状态。F5e 先读连续三章，
-完成全书后合读 Hook、开头和取材场景，检查重复、剧透、虚假悬念及语气错配；
+前文辅助语言、动作与情绪衔接，不能从正文推导新语义状态。F5e 已完成先读连续三章、
+再通读全书及合读 Hook／开头／取材场景的开发性检查；F9 用户通读正式入口的交付版本，
+问题按工程缺陷与文学质量意见记录。重复、剧透、虚假悬念及语气错配等阅读证据保留；
 机械篇幅披露与未执行的语义质量评估分别报告，不互相替代。HookReceipt／章级回执
 只证明机械范围，语义未评如实披露；正文或检查证据缺失、未知不得据 Q-13 伪造交付成功。
+
+切换与关闭条件：四类 truth、唯一 writer、依赖与完整消费链闭合；Preserve／Bind 隔离；
+窄修复和实际消费身份生效；恢复可重建 accepted prefix；交付可重放，旧链退役登记和红账
+全部闭合。F8d 工程验收加 F9 用户验收共同构成本轮终点。F9 修复后按最终提交复验工程
+基线，人工结论绑定实际交付版本；有效后一次合入 main。跨章重构自由度、长篇容量与
+第二本表达力在切换结论中披露“未验证，归后续 Golden 轮”，不以迁移验收冒充质量普适性。
+
+## 成本与授权
+
+F7／F8 免费实现与验证，F9 新购及正文外发分别授权。书1 当前 11 章的基础调用估算为
+约 30 次：Stage2 13（book＋11 章＋names）、Stage4 4（Preserve／Body Design／Hook Design／
+Bind）、正文 11、Hook Writer 1、Naming 1；正文额外重写每章至多 2 次，合计至多 22 次，
+Hook 额外至多 2 次。修复、网络重试及未知成本分列，30 次不是承诺的新购次数或费用上限。
+F5e 成功新购 23 次、约 111 万 prompt＋23 万 completion tokens 仅作历史参照，不能据此
+推断本轮免费采用量；开跑前按最终节点、配置、授权及可核验的同请求历史结果重新报价。
+未知历史成本不记为零，reasoning 不重复计入 completion。
+
+F7a 候选根与 F9 正式根均通过显式历史采用保留原请求／响应／成本关联；根之间的采用
+不是 session／checkpoint 续接，F5e 原根不写入新 workflow。目标根续跑复用本轮身份与
+累计工作单元／书级额度，重启、换 job 不重置额度。付费显式 `--yes`，正文外发分别授权，
+`--check-only` 零新购。第二本与 Golden 本轮不报价、不新增授权。
+
+## 本轮之后
+
+以下只保留范围和验收要求，STR-06 关闭后另行立项，不是并行活动计划。先进行一轮新契约
+与流水线迭代优化，输入为 F9 文学质量问题清单及下列持续登记项；之后再做 Golden，承接
+原 F3b 的第二本表达力、长篇／多线、IR／前文容量和 NameMap v5 跨书赋值验证。
 
 Golden 冻结：输入集、源版本、baseline 成书、rubric/version、评价方式、模型辅助评审的
 prompt／provider／model／参数、输出根和成本信封；沿用人工阅读验收，模型评分只作辅助；
@@ -271,18 +387,6 @@ NOVEL_CORPUS` 下核实后冻结（本轮未据源正文确认代表性）。Str
 Character Continuity、Natural Progression、Local Prose Coherence；未评或证据不足保持
 未验证。Golden 不代替独立的 current-schema corpus 验收。
 
-Cutover 条件：四类 truth、唯一 writer、依赖与完整消费链闭合；Preserve／Bind 隔离；
-窄修复和场景身份真实生效；恢复可重建 accepted prefix；交付可重放；工程回归及冻结过程
-下的逐书 Golden 验收通过。未实际验证的跨章质量范围必须随验收结论披露。
-
-成本与风险：基础调用估算 = Stage2 实际抽取 + Preserve 1 + Body Design 1 +
-Hook Design 1 + Bind 1 + 目标章数（按章正文）+ Hook Writer 1 + Naming 1；正文
-机械重写每章至多 2 次另列；修复、重试及未知成本分列，不能用书1的章数估算任意长篇。
-F6c（约 3–5，已完成 4）、F5e（RC4 书1基础 ≈15＋正文重写至多 22）、F3b（约 15+）
-及 F8 Golden 分别授权，Golden 按最终节点与样本报价；运行级新调用另受显式
-`--book-call-ceiling` 约束，续跑固定同一 run 目录。
-F4 与早期消费投影干跑为零模型调用。付费显式 `--yes`，正文外发分别授权，
-`--check-only` 零新购。
 持续登记：漏保／过保、源结构泄漏、under-spec、状态过建模、checklist prose、
 导演 brief 携带未登记事实或退化为通用形容词、章级机械检查的边界（章内揭示
 位置与逐场义务兑现不可证）、过度失效、下游语义材料不足、请求容量、Golden 成本。
@@ -300,7 +404,8 @@ F4 与早期消费投影干跑为零模型调用。付费显式 `--yes`，正文
 | `outputs/str06_f3_smoke_20260923_171800/`、`outputs/str06_f4_dryrun_20260923_172702/` | RC1 Target／IR 历史基线，不能绕过 RC2 形状与实际输入身份验证 |
 | `outputs/str06_f3_smoke_20260923_165735/` | 首跑 Binding 场景成环反例；续跑换目录导致额外 2 次购买，禁止照搬 |
 | `outputs/review_stage4_c/` 的 taxonomy.md、labeled_assertions.json、judge_slim_report.json | F5 的 11 条 labeled 断言、误报／漏报、判据边界与原始报告；完整文件 SHA 在快照 |
-| `outputs/vnext_stage4_r1/`、`outputs/vnext_stage4_r2/`、`outputs/vnext_stage4_bbase/`、`outputs/vnext_probe_b2/` | 旧成文、冻结对照及窄 patch 案例，保留至 F5 职责接管；均非当前 canonical |
+| `outputs/vnext_stage4_r1/`、`outputs/vnext_stage4_r2/`、`outputs/vnext_stage4_bbase/`、`outputs/vnext_probe_b2/` | 旧成文、冻结对照及窄 patch 案例，F8c 核对有效职责与证据接管后归档；均非当前 canonical |
+| `outputs/str06_f5e_body_20260924/run` | F5e 已完成的 RC4 隔离成书与恢复证据，原根只读；F7a 在独立候选根显式历史采用并核对原字节，F9 仍需正式入口与用户验收 |
 | `_tmp_vnext_guard.py`、`_tmp_vnext_judge_slim.py`、`_tmp_vnext_writer.py`、`_tmp_calib_under_spec.py` | 标定及反例资产，按新 contract 改写，不恢复旧架构、不作为现役执行入口 |
 | `_tmp_hook_v3.py`、`_tmp_stage7_v3.py` | F6 原型参考；先去单书假设，再证明真源／消费／恢复，不能直接转正 |
 | `tests/test_str06_contracts.py`、`tests/test_str06_invariants.py`、`tests/test_str06_fold_guard.py` | 已落的新链契约、跨产物、章级回执绑定、窄失效、交付与 Fold／Guard 反例入口 |
@@ -330,4 +435,4 @@ F4 与早期消费投影干跑为零模型调用。付费显式 `--yes`，正文
 适用的 unit/contract、stage、API/UI。通过后更新本文件的状态摘要、证据位置和下一批；
 未通过保留精确 node/item、失败原因及恢复入口。不得以代码存在、收集通过或机械全绿勾选质量验收。
 历史长记录进入快照／Git；可复用教训按需进入 LESSONS，裁决缘由进入 DECISIONS。
-本次重置只做文档整理，不代表开始 F4R、不扩展付费授权、不修改现役可执行契约。
+本次终点调整只修订计划与说明文档，不代表开始 F7a、不扩展付费授权、不修改现役可执行契约。
