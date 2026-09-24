@@ -1636,6 +1636,32 @@
         "test_candidate_reads_over_http_match_the_views": "stage",
         "test_half_run_candidate_keeps_present_and_missing_apart": "stage"
       }
+    },
+    "tests/test_str06_f7e_retirement.py": {
+      "layer": "unit_contract",
+      "stages": [
+        "stage2",
+        "stage4",
+        "stage5",
+        "stage7"
+      ],
+      "cases": {
+        "test_registered_items_all_exist": "stage",
+        "test_every_test_file_is_bucketed": "stage",
+        "test_grandfather_edges_all_registered": "stage"
+      }
+    },
+    "tests/test_str06_f7e_freeze.py": {
+      "layer": "unit_contract",
+      "stages": [
+        "stage2",
+        "stage4",
+        "stage5",
+        "stage7"
+      ],
+      "cases": {
+        "test_frozen_contract_identity_matches_the_live_tables": "stage"
+      }
     }
   },
   "version": 1

@@ -57,9 +57,10 @@ F3b 第二本 artifact-only smoke 撤销，不再作为本轮待办或付费点�
 
 ## 当前状态与下一步
 
-**下一批：F7e（免费）。F7a–F7d 已完成（F7d 候选只读监控面于 2026-09-25 落地，
-零模型调用）。其后顺序：F7e → F8 → F9。**
-F4R、F6、F5 已完成各自登记范围；F7a–F7d 已完成，F7e 待实施，F8–F9 待实施。
+**下一批：F8（免费，可分步提交）。F7a–F7e 已全部完成：候选链接线、免费验证、
+只读监控面、退役登记与红账对账、候选冻结均于 2026-09-24～25 落地（零模型调用）。
+F8 在分支内一次切换并旧链彻底退役，main 在 F9 后合入一次。**
+F4R、F6、F5 已完成各自登记范围；F7a–F7e 已完成，F8–F9 待实施。
 当前隔离链版式为 `str06-rc4`（F5 起 Design/WriterIR/章级回执新形状；Hook、NameMap
 等未变形状契约仍为 rc3 标签）；下表是既有证据摘要，不是本次重新运行或整书质量结论。
 
@@ -352,14 +353,36 @@ F5a–F5d 已闭合按章成文的契约、引擎与免费验证，F5e 已完成
     全过；契约五文件与 test_api_http（公开接口面同步登记 12 条新端点）绿；
     `docs/schema/_api.md` 与 `web/AGENTS.md` 路由表同批更新。现役路由与 Stage6
     页保留至 F8，候选读面不伪装为已切换产品。
-  - [ ] **F7e · 退役登记、红账对账与候选冻结**：沿用 F6d 的 Stage6 登记，为旧 Stage2／4／
-    5／7、编排分支、consumption、core、quality、report 判据、views、API、前端、schema
-    文档及测试建立补充登记，覆盖 88 条 grandfather 依赖。逐项写明接管者、有效反例、
-    验收证据和删除条件，做双向对账。既有 420 项失败／错误、test_store 74 项及被忽略的
-    两个收集错误文件按原 JUnit／收集记录核对，标明重叠、所属职责、处置批次与最终证据，
-    不直接相加、不将缺失记录算作已清偿。复验 F7a 定义的 manifest／epoch／版本组合。
-    **验收与盘面**：候选完整消费链、恢复和现役隔离均有证据，退役及红账登记无未归属项，
-    冻结 F8 候选清单；此时不宣称旧链已退役或完整回归已通过。
+  - [x] **F7e · 退役登记、红账对账与候选冻结**（2026-09-25 完成，零模型调用）：
+    `contracts/schema/str06/retirement.py` 增补 `STR06_F7E_RETIREMENT`（384 项，
+    与 F6d 106 项合并成 F8c 完整删除清单，两表目标不重复）：旧 Stage2/4/5/7
+    四个引擎包整包登记（91 个引擎文件由对账测试机械枚举）、NODES 旧链键 10 个、
+    ARTIFACT_PATHS 旧链键 30 个、consumption 投影键 13 个（stage6 两键 F6d 漏登
+    在此补齐）、判据层（judges stage2/4/5/7＋quality＋hard_cases）、编排面 15 个
+    改写消费者、views 5 删 3 留、API 14 个路由模块、前端旧屏 5 删 12 改写、
+    schema 文档 4 删 4 改写、测试三桶与 88 条 grandfather 边逐条登记。
+    测试三桶机械全覆盖 234 个 test_*.py：keep 37（基础设施/守卫/范围外，理由逐条
+    登记在 `STR06_F7E_TEST_KEEP`）、rewrite 80（F8b 切新链后保留）、delete 87
+    （F8c 先迁独有反例再删）、str06 候选 16、F6d 已登记 14。
+    **红账对账** `STR06_F7E_RED_ACCOUNT`（7 项）：F6 全量回归 420 项（含 test_store
+    74 与两个收集错误，包含关系不相加；原 JUnit 不在当前缓存，按登记口径核对，
+    F8d 全新回归取证）、test_store 74 项（49 退役夹具＋17 freshness＋8 旧形状）、
+    两个收集错误文件本批实测定位（test_blueprint_v11_compression.py 导入已删的
+    dedupe_exact_story_before；test_stage4_agent_boundary.py 导入不存在的
+    novel.agents）、test_schema_api 3 项（干净树复现实测）、88 条 grandfather 边、
+    F7a 候选根漂移拒用（F7b 已闭合）。
+    **候选组合复验**：F7c canary 根复制到 `outputs/str06_f7e_recheck_20260925`，
+    同 flags（--check-only＋--wire-dir＋--adopt-root＋--reasoning-effort medium）
+    全链重放：25 行 ledger 全 cached、实付 0、token 0、成书与 F5e 逐字一致
+    （sha 81e4fcce…）、delivery_identity 696d5824… 与 canary 相同；epoch 按
+    code_drift 滚到 ordinal 2（额度不重置）；F5e 原根只读未动。
+    **冻结**：`tests/test_str06_f7e_freeze.py` 钉住 F8 激活基线——契约身份
+    `04b6fb22f222d2118e996c9c1835e7fa5c0425bd69ea8b17e70aa7d3a9154466`、11 节点
+    （9 付费＋compile/assemble 结构性禁付）、22 份书产物、运行期配置
+    （Hook 280/360、篇幅带 0.6–1.3、取整 1000）；表内任何变化先改冻结记录再激活。
+    **验收与盘面**：`tests/test_str06_f7e_retirement.py`（9 项双向对账）＋
+    `test_str06_f7e_freeze.py`（5 项）全绿；str06 定向套件 312/312、契约五文件
+    ＋test_api_http 508/508 全绿，零新增失败。此时不宣称旧链已退役或完整回归已通过。
 - [ ] **F8 · 分支内一次切换与旧链彻底退役**（免费；可分步提交，main 在 F9 后合入一次）：
   - [ ] **F8a · 契约与公开规则翻转**：激活 F7 已验收的 ARTIFACT_SPECS、NODES／STAGES／
     RETIRED_*、判据注册表（M1–M6 按新坐标正式化）及 shape-break 账，NameMap v4→v5。
