@@ -311,3 +311,99 @@ def test_workflow_refuses_contract_table_drift(tmp_path):
     with pytest.raises(ProvenanceRefused, match='契约表已漂移'):
         _init_workflow(repo, source_identity='b' * 64)
 
+
+
+# ─── 登记的显式历史采用（F7a-3） ──────────────────────────────────────────────
+
+def _source_root(tmp_path, *, content='{"entries": []}', attempt='orig-attempt',
+                 usage=None, tamper=None):
+    """造一个注册源根：请求行 + ledger 真实付费行。"""
+    from novel.llm.str06_requests import digest
+    root = tmp_path / 'source' / 'run'
+    (root / 'runtime').mkdir(parents=True)
+    request = _request()
+    identity = digest({'owner': 'bind', 'provider': 'fake',
+                       'request': request.cache_payload()})
+    row = {'identity': identity, 'status': 'answered', 'attempt_id': attempt,
+           'provider': 'fake', 'request': request.cache_payload(),
+           'content': content, 'content_sha256': digest(content),
+           'model': 'deepseek-flash',
+           'usage': usage or {'prompt_tokens': 11, 'completion_tokens': 22}}
+    if tamper == 'content':
+        row['content'] = content + '被改'
+    if tamper == 'identity':
+        row['identity'] = 'f' * 64
+    (root / 'runtime' / f'request_{identity}.json').write_text(
+        json.dumps(row, ensure_ascii=False), encoding='utf-8')
+    ledger = CostLedger(path=ledger_path(tmp_path / 'source'))
+    ledger.record(node='str06.stage4.bind', sid='book', model='deepseek-flash',
+                  request_model='fake', code='str06-rc4', attempt=1, max_attempts=1,
+                  will_retry=False, cached=False, cache_policy='request-identity',
+                  purpose='bind', attempt_id=attempt, request_fingerprint=identity,
+                  outcome='ok', prompt_tokens=11, completion_tokens=22)
+    return root, identity, request
+
+
+def _candidate(tmp_path, adopt_root):
+    base = tmp_path / 'cand'
+    base.mkdir(exist_ok=True)
+    repo = Str06Repository(base / 'run')
+    ledger = CostLedger(path=ledger_path(base))
+    repo.attach_context(make_context(base / 'run', ledger=ledger))
+    session = PaidRequestSession(repo, ledger, _Transport(), yes=False,
+                                 allow_source_export=False, provider='fake',
+                                 sid='book', adopt_roots=(adopt_root,))
+    return base, repo, ledger, session
+
+
+def test_historical_adoption_zero_new_purchase_and_no_double_count(tmp_path):
+    root, identity, request = _source_root(tmp_path)
+    base, repo, ledger, session = _candidate(tmp_path, root)
+    data = session.ask('bind', request, lambda _: [])
+    assert data == {'entries': []}
+    record = repo.inspect('runtime/adopt_bind.json')
+    assert record['mode'] == 'historical-adoption' and record['new_paid_calls'] == 0
+    assert record['cost_link'] == 'ledger-row'
+    assert record['historical_usage'] == {'prompt_tokens': 11, 'completion_tokens': 22,
+                                          'reasoning_tokens': None}
+    assert record['model'] == 'deepseek-flash'
+    # 不复制响应字节进候选根（不冒充 cache hit）。
+    assert not list((base / 'run' / 'runtime').glob('request_*.json'))
+    rows, _ = read_cost_snapshot(base)
+    assert len(rows) == 1 and rows[0]['cached'] is True
+    assert rows[0]['completion_tokens'] == 0, '历史实付不得在候选根重复计费'
+    assert rows[0]['cache_policy'] == 'historical-adoption'
+    # provenance 的生成事实来自源行真实模型。
+    repo.write('stage4/grounding/semantic_binding.json', {'x': 1}, owners=('bind',))
+    provenance = repo.inspect('stage4/grounding/semantic_binding.json')['_provenance']
+    assert provenance['adopted_models'] == ['deepseek-flash']
+
+
+def test_historical_adoption_blocks_corrupted_evidence(tmp_path):
+    root, identity, request = _source_root(tmp_path, tamper='content')
+    base, repo, ledger, session = _candidate(tmp_path, root)
+    with pytest.raises(ValueError, match='内容损坏'):
+        session.ask('bind', request, lambda _: [])
+
+
+def test_historical_adoption_blocks_identity_mismatch(tmp_path):
+    root, identity, request = _source_root(tmp_path, tamper='identity')
+    base, repo, ledger, session = _candidate(tmp_path, root)
+    with pytest.raises(ValueError, match='身份损坏'):
+        session.ask('bind', request, lambda _: [])
+
+
+def test_historical_adoption_blocks_unknown_paid_status(tmp_path):
+    root, identity, request = _source_root(tmp_path)
+    # 抹掉源根成本账里的付费行：付费状态未知 → 拒绝采用。
+    (tmp_path / 'source' / '_service' / 'ledger.jsonl').write_text('', encoding='utf-8')
+    base, repo, ledger, session = _candidate(tmp_path, root)
+    with pytest.raises(ValueError, match='原成本关联'):
+        session.ask('bind', request, lambda _: [])
+
+
+def test_unregistered_owner_falls_through_to_authorization(tmp_path):
+    root, identity, request = _source_root(tmp_path)
+    base, repo, ledger, session = _candidate(tmp_path, root)
+    with pytest.raises(PurchaseRequired, match='--yes'):
+        session.ask('naming', request, lambda _: [])

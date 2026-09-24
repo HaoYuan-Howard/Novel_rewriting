@@ -32,6 +32,7 @@ import json
 import re
 import time
 import uuid
+from pathlib import Path
 from typing import Any, Callable, NamedTuple
 
 from contracts.schema.str06 import STR06_RC_VERSION
@@ -86,7 +87,8 @@ class TextAnswer(NamedTuple):
 class PaidRequestSession:
     def __init__(self, repository: Str06Repository, ledger: CostLedger,
                  transport: Transport, *, yes: bool = False, allow_source_export: bool = False,
-                 provider: str, book_call_ceiling: int | None = None, sid: str = ''):
+                 provider: str, book_call_ceiling: int | None = None, sid: str = '',
+                 adopt_roots: tuple[Path, ...] = ()):
         if ledger.path is None:
             raise ValueError('付费请求边界需要持久化成本账')
         self.repository, self.ledger, self.transport = repository, ledger, transport
@@ -96,6 +98,7 @@ class PaidRequestSession:
         self.base = ledger.path.parent.parent
         self.sid = sid
         self.run_id = ledger.run_id
+        self.adopt_roots = tuple(Path(root) for root in adopt_roots)
         self._units: dict[str, WorkUnitBudget] = {}
 
     def ask(self, owner: str, request: ChatRequest, validate) -> dict:
@@ -196,6 +199,9 @@ class PaidRequestSession:
                 self._record(owner, request, row, cached=True)
                 self._note_adoption(owner, request, row)
                 return row
+            adopted = self._adopted_row(owner, request, identity)
+            if adopted is not None:
+                return adopted
             if not self.yes or not self.allow_source_export:
                 raise PurchaseRequired(owner)
             if self.book_call_ceiling is not None and self._new_calls() >= self.book_call_ceiling:
@@ -247,6 +253,156 @@ class PaidRequestSession:
                                 turn_id=reservation.turn_id)
             return row
 
+    def _adopted_row(self, owner: str, request: ChatRequest, identity: str) -> dict | None:
+        """登记的显式历史采用（F7a-3）：从注册源根取同请求身份的已购结果。
+
+        逐个注册源核对四件事，任一不符**明确阻断**（不静默跳过、不补购）：
+        ① 请求身份逐字相等；② 响应字节完整（content_sha256）；③ 原状态为
+        answered；④ 原成本关联存在——源根 ledger 里有同 attempt_id＋同
+        request_fingerprint 的真实付费行（付费状态未知 = 拒绝采用）。
+        采用不复制响应字节进本根（不冒充 cache hit）：本根只落采用记录与一行
+       零 token 的 cached ledger 行，历史实付留在源根账内，不重复计费。
+        """
+        rel = f'runtime/request_{identity}.json'
+        for root in self.adopt_roots:
+            source = root / rel
+            if not source.is_file():
+                continue
+            row = Str06Repository.read_external(source)
+            if row.get('identity') != identity:
+                raise ValueError(
+                    f'{owner} 采用源 {root} 的请求身份损坏，拒绝采用或重购')
+            if row.get('status') != 'answered':
+                raise ValueError(
+                    f'{owner} 采用源 {root} 的原请求为 {row.get("status")}；'
+                    '付费状态未知，拒绝采用')
+            if digest(row.get('content')) != row.get('content_sha256'):
+                raise ValueError(
+                    f'{owner} 采用源 {root} 的已购响应内容损坏，拒绝采用或重购')
+            rows, partial = read_cost_snapshot(root.parent)
+            if partial:
+                raise ValueError(f'采用源 {root} 的成本账有未提交尾，先恢复再采用')
+            original = [r for r in rows
+                        if r.get('attempt_id') == row.get('attempt_id')
+                        and r.get('request_fingerprint') == identity]
+            if len(original) != 1 or original[0].get('cached') or \
+                    original[0].get('outcome') != 'ok':
+                raise ValueError(
+                    f'{owner} 采用源 {root} 缺原成本关联（attempt_id＋指纹无唯一'
+                    '真实付费行）；付费状态未知，拒绝采用')
+            usage = row.get('usage') or {}
+            self.repository.write(f'runtime/adopt_{owner}.json', {
+                'owner': owner, 'mode': 'historical-adoption',
+                'source_root': str(root.resolve()), 'source_rel': rel,
+                'sha256': Str06Repository.file_sha256(source),
+                'identity': identity, 'attempt_id': row['attempt_id'],
+                'provider': row.get('provider'), 'model': row.get('model'),
+                'historical_usage': {
+                    'prompt_tokens': original[0].get('prompt_tokens'),
+                    'completion_tokens': original[0].get('completion_tokens'),
+                    'reasoning_tokens': original[0].get('reasoning_tokens')},
+                'new_paid_calls': 0, 'cost_link': 'ledger-row', 'errors': []})
+            self._record_adoption(owner, request, identity, row)
+            self._note_adoption(owner, request, row)
+            return {**row, 'cached': True}
+        return None
+
+    def bind_wire_adoption(self, owner: str, identity: str, wire_path: Path, *,
+                           allow_patch: bool = False) -> dict:
+        """wire 采用的身份／成本绑定（F7a-3）：返回并入采用记录的字段。
+
+        证据分两轮扫描，逐档下降但都如实登记：
+        · 第一轮（`ledger-row`）：任一注册源根有同请求身份的已购行，成本关联
+          唯一且真实；wire 字节与其响应内容相等——身份、响应、成本三方绑定；
+        · 第二轮（`batch-documented`）：源根 `adopt_<owner>.json` 记录与本 wire
+          字节一致（采用链可验），原购买根的逐请求账未持久（F2b 批次证据），
+          成本只到批次口径；
+        · 都没有（`unverified`）：仅形状校验，采用记录如实标注。
+        `allow_patch` 接受 owner patch 链：wire 与已购内容不一致但源根采用记录
+          字节一致，且调用方已核验 patch note 的 base 身份（修订来源保留）。
+        """
+        wire_sha = Str06Repository.file_sha256(wire_path)
+        for root in self.adopt_roots:
+            source = root / 'runtime' / f'request_{identity}.json'
+            if not source.is_file():
+                continue
+            row = Str06Repository.read_external(source)
+            if row.get('identity') != identity:
+                raise ValueError(f'{owner} 采用源 {root} 的请求身份损坏，拒绝采用')
+            if row.get('status') != 'answered':
+                raise ValueError(
+                    f'{owner} 采用源 {root} 的原请求为 {row.get("status")}；'
+                    '付费状态未知，拒绝采用')
+            if digest(row.get('content')) != row.get('content_sha256'):
+                raise ValueError(f'{owner} 采用源 {root} 的已购响应内容损坏，拒绝采用')
+            rows, partial = read_cost_snapshot(root.parent)
+            if partial:
+                raise ValueError(f'采用源 {root} 的成本账有未提交尾，先恢复再采用')
+            original = [r for r in rows
+                        if r.get('attempt_id') == row.get('attempt_id')
+                        and r.get('request_fingerprint') == identity]
+            if len(original) != 1 or original[0].get('cached') or                     original[0].get('outcome') != 'ok':
+                raise ValueError(
+                    f'{owner} 采用源 {root} 缺原成本关联；付费状态未知，拒绝采用')
+            if _same_json_payload(wire_path, row.get('content') or ''):
+                return {'mode': 'historical-adoption', 'cost_link': 'ledger-row',
+                        'source_root': str(root.resolve()),
+                        'source_rel': f'runtime/request_{identity}.json',
+                        'identity': identity, 'attempt_id': row['attempt_id'],
+                        'provider': row.get('provider'), 'model': row.get('model'),
+                        'historical_usage': {
+                            'prompt_tokens': original[0].get('prompt_tokens'),
+                            'completion_tokens': original[0].get('completion_tokens'),
+                            'reasoning_tokens': original[0].get('reasoning_tokens')}}
+            recorded = self._adopt_record(root, owner)
+            if allow_patch and recorded is not None and recorded.get('sha256') == wire_sha:
+                return {'mode': 'historical-adoption', 'cost_link': 'ledger-row',
+                        'owner_patch': True,
+                        'source_root': str(root.resolve()),
+                        'source_rel': f'runtime/request_{identity}.json',
+                        'identity': identity, 'attempt_id': row['attempt_id'],
+                        'provider': row.get('provider'), 'model': row.get('model'),
+                        'historical_usage': {
+                            'prompt_tokens': original[0].get('prompt_tokens'),
+                            'completion_tokens': original[0].get('completion_tokens'),
+                            'reasoning_tokens': original[0].get('reasoning_tokens')}}
+            if recorded is None or recorded.get('sha256') != wire_sha:
+                raise ValueError(
+                    f'{owner} wire 与采用源 {root} 的已购响应内容不一致，且无匹配的 '
+                    'owner patch 采用链，拒绝采用')
+        for root in self.adopt_roots:
+            recorded = self._adopt_record(root, owner)
+            if recorded is not None and recorded.get('sha256') == wire_sha:
+                return {'mode': 'historical-adoption', 'cost_link': 'batch-documented',
+                        'source_root': str(root.resolve()),
+                        'source_rel': f'runtime/adopt_{owner}.json',
+                        'adoption_chain_verified': True}
+        return {'mode': 'wire-adoption', 'cost_link': 'unverified'}
+
+    @staticmethod
+    def _adopt_record(root: Path, owner: str) -> dict | None:
+        path = root / 'runtime' / f'adopt_{owner}.json'
+        if not path.is_file():
+            return None
+        return Str06Repository.read_external(path)
+
+    def _record_adoption(self, owner, request, identity, row) -> None:
+        """采用在候选根账内只记一行零 token 的 cached 行（新 attempt_id）。
+
+        不走 `_record` 的 cached 回填分支：那一条服务本根已购响应的免费重放，
+        会把历史 token 抄进候选根账——同一批 token 两处各声称一次。
+        """
+        node, _scope = self._owner_unit(owner)
+        self.ledger.record(
+            node=node, sid=self.sid, model=row.get('model', request.model),
+            request_model=request.model, code=STR06_RC_VERSION, attempt=1, max_attempts=1,
+            will_retry=False,
+            cached=True, cache_policy='historical-adoption', purpose=owner,
+            attempt_id=uuid.uuid4().hex,
+            request_fingerprint=identity,
+            outcome='ok' if row.get('status') == 'answered' else 'error',
+            prompt_tokens=0, completion_tokens=0, reasoning_tokens=0)
+
     def _record(self, owner, request, row, *, cached):
         # raw→ledger 中断时，免费重放先补原始账，不能把已付费变成缓存零成本。
         rows, partial = read_cost_snapshot(self.base)
@@ -280,6 +436,14 @@ class PaidRequestSession:
             owner=owner, model=row.get('model') or request.model,
             prompts={'system': request.system, 'user': request.user},
             turn_id=turn_id, unit=unit)
+
+
+def _same_json_payload(path: Path, content: str) -> bool:
+    """wire 文件与已购响应内容是否同一份 JSON 载荷（语义相等，不管序列化）。"""
+    try:
+        return Str06Repository.read_external(path) == json.loads(content)
+    except (ValueError, OSError):
+        return False
 
 
 def _unique(pairs):

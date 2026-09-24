@@ -472,6 +472,10 @@ def main():
                              'max_tokens 导致响应截断（F5e 实证），可显式降档')
     parser.add_argument('--check-only', action='store_true',
                         help='免费检查：只允许缓存采用与 wire 采用，不签发新调用')
+    parser.add_argument('--adopt-root', type=Path, action='append', default=[],
+                        help='登记的显式历史采用源根（候选 run 目录，可重复）：'
+                             '同请求身份的已购结果经身份／字节／成本关联核对后零新购 '
+                             '采用；身份不符、证据损坏或付费状态未知明确阻断')
     parser.add_argument('--yes', action='store_true')
     parser.add_argument('--allow-source-export', action='store_true')
     args = parser.parse_args()
@@ -481,6 +485,9 @@ def main():
         raise ValueError('--body-band-low/high 必须满足 0 < low < high')
     if args.check_only and (args.yes or args.allow_source_export):
         raise ValueError('--check-only 不签发新调用：去掉 --yes/--allow-source-export 再跑')
+    for root in args.adopt_root:
+        if not root.resolve().is_dir():
+            raise ValueError(f'--adopt-root 不是目录：{root}')
     base = os.environ.get('NOVEL_OUTPUT')
     if not base:
         raise ValueError('NOVEL_OUTPUT 未设置：没查、未运行')
@@ -524,24 +531,47 @@ def main():
     session = PaidRequestSession(repository, ledger, DeepSeekTransport(cfg), yes=args.yes,
                                  allow_source_export=args.allow_source_export,
                                  provider=cfg.base_url,
-                                 book_call_ceiling=args.book_call_ceiling, sid=sid)
+                                 book_call_ceiling=args.book_call_ceiling, sid=sid,
+                                 adopt_roots=tuple(args.adopt_root))
 
-    def adopt(owner, path, validate, *, system, prompt):
+    def adopt(owner, path, validate, *, system, prompt, json_mode, temperature):
         if args.repair_manifest and (
                 owner not in adopted or Path(adopted[owner]['path']).resolve() != path.resolve()
                 or repository.file_sha256(path) != adopted[owner]['sha256']):
             raise ValueError(f'{owner} wire 不在已核实修订 manifest 内')
         raw = repository.read_external(path)
         errors = validate(raw)
-        repository.write(f'runtime/adopt_{owner}.json', {
+        record = {
             'owner': owner, 'path': str(path.resolve()),
             'sha256': repository.file_sha256(path),
-            'new_paid_calls': 0, 'historical_usage': None, 'errors': errors})
+            'new_paid_calls': 0, 'historical_usage': None, 'errors': errors}
         if errors:
+            repository.write(f'runtime/adopt_{owner}.json', record)
             raise ValueError(f'{owner} 免费采用失败：{errors}')
-        # wire 采用登记进 provenance 采用台账：模型身份在 wire 里不可知，如实记
-        # unknown；prompt 是本次与之身份一致的请求原文（F7a-3 起改从原请求行取值）。
-        context.note_adoption(owner=owner, model='unknown',
+        # F7a-3：wire 采用登记身份／成本绑定——注册源根有同请求身份已购行时三方
+        # 绑定（身份／响应／成本），否则退到采用链（批次口径）或如实标未核。
+        model = 'unknown'
+        if args.adopt_root:
+            request = build_request(owner, prompt, json_mode=json_mode, system=system,
+                                    temperature=temperature)
+            identity = digest({'owner': owner, 'provider': session.provider,
+                               'request': request.cache_payload()})
+            allow_patch, patch_reason = False, None
+            note_path = (args.wire_dir / f'{owner}_patch_note.json'
+                         if args.wire_dir else None)
+            if note_path is not None and note_path.exists():
+                note = repository.read_external(note_path)
+                if note.get('base_response_identity') != identity:
+                    raise ValueError(
+                        f'{owner} patch note 的基线身份与当前请求不一致，拒绝采用')
+                allow_patch, patch_reason = True, note.get('reason')
+            record.update(session.bind_wire_adoption(owner, identity, path,
+                                                     allow_patch=allow_patch))
+            if patch_reason:
+                record['owner_patch_reason'] = patch_reason
+            model = record.get('model') or 'unknown'
+        repository.write(f'runtime/adopt_{owner}.json', record)
+        context.note_adoption(owner=owner, model=model,
                               prompts={'system': system, 'user': prompt})
         return raw
 
@@ -565,7 +595,8 @@ def main():
     def ask(owner, prompt, validate):
         path = wire_path(owner)
         if path is not None:
-            return adopt(owner, path, validate, system=SYS, user=prompt)
+            return adopt(owner, path, validate, system=SYS, prompt=prompt,
+                         json_mode=True, temperature=0.3)
         request = build_request(owner, prompt, json_mode=True, system=SYS, temperature=0.3)
         return session.ask(owner, request, validate)
 
@@ -573,7 +604,7 @@ def main():
         path = wire_path(owner)
         if path is not None:
             raw = adopt(owner, path, lambda w: [], system=HOOK_WRITER_SYSTEM,
-                        user=prompt)
+                        prompt=prompt, json_mode=False, temperature=0.7)
             prose = (raw.get('prose') or '').strip() if isinstance(raw, dict) else ''
             if not prose:
                 raise ValueError(f'{owner} wire 文本为空')
@@ -587,7 +618,7 @@ def main():
         path = wire_path(owner)
         if path is not None:
             raw = adopt(owner, path, lambda w: [], system=BODY_WRITER_SYSTEM,
-                        user=prompt)
+                        prompt=prompt, json_mode=False, temperature=0.7)
             prose = (raw.get('prose') or '').strip() if isinstance(raw, dict) else ''
             if not prose:
                 raise ValueError(f'{owner} wire 文本为空')

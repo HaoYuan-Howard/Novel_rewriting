@@ -57,8 +57,8 @@ F3b 第二本 artifact-only smoke 撤销，不再作为本轮待办或付费点�
 
 ## 当前状态与下一步
 
-**下一批：F7a 第三步（历史采用，免费）。F7a 第一、二步已完成（2026-09-24，零模型调用）。
-其后顺序：F7a-3 → F7b–F7e → F8 → F9。**
+**下一批：F7b（owner runner 与薄驱动，免费）。F7a 三步已于 2026-09-24 全部完成
+（零模型调用）。其后顺序：F7b–F7e → F8 → F9。**
 F4R、F6、F5 已完成各自登记范围；F7–F9 均待实施，本次文档修订不开始迁移实现。
 当前隔离链版式为 `str06-rc4`（F5 起 Design/WriterIR/章级回执新形状；Hook、NameMap
 等未变形状契约仍为 rc3 标签）；下表是既有证据摘要，不是本次重新运行或整书质量结论。
@@ -240,13 +240,21 @@ F5a–F5d 已闭合按章成文的契约、引擎与免费验证，F5e 已完成
     freshness 断言＋8 旧形状），零新增——均非本批 Store 接口相关，按计划整项进入 F7e
     登记。测试 `tests/test_str06_f7a_wiring.py` 18 项；str06 全套＋layering＋
     work_units／book_budget／execution_permit／test_selection 定向全绿。
-  - [ ] **F7a 第三步 · F5e 历史采用**（待实施）：F5e 原输出根只读保存，在独立候选输出根
-    初始化新 workflow（`runtime/candidate_workflow.json` 记录机制已就绪：首开、复用、
-    代码漂移滚动、源输入身份变化拒绝），经登记的显式历史采用入口核对原请求、响应、来源
-    摘要、provider／model 及原成本关联。只采用同请求身份的合法已购结果；身份不匹配、
-    来源损坏或付费状态未知时明确阻断，免费批次不补购。owner patch 保留原基线、修订与
-    采用证据，不伪装成未经修订的原始模型响应。历史实付与本轮新增成本分列，历史采用不
-    复制缓存或冒充新根 cache hit，也不重复计费。
+  - [x] **F7a 第三步 · F5e 历史采用**（2026-09-24 完成，零模型调用）：候选 run
+    `outputs/str06_f7a_candidate_20260924/run`。`--adopt-root`（可重复）登记显式历史
+    采用源根：新购首 wire 前先查本地请求行，再逐个注册源根核对同请求身份的已购行——
+    身份逐字相等、响应字节完整、原状态 answered、源根 ledger 有唯一真实付费行（同
+    attempt_id＋指纹）；任一不符明确阻断，不补购。采用不复制响应字节进候选根（不冒充
+    cache hit）：候选根只落采用记录与零 token 的 cached ledger 行，历史实付留在源根账
+    内分列。wire 采用经 `bind_wire_adoption` 绑定身份／成本：ledger-row（三方绑定）、
+    batch-documented（采用链可验、批次口径，F2b 逐请求账未持久如实标注）、unverified
+    三档；hook_design 的 owner patch 经 patch note 基线身份核验后绑定（修订来源保留）。
+    **验收结果**：F5e 原根树字节指纹前后一致（只读）；同输入交付文本与 F5e 逐字一致
+    （`夫君的报恩_rewriting.txt` sha 81e4fcce…）；零新购（无 admission 计费，ledger
+    21 行全 cached、token 合计 0）；30 份采用记录成本关联完整（15 ledger-row＋15
+    batch-documented，含 1 份 patch 链）；同 flags `--check-only` 免费续跑：前缀恢复
+    跳过 11 章正文、仅 stage4／hook 重放 3 行采用、零新购、交付字节不变。源 JSON 按
+    F6c 已购 names 请求内嵌全文逐字重建（11 章 10093 字，sha 90ea4b16…）。
     **验收与盘面**：F5e 原证据字节不变；独立候选根的采用记录、来源及成本关联完整；
     同输入交付文本字节一致、零新购、可免费续跑；正式封装与 provenance 的变化单独核对，
     不要求新旧元数据文件逐字相同。候选节点可用，现役注册面不变，Store 有效反例通过。

@@ -125,7 +125,9 @@ candidate_workflow.json`：源输入身份变化与契约表漂移关闭式拒�
 身份不匹配、证据损坏或付费状态未知时明确阻断。owner patch 保留原基线及修订来源；
 历史采用不复制缓存、不续旧 session、不重复计原实付。原证据字节保持不变，同输入交付
 文本字节一致；正式封装和 provenance 单独验证，不要求新旧元数据文件逐字相同。历史
-采用通路尚待 F7a 第三步实现，不能据本节原地升级 F5e 根。
+采用通路已由 F7a 第三步实现（`--adopt-root` 登记源根，身份／响应／成本三方核对，
+零新购、不复制缓存、不续旧 session），候选根 `outputs/str06_f7a_candidate_20260924`
+与 F5e 交付逐字一致；仍不得据本节原地升级 F5e 根。
 
 引擎按 Stage2 source／names、Stage4 preserve／body_design／hook_design／bind／compile、
 Stage5 body／hook、Stage7 naming／assemble 拆 owner runner；复检用 `--check-only`。
