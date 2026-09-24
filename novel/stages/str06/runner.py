@@ -119,6 +119,21 @@ def _chapter_ordinal(n: int) -> str:
     return f'ch{n:02d}'
 
 
+def derive_total_length_budget(chapters: list[dict], *,
+                               rounding: int = 1000) -> int:
+    """书级正文篇幅目标：从源章数组总字数确定性派生（保留全书篇幅边界）。
+
+    向上取整到 `rounding` 的整数倍——同一份源章数组永远得到同一个预算，预算
+    进 IR（book_brief.total_length_budget）从而进请求身份；换源即换预算，
+    不沿用旧根的正文请求结论。付费调用额度不参与本计算（Q-10 两层是次数闸，
+    不是篇幅语义）。
+    """
+    total = sum(len(c['text']) for c in chapters)
+    if total <= 0:
+        raise ValueError('源章数组为空，无法派生书级篇幅')
+    return -(-total // rounding) * rounding
+
+
 # ─── stage2 source ───────────────────────────────────────────────────────────
 
 def run_source(ctx: ChainContext) -> dict:

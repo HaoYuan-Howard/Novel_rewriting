@@ -21,6 +21,7 @@ from contracts.schema.str06 import (
     STR06_CANDIDATE_NODES,
     STR06_PATH_FAMILIES,
     STR06_RC_VERSION,
+    STR06_RUNTIME_CONFIG,
     candidate_artifact,
     candidate_contract_identity,
     candidate_node,
@@ -165,6 +166,7 @@ def test_contract_identity_covers_both_tables():
     """身份摘要必须覆盖节点表与产物表全部内容（防改表不换身份）。"""
     expected = hashlib.sha256(json.dumps({
         'rc': RC_VERSION,
+        'config': STR06_RUNTIME_CONFIG._asdict(),
         'nodes': {node: {'stage': s.stage, 'owner': s.owner, 'paid': s.paid,
                          'produces': list(s.produces),
                          'free_recheck': s.free_recheck,
@@ -246,3 +248,24 @@ def test_workflow_check_detects_drift_and_tampering():
     bad_epoch = record._replace(epoch=epoch._replace(epoch_id='xyz'))
     problems = check_candidate_workflow(bad_epoch, code_version='code-abc')
     assert any('epoch 形状损坏' in p for p in problems)
+
+
+def test_runtime_config_is_the_formal_source_and_identity_bound():
+    """Hook 长度／篇幅带／取整粒度有正式来源，且进契约身份（配置变化换身份）。"""
+    assert STR06_RUNTIME_CONFIG.hook_hard_max_chars > STR06_RUNTIME_CONFIG.hook_target_chars
+    assert 0 < STR06_RUNTIME_CONFIG.length_band_low < STR06_RUNTIME_CONFIG.length_band_high
+    before = candidate_contract_identity()
+    assert 'config' in json.loads(json.dumps({
+        'config': STR06_RUNTIME_CONFIG._asdict()})), '配置必须可序列化进身份'
+
+
+def test_derived_budget_is_deterministic_from_source_chapters():
+    from novel.stages.str06.runner import derive_total_length_budget
+    chapters = [{'chapter_ordinal': 1, 'text': '九' * 2500},
+                {'chapter_ordinal': 2, 'text': '八' * 2500}]
+    assert derive_total_length_budget(chapters) == 5000      # 5000 正向取整
+    assert derive_total_length_budget(chapters, rounding=1000) == 5000
+    assert derive_total_length_budget(chapters, rounding=100) == 5000
+    assert derive_total_length_budget(chapters[:1], rounding=1000) == 3000
+    with pytest.raises(ValueError, match='无法派生'):
+        derive_total_length_budget([])

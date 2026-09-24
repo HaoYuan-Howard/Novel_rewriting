@@ -57,8 +57,9 @@ F3b 第二本 artifact-only smoke 撤销，不再作为本轮待办或付费点�
 
 ## 当前状态与下一步
 
-**下一批：F7c（输入、篇幅与恢复职责，免费）。F7a、F7b 已于 2026-09-24 完成
-（零模型调用）。其后顺序：F7c–F7e → F8 → F9。**
+**下一批：F7c 余下职责（免费）。F7c 第一步（正式 Stage1 输入、配置正式来源、
+预算派生、hook_copy 边界）已于 2026-09-24 完成（零模型调用）。其后顺序：
+F7c 余项 → F7d–F7e → F8 → F9。**
 F4R、F6、F5 已完成各自登记范围；F7–F9 均待实施，本次文档修订不开始迁移实现。
 当前隔离链版式为 `str06-rc4`（F5 起 Design/WriterIR/章级回执新形状；Hook、NameMap
 等未变形状契约仍为 rc3 标签）；下表是既有证据摘要，不是本次重新运行或整书质量结论。
@@ -281,16 +282,28 @@ F5a–F5d 已闭合按章成文的契约、引擎与免费验证，F5e 已完成
     delivery_identity 相同、15 ledger-row＋15 batch-documented），F5e 原根树字节
     不变。F7a 候选根被契约表漂移守卫按设计拒绝复用（候选表新增两件派生产物）——
     旧根不原地升级，采用结论按新表在新根重建。
-  - [ ] **F7c · 输入、篇幅与恢复职责**：Stage2 改读正式 Stage1 章数组，去掉生产路径对
-    `--source-json` 的依赖；明确 Stage1 hook_copy 的新消费者或 F8 退役边界。书级正文
-    篇幅目标按“保留全书篇幅边界”从源 MainText 确定性派生，目标章数等于源章数；Hook
-    长度及章篇幅带有正式配置来源，与付费调用额度分开。迁移三条 Stage4 skip 的有效
-    职责：Binding INVALID＋typed witness、owner 停止、同指纹熔断；覆盖 binding-only
-    崩溃精确补尾和 public_state_ref 的身份隔离／跨章携入／状态解除三反例。审计 analyze
-    receipt／draft repair，防重复付费、重复实体或漏补提交；名称结构接管 Stage5/7、
-    consumption 与 core.naming 的 name_distinctiveness 消费。
-    **验收与盘面**：正式 Stage1 输入到新链可达；输入及配置进入请求／消费身份，变化不
-    误用旧结果；恢复反例通过且保留精确 owner，不把 F7a 同输入重放证明扩称为新输入可采用。
+  - [x] **F7c 第一步 · 正式 Stage1 输入、配置来源与预算派生**（2026-09-24 完成，
+    零模型调用）：`--book-sid` 生产路径经正式契约读 `<base>/<sid>/stage1/main_text.json`
+    （`MainText` 章数组，阅读序密集校验），源输入身份＝该产物盘上字节 SHA-256，写入
+    workflow 记录；`--source-json` 退为开发／测试路径。候选运行期配置落在
+    `contracts/schema/str06/candidates.py::STR06_RUNTIME_CONFIG`（Hook 长度、章篇幅带、
+    取整粒度；进契约身份，与付费调用额度分开）。书级正文篇幅从源章总字数向上取整
+    确定性派生（`derive_total_length_budget`，本书 10093 字 → 11000，与 F5e 一致），
+    目标章数等于源章数由 MainText 模型保证。**Stage1 hook_copy 边界闭合：新链无消费者**
+    （Hook 设计吃目标 Design 的材料投影，不消费源 hook 文案）——随旧链于 F8 退役，
+    登记见退役表。canary（`outputs/str06_f7c_candidate_20260924`，正式 Stage1 输入＋
+    `--check-only`）：零新购复现交付（21 行 ledger 全 cached、token 0、交付与 F5e
+    逐字一致、delivery_identity 相同、15 ledger-row＋15 batch-documented）；**输入变化
+    闸实证**：改动 stage1 一章文本后重跑被 `ProvenanceRefused` 拒绝（旧根采用不覆盖
+    新输入）——变化不误用旧结果。facilities 顺序纪律：workflow manifest 须在 base 干净时
+    初始化（先 facilities 后书目录），候选工具在 manifest 缺失且 base 非空时按正式
+    `_require_clean_base` 拒绝。
+  - [ ] **F7c 余项 · 恢复职责与消费接管**：迁移三条 Stage4 skip 的有效职责：Binding
+    INVALID＋typed witness、owner 停止、同指纹熔断；覆盖 binding-only 崩溃精确补尾和
+    public_state_ref 的身份隔离／跨章携入／状态解除三反例。审计 analyze receipt／draft
+    repair，防重复付费、重复实体或漏补提交；名称结构接管 Stage5/7、consumption 与
+    core.naming 的 name_distinctiveness 消费。
+    **验收与盘面**：恢复反例通过且保留精确 owner，不把 F7a 同输入重放证明扩称为新输入可采用。
   - [ ] **F7d · API／Views／前端候选面**：纯函数 views 覆盖 Characters v4、Blueprint v12、
     graph／binding（含 Hook、导演说明、章目的）、WriterBookIR 导航、章正文与章回执
     （机械范围、语义未评、篇幅披露）、Hook 与回执、NameMap v5、成书下载与 manifest、
@@ -363,7 +376,7 @@ F5a–F5d 已闭合按章成文的契约、引擎与免费验证，F5e 已完成
 | `_tmp_*` harness 与旧链实现 | F7e 登记有效职责与反例，F8c 接管完成后删除代码；付费响应、checkpoint、采用证据、接受正文及质量基线保留或归档 |
 | 现役 Stage6 链整层（prepare/hook/approve、产物家族、批准绑定、API/Views/前端、判据、纯 Stage6 测试） | 已登记于 `contracts/schema/str06/retirement.py::STR06_F6D_RETIREMENT`（106 项，含接管者），`tests/test_str06_retirement.py` 双向对账；F7e 复验、F8a–F8c 按表退役，先迁有效独有反例 |
 | 旧 Stage2／4／5／7 及跨层消费面 | F7e 建补充退役登记，与 Stage6 登记共同覆盖编排、consumption、core、quality、report、API/UI、schema 文档和测试；F8c 按接管证据删除，F8d 验证真实消费者 |
-| Stage1 `hook_copy` | F7c 明确新消费者或退役边界，覆盖 partition/check、节点产物、审批、source_identity 与 UI 的有效职责；F8 同批接线或退役，不留无消费者产物作为新链准入条件 |
+| Stage1 `hook_copy` | F7c 已判定新链无消费者（Hook 设计吃目标 Design 材料投影）；F8 随旧链退役，覆盖 partition/check、节点产物、审批、source_identity 与 UI 的有效职责，不留无消费者产物作为新链准入条件 |
 | 书级正文篇幅、Hook 长度与章篇幅带 | F7c 从正式 MainText 派生书级篇幅、固定目标章数为源章数，Hook／篇幅带有正式配置来源；移除生产路径的 harness 默认值依赖，配置变化进入实际消费身份 |
 | F5e 原输出根与已购证据 | F7a 原根只读、独立候选根显式历史采用，核对请求／响应／来源／成本及零新购同文本重放；F8c 保留或归档，F9 复用同一采用边界，不原地升级或伪造缓存命中 |
 | `tests/test_store.py` 的既存 74 项失败 | 保留 161 收集、87 通过及失败分类的历史记录；F7a-2 已复核与 HEAD 基线逐项一致（49 退役路径夹具＋17 freshness 断言＋8 旧形状，均非 Store 接口相关，零新增）；F7e 登记其余接管者，F8d 有效职责全部通过；不以删除现役反例清零 |

@@ -136,10 +136,15 @@ BodyDesign 是正式派生产物（`stage2/compiled/book_extraction.json`、
 `stage4/design/body_design.json`），不再只活在内存；`tools/str06_workflow.py` 是薄驱动，
 复检用 `--check-only`／`--node`，不新造 check 节点。候选产物落盘保序（同正式
 `_render`）：盘上字符典序即 wire 序，prompt 与已购请求身份按字节复算。
-Stage2 输入改读正式 Stage1 章数组、目标章数等于源章数、书级正文篇幅从 MainText 确定性
-派生、Hook 长度和章篇幅带使用正式配置并绑定消费身份、正文篇幅预算与付费调用额度分开、
-Stage1 hook_copy 的消费或退役边界显式闭合——以上属 F7c。子批次、验收、红账及删除条件
-只在 REQUIREMENTS 维护。
+Stage2 输入已改读正式 Stage1 章数组（F7c 第一步）：`--book-sid` 经正式契约读
+`stage1/main_text.json`（MainText，阅读序密集校验），源输入身份是该产物盘上字节
+SHA-256 并写入 workflow 记录；目标章数等于源章数由模型保证，书级正文篇幅从源章总
+字数向上取整确定性派生（`derive_total_length_budget`），Hook 长度和章篇幅带的正式
+来源是 `STR06_RUNTIME_CONFIG`（进契约身份，与付费调用额度分开），输入或配置变化后
+旧根的采用结论按设计拒绝复用。Stage1 hook_copy 新链无消费者，随旧链于 F8 退役。
+恢复职责（Binding INVALID＋typed witness、owner 停止、同指纹熔断、binding-only 精确
+补尾、public_state_ref 三反例、analyze receipt／draft repair 审计、name_distinctiveness
+消费接管）属 F7c 余项。子批次、验收、红账及删除条件只在 REQUIREMENTS 维护。
 
 ## 扩容目标：四类 truth 与职责（隔离实装，正式接线待 F7/F8）
 

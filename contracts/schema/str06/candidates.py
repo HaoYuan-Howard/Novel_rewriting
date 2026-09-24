@@ -49,7 +49,7 @@ import re
 from typing import Any, Final, NamedTuple
 
 from contracts.schema.str06.book_ir import WriterBookIR
-from contracts.schema.str06.design import PresentationGraph
+from contracts.schema.str06.design import BodyDesign, PresentationGraph
 from contracts.schema.str06.execution import ExecutionPlan
 from contracts.schema.str06.grounding import (
     PreserveCheckpoint,
@@ -59,7 +59,9 @@ from contracts.schema.str06.grounding import (
 from contracts.schema.str06.hook import HookContext, HookReceipt
 from contracts.schema.str06.naming import NameMapV5
 from contracts.schema.str06.receipt import ChapterReceipt
-from contracts.schema.str06.source import BlueprintsArtifactV12, CharactersArtifactV4
+from contracts.schema.str06.source import (
+    BlueprintsArtifactV12, CharactersArtifactV4, CharactersCore,
+)
 
 #: 本子包契约的 RC 版式身份（与 `contracts.schema.str06.STR06_RC_VERSION` 同源；
 #: 此处再 import 会形成包内环，故按同一常量字面值登记并由测试对账）。
@@ -67,6 +69,26 @@ RC_VERSION: Final = 'str06-rc4'
 
 #: 已知 RC 标签面（版本规则见模块头）。
 RC_LABELS: Final = ('str06-rc2', 'str06-rc3', 'str06-rc4')
+
+
+class CandidateRuntimeConfig(NamedTuple):
+    """候选链运行期配置的**正式来源**（F7c）：Hook 长度、章篇幅带与书级篇幅
+    取整粒度。与付费调用额度（`--book-call-ceiling`、工作单元／整书总闸）是两件
+    事：配置进 prompt 与 IR，从而进请求身份；额度只闸新购次数，不进语义身份。
+
+    CLI 旗标可覆盖，但覆盖值同样经 prompt／IR 进入身份——配置变化不误用旧结果。
+    """
+
+    hook_target_chars: int = 280
+    hook_hard_max_chars: int = 360
+    length_band_low: float = 0.6
+    length_band_high: float = 1.3
+    #: 书级正文篇幅从源 MainText 章节总字数向上取整的粒度（保留全书篇幅边界）。
+    length_budget_rounding: int = 1000
+
+
+#: 现役候选运行期配置（版本随 RC 表一起进契约身份）。
+STR06_RUNTIME_CONFIG: Final = CandidateRuntimeConfig()
 
 #: epoch 滚动理由面。`initial` 只允许首开；漂移类要求身份确实变化；`repair`
 #: 是 typed 修复的显式 producer 边界（对齐正式 ExecutionEpochReason 的 continue）。
@@ -190,6 +212,7 @@ STR06_CANDIDATE_NODES: Final[dict[str, CandidateNode]] = {
         label='Stage2 源语义抽取（book＋chNN）与确定性 Blueprint 编译',
         paid=True,
         produces=('stage2/blueprints/chapter_blueprints.json',
+                  'stage2/compiled/book_extraction.json',
                   'stage2/compiled/input_snapshots.json',
                   'stage2/acceptance/fold.json'),
         free_recheck='--check-only',
@@ -222,9 +245,10 @@ STR06_CANDIDATE_NODES: Final[dict[str, CandidateNode]] = {
         node='str06.stage4.body_design', stage='stage4', owner='stage4.body_design',
         label='Stage4 目标故事与导演说明设计（BodyDesign）',
         paid=True,
-        # 产出不单独落盘：与 Hook 经 publish_graph 合并发布为
-        # presentation_graph.json（唯一 publisher 是 hook_design 节点）。
-        produces=(),
+        # BodyDesign 先落正式派生产物（bind／hook_design 的单节点输入），
+        # 再与 Hook 经 publish_graph 合并发布为 presentation_graph.json
+        # （唯一 publisher 是 hook_design 节点）。
+        produces=('stage4/design/body_design.json',),
         free_recheck='--check-only',
         flags=('--check-only',),
         lifecycle=CandidateLifecycle(
@@ -323,6 +347,11 @@ STR06_CANDIDATE_ARTIFACTS: Final[dict[str, CandidateArtifact]] = {
         family='str06.stage2.blueprints', form='json',
         writer='str06.stage2.source', schema_version='str06-rc2',
         model=BlueprintsArtifactV12),
+    'stage2/compiled/book_extraction.json': CandidateArtifact(
+        rel='stage2/compiled/book_extraction.json',
+        family='str06.stage2.compiled', form='json',
+        writer='str06.stage2.source', schema_version='str06-rc2',
+        model=CharactersCore),
     'stage2/compiled/input_snapshots.json': CandidateArtifact(
         rel='stage2/compiled/input_snapshots.json',
         family='str06.stage2.compiled', form='json',
@@ -364,6 +393,11 @@ STR06_CANDIDATE_ARTIFACTS: Final[dict[str, CandidateArtifact]] = {
         rel='stage4/acceptance/guard/report.json',
         family='str06.stage4.acceptance.guard', form='json',
         writer='str06.stage4.compile', schema_version='str06-rc4'),
+    'stage4/design/body_design.json': CandidateArtifact(
+        rel='stage4/design/body_design.json',
+        family='str06.stage4.design', form='json',
+        writer='str06.stage4.body_design', schema_version='str06-rc4',
+        model=BodyDesign),
     'stage4/design/presentation_graph.json': CandidateArtifact(
         rel='stage4/design/presentation_graph.json',
         family='str06.stage4.design', form='json',
@@ -441,6 +475,7 @@ def candidate_contract_identity() -> str:
     """
     return _digest({
         'rc': RC_VERSION,
+        'config': STR06_RUNTIME_CONFIG._asdict(),
         'nodes': {node: _node_identity(spec)
                   for node, spec in sorted(STR06_CANDIDATE_NODES.items())},
         'artifacts': {rel: _artifact_identity(spec)
