@@ -455,7 +455,7 @@ def test_hook_writer_length_rewrite_same_context():
         return (long_prose, [], f'id-{len(prompts)}') if len(prompts) == 1 \
             else (ok_prose, [], f'id-{len(prompts)}')
 
-    from tools.str06_workflow import _write_hook
+    from novel.stages.str06.runner import _write_hook
     prose, attempts, identity = _write_hook(context, ask_text)
     assert prose == ok_prose
     assert len(prompts) == 2
@@ -471,7 +471,7 @@ def test_hook_writer_rewrite_limit_exhausted():
         calls.append(prompt)
         return ('夜' * (context.hard_max_chars + 1), [], f'id-{len(calls)}')
 
-    from tools.str06_workflow import _write_hook
+    from novel.stages.str06.runner import _write_hook
     prose, attempts, _ = _write_hook(context, ask_text)
     assert prose is None
     assert len(calls) == 1 + MAX_REWRITES

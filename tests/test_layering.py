@@ -511,7 +511,9 @@ def test_only_the_store_writes_to_disk():
             if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) \
                     and n.func.attr in ('write_bytes', 'write_text', 'mkdir', 'unlink'):
                 recv = n.func.value
-                if isinstance(recv, ast.Name) and recv.id == 'store':
+                # 写路口按方法认定：现役是 store，STR-06 候选链是 Str06Repository
+                # （runner 里的变量名 repository）——同一道原子写＋读回核对。
+                if isinstance(recv, ast.Name) and recv.id in ('store', 'repository'):
                     continue
                 bad.append(f'{rel}:{n.lineno} .{n.func.attr}()')
             elif isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == 'open':

@@ -57,8 +57,8 @@ F3b 第二本 artifact-only smoke 撤销，不再作为本轮待办或付费点�
 
 ## 当前状态与下一步
 
-**下一批：F7b（owner runner 与薄驱动，免费）。F7a 三步已于 2026-09-24 全部完成
-（零模型调用）。其后顺序：F7b–F7e → F8 → F9。**
+**下一批：F7c（输入、篇幅与恢复职责，免费）。F7a、F7b 已于 2026-09-24 完成
+（零模型调用）。其后顺序：F7c–F7e → F8 → F9。**
 F4R、F6、F5 已完成各自登记范围；F7–F9 均待实施，本次文档修订不开始迁移实现。
 当前隔离链版式为 `str06-rc4`（F5 起 Design/WriterIR/章级回执新形状；Hook、NameMap
 等未变形状契约仍为 rc3 标签）；下表是既有证据摘要，不是本次重新运行或整书质量结论。
@@ -258,13 +258,29 @@ F5a–F5d 已闭合按章成文的契约、引擎与免费验证，F5e 已完成
     **验收与盘面**：F5e 原证据字节不变；独立候选根的采用记录、来源及成本关联完整；
     同输入交付文本字节一致、零新购、可免费续跑；正式封装与 provenance 的变化单独核对，
     不要求新旧元数据文件逐字相同。候选节点可用，现役注册面不变，Store 有效反例通过。
-  - [ ] **F7b · owner runner 与薄驱动**：拆出 stage2 source（book＋chNN）／names，
-    stage4 preserve／body_design／hook_design／bind／compile（Guard＋WriterBookIR＋
-    HookContext），stage5 body／hook，stage7 naming／assemble。`build_evidence` 等
-    harness 逻辑归还 owner，`tools/str06_workflow.py` 退为薄驱动。消费 F7a 已定义的候选
-    节点表，与 profiled executor、产物家族及唯一 writer 双向对账；复检用 `--check-only`，
-    不新造 check 节点。**验收与盘面**：fake transport 下逐节点全链跑通，可单节点重跑和
-    续跑；F7a 历史采用后的候选根 `--check-only` 零新购，F5e 原根继续只读。
+  - [x] **F7b · owner runner 与薄驱动**（2026-09-24 完成，零模型调用）：
+    `novel/stages/str06/runner.py` 按候选节点表拆出 11 个 owner runner（stage2
+    source／names；stage4 preserve／body_design／hook_design／bind／compile——
+    Guard＋WriterBookIR＋HookContext；stage5 body／hook；stage7 naming／assemble），
+    `NODE_ORDER` 即执行序，`run_node` 单节点可重跑；`build_evidence` 等 harness 逻辑
+    归 stage2 source owner；`tools/str06_workflow.py` 由 587 行退为 271 行薄驱动
+    （装配 ChainContext、驱动节点计划、落 run 级状态）。每个 runner 的输入一律从盘面
+    读（`repository.read_model`）：源 core 与 BodyDesign 落为正式派生产物
+    （`stage2/compiled/book_extraction.json`、`stage4/design/body_design.json`，
+    候选产物表 20→22 条），不再只活在内存。**两处实测修正**：① candidate repository
+    落盘原用 `sort_keys` 归一字符典序，会把 F5e 已购请求的身份静默改掉（design 采用
+    失配）——改为保序序列化（同正式 store 的 `_render`），prompt 按字节复算；
+    ② 来源边窗口跨 run 继承会把上轮末尾的输入边写进下轮第一份产物（freshness 误判
+    stale）——`begin_run` 清窗口，轮内继承保留。恢复扫描遇上游过期的回执视为前缀
+    断裂（该章按新身份重做），与回执自身的 IR 绑定校验同一语义。
+    **验收与盘面**：fake transport 下逐节点全链跑通（str06 全套＋layering＋
+    work_units／book_budget／execution_permit／test_selection 共 500 项，仅
+    test_store 74 项既有失败且与基线逐项一致）；`--node` 单节点重跑（assemble／names）
+    与续跑通过；F7b 新候选根 `outputs/str06_f7b_candidate_20260924` `--check-only`
+    零新购复现交付（21 行 ledger 全 cached、token 0、交付与 F5e 逐字一致、
+    delivery_identity 相同、15 ledger-row＋15 batch-documented），F5e 原根树字节
+    不变。F7a 候选根被契约表漂移守卫按设计拒绝复用（候选表新增两件派生产物）——
+    旧根不原地升级，采用结论按新表在新根重建。
   - [ ] **F7c · 输入、篇幅与恢复职责**：Stage2 改读正式 Stage1 章数组，去掉生产路径对
     `--source-json` 的依赖；明确 Stage1 hook_copy 的新消费者或 F8 退役边界。书级正文
     篇幅目标按“保留全书篇幅边界”从源 MainText 确定性派生，目标章数等于源章数；Hook

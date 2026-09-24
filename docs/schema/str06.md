@@ -129,12 +129,17 @@ candidate_workflow.json`：源输入身份变化与契约表漂移关闭式拒�
 零新购、不复制缓存、不续旧 session），候选根 `outputs/str06_f7a_candidate_20260924`
 与 F5e 交付逐字一致；仍不得据本节原地升级 F5e 根。
 
-引擎按 Stage2 source／names、Stage4 preserve／body_design／hook_design／bind／compile、
-Stage5 body／hook、Stage7 naming／assemble 拆 owner runner；复检用 `--check-only`。
-`tools/str06_workflow.py` 退为薄驱动，源证据切分归 owner；Stage2 输入来自正式 Stage1
-章数组。目标章数等于源章数，书级正文篇幅从 MainText 确定性派生；Hook 长度和章篇幅带
-使用正式配置并绑定消费身份，正文篇幅预算与付费调用额度分开。Stage1 hook_copy 的
-消费或退役边界必须显式闭合。子批次、验收、红账及删除条件只在 REQUIREMENTS 维护。
+owner runner 拆分已落地（F7b）：`novel/stages/str06/runner.py` 按候选节点表编排
+Stage2 source／names、Stage4 preserve／body_design／hook_design／bind／compile、
+Stage5 body／hook、Stage7 naming／assemble；每个 runner 的输入从盘面读——源 core 与
+BodyDesign 是正式派生产物（`stage2/compiled/book_extraction.json`、
+`stage4/design/body_design.json`），不再只活在内存；`tools/str06_workflow.py` 是薄驱动，
+复检用 `--check-only`／`--node`，不新造 check 节点。候选产物落盘保序（同正式
+`_render`）：盘上字符典序即 wire 序，prompt 与已购请求身份按字节复算。
+Stage2 输入改读正式 Stage1 章数组、目标章数等于源章数、书级正文篇幅从 MainText 确定性
+派生、Hook 长度和章篇幅带使用正式配置并绑定消费身份、正文篇幅预算与付费调用额度分开、
+Stage1 hook_copy 的消费或退役边界显式闭合——以上属 F7c。子批次、验收、红账及删除条件
+只在 REQUIREMENTS 维护。
 
 ## 扩容目标：四类 truth 与职责（隔离实装，正式接线待 F7/F8）
 

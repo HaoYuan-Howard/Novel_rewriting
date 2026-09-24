@@ -2627,7 +2627,10 @@ class Str06Repository:
             raise ProvenanceRefused(
                 f'{rel} 是已登记候选产物，但 repository 未附加上下文：'
                 '拒绝在无来源账的情况下写正式产物')
-        data = json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2,
+        # 保序序列化（同正式 store 的 _render，不 sort_keys）：盘上字符典序即
+        # wire 序，prompt 与已购请求身份按字节复算——排序会把 F5e 已购请求的
+        # 身份静默改掉，历史采用随之失配。
+        data = json.dumps(payload, ensure_ascii=False, indent=2,
                           allow_nan=False).encode('utf-8')
         # RC 与现役共用 OS 原子替换语义，不调用现役 Stage 实现或私有产物编排。
         fd, temporary = tempfile.mkstemp(prefix='.rc-', suffix='.tmp', dir=path.parent)
@@ -2673,6 +2676,21 @@ class Str06Repository:
         区分生产消费与检查，否则一次断言读会写进下一份产物的来源账。
         """
         return self.read_external(self.path(rel))
+
+    def read_model(self, rel: str):
+        """按候选产物表读一份已登记产物并校验为契约模型（owner runner 的输入口）。
+
+        剥掉盘上 `_provenance` 键再校验：来源账是盘上事实，不进计算用的模型
+        （模型不声明该字段时 `extra='forbid'` 会拒读；声明的模型也不在此路上
+        消费它）。读路径仍走 `read`——记账与过期拒绝照常。
+        """
+        spec = candidate_artifact(rel)
+        if spec is None or spec.model is None:
+            raise ProvenanceRefused(f'{rel} 未登记契约模型，不能按模型读')
+        data = self.read(rel)
+        if isinstance(data, dict):
+            data = {k: v for k, v in data.items() if k != '_provenance'}
+        return spec.model.model_validate(data)
 
     # ── INVALID 孪生与 _rounds 归档（F7a-2：路径与写入事务接正式机制） ──────
 
@@ -2738,7 +2756,7 @@ class Str06Repository:
     def _write_payload(self, rel: str, payload: Any) -> Path:
         path = self.path(rel)
         path.parent.mkdir(parents=True, exist_ok=True)
-        data = json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2,
+        data = json.dumps(payload, ensure_ascii=False, indent=2,
                           allow_nan=False).encode('utf-8')
         fd, temporary = tempfile.mkstemp(prefix='.rc-', suffix='.tmp', dir=path.parent)
         try:
