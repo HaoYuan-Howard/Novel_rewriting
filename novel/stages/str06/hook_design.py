@@ -7,6 +7,12 @@
 自洽、人称组合、称谓释放面、隐藏人物的 presentation 纪律。全部错误聚合返回，
 wire 原样进、不修改（I-24）。
 
+【withheld 指向不存在地址必须报错（F5e 重申）】
+与 design_compile 的确定性归一不同，这里不做静默剔除：withheld 指向该拍
+delta 之外的地址，可能意味着设计者对「事实在哪一拍建立」的真实误解（想把
+别处建立的事实藏在本材料）——静默丢弃会掩盖披露意图错误。报错后走 owner
+patch（提取已购 wire、最小修订、经 --wire-dir 采用留证），不走 compiler 猜测。
+
 【唯一 publisher】
 `publish_graph(body, hook)` 是完整 PresentationGraph 的唯一发布点——不存在
 「正文设计完成但 Hook 未定」的中间 canonical，也不用空 Hook 默认值冒充完成。

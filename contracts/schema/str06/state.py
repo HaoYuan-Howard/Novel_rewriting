@@ -50,8 +50,10 @@ class StateChange(StateAddress):
             raise ValueError('set 需要显式值（空字符串是合法空值）')
         if self.op != 'set' and self.value is not None:
             raise ValueError('unset/unknown 不得伪造值')
-        if (self.domain is EffectDomain.KNOWLEDGE) != (self.knowledge_mode is not None):
-            raise ValueError('knowledge 必须声明知情模式；其它域不得带模式')
+        # 知情模式只对「建立」有语义：unset/unknown 是解除与未知标记，无模式可言
+        # （F5e 真书 wire 实证——模型在 unknown 解除项上留 null；此为解除项的合法形态）。
+        if self.op == 'set' and (self.domain is EffectDomain.KNOWLEDGE) != (self.knowledge_mode is not None):
+            raise ValueError('knowledge 的 set 必须声明知情模式；其它域不得带模式')
         return self
 
 

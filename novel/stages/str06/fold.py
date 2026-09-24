@@ -38,8 +38,11 @@ class FoldedState:
             for _, e in sorted(self._visible().items()) if e.domain in domains)
 
     def entry_knowledge_view(self) -> tuple[KnowledgeEntry, ...]:
+        # 非 set（解除/未知）的 knowledge 项无知情模式可消费；mode 只在 set 上有
+        # 语义，这里按 inert 'known' 兜底，防 None 炸 KnowledgeEntry 构造。
         return tuple(KnowledgeEntry(
-            holder=e.holder, subjects=e.subjects, key=e.key, mode=e.knowledge_mode,
+            holder=e.holder, subjects=e.subjects, key=e.key,
+            mode=e.knowledge_mode or 'known',
             proposition=f'{e.key}={e.value}', status=e.op, established_by=e.established_by)
             for _, e in sorted(self._visible().items()) if e.domain is EffectDomain.KNOWLEDGE)
 

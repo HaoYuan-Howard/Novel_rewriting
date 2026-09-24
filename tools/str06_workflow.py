@@ -197,7 +197,9 @@ def _run_workflow(*, repository, chapters, ask, ask_text, ask_body, budget, thro
                                 identities=[i.model_dump(mode='json') for i in identities],
                                 constraints=constraints.model_dump(mode='json'))
     def design_compile(w):
-        return assemble_body_design(w, known_char_ids=set(chars.characters), constraints=constraints)
+        return assemble_body_design(
+            w, known_char_ids=set(chars.characters), constraints=constraints,
+            char_canonicals={c.canonical: cid for cid, c in chars.characters.items()})
     dw = ask('design', design_prompt, lambda w: design_compile(w)[1])
     body, errors = design_compile(dw)
     if errors:
@@ -286,7 +288,8 @@ def _run_workflow(*, repository, chapters, ask, ask_text, ask_body, budget, thro
         outcome = write_chapter(
             book_ir=writer_ir, graph=body, projection=projection,
             chapter_ordinal=ordinal, committed=committed, structure=chars.name_structure,
-            ask=lambda prompt, ordinal=ordinal: ask_body(_chapter_ordinal(ordinal), prompt))
+            ask=lambda prompt, ordinal=ordinal: ask_body(
+                f'body_{_chapter_ordinal(ordinal)}', prompt))
         repository.write(f'runtime/body_attempts_{_chapter_ordinal(ordinal)}.json',
                          {'attempts': [a._asdict() for a in outcome.attempts]})
         if outcome.prose is None or outcome.receipt is None:
@@ -456,6 +459,9 @@ def main():
     parser.add_argument('--book-call-ceiling', type=int,
                         help='本次运行允许的新购调用上限（锁内核对；缓存采用不计）')
     parser.add_argument('--book-title', default='')
+    parser.add_argument('--reasoning-effort', default='high',
+                        help='JSON/正文请求的思考档位；high 档 reasoning 可能耗尽 '
+                             'max_tokens 导致响应截断（F5e 实证），可显式降档')
     parser.add_argument('--check-only', action='store_true',
                         help='免费检查：只允许缓存采用与 wire 采用，不签发新调用')
     parser.add_argument('--yes', action='store_true')
@@ -522,7 +528,8 @@ def main():
     def build_request(owner, prompt, *, json_mode, system, temperature):
         from novel.llm.budget import enforce_request_budget
         request = ChatRequest(model=cfg.model, system=system, user=prompt,
-                              reasoning_effort='high', thinking=cfg.thinking_mode == 'on',
+                              reasoning_effort=args.reasoning_effort,
+                              thinking=cfg.thinking_mode == 'on',
                               json_mode=json_mode, max_tokens=65536, temperature=temperature)
         if not args.wire_dir:
             # 完整输入超限就阻断：精确 tokenizer + 官方 framing，不摘要、不截断。

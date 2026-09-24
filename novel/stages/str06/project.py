@@ -55,6 +55,11 @@ def project_context(*, scene_id: str, graph: BodyDesign,
     obmap = {o.obligation_id: o for o in binding.obligations}
     owned = tuple(obmap[oid] for oid in ids)
     reads = {r.address() for r in scene.state_reads}
+    # 场内自建立的地址不是入场消费：该事实在本场中途才成立，经 BeatIR/planned_delta
+    # 到达写手；把它当 entry 事实只会迫使 Design 用 unknown 初始项「垫底」（F5e 实证）。
+    # 未建立且场内也不自建的消费仍然报错——幻觉护栏不变。
+    scene_established = {e.address() for e in scene_plan.establishments}
+    reads = {a for a in reads if a not in scene_established}
     state = tuple(e for e in folded_prefix.entry_state_view(f'{scene_id}#start')
                   if e.address() in reads)
     knowledge = tuple(e for e in folded_prefix.entry_knowledge_view()
