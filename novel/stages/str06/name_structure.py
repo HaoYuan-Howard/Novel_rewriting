@@ -22,6 +22,8 @@ from contracts.schema.str06.source import (
 
 _PEOPLE_KEYS = frozenset({'family_id', 'given', 'aliases', 'surface_forms'})
 _FAMILY_KEYS = frozenset({'literal', 'forms'})
+#: wire 允许对象内冗余自报名（与 dict 键一致时归一，不一致报错）
+_FAMILY_OPTIONAL = frozenset({'family_id'})
 
 
 class ProbeFinding(NamedTuple):
@@ -59,8 +61,11 @@ def compile_name_structure(
     # 家族：键白名单、字面非空、源文出现、form 只用 {family}。
     for family_id, raw in raw_families.items():
         where = f'家族 {family_id}'
-        if not isinstance(raw, dict) or set(raw) - _FAMILY_KEYS:
+        if not isinstance(raw, dict) or set(raw) - _FAMILY_KEYS - _FAMILY_OPTIONAL:
             errors.append(f'{where} 携带未知字段或形状非法')
+            continue
+        if 'family_id' in raw and raw['family_id'] != family_id:
+            errors.append(f'{where} 对象内 family_id 与键不一致：{raw["family_id"]!r}')
             continue
         literal = raw.get('literal')
         if not isinstance(literal, str) or not literal:
@@ -144,10 +149,16 @@ def compile_name_structure(
                     f'{form!r} 渲染为 {rendered!r}')
     if errors:
         return None, errors
-    # schema 构造期复检全部跨段规则（渲染等式、覆盖、闭合）。
+    # schema 构造期复检全部跨段规则（渲染等式、覆盖、闭合）；先剥家族对象内
+    # 与键一致的冗余 family_id（wire 允许携带，canonical 不收）。
+    normalized = {
+        'families': {fid: {k: v for k, v in raw.items() if k != 'family_id'}
+                     for fid, raw in raw_families.items()},
+        'people': raw_people,
+    }
     from pydantic import ValidationError
     try:
-        return NameStructure.model_validate(wire), []
+        return NameStructure.model_validate(normalized), []
     except ValidationError as exc:
         return None, [f'name_structure 构造失败：{exc}']
 

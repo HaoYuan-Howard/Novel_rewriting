@@ -137,6 +137,21 @@ def test_name_structure_compile_green_and_refusals():
     assert any('未在源文中出现' in e for e in errors)
 
 
+def test_family_redundant_id_normalized_or_mismatch_rejected():
+    """F6c 真书证据：LLM 会在家族对象内冗余自报 family_id；与键一致时归一，
+    不一致时报错（wire 白名单不静默）。"""
+    core = _chars().core_view()
+    structure = _chars().name_structure
+    wire = structure.model_dump(mode='json')
+    wire['families']['fam_chen']['family_id'] = 'fam_chen'  # 冗余但一致
+    compiled, errors = compile_name_structure(wire, core, SRC)
+    assert compiled is not None and not errors, errors
+    assert 'family_id' not in compiled.families['fam_chen'].model_dump()
+    wire['families']['fam_chen']['family_id'] = 'fam_other'
+    _, errors = compile_name_structure(wire, core, SRC)
+    assert any('不一致' in e for e in errors)
+
+
 def test_surname_probe_reports_and_never_blocks():
     core = _chars().core_view()
     structure = _chars().name_structure
