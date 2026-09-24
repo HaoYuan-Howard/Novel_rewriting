@@ -1,89 +1,80 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""receipt —— 接受回执最小接口与 Fidelity 判定（F0 RC）。
+"""receipt —— 章级接受回执（F5 RC4）。
 
-【最小七字段】
-计划原文钉死的接受回执接口：scene_id / attempt_id / prose_sha256 /
-writer_context_sha256 / execution_slice_sha256 / judge_contract_version / status。
-`extra='forbid'` 同时拒绝两类混入：全书 plan hash、审计时间戳等无关 metadata
-（它们**不作为场景有效性的硬匹配条件**），以及任何「顺手」的修复字段。
+【为什么是章级】
+正文严格按章串行生成、一次输出整章自然正文；整章自由正文不提供可靠的场景
+边界，接受与提交的最小单位因此是章。场景级 SceneReceipt 与 FidelityVerdict
+随生产正文 Judge 一并退役（取消 Judge 是已确认产品方向；机械检查不证明章内
+揭示位置或逐场义务兑现，这一限制如实进入披露）。
 
 【绑定语义】
-`prose_sha256` 绑定**替换人名前**的具体正文——接受正文与交付正文分离：更换
-name_map 不使本回执失效，只影响 Stage7 交付结果。Context／slice 摘要绑定本场
-实际消费的规范化业务内容及必要契约身份（`ExecutionSlice` 是其唯一身份来源）。
+回执绑定：章序、全书 IR 身份（`book_ir_sha256`，IR 任何 Writer 可见变化使全
+书回执失效）、实际前文（`prior_text_sha256`，第 k 章正文改变使后缀失效）、
+改名前正文、被接受 attempt 的实际请求身份、协议与校验版本。无有效回执的
+文本不能作为前文或交付输入。`prose_sha256` 绑定改名前正文：换 NameMap 不使
+回执失效，只改变交付身份。
 
-【Judge 边界】
-FidelityVerdict 只验证并报告：`failure_origin ∈ {writer, upstream_ir,
-unverifiable}`（未知不伪装通过），没有 edit/repair 字段——Judge 不编辑 truth，
-修复回到 owner（Detection ≠ Ownership）。
+【语义边界】
+回执只记录机械结果；`semantic` 恒为 `unverified`——机械通过不升级为语义已验
+（I-42）。篇幅偏差是唯一允许在重写额度耗尽后披露放行的软检查
+（`length_disclosed`）；专名泄漏、空文、编码、包装与截断不能披露放行。
 """
 from __future__ import annotations
 
-from enum import Enum
+from typing import Literal
 
 from pydantic import Field, model_validator
 
 from contracts.schema.base import StrictModel
 
-
-class ReceiptStatus(str, Enum):
-    ACCEPTED = 'accepted'
-    REJECTED = 'rejected'
+__all__ = ['ChapterLengthDisclosure', 'ChapterReceipt']
 
 
-class FailureOrigin(str, Enum):
-    """Judge 的错误归属闭集：只诊断，不修。"""
+class ChapterLengthDisclosure(StrictModel):
+    """篇幅读数：计数排除空白；程序章号与 Hook 不在本章文本内。"""
 
-    WRITER = 'writer'
-    UPSTREAM_IR = 'upstream_ir'
-    UNVERIFIABLE = 'unverifiable'
-
-
-class SceneReceipt(StrictModel):
-    """场景接受回执（`stage5/acceptance/fidelity/scene_{nnn}.json` 的核心）。"""
-
-    scene_id: str = Field(min_length=1)
-    attempt_id: str = Field(min_length=1)
-    prose_sha256: str = Field(min_length=64, max_length=64)
-    writer_context_sha256: str = Field(min_length=64, max_length=64)
-    execution_slice_sha256: str = Field(min_length=64, max_length=64)
-    judge_contract_version: str = Field(min_length=1)
-    status: ReceiptStatus
+    char_count: int = Field(ge=0, description='非空白字符数')
+    target_chars: int = Field(ge=1)
+    band_low: int = Field(ge=0)
+    band_high: int = Field(ge=0)
+    within_band: bool
+    #: (char_count - target) / target；带内候选也可能带非零偏差读数。
+    deviation_ratio: float
 
     @model_validator(mode='after')
-    def _slice_matches_context_owner(self) -> 'SceneReceipt':
-        # receipt 不携带 Context 内容，但三份 hash 都必须是小写十六进制 64 位——
-        # 大写/短 hash 的混入在构造期即拒，防「看起来绑定了、实际对不上账」。
-        for name in ('prose_sha256', 'writer_context_sha256', 'execution_slice_sha256'):
-            value = getattr(self, name)
-            if any(c not in '0123456789abcdef' for c in value):
-                raise ValueError(f'{name} 必须是小写十六进制 SHA-256')
+    def _window(self) -> 'ChapterLengthDisclosure':
+        if self.band_low > self.band_high:
+            raise ValueError('篇幅带下界不得大于上界')
         return self
 
 
-class FidelityFinding(StrictModel):
-    """单条判定发现：保留 stage/node/item/context 的定位（I-36）。"""
+class ChapterReceipt(StrictModel):
+    """章级接受回执（`stage5/acceptance/body/ch{nn}.json`）。"""
 
-    code: str = Field(min_length=1)
-    scene_id: str = Field(min_length=1)
-    detail: str = Field(min_length=1)
-    origin: FailureOrigin
-
-
-class FidelityVerdict(StrictModel):
-    """Fidelity Judge 的完整判定：receipt + findings。
-
-    刻意没有 verdict 级「修复建议落地」字段；fix_layer 只报 writer|context 的
-    试点结论由 findings.origin 承载，上游归因交回写前链路。
-    """
-
-    receipt: SceneReceipt
-    findings: tuple[FidelityFinding, ...] = Field(default=(), min_length=0)
+    contract_version: Literal['str06-rc4'] = 'str06-rc4'
+    chapter_ordinal: int = Field(ge=1)
+    book_ir_sha256: str = Field(min_length=64, max_length=64)
+    prior_text_sha256: str = Field(min_length=64, max_length=64,
+                                   description='本章之前全部有效前文（改名前）的身份；第 1 章为空文本 SHA')
+    prose_sha256: str = Field(min_length=64, max_length=64,
+                              description='绑定改名前本章正文')
+    request_identity: str = Field(min_length=1, description='被接受 attempt 的实际请求身份')
+    protocol_version: str = Field(min_length=1)
+    renderer_version: str = Field(min_length=1)
+    validator_version: str = Field(min_length=1)
+    status: Literal['accepted', 'rejected']
+    mechanical_checks: tuple[str, ...] = Field(
+        min_length=1, description='validator 版本执行的机械检查项名单')
+    length: ChapterLengthDisclosure
+    #: 重写额度耗尽后按偏差最小提交的带外候选必须显式披露，不得静默当带内。
+    length_disclosed: bool = False
+    semantic: Literal['unverified'] = 'unverified'
 
     @model_validator(mode='after')
-    def _findings_bound_to_scene(self) -> 'FidelityVerdict':
-        stray = {f.scene_id for f in self.findings} - {self.receipt.scene_id}
-        if stray:
-            raise ValueError(f'finding 挂在了别的场景上：{sorted(stray)}')
+    def _hash_charset(self) -> 'ChapterReceipt':
+        for name in ('book_ir_sha256', 'prior_text_sha256', 'prose_sha256'):
+            value = getattr(self, name)
+            if any(c not in '0123456789abcdef' for c in value):
+                raise ValueError(f'{name} 必须是小写十六进制 SHA-256')
         return self

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""design —— BodyDesign／PresentationGraph v1（Target Design，source-blind）（F0／F6 RC）。
+"""design —— BodyDesign／PresentationGraph（Target Design，source-blind）（F5 RC4）。
 
 【source-blind 的类型层表达】
 Target Design 完全盲于 Source binding：本模块所有模型**没有** source_ref /
@@ -10,10 +10,20 @@ source_beat_ref / evidence_ref / source_intent_ref / source chapter 字段，且
 
 【结构对应终态裁决】
 TargetScene = SceneDriver{focal_actor, immediate_want, opposition, turn} +
-OrderedTargetBeats + Delivery；TargetBeat = Event + Participants + DramaticIntent +
-TargetDelta + DeliveryHint。归章（ChapterAssignment）由 Design 决定；Compiler 只
-验证章数、归属、顺序和完整性——其中「自洽」的部分（章号连续 1..N、场景全覆盖、
-每章非空）在构造期就拒，语义合理性仍归上游判断。
+OrderedTargetBeats + Delivery + RealizationBrief；TargetBeat = Event +
+Participants + DramaticIntent + TargetDelta + DeliveryHint。归章
+（ChapterAssignment.purpose）由 Design 决定；Compiler 只验证章数、归属、顺序和
+完整性——其中「自洽」的部分（章号连续 1..N、场景全覆盖、每章非空）在构造期就拒，
+语义合理性仍归上游判断。
+
+【导演说明与章节目的（F5 RC4）】
+`TargetScene.realization_brief`（本场怎样演出来：重心、理解推进、展开与压缩、
+转折显现、收束点、邻场衔接）与 `ChapterAssignment.purpose`（本章承担的核心变化，
+不单独增加事件或结果）是 Design 的必填、非空语义输出。两者只承载呈现方向；
+brief 中涉及关键行动、持久认知变化、秘密、承诺或因果条件的内容必须同时落在
+正式故事字段（driver/event/target_delta/surface_introductions）——compiler 只查
+形状与引用闭合，不用关键词规则声称发现自然语言冲突。旧 RC3 Design 缺这两项，
+明确拒读：不用空字符串兜底，也不由 compiler 补写（F5e 对现有样书重跑 Design）。
 
 【Hook 与正文同一份 graph（F6）】
 `BodyDesign` 承载正文选择；`PresentationGraph(BodyDesign)` 增加必填 `hook`。
@@ -78,6 +88,9 @@ class TargetScene(StrictModel):
     beats: tuple[TargetBeat, ...] = Field(min_length=1)
     delivery: SceneDelivery
     state_reads: tuple[StateAddress, ...]
+    #: 本场怎样演出来（导演说明）：场景重心、理解推进、展开与压缩、关键转折
+    #: 及收束、邻场衔接；不规定逐句正文。必填非空——缺省即拒读（RC4）。
+    realization_brief: str = Field(min_length=1)
 
     @model_validator(mode='after')
     def _unique_beat_ids(self) -> 'TargetScene':
@@ -88,9 +101,14 @@ class TargetScene(StrictModel):
 
 
 class ChapterAssignment(StrictModel):
-    """Scene 归章：输出保持 N 个非空目标章、连续章号 1..N。"""
+    """Scene 归章：输出保持 N 个非空目标章、连续章号 1..N。
+
+    `purpose` 是本章承担的核心变化（概括章内已设计的变化，不单独增加事件或
+    结果）——为一次整章写作提供方向；compiler 不从场景事件猜这一层语义（RC4）。
+    """
 
     chapter_ordinal: int = Field(ge=1)
+    purpose: str = Field(min_length=1)
     scene_ids: tuple[str, ...] = Field(min_length=1)
 
     @model_validator(mode='after')
@@ -101,11 +119,11 @@ class ChapterAssignment(StrictModel):
 
 
 class BodyDesign(StrictModel):
-    """正文选择（canonical body view，RC3）。
+    """正文选择（canonical body view，RC4）。
 
     Bind、Compile、Context 与 Guard 的类型都收窄到这里——Hook 不是正文
     写前链路的输入，也不增加义务分母。"""
-    contract_version: Literal['str06-rc3'] = 'str06-rc3'
+    contract_version: Literal['str06-rc4'] = 'str06-rc4'
     graph_id: str = Field(min_length=1)
     initial_state: tuple[TargetDelta, ...]
     initial_surfaces: tuple[SurfaceIntroduction, ...] = ()
@@ -169,7 +187,7 @@ class BodyDesign(StrictModel):
 
 
 class PresentationGraph(BodyDesign):
-    """完整 Target Design canonical artifact（目标 v1，RC3）。
+    """完整 Target Design canonical artifact（目标 v1，RC4）。
 
     `hook` 必填：没有「正文设计完成但 Hook 未定」的中间态 canonical——
     完整 graph 由唯一 publisher 发布（novel/stages/str06/hook_design.py）。

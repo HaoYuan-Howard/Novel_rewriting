@@ -1,11 +1,15 @@
-"""STR-06 隔离入口：source JSON → Stage2(+names) → Preserve/Design/Hook/Bind → planned 干跑
-→ Hook 设计/成文 → Naming → Assembly（F6）。
+"""STR-06 隔离入口：source JSON → Stage2(+names) → Preserve/Design/Hook/Bind → Compile+Guard+WriterIR
+→ 按章正文 → Hook 成文 → Naming → Assembly（F5/F6）。
 
 --wire-dir 显式采用已购/人工修订 wire，逐份记录字节 SHA；owner wire 缺失时走付费
-边界：没有同时 --yes --allow-source-export 就停在该 owner 并报告需要授权。
---run-dir 固定重用；同请求身份结果免费采用，零重复付费。
-此入口不发布 Stage5 body 接受回执；无 accepted body 时 Assembly 显式 not_ready
-（正文成文与组装归 F5），也不切换现役工作流（删除条件 STR-06-F8）。
+边界：同请求身份结果优先免费采用（缓存先于授权），缺失且未授权停在该 owner 并
+报告需要授权（PurchaseRequired）。--run-dir 固定重用。
+
+F5 起的腿边界：Stage4 完整发布 graph 与 WriterBookIR 后结束（零正文购买）；
+Stage5 完成正文（严格按章串行，--body-chapter-limit 限定前缀）与 Hook；
+Stage7 由真实 Assembly 产生交付（文件先落盘、manifest 最后提交）。
+--check-only 强制不新购：只做免费采用与免费重放。
+此入口不切换现役工作流（删除条件 STR-06-F8）。
 """
 from __future__ import annotations
 
@@ -18,7 +22,7 @@ from contracts.schema.str06 import OutputConstraints
 from contracts.schema.str06.hook import HookConstraints, HookReceipt
 from novel.config import load_config
 from novel.llm.ledger import CostLedger, ledger_path
-from novel.llm.str06_requests import PaidRequestSession, digest
+from novel.llm.str06_requests import PaidRequestSession, PurchaseRequired, digest
 from novel.llm.transport import ChatRequest, DeepSeekTransport
 from novel.store import Str06Repository
 from novel.stages.str06.source_compile import (
@@ -37,25 +41,20 @@ from novel.stages.str06.naming import (
     apply_names, check_residual, compile_name_map, compile_surface_replacements,
     naming_projection,
 )
-from novel.stages.str06.assembly import assemble_delivery, body_access
+from novel.stages.str06.assembly import (
+    assemble_delivery, build_delivery_manifest, chapter_access, verify_chapter_chain,
+)
 from novel.stages.str06.compile import compile_execution_plan
-from novel.stages.str06.fold import fold_accepted_prefix
-from novel.stages.str06.project import project_context
+from novel.stages.str06.book_ir import compile_writer_book_ir
+from novel.stages.str06.body_writer import (
+    AnsweredText, book_ir_sha256, prior_body_text, sha256_text, write_chapter,
+)
+from novel.stages.str06.checks import check_chapter_receipt
 from novel.stages.str06.guard import run_mechanical_guard
 from novel.stages.str06.prompts import (
     SYS, BOOK_PROMPT, CHAPTER_PROMPT, PRESERVE_RULES, DESIGN_RULES, BIND_RULES,
-    HOOK_DESIGN_RULES, HOOK_WRITER_SYSTEM, NAMES_RULES, NAMING_RULES, pack_prompt,
+    BODY_WRITER_SYSTEM, HOOK_DESIGN_RULES, HOOK_WRITER_SYSTEM, NAMES_RULES, NAMING_RULES, pack_prompt,
 )
-
-
-class AuthorizationRequired(Exception):
-    """owner wire 缺失且未授权付费：停在该 owner，报告需要授权。"""
-
-    def __init__(self, owner: str):
-        super().__init__(
-            f'{owner} 的 wire 缺失且未授权新调用；如需继续请同时提供 '
-            '--yes --allow-source-export（外发与付费分别授权）')
-        self.owner = owner
 
 
 def build_evidence(chapters):
@@ -76,47 +75,56 @@ def build_evidence(chapters):
     return evidence
 
 
+#: --through → 终态（body_chapter_limit 未覆盖全书或组装未就绪时另记状态）。
 FINAL_STATUS = {
     'stage2': 'names_applied',
     'stage4': 'planned_validated',
-    'stage5': 'hook_accepted_mechanical',
-    'stage7': 'assembly_not_ready',
+    'stage5': 'body_hook_accepted_mechanical',
+    'stage7': 'delivered',
 }
 
 
-def run_workflow(*, repository, chapters, ask, ask_text, budget=11000, through='stage4',
-                 provider='manual-adoption', model='unknown', book_title='',
-                 hook_constraints=None):
+def _chapter_ordinal(n: int) -> str:
+    return f'ch{n:02d}'
+
+
+def run_workflow(*, repository, chapters, ask, ask_text, ask_body, budget=11000,
+                 through='stage4', provider='manual-adoption', model='unknown',
+                 book_title='', hook_constraints=None, length_band=(0.6, 1.3),
+                 body_chapter_limit=None):
     """记录显式执行状态；失败保留旧产物供恢复，但不能仍宣称上次绿灯有效。"""
     hook_constraints = hook_constraints or HookConstraints(
         target_chars=280, hard_max_chars=360)
-    identity = digest({'chapters': chapters, 'budget': budget, 'through': through})
+    identity = digest({'chapters': chapters, 'budget': budget, 'through': through,
+                       'band': length_band, 'body_limit': body_chapter_limit})
     status_rel = 'runtime/workflow_status.json'
     repository.write(status_rel, {'status': 'running', 'input_sha256': identity,
                                   'accepted_body': False})
     try:
-        report = _run_workflow(repository=repository, chapters=chapters, ask=ask,
-                               ask_text=ask_text, budget=budget, through=through,
-                               provider=provider, model=model, book_title=book_title,
-                               hook_constraints=hook_constraints)
-    except AuthorizationRequired as exc:
+        report, final_status, accepted_body = _run_workflow(
+            repository=repository, chapters=chapters, ask=ask,
+            ask_text=ask_text, ask_body=ask_body, budget=budget,
+            through=through, provider=provider, model=model,
+            book_title=book_title, hook_constraints=hook_constraints,
+            length_band=length_band, body_chapter_limit=body_chapter_limit)
+    except PurchaseRequired as exc:
         repository.write(status_rel, {
             'status': 'needs_authorization', 'input_sha256': identity,
-            'accepted_body': False, 'blocked_owner': exc.owner,
-            'detail': str(exc)})
+            'accepted_body': False, 'blocked_owner': exc.owner, 'detail': str(exc)})
         raise
     except Exception as exc:
         repository.write(status_rel, {'status': 'failed', 'input_sha256': identity,
                                       'accepted_body': False, 'failure_kind': type(exc).__name__,
                                       'detail': str(exc)})
         raise
-    repository.write(status_rel, {'status': FINAL_STATUS[through], 'input_sha256': identity,
-                                  'accepted_body': False, 'through': through})
+    repository.write(status_rel, {'status': final_status, 'input_sha256': identity,
+                                  'accepted_body': accepted_body, 'through': through})
     return report
 
 
-def _run_workflow(*, repository, chapters, ask, ask_text, budget, through, provider,
-                  model, book_title, hook_constraints):
+def _run_workflow(*, repository, chapters, ask, ask_text, ask_body, budget, through,
+                  provider, model, book_title, hook_constraints, length_band,
+                  body_chapter_limit):
     stage_order = {'stage2': 0, 'stage4': 1, 'stage5': 2, 'stage7': 3}
     if through not in stage_order:
         raise ValueError(f'--through 取值面为 stage2|stage4|stage5|stage7：{through}')
@@ -168,7 +176,7 @@ def _run_workflow(*, repository, chapters, ask, ask_text, budget, through, provi
     repository.write('stage2/characters/characters.json', chars)
     if through == 'stage2':
         return {'chapters': len(compiled), 'fold_events': events,
-                'name_structure_people': len(structure.people)}
+                'name_structure_people': len(structure.people)}, FINAL_STATUS['stage2'], False
 
     def preserve_compile(w):
         return assemble_preserve(w, policy_id='preserve-default', policy_version=1,
@@ -207,26 +215,9 @@ def _run_workflow(*, repository, chapters, ask, ask_text, budget, through, provi
     if errors:
         raise ValueError(errors)
     repository.write('stage4/compiled/execution_plan.json', plan)
-    problems = []
-    for i, scene in enumerate(body.scenes):
-        folded = fold_accepted_prefix(plan.scenes[:i], initial=plan.initial_establishments)
-        context, slice_ = project_context(scene_id=scene.scene_id, attempt_id='planned-dry-run',
-                                          graph=body, plan=plan, binding=binding,
-                                          folded_prefix=folded, total_budget=budget)
-        errors = run_mechanical_guard(binding=binding, context=context, graph=body)
-        problems.extend(errors)
-        repository.write(f'stage4/context/{scene.scene_id}.json', context)
-        repository.write(f'stage4/compiled/slice_{scene.scene_id}.json', slice_)
-    guard_report = {'mode': 'planned-only', 'accepted_body': False, 'chapters': len(compiled),
-                    'scenes': len(body.scenes), 'obligations': len(binding.obligations),
-                    'guard_errors': problems, 'source_fold_events': events}
-    repository.write('stage4/acceptance/guard/report.json', guard_report)
-    if problems:
-        raise ValueError(problems)
-    if through == 'stage4':
-        return guard_report
 
     # ── Hook Design：Body Design 完成后的第二次语义请求；唯一 publisher 发布 ──
+    # （F5 起 Hook Design 属 Stage4 腿：完整 graph 与 WriterIR 一起发布。）
     projection = chars.name_projection()
     hook_design_prompt = pack_prompt(
         HOOK_DESIGN_RULES, book_title=book_title, design=body.model_dump(mode='json'),
@@ -245,15 +236,33 @@ def _run_workflow(*, repository, chapters, ask, ask_text, budget, through, provi
     if errors:
         raise ValueError(errors)
     repository.write('stage4/context/hook/hook.json', hook_context)
-    repository.write('runtime/workflow_status.json', {
-        'status': 'hook_context_compiled', 'accepted_body': False})
+
+    # ── WriterBookIR：任何正文购买前完成整本 Compile/Fold/Guard/IR ──
+    writer_ir = compile_writer_book_ir(graph=body, plan=plan, binding=binding,
+                                       total_budget=budget, length_band=length_band,
+                                       book_title=book_title)
+    problems = []
+    for chapter_ir in writer_ir.chapters:
+        for context in chapter_ir.scenes:
+            problems.extend(run_mechanical_guard(binding=binding, context=context, graph=body))
+    repository.write('stage4/ir/writer_book_ir.json', writer_ir)
+    guard_report = {'mode': 'planned-only', 'accepted_body': False, 'chapters': len(compiled),
+                    'scenes': len(body.scenes), 'obligations': len(binding.obligations),
+                    'guard_errors': problems, 'source_fold_events': events,
+                    'chapter_budgets': {c.chapter_ordinal: c.length_budget
+                                        for c in writer_ir.chapters}}
+    repository.write('stage4/acceptance/guard/report.json', guard_report)
+    if problems:
+        raise ValueError(problems)
+    if through == 'stage4':
+        return guard_report, FINAL_STATUS['stage4'], False
 
     # ── Hook Writer：单产 + 机械验；超长同 Context 有限重写（attempt 进请求身份） ──
     prose, attempts_log, attempt_identity = _write_hook(hook_context, ask_text)
     status = 'hook_accepted_mechanical' if prose is not None else 'hook_rejected'
     receipt = HookReceipt(
         hook_context_sha256=context_sha256(hook_context),
-        prose_sha256=_sha256_text(prose or ''),
+        prose_sha256=sha256_text(prose or ''),
         request_identity=attempt_identity,
         validator_version=HOOK_VALIDATOR_VERSION,
         status='accepted' if prose is not None else 'rejected',
@@ -262,13 +271,45 @@ def _run_workflow(*, repository, chapters, ask, ask_text, budget, through, provi
         repository.write_text('stage5/hook/hook.txt', prose)
     repository.write('stage5/hook/receipt.json', receipt)
     repository.write('runtime/hook_attempts.json', attempts_log)
-    repository.write('runtime/workflow_status.json', {
-        'status': status, 'accepted_body': False})
     if prose is None:
+        repository.write('runtime/workflow_status.json', {
+            'status': status, 'accepted_body': False})
         raise ValueError('Hook 写作在重写上限内未通过机械校验；先人工复核 HookContext')
+
+    # ── Body：严格按章串行；恢复从连续有效章前缀开始 ──
+    ir_sha = book_ir_sha256(writer_ir)
+    target_chapters = (min(body_chapter_limit, len(writer_ir.chapters))
+                       if body_chapter_limit is not None else len(writer_ir.chapters))
+    committed, committed_receipts = _committed_prefix(
+        repository, writer_ir, ir_sha, target_chapters)
+    for ordinal in range(len(committed) + 1, target_chapters + 1):
+        outcome = write_chapter(
+            book_ir=writer_ir, graph=body, projection=projection,
+            chapter_ordinal=ordinal, committed=committed, structure=chars.name_structure,
+            ask=lambda prompt, ordinal=ordinal: ask_body(_chapter_ordinal(ordinal), prompt))
+        repository.write(f'runtime/body_attempts_{_chapter_ordinal(ordinal)}.json',
+                         {'attempts': [a._asdict() for a in outcome.attempts]})
+        if outcome.prose is None or outcome.receipt is None:
+            repository.write('runtime/workflow_status.json', {
+                'status': 'body_rejected', 'accepted_body': False,
+                'chapter': ordinal,
+                'detail': '重写额度内无合法候选（硬检查未全过）；停止后续章'})
+            raise ValueError(f'第{ordinal}章在重写额度内无合法候选；先人工复核')
+        # 原子写正文 → 原子写章回执（提交完成）；拒绝候选留证在 attempts 记录。
+        repository.write_text(f'stage5/body/{_chapter_ordinal(ordinal)}.txt', outcome.prose)
+        repository.write(f'stage5/acceptance/body/{_chapter_ordinal(ordinal)}.json',
+                         outcome.receipt)
+        committed[ordinal] = outcome.prose
+        committed_receipts[ordinal] = outcome.receipt.model_dump(mode='json')
+    body_complete = len(committed) == len(writer_ir.chapters)
     if through == 'stage5':
+        status = 'body_hook_accepted_mechanical' if body_complete else 'body_partial'
         return {'hook_chars': len(prose), 'materials': len(hook_context.materials),
-                'pov': hook_context.pov.model_dump(mode='json')}
+                'pov': hook_context.pov.model_dump(mode='json'),
+                'body_chapters': sorted(committed), 'body_complete': body_complete,
+                'length_disclosed_chapters': [
+                    k for k, r in committed_receipts.items() if r.get('length_disclosed')],
+                }, status, body_complete
 
     # ── Naming：只消费名称投影；Apply 与装配 ──
     naming_prompt = pack_prompt(NAMING_RULES, book_title=book_title,
@@ -291,29 +332,84 @@ def _run_workflow(*, repository, chapters, ask, ask_text, budget, through, provi
         raise ValueError(f'Hook 改名残留：{residual}')
     repository.write_text('runtime/delivery/hook_renamed.txt', renamed_hook)
 
-    # ── Assembly：无 accepted body ⇒ 显式 not_ready（F5 接管整书组装）；
-    # stage7/final/ 不落任何产物，组装报告只进 runtime/delivery/。 ──
-    access = body_access(_scene_ids(body), {})
+    # ── Assembly：章级回执链核对 → 改名 → 最终 TXT 先落盘 → manifest 最后提交 ──
+    chapter_prose = {k: committed[k] for k in sorted(committed)}
+    access = chapter_access(range(1, len(writer_ir.chapters) + 1), committed_receipts)
+    chain_problems = verify_chapter_chain(committed_receipts, chapter_prose,
+                                          book_ir_sha256=ir_sha)
+    body_text = prior_body_text(chapter_prose) if chapter_prose else None
+    hook_sha = sha256_text(prose)
     outcome = assemble_delivery(
-        body_text=None, body=access, hook_prose=prose,
+        body_text=body_text, body=access, hook_prose=prose,
         hook_receipt=receipt.model_dump(mode='json'),
         hook_context_sha256=context_sha256(hook_context),
         replacements=replacements, kept_literals=kept_literals)
-    report = {'mode': 'hook+naming', 'accepted_body': False, 'chapters': len(compiled),
+    report = {'mode': 'body+hook+naming', 'accepted_body': access.ready and not chain_problems,
+              'chapters': len(compiled), 'committed_chapters': sorted(committed),
               'scenes': len(body.scenes), 'obligations': len(binding.obligations),
               'guard_errors': problems, 'source_fold_events': events,
+              'chain_problems': chain_problems,
               'hook': {'chars': len(prose), 'renamed_chars': len(renamed_hook),
                        'materials': len(hook_context.materials),
                        'replacements': len(replacements), 'kept': len(kept_literals)},
               'assembly': {'status': outcome.status, 'reason': outcome.reason,
                            'delivery_identity': outcome.delivery_identity}}
+    if outcome.status == 'ready':
+        final_rel = f'stage7/final/{book_title or "book"}_rewriting.txt'
+        # 文件先落盘，manifest 最后提交：消费者核对 manifest 才算就绪。
+        repository.write_text(final_rel, outcome.delivery_bytes.decode('utf-8'))
+        manifest = build_delivery_manifest(
+            delivery_identity=outcome.delivery_identity,
+            final_text_sha256=repository.file_sha256(repository.path(final_rel)),
+            receipts=committed_receipts, chapter_prose=chapter_prose,
+            hook_prose_sha256=hook_sha, name_map_sha256=repository.file_sha256(
+                repository.path('stage7/naming/name_map.json')),
+            total_length_budget=budget)
+        repository.write('stage7/final/delivery_manifest.json', manifest)
+        repository.write('runtime/delivery/assembly_report.json', report)
+        return report, 'delivered', True
     repository.write('runtime/delivery/assembly_report.json', report)
-    return report
+    return report, 'assembly_not_ready', False
 
 
-def _sha256_text(text: str) -> str:
-    import hashlib
-    return hashlib.sha256(text.encode('utf-8')).hexdigest()
+def _committed_prefix(repository, writer_ir, ir_sha, target_chapters):
+    """恢复：从连续有效章前缀装载已提交正文与回执；首个断裂处停止。
+
+    回执绑定当前全书 IR 与实际前文；正文文件与回执 prose_sha256 必须逐字一致。
+    无有效回执的文本不能作为前文（崩溃窗口：正文已写、回执未写 → 本章重做）。
+    """
+    committed: dict[int, str] = {}
+    receipts: dict[int, dict] = {}
+    for ordinal in range(1, target_chapters + 1):
+        rel_receipt = f'stage5/acceptance/body/{_chapter_ordinal(ordinal)}.json'
+        rel_prose = f'stage5/body/{_chapter_ordinal(ordinal)}.txt'
+        try:
+            receipt = repository.read(rel_receipt)
+        except FileNotFoundError:
+            break
+        try:
+            prose = repository.read_text(rel_prose)
+        except FileNotFoundError:
+            break
+        prior = prior_sha(committed)
+        problems = check_chapter_receipt(
+            _receipt_model(receipt), book_ir_sha256=ir_sha,
+            prior_text_sha256=prior, prose_sha256=sha256_text(prose))
+        if problems:
+            break
+        committed[ordinal] = prose
+        receipts[ordinal] = receipt
+    return committed, receipts
+
+
+def prior_sha(committed: dict[int, str]) -> str:
+    from novel.stages.str06.body_writer import prior_body_text
+    return sha256_text(prior_body_text(committed))
+
+
+def _receipt_model(receipt: dict):
+    from contracts.schema.str06.receipt import ChapterReceipt
+    return ChapterReceipt.model_validate(receipt)
 
 
 def _write_hook(hook_context, ask_text):
@@ -324,8 +420,8 @@ def _write_hook(hook_context, ask_text):
     for attempt in range(1 + MAX_REWRITES):
         prompt = (build_hook_user_prompt(hook_context) if attempt == 0
                   else build_rewrite_user_prompt(hook_context, errors))
-        identity = digest({'owner': 'hook_writer', 'prompt': prompt})
-        prose, response_errors = ask_text('hook_writer', prompt)
+        prose, response_errors, answered = ask_text('hook_writer', prompt)
+        identity = answered
         if prose is None:
             errors = response_errors or ['响应为空']
             attempts.append({'attempt': attempt + 1, 'chars': 0, 'errors': errors})
@@ -342,10 +438,6 @@ def _kept_surfaces(chars, char_ref: str) -> set[str]:
     return {s for s, form in person.surface_forms.items() if form is not None}
 
 
-def _scene_ids(body):
-    return [s.scene_id for s in body.scenes]
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--source-json', type=Path, required=True)
@@ -357,12 +449,24 @@ def main():
     parser.add_argument('--budget', type=int, default=11000)
     parser.add_argument('--hook-target-chars', type=int, default=280)
     parser.add_argument('--hook-hard-max', type=int, default=360)
+    parser.add_argument('--body-band-low', type=float, default=0.6)
+    parser.add_argument('--body-band-high', type=float, default=1.3)
+    parser.add_argument('--body-chapter-limit', type=int,
+                        help='只生成前 N 章（前缀式）；缺省为全书')
+    parser.add_argument('--book-call-ceiling', type=int,
+                        help='本次运行允许的新购调用上限（锁内核对；缓存采用不计）')
     parser.add_argument('--book-title', default='')
+    parser.add_argument('--check-only', action='store_true',
+                        help='免费检查：只允许缓存采用与 wire 采用，不签发新调用')
     parser.add_argument('--yes', action='store_true')
     parser.add_argument('--allow-source-export', action='store_true')
     args = parser.parse_args()
     if args.hook_target_chars > args.hook_hard_max:
         raise ValueError('--hook-target-chars 不得大于 --hook-hard-max')
+    if not 0 < args.body_band_low < args.body_band_high:
+        raise ValueError('--body-band-low/high 必须满足 0 < low < high')
+    if args.check_only and (args.yes or args.allow_source_export):
+        raise ValueError('--check-only 不签发新调用：去掉 --yes/--allow-source-export 再跑')
     base = os.environ.get('NOVEL_OUTPUT')
     if not base:
         raise ValueError('NOVEL_OUTPUT 未设置：没查、未运行')
@@ -391,8 +495,8 @@ def main():
     ledger = CostLedger(path=ledger_path(Path(base)))
     session = PaidRequestSession(repository, ledger, DeepSeekTransport(cfg), yes=args.yes,
                                  allow_source_export=args.allow_source_export,
-                                 provider=cfg.base_url)
-    authorized = args.yes and args.allow_source_export
+                                 provider=cfg.base_url,
+                                 book_call_ceiling=args.book_call_ceiling)
 
     def adopt(owner, path, validate):
         if args.repair_manifest and (
@@ -415,15 +519,21 @@ def main():
         path = args.wire_dir / f'{owner}_wire.json'
         return path if path.exists() else None
 
+    def build_request(owner, prompt, *, json_mode, system, temperature):
+        from novel.llm.budget import enforce_request_budget
+        request = ChatRequest(model=cfg.model, system=system, user=prompt,
+                              reasoning_effort='high', thinking=cfg.thinking_mode == 'on',
+                              json_mode=json_mode, max_tokens=65536, temperature=temperature)
+        if not args.wire_dir:
+            # 完整输入超限就阻断：精确 tokenizer + 官方 framing，不摘要、不截断。
+            enforce_request_budget([request], node='str06', purpose=owner)
+        return request
+
     def ask(owner, prompt, validate):
         path = wire_path(owner)
         if path is not None:
             return adopt(owner, path, validate)
-        if not authorized:
-            raise AuthorizationRequired(owner)
-        request = ChatRequest(model=cfg.model, system=SYS, user=prompt, reasoning_effort='high',
-                              thinking=cfg.thinking_mode == 'on', json_mode=True,
-                              max_tokens=65536, temperature=0.3)
+        request = build_request(owner, prompt, json_mode=True, system=SYS, temperature=0.3)
         return session.ask(owner, request, validate)
 
     def ask_text(owner, prompt):
@@ -433,21 +543,36 @@ def main():
             prose = (raw.get('prose') or '').strip() if isinstance(raw, dict) else ''
             if not prose:
                 raise ValueError(f'{owner} wire 文本为空')
-            return prose, []
-        if not authorized:
-            raise AuthorizationRequired(owner)
-        request = ChatRequest(model=cfg.model, system=HOOK_WRITER_SYSTEM, user=prompt,
-                              reasoning_effort='high', thinking=cfg.thinking_mode == 'on',
-                              json_mode=False, max_tokens=65536, temperature=0.7)
-        return session.ask_text(owner, request)
+            return prose, [], 'wire-adoption'
+        request = build_request(owner, prompt, json_mode=False, system=HOOK_WRITER_SYSTEM,
+                                temperature=0.7)
+        answered = session.ask_answered(owner, request)
+        return answered.text, answered.errors, answered.identity
+
+    def ask_body(owner, prompt):
+        path = wire_path(owner)
+        if path is not None:
+            raw = adopt(owner, path, lambda w: [])
+            prose = (raw.get('prose') or '').strip() if isinstance(raw, dict) else ''
+            if not prose:
+                raise ValueError(f'{owner} wire 文本为空')
+            return AnsweredText(text=prose, finish_reason=None, identity='wire-adoption',
+                                cached=True)
+        request = build_request(owner, prompt, json_mode=False, system=BODY_WRITER_SYSTEM,
+                                temperature=0.7)
+        answered = session.ask_answered(owner, request)
+        return AnsweredText(text=answered.text, finish_reason=answered.finish_reason,
+                            identity=answered.identity, cached=answered.cached)
 
     print(run_workflow(repository=repository, chapters=chapters, ask=ask, ask_text=ask_text,
-                       budget=args.budget, through=args.through,
+                       ask_body=ask_body, budget=args.budget, through=args.through,
                        provider='manual-adoption' if args.wire_dir else cfg.base_url,
                        model='unknown' if args.wire_dir else cfg.model,
                        book_title=args.book_title,
                        hook_constraints=HookConstraints(target_chars=args.hook_target_chars,
-                                                         hard_max_chars=args.hook_hard_max)))
+                                                         hard_max_chars=args.hook_hard_max),
+                       length_band=(args.body_band_low, args.body_band_high),
+                       body_chapter_limit=args.body_chapter_limit))
 
 
 if __name__ == '__main__':

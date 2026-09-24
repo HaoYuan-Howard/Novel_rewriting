@@ -38,8 +38,9 @@ F8 迁移包分流删除时同步删除此登记，并让正式 Stage 与其消�
 
 ## 当前状态与下一步
 
-**下一批：F5。顺序：F5 → F3b → F7 → F8（F4R、F6 已全部完成）。**
-当前隔离链版式为 `str06-rc3`；下表是既有证据摘要，不是本次重新运行或整书质量结论。
+**下一批：F5e（付费，待授权）。其后顺序：F3b → F7 → F8（F4R、F6、F5a–F5d 已全部完成）。**
+当前隔离链版式为 `str06-rc4`（F5 起 Design/WriterIR/章级回执新形状；Hook、NameMap
+等未变形状契约仍为 rc3 标签）；下表是既有证据摘要，不是本次重新运行或整书质量结论。
 
 | 已有阶段 | 状态与证据边界 |
 |---|---|
@@ -49,22 +50,26 @@ F8 迁移包分流删除时同步删除此登记，并让正式 Stage 与其消�
 | F4 | 单书 RC1 planned-only 干跑：28 场、零模型调用、计划连续性可重放；不是 accepted body 或阅读验收；第二本仍待 F3b |
 | RC2 | Source／Brief／Design／Binding／Compile／Context 的真书审阅修复与隔离入口已落；11 章、69 义务、28 场，零新增模型调用；定向 96/96、契约与路径 484/484；仅改 ob55 满足条件时仅 s27 消费身份变化 |
 | F4R | 红账三项清偿（2026-09-24，零模型调用）：uploads 死引用删除后 test_store 恢复收集 161 项（HEAD 上是 collection error）；深导入 grandfather 补账 11 条（分母 77→88，stale 核对无消失边）；`_SHAPE_BREAKS` 补三条 v3 账。定向组合 485/485 绿（upload_autostart／layering／artifact_versions／stage0_revisions／stage01／stage2_characters）。test_store 87/161 绿，74 失败是修复收集后显形的既存夹具脱节（非本批引入），见 F4R 条目遗留登记 |
-| F6 | Hook 链与 Stage7 终态契约＋引擎＋免费反例（2026-09-24，F6c 另付 4 次）：RC3（Characters 增 name_structure、graph 必填 hook、投影族六族、家族 +stage5/hook、stage7/naming、stage7/final）；Hook 唯一 publisher、确定性 HookContext、hook_writer 机械验＋同 Context 有限重写、NameMap v5／ApplyNames／Assembly、Stage2 names 窄调用与名称投影、迁移包依赖规则 AST 真实执行、F6d 退役登记 106 项双向对账。定向 str06＋layering 171/171、契约 §9.5 五文件 426/426；RC2 wire 在 RC3 代码下重编译：28 场 WriterContext（去版本/身份）与 replay 盘面逐字一致、checkpoint sha 不变。全量非 corpus 回归 4902 通过、420 失败/错误与 HEAD 基线逐项一致（零新增失败，全部为分支既有账，含 test_store 74 与两个既有收集错误文件，已忽略不计入）。F6c 付费冒烟待单独授权 |
+| F6 | Hook 链与 Stage7 终态契约＋引擎＋免费反例（2026-09-24，F6c 另付 4 次）：RC3（Characters 增 name_structure、graph 必填 hook、投影族六族、家族 +stage5/hook、stage7/naming、stage7/final）；Hook 唯一 publisher、确定性 HookContext、hook_writer 机械验＋同 Context 有限重写、NameMap v5／ApplyNames／Assembly、Stage2 names 窄调用与名称投影、迁移包依赖规则 AST 真实执行、F6d 退役登记 106 项双向对账。定向 str06＋layering 171/171、契约 §9.5 五文件 426/426；RC2 wire 在 RC3 代码下重编译：28 场 WriterContext（去版本/身份）与 replay 盘面逐字一致、checkpoint sha 不变。全量非 corpus 回归 4902 通过、420 失败/错误与 HEAD 基线逐项一致（零新增失败，全部为分支既有账，含 test_store 74 与两个既有收集错误文件，已忽略不计入）。F6c 付费冒烟已完成（见批次勾选） |
+| F5a–F5d | 按章成文链免费面（2026-09-24，零模型调用）：RC4（Design 增 `realization_brief`/`purpose` 必填、双视图职责重划＋`BeatIR` 逐拍定位、`WriterBookIR`、`ChapterReceipt` 章级回执、家族 +stage4/ir、stage5/body、stage5/acceptance/body，删场景正文旧家族；生产正文 Judge 与场景回执/Fidelity 退役）；章预算 largest-remainder 确定性分配；确定性 renderer＋版本化 Writer 协议（六层阅读面、lineage 不进阅读面、完整 IR＋完整前文进请求、超限由精确 tokenizer 容量闸阻断）；`body_checks` 章级机械验（硬失败不能披露放行，只有篇幅带可披露）；按章 Writer 同输入有限重写＋确定性候选选择（偏差最小、平局取较晚）；工具层缓存先于授权、`--book-call-ceiling` 锁内准入、`--check-only`、`--body-chapter-limit`；Stage7 章回执链核对、TXT 先落盘 manifest 最后提交、全书 ±10% 偏差读数。str06 定向 156/156、契约 §9.5 五文件＋layering＋选测＋版本账全绿。真实成文与阅读验收归 F5e |
 
 RC2 修复覆盖此前“第二轮再优化”的暂缓安排，不能重新把已修问题记作待办。当前正式
 编译输入是 D/G；不从 Preserve checkpoint 裸读补语义。`tools/str06_workflow.py` 取代
 旧 `_tmp_str06_*` 执行 harness，旧脚本只作参考。RC1 形状不自动迁入 RC2。
 
-仍未验证：完整工程回归、test_store 既存夹具脱节的修复、第二本表达力、真实新购 token 对比、Stage5 成文、
-F6c 的 Hook 真实设计与成文（机械通过不证明不剧透、遵守材料顺序、POV 正确或吸引人）、
-NameMap v5 真实赋值及整书交付，及 Golden。原 Prepare 消费干跑和 Hook／Stage7 付费原型
-只能证明当时范围。Stage5 正文及其回执不存在时，Assembly 明确未就绪，不制造成功状态。
+仍未验证：完整工程回归、test_store 既存夹具脱节的修复、第二本表达力、真实新购 token 对比、
+F5e 的 RC4 Stage4 真实设计与按章成书（导演说明/章节目的的真实语义质量、正文成文质量、
+机械通过不证明章内揭示位置与逐场义务兑现）、F6c 的 Hook 真实设计与成文（机械通过不
+证明不剧透、遵守材料顺序、POV 正确或吸引人）、NameMap v5 真实赋值及整书交付，及
+Golden。原 Prepare 消费干跑、F6c 冒烟和 Hook／Stage7 付费原型只能证明当时范围；
+F6c 冒烟的 RC3 design 产物在 RC4 下拒读，不作为 F5e 输入。正文或章级回执不存在时，
+Assembly 明确未就绪，不制造成功状态。
 
 ## 批次交付与验收
 
-F6 先闭合 Hook／Naming 接口，F5 有 accepted body 后补全书交付与连读；F3b 补第二本
-表达力与干跑，F8 仍须两本成书 Golden。下列勾选项除已完成的 F4R 外都是待实施，
-付费点分别授权。
+F5a–F5d 已闭合按章成文的契约、引擎与免费验证（正文接受与交付待 F5e 真书验证）；
+F3b 补第二本表达力与干跑，F8 仍须两本成书 Golden。下列勾选项除已完成的
+F4R／F6／F5a–F5d 外都是待实施，付费点分别授权。
 
 - [x] **F4R · 红账清偿与 Stage0 收尾（免费，先行）**（2026-09-24 完成，零模型调用）：
   - 修复 `novel/orchestrator/uploads.py`：删除对已删除 `Stage0CandidatePlan`／
@@ -90,8 +95,8 @@ F6 先闭合 Hook／Naming 接口，F5 有 accepted body 后补全书交付与�
     `('stale','consumed_changed')≠('fresh','match')`、零星 Characters v3 波及
     （KeyError 'aliases'、EvidenceBin 校验）。修复须更新夹具至现役契约且不缩分母，
     归 store 与退役路径清理批次（F7 接正式 Store 时核对、F8 清账前必须归零）。
-- [ ] **F6 · Hook 链与 Stage7 终态**（取代旧“仅消费适配”范围；F6a/F6b/F6d 已于
-  2026-09-24 完成并提交到隔离分支，零模型调用；F6c 待单独授权）：
+- [x] **F6 · Hook 链与 Stage7 终态**（取代旧“仅消费适配”范围；F6a/F6b/F6c/F6d
+  已于 2026-09-24 全部完成并提交到隔离分支，其中 F6c 用户授权付费 4 次）：
   - [x] F6a 契约与免费反例：Hook 必要选择进正式 Design（PresentationGraph.hook 必填、
     publish_graph 唯一发布），删除 Context 后免费重建字节一致；source-hook 混入、悬空
     引用、误载必保义务、跨场冷开乱序、隐藏身份三层防线（称谓释放／presentation 字面/
@@ -130,19 +135,61 @@ F6 先闭合 Hook／Naming 接口，F5 有 accepted body 后补全书交付与�
     登记项必须真实存在、现役面（NODES/ARTIFACT_PATHS stage6 键、stage6 引擎与 schema
     文件、纯 Stage6 测试、前端 Stage6 页、/stage6 路由）必须全部在册。已退役判官不算
     新增成果。
-- [ ] **F5 · Body Realization**：
-  - F5a/F5b：定版 SceneReceipt 与 judge_contract_version，pending／accepted／rejected／
-    unknown 分开；串行 Project→Guard→Write→Judge→Commit→Apply planned_delta。
-    origin=writer 的机械长度失败同 Context 有限重写，upstream_ir 回对应 owner，
-    unverifiable 保持 unver；接入有限尾文及实际请求身份、连续有效前缀恢复、历史采用，
-    窄修复的 directly_affected＋entry_sensitive_closure；正文 Assemble 唯一 producer。
-    验收章／场字数预算来自 Design 权重投影并遵守全书篇幅边界，不对照同号源章长度。
-  - F5c/F5d：隔离入口接通 `--through stage5`，逐场 ledger、连续性与尾文重放、书级
-    budget 预留；迁入试点 labeled 11 条和下方登记的两类 skip 恢复反例后删 skip；
-    WriterIR 接管 Stage5 的旧 PlanChapters 消费，删除条件见恢复与退役表。
-  - F5e：书1 28 场约 56 次基础 writer＋judge 调用，独立授权；原批次先读连续两三场
-    再继续全书。完成后连接 F6，验证回执、最终盘面和重放；合读 Hook＋开头＋所选材料
-    对应场景，检查重复开场、提前剧透、语气错配与悬念兑现，并预演六维阅读 rubric。
+- [ ] **F5 · 按章成文与完整交付（F5a–F5d 已于 2026-09-24 完成并提交到隔离分支，
+  零模型调用；F5e 待单独授权）**：
+  - [x] F5a 契约与 renderer：Design 升 RC4——`TargetScene.realization_brief` 与
+    `ChapterAssignment.purpose` 必填非空，旧 RC3 Design 明确拒读（不用空串兜底、
+    不由 compiler 补写）；`realization_brief` 只承载呈现方向，关键行动/持久认知
+    变化/秘密/承诺/因果条件必须同时落在正式故事字段。双视图职责重划：
+    `VerificationIR` 补 `BeatIR` 逐拍定位与 `prohibitions`，`WriterBrief` 只投影
+    呈现（事实清单不再重复进 Brief）；`WriterBookIR = BookBrief + ChapterIR[]`
+    唯一落盘 `stage4/ir/writer_book_ir.json`，BookBrief 只做确定性导航与称谓释放
+    位置投影（不调 LLM 总结、不取 POV 众数、不补造统一文风）；章预算按场景权重
+    largest-remainder 整数分配、总和恰等于书级目标。确定性 renderer 六层阅读面
+    （协议→规划参考→完整前文→章目的→本章场景→交付要求），完整 IR 与完整前文
+    真实进请求，lineage/源拓扑/审计字段剥离，同输入字节一致；协议/renderer/prompt
+    各自版本化进请求身份。`ChapterReceipt` 章级回执绑定章序、全书 IR、实际前文、
+    改名前正文、请求身份、协议与校验版本；场景回执与 Fidelity 判定随取消的生产
+    正文 Judge 退役。免费反例：canonical 缺失拒绝、brief 原样投影、双视图同源、
+    逐拍事实不遗漏、知情/否定/释放位置可追溯、未来章 brief 修改使请求变化、
+    前文修改使请求变化、Hook/NameMap 不扩大正文失效。
+  - [x] F5b 按章 Writer 与机械控制：`body_checks` 章级机械验（非空/编码/包装/
+    未释放专名/篇幅带；截断按 finish_reason 折算 typed 错误）——硬失败不能披露
+    放行，只有篇幅偏差可在额度耗尽后披露；`body_writer` 同 IR 同前文＋上一稿＋
+    typed 错误的有限重写（首次+再 2 次，attempt 进请求身份）、确定性候选选择
+    （硬检查全过优先，耗尽后按相对目标偏差最小、平局取较晚）、无合法候选即停止
+    后续章。免费反例覆盖全部分支与篇幅披露形状。
+  - [x] F5c 真实入口与恢复：`tools/str06_workflow.py` Stage4 腿完整发布 graph 与
+    WriterIR 后结束（零正文购买），Stage5 腿按章串行成文＋Hook，Stage7 由真实
+    Assembly 产生交付；`--body-chapter-limit`（前缀式）、`--check-only`（免费，
+    只允许缓存/wire 采用）、`--book-call-ceiling`（锁内按准入凭据累计，
+    pending/unknown 不释放额度，缓存采用不耗额度）、`--body-band-low/high`；
+    付费边界修复为「缓存先于授权拒绝」（`PurchaseRequired` 停在对应 owner 写
+    needs_authorization）；提交顺序=原响应耐久→检查→候选→原子写正文→原子写
+    章回执；恢复从连续有效章前缀装载，回执绑定当前 IR/前文/正文字节三方核对，
+    崩溃窗口（响应已存/正文已写回执未写/manifest 未提交）免费重放闭合。
+    Stage7：章回执链核对（逐章 IR 身份+前文链+正文 hash）、ApplyNames 单遍替换、
+    TXT 先落盘、manifest 最后提交（含逐章篇幅读数与全书 ±10% 偏差无条件报告、
+    机械范围与未评语义分开披露）。
+  - [x] F5d 免费验证与文档契约检查：经真实 repository＋请求边界（fake transport）
+    跑到最终成书；同根恢复零新调用、交付字节一致；IR 变化（含未来章 brief）使
+    正文按新请求身份重购、hook_writer/naming 缓存命中不重购；额度上限显式停止。
+    str06 定向 156/156、契约 §9.5 五文件＋layering＋test_selection＋
+    artifact_versions 全绿；`tests/test_str06_body.py` 已登记 suite_catalog。
+    原 Stage4 三条 skip 继续归 F7 的 Binding 恢复、owner 停止和无进展停止职责
+    迁移，F8 核对后删除；历史 11 条 labeled 断言保留为质量反例，不计作新 Writer
+    已通过。
+  - [ ] F5e 重新执行 Stage4 与按章成书（付费，独立授权）：现有样书重跑 Stage4
+    Design（故事设计与导演说明同一次请求形成，不给旧设计定点补 brief）；建立
+    RC4 验收候选 run，后续生成与恢复固定该目录。基础新调用 ≈15 次（Body Design、
+    Binding、Hook Design、Hook Writer 各 1＋正文 11 章；Source/Preserve/Naming
+    能否免费采用先核对实际输入），正文最多另有 22 次机械重写，Hook 重写与其它
+    失败另列。分步报价与授权：① 新 Stage4（检查故事设计、场景导演说明与章节
+    目的，特别关注 brief 是否新增未登记事实、是否只剩通用形容词）；② Hook 与
+    前三章（按实际 renderer 输入重新计量容量和费用，生成后连读）；③ 剩余正文
+    与交付（核验完整盘面及零新购重放）。阅读沿用六维 rubric 并具体检查机械
+    复述、每场重新开场、旁白宣布 effects、压掉关键行动、对白推进与 brief 指导
+    下的展开压缩；合读 Hook＋开头＋取材场景。
 - [ ] **F3b · 第二本 artifact-only smoke**：第二本 Stage2 全链＋F3 链约 15+ 次付费，
   独立授权；补 F4 第二本干跑并验证表达力多样性。选书须服务 F8 的长篇或多线覆盖，
   具体书目经显式 corpus 路径核实；artifact-only 不算第二本成书验收。
@@ -209,9 +256,10 @@ derived 仅重算受影响 slice，不能以保护已购结果为由忽略真源
 Stage7 改名不回写 Stage5，交付可确定性重放、残留判断遵守 claimed/kept；Stage6 退役
 实际到达节点、API/UI 和旧盘面拒读。旧 Prepare 坐标分离证据留在历史记录，不冒充新链验收。
 
-写作验收：Writer 在既有戏剧驱动／voice／hint 内落实可信的欲望、阻力、选择与后果；
-有限前文尾文辅助语言、动作与情绪衔接，不能从正文推导新语义状态。F5 先读连续两三场，
-完成全书后合读 Hook、开头和取材场景，检查重复、剧透、虚假悬念及语气错配。HookReceipt
+写作验收：Writer 在导演说明边界内落实可信的欲望、阻力、选择与后果；完整已提交
+前文辅助语言、动作与情绪衔接，不能从正文推导新语义状态。F5e 先读连续三章，
+完成全书后合读 Hook、开头和取材场景，检查重复、剧透、虚假悬念及语气错配；
+机械篇幅披露与未执行的语义质量评估分别报告，不互相替代。HookReceipt／章级回执
 只证明机械范围，语义未评如实披露；正文或检查证据缺失、未知不得据 Q-13 伪造交付成功。
 
 Golden 冻结：输入集、源版本、baseline 成书、rubric/version、评价方式、模型辅助评审的
@@ -230,13 +278,16 @@ Cutover 条件：四类 truth、唯一 writer、依赖与完整消费链闭合�
 下的逐书 Golden 验收通过。未实际验证的跨章质量范围必须随验收结论披露。
 
 成本与风险：基础调用估算 = Stage2 实际抽取 + Preserve 1 + Body Design 1 +
-Hook Design 1 + Bind 1 + 2 × 目标场景数 + Hook Writer 1 + Naming 1；修复、重写、
-重判、重试及未知成本分列，不能用书1的场景数估算任意长篇。F6c（约 3–5）、F5e
-（书1约 56）、F3b（约 15+）及 F8 Golden 分别授权，Golden 按最终节点与样本报价；
-书级 budget 默认 512 仍须在真实许可边界累计检查，续跑固定同一 run 目录。
-F4 与早期消费投影干跑为零模型调用。付费显式 `--yes`，正文外发分别授权。
-持续登记：漏保／过保、源结构泄漏、under-spec、状态过建模、checklist prose、Judge
-误判、过度失效、下游语义材料不足、请求容量、Golden 成本。
+Hook Design 1 + Bind 1 + 目标章数（按章正文）+ Hook Writer 1 + Naming 1；正文
+机械重写每章至多 2 次另列；修复、重试及未知成本分列，不能用书1的章数估算任意长篇。
+F6c（约 3–5，已完成 4）、F5e（RC4 书1基础 ≈15＋正文重写至多 22）、F3b（约 15+）
+及 F8 Golden 分别授权，Golden 按最终节点与样本报价；运行级新调用另受显式
+`--book-call-ceiling` 约束，续跑固定同一 run 目录。
+F4 与早期消费投影干跑为零模型调用。付费显式 `--yes`，正文外发分别授权，
+`--check-only` 零新购。
+持续登记：漏保／过保、源结构泄漏、under-spec、状态过建模、checklist prose、
+导演 brief 携带未登记事实或退化为通用形容词、章级机械检查的边界（章内揭示
+位置与逐场义务兑现不可证）、过度失效、下游语义材料不足、请求容量、Golden 成本。
 
 ## 必要证据与标定知识
 
@@ -254,8 +305,9 @@ F4 与早期消费投影干跑为零模型调用。付费显式 `--yes`，正文
 | `outputs/vnext_stage4_r1/`、`outputs/vnext_stage4_r2/`、`outputs/vnext_stage4_bbase/`、`outputs/vnext_probe_b2/` | 旧成文、冻结对照及窄 patch 案例，保留至 F5 职责接管；均非当前 canonical |
 | `_tmp_vnext_guard.py`、`_tmp_vnext_judge_slim.py`、`_tmp_vnext_writer.py`、`_tmp_calib_under_spec.py` | 标定及反例资产，按新 contract 改写，不恢复旧架构、不作为现役执行入口 |
 | `_tmp_hook_v3.py`、`_tmp_stage7_v3.py` | F6 原型参考；先去单书假设，再证明真源／消费／恢复，不能直接转正 |
-| `tests/test_str06_contracts.py`、`tests/test_str06_invariants.py`、`tests/test_str06_fold_guard.py` | 已落的新链契约、跨产物、窄失效、交付与 Fold／Guard 反例入口 |
-| `tests/test_str06_source.py`、`tests/test_str06_target.py`、`tests/test_str06_execution_ir.py`、`tests/test_str06_repairs.py`、`tests/test_str06_workflow.py` | Source／Target／IR／RC2 修复与隔离入口回归，选测按真实影响，不凭文件名宣布全链通过 |
+| `tests/test_str06_contracts.py`、`tests/test_str06_invariants.py`、`tests/test_str06_fold_guard.py` | 已落的新链契约、跨产物、章级回执绑定、窄失效、交付与 Fold／Guard 反例入口 |
+| `tests/test_str06_source.py`、`tests/test_str06_target.py`、`tests/test_str06_execution_ir.py`、`tests/test_str06_repairs.py`、`tests/test_str06_workflow.py` | Source／Target／IR／修复与隔离入口回归，选测按真实影响，不凭文件名宣布全链通过 |
+| `tests/test_str06_body.py` | F5 按章成文链免费反例入口：章预算分配、双视图 IR 同源、renderer 分层与 lineage 剥离、机械检查全分支、重写与候选选择、回执链核对、fake transport 全链到交付＋零新购恢复＋IR 失效边界 |
 
 后续实现必须保留的知识：
 

@@ -25,8 +25,10 @@
   hook         HookDesign / HookContext / HookReceipt（F6）
   naming       NameMap v5 与目标名称位（F6）
   execution    ExecutionPlan（四类执行语义）与 ExecutionSlice 身份
-  context      WriterContext 双视图（VerificationIR + WriterBrief）
-  receipt      SceneReceipt（接受回执最小七字段）与 FidelityVerdict
+  context      WriterContext 双视图（VerificationIR 事实约束 + WriterBrief 呈现）
+  book_ir      WriterBookIR：BookBrief 导航 + ChapterIR（F5）
+  receipt      ChapterReceipt 章级接受回执（F5；场景回执与 Fidelity 随取消的
+               生产正文 Judge 退役）
   consumption  Stage5/7 消费投影族登记（F6 改版：六族，Prepare 退役）
   dependency   新链依赖方向登记（含 F6 迁移包真实模块规则）
   retirement   F6d 退役登记（纯数据，随 RC 包在 F8 删除）
@@ -47,11 +49,18 @@ from contracts.schema.str06.dependency import (
 )
 from contracts.schema.str06.families import (
     STR06_PATH_FAMILIES,
-    STR06_TWO_LEVEL_PATHS,
     PathFamily,
     family_for,
 )
+from contracts.schema.str06.book_ir import (
+    BookBrief,
+    ChapterIR,
+    ChapterNavEntry,
+    ReleaseScheduleEntry,
+    WriterBookIR,
+)
 from contracts.schema.str06.context import (
+    BeatIR,
     KnowledgeEntry,
     StateEntry,
     SurfaceRelease,
@@ -109,11 +118,8 @@ from contracts.schema.str06.naming import (
 )
 from contracts.schema.str06.policy import PreserveKind, PreservationPolicy
 from contracts.schema.str06.receipt import (
-    FailureOrigin,
-    FidelityFinding,
-    FidelityVerdict,
-    ReceiptStatus,
-    SceneReceipt,
+    ChapterLengthDisclosure,
+    ChapterReceipt,
 )
 from contracts.schema.str06.source import (
     AliasEntry,
@@ -146,9 +152,9 @@ from contracts.schema.str06.retirement import (
     RetirementItem,
 )
 
-#: 本子包契约的 RC 版式身份。判官契约版本（`SceneReceipt.judge_contract_version`）
-#: 与 ledger code 引用本常量，避免各处手写字符串漂移。
-STR06_RC_VERSION = 'str06-rc3'
+#: 本子包契约的 RC 版式身份（F5 起为 rc4：Design/WriterIR/章级回执新形状）。
+#: ledger code 与 slice 业务身份引用本常量，避免各处手写字符串漂移。
+STR06_RC_VERSION = 'str06-rc4'
 
 __all__ = [
     'PROJECTION_COORDINATES',
@@ -160,11 +166,16 @@ __all__ = [
     'STR06_MIGRATION_MODULE_OWNERS',
     'STR06_PATH_FAMILIES',
     'STR06_RC_VERSION',
-    'STR06_TWO_LEVEL_PATHS',
     'AliasEntry',
+    'BeatIR',
     'BindingEntry',
     'BodyDesign',
+    'BookBrief',
     'ChapterAssignment',
+    'ChapterIR',
+    'ChapterLengthDisclosure',
+    'ChapterNavEntry',
+    'ChapterReceipt',
     'CharactersArtifactV4',
     'CharactersCore',
     'ConstraintSpec',
@@ -174,11 +185,8 @@ __all__ = [
     'Establishment',
     'ExecutionPlan',
     'ExecutionSlice',
-    'FailureOrigin',
     'FamilyEntry',
     'FamilyForm',
-    'FidelityFinding',
-    'FidelityVerdict',
     'ForbiddenReveal',
     'HookConstraints',
     'HookContext',
@@ -203,15 +211,14 @@ __all__ = [
     'PreserveKind',
     'PreservationPolicy',
     'ProjectionCoordinate',
-    'ReceiptStatus',
     'ReconstructionBrief',
     'Reinforcement',
+    'ReleaseScheduleEntry',
     'RetirementAction',
     'RetirementItem',
     'SceneDelivery',
     'SceneDriver',
     'SceneExecutionPlan',
-    'SceneReceipt',
     'SemanticBinding',
     'SourceLineage',
     'SourceObligation',
@@ -223,6 +230,7 @@ __all__ = [
     'TargetScene',
     'UnboundEntry',
     'VerificationIR',
+    'WriterBookIR',
     'WriterBrief',
     'WriterContext',
     'family_for',

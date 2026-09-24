@@ -90,6 +90,8 @@ def _body_wire() -> dict:
             {'scene_id': 's01', 'state_reads': [],
              'driver': {'focal_actor': 'yun_niang', 'immediate_want': '安度新婚',
                         'opposition': '夫君的怪异', 'turn': '立约'},
+             'realization_brief': '重心在拜堂到立约的落差；从婚礼喧闹写起，展开洞房对坐，'
+                                  '在旧约出口处收住，衔接下一场夜半异动。',
              'beats': [
                  {'beat_id': 'bt1', 'event': '拜堂成亲', 'participants': ['yun_niang', 'fu_jun'],
                   'dramatic_intent': '成礼', 'target_delta': [
@@ -113,6 +115,7 @@ def _body_wire() -> dict:
             {'scene_id': 's02', 'state_reads': [],
              'driver': {'focal_actor': 'yun_niang', 'immediate_want': '查明真相',
                         'opposition': '无凭据', 'turn': '发现玉佩'},
+             'realization_brief': '重心在玉佩的发现；从空房冷起，压缩等待，在字面露出的瞬间收束。',
              'beats': [
                  {'beat_id': 'bt1', 'event': '夫君夜半离家', 'participants': ['fu_jun'],
                   'dramatic_intent': '悬念', 'target_delta': [
@@ -126,8 +129,8 @@ def _body_wire() -> dict:
                        'scope': 'book', 'knowledge_mode': 'known'}],
                   'delivery_hint': '', 'surface_introductions': []}],
              'delivery': {'pov': 'yun_niang', 'voice': '冷峻', 'avoid': []}}],
-        'chapters': [{'chapter_ordinal': 1, 'scene_ids': ['s01']},
-                     {'chapter_ordinal': 2, 'scene_ids': ['s02']}],
+        'chapters': [{'chapter_ordinal': 1, 'purpose': '新婚之夜埋下旧约之疑', 'scene_ids': ['s01']},
+                     {'chapter_ordinal': 2, 'purpose': '玉佩之谜浮出水面', 'scene_ids': ['s02']}],
         'chapter_weights': {'s01': 0.5, 's02': 0.5},
     }
 
@@ -446,14 +449,15 @@ def test_hook_writer_length_rewrite_same_context():
 
     def ask_text(owner, prompt):
         prompts.append(prompt)
-        return (long_prose, []) if len(prompts) == 1 else (ok_prose, [])
+        return (long_prose, [], f'id-{len(prompts)}') if len(prompts) == 1 \
+            else (ok_prose, [], f'id-{len(prompts)}')
 
     from tools.str06_workflow import _write_hook
     prose, attempts, identity = _write_hook(context, ask_text)
     assert prose == ok_prose
     assert len(prompts) == 2
     assert '原因' in prompts[1]  # 重写请求 = 同一 Context + 上一稿机械错误
-    assert len(attempts) == 2 and identity
+    assert len(attempts) == 2 and identity == 'id-2'
 
 
 def test_hook_writer_rewrite_limit_exhausted():
@@ -462,7 +466,7 @@ def test_hook_writer_rewrite_limit_exhausted():
 
     def ask_text(owner, prompt):
         calls.append(prompt)
-        return ('夜' * (context.hard_max_chars + 1), [])
+        return ('夜' * (context.hard_max_chars + 1), [], f'id-{len(calls)}')
 
     from tools.str06_workflow import _write_hook
     prose, attempts, _ = _write_hook(context, ask_text)
@@ -635,7 +639,7 @@ def _full_chain_wires():
 
 
 def test_through_stage7_full_chain_replay_and_authorization_gate(tmp_path):
-    from tools.str06_workflow import AuthorizationRequired, run_workflow
+    from tools.str06_workflow import PurchaseRequired, run_workflow
     wires = _full_chain_wires()
     chapters = [
         {'chapter_ordinal': 1, 'text': '苏芸娘嫁入陆家，唤夫君为陆大哥，苏姑娘陪嫁，陆兄迎娶。'},
@@ -644,22 +648,27 @@ def test_through_stage7_full_chain_replay_and_authorization_gate(tmp_path):
     def make_ask(wires, counter):
         def ask(owner, prompt, validate):
             if owner not in wires:
-                raise AuthorizationRequired(owner)
+                raise PurchaseRequired(owner)
             counter.append(owner)
             return deepcopy(wires[owner])
         return ask
 
     def ask_text(owner, prompt):
-        return '苏芸娘望着空房。', []
+        return '苏芸娘望着空房。', [], 'wire-adoption'
+
+    def ask_body(owner, prompt):
+        raise AssertionError('body_chapter_limit=0 不应调用正文 owner')
 
     from copy import deepcopy
     repo = Str06Repository(tmp_path / 'run')
     counter: list[str] = []
     report = run_workflow(repository=repo, chapters=chapters,
                           ask=make_ask(wires, counter), ask_text=ask_text,
+                          ask_body=ask_body,
                           budget=2000, through='stage7', book_title='报恩',
                           hook_constraints=HookConstraints(target_chars=10,
-                                                           hard_max_chars=360))
+                                                           hard_max_chars=360),
+                          body_chapter_limit=0)
     assert report['assembly']['status'] == 'not_ready'
     assert report['assembly']['reason'] == 'body_not_implemented'
     assert report['accepted_body'] is False
@@ -674,13 +683,16 @@ def test_through_stage7_full_chain_replay_and_authorization_gate(tmp_path):
     # 重跑：零新调用（wire 全命中），字节一致
     before = {rel: repo.path(rel).read_bytes() for rel in (
         'stage4/design/presentation_graph.json', 'stage4/context/hook/hook.json',
+        'stage4/ir/writer_book_ir.json',
         'stage5/hook/hook.txt', 'stage7/naming/name_map.json',
         'runtime/delivery/hook_renamed.txt')}
     counter.clear()
     run_workflow(repository=repo, chapters=chapters,
                  ask=make_ask(wires, counter), ask_text=ask_text,
+                 ask_body=ask_body,
                  budget=2000, through='stage7', book_title='报恩',
-                 hook_constraints=HookConstraints(target_chars=10, hard_max_chars=360))
+                 hook_constraints=HookConstraints(target_chars=10, hard_max_chars=360),
+                 body_chapter_limit=0)
     after = {rel: repo.path(rel).read_bytes() for rel in before}
     assert before == after
     assert counter  # fake wire 命中与真实 wire-dir 采用语义一致（0 付费调用）
@@ -688,9 +700,10 @@ def test_through_stage7_full_chain_replay_and_authorization_gate(tmp_path):
     # 缺 wire 且未授权：停在对应 owner，报告需要授权
     missing = {k: v for k, v in wires.items() if k != 'hook_design'}
     repo2 = Str06Repository(tmp_path / 'run2')
-    with pytest.raises(AuthorizationRequired) as excinfo:
+    with pytest.raises(PurchaseRequired) as excinfo:
         run_workflow(repository=repo2, chapters=chapters,
                      ask=make_ask(missing, []), ask_text=ask_text,
+                     ask_body=ask_body,
                      budget=2000, through='stage7')
     assert excinfo.value.owner == 'hook_design'
     status = repo2.read('runtime/workflow_status.json')

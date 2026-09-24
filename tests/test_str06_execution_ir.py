@@ -11,6 +11,7 @@ from contracts.schema.str06.design import (
     ChapterAssignment, BodyDesign, SceneDelivery, SceneDriver,
     TargetBeat, TargetDelta, TargetScene,
 )
+from contracts.schema.str06.context import WriterBrief
 from contracts.schema.str06.execution import EffectDomain
 from contracts.schema.str06.grounding import BindingEntry, SourceLineage
 from contracts.schema.str06.policy import PreserveKind
@@ -45,6 +46,7 @@ def _scene(sid, *deltas):
     return TargetScene(state_reads=(),
         scene_id=sid,
         driver=SceneDriver(focal_actor='ch1', immediate_want='w', opposition='o', turn='t'),
+        realization_brief=f'重心在{sid}的核心对峙；展开转折，收在结果落地。',
         beats=(TargetBeat(
             beat_id='bt1', event=f'事件{sid}', participants=('ch1',),
             dramatic_intent='d', target_delta=tuple(
@@ -57,7 +59,8 @@ def _graph():
         graph_id='g1',
         scenes=(_scene('s01', ('world', 'season', '秋'), ('character', 'mood', '冷')),
                 _scene('s02', ('character', 'mood', '回暖'))),
-        chapters=(ChapterAssignment(chapter_ordinal=1, scene_ids=('s01', 's02')),),
+        chapters=(ChapterAssignment(chapter_ordinal=1, purpose='冷暖转换',
+                                    scene_ids=('s01', 's02')),),
         chapter_weights={'s01': 0.6, 's02': 0.4})
 
 
@@ -125,28 +128,36 @@ def test_project_context_dual_view_and_slice_identity():
     cp = _cp(_ob('ob1'), _ob('ob2', PreserveKind.IDENTITY))
     graph, binding = _graph(), _binding(cp)
     plan, _ = compile_execution_plan(graph, binding)
-    from contracts.schema.str06.grounding import IdentityProjection
-    identity = (IdentityProjection(char_id='ch1', identity_statement='甲（可用称呼：阿甲）'),)
     folded = fold_accepted_prefix(plan.scenes[:1])
     ctx, slice_ = project_context(
-        scene_id='s02', attempt_id='a1', graph=graph, plan=plan,
-        binding=binding, folded_prefix=folded, total_budget=1000)
+        scene_id='s02', graph=graph, plan=plan,
+        binding=binding, folded_prefix=folded)
     # 双视图同源
     assert ctx.verification_ir.scene_id == ctx.writer_brief.scene_id == 's02'
-    # IR：本场义务 + 前场 continuity + M5 释放（ch1 已出场）
+    # IR：本场义务 + 前场 continuity + M5 释放 + 逐拍定位
     assert ctx.verification_ir.obligations == ()
     assert ctx.verification_ir.continuity_fact_view == ()
     assert ctx.verification_ir.released_surfaces == ()
-    # 预算按权重
-    assert ctx.writer_brief.length_budget == 400
+    assert [b.beat_ref for b in ctx.verification_ir.beats] == ['s02#bt1']
+    assert ctx.verification_ir.beats[0].event == '事件s02'
+    # 呈现视图：canonical realization_brief 原样投影；事实清单不在 brief 里
+    assert ctx.writer_brief.realization_brief == graph.scenes[1].realization_brief
+    assert 'required_content' not in WriterBrief.model_fields
+    assert 'entry_facts' not in WriterBrief.model_fields
     # slice 身份与 context 同源且稳定
     assert slice_.execution_slice_sha256 == ctx.execution_slice_sha256
     ctx2, slice2 = project_context(
-        scene_id='s02', attempt_id='a1', graph=graph, plan=plan,
-        binding=binding, folded_prefix=folded, total_budget=1000)
+        scene_id='s02', graph=graph, plan=plan,
+        binding=binding, folded_prefix=folded)
     assert slice2.execution_slice_sha256 == slice_.execution_slice_sha256
-    # 预算属于实际消费内容，变化必须使 slice 失效
+    # 消费内容（导演说明）变化必须使 slice 失效；brief 之外的事实同样如此
     ctx3, slice3 = project_context(
-        scene_id='s02', attempt_id='a1', graph=graph, plan=plan,
-        binding=binding, folded_prefix=folded, total_budget=2000)
-    assert slice3.execution_slice_sha256 != slice_.execution_slice_sha256
+        scene_id='s02', graph=graph, plan=plan, binding=binding,
+        folded_prefix=fold_accepted_prefix(plan.scenes[:1]),
+        )
+    assert slice3.execution_slice_sha256 == slice_.execution_slice_sha256
+    graph.scenes[1].realization_brief = '重心改为独白。'
+    ctx4, slice4 = project_context(
+        scene_id='s02', graph=graph, plan=plan,
+        binding=binding, folded_prefix=folded)
+    assert slice4.execution_slice_sha256 != slice_.execution_slice_sha256

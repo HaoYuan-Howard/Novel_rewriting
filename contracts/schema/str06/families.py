@@ -58,14 +58,19 @@ STR06_PATH_FAMILIES: Final[dict[str, PathFamily]] = {
         prefix='stage4/grounding/', kind='derived+canonical', writer_owner='stage4.grounding'),
     'str06.stage4.compiled': PathFamily(
         prefix='stage4/compiled/', kind='derived', writer_owner='stage4.compile'),
+    # 全书静态写作 IR（F5）：嵌入全部场景双视图的唯一 Derived artifact。
+    'str06.stage4.ir': PathFamily(
+        prefix='stage4/ir/', kind='derived', writer_owner='stage4.context'),
     'str06.stage4.context': PathFamily(
         prefix='stage4/context/', kind='derived', writer_owner='stage4.context'),
     'str06.stage4.acceptance.guard': PathFamily(
         prefix='stage4/acceptance/guard/', kind='report', writer_owner='stage4.guard'),
-    'str06.stage5.scenes': PathFamily(
-        prefix='stage5/scenes/', kind='prose', writer_owner='stage5.writer'),
-    'str06.stage5.acceptance.fidelity': PathFamily(
-        prefix='stage5/acceptance/fidelity/', kind='report', writer_owner='stage5.judge'),
+    # 正文按章成文（F5）：ch{nn}.txt 是 prose，章级 attempts 记录是 audit；
+    # 按文件区分，登记在同一家族（同 stage5.hook 的先例）。
+    'str06.stage5.body': PathFamily(
+        prefix='stage5/body/', kind='prose+audit', writer_owner='stage5.body_writer'),
+    'str06.stage5.acceptance.body': PathFamily(
+        prefix='stage5/acceptance/body/', kind='report', writer_owner='stage5.body_writer'),
     # Hook 目录混居两职：hook.txt 是 prose，receipt.json 是 audit；按文件区分，
     # 登记在同一家族（同 stage4.grounding 的先例）。
     'str06.stage5.hook': PathFamily(
@@ -78,13 +83,6 @@ STR06_PATH_FAMILIES: Final[dict[str, PathFamily]] = {
     'str06.runtime': PathFamily(
         prefix='runtime/', kind='runtime', writer_owner='runtime'),
 }
-
-#: 两级特例：Stage5 最终正文。它是 Assemble 的唯一产物，但目录深度天然两级，
-#: 继续走现役两级准入即可——登记在这里只是让「新链正式产物」有一份完整清单，
-#: 不代表它需要多级支持。
-STR06_TWO_LEVEL_PATHS: Final[frozenset[str]] = frozenset({
-    'stage5/rewritten_body.txt',
-})
 
 
 def family_for(rel: str) -> PathFamily | None:

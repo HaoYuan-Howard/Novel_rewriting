@@ -1,19 +1,23 @@
 # STR-06 终态架构 RC 契约（Stage2–Stage7，Stage6 退役）
 
-本文件登记当前 RC3 实装与 Stage2–Stage7 扩容目标：四类 truth、Hook、交付改名、
-路径与消费边界、阅读验收及 F8 切换清单。下文明确区分已实现契约和待实施目标；
-Stage6 整层退役是目标，不表示现役链已经切换。
+本文件登记当前 RC4 实装与 Stage2–Stage7 扩容目标：四类 truth、Hook、按章正文、
+交付改名、路径与消费边界、阅读验收及 F8 切换清单。下文明确区分已实现契约和
+待实施目标；Stage6 整层退役是目标，不表示现役链已经切换。
 批次进度、必要证据索引与历史快照入口见 `docs/REQUIREMENTS.md` STR-06；架构裁决见
-`docs/DECISIONS.md` 2026-09-23。
+`docs/DECISIONS.md` 2026-09-23／2026-09-24。
 
 **RC 边界**：代码落点为 `contracts/schema/str06/` 子包。字段级 schema 保持 RC，
 经反例与真书验证后定版。本子包**不进** `ARTIFACT_SPECS`、不注册
 `NODES`、不进判据注册表；现役链按旧契约验收，正式替代一次合入（F8）。
-当前代码版式身份为 `str06-rc3`（F6，2026-09-24）：Hook、NameMap v5、名称结构与
-stage5/hook、stage7/naming、stage7/final 路径家族已实装（F6c 真书付费冒烟除外）。
-后续破坏形状须显式修订 RC 身份，不能靠文档更新默许旧载荷。RC1/RC2 目标产物不能直接
-加载；只能逐 owner 显式审阅 wire 后免费重编译（RC2 wire 在 RC3 代码下 body 路径
-免费重编译与 replay 逐字一致，checkpoint sha 不变——见 REQUIREMENTS F6 证据行）。
+当前代码版式身份为 `str06-rc4`（F5，2026-09-24）：Design 增导演说明与章节目的、
+双层 WriterIR、按章成文与章级回执、`stage4/ir`、`stage5/body`、
+`stage5/acceptance/body` 路径家族已实装（F5e 真书付费重跑除外）。
+Hook（`hook.py`）、NameMap v5、名称结构等未改变形状的契约**不**为统一标签
+机械升版，`contract_version` 仍为 `str06-rc3`。后续破坏形状须显式修订 RC 身份，
+不能靠文档更新默许旧载荷。RC1/RC2/RC3 目标产物不能直接加载：旧 RC3 Design 缺
+`realization_brief`／`purpose`，明确拒读——不用空字符串兜底，也不由 compiler
+补写迁移；旧设计、正文、回执、付费响应及 F6 证据只读保留，只能逐 owner 显式
+审阅 wire 后免费重编译（旧 wire 不得拷贝成伪造缓存命中）。
 
 ## 当前 RC 实装、修订与免费恢复
 
@@ -48,23 +52,29 @@ Design → Bind → Compile/Context；字段变化不接入现役注册表，正
 不代表成文质量验收。`runtime/request_*.json` 是已购证据，禁止当普通派生缓存清理。
 RC2 的人工语义修订是显式外部输入，不是 compiler 自然语言猜测规则；质量仍需 F5/F8 验收。
 
-## 当前 RC 模块与路径（RC3）
+## 当前 RC 模块与路径（RC4）
 
 | 模块 | 承载 | 关键不变量（构造期表达） |
 |---|---|---|
 | `policy.py` | `PreservationPolicy`（版本化策略）、`PreserveKind` 闭集 | 类别集变化必须升版；执行身份不进 Policy |
 | `grounding.py` | `SourceObligation` / `PreserveCheckpoint` / `ReconstructionBrief` / `IdentityProjection` / `OutputConstraints` / `SemanticBinding` | 必保义务必有非空 `satisfaction`；checkpoint 无 Design/Bind 字段；Brief 无源章/源拍/叙述顺序/证据定位字段；Binding 是完整 snapshot，entries 与 unbound 不交集 |
-| `design.py` | `BodyDesign`／`PresentationGraph(BodyDesign)+hook` v1（`SceneDriver`/`TargetBeat`/`TargetDelta`/`SceneDelivery`/`ChapterAssignment`） | source-blind（无 source_ref 族字段且 forbid extra）；章号连续 1..N、场景全覆盖、每章非空；hook 必填且 graph 内引用闭合 |
-| `hook.py` | `HookDesign`／`HookContext`／`HookReceipt`／`HookConstraints`（F6） | 起笔事实只引用已建立的目标事实；first 恰一人且非 narrator；材料唯一呈现语义口是 presentation；回执 semantic 恒 unverified |
+| `design.py` | `BodyDesign`／`PresentationGraph(BodyDesign)+hook`（RC4：`SceneDriver`/`TargetBeat`/`TargetDelta`/`SceneDelivery`/`ChapterAssignment`） | source-blind（无 source_ref 族字段且 forbid extra）；章号连续 1..N、场景全覆盖、每章非空；hook 必填且 graph 内引用闭合；每场 `realization_brief` 与每章 `purpose` 必填非空（缺省拒读） |
+| `hook.py` | `HookDesign`／`HookContext`／`HookReceipt`／`HookConstraints`（F6，形状未变） | 起笔事实只引用已建立的目标事实；first 恰一人且非 narrator；材料唯一呈现语义口是 presentation；回执 semantic 恒 unverified |
 | `naming.py` | `NameMapV5`／`NameAssignment`／`TargetName`（F6） | name 与 keep_reason 恰好一个；full 由 compiler 拼接；char_ref 唯一 |
 | `source.py` | Characters v4（`CharactersCore` + `name_structure` RC 段）／Blueprints v12（F6 扩） | core view 与 RC2 同形（Preserve sha 不变）；名称结构 surface 恰好覆盖、模板渲染逐字相等、纯称谓不含姓名字面、同姓亲属共享 family_id |
 | `execution.py` | `ExecutionPlan`（establishment/constraint/dependency/reinforcement）与 `ExecutionSlice` | 必保只落 establishment/constraint；`Reinforcement` 无 obligation_id（0..N 不稀释必保）；依赖边禁自指 |
-| `context.py` | `WriterContext` 双视图（`VerificationIR` + `WriterBrief`） | 两视图 scene_id 与 `execution_slice_sha256` 同源；IR 带 `continuity_fact_view`（跨场回指误报的根因修复输入） |
-| `receipt.py` | `SceneReceipt`（最小七字段）与 `FidelityVerdict` | 无 plan hash/时间戳等无关 metadata 字段；`prose_sha256` 绑定改名前正文；`failure_origin ∈ {writer, upstream_ir, unverifiable}`；无修复字段 |
-| `consumption.py` | 六个消费投影族（world_view／character_exposure／chapter_map／body_access／hook_material／rename_materials；F6 删 Prepare 族） | body_access 不再含 stage6.prepare；rename_materials 写明 Naming 只读投影与 Apply 唯一应用者的权限分界 |
-| `families.py` | 三级路径家族登记（15 个家族；F6 增 stage5/hook、stage7/naming、stage7/final） | 来源账键=完整相对路径（不塌两级） |
-| `dependency.py` | 新链依赖方向登记 ＋ F6 迁移包真实模块 owner 映射与规则 | 目标表自洽；迁移包规则由 AST 对真实文件执行（test_str06_hook） |
+| `context.py` | `WriterContext` 双视图（`VerificationIR` + `WriterBrief`，RC4 职责重划） | IR 带 `beats` 逐拍定位与 `prohibitions`（从 delivery.avoid 投影）；Brief 只承载呈现（`realization_brief` 原样投影＋driver 摘要＋POV/voice/hints），事实清单不进 Brief；两视图 scene_id 与 `execution_slice_sha256` 同源；attempt/审计字段不进静态 IR |
+| `book_ir.py` | `WriterBookIR`＝`BookBrief`＋`ChapterIR[]`（F5） | BookBrief 是全书约束与确定性导航（不调 LLM 总结、不取 POV 众数、不补造统一文风；禁止项只从已有明确限制及释放位置投影）；ChapterIR 携带章目的、确定性章预算与场景双视图；章号连续、导航与章 IR 一致 |
+| `receipt.py` | `ChapterReceipt`（章级回执；场景回执与 Fidelity 随取消的生产正文 Judge 退役） | 绑定章序、全书 IR、实际前文、改名前正文、实际请求身份、协议/renderer/校验版本；`semantic` 恒 unverified；只有篇幅偏差可在额度耗尽后 `length_disclosed` 披露放行 |
+| `consumption.py` | 六个消费投影族（world_view／character_exposure／chapter_map／body_access／hook_material／rename_materials） | body_access 按章级有效回执判定；rename_materials 写明 Naming 只读投影与 Apply 唯一应用者的权限分界 |
+| `families.py` | 三级路径家族登记（16 个家族；F5 增 stage4/ir、stage5/body、stage5/acceptance/body，删 stage5/scenes、stage5/acceptance/fidelity） | 来源账键=完整相对路径（不塌两级） |
+| `dependency.py` | 新链依赖方向登记 ＋ 迁移包真实模块 owner 映射与规则 | 目标表自洽；迁移包规则由 AST 对真实文件执行（test_str06_hook） |
 | `retirement.py` | F6d 现役 Stage6 链退役登记（纯数据，106 项） | 双向对账：登记项必须真实存在、现役面必须全部在册；随 RC 包 F8 删除 |
+
+对应引擎（`novel/stages/str06/`，F5 新增）：`book_ir.py`（章预算 largest-remainder
+确定性分配＋全书 IR 唯一编译）、`render.py`（确定性 renderer＋版本化 Writer 协议）、
+`body_checks.py`（章级机械校验＋专名禁用面推导）、`body_writer.py`（按章 Writer、
+有限重写与确定性候选选择）。
 
 跨产物不变量（不由 schema 自身保证，归 F4 机械 Guard）：Binding 的 obligations
 分母必须与采用的 Preserve checkpoint 一致；ExecutionPlan 的依赖图无环；
@@ -112,7 +122,76 @@ Binding 不维护第二份初始态。Identity 等必要材料只经明确公共
 producer 轮流改 canonical，不用空 Hook 默认值冒充完成。Bind 只给目标故事分配保留
 义务，Hook 不增加义务分母，也不作为正文漏保的替代承载。
 
-## Hook 的正式选择与确定性投影（RC3 已实装，F6a/F6b）
+## F5 的导演说明、双层 WriterIR 与按章成文（RC4 已实装，真书验证归 F5e）
+
+**导演说明由 Design 直接产生。**`TargetScene.realization_brief`（本场怎样演出来：
+场景重心、人物如何理解局面、展开与压缩、关键转折及收束点、邻场衔接）与
+`ChapterAssignment.purpose`（本章承担的核心变化，概括章内已设计的变化，不单独
+增加事件或结果）是必填、非空的自然语言字段。职责分工保持：`driver` 承载欲望/
+阻力/转折；`event/target_delta/surface_introductions` 承载故事事实、变化及许可
+位置；`realization_brief` 只承载呈现方向；`delivery_hint` 只补拍级局部表达；
+`delivery` 承载 POV、voice、avoid。brief 中涉及关键行动、持久认知变化、秘密、
+承诺或因果条件的内容必须同时落在相应故事字段——不能经自由文本绕开正式状态与
+披露设计。compiler 只查形状、引用及可机械证明的一致性，不用关键词规则声称
+发现自然语言冲突，也不新增语义 Judge。
+
+**场景 WriterIR 保留双视图，职责重划。**`VerificationIR` 回答「什么必须成立」：
+起笔状态、人物知情、本场行动和义务、满足条件、逐拍结果（`BeatIR` 的
+event/delta/释放位置定位）、信息释放位置及明确禁止事项（从 `delivery.avoid`
+投影）；它表示应满足的条件，不表示正文已经通过语义验证。`WriterBrief` 回答
+「怎样呈现」：canonical `realization_brief` 原样投影＋driver 摘要＋POV、voice
+与拍级 delivery hints；旧 Brief 中重复的事件、义务、状态清单移回事实视图，
+避免两份内容分别解释同一语义。两视图来自同一份 Design/Binding，使用相同场景
+身份与 slice 身份。
+
+**全书静态 IR。**`WriterBookIR = BookBrief + ChapterIR[]`，由 compiler 在任何
+正文购买前从（BodyDesign, ExecutionPlan, SemanticBinding）确定性编译并唯一落盘
+`stage4/ir/writer_book_ir.json`。`BookBrief` 汇集已有约束与按阅读序的导航（章
+目的、场景一行摘要、称谓释放位置表）；不调用 LLM 总结、不取场景 POV 众数、
+不补造统一文风；额外禁止项只从已有明确限制及释放位置投影，不从未来剧情猜政策。
+`ChapterIR` 携带章目的、章预算（按 Design 场景权重 largest-remainder 整数分配，
+总和恰等于书级目标，不对照同号源章长度）与本章场景双视图。Stage4 只生成静态
+写作 IR；Stage5 从有效章回执读取前文形成派生的 `ChapterWriterPacket`；Stage4
+不反向读取 Stage5 正文。
+
+**模型阅读界面是确定性 renderer。**内部严格 IR 与模型实际阅读文本分别定义；
+renderer 只排序、分组、引用解析和格式化，不压缩语义、不改写 brief、不新增
+模型调用。正文请求按六层组织：【整书写作约定与自由度】（版本化 Writer 协议：
+entry 是起笔已成立状态、effects 是结束需成立结果、义务必须实际兑现、约束内
+创造自由、局部细节不得产生新的关键因果/知情/后续依赖）→【全书规划参考：作者
+知道，不等于人物或读者已知】→【完整已提交前文】→【本章目的】→【本章各场景：
+导演说明＋事实约束】→【本章交付要求】。完整 `WriterBookIR` 仍进入请求；当前章
+材料集中展示，其余章完整场景 IR 标为规划参考，同一内容不重复展开。全部实质
+约束（义务与满足条件、知情模式、否定条件、释放位置、逐拍结果）可追溯进入请求；
+source lineage、源章拓扑和审计字段不进 Writer 阅读面。renderer／协议与
+prompt 各自版本化并进入请求身份；首版不自动缩短上下文——完整输入超限由精确
+tokenizer＋容量闸阻断，不静默摘要、截断或换模型。
+
+**按章生成、机械控制与候选选择。**正文严格按章串行：每次读取完整 IR 和全部
+有效前文，一次输出当前整章自然正文；章号由 compiler 添加，不强制输出场景片段、
+ID 或覆盖声明，不建设厂商会话状态。章篇幅带默认 `[0.6, 1.3] × 预算`（CLI 可
+覆盖），全书 ±10% 偏差读数无条件报告；计数排除空白、程序章号和 Hook。每章
+首次生成加最多两次重写，重写使用相同 IR、相同前文、上一稿与 typed 机械错误。
+硬检查（非空、编码、包装、明确未释放专名、响应截断）失败有额度则重写、不能
+披露放行；只有篇幅偏差可在额度耗尽后按「相对目标篇幅偏差最小优先、平局取
+较晚者」提交并披露；没有合法候选则停止后续生成。整章自由正文不提供可靠的
+场景边界，机械检查只能覆盖章级明确字面禁用等事项，不能证明章内揭示位置或
+逐场义务兑现——这些限制写入交付披露与阅读验收。
+
+**章级提交与恢复。**提交顺序：原响应耐久保存 → 确定性编译与检查 → 选定候选
+→ 原子写正文 → 原子写章回执（提交完成）→ 下一章。章级回执绑定章序、全书 IR、
+实际前文、改名前正文、实际请求身份、协议及校验版本，记录机械结果和篇幅披露；
+拒绝候选单独留证；pending/unknown 属于执行状态。无有效回执的文本不能作为前文
+或交付输入。保存旧提交历史，恢复从连续有效章前缀开始；已保存响应优先免费补
+提交；progress/report 由证据重建，不成为第二份业务权威。付费边界上缓存采用
+先于授权拒绝；新调用再核对付费、正文外发许可及显式 `--book-call-ceiling`，
+额度在锁内按准入凭据累计，pending/unknown 不释放额度，缓存采用不耗新调用额度；
+成本唯一权威仍是 ledger。完整上下文的失效规则：Writer 可见的全书 IR 改变
+（包括未来场景 brief）→ 全部正文重新核验、不沿用旧请求身份；第 k 章正文改变
+→ 保留有效前缀、后续章因输入变化失效；只改 Hook 或 NameMap → 正文保持有效；
+validator 改变而请求未变 → 免费重验已有响应。
+
+## Hook 的正式选择与确定性投影（RC3 已实装，F6a/F6b；brief 要求 F5 强化）
 
 Hook 是同一目标故事的另一种呈现。设计负责材料及顺序、起笔、时间跳转、披露和收束；
 Writer 负责句法、措辞、对白、局部动作、节奏、意象和语气。局部细节不得改变事实或
@@ -150,16 +229,7 @@ withheld 字面泄漏（先认领已释放称谓再扫）；回执 `semantic` �
 众数、无关拍改动不扩大 HookContext 失效、只改 Hook 时正文 plan 全等、机械通过不产生
 语义已验字段。原型已删除单书人名、全局缓存与人称词频假设，未直接复制试点脚本。
 
-## Stage5 接受边界与正文衔接（Hook 面已实装，Body 面归 F5）
-
-Body 严格串行 `Project → Guard → Write → Judge → Commit → Apply planned_delta`；
-恢复只重放连续有效 accepted prefix。Body Writer 消费有限相邻已接受正文 tail，窗口规则
-和实际消费字节须进入本场 Context/请求及 slice 身份；从已接受正文重建 tail，不从正文反抽 semantic
-delta，也不绑定未消费的整书文本。材料缺失、unknown、拒绝和接受状态分开。
-
-Writer 可在既有 scene driver／voice／delivery hint 内实现不改变因果、知情和持久
-状态的迟疑、潜台词、情绪与局部动作；新增前史、秘密、长期动机或后文依赖的事实
-须由 Design 明确承接。不从正文反推状态，不增加情绪状态机。
+## Stage5 Hook 成文的接受边界（RC3 已实装；Body 面已由 F5 按章接管）
 
 Hook 只有一个输出与机械回执（`stage5/hook/hook.txt`＋`stage5/hook/receipt.json`，
 绑定 hook_context_sha256 与改名前 prose_sha256）；非空、长度、编码和 wrapper/Markdown
@@ -167,8 +237,13 @@ Hook 只有一个输出与机械回执（`stage5/hook/hook.txt`＋`stage5/hook/r
 （回执 `semantic` 恒为 unverified）；未验证质量按现有披露机制保留。超长在同一 Context
 下有限重写（重写请求=同一 Context＋上一稿机械错误，身份确定、可免费恢复，最多再
 2 次），属于 realization failure；上游设计错误回 Stage4，付费状态未知仍阻断，不用
-质量披露绕过。隔离入口 `--through stage5` 到 hook_accepted_mechanical/hook_rejected
-显式状态为止。
+质量披露绕过。隔离入口 `--through stage5` 以「正文按章提交＋hook_accepted_mechanical」
+为终态（`--body-chapter-limit` 可限定章前缀；部分提交显式记 `body_partial`）。
+
+Hook `design_brief` 的写作要求在 F5 强化为逐项覆盖：入口（从什么状态或画面进入）、
+哪些材料快速带过、冲突如何升级、重点展开哪里、给读者留下什么问题、在哪里切断；
+`delivery_brief` 保留口吻职责。两者仍为字符串，不增加一套导演字段；
+Hook renderer 同样采用分层阅读界面，材料与事实边界保持现有正式投影。
 
 ## NameMap v5 与接受／交付文本分离（RC3 已实装，F6a/F6b）
 
@@ -215,15 +290,15 @@ body 替换组装，另行绑定交付身份。同一输入字节、映射和组
 | 身份 | 目标产物或证据 |
 |---|---|
 | Canonical Semantic Truth | 上述 Characters、Blueprint、Target Design、Semantic Binding |
-| Derived | ReconstructionBrief、ExecutionPlan、Body/Hook WriterIR、可重建 continuity/tail/progress/cache |
-| Accepted Prose | 有效接受回执绑定的 scene 正文、assembled body、单篇 Hook |
-| Acceptance / Audit | Guard 报告、Body/Hook receipt；证明的范围与状态明确，不当作语义真源或普通缓存 |
+| Derived | ReconstructionBrief、ExecutionPlan、WriterBookIR（含场景双视图）、HookContext、可重建 progress/cache |
+| Accepted Prose | 有效章级回执绑定的章正文、单篇 Hook |
+| Acceptance / Audit | Guard 报告、章级/Hook receipt；证明的范围与状态明确，不当作语义真源或普通缓存 |
 | Delivery Transformation Contract | NameMap v5 |
-| Final Deliverable | 最终重写成书 |
+| Final Deliverable | 最终重写成书（`stage7/final/`：TXT 先落盘、manifest 最后提交） |
 | 已购恢复证据 | Preserve checkpoint、request/response 及采用账；与 Derived cache 分开保留 |
 
-以下是目标输出根内的布局示意，不是本次新增目录；具体路径家族、receipt 身份和归档
-机制在对应批次一起登记。正文与已购证据不可按“非 semantic truth”批量清理。
+以下是目标输出根内的布局示意；正文按章成文的路径家族（`stage4/ir`、`stage5/body`、
+`stage5/acceptance/body`）已随 F5 登记。正文与已购证据不可按“非 semantic truth”批量清理。
 
 ```text
 stage2/characters/characters.json
@@ -232,14 +307,15 @@ stage2/compiled/、stage2/acceptance/
 stage4/grounding/{reconstruction_brief,semantic_binding}.json
 stage4/design/presentation_graph.json
 stage4/compiled/execution_plan.json
-stage4/context/body/scene_{nnn}.json、stage4/context/hook/hook.json
+stage4/ir/writer_book_ir.json
+stage4/context/hook/hook.json
 stage4/acceptance/guard/
-stage5/body/scenes/scene_{nnn}.txt、stage5/body/rewritten_body.txt
-stage5/acceptance/body/scene_{nnn}.json
+stage5/body/ch{nn}.txt
+stage5/acceptance/body/ch{nn}.json
 stage5/hook/hook.txt、stage5/hook/receipt.json
 stage7/naming/name_map.json
-stage7/final/<书名>_rewriting.txt
-runtime/continuity/、runtime/progress/、runtime/tail/、runtime/cache/
+stage7/final/<书名>_rewriting.txt、stage7/final/delivery_manifest.json
+runtime/progress/、runtime/body_attempts_ch{nn}.json、runtime/admission.json
 ```
 
 正式代码继续按 owner 分包，schema 唯一在 contracts/schema 下；RC 迁移包 F8 分流后
@@ -248,9 +324,9 @@ runtime/continuity/、runtime/progress/、runtime/tail/、runtime/cache/
 | owner | 目标代码职责 |
 |---|---|
 | Stage2 | characters、blueprints 的语义抽取／确定性编译与 acceptance |
-| Stage4 | grounding 的 preserve/bind；design 的 body/hook；单一 graph publisher；compile；body/hook context；机械 guard |
-| Stage5 | body writer/judge/assemble；hook writer/validator；必要的公共 receipt 处理 |
-| Stage7 | naming assign、机械 apply、final assemble；无故事 resolver 或语义 review 层 |
+| Stage4 | grounding 的 preserve/bind；design 的 body/hook（含导演说明与章节目的）；单一 graph publisher；compile；WriterBookIR 编译与 hook context；机械 guard |
+| Stage5 | 按章 body writer（机械检查/有限重写/候选选择）；hook writer/validator；必要的公共 receipt 处理 |
+| Stage7 | naming assign、机械 apply、final assemble（章回执链核对、TXT 先落盘、manifest 最后提交）；无故事 resolver 或语义 review 层 |
 | 跨层设施 | 沿用 repository/store、paths、runtime 和 orchestrator；只抽取真实公共职责 |
 
 依赖单向：Design 禁 Grounding 实现/Blueprint internals/checkpoint 裸读；Grounding 禁
@@ -280,10 +356,13 @@ Continuity、Natural Progression、Local Prose Coherence。人工阅读为主，
 至少两本代表性书，其中至少一本长篇或多线结构，冻结输入、baseline、rubric、评价方式
 与成本信封。工程绿、planned-only 干跑和机械回执都不替代成文质量，未评保持未验证。
 
-F6 阅读检查 Hook 的冲突、信息升级、悬念及不提前兑现后文；F5 原批次先读连续两三场
-再继续全书，接通后合读 Hook、正文开头及所选材料对应场景，检查重复、剧透、转场和
-叙述声音，再检查整书人物动机、因果推进、场景节奏、情感与结局回收。
-不增加新的逐场审批或自动 taste Judge。新增质量读项沿用六维 rubric 和实际文本证据，
+F6 阅读检查 Hook 的冲突、信息升级、悬念及不提前兑现后文；F5e 先读连续三章再继续
+全书，完成后合读 Hook、正文开头及所选材料对应场景，检查重复、剧透、转场和
+叙述声音，再检查整书人物动机、因果推进、场景节奏、情感与结局回收。并具体检查：
+是否机械复述状态、每场重新开场、用旁白宣布 effects、压掉关键行动、对白和反应
+缺乏推进，以及导演 brief 指导下的展开与压缩是否有效。Hook 与正文开头、取材场景
+合读，检查重复、剧透、语气和悬念兑现；阅读属于开发验收，不新增产品逐章审批或
+自动 taste Judge。新增质量读项沿用六维 rubric 和实际文本证据，
 不把“像小说”降成义务逐条复述，也不为结构原创指标强迫搬移情节。
 
 按目标语义位置评价事实、因果、披露与改名质量；Structural Originality 以书/场景及
@@ -296,18 +375,20 @@ current-schema corpus 验收；范围外事项见 REQUIREMENTS，不再保留独
 F8 一次合入时同步闭合，候选可提前准备但不得提前现役化：
 
 1. `ARTIFACT_SPECS` 翻转：characters v4、blueprints v12、graph/binding/plan、
-   Body/Hook WriterIR、正文/Hook/receipts、NameMap v5、交付及 runtime 家族；
+   WriterBookIR（BookBrief/ChapterIR）、正文章文件/章级回执/Hook 回执、NameMap v5、
+   交付及 runtime 家族；
    NameMap v4→v5 与旧 Stage2/4/5 形状断裂记入版本账本，旧书独立根重建。
 2. 公开契约改写：现役 I-40 与 `R-5.2` 本轮不改；目标 N 章连续非空及跨章重构的
    规则在 F8 同批切换，不能只改措辞却仍保留旧判据；
    R-2.*（Characters v4）、R-3.*（Blueprints v12）、R-5/R-6（Stage4 新链）、
-   R-7/R-8（Stage5 新链）、R-9/R-10 中消费旧产物的条款同步。
+   R-7/R-8（Stage5 新链，含章级提交与篇幅披露）、R-9/R-10 中消费旧产物的条款同步。
 3. `NODES` 与编排：Stage2 抽取、Stage4 Preserve/Body Design/Hook Design/Bind、
-   Stage5 Body Write/Judge 与 Hook Write、Stage7 Naming/Assemble 及免费检查/恢复
-   面闭合；节点/profile/permit/消费身份双向对账。`--check-only` 沿用免费检查职责，
+   Stage5 按章 Body Write 与 Hook Write、Stage7 Naming/Assemble 及免费检查/恢复
+   面闭合（生产正文 Judge 已取消，不注册判官节点）；
+   节点/profile/permit/消费身份双向对账。`--check-only` 沿用免费检查职责，
    不因本文件增加占位 check 节点。
-4. 判据注册表与 `docs/schema/` 现役文档：试点 M1–M6 机械 Guard、Judge 判定
-   按新坐标正式化；`tests/test_artifact_versions.py` shape-break 账本同批答
+4. 判据注册表与 `docs/schema/` 现役文档：试点 M1–M6 机械 Guard 按新坐标正式化
+   （场景级写前守卫保留）；`tests/test_artifact_versions.py` shape-break 账本同批答
    「谁重建」。
 5. Stage6 整层及 prepare/hook/approve 节点、三候选/改选/rebuild/历史审批写接口、
    产物家族和 approval bindings 登记 retired；旧 Stage2/4/5/7 替代路径同批删除。

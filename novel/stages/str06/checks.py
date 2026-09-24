@@ -25,7 +25,7 @@ from pydantic import BaseModel
 from contracts.schema.str06.design import BodyDesign
 from contracts.schema.str06.execution import ExecutionPlan, ExecutionSlice
 from contracts.schema.str06.grounding import PreserveCheckpoint, SemanticBinding
-from contracts.schema.str06.receipt import SceneReceipt
+from contracts.schema.str06.receipt import ChapterReceipt
 from contracts.schema.str06.context import WriterContext
 
 
@@ -81,24 +81,37 @@ def check_plan_matches_graph(
     return problems
 
 
-def check_receipt_binding(
-    receipt: SceneReceipt, context: WriterContext,
-    *, execution_slice_sha256: str,
+def check_chapter_receipt(
+    receipt: ChapterReceipt, *, book_ir_sha256: str,
+    prior_text_sha256: str, prose_sha256: str,
 ) -> list[str]:
-    """旧 PASS 配新 Context／slice 必须拒绝：三份绑定逐一核对。"""
+    """章级回执与当前输入的绑定核对：旧回执配新输入必须拒绝。
+
+    全书 IR 变化使全部回执失效；第 k 章前文变化使该章回执失效；正文字节变化
+    使回执与文本脱钩。三份绑定逐一核对（I-16：回执不是第二份业务权威）。
+    """
     problems: list[str] = []
-    if receipt.scene_id != context.scene_id:
-        problems.append(f"receipt 场景 {receipt.scene_id!r} 与 context 场景 {context.scene_id!r} 不一致")
-    if receipt.attempt_id != context.attempt_id:
-        problems.append('receipt attempt_id 与 Context 不一致')
-    if context.execution_slice_sha256 != execution_slice_sha256:
-        problems.append('Context 与当前 slice 身份不一致')
-    actual_context = canonical_sha256(context)
-    if receipt.writer_context_sha256 != actual_context:
-        problems.append('writer_context_sha256 与当前 Context 内容不匹配（旧 PASS 配新 Context）')
-    if receipt.execution_slice_sha256 != execution_slice_sha256:
-        problems.append('execution_slice_sha256 与当前执行切片身份不匹配（旧 PASS 配新 slice）')
+    if receipt.status != 'accepted':
+        problems.append(f'回执状态为 {receipt.status}，不构成有效提交')
+    if receipt.book_ir_sha256 != book_ir_sha256:
+        problems.append('book_ir_sha256 与当前全书 IR 不一致（IR 变化使全书回执失效）')
+    if receipt.prior_text_sha256 != prior_text_sha256:
+        problems.append('prior_text_sha256 与当前有效前文不一致（前缀变化使本章失效）')
+    if receipt.prose_sha256 != prose_sha256:
+        problems.append('prose_sha256 与章文本不匹配（回执与正文脱钩）')
     return problems
+
+
+def affected_chapters(
+    directly_affected_scenes: Iterable[str], graph: BodyDesign,
+) -> set[int]:
+    """场景级窄修复 → 章级失效范围：受影响场景所在的目标章。
+
+    第 k 章内任何场景输入变化 ⇒ 第 k 章回执失效；后续章因前文变化按
+    「连续有效章前缀」语义另行截断（见 check_chapter_receipt 的 prior 绑定）。
+    """
+    scene_chapter = {sid: ch.chapter_ordinal for ch in graph.chapters for sid in ch.scene_ids}
+    return {scene_chapter[sid] for sid in directly_affected_scenes if sid in scene_chapter}
 
 
 def directly_affected(

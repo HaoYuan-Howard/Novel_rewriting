@@ -49,6 +49,7 @@ def _scene(scene_id: str, *participants: str) -> TargetScene:
         scene_id=scene_id,
         driver=SceneDriver(focal_actor=participants[0] if participants else 'ch1',
                            immediate_want='w', opposition='o', turn='t'),
+        realization_brief=f'重心在{scene_id}的对峙；展开转折后收束。',
         beats=(TargetBeat(beat_id='bt1', event='e', participants=participants or ('ch1',),
                           dramatic_intent='d', target_delta=()),),
         delivery=SceneDelivery(pov='ch1', voice='v'))
@@ -59,9 +60,9 @@ def _graph() -> BodyDesign:
         graph_id='g1',
         scenes=(_scene('s01', 'ch1'), _scene('s02', 'ch1', 'ch2'), _scene('s03', 'ch1')),
         chapters=(
-            ChapterAssignment(chapter_ordinal=1, scene_ids=('s01',)),
-            ChapterAssignment(chapter_ordinal=2, scene_ids=('s02',)),
-            ChapterAssignment(chapter_ordinal=3, scene_ids=('s03',)),
+            ChapterAssignment(chapter_ordinal=1, purpose='起', scene_ids=('s01',)),
+            ChapterAssignment(chapter_ordinal=2, purpose='承', scene_ids=('s02',)),
+            ChapterAssignment(chapter_ordinal=3, purpose='转', scene_ids=('s03',)),
         ))
 
 
@@ -86,16 +87,18 @@ def _context(
     entry_knowledge=(),
     released=(),
 ) -> WriterContext:
+    from contracts.schema.str06.context import BeatIR
     return WriterContext(
-        scene_id=scene_id, attempt_id='a1', execution_slice_sha256=H64,
+        scene_id=scene_id, execution_slice_sha256=H64,
         verification_ir=VerificationIR(
             scene_id=scene_id, obligations=tuple(_ob(o) for o in obligations),
+            beats=(BeatIR(beat_ref=f'{scene_id}#bt1', event='e', dramatic_intent='d'),),
             entry_state=tuple(entry_state),
             entry_knowledge=tuple(entry_knowledge),
             released_surfaces=tuple(released)),
         writer_brief=WriterBrief(pov='ch1',
-            scene_id=scene_id, task='t', scene_driver_summary='d',
-            beat_outlines=('b1',), length_budget=800, voice='v'))
+            scene_id=scene_id, realization_brief='重心在核心对峙。',
+            scene_driver_summary='d', voice='v'))
 
 
 def _est(domain: EffectDomain, key: str, value: str, scope: str = 'book') -> Establishment:

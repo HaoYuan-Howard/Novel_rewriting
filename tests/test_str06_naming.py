@@ -26,7 +26,7 @@ from novel.stages.str06.naming import (
     compile_name_map, compile_surface_replacements, diff_proof, naming_projection,
 )
 from novel.stages.str06.assembly import (
-    BodyAccess, assemble_delivery, body_access, delivery_identity,
+    BodyAccess, assemble_delivery, chapter_access, delivery_identity,
 )
 
 SRC = ('皇甫珩执剑护院。陈砚与陈松是亲兄弟，住在陈家。赵老大与赵老二素不相识。'
@@ -420,7 +420,7 @@ def test_diff_proof_green_and_tamper_red():
 # ───────────────────────── Assembly：就绪边界与身份分离 ─────────────────────────
 
 def test_body_access_states_separated():
-    access = body_access(['s01', 's02', 's03', 's04'], {
+    access = chapter_access(['s01', 's02', 's03', 's04'], {
         's01': {'status': 'accepted'}, 's03': {'status': 'rejected'},
         's04': {'status': 'something_else'}})
     assert access.accepted == ('s01',)
@@ -443,7 +443,7 @@ def _ready_delivery():
     hook, body_text = '楔子：裴书远夜行。', '正文：裴书远到家。'
     context_sha = 'c' * 64
     receipt = _hook_receipt_dict(hook, context_sha)
-    access = body_access(['s01'], {'s01': {'status': 'accepted'}})
+    access = chapter_access(['s01'], {'s01': {'status': 'accepted'}})
     outcome = assemble_delivery(body_text=body_text, body=access, hook_prose=hook,
                                 hook_receipt=receipt, hook_context_sha256=context_sha,
                                 replacements=table, kept_literals=())
@@ -472,7 +472,7 @@ def test_assembly_not_ready_without_accepted_body():
     table = {'裴书远': '林书言'}
     hook, context_sha = '楔子。', 'c' * 64
     receipt = _hook_receipt_dict(hook, context_sha)
-    outcome = assemble_delivery(body_text=None, body=body_access([], {}),
+    outcome = assemble_delivery(body_text=None, body=chapter_access([], {}),
                                 hook_prose=hook, hook_receipt=receipt,
                                 hook_context_sha256=context_sha,
                                 replacements=table, kept_literals=())
@@ -487,7 +487,7 @@ def test_assembly_hook_receipt_binding_enforced():
     hook, body_text, context_sha, receipt, access = (
         '楔子：裴书远夜行。', '正文：裴书远到家。', 'c' * 64,
         _hook_receipt_dict('楔子：裴书远夜行。', 'c' * 64),
-        body_access(['s01'], {'s01': {'status': 'accepted'}}))
+        chapter_access(['s01'], {'s01': {'status': 'accepted'}}))
     wrong_ctx = assemble_delivery(body_text=body_text, body=access, hook_prose=hook,
                                   hook_receipt=receipt, hook_context_sha256='d' * 64,
                                   replacements=table, kept_literals=())

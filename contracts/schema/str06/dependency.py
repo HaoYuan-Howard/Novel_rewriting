@@ -161,6 +161,7 @@ STR06_MIGRATION_DEPENDENCY_RULES: Final[tuple[DependencyRule, ...]] = (
         + tuple(m for m in _STAGE457 if m != 'novel.stages.str06.hook_writer')),
     # naming／assembly 禁止 import design／grounding／compile／project／hook_design
     # （计划原文）；两者共用 literal_scan，assembly 复用 naming 的纯函数。
+    # F5 起 assembly 消费 body_checks（篇幅口径）与 body_writer（前文拼接/文本 SHA）。
     DependencyRule(
         module='novel.stages.str06.naming',
         allows=('contracts.schema.str06.*', 'novel.stages.str06.literal_scan'),
@@ -171,7 +172,8 @@ STR06_MIGRATION_DEPENDENCY_RULES: Final[tuple[DependencyRule, ...]] = (
     DependencyRule(
         module='novel.stages.str06.assembly',
         allows=('contracts.schema.str06.*', 'novel.stages.str06.literal_scan',
-                'novel.stages.str06.naming'),
+                'novel.stages.str06.naming', 'novel.stages.str06.body_checks',
+                'novel.stages.str06.body_writer'),
         forbids=('novel.llm', 'novel.llm.*', 'novel.stages.str06.hook_writer',
                  'novel.stages.str06.source_compile', 'novel.stages.str06.grounding',
                  'novel.stages.str06.design_compile', 'novel.stages.str06.compile',

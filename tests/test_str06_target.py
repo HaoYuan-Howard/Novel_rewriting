@@ -168,13 +168,15 @@ def _design_wire():
             {'scene_id': 's01', 'state_reads': [],
              'driver': {'focal_actor': 'yun', 'immediate_want': '保全婚姻',
                         'opposition': '家族压力', 'turn': '约定'},
+             'realization_brief': '重心在约定成立的承诺瞬间；从家族施压的晚宴写起，'
+                                  '展开两人独处的对峙，在立约处收住，衔接下一场的兑现。',
              'beats': [
                  {'beat_id': 'bt1', 'event': '约定成立', 'participants': ['yun', 'fu_jun'],
                   'dramatic_intent': '立誓', 'target_delta': [
                       {'domain': 'relation', 'subjects': ['yun', 'fu_jun'], 'op': 'set', 'scope': 'book', 'key': 'marital_status', 'value': '夫妻'}],
                   'delivery_hint': ''}],
              'delivery': {'pov': 'yun', 'voice': '冷峻', 'avoid': []}}],
-        'chapters': [{'chapter_ordinal': 1, 'scene_ids': ['s01']}],
+        'chapters': [{'chapter_ordinal': 1, 'purpose': '婚姻从名分走向盟约', 'scene_ids': ['s01']}],
         'chapter_weights': {'s01': 1.0},
     }
 
@@ -184,6 +186,9 @@ def test_assemble_design_green_and_refusals():
         _design_wire(), known_char_ids={'yun', 'fu_jun'})
     assert body is not None and not errors, errors
     assert body.scenes[0].beats[0].target_delta[0].domain == 'relation'
+    # RC4：导演说明与章节目的作为 canonical 内容被组装保留
+    assert body.scenes[0].realization_brief.startswith('重心在')
+    assert body.chapters[0].purpose == '婚姻从名分走向盟约'
 
     bad = _design_wire()
     bad['scenes'][0]['beats'][0]['participants'].append('ghost')

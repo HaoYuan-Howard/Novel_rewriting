@@ -11,12 +11,12 @@ import sys
 import pytest
 from pydantic import ValidationError
 
-from contracts.schema.str06 import BindingEntry, SemanticBinding, SceneReceipt, TargetDelta
+from contracts.schema.str06 import BindingEntry, SemanticBinding, TargetDelta
 from contracts.schema.str06.state import StateAddress, SurfaceIntroduction
 from novel.stages.str06.compile import compile_execution_plan
 from novel.stages.str06.project import project_context
 from novel.stages.str06.fold import fold_accepted_prefix, FoldedState
-from novel.stages.str06.checks import canonical_sha256, check_receipt_binding
+from novel.stages.str06.checks import canonical_sha256
 from novel.stages.str06.guard import run_mechanical_guard
 from novel.stages.str06.grounding import assemble_preserve, project_brief, assemble_binding
 from novel.stages.str06.source_compile import ChapterCompiler, assemble_blueprint, chapter_input_snapshot
@@ -29,9 +29,9 @@ def contexts(graph, binding):
     plan, errors = compile_execution_plan(graph, binding)
     assert not errors, errors
     return {s.scene_id: project_context(
-        scene_id=s.scene_id, attempt_id='a1', graph=graph, plan=plan, binding=binding,
-        folded_prefix=fold_accepted_prefix(plan.scenes[:i], initial=plan.initial_establishments),
-        total_budget=1000) for i, s in enumerate(graph.scenes)}
+        scene_id=s.scene_id, graph=graph, plan=plan, binding=binding,
+        folded_prefix=fold_accepted_prefix(plan.scenes[:i], initial=plan.initial_establishments))
+        for i, s in enumerate(graph.scenes)}
 
 
 def test_diamond_requires_is_not_cycle_and_brief_all_kinds_are_closed():
@@ -68,7 +68,7 @@ def test_reversed_acyclic_dependency_is_rejected():
     assert any('逆序' in e for e in compile_execution_plan(_graph(), binding)[1])
 
 
-@pytest.mark.parametrize('change', ['satisfaction', 'pov', 'avoid', 'hint', 'delta'])
+@pytest.mark.parametrize('change', ['satisfaction', 'pov', 'avoid', 'hint', 'delta', 'brief'])
 def test_actual_business_change_invalidates_only_own_context(change):
     cp = _cp(_ob('ob1'))
     graph, binding = _graph(), _binding(cp)
@@ -81,18 +81,20 @@ def test_actual_business_change_invalidates_only_own_context(change):
         graph.scenes[0].delivery.avoid = ('不得提前披露',)
     elif change == 'hint':
         graph.scenes[0].beats[0].delivery_hint = '先动作后解释'
+    elif change == 'brief':
+        graph.scenes[0].realization_brief = '重心改为暗中交锋。'
     else:
         graph.scenes[0].beats[0].target_delta[0].value = '冬'
     after = contexts(graph, binding)
+    # slice 身份变化 = 该场消费内容变化（章级失效判定的材料）
     assert before['s01'][1] != after['s01'][1]
     assert before['s02'] == after['s02']  # s02 没有消费 s01 的该状态/义务
-    old = before['s01'][0]
-    receipt = SceneReceipt(scene_id='s01', attempt_id='a1', prose_sha256='a'*64,
-                           writer_context_sha256=canonical_sha256(old),
-                           execution_slice_sha256=old.execution_slice_sha256,
-                           judge_contract_version='str06-rc2', status='accepted')
-    assert check_receipt_binding(receipt, after['s01'][0],
-                                 execution_slice_sha256=after['s01'][1].execution_slice_sha256)
+    # avoid 经投影进入 IR 的明确禁止事项（不进呈现视图）
+    if change == 'avoid':
+        assert after['s01'][0].verification_ir.prohibitions == ('不得提前披露',)
+        assert '不得提前披露' not in '\n'.join(
+            v for v in after['s01'][0].writer_brief.model_dump().values()
+            if isinstance(v, str))
 
 
 def test_state_read_change_invalidates_consumer_and_unknown_blocks():
@@ -117,7 +119,9 @@ def test_compound_obligation_uses_prior_beats_without_premature_whole_fact():
     context = contexts(graph, binding)['s02'][0]
     assert context.verification_ir.obligations == cp.obligations
     assert context.verification_ir.continuity_fact_view == ('s01#bt1：事件s01',)
-    assert '正文呈现' in context.writer_brief.required_content[0]
+    # 义务清单属于事实约束视图（IR），不在呈现视图里重复
+    assert '义务ob30' in context.verification_ir.obligations[0].statement
+    assert not hasattr(context.writer_brief, 'required_content')
     binding.entries[0].supporting_beat_refs = ('s02#bt1',)
     assert compile_execution_plan(graph, binding)[1]
 

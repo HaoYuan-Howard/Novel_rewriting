@@ -355,8 +355,7 @@ def check_rel_family(rel: str) -> str:
 
     与 `check_rel_deep` 的区别就是「登记」二字：deep 是给归档/文本读取用的无限深，
     本函数要求路径落在 `STR06_PATH_FAMILIES` 登记的前缀内，家族外的多级路径照样
-    拒——两级一般规则（`check_rel`）一寸不放。两级的 STR-06 特例
-    （`stage5/rewritten_body.txt`）仍走 `check_rel`。
+    拒——两级一般规则（`check_rel`）一寸不放。
     """
     from contracts.schema.str06.families import family_for
 
@@ -1461,9 +1460,9 @@ def stage5_trim_audit_ordinal(rel: str) -> int | None:
 
 def str06_artifact_path(root: Path, rel: str) -> Path:
     """RC 产物仅接受已登记路径家族，并拒绝链接越过隔离根。"""
-    from contracts.schema.str06.families import family_for, STR06_TWO_LEVEL_PATHS
+    from contracts.schema.str06.families import family_for
     normalized = check_rel_family(rel)
-    if family_for(normalized) is None and normalized not in STR06_TWO_LEVEL_PATHS:
+    if family_for(normalized) is None:
         raise PathRefused('STR-06 路径未登记家族')
     target = (root.resolve() / normalized).resolve()
     if not target.is_relative_to(root.resolve()):

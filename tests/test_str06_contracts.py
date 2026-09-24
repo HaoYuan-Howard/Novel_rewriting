@@ -20,25 +20,26 @@ from contracts.schema.str06 import (
     STR06_CONSUMPTION_PROJECTIONS,
     STR06_DEPENDENCY_RULES,
     STR06_PATH_FAMILIES,
-    STR06_TWO_LEVEL_PATHS,
     BindingEntry,
     ChapterAssignment,
+    ChapterIR,
+    ChapterLengthDisclosure,
+    ChapterNavEntry,
+    ChapterReceipt,
     DependencyEdge,
     Establishment,
     ExecutionSlice,
-    FailureOrigin,
-    FidelityVerdict,
     IdentityProjection,
     OutputConstraints,
     PreserveCheckpoint,
     PreserveKind,
     PreservationPolicy,
     ReconstructionBrief,
-    SceneReceipt,
     SemanticBinding,
     SourceLineage,
     SourceObligation,
     UnboundEntry,
+    WriterBookIR,
     WriterContext,
     WriterBrief,
     VerificationIR,
@@ -48,7 +49,6 @@ from contracts.schema.str06.design import (
     BodyDesign, SceneDelivery, SceneDriver, TargetBeat, TargetScene,
 )
 from contracts.schema.str06.execution import Reinforcement
-from contracts.schema.str06.receipt import FidelityFinding
 from novel.errors import PathRefused
 from novel.paths import check_rel, check_rel_family, family_input_key
 
@@ -189,15 +189,16 @@ def _scene(scene_id: str) -> TargetScene:
         beats=(TargetBeat(beat_id='bt1', event='提亲', participants=('ch1',),
                           dramatic_intent='立誓', target_delta=()),),
         delivery=SceneDelivery(pov='ch1', voice='冷峻'),
-    )
+        realization_brief='重心在提亲被拒的瞬间；从门槛外的雨写起，压缩路途，'
+                          '在退婚言辞落地处收束，衔接下一场的家族反击。')
 
 
 def _graph(**over) -> dict:
     base = dict(
         graph_id='g1', initial_state=(),
         scenes=(_scene('s01'), _scene('s02')),
-        chapters=(ChapterAssignment(chapter_ordinal=1, scene_ids=('s01',)),
-                  ChapterAssignment(chapter_ordinal=2, scene_ids=('s02',))),
+        chapters=(ChapterAssignment(chapter_ordinal=1, purpose='婚约破裂，主角立誓', scene_ids=('s01',)),
+                  ChapterAssignment(chapter_ordinal=2, purpose='家族反扑，退路收窄', scene_ids=('s02',))),
     )
     base.update(over)
     return base
@@ -210,26 +211,50 @@ def test_presentation_graph_source_blind():
             BodyDesign(**{**_graph(), smuggled: 'b07_01'})
 
 
+def test_rc4_requires_director_brief_and_chapter_purpose():
+    """RC4 新必填：realization_brief / purpose 缺失即拒读——不用空串兜底，
+    不由 compiler 补写（旧 RC3 design 明确拒读，归 F5e 重跑 Design）。"""
+    import copy
+    no_brief = copy.deepcopy(_graph())
+    scene = no_brief['scenes'][1].model_dump()
+    del scene['realization_brief']
+    no_brief['scenes'] = (no_brief['scenes'][0], scene)
+    with pytest.raises(ValidationError):
+        BodyDesign(**no_brief)
+    empty_brief = copy.deepcopy(_graph())
+    scene0 = empty_brief['scenes'][0].model_dump()
+    scene0['realization_brief'] = ''
+    empty_brief['scenes'] = (scene0, empty_brief['scenes'][1])
+    with pytest.raises(ValidationError):
+        BodyDesign(**empty_brief)
+    no_purpose = copy.deepcopy(_graph())
+    with pytest.raises(ValidationError):
+        no_purpose['chapters'] = tuple(
+            ChapterAssignment(chapter_ordinal=c.chapter_ordinal, scene_ids=c.scene_ids)
+            for c in no_purpose['chapters'])
+
+
 def test_presentation_graph_chapter_invariants():
     BodyDesign(**_graph())
     # 章号必须从 1 连续
     with pytest.raises(ValidationError):
         BodyDesign(**_graph(chapters=(
-            ChapterAssignment(chapter_ordinal=2, scene_ids=('s01',)),
-            ChapterAssignment(chapter_ordinal=3, scene_ids=('s02',)))))
+            ChapterAssignment(chapter_ordinal=2, purpose='起', scene_ids=('s01',)),
+            ChapterAssignment(chapter_ordinal=3, purpose='承', scene_ids=('s02',)))))
     # 场景必须全部归章
     with pytest.raises(ValidationError, match='未归章'):
-        BodyDesign(**_graph(chapters=(ChapterAssignment(chapter_ordinal=1, scene_ids=('s01',)),)))
+        BodyDesign(**_graph(chapters=(ChapterAssignment(
+            chapter_ordinal=1, purpose='起', scene_ids=('s01',)),)))
     # 归章引用不存在的场景
     with pytest.raises(ValidationError, match='不存在'):
         BodyDesign(**_graph(chapters=(
-            ChapterAssignment(chapter_ordinal=1, scene_ids=('s01',)),
-            ChapterAssignment(chapter_ordinal=2, scene_ids=('s02', 'sX')),)))
+            ChapterAssignment(chapter_ordinal=1, purpose='起', scene_ids=('s01',)),
+            ChapterAssignment(chapter_ordinal=2, purpose='承', scene_ids=('s02', 'sX')),)))
     # 同一场景归两章
     with pytest.raises(ValidationError, match='多章'):
         BodyDesign(**_graph(chapters=(
-            ChapterAssignment(chapter_ordinal=1, scene_ids=('s01',)),
-            ChapterAssignment(chapter_ordinal=2, scene_ids=('s01',)))))
+            ChapterAssignment(chapter_ordinal=1, purpose='起', scene_ids=('s01',)),
+            ChapterAssignment(chapter_ordinal=2, purpose='承', scene_ids=('s01',)))))
     # 权重引用不存在的场景
     with pytest.raises(ValidationError, match='chapter_weights'):
         BodyDesign(**_graph(chapter_weights={'sX': 1.0}))
@@ -262,21 +287,41 @@ def test_establishment_scope_and_domain_closed():
 # ───────────────────────── WriterContext 双视图 ─────────────────────────
 
 def _ir(scene_id: str) -> VerificationIR:
-    return VerificationIR(scene_id=scene_id, obligations=(SourceObligation(**_obligation()),))
+    from contracts.schema.str06.context import BeatIR
+    return VerificationIR(scene_id=scene_id,
+                          obligations=(SourceObligation(**_obligation()),),
+                          beats=(BeatIR(beat_ref=f'{scene_id}#bt1', event='提亲',
+                                        dramatic_intent='立誓'),))
 
 
 def test_writer_context_views_must_agree():
-    WriterContext(
-        scene_id='s01', attempt_id='a1', execution_slice_sha256=H64,
-        verification_ir=_ir('s01'),
-        writer_brief=WriterBrief(pov='ch1', scene_id='s01', task='写', scene_driver_summary='驱动',
-                                 beat_outlines=('拍1',), length_budget=800, voice='冷峻'))
+    brief = WriterBrief(scene_id='s01', realization_brief='重心在提亲被拒。',
+                        scene_driver_summary='驱动', pov='ch1', voice='冷峻')
+    WriterContext(scene_id='s01', execution_slice_sha256=H64,
+                  verification_ir=_ir('s01'), writer_brief=brief)
     with pytest.raises(ValidationError, match='同源'):
         WriterContext(
-            scene_id='s01', attempt_id='a1', execution_slice_sha256=H64,
+            scene_id='s01', execution_slice_sha256=H64,
             verification_ir=_ir('s02'),
-            writer_brief=WriterBrief(pov='ch1', scene_id='s01', task='写', scene_driver_summary='驱动',
-                                     beat_outlines=('拍1',), length_budget=800, voice='冷峻'))
+            writer_brief=brief)
+    # attempt/审计字段不进静态 IR（I-38）
+    with pytest.raises(ValidationError):
+        WriterContext(**{**WriterContext(
+            scene_id='s01', execution_slice_sha256=H64,
+            verification_ir=_ir('s01'), writer_brief=brief).model_dump(),
+            'attempt_id': 'a1'})
+
+
+def test_verification_ir_requires_beat_positioning():
+    """F5：IR 必须携带逐拍定位；跨场景 beat_ref 挂靠被构造期拒绝。"""
+    with pytest.raises(ValidationError):
+        VerificationIR(scene_id='s01', obligations=(), beats=())
+    from contracts.schema.str06.context import BeatIR
+    with pytest.raises(ValidationError, match='别的场景'):
+        VerificationIR(scene_id='s01', obligations=(), beats=(
+            BeatIR(beat_ref='s02#bt1', event='x', dramatic_intent='y'),))
+    with pytest.raises(ValidationError):
+        BeatIR(beat_ref='bt1', event='x', dramatic_intent='y')
 
 
 def test_execution_slice_fields():
@@ -289,40 +334,51 @@ def test_execution_slice_fields():
                        execution_slice_sha256=H64)
 
 
-# ───────────────────────── Receipt ─────────────────────────
+# ───────────────────────── 章级回执（F5） ─────────────────────────
 
-def test_scene_receipt_is_minimal_seven_fields():
-    assert set(SceneReceipt.model_fields) == {
-        'scene_id', 'attempt_id', 'prose_sha256', 'writer_context_sha256',
-        'execution_slice_sha256', 'judge_contract_version', 'status'}
-    receipt = SceneReceipt(
-        scene_id='s01', attempt_id='a1', prose_sha256=H64, writer_context_sha256=H64,
-        execution_slice_sha256=H64, judge_contract_version='str06-rc1', status='accepted')
-    assert receipt.status.value == 'accepted'
+def _length(**over) -> dict:
+    base = dict(char_count=900, target_chars=1000, band_low=600, band_high=1300,
+                within_band=True, deviation_ratio=-0.1)
+    base.update(over)
+    return base
+
+
+def _chapter_receipt(**over) -> dict:
+    base = dict(
+        chapter_ordinal=1, book_ir_sha256=H64, prior_text_sha256=H64,
+        prose_sha256=H64, request_identity='req-1',
+        protocol_version='str06-body-protocol-v1', renderer_version='str06-render-v1',
+        validator_version='str06-body-mechanical-v1', status='accepted',
+        mechanical_checks=('non_empty', 'length_band'), length=_length())
+    base.update(over)
+    return base
+
+
+def test_chapter_receipt_binds_inputs_and_rejects_metadata():
+    receipt = ChapterReceipt(**_chapter_receipt())
+    assert receipt.semantic == 'unverified'
     # 无关 metadata 不作硬匹配条件：类型上就不存在
     with pytest.raises(ValidationError):
-        SceneReceipt(**{**receipt.model_dump(), 'book_plan_sha256': H64})
+        ChapterReceipt(**{**_chapter_receipt(), 'attempt_id': 'a1'})
     with pytest.raises(ValidationError):
-        SceneReceipt(**{**receipt.model_dump(), 'audited_at': '2026-09-23'})
-    # 大写/非十六进制 hash 是「看似绑定、对不上账」的形态
+        ChapterReceipt(**{**_chapter_receipt(), 'audited_at': '2026-09-24'})
+    # 换 NameMap 不影响接受回执：回执字段里没有任何交付材料
+    assert 'name_map' not in ChapterReceipt.model_fields
+    # hash 字符集：大写/非十六进制在构造期即拒
     with pytest.raises(ValidationError):
-        SceneReceipt(**{**receipt.model_dump(), 'prose_sha256': 'A' * 64})
+        ChapterReceipt(**_chapter_receipt(prose_sha256='A' * 64))
+    # 篇幅披露窗口自洽
+    with pytest.raises(ValidationError):
+        ChapterReceipt(**_chapter_receipt(length=_length(band_low=2000, band_high=1)))
 
 
-def test_fidelity_verdict_only_diagnoses():
-    assert {o.value for o in FailureOrigin} == {'writer', 'upstream_ir', 'unverifiable'}
-    receipt = SceneReceipt(
-        scene_id='s01', attempt_id='a1', prose_sha256=H64, writer_context_sha256=H64,
-        execution_slice_sha256=H64, judge_contract_version='str06-rc1', status='rejected')
-    FidelityVerdict(receipt=receipt, findings=(
-        FidelityFinding(code='time_precision', scene_id='s01', detail='当天→次日',
-                        origin='writer'),))
-    with pytest.raises(ValidationError):
-        FidelityVerdict(receipt=receipt, findings=(
-            FidelityFinding(code='x', scene_id='s02', detail='y', origin='writer'),))
-    with pytest.raises(ValidationError):
-        # Judge 不编辑 truth：判定上没有修复通道
-        FidelityVerdict(**{**FidelityVerdict(receipt=receipt).model_dump(), 'applied_fix': 'z'})
+def test_chapter_receipt_disclosure_shape():
+    disclosed = ChapterReceipt(**_chapter_receipt(
+        length=_length(char_count=400, band_low=600, within_band=False,
+                       deviation_ratio=-0.6), length_disclosed=True))
+    assert disclosed.length_disclosed and not disclosed.length.within_band
+    in_band = ChapterReceipt(**_chapter_receipt())
+    assert not in_band.length_disclosed and in_band.length.within_band
 
 
 # ───────────────────────── 消费投影与 Prepare 坐标分离 ─────────────────────────
@@ -342,8 +398,12 @@ def test_path_families_unique_prefixes():
     prefixes = [f.prefix for f in STR06_PATH_FAMILIES.values()]
     assert len(prefixes) == len(set(prefixes))
     assert all(p.endswith('/') for p in prefixes)
-    # 两级特例不在三级家族前缀内（走现役两级准入）
-    assert not any(t.startswith(p) for p in prefixes for t in STR06_TWO_LEVEL_PATHS)
+    # F5 章级正文家族已登记；场景级旧家族不得残留（正文按章成文）
+    assert 'str06.stage5.scenes' not in STR06_PATH_FAMILIES
+    assert 'str06.stage5.acceptance.fidelity' not in STR06_PATH_FAMILIES
+    assert 'str06.stage5.body' in STR06_PATH_FAMILIES
+    assert 'str06.stage5.acceptance.body' in STR06_PATH_FAMILIES
+    assert 'str06.stage4.ir' in STR06_PATH_FAMILIES
 
 
 def test_check_rel_family_admits_registered_and_refuses_rest():

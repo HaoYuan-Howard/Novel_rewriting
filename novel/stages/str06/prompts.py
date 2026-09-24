@@ -119,10 +119,15 @@ scope(book/scene), knowledge_mode(knowledge 为 known/suspected/heard，其它 n
 临时动作环境用 scene；结束的长期状态用 unset；倒叙讲述只能改变当下读者/人物知情，不能倒改当前状态。
 每场 state_reads 显式列出实际需要的状态地址(domain,key,subjects,holder)，不要列全书状态。
 每拍 surface_introductions 只声明该位置首次允许的称谓 [{char_id,surfaces}]，不得一次放开该人物所有称谓。
+每场 realization_brief 必填非空：本场怎样演出来——重心在哪里、人物如何理解局面、哪些内容展开或
+略写、转折怎样显现、在哪里收住、如何衔接邻场；一段自然语言，不规定逐句正文，不拆成情绪/镜头/
+五感等字段。brief 只承载呈现方向：凡涉及关键行动、持久认知变化、秘密、承诺或因果条件的表述，
+必须同时体现在 driver/event/target_delta/surface_introductions 等正式字段，不得只写在 brief 里。
+chapters 每项必填 purpose：本章承担的核心变化，概括章内已设计的变化，不单独增加事件或结果。
 返回 initial_state,initial_surfaces,scenes,chapters,chapter_weights。
-scenes 每项 scene_id,driver{focal_actor,immediate_want,opposition,turn},state_reads,
+scenes 每项 scene_id,driver{focal_actor,immediate_want,opposition,turn},state_reads,realization_brief,
 beats[{beat_id(场内短 ID),event,participants,dramatic_intent,target_delta,delivery_hint,surface_introductions}],
-delivery{pov,voice,avoid}。chapters:[{chapter_ordinal,scene_ids}] 连续1..N、非空、全部场景恰好归一章；
+delivery{pov,voice,avoid}。chapters:[{chapter_ordinal,purpose,scene_ids}] 连续1..N、非空、全部场景恰好归一章；
 scenes 与 chapters 阅读顺序一致。chapter_weights 覆盖所有场景，均为正且总和1。
 """
 
@@ -189,8 +194,9 @@ surface_releases：楔子中允许使用的称谓 [{char_id, surfaces}]——只
 forbidden_reveals（2-4 条）：后文真实存在、楔子不得提前兑现的关键揭示。每条
 {ref:"场景#拍", address:null 或 {domain,key,subjects,holder}}。
 
-design_brief（80-250 字）：这些材料如何组织成楔子——entry、escalation、reveal order、
-contrast/payoff、cut。只谈组织方式，不谈措辞。
+design_brief（120-300 字）：这些材料如何组织成楔子的写作要求，逐项覆盖——
+入口（从什么状态或画面进入）、哪些材料快速带过、冲突如何升级、重点展开哪里、
+给读者留下什么问题、在哪里切断。只谈组织方式，不谈措辞。
 delivery_brief（一句话）：文风机制与口吻（人称、节奏、对白密度），呈现自由交给写手。
 
 只输出一个 JSON 对象（不要围栏、不要解释）：
@@ -210,6 +216,20 @@ HOOK_WRITER_SYSTEM = """你是楔子写手（prose realizer）。楔子的结构
 呈现自由（你的创意只在这里发挥）：句法、对白措辞、节奏、意象、语气、局部小动作。
 
 直接输出楔子正文本身：不要标题，不要任何解释、前言、后缀，不要 markdown 围栏。"""
+
+BODY_WRITER_SYSTEM = """你是小说正文写手（prose realizer）。整本书的故事与呈现设计已经全部完成，
+你的唯一职责是把给定章节写成高质量的小说正文。
+
+规则（违反任何一条即报废）：
+1. 你是 prose realizer，不是故事设计师：事实、事件、知情、义务与释放位置以输入为准，不新增、删除、替换；输入没写的背景、人物前史与后续伏笔一律不补造。
+2. 导演说明是呈现方向，事实约束是硬边界；两者冲突时以事实约束为准，不靠改写事实来成全文风。
+3. 只使用已释放的称谓与已获准知道的信息；未释放的专名字面与提前知情一律不得出现。
+4. 逐拍结果是本章结束后需要成立的结果，要实际写出来，不是提一嘴关键词。
+5. 遵守交付要求：一次给出本章完整正文，篇幅在给定区间内。
+
+呈现自由（你的创意只在这里发挥）：在导演说明边界内组织场景节奏、展开与压缩，写具体的对白、动作、停顿与即时反应。
+
+直接输出本章正文本身：不要章号、标题、场景标记，不要任何解释、前言、后缀，不要 markdown 围栏。"""
 
 NAMING_RULES = """任务：为角色分配最终表层姓名（新姓/新名），只输出 JSON，不解释、不生成替换规则。
 

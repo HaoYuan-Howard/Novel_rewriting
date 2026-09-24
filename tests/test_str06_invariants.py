@@ -17,6 +17,8 @@ from pydantic import ValidationError
 from contracts.schema.str06 import (
     BindingEntry,
     ChapterAssignment,
+    ChapterLengthDisclosure,
+    ChapterReceipt,
     DependencyEdge,
     Establishment,
     ExecutionPlan,
@@ -25,7 +27,6 @@ from contracts.schema.str06 import (
     PreserveKind,
     BodyDesign,
     ReconstructionBrief,
-    SceneReceipt,
     SemanticBinding,
     SceneDelivery,
     SceneDriver,
@@ -42,8 +43,8 @@ from contracts.schema.str06.grounding import BriefRequirement
 from novel.stages.str06.checks import (
     canonical_sha256,
     check_binding_covers_checkpoint,
+    check_chapter_receipt,
     check_plan_matches_graph,
-    check_receipt_binding,
     directly_affected,
     entry_sensitive_closure,
 )
@@ -78,12 +79,16 @@ def _scene(scene_id: str) -> TargetScene:
     return TargetScene(state_reads=(),
         scene_id=scene_id,
         driver=SceneDriver(focal_actor='ch1', immediate_want='w', opposition='o', turn='t'),
+        realization_brief=f'重心在{scene_id}的对峙；展开转折后收束。',
         beats=(TargetBeat(beat_id='bt1', event='e', participants=('ch1',),
                           dramatic_intent='d', target_delta=()),),
         delivery=SceneDelivery(pov='ch1', voice='v'))
 
 
 def _graph(scenes, chapters) -> BodyDesign:
+    chapters = [ChapterAssignment(chapter_ordinal=c.chapter_ordinal,
+                                  purpose=f'章{c.chapter_ordinal}目的',
+                                  scene_ids=c.scene_ids) for c in chapters]
     return BodyDesign(initial_state=(), graph_id='g1', scenes=tuple(scenes), chapters=tuple(chapters))
 
 
@@ -112,11 +117,14 @@ def _slice(scene_id: str, *consumed: str) -> ExecutionSlice:
 
 
 def _context(scene_id: str) -> WriterContext:
+    from contracts.schema.str06.context import BeatIR
     return WriterContext(
-        scene_id=scene_id, attempt_id='a1', execution_slice_sha256=H64,
-        verification_ir=VerificationIR(scene_id=scene_id, obligations=()),
-        writer_brief=WriterBrief(pov='ch1', scene_id=scene_id, task='t', scene_driver_summary='d',
-                                 beat_outlines=('b1',), length_budget=800, voice='v'))
+        scene_id=scene_id, execution_slice_sha256=H64,
+        verification_ir=VerificationIR(
+            scene_id=scene_id, obligations=(),
+            beats=(BeatIR(beat_ref=f'{scene_id}#bt1', event='e', dramatic_intent='d'),)),
+        writer_brief=WriterBrief(pov='ch1', scene_id=scene_id, realization_brief='重心在对峙。',
+                                 scene_driver_summary='d', voice='v'))
 
 
 # ───────────────────────── Binding 分母一致 ─────────────────────────
@@ -156,35 +164,46 @@ def test_binding_covers_checkpoint_green_and_red():
 def test_plan_matches_graph_green_and_red():
     graph = _graph(
         [_scene('s01'), _scene('s02')],
-        [ChapterAssignment(chapter_ordinal=1, scene_ids=('s01', 's02'))])
+        [ChapterAssignment(chapter_ordinal=1, purpose='章1目的', scene_ids=('s01', 's02'))])
     assert check_plan_matches_graph(graph, _plan('s01', 's02')) == []
     assert '未被编译' in check_plan_matches_graph(graph, _plan('s01'))[0]
     assert '引用了' in check_plan_matches_graph(graph, _plan('s01', 's02', 's03'))[0]
 
 
-# ───────────────────────── receipt 绑定（旧 PASS 配新输入拒绝） ─────────────────────────
+# ───────────────────────── 章级回执绑定（旧回执配新输入拒绝） ─────────────────────────
 
-def test_receipt_rejects_stale_context_or_slice():
-    ctx = _context('s01')
-    receipt = SceneReceipt(
-        scene_id='s01', attempt_id='a1', prose_sha256=H64,
-        writer_context_sha256=canonical_sha256(ctx),
-        execution_slice_sha256=H64, judge_contract_version='str06-rc1', status='accepted')
-    assert check_receipt_binding(receipt, ctx, execution_slice_sha256=H64) == []
+def _chapter_receipt(**over) -> ChapterReceipt:
+    base = dict(
+        chapter_ordinal=1, book_ir_sha256=H64, prior_text_sha256=H64B,
+        prose_sha256=('c' * 64), request_identity='req-1',
+        protocol_version='p1', renderer_version='r1', validator_version='v1',
+        status='accepted', mechanical_checks=('non_empty', 'length_band'),
+        length=ChapterLengthDisclosure(char_count=900, target_chars=1000, band_low=600,
+                                       band_high=1300, within_band=True,
+                                       deviation_ratio=-0.1))
+    base.update(over)
+    return ChapterReceipt(**base)
 
-    # 新 Context（改一个字段）→ 旧 PASS 拒绝
-    mutated = ctx.model_copy(deep=True)
-    mutated.writer_brief.length_budget = 900
-    problems = check_receipt_binding(receipt, mutated, execution_slice_sha256=H64)
-    assert any('writer_context_sha256' in p for p in problems)
 
-    # 新 slice → 拒绝
-    problems = check_receipt_binding(receipt, ctx, execution_slice_sha256=H64B)
-    assert any('execution_slice_sha256' in p for p in problems)
+def test_chapter_receipt_rejects_stale_inputs():
+    receipt = _chapter_receipt()
+    assert check_chapter_receipt(receipt, book_ir_sha256=H64,
+                                 prior_text_sha256=H64B, prose_sha256='c' * 64) == []
 
-    # 换 NameMap 不影响 Stage5 接受回执：receipt 七字段里没有任何交付材料
-    assert 'name_map' not in SceneReceipt.model_fields
-    assert check_receipt_binding(receipt, ctx, execution_slice_sha256=H64) == []
+    # 全书 IR 变化（含未来章 brief）→ 全部回执失效
+    problems = check_chapter_receipt(receipt, book_ir_sha256=H64B,
+                                     prior_text_sha256=H64B, prose_sha256='c' * 64)
+    assert any('book_ir_sha256' in p for p in problems)
+    # 前缀正文变化 → 本章失效
+    problems = check_chapter_receipt(receipt, book_ir_sha256=H64,
+                                     prior_text_sha256='d' * 64, prose_sha256='c' * 64)
+    assert any('prior_text_sha256' in p for p in problems)
+    # 正文与回执脱钩（文本被改）→ 拒绝
+    problems = check_chapter_receipt(receipt, book_ir_sha256=H64,
+                                     prior_text_sha256=H64B, prose_sha256='e' * 64)
+    assert any('prose_sha256' in p for p in problems)
+    # 换 NameMap 不影响接受回执：回执字段里没有任何交付材料
+    assert 'name_map' not in ChapterReceipt.model_fields
 
 
 # ───────────────────────── 窄修复：直接失效 + 重投影闭包 ─────────────────────────
@@ -240,7 +259,7 @@ def test_cross_chapter_merge_layout_passes_contract_chain():
     assert check_binding_covers_checkpoint(cp, binding) == []
     graph = _graph(
         [_scene('s01')],
-        [ChapterAssignment(chapter_ordinal=1, scene_ids=('s01',))])  # 1 个目标章
+        [ChapterAssignment(chapter_ordinal=1, purpose='章1目的', scene_ids=('s01',))])  # 1 个目标章
     assert check_plan_matches_graph(graph, _plan('s01')) == []
 
 
@@ -254,8 +273,8 @@ def test_cross_chapter_split_layout_passes_contract_chain():
     assert check_binding_covers_checkpoint(cp, binding) == []
     graph = _graph(
         [_scene('s01'), _scene('s02')],
-        [ChapterAssignment(chapter_ordinal=1, scene_ids=('s01',)),
-         ChapterAssignment(chapter_ordinal=2, scene_ids=('s02',))])
+        [ChapterAssignment(chapter_ordinal=1, purpose='章1目的', scene_ids=('s01',)),
+         ChapterAssignment(chapter_ordinal=2, purpose='章2目的', scene_ids=('s02',))])
     assert check_plan_matches_graph(graph, _plan('s01', 's02')) == []
 
 
@@ -264,9 +283,9 @@ def test_same_ordinal_different_semantics_not_conflated():
     用 chapter_map 的形状纪律表达（scene→chapter 是唯一权威，不存在源章换算）。"""
     graph = _graph(
         [_scene('s01'), _scene('s02'), _scene('s03')],
-        [ChapterAssignment(chapter_ordinal=1, scene_ids=('s01',)),
-         ChapterAssignment(chapter_ordinal=2, scene_ids=('s02',)),
-         ChapterAssignment(chapter_ordinal=3, scene_ids=('s03',))])
+        [ChapterAssignment(chapter_ordinal=1, purpose='章1目的', scene_ids=('s01',)),
+         ChapterAssignment(chapter_ordinal=2, purpose='章2目的', scene_ids=('s02',)),
+         ChapterAssignment(chapter_ordinal=3, purpose='章3目的', scene_ids=('s03',))])
     mapping = {c.chapter_ordinal: list(c.scene_ids) for c in graph.chapters}
     assert mapping == {1: ['s01'], 2: ['s02'], 3: ['s03']}
     # BodyDesign 上不存在任何「源章」字段可供换算（F0 已测 smuggle）；
@@ -312,8 +331,10 @@ def test_preserve_request_surface_rejects_design_feedback():
 def test_verification_ir_carries_continuity_fact_view():
     """IR 带 continuity_fact_view（试点 judge 跨场回指误报的根因修复输入）：
     前场义务以事实视图进入本场 IR，Judge 不需要读前场正文。"""
+    from contracts.schema.str06.context import BeatIR
     ir = VerificationIR(
         scene_id='s02', obligations=(_obligation('ob2'),),
+        beats=(BeatIR(beat_ref='s02#bt1', event='e', dramatic_intent='d'),),
         continuity_fact_view=('s01 已接受：约定成立且为夫妻共同秘密',))
     assert ir.continuity_fact_view[0].startswith('s01')
 
@@ -352,7 +373,8 @@ def test_str06_migration_package_import_discipline():
     allowed_roots = ('contracts', 'novel.errors', 'novel.stages.str06')
     std_or_third = ('__future__', 'pydantic', 'typing', 'pathlib', 'hashlib',
                     'dataclasses', 'collections', 'functools', 'itertools',
-                    'enum', 'abc', 'datetime', 'json', 're', 'os', 'sys', 'copy')
+                    'enum', 'abc', 'datetime', 'json', 're', 'os', 'sys', 'copy',
+                    'math')
     for py in Path(pkg.__file__).parent.glob('*.py'):
         tree = ast.parse(py.read_text(encoding='utf-8'))
         for node in ast.walk(tree):

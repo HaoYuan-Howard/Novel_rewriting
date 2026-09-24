@@ -1,12 +1,16 @@
-"""同一局部输入投影 IR/WriterBrief 与消费身份；不累计复制所有历史义务。"""
+"""同一局部输入投影 IR/WriterBrief 与消费身份；不累计复制所有历史义务。
+
+F5 职责重划后：VerificationIR 承载全部事实约束（含逐拍定位 BeatIR 与禁止项），
+WriterBrief 只承载呈现（realization_brief 原样投影）；章预算归 ChapterIR，
+不再进入场景 slice 身份。
+"""
 from __future__ import annotations
 
 import hashlib
 import json
-from typing import Mapping
 
 from contracts.schema.str06.context import (
-    SurfaceRelease, VerificationIR, WriterBrief, WriterContext,
+    SurfaceRelease, VerificationIR, WriterBrief, WriterContext, beats_ir,
 )
 from contracts.schema.str06.design import BodyDesign
 from contracts.schema.str06.execution import ExecutionPlan, ExecutionSlice
@@ -39,9 +43,10 @@ def surface_engine_release(graph: BodyDesign, at_scene: str) -> tuple[SurfaceRel
     raise ValueError(f'未知场景 {at_scene}')
 
 
-def project_context(*, scene_id: str, attempt_id: str, graph: BodyDesign,
+def project_context(*, scene_id: str, graph: BodyDesign,
                     plan: ExecutionPlan, binding: SemanticBinding,
-                    folded_prefix: FoldedState, total_budget: int) -> tuple[WriterContext, ExecutionSlice]:
+                    folded_prefix: FoldedState) -> tuple[WriterContext, ExecutionSlice]:
+    """场景双视图与消费身份的确定性投影（纯函数，不落盘、不调 LLM）。"""
     scene = next(s for s in graph.scenes if s.scene_id == scene_id)
     scene_plan = next(s for s in plan.scenes if s.scene_id == scene_id)
     entries = sorted((e for e in binding.entries if e.scene_id == scene_id),
@@ -71,25 +76,23 @@ def project_context(*, scene_id: str, attempt_id: str, graph: BodyDesign,
     continuity = tuple(f'{r}：{positions[r][2].event}' for r in prior_refs)
     releases = surface_engine_release(graph, scene_id)
     delta = tuple(type(d)(**d.model_dump()) for b in scene.beats for d in b.target_delta)
-    ir = VerificationIR(scene_id=scene_id, obligations=owned, entry_state=state,
-                        entry_knowledge=knowledge, released_surfaces=releases,
-                        planned_delta=delta, continuity_fact_view=continuity)
-    weight = graph.chapter_weights.get(scene_id, 1 / len(graph.scenes))
+    ir = VerificationIR(scene_id=scene_id, obligations=owned, beats=beats_ir(scene_id, scene.beats),
+                        entry_state=state, entry_knowledge=knowledge,
+                        released_surfaces=releases, planned_delta=delta,
+                        prohibitions=tuple(scene.delivery.avoid),
+                        continuity_fact_view=continuity)
     facts = tuple(json.dumps(e.model_dump(mode='json'), ensure_ascii=False, sort_keys=True)
                   for e in (*state, *knowledge))
     brief = WriterBrief(
-        scene_id=scene_id, task='完成本场事件与保存义务；跨场支撑仅作回指依据。',
+        scene_id=scene_id,
+        realization_brief=scene.realization_brief,
         scene_driver_summary=(f'{scene.driver.focal_actor} 想「{scene.driver.immediate_want}」，'
                               f'受阻于「{scene.driver.opposition}」，转折：{scene.driver.turn}'),
-        beat_outlines=tuple(f'{b.event}（意图：{b.dramatic_intent}）' for b in scene.beats),
-        constraints=tuple(c.expected for c in scene_plan.constraints),
-        required_content=tuple(f'{o.statement}；满足条件：{o.satisfaction}' for o in owned),
-        entry_facts=facts, continuity=continuity, usable_surfaces=releases,
-        length_budget=max(1, int(total_budget * weight)), voice=scene.delivery.voice,
-        pov=scene.delivery.pov, avoid=scene.delivery.avoid,
-        delivery_hints=tuple(b.delivery_hint for b in scene.beats) + tuple(
+        pov=scene.delivery.pov, voice=scene.delivery.voice,
+        delivery_hints=tuple(b.delivery_hint for b in scene.beats if b.delivery_hint) + tuple(
             f'第 {b.beat_id} 拍起才可使用：' + '、'.join(intro.surfaces)
-            for b in scene.beats for intro in b.surface_introductions))
+            for b in scene.beats for intro in b.surface_introductions),
+        usable_surfaces=releases)
     # 内容身份不含全书 hash、请求 attempt、源坐标和观测元数据。
     business = {
         'contract': STR06_RC_VERSION, 'scene': scene.model_dump(mode='json'),
@@ -101,8 +104,8 @@ def project_context(*, scene_id: str, attempt_id: str, graph: BodyDesign,
     for o in business['ir']['obligations']:
         o.pop('lineage')
     digest = _sha(business)
-    context = WriterContext(scene_id=scene_id, attempt_id=attempt_id,
-                            execution_slice_sha256=digest, verification_ir=ir, writer_brief=brief)
+    context = WriterContext(scene_id=scene_id, execution_slice_sha256=digest,
+                            verification_ir=ir, writer_brief=brief)
     slice_ = ExecutionSlice(scene_id=scene_id, consumed_obligation_ids=ids,
                             entry_state_sha256=_sha([e.model_dump(mode='json') for e in state]),
                             entry_knowledge_sha256=_sha([e.model_dump(mode='json') for e in knowledge]),
