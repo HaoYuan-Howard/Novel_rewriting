@@ -298,12 +298,18 @@ F5a–F5d 已闭合按章成文的契约、引擎与免费验证，F5e 已完成
     新输入）——变化不误用旧结果。facilities 顺序纪律：workflow manifest 须在 base 干净时
     初始化（先 facilities 后书目录），候选工具在 manifest 缺失且 base 非空时按正式
     `_require_clean_base` 拒绝。
-  - [ ] **F7c 余项 · 恢复职责与消费接管**：迁移三条 Stage4 skip 的有效职责：Binding
-    INVALID＋typed witness、owner 停止、同指纹熔断；覆盖 binding-only 崩溃精确补尾和
-    public_state_ref 的身份隔离／跨章携入／状态解除三反例。审计 analyze receipt／draft
-    repair，防重复付费、重复实体或漏补提交；名称结构接管 Stage5/7、consumption 与
-    core.naming 的 name_distinctiveness 消费。
-    **验收与盘面**：恢复反例通过且保留精确 owner，不把 F7a 同输入重放证明扩称为新输入可采用。
+  - [x] **F7c 第二步 · 恢复职责（INVALID 留痕／owner 停止／熔断／精确补尾）**
+    （2026-09-24 完成，零模型调用）：bind 的机械校验闸移到节点自身——拦下的稿进
+    `stage4/grounding/semantic_binding.INVALID.json` 孪生（`gates_skipped`＝问题清单、
+    wire 原样留证）再 fail-fast；run 级状态记 `failed_node`（owner 停止的精确归属），
+    后续节点不再执行。同指纹熔断：校验失败不重购（原响应已耐久，重放走缓存、零 token）。
+    binding-only 崩溃精确补尾：删 `stage4/compiled/execution_plan.json` 后重跑零新购、
+    交付字节不变。测试 `tests/test_str06_f7a_wiring.py` 26 项（含上述四类反例）。
+  - [ ] **F7c 余项 · 消费接管与审计**：public_state_ref 的身份隔离／跨章携入／状态解除
+    三反例（新链由 IR 称谓释放位置表与公共投影接管，需补反例）；审计 analyze receipt／
+    draft repair，防重复付费、重复实体或漏补提交；名称结构接管 Stage5/7、consumption 与
+    core.naming 的 name_distinctiveness 真实消费者。
+    **验收与盘面**：反例通过且保留精确 owner，不把 F7a 同输入重放证明扩称为新输入可采用。
   - [ ] **F7d · API／Views／前端候选面**：纯函数 views 覆盖 Characters v4、Blueprint v12、
     graph／binding（含 Hook、导演说明、章目的）、WriterBookIR 导航、章正文与章回执
     （机械范围、语义未评、篇幅披露）、Hook 与回执、NameMap v5、成书下载与 manifest、

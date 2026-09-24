@@ -407,3 +407,81 @@ def test_unregistered_owner_falls_through_to_authorization(tmp_path):
     base, repo, ledger, session = _candidate(tmp_path, root)
     with pytest.raises(PurchaseRequired, match='--yes'):
         session.ask('naming', request, lambda _: [])
+
+
+# ─── F7c 恢复职责：INVALID 留痕／owner 停止／同指纹熔断／崩溃补尾 ─────────────
+
+def _full_chain(tmp_path, wires, *, ceiling=None):
+    from tests.test_str06_body import (
+        _RoutingTransport, _fake_ask, _fake_text, _fake_body, _chapters, _make_session,
+    )
+    repo, session, transport = _make_session(tmp_path, wires, ceiling=ceiling)
+    return repo, session, transport, (_fake_ask, _fake_text, _fake_body, _chapters())
+
+
+def test_binding_invalid_witness_and_owner_stop(tmp_path):
+    from tests.test_str06_body import _full_chain_wires
+    from tools.str06_workflow import run_workflow
+    wires = _full_chain_wires()
+    # 悬空 beat_ref：bind 机械闸必须拦下并留 typed witness。
+    wires['bind'] = {'entries': [{'obligation_id': 'ob01', 'scene_id': 's01',
+                                  'beat_ref': 's01#bt99'}], 'unbound': []}
+    repo, session, transport, (ask, ask_text, ask_body, chapters) = _full_chain(tmp_path, wires)
+    with pytest.raises(ValueError, match='INVALID 孪生已留证'):
+        run_workflow(repository=repo, chapters=chapters, ask=ask(session),
+                     ask_text=ask_text(session), ask_body=ask_body(session),
+                     budget=2000, through='stage7', book_title='报恩',
+                     hook_constraints=HookConstraints(target_chars=10, hard_max_chars=360),
+                     length_band=(0.01, 0.05))
+    invalid = repo.inspect('stage4/grounding/semantic_binding.INVALID.json')
+    assert invalid['_provenance']['gates_skipped'], 'INVALID 必须带 typed witness'
+    assert invalid['wire']['entries'][0]['beat_ref'] == 's01#bt1'.replace('bt1', 'bt99')
+    status = repo.inspect('runtime/workflow_status.json')
+    assert status['status'] == 'failed'
+    assert status['failed_node'] == 'str06.stage4.bind', status
+    # owner 停止：bind 之后没有任何后续 owner 的调用（失败即停，不继续问模型）。
+    asked = set(transport.calls)
+    assert 'hook_design' not in asked and not any(
+        o.startswith('body_') for o in asked), asked
+
+
+def test_same_fingerprint_failure_never_rebuys(tmp_path):
+    transport = _Transport(content='{"entries": "坏形状"}')
+    base = tmp_path / 'out'
+    base.mkdir(exist_ok=True)
+    repo = Str06Repository(base / 'run')
+    ledger = CostLedger(path=ledger_path(base))
+    repo.attach_context(make_context(base / 'run', ledger=ledger))
+    session = PaidRequestSession(repo, ledger, transport, yes=True,
+                                 allow_source_export=True, provider='fake', sid='book')
+    request = _request()
+    for _ in range(3):
+        with pytest.raises(ValueError, match='免费修复'):
+            session.ask('bind', request, lambda _: ['形状不合约定'])
+    assert transport.calls == 1, '同指纹失败不得重复计费'
+    rows, _ = read_cost_snapshot(base)
+    # 缓存命中按 Q-11 每次记一行：1 行实付 + 2 行零 token 缓存，不重复计费。
+    assert len([r for r in rows if not r['cached']]) == 1
+    assert all(r['prompt_tokens'] == 0 and r['completion_tokens'] == 0
+               for r in rows if r['cached'])
+
+
+def test_crash_tail_replays_exact_without_new_purchase(tmp_path):
+    from tests.test_str06_body import _full_chain_wires
+    from tools.str06_workflow import run_workflow
+    wires = _full_chain_wires()
+    repo, session, transport, (ask, ask_text, ask_body, chapters) = _full_chain(tmp_path, wires)
+    kwargs = dict(budget=2000, through='stage7', book_title='报恩',
+                  hook_constraints=HookConstraints(target_chars=10, hard_max_chars=360),
+                  length_band=(0.01, 0.05))
+    run_workflow(repository=repo, chapters=chapters, ask=ask(session),
+                 ask_text=ask_text(session), ask_body=ask_body(session), **kwargs)
+    final_before = repo.path('stage7/final/报恩_rewriting.txt').read_bytes()
+    calls_before = transport.calls
+    # 崩溃窗口：编译产物丢失 → 重跑必须精确补尾，零新购、交付不变。
+    repo.path('stage4/compiled/execution_plan.json').unlink()
+    run_workflow(repository=repo, chapters=chapters, ask=ask(session),
+                 ask_text=ask_text(session), ask_body=ask_body(session), **kwargs)
+    assert transport.calls == calls_before, '崩溃补尾不得新购'
+    assert repo.path('stage7/final/报恩_rewriting.txt').read_bytes() == final_before
+    assert repo.inspect('runtime/workflow_status.json')['status'] == 'delivered'

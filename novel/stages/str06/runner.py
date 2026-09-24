@@ -261,11 +261,18 @@ def run_bind(ctx: ChainContext) -> dict:
     bind_prompt = pack_prompt(BIND_RULES, design=body.model_dump(mode='json'),
                               obligations=[o.model_dump(mode='json')
                                            for o in checkpoint.obligations])
-    bw = ctx.ask('bind', bind_prompt,
-                 lambda w: assemble_binding(w, checkpoint, positions)[1])
+    # 校验闸在节点自身（不在 ask 回调）：机械闸拦下的稿要落到本产物的
+    # .INVALID 孪生上（typed witness），ask 只负责取回并耐久原响应。
+    bw = ctx.ask('bind', bind_prompt, lambda w: [])
     binding, errors = assemble_binding(bw, checkpoint, positions)
     if errors:
-        raise ValueError(errors)
+        # Binding INVALID＋typed witness：机械闸拦下的稿进 .INVALID 孪生
+        # （gates_skipped＝问题清单，wire 原样留证），正式位不写；再 fail-fast
+        # 停在该 owner——不静默放行、不自动重购（I-34／Q-13）。
+        repository.write_invalid(
+            'stage4/grounding/semantic_binding.json',
+            {'wire': bw, 'errors': list(errors)}, problems=tuple(errors))
+        raise ValueError(f'bind 机械校验失败；INVALID 孪生已留证：{errors}')
     repository.write('stage4/grounding/semantic_binding.json', binding, owners=('bind',))
     return {'entries': len(binding.entries), 'unbound': len(binding.unbound)}
 
@@ -597,7 +604,21 @@ def run_chain(ctx: ChainContext, *, through: str = 'stage4',
     for node_id in NODE_ORDER:
         if selected is not None and node_id not in selected:
             continue
-        report.update(run_node(node_id, ctx))
+        try:
+            report.update(run_node(node_id, ctx))
+        except Exception as exc:
+            # owner 停止：失败归属精确到候选节点，run 级状态留痕后外抛；
+            # 后续节点不再执行（不继续问模型、不放行半成品）。
+            repository = ctx.repository
+            status = {}
+            try:
+                status = repository.read('runtime/workflow_status.json')
+            except FileNotFoundError:
+                pass
+            status.update({'status': 'failed', 'failed_node': node_id,
+                           'failure_kind': type(exc).__name__, 'detail': str(exc)})
+            repository.write('runtime/workflow_status.json', status)
+            raise
         if node_id == 'str06.stage5.body':
             accepted_body = report.get('body_complete', False)
         if selected is None and node_id == boundary:

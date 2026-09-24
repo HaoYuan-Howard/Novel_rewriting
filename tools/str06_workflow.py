@@ -104,10 +104,17 @@ def run_workflow(*, repository, chapters, ask, ask_text, ask_body, budget=11000,
             'accepted_body': False, 'blocked_owner': exc.owner, 'detail': str(exc)})
         raise
     except Exception as exc:
-        repository.write(status_rel, {'status': 'failed', 'input_sha256': identity,
-                                      'accepted_body': False,
-                                      'failure_kind': type(exc).__name__,
-                                      'detail': str(exc)})
+        # run_chain 已按候选节点留痕（failed_node）；此处只补 run 级身份，
+        # 不覆盖精确 owner 归属。
+        status = {}
+        try:
+            status = repository.read(status_rel)
+        except FileNotFoundError:
+            pass
+        status.update({'status': 'failed', 'input_sha256': identity,
+                       'accepted_body': False,
+                       'failure_kind': type(exc).__name__, 'detail': str(exc)})
+        repository.write(status_rel, status)
         raise
     repository.write(status_rel, {'status': final_status, 'input_sha256': identity,
                                   'accepted_body': accepted_body, 'through': through})
