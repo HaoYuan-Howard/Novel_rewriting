@@ -23,7 +23,7 @@ from contracts.schema.str06 import (
     ExecutionSlice,
     PreserveCheckpoint,
     PreserveKind,
-    PresentationGraph,
+    BodyDesign,
     ReconstructionBrief,
     SceneReceipt,
     SemanticBinding,
@@ -47,15 +47,6 @@ from novel.stages.str06.checks import (
     directly_affected,
     entry_sensitive_closure,
 )
-from novel.stages.str06.delivery import (
-    DeliveryContract,
-    KeptLiteral,
-    Substitution,
-    check_residual,
-    delivery_identity,
-    render_delivery,
-)
-
 H64 = 'a' * 64
 H64B = 'b' * 64
 
@@ -92,8 +83,8 @@ def _scene(scene_id: str) -> TargetScene:
         delivery=SceneDelivery(pov='ch1', voice='v'))
 
 
-def _graph(scenes, chapters) -> PresentationGraph:
-    return PresentationGraph(initial_state=(), graph_id='g1', scenes=tuple(scenes), chapters=tuple(chapters))
+def _graph(scenes, chapters) -> BodyDesign:
+    return BodyDesign(initial_state=(), graph_id='g1', scenes=tuple(scenes), chapters=tuple(chapters))
 
 
 def _plan(*scene_ids: str, deps: dict[str, list[str]] | None = None) -> ExecutionPlan:
@@ -191,10 +182,7 @@ def test_receipt_rejects_stale_context_or_slice():
     problems = check_receipt_binding(receipt, ctx, execution_slice_sha256=H64B)
     assert any('execution_slice_sha256' in p for p in problems)
 
-    # 换 name_map 不影响 Stage5 接受回执：receipt 七字段里没有任何交付材料
-    delivered = render_delivery('甲在此', DeliveryContract(
-        '钩子', (Substitution(source_name='甲', target_name='乙'),), ()))
-    assert '乙在此'.encode('utf-8') in delivered  # 替换已发生
+    # 换 NameMap 不影响 Stage5 接受回执：receipt 七字段里没有任何交付材料
     assert 'name_map' not in SceneReceipt.model_fields
     assert check_receipt_binding(receipt, ctx, execution_slice_sha256=H64) == []
 
@@ -239,54 +227,6 @@ def test_narrow_repair_scan_is_not_rerun_scope():
     assert directly_affected({'ob9'}, all_slices) == {'s09'}
 
 
-# ───────────────────────── 交付确定性与 claimed/kept ─────────────────────────
-
-def test_delivery_replay_is_byte_stable():
-    contract = DeliveryContract(
-        hook='楔子',
-        substitutions=(Substitution(source_name='裴书远', target_name='沈书言'),
-                       Substitution(source_name='陆夫君', target_name='顾行舟')),
-        kept=(KeptLiteral(literal='表弟', reason='称谓保留'),))
-    body = '裴书远对陆夫君说：表弟勿慌。'
-    first = render_delivery(body, contract)
-    second = render_delivery(body, contract)
-    assert first == second
-    assert '沈书言'.encode('utf-8') in first
-    assert '顾行舟'.encode('utf-8') in first
-    assert '表弟'.encode('utf-8') in first  # kept 不被替换（未在 substitutions）
-
-    # 不同的 name_map：交付字节变，但 delivery_identity 也变——可区分、可重放
-    other = DeliveryContract(
-        hook='楔子',
-        substitutions=(Substitution(source_name='裴书远', target_name='林晚照'),
-                       Substitution(source_name='陆夫君', target_name='顾行舟')),
-        kept=(KeptLiteral(literal='表弟', reason='称谓保留'),))
-    assert render_delivery(body, other) != first
-    assert delivery_identity(other) != delivery_identity(contract)
-
-    # 长名优先：短源名不得先拆长名（顺序即契约）
-    tricky = DeliveryContract(
-        hook='h',
-        substitutions=(Substitution(source_name='裴', target_name='X'),
-                       Substitution(source_name='裴书远', target_name='Y')), kept=())
-    assert b'Y' in render_delivery('裴书远', tricky)
-
-
-def test_residual_claims_and_kept():
-    contract = DeliveryContract(
-        hook='h',
-        substitutions=(Substitution(source_name='裴书远', target_name='沈书言'),),
-        kept=(KeptLiteral(literal='裴家', reason='家族称谓，源目标同形'),))
-    # 未认领的应替换残留 → 拒
-    assert check_residual('裴书远还在', contract) != []
-    # kept 认账的字面 → 不误报
-    assert check_residual('裴家老宅', contract) == []
-    # 干净正文 → 绿
-    assert check_residual('沈书言还在', contract) == []
-    # 「所有源名字串都不能出现」不是本判据：源名子串出现在 kept 字面内不算残留
-    assert '裴' in '裴家'
-
-
 # ───────────────────────── 跨章布局：契约能力接通（F1 分工） ─────────────────────────
 
 def test_cross_chapter_merge_layout_passes_contract_chain():
@@ -329,7 +269,7 @@ def test_same_ordinal_different_semantics_not_conflated():
          ChapterAssignment(chapter_ordinal=3, scene_ids=('s03',))])
     mapping = {c.chapter_ordinal: list(c.scene_ids) for c in graph.chapters}
     assert mapping == {1: ['s01'], 2: ['s02'], 3: ['s03']}
-    # PresentationGraph 上不存在任何「源章」字段可供换算（F0 已测 smuggle）；
+    # BodyDesign 上不存在任何「源章」字段可供换算（F0 已测 smuggle）；
     # 这里锁行为面：章节分母来自 Design，而非源章数量
     assert len(graph.chapters) == 3
 

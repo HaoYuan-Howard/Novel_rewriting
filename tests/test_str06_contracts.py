@@ -30,17 +30,14 @@ from contracts.schema.str06 import (
     FidelityVerdict,
     IdentityProjection,
     OutputConstraints,
-    PrepareMaterials,
     PreserveCheckpoint,
     PreserveKind,
     PreservationPolicy,
     ReconstructionBrief,
     SceneReceipt,
     SemanticBinding,
-    SourceHookEvidence,
     SourceLineage,
     SourceObligation,
-    TargetOpening,
     UnboundEntry,
     WriterContext,
     WriterBrief,
@@ -48,7 +45,7 @@ from contracts.schema.str06 import (
 )
 from contracts.schema.str06.grounding import BriefRequirement
 from contracts.schema.str06.design import (
-    PresentationGraph, SceneDelivery, SceneDriver, TargetBeat, TargetScene,
+    BodyDesign, SceneDelivery, SceneDriver, TargetBeat, TargetScene,
 )
 from contracts.schema.str06.execution import Reinforcement
 from contracts.schema.str06.receipt import FidelityFinding
@@ -207,35 +204,35 @@ def _graph(**over) -> dict:
 
 
 def test_presentation_graph_source_blind():
-    PresentationGraph(**_graph())
+    BodyDesign(**_graph())
     for smuggled in ('source_ref', 'source_beat_ref', 'evidence_ref', 'source_intent_ref'):
         with pytest.raises(ValidationError):
-            PresentationGraph(**{**_graph(), smuggled: 'b07_01'})
+            BodyDesign(**{**_graph(), smuggled: 'b07_01'})
 
 
 def test_presentation_graph_chapter_invariants():
-    PresentationGraph(**_graph())
+    BodyDesign(**_graph())
     # 章号必须从 1 连续
     with pytest.raises(ValidationError):
-        PresentationGraph(**_graph(chapters=(
+        BodyDesign(**_graph(chapters=(
             ChapterAssignment(chapter_ordinal=2, scene_ids=('s01',)),
             ChapterAssignment(chapter_ordinal=3, scene_ids=('s02',)))))
     # 场景必须全部归章
     with pytest.raises(ValidationError, match='未归章'):
-        PresentationGraph(**_graph(chapters=(ChapterAssignment(chapter_ordinal=1, scene_ids=('s01',)),)))
+        BodyDesign(**_graph(chapters=(ChapterAssignment(chapter_ordinal=1, scene_ids=('s01',)),)))
     # 归章引用不存在的场景
     with pytest.raises(ValidationError, match='不存在'):
-        PresentationGraph(**_graph(chapters=(
+        BodyDesign(**_graph(chapters=(
             ChapterAssignment(chapter_ordinal=1, scene_ids=('s01',)),
             ChapterAssignment(chapter_ordinal=2, scene_ids=('s02', 'sX')),)))
     # 同一场景归两章
     with pytest.raises(ValidationError, match='多章'):
-        PresentationGraph(**_graph(chapters=(
+        BodyDesign(**_graph(chapters=(
             ChapterAssignment(chapter_ordinal=1, scene_ids=('s01',)),
             ChapterAssignment(chapter_ordinal=2, scene_ids=('s01',)))))
     # 权重引用不存在的场景
     with pytest.raises(ValidationError, match='chapter_weights'):
-        PresentationGraph(**_graph(chapter_weights={'sX': 1.0}))
+        BodyDesign(**_graph(chapter_weights={'sX': 1.0}))
 
 
 # ───────────────────────── Execution ─────────────────────────
@@ -332,22 +329,11 @@ def test_fidelity_verdict_only_diagnoses():
 
 def test_consumption_projection_registry_complete():
     assert set(STR06_CONSUMPTION_PROJECTIONS) == {
-        'world_view', 'character_exposure', 'chapter_map', 'body_access', 'rename_materials'}
+        'world_view', 'character_exposure', 'chapter_map', 'body_access',
+        'hook_material', 'rename_materials'}
     for spec in STR06_CONSUMPTION_PROJECTIONS.values():
         assert spec.source_owners
         assert spec.coordinate.value in ('source', 'target', 'dual')
-
-
-def test_prepare_materials_two_coordinates():
-    # 源坐标材料与目标坐标材料分别表达；target 未就绪是显式 None，不是缺省成功
-    PrepareMaterials(
-        source_evidence=SourceHookEvidence(
-            through_chapter=3, hook_facts=('f',), source_evidence_refs=('s://ch1',)),
-        target_opening=None)
-    PrepareMaterials(
-        source_evidence=SourceHookEvidence(
-            through_chapter=3, hook_facts=('f',), source_evidence_refs=('s://ch1',)),
-        target_opening=TargetOpening(opening_scene_ids=('s01',), opening_note='首场'))
 
 
 # ───────────────────────── 路径家族 ─────────────────────────

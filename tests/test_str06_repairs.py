@@ -236,11 +236,11 @@ def test_paid_response_durable_before_validation_and_reused(tmp_path):
 
 
 def test_target_rc1_missing_semantics_is_rejected():
-    from novel.stages.str06.design_compile import assemble_presentation_graph
+    from novel.stages.str06.design_compile import assemble_body_design
     from tests.test_str06_target import _design_wire
     wire = _design_wire()
     del wire['initial_state']
-    assert assemble_presentation_graph(wire, known_char_ids={'yun','fu_jun'})[1]
+    assert assemble_body_design(wire, known_char_ids={'yun','fu_jun'})[1]
 
 
 @pytest.mark.parametrize('failure', ['transport', 'duplicate_json'])

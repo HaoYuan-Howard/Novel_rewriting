@@ -1,7 +1,7 @@
 """只消费 D/G 编译执行计划；目标初始态来自 Design，义务来自完整 Binding。"""
 from __future__ import annotations
 
-from contracts.schema.str06.design import PresentationGraph
+from contracts.schema.str06.design import BodyDesign
 from contracts.schema.str06.execution import (
     ConstraintSpec, DependencyEdge, Establishment, ExecutionPlan, SceneExecutionPlan,
 )
@@ -9,13 +9,13 @@ from contracts.schema.str06.grounding import SemanticBinding
 from novel.stages.str06.guard import check_binding_beat_refs
 
 
-def init_establishments(graph: PresentationGraph) -> tuple[Establishment, ...]:
+def init_establishments(graph: BodyDesign) -> tuple[Establishment, ...]:
     return tuple(Establishment(**d.model_dump(), established_by='init')
                  for d in graph.initial_state)
 
 
 def compile_execution_plan(
-    graph: PresentationGraph, binding: SemanticBinding,
+    graph: BodyDesign, binding: SemanticBinding,
 ) -> tuple[ExecutionPlan | None, list[str]]:
     errors = check_binding_beat_refs(binding, graph)
     obligations = {o.obligation_id: o for o in binding.obligations}

@@ -15,7 +15,7 @@ from contracts.schema.str06 import (
     EffectDomain,
     PreserveCheckpoint,
     PreserveKind,
-    PresentationGraph,
+    BodyDesign,
     SceneDelivery,
     SceneDriver,
     SemanticBinding,
@@ -54,8 +54,8 @@ def _scene(scene_id: str, *participants: str) -> TargetScene:
         delivery=SceneDelivery(pov='ch1', voice='v'))
 
 
-def _graph() -> PresentationGraph:
-    return PresentationGraph(initial_state=(),
+def _graph() -> BodyDesign:
+    return BodyDesign(initial_state=(),
         graph_id='g1',
         scenes=(_scene('s01', 'ch1'), _scene('s02', 'ch1', 'ch2'), _scene('s03', 'ch1')),
         chapters=(

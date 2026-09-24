@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""design —— PresentationGraph v1（Target Design，source-blind）（F0 RC）。
+"""design —— BodyDesign／PresentationGraph v1（Target Design，source-blind）（F0／F6 RC）。
 
 【source-blind 的类型层表达】
 Target Design 完全盲于 Source binding：本模块所有模型**没有** source_ref /
@@ -14,12 +14,19 @@ OrderedTargetBeats + Delivery；TargetBeat = Event + Participants + DramaticInte
 TargetDelta + DeliveryHint。归章（ChapterAssignment）由 Design 决定；Compiler 只
 验证章数、归属、顺序和完整性——其中「自洽」的部分（章号连续 1..N、场景全覆盖、
 每章非空）在构造期就拒，语义合理性仍归上游判断。
+
+【Hook 与正文同一份 graph（F6）】
+`BodyDesign` 承载正文选择；`PresentationGraph(BodyDesign)` 增加必填 `hook`。
+顺序是 Body Design → Hook Design → publish_graph 发布完整 graph：不让两个
+producer 轮流改 canonical，不用空 Hook 默认值冒充完成。Bind／Compile／Context
+的类型收窄到 `BodyDesign`，从类型上保证 Hook 不影响正文。
 """
 from __future__ import annotations
 
 from pydantic import Field, model_validator
 
 from contracts.schema.base import StrictModel
+from contracts.schema.str06.hook import HookDesign
 from contracts.schema.str06.state import StateAddress, StateChange, SurfaceIntroduction
 from typing import Literal
 import math
@@ -93,10 +100,12 @@ class ChapterAssignment(StrictModel):
         return self
 
 
-class PresentationGraph(StrictModel):
-    """完整 Target Design canonical artifact（目标 v1，RC）。"""
+class BodyDesign(StrictModel):
+    """正文选择（canonical body view，RC3）。
 
-    contract_version: Literal['str06-rc2'] = 'str06-rc2'
+    Bind、Compile、Context 与 Guard 的类型都收窄到这里——Hook 不是正文
+    写前链路的输入，也不增加义务分母。"""
+    contract_version: Literal['str06-rc3'] = 'str06-rc3'
     graph_id: str = Field(min_length=1)
     initial_state: tuple[TargetDelta, ...]
     initial_surfaces: tuple[SurfaceIntroduction, ...] = ()
@@ -105,8 +114,25 @@ class PresentationGraph(StrictModel):
     #: 章／场权重：目标预算分配的依据（不对照同号源章长度）
     chapter_weights: dict[str, float] = Field(default_factory=dict)
 
+    def beat(self, scene_id: str, beat_id: str) -> 'TargetBeat | None':
+        scene = next((s for s in self.scenes if s.scene_id == scene_id), None)
+        if scene is None:
+            return None
+        return next((b for b in scene.beats if b.beat_id == beat_id), None)
+
+    def declared_surfaces(self) -> dict[str, set[str]]:
+        """Design 已声明的称谓面（char_id → surface 集合）：Hook 释放校验的基准。"""
+        faces: dict[str, set[str]] = {}
+        for intro in self.initial_surfaces:
+            faces.setdefault(intro.char_id, set()).update(intro.surfaces)
+        for scene in self.scenes:
+            for beat in scene.beats:
+                for intro in beat.surface_introductions:
+                    faces.setdefault(intro.char_id, set()).update(intro.surfaces)
+        return faces
+
     @model_validator(mode='after')
-    def _chapters_consistent(self) -> 'PresentationGraph':
+    def _chapters_consistent(self) -> 'BodyDesign':
         ordinals = [c.chapter_ordinal for c in self.chapters]
         expected = list(range(1, len(self.chapters) + 1))
         if sorted(ordinals) != expected:
@@ -139,4 +165,60 @@ class PresentationGraph(StrictModel):
                    for sid in c.scene_ids]
         if ordered != [s.scene_id for s in self.scenes]:
             raise ValueError('scenes 必须按目标章内阅读序排列')
+        return self
+
+
+class PresentationGraph(BodyDesign):
+    """完整 Target Design canonical artifact（目标 v1，RC3）。
+
+    `hook` 必填：没有「正文设计完成但 Hook 未定」的中间态 canonical——
+    完整 graph 由唯一 publisher 发布（novel/stages/str06/hook_design.py）。
+    此处的跨引用校验只保结构闭合（引用的拍/人物在本 graph 内存在）；
+    语义合法（withheld ⊆ 该拍 delta、时序、披露自洽）归 assemble_hook_design。
+    """
+    hook: HookDesign
+
+    @model_validator(mode='after')
+    def _hook_refs_close(self) -> 'PresentationGraph':
+        beat_refs = {f'{s.scene_id}#{b.beat_id}' for s in self.scenes for b in s.beats}
+        char_ids: set[str] = set()
+        for scene in self.scenes:
+            char_ids.add(scene.driver.focal_actor)
+            if scene.delivery.pov != 'narrator':
+                char_ids.add(scene.delivery.pov)
+            for beat in scene.beats:
+                char_ids.update(beat.participants)
+                for delta in beat.target_delta:
+                    char_ids.update(delta.subjects)
+                    if delta.holder:
+                        char_ids.add(delta.holder)
+                for intro in beat.surface_introductions:
+                    char_ids.add(intro.char_id)
+        for intro in self.initial_surfaces:
+            char_ids.add(intro.char_id)
+        for delta in self.initial_state:
+            char_ids.update(delta.subjects)
+            if delta.holder:
+                char_ids.add(delta.holder)
+        hook = self.hook
+        for focal in hook.pov.focalizers:
+            if focal != 'narrator' and focal not in char_ids:
+                raise ValueError(f'hook.pov 引用了 graph 外的人物：{focal}')
+        for fact in hook.opening_facts:
+            if fact.ref != 'init' and fact.ref not in beat_refs:
+                raise ValueError(f'hook.opening_facts 引用了不存在的拍：{fact.ref}')
+            for subject in fact.address.subjects:
+                if subject not in char_ids:
+                    raise ValueError(f'hook.opening_facts 引用了 graph 外人物：{subject}')
+            if fact.address.holder and fact.address.holder not in char_ids:
+                raise ValueError(f'hook.opening_facts 引用了 graph 外人物：{fact.address.holder}')
+        for material in hook.materials:
+            if material.beat_ref == 'init' or material.beat_ref not in beat_refs:
+                raise ValueError(f'hook.materials 引用了不存在的拍：{material.beat_ref}')
+        for item in hook.forbidden_reveals:
+            if item.ref != 'init' and item.ref not in beat_refs:
+                raise ValueError(f'hook.forbidden_reveals 引用了不存在的拍：{item.ref}')
+        for char_id in hook.concealed:
+            if char_id not in char_ids:
+                raise ValueError(f'hook.concealed 引用了 graph 外的人物：{char_id}')
         return self

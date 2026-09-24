@@ -66,6 +66,15 @@ STR06_PATH_FAMILIES: Final[dict[str, PathFamily]] = {
         prefix='stage5/scenes/', kind='prose', writer_owner='stage5.writer'),
     'str06.stage5.acceptance.fidelity': PathFamily(
         prefix='stage5/acceptance/fidelity/', kind='report', writer_owner='stage5.judge'),
+    # Hook 目录混居两职：hook.txt 是 prose，receipt.json 是 audit；按文件区分，
+    # 登记在同一家族（同 stage4.grounding 的先例）。
+    'str06.stage5.hook': PathFamily(
+        prefix='stage5/hook/', kind='prose+audit', writer_owner='stage5.hook_writer'),
+    'str06.stage7.naming': PathFamily(
+        prefix='stage7/naming/', kind='canonical', writer_owner='stage7.naming'),
+    # 交付目录混居两职：final 正文是 prose，组装报告与 diff proof 是 audit。
+    'str06.stage7.final': PathFamily(
+        prefix='stage7/final/', kind='prose+audit', writer_owner='stage7.assembly'),
     'str06.runtime': PathFamily(
         prefix='runtime/', kind='runtime', writer_owner='runtime'),
 }

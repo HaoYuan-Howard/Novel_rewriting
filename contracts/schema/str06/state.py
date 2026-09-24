@@ -58,3 +58,12 @@ class StateChange(StateAddress):
 class SurfaceIntroduction(StrictModel):
     char_id: str = Field(min_length=1)
     surfaces: tuple[str, ...] = Field(min_length=1)
+
+
+class SurfaceRelease(StrictModel):
+    """一个人物本场可用的称谓面（IR/Hook 投影的查询面）。
+
+    原定义在 context.py；F6 起 hook 投影也消费它，为避免 context↔design↔hook
+    循环 import 下沉到 state（最小状态词汇层）。"""
+    char_id: str = Field(min_length=1)
+    surfaces: tuple[str, ...] = Field(min_length=1)

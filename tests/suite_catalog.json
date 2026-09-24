@@ -21,6 +21,28 @@
   "stage7": []
  },
  "modules": {
+  "tests/test_str06_hook.py": {
+   "layer": "unit_contract",
+   "stages": [
+    "stage4",
+    "stage5",
+    "stage7"
+   ],
+   "cases": {
+    "test_through_stage7_full_chain_replay_and_authorization_gate": "stage"
+   }
+  },
+  "tests/test_str06_naming.py": {
+   "layer": "unit_contract",
+   "stages": [
+    "stage2",
+    "stage7"
+   ]
+  },
+  "tests/test_str06_retirement.py": {
+   "layer": "unit_contract",
+   "stages": []
+  },
   "tests/test_str06_execution_ir.py": {
    "layer": "unit_contract",
    "stages": [

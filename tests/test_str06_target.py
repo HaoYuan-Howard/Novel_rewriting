@@ -11,22 +11,22 @@ from __future__ import annotations
 from contracts.schema.str06.grounding import SemanticBinding
 from contracts.schema.str06.policy import PreserveKind
 from contracts.schema.str06.source import (
-    BlueprintsArtifactV12, ChapterBlueprint, CharactersArtifactV4,
+    BlueprintsArtifactV12, ChapterBlueprint, CharactersCore,
 )
 from novel.stages.str06.grounding import (
     assemble_binding, assemble_preserve, project_brief,
 )
-from novel.stages.str06.design_compile import assemble_presentation_graph
+from novel.stages.str06.design_compile import assemble_body_design
 
 
 def _source_pair():
-    chars = CharactersArtifactV4(
+    chars = CharactersCore(
         characters={
             'fu_jun': {'canonical': '夫君',
                        'surfaces': [{'surface': '夫君', 'from_chapter': 1,
                                      'until_chapter': None, 'source_refs': ['e01_01']}]},
             'yun': {'canonical': '云娘',
-                    'surfaces': [{'surface': '娘子', 'from_chapter': 1,
+                    'surfaces': [{'surface': '云娘', 'from_chapter': 1,
                                   'until_chapter': None, 'source_refs': ['e01_01']}]}},
         initial_state=[])
     bp = BlueprintsArtifactV12(
@@ -180,28 +180,28 @@ def _design_wire():
 
 
 def test_assemble_design_green_and_refusals():
-    graph, errors = assemble_presentation_graph(
+    body, errors = assemble_body_design(
         _design_wire(), known_char_ids={'yun', 'fu_jun'})
-    assert graph is not None and not errors, errors
-    assert graph.scenes[0].beats[0].target_delta[0].domain == 'relation'
+    assert body is not None and not errors, errors
+    assert body.scenes[0].beats[0].target_delta[0].domain == 'relation'
 
     bad = _design_wire()
     bad['scenes'][0]['beats'][0]['participants'].append('ghost')
-    _, errors = assemble_presentation_graph(bad, known_char_ids={'yun', 'fu_jun'})
+    _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'})
     assert any('未知 char_id' in e for e in errors)
 
     bad = _design_wire()
     bad['scenes'][0]['beats'][0]['target_delta'][0]['domain'] = 'plot'
-    _, errors = assemble_presentation_graph(bad, known_char_ids={'yun', 'fu_jun'})
+    _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'})
     assert errors
 
     bad = _design_wire()
     bad['chapters'][0]['scene_ids'] = ['sX']
-    _, errors = assemble_presentation_graph(bad, known_char_ids={'yun', 'fu_jun'})
+    _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'})
     assert errors
 
     # source-blind：混入 source_ref 即拒（schema 层）
     bad = _design_wire()
     bad['scenes'][0]['source_ref'] = 'b01_01'
-    _, errors = assemble_presentation_graph(bad, known_char_ids={'yun', 'fu_jun'})
+    _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'})
     assert errors

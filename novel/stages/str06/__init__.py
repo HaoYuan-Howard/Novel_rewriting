@@ -10,6 +10,10 @@ F0–F7 在隔离分支推进、主仓不出现两套现役定义：新链的判
   • 零 LLM、零盘上 IO（纯函数，落盘归 repository）；
   • validator 不修改输入对象（I-24）。
 
-模块：checks（跨产物机械判定）、delivery（接受正文→交付正文的确定性组装）。
+模块（F6 后）：checks（跨产物机械判定）、literal_scan（共享字面扫描）、
+name_structure（Stage2 names compile）、source_compile／grounding／design_compile／
+hook_design（各语义请求的确定性臂与唯一 publisher）、compile／fold／project／guard
+（计划与写前链）、hook_context／hook_writer（Hook 投影与机械验）、naming／assembly
+（Stage7 改名与终态组装）。delivery 已删，职责并入 naming/assembly。
 """
 from __future__ import annotations

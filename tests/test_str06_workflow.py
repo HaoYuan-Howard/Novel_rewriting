@@ -11,6 +11,14 @@ def test_stage2_stage4_repository_replay_and_writer_consumer(tmp_path):
     wires = {
         'book': {**chars.model_dump(mode='json'), 'world_constraints': []},
         'ch01': {'beats': [b.model_dump(mode='json') for b in bp.chapters[0].beats], 'causal_edges': []},
+        'names': {
+            'families': {'fam_yun': {'literal': '云', 'forms': []}},
+            'people': {
+                'fu_jun': {'family_id': None, 'given': None, 'aliases': [],
+                           'surface_forms': {'夫君': None}},
+                'yun': {'family_id': 'fam_yun', 'given': '娘', 'aliases': [],
+                        'surface_forms': {'云娘': '{family}{given}'}},
+            }},
         'preserve': _preserve_wire(), 'design': _design_wire(),
         'bind': {'entries': [{'obligation_id': f'ob{i:02}', 'scene_id': 's01', 'beat_ref': 's01#bt1'}
                              for i in range(1, 4)], 'unbound': []},
@@ -22,8 +30,11 @@ def test_stage2_stage4_repository_replay_and_writer_consumer(tmp_path):
         requests.append((owner, prompt))
         return data
     repo = Str06Repository(tmp_path / 'book')
-    chapters = [{'chapter_ordinal': 1, 'text': '甲提出约定，乙知晓真相。'}]
-    report = run_workflow(repository=repo, chapters=chapters, ask=ask, budget=800)
+    chapters = [{'chapter_ordinal': 1, 'text': '云娘提出约定，夫君知晓真相。'}]
+    report = run_workflow(repository=repo, chapters=chapters, ask=ask,
+                          ask_text=lambda owner, prompt: (_ for _ in ()).throw(
+                              AssertionError('stage4 干跑不应调用文本 owner')),
+                          budget=800)
     assert report['guard_errors'] == [] and report['accepted_body'] is False
     context = repo.read('stage4/context/s01.json')
     assert len(context['verification_ir']['obligations']) == 3
@@ -36,14 +47,17 @@ def test_stage2_stage4_repository_replay_and_writer_consumer(tmp_path):
     binding_prompt = next(prompt for owner, prompt in requests if owner == 'bind')
     assert 'dramatic_intent' in binding_prompt and 'target_delta' in binding_prompt
     before = repo.path('stage4/context/s01.json').read_bytes()
-    run_workflow(repository=repo, chapters=chapters, ask=ask, budget=800)
+    run_workflow(repository=repo, chapters=chapters, ask=ask,
+                 ask_text=lambda owner, prompt: (_ for _ in ()).throw(
+                     AssertionError('stage4 干跑不应调用文本 owner')), budget=800)
     assert repo.path('stage4/context/s01.json').read_bytes() == before
     assert repo.read('runtime/workflow_status.json')['status'] == 'planned_validated'
     def rejected(owner, prompt, validate):
         raise ValueError('book 输入待免费修复')
     import pytest
     with pytest.raises(ValueError, match='免费修复'):
-        run_workflow(repository=repo, chapters=chapters, ask=rejected)
+        run_workflow(repository=repo, chapters=chapters, ask=rejected,
+                     ask_text=lambda owner, prompt: None)
     assert repo.read('runtime/workflow_status.json')['status'] == 'failed'
     assert repo.read('runtime/workflow_status.json')['accepted_body'] is False
 

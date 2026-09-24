@@ -22,7 +22,7 @@ from typing import Iterable, Mapping
 
 from pydantic import BaseModel
 
-from contracts.schema.str06.design import PresentationGraph
+from contracts.schema.str06.design import BodyDesign
 from contracts.schema.str06.execution import ExecutionPlan, ExecutionSlice
 from contracts.schema.str06.grounding import PreserveCheckpoint, SemanticBinding
 from contracts.schema.str06.receipt import SceneReceipt
@@ -65,7 +65,7 @@ def check_binding_covers_checkpoint(
 
 
 def check_plan_matches_graph(
-    graph: PresentationGraph, plan: ExecutionPlan,
+    graph: BodyDesign, plan: ExecutionPlan,
 ) -> list[str]:
     """Compiler 只验证章数、归属、顺序和完整性——本函数的「完整性」那一段：
     plan 的场景集合必须与 Design 的场景集合一致，不多不少。"""

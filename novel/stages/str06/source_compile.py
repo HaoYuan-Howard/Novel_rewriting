@@ -19,7 +19,7 @@ from typing import Any, Iterable
 from copy import deepcopy
 
 from contracts.schema.str06.source import (
-    Beat, BlueprintsArtifactV12, ChapterBlueprint, CharactersArtifactV4,
+    Beat, BlueprintsArtifactV12, ChapterBlueprint, CharactersCore,
     WorldConstraint,
 )
 from pydantic import ValidationError
@@ -35,10 +35,13 @@ def _slug_ok(slug: str) -> bool:
 
 def compile_book(
     wire: dict[str, Any], *, evidence_ids: Iterable[str],
-) -> tuple[CharactersArtifactV4 | None, list[Any] | None, list[str]]:
-    """book wire → (Characters v4, world_constraints wire, errors)。
+) -> tuple[CharactersCore | None, list[Any] | None, list[str]]:
+    """book wire → (Characters core view, world_constraints wire, errors)。
 
-    world_constraints 由调用方并入 Blueprints v12（compile_chapters 的聚合点）。
+    core view（characters + initial_state）形状与 RC2 相同：Preserve/章节编译
+    只消费它。发布 Characters 前由 `name_structure.merge_name_structure` 合并
+    名称结构（F6）。world_constraints 由调用方并入 Blueprints v12（compile_chapters
+    的聚合点）。
     """
     errors: list[str] = []
     if set(wire) - {'characters', 'initial_state', 'world_constraints'}:
@@ -68,11 +71,11 @@ def compile_book(
     if errors:
         return None, None, errors
     try:
-        characters = CharactersArtifactV4(
+        characters = CharactersCore(
             characters=raw_chars,
             initial_state=wire.get('initial_state') or [])
     except ValidationError as exc:
-        return None, None, [f'characters v4 构造失败：{exc}']
+        return None, None, [f'characters core 构造失败：{exc}']
     try:
         for wc in wcs:
             WorldConstraint.model_validate(wc)
@@ -85,7 +88,7 @@ def compile_book(
 class ChapterCompiler:
     """逐章 compile 的跨章状态：已登记 beat、knowledge 命题、人物闭集。"""
 
-    def __init__(self, characters: CharactersArtifactV4, *, evidence_ids: Iterable[str]):
+    def __init__(self, characters: CharactersCore, *, evidence_ids: Iterable[str]):
         self.chars = set(characters.characters)
         self.evidence = frozenset(evidence_ids)
         self.known_beats: set[str] = set()
@@ -216,7 +219,7 @@ def _render(state: dict[tuple, dict]) -> list[str]:
         for k, v in sorted(state.items(), key=str)]
 
 
-def initial_snapshot(characters: CharactersArtifactV4) -> list[str]:
+def initial_snapshot(characters: CharactersCore) -> list[str]:
     """第 1 章起点快照 = initial_state 渲染（source_fold 的章 0 部分）。"""
     state: dict[tuple, dict] = {}
     for atom in characters.initial_state:
@@ -226,7 +229,7 @@ def initial_snapshot(characters: CharactersArtifactV4) -> list[str]:
 
 
 def source_fold(
-    characters: CharactersArtifactV4, blueprint: BlueprintsArtifactV12,
+    characters: CharactersCore, blueprint: BlueprintsArtifactV12,
 ) -> tuple[dict[int, list[str]], list[str]]:
     """确定性折叠：返回（每章末的状态快照渲染，fold 事件）。
 
@@ -284,7 +287,7 @@ def _target_dict(target) -> dict[str, Any]:
     return {k: v for k, v in d.items() if v is not None}
 
 
-def chapter_input_snapshot(characters: CharactersArtifactV4,
+def chapter_input_snapshot(characters: CharactersCore,
                            blueprint: BlueprintsArtifactV12, next_chapter: int) -> list[str]:
     """严格消费连续前缀，禁止取不到章快照时退回初始态。"""
     ordinals = [c.chapter for c in blueprint.chapters]

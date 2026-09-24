@@ -8,7 +8,7 @@ from typing import Mapping
 from contracts.schema.str06.context import (
     SurfaceRelease, VerificationIR, WriterBrief, WriterContext,
 )
-from contracts.schema.str06.design import PresentationGraph
+from contracts.schema.str06.design import BodyDesign
 from contracts.schema.str06.execution import ExecutionPlan, ExecutionSlice
 from contracts.schema.str06.grounding import SemanticBinding
 from contracts.schema.str06 import STR06_RC_VERSION
@@ -20,7 +20,7 @@ def _sha(value: object) -> str:
                                      separators=(',', ':')).encode('utf-8')).hexdigest()
 
 
-def surface_engine_release(graph: PresentationGraph, at_scene: str) -> tuple[SurfaceRelease, ...]:
+def surface_engine_release(graph: BodyDesign, at_scene: str) -> tuple[SurfaceRelease, ...]:
     """只释放 Design 显式声明的称谓；participants 出现不等于真名已揭示。"""
     faces: dict[str, set[str]] = {}
     for intro in graph.initial_surfaces:
@@ -39,7 +39,7 @@ def surface_engine_release(graph: PresentationGraph, at_scene: str) -> tuple[Sur
     raise ValueError(f'未知场景 {at_scene}')
 
 
-def project_context(*, scene_id: str, attempt_id: str, graph: PresentationGraph,
+def project_context(*, scene_id: str, attempt_id: str, graph: BodyDesign,
                     plan: ExecutionPlan, binding: SemanticBinding,
                     folded_prefix: FoldedState, total_budget: int) -> tuple[WriterContext, ExecutionSlice]:
     scene = next(s for s in graph.scenes if s.scene_id == scene_id)

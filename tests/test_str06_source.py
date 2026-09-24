@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 from contracts.schema.str06.source import (
-    BlueprintsArtifactV12, CharactersArtifactV4,
+    BlueprintsArtifactV12, CharactersArtifactV4, CharactersCore,
 )
 from novel.stages.str06.source_compile import (
     ChapterCompiler, assemble_blueprint, compile_book, source_fold,
@@ -84,7 +84,7 @@ def _compile_pair():
 def test_compile_book_splits_truths():
     chars, wcs, errors = compile_book(_book_wire(), evidence_ids=EVID)
     assert errors == []
-    assert isinstance(chars, CharactersArtifactV4)
+    assert isinstance(chars, CharactersCore)
     assert set(chars.characters) == {'fu_jun', 'yun_niang'}
     assert wcs and wcs[0]['constraint_id'] == 'wc_era'
 

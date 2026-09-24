@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 from contracts.schema.str06.design import (
-    ChapterAssignment, PresentationGraph, SceneDelivery, SceneDriver,
+    ChapterAssignment, BodyDesign, SceneDelivery, SceneDriver,
     TargetBeat, TargetDelta, TargetScene,
 )
 from contracts.schema.str06.execution import EffectDomain
@@ -53,7 +53,7 @@ def _scene(sid, *deltas):
 
 
 def _graph():
-    return PresentationGraph(initial_state=(),
+    return BodyDesign(initial_state=(),
         graph_id='g1',
         scenes=(_scene('s01', ('world', 'season', '秋'), ('character', 'mood', '冷')),
                 _scene('s02', ('character', 'mood', '回暖'))),

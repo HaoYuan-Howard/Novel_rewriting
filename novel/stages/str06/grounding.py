@@ -25,9 +25,8 @@ from contracts.schema.str06.grounding import (
     IdentityProjection, PreserveCheckpoint, ReconstructionBrief,
     SemanticBinding, SourceLineage, SourceObligation,
 )
-from contracts.schema.str06.policy import PreserveKind
 from contracts.schema.str06.source import (
-    BlueprintsArtifactV12, CharactersArtifactV4,
+    BlueprintsArtifactV12, CharactersCore,
 )
 from contracts.schema.str06.grounding import BriefRequirement
 from novel.stages.str06.checks import check_binding_covers_checkpoint
@@ -58,11 +57,13 @@ def _reject_unknown_keys(errors: list[str], obj: dict[str, Any], allowed: frozen
 def assemble_preserve(
     wire: dict[str, Any], *,
     policy_id: str, policy_version: int,
-    characters: CharactersArtifactV4, blueprint: BlueprintsArtifactV12,
+    characters: CharactersCore, blueprint: BlueprintsArtifactV12,
     provider: str, model: str, request_sha256: str,
 ) -> tuple[PreserveCheckpoint | None, list[str]]:
     """Preserve wire（{'obligations': [...]}）→ checkpoint。确定性校验：
-    id 唯一、requires 闭合无环、lineage 的 beat/char 引用真实。"""
+    id 唯一、requires 闭合无环、lineage 的 beat/char 引用真实。
+    `characters_sha256` 绑定 core view（characters + initial_state）——名称结构
+    修订不使已购 checkpoint 失效（F6 裁决）。"""
     errors: list[str] = []
     _reject_unknown_keys(errors, wire, frozenset({'obligations'}), 'Preserve')
     raw = wire.get('obligations') or []
@@ -140,7 +141,7 @@ def assemble_preserve(
 
 
 def project_brief(
-    checkpoint: PreserveCheckpoint, characters: CharactersArtifactV4,
+    checkpoint: PreserveCheckpoint, characters: CharactersCore,
 ) -> tuple[ReconstructionBrief, tuple[IdentityProjection, ...]]:
     """checkpoint → (Brief, IdentityProjection)。Design 的全部语义输入。
 

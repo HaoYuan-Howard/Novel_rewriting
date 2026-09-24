@@ -32,8 +32,8 @@ I-40、`R-5.2` 等公开规则、新节点与产物注册、API/UI、正式指�
 
 ## 当前状态与下一步
 
-**下一批：F6。顺序：F6 → F5 → F3b → F7 → F8（F4R 已清偿）。**
-当前隔离链版式为 `str06-rc2`；下表是既有证据摘要，不是本次重新运行或整书质量结论。
+**下一批：F5。顺序：F5 → F3b → F7 → F8（F4R、F6 免费面已清偿，F6c 待授权）。**
+当前隔离链版式为 `str06-rc3`；下表是既有证据摘要，不是本次重新运行或整书质量结论。
 
 | 已有阶段 | 状态与证据边界 |
 |---|---|
@@ -43,13 +43,15 @@ I-40、`R-5.2` 等公开规则、新节点与产物注册、API/UI、正式指�
 | F4 | 单书 RC1 planned-only 干跑：28 场、零模型调用、计划连续性可重放；不是 accepted body 或阅读验收；第二本仍待 F3b |
 | RC2 | Source／Brief／Design／Binding／Compile／Context 的真书审阅修复与隔离入口已落；11 章、69 义务、28 场，零新增模型调用；定向 96/96、契约与路径 484/484；仅改 ob55 满足条件时仅 s27 消费身份变化 |
 | F4R | 红账三项清偿（2026-09-24，零模型调用）：uploads 死引用删除后 test_store 恢复收集 161 项（HEAD 上是 collection error）；深导入 grandfather 补账 11 条（分母 77→88，stale 核对无消失边）；`_SHAPE_BREAKS` 补三条 v3 账。定向组合 485/485 绿（upload_autostart／layering／artifact_versions／stage0_revisions／stage01／stage2_characters）。test_store 87/161 绿，74 失败是修复收集后显形的既存夹具脱节（非本批引入），见 F4R 条目遗留登记 |
+| F6（免费面） | Hook 链与 Stage7 终态契约＋引擎＋免费反例（2026-09-24，零模型调用，F6c 未执行）：RC3（Characters 增 name_structure、graph 必填 hook、投影族六族、家族 +stage5/hook、stage7/naming、stage7/final）；Hook 唯一 publisher、确定性 HookContext、hook_writer 机械验＋同 Context 有限重写、NameMap v5／ApplyNames／Assembly、Stage2 names 窄调用与名称投影、迁移包依赖规则 AST 真实执行、F6d 退役登记 106 项双向对账。定向 str06＋layering 171/171、契约 §9.5 五文件 426/426；RC2 wire 在 RC3 代码下重编译：28 场 WriterContext（去版本/身份）与 replay 盘面逐字一致、checkpoint sha 不变。全量非 corpus 回归 4902 通过、420 失败/错误与 HEAD 基线逐项一致（零新增失败，全部为分支既有账，含 test_store 74 与两个既有收集错误文件，已忽略不计入）。F6c 付费冒烟待单独授权 |
 
 RC2 修复覆盖此前“第二轮再优化”的暂缓安排，不能重新把已修问题记作待办。当前正式
 编译输入是 D/G；不从 Preserve checkpoint 裸读补语义。`tools/str06_workflow.py` 取代
 旧 `_tmp_str06_*` 执行 harness，旧脚本只作参考。RC1 形状不自动迁入 RC2。
 
 仍未验证：完整工程回归、test_store 既存夹具脱节的修复、第二本表达力、真实新购 token 对比、Stage5 成文、
-新 Hook／NameMap v5／完整交付及 Golden。原 Prepare 消费干跑和 Hook／Stage7 付费原型
+F6c 的 Hook 真实设计与成文（机械通过不证明不剧透、遵守材料顺序、POV 正确或吸引人）、
+NameMap v5 真实赋值及整书交付，及 Golden。原 Prepare 消费干跑和 Hook／Stage7 付费原型
 只能证明当时范围。Stage5 正文及其回执不存在时，Assembly 明确未就绪，不制造成功状态。
 
 ## 批次交付与验收
@@ -82,20 +84,39 @@ F6 先闭合 Hook／Naming 接口，F5 有 accepted body 后补全书交付与�
     `('stale','consumed_changed')≠('fresh','match')`、零星 Characters v3 波及
     （KeyError 'aliases'、EvidenceBin 校验）。修复须更新夹具至现役契约且不缩分母，
     归 store 与退役路径清理批次（F7 接正式 Store 时核对、F8 清账前必须归零）。
-- [ ] **F6 · Hook 链与 Stage7 终态**（取代旧“仅消费适配”范围）：
-  - F6a 契约与免费反例：Hook 必要选择进正式 Design，删除 Context 后免费重建一致；
-    source-hook 混入、悬空引用、误载必保义务、跨场冷开、隐藏身份、第三人称／多视角、
-    Hook 窄改不扩大正文失效。Naming 覆盖复姓、同姓亲属、独立化名、纯称谓、漏项、
-    合法保留、单遍替换及 residual 误报；名称结构接管旧 name_distinctiveness 的有效职责。
-  - F6b 引擎：迁移 Hook／Stage7 原型的已验证行为，移除硬编码人物、正文 POV 众数、
-    强制第一人称、全局缓存、首字猜姓及一人一姓等试点假设。实现 target-only 投影、
-    Hook 设计与唯一发布、确定性 Context、单产 Writer／机械验、Naming、ApplyNames
-    和 Assembly；超长只走同 Context 有限重写，不变成重新设计。
-  - F6c 付费冒烟：书1 Hook 设计→成文→Naming→Hook 改名及确定性重放，约 3–5 次
-    基础调用，单独授权。accepted body 不存在时 Assembly 显式未就绪，F5 后补整书
-    组装；不以机械通过宣称不剧透、忠实或开篇质量已验证。
-  - F6d 退役准备：登记 Stage6 prepare／hook／approve、产物家族、批准绑定及
-    approve／rebuild／改选 API、Stage6Screen 的 F8 删除清单；已退役判官不算新增成果。
+- [ ] **F6 · Hook 链与 Stage7 终态**（取代旧“仅消费适配”范围；F6a/F6b/F6d 已于
+  2026-09-24 完成并提交到隔离分支，零模型调用；F6c 待单独授权）：
+  - [x] F6a 契约与免费反例：Hook 必要选择进正式 Design（PresentationGraph.hook 必填、
+    publish_graph 唯一发布），删除 Context 后免费重建字节一致；source-hook 混入、悬空
+    引用、误载必保义务、跨场冷开乱序、隐藏身份三层防线（称谓释放／presentation 字面/
+    withheld_literals）、第三人称多视角、起笔事实时序与禁止集、Hook 窄改不扩大正文失效
+    均有免费反例钉住。Naming 覆盖复姓（皇甫不截首字）、同姓亲属（同 family_id 新姓一致、
+    不同源姓不得合并）、同姓不同人、独立化名显式赋值、纯称谓不进应改名集、漏项、
+    合法保留带理由、名称位一致、单遍替换及 residual 不误报（目标名含旧字面、kept 含
+    映射键）；名称结构投影接管旧 name_distinctiveness 的有效职责。契约测试 49 项新增
+    （test_str06_hook／naming／retirement）。
+  - [x] F6b 引擎：原型已验证行为迁移完成，无硬编码人物、正文 POV 众数、强制第一人称、
+    全局缓存、首字猜姓及一人一姓假设。`literal_scan`（单遍长名优先认领区间，Stage5/7
+    共用）、`name_structure`（Stage2 names 窄调用 compile＋只报告的姓氏构词探针）、
+    `hook_design`（确定性校验臂＋唯一 publisher）、`hook_context`（纯投影）、
+    `hook_writer`（单产＋机械验＋同 Context 有限重写 2 次，attempt 进请求身份）、
+    `naming`（投影／NameMap v5 compile／纯函数替换表／ApplyNames／残留／diff proof）、
+    `assembly`（body_access 四态分开、not_ready 显式、交付身份与回执分离）；删
+    `delivery.py`（重放稳定/长名优先/claimed-kept 职责迁新实现）。Preserve/Brief/章节
+    编译改吃 core view；Bind/Compile/Context/Guard 类型收窄 BodyDesign。隔离入口
+    `--through stage2|stage4|stage5|stage7`、新 owner names／hook_design／hook_writer／
+    naming、混合采用（wire 免费、缺失未授权停在 owner 并写 needs_authorization）。
+  - [ ] F6c 付费冒烟：书1 Hook 设计→成文→Naming→Hook 改名及确定性重放，约 4–6 次
+    基础调用（names／hook_design／hook_writer×1-3／naming），单独授权。accepted body
+    不存在时 Assembly 显式未就绪，F5 后补整书组装；不以机械通过宣称不剧透、忠实或
+    开篇质量已验证。
+  - [x] F6d 退役准备：`contracts/schema/str06/retirement.py` 登记 106 项（节点与编排、
+    产物与版本账、批准绑定 s6/s6r4_/HookApprovalResolution、API/Views/前端 Stage6 面、
+    判据、14 个纯 Stage6 测试文件、Stage7 现役对 stage6/hook.json 的依赖、已死残留
+    stage6.semantic 与 _api.md 幽灵路由等），`test_str06_retirement.py` 双向对账：
+    登记项必须真实存在、现役面（NODES/ARTIFACT_PATHS stage6 键、stage6 引擎与 schema
+    文件、纯 Stage6 测试、前端 Stage6 页、/stage6 路由）必须全部在册。已退役判官不算
+    新增成果。
 - [ ] **F5 · Body Realization**：
   - F5a/F5b：定版 SceneReceipt 与 judge_contract_version，pending／accepted／rejected／
     unknown 分开；串行 Project→Guard→Write→Judge→Commit→Apply planned_delta。
@@ -154,6 +175,7 @@ F6 先闭合 Hook／Naming 接口，F5 有 accepted body 后补全书交付与�
 | `Str06Repository`／`PaidRequestSession`／`tools.str06_workflow` | F7 接正式 Store、执行许可、成本及恢复边界；F8 分流／删除，不注册两条现役主路径 |
 | `contracts/schema/str06/`、`novel/stages/str06/` | F7 目标形状与真实消费闭合；F8 分流至正式 Stage 包，版本／manifest／epoch／注册表同步后删除迁移包 |
 | `_tmp_*` harness 与旧链实现 | 有效职责与反例已迁移后删除代码；付费响应、checkpoint、采用证据、接受正文及质量基线保留或归档，不能当缓存清掉 |
+| 现役 Stage6 链整层（prepare/hook/approve、产物家族、批准绑定、API/Views/前端、判据、纯 Stage6 测试） | 唯一登记在 `contracts/schema/str06/retirement.py::STR06_F6D_RETIREMENT`（106 项，含接管者），`tests/test_str06_retirement.py` 双向对账守分母；F8 一次合入按表执行，先迁仍有效的独有反例，不缩分母 |
 
 历史响应先耐久再校验；同请求身份优先免费恢复，pending／unknown 不自动重购。
 语义修复核对 owner patch 的基线身份，验证无关 canonical 内容及稳定 ID 保持；

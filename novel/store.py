@@ -2571,3 +2571,25 @@ class Str06Repository:
         if path.read_bytes() != data:
             raise ValueError(f'RC 产物读回字节不一致：{rel}')
         return path
+
+    def write_text(self, rel: str, text: str) -> Path:
+        """正文/文本产物的原子写（UTF-8）+ 回读核对；与 write 同一套语义。"""
+        path = self.path(rel)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        data = text.encode('utf-8')
+        fd, temporary = tempfile.mkstemp(prefix='.rc-', suffix='.tmp', dir=path.parent)
+        try:
+            with os.fdopen(fd, 'wb') as stream:
+                stream.write(data)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, path)
+        finally:
+            Path(temporary).unlink(missing_ok=True)
+        if path.read_bytes() != data:
+            raise ValueError(f'RC 产物读回字节不一致：{rel}')
+        return path
+
+    def read_text(self, rel: str) -> str:
+        """正文/文本产物读取；文件不存在抛 FileNotFoundError，由调用方归类。"""
+        return self.path(rel).read_text(encoding='utf-8')

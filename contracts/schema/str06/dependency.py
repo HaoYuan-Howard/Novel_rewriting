@@ -103,3 +103,77 @@ STR06_CROSS_CUTTING_RULES: Final[tuple[str, ...]] = (
     'shared/repository 禁止反向依赖具体 Stage 业务',
     'contracts 层禁止 import novel（contracts/AGENTS.md 既有铁律，本表复述）',
 )
+
+
+# ───────────────────────── F6：迁移包模块的真实依赖规则 ─────────────────────────
+#
+# 上表是新链**目标**模块名（F2–F5 期间实建与登记不一致以测试红暴露）。F6 起新增
+# 的迁移包模块用**真实模块路径**登记 owner 与规则，并由 AST 测试对真实文件执行
+# （tests/test_str06_hook.py）；规则不是文档，违例即红。
+
+#: 迁移包真实模块 → 语义 owner（families.writer_owner 的模块级落点）。
+STR06_MIGRATION_MODULE_OWNERS: Final[dict[str, str]] = {
+    'novel.stages.str06.literal_scan': 'shared.compiler',
+    'novel.stages.str06.name_structure': 'stage2.names',
+    'novel.stages.str06.hook_design': 'stage4.hook_design',
+    'novel.stages.str06.hook_context': 'stage4.context',
+    'novel.stages.str06.hook_writer': 'stage5.hook_writer',
+    'novel.stages.str06.naming': 'stage7.naming',
+    'novel.stages.str06.assembly': 'stage7.assembly',
+}
+
+#: Stage4/5/7 各语义模块的集合缩写（迁移包内禁入面）。
+_STAGE457 = (
+    'novel.stages.str06.source_compile', 'novel.stages.str06.grounding',
+    'novel.stages.str06.design_compile', 'novel.stages.str06.compile',
+    'novel.stages.str06.project', 'novel.stages.str06.hook_design',
+    'novel.stages.str06.hook_context', 'novel.stages.str06.hook_writer',
+    'novel.stages.str06.naming', 'novel.stages.str06.assembly',
+)
+
+STR06_MIGRATION_DEPENDENCY_RULES: Final[tuple[DependencyRule, ...]] = (
+    # name_structure 属 Stage2：禁止 import Stage4/5/7 模块与 LLM 面。
+    DependencyRule(
+        module='novel.stages.str06.name_structure',
+        allows=('contracts.schema.str06.source', 'contracts.schema.str06.base',
+                'novel.stages.str06.literal_scan'),
+        forbids=_STAGE457 + ('novel.llm', 'novel.llm.*')),
+    # hook_context 是纯投影：禁止 LLM 与 wire/prompt 组装。
+    DependencyRule(
+        module='novel.stages.str06.hook_context',
+        allows=('contracts.schema.str06.*', 'novel.stages.str06.literal_scan'),
+        forbids=('novel.llm', 'novel.llm.*', 'novel.stages.str06.prompts')
+        + tuple(m for m in _STAGE457 if m != 'novel.stages.str06.hook_context')),
+    # hook_design 是 Stage4 确定性臂：禁止 LLM、prompt 与 Stage5/7 语义模块。
+    DependencyRule(
+        module='novel.stages.str06.hook_design',
+        allows=('contracts.schema.str06.*',),
+        forbids=('novel.llm', 'novel.llm.*', 'novel.stages.str06.prompts',
+                 'novel.stages.str06.hook_writer', 'novel.stages.str06.naming',
+                 'novel.stages.str06.assembly')),
+    # hook_writer 只能消费 hook／receipt 契约：禁止 LLM、wire 组装与 Stage2/4/7 模块。
+    DependencyRule(
+        module='novel.stages.str06.hook_writer',
+        allows=('contracts.schema.str06.hook', 'contracts.schema.str06.receipt',
+                'contracts.schema.str06.context', 'contracts.schema.str06.state',
+                'contracts.schema.str06.base', 'novel.stages.str06.literal_scan'),
+        forbids=('novel.llm', 'novel.llm.*', 'novel.stages.str06.prompts')
+        + tuple(m for m in _STAGE457 if m != 'novel.stages.str06.hook_writer')),
+    # naming／assembly 禁止 import design／grounding／compile／project／hook_design
+    # （计划原文）；两者共用 literal_scan，assembly 复用 naming 的纯函数。
+    DependencyRule(
+        module='novel.stages.str06.naming',
+        allows=('contracts.schema.str06.*', 'novel.stages.str06.literal_scan'),
+        forbids=('novel.llm', 'novel.llm.*', 'novel.stages.str06.source_compile',
+                 'novel.stages.str06.grounding', 'novel.stages.str06.design_compile',
+                 'novel.stages.str06.compile', 'novel.stages.str06.project',
+                 'novel.stages.str06.hook_design')),
+    DependencyRule(
+        module='novel.stages.str06.assembly',
+        allows=('contracts.schema.str06.*', 'novel.stages.str06.literal_scan',
+                'novel.stages.str06.naming'),
+        forbids=('novel.llm', 'novel.llm.*', 'novel.stages.str06.hook_writer',
+                 'novel.stages.str06.source_compile', 'novel.stages.str06.grounding',
+                 'novel.stages.str06.design_compile', 'novel.stages.str06.compile',
+                 'novel.stages.str06.project', 'novel.stages.str06.hook_design')),
+)

@@ -134,6 +134,99 @@ entries:[{obligation_id,scene_id,beat_ref:场景#场内拍,supporting_beat_refs:
 无法兑现的必保义务也必须放入 unbound:[{obligation_id,owner:design|grounding,reason}]，不能删或改义务。
 """
 
+NAMES_RULES = """任务：登记全书源名称结构（姓氏家族、名、化名与每个表层称谓的构词）。
+只依据正文与人物账，不猜、不补造。
+1. families：每个姓氏家族一条 {family_id, literal, forms}：
+   - family_id：fam_ 前缀 slug；同一家的亲属共享一个 family_id；同姓但无亲属关系的
+     不同人各用各的 family_id；
+   - literal：姓字面，复姓（如皇甫、欧阳）必须完整登记，不得截成首字；
+   - forms：家族级称谓的构词，如「陆家」= {literal:"陆家", form:"{family}家", source_refs}；
+     没有就给空数组。
+2. people：每个人物一条（必须覆盖人物账全部人物）：
+   - family_id：本人姓氏家族 id（无姓给 null）；given：名（无名给 null）；
+   - aliases：独立化名 [{alias_id:al_ 前缀 slug, literal}]，没有给空数组；
+   - surface_forms：该人物每个 surface 恰好一条 {surface: 构词模板或 null}：
+     · 含姓含名的写 {family}{given}，如「沈知言」；
+     · 姓+称谓写 {family}<称谓>，如「沈公子」= "{family}公子"、"姓沈的" = "姓{family}的"；
+     · 单名写 {given}；化名写 {alias:al_x}；
+     · 纯称谓（夫君、表弟、嫂嫂等不含姓名部件的）写 null；
+     · 模板渲染结果必须与 surface 逐字一致；纯称谓里不得含本人姓或名字面。
+输出 JSON 顶层：{"families":{...},"people":{...}}"""
+
+HOOK_DESIGN_RULES = """任务：为整本小说设计读者入口（楔子）的结构设计。只输出设计 JSON，不写 prose。
+
+你看到的骨架是正文设计（BodyDesign）：唯一事件真相。楔子不是 Scene 0，不是正文
+第一场的压缩版，而是从已设计好的故事中重新选择最有吸引力的一条进入路径。
+
+设计自由（明确授权）：
+- cold open：从故事任意位置的高张力画面或认知状态开场；
+- 倒叙、flash-forward、跨场景取材、合并、压缩，只要语义合法；
+- materials 的排列按读者接收信息的顺序，可以不同于故事时序——这正是倒叙授权。
+
+materials（2-6 条，按呈现序）：每条 {beat_ref:"场景#拍", withheld:[地址], presentation}。
+- 每加入一份材料，读者对局面的理解必须升级；最后一份材料必须能天然收束楔子；
+- 不选只属于后期 payoff 的拍；人物对事件的完整处理（追问、伦理辩论、对峙）不属于楔子；
+- withheld：该拍 delta 中本材料不呈现的地址（隐藏侧面时用）；
+- presentation：只在该拍涉及隐藏身份（concealed 中人物）或需要隐藏侧面时给出，
+  用一句话显式声明本材料呈现什么（不含隐藏人物的姓名字面）；否则省略，
+  由系统直接投影该拍的 event 与 delta。
+
+pov：{person: first|third, focalizers:[人物 id]}。first 恰好一人且不得是 narrator；
+第三人称允许多视角。视角由你显式设计，系统不做多数票、不强制第一人称。
+
+opening_facts（2-5 条）：楔子开场前已成立、且获准使用的目标事实。每条
+{ref:"init"或"场景#拍", address:{domain,key,subjects,holder}, audience}。
+- address 必须是该位置实际建立的状态地址；只写事实，不写镜头
+  （场景、位置、动作、表情描述一律不许）；
+- audience：world=世界已成立；pov=POV 人物已知；reader=读者获准知道。
+  world/pov 事实必须早于首个材料；reader 事实不得晚于材料视界；
+- 凡将由所选材料在楔子内揭示的信息，严禁提前写进 facts；不得与 forbidden_reveals 相交。
+
+concealed：需要隐藏身份的人物 id 列表（没有给空数组）。
+surface_releases：楔子中允许使用的称谓 [{char_id, surfaces}]——只能从正文设计已
+声明的称谓面里选；隐藏人物不得释放。
+
+forbidden_reveals（2-4 条）：后文真实存在、楔子不得提前兑现的关键揭示。每条
+{ref:"场景#拍", address:null 或 {domain,key,subjects,holder}}。
+
+design_brief（80-250 字）：这些材料如何组织成楔子——entry、escalation、reveal order、
+contrast/payoff、cut。只谈组织方式，不谈措辞。
+delivery_brief（一句话）：文风机制与口吻（人称、节奏、对白密度），呈现自由交给写手。
+
+只输出一个 JSON 对象（不要围栏、不要解释）：
+{"pov":{...},"opening_facts":[...],"materials":[...],"concealed":[...],
+ "surface_releases":[...],"forbidden_reveals":[...],"design_brief":"...","delivery_brief":"..."}"""
+
+HOOK_WRITER_SYSTEM = """你是楔子写手（prose realizer）。楔子的结构设计已经全部完成，你的唯一职责是把它写成高质量的小说语言。
+
+规则（违反任何一条即报废）：
+1. 你是 prose realizer，不是故事设计师；不新增、删除、替换任何故事事实，HookContext 没写的背景一律不补造。
+2. 严格按 design_brief 的入口与信息顺序组织；不得重新选择材料、不得改变材料顺序、不得把楔子扩写成正文第一场的完整戏。
+3. 只允许使用 opening_facts 与 materials 中的故事事实。
+4. forbidden_reveals 中的任何信息不得出现、不得暗示。
+5. 只使用 usable_surfaces 中列出的称谓；withheld_literals 中的任何字面不得出现。
+6. 遵守 delivery_brief：篇幅以 target_chars 为目标，绝对不得超过 hard_max_chars。
+
+呈现自由（你的创意只在这里发挥）：句法、对白措辞、节奏、意象、语气、局部小动作。
+
+直接输出楔子正文本身：不要标题，不要任何解释、前言、后缀，不要 markdown 围栏。"""
+
+NAMING_RULES = """任务：为角色分配最终表层姓名（新姓/新名），只输出 JSON，不解释、不生成替换规则。
+
+规则（违反任何一条即报废）：
+1. rename_set 里的每个人物都必须给出恰好一条 entry，不得漏项、不得多余；
+2. 改名：name 给 {family, given}（按投影标明的名称位给全：源结构有姓必须给新姓，
+   有名必须给新名）；只有姓氏位的人物只给 family；
+3. 保留：name 给 null 并给 keep_reason（一句话理由）；没有合法理由不得保留；
+4. 同一家族（共享 family 位）的新姓必须一致；不同源姓不得改出同一个新姓；
+5. 新姓名要符合投影给定的时代与题材风格，与角色性别、身份相称；避免生僻字；
+6. 新姓、新名、新化名不得与任何人物的旧姓名字面重复，不得与他人新名重复；
+7. aliases：投影中列出的化名位需要改名的，逐个 alias_id 给新字面；不改就不写；
+   不得发明投影之外的化名位。
+
+只输出一个 JSON 对象（不要围栏、不要解释）：
+{"entries":[{"char_ref":"...","name":{"family":"...","given":"..."},"aliases":{},"keep_reason":null}]}"""
+
 
 def pack_prompt(rules: str, **materials) -> str:
     return rules + '\n输入：\n' + json.dumps(materials, ensure_ascii=False, sort_keys=True,

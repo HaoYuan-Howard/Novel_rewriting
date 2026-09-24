@@ -20,9 +20,12 @@ from pydantic import Field, model_validator
 from contracts.schema.base import StrictModel
 from contracts.schema.str06.design import TargetDelta
 from contracts.schema.str06.execution import Establishment
-from contracts.schema.str06.state import StateAddress
+from contracts.schema.str06.state import StateAddress, SurfaceRelease
 from contracts.schema.str06.grounding import SourceObligation
 from typing import Literal
+
+__all__ = ['KnowledgeEntry', 'StateEntry', 'SurfaceRelease', 'VerificationIR',
+           'WriterBrief', 'WriterContext']
 
 
 class StateEntry(StateAddress):
@@ -43,13 +46,6 @@ class KnowledgeEntry(StrictModel):
     key: str = Field(min_length=1)
     status: Literal['set', 'unset', 'unknown'] = 'set'
     mode: Literal['known', 'suspected', 'heard']
-
-
-class SurfaceRelease(StrictModel):
-    """IR 的 surface 释放：char_id 本场可用的称谓面（M5/M6 的查询面）。"""
-
-    char_id: str = Field(min_length=1)
-    surfaces: tuple[str, ...] = Field(min_length=1)
 
 
 class VerificationIR(StrictModel):
@@ -88,7 +84,7 @@ class WriterBrief(StrictModel):
 class WriterContext(StrictModel):
     """双视图载体：单份 Derived artifact（`stage4/context/scene_{nnn}.json`）。"""
 
-    contract_version: Literal['str06-rc2'] = 'str06-rc2'
+    contract_version: Literal['str06-rc3'] = 'str06-rc3'
     scene_id: str = Field(min_length=1)
     attempt_id: str = Field(min_length=1)
     execution_slice_sha256: str = Field(min_length=64, max_length=64)

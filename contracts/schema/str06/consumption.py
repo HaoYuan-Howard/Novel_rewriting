@@ -1,12 +1,18 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""consumption —— Stage6/7 消费投影族登记与 Prepare 坐标分离（F0 RC）。
+"""consumption —— Stage5/7 消费投影族登记（F0 登记，F6 改版）。
 
 【为什么 F0 就登记投影】
-Stage6/7 不需要新 canonical truth，只需要消费投影；但消费投影的**形状、来源和
-坐标域**若拖到 F6 才定义，F3/F4 的免费干跑就没有靶子。登记在这里的是接口形状
-（数据表），不是实现——F3 免费检查已有产物能否提供这些信息，F4 用真实 Compile
-结果干跑，F6 验证真实完整消费链。
+Stage5/7 不需要新 canonical truth，只需要消费投影；消费投影的**形状、来源和
+坐标域**在这里集中登记（数据表，不是实现）。F3 免费检查已有产物能否提供这些
+信息，F4 用真实 Compile 结果干跑，F6 起验证真实完整消费链。
+
+【F6 改版】
+旧 Prepare 坐标分离（PrepareMaterials／SourceHookEvidence／TargetOpening）随
+Stage6 prepare 节点一并退役：Hook 的正式选择改由 `hook_material` 投影承载
+（Design 保存必要选择，compiler 确定性投影）。`body_access` 的来源删去
+stage6.prepare，改按 Stage5 有效接受回执过滤。`rename_materials` 写明 Naming
+（只读投影）与 Apply（唯一应用者）的权限分界。
 
 【坐标域纪律】
 源首次提及、身份揭示、姓名可用时点是**源事实**（Characters 三投影，坐标=源章）；
@@ -33,12 +39,12 @@ class ProjectionFamilySpec(StrictModel):
     """一个消费投影族的登记：形状说明、来源 owner、坐标域。"""
 
     name: str = Field(min_length=1)
-    shape_note: str = Field(min_length=1, description='RC 形状说明；F3/F4 干跑后定版')
+    shape_note: str = Field(min_length=1, description='RC 形状说明；F3/F4/F6 干跑后定版')
     source_owners: tuple[str, ...] = Field(min_length=1)
     coordinate: ProjectionCoordinate
 
 
-#: 五个投影族（计划 F0 登记清单的原样落点）。
+#: 六个投影族（F6 改版后的登记清单）。
 STR06_CONSUMPTION_PROJECTIONS: dict[str, ProjectionFamilySpec] = {
     'world_view': ProjectionFamilySpec(
         name='world_view',
@@ -62,47 +68,22 @@ STR06_CONSUMPTION_PROJECTIONS: dict[str, ProjectionFamilySpec] = {
     'body_access': ProjectionFamilySpec(
         name='body_access',
         shape_note='accepted body 的完整读取与目标开篇读取'
-                   '（按有效接受回执过滤场景正文）',
-        source_owners=('stage5.receipt', 'stage5.body', 'stage6.prepare'),
+                   '（按 Stage5 有效接受回执过滤场景正文；缺失/未知/拒绝分开列出）',
+        source_owners=('stage5.receipt', 'stage5.body'),
         coordinate=ProjectionCoordinate.DUAL),
+    'hook_material': ProjectionFamilySpec(
+        name='hook_material',
+        shape_note='Hook 的正式选择（PresentationGraph.hook）到 HookContext 的确定性投影：'
+                   'POV、起笔事实、按设计序材料、禁止揭示、可用称谓与 withheld 字面',
+        source_owners=('stage4.design', 'stage2.characters', 'stage5.hook'),
+        coordinate=ProjectionCoordinate.TARGET),
     'rename_materials': ProjectionFamilySpec(
         name='rename_materials',
-        shape_note='名称替换所需实体、关系、时代背景、候选文案及有效正文投影',
-        source_owners=('stage2.characters', 'stage2.blueprint', 'stage4.design',
-                       'stage5.body'),
+        shape_note='Naming 只消费名称结构与稳定身份的只读投影；ApplyNames 是替换的'
+                   '唯一应用者（权限分界：投影不落交付，Apply 不改映射）',
+        source_owners=('stage2.characters', 'stage2.blueprint', 'stage7.naming'),
         coordinate=ProjectionCoordinate.DUAL),
 }
 
-#: 坐标枚举的闭环自检材料：五个族必须全部有坐标域。
+#: 坐标枚举的闭环自检材料：六个族必须全部有坐标域。
 PROJECTION_COORDINATES = ProjectionCoordinate
-
-
-class SourceHookEvidence(StrictModel):
-    """Prepare 的源坐标材料：源钩子事实及其源正文／源钩子证据。
-
-    `through_chapter` **只作用于本对象**——源证据的截断范围；它不控制任何目标
-    材料（见 PrepareMaterials 的分离不变量）。源文支持不自动等于目标文案可用。
-    """
-
-    through_chapter: int = Field(ge=1)
-    hook_facts: tuple[str, ...] = Field(min_length=1)
-    source_evidence_refs: tuple[str, ...] = Field(min_length=1)
-
-
-class TargetOpening(StrictModel):
-    """Prepare 的目标坐标材料：基于 accepted target body 的开篇范围与定位。"""
-
-    opening_scene_ids: tuple[str, ...] = Field(min_length=1)
-    opening_note: str = Field(min_length=1, description='目标开篇定位说明（坐标=目标场景）')
-
-
-class PrepareMaterials(StrictModel):
-    """Prepare 契约升版的载体：两种坐标分别表达。
-
-    `target_opening=None` 是显式「未就绪」：尚无 accepted body 或尚未生成目标
-    开篇时，消费方必须报告未就绪，不制造成功状态（I-42）。它不是可选默认——
-    是三态里的一态。
-    """
-
-    source_evidence: SourceHookEvidence
-    target_opening: TargetOpening | None

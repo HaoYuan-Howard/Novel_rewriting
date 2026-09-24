@@ -118,7 +118,7 @@ class ReconstructionBrief(StrictModel):
     拓扑是 Preserve→Design 的冻结边界，字段缺失就是它的类型层表达。
     """
 
-    contract_version: Literal['str06-rc2'] = 'str06-rc2'
+    contract_version: Literal['str06-rc3'] = 'str06-rc3'
     brief_id: str = Field(min_length=1)
     preserve_checkpoint_sha256: str = Field(min_length=64, max_length=64)
     requirements: tuple[BriefRequirement, ...] = Field(min_length=1)
@@ -178,7 +178,7 @@ class SemanticBinding(StrictModel):
     一次）；跨产物「全分母 = 采用的 checkpoint obligations」归 F4 机械 Guard。
     """
 
-    contract_version: Literal['str06-rc2'] = 'str06-rc2'
+    contract_version: Literal['str06-rc3'] = 'str06-rc3'
     binding_id: str = Field(min_length=1)
     preserve_checkpoint_sha256: str = Field(min_length=64, max_length=64)
     obligations: tuple[SourceObligation, ...] = Field(min_length=1)

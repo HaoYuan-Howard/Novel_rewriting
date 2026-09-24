@@ -1,6 +1,6 @@
 # STR-06 终态架构 RC 契约（Stage2–Stage7，Stage6 退役）
 
-本文件登记当前 RC2 实装与 Stage2–Stage7 扩容目标：四类 truth、Hook、交付改名、
+本文件登记当前 RC3 实装与 Stage2–Stage7 扩容目标：四类 truth、Hook、交付改名、
 路径与消费边界、阅读验收及 F8 切换清单。下文明确区分已实现契约和待实施目标；
 Stage6 整层退役是目标，不表示现役链已经切换。
 批次进度、必要证据索引与历史快照入口见 `docs/REQUIREMENTS.md` STR-06；架构裁决见
@@ -9,11 +9,13 @@ Stage6 整层退役是目标，不表示现役链已经切换。
 **RC 边界**：代码落点为 `contracts/schema/str06/` 子包。字段级 schema 保持 RC，
 经反例与真书验证后定版。本子包**不进** `ARTIFACT_SPECS`、不注册
 `NODES`、不进判据注册表；现役链按旧契约验收，正式替代一次合入（F8）。
-当前代码版式身份仍为 `str06-rc2`；本文的扩容目标不代表 Hook、NameMap v5 或新路径已实装。
-后续破坏形状须显式修订 RC 身份，不能靠文档更新默许旧载荷。RC1 目标产物不能直接加载；
-只能逐 owner 显式审阅 wire 后免费重编译。
+当前代码版式身份为 `str06-rc3`（F6，2026-09-24）：Hook、NameMap v5、名称结构与
+stage5/hook、stage7/naming、stage7/final 路径家族已实装（F6c 真书付费冒烟除外）。
+后续破坏形状须显式修订 RC 身份，不能靠文档更新默许旧载荷。RC1/RC2 目标产物不能直接
+加载；只能逐 owner 显式审阅 wire 后免费重编译（RC2 wire 在 RC3 代码下 body 路径
+免费重编译与 replay 逐字一致，checkpoint sha 不变——见 REQUIREMENTS F6 证据行）。
 
-## 当前 RC2 实装、修订与免费恢复
+## 当前 RC 实装、修订与免费恢复
 
 2026-09-23 从 F2b/F3/F4 真书结果反推修订。架构仍为 Source → Preserve → Brief →
 Design → Bind → Compile/Context；字段变化不接入现役注册表，正式切换仍归 F8。
@@ -46,25 +48,29 @@ Design → Bind → Compile/Context；字段变化不接入现役注册表，正
 不代表成文质量验收。`runtime/request_*.json` 是已购证据，禁止当普通派生缓存清理。
 RC2 的人工语义修订是显式外部输入，不是 compiler 自然语言猜测规则；质量仍需 F5/F8 验收。
 
-## 当前 RC2 模块与路径
+## 当前 RC 模块与路径（RC3）
 
 | 模块 | 承载 | 关键不变量（构造期表达） |
 |---|---|---|
 | `policy.py` | `PreservationPolicy`（版本化策略）、`PreserveKind` 闭集 | 类别集变化必须升版；执行身份不进 Policy |
 | `grounding.py` | `SourceObligation` / `PreserveCheckpoint` / `ReconstructionBrief` / `IdentityProjection` / `OutputConstraints` / `SemanticBinding` | 必保义务必有非空 `satisfaction`；checkpoint 无 Design/Bind 字段；Brief 无源章/源拍/叙述顺序/证据定位字段；Binding 是完整 snapshot，entries 与 unbound 不交集 |
-| `design.py` | `PresentationGraph` v1（`SceneDriver`/`TargetBeat`/`TargetDelta`/`SceneDelivery`/`ChapterAssignment`） | source-blind（无 source_ref 族字段且 forbid extra）；章号连续 1..N、场景全覆盖、每章非空 |
+| `design.py` | `BodyDesign`／`PresentationGraph(BodyDesign)+hook` v1（`SceneDriver`/`TargetBeat`/`TargetDelta`/`SceneDelivery`/`ChapterAssignment`） | source-blind（无 source_ref 族字段且 forbid extra）；章号连续 1..N、场景全覆盖、每章非空；hook 必填且 graph 内引用闭合 |
+| `hook.py` | `HookDesign`／`HookContext`／`HookReceipt`／`HookConstraints`（F6） | 起笔事实只引用已建立的目标事实；first 恰一人且非 narrator；材料唯一呈现语义口是 presentation；回执 semantic 恒 unverified |
+| `naming.py` | `NameMapV5`／`NameAssignment`／`TargetName`（F6） | name 与 keep_reason 恰好一个；full 由 compiler 拼接；char_ref 唯一 |
+| `source.py` | Characters v4（`CharactersCore` + `name_structure` RC 段）／Blueprints v12（F6 扩） | core view 与 RC2 同形（Preserve sha 不变）；名称结构 surface 恰好覆盖、模板渲染逐字相等、纯称谓不含姓名字面、同姓亲属共享 family_id |
 | `execution.py` | `ExecutionPlan`（establishment/constraint/dependency/reinforcement）与 `ExecutionSlice` | 必保只落 establishment/constraint；`Reinforcement` 无 obligation_id（0..N 不稀释必保）；依赖边禁自指 |
 | `context.py` | `WriterContext` 双视图（`VerificationIR` + `WriterBrief`） | 两视图 scene_id 与 `execution_slice_sha256` 同源；IR 带 `continuity_fact_view`（跨场回指误报的根因修复输入） |
 | `receipt.py` | `SceneReceipt`（最小七字段）与 `FidelityVerdict` | 无 plan hash/时间戳等无关 metadata 字段；`prose_sha256` 绑定改名前正文；`failure_origin ∈ {writer, upstream_ir, unverifiable}`；无修复字段 |
-| `consumption.py` | 原五个消费投影族与 `PrepareMaterials` | 原 F0–F4 消费范围；待扩容替代，不是终态 Hook 输入 |
-| `families.py` | 三级路径家族登记 | 来源账键=完整相对路径（不塌两级） |
-| `dependency.py` | 新链依赖方向登记 | F1 AST 守卫的数据源 |
+| `consumption.py` | 六个消费投影族（world_view／character_exposure／chapter_map／body_access／hook_material／rename_materials；F6 删 Prepare 族） | body_access 不再含 stage6.prepare；rename_materials 写明 Naming 只读投影与 Apply 唯一应用者的权限分界 |
+| `families.py` | 三级路径家族登记（15 个家族；F6 增 stage5/hook、stage7/naming、stage7/final） | 来源账键=完整相对路径（不塌两级） |
+| `dependency.py` | 新链依赖方向登记 ＋ F6 迁移包真实模块 owner 映射与规则 | 目标表自洽；迁移包规则由 AST 对真实文件执行（test_str06_hook） |
+| `retirement.py` | F6d 现役 Stage6 链退役登记（纯数据，106 项） | 双向对账：登记项必须真实存在、现役面必须全部在册；随 RC 包 F8 删除 |
 
 跨产物不变量（不由 schema 自身保证，归 F4 机械 Guard）：Binding 的 obligations
 分母必须与采用的 Preserve checkpoint 一致；ExecutionPlan 的依赖图无环；
 entry_state/knowledge 的 `established_by` 均早于本场起点（试点 M2/M3 的迁移）。
 
-当前三级路径按登记家族准入（`contracts/schema/str06/families.py`，12 个家族）；
+当前三级路径按登记家族准入（`contracts/schema/str06/families.py`，15 个家族）；
 家族外多级路径仍拒，两级一般规则不变。实现在 `novel/paths.py`：
 `check_rel_family`（准入）与 `family_input_key`（来源账键=完整路径）。
 INVALID 孪生名与 `_rounds/` 归档沿用现役机制。两级特例
@@ -74,9 +80,10 @@ checkpoint 不是可随意删除的缓存；kind 登记是删除政策的输入�
 
 原 F0–F4 的 Prepare 采用 `SourceHookEvidence + TargetOpening|null`，两套坐标分离，
 源 `through_chapter` 不控制目标材料；没有 accepted body 时目标开篇显式未就绪。
-此记录保留其历史证据与 Q-13 纪律；Prepare 消费链由下述 Hook 目标替代，不再扩建。
-当前 AST 规则仍在 `contracts/schema/str06/dependency.py`，新依赖守卫同批实施，
-不能把下文目标当成已经通过的检查。
+此记录保留其历史证据与 Q-13 纪律；Prepare 消费链已由 F6 的 Hook 正式选择替代，
+`PrepareMaterials`/`SourceHookEvidence`/`TargetOpening` 在 RC3 删除。迁移包依赖规则
+（hook_writer／hook_context／hook_design／naming／assembly／name_structure）已由
+AST 测试对真实模块执行（`tests/test_str06_hook.py`），不是纸面检查。
 
 ## 扩容目标：四类 truth 与职责（待实施）
 
@@ -105,29 +112,45 @@ Binding 不维护第二份初始态。Identity 等必要材料只经明确公共
 producer 轮流改 canonical，不用空 Hook 默认值冒充完成。Bind 只给目标故事分配保留
 义务，Hook 不增加义务分母，也不作为正文漏保的替代承载。
 
-## Hook 的正式选择与确定性投影（待实施）
+## Hook 的正式选择与确定性投影（RC3 已实装，F6a/F6b）
 
 Hook 是同一目标故事的另一种呈现。设计负责材料及顺序、起笔、时间跳转、披露和收束；
 Writer 负责句法、措辞、对白、局部动作、节奏、意象和语气。局部细节不得改变事实或
 成为未经 Design 承接的后续情节依据，不重选材料、改序或突破披露许可。
 
-`material_refs + brief` 只有在能重建全部 HookContext 时才足够。现试点额外生成的
-起笔事实、禁止揭示及 POV 选择不能只藏在 wire 或 Context：由 Hook Design 保存必要
-的正式选择，优先引用现有 target beat/fact；具体字段经 F6 反例定版。compiler 只解析
-引用、投影与格式化，不解释自然语言 brief 补出缺失选择。Body/Hook 仍由一份 graph
-承载，无额外 Hook truth 文件。
+由 Hook Design 保存必要的正式选择（RC3 落点 `contracts/schema/str06/hook.py`）：
+`pov{person,focalizers}`、`opening_facts[{ref,address,audience}]`（只引用 init 或
+目标拍上真实建立的 StateAddress，按 world/pov/reader 分获准面）、
+`materials[{beat_ref,withheld,presentation?}]`（呈现序，允许乱序冷开）、`concealed`、
+`surface_releases`、`forbidden_reveals[{ref,address?}]`、两份 brief。具体字段经 F6
+反例定版。compiler 只解析引用、投影与格式化，不解释自然语言 brief 补出缺失选择。
+Body/Hook 仍由一份 graph 承载（`PresentationGraph(BodyDesign)+hook` 必填，
+`publish_graph` 唯一发布），无额外 Hook truth 文件；Bind/Compile/Context/Guard
+类型收窄到 `BodyDesign`，从类型上保证 Hook 不影响正文。机械校验臂
+（`novel/stages/str06/hook_design.py`）钉住：引用闭合、withheld ⊆ 该拍 delta、
+world/pov 起笔事实早于首个材料、reader 不晚于材料视界且不在禁止集、起笔事实不得是
+材料拍 delta、first 恰一人且非 narrator、释放称谓必须是已声明面且不属隐藏人物、
+隐藏人物材料必须 presentation 且不含其字面。
 
-HookContext 包含 POV、最小起笔事实、按设计顺序排列的材料、禁止揭示、design brief、
-delivery brief 与长度边界；材料只投影获准呈现的语义。起笔事实不是镜头描述，也不
-自动等于全书 T₀；冷开时区分世界已成立、POV 已知、读者获准知道。正文 reveal 位置
-和 Binding 不能单独决定 Hook 披露边界，单个 beat 含须隐藏侧面时由 Design 明确选择。
-POV 不按正文多数票猜测，不强制第一人称；compiler 从正式设计投影。
+HookContext（`stage4/context/hook/hook.json`，Derived）包含 POV、按 audience 分组
+的起笔事实、按设计序排列的材料投影（presentation，或 event＋未 withheld 的 set
+delta）、禁止揭示、两份 brief、长度边界、可用称谓与 `withheld_literals`（未释放的
+专名字面，由名称结构 ∩ 全部人物专名/带名 surface 推导，不写死人名）。起笔事实不是
+镜头描述，也不自动等于全书 T₀；冷开时区分世界已成立、POV 已知、读者获准知道。
+正文 reveal 位置和 Binding 不能单独决定 Hook 披露边界，单个 beat 含须隐藏侧面时由
+Design 显式 withheld 或 presentation。POV 不按正文多数票猜测，不强制第一人称；
+compiler 从正式设计投影。Hook Writer 的机械 validator 查非空、长度、编码、包装行与
+withheld 字面泄漏（先认领已释放称谓再扫）；回执 `semantic` 恒为 unverified；
+超长同 Context 有限重写（再 2 次，attempt 进请求身份）。
 
-免费反例覆盖：只用 canonical 重建同一 Context、悬空引用、禁止源 Hook/正文混入、
-冷开乱序但事实及披露自洽、第三人称/多视角、单拍部分披露、无关改动不扩大失效。
-原型入包须删除单书人名、全局缓存与人称词频假设，不直接复制试点脚本为正式路径。
+免费反例（`tests/test_str06_hook.py`）覆盖：只用 canonical 重建同一 Context 字节
+一致、悬空引用、禁止源 Hook/源坐标/义务字段/state0 自由文本混入、冷开乱序但事实及
+披露自洽、起笔事实时序越界、隐藏身份在称谓/presentation/正文字面三层被挡、
+第三人称多视角、first 配多人或 narrator 拒、单拍部分披露、POV 取自设计而非正文
+众数、无关拍改动不扩大 HookContext 失效、只改 Hook 时正文 plan 全等、机械通过不产生
+语义已验字段。原型已删除单书人名、全局缓存与人称词频假设，未直接复制试点脚本。
 
-## Stage5 接受边界与正文衔接（待实施）
+## Stage5 接受边界与正文衔接（Hook 面已实装，Body 面归 F5）
 
 Body 严格串行 `Project → Guard → Write → Judge → Commit → Apply planned_delta`；
 恢复只重放连续有效 accepted prefix。Body Writer 消费有限相邻已接受正文 tail，窗口规则
@@ -138,12 +161,16 @@ Writer 可在既有 scene driver／voice／delivery hint 内实现不改变因�
 状态的迟疑、潜台词、情绪与局部动作；新增前史、秘密、长期动机或后文依赖的事实
 须由 Design 明确承接。不从正文反推状态，不增加情绪状态机。
 
-Hook 只有一个输出与机械回执；非空、长度、编码和 wrapper/Markdown 等格式检查
-不证明未剧透、遵守材料顺序、POV 正确或吸引人。机械通过不得升级为语义已验；未验证
-质量按现有披露机制保留。超长在同一 Context 下有限重写，属于 realization failure；
-上游设计错误回 Stage4，付费状态未知仍阻断，不用质量披露绕过。
+Hook 只有一个输出与机械回执（`stage5/hook/hook.txt`＋`stage5/hook/receipt.json`，
+绑定 hook_context_sha256 与改名前 prose_sha256）；非空、长度、编码和 wrapper/Markdown
+等格式检查不证明未剧透、遵守材料顺序、POV 正确或吸引人。机械通过不得升级为语义已验
+（回执 `semantic` 恒为 unverified）；未验证质量按现有披露机制保留。超长在同一 Context
+下有限重写（重写请求=同一 Context＋上一稿机械错误，身份确定、可免费恢复，最多再
+2 次），属于 realization failure；上游设计错误回 Stage4，付费状态未知仍阻断，不用
+质量披露绕过。隔离入口 `--through stage5` 到 hook_accepted_mechanical/hook_rejected
+显式状态为止。
 
-## NameMap v5 与接受／交付文本分离（待实施）
+## NameMap v5 与接受／交付文本分离（RC3 已实装，F6a/F6b）
 
 NameMap 是交付变换契约，不是第五类 semantic truth。Naming 只消费 Characters 的稳定
 身份与源名称结构、目标命名风格投影，不读整本源书、Body/Hook prose 或 Binding 内部。
@@ -152,25 +179,38 @@ NameMap 是交付变换契约，不是第五类 semantic truth。Naming 只消�
 这里登记源名称结构的 owner 要求，不声称当前 Characters v4 已具备全部字段；需要补齐
 正式形状时显式修订 RC 并提供恢复边界，不让 Naming 或 compiler 代替源语义抽取。
 
-v5 的基础面为 `char_ref → name{full,family,given}`，按源名称结构给出必要部分。
-`absence=unchanged` 不能掩盖模型漏答：输入明确应改名集合，输出须完整覆盖，合法保留
-由明确策略决定。共享姓氏和姓氏称谓按已知归属处理，不能全局替换单个姓字；同姓不同
-人或同一表层多归属导致同一源字面对应不同替换值时，必须显式报错，不能按替换顺序
-选 owner；共享同姓本身不是冲突。独立化名不由新姓或
-新全名机械猜出：若需改名，由 Naming 对源身份中已登记的名称位显式赋值，RC 形状覆盖
-该需求；不能用未授权的 `extra_subs` 或 residual 语义猜测补齐。
+v5 的基础面为 `entries[{char_ref, name{family?,given?,full?}|None, aliases{},
+keep_reason?}]`（RC3 落点 `contracts/schema/str06/naming.py`；`full` 由 compiler
+拼接，wire 不携带；name 与 keep_reason 恰好一个）。按源名称结构给出必要名称位：
+源结构登记了姓必须给新姓、登记了名必须给新名，反之不得给；只改化名位的人物允许
+name 全空＋显式 alias 赋值。`absence=unchanged` 不能掩盖模型漏答：compile 以明确
+应改名集合核对完整覆盖（漏项/多余项/未知 char_ref 报错），合法保留必须带理由。
+共享姓氏和姓氏称谓按已知归属处理（surface_forms 模板逐人渲染），不能全局替换单个
+姓字；同姓不同人或同一表层多归属导致同一源字面对应不同替换值时，必须显式报错并列出
+owner，不能按替换顺序选 owner；共享同姓本身不是冲突。同 family_id 新姓必须一致、
+不同源姓不得合并同姓、新姓必须与本人旧姓不同、新字面与他人旧字面冲突拒绝。
+独立化名不由新姓或新全名机械猜出：由 Naming 对源身份中已登记的 alias_id 显式赋值；
+不能用未授权的 `extra_subs` 或 residual 语义猜测补齐。
 
-`CompileSurfaceReplacements(Characters,NameMap)` 是纯函数，不新增 replacement-table
-产物。已明确的姓氏构词可确定性展开，如沈公子→柳公子；ApplyNames 单遍长名优先，
-避免连环替换。残留检查保留 `claimed/kept` 的有效语义：拒绝未认领且应替换的残留，
-合法保留与认领区间字面不误报；不把所有源名字串都列禁词，不调用 LLM 猜测归属。
+`compile_surface_replacements(Characters,NameMap)` 是纯函数，不新增 replacement-table
+产物。已明确的姓氏构词由 surface_forms 模板渲染确定性展开（如 `姓{family}的`→
+姓柳的；家族级 forms 如 `{family}家` 按同 family_id 新姓一致展开）；替换值包含另一
+键（链式替换风险）报错。ApplyNames（`literal_scan.apply_replacements`）单遍长名
+优先，避免连环替换。残留检查保留 `claimed/kept` 的有效语义：只查应替换的字面，
+跳过认领区间与合法保留字面——目标名含旧字面、kept 含映射键时不误报；不把所有源名
+字串都列禁词，不调用 LLM 猜测归属。diff proof 用骨架法机械证明差异恰为替换表。
 源身份/名称结构缺失回 Stage2，目标名称缺失或冲突回 Naming，机械实现错误回 compiler。
+Assembly（`novel/stages/str06/assembly.py`）body_access 按 accepted/rejected/missing/
+unknown 四态判定；无 accepted body 时显式 not_ready（F6 只落
+`runtime/delivery/hook_renamed.txt` 与 runtime 组装报告，`stage7/final/` 不落产物）；
+交付身份由（body hash, hook prose hash, 替换表, kept）派生，与 Stage5/Hook 回执分离，
+换 NameMap 只变交付身份。
 
 Stage5 receipt 绑定改名前正文；Stage7 用有效 NameMap、机械接受的 Hook 与 accepted
 body 替换组装，另行绑定交付身份。同一输入字节、映射和组装契约产生相同交付字节；
 换 NameMap 不使 Stage5 回执失效。接受状态、输入身份或 Body 未就绪时不得交付成功。
 
-## 目标产物与代码职责（待实施）
+## 目标产物与代码职责（Hook/Naming/Assembly 已实装，Body 成文归 F5）
 
 | 身份 | 目标产物或证据 |
 |---|---|
@@ -218,7 +258,7 @@ Design 实现；Compile/Context 禁 LLM 和草稿；Stage5 只消费 WriterIR/ac
 Hook Writer 禁 Body prose、源 Hook 和源小说。Stage7 只消费正式契约与已接受文本，
 不得反向修改 truth 或依赖 Stage2/4/5 internals；validator 不修输入，repository 不决策。
 
-## 目标消费投影（待实施）
+## 目标消费投影（RC3 登记已落 `consumption.py`，六族）
 
 | 投影族 | 正式来源与消费面 |
 |---|---|

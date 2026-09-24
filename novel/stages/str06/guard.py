@@ -8,12 +8,12 @@ from __future__ import annotations
 from typing import Mapping
 
 from contracts.schema.str06.context import WriterContext
-from contracts.schema.str06.design import PresentationGraph
+from contracts.schema.str06.design import BodyDesign
 from contracts.schema.str06.grounding import SemanticBinding
 
 
 
-def scene_order(graph: PresentationGraph) -> dict[str, int]:
+def scene_order(graph: BodyDesign) -> dict[str, int]:
     """场景的阅读序：章序为主、章内声明序为次；init 恒早；未知锚不合法。"""
     order: dict[str, int] = {}
     position = 0
@@ -65,7 +65,7 @@ def check_entry_timing(
 
 
 def check_binding_beat_refs(
-    binding: SemanticBinding, graph: PresentationGraph,
+    binding: SemanticBinding, graph: BodyDesign,
 ) -> list[str]:
     """M4：承载位置必须指向真实场景/拍（跨产物存在性，schema 只能保前缀）。"""
     refs = {f'{s.scene_id}#{b.beat_id}' for s in graph.scenes for b in s.beats}
@@ -79,7 +79,7 @@ def check_binding_beat_refs(
 
 
 def check_cast_legality(
-    context: WriterContext, graph: PresentationGraph,
+    context: WriterContext, graph: BodyDesign,
     appeared: set[str],
 ) -> list[str]:
     """M6：人物须由 Design 声明参与或引入；提及未到场人物同样合法。"""
@@ -92,7 +92,7 @@ def check_cast_legality(
 
 
 def appeared_chars(
-    graph: PresentationGraph, order: Mapping[str, int], upto_scene: str,
+    graph: BodyDesign, order: Mapping[str, int], upto_scene: str,
 ) -> set[str]:
     """upto_scene（含当场）之前合法参与或被引入的人物。"""
     current = order.get(upto_scene, 0)
@@ -109,7 +109,7 @@ def run_mechanical_guard(
     *,
     binding: SemanticBinding,
     context: WriterContext,
-    graph: PresentationGraph,
+    graph: BodyDesign,
 ) -> list[str]:
     """写前 M1–M6 的唯一聚合入口，使用同一称谓释放引擎。"""
     from novel.stages.str06.project import surface_engine_release

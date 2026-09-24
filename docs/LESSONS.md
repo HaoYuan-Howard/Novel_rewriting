@@ -203,3 +203,23 @@ INFO、metric、UNVER 和 binding concern 是阅读线索，不自带付费行�
 ## 37. 会让授权主体失效的付费动作，必须先把意图正式化
 
 会使原 workpack stale 的付费动作，先由免费 producer 落正式 request，再以 authority receipt 接管授权，之后才退休临时记录。独立 epoch/permit 在 wire 前写 journal；每轮 retry intent 先于调用。checkpoint/prepared 只按 exact request 免费恢复，合法后继用 WAL/receipt 证明；批量每章独立身份，未知最新结果不得重发。
+
+## 38. 引入「同一 graph 的第二 producer」时，先给类型层收窄，再谈校验
+
+Hook 与正文同住一份 PresentationGraph，若 publisher 只有一个而消费类型不收窄，下游仍可能把
+hook 字段读进正文链路。F6 的做法：拆 `BodyDesign`（Bind/Compile/Context/Guard 只收这个类型），
+`PresentationGraph(BodyDesign)+hook` 必填、`publish_graph` 唯一发布——「Hook 不影响正文」从类型
+上成立，而不是靠校验提醒。同类场景（两个语义请求产一份 canonical）先拆视图类型再谈守卫。
+
+## 39. 文本产物必须有文本落盘口，JSON write 会把字符串变成带引号的 JSON
+
+`Str06Repository.write` 对 str 入参做 JSON 编码，落盘成 `"柳婉望着空房。"`——内容「存在」且
+read 回来相等，直到有人按正文读它。新增 `write_text/read_text`（同一套原子写＋回读核对）后，
+正文/成文类产物一律走文本口；测试要断言 `read_text` 的原始字节，不能只断言 `read` 的往返。
+
+## 40. 退役清单要双向对账：登记项必须真实存在，现役面必须全部在册
+
+只扫现役面会漏登记（新加文件不在清单），只验登记会指错对象（符号改名后清单静默失效）。
+F6d 的登记表每条 target 用四种可核对格式（文件/符号/dict 键/字面子串），测试同时做两个方向；
+现役面扫描（NODES 键、stage6 文件、纯 Stage6 测试、前端目录、路由装饰器）发现清单外对象即红。
+没有对账的退役清单会在 F8 当天才发现删不动。
