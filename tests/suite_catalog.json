@@ -1622,6 +1622,20 @@
         "test_paid_artifact_replay_after_lost_commit_is_free": "stage",
         "test_invalid_twin_rerun_archives_rounds_without_rebuy": "stage"
       }
+    },
+    "tests/test_str06_views.py": {
+      "layer": "unit_contract",
+      "stages": [
+        "stage2",
+        "stage4",
+        "stage5",
+        "stage7"
+      ],
+      "cases": {
+        "test_views_cover_the_whole_delivered_chain": "stage",
+        "test_candidate_reads_over_http_match_the_views": "stage",
+        "test_half_run_candidate_keeps_present_and_missing_apart": "stage"
+      }
     }
   },
   "version": 1

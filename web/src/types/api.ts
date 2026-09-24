@@ -68,6 +68,18 @@ import type { AnalyzeDraftView, AnalyzeDraftOwner } from './analyzeDraft'
 import type {
   PrepareView, PrepareWorkpack,
 } from './prepare'
+import type {
+  Str06BlueprintView,
+  Str06CandidateList,
+  Str06CharactersView,
+  Str06ChapterView,
+  Str06DeliveryView,
+  Str06DesignView,
+  Str06HookView,
+  Str06IrNavView,
+  Str06NamingView,
+  Str06RunView,
+} from './str06'
 
 export interface Api {
   /* 读 */
@@ -186,4 +198,17 @@ export interface Api {
   applyRetention(plan: RetentionPlan, confirmed: boolean): Promise<RetentionApplyResult>
   previewTrashRestore(trashId: string, expectedTitle: string): Promise<TrashRestorePlan>
   applyTrashRestore(plan: TrashRestorePlan, confirmed: boolean): Promise<TrashRestoreResult>
+
+  /* STR-06 候选链只读监控（F7d；F8 激活前与现役 `/novels` 面物理分开） */
+  getStr06Candidates(): Promise<Str06CandidateList>
+  getStr06Run(candidate: string): Promise<Str06RunView>
+  getStr06Characters(candidate: string): Promise<Str06CharactersView>
+  getStr06Blueprint(candidate: string): Promise<Str06BlueprintView>
+  getStr06Design(candidate: string): Promise<Str06DesignView>
+  getStr06Ir(candidate: string): Promise<Str06IrNavView>
+  getStr06Chapter(candidate: string, ordinal: number): Promise<Str06ChapterView>
+  getStr06Hook(candidate: string): Promise<Str06HookView>
+  getStr06Naming(candidate: string): Promise<Str06NamingView>
+  getStr06Delivery(candidate: string): Promise<Str06DeliveryView>
+  getStr06Book(candidate: string): Promise<string>
 }

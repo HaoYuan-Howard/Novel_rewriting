@@ -3,6 +3,21 @@ import type { JobRequest } from '@/types/jobs'
 import type { AgentRunRequest } from '@/types/agent'
 import type { AnalyzeDraftOwner } from '@/types/analyzeDraft'
 
+/** STR-06 候选链只读监控：key 以候选根名开头（与 sid 同一职责——换根换缓存）。 */
+export const qkStr06 = {
+  candidates: () => ['str06', 'candidates'] as const,
+  run: (candidate: string) => ['str06', candidate, 'run'] as const,
+  characters: (candidate: string) => ['str06', candidate, 'characters'] as const,
+  blueprint: (candidate: string) => ['str06', candidate, 'blueprint'] as const,
+  design: (candidate: string) => ['str06', candidate, 'design'] as const,
+  ir: (candidate: string) => ['str06', candidate, 'ir'] as const,
+  chapter: (candidate: string, o: number) => ['str06', candidate, 'chapter', o] as const,
+  hook: (candidate: string) => ['str06', candidate, 'hook'] as const,
+  naming: (candidate: string) => ['str06', candidate, 'naming'] as const,
+  delivery: (candidate: string) => ['str06', candidate, 'delivery'] as const,
+  book: (candidate: string) => ['str06', candidate, 'book'] as const,
+}
+
 /**
  * 所有 query key 都以 sid 开头（除了语料库与 enums）。
  * 这一条让「闸门不能是全局的」变成结构性保证：换一本书 = 换一条缓存记录，

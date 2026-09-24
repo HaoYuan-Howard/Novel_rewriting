@@ -91,6 +91,7 @@ npm run build                       # web/dist，供后端同源托管
 | `/n/:sid/inbox` | 全书待办与对应只读入口；不建立第二套编辑面或校验结论 |
 | `/n/:sid/stage6` | 文案准备只读状态；三候选展示与免费改选（`approveHook`）；终审 workpack 展开原钩子、接受主张和完整重写正文 |
 | `/n/:sid/stage7`、`/n/:sid/stage7/:o` | 改名表、漏网候选、成书状态与逐章替换对照（只读；残留采纳由流水线自动完成） |
+| `/str06/:candidate` | STR-06 候选链只读监控（F7d）：隔离候选根的 workflow 状态、节点盘面事实、ledger 成本、Characters／Blueprint／Design／WriterBookIR 导航、章正文与章回执、Hook、NameMap 与成书 manifest。顶部常驻「候选链 · 未切换」标注；F8 激活前不进左导航、无 check 面板、无写按钮 |
 
 `stage5` 无章号时转第 1 章，非法章序也走同一守卫。旧 `review/:o` 与 `check` 仅重定向至 `stage5/:o`
 和 `inbox`；不恢复独立 review/check 屏或 Stage3。

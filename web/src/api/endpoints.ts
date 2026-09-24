@@ -46,6 +46,18 @@ import type { Artifact, NovelOverview, NovelsResponse } from '@/types/novels'
 import type { TrashNovelResult } from '@/types/novels'
 import type { RunProgress, WorkUnitGrantPreview, WorkUnitGrantResult } from '@/types/run'
 import type {
+  Str06BlueprintView,
+  Str06CandidateList,
+  Str06CharactersView,
+  Str06ChapterView,
+  Str06DeliveryView,
+  Str06DesignView,
+  Str06HookView,
+  Str06IrNavView,
+  Str06NamingView,
+  Str06RunView,
+} from '@/types/str06'
+import type {
   RetentionApplyResult,
   RetentionPlan,
   RetentionPolicy,
@@ -73,6 +85,10 @@ import { mockApi } from './mock'
 import { projectGlobalSpoilers } from './spoilers'
 
 const n = (sid: string) => '/novels/' + encodeURIComponent(sid)
+
+/** STR-06 候选根路径（F7d）：候选名同样过编码，非法名由后端 404，不拼路径。 */
+const str06 = (candidate: string, suffix: string) =>
+  '/str06/candidates/' + encodeURIComponent(candidate) + '/' + suffix
 
 /**
  * 当前后端的 NovelOverview 已收敛成「八个 StageState 的列表」，而冻结 mock 仍是
@@ -532,6 +548,19 @@ export const realApi: Api = {
     }),
   applyTrashRestore: (plan, confirmed) =>
     post<TrashRestoreResult>('/maintenance/trash/restore/apply', { plan, confirmed }),
+
+  // STR-06 候选链只读监控：与现役 `/novels` 面物理分开的另一棵路由树（F7d）。
+  getStr06Candidates: () => get<Str06CandidateList>('/str06/candidates'),
+  getStr06Run: (candidate) => get<Str06RunView>(str06(candidate, 'run')),
+  getStr06Characters: (candidate) => get<Str06CharactersView>(str06(candidate, 'characters')),
+  getStr06Blueprint: (candidate) => get<Str06BlueprintView>(str06(candidate, 'blueprint')),
+  getStr06Design: (candidate) => get<Str06DesignView>(str06(candidate, 'design')),
+  getStr06Ir: (candidate) => get<Str06IrNavView>(str06(candidate, 'ir')),
+  getStr06Chapter: (candidate, o) => get<Str06ChapterView>(str06(candidate, 'chapters/' + o)),
+  getStr06Hook: (candidate) => get<Str06HookView>(str06(candidate, 'hook')),
+  getStr06Naming: (candidate) => get<Str06NamingView>(str06(candidate, 'naming')),
+  getStr06Delivery: (candidate) => get<Str06DeliveryView>(str06(candidate, 'delivery')),
+  getStr06Book: (candidate) => getText(str06(candidate, 'book')),
 }
 
 /** 编译期常量：VITE_USE_MOCK 会被 Vite 替换成字面量，于是这个三元能被静态折叠 */

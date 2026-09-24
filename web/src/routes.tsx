@@ -13,6 +13,7 @@ import { Stage7Screen } from '@/screens/stage7/Stage7Screen'
 import { InboxScreen } from '@/screens/inbox/InboxScreen'
 import { RunScreen } from '@/screens/run/RunScreen'
 import { SettingsScreen } from '@/screens/settings/SettingsScreen'
+import { Str06MonitorScreen } from '@/screens/str06/Str06MonitorScreen'
 
 /** 换书 / 换章都整棵重挂：屏内的选中、开关、编辑中的文本不会跟过去 */
 function Keyed({ children }: { children: React.ReactNode }) {
@@ -51,6 +52,8 @@ export function AppRoutes() {
       <Route element={<AppShell />}>
         <Route path="/" element={<CorpusScreen />} />
         <Route path="/settings" element={<SettingsScreen />} />
+        {/* STR-06 候选链只读监控（F7d）：隔离候选根，不在现役 Stage 导航内。 */}
+        <Route path="/str06/:candidate" element={<Str06MonitorScreen />} />
 
         <Route path="/n/:sid" element={<BookLayout />}>
           <Route index element={<Navigate to="stage0" replace />} />

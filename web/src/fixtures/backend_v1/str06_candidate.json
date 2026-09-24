@@ -1,0 +1,705 @@
+{
+ "candidates": {
+  "candidates": [
+   {
+    "candidate": "cand",
+    "present": true,
+    "status": "delivered",
+    "updated_at": 1790269950
+   }
+  ]
+ },
+ "run": {
+  "candidate": "cand",
+  "present": true,
+  "status": "delivered",
+  "failed_node": null,
+  "accepted_body": true,
+  "epoch": {
+   "epoch_id": "95478c68ab0a210f5ff791fd36b3417eb88599c9c21be8bb3d4d89803f728aa4",
+   "ordinal": 1,
+   "reason": "initial",
+   "session_run_id": "dfcb8c03fc3a4c9abd0d60e1980299d1"
+  },
+  "nodes": [
+   {
+    "node": "str06.stage2.source",
+    "stage": "stage2",
+    "owner": "stage2.source",
+    "paid": true,
+    "produced": true
+   },
+   {
+    "node": "str06.stage2.names",
+    "stage": "stage2",
+    "owner": "stage2.names",
+    "paid": true,
+    "produced": true
+   },
+   {
+    "node": "str06.stage4.preserve",
+    "stage": "stage4",
+    "owner": "stage4.preserve",
+    "paid": true,
+    "produced": true
+   },
+   {
+    "node": "str06.stage4.body_design",
+    "stage": "stage4",
+    "owner": "stage4.body_design",
+    "paid": true,
+    "produced": true
+   },
+   {
+    "node": "str06.stage4.hook_design",
+    "stage": "stage4",
+    "owner": "stage4.hook_design",
+    "paid": true,
+    "produced": true
+   },
+   {
+    "node": "str06.stage4.bind",
+    "stage": "stage4",
+    "owner": "stage4.bind",
+    "paid": true,
+    "produced": true
+   },
+   {
+    "node": "str06.stage4.compile",
+    "stage": "stage4",
+    "owner": "stage4.compile",
+    "paid": false,
+    "produced": true
+   },
+   {
+    "node": "str06.stage5.body",
+    "stage": "stage5",
+    "owner": "stage5.body",
+    "paid": true,
+    "produced": true
+   },
+   {
+    "node": "str06.stage5.hook",
+    "stage": "stage5",
+    "owner": "stage5.hook",
+    "paid": true,
+    "produced": true
+   },
+   {
+    "node": "str06.stage7.naming",
+    "stage": "stage7",
+    "owner": "stage7.naming",
+    "paid": true,
+    "produced": true
+   },
+   {
+    "node": "str06.stage7.assemble",
+    "stage": "stage7",
+    "owner": "stage7.assembly",
+    "paid": false,
+    "produced": true
+   }
+  ],
+  "cost": {
+   "present": true,
+   "rows": 12,
+   "new_paid_rows": 12,
+   "cached_rows": 0,
+   "prompt_tokens": 300,
+   "completion_tokens": 175,
+   "reasoning_tokens": null,
+   "unknown_cost_rows": 0,
+   "per_node": [
+    {
+     "node": "str06.stage2.names",
+     "rows": 1,
+     "new_paid_rows": 1,
+     "cached_rows": 0,
+     "prompt_tokens": 10,
+     "completion_tokens": 10,
+     "reasoning_tokens": null
+    },
+    {
+     "node": "str06.stage2.source",
+     "rows": 3,
+     "new_paid_rows": 3,
+     "cached_rows": 0,
+     "prompt_tokens": 30,
+     "completion_tokens": 30,
+     "reasoning_tokens": null
+    },
+    {
+     "node": "str06.stage4.bind",
+     "rows": 1,
+     "new_paid_rows": 1,
+     "cached_rows": 0,
+     "prompt_tokens": 10,
+     "completion_tokens": 10,
+     "reasoning_tokens": null
+    },
+    {
+     "node": "str06.stage4.body_design",
+     "rows": 1,
+     "new_paid_rows": 1,
+     "cached_rows": 0,
+     "prompt_tokens": 10,
+     "completion_tokens": 10,
+     "reasoning_tokens": null
+    },
+    {
+     "node": "str06.stage4.hook_design",
+     "rows": 1,
+     "new_paid_rows": 1,
+     "cached_rows": 0,
+     "prompt_tokens": 10,
+     "completion_tokens": 10,
+     "reasoning_tokens": null
+    },
+    {
+     "node": "str06.stage4.preserve",
+     "rows": 1,
+     "new_paid_rows": 1,
+     "cached_rows": 0,
+     "prompt_tokens": 10,
+     "completion_tokens": 10,
+     "reasoning_tokens": null
+    },
+    {
+     "node": "str06.stage5.body",
+     "rows": 2,
+     "new_paid_rows": 2,
+     "cached_rows": 0,
+     "prompt_tokens": 200,
+     "completion_tokens": 80,
+     "reasoning_tokens": null
+    },
+    {
+     "node": "str06.stage5.hook",
+     "rows": 1,
+     "new_paid_rows": 1,
+     "cached_rows": 0,
+     "prompt_tokens": 10,
+     "completion_tokens": 5,
+     "reasoning_tokens": null
+    },
+    {
+     "node": "str06.stage7.naming",
+     "rows": 1,
+     "new_paid_rows": 1,
+     "cached_rows": 0,
+     "prompt_tokens": 10,
+     "completion_tokens": 10,
+     "reasoning_tokens": null
+    }
+   ]
+  }
+ },
+ "characters": {
+  "present": true,
+  "contract_version": "str06-rc3",
+  "characters": [
+   {
+    "char_id": "fu_jun",
+    "canonical": "夫君",
+    "surfaces": [
+     {
+      "surface": "夫君",
+      "from_chapter": 1,
+      "until_chapter": null
+     },
+     {
+      "surface": "陆大哥",
+      "from_chapter": 1,
+      "until_chapter": null
+     },
+     {
+      "surface": "陆兄",
+      "from_chapter": 1,
+      "until_chapter": null
+     }
+    ]
+   },
+   {
+    "char_id": "yun_niang",
+    "canonical": "苏芸娘",
+    "surfaces": [
+     {
+      "surface": "苏芸娘",
+      "from_chapter": 1,
+      "until_chapter": null
+     },
+     {
+      "surface": "芸娘",
+      "from_chapter": 1,
+      "until_chapter": null
+     },
+     {
+      "surface": "苏姑娘",
+      "from_chapter": 1,
+      "until_chapter": null
+     }
+    ]
+   }
+  ],
+  "name_structure": {
+   "families": {
+    "fam_lu": "陆",
+    "fam_su": "苏"
+   },
+   "people": {
+    "fu_jun": {
+     "family_id": "fam_lu",
+     "given": null,
+     "aliases": [],
+     "surface_forms": {
+      "夫君": null,
+      "陆大哥": "{family}大哥",
+      "陆兄": "{family}兄"
+     }
+    },
+    "yun_niang": {
+     "family_id": "fam_su",
+     "given": "芸娘",
+     "aliases": [],
+     "surface_forms": {
+      "苏芸娘": "{family}{given}",
+      "芸娘": "{given}",
+      "苏姑娘": "{family}姑娘"
+     }
+    }
+   }
+  }
+ },
+ "blueprint": {
+  "present": true,
+  "world_constraints": [],
+  "chapters": [
+   {
+    "chapter": 1,
+    "beats": [
+     {
+      "beat_id": "b01_01",
+      "event": "苏芸娘嫁入陆家，夫君立下旧约。",
+      "participants": [
+       "yun_niang",
+       "fu_jun"
+      ],
+      "effects": [],
+      "reveals": []
+     }
+    ],
+    "causal_edges": []
+   },
+   {
+    "chapter": 2,
+    "beats": [
+     {
+      "beat_id": "b02_01",
+      "event": "夫君夜半离家，芸娘发现玉佩之秘。",
+      "participants": [
+       "yun_niang",
+       "fu_jun"
+      ],
+      "effects": [],
+      "reveals": []
+     }
+    ],
+    "causal_edges": []
+   }
+  ]
+ },
+ "design": {
+  "present": true,
+  "graph_id": "pg_main",
+  "scenes": [
+   {
+    "scene_id": "s01",
+    "driver": {
+     "focal_actor": "yun_niang",
+     "immediate_want": "安度新婚",
+     "opposition": "夫君的怪异",
+     "turn": "立约"
+    },
+    "realization_brief": "重心在拜堂到立约的落差；从婚礼喧闹写起，展开洞房对坐，在旧约出口处收住，衔接下一场夜半异动。",
+    "pov": "yun_niang",
+    "voice": "冷峻",
+    "avoid": [],
+    "beats": [
+     {
+      "beat_id": "bt1",
+      "event": "拜堂成亲",
+      "participants": [
+       "yun_niang",
+       "fu_jun"
+      ],
+      "dramatic_intent": "成礼",
+      "target_delta": [
+       {
+        "domain": "relation",
+        "key": "marital_status",
+        "subjects": [
+         "yun_niang",
+         "fu_jun"
+        ],
+        "holder": null,
+        "op": "set",
+        "value": "夫妻",
+        "scope": "book",
+        "knowledge_mode": null
+       }
+      ],
+      "delivery_hint": "",
+      "surface_introductions": []
+     },
+     {
+      "beat_id": "bt2",
+      "event": "洞房夜夫君立约",
+      "participants": [
+       "yun_niang",
+       "fu_jun"
+      ],
+      "dramatic_intent": "埋线",
+      "target_delta": [
+       {
+        "domain": "knowledge",
+        "key": "debt_agreement",
+        "subjects": [
+         "fu_jun"
+        ],
+        "holder": "yun_niang",
+        "op": "set",
+        "value": "夫君身负报恩之约",
+        "scope": "book",
+        "knowledge_mode": "known"
+       }
+      ],
+      "delivery_hint": "",
+      "surface_introductions": [
+       {
+        "char_id": "yun_niang",
+        "surfaces": [
+         "芸娘"
+        ]
+       }
+      ]
+     },
+     {
+      "beat_id": "bt3",
+      "event": "芸娘立誓查清",
+      "participants": [
+       "yun_niang"
+      ],
+      "dramatic_intent": "立意",
+      "target_delta": [
+       {
+        "domain": "knowledge",
+        "key": "vow",
+        "subjects": [
+         "yun_niang"
+        ],
+        "holder": "yun_niang",
+        "op": "set",
+        "value": "她决意查清真相",
+        "scope": "book",
+        "knowledge_mode": "known"
+       }
+      ],
+      "delivery_hint": "",
+      "surface_introductions": []
+     }
+    ]
+   },
+   {
+    "scene_id": "s02",
+    "driver": {
+     "focal_actor": "yun_niang",
+     "immediate_want": "查明真相",
+     "opposition": "无凭据",
+     "turn": "发现玉佩"
+    },
+    "realization_brief": "重心在玉佩的发现；从空房冷起，压缩等待，在字面露出的瞬间收束。",
+    "pov": "yun_niang",
+    "voice": "冷峻",
+    "avoid": [],
+    "beats": [
+     {
+      "beat_id": "bt1",
+      "event": "夫君夜半离家",
+      "participants": [
+       "fu_jun"
+      ],
+      "dramatic_intent": "悬念",
+      "target_delta": [
+       {
+        "domain": "character",
+        "key": "whereabouts",
+        "subjects": [
+         "fu_jun"
+        ],
+        "holder": null,
+        "op": "set",
+        "value": "去向不明",
+        "scope": "book",
+        "knowledge_mode": null
+       }
+      ],
+      "delivery_hint": "",
+      "surface_introductions": []
+     },
+     {
+      "beat_id": "bt2",
+      "event": "芸娘发现玉佩秘密",
+      "participants": [
+       "yun_niang"
+      ],
+      "dramatic_intent": "揭示",
+      "target_delta": [
+       {
+        "domain": "knowledge",
+        "key": "jade_secret",
+        "subjects": [
+         "fu_jun"
+        ],
+        "holder": "yun_niang",
+        "op": "set",
+        "value": "玉佩刻着沈字",
+        "scope": "book",
+        "knowledge_mode": "known"
+       }
+      ],
+      "delivery_hint": "",
+      "surface_introductions": []
+     }
+    ]
+   }
+  ],
+  "chapters": [
+   {
+    "chapter_ordinal": 1,
+    "purpose": "新婚之夜埋下旧约之疑",
+    "scene_ids": [
+     "s01"
+    ]
+   },
+   {
+    "chapter_ordinal": 2,
+    "purpose": "玉佩之谜浮出水面",
+    "scene_ids": [
+     "s02"
+    ]
+   }
+  ],
+  "hook": {
+   "person": "first",
+   "focalizers": [
+    "yun_niang"
+   ],
+   "materials": [
+    "s02#bt1",
+    "s01#bt2"
+   ],
+   "concealed": [
+    "fu_jun"
+   ],
+   "forbidden_reveals": 1,
+   "design_brief": "从深夜冷开倒叙入新婚夜旧约，信息逐层升级后在新婚夜收束，玉佩之谜不露。"
+  },
+  "binding": {
+   "obligations": 1,
+   "entries": [
+    {
+     "obligation_id": "ob01",
+     "scene_id": "s01",
+     "beat_ref": "s01#bt2",
+     "supporting_beat_refs": [
+      "s01#bt1"
+     ]
+    }
+   ],
+   "unbound": []
+  }
+ },
+ "ir": {
+  "present": true,
+  "book_title": "报恩",
+  "target_chapter_count": 2,
+  "total_length_budget": 2000,
+  "length_band_low": 0.01,
+  "length_band_high": 0.05,
+  "chapters": [
+   {
+    "chapter_ordinal": 1,
+    "purpose": "新婚之夜埋下旧约之疑",
+    "length_budget": 1000,
+    "scene_ids": [
+     "s01"
+    ],
+    "scene_lines": [
+     "s01（pov=yun_niang）yun_niang想「安度新婚」受阻于「夫君的怪异」"
+    ]
+   },
+   {
+    "chapter_ordinal": 2,
+    "purpose": "玉佩之谜浮出水面",
+    "length_budget": 1000,
+    "scene_ids": [
+     "s02"
+    ],
+    "scene_lines": [
+     "s02（pov=yun_niang）yun_niang想「查明真相」受阻于「无凭据」"
+    ]
+   }
+  ],
+  "release_schedule": [
+   {
+    "char_id": "fu_jun",
+    "surfaces": [
+     "夫君"
+    ],
+    "from_chapter": 1
+   },
+   {
+    "char_id": "yun_niang",
+    "surfaces": [
+     "芸娘",
+     "苏芸娘"
+    ],
+    "from_chapter": 1
+   }
+  ]
+ },
+ "chapter1": {
+  "ordinal": 1,
+  "present": true,
+  "prose": "拜堂之夜，苏芸娘望着夫君，旧约出口，烛火到天亮才熄，她记住了每一个字。",
+  "receipt": {
+   "status": "accepted",
+   "mechanical_checks": [
+    "non_empty",
+    "encoding",
+    "no_wrapper",
+    "withheld_literals",
+    "length_band"
+   ],
+   "semantic": "unverified",
+   "length": {
+    "char_count": 35,
+    "target_chars": 1000,
+    "band_low": 10,
+    "band_high": 50,
+    "within_band": true,
+    "deviation_ratio": -0.965
+   },
+   "length_disclosed": false,
+   "request_identity": "f5e3192863f41a8f21a05c950913d8c6bcf65c19084cdf958db9c2766c66ea0c",
+   "protocol_version": "str06-body-protocol-v1",
+   "renderer_version": "str06-render-v1",
+   "validator_version": "str06-body-mechanical-v1"
+  }
+ },
+ "hook": {
+  "present": true,
+  "prose": "苏芸娘望着空房。",
+  "receipt": {
+   "hook_context_sha256": "5af8c0c708b8d388a4b6df32eb70409a156d1c4d1902a54cc416f84c6248fbae",
+   "prose_sha256": "b50c4965bbd1730d16ec752c958ebf275042f7fa9fbed6136300a1b2270f1afc",
+   "request_identity": "2abd0e710931ffb7055599ed3b29603daae40a5396ef8289c78a8da1bd8b4dfa",
+   "validator_version": "str06-hook-mechanical-v1",
+   "status": "accepted",
+   "mechanical_checks": [
+    "non_empty",
+    "length",
+    "encoding",
+    "no_wrapper",
+    "withheld_literals"
+   ],
+   "semantic": "unverified",
+   "_provenance": {
+    "code": "5bd8f5c99a3206c263d8d2197198136e8e1978e3-dirty.3107112ab13cab29",
+    "root_clean_sha1": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "inputs": {
+     "stage4/context/hook/hook.json": {
+      "file": "aa6c77f6e7",
+      "consumed": null
+     }
+    },
+    "usage": {
+     "calls_made": 1,
+     "calls_cached": 0,
+     "prompt_tokens": 10,
+     "completion_tokens": 5,
+     "reasoning_tokens": null
+    },
+    "prompts": {
+     "hook_writer.system": "907619240c",
+     "hook_writer.user": "b51c98ffae"
+    },
+    "model": "fake",
+    "adopted_models": [
+     "fake"
+    ]
+   }
+  }
+ },
+ "naming": {
+  "present": true,
+  "entries": [
+   {
+    "char_ref": "fu_jun",
+    "family": "顾",
+    "given": null,
+    "full": "顾",
+    "aliases": {},
+    "keep_reason": null
+   },
+   {
+    "char_ref": "yun_niang",
+    "family": "柳",
+    "given": "婉",
+    "full": "柳婉",
+    "aliases": {},
+    "keep_reason": null
+   }
+  ]
+ },
+ "delivery": {
+  "present": true,
+  "delivery_identity": "53d4885521e612b7be0d606cb55e3ffd387052d6dfdb7b383bc24870fec83a9c",
+  "final_text_sha256": "67ad65448467e1843a2c460402b0897dc9d249806dab8a29b648d3ddddbecb6b",
+  "chapters": [
+   {
+    "chapter_ordinal": 1,
+    "prose_sha256": "b43fe4fd64b6d6225d258e23d31aebdbf784820cc4ecb8439e9bb8ecf2a3931a",
+    "length": {
+     "char_count": 35,
+     "target_chars": 1000,
+     "band_low": 10,
+     "band_high": 50,
+     "within_band": true,
+     "deviation_ratio": -0.965
+    },
+    "length_disclosed": false
+   },
+   {
+    "chapter_ordinal": 2,
+    "prose_sha256": "7037630aabd61bf56ba2b0c8d6a64f35ccbac307f604cae2ecdd4afd847849a3",
+    "length": {
+     "char_count": 37,
+     "target_chars": 1000,
+     "band_low": 10,
+     "band_high": 50,
+     "within_band": true,
+     "deviation_ratio": -0.963
+    },
+    "length_disclosed": false
+   }
+  ],
+  "length_reading": {
+   "total_chars": 72,
+   "total_length_budget": 2000,
+   "whole_book_deviation_ratio": -0.964
+  },
+  "disclosure": "回执只覆盖章级机械检查；章内揭示位置、逐场义务兑现与成文质量未经语义验证，semantic=unverified 如实保留"
+ },
+ "book": "柳婉望着空房。\n\n拜堂之夜，柳婉望着夫君，旧约出口，烛火到天亮才熄，她记住了每一个字。\n\n夫君夜半离家，婉在他枕下发现玉佩，字迹陌生，她把玉佩藏回原处，坐到天明。"
+}

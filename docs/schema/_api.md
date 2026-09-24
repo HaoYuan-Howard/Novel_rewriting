@@ -165,6 +165,17 @@ Prompt 选型完成后，`prompt_variants`、`prompt_defaults` 与 `--prompt-var
 | `GET /api/novels/:sid/stage7/:o` | `Stage7View` | 新 |
 | `GET /api/novels/:sid/run` | `RunProgressView`（信标折叠 + 完成度，观察轨迹非判定） | **复用** `_orchestration.md` |
 | `GET /api/novels/:sid/run/metrics?run_id=` | `contracts/schema/run_metrics.py::RunMetricsView`；省略 run_id 为本书跨运行累计 | 只读权威成本、工作单元、运行和会话账；不依赖追加额度资格，不写状态或发模型请求 |
+| `GET /api/str06/candidates` | `contracts/schema/str06/api.py::Str06CandidateList`（输出根下的候选根与各自 run 级状态；以 workflow 身份记录为标记） | 新；候选链只读监控面（F7d），F8 激活前与现役 `/novels` 面物理分开 |
+| `GET /api/str06/candidates/:candidate/run` | `Str06RunView`（workflow 状态、epoch、节点盘面事实与 ledger 成本；无 badge/passed/counts） | 新；节点 `produced` 是 I/O 事实，不充当业务状态 |
+| `GET /api/str06/candidates/:candidate/characters` | `Str06CharactersView`（Characters v4 称谓时间窗＋源名称结构） | 新 |
+| `GET /api/str06/candidates/:candidate/blueprint` | `Str06BlueprintView`（Blueprint v12 世界约束、逐章 beats 与因果边） | 新 |
+| `GET /api/str06/candidates/:candidate/design` | `Str06DesignView`（graph／binding：导演说明、章目的、Hook 选择与 Binding 条目） | 新 |
+| `GET /api/str06/candidates/:candidate/ir` | `Str06IrNavView`（WriterBookIR 导航：章预算、章目的、逐场摘要行与称谓释放位置表） | 新 |
+| `GET /api/str06/candidates/:candidate/chapters/:ordinal` | `Str06ChapterView`（章正文＋章回执：机械范围、semantic 恒 unverified、篇幅披露显式） | 新；present=false 与合法空值分开 |
+| `GET /api/str06/candidates/:candidate/hook` | `Str06HookView`（Hook 成文与机械回执） | 新 |
+| `GET /api/str06/candidates/:candidate/naming` | `Str06NamingView`（NameMap v5 只读投影） | 新 |
+| `GET /api/str06/candidates/:candidate/delivery` | `Str06DeliveryView`（manifest 就绪核对记录与全书篇幅读数） | 新 |
+| `GET /api/str06/candidates/:candidate/book` | UTF-8 纯文本（`stage7/final/{title}_rewriting.txt` 原样流出）；没有成书是 404 不是空 200 | 新；候选链下载面 |
 | `POST /api/agent/runs/preview` | `AgentRunPreview`（与真跑同一构造函数） | 新 |
 | `POST /api/agent/runs` | `AgentRunRecord`（202；请求体 `AgentRunRequest`） | **复用** `_orchestration.md` |
 | `GET /api/agent/runs?sid=` | `AgentRunList` | 新 |

@@ -34,6 +34,18 @@ import {
 } from '@/types/approvals'
 import type { EnumsResponse } from '@/types/enums'
 import type {
+  Str06BlueprintView,
+  Str06CandidateList,
+  Str06CharactersView,
+  Str06ChapterView,
+  Str06DeliveryView,
+  Str06DesignView,
+  Str06HookView,
+  Str06IrNavView,
+  Str06NamingView,
+  Str06RunView,
+} from '@/types/str06'
+import type {
   Job,
   JobLogResponse,
   JobPreview,
@@ -266,6 +278,48 @@ function fx<T>(file: string): T {
   const hit = RAW_V1['../fixtures/backend_v1/' + file]
   if (hit === undefined) throw new ApiError('malformed', '/fixtures/' + file)
   return hit as T
+}
+
+/* --------------------------------------------- STR-06 候选链监控 fixture（F7d） */
+
+/** 录制的合成候选根（fake transport 全链产物，非真实书正文；与真后端同形状）。 */
+interface Str06Fixture {
+  candidates: Str06CandidateList
+  run: Str06RunView
+  characters: Str06CharactersView
+  blueprint: Str06BlueprintView
+  design: Str06DesignView
+  ir: Str06IrNavView
+  chapter1: Str06ChapterView
+  hook: Str06HookView
+  naming: Str06NamingView
+  delivery: Str06DeliveryView
+  book: string
+}
+
+/** 样本候选根名：与 fixture 的 candidates[0].candidate 对账（写死两份必然分家）。 */
+const STR06_FIXTURE_CANDIDATE = 'cand'
+/** 样本只录了第 1 章；别的章号答 nosample，不编一章空数据。 */
+const STR06_FIXTURE_CHAPTER = 1
+
+function str06Fixture(): Str06Fixture {
+  return fx<Str06Fixture>('str06_candidate.json')
+}
+
+function str06Read<K extends keyof Omit<Str06Fixture, 'book'>>(
+  candidate: string, key: K,
+): Promise<Str06Fixture[K]> {
+  if (candidate !== STR06_FIXTURE_CANDIDATE) {
+    return noBook('/str06/candidates/' + candidate + '/' + key)
+  }
+  return later(structuredClone(str06Fixture()[key]))
+}
+
+function str06ReadBook(candidate: string): string {
+  if (candidate !== STR06_FIXTURE_CANDIDATE) {
+    throw new ApiError('nosample', '/str06/candidates/' + candidate + '/book')
+  }
+  return str06Fixture().book
 }
 
 /* ---------------------------------------------------------------- 延迟 */
@@ -1392,6 +1446,22 @@ export const mockApi: Api = {
   applyRetention: () => noBook('/maintenance/retention/apply'),
   previewTrashRestore: () => noBook('/maintenance/trash/restore/preview'),
   applyTrashRestore: () => noBook('/maintenance/trash/restore/apply'),
+
+  /* STR-06 候选链只读监控（F7d）：录制的合成候选根响应，真实后端同形状。
+     只读——mock 不伪造任何候选链写动作（那属于 CLI 子进程，不属于服务）。 */
+  getStr06Candidates: () => later(str06Fixture().candidates),
+  getStr06Run: (candidate) => str06Read(candidate, 'run'),
+  getStr06Characters: (candidate) => str06Read(candidate, 'characters'),
+  getStr06Blueprint: (candidate) => str06Read(candidate, 'blueprint'),
+  getStr06Design: (candidate) => str06Read(candidate, 'design'),
+  getStr06Ir: (candidate) => str06Read(candidate, 'ir'),
+  getStr06Chapter: (candidate, o) =>
+    o === STR06_FIXTURE_CHAPTER ? str06Read(candidate, 'chapter1')
+      : noChapter('/str06/candidates/' + candidate + '/chapters/' + o),
+  getStr06Hook: (candidate) => str06Read(candidate, 'hook'),
+  getStr06Naming: (candidate) => str06Read(candidate, 'naming'),
+  getStr06Delivery: (candidate) => str06Read(candidate, 'delivery'),
+  getStr06Book: (candidate) => later(str06ReadBook(candidate)),
 }
 import plotReviewSample from '@/fixtures/plot_v1/review.json'
 import plotFlowSample from '@/fixtures/plot_v1/flow.json'

@@ -433,6 +433,17 @@ def test_the_published_surface_is_exactly_the_current_surface(app):
         '/api/queues/{queue_id}/items/{item_index}/cancel': ['POST'],
         '/api/queues/{queue_id}/resume': ['POST'],
         '/api/settings/agent-profiles': ['GET', 'POST'],
+        '/api/str06/candidates': ['GET'],
+        '/api/str06/candidates/{candidate}/blueprint': ['GET'],
+        '/api/str06/candidates/{candidate}/book': ['GET'],
+        '/api/str06/candidates/{candidate}/characters': ['GET'],
+        '/api/str06/candidates/{candidate}/chapters/{ordinal}': ['GET'],
+        '/api/str06/candidates/{candidate}/delivery': ['GET'],
+        '/api/str06/candidates/{candidate}/design': ['GET'],
+        '/api/str06/candidates/{candidate}/hook': ['GET'],
+        '/api/str06/candidates/{candidate}/ir': ['GET'],
+        '/api/str06/candidates/{candidate}/naming': ['GET'],
+        '/api/str06/candidates/{candidate}/run': ['GET'],
         '/api/upload': ['POST'],
     }
 

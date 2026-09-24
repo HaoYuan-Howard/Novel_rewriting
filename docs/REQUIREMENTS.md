@@ -57,10 +57,9 @@ F3b 第二本 artifact-only smoke 撤销，不再作为本轮待办或付费点�
 
 ## 当前状态与下一步
 
-**下一批：F7d（免费）。F7c 余项（public_state_ref 三反例、analyze receipt／
-draft repair 审计）已于 2026-09-25 完成（零模型调用）。其后顺序：
-F7d–F7e → F8 → F9。**
-F4R、F6、F5 已完成各自登记范围；F7a–F7c 已完成（F7d–F7e 待实施），F8–F9 待实施。
+**下一批：F7e（免费）。F7a–F7d 已完成（F7d 候选只读监控面于 2026-09-25 落地，
+零模型调用）。其后顺序：F7e → F8 → F9。**
+F4R、F6、F5 已完成各自登记范围；F7a–F7d 已完成，F7e 待实施，F8–F9 待实施。
 当前隔离链版式为 `str06-rc4`（F5 起 Design/WriterIR/章级回执新形状；Hook、NameMap
 等未变形状契约仍为 rc3 标签）；下表是既有证据摘要，不是本次重新运行或整书质量结论。
 
@@ -334,12 +333,25 @@ F5a–F5d 已闭合按章成文的契约、引擎与免费验证，F5e 已完成
     **验收与盘面**：本批 15/15 通过；str06 定向套件（15 文件含 layering／
     test_selection）286/286、付费设施（book_budget／execution_permit／work_units）
     73/73 全绿，零新增失败；`tests/suite_catalog.json` 同步登记（三例 stage 层）。
-  - [ ] **F7d · API／Views／前端候选面**：纯函数 views 覆盖 Characters v4、Blueprint v12、
-    graph／binding（含 Hook、导演说明、章目的）、WriterBookIR 导航、章正文与章回执
-    （机械范围、语义未评、篇幅披露）、Hook 与回执、NameMap v5、成书下载与 manifest、
-    Run 新节点图和 ledger 成本。前端只读监控页、types 和 fixtures 同批完成。
-    **验收与盘面**：候选 API 与页面消费一致，相关测试、typecheck 和 seams 通过；现役路由
-    及 Stage6 页保留至 F8，候选读面不伪装为已切换产品。
+  - [x] **F7d · API／Views／前端候选只读面**（2026-09-25 完成，零模型调用）：
+    契约模型 `contracts/schema/str06/api.py`（16 个视图模型：不抄字面量取值面、
+    无 badge/passed/counts、契约层不背 web 栈，与现役 api.py 同构三条纪律），
+    纯函数 views `novel/views/str06.py`（候选根定位以 workflow 身份记录为标记，
+    读口走 inspect 不记边；present 显式分开缺席与合法空值；semantic 恒 unverified；
+    ledger 实付与缓存分开、usage 缺失单列不并零），只读路由
+    `novel/api/routes/str06.py`（`/api/str06/candidates/...` 12 条 GET，与现役
+    `/novels` 面物理分开；未知候选根 404，成书缺失 404 不是空 200；服务层不写
+    产物盘、够不到 LLM 层与判官层，layering 守卫绿）。前端：`web/src/types/str06.ts`、
+    `useStr06Monitor`、`/str06/:candidate` 只读监控屏（不进左导航、无 check 面板、
+    无写按钮，顶部常驻「候选链 · 未切换」标注）、mock 经
+    `fixtures/backend_v1/str06_candidate.json`（fake transport 全链合成录制，
+    非真实书正文）。types→endpoints→hook→页面→fixture 同批闭合。
+    **验收与盘面**：`tests/test_str06_views.py` 9 项（合成候选根逐面核对、半程
+    候选根 present 分开、HTTP 与 views 逐字段一致、未知/非法候选根 404、
+    监控读口零写盘、契约纪律对账）全绿；前端 typecheck／seams／test 183／build
+    全过；契约五文件与 test_api_http（公开接口面同步登记 12 条新端点）绿；
+    `docs/schema/_api.md` 与 `web/AGENTS.md` 路由表同批更新。现役路由与 Stage6
+    页保留至 F8，候选读面不伪装为已切换产品。
   - [ ] **F7e · 退役登记、红账对账与候选冻结**：沿用 F6d 的 Stage6 登记，为旧 Stage2／4／
     5／7、编排分支、consumption、core、quality、report 判据、views、API、前端、schema
     文档及测试建立补充登记，覆盖 88 条 grandfather 依赖。逐项写明接管者、有效反例、
@@ -503,6 +515,7 @@ Character Continuity、Natural Progression、Local Prose Coherence；未评或�
 | `tests/test_str06_contracts.py`、`tests/test_str06_invariants.py`、`tests/test_str06_fold_guard.py` | 已落的新链契约、跨产物、章级回执绑定、窄失效、交付与 Fold／Guard 反例入口 |
 | `tests/test_str06_source.py`、`tests/test_str06_target.py`、`tests/test_str06_execution_ir.py`、`tests/test_str06_repairs.py`、`tests/test_str06_workflow.py` | Source／Target／IR／修复与隔离入口回归，选测按真实影响，不凭文件名宣布全链通过 |
 | `tests/test_str06_body.py` | F5 按章成文链免费反例入口：章预算分配、双视图 IR 同源、renderer 分层与 lineage 剥离、机械检查全分支、重写与候选选择、回执链核对、fake transport 全链到交付＋零新购恢复＋IR 失效边界 |
+| `tests/test_str06_views.py` | F7d 候选只读监控面入口：合成候选根逐面核对、半程候选根 present 分开、HTTP 与 views 逐字段一致、未知/非法候选根 404、监控读口零写盘、候选契约三条纪律对账 |
 | `tests/test_str06_f7c_remainder.py` | F7c 余项反例入口：public_state_ref 接管三反例（身份隔离／跨章携入／状态解除，IR 释放位置表与公共投影）与 analyze receipt／draft repair 审计（不重复付费、不造重复实体、不漏补提交）；旧消费者退役登记归 F7e |
 
 后续实现必须保留的知识：
