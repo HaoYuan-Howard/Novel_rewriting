@@ -383,6 +383,13 @@ F5a–F5d 已闭合按章成文的契约、引擎与免费验证，F5e 已完成
     **验收与盘面**：`tests/test_str06_f7e_retirement.py`（9 项双向对账）＋
     `test_str06_f7e_freeze.py`（5 项）全绿；str06 定向套件 312/312、契约五文件
     ＋test_api_http 508/508 全绿，零新增失败。此时不宣称旧链已退役或完整回归已通过。
+    **整批门槛回归**（2026-09-25，按根指南对含生产代码的最终改动集合执行）：默认非
+    corpus 全量回归 5448 项——5030 通过、418 失败/错误（F6 记录口径 420，通过数由
+    4902 增至 5030，失败集无 str06 项、无本批新增；两个已知收集错误文件按 F6 同口径
+    `--ignore`）、8 个跳过全部带说明（其中 6 个是 F7c 已迁接管、登记待 F8c 删除的旧
+    skip）。中途修正一处本批引入的测试副作用（f7e 对账测试曾用 `del sys.modules`
+    重导入 contracts.schema.str06，导致全量运行时同类双实例假红——已改子进程验证，
+    复跑确认 str06 零失败）。
 - [ ] **F8 · 分支内一次切换与旧链彻底退役**（免费；可分步提交，main 在 F9 后合入一次）：
   - [ ] **F8a · 契约与公开规则翻转**：激活 F7 已验收的 ARTIFACT_SPECS、NODES／STAGES／
     RETIRED_*、判据注册表（M1–M6 按新坐标正式化）及 shape-break 账，NameMap v4→v5。
@@ -410,6 +417,13 @@ F5a–F5d 已闭合按章成文的契约、引擎与免费验证，F5e 已完成
   - 在独立 `NOVEL_OUTPUT` 根经前端上传《夫君的报恩》，自动跑到 stage7；按实际节点、
     配置和可采用结果重新报价。基础约 30 次、正文额外至多 22 次、Hook 额外至多 2 次的
     口径见“成本与授权”；同请求身份已购结果只经 F7a 登记的历史采用通路复用。
+  - **F7e 复验证实的采用调用配方**（F8b 须把它带进新链正式入口）：候选 run 目录按
+    `--check-only --reasoning-effort medium --wire-dir <F5e>/wires --adopt-root <F5e>/run`
+    重放即零新购复现交付（25 行 ledger 全 cached、token 0、成书与 F5e 逐字一致）。
+    两个易错点：① F5e 全部成功请求都是 `medium` 档（唯一 `high` 档是被截断浪费的
+    design attempt）——档位进请求身份，用默认 high 会匹配到截断行或被拒；
+    ② `wires/` 只有 book／chNN／names／preserve／hook_design（含 patch）／naming，
+    design／bind／hook_writer／body 走 `--adopt-root` 的已购行——两者都要给。
   - agent 先核验章连续非空、回执链、改名零残留、manifest／hash、零新购重放、Stage 页
     与盘面一致及 ledger 成本，再请用户通读。工程缺陷修到通过，文学质量意见逐条进入
     后续迭代输入；语义未评和跨章／长篇等未验证范围随交付披露。

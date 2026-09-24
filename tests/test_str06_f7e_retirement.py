@@ -249,10 +249,26 @@ def test_f6d_and_f7e_tables_do_not_double_register():
 
 @pytest.mark.parametrize('why', ['import 时无业务副作用'], ids=lambda v: v)
 def test_registry_module_has_no_import_side_effects(why):
-    """登记是纯数据：import 本模块不得碰盘面（与 candidates.py 同纪律）。"""
-    before = {p.as_posix() for p in ROOT.rglob('*') if p.is_file()}
-    for module in [m for m in list(sys.modules) if m.startswith('contracts.schema.str06')]:
-        del sys.modules[module]
-    import contracts.schema.str06.retirement  # noqa: F401
-    after = {p.as_posix() for p in ROOT.rglob('*') if p.is_file()}
-    assert before == after, why
+    """登记是纯数据：import 本模块不得碰盘面（与 candidates.py 同纪律）。
+
+    ⚠ 在**子进程**里验，不在本进程删 `sys.modules` 再重导入：那会把
+    `contracts.schema.str06` 全家载成第二套类对象，之后任何持旧类引用的
+    测试都因 isinstance 分家而假红（全量回归里实测过，症状是
+    「Input should be a valid dictionary or instance of BindingEntry」）。
+    """
+    import subprocess
+
+    script = (
+        'import sys;'
+        'sys.path.insert(0, sys.argv[1]);'
+        'before = {p for p in __import__("pathlib").Path(sys.argv[1]).rglob("*")'
+        ' if p.is_file()};'
+        'import contracts.schema.str06.retirement as r;'
+        'after = {p for p in __import__("pathlib").Path(sys.argv[1]).rglob("*")'
+        ' if p.is_file()};'
+        'assert before == after, "import 写了盘面";'
+        'assert r.STR06_F7E_RETIREMENT and r.STR06_F7E_RED_ACCOUNT'
+    )
+    result = subprocess.run([sys.executable, '-c', script, str(ROOT)],
+                            capture_output=True, text=True, timeout=120)
+    assert result.returncode == 0, f'{why}：{result.stderr[-500:]}'
