@@ -655,7 +655,6 @@ _SERVICE_MUTATORS = {
     ('jobs', 'run'),
     ('jobs', 'start'),
     ('uploads', 'save_upload'),
-    ('uploads', 'save_edit_plan'),
     ('uploads', 'save_draft_edit'),
     ('uploads', 'discard_edit_plan'),
     ('approvals', 'approve_gate'),
@@ -879,6 +878,19 @@ _CROSS_STAGE_DEEP_GRANDFATHER = frozenset({
     ('novel/stages/stage1/partition.py', 'novel.stages.stage0.eligibility'),
     ('novel/stages/stage4/actors.py', 'novel.stages.stage2.shared.character_refs'),
     ('novel/stages/stage4/actors.py', 'novel.stages.stage2.blueprint.compile'),
+    # F4R（2026-09-24）：以下 11 条为 STR-02 blueprint/shared 模块改名与 STR-03 收编时
+    # 既存、未同步冻结清单的深边补账（非新增依赖）；F8 随旧链整层删除。
+    ('novel/stages/stage4/beats.py', 'novel.stages.stage2.blueprint.evidence'),
+    ('novel/stages/stage4/beats.py', 'novel.stages.stage2.blueprint.source_contexts'),
+    ('novel/stages/stage4/plot_binding.py', 'novel.stages.stage2.blueprint.evidence'),
+    ('novel/stages/stage4/plot_binding.py', 'novel.stages.stage2.blueprint.source_contexts'),
+    ('novel/stages/stage4/plot_context.py', 'novel.stages.stage2.blueprint.evidence'),
+    ('novel/stages/stage4/plot_context.py', 'novel.stages.stage2.blueprint.narration'),
+    ('novel/stages/stage4/plot_design.py', 'novel.stages.stage2.blueprint.evidence'),
+    ('novel/stages/stage4/plot_design.py', 'novel.stages.stage2.shared.character_refs'),
+    ('novel/stages/stage4/plot_materials.py', 'novel.stages.stage2.blueprint.evidence'),
+    ('novel/stages/stage4/plan.py', 'novel.stages.stage2.blueprint.evidence'),
+    ('novel/views/stage4.py', 'novel.stages.stage4.plan'),
     ('novel/stages/stage4/beats.py', 'novel.stages.stage2.blueprint.compile'),
     ('novel/stages/stage4/plan.py', 'novel.stages.stage2.knowledge'),
     ('novel/stages/stage5/review.py', 'novel.stages.stage2.knowledge'),
@@ -976,7 +988,10 @@ def test_cross_stage_imports_stay_on_the_package_surface():
     # stage2_runs、edits→blueprint 深边，分母 64→68。
     # STR-03 analyze 包迁入：cli/inspection/queue → analyze 包深边，68→71。
     # STR-03 knowledge/（产品 stage2.global；包名避 Python 关键字）+ shared 证据原语：71→77。
-    assert len(_CROSS_STAGE_DEEP_GRANDFATHER) == 77
+    # F4R（2026-09-24）：补登 STR-02/STR-03 改名收编时漏账的 11 条既存深边
+    # （stage4→blueprint evidence/source_contexts/narration、plot_design→shared
+    # character_refs、views/stage4→stage4.plan），77→88；F8 随旧链清零。
+    assert len(_CROSS_STAGE_DEEP_GRANDFATHER) == 88
 
 
 

@@ -66,18 +66,36 @@ def test_schema_model_map_is_derived_from_the_current_registry():
 #: 「存量产物由谁重建」。答不出来的破坏不许落。
 _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
     'stage2/characters.json': (
-        2, '去除逐次 address；唯一 aliases/identity_revealed_from、首次身份与共享证据表，正式 ID 由代码分配',
-        '新根 stage2.analyze 联合首抽或 stage2.characters 独立重建；旧人物与旧审批不自动迁移',
+        3,
+        '两次破坏。v2（2026-08-25）：去除逐次 address；唯一 aliases/'
+        'identity_revealed_from、首次身份与共享证据表，正式 ID 由代码分配。'
+        'v3（2026-09-19 lexicon Resolve M1）：身份、lexicon 归属与出现绑定收成 '
+        'CharacterRegistry——surface_bindings 一条词表规则由 compiler 展开为逐字面 '
+        'mentions；删除自由文本 role、first_chapter 与逐人物 aliases；'
+        'first_mention/name_usable/name_distinctiveness/book-level surfaces 全部改由 '
+        'compiler 派生，不得由模型直填',
+        '新空根由 stage2.characters 走 Extract→Resolve 直连（付费）重建，v2 拒读、'
+        '无通用迁移；analyze 联合首抽不再写人物，存量 CharactersResponse 草稿只作'
+        '历史解码，不得据此物化 v3；当前 v3 的 typed 编辑/免费 revalidate 按本 owner 恢复',
     ),
     'stage2/characters_edit.json': (
-        2, '编辑人物新契约与共享证据引用；已有主体绑定原 SHA/正式 ID，新增只交局部 cN，'
-        '代码按现存及已退役 ID 冻结 added_character_ids，不接受猜测下一正式 ID',
-        '人物 owner 免费重发编辑模板，人工依据原文填写当前形状，不改旧版本号追认',
+        3,
+        '两次破坏。v2：编辑人物新契约与共享证据引用；已有主体绑定原 SHA/正式 ID，'
+        '新增只交局部 cN，代码按现存及已退役 ID 冻结 added_character_ids。'
+        'v3：operations 换 CharacterAdd/CharacterReplace/CharacterDelete/MentionRebind '
+        '判别联合（rebind 按 mention_ids 裁 occurrence 归属），source_sha256 绑定当前 '
+        'v3 registry 整体 SHA',
+        '人物 owner 免费重发当前 v3 编辑模板，人工依据原文重填当前形状；旧 v2 '
+        '编辑不迁移、不改版本号追认',
     ),
     'stage2/blueprint_character_projection.json': (
-        2, '去除称呼 occurrence，按独立人物登记投影唯一称谓；character_bindings 保留已出现 surface '
-        '及 identity_revealed_from，为 Blueprint/Stage4 的呈现候选守卫提供同一输入',
-        'stage2.characters 免费 --revalidate 按当前人物重建，旧产物先完成 v2 人物生产',
+        3,
+        '两次破坏。v2：去除称呼 occurrence，按独立人物登记投影唯一称谓。'
+        'v3：随 Characters v3 派生——past_attested_surfaces/visible_character_refs/'
+        'character_bindings 按 first_mention、name_usable 与 surfaces 词表计算，'
+        '含已到 first_mention 但登记名尚未字面出现的实体',
+        'stage2.characters 免费 --revalidate 按当前 v3 人物重建投影；旧产物须先完成 '
+        'v3 人物生产，v2 拒读',
     ),
     'stage2/global_edit_input_commit.json': (
         2, '冻结 v6 Core sparse 编辑输入及原问题；退役状态/知情/源钩子字段',
