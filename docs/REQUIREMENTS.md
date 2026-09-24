@@ -305,10 +305,17 @@ F5a–F5d 已闭合按章成文的契约、引擎与免费验证，F5e 已完成
     后续节点不再执行。同指纹熔断：校验失败不重购（原响应已耐久，重放走缓存、零 token）。
     binding-only 崩溃精确补尾：删 `stage4/compiled/execution_plan.json` 后重跑零新购、
     交付字节不变。测试 `tests/test_str06_f7a_wiring.py` 26 项（含上述四类反例）。
-  - [ ] **F7c 余项 · 消费接管与审计**：public_state_ref 的身份隔离／跨章携入／状态解除
-    三反例（新链由 IR 称谓释放位置表与公共投影接管，需补反例）；审计 analyze receipt／
-    draft repair，防重复付费、重复实体或漏补提交；名称结构接管 Stage5/7、consumption 与
-    core.naming 的 name_distinctiveness 真实消费者。
+  - [x] **F7c 第三步 · name_distinctiveness 消费接管核验**（2026-09-24）：新链
+    （`novel/stages/str06/*`、`novel/llm/str06_*`、`tools/str06_workflow.py`、
+    `contracts/schema/str06/*`）对 `name_distinctiveness` 的功能引用为 0（仅
+    source.py 三处注释说明接管关系）——Stage2 names
+    的名称结构（`NameStructure`／`name_projection`）是唯一专名面，Stage5/7 与
+    consumption 的新链消费者全部走名称投影（F6 已落）；旧消费者（`novel/consumption.py`
+    三处、`novel/core/naming.py` 首字猜姓）只服务旧链，随旧链退役归 F7e／F8c 登记。
+    真书证据：候选根 naming 11 处替换零残留（F7a–F7c canary）。
+  - [ ] **F7c 余项 · public_state_ref 反例与 repair 审计**：public_state_ref 的身份隔离／
+    跨章携入／状态解除三反例（新链由 IR 称谓释放位置表与公共投影接管，需补反例）；
+    审计 analyze receipt／draft repair，防重复付费、重复实体或漏补提交。
     **验收与盘面**：反例通过且保留精确 owner，不把 F7a 同输入重放证明扩称为新输入可采用。
   - [ ] **F7d · API／Views／前端候选面**：纯函数 views 覆盖 Characters v4、Blueprint v12、
     graph／binding（含 Hook、导演说明、章目的）、WriterBookIR 导航、章正文与章回执
