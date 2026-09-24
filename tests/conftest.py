@@ -19,9 +19,6 @@ import pytest
 from contracts.schema import CorpusManifest
 from tests.corpus_manifest import verify as verify_corpus_manifest
 
-pytest_plugins = ['tests.selection']
-
-
 _ROOT = Path(__file__).resolve().parents[1]
 _DEFAULT_MANIFEST = _ROOT / 'docs' / 'corpus' / 'current_schema_manifest.json'
 _SEEN_SKIPS: list[dict[str, str]] = []

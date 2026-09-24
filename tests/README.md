@@ -51,6 +51,11 @@ Stage3 文风迁移、Stage6 旧定性包 A/B 与 Stage2 旧五轮实验退出�
 历史由 Git 和既存实验记录保存，不新增测试归档目录；旧解释器不能接受当前报告的守卫仍保留。
 从旧实验中抽出的现役 Hook/Retry 夹具归 `tests/factories.py`，不再让当前测试依赖退役实验模块。
 
+选测修订（2026-09-24）只校准目录登记：Stage0 状态反例与 Characters v3 用例名按现存代码同步，
+不存在的旧 `cases` 键移除，未删除任何测试函数；现役 Characters producer／编辑用例纳入 stage 层。
+补登记既存 `test_stage4_agent_boundary.py` 为 unit/contract，使无关范围可在导入前排除它；
+该文件仍依赖已退役 `novel.agents`，完整收集的既存失败保持暴露，登记不证明旧流程重新成为现役。
+
 后续新增测试须说明它保护的现役约定、失败机制或结果要求。bug 优先缩成最小可失败样例，
 先让旧行为失败，再确认修复通过；若风险只在进程、并发、恢复或整链组合时出现，保留对应集成证据。
 冻结 fixture 只替代未改动的上游准备，不能替代被测 producer、判据或真实消费者；schema 变化时同步重建。
@@ -80,13 +85,34 @@ conda run -n novel_refactor python -m pytest -n 0 --test-layer stage --test-stag
 
 # 定向回归复用原用例，不另建回归副本
 conda run -n novel_refactor python -m pytest -n 0 --test-layer regression --changed novel/stages/stage7/rename.py
+
+# 隔离迁移：登记范围补充导入消费者；先查看实际收集，再去掉 --collect-only 执行
+conda run -n novel_refactor python -m pytest -n 0 --changed novel/stages/str06/hook_context.py --collect-only --selection-report .test_cache/str06-selection.json
+
+# 已提交的删除或目录登记：使用变更前的 commit；HEAD~1 仅适用于变更就在最近一次提交
+conda run -n novel_refactor python -m pytest -n 0 --changed tests/suite_catalog.json --changed-base HEAD~1 --collect-only
 ```
 
 `--test-stage` 和 `--changed` 可分别重复；二者不能组合，避免用交集漏掉真实消费者。
 `--changed` 接受仓内相对或绝对文件路径，检查函数内、相对与测试 helper 导入的传递消费者，
-并补上阶段依赖。非 Python、共享测试配置、删除文件或无法定位消费者的修改，保守扩大到完整工程集合
-并在报告解释原因。它是保守选择器，不能证明动态加载、外部配置等影响不存在；最终仍按根指南决定验证范围。
-修改 `contracts/` 时还纳入契约 §9.5 五文件，覆盖通过 AST/注册表而非直接 import 检查契约的消费者。
+并补上阶段依赖；多个修改路径取并集。特殊文件按以下证据选择：
+
+| 修改 | 选择与兜底 |
+|---|---|
+| `docs/` 下 Markdown、各级 AGENTS／README | 文档引用守卫与可静态识别的读取消费者；schema 文档及 BACKEND_CONTRACT 还保留契约五文件。运行时读取的契约不能视为纯说明 |
+| `tests/suite_catalog.json` 的普通模块登记 | 与基线比较，选择新增／变更条目及目录表守卫；阶段依赖、范围规则或版本变化仍扩大到完整工程集合 |
+| 删除的 Python 文件 | 只读 Git 基线，将删除前与当前导入边合并，选择仍存在的消费者；基线缺失、不可分析或无可定位消费者时仍扩大 |
+| 隔离迁移路径 | `change_scopes` 登记路径模式与测试模式，补充当前职责；始终并入范围外真实消费者，不截断现役依赖 |
+| 共享执行配置、其它非 Python 或未知影响 | 保守扩大到完整工程集合并解释原因 |
+
+`--changed-base REF` 默认 HEAD，只为删除项及目录登记提供比较基线，不自动推导修改文件列表。
+已提交的变更须指定变更前的 commit；选择报告保留实际基线身份。不会切换 checkout、运行历史代码或恢复旧文件。
+文档读取的静态补充识别完整路径／文件名字符串；动态拼接、外部配置等仍须人工核对真实消费者。
+`change_scopes` 只增加覆盖，不豁免契约或最终验收；测试模式必须匹配已登记模块，迁移退役时同步删除登记。
+例如 STR06 schema 经公共 paths 形成真实共享依赖时仍会扩大，不能因所属迁移包而截断。
+修改 `contracts/` 仍纳入契约 §9.5 五文件，覆盖通过 AST/注册表而非直接 import 检查契约的消费者。
+本工具是保守选择器，不能证明动态影响不存在；全量兜底不是独立验收门槛，最终仍按根指南决定验证范围。
+根 `conftest.py` 提前注册插件，使 `--changed` 后的文档或源码参数在收集前被正确识别。
 `--require-corpus` 不允许与新增范围过滤组合。
 
 `--selection-report` 输出最后收集的精确 nodeid、层级、stage、corpus 标记、命令、代码起止身份、退出码、执行结果和各阶段耗时；
@@ -115,8 +141,8 @@ conda run -n novel_refactor python -m pytest -n 0 --lf --lfnf=none -x
 “非 corpus 回归通过”。
 
 测试选择和批次门槛统一见 `AGENTS.md::测试选择与批次验收`：局部修复先定向，允许多个检查点提交，
-单个 stage 重构只验证该 stage 及实际受影响的消费链。完整回归在项目最终工程验收、首次全链工程验收、
-候选冻结、main／发布或影响无法定向闭合等门槛统一执行；不因局部修复或 stage 重构交付重复全仓。
+单个 stage 重构只验证该 stage 及实际受影响的消费链。完整回归在整项目验收、main／冻结发布或
+共享基础设施影响无法定向闭合时统一执行；子批次交付、检查点提交与新增测试登记不自动触发。
 同一契约批次形状稳定后先跑契约 §9.5 五文件，再补实际消费链。完整回归后生产代码又有变化，
 旧结果只作基线，新增定向结果单列；说明文档、注释或测试记录变化只补相关校验。
 测速和 profiler 仅用于已定位的热点，命令见
@@ -232,7 +258,7 @@ Windows 上的 `--basetemp` 有两条出路，选一条即可：
 - **一次性解除限制**（推荐，管理员一次）：设
   `HKLM\SYSTEM\CurrentControlSet\Control\FileSystem\LongPathsEnabled=1`。本仓 conda 环境的
   `python.exe` 带 `longPathAware` manifest，两者齐备后普通路径不再受 260 限制，
-  `conftest.py::_windows_basetemp_problem` 会**实测**到这一点并自动不再拦——它探测文件系统
+  `tests/conftest.py::_windows_basetemp_problem` 会**实测**到这一点并自动不再拦——它探测文件系统
   本身，不读注册表也不查 manifest（那是两个各自都会变的间接条件）。git 另需
   `git config --global core.longpaths true`，它不吃系统开关。
 

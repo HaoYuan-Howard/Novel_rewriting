@@ -1,4 +1,20 @@
 {
+ "change_scopes": {
+  "str06": {
+   "paths": [
+    "contracts/schema/str06/*",
+    "novel/stages/str06/*",
+    "novel/llm/str06_requests.py",
+    "tools/str06_workflow.py",
+    "docs/schema/str06.md"
+   ],
+   "tests": [
+    "tests/test_str06_*.py",
+    "tests/test_layering.py",
+    "tests/test_test_selection.py"
+   ]
+  }
+ },
  "downstream": {
   "stage0": [
    "stage1"
@@ -21,6 +37,12 @@
   "stage7": []
  },
  "modules": {
+  "tests/test_stage4_agent_boundary.py": {
+   "layer": "unit_contract",
+   "stages": [
+    "stage4"
+   ]
+  },
   "tests/test_str06_hook.py": {
    "layer": "unit_contract",
    "stages": [
@@ -815,7 +837,7 @@
     "test_same_sid_with_a_different_title_cannot_split_into_two_directories": "stage",
     "test_source_sid_mismatch_is_terminal_before_a_directory_is_created": "stage",
     "test_stage1_cli_propagates_a_written_check_failure": "stage",
-    "test_unapproved_states_are_interpreted_not_conflated": "stage",
+    "test_missing_transform_and_admitted_states_are_not_conflated": "stage",
     "test_unpartitionable_book_is_an_explicit_stage1_terminal": "stage"
    },
    "layer": "unit_contract",
@@ -875,13 +897,14 @@
   },
   "tests/test_stage2_characters.py": {
    "cases": {
-    "test_character_address_hard_gate_and_free_repair_share_the_real_producer": "stage",
+    "test_character_add_and_delete_smoke": "stage",
+    "test_character_edit_invalid_target_preserves_formal_projection_and_cost": "stage",
     "test_character_edit_preflight_is_readonly_and_exact_candidate_commits": "stage",
-    "test_characters_edit_preserves_evidence_and_is_idempotent": "stage",
-    "test_exhausted_character_candidate_stays_invalid_and_revalidation_cannot_bless": "stage",
+    "test_characters_edit_replace_preserves_provenance_and_is_idempotent": "stage",
+    "test_characters_noop_edit_does_not_land_a_round": "stage",
+    "test_explicit_backend_runs_the_same_v3_contract": "stage",
     "test_frozen_character_baseline_is_read_from_exact_archived_bytes": "stage",
-    "test_independent_characters_generate_through_real_producer_and_store": "stage",
-    "test_static_hard_failure_lands_invalid_once_without_global_write": "stage"
+    "test_independent_characters_generate_through_real_producer_and_store": "stage"
    },
    "layer": "unit_contract",
    "stages": [

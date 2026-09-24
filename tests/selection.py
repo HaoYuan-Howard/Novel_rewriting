@@ -1,12 +1,13 @@
 """四层测试的工程选择器；回归复用原用例，golden set 由独立入口执行。
 
-目录表明确测试职责，导入闭包补充修改文件的实际消费者。无法静态定位的修改
-扩大到完整工程集合并解释原因，不能把未知依赖解释成没有测试。
+目录表明确测试职责，导入闭包、登记范围与删除前基线补充实际消费者。
+文档与普通测试登记不自动触发全仓；无法定位的影响仍扩大并解释原因。
 """
 from __future__ import annotations
 
 import ast
 from dataclasses import dataclass
+from fnmatch import fnmatchcase
 import json
 from pathlib import Path
 from typing import Any
@@ -14,6 +15,7 @@ from typing import Any
 import pytest
 
 from contracts.invariants import STAGES
+from tests.selection_sources import Baseline, BaselineUnavailable, read_baseline
 
 ROOT = Path(__file__).resolve().parents[1]
 CATALOG = Path(__file__).with_name('suite_catalog.json')
@@ -21,6 +23,8 @@ LAYERS = ('unit_contract', 'stage', 'regression')
 CONTRACT_GUARDS = frozenset(f'tests/{name}.py' for name in (
     'test_docs_references', 'test_coverage', 'test_rules_registry',
     'test_hard_counterexamples', 'test_ingest_fixtures'))
+CATALOG_GUARDS = frozenset({'tests/test_test_selection.py'})
+DOC_GUARDS = frozenset({'tests/test_docs_references.py'})
 
 
 def load_catalog(path: Path = CATALOG) -> dict[str, Any]:
@@ -37,6 +41,15 @@ def load_catalog(path: Path = CATALOG) -> dict[str, Any]:
             raise ValueError(f'无效测试归属：{path}')
         if any(layer not in LAYERS for layer in row.get('cases', {}).values()):
             raise ValueError(f'无效用例分类：{path}')
+    for name, scope in data.get('change_scopes', {}).items():
+        if not scope.get('paths') or not scope.get('tests'):
+            raise ValueError(f'选测范围缺少路径或测试：{name}')
+        for pattern in [*scope['paths'], *scope['tests']]:
+            if Path(pattern).is_absolute() or '..' in Path(pattern).parts or '\\' in pattern:
+                raise ValueError(f'无效选测路径：{pattern}')
+        for pattern in scope['tests']:
+            if not any(fnmatchcase(path, pattern) for path in data['modules']):
+                raise ValueError(f'选测范围没有已登记测试：{name} / {pattern}')
     return data
 
 
@@ -64,15 +77,24 @@ def _python_modules(root: Path) -> dict[str, Path]:
     return result
 
 
-def import_graph(root: Path) -> dict[str, set[str]]:
+def import_graph(root: Path, resources: tuple[str, ...] = ()) -> dict[str, set[str]]:
     """包括函数内导入、from 包 import 子模块及相对导入，不执行被扫描代码。"""
-    modules = _python_modules(root)
+    return _graph_from_sources({path.relative_to(root).as_posix(): path.read_text(encoding='utf-8-sig')
+                                for path in _python_modules(root).values()}, resources)
+
+
+def _graph_from_sources(sources: dict[str, str], resources: tuple[str, ...] = ()) -> dict[str, set[str]]:
+    modules = {path.removesuffix('.py').replace('/', '.').removesuffix('.__init__'): path
+               for path in sources}
     graph: dict[str, set[str]] = {}
     for name, path in modules.items():
         deps: set[str] = set()
-        tree = ast.parse(path.read_text(encoding='utf-8-sig'))
-        package = name if path.name == '__init__.py' else name.rpartition('.')[0]
+        tree = ast.parse(sources[path], filename=path)
+        package = name if Path(path).name == '__init__.py' else name.rpartition('.')[0]
+        resources_read: set[str] = set()
         for node in ast.walk(tree):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                resources_read.update(rel for rel in resources if node.value in {rel, Path(rel).name})
             candidates: list[str] = []
             if isinstance(node, ast.Import):
                 candidates = [alias.name for alias in node.names]
@@ -86,16 +108,28 @@ def import_graph(root: Path) -> dict[str, set[str]]:
                 pieces = candidate.split('.')
                 deps.update('.'.join(pieces[:i]) for i in range(1, len(pieces) + 1)
                             if '.'.join(pieces[:i]) in modules)
-        graph[path.relative_to(root).as_posix()] = {
-            modules[dep].relative_to(root).as_posix() for dep in deps}
+        graph[path] = {modules[dep] for dep in deps} | resources_read
     return graph
 
 
-def changed_modules(root: Path, paths: list[str], catalog: dict[str, Any]) -> tuple[set[str], list[str]]:
-    graph = None
+def _consumers(graph: dict[str, set[str]], rel: str) -> set[str]:
+    reached = {rel}
+    while more := {path for path, deps in graph.items() if deps & reached} - reached:
+        reached.update(more)
+    return reached
+
+
+def _document(rel: str) -> bool:
+    path = Path(rel)
+    return path.suffix == '.md' and (rel.startswith('docs/') or path.name in {'AGENTS.md', 'README.md'})
+
+
+def changed_modules(root: Path, paths: list[str], catalog: dict[str, Any], *,
+                    base: str = 'HEAD') -> tuple[set[str], list[str]]:
     modules = set(catalog['modules'])
     selected: set[str] = set()
     reasons: list[str] = []
+    relative = []
     for value in paths:
         raw = Path(value)
         full = raw.resolve() if raw.is_absolute() else (root / raw).resolve()
@@ -103,27 +137,78 @@ def changed_modules(root: Path, paths: list[str], catalog: dict[str, Any]) -> tu
             rel = full.relative_to(root.resolve()).as_posix()
         except ValueError as exc:
             raise ValueError(f'修改路径不在仓内：{value}') from exc
-        # 删除项保留路径；它的旧导入边已无法证明，按未知扩大，不静默漏选。
-        if full.suffix != '.py' or not full.is_file() or rel in {'tests/conftest.py', 'tests/selection.py'}:
+        relative.append(rel)
+    resources = tuple(rel for rel in relative if _document(rel))
+    graph = None
+    baseline = None
+    baseline_error = None
+    old_graph = None
+
+    def previous() -> Baseline:
+        nonlocal baseline, baseline_error
+        if baseline is None and baseline_error is None:
+            try:
+                baseline = read_baseline(root, base)
+            except BaselineUnavailable as exc:
+                baseline_error = str(exc)
+        if baseline_error:
+            raise BaselineUnavailable(baseline_error)
+        assert baseline is not None
+        return baseline
+
+    for rel in relative:
+        full = root / rel
+        if rel == 'tests/suite_catalog.json':
+            try:
+                old = previous()
+                if {key: value for key, value in old.catalog.items() if key != 'modules'} != {
+                        key: value for key, value in catalog.items() if key != 'modules'}:
+                    raise BaselineUnavailable('目录表全局规则或阶段依赖变化')
+                targets = {path for path in modules if catalog['modules'][path] != old.catalog['modules'].get(path)}
+                targets.update(CATALOG_GUARDS & modules)
+                selected.update(targets)
+                reasons.append(f'{rel}：对比基线 {old.revision[:12]}，普通登记与目录表守卫共 {len(targets)} 个模块')
+            except BaselineUnavailable as exc:
+                selected.update(modules)
+                reasons.append(f'{rel}：{exc}，选择完整工程集合')
+            continue
+        if rel in {'conftest.py', 'tests/conftest.py', 'tests/selection.py', 'tests/selection_sources.py'} or (
+                full.suffix != '.py' and not _document(rel)):
             selected.update(modules)
-            reasons.append(f'{rel}：共享配置、非 Python 或依赖未知，选择完整工程集合')
+            reasons.append(f'{rel}：共享执行配置或未登记的文件类型，选择完整工程集合')
             continue
         if graph is None:
-            graph = import_graph(root)
-        if rel not in graph:
-            selected.update(modules)
-            reasons.append(f'{rel}：不属于可分析模块，选择完整工程集合')
-            continue
-        reached = {rel}
-        while True:
-            more = {path for path, deps in graph.items() if deps & reached} - reached
-            if not more:
-                break
-            reached.update(more)
+            graph = import_graph(root, resources)
+        reached = _consumers(graph, rel)
+        if not full.is_file() and full.suffix == '.py':
+            try:
+                old = previous()
+                if rel not in old.sources:
+                    raise BaselineUnavailable(f'基线 {base} 不含删除路径')
+                if old_graph is None:
+                    old_graph = _graph_from_sources(old.sources, resources)
+                # 合并边后求闭包，保留“旧调用方已改为由新入口消费”的迁移链。
+                combined = {path: graph.get(path, set()) | old_graph.get(path, set())
+                            for path in graph.keys() | old_graph.keys()}
+                reached = _consumers(combined, rel)
+                reasons.append(f'{rel}：恢复删除前基线 {old.revision[:12]} 的依赖')
+            except (BaselineUnavailable, SyntaxError) as exc:
+                selected.update(modules)
+                reasons.append(f'{rel}：旧依赖不可证明（{exc}），选择完整工程集合')
+                continue
         targets = reached & modules
+        if _document(rel):
+            targets.update(DOC_GUARDS & modules)
+            if rel.startswith('docs/schema/') or rel == 'docs/BACKEND_CONTRACT.md':
+                targets.update(CONTRACT_GUARDS & modules)
         if rel.startswith('contracts/'):
             # AST/注册表守卫不一定 import 被改的具体 schema；现役契约 §9.5 明确要求五文件。
             targets.update(CONTRACT_GUARDS & modules)
+        for name, scope in catalog.get('change_scopes', {}).items():
+            if any(fnmatchcase(rel, pattern) for pattern in scope['paths']):
+                targets.update(path for path in modules
+                               if any(fnmatchcase(path, pattern) for pattern in scope['tests']))
+                reasons.append(f'{rel}：补充登记范围 {name}，不排除范围外真实消费者')
         # 产物路径、反射与动态注册不一定有 Python 导入边；stage 所属用例是补充证据。
         stages = {part for part in Path(rel).parts if part in STAGES}
         if stages:
@@ -134,7 +219,7 @@ def changed_modules(root: Path, paths: list[str], catalog: dict[str, Any]) -> tu
             targets = modules
             reasons.append(f'{rel}：未定位到消费者，选择完整工程集合')
         else:
-            reasons.append(f'{rel}：导入消费者与阶段依赖共 {len(targets)} 个模块')
+            reasons.append(f'{rel}：消费者、登记范围与守卫共 {len(targets)} 个模块')
         selected.update(targets)
     return selected, reasons
 
@@ -148,13 +233,16 @@ class Selection:
 
 
 def plan(catalog: dict[str, Any], *, layer: str = 'regression', stages: tuple[str, ...] = (),
-         affected: bool = False, changed: tuple[str, ...] = (), root: Path = ROOT) -> Selection:
+         affected: bool = False, changed: tuple[str, ...] = (), root: Path = ROOT,
+         changed_base: str | None = None) -> Selection:
     if layer not in LAYERS:
         raise ValueError('未知测试层级')
     if affected and not stages:
         raise ValueError('--affected 必须同时指定 --test-stage')
     if stages and changed:
         raise ValueError('--test-stage 与 --changed 分别选择，避免交集漏掉消费者')
+    if changed_base is not None and not changed:
+        raise ValueError('--changed-base 必须同时指定 --changed')
     scope = set(stages)
     if not scope <= set(STAGES):
         raise ValueError('未知或退役的 stage')
@@ -166,7 +254,7 @@ def plan(catalog: dict[str, Any], *, layer: str = 'regression', stages: tuple[st
         modules = {path for path in modules if set(catalog['modules'][path]['stages']) & scope}
         reasons.append('阶段范围：' + ', '.join(sorted(scope)))
     if changed:
-        modules, reasons = changed_modules(root, list(changed), catalog)
+        modules, reasons = changed_modules(root, list(changed), catalog, base=changed_base or 'HEAD')
     if layer != 'regression':
         modules = {path for path in modules if layer in {
             catalog['modules'][path]['layer'], *catalog['modules'][path].get('cases', {}).values()}}
@@ -191,6 +279,8 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     group.addoption('--affected', action='store_true', help='包含选定 stage 的传递下游')
     group.addoption('--changed', action='append', default=[], metavar='PATH',
                     help='按仓内修改路径及真实导入消费者选择，可重复；删除项亦可传入')
+    group.addoption('--changed-base', metavar='REF',
+                    help='删除文件与目录表登记的比较基线，默认 HEAD；已提交删除需指定删除前 commit')
     group.addoption('--selection-report', metavar='PATH', help='输出本轮精确选择及结果，JSON 无正文')
 
 
@@ -205,7 +295,8 @@ def pytest_configure(config: pytest.Config) -> None:
         selected = plan(catalog, layer=config.getoption('--test-layer'),
                         stages=tuple(config.getoption('--test-stage')),
                         affected=config.getoption('--affected'),
-                        changed=tuple(config.getoption('--changed')))
+                        changed=tuple(config.getoption('--changed')),
+                        changed_base=config.getoption('--changed-base'))
     except (ValueError, KeyError) as exc:
         raise pytest.UsageError(str(exc)) from exc
     config._test_catalog = catalog

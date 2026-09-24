@@ -14,7 +14,9 @@
 - 单点用 `-n 0 -x`，失败回放用 `-n 0 --lf --lfnf=none -x`；两者只可报告“定向测试”。
   默认非 corpus 回归为 `-n 4 --dist loadgroup -m "not corpus"`；corpus 硬验收显式 `-n 0 --require-corpus`。
 - 工程分层通过 `--test-layer unit_contract|stage|regression`；`--test-stage` / `--affected` 选择阶段依赖，
-  `--changed` 选择文件及消费者，具体命令见 README。golden set 只经 `python -m tests.golden` 显式执行。
+  `--changed` 选择文件及消费者，删除项与目录登记默认对比 HEAD，已提交变更用 `--changed-base` 指定变更前基线。
+  扩大范围时先看 `--collect-only --selection-report` 的原因和实际用例；裸 pytest 是完整非 corpus 回归，
+  `-n 0` 只改变并行度。具体命令见 README。golden set 只经 `python -m tests.golden` 显式执行。
 
 ## 测试结构与隔离
 
@@ -23,11 +25,13 @@
 - 回归复用既有用例；局部改动先按影响选择，单个 stage 重构验证该 stage 及受影响 stage，不默认全仓。
   golden set 使用根指南指定的 Workbench 源书，只在项目最终质量验收时运行；普通测试不依赖该目录。
 - 新增模块同步 `tests/suite_catalog.json`；混合文件逐用例分类，单例 stage_scope 只能收窄模块范围。
+  普通登记变化验证目录表与变更条目；隔离迁移用 `change_scopes` 补充职责范围，与真实消费者取并集，
+  不把迁移批次编号当作现役 stage，也不因更新目录表就要求全仓。全局选测规则变化仍核对共享影响。
   文件名、注释中的“真实”不能作为 stage 分类依据：被测 producer、判据、Store 和消费者必须实际执行。
 - 删除测试先核实现役契约、生产调用、CLI/API、动态注册和运维消费者；旧格式拒绝、免费恢复与独有故障反例
   仍归现役职责。等价重复须比较输入、故障点、断言和消费者；删除同步目录表、专用 fixture、串行登记与引用。
   只为历史复现保留的测试是否退出维护属于范围决定，现役依据不明确时提交具体案例由用户裁决。
-- `tests/conftest.py` 管 fixture、代码身份与调度。普通测试按文件成组，线程、跨进程或取消生命周期模块
+- 根 `conftest.py` 提前注册选测插件；`tests/conftest.py` 管 fixture、代码身份与调度。普通测试按文件成组，线程、跨进程或取消生命周期模块
   登记到 `_SERIAL_TEST_MODULES`；不拆散模块 fixture 或移除 serial 登记换速度。
 - 新测试用 `tmp_path` / `tmp_path_factory`，不回到系统 `%TEMP%`。上游准备复用只能保存不可变基线，
   每例还原到自己的空目录；不共享可变 Store、账或硬链接，不复用被测步骤的结论。
