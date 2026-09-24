@@ -36,6 +36,7 @@ from __future__ import annotations
 from pydantic import Field, model_validator
 
 from contracts.schema.base import StrictModel
+from contracts.schema.common import FreeProvenance, LlmProvenance
 from contracts.schema.str06.hook import HookDesign
 from contracts.schema.str06.state import StateAddress, StateChange, SurfaceIntroduction
 from typing import Literal
@@ -195,6 +196,9 @@ class PresentationGraph(BodyDesign):
     语义合法（withheld ⊆ 该拍 delta、时序、披露自洽）归 assemble_hook_design。
     """
     hook: HookDesign
+    #: 来源账（F7a）：盘上键 `_provenance`；`exclude=True` 保 prompt 字节不变。
+    provenance: FreeProvenance | LlmProvenance | None = Field(
+        default=None, alias='_provenance', exclude=True)
 
     @model_validator(mode='after')
     def _hook_refs_close(self) -> 'PresentationGraph':

@@ -29,6 +29,7 @@ from novel.stages.str06.body_writer import (
 from novel.stages.str06.render import render_chapter_packet
 from novel.stages.str06.assembly import verify_chapter_chain
 from tools.str06_workflow import run_workflow
+from tests.str06_facilities import make_context
 from tests.test_str06_hook import _body_wire, _characters, _full_chain_wires
 from novel.stages.str06.design_compile import assemble_body_design
 from novel.stages.str06.compile import compile_execution_plan
@@ -356,9 +357,10 @@ def _make_session(tmp_path, wires, ceiling=None):
     base.mkdir(exist_ok=True)
     repo = Str06Repository(base / 'run')
     ledger = CostLedger(path=ledger_path(base))
+    repo.attach_context(make_context(base / 'run', ledger=ledger))
     session = PaidRequestSession(repo, ledger, transport, yes=True,
                                  allow_source_export=True, provider='fake',
-                                 book_call_ceiling=ceiling)
+                                 book_call_ceiling=ceiling, sid='run')
     return repo, session, transport
 
 
@@ -417,12 +419,12 @@ def test_full_pipeline_to_delivery_and_free_recovery(tmp_path):
     final_text = repo.read_text(final_rel)
     assert '楔子' not in final_text  # 系统不添加标题
     assert '柳婉' in final_text and '苏芸娘' not in final_text  # 改名后交付
-    manifest = repo.read('stage7/final/delivery_manifest.json')
+    manifest = repo.inspect('stage7/final/delivery_manifest.json')
     assert manifest['final_text_sha256'] == repo.file_sha256(repo.path(final_rel))
     assert [c['chapter_ordinal'] for c in manifest['chapters']] == [1, 2]
     assert manifest['length_reading']['whole_book_deviation_ratio'] is not None
     # 章级回执与正文绑定；本章前文绑定
-    receipt2 = repo.read('stage5/acceptance/body/ch02.json')
+    receipt2 = repo.inspect('stage5/acceptance/body/ch02.json')
     assert receipt2['status'] == 'accepted'
     assert receipt2['length_disclosed'] is False
     # 新购账：9 个 JSON owner + hook_writer + 2 章 body = 12 次新购

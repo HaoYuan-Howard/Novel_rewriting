@@ -25,6 +25,7 @@ from typing import Literal
 from pydantic import Field, model_validator
 
 from contracts.schema.base import StrictModel
+from contracts.schema.common import FreeProvenance, LlmProvenance
 from contracts.schema.str06.state import StateAddress, SurfaceRelease
 
 OpeningRef = str  # 'init' 或 '<scene_id>#<beat_id>'；存在性归跨引用校验
@@ -153,6 +154,8 @@ class HookContext(StrictModel):
     opening_facts: tuple[HookOpeningFact, ...] = ()
     materials: tuple[HookMaterialView, ...] = Field(min_length=1)
     forbidden_reveals: tuple[str, ...] = Field(default=(), min_length=0)
+    provenance: FreeProvenance | LlmProvenance | None = Field(
+        default=None, alias='_provenance', exclude=True)
     design_brief: str = Field(min_length=1)
     delivery_brief: str = Field(min_length=1)
     target_chars: int = Field(ge=1)
@@ -182,6 +185,9 @@ class HookReceipt(StrictModel):
     mechanical_checks: tuple[str, ...] = Field(min_length=1,
                                                description='validator 版本执行的机械检查项名单')
     semantic: Literal['unverified'] = 'unverified'
+    #: 来源账（F7a）：盘上键 `_provenance`；`exclude=True` 保 prompt 字节不变。
+    provenance: FreeProvenance | LlmProvenance | None = Field(
+        default=None, alias='_provenance', exclude=True)
 
     @model_validator(mode='after')
     def _hash_charset(self) -> 'HookReceipt':

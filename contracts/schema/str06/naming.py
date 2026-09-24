@@ -20,6 +20,7 @@ from typing import Literal
 from pydantic import Field, model_validator
 
 from contracts.schema.base import StrictModel
+from contracts.schema.common import FreeProvenance, LlmProvenance
 
 NamePart = str  # 非空名称部件；长度/字符面由 compile 校验（schema 只保非空语义）
 
@@ -63,6 +64,8 @@ class NameMapV5(StrictModel):
     唯一。空 entries 非法——至少要显式处理一个人物。"""
     contract_version: Literal['str06-rc3'] = 'str06-rc3'
     entries: tuple[NameAssignment, ...] = Field(min_length=1)
+    provenance: FreeProvenance | LlmProvenance | None = Field(
+        default=None, alias='_provenance', exclude=True)
 
     @model_validator(mode='after')
     def _unique_char_refs(self) -> 'NameMapV5':

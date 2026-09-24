@@ -5,6 +5,7 @@
         "contracts/schema/str06/*",
         "novel/stages/str06/*",
         "novel/llm/str06_requests.py",
+        "novel/llm/str06_run_context.py",
         "tools/str06_workflow.py",
         "docs/schema/str06.md"
       ],
@@ -1571,6 +1572,29 @@
       ],
       "cases": {
         "test_stage2_stage4_repository_replay_and_writer_consumer": "stage"
+      }
+    },
+    "tests/test_str06_candidates.py": {
+      "layer": "unit_contract",
+      "stages": [
+        "stage2",
+        "stage4",
+        "stage5",
+        "stage7"
+      ]
+    },
+    "tests/test_str06_f7a_wiring.py": {
+      "layer": "unit_contract",
+      "stages": [
+        "stage2",
+        "stage4",
+        "stage5",
+        "stage7"
+      ],
+      "cases": {
+        "test_new_call_takes_work_unit_turn_and_ledger_attribution": "stage",
+        "test_book_budget_gate_persists_across_sessions": "stage",
+        "test_workflow_record_init_resume_and_code_drift_roll": "stage"
       }
     },
     "tests/test_str06_body.py": {

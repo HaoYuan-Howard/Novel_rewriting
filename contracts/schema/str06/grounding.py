@@ -9,6 +9,7 @@ from __future__ import annotations
 from pydantic import Field, model_validator
 
 from contracts.schema.base import StrictModel
+from contracts.schema.common import FreeProvenance, LlmProvenance
 from contracts.schema.str06.policy import PreserveKind
 from typing import Literal
 
@@ -65,6 +66,8 @@ class PreserveCheckpoint(StrictModel):
     hash，供「同请求身份下历史采用」与成本对账（I-37/I-43）。
     """
 
+    provenance: FreeProvenance | LlmProvenance | None = Field(
+        default=None, alias='_provenance', exclude=True)
     checkpoint_id: str = Field(min_length=1)
     policy_id: str = Field(min_length=1)
     policy_version: int = Field(ge=1)
@@ -123,6 +126,8 @@ class ReconstructionBrief(StrictModel):
     preserve_checkpoint_sha256: str = Field(min_length=64, max_length=64)
     requirements: tuple[BriefRequirement, ...] = Field(min_length=1)
     book_constraints: tuple[str, ...] = Field(default=(), min_length=0)
+    provenance: FreeProvenance | LlmProvenance | None = Field(
+        default=None, alias='_provenance', exclude=True)
 
     @model_validator(mode='after')
     def _unique_core_ids(self) -> 'ReconstructionBrief':
@@ -184,6 +189,8 @@ class SemanticBinding(StrictModel):
     obligations: tuple[SourceObligation, ...] = Field(min_length=1)
     entries: tuple[BindingEntry, ...] = Field(min_length=0)
     unbound: tuple[UnboundEntry, ...] = Field(min_length=0)
+    provenance: FreeProvenance | LlmProvenance | None = Field(
+        default=None, alias='_provenance', exclude=True)
 
     @model_validator(mode='after')
     def _no_double_bookkeeping(self) -> 'SemanticBinding':

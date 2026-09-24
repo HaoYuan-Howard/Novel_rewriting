@@ -31,6 +31,8 @@
                生产正文 Judge 退役）
   consumption  Stage5/7 消费投影族登记（F6 改版：六族，Prepare 退役）
   dependency   新链依赖方向登记（含 F6 迁移包真实模块规则）
+  candidates   F7a 候选节点／产物／workflow／epoch 身份登记（接线前前置定义，
+               不进现役注册表；F8 激活同一套定义）
   retirement   F6d 退役登记（纯数据，随 RC 包在 F8 删除）
 """
 from __future__ import annotations
@@ -58,6 +60,24 @@ from contracts.schema.str06.book_ir import (
     ChapterNavEntry,
     ReleaseScheduleEntry,
     WriterBookIR,
+)
+from contracts.schema.str06.candidates import (
+    EPOCH_REASONS,
+    RC_LABELS,
+    STR06_CANDIDATE_ARTIFACTS,
+    STR06_CANDIDATE_NODES,
+    CandidateArtifact,
+    CandidateEpoch,
+    CandidateLifecycle,
+    CandidateNode,
+    CandidateWorkflow,
+    candidate_artifact,
+    candidate_contract_identity,
+    candidate_node,
+    check_candidate_workflow,
+    open_candidate_epoch,
+    open_candidate_workflow,
+    roll_candidate_epoch,
 )
 from contracts.schema.str06.context import (
     BeatIR,
@@ -157,7 +177,11 @@ from contracts.schema.str06.retirement import (
 STR06_RC_VERSION = 'str06-rc4'
 
 __all__ = [
+    'EPOCH_REASONS',
     'PROJECTION_COORDINATES',
+    'RC_LABELS',
+    'STR06_CANDIDATE_ARTIFACTS',
+    'STR06_CANDIDATE_NODES',
     'STR06_CONSUMPTION_PROJECTIONS',
     'STR06_CROSS_CUTTING_RULES',
     'STR06_DEPENDENCY_RULES',
@@ -171,6 +195,11 @@ __all__ = [
     'BindingEntry',
     'BodyDesign',
     'BookBrief',
+    'CandidateArtifact',
+    'CandidateEpoch',
+    'CandidateLifecycle',
+    'CandidateNode',
+    'CandidateWorkflow',
     'ChapterAssignment',
     'ChapterIR',
     'ChapterLengthDisclosure',
@@ -233,6 +262,13 @@ __all__ = [
     'WriterBookIR',
     'WriterBrief',
     'WriterContext',
+    'candidate_artifact',
+    'candidate_contract_identity',
+    'candidate_node',
+    'check_candidate_workflow',
     'family_for',
+    'open_candidate_epoch',
+    'open_candidate_workflow',
     'render_form',
+    'roll_candidate_epoch',
 ]

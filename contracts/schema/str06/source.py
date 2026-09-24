@@ -33,6 +33,7 @@ from typing import Any
 from pydantic import Field, model_validator
 
 from contracts.schema.base import StrictModel
+from contracts.schema.common import FreeProvenance, LlmProvenance
 
 Slug = str  # 小写下划线人物键；pattern 在 compile 层统一校验（dict key 无法带 Field）
 
@@ -318,6 +319,10 @@ class CharactersArtifactV4(CharactersCore):
     initial_state）形状与 RC2 相同。"""
     contract_version: str = Field(default='str06-rc3', pattern=r'^str06-rc[0-9]+$')
     name_structure: NameStructure | None = None
+    #: 来源账（F7a）：盘上键 `_provenance`。`exclude=True` 让内存态 dump 不带
+    #: 它——prompt／请求字节与 F5e 已购身份逐字不变；落盘由 repository 注入。
+    provenance: FreeProvenance | LlmProvenance | None = Field(
+        default=None, alias='_provenance', exclude=True)
 
     def name_projection(self) -> NameProjection:
         """整书名称投影（display 取 core canonical）；未登记结构时是编程错误。"""
@@ -456,6 +461,8 @@ class BlueprintsArtifactV12(StrictModel):
     """`stage2/blueprints/chapter_blueprints.json` 目标 v12（RC）。跨章 from_beat
     引用的存在性归 compile（需要全书 beat 集合）。"""
 
+    provenance: FreeProvenance | LlmProvenance | None = Field(
+        default=None, alias='_provenance', exclude=True)
     world_constraints: tuple[WorldConstraint, ...] = Field(default=(), min_length=0)
     chapters: tuple[ChapterBlueprint, ...] = Field(min_length=1)
 

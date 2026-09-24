@@ -56,6 +56,7 @@ from contracts.schema import (
     artifact_spec, decode_artifact, encode_artifact,
 )
 from contracts.schema.stage4 import EvidenceBinding
+from contracts.schema.str06.candidates import candidate_artifact
 from novel import paths, prov
 from novel.consumption import (
     canonical_rel, context_inputs_for,
@@ -2527,9 +2528,35 @@ class ArtifactStore:
 
 
 class Str06Repository:
-    """隔离 RC 产物的持久化口；不接现役注册表，不决定业务状态（F8 删除）。"""
-    def __init__(self, root: Path):
-        self.root = root.resolve()
+    """隔离 RC 产物的持久化口（F7a-2 起接正式 Store 机制；F8 分流删除）。
+
+    【接的是正式 Store 的机制，不是它的注册表】
+    家族路径准入与完整路径来源账键走 `paths.check_rel_family`／
+    `family_input_key`；provenance 用 `contracts.schema.common` 的同一套
+    canonical 模型（`FreeProvenance`／`LlmProvenance`／`InputEdge`／`Usage`），
+    由 `CandidateRunContext` 按候选节点表铸造；freshness 用
+    `novel.prov.freshness` 对产物自记的 inputs 复算，明确 stale 在生产路径
+    拒绝；INVALID 孪生名与 `_rounds/` 归档走 `paths.invalid_of`／`rounds_dir_of`／
+    `round_rel`／`archived_rounds`；落盘一律 OS 原子替换 + 读回核对。
+    ⇒ 不新建领域模型（I-11）、不建第二本账（I-17），也不进现役
+    ARTIFACT_SPECS／NODES（S-04）。
+
+    【与正式 ArtifactStore 的边界】正式 store 由 RunContext 造、吃现役注册表
+    与 consumption 投影；本类由候选上下文造、吃候选表
+    （`STR06_CANDIDATE_ARTIFACTS`）。两侧共用 schema 与 prov 原语。盘上
+    `_provenance` 键与正式产物同形，F8 激活时可直接进正式解码路径。
+
+    【context 是显式依赖】构造后必须 `attach_context` 附上候选运行上下文再写
+    正式产物；未附着时写已登记产物**关闭式拒绝**——不存在「无来源账的正式
+    产物」这条静默路径。读取旧根／外部文件不依赖上下文。
+    """
+
+    def __init__(self, root: Path, context=None):
+        self.root = Path(root).resolve()
+        self.context = context
+
+    def attach_context(self, context) -> None:
+        self.context = context
 
     def path(self, rel: str) -> Path:
         return paths.str06_artifact_path(self.root, rel)
@@ -2550,12 +2577,56 @@ class Str06Repository:
         return hashlib.sha256(path.read_bytes()).hexdigest()
 
     def read(self, rel: str) -> Any:
-        return self.read_external(self.path(rel))
+        path = self.path(rel)
+        raw = path.read_bytes()
+        data = self.read_external(path)
+        if self.context is not None:
+            spec = candidate_artifact(rel)
+            if spec is not None:
+                # 读到的上游才记边（手工列举的来源清单会烂；内存传递不产生边）。
+                self.context.record_edge(paths.family_input_key(rel),
+                                         prov.fingerprint_bytes(raw))
+                if not self.context.readonly:
+                    self._refuse_stale(rel, data)
+        return data
 
-    def write(self, rel: str, value: Any) -> Path:
+    def _refuse_stale(self, rel: str, data: Any) -> None:
+        """对产物自记的 inputs 复算新鲜度；只有可复算且明确 stale 才阻断。
+
+        无 provenance（旧根产物、自由形态记录）保持 unknown 放行——不把「不知道」
+        升级成 fresh，也不把旧根证据冒充成已验。
+        """
+        provenance = data.get('_provenance') if isinstance(data, dict) else None
+        recorded = provenance.get('inputs') if isinstance(provenance, dict) else None
+
+        def file_now(key: str) -> str | None:
+            try:
+                return prov.fingerprint_bytes(self.path(key).read_bytes())
+            except (FileNotFoundError, NotADirectoryError):
+                return None
+
+        report = prov.freshness(recorded, file_now=file_now)
+        if report.state != 'stale':
+            return
+        changed = ', '.join(edge.key for edge in report.edges) or report.reason
+        raise UpstreamStale(
+            f'候选产物 {rel} 的上游已过期（{changed}）；在生成或付费请求前拒绝消费。'
+            '请先从对应 owner 重建当前候选根上的产物')
+
+    def write(self, rel: str, value: Any, *, owners: tuple[str, ...] | None = None) -> Path:
         path = self.path(rel)
         path.parent.mkdir(parents=True, exist_ok=True)
         payload = value.model_dump(mode='json') if isinstance(value, BaseModel) else value
+        if self.context is not None:
+            spec = candidate_artifact(rel)
+            if spec is not None and spec.form == 'json':
+                # 已登记产物落盘即带来源账；正文（text）的账在绑定它的回执上。
+                provenance = self.context.provenance_for(spec.writer, rel, owners=owners)
+                payload = {**payload, '_provenance': provenance.to_disk()}
+        elif candidate_artifact(rel) is not None:
+            raise ProvenanceRefused(
+                f'{rel} 是已登记候选产物，但 repository 未附加上下文：'
+                '拒绝在无来源账的情况下写正式产物')
         data = json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2,
                           allow_nan=False).encode('utf-8')
         # RC 与现役共用 OS 原子替换语义，不调用现役 Stage 实现或私有产物编排。
@@ -2593,3 +2664,91 @@ class Str06Repository:
     def read_text(self, rel: str) -> str:
         """正文/文本产物读取；文件不存在抛 FileNotFoundError，由调用方归类。"""
         return self.path(rel).read_text(encoding='utf-8')
+
+    def inspect(self, rel: str) -> Any:
+        """只读检查：不记来源边、不判新鲜度（断言、视图与 `--check-only` 用）。
+
+        与 `read` 的分工同正式 store 的 `full_sha256_or_none`：生产消费走 `read`
+        （记账 + 过期拒绝），检查走本口——单进程 pipeline 里「谁读的」必须能
+        区分生产消费与检查，否则一次断言读会写进下一份产物的来源账。
+        """
+        return self.read_external(self.path(rel))
+
+    # ── INVALID 孪生与 _rounds 归档（F7a-2：路径与写入事务接正式机制） ──────
+
+    def invalid_rel(self, rel: str) -> str:
+        return paths.invalid_of(paths.check_rel_family(rel))
+
+    def round_rel(self, rel: str, round_no: int) -> str:
+        return paths.round_rel(paths.check_rel_family(rel), round_no)
+
+    def archived_rounds(self, rel: str) -> set[int]:
+        formal = paths.check_rel_family(rel)
+        return paths.archived_rounds(
+            self.path(paths.rounds_dir_of(formal)), paths.stem_of(formal))
+
+    def write_invalid(self, rel: str, value: Any, *,
+                      problems: tuple[str, ...], owners: tuple[str, ...] | None = None) -> Path:
+        """被机械闸拦下的稿进 `.INVALID` 孪生：正式位不写，`gates_skipped` 留痕。
+
+        先归档孪生上已有的历史轮次再覆写——归档是出事之后唯一能回去的那份，
+        不允许第二次被拦的稿静默覆盖第一次（对齐正式 `_rounds` 纪律）。
+        typed witness 与 revalidation audit 归 F7c；本方法只保证「拦下的稿
+        不丢、正式位不被污染」。
+        """
+        invalid = self.invalid_rel(rel)
+        seen = self.archived_rounds(invalid)
+        if self.path(invalid).exists():
+            # 孪生上已有历史：先归档成下一轮再写新孪生——归档是出事之后唯一
+            # 能回去的那份，不允许第二次被拦的稿静默覆盖第一次。
+            self._archive(invalid, prov.next_round(seen))
+        spec = candidate_artifact(paths.formal_of(invalid))
+        if spec is not None and spec.form == 'json':
+            if self.context is None:
+                raise ProvenanceRefused(
+                    f'{rel} 是已登记候选产物，但 repository 未附加上下文：'
+                    '拒绝在无来源账的情况下写 INVALID 孪生')
+            provenance = self.context.provenance_for(spec.writer, invalid, owners=owners)
+            provenance = provenance.model_copy(update={'gates_skipped': list(problems)})
+            payload = value.model_dump(mode='json') if isinstance(value, BaseModel) else value
+            payload = {**payload, '_provenance': provenance.to_disk()}
+            return self._write_payload(invalid, payload)
+        return self.write(invalid, value, owners=owners)
+
+    def promote_invalid(self, rel: str) -> Path:
+        """把 `.INVALID` 孪生提升为正式位（字节原样， provenance 不重铸）。
+
+        提升不改写来源账：这次跑没有新生成任何东西，重铸就是把历史付费产出
+        伪装成本次产物。revalidation audit 归 F7c。
+        """
+        invalid = self.invalid_rel(rel)
+        source, target = self.path(invalid), self.path(rel)
+        if not source.exists():
+            raise FileNotFoundError(f'{rel} 没有可提升的 INVALID 孪生')
+        target.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(source, target)
+        return target
+
+    def _archive(self, rel: str, round_no: int) -> Path:
+        destination = self.path(self.round_rel(rel, round_no))
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(self.path(rel), destination)
+        return destination
+
+    def _write_payload(self, rel: str, payload: Any) -> Path:
+        path = self.path(rel)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        data = json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2,
+                          allow_nan=False).encode('utf-8')
+        fd, temporary = tempfile.mkstemp(prefix='.rc-', suffix='.tmp', dir=path.parent)
+        try:
+            with os.fdopen(fd, 'wb') as stream:
+                stream.write(data)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, path)
+        finally:
+            Path(temporary).unlink(missing_ok=True)
+        if path.read_bytes() != data:
+            raise ValueError(f'RC 产物读回字节不一致：{rel}')
+        return path

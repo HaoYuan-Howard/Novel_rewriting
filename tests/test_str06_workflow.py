@@ -1,8 +1,10 @@
 """Stage2→Stage4 RC4 真实隔离入口的离线阶段测试（语义 wire 固定，不请求 LLM）。"""
 from copy import deepcopy
 
+from novel.llm.ledger import CostLedger
 from novel.store import Str06Repository
 from tools.str06_workflow import run_workflow
+from tests.str06_facilities import make_context
 from tests.test_str06_target import _source_pair, _preserve_wire, _design_wire
 
 
@@ -37,10 +39,13 @@ def test_stage2_stage4_repository_replay_and_writer_consumer(tmp_path):
         data = deepcopy(wires[owner])
         assert not validate(data), (owner, validate(data))
         requests.append((owner, prompt))
+        repo.context.note_adoption(owner=owner, model='fake',
+                                   prompts={'user': prompt})
         return data
     def ask_text(owner, prompt):
         raise AssertionError('stage4 干跑不应调用文本 owner')
     repo = Str06Repository(tmp_path / 'book')
+    repo.attach_context(make_context(tmp_path / 'book', ledger=CostLedger(path=None)))
     chapters = [{'chapter_ordinal': 1, 'text': '云娘提出约定，夫君知晓真相。'}]
     report = run_workflow(repository=repo, chapters=chapters, ask=ask,
                           ask_text=ask_text,
@@ -49,7 +54,7 @@ def test_stage2_stage4_repository_replay_and_writer_consumer(tmp_path):
                           budget=800)
     assert report['guard_errors'] == [] and report['accepted_body'] is False
     # WriterBookIR 唯一落盘；场景上下文嵌入其中（不再单独写场景文件）
-    writer_ir = repo.read('stage4/ir/writer_book_ir.json')
+    writer_ir = repo.inspect('stage4/ir/writer_book_ir.json')
     assert writer_ir['book_brief']['target_chapter_count'] == 1
     chapter_ir = writer_ir['chapters'][0]
     assert chapter_ir['purpose'] == '婚姻从名分走向盟约'
@@ -61,7 +66,7 @@ def test_stage2_stage4_repository_replay_and_writer_consumer(tmp_path):
     assert any('约定被提出且被接受' in o['satisfaction']
                for o in context['verification_ir']['obligations'])
     assert context['writer_brief']['pov'] == 'yun'
-    assert len(repo.read('stage4/grounding/reconstruction_brief.json')['requirements']) == 3
+    assert len(repo.inspect('stage4/grounding/reconstruction_brief.json')['requirements']) == 3
     design_prompt = next(prompt for owner, prompt in requests if owner == 'design')
     assert '知晓时刻与反应' in design_prompt and '夫君身份约束' in design_prompt
     assert 'b01_01' not in design_prompt

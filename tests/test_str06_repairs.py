@@ -20,6 +20,7 @@ from novel.stages.str06.checks import canonical_sha256
 from novel.stages.str06.guard import run_mechanical_guard
 from novel.stages.str06.grounding import assemble_preserve, project_brief, assemble_binding
 from novel.stages.str06.source_compile import ChapterCompiler, assemble_blueprint, chapter_input_snapshot
+from tests.str06_facilities import make_context
 from tests.test_str06_execution_ir import _graph, _binding, _cp, _ob
 from tests.test_str06_target import _assemble, _preserve_wire, _source_pair
 from tests.test_str06_source import _compile_pair, _chapter_wire
@@ -220,13 +221,16 @@ def test_paid_response_durable_before_validation_and_reused(tmp_path):
     transport = Transport()
     repo = Str06Repository(tmp_path/'book')
     ledger = CostLedger(path=ledger_path(tmp_path))
-    session = PaidRequestSession(repo, ledger, transport, yes=True, allow_source_export=True, provider='fake')
+    repo.attach_context(make_context(tmp_path/'book', ledger=ledger))
+    session = PaidRequestSession(repo, ledger, transport, yes=True, allow_source_export=True,
+                                 provider='fake', sid='book')
     request = ChatRequest(model='fake', system='s', user='u', reasoning_effort='high',
                           thinking=True, json_mode=True, max_tokens=50)
     with pytest.raises(ValueError, match='免费修复'):
         session.ask('bind', request, lambda _: ['缺必保义务'])
     # 跨 session、同请求，免费重新校验已购原响应。
-    session2 = PaidRequestSession(repo, CostLedger(path=ledger_path(tmp_path)), transport, provider='fake')
+    session2 = PaidRequestSession(repo, CostLedger(path=ledger_path(tmp_path)), transport,
+                                  provider='fake', sid='book')
     assert session2.ask('bind', request, lambda _: []) == {'entries': []}
     assert transport.calls == 1
     rows, _ = read_cost_snapshot(tmp_path)
@@ -262,8 +266,11 @@ def test_failed_request_is_preserved_and_never_automatically_rebought(tmp_path, 
             return ChatResponse(content='{"a":1,"a":2}', usage=None)
     transport = Transport()
     repo = Str06Repository(tmp_path/'book')
-    session = PaidRequestSession(repo, CostLedger(path=ledger_path(tmp_path)), transport,
-                                 provider='fake', yes=True, allow_source_export=True)
+    ledger = CostLedger(path=ledger_path(tmp_path))
+    repo.attach_context(make_context(tmp_path/'book', ledger=ledger))
+    session = PaidRequestSession(repo, ledger, transport,
+                                 provider='fake', yes=True, allow_source_export=True,
+                                 sid='book')
     request = ChatRequest(model='fake', system='s', user='u', reasoning_effort='high',
                           thinking=True, json_mode=True, max_tokens=50)
     with pytest.raises((ValueError, TimeoutError)):

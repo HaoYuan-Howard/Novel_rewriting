@@ -1,5 +1,5 @@
 """STR-06 隔离入口：source JSON → Stage2(+names) → Preserve/Design/Hook/Bind → Compile+Guard+WriterIR
-→ 按章正文 → Hook 成文 → Naming → Assembly（F5/F6）。
+→ 按章正文 → Hook 成文 → Naming → Assembly（F5/F6；F7a-2 接正式设施）。
 
 --wire-dir 显式采用已购/人工修订 wire，逐份记录字节 SHA；owner wire 缺失时走付费
 边界：同请求身份结果优先免费采用（缓存先于授权），缺失且未授权停在该 owner 并
@@ -9,22 +9,29 @@ F5 起的腿边界：Stage4 完整发布 graph 与 WriterBookIR 后结束（零�
 Stage5 完成正文（严格按章串行，--body-chapter-limit 限定前缀）与 Hook；
 Stage7 由真实 Assembly 产生交付（文件先落盘、manifest 最后提交）。
 --check-only 强制不新购：只做免费采用与免费重放。
-此入口不切换现役工作流（删除条件 STR-06-F8）。
+
+F7a-2：候选根首次运行初始化 workflow／epoch 身份（runtime/candidate_workflow.json），
+之后原 epoch 复用、代码漂移滚动、源输入变化拒绝；付费边界经正式工作单元与整书
+总闸记账，ledger 行带候选节点归属。此入口不切换现役工作流（删除条件 STR-06-F8）。
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import re
+import time
 from pathlib import Path
 
 from contracts.schema.str06 import OutputConstraints
 from contracts.schema.str06.hook import HookConstraints, HookReceipt
 from novel.config import load_config
-from novel.llm.ledger import CostLedger, ledger_path
+from novel.llm.str06_run_context import init_or_resume_candidate_workflow
 from novel.llm.str06_requests import PaidRequestSession, PurchaseRequired, digest
 from novel.llm.transport import ChatRequest, DeepSeekTransport
+from novel import prov
 from novel.store import Str06Repository
+from novel.work_units import require_workflow
 from novel.stages.str06.source_compile import (
     ChapterCompiler, assemble_blueprint, compile_book, chapter_input_snapshot, initial_snapshot, source_fold,
 )
@@ -211,7 +218,7 @@ def _run_workflow(*, repository, chapters, ask, ask_text, ask_body, budget, thro
     binding, errors = assemble_binding(bw, checkpoint, positions)
     if errors:
         raise ValueError(errors)
-    repository.write('stage4/grounding/semantic_binding.json', binding)
+    repository.write('stage4/grounding/semantic_binding.json', binding, owners=('bind',))
     plan, errors = compile_execution_plan(body, binding)
     repository.write('stage4/acceptance/guard/compile.json', {'errors': errors})
     if errors:
@@ -233,7 +240,8 @@ def _run_workflow(*, repository, chapters, ask, ask_text, ask_body, budget, thro
     if errors:
         raise ValueError(errors)
     graph = publish_graph(body, hook)
-    repository.write('stage4/design/presentation_graph.json', graph)
+    repository.write('stage4/design/presentation_graph.json', graph,
+                     owners=('design', 'hook_design'))
     hook_context, errors = compile_hook_context(graph, projection, hook_constraints)
     if errors:
         raise ValueError(errors)
@@ -476,9 +484,16 @@ def main():
     base = os.environ.get('NOVEL_OUTPUT')
     if not base:
         raise ValueError('NOVEL_OUTPUT 未设置：没查、未运行')
-    if not args.run_dir.resolve().is_relative_to(Path(base).resolve()):
+    base_path = Path(base).resolve()
+    run_dir = args.run_dir.resolve()
+    if not run_dir.is_relative_to(base_path):
         raise ValueError('--run-dir 必须位于 NOVEL_OUTPUT 下的隔离根')
-    repository = Str06Repository(args.run_dir)
+    # 一个 NOVEL_OUTPUT 根一个候选链：facilities 的 sid 取 run 目录名。
+    sid = run_dir.relative_to(base_path).as_posix().replace('/', '_')
+    source_bytes = args.source_json.read_bytes()
+    source_identity = hashlib.sha256(source_bytes).hexdigest()
+    root_sha1 = prov.content_sha1(source_bytes)
+    repository = Str06Repository(run_dir)
     chapters = repository.read_external(args.source_json)
     adopted = {}
     if args.repair_manifest:
@@ -498,13 +513,20 @@ def main():
                     raise ValueError(f'owner patch {entry["owner"]} 的 {field} 身份变化，拒绝采用')
         repository.write('runtime/repair_manifest.json', manifest)
     cfg = load_config()
-    ledger = CostLedger(path=ledger_path(Path(base)))
+    # workflow／epoch 身份：首开落记录，复用不换身份，代码漂移滚动，源输入变化拒绝。
+    workflow, context = init_or_resume_candidate_workflow(
+        repository=repository, base=base_path, code=prov.code_version(),
+        root_sha1=root_sha1, source_identity=source_identity,
+        task_id=require_workflow(base_path).task_id,
+        configured_model='unknown' if args.wire_dir else cfg.model,
+        created_at=int(time.time()), readonly=args.check_only)
+    ledger = context.ledger
     session = PaidRequestSession(repository, ledger, DeepSeekTransport(cfg), yes=args.yes,
                                  allow_source_export=args.allow_source_export,
                                  provider=cfg.base_url,
-                                 book_call_ceiling=args.book_call_ceiling)
+                                 book_call_ceiling=args.book_call_ceiling, sid=sid)
 
-    def adopt(owner, path, validate):
+    def adopt(owner, path, validate, *, system, prompt):
         if args.repair_manifest and (
                 owner not in adopted or Path(adopted[owner]['path']).resolve() != path.resolve()
                 or repository.file_sha256(path) != adopted[owner]['sha256']):
@@ -517,6 +539,10 @@ def main():
             'new_paid_calls': 0, 'historical_usage': None, 'errors': errors})
         if errors:
             raise ValueError(f'{owner} 免费采用失败：{errors}')
+        # wire 采用登记进 provenance 采用台账：模型身份在 wire 里不可知，如实记
+        # unknown；prompt 是本次与之身份一致的请求原文（F7a-3 起改从原请求行取值）。
+        context.note_adoption(owner=owner, model='unknown',
+                              prompts={'system': system, 'user': prompt})
         return raw
 
     def wire_path(owner):
@@ -539,14 +565,15 @@ def main():
     def ask(owner, prompt, validate):
         path = wire_path(owner)
         if path is not None:
-            return adopt(owner, path, validate)
+            return adopt(owner, path, validate, system=SYS, user=prompt)
         request = build_request(owner, prompt, json_mode=True, system=SYS, temperature=0.3)
         return session.ask(owner, request, validate)
 
     def ask_text(owner, prompt):
         path = wire_path(owner)
         if path is not None:
-            raw = adopt(owner, path, lambda w: [])
+            raw = adopt(owner, path, lambda w: [], system=HOOK_WRITER_SYSTEM,
+                        user=prompt)
             prose = (raw.get('prose') or '').strip() if isinstance(raw, dict) else ''
             if not prose:
                 raise ValueError(f'{owner} wire 文本为空')
@@ -559,7 +586,8 @@ def main():
     def ask_body(owner, prompt):
         path = wire_path(owner)
         if path is not None:
-            raw = adopt(owner, path, lambda w: [])
+            raw = adopt(owner, path, lambda w: [], system=BODY_WRITER_SYSTEM,
+                        user=prompt)
             prose = (raw.get('prose') or '').strip() if isinstance(raw, dict) else ''
             if not prose:
                 raise ValueError(f'{owner} wire 文本为空')

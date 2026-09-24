@@ -23,6 +23,7 @@ from contracts.invariants import (
     BOOK_CONTENT_CALL_CEILING_DEFAULT, NODES, RETIRED_APPROVAL_BINDINGS,
     approval_work_unit, approval_scope_allowed,
 )
+from contracts.schema.str06.candidates import STR06_CANDIDATE_NODES
 from contracts.schema.workflow import (
     BookBudgetGrantV1, BookContentBudgetV1, WorkflowManifestV6,
     WorkflowManifestV7, WorkflowManifestV8, WorkflowManifestV9, WorkUnitAttempt, WorkUnitBlobV1,
@@ -308,6 +309,34 @@ def _book_budget_path(base: str | os.PathLike[str], sid: str) -> Path:
     return _safe(base, paths.book_budget_path(base, sid))
 
 
+def node_lifecycle_spec(node: str):
+    """节点生命周期解析：现役 `NODES` 优先，未登记再查 STR-06 候选表（F7a）。
+
+    【为什么正式设施要认候选身份】STR-06 隔离链的候选节点（`str06.*`）在 F8 前
+    不进现役 `NODES`，但它的付费内容调用必须落在**同一套**持久工作单元与整书
+    总闸上：另建一套候选预算账就是第二份真相源（I-17），两本账对不上的那天
+    没有任何机械判据能发现。因此这里只做身份解析、不做行为分支——候选节点
+    原样复用 `WorkUnitBudget` 的全部正式语义（未闭合轮拒绝、内容上限、总闸、
+    登记账、坏账关闭式拒绝）。候选表里 `executor_content_limit=0` 的免费节点
+    （compile／assemble）会被正式的角色闸直接拒绝建模，机械禁付。
+
+    【删除条件】STR-06-F8c：候选定义激活进正式 `NODES` 后，本回退随候选表一起
+    删除，未登记节点一律 `WorkUnitRefused`（回到现役行为）。
+
+    返回 `NodeLifecycleSpec`（现役）或 `CandidateLifecycle`（候选）；两者都带
+    `unit_kind` 与 `executor_content_limit`，调用方只消费这两个字段。
+    """
+    if node in NODES:
+        spec = NODES[node].lifecycle
+        if spec is None:
+            raise WorkUnitRefused(f'现役节点未登记执行生命周期：{node}')
+        return spec
+    candidate = STR06_CANDIDATE_NODES.get(node)
+    if candidate is not None:
+        return candidate.lifecycle
+    raise WorkUnitRefused(f'未登记的工作单元节点：{node}')
+
+
 def read_book_budget(
     base: str | os.PathLike[str], sid: str, *, task_id: str | None = None,
 ) -> BookContentBudgetV1 | None:
@@ -321,20 +350,21 @@ def read_book_budget(
     return budget
 
 
-def _reserve_book_call(base: str | os.PathLike[str], identity: dict) -> None:
-    """在已持有的单元账锁内对整书总闸 +1；锁序恒为 单元账 → 整书账。
+def reserve_book_call(base: str | os.PathLike[str], sid: str, *, task_id: str) -> None:
+    """整书付费内容调用总闸 +1（跨全部工作单元合账的唯一持久入口，Q-10）。
 
-    账在首次付费调用时创建；重启/恢复/重建 job 读的是同一份持久账，
-    已消耗额度不重置。坏账关闭式拒绝新调用（Q-13：付费副作用状态未知
-    不得绕过）。
+    正式 `WorkUnitBudget.reserve` 在单元账锁内调用它；隔离候选链的付费边界
+    经同一工作单元路径间接调用——两条路同一份账
+    （`_service/runs/<sid>/book_budget.json`），不建第二本预算账（I-17）。
+    账在首次付费调用时创建；重启、恢复、重建 job 读同一份持久账，已消耗额度
+    不重置。坏账关闭式拒绝新调用；自动恢复路径不得追加额度。
     """
-    path = _book_budget_path(base, identity['sid'])
+    path = _book_budget_path(base, sid)
     with path_transaction_lock(path):
-        budget = read_book_budget(
-            base, identity['sid'], task_id=identity['task_id'])
+        budget = read_book_budget(base, sid, task_id=task_id)
         if budget is None:
             budget = BookContentBudgetV1(
-                task_id=identity['task_id'], sid=identity['sid'],
+                task_id=task_id, sid=sid,
                 ceiling=BOOK_CONTENT_CALL_CEILING_DEFAULT)
         if budget.remaining <= 0:
             raise WorkUnitBudgetExhausted(
@@ -343,6 +373,11 @@ def _reserve_book_call(base: str | os.PathLike[str], identity: dict) -> None:
                 '这是跨全部工作单元的合计上限；请显式追加整书预算后再续跑，'
                 '自动恢复路径不得追加')
         _write(base, path, budget.model_copy(update={'used': budget.used + 1}))
+
+
+def _reserve_book_call(base: str | os.PathLike[str], identity: dict) -> None:
+    """在已持有的单元账锁内对整书总闸 +1；锁序恒为 单元账 → 整书账。"""
+    reserve_book_call(base, identity['sid'], task_id=identity['task_id'])
 
 
 def grant_book_budget(
@@ -381,15 +416,22 @@ class ContentReservation:
 class WorkUnitBudget:
     def __init__(self, base: str | os.PathLike[str], sid: str, node: str,
                  role: str = 'executor', scope: str = 'book', *, read_only: bool = False) -> None:
-        if node not in NODES or role not in ('executor', 'commander'):
-            raise WorkUnitRefused('未登记的工作单元节点或角色')
+        if role not in ('executor', 'commander'):
+            raise WorkUnitRefused('未登记的工作单元角色')
         if role == 'commander' and not read_only:
             # Commander 受托审阅已退役（2026-09-15）：新工作单元不再接受
             # commander 角色；``read_only=True`` 仅服务存量书历史账的解码与
             # owner 停止证明，不参与任何新预算。
             raise WorkUnitRefused('Commander 工作单元已退役；历史账只读解码仍可用')
-        spec = NODES[node].lifecycle
+        try:
+            # 现役 NODES 与 STR-06 候选表（F7a）同一道解析；候选节点复用本类
+            # 全部正式语义，不为隔离链建第二套预算账（删除条件见函数 docstring）。
+            spec = node_lifecycle_spec(node)
+        except WorkUnitRefused:
+            raise WorkUnitRefused('未登记的工作单元节点或角色')
         if role == 'commander':
+            if node not in NODES:
+                raise WorkUnitRefused('Commander 工作单元只服务现役历史账解码')
             # 原 ``spec.commander_content_limit == 4`` 的准入面随字段退役；
             # 历史解码以现存的审批登记（approval_bindings）与已退役闸的
             # 历史只读表（RETIRED_APPROVAL_BINDINGS）为等价准入证据。

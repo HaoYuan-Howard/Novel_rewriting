@@ -25,6 +25,7 @@ from typing import Literal
 from pydantic import Field, model_validator
 
 from contracts.schema.base import StrictModel
+from contracts.schema.common import FreeProvenance, LlmProvenance
 from contracts.schema.str06.state import EffectDomain, StateChange
 
 
@@ -94,6 +95,8 @@ class ExecutionPlan(StrictModel):
     contract_version: Literal['str06-rc3'] = 'str06-rc3'
     initial_establishments: tuple[Establishment, ...] = ()
     scenes: tuple[SceneExecutionPlan, ...] = Field(min_length=1)
+    provenance: FreeProvenance | LlmProvenance | None = Field(
+        default=None, alias='_provenance', exclude=True)
 
     @model_validator(mode='after')
     def _unique_scene_ids(self) -> 'ExecutionPlan':

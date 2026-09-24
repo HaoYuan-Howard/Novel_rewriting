@@ -37,7 +37,9 @@ from novel.stages.str06.compile import compile_execution_plan
 from novel.stages.str06.grounding import assemble_binding
 from novel.store import Str06Repository
 from novel.errors import PathRefused
+from novel.llm.ledger import CostLedger
 from novel.paths import check_rel_family
+from tests.str06_facilities import make_context
 
 H64 = 'a' * 64
 SRC = '苏芸娘嫁入陆家，唤夫君为陆大哥，苏姑娘陪嫁，陆兄迎娶。'
@@ -190,6 +192,7 @@ def _green_pair():
 def test_context_rebuild_is_byte_identical_after_delete(tmp_path):
     _, graph, _ = _green_pair()
     repo = Str06Repository(tmp_path)
+    repo.attach_context(make_context(tmp_path, ledger=CostLedger(path=None)))
     def build():
         context, errors = compile_hook_context(
             graph, _projection(), HookConstraints(target_chars=280, hard_max_chars=360))
@@ -645,25 +648,34 @@ def test_through_stage7_full_chain_replay_and_authorization_gate(tmp_path):
         {'chapter_ordinal': 1, 'text': '苏芸娘嫁入陆家，唤夫君为陆大哥，苏姑娘陪嫁，陆兄迎娶。'},
         {'chapter_ordinal': 2, 'text': '夫君夜半翻墙而出，苏芸娘发现玉佩刻着沈字。'}]
 
-    def make_ask(wires, counter):
+    def make_ask(wires, counter, repo):
         def ask(owner, prompt, validate):
             if owner not in wires:
                 raise PurchaseRequired(owner)
             counter.append(owner)
+            # 假 ask 也要履行付费边界的采用登记（provenance 的生成事实）。
+            repo.context.note_adoption(owner=owner, model='fake',
+                                       prompts={'user': prompt})
             return deepcopy(wires[owner])
         return ask
 
-    def ask_text(owner, prompt):
-        return '苏芸娘望着空房。', [], 'wire-adoption'
+    def make_text(repo):
+        def ask_text(owner, prompt):
+            repo.context.note_adoption(owner=owner, model='fake',
+                                       prompts={'user': prompt})
+            return '苏芸娘望着空房。', [], 'wire-adoption'
+        return ask_text
 
     def ask_body(owner, prompt):
         raise AssertionError('body_chapter_limit=0 不应调用正文 owner')
 
     from copy import deepcopy
     repo = Str06Repository(tmp_path / 'run')
+    repo.attach_context(make_context(tmp_path / 'run', ledger=CostLedger(path=None)))
     counter: list[str] = []
     report = run_workflow(repository=repo, chapters=chapters,
-                          ask=make_ask(wires, counter), ask_text=ask_text,
+                          ask=make_ask(wires, counter, repo),
+                          ask_text=make_text(repo),
                           ask_body=ask_body,
                           budget=2000, through='stage7', book_title='报恩',
                           hook_constraints=HookConstraints(target_chars=10,
@@ -678,7 +690,7 @@ def test_through_stage7_full_chain_replay_and_authorization_gate(tmp_path):
     assert not (tmp_path / 'run/stage7/final').exists()
     assert repo.read_text('runtime/delivery/hook_renamed.txt') == '柳婉望着空房。'
     assert repo.read_text('stage5/hook/hook.txt') == '苏芸娘望着空房。'
-    assert repo.read('stage5/hook/receipt.json')['semantic'] == 'unverified'
+    assert repo.inspect('stage5/hook/receipt.json')['semantic'] == 'unverified'
 
     # 重跑：零新调用（wire 全命中），字节一致
     before = {rel: repo.path(rel).read_bytes() for rel in (
@@ -688,7 +700,7 @@ def test_through_stage7_full_chain_replay_and_authorization_gate(tmp_path):
         'runtime/delivery/hook_renamed.txt')}
     counter.clear()
     run_workflow(repository=repo, chapters=chapters,
-                 ask=make_ask(wires, counter), ask_text=ask_text,
+                 ask=make_ask(wires, counter, repo), ask_text=make_text(repo),
                  ask_body=ask_body,
                  budget=2000, through='stage7', book_title='报恩',
                  hook_constraints=HookConstraints(target_chars=10, hard_max_chars=360),
@@ -700,9 +712,10 @@ def test_through_stage7_full_chain_replay_and_authorization_gate(tmp_path):
     # 缺 wire 且未授权：停在对应 owner，报告需要授权
     missing = {k: v for k, v in wires.items() if k != 'hook_design'}
     repo2 = Str06Repository(tmp_path / 'run2')
+    repo2.attach_context(make_context(tmp_path / 'run2', ledger=CostLedger(path=None)))
     with pytest.raises(PurchaseRequired) as excinfo:
         run_workflow(repository=repo2, chapters=chapters,
-                     ask=make_ask(missing, []), ask_text=ask_text,
+                     ask=make_ask(missing, [], repo2), ask_text=make_text(repo2),
                      ask_body=ask_body,
                      budget=2000, through='stage7')
     assert excinfo.value.owner == 'hook_design'

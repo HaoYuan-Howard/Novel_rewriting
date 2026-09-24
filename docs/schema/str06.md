@@ -99,22 +99,33 @@ provenance、freshness 与归档事务归 F7a，不能把路径可用当作设�
 （hook_writer／hook_context／hook_design／naming／assembly／name_structure）已由
 AST 测试对真实模块执行（`tests/test_str06_hook.py`），不是纸面检查。
 
-## 正式设施接入与历史采用（F7 目标，待实施）
+## 正式设施接入与历史采用（候选契约与设施接线已落；历史采用待 F7a 第三步）
 
-候选节点、产物 schema／版本及 workflow／manifest／execution epoch 身份在接设施前
-定义，包含节点生命周期、付费属性、flags、产物与唯一 writer、免费复检及恢复入口。
-候选契约作为显式依赖传入运行上下文、Store、许可和预算设施；生产入口继续使用现役
-注册表。候选身份不借旧节点获得许可，不绕过版本校验，不修改全局注册表以启动隔离链。
-F8 激活同一套已验收定义为唯一现役契约，临时 adapter 随接管完成退役。
+候选节点、产物 schema／版本及 workflow／manifest／execution epoch 身份已前置定义
+（`contracts/schema/str06/candidates.py`，F7a 第一步）：节点表含 paid、lifecycle、
+flags、produces、免费复检与恢复入口（compile／assemble 以 `executor_content_limit=0`
+结构性禁付）；产物表含家族、schema 版本与唯一执行 writer（模型自带
+`contract_version` 的表值逐字对账）；epoch 身份支持首开、复用、code_drift／
+contract_drift／repair 滚动，假漂移拒绝，滚动不重置累计额度。候选契约作为显式依赖
+传入运行上下文、Store、许可和预算设施（`novel/llm/str06_run_context.py` 与
+`Str06Repository(root, context)`）；生产入口继续使用现役注册表。候选身份不借旧节点
+获得许可，不绕过版本校验，不修改全局注册表以启动隔离链。F8 激活同一套已验收定义为
+唯一现役契约，临时 adapter 随接管完成退役。
 
-Repository 接家族路径、完整相对路径来源账键、provenance／freshness、INVALID／_rounds
-和原子提交；付费边界接唯一 ledger、工作单元与书级额度，保持缓存先于新调用授权，
-pending／unknown 不自动重购或释放额度。F5e 原根只读保存，在独立候选输出根初始化
-新 workflow；通过登记的显式历史采用核对原请求、响应、来源摘要与原成本关联。
-同请求身份的合法结果可零新购采用，身份不匹配、证据损坏或状态未知时明确阻断。
-owner patch 保留原基线及修订来源；历史采用不复制缓存、不续旧 session、不重复计原实付。
-原证据字节保持不变，同输入交付文本字节一致；正式封装和 provenance 单独验证，
-不要求新旧元数据文件逐字相同。此通路尚待 F7a 实现，不能据本节原地升级 F5e 根。
+Repository 已接家族路径、完整相对路径来源账键、provenance／freshness、INVALID／_rounds
+和原子提交（F7a 第二步）：provenance 复用 `contracts.schema.common` 同一套模型，
+与正式 ctx 同构同闸；freshness 由 `prov.freshness` 复算，明确 stale 拒绝、无
+provenance 保持 unknown；断言与视图走不记账的 `inspect` 读口。付费边界已接唯一
+ledger、工作单元与书级额度：新购首 wire 前经 `WorkUnitBudget.reserve` 取内容轮，
+响应同步进工作单元账，ledger 行带真实候选节点 id 与 sid；缓存先于新调用授权，
+pending／unknown 不自动重购或释放额度；未采纳轮在下一次 reserve 前关闭且拒绝证据
+保留。F5e 原根只读保存，在独立候选输出根初始化新 workflow（`runtime/
+candidate_workflow.json`：源输入身份变化与契约表漂移关闭式拒绝）；通过登记的显式
+历史采用核对原请求、响应、来源摘要与原成本关联。同请求身份的合法结果可零新购采用，
+身份不匹配、证据损坏或付费状态未知时明确阻断。owner patch 保留原基线及修订来源；
+历史采用不复制缓存、不续旧 session、不重复计原实付。原证据字节保持不变，同输入交付
+文本字节一致；正式封装和 provenance 单独验证，不要求新旧元数据文件逐字相同。历史
+采用通路尚待 F7a 第三步实现，不能据本节原地升级 F5e 根。
 
 引擎按 Stage2 source／names、Stage4 preserve／body_design／hook_design／bind／compile、
 Stage5 body／hook、Stage7 naming／assemble 拆 owner runner；复检用 `--check-only`。

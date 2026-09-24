@@ -27,6 +27,7 @@ from typing import Literal
 from pydantic import Field, model_validator
 
 from contracts.schema.base import StrictModel
+from contracts.schema.common import FreeProvenance, LlmProvenance
 
 __all__ = ['ChapterLengthDisclosure', 'ChapterReceipt']
 
@@ -70,6 +71,9 @@ class ChapterReceipt(StrictModel):
     #: 重写额度耗尽后按偏差最小提交的带外候选必须显式披露，不得静默当带内。
     length_disclosed: bool = False
     semantic: Literal['unverified'] = 'unverified'
+    #: 来源账（F7a）：盘上键 `_provenance`；`exclude=True` 保 prompt 字节不变。
+    provenance: FreeProvenance | LlmProvenance | None = Field(
+        default=None, alias='_provenance', exclude=True)
 
     @model_validator(mode='after')
     def _hash_charset(self) -> 'ChapterReceipt':

@@ -22,6 +22,7 @@ from typing import Literal
 from pydantic import Field, model_validator
 
 from contracts.schema.base import StrictModel
+from contracts.schema.common import FreeProvenance, LlmProvenance
 from contracts.schema.str06.context import WriterContext
 from contracts.schema.str06.state import SurfaceRelease
 
@@ -88,6 +89,8 @@ class WriterBookIR(StrictModel):
     contract_version: Literal['str06-rc4'] = 'str06-rc4'
     book_brief: BookBrief
     chapters: tuple[ChapterIR, ...] = Field(min_length=1)
+    provenance: FreeProvenance | LlmProvenance | None = Field(
+        default=None, alias='_provenance', exclude=True)
 
     def chapter(self, ordinal: int) -> ChapterIR:
         return next(c for c in self.chapters if c.chapter_ordinal == ordinal)
