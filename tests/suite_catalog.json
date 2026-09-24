@@ -1608,6 +1608,20 @@
         "test_full_pipeline_to_delivery_and_free_recovery": "stage",
         "test_book_call_ceiling_stops_generation": "stage"
       }
+    },
+    "tests/test_str06_f7c_remainder.py": {
+      "layer": "unit_contract",
+      "stages": [
+        "stage2",
+        "stage4",
+        "stage5",
+        "stage7"
+      ],
+      "cases": {
+        "test_unauthorized_stop_then_authorized_rerun_pays_exactly_once": "stage",
+        "test_paid_artifact_replay_after_lost_commit_is_free": "stage",
+        "test_invalid_twin_rerun_archives_rounds_without_rebuy": "stage"
+      }
     }
   },
   "version": 1

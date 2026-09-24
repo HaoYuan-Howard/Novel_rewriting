@@ -57,10 +57,10 @@ F3b 第二本 artifact-only smoke 撤销，不再作为本轮待办或付费点�
 
 ## 当前状态与下一步
 
-**下一批：F7c 余下职责（免费）。F7c 第一步（正式 Stage1 输入、配置正式来源、
-预算派生、hook_copy 边界）已于 2026-09-24 完成（零模型调用）。其后顺序：
-F7c 余项 → F7d–F7e → F8 → F9。**
-F4R、F6、F5 已完成各自登记范围；F7–F9 均待实施，本次文档修订不开始迁移实现。
+**下一批：F7d（免费）。F7c 余项（public_state_ref 三反例、analyze receipt／
+draft repair 审计）已于 2026-09-25 完成（零模型调用）。其后顺序：
+F7d–F7e → F8 → F9。**
+F4R、F6、F5 已完成各自登记范围；F7a–F7c 已完成（F7d–F7e 待实施），F8–F9 待实施。
 当前隔离链版式为 `str06-rc4`（F5 起 Design/WriterIR/章级回执新形状；Hook、NameMap
 等未变形状契约仍为 rc3 标签）；下表是既有证据摘要，不是本次重新运行或整书质量结论。
 
@@ -313,10 +313,27 @@ F5a–F5d 已闭合按章成文的契约、引擎与免费验证，F5e 已完成
     consumption 的新链消费者全部走名称投影（F6 已落）；旧消费者（`novel/consumption.py`
     三处、`novel/core/naming.py` 首字猜姓）只服务旧链，随旧链退役归 F7e／F8c 登记。
     真书证据：候选根 naming 11 处替换零残留（F7a–F7c canary）。
-  - [ ] **F7c 余项 · public_state_ref 反例与 repair 审计**：public_state_ref 的身份隔离／
-    跨章携入／状态解除三反例（新链由 IR 称谓释放位置表与公共投影接管，需补反例）；
-    审计 analyze receipt／draft repair，防重复付费、重复实体或漏补提交。
-    **验收与盘面**：反例通过且保留精确 owner，不把 F7a 同输入重放证明扩称为新输入可采用。
+  - [x] **F7c 余项 · public_state_ref 反例与 repair 审计**（2026-09-25 完成，
+    零模型调用）：旧 Blueprint `public_state_ref` 三项职责由新链 IR 称谓释放
+    位置表与公共投影接管，`tests/test_str06_f7c_remainder.py` 15 项免费反例：
+    ① 身份隔离——participants 不等于揭示（fu_jun 全程参与 s01 但无释放面）、
+    未揭示称谓逐个独立释放不提前合并（苏姑娘／苏芸娘分拍释放）、未释放专名是
+    硬失败（`[withheld_literals]` 重写耗尽后无合法候选即停止，不披露放行；
+    只用已释放称谓的稿同尺接受）；② 跨章携入——第 2 章引入不向前携入（第 1 章
+    释放集／禁用面／场景 IR 均不含陆大哥，释放后退出禁用面，全书未引入的陆兄
+    两章都禁用）、只改后章引入时前章释放集与第 1 章场景 IR 释放面不变、
+    release_schedule 记最早引入章、同章后场引入不向前场携入；③ 状态解除——
+    unset 以显式解除标记到达消费面（status=unset、value=None，不残留 stale 值、
+    不静默消失），`value_of` 返回 None，且解除是真实输入变化（s03 消费身份随
+    之窄失效）；unknown 仍阻断消费，两态不相混（I-42）。analyze receipt／draft
+    repair 审计：同请求身份只购一次（二次 ask 零 token 缓存行、轮次不翻倍）、
+    采用重放幂等（记录字节不变、候选根零实付行）、候选根已购行被篡改拒绝采用
+    也拒绝重购、未授权停在 owner 零调用零账不建额度且授权后同根重跑 12 次新购
+    与全新运行一致、付费产物漏补提交后单节点重放零新购业务内容逐字一致、同指纹
+    再次拦下旧孪生先进归档再覆写且正式位不落污染稿。旧消费者退役登记归 F7e。
+    **验收与盘面**：本批 15/15 通过；str06 定向套件（15 文件含 layering／
+    test_selection）286/286、付费设施（book_budget／execution_permit／work_units）
+    73/73 全绿，零新增失败；`tests/suite_catalog.json` 同步登记（三例 stage 层）。
   - [ ] **F7d · API／Views／前端候选面**：纯函数 views 覆盖 Characters v4、Blueprint v12、
     graph／binding（含 Hook、导演说明、章目的）、WriterBookIR 导航、章正文与章回执
     （机械范围、语义未评、篇幅披露）、Hook 与回执、NameMap v5、成书下载与 manifest、
@@ -373,9 +390,9 @@ F5a–F5d 已闭合按章成文的契约、引擎与免费验证，F5e 已完成
 
 | 对象／旧来源 | 关闭条件与验收归属 |
 |---|---|
-| analyze 联合首抽及 receipt／draft repair（原 STR-03-S2-CH） | F7c 迁移恢复不重复付费或造实体的反例；F7e 登记旧消费者，F8b 新书默认新链、F8c 核对旧消费者清零后删除。现役默认 v3 不是新链验收证据 |
+| analyze 联合首抽及 receipt／draft repair（原 STR-03-S2-CH） | F7c 已迁反例：同请求身份只购一次、采用重放幂等零实付、已购行篡改拒绝采用与重购、未授权停 owner 零账、漏补提交免费重放、同指纹再拦旧孪生先归档（test_str06_f7c_remainder.py）；F7e 登记旧消费者，F8b 新书默认新链、F8c 核对旧消费者清零后删除。现役默认 v3 不是新链验收证据 |
 | 内存 `PlanChapters` | F5 的 WriterIR 在隔离链接管；F7b/F7d 闭合 runner 与消费面，保留机械守卫职责，F8c 删除类与消费者。正式 plan_chapters 产物早已退役，只保留拒读登记 |
-| 旧 Blueprint `public_state_ref` | F7c 由新 IR／公共投影接管公开身份与表面角色职责，迁移身份隔离、跨章携入、状态解除三类反例；F8c 随旧链删除，不能凭样例全 null 去掉职责 |
+| 旧 Blueprint `public_state_ref` | F7c 已由新 IR／公共投影接管并迁三反例：身份隔离（participants≠揭示、未释放面独立释放不提前合并、未释放专名硬失败不披露）、跨章携入（后章／同章后场引入不向前携入、前章释放集对后章编辑稳定）、状态解除（unset 显式携带、非 stale／非静默消失／非 unknown 阻断）；F8c 随旧链删除，不能凭样例全 null 去掉职责 |
 | `name_distinctiveness` | F6 的名称结构能力由 F7c 接通 Stage5 的 Book.names/name_stems、consumption 的 stage5_characters/stage7_characters、core.naming 的 name_stems/attested_surname；F8c 核对旧消费者清零后删除，不复活首字猜姓 |
 | `test_mechanical_aggregate_crash_replays_exact_tail_without_wire` | F7c 迁为 binding-only 崩溃恢复反例，验证精确补尾且不重购；F8c 清除旧 skip 与替代后的旧夹具 |
 | `test_a_owned_failure_stops_first_round_without_more_wire`、`test_same_fingerprint_twice_terminates_early` | F7c 迁入 Binding INVALID＋typed witness 路径，保留 owner 停止和相同指纹熔断职责；F8c 删除旧 skip，不能直接丢弃反例 |
@@ -486,6 +503,7 @@ Character Continuity、Natural Progression、Local Prose Coherence；未评或�
 | `tests/test_str06_contracts.py`、`tests/test_str06_invariants.py`、`tests/test_str06_fold_guard.py` | 已落的新链契约、跨产物、章级回执绑定、窄失效、交付与 Fold／Guard 反例入口 |
 | `tests/test_str06_source.py`、`tests/test_str06_target.py`、`tests/test_str06_execution_ir.py`、`tests/test_str06_repairs.py`、`tests/test_str06_workflow.py` | Source／Target／IR／修复与隔离入口回归，选测按真实影响，不凭文件名宣布全链通过 |
 | `tests/test_str06_body.py` | F5 按章成文链免费反例入口：章预算分配、双视图 IR 同源、renderer 分层与 lineage 剥离、机械检查全分支、重写与候选选择、回执链核对、fake transport 全链到交付＋零新购恢复＋IR 失效边界 |
+| `tests/test_str06_f7c_remainder.py` | F7c 余项反例入口：public_state_ref 接管三反例（身份隔离／跨章携入／状态解除，IR 释放位置表与公共投影）与 analyze receipt／draft repair 审计（不重复付费、不造重复实体、不漏补提交）；旧消费者退役登记归 F7e |
 
 后续实现必须保留的知识：
 
