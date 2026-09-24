@@ -113,6 +113,17 @@ class CandidateRunContext:
 
     # ── 来源账 ─────────────────────────────────────────────────────────────
 
+    def begin_run(self) -> None:
+        """一次链执行开始：清空来源边窗口、继承输入与采用台账。
+
+        跨 run 的继承会把上一轮末尾的输入边写进下一轮的第一份产物——那些上游
+        在下一轮里可能还没生成，freshness 复算立刻误判 stale。轮内继承（同一份
+        付费产物的第二个 key）保留，由 begin_run 的边界保证它不跨轮泄漏。
+        """
+        self._edges.clear()
+        self._last_inputs.clear()
+        self._adoptions.clear()
+
     def record_edge(self, rel: str, file_fp: str) -> None:
         """登记一条输入边：键 = 完整相对路径（家族内不塌两级）。"""
         self._edges[rel] = InputEdge(file=file_fp, consumed=None)
