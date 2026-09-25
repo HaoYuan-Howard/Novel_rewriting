@@ -83,190 +83,6 @@ class _LanePlan:
     verified_skipped_nodes: tuple[str, ...]
 
 
-def _stage2_commit_recovery_surface(
-    snapshot: OperatorReadSnapshot,
-) -> tuple[_LanePlan, InboxView] | None:
-    """Stage2 action/terminal 必须在 approvals/reviewer workpack 读取前分流。"""
-    item = queue.stage2_core_recovery_item(snapshot.base, snapshot.sid, code=snapshot.code)
-    if item is not None:
-        lane = _LanePlan(state='blocked' if item.waiting_on else 'ready', action=_action(
-            base=os.fspath(snapshot.base), sid=snapshot.sid, code=snapshot.code,
-            surface_seal=snapshot.surface_seal, overview=snapshot.overview, item=item),
-            verified_skipped_nodes=())
-        counts = {kind: 0 for kind in INBOX_KIND}
-        if item.waiting_on:
-            draft_repair = item.waiting_on == queue.WAITING_ON_ANALYZE_DRAFT_REPAIR
-            kind = ('repairable' if draft_repair or item.waiting_on == queue.WAITING_ON_ANALYZE_RESPONSE_REPAIR
-                    else 'human_only')
-            counts[kind] = 1
-            return lane, InboxView(items=[InboxItem(kind=kind, stage='stage2', chapter=None,
-                rule='analyze_owner_draft_repair' if draft_repair else 'analyze_response_repair', what=item.why,
-                how=('原 owner 草稿编译失败：自动/恢复路径使用 '
-                     '`--emit-analyze-draft-template` / `--repair-analyze-draft` / '
-                     '`--recover-analyze-draft`（人工 HTTP 写面已退役）'
-                     if draft_repair else
-                     '结构化响应修复由 agent/自动恢复路径经 response-repair 封存后 '
-                     '`--recover-analyze-run` 免费恢复（人工 Stage 页提交面已退役）'
-                     if kind == 'repairable' else '保留原响应、费用与 owner，先核对 ledger/会话审计再决定；'
-                     '付费状态未知时不重发付费请求'))],
-                counts=counts, total=1, wontfix=0)
-        return lane, InboxView(items=[], counts=counts, total=0, wontfix=0)
-    recovery_flags = state.stage2_edit_commit_recovery_flags(
-        snapshot.base, snapshot.sid, code=snapshot.code)
-    action_kind = (
-        'revalidate' if recovery_flags and recovery_flags[0] == '--revalidate'
-        else 'apply_edit' if recovery_flags else None
-    )
-    if action_kind is None:
-        return None
-    if action_kind == 'apply_edit':
-        assert recovery_flags is not None
-        flags = list(recovery_flags)
-        waiting_on = queue.WAITING_ON_STAGE2_EDIT_COMMIT
-        why = (
-            'Stage2 reviewed-edit prepared commit 尚未逐件收敛；只允许 Executor '
-            '重放 canonical edit，0 wire、0 Commander')
-        rule = 'global_edit_prepared_commit'
-        what = (
-            'reviewed GlobalEdit 的正式 Global/review/projection 提交被硬中断，'
-            '盘上 prepared journal 可证明每份仍为 baseline 或 target')
-        how = (
-            'Supervisor 将以 stage2.global --apply-edit '
-            'stage2/global_edit.json 交给 Executor 确定性补尾；不会调用模型')
-    else:
-        assert recovery_flags is not None
-        flags = list(recovery_flags)
-        waiting_on = queue.WAITING_ON_STAGE2_EDIT_REVALIDATE
-        why = (
-            'Stage2 Global revalidate 已留下可恢复的 exact 审计身份；'
-            '只允许 Executor 0-wire 逐字重放提升/补尾')
-        rule = 'global_edit_revalidation_commit'
-        what = (
-            'prepared journal 已冻结 exact actor/reason，尚未收敛的 '
-            'revalidate 提交由 Executor 免费补尾')
-        how = 'Supervisor 将逐字复用 journal 冻结的 actor/reason 重放 stage2.global --revalidate'
-    item = QueueItem(
-        sid=snapshot.sid,
-        node='stage2.global',
-        flags=flags,
-        steps=[],
-        why=why,
-        waiting_on=waiting_on,
-    )
-    lane = _LanePlan(
-        state='blocked',
-        action=_action(
-            base=os.fspath(snapshot.base), sid=snapshot.sid,
-            code=snapshot.code, surface_seal=snapshot.surface_seal,
-            overview=snapshot.overview, item=item),
-        verified_skipped_nodes=(),
-    )
-    inbox_item = InboxItem(
-        kind='repairable', stage='stage2', chapter=None,
-        rule=rule,
-        what=what,
-        how=how,
-    )
-    counts = {kind: 0 for kind in INBOX_KIND}
-    counts['repairable'] = 1
-    inbox = InboxView(
-        items=[inbox_item], counts=counts, total=1, wontfix=0)
-    return lane, inbox
-
-
-def _stage4_design_repair_commit_recovery_surface(
-    snapshot: OperatorReadSnapshot,
-) -> tuple[_LanePlan, InboxView] | None:
-    """repair/replan prepared 尾窗优先于 stale token 与新 Stage4 审阅。"""
-    from novel.llm import stage4_runs
-
-    ctx = state.readonly_ctx(
-        snapshot.novel_dir, 'stage4.design', snapshot.code)
-    recovery = stage4_runs.inspect_prepared_design_repair_aggregate_recovery(ctx)
-    if recovery is None:
-        return None
-    flags = [
-        '--recover-repair-aggregate', recovery.source_run_id,
-        '--source-journal-sha256', recovery.journal_sha256,
-        '--source-commit-sha256', recovery.commit_sha256,
-    ]
-    item = QueueItem(
-        sid=snapshot.sid,
-        node='stage4.design',
-        flags=flags,
-        steps=[],
-        why=(
-            'Stage4 repair/replan 已封存候选，但 source producer 在 aggregate '
-            'committed 前结束；只允许新 run 0-wire 幂等补尾'),
-        waiting_on=queue.WAITING_ON_STAGE4_DESIGN_REPAIR_COMMIT,
-    )
-    lane = _LanePlan(
-        state='blocked',
-        action=_action(
-            base=os.fspath(snapshot.base), sid=snapshot.sid,
-            code=snapshot.code, surface_seal=snapshot.surface_seal,
-            overview=snapshot.overview, item=item),
-        verified_skipped_nodes=(),
-    )
-    inbox_item = InboxItem(
-        kind='repairable', stage='stage4', chapter=None,
-        rule='design_repair_aggregate_prepared_commit',
-        what=(
-            f'source run {recovery.source_run_id} 的 repair/replan aggregate '
-            f'停在 prepared，正式候选当前为 {recovery.target_state}'),
-        how=(
-            'Supervisor 将用 journal 中 sealed candidate 补齐验证、adoption 与 '
-            'committed；不启动 reviewer 或模型会话'),
-    )
-    counts = {kind: 0 for kind in INBOX_KIND}
-    counts['repairable'] = 1
-    return lane, InboxView(
-        items=[inbox_item], counts=counts, total=1, wontfix=0)
-
-
-def _prepared_delivery_recovery_surface(
-    snapshot: OperatorReadSnapshot,
-    *, item: QueueItem | None = None,
-) -> tuple[_LanePlan, InboxView] | None:
-    """原组提交尾窗先于审批投影；正式文件存在不能掩盖未闭采纳。"""
-    item = item or queue.prepared_delivery_recovery_item(snapshot.base, snapshot.sid, code=snapshot.code)
-    if item is None:
-        return None
-    lane = _LanePlan(
-        state='blocked',
-        action=_action(
-            base=os.fspath(snapshot.base), sid=snapshot.sid, code=snapshot.code,
-            surface_seal=snapshot.surface_seal, overview=snapshot.overview, item=item),
-        verified_skipped_nodes=())
-    kind = ('repairable' if item.waiting_on in {
-                queue.WAITING_ON_PREPARED_DELIVERY}
-            else 'human_only')
-    counts = {key: 0 for key in INBOX_KIND}
-    counts[kind] = 1
-    return lane, InboxView(items=[InboxItem(
-        kind=kind, stage=NODES[item.node].stage, chapter=None, rule='prepared_delivery',
-        what=item.why,
-        how=('按后端当前冻结的原提交恢复动作免费补尾；不构造模型客户端'
-             if kind == 'repairable' else '保留原完成组、成本与采纳记录，核对未知证据；不能重新生成'))],
-        counts=counts, total=1, wontfix=0)
-
-
-def _prepared_commit_recovery_surface(
-    snapshot: OperatorReadSnapshot,
-) -> tuple[_LanePlan, InboxView] | None:
-    """同时检查已登记的 prepared ownership，不按节点顺序猜一份。"""
-    stage2 = _stage2_commit_recovery_surface(snapshot)
-    stage4 = _stage4_design_repair_commit_recovery_surface(snapshot)
-    delivery = _prepared_delivery_recovery_surface(snapshot)
-    pending = [entry for entry in (stage2, stage4, delivery) if entry is not None]
-    if len(pending) > 1:
-        raise ArtifactUnreadable(
-            'operator 同时发现多个阶段的 prepared 提交尾窗；'
-            '两者都可能改写 sealed/current input，不能按节点'
-            '顺序选一份执行')
-    return pending[0] if pending else None
-
-
 def _lane_from_snapshot(
     snapshot: OperatorReadSnapshot, approval_doc: ApprovalDoc,
 ) -> _LanePlan:
@@ -318,25 +134,23 @@ def _require_snapshot_current(snapshot: OperatorReadSnapshot) -> None:
 def _next_from_snapshot(snapshot: OperatorReadSnapshot) -> OperatorNext:
     """只消费一份已冻结快照规划 next，并为 ready 同次铸 execution token。"""
     sid = snapshot.sid
-    recovery = _prepared_commit_recovery_surface(snapshot)
-    if recovery is not None:
-        # partial bundle 上的 approvals/inbox/reviewer workpack 本来就可能因
-        # source mismatch 关闭；prepared journal 是更早、且唯一可执行的事实。
-        lane, inbox = recovery
-    else:
-        # inbox、queue 与审批 currentness 必须共享这一个 invocation 坐标。
-        # 之前这里只复用了 overview，却让每个 gate 单独重跑整仓 code_version；
-        # 一本后期书会在一次 next 内 fork 出二十多个代码时点与 git 子进程。
-        with approvals.read_projection(
-                overview=snapshot.overview, code=snapshot.code):
-            approval_doc = approvals.get(
-                snapshot.base, sid,
-                overview=snapshot.overview, code=snapshot.code,
-                include_spawns=False, operator_projection=True)
-            inbox = inbox_from_snapshot(
-                snapshot, approval_doc=approval_doc,
-                _final_cas_owner=_OPERATOR_FINAL_CAS)
-            lane = _lane_from_snapshot(snapshot, approval_doc)
+    # ⚠ F8b-3（S-05 deprecation）：旧链 prepared 提交尾窗 lane（stage2 edit
+    # commit／stage4 repair aggregate／prepared delivery）随旧链退役拆除——
+    # 这些 journal 只能由旧链节点写出，生产入口已拒识；新链恢复是候选 runner
+    # 自身续跑（F7c），不再经 operator 发布补尾 blocker。
+    # inbox、queue 与审批 currentness 必须共享这一个 invocation 坐标。
+    # 之前这里只复用了 overview，却让每个 gate 单独重跑整仓 code_version；
+    # 一本后期书会在一次 next 内 fork 出二十多个代码时点与 git 子进程。
+    with approvals.read_projection(
+            overview=snapshot.overview, code=snapshot.code):
+        approval_doc = approvals.get(
+            snapshot.base, sid,
+            overview=snapshot.overview, code=snapshot.code,
+            include_spawns=False, operator_projection=True)
+        inbox = inbox_from_snapshot(
+            snapshot, approval_doc=approval_doc,
+            _final_cas_owner=_OPERATOR_FINAL_CAS)
+        lane = _lane_from_snapshot(snapshot, approval_doc)
 
     decision = OperatorNextDecision(
         base=os.fspath(snapshot.base), sid=sid,
@@ -448,16 +262,13 @@ def progress_read_snapshot(
     with readonly_snapshot_memo(novel_dir):
         snapshot = capture_operator_snapshot(base, sid)
         with approvals.read_projection(overview=snapshot.overview, code=snapshot.code):
-            approval_doc = None
-            recovery = _prepared_commit_recovery_surface(snapshot)
-            if recovery is not None:
-                lane, _inbox = recovery
-            else:
-                approval_doc = approvals.get(
-                    snapshot.base, sid,
-                    overview=snapshot.overview, code=snapshot.code,
-                    include_spawns=False, operator_projection=True)
-                lane = _lane_from_snapshot(snapshot, approval_doc)
+            # ⚠ F8b-3（S-05）：旧链 prepared 提交尾窗 lane 已随 operator 拆除，
+            # 进度前沿与 next_action 消费同一条 lane 推导。
+            approval_doc = approvals.get(
+                snapshot.base, sid,
+                overview=snapshot.overview, code=snapshot.code,
+                include_spawns=False, operator_projection=True)
+            lane = _lane_from_snapshot(snapshot, approval_doc)
             yield snapshot.overview, _frontier_view(lane, approval_doc)
             _require_snapshot_current(snapshot)
 

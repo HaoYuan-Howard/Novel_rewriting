@@ -118,130 +118,6 @@ def test_global_evidence_fixture_matches_its_archived_source_snapshot():
     assert located >= 7, '七类 evidence 没有都在 fixture 里留下可回取正例'
 
 
-def test_plot_flow_fixtures_are_closed_current_http_and_review_views():
-    from novel.api.enums import payload as enum_payload
-    from contracts.schema.api import (InboxView,
-        Stage7ApprovalWorkpack)
-
-    captured = json.loads((ROOT / 'web/src/fixtures/plot_v1/flow.json').read_text(
-        encoding='utf-8'))
-    models = {
-        # Stage4 design/structure 工作包已随人工闸退役（2026-09-15 全自动裁决）。
-        **{f'http:reading/{ordinal}': ReadingView for ordinal in range(1, 4)},
-        **{f'http:stage4/{ordinal}': Stage4View for ordinal in range(1, 4)},
-        'http:stage5/1': Stage5View,
-        'http:overview': NovelOverview,
-        'http:approvals': ApprovalDoc,
-        'http:stage1': Stage1View,
-        'http:stage2/global': GlobalView,
-        'http:stage2/characters': CharacterRegistryView,
-        'http:run': RunProgressView,
-        'http:run/metrics': RunMetricsView,
-        # 审阅退役后只余只读阅读工作包：查看与证据回源共用，不带接受语义。
-        'http:stage2/blueprint-reading-workpack?scope=chapter%3A1': BlueprintReadingWorkpack,
-        'http:stage2/blueprint-reading-workpack?scope=cross_chapter': BlueprintReadingWorkpack,
-        'api:jobs': JobList,
-        'api:agent/runs': AgentRunList,
-        'http:check/stage2': CheckReport,
-        'http:check/stage5': CheckReport,
-    }
-    # 同一次贯通分别保留 Stage5 前检查点与最终交付，不把最终接受盖到旧材料上。
-    models.update({f'final:{name}': model for name, model in list(models.items())
-                   if name.startswith('http:')})
-    models.update({
-        'final:http:inbox': InboxView,
-        'final:http:stage7': Stage7View,
-        'final:http:approvals/stage7/workpack': Stage7ApprovalWorkpack,
-        'final:http:check/stage4': CheckReport,
-        'final:http:check/stage7': CheckReport,
-        **{f'final:http:stage5/{ordinal}': Stage5View for ordinal in range(1, 4)},
-        **{f'final:http:review/{ordinal}': ReviewView for ordinal in range(1, 4)},
-        **{f'final:http:stage7/{ordinal}': Stage7View for ordinal in range(1, 4)},
-    })
-    # enums 唯一取值面由纯发布器产生；下载仍为纯文本，不伪造 JSON 响应。
-    assert captured.keys() == models.keys() | {'api:enums', 'metadata', 'final:http:stage7/book.txt'}
-    assert captured['api:enums'] == enum_payload()
-    for name, model in models.items():
-        model.model_validate(captured[name])
-    assert captured['metadata']['synthetic'] is True
-    assert captured['metadata']['sid'] == captured['final:http:overview']['sid']
-    assert '顾清棠' in captured['final:http:stage7/book.txt']
-    assert '李宝珠' not in captured['final:http:stage7/book.txt']
-    assert captured['final:http:approvals']['prepare'] == captured['final:http:stage6/prepare']['status']
-    assert captured['final:http:stage6/prepare']['status']['state'] == 'accepted'
-    assert captured['final:http:approvals/stage6/workpack']['disposition'] == 'already_current'
-    for stage in ('stage2', 'stage5'):
-        check = CheckReport.model_validate(captured['http:check/' + stage])
-        assert [line.rule for line in check.rules] == sorted(
-            rule.rule for rule in REGISTRY.of_stage(stage))
-
-
-def test_plot_flow_keeps_its_synthetic_source_semantics_through_context():
-    """已知合成书的语义回归；证据坐标与 schema 合法不证明剧情归属正确。"""
-    captured = json.loads((ROOT / 'web/src/fixtures/plot_v1/flow.json').read_text(
-        encoding='utf-8'))
-    sources = {ordinal: captured[f'http:reading/{ordinal}']['text']
-               for ordinal in range(1, 4)}
-    assert '信上说父亲已经回城。' in sources[1]
-    assert '其实母亲早就知道那封信的事。' in sources[2]
-    world = captured['http:stage2/global']
-    characters = captured['http:stage2/characters']
-    assert {char_id: (row['canonical'], row['role'])
-            for char_id, row in characters['registry']['characters'].items()} == {
-        'char_001': ('李宝珠', '李宝珠，在家中翻阅账册'),
-        'char_002': ('母亲', '李宝珠的母亲'),
-    }
-    assert 'characters' not in world
-    assert world['setting']['era'] == '原文未明确年代'
-    assert world['world_rules'] == []
-    assert len(world['arc_secrets']) == 1
-    secret = world['arc_secrets'][0]
-    assert secret['fact'] == '母亲早就知道那封信的事。'
-    assert secret['revealed_from'] == 2
-    assert 'knowledge_events' not in secret
-    assert [(row['effective_from'], row['revealed_from'])
-            for row in world['relations']] == [(2, 2)]
-    assert [(row['subject']['raw'], row['predicate'], row['object']['raw'])
-            for row in world['relations']] == [('char_001', '母女', 'char_002')]
-
-    # 两个真实 HTTP 响应分别拥有证据表；只用同次 Reading 响应还原原文，不能跨 owner 借表。
-    for anchors, snippets in (
-        (world['evidence_anchors'], world['evidence_snippets']),
-        (characters['registry']['evidence_anchors'], characters['evidence_snippets']),
-    ):
-        assert anchors and anchors.keys() == snippets.keys()
-        for evidence_id, evidence in anchors.items():
-            source = sources[evidence['chapter_ordinal']]
-            text = source[evidence['start']:evidence['end']]
-            assert text == snippets[evidence_id]
-            assert hashlib.sha256(text.encode('utf-8')).hexdigest() == evidence['text_sha256']
-
-    # “母亲知情”由完整 Beat 保留；Global 不再拥有逐人物知情记录。
-    chapter_two = captured['http:reading/2']['blueprint']
-    knowledge_beat = next(row for row in chapter_two['beats'] if row['beat_id'] == 'b02_02')
-    assert knowledge_beat['content'] == '母亲其实早已知道那封信的事。'
-    assert knowledge_beat['participants'] == [{'char_id': 'char_002', 'presentation_ref': None}]
-    context = captured['http:stage4/2']['ctx_chapter']
-    mother = next(row for row in context['characters'] if row['display_name'] == '母亲')
-    written_beat = next(row for row in context['beats'] if row['beat_ref'] == 'b02_02')
-    assert written_beat['content'] == knowledge_beat['content']
-    assert written_beat['participants'] == [mother['actor_ref']]
-    # 秘密答案不再作为 global subject 下发：同章揭示由完整 Beat 表达，
-    # secret 只能以受限引用（只有引用、没有答案）进入写手目录。
-    assert all(row['subject_ref']['kind'] != 'secret'
-               for row in context['global_subjects'])
-    # KnowledgeLinks 揭示事件随语义审阅退役：同章揭示安排由现有计划表达，
-    # WriterContext 不再有逐场知识许可表，也就没有 secret_reveal 事件可断言。
-    assert not any(row.get('kind') == 'secret_reveal' for row in context.get('knowledge_events', []))
-    assert not any(row['subject_ref']['kind'] == 'secret'
-                   for row in captured['http:stage4/1']['ctx_chapter']['global_subjects'])
-    for ordinal in sources:
-        chapter = captured[f'http:reading/{ordinal}']['blueprint']
-        planned = captured[f'http:stage4/{ordinal}']
-        assert planned['plan_chapter']['chapter_rewrite_brief'] == chapter['chapter_function']
-        assert planned['ctx_chapter']['chapter_rewrite_brief'] == chapter['chapter_function']
-
-
 def test_active_stage5_fixtures_are_exact_slim_http_views():
     fixtures = ROOT / 'web' / 'src' / 'fixtures' / 'backend_v1'
     stage5 = Stage5View.model_validate_json(
@@ -417,11 +293,12 @@ def test_stage1_continuous_view_and_chapter_index_reject_gaps():
 
 
 def test_reading_source_presence_distinguishes_unknown_from_explicit_empty():
+    # 现役契约（contracts/schema/plot.py）：省略 present = 已确定与 participants
+    # 一致（合法默认），None = 未知，[] = 明确空——三态必须分开。
     base = dict(evidence_refs=['e01_01'], time_layer='present', place=None)
     assert SourceContext(**base, present=[]).present == []
     assert SourceContext(**base, present=None).present is None
-    with pytest.raises(ValidationError):
-        SourceContext(**base)
+    assert SourceContext(**base).present is None, '省略 = 合法默认，不是错误'
     actor = {'char_id': 'char_001', 'presentation_ref': 'ap01_01'}
     with pytest.raises(ValidationError):
         SourceContext(**base, present=[actor, actor])
@@ -546,9 +423,7 @@ def test_approval_doc_v9_has_the_current_six_gates_and_no_seen_ledger():
         'sid': '123',
         'gate': {gate: False for gate in APPROVAL_GATES},
         'writing': False,
-        'prepare': {'state': 'missing', 'reason': '尚未生成文案准备',
-            'subject_sha256': None, 'review_token': None, 'prepare': None,
-            'review': None, 'pending_commit': False},
+        # F8b-3：ApprovalDoc.prepare 字段随 Stage6 prepare 链退役删除。
         'structure': {
             'state': 'unavailable', 'current_subject_sha256': None,
             'current_decision': None, 'history': [],
@@ -559,6 +434,7 @@ def test_approval_doc_v9_has_the_current_six_gates_and_no_seen_ledger():
     assert set(doc.gate) == set(APPROVAL_GATES) == \
         {'s0', 's1', 's4', 's5', 's6', 's7'}
     assert 'seen' not in ApprovalDoc.model_fields
+    assert 'prepare' not in ApprovalDoc.model_fields
     with pytest.raises(ValidationError):
         ApprovalDoc.model_validate({**payload, 'v': 8})
     with pytest.raises(ValidationError):

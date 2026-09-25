@@ -11,7 +11,7 @@ import copy
 import pytest
 from pydantic import ValidationError
 
-from contracts.artifacts import STAGE4_BLIND_CHAPTER_EDIT
+from contracts.artifacts import RETIRED_ARTIFACT_PATHS, STAGE4_BLIND_CHAPTER_EDIT
 from contracts.invariants import (
     BLIND_ALIAS_ALGORITHM, DESIGN_REVIEW_CONTRACT,
     LEGACY_V3_DESIGN_REVIEW_CONTRACT,
@@ -76,8 +76,7 @@ def _truth(*, ordinal: int = 1) -> dict[str, object]:
     return {
         'chapter_ordinal': ordinal,
         'chapter_function': '建立回应关系',
-        'characters': [{'alias': OBSERVER,
-            'surfaces': ['来访者'], 'role': '敲门求见的人'}],
+        'characters': [{'alias': OBSERVER, 'surfaces': ['来访者']}],
         'beats': [
             {'alias': A, 'content': '她敲门。', 'participant_aliases': [OBSERVER]},
             {'alias': B, 'content': '对方回应。', 'participant_aliases': [OBSERVER]},
@@ -320,7 +319,13 @@ def test_strategy_replan_has_typed_cumulative_feedback_and_accepted_constraints(
             placeholder=False, decision='request_replan', reason='策略需重做。')
 
 
-def test_complete_chapter_edit_request_is_registered_v3_and_ordinal_bound():
+def test_complete_chapter_edit_request_is_retired_with_the_old_chain():
+    """整章人工编辑面随旧链退役（F8a）：产物不再是现役 spec，只读解码保留。
+
+    人工写回面已随全自动单模式整族退役（F8b-2 edits 路由族同批）；模型仍可
+    解码历史盘面，但 `stage4/blind_chapter_edit.json` 已入 RETIRED_ARTIFACT_PATHS
+    （拒读、拒版本），不得作为新链准入条件复活。
+    """
     payload = {
         'actor': 'reviewer', 'reason': '修正动作与台词回应关系。',
         'review_token': 's4er1_' + '1' * 64,
@@ -328,14 +333,9 @@ def test_complete_chapter_edit_request_is_registered_v3_and_ordinal_bound():
         'chapter': _chapter(candidate=False),
     }
     request = BlindChapterEditRequest.model_validate(payload)
-    spec = ARTIFACT_SPECS[STAGE4_BLIND_CHAPTER_EDIT]
-    assert spec.model is BlindChapterEditRequest
-    assert spec.current_version == 3
     assert request.chapter.output_ordinal == 1
     assert set(request.model_dump()) == {
         'actor', 'reason', 'review_token', 'output_ordinal', 'chapter'}
 
-    drifted = copy.deepcopy(payload)
-    drifted['output_ordinal'] = 2
-    with pytest.raises(ValidationError, match='output_ordinal'):
-        BlindChapterEditRequest.model_validate(drifted)
+    assert STAGE4_BLIND_CHAPTER_EDIT not in ARTIFACT_SPECS
+    assert STAGE4_BLIND_CHAPTER_EDIT == RETIRED_ARTIFACT_PATHS['stage4.blind_chapter_edit']

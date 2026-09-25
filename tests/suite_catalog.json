@@ -384,23 +384,6 @@
       "layer": "unit_contract",
       "stages": []
     },
-    "tests/test_delivery.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage7"
-      ]
-    },
-    "tests/test_delivery_modes.py": {
-      "layer": "regression",
-      "stages": [
-        "stage0",
-        "stage1",
-        "stage2",
-        "stage4",
-        "stage5",
-        "stage7"
-      ]
-    },
     "tests/test_docs_references.py": {
       "layer": "unit_contract",
       "stages": []
@@ -429,12 +412,6 @@
     "tests/test_fixture_registry.py": {
       "layer": "unit_contract",
       "stages": []
-    },
-    "tests/test_frozen_stage2_v6_recovery.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage2"
-      ]
     },
     "tests/test_frozen_tree.py": {
       "layer": "unit_contract",
@@ -1049,12 +1026,6 @@
         "test_relation_window_is_rejected_before_mutating_the_caller": "stage"
       },
       "layer": "unit_contract",
-      "stages": [
-        "stage2"
-      ]
-    },
-    "tests/test_stage2_uploaded_flow.py": {
-      "layer": "stage",
       "stages": [
         "stage2"
       ]

@@ -9,7 +9,6 @@ from types import MappingProxyType, SimpleNamespace
 
 import pytest
 
-from tests.factories import missing_prepare_state
 from pydantic import ValidationError
 
 from contracts.invariants import INBOX_KIND, NODES, OPERATOR_NEXT_STATES, RESUME_VERDICTS
@@ -71,81 +70,6 @@ def _blocked(node: str, waiting_on: str) -> QueueItem:
         why=f'在等 {waiting_on}', waiting_on=waiting_on)
 
 
-@pytest.mark.parametrize(
-    ('has_stage2', 'has_stage4', 'expected'),
-    [
-        (True, False, 'stage2'),
-        (False, True, 'stage4'),
-        (False, False, None),
-    ],
-)
-def test_prepared_recovery_probe_selects_only_the_unique_owner(
-        monkeypatch, tmp_path, has_stage2, has_stage4, expected):
-    snapshot = _snapshot(tmp_path)
-    stage2 = object() if has_stage2 else None
-    stage4 = object() if has_stage4 else None
-    monkeypatch.setattr(
-        O, '_stage2_commit_recovery_surface', lambda _snapshot: stage2)
-    monkeypatch.setattr(
-        O, '_stage4_design_repair_commit_recovery_surface',
-        lambda _snapshot: stage4)
-
-    got = O._prepared_commit_recovery_surface(snapshot)
-
-    assert got is ({'stage2': stage2, 'stage4': stage4}.get(expected))
-
-
-def test_prepared_recovery_probe_refuses_stage2_and_stage4_dual_ownership(
-        monkeypatch, tmp_path):
-    snapshot = _snapshot(tmp_path)
-    monkeypatch.setattr(
-        O, '_stage2_commit_recovery_surface', lambda _snapshot: object())
-    monkeypatch.setattr(
-        O, '_stage4_design_repair_commit_recovery_surface',
-        lambda _snapshot: object())
-
-    with pytest.raises(ArtifactUnreadable, match='同时发现多个阶段'):
-        O._prepared_commit_recovery_surface(snapshot)
-
-
-def test_stage4_prepared_recovery_operator_action_is_exact_free_blocker(
-        monkeypatch, tmp_path):
-    snapshot = _snapshot(tmp_path)
-    recovery = SimpleNamespace(
-        source_run_id='stage4-source-run',
-        journal_sha256='1' * 64,
-        commit_sha256='2' * 64,
-        target_state='baseline',
-    )
-    monkeypatch.setattr(O.state, 'readonly_ctx', lambda *_args: object())
-    monkeypatch.setattr(
-        O.state, 'resume_verdict', lambda *_args, **_kwargs: ('run', 'repair tail'))
-    monkeypatch.setattr(
-        'novel.llm.stage4_runs.inspect_prepared_design_repair_aggregate_recovery',
-        lambda _ctx: recovery)
-
-    found = O._stage4_design_repair_commit_recovery_surface(snapshot)
-
-    assert found is not None
-    lane, inbox = found
-    assert lane.state == 'blocked'
-    assert lane.action is not None
-    assert lane.action.flags == [
-        '--recover-repair-aggregate', recovery.source_run_id,
-        '--source-journal-sha256', recovery.journal_sha256,
-        '--source-commit-sha256', recovery.commit_sha256,
-    ]
-    assert lane.action.waiting_on == Q.WAITING_ON_STAGE4_DESIGN_REPAIR_COMMIT
-    assert lane.action.paid is False
-    assert inbox.counts['repairable'] == inbox.total == 1
-    frontier = O._frontier_view(lane)
-    assert frontier.node == 'stage4.design'
-    assert frontier.next_handler == 'executor'
-    assert frontier.verified_skipped_nodes == []
-    assert frontier.verified_skipped_count == 0
-    assert frontier.review_states is None
-
-
 def test_precomputed_approval_projection_rejects_cross_book_reuse(tmp_path):
     snapshot = _snapshot(tmp_path)
     wrong = SimpleNamespace(sid='other-book')
@@ -166,7 +90,6 @@ def _wire(
     calls: list[object] = []
     raw = A._fresh_record(snapshot.sid)
     frozen_approval_doc = ApprovalDoc(
-        prepare=missing_prepare_state(),
         sid=snapshot.sid, gate=raw.gate,
         structure=StructureApprovalView(state='unavailable'))
     monkeypatch.setattr(
@@ -230,7 +153,7 @@ def test_next_uses_one_snapshot_and_the_shared_queue_lane(monkeypatch, tmp_path)
     snapshot = _snapshot(tmp_path)
     calls = _wire(
         monkeypatch, snapshot,
-        todo=[_ready('stage2.global')],
+        todo=[_ready('str06.stage2.source')],
         blocked=[_blocked('stage1.partition', Q.WAITING_ON_INBOX)])
 
     got = O.next_action(tmp_path, 'book-1')
@@ -255,7 +178,7 @@ def test_retired_blocker_has_no_execution_token(
         monkeypatch, tmp_path):
     snapshot = _snapshot(tmp_path)
     blocker = _blocked(
-        'stage4.plan', 'legacy_frozen_v6_design_authority_unavailable')
+        'str06.stage4.bind', 'legacy_frozen_v6_design_authority_unavailable')
     _wire(monkeypatch, snapshot, todo=[], blocked=[blocker])
 
     got = O.next_action(tmp_path, 'book-1')
@@ -270,7 +193,7 @@ def test_retired_blocker_has_no_execution_token(
 def test_ready_action_carries_the_canonical_safety_axes_and_stable_hash(
         monkeypatch, tmp_path):
     snapshot = _snapshot(tmp_path)
-    _wire(monkeypatch, snapshot, todo=[_ready('stage2.global')], blocked=[])
+    _wire(monkeypatch, snapshot, todo=[_ready('str06.stage2.source')], blocked=[])
 
     first = O.next_action(tmp_path, 'book-1')
     second = O.next_action(tmp_path, 'book-1')
@@ -279,7 +202,7 @@ def test_ready_action_carries_the_canonical_safety_axes_and_stable_hash(
     assert first.action is not None
     assert first.action.resume_verdict == 'run'
     assert first.action.paid is True
-    assert first.action.writes == ' · '.join(NODES['stage2.global'].produces)
+    assert first.action.writes == ' · '.join(NODES['str06.stage2.source'].produces)
     assert first.action.action_sha256 == second.action.action_sha256
     assert len(first.action.action_sha256) == 64
     assert first.execution_token is not None
@@ -294,13 +217,13 @@ def test_ready_redo_keeps_its_verdict_and_gets_an_execution_token(
     """REDO 被安全准入后仍叫 REDO，不靠改名成 RUN 绕过五态契约。"""
     snapshot = _snapshot(tmp_path)
     item = QueueItem(
-        sid='book-1', node='stage2.blueprint', flags=[],
-        steps=[_step('stage2.blueprint')],
-        why='redo：Global 的实际消费投影已更新')
+        sid='book-1', node='str06.stage2.source', flags=[],
+        steps=[_step('str06.stage2.source')],
+        why='redo：源语义的实际消费投影已更新')
     _wire(monkeypatch, snapshot, todo=[item], blocked=[])
     monkeypatch.setattr(
         O.state, 'resume_verdict',
-        lambda _overview, _node, *, flags=(): ('redo', 'Global 的实际消费投影已更新'))
+        lambda _overview, _node, *, flags=(): ('redo', '源语义的实际消费投影已更新'))
 
     got = O.next_action(tmp_path, 'book-1')
 
@@ -308,7 +231,7 @@ def test_ready_redo_keeps_its_verdict_and_gets_an_execution_token(
     assert got.action is not None and got.action.resume_verdict == 'redo'
     assert got.action.waiting_on is None
     assert got.execution_token is not None
-    assert got.execution_token.node == 'stage2.blueprint'
+    assert got.execution_token.node == 'str06.stage2.source'
 
 
 def test_action_hash_binds_the_surface_seal(monkeypatch, tmp_path):
@@ -341,12 +264,12 @@ def test_no_lane_item_is_pipeline_complete_not_delivery_ready(monkeypatch, tmp_p
     [
         (
             _blocked(
-                'stage5.write', Q.WAITING_ON_STAGE5_REVIEWER_REWRITE),
+                'str06.stage5.body', Q.WAITING_ON_STAGE5_REVIEWER_REWRITE),
             'executor',
         ),
         (
             _blocked(
-                'stage6.hook', Q.WAITING_ON_STAGE5_CLOSURE),
+                'str06.stage5.body', Q.WAITING_ON_RESUME_DECISION),
             'human',
         ),
     ],
@@ -382,15 +305,15 @@ def test_resume_frontier_rejects_a_frontend_invented_node_label():
 
 
 def _recovery_frontier_fields():
-    node = 'stage2.global'
+    node = 'str06.stage5.body'
     return dict(
         state='blocked', node=node, seq=list(NODES).index(node) + 1,
         label=NODES[node].label, resume_verdict='run', why='原 owner 尚待免费恢复',
         waiting_on=Q.WAITING_ON_ANALYZE_DRAFT_REPAIR, paid=False,
-        writes='stage2/global_grounding.json', next_handler='human')
+        writes='stage5/body/ch01.txt', next_handler='human')
 
 
-@pytest.mark.parametrize('prefix_length', [0, 2])
+@pytest.mark.parametrize('prefix_length', [0, 1])
 def test_resume_frontier_accepts_only_actually_verified_short_prefix(prefix_length):
     fields = _recovery_frontier_fields()
     prefix = list(NODES)[:prefix_length]
@@ -407,7 +330,7 @@ def test_resume_frontier_accepts_only_actually_verified_short_prefix(prefix_leng
 @pytest.mark.parametrize('skipped,count,reason', [
     ([list(NODES)[1]], 1, '连续 NODES 前缀'),
     ([list(NODES)[0], list(NODES)[2]], 2, '连续 NODES 前缀'),
-    (['stage2.global'], 1, '位于续跑点之前'),
+    (['str06.stage7.assemble'], 1, '位于续跑点之前'),
     ([list(NODES)[1], list(NODES)[0]], 2, '按序且不重复'),
     ([list(NODES)[0], list(NODES)[0]], 2, '按序且不重复'),
     (['unregistered'], 1, '来自 NODES'),
@@ -479,10 +402,10 @@ def test_cli_json_keeps_blocked_and_complete_at_exit_zero(
     action = None
     if state == 'blocked':
         action = OperatorAction(
-            node='stage7.rename', flags=['--recheck'], resume_verdict='run',
-            why='人名表需 0 成本重验后 auto seal',
-            waiting_on='stage7.rename', paid=False,
-            writes='stage7/name_map.json', action_sha256='c' * 64)
+            node='str06.stage7.naming', flags=['--check-only'], resume_verdict='run',
+            why='命名残留需 0 成本复检后交付',
+            waiting_on='str06.stage7.naming', paid=False,
+            writes='stage7/naming/name_map.json', action_sha256='c' * 64)
     result = OperatorNext(
         base=str(tmp_path), sid='book-1', code_version='code-v1',
         surface_seal='a' * 64, state=state,

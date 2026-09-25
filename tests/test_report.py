@@ -31,7 +31,7 @@ from novel.report import builder as report_builder
 from novel.report import build, render
 from novel.report.findings import ran, unverifiable
 
-NODE = 'stage2.blueprint'
+NODE = 'str06.stage2.source'
 STAGE = 'stage2'
 
 
@@ -85,7 +85,7 @@ def _finding(**kw):
     #   `contracts.rules.REGISTRY` 取那一行（`sev` / `owner` / `actionable` 全从它派生）。
     #   本文件脚手架里的 `r_demo` 只活在临时 `Registry()` 里，进不了全局表。
     from contracts.schema.report import finding
-    base = dict(rule='band_drift', detail='示例结论', evidence=['e1'])
+    base = dict(rule='s1_warnings', detail='示例结论', evidence=['e1'])
     base.update(kw)
     return finding(**base)
 
@@ -129,17 +129,20 @@ def test_a_wontfix_and_an_identity_mark_both_survive_on_the_same_line():
     from contracts.schema.report import RuleLine
     f = _finding(identity_hit=True,
                  wontfix=WontFixNote(why='这条我不修', at='review_1'))
-    line = RuleLine(rule='band_drift', item='示例判据', sev='info', check_kind='mechanical',
+    line = RuleLine(rule='s1_warnings', item='示例判据', sev='info', check_kind='mechanical',
                     requirement='R-7.21', remediation='human', status='hit', findings=[f])
     text = ' | '.join(_rules([line]))   # 分隔符无关，本条只查两个记号都在
     assert '已豁免' in text and '本章源文' in text
 
 
-def test_a_valued_fix_route_gets_its_chapters_from_machine_evidence():
+def test_a_valued_fix_route_gets_its_chapters_from_machine_evidence(monkeypatch):
+    """带值旗标的实参从 finding 机器证据收集；新链 VALUED_FLAGS 只登记 --source，
+    本条用合成旗标钉住机制本身（收集、去重、排序、不可用理由）。"""
+    monkeypatch.setattr(report_builder, 'VALUED_FLAGS', {'--chapters': '章节列表'})
     rule = Rule(
         rule='demo_chapters', stage='stage2', item='示例', sev='hard',
         who_checks='HARD', requirement='R-3.5', owner='stage2',
-        fix=('stage2.blueprint', '--chapters'),
+        fix=('str06.stage2.source', '--chapters'),
         fix_args_from_finding=('--chapters',),
     )
     route = report_builder._fix_route(
@@ -151,11 +154,12 @@ def test_a_valued_fix_route_gets_its_chapters_from_machine_evidence():
     assert route.flags == ['--chapters', '3,11']
 
 
-def test_a_valued_fix_route_without_an_argument_says_it_is_unavailable():
+def test_a_valued_fix_route_without_an_argument_says_it_is_unavailable(monkeypatch):
+    monkeypatch.setattr(report_builder, 'VALUED_FLAGS', {'--chapters': '章节列表'})
     rule = Rule(
         rule='demo_chapters', stage='stage2', item='示例', sev='hard',
         who_checks='HARD', requirement='R-3.5', owner='stage2',
-        fix=('stage2.blueprint', '--chapters'),
+        fix=('str06.stage2.source', '--chapters'),
         fix_args_from_finding=('--chapters',),
     )
     route = report_builder._fix_route(
@@ -164,26 +168,6 @@ def test_a_valued_fix_route_without_an_argument_says_it_is_unavailable():
     )
     assert route is not None and not route.available
     assert route.unavailable_reason and '没有提供' in route.unavailable_reason
-
-
-def test_plot_evidence_carries_the_parsed_chapter_into_the_report(monkeypatch):
-    from novel.stages.stage2.checks import finding as stage2_finding
-
-    hit = stage2_finding(
-        'plot_evidence', detail='共享证据锚点无法定位', evidence=['b11_02:「证据」'])
-    assert hit.fix_args == {'--chapters': '11'}
-    monkeypatch.setitem(acc.ACCOUNTING, 'stage2', ())
-    rep = build(
-        sid='7615069877019300633', node='stage2.blueprint', freshness=_fresh(),
-        outcomes=[ran('plot_evidence', [hit])],
-    )
-    line = next(row for row in rep.rules if row.rule == 'plot_evidence')
-    assert line.fix is not None and line.fix.available
-    assert line.fix.flags == ['--chapters', '11']
-    from novel.orchestrator.inbox_projection import _report_items
-    inbox = _report_items(rep, 'stage2')
-    item = next(row for row in inbox if row.rule == 'plot_evidence')
-    assert item.kind == 'repairable' and '--chapters 11' in item.how
 
 
 # ───────── ⭐ 报告由注册表生成，不由产出生成 ─────────
@@ -292,7 +276,7 @@ def test_a_ruleline_that_claims_a_metric_hit_raises():
 # ───────── 「够不着」必须说出为什么 ─────────
 
 def test_a_permanently_unverifiable_rule_must_say_why(monkeypatch):
-    """`sev='unver'` 的判据（stage6 有 3/9 条）必须说出边界在哪，而只有它自己知道。"""
+    """`sev='unver'` 的判据（新链披露位判据如 body_semantics_unver）必须说出边界在哪，而只有它自己知道。"""
     reg = _registry(_rule(rule='u', sev='unver', owner=None))
     with pytest.raises(RefusedByStructure, match='为什么够不着'):
         _build(reg, [ran('u')], monkeypatch=monkeypatch)

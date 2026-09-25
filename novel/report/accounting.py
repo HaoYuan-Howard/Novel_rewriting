@@ -69,15 +69,7 @@ ACCOUNTING: dict[str, tuple[AccountingSpec, ...]] = {
         AccountingSpec('quotes_fixed', '这一次引号体归一改了多少字符？'),
         AccountingSpec('paras_fixed', '这一次有几章的段落分隔被归一改过？'),
     ),
-    # ⚠ `params` 是**原型完全没有**的键（`stage6.md` 事实④）：本层是付费节点，
-    #    而换了模型、换了 `--max-tokens`，产物里没有任何一处说得出来。
-    'stage6': (
-        AccountingSpec('params', '这一次是用什么旋钮跑的？（`max_tokens` / `tag`）'),
-        AccountingSpec('candidate_retries', '哪些机械 HARD 候选自动定向重试过，是否改善并采纳？'),
-        AccountingSpec('revalidated', '这份稿是跑出来的，还是被重判提升上来的？'),
-        AccountingSpec('gates_skipped', '哪几条阻断级判据当时【没跑成】？'),
-        AccountingSpec('partial_rewrite', '这份产物是混版的吗？（`--recheck` 改过其中一部分）'),
-    ),
+    # ⚠ F8a：Stage6 整层退役，ACCOUNTING 行随层删除（STAGES 不再有 stage6）。
     # ⚠ `params` 与 stage6 同形（两个付费节点犯同一个错：换了模型、换了 `--max-tokens`，
     #    产物里没有任何一处说得出来）。另外三个的理由也同 stage6。
     'stage7': (

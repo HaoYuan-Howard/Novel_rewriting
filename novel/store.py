@@ -49,7 +49,7 @@ from contracts.artifacts import (
     STAGE2_GLOBAL_GROUNDING,
     STAGE4_BLIND_CANDIDATE, STAGE4_EVIDENCE_BINDING,
     STAGE4_WRITER_CONTEXT,
-    STAGE7_NAME_MAP,
+    STR06_DELIVERY_MANIFEST, STR06_HOOK_RECEIPT, STR06_HOOK_TEXT,
 )
 from contracts.schema import (
     ArtifactVersionError, HumanApproval, InputEdge, Provenance, RevalidationAudit,
@@ -1788,12 +1788,25 @@ class ArtifactStore:
             return self._stage1_freshness(rel)
         if rel == STAGE2_BLUEPRINT_CHARACTER_PROJECTION:
             return self._blueprint_character_projection_freshness()
+        if rel == STR06_HOOK_TEXT:
+            return self._hook_prose_freshness()
         # ⚠ 成书的 rel 带书名 ⇒ **不能与 `STAGE7_BOOK` 直接比**（那是模板）。
         #   拿模板比出来的恒是 False，而后果是 `_deterministic_freshness` 返回 None
         #   ⇒ 成书的 freshness 变成「没有来源账」，那道对账**静默失效**。
         if rel == paths.book_txt_rel(self.ctx.novel_dir):
             return self._book_freshness()
         return None
+
+    def _hook_prose_freshness(self) -> FreshnessReport:
+        """`stage5/hook/hook.txt` 的身份由章级回执族的 `receipt.json::prose_sha256`
+        （绑定改名前正文）承载；字节产物本身没有 `_provenance` 槽位。"""
+        receipt = self._freshness_payload(STR06_HOOK_RECEIPT)
+        expected = receipt.get('prose_sha256') if receipt is not None else None
+        if not isinstance(expected, str) or not expected:
+            return FreshnessReport('unknown', 'no_provenance')
+        edge = self._content_edge(
+            STR06_HOOK_TEXT, expected, self._content_sha256_or_none(STR06_HOOK_TEXT))
+        return self._content_report((edge,))
 
     def _blueprint_character_projection_freshness(self) -> FreshnessReport:
         """称名投影只来自人物 producer 与 MainText；知识、关系和规则没有该输入边。
@@ -2029,16 +2042,38 @@ class ArtifactStore:
         return FreshnessReport(state, reason, (edge,))
 
     def _book_freshness(self) -> FreshnessReport:
-        name_map = self._freshness_payload(STAGE7_NAME_MAP)
-        book_txt = name_map.get('book_txt') if name_map is not None else None
-        expected = book_txt.get('sha1') if isinstance(book_txt, dict) else None
+        # ⚠ F8b-3：新链成书身份由 assembly 的交付清单承载（manifest 最后提交；
+        # `final_text_sha256` 绑定成书字节）。旧 `stage7/name_map.json` 的
+        # book_txt 桥随旧链退役（F8a 后该路径已拒读）。
+        manifest = self._raw_json_payload(STR06_DELIVERY_MANIFEST)
+        expected = manifest.get('final_text_sha256') if manifest is not None else None
         if not isinstance(expected, str) or not expected:
             return FreshnessReport('unknown', 'no_provenance')
         # 边的 key 用**这本书的**那条具体路径：报告里要点名的就是它。
         book_rel = paths.book_txt_rel(self.ctx.novel_dir)
         edge = self._content_edge(
-            book_rel, expected, self._content_sha1_or_none(book_rel))
+            book_rel, expected, self._content_sha256_or_none(book_rel))
         return self._content_report((edge,))
+
+    def _raw_json_payload(self, rel: str) -> dict[str, Any] | None:
+        """读一份**未登记 spec** 的 companion JSON（如交付清单）；缺席 = 没有账。"""
+        p = self.path(rel)
+        if not p.is_file():
+            return None
+        try:
+            raw = json.loads(_read_file_bytes(p).decode('utf-8'))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as e:
+            raise ArtifactUnreadable(f'{rel} 不是可用的来源指纹载体：{e!r}') from e
+        return raw if isinstance(raw, dict) else None
+
+    def _content_sha256_or_none(self, rel: str) -> str | None:
+        p = self.path(rel)
+        if not p.is_file():
+            return None
+        try:
+            return hashlib.sha256(_read_file_bytes(p)).hexdigest()
+        except OSError as e:
+            raise ArtifactUnreadable(f'{self.ctx.node}: 读不了 {rel} 的内容指纹：{e!r}') from e
 
     def _freshness_payload(self, rel: str) -> dict[str, Any] | None:
         """为新鲜度读一份 companion；缺席表示没有账，坏 JSON 仍是显式不可读。"""

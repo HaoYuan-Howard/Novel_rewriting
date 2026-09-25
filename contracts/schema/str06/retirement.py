@@ -681,10 +681,6 @@ STR06_F7E_RETIREMENT: tuple[RetirementItem, ...] = (
          'F8b 提前执行：F8a 已删工具的派生源（NODES 旧键、产物 spec、HOOK 常量），'
          'import 与运行双死；修复需手抄冻结节点表，违反工具自身的「从现役契约派生」纪律。'
          '同批删除 tools/current_corpus_paid_preview.py（原 rewrite 登记，随测试一起处置）'),
-        ('rewrite_consumer', 'tests/test_delivery.py',
-         '交付准入随 F8b 切新链', '基础设施／编排测试：F8b 切新链后保留'),
-        ('rewrite_consumer', 'tests/test_delivery_modes.py',
-         '交付模式随 F8b 切新链', '基础设施／编排测试：F8b 切新链后保留'),
         ('rewrite_consumer', 'tests/test_execution_context.py',
          '执行上下文随 F8b 切新链', '基础设施／编排测试：F8b 切新链后保留'),
         ('rewrite_consumer', 'tests/test_execution_permit.py',
@@ -753,8 +749,11 @@ STR06_F7E_RETIREMENT: tuple[RetirementItem, ...] = (
          'Stage2 恢复运行随 F8b 切新链', '基础设施／编排测试：F8b 切新链后保留'),
         ('rewrite_consumer', 'tests/test_stage2_review_ledger.py',
          'Stage2 审阅账随 Stage2 语义审阅退役登记', '基础设施／编排测试：F8b 切新链后保留'),
-        ('rewrite_consumer', 'tests/test_stage2_uploaded_flow.py',
-         '上传流程随 F8b 切新链', '基础设施／编排测试：F8b 切新链后保留'),
+        # tests/test_stage2_uploaded_flow.py 已随 F8b-3 退役：其主体（characters
+        # edit renormalize／blueprint release 经旧链 CLI）是被退役的人工写回面与
+        # 旧链 producer；「上传→自动开跑→编排→交付」的真实入口全链职责归 F8d
+        # fake transport 全链验收（REQUIREMENTS F8d），autostart 机制反例由
+        # tests/test_upload_autostart.py 继续持有。
         ('rewrite_consumer', 'tests/test_stage4_approval_landed.py',
          'Stage4 审批落账随人工闸退役登记', '基础设施／编排测试：F8b 切新链后保留'),
         ('rewrite_consumer', 'tests/test_stage4_design_contract_v3.py',
@@ -1151,7 +1150,10 @@ STR06_F7E_TEST_KEEP: dict[str, str] = {
     'test_corpus_manifest.py': 'corpus manifest 冻结',
     'test_coverage.py': '覆盖登记（契约五文件）',
     'test_docs_references.py': '文档引用守卫（契约五文件）',
-    'test_frozen_stage2_v6_recovery.py': '冻结 v6 证据拒读反例',
+    # 'test_frozen_stage2_v6_recovery.py' 已随 F8b-3 退役：其夹具依赖旧链
+    # producer 链（test_stage4_v3_integration::designed，F8c 删除），旧 Blueprint
+    # 版本信封拒读职责由 tests/test_artifact_versions.py（版本账，177 项全绿）
+    # 与编排状态 unreadable 条件（test_orchestrator_state）承接，新链无 v6 专属面。
     'test_frozen_tree.py': '冻结证据树守卫',
     'test_golden_set.py': 'golden set 独立入口（后续轮承接）',
     'test_human_actions.py': '人工动作账',
