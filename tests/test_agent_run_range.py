@@ -18,7 +18,7 @@ from tests.test_agent_supervisor import _epoch
 from tests.test_agent import _PROFILES
 
 
-def _current(node, *, state='ready', waiting_on='stage2.blueprint.review'):
+def _current(node, *, state='ready', waiting_on='manual-unregistered-blocker'):
     return SimpleNamespace(state=state, code_version='code-1',
         action=None if state == 'pipeline_complete' else SimpleNamespace(
             node=node, waiting_on=waiting_on if state == 'blocked' else None),
@@ -26,8 +26,9 @@ def _current(node, *, state='ready', waiting_on='stage2.blueprint.review'):
 
 
 @pytest.mark.parametrize('node,state', [
-    ('stage2.blueprint', 'ready'), ('stage2.blueprint', 'blocked'),
-    ('stage4.design', 'ready'), ('stage5.write', 'blocked'),
+    ('str06.stage4.body_design', 'ready'),
+    ('str06.stage4.body_design', 'blocked'),
+    ('str06.stage4.hook_design', 'ready'), ('str06.stage5.body', 'blocked'),
     (None, 'pipeline_complete'), ('future.unknown', 'ready'),
 ])
 def test_supervisor_range_stops_before_any_ready_review_or_finalize(node, state):
@@ -40,7 +41,7 @@ def test_supervisor_range_stops_before_any_ready_review_or_finalize(node, state)
         read_operator_next=lambda _: _current(node, state=state),
         run_ready_action=lambda *_: pytest.fail('边界后的 Executor 不得启动'),
         finalize_run=lambda *_: pytest.fail('范围收口不做全链交付'),
-        pause_before_node='stage2.blueprint')
+        pause_before_node='str06.stage4.body_design')
     result = supervisor.run()
     assert result.turn.exit_code == 2 and result.turn.outcome.state == 'stopped'
     assert '范围' in result.turn.outcome.reason
@@ -49,8 +50,9 @@ def test_supervisor_range_stops_before_any_ready_review_or_finalize(node, state)
     assert events[0].drain_state == 'drained'
 
 
-def test_range_allows_upstream_repair_then_stops_at_blueprint_without_reviewer():
-    actions = [_current('stage2.global'), _current('stage2.blueprint', state='blocked')]
+def test_range_allows_upstream_repair_then_stops_at_preserve_without_reviewer():
+    actions = [_current('str06.stage2.names'),
+               _current('str06.stage4.preserve', state='blocked')]
     calls, events = [], []
 
     def ready(_epoch, current, ticket):
@@ -66,17 +68,26 @@ def test_range_allows_upstream_repair_then_stops_at_blueprint_without_reviewer()
         epoch_identity_current=lambda _: True, cancel_active=lambda: True,
         initial_epoch=_epoch('range-epoch', 1, 'initial'), read_operator_next=lambda _: actions[0],
         run_ready_action=ready,
-        finalize_run=lambda *_: pytest.fail('不得全链定稿'), pause_before_node='stage2.blueprint')
+        finalize_run=lambda *_: pytest.fail('不得全链定稿'),
+        pause_before_node='str06.stage4.preserve')
     result = supervisor.run()
-    assert calls == ['stage2.global']
+    assert calls == ['str06.stage2.names']
     assert result.turn.outcome.state == 'stopped'
-    assert 'stage2.blueprint' in result.turn.outcome.reason
+    assert 'str06.stage4.preserve' in result.turn.outcome.reason
 
 
 def test_joint_owner_and_repair_owner_cannot_evade_range_order():
-    assert range_boundary_reason(_current('stage2.analyze'), 'stage2.global') is not None
-    assert range_boundary_reason(_current('stage2.analyze'), 'stage2.characters') is not None
-    assert range_boundary_reason(_current('stage2.analyze'), 'stage2.blueprint') is None
+    # F8a：联合抽取折叠为 str06.stage2.source（book＋chNN 联合物化），旧
+    # stage2.analyze 的多 owner 面随旧链退役；现役守卫同一方向：上界处的
+    # 动作不启动，严格早于上界才放行。
+    assert range_boundary_reason(
+        _current('str06.stage2.source'), 'str06.stage2.source') is not None
+    assert range_boundary_reason(
+        _current('str06.stage2.source'), 'str06.stage2.names') is None
+    # 旧联合节点 stage2.analyze 已退役：不在运行范围取值面里，关闭式拒排，
+    # 不借历史编排位逃过现役上界。
+    assert range_boundary_reason(
+        _current('stage2.analyze'), 'str06.stage2.names') is not None
     # stage0.approve / stage0.edit 已退役（2026-09-15）：退役节点不在运行范围
     # 取值面里，关闭式拒排（不猜测节点先后），不再有「编辑归属 remove 槽」的重映射。
     assert range_boundary_reason(_current('stage0.edit'), 'stage0.remove') is not None
@@ -86,22 +97,29 @@ def test_joint_owner_and_repair_owner_cannot_evade_range_order():
         AgentRunRequest(sid='42', pause_before_node='stage3.retired')
 
 
-def test_range_uses_registered_commander_owner_not_blocked_consumer():
+def test_range_uses_registered_owner_not_blocked_consumer():
+    from contracts.invariants import (
+        NODES, RETIRED_APPROVAL_BINDINGS, approval_work_unit,
+    )
     from novel.orchestrator.queue import WAITING_ON_STAGE4_DESIGN_REVIEW
-    # Stage2 审阅席位退役后，blocked→owner 投影由保留的 Stage4 席位守卫。
-    current = _current('stage4.plan', state='blocked', waiting_on=WAITING_ON_STAGE4_DESIGN_REVIEW)
-    assert range_boundary_reason(current, 'stage4.plan') is None
-    assert range_boundary_reason(current, 'stage2.blueprint') is not None
-    from contracts.invariants import NODES, approval_work_unit
-    for waiting_on, _scope in NODES['stage4.plan'].lifecycle.approval_bindings:
-        downstream = _current('stage4.plan', state='blocked', waiting_on=waiting_on)
-        owner_node, _owner_scope = approval_work_unit(waiting_on)
-        if owner_node != 'stage4.plan':
-            # 被挡住的下游不是本轮裁决属主；属主在上界前可继续完成裁决。
-            assert range_boundary_reason(downstream, 'stage4.plan') is None
-            assert range_boundary_reason(downstream, 'stage2.blueprint') is not None
-        else:
-            assert range_boundary_reason(downstream, 'stage4.plan') is not None
+    # Stage4 审阅席位已随 2026-09-15 全自动裁决退役：保留的 blocker→owner
+    # 只读登记全部指向已退役 owner ⇒ 运行范围关闭式拒排（物化归属未知），
+    # 不让 blocked 消费者借历史席位在现役链上继续物化。
+    seated = _current('str06.stage2.source', state='blocked',
+                      waiting_on=WAITING_ON_STAGE4_DESIGN_REVIEW)
+    assert range_boundary_reason(seated, 'str06.stage4.compile') is not None
+    for _owner, bindings in RETIRED_APPROVAL_BINDINGS.items():
+        for waiting_on, _scope in bindings:
+            owner_node, _owner_scope = approval_work_unit(waiting_on)
+            assert owner_node not in NODES
+            blocked = _current('str06.stage2.source', state='blocked',
+                               waiting_on=waiting_on)
+            assert range_boundary_reason(blocked, 'str06.stage4.compile') is not None
+    # 未登记 blocker 不做历史席位重映射：blocked 消费者按自身编排位参与范围判定。
+    consumer = _current('str06.stage2.source', state='blocked',
+                        waiting_on='unregistered-blocker')
+    assert range_boundary_reason(consumer, 'str06.stage4.compile') is None
+    assert range_boundary_reason(consumer, 'str06.stage2.source') is not None
 
 
 def test_none_boundary_keeps_original_persistent_contract_identity():
@@ -113,8 +131,8 @@ def test_none_boundary_keeps_original_persistent_contract_identity():
         original = model.model_dump(mode='json')
         assert 'pause_before_node' not in original
         assert type(model).model_validate({**original, 'pause_before_node': None}).model_dump(mode='json') == original
-        bounded = model.model_copy(update={'pause_before_node': 'stage2.blueprint'})
-        assert type(model).model_validate(bounded.model_dump(mode='json')).pause_before_node == 'stage2.blueprint'
+        bounded = model.model_copy(update={'pause_before_node': 'str06.stage2.source'})
+        assert type(model).model_validate(bounded.model_dump(mode='json')).pause_before_node == 'str06.stage2.source'
 
 
 def test_http_range_start_drains_owner_and_restart_continuation_preserves_boundary(tmp_path, monkeypatch):
@@ -160,9 +178,9 @@ def test_http_range_start_drains_owner_and_restart_continuation_preserves_bounda
         assert expanded.status_code == 200, expanded.text
         assert expanded.json()['pause_before_node'] is None
         assert expanded.json()['profiles'] == old['profiles']
-        explicit = restarted.post('/api/agent/runs/preview', json={**continued, 'pause_before_node': 'stage2.blueprint'})
+        explicit = restarted.post('/api/agent/runs/preview', json={**continued, 'pause_before_node': 'str06.stage2.source'})
         assert explicit.status_code == 200, explicit.text
-        assert explicit.json()['pause_before_node'] == 'stage2.blueprint'
+        assert explicit.json()['pause_before_node'] == 'str06.stage2.source'
         second = restarted.post('/api/agent/runs', json=continued)
         assert second.status_code == 202, second.text
         assert agent.wait(second.json()['run_id'], 60)

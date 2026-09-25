@@ -24,10 +24,12 @@ from novel.orchestrator import (
 
 
 def _ready_permit(base: str, *, surface: str = 'a' * 64) -> ExecutionPermit:
-    """构造 canonical、可跨 root/follow 复用的最小许可。"""
-    flags = [
-        '--revalidate', '--actor', 'agent:test', '--reason', '测试复验',
-    ]
+    """构造 canonical、可跨 root/follow 复用的最小许可。
+
+    F8a：旧链 `stage4.plan --revalidate` 免费恢复跑法已随节点退役。现役等价
+    形状取免费节点 `stage1.partition` 的默认跑法（0 成本、写盘，root 后自动追
+    `--check-only` follow）；Commander admission 纵切只服务 stage0/1 旧驱动路。
+    """
     payload = {
         'base': str(Path(base).resolve()),
         'sid': '42',
@@ -36,10 +38,10 @@ def _ready_permit(base: str, *, surface: str = 'a' * 64) -> ExecutionPermit:
         'next_state': 'ready',
         'waiting_on': None,
         'kind': 'ready',
-        'node': 'stage4.plan',
-        'flags': flags,
-        'paid': nodes.is_paid('stage4.plan', flags),
-        'writes': nodes.write_effect('stage4.plan', flags),
+        'node': 'stage1.partition',
+        'flags': [],
+        'paid': nodes.is_paid('stage1.partition', []),
+        'writes': nodes.write_effect('stage1.partition', []),
         'operator_action_sha256': 'b' * 64,
         'external_inputs': [],
     }
@@ -223,7 +225,7 @@ def test_commander_context_direct_node_cli_without_claim_is_refused_before_run(
         cli.RunContext, 'open',
         lambda *_args, **_kwargs: pytest.fail('无 claim 不得进入 RunContext/producer'))
     args = cli._parser().parse_args([
-        'run', 'stage2.global', '42', '--base', str(tmp_path), '--yes'])
+        'run', 'stage1.partition', '42', '--base', str(tmp_path)])
 
     with pytest.raises(TerminalState, match='缺 active admission claim'):
         cli._cmd_run(args)

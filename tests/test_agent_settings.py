@@ -28,7 +28,7 @@ def _profiles() -> PipelineAgentProfiles:
     return PipelineAgentProfiles(
         executor_default=LegacyExecutorBackend(profile=_profile()),
         executor_overrides={
-            'stage7.rename': LegacyExecutorBackend(
+            'str06.stage7.naming': LegacyExecutorBackend(
                 profile=_profile(model='deepseek-flash')),
         },
     )

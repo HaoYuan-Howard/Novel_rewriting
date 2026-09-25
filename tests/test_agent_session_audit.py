@@ -43,7 +43,7 @@ def _start(*, session_run_id: str = 'session-1', ts: int = 10,
         session_run_id=session_run_id,
         parent_run_id='commander-1',
         role='executor',
-        node='stage5.write',
+        node='str06.stage5.body',
         chapter=7,
         subject_sha256=_SHA_A,
         profile={
@@ -75,7 +75,7 @@ def _turn(*, session_run_id: str = 'session-1', turn_index: int = 1,
         session_run_id=session_run_id,
         parent_run_id='commander-1',
         role='executor',
-        node='stage5.write',
+        node='str06.stage5.body',
         chapter=7,
         subject_sha256=_SHA_A,
         profile={
@@ -117,7 +117,7 @@ def _end(*, session_run_id: str = 'session-1', ts: int = 30,
         session_run_id=session_run_id,
         parent_run_id='commander-1',
         role='executor',
-        node='stage5.write',
+        node='str06.stage5.body',
         chapter=7,
         subject_sha256=_SHA_A,
         profile={
@@ -371,7 +371,7 @@ def test_fold_rejects_orphans_duplicate_turns_and_static_identity_drift():
         ])
     drifted = A.AgentSessionEvent(
         session_run_id='session-1', parent_run_id='commander-1',
-        role='executor', node='stage4.plan', chapter=7,
+        role='executor', node='str06.stage4.bind', chapter=7,
         subject_sha256=_SHA_A, kind='turn', ts=20, turn_index=1,
         attempt_id='attempt-drift')
     with pytest.raises(ValueError, match='node 发生漂移'):
@@ -544,7 +544,7 @@ def _attempt(*, session_run_id: str = 'session-1', ordinal: int = 1,
         session_run_id=session_run_id,
         parent_run_id='commander-1',
         role='executor',
-        node='stage5.write',
+        node='str06.stage5.body',
         chapter=7,
         subject_sha256=_SHA_A,
         profile={

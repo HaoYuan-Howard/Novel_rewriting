@@ -122,7 +122,7 @@ def _legacy_profiles_v2() -> dict:
                 reasoning_effort='high', thinking_mode='on').model_dump(mode='json'),
         },
         'executor_overrides': {
-            'stage4.design': {'kind': 'agent', 'profile': {'driver': 'codex', 'model': 'x', 'reasoning_effort': 'high'}},
+            'str06.stage4.body_design': {'kind': 'agent', 'profile': {'driver': 'codex', 'model': 'x', 'reasoning_effort': 'high'}},
         },
     }
 
@@ -209,13 +209,13 @@ def _wait_marker(path: Path, timeout: float = 10.0) -> None:
 def test_plan_deep_freezes_nested_profile_overrides(base):
     requested = PipelineAgentProfiles(
         executor_default=_LEGACY,
-        executor_overrides={'stage5.write': _LEGACY_FLASH})
+        executor_overrides={'str06.stage5.body': _LEGACY_FLASH})
     planned = agent.plan(
         base, '42', authorized=False, egress_authorized=False,
         profiles=requested)
 
-    requested.executor_overrides['stage5.write'] = _LEGACY
-    frozen = planned.profiles.executor_overrides['stage5.write']
+    requested.executor_overrides['str06.stage5.body'] = _LEGACY
+    frozen = planned.profiles.executor_overrides['str06.stage5.body']
     assert frozen.kind == 'legacy' and frozen.profile.model == 'deepseek-flash'
     assert planned.profiles.schema_version == 4
     assert 'commander' not in planned.profiles.model_dump(mode='json')
@@ -246,8 +246,8 @@ def test_plan_refuses_missing_profiles_while_preview_remains_zero_cost(base):
 def test_plan_echoes_the_frozen_boundary_and_refuses_unknown_nodes(base):
     planned = agent.plan(
         base, '42', authorized=False, egress_authorized=False,
-        profiles=_PROFILES, pause_before_node='stage2.blueprint')
-    assert planned.pause_before_node == 'stage2.blueprint'
+        profiles=_PROFILES, pause_before_node='str06.stage2.source')
+    assert planned.pause_before_node == 'str06.stage2.source'
     with pytest.raises(Exception, match='登记节点'):
         agent.plan(
             base, '42', authorized=False, egress_authorized=False,
@@ -268,7 +268,7 @@ def test_v2_history_rows_fold_to_v3_and_drop_the_commander_key(base):
     assert rec.run_id == 'v2-history'
     assert rec.start.profiles.schema_version == 4
     assert rec.start.profiles.executor_default.kind == 'legacy'
-    assert set(rec.start.profiles.executor_overrides) == {'stage4.design'}
+    assert set(rec.start.profiles.executor_overrides) == {'str06.stage4.body_design'}
     dumped = rec.start.profiles.model_dump(mode='json')
     assert 'commander' not in dumped and dumped['schema_version'] == 4
     # 原始 append-only 字节不动：历史行的 commander 字段仍在盘上。
@@ -323,7 +323,7 @@ def test_history_mixed_executor_modes_still_fold_but_new_inputs_stay_refused(bas
     [rec] = agent.fold(agent.read_events(base))
     assert rec.run_id == 'mixed-history'
     assert rec.start.profiles.executor_default.kind == 'legacy'
-    assert rec.start.profiles.executor_overrides['stage4.design'].kind == 'agent'
+    assert rec.start.profiles.executor_overrides['str06.stage4.body_design'].kind == 'agent'
     assert agent.queue_view(base).running == []
 
     # C3：非历史重放加载丢弃 agent 覆盖；不再以「混用」文案拒绝。
@@ -343,7 +343,7 @@ def test_agent_only_exemption_retirement_refuses_mixed_legacy_default_runs(base)
             },
         },
         'executor_overrides': {
-            'stage6.prepare': {
+            'str06.stage4.body_design': {
                 'kind': 'agent',
                 'profile': {
                     'driver': 'codex', 'model': 'x',
@@ -366,11 +366,11 @@ def test_agent_only_exemption_retirement_refuses_mixed_legacy_default_runs(base)
         })
     ok = PipelineAgentProfiles(
         executor_default=_CLAUDE,
-        executor_overrides={'stage5.write': LegacyExecutorBackend(
+        executor_overrides={'str06.stage5.body': LegacyExecutorBackend(
             profile=LegacyLlmProfile(
                 provider='deepseek', model='deepseek-v4-pro',
                 reasoning_effort='high', thinking_mode='on'))})
-    assert ok.executor_overrides['stage5.write'].kind == 'legacy'
+    assert ok.executor_overrides['str06.stage5.body'].kind == 'legacy'
 
 
 def test_preview_can_show_unknown_code_but_start_refuses_before_spawn_or_audit(
@@ -1136,17 +1136,17 @@ def test_the_queue_starts_the_next_book_when_one_ends(
     box = _dispatch(monkeypatch, tmp_path, blocking=True)
     requested = PipelineAgentProfiles(
         executor_default=_LEGACY,
-        executor_overrides={'stage5.write': _LEGACY_FLASH})
+        executor_overrides={'str06.stage5.body': _LEGACY_FLASH})
     view = agent.enqueue(base, ['42', '43'], authorized=True,
                          egress_authorized=True, profiles=requested)
     assert [r.start.sid for r in view.running] == ['42']
     assert [p.sid for p in view.pending] == ['43'] and view.pending[0].position == 1
-    pending_backend = view.pending[0].profiles.executor_overrides['stage5.write']
+    pending_backend = view.pending[0].profiles.executor_overrides['str06.stage5.body']
     assert (pending_backend.kind == 'legacy'
             and pending_backend.profile.model == 'deepseek-flash')
     # response model 也不得与内部 pending plan 共享可变 overrides。
-    view.pending[0].profiles.executor_overrides['stage5.write'] = _LEGACY
-    requested.executor_overrides['stage5.write'] = _LEGACY
+    view.pending[0].profiles.executor_overrides['str06.stage5.body'] = _LEGACY
+    requested.executor_overrides['str06.stage5.body'] = _LEGACY
     # 入队后 registry/default 即使漂移也不得在出队时重解析。
     monkeypatch.setattr(
         agent, 'validate_pipeline_profiles',
@@ -1164,7 +1164,7 @@ def test_the_queue_starts_the_next_book_when_one_ends(
     assert '43' in {r.start.sid for r in agent.records(base)}, '队列没有把下一本带起来'
     second = next(r for r in agent.records(base) if r.start.sid == '43')
     assert second.start.profiles is not None
-    second_backend = second.start.profiles.executor_overrides['stage5.write']
+    second_backend = second.start.profiles.executor_overrides['str06.stage5.body']
     assert (second_backend.kind == 'legacy'
             and second_backend.profile.model == 'deepseek-flash')
     for rec in agent.records(base):
@@ -1580,9 +1580,8 @@ def test_original_profiles_continue_through_http_after_restart(
     box = _dispatch(monkeypatch, tmp_path)
     profiles = PipelineAgentProfiles(
         executor_default=_LEGACY,
-        executor_overrides={'stage5.write': _LEGACY_FLASH},
-        concurrency=PipelineConcurrency(
-            node_overrides={'stage5.write': 6}, per_book=6, per_provider=8))
+        executor_overrides={'str06.stage5.body': _LEGACY_FLASH},
+        concurrency=PipelineConcurrency(per_book=6, per_provider=8))
     profiles = agent._freeze_profiles(profiles)
     first = agent.start(base, '42', authorized=True, egress_authorized=True,
                         profiles=profiles)
