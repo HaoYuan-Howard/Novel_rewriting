@@ -457,7 +457,7 @@ export function CorpusScreen() {
           vm.books.length === 0 ? (
             <NotRunYet
               title="一本书都还没有"
-              body="这台机器上的 Output 目录里没有任何一本书。把一个 .txt 丢进上面的上传口，确认授权与 profiles 后上传会自动开跑；Stage 页用于只读监控，Stage6 可改选候选。"
+              body="这台机器上的 Output 目录里没有任何一本书。把一个 .txt 丢进上面的上传口，确认授权与 profiles 后上传会自动开跑；Stage 页用于只读监控。"
               action={<LinkButton onClick={() => setUploadOpen(true)}>选择第一本原作</LinkButton>}
             />
           ) : (

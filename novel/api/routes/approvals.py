@@ -5,15 +5,16 @@ from fastapi import APIRouter, Depends
 
 from contracts.schema.api import (
     ApprovalBackfillResult, ApprovalDoc, GateKey,
-    Stage6ApprovalWorkpack, Stage7ApprovalWorkpack,
 )
 from novel.api.deps import checked_sid, get_base
 from novel.orchestrator import approvals, inspection
 from novel.orchestrator.write_admission import operation_scope
-from novel.views.stage6 import stage6_approval_workpack
-from novel.views.stage7 import stage7_approval_workpack
 
 router = APIRouter(prefix='/novels/{sid}/approvals')
+
+# ⚠ Stage6/7 终审工作包（approval workpack）面已随人工闸退役整体移除（F8b）：
+# Stage6 三候选定稿随整层退役；Stage7 人名表工作包的 view 读旧链 rename 节点，
+# 该节点已不在 NODES。新链的命名与交付监控走 `/api/str06/candidates/{candidate}/*`。
 
 
 @router.get('', response_model=ApprovalDoc)
@@ -22,22 +23,6 @@ def get_approvals(
 ) -> ApprovalDoc:
     with inspection.approval_read_snapshot(base, sid) as (overview, code):
         return approvals.get(base, sid, overview=overview, code=code)
-
-
-@router.get('/stage6/workpack', response_model=Stage6ApprovalWorkpack)
-def get_stage6_workpack(
-    sid: str = Depends(checked_sid), base: str = Depends(get_base),
-) -> Stage6ApprovalWorkpack:
-    """当前 Stage6 候选集的紧凑、A/B 证据与机械检查绑定终审包。"""
-    return stage6_approval_workpack(base, sid)
-
-
-@router.get('/stage7/workpack', response_model=Stage7ApprovalWorkpack)
-def get_stage7_workpack(
-    sid: str = Depends(checked_sid), base: str = Depends(get_base),
-) -> Stage7ApprovalWorkpack:
-    """当前 Stage7 人物决策面的紧凑、真实命中与机械检查绑定终审包。"""
-    return stage7_approval_workpack(base, sid)
 
 
 # ⚠ Stage5 写作授权与闭合回执的人工写面已随批次 B3（2026-09-15 全自动裁决）

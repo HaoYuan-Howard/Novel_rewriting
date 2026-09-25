@@ -6,7 +6,7 @@ import { qk } from '@/api/queryKeys'
 const BOOK_READ_ROOTS = new Set([
   'novel', 'stage0', 'stage1', 'reading',
   'characters', 'global', 'stage2', 'stage4', 'stage5', 'review', 'inbox',
-  'stage6', 'stage7', 'check', 'approvals',
+  'stage7', 'check', 'approvals',
 ])
 
 function belongsToBook(queryKey: QueryKey, sid: string): boolean {

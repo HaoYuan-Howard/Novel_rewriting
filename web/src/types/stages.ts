@@ -303,7 +303,7 @@ export interface Stage2Global {
   _provenance: Provenance
 }
 
-/** Stage6 当前读模型自有材料，独立于 Stage2 Global v7。 */
+/** prepare 的源材料读模型（独立于 Stage2 Global v7）。 */
 export type SourceBlurbMaterials = {
     facts: (
       | { kind: 'supported'; claim_id: string; claim: string; evidence: GlobalFactEvidence }
@@ -510,80 +510,6 @@ export interface ReviewResponse {
   chapter: ReviewChapter
 }
 
-/* ---------------------------------------------------------------- stage6 */
-
-export interface HookMech {
-  punct_fixed: number
-  quotes_fixed: number
-  paras_fixed: number
-}
-
-
-
-export interface HookCandidate {
-  index: number
-  approach: string
-  /** measure() 那把尺子的去空白字数（服务端现算，与判据同源） */
-  chars: number
-  text: string
-  subject_sha256: string
-  mech: HookMech
-  findings: Finding[]
-  /** 这一条是不是当前定稿 */
-  approved: boolean
-}
-
-export interface HookApproved {
-  /**
-    * 从**哪一条候选**来的（位置身份 `c1`/`c2`/`c3`）；`null` = 没有前身（人手写）。
-    * ⚠ 这里曾是策略名 + 一个 `human_edit`。同一种策略可以有不止一条候选 ⇒
-    * 策略名答不出「是哪一条」，而定稿要回答的正是这个。
-    */
-  slot: string | null
-  /** 那条候选用的什么策略（服务端现算）；`slot` 为 null 时同为 null。 */
-  approach: string | null
-  chars: number
-  text: string
-  origin: string
-  mech: HookMech
-  findings: Finding[]
-  resolution: {
-    actor: string
-    reason: string
-    subject_sha256: string
-    /** `default_policy` = 自动定稿；`human_selection` = 人工改选（判官退役后选择只证明选择）。 */
-    basis: 'default_policy' | 'human_selection'
-    /** null = 旧批准；下一次终审后才可用于 already_current。 */
-    workpack_sha256: string | null
-  }
-}
-
-export interface JudgedDraft {
-  output_ordinal: number
-  round: number
-  sha1: string
-  consumed: { output_ordinal: number; text_sha1: string; has_budget_chars: boolean | null } | null
-}
-
-export interface Stage6Response {
-  sid: string
-  title: string
-  source_hook_text: string
-  lead_upto: number
-  rationale: string
-  candidates: HookCandidate[]
-  /** null = 还没定稿 */
-  approved: HookApproved | null
-  /** 键是成稿完整相对路径 */
-  judged: Record<string, JudgedDraft>
-  sources: Sources
-  invalid_exists: boolean
-  freshness: Freshness
-  reason: string
-  ghosts: string[]
-  _provenance: Provenance
-}
-
 /* ---------------------------------------------------------------- stage7 */
 
 export interface NameChar {
@@ -750,14 +676,13 @@ export interface CheckReport {
   counts: { ok: number; hit: number; unver: number; skipped: number }
 }
 
-/** 与服务端 `STAGES` 逐值相等；Stage3 已退役，编号保留空洞。 */
+/** 与服务端 `STAGES` 逐值相等；Stage3 与 Stage6 已退役，编号保留空洞。 */
 export type CheckKind =
   | 'stage0'
   | 'stage1'
   | 'stage2'
   | 'stage4'
   | 'stage5'
-  | 'stage6'
   | 'stage7'
 
 export const CHECK_KINDS: CheckKind[] = [
@@ -766,6 +691,5 @@ export const CHECK_KINDS: CheckKind[] = [
   'stage2',
   'stage4',
   'stage5',
-  'stage6',
   'stage7',
 ]

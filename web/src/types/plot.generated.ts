@@ -127,6 +127,9 @@ export type BlindCandidateScene = {
   "context_beat_aliases": (string)[]
   "turn_beat_alias": string
   "candidate_scene_id": string
+  "steps": ({
+    [key: string]: unknown
+  })[]
 }
 
 export type BlindChapterWeightResponse = {
@@ -144,6 +147,8 @@ export type BlindLocalGoalResponse = {
 export type BlindPresentationDelivery = {
   "scene_ref": string
   "presentation_instruction": string | null
+  "delivery_focus": string | null
+  "delivery_ref": string | null
 }
 
 export type BlindStructureDecision = {
@@ -178,7 +183,7 @@ export type BlueprintProvenance = {
   "gates_skipped": (string)[] | null
   "origin": "human" | null
   "input_basis": string | null
-  "partial_rewrite": "--recheck" | "--renormalize" | "--identity" | "--apply-edit" | "--adopt-residual" | null
+  "partial_rewrite": null | null
   "invalid_baseline_sha256": string | null
   "revalidation_audit": RevalidationAudit | null
   "prompts": {
@@ -297,7 +302,7 @@ export type CtxProvenance = {
   "gates_skipped": (string)[] | null
   "origin": "human" | null
   "input_basis": string | null
-  "partial_rewrite": "--recheck" | "--renormalize" | "--identity" | "--apply-edit" | "--adopt-residual" | null
+  "partial_rewrite": null | null
   "invalid_baseline_sha256": string | null
   "revalidation_audit": RevalidationAudit | null
   "prompts": {
@@ -635,7 +640,7 @@ export type PlanProvenance = {
   "gates_skipped": (string)[] | null
   "origin": "compiled" | "human"
   "input_basis": string | null
-  "partial_rewrite": "--recheck" | "--renormalize" | "--identity" | "--apply-edit" | "--adopt-residual" | null
+  "partial_rewrite": null | null
   "invalid_baseline_sha256": string | null
   "revalidation_audit": RevalidationAudit | null
   "prompts": {
@@ -684,7 +689,6 @@ export type PlannerBeat = {
 export type PlannerCharacter = {
   "alias": string
   "surfaces": (string)[]
-  "role": string | null
 }
 
 export type PlannerEndpoint = {
@@ -738,7 +742,7 @@ export type PlotBeat = {
   "content": string
   "participants": (ActorRef)[]
   "evidence_refs": (string)[]
-  "source_contexts": (SourceContext)[]
+  "source_contexts": (SourceContext)[] | null
 }
 
 export type PlotBeatResponse = {
@@ -746,7 +750,7 @@ export type PlotBeatResponse = {
   "content": string
   "participants": (ActorRefResponse)[]
   "evidence": (ParagraphRange)[]
-  "source_contexts": (SourceContextResponse)[]
+  "source_contexts": (SourceContextResponse)[] | null
 }
 
 export type PlotBlueprint = {
@@ -896,8 +900,8 @@ export type PlotState = {
 
 export type PlotStateResponse = {
   "state_key": string
-  "content": string | null
-  "global_ref": GlobalSubjectRefResponse | null
+  "semantic": string
+  "canonical_ref_hint": GlobalSubjectRefResponse | null
   "modality": "world" | "belief" | "claim" | "unresolved"
   "holder": ActorRefResponse | null
   "established_at": BeatMomentResponse
@@ -932,6 +936,8 @@ export type PlotValueConstraintResponse = {
 export type PresentationDelivery = {
   "scene_ref": string
   "presentation_instruction": string | null
+  "delivery_focus": string | null
+  "delivery_ref": string | null
   "evidence_refs": (string)[]
   "source_context_refs": (string)[]
 }
@@ -1051,14 +1057,14 @@ export type SharedAnalysisSource = {
 }
 
 export type SourceContext = {
-  "evidence_refs": (string)[]
+  "evidence_refs": (string)[] | null
   "time_layer": "present" | "recall" | "hearsay" | null
   "place": string | null
   "present": (ActorRef)[] | null
 }
 
 export type SourceContextResponse = {
-  "evidence": (ParagraphRange)[]
+  "evidence": (ParagraphRange)[] | null
   "time_layer": "present" | "recall" | "hearsay" | null
   "place": string | null
   "present": (ActorRefResponse)[] | null

@@ -76,9 +76,7 @@ from contracts.invariants import (
     DESIGN_REVIEW_STATES,
     DESIGN_STRATEGY_REPLAN_CONSTRAINTS,
     DESIGN_STRATEGY_DECISIONS,
-    STAGE6_REVIEW_CONTRACT,
     STAGE7_REVIEW_CONTRACT,
-    STAGE6_APPROVAL_CHECK_BASIS,
     STAGE7_APPROVAL_CHECK_BASIS,
     INBOX_ATTENTION,
     INBOX_DELIVERY_EFFECT,
@@ -3665,28 +3663,6 @@ class TrimResolutionRequest(StrictModel):
 
     @model_validator(mode='after')
     def _audit_text_is_not_blank(self) -> 'TrimResolutionRequest':
-        if not self.actor.strip() or not self.reason.strip():
-            raise ValueError('actor/reason 不得只有空白')
-        return self
-
-
-class HookApproveRequest(StrictModel):
-    """`POST /api/novels/:sid/stage6/approve` —— 文案定稿（`--pick`，1 起）。
-
-    ⚠ **不收文本**（2026-08-17 用户裁决）：改字是另一个节点。除候选序号外，
-    必须收 actor/reason 和 opaque workpack token，用于自报身份审计与乐观锁。
-    改字由 `stage6.hook --apply-edit` 承接，且契约把编辑文件钉死在书目录内（`_edit_rel`）、
-    R-11.3 禁止服务进程写产物盘 ⇒ 浏览器文本没有合规通道落成 `hook_edit.json`。
-    改字走 CLI；S-11 的产品语义本来就只有「定稿按钮」（人选那一下是唯一闸门）。
-    """
-
-    pick: int = Field(ge=1)
-    actor: str = Field(min_length=1)
-    reason: str = Field(min_length=1)
-    review_token: str = Field(pattern=r'^s6r4_[0-9a-f]{64}$')
-
-    @model_validator(mode='after')
-    def _audit_text_is_not_blank(self) -> 'HookApproveRequest':
         if not self.actor.strip() or not self.reason.strip():
             raise ValueError('actor/reason 不得只有空白')
         return self

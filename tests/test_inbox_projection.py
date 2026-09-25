@@ -68,52 +68,41 @@ def test_human_only_collects_hits_whose_remediation_is_human():
 
     finding = SimpleNamespace(
         output_ordinal=4, wontfix=None, unresolved_rounds=0,
-        owner='stage6', detail='结尾形态需人工裁决')
+        owner='stage1', detail='切分告警需人工判断')
     line = SimpleNamespace(
         status='hit', sev='info', remediation='human', fix=None,
-        rule='hook_ending_shape', findings=[finding])
-    human = I._report_items(SimpleNamespace(rules=[line]), 'stage6')
+        rule='s1_warnings', findings=[finding])
+    human = I._report_items(SimpleNamespace(rules=[line]), 'stage1')
     assert len(human) == 1
     assert human[0].kind == 'human_only'
     assert human[0].chapter == 4
-    assert human[0].stage == 'stage6' and human[0].rule == 'hook_ending_shape'
-    assert '--apply-edit' in human[0].how or '--pick' in human[0].how
+    assert human[0].stage == 'stage1' and human[0].rule == 's1_warnings'
+    # 新链全自动单模式：没有任何节点发布 0 成本人工写入口（flags 只有
+    # --check-only）⇒ 兜底文案必须如实说「没有」，不许指一条敲不出来的命令。
+    assert '没有 0 成本人工入口' in human[0].how
+    assert '--apply-edit' not in human[0].how and '--pick' not in human[0].how
 
 
 def test_final_approval_inbox_commands_bind_the_same_fresh_workpack():
-    """恢复命令只搬运同一份 fresh workpack 的 opaque token。"""
+    """恢复命令只搬运同一份 fresh workpack 的 opaque token。
+
+    ⚠ Stage6 候选核验/定稿两项已随 Stage6 整层退役（F8b）：新链 Hook 单输出，
+    没有待人工核验的候选集；本指令只留 stage7 人名表的机械定稿披露。
+    """
     from novel.orchestrator import inbox_projection as I
 
-    candidate = SimpleNamespace(
-        index=2, slot='c2', approach='scene_punchline',
-        subject_sha256='a' * 64,
-        semantic_state='uncertain', semantic_reason='A/B 证据待人工核验',
-    )
-    stage6_pack = SimpleNamespace(
-        disposition='review_required', workpack_sha256='b' * 64,
-        review_token='s6r3_' + 'b' * 64,
-        candidates=[candidate],
-    )
     stage7_pack = SimpleNamespace(
         disposition='review_required', workpack_sha256='c' * 64,
         review_token='s7r3_' + 'c' * 64,
         decision_subject_sha256='d' * 64,
     )
 
-    verification = I._hook_verification_items(
-        '.', 'code', workpack=stage6_pack, workpack_checked=True)
     approvals = I._approval_items(
-        '.', 'code', stage6_workpack=stage6_pack,
-        stage7_workpack=stage7_pack, workpacks_checked=True)
+        '.', 'code', stage7_workpack=stage7_pack, workpacks_checked=True)
 
-    assert len(verification) == 1
-    assert '--review-token s6r3_' + 'b' * 64 in verification[0].how
-    assert '--subject-sha256' not in verification[0].how
-    assert '--workpack-sha256' not in verification[0].how
     by_rule = {row.rule: row for row in approvals}
     # 批次 B4：stage7.approve 退役；人名表未定稿投影为 rename 验证项。
-    assert set(by_rule) == {'stage6.approve', 'stage7.rename'}
-    assert '--review-token s6r3_' + 'b' * 64 in by_rule['stage6.approve'].how
+    assert set(by_rule) == {'stage7.rename'}
     assert 'stage7.rename --recheck' in by_rule['stage7.rename'].how
     assert 'system:stage7-auto' in by_rule['stage7.rename'].how
 
@@ -122,22 +111,14 @@ def test_final_approval_inbox_omits_already_current_actions():
     """同一当前工作包已经盖章时不再发布重复 approve/verification 动作。"""
     from novel.orchestrator import inbox_projection as I
 
-    stage6_pack = SimpleNamespace(
-        disposition='already_current', workpack_sha256='b' * 64,
-        review_token='s6r3_' + 'b' * 64,
-        candidates=[],
-    )
     stage7_pack = SimpleNamespace(
         disposition='already_current', workpack_sha256='c' * 64,
         review_token='s7r3_' + 'c' * 64,
         decision_subject_sha256='d' * 64,
     )
 
-    assert I._hook_verification_items(
-        '.', 'code', workpack=stage6_pack, workpack_checked=True) == []
     assert I._approval_items(
-        '.', 'code', stage6_workpack=stage6_pack,
-        stage7_workpack=stage7_pack, workpacks_checked=True) == []
+        '.', 'code', stage7_workpack=stage7_pack, workpacks_checked=True) == []
 
 
 def test_missing_blueprint_projection_inbox_points_only_to_free_materialization():
@@ -171,11 +152,11 @@ def test_old_blueprint_has_no_separate_migration_inbox():
 
 def test_unknown_input_invalid_cannot_suppress_normal_validation_inbox():
     """来源未知仍展示人工复验；是否可提升由 producer 判定。"""
-    from contracts.artifacts import STAGE2_CHAPTER_BLUEPRINTS
+    from contracts.artifacts import STR06_STAGE2_BLUEPRINTS
     from novel import paths
     from novel.orchestrator import inbox_projection as I
 
-    invalid_rel = paths.invalid_of(STAGE2_CHAPTER_BLUEPRINTS)
+    invalid_rel = paths.invalid_of(STR06_STAGE2_BLUEPRINTS)
 
     class Store:
         @staticmethod
@@ -184,32 +165,35 @@ def test_unknown_input_invalid_cannot_suppress_normal_validation_inbox():
 
     generic = I._invalid_items(Store(), 'stage2')
     assert len(generic) == 1
-    assert '--revalidate' in generic[0].how
+    # 新链无 --revalidate 提升口（F8a 翻转）：how 明说没有入口，不拼假命令，
+    # 也不恢复 Stage3 时代的 --renormalize 猜测。
+    assert '没有可执行的 INVALID 提升入口' in generic[0].how
     assert '--renormalize' not in generic[0].how
 
 
-def test_stage5_band_drift_is_one_book_task_with_chapter_details_preserved():
+def test_stage5_book_finding_is_one_task_with_chapter_details_preserved():
     """inbox 直接消费 CheckReport 的书级 finding，不再做第二次聚合。"""
     from novel.orchestrator import inbox_projection as I
 
     aggregate = SimpleNamespace(
         output_ordinal=None, wontfix=None, unresolved_rounds=0,
         owner='stage5',
-        detail=('书级档位漂移：2/25 章命中，涉及章节 [2, 7]，'
+        detail=('书级篇幅偏差：2/25 章命中，涉及章节 [2, 7]，'
                 '逐章事实可在 evidence 展开'))
     line = SimpleNamespace(
         status='hit', sev='info', remediation='human', fix=None,
-        rule='band_drift', scanned='3/25 章（按命中章去重）',
+        rule='body_length_reading', scanned='3/25 章（按命中章去重）',
         findings=[aggregate],
     )
     rows = I._report_items(SimpleNamespace(rules=[line]), 'stage5')
     assert len(rows) == 1
     assert rows[0].kind == 'human_only' and rows[0].chapter is None
-    assert rows[0].rule == 'band_drift'
+    assert rows[0].rule == 'body_length_reading'
     assert '[2, 7]' in rows[0].what and '2/25 章' in rows[0].what
     assert 'evidence 展开' in rows[0].what
-    assert '0 LLM 费用' in rows[0].how
-    assert '所有 producer-owned slot' in rows[0].how and '整章全文' in rows[0].how
+    # 兜底 how 从现役 NODES 派生（F8b 后新链 stage5 无 --apply-edit／--wontfix
+    # 人工路）：明说没有 0 成本人工入口，不拼旧链承诺。
+    assert '没有 0 成本人工入口' in rows[0].how
 
 
 def test_stage5_length_over_uses_the_finding_chapter_without_display_side_guessing():
@@ -221,11 +205,10 @@ def test_stage5_length_over_uses_the_finding_chapter_without_display_side_guessi
         owner='stage5', detail='第 3 章超出目标区间')
     line = SimpleNamespace(
         status='hit', sev='info', remediation='human', fix=None,
-        rule='length_over', scanned='1/1 章', findings=[finding])
+        rule='body_length_reading', scanned='1/1 章', findings=[finding])
     rows = I._report_items(SimpleNamespace(rules=[line]), 'stage5')
     assert len(rows) == 1 and rows[0].chapter == 3
-    assert '0 LLM 费用' in rows[0].how
-    assert '所有 producer-owned slot' in rows[0].how and '整章全文' in rows[0].how
+    assert '没有 0 成本人工入口' in rows[0].how
 
 
 @_STAGE6_CORPUS
@@ -273,22 +256,6 @@ def test_an_invalid_without_formal_is_invalid_and_with_formal_is_rejected(box):
 
 
 @_STAGE6_CORPUS
-def test_approval_lists_the_unapproved_hook_gate(box):
-    """定稿闸门没盖章 ⇒ `approval` 入列；它不是故障，但确实该在清单上。"""
-    rel = box.dir / 'stage6' / 'hook.json'
-    data = json.loads(rel.read_text(encoding='utf-8'))
-    baseline = inbox_view(str(box.root), box.sid)
-    if data.get('approved') is None:
-        assert [it for it in baseline.items if it.kind == 'approval']
-        return
-    data['approved'] = None
-    rel.write_text(json.dumps(data, ensure_ascii=False), encoding='utf-8')
-    view = inbox_view(str(box.root), box.sid)
-    gates = [it for it in view.items if it.kind == 'approval']
-    assert [it.rule for it in gates] == ['stage6.approve']
-    assert '--pick' in gates[0].how
-
-
 def test_plan_info_warnings_route_to_human_and_thus_into_the_inbox():
     """Stage4 INFO 的处置是「归人判断」——remediation 恒 `human`，
     而 `_report_items` 把任何 `human` 命中收进清单（上一条已验）。两半合起来即回环。"""
@@ -300,6 +267,11 @@ def test_plan_info_warnings_route_to_human_and_thus_into_the_inbox():
         assert remediation_of(rule) == 'human'
 
 
+@pytest.mark.skip(
+    reason='旧链 Stage5 Review 收敛账（band_drift/book_length＋stage5.review '
+           '--wontfix 路由）；判据表已翻新链（F8a），新链无 stalled 收敛账，'
+           'INVALID 由 owner 重跑处置。F8c 随 _stage5_stalled 及本测试删除，'
+           'F8d 前清零跳过。')
 def test_stalled_items_only_take_hard_info_at_the_stop_threshold(monkeypatch):
     """轮次到顶只升级 HARD/INFO；常驻 METRIC/UNVER 不是修复失败。"""
     from novel.stages.stage5 import review
@@ -376,7 +348,14 @@ def test_the_fallback_how_only_names_commands_that_can_actually_be_built():
             '裸 flag 会把 global 的入口读成 blueprint 也有')
         if not named:
             assert '--' not in text, f'{stage} 一条 0 成本人工路都没有，却给出了一条命令：{text}'
-    assert checked, '正则一条 `node --flag` 都没匹配到——文案格式漂了，这条守卫已经静默失效'
+            assert '没有 0 成本人工入口' in text, (
+                f'{stage} 没有 0 成本人工入口时必须如实说明，不编下一步：{text!r}')
+    # ⚠ 新链全自动单模式：现役节点的 flags 只有 --check-only，没有任何一层发布
+    # 0 成本人工写入口 ⇒ 全 STAGES 都走「如实说没有」分支。哪天新链真发布了
+    # 这样的人入口，`checked` 会大于 0，上面那条 build_argv 循环当场接管校验。
+    assert checked == 0, (
+        f'新链出现了 0 成本人工入口（{checked} 条）：上面已逐条验过可拼，'
+        '请同步确认它们确实该对人工发布')
 
 
 def test_verification_rows_are_disclosure_not_blocking():
@@ -395,19 +374,26 @@ def test_verification_rows_are_disclosure_not_blocking():
     assert blocking.delivery_effect == 'blocking'
 
 
-def test_every_revalidate_inbox_instruction_points_at_system_auto_path():
+def test_no_current_node_carries_revalidate_and_instructions_stay_system_only():
+    """F8a 翻转后现役 NODES 无 `--revalidate` 提升口；指令格式守卫保留。
+
+    新链的 INVALID 由 owner 重跑／`--check-only` 复检处置。若未来重新引入
+    `--revalidate`，`_revalidate_how` 必须仍指系统自动路径——那条格式断言
+    在这里继续守着，不为空集放水。
+    """
     from contracts.invariants import (
         NODES, SYSTEM_INVALID_REVALIDATE_ACTOR, SYSTEM_INVALID_REVALIDATE_REASON,
     )
     from novel.orchestrator.inbox_projection import _revalidate_how
 
     nodes = [node for node, spec in NODES.items() if '--revalidate' in spec.flags]
-    assert nodes
-    for node in nodes:
-        text = _revalidate_how(node)
-        assert f'{node} --revalidate --actor {SYSTEM_INVALID_REVALIDATE_ACTOR}' in text
-        assert SYSTEM_INVALID_REVALIDATE_REASON in text
-        assert '0 LLM' in text
+    assert not nodes, f'现役链不应有 --revalidate 节点，实得 {nodes}'
+    # 格式守卫：合成节点名走同一拼装路径，重新引入时指令仍是系统自动路。
+    text = _revalidate_how('str06.stage5.body')
+    assert ('str06.stage5.body --revalidate --actor '
+            f'{SYSTEM_INVALID_REVALIDATE_ACTOR}') in text
+    assert SYSTEM_INVALID_REVALIDATE_REASON in text
+    assert '0 LLM' in text
 
 
 class _InvalidStore:
@@ -434,20 +420,22 @@ class _InvalidStore:
 
 
 def test_generic_invalid_checks_the_producer_revalidate_flag_before_schema_version():
-    """通用路由从 NODES 派生；有真实提升口时不做 Stage3 专属版本猜测。"""
-    from contracts.artifacts import STAGE6_HOOK
+    """通用路由从 NODES 派生；无提升口的节点不得拼出不存在的命令。"""
+    from contracts.artifacts import STR06_STAGE2_BLUEPRINTS
     from novel import paths
     from novel.orchestrator import inbox_projection as I
 
-    invalid = paths.invalid_of(STAGE6_HOOK)
+    invalid = paths.invalid_of(STR06_STAGE2_BLUEPRINTS)
     store = _InvalidStore(
-        present={STAGE6_HOOK, invalid}, versions={}, refuse_version_read=True)
-    rows = I._invalid_items(store, 'stage6')
+        present={STR06_STAGE2_BLUEPRINTS, invalid}, versions={},
+        refuse_version_read=True)
+    rows = I._invalid_items(store, 'stage2')
     assert len(rows) == 1 and rows[0].kind == 'rejected'
-    assert rows[0].rule == 'stage6.hook'
+    assert rows[0].rule == 'str06.stage2.source'
     assert '_rounds/' in rows[0].how
-    assert 'system:invalid-revalidate' in rows[0].how
-    assert 'stage6.hook --revalidate' in rows[0].how
+    # 新链无 --revalidate 提升口：how 必须明说不存在入口，而不是拼假命令。
+    assert '没有可执行的 INVALID 提升入口' in rows[0].how
+    assert '--revalidate' not in rows[0].how
 
 
 def test_every_human_only_row_offers_something_the_operator_can_actually_run():

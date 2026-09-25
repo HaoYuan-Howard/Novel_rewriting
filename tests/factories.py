@@ -3,21 +3,11 @@
 """Small, deterministic builders for tests that do not need the local corpus."""
 from __future__ import annotations
 
-from typing import Any
-
-from contracts.invariants import HOOK_RECIPE, HOOK_SLOTS
-from contracts.schema.report import finding
-from contracts.schema.stage6 import Hook
+from contracts.schema.report import finding  # noqa: F401  （stage5_book 的判据样本共用）
 from contracts.schema.stage6_prepare import PrepareState
 from contracts.schema.stage1 import MainText
 from novel.core.measure import body_style_metrics, measure_body
 from novel.stages.stage5.measure import Book
-
-#: 三条互异的开篇文案样本。原定义在 `tests/test_stage6_semantic.py`（已随
-#: 判官节点退役删除，2026-09-15）；审批、视图与落地链的合成样本继续消费。
-TEXT_A = '她嫁进将军府那晚，就发现枕头下压着一封没有署名的信。\n\n信里只有一句话。'
-TEXT_B = '他在城门口等了三年，等来的却是她与仇人成亲的喜帖。'
-TEXT_C = '说书人拍醒木：这故事没人讲完过，因为讲到最后的人都死了。'
 
 
 def missing_prepare_state() -> PrepareState:
@@ -109,77 +99,6 @@ def stage5_book() -> Book:
                     'char_002': {'display_name': '周衡', 'role': '与沈青一同核账的人',
                                  'name_distinctiveness': 'high'}},
     )
-
-
-# 现役 Stage6 的纯载体夹具；不证明真实生成、判据或成书质量。
-def stage6_hook_retry(slot: str, index: int) -> dict:
-    return {
-        'slot': slot,
-        'attempt': index // len(HOOK_SLOTS) + 1,
-        'failure_items': ['hook_truncated'],
-        'failure_evidence': f'{index:010x}'[-10:],
-        'user_prompt': f'{index + 1:010x}'[-10:],
-        'output': f'{index + 2:010x}'[-10:],
-        'model': 'model-x',
-        'cache_policy': 'refresh-write',
-        'before_hard': 1,
-        'after_hard': 0,
-        'status': 'accepted',
-        'reason': None,
-        'accepted': True,
-    }
-
-
-def stage6_hook(
-    texts: list[str],
-    *,
-    hard_slots: set[int] = frozenset(),
-    reuse_slots: set[int] = frozenset(),
-    retries: int = 0,
-) -> Hook:
-    candidates = []
-    for index, (approach, text) in enumerate(zip(HOOK_RECIPE, texts), 1):
-        findings = []
-        if index in hard_slots:
-            findings.append(finding(
-                'hook_truncated', detail='测试：句末不完整', evidence=['截断']))
-        if index in reuse_slots:
-            findings.append(finding(
-                'hook_reuses_source', detail='测试：复用原作文案', evidence=['二十字复用']))
-        candidates.append({
-            'approach': approach,
-            'text': text,
-            'mech': {'punct_fixed': 0, 'quotes_fixed': 0, 'paras_fixed': 0},
-            'findings': [row.model_dump(mode='json') for row in findings],
-        })
-    retry_rows = [stage6_hook_retry(HOOK_SLOTS[index % 3], index) for index in range(retries)]
-    return Hook.model_validate({
-        'lead_upto': 1,
-        'rationale': '确定性合成候选，供现役载体与审批边界测试。',
-        'candidates': candidates,
-        'approved': None,
-        'sources': {'writer_context': {'state': 'fresh', 'detail': [], 'code': 'test'}},
-        'judged': {},
-        '_provenance': {
-            'code': 'test-code',
-            'root_clean_sha1': 'a' * 40,
-            'inputs': {},
-            'usage': {
-                'calls_made': 1, 'calls_cached': 0,
-                'prompt_tokens': 10, 'completion_tokens': 10, 'reasoning_tokens': 5,
-            },
-            'prompts': {'HOOK_SYS': 'b' * 10, 'RULES': 'c' * 10},
-            'model': 'model-x',
-            'params': {
-                'max_tokens': 64000,
-                'candidate_retry_max_tokens': 24000,
-                'candidate_retry_limit': 4,
-                'candidate_retry_effort': 'low',
-                'candidate_retry_thinking': False,
-            },
-            'candidate_retries': retry_rows,
-        },
-    })
 
 
 # ── stage0 链助手（2026-09-15 全自动裁决后的人工闸退役测试夹具）──────────────

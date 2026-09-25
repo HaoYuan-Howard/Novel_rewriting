@@ -110,10 +110,11 @@ def _tree(root) -> set:
 #: 读屏 → 它的产物（缺席 ⇒ 404 的那批）。`inbox` 不在此表：它没有「自己的产物」，
 #: 缺哪层跳哪层。`reading`/`stage4`/`stage5` 也不在：它们对「stage2/4 没跑」
 #: 各有自己的 200 形态（下面各有专条）。
+# ⚠ stage6/stage7 两屏随 Stage6 整层退役与 stage7 读屏注销移除（F8b）：
+# 命名与交付监控读 /api/str06/candidates/{candidate}/*，成书下载带
+# Content-Disposition（test_str06_views.py 的下载用例）。
 SCREENS = {
     'stage2/global': 'stage2/global_grounding.json',
-    'stage6': 'stage6/hook.json',
-    'stage7': 'stage7/name_map.json',
 }
 
 #: 章级读屏（`:o` 取 1——沙箱书从第 1 章起必有）。
@@ -125,8 +126,6 @@ CHAPTER_SCREENS = ('reading/1', 'stage4/1', 'stage5/1', 'review/1')
 def test_every_screen_answers_200_on_a_complete_book(client, box):
     urls = [f'/api/novels/{box.sid}/{tail}'
             for tail in (*SCREENS, 'inbox', *CHAPTER_SCREENS)]
-    body7 = client.get(f'/api/novels/{box.sid}/stage7').json()
-    urls.append(f'/api/novels/{box.sid}/stage7/{body7["chapters"][0]}')
     for url in urls:
         r = client.get(url)
         assert r.status_code == 200, f'{url} → {r.status_code} {r.text[:200]}'
@@ -139,83 +138,10 @@ def test_the_underscore_provenance_key_survives_the_wire(client, box):
         assert '_provenance' in body and 'provenance' not in body, tail
 
 
-def test_stage7_chapter_block_is_all_or_nothing_over_the_wire(client, box):
-    book_level = client.get(f'/api/novels/{box.sid}/stage7').json()
-    assert book_level['ordinal'] is None and book_level['rows'] is None
-    o = book_level['chapters'][0]
-    chapter = client.get(f'/api/novels/{box.sid}/stage7/{o}').json()
-    assert chapter['ordinal'] == o and chapter['rows']
-
-
 def test_stage4_index_carries_every_chapter_goal_in_one_response(client, box):
     body = client.get(f'/api/novels/{box.sid}/stage4/1').json()
     assert len(body['index']) == len(body['chapters'])
     assert all(row['chapter_goal'] for row in body['index'])
-
-
-def test_stage7_book_can_be_previewed_and_downloaded(client, box, monkeypatch):
-    from novel.stages.stage7 import assemble
-    monkeypatch.setattr(
-        assemble, 'read_current_book', lambda _ctx: '第一章\n成书正文')
-
-    preview = client.get(f'/api/novels/{box.sid}/stage7/book.txt')
-    assert preview.status_code == 200 and preview.text == '第一章\n成书正文'
-    assert 'content-disposition' not in preview.headers
-
-    download = client.get(f'/api/novels/{box.sid}/stage7/book.txt?download=true')
-    assert download.status_code == 200
-    assert download.headers['content-disposition'] == 'attachment; filename="book.txt"'
-
-
-def test_stage7_book_endpoint_never_bypasses_the_current_delivery_gate(
-        client, box, monkeypatch):
-    """⭐ 交付闸的每一条拒绝都要以**具名 4xx** 到达客户端。
-
-    ⚠⚠ **此前这里造的是一个裸 `TerminalState`，而那条断言从来没成立过**：
-    `status_of` 对两个抽象基类刻意不给格（「加一个类就得决定一次」），认不出就原样抛
-    ⇒ 那条异常一路冒到 Starlette，客户端拿到的是 500 而不是 409。
-    守卫**替生产伪造了一种它不该产生的失败形状**，于是它红着的其实是
-    `novel/errors.py` 开头那条「不设默认异常」——不是端点漏了闸。
-    ⇒ 现在逐条走 `read_current_book` **真会抛的那几个类**。
-
-    ⚠ 同时钉住 `message` / `hint` **分成两格**到达：拼在一起的话，界面只能把整段话
-    糊进正文，「这条失败有没有出路」在前端就不可判定。最后一条**刻意不带 `hint`**
-    ——「说不出下一条命令」是一个有含义的状态，那一格必须是 `null` 而不是编一句。
-    """
-    from novel.errors import (
-        ApprovalRequired, BlockingFindingsUnresolved, GateBlocked, UpstreamMissing,
-        UpstreamStale, UpstreamUnproven,
-    )
-    from novel.stages.stage7 import assemble
-
-    cases = [
-        (ApprovalRequired('人物映射还没定稿', hint='stage7.approve --actor <id>'),
-         409, None),
-        (UpstreamStale('name_map.json 已过期', hint='stage7.rename --recheck'), 409, None),
-        (UpstreamUnproven('name_map.json 证明不了自己出自当前根',
-                          hint='stage7.rename --recheck'), 409, None),
-        (BlockingFindingsUnresolved('仍有阻断级问题', rules=['rn_ambiguous'],
-                                    hint='stage7.rename --apply-edit <路径>'), 409, None),
-        (GateBlocked('有一份没裁决的废稿', invalid_path='stage7/name_map.INVALID.json',
-                     hint='stage7.rename --revalidate --actor system:invalid-revalidate --reason <audit>'),
-         409, 'stage7/name_map.INVALID.json'),
-        (UpstreamMissing('book.txt 不在盘上'), 404, None),
-    ]
-    for exc, code, missing in cases:
-        monkeypatch.setattr(
-            assemble, 'read_current_book',
-            lambda _ctx, _exc=exc: (_ for _ in ()).throw(_exc))
-        response = client.get(f'/api/novels/{box.sid}/stage7/book.txt?download=true')
-        body = response.json()
-        assert response.status_code == code, (type(exc).__name__, body)
-        assert body['kind'] == type(exc).__name__
-        # `GateBlocked` 的全部价值：那份被拦下的稿在哪，必须到得了客户端。
-        assert body.get('missing') == missing, type(exc).__name__
-        # 「下一条命令」自己一格，且**不混进正文**。
-        assert body.get('hint') == exc.hint, type(exc).__name__
-        assert body['message'] == str(exc), type(exc).__name__
-    # 说不出来的那一条：`hint` 是 `null`，不是一句编出来的「试试重跑」。
-    assert body.get('hint') is None
 
 
 @pytest.mark.usefixtures('current_map')
@@ -383,30 +309,13 @@ def test_a_corrupt_artifact_is_409_not_404(client, box, tail):
     assert r.json()['kind'] == 'ArtifactUnreadable'
 
 
-def test_stage6_and_stage7_live_legacy_without_downstream_are_explicit_409(tmp_path):
-    """真实旧目录优先于缺失下游；两次 GET 都必须纯读且不产生付费账。"""
-    book = tmp_path / '书名_123'
-    (book / 'stage5' / 'deep').mkdir(parents=True)
-    before = _tree(tmp_path)
-    with TestClient(create_app(tmp_path)) as http:
-        http.headers.update({UI_HEADER: '1'})
-        for tail in ('stage6', 'stage7'):
-            response = http.get(f'/api/novels/123/{tail}')
-            body = response.json()
-            assert response.status_code == 409, (tail, body)
-            assert body['kind'] == 'HumanEditProtected'
-            assert 'legacy_incompatible' in body['message']
-            assert body['hint']
-    assert _tree(tmp_path) == before
-    assert not (tmp_path / '_service' / 'ledger.jsonl').exists()
-
-
 # ───────────────────────── 四、参数不合法 ⇒ 400 ─────────────────────────
 
 @pytest.mark.parametrize('sid', ['C:', 'a b ', 'x%5Cy'])
 def test_an_illegal_sid_is_400_because_the_client_sent_it(bare_client, sid):
     """`paths.check_sid` 挡的每一种走法都是一个任意目录读写入口，产地是客户端 ⇒ 400。"""
-    for tail in ('stage2/global', 'stage6', 'stage7', 'inbox'):
+    # F8b 后现役读屏面：stage2/global、inbox（旧 stage7 读屏已随旧链删除）。
+    for tail in ('stage2/global', 'stage2/characters', 'inbox'):
         r = bare_client.get(f'/api/novels/{sid}/{tail}')
         assert r.status_code == 400, (sid, tail)
         assert r.json()['kind'] == 'BadRequest'
@@ -414,7 +323,8 @@ def test_an_illegal_sid_is_400_because_the_client_sent_it(bare_client, sid):
 
 def test_a_non_integer_ordinal_is_422_from_the_carrier(bare_client):
     """`:o` 的类型闸在 FastAPI 载体层——不是 404，也绝不是 500。"""
-    assert bare_client.get('/api/novels/123/stage7/abc').status_code == 422
+    assert bare_client.get('/api/novels/123/reading/abc').status_code == 422
+    assert bare_client.get('/api/novels/123/stage5/abc').status_code == 422
 
 
 # ───────────────────────── 五、`R-11.3`：一个字节都不写 ─────────────────────────

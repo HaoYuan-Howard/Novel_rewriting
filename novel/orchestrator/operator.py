@@ -239,7 +239,7 @@ def _prepared_delivery_recovery_surface(
             surface_seal=snapshot.surface_seal, overview=snapshot.overview, item=item),
         verified_skipped_nodes=())
     kind = ('repairable' if item.waiting_on in {
-                queue.WAITING_ON_PREPARED_DELIVERY, queue.WAITING_ON_STAGE6_PREPARE_COMMIT}
+                queue.WAITING_ON_PREPARED_DELIVERY}
             else 'human_only')
     counts = {key: 0 for key in INBOX_KIND}
     counts[kind] = 1
@@ -258,9 +258,7 @@ def _prepared_commit_recovery_surface(
     stage2 = _stage2_commit_recovery_surface(snapshot)
     stage4 = _stage4_design_repair_commit_recovery_surface(snapshot)
     delivery = _prepared_delivery_recovery_surface(snapshot)
-    item = queue.prepare_edit_recovery_item(snapshot.base, snapshot.sid, code=snapshot.code)
-    prepare = _prepared_delivery_recovery_surface(snapshot, item=item) if item is not None else None
-    pending = [entry for entry in (stage2, stage4, delivery, prepare) if entry is not None]
+    pending = [entry for entry in (stage2, stage4, delivery) if entry is not None]
     if len(pending) > 1:
         raise ArtifactUnreadable(
             'operator 同时发现多个阶段的 prepared 提交尾窗；'

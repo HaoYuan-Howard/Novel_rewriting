@@ -35,17 +35,22 @@ stage6/_rounds/hook.rN.json 归档：上一轮的**整份拷贝**，形状与 ho
 """
 from __future__ import annotations
 
-from typing import Literal
+from typing import Final, Literal
 
 from pydantic import Field, model_validator
 
 from contracts.invariants import (
     CACHE_POLICY,
-    HOOK_APPROACHES,
-    HOOK_RECIPE,
-    HOOK_SLOTS,
     WORK_UNIT_EXECUTOR_MAX_CONTENT_CALLS,
 )
+
+# ⚠⚠ F8a 过渡内联：`HOOK_APPROACHES`／`HOOK_RECIPE`／`HOOK_SLOTS` 已随
+#   Stage6 三候选面从 `contracts.invariants` 删除；本模块是 Stage6 旧链产物
+#   schema（F6d 登记、F8c 随旧链删除），按删除前的值原样内联，保证存量盘面
+#   在删除前继续只读解码，不改变任何现役行为。
+HOOK_APPROACHES: Final = ('source_architecture', 'payoff_preview', 'scene_punchline')
+HOOK_RECIPE: Final = ('payoff_preview', 'scene_punchline', 'scene_punchline')
+HOOK_SLOTS: Final = ('c1', 'c2', 'c3')
 from contracts.schema.base import Fp10, StrictModel
 from contracts.schema.common import (
     Finding, HashBoundHumanApproval, LlmProvenance, Sha256,

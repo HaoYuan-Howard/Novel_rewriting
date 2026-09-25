@@ -110,7 +110,7 @@ describe('BookLayout approval source', () => {
 
     expect(await screen.findByRole('button', { name: '剔除番外，已确认' })).toBeVisible()
     expect(screen.getByRole('button', { name: /分章报告，未确认/ })).toBeVisible()
-    expect(screen.getByRole('button', { name: /开篇文案，锁定，先过 stage5 成稿确认/ })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /人名\+成书，未确认/ })).toBeVisible()
   })
 
   it('不再提供按盘面补录验收链写按钮', async () => {
@@ -140,36 +140,28 @@ describe('BookLayout approval source', () => {
     expect('backfillApprovals' in api).toBe(false)
   })
 
-  it.each([
-    { stage: 'stage6', gate: 's6', label: 'Stage6 文案改选' },
-    { stage: 'stage7', gate: 's7', label: 'Stage7 人物对照' },
-  ] as const)('$stage 的最终缺口只导航只读页，不提供补录代批', async ({ stage, gate, label }) => {
-    vi.spyOn(api, 'getNovel').mockResolvedValue(bookWithStages({ [stage]: true }))
+  it('Stage7 的最终缺口只导航只读页，不提供补录代批', async () => {
+    vi.spyOn(api, 'getNovel').mockResolvedValue(bookWithStages({ stage7: true }))
     vi.spyOn(api, 'getApprovals').mockResolvedValue({
-      ...current, gate: { ...current.gate, [gate]: false },
+      ...current, gate: { ...current.gate, s7: false },
     })
-    const approveHook = vi.spyOn(api, 'approveHook')
     renderRoute(<><BookLayout /><CurrentPath /></>)
 
-    const review = await screen.findByRole('button', { name: '查看' + label })
-    expect(screen.getByText(/Stage6 可免费改选候选/)).toBeVisible()
+    const review = await screen.findByRole('button', { name: '查看Stage7 人物对照' })
     expect(screen.queryByRole('button', { name: '按盘面补录验收链' })).not.toBeInTheDocument()
     fireEvent.click(review)
-    expect(await screen.findByText('/n/book-1/' + stage)).toBeVisible()
-    expect(approveHook).not.toHaveBeenCalled()
+    expect(await screen.findByText('/n/book-1/stage7')).toBeVisible()
     expect('approveNames' in api).toBe(false)
   })
 
-  it('Stage7 已有产物而最终闸级联暂停时提示检查前置，不声称需要重新签字', async () => {
+  it('Stage7 已有产物而最终闸未对齐时提示检查前置，不声称需要重新签字', async () => {
     vi.spyOn(api, 'getNovel').mockResolvedValue(bookWithStages({ stage7: true }))
     vi.spyOn(api, 'getApprovals').mockResolvedValue({
-      ...current, gate: { ...current.gate, s5: false, s6: false, s7: false },
+      ...current, gate: { ...current.gate, s5: false, s7: false },
     })
     renderRoute(<BookLayout />)
 
-    expect(await screen.findByRole('button', { name: '查看Stage6 文案改选' })).toBeVisible()
-    expect(screen.getByRole('button', { name: '查看Stage7 人物对照' })).toBeVisible()
-    expect(screen.getByText(/Stage6 可免费改选候选/)).toBeVisible()
+    expect(await screen.findByRole('button', { name: '查看Stage7 人物对照' })).toBeVisible()
     expect(screen.queryByText(/重新签|必须重审|缺少对应的前端人工验收/)).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '按盘面补录验收链' })).not.toBeInTheDocument()
   })
@@ -179,13 +171,12 @@ describe('BookLayout approval source', () => {
     vi.spyOn(api, 'getApprovals').mockResolvedValue(pending)
     renderRoute(<BookLayout />)
 
-    expect(await screen.findByRole('button', { name: '查看Stage6 文案改选' })).toBeVisible()
-    expect(screen.getByRole('button', { name: '查看Stage7 人物对照' })).toBeVisible()
+    expect(await screen.findByRole('button', { name: '查看Stage7 人物对照' })).toBeVisible()
     expect(screen.queryByRole('button', { name: '按盘面补录验收链' })).not.toBeInTheDocument()
   })
 
   it('后端最终审批已经 current 时不再提示前端缺章或要求补录', async () => {
-    vi.spyOn(api, 'getNovel').mockResolvedValue(bookWithStages({ stage6: true, stage7: true }))
+    vi.spyOn(api, 'getNovel').mockResolvedValue(bookWithStages({ stage7: true }))
     vi.spyOn(api, 'getApprovals').mockResolvedValue(current)
     const { queryClient } = renderRoute(<BookLayout />)
     await waitFor(() => expect(queryClient.getQueryData(qk.approvals('book-1'))).toEqual(current))
@@ -195,23 +186,23 @@ describe('BookLayout approval source', () => {
   })
 
   it('审批读取失败不从已有最终产物推断缺少决定或提供补录', async () => {
-    vi.spyOn(api, 'getNovel').mockResolvedValue(bookWithStages({ stage6: true, stage7: true }))
+    vi.spyOn(api, 'getNovel').mockResolvedValue(bookWithStages({ stage7: true }))
     vi.spyOn(api, 'getApprovals').mockRejectedValue(new Error('审批当前状态未知'))
     const { queryClient } = renderRoute(<BookLayout />)
     await waitFor(() => expect(queryClient.getQueryState(qk.approvals('book-1'))?.status).toBe('error'))
     expect(screen.queryByText(/检查单尚未闭合|最终定稿当前未生效/)).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '按盘面补录验收链' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /查看Stage[67]/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /查看Stage7/ })).not.toBeInTheDocument()
   })
 
   it('最终产物是否完成尚不明确时不创建缺口提示', async () => {
-    vi.spyOn(api, 'getNovel').mockResolvedValue(bookWithStages({ stage6: null, stage7: false }))
+    vi.spyOn(api, 'getNovel').mockResolvedValue(bookWithStages({ stage7: false }))
     vi.spyOn(api, 'getApprovals').mockResolvedValue(pending)
     const { queryClient } = renderRoute(<BookLayout />)
     await waitFor(() => expect(queryClient.getQueryData(qk.approvals('book-1'))).toEqual(pending))
     expect(await screen.findByText('book-1 · 11 章')).toBeVisible()
     expect(screen.queryByText(/检查单尚未闭合|最终定稿当前未生效/)).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /查看Stage[67]/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /查看Stage7/ })).not.toBeInTheDocument()
   })
 
 })

@@ -20,7 +20,10 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-import contracts.judges.stage5  # noqa: F401  # 注册现役 Stage5 判据供 fixture 对账
+# ⚠⚠ F8b：不再在收集期 import `contracts.judges.stage5`——旧链判据表（随旧链
+#   F8c 删除）一旦注册进进程内 REGISTRY，同进程后续的 coverage／rules_registry
+#   反向覆盖账就会看到新旧两组判据而误红。本文件的 fixture 对账只做
+#   model_validate，不查 REGISTRY；新链判据注册见 `contracts/judges/str06.py`。
 from contracts.invariants import (
     LLM_EXECUTOR_NODES, APPROVAL_GATES, RETENTION_CANDIDATE_KINDS,
 )
@@ -35,7 +38,7 @@ from contracts.schema.api import (
     ReviewChapterView, ReviewView,
     Stage0EditRequest, Stage0EditResult, Stage0Segment, Stage0Segments,
     Stage1Segment, Stage1View,
-    Stage4View, Stage5View, Stage6View, Stage7View,
+    Stage4View, Stage5View, Stage7View,
     TrashRestoreApplyRequest, TrashRestorePlanView, UploadResult,
 )
 from contracts.schema.plot import SourceContext
@@ -118,7 +121,6 @@ def test_global_evidence_fixture_matches_its_archived_source_snapshot():
 def test_plot_flow_fixtures_are_closed_current_http_and_review_views():
     from novel.api.enums import payload as enum_payload
     from contracts.schema.api import (InboxView,
-        Stage6PrepareView, Stage6PrepareWorkpack, Stage6ApprovalWorkpack,
         Stage7ApprovalWorkpack)
 
     captured = json.loads((ROOT / 'web/src/fixtures/plot_v1/flow.json').read_text(
@@ -148,14 +150,9 @@ def test_plot_flow_fixtures_are_closed_current_http_and_review_views():
                    if name.startswith('http:')})
     models.update({
         'final:http:inbox': InboxView,
-        'final:http:stage6/prepare': Stage6PrepareView,
-        'final:http:stage6/prepare/workpack': Stage6PrepareWorkpack,
-        'final:http:stage6': Stage6View,
         'final:http:stage7': Stage7View,
-        'final:http:approvals/stage6/workpack': Stage6ApprovalWorkpack,
         'final:http:approvals/stage7/workpack': Stage7ApprovalWorkpack,
         'final:http:check/stage4': CheckReport,
-        'final:http:check/stage6': CheckReport,
         'final:http:check/stage7': CheckReport,
         **{f'final:http:stage5/{ordinal}': Stage5View for ordinal in range(1, 4)},
         **{f'final:http:review/{ordinal}': ReviewView for ordinal in range(1, 4)},
@@ -517,7 +514,7 @@ def test_the_api_models_never_carry_a_verdict():
         NovelList, JobList, LogChunk, LogStreamEvent, PreviewRequest, ErrorBody,
         AgentCapabilitiesResponse,
         Stage0Segment, Stage0Segments, Stage1Segment, Stage1View, UploadResult,
-        GlobalView, Stage6View, Stage7View,
+        GlobalView, Stage7View,
         ReadingView, Stage4View, Stage5View, ReviewView,
     ):
         leaked = verdicts & set(model.model_fields)
@@ -617,7 +614,7 @@ def test_every_response_model_forbids_extra_fields():
         AgentCapabilitiesResponse,
         Stage0Segment, Stage0Segments, Stage0EditRequest, Stage0EditResult,
         Stage1Segment, Stage1View,
-        UploadResult, GlobalView, Stage6View, Stage7View,
+        UploadResult, GlobalView, Stage7View,
         ReadingView, Stage4View, Stage5View, ReviewView,
     ):
         assert model.model_config['extra'] == 'forbid', model.__name__

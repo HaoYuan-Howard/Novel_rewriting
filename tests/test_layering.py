@@ -927,11 +927,6 @@ _CROSS_STAGE_DEEP_GRANDFATHER = frozenset({
     ('novel/views/stage4.py', 'novel.stages.stage5.prompts'),
     ('novel/views/stage5.py', 'novel.stages.stage5.measure'),
     ('novel/views/stage5.py', 'novel.stages.stage5.prompts'),
-    ('novel/views/stage6.py', 'novel.stages.stage5.measure'),
-    ('novel/views/stage6.py', 'novel.stages.stage6.hook'),
-    ('novel/views/stage7.py', 'novel.stages.stage5.measure'),
-    ('novel/views/stage7.py', 'novel.stages.stage7.rename'),
-    ('novel/views/stage7.py', 'novel.stages.stage7.subs'),
 })
 
 
@@ -993,7 +988,11 @@ def test_cross_stage_imports_stay_on_the_package_surface():
     # F4R（2026-09-24）：补登 STR-02/STR-03 改名收编时漏账的 11 条既存深边
     # （stage4→blueprint evidence/source_contexts/narration、plot_design→shared
     # character_refs、views/stage4→stage4.plan），77→88；F8 随旧链清零。
-    assert len(_CROSS_STAGE_DEEP_GRANDFATHER) == 88
+    # F8b（2026-09-25）：Stage6 服务面按登记切除，views/stage6.py 随路由注销
+    # 删除，其 2 条深边（stage5.measure／stage6.hook）一并消化，88→86；
+    # views/stage7.py 经已退役的 stage7.rename 节点建 ctx、F8a 后一调用即
+    # ValueError，按 F7e delete_file 提前删除，其余 3 条深边随之消化，86→83。
+    assert len(_CROSS_STAGE_DEEP_GRANDFATHER) == 83
 
 
 

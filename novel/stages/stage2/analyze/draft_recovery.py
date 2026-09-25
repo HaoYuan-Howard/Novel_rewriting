@@ -45,6 +45,11 @@ def _formal(owner: str) -> str:
 
 def status(novel_dir: Path, *, code: str | None = None) -> list[dict]:
     """纯读调度面；来源损坏抛出，不把未知当作可以再次购买。"""
+    # ⚠ 旧链联合首抽调度面（F8c 随旧链删除）：新链书没有 AnalyzeReceipt；
+    # 在构造旧节点只读 ctx 之前先按纯文件存在性早退，热路（operator 快照
+    # 的 seal 采集）不得因旧节点已退役而崩。
+    if not (novel_dir / STAGE2_ANALYZE_RECEIPT).is_file():
+        return []
     store = _store(novel_dir, code=code)
     if not store.exists(STAGE2_ANALYZE_RECEIPT):
         return []
@@ -73,6 +78,9 @@ def source_paths(novel_dir: Path, *, code: str | None = None) -> tuple[Path, ...
     from novel.llm import run_journal as agent_runs
     from novel.orchestrator.queue import analyze_initial_recovery_surface
 
+    # 同 status() 的早退：新链书没有旧链 AnalyzeReceipt，seal 不采集任何来源。
+    if not (novel_dir / STAGE2_ANALYZE_RECEIPT).is_file():
+        return ()
     store = _store(novel_dir, code=code)
     rows = status(novel_dir, code=code)
     if not rows:

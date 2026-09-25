@@ -27,7 +27,8 @@ from contracts.artifacts import (
     STAGE2_GLOBAL_EDIT_INPUT_COMMIT, STAGE2_GLOBAL_GROUNDING, STAGE2_KNOWLEDGE_LINKS,
     STAGE4_BLIND_CANDIDATE, STAGE4_EVIDENCE_BINDING,
     STAGE4_PLAN_CHAPTERS, STAGE4_WRITER_CONTEXT,
-    STAGE5_CHAPTER, artifact_rel,
+    STAGE5_CHAPTER, artifact_rel, STR06_BODY_DESIGN, STR06_STAGE5_BODY,
+    STR06_STAGE5_BODY_RECEIPT,
 )
 
 import os
@@ -176,11 +177,15 @@ def artifact_state(store: ArtifactStore, rel: str) -> ArtifactState:
             # Schema 只知道 ``output_ordinal >= 1``；文件名与主体的跨路径绑定
             # 必须在读盘边界另查。否则 ``ch01.json`` 里装一份合法的第 2 章，
             # 完成度仍会按文件名集合把第 1 章判成 current 并 SKIP 付费写作。
-            if artifact_key(rel) == STAGE5_CHAPTER:
-                output_ordinal = getattr(obj, 'output_ordinal', None)
+            if rel == STR06_STAGE5_BODY_RECEIPT:
+                # 新链章稿是纯文本（无 per-file schema）；跨路径绑定由
+                # stage7 assembly_chapter_chain 回执链守卫，这里保留
+                # JSON 回执的章号绑定反例。
+                output_ordinal = getattr(obj, 'chapter_ordinal', None)
                 readable = (
                     isinstance(output_ordinal, int)
-                    and rel == artifact_rel('stage5.chapter', nn=output_ordinal)
+                    and rel == artifact_rel(STR06_STAGE5_BODY_RECEIPT,
+                                            nn=output_ordinal)
                 )
 
     return ArtifactState(
@@ -207,16 +212,16 @@ def chapters_done(novel_dir: Path) -> list[int]:
     不再靠“排除已知后缀”的黑名单：新增一种失败留证时，黑名单会再次漏掉。
     候选必须逐字等于产物目录生成的规范路径，只有正式稿这一种形状能通过。
     """
-    d = novel_dir / 'stage5'
+    d = novel_dir / 'stage5' / 'body'
     if not d.is_dir():
         return []
     out = []
-    for p in sorted(d.glob('ch*.json')):
+    for p in sorted(d.glob('ch*.txt')):
         digits = ''.join(c for c in p.stem if c.isdigit())
         if not digits:
             continue
         ordinal = int(digits)
-        expected = novel_dir / artifact_rel('stage5.chapter', nn=ordinal)
+        expected = novel_dir / artifact_rel(STR06_STAGE5_BODY, nn=ordinal)
         if p == expected:
             out.append(ordinal)
     return sorted(out)
@@ -228,16 +233,17 @@ def stage5_invalid_inventory(novel_dir: Path) -> tuple[list[int], list[str]]:
     INVALID 不属于 ``chapters_done``，但也绝不能从状态面消失：计划读不回或候选已
     落在计划集合外时，它仍是一份待 0 LLM 重验证/人工处置的真实字节。
     """
-    directory = novel_dir / 'stage5'
+    directory = novel_dir / 'stage5' / 'body'
     if not directory.is_dir():
         return [], []
     ordinals: list[int] = []
     malformed: list[str] = []
-    for candidate in sorted(directory.glob('ch*.INVALID.json')):
+    for candidate in sorted(directory.glob('ch*.INVALID.txt')):
         digits = ''.join(ch for ch in candidate.name.split('.', 1)[0] if ch.isdigit())
         ordinal = int(digits) if digits else 0
         expected = (
-            novel_dir / paths.invalid_of(artifact_rel('stage5.chapter', nn=ordinal))
+            novel_dir / paths.invalid_of(
+                artifact_rel(STR06_STAGE5_BODY, nn=ordinal))
             if ordinal >= 1 else None
         )
         if expected is not None and candidate == expected:
@@ -279,15 +285,14 @@ def planned_chapters(store: ArtifactStore) -> list[int] | None:
     已退役的 ``plan_chapters.json``。
     """
     try:
-        from contracts.artifacts import STAGE4_BLIND_CANDIDATE
-        design, _raw = store.read_own(ARTIFACTS[STAGE4_BLIND_CANDIDATE],
-                                      STAGE4_BLIND_CANDIDATE)
+        from contracts.artifacts import STR06_BODY_DESIGN
+        design, _raw = store.read_own(STR06_BODY_DESIGN, STR06_BODY_DESIGN)
     except (ArtifactUnreadable, UpstreamMissing):
         return None
-    out = getattr(design, 'output_chapters', None)
+    out = getattr(design, 'chapters', None)
     if out is None:
         return None
-    return sorted(int(c.output_ordinal) for c in out)
+    return sorted(int(c.chapter_ordinal) for c in out)
 
 
 def stage1_chapter_count(store: ArtifactStore) -> int | None:
@@ -341,7 +346,7 @@ def stage_state(store: ArtifactStore, stage: str) -> StageState:
         ordinals = sorted(
             set(written) | set(want or ()) | set(invalid_ordinals))
         chapter_states = [
-            artifact_state(store, artifact_rel('stage5.chapter', nn=ordinal))
+            artifact_state(store, artifact_rel(STR06_STAGE5_BODY, nn=ordinal))
             for ordinal in ordinals
         ]
         usable = [
@@ -472,6 +477,9 @@ def readonly_ctx(novel_dir: Path, node: str, code: str) -> RunContext:
     漏掉 `ledger=CostLedger(path=None)` ⇒ **长驻的服务进程会往盘上追加账本行**，
     当场踩 `R-11.3`（服务进程绝不落产物盘）。少一个参数不会报错，只会安静地写。
     """
+    # ⚠⚠ F8b：旧链恢复/审批/完成度探测仍用旧节点 id 建只读 ctx 读**旧盘面**
+    #   （旧书只读识别 legacy_incompatible 的正当读路）。RunContext 对
+    #   readonly+RETIRED_NODES 放行（见 novel/run.py 的校验），此处无需分支。
     return RunContext(novel_dir=novel_dir, node=node, paid=False, code=code,
                       cache=CachePolicy.default(), ledger=CostLedger(path=None),
                       readonly=True)
@@ -1014,7 +1022,7 @@ def resume_verdict(
 
 def _stage5_chapter_ordinal(rel: str) -> int | None:
     """从路径注册表的模板反解 canonical Stage5 章号；不重抄路径字面。"""
-    prefix, marker, suffix = STAGE5_CHAPTER.partition('{nn}')
+    prefix, marker, suffix = STR06_STAGE5_BODY.partition('{nn}')
     if not marker or not rel.startswith(prefix) or not rel.endswith(suffix):
         return None
     end = len(rel) - len(suffix) if suffix else len(rel)
@@ -1022,7 +1030,7 @@ def _stage5_chapter_ordinal(rel: str) -> int | None:
     if not raw.isdigit():
         return None
     ordinal = int(raw)
-    if ordinal < 1 or artifact_rel('stage5.chapter', nn=ordinal) != rel:
+    if ordinal < 1 or artifact_rel(STR06_STAGE5_BODY, nn=ordinal) != rel:
         return None
     return ordinal
 

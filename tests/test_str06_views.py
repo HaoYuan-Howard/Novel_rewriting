@@ -271,3 +271,28 @@ def test_candidate_api_models_keep_the_active_disciplines():
     assert not (mods & {'fastapi', 'starlette', 'uvicorn', 'novel'}), \
         f'候选契约层长出了不该有的依赖：{sorted(mods)}'
     assert 'pydantic' in mods
+
+
+def test_book_download_carries_the_chinese_filename(base):
+    """成书下载带 `Content-Disposition`（F8b 从旧 stage7/book.txt 移植）。
+
+    ⚠ 书名是中文而 header 值只能是 latin-1：`filename=` 留 ASCII 回退
+    （`book.txt`，与 URL 同名），真名走 `filename*=UTF-8''<百分号编码>`——
+    另存文件名用**盘上那份的名字**，前端不拿书名重拼（`R-11.4`）。
+    ⚠ `download` 缺省 false 时不带头：页面内预览与另存是两件事。
+    """
+    from urllib.parse import unquote
+
+    with TestClient(create_app(base)) as http:
+        preview = http.get('/api/str06/candidates/cand/book')
+        assert preview.status_code == 200, preview.text[:200]
+        assert 'content-disposition' not in preview.headers
+
+        download = http.get('/api/str06/candidates/cand/book?download=true')
+        assert download.status_code == 200
+        header = download.headers['content-disposition']
+        assert header.startswith('attachment; filename="book.txt"; filename*=')
+        name = unquote(header.split("filename*=UTF-8''", 1)[1])
+        assert name.endswith('_rewriting.txt') and name != 'book.txt'
+        assert download.text == views.final_text_path(base, 'cand').read_text(
+            encoding='utf-8')

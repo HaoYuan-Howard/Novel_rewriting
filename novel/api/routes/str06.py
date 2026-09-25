@@ -17,7 +17,9 @@
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from urllib.parse import quote
+
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import PlainTextResponse
 
 from contracts.schema.str06.api import (
@@ -113,12 +115,31 @@ def get_delivery(candidate: str, base: str = Depends(get_base)) -> Str06Delivery
     return views.delivery_view(base, candidate)
 
 
+def _download_headers(name: str) -> dict[str, str]:
+    """另存文件名。**必须同时给 `filename` 与 `filename*`**（RFC 6266 / RFC 5987）。
+
+    ⚠⚠ 书名是中文，而 `Content-Disposition` 的 header 值只能是 latin-1：直接把
+    中文塞进 `filename="…"` 会在 ASGI 编码 header 时抛 `UnicodeEncodeError`
+    （500），或被中间层换成一串问号 ⇒ 中文走 `filename*=UTF-8''<百分号编码>`，
+    `filename=` 留一个纯 ASCII 回退（`book.txt`，与 URL 同名，说得清来历）。
+    """
+    quoted = quote(name, safe='')
+    return {
+        'Content-Disposition':
+            "attachment; filename=\"book.txt\"; filename*=UTF-8''" + quoted,
+    }
+
+
 @router.get('/{candidate}/book')
-def get_book(candidate: str, base: str = Depends(get_base)) -> PlainTextResponse:
+def get_book(candidate: str, download: bool = Query(default=False),
+             base: str = Depends(get_base)) -> PlainTextResponse:
     """成书字节下载（`stage7/final/{title}_rewriting.txt` 原样流出）。
 
     ⚠ 没有成书是 404，不是空响应：文件存在不等于可交付，而空 200 会让页面
     把「还没成书」显示成「一本空书」。
+    ⚠ `download=true` 时带 `Content-Disposition`（承接旧 `stage7/book.txt`
+    的另存名语义，F8b）：另存文件名用**盘上那份的名字**，不让前端拿书名重拼——
+    同一条命名规则不该有两个落点（`R-11.4`）。
     """
     _require_candidate(base, candidate)
     path = views.final_text_path(base, candidate)
@@ -127,4 +148,5 @@ def get_book(candidate: str, base: str = Depends(get_base)) -> PlainTextResponse
             f'候选根 {candidate} 还没有成书文件',
             hint='跑到 stage7 assemble 且 manifest 提交后才有成书；'
                  '用 /delivery 看就绪状态')
-    return PlainTextResponse(path.read_text(encoding='utf-8'))
+    headers = _download_headers(path.name) if download else None
+    return PlainTextResponse(path.read_text(encoding='utf-8'), headers=headers)

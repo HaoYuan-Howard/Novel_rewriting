@@ -57,12 +57,13 @@ F3b 第二本 artifact-only smoke 撤销，不再作为本轮待办或付费点�
 
 ## 当前状态与下一步
 
-**下一批：F8b（免费，可分步提交）。F8a 已于 2026-09-25 完成：契约与公开规则翻转
+**下一批：F8b-3（免费，可分步提交）。F8a 已于 2026-09-25 完成：契约与公开规则翻转
 （候选表原样激活为唯一现役注册面、判据注册表按新坐标重建、BACKEND_CONTRACT
 R-2～R-10 与指南同批改写）全部落地，零模型调用；契约五文件与 str06 定向套件全绿。
-F8b 起翻转编排与服务面（CLI／queue／state／permit／admission／delivery／
-autostart／API／Views／前端），F8c 分流删除，F8d 最终工程验收；main 在 F9 后合入一次。**
-F4R、F6、F5、F7a–F7e 已完成各自登记范围；F8a 已完成，F8b–F8d 与 F9 待实施。
+F8b-1（CLI 新链可达）与 F8b-2（编排状态与服务面收口、legacy 拒读读路）已于
+2026-09-25 完成；F8b-3 起按文件分批完成 rewrite 桶旧节点载荷改写（约 870 项），
+其后 F8c 分流删除，F8d 最终工程验收；main 在 F9 后合入一次。**
+F4R、F6、F5、F7a–F7e 已完成各自登记范围；F8a–F8b-2 已完成，F8b-3 起与 F8c、F8d 及 F9 待实施。
 F8a 激活后版式身份即现役契约（候选契约表身份 `04b6fb22…`，由
 `tests/test_str06_f7e_freeze.py` 钉住；激活时表内任何变化须先改冻结记录）。
 下表是既有证据摘要，不是本次重新运行或整书质量结论。
@@ -419,7 +420,7 @@ F5a–F5d 已闭合按章成文的契约、引擎与免费验证，F5e 已完成
       test_test_selection.py` 的 str06 选测范围断言把旧链模块算进消费者闭包
       （4 项，F8a 提交时已红），随 F8c 删除旧链测试模块与 `change_scopes.str06`
       登记后闭合；③ 旧链测试文件的收集失败按 delete／rewrite 两桶归 F8b／F8c。
-  - [ ] **F8b · 编排与服务翻转**（进行中；F8b-1 已提交）：CLI runner、queue／state／operator／Agent supervisor／
+  - [ ] **F8b · 编排与服务翻转**（进行中；F8b-1、F8b-2 已提交）：CLI runner、queue／state／operator／Agent supervisor／
     execution_permit／admission／delivery／upload_autostart 改走新节点，API／Views／前端
     路由同步激活；按登记删除 Stage6 分支。旧书只读识别为 `legacy_incompatible`，独立根
     重建，不继承旧批准或接受记录。
@@ -431,6 +432,31 @@ F5a–F5d 已闭合按章成文的契约、引擎与免费验证，F5e 已完成
       付费边界（工作单元＋整书总闸＋唯一 ledger）与 workflow／epoch 身份由
       PaidRequestSession／CandidateRunContext 闭合。`tests/test_str06_cli_dispatch.py`
       5 项（argv 形状／节点旗标面／分流点／付费闸／未知旗标拒绝）全绿。
+    - [x] **F8b-2 · 编排状态与服务面收口**（2026-09-25 完成，零模型调用）：
+      Stage6 服务分支按登记切除（CLI `_runners` 无 stage6 腿、queue／permit／
+      inbox_projection／operator／reviewer 的 Stage6 workpack 与 prepare 恢复面删除；
+      views／routes／前端 Stage6 页、`stage7` 旧视图与 fixtures 同批退役）。
+      state 完成度面翻新链：章稿 `stage5/body/ch{nn}.txt`、计划章集读 BodyDesign、
+      INVALID 清单与回执章号绑定改新链路径族。`check_node` 改「NODES 顺序第一座
+      桥」代表语义（新链复检是节点级 `--check-only`，零桥仍报错）。`RunContext`
+      对 readonly＋`RETIRED_NODES` 放行——旧链恢复／审批／完成度探测读旧盘面
+      是 `legacy_incompatible` 只读识别的正读路，生产入口仍按退役拒识。
+      `PROFILED_LLM_RUNS` 翻为 9 个 `str06.` 付费节点默认跑法。edits 路由族
+      （review 改稿／stage2 编辑三族／stage7 残留采纳）随全自动单模式整族退役，
+      文件保留空 router。F8a 遗留破损修复：inspection 的 `ARTIFACT_PATHS` 漏
+      import、enums `STAGE6_*` 悬空恢复 `_WITHHELD`、stage6 链模块（hook／
+      prompts／schema.stage6）按删除前值内联过渡（F8c 整包删除）。corpus 付费
+      预览工具与测试按登记修订为 F8b 提前删除（F8a 已删其派生源，修复需手抄
+      冻结节点表违反工具自身纪律；接管：新链付费边界由 PaidRequestSession
+      工作单元／整书总闸／ledger 守卫，corpus 线重启时按当期契约重建预览面）。
+      验证：契约 §9.5 五文件＋`test_invariants`＋str06 定向（candidates／freeze／
+      retirement×2／cli_dispatch）全绿；inbox／api_screens／api_edits／
+      artifact_versions 全绿（api_edits 重写为退役守卫、schema_api 移除收集期
+      旧判据注册污染）；前端 test 171／typecheck／seams／build 全绿，backend／
+      plot 生成类型同步重导。定向面余项：schema_api 3 项（F7e 红账，F8d 闭合）。
+      **剩余（F8b-3 起）**：rewrite 桶其余文件的旧节点载荷改写（llm／cli／
+      queue／nodes／state／api_http 等约 870 项，根因集中于旧节点字符串与旧
+      fixtures，按文件分批推进，F8d 前清零）。
   - [ ] **F8c · 分流、删除与证据保护**：迁移包分流到正式 stage2／4／5／7 及 contracts
     schema 包，按两张登记删除已被接管的旧实现、views、routes、前端页、fixtures 和测试。
     先迁有效职责与独有反例，不缩验收分母；删除 harness、临时 adapter、`change_scopes.str06`

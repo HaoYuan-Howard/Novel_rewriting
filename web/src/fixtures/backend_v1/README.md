@@ -18,7 +18,7 @@ Stage2 检查明确返回能力不可用；不使用旧事实检查或旧审批�
   以及原文回取成功和 `source=null` 两态。机械检查不证明语义已审。
 - `stage5_ch3.json`、`review_ch3.json`：当前 HTTP 协议的 `legacy_incompatible` 拒绝态，
   不携带旧双臂正文，不冒充已执行的新链。
-- `stage1.json`、`stage6.json`、`stage7.json`、`stage7_ch3.json`、`inbox.json` 与检查报告：
+- `stage1.json`、`stage7.json`、`stage7_ch3.json`、`inbox.json` 与检查报告：
   已注明来源的历史屏幕输入，仅供交互测试；缺少的新判据不能补签成通过。
 - `enums.json`：由 `tools/regen_web_enums_fixture.py` 调用当前 `novel/api/enums.py::payload()`
   生成；`tests/test_api_enums.py` 核对完整对象。
@@ -34,5 +34,6 @@ Stage2 检查明确返回能力不可用；不使用旧事实检查或旧审批�
 和 seams 复验，不能覆盖。仅目录/概览/Stage0 输入仍由历史样例解码入口读取，其余冻结正文、
 旧事实与审阅材料均不进入运行包。
 
-历史 Stage6 provenance 记录生产时的配置，前端不拿它计算当前预算；费用、用量与恢复结果
-始终消费当前服务账。新链使用干净数据根，不从这些样例迁移事实或继承审批。
+历史样例的 provenance 只记录生产时的配置，前端不拿它计算当前预算；费用、用量与恢复结果
+始终消费当前服务账。Stage6 整层已随 STR-06 切换退役：`stage6.json` 与 `check_stage6.json`
+删除，恢复来源为 Git 历史。新链使用干净数据根，不从这些样例迁移事实或继承审批。

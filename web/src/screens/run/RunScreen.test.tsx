@@ -20,49 +20,6 @@ beforeEach(() => {
 })
 
 describe('RunScreen 交付终验', () => {
-  it('展示 Stage6 改选重建排队与成书对齐状态', async () => {
-    const run = await mockApi.getRunProgress(SAMPLE_SID)
-    vi.spyOn(api, 'getRunProgress').mockResolvedValue(run)
-    vi.spyOn(api, 'getCheck').mockResolvedValue(null)
-    vi.spyOn(api, 'getAgentRuns').mockResolvedValue({ runs: [] })
-    const rebuild = vi.spyOn(api, 'getStage6Rebuild').mockResolvedValue({
-      pending: true,
-      published: false,
-      queue_depth: 1,
-      expected_slot: 'c2',
-      expected_approved_text_sha1: 'abcdef0123',
-      expected_candidates_sha1: 'fedcba9876',
-    })
-    const { unmount } = renderRoute(<RunScreen />, `/n/${SAMPLE_SID}/run`)
-    await waitFor(() => {
-      expect(screen.getByTestId('stage6-rebuild')).toHaveTextContent('重建排队中')
-    })
-    expect(rebuild).toHaveBeenCalledWith(SAMPLE_SID)
-    expect(screen.getByTestId('stage6-rebuild')).toHaveTextContent(
-      '当前下载对应旧版本；新选择正在生成。',
-    )
-    expect(screen.getByTestId('rebuild-queue-depth')).toHaveTextContent('1')
-    expect(screen.getByTestId('rebuild-expected-version')).toHaveTextContent('c2')
-    expect(screen.getByTestId('rebuild-published-version')).toHaveTextContent('否')
-    unmount()
-
-    rebuild.mockResolvedValue({
-      pending: false,
-      published: true,
-      queue_depth: 0,
-      expected_slot: null,
-      expected_approved_text_sha1: null,
-      expected_candidates_sha1: null,
-    })
-    renderRoute(<RunScreen />, `/n/${SAMPLE_SID}/run`)
-    await waitFor(() => {
-      expect(screen.getByTestId('stage6-rebuild')).toHaveTextContent('无待办重建')
-    })
-    expect(screen.getByTestId('stage6-rebuild')).toHaveTextContent('已对齐当前选择。')
-    expect(screen.getByTestId('rebuild-published-version')).toHaveTextContent('是')
-  })
-
-
   it('显示后端当前审批与恢复，历史工作单元不决定下一角色', async () => {
     const run = await mockApi.getRunProgress(SAMPLE_SID)
     vi.spyOn(api, 'getRunProgress').mockResolvedValue({
@@ -82,7 +39,7 @@ describe('RunScreen 交付终验', () => {
     vi.spyOn(api, 'getCheck').mockResolvedValue(null)
     vi.spyOn(api, 'getAgentRuns').mockResolvedValue({ runs: [] })
     renderRoute(<RunScreen />, `/n/${SAMPLE_SID}/run`)
-    expect(await screen.findByText('下一处理者：人工（Stage6 改选等只读监控面上的例外动作）')).toBeVisible()
+    expect(await screen.findByText('下一处理者：人工（只读监控面上的例外动作）')).toBeVisible()
     expect(screen.getByText('stage2.global · book：accepted')).toBeVisible()
     expect(screen.getByText('stage2.blueprint · book：uncertain')).toBeVisible()
     expect(screen.getByText('当前恢复：book: replay_response')).toBeVisible()
@@ -461,7 +418,7 @@ describe('RunScreen check composition', () => {
     await waitFor(() => expect(getCheck).toHaveBeenCalledTimes(1))
     expect(getCheck).toHaveBeenCalledWith(SAMPLE_SID, 'stage0')
     expect(getCheck).not.toHaveBeenCalledWith(SAMPLE_SID, 'stage5')
-    expect(screen.getAllByText('· 尚不可检查')).toHaveLength(6)
+    expect(screen.getAllByText('· 尚不可检查')).toHaveLength(5)
   })
 
   it('默认折叠 operator 已确认无需重跑的前缀，并显示真实续跑处理者', async () => {
@@ -497,7 +454,7 @@ describe('RunScreen check composition', () => {
     const frontier = await screen.findByTestId('resume-frontier')
     expect(frontier).toHaveTextContent(/下一节点：stage4 写作上下文组装/)
     expect(frontier).toHaveTextContent('当前执行：stage4 重构计划（stage4.plan）')
-    expect(frontier).toHaveTextContent('下一处理者：人工（Stage6 改选等只读监控面上的例外动作）')
+    expect(frontier).toHaveTextContent('下一处理者：人工（只读监控面上的例外动作）')
     expect(screen.getByRole('button', { name: '跳到下一节点' })).toBeEnabled()
     expect(screen.queryAllByTitle('stage0.remove')).toHaveLength(0)
 
@@ -623,8 +580,8 @@ describe('RunScreen check composition', () => {
 
     renderRoute(<RunScreen />, `/n/${SAMPLE_SID}/run`)
 
-    expect(await screen.findAllByText('有阻断')).toHaveLength(6)
-    expect(screen.getAllByText('hard 1 · info 1 · unver 3')).toHaveLength(6)
+    expect(await screen.findAllByText('有阻断')).toHaveLength(5)
+    expect(screen.getAllByText('hard 1 · info 1 · unver 3')).toHaveLength(5)
     expect(screen.getByText('? 校验未知')).toBeInTheDocument()
     expect(screen.getByText(/badge 与计数来自各层 CheckReport/)).toBeInTheDocument()
   })
@@ -649,7 +606,7 @@ describe('RunScreen check composition', () => {
     })
 
     const { queryClient } = renderRoute(<RunScreen />, `/n/${SAMPLE_SID}/run`)
-    expect(await screen.findAllByText('通过')).toHaveLength(7)
+    expect(await screen.findAllByText('通过')).toHaveLength(6)
 
     act(() => {
       void queryClient.invalidateQueries({ queryKey: qk.check(SAMPLE_SID, 'stage1') })
@@ -661,13 +618,13 @@ describe('RunScreen check composition', () => {
       )
     })
     expect(screen.queryByText('? 校验未知')).not.toBeInTheDocument()
-    expect(screen.getAllByText('通过')).toHaveLength(7)
+    expect(screen.getAllByText('通过')).toHaveLength(6)
 
     // 这次是真的取不到了——才显示未知
     act(() => rejectRefresh(new Error('current check unavailable')))
     await waitFor(() => {
       expect(screen.getByText('? 校验未知')).toBeInTheDocument()
-      expect(screen.getAllByText('通过')).toHaveLength(6)
+      expect(screen.getAllByText('通过')).toHaveLength(5)
     })
   })
 })

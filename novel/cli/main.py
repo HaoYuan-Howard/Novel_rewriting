@@ -51,7 +51,7 @@ from pydantic import ValidationError
 
 from contracts.invariants import (
     FREE_ENTRIES, NODES,
-    PAID_FLAGS, PROGRESS_PHASES,
+    PAID_FLAGS, PROGRESS_PHASES, RETIRED_NODES,
     STAGES, STAGE5_CLOSED_EXEMPT_FLAGS, VALUED_FLAGS,
 )
 from contracts.schema.orchestration import (
@@ -257,13 +257,6 @@ def _parser() -> argparse.ArgumentParser:
     approval_gate.add_argument('sid')
     approval_gate.add_argument('--base', required=True)
 
-    approval_workpack = approval_sub.add_parser(
-        'workpack', help='只读输出当前 Stage6/7 审批工作包'
-                         '（Stage4 design/structure 工作包已随人工闸退役）')
-    approval_workpack.add_argument('surface', choices=('stage6', 'stage7'))
-    approval_workpack.add_argument('sid')
-    approval_workpack.add_argument('--base', required=True)
-
     # ⚠ `approval template/apply` 的 writing/stage5 面已随批次 B3（2026-09-15
     #   全自动裁决）退役删除：写作授权并入 run 启动授权，闭合回执由
     #   `stage5.review` producer 机械落账。
@@ -356,10 +349,14 @@ def _executor_backend_of(a: argparse.Namespace) -> ExecutorBackend | None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _runners() -> dict[str, Callable[[RunContext, list[str]], int]]:
-    """`stage` → 跑法派发。`_dispatch` 与 `runnable_stages` 共用这一张当前表。"""
+    """`stage` → 跑法派发。`_dispatch` 与 `runnable_stages` 共用这一张当前表。
+
+    ⚠ Stage6 整层随 STR-06 切换退役（F8b）：`_runners` 不再有 `stage6` 腿；
+    旧链节点在 `_cmd_run` 入口即按 `RETIRED_NODES` 拒读（legacy_incompatible）。
+    """
     return {'stage0': _run_stage0, 'stage1': _run_stage1, 'stage2': _run_stage2,
             'stage4': _run_stage4, 'stage5': _run_stage5,
-            'stage6': _run_stage6, 'stage7': _run_stage7}
+            'stage7': _run_stage7}
 
 
 def runnable_stages() -> frozenset[str]:
@@ -582,145 +579,6 @@ def _run_stage1(ctx: RunContext, flags: list[str]) -> int:
         return X.OK if report.passed else X.CHECK_FAILED
     return X.OK
 
-
-def _run_stage6(ctx: RunContext, flags: list[str]) -> int:
-    """Stage6 生成、审阅与免费恢复的统一分发。
-
-    ⚠ `stage6.approve --pick N` 也走这里：派发按 **stage** 分，节点由 `ctx.node` 带着。
-    """
-    from novel.stages.stage6 import hook
-
-    tokens = set(N.flag_tokens(flags))
-
-    if ctx.node == 'stage6.prepare':
-        from contracts.artifacts import STAGE6_PREPARE_EDIT
-        from contracts.schema import encode_artifact
-        from novel.stages.stage6 import prepare
-        from novel.store import ArtifactStore
-        store = ArtifactStore(ctx)
-        if '--dry-run' in tokens:
-            print(prepare.build_prompt(ctx))
-        elif '--emit-review-workpack' in tokens or '--emit-review-template' in tokens:
-            raise TerminalState(
-                'stage6.prepare 的 --emit-review-* 已退役（批次 B4）；'
-                '机械校验通过即自动接受，请用 --revalidate / --recover-edit / '
-                '--recover-prepared')
-        elif '--emit-edit-template' in tokens:
-            print(json.dumps(encode_artifact(STAGE6_PREPARE_EDIT,
-                prepare.review_workpack(store).edit_template.model_dump(mode='json')), ensure_ascii=False))
-        elif '--apply-edit' in tokens or '--review-decisions' in tokens:
-            raise TerminalState(
-                'stage6.prepare 的 --apply-edit / --review-decisions 已退役'
-                '（批次 B4）；机械校验通过即自动接受，免费恢复请用 '
-                '--recover-edit / --recover-prepared / --revalidate')
-        elif '--recover-edit' in tokens:
-            prepare.run_recover_edit(ctx)
-        elif '--recover-prepared' in tokens:
-            prepare.recover_prepared(ctx,
-                source_run_id=_valued(flags, '--recover-prepared') or '',
-                subject_sha256=_valued(flags, '--subject-sha256') or '')
-        elif '--revalidate' in tokens:
-            report = prepare.run_revalidate(ctx)
-            print(render(report))
-            return X.OK if report.passed else X.CHECK_FAILED
-        else:
-            prepare.run_prepare(ctx, _llm_client(ctx))
-        return X.OK
-
-    if ctx.node == 'stage6.hook' and '--recover-prepared' in tokens:
-        hook.recover_prepared_hook(ctx,
-            source_run_id=_valued(flags, '--recover-prepared') or '',
-            proof_sha256=_valued(flags, '--subject-sha256') or '')
-        print('  ✓ 已按原完成组补齐 Hook 正式提交与采纳尾账（0 模型）')
-        return X.OK
-
-    if ctx.node == 'stage6.approve':
-        pick = _valued(flags, '--pick')
-        if pick is None:
-            auto = True          # 默认路径 = 自动定稿（队列/Supervisor 跑法）
-        elif '--auto' in tokens:
-            raise TerminalState(
-                'stage6.approve 的 --auto 与 --pick N 互斥；'
-                '人工改选只给 --pick N --actor --reason --review-token')
-        else:
-            auto = False
-        actor = _valued(flags, '--actor') or ''
-        reason = _valued(flags, '--reason') or ''
-        review_token = _valued(flags, '--review-token') or ''
-        if not auto and (not actor or not reason or not review_token):
-            raise TerminalState(
-                '人工改选必须显式给 --actor、--reason 和 '
-                '--review-token；actor 是自报身份，opaque token 防旧页面误批')
-        if pick is not None and not pick.isdigit():
-            raise TerminalState(f'--pick {pick!r} 不是一个候选序号（1 起的整数）')
-        art, report = hook.run_approve(
-            ctx, int(pick) if pick is not None else None, auto=auto,
-            actor=actor, reason=reason, review_token=review_token)
-        print(render(report))
-        if art.approved is not None and art.approved.origin == 'auto':
-            print(f"  ✓ 已自动定稿 {art.approved.slot}（固定槽位序第一条可用候选）")
-        return X.OK if report.passed else X.CHECK_FAILED
-
-    if '--check-only' in tokens:
-        report = hook.run_check_only(ctx)
-        print(render(report))
-        return X.OK if report.passed else X.CHECK_FAILED
-
-    if '--dry-run' in tokens:
-        system, user, _mat = hook.build_prompt(ctx)
-        print(f'── system（{len(system)} 字）──\n{system}')
-        print(f'\n── user（{len(user)} 字）──\n{user}')
-        return X.OK
-
-    if '--identity' in tokens:
-        grid, report = hook.run_identity(ctx)
-        print(f'── 恒等基线 ── {len(grid)} 格（拿原作文案段当输入跑同一把尺子）')
-        for rule, cell in sorted(grid.items()):
-            print(f'  {cell}  {rule}')
-        print(render(report))
-        # ⚠ 恒等基线**不拿 badge 当退出码**：它量的是「判据有没有误伤原作」，
-        # 而报告里那些 unver 说的是本层的常态。跑完了就是 0。
-        return X.OK
-
-    if '--recheck' in tokens:
-        _art, report = hook.run_recheck(ctx)
-        print(render(report))
-        return X.OK if report.passed else X.CHECK_FAILED
-
-    if '--rebind-review' in tokens:
-        _art, report = hook.run_rebind_review(ctx)
-        print(render(report))
-        print('  ✓ 旧 Stage6 人工决定已保留原 actor/reason 并绑定稳定 review identity')
-        return X.OK if report.passed else X.CHECK_FAILED
-
-    if '--revalidate' in tokens:
-        promoted, report = hook.run_revalidate(
-            ctx, actor=_valued(flags, '--actor') or '',
-            reason=_valued(flags, '--reason') or '')
-        print(render(report))
-        print('  ✓ 已提升为正式产物（0 成本）' if promoted
-              else '  ✗ 仍有阻断级问题，未提升；问题稿留在 .INVALID')
-        return X.OK if promoted else X.CHECK_FAILED
-
-    if '--apply-edit' in tokens:
-        _art, report = hook.run_apply_edit(ctx, _valued(flags, '--apply-edit') or '')
-        print(render(report))
-        print('  ✓ 人工文案修订已落为新一轮')
-        return X.OK if report.passed else X.CHECK_FAILED
-
-    if '--wontfix' in tokens:
-        report = hook.run_wontfix(ctx, _valued(flags, '--wontfix') or '')
-        print(render(report))
-        print('  ✓ 豁免已记进 stage6/wontfix.json。'
-              '⚠ **豁免不删结论**：它照常列在报告与界面上，只是不占待人工；'
-              '定稿闸门（`stage6.approve --pick`）**照旧拒绝有矛盾的候选**')
-        return X.OK if report.passed else X.CHECK_FAILED
-
-    # 付费路：遵循 AGENTS.md 的付费与正文外发授权边界。
-    client = _llm_client(ctx)
-    hook.run_hook(ctx, client)
-    print('  ✓ stage6 开篇文案已落盘（三个候选）——跑 `stage6.approve --pick N` 定稿')
-    return X.OK
 
 
 def _run_stage2(ctx: RunContext, flags: list[str]) -> int:
@@ -1326,7 +1184,6 @@ def _run_stage7(ctx: RunContext, flags: list[str]) -> int:
     ⚠⚠ **本层是第一个「一个 stage 三个节点」的层**（`stage7.rename` / `.assemble` /
     `.approve`）。派发按 **stage** 分（`_runners` 那张表的键就是 stage），
     节点由 `ctx.node` 带着 ⇒ 这里要**先按节点分两次岔，再按 flag 分**。
-    形态照 `_run_stage6` 里 `ctx.node == 'stage6.approve'` 那一支，只是多一支。
     """
     from novel.stages.stage7 import assemble, rename
 
@@ -1559,6 +1416,14 @@ def _cmd_run(a: argparse.Namespace) -> int:
     # 手敲 CLI 不能绕过编排器的节点契约。此前 `stage2.global --check-only`
     # （该节点不接受这条跑法）先被 `is_paid` 倒向“会花钱”，显示成“加 --yes”；
     # 真加了又会落到默认付费分支。入口先走与 preview 共用的节点校验。
+    if a.node in RETIRED_NODES:
+        # 旧链节点随 STR-06 切换整体退役（F8b）：现役 NODES 只有 stage0/1 与
+        # 11 个 str06. 节点。旧书只读识别为 legacy_incompatible，不继承旧批准
+        # 或接受记录；要重跑必须在独立根经新链重建。
+        raise TerminalState(
+            f'节点 {a.node!r} 已随旧链退役（legacy_incompatible）：现役链是 '
+            f'{sorted(NODES)}。旧书的盘上产物只读保留，不能据此触发重跑；'
+            '在独立输出根重新上传并按新链自动开跑')
     N.validate_run(a.node, flags)
     # ⚠ 付费确认闸前置：`is_paid` 只有一处算（`R-11.7`），而「花不花钱」必须先于
     #   任何派发回答——新链节点同样受这道闸约束（`Q-10`）。
@@ -1725,15 +1590,14 @@ def _cmd_run(a: argparse.Namespace) -> int:
             reviewer_rewrite_request_rel=reviewer_rewrite_rel,
         )
     # Stage5 闭合闸落在**所有真实执行最终汇合的运行边界**（手敲 CLI、API jobs、
-    # headless agent 子 CLI 都经过这里）：stage6/stage7 的任何写效果跑法都要求
+    # headless agent 子 CLI 都经过这里）：stage7 的任何写效果跑法都要求
     # 当前 typed closure 回执已打开 gate.s5。0 成本只读跑法（--check-only 等）
     # 仍可运行，否则人连开闸需要的证据都拿不到（R 系硬闸与恢复面同批交付）。
+    # ⚠ Stage6 prepare/hook 两项随 Stage6 整层退役（F8b）：该层不再有写效果节点。
     prepared_delivery_recovery = (
-        a.node in ('stage6.prepare', 'stage6.hook', 'stage7.rename')
+        a.node == 'stage7.rename'
         and run_tokens == {'--recover-prepared', '--subject-sha256'})
-    prepared_delivery_recovery = prepared_delivery_recovery or (
-        a.node == 'stage6.prepare' and run_tokens == {'--recover-edit'})
-    if (a.node in ('stage6.prepare', 'stage6.hook', 'stage7.rename', 'stage7.assemble')
+    if (a.node in ('stage7.rename', 'stage7.assemble')
             and not prepared_delivery_recovery
             and not (run_tokens and run_tokens <= set(STAGE5_CLOSED_EXEMPT_FLAGS))):
         from novel.stages.stage5 import closure as stage5_closure
@@ -2193,11 +2057,13 @@ def _cmd_approval(a: argparse.Namespace) -> int:
 
 
 def _cmd_approval_admitted(a: argparse.Namespace) -> int:
-    """可审计审批 CLI：只读 show/workpack + backfill/gate(s0,s1)。
+    """可审计审批 CLI：只读 show + backfill/gate(s0,s1)。
 
     Stage4 design/structure 工作包、模板与 typed apply 已随四道人工闸退役；
     Stage5 writing/闭合（closure）人工面已随批次 B3（2026-09-15 全自动裁决）
-    退役——闭合由 `stage5.review` producer 以 system:stage5-auto 机械落账。
+    退役——闭合由 `stage5.review` producer 以 system:stage5-auto 机械落账；
+    Stage6/7 终审工作包（approval workpack）随人工闸退役整体移除（F8b）——
+    命名与交付监控读 `/api/str06/candidates/{candidate}/*` 只读面。
     """
     from novel.orchestrator import approvals
 
@@ -2210,13 +2076,6 @@ def _cmd_approval_admitted(a: argparse.Namespace) -> int:
             raise ApprovalRequired(
                 'gate.s4 已退役：Stage4 唯一打开条件是统一机械准入')
         result = approvals.approve_gate(a.base, a.sid, a.gate)
-    elif a.approval_action == 'workpack':
-        if a.surface == 'stage6':
-            from novel.views.stage6 import stage6_approval_workpack
-            result = stage6_approval_workpack(a.base, a.sid)
-        else:
-            from novel.views.stage7 import stage7_approval_workpack
-            result = stage7_approval_workpack(a.base, a.sid)
     else:
         raise TerminalState(f'未登记的审批动作：{a.approval_action!r}')
     print(result.model_dump_json(indent=2))

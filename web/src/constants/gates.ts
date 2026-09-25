@@ -3,9 +3,9 @@
  *
  *   stage0 剔番外 ─► stage1 切分 ─► stage2 global ─► blueprint
  *                     └─ 统一机械准入衔接，语义未审以报告 unver 披露 ─┘ ─► stage4 计划
- *                   ─► Stage5 写作授权 ─► stage5 ─► stage6 ─► stage7
+ *                   ─► Stage5 写作授权 ─► stage5 ─► stage7
  *
- * 通用 GateBar 已随人工逐 Stage 模式退役；Stage6 改选走专用 approveHook。
+ * 通用 GateBar 已随人工逐 Stage 模式退役。
  * 审批、后续作业与最终交付分别读取后端证明，不能从 gate 推导成书或自动发起状态。
  * Stage2 语义审阅已退役：read 屏不再挂 gate，global 屏的下一动作只消费 s1 spawns。
  */
@@ -82,15 +82,15 @@ export function resolveGate(screen: ScreenName, doc: ApprovalDoc): GateView | nu
         blocked: !ready,
         title: done ? '成稿已确认' : ready ? '这些章可以定稿了吗？' : '上游还没齐，先别定稿',
         note: ready
-          ? '判据在左、成稿在右，改完再确认。确认后发起 stage6 开篇文案。'
+          ? '判据在左、成稿在右，改完再确认。确认后进入 stage7 人名替换与成书。'
           : '成稿必须建立在当前已确认的 Stage4 计划与全书写作授权上。',
         chips: [
           { ok: g.s4, label: 'stage4 计划' },
           { ok: doc.writing, label: doc.writing ? '全书写作已授权' : '全书写作未授权' },
         ],
-        btn: done ? '已确认' : ready ? '确认成稿，启动 stage6' : '等计划确认与写作授权',
+        btn: done ? '已确认' : ready ? '确认成稿' : '等计划确认与写作授权',
         blockedReason: '当前计划或全书写作授权尚未成立。',
-        doneNote: done ? 'stage6 已发起。' : null,
+        doneNote: done ? 'stage5 成稿已确认。' : null,
       }
     }
 
@@ -105,23 +105,25 @@ export function resolveGate(screen: ScreenName, doc: ApprovalDoc): GateView | nu
  */
 export const RAIL_LOCK: Partial<Record<ScreenName, { need: GateKey; why: string }>> = {
   stage1: { need: 's0', why: '先过 stage0：番外还没剔，切了也要重切' },
-  stage6: { need: 's5', why: '先确认 stage5 成稿：文案是给成稿写的招牌' },
-  stage7: { need: 's6', why: '先确认 stage6 文案：不然拼出来的是半本' },
 }
 
-/** gate key → 一句人话。左导航锁定项右侧的小字用它，别在屏里散落硬编码。 */
-export const GATE_LABEL: Record<GateKey, string> = {
+/**
+ * gate key → 一句人话。左导航锁定项右侧的小字用它，别在屏里散落硬编码。
+ * Stage6 整层退役后界面不再有 stage6 闸门词汇；后端 `gate` 投影里的历史闸键只作解码，
+ * 不进任何文案（GateKey 仍含它，见 `types/approvals.ts`）。
+ */
+export const GATE_LABEL: Partial<Record<GateKey, string>> = {
   s0: 'stage0 剔除番外',
   s1: 'stage1 切分确认',
   s4: 'stage4 计划确认',
   s5: 'stage5 成稿确认',
-  s6: 'stage6 文案确认',
   s7: 'stage7 人名定稿',
 }
 
 /** 锁定项右侧的常驻小字：「先过 stage0 剔除番外」 */
 export function gateNeedText(key: GateKey): string {
-  return '先过 ' + GATE_LABEL[key]
+  const label = GATE_LABEL[key]
+  return label === undefined ? '前置闸门未确认' : '先过 ' + label
 }
 
 /** 左导航上打 ✓ 的依据 */
@@ -130,6 +132,5 @@ export const RAIL_GATE: Partial<Record<ScreenName, GateKey>> = {
   stage1: 's1',
   stage4: 's4',
   stage5: 's5',
-  stage6: 's6',
   stage7: 's7',
 }

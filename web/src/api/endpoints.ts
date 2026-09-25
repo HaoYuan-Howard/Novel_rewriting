@@ -1,5 +1,4 @@
 import type { RunMetrics } from '@/types/runMetrics'
-import type { PrepareView, PrepareWorkpack } from '@/types/prepare'
 /**
  * 唯一的数据缝。屏与组件只认这个文件导出的 `api`。
  *
@@ -21,7 +20,6 @@ import type {
 } from '@/types/agent'
 import type {
   ApprovalDoc,
-  Stage6ApprovalWorkpack,
   Stage7ApprovalWorkpack,
 } from '@/types/approvals'
 import type { EnumsResponse } from '@/types/enums'
@@ -38,7 +36,6 @@ import type {
   JobPreview,
   JobRequest,
   JobsResponse,
-  Stage6RebuildStatus,
   UploadCorpusOptions,
   UploadResponse,
 } from '@/types/jobs'
@@ -76,7 +73,6 @@ import type {
   Stage2Global,
   Stage4Response,
   Stage5Response,
-  Stage6Response,
   Stage7Response,
 } from '@/types/stages'
 import { isApiError } from './errors'
@@ -390,10 +386,6 @@ export const realApi: Api = {
   getStage5: (sid, o) => get<Stage5Response>(n(sid) + '/stage5/' + o),
   getReview: (sid, o) => get<ReviewResponse>(n(sid) + '/review/' + o),
   getInbox: (sid) => get<InboxResponse>(n(sid) + '/inbox'),
-  getStage6: (sid) => get<Stage6Response>(n(sid) + '/stage6'),
-  getStage6Prepare: (sid) => get<PrepareView>(n(sid) + '/stage6/prepare'),
-  getStage6PrepareWorkpack: (sid) => get<PrepareWorkpack>(n(sid) + '/stage6/prepare/workpack'),
-  getStage6Rebuild: (sid) => get<Stage6RebuildStatus>(n(sid) + '/stage6/rebuild'),
   getStage7: (sid) => get<Stage7Response>(n(sid) + '/stage7'),
   getStage7Chapter: (sid, o) => get<Stage7Response>(n(sid) + '/stage7/' + o),
   getStage7Book: (sid) => getText(n(sid) + '/stage7/book.txt'),
@@ -501,14 +493,10 @@ export const realApi: Api = {
   getApprovals: (sid) => get<ApprovalDoc>(n(sid) + '/approvals'),
   // stage4 design/structure workpack、模板与 POST 写面已随 2026-09-15 全自动裁决退役；
   // Stage4 人工闸只剩只读审批投影，机械准入是唯一打开条件。
-  getStage6ApprovalWorkpack: (sid) =>
-    get<Stage6ApprovalWorkpack>(n(sid) + '/approvals/stage6/workpack'),
   getStage7ApprovalWorkpack: (sid) =>
     get<Stage7ApprovalWorkpack>(n(sid) + '/approvals/stage7/workpack'),
   resetBook: (sid) => post<ApprovalDoc>(n(sid) + '/approvals/reset'),
 
-  approveHook: async (sid, req) =>
-    adaptJob(await post<BackendJobRecord>(n(sid) + '/stage6/approve', req)),
   uploadCorpus: async (file, options: UploadCorpusOptions) => {
     const params = new URLSearchParams({
       filename: file.name,

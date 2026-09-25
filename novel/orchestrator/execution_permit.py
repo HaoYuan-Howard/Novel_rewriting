@@ -71,16 +71,12 @@ _STAGE5_REVIEW = queue.WAITING_ON_REVIEW
 _STAGE5_CLOSURE = queue.WAITING_ON_STAGE5_CLOSURE
 _STAGE5_REVIEWER_REWRITE = queue.WAITING_ON_STAGE5_REVIEWER_REWRITE
 _PREPARED_DELIVERY = queue.WAITING_ON_PREPARED_DELIVERY
-_STAGE6_APPROVE = 'stage6.approve'
 
 _W0 = frozenset({_INBOX, _RESUME})
 # stage2 恢复入口只认统一机械准入 blockers；节点写权仍按知识生产节点登记。
 _W2 = frozenset({_INBOX, _RESUME, _INVALID_REVALIDATE})
 _W4 = frozenset({_INBOX, _RESUME, _INVALID_REVALIDATE})
 _W5 = frozenset({_INBOX, _RESUME, _STAGE5_REVIEW, _STAGE5_CLOSURE, _INVALID_REVALIDATE})
-_W6 = frozenset({_INBOX, _RESUME, _STAGE5_CLOSURE, _STAGE6_APPROVE, _INVALID_REVALIDATE})
-# prepare 接受闸已退役；现役允许在 stage6.prepare 等待面与恢复面下跑免费路。
-_W6_PREPARE = _W6 | frozenset({'stage6.prepare', queue.WAITING_ON_STAGE6_PREPARE_COMMIT})
 _W7 = frozenset({_INBOX, _RESUME, _INVALID_REVALIDATE})
 
 
@@ -185,29 +181,9 @@ RECOVERY_RUN_POLICIES: Final[tuple[RecoveryRunPolicy, ...]] = (
            '--reviewer-rewrite-request-sha256'),
         frozenset({_STAGE5_REVIEWER_REWRITE})),
 
-    RecoveryRunPolicy('stage6.prepare', _t('--revalidate'), _W6_PREPARE),
-    RecoveryRunPolicy('stage6.prepare', _t('--emit-edit-template'), _W6_PREPARE),
-    RecoveryRunPolicy('stage6.prepare', _t('--recover-edit'), frozenset({queue.WAITING_ON_STAGE6_PREPARE_COMMIT})),
-    RecoveryRunPolicy('stage6.prepare', _t('--recover-prepared', '--subject-sha256'), frozenset({_PREPARED_DELIVERY})),
-    RecoveryRunPolicy('stage6.hook', _t('--check-only'), _W6),
-    RecoveryRunPolicy('stage6.hook', _t('--identity'), _W6),
-    RecoveryRunPolicy('stage6.hook', _t('--recheck'), _W6),
-    RecoveryRunPolicy(
-        'stage6.hook', _t('--revalidate', '--actor', '--reason'), _W6),
-    RecoveryRunPolicy('stage6.hook', _t('--apply-edit'), _W6),
-    RecoveryRunPolicy('stage6.hook', _t('--wontfix'), _W6),
-    RecoveryRunPolicy('stage6.hook', _t('--rebind-review'), _W6),
-    RecoveryRunPolicy(
-        'stage6.hook', _t('--recover-prepared', '--subject-sha256'),
-        frozenset({_PREPARED_DELIVERY})),
     RecoveryRunPolicy(
         'stage7.rename', _t('--recover-prepared', '--subject-sha256'),
         frozenset({_PREPARED_DELIVERY})),
-    RecoveryRunPolicy(
-        'stage6.approve',
-        _t('--pick', '--actor', '--reason', '--review-token'),
-        frozenset({_STAGE6_APPROVE}),
-    ),
 
     RecoveryRunPolicy('stage7.rename', _t('--check-only'), _W7),
     RecoveryRunPolicy('stage7.rename', _t('--identity'), _W7),
@@ -267,7 +243,6 @@ EXTERNAL_INPUT_POLICIES: Final[
     # （stage5.review 的 trim manifest / reviewer-input 两条外部输入随批次 B3
     #   trim 三选一退役删除。）
     ('stage5.write', '--reviewer-rewrite'): 'book',
-    ('stage6.hook', '--apply-edit'): 'book',
     ('stage7.rename', '--apply-edit'): 'book',
     ('stage7.rename', '--validate-edit'): 'book',
 }
@@ -436,10 +411,10 @@ def _require_recovery_policy(
         raise UnsupportedRunMode(
             f'{node} {list(tokens)} 不能处理当前 blocker {waiting_on!r}')
     if waiting_on == queue.WAITING_ON_STAGE6_PREPARE_COMMIT:
-        recovery = queue.prepare_edit_recovery_item(current.base, current.sid, code=current.code_version)
-        if (node != 'stage6.prepare' or flags != ('--recover-edit',)
-                or recovery is None or tuple(current.action.flags) != flags):
-            raise UnsupportedRunMode('Prepare WAL 只能免费恢复当前冻结原决定')
+        # Stage6 prepare 接受闸已随 Stage6 整层退役（F8b）：该等待面只会
+        # 出现在旧书历史账里，新链不再发出，也没有可恢复的 producer。
+        raise UnsupportedRunMode(
+            'stage6.prepare WAL 已随 Stage6 整层退役，不再提供恢复许可')
     if (waiting_on == _STAGE2_EDIT_COMMIT
             and (node != 'stage2.global'
                  or flags != ('--apply-edit', STAGE2_GLOBAL_EDIT))):
@@ -460,7 +435,7 @@ def _require_recovery_policy(
             'source run/journal raw/commit SHA')
     if waiting_on == _PREPARED_DELIVERY:
         if node != current.action.node or flags != tuple(current.action.flags):
-            raise UnsupportedRunMode('Stage6/7 完成组只能执行 operator 冻结的原 run/proof SHA')
+            raise UnsupportedRunMode('交付完成组只能执行 operator 冻结的原 run/proof SHA')
         recovery = queue.prepared_delivery_recovery_item(
             current.base, current.sid, code=current.code_version)
         if (recovery is None or recovery.waiting_on != _PREPARED_DELIVERY

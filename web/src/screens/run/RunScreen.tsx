@@ -143,70 +143,6 @@ function AuthorizationChip({ value, label }: { value: boolean | null; label: str
   )
 }
 
-/** Stage6 改选后的重建排队 / 成书对齐状态。 */
-function Stage6RebuildPanel({ sid }: { sid: string }) {
-  const q = useQuery({
-    queryKey: qk.stage6Rebuild(sid),
-    queryFn: () => api.getStage6Rebuild(sid),
-    retry: false,
-    refetchInterval: (query) => (query.state.data?.pending ? 4000 : false),
-  })
-  return (
-    <Panel>
-      <PaneHeader title="Stage6 改选重建" meta="后端 /stage6/rebuild" />
-      <div data-testid="stage6-rebuild" className="flex flex-col gap-8 px-18 py-14">
-        {q.isPending ? (
-          <div className="text-body text-ink-5">读取重建状态…</div>
-        ) : q.isError ? (
-          <div className="text-body text-warn-ink">
-            取不到重建状态：{errorBody(q.error)}
-            <ErrorHint error={q.error} />
-          </div>
-        ) : (
-          <>
-            {q.data.pending ? (
-              <span className="rounded-tag border border-warn-line bg-warn-bg px-8 py-3 text-tag font-semibold text-warn-ink">
-                重建排队中
-              </span>
-            ) : (
-              <span className="rounded-tag border border-gate-ok-line bg-gate-ok-bg px-8 py-3 text-tag font-semibold text-gate-ok-ink">
-                无待办重建
-              </span>
-            )}
-            <div className="prose-cn text-body text-ink-3">
-              {q.data.pending && !q.data.published
-                ? '当前下载对应旧版本；新选择正在生成。'
-                : q.data.published
-                  ? '已对齐当前选择。'
-                  : '成书尚未对齐当前选择。'}
-            </div>
-            <dl className="m-0 grid grid-cols-[auto_1fr] gap-x-14 gap-y-4 text-tag text-ink-4">
-              <dt>排队深度</dt>
-              <dd className="m-0" data-testid="rebuild-queue-depth">
-                {q.data.queue_depth ?? (q.data.pending ? '≥1' : 0)}
-              </dd>
-              <dt>期望版本</dt>
-              <dd className="m-0" data-testid="rebuild-expected-version">
-                {q.data.expected_slot
-                  ? `${q.data.expected_slot} · ${q.data.expected_approved_text_sha1 ?? '?'}`
-                  : q.data.published
-                    ? '与盘面当前选择一致'
-                    : '未知（尚无排队意图指纹）'}
-              </dd>
-              <dt>已发布</dt>
-              <dd className="m-0" data-testid="rebuild-published-version">
-                {q.data.published ? '是（成书 == 当前期望）' : '否（下载仍可能是旧成书）'}
-              </dd>
-            </dl>
-          </>
-        )}
-      </div>
-    </Panel>
-  )
-}
-
-
-
 /**
  * 交付终验徽标 + **可展开的判定依据**。
  *
@@ -499,7 +435,7 @@ function nodeScreen(node: string): ScreenName | null {
 const NEXT_HANDLER_LABEL: Record<RunNextHandler, string> = {
   code: '代码（0 成本）',
   executor: 'Executor（执行既有决定）',
-  human: '人工（Stage6 改选等只读监控面上的例外动作）',
+  human: '人工（只读监控面上的例外动作）',
   none: '没有后续节点',
   unknown: '尚不可判',
 }
@@ -631,7 +567,6 @@ export function RunScreen() {
       <QueryStates q={q} loadingLabel="读跑书进度">
         {(d) => <>
           <BlueprintProgressPanel sid={sid} progress={d.blueprint_progress} />
-          <Stage6RebuildPanel sid={sid} />
           <ResumeFrontier frontier={d.resume_frontier} steps={d.steps} />
         </>}
       </QueryStates>

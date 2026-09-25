@@ -35,10 +35,10 @@ describe('InboxScreen verification copy', () => {
     await waitFor(() => expect(getCheck).toHaveBeenCalledTimes(1))
     expect(getCheck).toHaveBeenCalledWith(SAMPLE_SID, 'stage0')
     expect(getCheck).not.toHaveBeenCalledWith(SAMPLE_SID, 'stage5')
-    expect(screen.getAllByText('尚不可检查')).toHaveLength(6)
+    expect(screen.getAllByText('尚不可检查')).toHaveLength(5)
   })
 
-  it('routes verification work across Stage2, Stage5, and Stage6', async () => {
+  it('routes verification work across Stage2 and Stage5', async () => {
     const base = await mockApi.getInbox(SAMPLE_SID)
     vi.spyOn(api, 'getInbox').mockResolvedValue({
       ...base,
@@ -46,11 +46,11 @@ describe('InboxScreen verification copy', () => {
         ...base.items,
         {
           kind: 'verification',
-          stage: 'stage6',
+          stage: 'stage5',
           chapter: null,
-          rule: 'hook_semantic_review',
+          rule: 'closure_semantic_review',
           what: '语义复核尚未闭合',
-          how: '回到文案屏补决定与证据',
+          how: '回到成稿屏补决定与证据',
           attention: 'pending',
           delivery_effect: 'disclosure',
           decision: null,
@@ -78,7 +78,7 @@ describe('InboxScreen verification copy', () => {
     renderRoute(<InboxScreen />, `/n/${SAMPLE_SID}/inbox`)
 
     expect(await screen.findByText('人工复核未闭合')).toBeInTheDocument()
-    expect(screen.getByText(/Stage2 \/ Stage5 \/ Stage6/)).toHaveTextContent(
+    expect(screen.getByText(/Stage2 \/ Stage5/)).toHaveTextContent(
       '回到所属阶段补决定与证据',
     )
   })

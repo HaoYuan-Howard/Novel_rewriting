@@ -48,9 +48,6 @@ export const qk = {
   stage5: (sid: string, o: number) => ['stage5', sid, o] as const,
   review: (sid: string, o: number) => ['review', sid, o] as const,
   inbox: (sid: string) => ['inbox', sid] as const,
-  stage6: (sid: string) => ['stage6', sid] as const,
-  stage6Prepare: (sid: string) => ['stage6', sid, 'prepare'] as const,
-  stage6PrepareWorkpack: (sid: string) => ['stage6', sid, 'prepare', 'workpack'] as const,
   stage7: (sid: string) => ['stage7', sid] as const,
   stage7ch: (sid: string, o: number) => ['stage7', sid, o] as const,
   stage7book: (sid: string) => ['stage7', sid, 'book'] as const,
@@ -82,8 +79,6 @@ export const qk = {
     ['agentRunPreview', req] as const,
 
   approvals: (sid: string) => ['approvals', sid] as const,
-  finalApprovalWorkpack: (sid: string, kind: 'stage6' | 'stage7') =>
+  finalApprovalWorkpack: (sid: string, kind: 'stage7') =>
     ['approvals', sid, kind, 'workpack'] as const,
-  /** Stage6 改选后的重建排队 / 成书对齐。 */
-  stage6Rebuild: (sid: string) => ['stage6', sid, 'rebuild'] as const,
 }

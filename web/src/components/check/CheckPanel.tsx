@@ -17,7 +17,7 @@ import { cx } from '@/lib/cx'
 import type { ReactNode } from 'react'
 
 /**
- * 屏 → 这一层的校验 kind。七个 kind 与服务端 `STAGES` 逐值相等（FE-02）。
+ * 屏 → 这一层的校验 kind。六个 kind 与服务端 `STAGES` 逐值相等（FE-02）。
  * 「重跑校验」不再是一条动作：真后端的 `GET /check/:kind` 本身就是 0 成本现算复检，
  * 按钮 = refetch。
  */
@@ -28,7 +28,6 @@ const CHECK_OF: Partial<Record<ScreenName, CheckKind>> = {
   global: 'stage2',
   stage4: 'stage4',
   stage5: 'stage5',
-  stage6: 'stage6',
   stage7: 'stage7',
 }
 

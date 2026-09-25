@@ -16,12 +16,30 @@ import hashlib
 import json
 import os
 from dataclasses import dataclass, field
-from typing import Any, Mapping
+from typing import Any, Final, Mapping
 
 from collections import Counter
 
-from contracts.invariants import (
-    HOOK_APPROACH_NOTES, HOOK_CURRENT_APPROACHES, HOOK_RECIPE, slot_of,)
+# ⚠⚠ F8a 过渡内联：HOOK 家族常量已随 Stage6 三候选面从 `contracts.invariants`
+#   删除；本模块归 F6d 退役登记（F8c 整包删除），按删除前的值原样内联。
+HOOK_RECIPE: Final = ('payoff_preview', 'scene_punchline', 'scene_punchline')
+HOOK_CURRENT_APPROACHES: Final = tuple(dict.fromkeys(HOOK_RECIPE))
+HOOK_APPROACH_NOTES: Final[dict[str, str]] = {
+    'payoff_preview':  '兑现预告 —— 从全书挑最有吸引力的后期兑现或反转作预告，'
+                       '制造「怎么走到这一步」的阅读欲',
+    'scene_punchline': '场面重击 —— 用一个可视、可听的具体场面或对白砸出核心关系，'
+                       '以人物反应、危险或笑点收尾',
+}
+_HOOK_SLOTS: Final = ('c1', 'c2', 'c3')
+
+
+def slot_of(index: int) -> str:
+    """1 起的候选位置 → 候选身份（过渡内联；语义同删除前的 invariants 唯一换算口）。"""
+    if not 1 <= index <= len(_HOOK_SLOTS):
+        raise ValueError(
+            f'候选位置 {index} 越界；本层恒 {len(_HOOK_SLOTS)} 条候选'
+            f'（1~{len(_HOOK_SLOTS)}），取值面是 {list(_HOOK_SLOTS)}')
+    return _HOOK_SLOTS[index - 1]
 from novel.core.bands import ending_shape, hook_shape_band, sep_band_of_text
 from novel.errors import TerminalState
 from novel.llm.prompts import fill, with_json_shape

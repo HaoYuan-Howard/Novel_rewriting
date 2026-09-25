@@ -11,7 +11,7 @@ test_core.py —— `novel/core/` 里那些**确定性算子**。
 from __future__ import annotations
 
 from contracts.invariants import (
-    ENDING_SHAPES, HOOK_APPROACHES, HOOK_APPROACH_NOTES, HOOK_CURRENT_APPROACHES,
+    ENDING_SHAPES,
     SEP_BANDS,)
 from novel.core.bands import BAND_SEP, ending_shape, sep_band_of_text
 from novel.core.evidence import iter_global_evidence_slots, without_global_evidence
@@ -470,18 +470,11 @@ def test_rename_semantic_markers_preserve_rank_number_relationship_and_office():
 
 
 # ── 取值面 ────────────────────────────────────────────────────────────────
-
-def test_hook_approach_notes_cover_exactly_the_current_recipe():
-    """加一种写法而忘了写说明 ⇒ prompt 渲染期 `KeyError`，所以在这里先红。
-
-    ⚠ 说明覆盖的是**在编写法**（配方里出现过的），不是整个取值面：取值面还留着
-    已退场的写法给存量产物读，而说明是发给模型的东西——退场就是不再发它。
-    """
-    assert tuple(HOOK_APPROACH_NOTES) == HOOK_CURRENT_APPROACHES
-    assert all(v.strip() for v in HOOK_APPROACH_NOTES.values())
-    assert set(HOOK_CURRENT_APPROACHES) < set(HOOK_APPROACHES), \
-        '取值面必须真的比在编面宽——一样宽就说明退场那一格没落到取值面上'
-
+#
+# ⚠⚠ 这里曾经有一条「Hook 写法说明覆盖在编配方」的用例（HOOK_APPROACHES
+#    家族）。Stage6 三候选开篇文案面已随 STR-06 切换退役（F8a），取值面常量
+#    整体删除；Hook 的必要选择进 Stage4 正式 Design，机械验由 stage5 hook
+#    owner 的回执守护——本用例不再有现役职责。
 
 def test_terminal_punct_has_one_home():
     """截断判定与删减守卫共用这一份——两处各抄一套就会漂。"""

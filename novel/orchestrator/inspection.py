@@ -16,7 +16,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Iterator, Mapping
 
-from contracts.artifacts import RETIRED_ARTIFACT_PATHS
+from contracts.artifacts import ARTIFACT_PATHS, RETIRED_ARTIFACT_PATHS
 from contracts.invariants import STAGES
 from contracts.schema import artifact_key
 from contracts.schema.orchestration import NovelOverview

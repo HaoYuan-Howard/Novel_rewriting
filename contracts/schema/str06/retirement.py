@@ -558,6 +558,14 @@ STR06_F7E_RETIREMENT: tuple[RetirementItem, ...] = (
          'F7d 候选监控屏', '旧 Stage5 屏目录'),
         ('delete_file', 'web/src/screens/inbox/',
          '候选链无待办面（人工闸已退役）', '旧待办屏目录'),
+        # F8b 补登并执行：后端 novel/views/stage7.py 经已退役的 stage7.rename
+        # 节点建 readonly_ctx（F8a 后一调用即 ValueError），stage7 读屏路由与
+        # 该视图按 F7e 507 提前删除；前端屏的内容（改名表／漏网候选／成书状态／
+        # 逐章对照／下载）由 F7d 候选监控屏的 naming／delivery／book pane 接管，
+        # 下载的 Content-Disposition 语义随 str06 book 路由一并移植。
+        ('delete_file', 'web/src/screens/stage7/',
+         'F7d 候选监控屏（naming/delivery/book pane）',
+         '旧 Stage7 读屏目录（F8b 随 views/stage7.py 提前删除）'),
         ('rewrite_consumer', 'web/src/screens/stage0/',
          '范围外保留（Stage0/1）', 'Stage0 屏目录'),
         ('rewrite_consumer', 'web/src/screens/stage1/',
@@ -668,8 +676,11 @@ STR06_F7E_RETIREMENT: tuple[RetirementItem, ...] = (
          'Commander 回执恢复（已退役模式）保留为历史反例', '基础设施／编排测试：F8b 切新链后保留'),
         ('rewrite_consumer', 'tests/test_core.py',
          'novel/core 共享原语随旧链退役登记（F8c 分流）', '基础设施／编排测试：F8b 切新链后保留'),
-        ('rewrite_consumer', 'tests/test_current_corpus_paid_preview.py',
-         'corpus 付费预览随 F8b 切新链', '基础设施／编排测试：F8b 切新链后保留'),
+        ('delete_file', 'tests/test_current_corpus_paid_preview.py',
+         '新链付费边界由 PaidRequestSession 工作单元／整书总闸／ledger 守卫（F7c 已迁反例）；corpus 线重启时按当期现役契约重建预览面',
+         'F8b 提前执行：F8a 已删工具的派生源（NODES 旧键、产物 spec、HOOK 常量），'
+         'import 与运行双死；修复需手抄冻结节点表，违反工具自身的「从现役契约派生」纪律。'
+         '同批删除 tools/current_corpus_paid_preview.py（原 rewrite 登记，随测试一起处置）'),
         ('rewrite_consumer', 'tests/test_delivery.py',
          '交付准入随 F8b 切新链', '基础设施／编排测试：F8b 切新链后保留'),
         ('rewrite_consumer', 'tests/test_delivery_modes.py',

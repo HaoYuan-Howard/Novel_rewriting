@@ -203,8 +203,9 @@ SALVAGE_ANSWER_FROM_REASONING: Final = True
 #:
 #: ⚠ 这是「重采」不是「重试」：重试扛**网络**（`_send_attempts`，429/5xx/超时），
 #: 重采换的是**同参数下的新样本**，兜底换的是**模型能力**——三条循环各管各的，不许合并
-#: （合并一次网络抖动就会烧掉两份采样预算）。`tools/current_corpus_paid_preview.py`
-#: 按这一格放大 wire 硬上限——改它必须同批改那边的口径。
+#: （合并一次网络抖动就会烧掉两份采样预算）。付费预览面按这一格
+#: 放大 wire 硬上限（原 corpus 预览工具已随旧链删除，corpus 线重启时按当期
+#: 契约重建）。
 #:
 #: ⚠ 被内容闸拒绝的响应会 `evict`，真发循环也显式 `use_cache=False`，所以本地响应缓存
 #: **不会**替后续重采买单。供应商输入前缀缓存可能命中，但不是本仓可保证的契约；
@@ -262,8 +263,8 @@ def _worth_resampling(resp: ChatResponse) -> bool:
 
     盘上 22 次实付合计 completion 378 368，其中 **180 334（47.7%）** 花在没被采纳的档位上。
 
-    ⚠ `MAX_SAMPLES_PER_RUNG=2` ⇒ 每档 wire 硬上限是两采，
-    `tools/current_corpus_paid_preview.py` 从这个生产常量派生上限。
+    ⚠ `MAX_SAMPLES_PER_RUNG=2` ⇒ 每档 wire 硬上限是两采；付费预览面
+    从这个生产常量派生上限（原 corpus 预览工具已随旧链删除）。
     """
     return resp.finish_reason != 'length'
 

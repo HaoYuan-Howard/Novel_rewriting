@@ -205,10 +205,6 @@ def _human_gate_turn(waiting_on: str) -> ExecutionTurnResult:
         reason = (
             f'停在续跑裁决：{waiting_on}；队列不会把 REDO/UNKNOWN 猜成命令，'
             '请人工决定下一步后用原配置续跑')
-    elif waiting_on == 'stage6.prepare':
-        reason = (
-            f'等待 `{waiting_on}` 机械通过并由 system:stage6-prepare-auto '
-            '自动接受；完成后用原配置续跑')
     else:
         reason = (
             f'停在阻断面：{waiting_on}；按该 waiting_on 对应恢复入口收口后'

@@ -3,7 +3,7 @@ import { useEffect, type ReactNode } from 'react'
 const ACTOR_KEY = 'nr.actor'
 
 /**
- * 自报身份 actor + 理由 reason 两连输入，stage0 / stage6 / stage7 / global 共用一份。
+ * 自报身份 actor + 理由 reason 两连输入，stage0 / stage7 / global 共用一份。
  *
  * actor 经 sessionStorage 记住上一次（key `nr.actor`）：挂载时父 state 为空就回填
  * （同时调 onActor，保证提交时带得上），每次改动也写回去。

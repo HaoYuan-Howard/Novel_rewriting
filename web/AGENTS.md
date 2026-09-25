@@ -113,7 +113,8 @@ npm run build                       # web/dist，供后端同源托管
   决定继承及基础/追加/累计额度；缺失保持 unknown，空单元列表表示尚无登记，界面不计算剩余额度。
   暂停、恢复、熄火与追加额度分别走对应后端入口；不再提供「按原配置继续」的 human-gate 续跑对话框。
 - Stage 页只读监控。不要在 Stage 屏恢复人工编辑、批准闸门、补录验收链或改稿提交按钮；
-  Stage6 三候选改选面已随 Stage6 整层退役（F8a），`approveHook` 写面随 F8b 删除。
+  Stage6 三候选改选面已随 Stage6 整层退役（F8a），`approveHook` 写面与前端 Stage6 消费面
+  （屏、路由、端点、query key、mock 与 fixture）已随 F8b 一并删除。
   现役判据（Guard M1–M6、章级机械验、命名残留、交付回执链）的结论由后端公开，
   不因来自 CLI/Agent 就要求再补 HTTP 盖章。
 - Stage7 下载入口消费后端 delivery；文件存在不等于可交付。运行统计区分运行历时、模型活跃区间并集

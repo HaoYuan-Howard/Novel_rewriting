@@ -96,7 +96,6 @@ function compactBook(): NovelRow {
       stage2: false,
       stage4: false,
       stage5: null,
-      stage6: false,
       stage7: true,
     },
     stage_reviewable: {},

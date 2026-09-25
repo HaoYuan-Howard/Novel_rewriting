@@ -236,12 +236,14 @@ _WITHHELD: dict[str, str] = {
     'LEGACY_V4_DESIGN_REVIEW_CONTRACT': '仅供后端识别旧审阅，当前界面消费后端有效性判定，不自行比版本',
     'FROZEN_V6_DESIGN_REVIEW_CONTRACT': (
         '仅供后端无损解码不可变历史决定；现役不开放旧 Blueprint 兼容消费或恢复'),
+    # ⚠ Stage6 常量本体仍在 invariants（旧链盘面只读解码的过渡期）；工作面
+    #   已随 STR-06 退役，前端无任何消费——继续登记不发。
     'STAGE6_REVIEW_CONTRACT': (
-        'Stage6 workpack 已随包携带；UI 只回传 opaque token，不自行重算身份'),
+        'Stage6 已随 STR-06 退役；常量仅供后端旧盘只读解码，前端无消费面'),
+    'STAGE6_APPROVAL_CHECK_BASIS': (
+        'Stage6 已随 STR-06 退役；常量仅供后端旧盘只读解码，前端无消费面'),
     'STAGE7_REVIEW_CONTRACT': (
         'Stage7 workpack 已随包携带；UI 只回传 opaque token，不自行重算身份'),
-    'STAGE6_APPROVAL_CHECK_BASIS': (
-        '固定检查基准由 Stage6 workpack 的 check_basis 提供；不是可选项，前端不据此判定当前审批'),
     'STAGE7_APPROVAL_CHECK_BASIS': (
         '固定检查基准由 Stage7 workpack 的 check_basis 提供；不是可选项，当前交付仍读后端判定'),
     'BLIND_ALIAS_ALGORITHM': 'Stage4A 审计用的 opaque alias 算法身份；前端既不生成 alias，'

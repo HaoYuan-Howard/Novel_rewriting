@@ -105,7 +105,7 @@ export function Stage7Screen() {
           <div className="flex min-w-0 flex-col gap-3">
             <span className="text-body font-semibold">还没跑人名替换</span>
             <span className="text-tag text-ink-4">
-              stage6 文案已定稿。这一层要先产出 stage7/name_map.json；机械通过后自动定稿再拼装成书。
+              这一层要先产出 stage7/name_map.json；机械通过后自动定稿再拼装成书。
             </span>
           </div>
           <ActionButton

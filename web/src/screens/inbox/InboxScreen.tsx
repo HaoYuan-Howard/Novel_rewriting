@@ -13,14 +13,13 @@ import { Panel, PaneHeader } from '@/components/ui/Panel'
 import { CheckBadge, CheckMark } from '@/components/vocab/Badges'
 import { isNoSample } from '@/api/errors'
 
-/** 七层校验器分别落在哪一屏 —— 待办只路由，不提供编辑 */
+/** 六层校验器分别落在哪一屏 —— 待办只路由，不提供编辑 */
 const LAYERS: { kind: CheckKind; where: string; screen: string; chaptered?: boolean }[] = [
   { kind: 'stage0', where: '剔除审阅', screen: 'stage0' },
   { kind: 'stage1', where: '分章报告', screen: 'stage1' },
   { kind: 'stage2', where: '全局设定', screen: 'global' },
   { kind: 'stage4', where: '计划屏', screen: 'stage4', chaptered: true },
   { kind: 'stage5', where: '成稿屏', screen: 'stage5', chaptered: true },
-  { kind: 'stage6', where: '文案屏', screen: 'stage6' },
   { kind: 'stage7', where: '人名屏', screen: 'stage7' },
 ]
 
@@ -47,7 +46,7 @@ const KIND_META: Record<
   human_only: { title: '真正需要人工修复', meaning: '没有机器修复路由，或人裁决不改', ...SEV.info },
   verification: {
     title: '人工复核未闭合',
-    meaning: 'Stage2 / Stage5 / Stage6 的 pending、FAIL 或 UNVER 回到所属阶段补决定与证据',
+    meaning: 'Stage2 / Stage5 的 pending、FAIL 或 UNVER 回到所属阶段补决定与证据',
     ...SEV.unver,
   },
   upstream: { title: '阻断级，重写修不掉', meaning: '根因在上游', ...SEV.hard },
@@ -101,10 +100,10 @@ export function InboxScreen() {
         </div>
       </header>
 
-      {/* 七层校验器状态 */}
+      {/* 六层校验器状态 */}
       <Panel>
-        <PaneHeader title="七层校验器" meta="点一层跳到它的阶段屏" />
-        <div className="grid gap-1 bg-line-2" style={{ gridTemplateColumns: 'repeat(7,1fr)' }}>
+        <PaneHeader title="六层校验器" meta="点一层跳到它的阶段屏" />
+        <div className="grid gap-1 bg-line-2" style={{ gridTemplateColumns: 'repeat(6,1fr)' }}>
           {LAYERS.map((l, i) => {
             const r = checks[i]
             const reviewable = overview.data?.stage_reviewable[l.kind]

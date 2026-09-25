@@ -387,8 +387,8 @@ def test_the_published_surface_is_exactly_the_current_surface(app):
         '/api/novels/{sid}/approvals/reset': ['POST'],
         # Stage5 写作授权/闭合回执的 template/apply 面已随批次 B3（2026-09-15
         # 全自动裁决）退役；闭合由 stage5.review producer 机械落账。
-        '/api/novels/{sid}/approvals/stage6/workpack': ['GET'],
-        '/api/novels/{sid}/approvals/stage7/workpack': ['GET'],
+        # Stage6 三候选定稿面（approvals/stage6/workpack、stage6、stage6/approve、
+        # stage6/rebuild、stage6/prepare 两端）已随 Stage6 整层退役（F8b）。
         '/api/novels/{sid}/check/{kind}': ['GET'],
         '/api/novels/{sid}/inbox': ['GET'],
         '/api/novels/{sid}/operator-next': ['GET'],
@@ -414,17 +414,13 @@ def test_the_published_surface_is_exactly_the_current_surface(app):
         '/api/novels/{sid}/stage2/global/edit/preview': ['POST'],
         '/api/novels/{sid}/stage2/global/edit/template': ['GET'],
         '/api/novels/{sid}/stage4/{ordinal}': ['GET'],
-        # （stage5 trim retain-pretrim 两端点已随批次 B3 trim 三选一退役。）
+        # （stage5 trim retain-pretrim 两端点已随批次 B3 trim 三选一退役；
+        #   stage6 页/定稿/重建/prepare 已随 Stage6 整层退役。）
         '/api/novels/{sid}/stage5/{ordinal}': ['GET'],
-        '/api/novels/{sid}/stage6': ['GET'],
-        '/api/novels/{sid}/stage6/approve': ['POST'],
-        '/api/novels/{sid}/stage6/rebuild': ['GET'],
-        '/api/novels/{sid}/stage6/prepare': ['GET'],
-        '/api/novels/{sid}/stage6/prepare/workpack': ['GET'],
-        '/api/novels/{sid}/stage7': ['GET'],
+        # Stage6/7 终审工作包与 stage7 读屏三路由已随人工闸退役与旧链注销
+        # 移除（F8b）：命名与交付监控读 /api/str06/candidates/{candidate}/*，
+        # 成书下载走 /api/str06/candidates/{candidate}/book（download=true）。
         '/api/novels/{sid}/stage7/adopt-residual': ['POST'],
-        '/api/novels/{sid}/stage7/book.txt': ['GET'],
-        '/api/novels/{sid}/stage7/{ordinal}': ['GET'],
         '/api/novels/{sid}/trash': ['POST'],
         '/api/novels/{sid}/work-units/{unit_id}/grant': ['GET', 'POST'],
         '/api/queues': ['GET', 'POST'],
@@ -474,10 +470,10 @@ def test_the_service_writes_nothing_at_all(corpus_client, box):
     before = _tree(box.root)
     for url in ('/api/enums', '/api/novels', f'/api/novels/{box.sid}',
                 f'/api/novels/{box.sid}/check/stage2', '/api/jobs',
-                # 第二阶段读屏（本沙箱里 stage6/7 是 404——404 也不许写一个字节；
-                # 带全量产物的 0 写断言在 `test_api_screens.py`）。
+                # 第二阶段读屏（本沙箱里 stage7 是 404——404 也不许写一个字节；
+                # 带全量产物的 0 写断言在 `test_api_screens.py`；stage6 屏已随
+                # Stage6 整层退役删除）。
                 f'/api/novels/{box.sid}/stage2/global',
-                f'/api/novels/{box.sid}/stage6',
                 f'/api/novels/{box.sid}/stage7',
                 f'/api/novels/{box.sid}/inbox'):
         client.get(url)

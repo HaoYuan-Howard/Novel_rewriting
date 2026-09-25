@@ -245,14 +245,13 @@ export interface StageDef {
   label: string
 }
 
-/** 当前产物矩阵的七列；编号保留 Stage3 空洞。 */
+/** 当前产物矩阵的六列；编号保留 Stage3/Stage6 空洞。 */
 export const STAGES: StageDef[] = [
   { n: '0', key: 'stage0', label: '剔除番外' },
   { n: '1', key: 'stage1', label: '摄入分章' },
   { n: '2', key: 'stage2', label: '抽骨架' },
   { n: '4', key: 'stage4', label: '定计划' },
   { n: '5', key: 'stage5', label: '写作+验收' },
-  { n: '6', key: 'stage6', label: '开篇文案' },
   { n: '7', key: 'stage7', label: '人名+成书' },
 ]
 
@@ -267,7 +266,6 @@ export type ScreenName =
   | 'global'
   | 'stage4'
   | 'stage5'
-  | 'stage6'
   | 'stage7'
   | 'inbox'
 
@@ -286,7 +284,6 @@ export const RAIL: RailItem[] = [
   { screen: 'global', n: '2', label: '全局设定' },
   { screen: 'stage4', n: '4', label: '计划↔上下文', chaptered: true },
   { screen: 'stage5', n: '5', label: '成稿↔材料', chaptered: true },
-  { screen: 'stage6', n: '6', label: '开篇文案' },
   { screen: 'stage7', n: '7', label: '人名+成书' },
   { screen: 'inbox', n: '·', label: '待办' },
 ]
@@ -298,7 +295,6 @@ export const STAGE_SCREEN: Record<string, ScreenName> = {
   stage2: 'read',
   stage4: 'stage4',
   stage5: 'stage5',
-  stage6: 'stage6',
   stage7: 'stage7',
 }
 
@@ -316,7 +312,6 @@ export const SCREEN_TITLE: Record<ScreenName, string> = {
   global: '全局设定 · stage2',
   stage4: '计划 ↔ 写作上下文',
   stage5: '成稿 ↔ 材料',
-  stage6: '开篇文案 · stage6',
   stage7: '人名替换 + 成书 · stage7',
   inbox: '待办',
 }

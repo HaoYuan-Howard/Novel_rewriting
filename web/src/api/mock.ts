@@ -28,7 +28,6 @@ import {
   type GateKey,
   type Stage5ClosureDecision,
   type Stage5ClosureWorkpack,
-  type Stage6ApprovalWorkpack,
   type Stage7ApprovalWorkpack,
   type StructureApprovalDecision,
 } from '@/types/approvals'
@@ -51,7 +50,6 @@ import type {
   JobPreview,
   JobRequest,
   JobsResponse,
-  Stage6RebuildStatus,
   UploadCorpusOptions,
   UploadResponse,
 } from '@/types/jobs'
@@ -68,7 +66,6 @@ import type {
   Stage1View,
   Stage2Global,
   Stage5Response,
-  Stage6Response,
   Stage7Response,
 } from '@/types/stages'
 import { lookupAction } from '@/constants/actions'
@@ -114,7 +111,7 @@ type LegacyNovel = Omit<
 }
 
 const PIPELINE_STAGES = [
-  'stage0', 'stage1', 'stage2', 'stage4', 'stage5', 'stage6', 'stage7',
+  'stage0', 'stage1', 'stage2', 'stage4', 'stage5', 'stage7',
 ]
 
 /** Stage5 fixture 已按现役 HTTP 契约收成明确的 legacy 终态。 */
@@ -266,7 +263,6 @@ const RAW_V1 = import.meta.glob([
   '!../fixtures/backend_v1/reading_ch3.json',
   '!../fixtures/backend_v1/check_stage2.json',
   '!../fixtures/backend_v1/global.json',
-  '!../fixtures/backend_v1/stage6.json',
   '!../fixtures/backend_v1/stage7.json',
   '!../fixtures/backend_v1/stage7_ch3.json',
 ], {
@@ -964,9 +960,6 @@ const PIPELINE_STEPS: { node: string; label: string; paid: boolean }[] = [
   { node: 'stage4.context', label: 'stage4 写作上下文组装', paid: false },
   { node: 'stage5.write', label: 'stage5 逐章写作', paid: true },
   { node: 'stage5.review', label: 'stage5 全书验收', paid: false },
-  { node: 'stage6.prepare', label: 'stage6 文案准备', paid: true },
-  { node: 'stage6.hook', label: 'stage6 开篇文案', paid: true },
-  { node: 'stage6.approve', label: 'stage6 文案定稿', paid: false },
   { node: 'stage7.rename', label: 'stage7 人名表', paid: true },
   { node: 'stage7.assemble', label: 'stage7 替换与成书', paid: false },
 ]
@@ -1005,7 +998,6 @@ function mockRunProgress(sid: string): RunProgress {
       stage2: null,
       stage4: null,
       stage5: null,
-      stage6: null,
       stage7: null,
     },
     events_tail: [],
@@ -1123,7 +1115,7 @@ function mockInbox(): InboxResponse {
     attention: item.attention ?? ('pending' as const),
     delivery_effect:
       item.delivery_effect ??
-      (item.kind === 'human_only' || (item.kind === 'verification' && item.stage === 'stage6')
+      (item.kind === 'human_only'
         ? ('disclosure' as const)
         : ('blocking' as const)),
     decision: item.decision ?? null,
@@ -1211,8 +1203,6 @@ export const mockApi: Api = {
   getAnalyzeDraft: (sid) => fail(new ApiError('nosample', `/novels/${sid}/stage2/analyze-draft`, {
     scope: 'book', message: '冻结样本不含待修复联合草稿，请连接真实后端读取。',
   })),
-
-
   getStage4: (sid, o) => sid === PLOT_SAMPLE_SID ? plotRead(sid, 'stage4/' + o, false, 'chapter') :
     fail(new ApiError('server', `/novels/${sid}/stage4/${o}`, {
       status: 501, message: '此历史示例没有现役分场呈现与章级上下文，请连接当前后端。',
@@ -1228,17 +1218,6 @@ export const mockApi: Api = {
   getInbox: (sid) => sid === PLOT_SAMPLE_SID ? plotRead(sid, 'inbox', true)
     : bookOnly(sid, `/novels/${sid}/inbox`, mockInbox),
 
-  getStage6Prepare: (sid) => plotRead(sid, 'stage6/prepare', true),
-  getStage6PrepareWorkpack: (sid) => plotRead(sid, 'stage6/prepare/workpack', true),
-  getStage6Rebuild: (_sid): Promise<Stage6RebuildStatus> => later({
-    pending: false,
-    published: true,
-    queue_depth: 0,
-    expected_approved_text_sha1: null,
-    expected_candidates_sha1: null,
-    expected_slot: null,
-  }),
-  getStage6: (sid) => plotRead(sid, 'stage6', true),
   getStage7: (sid) => plotRead(sid, 'stage7', true),
   getStage7Chapter: (sid, ordinal) => plotRead(sid, 'stage7/' + ordinal, true, 'chapter'),
   getStage7Book: (sid) => plotRead(sid, 'stage7/book.txt', true),
@@ -1397,23 +1376,10 @@ export const mockApi: Api = {
 
   // stage4 design/structure workpack、模板与 typed 决定写面已随 2026-09-15 全自动
   // 裁决退役：mock 不再模拟这些读/写端点，Stage4 人工闸只剩只读审批投影。
+  // Stage6 整层（prepare / 三候选改选 / 定稿写面）已随 STR-06 切换退役，无对应端点。
 
-  getStage6ApprovalWorkpack: (sid) => plotRead(sid, 'approvals/stage6/workpack', true),
   getStage7ApprovalWorkpack: (sid) => plotRead(sid, 'approvals/stage7/workpack', true),
-
-
-
-
-
-
   resetBook: (sid) => later(saveDoc(freshDoc(sid))),
-
-
-
-
-
-  approveHook: (sid) => readonlyPlot('/novels/' + sid + '/stage6/approve'),
-
   uploadCorpus: (file, options: UploadCorpusOptions): Promise<UploadResponse> => {
     // mock 里只有这一本真书。上传等于把它重置回第 0 步；授权只回显，不真开跑。
     void options.profiles
@@ -1478,13 +1444,9 @@ export function plotFlowFixture() {
     'http:stage5/1': import('@/types/stages').Stage5Response
     'http:run': import('@/types/run').RunProgress
     metadata: { synthetic: true; sid: string; source: string; scope: string }
-    'final:http:stage6/prepare': import('@/types/prepare').PrepareView
-    'final:http:stage6/prepare/workpack': import('@/types/prepare').PrepareWorkpack
-    'final:http:stage6': Stage6Response
     'final:http:stage7': Stage7Response
     'final:http:stage7/book.txt': string
     'final:http:approvals': ApprovalDoc
-    'final:http:approvals/stage6/workpack': Stage6ApprovalWorkpack
     'final:http:approvals/stage7/workpack': Stage7ApprovalWorkpack
   }
 }
@@ -1492,8 +1454,6 @@ export function plotFlowFixture() {
 /** 正式合成链录制的界面测试材料；不与历史小说或审批自动拼接。 */
 export function plotReviewFixture() {
   return structuredClone(plotReviewSample) as unknown as {
-    prepare: import('@/types/prepare').PrepareWorkpack
-    hook: Stage6ApprovalWorkpack
     rename: Stage7ApprovalWorkpack
   }
 }

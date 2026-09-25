@@ -119,18 +119,6 @@ export interface UploadCorpusOptions {
   profiles: PipelineAgentProfiles
 }
 
-/** Stage6 改选后的重建状态（GET /stage6/rebuild）。 */
-export interface Stage6RebuildStatus {
-  pending: boolean
-  published: boolean
-  /** 未闭合重建意图条数；无排队时为 0。 */
-  queue_depth?: number
-  /** 最新排队意图上的期望文案指纹；已发布且无排队时可能缺席。 */
-  expected_approved_text_sha1?: string | null
-  expected_candidates_sha1?: string | null
-  expected_slot?: 'c1' | 'c2' | 'c3' | null
-}
-
 export interface JobLogResponse {
   lines: JobLogLine[]
   /** 下次从这里续取 */

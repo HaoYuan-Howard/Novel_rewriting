@@ -747,9 +747,10 @@ def test_legacy_stage5_is_never_treated_as_missing_or_paid_resume():
         review_state='legacy_incompatible',
         review_reasons=['stage5/deep 是旧契约'])
     ov = _overview(legacy)
-    for node in ('stage5.write', 'stage5.review'):
+    # F8b 后向现役新链节点提问；旧链节点已按 RETIRED_NODES 拒识。
+    for node in ('str06.stage5.body', 'str06.stage5.hook'):
         verdict, why = S.resume_verdict(ov, node)
-        assert verdict == S.RESUME_LEGACY
+        assert verdict == S.RESUME_LEGACY, (node, verdict, why)
         assert 'stage5/deep' in why and 'missing' in why
 
 

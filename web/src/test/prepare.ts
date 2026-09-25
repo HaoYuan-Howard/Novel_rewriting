@@ -1,4 +1,4 @@
-import type { PrepareState } from '@/types/prepare'
+import type { PrepareState } from '@/types/approvals'
 
 /** 当前契约的明确未运行状态；不为历史样例补造准备接受。 */
 export function missingPrepareState(): PrepareState {

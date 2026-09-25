@@ -8,7 +8,6 @@ import type { RunMetrics } from './runMetrics'
  */
 import type {
   ApprovalDoc,
-  Stage6ApprovalWorkpack,
   Stage7ApprovalWorkpack,
 } from './approvals'
 import type {
@@ -32,7 +31,6 @@ import type {
   JobPreview,
   JobRequest,
   JobsResponse,
-  Stage6RebuildStatus,
   UploadCorpusOptions,
   UploadResponse,
 } from './jobs'
@@ -59,15 +57,11 @@ import type {
   Stage2Global,
   Stage4Response,
   Stage5Response,
-  Stage6Response,
   Stage7Response,
 } from './stages'
 
 import type { CharacterRegistryView } from './characters'
 import type { AnalyzeDraftView, AnalyzeDraftOwner } from './analyzeDraft'
-import type {
-  PrepareView, PrepareWorkpack,
-} from './prepare'
 import type {
   Str06BlueprintView,
   Str06CandidateList,
@@ -107,11 +101,6 @@ export interface Api {
   getStage5(sid: string, ordinal: number): Promise<Stage5Response>
   getReview(sid: string, ordinal: number): Promise<ReviewResponse>
   getInbox(sid: string): Promise<InboxResponse>
-  getStage6(sid: string): Promise<Stage6Response>
-  getStage6Prepare(sid: string): Promise<PrepareView>
-  getStage6PrepareWorkpack(sid: string): Promise<PrepareWorkpack>
-  /** Stage6 改选后的重建排队 / 成书对齐状态。 */
-  getStage6Rebuild(sid: string): Promise<Stage6RebuildStatus>
   getStage7(sid: string): Promise<Stage7Response>
   getStage7Chapter(sid: string, ordinal: number): Promise<Stage7Response>
   getStage7Book(sid: string): Promise<string>
@@ -167,25 +156,10 @@ export interface Api {
   /* 只读审批投影 */
   getApprovals(sid: string): Promise<ApprovalDoc>
   // stage4/5 人工闸与通用 gate 写面已退役；Stage 页只读监控。
-  /** Stage6 候选 + A/B 原始证据 + 机械异常的 hash-bound 紧凑终审包。 */
-  getStage6ApprovalWorkpack(sid: string): Promise<Stage6ApprovalWorkpack>
   /** Stage7 人物决策 + 实际替换命中 + 残留上下文的 hash-bound 紧凑终审包。 */
   getStage7ApprovalWorkpack(sid: string): Promise<Stage7ApprovalWorkpack>
   resetBook(sid: string): Promise<ApprovalDoc>
 
-  /**
-   * 文案定稿 / 三候选改选：序号 + 自报身份/理由 + immutable workpack token。
-   * Stage 页唯一保留的人工写动作。
-   */
-  approveHook(
-    sid: string,
-    req: {
-      pick: number
-      actor: string
-      reason: string
-      review_token: string
-    },
-  ): Promise<Job>
   /**
    * 上传并自动开跑。Header 带幂等键；授权与 profiles 走 query；body 仍是文件字节。
    */

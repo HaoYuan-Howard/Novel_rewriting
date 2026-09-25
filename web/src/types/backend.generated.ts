@@ -20,5 +20,5 @@ export type JobState = (typeof JOB_STATES)[number]
 export const INBOX_KINDS = ['invalid', 'rejected', 'stalled', 'repairable', 'human_only', 'verification', 'upstream', 'approval'] as const
 export type InboxKind = (typeof INBOX_KINDS)[number]
 
-export const STAGE_IDS = ['stage0', 'stage1', 'stage2', 'stage4', 'stage5', 'stage6', 'stage7'] as const
+export const STAGE_IDS = ['stage0', 'stage1', 'stage2', 'stage4', 'stage5', 'stage7'] as const
 export type StageId = (typeof STAGE_IDS)[number]

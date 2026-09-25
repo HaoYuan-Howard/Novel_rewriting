@@ -22,7 +22,6 @@
 | `scripts/export_plot_types.py` | 生成 `web/src/types/plot.generated.ts`（`--check`） | 生成文件头、`web/src/fixtures/plot_v1/README.md` |
 | `scripts/export_backend_types.py` | 生成 `web/src/types/backend.generated.ts`（`--check`） | `tests/test_api_enums.py` 对账守卫 |
 | `scripts/export_plot_fixture.py` / `export_stage2_core_fixture.py` | 生成 `web/src/fixtures/plot_v1/` 夹具 | `web/src/fixtures/plot_v1/README.md` |
-| `current_corpus_paid_preview.py` | 冻结当前语料付费范围预览（只读） | `tests/test_current_corpus_paid_preview.py` |
 | `calibrate_style_corpus.py` | 0 成本 Stage5 风格基线复算 | `tests/test_style_calibration.py` |
 | `book_overlap.py` | 成书与源文逐章 20 字重叠读数 | `tests/test_book_overlap.py` |
 | `derive_schema.py` | 从盘上产物反推观察 schema（观察 ≠ 契约） | `docs/schema/_README.md` |

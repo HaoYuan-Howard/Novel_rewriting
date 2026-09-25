@@ -29,9 +29,10 @@ inbox_projection.py —— 「待人工」八类清单的**生产者**（BE-04 �
                  （stage4 计划轻重告警自然入列——**UG-11 的闭环**：处置=归人判断）
   · `verification` stage2 全书评测中可由人补证据消解的 `pending` / `UNVER`
   · `upstream`   `sev=hard` 且根因第一嫌疑（`owner`）在**别的层**的命中
-  · `approval`   Stage4 A/B 当前 subject 及两个人定稿闸门
-                 （stage6 文案 / stage7 人名表）还没盖章
-                 （⚠ 按前端契约 v1 不含 stage0——那一闸由审批状态机自己呈现）
+  · `approval`   人定稿闸门（stage6 文案 / stage7 人名表）还没盖章
+                 （⚠ 按前端契约 v1 不含 stage0——那一闸由审批状态机自己呈现；
+                 ⚠ Stage6 三候选定稿闸已随 Stage6 整层退役（F8b）：新链 Hook 单
+                 输出，不存在待人工核验的候选集，本类现只剩 stage7 机械定稿披露）
 
 【三条纪律】
   ⚠ **通用 check 报告的 `unver` 永不入列**（`invariants.INBOX_KIND` 的纪律）：
@@ -46,7 +47,7 @@ inbox_projection.py —— 「待人工」八类清单的**生产者**（BE-04 �
 from __future__ import annotations
 
 from contracts.artifacts import (
-    STAGE2_GLOBAL_EDIT, STAGE6_HOOK, STAGE7_NAME_MAP,
+    STAGE2_GLOBAL_EDIT, STAGE7_NAME_MAP,
 )
 
 import os
@@ -57,7 +58,7 @@ from contracts.invariants import (
 from contracts.rules import REGISTRY
 from contracts.schema.api import (
     ApprovalDoc, InboxItem, InboxView,
-    Stage6ApprovalWorkpack, Stage7ApprovalWorkpack,
+    Stage7ApprovalWorkpack,
 )
 from contracts.schema.report import CheckReport
 from novel import paths, wontfix
@@ -227,29 +228,15 @@ def inbox_from_snapshot(
         if report is not None:
             items += _report_items_for_inbox(report, stage)
 
-    from novel.stages.stage6 import prepare as prepare_stage6
-    prepare_state = prepare_stage6.view_state(ArtifactStore(readonly_ctx(
-        novel_dir, 'stage6.prepare', code)))
-    if prepare_state.state not in {'missing', 'accepted'}:
-        items.append(InboxItem(
-            kind='verification',
-            stage='stage6', chapter=None, rule='stage6.prepare',
-            what=('独立文案准备待补提交：' if prepare_state.pending_commit else '独立文案准备待自动接受：') + prepare_state.reason,
-                how=('运行 stage6.prepare --recover-edit 免费补齐原决定'
-                     if prepare_state.pending_commit else
-                     '队列将跑 stage6.prepare --revalidate（0 成本）触发机械自动接受；'
-                     '材料已变则重跑 stage6.prepare')))
     items += _stage2_projection_recovery_items(ov)
     items += _trim_verification_items(novel_dir, code, audits=trim_audits)
-    stage6_workpack = _stage6_workpack_or_none(novel_dir, code)
     stage7_workpack = _stage7_workpack_or_none(novel_dir, code)
-    items += _hook_verification_items(
-        novel_dir, code, workpack=stage6_workpack, workpack_checked=True)
     # Stage4 四道人工闸的审批 inbox 投影已随 2026-09-15 全自动裁决退役：
     # A/B 落盘后的推进由机械准入与预算内自动重采驱动，不再产生待审清单行。
+    # Stage6 三候选定稿闸已随 Stage6 整层退役（F8b）：开篇 Hook 由新链
+    # stage4.hook_design＋stage5.hook_writer 单输出，不存在待人工核验的候选集。
     items += _approval_items(
         novel_dir, code,
-        stage6_workpack=stage6_workpack,
         stage7_workpack=stage7_workpack,
         workpacks_checked=True,
     )
@@ -530,8 +517,13 @@ def _report_items(
 
 def _current_trim_audits(novel_dir, code: str):
     """One shared definition of a current, unresolved Stage5 trim audit."""
+    from contracts.artifacts import STAGE5_TRIM_AUDIT
     from novel.stages.stage5 import trim_resolution
 
+    # ⚠ 旧链 trim 审计面（F8c 随旧链删除）：新链书没有 trim 审计产物；
+    # 在构造旧节点只读 ctx 之前按纯目录存在性早退，清单组装热路不得崩。
+    if not (novel_dir / STAGE5_TRIM_AUDIT.rsplit('/', 1)[0]).is_dir():
+        return {}
     store = ArtifactStore(readonly_ctx(novel_dir, 'stage5.write', code))
     try:
         return trim_resolution.current_unresolved_audits(store)
@@ -546,6 +538,9 @@ def _trim_verification_items(novel_dir, code: str, *, audits=None) -> list[Inbox
     from novel.stages.stage5 import trim_resolution
 
     current = audits if audits is not None else _current_trim_audits(novel_dir, code)
+    if not current:
+        # 旧链 trim 审计面（F8c 随旧链删除）：无当前审计就不构造旧节点 ctx。
+        return []
     store = ArtifactStore(readonly_ctx(novel_dir, 'stage5.write', code))
     out: list[InboxItem] = []
     for ordinal, (audit, _audit_sha256) in sorted(current.items()):
@@ -565,21 +560,6 @@ def _trim_verification_items(novel_dir, code: str, *, audits=None) -> list[Inbox
     return out
 
 
-def _stage6_workpack_or_none(
-    novel_dir, code: str,
-) -> Stage6ApprovalWorkpack | None:
-    """只建一次与真正 approve 同 node/code 的 Stage6 fresh 工作包。"""
-    from novel.stages.stage6 import hook
-
-    store = ArtifactStore(readonly_ctx(novel_dir, 'stage6.approve', code))
-    if not store.exists(STAGE6_HOOK):
-        return None
-    try:
-        return hook.approval_workpack(store)
-    except (ArtifactUnreadable, TerminalState, UpstreamMissing):
-        return None
-
-
 def _stage7_workpack_or_none(
     novel_dir, code: str,
 ) -> Stage7ApprovalWorkpack | None:
@@ -595,68 +575,16 @@ def _stage7_workpack_or_none(
         return None
 
 
-def _hook_verification_items(
-    novel_dir, code: str, *,
-    workpack: Stage6ApprovalWorkpack | None = None,
-    workpack_checked: bool = False,
-) -> list[InboxItem]:
-    """每条候选都等着一次 hash 绑定的人工核验——本仓没有自动放行门。
-
-    ⚠ 这里曾按 `assessment.human_resolvable` 过滤。`semantic_state` 收成
-    `unreviewed` / `uncertain` 两态之后那个谓词恒真，过滤是空转；
-    **两个状态都要人看**，差别只在「没人判过」还是「两名判官的带证据结论等着人读」。
-    """
-    if not workpack_checked:
-        workpack = _stage6_workpack_or_none(novel_dir, code)
-    if workpack is None or workpack.disposition == 'already_current':
-        return []
-    out: list[InboxItem] = []
-    seen: set[str] = set()
-    for candidate in workpack.candidates:
-        subject = candidate.subject_sha256
-        if subject in seen:
-            continue
-        seen.add(subject)
-        out.append(InboxItem(
-            kind='verification', stage='stage6', chapter=None,
-            # ⚠ 收敛键按**位置身份**，不按策略名：同一种策略两条候选会共用一个键，
-            #   而那正是「换了个位置的同类问题」被当成同一条的形状。
-            rule=f'reference_boundary:{candidate.slot}',
-            what=(f'候选 {candidate.index}（{candidate.approach}）当前为 '
-                  f'{candidate.semantic_state}：{candidate.semantic_reason}'),
-            how=('开篇候选未决属质量披露面（Q-13）；流水线默认 '
-                 '`stage6.approve --auto` 按固定槽位序定稿。人工改选随时可做：'
-                 f'`stage6.approve --pick {candidate.index} '
-                 f'--actor <自报身份> --reason <理由> '
-                 f'--review-token {workpack.review_token}`（不阻塞下游）'))
-        )
-    return out
-
-
 def _approval_items(
     novel_dir, code: str, *,
-    stage6_workpack: Stage6ApprovalWorkpack | None = None,
     stage7_workpack: Stage7ApprovalWorkpack | None = None,
     workpacks_checked: bool = False,
 ) -> list[InboxItem]:
-    """两个「人定稿」闸门。⚠ 它们**不是故障**，但确实该在这张清单上。"""
+    """stage7 人名表的机械定稿披露项。⚠ 它**不是故障**，但确实该在这张清单上。"""
     out: list[InboxItem] = []
 
     if not workpacks_checked:
-        stage6_workpack = _stage6_workpack_or_none(novel_dir, code)
         stage7_workpack = _stage7_workpack_or_none(novel_dir, code)
-
-    if (stage6_workpack is not None
-            and stage6_workpack.disposition != 'already_current'):
-        out.append(InboxItem(
-            kind='approval', stage='stage6', chapter=None, rule='stage6.approve',
-            what=('开篇三候选的当前代码/规则/证据工作包还没有有效人工定稿——'
-                  '这是准备接受之后的独立最终定稿闸门'),
-            how=('先读 `approval workpack stage6 <sid> --base <base>`；选择候选 N 后跑 '
-                 '`stage6.approve --pick N --actor <自报身份> --reason <理由> '
-                 f'--review-token {stage6_workpack.review_token}`。'
-                 '候选主体与多枚内部 SHA 由 opaque token 关闭式绑定；同一当前工作包'
-                 '已有批准时本项不会发布')))
 
     if (stage7_workpack is not None
             and stage7_workpack.disposition != 'already_current'):

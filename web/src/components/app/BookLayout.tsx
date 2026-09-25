@@ -10,7 +10,6 @@ import { useRunProgress } from '@/hooks/useRunProgress'
 import { Mono } from '@/components/ui/Mono'
 
 const FINAL_APPROVAL_PAGES = [
-  { stage: 'stage6', gate: 's6', label: 'Stage6 文案改选' },
   { stage: 'stage7', gate: 's7', label: 'Stage7 人物对照' },
 ] as const
 
@@ -35,10 +34,7 @@ export function BookLayout() {
   const chapters = q.data?.chapters ?? null
   // gate 的有效性只认后端；这里仅给已有产物对应的只读页导航。
   const finalApprovalGaps = FINAL_APPROVAL_PAGES.filter(({ stage, gate }) =>
-    doc?.gate[gate] === false && (
-      q.data?.stage_done[stage] === true
-      || (stage === 'stage6' && q.data?.stage_done.stage7 === true)
-    ),
+    doc?.gate[gate] === false && q.data?.stage_done[stage] === true,
   )
 
   return (
@@ -63,7 +59,7 @@ export function BookLayout() {
           <span aria-hidden>!</span>
           <span className="min-w-0 flex-1">
             {finalApprovalGaps.map(({ label }) => label).join('、')}尚未对齐当前选择。
-            请到对应页面查看状态；Stage6 可免费改选候选。
+            请到对应页面查看状态。
           </span>
           {finalApprovalGaps.map(({ stage, label }) => (
             <button

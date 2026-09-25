@@ -60,37 +60,22 @@ FOLLOW_CHECK_NOTE = '自动追跑：退出码 0 也可能是残缺产物'
 
 #: 已完成真实「profile → DirectLlmExecutor → 代码提交」纵切的付费跑法。
 #:
-#: 节点名不够表达执行边界：``stage5.write --revise`` 与默认写作都付费，
-#: ``stage4.design --replan`` 也是同一 producer 的显式重采；反过来，``--dry-run`` /
-#: ``--revalidate`` 等 0 成本路径绝不能因为节点在名单里就拿到 executor profile。
-#: 因此唯一判据是 ``(node, flag token set)``，值只列**已经完整迁移**的组合。
-#: 带值参数只以 token 入表，值仍由 ``validate_run`` 与 producer 校验。
+#: 节点名不够表达执行边界；反过来，``--check-only`` 等 0 成本复检路径绝不能
+#: 因为节点在名单里就拿到 executor profile。因此唯一判据是
+#: ``(node, flag token set)``，值只列**已经完整迁移**的组合。
+#: ⚠⚠ F8b 翻转：旧链 10 键随 ``RETIRED_NODES`` 退役；新链付费纵切经 F5e 真实
+#: 成书与 F7a PaidRequestSession 边界验证，9 个 ``str06.`` 付费节点的完整迁移
+#: 跑法都是默认 argv（``--check-only`` 是免费复检，不在此表）。
 PROFILED_LLM_RUNS: dict[str, tuple[frozenset[str], ...]] = {
-    'stage2.analyze': (frozenset(),),
-    # Stage2 语义审阅退役：stage2 三节点不再有 `--review-token` 跑法。
-    'stage2.characters': (frozenset(),),
-    'stage2.global': (frozenset(),),
-    'stage2.blueprint': (frozenset(),),
-    # 人工闸退役（2026-09-15 全自动裁决）：--review-token 跑法随审阅票退役；
-    # --replan 保留为显式付费重采（预算内自动执行的唯一 A 恢复路）。
-    'stage4.design': (
-        frozenset(),
-        frozenset({'--replan'}),
-    ),
-    'stage4.plan': (frozenset(),),
-    'stage5.write': (
-        frozenset(),
-        frozenset({'--chapters'}),
-        frozenset({'--revise'}),
-        frozenset({'--revise', '--chapters'}),
-        frozenset({'--reviewer-rewrite'}),
-    ),
-    # stage6.prepare 已迁入直连 LLM（2026-09-17）：空 flags 付费生产走 legacy profile；
-    # agent session 生产臂仍退役，不再接受 agent backend。
-    'stage6.prepare': (frozenset(),),
-    'stage6.hook': (frozenset(),),
-    # stage6.semantic 已随判官节点退役（2026-09-15），不再有 executor 跑法。
-    'stage7.rename': (frozenset(),),
+    'str06.stage2.source': (frozenset(),),
+    'str06.stage2.names': (frozenset(),),
+    'str06.stage4.preserve': (frozenset(),),
+    'str06.stage4.body_design': (frozenset(),),
+    'str06.stage4.bind': (frozenset(),),
+    'str06.stage4.hook_design': (frozenset(),),
+    'str06.stage5.hook': (frozenset(),),
+    'str06.stage5.body': (frozenset(),),
+    'str06.stage7.naming': (frozenset(),),
 }
 
 PROFILED_LLM_NODES = tuple(PROFILED_LLM_RUNS)
@@ -589,23 +574,25 @@ def check_nodes(stage: str) -> tuple[str, ...]:
 
 
 def check_node(stage: str) -> str:
-    """这一层那**唯一**一座复检桥。`check_nodes` 的单数投影。
+    """这一层复检桥的**代表**节点（`NODES` 顺序第一座 `--check-only`）。
 
-    【为什么单开一个函数】「每层恰好一座」是 `tests/test_orchestrator_nodes.py::
-    test_every_stage_has_exactly_one_check_node` 钉住的不变量，而消费方**全都**只要那一个。
-    各自解一次单例的下场是各自定一套降级策略：实测同时存在过三种——
-    解构当场炸、`nodes[0]` 抛 IndexError、以及最坏的 `nodes[0] if nodes else f'{stage}.review'`
-    ⇒ **编出一个不存在的节点 id** 一路带进 `readonly_ctx`，
-    把「这层没有复检桥」变成「这层有一座谁都找不到的桥」。
-    ⇒ 收成一处：不变量破了就在这里、以同一句话、对所有消费方当场出声。
+    【为什么单开一个函数】消费方全都只要一个节点 id 建 `readonly_ctx`——
+    那个 id 只影响错误信息前缀，不承载复检调度语义。各自解一次的下场是
+    各自定一套降级策略：实测同时存在过三种——解构当场炸、`nodes[0]` 抛
+    IndexError、以及最坏的 `nodes[0] if nodes else f'{stage}.review'`
+    ⇒ **编出一个不存在的节点 id** 一路带进 `readonly_ctx`。
+    ⇒ 收成一处：桥数异常就在这里、以同一句话、对所有消费方当场出声。
+
+    ⚠⚠ F8b 翻转：新链的复检是**节点级**（每个 `str06.` 节点自带
+    `--check-only`，见 `docs/schema/str06.md`），stage2／4／5 各有多座桥。
+    层的代表桥取 NODES 顺序第一座——零座仍是登记错误（忘了给节点登记
+    跑法），多座不再断言恰好一座；真正的复检调度走节点级入口。
     """
     nodes = check_nodes(stage)
-    if len(nodes) != 1:
+    if not nodes:
         raise KeyError(
-            f'{stage} 有 {len(nodes)} 个节点接受 `--check-only`：{nodes}；'
-            f'每层必须恰好一座复检桥。'
-            f'→ 0 个：忘了给它登记跑法（`contracts/invariants.py::NODES` 的 flags）；'
-            f'→ 2 个以上：这一层的复检入口不知道该调哪一个')
+            f'{stage} 有 0 个节点接受 `--check-only`：'
+            f'忘了给它登记跑法（`contracts/invariants.py::NODES` 的 flags）')
     return nodes[0]
 
 

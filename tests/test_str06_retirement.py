@@ -75,13 +75,34 @@ _EXECUTED_BY_F8A = ('contracts/invariants.py#stage6.',
                     'contracts/invariants.py::HOOK_',
                     'tests/test_artifact_versions.py#stage6/')
 
+#: F8b 已兑现的登记项（Stage6 服务面按登记切除：三个纯 Stage6 文件随路由注销
+#: 删除、四条 Stage6 路由串与 s6r4_ opaque token 随写面退役移除）——同样以
+#: 「不在现役面」作为删除成功的证据。登记条目本身保留作历史台账。
+_EXECUTED_BY_F8B = (
+    'novel/api/routes/stage6_prepare.py',
+    'novel/views/stage6.py',
+    'novel/views/stage6_prepare.py',
+    'tests/test_views_stage6.py',
+    'tests/test_stage6_prepare_http.py',
+    'web/src/screens/stage6/Stage6Screen.tsx',
+    'web/src/screens/stage6/Stage6Screen.test.tsx',
+    'web/src/screens/stage6/PreparePanel.tsx',
+    'web/src/screens/stage6/PreparePanel.test.tsx',
+    'web/src/constants/gates.ts@"s6"',
+    'novel/api/routes/edits.py@"/{sid}/stage6/approve"',
+    'novel/api/routes/edits.py@"/{sid}/stage6/rebuild"',
+    'novel/api/routes/approvals.py@"/stage6/workpack"',
+    'novel/api/routes/screens.py@"/{sid}/stage6"',
+    'novel/orchestrator/reviewer_node_landed.py@"s6r4_"',
+)
+
 
 def test_registered_items_all_exist():
     assert STR06_F6D_RETIREMENT, '退役登记为空'
     problems: list[str] = []
     for item in STR06_F6D_RETIREMENT:
         target = item.target
-        if target.startswith(_EXECUTED_BY_F8A):
+        if target.startswith(_EXECUTED_BY_F8A) or target.startswith(_EXECUTED_BY_F8B):
             continue
         file = _file_of(target)
         if file is None:

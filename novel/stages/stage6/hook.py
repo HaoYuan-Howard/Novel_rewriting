@@ -24,7 +24,9 @@ import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from functools import wraps
-from typing import Any, Literal, Protocol
+from typing import Any, Final, Literal, Protocol
+
+from pydantic import Field, model_validator
 
 from contracts.artifacts import (
     STAGE1_HOOK_COPY, STAGE2_CHARACTERS, STAGE2_GLOBAL_GROUNDING,
@@ -33,12 +35,31 @@ from contracts.artifacts import (
 
 
 from contracts.invariants import (
-    HOOK_APPROACHES, STAGE6_REVIEW_CONTRACT, WORK_UNIT_EXECUTOR_MAX_CONTENT_CALLS, slot_of,
+    STAGE6_REVIEW_CONTRACT, WORK_UNIT_EXECUTOR_MAX_CONTENT_CALLS,
 )
+
+# ⚠⚠ F8a 过渡内联：`HOOK_APPROACHES`／`slot_of` 已随 Stage6 三候选面从
+#   `contracts.invariants` 删除；本模块归 F6d 退役登记（F8c 整包删除），
+#   corpus 付费预览工具仍读本模块的 token 常量，这里按删除前的值原样内联，
+#   保证旧链模块在删除前可 import，不改变任何现役行为。
+HOOK_APPROACHES: Final = ('source_architecture', 'payoff_preview', 'scene_punchline')
+_HOOK_SLOTS: Final = ('c1', 'c2', 'c3')
+
+
+def slot_of(index: int) -> str:
+    """1 起的候选位置 → 候选身份（过渡内联；语义同删除前的 invariants 唯一换算口）。"""
+    if not 1 <= index <= len(_HOOK_SLOTS):
+        raise ValueError(
+            f'候选位置 {index} 越界；本层恒 {len(_HOOK_SLOTS)} 条候选'
+            f'（1~{len(_HOOK_SLOTS)}），取值面是 {list(_HOOK_SLOTS)}')
+    return _HOOK_SLOTS[index - 1]
+
 from contracts.rules import REGISTRY
 from contracts.schema.common import Finding
 from contracts.schema.api import (
-    Stage6ApprovalCandidate, Stage6ApprovalMaterials, Stage6ApprovalWorkpack,
+    ApprovalWorkpackDisposition, CompactApprovalCheck, FactEvidence,
+    FinalApprovalWorkpackKind, FrozenModel, HookFactEvidence, Sha256,
+    SourceBlurbGrounding,
 )
 from contracts.schema.report import CheckReport
 from contracts.schema.characters import CharacterRegistry
@@ -69,6 +90,91 @@ from novel.stages.stage6.measure import (
     lead_drafts, lead_upto, normalize_hook, quote_problems_of,
 )
 from novel.store import ArtifactStore, readonly_snapshot_value
+
+
+#: 过渡内联：F8a 删除了 `contracts.schema.api` 的 Stage6 审批模型，本模块
+#: （F6d 登记、F8c 整包删除）按删除前的定义原样承接，值与校验逐字保留。
+_STAGE6_APPROVAL_CHECK_BASIS: Final = 'candidate_without_approval'
+
+
+class Stage6ApprovalCandidate(FrozenModel):
+    """Stage6 终审的一条候选：文本、机械结论与 A/B 原始证据同包。"""
+
+    index: int = Field(ge=1)
+    slot: Literal[_HOOK_SLOTS]
+    approach: Literal[HOOK_APPROACHES]
+    chars: int = Field(ge=0)
+    text: str = Field(min_length=1)
+    subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    mech: Mech
+    findings: list[Finding]
+
+    @model_validator(mode='after')
+    def _slot_matches_the_visible_index(self) -> 'Stage6ApprovalCandidate':
+        if self.slot != slot_of(self.index):
+            raise ValueError('候选 slot 必须与 1 起 index 使用同一位置身份')
+        return self
+
+
+class Stage6ApprovalChapter(FrozenModel):
+    chapter_ordinal: int = Field(ge=1)
+    text: str = Field(min_length=1)
+
+
+class Stage6ApprovalMaterials(FrozenModel):
+    """终审可实际核验的事实来源；原钩子与重写正文各只下发一次。"""
+
+    prepare_subject_sha256: Sha256
+    source_hook: str = Field(min_length=1)
+    source_blurb: SourceBlurbGrounding[FactEvidence, HookFactEvidence]
+    rewritten_chapters: list[Stage6ApprovalChapter] = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _chapters_cover_the_reading_order(self) -> 'Stage6ApprovalMaterials':
+        if [row.chapter_ordinal for row in self.rewritten_chapters] != list(
+                range(1, len(self.rewritten_chapters) + 1)):
+            raise ValueError('文案终审正文必须按阅读序完整覆盖连续章号')
+        return self
+
+
+class Stage6ApprovalWorkpack(FrozenModel):
+    """Stage6 当前候选集的紧凑终审包（过渡内联；字段与校验同删除前的 api 版）。"""
+
+    v: Literal[4] = 4
+    kind: FinalApprovalWorkpackKind
+    sid: str = Field(min_length=1)
+    review_contract_version: Literal[STAGE6_REVIEW_CONTRACT] = STAGE6_REVIEW_CONTRACT
+    review_identity_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    validation_seal_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    review_token: str = Field(pattern=r'^s6r4_[0-9a-f]{64}$')
+    artifact_subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    rationale: str = Field(min_length=1)
+    materials: Stage6ApprovalMaterials
+    #: 检查固定针对去审批候选；当前接受状态只由 disposition/current_approval 表达。
+    check_basis: Literal[_STAGE6_APPROVAL_CHECK_BASIS] = _STAGE6_APPROVAL_CHECK_BASIS
+    check: CompactApprovalCheck
+    candidates: list[Stage6ApprovalCandidate] = Field(min_length=3, max_length=3)
+    workpack_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    disposition: ApprovalWorkpackDisposition
+    current_slot: Literal[_HOOK_SLOTS] | None = None
+    current_approval: HookApprovalResolution | None = None
+
+    @model_validator(mode='after')
+    def _currentness_and_candidate_set_are_closed(self) -> 'Stage6ApprovalWorkpack':
+        if self.kind != 'stage6':
+            raise ValueError('Stage6ApprovalWorkpack.kind 必须是 stage6')
+        if self.review_token != f's6r4_{self.workpack_sha256}':
+            raise ValueError('Stage6 review_token 必须封装当前 exact workpack')
+        if [row.index for row in self.candidates] != [1, 2, 3]:
+            raise ValueError('Stage6 workpack 必须按产物顺序完整覆盖 1..3')
+        current = self.current_slot is not None and self.current_approval is not None
+        if (self.disposition == 'already_current') != current:
+            raise ValueError('already_current 必须携带当前 slot 与 approval')
+        if self.current_approval is not None \
+                and self.current_approval.review_identity_sha256 \
+                != self.review_identity_sha256:
+            raise ValueError('当前 approval 必须绑定这份长期 review identity')
+        return self
 
 REL = STAGE6_HOOK
 #: `--apply-edit` 的缺省决策集路径。形状是契约（`ARTIFACTS` 里登记着 `HookEdit`）。

@@ -25,7 +25,7 @@ export interface PendingConfirm {
   after?: (job: Job | null) => void
   /**
    * 执行覆盖：历史专用写回路由已随全自动只读面退役；现役确认框若仍带 run，
-   * 须先 preview 同一服务端计划（R-11.8），再跑该覆盖。Stage6 改选走 approveHook。
+   * 须先 preview 同一服务端计划（R-11.8），再跑该覆盖。
    */
   run?: () => Promise<unknown>
 }

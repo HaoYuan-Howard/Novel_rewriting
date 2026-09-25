@@ -177,6 +177,8 @@ STR06_HOOK_CONTEXT = artifact_rel('stage4/context/hook/hook.json')
 STR06_WRITER_BOOK_IR = artifact_rel('stage4/ir/writer_book_ir.json')
 STR06_HOOK_TEXT = artifact_rel('stage5/hook/hook.txt')
 STR06_HOOK_RECEIPT = artifact_rel('stage5/hook/receipt.json')
+STR06_STAGE5_BODY = artifact_rel('stage5/body/ch{nn}.txt')
+STR06_STAGE5_BODY_RECEIPT = artifact_rel('stage5/acceptance/body/ch{nn}.json')
 STR06_NAME_MAP = artifact_rel('stage7/naming/name_map.json')
 STR06_DELIVERY_MANIFEST = artifact_rel('stage7/final/delivery_manifest.json')
 

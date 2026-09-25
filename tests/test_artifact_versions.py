@@ -260,25 +260,29 @@ def test_paths_feed_schema_nodes_consumption_and_runtime_from_one_catalog():
     assert {
         rel for projections in CONSUMED_PROJECTIONS.values() for rel in projections
     } <= catalog
-    assert artifact_rel('stage5.chapter', nn=3) == 'stage5/ch03.json'
-    assert artifact_rel('stage5.rejected_revision', nn=12) == 'stage5/ch12.rejected.json'
+    # F8a 后逐章正文/回执的字面键直接以模板为 id；旧 stage5.chapter／
+    # rejected_revision（Stage5 Review 收敛账）随旧链退役。
+    assert artifact_rel('stage5/body/ch{nn}.txt', nn=3) == 'stage5/body/ch03.txt'
+    assert artifact_rel('stage5/acceptance/body/ch{nn}.json', nn=12) == (
+        'stage5/acceptance/body/ch12.json')
 
 
 @pytest.mark.parametrize('rel,key', [
-    ('stage5/ch01.json', 'stage5/ch{nn}.json'),
-    ('stage5/_rounds/ch01.r3.json', 'stage5/ch{nn}.json'),
-    ('stage5/_rounds/ch01.INVALID.r3.json', 'stage5/ch{nn}.json'),
-    ('stage5/_rounds/review_4.r2.json', 'stage5/review_{n}.json'),
-    ('stage6/hook.INVALID.json', 'stage6/hook.json'),
-    ('stage6/_rounds/hook.r2.json', 'stage6/hook.json'),
+    ('stage5/acceptance/body/ch01.json', 'stage5/acceptance/body/ch{nn}.json'),
+    ('stage5/acceptance/body/_rounds/ch01.r3.json',
+     'stage5/acceptance/body/ch{nn}.json'),
+    ('stage5/acceptance/body/_rounds/ch01.INVALID.r3.json',
+     'stage5/acceptance/body/ch{nn}.json'),
+    # 旧 stage5/ch{nn}.json 与 review_{n}.json 路径族随旧链退役
+    # （F8b），路径路由反例归旧链注销批次，不保留现役参数。
 ])
 def test_runtime_and_corpus_share_the_same_path_router(rel: str, key: str):
     assert artifact_key(rel) == key
 
 
 @pytest.mark.parametrize('rel', [
-    'stage5/_rounds/ch01.INVALID.superseded.json',
-    'stage5/_rounds/review_4.invalid_metadata_convergence.json',
+    'stage5/acceptance/body/_rounds/ch01.INVALID.superseded.json',
+    'stage5/acceptance/body/_rounds/review_4.invalid_metadata_convergence.json',
 ])
 def test_retired_archive_aliases_are_not_current_artifact_paths(rel: str):
     assert artifact_key(rel) is None
@@ -348,7 +352,8 @@ def test_unreadable_current_artifacts_do_not_take_down_read_only_aggregation(tmp
         }), ensure_ascii=False),
         encoding='utf-8')
     malformed = json.dumps({'_schema_version': 1}, ensure_ascii=False)
-    (book / 'stage2' / 'global_grounding.json').write_text(
+    (book / 'stage2' / 'compiled').mkdir()
+    (book / 'stage2' / 'compiled' / 'book_extraction.json').write_text(
         malformed, encoding='utf-8')
 
     ov = overview(root, '123')
@@ -357,52 +362,6 @@ def test_unreadable_current_artifacts_do_not_take_down_read_only_aggregation(tmp
     assert ov.summary.verdict == 'broken'
     assert inbox.total == len(inbox.items)
 
-
-def _hook_with_ordered_retries(attempts: list[int]):
-    from tests.factories import stage6_hook as _hook, stage6_hook_retry as _retry
-    artifact = _hook(['甲推门进入庭院。', '乙收到一封密信。', '丙发现灯下的人影。'])
-    payload = artifact.model_dump(by_alias=True, mode='json')
-    rows = []
-    for index, attempt in enumerate(attempts):
-        row = _retry('c1', index)
-        row.update(attempt=attempt, before_hard=4 - index, after_hard=3 - index)
-        rows.append(row)
-    payload['_provenance']['candidate_retries'] = rows
-    return payload
-
-
-def test_hook_v5_keeps_four_distinct_same_slot_attempts_and_refuses_legacy_envelopes():
-    from contracts.schema.stage6 import Hook
-    payload = _hook_with_ordered_retries([1, 2, 3, 4])
-    artifact = Hook.model_validate(payload)
-    encoded = encode_artifact('stage6/hook.json', artifact.model_dump(by_alias=True, mode='json'))
-    assert encoded['_schema_version'] == 5
-    assert [row.attempt for row in artifact.provenance.candidate_retries] == [1, 2, 3, 4]
-    assert Hook.model_validate(decode_artifact('stage6/hook.json', encoded).payload) == artifact
-    for legacy_version in (1, 2, 3):
-        encoded['_schema_version'] = legacy_version
-        with pytest.raises(ArtifactVersionError):
-            decode_artifact('stage6/hook.json', encoded)
-    assert ARTIFACT_SPECS['stage6/hook_edit.json'].current_version == 2
-
-
-@pytest.mark.parametrize('attempts', [[1, 1], [1, 3], [2], [1, 2, 3, 5]])
-def test_hook_v4_rejects_repeated_missing_or_out_of_budget_retry_identity(attempts):
-    from contracts.schema.stage6 import Hook
-    with pytest.raises(ValidationError):
-        Hook.model_validate(_hook_with_ordered_retries(attempts))
-
-
-def test_hook_v4_distinguishes_agent_full_replacement_from_legacy_local_revision():
-    from contracts.schema.stage6 import Hook, HookParams
-    assert HookParams(max_tokens=1).candidate_retry_limit == 4
-    assert HookParams(max_tokens=1, candidate_retry_limit=0).candidate_retry_limit == 0
-    with pytest.raises(ValidationError):
-        HookParams(max_tokens=1, candidate_retry_limit=1)
-    payload = _hook_with_ordered_retries([1])
-    payload['_provenance']['params']['candidate_retry_limit'] = 0
-    with pytest.raises(ValidationError, match='未启用局部候选协议'):
-        Hook.model_validate(payload)
 
 @pytest.mark.parametrize('rel', [
     'stage3/style_grounding.json',

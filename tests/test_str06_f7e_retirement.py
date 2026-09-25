@@ -103,12 +103,40 @@ _EXECUTED_BY_F8A = ('contracts/invariants.py#', 'contracts/artifacts.py#',
                     # stage6.md／plot_blueprint.md 两份旧文档删除。
                     'docs/schema/plot_blueprint.md', 'docs/schema/stage6.md')
 
+#: F8b 已执行的登记项：Stage6 服务面按登记切除（F6d 表三条 delete_file 经本表
+#: 的 grandfather 边对账），`novel/views/stage6.py` 已随 routes 注销删除——
+#: 文件不存在正是删除成功的证据；`tests/test_layering.py` 的冻结边清单同批缩减。
+#: `web/src/types/prepare.ts` 同批删除：Stage6 prepare 视图类型随整层退役
+#: （take_over「退役无接管」），仍被 ApprovalDoc.prepare 消费的 PrepareState 等
+#: 并入 web/src/types/approvals.ts，不为退役面保留第二个类型落点。
+#: `novel/views/stage7.py`（delete_file，take_over「F7d 候选 views
+#: （naming/delivery）」）同批执行：该视图经已退役的 `stage7.rename` 节点建
+#: readonly_ctx，F8a 后一调用即 ValueError——不是「能跑但过期」，是按登记
+#: 提前删除；其 3 条 grandfather 边随 `tests/test_layering.py` 冻结清单缩减
+#: （88→83，含 views/stage6.py 两条）。`tests/test_views_stage7.py` 随主题删除。
+_EXECUTED_BY_F8B = ('novel/views/stage6.py@', 'web/src/types/prepare.ts',
+                    'novel/views/stage7.py', 'tests/test_views_stage7.py',
+                    'novel/views/stage7.py@',
+                    'web/src/screens/stage7/',
+                    # corpus 付费预览（原 rewrite 登记）改判 F8b 提前删除：
+                    # F8a 已删其派生源（NODES 旧键、产物 spec、HOOK 常量），
+                    # import 与运行双死；修复需手抄冻结节点表，违反工具自身的
+                    # 「从现役契约派生」纪律。接管：新链付费边界由
+                    # PaidRequestSession 工作单元／整书总闸／ledger 守卫（F7c
+                    # 已迁反例）；corpus 线重启时按当期现役契约重建预览面。
+                    'tests/test_current_corpus_paid_preview.py',
+                    'tools/current_corpus_paid_preview.py',
+                    # edits 路由族（旧节点编辑端点整族退役，F8b 提前执行）：
+                    # 文件保留空 router 维持 app 模块面，两条 stage2 深导入
+                    # grandfather 边随路由删除消失。
+                    'novel/api/routes/edits.py@novel.stages.stage2')
+
 
 def test_registered_items_all_exist():
     problems: list[str] = []
     for item in STR06_F7E_RETIREMENT:
         target = item.target
-        if target.startswith(_EXECUTED_BY_F8A):
+        if target.startswith(_EXECUTED_BY_F8A) or target.startswith(_EXECUTED_BY_F8B):
             continue
         file = _file_of(target)
         if file is None:
@@ -253,8 +281,10 @@ def test_old_chain_views_and_frontend_registered():
     """旧链 views 与前端旧屏必须在册（F7d 候选监控面是接管者，不是删除对象）。"""
     registered = _registered_files(STR06_F7E_RETIREMENT)
     problems = []
+    # ⚠ views/stage7.py 已由 F8b 按 delete_file 登记执行删除（经已退役的
+    # stage7.rename 节点建 ctx，F8a 后不可用），不再要求在册。
     for rel in ('novel/views/stage2.py', 'novel/views/stage4.py',
-                'novel/views/stage5.py', 'novel/views/stage7.py',
+                'novel/views/stage5.py',
                 'novel/views/blueprint_progress.py'):
         if rel not in registered:
             problems.append(f'旧链视图未登记：{rel}')

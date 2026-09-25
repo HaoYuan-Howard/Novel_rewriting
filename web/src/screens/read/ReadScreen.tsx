@@ -75,7 +75,7 @@ function PlotChapter({ chapter }: { chapter: PlotBlueprint }) {
       <h3 className="font-semibold">剧情节点 {i + 1}</h3>
       <p className="prose-cn">{beat.content}</p>
       <p className="text-tag text-ink-4">原文证据：{evidence(beat.evidence_refs)}</p>
-      {beat.source_contexts.map((context, n) => <p key={n} className="text-tag text-ink-3">
+      {(beat.source_contexts ?? []).map((context, n) => <p key={n} className="text-tag text-ink-3">
         {context.time_layer ?? '时层未知'} · {context.place ?? '地点未知'} ·
         在场人物 {context.present === null ? '未知' : context.present.map(actor).join('、') || '明确为空'}
       </p>)}
