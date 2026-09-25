@@ -153,8 +153,8 @@ conda run -n novel_refactor python -m pytest -n 0 --lf --lfnf=none -x
 结论。Stage4 B 测试复用 A/旧 B 前置盘面，Stage5～Stage7 职责测试复用逐层冻结的合成上游；故障注入、真实生产、HTTP/审批、
 并发与最终字节断言仍逐例运行。并发生命周期的 serial 登记和真实代码身份校验保持原约束。
 
-`tests/test_delivery_modes.py` 将当前工程文件复制并提交到独立临时 Git 根，从空输出执行
-`tests/delivery_scenario.py`：人工上传与逐层审批、免费 CLI、自动 Supervisor 收尾、HTTP 下载和
+（原双模式全链场景已随旧链退役；真实入口全链验收由 F8d fake transport 承接，
+见 `docs/REQUIREMENTS.md`。）从空输出执行
 服务重启均用真实入口。模型回答由合成 transport/driver 提供；自动收尾只准免费组装，任何额外
 动作或模型调用都失败。这验证两种模式共用交付证明及无需 Markdown 报告，不证明模型质量或真实费用。
 回答/决定/prepared 的中断恢复仍由所属恢复测试保留反例，不用成功场景替代。
@@ -165,7 +165,7 @@ conda run -n novel_refactor python -m pytest -n 0 --lf --lfnf=none -x
 |---|---|---|
 | stage0 | `tests/test_stage01.py` 的摄入、源漂移拒绝和人工修订保留 | `tests/test_api_stage01.py` 的批准与正式分章 |
 | stage1 | `tests/test_stage01.py` 的分章、空章拒绝、章号与重新分章 | `tests/test_api_stage01.py` 的连续正文与诊断读面 |
-| stage2 | `tests/test_stage2_characters.py`、`tests/test_stage2_knowledge_flow.py`、`tests/test_stage2_generation.py`、`tests/test_plot_producer.py` 的独立生成与恢复；`tests/test_plot_edit.py` / `tests/test_plot_repair.py` 的编辑与返修；`tests/test_blueprint_repair_queue.py` 的统一机械准入阻断与免费恢复 | `tests/test_stage2_node_lifecycle.py`、`tests/test_stage2_uploaded_flow.py` 的正式提交与下游释放，`tests/test_plot_edit_http.py` 的 CLI 与服务重启；Stage2 语义审阅已退役，语义未审以报告 unver 行与交付披露承接 |
+| stage2 | `tests/test_stage2_characters.py`、`tests/test_stage2_knowledge_flow.py`、`tests/test_stage2_generation.py`、`tests/test_plot_producer.py` 的独立生成与恢复；`tests/test_plot_edit.py` / `tests/test_plot_repair.py` 的编辑与返修；`tests/test_blueprint_repair_queue.py` 的统一机械准入阻断与免费恢复 | `tests/test_stage2_node_lifecycle.py` 的正式提交与下游释放，`tests/test_plot_edit_http.py` 的 CLI 与服务重启；Stage2 语义审阅已退役，语义未审以报告 unver 行与交付披露承接 |
 | stage4 | `tests/test_stage4_v3_integration.py` 的 A/B/Context、错误证据拒绝与免费 binding 修订 | 同模块的正式读取、HTTP 与重启 |
 | stage5 | `tests/test_stage_responsibilities.py` 的正式逐章生成、提交尾窗的第三方字节拒绝与免费恢复 | 正式 Chapter 读回与 Review；替换判据的 `tests/test_stage5_generation.py` 保留在单元 / contract 层 |
 | stage6 | `tests/test_stage_responsibilities.py` 的 Hook、双判官、定稿及证据缺失 / 恢复 | 真实 Stage6 页面读面；此前仅 corpus 覆盖的成功路径已加入默认测试 |

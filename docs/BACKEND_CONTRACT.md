@@ -332,7 +332,7 @@ Hook 的必要选择进入 Stage4 正式 Design（`R-5.6`），经 HookContext �
   terminal 后的免费重验/编辑先写 successor prepared，合法后继或明确 consumption 前不替换请求。
   Stage5 partial batch replay 的 exit 2 不得删掉唯一 action 后重买；先保留证据并停止。
 - Stage5 trim 的 retain/rewrite 共用原 Review、完整有序 manifest 与 contract 的业务身份；逐项写回导致 token
-  自变不重置内容额度。Stage4 replan 的 typed stop 不产生审批或执行权，原拒绝保持，见 `tests/test_reviewer_approval_landed.py`。
+  自变不重置内容额度。Stage4 replan 的 typed stop 不产生审批或执行权，原拒绝保持（受托审阅模式已退役；legacy 拒识见审批历史投影与 `tests/test_approvals.py`）。
 - 确定性 prepared 补尾优先于新审阅，且只消费唯一来源及其 exact CAS；同时存在互斥 prepared 必须拒绝。
   历史 journal 仅作为被选中恢复动作的 external input，不把历史全树加入活动身份。
 - Stage4 紧凑 wire 只压缩运输，不能减少合法 submission option。actor、范围、token 与 SHA 由同一 immutable
@@ -455,7 +455,7 @@ unknown、缺失、未运行、合法空值、失败和通过分别保留，不�
 原始字节不变，才能保留 Stage2–5 原来源及仍满足完整身份的审批；稳定盲句柄和审阅依据不得
 因此换 seed。未知、正文或切分变动、未批准、坏链、Hook 依赖仍走原根守卫。Prepare 则由
 完整 typed 重编绑定当前两材料及历史生成证明，重新接受；不把旧模型来源重挂成新模型调用。
-证明与拒绝反例见 `novel/source_identity.py`、`tests/test_source_identity.py` 和 Prepare HTTP 回归。
+证明与拒绝反例见 `novel/source_identity.py` 与 Prepare HTTP 回归；新链源输入身份由 `tests/test_str06_f7a_wiring.py` 承接。
 字段形状见 `docs/schema/_common.md` 及各 producer schema。
 
 ### Q-5 · 先校验后落盘

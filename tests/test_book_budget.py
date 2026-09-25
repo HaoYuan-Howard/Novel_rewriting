@@ -34,8 +34,8 @@ def tiny_ceiling(monkeypatch):
 
 def test_book_ceiling_trips_across_units(tmp_path, tiny_ceiling):
     # 不同 (node, scope) 的单元各自有 4 次单元额度，但合账只有 2 次。
-    hook = WorkUnitBudget(tmp_path, '42', 'stage6.hook', 'executor', 'book')
-    write = WorkUnitBudget(tmp_path, '42', 'stage5.write', 'executor', 'chapter:1')
+    hook = WorkUnitBudget(tmp_path, '42', 'str06.stage5.hook', 'executor', 'book')
+    write = WorkUnitBudget(tmp_path, '42', 'str06.stage5.body', 'executor', 'chapter:1')
     spend(hook, 'a')
     spend(write, 'b')
     with pytest.raises(WorkUnitBudgetExhausted, match='整书付费内容调用总闸'):
@@ -45,10 +45,10 @@ def test_book_ceiling_trips_across_units(tmp_path, tiny_ceiling):
 
 
 def test_book_budget_persists_across_restart(tmp_path, tiny_ceiling):
-    unit = WorkUnitBudget(tmp_path, '42', 'stage6.hook', 'executor', 'book')
+    unit = WorkUnitBudget(tmp_path, '42', 'str06.stage5.hook', 'executor', 'book')
     spend(unit, 'a')
     # 新实例 = 进程重启：账在盘上，已消耗额度不重置。
-    reopened = WorkUnitBudget(tmp_path, '42', 'stage6.hook', 'executor', 'book')
+    reopened = WorkUnitBudget(tmp_path, '42', 'str06.stage5.hook', 'executor', 'book')
     budget = read_book_budget(tmp_path, '42')
     assert budget is not None and budget.used == 1
     spend(reopened, 'b', run_id='run-2')
@@ -58,7 +58,7 @@ def test_book_budget_persists_across_restart(tmp_path, tiny_ceiling):
 
 def test_network_retries_do_not_spend_book_budget(tmp_path):
     """重试层级不变式：网络尝试共享同一 reservation，只有 reserve 计整书账。"""
-    unit = WorkUnitBudget(tmp_path, '42', 'stage6.hook', 'executor', 'book')
+    unit = WorkUnitBudget(tmp_path, '42', 'str06.stage5.hook', 'executor', 'book')
     turn = unit.reserve(sha('r1'), run_id='run-1')
     for index in range(3):
         unit.record_attempt(turn.turn_id, attempt_id=f'a{index}', outcome='error')
@@ -68,7 +68,7 @@ def test_network_retries_do_not_spend_book_budget(tmp_path):
 
 
 def test_grant_extends_ceiling_and_requires_actor_reason(tmp_path, tiny_ceiling):
-    unit = WorkUnitBudget(tmp_path, '42', 'stage6.hook', 'executor', 'book')
+    unit = WorkUnitBudget(tmp_path, '42', 'str06.stage5.hook', 'executor', 'book')
     spend(unit, 'a')
     spend(unit, 'b')
     with pytest.raises(WorkUnitBudgetExhausted):
@@ -90,7 +90,7 @@ def test_grant_on_missing_budget_initializes_default(tmp_path):
 
 def test_corrupt_book_budget_refuses_new_calls(tmp_path, tiny_ceiling):
     """坏账关闭式拒绝：付费副作用状态未知不得绕过（Q-13），也不作零。"""
-    unit = WorkUnitBudget(tmp_path, '42', 'stage6.hook', 'executor', 'book')
+    unit = WorkUnitBudget(tmp_path, '42', 'str06.stage5.hook', 'executor', 'book')
     unit.reserve(sha('r1'), run_id='run-1')
     path = work_units._book_budget_path(tmp_path, '42')
     path.write_text('{ 不是账 }', encoding='utf-8')
