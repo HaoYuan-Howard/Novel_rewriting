@@ -61,6 +61,8 @@ def _t(*tokens: str) -> frozenset[str]:
 
 _INBOX = queue.WAITING_ON_INBOX
 _RESUME = queue.WAITING_ON_RESUME_DECISION
+#: 新链节点的通用 blocker 面。
+_STR06 = frozenset({_INBOX, _RESUME})
 _STAGE2_EDIT_COMMIT = queue.WAITING_ON_STAGE2_EDIT_COMMIT
 _STAGE2_EDIT_REVALIDATE = queue.WAITING_ON_STAGE2_EDIT_REVALIDATE
 _INVALID_REVALIDATE = queue.WAITING_ON_INVALID_REVALIDATE
@@ -84,126 +86,25 @@ _W7 = frozenset({_INBOX, _RESUME, _INVALID_REVALIDATE})
 #: 例如 revalidate 没有 actor/reason 就不是同一行。表外组合即使节点 argparse
 #: 暂时能解析，也不能拿到 Commander 执行许可。
 RECOVERY_RUN_POLICIES: Final[tuple[RecoveryRunPolicy, ...]] = (
+    # ⚠ F8b-3（S-05 deprecation）：旧链恢复旗标族（--revalidate/--apply-edit/
+    # --revise/--recover-* 等）随旧链整层退役——它们的 blocker 只能由旧链
+    # planner 发出，生产入口已拒识。新链的免费复检是节点级 ``--check-only``
+    # （blocked 恢复与零成本重验同一形状）；付费节点的恢复是候选 runner 自身
+    # 续跑（F7c 精确补尾），不经 permit 表发布付费恢复动作。
     RecoveryRunPolicy('stage0.remove', _t('--check-only'), _W0),
     RecoveryRunPolicy(
         'stage1.partition', _t('--check-only'),
         frozenset({_INBOX, _RESUME}),
     ),
-
-    RecoveryRunPolicy('stage2.global', _t('--renormalize'), _W2),
-    RecoveryRunPolicy('stage2.global', _t('--recover-analyze'), _W2),
-    RecoveryRunPolicy('stage2.analyze', _t('--recover-analyze-run'), _W2),
-    RecoveryRunPolicy(
-        'stage2.global', _t('--revalidate', '--actor', '--reason'),
-        _W2 | frozenset({_STAGE2_EDIT_REVALIDATE})),
-    # reviewed-edit 只保留 WAL 补尾这一条恢复路；审阅轮的 apply-edit/
-    # review-decisions 等语义动作已随 Stage2 审阅退役。
-    RecoveryRunPolicy(
-        'stage2.global', _t('--apply-edit'),
-        frozenset({_STAGE2_EDIT_COMMIT})),
-    RecoveryRunPolicy('stage2.blueprint', _t('--check-only'), _W2),
-    RecoveryRunPolicy('stage2.blueprint', _t('--renormalize'), _W2),
-    RecoveryRunPolicy(
-        'stage2.blueprint', _t('--revalidate', '--actor', '--reason'), _W2),
-    RecoveryRunPolicy(
-        'stage2.blueprint', _t('--emit-edit-template'), _W2 | _W4),
-    RecoveryRunPolicy(
-        'stage2.blueprint', _t('--validate-edit'), _W2 | _W4),
-    RecoveryRunPolicy(
-        'stage2.blueprint', _t('--apply-edit'), _W2 | _W4),
-
-    RecoveryRunPolicy(
-        'stage4.design',
-        _t('--recover-repair-aggregate', '--source-journal-sha256',
-           '--source-commit-sha256'),
-        frozenset({_STAGE4_DESIGN_REPAIR_COMMIT}),
-    ),
-    RecoveryRunPolicy('stage4.plan', _t('--reaggregate'), _W4),
-    RecoveryRunPolicy('stage4.design', _t('--reaggregate'), _W4),
-    RecoveryRunPolicy('stage4.design', _t('--recover-responses'), _W4),
-    RecoveryRunPolicy(
-        'stage4.plan', _t('--recover-prepared', '--subject-sha256'),
-        frozenset({_PREPARED_DELIVERY})),
-    RecoveryRunPolicy(
-        'stage4.design', _t('--recover-prepared', '--subject-sha256'),
-        frozenset({_PREPARED_DELIVERY})),
-    RecoveryRunPolicy('stage4.plan', _t('--check-only'), _W4),
-    RecoveryRunPolicy('stage4.plan', _t('--names-only'), _W4),
-    RecoveryRunPolicy('stage4.plan', _t('--identity'), _W4),
-    RecoveryRunPolicy(
-        'stage4.plan', _t('--revalidate', '--actor', '--reason'), _W4),
-    RecoveryRunPolicy('stage4.plan', _t('--apply-edit'), _W4),
-    RecoveryRunPolicy('stage4.plan', _t('--apply-binding'), _W4),
-
-    RecoveryRunPolicy('stage5.write', _t('--recheck'), _W5),
-    RecoveryRunPolicy('stage5.write', _t('--recheck', '--chapters'), _W5),
-    RecoveryRunPolicy(
-        'stage5.write', _t('--revalidate', '--actor', '--reason'), _W5),
-    RecoveryRunPolicy(
-        'stage5.write',
-        _t('--revalidate', '--chapters', '--actor', '--reason'), _W5),
-    RecoveryRunPolicy('stage5.write', _t('--preview-edit'), _W5),
-    RecoveryRunPolicy(
-        'stage5.write',
-        _t('--apply-edit', '--actor', '--reason',
-           '--current-chapter-sha256', '--preview-subject-sha256',
-           '--edit-confirmation'),
-        _W5,
-    ),
-    RecoveryRunPolicy(
-        'stage5.write', _t('--emit-prepared-recovery-workpack'), _W5),
-    RecoveryRunPolicy(
-        'stage5.write',
-        _t('--recover-prepared', '--actor', '--reason', '--subject-sha256'),
-        _W5,
-    ),
-    RecoveryRunPolicy('stage5.review', _t(), _W5),
-    RecoveryRunPolicy('stage5.review', _t('--check-only'), _W5),
-    RecoveryRunPolicy('stage5.review', _t('--wontfix'), _W5),
-    # ⚠ `--retain-pretrim(-batch)` / `--request-reviewer-rewrite` 恢复策略已随
-    #   批次 B3 trim 三选一退役删除；stage5.review 无参重算即机械闭合补算路，
-    #   它在 _STAGE5_CLOSURE blocker 下同样被本表放行（_W5 含闭合闸）。
-    RecoveryRunPolicy(
-        'stage5.write',
-        _t('--recover-reviewer-rewrite-prepared',
-           '--reviewer-rewrite-request-sha256'),
-        frozenset({_STAGE5_REVIEWER_REWRITE})),
-    RecoveryRunPolicy(
-        'stage5.write',
-        _t('--recover-reviewer-rewrite-prepared',
-           '--reviewer-rewrite-request-sha256',
-           '--reviewer-rewrite-recovery-target-run-id',
-           '--reviewer-rewrite-recovery-journal-sha256'),
-        frozenset({_STAGE5_REVIEWER_REWRITE})),
-    RecoveryRunPolicy(
-        'stage5.write',
-        _t('--retire-reviewer-rewrite-request',
-           '--reviewer-rewrite-request-sha256'),
-        frozenset({_STAGE5_REVIEWER_REWRITE})),
-
-    RecoveryRunPolicy(
-        'stage7.rename', _t('--recover-prepared', '--subject-sha256'),
-        frozenset({_PREPARED_DELIVERY})),
-
-    RecoveryRunPolicy('stage7.rename', _t('--check-only'), _W7),
-    RecoveryRunPolicy('stage7.rename', _t('--identity'), _W7),
-    RecoveryRunPolicy('stage7.rename', _t('--recheck'), _W7),
-    RecoveryRunPolicy(
-        'stage7.rename', _t('--revalidate', '--actor', '--reason'), _W7),
-    RecoveryRunPolicy('stage7.rename', _t('--apply-edit'), _W7),
-    RecoveryRunPolicy('stage7.rename', _t('--emit-edit-template'), _W7),
-    RecoveryRunPolicy('stage7.rename', _t('--validate-edit'), _W7),
-    RecoveryRunPolicy('stage7.rename', _t('--adopt-residual'), _W7),
-    RecoveryRunPolicy('stage7.rename', _t('--rebind-review'), _W7),
-
-    # 付费恢复只开放 executor 已完整迁移且另有 typed 授权的两族；
-    # stage4.design 的人工 typed 恢复动作已随四道闸退役。
-    RecoveryRunPolicy('stage5.write', _t('--revise'), _W5, paid=True),
-    RecoveryRunPolicy(
-        'stage5.write', _t('--revise', '--chapters'), _W5, paid=True),
-    RecoveryRunPolicy(
-        'stage5.write', _t('--reviewer-rewrite'),
-        frozenset({_STAGE5_REVIEWER_REWRITE}), paid=True),
+    RecoveryRunPolicy('str06.stage2.source', _t('--check-only'), _STR06),
+    RecoveryRunPolicy('str06.stage2.names', _t('--check-only'), _STR06),
+    RecoveryRunPolicy('str06.stage4.preserve', _t('--check-only'), _STR06),
+    RecoveryRunPolicy('str06.stage4.body_design', _t('--check-only'), _STR06),
+    RecoveryRunPolicy('str06.stage4.bind', _t('--check-only'), _STR06),
+    RecoveryRunPolicy('str06.stage4.hook_design', _t('--check-only'), _STR06),
+    RecoveryRunPolicy('str06.stage5.hook', _t('--check-only'), _STR06),
+    RecoveryRunPolicy('str06.stage5.body', _t('--check-only'), _STR06),
+    RecoveryRunPolicy('str06.stage7.naming', _t('--check-only'), _STR06),
 )
 
 
@@ -225,27 +126,13 @@ ExternalPathScope = Literal[
 
 #: 会把**文件字节**送进 producer 的 valued flag。actor/reason/hash/run_id 等纯值
 #: 不在这里；漏登记一个文件 flag 会让许可只绑定路径字符串而没绑定真正输入。
+#: 会把**文件字节**送进 producer 的 valued flag。actor/reason/hash/run_id 等纯值
+#: 不在这里；漏登记一个文件 flag 会让许可只绑定路径字符串而没绑定真正输入。
+#: ⚠ F8b-3：旧链编辑/恢复族（--apply-edit/--preview-edit/--recover-*）随旧链
+#: 退役，现役节点旗标面只剩 --check-only（纯免费复检，无外部文件输入）⇒ 空表。
 EXTERNAL_INPUT_POLICIES: Final[
     dict[tuple[str, str], ExternalPathScope]
-] = {
-    ('stage2.global', '--apply-edit'): 'book_or_service_edit',
-    ('stage2.blueprint', '--validate-edit'): 'book_or_service_edit',
-    ('stage2.blueprint', '--apply-edit'): 'book_or_service_edit',
-    # Stage4A producer 用 ``paths.edit_rel`` + ArtifactStore 读 typed request，
-    # 因此现役真实路径只能在书目录内。未接 HTTP upload 前不能
-    # 在 permit 层谎称 `_service/edits` 可达，否则 token 会放行一条
-    # producer 必然拒绝的伪恢复路。
-    ('stage4.design', '--recover-repair-aggregate'): 'stage4_repair_journal',
-    ('stage4.plan', '--apply-edit'): 'book',
-    ('stage4.plan', '--apply-binding'): 'book',
-    ('stage5.write', '--preview-edit'): 'book_or_service_edit',
-    ('stage5.write', '--apply-edit'): 'book_or_service_edit',
-    # （stage5.review 的 trim manifest / reviewer-input 两条外部输入随批次 B3
-    #   trim 三选一退役删除。）
-    ('stage5.write', '--reviewer-rewrite'): 'book',
-    ('stage7.rename', '--apply-edit'): 'book',
-    ('stage7.rename', '--validate-edit'): 'book',
-}
+] = {}
 
 
 def _resolve_external_path(
@@ -509,69 +396,11 @@ def _require_recovery_policy(
         raise UnsupportedRunMode(
             f'execution recovery policy 贵贱漂移：登记 paid={row.paid}，当前判定={paid}')
     if paid:
-        profiled = PROFILED_LLM_RUNS.get(node, ())
-        if row.tokens not in profiled:
-            raise UnsupportedRunMode(
-                f'{node} {sorted(row.tokens)} 尚未完成 executor profile 迁移，'
-                '付费恢复关闭式拒绝')
-        _require_paid_recovery_authorized(current, node, flags)
+        # F8b-3：恢复表不再登记任何付费行——付费节点的恢复是候选 runner
+        # 自身续跑（F7c），这里到达即表与贵贱判定分家，关闭式拒绝。
+        raise UnsupportedRunMode(
+            f'{node} {sorted(flag_tokens(flags))} 不是登记的免费恢复组合')
     return row
-
-
-def _require_paid_recovery_authorized(
-    current: OperatorNextDecision, node: str, flags: tuple[str, ...],
-) -> None:
-    tokens = set(flag_tokens(flags))
-    if node == 'stage5.write' and '--revise' in tokens:
-        chapters = queue.chapters_from_flags(flags)
-        approvals.authorize_writing(
-            current.base, current.sid, chapters, requires_fresh_review=True)
-        # ``--chapters`` 是过滤器，不是让调用者任意点章的授权。可付费自救章集
-        # 必须由 producer 的四道筛子（actionable / UNIQUE / 未达轮次上限 /
-        # current Review）现算；permit 不复制判据，也不把“计划内”误当“可 revise”。
-        from novel.orchestrator import state
-        from novel.stages.stage5 import write
-        from novel.store import ArtifactStore
-        novel_dir = paths.resolve_novel_dir(current.base, current.sid)
-        store = ArtifactStore(state.readonly_ctx(
-            novel_dir, 'stage5.write', current.code_version))
-        picked, _skipped, _review_fingerprint = write.revise_targets(store)
-        available = set(picked)
-        if not available:
-            raise UnsupportedRunMode(
-                '当前 fresh Stage5 Review 没有 actionable/UNIQUE/未达轮次上限的'
-                '可付费自救章；不得签发空 revise permit')
-        if chapters is not None:
-            requested = set(chapters)
-            outside = sorted(requested - available)
-            if not requested or outside:
-                raise UnsupportedRunMode(
-                    f'--revise --chapters 必须是当前 picked 章的非空子集；'
-                    f'可选={sorted(available)}，越界={outside}')
-        return
-    if node == 'stage5.write' and '--reviewer-rewrite' in tokens:
-        request_rel = flag_value(flags, '--reviewer-rewrite')
-        if request_rel != STAGE5_REVIEWER_REWRITE_REQUEST:
-            raise UnsupportedRunMode(
-                'Stage5 Reviewer rewrite paid 入口只接受 current canonical request')
-        from novel.orchestrator import state
-        from novel.stages.stage5 import reviewer_rewrite
-
-        novel_dir = paths.resolve_novel_dir(current.base, current.sid)
-        ctx = state.readonly_ctx(
-            novel_dir, 'stage5.write', current.code_version)
-        probe = reviewer_rewrite.current_reviewer_rewrite_request(
-            ctx, request_rel)
-        if probe is None or probe.execution.state != 'ready_paid':
-            raise UnsupportedRunMode(
-                'Stage5 Reviewer rewrite request 当前不是可付费首发态')
-        approvals.authorize_writing(
-            current.base, current.sid,
-            list(reviewer_rewrite.ready_reviewer_rewrite_targets(ctx, request_rel)),
-            reviewer_rewrite_request_rel=request_rel)
-        return
-    raise UnsupportedRunMode(
-        f'{node} {sorted(tokens)} 不是已登记的 typed paid recovery')
 
 
 def _permit_from_decision(
