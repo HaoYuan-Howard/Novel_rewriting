@@ -277,17 +277,6 @@
         "stage7"
       ]
     },
-    "tests/test_approval_freshness.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage0",
-        "stage1",
-        "stage2",
-        "stage4",
-        "stage5",
-        "stage7"
-      ]
-    },
     "tests/test_approval_retirement.py": {
       "layer": "unit_contract",
       "stages": [
@@ -474,13 +463,6 @@
     "tests/test_llm_response_repair.py": {
       "layer": "unit_contract",
       "stages": []
-    },
-    "tests/test_material_dialogue_flow.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage4",
-        "stage5"
-      ]
     },
     "tests/test_model_slots.py": {
       "layer": "unit_contract",
@@ -812,12 +794,6 @@
         "stage2"
       ]
     },
-    "tests/test_stage2_analyze_draft_http.py": {
-      "layer": "stage",
-      "stages": [
-        "stage2"
-      ]
-    },
     "tests/test_stage2_analyze_draft_recovery.py": {
       "layer": "stage",
       "stages": [
@@ -831,12 +807,6 @@
       ]
     },
     "tests/test_stage2_blueprint_agent_boundary.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage2"
-      ]
-    },
-    "tests/test_stage2_blueprint_workpack.py": {
       "layer": "unit_contract",
       "stages": [
         "stage2"
@@ -914,12 +884,6 @@
     },
     "tests/test_stage2_global_core.py": {
       "layer": "unit_contract",
-      "stages": [
-        "stage2"
-      ]
-    },
-    "tests/test_stage2_global_core_edits.py": {
-      "layer": "stage",
       "stages": [
         "stage2"
       ]

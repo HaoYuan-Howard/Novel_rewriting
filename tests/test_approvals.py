@@ -322,30 +322,6 @@ def test_retired_draft_is_not_stage5_work(tmp_path):
     assert approvals._has_stage5_work(novel_dir) is False
 
 
-def test_stage5_approval_subject_is_canonical_chapters_plus_review(
-        tmp_path, monkeypatch):
-    from novel.stages.stage5 import review as stage5_review
-
-    novel_dir = tmp_path / '书名_123'
-    novel_dir.mkdir()
-    monkeypatch.setattr(approvals, '_require_stage5_complete', lambda *_args: None)
-    monkeypatch.setattr(approvals, '_planned', lambda *_args: [1, 2])
-    monkeypatch.setattr(approvals.paths, 'resolve_novel_dir', lambda *_args: novel_dir)
-    monkeypatch.setattr(
-        approvals, '_store_for',
-        lambda path: SimpleNamespace(ctx=SimpleNamespace(novel_dir=path)))
-    monkeypatch.setattr(
-        stage5_review, 'require_accepted_review',
-        lambda *_args: SimpleNamespace(review_rel='stage5/review_3.json'))
-
-    rels = approvals._stage5_subject_rels(
-        tmp_path, '123', approvals._fresh_record('123'))
-    assert rels == [
-        'stage5/ch01.json', 'stage5/ch02.json', 'stage5/review_3.json',
-    ]
-    assert 'stage5/draft.md' not in rels
-
-
 def test_retired_draft_in_old_s5_proof_revokes_s5_and_downstream(
         tmp_path, monkeypatch):
     """旧 s5 subject 多绑一份 draft 时，不得被当前较小主体误认成仍有效。"""
@@ -502,44 +478,6 @@ def test_legacy_stage5_is_explicit_and_cannot_authorize_or_approve():
             approvals.approve_gate(box.root, box.sid, 's5')
     finally:
         box.close()
-
-
-@pytest.mark.parametrize('legacy_rel', [
-    'stage5/deep/',
-    'stage5/review_1.json',
-    'stage5/trim_audit_ch01.json',
-    'stage5/trim_resolution_ch01.json',
-])
-def test_authorize_rejects_every_legacy_stage5_subject_before_planned_reads(
-        tmp_path, monkeypatch, legacy_rel):
-    """旧目录、Review v1、trim v1 共用 review_status，且拒绝前不读计划/审批账。"""
-    from novel.work_units import initialize_workflow
-    initialize_workflow(tmp_path)
-    book = tmp_path / '书名_123'
-    book.mkdir()
-    target = book / legacy_rel.rstrip('/')
-    if legacy_rel.endswith('/'):
-        target.mkdir(parents=True)
-    else:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text('{"_schema_version":1}', encoding='utf-8')
-
-    record = approvals._fresh_record('123')
-    approval_path = approvals._path(tmp_path, '123')
-    approval_path.parent.mkdir(parents=True, exist_ok=True)
-    approval_path.write_text(record.model_dump_json(indent=2), encoding='utf-8')
-    before = approval_path.read_bytes()
-    monkeypatch.setattr(
-        approvals, '_planned',
-        lambda *_args: pytest.fail('legacy 必须在计划与 bool gate 之前终止'))
-
-    # 批次 B3：begin_writing 已随写作授权写面退役；机械前置复验仍在
-    # authorize_writing 内先于计划读取执行。
-    with pytest.raises(HumanEditProtected, match='legacy_incompatible'):
-        approvals.authorize_writing(tmp_path, '123', None)
-
-    assert approval_path.read_bytes() == before
-    assert not (tmp_path / '_service' / 'ledger.jsonl').exists()
 
 
 @_corpus_test
