@@ -806,8 +806,6 @@ STR06_F7E_RETIREMENT: tuple[RetirementItem, ...] = (
          '迁移独有反例后删除（F8c）', '旧链功能测试（F7e 宽口径入桶）'),
         ('delete_file', 'tests/test_plot_writer.py',
          '迁移独有反例后删除（F8c）', '旧链功能测试（F7e 宽口径入桶）'),
-        ('delete_file', 'tests/test_reviewer_approval_landed.py',
-         '迁移独有反例后删除（F8c）', '旧链功能测试（F7e 宽口径入桶）'),
         ('delete_file', 'tests/test_stage2.py',
          '迁移独有反例后删除（F8c）', '旧链功能测试（F7e 宽口径入桶）'),
         ('delete_file', 'tests/test_stage2_analyze.py',

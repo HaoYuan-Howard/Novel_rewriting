@@ -665,17 +665,6 @@
       "layer": "regression",
       "stages": []
     },
-    "tests/test_reviewer_approval_landed.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage0",
-        "stage1",
-        "stage2",
-        "stage4",
-        "stage5",
-        "stage7"
-      ]
-    },
     "tests/test_reviewer_node_landed.py": {
       "layer": "unit_contract",
       "stages": [
