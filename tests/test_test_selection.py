@@ -33,7 +33,9 @@ def test_stage_graph_covers_registered_consumption_and_has_no_retired_stage():
     catalog = S.load_catalog()
     assert set(catalog['downstream']) == set(STAGES)
     for node, inputs in CONSUMED_PROJECTIONS.items():
-        owner = node.split('.')[0]
+        # F8a：新链投影键是 `str06.<stage>.<owner>`；stage0/1 键仍是 `stageN.verb`。
+        parts = node.split('.')
+        owner = parts[1] if parts[0] == 'str06' else parts[0]
         for artifact in inputs:
             upstream = artifact.split('/')[0]
             if upstream in STAGES:
@@ -43,7 +45,8 @@ def test_stage_graph_covers_registered_consumption_and_has_no_retired_stage():
 def test_stage4_closure_includes_downstream_but_not_upstream_or_retired_stage():
     catalog = S.load_catalog()
     selected = S.plan(catalog, layer='stage', stages=('stage4',), affected=True)
-    assert selected.stages == {'stage4', 'stage5', 'stage6', 'stage7'}
+    # F8a：Stage6 退役后下游闭包是 stage4 → stage5 → stage7。
+    assert selected.stages == {'stage4', 'stage5', 'stage7'}
     assert 'tests/test_stage4_v3_integration.py' in selected.modules
     assert 'tests/test_stage01.py' not in selected.modules
     assert 'tests/test_plot_pipeline.py' not in selected.modules

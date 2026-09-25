@@ -413,14 +413,24 @@ F5a–F5d 已闭合按章成文的契约、引擎与免费验证，F5e 已完成
       test_docs_references／test_ingest_fixtures）全绿；str06 定向套件（candidates／freeze／
       retirement×2／views 外功能面）全绿；test_invariants 全绿。test_hard_counterexamples
       的 25 个新链最小会红样本逐条真跑会红（hard_cases.py 重写）。
-    - 已知过渡态（F8b 处置，非本批引入）：编排层旧链分支（inbox_projection 的 Stage6
-      workpack、execution_permit／state／nodes／cli 的旧节点特例）仍引用已退役的
-      Stage6 API 模型 ⇒ `novel.api.app` 导入链在 F8b 完成前不通；旧链测试文件的收集
-      失败按 delete／rewrite 两桶在 F8b／F8c 处置。
-  - [ ] **F8b · 编排与服务翻转**：CLI runner、queue／state／operator／Agent supervisor／
+    - 已知过渡态（F8b／F8c 处置，非本批引入）：① 编排层旧链分支（inbox_projection 的
+      Stage6 workpack、execution_permit／state／nodes 的旧节点特例）仍引用已退役的
+      Stage6 API 模型 ⇒ `novel.api.app` 导入链在 F8b 完成前不通；② `tests/
+      test_test_selection.py` 的 str06 选测范围断言把旧链模块算进消费者闭包
+      （4 项，F8a 提交时已红），随 F8c 删除旧链测试模块与 `change_scopes.str06`
+      登记后闭合；③ 旧链测试文件的收集失败按 delete／rewrite 两桶归 F8b／F8c。
+  - [ ] **F8b · 编排与服务翻转**（进行中；F8b-1 已提交）：CLI runner、queue／state／operator／Agent supervisor／
     execution_permit／admission／delivery／upload_autostart 改走新节点，API／Views／前端
     路由同步激活；按登记删除 Stage6 分支。旧书只读识别为 `legacy_incompatible`，独立根
     重建，不继承旧批准或接受记录。
+    - [x] **F8b-1 · CLI 新链可达**（2026-09-25 完成，零模型调用）：`novel.cli run
+      <str06 节点> <sid>` 在旧链前置之前分流到 `_run_str06`；付费确认闸（`--yes`）
+      前置到分流点；`tools/str06_workflow.py` 的装配体提取为 `execute(args)`（工具
+      CLI 与 orchestrator 节点执行共用同一条路径，`base` 显式传入）；argv 保持
+      `novel.cli run <node> <sid> --base …` 形状（run_step 信标身份解析不变）；
+      付费边界（工作单元＋整书总闸＋唯一 ledger）与 workflow／epoch 身份由
+      PaidRequestSession／CandidateRunContext 闭合。`tests/test_str06_cli_dispatch.py`
+      5 项（argv 形状／节点旗标面／分流点／付费闸／未知旗标拒绝）全绿。
   - [ ] **F8c · 分流、删除与证据保护**：迁移包分流到正式 stage2／4／5／7 及 contracts
     schema 包，按两张登记删除已被接管的旧实现、views、routes、前端页、fixtures 和测试。
     先迁有效职责与独有反例，不缩验收分母；删除 harness、临时 adapter、`change_scopes.str06`

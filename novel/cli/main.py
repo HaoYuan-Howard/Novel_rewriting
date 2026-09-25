@@ -367,6 +367,68 @@ def runnable_stages() -> frozenset[str]:
     return frozenset(_runners())
 
 
+#: 新链节点 → `--through` 腿（单节点执行时腿只作记录；node_filter 决定实际范围）。
+_STR06_THROUGH = {
+    'str06.stage2.source': 'stage2', 'str06.stage2.names': 'stage2',
+    'str06.stage4.preserve': 'stage4', 'str06.stage4.body_design': 'stage4',
+    'str06.stage4.hook_design': 'stage4', 'str06.stage4.bind': 'stage4',
+    'str06.stage4.compile': 'stage4',
+    'str06.stage5.hook': 'stage5', 'str06.stage5.body': 'stage5',
+    'str06.stage7.naming': 'stage7', 'str06.stage7.assemble': 'stage7',
+}
+
+
+def _run_str06(a: argparse.Namespace, flags: list[str], *, paid: bool) -> int:
+    """经新链薄驱动执行一个 `str06.` 节点（F8b）。
+
+    与旧链 runner 的分工：编排（节点表、argv、许可、信标）仍归 orchestrator；
+    链装配（Stage1 输入、workflow／epoch、付费边界、恢复入口）归
+    `tools/str06_workflow.py::execute`——两边共用同一条装配路径，不为切换长第二套。
+    产物落本书目录的三级家族路径（`contracts/artifacts.py` 的 rel 键）。
+    """
+    from contracts.schema.str06 import STR06_RUNTIME_CONFIG
+    from tools.str06_workflow import execute
+
+    if a.sid is None:
+        raise TerminalState(f'{a.node} 要已有书 sid（正式 Stage1 输入）')
+    tokens = set(N.flag_tokens(flags))
+    unknown = tokens - {'--check-only'}
+    if unknown:
+        raise TerminalState(
+            f'{a.node} 只接受 --check-only，实得多余旗标 {sorted(unknown)}')
+    if paid and not tokens and not a.yes:
+        raise ApprovalRequired(
+            f'{a.node} 默认路径会花钱；加 `--yes` 或用 `--check-only` 免费复检')
+    novel_dir = paths.resolve_novel_dir(a.base, a.sid)
+    args = argparse.Namespace(
+        base=os.path.abspath(os.fspath(a.base)),
+        source_json=None,
+        run_dir=novel_dir,
+        wire_dir=None,
+        repair_manifest=None,
+        through=_STR06_THROUGH[a.node],
+        book_sid=a.sid,
+        budget=None,
+        hook_target_chars=STR06_RUNTIME_CONFIG.hook_target_chars,
+        hook_hard_max=STR06_RUNTIME_CONFIG.hook_hard_max_chars,
+        body_band_low=STR06_RUNTIME_CONFIG.length_band_low,
+        body_band_high=STR06_RUNTIME_CONFIG.length_band_high,
+        body_chapter_limit=None,
+        book_call_ceiling=None,
+        book_title=paths.title_of(novel_dir),
+        reasoning_effort='high',
+        check_only='--check-only' in tokens,
+        adopt_root=[],
+        node=[a.node],
+        yes=bool(a.yes),
+        # 正文外发授权与付费确认是两份独立授权（I-43）：CLI 的 --allow-egress
+        # 即新链付费边界的 source-export 凭据。
+        allow_source_export=bool(getattr(a, 'allow_egress', False)),
+    )
+    execute(args)
+    return 0
+
+
 def _dispatch(node: str, ctx: RunContext, flags: list[str]) -> int:
     """跑一个当前节点；`NODES` 与 `_runners` 的覆盖关系由契约测试钉住。"""
     # 单 Executor 架构（C3）：执行面唯一——``kind=legacy`` 由 stage runner
@@ -1498,6 +1560,19 @@ def _cmd_run(a: argparse.Namespace) -> int:
     # （该节点不接受这条跑法）先被 `is_paid` 倒向“会花钱”，显示成“加 --yes”；
     # 真加了又会落到默认付费分支。入口先走与 preview 共用的节点校验。
     N.validate_run(a.node, flags)
+    # ⚠ 付费确认闸前置：`is_paid` 只有一处算（`R-11.7`），而「花不花钱」必须先于
+    #   任何派发回答——新链节点同样受这道闸约束（`Q-10`）。
+    paid = N.is_paid(a.node, flags)
+    if paid and not a.yes:
+        raise ApprovalRequired(
+            f'这一次会花钱（{a.node} {" ".join(flags) or "默认路径"}）。'
+            f'⚠ 加 `--yes` 确认。**不显示预估花费**（`Q-10`：猜一个数比不显示更坏）——'
+            f'要先看会发出去什么，用 `--dry-run`（0 成本）')
+    if a.node.startswith('str06.'):
+        # 新链节点（F8b）：workflow／epoch 身份、付费边界（工作单元＋整书总闸＋
+        # 唯一 ledger）与恢复入口都在 PaidRequestSession／CandidateRunContext
+        # 内闭合，不经旧链的 RunContext／approval／closure 前置。
+        return _run_str06(a, flags, paid=paid)
     if N.would_write(a.node, flags):
         from novel.work_units import check_workflow_write
         check_workflow_write(a.base)
@@ -1554,12 +1629,8 @@ def _cmd_run(a: argparse.Namespace) -> int:
             'executor 会向所选 provider 外发小说正文；正文外发授权必须显式加 '
             '--allow-egress。'
             '这与 --yes 付费确认是两份独立授权')
-    paid = N.is_paid(a.node, flags)
-    if paid and not a.yes:
-        raise ApprovalRequired(
-            f'这一次会花钱（{a.node} {" ".join(flags) or "默认路径"}）。'
-            f'⚠ 加 `--yes` 确认。**不显示预估花费**（`Q-10`：猜一个数比不显示更坏）——'
-            f'要先看会发出去什么，用 `--dry-run`（0 成本）')
+    # ⚠ `paid` 与 `--yes` 确认已在入口早期完成（见函数开头；`is_paid` 只有一处算，
+    #   `R-11.7`）。这里只把早期结论带给后续派发。
     producer_run_id = a.run_id
     parent_run_id = None
     if parent_context is not None:

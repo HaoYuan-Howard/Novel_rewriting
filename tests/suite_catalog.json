@@ -7,7 +7,8 @@
         "novel/llm/str06_requests.py",
         "novel/llm/str06_run_context.py",
         "tools/str06_workflow.py",
-        "docs/schema/str06.md"
+        "docs/schema/str06.md",
+        "novel/cli/main.py"
       ],
       "tests": [
         "tests/test_str06_*.py",
@@ -1601,6 +1602,22 @@
       ],
       "cases": {
         "test_frozen_contract_identity_matches_the_live_tables": "stage"
+      }
+    },
+    "tests/test_str06_cli_dispatch.py": {
+      "layer": "unit_contract",
+      "stages": [
+        "stage2",
+        "stage4",
+        "stage5",
+        "stage7"
+      ],
+      "cases": {
+        "test_build_argv_keeps_the_run_shape_for_str06_nodes": "unit_contract",
+        "test_check_only_is_the_only_node_flag_of_the_new_chain": "unit_contract",
+        "test_cmd_run_routes_str06_nodes_before_legacy_preconditions": "stage",
+        "test_str06_paid_run_still_requires_yes": "unit_contract",
+        "test_run_str06_refuses_unknown_node_flags": "unit_contract"
       }
     }
   },

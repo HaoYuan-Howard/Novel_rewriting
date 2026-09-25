@@ -121,47 +121,12 @@ def run_workflow(*, repository, chapters, ask, ask_text, ask_body, budget=11000,
     return report
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--source-json', type=Path,
-                        help='开发／测试用源章 JSON；生产路径用 --book-sid 读正式 Stage1')
-    parser.add_argument('--run-dir', type=Path, required=True)
-    parser.add_argument('--wire-dir', type=Path)
-    parser.add_argument('--repair-manifest', type=Path)
-    parser.add_argument('--through', choices=['stage2', 'stage4', 'stage5', 'stage7'],
-                        default='stage4')
-    parser.add_argument('--book-sid', help='正式 Stage1 输入的书 id（生产路径：'
-                                         '读 <base>/<sid>/stage1/main_text.json）')
-    parser.add_argument('--budget', type=int, default=None,
-                        help='书级正文篇幅目标；缺省从源章数组总字数确定性派生'
-                             '（保留全书篇幅边界，见 STR06_RUNTIME_CONFIG）')
-    parser.add_argument('--hook-target-chars', type=int,
-                        default=STR06_RUNTIME_CONFIG.hook_target_chars)
-    parser.add_argument('--hook-hard-max', type=int,
-                        default=STR06_RUNTIME_CONFIG.hook_hard_max_chars)
-    parser.add_argument('--body-band-low', type=float,
-                        default=STR06_RUNTIME_CONFIG.length_band_low)
-    parser.add_argument('--body-band-high', type=float,
-                        default=STR06_RUNTIME_CONFIG.length_band_high)
-    parser.add_argument('--body-chapter-limit', type=int,
-                        help='只生成前 N 章（前缀式）；缺省为全书')
-    parser.add_argument('--book-call-ceiling', type=int,
-                        help='本次运行允许的新购调用上限（锁内核对；缓存采用不计）')
-    parser.add_argument('--book-title', default='')
-    parser.add_argument('--reasoning-effort', default='high',
-                        help='JSON/正文请求的思考档位；high 档 reasoning 可能耗尽 '
-                             'max_tokens 导致响应截断（F5e 实证），可显式降档')
-    parser.add_argument('--check-only', action='store_true',
-                        help='免费检查：只允许缓存采用与 wire 采用，不签发新调用')
-    parser.add_argument('--adopt-root', type=Path, action='append', default=[],
-                        help='登记的显式历史采用源根（候选 run 目录，可重复）：'
-                             '同请求身份的已购结果经身份／字节／成本关联核对后零新购 '
-                             '采用；身份不符、证据损坏或付费状态未知明确阻断')
-    parser.add_argument('--node', action='append', default=[],
-                        help='只跑指定候选节点（可重复；单节点重跑与定向复检）')
-    parser.add_argument('--yes', action='store_true')
-    parser.add_argument('--allow-source-export', action='store_true')
-    args = parser.parse_args()
+def execute(args) -> None:
+    """装配显式依赖并驱动链执行（F8b：CLI `run <str06 节点>` 与工具共用本函数）。
+
+    `args` 是任一来源解析出的同形命名空间（argparse Namespace 或等价对象）：
+    工具 CLI 与 orchestrator 的节点执行共用这一条装配路径，不为切换长第二套。
+    """
     if not args.book_sid and args.source_json is None:
         raise ValueError('必须给出 --book-sid（正式 Stage1 输入）或 --source-json（开发路径）')
     if args.hook_target_chars > args.hook_hard_max:
@@ -173,7 +138,8 @@ def main():
     for root in args.adopt_root:
         if not root.resolve().is_dir():
             raise ValueError(f'--adopt-root 不是目录：{root}')
-    base = os.environ.get('NOVEL_OUTPUT')
+    # F8b：`base` 显式传入（CLI 节点执行路径）；工具 CLI 仍可经 NOVEL_OUTPUT 提供。
+    base = getattr(args, 'base', None) or os.environ.get('NOVEL_OUTPUT')
     if not base:
         raise ValueError('NOVEL_OUTPUT 未设置：没查、未运行')
     base_path = Path(base).resolve()
@@ -334,6 +300,49 @@ def main():
                                                          hard_max_chars=args.hook_hard_max),
                        length_band=(args.body_band_low, args.body_band_high),
                        body_chapter_limit=args.body_chapter_limit))
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--source-json', type=Path,
+                        help='开发／测试用源章 JSON；生产路径用 --book-sid 读正式 Stage1')
+    parser.add_argument('--run-dir', type=Path, required=True)
+    parser.add_argument('--wire-dir', type=Path)
+    parser.add_argument('--repair-manifest', type=Path)
+    parser.add_argument('--through', choices=['stage2', 'stage4', 'stage5', 'stage7'],
+                        default='stage4')
+    parser.add_argument('--book-sid', help='正式 Stage1 输入的书 id（生产路径：'
+                                         '读 <base>/<sid>/stage1/main_text.json）')
+    parser.add_argument('--budget', type=int, default=None,
+                        help='书级正文篇幅目标；缺省从源章数组总字数确定性派生'
+                             '（保留全书篇幅边界，见 STR06_RUNTIME_CONFIG）')
+    parser.add_argument('--hook-target-chars', type=int,
+                        default=STR06_RUNTIME_CONFIG.hook_target_chars)
+    parser.add_argument('--hook-hard-max', type=int,
+                        default=STR06_RUNTIME_CONFIG.hook_hard_max_chars)
+    parser.add_argument('--body-band-low', type=float,
+                        default=STR06_RUNTIME_CONFIG.length_band_low)
+    parser.add_argument('--body-band-high', type=float,
+                        default=STR06_RUNTIME_CONFIG.length_band_high)
+    parser.add_argument('--body-chapter-limit', type=int,
+                        help='只生成前 N 章（前缀式）；缺省为全书')
+    parser.add_argument('--book-call-ceiling', type=int,
+                        help='本次运行允许的新购调用上限（锁内核对；缓存采用不计）')
+    parser.add_argument('--book-title', default='')
+    parser.add_argument('--reasoning-effort', default='high',
+                        help='JSON/正文请求的思考档位；high 档 reasoning 可能耗尽 '
+                             'max_tokens 导致响应截断（F5e 实证），可显式降档')
+    parser.add_argument('--check-only', action='store_true',
+                        help='免费检查：只允许缓存采用与 wire 采用，不签发新调用')
+    parser.add_argument('--adopt-root', type=Path, action='append', default=[],
+                        help='登记的显式历史采用源根（候选 run 目录，可重复）：'
+                             '同请求身份的已购结果经身份／字节／成本关联核对后零新购 '
+                             '采用；身份不符、证据损坏或付费状态未知明确阻断')
+    parser.add_argument('--node', action='append', default=[],
+                        help='只跑指定候选节点（可重复；单节点重跑与定向复检）')
+    parser.add_argument('--yes', action='store_true')
+    parser.add_argument('--allow-source-export', action='store_true')
+    execute(parser.parse_args())
 
 
 if __name__ == '__main__':
