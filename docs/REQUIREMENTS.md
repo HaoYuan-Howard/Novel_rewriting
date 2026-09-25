@@ -457,6 +457,25 @@ F5a–F5d 已闭合按章成文的契约、引擎与免费验证，F5e 已完成
       **剩余（F8b-3 起）**：rewrite 桶其余文件的旧节点载荷改写（llm／cli／
       queue／nodes／state／api_http 等约 870 项，根因集中于旧节点字符串与旧
       fixtures，按文件分批推进，F8d 前清零）。
+      **F8b-3 进行中（2026-09-25，分批提交 74faff4b→当前）**：已完成并全绿——
+      keep 桶与新链守卫（str06 现役挂载守卫翻转、layering 冻结清单 88→81、
+      corpus 冻结坐标翻新链＋无信封派生 JSON 封闭集合、ApprovalDoc.prepare
+      删除、RETIRED_NODES 补 stage7.assemble、enums 旧动作面退役守卫、
+      core v3 surfaces 夹具、retired_surface/run.py AgentProfile 清除、
+      schema_api 红账 3 项闭合）；store 族（test_store 161/161，74 项红账
+      闭合；store 成书桥改读交付清单、hook.txt 接确定性桥）；queue/state/
+      jobs/metrics/nodes（agent 改写 190 项＋_ordered_items 退役容错＋
+      章回执跨路径绑定修复＋resume_verdict INVALID 防崩＋stage5 hook 面
+      并入完成度）；operator（旧 prepared 恢复 lane 按 S-05 拆除）；
+      work_units 族（executor_scope 翻新链、退役节点只读解码桩）；agent 族
+      （78+6+21+11+39）；llm 族（132+27+27+26）；信标/运行操作面/巡检/
+      恢复反例/api_run；report（44）；交付消费缝三件＋旧链语义/审批面
+      六文件＋source_identity 按登记退役（接管者逐条写入
+      retirement.py::_EXECUTED_BY_F8B 注记）。
+      **F8b-3 尾项**：test_cli（64）＋test_execution_permit（36）进行中；
+      test_api_http（38）待改；test_workflow_transition（41）的播种夹具
+      依赖旧链 producer，其离线物化与迁移器对 stage2 shared 纯编译器的
+      耦合归 F8c 包分流同批收口（不阻塞 F8b-3 其余闭合）。
   - [ ] **F8c · 分流、删除与证据保护**：迁移包分流到正式 stage2／4／5／7 及 contracts
     schema 包，按两张登记删除已被接管的旧实现、views、routes、前端页、fixtures 和测试。
     先迁有效职责与独有反例，不缩验收分母；删除 harness、临时 adapter、`change_scopes.str06`
