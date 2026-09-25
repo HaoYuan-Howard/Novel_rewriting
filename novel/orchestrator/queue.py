@@ -347,43 +347,15 @@ def _stage4_replan_required(base: str | os.PathLike[str], sid: str) -> bool:
 def prepared_delivery_recovery_item(
     base: str | os.PathLike[str], sid: str, *, code: str, until_stage: str = 'stage7',
 ) -> QueueItem | None:
-    """producer 严格检查后才发布免费补尾；此查询不补账、不因文件存在发命令。"""
-    from novel.stages.stage4 import design_recovery, plan_recovery
-    from novel.work_units import workflow_manifest
+    """producer 严格检查后才发布免费补尾；此查询不补账、不因文件存在发命令。
 
-    if workflow_manifest(base) is None:
-        return None
-    book = paths.find_novel_dir(base, sid)
-    if book is None:
-        return None
-    pending = []
-    # ⚠ F8A：stage6.prepare／stage6.hook 两项随 Stage6 整层退役删除（F6d 登记）。
-    for node, producer in (('stage4.design', design_recovery), ('stage4.plan', plan_recovery)):
-        if STAGES.index(NODES[node].stage) > STAGES.index(until_stage):
-            continue
-        inspected = producer.inspect_prepared_recovery(st.readonly_ctx(book, node, code))
-        if inspected is not None and inspected.state != 'complete':
-            pending.append((node, inspected))
-    if not pending:
-        return None
-    if len(pending) != 1:
-        raise ArtifactUnreadable('同时存在多个阶段的未闭提交组，不能猜测恢复顺序')
-    node, inspected = pending[0]
-    if inspected.state == 'unknown':
-        return QueueItem(
-            sid=sid, node=node, flags=[], steps=[],
-            waiting_on=WAITING_ON_PREPARED_DELIVERY_UNKNOWN,
-            why=inspected.reason or '已保存完成组证据无法验证；保留原账并等待人工核对')
-    if (inspected.state != 'recoverable' or inspected.source_run_id is None
-            or inspected.proof_sha256 is None):
-        raise ArtifactUnreadable('恢复 producer 恢复投影缺精确原身份')
-    flags = ['--recover-prepared', inspected.source_run_id,
-             '--subject-sha256', inspected.proof_sha256]
-    return QueueItem(
-        sid=sid, node=node, flags=flags,
-        steps=build_steps(node, sid, flags, base=base, follow_check=False),
-        waiting_on=WAITING_ON_PREPARED_DELIVERY,
-        why='原完成组仍待正式提交或采纳尾账；先按精确来源免费补尾，再进入下游审阅')
+    ⚠ F8b-3（S-05 deprecation）：旧链尾窗恢复面随旧链退役——它的两个 producer
+    （stage4 design/plan prepared recovery）只能由旧链节点写出，而生产入口已
+    拒识旧节点，队列可规划的书不可能再产生新的未闭提交组。新链的恢复是候选
+    runner 自身续跑（F7c 精确补尾），不再经队列发布补尾项。本函数停用为恒
+    None，随 F8c 与旧链整层删除。
+    """
+    return None
 
 
 def plan_book(base: str | os.PathLike[str], sid: str, *, until_stage: str,

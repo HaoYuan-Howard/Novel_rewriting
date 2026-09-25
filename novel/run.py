@@ -31,7 +31,7 @@ from contracts.invariants import NODES, RETIRED_NODES
 from contracts.schema import InputEdge, Provenance, Usage
 from contracts.schema.common import FreeProvenance, LlmProvenance
 from contracts.schema.orchestration import (
-    AgentProfile, ExecutorBackend, LegacyExecutorBackend, LegacyLlmProfile,
+    ExecutorBackend, LegacyExecutorBackend, LegacyLlmProfile,
 )
 from contracts.artifacts import STAGE0_CLEAN_TEXT
 from novel import paths, prov, run_identity
@@ -66,9 +66,11 @@ class RunContext:
     #: 尚未迁移的独立 legacy CLI。分流只看 ``kind``，不再看 profile 是否为空。
     executor_backend: ExecutorBackend | None = None
 
-    #: 旧节点 agent 实现的只读/构造兼容投影。``__post_init__`` 会与
+    #: 旧节点 legacy 直连的只读/构造兼容投影。``__post_init__`` 会与
     #: ``executor_backend`` 归一并校验；顶层分流不得再以本格是否为空判模式。
-    executor_profile: LegacyLlmProfile | AgentProfile | None = None
+    #: agent wire 已随 C3 退役（现役付费执行唯一走直连 LLM），本格不再收
+    #: AgentProfile。
+    executor_profile: LegacyLlmProfile | None = None
 
     #: 这一次跑的跨进程联结键。它只进运行时账/观测/恢复状态，
     #: 不进正式 provenance、cache key 或 node flags。手搭 context 也必须

@@ -447,15 +447,21 @@ def test_dependency_rules_self_consistent():
                 f'{rule.module} 的禁止面包含了自己（{banned}）——自禁规则没有信息量')
 
 
-def test_str06_stays_out_of_live_registry():
-    # 「主仓不出现两套现役定义」的反向守卫：F8 之前，str06 家族不得进
-    # ARTIFACT_SPECS 现役路径面（键即产物相对路径，可含 {n} 占位）。
+def test_str06_live_mounts_come_from_the_candidate_table():
+    # 「主仓不出现两套现役定义」的正向守卫：F8a 激活后 str06 家族就是现役
+    # 注册面（键即产物相对路径，可含 {nn} 占位），现役 ARTIFACT_SPECS 内
+    # 属于 str06 家族前缀的每个 rel 都必须来自候选产物表，不得出现表外
+    # 的第二套定义。
+    from contracts.schema.str06 import STR06_CANDIDATE_ARTIFACTS
+
     live_paths = {key.replace('\\', '/') for key in ARTIFACT_SPECS}
     for family in STR06_PATH_FAMILIES.values():
         for rel in live_paths:
-            assert not rel.startswith(family.prefix), (
-                f'{rel} 已进入现役 ARTIFACT_SPECS，但 {family.prefix} 属 STR-06 RC 家族；'
-                f'正式挂载只能发生在 F8 切换提交')
+            if not rel.startswith(family.prefix):
+                continue
+            assert rel in STR06_CANDIDATE_ARTIFACTS, (
+                f'{rel} 挂在现役 ARTIFACT_SPECS 的 {family.prefix} 家族下，'
+                f'但不在候选产物表里：str06 家族的现役挂载只能来自候选表')
 
 
 def test_str06_subpackage_never_imports_novel():

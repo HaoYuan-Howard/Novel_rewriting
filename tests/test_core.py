@@ -303,7 +303,7 @@ def test_character_name_projection_keeps_display_and_distinctiveness_together():
         'char_002': {
             'canonical': '模型标签',
             'name_distinctiveness': 'common',
-            'aliases': [{'surface': '掌柜'}],
+            'surfaces': [{'surface': '掌柜'}],
         },
     }
     projected, substitutions, unattested = project_character_names(
@@ -342,16 +342,17 @@ def test_invented_names_needs_the_left_anchor():
 # ── 姓氏族群（stage7 改名）─────────────────────────────────────────────────
 
 #: 六个角色，覆盖 `attested_surname` 各道过滤拦下的典型形状。
+#: Characters v3：有据表面在 `surfaces` 键（v3 起不再回退 `aliases`）。
 _REG = {
-    'char_001': {'canonical': '孟青禾', 'aliases': [{'surface': '阿禾'}]},
-    'char_002': {'canonical': '孟青兰', 'aliases': []},
+    'char_001': {'canonical': '孟青禾', 'surfaces': [{'surface': '阿禾'}]},
+    'char_002': {'canonical': '孟青兰', 'surfaces': []},
     # ① 自造记账标签：「许言的姐姐」的「许」是**别人**的姓，碰巧对上纯属巧合
-    'char_003': {'canonical': '许言的姐姐', 'aliases': []},
+    'char_003': {'canonical': '许言的姐姐', 'surfaces': []},
     # ③ 通用角色词：「书童」同时挂着两个 char_id
-    'char_004': {'canonical': '书童(陆明洲)', 'aliases': [{'surface': '书童'}]},
-    'char_005': {'canonical': '陆明洲', 'aliases': [{'surface': '书童'}]},
+    'char_004': {'canonical': '书童(陆明洲)', 'surfaces': [{'surface': '书童'}]},
+    'char_005': {'canonical': '陆明洲', 'surfaces': [{'surface': '书童'}]},
     # 外貌修饰不是姓
-    'char_006': {'canonical': '胖媒婆', 'aliases': []},
+    'char_006': {'canonical': '胖媒婆', 'surfaces': []},
 }
 _BOOK = '孟青禾 孟青兰 许言的姐姐 书童 陆明洲 胖媒婆'
 

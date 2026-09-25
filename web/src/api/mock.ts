@@ -505,8 +505,6 @@ function freshDoc(sid: string): ApprovalDoc {
   return {
     v: 9,
     sid,
-    prepare: { state: 'unknown', reason: '此历史样例未记录独立 Prepare，不能继承为已接受。',
-      subject_sha256: null, review_token: null, prepare: null, review: null, pending_commit: false },
     gate: { s0: false, s1: false, s4: false, s5: false, s6: false, s7: false },
     writing: false,
     design_review: {
@@ -556,7 +554,6 @@ function seededDoc(sid: string): ApprovalDoc {
   return {
     v: 9,
     sid,
-    prepare: freshDoc(sid).prepare,
     gate: { s0: true, s1: true, s4: true, s5: true, s6: false, s7: false },
     writing: true,
     // Stage4A 人工审阅已退役：样本按现役投影呈现无决定、无历史的历史账。

@@ -5,7 +5,6 @@ import json
 
 import pytest
 
-from tests.factories import missing_prepare_state
 
 from contracts.invariants import APPROVAL_GATES
 from contracts.schema.api import (
@@ -24,7 +23,6 @@ SUBJECT = 'a' * 64
 
 def _doc() -> ApprovalDoc:
     return ApprovalDoc(
-        prepare=missing_prepare_state(),
         sid=SID,
         gate={key: False for key in APPROVAL_GATES},
         structure=StructureApprovalView(

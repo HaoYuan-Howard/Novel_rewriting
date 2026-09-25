@@ -66,7 +66,7 @@ def test_cli_rejects_retired_stage2_recovery_flags_without_touching_history(tmp_
 
 
 def test_replacing_old_audit_cannot_reset_current_work_unit(tmp_path):
-    unit = WorkUnitBudget(tmp_path, '42', 'stage2.global', role='executor', scope='book')
+    unit = WorkUnitBudget(tmp_path, '42', 'str06.stage2.source', role='executor', scope='strategy')
     for index in range(4):
         turn = unit.reserve(hashlib.sha256(str(index).encode()).hexdigest(), run_id=f'parent-{index}')
         unit.finish(turn.turn_id, outcome='failed', reason_code='typed_invalid')
@@ -77,7 +77,7 @@ def test_replacing_old_audit_cannot_reset_current_work_unit(tmp_path):
         payload.update(schema_version=version, turns=[], state='active')
         path.write_text(json.dumps(payload), encoding='utf-8')
         with pytest.raises(WorkUnitBudgetExhausted):
-            WorkUnitBudget(tmp_path, '42', 'stage2.global', role='executor', scope='book').reserve(
+            WorkUnitBudget(tmp_path, '42', 'str06.stage2.source', role='executor', scope='strategy').reserve(
                 'f' * 64, run_id='attempted-budget-reset')
         assert unit.path.read_bytes() == ledger_before
         assert unit.used == 4

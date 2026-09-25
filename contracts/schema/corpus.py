@@ -7,7 +7,6 @@ from typing import Annotated, Literal
 
 from pydantic import Field, StringConstraints, model_validator
 
-from contracts.artifacts import ARTIFACT_PATHS
 from contracts.schema.base import Sha1, StrictModel
 
 
@@ -23,17 +22,37 @@ CURRENT_CORPUS_BOOKS: tuple[tuple[str, int], ...] = (
     ('2019402867061048656', 17),
     ('1668963766200045568', 25),
 )
+#: STR-06 F8a 激活后的现役付费面（`contracts/invariants.py::NODES` 逐字派生：
+#: 9 个 `str06.` 付费节点；`str06.stage4.compile`／`str06.stage7.assemble`
+#: 结构性禁付，不派发 production dispatch）。
+#: ⚠ 冻结书盘在语料重生成批次前没有新链产物；current-schema corpus 验收随该
+#: 批次另行执行（REQUIREMENTS「本轮范围外」），本清单只锁定当期现役坐标。
 CURRENT_CORPUS_PAID_NODES: tuple[str, ...] = (
-    'stage2.characters',
-    'stage2.global',
-    'stage2.blueprint',
-    'stage4.design',
-    'stage4.plan',
-    'stage5.write',
-    'stage6.hook',
-    # stage6.semantic 已随判官节点退役（2026-09-15）；冻结拓扑不再派发它。
-    'stage7.rename',
+    'str06.stage2.source',
+    'str06.stage2.names',
+    'str06.stage4.preserve',
+    'str06.stage4.body_design',
+    'str06.stage4.bind',
+    'str06.stage4.hook_design',
+    'str06.stage5.hook',
+    'str06.stage5.body',
+    'str06.stage7.naming',
 )
+
+#: 成书的模板 rel（「记模板、哈希实体」：盘上是 `stage7/<书名>_rewriting.txt`，
+#: 清单不含书名）。必须与 `contracts/artifacts.py` 的现役 rel 逐字一致。
+BOOK_TEMPLATE_REL = 'stage7/final/{title}_rewriting.txt'
+
+#: 无信封派生 JSON：新链确定性 compiler 落盘的正式产物，内容即事实、无模型
+#: schema 版本可钉（`_schema_version` 信封只用于登记了 ARTIFACT_SPECS 的模型
+#: 产物）。清单对它们照样逐字节 hash 计账——封闭集合，盘上多出一份未登记
+#: JSON 仍然被 `_artifact_inventory` 拒绝，不因本集合静默放宽。
+ENVELOPE_LESS_JSON_RELS: frozenset[str] = frozenset({
+    'stage2/acceptance/fold.json',
+    'stage2/compiled/input_snapshots.json',
+    'stage4/acceptance/guard/compile.json',
+    'stage4/acceptance/guard/report.json',
+})
 
 
 def required_current_corpus_artifacts(chapters: int) -> frozenset[str]:
@@ -43,38 +62,53 @@ def required_current_corpus_artifacts(chapters: int) -> frozenset[str]:
         # ⚠ 2026-08-22 阶段 C：`machine_snapshot.json` 整份下线，`revisions.json`
         #   接替它成为本层的唯一 JSON 权威；clean_text 是正文投影。
         'stage0/revisions.json',
-        'stage1/hook_copy.json',
+        # ⚠ `stage1/hook_copy.json` 随旧链退役（F7c 判定：新链 Hook 设计吃目标
+        #   Design 的材料投影，无消费者），不再是一本合格语料书的必备面。
         'stage1/main_text.json',
-        ARTIFACT_PATHS['stage2.characters'],
-        'stage2/blueprint_character_projection.json',
-        'stage2/chapter_blueprints.json',
-        'stage2/global_grounding.json',
-        'stage4/blind_candidate.json',
-        'stage4/evidence_binding.json',
-        'stage4/plan_chapters.json',
-        'stage4/writer_context.json',
-        'stage5/review_1.json',
-        # ⚠ `stage5/semantic_1.json` 随 `stage5.semantic` 节点于 2026-08-17 下线，
-        #   不再是一本合格语料书的必备面。
-        'stage6/hook.json',
-        # ⚠ `stage6/semantic_1.json` 已随 stage6.semantic 判官节点退役（2026-09-15），
-        #   不再是一本合格语料书的必备面；冻结书盘上已有的那份只是多余存货。
+        # str06.stage2.source／names 的正式产物。
+        'stage2/blueprints/chapter_blueprints.json',
+        'stage2/compiled/book_extraction.json',
+        'stage2/compiled/input_snapshots.json',
+        'stage2/acceptance/fold.json',
+        'stage2/characters/characters.json',
+        # str06.stage4.preserve（运行时 checkpoint 落在 runtime/ 家族）。
+        'runtime/preserve_checkpoint.json',
+        'stage4/grounding/reconstruction_brief.json',
+        # str06.stage4.body_design／hook_design／bind。
+        'stage4/design/body_design.json',
+        'stage4/design/presentation_graph.json',
+        'stage4/grounding/semantic_binding.json',
+        # str06.stage4.compile（免费）的确定性与 Guard 面。
+        'stage4/compiled/execution_plan.json',
+        'stage4/acceptance/guard/compile.json',
+        'stage4/acceptance/guard/report.json',
+        'stage4/context/hook/hook.json',
+        'stage4/ir/writer_book_ir.json',
+        # str06.stage5.hook。
+        'stage5/hook/hook.txt',
+        'stage5/hook/receipt.json',
+        # str06.stage7.naming。
+        'stage7/naming/name_map.json',
         # ⚠⚠ **成书这一条登记的是模板 rel，不是盘上那个文件名。**
         #   盘上它叫 `stage7/<书名>_rewriting.txt`，而本清单**刻意不含书名**
         #   （本模块 docstring 的 "text-free"；`docs/schema/corpus.md`）——它要能提交进 git。
         #   把具体文件名写进 `rel` 就会泄漏它承诺不含的东西，而 `CorpusBookEntry`
         #   里也根本没有书名字段可供校验方复原。
         #   ⇒ 记模板：「哪一份产物」仍然说得清，sha256 照旧取盘上那份实体的字节。
-        ARTIFACT_PATHS['stage7.book'],
-        'stage7/name_map.json',
+        #   `stage7/final/delivery_manifest.json` 是 run 的自述清单（含逐章读数与
+        #   hash），由外层 corpus manifest 承担身份，不重复入册。
+        BOOK_TEMPLATE_REL,
     }
-    fixed.update(f'stage5/ch{ordinal:02d}.json' for ordinal in range(1, chapters + 1))
+    # str06.stage5.body：正文与章级机械回执成对，ch01..chNN 连续全覆盖。
+    for ordinal in range(1, chapters + 1):
+        fixed.add(f'stage5/body/ch{ordinal:02d}.txt')
+        fixed.add(f'stage5/acceptance/body/ch{ordinal:02d}.json')
     return frozenset(fixed)
 
 
 _DISPATCH_RE = re.compile(
     r'(?:^|\s)["\']?novel\.cli["\']?\s+run\s+'
-    r'(stage[2-7]\.[a-z0-9_]+)\s+(\d+)(?=\s|$)'
+    r'((?:str06\.)?stage[0-9]\.[a-z0-9_]+)\s+(\d+)(?=\s|$)'
 )
 
 
@@ -95,14 +129,18 @@ def _has_flag(command: str, flag: str) -> bool:
 class CorpusArtifactEntry(StrictModel):
     """One exact output; JSON artifacts additionally pin schema version."""
 
-    rel: str = Field(min_length=1, pattern=r'^stage[0-7]/')
+    rel: str = Field(min_length=1, pattern=r'^(?:stage[0-7]|runtime)/')
     schema_version: int | None
     sha256: Sha256
 
     @model_validator(mode='after')
     def _json_has_version(self) -> 'CorpusArtifactEntry':
-        if self.rel.endswith('.json') != (self.schema_version is not None):
-            raise ValueError('JSON 产物必须钉 schema_version；字节产物必须为 null')
+        is_json = self.rel.endswith('.json')
+        if is_json != (self.schema_version is not None) and not (
+                is_json and self.rel in ENVELOPE_LESS_JSON_RELS):
+            raise ValueError(
+                'JSON 产物必须钉 schema_version（无信封派生 JSON 除外）；'
+                '字节产物必须为 null')
         if self.schema_version is not None and self.schema_version < 1:
             raise ValueError('schema_version 必须 >= 1')
         return self
@@ -184,15 +222,15 @@ class CorpusBookEntry(StrictModel):
             raise ValueError(f'最终 corpus 不得残留 INVALID：{invalid}')
         expected_chapter_artifacts = {
             rel for rel in required_current_corpus_artifacts(self.chapters)
-            if re.fullmatch(r'stage5/ch\d+\.json', rel)
+            if re.fullmatch(r'stage5/(?:body/ch\d+\.txt|acceptance/body/ch\d+\.json)', rel)
         }
         actual_chapter_artifacts = {
             rel for rel in rels
-            if re.fullmatch(r'stage5/ch\d+\.json', rel)
+            if re.fullmatch(r'stage5/(?:body/ch\d+\.txt|acceptance/body/ch\d+\.json)', rel)
         }
         if actual_chapter_artifacts != expected_chapter_artifacts:
             raise ValueError(
-                'Stage5 formal chapters 必须恰为 canonical ch01..chNN')
+                'Stage5 formal chapters 必须恰为 canonical ch01..chNN（正文＋章回执成对）')
         expected_nodes = set(CURRENT_CORPUS_PAID_NODES)
         if set(self.ledger.nodes) != expected_nodes:
             raise ValueError(

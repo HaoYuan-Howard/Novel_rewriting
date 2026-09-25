@@ -160,58 +160,47 @@ def test_every_action_is_unique_and_buildable(paid_payload):
 
 
 def test_revalidate_is_hidden_from_user_action_catalog(paid_payload):
-    """批次 C：enums.actions 不再发布 --revalidate 用户入口；job_kinds 仍登记。"""
+    """旧 --revalidate 复验旗标随旧链整族退役：动作目录与 job_kinds 都不再发布。"""
     actions = paid_payload['actions']
     assert not [
         action for action in actions
         if action['extra'] == ['--revalidate']
     ]
-    kinds = paid_payload['job_kinds']
-    expected = {node for node, spec in NODES.items() if '--revalidate' in spec.flags}
-    assert expected
-    for node in expected:
-        assert '--revalidate' in kinds[node]['flags']
-
-
-def test_stage5_edit_publishes_one_complete_action_not_three_credential_actions(
-        paid_payload):
-    actions = paid_payload['actions']
-    apply = next(
-        action for action in actions
-        if action['kind'] == 'stage5.write'
-        and action['extra'] == ['--apply-edit'])
-    assert [row['flag'] for row in apply['required_inputs']] == [
-        '--actor', '--reason', '--current-chapter-sha256',
-        '--preview-subject-sha256', '--edit-confirmation',
+    assert not [
+        flag for spec in paid_payload['job_kinds'].values()
+        for flag in spec['flags'] if flag == '--revalidate'
     ]
+    # 新链的免费复检入口是节点级 --check-only。
+    assert {'--check-only'} <= set(paid_payload['job_kinds']['str06.stage2.source']['flags'])
+
+
+def test_stage5_edit_credential_actions_are_retired(paid_payload):
+    """stage5 人工改稿三凭据动作随人工写回面整族退役（F8b-2），不再发布。"""
     credential_only = {
         '--current-chapter-sha256', '--preview-subject-sha256',
-        '--edit-confirmation',
+        '--edit-confirmation', '--apply-edit',
     }
     assert not [
-        action for action in actions
+        action for action in paid_payload['actions']
         if set(action['extra'] or ()) & credential_only
     ]
-
-
-def test_stage4_repair_recovery_publishes_one_action_with_two_sha_credentials(
-        paid_payload):
-    actions = paid_payload['actions']
-    recovery = next(
-        action for action in actions
-        if action['kind'] == 'stage4.design'
-        and action['extra'] == ['--recover-repair-aggregate'])
-
-    assert recovery['paid'] is False
-    assert recovery['needs_value'] == \
-        VALUED_FLAGS['--recover-repair-aggregate']
-    assert [row['flag'] for row in recovery['required_inputs']] == [
-        '--source-journal-sha256', '--source-commit-sha256',
-    ]
-    credentials = {'--source-journal-sha256', '--source-commit-sha256'}
     assert not [
-        action for action in actions
+        flag for spec in paid_payload['job_kinds'].values()
+        for flag in spec['flags'] if flag in credential_only
+    ]
+
+
+def test_stage4_repair_recovery_credential_actions_are_retired(paid_payload):
+    """--recover-repair-aggregate 恢复动作随旧链 Stage4 修复面退役，不再发布。"""
+    credentials = {'--recover-repair-aggregate',
+                   '--source-journal-sha256', '--source-commit-sha256'}
+    assert not [
+        action for action in paid_payload['actions']
         if set(action['extra'] or ()) & credentials
+    ]
+    assert not [
+        flag for spec in paid_payload['job_kinds'].values()
+        for flag in spec['flags'] if flag in credentials
     ]
 
 
@@ -302,6 +291,7 @@ def test_job_kinds_is_keyed_by_current_node_id(paid_payload):
 
 
 def test_reviewer_rewrite_internal_actions_are_not_job_form_buttons(paid_payload):
+    """Reviewer/Commander 改写旗标随人工审阅模式整族退役：动作与 job_kinds 都不留。"""
     internal = {
         # （--request-reviewer-rewrite 已随批次 B3 trim 三选一退役删除。）
         '--reviewer-rewrite',
@@ -312,5 +302,5 @@ def test_reviewer_rewrite_internal_actions_are_not_job_form_buttons(paid_payload
     }
     assert not [action for action in paid_payload['actions']
                 if internal.intersection(action['extra'] or ())]
-    assert internal <= {flag for spec in paid_payload['job_kinds'].values()
-                        for flag in spec['flags']}
+    assert not [flag for spec in paid_payload['job_kinds'].values()
+                for flag in spec['flags'] if flag in internal]

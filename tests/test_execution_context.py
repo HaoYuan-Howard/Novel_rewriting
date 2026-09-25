@@ -21,7 +21,7 @@ def _profiles() -> PipelineAgentProfiles:
             provider='deepseek', model='deepseek-v4-pro',
             reasoning_effort='high', thinking_mode='on')),
         executor_overrides={
-            'stage7.rename': LegacyExecutorBackend(profile=LegacyLlmProfile(
+            'str06.stage7.naming': LegacyExecutorBackend(profile=LegacyLlmProfile(
                 provider='deepseek', model='deepseek-flash',
                 reasoning_effort='high', thinking_mode='on')),
         },
@@ -65,8 +65,8 @@ def test_context_env_is_only_a_pointer_and_round_trips_the_started_snapshot(
     assert loaded.producer_run_id == loaded.run_id == 'commander-1'
     assert env['KEEP'] == 'yes'
     assert loaded.start == start and loaded.profiles == _profiles()
-    assert loaded.executor_backend('stage2.global').profile.provider == 'deepseek'
-    assert loaded.executor_backend('stage7.rename').profile.model == 'deepseek-flash'
+    assert loaded.executor_backend('str06.stage2.source').profile.provider == 'deepseek'
+    assert loaded.executor_backend('str06.stage7.naming').profile.model == 'deepseek-flash'
     serialized_env = '\n'.join(f'{key}={value}' for key, value in env.items())
     assert 'deepseek-v4-pro' not in serialized_env
 

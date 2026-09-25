@@ -732,10 +732,8 @@ def test_service_mutations_are_narrowly_owned_by_mutation_routes():
             ('approvals', 'approve_gate'),
             ('approvals', 'reset'), ('approvals', 'backfill_from_disk'),
         },
-        'novel/api/routes/edits.py': {
-            ('jobs', 'run'), ('uploads', 'save_draft_edit'),
-            ('uploads', 'discard_edit_plan'),
-        },
+        # novel/api/routes/edits.py 已随旧链人工写回面整族退役（F8b-2）：
+        # 只剩空 router，无任何服务变更入口。
         'novel/api/routes/maintenance.py': {
             ('trash', 'run'), ('trash', 'run_restore'),
             ('service_lifecycle', 'apply_retention'),
@@ -841,8 +839,8 @@ def _import_targets_stage(node) -> bool:
 
 _CROSS_STAGE_DEEP_GRANDFATHER = frozenset({
     ('novel/api/errors.py', 'novel.stages.stage4.plot_refs'),
-    ('novel/api/routes/edits.py', 'novel.stages.stage2.extract'),
-    ('novel/api/routes/edits.py', 'novel.stages.stage2.blueprint'),
+    # novel/api/routes/edits.py 的两条 stage2 深导入边（extract／blueprint）
+    # 已随 F8b-2 人工写回路由族退役消失——edits.py 只剩空 router。
     ('novel/cli/main.py', 'novel.stages.stage2.analyze'),
     ('novel/cli/main.py', 'novel.stages.stage2.blueprint.edit'),
     ('novel/llm/client.py', 'novel.stages.stage2.blueprint.recovery_policy'),
@@ -992,7 +990,9 @@ def test_cross_stage_imports_stay_on_the_package_surface():
     # 删除，其 2 条深边（stage5.measure／stage6.hook）一并消化，88→86；
     # views/stage7.py 经已退役的 stage7.rename 节点建 ctx、F8a 后一调用即
     # ValueError，按 F7e delete_file 提前删除，其余 3 条深边随之消化，86→83。
-    assert len(_CROSS_STAGE_DEEP_GRANDFATHER) == 83
+    # F8b-2（2026-09-25）：edits 路由族（旧节点人工写回面）整族退役，只剩空
+    # router，其 2 条 stage2 深边随之消化，83→81。
+    assert len(_CROSS_STAGE_DEEP_GRANDFATHER) == 81
 
 
 

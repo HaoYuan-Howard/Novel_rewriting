@@ -114,7 +114,6 @@ from contracts.invariants import (
 
 from contracts.schema.base import FrozenModel, StrictModel
 from contracts.schema.common import Finding, HashBoundHumanApproval, Sha256
-from contracts.schema.stage6_prepare import PrepareDraft, PrepareState, PrepareWorkpack
 from contracts.schema.characters import CharacterRegistry, CharactersEdit
 from contracts.schema.orchestration import (
     AgentRunRecord, ArtifactCondition,
@@ -2776,7 +2775,6 @@ class ApprovalDoc(StrictModel):
     v: Literal[9] = 9
     sid: str = Field(min_length=1)
     gate: dict[GateKey, bool]
-    prepare: PrepareState
     writing: bool = False
     design_review: DesignReviewView = Field(
         default_factory=lambda: DesignReviewView(state='unavailable'))

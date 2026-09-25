@@ -310,6 +310,8 @@ def test_frontend_does_not_rejudge_scene_budget_band():
     assert 'plan.budget_chars /' not in hook and '/ source' not in hook
 
     # ③ 反向——**问生产落点**，不重拼一份信念：判定在服务端，而且只在章级。
+    # （budget_band 旧判据随旧链退役；新链的章级篇幅带判据是 body_length_band
+    #   （stage5 章级机械验），逐场分配与守恒仍在 stage4。）
     from contracts.rules import REGISTRY
     from contracts.schema.api import PlanSceneLine, Stage4IndexRow
 
@@ -317,7 +319,9 @@ def test_frontend_does_not_rejudge_scene_budget_band():
     assert 'in_band' not in PlanSceneLine.model_fields
     assert 'source_chars' not in PlanSceneLine.model_fields
     assert 'span_chars' not in PlanSceneLine.model_fields
-    assert REGISTRY.get('budget_band').stage == 'stage4'
+    assert REGISTRY.get('scene_budget_distribution').stage == 'stage4'
+    assert REGISTRY.get('length_budget_conserved').stage == 'stage4'
+    assert REGISTRY.get('body_length_band').stage == 'stage5'
 
 
 # ───────────────────────── `R-11.7` 贵贱只有一处算 ─────────────────────────
@@ -407,21 +411,11 @@ def test_job_conflict_maps_and_returns_409(monkeypatch):
         # 提交端点已随 2026-09-15 全自动裁决（批次 B2/B3）退役。
         '/api/novels/{sid}/approvals/reset',
         '/api/upload',
-        # 第二阶段批 3 · 人工写回（行为在 `tests/test_api_edits.py`）
-        '/api/novels/{sid}/review/{ordinal}/edit',
-        '/api/novels/{sid}/review/{ordinal}/edit/preview',
+        # 人工写回路由族（review／stage2 三族／stage7 残留采纳）已随 F8b-2
+        # 全自动单模式整族退役：edits.py 只剩空 router，POST 面不再有它们。
         # （stage5 trim retain-pretrim 两端点已随批次 B3 trim 三选一退役。）
         # Prepare 独立写面（edit/review）与 stage7.approve 已随批次 B4 退役。
         # analyze-draft 人工提交面已随批次 C 退役（POST 405；内部 CLI 保留）。
-        '/api/novels/{sid}/stage6/approve',
-        '/api/novels/{sid}/stage7/adopt-residual',
-        '/api/novels/{sid}/stage7/adopt-residual',
-        '/api/novels/{sid}/stage2/global/edit',
-        '/api/novels/{sid}/stage2/global/edit/preview',
-        '/api/novels/{sid}/stage2/characters/edit',
-        # Blueprint 有据修订由 Stage2 持有；普通分场仍留在 Stage4。
-        '/api/novels/{sid}/stage2/blueprint/edit',
-        '/api/novels/{sid}/stage2/blueprint/edit/preview',
         # agent 代跑（行为在 `tests/test_api_agent.py`；preview 是 0 成本但仍是 POST）
         '/api/agent/runs',
         '/api/agent/runs/preview',

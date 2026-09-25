@@ -4,17 +4,9 @@
 from __future__ import annotations
 
 from contracts.schema.report import finding  # noqa: F401  （stage5_book 的判据样本共用）
-from contracts.schema.stage6_prepare import PrepareState
 from contracts.schema.stage1 import MainText
 from novel.core.measure import body_style_metrics, measure_body
 from novel.stages.stage5.measure import Book
-
-
-def missing_prepare_state() -> PrepareState:
-    """审批接口最小样例明确登记未运行准备，不把缺字段当成未运行。"""
-    return PrepareState(state='missing', reason='测试样例尚未运行文案准备',
-        subject_sha256=None, review_token=None, prepare=None, review=None,
-        pending_commit=False)
 
 
 def stage5_book() -> Book:

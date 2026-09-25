@@ -1,50 +1,20 @@
 # -*- coding: utf-8 -*-
-"""现役 executor、来源采用与免费尾窗不得接入旧书内运行记录（C5：无 agent_runs 测试夹具）。"""
+"""运行期布局原语：旧书内运行记录一律拒读（C5：无 agent_runs 测试夹具）。
+
+F8b-3 收口：旧链 adapter 消费侧的两个用例（run-spec adapter 拒旧状态、
+免费恢复/历史来源读路共享布局守卫）的被测对象是旧链 runs 模块
+（stage2_global_runs／stage4_runs／stage5_runs／stage6_hook_runs／stage7_runs），
+按 F7e 退役登记随旧链整层删除（F8c）；「不接入旧运行记录」的布局原语守卫
+由本文件首条测试继续钉住，新链不读 legacy 运行目录（无任何引用）。
+"""
 from __future__ import annotations
 
 from pathlib import Path
 
 import pytest
-from pydantic import BaseModel, ConfigDict
 
-from contracts.schema.orchestration import LegacyExecutorBackend, LegacyLlmProfile
-from novel import paths, prov, runtime_layout
+from novel import paths, runtime_layout
 from novel.errors import ProvenanceRefused
-from novel.llm import run_journal, stage2_global_runs, stage4_runs, stage5_runs
-from novel.llm import stage6_hook_runs, stage7_runs
-from novel.llm.cache import CachePolicy
-from novel.llm.ledger import CostLedger, ledger_path
-from novel.run import RunContext
-from novel.work_units import initialize_workflow
-
-_SYSTEM = 'SYSTEM'
-_USER = 'USER'
-_INPUT_SHA = 'a' * 64
-_MAX_TOKENS = 2048
-
-
-class _Answer(BaseModel):
-    model_config = ConfigDict(extra='forbid', strict=True)
-    value: int
-
-
-def _ctx(base: Path) -> RunContext:
-    initialize_workflow(base)
-    novel_dir = base / '运行布局_4242'
-    novel_dir.mkdir(exist_ok=True)
-    profile = LegacyLlmProfile(
-        provider='deepseek', model='deepseek-v4-pro',
-        reasoning_effort='high', thinking_mode='on')
-    return RunContext(
-        novel_dir=novel_dir,
-        node='stage4.design',
-        paid=True,
-        code=prov.code_version(),
-        cache=CachePolicy.default(),
-        ledger=CostLedger(path=ledger_path(base)),
-        executor_backend=LegacyExecutorBackend(profile=profile),
-    )
-
 
 def _snapshot(root):
     return {
@@ -70,57 +40,3 @@ def test_retired_layout_keeps_empty_missing_and_corrupt_records_closed(
         runtime_layout.stage_run_roots(book, stage)
     assert _snapshot(tmp_path) == before
     assert not current.exists()
-
-
-@pytest.mark.parametrize('factory', [
-    stage2_global_runs._run_spec,
-    lambda: stage4_runs.design_unit_run_spec(None),
-    lambda: stage4_runs.plan_chapter_run_spec(1),
-    lambda: stage5_runs._run_spec(1),
-    stage6_hook_runs._run_spec, stage7_runs._run_spec,
-])
-def test_actual_single_session_adapters_refuse_old_state_before_any_current_write(
-        tmp_path, factory):
-    ctx = _ctx(tmp_path)
-    spec = factory()
-    ctx.node = spec.node
-    old = paths.legacy_stage_runs_dir(ctx.novel_dir, spec.node.split('.', 1)[0])
-    old.mkdir()
-    (old / 'untrusted-checkpoint.json').write_bytes(b'{"current-looking":true}\n')
-    before = _snapshot(tmp_path)
-    with pytest.raises(ProvenanceRefused, match='旧运行目录已退役'):
-        run_journal.ensure_run(
-            ctx, spec, input_sha256=_INPUT_SHA, system=_SYSTEM, user=_USER,
-            response_model=_Answer, max_tokens=_MAX_TOKENS)
-    assert _snapshot(tmp_path) == before
-    assert not spec.run_path(ctx).exists()
-    assert not spec.checkpoint_dir(ctx).exists()
-
-
-@pytest.mark.parametrize(
-    'entry',
-    ['chapter', 'reviewer', 'manifest', 'design_run', 'design_checkpoint'],
-)
-def test_free_recovery_and_historical_source_readers_share_the_layout_guard(
-        tmp_path, entry):
-    ctx = _ctx(tmp_path)
-    stage = 'stage4' if entry.startswith('design') else 'stage5'
-    ctx.node = stage + ('.design' if stage == 'stage4' else '.write')
-    old = paths.legacy_stage_runs_dir(ctx.novel_dir, stage)
-    old.mkdir()
-    (old / 'committed.json').write_bytes(b'{}\n')
-    before = _snapshot(tmp_path)
-    with pytest.raises(ProvenanceRefused, match='旧运行目录已退役'):
-        if entry == 'chapter':
-            stage5_runs.recovery_state(ctx, 1)
-        elif entry == 'reviewer':
-            stage5_runs.reviewer_rewrite_recovery_state(
-                ctx, run_id=ctx.run_id, chapter=1)
-        elif entry == 'manifest':
-            stage5_runs._recovery_manifest_path(ctx.novel_dir, ctx.run_id)
-        elif entry == 'design_run':
-            stage4_runs._historical_design_run_path(ctx, ctx.run_id, 1)
-        else:
-            stage4_runs._historical_design_checkpoint_path(ctx, ctx.run_id, 1, 1)
-    assert _snapshot(tmp_path) == before
-    assert not paths.service_stage_runs_dir(ctx.novel_dir, stage).exists()

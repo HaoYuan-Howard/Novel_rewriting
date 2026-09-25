@@ -12,14 +12,13 @@ from types import SimpleNamespace
 import pytest
 from pydantic import ValidationError
 
-from contracts.artifacts import ARTIFACT_PATHS
 from contracts.invariants import NODES
 from contracts.schema import (
     CorpusArtifactEntry, CorpusLedgerSummary, CorpusManifest,
     CorpusSkipExpectation, LedgerTokenSummary, artifact_spec, encode_artifact,
 )
 from contracts.schema.corpus import (
-    CURRENT_CORPUS_BOOKS, CURRENT_CORPUS_PAID_NODES,
+    BOOK_TEMPLATE_REL, CURRENT_CORPUS_BOOKS, CURRENT_CORPUS_PAID_NODES,
     required_current_corpus_artifacts,
 )
 from contracts.schema.stage1 import MainText
@@ -42,7 +41,7 @@ def test_documented_script_entrypoint_bootstraps_repo_imports(tmp_path):
 
 def _ledger_row(
     *, cached: bool, prompt, hit, miss, completion, reasoning,
-    sid: str = '123', node: str = 'stage2.global',
+    sid: str = '123', node: str = 'str06.stage2.source',
 ):
     return {
         'sid': sid, 'node': node, 'cached': cached, 'outcome': 'ok', 'model': 'model-v1',
@@ -125,38 +124,49 @@ def _manifest_raw() -> dict:
 def test_current_corpus_tracks_both_paid_stage4_phases_and_their_outputs():
     """冻结语料清单是两本书硬验收的身份集，刻意不自动跟随新增付费节点。
 
-    stage2.analyze（Gate A 联合首抽）与 stage6.prepare（Gate C 文案准备）已在
-    现役付费面，但冻结语料书盘上没有这两份产物；进入 corpus 冻结清单要等
-    语料重生成批次（TODO-21/49），不在本批工程收口内。
+    STR-06 F8a 后现役付费面是 9 个 `str06.` 节点，冻结清单同步翻新链坐标；
+    冻结书盘在新链下按 `legacy_incompatible` 拒读，current-schema corpus 验收
+    等语料重生成批次（REQUIREMENTS「本轮范围外」），本测试锁的是**坐标不漂移**。
     """
-    deferred = {'stage2.analyze', 'stage6.prepare'}
-    paid_nodes = tuple(node for node, spec in NODES.items()
-                       if spec.paid and node not in deferred)
-    assert CURRENT_CORPUS_PAID_NODES == paid_nodes
+    assert CURRENT_CORPUS_PAID_NODES == tuple(
+        node for node, spec in NODES.items() if spec.paid)
     assert tuple(
         node for node in CURRENT_CORPUS_PAID_NODES if NODES[node].stage == 'stage4'
-    ) == ('stage4.design', 'stage4.plan')
-    # stage6.semantic 判官退役（2026-09-15）后冻结面是 2 书 × 8 付费节点。
-    assert len(CURRENT_CORPUS_BOOKS) * len(CURRENT_CORPUS_PAID_NODES) == 16
-    assert ARTIFACT_PATHS['stage2.characters'] in required_current_corpus_artifacts(17)
+    ) == ('str06.stage4.preserve', 'str06.stage4.body_design',
+          'str06.stage4.bind', 'str06.stage4.hook_design')
+    # 2 书 × 9 付费节点 = 18 条 production dispatch。
+    assert len(CURRENT_CORPUS_BOOKS) * len(CURRENT_CORPUS_PAID_NODES) == 18
+    required = required_current_corpus_artifacts(17)
+    assert 'stage2/characters/characters.json' in required
+    assert 'stage1/hook_copy.json' not in required, 'hook_copy 随旧链退役，不再是必备面'
 
     stage4_paid_outputs = {
         rel
-        for node in ('stage4.design', 'stage4.plan')
+        for node in ('str06.stage4.preserve', 'str06.stage4.body_design',
+                     'str06.stage4.bind', 'str06.stage4.hook_design')
         for rel in NODES[node].produces
     }
     assert stage4_paid_outputs == {
-        ARTIFACT_PATHS['stage4.blind_candidate'],
-        ARTIFACT_PATHS['stage4.evidence_binding'],
-        ARTIFACT_PATHS['stage4.plan_chapters'],
+        'runtime/preserve_checkpoint.json',
+        'stage4/grounding/reconstruction_brief.json',
+        'stage4/design/body_design.json',
+        'stage4/grounding/semantic_binding.json',
+        'stage4/design/presentation_graph.json',
     }
     for _sid, chapters in CURRENT_CORPUS_BOOKS:
         assert stage4_paid_outputs <= required_current_corpus_artifacts(chapters)
+    # 免费编译/交付面也必须在必备集里（成功 run 的完整表面）。
+    free_outputs = {
+        rel for node in ('str06.stage4.compile', 'str06.stage7.assemble')
+        for rel in NODES[node].produces
+    } - {'stage7/final/delivery_manifest.json'}
+    assert free_outputs <= required_current_corpus_artifacts(17)
 
 
 @pytest.mark.parametrize('rel', [
-    ARTIFACT_PATHS['stage4.blind_candidate'],
-    ARTIFACT_PATHS['stage4.evidence_binding'],
+    'stage4/design/body_design.json',
+    'stage4/grounding/semantic_binding.json',
+    'runtime/preserve_checkpoint.json',
 ])
 def test_manifest_rejects_a_missing_stage4_intermediate(rel):
     raw = _manifest_raw()
@@ -167,10 +177,10 @@ def test_manifest_rejects_a_missing_stage4_intermediate(rel):
         CorpusManifest.model_validate(raw)
 
 
-def test_manifest_does_not_let_stage4_plan_ledger_rows_replace_design():
+def test_manifest_does_not_let_stage4_bind_ledger_rows_replace_body_design():
     raw = _manifest_raw()
     nodes = raw['books'][0]['ledger']['nodes']
-    nodes['stage4.plan'] += nodes.pop('stage4.design')
+    nodes['str06.stage4.bind'] += nodes.pop('str06.stage4.body_design')
     with pytest.raises(ValidationError, match='ledger.nodes'):
         CorpusManifest.model_validate(raw)
 
@@ -203,7 +213,7 @@ def test_ledger_manifest_partitions_cannot_claim_impossible_counts():
     with pytest.raises(ValidationError, match='outcomes 计数之和'):
         CorpusLedgerSummary(
             rows=1, wire_attempts=1, local_cache_hits=0,
-            nodes={'stage2.global': 1}, outcomes={}, models={'m': 1},
+            nodes={'str06.stage2.source': 1}, outcomes={}, models={'m': 1},
             reasoning_efforts={'high': 1},
             **{key: token for key in corpus_manifest._TOKEN_COLUMNS})
     with pytest.raises(ValidationError, match='token total'):
@@ -253,14 +263,14 @@ def test_manifest_pins_the_real_run_dispatch_topology_and_required_flags():
     #   反向由下面那条「多一个 flag 就拒」覆盖：production 命令只许带 `--base --yes`。
     raw = _manifest_raw()
     index = next(i for i, command in enumerate(raw['commands'])
-                 if 'stage7.rename' in command)
+                 if 'str06.stage7.naming' in command)
     raw['commands'][index] += ' --advisory'
     with pytest.raises(ValidationError, match='flags 必须恰为'):
         CorpusManifest.model_validate(raw)
 
     raw = _manifest_raw()
     index = next(i for i, command in enumerate(raw['commands'])
-                 if 'stage5.write' in command)
+                 if 'str06.stage5.body' in command)
     raw['commands'][index] += ' --deep 1,2,3'
     with pytest.raises(ValidationError, match='flags 必须恰为'):
         CorpusManifest.model_validate(raw)
@@ -283,10 +293,13 @@ def test_manifest_accepts_commands_from_the_production_argv_builder(tmp_path):
 
 def test_manifest_rejects_incomplete_books_ledger_and_artifact_hashes():
     raw = _manifest_raw()
-    # ⚠ 取注册表符号而不是字面量：清单里成书那一条记的是**模板 rel**（不含书名，
-    #   见 `contracts/schema/corpus.py`）。写死 `stage7/book.txt` 的后果不是红——
-    #   过滤器一条都匹配不上，于是这里什么都没删，用例安静地不再制造「缺必备产物」。
-    delivery = ARTIFACT_PATHS['stage7.book']
+    # ⚠ 取模块常量而不是字面量：清单里成书那一条记的是**模板 rel**（不含书名，
+    #   见 `contracts/schema/corpus.py::BOOK_TEMPLATE_REL`）。写死具体文件名的后果
+    #   不是红——过滤器一条都匹配不上，于是这里什么都没删，用例安静地不再制造
+    #   「缺必备产物」。
+    delivery = BOOK_TEMPLATE_REL
+    assert delivery in required_current_corpus_artifacts(17), \
+        '模板 rel 必须仍在必备集里，否则过滤器什么也删不掉'
     raw['books'][0]['artifacts'] = [
         item for item in raw['books'][0]['artifacts']
         if item['rel'] != delivery
@@ -297,7 +310,7 @@ def test_manifest_rejects_incomplete_books_ledger_and_artifact_hashes():
         CorpusManifest.model_validate(raw)
 
     raw = _manifest_raw()
-    raw['books'][0]['ledger']['nodes'].pop('stage7.rename')
+    raw['books'][0]['ledger']['nodes'].pop('str06.stage7.naming')
     with pytest.raises(ValidationError, match='nodes'):
         CorpusManifest.model_validate(raw)
 
@@ -383,7 +396,7 @@ def test_observe_is_text_free_and_verification_detects_any_inventory_or_ledger_d
     ]
 
     rows.append(_ledger_row(
-        sid=CURRENT_CORPUS_BOOKS[0][0], node='stage2.global',
+        sid=CURRENT_CORPUS_BOOKS[0][0], node='str06.stage2.source',
         cached=True, prompt=None, hit=None, miss=None, completion=None, reasoning=None))
     with pytest.raises(ValueError, match='独立空本地缓存'):
         corpus_manifest.verify(tmp_path, manifest)
@@ -392,7 +405,7 @@ def test_observe_is_text_free_and_verification_detects_any_inventory_or_ledger_d
     sid = CURRENT_CORPUS_BOOKS[0][0]
     artifacts = state[sid]['artifacts']
     state[sid]['artifacts'] = [
-        item for item in artifacts if item.rel != ARTIFACT_PATHS['stage7.book']
+        item for item in artifacts if item.rel != BOOK_TEMPLATE_REL
     ]
     assert len(state[sid]['artifacts']) < len(artifacts), \
         '过滤器没删掉任何东西——它匹配的 rel 已经不存在了'
@@ -412,11 +425,11 @@ def test_observe_is_text_free_and_verification_detects_any_inventory_or_ledger_d
         corpus_manifest.verify(tmp_path, manifest)
     state[sid]['artifacts'] = artifacts
 
-    # ⚠ 同上一格那条纪律：取注册表符号，别写死 `stage7/book.txt`。写死的后果不是红——
+    # ⚠ 同上一格那条纪律：取模块常量，别写死具体文件名。写死的后果不是红——
     #   条件一条都不命中 ⇒ 这份 artifacts 与原件逐字相同 ⇒ 用例安静地不再制造漂移。
     state[sid]['artifacts'] = [
         item.model_copy(update={'sha256': 'f' * 64})
-        if item.rel == ARTIFACT_PATHS['stage7.book'] else item
+        if item.rel == BOOK_TEMPLATE_REL else item
         for item in artifacts
     ]
     assert state[sid]['artifacts'] != artifacts, '没有制造出任何漂移，这一格失去了判别力'
@@ -442,7 +455,7 @@ def test_observe_is_text_free_and_verification_detects_any_inventory_or_ledger_d
         one['codes'] = {'frozen-code'}
 
     rows.append(_ledger_row(
-        sid='999', node='stage2.global', cached=False,
+        sid='999', node='str06.stage2.source', cached=False,
         prompt=1, hit=0, miss=1, completion=1, reasoning=0))
     with pytest.raises(ValueError, match='ledger SID'):
         corpus_manifest.verify(tmp_path, manifest)
@@ -491,21 +504,23 @@ def test_inventory_refuses_a_raw_non_current_version(tmp_path):
     这条的语义变成「raw marker 必须直接等于 current」，仍然值钱：
     盘面清点要的是**盘上那个数字**，不是解码器愿意接受的那个数字。
     """
-    from tests.test_stage2 import global_grounding
+    rel = 'stage2/compiled/book_extraction.json'
+    spec = artifact_spec(rel)
+    assert spec is not None
 
     book = tmp_path / 'book_123'
-    target = book / 'stage2' / 'global_grounding.json'
+    target = book / 'stage2' / 'compiled' / 'book_extraction.json'
     target.parent.mkdir(parents=True)
+    # raw marker 检查先于 payload 解码，形状无关；故意给非 current 版本号。
     target.write_text(json.dumps({
-        '_schema_version': 2,
-        **global_grounding(),
+        '_schema_version': spec.current_version + 1,
+        'payload': {},
     }, ensure_ascii=False), encoding='utf-8')
 
-    spec = artifact_spec('stage2/global_grounding.json')
-    assert spec is not None
     with pytest.raises(
             ValueError,
-            match=rf'raw _schema_version=2.*current v{spec.current_version}.*从 producer 重跑'):
+            match=rf'raw _schema_version={spec.current_version + 1}.*'
+                  rf'current v{spec.current_version}.*从 producer 重跑'):
         corpus_manifest._artifact_inventory(book)
 
 
@@ -771,18 +786,13 @@ def test_default_collection_keeps_schema_gates_and_carrier_regressions(
         [
             sys.executable, '-m', 'pytest', '-n', '0', '--collect-only', '-vv',
             '-m', 'not corpus', '--basetemp', str(short_base),
-                'tests/test_stage4.py',
-            'tests/test_stage4_beats.py',
-            'tests/test_stage4_repair.py',
-            'tests/test_stage6.py',
-            'tests/test_stage7.py',
-            'tests/test_api_edits.py',
+                'tests/test_api_edits.py',
             'tests/test_api_screens.py',
-            'tests/test_views_stage2.py',
-            'tests/test_views_stage4.py',
-            'tests/test_views_stage5.py',
-            'tests/test_views_stage6.py',
-            'tests/test_views_stage7.py',
+            'tests/test_api_http.py',
+            'tests/test_str06_views.py',
+            'tests/test_str06_candidates.py',
+            'tests/test_str06_cli_dispatch.py',
+            'tests/test_str06_contracts.py',
         ],
         cwd=root,
         env=env,
@@ -793,25 +803,20 @@ def test_default_collection_keeps_schema_gates_and_carrier_regressions(
     )
     assert result.returncode == 0, result.stdout + result.stderr
     default_nodes = (
-        'test_system_prompt_contains_every_current_style_word',
-        'test_identity_source_order_is_not_automatically_a_hard_violation',
-        'test_scene_compiler_refuses_incomplete_or_duplicate_placement',
-        'test_split_state_requires_specific_binding_and_does_not_default_to_first_scene',
-        'test_budget_allocator_postconditions_are_green_at_the_production_checker',
-        'test_revalidate_promotes_only_plan_without_llm_or_context',
-        'test_synthetic_stage6_gate_blocks_only_when_every_candidate_is_dirty',
-        'test_the_current_system_prompt_is_the_rendered_prompt',
-        'test_an_illegal_edit_body_is_422_from_the_carrier',
-        'test_a_zero_pick_is_422_from_the_carrier',
-        'test_stage7_approve_http_endpoint_is_retired',
+        # 退役守卫（edits 路由族整族退役后的形状）。
+        'test_old_edit_post_endpoints_are_gone',
+        'test_old_edit_get_endpoints_are_gone',
+        # 读屏载体回归。
         'test_an_unknown_book_is_404_on_every_screen',
         'test_an_illegal_sid_is_400_because_the_client_sent_it',
         'test_a_non_integer_ordinal_is_422_from_the_carrier',
-        'test_stage2_view_rejects_an_unknown_synthetic_book',
-        'test_stage4_view_rejects_an_unknown_synthetic_book',
-        'test_stage5_views_reject_an_unknown_synthetic_book',
-        'test_stage6_view_rejects_an_unknown_synthetic_book',
-        'test_stage7_view_rejects_an_unknown_synthetic_book',
+        # str06 候选契约与只读面。
+        'test_candidate_table_is_now_the_production_registry',
+        'test_views_cover_the_whole_delivered_chain',
+        'test_half_run_candidate_keeps_present_and_missing_apart',
+        # CLI 分流与守卫。
+        'test_cmd_run_routes_str06_nodes_before_legacy_preconditions',
+        'test_str06_paid_run_still_requires_yes',
     )
     missing = [node for node in default_nodes if node not in result.stdout]
     assert not missing, (

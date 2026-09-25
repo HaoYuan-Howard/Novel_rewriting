@@ -511,84 +511,10 @@ export interface Stage5ClosureView {
   history: Stage5ClosureDecision[]
 }
 
-/**
- * prepare 读模型。
- *
- * `GET /approvals` 仍下发 `prepare` 状态（后端 `contracts/schema/api.py::ApprovalDoc`
- * 尚未随 Stage6 整层删除该字段），因此这些形状随 ApprovalDoc 留在此文件；
- * Stage6 页专用的 PrepareView / PrepareWorkpack / 编辑与决定请求面已整层退役。
- */
-export interface PrepareParagraphRef { start_para: number; end_para: number }
-export interface PrepareMainEvidence extends PrepareParagraphRef { chapter_ordinal: number }
-
-/** 编辑只提交原文段落引用；正式坐标和语义接受由后端产生。 */
-export interface PrepareDraft {
-  facts: (
-    | { kind: 'supported'; claim_id: string; claim: string; evidence: PrepareMainEvidence }
-    | { kind: 'hook_supported'; claim_id: string; claim: string; hook_evidence: PrepareParagraphRef }
-    | { kind: 'unresolved'; claim_id: string; claim: string; reason: string }
-  )[]
-  opening:
-    | { kind: 'proposed'; through_chapter: number; rationale: string; boundary_evidence: PrepareMainEvidence }
-    | { kind: 'unresolved'; reason: string }
-}
-
-export interface PrepareArtifact {
-  source_blurb: SourceBlurbMaterials
-  main_text_sha256: string
-  hook_copy_sha256: string
-  _provenance: Provenance & {
-    /** 当前源免费完整重编；模型字段仍属于此证明引用的历史生成。 */
-    source_rebuild?: {
-      source_sha256: string
-      source_root_clean_sha1: string
-      target_root_clean_sha1: string
-      generation_root_clean_sha1: string
-      source_revision_id: string
-      target_revision_id: string
-      main_text_sha256: string
-      hook_copy_sha256: string
-    }
-  }
-}
-
-export interface PrepareEdit {
-  actor: string
-  reason: string
-  review_token: string
-  source_sha256: string
-  main_text_sha256: string
-  hook_copy_sha256: string
-  source_blurb: PrepareDraft
-}
-
-export interface PrepareDecision {
-  actor: string
-  reason: string
-  source_sha256: string
-  review_token: string
-  decision: 'accept' | 'rework' | 'uncertain'
-  edit: PrepareEdit | null
-}
-
-export interface PrepareState {
-  state: 'missing' | 'invalid' | 'pending' | 'accepted' | 'stale' | 'unknown'
-  reason: string
-  subject_sha256: string | null
-  review_token: string | null
-  prepare: PrepareArtifact | null
-  review: {
-    actor: string; reason: string; source_sha256: string; request_sha256: string
-    decision: PrepareDecision['decision']; at: string
-  } | null
-  pending_commit: boolean
-}
-
 export interface ApprovalDoc {
   v: 9
   sid: string
   gate: Record<GateKey, boolean>
-  prepare: PrepareState
   /** 是否已经批准全书闭卷开写。 */
   writing: boolean
   /** Stage4A 候选的历史审阅投影（只读；写面已随四道人工闸退役）。 */

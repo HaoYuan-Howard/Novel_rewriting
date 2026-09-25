@@ -29,7 +29,6 @@ describe('request-shaped cache and diagnostics', () => {
     localStorage.setItem(key, JSON.stringify({ v: version, gate: { s4: true }, writing: true }))
     const current = await mockApi.getApprovals(SAMPLE_SID)
     expect(current.v).toBe(9)
-    expect(current.prepare.state).toBe('unknown')
     expect(current.gate.s4).toBe(false)
     expect(current.writing).toBe(false)
     localStorage.removeItem(key)

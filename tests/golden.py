@@ -207,7 +207,9 @@ def validate_baseline(manifest: Manifest) -> None:
                 or not review.reviewer.strip()):
             raise ValueError('基线没有完整具名质量通过证据')
         book = paths.resolve_novel_dir(snapshot['output_root'], source.sid)
-        text = ArtifactStore(readonly_ctx(book, 'stage7.assemble', prov.code_version())).read_text(paths.book_txt_rel(book))
+        # 基线恒等是**字节**校验：直接读盘上成书（新链成书 rel 是三级
+        # `stage7/final/<title>_rewriting.txt`，不走两级来源账键的读口）。
+        text = (book / paths.book_txt_rel(book)).read_text(encoding='utf-8')
         if _sha(text.encode()) != row['output_sha256']:
             raise ValueError('基线成书字节已经改变')
 

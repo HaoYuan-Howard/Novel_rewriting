@@ -1,4 +1,3 @@
-import { missingPrepareState } from '@/test/prepare'
 import { api } from '@/api/endpoints'
 import { ApiError } from '@/api/errors'
 import { fireEvent, screen } from '@testing-library/react'
@@ -76,7 +75,7 @@ function emptyEnums(actions: { kind: string; label: string; extra: null }[]) {
 
 function approvals(spawns: ApprovalDoc['spawns']): ApprovalDoc {
   return {
-    v: 9, prepare: missingPrepareState(),
+    v: 9,
     sid: 'book-1',
     gate: { s0: true, s1: true, s4: false, s5: false, s6: false, s7: false },
     writing: false,

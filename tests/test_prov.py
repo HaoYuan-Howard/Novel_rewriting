@@ -40,11 +40,12 @@ def test_rule_table_fingerprint_is_stage_scoped_and_covers_every_rule_field():
 
 
 def test_stage7_human_only_provenance_has_no_model(tmp_path):
-    """首次人工改名没有模型基线时，也必须能构造符合当前 NameMap 契约的来源账。"""
+    """人工来源的 NameMap 账没有模型基线时，也必须能构造符合当前 NameMap 契约的来源账。"""
     novel_dir = tmp_path / 'book_1'
     (novel_dir / 'stage0').mkdir(parents=True)
     (novel_dir / 'stage0' / 'clean_text.txt').write_text('根正文\n', encoding='utf-8')
-    ctx = RunContext.open(tmp_path, '1', 'stage7.rename', paid=False, write_ledger=False)
+    ctx = RunContext.open(tmp_path, '1', 'str06.stage7.assemble', paid=False,
+                          write_ledger=False)
     provenance = ctx.free_provenance(
         NameMapFreeProvenance,
         prompts={'RULES': 'rules'},

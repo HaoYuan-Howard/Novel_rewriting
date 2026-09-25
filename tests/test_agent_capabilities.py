@@ -22,7 +22,8 @@ def _legacy_profile(*, model: str = 'deepseek-v4-pro',
 
 
 def test_executor_nodes_cover_all_paid_llm_nodes():
-    assert len(LLM_EXECUTOR_NODES) == 10
+    # 9 个付费节点：compile／assemble 结构性禁付（executor_content_limit=0）。
+    assert len(LLM_EXECUTOR_NODES) == 9
     assert set(LLM_EXECUTOR_NODES) == {
         node for node, spec in NODES.items() if spec.paid
     }

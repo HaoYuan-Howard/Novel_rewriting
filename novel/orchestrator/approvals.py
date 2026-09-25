@@ -542,7 +542,8 @@ def _view(
     writing_approval = _writing_view(novel_dir, record)
     closure = _closure_view(novel_dir, record)
     spawns = _spawns(base, record.sid) if include_spawns else {}
-    # ⚠ F8a：`prepare` 投影随 Stage6 prepare 链退役删除（F6d 登记）。
+    # ⚠ F8b-3：`prepare` 字段随 Stage6 prepare 链退役从 ApprovalDoc 删除
+    # （F6d 登记；F8a 先删投影产出，本批补齐模型与消费面）。
     return ApprovalDoc(
         sid=record.sid, gate=record.gate,
         writing=record.writing,

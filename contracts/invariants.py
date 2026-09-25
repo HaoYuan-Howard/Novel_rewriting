@@ -2061,7 +2061,7 @@ RETIRED_NODES: Final = (
     'stage4.design', 'stage4.plan', 'stage4.context',
     'stage5.write', 'stage5.review',
     'stage6.prepare', 'stage6.hook', 'stage6.approve',
-    'stage7.rename',
+    'stage7.rename', 'stage7.assemble',
 )
 RETIRED_STAGES: Final = ('stage3', 'stage6')
 

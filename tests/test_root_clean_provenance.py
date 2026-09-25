@@ -25,7 +25,7 @@ class _Artifact(StrictModel):
     provenance: FreeProvenance = Field(alias='_provenance')
 
 
-def _ctx(novel_dir: Path, node: str = 'stage4.context') -> RunContext:
+def _ctx(novel_dir: Path, node: str = 'str06.stage4.compile') -> RunContext:
     return RunContext(
         novel_dir=novel_dir,
         node=node,
@@ -105,7 +105,7 @@ def test_readonly_view_can_still_load_a_stale_artifact_to_explain_it(tmp_path):
         '第二版正文\n', encoding='utf-8', newline='')
     view_ctx = RunContext(
         novel_dir=novel_dir,
-        node='stage4.context',
+        node='str06.stage4.compile',
         paid=False,
         code='test-code',
         cache=CachePolicy.default(),

@@ -18,26 +18,29 @@ from contracts.schema import (  # noqa: E402
     CorpusSkipExpectation, LedgerTokenSummary, artifact_spec, decode_artifact,
 )
 from contracts.schema.corpus import (  # noqa: E402
-    CURRENT_CORPUS_BOOKS, CURRENT_CORPUS_PAID_NODES, corpus_command_dispatch,
+    BOOK_TEMPLATE_REL, CURRENT_CORPUS_BOOKS, CURRENT_CORPUS_PAID_NODES,
+    ENVELOPE_LESS_JSON_RELS, corpus_command_dispatch,
 )
-from contracts.artifacts import ARTIFACT_PATHS  # noqa: E402
 from novel.llm.ledger import LEDGER_REL  # noqa: E402
 from novel.paths import book_txt_rel, derive_source_meta  # noqa: E402
 
 
-def _byte_artifacts(book: Path) -> tuple[tuple[str, str], ...]:
+def _byte_artifacts(book: Path, chapters: int) -> tuple[tuple[str, str], ...]:
     """这本书的字节形态产物：`(盘上路径, 清单里记的 rel)`。两者只在成书那条上不同。
 
     ⚠⚠ **成书刻意「记模板、哈希实体」。** 盘上它叫 `stage7/<书名>_rewriting.txt`，
     而这份清单**不含书名**（`docs/schema/corpus.md`：不含书名、原文、prompt——
     它要能提交进 git）⇒ 把具体文件名写进 `rel` 会泄漏它承诺不含的东西。
-    模板 rel 由 `contracts/schema/corpus.py::required_current_corpus_artifacts`
-    那一侧登记，两处必须是同一个字面 ⇒ 都取 `ARTIFACT_PATHS['stage7.book']`。
+    模板 rel 由 `contracts/schema/corpus.py::BOOK_TEMPLATE_REL` 登记两处共用。
     """
-    return (
-        ('stage0/clean_text.txt', 'stage0/clean_text.txt'),
-        (book_txt_rel(book), ARTIFACT_PATHS['stage7.book']),
-    )
+    pairs = [('stage0/clean_text.txt', 'stage0/clean_text.txt')]
+    # str06.stage5.body：正文按章成对落盘（回执是 JSON，走上面的 JSON 扫描）。
+    for ordinal in range(1, chapters + 1):
+        pairs.append((f'stage5/body/ch{ordinal:02d}.txt',
+                      f'stage5/body/ch{ordinal:02d}.txt'))
+    pairs.append(('stage5/hook/hook.txt', 'stage5/hook/hook.txt'))
+    pairs.append((book_txt_rel(book), BOOK_TEMPLATE_REL))
+    return tuple(pairs)
 _TOKEN_COLUMNS = (
     'prompt_tokens', 'prompt_cache_hit_tokens', 'prompt_cache_miss_tokens',
     'completion_tokens', 'reasoning_tokens',
@@ -70,9 +73,24 @@ def _artifact_inventory(book: Path) -> tuple[list[CorpusArtifactEntry], dict[str
     entries: list[CorpusArtifactEntry] = []
     payloads: dict[str, Any] = {}
     codes: set[str] = set()
-    for stage in sorted(book.glob('stage[0-7]')):
+    stage_dirs = sorted(
+        list(book.glob('stage[0-7]')) + [book / 'runtime'])
+    for stage in stage_dirs:
+        if not stage.is_dir():
+            continue
         for path in sorted(stage.rglob('*.json')):
             rel = path.relative_to(book).as_posix()
+            if rel in ENVELOPE_LESS_JSON_RELS:
+                # 无信封派生 JSON：照样逐字节计账（封闭集合），不要求模型版本，
+                # 也不做模型 decode——内容即事实。
+                raw_bytes = path.read_bytes()
+                try:
+                    json.loads(raw_bytes.decode('utf-8'))
+                except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                    raise ValueError(f'{book.name}/{rel}: JSON/UTF-8 损坏：{exc}') from exc
+                entries.append(CorpusArtifactEntry(
+                    rel=rel, schema_version=None, sha256=_sha256_bytes(raw_bytes)))
+                continue
             spec = artifact_spec(rel)
             if spec is None:
                 raise ValueError(
@@ -112,7 +130,9 @@ def _artifact_inventory(book: Path) -> tuple[list[CorpusArtifactEntry], dict[str
                     top_code = payload.get('code')
                     if isinstance(top_code, str) and top_code:
                         codes.add(top_code)
-    for disk_rel, manifest_rel in _byte_artifacts(book):
+    main = payloads.get('stage1/main_text.json')
+    chapters = len(main) if isinstance(main, list) else 0
+    for disk_rel, manifest_rel in _byte_artifacts(book, chapters):
         path = book / Path(disk_rel)
         if path.is_file():
             raw_bytes = path.read_bytes()
