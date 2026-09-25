@@ -25,7 +25,7 @@ def _ctx(base: Path) -> RunContext:
     book = base / '成本回执_855'
     book.mkdir(exist_ok=True)
     return RunContext(
-        novel_dir=book, node='stage6.hook', paid=True, code='receipt-test',
+        novel_dir=book, node='str06.stage5.hook', paid=True, code='receipt-test',
         cache=CachePolicy.default(), ledger=CostLedger(path=ledger_path(base)),
         observer=lambda _event: None)
 
@@ -39,7 +39,7 @@ def _client(ctx: RunContext, transport: FakeTransport) -> LlmClient:
 
 def _ask(client: LlmClient) -> _Answer:
     return client.ask_json('封闭的测试系统', '同一完整工作包',
-                           model_cls=_Answer, purpose='stage6.hook')
+                           model_cls=_Answer, purpose='str06.stage5.hook')
 
 
 def _response() -> ChatResponse:
@@ -114,12 +114,12 @@ def test_same_purpose_parallel_requests_keep_wire_history_and_budgets(tmp_path, 
     from novel.observability import RequestProgress
     from novel.run import RunContext
     seed = _ctx(tmp_path)
-    ctx = RunContext(novel_dir=seed.novel_dir, node='stage5.write', paid=True,
+    ctx = RunContext(novel_dir=seed.novel_dir, node='str06.stage5.body', paid=True,
                      code=seed.code, cache=CachePolicy.default(),
                      ledger=CostLedger(path=ledger_path(tmp_path)), observer=lambda _event: None)
     wire = FakeTransport.always(_response())
     client = _client(ctx, wire)
-    purpose = 'stage5.write'
+    purpose = 'str06.stage5.body'
     for chapter in (1, 2):
         client.ask_json('SYS', f'首稿章{chapter}', model_cls=_Answer, purpose=purpose,
                         progress=RequestProgress(chapter=chapter, index=chapter, total=2))

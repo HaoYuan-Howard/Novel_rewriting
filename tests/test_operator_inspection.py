@@ -185,8 +185,9 @@ def test_approval_projection_reuses_snapshot_overview_and_code_without_fallback(
         tmp_path, 'book-1', overview=overview, code='code-v1') == 'approval-doc'
     # _spawns 先用解析后的书目录建 ctx（含 s4 的 infeasible 只读检查）；
     # 外层审批投影仍用 base 本身。
+    # Stage6 prepare/hook 的 spawn 恢复探针已随 F8b-2 Stage6 分支切除：
+    # 剩一次 _spawns 的只读 ctx ＋ 外层审批投影的 base ctx。
     assert contexts == [(tmp_path / 'book_1', 'stage0.remove', 'code-v1'),
-                        (tmp_path / 'book_1', 'stage0.remove', 'code-v1'),
                         (tmp_path, 'stage0.remove', 'code-v1')]
     assert A._READ_CODE.get() is None
     assert A._READ_OVERVIEW.get() is None
@@ -203,8 +204,8 @@ def test_approval_projection_requires_a_complete_matching_snapshot_coordinate():
 def test_read_surface_seal_ignores_unregistered_documents(
         monkeypatch, tmp_path):
     novel_dir = tmp_path / 'FQ_测试书_book-1'
-    (novel_dir / 'stage7').mkdir(parents=True)
-    artifact = novel_dir / 'stage7' / 'name_map.json'
+    (novel_dir / 'stage7' / 'naming').mkdir(parents=True)
+    artifact = novel_dir / 'stage7' / 'naming' / 'name_map.json'
     artifact.write_text('v1', encoding='utf-8')
     review = novel_dir / '测试书_review.md'
     review.write_text('draft v1', encoding='utf-8')
@@ -244,8 +245,8 @@ def test_surface_seal_ignores_legacy_report_files_but_keeps_active_artifact(
     assert I.read_surface_seal(
         tmp_path, 'book-1') == before
 
-    active = novel_dir / 'stage7' / 'name_map.json'
-    active.parent.mkdir(exist_ok=True)
+    active = novel_dir / 'stage7' / 'naming' / 'name_map.json'
+    active.parent.mkdir(parents=True, exist_ok=True)
     active.write_text('{}', encoding='utf-8')
     assert I.read_surface_seal(
         tmp_path, 'book-1') != before
@@ -254,7 +255,7 @@ def test_surface_seal_ignores_legacy_report_files_but_keeps_active_artifact(
 def test_surface_seal_ignores_rounds_scratch_and_approval_history(
         monkeypatch, tmp_path):
     novel_dir = tmp_path / 'FQ_测试书_book-1'
-    active = novel_dir / 'stage4' / 'plan_chapters.json'
+    active = novel_dir / 'stage4' / 'design' / 'body_design.json'
     active.parent.mkdir(parents=True)
     active.write_text('{"active":1}', encoding='utf-8')
     rounds = novel_dir / 'stage4' / '_rounds' / 'plan_chapters.r1.json'

@@ -70,25 +70,25 @@ def test_beacon_events_fold_into_steps(client):
     # 改用现役节点名钉同一组状态。
     beacon.append(base, _ev(10, 'stage0.remove', 'start'))
     beacon.append(base, _ev(20, 'stage0.remove', 'end', exit_code=0))
-    beacon.append(base, _ev(30, 'stage2.analyze', 'start'))
-    beacon.append(base, _ev(31, 'stage2.characters', 'end', exit_code=1))
+    beacon.append(base, _ev(30, 'str06.stage2.source', 'start'))
+    beacon.append(base, _ev(31, 'str06.stage2.names', 'end', exit_code=1))
     beacon.append(base, _ev(32, 'stage1.partition', 'end', exit_code=2))
-    beacon.append(base, _ev(33, 'stage2.global', 'end', exit_code=70))
+    beacon.append(base, _ev(33, 'str06.stage4.preserve', 'end', exit_code=70))
     beacon.append(base, _ev(30, 'stage1.partition', 'start', sid='other'))
     d = c.get('/api/novels/42/run').json()
     by_node = {s['node']: s for s in d['steps']}
     assert by_node['stage0.remove']['beacon'] == 'ok'
     assert by_node['stage0.remove']['last_exit'] == 0
-    assert by_node['stage2.analyze']['beacon'] == 'running'
-    assert by_node['stage2.analyze']['elapsed'] is not None
-    assert by_node['stage2.characters']['beacon'] == 'landed_red'
-    assert by_node['stage2.characters']['last_exit'] == 1
+    assert by_node['str06.stage2.source']['beacon'] == 'running'
+    assert by_node['str06.stage2.source']['elapsed'] is not None
+    assert by_node['str06.stage2.names']['beacon'] == 'landed_red'
+    assert by_node['str06.stage2.names']['last_exit'] == 1
     assert by_node['stage1.partition']['beacon'] == 'stopped'
-    assert by_node['stage2.global']['beacon'] == 'failed'
+    assert by_node['str06.stage4.preserve']['beacon'] == 'failed'
     assert len(d['events_tail']) == 6
     by_event_node = {event['node']: event for event in d['events_tail']}
     assert by_event_node['stage1.partition']['beacon'] == 'stopped'
-    assert by_event_node['stage2.global']['beacon'] == 'failed'
+    assert by_event_node['str06.stage4.preserve']['beacon'] == 'failed'
 
 
 def test_existing_book_dir_gives_real_stage_done(client):
@@ -106,20 +106,18 @@ def test_existing_book_dir_gives_real_stage_done(client):
     assert d['resume_frontier']['verified_skipped_count'] == 0
 
 
-def test_stage2_chapter_fix_route_reaches_http_preview(client):
+def test_retired_valued_flag_is_refused_at_http_preview(client):
+    """F8b-1 后节点旗标面收敛为 --check-only：旧链带值旗标（--chapters）
+    在预检口关闭式拒绝，不再拼出一条看似可跑的命令。"""
     c, base = client
     os.mkdir(os.path.join(base, '测试书_42'))
     response = c.post(
         '/api/jobs/preview',
         headers={UI_HEADER: '1'},
-        json={'sid': '42', 'node': 'stage2.blueprint',
+        json={'sid': '42', 'node': 'str06.stage2.source',
               'flags': ['--chapters', '11']},
     )
-    assert response.status_code == 200, response.text
-    body = response.json()
-    assert body['flags'] == ['--chapters', '11']
-    assert any('--chapters' in step['argv'] and '11' in step['argv']
-               for step in body['steps'])
+    assert response.status_code == 400, response.text
 
 
 def test_run_projects_current_review_states_and_only_current_role_recovery(client, monkeypatch):
@@ -133,12 +131,12 @@ def test_run_projects_current_review_states_and_only_current_role_recovery(clien
     os.mkdir(os.path.join(base, '测试书_42'))
     actual = c.get('/api/novels/42/run').json()
     reviews = actual['resume_frontier']['review_states']
-    # 批次 B4 后：仍有 approval_projection 的现役节点投影到 run 面
-    # （prepare 状态 / s6 闸 / s7 闸读面），不再等于 review_mode==human。
+    # F8a/F8b-2：prepare/s6/s7 闸随 Stage6 与人工闸整层退役，现役 NODES
+    # 不再带 approval_projection——run 面的审阅投影为空是正确形状。
     assert {row['node'] for row in reviews} == {
         node for node, spec in NODES.items()
         if spec.lifecycle.approval_projection}
-    assert len(reviews) == 3
+    assert reviews == []
     # Stage2 语义审阅退役：run 面不再有 stage2 审批状态行。
     assert not [row for row in reviews if row['node'].startswith('stage2.')]
     assert operator._review_state_projection(None) is None
@@ -147,18 +145,18 @@ def test_run_projects_current_review_states_and_only_current_role_recovery(clien
                     content_used=1, content_limit=4, content_remaining=3, state='delivered',
                     recovery_action='replay_response')
     monkeypatch.setattr(run.work_units, 'list_unit_views', lambda *_args: [
-        row('stage7.rename', 'executor', 'book'),
+        row('str06.stage7.naming', 'executor', 'book'),
         # 历史 commander 行保留只读解码，但不得进入当前恢复动作面。
-        row('stage7.rename', 'commander', 'book'),
+        row('str06.stage7.naming', 'commander', 'book'),
         row('stage6.hook', 'executor', 'book')])
     # 阻断面：next_handler=human，任何模型工作单元都不投影恢复动作。
     frontier = RunResumeFrontierView(
-        state='blocked', node='stage7.rename', seq=list(NODES).index('stage7.rename') + 1,
-        label=NODES['stage7.rename'].label, resume_verdict='run', why='等人名表恢复',
-        waiting_on='inbox:invalid', paid=False, writes='NameMap',
+        state='blocked', node='str06.stage7.naming', seq=list(NODES).index('str06.stage7.naming') + 1,
+        label=NODES['str06.stage7.naming'].label, resume_verdict='run', why='等人名表恢复',
+        waiting_on='inbox:invalid', paid=False, writes='stage7/naming/name_map.json',
         next_handler='human', review_states=reviews,
-        verified_skipped_nodes=list(NODES)[:list(NODES).index('stage7.rename')],
-        verified_skipped_count=list(NODES).index('stage7.rename'))
+        verified_skipped_nodes=list(NODES)[:list(NODES).index('str06.stage7.naming')],
+        verified_skipped_count=list(NODES).index('str06.stage7.naming'))
     monkeypatch.setattr(operator, 'progress_read_snapshot',
                         lambda *_args: nullcontext((SimpleNamespace(stages=[]), frontier)))
     response = c.get('/api/novels/42/run')
@@ -167,12 +165,12 @@ def test_run_projects_current_review_states_and_only_current_role_recovery(clien
     assert response.json()['current_recovery_actions'] == []
     # executor lane：只有与 next_handler 同角色的当前节点工作单元进入恢复动作。
     frontier = RunResumeFrontierView(
-        state='blocked', node='stage7.rename', seq=list(NODES).index('stage7.rename') + 1,
-        label=NODES['stage7.rename'].label, resume_verdict='run', why='人名表待重采',
-        waiting_on='resume:manual-decision', paid=True, writes='NameMap',
+        state='blocked', node='str06.stage7.naming', seq=list(NODES).index('str06.stage7.naming') + 1,
+        label=NODES['str06.stage7.naming'].label, resume_verdict='run', why='人名表待重采',
+        waiting_on='resume:manual-decision', paid=True, writes='stage7/naming/name_map.json',
         next_handler='executor', review_states=reviews,
-        verified_skipped_nodes=list(NODES)[:list(NODES).index('stage7.rename')],
-        verified_skipped_count=list(NODES).index('stage7.rename'))
+        verified_skipped_nodes=list(NODES)[:list(NODES).index('str06.stage7.naming')],
+        verified_skipped_count=list(NODES).index('str06.stage7.naming'))
     response = c.get('/api/novels/42/run')
     assert response.status_code == 200
     # 恢复动作标签 = scope: recovery_action；只有当前节点 executor 轮进入。

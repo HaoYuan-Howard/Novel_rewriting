@@ -41,7 +41,7 @@ def test_pipeline_steps_match_the_skill_table():
     """进度节点逐项来自 NODES；贵贱仍只有 `is_paid` 一处算。"""
     assert PIPELINE_STEPS == tuple(NODES)
     # 批次 B4：stage7.approve 退役；rename 后直接 assemble。
-    assert PIPELINE_STEPS[-2:] == ('stage7.rename', 'stage7.assemble')
+    assert PIPELINE_STEPS[-2:] == ('str06.stage7.naming', 'str06.stage7.assemble')
     assert {n for n in PIPELINE_STEPS if N.is_paid(n, ())} == {
         n for n in NODES if N.is_paid(n, ())}
 
@@ -49,9 +49,9 @@ def test_pipeline_steps_match_the_skill_table():
 def test_progress_event_payload_matches_phase():
     """一种相位恰好带一种载荷：start 不带退出码，end 必带。"""
     with pytest.raises(Exception):
-        _ev(1, 'stage4.plan', 'start', exit_code=0)
+        _ev(1, 'str06.stage4.bind', 'start', exit_code=0)
     with pytest.raises(Exception):
-        _ev(1, 'stage4.plan', 'end')
+        _ev(1, 'str06.stage4.bind', 'end')
 
 
 def test_append_then_read_roundtrip(base):
@@ -92,7 +92,7 @@ def test_complete_json_without_lf_is_not_a_committed_beacon(base):
     path = beacon.beacon_path(base)
     path.parent.mkdir(parents=True, exist_ok=True)
     event = _ev(
-        1, 'stage2.global', 'start', run_id='parent-1',
+        1, 'str06.stage2.names', 'start', run_id='parent-1',
         execution_id='exec-uncommitted')
     path.write_bytes(json.dumps(
         event.model_dump(mode='json'), ensure_ascii=False).encode('utf-8'))
@@ -111,10 +111,10 @@ def test_lf_committed_bad_last_line_is_not_silently_tolerated(base):
 
 def test_truncated_end_never_closes_the_committed_start(base):
     start = _ev(
-        1, 'stage2.global', 'start', run_id='parent-1',
+        1, 'str06.stage2.names', 'start', run_id='parent-1',
         execution_id='exec-open')
     end = _ev(
-        2, 'stage2.global', 'end', exit_code=0, run_id='parent-1',
+        2, 'str06.stage2.names', 'end', exit_code=0, run_id='parent-1',
         execution_id='exec-open')
     beacon.append(base, start)
     path = beacon.beacon_path(base)
@@ -134,7 +134,7 @@ def test_append_refuses_to_join_a_non_lf_tail(base):
     path.write_bytes(original)
 
     with pytest.raises(ValueError, match='未以 LF 提交'):
-        beacon.append(base, _ev(2, 'stage2.global', 'start'))
+        beacon.append(base, _ev(2, 'str06.stage2.names', 'start'))
     assert path.read_bytes() == original
 
 
@@ -155,9 +155,9 @@ def test_fold_six_states():
     events = [
         _ev(10, 'stage0.remove', 'start'),
         _ev(20, 'stage0.remove', 'end', exit_code=0),
-        _ev(30, 'stage2.analyze', 'start'),                       # 还在跑
-        _ev(35, 'stage2.characters', 'start'),
-        _ev(36, 'stage2.characters', 'end', exit_code=1),         # 落盘但红
+        _ev(30, 'str06.stage2.source', 'start'),                       # 还在跑
+        _ev(35, 'str06.stage2.names', 'start'),
+        _ev(36, 'str06.stage2.names', 'end', exit_code=1),         # 落盘但红
         _ev(40, 'stage1.partition', 'start'),
         _ev(50, 'stage1.partition', 'end', exit_code=2),          # 显式终态
     ]
@@ -166,14 +166,14 @@ def test_fold_six_states():
     assert [s.seq for s in steps] == list(range(1, len(NODES) + 1))
     assert by_node['stage0.remove'].beacon == 'ok'
     assert by_node['stage0.remove'].last_exit == 0
-    assert by_node['stage2.analyze'].beacon == 'running'
-    assert by_node['stage2.analyze'].elapsed == 70
-    assert by_node['stage2.characters'].beacon == 'landed_red'
-    assert by_node['stage2.characters'].last_exit == 1
+    assert by_node['str06.stage2.source'].beacon == 'running'
+    assert by_node['str06.stage2.source'].elapsed == 70
+    assert by_node['str06.stage2.names'].beacon == 'landed_red'
+    assert by_node['str06.stage2.names'].last_exit == 1
     assert by_node['stage1.partition'].beacon == 'stopped'
     assert by_node['stage1.partition'].last_exit == 2
-    assert by_node['stage4.plan'].beacon == 'pending'
-    assert by_node['stage4.plan'].label == NODES['stage4.plan'].label
+    assert by_node['str06.stage4.bind'].beacon == 'pending'
+    assert by_node['str06.stage4.bind'].label == NODES['str06.stage4.bind'].label
     assert all(s.beacon in BEACON_STATES for s in steps)
 
 
@@ -190,22 +190,22 @@ def test_event_view_projects_exit_two_and_crash_without_browser_inference():
 def test_fold_takes_the_latest_event_per_node():
     """修复回路里同一节点会跑多次——进度只关心最近一次，历史在 events_tail。"""
     events = [
-        _ev(10, 'stage7.rename', 'start'),
-        _ev(20, 'stage7.rename', 'end', exit_code=2),
-        _ev(30, 'stage7.rename', 'start'),
-        _ev(40, 'stage7.rename', 'end', exit_code=0),
+        _ev(10, 'str06.stage7.naming', 'start'),
+        _ev(20, 'str06.stage7.naming', 'end', exit_code=2),
+        _ev(30, 'str06.stage7.naming', 'start'),
+        _ev(40, 'str06.stage7.naming', 'end', exit_code=0),
     ]
-    [step] = [s for s in beacon.fold(events, now=50) if s.node == 'stage7.rename']
+    [step] = [s for s in beacon.fold(events, now=50) if s.node == 'str06.stage7.naming']
     assert step.beacon == 'ok' and step.last_ts == 40
 
 
 def test_open_executions_pairs_exact_attempts_within_one_parent_run(base):
     events = [
-        _ev(1, 'stage2.global', 'start', run_id='parent-1', execution_id='exec-a'),
-        _ev(2, 'stage2.global', 'start', run_id='parent-1', execution_id='exec-b'),
-        _ev(3, 'stage2.global', 'end', exit_code=0,
+        _ev(1, 'str06.stage2.names', 'start', run_id='parent-1', execution_id='exec-a'),
+        _ev(2, 'str06.stage2.names', 'start', run_id='parent-1', execution_id='exec-b'),
+        _ev(3, 'str06.stage2.names', 'end', exit_code=0,
             run_id='parent-1', execution_id='exec-a'),
-        _ev(4, 'stage2.global', 'start', run_id='other-run', execution_id='exec-c'),
+        _ev(4, 'str06.stage2.names', 'start', run_id='other-run', execution_id='exec-c'),
     ]
     for event in events:
         beacon.append(base, event)
@@ -215,17 +215,17 @@ def test_open_executions_pairs_exact_attempts_within_one_parent_run(base):
 
 def test_open_executions_refuses_unpaired_or_unidentified_current_events(base):
     beacon.append(base, _ev(
-        1, 'stage2.global', 'start', run_id='parent-1'))
+        1, 'str06.stage2.names', 'start', run_id='parent-1'))
     with pytest.raises(ValueError, match='缺 execution_id'):
         beacon.open_executions(base, 'parent-1')
 
 
 def test_typed_tail_repair_quarantines_then_replays_open_execution(base):
     start = _ev(
-        1, 'stage2.global', 'start', run_id='parent-1',
+        1, 'str06.stage2.names', 'start', run_id='parent-1',
         execution_id='exec-repair')
     end = _ev(
-        2, 'stage2.global', 'end', exit_code=0, run_id='parent-1',
+        2, 'str06.stage2.names', 'end', exit_code=0, run_id='parent-1',
         execution_id='exec-repair')
     beacon.append(base, start)
     path = beacon.beacon_path(base)
@@ -295,9 +295,9 @@ def test_mark_drained_and_reconcile_refuse_non_lf_beacon_under_joint_lock(base):
 
 
 def test_mark_command_roundtrip(base):
-    assert main(['mark', '42', '--node', 'stage4.plan', '--phase', 'start',
+    assert main(['mark', '42', '--node', 'str06.stage4.bind', '--phase', 'start',
                  '--execution-id', 'attempt-1', '--base', base]) == X.OK
-    assert main(['mark', '42', '--node', 'stage4.plan', '--phase', 'end',
+    assert main(['mark', '42', '--node', 'str06.stage4.bind', '--phase', 'end',
                  '--execution-id', 'attempt-1', '--exit', '0',
                  '--note', '计划过闸', '--base', base]) == X.OK
     events = beacon.read_events(base)
@@ -308,9 +308,9 @@ def test_mark_command_roundtrip(base):
 
 def test_mark_end_requires_exit(base):
     """被拒绝的打点不许落盘。"""
-    assert main(['mark', '42', '--node', 'stage4.plan', '--phase', 'end',
+    assert main(['mark', '42', '--node', 'str06.stage4.bind', '--phase', 'end',
                  '--base', base]) == X.TERMINAL_STATE
-    assert main(['mark', '42', '--node', 'stage4.plan', '--phase', 'start',
+    assert main(['mark', '42', '--node', 'str06.stage4.bind', '--phase', 'start',
                  '--exit', '0', '--base', base]) == X.TERMINAL_STATE
     assert beacon.read_events(base) == []
 
@@ -321,7 +321,7 @@ def test_reconcile_cli_exposes_zero_cost_typed_beacon_tail_repair(
     path.parent.mkdir(parents=True, exist_ok=True)
     committed = (
         json.dumps(_ev(
-            1, 'stage4.plan', 'start', run_id='parent-1',
+            1, 'str06.stage4.bind', 'start', run_id='parent-1',
             execution_id='attempt-1').model_dump(mode='json'),
             ensure_ascii=False) + '\n').encode('utf-8')
     tail = b'{"truncated":'
@@ -354,7 +354,7 @@ def test_reconcile_cli_exposes_zero_cost_typed_beacon_tail_repair(
     assert beacon.tail_repair_dir(base).joinpath(
         f"{shown['subject_sha256']}.tail.bin").read_bytes() == tail
     beacon.append(base, _ev(
-        2, 'stage4.plan', 'end', exit_code=0, run_id='parent-1',
+        2, 'str06.stage4.bind', 'end', exit_code=0, run_id='parent-1',
         execution_id='attempt-1'))
     assert beacon.open_executions(base, 'parent-1') == ()
 

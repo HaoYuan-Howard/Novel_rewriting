@@ -41,8 +41,8 @@ def test_run_step_closes_execution_with_crash_when_node_spawn_raises(
     runner = _operator_script('run_step')
     step = SimpleNamespace(
         label='stage2 全局事实',
-        argv=['python', '-m', 'novel.cli', 'run', 'stage2.global', '42'],
-        cwd=str(REPO_ROOT), paid=True, writes='stage2/global_grounding.json',
+        argv=['python', '-m', 'novel.cli', 'run', 'str06.stage2.source', '42'],
+        cwd=str(REPO_ROOT), paid=True, writes='stage2/compiled/book_extraction.json',
         note=None)
     calls: list[list[str]] = []
     monkeypatch.setattr(runner, 'build_steps', lambda *_args, **_kwargs: [step])
@@ -65,7 +65,7 @@ def test_run_step_closes_execution_with_crash_when_node_spawn_raises(
     assert runner.main([
         '--base', 'E:/outputs', '--sid', '42',
         '--expect-code-version', 'code-v1', '--execute',
-        '--operator-permit-file', str(permit_file), 'stage2.global',
+        '--operator-permit-file', str(permit_file), 'str06.stage2.source',
     ]) == runner.X.CRASH
 
     start, _node, end = calls
@@ -89,7 +89,7 @@ def _executor_profiles() -> PipelineAgentProfiles:
 
 def _execution_permit(
         *, base: str = 'E:/outputs', sid: str = '42',
-        node: str = 'stage2.global', flags: list[str] | None = None,
+        node: str = 'str06.stage2.source', flags: list[str] | None = None,
         code_version: str = 'code-v1', surface_seal: str = 'a' * 64,
         operator_action_sha256: str = 'b' * 64) -> ExecutionPermit:
     """生成可过 canonical envelope 校验的最小 ready permit。"""
@@ -153,9 +153,9 @@ def test_run_step_permit_file_preview_never_remints_or_revalidates(
     token = _write_ready_next(tmp_path / 'operator-next.json', permit)
     step = SimpleNamespace(
         label='stage2 全局事实',
-        argv=['python', '-m', 'novel.cli', 'run', 'stage2.global', '42'],
+        argv=['python', '-m', 'novel.cli', 'run', 'str06.stage2.source', '42'],
         cwd=str(REPO_ROOT), paid=True,
-        writes=write_effect('stage2.global', []), note=None,
+        writes=write_effect('str06.stage2.source', []), note=None,
     )
     built: list[tuple] = []
     monkeypatch.setattr(runner.prov, 'code_version', lambda: 'code-v1')
@@ -172,11 +172,11 @@ def test_run_step_permit_file_preview_never_remints_or_revalidates(
     rc = runner.main([
         '--base', str(tmp_path), '--sid', '42',
         '--expect-code-version', 'code-v1',
-        '--operator-permit-file', str(token), 'stage2.global',
+        '--operator-permit-file', str(token), 'str06.stage2.source',
     ])
 
     assert rc == 0
-    assert built == [(('stage2.global', '42', []), {
+    assert built == [(('str06.stage2.source', '42', []), {
         'base': str(tmp_path.resolve()),
         'executor_backend': None,
         'egress_authorized': None,
@@ -204,7 +204,7 @@ def test_run_step_permit_file_refuses_tampering_before_building(
     rc = runner.main([
         '--base', str(tmp_path), '--sid', '42',
         '--expect-code-version', 'code-v1',
-        '--operator-permit-file', str(token), 'stage2.global',
+        '--operator-permit-file', str(token), 'str06.stage2.source',
     ])
 
     assert rc == 2
@@ -228,7 +228,7 @@ def test_run_step_permit_file_refuses_exact_coordinate_drift_before_building(
     rc = runner.main([
         '--base', str(tmp_path), '--sid', 'other-book',
         '--expect-code-version', 'code-v1',
-        '--operator-permit-file', str(token), 'stage2.global',
+        '--operator-permit-file', str(token), 'str06.stage2.source',
     ])
 
     assert rc == 2
@@ -252,9 +252,9 @@ def test_run_step_projects_frozen_executor_and_egress_into_production_steps(
     profile = profiles.executor_default
     step = SimpleNamespace(
         label='stage2 全局事实',
-        argv=['python', '-m', 'novel.cli', 'run', 'stage2.global', '42'],
+        argv=['python', '-m', 'novel.cli', 'run', 'str06.stage2.source', '42'],
         cwd=str(REPO_ROOT), paid=True,
-        writes='stage2/global_grounding.json', note=None,
+        writes='stage2/compiled/book_extraction.json', note=None,
         executor_backend=profile, egress_authorized=True)
     monkeypatch.setenv(runner.execution_context.COMMANDER_RUN_ID_ENV, 'outer-1')
     monkeypatch.setenv(
@@ -275,7 +275,7 @@ def test_run_step_projects_frozen_executor_and_egress_into_production_steps(
         '--base', str(tmp_path), '--sid', '42',
         '--expect-code-version', 'code-v1', '--evidence-json', str(evidence),
         '--operator-permit-sha256', permit.permit_sha256,
-        'stage2.global',
+        'str06.stage2.source',
     ])
 
     assert rc == 0
@@ -304,7 +304,7 @@ def test_run_step_with_frozen_profile_refuses_execute_without_both_authorization
     )
     step = SimpleNamespace(
         label='stage2 全局事实', argv=['python'], cwd=str(REPO_ROOT),
-        paid=True, writes='stage2/global_grounding.json', note=None,
+        paid=True, writes='stage2/compiled/book_extraction.json', note=None,
         executor_backend=profiles.executor_default, egress_authorized=False)
     monkeypatch.setenv(runner.execution_context.COMMANDER_RUN_ID_ENV, 'outer-1')
     monkeypatch.setenv(
@@ -324,7 +324,7 @@ def test_run_step_with_frozen_profile_refuses_execute_without_both_authorization
     rc = runner.main([
         '--base', str(tmp_path), '--sid', '42',
         '--expect-code-version', 'code-v1', '--execute',
-        '--operator-permit-sha256', permit.permit_sha256, 'stage2.global',
+        '--operator-permit-sha256', permit.permit_sha256, 'str06.stage2.source',
     ])
 
     assert rc == 2
@@ -347,9 +347,9 @@ def test_headless_execute_claims_before_evidence_and_releases_after_steps(
     token = _write_execution_token(tmp_path / 'execution-token.json', permit)
     step = SimpleNamespace(
         label='stage2 全局事实',
-        argv=['python', '-m', 'novel.cli', 'run', 'stage2.global', '42'],
+        argv=['python', '-m', 'novel.cli', 'run', 'str06.stage2.source', '42'],
         cwd=str(REPO_ROOT), paid=True,
-        writes='stage2/global_grounding.json', note=None,
+        writes='stage2/compiled/book_extraction.json', note=None,
         executor_backend=profiles.executor_default, egress_authorized=True)
     runner.admission.open_gate(str(tmp_path), context.run_id, '42')
     monkeypatch.setenv(runner.execution_context.COMMANDER_RUN_ID_ENV, context.run_id)
@@ -377,7 +377,7 @@ def test_headless_execute_claims_before_evidence_and_releases_after_steps(
         assert coordinates == {
             'base': str(tmp_path),
             'sid': '42',
-            'node': 'stage2.global',
+            'node': 'str06.stage2.source',
             'flags': [],
         }
         order.append('revalidate')
@@ -413,7 +413,7 @@ def test_headless_execute_claims_before_evidence_and_releases_after_steps(
         '--base', str(tmp_path), '--sid', '42',
         '--expect-code-version', 'code-v1', '--execute',
         '--evidence-json', str(evidence),
-        '--operator-permit-file', str(token), 'stage2.global'])
+        '--operator-permit-file', str(token), 'str06.stage2.source'])
 
     assert rc == 0 and evidence.is_file() and len(calls) == 3
     assert order[:2] == ['revalidate', 'evidence']
@@ -438,9 +438,9 @@ def test_headless_execute_releases_claim_when_node_spawn_raises(
     permit = _execution_permit(base=str(tmp_path.resolve()))
     step = SimpleNamespace(
         label='stage2 全局事实',
-        argv=['python', '-m', 'novel.cli', 'run', 'stage2.global', '42'],
+        argv=['python', '-m', 'novel.cli', 'run', 'str06.stage2.source', '42'],
         cwd=str(REPO_ROOT), paid=True,
-        writes='stage2/global_grounding.json', note=None,
+        writes='stage2/compiled/book_extraction.json', note=None,
         executor_backend=profiles.executor_default, egress_authorized=True)
     runner.admission.open_gate(str(tmp_path), context.run_id, '42')
     monkeypatch.setenv(runner.execution_context.COMMANDER_RUN_ID_ENV, context.run_id)
@@ -468,7 +468,7 @@ def test_headless_execute_releases_claim_when_node_spawn_raises(
     assert runner.main([
         '--base', str(tmp_path), '--sid', '42',
         '--expect-code-version', 'code-v1', '--execute',
-        '--operator-permit-file', str(permit_file), 'stage2.global']) == runner.X.CRASH
+        '--operator-permit-file', str(permit_file), 'str06.stage2.source']) == runner.X.CRASH
     assert runner.admission.snapshot(
         str(tmp_path), context.run_id).active_claims == ()
 
@@ -502,7 +502,7 @@ def test_delayed_headless_run_step_after_parent_close_never_writes_or_spawns(
         runner, 'build_steps',
         lambda *_args, **_kwargs: [SimpleNamespace(
             label='stage2 全局事实', argv=['python'], cwd=str(REPO_ROOT),
-            paid=True, writes='stage2/global_grounding.json', note=None,
+            paid=True, writes='stage2/compiled/book_extraction.json', note=None,
             executor_backend=profiles.executor_default,
             egress_authorized=True)])
     monkeypatch.setattr(
@@ -516,7 +516,7 @@ def test_delayed_headless_run_step_after_parent_close_never_writes_or_spawns(
         '--base', str(tmp_path), '--sid', '42',
         '--expect-code-version', 'code-v1', '--execute',
         '--evidence-json', str(tmp_path / 'never.json'),
-        '--operator-permit-sha256', permit.permit_sha256, 'stage2.global'])
+        '--operator-permit-sha256', permit.permit_sha256, 'str06.stage2.source'])
 
     assert rc == 2
 
@@ -546,7 +546,7 @@ def test_headless_run_step_requires_a_machine_selected_execution_permit(
 
     rc = runner.main([
         '--base', str(tmp_path), '--sid', '42',
-        '--expect-code-version', 'code-v1', 'stage2.global',
+        '--expect-code-version', 'code-v1', 'str06.stage2.source',
     ])
 
     assert rc == 2
@@ -574,7 +574,7 @@ def test_run_step_refuses_an_unmintable_execution_permit_before_building(
     rc = runner.main([
         '--base', str(tmp_path), '--sid', '42',
         '--expect-code-version', 'code-v1',
-        '--operator-permit-sha256', 'c' * 64, 'stage2.global',
+        '--operator-permit-sha256', 'c' * 64, 'str06.stage2.source',
     ])
 
     assert rc == 2
@@ -598,7 +598,7 @@ def test_run_step_rejects_a_stale_permit_hash_before_building(
     rc = runner.main([
         '--base', str(tmp_path), '--sid', '42',
         '--expect-code-version', 'code-v1',
-        '--operator-permit-sha256', 'c' * 64, 'stage2.global',
+        '--operator-permit-sha256', 'c' * 64, 'str06.stage2.source',
     ])
 
     assert rc == 2
@@ -631,7 +631,7 @@ def test_run_step_stops_before_building_when_the_session_code_changed(monkeypatc
 
     rc = runner.main([
         '--base', 'E:/outputs', '--sid', '42',
-        '--expect-code-version', 'code-v1', 'stage2.global',
+        '--expect-code-version', 'code-v1', 'str06.stage2.source',
     ])
 
     assert rc == 2
@@ -644,7 +644,7 @@ def test_run_step_evidence_serializes_the_same_steps_for_preview_and_execute(
     runner = _operator_script('run_step')
     evidence = tmp_path / 'nested' / 'preview.json'
     step_argv = [
-        'python', '-B', '-m', 'novel.cli', 'run', 'stage5.write', '42',
+        'python', '-B', '-m', 'novel.cli', 'run', 'str06.stage5.body', '42',
         '--base', 'E:/outputs', '--yes',
     ]
     step = SimpleNamespace(
@@ -657,7 +657,7 @@ def test_run_step_evidence_serializes_the_same_steps_for_preview_and_execute(
         runner, 'build_steps',
         lambda *args, **kwargs: built.append((args, kwargs)) or [step])
     monkeypatch.setattr(runner.prov, 'code_version', lambda: 'code-v1')
-    permit = _execution_permit(node='stage5.write')
+    permit = _execution_permit(node='str06.stage5.body')
     permit_file = tmp_path / 'execution-permit.json'
     permit_file.write_text(permit.model_dump_json(indent=2), encoding='utf-8')
     monkeypatch.setattr(
@@ -670,7 +670,7 @@ def test_run_step_evidence_serializes_the_same_steps_for_preview_and_execute(
     common = [
         '--base', 'E:/outputs', '--sid', '42', '--expect-code-version', 'code-v1',
         '--operator-permit-file', str(permit_file),
-        'stage5.write', '--evidence-json', str(evidence),
+        'str06.stage5.body', '--evidence-json', str(evidence),
     ]
     assert runner.main(common) == 0
     preview_bytes = evidence.read_bytes()
@@ -685,13 +685,13 @@ def test_run_step_evidence_serializes_the_same_steps_for_preview_and_execute(
             'note': '随后免费复检',
         }],
     }
-    assert built[0][0] == ('stage5.write', '42', [])
+    assert built[0][0] == ('str06.stage5.body', '42', [])
     assert built[0][1]['placeholders'] is True
     assert calls == []
 
     assert runner.main([*common, '--execute']) == 0
     assert evidence.read_bytes() == preview_bytes
-    assert built[1][0] == ('stage5.write', '42', [])
+    assert built[1][0] == ('str06.stage5.body', '42', [])
     assert built[1][1]['placeholders'] is False
     assert step_argv in calls
     expected_note = 'operator_evidence_sha256=' + runner.hashlib.sha256(
@@ -708,7 +708,7 @@ def test_run_step_execute_partial_cannot_reuse_full_book_preview_evidence(
     evidence = tmp_path / 'preview.json'
 
     def step(flags):
-        argv = ['python', '-m', 'novel.cli', 'run', 'stage5.write', '42', *flags,
+        argv = ['python', '-m', 'novel.cli', 'run', 'str06.stage5.body', '42', *flags,
                 '--base', 'E:/outputs', '--yes']
         return SimpleNamespace(
             label='stage5 写作', argv=argv, cwd=str(REPO_ROOT), paid=True,
@@ -720,9 +720,9 @@ def test_run_step_execute_partial_cannot_reuse_full_book_preview_evidence(
     calls = []
     monkeypatch.setattr(runner, 'build_steps', fake_build)
     monkeypatch.setattr(runner.prov, 'code_version', lambda: 'code-v1')
-    full_permit = _execution_permit(node='stage5.write')
+    full_permit = _execution_permit(node='str06.stage5.body')
     partial_permit = _execution_permit(
-        node='stage5.write', flags=['--chapters', '1'])
+        node='str06.stage5.body', flags=['--chapters', '1'])
 
     def mint(_base, _sid, _node, flags):
         return partial_permit if flags else full_permit
@@ -737,11 +737,11 @@ def test_run_step_execute_partial_cannot_reuse_full_book_preview_evidence(
     ]
     assert runner.main([
         *common, '--operator-permit-sha256', full_permit.permit_sha256,
-        'stage5.write']) == 0
+        'str06.stage5.body']) == 0
     assert runner.main([
         *common, '--execute',
         '--operator-permit-sha256', partial_permit.permit_sha256,
-        'stage5.write', '--', '--chapters', '1']) == 2
+        'str06.stage5.body', '--', '--chapters', '1']) == 2
     assert calls == [], 'evidence hash 不同必须在打信标/执行前停止'
 
 
@@ -754,11 +754,11 @@ def test_run_step_evidence_refuses_different_existing_content_before_execution(
     evidence.write_bytes(original)
     step = SimpleNamespace(
         label='stage5 写作',
-        argv=['python', '-m', 'novel.cli', 'run', 'stage5.write', '42', '--yes'],
+        argv=['python', '-m', 'novel.cli', 'run', 'str06.stage5.body', '42', '--yes'],
         cwd=str(REPO_ROOT), paid=True, writes='stage5/ch{nn}.json', note=None)
     monkeypatch.setattr(runner, 'build_steps', lambda *_args, **_kwargs: [step])
     monkeypatch.setattr(runner.prov, 'code_version', lambda: 'code-v1')
-    permit = _execution_permit(node='stage5.write')
+    permit = _execution_permit(node='str06.stage5.body')
     monkeypatch.setattr(
         runner.operator_planner, 'permit', lambda *_args, **_kwargs: permit)
     monkeypatch.setattr(
@@ -768,7 +768,7 @@ def test_run_step_evidence_refuses_different_existing_content_before_execution(
     rc = runner.main([
         '--base', 'E:/outputs', '--sid', '42', '--expect-code-version', 'code-v1',
         '--evidence-json', str(evidence), '--execute',
-        '--operator-permit-sha256', permit.permit_sha256, 'stage5.write',
+        '--operator-permit-sha256', permit.permit_sha256, 'str06.stage5.body',
     ])
 
     assert rc == 2
@@ -786,7 +786,7 @@ def test_run_step_evidence_refuses_a_suspected_key_without_writing_or_execution(
         cwd=str(REPO_ROOT), paid=False, writes='', note=None)
     monkeypatch.setattr(runner, 'build_steps', lambda *_args, **_kwargs: [step])
     monkeypatch.setattr(runner.prov, 'code_version', lambda: 'code-v1')
-    permit = _execution_permit(node='stage5.write')
+    permit = _execution_permit(node='str06.stage5.body')
     monkeypatch.setattr(
         runner.operator_planner, 'permit', lambda *_args, **_kwargs: permit)
     monkeypatch.setattr(
@@ -796,7 +796,7 @@ def test_run_step_evidence_refuses_a_suspected_key_without_writing_or_execution(
     rc = runner.main([
         '--base', 'E:/outputs', '--sid', '42', '--expect-code-version', 'code-v1',
         '--evidence-json', str(evidence), '--execute',
-        '--operator-permit-sha256', permit.permit_sha256, 'stage5.write',
+        '--operator-permit-sha256', permit.permit_sha256, 'str06.stage5.body',
     ])
 
     assert rc == 2
