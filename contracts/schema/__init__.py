@@ -192,18 +192,27 @@ from contracts.schema.stage5 import (
     reviewer_rewrite_successor_journal_sha256,
     reviewer_rewrite_request_sha256,
 )
-from contracts.schema.stage6 import (
-    ApprovedHook, Candidate, Hook, HookApprovalResolution, HookEdit,
-    Mech,
-)
-from contracts.artifacts import (STAGE6_PREPARE, STAGE6_PREPARE_EDIT, STAGE6_PREPARE_REVIEW,
-    STAGE6_PREPARE_REVIEW_DECISIONS, STAGE6_PREPARE_COMMIT)
-from contracts.schema.stage6_prepare import (Stage6Prepare, PrepareEdit, Stage6PrepareReview,
-    PrepareDecision, PrepareMutationJournal)
+# ⚠ F8a：`contracts.schema.stage6` / `stage6_prepare` 两个模块的 import 与
+#   ARTIFACT_SPECS 挂载（八项）随 Stage6 整层退役删除（F6d 登记，F8c 删文件）。
+#   Hook 的契约形状由 `contracts/schema/str06/hook.py`（HookContext/HookReceipt）承接。
 from contracts.schema.stage7 import (
     BookTxt, CharacterPatch, ExtraSub, IdentityBaseline, NameDecision, NameMap,
     NameMapEdit, NameMapResponse, Residual, StemBaseline,
 )
+
+# ── STR-06 新链契约模型（F8a 激活；F8c 分流至正式 stageN 模块后改 import）──
+from contracts.schema.str06.source import (
+    BlueprintsArtifactV12, CharactersArtifactV4, CharactersCore,
+)
+from contracts.schema.str06.grounding import (
+    PreserveCheckpoint, ReconstructionBrief, SemanticBinding,
+)
+from contracts.schema.str06.execution import ExecutionPlan
+from contracts.schema.str06.design import BodyDesign, PresentationGraph
+from contracts.schema.str06.hook import HookContext, HookReceipt
+from contracts.schema.str06.book_ir import WriterBookIR
+from contracts.schema.str06.receipt import ChapterReceipt
+from contracts.schema.str06.naming import NameMapV5
 
 class ArtifactVersionError(ValueError):
     """一份产物不是当前注册版本。错误恒带文件与版本。
@@ -276,96 +285,40 @@ ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
     # Stage0～7 减法完成后，两本现役书统一从头重建，不做迁移或手补字段。
     STAGE1_MAIN_TEXT: ArtifactSpec(MainText, 3),
     STAGE1_HOOK_COPY: ArtifactSpec(HookCopy, 2),
-    # 联合首抽只新增来源回执；人物与知识分别编译/存储，不继承旧版本审批。
-    STAGE2_ANALYZE_RECEIPT: ArtifactSpec(AnalyzeReceipt),
-    STAGE2_ANALYZE_RECOVERY: ArtifactSpec(AnalyzeRecoveryJournal),
-    STAGE2_ANALYZE_OWNER_DRAFT_EDIT: ArtifactSpec(AnalyzeOwnerDraftEdit),
-    STAGE2_ANALYZE_CHARACTERS_DRAFT_REPAIR: ArtifactSpec(AnalyzeDraftRepairJournal),
-    STAGE2_ANALYZE_GLOBAL_DRAFT_REPAIR: ArtifactSpec(AnalyzeDraftRepairJournal),
-    # v3：lexicon Resolve + occurrence 展开；删除 role / first_chapter / aliases。
-    # 存量由 ``stage2.characters`` 整跑（付费）重建，拒读 v2，无通用迁移。
-    STAGE2_CHARACTERS: ArtifactSpec(CharacterRegistry, 3),
-    STAGE2_CHARACTERS_EDIT: ArtifactSpec(CharactersEdit, 3),
-    STAGE2_GLOBAL_GROUNDING: ArtifactSpec(KnowledgeGrounding, 7),
-    # ⚠ 人产的 Stage2 typed 订正决策集（`stage2.global --apply-edit` 吃它）——
-    #   与下面三份 `*_edit.json` 同一类：不是节点产的，但落在产物目录、
-    #   被 `store.read` 当上游边记账 ⇒ 形状同样是契约。
-    # v6 编辑四类 Core；旧输入免费重发当前模板，不迁移已退役场景事实与文案字段。
-    STAGE2_GLOBAL_EDIT: ArtifactSpec(GlobalEdit, 6),
-    # v1：canonical reviewed edit 被拒后由 ``stage2.global --apply-edit`` 免费
-    # 重建；它是 transient correction fact，不进入 NodeSpec.produces。
-    STAGE2_GLOBAL_EDIT_FAILURE: ArtifactSpec(GlobalEditFailure),
-    # v1：canonical sparse input + pending/superseded failure 的 transient WAL。
-    STAGE2_GLOBAL_EDIT_INPUT_COMMIT: ArtifactSpec(GlobalEditInputCommit, 2),
-    # v1：Stage2 Global 正式三件套的 transient prepared/committed journal；
-    # reviewed 额外绑定 failure/workpack，generic INVALID 提升可显式表达没有
-    # action-owned edit identity / formal baseline；不进入 NodeSpec.produces。
-    STAGE2_GLOBAL_EDIT_COMMIT: ArtifactSpec(GlobalEditCommit, 3),
-    # v3：随 Characters v3 派生（first_mention / name_usable / surfaces）；
-    # 缺/坏时由人物 owner 免费重验重建；拒读 v2。
-    STAGE2_BLUEPRINT_CHARACTER_PROJECTION: ArtifactSpec(
-        BlueprintCharacterProjection, 3),
-    # ⚠⚠ 2026-08-19 首次破坏：beat 区间改由**段号**算出，升 v2。
-    #   2026-08-23 第二次破坏：`BlueprintContext.architecture` 从七值收窄为
-    #   v1.1/v2/v3.1 三值，升 v3；2026-08-24 再收成 v2/v3.1 两值，升 v4。
-    #   三次都会让旧信封**读不进来**。
-    #   **存量产物由谁重建：`stage2.blueprint` 整跑（付费）**；`.INVALID` 与 `_rounds/`
-    #   一律作废，不手补字段冒充当前产地。取值与升版记录见
-    #   `contracts/invariants.py::BLUEPRINT_ARCHITECTURE`。
-    # v6 删除摘要、人物显示名、重复父键与无消费者 provenance 账；由
-    # `stage2.blueprint` 整跑（付费）重建，不迁移或手补。称名投影
-    # 只改通用 `inputs` 的运行时键，没改 BlueprintProvenance 载体形状，不升版。
-    STAGE2_CHAPTER_BLUEPRINTS: ArtifactSpec(ChapterBlueprints, 11),
-    # v1：外部 hash-bound typed request；只被 CLI/API 读取，不是 producer 产物。
-    STAGE2_BLUEPRINT_EDIT: ArtifactSpec(PlotEdit, 2),
-    # v2 删除 goal rationale；A 仍保留重构策略与预算权重，供 B/编译器消费。
-    # v3 退役整书拒稿采用及无架构来源；由新根内当前策略/单章 producer 重建。
-    # v6 随 KnowledgeLinks 退役删除 PlannerKnowledge 与 knowledge 端点；
-    # 存量由 stage4.design 重跑（付费）重建，不迁移。
-    # v7：compiler 物化 scenes[].steps[] + delivery_ref（呈现序权威）。
-    STAGE4_BLIND_CANDIDATE: ArtifactSpec(BlindCandidate, 7),
-    # v1：外部 hash-bound 完整章替换请求；只被 Stage4A CLI/API 读取，
-    # 不是 Executor 产物，也不进入正式产物展示面。
-    STAGE4_BLIND_CHAPTER_EDIT: ArtifactSpec(BlindChapterEditRequest, 3),
-    # v2 删除可由绑定舞台 present 唯一推出的 participant_refs。
-    # v6 随 KnowledgeLinks 退役删除章级证据闭包中的 knowledge_events。
-    # v7：delivery_ref 主键；可选扁平 bindings；失败三分 ambiguous/input_insufficient。
-    STAGE4_EVIDENCE_BINDING: ArtifactSpec(EvidenceBinding, 7),
-    # STR-03-S4：PlanChapters 退役；内存编译视图仍用 schema 类，不进正式 registry。
-    STAGE4_PLAN_EDIT: ArtifactSpec(PlanEdit, 7),
-    # v10 随 KnowledgeLinks 退役删除 WriterKnowledgeEvent 与逐场 knowledge_event_refs。
-    # STR-03-S4：Context 上游改为 Design+Grounding；载体形状仍为 CtxChapter 直至 Stage5 reader 切 Writer IR。
-    STAGE4_WRITER_CONTEXT: ArtifactSpec(WriterContext, 10),
-    # ⚠ 2026-08-24 单臂折平：删除 `mode`，路径改为
-    #   `stage5/chNN.json`。存量双臂稿是只读历史证据，不做迁移；
-    #   current 产物由 `stage5.write` 重建。
-    STAGE5_CHAPTER: ArtifactSpec(Chapter, 3),
-    STAGE5_REJECTED_REVISION: ArtifactSpec(RejectedRevision, 2),
-    STAGE5_REVIEWER_REWRITE_REQUEST: ArtifactSpec(ReviewerRewriteBatchRequest, 2),
-    # ⚠ Review 的章行同步删除 `mode/mode_dir`；由 `stage5.review`
-    #   零成本重建，旧报告不伪装成当前判据产地。
-    STAGE5_REVIEW: ArtifactSpec(Review, 3),
-    # ⚠ trim 两份 hash-bound 产物删除目录臂字段，改绑
-    #   canonical 章路径；新的超长章由写作/重判路径重建。
-    STAGE5_TRIM_AUDIT: ArtifactSpec(TrimAudit, 3),
-    STAGE5_TRIM_RESOLUTION: ArtifactSpec(TrimResolution, 3),
-    # ⚠ 逐层一份账（2026-08-15 裁决）：**层由文件路径承载，不进收敛键**。
-    #   两份共用一个模型——同一件事的第 N 个落点必然分家。
-    STAGE5_WONTFIX: ArtifactSpec(WontFix),
-    # v3 同槽可持续修订，attempt 按槽连续唯一；总内容预算仍属整书工作单元。
-    # 旧 v2 只在冻结代码读取，新 clean base 由 Hook producer 重建，不迁移。
-    STAGE6_PREPARE: ArtifactSpec(Stage6Prepare),
-    STAGE6_PREPARE_EDIT: ArtifactSpec(PrepareEdit),
-    STAGE6_PREPARE_REVIEW: ArtifactSpec(Stage6PrepareReview),
-    STAGE6_PREPARE_REVIEW_DECISIONS: ArtifactSpec(PrepareDecision),
-    STAGE6_PREPARE_COMMIT: ArtifactSpec(PrepareMutationJournal),
-    STAGE6_HOOK: ArtifactSpec(Hook, 5),
-    STAGE6_HOOK_EDIT: ArtifactSpec(HookEdit, 2),
-    # v2 新增判官实际看见的 Stage5 开篇成稿 `judged`绑定；
-    # 旧 v1 不能证明正文改字后语义结论仍然 current。
-    STAGE6_WONTFIX: ArtifactSpec(WontFix),
-    STAGE7_NAME_MAP: ArtifactSpec(NameMap, 4),
-    STAGE7_NAME_MAP_EDIT: ArtifactSpec(NameMapEdit),
+    # ── STR-06 新链（F8a 激活；键即相对路径，见 contracts/artifacts.py）────────
+    # 【版本口径】新链产物全部 current_version=1：三级路径是切换时新建的命名
+    #   空间，盘上没有旧信封字节可读（旧路径已整体退役，见 RETIRED_ARTIFACT_PATHS）。
+    #   形状破坏史不在信封上累加，而由两条线承载：① 模型自带 `contract_version`
+    #   字面量（Characters v4／Brief／Binding／Plan／Graph／BookIR／HookContext／
+    #   ChapterReceipt／NameMap v5，与候选产物表逐字对账）；② 候选产物表的
+    #   `schema_version` RC 标签（rc2→rc3→rc4 的批次定格）。未声明
+    #   `contract_version` 的模型（Blueprints v12、CharactersCore 抽取）按 F8
+    #   义务在本注册表登记形状（即本表条目自身），不进模型——往模型加非 exclude
+    #   字段会改 `model_dump` 字节，从而改 prompt 与已购请求身份，F7a 的历史
+    #   采用会当场失配（`_provenance` 用 exclude=True 正是为守住这条）。
+    # Stage2：源语义（str06.stage2.source／names）
+    'stage2/blueprints/chapter_blueprints.json': ArtifactSpec(BlueprintsArtifactV12, 1),
+    'stage2/compiled/book_extraction.json': ArtifactSpec(CharactersCore, 1),
+    'stage2/characters/characters.json': ArtifactSpec(CharactersArtifactV4, 1),
+    # Stage4：目标故事与确定性编译（preserve／body_design／hook_design／bind／compile）
+    'runtime/preserve_checkpoint.json': ArtifactSpec(PreserveCheckpoint, 1),
+    'stage4/grounding/reconstruction_brief.json': ArtifactSpec(ReconstructionBrief, 1),
+    'stage4/grounding/semantic_binding.json': ArtifactSpec(SemanticBinding, 1),
+    'stage4/compiled/execution_plan.json': ArtifactSpec(ExecutionPlan, 1),
+    'stage4/design/body_design.json': ArtifactSpec(BodyDesign, 1),
+    'stage4/design/presentation_graph.json': ArtifactSpec(PresentationGraph, 1),
+    'stage4/context/hook/hook.json': ArtifactSpec(HookContext, 1),
+    'stage4/ir/writer_book_ir.json': ArtifactSpec(WriterBookIR, 1),
+    # Stage5：按章正文与 Hook 回执（body／hook）
+    'stage5/hook/receipt.json': ArtifactSpec(HookReceipt, 1),
+    'stage5/acceptance/body/ch{nn}.json': ArtifactSpec(ChapterReceipt, 1),
+    # Stage7：命名与交付（naming／assemble）
+    'stage7/naming/name_map.json': ArtifactSpec(NameMapV5, 1),
+    # ⚠ 自由形态派生记录（input_snapshots／fold／guard 两份／delivery_manifest）
+    #   与三份正文（hook.txt／ch{nn}.txt／{title}_rewriting.txt）只登记路径
+    #   （`contracts/artifacts.py::ARTIFACT_PATHS`），不进本表：它们的形状由唯一
+    #   writer 的契约治理（同 `stage0/clean_text.txt` 的先例，见模块头），
+    #   信封版本对「没有第二 Shape」的记录不携带信息。
 }
 ARTIFACTS: dict[str, type[BaseModel]] = {
     key: spec.model for key, spec in ARTIFACT_SPECS.items()
@@ -373,10 +326,15 @@ ARTIFACTS: dict[str, type[BaseModel]] = {
 
 
 def artifact_regex(template: str) -> re.Pattern[str]:
-    """把注册表模板编译成语料、运行时共用的相对路径路由。"""
+    """把注册表模板编译成语料、运行时共用的相对路径路由。
+
+    `{nn}`／`{n}` = 数字占位（章序、轮次）；`{title}` = 书级占位（F8a 新链成书
+    `stage7/final/{title}_rewriting.txt`，非数字、按「这本书是谁」解析）。
+    """
     escaped = re.escape(template)
     escaped = escaped.replace(r'\{nn\}', r'\d+')
     escaped = escaped.replace(r'\{n\}', r'\d+')
+    escaped = escaped.replace(r'\{title\}', r'[^/]+')
     return re.compile(f'^{escaped}$')
 
 

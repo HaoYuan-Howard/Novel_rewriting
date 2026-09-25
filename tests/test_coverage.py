@@ -73,14 +73,12 @@ _R_SECTION_SIZES = {
     # 和运行页三事实分层；R-12 明确跨 run adoption 不属于 live restore。
     # 2026-09-06：R-5.26c 冻结 Stage4 repair/replan aggregate 跨 ended-producer
     # 的 prepared 提交补尾，不把旧 checkpoint/provider 冒充 live resume。
-    'R-0': 16, 'R-1': 16, 'R-2': 29, 'R-3': 35, 'R-4': 18,
-    # R-7.31 冻结 Reviewer 单章改写请求、执行身份和零模型恢复。
-    # 2026-09-08：完整章级 B 输入、窄过时恢复与真实输入契约审阅身份。
-    'R-5': 42, 'R-6': 12, 'R-7': 48, 'R-8': 23, 'R-9': 26,
-    # 2026-09-04：R-11.25 冻结 Commander approval 决定的内容寻址持久化与零模型重放；
-    # R-12.2a 冻结 Claude/Codex 公共严格响应 schema 与动态映射 wire。
-    # R-11.23b：受管运行范围上界与保持额度的原配置续跑。
-    'R-10': 35, 'R-11': 30, 'R-12': 15, 'R-13': 9, 'R-14': 8,
+    # F8a（STR-06 切换）：R-2～R-10 按新链改写。新链 11 个节点、判据注册表 62 条；
+    # Stage6 整层退役（R-9 只保留退役条款，0 条现役判据）；R-4 仍是跨层测量契约，
+    # 不认领节点、原样保留。旧链的 typed edit／人工闸／三候选／Judge 反哺判据随旧链退役。
+    'R-0': 16, 'R-1': 16, 'R-2': 8, 'R-3': 5, 'R-4': 18,
+    'R-5': 12, 'R-6': 11, 'R-7': 8, 'R-8': 5, 'R-9': 3,
+    'R-10': 10, 'R-11': 30, 'R-12': 15, 'R-13': 9, 'R-14': 8,
 }
 
 
@@ -423,9 +421,11 @@ def test_every_pipeline_requirement_section_is_claimed_by_a_node():
     按设计不在这张表里——它们的守卫在别处，不该靠这条测试。
     """
     claimed = {spec.section for spec in NODES.values()}
-    pipeline = {f'R-{i}' for i in range(0, 11)} - {'R-4'}
+    # F8a：R-9（Stage6）随整层退役，不再被任何节点认领；R-4 是跨层测量契约。
+    pipeline = {f'R-{i}' for i in range(0, 11)} - {'R-4', 'R-9'}
     assert pipeline <= claimed, f'这些需求节没有任何节点认领：{sorted(pipeline - claimed)}'
-    assert 'R-4' not in claimed, 'R-4 是 Stage5/6 即时测量契约，不得复活 Stage3 节点'
+    assert 'R-4' not in claimed, 'R-4 是跨层即时测量契约，不得复活 Stage3 节点'
+    assert 'R-9' not in claimed, 'R-9 是 Stage6 退役节，不得被新链节点认领'
 
 
 def test_stage_sections_is_not_the_naive_stage_number():
@@ -435,10 +435,13 @@ def test_stage_sections_is_not_the_naive_stage_number():
     那个式子只在 stage0/stage1 上对——R 节的编排轴是**节点**不是 stage。
     下面这几个字面值是分歧点，写死在这里，改坏了当场红：
     """
-    assert STAGE_SECTIONS['stage2'] == ('R-2', 'R-3'), 'stage2 有两个节点（全书 / 逐章）'
+    # F8a：新链的节映射。stage2＝源语义（R-2）＋名称结构（R-3）；stage4＝目标故事
+    # （R-5）＋确定性编译（R-6）；stage5＝按章正文（R-7）＋Hook 成文（R-8，执行序在
+    # 正文之前，故声明序为 R-8、R-7）；stage7＝命名与交付（R-10）。
+    assert STAGE_SECTIONS['stage2'] == ('R-2', 'R-3'), 'stage2 有两个节点（源语义 / 名称结构）'
     assert 'stage3' not in STAGE_SECTIONS, 'Stage3 已整层退役，R-4 不再映射到产物层'
-    assert STAGE_SECTIONS['stage4'] == ('R-5', 'R-6'), 'stage4 有两份产物（计划 / 上下文组装）'
-    assert STAGE_SECTIONS['stage5'] == ('R-7', 'R-8'), 'stage5 有两相（写作 / 全书验收）'
+    assert STAGE_SECTIONS['stage4'] == ('R-5', 'R-6'), 'stage4 有两组节点（目标故事 / 确定性编译）'
+    assert STAGE_SECTIONS['stage5'] == ('R-8', 'R-7'), 'stage5 有两个节点（Hook 成文 / 按章正文）'
     assert STAGE_SECTIONS['stage7'] == ('R-10',)
 
     naive = {s for s in STAGES if STAGE_SECTIONS[s] == ('R-' + s.removeprefix('stage'),)}
@@ -517,9 +520,10 @@ def test_every_stage_with_rules_appears_in_the_reverse_coverage_table():
 def test_the_reverse_coverage_scan_actually_finds_something():
     """守卫的守卫：正则失配时上面两条会全绿，而那正是最坏的情况。"""
     claims = _reverse_coverage_claims()
-    assert len(claims) >= 7, (
+    # F8a：Stage6 整层退役后剩六个有判据的层（stage0/1/2/4/5/7）。
+    assert len(claims) >= 6, (
         f'只从 §五 扫到 {len(claims)} 层的条数登记——正则多半失配了。'
-        f'当前七个产物层都有判据，七层都该被扫到'
+        f'当前六个产物层都有判据，六层都该被扫到'
     )
 
 

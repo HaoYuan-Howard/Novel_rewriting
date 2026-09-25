@@ -81,7 +81,7 @@ from contracts.schema.stage4 import (
     BindingConcern, BlindCandidate,
     EvidenceBinding, PlanChapters,
 )
-from contracts.schema.stage6 import Hook
+# ⚠ F8a：`contracts.schema.stage6` 的 import 随 Stage6 整层退役删除（F6d 登记）。
 from contracts.schema.stage7 import NameMap
 from contracts.schema.base import StrictModel
 from novel import paths, prov
@@ -278,9 +278,9 @@ class _ApprovalRecordV8(StrictModel):
     @model_validator(mode='after')
     def _record_is_complete_and_proved(self) -> _ApprovalRecordV8:
         if set(self.gate) != set(APPROVAL_GATES):
-            raise ValueError('gate must contain exactly s0,s1,s4,s5,s6,s7')
+            raise ValueError('gate must contain exactly ' + ','.join(APPROVAL_GATES))
         if set(self.gate_proofs) != set(APPROVAL_GATES):
-            raise ValueError('gate_proofs must contain exactly s0,s1,s4,s5,s6,s7')
+            raise ValueError('gate_proofs must contain exactly ' + ','.join(APPROVAL_GATES))
         for key, approved in self.gate.items():
             if approved != (self.gate_proofs[key] is not None):
                 raise ValueError(f'gate {key} and its current-subject proof must agree')
@@ -466,14 +466,9 @@ def _spawns(base: str | os.PathLike[str], sid: str) -> dict[str, list[ApprovalAc
     run.  The queue and the gate now ask the same resume predicate; the browser
     remains a renderer and never has to infer freshness or cost itself.
     """
-    candidates = {
-        's5': [ApprovalAction(
-            kind='stage6.hook', label='\u751f\u6210\u5f00\u7bc7\u6587\u6848')],
-        's6': [ApprovalAction(
-            kind='stage7.rename', label='\u6267\u884c\u4eba\u7269\u6539\u540d')],
-        's7': [ApprovalAction(
-            kind='stage7.assemble', label='\u62fc\u88c5\u6700\u7ec8\u6210\u4e66')],
-    }
+    # ⚠ F8a：旧链 s5→stage6.hook→s6→stage7.rename 的 spawn 链随 Stage6 与旧
+    #   Stage2/4/5/7 退役整条删除；新链无审批 spawn 面（全自动单模式）。
+    candidates: dict[str, list[ApprovalAction]] = {}
     overview = _READ_OVERVIEW.get()
     if overview is None:
         overview = state.overview(base, sid)
@@ -482,14 +477,7 @@ def _spawns(base: str | os.PathLike[str], sid: str) -> dict[str, list[ApprovalAc
                if state.resume_verdict(overview, action.kind)[0] != state.RESUME_SKIP]
         for gate, actions in candidates.items()
     }
-    from novel.stages.stage6 import prepare as prepare_stage6
-    prepare_state = prepare_stage6.view_state(_store_for(paths.resolve_novel_dir(base, sid)))
-    if prepare_state.pending_commit:
-        spawns['s5'] = [ApprovalAction(kind='stage6.prepare', label='免费补齐原准备决定', extra=['--recover-edit'])]
-    elif prepare_state.state == 'missing':
-        spawns['s5'] = [ApprovalAction(kind='stage6.prepare', label='准备原钩子事实与开篇范围')]
-    elif prepare_state.state != 'accepted':
-        spawns['s5'] = []
+    # ⚠ F8a：stage6.prepare 的 spawn 分支随 Stage6 整层退役删除（F6d 登记）。
     # Stage2 两份付费生成各自确认；机械准入通过后才发布下一步动作。
     # 浏览器只渲染服务端动作，不自行计算准入或语义结论。
     from novel.orchestrator import mechanical_admission as admission
@@ -553,9 +541,8 @@ def _view(
     structure = _structure_view(novel_dir, record)
     writing_approval = _writing_view(novel_dir, record)
     closure = _closure_view(novel_dir, record)
-    from novel.stages.stage6 import prepare as prepare_stage6
-    prepare_state = prepare_stage6.view_state(_store_for(novel_dir))
     spawns = _spawns(base, record.sid) if include_spawns else {}
+    # ⚠ F8a：`prepare` 投影随 Stage6 prepare 链退役删除（F6d 登记）。
     return ApprovalDoc(
         sid=record.sid, gate=record.gate,
         writing=record.writing,
@@ -563,7 +550,6 @@ def _view(
         structure=structure,
         writing_approval=writing_approval,
         closure=closure,
-        prepare=prepare_state,
         spawns=spawns,
     )
 
@@ -717,7 +703,7 @@ _GATE_ARTIFACTS = {
     's0': (STAGE0_REVISIONS,),
     's1': (STAGE1_MAIN_TEXT, STAGE1_HOOK_COPY),
     's4': (STAGE4_BLIND_CANDIDATE, STAGE4_EVIDENCE_BINDING),
-    's6': (STAGE6_HOOK,),
+    # ⚠ F8a：'s6' 项随 Stage6 退役删除（F6d 登记）；键位在 APPROVAL_GATES 保留为存量只读。
     's7': (STAGE7_NAME_MAP,),
 }
 
@@ -2243,12 +2229,8 @@ def _require_typed_gate_decision(store: ArtifactStore, gate: str) -> str | None:
         if audit.hard_findings:
             details = '；'.join(item.detail for item in audit.hard_findings[:6])
             raise ApprovalRequired(f'stage1 当前材料未通过 HARD 审计：{details}')
-    elif gate == 's6':
-        from novel.stages.stage6 import prepare as prepare_stage6
-        prepare_stage6.require_accepted(store)
-        hook, _ = store.read_own(Hook, STAGE6_HOOK)
-        from novel.stages.stage6 import semantic
-        semantic.require_approved_clear(store, hook)
+    # ⚠ F8a：s6 分支随 Stage6 整层退役删除（三候选定稿链不存在；F6d 登记）。
+    #   存量书的 s6 票恒 False，只读投影不再复验它。
     elif gate == 's7':
         names, _ = store.read_own(NameMap, STAGE7_NAME_MAP)
         if names.approved is None:

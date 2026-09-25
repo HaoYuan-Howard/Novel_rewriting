@@ -57,12 +57,15 @@ F3b 第二本 artifact-only smoke 撤销，不再作为本轮待办或付费点�
 
 ## 当前状态与下一步
 
-**下一批：F8（免费，可分步提交）。F7a–F7e 已全部完成：候选链接线、免费验证、
-只读监控面、退役登记与红账对账、候选冻结均于 2026-09-24～25 落地（零模型调用）。
-F8 在分支内一次切换并旧链彻底退役，main 在 F9 后合入一次。**
-F4R、F6、F5 已完成各自登记范围；F7a–F7e 已完成，F8–F9 待实施。
-当前隔离链版式为 `str06-rc4`（F5 起 Design/WriterIR/章级回执新形状；Hook、NameMap
-等未变形状契约仍为 rc3 标签）；下表是既有证据摘要，不是本次重新运行或整书质量结论。
+**下一批：F8b（免费，可分步提交）。F8a 已于 2026-09-25 完成：契约与公开规则翻转
+（候选表原样激活为唯一现役注册面、判据注册表按新坐标重建、BACKEND_CONTRACT
+R-2～R-10 与指南同批改写）全部落地，零模型调用；契约五文件与 str06 定向套件全绿。
+F8b 起翻转编排与服务面（CLI／queue／state／permit／admission／delivery／
+autostart／API／Views／前端），F8c 分流删除，F8d 最终工程验收；main 在 F9 后合入一次。**
+F4R、F6、F5、F7a–F7e 已完成各自登记范围；F8a 已完成，F8b–F8d 与 F9 待实施。
+F8a 激活后版式身份即现役契约（候选契约表身份 `04b6fb22…`，由
+`tests/test_str06_f7e_freeze.py` 钉住；激活时表内任何变化须先改冻结记录）。
+下表是既有证据摘要，不是本次重新运行或整书质量结论。
 
 | 已有阶段 | 状态与证据边界 |
 |---|---|
@@ -391,12 +394,29 @@ F5a–F5d 已闭合按章成文的契约、引擎与免费验证，F5e 已完成
     重导入 contracts.schema.str06，导致全量运行时同类双实例假红——已改子进程验证，
     复跑确认 str06 零失败）。
 - [ ] **F8 · 分支内一次切换与旧链彻底退役**（免费；可分步提交，main 在 F9 后合入一次）：
-  - [ ] **F8a · 契约与公开规则翻转**：激活 F7 已验收的 ARTIFACT_SPECS、NODES／STAGES／
-    RETIRED_*、判据注册表（M1–M6 按新坐标正式化）及 shape-break 账，NameMap v4→v5。
-    BACKEND_CONTRACT 的 R-2～R-10 按新链改写；I-40 与 `R-5.2` 改为 N 章连续非空、允许
-    跨章重构，同步 `R-5.11b`、`R-14.1` 及 R-11～R-14 中受影响条款。完成度核对当前输入、
-    freshness 与有效回执，progress 不作独立业务权威。str06.md 的现役内容分流至正式
-    schema 文档，stage6.md 退役；根、novel、web 等指南同批更新。
+  - [x] **F8a · 契约与公开规则翻转**（2026-09-25 完成，零模型调用）：
+    - 激活面：`contracts/invariants.py::NODES` 由 14 个旧链键翻为 11 个 `str06.` 节点
+      （候选表原样激活，`tests/test_str06_candidates.py` 双向对账）；`STAGES` 删 `stage6`，
+      旧 14 键进 `RETIRED_NODES` 只读解码；`contracts/artifacts.py` 旧 38 个路径键移入
+      `RETIRED_ARTIFACT_PATHS`（拒读），22 份候选产物以 rel 为键上位；
+      `ARTIFACT_SPECS` 挂 14 份模型产物（全 v1；形状史由 `contract_version` 字面量与
+      候选表 RC 标签承载，R-2.5／R-5.11b 写明）；NameMap v4→v5；`artifact_regex` 补
+      `{title}`；`PARTIAL_REWRITE_FLAGS` 空表（机制退役）；`VALUED_FLAGS` 收敛为节点级。
+    - 判据注册表：`contracts/judges/str06.py` 62 条（M1–M6、章级机械验、Hook 机械验、
+      命名残留、交付回执链；旧五张 judges 表随旧链退役）；`novel/consumption.py` 投影键
+      翻为新链 11 节点＋stage1；`_SHAPE_BREAKS` 账翻为新链口径。
+    - BACKEND_CONTRACT：R-2～R-10 按新链改写（I-40 与 `R-5.2` 翻为 N 章连续非空、
+      允许跨章重构；R-9 保留退役条款；R-5.11b／R-14.1 及 R-11～R-14 受影响条款同步；
+      §五 反向覆盖率表按 6 层重算）；`docs/schema/stage2／4／5／7.md` 重写（新链内容＋
+      判据表＋计数行），`stage6.md`／`plot_blueprint.md` 删除；根／novel／web 指南同批更新。
+    - 验收：契约 §9.5 五文件（test_coverage／test_rules_registry／test_hard_counterexamples／
+      test_docs_references／test_ingest_fixtures）全绿；str06 定向套件（candidates／freeze／
+      retirement×2／views 外功能面）全绿；test_invariants 全绿。test_hard_counterexamples
+      的 25 个新链最小会红样本逐条真跑会红（hard_cases.py 重写）。
+    - 已知过渡态（F8b 处置，非本批引入）：编排层旧链分支（inbox_projection 的 Stage6
+      workpack、execution_permit／state／nodes／cli 的旧节点特例）仍引用已退役的
+      Stage6 API 模型 ⇒ `novel.api.app` 导入链在 F8b 完成前不通；旧链测试文件的收集
+      失败按 delete／rewrite 两桶在 F8b／F8c 处置。
   - [ ] **F8b · 编排与服务翻转**：CLI runner、queue／state／operator／Agent supervisor／
     execution_permit／admission／delivery／upload_autostart 改走新节点，API／Views／前端
     路由同步激活；按登记删除 Stage6 分支。旧书只读识别为 `legacy_incompatible`，独立根

@@ -16,7 +16,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Iterator, Mapping
 
-from contracts.artifacts import ARTIFACT_PATHS
+from contracts.artifacts import RETIRED_ARTIFACT_PATHS
 from contracts.invariants import STAGES
 from contracts.schema import artifact_key
 from contracts.schema.orchestration import NovelOverview
@@ -55,13 +55,11 @@ def approval_read_snapshot(
 # 这些 schema-valid JSON 是一次性 typed request，不是 planner 的当前业务面。
 # 只有 exact node/flag 消费它时，execution permit 才按原始字节显式绑定；若在这里
 # 也全局扫描，一份尚未使用的人工草稿会让所有无关节点 token 一起过期。
+# ⚠ F8A：新链没有 typed edit 请求面（人工改稿闸随旧链退役），旧链的六个
+#   `*_edit.json` 路径键已移入 `RETIRED_ARTIFACT_PATHS`；本表现在为空集，
+#   结构保留是因为巡检仍按「显式登记的 externally-bound 请求」口径扫描。
 _EXTERNAL_REQUEST_ARTIFACTS = frozenset({
-    ARTIFACT_PATHS['stage2.global_edit'],
-    ARTIFACT_PATHS['stage2.blueprint_edit'],
-    ARTIFACT_PATHS['stage4.blind_chapter_edit'],
-    ARTIFACT_PATHS['stage4.plan_edit'],
-    ARTIFACT_PATHS['stage6.hook_edit'],
-    ARTIFACT_PATHS['stage7.name_map_edit'],
+    rel for rel in RETIRED_ARTIFACT_PATHS.values() if rel.endswith('_edit.json')
 })
 
 

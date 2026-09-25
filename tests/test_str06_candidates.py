@@ -13,7 +13,10 @@ import pytest
 from pydantic import BaseModel
 
 from contracts.artifacts import ARTIFACT_PATHS
-from contracts.invariants import NODES, WORK_UNIT_EXECUTOR_MAX_CONTENT_CALLS
+from contracts.invariants import (
+    NODES, RETIRED_NODES, RETIRED_STAGES, STAGES,
+    WORK_UNIT_EXECUTOR_MAX_CONTENT_CALLS,
+)
 from contracts.schema.str06 import (
     EPOCH_REASONS,
     RC_LABELS,
@@ -137,14 +140,35 @@ def test_every_family_has_registered_artifact():
         f'未覆盖家族：{set(STR06_PATH_FAMILIES) - covered}')
 
 
-def test_candidate_ids_never_enter_production_registries():
-    for node_id in STR06_CANDIDATE_NODES:
-        assert node_id not in NODES, '候选节点不得借用现役节点身份'
+def test_candidate_table_is_now_the_production_registry():
+    """F8A 翻转：候选表**就是**现役注册表（F7e 冻结基线原样激活）。
+
+    F7a 期本条盯的是反方向——候选 id 不得借用现役节点身份（边接边定义会绕过
+    版本检查）。切换后同一张表成为唯一现役面，守卫随之翻转：候选节点必须全部
+    在 NODES 里且 paid／produces 逐字相等；候选产物 rel 必须全部在
+    ARTIFACT_PATHS 里；旧链节点键一个都不在。
+    """
+    for node_id, spec in STR06_CANDIDATE_NODES.items():
+        assert node_id in NODES, f'候选节点未激活：{node_id}'
+        live = NODES[node_id]
+        assert live.paid == spec.paid, node_id
+        assert set(live.produces) == set(spec.produces), node_id
+        assert live.lifecycle.unit_kind == spec.lifecycle.unit_kind, node_id
+        assert (live.lifecycle.executor_content_limit
+                == spec.lifecycle.executor_content_limit), node_id
     production_rels = set(ARTIFACT_PATHS.values())
     for rel in STR06_CANDIDATE_ARTIFACTS:
-        assert rel not in production_rels
-    for family in STR06_PATH_FAMILIES:
-        assert family not in ARTIFACT_PATHS
+        assert rel in production_rels, f'候选产物未激活：{rel}'
+    # 旧链 14 个节点键必须已经不在现役表（移入 RETIRED_NODES 只读解码）。
+    for retired in ('stage2.analyze', 'stage2.characters', 'stage2.global',
+                    'stage2.blueprint', 'stage4.design', 'stage4.plan',
+                    'stage4.context', 'stage5.write', 'stage5.review',
+                    'stage6.prepare', 'stage6.hook', 'stage6.approve',
+                    'stage7.rename'):
+        assert retired not in NODES, f'旧链节点键仍在现役表：{retired}'
+        assert retired in RETIRED_NODES, f'旧链节点键未登记只读解码：{retired}'
+    # Stage6 整层不在现役 stage 面。
+    assert 'stage6' not in STAGES and 'stage6' in RETIRED_STAGES
 
 
 def test_candidate_node_lookup_refuses_unknown():

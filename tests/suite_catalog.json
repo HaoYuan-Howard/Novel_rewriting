@@ -30,9 +30,6 @@
       "stage5"
     ],
     "stage5": [
-      "stage6"
-    ],
-    "stage6": [
       "stage7"
     ],
     "stage7": []
@@ -120,7 +117,6 @@
         "stage2",
         "stage4",
         "stage5",
-        "stage6",
         "stage7"
       ]
     },
@@ -147,7 +143,6 @@
         "stage2",
         "stage4",
         "stage5",
-        "stage6",
         "stage7"
       ]
     },
@@ -167,7 +162,6 @@
         "stage2",
         "stage4",
         "stage5",
-        "stage6",
         "stage7"
       ]
     },
@@ -183,7 +177,6 @@
         "stage2",
         "stage4",
         "stage5",
-        "stage6",
         "stage7"
       ]
     },
@@ -195,7 +188,6 @@
         "stage2",
         "stage4",
         "stage5",
-        "stage6",
         "stage7"
       ]
     },
@@ -207,7 +199,6 @@
         "stage2",
         "stage4",
         "stage5",
-        "stage6",
         "stage7"
       ]
     },
@@ -223,7 +214,6 @@
         "stage2",
         "stage4",
         "stage5",
-        "stage6",
         "stage7"
       ]
     },
@@ -239,7 +229,6 @@
         "stage2",
         "stage4",
         "stage5",
-        "stage6",
         "stage7"
       ]
     },
@@ -251,7 +240,6 @@
         "stage2",
         "stage4",
         "stage5",
-        "stage6",
         "stage7"
       ]
     },
@@ -274,8 +262,7 @@
     "tests/test_apply_edit.py": {
       "layer": "unit_contract",
       "stages": [
-        "stage4",
-        "stage6"
+        "stage4"
       ]
     },
     "tests/test_approval_cli.py": {
@@ -286,7 +273,6 @@
         "stage2",
         "stage4",
         "stage5",
-        "stage6",
         "stage7"
       ]
     },
@@ -298,7 +284,6 @@
         "stage2",
         "stage4",
         "stage5",
-        "stage6",
         "stage7"
       ]
     },
@@ -310,7 +295,6 @@
         "stage2",
         "stage4",
         "stage5",
-        "stage6",
         "stage7"
       ]
     },
@@ -322,7 +306,6 @@
         "stage2",
         "stage4",
         "stage5",
-        "stage6",
         "stage7"
       ]
     },
@@ -334,7 +317,6 @@
         "stage2",
         "stage4",
         "stage5",
-        "stage6",
         "stage7"
       ]
     },
@@ -415,7 +397,6 @@
         "stage2",
         "stage4",
         "stage5",
-        "stage6",
         "stage7"
       ]
     },
@@ -435,14 +416,12 @@
         "stage2",
         "stage4",
         "stage5",
-        "stage6",
         "stage7"
       ]
     },
     "tests/test_final_approval_workpacks.py": {
       "layer": "unit_contract",
       "stages": [
-        "stage6",
         "stage7"
       ]
     },
@@ -480,7 +459,6 @@
         "stage2",
         "stage4",
         "stage5",
-        "stage6",
         "stage7"
       ]
     },
@@ -538,7 +516,6 @@
         "stage2",
         "stage4",
         "stage5",
-        "stage6",
         "stage7"
       ]
     },
@@ -550,7 +527,6 @@
         "stage2",
         "stage4",
         "stage5",
-        "stage6",
         "stage7"
       ]
     },
@@ -574,7 +550,6 @@
         "stage2",
         "stage4",
         "stage5",
-        "stage6",
         "stage7"
       ]
     },
@@ -586,7 +561,6 @@
         "stage2",
         "stage4",
         "stage5",
-        "stage6",
         "stage7"
       ]
     },
@@ -667,7 +641,6 @@
         "stage2",
         "stage4",
         "stage5",
-        "stage6",
         "stage7"
       ]
     },
@@ -740,7 +713,6 @@
         "stage2",
         "stage4",
         "stage5",
-        "stage6",
         "stage7"
       ]
     },
@@ -752,7 +724,6 @@
         "stage2",
         "stage4",
         "stage5",
-        "stage6",
         "stage7"
       ]
     },
@@ -764,7 +735,6 @@
         "stage2",
         "stage4",
         "stage5",
-        "stage6",
         "stage7"
       ]
     },
@@ -796,7 +766,6 @@
         "stage2",
         "stage4",
         "stage5",
-        "stage6",
         "stage7"
       ]
     },
@@ -819,8 +788,7 @@
         "stage1",
         "stage2",
         "stage4",
-        "stage5",
-        "stage6"
+        "stage5"
       ]
     },
     "tests/test_stage01.py": {
@@ -1296,9 +1264,7 @@
     },
     "tests/test_stage6.py": {
       "layer": "unit_contract",
-      "stages": [
-        "stage6"
-      ]
+      "stages": []
     },
     "tests/test_stage6_core_consumption.py": {
       "cases": {
@@ -1307,75 +1273,54 @@
       },
       "layer": "unit_contract",
       "stages": [
-        "stage5",
-        "stage6"
+        "stage5"
       ]
     },
     "tests/test_stage6_hook_content_budget.py": {
       "layer": "unit_contract",
-      "stages": [
-        "stage6"
-      ]
+      "stages": []
     },
     "tests/test_stage6_legacy_delivery_recovery.py": {
       "layer": "unit_contract",
-      "stages": [
-        "stage6"
-      ]
+      "stages": []
     },
     "tests/test_stage6_prepare.py": {
       "cases": {
         "test_prepare_schema_explicit_empty_facts_and_strict_source_refs": "unit_contract"
       },
       "layer": "stage",
-      "stages": [
-        "stage6"
-      ]
+      "stages": []
     },
     "tests/test_stage6_prepare_http.py": {
       "layer": "stage",
-      "stages": [
-        "stage6"
-      ]
+      "stages": []
     },
     "tests/test_stage6_prepare_workflow.py": {
       "cases": {
         "test_pending_decision_exposes_exact_free_recovery_and_preserves_budget": "unit_contract"
       },
       "layer": "stage",
-      "stages": [
-        "stage6"
-      ]
+      "stages": []
     },
     "tests/test_stage6_prepared_cli.py": {
       "layer": "unit_contract",
-      "stages": [
-        "stage6"
-      ]
+      "stages": []
     },
     "tests/test_stage6_prompt_experiments.py": {
       "layer": "unit_contract",
-      "stages": [
-        "stage6"
-      ]
+      "stages": []
     },
     "tests/test_stage6_quality_contract.py": {
       "layer": "unit_contract",
-      "stages": [
-        "stage6"
-      ]
+      "stages": []
     },
     "tests/test_stage6_auto_approve.py": {
       "layer": "unit_contract",
-      "stages": [
-        "stage6"
-      ]
+      "stages": []
     },
     "tests/test_stage6_retry.py": {
       "layer": "unit_contract",
-      "stages": [
-        "stage6"
-      ]
+      "stages": []
     },
     "tests/test_stage7.py": {
       "layer": "unit_contract",
@@ -1413,7 +1358,6 @@
       "layer": "stage",
       "stages": [
         "stage5",
-        "stage6",
         "stage7"
       ]
     },
@@ -1477,9 +1421,7 @@
     },
     "tests/test_views_stage6.py": {
       "layer": "unit_contract",
-      "stages": [
-        "stage6"
-      ]
+      "stages": []
     },
     "tests/test_views_stage7.py": {
       "layer": "unit_contract",
@@ -1499,7 +1441,6 @@
         "stage2",
         "stage4",
         "stage5",
-        "stage6",
         "stage7"
       ]
     },
@@ -1523,7 +1464,6 @@
         "stage2",
         "stage4",
         "stage5",
-        "stage6",
         "stage7"
       ]
     },

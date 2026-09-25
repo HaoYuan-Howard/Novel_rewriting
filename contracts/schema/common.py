@@ -22,7 +22,22 @@ from contracts.schema.base import Fp10, FrozenModel, Sha1, StrictModel
 
 Severity = Literal[SEVERITY]
 Owner = Literal[OWNER]
-PartialRewrite = Literal[PARTIAL_REWRITE_FLAGS]
+#: 「0 成本路径局部改写过这份产物」那条路的 flag 取值面。
+#: ⚠ F8a：旧链的局部改写旗标（`--recheck`／`--renormalize`／`--identity`／
+#: `--apply-edit`／`--adopt-residual`）随旧链整体退役，`PARTIAL_REWRITE_FLAGS`
+#: 现为空——新链没有「同一份产物被 0 成本路部分改写」的形状：免费恢复入口
+#: （saved_response／historical_adoption／owner_patch／deterministic_replay）
+#   全部整份重写本节点产物，写效应即该节点的 `produces`。
+#: 空 `Literal[()]` 不是合法类型 ⇒ 落到 `Never`：这个字段**结构上只能是 None**。
+#: 保留字段而不删，是因为 `Provenance` 是新旧链共用的载体（I-05），删字段会
+#: 改动所有存量产物的解码面；让它在类型上不可达才是诚实的「这条路没有了」。
+if PARTIAL_REWRITE_FLAGS:
+    PartialRewrite = Literal[PARTIAL_REWRITE_FLAGS]
+else:
+    # 空取值面 ⇒ 字段只能是 None。`Literal[None]` 是合法类型且与 `| None`
+    # 可组合（裸 `None` 不能做 `|` 运算），pydantic 只收 None——这比 `Literal[()]`
+    # （非法类型）与 `str`（类型上放开）都诚实。
+    PartialRewrite = Literal[None]
 Sha256 = Annotated[str, StringConstraints(pattern=r'^[0-9a-f]{64}$')]
 
 #: `promoted()` 的返回类型。**`model_copy` 保留具体类**，于是

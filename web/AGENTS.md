@@ -31,10 +31,13 @@ npm run build                       # web/dist，供后端同源托管
 
 ## 产品边界
 
-- 产品现役为**全自动单模式**（确定性 RunSupervisor 推进）+ Stage6 文案三候选免费改选。
-  上传前确认付费/正文外发授权与 profiles，并带客户端幂等键自动开跑。Stage 页只读监控
-  （除 Stage6 `approveHook` 改选外不提供人工编辑/批准写按钮）；人工逐 Stage 模式已退役。
-  工程运维手册供维护者查故障，不是普通用户的跑书教程。
+- 产品现役为**全自动单模式**（确定性 orchestrator 推进）。F8a 起现役链是 11 个
+  `str06.` 节点（Stage2 源语义与名称结构 → Stage4 目标故事与确定性编译 → Stage5
+  按章正文与 Hook → Stage7 命名与交付）；Stage6 整层与三候选改选面已退役，
+  `/n/:sid/stage6` 路由与 `approveHook` 写面随 F8b 删除。上传前确认付费/正文外发
+  授权与 profiles，并带客户端幂等键自动开跑。Stage 页只读监控，不提供任何人工
+  编辑/批准写按钮；人工逐 Stage 模式已退役。工程运维手册供维护者查故障，不是普通
+  用户的跑书教程。
 - **术语**：界面与类型里的 Agent / `/agent/*` 仅指**整书代跑编排**；模型侧配置文案为
   「模型执行配置」（wire `kind:"legacy"`）。不要把 Agent 写成 CLI driver / session。
 - 最终交付是小说文件，运行统计与披露在前端读取权威账；不要求生成或阅读 Markdown 终审报告。
@@ -81,7 +84,7 @@ npm run build                       # web/dist，供后端同源托管
 | `/` | 语料库、顺序批量上传（上传前授权并自动开跑）、逐书状态与批量代跑；维护/回收站入口。书名为打开入口，筛选在页头，卡片保持紧凑 |
 | `/settings` | 当前 output base 的默认模型执行配置与节点覆盖偏好；只消费 capability，保存/清空走 revision CAS |
 | `/n/:sid` | 重定向到 Stage0；已有产物可从左栏直达对应层 |
-| `/n/:sid/run` | 全链进度、Blueprint 生成/正式提交/有效章审/跨章状态、Stage6 改选重建状态、事件、工作单元耗时/token 与累计额度；可选择本次运行或跨运行累计，展开尝试和所属日志；节点顺序、续跑前沿、下一处理者和可用动作全部来自后端 |
+| `/n/:sid/run` | 全链进度（11 个 `str06.` 节点顺序）、事件、工作单元耗时/token 与累计额度；可选择本次运行或跨运行累计，展开尝试和所属日志；节点顺序、续跑前沿、下一处理者和可用动作全部来自后端 |
 | `/n/:sid/stage0` | 整本剔除只读监控；完整原文默认展开。上传已自动开跑时通常不需在此发起作业 |
 | `/n/:sid/stage1` | 校验结论与切分只读展示；章节索引、切分正文和一次开篇文案，按后端诊断标出重号/缺号/倒退 |
 | `/n/:sid/read/:o` | 原文与完整剧情只读对照；展示节点、状态、约束与证据 |
@@ -89,9 +92,8 @@ npm run build                       # web/dist，供后端同源托管
 | `/n/:sid/stage4/:o` | A/B 结构产物只读监控；展示主体身份、全章 retain/reconstruct、声明/复算变化及 concerns |
 | `/n/:sid/stage5/:o` | canonical 正文、材料、finding 的只读监控；`materials=null` 表示材料缺席，不画假任务书 |
 | `/n/:sid/inbox` | 全书待办与对应只读入口；不建立第二套编辑面或校验结论 |
-| `/n/:sid/stage6` | 文案准备只读状态；三候选展示与免费改选（`approveHook`）；终审 workpack 展开原钩子、接受主张和完整重写正文 |
 | `/n/:sid/stage7`、`/n/:sid/stage7/:o` | 改名表、漏网候选、成书状态与逐章替换对照（只读；残留采纳由流水线自动完成） |
-| `/str06/:candidate` | STR-06 候选链只读监控（F7d）：隔离候选根的 workflow 状态、节点盘面事实、ledger 成本、Characters／Blueprint／Design／WriterBookIR 导航、章正文与章回执、Hook、NameMap 与成书 manifest。顶部常驻「候选链 · 未切换」标注；F8 激活前不进左导航、无 check 面板、无写按钮 |
+| `/str06/:candidate` | STR-06 链只读监控（F7d 上线；F8a 契约翻转后即现役链盘面）：workflow 状态、节点盘面事实、ledger 成本、Characters／Blueprint／Design／WriterBookIR 导航、章正文与章回执、Hook、NameMap 与成书 manifest。不进左导航、无 check 面板、无写按钮 |
 
 `stage5` 无章号时转第 1 章，非法章序也走同一守卫。旧 `review/:o` 与 `check` 仅重定向至 `stage5/:o`
 和 `inbox`；不恢复独立 review/check 屏或 Stage3。
@@ -107,12 +109,13 @@ npm run build                       # web/dist，供后端同源托管
 - 删除项目需完整 sid 二次确认，先移入可恢复回收站；运行/排队中的书由后端拒绝，成功后刷新语料库。
   retention/restore 先 preview 后 apply，展示完整计划与扫描分母；表单变化使旧预览失效，apply 原样提交计划并显式确认。
   TTL 留空是 null，不解释为 0；浏览器和 HTTP 进程不直接修改产物目录。
-- 运行页消费 `resume_frontier`、`work_units`、`allowed_controls`、Stage6 rebuild 状态和恢复投影。显示实际生成、机械处理、历史采用、
+- 运行页消费 `resume_frontier`、`work_units`、`allowed_controls` 和恢复投影。显示实际生成、机械处理、历史采用、
   决定继承及基础/追加/累计额度；缺失保持 unknown，空单元列表表示尚无登记，界面不计算剩余额度。
   暂停、恢复、熄火与追加额度分别走对应后端入口；不再提供「按原配置继续」的 human-gate 续跑对话框。
-- Stage 页只读监控（除 Stage6 三候选改选）。不要在 Stage 屏恢复人工编辑、批准闸门、补录验收链或改稿提交按钮。
-- Stage6 改选走 `approveHook`（candidate set version / review token）；改选后进度屏展示 rebuild `pending`/`published`。
-  Stage6/7 的正式 typed 决定由后端 current 证明公开；不因来自 CLI/Agent 就要求再补 HTTP 盖章。
+- Stage 页只读监控。不要在 Stage 屏恢复人工编辑、批准闸门、补录验收链或改稿提交按钮；
+  Stage6 三候选改选面已随 Stage6 整层退役（F8a），`approveHook` 写面随 F8b 删除。
+  现役判据（Guard M1–M6、章级机械验、命名残留、交付回执链）的结论由后端公开，
+  不因来自 CLI/Agent 就要求再补 HTTP 盖章。
 - Stage7 下载入口消费后端 delivery；文件存在不等于可交付。运行统计区分运行历时、模型活跃区间并集
   和尝试累计耗时；只有部分已知时展示小计与缺失分母。缓存、历史采用与实际网络调用分开，reasoning 不重复加总。
 

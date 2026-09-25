@@ -65,42 +65,6 @@ def test_schema_model_map_is_derived_from_the_current_registry():
 #: 「盘上的旧字节从此读不进来」，而本仓**没有迁移机制** ⇒ 每一次都必须同批回答
 #: 「存量产物由谁重建」。答不出来的破坏不许落。
 _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
-    'stage2/characters.json': (
-        3,
-        '两次破坏。v2（2026-08-25）：去除逐次 address；唯一 aliases/'
-        'identity_revealed_from、首次身份与共享证据表，正式 ID 由代码分配。'
-        'v3（2026-09-19 lexicon Resolve M1）：身份、lexicon 归属与出现绑定收成 '
-        'CharacterRegistry——surface_bindings 一条词表规则由 compiler 展开为逐字面 '
-        'mentions；删除自由文本 role、first_chapter 与逐人物 aliases；'
-        'first_mention/name_usable/name_distinctiveness/book-level surfaces 全部改由 '
-        'compiler 派生，不得由模型直填',
-        '新空根由 stage2.characters 走 Extract→Resolve 直连（付费）重建，v2 拒读、'
-        '无通用迁移；analyze 联合首抽不再写人物，存量 CharactersResponse 草稿只作'
-        '历史解码，不得据此物化 v3；当前 v3 的 typed 编辑/免费 revalidate 按本 owner 恢复',
-    ),
-    'stage2/characters_edit.json': (
-        3,
-        '两次破坏。v2：编辑人物新契约与共享证据引用；已有主体绑定原 SHA/正式 ID，'
-        '新增只交局部 cN，代码按现存及已退役 ID 冻结 added_character_ids。'
-        'v3：operations 换 CharacterAdd/CharacterReplace/CharacterDelete/MentionRebind '
-        '判别联合（rebind 按 mention_ids 裁 occurrence 归属），source_sha256 绑定当前 '
-        'v3 registry 整体 SHA',
-        '人物 owner 免费重发当前 v3 编辑模板，人工依据原文重填当前形状；旧 v2 '
-        '编辑不迁移、不改版本号追认',
-    ),
-    'stage2/blueprint_character_projection.json': (
-        3,
-        '两次破坏。v2：去除称呼 occurrence，按独立人物登记投影唯一称谓。'
-        'v3：随 Characters v3 派生——past_attested_surfaces/visible_character_refs/'
-        'character_bindings 按 first_mention、name_usable 与 surfaces 词表计算，'
-        '含已到 first_mention 但登记名尚未字面出现的实体',
-        'stage2.characters 免费 --revalidate 按当前 v3 人物重建投影；旧产物须先完成 '
-        'v3 人物生产，v2 拒读',
-    ),
-    'stage2/global_edit_input_commit.json': (
-        2, '冻结 v6 Core sparse 编辑输入及原问题；退役状态/知情/源钩子字段',
-        '旧 owner 在旧代码补尾；当前 v6 typed 编辑由 Global 免费生成新的输入提交记录',
-    ),
     'stage1/main_text.json': (
         3,
         '两次破坏。v2（2026-08-22）：`section_id` 删除，`source_chapter_label: str` '
@@ -123,211 +87,21 @@ _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
         '2026-08-22 阶段 B：恒 `sec_0001` 的 `section_id` 删除，产物收成 `{text}`',
         '同 `stage1/main_text.json`：`stage1.partition` 免费重跑',
     ),
-    'stage2/global_grounding.json': (
-        7,
-        '两次破坏。v2（2026-08-23）secret 时间线三刀：① `setup_chapters: list[int]` 换成 `setup` '
-        '判别联合（`{"kind":"cold"}` / `{"kind":"foreshadowed","chapters":[…]}`）'
-        '——v1 的 `[]` 同时表示「声明冷揭示」与「模型压根没想过」，而这一格是两道'
-        '下发闸门的前件；② `reader_reveal_events[]` 加 `kind: first|confirm`，'
-        '载体强制恰有一条 `first`——旧的下发闸门按「任意一次揭示 ≤ 本章」判，'
-        '分两次揭示的秘密在第一次之后就把整份 `fact` 泄给了写前面章节的写手；'
-        '③ 新增可空 `group_id`，复合真相拆成多条后归组用。'
-        'v3（2026-08-24）：① relation 新增 public/via_secret 显式 visibility；'
-        '② secret 的无时间 `character_known_by` 换成 CharacterRef/GroupRef + known_from_chapter '
-        '的 `knowledge_events`；③ role/fate、relation predicate、setting、rule desc、secret fact、'
-        'knowledge event、arc trajectory 新增代码按“指定章 + 短 locator”唯一回取的正式证据，'
-        '失败态 source=null；'
-        '④ `valid_to_chapter` 改名 `valid_through_chapter`，把原本即包含式的端点语义写进字段名。'
-        'v4（2026-08-26）删除 SourceSpan.normalized/recovery、secret group_id/确认事件，'
-        '把唯一消费的首次揭示收成 first_reveal_chapter 标量，并删除 arc dimension/change_type。'
-        'v5 删除文学 arc，新增源文案事实及显式开篇范围，正式读取 HookCopy；v6 静态人物拆至独立 CharacterRegistry；'
-        'v7 仅四类长期事实、独立共享证据表与 effective/revealed 双时间轴，删除动态状态、知识事件和源文案',
-        '旧根保留原版本来源并只配对冻结旧代码恢复；新空根由 stage2.analyze 一次付费联合首抽，'
-        '两侧独立编译。已有当前人物时由 stage2.global 独立生产；当前 v7 的 INVALID/已购草稿/'
-        'prepared 走本 owner 免费恢复。旧 Global 与旧批准不迁移，当前审阅重新 pending；'
-        '不能把单侧修复变成重买联合首抽。',
-    ),
-    'stage2/global_edit.json': (
-        6,
-        '2026-08-24：secret patch/replacement 从 `character_known_by` 换成带 locator 的 '
-        '`knowledge_events`，并新增 relation visibility、setting、fate、arc 与全部自由事实证据的 '
-        'typed patch/replacement；旧 v1 决策文件不能表达知情时点或证据',
-        'v3（2026-08-26）随 GlobalGrounding v4 删除同批冗余字段；v4 删除 arc 修改协议，'
-        '新增带 locator 的 source_blurb_replace；v5 删除静态人物写权限，仅保留必要状态、知识与源文案订正。'
-        'v6 仅编辑四类Core与共享证据引用。它是人产决策集，不由模型重建：人工用 --emit-edit-template 免费取得当前 v6 模板并重写书内 JSON。'
-        '不根据旧 known_by 猜 known_from_chapter，不为旧 claim 伪造 locator；盘上 v1 字节原样保留'
-        '只能作为历史输入，当前运行时关闭式拒读',
-    ),
-    'stage2/global_edit_commit.json': (
-        3,
-        '免费知识写回回执冻结 Global v7 当前主体与人物引用、Core v3审阅及当前投影',
-        '旧回执与原代码配对恢复；新 v6 typed 输入由 stage2.global --apply-edit 免费生成 v3 回执，不迁移旧提交',
-    ),
-    'stage2/chapter_blueprints.json': (
-        11,
-        '历次破坏。2026-08-19 bounded-fidelity-v2 → v3：beat 的区间改由段号'
-        '算出，SourceSpan.recovery 去掉 lcs，BlueprintProvenance.verbatim_recovered '
-        '删除。2026-08-23：BlueprintContext.architecture 从七值收窄为 '
-        'extraction-ir-v1.1 / v2 / v3.1 三值，退役 bounded-fidelity-v3、v1、v2.1、v3。'
-        '2026-08-24：再收窄为 v2 / v3.1 两值，退役 v1.1。2026-08-25：删除复合 '
-        '`Beat.event` 事实源，新增章级 `chapter_function`、`fact_atoms`、`causal_edges`、'
-        '`entry_state_refs` 与 `ending_state_refs`；hinge 新增稳定 id。2026-08-26 v6 删除'
-        'summary、present_names、叙述显示名、hinge 重复父键与无消费者 provenance 账。'
-        '2026-09-01 v7 新增 typed narrative_relations（故事时序、回应、必须同场、观察），'
-        '并把 hard/review 分级写入正式关系契约；v8 新增材料 source_fact_refs、对白语义与有剧情依据的字面例外；'
-        '2026-09-12 v9 切换 plot-blueprint-v1：删除全量 fact_atoms/hinges 及事实关系网，'
-        '完整剧情只保存在 beat.content；新增统一 EvidenceAnchor、稀疏状态、约束和显式状态端点。'
-        'v10 在参与人、持有者、观察者、叙述者及关系端点统一 ActorRef；新增共享 actor_bindings '
-        '及只表达关系呈现的 relation_uses，不按 char_id 合并不同表面身份。'
-        '2026-09-18 v11（STR-03-S2-BP）：无损结构压缩——source_contexts 稀疏编码（保留列表基数与'
-        'present/time_layer 三态语义）、书级 narration_default、统一 evidence 解析入口；'
-        'story_before 仅去完全重复登记；public_state_ref 保留',
-        '旧根仅配对冻结旧代码恢复，不迁移旧事实。新空根由 stage2.blueprint '
-        '在既有付费及外发授权下按章重建 v11；v10 正式文件/INVALID/检查点拒读，不能冒充 v11；'
-        '当前 v11 已购结果依其正式身份免费重算证据坐标（revalidate/renormalize），不改语义',
-    ),
-    'stage2/blueprint_edit.json': (
-        2,
-        'PlotEdit 与 Blueprint v10 同步：完整章含 ActorRef/actor_bindings/relation_uses，'
-        '身份操作新增 actor_bindings 的保留/替换/新增；请求只携 bpe2 opaque token，代码编译正式 ID',
-        '由 stage2.blueprint --emit-edit-template 免费取得当前完整章模板，人工依据当前材料填写，'
-        '--apply-edit 同尺编译并保存身份历史及待审义务；旧 v1 不改版本号继承 token 或审批',
-    ),
-    'stage4/plan_edit.json': (
-        7,
-        '三次破坏：v2 改为语义契约 + scenes；v3 与正式计划同步新增章级结构决定及代码复算变化；'
-        'v4 与正式计划同步删除展示/过程/派生字段；2026-09-12 v5 与正式计划同步采用 '
-        'BeatPlacement、presentation deliveries 和明确端点，删除逐事实编辑面；v6 完整章替换随 Plan v6 '
-        '保留人物与关系端点的表面身份，不能把旧裸 char_id 当作已确认呈现',
-        '旧编辑集随旧根/旧代码恢复，不升级版本号复用；新根需要编辑时按当前 PlanEdit v7 '
-        '重新填写，重新核验真实依赖与受影响的 Stage4 接受',
-    ),
-    'stage4/blind_candidate.json': (
-        7,
-        'v2 删除三个 goal 的 rationale；v3 删除退役整书拒稿采用来源，'
-        '策略/单章架构改为必填，旧候选快照不得冒充当前 unit lineage；2026-09-12 v4 '
-        '规划完整剧情及呈现分配，使用人物语义目录与 opaque alias，退役事实 alias 和逐事实落场。'
-        'v5 participant_aliases 值为 ActorRef；subject_aliases 保留人物及关系两端呈现，'
-        '同实体不同表面身份分别映射，规划知识端点可指向全部实际主体 alias。'
-        'v6（2026-09）随 KnowledgeLinks 退役删除逐场知识事件分配与传播许可，'
-        '呈现分配只绑 ActorRef 与 EvidenceAnchor。'
-        'v7（STR-03-S4）compiler 物化 scenes[].steps[] 与 delivery_ref（呈现序权威）；'
-        '正式产物可携 delivery_focus；plan_chapters 正式读写退役',
-        '旧 v1～v6 仅配对旧根/旧代码恢复；新 clean root 由 stage4.design 重建 v7；'
-        'Context 改消费 Design+Grounding，章集分母改读本文件',
-    ),
-    'stage4/blind_chapter_edit.json': (
-        3,
-        '2026-09-12 单章盲设计编辑随 BlindCandidate v4 切换为本章 opaque alias、'
-        '完整节点 placement、分场指令和必要端点；旧逐事实编辑无法表达这一映射。'
-        'v3 随 BlindCandidate v5 使用表面身份的 opaque alias 与完整主体/知识端点，不允许回退登记名',
-        '旧 v1/v2 编辑留在配对旧根/旧代码中，不自动转成新的呈现指令；新根基于当前章级设计工作包 '
-        '重新填写 v3，由 stage4.design 免费完整章编辑编译，设计审阅仍核验当前主体、局部 alias 及依赖身份',
-    ),
-    'stage4/evidence_binding.json': (
-        7,
-        '2026-08-26 v2 删除 participant_refs；2026-08-28 v3 把模型 infeasible '
-        '降为待核证主张，新增非阻断 binding_concerns、代码铸造的 '
-        'infeasibility_proof 与 human/llm 判别来源账；2026-09-08 v4 为按章 legacy B '
-        '新增 work_unit_response 来源，绑定原内容轮、请求和回答 SHA；'
-        '删除整书及缺省架构兼容，章模型必须有明确来源，正式绑定必须完整覆盖章集；'
-        '2026-09-12 v5 按已接受章级设计绑定 delivery 的 EvidenceAnchor 和有据舞台，'
-        '不修改 A 的呈现分配、顺序、目标及端点，也不把证据重叠当作剧情重复。'
-        'v6（2026-09）随 KnowledgeLinks 退役只绑定现存主体与共享锚点，无知识事件端点。'
-        'v7（STR-03-S4）绑定键为 delivery_ref；可选扁平 bindings；'
-        'status 增加 ambiguous / input_insufficient（缺上游不触发 Design 重采）',
-        '旧 base 使用冻结旧代码保留证据；当前 producer 只在新 clean base 从原始材料及 '
-        '当前 A 后由 stage4.plan 重建；正式下游只消费 bound 结果',
-    ),
-    'stage4/writer_context.json': (
-        10,
-        '2026-08-25 删除写手面的 `CtxBeat.events[]`，新增 chapter_rewrite_brief、'
-        '四类 delta 在内的人话 semantic_contract 与可直接执行的 CtxScene；v3 随 Stage2 '
-        'ArcTrack 删除 dimension/change_type；2026-08-26 v4 删除 world_facts、逐场源字数/参与者、'
-        '秘密与规则内部 id、must_not_reveal，并把 characters 改为带 char_id 的数组；v5 删除无消费必要的 facts.arc；'
-        'v6 以独立 KnowledgeLinks 生成场景 knowledge 与披露许可；章首秘密仅已知、未开放设定显式为 null；'
-        'v7 删除同号源章、总预算、源字数副本，运行时从章序、场景预算与 Stage1 唯一派生；'
-        '2026-09-12 v8 改为唯一章级剧情目录、场景 delivery、稀疏状态和逐场知识表达许可，'
-        '不重复展开父节点正文，不宣称章级写作请求物理隔离后场材料。v9 全部人物位置使用独立 '
-        'opaque actor_ref，characters/global_subjects 提供公开语义而不下发反向 char_id；'
-        '身份合并及 role 按场景许可消费，历史事实保留有效窗口及披露边界',
-        '旧 Context 只在配对旧根/旧代码恢复；新根由 stage4.context 从 Characters v2、Global v7、'
-        'Blueprint v10 及已接受 Plan v7 免费重建 v10。不手补旧 Context，下游请求、检查和恢复按实际消费身份判 stale',
-    ),
-    'stage5/ch{nn}.json': (
-        3,
-        '2026-08-24 Stage5 单臂折平：删除 `mode`，正式稿从 `stage5/{mode}/chNN.json` 收成唯一 `stage5/chNN.json` v3 删除来源章号/字数、预算、成稿读数与 warns/errs；只保存章主体、segments 和来源账。',
-        '新空根由 stage5.write 在显式付费授权下重建；当前 INVALID 可按原来源免费重验证，不升级旧字节。',
-    ),
-    'stage5/review_{n}.json': (
-        3,
-        '2026-08-24 Stage5 单臂折平：ReviewChapter 删除 `mode/mode_dir`，judged 主体改绑 canonical 章集合 v3 删除重复 sources/counts 和章节展示副本；judged 唯一绑定正文，保留 findings 与必要基线。',
-        '新空根由 stage5.review 对当前 Chapter v3 免费重建；旧 Review 不迁移、不驱动新付费动作。',
-    ),
-    'stage5/ch{nn}.rejected.json': (
-        2,
-        '拒稿尝试删除 chars/text 副本，保留原 producer segments，恢复不猜场景边界。',
-        '新空根由 stage5.write 当前候选链生成；旧拒稿保留在旧根，不转换为新候选。',
-    ),
-    'stage5/reviewer_rewrite_request.json': (
-        2,
-        '2026-09-07 受托改写从独立单章 request 改为有序非空批信封，章执行单元仍独立自哈希',
-        '旧 v1 不自动转换；原版本按原执行账先收口，再由 fresh Commander 决定与 '
-        'FREE stage5.review --request-reviewer-rewrite 重建 v2。未知执行不得删除或手补为新授权',
-    ),
-    'stage5/trim_audit_ch{nn}.json': (
-        3,
-        '2026-08-24 Stage5 单臂折平：TrimAudit 删除 `mode`，章身份只由 ordinal 与 canonical 路径承载 v3 章号从登记路径唯一解析，保留当时 reason 与 before SHA，不重写历史事实。',
-        '新空根当前写作或免费 recheck/revalidate 由 stage5.write 生成；旧 audit 不手补。',
-    ),
-    'stage5/trim_resolution_ch{nn}.json': (
-        3,
-        '2026-08-24 Stage5 单臂折平：TrimResolution 删除 `mode`，`chapter_rel` 固定绑定 `stage5/chNN.json` v3 保留人审章主体与 exact audit 引用；删除 before/chapter SHA 和正文路径副本。',
-        '对新空根的当前 audit 重新走免费 typed retain_pretrim 单章或整批决定；不迁移旧审批。',
-    ),
-    'stage6/hook.json': (
-        5,
-        'v3 同一候选机械 HARD 严格下降时可连续修订；candidate_retry_limit '
-        '改为 legacy 4 / Agent 0，candidate_retries.attempt 为同槽连续唯一的 1..4；'
-        '整书生成和修订仍共同占用工作单元四次内容预算，不给每槽另发预算。'
-        'v4 切换实际来源契约：独立 Prepare 接受、Characters v2/Global v7 与 Writer9 公开故事地图；'
-        'judged 只绑定真实下发的开篇成稿，终审另绑定全书正文，不沿用旧 Global.source_blurb 的批准。'
-        'v5（2026-09-15 全自动裁决）：HookApprovalResolution.basis 收窄为 '
-        'default_policy/human_selection（旧 human_verification 与判官 semantic_review_seq 随 '
-        'stage6.semantic 退役删除），ApprovedHook.origin 扩为 auto|human。',
-        '旧 v1～v3 base 冻结原代码与原账，不迁移、不手改 schema 标记或补新来源。'
-        '新根先完成 stage6.prepare 的生成与独立接受，再由 stage6.hook 在显式付费及外发授权后生产 v5，'
-        '然后由 stage6.approve 自动定稿或人工改选收口（判官节点已随 2026-09-15 全自动裁决退役）。'
-        '旧 v4（basis=human_verification）不迁移：判官已退役，存量半程书重跑 stage6 '
-        '（stage6.prepare 保留可复用）；成书交付前的存量书整层重跑。'
-        '当前 v5 已封存提交证明的尾窗走 --recover-prepared 零模型恢复；不是旧产物迁移。'
-        'HookEdit 保持 v2。',
-    ),
-    'stage6/hook_edit.json': (
-        2,
-        '2026-08-23 同批：`HookEdit.candidate` 的取值面从策略名换成位置身份 '
-        '`c1`/`c2`/`c3`（`None` 仍表示「写/替换定稿」）。策略名不再唯一 ⇒ 选不中那一条',
-        '**盘上零存量**（全 `outputs/` 找不到一份 `hook_edit.json`）⇒ 本次代价为零。'
-        '它是人工决策集不是产出物，下次写的时候按新取值面写即可',
-    ),
-    'stage7/name_map.json': (
-        4,
-        'v2 的 `NameDecision` 加跨字段 validator——'
-        '`renamed=true` 时 `not_renamed_reason` **只准是 `null`**。'
-        '契约注释早就这么写着，但 `_build` 一直原样透传 ⇒ 盘上空串合法通行，'
-        '收窄之后带 `\'\'` 的存量一律读不进来。'
-        '（同批的 `ExtraSub.origin=adopted` 只是扩域。）v3 切换独立 Characters v2 身份来源：'
-        '唯一 aliases 含 canonical 一次，改名材料显式排除 canonical 的重复 alias；Global v7 不再代管人物。'
-        'Writer9 公开角色目录进入实际消费身份，继续保留共享称谓、排行、长词和替换冲突校验。'
-        'v4（2026-09-15 免费改选裁决）：HookConsumed.approved_text_sha1 改为 candidates_sha1——'
-        '投影绑定三候选文本集合而不是选中的那条，碰撞校验目标面扩为全部候选；候选间改选不 stale',
-        '旧 v1～v3 及交付文件保留在冻结旧根，不按新 schema 读取（v3 存量按新判据免费 --recheck 后 '
-        '升级为 v4 投影）。新根由 stage7.rename 按当前 '
-        '人物、Global 和 WriterContext 重建（模型路线付费且须已有授权）；完整人工决策也可在没有 '
-        '旧 NameMap 的新根经同 owner --apply-edit 免费编译，但不能原地读旧版本后改标记。'
-        '新人物表按 stage7-final-review-v4 完成 stage7.approve，再由 stage7.assemble 免费重建交付；'
-        '当前 v3 已购回答与 prepared 走原来源恢复，不能继承旧批准或仅凭旧 book_txt 宣称可下载',
-    ),
+    # ── STR-06 新链（F8a）────────────────────────────────────────────
+    # 新链 14 份 schema 化产物全部 current_version=1，**没有升版账**：三级路径是
+    # 切换时新建的命名空间，盘上没有旧信封字节（旧路径整体退役，见
+    # `contracts/artifacts.py::RETIRED_ARTIFACT_PATHS`）。形状破坏史由另外两条线
+    # 承载，不在本表重复登记：
+    #   ① 模型自带 `contract_version` 字面量（Characters v4／ReconstructionBrief／
+    #      SemanticBinding／ExecutionPlan／PresentationGraph／HookContext／
+    #      WriterBookIR／ChapterReceipt／NameMap v5，与候选产物表逐字对账，
+    #      `tests/test_str06_candidates.py` 守着）；
+    #   ② 候选产物表的 `schema_version` RC 标签（rc2→rc3→rc4 的批次定格，
+    #      `tests/test_str06_f7e_freeze.py` 钉住冻结基线）。
+    # 未声明 `contract_version` 的模型（Blueprints v12、CharactersCore 抽取）按
+    # F8 义务在本注册表登记形状（即 `ARTIFACT_SPECS` 条目自身）——不往模型加非
+    # exclude 字段：那会改 `model_dump` 字节，从而改 prompt 与 F7a 历史采用的
+    # 已购请求身份。
 }
 
 

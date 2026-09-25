@@ -67,7 +67,8 @@ def _is_pattern(rel: str) -> bool:
 #: 而 `_is_pattern` 只看 `'{' in rel` ⇒ 不先解析就会把成书整个丢出 `artifacts[]`，
 #: 于是它从完成度、freshness 徽章和 inbox 里**同时消失**，而没有一层会报错。
 _BOOK_SCOPED_RESOLVERS = {
-    ARTIFACT_PATHS['stage7.book']: paths.book_txt_rel,
+    # F8a：新链成书路径（`stage7/final/{title}_rewriting.txt`）。
+    'stage7/final/{title}_rewriting.txt': paths.book_txt_rel,
 }
 
 

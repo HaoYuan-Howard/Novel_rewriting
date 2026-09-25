@@ -15,13 +15,15 @@ contracts.judges —— 判据的【行】。**与它守的契约同层**（`Q-1
 `REGISTRY` 的内容一旦取决于文件系统或 import 顺序，「装了哪些判据」就成了一个
 要去盘上查才知道的问题——而正向覆盖率、落盘闸门、报告三个消费方都在问这件事。
 七个现役层手写一张表，加一层加一行。
+
+【F8a 翻转】现役判据面是新链三块：Stage0/1（范围外保留）＋ `str06`
+（Stage2/4/5/7 新坐标，M1–M6 与章级机械验在此正式化）。旧
+`stage{2,4,5,6,7}` 五张判据表随旧链退役（F6d/F7e 登记，F8c 删除文件）——
+它们不再注册，旧链代码对旧 rule id 的查找会当场 KeyError，那是切换期的
+预期形状（消费者按登记改写或删除）。
 """
 from __future__ import annotations
 
 from contracts.judges import stage0  # noqa: F401  —— import 即注册，副作用就是它的全部意义
 from contracts.judges import stage1  # noqa: F401
-from contracts.judges import stage2  # noqa: F401
-from contracts.judges import stage4  # noqa: F401
-from contracts.judges import stage5  # noqa: F401
-from contracts.judges import stage6  # noqa: F401
-from contracts.judges import stage7  # noqa: F401
+from contracts.judges import str06  # noqa: F401  —— STR-06 新链（F8a 激活）

@@ -1,270 +1,371 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Stage4/6/7 每条 HARD 判据的最小会红样本登记表（VAL-02）。
+"""hard_cases —— 新链每条 HARD 判据的最小会红样本登记表（VAL-02，F8a 重写）。
 
-每个 ``build`` 都调用真实判据入口。Stage4 的样本以生产的
-``identity_plan`` 为绿底座，再只破坏一个完整节点、呈现端点或场景契约；这里不保留退役分组
-算法的测试替身。
+【F8a 重写的理由】旧表登记的是旧 Stage4/6/7 判据的最小会红样本；那些判据随旧链
+整体退役（`contracts/judges/str06.py` 是新链唯一注册表）。本表现在登记**新链**
+HARD 判据的最小会红样本：每个 ``build`` 都调用真实判据入口——Guard M1–M6、
+章级机械验、Hook 机械验、命名残留与回执链都在 `novel/stages/str06/`。
+
+【与 str06 反例套件的分工】`tests/test_str06_*.py` 是各能力的完整反例套件
+（绿底座＋逐条红）；本表是**跨判据的 consolidated 抽样**：每条新链 HARD 至少有一个
+在这里登记的最小会红样本，`test_hard_counterexamples.py` 逐条真跑。完整性由
+``test_every_new_chain_hard_rule_is_covered_somewhere`` 兜底（判据 id 必须在本表
+或 str06 套件里出现）。
 """
 from __future__ import annotations
 
-import copy
-from pathlib import Path
 from typing import Callable, NamedTuple
 
 
 class Case(NamedTuple):
     stage: str
-    build: Callable[..., list]
-    uses_tmp_path: bool = False
+    build: Callable[[], list]
+    #: 会红样本必须命中的结论片段（真实判据入口的输出子串）。
+    expect: str
 
 
-# ═══ Stage6 ══════════════════════════════════════════════════════════════════
+def _guard_m1() -> list:
+    """M1：本场 owner 的义务没有完整进入 IR。"""
+    from contracts.schema.str06 import BindingEntry
+    from tests.test_str06_fold_guard import _binding, _context
+    from novel.stages.str06.guard import check_obligation_coverage
 
-def _hook(text: str, *, src_hook: str | None = None, characters: dict | None = None,
-          given: str = '下发面：本书人物与秘密的材料。') -> list:
-    from novel.stages.stage6 import checks, prompts
-    return checks.hook_findings(
-        text, mat=prompts.Material(blocks=(given,)), secrets=[],
-        characters=characters or {}, src_hook=src_hook, hook_mechanical=None,
-        quote_problems=[])
-
-
-_SRC_HOOK = '她推开门，看见满地的信纸，和一段没有寄出的往事，写满了整面墙壁。'
+    binding = _binding(BindingEntry(obligation_id='ob1', scene_id='s01',
+                                    beat_ref='s01#bt1', supporting_beat_refs=()))
+    return check_obligation_coverage(binding, _context('s01', obligations=()))
 
 
-def _prepare_report(base: Path, *, broken: bool):
-    """只替换 E 运输；证据编译、INVALID 落盘和免费判据均执行生产入口。"""
-    import json
+def _guard_m2() -> list:
+    """M2：entry_knowledge 的 established_by 不早于本场起点（提前揭示）。"""
+    from contracts.schema.str06.context import KnowledgeEntry
+    from tests.test_str06_fold_guard import _context
+    from novel.stages.str06.guard import check_entry_timing
 
-    from novel.stages.stage6 import prepare
-    from novel.store import ArtifactStore
-    from tests.test_stage6_prepare import direct_prepare, prepare_ctx, response
-    from tests.test_stage2_global_agent import _free_ctx
-
-    ctx = prepare_ctx(base)
-    payload = response()
-    if broken:
-        # 只破坏正文支持的段终点；章、支持类型与连续开篇边界仍合法。
-        payload['source_blurb']['facts'][0]['evidence']['end_para'] = 99
-    _artifact, driver = direct_prepare(ctx, payload, expect_blocked=broken)
-    store = ArtifactStore(ctx)
-    assert store.exists(prepare.INVALID) is broken
-    assert store.exists(prepare.REL) is (not broken)
-    # 批次 B4：机械校验通过即 auto accept；绿底必须落 REVIEW，坏证据不得接受。
-    if broken:
-        assert not store.exists(prepare.REVIEW), '坏证据不得获得 Prepare 接受'
-    else:
-        from contracts.schema.stage6_prepare import Stage6PrepareReview
-        assert store.exists(prepare.REVIEW), '机械绿底必须由 producer auto accept'
-        review = store.read_own(Stage6PrepareReview, prepare.REVIEW)[0]
-        assert review.decision == 'accept'
-        assert review.actor == 'system:stage6-prepare-auto'
-        assert prepare.view_state(store).state == 'accepted'
-    report = prepare.run_check_only(_free_ctx(ctx))
-    # 直连窄修复：坏证据先交回一轮修复再判 INVALID；免费重验本身 0 调用。
-    assert len(driver.calls) == (2 if broken else 1), '免费重验不能再购买回答'
-    return report
+    # ce1：把后期（s03）才揭示的 knowledge 塞进 s02 的 entry_knowledge。
+    context = _context('s02', entry_knowledge=(
+        KnowledgeEntry(key='secret', mode='known', holder='ch1', proposition='身世',
+                       established_by='s03#bt1'),))
+    return check_entry_timing(context, {'s01': 0, 's02': 1, 's03': 2})
 
 
-def _prepare_evidence_invalid(base: Path) -> list:
-    report = _prepare_report(base, broken=True)
-    return [finding for row in report.rules for finding in row.findings]
+def _guard_m3() -> list:
+    """M3：entry_state 的 established_by 不早于本场起点（提前效应）。"""
+    from contracts.schema.str06.context import StateEntry
+    from tests.test_str06_fold_guard import _context
+    from novel.stages.str06.guard import check_entry_timing
+
+    # ce2：把后期建立的 state 塞进 s02 的 entry_state。
+    context = _context('s02', entry_state=(
+        StateEntry(domain='world', key='season', value='冬',
+                   established_by='s03#scene'),))
+    return check_entry_timing(context, {'s01': 0, 's02': 1, 's03': 2})
 
 
-# ═══ Stage7 ══════════════════════════════════════════════════════════════════
+def _guard_m4() -> list:
+    """M4：承载位置指向不真实的拍。"""
+    from contracts.schema.str06 import BindingEntry
+    from tests.test_str06_fold_guard import _binding, _graph
+    from novel.stages.str06.guard import check_binding_beat_refs
 
-def _rename(**over) -> list:
-    from novel.stages.stage7 import checks
-    kw: dict = dict(
-        name_map={'characters': [], 'surname_map': {}, 'kept': []},
-        subs={}, problems=[], applied={}, residual=[], baseline={},
-        dispatched_characters={},
-        pre_target='', source_text='', residual_keys=set(), stem_noise={},
-        family_members={}, missing=[], invalids=[],
-        post_units=[], title_line='书名：略')
-    kw.update(over)
-    return checks.rename_findings(**kw)
-
-
-def _via_build_subs(characters: list[dict], *, extra_subs: tuple = (),
-                    owners: dict | None = None,
-                    universe: frozenset = frozenset()) -> list:
-    from novel.stages.stage7.measure import build_subs
-    _subs, _kept, problems = build_subs(characters, extra_subs, owners, universe)
-    return _rename(problems=problems)
+    binding = _binding(BindingEntry(obligation_id='ob1', scene_id='s01',
+                                    beat_ref='s01#bt1', supporting_beat_refs=()))
+    # 跨产物存在性：binding 合法（beat_ref 落在自己声明的场景内），但 graph 里
+    # 已经没有 s01 了——Binding 的 validator 保不住「对手盘当前还在」。
+    graph = _graph().model_copy(update={
+        'scenes': tuple(s for s in _graph().scenes if s.scene_id != 's01')})
+    return check_binding_beat_refs(binding, graph)
 
 
-def _c7(cid: str, old: str, new: str, aliases: tuple = ()) -> dict:
-    return {'char_id': cid, 'renamed': True, 'old_canonical': old,
-            'new_canonical': new,
-            'aliases': [{'old': old_alias, 'new': new_alias}
-                        for old_alias, new_alias in aliases]}
+def _guard_m5() -> list:
+    """M5：IR 释放集与 Design 显式释放集不一致（同一称谓释放引擎复算）。"""
+    from contracts.schema.str06.context import SurfaceRelease
+    from contracts.schema.str06 import BindingEntry
+    from tests.test_str06_fold_guard import _binding, _context, _graph
+    from novel.stages.str06.guard import run_mechanical_guard
+
+    graph = _graph()
+    binding = _binding(BindingEntry(obligation_id='ob1', scene_id='s01',
+                                    beat_ref='s01#bt1', supporting_beat_refs=()))
+    context = _context('s01', obligations=('ob1',), released=(
+        SurfaceRelease(char_id='ch1', surfaces=('苏姑娘',)),))
+    return run_mechanical_guard(binding=binding, context=context, graph=graph)
 
 
-def _rn_txt_stale() -> list:
-    from contracts.schema.report import finding
-    from novel.stages.stage7 import checks
-    required = [
-        finding(rule, detail='当前契约要求的书级说明', evidence=[])
-        for rule in ('rn_taste_unver', 'rn_coverage_unver', 'rn_title_unver')
-    ]
-    outcomes = checks.check(
-        findings=required, scanned='0 条映射', baseline_line='0 字',
-        chapter_scanned='0 章',
-        txt_state=(False, '盘上的成书与产物记的指纹不符'),
-        approved=False, stale=[], missing=[], hook_stale=False, identity=None,
-        title_line='书名：略', body_count=0, upstream=('fresh', 'match', 6))
-    return [finding_ for outcome in outcomes for finding_ in outcome.findings]
+def _guard_m6() -> list:
+    """M6：释放面人物尚未由 Design 声明参与或引入。"""
+    from contracts.schema.str06.context import SurfaceRelease
+    from tests.test_str06_fold_guard import _context, _graph
+    from novel.stages.str06.guard import check_cast_legality
+
+    context = _context('s01', released=(SurfaceRelease(char_id='ghost', surfaces=('阿 ghosts',)),))
+    return check_cast_legality(context, _graph(), appeared={'ch1'})
 
 
-def _norm7(value: str) -> str:
-    from novel.core.text import norm
-    return norm(value)
+def _body_withheld() -> list:
+    """未释放专名进正文：硬失败（重写耗尽后无合法候选即停止，不披露放行）。"""
+    from novel.stages.str06.body_checks import validate_chapter_prose
+    return validate_chapter_prose(
+        '苏芸娘推门进屋，看见满地信纸。', withheld_literals=('苏芸娘',),
+        released_surfaces=('苏姑娘',), target_chars=1000,
+        band_low=600, band_high=1300)
 
 
-# ═══ Stage4：完整剧情与呈现契约 ═══════════════════════════════════════════════
-from tests.plot_fixtures import (
-    TEXT as _TEXT4, MAIN as _MAIN4, GLOBAL as _GLOBAL4, REGISTRY as _CHARACTERS4,
-    blueprint as _blueprints4, plan as _clean_plan4, context as _ctx4,
-)
-_BPS4 = _blueprints4()
-
-def _phase_links4(*, mismatch: bool = False) -> tuple:
-    from contracts.artifacts import STAGE4_BLIND_CANDIDATE, STAGE4_EVIDENCE_BINDING
-    from novel.stages.stage4.phase_binding import PhaseArtifactLink
-
-    expected = 'a' * 64
-    return (
-        PhaseArtifactLink(
-            provenance_field='blind_candidate_sha256',
-            key=STAGE4_BLIND_CANDIDATE,
-            expected_sha256=expected,
-            now_sha256=('b' * 64 if mismatch else expected),
-            state=('mismatch' if mismatch else 'match'),
-        ),
-        PhaseArtifactLink(
-            provenance_field='evidence_binding_sha256',
-            key=STAGE4_EVIDENCE_BINDING,
-            expected_sha256=expected,
-            now_sha256=expected,
-            state='match',
-        ),
-    )
+def _body_empty() -> list:
+    from novel.stages.str06.body_checks import validate_chapter_prose
+    return validate_chapter_prose(
+        '   ', withheld_literals=(), released_surfaces=(), target_chars=1000,
+        band_low=600, band_high=1300)
 
 
-def _find4(plan: dict, *, ctx: dict | None = None,
-           ctx_link: tuple[str, str] = ('ok', 'same plan'),
-           phase_links: tuple | None = None, blueprints: dict | None = None) -> list:
-    from novel.stages.stage4 import checks
-    # 坏计划不能先经 Context 编译器拒绝，必须让目标生产判据看到反例。
-    expected = _ctx4(_clean_plan4())
-    outcomes = checks.check(
-        plan, blueprints=_BPS4 if blueprints is None else blueprints, main_text=_MAIN4,
-        global_g=_GLOBAL4, characters=_CHARACTERS4,
-        ctx=expected if ctx is None else ctx, expected_ctx=expected, ctx_link=ctx_link,
-        phase_links=_phase_links4() if phase_links is None else phase_links)
-    return [finding_ for outcome in outcomes for finding_ in outcome.findings]
+def _hook_withheld() -> list:
+    """Hook 出现未释放专名：机械验拦下，拒绝稿不落正式位。
+
+    绿 Context 来自生产构造器（`test_str06_hook._green_pair` 的同一入口），
+    只把成文换成泄漏未释放专名的那一段。
+    """
+    from tests.test_str06_hook import _green_pair
+    from novel.stages.str06.hook_writer import validate_hook_prose
+
+    _body, _published, context = _green_pair()
+    return validate_hook_prose('苏芸娘想起陆大哥。', context)
 
 
-def _bad_plan4(rule: str) -> list:
-    plan = copy.deepcopy(_clean_plan4())
-    chapter = plan['output_chapters'][0]
-    scenes = chapter['scenes']
-    if rule == 'one_to_one':
-        chapter['from_source_ordinals'] = [2]
-    elif rule == 'ordinal_seq':
-        chapter['output_ordinal'] = 2
-    elif rule == 'empty_chapter':
-        chapter['scenes'] = []
-    elif rule == 'placement_ref':
-        chapter['beat_placements'].pop()
-    elif rule == 'scene_transition':
-        scenes[0]['transition'] = 'continue'
-    elif rule == 'goal_landing':
-        chapter['open_hook_goal']['anchor_scene_ref'] = 's02'
-    elif rule == 'budget_int':
-        scenes[0]['budget_chars'] = 0
-    elif rule == 'budget_band':
-        for scene in scenes:
-            scene['budget_chars'] = 1
-    elif rule == 'plan_book_band':
-        base = sum(scene['budget_chars'] for scene in scenes)
-        scenes[-1]['budget_chars'] += round(base * 1.15) - base
-    elif rule == 'style_words':
-        chapter['chapter_rewrite_brief'] = '用张力强化整章'
-    else:
-        raise AssertionError(rule)
-    return _find4(plan)
+def _name_map_conflict() -> list:
+    """同姓不同人不得合并：NameMap 编译闭合拒绝。"""
+    from tests.test_str06_naming import _chars, _naming_wire
+    from novel.stages.str06.naming import compile_name_map
+
+    wire = _naming_wire([
+        {'char_ref': 'c1', 'name': '苏瑶', 'family': '苏', 'kept_reason': None},
+        {'char_ref': 'c2', 'name': '苏瑶', 'family': '苏', 'kept_reason': None},
+    ])
+    _map, errors = compile_name_map(wire, _chars())
+    return errors
 
 
-def _bad_context4(rule: str) -> list:
-    plan = _clean_plan4()
-    ctx = _ctx4(plan)
-    chapter = ctx['chapters'][0]
-    if rule == 'ctx_plot_exact':
-        chapter['beats'][0]['content'] = '被中间层改写过的剧情'
-    elif rule == 'ctx_name_attested':
-        chapter['characters'][0]['display_name'] = '虚构姓名'
-    elif rule == 'ctx_permission_exact':
-        chapter['scenes'][-1]['state_events'] = []
-    else:
-        raise AssertionError(rule)
-    return _find4(plan, ctx=ctx)
+def _naming_residual() -> list:
+    """应替换的源名在交付文本中残留且未认领。"""
+    from novel.stages.str06.naming import check_residual
+    return check_residual('苏姑娘推门进屋。', {'苏姑娘': '苏瑶'}, claims=(), kept_literals=())
 
 
-# ═══ 登记表 ═══════════════════════════════════════════════════════════════════
+def _chain_broken() -> list:
+    """章回执与正文 hash 脱钩：回执链断裂，装配未就绪。"""
+    from novel.stages.str06.assembly import verify_chapter_chain
+    receipts = {1: {'status': 'accepted', 'book_ir_sha256': 'a' * 64,
+                    'prose_sha256': 'b' * 64, 'prior_text_sha256': 'c' * 64}}
+    return verify_chapter_chain(receipts, {1: '推门进屋。'}, book_ir_sha256='a' * 64)
+
 
 CASES: dict[str, Case] = {
-    'prepare_evidence_valid': Case('stage6', _prepare_evidence_invalid, uses_tmp_path=True),
-    'hook_empty': Case('stage6', lambda: _hook('短。')),
-    'hook_truncated': Case('stage6', lambda: _hook(
-        '这条文案写到一半没有任何终止标点就停在这里像被拦腰截断')),
-    'hook_reuses_source': Case('stage6', lambda: _hook(_SRC_HOOK, src_hook=_SRC_HOOK)),
-    'hook_invented_name': Case('stage6', lambda: _hook(
-        '沈姑娘站在长街尽头吹了整夜的风，等一个不会回来的人回头。',
-        characters={'c1': {'display_name': '沈凌', 'name_distinctiveness': 'high'}})),
-    'hook_para_sep': Case('stage6', lambda: _hook(
-        '第一段落的文字要足够长一点。\n第二段落的文字也足够长一点。',
-        src_hook='第一段。\n\n第二段。')),
-
-    'rn_llm_shape': Case('stage7', lambda: _rename(
-        dispatched_characters={'c1': {'canonical': '沈凌', 'aliases': []}})),
-    'rn_map_coverage': Case('stage7', lambda: _via_build_subs(
-        [], universe=frozenset({'狗剩'}))),
-    'rn_new_collide': Case('stage7', lambda: _via_build_subs(
-        [_c7('c1', '沈凌', '叶翎'), _c7('c2', '许晏', '叶翎')])),
-    'rn_ambiguous': Case('stage7', lambda: _via_build_subs(
-        [_c7('c1', '沈凌', '叶翎')], extra_subs=({'old': '沈凌', 'new': '岑越'},))),
-    'rn_shared_surface': Case('stage7', lambda: _via_build_subs(
-        [_c7('c1', '沈凌', '叶翎', aliases=(('书童', '小砚'),))],
-        owners={_norm7('书童'): frozenset({'c1', 'c2'})})),
-    'rn_surface_short': Case('stage7', lambda: _via_build_subs(
-        [_c7('c1', '沈凌', '叶翎', aliases=(('姐', '妹'),))])),
-    'rn_already_present': Case('stage7', lambda: _rename(
-        subs={'沈凌': '叶翎'}, pre_target='叶翎早已出现在替换目标的成稿里。')),
-    'rn_title_dropped': Case('stage7', lambda: _rename(subs={'李将军': '沈昭'})),
-    'rn_semantic_marker_changed': Case('stage7', lambda: _rename(subs={'七郎': '六郎'})),
-    'rn_kinship_touched': Case('stage7', lambda: _rename(subs={'姐姐': '妹妹'})),
-    'rn_surname_split': Case('stage7', lambda: _rename(
-        name_map={'characters': [], 'surname_map': {'沈': '叶', '许': '叶'}, 'kept': []})),
-    'rn_overlap': Case('stage7', lambda: _via_build_subs(
-        [], extra_subs=({'old': '阿禾姊', 'new': '李云'},
-                        {'old': '姊姊', 'new': '妹妹'}))),
-    'rn_residual_key': Case('stage7', lambda: _rename(residual_keys={'沈凌'})),
-    'rn_book_incomplete': Case('stage7', lambda: _rename(missing=[2])),
-    'rn_txt_stale': Case('stage7', _rn_txt_stale),
-
-    **{rule: Case('stage4', lambda rule=rule: _bad_plan4(rule)) for rule in (
-        'one_to_one', 'ordinal_seq', 'empty_chapter',
-        'placement_ref', 'scene_transition', 'goal_landing', 'budget_int',
-        'budget_band', 'plan_book_band', 'style_words',
-    )},
-    'context_link': Case('stage4', lambda: _find4(
-        _clean_plan4(), ctx_link=('stale', '上下文照的是另一版计划'))),
-    'phase_artifact_link': Case('stage4', lambda: _find4(
-        _clean_plan4(), phase_links=_phase_links4(mismatch=True))),
-    **{rule: Case('stage4', lambda rule=rule: _bad_context4(rule)) for rule in (
-        'ctx_plot_exact', 'ctx_name_attested', 'ctx_permission_exact',
-    )},
+    'guard_m1_obligation_coverage': Case('stage4', _guard_m1, 'M1 义务覆盖'),
+    'guard_m2_early_reveal': Case('stage4', _guard_m2, 'M2 提前揭示'),
+    'guard_m3_early_effect': Case('stage4', _guard_m3, 'M3 提前效应'),
+    'guard_m4_carrier_ref': Case('stage4', _guard_m4, 'M4 承载位置'),
+    'guard_m5_surface_release': Case('stage4', _guard_m5, 'M5 称谓释放'),
+    'guard_m6_cast_legality': Case('stage4', _guard_m6, 'M6 人物合法性'),
+    'body_chapter_complete': Case('stage5', _body_empty, '[non_empty]'),
+    'body_withheld_literals': Case('stage5', _body_withheld, '[withheld_literals]'),
+    'hook_mechanical': Case('stage5', _hook_withheld, '[withheld_literals]'),
+    'name_map_compile': Case('stage7', _name_map_conflict, 'naming 条目形状非法'),
+    'naming_residual': Case('stage7', _naming_residual, '在交付文本中残留'),
+    'assembly_chapter_chain': Case('stage7', _chain_broken, 'prose_sha256 脱钩'),
 }
+
+
+# ─── 其余 HARD 的最小会红样本（编译闭合一族） ────────────────────────────────
+
+def _body_design_bad_wire() -> list:
+    """BodyDesign 编译闭合：非法 POV（未知人物）当场拒。"""
+    from novel.stages.str06.design_compile import assemble_body_design
+    _body, errors = assemble_body_design(
+        {'scenes': [{'scene_id': 's01',
+                     'beats': [{'beat_id': 'bt1', 'event': 'e',
+                                'participants': ['ch1']}],
+                     'delivery': {'pov': 'ghost', 'voice': 'v'}}]},
+        known_char_ids={'ch1'})
+    return errors
+
+
+def _chapter_count_mismatch() -> list:
+    """章唯一键：目标章数必须等于实际章任务数（约束声明 99、实到 N 即拒）。"""
+    from contracts.schema.str06.grounding import OutputConstraints
+    from tests.test_str06_hook import _body_wire
+    from novel.stages.str06.design_compile import assemble_body_design
+
+    _body, errors = assemble_body_design(
+        _body_wire(), known_char_ids={'fu_jun', 'yun_niang'},
+        constraints=OutputConstraints(target_chapter_count=99,
+                                      total_length_budget=10000))
+    return errors
+
+
+def _preserve_bad_wire() -> list:
+    """Preserve 编译闭合：obligation_id 重复拒收。"""
+    from novel.stages.str06.grounding import assemble_preserve
+
+    from contracts.schema.str06.source import (
+        Beat, BlueprintsArtifactV12, ChapterBlueprint, CharacterEntry,
+        CharactersCore, SurfaceWindow,
+    )
+    entry = {'obligation_id': 'o1', 'kind': 'event_core', 'statement': 's',
+             'must_preserve': True, 'satisfaction': '明确呈现',
+             'lineage': {'blueprint_refs': ['b01_01'], 'character_ids': []}}
+    _checkpoint, errors = assemble_preserve(
+        {'obligations': [entry, dict(entry)]},
+        policy_id='preserve-default', policy_version=1,
+        characters=CharactersCore(characters={'ch1': CharacterEntry(
+            canonical='苏姑娘',
+            surfaces=(SurfaceWindow(surface='苏姑娘', from_chapter=1,
+                                    source_refs=('e01_01',)),))}),
+        blueprint=BlueprintsArtifactV12(chapters=(
+            ChapterBlueprint(chapter=1, beats=(Beat(
+                beat_id='b01_01', event='e', source_refs=('e01_01',)),)),)),
+        provider='p', model='m', request_sha256='a' * 64)
+    return errors
+
+
+def _checkpoint_with(*obligation_ids: str):
+    from contracts.schema.str06 import (
+        PreserveCheckpoint, SourceObligation, SourceLineage,
+    )
+    return PreserveCheckpoint(
+        checkpoint_id='cp1', policy_id='preserve-default', policy_version=1,
+        characters_sha256='a' * 64, blueprints_sha256='b' * 64,
+        provider='p', model='m', request_sha256='c' * 64,
+        checkpoint_sha256='d' * 64,
+        obligations=tuple(SourceObligation(
+            obligation_id=oid, kind='event_core', statement=oid,
+            lineage=SourceLineage(blueprint_refs=('b01_01',), character_ids=()),
+            must_preserve=True, satisfaction='明确呈现')
+            for oid in obligation_ids))
+
+
+def _binding_unclosed() -> list:
+    """Bind 机械校验：entry 的 obligation 不在 checkpoint 分母内。"""
+    from novel.stages.str06.grounding import assemble_binding
+
+    _model, errors = assemble_binding(
+        {'entries': [{'obligation_id': 'ghost', 'scene_id': 's01',
+                      'beat_ref': 's01#bt1', 'supporting_beat_refs': []}],
+         'unbound': []},
+        _checkpoint_with('o1'), known_scene_beats={'s01': {'bt1'}})
+    return errors
+
+
+def _hook_design_bad_wire() -> list:
+    """Hook 设计机械校验：材料引用不存在的拍。"""
+    from tests.test_str06_hook import _green_pair
+    from novel.stages.str06.hook_design import assemble_hook_design
+
+    graph, projection, _context = _green_pair()
+    _hook, errors = assemble_hook_design(
+        {'materials': [{'beat_ref': 's99#bt1', 'presentation': '倒叙材料'}],
+         'opening_facts': [], 'forbidden_reveals': []},
+        body=graph, known_char_ids=set(), name_projection=projection)
+    return errors
+
+
+def _plan_unclosed() -> list:
+    """ExecutionPlan 编译闭合：Binding 义务分母不闭合（entry 无对应 obligation）。"""
+    from contracts.schema.str06 import BindingEntry, SemanticBinding, SourceObligation, SourceLineage
+    from tests.test_str06_fold_guard import _graph
+    from novel.stages.str06.compile import compile_execution_plan
+
+    binding = SemanticBinding(
+        binding_id='bd1', preserve_checkpoint_sha256='a' * 64,
+        obligations=(SourceObligation(
+            obligation_id='o1', kind='event_core', statement='s',
+            lineage=SourceLineage(blueprint_refs=('b01_01',), character_ids=()),
+            must_preserve=True, satisfaction='明确呈现'),),
+        entries=(BindingEntry(obligation_id='ghost', scene_id='s01',
+                              beat_ref='s01#bt1', supporting_beat_refs=()),),
+        unbound=())
+    _plan, errors = compile_execution_plan(_graph(), binding)
+    return errors
+
+
+def _hook_context_unresolvable() -> list:
+    """HookContext 仅凭正式输入可重建：起笔事实在引用处未建立即拒。"""
+    from contracts.schema.str06.hook import HookConstraints
+    from tests.test_str06_hook import _green_pair
+    from novel.stages.str06.hook_context import compile_hook_context
+
+    _body, graph, _context = _green_pair()
+    from tests.test_str06_hook import _projection
+    broken = graph.model_copy(update={'hook': graph.hook.model_copy(update={
+        'opening_facts': tuple(
+            fact.model_copy(update={'ref': 's99#bt1'})
+            for fact in graph.hook.opening_facts)})})
+    _rebuilt, errors = compile_hook_context(
+        broken, _projection(), HookConstraints(target_chars=280, hard_max_chars=360))
+    return errors
+
+
+def _body_out_of_band() -> list:
+    from novel.stages.str06.body_checks import validate_chapter_prose
+    return validate_chapter_prose(
+        '短。', withheld_literals=(), released_surfaces=(), target_chars=1000,
+        band_low=600, band_high=1300)
+
+
+def _receipt_stale() -> list:
+    """章回执绑定：旧回执配新 IR 必须拒绝（三份绑定逐一核对）。"""
+    from contracts.schema.str06.receipt import ChapterReceipt
+    from novel.stages.str06.checks import check_chapter_receipt
+
+    from contracts.schema.str06.receipt import ChapterLengthDisclosure
+    receipt = ChapterReceipt(
+        contract_version='str06-rc4', chapter_ordinal=1, status='accepted',
+        book_ir_sha256='a' * 64, prior_text_sha256='b' * 64,
+        prose_sha256='c' * 64, request_identity='r1',
+        protocol_version='p1', renderer_version='r1', validator_version='v1',
+        mechanical_checks=('non_empty',), length=ChapterLengthDisclosure(
+            char_count=100, target_chars=100, band_low=60, band_high=130,
+            within_band=True, deviation_ratio=0.0))
+    return check_chapter_receipt(receipt, book_ir_sha256='d' * 64,
+                                 prior_text_sha256='b' * 64, prose_sha256='c' * 64)
+
+
+def _hook_rejected_no_formal() -> list:
+    """Hook 重写上限内无合法候选：拒绝稿不落正式位（机械验持续拦下）。"""
+    from tests.test_str06_hook import _green_pair
+    from novel.stages.str06.hook_writer import MAX_REWRITES, validate_hook_prose
+
+    _body, _published, context = _green_pair()
+    errors: list[str] = []
+    for _attempt in range(1 + MAX_REWRITES):
+        errors = validate_hook_prose('苏芸娘想起陆大哥。', context)
+        if not errors:
+            return []
+    return errors
+
+
+def _delivery_not_ready() -> list:
+    """交付可确定性重放：缺环时装配显式未就绪（not_ready），不制造成功状态。"""
+    from novel.stages.str06.assembly import chapter_access
+
+    access = chapter_access(range(1, 3), {})
+    if access.ready:
+        return []
+    return [f'assembly not ready: accepted={list(access.accepted)} '
+            f'missing={list(access.missing)}']
+
+
+CASES.update({
+    'body_length_band': Case('stage5', _body_out_of_band, '[length_band]'),
+    'chapter_receipt_binding': Case('stage5', _receipt_stale, 'book_ir_sha256'),
+    'hook_receipt_binding': Case('stage5', _hook_rejected_no_formal,
+                                 '[withheld_literals]'),
+    'body_design_compile': Case('stage4', _body_design_bad_wire, '构造失败'),
+    'chapter_plan_shape': Case('stage4', _chapter_count_mismatch, '章'),
+    'length_budget_conserved': Case('stage4', _chapter_count_mismatch, '章'),
+    'preserve_compile': Case('stage4', _preserve_bad_wire, 'obligation'),
+    'binding_mechanical': Case('stage4', _binding_unclosed, 'Binding'),
+    'hook_design_mechanical': Case('stage4', _hook_design_bad_wire, '材料引用不存在的拍'),
+    'execution_plan_compile': Case('stage4', _plan_unclosed, 'Binding'),
+    'writer_ir_dual_view': Case('stage4', _hook_context_unresolvable, '起笔事实'),
+    'hook_context_rebuildable': Case('stage4', _hook_context_unresolvable, '起笔事实'),
+    'delivery_replayable': Case('stage7', _delivery_not_ready, 'not ready'),
+})

@@ -185,7 +185,7 @@ Stage4 的章级 B 另有登记的 producer 输入契约结论：`binding_input_
 `novel/stages/stage4/binding_input_contract.py::inspect_binding_input_contract`，Store 只在普通边已
 `fresh` 时附加该结论；原有上游漂移、缺失与未知原因不被覆盖。compiled Plan 在完整 A/B 字节
 关系闭合后继承 B 的该结论。真实输入边和对照保留，不伪装成 `consumed_changed`。
-具体识别、授权与恢复边界见 `docs/BACKEND_CONTRACT.md::R-5.10f`。
+具体识别、授权与恢复边界见 `docs/BACKEND_CONTRACT.md::R-5.10`。
 
 > ### ⚠ 幽灵边必须点名，这是 `Q-4` 亲自点过的一个 bug
 >
@@ -234,58 +234,21 @@ Stage4 的章级 B 另有登记的 producer 输入契约结论：`binding_input_
 RFC 6901 `changed_json_pointers`。因此「判据变了、原稿原样提升」与「人改过问题稿后提升」不再同形。
 该审计仍不把提升伪造成新生成：原 prompts/model/adopted_models/inputs/usage/round 原样继承。
 
-### 5.1b `partial_rewrite` —— 混版产物要如实记来源
+### 5.1b `partial_rewrite` —— 机制已随旧链退役（F8a）
 
-有一类 0 成本路径**只改产物的一部分**：`--recheck` 刷指标并重拼（Stage5 例外，见下）·
-`--renormalize` 按当前契约重算派生字段与原文定位 · `--identity` 刷新身份投影 ·
-stage7 的 `--apply-edit` 只改人工决策 patch / `extra_subs`、保留原模型人物表。
-⚠ 同名 flag 在 stage5 落的是一整章人工新稿，那里走 `origin=human`，不是混版。
-改完之后那一份是**混版的**：LLM 写的那些字段出自当初那次付费产出，
-被改的那部分是**现在**从盘上重算的。
+有一类 0 成本路径**只改产物的一部分**（`--recheck` 刷指标并重拼 · `--renormalize`
+重算派生字段 · `--identity` 刷新身份投影 · stage7 `--apply-edit` 只改人工决策 patch）。
+这类「混版产物」在旧链用 `partial_rewrite` 带值键记录来源。
 
-⚠ **Stage5 的 `--recheck` 刻意不属于混版改写。** 它只按同一份 canonical
-`segments` 与冻结任务书修复 v2 的 `chars/overlap/warns/errs` 并对账 trim；正文、任务快照和
-writing provenance 全部原样保留，也不再重拼已退役的 `draft.md`。这条例外由 `R-7.24` 与
-`ArtifactStore.refresh_formal` 关闭式约束；`PARTIAL_REWRITE_FLAGS` 仍保留 `--recheck`，是因为
-其他层的同名 flag 确实会重建来源账，取值表按 flag 不能表达节点维度。
+**STR-06 切换后这条机制整体退役**：上述 flag 全部随旧链节点删除，
+`contracts/invariants.py::PARTIAL_REWRITE_FLAGS` 为空表，`Provenance.partial_rewrite`
+在类型上结构不可达（`Literal[None]`，只能为 `None`）。新链没有「同一份产物被 0 成本
+路部分改写」的形状——免费恢复入口（saved_response／historical_adoption／owner_patch／
+chapter_prefix_replay／deterministic_replay）全部整份重写本节点产物，写效应即该节点
+的 `produces`。字段保留在载体上只为存量产物解码，不再有新写入方。
 
-⇒ 三个键各错一半，都不能用：
-
-| 记法 | 为什么错 |
-|---|---|
-| 沿用旧 `_provenance` 一个字不改 | 「这份派生字段照哪份上游重算的」**永远说不出口**——而那正是局部重算必须换 inputs 的理由 |
-| 整份覆盖成新账 | 会把 `prompts` / `model` / `adopted_models` 说成**本次**产的，而本次一个请求都没发（`Q-5` 点名的伪造） |
-| 借 `revalidated` 来标 | 那一条说的是**状态变更**（`.INVALID` → 正式稿），**内容一个字没动**。两件事 |
-
-**正确的记法**：只换 `inputs`、保留 `prompts` / `model` / `adopted_models`、标一个 `partial_rewrite`，
-让局部改写这件事看得见。
-
-> #### ⚠ 为什么是**一个带值的键**，不是三个布尔
->
-> 除上述 Stage5 例外外，`--recheck` / `--renormalize` / `--identity` 干的是**同一类事**
-> ——局部改写一份付费产物——区别只在「哪条路」，**那是一个值，不是三个键**。
-> 分成多个布尔会制造同一语义的多个落点
-> （`Q-3`：同一个语义在不同节点上必须叫同一个名字）。
-> 即时机械测量不写 artifact，因此也不属于这种“保留旧 LLM 字段的混版改写”。
->
-> 取值面的唯一落点是 `contracts/invariants.py::PARTIAL_REWRITE_FLAGS`，
-> 且它**必须 ⊆ `FREE_ENTRIES`**（由测试钉着）——一条会花钱的路不叫「局部改写」，
-> 它是一次新的产出。
-
-**构造口同样收紧**（同 5.2 那条判准）：
-
-```
-partial_rewrite(旧的 _provenance, *, 哪条路, 代码版本, 本次读到的 inputs) -> 新的 _provenance
-    继承旧的 prompts / model / adopted_models 一个字不动
-    round 不 +1（它不是新的一轮写作）
-```
-
-⚠ 签名里**有** `inputs` 而 5.2 的提升路**没有**，这不是不一致：
-提升路**没有读任何新东西**（它只是把一份已有的稿换个位置），而局部改写
-**真的重新读了上游**——记下这次读到的正是它的全部意义。
-危险的那三个（`prompts` / `model` / `adopted_models`）在两条路上都够不到。
-⚠ 运行时那一侧再收一道：`inputs` 只能来自 `RunContext` 的来源账，
-**调用方传不进去**（同 `llm_provenance` / `free_provenance` 的写法）。
+存量盘面上带 `partial_rewrite` 的产物是旧链字节，随旧根与冻结旧代码配对读取；
+新根不产生该键。
 
 ### 5.2 ⚠ 提升不许**伪造**，也不许**丢**——全链四处实测
 

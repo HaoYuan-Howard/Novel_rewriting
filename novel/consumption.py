@@ -20,16 +20,13 @@ import re
 from typing import Any, Callable, Final, Mapping
 
 from contracts.artifacts import (
-    STAGE0_CLEAN_TEXT, STAGE0_REVISIONS, STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT,
-    STAGE2_BLUEPRINT_CHARACTER_PROJECTION, STAGE2_CHAPTER_BLUEPRINTS,
-    STAGE2_CHARACTERS,
-    STAGE2_GLOBAL_EDIT, STAGE2_GLOBAL_GROUNDING,
-    STAGE4_BLIND_CANDIDATE,
-    STAGE4_BLIND_CHAPTER_EDIT, STAGE4_EVIDENCE_BINDING,
-    STAGE4_PLAN_EDIT,
-    STAGE4_WRITER_CONTEXT, STAGE5_REVIEW, STAGE5_TRIM_AUDIT,
-    STAGE6_HOOK, STAGE6_HOOK_EDIT, STAGE6_PREPARE,
-    STAGE7_NAME_MAP_EDIT,
+    STAGE0_CLEAN_TEXT, STAGE0_REVISIONS, STAGE1_MAIN_TEXT,
+    STR06_STAGE2_BLUEPRINTS, STR06_STAGE2_BOOK_EXTRACTION,
+    STR06_STAGE2_CHARACTERS, STR06_PRESERVE_CHECKPOINT,
+    STR06_RECONSTRUCTION_BRIEF, STR06_SEMANTIC_BINDING,
+    STR06_EXECUTION_PLAN, STR06_BODY_DESIGN, STR06_PRESENTATION_GRAPH,
+    STR06_HOOK_CONTEXT, STR06_WRITER_BOOK_IR,
+    STR06_HOOK_RECEIPT, STR06_NAME_MAP,
 )
 from contracts.invariants import NODES, STYLE_MEASUREMENT_CONTRACT
 from novel.core.evidence import without_global_evidence
@@ -466,98 +463,74 @@ def stage7_characters(data: object) -> object:
     return out
 
 
-# 每一格的键都是 ArtifactStore 写进 ``_provenance.inputs`` 的两级相对路径。
+# 每一格的键都是本节点**真正消费**的上游产物相对路径；值是那份上游的投影。
+# ⚠ F8a：键翻为新链 11 个节点（`str06.` 前缀，见 `contracts/invariants.py::NODES`），
+# 上游路径翻为三级家族路径（见 `contracts/artifacts.py`）。Stage0/1 两行不变
+# （范围外保留）。旧链 12 个节点键随旧链退役删除（F7e 登记）。
+#
+# 【新链的投影口径：整份载荷】旧链按节点裁剪语义子集（如 stage4.design 只消费
+# blueprints 的剧情字段）；新链统一 `artifact_payload`（整份业务载荷，剥掉上游
+# 自己的来源账）——候选链的来源账边在读取时按完整字节指纹记录
+# （`novel/store.py::Str06Repository.read` → `paths.family_input_key`），
+# 任何上游字节变化都如实过期。更严格是刻意选择：新链的产物由唯一 writer 整份
+# 重写，没有「只改一个字段」的路径，裁剪投影只会造出第二套会漂的语义。
 CONSUMED_PROJECTIONS: Final[dict[str, dict[str, Projection]]] = {
     'stage1.partition': {
         STAGE0_REVISIONS: stage1_stage0_source,
         STAGE0_CLEAN_TEXT: artifact_payload,
     },
-    'stage2.analyze': {
-        STAGE1_MAIN_TEXT: stage2_main_text,
-        STAGE2_CHARACTERS: character_knowledge_reference,
-    },
-    'stage2.characters': {
+    # ── STR-06 新链（F8a 激活）──
+    'str06.stage2.source': {
         STAGE1_MAIN_TEXT: stage2_main_text,
     },
-    'stage2.global': {
+    'str06.stage2.names': {
+        STR06_STAGE2_BOOK_EXTRACTION: artifact_payload,
         STAGE1_MAIN_TEXT: stage2_main_text,
-        STAGE2_CHARACTERS: character_knowledge_reference,
-        # ``--apply-edit`` consumes the typed human decision set as a real
-        # provenance edge.  Without this projection a just-written grounding
-        # is ``consumed_undeclared`` and the formal-write postcondition must
-        # (correctly) roll it back.
-        STAGE2_GLOBAL_EDIT: artifact_payload,
     },
-    'stage2.blueprint': {
-        STAGE1_MAIN_TEXT: stage2_main_text,
-        # 只由独立关联物化读取；E 抽取不读这两份，因此不会被知识规则返工失效。
-        STAGE2_GLOBAL_GROUNDING: artifact_payload,
-        STAGE2_CHAPTER_BLUEPRINTS: artifact_payload,
-        # Blueprint 不再伪记一条 global 边：真正发给模型/validator/compiler 的
-        # 是这份版本化、确定性物化的称名闭集。
-        STAGE2_BLUEPRINT_CHARACTER_PROJECTION: artifact_payload,
+    'str06.stage4.preserve': {
+        STR06_STAGE2_BOOK_EXTRACTION: artifact_payload,
+        STR06_STAGE2_BLUEPRINTS: artifact_payload,
     },
-    'stage4.design': {
-        STAGE1_MAIN_TEXT: stage4_design_main_text,
-        STAGE2_CHAPTER_BLUEPRINTS: stage4_design_blueprints,
-        STAGE2_CHARACTERS: stage4_characters,
-        STAGE2_GLOBAL_GROUNDING: stage4_grounding,
-        STAGE4_BLIND_CHAPTER_EDIT: artifact_payload,
+    'str06.stage4.body_design': {
+        STR06_STAGE2_BOOK_EXTRACTION: artifact_payload,
+        STR06_PRESERVE_CHECKPOINT: artifact_payload,
+        STR06_STAGE2_CHARACTERS: artifact_payload,
     },
-    'stage4.plan': {
-        STAGE2_CHARACTERS: stage4_plan_characters,
-        STAGE1_MAIN_TEXT: stage4_main_text,
-        STAGE2_CHAPTER_BLUEPRINTS: stage4_plan_blueprints,
-        STAGE2_GLOBAL_GROUNDING: stage4_grounding,
-        STAGE4_BLIND_CANDIDATE: artifact_payload,
-        # B 的正式 binding 是最终 v3 计划的直接编译输入；不登记这一边，producer
-        # 虽然会如实把它写进 provenance，刚写完的 freshness 却只能报
-        # ``consumed_undeclared`` 并回滚整份计划。
-        STAGE4_EVIDENCE_BINDING: artifact_payload,
-        STAGE4_PLAN_EDIT: artifact_payload,
+    'str06.stage4.bind': {
+        STR06_BODY_DESIGN: artifact_payload,
+        STR06_PRESERVE_CHECKPOINT: artifact_payload,
     },
-    'stage4.context': {
-        STAGE2_CHARACTERS: stage4_characters,
-        STAGE1_MAIN_TEXT: stage4_main_text,
-        STAGE2_CHAPTER_BLUEPRINTS: stage4_context_blueprints,
-        STAGE2_GLOBAL_GROUNDING: stage4_grounding,
-        STAGE4_BLIND_CANDIDATE: artifact_payload,
-        STAGE4_EVIDENCE_BINDING: artifact_payload,
+    'str06.stage4.hook_design': {
+        STR06_BODY_DESIGN: artifact_payload,
+        STR06_STAGE2_CHARACTERS: artifact_payload,
+        STR06_PRESERVE_CHECKPOINT: artifact_payload,
+        STR06_STAGE2_BOOK_EXTRACTION: artifact_payload,
     },
-    'stage5.write': {
-        STAGE2_CHARACTERS: stage5_characters,
-        STAGE1_MAIN_TEXT: stage5_main_text,
-        STAGE2_GLOBAL_GROUNDING: stage5_grounding,
-        STAGE4_WRITER_CONTEXT: stage5_context,
+    'str06.stage4.compile': {
+        STR06_PRESENTATION_GRAPH: artifact_payload,
+        STR06_SEMANTIC_BINDING: artifact_payload,
+        STR06_STAGE2_CHARACTERS: artifact_payload,
     },
-    'stage5.review': {
-        STAGE2_CHARACTERS: stage5_characters,
-        STAGE1_MAIN_TEXT: stage5_main_text,
-        STAGE2_GLOBAL_GROUNDING: stage5_review_grounding,
-        STAGE4_WRITER_CONTEXT: stage5_review_context,
-        # retain_pretrim 的人工裁决绑定完整 audit bytes；任一审计事实变化都应过期。
-        STAGE5_TRIM_AUDIT: artifact_payload,
+    'str06.stage5.body': {
+        STR06_WRITER_BOOK_IR: artifact_payload,
+        STR06_PRESENTATION_GRAPH: artifact_payload,
+        STR06_STAGE2_CHARACTERS: artifact_payload,
     },
-    'stage6.prepare': {
-        STAGE1_MAIN_TEXT: stage2_main_text,
-        STAGE1_HOOK_COPY: _hook_text,
+    'str06.stage5.hook': {
+        STR06_HOOK_CONTEXT: artifact_payload,
     },
-    'stage6.hook': {
-        STAGE6_PREPARE: prepare_projection,
-        STAGE2_CHARACTERS: stage6_characters,
-        STAGE1_HOOK_COPY: stage6_hook_copy,
-        STAGE2_GLOBAL_GROUNDING: stage6_grounding,
-        STAGE4_WRITER_CONTEXT: stage6_context,
-        STAGE6_HOOK_EDIT: artifact_payload,
+    'str06.stage7.naming': {
+        STR06_STAGE2_CHARACTERS: artifact_payload,
+        STR06_STAGE2_BLUEPRINTS: artifact_payload,
     },
-    'stage7.rename': {
-        STAGE2_CHARACTERS: stage7_characters,
-        STAGE1_MAIN_TEXT: stage7_main_text,
-        STAGE2_GLOBAL_GROUNDING: stage7_grounding,
-        STAGE4_BLIND_CANDIDATE: stage7_plan,
-        STAGE4_WRITER_CONTEXT: stage7_context,
-        STAGE6_HOOK: stage7_hook,
-        STAGE7_NAME_MAP_EDIT: artifact_payload,
+    'str06.stage7.assemble': {
+        STR06_WRITER_BOOK_IR: artifact_payload,
+        STR06_PRESENTATION_GRAPH: artifact_payload,
+        STR06_STAGE2_CHARACTERS: artifact_payload,
+        STR06_NAME_MAP: artifact_payload,
+        STR06_HOOK_CONTEXT: artifact_payload,
+        STR06_SEMANTIC_BINDING: artifact_payload,
+        STR06_HOOK_RECEIPT: artifact_payload,
     },
 }
 
@@ -582,9 +555,9 @@ def projection_for(node: str, rel: str) -> Projection | None:
 #: 「额外需要读哪个 current 载体」；语义仍在对应的纯投影函数里。
 #: 若 store 两侧不共用本表，一侧就会给两份书级输入各自算一份
 #: 看似合理、实际无法回放的 fingerprint。
-_CONTEXT_INPUTS: Final[dict[tuple[str, str], tuple[str, ...]]] = {
-    ('stage4.design', STAGE1_MAIN_TEXT): (STAGE2_CHARACTERS,),
-}
+#: F8a：旧链唯一的 contextual 投影（stage4.design 的 MainText 需兼读 Characters）
+#: 随旧链退役；新链全部投影都是单载体整份载荷，没有「额外再读一份」的形状。
+_CONTEXT_INPUTS: Final[dict[tuple[str, str], tuple[str, ...]]] = {}
 
 
 def context_inputs_for(node: str, rel: str) -> tuple[str, ...]:
@@ -609,11 +582,6 @@ def project_consumed(
     project = projection_for(node, canonical)
     if project is None:
         return False, None
-    if node == 'stage4.design' and canonical == STAGE1_MAIN_TEXT:
-        try:
-            return True, stage4_design_main_text(data, characters=(related or {}).get(STAGE2_CHARACTERS))
-        except (KeyError, TypeError, ValueError):
-            return False, None
     return True, project(data)
 
 

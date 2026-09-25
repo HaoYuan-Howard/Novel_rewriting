@@ -29,12 +29,16 @@ def test_stage4_binding_codes_have_one_closed_contract_surface():
         inv.BINDING_INFEASIBILITY_CODES)
 
 
-def test_stage6_wontfix_entry_is_registered_on_every_required_surface():
-    assert '--wontfix' in inv.NODES['stage6.hook'].flags
-    assert '--wontfix' in inv.NODES['stage5.review'].flags
-    assert '--wontfix' in inv.VALUED_FLAGS
-    assert '--wontfix' in inv.WRITE_EFFECTS
-    assert 'wontfix.json' not in ' '.join(inv.NODES['stage6.hook'].produces)
+def test_wontfix_surface_is_fully_retired():
+    """F8A：`--wontfix` 豁免记账面随旧链人工闸整体退役。
+
+    新链没有「这条我不修」的登记入口——机械验拦下的稿进 `.INVALID` 孪生留证后
+    fail-fast，恢复走 owner patch 与 `--check-only`。
+    """
+    assert '--wontfix' not in inv.FREE_ENTRIES
+    assert '--wontfix' not in inv.VALUED_FLAGS
+    assert '--wontfix' not in inv.WRITE_EFFECTS
+    assert all('--wontfix' not in spec.flags for spec in inv.NODES.values())
 
 
 def test_metric_is_separate_from_info():
@@ -45,11 +49,9 @@ def test_metric_is_separate_from_info():
 #: 这些 tuple **不是取值面**，是**序列**——同一个值出现两次是它们的语义，不是笔误。
 #: ⚠ 白名单一条一行、写明它是什么，别写成一句「有些表允许重复」：那样下一个真写重的
 #: 取值面就会顺着这条口子进来。
-_ORDERED_SEQUENCES_NOT_DOMAINS = {
-    # 候选配方：按槽位逐条指定写法，当前是 payoff_preview ×1 + scene_punchline ×2。
-    # 它的取值面是 `HOOK_APPROACHES`（那一张仍然不许重复，下面照查）。
-    'HOOK_RECIPE',
-}
+# F8a：旧链唯一的白名单序列（HOOK_RECIPE 候选配方）随 Stage6 退役删除，
+# 白名单现在是**空的**——没有任何 tuple 常量享有「允许重复」豁免。
+_ORDERED_SEQUENCES_NOT_DOMAINS: set[str] = set()
 
 
 def test_no_duplicates_in_any_tuple_domain():
@@ -66,8 +68,8 @@ def test_every_whitelisted_sequence_still_lives_inside_a_real_domain():
 
     少了这一条，`_ORDERED_SEQUENCES_NOT_DOMAINS` 就成了「这张表不受查」的后门。
     """
-    assert set(inv.HOOK_RECIPE) <= set(inv.HOOK_APPROACHES)
-    assert len(set(inv.HOOK_APPROACHES)) == len(inv.HOOK_APPROACHES)
+    assert _ORDERED_SEQUENCES_NOT_DOMAINS == set(), (
+        '白名单非空：每一格豁免都要有登记在册的理由；HOOK_RECIPE 已随 Stage6 退役')
 
 
 def test_nonbody_kinds_never_collide_with_end_markers():
@@ -120,10 +122,16 @@ def test_retired_fact_domains_cannot_reenter_the_current_contract():
 
 def test_node_ids_are_stage_dot_verb():
     for node, spec in inv.NODES.items():
-        stage, separator, verb = node.partition('.')
-        assert separator and verb and not verb.isdigit(), node
-        assert stage in inv.STAGES
-        assert stage == spec.stage
+        # F8a：新链节点 id 是 `str06.<stage>.<owner>` 三段；stage0/1 两段不变。
+        head, separator, rest = node.partition('.')
+        assert separator and rest, node
+        if head == 'str06':
+            stage, sep2, verb = rest.partition('.')
+            assert sep2 and verb and not verb.isdigit(), node
+        else:
+            stage, verb = head, rest
+        assert stage in inv.STAGES, node
+        assert stage == spec.stage, node
 
 
 def test_node_labels_are_unique():
@@ -137,8 +145,10 @@ def test_node_schema_has_no_modes_and_legacy_modes_are_detection_only():
     assert '--deep' not in _known_flags()
     assert '--shallow-rest' not in _known_flags()
     assert '--rebuild-draft' not in inv.FREE_ENTRIES
-    assert '--rebuild-draft' not in inv.NODES['stage5.write'].flags
-    assert 'stage5/draft.md' not in inv.NODES['stage5.write'].produces
+    assert '--rebuild-draft' not in _known_flags()
+    # F8A：旧 stage5 双臂稿路径只读拒识（legacy_incompatible），不进任何 produces。
+    assert 'stage5/ch{nn}.json' not in {
+        rel for spec in inv.NODES.values() for rel in spec.produces}
 
 
 def test_operator_redo_strategies_are_closed_and_explicit_per_node():
@@ -148,20 +158,12 @@ def test_operator_redo_strategies_are_closed_and_explicit_per_node():
         for node, spec in inv.NODES.items()
         if spec.operator_redo is not None
     }
+    # F8a：新链登记 operator_redo 的节点 = stage1.partition（范围外）＋
+    # 按章正文与装配（默认路径完整重建本节点当前正式输出）。
     assert registered == {
         'stage1.partition': 'canonical',
-        'stage2.characters': 'canonical',
-        'stage2.global': 'canonical',
-        'stage2.blueprint': 'canonical',
-        'stage4.design': 'canonical',
-        'stage4.plan': 'canonical',
-        'stage4.context': 'canonical',
-        'stage5.write': 'stale_chapters',
-        'stage5.review': 'review',
-        'stage6.hook': 'canonical',
-        'stage6.prepare': 'canonical',
-        'stage7.rename': 'canonical',
-        'stage7.assemble': 'canonical',
+        'str06.stage5.body': 'canonical',
+        'str06.stage7.assemble': 'canonical',
     }
     assert set(registered.values()) <= set(inv.OPERATOR_REDO_STRATEGIES)
     assert all(
@@ -169,9 +171,10 @@ def test_operator_redo_strategies_are_closed_and_explicit_per_node():
         for node, strategy in registered.items()
         if strategy == 'canonical'
     )
-    assert inv.NODES['stage6.approve'].operator_redo is None
-    # stage7.approve 已移入 RETIRED_NODES（批次 B4）；不再出现在 NODES。
-    assert 'stage7.approve' not in inv.NODES
+    assert 'str06.stage4.compile' not in registered
+    # 旧链节点键已整体移入 RETIRED_NODES，不再出现在 NODES。
+    for retired in ('stage7.approve', 'stage6.approve', 'stage5.write'):
+        assert retired not in inv.NODES
 
 
 def test_unmeasured_nodes_keep_the_default_high_effort():
@@ -180,7 +183,9 @@ def test_unmeasured_nodes_keep_the_default_high_effort():
     #   effort 前缀。三处闸说的是同一件事，见 `novel/llm/client.py::rungs_from_effort`。
     assert all(spec.effort in (None, 'low', 'high') for spec in inv.NODES.values())
     assert 'stage3.style' not in inv.NODES
-    assert inv.NODES['stage7.rename'].effort is None
+    # F8A：新链全部付费节点跟随全局默认（2026-09-16 裁决：全链 DeepSeek Flash）。
+    assert inv.NODES['str06.stage2.source'].effort is None
+    assert inv.NODES['str06.stage5.body'].effort is None
 
 
 def test_no_nodes_pin_a_model_over_the_global_default():
@@ -196,11 +201,10 @@ def test_no_nodes_pin_a_model_over_the_global_default():
 
 def test_free_nodes_are_the_ones_without_llm():
     free = {node for node, spec in inv.NODES.items() if not spec.paid}
-    # stage0.approve/edit（B1）与 stage7.approve（B4）退役后：NODES 17 → 16。
+    # F8A：新链免费节点 = stage0/1（范围外）＋ 两个结构性禁付的确定性节点。
     assert free == {
-        'stage0.remove',
-        'stage1.partition', 'stage4.context', 'stage5.review',
-        'stage6.approve', 'stage7.assemble',
+        'stage0.remove', 'stage1.partition',
+        'str06.stage4.compile', 'str06.stage7.assemble',
     }
 
 
@@ -225,8 +229,11 @@ def test_node_flags_are_registered_run_modes():
 
 def test_prompt_preview_has_one_current_flag():
     assert '--prompt-only' not in _known_flags()
-    assert '--dry-run' in inv.NODES['stage2.blueprint'].flags
-    assert '--dry-run' in inv.NODES['stage4.plan'].flags
+    # F8A：`--dry-run` 只留在范围外的 stage0/1；新链复检入口是 `--check-only`。
+    assert '--dry-run' in inv.NODES['stage0.remove'].flags
+    assert '--dry-run' in inv.NODES['stage1.partition'].flags
+    assert all('--dry-run' not in spec.flags
+               for node, spec in inv.NODES.items() if node.startswith('str06.'))
 
 
 def test_paid_flags_are_registered_and_accepted_by_their_node():
@@ -235,29 +242,30 @@ def test_paid_flags_are_registered_and_accepted_by_their_node():
         assert set(spec.paid_flags) <= set(spec.flags), node
 
 
-def test_stage4_replan_is_an_explicit_paid_design_action_only():
-    assert '--replan' in inv.PAID_FLAGS
-    accepting = {
-        node for node, spec in inv.NODES.items() if '--replan' in spec.flags
-    }
-    assert accepting == {'stage4.design'}
-    assert '--replan' not in inv.FREE_ENTRIES
+def test_no_flag_turns_a_free_node_paid():
+    """F8A：新链没有「把免费节点变付费」的旗标，`PAID_FLAGS` 是空表。
+
+    付费性由节点默认路径（`spec.paid`）与 `--check-only` 的免费覆盖共同决定；
+    旧链的 --revise／--replan／--resample 一族随旧节点整体退役。
+    """
+    assert inv.PAID_FLAGS == {}
+    assert all(not spec.paid_flags for spec in inv.NODES.values())
 
 
-def test_stage4_human_credential_flags_are_retired_and_recovery_flags_stay():
-    """人工闸退役后 stage4 不再有 review-token/close-review 凭据面；
-    免费恢复与 0-wire 编辑入口保持登记。"""
-    for retired in ('--review-token', '--close-review', '--validate-edit'):
-        assert retired not in inv.NODES['stage4.design'].flags
-        assert retired not in inv.NODES['stage4.plan'].flags
-    assert '--replan' in inv.NODES['stage4.design'].flags
-    assert '--repair-decision' not in inv.PAID_FLAGS
-    assert '--repair-decision' not in inv.VALUED_FLAGS
-    assert '--repair-decision' not in inv.NODES['stage4.design'].flags
-    assert '--chapters' not in inv.NODES['stage4.design'].flags
-    assert '--apply-binding' in inv.FREE_ENTRIES
-    assert '--apply-binding' in inv.VALUED_FLAGS
-    assert '--apply-binding' in inv.NODES['stage4.plan'].flags
+def test_no_human_credential_surface_survives_the_cutover():
+    """F8A：人工凭据旗标（review-token／close-review／validate-edit／
+    apply-binding／replan…）随旧链人工闸整体退役；新链恢复入口在生命周期表上。"""
+    retired = ('--review-token', '--close-review', '--validate-edit',
+               '--apply-binding', '--replan', '--repair-decision', '--chapters',
+               '--apply-edit', '--revise', '--wontfix', '--revalidate')
+    for flag in retired:
+        assert flag not in inv.FREE_ENTRIES, flag
+        assert flag not in inv.PAID_FLAGS, flag
+        assert flag not in inv.VALUED_FLAGS, flag
+        assert all(flag not in spec.flags for spec in inv.NODES.values()), flag
+    # 新链每个节点的免费恢复入口都在生命周期表上登记。
+    for node, spec in inv.NODES.items():
+        assert spec.lifecycle.recovery_entries, node
 
 
 def test_every_registered_flag_is_reachable():
@@ -267,8 +275,14 @@ def test_every_registered_flag_is_reachable():
 
 
 def test_valued_flags_are_orthogonal_to_cost():
-    assert '--apply-edit' in inv.FREE_ENTRIES
-    assert '--apply-edit' in inv.VALUED_FLAGS
+    """F8A：带值旗标只剩 `--source`（stage0 首次摄入的原始小说路径）。
+
+    它与成本正交：`--source` 不是免费入口也不是付费 flag——贵贱由节点默认路径
+    与 `--check-only` 决定，与「这个 flag 带不带值」是两个轴。
+    """
+    assert '--source' in inv.VALUED_FLAGS
+    assert '--source' not in inv.FREE_ENTRIES
+    assert '--source' not in inv.PAID_FLAGS
 
 
 def test_write_effects_only_names_current_flags():
@@ -287,9 +301,13 @@ def test_write_effects_only_names_current_flags():
 
 
 def test_partial_rewrite_flags_are_current_free_paths():
+    """F8a：旧链的局部改写旗标随旧链退役，`PARTIAL_REWRITE_FLAGS` 为空表。
+
+    不变量本身保留：将来若重新出现局部改写路，它必须 ⊆ `FREE_ENTRIES` 且不得
+    借 `--revalidate`（提升路改的是状态，不是内容）。空表是诚实的现状。
+    """
     assert set(inv.PARTIAL_REWRITE_FLAGS) <= set(inv.FREE_ENTRIES)
     assert '--revalidate' not in inv.PARTIAL_REWRITE_FLAGS
-    assert '--apply-edit' in inv.PARTIAL_REWRITE_FLAGS
 
 
 def test_the_stage0_warning_union_covers_its_value_domain_exactly():
@@ -353,30 +371,29 @@ def test_stage0_admission_covers_mechanical_passed_shape():
 def test_node_lifecycle_covers_real_nodes_and_preserves_boundaries():
     from contracts.invariants import NODES
 
-    # stage6.semantic 已退役（2026-09-15）：20 → 19
-    # stage0.approve / stage0.edit 退役（2026-09-15 全自动裁决）：19 → 17
-    # stage7.approve 退役（批次 B4）：17 → 16
-    assert len(NODES) == 16
+    # F8a（STR-06 切换）：旧链 16 个节点整体退役，新链 11 个 str06. 节点 +
+    # stage0.remove / stage1.partition（范围外保留）= 13。
+    assert len(NODES) == 13
     assert all(spec.lifecycle is not None for spec in NODES.values())
     for node, spec in NODES.items():
         life = spec.lifecycle
         assert life.input_workpack and life.unit_kind and life.recovery_entries
         assert set(life.repair_owners) <= set(NODES)
-        # 审批闸人工（Commander 退役）：登记了 approval_bindings 的节点必须
-        # 以 human 为审阅模式；approval_bindings 本身保留，供审批状态投影与
-        # 历史 reviewer 工作单元解码使用。
-        assert bool(life.approval_bindings) == (life.review_mode == 'human')
-        assert life.executor_content_limit == (4 if spec.paid else 0)
-    # Stage2 语义审阅退役：两个生产节点不再有任何审批登记或人审面。
-    assert not NODES['stage2.global'].lifecycle.approval_bindings
-    assert not NODES['stage2.blueprint'].lifecycle.approval_bindings
-    assert NODES['stage2.global'].lifecycle.review_mode == 'none'
-    assert NODES['stage2.blueprint'].lifecycle.review_mode == 'none'
-    assert NODES['stage4.context'].lifecycle.review_mode == 'none'
+        # 新链没有任何审批面：全部节点 review_mode='none' 且无 approval_bindings。
+        assert life.review_mode == 'none', node
+        assert not life.approval_bindings, node
+        # 付费节点 4 次内容调用上限；确定性节点 0（结构性禁付）。
+        assert life.executor_content_limit == (4 if spec.paid else 0), node
+    # 确定性节点确实是确定性生成模式。
+    assert NODES['str06.stage4.compile'].lifecycle.generation_mode == 'deterministic'
+    assert NODES['str06.stage7.assemble'].lifecycle.generation_mode == 'deterministic'
     assert NODES['stage1.partition'].lifecycle.review_mode == 'none'
-    assert NODES['stage7.assemble'].lifecycle.review_mode == 'none'
-    assert NODES['stage5.review'].lifecycle.generation_mode == 'deterministic'
-    assert NODES['stage4.design'].lifecycle.session_scope != NODES['stage4.plan'].lifecycle.session_scope
+    # 单元粒度如实区分：book／chapter／strategy_and_chapter 三种都在表内。
+    kinds = {spec.lifecycle.unit_kind for spec in NODES.values()}
+    assert {'book', 'chapter', 'strategy_and_chapter'} <= kinds, kinds
+    # 同阶段不同 owner 的会话作用域不串。
+    assert (NODES['str06.stage2.source'].lifecycle.session_scope
+            != NODES['str06.stage2.names'].lifecycle.session_scope)
 
 
 def test_deterministic_rebuild_whitelist_is_free_and_deterministic():

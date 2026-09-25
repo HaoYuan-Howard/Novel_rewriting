@@ -76,13 +76,10 @@ from contracts.invariants import (
     DESIGN_REVIEW_STATES,
     DESIGN_STRATEGY_REPLAN_CONSTRAINTS,
     DESIGN_STRATEGY_DECISIONS,
-    HOOK_APPROACHES,
     STAGE6_REVIEW_CONTRACT,
     STAGE7_REVIEW_CONTRACT,
     STAGE6_APPROVAL_CHECK_BASIS,
     STAGE7_APPROVAL_CHECK_BASIS,
-    HOOK_SLOTS,
-    slot_of,
     INBOX_ATTENTION,
     INBOX_DELIVERY_EFFECT,
     INBOX_KIND,
@@ -143,12 +140,8 @@ from contracts.schema.stage4 import (
 from contracts.schema.stage5 import (
     ChapterSegment, JudgedDraft, RoundFreeProvenance, RoundLlmProvenance,
 )
-from contracts.schema.stage6 import (
-    HookApprovalResolution,
-    HookProvenance,
-    HookSources,
-    Mech,
-)
+# ⚠ F8a：`contracts.schema.stage6` 的 import 随 Stage6 整层退役删除
+#   （HookApprovalResolution／HookProvenance／HookSources／Mech；F6d 登记）。
 from contracts.schema.report import (
     AccountingLine, ProvenanceSection, RuleLine, StatusCounts,
 )
@@ -2203,129 +2196,6 @@ class CompactApprovalCheck(FrozenModel):
         return self
 
 
-class Stage6PrepareView(StrictModel):
-    """准备产物缺席也返回明确状态；不依赖 Hook 已经生成。"""
-
-    sid: str = Field(min_length=1)
-    title: str
-    status: PrepareState
-
-
-class Stage6PrepareWorkpack(PrepareWorkpack):
-    sid: str = Field(min_length=1)
-    title: str
-
-
-class Stage6PrepareEditRequest(StrictModel):
-    """浏览器只回交 opaque 基线和本次内容，不计算来源摘要。"""
-
-    review_token: str = Field(pattern=r'^s6p1_[0-9a-f]{64}$')
-    actor: str = Field(min_length=1)
-    reason: str = Field(min_length=1)
-    source_blurb: PrepareDraft
-
-
-class Stage6PrepareDecisionRequest(StrictModel):
-    review_token: str = Field(pattern=r'^s6p1_[0-9a-f]{64}$')
-    actor: str = Field(min_length=1)
-    reason: str = Field(min_length=1)
-    decision: Literal[STAGE6_PREPARE_DECISIONS]
-    edit: PrepareDraft | None = None
-
-
-class Stage6PrepareEditPreview(StrictModel):
-    """复用 producer 编译结果的免费预览；不是语义接受。"""
-
-    would_apply: bool
-    findings: list[Finding]
-    source_blurb: SourceBlurbGrounding[FactEvidence, HookFactEvidence]
-
-
-class Stage6ApprovalCandidate(FrozenModel):
-    """Stage6 终审的一条候选：文本、机械结论与 A/B 原始证据同包。"""
-
-    index: int = Field(ge=1)
-    slot: Literal[HOOK_SLOTS]
-    approach: Literal[HOOK_APPROACHES]
-    chars: int = Field(ge=0)
-    text: str = Field(min_length=1)
-    subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
-    mech: Mech
-    findings: list[Finding]
-
-    @model_validator(mode='after')
-    def _slot_matches_the_visible_index(self) -> 'Stage6ApprovalCandidate':
-        if self.slot != slot_of(self.index):
-            raise ValueError('候选 slot 必须与 1 起 index 使用同一位置身份')
-        return self
-
-
-class Stage6ApprovalChapter(FrozenModel):
-    chapter_ordinal: int = Field(ge=1)
-    text: str = Field(min_length=1)
-
-
-class Stage6ApprovalMaterials(FrozenModel):
-    """终审可实际核验的事实来源；原钩子与重写正文各只下发一次。"""
-
-    prepare_subject_sha256: Sha256
-    source_hook: str = Field(min_length=1)
-    source_blurb: SourceBlurbGrounding[FactEvidence, HookFactEvidence]
-    rewritten_chapters: list[Stage6ApprovalChapter] = Field(min_length=1)
-
-    @model_validator(mode='after')
-    def _chapters_cover_the_reading_order(self) -> 'Stage6ApprovalMaterials':
-        if [row.chapter_ordinal for row in self.rewritten_chapters] != list(
-                range(1, len(self.rewritten_chapters) + 1)):
-            raise ValueError('文案终审正文必须按阅读序完整覆盖连续章号')
-        return self
-
-
-class Stage6ApprovalWorkpack(FrozenModel):
-    """Stage6 当前候选集的紧凑终审包。
-
-    ``workpack/review_token`` 只负责本次提交的精确 TOCTOU；长期人工适用性
-    只看 ``review_identity`` 与显式审阅契约。validation seal 仍可关闭式重验，
-    但 execution code / rules 只在服务端参与 seal，不再作为公开字段外发。
-    """
-
-    v: Literal[4] = 4
-    kind: FinalApprovalWorkpackKind
-    sid: str = Field(min_length=1)
-    review_contract_version: Literal[STAGE6_REVIEW_CONTRACT] = STAGE6_REVIEW_CONTRACT
-    review_identity_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
-    validation_seal_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
-    review_token: str = Field(pattern=r'^s6r4_[0-9a-f]{64}$')
-    artifact_subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
-    rationale: str = Field(min_length=1)
-    materials: Stage6ApprovalMaterials
-    #: 检查固定针对去审批候选；当前接受状态只由 disposition/current_approval 表达。
-    check_basis: Literal[STAGE6_APPROVAL_CHECK_BASIS] = STAGE6_APPROVAL_CHECK_BASIS
-    check: CompactApprovalCheck
-    candidates: list[Stage6ApprovalCandidate] = Field(min_length=3, max_length=3)
-    workpack_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
-    disposition: ApprovalWorkpackDisposition
-    current_slot: Literal[HOOK_SLOTS] | None = None
-    current_approval: HookApprovalResolution | None = None
-
-    @model_validator(mode='after')
-    def _currentness_and_candidate_set_are_closed(self) -> 'Stage6ApprovalWorkpack':
-        if self.kind != 'stage6':
-            raise ValueError('Stage6ApprovalWorkpack.kind 必须是 stage6')
-        if self.review_token != f's6r4_{self.workpack_sha256}':
-            raise ValueError('Stage6 review_token 必须封装当前 exact workpack')
-        if [row.index for row in self.candidates] != [1, 2, 3]:
-            raise ValueError('Stage6 workpack 必须按产物顺序完整覆盖 1..3')
-        current = self.current_slot is not None and self.current_approval is not None
-        if (self.disposition == 'already_current') != current:
-            raise ValueError('already_current 必须携带当前 slot 与 approval')
-        if self.current_approval is not None \
-                and self.current_approval.review_identity_sha256 \
-                != self.review_identity_sha256:
-            raise ValueError('当前 approval 必须绑定这份长期 review identity')
-        return self
-
-
 class Stage7ApprovalWorkpack(FrozenModel):
     """Stage7 当前人物决策面的紧凑终审包；身份分层同 Stage6。"""
 
@@ -3224,86 +3094,6 @@ class GlobalView(StrictModel):
 # ─────────────────────────────────────────────────────────────────────────────
 # 二d、S-11 开篇文案（`GET /api/novels/:sid/stage6`）
 # ─────────────────────────────────────────────────────────────────────────────
-
-class HookCandidateLine(FrozenModel):
-    """一条候选的视图行。`index` / `chars` / `approved` 是 view 现算的。
-
-    ⚠ **`chars` 必须在 Python 侧走 `measure()` 那把尺子现算**（`stage6.Candidate`
-    裁掉 `chars` 时明写的条件）：同一条候选 `measure()['chars']=253` 而
-    `len(text)=277`——下沉到 JS 的后果是同一页上人会看到两个字数。
-    """
-
-    index: int = Field(ge=1)
-    approach: Literal[HOOK_APPROACHES]
-    chars: int = Field(ge=0)
-    text: str = Field(min_length=1)
-    subject_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
-    mech: Mech
-    findings: list[Finding]
-
-    #: 这一条是不是当前定稿（按**位置身份**比：`hook.approved.slot == slot_of(index)`）。
-    #: ⚠ 曾按 `approach` 比。同一种策略采两条样本时，那样写会把**两条**都标成已定稿。
-    approved: bool
-
-
-class HookApprovedLine(FrozenModel):
-    """定稿的视图行。`origin ∈ {auto, human}`：auto=流水线默认定稿，human=人工改选。
-    这里不抄第二份 Literal（api.py 纪律 ①）。"""
-
-    #: 从**哪一条候选**来的；`None` = 没有前身（人手写）。
-    slot: Literal[HOOK_SLOTS] | None
-    #: 那条候选用的什么策略。**现算**（`candidates[slot].approach`），
-    #: `slot is None` 时同为 `None`——没有前身就没有策略可报。
-    approach: str | None
-    chars: int = Field(ge=0)
-    text: str = Field(min_length=1)
-    origin: str = Field(min_length=1)
-    mech: Mech
-    findings: list[Finding]
-    resolution: HookApprovalResolution
-
-
-class Stage6View(StrictModel):
-    """`GET /api/novels/:sid/stage6`。**S-11 那一屏的全部数据。**
-
-    ⚠ 判据表不在这里——**结论只能来自 `/check/stage6`**（`R-11.4`）。
-    ⚠ 产物不在 ⇒ 404（本屏没有产物就没有内容）；读不回 ⇒ 409。
-    """
-
-    sid: str = Field(min_length=1)
-    title: str = Field(min_length=1)
-    source_hook_text: str = Field(min_length=1)
-
-    lead_upto: int = Field(ge=1)
-    rationale: str = Field(min_length=1)
-    candidates: list[HookCandidateLine] = Field(min_length=3, max_length=3)
-    approved: HookApprovedLine | None
-    judged: dict[str, JudgedDraft]
-    sources: HookSources
-
-    invalid_exists: bool
-    freshness: Freshness
-    reason: FreshnessReason
-    ghosts: list[str] = Field(default_factory=list)
-
-    provenance: HookProvenance = Field(alias='_provenance')
-
-    @model_validator(mode='after')
-    def _the_approved_flag_matches_the_approved_hook(self) -> Stage6View:
-        """`candidates[].approved` 与 `approved` 说的必须是同一件事。"""
-        flagged = [slot_of(c.index) for c in self.candidates if c.approved]
-        if self.approved is None and flagged:
-            raise ValueError(f'没有定稿而 {flagged} 标着已定——两格在说两件事')
-        if self.approved is not None:
-            want = [self.approved.slot] if self.approved.slot is not None else []
-            if flagged != want:
-                raise ValueError(
-                    f'定稿来自 {self.approved.slot!r} 而候选标记是 {flagged}——'
-                    f'无前身（人手写）时不许有候选自称定稿')
-        if [c.index for c in self.candidates] != [1, 2, 3]:
-            raise ValueError('候选 index 必须是 1..3（顺序即产物顺序）')
-        return self
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 二e、S-12 人名替换 + 成书（`GET /api/novels/:sid/stage7[/:o]`）

@@ -69,11 +69,20 @@ def _text(path: Path) -> str:
 
 # ───────────────────────── 方向①：登记项必须真实存在 ─────────────────────────
 
+#: F8a 已兑现的登记项（Stage6 注册键／HOOK_* 常量随契约翻转删除、shape-break 账
+#: 已翻为新链）：它们**不在现役面里正是删除成功的证据**，不再要求存在。
+_EXECUTED_BY_F8A = ('contracts/invariants.py#stage6.',
+                    'contracts/invariants.py::HOOK_',
+                    'tests/test_artifact_versions.py#stage6/')
+
+
 def test_registered_items_all_exist():
     assert STR06_F6D_RETIREMENT, '退役登记为空'
     problems: list[str] = []
     for item in STR06_F6D_RETIREMENT:
         target = item.target
+        if target.startswith(_EXECUTED_BY_F8A):
+            continue
         file = _file_of(target)
         if file is None:
             problems.append(f'{target}: 无法解析文件部分')

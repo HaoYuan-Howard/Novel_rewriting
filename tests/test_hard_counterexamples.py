@@ -1,16 +1,24 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""VAL-02：Stage4/6/7 每条 HARD 都有真实会红的最小反例。"""
+"""VAL-02：新链每条 HARD 都有真实会红的最小反例（F8a 重写）。
+
+【F8a 重写】旧文件盯的是旧 Stage4/6/7 判据；那些判据随旧链退役。现在盯新链：
+`tests/hard_cases.py` 登记跨判据的 consolidated 抽样（每条新链 HARD 至少一个最小
+会红样本），`tests/test_str06_*.py` 是各能力的完整反例套件。两条合起来覆盖全部
+新链 HARD——`test_every_new_chain_hard_rule_is_covered_somewhere` 钉住这个并集，
+防止「哪一边都以为另一边在管」。
+"""
 from __future__ import annotations
 
-import copy
+import re
+from pathlib import Path
 
 import pytest
 
-from contracts.schema.common import Finding
 from tests.hard_cases import CASES
 
-_STAGES = ('stage4', 'stage6', 'stage7')
+_ROOT = Path(__file__).resolve().parent
+_STAGES = ('stage4', 'stage5', 'stage7')
 
 
 def _hard_rules() -> dict[str, str]:
@@ -19,155 +27,52 @@ def _hard_rules() -> dict[str, str]:
             if row.sev == 'hard' and row.stage in _STAGES}
 
 
-def test_every_hard_rule_of_stage4_6_7_has_a_counterexample():
+def _str06_suite_text() -> str:
+    """新链反例套件的全文（覆盖检查的扫描面）。"""
+    return '\n'.join(
+        path.read_text(encoding='utf-8')
+        for path in sorted(_ROOT.glob('test_str06_*.py')))
+
+
+def test_every_new_chain_hard_rule_is_covered_somewhere():
+    """并集覆盖：每条新链 HARD 至少在一个地方有真实会红的反例。
+
+    反例（注册表空着 / 套件没跑）：`hard` 为空 ⇒ 判据表没被 import；
+    stray（CASES 点名不存在的判据）与 wrong（层登记不符）同样当场红。
+    """
     hard = _hard_rules()
-    assert hard, '三层一条 HARD 都没有——判据表多半没被 import'
-    assert not (missing := sorted(set(hard) - set(CASES))), (
-        f'这些 HARD 没有登记反例：{missing}')
+    assert hard, '新链一条 HARD 都没有——判据表多半没被 import'
     assert not (stray := sorted(set(CASES) - set(hard))), (
         f'CASES 点名了不存在或非 HARD 的判据：{stray}')
     assert not (wrong := sorted(rule for rule, case in CASES.items()
                                 if case.stage != hard[rule])), (
         f'这些样本登记的层与判据表不符：{wrong}')
+    suites = _str06_suite_text()
+    uncovered = sorted(
+        rule for rule in hard
+        if rule not in CASES
+        and not re.search(rf'\b{re.escape(rule)}\b', suites))
+    assert not uncovered, (
+        f'这些 HARD 在 hard_cases 与 str06 套件里都找不到反例：{uncovered}')
+
+
+def test_the_coverage_scan_actually_scans_something():
+    """守卫的守卫：扫描面塌成空文件时，上面那条会全绿。"""
+    text = _str06_suite_text()
+    assert len(text) > 10_000, 'str06 反例套件扫描面异常小——glob 没匹配到文件？'
 
 
 @pytest.mark.parametrize('rule', sorted(CASES))
-def test_each_counterexample_actually_reddens_its_target_rule(rule, tmp_path):
+def test_each_counterexample_actually_reddens_its_target_rule(rule):
+    """逐条真跑：样本必须产出结论，且命中它登记的那一条。
+
+    `expect` 是真实判据入口的输出子串（检查项名或 M 系前缀）——不是替身断言，
+    换一段与生产无关的文本当场红。
+    """
     case = CASES[rule]
-    findings = case.build(tmp_path) if case.uses_tmp_path else case.build()
+    findings = case.build()
     assert findings, f'{rule} 的样本一条结论都没产出来'
-    assert all(isinstance(finding, Finding) for finding in findings)
-    got = {finding.rule for finding in findings}
-    assert rule in got, f'{rule} 的样本只命中了 {sorted(got)}'
-
-
-def test_prepare_evidence_green_control_checks_all_facts_and_opening(tmp_path):
-    from tests.hard_cases import _prepare_report
-
-    report = _prepare_report(tmp_path, broken=False)
-    row = next(line for line in report.rules if line.rule == 'prepare_evidence_valid')
-    assert row.status == 'ok' and row.findings == []
-    assert row.scanned == '4', '正文支持、钩子支持、未决事实及连续开篇范围不能漏检'
-    assert report.node == 'stage6.prepare' and report.stage == 'stage6'
-    assert {line.rule for line in report.rules} == {
-        'prepare_evidence_valid', 'prepare_semantic_review'}
-    assert report.passed and report.badge == 'amber' and report.counts.skipped == 0
-    semantic = next(line for line in report.rules if line.rule == 'prepare_semantic_review')
-    # 批次 B4：机械通过即 auto accept；UNVER 仍披露「语义质量未审」，
-    # 不得把 auto accept 升格为语义绿。
-    assert semantic.status == 'unver', 'auto accept 不能替代语义质量未审披露'
-    assert '已经独立接受' in semantic.why
-    from novel.orchestrator import approvals
-    assert not approvals.get(tmp_path, report.sid).gate['s6'], '节点两规则通过不代表最终文案已接受'
-
-
-def _stage4_rules(plan: dict) -> set[str]:
-    from tests.hard_cases import _find4
-    return {finding.rule for finding in _find4(plan)}
-
-
-@pytest.mark.parametrize('damage', [
-    'missing_node', 'duplicate_placement', 'duplicate_delivery', 'foreign_node', 'foreign_scene',
-    'early_context', 'missing_evidence', 'duplicate_evidence', 'foreign_evidence',
-    'missing_stage', 'foreign_stage', 'missing_state_endpoint', 'wrong_state_endpoint',
-    'missing_constraint_endpoint', 'wrong_constraint_endpoint', 'same_scene_violation',
-])
-def test_presentation_hazards_reject_at_the_production_guard(damage):
-    """旧事实/材料/状态反例迁入完整节点契约，各分支仍经过同一正式判据。"""
-    from tests.hard_cases import _clean_plan4, _find4, _BPS4
-    plan = copy.deepcopy(_clean_plan4())
-    blueprint = copy.deepcopy(_BPS4)
-    chapter = plan['output_chapters'][0]
-    placements = chapter['beat_placements']
-    first = placements[0]['deliveries'][0]
-    if damage == 'missing_node':
-        placements.pop()
-    elif damage == 'duplicate_placement':
-        placements.append(copy.deepcopy(placements[0]))
-    elif damage == 'duplicate_delivery':
-        placements[0]['deliveries'].append(copy.deepcopy(first))
-    elif damage == 'foreign_node':
-        placements[0]['beat_ref'] = 'b02_01'
-    elif damage == 'foreign_scene':
-        first['scene_ref'] = 's99'
-    elif damage == 'early_context':
-        chapter['scenes'][0]['context_beat_refs'] = ['b01_03']
-    elif damage == 'missing_evidence':
-        first['evidence_refs'] = []
-    elif damage == 'duplicate_evidence':
-        first['evidence_refs'] *= 2
-    elif damage == 'foreign_evidence':
-        first['evidence_refs'] = ['e02_01']
-    elif damage == 'missing_stage':
-        first['source_context_refs'] = []
-    elif damage == 'foreign_stage':
-        first['source_context_refs'] = placements[1]['deliveries'][0]['source_context_refs']
-    elif damage == 'same_scene_violation':
-        blueprint['blueprints'][0]['constraints'][0]['kind'] = 'same_scene'
-    else:
-        last = placements[-1]['deliveries'][0]
-        last['presentation_instruction'] = '完成决定留下的呈现'
-        earlier = copy.deepcopy(last)
-        earlier.update(scene_ref='s02', presentation_instruction='先铺垫决定的犹豫')
-        placements[-1]['deliveries'].insert(0, earlier)
-        state = {'kind': 'state', 'ref': 'st01_01', 'endpoint': 'established', 'scene_ref': 's03'}
-        constraint = {'kind': 'constraint', 'ref': 'c01_01', 'endpoint': 'after', 'scene_ref': 's03'}
-        chapter['anchor_bindings'] = [state, constraint]
-        if damage == 'missing_state_endpoint':
-            chapter['anchor_bindings'].remove(state)
-        elif damage == 'wrong_state_endpoint':
-            state['scene_ref'] = 's01'
-        elif damage == 'missing_constraint_endpoint':
-            chapter['anchor_bindings'].remove(constraint)
-        elif damage == 'wrong_constraint_endpoint':
-            constraint['scene_ref'] = 's01'
-        else:
-            raise AssertionError(damage)
-    assert 'placement_ref' in {row.rule for row in _find4(plan, blueprints=blueprint)}
-    assert 'placement_ref' not in _stage4_rules(_clean_plan4())
-
-
-@pytest.mark.parametrize('damage', [
-    'missing_body', 'changed_body', 'missing_constraint', 'changed_stage', 'missing_state',
-    'changed_state_permission',
-])
-def test_context_does_not_drop_or_rewrite_plot_material(damage):
-    from tests.hard_cases import _clean_plan4, _ctx4, _find4
-    plan = _clean_plan4()
-    ctx = _ctx4(plan)
-    chapter = ctx['chapters'][0]
-    if damage == 'missing_body':
-        chapter['beats'].pop()
-    elif damage == 'changed_body':
-        chapter['beats'][0]['content'] = '邀请来自另一个人。'
-    elif damage == 'missing_constraint':
-        chapter['constraints'] = []
-    elif damage == 'changed_stage':
-        chapter['scenes'][0]['deliveries'][0]['stages'][0]['place'] = '错误地点'
-    elif damage == 'missing_state':
-        chapter['states'] = []
-    else:
-        chapter['scenes'][-1]['state_events'] = []
-    rules = {row.rule for row in _find4(plan, ctx=ctx)}
-    assert 'ctx_plot_exact' in rules
-    if damage == 'changed_state_permission':
-        assert 'ctx_permission_exact' in rules
-    assert not {row.rule for row in _find4(plan) if row.sev == 'hard'}
-
-
-def test_shared_evidence_and_ordinary_split_are_legal_without_full_background_release():
-    from tests.hard_cases import _clean_plan4, _find4
-    plan = _clean_plan4()
-    chapter = plan['output_chapters'][0]
-    target = chapter['beat_placements'][-1]
-    target['deliveries'][0]['presentation_instruction'] = '完成决定留下的呈现'
-    earlier = copy.deepcopy(target['deliveries'][0])
-    earlier.update(scene_ref='s02', presentation_instruction='先铺垫决定的犹豫')
-    target['deliveries'].insert(0, earlier)
-    chapter['anchor_bindings'] = [
-        {'kind': 'state', 'ref': 'st01_01', 'endpoint': 'established', 'scene_ref': 's03'},
-        {'kind': 'constraint', 'ref': 'c01_01', 'endpoint': 'after', 'scene_ref': 's03'},
-    ]
-    assert 'placement_ref' not in {row.rule for row in _find4(plan)}
-    chapter['scenes'][1]['context_beat_refs'] = ['b01_03']
-    assert 'placement_ref' in {row.rule for row in _find4(plan)}
+    assert all(isinstance(finding, str) and finding.strip() for finding in findings), (
+        f'{rule} 的样本结论不是非空字符串：{findings!r}')
+    assert any(case.expect in finding for finding in findings), (
+        f'{rule} 的样本没有命中 {case.expect!r}，只产出了 {findings}')

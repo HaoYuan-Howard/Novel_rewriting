@@ -61,18 +61,15 @@ def test_every_registered_rule_id_need_is_satisfied_by_its_prompt_surface():
         assert set(rule.needs_id_spaces) <= set(surface.provides_id_spaces)
 
 
-def test_stage4_registered_ids_match_the_current_plot_and_evidence_catalog():
+def test_no_live_rule_declares_a_prompt_surface_after_the_cutover():
+    """F8a：新链不注册 prompt surface——判据与模型下发面之间的 ID 空间对账随旧链
+    的 `needs_id_spaces` 声明一起退役（新链 prompt 由 `novel/stages/str06/prompts.py`
+    渲染，身份是请求身份而非注册表 surface）。`_validate` 的分支保留为防御：
+    任何重新声明 `needs_id_spaces` 的判据必须先注册 surface，否则注册期即红。
+    """
     from contracts.rules import REGISTRY
-    from novel.stages.stage4.plot_binding import build_evidence_catalog
-    from tests.plot_fixtures import blueprint
-
-    catalog = build_evidence_catalog(blueprint())[1]
-    surface = REGISTRY.prompt_surface('stage4.plan')
-    assert {'beats', 'states', 'constraints', 'evidence_anchors'} <= set(surface.provides_id_spaces)
-    assert not {'fact_atoms', 'source_stages'} & set(surface.provides_id_spaces)
-    assert catalog['blueprint']['beats'][0]['beat_id'] == 'b01_01'
-    assert catalog['blueprint']['beats'][0]['evidence_refs'] == ['e01_01']
-    assert 'e01_01' in catalog['evidence_refs']
+    assert [r.rule for r in REGISTRY.all() if r.needs_id_spaces] == []
+    assert [r.rule for r in REGISTRY.all() if r.prompt_surface] == []
 
 
 def test_bad_severity_raises():
@@ -129,13 +126,18 @@ def test_disclosure_and_degradable_sets_are_pinned():
     · 正向：集合空了 ⇒ 分层机制被整体绕开，上面那条反向断言照样绿。
     """
     from contracts.rules import REGISTRY
+    # F8a：新链的披露面是两条语义未评判据（正文文学质量、新名阅读质量）。
+    # 旧链的 character_semantics_unverifiable／secrets_absent／plot_semantics／
+    # s0_correctness 随旧链判据退役——Stage6 判官与生产正文 Judge 取消后，
+    # 语义质量一律走这两条 unver 披露。
     disclosed = {r.rule for r in REGISTRY.all() if r.disclosable_unver}
     assert disclosed == {
-        'character_semantics_unverifiable', 'secrets_absent', 'plot_semantics',
-        's0_correctness'}, \
+        'body_semantics_unver', 'naming_quality_unver', 's0_correctness'}, \
         '披露集合变化须同步 Q-13 理由与本钉扎'
+    # F8a：新链没有可降级判据——篇幅超限只有篇幅带可披露（R-7.3），
+    # 不是「HARD 预算耗尽后降级」的 degradable 形状。
     degradable = {r.rule for r in REGISTRY.all() if r.degradable}
-    assert degradable == {'paragraph_budget_missed'}, \
+    assert degradable == set(), \
         '可降级集合变化须同步契约 §七 与本钉扎'
     # 披露集合同时是机械准入的唯一披露面（单一落点）
     from novel.orchestrator.mechanical_admission import SEMANTIC_UNREVIEWED_RULES
@@ -180,8 +182,8 @@ def test_a_fix_route_is_accepted_when_the_node_and_flag_both_exist():
     下面每条 `pytest.raises` 都会绿，而真表一条也注册不进来。
     """
     reg = Registry()
-    reg.register(_s2(rule='r_fix_free', fix=('stage2.blueprint', '--renormalize')))
-    reg.register(_s2(rule='r_fix_paid', fix=('stage2.characters', '--resample')))
+    reg.register(_s2(rule='r_fix_free', fix=('str06.stage2.source', '--check-only')))
+    reg.register(_s2(rule='r_fix_recheck', fix=('str06.stage2.names', '--check-only')))
     assert len(reg) == 2
 
 
@@ -196,55 +198,32 @@ def test_a_fix_route_may_not_name_a_flag_the_node_does_not_accept():
 
     flag 不在该节点的 `flags` 里 ⇒ `build_argv` 会当场拒收，
     于是「这一条能 0 成本修」是一句**永远兑现不了**的承诺，而表里只看得见
-    一句「修法：…」。实例：`--revise` 是 stage5 的，`stage2.blueprint` 接不了它。
+    一句「修法：…」。实例：`--revise` 是旧链 stage5 的，新链节点接不了它。
     """
     with pytest.raises(ValueError, match='不在 `NODES'):
-        Registry().register(_s2(fix=('stage2.blueprint', '--revise')))
+        Registry().register(_s2(fix=('str06.stage2.source', '--revise')))
 
 
 def test_a_fix_route_may_not_point_at_another_layer():
     """指到别的层 ⇒ 报告让人去改一个**不产这份产物**的节点。"""
     with pytest.raises(ValueError, match='属 stage5'):
-        Registry().register(_s2(fix=('stage5.write', '--dry-run')))
+        Registry().register(_s2(fix=('str06.stage5.body', '--check-only')))
 
 
 def test_a_fix_route_needs_at_least_one_flag():
-    """只写节点名 = 「去跑一次默认路径」，而 stage2 的默认路径**要花钱**
+    """只写节点名 = 「去跑一次默认路径」，而付费节点的默认路径**要花钱**
     ——那对一条声称 0 成本的修复路是假话。"""
     with pytest.raises(ValueError, match='至少要'):
-        Registry().register(_s2(fix=('stage2.blueprint',)))
+        Registry().register(_s2(fix=('str06.stage2.source',)))
 
 
-def test_a_valued_fix_route_needs_a_value_or_a_finding_source():
-    with pytest.raises(ValueError, match='没有值.*finding'):
-        Registry().register(_s2(fix=('stage2.blueprint', '--chapters')))
-
-    reg = Registry()
-    reg.register(_s2(
-        fix=('stage2.blueprint', '--chapters'),
-        fix_args_from_finding=('--chapters',),
-    ))
-    assert len(reg) == 1
-
-
-def test_a_fix_argument_cannot_have_two_sources_or_a_stray_declaration():
-    with pytest.raises(ValueError, match='两个来源'):
-        Registry().register(_s2(
-            fix=('stage2.blueprint', '--chapters', '11'),
-            fix_args_from_finding=('--chapters',),
-        ))
-    with pytest.raises(ValueError, match='没有对应'):
-        Registry().register(_s2(
-            fix=('stage2.blueprint', '--renormalize'),
-            fix_args_from_finding=('--chapters',),
-        ))
-
-
-def test_a_static_valued_fix_argument_cannot_be_only_whitespace():
-    with pytest.raises(ValueError, match='空白值'):
-        Registry().register(_s2(
-            fix=('stage2.blueprint', '--chapters', '   '),
-        ))
+def test_no_live_rule_uses_a_valued_fix_route_after_the_cutover():
+    """F8a：新链没有任何节点接受带值旗标（节点级旗标只有 `--check-only`），
+    因此现役判据不可能有价值型 fix 路由。`_validate` 的带值分支保留为防御——
+    将来节点重新接受带值旗标时，那条路径仍会被注册期校验守着。
+    """
+    from contracts.rules import REGISTRY
+    assert [r.rule for r in REGISTRY.all() if r.fix and len(r.fix) > 1] == []
 
 
 def test_the_fix_route_is_what_makes_the_cost_colour_derivable():
@@ -255,10 +234,12 @@ def test_the_fix_route_is_what_makes_the_cost_colour_derivable():
     §5.1 那一列就不再携带信息了。
     """
     from novel.orchestrator.nodes import is_paid
-    free = _s2(rule='r_c_free', fix=('stage2.blueprint', '--renormalize'))
-    paid = _s2(rule='r_c_paid', fix=('stage2.global', '--purge-role'))
+    # F8a：新链唯一可注册的 fix 路由指向确定性节点（默认路径即 0 成本）；
+    # 付费节点的默认路径要花钱，`_validate` ⑩ 拒绝为它登记无旗标 fix。
+    free = _s2(rule='r_c_free', fix=('str06.stage4.compile',))
     assert is_paid(free.fix[0], free.fix[1:]) is False
-    assert is_paid(paid.fix[0], paid.fix[1:]) is True
+    assert is_paid('str06.stage5.body', ()) is True
+    assert is_paid('str06.stage2.source', ('--check-only',)) is False
 
 
 def test_wordlist_rule_must_declare_its_baseline():
@@ -279,28 +260,27 @@ def test_registry_covers_exactly_the_current_stages():
 
 def test_registry_is_not_vacuously_empty():
     from contracts.rules import REGISTRY
+    # F8a：Stage6 整层退役后现役判据层为 stage0/1/2/4/5/7。
     assert all(REGISTRY.of_stage(stage) for stage in ('stage0', 'stage1', 'stage2',
-                                                      'stage4', 'stage5', 'stage6',
-                                                      'stage7'))
+                                                      'stage4', 'stage5', 'stage7'))
     assert not REGISTRY.of_stage('stage3'), '退役 Stage3 不得残留现役判据'
+    assert not REGISTRY.of_stage('stage6'), '退役 Stage6 不得残留现役判据'
 
 
-def test_semantic_check_kind_is_confined_to_stage6():
-    """「语义校验只许出现在 stage6，其余层全机械」——2026-08-14 产品裁决的当前形态。
+def test_no_semantic_check_kind_survives_the_str06_cutover():
+    """「全链机械，语义一律 unver 披露」——STR-06 切换（F8a）后的当前形态。
 
-    · 反向：语义判据跑出这一层 ⇒ 裁决被静默突破——语义判据要花钱、结论要靠
-      审判模型，放错层就是把「确定性可查」的层悄悄换成「花钱问模型」；
-    · 正向（守卫的守卫）：语义判据的层集合空着，上面那条反向断言照样绿。
-
-    ⚠ 原裁决写的是 `{stage5, stage6}`。stage5 那两条（`semantic_secret_leak` /
-    `semantic_secret_coverage`）随 `stage5.semantic` 节点于 2026-08-17 一并下线
-    （用户裁决），于是层集合收敛成 `{stage6}`。**这一条仍是双向断言**：
-    语义判据既不许跑到别的层，也不许在 stage6 上一条不剩。
+    · 背景：原裁决把语义判据限死在 stage6；Stage6 整层退役后**没有任何层**再跑
+      语义判据——生产正文 Judge 与双盲判官都已取消，语义质量走 unver 披露
+      （`docs/BACKEND_CONTRACT.md` `R-7.6`／`R-10.6`）。
+    · 反向：任何一条 `check_kind='semantic'` 的判据重新注册 ⇒ 一个花钱问模型的
+      审判面被静默放回「确定性可查」的层里，本条当场红；
+    · 正向（守卫的守卫）：语义判据集合空着时上面那条反向断言照样绿，所以这里
+      显式钉住「空集」这个事实本身。
     """
     from contracts.rules import REGISTRY
-    strays = [(r.rule, r.stage) for r in REGISTRY.all()
-              if r.check_kind == 'semantic' and r.stage != 'stage6']
-    assert strays == []
-    semantic_stages = {r.stage for r in REGISTRY.all() if r.check_kind == 'semantic'}
-    assert semantic_stages == {'stage6'}, \
-        '语义判据的层集合变了——stage6 的语义判据一条都不能少，也不许扩到别的层'
+    semantic = [(r.rule, r.stage) for r in REGISTRY.all()
+                if r.check_kind == 'semantic']
+    assert semantic == [], (
+        f'语义判据随 Stage6 退役后不该存在：{semantic}；'
+        f'语义质量一律 unver 披露，不注册自动语义门')

@@ -34,9 +34,10 @@
 
 ## 调度与模型边界
 
-- RunSupervisor 只执行 planner 的冻结 action；`HUMAN_NODES` 为空（2026-09-15 全自动裁决，
-  批次 B4），命中 `approval:*` waiting_on 为编排 bug（fail-closed）；Stage6 `--pick` 改选不阻塞。
-  run 停在精确恢复/披露面后续跑。Executor 在校验过的空 cwd 中运行；
+- orchestrator 只执行 planner 的冻结 action；`HUMAN_NODES` 为空（2026-09-15 全自动裁决，
+  批次 B4），命中 `approval:*` waiting_on 为编排 bug（fail-closed）。F8a 起现役链是
+  11 个 `str06.` 节点（`contracts/invariants.py::NODES`），没有任何人工闸或改选面。
+  run 停在精确恢复/披露面后续跑。semantic unit 在校验过的空 cwd 中运行；
   不要把工程指南、skill 或额外盘上材料加入模型上下文。
 - 业务工作单元、execution epoch 与 provider session 分开；代码 漂移走新 epoch，原 profiles 与累计额度保留。
   连续会话绑定原目录和输出 schema 字节，不静默切模型或 effort。
@@ -44,8 +45,9 @@
   追加额度用不可变授权及锁内复验，不重置预算，也不解除无进展或 unknown 阻断。
 - 跨 producer prepared 补尾走登记的 deterministic action；批量决定先保存 manifest，逐项写前复验 frontier，
   冲突留证。会令自身 workpack 过期的改写先保存 request/authority receipt，再取新 epoch 的 permit。
-- 历史决定仍需完整覆盖当前义务；修改或删除问题主体后仍需复审，较新否决优先。Stage6 judge 只给带证据的
-  UNVER，由 `stage6.approve` typed 决定收口，不复活 evaluator profile 或 Stage5 收缩臂。
+- 历史决定仍需完整覆盖当前义务；修改或删除问题主体后仍需复审，较新否决优先。Stage6 judge 与
+  `stage6.approve` typed 决定面随 Stage6 整层退役（F8a）；语义质量一律 unver 披露，
+  不复活 evaluator profile、生产正文 Judge 或 Stage5 收缩臂。
 - 内容轮、网络重试、格式拒绝、恢复分别记账；共享 slot 落实书级及供应商限制。累计调用耗时不作墙钟，
   性能比较保留失败、重试、未知用量与质量分母；公开日志不泄露正文。
 

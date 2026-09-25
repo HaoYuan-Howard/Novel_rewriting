@@ -20,8 +20,9 @@ agent 负责维护工程上下文、实现与验证，关键取舍和结果直�
 
 后端固定使用 conda 环境 `novel_refactor`，不要用 base；安装、启动与诊断命令见
 `docs/OPERATIONS.md`。前端为 React/Vite/TypeScript，开发命令见 `web/AGENTS.md`。
-产品为全自动单模式：上传即授权开跑，Stage 页只读监控；Stage6 保留三候选改选（不阻塞
-stage7）。确定性调度、执行、恢复与交付检查由运行代码负责。
+产品为全自动单模式：上传即授权开跑，Stage 页只读监控。Stage6 整层已随 STR-06
+切换退役（三候选改选面不复存在；Hook 的必要选择进 Stage4 正式 Design）。确定性
+调度、执行、恢复与交付检查由运行代码负责。
 
 ## 目标角色词典
 
@@ -132,8 +133,13 @@ UI 称「模型执行配置」。禁止把「不得依赖 legacy implementation�
 4. 同一行为的契约、producer/compiler、consumer、恢复、API/UI、测试和文档同批闭合；完成要检查真实消费者与
    最终盘面，不能只凭函数存在、编译或单测通过。
 
-自动跑书由确定性 orchestrator 推进；Stage 页只读监控，Stage6 保留三候选改选（不阻塞下游）。
-历史受托 Commander/Reviewer（含 `<immutable-workpack>`）与人工逐 Stage 过闸模式已退役，材料只供存量解码。
+自动跑书由确定性 orchestrator 推进；Stage 页只读监控。现役链是 STR-06 新链：
+stage0/1 之后由 11 个 `str06.<stage>.<owner>` 节点串成（Stage2 源语义与名称结构、
+Stage4 目标故事与确定性编译、Stage5 按章正文与 Hook、Stage7 命名与交付），节点表
+唯一登记在 `contracts/invariants.py::NODES`。Stage6 整层与旧 Stage2/4/5/7 链已退役
+（退役登记见 `contracts/schema/str06/retirement.py`），旧书只读拒识为
+`legacy_incompatible`。历史受托 Commander/Reviewer（含 `<immutable-workpack>`）与
+人工逐 Stage 过闸模式已退役，材料只供存量解码。
 semantic unit 使用独立 prompt/schema，不加载工程 AGENTS、运维手册或额外盘上小说来补充材料。
 
 ## 测试选择与批次验收

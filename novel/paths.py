@@ -575,12 +575,12 @@ def archived_rounds(rounds_dir: str | os.PathLike[str], stem: str) -> set[int]:
 
 
 def book_txt_rel(novel_dir: str | os.PathLike[str]) -> str:
-    """**这本书**的成书在书内的相对路径：`stage7/<书名>_rewriting.txt`。
+    """**这本书**的成书在书内的相对路径：`stage7/final/<书名>_rewriting.txt`。
 
-    【为什么必须有这个函数】`ARTIFACT_PATHS['stage7.book']` 是**书级参数化模板**
-    （`contracts/artifacts.py::BOOK_SCOPED_PATHS`），`STAGE7_BOOK` 因此只是模板而不是
-    路径。交付物按书名命名，而书名的唯一权威源是**目录名**
-    （`title_of`；别用 `derive_source_meta(命令行参数)[1]`，那是 F-118）。
+    【为什么必须有这个函数】`ARTIFACT_PATHS['stage7/final/{title}_rewriting.txt']`
+    是**书级参数化模板**（`contracts/artifacts.py::BOOK_SCOPED_PATHS`，F8a 起为
+    新链成书路径），模板因此不是路径。交付物按书名命名，而书名的唯一权威源是
+    **目录名**（`title_of`；别用 `derive_source_meta(命令行参数)[1]`，那是 F-118）。
     ⇒ 「这本书的成书叫什么」只有这一处答得出来，消费方一律调它，不要各拼一份。
 
     ⚠ 书名天然是文件系统安全的：它本来就是一个真实目录名里的一段（已过 `safe_title`）。
@@ -598,7 +598,7 @@ def book_txt_rel(novel_dir: str | os.PathLike[str]) -> str:
       目录里最长的 Stage0 内容寻址归档（basetemp 之后约 204 字符，仍长于本条的 202），
       且测试套件里的书名都很短 ⇒ 那条预算不因本函数而变，别去动它。
     """
-    return artifact_rel('stage7.book', title=title_of(novel_dir))
+    return artifact_rel('stage7/final/{title}_rewriting.txt', title=title_of(novel_dir))
 
 
 #: `produces` 模板里的占位符（`review_{n}.json` 的 `{n}`）。

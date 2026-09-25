@@ -23,7 +23,7 @@ queue.py —— 批量队列（`R-13`）。**一次排入多本书，人只在�
 from __future__ import annotations
 
 from contracts.artifacts import (
-    STAGE2_GLOBAL_EDIT, STAGE6_HOOK,
+    STAGE2_GLOBAL_EDIT,
 )
 
 import json
@@ -45,7 +45,7 @@ from contracts.schema.orchestration import (
     NovelOverview, QueueCounts, QueueEntry, QueueEvent, QueueItem,
     QueueLaneCounts, QueuePlan, QueueRun, QueueStart,
 )
-from contracts.schema.stage6 import Hook
+# ⚠ F8A：`contracts.schema.stage6` 的 import 随 Stage6 整层退役删除（F6d 登记）。
 from contracts.artifacts import STAGE4_BLIND_CANDIDATE
 from novel import paths, prov
 from novel.appendlog import append_line
@@ -331,28 +331,6 @@ def _human_gate_satisfied(base: str | os.PathLike[str], sid: str, node: str) -> 
     return False
 
 
-def _stage6_approval_current(
-    base: str | os.PathLike[str], sid: str,
-) -> bool:
-    """stage6.approve（自动定稿）是否已闭合：hook.json 在盘且定稿 current。
-
-    读 typed 产物本体（approved 键不在 overview 快照里）；缺盘、不可读或
-    未定稿一律 False——producer 真跑时会给准确理由，这里只答「还要不要跑」。
-    """
-    from novel.stages.stage6 import hook as stage6_hook
-    try:
-        novel_dir = paths.resolve_novel_dir(base, sid)
-        store = ArtifactStore(st.readonly_ctx(
-            novel_dir, 'stage6.approve', approvals.projection_code()))
-        artifact, _raw = store.read_own(Hook, STAGE6_HOOK)
-    except (TerminalState, Exception):
-        return False
-    try:
-        return stage6_hook.approval_is_current(store, artifact)
-    except Exception:  # noqa: BLE001 - 判不了当作未闭合，producer 跑时再精确报错
-        return False
-
-
 def _stage4_replan_required(base: str | os.PathLike[str], sid: str) -> bool:
     """B 已对当前 A 落下 fresh typed infeasible 终态时，唯一后继是 A 重采。
 
@@ -366,29 +344,11 @@ def _stage4_replan_required(base: str | os.PathLike[str], sid: str) -> bool:
     return current_infeasible_binding(store) is not None
 
 
-def prepare_edit_recovery_item(base, sid, *, code) -> QueueItem | None:
-    """独立准备 WAL 比形式上的 formal/pending 审批优先；不购买新回答。"""
-    from novel.stages.stage6 import prepare
-    book = paths.find_novel_dir(base, sid)
-    if book is None:
-        return None
-    current = prepare.view_state(ArtifactStore(st.readonly_ctx(book, 'stage6.prepare', code)))
-    if not current.pending_commit:
-        return None
-    flags = ['--recover-edit']
-    return QueueItem(sid=sid, node='stage6.prepare', flags=flags,
-        steps=build_steps('stage6.prepare', sid, flags, base=base, follow_check=False),
-        waiting_on=WAITING_ON_STAGE6_PREPARE_COMMIT,
-        why='已保存独立准备编辑或决定；先免费补齐原提交，不重审或重买')
-
-
 def prepared_delivery_recovery_item(
     base: str | os.PathLike[str], sid: str, *, code: str, until_stage: str = 'stage7',
 ) -> QueueItem | None:
     """producer 严格检查后才发布免费补尾；此查询不补账、不因文件存在发命令。"""
     from novel.stages.stage4 import design_recovery, plan_recovery
-    from novel.stages.stage6 import hook, prepare
-    from novel.stages.stage7 import rename
     from novel.work_units import workflow_manifest
 
     if workflow_manifest(base) is None:
@@ -397,7 +357,8 @@ def prepared_delivery_recovery_item(
     if book is None:
         return None
     pending = []
-    for node, producer in (('stage4.design', design_recovery), ('stage4.plan', plan_recovery), ('stage6.prepare', prepare), ('stage6.hook', hook), ('stage7.rename', rename)):
+    # ⚠ F8A：stage6.prepare／stage6.hook 两项随 Stage6 整层退役删除（F6d 登记）。
+    for node, producer in (('stage4.design', design_recovery), ('stage4.plan', plan_recovery)):
         if STAGES.index(NODES[node].stage) > STAGES.index(until_stage):
             continue
         inspected = producer.inspect_prepared_recovery(st.readonly_ctx(book, node, code))
@@ -460,10 +421,6 @@ def plan_book_from_overview(
         core_recovery = stage2_core_recovery_item(base, sid, code=approvals.projection_code())
         if core_recovery is not None:
             return ([], [core_recovery]) if core_recovery.waiting_on else ([core_recovery], [])
-    if STAGES.index(until_stage) >= STAGES.index('stage6'):
-        recovery = prepare_edit_recovery_item(base, sid, code=approvals.projection_code())
-        if recovery is not None:
-            return [], [recovery]
     if STAGES.index(until_stage) >= STAGES.index('stage4'):
         recovery = prepared_delivery_recovery_item(base, sid, code=approvals.projection_code(), until_stage=until_stage)
         if recovery is not None:
@@ -491,10 +448,9 @@ def plan_book_from_overview(
         planned_nodes.remove('stage2.analyze')
     reviewer_rewrite_execution = None
     closure_state = 'unreadable'
-    if 'stage5.review' in planned_nodes or any(
-            NODES[node].stage == 'stage6' for node in planned_nodes):
-        # Stage5 机械闭合视图一次读取（批次 B3）：review 节点的闭合补算与
-        # stage6 闸消费同一份结论，不在 lane 内各自重判。
+    if 'stage5.review' in planned_nodes:
+        # Stage5 机械闭合视图一次读取（批次 B3）：review 节点的闭合补算
+        # 消费同一份结论，不在 lane 内各自重判。
         if approval_doc is not None:
             closure_view = approval_doc.closure
         else:
@@ -623,14 +579,7 @@ def plan_book_from_overview(
             if ghosts:
                 why_blocked = WAITING_ON_INBOX
 
-        stage6_approve_pending = node == 'stage6.approve'
         verdict, why = st.resume_verdict(ov, node)
-        if stage6_approve_pending and verdict == st.RESUME_SKIP:
-            if _stage6_approval_current(base, sid):
-                continue                  # 已有当前定稿（自动或人工）：无事可做
-            verdict, why = st.RESUME_RUN, (
-                '开篇文案尚无当前定稿——运行 stage6.approve 自动定稿（0 成本）；'
-                '人工改选后失配的同一条路免费重定稿')
         if blueprint_repair_reason is not None:
             why = blueprint_repair_reason
         if projection_recovery and why_blocked is None:
@@ -735,62 +684,10 @@ def plan_book_from_overview(
             if not gate.ok:
                 why_blocked = WAITING_ON_INBOX
                 why = '统一机械准入未通过：' + '；'.join(gate.blocking)
-        if why_blocked is None and spec.stage == 'stage6':
-            # Stage5 机械闭合闸（批次 B3）：只消费审批服务按机械闭合回执折出的
-            # current view——回执由 `stage5.review` producer 自动落账，queue 不
-            # 制造第二个判定。ready/expired（工作包可闭合、只差落账）时上方
-            # stage5.review 已排入 0 成本机械闭合补算，本次 lane 先停 stage6；
-            # 其余状态先走各自恢复面（stuck 已在上游传播）。
-            if (stage5_write_will_run or closure_relearn_planned
-                    or closure_state not in ('closed', 'ready', 'expired')):
-                why_blocked = WAITING_ON_STAGE5_CLOSURE
-        if why_blocked is None and spec.stage == 'stage6':
-            if approval_doc is not None:
-                current_prepare = approval_doc.prepare
-            else:
-                from novel.stages.stage6 import prepare
-                book = paths.resolve_novel_dir(base, sid)
-                current_prepare = prepare.view_state(ArtifactStore(st.readonly_ctx(
-                    book, 'stage6.prepare', approvals.projection_code())))
-            if node == 'stage6.prepare':
-                if current_prepare.state == 'accepted':
-                    continue
-                if current_prepare.pending_commit:
-                    why_blocked = WAITING_ON_STAGE6_PREPARE_COMMIT
-                elif current_prepare.state == 'missing':
-                    pass  # 可排付费 prepare
-                elif current_prepare.state == 'pending':
-                    # 机械产物已在盘、尚未 auto-accept：0 成本 --revalidate 触发接受
-                    prepare_auto_accept = True
-                    verdict, why = st.RESUME_RUN, (
-                        '文案准备机械通过但尚未自动接受——'
-                        '零成本 --revalidate 触发 system:stage6-prepare-auto')
-                elif current_prepare.state == 'stale':
-                    # 材料已变：重新购买 prepare（不 auto-accept 旧稿）
-                    verdict, why = st.RESUME_RUN, (
-                        '文案准备材料已变——重新购买 stage6.prepare')
-                elif current_prepare.state == 'invalid':
-                    why_blocked = WAITING_ON_INBOX
-                    why = ('文案准备仍有机械问题（INVALID/编译失败）；'
-                           '先修复或重跑 stage6.prepare，不能自动接受')
-                else:
-                    why_blocked = WAITING_ON_PREPARED_DELIVERY_UNKNOWN
-            elif (current_prepare.state != 'accepted'
-                    or any(row.node == 'stage6.prepare' for row in todo)):
-                # 下游等 prepare 闭合；不发已退役的 approval:stage6-prepare
-                if current_prepare.pending_commit:
-                    why_blocked = WAITING_ON_STAGE6_PREPARE_COMMIT
-                elif current_prepare.state == 'invalid':
-                    why_blocked = WAITING_ON_INBOX
-                    why = ('上游文案准备仍有机械问题；'
-                           '先修复或重跑 stage6.prepare')
-                elif current_prepare.state == 'unknown':
-                    why_blocked = WAITING_ON_PREPARED_DELIVERY_UNKNOWN
-                else:
-                    why_blocked = 'stage6.prepare'
-                    why = (
-                        f'等待 stage6.prepare 机械通过并自动接受'
-                        f'（当前 {current_prepare.state}）')
+        # ⚠ F8A：Stage6 机械闭合闸与 prepare 接受闸两个 planning 块随 Stage6
+        #   整层退役删除（F6d 登记）。Hook 的必要选择进 Stage4 正式 Design，
+        #   成文在 Stage5 单产（`str06.stage5.hook`），没有定稿链也没有
+        #   prepare 接受面。
         review_follows_planned_write = (
             node == 'stage5.review'
             and stage5_write_will_run
@@ -1024,6 +921,7 @@ def _blocked_why(
         return (
             '续跑结论要求人工决定，队列不会把 REDO/UNKNOWN 猜成可执行命令；'
             f'{verdict_why}')
+    # ⚠ F8A：以下两支只服务存量队列账的只读解码；现役队列不再发出 stage6 blocker。
     if waiting_on == 'stage6.prepare':
         return (
             '等待 stage6.prepare 机械通过并由 system:stage6-prepare-auto '

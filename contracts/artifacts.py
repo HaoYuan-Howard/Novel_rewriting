@@ -20,6 +20,48 @@ ARTIFACT_PATHS: Final[dict[str, str]] = {
     'stage0.clean_text': 'stage0/clean_text.txt',
     'stage1.main_text': 'stage1/main_text.json',
     'stage1.hook_copy': 'stage1/hook_copy.json',
+    # ── STR-06 新链（F8a 激活；键即相对路径）──────────────────────────────
+    # 【为什么新链的键是路径本身】三条理由，都指向「不许有第二份命名」：
+    # ① 候选产物表（`contracts/schema/str06/candidates.py::STR06_CANDIDATE_ARTIFACTS`）
+    #   就以 rel 为键，F8a 激活的是同一张表——再套一层符号名就是两份会漂的真相（I-16）；
+    # ② 三级家族路径的来源账键是**完整相对路径**（`paths.family_input_key`），
+    #   路径即键时账键与注册键天然一致，反查不会塌级；
+    # ③ `{nn}`／`{title}` 占位符由 `artifact_regex` 编译（见 `contracts/schema/__init__.py`），
+    #   与符号键的 `artifact_rel(name, nn=…)` 是同一套占位符语义。
+    # Stage0/1 保持符号键不变——那一层不在本轮范围，它的消费者照旧。
+    # ── Stage2（str06.stage2.source／names）──
+    'stage2/blueprints/chapter_blueprints.json': 'stage2/blueprints/chapter_blueprints.json',
+    'stage2/compiled/book_extraction.json': 'stage2/compiled/book_extraction.json',
+    'stage2/compiled/input_snapshots.json': 'stage2/compiled/input_snapshots.json',
+    'stage2/acceptance/fold.json': 'stage2/acceptance/fold.json',
+    'stage2/characters/characters.json': 'stage2/characters/characters.json',
+    # ── Stage4（preserve／body_design／hook_design／bind／compile）──
+    'runtime/preserve_checkpoint.json': 'runtime/preserve_checkpoint.json',
+    'stage4/grounding/reconstruction_brief.json': 'stage4/grounding/reconstruction_brief.json',
+    'stage4/grounding/semantic_binding.json': 'stage4/grounding/semantic_binding.json',
+    'stage4/compiled/execution_plan.json': 'stage4/compiled/execution_plan.json',
+    'stage4/acceptance/guard/compile.json': 'stage4/acceptance/guard/compile.json',
+    'stage4/acceptance/guard/report.json': 'stage4/acceptance/guard/report.json',
+    'stage4/design/body_design.json': 'stage4/design/body_design.json',
+    'stage4/design/presentation_graph.json': 'stage4/design/presentation_graph.json',
+    'stage4/context/hook/hook.json': 'stage4/context/hook/hook.json',
+    'stage4/ir/writer_book_ir.json': 'stage4/ir/writer_book_ir.json',
+    # ── Stage5（body／hook）──
+    'stage5/hook/hook.txt': 'stage5/hook/hook.txt',
+    'stage5/hook/receipt.json': 'stage5/hook/receipt.json',
+    'stage5/body/ch{nn}.txt': 'stage5/body/ch{nn}.txt',
+    'stage5/acceptance/body/ch{nn}.json': 'stage5/acceptance/body/ch{nn}.json',
+    # ── Stage7（naming／assemble）──
+    'stage7/naming/name_map.json': 'stage7/naming/name_map.json',
+    'stage7/final/{title}_rewriting.txt': 'stage7/final/{title}_rewriting.txt',
+    'stage7/final/delivery_manifest.json': 'stage7/final/delivery_manifest.json',
+}
+# 只供识别并拒绝退役产物；不进入当前 artifact registry，不提供解码或迁移。
+# ⚠ F8a：旧 Stage2/4/5/6/7 链全部路径键移入本表（STR-06 切换，F7e 退役登记）。
+#   旧书只读识别为 `legacy_incompatible`：`_refuse_retired_artifact` 在正式
+#   decode/encode 口拒绝它们，独立新根重建，不手补旧产物、不继承旧批准。
+RETIRED_ARTIFACT_PATHS: Final[dict[str, str]] = {
+    # ── 旧 Stage2 链 ──
     'stage2.analyze_receipt': 'stage2/analyze_receipt.json',
     'stage2.analyze_recovery': 'stage2/analyze_recovery.json',
     'stage2.analyze_owner_draft_edit': 'stage2/analyze_owner_draft_edit.json',
@@ -29,34 +71,27 @@ ARTIFACT_PATHS: Final[dict[str, str]] = {
     'stage2.characters_edit': 'stage2/characters_edit.json',
     'stage2.global_grounding': 'stage2/global_grounding.json',
     'stage2.global_edit': 'stage2/global_edit.json',
-    # reviewed edit 已经落为 canonical input、但 formal Global/review 尚未提交时的
-    # 瞬态恢复事实。它不是节点完成产物，也不是被 HARD 拦下的候选；因此不进入
-    # ``NodeSpec.produces``，只供 state/reviewer 关闭式恢复同一个 typed 动作。
     'stage2.global_edit_failure': 'stage2/global_edit_failure.json',
-    # canonical GlobalEdit + pending/superseded failure 的 write-ahead journal；
-    # 覆盖两个 live 文件之间无法靠 Python rollback 修复的进程硬杀窗口。
     'stage2.global_edit_input_commit': 'stage2/global_edit_input_commit.json',
-    # Stage2 Global 正式三件套的 book-local write-ahead journal。reviewed 时它与
-    # failure sidecar 分责；generic INVALID 提升即使没有 action-owned GlobalEdit
-    # identity / formal baseline 也由同一记录按 baseline/target 两态补尾。
     'stage2.global_edit_commit': 'stage2/global_edit_commit.json',
     'stage2.blueprint_character_projection': 'stage2/blueprint_character_projection.json',
     'stage2.chapter_blueprints': 'stage2/chapter_blueprints.json',
     'stage2.blueprint_edit': 'stage2/blueprint_edit.json',
+    # ── 旧 Stage4 链 ──
     'stage4.blind_candidate': 'stage4/blind_candidate.json',
     'stage4.blind_chapter_edit': 'stage4/blind_chapter_edit.json',
     'stage4.evidence_binding': 'stage4/evidence_binding.json',
     'stage4.plan_edit': 'stage4/plan_edit.json',
     'stage4.writer_context': 'stage4/writer_context.json',
+    # ── 旧 Stage5 链 ──
     'stage5.chapter': 'stage5/ch{nn}.json',
     'stage5.rejected_revision': 'stage5/ch{nn}.rejected.json',
-    # Commander 先以 free reviewer node 落一份单章、hash-bound 的正式改写请求；
-    # paid writer 只消费这一条 canonical 路径，不能把自由文本指令塞进 argv。
     'stage5.reviewer_rewrite_request': 'stage5/reviewer_rewrite_request.json',
     'stage5.review': 'stage5/review_{n}.json',
     'stage5.trim_audit': 'stage5/trim_audit_ch{nn}.json',
     'stage5.trim_resolution': 'stage5/trim_resolution_ch{nn}.json',
     'stage5.wontfix': 'stage5/wontfix.json',
+    # ── Stage6 整层（三候选改选与 prepare 链）──
     'stage6.prepare': 'stage6/prepare.json',
     'stage6.prepare_edit': 'stage6/prepare_edit.json',
     'stage6.prepare_review': 'stage6/prepare_review.json',
@@ -66,16 +101,11 @@ ARTIFACT_PATHS: Final[dict[str, str]] = {
     'stage6.hook_edit': 'stage6/hook_edit.json',
     'stage6.semantic': 'stage6/semantic_{n}.json',
     'stage6.wontfix': 'stage6/wontfix.json',
+    # ── 旧 Stage7 链 ──
     'stage7.name_map': 'stage7/name_map.json',
     'stage7.name_map_edit': 'stage7/name_map_edit.json',
-    # ⚠ **交付物按书名命名**，所以它是本表里唯一的「书级参数化」路径（见 `BOOK_SCOPED_PATHS`）。
-    #   占位符由「这本书是谁」决定 ⇒ 每本书恰好解析出一份具名产物，落点唯一在
-    #   `novel/paths.py::book_txt_rel`。
     'stage7.book': 'stage7/{title}_rewriting.txt',
-}
-
-# 只供识别并拒绝退役产物；不进入当前 artifact registry，不提供解码或迁移。
-RETIRED_ARTIFACT_PATHS: Final[dict[str, str]] = {
+    # ── 更早的退役项（原样保留）──
     'stage2.blueprint_relation_edit': 'stage2/blueprint_relation_edit.json',
     'stage2.knowledge_links': 'stage2/knowledge_links.json',
     'stage2.global_review': 'stage2/global_review.json',
@@ -84,6 +114,7 @@ RETIRED_ARTIFACT_PATHS: Final[dict[str, str]] = {
     # STR-03-S4：正式计划退役；章集/预算/对账边拆入 Design + Context provenance。
     'stage4.plan_chapters': 'stage4/plan_chapters.json',
 }
+
 
 
 #: 带占位符的路径分三类，**分类是声明的，不是从字面猜的**：
@@ -100,7 +131,8 @@ RETIRED_ARTIFACT_PATHS: Final[dict[str, str]] = {
 #: **误判**成轮次编号类：前者把它整个丢出 `artifacts[]`（成书从完成度、freshness 徽章、
 #: inbox 里同时消失），后者拿非数字去解析编号得到空集。
 #: ⇒ 书级路径必须在那两道分类之前先被解析掉，而「谁是书级」只能从这里查，不能靠字面猜。
-BOOK_SCOPED_PATHS: Final[frozenset[str]] = frozenset({'stage7.book'})
+# ⚠ F8a：书级路径翻为新链成书（`stage7/final/{title}_rewriting.txt`）。
+BOOK_SCOPED_PATHS: Final[frozenset[str]] = frozenset({'stage7/final/{title}_rewriting.txt'})
 
 
 def artifact_rel(name: str, **values: object) -> str:
@@ -124,57 +156,96 @@ STAGE0_REVISIONS = artifact_rel('stage0.revisions')
 STAGE0_CLEAN_TEXT = artifact_rel('stage0.clean_text')
 STAGE1_MAIN_TEXT = artifact_rel('stage1.main_text')
 STAGE1_HOOK_COPY = artifact_rel('stage1.hook_copy')
-STAGE2_ANALYZE_RECEIPT = artifact_rel('stage2.analyze_receipt')
-STAGE2_ANALYZE_RECOVERY = artifact_rel('stage2.analyze_recovery')
-STAGE2_ANALYZE_OWNER_DRAFT_EDIT = artifact_rel('stage2.analyze_owner_draft_edit')
-STAGE2_ANALYZE_CHARACTERS_DRAFT_REPAIR = artifact_rel('stage2.analyze_characters_draft_repair')
-STAGE2_ANALYZE_GLOBAL_DRAFT_REPAIR = artifact_rel('stage2.analyze_global_draft_repair')
-STAGE2_CHARACTERS = artifact_rel('stage2.characters')
-STAGE2_CHARACTERS_EDIT = artifact_rel('stage2.characters_edit')
-STAGE2_GLOBAL_GROUNDING = artifact_rel('stage2.global_grounding')
-# 仅供旧路径的明确拒绝与历史识别，不在现役 schema 注册表中。
+
+# ── STR-06 新链路径常量（F8a 激活；键即 rel，常量只是便利别名）────────────
+# 新链 runner／store／state 一律直接写 rel 字面（与候选产物表同一来源）；
+# 这些常量只服务「同一个路径在多处出现」的场合，不构成第二份命名权威。
+STR06_STAGE2_BLUEPRINTS = artifact_rel('stage2/blueprints/chapter_blueprints.json')
+STR06_STAGE2_BOOK_EXTRACTION = artifact_rel('stage2/compiled/book_extraction.json')
+STR06_STAGE2_INPUT_SNAPSHOTS = artifact_rel('stage2/compiled/input_snapshots.json')
+STR06_STAGE2_FOLD = artifact_rel('stage2/acceptance/fold.json')
+STR06_STAGE2_CHARACTERS = artifact_rel('stage2/characters/characters.json')
+STR06_PRESERVE_CHECKPOINT = artifact_rel('runtime/preserve_checkpoint.json')
+STR06_RECONSTRUCTION_BRIEF = artifact_rel('stage4/grounding/reconstruction_brief.json')
+STR06_SEMANTIC_BINDING = artifact_rel('stage4/grounding/semantic_binding.json')
+STR06_EXECUTION_PLAN = artifact_rel('stage4/compiled/execution_plan.json')
+STR06_GUARD_COMPILE = artifact_rel('stage4/acceptance/guard/compile.json')
+STR06_GUARD_REPORT = artifact_rel('stage4/acceptance/guard/report.json')
+STR06_BODY_DESIGN = artifact_rel('stage4/design/body_design.json')
+STR06_PRESENTATION_GRAPH = artifact_rel('stage4/design/presentation_graph.json')
+STR06_HOOK_CONTEXT = artifact_rel('stage4/context/hook/hook.json')
+STR06_WRITER_BOOK_IR = artifact_rel('stage4/ir/writer_book_ir.json')
+STR06_HOOK_TEXT = artifact_rel('stage5/hook/hook.txt')
+STR06_HOOK_RECEIPT = artifact_rel('stage5/hook/receipt.json')
+STR06_NAME_MAP = artifact_rel('stage7/naming/name_map.json')
+STR06_DELIVERY_MANIFEST = artifact_rel('stage7/final/delivery_manifest.json')
+
+
+def str06_body_rel(ordinal: int) -> str:
+    """新链逐章正文路径（`stage5/body/ch{nn}.txt`）。"""
+    return artifact_rel('stage5/body/ch{nn}.txt', nn=ordinal)
+
+
+def str06_body_receipt_rel(ordinal: int) -> str:
+    """新链逐章接受回执路径（`stage5/acceptance/body/ch{nn}.json`）。"""
+    return artifact_rel('stage5/acceptance/body/ch{nn}.json', nn=ordinal)
+
+
+def str06_book_rel(title: str) -> str:
+    """新链成书路径（`stage7/final/{title}_rewriting.txt`）。"""
+    return artifact_rel('stage7/final/{title}_rewriting.txt', title=title)
+
+
+# ── 旧链路径常量（F8a 起全部移入退役表；只供旧盘只读识别与拒绝）──────────
+# ⚠ 这些常量随 F8c 旧链消费者删除一并删除（F6d/F7e 退役登记）。它们**不再
+# 能通过 `artifact_rel` 取到**——那正是 `legacy_incompatible` 的机械形状：
+# 旧键不在现役表里，正式 decode/encode 路径拒绝旧字节。
+STAGE2_ANALYZE_RECEIPT = RETIRED_ARTIFACT_PATHS['stage2.analyze_receipt']
+STAGE2_ANALYZE_RECOVERY = RETIRED_ARTIFACT_PATHS['stage2.analyze_recovery']
+STAGE2_ANALYZE_OWNER_DRAFT_EDIT = RETIRED_ARTIFACT_PATHS['stage2.analyze_owner_draft_edit']
+STAGE2_ANALYZE_CHARACTERS_DRAFT_REPAIR = RETIRED_ARTIFACT_PATHS['stage2.analyze_characters_draft_repair']
+STAGE2_ANALYZE_GLOBAL_DRAFT_REPAIR = RETIRED_ARTIFACT_PATHS['stage2.analyze_global_draft_repair']
+STAGE2_CHARACTERS = RETIRED_ARTIFACT_PATHS['stage2.characters']
+STAGE2_CHARACTERS_EDIT = RETIRED_ARTIFACT_PATHS['stage2.characters_edit']
+STAGE2_GLOBAL_GROUNDING = RETIRED_ARTIFACT_PATHS['stage2.global_grounding']
 STAGE2_GLOBAL_REVIEW = RETIRED_ARTIFACT_PATHS['stage2.global_review']
 STAGE2_GLOBAL_REVIEW_DECISIONS = RETIRED_ARTIFACT_PATHS['stage2.global_review_decisions']
-STAGE2_GLOBAL_EDIT = artifact_rel('stage2.global_edit')
-STAGE2_GLOBAL_EDIT_FAILURE = artifact_rel('stage2.global_edit_failure')
-STAGE2_GLOBAL_EDIT_INPUT_COMMIT = artifact_rel(
-    'stage2.global_edit_input_commit')
-STAGE2_GLOBAL_EDIT_COMMIT = artifact_rel('stage2.global_edit_commit')
-STAGE2_BLUEPRINT_CHARACTER_PROJECTION = artifact_rel(
-    'stage2.blueprint_character_projection')
-STAGE2_CHAPTER_BLUEPRINTS = artifact_rel('stage2.chapter_blueprints')
+STAGE2_GLOBAL_EDIT = RETIRED_ARTIFACT_PATHS['stage2.global_edit']
+STAGE2_GLOBAL_EDIT_FAILURE = RETIRED_ARTIFACT_PATHS['stage2.global_edit_failure']
+STAGE2_GLOBAL_EDIT_INPUT_COMMIT = RETIRED_ARTIFACT_PATHS['stage2.global_edit_input_commit']
+STAGE2_GLOBAL_EDIT_COMMIT = RETIRED_ARTIFACT_PATHS['stage2.global_edit_commit']
+STAGE2_BLUEPRINT_CHARACTER_PROJECTION = RETIRED_ARTIFACT_PATHS['stage2.blueprint_character_projection']
+STAGE2_CHAPTER_BLUEPRINTS = RETIRED_ARTIFACT_PATHS['stage2.chapter_blueprints']
 STAGE2_KNOWLEDGE_LINKS = RETIRED_ARTIFACT_PATHS['stage2.knowledge_links']
-STAGE2_BLUEPRINT_EDIT = artifact_rel('stage2.blueprint_edit')
-# 仅供旧路径的明确拒绝与历史识别，不在现役 schema 注册表中。
+STAGE2_BLUEPRINT_EDIT = RETIRED_ARTIFACT_PATHS['stage2.blueprint_edit']
 STAGE2_BLUEPRINT_RELATION_EDIT = RETIRED_ARTIFACT_PATHS['stage2.blueprint_relation_edit']
 RETIRED_STAGE3_STYLE_GROUNDING = RETIRED_ARTIFACT_PATHS['stage3.style_grounding']
-STAGE4_BLIND_CANDIDATE = artifact_rel('stage4.blind_candidate')
-STAGE4_BLIND_CHAPTER_EDIT = artifact_rel('stage4.blind_chapter_edit')
-STAGE4_EVIDENCE_BINDING = artifact_rel('stage4.evidence_binding')
+STAGE4_BLIND_CANDIDATE = RETIRED_ARTIFACT_PATHS['stage4.blind_candidate']
+STAGE4_BLIND_CHAPTER_EDIT = RETIRED_ARTIFACT_PATHS['stage4.blind_chapter_edit']
+STAGE4_EVIDENCE_BINDING = RETIRED_ARTIFACT_PATHS['stage4.evidence_binding']
 STAGE4_PLAN_CHAPTERS = RETIRED_ARTIFACT_PATHS['stage4.plan_chapters']
-STAGE4_PLAN_EDIT = artifact_rel('stage4.plan_edit')
-STAGE4_WRITER_CONTEXT = artifact_rel('stage4.writer_context')
-STAGE5_CHAPTER = artifact_rel('stage5.chapter')
-STAGE5_REJECTED_REVISION = artifact_rel('stage5.rejected_revision')
-STAGE5_REVIEWER_REWRITE_REQUEST = artifact_rel(
-    'stage5.reviewer_rewrite_request')
-STAGE5_REVIEW = artifact_rel('stage5.review')
-STAGE5_TRIM_AUDIT = artifact_rel('stage5.trim_audit')
-STAGE5_TRIM_RESOLUTION = artifact_rel('stage5.trim_resolution')
-STAGE5_WONTFIX = artifact_rel('stage5.wontfix')
-STAGE6_PREPARE = artifact_rel('stage6.prepare')
-STAGE6_PREPARE_EDIT = artifact_rel('stage6.prepare_edit')
-STAGE6_PREPARE_REVIEW = artifact_rel('stage6.prepare_review')
-STAGE6_PREPARE_REVIEW_DECISIONS = artifact_rel('stage6.prepare_review_decisions')
-STAGE6_PREPARE_COMMIT = artifact_rel('stage6.prepare_commit')
-STAGE6_HOOK = artifact_rel('stage6.hook')
-STAGE6_HOOK_EDIT = artifact_rel('stage6.hook_edit')
+STAGE4_PLAN_EDIT = RETIRED_ARTIFACT_PATHS['stage4.plan_edit']
+STAGE4_WRITER_CONTEXT = RETIRED_ARTIFACT_PATHS['stage4.writer_context']
+STAGE5_CHAPTER = RETIRED_ARTIFACT_PATHS['stage5.chapter']
+STAGE5_REJECTED_REVISION = RETIRED_ARTIFACT_PATHS['stage5.rejected_revision']
+STAGE5_REVIEWER_REWRITE_REQUEST = RETIRED_ARTIFACT_PATHS['stage5.reviewer_rewrite_request']
+STAGE5_REVIEW = RETIRED_ARTIFACT_PATHS['stage5.review']
+STAGE5_TRIM_AUDIT = RETIRED_ARTIFACT_PATHS['stage5.trim_audit']
+STAGE5_TRIM_RESOLUTION = RETIRED_ARTIFACT_PATHS['stage5.trim_resolution']
+STAGE5_WONTFIX = RETIRED_ARTIFACT_PATHS['stage5.wontfix']
+STAGE6_PREPARE = RETIRED_ARTIFACT_PATHS['stage6.prepare']
+STAGE6_PREPARE_EDIT = RETIRED_ARTIFACT_PATHS['stage6.prepare_edit']
+STAGE6_PREPARE_REVIEW = RETIRED_ARTIFACT_PATHS['stage6.prepare_review']
+STAGE6_PREPARE_REVIEW_DECISIONS = RETIRED_ARTIFACT_PATHS['stage6.prepare_review_decisions']
+STAGE6_PREPARE_COMMIT = RETIRED_ARTIFACT_PATHS['stage6.prepare_commit']
+STAGE6_HOOK = RETIRED_ARTIFACT_PATHS['stage6.hook']
+STAGE6_HOOK_EDIT = RETIRED_ARTIFACT_PATHS['stage6.hook_edit']
 # stage6.semantic（A/B 语义审判）产物已随节点退役（2026-09-15）；
 # 旧书 semantic_N.json 不再被现役读取。
-STAGE6_WONTFIX = artifact_rel('stage6.wontfix')
-STAGE7_NAME_MAP = artifact_rel('stage7.name_map')
-STAGE7_NAME_MAP_EDIT = artifact_rel('stage7.name_map_edit')
-#: ⚠ **它是模板，不是可以直接落盘的路径**（同 `STAGE5_CHAPTER`）：里面还有 `{title}`。
+STAGE6_WONTFIX = RETIRED_ARTIFACT_PATHS['stage6.wontfix']
+STAGE7_NAME_MAP = RETIRED_ARTIFACT_PATHS['stage7.name_map']
+STAGE7_NAME_MAP_EDIT = RETIRED_ARTIFACT_PATHS['stage7.name_map_edit']
+#: ⚠ **它是模板，不是可以直接落盘的路径**：里面还有 `{title}`。
 #: 要具体路径请走 `novel/paths.py::book_txt_rel(novel_dir)`；拿这个常量去
 #: `store.path()` / 相等比较，得到的是一个字面叫 `{title}_rewriting.txt` 的东西。
-STAGE7_BOOK = artifact_rel('stage7.book')
+STAGE7_BOOK = RETIRED_ARTIFACT_PATHS['stage7.book']

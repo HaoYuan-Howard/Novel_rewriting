@@ -11,7 +11,6 @@
 | [stage2](stage2.md) | Global grounding、Blueprint 原子事实、统一机械准入与生成依赖 |
 | [stage4](stage4.md) | A 盲设计、B 证据绑定、计划与写作上下文 |
 | [stage5](stage5.md) | canonical 正文、Review、人工改稿、trim 与授权改写恢复 |
-| [stage6](stage6.md) | 文案候选、语义证据及 typed 定稿 |
 | [stage7](stage7.md) | 改名决策、替换和可交付小说 |
 | [_common](_common.md) | provenance、freshness、用量、归档及共有字段 |
 | [_report](_report.md) | 当前 CheckReport 的输出语义 |

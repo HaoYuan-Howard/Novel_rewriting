@@ -12,6 +12,12 @@
 本测试只对账，不删除、不改写任何现役面（删除归 F8c 一次合入）。
 与 `test_str06_retirement.py`（F6d 表）分工：那张盯 Stage6，本张盯旧 Stage2/4/5/7
 与跨层面；两表合并才是 F8c 的完整删除清单。
+
+【F8a 执行了注册键那一格】NODES／ARTIFACT_PATHS／CONSUMED_PROJECTIONS 的旧链键已随
+契约翻转删除（新链 11 节点、22 产物、12 投影键上位）——那些 `remove_entry` 登记项
+**已经兑现**，不再要求它们存在；方向 ① 现在只查尚未执行的 file／符号／字面目标，
+方向 ② 翻转为「现役键一律不得在退役册里」。F8c 删除旧引擎文件后，剩下的 file
+类登记项才会逐一消失。
 """
 from __future__ import annotations
 
@@ -89,10 +95,21 @@ def _registered_files(items) -> set[str]:
 
 # ───────────────────────── 方向①：登记项必须真实存在 ─────────────────────────
 
+#: F8a 已执行（旧链注册键随契约翻转删除）的登记项目标前缀：那些 `remove_entry`
+#: 项已经兑现——键不在现役表里正是删除成功的证据，不再要求它们存在。
+_EXECUTED_BY_F8A = ('contracts/invariants.py#', 'contracts/artifacts.py#',
+                    'novel/consumption.py#',
+                    # F8A 文档分流：str06.md 现役内容迁入正式 schema 文档后，
+                    # stage6.md／plot_blueprint.md 两份旧文档删除。
+                    'docs/schema/plot_blueprint.md', 'docs/schema/stage6.md')
+
+
 def test_registered_items_all_exist():
     problems: list[str] = []
     for item in STR06_F7E_RETIREMENT:
         target = item.target
+        if target.startswith(_EXECUTED_BY_F8A):
+            continue
         file = _file_of(target)
         if file is None:
             problems.append(f'{target}: 无法解析文件部分')
@@ -152,20 +169,24 @@ def test_old_stage_packages_fully_registered():
     assert not problems, '\n'.join(problems)
 
 
-def test_old_chain_registry_keys_registered():
+def test_no_live_registry_key_is_registered_for_retirement():
+    """F8a 翻转后的方向 ②：现役注册键一律不得在退役册里。
+
+    旧链键已随契约翻转删除（`remove_entry` 登记项兑现）；现在活着的是新链 11 个
+    `str06.` 节点与 22 份三级产物——把它们登记进退役册意味着切换把现役面删了，
+    那正是本测试要拦的事。
+    """
     registered = {item.target for item in STR06_F7E_RETIREMENT}
-    problems = []
-    for key in NODES:
-        if key.startswith(OUT_OF_SCOPE_KEY_PREFIXES):
-            continue
-        if f'contracts/invariants.py#{key}' not in registered:
-            problems.append(f'NODES 键未登记：{key}')
-    for key in ARTIFACT_PATHS:
-        if key.startswith(OUT_OF_SCOPE_KEY_PREFIXES):
-            continue
-        if f'contracts/artifacts.py#{key}' not in registered:
-            problems.append(f'ARTIFACT_PATHS 键未登记：{key}')
-    assert not problems, '旧链注册键存在清单外对象：\n' + '\n'.join(problems)
+    problems = [
+        f'现役 NODES 键被登记退役：{key}'
+        for key in NODES if f'contracts/invariants.py#{key}' in registered]
+    problems += [
+        f'现役 ARTIFACT_PATHS 键被登记退役：{key}'
+        for key in ARTIFACT_PATHS if f'contracts/artifacts.py#{key}' in registered]
+    assert not problems, '\n'.join(problems)
+    # 旧链键必须真的已经不在了（F8a 执行证据）。
+    assert not any(key.startswith(('stage2.', 'stage4.', 'stage5.', 'stage7.', 'stage6.'))
+                   for key in NODES), '旧链 NODES 键仍在现役表里'
 
 
 def test_consumption_projection_keys_registered():
@@ -176,9 +197,15 @@ def test_consumption_projection_keys_registered():
     assert match, 'consumption 投影表形状变化，对账测试需同步'
     live = set(re.findall(r"^    '([a-z0-9.]+)': \{", match.group(1), re.M))
     registered = {item.target for item in STR06_F7E_RETIREMENT}
-    problems = [f'consumption 键未登记：{key}' for key in sorted(live)
-                if f'novel/consumption.py#{key}' not in registered]
+    # F8a 翻转后：活着的是新链投影键（`str06.` 前缀）与范围外的 stage1.partition；
+    # 旧链投影键已删。方向翻转为「现役键不得在册」（范围外保留项除外——
+    # stage1.partition 登记的是「范围外保留」，不是删除）。
+    out_of_scope = {'novel/consumption.py#stage1.partition'}
+    problems = [f'现役 consumption 键被登记退役：{key}' for key in sorted(live)
+                if f'novel/consumption.py#{key}' in registered - out_of_scope]
     assert not problems, '\n'.join(problems)
+    assert all(key.startswith('str06.') or key == 'stage1.partition' for key in live), (
+        f'consumption 表里出现旧链键：{sorted(live)}')
 
 
 def test_every_test_file_is_bucketed():
