@@ -729,8 +729,6 @@ STR06_F7E_RETIREMENT: tuple[RetirementItem, ...] = (
          '运行期操作面随 F8b 切新链', '基础设施／编排测试：F8b 切新链后保留'),
         ('rewrite_consumer', 'tests/test_schema_api.py',
          '响应模型载体保留；3 项既有失败归 F7e 红账', '基础设施／编排测试：F8b 切新链后保留'),
-        ('rewrite_consumer', 'tests/test_source_identity.py',
-         '源身份（stage1 边界）保留', '基础设施／编排测试：F8b 切新链后保留'),
         ('rewrite_consumer', 'tests/test_stage2_global_agent.py',
          'global agent 面随 F8b 切新链', '基础设施／编排测试：F8b 切新链后保留'),
         ('rewrite_consumer', 'tests/test_stage2_node_lifecycle.py',

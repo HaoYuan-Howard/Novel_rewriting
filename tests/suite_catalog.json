@@ -730,16 +730,6 @@
       "layer": "unit_contract",
       "stages": []
     },
-    "tests/test_source_identity.py": {
-      "layer": "stage",
-      "stages": [
-        "stage0",
-        "stage1",
-        "stage2",
-        "stage4",
-        "stage5"
-      ]
-    },
     "tests/test_stage01.py": {
       "cases": {
         "test_a_serially_numbered_book_flags_nothing_in_the_stage1_view": "stage",
