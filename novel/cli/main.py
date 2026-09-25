@@ -393,6 +393,15 @@ def _run_str06(a: argparse.Namespace, flags: list[str], *, paid: bool) -> int:
     if unknown:
         raise TerminalState(
             f'{a.node} 只接受 --check-only，实得多余旗标 {sorted(unknown)}')
+    # str06 节点走直连 LLM 唯一通道，不接受任何 executor backend 旗标；
+    # 先于书目录解析拒绝，别让 retired 参数被书缺失的报错掩盖。
+    if getattr(a, 'executor_backend', None) is not None or any(
+            getattr(a, name, None) is not None for name in (
+                'legacy_provider', 'legacy_model', 'legacy_effort',
+                'legacy_thinking')):
+        raise TerminalState(
+            f'{a.node} 是直连 LLM 节点，不接受 --executor-backend/--legacy-* '
+            '（该执行面已退役）')
     if paid and not tokens and not a.yes:
         raise ApprovalRequired(
             f'{a.node} 默认路径会花钱；加 `--yes` 或用 `--check-only` 免费复检')

@@ -83,23 +83,6 @@ def _run(*argv: str) -> int:
     return main(list(argv))
 
 
-def test_stage7_edit_template_is_stdout_only_and_round_trips(
-        tmp_path, capsys):
-    sid = 'template_book_1'
-    novel_dir = tmp_path / sid
-    novel_dir.mkdir()
-
-    rc = _run(
-        'run', 'stage7.rename', sid, '--emit-edit-template',
-        '--base', str(tmp_path))
-
-    assert rc == X.OK
-    raw = json.loads(capsys.readouterr().out)
-    assert raw['_schema_version'] == 1
-    NameMapEdit.model_validate(
-        decode_artifact('stage7/name_map_edit.json', raw).payload)
-    assert list(novel_dir.iterdir()) == []
-
 
 @pytest.mark.parametrize('passed', [True, False])
 def test_stage5_review_cli_uses_current_minimal_review_shape(monkeypatch, capsys, passed):
@@ -135,56 +118,6 @@ def test_stage7_approve_cli_is_retired(monkeypatch):
         M._run_stage7(ctx, flags)
 
 
-def test_stage6_and_stage7_rebind_flags_dispatch_only_to_zero_wire_recovery(
-        monkeypatch) -> None:
-    """同一个无值 flag 必须命中两层显式迁移口，不能跌回默认付费 producer。"""
-    from novel.cli import main as M
-    from novel.stages.stage6 import hook
-    from novel.stages.stage7 import rename
-
-    report = SimpleNamespace(passed=True)
-    calls: list[tuple[str, object]] = []
-    monkeypatch.setattr(
-        hook, 'run_rebind_review',
-        lambda ctx: calls.append(('stage6', ctx)) or (object(), report))
-    monkeypatch.setattr(
-        rename, 'run_rebind_review',
-        lambda ctx: calls.append(('stage7', ctx)) or (object(), report))
-    monkeypatch.setattr(M, 'render', lambda actual: 'REPORT' if actual is report else '')
-    stage6_ctx = SimpleNamespace(node='stage6.hook')
-    stage7_ctx = SimpleNamespace(node='stage7.rename')
-
-    assert M._run_stage6(stage6_ctx, ['--rebind-review']) == X.OK
-    assert M._run_stage7(stage7_ctx, ['--rebind-review']) == X.OK
-    assert calls == [('stage6', stage6_ctx), ('stage7', stage7_ctx)]
-
-
-def test_blueprint_cli_blocks_on_failed_admission_before_constructing_client(tmp_path, monkeypatch):
-    """真实 CLI→统一机械准入→producer；准入未过不构造 client，通过后产物落盘。"""
-    from novel.cli import main as cli
-    from novel.stages.stage2 import extract
-    from tests.test_blueprint_repair_queue import prepare_complete_book
-    from tests.test_stage2_generation import _client, _respond_blueprints, _response_blueprints
-
-    monkeypatch.setenv('NOVEL_STAGE2_BLUEPRINT_CONTRACT', 'plot-blueprint-v1')
-    book = prepare_complete_book(tmp_path)
-    clients = []
-
-    def client(ctx):
-        clients.append(ctx)
-        return _client(ctx, lambda request, _index:
-                       _respond_blueprints(request, _response_blueprints()))[0]
-
-    monkeypatch.setattr(cli, '_llm_client', client)
-    argv = ['run', 'stage2.blueprint', '123', '--base', str(tmp_path), '--yes']
-    # 全链种子已含人物登记；移走称名投影让统一机械准入未过：付费 client
-    # 不许构造，也不产生任何节点命令。准入通过后的真实 producer 运行由
-    # tests/test_blueprint_repair_queue.py 的全链贯通覆盖。
-    projection = book / 'stage2/blueprint_character_projection.json'
-    projection.unlink()
-    assert _run(*argv) == X.TERMINAL_STATE
-    assert clients == []
-    assert not (book / extract.BLUEPRINT_REL).exists()
 
 
 @pytest.mark.parametrize('reached,status,want_rc', [
@@ -257,12 +190,12 @@ def test_the_free_flag_scan_covers_every_pair_not_one_per_flag():
     pairs = {(f, n) for f in FREE_ENTRIES
              for n, s in NODES.items() if f in s.flags}
     assert set(_FREE_CASES) == pairs, '参数化集合与节点表对不上了'
-    assert len(_FREE_CASES) >= 43, (
-        f'0 成本跑法的扫描面掉到了 {len(_FREE_CASES)} 个配对（曾实测 43）——'
+    assert len(_FREE_CASES) >= 13, (
+        f'0 成本跑法的扫描面掉到了 {len(_FREE_CASES)} 个配对（现役 13）——'
         f'是删了节点/flag，还是有人又把它改回「每个 flag 取一个代表」？')
     # `--dry-run` 是漂移最容易藏身的那一族：它是**唯一**逐层各写一段
     # 「怎么把 prompt 打出来」的分支，而那段代码直接调 stage 模块的函数签名。
-    assert sum(1 for f, _ in _FREE_CASES if f == '--dry-run') >= 8, \
+    assert sum(1 for f, _ in _FREE_CASES if f == '--dry-run') >= 2, \
         '`--dry-run` 的覆盖面缩水了——CLI 与 stage 模块的 API 漂移正是从这里漏的'
 
 
@@ -341,12 +274,13 @@ def test_direct_cli_rejects_a_flag_the_node_does_not_accept_before_costing_it(bo
 
 
 @pytest.mark.parametrize(('node', 'retired_args'), [
-    ('stage5.review', ['--mode', 'deep', '--check-only']),
-    ('stage5.write', ['--write-contract', 'event-list-v1']),
+    ('str06.stage5.body', ['--mode', 'deep', '--check-only']),
+    ('str06.stage5.body', ['--write-contract', 'event-list-v1']),
 ])
 def test_direct_cli_parser_has_no_retired_stage5_entry(
         tmp_path, capsys, node, retired_args):
-    """已删除的 Stage5 选择器在 argparse 入口就拒绝，不能进入 RunContext。"""
+    """已退役的 Stage5 选择器在入口就拒绝（新链旗标面只有 --check-only），
+    不能被静默吞掉后进入执行。"""
     with pytest.raises(SystemExit) as stopped:
         _run('run', node, 'retired-stage5-entry', *retired_args,
              '--base', str(tmp_path))
@@ -356,22 +290,24 @@ def test_direct_cli_parser_has_no_retired_stage5_entry(
     assert 'unrecognized arguments' in err and 'Traceback' not in err
 
 
-@pytest.mark.parametrize('prefix', [True, False], ids=['global', 'after-run'])
 def test_invalid_run_id_is_a_stable_cli_input_error_before_context(
-        tmp_path, monkeypatch, capsys, prefix):
-    """`--run-id` 是命令行值域；非法值应由 argparse exit 2，不得冒充崩溃 70。"""
+        tmp_path, monkeypatch, capsys):
+    """`--run-id` 是全局命令行值域；非法值应由 argparse exit 2，不得冒充崩溃 70。
+
+    （F8b-3：run 子命令面的 `--run-id` 尾参随旧链节点退役——值域守卫落在
+    全局选项一处，不再有两个落点。）
+    """
     from novel.cli import main as M
 
     opened: list[object] = []
     monkeypatch.setattr(
         M, 'RunContext',
         SimpleNamespace(open=lambda *_args, **_kwargs: opened.append(_kwargs)))
-    head = ['--run-id', '../跨书'] if prefix else []
-    tail = [] if prefix else ['--run-id', '../跨书']
+    head = ['--run-id', '../跨书']
 
     with pytest.raises(SystemExit) as stopped:
         _run(
-            *head, 'run', 'stage2.global', 'book-1', *tail,
+            *head, 'run', 'str06.stage2.source', 'book-1',
             '--base', str(tmp_path), '--yes')
 
     assert stopped.value.code == X.TERMINAL_STATE == 2
@@ -414,9 +350,9 @@ def test_stage0_source_cli_prints_and_threads_one_run_id_into_real_context(
     observed: list[tuple[str, str]] = []
     original_checked = removal._checked
 
-    def recording_checked(ctx, log):
+    def recording_checked(ctx, *args, **kwargs):
         observed.append((ctx.run_id, ctx.ledger.run_id))
-        return original_checked(ctx, log)
+        return original_checked(ctx, *args, **kwargs)
 
     monkeypatch.setattr(removal, '_checked', recording_checked)
     argv = [] if explicit is None else ['--run-id', explicit]
@@ -563,9 +499,9 @@ def test_a_paid_run_refuses_without_an_explicit_yes(box):
 def test_build_argv_already_carries_the_yes_for_a_paid_run():
     """摊开显示的那条命令**就是会跑的那条**（`R-11.8`）：
     确认在界面/队列那一层发生过了，所以 argv 里带着 `--yes`，粘进终端不会再问一遍。"""
-    argv = N.build_argv('stage6.hook', 'sid1', base='.')
+    argv = N.build_argv('str06.stage5.body', 'sid1', base='.')
     assert argv[-1] == '--yes'
-    assert '--yes' not in N.build_argv('stage6.hook', 'sid1', ['--check-only'], base='.')
+    assert '--yes' not in N.build_argv('str06.stage5.body', 'sid1', ['--check-only'], base='.')
 
 
 def test_stage4_design_and_plan_are_two_independent_paid_dispatches(
@@ -603,44 +539,6 @@ def test_stage4_design_and_plan_are_two_independent_paid_dispatches(
     assert events == [('plan', 'stage4.plan:client:stage4.plan')]
     assert authorizations == [], '人工闸退役后 stage4 不再有任何审批授权'
 
-
-def test_stage4_repair_aggregate_recovery_dispatches_before_any_model_surface(
-        monkeypatch, tmp_path, capsys):
-    """prepared 补交是 FREE producer；不解析旧票，不构造 agent/client。"""
-    from novel.cli import main as M
-    from novel.stages.stage4 import plan
-
-    source = 'source-run-1'
-    journal_sha = 'a' * 64
-    commit_sha = 'b' * 64
-    flags = [
-        '--recover-repair-aggregate', source,
-        '--source-journal-sha256', journal_sha,
-        '--source-commit-sha256', commit_sha,
-    ]
-    ctx = SimpleNamespace(
-        node='stage4.design', novel_dir=tmp_path / 'book', sid='123',
-        executor_backend=None, executor_profile=None,
-    )
-    captured = []
-
-    monkeypatch.setattr(
-        M, '_llm_client',
-        lambda _ctx: pytest.fail('prepared 补交不得构造 LLM client'))
-    monkeypatch.setattr(
-        plan, 'run_design_repair_aggregate_recovery',
-        lambda got_ctx, **kwargs: captured.append((got_ctx, kwargs))
-        or SimpleNamespace(output_chapters=[object(), object()]),
-    )
-
-    assert M._dispatch('stage4.design', ctx, flags) == X.OK
-    assert captured == [(ctx, {
-        'source_run_id': source,
-        'source_journal_sha256': journal_sha,
-        'source_commit_sha256': commit_sha,
-    })]
-    out = capsys.readouterr().out
-    assert '0 次模型调用' in out
 
 
 def test_stage4_two_dry_runs_preview_only_their_own_prompt(monkeypatch):
@@ -733,28 +631,6 @@ def test_retired_design_credential_flags_are_rejected_before_dispatch(
             N.validate_run('stage4.plan', flags)
 
 
-def test_stage4_replan_and_dry_run_are_mutually_exclusive_before_costing(
-        tmp_path, monkeypatch, capsys):
-    """“只看”与“付费重采”不能同时成立，也不能被免费白名单洗价。"""
-    from novel.cli import main as M
-
-    (tmp_path / '123').mkdir()
-    assert '--yes' in N.build_argv(
-        'stage4.design', '123', ['--replan'], base=tmp_path)
-    dispatched: list[str] = []
-    monkeypatch.setattr(
-        M, '_dispatch',
-        lambda node, _ctx, _flags: dispatched.append(node) or X.OK)
-
-    rc = _run(
-        'run', 'stage4.design', '123', '--dry-run', '--replan',
-        '--base', str(tmp_path))
-
-    assert rc == X.TERMINAL_STATE and dispatched == []
-    err = capsys.readouterr().err
-    assert '主操作互斥' in err and '--dry-run' in err and '--replan' in err
-    assert '加 `--yes`' not in err, '必须先拒绝自相矛盾的跑法，不得先误报费用'
-
 
 def test_stage4_typed_infeasible_is_landed_red_without_a_fake_report(
         tmp_path, monkeypatch, capsys):
@@ -844,105 +720,7 @@ def test_stage4_replan_budget_exhaustion_is_explicit_terminal(
         M._run_stage4(ctx, ['--replan'])
 
 
-def test_stage4_cli_rejects_retired_chapters_before_dispatch(
-        tmp_path, monkeypatch, capsys):
-    """v3 只允许整书 A/B；旧 ``--chapters`` 不得被吃掉后默认跑整书。"""
-    from novel.cli import main as M
 
-    dispatched: list[str] = []
-    monkeypatch.setattr(
-        M, '_dispatch',
-        lambda node, _ctx, _flags: dispatched.append(node) or X.OK)
-    monkeypatch.setattr(
-        M, '_llm_client',
-        lambda _ctx: pytest.fail('非法旧参数不得走到 LLM'))
-
-    rc = _run(
-        'run', 'stage4.plan', 'retired-stage4-chapters',
-        '--chapters', '5,2,5', '--yes', '--base', str(tmp_path))
-
-    assert rc == X.TERMINAL_STATE
-    assert dispatched == []
-    err = capsys.readouterr().err
-    assert 'stage4.plan' in err and '不接受' in err and '--chapters' in err
-
-
-@pytest.mark.parametrize(('extra', 'chapters', 'fresh_review'), [
-    ([], None, False),
-    (['--chapters', '5,2,5'], [2, 5], False),
-    (['--revise'], None, True),
-])
-def test_every_paid_stage5_cli_path_authorizes_before_dispatch(
-        tmp_path, monkeypatch, extra, chapters, fresh_review):
-    """手敲 CLI 与 API 共用写作授权；拒绝必须发生在任何 LLM 前。"""
-    from novel.cli import main as M
-    from novel.orchestrator import approvals
-
-    ctx = _dispatch_context(tmp_path, node='stage5.write')
-    authorized: list[tuple[list[int] | None, bool]] = []
-    dispatched: list[str] = []
-    monkeypatch.setattr(
-        M, 'RunContext', SimpleNamespace(open=lambda *_args, **_kwargs: ctx))
-
-    def refuse(_base, _sid, selected, *, requires_fresh_review=False, reviewer_rewrite_request_rel=None):
-        authorized.append((selected, requires_fresh_review))
-        raise ApprovalRequired('合成授权拒绝')
-
-    monkeypatch.setattr(approvals, 'authorize_writing', refuse)
-    monkeypatch.setattr(
-        M, '_dispatch',
-        lambda node, _ctx, _flags: dispatched.append(node) or X.OK)
-    monkeypatch.setattr(
-        M, '_llm_client',
-        lambda _ctx: pytest.fail('授权拒绝后不得构造 LLM client'))
-
-    rc = _run(
-        'run', 'stage5.write', '123', *extra,
-        '--yes', '--base', str(tmp_path))
-
-    assert rc == X.TERMINAL_STATE
-    assert authorized == [(chapters, fresh_review)]
-    assert dispatched == []
-
-
-@pytest.mark.parametrize('extra', [
-    ['--dry-run'],
-    ['--recheck'],
-    ['--revalidate', '--actor', 'operator', '--reason', '按当前判据提升'],
-    ['--preview-edit', 'stage5/chapter_edit.json'],
-    [
-        '--apply-edit', 'stage5/chapter_edit.json',
-        '--actor', 'operator', '--reason', '逐项核对当前预览',
-        '--current-chapter-sha256', 'a' * 64,
-        '--preview-subject-sha256', 'b' * 64,
-        '--edit-confirmation', 'formal',
-    ],
-])
-def test_zero_cost_stage5_recovery_paths_are_not_blocked_by_paid_authorization(
-        tmp_path, monkeypatch, extra):
-    """结构闸或 writing proof 未开时，人仍必须能进入零调用恢复路。"""
-    from novel.cli import main as M
-    from novel.orchestrator import approvals
-
-    ctx = _dispatch_context(tmp_path, node='stage5.write')
-    dispatched: list[tuple[str, list[str]]] = []
-    monkeypatch.setattr(
-        M, 'RunContext', SimpleNamespace(open=lambda *_args, **_kwargs: ctx))
-    monkeypatch.setattr(
-        approvals, 'authorize_writing',
-        lambda *_args, **_kwargs: pytest.fail(
-            '零成本恢复路不应要求 structure/writing 授权'))
-    monkeypatch.setattr(
-        M, '_dispatch',
-        lambda node, _ctx, flags: dispatched.append((node, flags)) or X.OK)
-
-    rc = _run(
-        'run', 'stage5.write', '123', *extra,
-        '--base', str(tmp_path))
-
-    assert rc == X.OK
-    assert len(dispatched) == 1 and dispatched[0][0] == 'stage5.write'
-    assert N.is_paid('stage5.write', dispatched[0][1]) is False
 
 
 def test_stage5_preview_edit_dispatches_to_write_not_stage6(
@@ -1148,11 +926,11 @@ def test_paid_nodes_follow_the_global_default_model_without_pins(monkeypatch):
         lambda: config.Config(api_key=None, model='deepseek-flash'))
 
     design = M._llm_client(RunContext.open(
-        base, '123', 'stage4.design', paid=True, write_ledger=False))
+        base, '123', 'str06.stage4.body_design', paid=True, write_ledger=False))
     plan = M._llm_client(RunContext.open(
-        base, '123', 'stage4.plan', paid=True, write_ledger=False))
+        base, '123', 'str06.stage4.bind', paid=True, write_ledger=False))
     other = M._llm_client(RunContext.open(
-        base, '123', 'stage2.global', paid=True, write_ledger=False))
+        base, '123', 'str06.stage2.source', paid=True, write_ledger=False))
 
     assert design.model == 'deepseek-flash' == config.DEFAULT_MODEL
     assert plan.model == 'deepseek-flash'
@@ -1207,34 +985,16 @@ RETIRED_AGENT_BACKEND_ARGS = (
 # 八个已迁移节点的正向面；Stage5 的 flag 组合是四种不同业务身份，不能
 # 只测“节点在名单里”后让 `_dispatch` 静默吞掉 chapters/revise。
 _PROFILED_RUN_CASES = (
-    pytest.param('stage2.global', [], {}, id='stage2-global'),
-    pytest.param(
-        'stage2.blueprint', [], {'concurrency': DEFAULT_CONCURRENCY},
-        id='stage2-blueprint'),
-    pytest.param(
-        'stage4.design', [], {'concurrency': DEFAULT_CONCURRENCY},
-        id='stage4-design'),
-    pytest.param('stage4.plan', [], {'concurrency': DEFAULT_CONCURRENCY}, id='stage4-plan'),
-    pytest.param(
-        'stage5.write', [], {
-            'concurrency': DEFAULT_CONCURRENCY,
-            'chapters': None, 'revise': False, 'reviewer_rewrite': None},
-        id='stage5-default'),
-    pytest.param(
-        'stage5.write', ['--chapters', '5,2,5'],
-        {'concurrency': DEFAULT_CONCURRENCY,
-         'chapters': '5,2,5', 'revise': False, 'reviewer_rewrite': None}, id='stage5-chapters'),
-    pytest.param(
-        'stage5.write', ['--revise'],
-        {'concurrency': DEFAULT_CONCURRENCY,
-         'chapters': None, 'revise': True, 'reviewer_rewrite': None}, id='stage5-revise'),
-    pytest.param(
-        'stage5.write', ['--chapters', '5,2,5', '--revise'],
-        {'concurrency': DEFAULT_CONCURRENCY,
-         'chapters': '5,2,5', 'revise': True, 'reviewer_rewrite': None},
-        id='stage5-revise-chapters'),
-    pytest.param('stage6.hook', [], {}, id='stage6-hook'),
-    pytest.param('stage7.rename', [], {}, id='stage7-rename'),
+    # F8a/F8b：现役付费面 9 个 str06 节点，旗标面只有 --check-only。
+    pytest.param('str06.stage2.source', [], {}, id='stage2-source'),
+    pytest.param('str06.stage2.names', [], {}, id='stage2-names'),
+    pytest.param('str06.stage4.preserve', [], {}, id='stage4-preserve'),
+    pytest.param('str06.stage4.body_design', [], {}, id='stage4-body-design'),
+    pytest.param('str06.stage4.bind', [], {}, id='stage4-bind'),
+    pytest.param('str06.stage4.hook_design', [], {}, id='stage4-hook-design'),
+    pytest.param('str06.stage5.hook', [], {}, id='stage5-hook'),
+    pytest.param('str06.stage5.body', [], {}, id='stage5-body'),
+    pytest.param('str06.stage7.naming', [], {}, id='stage7-naming'),
 )
 
 
@@ -1294,7 +1054,7 @@ def test_agent_executor_backend_is_retired_at_cli_parse(
     assert rc == X.TERMINAL_STATE
     assert opened == []
     err = capsys.readouterr().err
-    assert '退役' in err and 'agent' in err
+    assert '退役' in err or '直连 LLM' in err
     assert 'Traceback' not in err
 
 
@@ -1319,43 +1079,8 @@ def test_agent_argv_never_round_trips_through_cli_into_run_context(
     assert rc == X.TERMINAL_STATE
     assert opened == []
     err = capsys.readouterr().err
-    assert '退役' in err and 'agent' in err
+    assert '退役' in err or '直连 LLM' in err
 
-
-def test_explicit_legacy_argv_round_trips_without_becoming_an_agent_profile(
-        tmp_path, monkeypatch):
-    from novel.cli import main as M
-
-    backend = LegacyExecutorBackend(profile=LegacyLlmProfile(
-        provider='deepseek', model='deepseek-v4-pro',
-        reasoning_effort='high', thinking_mode='on'))
-    argv = N.build_argv(
-        'stage2.global', 'book-1', base=tmp_path,
-        executor_backend=backend, egress_authorized=True)
-    captured = {}
-
-    def open_context(base, sid, node, **kwargs):
-        captured.update(base=base, sid=sid, node=node, **kwargs)
-        return _dispatch_context(
-            tmp_path, node=node,
-            run_id='legacy-round-trip',
-            executor_backend=kwargs.get('executor_backend'),
-            executor_profile=kwargs.get('executor_profile'),
-        )
-
-    def dispatch(node, ctx, flags):
-        captured['dispatch'] = (
-            node, ctx.executor_backend, ctx.executor_profile, list(flags))
-        return X.OK
-
-    monkeypatch.setattr(M, 'RunContext', SimpleNamespace(open=open_context))
-    monkeypatch.setattr(M, '_dispatch', dispatch)
-
-    assert _run(*argv[argv.index('run'):]) == X.OK
-    assert captured['executor_backend'] == backend
-    assert captured['executor_profile'] == backend.profile
-    assert captured['dispatch'] == (
-        'stage2.global', backend, backend.profile, [])
 
 
 def test_legacy_backend_uses_provider_factory_instead_of_implicit_deepseek(
@@ -1610,5 +1335,6 @@ def test_the_help_text_lists_every_registered_subcommand():
 def test_the_free_flag_matrix_actually_has_rows():
     """守卫的守卫：参数化表算空时，上面那条最值钱的测试会**一条都不跑**。"""
     assert len(_FREE_CASES) >= 10, f'只铺出 {len(_FREE_CASES)} 条 0 成本跑法'
-    assert set(PAID_FLAGS) & {f for s in NODES.values() for f in s.flags}, \
-        '付费 flag 一个都没挂上？那 `is_paid` 的反方向就没有样本'
+    # F8a：旗标级付费面退役——贵贱只由节点 + --check-only 决定，
+    # 付费旗标本就不该再存在；付费样本由 9 个 str06 节点的空 flags 提供。
+    assert not PAID_FLAGS
