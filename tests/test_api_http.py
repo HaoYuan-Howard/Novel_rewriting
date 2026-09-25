@@ -393,9 +393,9 @@ def test_the_published_surface_is_exactly_the_current_surface(app):
         '/api/novels/{sid}/inbox': ['GET'],
         '/api/novels/{sid}/operator-next': ['GET'],
         '/api/novels/{sid}/reading/{ordinal}': ['GET'],
+        # review/{ordinal} 人工写回（edit 两端）已随 F8b-2 人工写回族退役；
+        # 只读屏仍保留。
         '/api/novels/{sid}/review/{ordinal}': ['GET'],
-        '/api/novels/{sid}/review/{ordinal}/edit': ['POST'],
-        '/api/novels/{sid}/review/{ordinal}/edit/preview': ['POST'],
         '/api/novels/{sid}/run': ['GET'],
         '/api/novels/{sid}/run/metrics': ['GET'],
         '/api/novels/{sid}/stage0/report': ['GET'],
@@ -404,23 +404,17 @@ def test_the_published_surface_is_exactly_the_current_surface(app):
         '/api/novels/{sid}/stage1/partition': ['POST'],
         '/api/novels/{sid}/stage2/analyze-draft': ['GET'],
         '/api/novels/{sid}/stage2/blueprint-reading-workpack': ['GET'],
-        '/api/novels/{sid}/stage2/blueprint/edit': ['POST'],
-        '/api/novels/{sid}/stage2/blueprint/edit/preview': ['POST'],
-        '/api/novels/{sid}/stage2/blueprint/edit/template': ['GET'],
+        # stage2 blueprint/global/characters 的 edit/template 写面已随 F8b-2
+        # 人工写回族整族退役。
         '/api/novels/{sid}/stage2/characters': ['GET'],
-        '/api/novels/{sid}/stage2/characters/edit': ['POST'],
         '/api/novels/{sid}/stage2/global': ['GET'],
-        '/api/novels/{sid}/stage2/global/edit': ['POST'],
-        '/api/novels/{sid}/stage2/global/edit/preview': ['POST'],
-        '/api/novels/{sid}/stage2/global/edit/template': ['GET'],
         '/api/novels/{sid}/stage4/{ordinal}': ['GET'],
         # （stage5 trim retain-pretrim 两端点已随批次 B3 trim 三选一退役；
         #   stage6 页/定稿/重建/prepare 已随 Stage6 整层退役。）
         '/api/novels/{sid}/stage5/{ordinal}': ['GET'],
-        # Stage6/7 终审工作包与 stage7 读屏三路由已随人工闸退役与旧链注销
+        # Stage6/7 终审工作包与 stage7 读屏/残留采纳已随人工闸退役与旧链注销
         # 移除（F8b）：命名与交付监控读 /api/str06/candidates/{candidate}/*，
         # 成书下载走 /api/str06/candidates/{candidate}/book（download=true）。
-        '/api/novels/{sid}/stage7/adopt-residual': ['POST'],
         '/api/novels/{sid}/trash': ['POST'],
         '/api/novels/{sid}/work-units/{unit_id}/grant': ['GET', 'POST'],
         '/api/queues': ['GET', 'POST'],
@@ -515,23 +509,17 @@ def test_preview_refuses_a_flag_that_node_does_not_have(client):
 
 
 _EXECUTOR_PROFILE_HTTP_CASES = (
-    ('stage2.analyze', (), 1),
-    ('stage2.characters', (), 1),
-    ('stage2.global', (), 1),
-    ('stage2.blueprint', (), 2),
-    # stage4 人工闸退役：--review-token 跑法随审阅票移出注册表；
-    # --replan 是预算内自动重采的付费跑法。
-    ('stage4.design', (), 1),
-    ('stage4.design', ('--replan',), 1),
-    ('stage4.plan', (), 2),
-    ('stage5.write', (), 1),
-    ('stage5.write', ('--chapters', '1'), 1),
-    ('stage5.write', ('--revise',), 1),
-    ('stage5.write', ('--revise', '--chapters', '1'), 1),
-    # stage6.prepare 已迁入 PROFILED_LLM_RUNS（2026-09-17）：空 flags 付费走 legacy。
-    ('stage6.prepare', (), 1),
-    ('stage6.hook', (), 2),
-    ('stage7.rename', (), 2),
+    # F8a/F8b：现役注册面是 9 个 str06 付费节点，节点旗标面只有 --check-only
+    #（付费 token 组合即空 flags）。
+    ('str06.stage2.source', (), 2),
+    ('str06.stage2.names', (), 2),
+    ('str06.stage4.preserve', (), 2),
+    ('str06.stage4.body_design', (), 2),
+    ('str06.stage4.bind', (), 2),
+    ('str06.stage4.hook_design', (), 2),
+    ('str06.stage5.hook', (), 2),
+    ('str06.stage5.body', (), 2),
+    ('str06.stage7.naming', (), 2),
 )
 
 
@@ -540,8 +528,6 @@ def test_executor_backend_http_matrix_covers_current_run_registry():
     covered: dict[str, list[frozenset[str]]] = {}
     for node, flags, _step_count in _EXECUTOR_PROFILE_HTTP_CASES:
         covered.setdefault(node, []).append(frozenset(flag_tokens(flags)))
-    # Supervisor 专属改写由 HTTP 拒绝测试覆盖；与正向组合共同闭合注册表。
-    covered['stage5.write'].append(frozenset({'--reviewer-rewrite'}))
     assert {node: tuple(token_sets) for node, token_sets in covered.items()} == \
         PROFILED_LLM_RUNS
 
@@ -638,7 +624,7 @@ def test_profiled_preview_can_show_denied_egress_but_post_cannot_start(
         client, base):
     # C2a/C2b：执行面 legacy-only——egress 拒绝职责改由 legacy backend 承担。
     request = {
-        'sid': '42', 'node': 'stage2.global', 'flags': [],
+        'sid': '42', 'node': 'str06.stage2.source', 'flags': [],
         'executor_backend': {'kind': 'legacy', 'profile': {
             'provider': 'deepseek', 'model': 'deepseek-v4-pro',
             'reasoning_effort': 'high', 'thinking_mode': 'on'}},
@@ -659,7 +645,7 @@ def test_profiled_preview_can_show_denied_egress_but_post_cannot_start(
 
 def test_http_refuses_egress_authorization_without_an_executor_profile(client):
     response = client.post('/api/jobs/preview', json={
-        'sid': '42', 'node': 'stage2.global', 'flags': [],
+        'sid': '42', 'node': 'str06.stage2.source', 'flags': [],
         'egress_authorized': True,
     })
 
@@ -671,10 +657,10 @@ def test_http_refuses_egress_authorization_without_an_executor_profile(client):
 
 
 @pytest.mark.parametrize(('path', 'node', 'flags'), [
-    ('/api/jobs/preview', 'stage2.global', ['--purge-role']),
-    ('/api/jobs', 'stage2.global', ['--purge-role']),
-    ('/api/jobs/preview', 'stage2.blueprint', ['--chapters', '1']),
-    ('/api/jobs', 'stage2.blueprint', ['--chapters', '1']),
+    ('/api/jobs/preview', 'str06.stage2.source', ['--purge-role']),
+    ('/api/jobs', 'str06.stage2.source', ['--purge-role']),
+    ('/api/jobs/preview', 'str06.stage5.body', ['--chapters', '1']),
+    ('/api/jobs', 'str06.stage5.body', ['--chapters', '1']),
     ('/api/jobs/preview', 'stage4.context', []),
     ('/api/jobs', 'stage4.context', []),
 ])
@@ -761,14 +747,12 @@ def _started_record(
 
 
 @pytest.mark.parametrize('flags', [
-    ['--recheck', '--chapters', '1'],
-    ['--revalidate', '--chapters', '1',
-     '--actor', 'reviewer-a', '--reason', '同轮重判'],
-    ['--dry-run'],
+    ['--check-only'],
 ])
-def test_free_stage5_recovery_jobs_do_not_request_writing_authorization(
+def test_free_jobs_do_not_request_writing_authorization(
         client, base, monkeypatch, flags):
-    """preview 判为免费的 Stage5 恢复路不能被 writing 审批反向堵死。"""
+    """preview 判为免费的作业路不能被已退役的 writing 审批反向堵死
+    （该审批写面已随批次 B3 退役，本条守卫其不复活）。"""
     authorized = []
 
     def refuse_authorization(*args, **kwargs):
@@ -787,7 +771,7 @@ def test_free_stage5_recovery_jobs_do_not_request_writing_authorization(
     monkeypatch.setattr(JOB_API.jobs, 'start', start_without_thread)
 
     response = client.post('/api/jobs', json={
-        'sid': '42', 'node': 'stage5.write', 'flags': flags,
+        'sid': '42', 'node': 'str06.stage5.body', 'flags': flags,
     })
 
     assert response.status_code == 202, response.text
@@ -868,7 +852,7 @@ def test_http_jobs_refuse_internal_reviewer_rewrite_actions(
 
 def test_paid_blueprint_job_starts_without_a_semantic_review_gate(
         client, monkeypatch):
-    """Stage2 语义审阅退役：blueprint 的启动不再有任何下游人审前置。"""
+    """Stage2 语义审阅退役：付费抽取层的启动不再有任何下游人审前置。"""
 
     def start_without_thread(
             run_base, node, sid, run_flags, *, steps,
@@ -881,14 +865,14 @@ def test_paid_blueprint_job_starts_without_a_semantic_review_gate(
     monkeypatch.setattr(JOB_API.jobs, 'start', start_without_thread)
 
     response = client.post('/api/jobs', json={
-        'sid': '42', 'node': 'stage2.blueprint', 'flags': [],
+        'sid': '42', 'node': 'str06.stage2.source', 'flags': [],
     })
 
     assert response.status_code == 202, response.text
     assert response.json()['start']['paid'] is True
 
 
-@pytest.mark.parametrize('node', ['stage4.design', 'stage4.context'])
+@pytest.mark.parametrize('node', ['str06.stage4.body_design', 'str06.stage4.bind'])
 def test_stage4_jobs_need_no_approval_prepare_any_more(client, monkeypatch, node):
     """人工闸退役后 stage4 作业不再铸任何审批授权 prepare。"""
     prepares: list[str] = []
@@ -911,131 +895,12 @@ def test_stage4_jobs_need_no_approval_prepare_any_more(client, monkeypatch, node
     assert prepares == [], 'stage4 的唯一打开条件是统一机械准入'
 
 
-def test_stage4_plan_new_outputs_need_no_approval_any_more(client, monkeypatch):
-    """B 的打开条件是机械准入（queue/operator 判定），不再有审批 prepare。"""
-    authorized: list[str] = []
-    for name in ('authorize_plan', 'authorize_context',
-                 'authorize_design_initial'):
-        monkeypatch.setattr(
-            JOB_API.approvals, name,
-            lambda _base, sid, _name=name: authorized.append(_name),
-            raising=False)
-
-    def start_without_thread(
-            run_base, node, sid, run_flags, *, steps,
-            executor_backend=None, egress_authorized=None, prepare=None):
-        assert prepare is None, 'stage4 不再铸审批 prepare'
-        return _started_record(run_base, node, sid, run_flags, steps)
-
-    monkeypatch.setattr(JOB_API.jobs, 'start', start_without_thread)
-    for flags in ([], ['--apply-binding', 'binding.json']):
-        response = client.post('/api/jobs', json={
-            'sid': '42', 'node': 'stage4.plan', 'flags': flags,
-        })
-        assert response.status_code == 202, response.text
-    assert authorized == []
-
-
-def test_stage4_design_replan_casts_scope_under_the_job_lock(
-        client, monkeypatch):
-    """--replan 的机器 scope 在占住书锁后、启动前现铸一次。"""
-    cast: list[str] = []
-    monkeypatch.setattr(
-        JOB_API.approvals, 'cast_infeasible_replan_scope',
-        lambda _base, sid: cast.append(sid))
-
-    def start_without_thread(
-            run_base, node, sid, run_flags, *, steps,
-            executor_backend=None, egress_authorized=None, prepare=None):
-        if prepare is not None:
-            prepare()
-        return _started_record(run_base, node, sid, run_flags, steps)
-
-    monkeypatch.setattr(JOB_API.jobs, 'start', start_without_thread)
-    response = client.post('/api/jobs', json={
-        'sid': '42', 'node': 'stage4.design', 'flags': ['--replan'],
-    })
-
-    assert response.status_code == 202, response.text
-    assert cast == ['42']
-
-
-def test_paid_stage5_job_authorizes_selected_chapters_before_start(
-        client, base, monkeypatch):
-    """付费定向写作仍在占锁后、启动前校验 writing proof。"""
-    authorized = []
-
-    def authorize(run_base, sid, chapters, *, requires_fresh_review):
-        authorized.append((run_base, sid, chapters, requires_fresh_review))
-
-    def start_without_thread(
-            run_base, node, sid, run_flags, *, steps,
-            executor_backend=None, egress_authorized=None, prepare=None):
-        assert prepare is not None
-        assert executor_backend is None
-        assert egress_authorized is None
-        prepare()
-        return _started_record(run_base, node, sid, run_flags, steps)
-
-    monkeypatch.setattr(JOB_API.approvals, 'authorize_writing', authorize)
-    monkeypatch.setattr(JOB_API.jobs, 'start', start_without_thread)
-
-    response = client.post('/api/jobs', json={
-        'sid': '42', 'node': 'stage5.write',
-        'flags': ['--chapters', '1,3'],
-    })
-
-    assert response.status_code == 202, response.text
-    assert response.json()['start']['paid'] is True
-    assert [(sid, chapters, fresh) for _, sid, chapters, fresh in authorized] == [
-        ('42', [1, 3], False),
-    ]
-
-
-@pytest.mark.parametrize('node', [
-    'stage2.global', 'stage2.blueprint', 'stage4.plan',
-    'stage5.write', 'stage6.hook', 'stage7.rename',
-])
-def test_revalidate_preview_is_a_template_but_execution_requires_real_audit_values(
-        client, node):
-    request = {
-        'sid': '42',
-        'node': node,
-        'flags': ['--revalidate'],
-    }
-    preview = client.post('/api/jobs/preview', json=request)
-    assert preview.status_code == 200, preview.text
-    body = preview.json()
-    first = body['steps'][0]['argv']
-    assert first[first.index('--actor') + 1] == '待填·actor'
-    assert first[first.index('--reason') + 1] == '待填·reason'
-    assert body['flags'] == ['--revalidate']
-
-    missing = client.post('/api/jobs', json=request)
-    assert missing.status_code == 400
-    assert missing.json()['kind'] == 'UnsupportedRunMode'
-
-    placeholder_request = {
-        **request,
-        'flags': [
-            '--revalidate', '--actor', '待填·actor',
-            '--reason', '待填·reason',
-        ],
-    }
-    placeholder = client.post('/api/jobs', json=placeholder_request)
-    assert placeholder.status_code == 400
-    assert placeholder.json()['kind'] == 'UnsupportedRunMode'
-
-
 def test_revalidate_preview_with_real_audit_values_matches_the_strict_plan(client, base):
-    flags = [
-        '--revalidate', '--actor', 'reviewer-a',
-        '--reason', '逐项核对当前闸门后同轮重判',
-    ]
-    request = {'sid': '42', 'node': 'stage7.rename', 'flags': flags}
+    flags = ['--check-only']
+    request = {'sid': '42', 'node': 'str06.stage7.naming', 'flags': flags}
     response = client.post('/api/jobs/preview', json=request)
     assert response.status_code == 200, response.text
-    strict = J.plan_start('stage7.rename', '42', flags, base=base)
+    strict = J.plan_start('str06.stage7.naming', '42', flags, base=base)
     assert response.json() == json.loads(strict.model_dump_json())
 
 
@@ -1043,7 +908,7 @@ def test_revalidate_preview_with_real_audit_values_matches_the_strict_plan(clien
 
 def _fake_started(base, sid) -> str:
     """手写一条只有 `started` 的事件——**「服务重启前它是死是活我们不知道」那一态**。"""
-    start = J.plan_start('stage5.review', sid, ['--check-only'], base=base)
+    start = J.plan_start('str06.stage7.naming', sid, ['--check-only'], base=base)
     job_id = J.new_job_id(now=1)
     J.append_event(base, J.JobEvent(job_id=job_id, kind='started', ts=1, start=start))
     return job_id
