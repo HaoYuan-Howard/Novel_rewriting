@@ -1117,7 +1117,12 @@ def new_queue_id(now: float | None = None) -> str:
 
 def _ordered_items(start: QueueStart) -> list[QueueItem]:
     """Restore book order and node order after QueuePlan's runnable/blocked split."""
+    # ⚠ F8b-3：历史 queues.jsonl 可含退役节点条目（旧账只读可解码）；排序
+    # 名册只覆盖现役 NODES，退役节点按注册顺序排在现役面之后，不参与新调度。
     rank = {node: index for index, node in enumerate(NODES)}
+    retired_rank = {node: len(rank) + index
+                    for index, node in enumerate(RETIRED_NODES)}
+    rank.update(retired_rank)
     all_items = start.plan.items + start.plan.blocked
     out: list[QueueItem] = []
     for sid in start.sids:

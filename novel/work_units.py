@@ -21,7 +21,7 @@ from pydantic import BaseModel
 
 from contracts.invariants import (
     BOOK_CONTENT_CALL_CEILING_DEFAULT, NODES, RETIRED_APPROVAL_BINDINGS,
-    approval_work_unit, approval_scope_allowed,
+    RETIRED_NODES, approval_work_unit, approval_scope_allowed,
 )
 from contracts.schema.str06.candidates import STR06_CANDIDATE_NODES
 from contracts.schema.workflow import (
@@ -334,7 +334,25 @@ def node_lifecycle_spec(node: str):
     candidate = STR06_CANDIDATE_NODES.get(node)
     if candidate is not None:
         return candidate.lifecycle
+    if node in RETIRED_NODES:
+        # ⚠ F8b-3：退役节点只服务存量书历史账的只读解码（Commander
+        # read_only 路径）；`executor_content_limit=0` 让一切新建模
+        # （executor/commander 写面）被角色闸拒绝，scope 准入由
+        # RETIRED_APPROVAL_BINDINGS 历史只读表承接。
+        return _RetiredNodeLifecycle(node)
     raise WorkUnitRefused(f'未登记的工作单元节点：{node}')
+
+
+class _RetiredNodeLifecycle:
+    """退役节点的只读解码桩：只带字段形状，不发任何新预算。"""
+
+    __slots__ = ('node', 'unit_kind', 'executor_content_limit', 'approval_bindings')
+
+    def __init__(self, node: str) -> None:
+        self.node = node
+        self.unit_kind = 'retired'
+        self.executor_content_limit = 0
+        self.approval_bindings: tuple = ()
 
 
 def read_book_budget(
@@ -430,7 +448,9 @@ class WorkUnitBudget:
         except WorkUnitRefused:
             raise WorkUnitRefused('未登记的工作单元节点或角色')
         if role == 'commander':
-            if node not in NODES:
+            if node not in NODES and node not in RETIRED_NODES:
+                # ⚠ F8b-3：退役节点（RETIRED_NODES）的 Commander 账同样是
+                # 存量书历史解码面；除此之外不再服务任何现役节点。
                 raise WorkUnitRefused('Commander 工作单元只服务现役历史账解码')
             # 原 ``spec.commander_content_limit == 4`` 的准入面随字段退役；
             # 历史解码以现存的审批登记（approval_bindings）与已退役闸的
@@ -1257,23 +1277,31 @@ def validate_reviewer_record(base: str | os.PathLike[str], sid: str, record: Any
 
 
 def executor_scope(node: str, purpose: str, progress: Any = None) -> str:
-    """只从登记的业务拓扑取 scope，修复 purpose 不铸新单元。"""
-    if node in ('stage2.analyze', 'stage2.characters', 'stage2.global', 'stage6.prepare', 'stage6.hook', 'stage7.rename'):
+    """只从登记的业务拓扑取 scope，修复 purpose 不铸新单元。
+
+    ⚠ F8b-3：本表按现役候选表 unit_kind 登记新链 9 个付费节点；旧链节点键
+    已随 F8a 退役（不再接受任何模型工作单元）。章级抽取（chNN）与按章成文
+    （body）的 purpose／progress 带显式章号，`strategy` 是 book＋chNN 联合
+    抽取的整书单元。
+    """
+    if node in ('str06.stage2.names', 'str06.stage4.preserve',
+                'str06.stage4.body_design', 'str06.stage4.hook_design',
+                'str06.stage4.bind', 'str06.stage5.hook', 'str06.stage7.naming'):
         return 'book'
-    chapter = getattr(progress, 'chapter_ordinal', None)
-    if chapter is None:
-        chapter = getattr(progress, 'chapter', None)
-    if isinstance(progress, dict):
-        chapter = progress.get('chapter_ordinal', progress.get('chapter', chapter))
-    if node == 'stage4.design' and 'strategy' in purpose:
-        return 'strategy'
-    if chapter is None:
-        match = re.search(r'(?:chapter|ch)[.:_-]?(\d+)', purpose)
-        if match is None:
-            match = re.match(re.escape(node) + r':(\d+)(?:\b|:)', purpose)
-        if match:
-            chapter = int(match.group(1))
-    if node in ('stage2.blueprint', 'stage4.design', 'stage4.plan', 'stage5.write'):
+    if node in ('str06.stage2.source', 'str06.stage5.body'):
+        if node == 'str06.stage2.source' and ('strategy' in purpose or purpose == 'book'):
+            return 'strategy'
+        chapter = getattr(progress, 'chapter_ordinal', None)
+        if chapter is None:
+            chapter = getattr(progress, 'chapter', None)
+        if isinstance(progress, dict):
+            chapter = progress.get('chapter_ordinal', progress.get('chapter', chapter))
+        if chapter is None:
+            match = re.search(r'(?:chapter|ch)[.:_-]?(\d+)', purpose)
+            if match is None:
+                match = re.match(re.escape(node) + r':(\d+)(?:\b|:)', purpose)
+            if match:
+                chapter = int(match.group(1))
         if not isinstance(chapter, int) or isinstance(chapter, bool) or chapter < 1:
             raise WorkUnitRefused(f'{node} 请求缺显式章节工作单元')
         return f'chapter:{chapter}'

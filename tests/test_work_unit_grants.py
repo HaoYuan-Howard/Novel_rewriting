@@ -38,7 +38,7 @@ def _profile() -> LegacyLlmProfile:
         reasoning_effort='high', thinking_mode='on')
 
 
-def _ctx(base, node: str = 'stage2.global') -> RunContext:
+def _ctx(base, node: str = 'str06.stage4.body_design') -> RunContext:
     initialize_workflow(base)
     book = base / '额度链路_42'
     book.mkdir(exist_ok=True)
@@ -146,8 +146,10 @@ def test_grant_cannot_bypass_changed_or_pending_work(tmp_path, damage):
     assert view.available, view.reason
     request = _request(view)
     if damage == 'surface':
-        target = ctx.novel_dir / 'stage2' / 'global_grounding.json'
-        target.parent.mkdir(exist_ok=True)
+        # 现役 active 面：新链登记产物（global_grounding 已随旧链退役，
+        # 不再进入 surface seal）。
+        target = ctx.novel_dir / 'stage2' / 'characters' / 'characters.json'
+        target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text('{"changed":true}', encoding='utf-8')
     elif damage == 'ledger':
         budget.save_feedback(budget.latest_turn().turn_id, {'reason': '新的精确拒因'})

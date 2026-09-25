@@ -1964,7 +1964,11 @@ def approval_scope_allowed(node: str, scope: str) -> bool:
 
     已退役闸的 scope 仍按历史只读表放行，仅供存量书历史解码，不构成
     任何现役写面。
+    ⚠ F8b-3：旧链节点键整体在 RETIRED_NODES（不在现役 NODES），scope 准入
+    直接走 RETIRED_APPROVAL_BINDINGS 历史只读表。
     """
+    if node in RETIRED_NODES:
+        return scope in {value for _, value in RETIRED_APPROVAL_BINDINGS.get(node, ())}
     return scope in (
         {value for _, value in NODES[node].lifecycle.approval_bindings}
         | {value for _, value in RETIRED_APPROVAL_BINDINGS.get(node, ())})

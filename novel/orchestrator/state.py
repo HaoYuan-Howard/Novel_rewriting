@@ -20,6 +20,8 @@ routing 不符 ⇒ 重跑」。改成 Web 编排之后**整个消失，且没有
 """
 from __future__ import annotations
 
+import re
+
 from contracts.artifacts import (
     ARTIFACT_PATHS, BOOK_SCOPED_PATHS, STAGE1_MAIN_TEXT,
     STAGE2_BLUEPRINT_CHARACTER_PROJECTION, STAGE2_CHAPTER_BLUEPRINTS,
@@ -121,6 +123,10 @@ def required_artifacts(stage: str, *,
 # 一、一份产物
 # ─────────────────────────────────────────────────────────────────────────────
 
+#: 具体章回执 rel（模板含 ``{nn}`` 占位，不能直接参与相等比较）。
+_BODY_RECEIPT_RE = re.compile(r'stage5/acceptance/body/ch\d+\.json')
+
+
 def artifact_state(store: ArtifactStore, rel: str) -> ArtifactState:
     """一份产物此刻的处境。**不存在 ⇒ `unknown`，不是 `fresh`。**
 
@@ -177,10 +183,9 @@ def artifact_state(store: ArtifactStore, rel: str) -> ArtifactState:
             # Schema 只知道 ``output_ordinal >= 1``；文件名与主体的跨路径绑定
             # 必须在读盘边界另查。否则 ``ch01.json`` 里装一份合法的第 2 章，
             # 完成度仍会按文件名集合把第 1 章判成 current 并 SKIP 付费写作。
-            if rel == STR06_STAGE5_BODY_RECEIPT:
-                # 新链章稿是纯文本（无 per-file schema）；跨路径绑定由
-                # stage7 assembly_chapter_chain 回执链守卫，这里保留
-                # JSON 回执的章号绑定反例。
+            # ⚠ F8b-3 修复：模板 rel 与具体章路径恒不相等，绑定检查此前
+            # 不可达——装错章号的回执曾被读作 `ready`。
+            if _BODY_RECEIPT_RE.fullmatch(rel):
                 output_ordinal = getattr(obj, 'chapter_ordinal', None)
                 readable = (
                     isinstance(output_ordinal, int)
@@ -335,6 +340,16 @@ def stage_state(store: ArtifactStore, stage: str) -> StageState:
     rounds = {node: paths.numbered_rounds(store.ctx.novel_dir, rel)
               for node, rel in numbered_produces(stage).items()}
     if stage == 'stage5':
+        # ⚠ F8b-3：新链 stage5 增加具名 Hook 面（stage5/hook/hook.txt＋
+        # receipt.json）。与章稿同一纪律——干净书不把健康具名行塞进公共
+        # 状态（done=True ⇒ artifacts 为空），只有问题行才需要人处理；
+        # Hook 面的问题同时压住 stage 级 done。
+        hook_issues = [
+            artifact for artifact in arts
+            if not artifact.exists or not artifact.readable
+            or artifact.freshness == 'stale' or artifact.invalid
+        ]
+        arts = hook_issues
         written = chapters_done(store.ctx.novel_dir)
         invalid_ordinals, malformed_invalids = stage5_invalid_inventory(
             store.ctx.novel_dir)
@@ -380,7 +395,8 @@ def stage_state(store: ArtifactStore, stage: str) -> StageState:
                 # 压成 False 会让队列/界面把它当成一条确定的付费续写路。
                 done = None
             else:
-                done = bool(want) and not missing and not issues
+                done = (bool(want) and not missing and not issues
+                        and not hook_issues)
         legacy = stage5_legacy_paths(store.ctx.novel_dir)
         from novel.stages.stage5.review import review_status
         review = review_status(store.ctx, store)
@@ -1000,7 +1016,7 @@ def resume_verdict(
         #   一句与动作相反的解释，比不解释更贵。
         return RESUME_RUN, (
             f'盘上有比正式稿更晚、被闸门拦下的稿：'
-            f'{", ".join(paths.invalid_of(a.rel) for a in invalid)}。'
+            f'{", ".join(a.rel if paths.is_invalid(a.rel) else paths.invalid_of(a.rel) for a in invalid)}。'
             f'⚠ 队列会按原命令**重跑本节点**（付费节点=重新付费）；'
             '想先省钱就手动跑 0 LLM 提升路 '
             '`--revalidate --actor system:invalid-revalidate --reason <audit>`（同轮重判并留不可变审计），'
