@@ -48,15 +48,17 @@ def _base() -> Path:
 def _ctx(base: Path) -> RunContext:
     # 这一族测的多个 ``_ctx`` 就是同一次跨 CLI resume；
     # 新账不再允许靠 sid/purpose 把另一 run 的成本接过来。
+    # 旧 stage2.global/stage2.blueprint 已整族退役；book＋chNN 联合抽取
+    # 由 str06.stage2.source 承接（scope=strategy / chapter:N，见 executor_scope）。
     run_id = _RUN_IDS.setdefault(base, new_run_id())
     return RunContext.open(
-        base, '123', 'stage2.global', paid=True,
+        base, '123', 'str06.stage2.source', paid=True,
         repair_rejected_responses=True, run_id=run_id)
 
 
 def _ctx_for_run(base: Path, run_id: str) -> RunContext:
     return RunContext.open(
-        base, '123', 'stage2.global', paid=True,
+        base, '123', 'str06.stage2.source', paid=True,
         repair_rejected_responses=True, run_id=run_id)
 
 
@@ -77,7 +79,9 @@ def _good(model: str = 'deepseek-flash') -> ChatResponse:
 
 
 def _ask(client: LlmClient) -> RepairResponse:
-    return client.ask_json('system', 'user', model_cls=RepairResponse, purpose='repair.p')
+    # 整书级 purpose：str06.stage2.source 的 book 级单元按登记叫 `strategy`。
+    return client.ask_json('system', 'user', model_cls=RepairResponse,
+                           purpose='strategy:repair.p')
 
 
 def _ask_stage2(client: LlmClient, *, validator=None) -> RepairResponse:
@@ -125,7 +129,7 @@ def test_an_agent_candidate_is_revalidated_and_adopted_without_a_second_wire_cal
     got = _ask(client)
     assert got.surface_habits == ['短句']
     assert second_transport.calls == [], '修复候选过原闸后不能再发 Flash/Pro'
-    assert client.accepted_model('repair.p') == 'deepseek-flash'
+    assert client.accepted_model('strategy:repair.p') == 'deepseek-flash'
     usage = second_ctx.ledger.usage()
     assert usage is not None and (usage.calls_made, usage.completion_tokens) == (1, 7)
 
@@ -169,7 +173,7 @@ def test_true_legacy_chain_without_run_id_remains_resumable():
     record = response_repair.find_attempt(ctx.novel_dir, stopped.value.attempt_id)
 
     legacy_chain = response_repair.chain_fingerprint(
-        sid=ctx.sid, node=ctx.node, purpose='repair.p', code=ctx.code,
+        sid=ctx.sid, node=ctx.node, purpose='strategy:repair.p', code=ctx.code,
         system='system', user='user', models=first_client._models,
         rungs=first_client._rungs, json_mode=JSON_OBJECT_MODE,
         max_tokens=DEFAULT_MAX_TOKENS)
@@ -348,7 +352,7 @@ def test_stage2_batch_decline_resumes_once_without_second_human_pause(tmp_path):
     (book / 'stage1').mkdir(parents=True)
     run_id = new_run_id()
     ctx = RunContext.open(
-        base, '123', 'stage2.blueprint', paid=True,
+        base, '123', 'str06.stage2.source', paid=True,
         repair_rejected_responses=True, run_id=run_id)
     initial_client = _client(ctx, FakeTransport.always(_bad()))
     stage2_runs.ensure_run(
@@ -377,7 +381,7 @@ def test_stage2_batch_decline_resumes_once_without_second_human_pause(tmp_path):
 
     resumed_transport = FakeTransport(responder=respond)
     resumed_ctx = RunContext.open(
-        base, '123', 'stage2.blueprint', paid=True,
+        base, '123', 'str06.stage2.source', paid=True,
         repair_rejected_responses=True, run_id=run_id)
     got = _ask_stage2(_client(resumed_ctx, resumed_transport))
 
@@ -644,7 +648,7 @@ def test_untrusted_candidate_cannot_forge_the_recovery_packet_boundary():
 
 def test_plain_cli_keeps_independent_resampling_without_failure_packets():
     base = _base()
-    ctx = RunContext.open(base, '123', 'stage2.global', paid=True)
+    ctx = RunContext.open(base, '123', 'str06.stage2.source', paid=True)
     responses = [_bad(), _bad(), _bad(PRO_FALLBACK_MODEL), _good(PRO_FALLBACK_MODEL)]
     transport = FakeTransport(responder=lambda _request, index: responses[index])
     got = _ask(_client(ctx, transport))

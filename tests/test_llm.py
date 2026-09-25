@@ -65,7 +65,7 @@ def _book() -> Path:
 
 
 def _ctx(*, cache: CachePolicy | None = None, paid: bool = True,
-         node: str = 'stage6.hook') -> RunContext:
+         node: str = 'str06.stage5.hook') -> RunContext:
     return RunContext.open(_book(), '123', node, paid=paid,
                            cache=cache or CachePolicy.default(), write_ledger=False)
 
@@ -109,14 +109,14 @@ def test_total_slot_refusal_is_zero_wire_and_does_not_leave_unknown_budget(tmp_p
 
     book = tmp_path / '槽位_42'
     book.mkdir()
-    ctx = RunContext(novel_dir=book, node='stage6.hook', paid=True,
+    ctx = RunContext(novel_dir=book, node='str06.stage5.hook', paid=True,
                      code='test-code-version', ledger=CostLedger(), cache=CachePolicy.default())
     transport = FakeTransport([OK_JSON])
     client = _client(transport, ctx=ctx, concurrency_policy=PipelineConcurrency(
         per_book=2, per_provider=2))
     with pipeline_model_slot(book, 'deepseek', per_book=1, per_provider=1):
         with pytest.raises(LlmFailed, match='模型调用未开始'):
-            client.ask_json('SYS', 'subject', model_cls=Resp, purpose='stage6.hook')
+            client.ask_json('SYS', 'subject', model_cls=Resp, purpose='str06.stage5.hook')
     assert transport.calls == [] and ctx.ledger.calls_made == 0
     units = list_unit_views(tmp_path, '42')
     assert units is not None and len(units) == 1
@@ -415,7 +415,7 @@ def test_a_rung_rejected_by_a_content_gate_says_which_gate_and_why(body, gate):
     # 2026-08-22 起内容闸拒的下一步是**同档重采**（`_worth_resampling`）⇒ next 指回本档。
     assert (e['next_effort'], e['next_thinking']) == LADDER[0]
     assert e['exhausted'] is False
-    assert (e['purpose'], e['node'], e['sid']) == ('p', 'stage6.hook', '123')
+    assert (e['purpose'], e['node'], e['sid']) == ('p', 'str06.stage5.hook', '123')
     assert e['finish_reason'] == 'stop'
     assert e['reason'] and not e['reason_truncated']
     assert (e['content_chars'], e['reasoning_chars']) == (len(body), len('推敲过程'))
@@ -1123,10 +1123,10 @@ def test_the_first_wire_call_runs_alone_so_the_rest_can_hit_the_provider_prefix_
             marks.append(('exit', req.user))
         return OK_TEXT
 
-    client = _client(FakeTransport(responder=responder), ctx=_ctx(node='stage5.write'))
+    client = _client(FakeTransport(responder=responder), ctx=_ctx(node='str06.stage5.body'))
     with ThreadPoolExecutor(max_workers=8) as pool:
         list(pool.map(
-            lambda n: client.ask_text('s', f'u{n}', purpose=f'stage5.write:{n + 1}'), range(8)))
+            lambda n: client.ask_text('s', f'u{n}', purpose=f'str06.stage5.body:{n + 1}'), range(8)))
 
     assert marks[0][0] == 'enter'
     assert marks[1] == ('exit', marks[0][1]), \
@@ -1143,14 +1143,14 @@ def test_a_failing_first_call_still_releases_the_warmup_gate():
         return (TransportError('炸了', retryable=False) if req.user == 'boom'
                 else OK_TEXT)
 
-    client = _client(FakeTransport(responder=responder), ctx=_ctx(node='stage5.write'))
+    client = _client(FakeTransport(responder=responder), ctx=_ctx(node='str06.stage5.body'))
     with pytest.raises(TransportError):
-        client.ask_text('s', 'boom', purpose='stage5.write:1')
+        client.ask_text('s', 'boom', purpose='str06.stage5.body:1')
 
     assert client._warm_done.is_set(), '首发抛异常后闸没放行 ⇒ 后来者会死等'
     with ThreadPoolExecutor(max_workers=4) as pool:
         got = list(pool.map(
-            lambda n: client.ask_text('s', f'u{n}', purpose=f'stage5.write:{n + 2}'), range(4)))
+            lambda n: client.ask_text('s', f'u{n}', purpose=f'str06.stage5.body:{n + 2}'), range(4)))
     assert got == ['一段正文'] * 4
 
 
@@ -1566,7 +1566,7 @@ def test_every_wire_attempt_gets_its_own_ledger_row():
     一次超时对面很可能已经生成并计费了。
     """
     d = Path(tempfile.mkdtemp())
-    ctx = RunContext.open(_book(), '123', 'stage6.hook', paid=True,
+    ctx = RunContext.open(_book(), '123', 'str06.stage5.hook', paid=True,
                           ledger=CostLedger(path=d / 'ledger.jsonl'))
     events = []
     ctx.observer = events.append
@@ -1601,7 +1601,7 @@ def test_every_wire_attempt_gets_its_own_ledger_row():
     assert [(event['attempt'], event['state'], event['chapter']) for event in finished] == [
         (1, 'error', 7), (2, 'error', 7), (3, 'ok', 7),
     ]
-    assert all(event['sid'] == '123' and event['node'] == 'stage6.hook'
+    assert all(event['sid'] == '123' and event['node'] == 'str06.stage5.hook'
                for event in events)
     assert ctx.ledger.calls_made == 3
 
@@ -1650,7 +1650,7 @@ def test_an_inflight_attempt_emits_periodic_heartbeats_with_chapter_progress():
             in_flight.set()
 
     heartbeat = AttemptHeartbeat(
-        emit, purpose='stage5.write·ch3', attempt=1, max_attempts=4,
+        emit, purpose='str06.stage5.body·ch3', attempt=1, max_attempts=4,
         progress=RequestProgress(chapter=3, index=1, total=2), interval=0.005)
     heartbeat.start()
     assert in_flight.wait(1), '在途请求没有按间隔发心跳'
@@ -1708,7 +1708,7 @@ def test_the_ledger_separates_real_calls_from_cache_hits():
 
 def test_provider_prompt_cache_counts_keep_null_distinct_from_zero():
     d = Path(tempfile.mkdtemp())
-    ctx = RunContext.open(_book(), '123', 'stage6.hook', paid=True,
+    ctx = RunContext.open(_book(), '123', 'str06.stage5.hook', paid=True,
                           ledger=CostLedger(path=d / 'ledger.jsonl'))
     response = ChatResponse(
         content='一段正文', finish_reason='stop', model='deepseek-v4-pro',
@@ -1732,7 +1732,7 @@ def test_a_run_with_no_calls_has_no_usage_key_at_all():
 
 def test_concurrent_chapter_usage_is_attributed_by_chapter_not_completion_order():
     ledger = CostLedger()
-    common = dict(node='stage5.write', sid='book', model='m', code='c',
+    common = dict(node='str06.stage5.body', sid='book', model='m', code='c',
                   cache_policy='default')
     ledger.record(
         **common, cached=False, prompt_tokens=20, completion_tokens=200,
@@ -1753,7 +1753,7 @@ def _append_ledger_rows(path: str, worker: int, count: int) -> None:
     ledger = CostLedger(path=Path(path))
     for index in range(count):
         ledger.record(
-            node='stage5.write', sid=f'book-{worker}', model='m', code='c',
+            node='str06.stage5.body', sid=f'book-{worker}', model='m', code='c',
             cached=False, cache_policy='default', purpose=f'{worker}:{index}',
             prompt_tokens=1, completion_tokens=1,
         )

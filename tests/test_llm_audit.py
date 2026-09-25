@@ -56,7 +56,7 @@ def _book() -> Path:
 
 def _ledgered_ctx() -> tuple[RunContext, Path]:
     d = Path(tempfile.mkdtemp())
-    ctx = RunContext.open(_book(), '123', 'stage6.hook', paid=True,
+    ctx = RunContext.open(_book(), '123', 'str06.stage5.hook', paid=True,
                           ledger=CostLedger(path=d / 'ledger.jsonl'))
     return ctx, d
 
@@ -98,7 +98,7 @@ def test_one_run_id_closes_child_env_wire_gate_and_adoption_accounts(monkeypatch
     """子进程继承的同一身份必须逐字落进成本请求、内容闸与正式采纳三类账。"""
     run_id = 'acceptance-run-42'
     monkeypatch.setenv(run_identity.RUN_ID_ENV, run_id)
-    ctx = RunContext.open(_book(), '123', 'stage6.hook', paid=True)
+    ctx = RunContext.open(_book(), '123', 'str06.stage5.hook', paid=True)
     client = _client(FakeTransport.always(OK_JSON), ctx)
     client.ask_json('sys', 'usr', model_cls=Resp, purpose='p')
     attempt_id = client.accepted_attempt('p')
@@ -123,7 +123,7 @@ def test_epoch_run_rows_keep_logical_identity_and_explicit_parent_link():
     logical_run_id = 'epoch-producer-42'
     parent_run_id = 'agent-parent-42'
     ctx = RunContext.open(
-        _book(), '123', 'stage6.hook', paid=True,
+        _book(), '123', 'str06.stage5.hook', paid=True,
         run_id=logical_run_id, parent_run_id=parent_run_id)
     client = _client(FakeTransport.always(OK_JSON), ctx)
     client.ask_json('sys', 'usr', model_cls=Resp, purpose='p')
@@ -510,7 +510,7 @@ def test_cache_hits_settle_gates_and_are_adoptable_too():
 
 def test_audit_events_survive_in_memory_when_there_is_no_ledger_file():
     """`--dry-run` / 测试（`write_ledger=False`）没有盘上账本，判定仍要能被断言。"""
-    ctx = RunContext.open(_book(), '123', 'stage6.hook', paid=True,
+    ctx = RunContext.open(_book(), '123', 'str06.stage5.hook', paid=True,
                           write_ledger=False)
     transport = FakeTransport.always(OK_JSON)
     client = LlmClient(ctx, transport, sleep=lambda _s: None)
