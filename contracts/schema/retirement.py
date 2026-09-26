@@ -1209,6 +1209,11 @@ STR06_F7E_TEST_KEEP: dict[str, str] = {
     'test_service_lifecycle.py': '服务生命周期维护',
     'test_stage01.py': 'Stage0/1 联调；Stage1 输入边界归 F7 已闭合，范围外',
     'test_stage0_revisions.py': 'Stage0 revisions；Stage0/1 整层重构延期，范围外',
+    # 批 0a 探针工具（tools/stage2_context_probe.py）的契约测试：臂 A 与生产请求
+    # 逐字一致、臂 B 只插前文块、授权闸拒绝未授权购买。工具随批 0 结论关闭、不为
+    # 后续批次扩展，但**批 3 的 ch03–ch05 单臂重复仍要用它**——保留至该采样完成，
+    # 之后与工具文件同批删除（删除条件登记在 REQUIREMENTS 质量改进批次二 · 批 3）。
+    'test_stage2_context_probe.py': '批 0 Stage2 上下文/架构探针工具契约测试；批 3 的 ch03–ch05 单臂重复采样仍要用该工具，之后随工具删除',
     'test_start_script.py': '启动脚本',
     'test_test_selection.py': '选测目录；change_scopes.str06 的删除条件在本表（F8c）',
     'test_trash.py': '回收站',
