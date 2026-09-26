@@ -410,7 +410,10 @@ def context_readings(wire, compile_errors: list[str]) -> dict:
 
 
 def arch_readings(chapters: list[dict]) -> dict:
-    """架构探针读数：截断、逐章编译、ch04 床底揭示与 ch05 衣柜记法的机械摘录。"""
+    """架构探针读数：截断、逐章编译、ch04 床底揭示与 ch05 衣柜记法的机械摘录。
+
+    `chapters` 每项带 wire 层的 beats（编译失败也照常摘录——失败本身就是读数）。
+    """
     per_chapter = []
     for entry in chapters:
         beats = _beats(entry)
@@ -544,25 +547,31 @@ def run_arch_sample(args, prefix: ProbePrefix, boundary, label: str) -> dict:
     chapters = []
     entries = wire.get('chapters')
     if not isinstance(entries, list):
-        chapters.append({'chapter': None, 'compiled': False,
+        chapters.append({'chapter': None, 'compiled': False, 'beats': [],
                          'compile_errors': ['响应缺 chapters 数组（形状失败）']})
         entries = []
     for entry in entries:
-        no = entry.get('chapter') if isinstance(entry, dict) else None
+        if not isinstance(entry, dict):
+            chapters.append({'chapter': None, 'compiled': False, 'beats': [],
+                             'compile_errors': ['chapters 项不是 object']})
+            continue
+        no = entry.get('chapter')
         if not isinstance(no, int) or not (args.from_ch <= no <= args.to_ch):
             chapters.append({'chapter': no, 'compiled': False,
+                             'beats': entry.get('beats') or [],
                              'compile_errors': [f'章序 {no!r} 不在探针范围 '
                                                 f'{args.from_ch}..{args.to_ch}']})
             continue
         _, errors = compiler.compile(
             {'beats': entry.get('beats'), 'causal_edges': entry.get('causal_edges')}, no)
-        chapters.append({'chapter': no, 'compiled': not errors, 'compile_errors': errors})
+        chapters.append({'chapter': no, 'compiled': not errors, 'compile_errors': errors,
+                         'beats': entry.get('beats') or []})
     report = _sample_report(args, prefix, label, requests_report, {
         'mode': 'arch', 'arm': None,
         'readings': {**arch_readings(chapters),
                      'truncated': record.get('finish_reason') != 'stop',
                      'finish_reason': record.get('finish_reason')},
-        'chapters': chapters})
+        'chapters': [{k: v for k, v in c.items() if k != 'beats'} for c in chapters]})
     _persist(repository, label, report, {'arch': wire})
     return report
 
