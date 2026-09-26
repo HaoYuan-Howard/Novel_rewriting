@@ -531,8 +531,11 @@ F5a–F5d 已闭合按章成文的契约、引擎与免费验证，F5e 已完成
     dirty 拒绝分支（unknown 仍在 probe/spawn/模型 wire/生命周期写入前拒绝），契约
     R-11.23 原位改写（R-11 条数不变），dirty 启动与 unknown 早拒的测试断言同批切换；
     缘由与代价（跑书期间编辑会滚 epoch、采用仍按请求身份核对）见 DECISIONS 2026-09-26。
-    该变更触发 F9 重验义务：在最终提交上重做 F8d 工程验收（契约 §9.5 五文件＋默认非
-    corpus 回归＋前端 test/typecheck/seams/build）通过后，才在独立根跑付费书1。
+    该变更触发 F9 重验义务；**用户 2026-09-26 指示本次只是局部改动，全量非 corpus
+    回归推迟到合入 main 前跑**——本轮闭合证据为定向组合（test_agent／test_api_agent／
+    test_prov／test_coverage／test_docs_references／test_rules_registry 共 344 项）＋
+    契约 §9.5 五文件 377 项＋前端 typecheck／seams／test(115)／build，全部零失败；
+    合入前须按最终提交补全量回归再合。
   - 在独立 `NOVEL_OUTPUT` 根经前端上传《夫君的报恩》，自动跑到 stage7；按实际节点、
     配置和可采用结果重新报价。基础约 30 次、正文额外至多 22 次、Hook 额外至多 2 次的
     口径见“成本与授权”；同请求身份已购结果只经 F7a 登记的历史采用通路复用。
