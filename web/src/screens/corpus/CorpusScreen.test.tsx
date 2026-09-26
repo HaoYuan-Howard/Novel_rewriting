@@ -41,7 +41,6 @@ function renderCorpus(novels: NovelRow[] = []) {
     rejected: [],
     max_concurrent: 3,
   })
-  vi.spyOn(api, 'getSampleCoverage').mockResolvedValue(null)
 
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } },
@@ -55,6 +54,7 @@ function renderCorpus(novels: NovelRow[] = []) {
         <Routes>
           <Route path="/" element={<CorpusScreen />} />
           <Route path="/n/:sid/stage0" element={<div>Stage0 人工审校落点</div>} />
+          <Route path="/n/:sid/stage1" element={<div>Stage1 分章报告落点</div>} />
           <Route path="/n/:sid/run" element={<div>Run 进度落点</div>} />
           <Route path="/n/:sid/stage5/:ordinal" element={<div>Stage5 未知状态落点</div>} />
         </Routes>
@@ -170,7 +170,7 @@ describe('CorpusScreen 批量开书', () => {
     expect(screen.queryByText('shallow')).not.toBeInTheDocument()
   })
 
-  it('打开时不会越过 done=null 的 Stage5', async () => {
+  it('打开时只落在完成度已知的现役屏，不越过 done=null 的层', async () => {
     const book = compactBook()
     for (const stage of ['stage0', 'stage1', 'stage2', 'stage3', 'stage4']) {
       book.stage_done[stage] = true
@@ -179,7 +179,21 @@ describe('CorpusScreen 批量开书', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: '测试书' }))
 
-    expect(await screen.findByText('Stage5 未知状态落点')).toBeVisible()
+    // stage5 完成度是 null（unknown）时不猜、也不送去已退役的屏；
+    // 现役只剩 stage0/stage1，落点是完成度已知的最后一层。
+    expect(await screen.findByText('Stage1 分章报告落点')).toBeVisible()
+    expect(screen.queryByText('Stage5 未知状态落点')).not.toBeInTheDocument()
+  })
+
+  it('stage1 判不了时回退 stage0，不送人进尚不可审阅的层', async () => {
+    const book = compactBook()
+    book.stage_done = { ...book.stage_done, stage1: null }
+    renderCorpus([book])
+
+    fireEvent.click(await screen.findByRole('button', { name: '测试书' }))
+
+    expect(await screen.findByText('Stage0 人工审校落点')).toBeVisible()
+    expect(screen.queryByText('Stage1 分章报告落点')).not.toBeInTheDocument()
   })
 
   it('单本：上传前授权，成功后带幂等键 uploadCorpus 并进入进度屏', async () => {

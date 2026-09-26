@@ -245,7 +245,11 @@ export interface StageDef {
   label: string
 }
 
-/** 当前产物矩阵的六列；编号保留 Stage3/Stage6 空洞。 */
+/**
+ * 当前产物矩阵的六列；编号保留 Stage3/Stage6 空洞。
+ * ⚠ 列只是产物层的完成度读数（`stage_done`），不等于有可看的屏：STR-06 切换
+ * （F8c）后 stage2/4/5/7 的只读监控面在 `/str06/:candidate`，不在 `/n/:sid` 下。
+ */
 export const STAGES: StageDef[] = [
   { n: '0', key: 'stage0', label: '剔除番外' },
   { n: '1', key: 'stage1', label: '摄入分章' },
@@ -255,51 +259,36 @@ export const STAGES: StageDef[] = [
   { n: '7', key: 'stage7', label: '人名+成书' },
 ]
 
-/** 左导航的屏序。按流水线顺序，不是按字母。 */
+/**
+ * 左导航的屏序。按流水线顺序，不是按字母。
+ *
+ * ⚠ STR-06 切换（F8c）：旧链读屏（read / global / stage4 / stage5 / stage7）与
+ * 待办屏（inbox）已退役——新链 Stage2/4/5/7 的只读监控在 `/str06/:candidate`
+ * （不在左导航内），`/n/:sid` 下只剩进度、Stage0 与 Stage1。
+ */
 export type ScreenName =
   | 'corpus'
   | 'settings'
   | 'run'
   | 'stage0'
   | 'stage1'
-  | 'read'
-  | 'global'
-  | 'stage4'
-  | 'stage5'
-  | 'stage7'
-  | 'inbox'
 
 export interface RailItem {
   screen: ScreenName
   n: string
   label: string
-  /** 章号屏：路径带 /:o */
-  chaptered?: boolean
 }
 
 export const RAIL: RailItem[] = [
   { screen: 'stage0', n: '0', label: '剔除番外' },
   { screen: 'stage1', n: '1', label: '分章报告' },
-  { screen: 'read', n: '2', label: '原文↔骨架', chaptered: true },
-  { screen: 'global', n: '2', label: '全局设定' },
-  { screen: 'stage4', n: '4', label: '计划↔上下文', chaptered: true },
-  { screen: 'stage5', n: '5', label: '成稿↔材料', chaptered: true },
-  { screen: 'stage7', n: '7', label: '人名+成书' },
-  { screen: 'inbox', n: '·', label: '待办' },
 ]
 
-/** stage → 它的主屏。语料库「打开」与进度屏节点链接共用这一份，别在屏里各写一份。 */
+/** stage → 它在 `/n/:sid` 下的主屏。新链 stage2/4/5/7 没有对应屏（监控在 `/str06/:candidate`）。 */
 export const STAGE_SCREEN: Record<string, ScreenName> = {
   stage0: 'stage0',
   stage1: 'stage1',
-  stage2: 'read',
-  stage4: 'stage4',
-  stage5: 'stage5',
-  stage7: 'stage7',
 }
-
-/** 路由必须带 /:o 的屏 —— 跳过去要拼章号（stage7 的章号是可选的，不在内） */
-export const CHAPTERED_SCREENS: ReadonlySet<ScreenName> = new Set(['read', 'stage4', 'stage5'])
 
 /** 每屏标题（缺样本屏与文档标题共用） */
 export const SCREEN_TITLE: Record<ScreenName, string> = {
@@ -308,12 +297,6 @@ export const SCREEN_TITLE: Record<ScreenName, string> = {
   run: '跑书进度',
   stage0: '剔除番外 · stage0',
   stage1: '分章报告 · stage1',
-  read: '原文 ↔ 骨架',
-  global: '全局设定 · stage2',
-  stage4: '计划 ↔ 写作上下文',
-  stage5: '成稿 ↔ 材料',
-  stage7: '人名替换 + 成书 · stage7',
-  inbox: '待办',
 }
 
 /** 字节数 → 人读的大小 */

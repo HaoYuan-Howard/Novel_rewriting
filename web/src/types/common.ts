@@ -1,20 +1,15 @@
 /**
  * 跨 endpoint 复用的形状。字段名一律照抄后端响应，不改名、不压平嵌套。
- * 权威：`contracts/schema/api.py` 与 `contracts/schema/report.py`（backend_v1 fixture 是抓包证据）。
+ * 权威：`contracts/schema/api.py` 与 `contracts/schema/report.py`
+ * （backend_v1 fixture 是抓包证据）。
+ *
+ * ⚠ STR-06 切换（F8c）后只剩校验报告一族与总览 artifact 还在用：Stage2 全局
+ * 设定的 `NameRef`、`writer_context` 来源账与 Stage5/7 读屏的 `Sources` 随旧链
+ * 读屏整层退役，本文件不为它们保留第二个类型落点。
  */
-import type { Freshness, Severity } from '@/constants/vocabulary'
+import type { Severity } from '@/constants/vocabulary'
 
-/**
- * 一个「谁」的引用，服务端已解引用（stage2 全局屏）。
- * 解析不动时 `resolved=false` 且 `display === raw` —— 服务端不编名字。
- */
-export interface NameRef {
-  raw: string
-  display: string
-  resolved: boolean
-}
-
-/** 过期原因的一条边（writer_context 来源账的 detail）。 */
+/** 过期原因的一条边（总览 artifact 与工作单元账的 detail）。 */
 export interface StaleRef {
   key: string
   was: string | null
@@ -89,17 +84,4 @@ export interface RuleLine {
   scanned: string | null
   baseline: string | null
   note: string | null
-}
-
-/** `writer_context` 这一条上游的新鲜度（三态：没有 inputs 是「不知道」不是「匹配」）。 */
-export interface WriterContextSource {
-  state: Freshness
-  detail: StaleRef[]
-  code: string | null
-}
-
-export interface Sources {
-  writer_context: WriterContextSource
-  /** 只有 stage5 验收有：成稿那一侧的来源账。 */
-  drafts?: { stale: string[]; no_prov: string[] }
 }

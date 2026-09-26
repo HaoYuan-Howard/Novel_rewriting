@@ -8,8 +8,8 @@ describe('CheckPanel', () => {
   it('renders stable note, instance detail, typed wontfix and exact unavailable reason as text', async () => {
     vi.spyOn(api, 'getCheck').mockResolvedValue({
       sid: 'book-1',
-      node: 'stage5.review',
-      stage: 'stage5',
+      node: 'stage1.partition',
+      stage: 'stage1',
       provenance: {
         freshness: 'stale',
         reason: '规则版本已变化，需要重新验收',
@@ -29,11 +29,11 @@ describe('CheckPanel', () => {
           check_kind: 'mechanical',
           remediation: 'llm',
           fix: {
-            node: 'stage5.write',
+            node: 'stage1.partition',
             flags: [],
-            paid: true,
+            paid: false,
             available: false,
-            unavailable_reason: '缺少 --chapters 的动态章号',
+            unavailable_reason: '机械复检不接受附加参数',
           },
           findings: [
             {
@@ -66,7 +66,7 @@ describe('CheckPanel', () => {
       counts: { ok: 0, hit: 1, unver: 0, skipped: 0 },
     })
     const jump = vi.fn()
-    renderRoute(<CheckPanel screen="stage5" onJumpChapter={jump} />)
+    renderRoute(<CheckPanel screen="stage1" onJumpChapter={jump} />)
 
     expect(await screen.findByText('稳定规则解释只在 note 出现。')).toBeVisible()
     expect(screen.getByText('本书实例 **不解析 Markdown**')).toBeVisible()
@@ -78,6 +78,6 @@ describe('CheckPanel', () => {
     expect(chapter).toBeVisible()
     chapter.click()
     expect(jump).toHaveBeenCalledWith(11)
-    expect(screen.getByText('不能自动重跑：缺少 --chapters 的动态章号')).toBeVisible()
+    expect(screen.getByText('不能自动重跑：机械复检不接受附加参数')).toBeVisible()
   })
 })

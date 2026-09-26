@@ -17,18 +17,15 @@ import { cx } from '@/lib/cx'
 import type { ReactNode } from 'react'
 
 /**
- * 屏 → 这一层的校验 kind。六个 kind 与服务端 `STAGES` 逐值相等（FE-02）。
+ * 屏 → 这一层的校验 kind。**取值面只剩 stage0/stage1**（F8c）：新链
+ * Stage2/4/5/7 的复检是节点级 `--check-only`，没有层级 CheckReport，
+ * 旧屏随旧链退役后本表不为它们保留映射。
  * 「重跑校验」不再是一条动作：真后端的 `GET /check/:kind` 本身就是 0 成本现算复检，
  * 按钮 = refetch。
  */
 const CHECK_OF: Partial<Record<ScreenName, CheckKind>> = {
   stage0: 'stage0',
   stage1: 'stage1',
-  read: 'stage2',
-  global: 'stage2',
-  stage4: 'stage4',
-  stage5: 'stage5',
-  stage7: 'stage7',
 }
 
 /** `remediation` → 人话标签（处置路由表在 docs/BACKEND_CONTRACT.md §七，这里只是呈现）。 */

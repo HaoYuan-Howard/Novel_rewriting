@@ -4,10 +4,13 @@ import type { RunMetrics } from '@/types/runMetrics'
  *
  * 接后端时要做的事就是把 VITE_USE_MOCK 关掉。
  * 如果哪个组件自己造了数据，那一屏就会当场空掉 —— 而这正是联调时最不想找的一类 bug。
+ *
+ * ⚠ STR-06 切换（F8c）：旧链读屏缝（reading / blueprint-reading-workpack /
+ * global / characters / analyze-draft / stage4 / stage5 / review / inbox /
+ * stage7 / book 下载）与人工闸缝（approvals / workpack / reset）已整族删除；
+ * 现役只读监控面是 `/api/str06/candidates/{candidate}/*`。
  */
 import type { Api } from '@/types/api'
-import type { CharacterRegistryView } from '@/types/characters'
-import type { AnalyzeDraftView } from '@/types/analyzeDraft'
 import type {
   AgentCapabilitiesResponse,
   AgentProfileSettingsView,
@@ -18,10 +21,6 @@ import type {
   AgentRunRecord,
   AgentRunsResponse,
 } from '@/types/agent'
-import type {
-  ApprovalDoc,
-  Stage7ApprovalWorkpack,
-} from '@/types/approvals'
 import type { EnumsResponse } from '@/types/enums'
 import type {
   BackendJobList,
@@ -63,22 +62,13 @@ import type {
 } from '@/types/maintenance'
 import type {
   CheckReport,
-  BlueprintReadingWorkpack,
-  InboxResponse,
-  ReadingResponse,
-  ReviewResponse,
   Stage0Report,
   Stage0Segments,
   Stage1View,
-  Stage2Global,
-  Stage4Response,
-  Stage5Response,
-  Stage7Response,
 } from '@/types/stages'
 import { isApiError } from './errors'
-import { get, getBlob, getText, post, postRaw } from './client'
+import { get, getText, post, postRaw } from './client'
 import { mockApi } from './mock'
-import { projectGlobalSpoilers } from './spoilers'
 
 const n = (sid: string) => '/novels/' + encodeURIComponent(sid)
 
@@ -374,24 +364,10 @@ export const realApi: Api = {
   getStage0Segments: (sid) => get<Stage0Segments>(n(sid) + '/stage0/segments'),
   // stage0 人工写面与手动 partition 已退役；Stage 页只读，上传后自动开跑。
   getStage1: (sid) => get<Stage1View>(n(sid) + '/stage1'),
-  getReading: (sid, o) => get<ReadingResponse>(n(sid) + '/reading/' + o),
-  getBlueprintReadingWorkpack: (sid, scope) =>
-    get<BlueprintReadingWorkpack>(n(sid) + '/stage2/blueprint-reading-workpack'
-      + (scope ? '?scope=' + encodeURIComponent(scope) : '')),
-  getGlobal: async (sid, revealSpoilers = false) =>
-    projectGlobalSpoilers(await get<Stage2Global>(n(sid) + '/stage2/global'), revealSpoilers),
-  getCharacters: (sid) => get<CharacterRegistryView>(n(sid) + '/stage2/characters'),
-  getAnalyzeDraft: (sid, owner) => get<AnalyzeDraftView>(n(sid) + '/stage2/analyze-draft?owner=' + encodeURIComponent(owner)),
-  getStage4: (sid, o) => get<Stage4Response>(n(sid) + '/stage4/' + o),
-  getStage5: (sid, o) => get<Stage5Response>(n(sid) + '/stage5/' + o),
-  getReview: (sid, o) => get<ReviewResponse>(n(sid) + '/review/' + o),
-  getInbox: (sid) => get<InboxResponse>(n(sid) + '/inbox'),
-  getStage7: (sid) => get<Stage7Response>(n(sid) + '/stage7'),
-  getStage7Chapter: (sid, o) => get<Stage7Response>(n(sid) + '/stage7/' + o),
-  getStage7Book: (sid) => getText(n(sid) + '/stage7/book.txt'),
-  downloadStage7Book: (sid) => getBlob(n(sid) + '/stage7/book.txt?download=true'),
   // 后端对「这一层还没跑」答 404（资源不存在）；Api 契约里 null = 「还没有报告」。
   // 在这里翻译（唯一数据缝的职责），CheckPanel 不用自己捕 404。
+  // ⚠ F8c：`:kind` 取值面只剩 stage0/stage1（新链 Stage2/4/5/7 是节点级
+  //   `--check-only`，层名不在取值面里后端答 400 并列出现役值）。
   getCheck: async (sid, kind) => {
     try {
       return await get<CheckReport>(n(sid) + '/check/' + kind)
@@ -400,9 +376,6 @@ export const realApi: Api = {
       throw e
     }
   },
-
-  // 真后端上每一章都有数据，没有「样本边界」这回事
-  getSampleCoverage: () => Promise.resolve(null),
 
   getJobs: async (sid) => {
     const raw = await get<BackendJobList>('/jobs?sid=' + encodeURIComponent(sid))
@@ -489,13 +462,6 @@ export const realApi: Api = {
     post<AgentRunRecord>('/agent/runs/' + encodeURIComponent(runId) + '/resume'),
   startAgentBatch: (req) => post<AgentQueueView>('/agent/runs/batch', req),
   getAgentQueue: () => get<AgentQueueView>('/agent/runs/queue'),
-
-  getApprovals: (sid) => get<ApprovalDoc>(n(sid) + '/approvals'),
-  // stage4 design/structure workpack、模板与 POST 写面已随 2026-09-15 全自动裁决退役；
-  // Stage4 人工闸只剩只读审批投影，机械准入是唯一打开条件。
-  getStage7ApprovalWorkpack: (sid) =>
-    get<Stage7ApprovalWorkpack>(n(sid) + '/approvals/stage7/workpack'),
-  resetBook: (sid) => post<ApprovalDoc>(n(sid) + '/approvals/reset'),
 
   uploadCorpus: async (file, options: UploadCorpusOptions) => {
     const params = new URLSearchParams({

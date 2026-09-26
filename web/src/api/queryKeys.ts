@@ -1,7 +1,6 @@
 import type { CheckKind } from '@/types/stages'
 import type { JobRequest } from '@/types/jobs'
 import type { AgentRunRequest } from '@/types/agent'
-import type { AnalyzeDraftOwner } from '@/types/analyzeDraft'
 
 /** STR-06 候选链只读监控：key 以候选根名开头（与 sid 同一职责——换根换缓存）。 */
 export const qkStr06 = {
@@ -22,10 +21,12 @@ export const qkStr06 = {
  * 所有 query key 都以 sid 开头（除了语料库与 enums）。
  * 这一条让「闸门不能是全局的」变成结构性保证：换一本书 = 换一条缓存记录，
  * 不存在 A 书的 ✓ 能漏到 B 书的代码路径。
+ *
+ * ⚠ STR-06 切换（F8c）：旧链读屏键（reading / blueprintReadingWorkpack / global /
+ * stage4 / stage5 / review / inbox / stage7*）与审批键（approvals /
+ * finalApprovalWorkpack）随屏和端点一起删除，不再为退役面保留缓存根。
  */
 export const qk = {
-  characters: (sid: string) => ['characters', sid] as const,
-  analyzeDraft: (sid: string, owner: AnalyzeDraftOwner) => ['stage2', sid, 'analyzeDraft', owner] as const,
   novels: () => ['novels'] as const,
   novel: (sid: string) => ['novel', sid] as const,
   run: (sid: string) => ['run', sid] as const,
@@ -39,18 +40,6 @@ export const qk = {
   stage0Report: (sid: string) => ['stage0', sid, 'report'] as const,
   stage0Segments: (sid: string) => ['stage0', sid, 'segments'] as const,
   stage1: (sid: string) => ['stage1', sid] as const,
-  reading: (sid: string, o: number) => ['reading', sid, o] as const,
-  blueprintReadingWorkpack: (sid: string, scope?: string) =>
-    scope ? ['stage2', sid, 'blueprint-reading-workpack', scope] as const
-      : ['stage2', sid, 'blueprint-reading-workpack'] as const,
-  global: (sid: string, spoilers = false) => ['global', sid, spoilers] as const,
-  stage4: (sid: string, o: number) => ['stage4', sid, o] as const,
-  stage5: (sid: string, o: number) => ['stage5', sid, o] as const,
-  review: (sid: string, o: number) => ['review', sid, o] as const,
-  inbox: (sid: string) => ['inbox', sid] as const,
-  stage7: (sid: string) => ['stage7', sid] as const,
-  stage7ch: (sid: string, o: number) => ['stage7', sid, o] as const,
-  stage7book: (sid: string) => ['stage7', sid, 'book'] as const,
   check: (sid: string, kind: CheckKind) => ['check', sid, kind] as const,
 
   jobs: (sid: string) => ['jobs', sid] as const,
@@ -77,8 +66,4 @@ export const qk = {
   agentRunContinuation: (runId: string) => ['agentRunContinuation', runId] as const,
   agentRunPreview: (req: AgentRunRequest | null) =>
     ['agentRunPreview', req] as const,
-
-  approvals: (sid: string) => ['approvals', sid] as const,
-  finalApprovalWorkpack: (sid: string, kind: 'stage7') =>
-    ['approvals', sid, kind, 'workpack'] as const,
 }

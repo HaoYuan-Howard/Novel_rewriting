@@ -58,6 +58,7 @@ export interface RunResumeFrontier {
   paid: boolean | null
   writes: string | null
   next_handler: RunNextHandler
+  /** 有效审批的原状态；`not_accepted` 只表示当前 gate 未接受，不猜缺失原因。 */
   review_states?: Array<{ node: string; scope: string; state: string }> | null
   verified_skipped_nodes: string[]
   verified_skipped_count: number
@@ -160,5 +161,4 @@ export interface RunProgress {
   work_units?: RunWorkUnit[] | null
   work_units_unavailable_reason?: string | null
   current_recovery_actions?: string[] | null
-  blueprint_progress?: import('./plot.generated').BlueprintRunProgress | null
 }

@@ -1,23 +1,19 @@
 import { DELIVERY_LABEL } from '@/constants/vocabulary'
 import { RunMetricsPanel } from './RunMetricsPanel'
-import { BlueprintProgressPanel } from './BlueprintProgressPanel'
 import { useEffect, useId, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { keepPreviousData, useQueries, useQuery } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 import { api } from '@/api/endpoints'
 import { qk } from '@/api/queryKeys'
 import {
-  CHAPTERED_SCREENS,
   AGENT_STOPPED,
   FRESH,
   GATE,
   JOB,
   SPEND_INK,
-  STAGE_SCREEN,
   STAGES,
   when,
   type JobStateToken,
-  type ScreenName,
 } from '@/constants/vocabulary'
 import { errorBody } from '@/api/errors'
 import { ErrorHint } from '@/components/state/States'
@@ -27,7 +23,6 @@ import type {
   RunNextHandler,
   RunResumeFrontier,
 } from '@/types/run'
-import { CHECK_KINDS, type CheckReport } from '@/types/stages'
 import { useRunProgress } from '@/hooks/useRunProgress'
 import { WorkUnitBudgetGrant } from '@/components/agent/WorkUnitBudgetGrant'
 import { useSid } from '@/hooks/useRouteParams'
@@ -39,7 +34,6 @@ import {
   useStopAgentRun,
 } from '@/hooks/useAgentRuns'
 import type { AgentRunState } from '@/types/agent'
-import { useSampleCoverage } from '@/hooks/useSample'
 import { QueryStates } from '@/components/state/QueryStates'
 import { Mono } from '@/components/ui/Mono'
 import { Panel, PaneHeader } from '@/components/ui/Panel'
@@ -47,7 +41,6 @@ import { LinkButton } from '@/components/ui/ActionButton'
 import { AgentProfilesSnapshot } from '@/components/agent/AgentProfilesSnapshot'
 import {
   AgentStoppedChip,
-  CheckBadge,
   GateChip,
   JobStateChip,
 } from '@/components/vocab/Badges'
@@ -92,43 +85,6 @@ function BeaconChip({ beacon }: { beacon: RunBeacon }) {
     >
       <span aria-hidden style={dot} />
       {label}
-    </span>
-  )
-}
-
-/** amber 的未验证原因直接来自 CheckReport，不在前端重判。 */
-function UnverifiedHelp({ report }: { report: CheckReport }) {
-  const explanationId = useId()
-  const [open, setOpen] = useState(false)
-  const rows = report.rules.filter(
-    (row) => row.status === 'unver' || row.status === 'skipped',
-  )
-  if (rows.length === 0) return null
-  const explanation = rows
-    .map((row) => `${row.item}：${row.why ?? row.note ?? '本次没有完成验证'}`)
-    .join('\n')
-  return (
-    <span className="inline-flex flex-col items-start">
-      <button
-        type="button"
-        aria-label={`查看 ${rows.length} 项未验证原因`}
-        aria-expanded={open}
-        aria-controls={explanationId}
-        title={explanation}
-        onClick={() => setOpen((value) => !value)}
-        className="inline-flex h-18 w-18 cursor-help items-center justify-center rounded-full border border-line-btn bg-card text-micro font-semibold text-ink-4"
-      >
-        ?
-      </button>
-      {open ? (
-        <span
-          id={explanationId}
-          role="note"
-          className="mt-6 block w-[220px] rounded-block border border-line-btn bg-card px-10 py-8 text-left text-tag leading-relaxed whitespace-pre-line text-ink-2"
-        >
-          {explanation}
-        </span>
-      ) : null}
     </span>
   )
 }
@@ -425,11 +381,11 @@ function AgentRunBlock({
   )
 }
 
-/** 节点 id → 它产物所在的屏。stage2 两个节点分属两屏；查不到的节点保持纯文本。 */
-function nodeScreen(node: string): ScreenName | null {
+/** 节点 id → 它产物所在的屏。新链 stage2/4/5/7 的只读监控在 `/str06/:candidate`，
+ *  不在 `/n/:sid` 下；查不到的节点保持纯文本（不拼一个不存在的候选名）。 */
+function nodeScreen(node: string): 'stage0' | 'stage1' | null {
   const stage = node.split('.')[0]
-  if (stage === 'stage2') return node === 'stage2.global' ? 'global' : 'read'
-  return STAGE_SCREEN[stage] ?? null
+  return stage === 'stage0' || stage === 'stage1' ? stage : null
 }
 
 const NEXT_HANDLER_LABEL: Record<RunNextHandler, string> = {
@@ -502,7 +458,8 @@ function ResumeFrontier({
  *
  * 这一屏回答「真实节点图跑到哪了、当前这步在不在跑、每步最近退出码是什么」。
  * 它是观察屏：不放任何操作按钮，也不自行做判定。
- * 信标只说命令跑没跑完；各层合不合格在呈现层直接组合现有 CheckReport。
+ * 信标只说命令跑没跑完；层级校验报告归 Stage0/Stage1 两屏的 CheckPanel
+ * （`/check` 取值面只剩这两层），本屏不再各自拼一层。
  */
 export function RunScreen() {
   const sid = useSid()
@@ -512,20 +469,13 @@ export function RunScreen() {
     queryFn: () => api.getNovel(sid),
     retry: false,
   })
-  const { defaultOrdinal } = useSampleCoverage()
   const stepsRef = useRef<HTMLDivElement>(null)
   const [priorStepsOpen, setPriorStepsOpen] = useState(false)
 
   const nodePath = (node: string): string | null => {
     const screen = nodeScreen(node)
     if (!screen) return null
-    return (
-      '/n/' +
-      sid +
-      '/' +
-      screen +
-      (CHAPTERED_SCREENS.has(screen) ? '/' + defaultOrdinal(sid) : '')
-    )
+    return '/n/' + sid + '/' + screen
   }
 
   const scrollToCurrent = () =>
@@ -540,19 +490,6 @@ export function RunScreen() {
     return to ? { to, label: frontier.label } : null
   })()
 
-  const checks = useQueries({
-    queries: CHECK_KINDS.map((kind) => ({
-      queryKey: qk.check(sid, kind),
-      queryFn: () => api.getCheck(sid, kind),
-      // reviewable 是后端给出的“已有可审产物”事实。未到这一层时不提前打
-      // /check，更不能靠 404/500 猜阶段进度；stale/INVALID 仍会是 true。
-      enabled: overview.data?.stage_reviewable[kind] === true,
-      retry: false,
-      // 轮询 refetch 期间沿用上一份数据——不闪成「校验未知」（U-00：未知 ≠ 没问题）
-      placeholderData: keepPreviousData,
-    })),
-  })
-
   return (
     <section className="flex flex-col gap-16 px-30 py-24">
       <header className="flex items-end justify-between gap-24">
@@ -566,7 +503,6 @@ export function RunScreen() {
 
       <QueryStates q={q} loadingLabel="读跑书进度">
         {(d) => <>
-          <BlueprintProgressPanel sid={sid} progress={d.blueprint_progress} />
           <ResumeFrontier frontier={d.resume_frontier} steps={d.steps} />
         </>}
       </QueryStates>
@@ -581,7 +517,10 @@ export function RunScreen() {
           <>
 
             <Panel>
-              <PaneHeader title="当前审阅与恢复" meta="审批状态与当前节点恢复动作均由后端提供" />
+              <PaneHeader
+                title="当前审阅与恢复"
+                meta="审阅原状态与节点恢复动作都由后端 operator 投影；人工闸已退役，这里不再有确认入口"
+              />
               <div className="flex flex-col gap-9 px-18 py-14 text-body">
                 <p className="m-0">当前恢复：{d.current_recovery_actions == null ? '未知' :
                   d.current_recovery_actions.length ? d.current_recovery_actions.join('；') : '无已登记恢复动作'}</p>
@@ -721,28 +660,13 @@ export function RunScreen() {
             {/* 各层产物完成度：盘点自产物盘，与信标无关；书目录还没建时全是「判不了」 */}
             <Panel>
               <PaneHeader
-                title="各层产物完成度与校验"
-                meta="完成度来自产物盘；badge 与计数来自各层 CheckReport，二者互不改写"
+                title="各层产物完成度"
+                meta="完成度来自产物盘；层级校验报告在 Stage0/Stage1 屏，候选链盘面在 /str06"
               />
               <div className="flex flex-wrap gap-8 px-18 py-14">
-                {STAGES.map((stage, index) => {
+                {STAGES.map((stage) => {
                   const done = d.stage_done[stage.key]
                   const reviewable = overview.data?.stage_reviewable[stage.key]
-                  const checkQuery = checks[index]
-                  // placeholderData 保住了 refetch 期间的上一份——这里只看「有没有数据」，
-                  // 不再看 isFetching，否则每次轮询都会闪回「校验未知」
-                  const report = (
-                    reviewable === true && checkQuery && !checkQuery.isError
-                      ? checkQuery.data ?? null
-                      : null
-                  ) as CheckReport | null
-                  const hard = report?.rules.filter(
-                    (row) => row.sev === 'hard' && row.status === 'hit',
-                  ).length ?? 0
-                  const info = report?.rules.filter(
-                    (row) => row.sev === 'info' && row.status === 'hit',
-                  ).length ?? 0
-                  const unver = report ? report.counts.unver + report.counts.skipped : 0
                   const tone =
                     done === true
                       ? { color: GATE.ok.chipColor, bg: GATE.ok.chipBg, text: '✓ 已完成' }
@@ -765,18 +689,12 @@ export function RunScreen() {
                         </span>
                       </div>
                       <div className="flex items-center gap-7">
-                        {report ? (
-                          <>
-                            <CheckBadge badge={report.badge} />
-                            {report.badge === 'amber' ? <UnverifiedHelp report={report} /> : null}
-                            <Mono className="text-micro text-ink-5">
-                              hard {hard} · info {info} · unver {unver}
-                            </Mono>
-                          </>
-                        ) : reviewable === false ? (
-                          <span className="text-tag text-ink-4">· 尚不可检查</span>
+                        {reviewable === false ? (
+                          <span className="text-tag text-ink-4">· 尚不可审阅</span>
                         ) : (
-                          <span className="text-tag text-ink-4">? 校验未知</span>
+                          <span className="text-tag text-ink-4">
+                            层级校验见 Stage0/Stage1 屏；新链条目归 /str06 盘面
+                          </span>
                         )}
                       </div>
                     </div>

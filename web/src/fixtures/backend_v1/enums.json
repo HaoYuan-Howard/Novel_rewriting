@@ -772,7 +772,8 @@
   "stage6.prepare",
   "stage6.hook",
   "stage6.approve",
-  "stage7.rename"
+  "stage7.rename",
+  "stage7.assemble"
  ],
  "retired_stages": [
   "stage3",

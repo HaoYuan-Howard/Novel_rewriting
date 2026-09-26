@@ -1,16 +1,15 @@
 /**
- * stage0 – stage7 的响应形状。字段名照抄后端契约（`contracts/schema/api.py`），
- * 抓包证据在 `src/fixtures/backend_v1/`。
+ * Stage0 / Stage1 与校验报告的响应形状。字段名照抄后端契约
+ * （`contracts/schema/api.py` 与 `contracts/schema/report.py`），
+ * 抓包证据在 `src/fixtures/backend_v1/` 与 `src/mocks/`。
+ *
+ * ⚠ STR-06 切换（F8c）后旧链 Stage2/4/5/7 的读屏响应类型整体退役：
+ * `GET /check/:kind` 的取值面只剩 stage0/stage1（新链 Stage2/4/5/7 的复检是
+ * 节点级 `--check-only`，没有层级 CheckReport），候选链只读监控面的形状归
+ * `types/str06.ts`。本文件不再为已退役的层保留第二个类型落点。
  */
-import type { Badge, Freshness, Severity, InboxKind } from '@/constants/vocabulary'
-import type {
-  Finding,
-  NameRef,
-  Provenance,
-  RuleLine,
-  Sources,
-} from './common'
-import type { AgentDeliveryOutcome } from './agent'
+import type { Badge, Freshness } from '@/constants/vocabulary'
+import type { RuleLine } from './common'
 
 /* ---------------------------------------------------------------- stage0 */
 
@@ -76,28 +75,6 @@ export interface Stage0Segments {
   segments: Stage0Segment[]
 }
 
-/** 批准前分章预览里逐章原始章号的异常分类（`contracts/invariants.py::CHAPTER_LABEL_ANOMALY`）。 */
-export type ChapterLabelAnomaly = 'reset' | 'gap' | 'repeat'
-
-export interface TrimResolutionRequest {
-  /** Self-reported audit label; not an authenticated identity. */
-  actor: string
-  reason: string
-}
-
-export interface TrimResolution {
-  output_ordinal: number
-  action: 'retain_pretrim'
-  actor: string
-  reason: string
-  audit_sha256: string
-  before_sha256: string
-  after_sha256: string
-  chapter_rel: string
-  chapter_sha256: string
-  _provenance: Provenance
-}
-
 export interface S0Block {
   kind: 'hook_copy' | 'chapter'
   label: string
@@ -118,6 +95,7 @@ export interface S0Candidate {
   tail: string
 }
 
+/** mock 的 Stage0 输入解码（`src/mocks/stage0_extras.json`）；不是现役端点响应。 */
 export interface Stage0Extras {
   source_id: string
   original_filename: string
@@ -137,6 +115,9 @@ export interface Stage0Extras {
 
 /* ---------------------------------------------------------------- stage1 */
 
+/** 批准前分章预览里逐章原始章号的异常分类（`contracts/invariants.py::CHAPTER_LABEL_ANOMALY`）。 */
+export type ChapterLabelAnomaly = 'reset' | 'gap' | 'repeat'
+
 export type Stage1SegmentKind = 'hook' | 'chapter' | 'end_marker' | 'hole'
 
 export interface Stage1Segment {
@@ -155,487 +136,6 @@ export interface Stage1Segment {
 export interface Stage1View {
   segments: Stage1Segment[]
   anomaly_count: number
-}
-
-/* ----------------------------------------- 产物处境（formal / INVALID 分栏） */
-
-/** 一份产物此刻的处境（`contracts/schema/orchestration.py::ArtifactState`）。 */
-export interface ArtifactState {
-  rel: string
-  exists: boolean
-  bytes: number | null
-  mtime: number | null
-  freshness: Freshness
-  reason: string
-  ghosts: string[]
-  invalid: boolean
-  invalid_freshness: Freshness | null
-  invalid_reason: string | null
-  readable: boolean
-}
-
-/* ------------------------------------------------- stage2 · 原文↔骨架 */
-
-export type ReadingResponse = import('./plot.generated').ReadingView
-
-/** 阅读材料只服务原文↔蓝图对照；审阅语义已随 Stage2 语义审阅退役。 */
-export interface BlueprintReadingMaterial {
-  scope: import('./plot').ReviewScope
-  sources: { chapter_ordinal: number; text: string }[]
-  blueprints: import('./plot.generated').PlotBlueprint[]
-}
-
-/** 生成进度逐章投影；processing_state / checkpoint_state 取值面来自后端。 */
-export interface BlueprintChapterRunProgress {
-  chapter_ordinal: number
-  run_id: string | null
-  checkpoint_state: string
-  processing_state: string | null
-  reason: string | null
-}
-
-/**
- * Stage2 语义审阅退役后的只读阅读工作包：原文与完整节点各一份；
- * 机械可用性由统一准入与 /check/stage2 报告披露，页面不自算语义结论。
- */
-export type BlueprintReadingWorkpack = Omit<
-  import('./plot.generated').BlueprintReadingWorkpack,
-  'material' | 'progress'
-> & {
-  material: BlueprintReadingMaterial
-  progress: BlueprintRunProgress
-}
-
-/** 生成与机械提交分别计数；未知不作零显示。 */
-export interface BlueprintRunProgress {
-  total_chapters: number | null
-  generated_chapters: number | null
-  checkpoint_chapters: number | null
-  submitted_chapters: number | null
-  artifact_state: 'missing' | 'formal' | 'invalid' | 'unreadable'
-  chapters: BlueprintChapterRunProgress[]
-  unavailable_reason: string | null
-}
-
-/* ------------------------------------------------- stage2 · 全局设定 */
-
-export interface GlobalSourceSpan {
-  text: string
-  start: number
-  end: number
-}
-
-export interface GlobalFactEvidence {
-  chapter_ordinal: number
-  /** null 是正式的定位失败态，不等于没有 evidence 字段 */
-  source: GlobalSourceSpan | null
-}
-
-export interface CoreEvidenceAnchor {
-  chapter_ordinal: number
-  start: number
-  end: number
-  text_sha256: string
-}
-
-export type CoreEvidenceAnchors = Record<string, CoreEvidenceAnchor>
-/** 由后端校验当前 MainText 后回取；null 为不可验证，UI 不切正文偏移。 */
-export type CoreEvidenceSnippets = Record<string, string | null>
-
-export interface GlobalTimeWindow {
-  effective_from: number
-  /** 含此章；null 表示未声明截止章。 */
-  effective_until: number | null
-  revealed_from: number
-}
-
-export interface GlobalRelation extends GlobalTimeWindow {
-  relation_id: string
-  subject: NameRef
-  predicate: string
-  object: NameRef
-  evidence_refs: string[]
-}
-
-export interface GlobalWorldRule {
-  rule_id: string
-  kind: string
-  versions: (GlobalTimeWindow & {
-    version_id: string
-    desc: string
-    evidence_refs: string[]
-  })[]
-}
-
-export type GlobalFactRef =
-  | { kind: 'relation'; relation_id: string }
-  | { kind: 'world_rule_version'; rule_id: string; version_id: string }
-
-export interface GlobalSecret {
-  secret_id: string
-  fact: string | null
-  fact_ref: GlobalFactRef | null
-  evidence_refs: string[]
-  setup_chapters: number[]
-  revealed_from: number
-}
-
-export interface Stage2Global {
-  sid: string
-  title: string
-  setting: {
-    era: string | null
-    era_evidence_refs: string[]
-    social_context: string | null
-    social_context_evidence_refs: string[]
-  }
-  relations: GlobalRelation[]
-  world_rules: GlobalWorldRule[]
-  /** 空列表表示未提取到跨章秘密，完整性仍须审阅。 */
-  arc_secrets: GlobalSecret[]
-  evidence_anchors: CoreEvidenceAnchors
-  evidence_snippets: CoreEvidenceSnippets
-  unresolved_refs: number
-  invalid_exists: boolean
-  freshness: Freshness
-  reason: string
-  ghosts: string[]
-  _provenance: Provenance
-}
-
-/** prepare 的源材料读模型（独立于 Stage2 Global v7）。 */
-export type SourceBlurbMaterials = {
-    facts: (
-      | { kind: 'supported'; claim_id: string; claim: string; evidence: GlobalFactEvidence }
-      | { kind: 'hook_supported'; claim_id: string; claim: string;
-          hook_evidence: { source: GlobalSourceSpan | null; unresolved_locator: string | null } }
-      | { kind: 'unresolved'; claim_id: string; claim: string; reason: string }
-    )[]
-    opening:
-      | { kind: 'proposed'; through_chapter: number; rationale: string; boundary_evidence: GlobalFactEvidence }
-      | { kind: 'unresolved'; reason: string }
-  }
-
-/* ---------------------------------------------------------------- stage4 */
-
-export type PlanGoal = import('./plot.generated').PlanGoal
-
-/** Writer-facing goal: every planning ID has already been resolved by Stage4. */
-export type CtxGoal = import('./plot.generated').CtxGoal
-
-export type SemanticContract = import('./plot.generated').SemanticContract
-
-export type PlanScene = import('./plot.generated').PlanSceneLine
-
-/** 持久化声明 + API 从当前计划现场复算的只读向量；取值域由 `/api/enums` 发布。 */
-export interface StructurePlanDecision {
-  mode: string
-  reason: string
-  declared_change_kinds: string[]
-  computed_change_kinds: string[]
-}
-
-export type PlanChapterLine = import('./plot.generated').PlanChapterLine
-
-/** 章索引一行。⚠ 没有 in_band/style_hits —— 那是判据结论，去 join /check/stage4。 */
-export interface Stage4IndexRow {
-  output_ordinal: number
-  chapter_goal: string
-  structure_decision: StructurePlanDecision
-  budget_chars: number | null
-  scenes: number
-}
-
-export type CtxSemanticContract = import('./plot.generated').CtxSemanticContract
-
-/** 写手直接执行的新场景任务（`CtxScene`）。 */
-export type CtxScene = import('./plot.generated').CtxScene
-
-/** 一个输出章的完整任务书（`CtxChapter`）。 */
-export type CtxChapter = import('./plot.generated').CtxChapterView
-
-export type Stage4Response = import('./plot.generated').Stage4View
-
-/* ---------------------------------------------------------------- stage5 */
-
-/** 写手拿到的下发面 —— 与写手同一份（build_material 的 blocks），不是重组的第二份。 */
-export interface Materials {
-  blocks: string[]
-  chars: number
-  writer_target: [number, number]
-}
-
-/** 原文↔成稿的一个对齐块。anchored=false = 本块并入了无锚的拍。 */
-export interface AlignRow {
-  beats: number[]
-  l: string
-  r: string
-  anchored: boolean
-}
-
-/** 对齐的账。锚点覆盖率必须常驻显示（「锚 3/8 拍」）。 */
-export interface DraftAlign {
-  beats: number
-  anchors: number
-  rows: number
-  inversions: number
-  coverage: number
-  /** 旧服务缺字段时屏幕必须显示 unknown，不能按 coverage 自行补判。 */
-  coverage_threshold?: number
-  coverage_state?: 'low' | 'adequate'
-  /** 常驻：这是对应关系，不是判定 */
-  note: string
-}
-
-export interface ChapterSegment {
-  /** producer-owned stable slot; the edit API must return the same complete slot set. */
-  slot: string
-  text: string
-}
-
-/** Stage5 改稿 preview 给出的唯一合法提交语义；前端不按 finding 自行选择。 */
-export type DraftEditConfirmation = 'formal' | 'working_draft'
-
-/** 只读预检只提交完整 typed 槽位，不带人工审计或落盘意图。 */
-export interface DraftEditPreviewRequest {
-  segments: ChapterSegment[]
-}
-
-/** 与正式 apply 共用归一、判据和 subject 构造的只读服务端投影。 */
-export interface DraftEditPreview {
-  output_ordinal: number
-  current_chapter_sha256: string
-  preview_subject_sha256: string
-  normalized_segments: ChapterSegment[]
-  findings: Finding[]
-  current_hard_findings: Finding[]
-  introduced_hard_findings: Finding[]
-  resolved_hard_findings: Finding[]
-  required_confirmation: DraftEditConfirmation
-}
-
-/** 正式 apply 必须原样回传 preview 的归一稿、两枚 SHA 与确认语义。 */
-export interface DraftEditRequest {
-  segments: ChapterSegment[]
-  actor: string
-  reason: string
-  current_chapter_sha256: string
-  preview_subject_sha256: string
-  confirmation: DraftEditConfirmation
-}
-
-export interface Draft {
-  chars: number
-  budget_chars: number | null
-  overlap_excl_verbatim: number | null
-  /** schema-v2 disk authority; consumers deterministically project whole-chapter text. */
-  segments: ChapterSegment[]
-  /** null = 本章无锚可对（对齐辅助诚实缺席，不编分界线） */
-  align: DraftAlign | null
-  align_rows: AlignRow[]
-  freshness: Freshness
-  reason: string
-  _provenance: Provenance
-}
-
-export interface DraftIndexRow {
-  output_ordinal: number
-  budget_chars: number | null
-  has_draft: boolean
-  invalid: boolean
-  chars: number | null
-  overlap_excl_verbatim: number | null
-  freshness: Freshness | null
-}
-
-export interface Stage5TrimAudit {
-  output_ordinal: number
-  reason: string
-  context: string
-}
-
-export interface Stage5Response {
-  sid: string
-  title: string
-  /** false = 写作上下文还没建。给「先跑 stage4」，**不显示假材料**。 */
-  ctx_exists: boolean
-  /** null = 计划读不回来，「该有几章」判不了（与 0 是两件事） */
-  planned: number | null
-  written: number
-  invalid: number
-  missing: number[]
-  /** 旧 deep/shallow 路径只报兼容性，不混入 canonical 单臂稿。 */
-  legacy_incompatible: boolean
-  legacy_paths: string[]
-  chapters: number[]
-  ordinal: number
-  index: DraftIndexRow[]
-  source_text: string | null
-  source_chars_raw: number | null
-  materials: Materials | null
-  /** 一章至多一份现役正式稿；旧轮次在服务端归档。 */
-  drafts: Draft[]
-  invalid_drafts: Draft[]
-  /** 本章仍待人工确认“保留未裁剪正文”的超上限事实；null = 无待销账项。 */
-  trim_audit: Stage5TrimAudit | null
-  ctx_state: ArtifactState
-}
-
-/* ------------------------------------------------------ stage5 · 验收 */
-
-export interface ReviewIndexRow {
-  output_ordinal: number
-  /** 四 sev 键恒在（0 也写） */
-  finding_counts: Record<Severity, number>
-  unresolved: number
-}
-
-export interface ReviewChapter {
-  output_ordinal: number
-  findings: Finding[]
-}
-
-export interface ReviewResponse {
-  sid: string
-  title: string
-  review_seq: number
-  review_state: 'fresh' | 'stale' | 'unknown' | 'legacy_incompatible'
-  review_reasons: string[]
-  /** 全书按 sev 现数，四键恒在 —— 不读产物的稀疏 counts */
-  finding_counts: Record<Severity, number>
-  book: Finding[]
-  chapters: number[]
-  ordinal: number
-  index: ReviewIndexRow[]
-  chapter: ReviewChapter
-}
-
-/* ---------------------------------------------------------------- stage7 */
-
-export interface NameChar {
-  char_id: string
-  old_canonical: string
-  new_canonical: string
-  renamed: boolean
-  /** renamed=true 时恒 null */
-  not_renamed_reason: string | null
-  reason: string
-  aliases: { old: string; new: string }[]
-  /** 这个角色全部字面在 applied 记账里的替换总次数（按人求和的读数） */
-  hits: number
-}
-
-/** 漏网叫法候选 —— 唯一能发现人名表本身漏了人的地方。顺序是承重的。 */
-export interface Residual {
-  stem: string
-  where: string
-  /** 命中处起 3 个字（后端是字符串，不是数字） */
-  hit: string
-  context: string
-  confidence: string
-  unit: string | null
-  suggest: string | null
-}
-
-export interface StemBaseline {
-  total: number
-  covered: number
-  residual: number
-  /** total=0 时是 null（那种 stem 原文里一次都没出现过），不是 0.0 */
-  ratio: number | null
-}
-
-/** 逐章对照一行。changed 是 bool（不是 kind 字符串）。 */
-export interface NameRow {
-  l: string
-  r: string
-  changed: boolean
-}
-
-export interface IdentityBaseline {
-  roundtrip_ok: boolean
-  chapters: number
-  mismatches: string[]
-  blind: string[]
-}
-
-export interface Stage7Response {
-  sid: string
-  title: string
-  surname_map: Record<string, string>
-  characters: NameChar[]
-  extra_subs: { old: string; new: string; origin: string; note?: string | null }[]
-  subs_count: number
-  kept_count: number
-  residual: Residual[]
-  baselines: Record<string, StemBaseline>
-  approved: {
-    origin: string
-    actor: string
-    reason: string
-    subject_sha256: string
-    /** null = 旧批准；下一次终审后才可用于 already_current。 */
-    workpack_sha256: string | null
-  } | null
-  /** Canonical hash of surname_map + characters + extra_subs; approval is locked to this value. */
-  approval_subject_sha256: string
-  book: Finding[]
-  /** null = 当前流程从没跑过恒等基线 */
-  identity: IdentityBaseline | null
-  /** 组装时的账；book_txt_on_disk 才是盘上此刻的实况（两者可分家） */
-  book_txt: { sha1: string; chars: number; chapters: number } | null
-  book_txt_on_disk: boolean
-  delivery: AgentDeliveryOutcome
-  /**
-   * 成书文件名（`<书名>_rewriting.txt`），由服务端下发。
-   * ⚠ 另存名、按钮文案都用它，**不要拿 title 再拼一次**：那是同一条命名规则的第二个
-   * 落点（`R-11.4`），与后端的 `novel/paths.py::book_txt_rel` 分家时，盘上那份和
-   * 下载那份会叫两个名字。
-   */
-  book_filename: string
-  sources: Sources
-  chapters: number[]
-  /** 逐章对照时才有；与 rows 同进同出 */
-  ordinal: number | null
-  rows: NameRow[] | null
-  /** null = 文案没定稿（对照的左边没有来源） */
-  hook: { before: string; after: string } | null
-  invalid_exists: boolean
-  freshness: Freshness
-  reason: string
-  ghosts: string[]
-  _provenance: Provenance
-}
-
-/* ----------------------------------------------------------------- 其他 */
-
-export interface InboxItem {
-  kind: InboxKind
-  stage: string
-  /** 输出章口径；null = 书级 / 整份产物 */
-  chapter: number | null
-  rule: string
-  what: string
-  how: string
-  attention: 'pending' | 'reviewed_retained'
-  delivery_effect: 'blocking' | 'disclosure'
-  decision: {
-    actor: string
-    reason: string
-    subject_sha256: string
-    state: string
-    decided_at: string
-  } | null
-}
-
-export interface InboxResponse {
-  items: InboxItem[]
-  /** 八键全出（0 也要出） */
-  counts: Record<InboxKind, number>
-  attention_counts: Record<'pending' | 'reviewed_retained', number>
-  delivery_counts: Record<'blocking' | 'disclosure', number>
-  total: number
-  wontfix: number
 }
 
 /* ------------------------------------------------------------ 校验报告 */
@@ -676,20 +176,12 @@ export interface CheckReport {
   counts: { ok: number; hit: number; unver: number; skipped: number }
 }
 
-/** 与服务端 `STAGES` 逐值相等；Stage3 与 Stage6 已退役，编号保留空洞。 */
-export type CheckKind =
-  | 'stage0'
-  | 'stage1'
-  | 'stage2'
-  | 'stage4'
-  | 'stage5'
-  | 'stage7'
+/**
+ * `GET /api/novels/:sid/check/:kind` 的取值面 = `novel.stages.checkable_stages()`。
+ * F8c 起只剩 stage0/stage1：新链 Stage2/4/5/7 的复检是节点级 `--check-only`
+ * （`novel.cli run <str06 节点> <sid> --check-only`），没有层级 CheckReport；
+ * 层名不在取值面里 ⇒ 后端 400 并把可选值列出来。
+ */
+export type CheckKind = 'stage0' | 'stage1'
 
-export const CHECK_KINDS: CheckKind[] = [
-  'stage0',
-  'stage1',
-  'stage2',
-  'stage4',
-  'stage5',
-  'stage7',
-]
+export const CHECK_KINDS: CheckKind[] = ['stage0', 'stage1']

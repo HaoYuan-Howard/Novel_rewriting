@@ -9,8 +9,7 @@ import { LinkButton } from '@/components/ui/ActionButton'
 import { QueryStates } from '@/components/state/QueryStates'
 import { ErrorHint, NotRunYet } from '@/components/state/States'
 import { FreshnessBadge, FreshnessSymbol } from '@/components/vocab/Freshness'
-import { CHAPTERED_SCREENS, SPEND_INK } from '@/constants/vocabulary'
-import { useSampleCoverage } from '@/hooks/useSample'
+import { SPEND_INK } from '@/constants/vocabulary'
 import { AgentRunDialog } from '@/components/agent/AgentRunDialog'
 import { AgentBatchDialog } from '@/components/agent/AgentBatchDialog'
 import {
@@ -88,7 +87,6 @@ export function CorpusScreen() {
   const [pendingUpload, setPendingUpload] = useState<PendingUpload | null>(null)
   const input = useRef<HTMLInputElement>(null)
   const queue = useAgentQueue()
-  const { defaultOrdinal } = useSampleCoverage()
 
   // sid / 书名子串过滤（大小写不敏感；空串显示全部）
   const needle = filter.trim().toLowerCase()
@@ -98,13 +96,8 @@ export function CorpusScreen() {
       )
     : vm.books
 
-  // 「打开」落到第一个「待继续」层的屏；带章号的屏拼默认章号
-  const openPath = (b: BookView) =>
-    '/n/' +
-    b.sid +
-    '/' +
-    b.openScreen +
-    (CHAPTERED_SCREENS.has(b.openScreen) ? '/' + defaultOrdinal(b.sid) : '')
+  // 「打开」落到第一个「待继续」层的屏；现役 `/n/:sid` 下只有 stage0/stage1 可达
+  const openPath = (b: BookView) => '/n/' + b.sid + '/' + b.openScreen
 
   // ⚠ 顺序取自 picked 而不是 vm.books：勾选顺序就是排队顺序，
   //   人先勾的那本先跑，这是界面上唯一能表达优先级的地方。

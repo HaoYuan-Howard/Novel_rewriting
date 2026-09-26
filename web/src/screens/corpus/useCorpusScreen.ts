@@ -5,7 +5,6 @@ import {
   FRESH,
   MISSING,
   SEV,
-  STAGE_SCREEN,
   STAGES,
   kb,
   when,
@@ -46,7 +45,7 @@ export interface BookView {
   verdictBg: string
   mtimeLabel: string | null
   artifactCount: number
-  /** 「打开」落点：第一个「待继续」层的屏；全部完成是 stage7 */
+  /** 「打开」落点：现役屏里完成度已知的最后一层（stage0 或 stage1） */
   openScreen: ScreenName
 }
 
@@ -85,10 +84,12 @@ function viewOf(n: NovelRow): BookView {
           ? FRESH.unknown
           : FRESH.fresh
 
-  // 「打开」落到第一个尚未证实完成的层（columns 按 STAGES 顺序）。
-  // `null` 是 unknown，不是完成；跳过它会把人直接送到更晚的 stage，掩掉关闭式状态。
-  const todo = columns.find((c) => c.done !== true)
-  const openScreen = STAGE_SCREEN[todo?.key ?? 'stage7'] ?? 'stage0'
+  // 「打开」落到现役屏里完成度已知的最后一层：`/n/:sid` 下只剩 stage0/stage1
+  // （新链 Stage2/4/5/7 的只读监控在 `/str06/:candidate`）。
+  // ⚠ `null` 是 unknown 不是完成：stage1 判不了就回 stage0，不把人送进一屏
+  //    「尚不可审阅」的层，也不用旧链已退役的屏当落点。
+  const stage1Done = columns.find((c) => c.key === 'stage1')?.done
+  const openScreen: ScreenName = stage1Done === true ? 'stage1' : 'stage0'
 
   return {
     sid: n.sid,

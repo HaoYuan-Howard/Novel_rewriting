@@ -6,9 +6,10 @@
  *  2. 屏 / 组件里不许出现颜色字面量 —— 状态色只从 src/constants/vocabulary.ts 取，
  *     其余从 Tailwind @theme 令牌取。两份颜色表一定会漂移。
  *  3. src/mocks/*.json 只许 src/api/mock.ts 读 —— 组件里出现内联假数据就算不合格
- *  4. src/mocks/ 必须和统一契约登记的 20 份字节数 + SHA-256 一致（冻结证据基线）
- *  5. src/fixtures/ 只许 src/api/mock.ts 读 —— plot_v1 是完整剧情链的现役数据源，
- *     不是屏幕的（屏幕连 fixture 长什么样都不该知道）
+ *  4. src/mocks/ 必须和统一契约登记的字节数 + SHA-256 一致（冻结证据基线；
+ *     STR-06 切换 F8c 后旧链读屏抓包退役，份数由 20 降到 7）
+ *  5. src/fixtures/ 只许 src/api/mock.ts 读 —— backend_v1 是现役数据源，
+ *     plot_v1 完整剧情链夹具已随旧链退役，屏幕连 fixture 长什么样都不该知道
  *  6. 现役 TypeScript 不保留原子事实、hinge 或逐事实落点契约。
  */
 import { createHash } from 'node:crypto'
@@ -38,12 +39,14 @@ function mockBaseline() {
     if (rows.has(r.file)) throw new Error('mock 基线文件名重复：' + r.file)
     rows.set(r.file, { bytes: r.bytes, sha256: r.sha256 })
   }
-  // count 是**声明的**份数，rows.size 是**实际读到的**。两者都对上 20 才算数据完整：
+  // count 是**声明的**份数，rows.size 是**实际读到的**。两者都对上才算数据完整：
   // 只查后者的话，manifest 少一行同时 count 也少一行，就会静默通过。
   if (rows.size !== raw.count) {
     throw new Error(`mock 基线 count=${raw.count} 与实际 ${rows.size} 行不符`)
   }
-  if (rows.size !== 20) throw new Error('mock 基线应有 20 份，实际解析到 ' + rows.size)
+  // 现役基线份数：STR-06 切换（F8c）后旧链读屏抓包退役，20 → 7。
+  // 写死这个数是为了让「登记表与 count 同时缩水」这种静默缩分母当场红。
+  if (rows.size !== 7) throw new Error('mock 基线应有 7 份，实际解析到 ' + rows.size)
   return rows
 }
 
@@ -115,7 +118,7 @@ try {
 }
 
 if (problems.length === 0 && mockDiff.length === 0) {
-  console.log('数据缝 / 设计缝检查通过（' + files.length + ' 个文件，mocks 20 份基线匹配）')
+  console.log('数据缝 / 设计缝检查通过（' + files.length + ' 个文件，mocks 7 份基线匹配）')
   process.exit(0)
 }
 

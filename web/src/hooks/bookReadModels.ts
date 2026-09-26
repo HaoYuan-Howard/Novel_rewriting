@@ -3,10 +3,11 @@ import { qk } from '@/api/queryKeys'
 
 // 这里只登记已有书级读模型，不包含运行轮询、日志或动作预览。不能按 key 内任意
 // 字符串碰巧等于 sid 匹配，更不能让一次刷新反过来触发自己的观察查询。
+// ⚠ STR-06 切换（F8c）：旧链读屏根（reading/characters/global/stage2/stage4/
+// stage5/review/inbox/stage7）与审批根（approvals）随屏和端点一起退役；
+// 层级复检只剩 stage0/stage1 两个 kind，'check' 根保留。
 const BOOK_READ_ROOTS = new Set([
-  'novel', 'stage0', 'stage1', 'reading',
-  'characters', 'global', 'stage2', 'stage4', 'stage5', 'review', 'inbox',
-  'stage7', 'check', 'approvals',
+  'novel', 'stage0', 'stage1', 'check',
 ])
 
 function belongsToBook(queryKey: QueryKey, sid: string): boolean {

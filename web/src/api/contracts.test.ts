@@ -1,77 +1,30 @@
 import { describe, expect, it, vi } from 'vitest'
 import { qk } from './queryKeys'
 import { adaptNovel, realApi, splitLog } from './endpoints'
-import { projectGlobalSpoilers, SPOILER_PLACEHOLDER } from './spoilers'
-import type { Stage2Global } from '@/types/stages'
 import { READY_PROFILES } from '@/test/agent'
-import { mockApi, SAMPLE_SID, stage2CoreFixture } from './mock'
-
-function globalFixture(): Stage2Global {
-  const value = stage2CoreFixture().global
-  const ref = 'ev_' + '9'.repeat(24)
-  value.evidence_anchors[ref] = { chapter_ordinal: 2, start: 3, end: 9, text_sha256: '9'.repeat(64) }
-  value.evidence_snippets[ref] = '秘密独有证据'
-  value.arc_secrets = [{ secret_id: 'secret_01', fact: '真实秘密', fact_ref: null,
-    evidence_refs: [ref], setup_chapters: [1], revealed_from: 4 }]
-  return value
-}
-
+import { mockApi, SAMPLE_SID } from './mock'
 
 describe('request-shaped cache and diagnostics', () => {
-  it('历史事实样例不再提供当前阅读、分场或蓝图检查结论', async () => {
-    await expect(mockApi.getReading(SAMPLE_SID, 3)).rejects.toMatchObject({ status: 501 })
-    await expect(mockApi.getStage4(SAMPLE_SID, 3)).rejects.toMatchObject({ status: 501 })
-    await expect(mockApi.getCheck(SAMPLE_SID, 'stage2')).rejects.toMatchObject({ status: 501 })
-  })
-
-  it.each([6, 7, 8])('旧 v%s 本地审批不能升级为新契约接受或写作授权', async (version) => {
+  it('人工闸写面已从 Api 退役，本地历史审批键不构成授权', async () => {
+    // 人工逐 Stage 过闸模式退役后数据缝上不再有审批/重置类方法；mock 也不再读
+    // 本地审批账 ⇒ 浏览器里遗留的旧 gate 记录没有任何读者，不能冒充授权。
+    // 名字不写死：按形状查，旧链缝哪天改名回来也当场红。
+    const retiredShaped = Object.keys(mockApi).filter((key) =>
+      /approv|reset/i.test(key))
+    expect(retiredShaped).toEqual([])
     const key = 'nrc.v1.approvals.' + SAMPLE_SID
-    localStorage.setItem(key, JSON.stringify({ v: version, gate: { s4: true }, writing: true }))
-    const current = await mockApi.getApprovals(SAMPLE_SID)
-    expect(current.v).toBe(9)
-    expect(current.gate.s4).toBe(false)
-    expect(current.writing).toBe(false)
+    localStorage.setItem(key, JSON.stringify({ v: 6, gate: { s4: true }, writing: true }))
+    await expect(mockApi.getNovels()).resolves.toMatchObject({
+      novels: expect.any(Array),
+    })
     localStorage.removeItem(key)
   })
 
-  // stage4 design/structure workpack、模板与 POST 写面已随 2026-09-15 全自动裁决退役；
-  // 对应的两条 Stage4 人工审阅 HTTP 缝用例一并退役，Stage4 只剩只读审批投影。
-
-  // Stage5 改稿 / 闭合 / batch trim 写面已退役；对应 HTTP 缝用例不再维护。
-
   it('includes runtime chapter args in preview cache identity', () => {
-    const base = { kind: 'stage5.write', label: '写', extra: null, sid: 's' }
-    expect(qk.jobPreview({ ...base, args: ['--chapters', '1'] })).not.toEqual(
-      qk.jobPreview({ ...base, args: ['--chapters', '2'] }),
+    const base = { kind: 'stage0.remove', label: '写', extra: null, sid: 's' }
+    expect(qk.jobPreview({ ...base, args: ['--source', 'a.txt'] })).not.toEqual(
+      qk.jobPreview({ ...base, args: ['--source', 'b.txt'] }),
     )
-  })
-
-  it('requires the Stage5 Commander enums and publishes the exact edit preview/apply input surface', async () => {
-    const enums = await mockApi.getEnums()
-    expect(enums.stage5_must_appear_rulings).toEqual([
-      'confirmed_present', 'accepted_exception',
-    ])
-    expect(enums.stage5_closure_groups).toEqual(['fact_landing', 'unver'])
-    expect(enums.stage5_closure_states).toContain('review_required')
-    expect(enums.job_kinds['stage5.write']?.flags).toEqual(expect.arrayContaining([
-      '--preview-edit',
-      '--apply-edit',
-      '--current-chapter-sha256',
-      '--preview-subject-sha256',
-      '--edit-confirmation',
-    ]))
-    const preview = enums.actions.find((action) =>
-      action.kind === 'stage5.write' && action.extra?.includes('--preview-edit'))
-    expect(preview).toMatchObject({ paid: false, writes_disk: false, required_inputs: [] })
-    const apply = enums.actions.find((action) =>
-      action.kind === 'stage5.write' && action.extra?.includes('--apply-edit'))
-    expect(apply?.required_inputs?.map((input) => input.flag)).toEqual([
-      '--actor',
-      '--reason',
-      '--current-chapter-sha256',
-      '--preview-subject-sha256',
-      '--edit-confirmation',
-    ])
   })
 
   it('uses the whole agent request, including nested overrides, as preview cache identity', () => {
@@ -196,31 +149,9 @@ describe('request-shaped cache and diagnostics', () => {
     expect(lines[3]?.text).toContain('error_kind=Timeout')
     expect(lines[3]?.details).toMatchObject({ detail: 'wire failed' })
   })
-})
 
-describe('display-only spoiler projection', () => {
-  it('隐藏秘密的共享表引用与独有证据，同时保留其它事实的证据', () => {
-    const raw = globalFixture()
-    const publicRef = raw.setting.era_evidence_refs[0]
-    const hidden = projectGlobalSpoilers(raw, false)
-    expect(hidden.arc_secrets).toHaveLength(1)
-    expect(hidden.arc_secrets[0]?.fact).toBe(SPOILER_PLACEHOLDER)
-    expect(hidden.arc_secrets[0]?.evidence_refs).toEqual([])
-    expect(hidden.evidence_snippets[publicRef]).toBe(raw.evidence_snippets[publicRef])
-    expect(JSON.stringify(hidden)).not.toContain('真实秘密')
-    expect(JSON.stringify(hidden)).not.toContain('秘密独有证据')
-    expect(projectGlobalSpoilers(raw, true)).toBe(raw)
-  })
-
-  it('展示遮蔽不改动原响应，空列表和隐藏态保持不同', () => {
-    const raw = globalFixture()
-    const before = structuredClone(raw)
-    const hidden = projectGlobalSpoilers(raw, false)
-    expect(raw).toEqual(before)
-    expect(hidden.relations).toEqual(raw.relations)
-    expect(hidden.world_rules).toEqual(raw.world_rules)
-    raw.arc_secrets = []
-    expect(projectGlobalSpoilers(raw, false).arc_secrets[0]?.fact).toBe(SPOILER_PLACEHOLDER)
-    expect(projectGlobalSpoilers(raw, true).arc_secrets).toEqual([])
-  })
+  // STR-06 切换（F8c）：旧链读屏缝（reading / stage4 / stage5 / review / inbox /
+  // stage7 / book）与 stage2 层级复检随旧链整层退役，对应 HTTP 缝用例不再维护；
+  // 层级复检取值面只剩 stage0/stage1，新链条目复检是节点级 --check-only。
+  // 人工闸面（approvals / workpack / reset）同日退役，前端不再持本地审批账。
 })

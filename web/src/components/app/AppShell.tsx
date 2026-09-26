@@ -9,19 +9,18 @@ import { ScreenBoundary } from './ScreenBoundary'
 import { JobDrawer } from '@/components/job/JobDrawer'
 import { ConfirmDialog } from '@/components/job/ConfirmDialog'
 
+/**
+ * `/n/:sid` 下现役的屏段。STR-06 切换（F8c）后旧链读屏（read/global/stage4/
+ * stage5/stage7）与待办屏（inbox）已退役：它们不再是导航事实，未匹配段按
+ * corpus 处理，由路由兜底重定向。
+ */
 const SCREENS = new Set<string>([
   'run',
   'stage0',
   'stage1',
-  'read',
-  'global',
-  'stage4',
-  'stage5',
-  'stage7',
-  'inbox',
 ])
 
-/** 从路径里读出当前在哪本书的哪一屏。屏与章号是导航事实，家在 URL 里。 */
+/** 从路径里读出当前在哪本书的哪一屏。屏是导航事实，家在 URL 里。 */
 function useWhere() {
   const m = useMatch('/n/:sid/*')
   const { pathname } = useLocation()
@@ -29,16 +28,13 @@ function useWhere() {
     return {
       sid: null,
       screen: (pathname === '/settings' ? 'settings' : 'corpus') as ScreenName,
-      ordinal: null,
     }
   }
-  const parts = pathname.split('/').filter(Boolean) // n, sid, screen, [o]
+  const parts = pathname.split('/').filter(Boolean) // n, sid, screen
   const seg = parts[2] ?? ''
-  const o = Number(parts[3])
   return {
     sid: m.params.sid,
     screen: (SCREENS.has(seg) ? seg : 'corpus') as ScreenName,
-    ordinal: Number.isFinite(o) && o > 0 ? o : null,
   }
 }
 
@@ -47,7 +43,7 @@ function useWhere() {
  * 但要用满宽屏 —— 页面没有 max-width，多出来的宽度流进并排的两栏。
  */
 export function AppShell() {
-  const { sid, screen, ordinal } = useWhere()
+  const { sid, screen } = useWhere()
   const { drawerOpen, notices } = useChrome()
   const [railCollapsed, setRailCollapsed] = useState(false)
   useHotkeys()
@@ -66,7 +62,6 @@ export function AppShell() {
       <Rail
         sid={sid}
         screen={screen}
-        ordinal={ordinal}
         collapsed={railCollapsed}
         onToggle={() => setRailCollapsed((value) => !value)}
       />
@@ -74,7 +69,7 @@ export function AppShell() {
         className="min-w-0 transition-[padding-bottom] duration-200 ease-out"
         style={{ paddingBottom: 'var(--drawer-h)' }}
       >
-        <ScreenBoundary resetKey={(sid ?? '') + '/' + screen + '/' + (ordinal ?? '')}>
+        <ScreenBoundary resetKey={(sid ?? '') + '/' + screen}>
           <Outlet />
         </ScreenBoundary>
       </main>

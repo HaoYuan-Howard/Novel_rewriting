@@ -4,25 +4,23 @@ import { api } from '@/api/endpoints'
 import { qk } from '@/api/queryKeys'
 import { isNoSample } from '@/api/errors'
 import { useSid } from '@/hooks/useRouteParams'
-import { useApprovals } from '@/hooks/useApprovals'
 import { useAgentRuns } from '@/hooks/useAgentRuns'
 import { useRunProgress } from '@/hooks/useRunProgress'
 import { Mono } from '@/components/ui/Mono'
 
-const FINAL_APPROVAL_PAGES = [
-  { stage: 'stage7', gate: 's7', label: 'Stage7 人物对照' },
-] as const
-
 /**
  * 书级外壳：顶部一条书名 + sid。
  * `key={sid}` 加在路由那一层 —— 换书就整棵重挂，屏内的选中/开关不会跟过去。
+ *
+ * ⚠ STR-06 切换（F8c）：人工闸整族退役后这里不再挂审批投影，也没有
+ * 「最终缺口」提示条 —— 交付结论归 agent 代跑记录与 `/str06/:candidate` 的
+ * delivery pane，本外壳只呈现书与章数这两个盘面事实。
  */
 export function BookLayout() {
   const sid = useSid()
   const nav = useNavigate()
   useRunProgress(sid)
   useAgentRuns(sid)
-  const { doc } = useApprovals()
   const q = useQuery({
     queryKey: qk.novel(sid),
     queryFn: () => api.getNovel(sid),
@@ -32,10 +30,6 @@ export function BookLayout() {
 
   const title = q.data?.title ?? null
   const chapters = q.data?.chapters ?? null
-  // gate 的有效性只认后端；这里仅给已有产物对应的只读页导航。
-  const finalApprovalGaps = FINAL_APPROVAL_PAGES.filter(({ stage, gate }) =>
-    doc?.gate[gate] === false && q.data?.stage_done[stage] === true,
-  )
 
   return (
     <div className="flex min-w-0 flex-col">
@@ -54,25 +48,6 @@ export function BookLayout() {
           {sid} · {chapters === null ? '章数待分章' : chapters + ' 章'}
         </Mono>
       </header>
-      {finalApprovalGaps.length ? (
-        <div className="flex items-center gap-10 border-b border-warn-line bg-warn-bg px-30 py-10 text-body text-warn-ink">
-          <span aria-hidden>!</span>
-          <span className="min-w-0 flex-1">
-            {finalApprovalGaps.map(({ label }) => label).join('、')}尚未对齐当前选择。
-            请到对应页面查看状态。
-          </span>
-          {finalApprovalGaps.map(({ stage, label }) => (
-            <button
-              key={stage}
-              type="button"
-              onClick={() => nav('/n/' + sid + '/' + stage)}
-              className="cursor-pointer rounded-btn border border-warn-line bg-card px-12 py-6 text-body font-semibold"
-            >
-              查看{label}
-            </button>
-          ))}
-        </div>
-      ) : null}
       <Outlet />
     </div>
   )

@@ -1,15 +1,20 @@
 /**
  * 假后端。
  *
- * 这是**整个前端里唯一 import src/mocks/*.json 的文件**，也是唯一碰 localStorage 的文件。
- * 它不是「fixture 加载器」，是一个真的会写盘（写 localStorage）、会跑作业、会拒绝
- * 「这一份不在样本里」的服务端替身 —— 所以屏与组件在 mock 模式下走的代码路径
- * 和接了真后端之后**完全一样**。
+ * 这是**整个前端里唯一 import src/mocks/*.json 与 src/fixtures/**\/*.json 的文件**，
+ * 也是唯一碰 localStorage 的文件。它不是「fixture 加载器」，是一个真的会写盘
+ * （写 localStorage）、会跑作业、会拒绝「这一份不在样本里」的服务端替身 ——
+ * 所以屏与组件在 mock 模式下走的代码路径和接了真后端之后**完全一样**。
  *
  * 三件事故意做在这里而不是渲染层：
- *   1. 历史样例与当前完整剧情测试书的范围 —— 由假后端分别接入，不拼接身份
+ *   1. 历史样例与合成候选根的范围 —— 由假后端分别接入，不拼接身份
  *   2. 命令行的拼装 —— U-09 要求确认框里那条命令由服务端下发
  *   3. 花不花钱、会不会写盘 —— 前端一行判定都不许有
+ *
+ * ⚠ STR-06 切换（F8c）：旧链读屏与人工闸的 mock 面整族退役（plot_v1 剧情链
+ * 夹具、stage5/review/inbox/stage7 抓包、审批 localStorage 账全部删除）；
+ * 现役样本只剩语料库总览、Stage0/1 读面、作业与 agent 代跑，以及 STR-06
+ * 候选链监控（fixtures/backend_v1/str06_candidate.json）。
  */
 import type { Api } from '@/types/api'
 import type {
@@ -22,15 +27,6 @@ import type {
   AgentRunRequest,
   AgentRunsResponse,
 } from '@/types/agent'
-import {
-  type ActionRef,
-  type ApprovalDoc,
-  type GateKey,
-  type Stage5ClosureDecision,
-  type Stage5ClosureWorkpack,
-  type Stage7ApprovalWorkpack,
-  type StructureApprovalDecision,
-} from '@/types/approvals'
 import type { EnumsResponse } from '@/types/enums'
 import type {
   Str06BlueprintView,
@@ -57,27 +53,18 @@ import type { Artifact, NovelOverview, NovelsResponse } from '@/types/novels'
 import type { RunProgress } from '@/types/run'
 import type {
   CheckKind,
-  CheckReport,
-  InboxResponse,
-  ReviewResponse,
   Stage0Extras,
   Stage0Report,
   Stage0Segments,
   Stage1View,
-  Stage2Global,
-  Stage5Response,
-  Stage7Response,
 } from '@/types/stages'
 import { lookupAction } from '@/constants/actions'
 import { ApiError } from './errors'
-import { projectGlobalSpoilers } from './spoilers'
 
 /* ------------------------------------------------------------ 样本的边界 */
 
 /** 样本抓自这一本 8 章的书 */
 export const SAMPLE_SID = '7615069877019300633'
-/** 逐章响应只抓了第 3 章 */
-export const SAMPLE_ORDINAL = 3
 
 /* ------------------------------------------ 冻结原样（只加载仍消费的三份历史输入） */
 
@@ -113,15 +100,6 @@ type LegacyNovel = Omit<
 const PIPELINE_STAGES = [
   'stage0', 'stage1', 'stage2', 'stage4', 'stage5', 'stage7',
 ]
-
-/** Stage5 fixture 已按现役 HTTP 契约收成明确的 legacy 终态。 */
-function currentMockStage5(): Stage5Response {
-  return fx<Stage5Response>('stage5_ch3.json')
-}
-
-function currentMockReview(): ReviewResponse {
-  return fx<ReviewResponse>('review_ch3.json')
-}
 
 /** 冻结 mock 的旧业务推导只准留在这个假后端；屏幕与真实数据缝不兼容旧形状。 */
 function currentMockNovel(legacy: LegacyNovel): NovelOverview {
@@ -221,6 +199,7 @@ function currentMockNovel(legacy: LegacyNovel): NovelOverview {
       return [stage, Array.isArray(value) ? value : []]
     }),
   ) as Record<string, number[]>
+
   const {
     stage5_modes: _retiredStage5Modes,
     chapters_done: _legacyChaptersDone,
@@ -254,17 +233,11 @@ function mockNovels(): NovelsResponse {
 
 /**
  * 新后端真实响应的 fixture（FE-06 的「有版本含义的目录」）。
- * `src/mocks/` 那 20 份是**冻结的证据基线**，从此不再被新形状的端点消费；
+ * `src/mocks/` 那 7 份是**冻结的证据基线**，从此不再被新形状的端点消费；
  * mock 现役读的是这一批 —— 与真后端同一形状，屏幕在两种模式下走同一条代码路径。
  */
 const RAW_V1 = import.meta.glob([
   '../fixtures/backend_v1/*.json',
-  // 这些历史材料只作 Global 证据与拒绝旧结构的反例，不再作为页面响应打包。
-  '!../fixtures/backend_v1/reading_ch3.json',
-  '!../fixtures/backend_v1/check_stage2.json',
-  '!../fixtures/backend_v1/global.json',
-  '!../fixtures/backend_v1/stage7.json',
-  '!../fixtures/backend_v1/stage7_ch3.json',
 ], {
   eager: true,
   import: 'default',
@@ -276,7 +249,7 @@ function fx<T>(file: string): T {
   return hit as T
 }
 
-/* --------------------------------------------- STR-06 候选链监控 fixture（F7d） */
+/* --------------------------------------------- STR-06 候选链监控 fixture */
 
 /** 录制的合成候选根（fake transport 全链产物，非真实书正文；与真后端同形状）。 */
 interface Str06Fixture {
@@ -340,307 +313,16 @@ function noChapter(path: string): Promise<never> {
   return fail(new ApiError('nosample', path, { scope: 'chapter' }))
 }
 
-/** 完整合成书只读快照：缺键不回退其他小说或历史批准。 */
-function plotRead<T>(sid: string, suffix: string, final = false,
-  scope: 'book' | 'chapter' = 'book'): Promise<T> {
-  const path = `/novels/${sid}/${suffix}`
-  if (sid !== PLOT_SAMPLE_SID) return noBook(path)
-  const data = plotFlowSample as Record<string, unknown>
-  const key = suffix || 'overview'
-  const value = data['final:http:' + key] ?? (final ? undefined : data['http:' + key])
-  return value === undefined
-    ? fail(new ApiError('nosample', path, { scope }))
-    : later(structuredClone(value) as T)
-}
-
-function readonlyPlot(path: string): Promise<never> {
-  return fail(new ApiError('server', path, { status: 501,
-    message: '此样例只录制正式读回，不执行编辑、批准或作业；请连接真实后端。',
-    backendKind: 'MockCapabilityUnavailable' }))
-}
-
-async function plotNovel(): Promise<NovelOverview> {
-  // 复用真实 HTTP 适配器；延后加载避免 endpoints 选择 mock 时的初始化循环。
-  const { adaptNovel } = await import('./endpoints')
-  return adaptNovel(await plotRead<Parameters<typeof adaptNovel>[0]>(PLOT_SAMPLE_SID, 'overview', true))
-}
-
 function bookOnly<T>(sid: string, path: string, load: () => T): Promise<T> {
   if (sid !== SAMPLE_SID) return noBook(path)
   return later(load())
 }
 
-function chapterOnly<T>(sid: string, o: number, path: string, load: () => T): Promise<T> {
-  if (sid !== SAMPLE_SID) return noBook(path)
-  if (o !== SAMPLE_ORDINAL) return noChapter(path)
-  return later(load())
-}
-
-/* ------------------------------------------------------- localStorage 层 */
-
-const LS_PREFIX = 'nrc.v1.'
-
-function lsRead<T>(key: string): T | null {
-  try {
-    const s = localStorage.getItem(LS_PREFIX + key)
-    return s ? (JSON.parse(s) as T) : null
-  } catch {
-    return null
-  }
-}
-
-function lsWrite(key: string, v: unknown): void {
-  try {
-    localStorage.setItem(LS_PREFIX + key, JSON.stringify(v))
-  } catch {
-    /* 隐私模式下写不进去也不该崩 */
-  }
-}
-
-/* ------------------------------------------------------------ 验收记录 */
-
-const MOCK_STRUCTURE_SUBJECT = 'f'.repeat(64)
-const MOCK_DESIGN_CANDIDATE = 'e'.repeat(64)
-const MOCK_DESIGN_AGGREGATE = 'd'.repeat(64)
-const MOCK_STAGE5_WORKPACK = '7'.repeat(64)
-const MOCK_STAGE5_REVIEW = '6'.repeat(64)
-const MOCK_STRUCTURE_REVIEW_TOKEN = 's4sr1_' + MOCK_STRUCTURE_SUBJECT
-const MOCK_WRITING_REVIEW_TOKEN = 's5wr1_' + MOCK_STRUCTURE_SUBJECT
-const MOCK_STAGE5_REVIEW_TOKEN = 's5cr1_' + MOCK_STAGE5_WORKPACK
-
-function mockStage5Workpack(): Stage5ClosureWorkpack {
-  return {
-    review_seq: 1,
-    review_rel: 'stage5/review_1.json',
-    review_sha256: MOCK_STAGE5_REVIEW,
-    planned_chapters: [SAMPLE_ORDINAL],
-    missing_chapters: [],
-    chapter_subjects: [{
-      output_ordinal: SAMPLE_ORDINAL,
-      chapter_sha256: '3'.repeat(64),
-    }],
-    invalid_chapters: [],
-    hard_findings: [],
-    unresolved_trim_chapters: [],
-    unresolved_trim_items: [],
-    trim_subjects: [],
-    wontfix_sha256: null,
-    must_appear: [],
-    fact_group: null,
-    unver_group: null,
-    disclosure: {},
-    resolved: {},
-    workpack_sha256: MOCK_STAGE5_WORKPACK,
-    review_token: MOCK_STAGE5_REVIEW_TOKEN,
-  }
-}
-
-function mockStage5ClosureDecision(): Stage5ClosureDecision {
-  return {
-    actor: 'mock-reviewer',
-    reason: 'mock 样本已完成整书闭合复核',
-    review_token: MOCK_STAGE5_REVIEW_TOKEN,
-    must_appear: [],
-    group_acks: [],
-    decision_sha256: '5'.repeat(64),
-    decided_at: '2026-08-29T00:00:00+00:00',
-  }
-}
-
-function enumAt(values: string[], index: number, label: string): string {
-  const value = values[index]
-  if (!value) throw new ApiError('malformed', '/fixtures/enums.json', {
-    message: label + ' 取值面缺少第 ' + (index + 1) + ' 项',
-  })
-  return value
-}
-
-function seededStructureDecision(): StructureApprovalDecision {
-  return {
-    actor: 'mock-reviewer',
-    reason: 'mock 样本已核对全书结构',
-    review_token: MOCK_STRUCTURE_REVIEW_TOKEN,
-    chapters: [{
-      output_ordinal: SAMPLE_ORDINAL,
-      decision: enumAt(enums().structure_approval_decisions, 0, '结构审批决定'),
-      reason: 'mock 第 3 章结构已核对',
-    }],
-    decided_at: '2026-08-25T00:00:00+00:00',
-  }
-}
-
-/**
- * Stage4A 审阅投影的现役形状（与录制样本一致）：历史账只读、无新决定。
- * workpack/模板与 typed 决定写面已随 2026-09-15 全自动裁决退役。
- */
-function mockDesignReviewProjection() {
-  return {
-    state: enumAt(enums().design_review_states, 1, 'A 审阅状态'),
-    candidate_sha256: MOCK_DESIGN_CANDIDATE,
-    aggregate_subject_sha256: MOCK_DESIGN_AGGREGATE,
-    action_review_token: null,
-    current_decision: null,
-    history: [],
-    binding_infeasibility: null,
-    preflight: null,
-    repair_capability: {
-      repairable: null,
-      reason_code: null,
-      agent_repairable: false,
-      agent_reason_code: 'legacy_or_untracked_candidate',
-      full_chapter_editable: true,
-      full_chapter_edit_reason_code: 'current_typed_decision',
-      chapters: [{
-        output_ordinal: SAMPLE_ORDINAL,
-        committed_rounds: 0,
-        request_repair_available: null,
-        agent_repair_available: false,
-        full_chapter_edit_available: true,
-      }],
-    },
-  }
-}
-
-function freshDoc(sid: string): ApprovalDoc {
-  return {
-    v: 9,
-    sid,
-    gate: { s0: false, s1: false, s4: false, s5: false, s6: false, s7: false },
-    writing: false,
-    design_review: {
-      state: enumAt(enums().design_review_states, 0, 'A 审阅状态'),
-      candidate_sha256: null,
-      aggregate_subject_sha256: null,
-      action_review_token: null,
-      current_decision: null,
-      history: [],
-      binding_infeasibility: null,
-      preflight: null,
-      repair_capability: null,
-    },
-    structure: {
-      state: enumAt(enums().structure_approval_states, 0, '结构审批状态'),
-      current_subject_sha256: null,
-      review_token: null,
-      current_decision: null,
-      history: [],
-      binding_concerns: [],
-    },
-    writing_approval: {
-      available: false,
-      current_subject_sha256: null,
-      review_token: null,
-      current_decision: null,
-      history: [],
-    },
-    closure: {
-      state: 'missing',
-      workpack: null,
-      next_step: null,
-      current_decision: null,
-      history: [],
-    },
-    spawns: {},
-  }
-}
-
-/**
- * 样本那本书的初始状态：已经跑到 stage5，文案与成书还没确认。
- * 这样一打开就能看到一本走到一半的书 —— 全 false 的空壳看不出这个工具在干什么。
- *
- */
-function seededDoc(sid: string): ApprovalDoc {
-  const decision = seededStructureDecision()
-  return {
-    v: 9,
-    sid,
-    gate: { s0: true, s1: true, s4: true, s5: true, s6: false, s7: false },
-    writing: true,
-    // Stage4A 人工审阅已退役：样本按现役投影呈现无决定、无历史的历史账。
-    design_review: mockDesignReviewProjection(),
-    structure: {
-      state: enumAt(enums().structure_approval_states, 2, '结构审批状态'),
-      current_subject_sha256: MOCK_STRUCTURE_SUBJECT,
-      review_token: MOCK_STRUCTURE_REVIEW_TOKEN,
-      current_decision: decision,
-      history: [decision],
-      binding_concerns: [{
-        constraint_code: 'material_conflict',
-        chapter_ordinal: SAMPLE_ORDINAL,
-        scenes: ['c03s01'],
-        reason: '两场共用同一段证据，需审阅联合呈现是否遗漏或重复；证据重叠不直接判重复。',
-        closed_refs: ['a_' + '1'.repeat(16)],
-      }],
-    },
-    writing_approval: {
-      available: true,
-      current_subject_sha256: MOCK_STRUCTURE_SUBJECT,
-      review_token: MOCK_WRITING_REVIEW_TOKEN,
-      current_decision: null,
-      history: [],
-    },
-    closure: {
-      state: 'closed',
-      workpack: mockStage5Workpack(),
-      next_step: null,
-      current_decision: mockStage5ClosureDecision(),
-      history: [mockStage5ClosureDecision()],
-    },
-    spawns: {},
-  }
-}
-
-function loadDoc(sid: string): ApprovalDoc {
-  const got = lsRead<unknown>('approvals.' + sid)
-  // spawns 是服务端的事；只接受当前公开 v9，旧本地记录（含已退役 seen/s2）不沿用审批。
-  if (got && typeof got === 'object' && (got as { v?: unknown }).v === 9) {
-    return withMockSpawns(got as ApprovalDoc)
-  }
-  if (!got && sid === SAMPLE_SID) {
-    // 样本书的 stage2 两份产物已在盘上（历史录制），对应「已发起」的 s1 续跑状态。
-    lsWrite('stage2.global.issued.' + sid, true)
-    lsWrite('stage2.blueprint.issued.' + sid, true)
-  }
-  const seed = !got && sid === SAMPLE_SID ? seededDoc(sid) : freshDoc(sid)
-  const projected = withMockSpawns(seed)
-  lsWrite('approvals.' + sid, projected)
-  return projected
-}
-
-function saveDoc(doc: ApprovalDoc): ApprovalDoc {
-  const projected = withMockSpawns(doc)
-  lsWrite('approvals.' + doc.sid, projected)
-  return projected
-}
-
-/* ------------------------------------------------------ Stage2 全局复核 */
-
-/* Stage2 语义审阅已退役：mock 不再保存全局复核项、已读记录或逐节点接受。 */
-
 /* ------------------------------------------------------------ 命令行拼装 */
 
 /** 枚举取值直接透传当前后端生成的样例；仅补历史显示辅助字段。 */
 function enums(): EnumsResponse {
-  const frozen = fx<EnumsResponse>('enums.json')
-  if (frozen.spoiler_disclosure) return frozen
-  return {
-    ...frozen,
-    spoiler_disclosure: {
-      mode: 'display_only',
-      security_boundary: false,
-      server_sends_full_data: true,
-      hidden_paths: ['arc_secrets'],
-      known_leakage_surfaces: [
-        'HTTP response body',
-        'browser network/devtools/cache',
-        'role, relations and world rule descriptions may imply the same facts',
-      ],
-      consumers: ['api.projectGlobalSpoilers', 'GlobalScreen'],
-      notice:
-        '这是显示辅助，不是安全边界；服务端仍下发完整数据。关闭时只隐藏 fate、secrets、'
-        + 'climax、ending 四处核心字段，role、关系时点、规则正文与网络响应仍可能剧透。',
-    },
-  }
+  return fx<EnumsResponse>('enums.json')
 }
 
 /** 花不花钱由服务端的动作表说了算。这里是「假服务端」，所以查的是同一张表。 */
@@ -653,9 +335,6 @@ function argvOf(req: JobRequest): string {
   const parts = ['python', '-m', 'novel.cli', req.kind, '--sid', req.sid]
   if (req.extra) parts.push(...req.extra)
   if (req.args) parts.push(...req.args)
-  if (req.kind === 'stage5.write' && req.ordinal) {
-    parts.push('--chapters', String(req.ordinal))
-  }
   return parts.join(' ')
 }
 
@@ -695,14 +374,16 @@ function previewStepsOf(req: JobRequest): JobPreview['steps'] {
   }
   const checkArgv = (kind: string) =>
     ['python', '-m', 'novel.cli', kind, '--sid', req.sid, '--check-only'].join(' ')
-  if (req.kind === 'stage5.write') {
+  // 新链每个 str06 节点自带 --check-only 免费复检；预览把这条尾巴显示出来，
+  // 让「同一请求的 0 成本复检」在确认框里就看得见。
+  if (req.kind.startsWith('str06.')) {
     return [
       first,
       {
-        label: 'stage5 成稿 · 追跑全量校验',
+        label: req.kind + ' · 节点级复检',
         paid: false,
         writes: '',
-        argv: checkArgv('stage5.write'),
+        argv: checkArgv(req.kind),
         executor_backend: null,
         egress_authorized: null,
       },
@@ -711,41 +392,24 @@ function previewStepsOf(req: JobRequest): JobPreview['steps'] {
   return [first]
 }
 
-function plainMockReport(report: CheckReport): CheckReport {
-  const plain = (value: string | null) => value?.replace(/\*\*|~~|`/g, '') ?? null
-  return {
-    ...report,
-    rules: report.rules.map((line) => ({
-      ...line,
-      why: plain(line.why),
-      scanned: plain(line.scanned),
-      baseline: plain(line.baseline),
-      note: plain(line.note),
-      findings: line.findings.map((finding) => ({
-        ...finding,
-        detail: plain(finding.detail) ?? '',
-      })),
-    })),
+/* ------------------------------------------------------- localStorage 层 */
+
+const LS_PREFIX = 'nrc.v1.'
+
+function lsRead<T>(key: string): T | null {
+  try {
+    const s = localStorage.getItem(LS_PREFIX + key)
+    return s ? (JSON.parse(s) as T) : null
+  } catch {
+    return null
   }
 }
 
-function mockCheck(kind: CheckKind): CheckReport {
-  const report = plainMockReport(fx<CheckReport>(`check_${kind}.json`))
-  if (kind !== 'stage7') return report
-  // stage7 视图在 fake server 中把成书端点设为可达；同一 fake server 的
-  // 校验响应也要同步这件事实，不能一边说“在盘上”一边保留历史抓包的 missing 红行。
-  return {
-    ...report,
-    counts: {
-      ...report.counts,
-      ok: report.counts.ok + 1,
-      hit: report.counts.hit - 1,
-    },
-    rules: report.rules.map((line) =>
-      line.rule === 'rn_txt_stale'
-        ? { ...line, status: 'ok' as const, findings: [], why: null }
-        : line,
-    ),
+function lsWrite(key: string, v: unknown): void {
+  try {
+    localStorage.setItem(LS_PREFIX + key, JSON.stringify(v))
+  } catch {
+    /* 隐私模式下写不进去也不该崩 */
   }
 }
 
@@ -864,24 +528,6 @@ function publicJobs(sid: string): JobsResponse {
   return { jobs: mine, running: mine.find((j) => j.state === 'running') ?? null }
 }
 
-/** 确认之后自动发起的下游。谁发起什么由服务端决定，不由界面决定。 */
-function withMockSpawns(doc: ApprovalDoc): ApprovalDoc {
-  // mock 用「已发起」标记近似后端 resume 谓词：s1 分相下发 stage2.global →
-  // stage2.blueprint（骨架由统一机械准入衔接）；两份都发起后不再有下一相。
-  const s1: ActionRef[] = !doc.gate.s1 ? []
-    : !lsRead<boolean>('stage2.global.issued.' + doc.sid)
-      ? [{ kind: 'stage2.global', label: '生成 stage2 全局底座', extra: null }]
-      : !lsRead<boolean>('stage2.blueprint.issued.' + doc.sid)
-        ? [{ kind: 'stage2.blueprint', label: '机械准入通过后生成 stage2 逐章骨架', extra: null }]
-        : []
-  const spawns: Partial<Record<GateKey, ActionRef[]>> = {
-    s1,
-    // 历史样本未经过现役独立 Prepare，不能提供本轮 Hook/改名/交付动作。
-    s5: [], s6: [], s7: [],
-  }
-  return { ...doc, spawns }
-}
-
 function codePoints(text: string): number {
   return [...text].length
 }
@@ -929,12 +575,13 @@ function mockStage0Segments(_sid: string): Stage0Segments {
 
 function mockStage0Report(sid: string): Stage0Report {
   const data = raw<Stage0Extras>('stage0_extras.json')
-  const approved = loadDoc(sid).gate.s0
+  // 样本书的 stage0 尚未跑过：executable 只投影后端机械判定，mock 不代它放行。
+  void sid
   return {
     original_filename: data.original_filename,
     total_code_points: data.total_code_points,
     warnings: [],
-    executable: approved,
+    executable: false,
     revision_id: 'a'.repeat(64),
     revision_origin: 'machine' as const,
   }
@@ -950,15 +597,17 @@ function mockStage1View(): Stage1View {
 const PIPELINE_STEPS: { node: string; label: string; paid: boolean }[] = [
   { node: 'stage0.remove', label: 'stage0 非正文剔除', paid: false },
   { node: 'stage1.partition', label: 'stage1 分章', paid: false },
-  { node: 'stage2.global', label: 'stage2 全书级抽取', paid: true },
-  { node: 'stage2.blueprint', label: 'stage2 逐章抽取', paid: true },
-  { node: 'stage4.design', label: 'stage4 盲场景设计', paid: true },
-  { node: 'stage4.plan', label: 'stage4 重构计划', paid: true },
-  { node: 'stage4.context', label: 'stage4 写作上下文组装', paid: false },
-  { node: 'stage5.write', label: 'stage5 逐章写作', paid: true },
-  { node: 'stage5.review', label: 'stage5 全书验收', paid: false },
-  { node: 'stage7.rename', label: 'stage7 人名表', paid: true },
-  { node: 'stage7.assemble', label: 'stage7 替换与成书', paid: false },
+  { node: 'str06.stage2.source', label: 'Stage2 源语义抽取与确定性 Blueprint 编译', paid: true },
+  { node: 'str06.stage2.names', label: 'Stage2 源名称结构窄调用并发布 Characters v4', paid: true },
+  { node: 'str06.stage4.preserve', label: 'Stage4 Preserve 与 ReconstructionBrief 投影', paid: true },
+  { node: 'str06.stage4.body_design', label: 'Stage4 目标故事与导演说明设计', paid: true },
+  { node: 'str06.stage4.bind', label: 'Stage4 Bind（义务到目标位置绑定）', paid: true },
+  { node: 'str06.stage4.hook_design', label: 'Stage4 Hook 设计与 PresentationGraph 发布', paid: true },
+  { node: 'str06.stage4.compile', label: 'Stage4 确定性编译（ExecutionPlan/Guard/WriterBookIR/HookContext）', paid: false },
+  { node: 'str06.stage5.hook', label: 'Stage5 Hook 成文', paid: true },
+  { node: 'str06.stage5.body', label: 'Stage5 按章正文成文', paid: true },
+  { node: 'str06.stage7.naming', label: 'Stage7 Naming（NameMap v5 赋值）', paid: true },
+  { node: 'str06.stage7.assemble', label: 'Stage7 改名替换与成书装配', paid: false },
 ]
 
 /** 静态样例：全节点 pending + 空事件流 + 全 null 的 stage_done。 */
@@ -976,6 +625,7 @@ function mockRunProgress(sid: string): RunProgress {
       paid: false,
       writes: 'artifact',
       next_handler: 'code',
+      review_states: null,
       verified_skipped_nodes: [],
       verified_skipped_count: 0,
     },
@@ -1031,8 +681,8 @@ function mockAgentRunRecord(req: AgentRunRequest): AgentRunRecord {
     base: '/mock/base',
     argv: preview.argv,
     prompt: preview.prompt,
-    authorized: preview.authorized,
-    egress_authorized: preview.egress_authorized,
+    authorized: req.authorized,
+    egress_authorized: req.egress_authorized,
     code_version: 'mock-code-version',
     skill_sha256: 'a'.repeat(64),
     profiles: preview.profiles,
@@ -1105,53 +755,20 @@ function mockControlledAgentRun(runId: string, state: 'paused' | 'unknown'): Age
   }
 }
 
-function mockInbox(): InboxResponse {
-  const legacy = fx<InboxResponse>('inbox.json')
-  const items = legacy.items.map((item) => ({
-    ...item,
-    attention: item.attention ?? ('pending' as const),
-    delivery_effect:
-      item.delivery_effect ??
-      (item.kind === 'human_only'
-        ? ('disclosure' as const)
-        : ('blocking' as const)),
-    decision: item.decision ?? null,
-  }))
-  return {
-    ...legacy,
-    items,
-    attention_counts: {
-      pending: items.filter((item) => item.attention === 'pending').length,
-      reviewed_retained: items.filter((item) => item.attention === 'reviewed_retained').length,
-    },
-    delivery_counts: {
-      blocking: items.filter((item) => item.delivery_effect === 'blocking').length,
-      disclosure: items.filter((item) => item.delivery_effect === 'disclosure').length,
-    },
-  }
-}
-
-/** 历史 seen token 常量已随 Stage2 语义审阅退役删除；mock 不再提供已读/接受面。 */
-
 /* ------------------------------------------------------------------ Api */
 
 export const mockApi: Api = {
-  getNovels: async () => {
-    const legacy = mockNovels()
-    const data = plotFlowSample as Record<string, unknown>
-    return data['final:http:overview']
-      ? { ...legacy, novels: [await plotNovel(), ...legacy.novels] } : legacy
-  },
+  getNovels: async () => mockNovels(),
 
-  getNovel: (sid) => sid === PLOT_SAMPLE_SID ? plotNovel() :
+  getNovel: (sid) =>
     bookOnly(sid, `/novels/${sid}`, () =>
       currentMockNovel(raw<LegacyNovel>('novel_overview.json')),
     ),
 
   // 进度屏在 stage0.remove 前就要能开（书目录可能还没建）——任何 sid 都给静态样例，不走 bookOnly
-  getRunProgress: (sid) => sid === PLOT_SAMPLE_SID ? plotRead(sid, 'run', true) : later(mockRunProgress(sid)),
+  getRunProgress: (sid) => later(mockRunProgress(sid)),
   getRunMetrics: (sid, runId) => runId ? noBook(`/novels/${sid}/run/metrics?run_id=${runId}`)
-    : plotRead(sid, 'run/metrics', true),
+    : noBook(`/novels/${sid}/run/metrics`),
   previewWorkUnitGrant: async () => { throw new Error('离线样本未提供工作单元额度授权，请连接真实服务') },
   grantWorkUnit: async () => { throw new Error('离线样本未提供工作单元额度授权，请连接真实服务') },
 
@@ -1165,78 +782,15 @@ export const mockApi: Api = {
 
   // stage0 人工写面与手动 partition 已退役；mock 只提供只读展示。
 
-  getStage1: (sid) => sid === PLOT_SAMPLE_SID ? plotRead(sid, 'stage1')
-    : bookOnly(sid, `/novels/${sid}/stage1`, mockStage1View),
+  getStage1: (sid) => bookOnly(sid, `/novels/${sid}/stage1`, mockStage1View),
 
-  getReading: (sid, o) => sid === PLOT_SAMPLE_SID ? plotRead(sid, 'reading/' + o, false, 'chapter') :
-    fail(new ApiError('server', `/novels/${sid}/reading/${o}`, {
-      status: 501, message: '此历史示例使用已退役的事实蓝图。完整剧情阅读请连接当前后端。',
-      backendKind: 'MockCapabilityUnavailable',
-    })),
-
-  getBlueprintReadingWorkpack: (sid, scope = 'cross_chapter') => sid === PLOT_SAMPLE_SID
-    ? plotRead(sid, 'stage2/blueprint-reading-workpack?scope=' + encodeURIComponent(scope), true)
-    : fail(new ApiError('server', `/novels/${sid}/stage2/blueprint-reading-workpack`, {
-    status: 501,
-    message: '阅读工作包需要当前源文与 Blueprint 的完整只读材料，请连接真实后端',
-    backendKind: 'MockCapabilityUnavailable',
-  })),
-
-  getGlobal: (sid, revealSpoilers = false) => {
-    if (sid === PLOT_SAMPLE_SID) return plotRead<Stage2Global>(sid, 'stage2/global')
-      .then((value) => projectGlobalSpoilers(value, revealSpoilers))
-    const current = stage2CoreFixture().global
-    return sid === current.sid
-      ? later(projectGlobalSpoilers(current, revealSpoilers))
-      : fail(new ApiError('nosample', `/novels/${sid}/stage2/global`, { scope: 'book' }))
-  },
-
-  getCharacters: (sid) => {
-    if (sid === PLOT_SAMPLE_SID) return plotRead(sid, 'stage2/characters')
-    const current = stage2CoreFixture().characters
-    return sid === current.sid ? later(current)
-      : fail(new ApiError('nosample', `/novels/${sid}/stage2/characters`, { scope: 'book' }))
-  },
-  getAnalyzeDraft: (sid) => fail(new ApiError('nosample', `/novels/${sid}/stage2/analyze-draft`, {
-    scope: 'book', message: '冻结样本不含待修复联合草稿，请连接真实后端读取。',
-  })),
-  getStage4: (sid, o) => sid === PLOT_SAMPLE_SID ? plotRead(sid, 'stage4/' + o, false, 'chapter') :
-    fail(new ApiError('server', `/novels/${sid}/stage4/${o}`, {
-      status: 501, message: '此历史示例没有现役分场呈现与章级上下文，请连接当前后端。',
-      backendKind: 'MockCapabilityUnavailable',
-    })),
-
-  getStage5: (sid, o) => sid === PLOT_SAMPLE_SID ? plotRead(sid, 'stage5/' + o, true, 'chapter') :
-    chapterOnly(sid, o, `/novels/${sid}/stage5/${o}`, currentMockStage5),
-
-  getReview: (sid, o) => sid === PLOT_SAMPLE_SID ? plotRead(sid, 'review/' + o, true, 'chapter') :
-    chapterOnly(sid, o, `/novels/${sid}/review/${o}`, currentMockReview),
-
-  getInbox: (sid) => sid === PLOT_SAMPLE_SID ? plotRead(sid, 'inbox', true)
-    : bookOnly(sid, `/novels/${sid}/inbox`, mockInbox),
-
-  getStage7: (sid) => plotRead(sid, 'stage7', true),
-  getStage7Chapter: (sid, ordinal) => plotRead(sid, 'stage7/' + ordinal, true, 'chapter'),
-  getStage7Book: (sid) => plotRead(sid, 'stage7/book.txt', true),
-  downloadStage7Book: async (sid) => new Blob(
-    [await plotRead<string>(sid, 'stage7/book.txt', true)], { type: 'text/plain;charset=utf-8' }),
-
+  // F8c：层级复检取值面只剩 stage0/stage1，样本书上两层都没跑过（真后端答 404）
+  // —— null = 「还没跑」，不是「通过」。
   getCheck: (sid, kind: CheckKind) => {
     const path = `/novels/${sid}/check/${kind}`
-    if (sid === PLOT_SAMPLE_SID) return plotRead(sid, 'check/' + kind, true)
     if (sid !== SAMPLE_SID) return noBook(path)
-    // stage0/1 在样本书上没跑过（真后端答 404）—— null = 「还没跑」，不是「通过」。
-    if (kind === 'stage0' || kind === 'stage1') return later(null)
-    if (kind === 'stage2') return fail(new ApiError('server', path, {
-      status: 501, message: '此历史样本没有当前完整剧情蓝图，不能用旧事实检查作为本轮结论。',
-      backendKind: 'MockCapabilityUnavailable',
-    }))
-    return later(mockCheck(kind))
+    return later(null)
   },
-
-  getSampleCoverage: () => later({ sid: PLOT_SAMPLE_SID, ordinals: Object.keys(plotFlowSample)
-    .filter((key) => /^final:http:stage7\/\d+$/.test(key))
-    .map((key) => Number(key.split('/').at(-1))).sort((a, b) => a - b) }),
 
   getJobs: (sid) => later(publicJobs(sid)),
 
@@ -1287,19 +841,9 @@ export const mockApi: Api = {
     }
   },
 
-  previewJob: (req) => req.sid === PLOT_SAMPLE_SID || /^stage[67]\./.test(req.kind)
-    ? readonlyPlot('/jobs/preview') : later(mockJobPreview(req)),
+  previewJob: (req) => later(mockJobPreview(req)),
 
-  startJob: (req) => {
-    if (req.sid === PLOT_SAMPLE_SID || /^stage[67]\./.test(req.kind)) {
-      return readonlyPlot('/jobs')
-    }
-    // stage2 两份付费生成各自发起；发起即记录，供 s1 spawns 的下一相判断。
-    if (req.kind === 'stage2.global' || req.kind === 'stage2.blueprint') {
-      lsWrite(req.kind + '.issued.' + req.sid, true)
-    }
-    return later(spawn(req))
-  },
+  startJob: (req) => later(spawn(req)),
 
   /* agent 代跑：静态样例 —— 列表恒空（mock 不养 agent 进程），start 回一条 running 记录 */
   getAgentCapabilities: () => later(fx<AgentCapabilitiesResponse>('agent_capabilities.json')),
@@ -1369,18 +913,9 @@ export const mockApi: Api = {
   getAgentQueue: () =>
     later<AgentQueueView>({ running: [], pending: [], rejected: [], max_concurrent: 3 }),
 
-  getApprovals: (sid) => sid === PLOT_SAMPLE_SID ? plotRead(sid, 'approvals', true) : later(loadDoc(sid)),
-
-  // stage4 design/structure workpack、模板与 typed 决定写面已随 2026-09-15 全自动
-  // 裁决退役：mock 不再模拟这些读/写端点，Stage4 人工闸只剩只读审批投影。
-  // Stage6 整层（prepare / 三候选改选 / 定稿写面）已随 STR-06 切换退役，无对应端点。
-
-  getStage7ApprovalWorkpack: (sid) => plotRead(sid, 'approvals/stage7/workpack', true),
-  resetBook: (sid) => later(saveDoc(freshDoc(sid))),
   uploadCorpus: (file, options: UploadCorpusOptions): Promise<UploadResponse> => {
     // mock 里只有这一本真书。上传等于把它重置回第 0 步；授权只回显，不真开跑。
     void options.profiles
-    saveDoc(freshDoc(SAMPLE_SID))
     const job = finish(
       {
         kind: 'stage0.remove',
@@ -1410,7 +945,7 @@ export const mockApi: Api = {
   previewTrashRestore: () => noBook('/maintenance/trash/restore/preview'),
   applyTrashRestore: () => noBook('/maintenance/trash/restore/apply'),
 
-  /* STR-06 候选链只读监控（F7d）：录制的合成候选根响应，真实后端同形状。
+  /* STR-06 候选链只读监控：录制的合成候选根响应，真实后端同形状。
      只读——mock 不伪造任何候选链写动作（那属于 CLI 子进程，不属于服务）。 */
   getStr06Candidates: () => later(str06Fixture().candidates),
   getStr06Run: (candidate) => str06Read(candidate, 'run'),
@@ -1425,42 +960,4 @@ export const mockApi: Api = {
   getStr06Naming: (candidate) => str06Read(candidate, 'naming'),
   getStr06Delivery: (candidate) => str06Read(candidate, 'delivery'),
   getStr06Book: (candidate) => later(str06ReadBook(candidate)),
-}
-import plotReviewSample from '@/fixtures/plot_v1/review.json'
-import plotFlowSample from '@/fixtures/plot_v1/flow.json'
-/** sid 来自正式合成书，不能把历史小说的批准移植到这里。 */
-export const PLOT_SAMPLE_SID = plotFlowSample['http:overview'].sid
-export function plotFlowFixture() {
-  return structuredClone(plotFlowSample) as unknown as {
-    'http:reading/1': import('@/types/stages').ReadingResponse
-    'http:reading/2': import('@/types/stages').ReadingResponse
-    'http:reading/3': import('@/types/stages').ReadingResponse
-    'http:stage4/1': import('@/types/stages').Stage4Response
-    'http:stage4/2': import('@/types/stages').Stage4Response
-    'http:stage4/3': import('@/types/stages').Stage4Response
-    'http:stage5/1': import('@/types/stages').Stage5Response
-    'http:run': import('@/types/run').RunProgress
-    metadata: { synthetic: true; sid: string; source: string; scope: string }
-    'final:http:stage7': Stage7Response
-    'final:http:stage7/book.txt': string
-    'final:http:approvals': ApprovalDoc
-    'final:http:approvals/stage7/workpack': Stage7ApprovalWorkpack
-  }
-}
-
-/** 正式合成链录制的界面测试材料；不与历史小说或审批自动拼接。 */
-export function plotReviewFixture() {
-  return structuredClone(plotReviewSample) as unknown as {
-    rename: Stage7ApprovalWorkpack
-  }
-}
-
-/** 当前 Core 真实只读响应，独立于历史小说及完整剧情链的审批材料。 */
-import stage2CoreSample from '@/fixtures/plot_v1/core.json'
-export function stage2CoreFixture() {
-  return structuredClone(stage2CoreSample) as unknown as {
-    metadata: { synthetic: true; source: string; schemas: Record<string, number>; scope: string }
-    global: Stage2Global
-    characters: import('@/types/characters').CharacterRegistryView
-  }
 }

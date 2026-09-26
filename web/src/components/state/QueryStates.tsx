@@ -1,7 +1,6 @@
 import type { UseQueryResult } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import { isNoSample } from '@/api/errors'
-import type { ApiError } from '@/api/errors'
 import { LoadFailed, LoadingPane } from './States'
 import { MissingSample } from './MissingSample'
 
@@ -22,22 +21,14 @@ export function QueryStates<T>({
   children: (data: T) => ReactNode
   loadingLabel?: string
   loadingRows?: number
-  /** 章号屏 / 书屏：nosample 时用整屏的「没有样本」而不是一条错误框 */
-  missing?: { title: string; chapters?: number[]; ordinal?: number; path?: string }
+  /** 书屏：nosample 时用整屏的「没有样本」而不是一条错误框 */
+  missing?: { title: string }
   compactError?: boolean
 }) {
   if (q.isPending) return <LoadingPane label={loadingLabel} rows={loadingRows} />
   if (q.isError) {
     if (missing && isNoSample(q.error)) {
-      return (
-        <MissingSample
-          error={q.error as ApiError}
-          title={missing.title}
-          chapters={missing.chapters}
-          ordinal={missing.ordinal}
-          path={missing.path}
-        />
-      )
+      return <MissingSample title={missing.title} />
     }
     return <LoadFailed error={q.error} onRetry={() => void q.refetch()} compact={compactError} />
   }

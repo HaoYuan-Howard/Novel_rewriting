@@ -5,11 +5,13 @@ import type { RunMetrics } from './runMetrics'
  * src/api/mock.ts 与 src/api/endpoints.ts 里的真实实现都 `satisfies Api`，
  * 所以两条路径同型是 **tsc 强制**的，不是口头约定。
  * 组件与屏从不 fetch，只经 hooks → api.*。
+ *
+ * ⚠ STR-06 切换（F8c）：旧链读屏面（reading / blueprint-reading-workpack /
+ * global / characters / analyze-draft / stage4 / stage5 / review / inbox /
+ * stage7 / book 下载）与人工闸面（approvals / workpack / reset）整族退役，
+ * 对应方法已从本接口删除——不为已退役的端点保留第二个落点。新链只读监控面
+ * 走 `getStr06*`（`/api/str06/candidates/{candidate}/*`）。
  */
-import type {
-  ApprovalDoc,
-  Stage7ApprovalWorkpack,
-} from './approvals'
 import type {
   AgentCapabilitiesResponse,
   AgentBatchRequest,
@@ -47,21 +49,10 @@ import type {
 import type {
   CheckKind,
   CheckReport,
-  BlueprintReadingWorkpack,
-  InboxResponse,
-  ReadingResponse,
-  ReviewResponse,
   Stage0Report,
   Stage0Segments,
   Stage1View,
-  Stage2Global,
-  Stage4Response,
-  Stage5Response,
-  Stage7Response,
 } from './stages'
-
-import type { CharacterRegistryView } from './characters'
-import type { AnalyzeDraftView, AnalyzeDraftOwner } from './analyzeDraft'
 import type {
   Str06BlueprintView,
   Str06CandidateList,
@@ -91,29 +82,12 @@ export interface Api {
   // stage0 的人工编辑/批准/候选三选一与手动 partition 已随全自动裁决退役；
   // Stage0/1 面只剩只读展示，上传后由后端自动开跑。
   getStage1(sid: string): Promise<Stage1View>
-  getReading(sid: string, ordinal: number): Promise<ReadingResponse>
-  /** Stage2 语义审阅退役后的原文↔蓝图只读阅读工作包；不携带审阅或接受语义。 */
-  getBlueprintReadingWorkpack(sid: string, scope?: string): Promise<BlueprintReadingWorkpack>
-  getGlobal(sid: string, revealSpoilers?: boolean): Promise<Stage2Global>
-  getCharacters(sid: string): Promise<CharacterRegistryView>
-  getAnalyzeDraft(sid: string, owner: AnalyzeDraftOwner): Promise<AnalyzeDraftView>
-  getStage4(sid: string, ordinal: number): Promise<Stage4Response>
-  getStage5(sid: string, ordinal: number): Promise<Stage5Response>
-  getReview(sid: string, ordinal: number): Promise<ReviewResponse>
-  getInbox(sid: string): Promise<InboxResponse>
-  getStage7(sid: string): Promise<Stage7Response>
-  getStage7Chapter(sid: string, ordinal: number): Promise<Stage7Response>
-  getStage7Book(sid: string): Promise<string>
-  downloadStage7Book(sid: string): Promise<Blob>
-  /** null = 服务端说这一层还没有报告（≠ 通过）。抛 nosample = 这一份没抓在样本里。 */
-  getCheck(sid: string, kind: CheckKind): Promise<CheckReport | null>
-
   /**
-   * 样本覆盖了哪一本、哪几章 —— **只有 mock 会给**，真实模式返回 null。
-   * 有了它，「第 3 章才有数据」这条知识就留在数据层，
-   * 渲染层不会出现 `n === 3` 这种把样本边界写死进界面的代码。
+   * 层级复检报告。`null` = 服务端说这一层还没有报告（≠ 通过）。
+   * ⚠ F8c 起取值面只剩 stage0/stage1：新链 Stage2/4/5/7 的复检是节点级
+   * `--check-only`，层名不在取值面里后端答 400。
    */
-  getSampleCoverage(): Promise<{ sid: string; ordinals: number[] } | null>
+  getCheck(sid: string, kind: CheckKind): Promise<CheckReport | null>
 
   /* 作业 */
   getJobs(sid: string): Promise<JobsResponse>
@@ -153,13 +127,6 @@ export interface Api {
   /** 谁在跑、谁在排、闸开多大。排队部分只在内存，服务重启即清空。 */
   getAgentQueue(): Promise<AgentQueueView>
 
-  /* 只读审批投影 */
-  getApprovals(sid: string): Promise<ApprovalDoc>
-  // stage4/5 人工闸与通用 gate 写面已退役；Stage 页只读监控。
-  /** Stage7 人物决策 + 实际替换命中 + 残留上下文的 hash-bound 紧凑终审包。 */
-  getStage7ApprovalWorkpack(sid: string): Promise<Stage7ApprovalWorkpack>
-  resetBook(sid: string): Promise<ApprovalDoc>
-
   /**
    * 上传并自动开跑。Header 带幂等键；授权与 profiles 走 query；body 仍是文件字节。
    */
@@ -173,7 +140,7 @@ export interface Api {
   previewTrashRestore(trashId: string, expectedTitle: string): Promise<TrashRestorePlan>
   applyTrashRestore(plan: TrashRestorePlan, confirmed: boolean): Promise<TrashRestoreResult>
 
-  /* STR-06 候选链只读监控（F7d；F8 激活前与现役 `/novels` 面物理分开） */
+  /* STR-06 候选链只读监控：隔离候选根的十二条 GET，与现役 `/novels` 面物理分开 */
   getStr06Candidates(): Promise<Str06CandidateList>
   getStr06Run(candidate: string): Promise<Str06RunView>
   getStr06Characters(candidate: string): Promise<Str06CharactersView>

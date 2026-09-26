@@ -31,12 +31,14 @@ npm run build                       # web/dist，供后端同源托管
 
 ## 产品边界
 
-- 产品现役为**全自动单模式**（确定性 orchestrator 推进）。F8a 起现役链是 11 个
+- 产品现役为**全自动单模式**（确定性 orchestrator 推进）。现役链是 11 个
   `str06.` 节点（Stage2 源语义与名称结构 → Stage4 目标故事与确定性编译 → Stage5
   按章正文与 Hook → Stage7 命名与交付）；Stage6 整层与三候选改选面已退役，
-  `/n/:sid/stage6` 路由与 `approveHook` 写面随 F8b 删除。上传前确认付费/正文外发
-  授权与 profiles，并带客户端幂等键自动开跑。Stage 页只读监控，不提供任何人工
-  编辑/批准写按钮；人工逐 Stage 模式已退役。工程运维手册供维护者查故障，不是普通
+  `/n/:sid/stage6` 路由与 `approveHook` 写面随 F8b 删除。F8c 起旧链读屏
+  （read / global / stage4 / stage5 / stage7）、待办屏（inbox）与人工闸整族
+  （approvals / workpack / reset）连同路由、数据缝、类型与 mock 一并退役：
+  上传前确认付费/正文外发授权与 profiles，并带客户端幂等键自动开跑。Stage 页只读监控，
+  不提供任何人工编辑/批准写按钮；人工逐 Stage 模式已退役。工程运维手册供维护者查故障，不是普通
   用户的跑书教程。
 - **术语**：界面与类型里的 Agent / `/agent/*` 仅指**整书代跑编排**；模型侧配置文案为
   「模型执行配置」（wire `kind:"legacy"`）。不要把 Agent 写成 CLI driver / session。
@@ -52,10 +54,10 @@ npm run build                       # web/dist，供后端同源托管
 
 | 状态 | 唯一归属 |
 |---|---|
-| 产物、检查、审批、审阅工作包、作业与进度 | 后端判定，经 TanStack Query 按 sid 隔离缓存 |
-| 当前书、章号、屏幕 | React Router；换书或章不携带上一页的编辑草稿 |
+| 产物、层级复检、作业与进度 | 后端判定，经 TanStack Query 按 sid 隔离缓存 |
+| 当前书、屏 | React Router；换书不携带上一页的编辑草稿 |
 | 抽屉、待确认动作与瞬态提示 | `useChrome`；不存业务闸门 |
-| 筛选、选中项、剧透开关、编辑草稿 | 屏内状态；不冒充已持久化决定 |
+| 筛选、选中项、剧透开关 | 屏内状态；不冒充已持久化决定 |
 | 用户常用模型配置 | 当前 output base 的后端 settings；页面只持 revision 与未保存草稿，保存/清空走 CAS |
 
 - screens/components → hooks → `api.*`；普通 HTTP 只由 client 发起，SSE 由 API 适配器管理。
@@ -63,15 +65,16 @@ npm run build                       # web/dist，供后端同源托管
 - `realApi` 与 `mockApi` 共同满足 `web/src/types/api.ts` 的 `Api`。真实模式不得在缺端点时回退 mock，
   不用 localStorage、空数组或普通 404 伪装后端能力。新增字段追完整 types → endpoints → hook → 页面及 fixture。
 - `web/src/mocks/` 是冻结历史证据，字节/hash 由 `web/scripts/mock-baseline.json` 与 seams 守护，不能用新输出覆盖。
-  完整剧情链的现役模拟数据放 `web/src/fixtures/plot_v1/`；历史 Stage2 证据和旧检查退出运行包，
-  不作为新链接受依据。两类材料只由 `web/src/api/mock.ts` 接入，不让组件直接消费。
+  F8c 后只剩 7 份（目录/概览/Stage0 输入与 Stage0/1 作业样例）；`web/src/fixtures/backend_v1/` 是现役
+  数据源（enums / stage1 / agent_capabilities / str06_candidate），旧链读屏抓包与 `plot_v1` 完整剧情链
+  夹具已随旧链整层退役，恢复来源为 Git 历史。两类材料只由 `web/src/api/mock.ts` 接入，不让组件直接消费。
   模拟延迟、作业与 localStorage 覆盖仅服务离线开发，不作为真实链路证据。
 - 动作、枚举、费用、写盘语义来自后端；Provider/Model/Effort/Thinking 来自 capability，不能手抄节点数量或能力矩阵。
   `default_profiles=null` 不从数组首项代选；用户偏好与产品默认、已受理 run 分开，不保存凭据或两项授权。
   capability 的不可用/未知原因及 settings 读取失败、CAS 冲突都显式呈现；只读探针不证明账号或模型已验证。
 - 自动 Agent、普通 Job 与人工写回共用书级刷新。首次真实进度快照后复验相关读模型，并取消未返回的旧材料请求；
   后续按真实快照变化刷新，不因 elapsed 等时间噪声反复失效。run、日志与 preview 不进入读缓存失效循环。
-  invalidate 不等于已经 refetch；测试须在不重挂页面时验证产物、check、审批与 inbox 更新。
+  invalidate 不等于已经 refetch；测试须在不重挂页面时验证产物与 check 更新。
 - 作业抽屉只展示全部作业的最新概览，详情转本书进度页。日志只由专用消费者订阅；SSE 以 UTF-8 字节游标续读，
   终态先排空日志再结束。进程状态与盘面交付结论分别展示，不能由退出码或 beacon 猜“可下载”。
 
@@ -83,20 +86,16 @@ npm run build                       # web/dist，供后端同源托管
 |---|---|
 | `/` | 语料库、顺序批量上传（上传前授权并自动开跑）、逐书状态与批量代跑；维护/回收站入口。书名为打开入口，筛选在页头，卡片保持紧凑 |
 | `/settings` | 当前 output base 的默认模型执行配置与节点覆盖偏好；只消费 capability，保存/清空走 revision CAS |
-| `/n/:sid` | 重定向到 Stage0；已有产物可从左栏直达对应层 |
-| `/n/:sid/run` | 全链进度（11 个 `str06.` 节点顺序）、事件、工作单元耗时/token 与累计额度；可选择本次运行或跨运行累计，展开尝试和所属日志；节点顺序、续跑前沿、下一处理者和可用动作全部来自后端 |
+| `/n/:sid` | 重定向到 Stage0；`/n/:sid` 下只剩 run / stage0 / stage1 三个可达屏 |
+| `/n/:sid/run` | 全链进度（stage0.remove、stage1.partition 与 11 个 `str06.` 节点顺序）、事件、工作单元耗时/token 与累计额度；可选择本次运行或跨运行累计，展开尝试和所属日志；节点顺序、续跑前沿、下一处理者和可用动作全部来自后端。层级复检不在这屏：`/check` 取值面只剩 stage0/stage1，结论归那两屏的 CheckPanel |
 | `/n/:sid/stage0` | 整本剔除只读监控；完整原文默认展开。上传已自动开跑时通常不需在此发起作业 |
 | `/n/:sid/stage1` | 校验结论与切分只读展示；章节索引、切分正文和一次开篇文案，按后端诊断标出重号/缺号/倒退 |
-| `/n/:sid/read/:o` | 原文与完整剧情只读对照；展示节点、状态、约束与证据 |
-| `/n/:sid/global` | 独立人物登记与背景、世界规则、长期关系、跨章秘密的只读监控；展示证据片段、称谓身份映射揭示章、成立与披露时点 |
-| `/n/:sid/stage4/:o` | A/B 结构产物只读监控；展示主体身份、全章 retain/reconstruct、声明/复算变化及 concerns |
-| `/n/:sid/stage5/:o` | canonical 正文、材料、finding 的只读监控；`materials=null` 表示材料缺席，不画假任务书 |
-| `/n/:sid/inbox` | 全书待办与对应只读入口；不建立第二套编辑面或校验结论 |
-| `/n/:sid/stage7`、`/n/:sid/stage7/:o` | 改名表、漏网候选、成书状态与逐章替换对照（只读；残留采纳由流水线自动完成） |
-| `/str06/:candidate` | STR-06 链只读监控（F7d 上线；F8a 契约翻转后即现役链盘面）：workflow 状态、节点盘面事实、ledger 成本、Characters／Blueprint／Design／WriterBookIR 导航、章正文与章回执、Hook、NameMap 与成书 manifest。不进左导航、无 check 面板、无写按钮 |
+| `/str06/:candidate` | STR-06 链只读监控：workflow 状态、节点盘面事实、ledger 成本、Characters／Blueprint／Design／WriterBookIR 导航、章正文与章回执、Hook、NameMap 与成书 manifest，以及成书全文下载。不进左导航、无 check 面板、无写按钮。真实书的 run 目录里也有 `runtime/candidate_workflow.json`，书名 sid 同样可作为 candidate 名监控真实跑书 |
 
-`stage5` 无章号时转第 1 章，非法章序也走同一守卫。旧 `review/:o` 与 `check` 仅重定向至 `stage5/:o`
-和 `inbox`；不恢复独立 review/check 屏或 Stage3。
+F8c 起旧链读屏（`read/:o`、`global`、`stage4/:o`、`stage5/:o`、`stage7`、`stage7/:o`）与待办屏
+（`inbox`）整层退役，老路由重定向一并取消：`review/:o → stage5/:o` 与 `check → inbox` 的目标屏都已删，
+未匹配路径由兜底 `* → /` 处理，不保留指向空气的重定向。新链 Stage2/4/5/7 的只读监控统一在
+`/str06/:candidate`，不在 `/n/:sid` 下另开屏。
 
 ## 动作与审阅交互
 
@@ -114,11 +113,14 @@ npm run build                       # web/dist，供后端同源托管
   暂停、恢复、熄火与追加额度分别走对应后端入口；不再提供「按原配置继续」的 human-gate 续跑对话框。
 - Stage 页只读监控。不要在 Stage 屏恢复人工编辑、批准闸门、补录验收链或改稿提交按钮；
   Stage6 三候选改选面已随 Stage6 整层退役（F8a），`approveHook` 写面与前端 Stage6 消费面
-  （屏、路由、端点、query key、mock 与 fixture）已随 F8b 一并删除。
+  （屏、路由、端点、query key、mock 与 fixture）已随 F8b 一并删除；F8c 起旧链读屏与人工闸
+  整族（approvals / workpack / reset）连同端点、query key、类型与 mock 全部退役，新链没有
+  待办面也没有第二套编辑面。
   现役判据（Guard M1–M6、章级机械验、命名残留、交付回执链）的结论由后端公开，
   不因来自 CLI/Agent 就要求再补 HTTP 盖章。
-- Stage7 下载入口消费后端 delivery；文件存在不等于可交付。运行统计区分运行历时、模型活跃区间并集
-  和尝试累计耗时；只有部分已知时展示小计与缺失分母。缓存、历史采用与实际网络调用分开，reasoning 不重复加总。
+- 成书下载入口消费 `/api/str06/candidates/{candidate}/book`；文件存在不等于可交付。
+  运行统计区分运行历时、模型活跃区间并集和尝试累计耗时；只有部分已知时展示小计与缺失分母。
+  缓存、历史采用与实际网络调用分开，reasoning 不重复加总。
 
 ## UI 硬规则
 
@@ -137,11 +139,11 @@ npm run build                       # web/dist，供后端同源托管
 | U-08 | 免费写盘有明确标识；缺 writes_disk 显示未标注，不能当作只读 |
 | U-09 | 确认框呈现服务端完整命令；取不到有效 preview 就不能执行，专用编辑/批量输入也不前端拼 argv |
 | U-10 | 不显示预估费用或预估调用次数；实际用量与累计额度单独展示 |
-| U-11 | 不重算 badge/passed/severity/freshness/预算阈值/结构变化/closure；后端不给结论就显示原始读数或 unknown，流程图也不补审批结论 |
+| U-11 | 不重算 badge/passed/severity/freshness/预算阈值/结构变化；后端不给结论就显示原始读数或 unknown，流程图也不补审批结论 |
 | U-12 | 不用中文文案正则推导章节、修复路由或状态；证据定位用结构化材料，文本匹配失败明确说未命中 |
-| U-13 | 不按 Python 字符下标在 JavaScript 切正文；消费服务端片段。`HighlightedText` 不接受 start/end 偏移 |
+| U-13 | 不按 Python 字符下标在 JavaScript 切正文；消费服务端片段。任何高亮组件都不接受 start/end 偏移 |
 | U-14 | 中文优先字体，正文行高约 2.05～2.15、不 justify，段落靠间距，并排两侧共享可读列宽 |
-| U-15 | 对照默认并排，不用 tab 隐藏另一侧；`ComparePanes` 长文主滚动/结构侧栏，`CompareRows` 用已验证配对行等高，不做比例滚动同步 |
+| U-15 | 对照默认并排，不用 tab 隐藏另一侧；长文主滚动/结构侧栏，配对行等高，不做比例滚动同步 |
 | U-16 | 未对齐区域有可见边界与“对应未验证”文字，保留覆盖范围和回源，不能用空白暗示已对齐 |
 | U-17 | 每屏具备 loading/error/not-run/normal；not-run 给下一步，错误按 kind 区分并分别渲染 message/hint，空 hint 不占位。单屏崩溃也明确显示 |
 | U-18 | 不发明百分比、健康分或无依据建议；只展示有来源的状态、计数与读数 |
@@ -150,4 +152,5 @@ npm run build                       # web/dist，供后端同源托管
 
 状态色只从 `web/src/constants/vocabulary.ts` 取，其余颜色使用 `web/src/index.css` 的样式令牌。
 `npm run seams` 检查数据访问、颜色字面量、mock/fixture 入口和冻结样本；不另维护“逐条已通过”表。
-全局左右键只在带章号屏翻章，Esc 先关确认框再关抽屉；输入控件、contentEditable 和 Ctrl/Alt/Meta 组合键不劫持。
+Esc 先关确认框再关抽屉；输入控件、contentEditable 和 Ctrl/Alt/Meta 组合键不劫持。
+（F8c 后 `/n/:sid` 下没有带章号的屏，全局左右键翻章随旧链读屏一起退役。）

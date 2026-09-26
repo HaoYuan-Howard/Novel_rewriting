@@ -1,47 +1,65 @@
 import { api } from '@/api/endpoints'
 import { mockApi, SAMPLE_SID } from '@/api/mock'
-import { qk } from '@/api/queryKeys'
 import { JOB } from '@/constants/vocabulary'
-import { CHECK_KINDS, type CheckReport } from '@/types/stages'
-import { act, fireEvent, screen, waitFor } from '@testing-library/react'
+import { fireEvent, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { renderRoute } from '@/test/render'
 import { READY_PROFILES } from '@/test/agent'
+import type { UsageSummary } from '@/types/runMetrics'
 import { RunScreen } from './RunScreen'
 
+/** 全零读数：统计面板只验形状，不在这里重放计费语义。 */
+function emptyUsage(): UsageSummary {
+  return {
+    observed_rows: 0,
+    conflicting_rows: 0,
+    wire_calls: 0,
+    cached_calls: 0,
+    unknown_cache_calls: 0,
+    failed_calls: 0,
+    unknown_outcome_calls: 0,
+    missing_usage_calls: 0,
+    missing_latency_calls: 0,
+    known_prompt_tokens: 0,
+    known_completion_tokens: 0,
+    prompt_tokens: null,
+    completion_tokens: null,
+    total_tokens: null,
+    reasoning_tokens: null,
+    known_model_time_ms: 0,
+    model_time_ms: null,
+    known_active_time_ms: 0,
+    active_time_ms: null,
+    missing_interval_calls: 0,
+  }
+}
+
 beforeEach(() => {
-  vi.spyOn(api, 'getNovel').mockImplementation(async (sid) => {
-    const novel = await mockApi.getNovel(sid)
-    return {
-      ...novel,
-      stage_reviewable: Object.fromEntries(CHECK_KINDS.map((kind) => [kind, true])),
-    }
-  })
+  vi.spyOn(api, 'getNovel').mockImplementation(async (sid) => mockApi.getNovel(sid))
 })
 
 describe('RunScreen 交付终验', () => {
-  it('显示后端当前审批与恢复，历史工作单元不决定下一角色', async () => {
+  it('显示后端当前恢复与续跑前沿，历史工作单元不决定下一角色', async () => {
     const run = await mockApi.getRunProgress(SAMPLE_SID)
     vi.spyOn(api, 'getRunProgress').mockResolvedValue({
       ...run,
       resume_frontier: {
         ...run.resume_frontier, next_handler: 'human',
         review_states: [
-          { node: 'stage2.global', scope: 'book', state: 'accepted' },
-          { node: 'stage2.blueprint', scope: 'book', state: 'uncertain' },
+          { node: 'str06.stage2.source', scope: 'book', state: 'accepted' },
+          { node: 'str06.stage2.names', scope: 'book', state: 'uncertain' },
         ],
       },
       current_recovery_actions: ['book: replay_response'],
-      work_units: [{ unit_id: 'old', node: 'stage2.blueprint', role: 'executor', scope: 'chapter:1',
+      work_units: [{ unit_id: 'old', node: 'str06.stage2.names', role: 'executor', scope: 'chapter:1',
         content_used: 1, content_limit: 4, content_remaining: 3, state: 'adopted',
         latest_request_sha256: null, latest_response_sha256: null, recovery_action: null }],
     })
-    vi.spyOn(api, 'getCheck').mockResolvedValue(null)
     vi.spyOn(api, 'getAgentRuns').mockResolvedValue({ runs: [] })
     renderRoute(<RunScreen />, `/n/${SAMPLE_SID}/run`)
     expect(await screen.findByText('下一处理者：人工（只读监控面上的例外动作）')).toBeVisible()
-    expect(screen.getByText('stage2.global · book：accepted')).toBeVisible()
-    expect(screen.getByText('stage2.blueprint · book：uncertain')).toBeVisible()
+    expect(screen.getByText('str06.stage2.source · book：accepted')).toBeVisible()
+    expect(screen.getByText('str06.stage2.names · book：uncertain')).toBeVisible()
     expect(screen.getByText('当前恢复：book: replay_response')).toBeVisible()
   })
 
@@ -50,7 +68,7 @@ describe('RunScreen 交付终验', () => {
     vi.spyOn(api, 'getRunProgress').mockResolvedValue({
       ...run,
       work_units: [{
-        unit_id: 'u1', node: 'stage2.blueprint', role: 'commander', scope: 'book',
+        unit_id: 'u1', node: 'str06.stage2.names', role: 'executor', scope: 'book',
         content_used: 2, content_limit: 4, content_remaining: 1,
         state: 'response_saved', latest_request_sha256: null,
         latest_response_sha256: 'a'.repeat(64), recovery_action: 'replay_saved_response',
@@ -61,7 +79,6 @@ describe('RunScreen 交付终验', () => {
         review: { subject_sha256: 'b'.repeat(64), total: 19, pending: 1, decision_inherited: 18 },
       }],
     })
-    vi.spyOn(api, 'getCheck').mockResolvedValue(null)
     vi.spyOn(api, 'getAgentRuns').mockResolvedValue({ runs: [] })
     renderRoute(<RunScreen />, `/n/${SAMPLE_SID}/run`)
     expect(await screen.findByText('2 / 4，剩余 1')).toBeInTheDocument()
@@ -94,7 +111,6 @@ describe('RunScreen 交付终验', () => {
     vi.spyOn(api, 'getRunProgress').mockResolvedValue({
       ...run, work_units: null, work_units_unavailable_reason: '处理来源账损坏，保持未知',
     })
-    vi.spyOn(api, 'getCheck').mockResolvedValue(null)
     let reads = 0
     const getRuns = vi.spyOn(api, 'getAgentRuns').mockImplementation(async () => {
       reads += 1
@@ -147,7 +163,6 @@ describe('RunScreen 交付终验', () => {
       allowed_controls: ['pause', 'stop'] as const,
     }
     vi.spyOn(api, 'getRunProgress').mockResolvedValue(run)
-    vi.spyOn(api, 'getCheck').mockResolvedValue(null)
     let reads = 0
     const getRuns = vi.spyOn(api, 'getAgentRuns').mockImplementation(async () => {
       reads += 1
@@ -185,11 +200,11 @@ describe('RunScreen 交付终验', () => {
       paid: false,
       writes: 'approval',
       next_handler: 'human',
+      review_states: null,
       verified_skipped_nodes: [],
       verified_skipped_count: 0,
     }
     vi.spyOn(api, 'getRunProgress').mockResolvedValue(run)
-    vi.spyOn(api, 'getCheck').mockResolvedValue(null)
     vi.spyOn(api, 'getAgentRuns').mockResolvedValue({
       runs: [{
         run_id: 'run-1',
@@ -249,7 +264,6 @@ describe('RunScreen 交付终验', () => {
   it('exit70 仍显示 failed，不被安全停点状态洗白', async () => {
     const run = await mockApi.getRunProgress(SAMPLE_SID)
     vi.spyOn(api, 'getRunProgress').mockResolvedValue(run)
-    vi.spyOn(api, 'getCheck').mockResolvedValue(null)
     vi.spyOn(api, 'getAgentRuns').mockResolvedValue({
       runs: [{
         run_id: 'run-crashed',
@@ -291,7 +305,6 @@ describe('RunScreen 交付终验', () => {
     async (exitOrigin) => {
       const run = await mockApi.getRunProgress(SAMPLE_SID)
       vi.spyOn(api, 'getRunProgress').mockResolvedValue(run)
-      vi.spyOn(api, 'getCheck').mockResolvedValue(null)
       vi.spyOn(api, 'getAgentRuns').mockResolvedValue({
         runs: [{
           run_id: 'run-external-exit-one',
@@ -345,7 +358,6 @@ describe('RunScreen 交付终验', () => {
   it('展示每次运行已冻结的默认/override 精确配置', async () => {
     const run = await mockApi.getRunProgress(SAMPLE_SID)
     vi.spyOn(api, 'getRunProgress').mockResolvedValue(run)
-    vi.spyOn(api, 'getCheck').mockResolvedValue(null)
     vi.spyOn(api, 'getAgentRuns').mockResolvedValue({
       runs: [{
         run_id: 'run-profile-history',
@@ -399,34 +411,13 @@ describe('RunScreen 交付终验', () => {
   })
 })
 
-describe('RunScreen check composition', () => {
-  it('只请求后端标记为已有可审产物的阶段', async () => {
-    const run = await mockApi.getRunProgress(SAMPLE_SID)
-    const novel = await mockApi.getNovel(SAMPLE_SID)
-    vi.mocked(api.getNovel).mockResolvedValue({
-      ...novel,
-      stage_reviewable: Object.fromEntries(
-        CHECK_KINDS.map((kind) => [kind, kind === 'stage0']),
-      ),
-    })
-    vi.spyOn(api, 'getRunProgress').mockResolvedValue(run)
-    vi.spyOn(api, 'getAgentRuns').mockResolvedValue({ runs: [] })
-    const getCheck = vi.spyOn(api, 'getCheck').mockResolvedValue(null)
-
-    renderRoute(<RunScreen />, `/n/${SAMPLE_SID}/run`)
-
-    await waitFor(() => expect(getCheck).toHaveBeenCalledTimes(1))
-    expect(getCheck).toHaveBeenCalledWith(SAMPLE_SID, 'stage0')
-    expect(getCheck).not.toHaveBeenCalledWith(SAMPLE_SID, 'stage5')
-    expect(screen.getAllByText('· 尚不可检查')).toHaveLength(5)
-  })
-
+describe('RunScreen 节点图与完成度', () => {
   it('默认折叠 operator 已确认无需重跑的前缀，并显示真实续跑处理者', async () => {
     const run = await mockApi.getRunProgress(SAMPLE_SID)
-    const next = run.steps.find((step) => step.node === 'stage4.context')
-    const running = run.steps.find((step) => step.node === 'stage4.plan')
-    if (!next) throw new Error('mock pipeline 缺 stage4.context')
-    if (!running) throw new Error('mock pipeline 缺 stage4.plan')
+    const next = run.steps.find((step) => step.node === 'str06.stage2.names')
+    const running = run.steps.find((step) => step.node === 'str06.stage2.source')
+    if (!next) throw new Error('mock pipeline 缺 str06.stage2.names')
+    if (!running) throw new Error('mock pipeline 缺 str06.stage2.source')
     running.beacon = 'running'
     const skipped = run.steps
       .filter((step) => step.seq < next.seq && step.node !== running.node)
@@ -437,24 +428,24 @@ describe('RunScreen check composition', () => {
       seq: next.seq,
       label: next.label,
       resume_verdict: 'run',
-      why: 'Stage4B 当前决定要求回到 A 形成新的 typed 修订决定',
-      waiting_on: 'approval:stage4-structure-replan',
+      why: '同指纹熔断不重购，等待新的授权',
+      waiting_on: null,
       paid: false,
       writes: 'artifact',
-      next_handler: 'human',
+      next_handler: 'executor',
+      review_states: null,
       verified_skipped_nodes: skipped,
       verified_skipped_count: skipped.length,
     }
     vi.spyOn(api, 'getRunProgress').mockResolvedValue(run)
     vi.spyOn(api, 'getAgentRuns').mockResolvedValue({ runs: [] })
-    vi.spyOn(api, 'getCheck').mockResolvedValue(null)
 
     renderRoute(<RunScreen />, `/n/${SAMPLE_SID}/run`)
 
     const frontier = await screen.findByTestId('resume-frontier')
-    expect(frontier).toHaveTextContent(/下一节点：stage4 写作上下文组装/)
-    expect(frontier).toHaveTextContent('当前执行：stage4 重构计划（stage4.plan）')
-    expect(frontier).toHaveTextContent('下一处理者：人工（只读监控面上的例外动作）')
+    expect(frontier).toHaveTextContent('下一节点：Stage2 源名称结构窄调用并发布 Characters v4')
+    expect(frontier).toHaveTextContent('当前执行：Stage2 源语义抽取与确定性 Blueprint 编译（str06.stage2.source）')
+    expect(frontier).toHaveTextContent('下一处理者：Executor（执行既有决定）')
     expect(screen.getByRole('button', { name: '跳到下一节点' })).toBeEnabled()
     expect(screen.queryAllByTitle('stage0.remove')).toHaveLength(0)
 
@@ -482,7 +473,6 @@ describe('RunScreen check composition', () => {
     }]
     vi.spyOn(api, 'getRunProgress').mockResolvedValue(run)
     vi.spyOn(api, 'getAgentRuns').mockResolvedValue({ runs: [] })
-    vi.spyOn(api, 'getCheck').mockResolvedValue(null)
 
     renderRoute(<RunScreen />, `/n/${SAMPLE_SID}/run`)
 
@@ -514,7 +504,6 @@ describe('RunScreen check composition', () => {
     }]
     vi.spyOn(api, 'getRunProgress').mockResolvedValue(run)
     vi.spyOn(api, 'getAgentRuns').mockResolvedValue({ runs: [] })
-    vi.spyOn(api, 'getCheck').mockResolvedValue(null)
 
     renderRoute(<RunScreen />, `/n/${SAMPLE_SID}/run`)
 
@@ -523,108 +512,31 @@ describe('RunScreen check composition', () => {
     expect(screen.queryByText('failed 失败')).not.toBeInTheDocument()
   })
 
-  it('explains amber with the exact server-provided unver reason', async () => {
+  it('不再自建层级校验面板：/check 取值面只剩 stage0/stage1', async () => {
     const run = await mockApi.getRunProgress(SAMPLE_SID)
-    const base = await mockApi.getCheck(SAMPLE_SID, 'stage5')
-    if (!base || base.rules.length === 0) throw new Error('stage5 mock report is incomplete')
-    const report: CheckReport = {
-      ...base,
-      badge: 'amber',
-      passed: true,
-      rules: [{
-        ...base.rules[0],
-        status: 'unver',
-        why: '语义需要人工阅读确认',
-      }],
-      counts: { ok: 0, hit: 0, unver: 1, skipped: 0 },
-    }
     vi.spyOn(api, 'getRunProgress').mockResolvedValue(run)
     vi.spyOn(api, 'getAgentRuns').mockResolvedValue({ runs: [] })
-    vi.spyOn(api, 'getCheck').mockImplementation(async (_sid, kind) =>
-      kind === 'stage0' ? report : null,
-    )
+    vi.spyOn(api, 'getRunMetrics').mockResolvedValue({
+      sid: SAMPLE_SID,
+      run_id: null,
+      runs: [],
+      usage: emptyUsage(),
+      units: [],
+      unassigned_rows: 0,
+      unassigned_usage: emptyUsage(),
+      issues: [],
+    })
+    const getCheck = vi.spyOn(api, 'getCheck').mockResolvedValue(null)
 
     renderRoute(<RunScreen />, `/n/${SAMPLE_SID}/run`)
 
-    expect(await screen.findByText('通过 · 有未验证项')).toBeVisible()
-    const help = screen.getByRole('button', { name: '查看 1 项未验证原因' })
-    help.focus()
-    expect(help).toHaveFocus()
-    fireEvent.click(help)
-    expect(help).toHaveAttribute('aria-expanded', 'true')
-    const explanation = screen.getByRole('note')
-    expect(help).toHaveAttribute('aria-controls', explanation.id)
-    expect(explanation).toHaveTextContent('语义需要人工阅读确认')
-  })
-
-  it('shows authoritative badges and counts while unavailable checks stay unknown', async () => {
-    const run = await mockApi.getRunProgress(SAMPLE_SID)
-    const base = await mockApi.getCheck(SAMPLE_SID, 'stage5')
-    if (!base || base.rules.length < 2) throw new Error('stage5 mock report is incomplete')
-
-    const report: CheckReport = {
-      ...base,
-      badge: 'fail',
-      passed: false,
-      rules: [
-        { ...base.rules[0], sev: 'hard', status: 'hit' },
-        { ...base.rules[1], sev: 'info', status: 'hit' },
-      ],
-      counts: { ok: 0, hit: 2, unver: 2, skipped: 1 },
-    }
-    vi.spyOn(api, 'getRunProgress').mockResolvedValue(run)
-    vi.spyOn(api, 'getAgentRuns').mockResolvedValue({ runs: [] })
-    vi.spyOn(api, 'getCheck').mockImplementation(async (_sid, kind) =>
-      kind === 'stage1' ? null : report,
-    )
-
-    renderRoute(<RunScreen />, `/n/${SAMPLE_SID}/run`)
-
-    expect(await screen.findAllByText('有阻断')).toHaveLength(5)
-    expect(screen.getAllByText('hard 1 · info 1 · unver 3')).toHaveLength(5)
-    expect(screen.getByText('? 校验未知')).toBeInTheDocument()
-    expect(screen.getByText(/badge 与计数来自各层 CheckReport/)).toBeInTheDocument()
-  })
-
-  it('keeps the previous report while the current check refreshes; failure stays unknown', async () => {
-    const run = await mockApi.getRunProgress(SAMPLE_SID)
-    const base = await mockApi.getCheck(SAMPLE_SID, 'stage5')
-    if (!base) throw new Error('stage5 mock report is missing')
-    const report: CheckReport = { ...base, badge: 'pass', passed: true }
-    let stage1Calls = 0
-    let rejectRefresh!: (reason?: unknown) => void
-    const refresh = new Promise<CheckReport | null>((_resolve, reject) => {
-      rejectRefresh = reject
-    })
-
-    vi.spyOn(api, 'getRunProgress').mockResolvedValue(run)
-    vi.spyOn(api, 'getAgentRuns').mockResolvedValue({ runs: [] })
-    vi.spyOn(api, 'getCheck').mockImplementation(async (_sid, kind) => {
-      if (kind !== 'stage1') return report
-      stage1Calls += 1
-      return stage1Calls === 1 ? report : refresh
-    })
-
-    const { queryClient } = renderRoute(<RunScreen />, `/n/${SAMPLE_SID}/run`)
-    expect(await screen.findAllByText('通过')).toHaveLength(6)
-
-    act(() => {
-      void queryClient.invalidateQueries({ queryKey: qk.check(SAMPLE_SID, 'stage1') })
-    })
-    // refetch 期间 placeholderData 沿用上一份——不闪成「校验未知」（U-00：未知 ≠ 没问题）
-    await waitFor(() => {
-      expect(queryClient.getQueryState(qk.check(SAMPLE_SID, 'stage1'))?.fetchStatus).toBe(
-        'fetching',
-      )
-    })
-    expect(screen.queryByText('? 校验未知')).not.toBeInTheDocument()
-    expect(screen.getAllByText('通过')).toHaveLength(6)
-
-    // 这次是真的取不到了——才显示未知
-    act(() => rejectRefresh(new Error('current check unavailable')))
-    await waitFor(() => {
-      expect(screen.getByText('? 校验未知')).toBeInTheDocument()
-      expect(screen.getAllByText('通过')).toHaveLength(5)
-    })
+    // 层级复检归 Stage0/Stage1 两屏的 CheckPanel；进度屏不再逐层打 /check。
+    expect(await screen.findByTestId('resume-frontier')).toBeVisible()
+    expect(await screen.findByText('各层产物完成度')).toBeVisible()
+    expect(getCheck).not.toHaveBeenCalled()
+    expect(screen.queryByText('各层产物完成度与校验')).not.toBeInTheDocument()
+    expect(screen.queryByText(/badge 与计数来自各层 CheckReport/)).not.toBeInTheDocument()
+    // 旧链蓝图进度面板随该字段与旧链视图一起退役，屏上不再有第二个生成进度落点。
+    expect(screen.queryByLabelText('蓝图生成进度')).not.toBeInTheDocument()
   })
 })
