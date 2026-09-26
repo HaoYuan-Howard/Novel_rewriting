@@ -627,6 +627,22 @@ F5a–F5d 已闭合按章成文的契约、引擎与免费验证，F5e 已完成
       （不沿用旧购买），端到端重跑用新独立根；章回执绑定协议版本 v2 与 policy v2 ⇒
       旧已购正文/Preserve 结论在新输入下不复用。**本批未跑任何真实 LLM**；付费重跑与
       用户验收见下一条。
+  - **2026-09-26 质量改进后首轮付费验收：未通过，停在 Stage2.source/ch05**。
+    基线 `d37c212a`；用户明确授权《夫君的报恩》全文及本轮产物外发至 DeepSeek 官方
+    API，配置 `deepseek-flash/high`。独立根 `outputs/str06_quality_paid_20260926` 经
+    正式 CLI 免费生成 Stage0/1（11 章、288 码点章前文字），实购 book＋ch01–05 共
+    **6 次，29228 prompt＋98059 completion tokens**；全部 finish=stop，无 unknown
+    请求。首次响应直接编译 **4/6**：book 两处 `from_chapter=0` 已免费 owner patch
+    为 1 并保留原账关联；ch05 三处 recipients 的 `char_` 前缀错误复现并明确阻断。
+    **语义实证**：ch03 把丈夫的行为归给表弟并生成错误 intimacy 关系，该状态已进入
+    ch04 实际请求；女主自述又转成未限定为说辞的顺从状态；ch04 床下现身缺确认 reveal；
+    ch05 event 已从衣柜出来但 whereabouts 仍写藏于衣柜。免费前缀复算还发现新 fold
+    四条“初始已知又被告知”读数仅比较共享 e00，没有核对知情者或命题，本样本均属误报。
+    H4 未达标；H1/H2/H3、其余引子样本和成书质量未验证。未继续下游付费，正式完整
+    Blueprint 尚未发布，未生成 Stage4–7；未修改生产代码。原响应、修订链、原文对照与
+    成本证据见该根 `付费验收报告_20260926.md` 和 `acceptance/verification.json`。
+    本轮为 CLI 节点验收，未冒称 HTTP/UI 全链或用户成书验收完成；全量回归仍按前述
+    用户裁决留待合入前。
   - **质量改进后的端到端重跑与用户验收**（付费与正文外发分别授权；每臂独立根；stage0/1
     由 CLI 从源文件免费生成；开跑前重新报价）：分两段——段一 `str06.stage2.source` →
     `str06.stage4.compile`（本书参照 F9 前 14 次实付口径），段二 Hook、正文 11 章、naming、
