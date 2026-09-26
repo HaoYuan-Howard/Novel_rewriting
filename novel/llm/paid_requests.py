@@ -429,8 +429,10 @@ class PaidRequestSession:
           字节一致（采用链可验），原购买根的逐请求账未持久（F2b 批次证据），
           成本只到批次口径；
         · 都没有（`unverified`）：仅形状校验，采用记录如实标注。
-        `allow_patch` 接受 owner patch 链：wire 与已购内容不一致但源根采用记录
-        字节一致，且调用方已核验 patch note 的 base 身份（修订来源保留）。
+        `allow_patch` 接受 owner patch 链：wire 与已购内容不一致，但调用方已核验
+        patch note 的 base 身份与当前请求相等（修订来源保留），且采纳记录缺失或
+        与之相符。采纳记录缺失即同根首次补丁引导——本次通过的补丁即建档记录；
+        已存在的采纳记录须字节相符，不符即为不同的补丁版本，仍拒。
         """
         wire_sha = Str06Repository.file_sha256(wire_path)
         for root in self.adopt_roots:
@@ -466,7 +468,8 @@ class PaidRequestSession:
                             'completion_tokens': original[0].get('completion_tokens'),
                             'reasoning_tokens': original[0].get('reasoning_tokens')}}
             recorded = self._adopt_record(root, owner)
-            if allow_patch and recorded is not None and recorded.get('sha256') == wire_sha:
+            if allow_patch and (recorded is None
+                                or recorded.get('sha256') == wire_sha):
                 return {'mode': 'historical-adoption', 'cost_link': 'ledger-row',
                         'owner_patch': True,
                         'source_root': str(root.resolve()),

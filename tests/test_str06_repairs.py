@@ -244,6 +244,56 @@ def test_paid_response_durable_before_validation_and_reused(tmp_path):
         session2.ask('bind', replace(request, user='changed'), lambda _: [])
 
 
+def test_same_root_owner_patch_bootstraps_and_version_mismatch_refuses(tmp_path):
+    """F-4：同根 owner patch 首次采用可引导（adopt 记录缺失即本次建档），
+    非补丁通路的改写 wire 仍拒；补丁版本不符（已建档的另一 sha）也拒。
+
+    真实验证轮实证：ch04 补丁 wire 编译干净、patch note 基线身份相符，但
+    adopt_ch04.json 尚未存在（旧逻辑要求它预存在）而被拒——同根自补丁永远
+    死循环。安全边界不变：已购行身份／成本仍逐项核验，编译仍先过闸。
+    """
+    from novel.llm.paid_requests import PaidRequestSession, digest
+    from novel.llm.ledger import CostLedger, ledger_path
+    from novel.store import Str06Repository
+
+    book = tmp_path / 'book'
+    repo = Str06Repository(book)
+    ledger = CostLedger(path=ledger_path(tmp_path))
+    repo.attach_context(make_context(book, ledger=ledger))
+    identity, attempt = 'a' * 64, 'b' * 32
+    content = json.dumps({'beats': [{'beat_id': 'b04_01'}]}, ensure_ascii=False)
+    repo.write(f'runtime/request_{identity}.json', {
+        'identity': identity, 'status': 'answered', 'attempt_id': attempt,
+        'content': content, 'content_sha256': digest(content)})
+    ledger.record(node='str06.stage2.source', sid='book', model='fake',
+                  request_model='fake', code='str06-rc4', cached=False,
+                  cache_policy='request-identity', purpose='ch04',
+                  attempt_id=attempt, request_fingerprint=identity,
+                  outcome='ok', prompt_tokens=10, completion_tokens=20)
+
+    class Transport:
+        def send(self, request):
+            raise AssertionError('本测试不得触达 transport')
+
+    session = PaidRequestSession(repo, ledger, Transport(), yes=True,
+                                 allow_source_export=True, provider='fake',
+                                 sid='book', adopt_roots=(book,))
+    wire = tmp_path / 'ch04_wire.json'
+    wire.write_text(json.dumps({'beats': [{'beat_id': 'b04_01', 'patched': True}]},
+                               ensure_ascii=False), encoding='utf-8')
+    # 绿：同根首次补丁引导——记录缺失，身份／成本／编译三道闸已过。
+    bound = session.bind_wire_adoption('ch04', identity, wire, allow_patch=True)
+    assert bound['mode'] == 'historical-adoption' and bound['owner_patch'] is True
+    assert bound['attempt_id'] == attempt and bound['cost_link'] == 'ledger-row'
+    # 红 1：非补丁通路的改写 wire 仍拒。
+    with pytest.raises(ValueError, match='无匹配的'):
+        session.bind_wire_adoption('ch04', identity, wire, allow_patch=False)
+    # 红 2：补丁版本不符（已建档的另一 sha）仍拒。
+    repo.write('runtime/adopt_ch04.json', {'owner': 'ch04', 'sha256': 'f' * 64})
+    with pytest.raises(ValueError, match='无匹配的'):
+        session.bind_wire_adoption('ch04', identity, wire, allow_patch=True)
+
+
 def test_target_rc1_missing_semantics_is_rejected():
     from novel.stages.stage4.design import assemble_body_design
     from tests.test_str06_target import _design_wire
