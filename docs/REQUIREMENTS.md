@@ -752,6 +752,64 @@ F5a–F5d 已闭合按章成文的契约、引擎与免费验证，F5e 已完成
     · **未决**：ch05–ch11 未购；ch04 owner patch 未落地；离线语义核读未做，
     生产语义保持 `unver`；ch04 两类模型错误（嵌套位置、键作用域）是否 prompt 再收紧，
     待 patch 落地后评估，不并入本提交。
+    **2026-09-26 工程验证与离线语义验收（ch01–ch04 分期，免费）**：两项验证按执行
+    计划第六节分项报告，**不合成总体通过率**；真实验收未完成（ch05–ch11 未购、
+    ch03–ch05 三重复未采样、段一端到端未跑），批 3 勾选不开。
+    · **工程验证（16 行）**：`tests/ -k "str06 or layering or context_probe"` 共
+    433 项零失败零跳过（此前同选择 422 项 1 失败——探针测试未入桶，已修并提交
+    6fc682c1）。逐行证据：行 1（章请求上下文）除测试（`test_arm_a_is_byte_identical_to_production_request`／`test_arm_b_only_inserts_prior_text_before_chapter_marker`／
+    `test_changed_hook_copy_refuses_the_old_root_and_changes_requests`）外，补真实书
+    核查——ch03 实际请求含【前文原文】（只读、截至第 2 章末、不带证据 id）、快照逐条
+    带来源与正式 ID 登记（k01／loop01）、要求 7「以正文原文为准……按正文记录」在场，
+    且无第 4 章及以后正文；行 2–3（场景跨章延续／同拍位置变化）
+    `test_scene_segmentation_new_continue_and_cross_chapter`／
+    `test_scene_scope_expires_at_new_boundary`；行 4–5（事实/认知层、知情揭示）
+    `test_identity_stable_constraints_come_only_from_the_fact_layer`＋fold 对账；
+    行 6（可见性）`test_fold_reports_concealed_unrevealed_at_book_end`；行 7（悬念）
+    `test_loops_open_once_and_close_with_resolution`／
+    `test_loop_question_text_cannot_be_rewritten_at_close`；行 8（participants）
+    `test_chapter_compiler_rejects_unknown_participant_and_dual_owner`；行 9（空转读数）
+    `test_fold_counts_empty_transition_beats_per_chapter`；行 10（事件粒度）iterative
+    标记进 Preserve 材料由 target 测试对账；行 11（未知状态）
+    `test_fold_keeps_unset_and_unknown_distinct_from_never_established`；行 12（称谓锚点）
+    `test_from_chapter_is_derived_from_the_evidence_anchor`；行 13（believes）
+    `test_believes_knowledge_enters_writer_view_without_becoming_world_fact`；
+    行 14（写手投影）`test_pending_reader_confirmations_are_derived_per_scene`／
+    `test_pending_confirmations_render_into_the_writer_packet`；行 15（版本恢复）
+    `test_paid_response_durable_before_validation_and_reused`／
+    `test_failed_request_is_preserved_and_never_automatically_rebought`；行 16（实际
+    消费者）`test_full_chain_from_http_upload_to_stage7_delivery`＋HTTP/UI 读回
+    `test_candidate_reads_over_http_match_the_views`。
+    · **离线语义验收（ch01–ch04＋引子，对照源文逐拍核读；重编译免费、wire 只读）**：
+    结构首次成功率：book＋ch01–ch03 首响应即编译通过（4/4）；ch04 首响应 4 类错误
+    （上述）全被闸拦，owner patch（仅形状/命名 4 处修订，见该根 _patch_wires/）修复后编译
+    通过（15 拍）。语义核读：① 丈夫行为未归表弟——b03_03「嫂嫂」主体为夫君、
+    participants 无表弟（QP-01 未复现）；② 亲属方向正确（s0 `fu_jun→pei_shuyuan`
+    cousins，事件措辞「夫君的表弟裴书远」）；③ 自述/内心/事实未互相升级——b01_05
+    「处处为她想」记 believes、b04_14 未说出口的半句仅留 event；④ ch01 未补造
+    「同意暂缓」——b01_10 落 `marital_decision=undecided_pending_cousin_pei_arrival`；
+    ⑤ **QP-05 在真实样本兑现**——b04_02 床底藏身记成立拍＋concealed＋命题锚 k07，
+    b04_07 现身拍两人 learns＋出床 on_page 效应，隐藏/得知/读者三时点分明；⑥ 悬念
+    lifecycle 正确（loop01 借种主问题至 ch04 末仍 open，loop02/03 带 resolution 正常
+    关闭，问题文本未改写）；⑦ 称谓表与原文核对无误（含 ch06 一次「裴知远」原文写法，
+    非幻觉）；⑧ participants 无仅提名人物；⑨ 引子按 e00 分流（ch01 前三拍 e00 证据
+    段，与正文不重复）。次要读数：空转移拍比例 ch01 4/10、ch02 3/9、ch03 1/11、
+    ch04 8/15（ch04 偏高系对话章，逐拍核读后空拍均合法，仅 b04_06「就要外冲」的
+    位置变化略可记）。
+    · **本轮发现（分项，不合成通过率）**——遗漏 F-1：ch01 b01_08 夫君「有手有口定不
+    叫娘子失望」是 claim，未进 cognition（应 holder=fu_jun mode=asserts 建命题），
+    致 ch02 b02_09 的证实命题 k04 为新建而非引用同一命题，D5「同一命题」链断一半
+    （效应链仍在）；误用 F-2：b04_13 `scene_location='去向未交代'` 用 set 描述性值，
+    契约对去向未知有 unknown op；边界 F-3：b03_10 芸娘转述「夫君觉得要她亲生的好」
+    记为 fu_jun 事实（第一人称转述的他意，严格可归 believes）；工程 F-4：同根 owner
+    patch 首次引导不了——`bind_wire_adoption` 要求 `runtime/adopt_<owner>.json` 预存
+    在（补丁 wire 的 sha），而该记录只在 bind 成功后才写，同根自补丁死循环（ch04
+    补丁采用因此被拒；跨根历史采用不受影响；修复方案待定，未动付费链路代码）；测试
+    基础设施 F-5：探针测试未入桶（已修 6fc682c1）。**ch04 补丁采用链修复属于付费
+    恢复路径改动，需单独评估，不在本批顺手做。**
+    · **明确未覆盖**：ch05–ch11 抽取（未购）、ch03–ch05 三重复（未采样）、段一
+    Preserve→Design→compile 端到端（未跑）、生产 Judge 已取消（语义由人工核读）。
+    生产语义保持 `unver`。
 
 ## 恢复、替代与删除条件
 
