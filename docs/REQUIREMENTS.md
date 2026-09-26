@@ -732,6 +732,26 @@ F5a–F5d 已闭合按章成文的契约、引擎与免费验证，F5e 已完成
     工具以生产 prompt 单臂重复 3 次；离线语义核读按执行计划第六节分项报告（结构
     首次成功率、语义错误、遗漏、误报、未决项分开，不合成总体通过率），生产语义保持
     `unver`。通过后按上述 F9 端到端计划继续段一。
+    **2026-09-26 v13 验证轮（部分执行，停在 ch04）**：独立根
+    `outputs/str06_v13_verify_20260926`（候选契约身份 `7fb5ecfa…`，与批 2 一致），
+    stage0/1 由 CLI 免费生成；付费与外发授权以 2026-09-26 验收轮用户对《夫君的报恩》
+    全文＋DeepSeek 的明确授权为据。根 ledger 记 6 条付费行：book（prompt 15804／
+    completion 14268）、ch01（3778／20402）、ch02（3913／16554）、ch03 首次
+    TransportError unknown（无 token）、ch03 同身份重购（4475／20369）、
+    ch04（5414／22371）；成功 5 次合计 prompt 33384＋completion 93964 tokens，
+    按批 0 同口径估算约 0.06 美元；另有 9 条 CACHED 免费重放行（零新购）。
+    · **结构现实**：book＋ch01–ch03 编译通过；ch04 响应购到但校验失败，节点停在该章
+    （`workflow_status` 记四类错误）——b04_02 把 proposition 误放进 disclosure
+    （契约里它在 effect 上）、b04_01/b04_04 对 book 作用域登记键 body_head_covering
+    声明 scene、b04_07 cognition 引用未登记命题 p_fu_jun_hiding（前述 effect 构造
+    失败未登记的级联）、因果边指向被丢弃拍。全部被闸精确拦下，按规程走 owner patch
+    免费修复、不重问整份 JSON、不自动重购。
+    · **契约修复依据**：ch02 b02_09 实证 D5 同拍模式（命题文本建在证实拍 cognition、
+    同拍 effect 引用），旧单遍编译器会整章拒收——`_normalize` 改拍内两遍解析
+    （同拍合法、跨拍悬空仍拒），提交 8011d484，R-2.12 补边界措辞。
+    · **未决**：ch05–ch11 未购；ch04 owner patch 未落地；离线语义核读未做，
+    生产语义保持 `unver`；ch04 两类模型错误（嵌套位置、键作用域）是否 prompt 再收紧，
+    待 patch 落地后评估，不并入本提交。
 
 ## 恢复、替代与删除条件
 
