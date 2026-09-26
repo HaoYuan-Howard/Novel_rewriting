@@ -60,10 +60,8 @@ _PIPELINE_PROFILES = {
 def stable_code_version(monkeypatch):
     """HTTP 用例测路由、锁与审计，不把宿主 Git 状态混进来。
 
-    ``R-11.23`` 让付费 start 拒绝 dirty/unknown 代码身份；若这里照实读仓库指纹，
-    开发者工作树一有未提交改动，本文件的 202 用例就整批变成 400。代码指纹与
-    dirty 拒绝各由 ``tests/test_prov.py`` / ``tests/test_agent.py`` 独立覆盖，
-    这里固定一个干净的非 unknown 身份；个别用例再按需覆盖成 unknown 或 dirty。
+    代码指纹由 ``tests/test_prov.py`` 独立覆盖；R-11.23（2026-09-26 改写）只
+    拒 unknown、放行 dirty，个别用例再按需覆盖成 unknown 或 dirty。
     """
     from novel import prov
 
@@ -437,25 +435,27 @@ def test_http_start_refuses_unknown_code_before_spawn(client, monkeypatch):
     assert not agent.runs_path(base).exists()
 
 
-def test_http_start_refuses_dirty_code_but_preview_shows_it(client, monkeypatch):
-    """`R-11.23`：dirty digest 可 0 成本预览，付费 start 在派发前 400。"""
+def test_http_start_accepts_dirty_code_but_preview_shows_it(client, monkeypatch, tmp_path):
+    """`R-11.23`（2026-09-26 改写）：dirty digest 可 0 成本预览，付费 start 放行。"""
     from novel import prov
 
     c, base = client
     dirty = 'a' * 40 + '-dirty.' + 'b' * 16
     monkeypatch.setattr(prov, 'code_version', lambda: dirty)
-    dispatched = []
-    monkeypatch.setattr(
-        agent, '_run_step_argv',
-        lambda *_args, **_kwargs: dispatched.append(True))
+    box = _install_dispatch(monkeypatch, tmp_path, blocking=False)
+
     preview = c.post('/api/agent/runs/preview', json=_start_body(), headers=UI)
     assert preview.status_code == 200
     assert preview.json()['profiles'] == _PIPELINE_PROFILES
     response = c.post('/api/agent/runs', json=_start_body(), headers=UI)
-    assert response.status_code == 400
-    assert response.json()['kind'] == 'UnsupportedRunMode'
-    assert '未提交改动' in response.json()['message']
-    assert dispatched == []
+    assert response.status_code == 202
+    run_id = response.json()['run_id']
+    assert agent.wait(run_id, 15)
+    assert len(box['argvs']) == 1
+    epoch, _permit, _stem = box['argvs'][0]
+    assert epoch.code_version == dirty
+    runs = c.get('/api/agent/runs?sid=42').json()['runs']
+    assert [row['state'] for row in runs] == ['stopped']
 
 
 def test_both_directions_of_the_mutex(client, monkeypatch, tmp_path):

@@ -397,9 +397,13 @@ def test_preview_can_show_unknown_code_but_start_refuses_before_spawn_or_audit(
     assert not agent_session_audit.audit_path(base).exists()
 
 
-def test_preview_can_show_dirty_code_but_paid_start_and_epoch_refuse_it(
-        base, corpus, monkeypatch):
-    """生产跑只接受冻结 commit；预览仍能如实展示 dirty digest。"""
+def test_preview_shows_dirty_code_and_paid_start_accepts_it(
+        base, corpus, monkeypatch, tmp_path):
+    """2026-09-26 用户裁决（R-11.23）：dirty 工作树可启动付费跑书。
+
+    preview 照实展示 dirty 身份；守卫只拒 unknown；start 放行并把 dirty
+    身份写进 execution epoch（不清洗、不静默续接）。
+    """
     from novel import prov
 
     dirty = 'a' * 40 + '-dirty.' + 'b' * 16
@@ -408,14 +412,18 @@ def test_preview_can_show_dirty_code_but_paid_start_and_epoch_refuse_it(
         base, '42', authorized=True, egress_authorized=True,
         profiles=_PROFILES)
     assert shown.code_version == dirty
+    # 守卫只拒 unknown：dirty 放行，身份逐字节落账。
+    agent._require_reproducible_code_version(dirty)
 
-    with pytest.raises(Exception, match='未提交改动.*专用 worktree'):
-        agent.start(
-            base, '42', authorized=True, egress_authorized=True,
-            profiles=_PROFILES)
-    with pytest.raises(Exception, match='未提交改动'):
-        agent._require_reproducible_code_version(dirty)
-    assert not agent.runs_path(base).exists()
+    box = _dispatch(monkeypatch, tmp_path)
+    rec = agent.start(
+        base, '42', authorized=True, egress_authorized=True,
+        profiles=_PROFILES)
+    assert agent.wait(rec.run_id, 15)
+    events = [row for row in agent.read_events(base) if row.run_id == rec.run_id]
+    opened = [row.epoch for row in events if row.kind == 'epoch_opened']
+    assert len(opened) == 1 and opened[0].code_version == dirty
+    assert len(box['argvs']) == 1
 
 
 def test_enqueue_refuses_unknown_code_before_planning_or_spawning(

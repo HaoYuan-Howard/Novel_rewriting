@@ -955,23 +955,24 @@ def _require_start_authorization(*, authorized: bool,
 
 
 def _require_reproducible_code_version(code_version: str) -> None:
-    """付费启动前必须有可复验且干净的代码身份；preview 仍可照实展示。
+    """付费启动前必须有**可复验**的代码身份；preview 仍可照实展示。
 
     ``unknown == unknown`` 只证明两次都没问出来，不证明整书跑没有
     跨版本。放它进付费路，结束终验也注定只能 unknown，是可预知的白烧。
-    dirty digest 虽然可复算，却会让运行中任何编辑触发 epoch rollover；新 epoch
-    无法保证所有付费单元都能跨 run 采用，因此生产跑只接受冻结 commit。
+
+    **dirty 放行（2026-09-26 用户裁决，R-11.23 同批改写）**：带未提交改动的
+    工作树可以启动付费跑书。未提交改动不清洗——它逐字节进代码身份
+    （``<commit>-dirty.<digest>``），随 preview、execution epoch 与每份产物
+    的 provenance 落账；运行中编辑工作仓由 `_epoch_identity_current` 检出，
+    按 ``code_drift`` 滚 epoch 并记录新身份与原因，不静默续接旧 epoch。
+    已购结果的复用仍按请求身份逐字核对，不因工作树脏而拒绝启动，也不把
+    跨版本采用冒充同身份。
     """
     if (not isinstance(code_version, str) or not code_version.strip()
             or code_version == prov.CODE_UNKNOWN):
         raise UnsupportedRunMode(
             '当前代码指纹不可用；preview 仍可查看，但不能启动付费 '
             'agent 代跑，请先恢复可复验的仓库代码身份')
-    if '-dirty.' in code_version:
-        raise UnsupportedRunMode(
-            '当前工作树有未提交改动；preview 仍可查看，但不能启动或换入新的付费 '
-            'epoch。请在干净的专用 worktree/冻结 commit 中跑书，避免代码漂移导致'
-            '重复模型调用')
 
 
 def enqueue(base: str | os.PathLike[str], sids: Sequence[str], *,
