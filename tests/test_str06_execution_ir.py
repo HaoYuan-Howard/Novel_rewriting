@@ -7,26 +7,26 @@
 """
 from __future__ import annotations
 
-from contracts.schema.str06.design import (
+from contracts.schema.design import (
     ChapterAssignment, BodyDesign, SceneDelivery, SceneDriver,
     TargetBeat, TargetDelta, TargetScene,
 )
-from contracts.schema.str06.context import WriterBrief
-from contracts.schema.str06.execution import EffectDomain
-from contracts.schema.str06.grounding import BindingEntry, SourceLineage
-from contracts.schema.str06.policy import PreserveKind
-from contracts.schema.str06.source import (
+from contracts.schema.context import WriterBrief
+from contracts.schema.execution import EffectDomain
+from contracts.schema.grounding import BindingEntry, SourceLineage
+from contracts.schema.policy import PreserveKind
+from contracts.schema.source import (
     ChapterBlueprint, CharactersArtifactV4,
 )
-from novel.stages.str06.compile import compile_execution_plan, init_establishments
-from novel.stages.str06.fold import FoldedState, fold_accepted_prefix
-from novel.stages.str06.project import project_context
+from novel.stages.stage4.compile import compile_execution_plan, init_establishments
+from novel.stages.stage4.fold import FoldedState, fold_accepted_prefix
+from novel.stages.common import project_context
 
 H64 = 'a' * 64
 
 
 def _ob(oid, kind=PreserveKind.EVENT_CORE, must=True, requires=(), chars=('ch1',)):
-    from contracts.schema.str06.grounding import SourceObligation
+    from contracts.schema.grounding import SourceObligation
     return SourceObligation(
         obligation_id=oid, kind=kind, statement=f'义务{oid}',
         lineage=SourceLineage(blueprint_refs=('b01_01',), character_ids=chars),
@@ -35,7 +35,7 @@ def _ob(oid, kind=PreserveKind.EVENT_CORE, must=True, requires=(), chars=('ch1',
 
 
 def _cp(*obligations):
-    from contracts.schema.str06.grounding import PreserveCheckpoint
+    from contracts.schema.grounding import PreserveCheckpoint
     return PreserveCheckpoint(
         checkpoint_id='cp1', policy_id='p', policy_version=1,
         characters_sha256=H64, blueprints_sha256=H64, provider='x', model='y',
@@ -65,7 +65,7 @@ def _graph():
 
 
 def _binding(cp):
-    from contracts.schema.str06.grounding import SemanticBinding
+    from contracts.schema.grounding import SemanticBinding
     entries = tuple(
         BindingEntry(beat_ref=('s01' + '#bt1'), obligation_id=o.obligation_id, scene_id='s01')
         if o.kind is not PreserveKind.CAUSAL else
@@ -99,7 +99,7 @@ def test_compile_four_semantics_and_net_delta():
 def test_compile_rejects_scene_dependency_cycle():
     # obA(s01) requires obB(s02)；obB(s02) requires obA(s01) → 场景环
     cp = _cp(_ob('obA', requires=('obB',)), _ob('obB', requires=('obA',)))
-    from contracts.schema.str06.grounding import BindingEntry, SemanticBinding
+    from contracts.schema.grounding import BindingEntry, SemanticBinding
     binding = SemanticBinding(
         binding_id='b1', preserve_checkpoint_sha256=H64, obligations=cp.obligations,
         entries=(BindingEntry(beat_ref=('s01' + '#bt1'), obligation_id='obA', scene_id='s01'),

@@ -47,19 +47,24 @@ def test_stage4_closure_includes_downstream_but_not_upstream_or_retired_stage():
     selected = S.plan(catalog, layer='stage', stages=('stage4',), affected=True)
     # F8a：Stage6 退役后下游闭包是 stage4 → stage5 → stage7。
     assert selected.stages == {'stage4', 'stage5', 'stage7'}
-    assert 'tests/test_stage4_v3_integration.py' in selected.modules
+    assert 'tests/test_str06_body.py' in selected.modules
+    assert 'tests/test_workflow_transition.py' in selected.modules
     assert 'tests/test_stage01.py' not in selected.modules
-    assert 'tests/test_plot_pipeline.py' not in selected.modules
-    assert 'tests/test_delivery_modes.py' not in selected.modules
+    # F8c：旧链功能测试已整批删除——目录表里不再有它们，选测面也不该有。
+    assert not ({'tests/test_stage4_v3_integration.py', 'tests/test_plot_pipeline.py',
+                 'tests/test_delivery_modes.py'} & set(catalog['modules'])), (
+        '旧链功能测试应随 F8c 删除，不在目录表里')
 
 
 def test_mixed_stage_module_keeps_pure_contract_out_of_stage_layer():
     catalog = S.load_catalog()
     assert S.case_layer('tests/test_stage01.py::test_stage01_packages_are_in_the_explicit_wheel_manifest', catalog)[0] == 'unit_contract'
     assert S.case_layer('tests/test_stage01.py::test_r114_writes_all_artifacts_and_then_reports_failure', catalog)[0] == 'stage'
-    assert S.case_layer('tests/test_stage7_subs.py::test_unlisted_new_case', catalog)[0] == 'unit_contract'
-    assert S.case_layer('tests/test_stage5_generation.py::test_apply_edit_cannot_formalize_a_paragraph_budget_hard', catalog)[0] == 'unit_contract'
-    assert catalog['modules']['tests/test_plot_edit_http.py']['stages'] == ['stage2']
+    # 未逐例登记的用例默认跟随模块层，不猜成 stage。
+    assert S.case_layer('tests/test_paths.py::test_dirname_survives_a_title_that_looks_like_a_platform_prefix', catalog)[0] == 'unit_contract'
+    # 混合模块里逐例登记成 unit_contract 的那一例，不跟着模块的 stage 面升级。
+    assert S.case_layer('tests/test_str06_cli_dispatch.py::test_build_argv_keeps_the_run_shape_for_str06_nodes', catalog)[0] == 'unit_contract'
+    assert catalog['modules']['tests/test_stage2_node_lifecycle.py']['stages'] == ['stage2']
 
 
 def test_regression_reuses_both_layers_and_keeps_cross_stage_integration():
@@ -68,7 +73,7 @@ def test_regression_reuses_both_layers_and_keeps_cross_stage_integration():
     assert all_tests.modules == set(catalog['modules'])
     assert S.plan(catalog, layer='stage').modules <= all_tests.modules
     assert S.plan(catalog, layer='unit_contract').modules <= all_tests.modules
-    assert 'tests/test_delivery_modes.py' in all_tests.modules
+    assert 'tests/test_str06_workflow.py' in all_tests.modules
 
 
 @pytest.mark.parametrize('kwargs', [dict(stages=('stage3',)), dict(affected=True),
@@ -118,9 +123,20 @@ def test_real_changed_stage_path_includes_direct_unit_tests_and_downstream_consu
     result = S.plan(S.load_catalog(), changed=('novel/stages/stage7/substitute.py',))
     # 不存在的路径也不能给“零影响”；精确真实路径另由 imports 反例覆盖。
     assert result.modules
+    # F8c：stage6 判官模块与它的两个旧测试消费者（test_stage6／
+    # test_stage7_delivery_gate）已随旧链删除。删除路径按删除前基线恢复
+    # 旧边后，选测面仍须非空（「零影响」会静默跳过该看的测试），且不得把
+    # 已删除的消费者算进集合。
     result = S.plan(S.load_catalog(), changed=('novel/stages/stage6/semantic.py',))
-    # stage6 判官测试已退役删除；现役 stage6 直连面由 test_stage6.py 承载。
-    assert {'tests/test_stage6.py', 'tests/test_stage7_delivery_gate.py'} <= result.modules
+    assert result.modules
+    assert any('恢复删除前基线' in reason for reason in result.reasons)
+    assert not ({'tests/test_stage6.py', 'tests/test_stage7_delivery_gate.py'}
+                & result.modules), '已退役消费者的文件不应再被选测'
+    # 现役引擎路径：hook 成文改动选到直连测试与传递下游消费者（命名/组装）。
+    # F8c：`novel/stages/str06/hook_writer.py` → `novel/stages/stage5/hook_writer.py`。
+    live = S.plan(S.load_catalog(), changed=('novel/stages/stage5/hook_writer.py',))
+    assert {'tests/test_str06_hook.py', 'tests/test_str06_naming.py',
+            'tests/test_layering.py'} <= live.modules
 
 
 def test_changed_schema_keeps_contract_guards_without_direct_import_edges():
@@ -136,16 +152,32 @@ def test_documentation_change_keeps_document_checks_without_full_regression(path
 
 
 def test_str06_scope_keeps_contracts_replay_and_layering_without_old_stage_closure():
+    """登记范围（`change_scopes.str06`）必须既拉齐候选链套件，又不截掉范围外
+    真实消费者。
+
+    ⚠ F8c 坐标更新：迁移包路径（`novel/stages/str06/*`、
+    `contracts/schema/str06/*`）已拆进正式 per-stage 包与顶层 schema 模块，
+    选测范围随之改登记新落点；范围名 `str06` 是这条链的身份，不是路径前缀。
+    """
     catalog = S.load_catalog()
     expected = {path for path in catalog['modules'] if path.startswith('tests/test_str06_')}
-    for path in ('docs/schema/str06.md', 'novel/stages/str06/hook_context.py'):
-        result = S.plan(catalog, changed=(path,))
-        assert expected | {'tests/test_layering.py', 'tests/test_test_selection.py'} <= result.modules
-        assert 'tests/test_stage01.py' not in result.modules
-        assert result.modules < set(catalog['modules'])
-    assert S.CONTRACT_GUARDS <= S.plan(catalog, changed=('docs/schema/str06.md',)).modules
-    # Hook schema 经 RC 包导出再进入公共 paths；真实共享边不能被隔离登记截断。
-    shared = S.plan(catalog, changed=('contracts/schema/str06/hook.py',))
+    # 文档改动：登记范围 + 守卫，不拉进范围外真实消费者。
+    result = S.plan(catalog, changed=('docs/schema/str06.md',))
+    assert expected | {'tests/test_layering.py', 'tests/test_test_selection.py'} <= result.modules
+    assert 'tests/test_stage01.py' not in result.modules
+    assert result.modules < set(catalog['modules'])
+    assert S.CONTRACT_GUARDS <= result.modules
+    # 引擎源码改动：`novel/cli/main.py` 把 str06 节点分流进
+    # `novel/stages/chain.py`，于是 stage0/1 的 CLI 面（test_stage01）是
+    # **真实传递消费者**——登记范围不得把范围外真实消费者截掉
+    # （selection 的理由串「不排除范围外真实消费者」是同一判据）。
+    engine = S.plan(catalog, changed=('novel/stages/stage5/hook_context.py',))
+    assert expected | {'tests/test_layering.py', 'tests/test_test_selection.py',
+                       'tests/test_stage01.py'} <= engine.modules
+    assert engine.modules < set(catalog['modules'])
+    # Hook schema 经 `contracts/schema/hook.py` 直接进入公共 paths 与共用原语；
+    # 真实共享边不能被隔离登记截断。
+    shared = S.plan(catalog, changed=('contracts/schema/hook.py',))
     assert expected | S.CONTRACT_GUARDS | {'tests/test_stage01.py', 'tests/test_paths.py'} <= shared.modules
 
 
@@ -307,14 +339,17 @@ def test_real_pytest_selects_only_stage_cases_and_reports_exact_collection(tmp_p
 def test_real_pytest_document_and_str06_selection_excludes_unrelated_tests(tmp_path):
     report = tmp_path / 'str06.json'
     result = _pytest(tmp_path, '--collect-only', '--changed', 'docs/schema/str06.md',
-                     '--changed', 'novel/stages/str06/hook_context.py',
+                     '--changed', 'novel/stages/stage5/hook_context.py',
                      '--changed-base', 'HEAD', '--selection-report', str(report))
     assert result.returncode == 0, result.stdout + result.stderr
     data = json.loads(report.read_text(encoding='utf-8'))
     paths = {row['nodeid'].split('::')[0] for row in data['items']}
     assert {'tests/test_str06_hook.py', 'tests/test_str06_naming.py', 'tests/test_layering.py'} <= paths
     assert S.CONTRACT_GUARDS <= paths
-    assert not {'tests/test_store.py', 'tests/test_stage01.py'} & paths
+    # 引擎源码经 CLI 分流成为 stage0/1 面的真实传递消费者，不得被截掉；
+    # 与 str06 无关的存储层测试仍然排除。
+    assert 'tests/test_stage01.py' in paths
+    assert 'tests/test_store.py' not in paths
     assert any(row['layer'] == 'stage' for row in data['items'])
 
 
@@ -334,20 +369,32 @@ def test_real_pytest_rejects_corpus_acceptance_combined_with_scope(tmp_path):
 
 
 def test_real_pytest_empty_intersection_is_not_a_pass(tmp_path):
+    # 现役用例：`test_paths` 是 unit_contract 模块，`--test-layer stage` 与它
+    # 没有交集——必须明确失败，不能静默跳过当成通过。
     result = _pytest(tmp_path, '--test-layer', 'stage',
-                     'tests/test_stage7_subs.py::test_no_such_stage_case')
+                     'tests/test_paths.py::test_title_comes_from_the_directory_not_the_argument')
     assert result.returncode != 0
 
 
-def test_parameter_stage_scope_selects_only_its_own_generation_case(tmp_path):
+def test_stage_scope_never_leaks_into_another_stages_layer(tmp_path):
+    """`--test-stage` 按模块登记职责切选；范围外的层不因文件名相邻被带上。
+
+    F8c：原载体 `tests/test_stage_responsibilities.py`（逐 stage 参数化的
+    `stage_scope` 反例）随旧链删除；现役 stage 层模块是
+    `tests/test_api_stage01.py`（stage0/1）与 `tests/test_workflow_transition.py`
+    （stage2/4/5）——本条改钉模块级 stage 切选与范围外拒绝。
+    """
     report = tmp_path / 'scope.json'
-    result = _pytest(tmp_path, '--collect-only', '--test-layer', 'stage', '--test-stage', 'stage5',
-                     'tests/test_stage_responsibilities.py', '--selection-report', str(report))
+    result = _pytest(tmp_path, '--collect-only', '--test-layer', 'stage', '--test-stage', 'stage1',
+                     'tests/test_api_stage01.py', '--selection-report', str(report))
     assert result.returncode == 0, result.stdout + result.stderr
     data = json.loads(report.read_text(encoding='utf-8'))
-    assert len(data['items']) == 2
-    assert any(row['nodeid'].endswith('[stage5]') for row in data['items'])
-    assert all(row['stages'] == 'stage5' for row in data['items'])
+    assert data['items']
+    assert all('stage1' in row['stages'].split(',') for row in data['items'])
+    # stage0/1 的模块不属于 stage5 范围：空交集必须明确失败，不静默跳过。
+    refused = _pytest(tmp_path, '--collect-only', '--test-layer', 'stage', '--test-stage', 'stage5',
+                      'tests/test_api_stage01.py')
+    assert refused.returncode != 0
 
 
 def test_xdist_report_merges_worker_results_without_losing_collection(tmp_path_factory):
@@ -373,5 +420,6 @@ def test_every_active_stage_has_default_suite_responsibility_evidence():
     for stage in STAGES:
         selected = S.plan(catalog, layer='stage', stages=(stage,))
         assert selected.modules, stage
-    assert S.case_layer('tests/test_stage7_subs.py::test_example', catalog)[0] == 'unit_contract'
-    assert catalog['modules']['tests/test_stage_responsibilities.py']['layer'] == 'stage'
+    # 未逐例登记的用例默认跟随模块层（unit_contract），不猜成 stage。
+    assert S.case_layer('tests/test_paths.py::test_title_comes_from_the_directory_not_the_argument', catalog)[0] == 'unit_contract'
+    assert catalog['modules']['tests/test_workflow_transition.py']['layer'] == 'stage'

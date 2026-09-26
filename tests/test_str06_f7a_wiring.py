@@ -14,11 +14,11 @@ import json
 import pytest
 
 from contracts.schema.common import FreeProvenance, LlmProvenance
-from contracts.schema.str06 import open_candidate_epoch
-from contracts.schema.str06.hook import HookConstraints
+from novel.llm.paid_requests import open_candidate_epoch
+from contracts.schema.hook import HookConstraints
 from novel.errors import ProvenanceRefused, UpstreamStale
 from novel.llm.ledger import CostLedger, ledger_path, read_cost_snapshot
-from novel.llm.str06_requests import PaidRequestSession, PurchaseRequired
+from novel.llm.paid_requests import PaidRequestSession, PurchaseRequired
 from novel.llm.transport import ChatRequest, ChatResponse
 from novel.store import Str06Repository
 from novel.work_units import (
@@ -98,7 +98,7 @@ def test_repository_refuses_registered_write_without_context(tmp_path):
 
 def test_provenance_field_never_enters_model_dump(tmp_path):
     """exclude=True：prompt／请求字节与 F5e 已购身份逐字不变。"""
-    from contracts.schema.str06.naming import NameAssignment, NameMapV5, TargetName
+    from contracts.schema.naming import NameAssignment, NameMapV5, TargetName
     model = NameMapV5(entries=[NameAssignment(char_ref='c1',
                                               name=TargetName(family='萧', given='知言',
                                                               full='萧知言'))])
@@ -265,7 +265,7 @@ def test_free_node_cannot_open_paid_unit(tmp_path):
 # ─── workflow／epoch 身份 ────────────────────────────────────────────────────
 
 def _init_workflow(repo, *, source_identity, code='code-a'):
-    from novel.llm.str06_run_context import init_or_resume_candidate_workflow
+    from novel.llm.paid_requests import init_or_resume_candidate_workflow
     return init_or_resume_candidate_workflow(
         repository=repo, base=repo.root.parent, code=code, root_sha1='a' * 40,
         source_identity=source_identity, task_id='task-1', configured_model='fake',
@@ -288,7 +288,7 @@ def test_workflow_record_init_resume_and_code_drift_roll(tmp_path):
     assert drifted.epoch.ordinal == 2 and drifted.epoch.reason == 'code_drift'
     assert drifted.epoch.epoch_id != workflow.epoch.epoch_id
     with pytest.raises(ValueError, match='拒绝假漂移'):
-        from contracts.schema.str06 import roll_candidate_epoch
+        from novel.llm.paid_requests import roll_candidate_epoch
         roll_candidate_epoch(drifted.epoch, reason='code_drift', code_version='code-b',
                              task_id='task-1', session_run_id='r', created_at=1759000001)
 
@@ -318,7 +318,7 @@ def test_workflow_refuses_contract_table_drift(tmp_path):
 def _source_root(tmp_path, *, content='{"entries": []}', attempt='orig-attempt',
                  usage=None, tamper=None):
     """造一个注册源根：请求行 + ledger 真实付费行。"""
-    from novel.llm.str06_requests import digest
+    from novel.llm.paid_requests import digest
     root = tmp_path / 'source' / 'run'
     (root / 'runtime').mkdir(parents=True)
     request = _request()
@@ -421,7 +421,7 @@ def _full_chain(tmp_path, wires, *, ceiling=None):
 
 def test_binding_invalid_witness_and_owner_stop(tmp_path):
     from tests.test_str06_body import _full_chain_wires
-    from tools.str06_workflow import run_workflow
+    from novel.stages.chain import run_workflow
     wires = _full_chain_wires()
     # 悬空 beat_ref：bind 机械闸必须拦下并留 typed witness。
     wires['bind'] = {'entries': [{'obligation_id': 'ob01', 'scene_id': 's01',
@@ -468,7 +468,7 @@ def test_same_fingerprint_failure_never_rebuys(tmp_path):
 
 def test_crash_tail_replays_exact_without_new_purchase(tmp_path):
     from tests.test_str06_body import _full_chain_wires
-    from tools.str06_workflow import run_workflow
+    from novel.stages.chain import run_workflow
     wires = _full_chain_wires()
     repo, session, transport, (ask, ask_text, ask_body, chapters) = _full_chain(tmp_path, wires)
     kwargs = dict(budget=2000, through='stage7', book_title='报恩',

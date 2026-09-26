@@ -47,10 +47,13 @@ def _classify(rel: str) -> str:
         #   2026-08-24 各撞过一次（`stage5/chNN_edit.json` 与
         #   `stage2/global_review_workpack.json`）⇒ 把这两条岔路写进文案本身。
         '\n⚠ 先分清它是哪一类：'
-        '（a）`stage5.write` / `stage0.edit` 的**人工改稿**——这两层的 `--apply-edit` '
-        '路径语义是「任意路径」，编辑文件**刻意没有登记**（`novel/paths.py::edit_rel` '
-        '的例外一段：`R-11.3` 要服务进程不写产物盘），落点是 `<base>/_service/edits/` '
-        '⇒ **移走，不要登记**；'
+        # F8c：`stage5.write` / `stage0.edit` 两个 `--apply-edit` 面已随旧链整层
+        # 退役（`novel/api/routes/edits.py` 只留空 router）；「任意路径、刻意不登记」
+        # 的纪律本身不变——在产物目录里再撞见这类文件，处置仍是**移走，不要登记**。
+        '（a）`stage5.write` / `stage0.edit` 的**人工改稿**（已退役面）——那两层的 '
+        '`--apply-edit` 路径语义曾是「任意路径」，编辑文件**刻意没有登记**'
+        '（`novel/paths.py::edit_rel` 的例外一段：`R-11.3` 要服务进程不写产物盘），'
+        '落点是 `<base>/_service/edits/` ⇒ **移走，不要登记**；'
         '（b）`--emit-review-workpack` / `--emit-*-template` 这类**只读辅助输出**——'
         '它们是 stdout，重定向进产物目录就成了这里的未登记 JSON ⇒ **移走，不要登记**。'
     )
@@ -125,9 +128,11 @@ def freshness_of(novel_dir: Path, rel: str) -> 'FreshnessReport':
     于是它看起来和「查过没事」一模一样。
 
     ⚠ 提问者节点取 `novel/consumption.py::producer_node`，与 `ArtifactStore.freshness`
-    内部取的是**同一个函数**。自己传一个节点名进来就是第二个落点：
-    `stage7/name_map.json` 由 `stage7.rename` 与 `stage7.approve` 两个节点都 `produces`，
-    而只有前者持有真正的 consumed 契约——那个裁决写在 `NODES` 的声明顺序里，不该被复述。
+    内部取的是**同一个函数**。自己传一个节点名进来就是第二个落点：一份制品该由谁
+    提问只能由 `NODES` 的 `produces` 声明回答（F8c 起现役 26 份制品各有唯一产者；
+    历史上 `stage7/name_map.json` 曾由 `stage7.rename` 与 `stage7.approve` 两个节点
+    都 `produces`，而只有前者持有真正的 consumed 契约——那个裁决写在 `NODES` 的
+    声明顺序里，不该被复述）。
 
     ⚠ **运行时 import 收在函数体内**：本模块同时服务 `tests/test_corpus_fixtures.py`
     那批只 import `contracts.*` 的纯契约体检，顶层拖进 `novel.*` 会让那一批的 import 图跟着变。

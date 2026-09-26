@@ -14,33 +14,41 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from contracts.schema.str06 import (
-    BindingEntry,
-    ChapterAssignment,
-    ChapterLengthDisclosure,
-    ChapterReceipt,
-    DependencyEdge,
-    Establishment,
-    ExecutionPlan,
-    ExecutionSlice,
-    PreserveCheckpoint,
-    PreserveKind,
-    BodyDesign,
-    ReconstructionBrief,
-    SemanticBinding,
-    SceneDelivery,
-    SceneDriver,
-    SourceLineage,
-    SourceObligation,
-    TargetBeat,
-    TargetScene,
-    UnboundEntry,
+from contracts.schema.context import (
     VerificationIR,
     WriterBrief,
     WriterContext,
 )
-from contracts.schema.str06.grounding import BriefRequirement
-from novel.stages.str06.checks import (
+from contracts.schema.design import (
+    BodyDesign,
+    ChapterAssignment,
+    SceneDelivery,
+    SceneDriver,
+    TargetBeat,
+    TargetScene,
+)
+from contracts.schema.execution import (
+    DependencyEdge,
+    Establishment,
+    ExecutionPlan,
+    ExecutionSlice,
+)
+from contracts.schema.grounding import (
+    BindingEntry,
+    PreserveCheckpoint,
+    ReconstructionBrief,
+    SemanticBinding,
+    SourceLineage,
+    SourceObligation,
+    UnboundEntry,
+)
+from contracts.schema.policy import PreserveKind
+from contracts.schema.receipt import (
+    ChapterLengthDisclosure,
+    ChapterReceipt,
+)
+from contracts.schema.grounding import BriefRequirement
+from novel.stages.common import (
     canonical_sha256,
     check_binding_covers_checkpoint,
     check_chapter_receipt,
@@ -104,7 +112,7 @@ def _plan(*scene_ids: str, deps: dict[str, list[str]] | None = None) -> Executio
 
 
 def _scene_plan(scene_id: str, edges=(), establishments=()):
-    from contracts.schema.str06.execution import SceneExecutionPlan
+    from contracts.schema.execution import SceneExecutionPlan
     return SceneExecutionPlan(
         scene_id=scene_id, dependencies=tuple(edges),
         establishments=tuple(establishments))
@@ -117,7 +125,7 @@ def _slice(scene_id: str, *consumed: str) -> ExecutionSlice:
 
 
 def _context(scene_id: str) -> WriterContext:
-    from contracts.schema.str06.context import BeatIR
+    from contracts.schema.context import BeatIR
     return WriterContext(
         scene_id=scene_id, execution_slice_sha256=H64,
         verification_ir=VerificationIR(
@@ -299,7 +307,7 @@ def test_preserve_request_surface_rejects_design_feedback():
     """Preserve 请求的输入面只有 SourceTruth + Policy + 执行配置；
     喂 Design/Bind 失败结果属越界输入。F0 已锁 checkpoint 产物面，这里锁
     「请求构造器」语义：RC 期以最小请求模型表达（F3 落 LLM 调用时直接复用）。"""
-    from contracts.schema.str06.policy import PreservationPolicy
+    from contracts.schema.policy import PreservationPolicy
 
     policy = PreservationPolicy(
         policy_id='preserve-default', version=1,
@@ -331,7 +339,7 @@ def test_preserve_request_surface_rejects_design_feedback():
 def test_verification_ir_carries_continuity_fact_view():
     """IR 带 continuity_fact_view（试点 judge 跨场回指误报的根因修复输入）：
     前场义务以事实视图进入本场 IR，Judge 不需要读前场正文。"""
-    from contracts.schema.str06.context import BeatIR
+    from contracts.schema.context import BeatIR
     ir = VerificationIR(
         scene_id='s02', obligations=(_obligation('ob2'),),
         beats=(BeatIR(beat_ref='s02#bt1', event='e', dramatic_intent='d'),),
@@ -363,29 +371,55 @@ def test_scene_scoped_effect_expires_at_boundary():
     assert {e.scope for e in scene_plan.establishments} == {'scene', 'book'}
 
 
-# ───────────────────────── 迁移期包纪律（AST） ─────────────────────────
+# ───────────────── per-stage 引擎纪律（AST） ─────────────────
 
-def test_str06_migration_package_import_discipline():
-    """迁移期包只准依赖 contracts / novel.errors / 本包 / 标准库 / pydantic；
-    一旦有人从这里 import 现役 stage 实现或 orchestrator，F8 分流就会带着
-    耦合搬家——在源头挡住。"""
-    import novel.stages.str06 as pkg
-    allowed_roots = ('contracts', 'novel.errors', 'novel.stages.str06')
+#: F8c 分流后的确定性引擎包：stage2／stage4／stage5／stage7。`novel/stages/
+#: common.py` 与 `novel/stages/chain.py` **不在其内**——前者是跨 stage 共用原语，
+#: 后者是唯一允许装配设施的薄编排（见各模块头）。
+_ENGINE_PACKAGES = ('stage2', 'stage4', 'stage5', 'stage7')
+
+
+def test_stage_engine_packages_import_discipline():
+    """确定性引擎包只准依赖 contracts / novel.errors / novel.stages（共用原语与
+    包级公开面）/ 标准库 / pydantic；一旦有人从这里 import `novel.llm`／
+    `novel.store`／`novel.orchestrator`，引擎段就带着付费与持久化耦合搬家——
+    在源头挡住。
+
+    F8c 前本条扫迁移包 `novel/stages/str06/`；分流后扫四个 per-stage 包，
+    判据不变：`novel.stages` 内的互访只许走**包级公开面**
+    （`tests/test_layering.py::test_cross_stage_imports_stay_on_the_package_surface`
+    另立），`novel.llm`／`novel.orchestrator`／`novel.store`／`novel.views`／
+    `novel.api` 一律禁入。
+    """
+    stages_dir = Path(__file__).resolve().parents[1] / 'novel' / 'stages'
     std_or_third = ('__future__', 'pydantic', 'typing', 'pathlib', 'hashlib',
                     'dataclasses', 'collections', 'functools', 'itertools',
                     'enum', 'abc', 'datetime', 'json', 're', 'os', 'sys', 'copy',
                     'math')
-    for py in Path(pkg.__file__).parent.glob('*.py'):
-        tree = ast.parse(py.read_text(encoding='utf-8'))
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                names = [a.name for a in node.names]
-            elif isinstance(node, ast.ImportFrom):
-                names = [node.module or '']
-            else:
+    allowed_roots = ('contracts', 'novel.errors', 'novel.stages')
+    banned_novel = ('novel.llm', 'novel.orchestrator', 'novel.store',
+                    'novel.views', 'novel.api', 'novel.run', 'novel.work_units',
+                    'novel.consumption', 'novel.prov', 'novel.paths')
+    scanned = 0
+    for package in _ENGINE_PACKAGES:
+        for py in sorted((stages_dir / package).glob('*.py')):
+            if py.name == '__init__.py':
                 continue
-            for name in names:
-                root = name.split('.')[0]
-                assert root in std_or_third or name.startswith(allowed_roots), (
-                    f'{py.name} import 了 {name}：迁移期包禁止依赖现役实现，'
-                    f'F8 分流前保持零耦合')
+            scanned += 1
+            tree = ast.parse(py.read_text(encoding='utf-8'))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    names = [a.name for a in node.names]
+                elif isinstance(node, ast.ImportFrom):
+                    names = [node.module or '']
+                else:
+                    continue
+                for name in names:
+                    root = name.split('.')[0]
+                    assert root in std_or_third or name.startswith(allowed_roots), (
+                        f'{package}/{py.name} import 了 {name}：引擎段禁止依赖'
+                        f'付费边界与持久化设施')
+                    assert not name.startswith(banned_novel), (
+                        f'{package}/{py.name} import 了 {name}：引擎段禁止依赖'
+                        f'付费边界与持久化设施')
+    assert scanned >= 13, f'只扫到 {scanned} 个引擎模块——扫描面可能失效'

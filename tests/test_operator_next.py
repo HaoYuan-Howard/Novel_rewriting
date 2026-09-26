@@ -13,8 +13,7 @@ from pydantic import ValidationError
 
 from contracts.invariants import INBOX_KIND, NODES, OPERATOR_NEXT_STATES, RESUME_VERDICTS
 from contracts.schema.api import (
-    ApprovalDoc, InboxView, OperatorAction, OperatorNext, OperatorNextDecision,
-    StructureApprovalView,
+    InboxView, OperatorAction, OperatorNext, OperatorNextDecision,
 )
 from contracts.schema.orchestration import (
     NovelOverview, OverviewSummary, QueueItem, RunResumeFrontierView, Step,
@@ -71,12 +70,19 @@ def _blocked(node: str, waiting_on: str) -> QueueItem:
 
 
 def test_precomputed_approval_projection_rejects_cross_book_reuse(tmp_path):
+    """跨书投影仍被关闭式拒绝；审批 doc 预计算面已随人工闸退役。
+
+    F8c：`plan_book_from_overview` 不再收 `approval_doc`（人工闸整层退役）——
+    旧签名调用必须明确失败，不能静默忽略一个它不再理解的投影坐标；跨书拒绝的
+    现存落点是 `approvals.read_projection`（见 `tests/test_operator_inspection.py`）
+    与 `inbox_from_snapshot` 的同名校验。
+    """
     snapshot = _snapshot(tmp_path)
     wrong = SimpleNamespace(sid='other-book')
 
     with pytest.raises(ValueError, match='other-book'):
         O.inbox_from_snapshot(snapshot, approval_doc=wrong)
-    with pytest.raises(ValueError, match='other-book'):
+    with pytest.raises(TypeError):
         Q.plan_book_from_overview(
             tmp_path, snapshot.sid, snapshot.overview,
             until_stage='stage0', approval_doc=wrong)
@@ -87,11 +93,14 @@ def _wire(
     snapshot: OperatorReadSnapshot,
     *, todo: list[QueueItem], blocked: list[QueueItem],
 ) -> list[object]:
+    """把 next 的四个外部依赖换成可观测替身；审批投影只留 invocation 坐标。
+
+    F8c：`approvals.get`（构造 ApprovalDoc 的人工闸投影）随人工闸整层退役。
+    `_next_from_snapshot` 仍先开 `approvals.read_projection` 冻结本次调用的
+    overview/code 坐标，再投影 inbox 与 queue lane——下面两个替身据此断言
+    「同一次 next 里所有下游只用一个代码时点」。
+    """
     calls: list[object] = []
-    raw = A._fresh_record(snapshot.sid)
-    frozen_approval_doc = ApprovalDoc(
-        sid=snapshot.sid, gate=raw.gate,
-        structure=StructureApprovalView(state='unavailable'))
     monkeypatch.setattr(
         O.paths, 'resolve_novel_dir',
         lambda base, sid: snapshot.novel_dir)
@@ -101,25 +110,12 @@ def _wire(
     monkeypatch.setattr(
         P.prov, 'code_version',
         lambda: pytest.fail('ready next 不得重算第二次仓库 code fingerprint'))
-    def approval_get(
-            base, sid, *, overview, code, include_spawns,
-            operator_projection,
-    ):
-        assert (
-            base, sid, overview, code, include_spawns, operator_projection,
-        ) == (
-            snapshot.base, snapshot.sid, snapshot.overview, snapshot.code,
-            False, True,
-        )
-        assert A.projection_code() == snapshot.code
-        return frozen_approval_doc
 
-    monkeypatch.setattr(O.approvals, 'get', approval_get)
-
-    def inbox(got, *, approval_doc: object, _final_cas_owner: object):
+    def inbox(got, *, approval_doc: object = None,
+              _final_cas_owner: object = None):
         assert A.projection_code() == snapshot.code
         assert A._READ_OVERVIEW.get() is snapshot.overview
-        assert approval_doc is frozen_approval_doc
+        assert approval_doc is None
         assert _final_cas_owner is O._OPERATOR_FINAL_CAS
         calls.append(('inbox', got))
         return _inbox()
@@ -128,11 +124,10 @@ def _wire(
 
     def plan(
             base, sid, overview, *, until_stage, follow_check,
-            approval_doc: object, allow_deterministic_redo: bool,
+            allow_deterministic_redo: bool,
     ):
         assert A.projection_code() == snapshot.code
         assert A._READ_OVERVIEW.get() is snapshot.overview
-        assert approval_doc is frozen_approval_doc
         assert allow_deterministic_redo is True
         calls.append((
             'plan', base, sid, overview, until_stage, follow_check,
@@ -265,18 +260,23 @@ def test_no_lane_item_is_pipeline_complete_not_delivery_ready(monkeypatch, tmp_p
         (
             _blocked(
                 'str06.stage5.body', Q.WAITING_ON_STAGE5_REVIEWER_REWRITE),
-            'executor',
+            'unknown',
         ),
         (
             _blocked(
                 'str06.stage5.body', Q.WAITING_ON_RESUME_DECISION),
-            'human',
+            'unknown',
         ),
     ],
 )
 def test_progress_snapshot_projects_authoritative_frontier_and_handler(
         monkeypatch, tmp_path, item, expected_handler):
-    """运行页看 operator 当前 lane，不从空 beacon 猜成 Stage0 重跑。"""
+    """运行页看 operator 当前 lane，不从空 beacon 猜成 Stage0 重跑。
+
+    F8c：`DETERMINISTIC_RECOVERY_WAITING_ON` 现为空集——旧链的 0-wire 补尾
+    waiter（reviewer-rewrite 等）随旧链退役，任何未登记的 waiting_on 一律
+    投影为 `unknown` 处理人（fail-closed），不假装有人在处理。
+    """
     snapshot = _snapshot(tmp_path)
     _wire(monkeypatch, snapshot, todo=[], blocked=[item])
 

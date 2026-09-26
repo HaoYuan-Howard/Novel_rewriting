@@ -23,12 +23,12 @@ fastapi = pytest.importorskip(
     'fastapi', reason='没装 fastapi ⇒ 这一批**没在查**，不是「查过没事」')
 from fastapi.testclient import TestClient          # noqa: E402
 
-from contracts.schema.str06 import api as str06_api   # noqa: E402
-from contracts.schema.str06.hook import HookConstraints      # noqa: E402
+from contracts.schema import api as str06_api   # noqa: E402
+from contracts.schema.hook import HookConstraints      # noqa: E402
 from novel.api.app import create_app                         # noqa: E402
 from novel.llm.ledger import CostLedger, ledger_path, read_cost_snapshot   # noqa: E402
-from novel.llm.str06_requests import PaidRequestSession      # noqa: E402
-from novel.llm.str06_run_context import init_or_resume_candidate_workflow  # noqa: E402
+from novel.llm.paid_requests import PaidRequestSession      # noqa: E402
+from novel.llm.paid_requests import init_or_resume_candidate_workflow  # noqa: E402
 from novel.store import Str06Repository                      # noqa: E402
 from novel.views import str06 as views                       # noqa: E402
 from tests.str06_facilities import make_context              # noqa: E402
@@ -36,9 +36,14 @@ from tests.test_str06_body import (
     _RoutingTransport, _chapters, _fake_ask, _fake_body, _fake_text,
 )
 from tests.test_str06_hook import _full_chain_wires
-from tools.str06_workflow import run_workflow
+from novel.stages.chain import run_workflow
 
 STR06_API_PY = Path(str06_api.__file__)
+
+#: F8c 起候选监控面的响应模型与现役 API 契约同住 `contracts/schema/api.py`；
+#: 本条只管 `Str06` 前缀的那一段（现役模型另有 `contracts/schema/api.py`
+#: 自己的对账，不在候选面重复判）。
+_STR06_MODELS = tuple(name for name in dir(str06_api) if name.startswith('Str06'))
 
 
 def _candidate_root(tmp_path, wires, *, through='stage7') -> Path:
@@ -245,7 +250,13 @@ def test_candidate_reads_never_write_the_disk(client, base):
 # ─────────────────────────────── 契约纪律对账 ───────────────────────────────
 
 def test_candidate_api_models_keep_the_active_disciplines():
-    """与 `contracts/schema/api.py` 同构的三条：不抄取值面、不带判定、不背 web 栈。"""
+    """与 `contracts/schema/api.py` 同构的三条：不抄取值面、不带判定、不背 web 栈。
+
+    ⚠ F8c 起候选模型与现役模型同住一个文件，扫描面随之收窄到 `Str06` 前缀的
+    类（现役那一半由 `tests/test_api_discipline.py` 之类另立，不在这里重复判）。
+    字面量与依赖两条扫整个文件——它们与归属无关，候选段多一个字面量就是多一个
+    取值面落点。
+    """
     tree = ast.parse(STR06_API_PY.read_text(encoding='utf-8'), filename=str(STR06_API_PY))
     literals = [n for n in ast.walk(tree) if isinstance(n, ast.Subscript)
                 and isinstance(n.value, ast.Name) and n.value.id == 'Literal']
@@ -256,7 +267,8 @@ def test_candidate_api_models_keep_the_active_disciplines():
                     if isinstance(n, ast.Constant) and isinstance(n.value, str)]
     assert not spelled, f'候选视图模型抄了字面量取值面（第 {spelled} 行）'
     verdicts = {'badge', 'passed', 'counts', 'hard_count', 'unver_count'}
-    for name in dir(str06_api):
+    assert _STR06_MODELS, '一个 Str06 视图模型都没扫到——扫描面失效了'
+    for name in _STR06_MODELS:
         model = getattr(str06_api, name)
         fields = getattr(model, 'model_fields', None)
         if fields is None:

@@ -16,25 +16,25 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from contracts.schema.str06.design import (
+from contracts.schema.design import (
     BodyDesign, ChapterAssignment, SceneDelivery, SceneDriver, TargetBeat,
     TargetScene,
 )
-from contracts.schema.str06.hook import (
+from contracts.schema.hook import (
     HookConstraints, HookDesign, HookPov, HookReceipt,
 )
-from contracts.schema.str06.source import (
+from contracts.schema.source import (
     CharactersArtifactV4, NameStructure,
 )
-from novel.stages.str06.design_compile import assemble_body_design
-from novel.stages.str06.hook_context import compile_hook_context
-from novel.stages.str06.hook_design import assemble_hook_design, publish_graph
-from novel.stages.str06.hook_writer import (
+from novel.stages.stage4.design import assemble_body_design
+from novel.stages.stage5.hook_context import compile_hook_context
+from novel.stages.stage5.hook import assemble_hook_design, publish_graph
+from novel.stages.stage5.hook_writer import (
     MAX_REWRITES, build_hook_user_prompt, build_rewrite_user_prompt,
     validate_hook_prose,
 )
-from novel.stages.str06.compile import compile_execution_plan
-from novel.stages.str06.grounding import assemble_binding
+from novel.stages.stage4.compile import compile_execution_plan
+from novel.stages.stage4.grounding import assemble_binding
 from novel.store import Str06Repository
 from novel.errors import PathRefused
 from novel.llm.ledger import CostLedger
@@ -409,8 +409,8 @@ def test_hook_change_does_not_touch_body_slices():
 
 
 def _binding_for(body):
-    from contracts.schema.str06.grounding import PreserveCheckpoint, SourceObligation, SourceLineage
-    from contracts.schema.str06.policy import PreserveKind
+    from contracts.schema.grounding import PreserveCheckpoint, SourceObligation, SourceLineage
+    from contracts.schema.policy import PreserveKind
     obligation = SourceObligation(
         obligation_id='ob1', kind=PreserveKind.EVENT_CORE, statement='成亲',
         lineage=SourceLineage(blueprint_refs=('b01_01',), character_ids=('yun_niang',)),
@@ -455,7 +455,7 @@ def test_hook_writer_length_rewrite_same_context():
         return (long_prose, [], f'id-{len(prompts)}') if len(prompts) == 1 \
             else (ok_prose, [], f'id-{len(prompts)}')
 
-    from novel.stages.str06.runner import _write_hook
+    from novel.stages.chain import _write_hook
     prose, attempts, identity = _write_hook(context, ask_text)
     assert prose == ok_prose
     assert len(prompts) == 2
@@ -471,7 +471,7 @@ def test_hook_writer_rewrite_limit_exhausted():
         calls.append(prompt)
         return ('夜' * (context.hard_max_chars + 1), [], f'id-{len(calls)}')
 
-    from novel.stages.str06.runner import _write_hook
+    from novel.stages.chain import _write_hook
     prose, attempts, _ = _write_hook(context, ask_text)
     assert prose is None
     assert len(calls) == 1 + MAX_REWRITES
@@ -553,7 +553,7 @@ def _matches(name: str, patterns: tuple[str, ...]) -> bool:
 
 
 def test_migration_dependency_rules_executed_on_real_modules():
-    from contracts.schema.str06 import STR06_MIGRATION_DEPENDENCY_RULES
+    from contracts.schema.dependency import STR06_MIGRATION_DEPENDENCY_RULES
     scanned = 0
     for rule in STR06_MIGRATION_DEPENDENCY_RULES:
         path = _module_path(rule.module)
@@ -572,13 +572,13 @@ def test_migration_dependency_rules_executed_on_real_modules():
 
 
 def test_dependency_rule_scan_actually_finds_violations():
-    from contracts.schema.str06 import STR06_MIGRATION_DEPENDENCY_RULES
+    from contracts.schema.dependency import STR06_MIGRATION_DEPENDENCY_RULES
     rule = next(r for r in STR06_MIGRATION_DEPENDENCY_RULES
-                if r.module == 'novel.stages.str06.hook_context')
-    assert _matches('novel.llm.str06_requests', rule.forbids)
-    assert not _matches('contracts.schema.str06.hook', rule.forbids)
+                if r.module == 'novel.stages.stage5.hook_context')
+    assert _matches('novel.llm.paid_requests', rule.forbids)
+    assert not _matches('contracts.schema.hook', rule.forbids)
     # 若真实文件违例，上面的真实执行测试会红；这里证明扫描器本身有牙齿
-    synthetic = 'import novel.llm.transport\nfrom novel.llm import str06_requests\n'
+    synthetic = 'import novel.llm.transport\nfrom novel.llm import paid_requests\n'
     tree = ast.parse(synthetic)
     mods = set()
     for node in ast.walk(tree):
@@ -642,7 +642,7 @@ def _full_chain_wires():
 
 
 def test_through_stage7_full_chain_replay_and_authorization_gate(tmp_path):
-    from tools.str06_workflow import PurchaseRequired, run_workflow
+    from novel.stages.chain import PurchaseRequired, run_workflow
     wires = _full_chain_wires()
     chapters = [
         {'chapter_ordinal': 1, 'text': '苏芸娘嫁入陆家，唤夫君为陆大哥，苏姑娘陪嫁，陆兄迎娶。'},

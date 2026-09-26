@@ -144,7 +144,10 @@ def test_concurrency_and_process_lifecycle_modules_are_registered_serial():
         scanned += 1
         if _rel(path) not in hooks._SERIAL_TEST_MODULES:
             missing.append((_rel(path), sorted(primitives)))
-    assert scanned >= 20, f'只认出 {scanned} 个并发/进程测试模块——扫描面可能失效'
+    # ⚠ 下界是实测值，随旧链测试整批删除（F8b-3/F8c）从 20 下调到 15：
+    # 消失的全是旧 Stage2/4/5/6/7 功能测试里的子进程/线程用例，现役面一个没少
+    # （`missing` 为空即登记完整）。掉到下界以下仍然说明扫描面失效。
+    assert scanned >= 15, f'只认出 {scanned} 个并发/进程测试模块——扫描面可能失效'
     assert not missing, f'这些并发/进程生命周期模块未登记到 serial 调度组：{missing}'
 
 
@@ -209,6 +212,13 @@ _JSON_READ_ALLOWED = {
         '（拒绝重复键）与 _service 公开协议日志的完整失败信封，供存量书'
         '只读解码与 owner 停止证明；不读取盘上小说产物，不形成 provenance 输入'),
     'novel/work_units.py': '只读 _service 工作单元账和已保存响应，不读小说产物。',
+    'novel/stages/chain.py': (
+        '候选链装配体的 Stage1 输入采集：读的是**源书**目录的 '
+        'stage1/main_text.json（与候选根不同的根，Str06Repository 管不到它），'
+        '且必须保留完整字节——source_identity（SHA-256）与 provenance 的根身份格'
+        '（SHA-1）都按这份字节算。解码走正式 `decode_artifact`＋`artifact_spec`'
+        '信封路径，与 Store 同一条；候选根本身的产物读写仍全部经 '
+        'Str06Repository。'),
     'novel/stages/stage2/analyze/recovery.py': (
         'legacy Analyze 的免费恢复只解码自己的 sidecar（stage2/analyze_legacy_checkpoint.json）、'
         '书级 ledger 行与 work_units recovery 证明；不读 canonical 小说产物，'
@@ -717,9 +727,6 @@ def test_service_mutations_are_narrowly_owned_by_mutation_routes():
         'novel/api/app.py': {
             ('trash', 'reconcile_pending_restores'),
         },
-        'novel/api/approval_stamp.py': {
-            ('approvals', 'approve_gate'),
-        },
         'novel/api/routes/ingest.py': {
             # stage0 edit/approve 路由已退役（2026-09-15 全自动裁决）：
             # 一次性编辑计划/候选计划的保存与清理随路由一并下线。
@@ -728,10 +735,9 @@ def test_service_mutations_are_narrowly_owned_by_mutation_routes():
         'novel/api/routes/jobs.py': {
             ('jobs', 'start'),
         },
-        'novel/api/routes/approvals.py': {
-            ('approvals', 'approve_gate'),
-            ('approvals', 'reset'), ('approvals', 'backfill_from_disk'),
-        },
+        # novel/api/approval_stamp.py 与 novel/api/routes/approvals.py 已随
+        # 人工闸整族退役删除（F8b-3/F8c）：全自动单模式下没有审批写入面，
+        # 这两个文件不再是现役 API 面，它们的服务变更入口随之消失。
         # novel/api/routes/edits.py 已随旧链人工写回面整族退役（F8b-2）：
         # 只剩空 router，无任何服务变更入口。
         'novel/api/routes/maintenance.py': {
@@ -838,93 +844,21 @@ def _import_targets_stage(node) -> bool:
     return bool(node.module) and node.module.startswith('novel.stages')
 
 _CROSS_STAGE_DEEP_GRANDFATHER = frozenset({
-    ('novel/api/errors.py', 'novel.stages.stage4.plot_refs'),
-    # novel/api/routes/edits.py 的两条 stage2 深导入边（extract／blueprint）
-    # 已随 F8b-2 人工写回路由族退役消失——edits.py 只剩空 router。
-    ('novel/cli/main.py', 'novel.stages.stage2.analyze'),
-    ('novel/cli/main.py', 'novel.stages.stage2.blueprint.edit'),
-    ('novel/llm/client.py', 'novel.stages.stage2.blueprint.recovery_policy'),
-    ('novel/llm/stage2_global_runs.py', 'novel.stages.stage2.analyze'),
-    ('novel/llm/stage2_global_runs.py', 'novel.stages.stage2.analyze.draft_recovery'),
-    ('novel/llm/stage2_runs.py', 'novel.stages.stage2.blueprint'),
-    ('novel/llm/stage4_runs.py', 'novel.stages.stage4.design_rebuild'),
-    ('novel/llm/stage4_runs.py', 'novel.stages.stage4.plot_design'),
-    ('novel/orchestrator/agent.py', 'novel.stages.stage4.design_rebuild'),
-    ('novel/orchestrator/approvals.py', 'novel.stages.stage0.eligibility'),
-    ('novel/orchestrator/approvals.py', 'novel.stages.stage1.audit'),
-    ('novel/orchestrator/approvals.py', 'novel.stages.stage2.knowledge.grounding'),
-    ('novel/orchestrator/approvals.py', 'novel.stages.stage4.binding_input_contract'),
-    ('novel/orchestrator/approvals.py', 'novel.stages.stage4.design_evolution'),
-    ('novel/orchestrator/approvals.py', 'novel.stages.stage4.measure'),
-    ('novel/orchestrator/approvals.py', 'novel.stages.stage4.phase_state'),
-    ('novel/orchestrator/approvals.py', 'novel.stages.stage4.plan'),
-    ('novel/orchestrator/approvals.py', 'novel.stages.stage4.plot_design'),
-    ('novel/orchestrator/approvals.py', 'novel.stages.stage4.plot_materials'),
-    ('novel/orchestrator/approvals.py', 'novel.stages.stage5.closure'),
-    ('novel/orchestrator/approvals.py', 'novel.stages.stage5.review'),
-    ('novel/orchestrator/approvals.py', 'novel.stages.stage7.rename'),
-    # ('novel/orchestrator/queue.py', 'novel.stages.stage0.eligibility'):
-    # stage0.approve 人工闸退役（2026-09-15）后 queue 不再读 eligibility。
-    ('novel/orchestrator/inspection.py', 'novel.stages.stage2.analyze'),
-    ('novel/orchestrator/queue.py', 'novel.stages.stage2.analyze'),
-    ('novel/orchestrator/queue.py', 'novel.stages.stage2.blueprint.diagnostics'),
-    ('novel/orchestrator/queue.py', 'novel.stages.stage4.phase_state'),
-    ('novel/orchestrator/state.py', 'novel.stages.stage2.characters.rebind'),
-    ('novel/orchestrator/state.py', 'novel.stages.stage5.measure'),
-    ('novel/orchestrator/state.py', 'novel.stages.stage5.review'),
-    ('novel/orchestrator/workflow_transition.py', 'novel.stages.stage2.shared.character_refs'),
+    # ── F8c（2026-09-25）：旧链整层删除，81 条冻结边清零到 6 条 ──
+    # 被消化的 75 条全部随旧 Stage2/4/5/6/7 链（novel/stages/stage2|4|5|6|7/、
+    # novel/llm/stage*_runs.py、novel/views/stage{2,4,5,6}.py、
+    # novel/views/blueprint_progress.py、contracts/judges/stage{2,4,5,6,7}.py）
+    # 从磁盘删除而消失：importer 或深导入目标已不存在，边自然不成立。
+    # 逐条理由与对账登记见 contracts/schema/retirement.py（F7e 表
+    # 88 条 grandfather 边，take_over「F8c 随旧链整层删除（grandfather 清零）」）。
+    # 剩下的 6 条都在**范围外**的 stage0/stage1 之间（Stage0/1 整层重构延期），
+    # 继续冻结：它们不是旧链残留，删掉它们等于宣布新链可以新增同类深边。
     ('novel/source_identity.py', 'novel.stages.stage1.audit'),
     ('novel/source_identity.py', 'novel.stages.stage1.partition'),
     ('novel/stages/stage1/partition.py', 'novel.stages.stage0.eligibility'),
-    ('novel/stages/stage4/actors.py', 'novel.stages.stage2.shared.character_refs'),
-    ('novel/stages/stage4/actors.py', 'novel.stages.stage2.blueprint.compile'),
-    # F4R（2026-09-24）：以下 11 条为 STR-02 blueprint/shared 模块改名与 STR-03 收编时
-    # 既存、未同步冻结清单的深边补账（非新增依赖）；F8 随旧链整层删除。
-    ('novel/stages/stage4/beats.py', 'novel.stages.stage2.blueprint.evidence'),
-    ('novel/stages/stage4/beats.py', 'novel.stages.stage2.blueprint.source_contexts'),
-    ('novel/stages/stage4/plot_binding.py', 'novel.stages.stage2.blueprint.evidence'),
-    ('novel/stages/stage4/plot_binding.py', 'novel.stages.stage2.blueprint.source_contexts'),
-    ('novel/stages/stage4/plot_context.py', 'novel.stages.stage2.blueprint.evidence'),
-    ('novel/stages/stage4/plot_context.py', 'novel.stages.stage2.blueprint.narration'),
-    ('novel/stages/stage4/plot_design.py', 'novel.stages.stage2.blueprint.evidence'),
-    ('novel/stages/stage4/plot_design.py', 'novel.stages.stage2.shared.character_refs'),
-    ('novel/stages/stage4/plot_materials.py', 'novel.stages.stage2.blueprint.evidence'),
-    ('novel/stages/stage4/plan.py', 'novel.stages.stage2.blueprint.evidence'),
-    ('novel/views/stage4.py', 'novel.stages.stage4.plan'),
-    ('novel/stages/stage4/beats.py', 'novel.stages.stage2.blueprint.compile'),
-    ('novel/stages/stage4/plan.py', 'novel.stages.stage2.knowledge'),
-    ('novel/stages/stage5/review.py', 'novel.stages.stage2.knowledge'),
-    ('novel/stages/stage6/hook.py', 'novel.stages.stage2.knowledge'),
-    ('novel/stages/stage6/hook.py', 'novel.stages.stage5.review'),
-    ('novel/stages/stage6/measure.py', 'novel.stages.stage5.measure'),
-    ('novel/stages/stage6/prepare.py', 'novel.stages.stage2.shared.paragraphs'),
-    ('novel/stages/stage6/prepare_compile.py', 'novel.stages.stage2.shared.paragraphs'),
-    ('novel/stages/stage7/assemble.py', 'novel.stages.stage5.closure'),
-    ('novel/stages/stage7/measure.py', 'novel.stages.stage5.measure'),
-    ('novel/stages/stage7/rename.py', 'novel.stages.stage2.knowledge'),
-    ('novel/stages/stage7/rename.py', 'novel.stages.stage5.measure'),
-    ('novel/stages/stage7/rename.py', 'novel.stages.stage5.review'),
     ('novel/store.py', 'novel.stages.stage1.audit'),
-    ('novel/store.py', 'novel.stages.stage2.shared.character_refs'),
-    ('novel/store.py', 'novel.stages.stage2.knowledge.grounding'),
-    ('novel/store.py', 'novel.stages.stage4.binding_input_contract'),
-    ('novel/store.py', 'novel.stages.stage4.phase_binding'),
-    ('novel/views/blueprint_progress.py', 'novel.stages.stage2.blueprint'),
-    ('novel/views/blueprint_progress.py', 'novel.stages.stage2.blueprint.inputs'),
     ('novel/views/ingest.py', 'novel.stages.stage0.eligibility'),
     ('novel/views/ingest.py', 'novel.stages.stage1.audit'),
-    ('novel/views/stage2.py', 'novel.stages.stage2.analyze.draft_recovery'),
-    ('novel/views/stage2.py', 'novel.stages.stage2.knowledge'),
-    ('novel/views/stage2.py', 'novel.stages.stage2.shared.core_evidence'),
-    ('novel/views/stage4.py', 'novel.stages.stage2.knowledge'),
-    ('novel/views/stage4.py', 'novel.stages.stage2.knowledge.grounding'),
-    ('novel/views/stage4.py', 'novel.stages.stage4.beats'),
-    ('novel/views/stage4.py', 'novel.stages.stage4.context'),
-    ('novel/views/stage4.py', 'novel.stages.stage4.measure'),
-    ('novel/views/stage4.py', 'novel.stages.stage5.measure'),
-    ('novel/views/stage4.py', 'novel.stages.stage5.prompts'),
-    ('novel/views/stage5.py', 'novel.stages.stage5.measure'),
-    ('novel/views/stage5.py', 'novel.stages.stage5.prompts'),
 })
 
 
@@ -960,9 +894,12 @@ def test_cross_stage_imports_stay_on_the_package_surface():
     measure / prompts / plot_compile / checks 等内部实现一律禁止。
 
     「删一个机制为什么改几十个文件」的根源正是这些深边——StageN 的内部
-    实现被当成公共接口消费。现存 67 条深边为 2026-09 冻结基线
-    （2026-09-15 随 Commander 审阅退役消化 reviewer_tasks 的 3 条边；
-    stage0.approve 人工闸退役再消化 queue→stage0.eligibility 1 条），
+    实现被当成公共接口消费。冻结基线 2026-09 立项时为 67 条，历批消化
+    （Commander 审阅退役、stage0.approve 人工闸退役、STR-02/03 补账、
+    F8b Stage6 服务面与 edits 路由族退役）后，**F8c 随旧链整层删除清零**：
+    81 条里 75 条的 importer 或深导入目标已从磁盘删除（旧 Stage2/4/5/6/7
+    链全家），只剩 6 条——全部在**范围外**的 stage0/stage1 之间
+    （Stage0/1 整层重构延期，见 `docs/REQUIREMENTS.md`）。
     **只减不增**：消化一条就把它从清单删掉（diff 里可见、须说理由），
     新增深边必须先建 stageN 包级公开导出。
     """
@@ -976,36 +913,43 @@ def test_cross_stage_imports_stay_on_the_package_surface():
     assert not stale, (
         f'以下深边已消失，请同步从冻结清单删除（消化须在提交说明给理由）：{sorted(stale)}')
     # 守卫的守卫：扫描器必须看得见冻结清单里的已知边，否则红的是探测器。
-    assert ('novel/views/stage4.py', 'novel.stages.stage5.prompts') in current
-    # Stage4 人工闸退役批次：approvals 的 stage4.reading 深边随 design/structure
-    # workpack 退役一并消失，分母 67→66；C3 删 agents/node_agents 再消化 2 条，66→64。
-    # STR-02 Stage2 blueprint/shared 路径更名：显式登记既有 llm/client、views、
-    # stage2_runs、edits→blueprint 深边，分母 64→68。
-    # STR-03 analyze 包迁入：cli/inspection/queue → analyze 包深边，68→71。
-    # STR-03 knowledge/（产品 stage2.global；包名避 Python 关键字）+ shared 证据原语：71→77。
-    # F4R（2026-09-24）：补登 STR-02/STR-03 改名收编时漏账的 11 条既存深边
-    # （stage4→blueprint evidence/source_contexts/narration、plot_design→shared
-    # character_refs、views/stage4→stage4.plan），77→88；F8 随旧链清零。
-    # F8b（2026-09-25）：Stage6 服务面按登记切除，views/stage6.py 随路由注销
-    # 删除，其 2 条深边（stage5.measure／stage6.hook）一并消化，88→86；
-    # views/stage7.py 经已退役的 stage7.rename 节点建 ctx、F8a 后一调用即
-    # ValueError，按 F7e delete_file 提前删除，其余 3 条深边随之消化，86→83。
-    # F8b-2（2026-09-25）：edits 路由族（旧节点人工写回面）整族退役，只剩空
-    # router，其 2 条 stage2 深边随之消化，83→81。
-    assert len(_CROSS_STAGE_DEEP_GRANDFATHER) == 81
+    # （F8c 后清单里全是范围外边，取 store→stage1.audit 这条最要紧的：
+    # 产物单口对 Stage1 的惰性深触达仍在，探测器必须还看得见它。）
+    assert ('novel/store.py', 'novel.stages.stage1.audit') in current
+    # F8c（2026-09-25）：旧链整层删除，冻结清单里 75 条深边随 importer／
+    # 目标模块从磁盘消失而一并消化（81→6）。逐条登记口径见
+    # contracts/schema/retirement.py F7e 表 grandfather 边
+    # （take_over「F8c 随旧链整层删除（grandfather 清零）」）与红账
+    # 「删除即清零」条。清单只剩 6 条范围外边，「新链不得新增这些依赖」的
+    # 正向守卫由上面的 `new` 断言继续生效——清单小不等于守卫松：
+    # 任何新深边仍然当场红。
+    assert len(_CROSS_STAGE_DEEP_GRANDFATHER) == 6
 
 
 
 def test_stage2_owner_shims_cannot_return():
-    """STR-02：旧顶层 shim（plot_* / grounding / …）已删；不得再以同名模块回流。
+    """STR-02→F8c：旧顶层 shim（plot_* / grounding / …）与整个旧 Stage2 引擎
+    都已删；不得以同名模块或整族回流。
 
-    ``extract`` 保留为 knowledge+blueprint producer 的薄公开面（无业务实现），
-    不算 shim 回流。
+    ⚠ F8c（2026-09-25）方向调整：`novel/stages/stage2/` **被新链 per-stage 包
+    原地重建**（只住 `source.py`／`names.py` 两个 owner 引擎），因此本条不再断言
+    「整包不得存在」——包回来了不等于旧链回来，**模块名**才说了算。旧 Stage2 的
+    blueprint／analyze／characters／knowledge／shared 五族与全部顶层 shim 一个
+    都不许回来；新链包里也只许有那两个模块（多一个就是旧链回流的第一级台阶）。
     """
     import importlib.util
     from pathlib import Path
 
-    root = Path(__file__).resolve().parents[1] / 'novel' / 'stages' / 'stage2'
+    stages = Path(__file__).resolve().parents[1] / 'novel' / 'stages'
+    root = stages / 'stage2'
+    # F8c：新链 stage2 包必须落位，且只住两个 owner 引擎模块。
+    assert root.is_dir(), (
+        f'novel/stages/stage2/ 不在（{root}）——F8c 分流后新链 Stage2 引擎'
+        f'（source／names）应落位')
+    present = sorted(p.stem for p in root.glob('*.py'))
+    assert present == ['__init__', 'names', 'source'], (
+        f'novel/stages/stage2/ 的模块面变了：{present}；'
+        f'新链 Stage2 只许 __init__／names／source')
     banned = [
         'plot_checks', 'plot_compile', 'plot_continuity', 'plot_diagnostics',
         'plot_edit', 'plot_inputs', 'plot_prompts', 'plot_recovery',
@@ -1014,17 +958,22 @@ def test_stage2_owner_shims_cannot_return():
         'character_rebind', 'analyze_recovery', 'analyze_draft_recovery',
         'grounding', 'global_contract', 'global_normalize',
         'global_evidence_candidates', 'knowledge_prompts', 'source_blurb',
-        'core_evidence', 'normalize',
+        'core_evidence', 'normalize', 'extract', 'checks',
     ]
-    present = [name for name in banned if (root / f'{name}.py').exists()]
-    assert not present, f'Stage2 顶层 shim 回流：{present}'
     for name in banned:
-        spec = importlib.util.find_spec(f'novel.stages.stage2.{name}')
+        # 子目录族（blueprint／analyze／characters／knowledge／shared）整族不得回来。
+        try:
+            spec = importlib.util.find_spec(f'novel.stages.stage2.{name}')
+        except ModuleNotFoundError:
+            spec = None
         assert spec is None, f'仍可解析已删 shim 模块 novel.stages.stage2.{name}'
-    assert (root / 'blueprint').is_dir()
-    assert (root / 'knowledge' / 'producer.py').is_file()
-    assert (root / 'blueprint' / 'producer.py').is_file()
-    assert (root / 'extract.py').is_file()
+    for sub in ('blueprint', 'analyze', 'characters', 'knowledge', 'shared'):
+        assert not (root / sub).exists(), (
+            f'novel/stages/stage2/{sub}/ 整族回来了——旧 Stage2 链已随 F8c 删除')
+    # 守卫的守卫：新链 Stage2 实现确实住在正式 stage2 包里（而不是又回到某个
+    # 迁移包），扫错目录时上面几条会静静地绿。
+    assert (root / 'source.py').is_file() and (root / 'names.py').is_file(), (
+        'novel/stages/stage2/{source,names}.py 不在——扫描目标错了')
 
 
 def test_the_api_layer_has_no_second_argv_builder():
@@ -1263,13 +1212,21 @@ def test_the_cli_drift_scan_actually_finds_something():
     ⚠ 下界是实测值。CLI 少接一层、或者有人把 `from novel.stages.X import y` 改成
     别的写法（例如 `importlib.import_module`），这个数就会掉下来——
     而那正是上面那条**失去扫描面**的样子。
+
+    F8b 翻转后大幅下调（66→7、8→3）：旧链七层的派发函数（`_run_stage2`…
+    `_run_stage7`）随旧链删除，11 个 `str06.` 节点在入口分流到 `_run_str06`，
+    经 `novel/stages/chain.py::execute` 走**同一条装配路径**——不为切换长第二套
+    （`novel/cli/main.py:351`）。那层不经过「CLI 点名 stage 模块符号」的写法，
+    它的 API 漂移由 `tests/test_cli.py` 与 str06 workflow 测试把守；本条只剩
+    stage0/stage1 两个仍按 `模块.属性` 点名的派发函数（7 个配对）。
     """
     refs = _cli_stage_references()
-    assert len(refs) >= 66, (
-        f'只扫到 {len(refs)} 个「CLI 点名 stage 模块符号」的配对（曾实测 66）——'
+    assert len(refs) >= 7, (
+        f'只扫到 {len(refs)} 个「CLI 点名 stage 模块符号」的配对（F8b 后实测 7）——'
         f'`_stage_aliases` 多半没认出 CLI 现在的 import 写法')
     fns = {fn for _, _, _, fn in refs}
-    assert len(fns) >= 8, f'只覆盖到 {sorted(fns)}——七个现役层的派发函数应该都在里面'
+    assert len(fns) >= 3, (
+        f'只覆盖到 {sorted(fns)}——stage0 两个、stage1 一个派发函数应该都在里面')
 
 
 # ───────────────── 跨模块「返回元数」漂移 ─────────────────
@@ -1373,7 +1330,14 @@ def test_no_caller_unpacks_a_different_number_of_values_than_declared():
 
 
 def test_the_arity_scan_actually_finds_something():
-    """守卫的守卫：两个数都是实测值，掉下来就说明解析器没认出现在的写法。"""
+    """守卫的守卫：两个数都是实测值，掉下来就说明解析器没认出现在的写法。
+
+    下界 132 设定于 2026-08-15（`72c4b2cb`）；此后旧链（stage2/4/5/6/7、
+    stage3、views 旧屏）整层删除与新链上线互换了一批「返回定长元组」的函数，
+    当前实测 130——净减 2，按现役盘面重校。解包点 201→283 同向增长。
+    ⚠ 重校只跟盘面：若哪天掉到 130 以下，仍然是「解析器没认出现在的写法」
+    或「可解析调用方消失」两种真故障，不是默认放行。
+    """
     table, sites = _arity_scan()
-    assert len(table) >= 132, f'只认出 {len(table)} 个「返回定长元组」的函数（曾实测 132）'
+    assert len(table) >= 130, f'只认出 {len(table)} 个「返回定长元组」的函数（当前实测 130）'
     assert len(sites) >= 201, f'只查到 {len(sites)} 个可解析的解包点（曾实测 201）'

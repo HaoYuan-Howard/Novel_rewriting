@@ -52,9 +52,11 @@ def _executor_flags(node: str, tokens: frozenset[str]) -> list[str]:
     return out
 
 
-_FOLLOW_CHECK_EXECUTORS = frozenset({
-    'stage2.blueprint', 'stage4.plan', 'stage6.hook', 'stage7.rename',
-})
+#: F8b 新链：付费节点的旗标面只剩 `--check-only` ⇒ 每个_profiled 节点
+#: 成功后都自动追跑一次 0 成本 check（follow step）。
+_FOLLOW_CHECK_EXECUTORS = frozenset(
+    node for node in N.PROFILED_LLM_RUNS
+    if '--check-only' in NODES[node].flags)
 
 EXECUTOR_RUN_CASES = [
     pytest.param(
@@ -616,7 +618,7 @@ def test_profiled_job_without_egress_approval_never_starts(
 
     with pytest.raises(ApprovalRequired, match='正文外发'):
         entrypoint(
-            base, 'stage2.global', SID,
+            base, 'str06.stage2.names', SID,
             executor_backend=LEGACY_BACKEND,
             egress_authorized=False,
             spawn=spawn,

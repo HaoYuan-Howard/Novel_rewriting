@@ -8,15 +8,15 @@ checkpoint 内容 hash 稳定、Brief 去源坐标投影、Bind 分母完整与 
 """
 from __future__ import annotations
 
-from contracts.schema.str06.grounding import SemanticBinding
-from contracts.schema.str06.policy import PreserveKind
-from contracts.schema.str06.source import (
+from contracts.schema.grounding import SemanticBinding
+from contracts.schema.policy import PreserveKind
+from contracts.schema.source import (
     BlueprintsArtifactV12, ChapterBlueprint, CharactersCore,
 )
-from novel.stages.str06.grounding import (
+from novel.stages.stage4.grounding import (
     assemble_binding, assemble_preserve, project_brief,
 )
-from novel.stages.str06.design_compile import assemble_body_design
+from novel.stages.stage4.design import assemble_body_design
 
 
 def _source_pair():

@@ -87,7 +87,7 @@ conda run -n novel_refactor python -m pytest -n 0 --test-layer stage --test-stag
 conda run -n novel_refactor python -m pytest -n 0 --test-layer regression --changed novel/stages/stage7/rename.py
 
 # 隔离迁移：登记范围补充导入消费者；先查看实际收集，再去掉 --collect-only 执行
-conda run -n novel_refactor python -m pytest -n 0 --changed novel/stages/str06/hook_context.py --collect-only --selection-report .test_cache/str06-selection.json
+conda run -n novel_refactor python -m pytest -n 0 --changed novel/stages/stage5/hook_context.py --collect-only --selection-report .test_cache/str06-selection.json
 
 # 已提交的删除或目录登记：使用变更前的 commit；HEAD~1 仅适用于变更就在最近一次提交
 conda run -n novel_refactor python -m pytest -n 0 --changed tests/suite_catalog.json --changed-base HEAD~1 --collect-only
@@ -165,15 +165,15 @@ conda run -n novel_refactor python -m pytest -n 0 --lf --lfnf=none -x
 |---|---|---|
 | stage0 | `tests/test_stage01.py` 的摄入、源漂移拒绝和人工修订保留 | `tests/test_api_stage01.py` 的批准与正式分章 |
 | stage1 | `tests/test_stage01.py` 的分章、空章拒绝、章号与重新分章 | `tests/test_api_stage01.py` 的连续正文与诊断读面 |
-| stage2 | `tests/test_stage2_characters.py`、`tests/test_stage2_knowledge_flow.py`、`tests/test_stage2_generation.py`、`tests/test_plot_producer.py` 的独立生成与恢复；`tests/test_plot_edit.py` / `tests/test_plot_repair.py` 的编辑与返修；`tests/test_blueprint_repair_queue.py` 的统一机械准入阻断与免费恢复 | `tests/test_stage2_node_lifecycle.py` 的正式提交与下游释放，`tests/test_plot_edit_http.py` 的 CLI 与服务重启；Stage2 语义审阅已退役，语义未审以报告 unver 行与交付披露承接 |
-| stage4 | `tests/test_stage4_v3_integration.py` 的 A/B/Context、错误证据拒绝与免费 binding 修订 | 同模块的正式读取、HTTP 与重启 |
-| stage5 | `tests/test_stage_responsibilities.py` 的正式逐章生成、提交尾窗的第三方字节拒绝与免费恢复 | 正式 Chapter 读回与 Review；替换判据的 `tests/test_stage5_generation.py` 保留在单元 / contract 层 |
-| stage6 | `tests/test_stage_responsibilities.py` 的 Hook、双判官、定稿及证据缺失 / 恢复 | 真实 Stage6 页面读面；此前仅 corpus 覆盖的成功路径已加入默认测试 |
-| stage7 | `tests/test_stage_responsibilities.py` 的改名、定稿、组装、上游篡改拒绝和原字节恢复 | 正式下载读取与 golden set 收集器 |
+| stage2 | `tests/test_str06_source.py` 的源折叠与名称结构生成、`tests/test_str06_target.py` 的章预算与 IR 投影拒绝；付费边界与历史采用见 `tests/test_str06_f7a_wiring.py` | `tests/test_str06_cli_dispatch.py` 的 `novel.cli run` 分流与 `--yes` 闸，`tests/test_str06_views.py` 的候选只读监控；Stage2 语义审阅已退役，语义未审以 unver 披露承接 |
+| stage4 | `tests/test_str06_target.py` 的 Design/Assembly 编译、 dangling 与回路拒绝；`tests/test_str06_f7a_wiring.py` 的 binding 证据拒绝与 owner 停止 | 同层的候选只读监控（`/api/str06/candidates/:candidate/design`、`/ir`）与免费 `str06.stage4.compile` 复跑 |
+| stage5 | `tests/test_str06_body.py` 的逐章正文、预算带与称谓释放，`tests/test_str06_hook.py` 的开篇 Hook 与机械回执 | `tests/test_str06_workflow.py` 的仓储 replay 与 writer 消费；正式正文读回走候选 chapters 读面 |
+| stage6 | 已随 STR-06 切换整层退役（F8b）：不补占位流程，历史反例见 Git | 无现役页面；Hook 的必要选择已进 Stage4 正式 Design |
+| stage7 | `tests/test_str06_naming.py` 的改名、确定性替换与残留硬闸；`tests/test_str06_workflow.py` 的组装交付 | `tests/test_str06_views.py` 的 naming/delivery 读面与候选下载（`/book`） |
 
 `tests/test_test_selection.py` 检查目录表覆盖、混合分类、传递消费与实际 pytest 入口；
-`tests/test_stage_responsibilities.py` 的上游由正式 producer 建立，再以 `FrozenTree` 逐例还原，
-被测 stage 重新执行并读取真实结果。选择较早的 stage 时，准备不会为了后续阶段测试继续生成整书。
+新链阶段用例的上游由 `tests/str06_facilities.py` 与 fake transport 建立，被测节点重新执行并
+读取真实结果；选择较早的节点时，准备不会为了后续阶段测试继续生成整书。
 
 ## Golden set 与 corpus
 

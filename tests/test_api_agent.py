@@ -90,8 +90,8 @@ def client(tmp_path):
 # ── 派发 harness：HTTP 拉起的 agent 走真实 Supervisor ──────────────────
 
 def _install_dispatch(monkeypatch, tmp_root, *, blocking=True, ready_reads=1):
-    """前 ``ready_reads`` 次读面各派发一个零成本子进程，之后停在 stage0.approve
-    人工闸（exit 2 stopped）。
+    """前 ``ready_reads`` 次读面各派发一个零成本子进程，之后撞上阻断面
+    （exit 2 stopped；2026-09-15 后没有人工闸，标签只作 waiting_on 用）。
 
     * ``blocking=True``：子进程等到 ``<stem>.go`` 出现才退出（暂停/停止类用例）。
     返回 box：reads / argvs(epoch, permit, stem) / marker_root。
@@ -133,8 +133,9 @@ def _install_dispatch(monkeypatch, tmp_root, *, blocking=True, ready_reads=1):
 
     monkeypatch.setattr(agent.operator, 'next_action_at_code', next_action)
     monkeypatch.setattr(agent, '_run_step_argv', step_argv)
-    monkeypatch.setattr(
-        agent, '_delivery_pause_note', lambda *_args, **_kwargs: None)
+    # ⚠ F8c：旧链 stage2.blueprint/stage4.plan「已保留 N 章 checkpoint」的交付
+    #   暂停注记（`agent._delivery_pause_note`）随旧链整层退役——`_run_token`
+    #   现在恒传 `pause_note=None`，harness 无需也不得再替它打桩。
     monkeypatch.setattr(
         agent, '_assess_delivery',
         lambda *_args, **_kwargs: AgentDeliveryOutcome(

@@ -8,10 +8,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from contracts.invariants import STAGES
 from novel.errors import ArtifactUnreadable, UpstreamMissing
 from novel.orchestrator import approvals as A
 from novel.orchestrator import inspection as I
+from novel.stages import checkable_stages
 
 
 def test_operator_snapshot_freezes_one_code_and_runs_each_check_once(
@@ -35,7 +35,7 @@ def test_operator_snapshot_freezes_one_code_and_runs_each_check_once(
 
     def check_only(stage):
         def run(ctx):
-            # 真实 Stage4/5 复检会间接消费 Stage2/KL 的审批坐标。
+            # 真实 Stage0/1 复检会间接消费审批坐标。
             # 它们也必须复用外层身份，不能按内部闸门数量再调用 Git。
             assert A.projection_code() == 'code-v1'
             check_calls.append((stage, ctx))
@@ -48,11 +48,22 @@ def test_operator_snapshot_freezes_one_code_and_runs_each_check_once(
 
     assert len(code_calls) == 1
     assert overview_calls == [(tmp_path / 'book', 'code-v1')]
-    assert [stage for stage, _ctx in check_calls] == list(STAGES)
+    # F8c：快照只采集有层级复检器的层（stage0/1）；新链 Stage2/4/5/7 的复检是
+    # 节点级 `--check-only`，不进这份快照——`check(stage)` 对它们是「未采集」，
+    # 由消费者显示「校验未知」，不是绿灯。
+    assert sorted(stage for stage, _ctx in check_calls) == sorted(checkable_stages())
     assert all(ctx[2] == 'code-v1' for _stage, ctx in check_calls)
     assert snapshot.overview is overview
     assert A._READ_CODE.get() is None
-    assert all(snapshot.check(stage).report is not None for stage in STAGES)
+    assert set(snapshot.checks) == set(checkable_stages())
+    assert all(snapshot.check(stage).report is not None
+               for stage in checkable_stages())
+    # 没采集的层（新链 Stage2/4/5/7 走节点级 --check-only）给「未采集」观测：
+    # for_view() 为 None ⇒ 界面显示「校验未知」，不是绿灯。
+    assert snapshot.check('stage2').for_view() is None
+    assert snapshot.check('stage2').report is None
+    with pytest.raises(KeyError):
+        snapshot.check('stage3')  # 不在 STAGES 的层名是拼写错误，必须当场炸
     with pytest.raises(TypeError):
         snapshot.checks['stage0'] = I.CheckObservation()  # type: ignore[index]
 
@@ -84,7 +95,7 @@ def test_operator_snapshot_accepts_prevalidated_epoch_code_without_rehashing_rep
     assert snapshot.surface_seal == 'seal:epoch-code'
 
 
-def test_operator_snapshot_rejects_a_write_crossing_its_seven_checks(
+def test_operator_snapshot_rejects_a_write_crossing_its_checks(
         monkeypatch, tmp_path):
     monkeypatch.setattr(
         I.paths, 'resolve_novel_dir', lambda _base, _sid: tmp_path / 'book')
@@ -138,67 +149,45 @@ def test_check_observation_only_downgrades_expected_unavailable_errors():
 
 def test_approval_projection_reuses_snapshot_overview_and_code_without_fallback(
         monkeypatch, tmp_path):
-    overview = SimpleNamespace(sid='book-1')
-    record = SimpleNamespace(sid='book-1')
-    contexts: list[tuple] = []
+    """F8c：人工闸整层退役后，投影只剩「同一次只读调用复用冻结坐标」这一职责。
 
-    monkeypatch.setattr(A, '_read_current', lambda *_args: record)
-    # Stage2 复核闸退役：_spawns 的 s1/s4 分支改由统一机械准入发布；
-    # s5 的 Prepare 视图在快照投影内不得做真实盘读，一并按合成状态给。
-    from novel.orchestrator import mechanical_admission
-    monkeypatch.setattr(mechanical_admission, 'blueprint_generation_ready',
-                        lambda *_args: mechanical_admission.AdmissionCheck(
-                            'stage2.blueprint', ok=False))
-    monkeypatch.setattr(mechanical_admission, 'stage4_plan_ready',
-                        lambda *_args: mechanical_admission.AdmissionCheck('stage4.plan', ok=False))
-    monkeypatch.setattr(A, 'current_infeasible_binding', lambda _store: None)
-    import novel.stages.stage6.prepare as prepare_stage6
-    monkeypatch.setattr(
-        prepare_stage6, 'view_state', lambda _store: SimpleNamespace(
-            pending_commit=False, state='missing'))
+    operator/inspection 已在动作前后各做一次 surface seal CAS；投影内的所有
+    嵌套只读（queue、inbox、workflow_transition 的离线迁移）必须沿用这一份
+    overview/code，不能按内部闸门数量再跑 overview 或再取整仓 Git 指纹。
+    """
+    overview = SimpleNamespace(sid='book-1')
+
     monkeypatch.setattr(
         A.paths, 'resolve_novel_dir', lambda base, sid: tmp_path / 'book_1')
     monkeypatch.setattr(
-        A.state, 'overview',
-        lambda *_args: pytest.fail('快照审批投影不得再跑 overview'))
-    monkeypatch.setattr(
         A.prov, 'code_version',
         lambda: pytest.fail('快照审批投影不得再取 code_version'))
-    monkeypatch.setattr(
-        A.state, 'resume_verdict', lambda _overview, _node: (A.state.RESUME_SKIP, ''))
-    monkeypatch.setattr(
-        A.state, 'readonly_ctx',
-        lambda novel_dir, node, code: contexts.append((novel_dir, node, code)) or 'ctx')
-    monkeypatch.setattr(A, 'ArtifactStore', lambda ctx: ('store', ctx))
 
-    def view(base, got, *, include_spawns, operator_projection):
-        assert got is record
-        assert include_spawns is True
-        assert operator_projection is False
-        A._spawns(base, 'book-1')
-        assert A._store_for(tmp_path) == ('store', 'ctx')
-        return 'approval-doc'
-
-    monkeypatch.setattr(A, '_view', view)
-
-    assert A.get(
-        tmp_path, 'book-1', overview=overview, code='code-v1') == 'approval-doc'
-    # _spawns 先用解析后的书目录建 ctx（含 s4 的 infeasible 只读检查）；
-    # 外层审批投影仍用 base 本身。
-    # Stage6 prepare/hook 的 spawn 恢复探针已随 F8b-2 Stage6 分支切除：
-    # 剩一次 _spawns 的只读 ctx ＋ 外层审批投影的 base ctx。
-    assert contexts == [(tmp_path / 'book_1', 'stage0.remove', 'code-v1'),
-                        (tmp_path, 'stage0.remove', 'code-v1')]
+    with A.read_projection(overview=overview, code='code-v1'):
+        assert A.projection_code() == 'code-v1'
+        assert A._READ_OVERVIEW.get() is overview
+        # 嵌套只读调用不给坐标时继承外层快照，不另取指纹。
+        with A._read_projection(overview=None, code=None):
+            assert A.projection_code() == 'code-v1'
+            assert A._READ_OVERVIEW.get() is overview
     assert A._READ_CODE.get() is None
     assert A._READ_OVERVIEW.get() is None
 
 
 def test_approval_projection_requires_a_complete_matching_snapshot_coordinate():
+    """只读投影坐标必须成对提供且属于本书；半份或跨书坐标一律明确拒绝。"""
     overview = SimpleNamespace(sid='book-1')
     with pytest.raises(ValueError, match='必须成对提供'):
-        A.get('.', 'book-1', overview=overview)
+        A._validate_read_projection('book-1', overview=overview, code=None)
+    with pytest.raises(ValueError, match='必须成对提供'):
+        A._validate_read_projection('book-1', overview=None, code='code-v1')
     with pytest.raises(ValueError, match='不是'):
-        A.get('.', 'other-book', overview=overview, code='code-v1')
+        A._validate_read_projection('other-book', overview=overview, code='code-v1')
+    with A.read_projection(overview=overview, code='code-v1'):
+        with pytest.raises(ValueError, match='另一书'):
+            A._validate_read_projection('other-book', overview=None, code=None)
+    # 成对且属于本书时放行，不抛。
+    A._validate_read_projection('book-1', overview=overview, code='code-v1')
 
 
 def test_read_surface_seal_ignores_unregistered_documents(

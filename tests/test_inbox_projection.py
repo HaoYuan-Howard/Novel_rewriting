@@ -6,60 +6,24 @@
   · **UG-11**（计划轻重告警没有处置回环）→ 处置=归人判断：那两条 INFO 的
     remediation 恒为 `human`，而任何 `human` 命中都会被生产者收进清单；
   · **UG-12**（定向重生成被驳回后没有恢复路径）→ `rejected` 类入列，
-    `how` 里带 `_rounds/` 归档指针与 `--revalidate` 出路。
+    `how` 里带 `_rounds/` 归档指针与当前 producer 真有的出路。
+
+⚠ F8c：旧链待办面（stage6 候选定稿、stage7 人名表定稿闸、stage2 称名投影
+免费物化、stage5 章级 INVALID/rejected revisions、trim 审计待核验、stage5
+Review 收敛账）随旧链整层退役——它们的节点与旗标不在现役 `NODES`。本文件的
+现役断言一律走**合成输入**（受控报告 / 最小只读盘面），不再依赖已退役的
+stage6 语料；live `.INVALID` 的阻断由 `_invalid_items` 通用投影与 queue 的
+收件箱分类负责。
 """
 from __future__ import annotations
 
-import json
-import shutil
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 
-import pytest
-
-from novel.orchestrator.inbox_projection import inbox_view
-from tests import corpus, sandbox
-
-STAGE6_INPUTS = ('stage1/hook_copy.json', 'stage2/global_grounding.json',
-                 'stage4/writer_context.json',
-                 'stage6/hook.json')
-
-#: 盘上有 `hook_ending_shape` 命中（×2）的那本——对账表 `test_stage6.EXPECTED_HITS` 同源。
-BOOK_WITH_HITS = '我把夫君捧成头牌后，全家悔疯了_7615069877019300633'
-
-
-def _books() -> set[str]:
-    return {a.book_dir for a in corpus.iter_artifacts() if a.rel == 'stage6/hook.json'}
-
-def _STAGE6_CORPUS(test):
-    test = pytest.mark.corpus(test)
-    return pytest.mark.skipif(
-        not _books(), reason='盘上没有 stage6 语料——这几条**没在查**，不是「查过没事」')(test)
-
-
-def _drafts_of(book: str) -> tuple[str, ...]:
-    return tuple(sorted(
-        a.rel for a in corpus.iter_artifacts()
-        if a.book_dir == book and a.pattern == 'stage5/ch{nn}.json'
-        and '_rounds/' not in a.rel))
-
-
-@pytest.fixture
-def box():
-    """⚠ 首选 `BOOK_WITH_HITS`，其次**成稿链条相对上游是当前**的那一本。
-
-    收缩审计那条用例要在 stage5 的待核验清单里看见自己种下的那一行，而清单是从
-    验收报告来的：成稿一旦相对重生成过的 `stage4/writer_context.json` 过期，
-    stage5 那一段整段产不出来 ⇒ 清单为空，用例红在「种下的那一行没进清单：[]」上，
-    看起来像视图漏了行。实测：过期的两本 0 行，链条干净的那本 3 行且含种下的那一行。
-    """
-    books = _books()
-    book = BOOK_WITH_HITS if BOOK_WITH_HITS in books else next(
-        (candidate for candidate in sorted(books)
-         if (rels := _drafts_of(candidate)) and corpus.is_current(candidate, *rels)),
-        sorted(books)[0])
-    s = sandbox.Sandbox(book, STAGE6_INPUTS + _drafts_of(book))
-    yield s
-    s.close()
+from contracts.invariants import INBOX_KIND
+from contracts.schema.orchestration import NovelOverview, OverviewSummary
+from novel.orchestrator.inspection import (
+    OperatorReadSnapshot, read_surface_seal,
+)
 
 
 def test_human_only_collects_hits_whose_remediation_is_human():
@@ -83,65 +47,105 @@ def test_human_only_collects_hits_whose_remediation_is_human():
     assert '--apply-edit' not in human[0].how and '--pick' not in human[0].how
 
 
-def test_final_approval_inbox_commands_bind_the_same_fresh_workpack():
-    """恢复命令只搬运同一份 fresh workpack 的 opaque token。
+def test_retired_human_gate_inbox_producers_stay_deleted():
+    """F8c：人工闸整层退役——审批类待办生产者随旧链删除，不得复活。
 
-    ⚠ Stage6 候选核验/定稿两项已随 Stage6 整层退役（F8b）：新链 Hook 单输出，
-    没有待人工核验的候选集；本指令只留 stage7 人名表的机械定稿披露。
+    新链没有审批面（`HUMAN_NODES` 为空、无 gate/closure/workpack 节点）：
+    stage6 候选核验/定稿、stage7 人名表定稿闸、stage2 称名投影免费物化、
+    stage5 章级 INVALID/rejected revisions、trim 审计待核验、stage5 Review
+    收敛账这些生产者都只能由旧链节点写出，而生产入口已拒识旧节点
+    （`RETIRED_NODES` ⇒ legacy_incompatible）⇒ 待办清单只剩盘上 `.INVALID`
+    （`_invalid_items`）与 0 成本复检报告（`_report_items`）两类现役数据源。
+    任何审批待办生产者回来都意味着第二套人工闸（I-16：每类信息一个权威源）。
+    """
+    from novel.orchestrator import inbox_projection as I
+    for retired in (
+        '_approval_items', '_stage2_projection_recovery_items',
+        '_stage2_legacy_blueprint_recovery_items',
+        '_stage5_stalled', '_stage5_chapter_invalids',
+        '_stage5_rejected_revisions', '_trim_verification_items',
+        '_report_items_for_inbox',
+    ):
+        assert not hasattr(I, retired), (
+            f'{retired} 是旧链待办生产者，不应随 F8c 复活')
+
+
+def test_unver_and_skipped_rows_never_enter_the_inbox():
+    """「查不了」是判据的边界不是待办——堆进清单就永远清不空。
+
+    F8c：改走受控报告（原用例依赖已退役的 stage6 语料与旧判据表）：只有
+    `status=hit` 的结论能进清单，`unver`／`skipped` 一律不入列。
     """
     from novel.orchestrator import inbox_projection as I
 
-    stage7_pack = SimpleNamespace(
-        disposition='review_required', workpack_sha256='c' * 64,
-        review_token='s7r3_' + 'c' * 64,
-        decision_subject_sha256='d' * 64,
-    )
+    def line(status, rule, detail):
+        return SimpleNamespace(
+            status=status, sev='unver' if status == 'unver' else 'info',
+            remediation='none' if status != 'hit' else 'human', fix=None,
+            rule=rule,
+            findings=[SimpleNamespace(
+                output_ordinal=2, wontfix=None, unresolved_rounds=0,
+                owner='stage1', detail=detail)])
 
-    approvals = I._approval_items(
-        '.', 'code', stage7_workpack=stage7_pack, workpacks_checked=True)
+    rows = I._report_items(SimpleNamespace(rules=[
+        line('unver', 'body_semantics_unver', '语义判不了'),
+        line('skipped', 's1_warnings', '这一轮没查'),
+        line('hit', 's1_warnings', '切分告警需人工判断'),
+    ]), 'stage1')
+    assert [row.rule for row in rows] == ['s1_warnings']
+    assert not [row for row in rows if 'unver' in row.rule]
 
-    by_rule = {row.rule: row for row in approvals}
-    # 批次 B4：stage7.approve 退役；人名表未定稿投影为 rename 验证项。
-    assert set(by_rule) == {'stage7.rename'}
-    assert 'stage7.rename --recheck' in by_rule['stage7.rename'].how
-    assert 'system:stage7-auto' in by_rule['stage7.rename'].how
 
+def test_counts_total_and_kind_partition_are_mutually_consistent(tmp_path):
+    """八键全出（0 也出）、counts == items 分组 == total——载体后置条件。
 
-def test_final_approval_inbox_omits_already_current_actions():
-    """同一当前工作包已经盖章时不再发布重复 approve/verification 动作。"""
+    F8c：改走合成快照（原用例依赖已退役的 stage6 语料）：空书目录＋未采集
+    复检的快照也必须给出完整的八键计数与自洽总分——干净书是 0，不是缺键。
+    """
     from novel.orchestrator import inbox_projection as I
 
-    stage7_pack = SimpleNamespace(
-        disposition='already_current', workpack_sha256='c' * 64,
-        review_token='s7r3_' + 'c' * 64,
-        decision_subject_sha256='d' * 64,
-    )
+    book = tmp_path / 'book-1'
+    book.mkdir()
+    code = 'code-v1'
+    overview = NovelOverview(
+        sid='book-1', title='测试书', dirname=book.name, stages=[],
+        summary=OverviewSummary(
+            verdict='pending', text='待继续', detail='下一步待判',
+            artifact_count=0, latest_mtime=None))
+    snapshot = OperatorReadSnapshot(
+        base=tmp_path.resolve(), sid='book-1', novel_dir=book.resolve(),
+        code=code, surface_seal=read_surface_seal(tmp_path, 'book-1', code=code),
+        overview=overview, checks=MappingProxyType({}))
 
-    assert I._approval_items(
-        '.', 'code', stage7_workpack=stage7_pack, workpacks_checked=True) == []
+    view = I.inbox_from_snapshot(snapshot)
+
+    assert set(view.counts) == set(INBOX_KIND)
+    assert view.total == len(view.items) == sum(view.counts.values()) == 0
 
 
 def test_missing_blueprint_projection_inbox_points_only_to_free_materialization():
-    """待办文案不能把缺伴生产物说成要重新付费抽 Global。"""
+    """待办文案不能把缺伴生产物说成要重新付费抽 Global。
+
+    F8c：称名投影恢复生产者随 `stage2.characters` 旧链节点退役（artifact 键
+    移入 `RETIRED_ARTIFACT_PATHS`）——同名待办行不再存在，也不得指一条
+    已退役节点的 `--revalidate`。存活下来的是同一条纪律的通用形状：live
+    `.INVALID` 的恢复文案只指当前 producer 真有的入口，没有就明说没有。
+    """
     from novel.orchestrator import inbox_projection as I
+    assert not hasattr(I, '_stage2_projection_recovery_items')
 
-    grounding = SimpleNamespace(
-        rel='stage2/characters.json', exists=True, readable=True,
-        freshness='fresh', invalid=False,
-    )
-    projection = SimpleNamespace(
-        rel='stage2/blueprint_character_projection.json', exists=False,
-        readable=True, freshness='unknown', invalid=False,
-    )
-    ov = SimpleNamespace(stages=[SimpleNamespace(
-        stage='stage2', artifacts=[grounding, projection])])
+    from contracts.artifacts import STR06_STAGE2_BLUEPRINTS, RETIRED_ARTIFACT_PATHS
+    from novel import paths
 
-    rows = I._stage2_projection_recovery_items(ov)
-
-    assert len(rows) == 1 and rows[0].kind == 'repairable'
-    assert rows[0].rule == 'blueprint_character_projection'
-    assert 'stage2.characters --revalidate' in rows[0].how
-    assert '免费' in rows[0].how and '不会重采人物或知识' in rows[0].how
+    invalid = paths.invalid_of(STR06_STAGE2_BLUEPRINTS)
+    store = _InvalidStore(present={STR06_STAGE2_BLUEPRINTS, invalid}, versions={})
+    rows = I._invalid_items(store, 'stage2')
+    assert len(rows) == 1 and rows[0].kind == 'rejected'
+    # 恢复文案不许指旧链节点的提升路，也不许暗示一次新的付费抽取。
+    assert '没有可执行的 INVALID 提升入口' in rows[0].how
+    assert '--revalidate' not in rows[0].how
+    assert 'stage2.characters' not in rows[0].how
+    assert RETIRED_ARTIFACT_PATHS['stage2.blueprint_character_projection']
 
 
 def test_old_blueprint_has_no_separate_migration_inbox():
@@ -209,99 +213,6 @@ def test_stage5_length_over_uses_the_finding_chapter_without_display_side_guessi
     rows = I._report_items(SimpleNamespace(rules=[line]), 'stage5')
     assert len(rows) == 1 and rows[0].chapter == 3
     assert '没有 0 成本人工入口' in rows[0].how
-
-
-@_STAGE6_CORPUS
-def test_unver_rows_never_enter_the_inbox(box):
-    """「查不了」是判据的边界不是待办——堆进清单就永远清不空。"""
-    from contracts.rules import REGISTRY
-    view = inbox_view(str(box.root), box.sid)
-    unver_rules = {r.rule for r in REGISTRY.all() if r.sev == 'unver'}
-    assert not [it for it in view.items if it.rule in unver_rules]
-
-
-@_STAGE6_CORPUS
-def test_counts_total_and_kind_partition_are_mutually_consistent(box):
-    """八键全出（0 也出）、counts == items 分组 == total——载体后置条件与实产共同钉住。"""
-    view = inbox_view(str(box.root), box.sid)
-    assert set(view.counts) == {'invalid', 'rejected', 'stalled',
-                                'repairable', 'human_only', 'verification',
-                                'upstream', 'approval'}
-    assert view.total == len(view.items) == sum(view.counts.values())
-
-
-@_STAGE6_CORPUS
-def test_an_invalid_without_formal_is_invalid_and_with_formal_is_rejected(box):
-    """同一个 `.INVALID`，正式稿在不在决定它是「在等人改」还是「钱花了稿丢了」。"""
-    formal = box.dir / 'stage6' / 'hook.json'
-    shutil.copyfile(formal, box.dir / 'stage6' / 'hook.INVALID.json')
-
-    view = inbox_view(str(box.root), box.sid)
-    rejected = [it for it in view.items if it.kind == 'rejected' and it.stage == 'stage6']
-    assert len(rejected) == 1
-    assert rejected[0].rule == 'stage6.hook'
-    # UG-12 的锚：被驳回之后的下一条恢复路径写在 how 里——归档指针 + 0 成本出路。
-    assert '_rounds' in rejected[0].how and '--revalidate' in rejected[0].how
-    assert 'system:invalid-revalidate' in rejected[0].how
-    assert '0 LLM' in rejected[0].how
-
-    formal.unlink()
-    view2 = inbox_view(str(box.root), box.sid)
-    invalid = [it for it in view2.items if it.kind == 'invalid' and it.stage == 'stage6']
-    assert len(invalid) == 1
-    assert '--revalidate' in invalid[0].how
-    assert 'system:invalid-revalidate' in invalid[0].how
-    assert '0 LLM' in invalid[0].how
-    assert not [it for it in view2.items if it.kind == 'rejected' and it.stage == 'stage6']
-
-
-@_STAGE6_CORPUS
-def test_plan_info_warnings_route_to_human_and_thus_into_the_inbox():
-    """Stage4 INFO 的处置是「归人判断」——remediation 恒 `human`，
-    而 `_report_items` 把任何 `human` 命中收进清单（上一条已验）。两半合起来即回环。"""
-    from contracts.rules import REGISTRY
-    from novel.report.builder import remediation_of
-    for rule_id in ('causal_disclosure', 'verbatim_starved'):
-        rule = REGISTRY.get(rule_id)          # 改名会在这里当场说话
-        assert rule.sev == 'info'
-        assert remediation_of(rule) == 'human'
-
-
-@pytest.mark.skip(
-    reason='旧链 Stage5 Review 收敛账（band_drift/book_length＋stage5.review '
-           '--wontfix 路由）；判据表已翻新链（F8a），新链无 stalled 收敛账，'
-           'INVALID 由 owner 重跑处置。F8c 随 _stage5_stalled 及本测试删除，'
-           'F8d 前清零跳过。')
-def test_stalled_items_only_take_hard_info_at_the_stop_threshold(monkeypatch):
-    """轮次到顶只升级 HARD/INFO；常驻 METRIC/UNVER 不是修复失败。"""
-    from novel.stages.stage5 import review
-    from novel.orchestrator import inbox_projection as I
-
-    def finding(rule, rounds, wontfix=None):
-        return SimpleNamespace(rule=rule, detail=f'{rule} 连续未消', evidence_key='e',
-                               unresolved_rounds=rounds, wontfix=wontfix)
-
-    rev = SimpleNamespace(
-        chapters=[SimpleNamespace(output_ordinal=3, findings=[
-            finding('band_drift', 2),
-            finding('dialogue_ratio_drift', 1),
-            finding('invented_number', 2, wontfix=object()),
-        ])],
-        book=[
-            finding('book_length', 2),
-            finding('end_hook_surface_report', 2),
-            finding('must_hold_unver', 2),
-        ])
-    status = SimpleNamespace(state='fresh', fresh=True, reasons=[], review=rev)
-    monkeypatch.setattr(review, 'review_status', lambda _ctx, _store: status)
-
-    # ⚠ 豁免计数**不再由这个函数交**：那张账逐层各一份（`<stage>/wontfix.json`），
-    #   由 `inbox_view` 跨层求和。顺手在这里数会把 stage5 那一份数两次。
-    items = I._stage5_stalled(SimpleNamespace(ctx=object()))
-    assert [(it.rule, it.chapter) for it in items] == [('book_length', None), ('band_drift', None)]
-    assert '[3]' in next(it.what for it in items if it.rule == 'band_drift')
-    assert all(it.kind == 'stalled' and 'wontfix' in it.how for it in items)
-    assert all('stage5.review --wontfix' in it.how for it in items),         'stalled 那条路要指名节点——`--wontfix` 现在两层都有'
 
 
 def test_the_fallback_how_only_names_commands_that_can_actually_be_built():
@@ -483,115 +394,3 @@ def test_a_hard_local_hit_with_a_fix_route_is_repairable_not_human_only():
     rows = I._report_items(SimpleNamespace(rules=[line]), 'stage2')
     assert len(rows) == 1 and rows[0].kind == 'repairable'
     assert '`stage2.global --apply-edit stage2/global_edit.json`' in rows[0].how
-
-
-@_STAGE6_CORPUS
-def test_global_review_pending_fail_and_unver_are_verification_rows(box):
-    """未决 / `UNVER` / `FAIL` 进待核验清单，`PASS` 不进。
-
-    ⚠⚠ **审阅面必须从 `build_review` 现算，不许手搓几条 item。** 这里曾经手搓四条
-    （`source_sha256='b'*64` + 自造的 `subject_path`/`subject_sha256`），而
-    `_global_review_freshness`（`novel/store.py:1120-1138`）拿 `build_review(grounding)`
-    现算的主体哈希与逐条**身份四元组**去比 ⇒ 手搓的载荷**按构造永远算不出 `fresh`**；
-    而 `stage2/global_review.json` 在 `SELF_FRESH_DETERMINISTIC` 里 ⇒ `store.write` 必拒
-    （实测 `ProvenanceRefused: … stale/file_changed`）。
-    这是 `docs/LESSONS.md` 第 21 条第一形状：**守卫重拼了生产的实参**。
-    ⇒ 身份四元组一个字不动，只改 `state`/`actor`/`reason` 三格——那三格恰恰是新鲜度
-    **不看**的，理由就写在 `novel/store.py:1121-1122`（批准完成度是闸门/界面的事，不是新鲜度）。
-    """
-    from contracts.artifacts import STAGE2_GLOBAL_REVIEW
-    from novel import prov
-    from novel.orchestrator.state import readonly_ctx
-    from novel.quality.global_review import build_review
-    from novel.store import ArtifactStore
-
-    expected = build_review(box.read('stage2/global_grounding.json'))
-    corpus.declared_dependency(
-        len(expected.items) >= 4,
-        needs=(f'一份至少 4 条审阅项的 stage2/global_grounding.json'
-               f'（这本现算出 {len(expected.items)} 条，凑不出四种决策状态）'),
-        produced_by='stage2.global', cost='付费')
-
-    decided = {'actor': 'reviewer', 'decided_at': '2026-08-16T00:00:00+00:00'}
-    items = list(expected.items)
-    items[1] = items[1].model_copy(update={'state': 'UNVER', 'reason': '证据不足', **decided})
-    items[2] = items[2].model_copy(update={'state': 'FAIL', 'reason': '与原文冲突', **decided})
-    items[3] = items[3].model_copy(update={'state': 'PASS', 'reason': '已核实', **decided})
-
-    store = ArtifactStore(readonly_ctx(box.dir, 'stage2.global', prov.code_version()))
-    store.write(STAGE2_GLOBAL_REVIEW, expected.model_copy(update={'items': items}))
-    assert store.freshness(STAGE2_GLOBAL_REVIEW).state == 'fresh', \
-        '只改三格决策就被判过期了——那说明新鲜度现在也看决策状态，本条的构造前提没了'
-
-    rows = [row for row in inbox_view(str(box.root), box.sid).items
-            if row.kind == 'verification' and row.stage == 'stage2']
-    # ⚠ 断言写成**取值面的补集**，不写成手数出来的那几个 id：现役语料一本有几十条审阅项，
-    #   数出来的那份一换书就错，而它会红在「这本书碰巧有几条」上，不是它要验的那件事。
-    assert {row.rule for row in rows} == {
-        item.item_id for item in items if item.state != 'PASS'}
-    assert all('--review-decisions' in row.how and 'subject hash' in row.how for row in rows)
-
-
-@_STAGE6_CORPUS
-def test_an_over_length_trim_audit_is_a_verification_row(box):
-    import hashlib
-
-    from contracts.artifacts import STAGE4_WRITER_CONTEXT, artifact_rel
-    from contracts.schema.evaluation import TrimAudit
-    from contracts.schema.stage4 import WriterContext
-    from novel import prov
-    from novel.orchestrator.state import readonly_ctx
-    from novel.stages.stage5 import measure as M
-    from novel.store import ArtifactStore
-
-    store = ArtifactStore(readonly_ctx(box.dir, 'stage5.write', prov.code_version()))
-    drafts, _invalid, _judged = M.load_drafts(store)
-    ordinal = next(iter(sorted(drafts)))
-    draft = drafts[ordinal]
-    before = hashlib.sha256(draft['text'].encode('utf-8')).hexdigest()
-    audit = TrimAudit(before_sha256=before, reason='超上限；本仓没有自动收缩路径，保留 pretrim，转 verification')
-    store.write(artifact_rel('stage5.trim_audit', nn=ordinal), audit)
-
-    rows = [row for row in inbox_view(str(box.root), box.sid).items
-            if row.kind == 'verification' and row.stage == 'stage5']
-    # ⚠ 断言**不能**写成「恰好只有这一行」：语料书自己可能带着一批未采用的收缩审计
-    #   （现役这本 11 章都因为 evaluator profile 缺席保留了 pretrim），
-    #   那时这一条会红在「语料碰巧有几行」上，而不是它要验的那件事。
-    by_rule = {row.rule: row for row in rows}
-    rule = f'trim_audit_ch{ordinal:02d}'
-    assert rule in by_rule, f'种下的那一行没进清单：{sorted(by_rule)}'
-    assert all(row.rule.startswith('trim_audit_') for row in rows), \
-        f'stage5 的 verification 只该由收缩审计产生：{sorted(by_rule)}'
-    seeded = by_rule[rule]
-    assert seeded.chapter == ordinal
-    assert audit.reason in seeded.what, \
-        f'这一行不是从种下的那份 audit 渲染的：{seeded.what}'
-
-    # `what` 里的读数全由 `trim_resolution.verification_context` **现算**，
-    # 所以这里按产地各取一次再比字面，不只查 `当前 pretrim` / `目标 ` 两个前缀：
-    # 拿错章的字数、读错目标区间、把超限差算反这三种漂移只查前缀时全程绿着，
-    # 而这条 detail 存在的全部理由就是把这三个数摊给人看。
-    # 字数取自 `draft['text']`（装载器那一路）而不是再 `read_own` 一遍正式稿：
-    # 两者必须同文本，否则 audit 算不上 current、上面那行就进不了清单。
-    chars = M.chars_of(draft['text'])
-    entry = next(row for row in store.read(WriterContext, STAGE4_WRITER_CONTEXT).chapters
-                 if row.output_ordinal == ordinal)
-    lo, hi = M.target_range(entry.model_dump(by_alias=True))
-    # 这一行故意不把「语料这一章真的超上限」当前提声明（也不走 `declared_dependency`）：
-    # 种下的 audit 本就是合成的，真正被测的是「现算的关系句说不说得准」；
-    # 拿它当前提会让整条用例在一本「没有超限章」的书上静默跳过。
-    relation = (f'超上限 {chars - hi} 字' if chars > hi
-                else f'未超上限（距上限 {hi - chars} 字）')
-    assert (f'当前 pretrim {chars} 字，目标 {lo}~{hi} 字，{relation}'
-            in seeded.what), f'读数对不上产地：{seeded.what}'
-    # ⚠ 这里曾并排断言 `after={after}`，而 `after` 自 cfc747a（收缩臂整臂下线）起
-    #   就没有定义了：`TrimAudit.after_sha256` 随另外五格一起删除（它恒等于 before，
-    #   是拷贝不是读数），`verification_context` 的 identity 同批收成单边。
-    #   身份只剩一个哈希，另一半改由上面三个**带值**的读数承担；
-    #   别照旧文案把 `after=` 加回产地。
-    assert f'audit before={before}' in seeded.what
-
-    # 批次 C：trim 超限转披露；不再指向已退役的人工 retain-pretrim 写面。
-    assert '披露' in seeded.how and '机械处置' in seeded.how
-    assert '--retain-pretrim' not in seeded.how
-    assert seeded.delivery_effect == 'disclosure'

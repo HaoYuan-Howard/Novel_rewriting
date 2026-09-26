@@ -14,9 +14,7 @@ test_cli.py —— **唯一能把异常翻译成退出码的那一层**。
 from __future__ import annotations
 
 import io
-import json
 import os
-import shlex
 import sys
 from pathlib import Path
 from types import MethodType, SimpleNamespace
@@ -24,19 +22,17 @@ from types import MethodType, SimpleNamespace
 import pytest
 
 from contracts.invariants import (
-    FREE_ENTRIES, NODES, PAID_FLAGS, STAGES, VALUED_FLAGS,
+    FREE_ENTRIES, NODES, PAID_FLAGS, RETIRED_NODES, STAGES, VALUED_FLAGS,
 )
-from contracts.schema import decode_artifact
 from contracts.schema.orchestration import (
     LegacyExecutorBackend, LegacyLlmProfile,
 )
-from contracts.schema.stage7 import NameMapEdit
 from novel import exit_codes as X
 from novel.cli.main import main
-from novel.config import DEFAULT_CONCURRENCY
 from novel.errors import ApprovalRequired, TerminalState
 from novel.orchestrator import nodes as N
 from novel.orchestrator import queue as Q
+from novel.stages import checkable_stages
 from tests import sandbox
 
 
@@ -84,38 +80,89 @@ def _run(*argv: str) -> int:
 
 
 
-@pytest.mark.parametrize('passed', [True, False])
-def test_stage5_review_cli_uses_current_minimal_review_shape(monkeypatch, capsys, passed):
-    """Review v3 不保存计数；落盘后的 CLI 输出不能把合法结果变成 exit 70。"""
-    from contracts.schema.stage5 import Review, ReviewProvenance
+# ───────────────────── 旧链退役（STR-06 / F8b-3） ─────────────────────
+
+#: 旧链 Stage2/4/5/7 的节点名：argparse 的 `node` choices 已不含它们，
+#: 程序化 `_cmd_run`（run_step 重放／作业记录回放）则按 `RETIRED_NODES`
+#: 落 legacy_incompatible 显式终态。两条路都不许把旧节点静默跑起来。
+RETIRED_CHAIN_NODES = (
+    'stage2.analyze', 'stage2.blueprint', 'stage2.characters', 'stage2.global',
+    'stage4.context', 'stage4.design', 'stage4.plan',
+    'stage5.review', 'stage5.write',
+    'stage7.rename', 'stage7.approve',
+)
+
+
+@pytest.mark.parametrize('node', sorted(RETIRED_NODES))
+def test_retired_chain_nodes_are_legacy_incompatible_in_cmd_run(node):
+    """程序化 `_cmd_run` 按 `RETIRED_NODES` 拒读旧节点（F8b-3）。
+
+    ⚠ 话术是 `legacy_incompatible` 显式终态：旧书的盘上产物只读保留，
+    不继承旧批准、不接受旧记录，也不显示成「加 --yes 就能跑」。
+    ⚠ 与 argv 面（`invalid choice`，见下一条）合起来才关得死这道门：
+    只挡一层，另一层就能把旧节点悄悄放回执行。
+    """
     from novel.cli import main as M
-    from novel.stages.stage5 import review
 
-    artifact = Review(
-        judged={}, chapters=[{'output_ordinal': 1, 'findings': []}], book=[],
-        baselines={}, baselines_identity={},
-        _provenance=ReviewProvenance(code='test-code', root_clean_sha1='a' * 40, inputs={}))
-    report = SimpleNamespace(passed=passed)
-    monkeypatch.setattr(review, 'run_review', lambda _ctx: (artifact, report))
-    monkeypatch.setattr(M, 'render', lambda actual: '当前判据报告' if actual is report else '')
-    assert M._run_stage5(SimpleNamespace(node='stage5.review'), []) == (
-        X.OK if passed else X.CHECK_FAILED)
-    output = capsys.readouterr().out
-    assert '全书验收：1 章' in output and '当前判据报告' in output
+    with pytest.raises(TerminalState, match='legacy_incompatible'):
+        M._cmd_run(SimpleNamespace(node=node))
 
 
-def test_stage7_approve_cli_is_retired(monkeypatch):
-    """批次 B4：stage7.approve 节点已退役；CLI 明确拒绝并指向 rename auto seal。"""
+@pytest.mark.parametrize('node', RETIRED_CHAIN_NODES)
+def test_retired_chain_node_argv_is_an_invalid_choice_not_a_runner_error(
+        node, tmp_path, capsys):
+    """旧节点 argv 在 argparse 入口即拒（exit 2 + invalid choice）。
+
+    ⚠ 不能放行后再由 `_runners()` 查表失败：那会是 KeyError ⇒ 结构拒绝
+    `3`（「这是 bug」），而「按设计退役」必须落输入错误 `2`。
+    ⚠ 也不许静默忽略：argparse 的 choices 就是现役节点表的镜像，
+    旧节点名压根不在取值面里。
+    """
+    with pytest.raises(SystemExit) as stopped:
+        _run('run', node, 'book-1', '--base', str(tmp_path))
+    assert stopped.value.code == 2
+    err = capsys.readouterr().err
+    assert 'invalid choice' in err and node in err
+    assert 'Traceback' not in err
+
+
+def test_stage7_approve_cli_is_retired(tmp_path, capsys):
+    """批次 B4 → F8b-3：stage7.approve 的人工终审闸随旧链整层退役。
+
+    新链没有「人逐项核验后 approve」这一步：交付由 `str06.stage7.naming` /
+    `str06.stage7.assemble` 自动完成，机械判定归 check 报告。CLI 面上该
+    节点名已不在 choices，程序化面按 `RETIRED_NODES` 落 legacy_incompatible。
+    """
     from novel.cli import main as M
-    from novel.errors import TerminalState
 
-    ctx = SimpleNamespace(node='stage7.approve')
-    flags = [
-        '--actor', 'reviewer-a', '--reason', '逐项核验完成',
-        '--review-token', 's7r3_' + 'b' * 64,
-    ]
-    with pytest.raises(TerminalState, match='stage7.approve 已退役'):
-        M._run_stage7(ctx, flags)
+    with pytest.raises(SystemExit) as stopped:
+        _run('run', 'stage7.approve', 'book-1', '--base', str(tmp_path))
+    assert stopped.value.code == 2
+    assert 'stage7.approve' in capsys.readouterr().err
+
+    with pytest.raises(TerminalState, match='legacy_incompatible'):
+        M._cmd_run(SimpleNamespace(node='stage7.approve'))
+
+
+def test_response_repair_batch_surface_is_retired(tmp_path, capsys):
+    """F8c：Stage2 一次性 `--batch/--decisions` repair_manifest 面随旧链退役。
+
+    ⚠ 退役旗标必须在 argparse 入口就拒（exit 2 + unrecognized arguments），
+    不能被静默吞掉后让人以为修复稿已提交；单项 `--attempt` 是通用响应
+    修复的唯一入口（身份冲突守卫由
+    `test_single_repair_checks_a_recorded_run_but_does_not_guess_legacy` 覆盖）。
+    """
+    with pytest.raises(SystemExit) as stopped:
+        _run('response-repair', 'book-1',
+             '--attempt', '0123456789abcdef',
+             '--batch', 'repair_manifest.json',
+             '--decisions', 'decisions.json',
+             '--actor', 'operator', '--base', str(tmp_path))
+    assert stopped.value.code == 2
+    err = capsys.readouterr().err
+    assert '--batch' in err and '--decisions' in err
+    assert 'unrecognized arguments' in err
+    assert 'Traceback' not in err
 
 
 
@@ -375,80 +422,6 @@ def test_stage0_source_cli_prints_and_threads_one_run_id_into_real_context(
     assert observed == [(printed, printed)]
 
 
-def test_batch_repair_refuses_a_conflicting_explicit_run_before_submit(
-        tmp_path, monkeypatch, capsys):
-    """显式 run 身份与 manifest 冲突时，必须在不可变 resolution 写盘前 exit 2。"""
-    from novel.cli import main as M
-    from novel.llm import stage2_runs
-
-    submitted: list[object] = []
-    monkeypatch.setattr(M.paths, 'resolve_novel_dir', lambda *_args: tmp_path / 'book')
-    monkeypatch.setattr(
-        stage2_runs, 'manifest_resume_metadata',
-        lambda _path: {
-            'run_id': 'manifest-run',
-            'architecture': 'extraction-ir-v3.1',
-            'required_environment': {
-                'NOVEL_STAGE2_BLUEPRINT_CONTRACT': 'extraction-ir-v3.1',
-            },
-            'flags': (),
-        })
-    monkeypatch.setattr(
-        stage2_runs, 'submit_batch',
-        lambda *_args, **_kwargs: submitted.append((_args, _kwargs)))
-
-    rc = _run(
-        '--run-id', 'other-run', 'response-repair', 'book-1',
-        '--batch', 'repair_manifest.json', '--decisions', 'decisions.json',
-        '--actor', 'operator', '--base', str(tmp_path))
-
-    assert rc == X.TERMINAL_STATE
-    assert submitted == [], '身份冲突时不得进入会写 batch resolution 的函数'
-    err = capsys.readouterr().err
-    assert 'manifest-run' in err and 'other-run' in err and '不一致' in err
-    assert 'Traceback' not in err
-
-
-@pytest.mark.parametrize('explicit', [None, 'manifest-run'], ids=['implicit', 'matching'])
-def test_batch_repair_resumes_with_the_manifest_run_id_and_original_flags(
-        tmp_path, monkeypatch, capsys, explicit):
-    """提交后打印 manifest 封存的身份、架构环境与原始定向 flags。"""
-    from novel.cli import main as M
-    from novel.llm import stage2_runs
-
-    target = (tmp_path / '_service' / 'runs' / 'book' / 'stage2'
-              / 'manifest-run' / 'blueprint' / 'batch_resolution.json')
-    submitted: list[tuple[object, ...]] = []
-    monkeypatch.setattr(M.paths, 'resolve_novel_dir', lambda *_args: tmp_path / 'book')
-    monkeypatch.setattr(
-        stage2_runs, 'manifest_resume_metadata',
-        lambda _path: {
-            'run_id': 'manifest-run',
-            'architecture': 'extraction-ir-v3.1',
-            'required_environment': {
-                'NOVEL_STAGE2_BLUEPRINT_CONTRACT': 'extraction-ir-v3.1',
-            },
-            'flags': ('--chapters', '1,2'),
-        })
-
-    def submit(*args, **kwargs):
-        submitted.append((*args, kwargs))
-        return target
-
-    monkeypatch.setattr(stage2_runs, 'submit_batch', submit)
-    prefix = [] if explicit is None else ['--run-id', explicit]
-    rc = _run(
-        *prefix, 'response-repair', 'book-1',
-        '--batch', 'repair_manifest.json', '--decisions', 'decisions.json',
-        '--actor', 'operator', '--base', str(tmp_path))
-
-    assert rc == X.OK and len(submitted) == 1
-    out = capsys.readouterr().out
-    assert '--run-id manifest-run run stage2.blueprint' in out
-    assert '--yes --chapters 1,2' in out
-    assert "NOVEL_STAGE2_BLUEPRINT_CONTRACT='extraction-ir-v3.1'" in out
-
-
 @pytest.mark.parametrize(
     ('rejection_run_id', 'expected'),
     [('attempt-run', X.TERMINAL_STATE), (None, X.OK)],
@@ -504,102 +477,15 @@ def test_build_argv_already_carries_the_yes_for_a_paid_run():
     assert '--yes' not in N.build_argv('str06.stage5.body', 'sid1', ['--check-only'], base='.')
 
 
-def test_stage4_design_and_plan_are_two_independent_paid_dispatches(
-        monkeypatch, tmp_path):
-    """Stage4A 成功只落盲候选；同一命令不得顺手触发 Stage4B。"""
-    from novel.cli import main as M
-    from novel.stages.stage4 import plan
-
-    events: list[tuple[str, str]] = []
-    design_ctx = SimpleNamespace(
-        node='stage4.design', novel_dir=tmp_path / 'book', sid='123')
-    plan_ctx = SimpleNamespace(
-        node='stage4.plan', novel_dir=tmp_path / 'book', sid='123')
-    authorizations: list = []
-
-    def run_design(got_ctx, client, **kwargs):
-        assert kwargs == {'repair_scope': None}
-        events.append(('design', f'{got_ctx.node}:{client}'))
-        return SimpleNamespace(output_chapters=[object(), object()])
-
-    def run_plan(got_ctx, client):
-        events.append(('plan', f'{got_ctx.node}:{client}'))
-        return SimpleNamespace(passed=True)
-
-    monkeypatch.setattr(M, '_llm_client', lambda ctx: f'client:{ctx.node}')
-    monkeypatch.setattr(M, 'render', lambda _report: 'report')
-    monkeypatch.setattr(plan, 'run_design', run_design)
-    monkeypatch.setattr(plan, 'run_plan', run_plan)
-
-    assert M._run_stage4(design_ctx, []) == X.OK
-    assert events == [('design', 'stage4.design:client:stage4.design')]
-
-    events.clear()
-    assert M._run_stage4(plan_ctx, []) == X.OK
-    assert events == [('plan', 'stage4.plan:client:stage4.plan')]
-    assert authorizations == [], '人工闸退役后 stage4 不再有任何审批授权'
-
-
-
-def test_stage4_two_dry_runs_preview_only_their_own_prompt(monkeypatch):
-    """两次付费调用要分别 preview；dry-run 不构造 client，更不串行下一相。"""
-    from novel.cli import main as M
-    from novel.stages.stage4 import plan
-
-    calls: list[str] = []
-    monkeypatch.setattr(
-        M, '_llm_client',
-        lambda _ctx: pytest.fail('dry-run 不应构造 LLM client'))
-    monkeypatch.setattr(
-        plan, 'build_design_prompt',
-        lambda _ctx: (calls.append('design') or ('design-system', 'design-user')))
-    monkeypatch.setattr(
-        plan, 'build_prompt',
-        lambda _ctx: (calls.append('plan') or ('plan-system', 'plan-user')))
-
-    assert M._run_stage4(
-        SimpleNamespace(node='stage4.design'), ['--dry-run']) == X.OK
-    assert calls == ['design']
-    calls.clear()
-    assert M._run_stage4(
-        SimpleNamespace(node='stage4.plan'), ['--dry-run']) == X.OK
-    assert calls == ['plan']
-
-
-def test_stage4_replan_casts_infeasible_scope_and_refreshes_only_a(
-        monkeypatch, tmp_path):
-    """人工审阅票退役后，整书重采消费 B 的 typed infeasible 铸成的机器 scope。"""
-    from novel.cli import main as M
-    from novel.llm.cache import CachePolicy
-    from novel.orchestrator import approvals
-    from novel.stages.stage4 import plan
-
-    ctx = SimpleNamespace(
-        node='stage4.design', cache=CachePolicy.default(),
-        novel_dir=tmp_path / '平台_书_123', sid='123')
-    events: list[tuple[str, str]] = []
-    cast: list[tuple[object, str]] = []
-    scope = SimpleNamespace(strategy_replan=True, decision_sha256='d' * 64)
-
-    def run_design(got_ctx, client, **kwargs):
-        assert kwargs == {'repair_scope': scope}
-        events.append((got_ctx.cache.name, client))
-        return SimpleNamespace(output_chapters=[object()])
-
-    monkeypatch.setattr(
-        approvals, 'cast_infeasible_replan_scope',
-        lambda base, sid: cast.append((base, sid)) or scope)
-    monkeypatch.setattr(M, '_llm_client', lambda _ctx: 'design-client')
-    monkeypatch.setattr(plan, 'run_design', run_design)
-    monkeypatch.setattr(
-        plan, 'run_plan',
-        lambda *_args, **_kwargs: pytest.fail('replan 只产 A，不得自动串 B'))
-
-    flags = ['--replan']
-    assert N.is_paid('stage4.design', flags) is True
-    assert M._run_stage4(ctx, flags) == X.OK
-    assert events == [('refresh-write', 'design-client')]
-    assert cast == [(tmp_path, '123')]
+# ⚠⚠ F8b-3：以下旧链 Stage4/Stage5 runner 的 CLI 内构测试随旧链整层退役：
+# `_run_stage4`／`_run_stage5` 与 `novel.stages.stage4.plan`／`novel.stages.stage5.write`
+# 已从生产删除，`_runners()` 只剩 stage0/stage1 两腿，11 个 `str06.` 节点在
+# `_cmd_run` 入口分流到 `_run_str06`（`novel/stages/chain.py::execute`）。
+# 旧节点 argv 的退役拒识由上方的 `test_retired_chain_node_argv_is_an_invalid_choice…`
+# 与 `test_retired_chain_nodes_are_legacy_incompatible_in_cmd_run` 承接；
+# 新链 Stage4/5 的付费边界（工作单元预算、整书总闸、缓存免费重放、未授权停
+# owner）由 `tests/test_str06_f7a_wiring.py` 与 `tests/test_str06_cli_dispatch.py`
+# 覆盖，不为旧测试恢复废弃耦合（I-52）。
 
 
 def test_dispatch_refuses_legacy_executor_profile_projection(
@@ -621,7 +507,6 @@ def test_dispatch_refuses_legacy_executor_profile_projection(
 def test_retired_design_credential_flags_are_rejected_before_dispatch(
         tmp_path):
     """人工凭据面退役后，--review-token/--close-review 不再是 stage4 的旗标。"""
-    from novel.cli import main as M
     from novel.orchestrator import nodes as N
 
     for flags in (['--review-token', 's4rr1_' + 'a' * 64], ['--close-review']):
@@ -630,155 +515,6 @@ def test_retired_design_credential_flags_are_rejected_before_dispatch(
         with pytest.raises(Exception):
             N.validate_run('stage4.plan', flags)
 
-
-
-def test_stage4_typed_infeasible_is_landed_red_without_a_fake_report(
-        tmp_path, monkeypatch, capsys):
-    """B 负结论已落 evidence_binding：exit 1 记 landed，不伪造 CheckReport。"""
-    from contracts.schema.stage4 import (
-        BindingConcern, BindingInfeasibilityWitness, EvidenceBinding,
-    )
-    from novel.cli import main as M
-    from novel.orchestrator import approvals
-    from novel.stages.stage4 import plan
-
-    binding = EvidenceBinding.model_construct(
-        status='infeasible', candidate_sha256='a' * 64,
-        chapters=None,
-        binding_concerns=[BindingConcern(
-            constraint_code='future_leak', chapter_ordinal=2,
-            scenes=['c02s01'], reason='候选场景只能靠未来章证据成立。',
-            closed_refs=['c02s01'])],
-        infeasibility_proof=[BindingInfeasibilityWitness(
-            chapter_ordinal=2, scenes=['c02s01'],
-            constraint_code='missing_chapter_catalog',
-            closed_refs=['c02s01'], proof_basis='b' * 64)])
-    monkeypatch.setattr(M, '_llm_client', lambda _ctx: 'binding-client')
-    monkeypatch.setattr(plan, 'run_plan', lambda _ctx, _client: binding)
-    monkeypatch.setattr(
-        M, 'render', lambda _report: pytest.fail('typed negative 不得伪造 CheckReport'))
-
-    rc = M._run_stage4(SimpleNamespace(
-        node='stage4.plan', novel_dir=tmp_path / 'book', sid='123'), [])
-
-    assert rc == X.CHECK_FAILED and X.landed(rc)
-    out = capsys.readouterr().out
-    assert 'typed infeasible' in out and 'missing_chapter_catalog' in out
-    assert '预算内自动重采 Stage4A' in out
-
-
-def test_stage4_cli_handler_refuses_repeating_current_infeasible_without_wire(
-        tmp_path, monkeypatch):
-    """手敲 paid B 也必须落到 producer 的同一前置，而不是只靠浏览器隐藏。"""
-    from novel.cli import main as M
-    from novel.llm.client import LlmClient
-    from novel.stages.stage4 import plan
-
-    store = object()
-    monkeypatch.setattr(plan, 'ArtifactStore', lambda _ctx: store)
-    monkeypatch.setattr(
-        plan, 'current_infeasible_binding',
-        lambda got: SimpleNamespace(status='infeasible') if got is store else None)
-
-    class NoWireClient(LlmClient):
-        def __init__(self):
-            pass
-
-        def ask_json(self, *_args, **_kwargs):
-            pytest.fail('CLI 不得为同一 current infeasible 再发 B wire')
-
-    monkeypatch.setattr(M, '_llm_client', lambda _ctx: NoWireClient())
-    with pytest.raises(TerminalState, match=r'stage4\.design --replan'):
-        M._run_stage4(SimpleNamespace(
-            node='stage4.plan', novel_dir=tmp_path / 'book', sid='42'), [])
-
-
-def test_stage4_replan_budget_exhaustion_is_explicit_terminal(
-        monkeypatch, tmp_path):
-    """断言④：预算耗尽时自动重采以 WorkUnitBudgetExhausted 显式终态失败。
-
-    全自动重采路消费的是普通付费工作单元预算；耗尽即拒绝任何新 wire，
-    不伪造候选，也不退化为静默重试。
-    """
-    from novel.cli import main as M
-    from novel.orchestrator import approvals
-    from novel.work_units import WorkUnitBudgetExhausted
-
-    ctx = SimpleNamespace(
-        node='stage4.design',
-        cache=__import__('novel.llm.cache', fromlist=['CachePolicy']).CachePolicy.default(),
-        novel_dir=tmp_path / '平台_书_123', sid='123')
-    monkeypatch.setattr(
-        approvals, 'cast_infeasible_replan_scope',
-        lambda *_args: (_ for _ in ()).throw(
-            WorkUnitBudgetExhausted('Stage4A 工作单元内容预算已耗尽')))
-    monkeypatch.setattr(
-        M, '_llm_client',
-        lambda _ctx: pytest.fail('预算耗尽后不得构造 LLM client'))
-
-    with pytest.raises(WorkUnitBudgetExhausted, match='预算已耗尽'):
-        M._run_stage4(ctx, ['--replan'])
-
-
-
-
-
-def test_stage5_preview_edit_dispatches_to_write_not_stage6(
-        monkeypatch, capsys):
-    """CLI 的只读 preview 分支必须住在 stage5.write，不能引用 stage6 局部变量。"""
-    from novel.cli import main as M
-    from novel.stages.stage5 import write
-
-    seen = []
-    projection = SimpleNamespace(
-        model_dump_json=lambda **_kwargs: '{"output_ordinal":1}')
-    monkeypatch.setattr(
-        write, 'run_edit_preview',
-        lambda ctx, path: seen.append((ctx.node, path)) or projection)
-
-    rc = M._run_stage5(
-        SimpleNamespace(node='stage5.write'),
-        ['--preview-edit', 'stage5/ch01.json'])
-
-    assert rc == X.OK
-    assert seen == [('stage5.write', 'stage5/ch01.json')]
-    assert json.loads(capsys.readouterr().out) == {'output_ordinal': 1}
-
-
-def test_stage5_apply_edit_forwards_both_locks_identity_and_confirmation(
-        monkeypatch):
-    """CLI 最后一跳不得漏掉 preview-bound 的五项提交输入。"""
-    from novel.cli import main as M
-    from novel.stages.stage5 import write
-
-    seen = []
-    monkeypatch.setattr(
-        write, 'run_apply_edit',
-        lambda ctx, path, **kwargs: (
-            seen.append((ctx.node, path, kwargs))
-            or SimpleNamespace(passed=True)))
-    monkeypatch.setattr(M, 'render', lambda _report: 'ok')
-    flags = [
-        '--apply-edit', 'incoming/ch01.json',
-        '--actor', 'operator',
-        '--reason', '逐项核对当前预览后提交',
-        '--current-chapter-sha256', 'a' * 64,
-        '--preview-subject-sha256', 'b' * 64,
-        '--edit-confirmation', 'working_draft',
-    ]
-
-    rc = M._run_stage5(SimpleNamespace(node='stage5.write'), flags)
-
-    assert rc == X.OK
-    assert seen == [(
-        'stage5.write', 'incoming/ch01.json', {
-            'actor': 'operator',
-            'reason': '逐项核对当前预览后提交',
-            'current_chapter_sha256': 'a' * 64,
-            'preview_subject_sha256': 'b' * 64,
-            'confirmation': 'working_draft',
-        },
-    )]
 
 
 # ───────────────────── 退出码只有一张表 ─────────────────────
@@ -1181,8 +917,16 @@ def test_state_with_inbox_reuses_the_exact_same_invocation_snapshot(
     assert '── 待人工 ── 共 0 项' in out
 
 
-def test_state_with_inbox_calls_one_code_one_overview_and_seven_checks(
+def test_state_with_inbox_calls_one_code_one_overview_and_one_check_per_checkable_stage(
         monkeypatch, capsys, tmp_path):
+    """同一次只读快照：一次 code_version、一次 overview、每个**有层级复检器**的层各一次 check。
+
+    ⚠ F8c：`checkable_stages()` 只剩 stage0／stage1——新链 Stage2/4/5/7 的
+    复检是节点级 `--check-only`，不进这个快照（`check(stage)` 对它们返回
+    未采集，界面显示「校验未知」而不是绿灯）。所以这里钉的不再是「七层各一次」，
+    而是「采集面 == `checkable_stages()`」：谁把新链层偷画成层级复检，
+    或把 stage0/1 的复检从快照里漏掉，这条当场红。
+    """
     import importlib
 
     cli = importlib.import_module('novel.cli.main')
@@ -1228,7 +972,11 @@ def test_state_with_inbox_calls_one_code_one_overview_and_seven_checks(
 
     assert len(code_calls) == 1
     assert overview_calls == [(novel_dir, 'code-v1')]
-    assert check_calls == list(STAGES)
+    # 采集面逐层相等（frozenset 迭代序不定，比较集合而不是顺序）。
+    assert sorted(check_calls) == sorted(checkable_stages())
+    assert set(checkable_stages()) < set(STAGES), (
+        '新链 Stage2/4/5/7 没有层级复检器——采集面必须严于 STAGES，'
+        '否则「校验未知」会被画成层级绿灯')
     assert '── 待人工 ── 共 0 项' in capsys.readouterr().out
 
 

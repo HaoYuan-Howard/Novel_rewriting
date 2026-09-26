@@ -1,6 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""结构化拒绝响应的受托修复状态机：每份先修一次，失败才消费下一采。"""
+"""结构化拒绝响应的受托修复状态机：每份先修一次，失败才消费下一采。
+
+⚠ **F8b-3 载荷切换**：旧链 Stage2 的 `stage2-blueprint-v1` 内容恢复策略（answer_lost/
+length 直送 Pro、Flash 定向修 + Pro 约束重建各一次、人工 batch 补交）随旧链整层退役——
+`ask_json(recovery_policy=...)` 现在对任何非 None 值关闭式拒绝，`novel.llm.stage2_runs`
+与 `novel.stages.stage2.extract` 已删除。原 Stage2 专籍用例按同族不变量改走**通用修复链**
+（`repair_rejected_responses=True` 下的 targeted_repair／constraint_rebuild 两档）；
+Stage2 一次性 batch 补交面（`--batch`/`--decisions`）已退役，其不复活守卫见
+`tests/test_cli.py::test_response_repair_batch_surface_is_retired`。
+"""
 from __future__ import annotations
 
 import json
@@ -12,10 +21,10 @@ import pytest
 from pydantic import BaseModel, Field
 
 from novel.errors import (
-    ContextBudgetRefused, ResponseRepairBatchRequired, ResponseRepairRequired,
+    ContextBudgetRefused, ResponseRepairRequired,
     TerminalState,
 )
-from novel.llm import response_repair, stage2_runs
+from novel.llm import response_repair
 from novel.llm.cache import ResponseCache
 from novel.llm.client import (
     DEFAULT_MAX_TOKENS, JSON_OBJECT_MODE, MAX_SAMPLES_PER_RUNG,
@@ -26,7 +35,6 @@ from novel.llm.transport import ChatResponse, FakeTransport
 from novel.run import RunContext
 from novel.observability import RequestProgress
 from novel.run_identity import new_run_id
-from novel.stages.stage2 import extract
 
 
 class RepairResponse(BaseModel):
@@ -84,11 +92,16 @@ def _ask(client: LlmClient) -> RepairResponse:
                            purpose='strategy:repair.p')
 
 
-def _ask_stage2(client: LlmClient, *, validator=None) -> RepairResponse:
+def _ask_repair(client: LlmClient, *, validator=None) -> RepairResponse:
+    """通用修复链入口（F8b-3：取代已退役的 `stage2-blueprint-v1` 专籍入口）。
+
+    `repair_rejected_responses=True` 的 context 下同一逻辑调用跨 CLI 续用同一
+    修复链；第二采起经 `recovery_variants_for` 换 targeted_repair／constraint_rebuild
+    包，不再是原 prompt 原档位的重复请求。
+    """
     return client.ask_json(
-        'system', 'user', model_cls=RepairResponse, purpose='repair.p',
-        validator=validator, recovery_policy='stage2-blueprint-v1',
-        progress=RequestProgress(chapter=1, index=1, total=1))
+        'system', 'user', model_cls=RepairResponse, purpose='strategy:repair.p',
+        validator=validator, progress=RequestProgress(chapter=1, index=1, total=1))
 
 
 def _rows(path: Path) -> list[dict]:
@@ -215,7 +228,15 @@ def test_true_legacy_chain_without_run_id_remains_resumable():
         content='{"voice":', reasoning='', finish_reason='length',
         usage={'completion_tokens': 1}, model='deepseek-flash'),
 ])
-def test_stage2_answer_lost_without_material_and_length_go_directly_to_pro(first):
+def test_answer_lost_resamples_while_truncation_goes_straight_to_pro(first):
+    """通用修复链里两种空正文仍走两条路（F8b-3：取代 stage2 专籍直送 Pro 用例）。
+
+    · `answer_lost`（空正文 + `stop`）同档再采一次——第二采带 targeted_repair 包；
+    · `length`（截断）不同配置重采，直接进 Pro 首采，Pro 首采按全部失败史重建
+      （constraint_rebuild）。
+    ⚠ 与旧 stage2 专籍的差别只在 answer_lost 那一格：专籍策略直送 Pro，通用链按
+    模块 docstring ①「换新样本」先同档再采一次；两条路都不自动降 effort。
+    """
     base = _base()
     ctx = _ctx(base)
 
@@ -223,13 +244,21 @@ def test_stage2_answer_lost_without_material_and_length_go_directly_to_pro(first
         return first if index == 0 else _good(req.model)
 
     transport = FakeTransport(responder=respond)
-    got = _ask_stage2(_client(ctx, transport))
+    got = _ask_repair(_client(ctx, transport))
 
     assert got.voice == GOOD['voice']
-    assert [request.model for request in transport.calls] == [
-        'deepseek-flash', PRO_FALLBACK_MODEL,
-    ]
-    assert _recovery_packet(transport.calls[1].user)['strategy'] == 'constraint_rebuild'
+    if first.finish_reason == 'length':
+        assert [request.model for request in transport.calls] == [
+            'deepseek-flash', PRO_FALLBACK_MODEL,
+        ]
+        assert _recovery_packet(transport.calls[1].user)[
+            'strategy'] == 'constraint_rebuild'
+    else:
+        assert [request.model for request in transport.calls] == [
+            'deepseek-flash', 'deepseek-flash',
+        ]
+        assert _recovery_packet(transport.calls[1].user)[
+            'strategy'] == 'targeted_repair'
 
 
 @pytest.mark.parametrize('first', [
@@ -240,14 +269,19 @@ def test_stage2_answer_lost_without_material_and_length_go_directly_to_pro(first
         content='{"voice":', reasoning='', finish_reason='length',
         usage={'completion_tokens': 1}, model=PRO_FALLBACK_MODEL),
 ])
-def test_stage2_pro_primary_uses_one_constraint_rebuild_not_a_fake_flash_retry(first):
+def test_pro_primary_uses_one_constraint_rebuild_not_a_fake_flash_retry(first):
+    """单 Pro 主模型没有 Flash→Pro 第二槽：首采被拒后只保留一次约束重建。
+
+    （F8b-3：原 stage2 专籍用例；不变量在通用修复链里原样成立——第二采是
+    constraint_rebuild 包，不是同 prompt 的假 Flash 重试。）
+    """
     base = _base()
 
     def respond(req, index):
         return first if index == 0 else _good(req.model)
 
     transport = FakeTransport(responder=respond)
-    got = _ask_stage2(_client(
+    got = _ask_repair(_client(
         _ctx(base), transport, model=PRO_FALLBACK_MODEL))
 
     assert got.voice == GOOD['voice']
@@ -264,30 +298,39 @@ def test_stage2_pro_primary_uses_one_constraint_rebuild_not_a_fake_flash_retry(f
     assert rejected[0]['next_recovery_action'] == 'pro_constraint_rebuild'
 
 
-def test_stage2_validator_failure_uses_one_flash_target_then_one_pro_rebuild():
+def test_validator_failure_uses_one_flash_target_then_one_pro_rebuild():
+    """dynamic validator 失败不交给通用 JSON 修复：每个模型各一次定向/重建采。
+
+    （F8b-3：原 stage2 专籍用例把 Pro 压在「只一次 constraint rebuild」；通用链的
+    形状是 `_worth_resampling` 一家管——Flash 第二采 targeted_repair、切到 Pro 的
+    首采按全部失败史 constraint_rebuild、Pro 自己的第二采再回到 targeted_repair。
+    Stage2 的「Pro 只重建一次」预算截断随专籍策略退役，不在这条通用链里复活。）
+    """
     base = _base()
     transport = FakeTransport(
         responder=lambda req, _index: _good(req.model))
     with pytest.raises(LlmFailed):
-        _ask_stage2(
+        _ask_repair(
             _client(_ctx(base), transport),
             validator=lambda _obj, _resp: 'dynamic scope mismatch')
 
     assert [request.model for request in transport.calls] == [
         'deepseek-flash', 'deepseek-flash', PRO_FALLBACK_MODEL,
+        PRO_FALLBACK_MODEL,
     ]
     assert [
         _recovery_packet(request.user)['strategy']
         for request in transport.calls[1:]
-    ] == ['targeted_repair', 'constraint_rebuild']
+    ] == ['targeted_repair', 'constraint_rebuild', 'targeted_repair']
 
 
-def test_stage2_pro_primary_validator_failure_has_only_one_rebuild():
+def test_pro_primary_validator_failure_has_only_one_rebuild():
+    """单 Pro 的 validator 失败也只有一次重建，不会升级成第二次同动作。"""
     base = _base()
     transport = FakeTransport(
         responder=lambda req, _index: _good(req.model))
     with pytest.raises(LlmFailed):
-        _ask_stage2(
+        _ask_repair(
             _client(_ctx(base), transport, model=PRO_FALLBACK_MODEL),
             validator=lambda _obj, _resp: 'dynamic scope mismatch')
 
@@ -297,11 +340,12 @@ def test_stage2_pro_primary_validator_failure_has_only_one_rebuild():
     assert _recovery_packet(transport.calls[1].user)['strategy'] == 'constraint_rebuild'
 
 
-def test_stage2_pro_primary_after_human_decline_resumes_with_constraint_rebuild():
+def test_pro_primary_after_human_decline_resumes_with_constraint_rebuild():
+    """放弃本次修复额度后，同一逻辑调用续跑时第一采就是约束重建。"""
     base = _base()
     first_ctx = _ctx(base)
     with pytest.raises(ResponseRepairRequired) as pending:
-        _ask_stage2(_client(
+        _ask_repair(_client(
             first_ctx, FakeTransport.always(_bad(PRO_FALLBACK_MODEL)),
             model=PRO_FALLBACK_MODEL))
     response_repair.submit(
@@ -309,7 +353,7 @@ def test_stage2_pro_primary_after_human_decline_resumes_with_constraint_rebuild(
         actor='operator', reason='候选缺必需键，不能忠实补齐', decline=True)
 
     resumed_transport = FakeTransport.always(_good(PRO_FALLBACK_MODEL))
-    got = _ask_stage2(_client(
+    got = _ask_repair(_client(
         _ctx(base), resumed_transport, model=PRO_FALLBACK_MODEL))
 
     assert got.voice == GOOD['voice']
@@ -320,10 +364,11 @@ def test_stage2_pro_primary_after_human_decline_resumes_with_constraint_rebuild(
 
 
 def test_same_failure_signature_cannot_repeat_the_same_recovery_action():
+    """相同失败签名重复执行同一恢复动作 = 白烧；跨 CLI 也认这份账。"""
     base = _base()
     ctx = _ctx(base)
     with pytest.raises(LlmFailed):
-        _ask_stage2(
+        _ask_repair(
             _client(ctx, FakeTransport.always(_good())),
             validator=lambda _obj, _resp: 'same dynamic failure')
 
@@ -340,55 +385,20 @@ def test_same_failure_signature_cannot_repeat_the_same_recovery_action():
 
     transport = FakeTransport.always(_good())
     with pytest.raises(TerminalState, match='相同失败签名重复执行恢复动作'):
-        _ask_stage2(
+        _ask_repair(
             _client(_ctx(base), transport),
             validator=lambda _obj, _resp: 'same dynamic failure')
     assert transport.calls == []
 
 
-def test_stage2_batch_decline_resumes_once_without_second_human_pause(tmp_path):
-    base = tmp_path / 'outputs'
-    book = base / '书名_123'
-    (book / 'stage1').mkdir(parents=True)
-    run_id = new_run_id()
-    ctx = RunContext.open(
-        base, '123', 'str06.stage2.source', paid=True,
-        repair_rejected_responses=True, run_id=run_id)
-    initial_client = _client(ctx, FakeTransport.always(_bad()))
-    stage2_runs.ensure_run(
-        ctx, architecture='extraction-ir-v3.1', topology='scaffolded_single',
-        requests=[(1, 'system', 'user')],
-        request_policy=initial_client.json_request_policy(
-            [('blueprint', RepairResponse, DEFAULT_MAX_TOKENS, False)],
-            recovery_policy='stage2-blueprint-v1'))
-
-    with pytest.raises(ResponseRepairRequired) as pending:
-        _ask_stage2(initial_client)
-    with pytest.raises(ResponseRepairBatchRequired) as packed:
-        extract._raise_response_repair(
-            ctx, [pending.value], architecture='extraction-ir-v3.1')
-    decisions = tmp_path / 'decisions.json'
-    decisions.write_text(json.dumps({'decisions': [{
-        'attempt_id': pending.value.attempt_id,
-        'action': 'decline', 'reason': '材料不足，升级模型恢复',
-    }]}, ensure_ascii=False), encoding='utf-8')
-    stage2_runs.submit_batch(
-        ctx.novel_dir, Path(packed.value.manifest_path), decisions,
-        actor='operator')
-
-    def respond(req, index):
-        return _bad(req.model) if index == 0 else _good(req.model)
-
-    resumed_transport = FakeTransport(responder=respond)
-    resumed_ctx = RunContext.open(
-        base, '123', 'str06.stage2.source', paid=True,
-        repair_rejected_responses=True, run_id=run_id)
-    got = _ask_stage2(_client(resumed_ctx, resumed_transport))
-
-    assert got.voice == GOOD['voice']
-    assert [request.model for request in resumed_transport.calls] == [
-        'deepseek-flash', PRO_FALLBACK_MODEL,
-    ]
+# ⚠⚠ F8b-3：旧链 Stage2 一次性 batch 补交面（`stage2_runs.ensure_run`／
+# `extract._raise_response_repair`／`stage2_runs.submit_batch` 与 CLI
+# `response-repair --batch/--decisions`）随旧链整层退役：新链付费恢复是候选
+# runner 自身续跑，单项 `--attempt` 是通用响应修复的唯一入口。同族不变量
+# （放弃额度后以约束重建续跑一次、不再第二次人工暂停）由上面的
+# `test_pro_primary_after_human_decline_resumes_with_constraint_rebuild` 承接；
+# batch 旗标面的不复活守卫见 `tests/test_cli.py::
+# test_response_repair_batch_surface_is_retired`。
 
 
 def test_a_trailing_comma_is_repaired_mechanically_before_agent_or_resampling():

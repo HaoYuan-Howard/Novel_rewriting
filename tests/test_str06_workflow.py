@@ -3,7 +3,7 @@ from copy import deepcopy
 
 from novel.llm.ledger import CostLedger
 from novel.store import Str06Repository
-from tools.str06_workflow import run_workflow
+from novel.stages.chain import run_workflow
 from tests.str06_facilities import make_context
 from tests.test_str06_target import _source_pair, _preserve_wire, _design_wire
 

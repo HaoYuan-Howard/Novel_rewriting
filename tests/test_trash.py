@@ -491,38 +491,54 @@ def test_approval_writes_are_refused_while_the_book_is_being_trashed(tmp_path):
     _book(tmp_path)
     seen: list[Exception] = []
 
-    def someone_approves():
-        try:
+def test_no_approval_write_surface_can_resurrect_a_trashed_book(tmp_path):
+    """⭐ 「书已删除、审批复活」竞价的 F8c 形状：写入口不存在，孤儿无从造出。
+
+    旧形状是「审批写在父进程、目录移动在子进程」，靠 `frozen_for_trash` 在删除
+    窗口拒写。STR-06 切换后审批写面整层退役（人工闸 → 全自动单模式）：模块不再
+    有任何能落 `_service/approvals/<sid>.json` 的函数 ⇒ 这条竞选的**写方本体**
+    已消失。本用例把该事实钉成结构断言，并真跑一次删除证明盘面上不复发。
+    """
+    _book(tmp_path)
+    for name in ('reset', 'approve_gate', 'backfill_from_disk', 'authorize_writing',
+                 'authorize_prepared_recovery', 'record_stage5_auto_closure',
+                 'stage5_closure_view', 'cast_infeasible_replan_scope'):
+        assert not hasattr(approvals, name), f'审批写入口 {name} 不得复活（S-05）'
+    seen: list[BaseException] = []
+
+    def someone_tries_to_write():
+        try:                                   # 旧竞选的写方动作；现在无路可走
             approvals.reset(tmp_path, '1001')
-        except Exception as exc:                      # noqa: BLE001
+        except AttributeError as exc:
             seen.append(exc)
 
     trash.run(tmp_path, '1001', '测试书',
-              spawn=_spawn_that_really_moves(tmp_path, before=someone_approves))
+              spawn=_spawn_that_really_moves(tmp_path, before=someone_tries_to_write))
 
-    assert len(seen) == 1 and isinstance(seen[0], ApprovalFrozen), seen
+    assert len(seen) == 1, '删除窗口内旧写入口应当场 AttributeError，而不是写回盘上'
     assert not (tmp_path / '_service' / 'approvals' / '1001.json').exists(), \
         '删除完成之后，这本书的审批又被写了回来'
 
 
-def test_approval_writes_work_again_after_the_deletion_finishes(tmp_path):
-    """冻结只覆盖删除那一段，而且只覆盖这一本书。"""
+def test_approval_exclusion_lock_is_per_book_and_released_after_the_block(tmp_path):
+    """锁作用域：只覆盖自己这本书，退出即释放（旧冻结语义的幸存承重者）。
+
+    `approval_exclusion_lock` 是 trash 归档审批文件时仍占用的那把跨进程锁
+    （`trash.py` 两处 RMW）；冻结一座书不得挡住别的书，退出后同书可再拿锁。
+    """
     _book(tmp_path)
     _book(tmp_path, sid='1002', title='另一本')
     inside: list[str] = []
 
-    def another_book_is_approved():
-        approvals.reset(tmp_path, '1002')                 # 别的书不受影响
-        inside.append('ok')
+    def another_book_takes_its_own_lock():
+        with approvals.approval_exclusion_lock(tmp_path, '1002'):
+            inside.append('ok')
 
     trash.run(tmp_path, '1001', '测试书',
-              spawn=_spawn_that_really_moves(tmp_path,
-                                             before=another_book_is_approved))
-    assert inside == ['ok'], '冻结一本书把别的书的审批也挡住了'
-    with approvals.frozen_for_trash('1002'):
-        with pytest.raises(ApprovalFrozen):
-            approvals.reset(tmp_path, '1002')
-    approvals.reset(tmp_path, '1002')                     # 出了 with 就恢复
+              spawn=_spawn_that_really_moves(tmp_path, before=another_book_takes_its_own_lock))
+    assert inside == ['ok'], '锁一本书把别的书的审批锁也挡住了'
+    with approvals.approval_exclusion_lock(tmp_path, '1002'):
+        pass                                            # 退出即释放，可再拿
 
 
 def test_sweep_skips_a_book_level_writer_without_moving_the_archived_approval(

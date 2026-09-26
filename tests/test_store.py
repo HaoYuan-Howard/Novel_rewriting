@@ -36,10 +36,10 @@ from contracts.schema import (
     ArtifactVersionError, InputEdge, LlmProvenance, Usage, artifact_spec,
     decode_artifact, encode_artifact,
 )
-from contracts.schema.str06.grounding import (
+from contracts.schema.grounding import (
     PreserveKind, SemanticBinding, SourceLineage, SourceObligation,
 )
-from contracts.schema.str06.source import (
+from contracts.schema.source import (
     CharactersArtifactV4, CharacterEntry, SurfaceWindow,
 )
 from novel.consumption import (
@@ -277,7 +277,7 @@ def _seed_preserve_checkpoint(base: Path) -> str:
     新链的 compiled 字节绑定只剩这一处：SemanticBinding.preserve_checkpoint_sha256
     绑定 `runtime/preserve_checkpoint.json` 的完整字节（旧链是 A/B 两相两把 SHA）。
     """
-    from contracts.schema.str06.grounding import PreserveCheckpoint
+    from contracts.schema.grounding import PreserveCheckpoint
 
     store = ArtifactStore(_ctx(base, node='str06.stage4.preserve', paid=False))
     checkpoint = PreserveCheckpoint(
@@ -969,18 +969,28 @@ def test_blueprint_projection_does_not_invent_a_character_id_format_gate():
     {'entities': {'characters': {'char_001': {'address': 'x'}}}},
     {'entities': {'characters': {'char_001': {'address': [None]}}}},
 ))
-def test_blueprint_character_inventory_survives_malformed_upstream(malformed: object):
+def test_registered_projections_survive_malformed_upstream(malformed: object):
     """畸形上游只许算不出投影，不许抛。
 
     投影吃的是**未经模型校验**的 JSON：一份陈旧上游可能已经不合当前 schema，
     而 freshness 恰恰必须在这种情况下仍能回答（`novel/consumption.py` 文件头）。
     抛出去会让 `state` 查询整个崩掉，那比 `unknown` 坏得多。
-    """
-    from novel.stages.stage2.shared.character_refs import character_ref_inventory
 
-    entities = malformed.get('entities') if isinstance(malformed, dict) else None
-    characters = entities.get('characters') if isinstance(entities, dict) else None
-    character_ref_inventory(characters)
+    （F8b-3：旧链 `novel.stages.stage2.shared.character_refs::character_ref_inventory`
+    随 Stage2 整层删除；同族不变量改扫**现役注册投影**全集——每个
+    `CONSUMED_PROJECTIONS` 里的投影函数吃这份畸形矩阵都必须只回答
+    「算得出／算不出」，不许把 `state` 查询拖崩。）
+    """
+    from novel.consumption import CONSUMED_PROJECTIONS
+
+    projections = {project.__name__: project
+                   for table in CONSUMED_PROJECTIONS.values()
+                   for project in table.values()}
+    assert projections, '注册投影是空的——本条在扫一个空表'
+    for name, project in sorted(projections.items()):
+        result = project(malformed)     # 不许抛；抛出去比算不出坏得多
+        assert result is None or isinstance(
+            result, (dict, list, tuple, str, int, bool)), (name, type(result))
 
 
 @pytest.mark.parametrize('malformed', (
@@ -988,14 +998,24 @@ def test_blueprint_character_inventory_survives_malformed_upstream(malformed: ob
     {'entities': None},
     {'entities': {'characters': None}},
 ))
-def test_blueprint_character_inventory_marks_missing_character_maps_empty(
-    malformed: object,
-):
-    from novel.stages.stage2.shared.character_refs import character_ref_inventory
+def test_projection_marks_missing_character_maps_empty(malformed: object):
+    """缺地图与空地图分得开：前者算不出（None），后者是合法空值——都不许抛。
 
-    entities = malformed.get('entities') if isinstance(malformed, dict) else None
-    characters = entities.get('characters') if isinstance(entities, dict) else None
-    assert character_ref_inventory(characters) == ({}, {})
+    （F8b-3：旧夹具经 stage2 shared 的 character_ref_inventory 读「entities →
+    characters」两层；现役同域落点是 `novel.consumption.stage2_main_text`
+    （`str06.stage2.source` 的注册投影）与 `character_knowledge_reference`
+    （人物身份闭集投影）：整份载荷不是数组/字典 ⇒ None；空数组 ⇒ 空清单。）
+    """
+    from novel.consumption import character_knowledge_reference, stage2_main_text
+
+    # 畸形一律算不出或合法空，不许抛：`None` 是「算不出」，`{}`／`[]` 是「空的」。
+    for payload in (malformed, {'characters': malformed}, {'root': [malformed]}):
+        assert stage2_main_text(payload) is None, payload
+        got = character_knowledge_reference(payload)
+        assert got is None or got == {}, (payload, got)
+    # 合法空值不是错误：空章数组／空人物图都该给出空清单（与「缺地图」分得开）。
+    assert stage2_main_text([]) == []
+    assert character_knowledge_reference({'characters': {}}) == {}
 
 
 def test_stage7_naming_projection_tracks_role_sent_to_rename_prompt():
@@ -1613,7 +1633,7 @@ def test_every_produced_artifact_without_provenance_reaches_the_deterministic_br
     """
     from contracts.invariants import NODES
     from contracts.schema import ARTIFACT_SPECS
-    from contracts.schema.str06.candidates import candidate_artifact
+    from novel.store import candidate_artifact
     from novel.orchestrator import state as state_view
     from novel.store import PROVENANCE_KEY
 
@@ -1624,7 +1644,8 @@ def test_every_produced_artifact_without_provenance_reaches_the_deterministic_br
     def carries_provenance(rel: str) -> bool:
         candidate = candidate_artifact(rel)
         if candidate is not None:
-            return candidate.form == 'json'   # repository.write 落盘即注入来源账
+            # repository.write 落盘即注入来源账；正文（text）的账在绑定它的回执上。
+            return not candidate.endswith('.txt')
         spec = ARTIFACT_SPECS.get(rel)
         if spec is None:                      # 字节形态产物，本来就没有槽位
             return False

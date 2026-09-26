@@ -1,16 +1,82 @@
 """真实工作单元与 HTTP 统计：失败、缓存、未知、跨 run 和重启不丢分母。"""
 from __future__ import annotations
 
+import hashlib
 import json
 
 import pytest
 from fastapi.testclient import TestClient
 
+from contracts.schema.orchestration import LegacyExecutorBackend, LegacyLlmProfile
+from novel import prov
 from novel.api.app import create_app
-from novel.llm.ledger import read_cost_snapshot, read_jsonl_rows
+from novel.llm.cache import CachePolicy
+from novel.llm.ledger import CostLedger, ledger_path, read_cost_snapshot, read_jsonl_rows
+from novel.run import RunContext
 from novel.views import run_metrics
 from novel.work_unit_usage import summarize
-from tests.test_work_unit_grants import _exhaust
+from novel.work_units import WorkUnitBudget, initialize_workflow
+
+
+def _sha(label: str) -> str:
+    return hashlib.sha256(label.encode()).hexdigest()
+
+
+def _profile() -> LegacyLlmProfile:
+    return LegacyLlmProfile(
+        provider='deepseek', model='deepseek-v4-pro',
+        reasoning_effort='high', thinking_mode='on')
+
+
+def _ctx(base) -> RunContext:
+    """书级付费工作单元的现役坐标：`str06.stage2.names`（book scope，4 轮）。
+
+    ⚠ F8b 新链：旧 `stage2.global` 已退役，RunContext 生产入口拒识；
+    本文件自持最小 `_exhaust`，不再跨文件依赖 `test_work_unit_grants`
+    的旧链节点默认值。
+    """
+    initialize_workflow(base)
+    book = base / '额度链路_42'
+    book.mkdir(exist_ok=True)
+    return RunContext(
+        novel_dir=book, node='str06.stage2.names', paid=True,
+        code=prov.code_version(), cache=CachePolicy.default(),
+        ledger=CostLedger(path=ledger_path(base)),
+        executor_backend=LegacyExecutorBackend(profile=_profile()),
+    )
+
+
+def _exhaust(base, *, accepted_last: bool = False):
+    """耗尽基础四次内容额度；可选最后一次采纳成功（留 delivered+response）。"""
+    ctx = _ctx(base)
+    budget = WorkUnitBudget(base, ctx.sid, ctx.node)
+    checkpoint = None
+    for index in range(4):
+        fingerprint = _sha(f'req-{index}')
+        turn = budget.reserve(fingerprint, run_id=ctx.run_id)
+        budget.record_attempt(
+            turn.turn_id, attempt_id=f'att-{index}',
+            outcome='ok' if (accepted_last and index == 3) else 'error',
+            request_fingerprint=fingerprint)
+        ctx.ledger.record(
+            sid=ctx.sid, node=ctx.node, model=_profile().model,
+            code=ctx.code, cached=False, cache_policy=ctx.cache.name,
+            outcome='ok' if (accepted_last and index == 3) else 'error',
+            prompt_tokens=10, completion_tokens=3, reasoning_tokens=2,
+            purpose=ctx.node, attempt_id=f'att-{index}',
+            request_fingerprint=fingerprint, latency_ms=12)
+        if accepted_last and index == 3:
+            budget.save_response(turn.turn_id, {'final_response': '{"value":4}'})
+            budget.mark_adopted(turn.turn_id)
+            checkpoint = {
+                'accepted_turn_index': 4,
+                'attempt_links': [
+                    {'attempt_id': f'att-{i}'} for i in range(4)],
+            }
+        else:
+            budget.finish(turn.turn_id, outcome='failed')
+    assert budget.used == 4 and budget.remaining == 0
+    return ctx, budget, checkpoint
 
 
 def test_http_reads_failed_units_without_grant_eligibility_and_survives_restart(tmp_path):

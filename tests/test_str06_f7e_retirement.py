@@ -16,8 +16,14 @@
 【F8a 执行了注册键那一格】NODES／ARTIFACT_PATHS／CONSUMED_PROJECTIONS 的旧链键已随
 契约翻转删除（新链 11 节点、22 产物、12 投影键上位）——那些 `remove_entry` 登记项
 **已经兑现**，不再要求它们存在；方向 ① 现在只查尚未执行的 file／符号／字面目标，
-方向 ② 翻转为「现役键一律不得在退役册里」。F8c 删除旧引擎文件后，剩下的 file
-类登记项才会逐一消失。
+方向 ② 翻转为「现役键一律不得在退役册里」。
+
+【F8b/F8c 执行了删除那一格】Stage6 服务面（F8b）与旧 Stage2/4/5/7 整链
+（F8c：四个 stage 引擎包、判官、旧链 views、approvals 路由、delete 桶测试与
+grandfather 边）已按登记删除——方向 ① 对这两个批次放开（`_EXECUTED_BY_F8B`／
+`_EXECUTED_BY_F8C`／从 delete 桶机械派生的 `_F8C_DELETED_TESTS`），「不在盘上」
+正是删除成功的证据；旧 stage 包与旧链 views 的方向 ② 随之翻转为「必须已删」。
+前端旧屏（read/global/stage4/stage5/inbox）尚未删除，仍要求在册且存在。
 """
 from __future__ import annotations
 
@@ -30,7 +36,7 @@ import pytest
 
 from contracts.artifacts import ARTIFACT_PATHS
 from contracts.invariants import NODES
-from contracts.schema.str06.retirement import (
+from contracts.schema.retirement import (
     STR06_F6D_RETIREMENT, STR06_F7E_RED_ACCOUNT, STR06_F7E_RETIREMENT,
     STR06_F7E_TEST_KEEP,
 )
@@ -38,8 +44,61 @@ from contracts.schema.str06.retirement import (
 ROOT = Path(__file__).resolve().parent.parent
 
 #: 旧链 stage 包（F7e 目录级登记的四个对象）。
+#: ⚠ F8c（2026-09-25）：这四个目录**被新链 per-stage 包原地重建**——
+#: `novel/stages/stage2|4|5/7/` 现在住的是 STR-06 新链的确定性引擎，旧链整层
+#: （blueprint/analyze/characters/knowledge/plot_*/stage6/…）随迁移包分流一并
+#: 删除。因此「目录不在盘上」这条执行证据改为**逐模块名**核对：旧链引擎模块
+#: 一个都不许回来（`tests/test_layering.py::test_stage2_owner_shims_cannot_return`
+#: 另立同向守卫），新链模块必须全部落位。
 OLD_STAGE_DIRS = ('novel/stages/stage2', 'novel/stages/stage4',
                   'novel/stages/stage5', 'novel/stages/stage7')
+
+#: 旧链引擎模块（F7e delete_file 登记在册、F8c 必须已删除的那一批；逐条见
+#: `contracts/schema/retirement.py::STR06_F7E_RETIREMENT`）。
+OLD_STAGE_MODULES = (
+    'novel/stages/stage2/analyze', 'novel/stages/stage2/blueprint',
+    'novel/stages/stage2/characters', 'novel/stages/stage2/knowledge',
+    'novel/stages/stage2/shared', 'novel/stages/stage2/extract.py',
+    'novel/stages/stage2/checks.py',
+    'novel/stages/stage4/plot_design.py', 'novel/stages/stage4/plan.py',
+    'novel/stages/stage4/beats.py', 'novel/stages/stage4/measure.py',
+    'novel/stages/stage4/reading.py', 'novel/stages/stage4/actors.py',
+    'novel/stages/stage4/plot_binding.py', 'novel/stages/stage4/plot_checks.py',
+    'novel/stages/stage4/plot_context.py', 'novel/stages/stage4/plot_materials.py',
+    'novel/stages/stage4/plot_measure.py', 'novel/stages/stage4/plot_placements.py',
+    'novel/stages/stage4/plot_refs.py', 'novel/stages/stage4/compile_ir.py',
+    'novel/stages/stage4/design_rebuild.py', 'novel/stages/stage4/design_recovery.py',
+    'novel/stages/stage4/design_evolution.py', 'novel/stages/stage4/plan_recovery.py',
+    'novel/stages/stage4/phase_binding.py', 'novel/stages/stage4/phase_state.py',
+    'novel/stages/stage4/design_response_recovery.py',
+    'novel/stages/stage4/binding_input_contract.py',
+    'novel/stages/stage4/source_view.py', 'novel/stages/stage4/prompts.py',
+    'novel/stages/stage5/write.py', 'novel/stages/stage5/review.py',
+    'novel/stages/stage5/measure.py', 'novel/stages/stage5/checks.py',
+    'novel/stages/stage5/closure.py', 'novel/stages/stage5/plot_checks.py',
+    'novel/stages/stage5/plot_prompts.py', 'novel/stages/stage5/prompts.py',
+    'novel/stages/stage5/reviewer_rewrite.py',
+    'novel/stages/stage5/trim_resolution.py',
+    'novel/stages/stage7/rename.py', 'novel/stages/stage7/assemble.py',
+    'novel/stages/stage7/checks.py', 'novel/stages/stage7/measure.py',
+    'novel/stages/stage7/prompts.py', 'novel/stages/stage7/subs.py',
+)
+
+#: 新链 per-stage 引擎模块（F8c 分流后的落点；必须全部在盘上）。
+NEW_STAGE_MODULES = (
+    'novel/stages/stage2/__init__.py', 'novel/stages/stage2/source.py',
+    'novel/stages/stage2/names.py',
+    'novel/stages/stage4/__init__.py', 'novel/stages/stage4/design.py',
+    'novel/stages/stage4/grounding.py', 'novel/stages/stage4/compile.py',
+    'novel/stages/stage4/guard.py', 'novel/stages/stage4/fold.py',
+    'novel/stages/stage4/book_ir.py',
+    'novel/stages/stage5/__init__.py', 'novel/stages/stage5/body.py',
+    'novel/stages/stage5/body_checks.py', 'novel/stages/stage5/hook.py',
+    'novel/stages/stage5/hook_writer.py', 'novel/stages/stage5/hook_context.py',
+    'novel/stages/stage7/__init__.py', 'novel/stages/stage7/naming.py',
+    'novel/stages/stage7/assembly.py',
+    'novel/stages/common.py', 'novel/stages/chain.py',
+)
 
 #: 这三类键不进退役登记：stage6 归 F6d 表，stage0/1 整层重构延期（范围外）。
 OUT_OF_SCOPE_KEY_PREFIXES = ('stage6.', 'stage0.', 'stage1.')
@@ -77,20 +136,6 @@ def _dict_keys(path: Path) -> set[str]:
                 if isinstance(k, ast.Constant) and isinstance(k.value, str):
                     keys.add(k.value)
     return keys
-
-
-def _registered_files(items) -> set[str]:
-    out: set[str] = set()
-    for item in items:
-        target = item.target
-        file = _file_of(target)
-        if file is not None and file.is_file():
-            out.add(file.relative_to(ROOT).as_posix())
-        elif file is not None and file.is_dir():
-            out.add(file.relative_to(ROOT).as_posix() + '/')
-        elif '@' not in target and '::' not in target and '#' in target:
-            out.add(target.split('#')[0])
-    return out
 
 
 # ───────────────────────── 方向①：登记项必须真实存在 ─────────────────────────
@@ -131,12 +176,81 @@ _EXECUTED_BY_F8B = ('novel/views/stage6.py@', 'web/src/types/prepare.ts',
                     # grandfather 边随路由删除消失。
                     'novel/api/routes/edits.py@novel.stages.stage2')
 
+#: F8c 已执行的登记项（2026-09-25 旧链整层删除）：文件/目录不在盘上、
+#: importer 不再深导入，正是删除成功的证据，不再要求它们存在。与
+#: `_EXECUTED_BY_F8B` 同格式、同纪律（登记条目保留作历史台账）。分组：
+#: ① 四个旧链 stage 引擎包（目录级 delete_file；目录前缀同时覆盖包内模块
+#:    作 importer 的 grandfather 边，如 stage4/actors.py@…、stage6/hook.py@…）；
+#: ② 旧链判官、旧链 views 与 approvals 路由文件；
+#: ③ importer 仍在盘上、但旧链 stage 深导入已随旧链消失的 grandfather 边，
+#:    按 importer 整文件覆盖——这些文件今天一条 `novel.stages.` 深边都不剩。
+#:    「该 importer 无旧链深边」这个假设由 `test_grandfather_edges_all_registered`
+#:    反向钉住：它哪天新增一条深边，那条边不在 F7e 登记表里，当场红。
+#: ⚠ 不含 store.py→stage1.audit 与 views/ingest.py 两条**范围外边**
+#: （stage0/stage1 整层重构延期，边仍在，必须继续真实存在）——store.py 的
+#: 四条旧链边因此逐条登记，不用整文件前缀。
+_EXECUTED_BY_F8C = (
+    'novel/stages/stage2/',
+    'novel/stages/stage4/',
+    'novel/stages/stage5/',
+    'novel/stages/stage6/',
+    'novel/stages/stage7/',
+    'contracts/judges/stage2.py',
+    'contracts/judges/stage4.py',
+    'contracts/judges/stage5.py',
+    'contracts/judges/stage7.py',
+    'novel/views/stage2.py',
+    'novel/views/stage4.py',
+    'novel/views/stage5.py',
+    'novel/views/blueprint_progress.py',
+    'novel/api/routes/approvals.py',
+    # ── F8c 前端退役批次（旧链屏目录、旧链类型与旧链夹具整族删除）──
+    # 前端旧屏目录（read/global/stage4/stage5/inbox 的 delete_file 登记项，
+    # 以及 stage7 屏目录：F8b 只提前删了后端 views/stage7.py，前端屏随本批删除）
+    # 与它们的 rewrite_consumer 类型/夹具项：文件不在盘上正是删除成功的证据，
+    # 「必须已删」的翻转断言在 test_old_chain_views_and_frontend_registered。
+    'web/src/screens/read/',
+    'web/src/screens/global/',
+    'web/src/screens/stage4/',
+    'web/src/screens/stage5/',
+    'web/src/screens/inbox/',
+    'web/src/screens/stage7/',
+    'web/src/types/plot.ts',
+    'web/src/types/characters.ts',
+    'web/src/types/approvals.ts',
+    'web/src/fixtures/plot_v1/',
+    'novel/api/errors.py@novel.stages.',
+    'novel/cli/main.py@novel.stages.',
+    'novel/llm/client.py@novel.stages.',
+    'novel/llm/stage2_global_runs.py',
+    'novel/llm/stage2_runs.py',
+    'novel/llm/stage4_runs.py',
+    'novel/orchestrator/agent.py@novel.stages.',
+    'novel/orchestrator/approvals.py@novel.stages.',
+    'novel/orchestrator/inspection.py@novel.stages.',
+    'novel/orchestrator/queue.py@novel.stages.',
+    'novel/orchestrator/state.py@novel.stages.',
+    'novel/orchestrator/workflow_transition.py@novel.stages.',
+    'novel/store.py@novel.stages.stage2.knowledge.grounding',
+    'novel/store.py@novel.stages.stage2.shared.character_refs',
+    'novel/store.py@novel.stages.stage4.binding_input_contract',
+    'novel/store.py@novel.stages.stage4.phase_binding',
+)
+
+#: F8c 随旧链整批删除的旧链功能测试：从 F7e 表 delete 桶**机械派生**
+#: （不手抄清单——登记表是真相源）。delete 桶里每个文件已不在盘上，
+#: 「不存在」即删除成功的证据。
+_F8C_DELETED_TESTS = frozenset(
+    item.target for item in STR06_F7E_RETIREMENT
+    if item.action.value == 'delete_file' and item.target.startswith('tests/'))
+
 
 def test_registered_items_all_exist():
     problems: list[str] = []
     for item in STR06_F7E_RETIREMENT:
         target = item.target
-        if target.startswith(_EXECUTED_BY_F8A) or target.startswith(_EXECUTED_BY_F8B):
+        if (target.startswith(_EXECUTED_BY_F8A) or target.startswith(_EXECUTED_BY_F8B)
+                or target.startswith(_EXECUTED_BY_F8C) or target in _F8C_DELETED_TESTS):
             continue
         file = _file_of(target)
         if file is None:
@@ -184,16 +298,44 @@ def test_red_account_rows_are_complete():
 # ───────────────────────── 方向②：现役旧链面必须全部在册 ─────────────────────────
 
 def test_old_stage_packages_fully_registered():
-    registered_dirs = {t for t in _registered_files(STR06_F7E_RETIREMENT) if t.endswith('/')}
+    """旧链 stage 引擎：delete_file 在册 **且已真的删掉**（F8c 执行证据）。
+
+    F8c 前本条查「目录登记之外，包内每个引擎文件都必须真实存在（登记的不是
+    空目录）」；旧链整层删除后方向翻转为——旧链引擎模块必须**不在盘上**（连
+    只剩 `__pycache__` 的半删除态也不算）。删除范围被静默缩小（留一个模块）
+    都当场红。⚠ F8c 把 `novel/stages/stage2|4|5/7/` **原地重建**为新链
+    per-stage 包，因此本条不再断言「目录不存在」，改为逐模块名核对旧链引擎
+    已删、新链模块已落位——目录回来不等于旧链回来，模块名才说了算。
+    包内引擎文件删除前「先迁独有反例」的义务按家族登记在 REQUIREMENTS，
+    不随本条的翻转缩分母。
+    """
+    targets = {item.target for item in STR06_F7E_RETIREMENT}
+    delete_dirs = {item.target for item in STR06_F7E_RETIREMENT
+                   if item.action.value == 'delete_file'}
     problems = []
     for directory in OLD_STAGE_DIRS:
-        if f'{directory}/' not in registered_dirs:
+        if f'{directory}/' not in targets:
             problems.append(f'旧链包未登记：{directory}/')
             continue
-        # 目录登记之外，包内每个引擎文件都必须真实存在（登记的不是空目录）。
-        engines = [p for p in (ROOT / directory).rglob('*.py')
-                   if '__pycache__' not in p.parts]
-        assert engines, f'{directory}/ 下没有引擎文件——目录登记失去意义'
+        if f'{directory}/' not in delete_dirs:
+            problems.append(f'旧链包登记动作不是 delete_file：{directory}/')
+    # F8c 执行证据 ①：旧链引擎模块一个都不许回来。
+    for module in OLD_STAGE_MODULES:
+        if (ROOT / module).exists():
+            problems.append(f'旧链引擎模块仍在盘上（F8c 删除未执行）：{module}')
+    # F8c 执行证据 ②：新链 per-stage 模块必须全部落位（分流没做完也红）。
+    for module in NEW_STAGE_MODULES:
+        if not (ROOT / module).is_file():
+            problems.append(f'新链模块未落位（F8c 分流未完成）：{module}')
+    # 守卫的守卫：新链包里不得混进旧链模块名（包回来了但装的是旧代码）。
+    for directory in OLD_STAGE_DIRS:
+        present = sorted(p.name for p in (ROOT / directory).glob('*.py'))
+        for name in ('extract.py', 'checks.py', 'plot_design.py', 'plan.py',
+                     'write.py', 'review.py', 'rename.py', 'assemble.py',
+                     'prompts.py', 'measure.py', 'beats.py', 'actors.py',
+                     'reading.py', 'closure.py', 'subs.py'):
+            if name in present:
+                problems.append(f'{directory}/ 混进旧链模块名：{name}')
     assert not problems, '\n'.join(problems)
 
 
@@ -278,21 +420,32 @@ def test_grandfather_edges_all_registered():
 
 
 def test_old_chain_views_and_frontend_registered():
-    """旧链 views 与前端旧屏必须在册（F7d 候选监控面是接管者，不是删除对象）。"""
-    registered = _registered_files(STR06_F7E_RETIREMENT)
+    """旧链 views 与前端旧屏必须在册（F7d 候选监控面是接管者，不是删除对象）。
+
+    F8c 后方向整体翻转：views 与前端旧屏目录都要求**已不在盘上**——删除正是
+    退役执行的证据；半删一个文件（留个空目录或只剩测试）就是旧链监控面还在。
+    前端批次（F8c）执行内容：read/global/stage4/stage5/inbox/stage7 六个屏目录
+    连同测试删除，`types/plot.ts`、`types/characters.ts`、`types/approvals.ts`
+    与 `fixtures/plot_v1/` 同批退役（stage7 屏目录 F8b 只提前删了后端视图，
+    前端屏随本批删除）；保留屏 stage0/stage1/corpus/settings/run/str06 与
+    `types/stages.ts`（改写成 Stage0/1 + CheckReport）继续在册且真实存在。
+    """
+    targets = {item.target for item in STR06_F7E_RETIREMENT}
     problems = []
-    # ⚠ views/stage7.py 已由 F8b 按 delete_file 登记执行删除（经已退役的
-    # stage7.rename 节点建 ctx，F8a 后不可用），不再要求在册。
     for rel in ('novel/views/stage2.py', 'novel/views/stage4.py',
                 'novel/views/stage5.py',
                 'novel/views/blueprint_progress.py'):
-        if rel not in registered:
+        if rel not in targets:
             problems.append(f'旧链视图未登记：{rel}')
+        if (ROOT / rel).exists():
+            problems.append(f'旧链视图仍在盘上（F8c 删除未执行）：{rel}')
     for directory in ('web/src/screens/read', 'web/src/screens/global',
                       'web/src/screens/stage4', 'web/src/screens/stage5',
-                      'web/src/screens/inbox'):
-        if f'{directory}/' not in registered:
+                      'web/src/screens/inbox', 'web/src/screens/stage7'):
+        if f'{directory}/' not in targets:
             problems.append(f'旧链前端屏未登记：{directory}/')
+        elif (ROOT / directory).exists():
+            problems.append(f'旧链前端屏仍在盘上（F8c 前端批次未执行）：{directory}/')
     assert not problems, '\n'.join(problems)
 
 
@@ -306,10 +459,10 @@ def test_f6d_and_f7e_tables_do_not_double_register():
 
 @pytest.mark.parametrize('why', ['import 时无业务副作用'], ids=lambda v: v)
 def test_registry_module_has_no_import_side_effects(why):
-    """登记是纯数据：import 本模块不得碰盘面（与 candidates.py 同纪律）。
+    """登记是纯数据：import 本模块不得碰盘面（与激活表同纪律）。
 
     ⚠ 在**子进程**里验，不在本进程删 `sys.modules` 再重导入：那会把
-    `contracts.schema.str06` 全家载成第二套类对象，之后任何持旧类引用的
+    contracts 层载成第二套类对象，之后任何持旧类引用的
     测试都因 isinstance 分家而假红（全量回归里实测过，症状是
     「Input should be a valid dictionary or instance of BindingEntry」）。
     """
@@ -320,7 +473,7 @@ def test_registry_module_has_no_import_side_effects(why):
         'sys.path.insert(0, sys.argv[1]);'
         'before = {p for p in __import__("pathlib").Path(sys.argv[1]).rglob("*")'
         ' if p.is_file()};'
-        'import contracts.schema.str06.retirement as r;'
+        'import contracts.schema.retirement as r;'
         'after = {p for p in __import__("pathlib").Path(sys.argv[1]).rglob("*")'
         ' if p.is_file()};'
         'assert before == after, "import 写了盘面";'

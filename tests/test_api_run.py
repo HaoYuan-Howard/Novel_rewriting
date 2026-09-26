@@ -131,15 +131,12 @@ def test_run_projects_current_review_states_and_only_current_role_recovery(clien
     os.mkdir(os.path.join(base, '测试书_42'))
     actual = c.get('/api/novels/42/run').json()
     reviews = actual['resume_frontier']['review_states']
-    # F8a/F8b-2：prepare/s6/s7 闸随 Stage6 与人工闸整层退役，现役 NODES
-    # 不再带 approval_projection——run 面的审阅投影为空是正确形状。
-    assert {row['node'] for row in reviews} == {
-        node for node, spec in NODES.items()
-        if spec.lifecycle.approval_projection}
-    assert reviews == []
-    # Stage2 语义审阅退役：run 面不再有 stage2 审批状态行。
-    assert not [row for row in reviews if row['node'].startswith('stage2.')]
-    assert operator._review_state_projection(None) is None
+    # F8a/F8b-2/F8c：prepare/s6/s7 闸与 Stage2 语义审阅面随 Stage6 整层与人工闸
+    # 退役，`RunResumeFrontierView.review_states` 恒为 None——run 面不再投影任何
+    # 审批状态行（字段保留只为 wire 兼容，读到的就是「没有这个面」）。
+    assert reviews is None
+    # 投影函数本身也随人工闸整层退役：operator 不再有 review state 投影落点。
+    assert not hasattr(operator, '_review_state_projection')
     def row(node, role, scope):
         return dict(unit_id=node+role+scope, node=node, role=role, scope=scope,
                     content_used=1, content_limit=4, content_remaining=3, state='delivered',

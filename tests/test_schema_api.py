@@ -79,64 +79,27 @@ def test_retention_candidate_kind_uses_the_invariant_value_domain():
         RETENTION_CANDIDATE_KINDS
 
 
-def test_global_evidence_fixture_matches_its_archived_source_snapshot():
-    fixtures = ROOT / 'web' / 'src' / 'fixtures' / 'backend_v1'
-    # 冻结旧字节继续证明历史证据的坐标来源；不把旧知识图当成当前 Core HTTP 正例。
-    archived = {name: (fixtures / name).read_bytes()
-                for name in ('global.json', 'reading_ch3.json')}
-    assert {name: hashlib.sha256(data).hexdigest() for name, data in archived.items()} == {
-        'global.json': 'e296473948f158f13268a826ba1337dfea08efa71544220f71c5f2a8e71a6b20',
-        'reading_ch3.json': '1ad21dc8d156783080c38f410b0e8beab24d90e4bb37a47818b754c99fdb5588',
-    }
-    raw = json.loads(archived['global.json'])
-    with pytest.raises(ValidationError):
-        GlobalView.model_validate(raw)
-    assert {row['visibility']['kind'] for row in raw['relations']} == {'public', 'via_secret'}
-    assert {event['subject_kind'] for secret in raw['secrets']
-            for event in secret['knowledge_events']} == {
-        'character', 'group'}
-
-    reading = json.loads(archived['reading_ch3.json'])
-    # 保留 Global 的七类证据反例；旧阅读快照只作源文，不能冒充 V9 HTTP 响应。
-    with pytest.raises(ValidationError):
-        ReadingView.model_validate(reading)
-    check = json.loads((fixtures / 'check_stage2.json').read_text(encoding='utf-8'))
-    CheckReport.model_validate(check)
-    chapter = ''.join(segment['text'] for segment in reading['segments'])
-    pending: list[object] = [raw]
-    located = 0
-    while pending:
-        item = pending.pop()
-        if isinstance(item, dict):
-            source = item.get('source')
-            if isinstance(source, dict):
-                assert chapter[source['start']:source['end']] == source['text']
-                located += 1
-            pending.extend(item.values())
-        elif isinstance(item, list):
-            pending.extend(item)
-    assert located >= 7, '七类 evidence 没有都在 fixture 里留下可回取正例'
-
-
-def test_active_stage5_fixtures_are_exact_slim_http_views():
-    fixtures = ROOT / 'web' / 'src' / 'fixtures' / 'backend_v1'
-    stage5 = Stage5View.model_validate_json(
-        (fixtures / 'stage5_ch3.json').read_text(encoding='utf-8'))
-    review = ReviewView.model_validate_json(
-        (fixtures / 'review_ch3.json').read_text(encoding='utf-8'))
-
-    assert stage5.legacy_incompatible is True and not stage5.drafts
-    assert review.review_state == 'legacy_incompatible'
-    assert set(review.chapter.model_dump()) == {'output_ordinal', 'findings'}
-    assert set(review.index[0].model_dump()) == {
-        'output_ordinal', 'finding_counts', 'unresolved',
-    }
-
-    check = CheckReport.model_validate_json(
-        (fixtures / 'check_stage5.json').read_text(encoding='utf-8'))
-    # 历史报告不能补签后来增加的判据；当前完整取值面由 plot_flow 实际 HTTP 报告验证。
-    assert 'knowledge_position_unver' not in {line.rule for line in check.rules}
-
+# ───────────────── 已退役：旧链 HTTP fixture 对账（F8c） ─────────────────
+#
+# 原来这里有两项对账旧链读屏形状的用例：
+#   · `test_global_evidence_fixture_matches_its_archived_source_snapshot`
+#   · `test_active_stage5_fixtures_are_exact_slim_http_views`
+#
+# 【为什么退役】它们的证据是 `web/src/fixtures/backend_v1/` 下六份**旧链**冻结
+# fixture（global／reading_ch3／check_stage2／stage5_ch3／review_ch3／
+# check_stage5）。F8b 随旧链读屏（`novel/views/stage{2,4,5}.py`、
+# `blueprint_progress.py`）与旧链 routes 整批删除了这些 fixture，旧链 HTTP 面已
+# 不存在——`GlobalView`／`ReadingView`／`Stage5View`／`ReviewView`／`CheckReport`
+# 的旧形状没有任何现役消费者。这正落在 F7e 红账对
+# `test_schema_api 3 项既有失败` 登记的处置「修复或随旧链形状退役；不删分母」
+# 的**退役**分支：不是判据放宽，是被钉的旧链形状连同其冻结证据一起消失。
+#
+# 【反例没有静默丢失】① 旧字节与旧形状断言按 Git 历史读取（删除前的工作树）；
+#   ② 现役候选链监控面的同名纪律由 `tests/test_str06_views.py::
+#      test_candidate_api_models_keep_the_active_disciplines` 承接（不抄取值面、
+#      不带判定字段、不背 web 栈）；③ 现役契约层的两条纪律由本文件余下用例
+#      （`Literal` 取值面、web 栈依赖）继续守。
+# ─────────────────────────────────────────────────────────────────────────────
 
 def test_preview_sid_is_nullable_but_never_empty():
     assert PreviewRequest(sid=None, node='stage0.remove').sid is None
@@ -215,10 +178,27 @@ def test_executor_egress_snapshots_distinguish_old_unknown_from_new_bool():
     old_round_trip = JobStart.model_validate_json(old_job.model_dump_json())
     assert old_round_trip.egress_authorized is None
     assert old_round_trip.steps[0].egress_authorized is None
-    with pytest.raises(ValidationError, match='不能携带正文外发授权'):
-        Step(**step_fields, executor_backend=None, egress_authorized=False)
+    # F8c：外发授权与 executor backend 解钩——直连 LLM step（无 backend）可携带
+    # 显式授权，但 argv 与字段必须同进同出（不一致=第二个真相源）。
     with pytest.raises(ValidationError, match='与 argv'):
         Step(**step_fields, executor_backend=LegacyExecutorBackend(profile=profile), egress_authorized=True)
+    direct_step = Step(
+        **dict(step_fields, argv=[*step_fields['argv'], '--allow-egress']),
+        executor_backend=None, egress_authorized=True)
+    assert direct_step.egress_authorized is True
+    # 显式 False（未授权）与 None（旧盘未知）都不夹带旗标，同样合法。
+    assert Step(**step_fields, executor_backend=None,
+                egress_authorized=False).egress_authorized is False
+    assert Step(**step_fields, executor_backend=None,
+                egress_authorized=None).egress_authorized is None
+    # 夹带旗标却声明未授权，仍是同一类不一致。
+    with pytest.raises(ValidationError, match='与 argv'):
+        Step(**dict(step_fields, argv=[*step_fields['argv'], '--allow-egress']),
+             executor_backend=None, egress_authorized=False)
+    with pytest.raises(ValidationError, match='0 成本 step 不能携带正文外发授权'):
+        Step(**dict(step_fields, argv=[*step_fields['argv'], '--allow-egress'],
+                    paid=False),
+             executor_backend=None, egress_authorized=True)
 
     current_step = Step(
         **step_fields, executor_backend=LegacyExecutorBackend(profile=profile), egress_authorized=False)
@@ -226,7 +206,7 @@ def test_executor_egress_snapshots_distinguish_old_unknown_from_new_bool():
         sid='new', node='stage2.global', steps=[current_step], python='3.11', code='new',
         paid=True, writes=True, executor_backend=LegacyExecutorBackend(profile=profile), egress_authorized=False)
     assert current_job.egress_authorized is False
-    with pytest.raises(ValidationError, match=r'steps\[\] 不一致'):
+    with pytest.raises(ValidationError, match='外发授权不一致'):
         JobStart(
             sid='new', node='stage2.global', steps=[current_step],
             python='3.11', code='new', paid=True, writes=True,

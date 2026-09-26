@@ -220,7 +220,6 @@ def capture_book(manifest: Manifest, source: Source) -> dict[str, Any]:
     from novel.orchestrator import agent, delivery, state
     from novel.orchestrator.inspection import read_surface_seal
     from novel.stages.stage0 import revisions
-    from novel.stages.stage7 import assemble
     from novel.store import ArtifactStore
 
     base = Path(manifest.output_root)
@@ -246,7 +245,14 @@ def capture_book(manifest: Manifest, source: Source) -> dict[str, Any]:
         result['delivery_state'] = outcome.state
         main, _ = store.read_own(MainText, STAGE1_MAIN_TEXT)
         result['chapter_ordinals'] = [chapter.chapter_ordinal for chapter in main.root]
-        text = assemble.read_current_book(state.readonly_ctx(book, 'stage7.assemble', code))
+        # F8c：旧 `novel.stages.stage7.assemble.read_current_book` 随旧链退役。
+        # 新链成书由 str06.stage7.assemble 写 `stage7/final/<书名>_rewriting.txt`
+        # （`novel/paths.py::book_txt_rel` 是唯一权威 rel；三级路径不进来源账，
+        # 生产下载面同样按盘上路径直读，见 `novel/api/routes/str06.py::get_book`），
+        # 就绪记录是同一节点**最后提交**的 `stage7/final/delivery_manifest.json`。
+        # ⇒ 与 `validate_baseline` 同一把尺子：按盘上路径直读当前成书字节；
+        #   文件缺席照旧记 error，不把「盘上有 txt」冒充可交付。
+        text = (book / paths.book_txt_rel(book)).read_text(encoding='utf-8')
         result['output_sha256'] = _sha(text.encode('utf-8'))
         if surface != read_surface_seal(base, source.sid, code=code):
             raise ValueError('收集过程中盘面变化')

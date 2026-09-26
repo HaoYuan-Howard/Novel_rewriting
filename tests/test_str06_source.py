@@ -7,10 +7,10 @@
 """
 from __future__ import annotations
 
-from contracts.schema.str06.source import (
+from contracts.schema.source import (
     BlueprintsArtifactV12, CharactersArtifactV4, CharactersCore,
 )
-from novel.stages.str06.source_compile import (
+from novel.stages.stage2.source import (
     ChapterCompiler, assemble_blueprint, compile_book, source_fold,
 )
 

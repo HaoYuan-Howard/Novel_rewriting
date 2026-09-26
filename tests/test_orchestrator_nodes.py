@@ -7,6 +7,10 @@ test_orchestrator_nodes.py —— 四个纯函数：贵贱 · 写不写 · 那�
   · **贵贱只有一处算**（`R-11.7`）——原型漏登记 4 个 0 成本 flag，界面把免费动作画成付费
   · **展示与执行共用同一个 argv 构造函数**（`R-11.8`）——第二个落点会慢慢分家而不出声
   · **「0 成本」不等于「不写盘」**——原型 8 条注释都在说这句，而代码里没有落点
+
+⚠ F8b 载荷：现役 `NODES` 是 stage0.remove／stage1.partition ＋ 11 个 `str06.` 节点；
+旧链 14 键进 `RETIRED_NODES`。旧链节点的旗标面（--revalidate/--apply-edit/--mode 族）
+随节点整体退役——本文件对它们的现役断言一律是「任何现役节点都拒收」。
 """
 from __future__ import annotations
 
@@ -17,8 +21,8 @@ import sys
 import pytest
 
 from contracts.invariants import (
-    LLM_EXECUTOR_NODES, FREE_ENTRIES, NODES, NODE_WRITE_EFFECTS, STAGES,
-    VALUED_FLAGS, WRITE_EFFECTS,
+    CONDITIONAL_REQUIRED_FLAGS, FREE_ENTRIES, LLM_EXECUTOR_NODES, NODES,
+    NODE_WRITE_EFFECTS, STAGES, VALUED_FLAGS, WRITE_EFFECTS,
 )
 from contracts.schema.orchestration import (
     LegacyExecutorBackend, LegacyLlmProfile,
@@ -43,7 +47,8 @@ def _bare(node: str) -> list[str]:
 
     ⚠ 不是空列表：人工 approve 节点有必填的人工凭据（`NodeSpec.required_flags`），
     少一个就拼不出 argv。想测「默认路径」的那几条要的是**默认跑法**，不是**空 flags**。
-    （`stage6.approve` 已改自动定稿，默认无必填项。）
+    （F8b 后人工凭据族随旧链退役：现役 13 个节点 `required_flags` 全空，
+    `_bare` 仍走 `missing_required`——它要在必填面重新出现时自动跟上。）
     """
     out: list[str] = []
     for extra in N.missing_required(node, out):
@@ -55,9 +60,8 @@ def _args(flag: str, node: str | None = None) -> list[str]:
     """带值 flag 补一个值——不补的话拒收的是「没给值」，测不到我们想测的那件事。
 
     ⚠ 给了 node 就把该节点的**必填项**一并补齐（`NodeSpec.required_flags`）：
-    `stage0.approve` 少一个人工凭据就拼不出可执行 argv，
-    而这张表想测的是「这条 flag 该节点认不认」，不是「必填项齐不齐」——
-    后者有它自己的专测。
+    少一个必填项就拼不出可执行 argv，而这张表想测的是「这条 flag 该节点认不认」，
+    不是「必填项齐不齐」——后者有它自己的专测。
     """
     out = [flag, 'payload.json'] if flag in VALUED_FLAGS else [flag]
     if node is not None:
@@ -72,30 +76,11 @@ def _executor_flags(node: str, tokens: frozenset[str]) -> list[str]:
     assert set(ordered) == set(tokens), f'{node} 的 executor token 未登记进 NodeSpec.flags'
     out: list[str] = []
     for flag in ordered:
-        if flag == '--chapters':
-            out += [flag, '1,3']
-        elif flag in VALUED_FLAGS:
+        if flag in VALUED_FLAGS:
             out += [flag, 'a' * 64]
         else:
             out.append(flag)
     return out
-
-
-_STAGE5_EDIT_FLAGS = frozenset({
-    '--apply-edit', '--actor', '--reason', '--current-chapter-sha256',
-    '--preview-subject-sha256', '--edit-confirmation',
-})
-
-
-def _stage5_edit_flags() -> list[str]:
-    """把任一 edit 绑定参数物化为同一条完整合法 argv。"""
-    return [
-        '--apply-edit', 'ch01.json',
-        '--actor', 'operator', '--reason', '逐项核对当前预览',
-        '--current-chapter-sha256', 'a' * 64,
-        '--preview-subject-sha256', 'b' * 64,
-        '--edit-confirmation', 'formal',
-    ]
 
 
 _STAGE4_REPAIR_RECOVERY_FLAGS = frozenset({
@@ -106,7 +91,7 @@ _STAGE4_REPAIR_RECOVERY_FLAGS = frozenset({
 
 
 def _stage4_repair_recovery_flags() -> list[str]:
-    """物化唯一合法的 Stage4A repair/replan prepared 补交 argv。"""
+    """物化旧链 Stage4A repair/replan prepared 补交 argv（现已整体退役）。"""
     return [
         '--recover-repair-aggregate', 'source-run-1',
         '--source-journal-sha256', 'a' * 64,
@@ -114,15 +99,13 @@ def _stage4_repair_recovery_flags() -> list[str]:
     ]
 
 
-_FOLLOW_CHECK_EXECUTORS = frozenset({
-    'stage2.blueprint', 'stage4.plan', 'stage6.hook', 'stage7.rename',
-})
-
 EXECUTOR_RUN_CASES = [
     pytest.param(
         node,
         _executor_flags(node, tokens),
-        2 if node in _FOLLOW_CHECK_EXECUTORS else 1,
+        # 新链 9 个 str06 付费节点全部接受 `--check-only`：默认付费跑写盘，
+        # builder 一律自动追一条免费复检（判准是「写不写盘」）。
+        2,
         id=f'{node}:{"+".join(sorted(tokens)) or "default"}',
     )
     for node, combinations in N.PROFILED_LLM_RUNS.items()
@@ -132,11 +115,7 @@ EXECUTOR_RUN_CASES = [
 UNMIGRATED_EXECUTOR_FLAG_CASES = [
     pytest.param(
         node,
-        (_stage5_edit_flags()
-         if node == 'stage5.write' and flag in _STAGE5_EDIT_FLAGS
-         else _stage4_repair_recovery_flags()
-         if node == 'stage4.design' and flag in _STAGE4_REPAIR_RECOVERY_FLAGS
-         else _args(flag, node)),
+        _args(flag, node),
         id=f'{node}:{flag}',
     )
     for node, combinations in N.PROFILED_LLM_RUNS.items()
@@ -149,11 +128,10 @@ UNMIGRATED_EXECUTOR_FLAG_CASES = [
 
 def test_the_matrix_actually_has_rows():
     """参数化表算空时，下面几十条会**全绿**——而那正是最坏的情况。"""
-    assert len(CASES) > 25, f'node × flag 只铺出 {len(CASES)} 行，节点表多半被清空了'
-    # Stage3 已退役；人物独立抽取新增一个 Executor，不新增 Commander。
-    # stage6.semantic / stage0.approve|edit / stage7.approve（批次 B4）相继退役后
-    # 现役节点数是 16。
-    assert len(NODES) == 16, f'节点数变成 {len(NODES)} 了——是有意加的就来改这个数'
+    assert len(CASES) >= 14, f'node × flag 只铺出 {len(CASES)} 行，节点表多半被清空了'
+    # F8a 翻转：现役节点表 = stage0/stage1 两座 + 11 个 str06. 节点（Stage6 整层
+    # 与旧 Stage2/4/5/7 链已入 RETIRED_NODES）。加节点就来改这个数。
+    assert len(NODES) == 13, f'节点数变成 {len(NODES)} 了——是有意加的就来改这个数'
 
 
 # ───────────────────────── 贵贱（R-11.7 · Q-10） ─────────────────────────
@@ -189,17 +167,17 @@ def test_an_unknown_flag_is_paid_even_on_a_free_node():
     （`build_argv` 拒收、`is_paid` 放行）比两处都严更难查。
     """
     assert N.is_paid('stage1.partition', ['--brand-new-flag']) is True
-    assert N.is_paid('stage4.context', ['--brand-new-flag']) is True
+    assert N.is_paid('str06.stage4.compile', ['--brand-new-flag']) is True
 
 
 def test_the_value_of_a_valued_flag_is_not_mistaken_for_a_flag():
-    """`--apply-edit C:/x.json` 的**值**不是 flag。
+    """`--source E:/x.txt` 的**值**不是 flag。
 
-    不把它剔掉，白名单会拿一个文件路径去查、查不到，于是一次 0 成本的人工编辑
+    不把它剔掉，白名单会拿一个文件路径去查、查不到，于是一次 0 成本的摄入
     被判成付费——`Q-3` 记着的那个「漏登记的后果是反的」，换了个成因。
     """
-    assert N.flag_tokens(['--apply-edit', 'C:/x.json']) == ('--apply-edit',)
-    assert N.is_paid('stage4.plan', ['--apply-edit', 'C:/x.json']) is False
+    assert N.flag_tokens(['--source', 'C:/x.txt']) == ('--source',)
+    assert N.is_paid('stage0.remove', ['--source', 'C:/x.txt']) is False
 
 
 def test_a_bare_paid_node_is_paid():
@@ -219,15 +197,25 @@ def test_the_look_only_flags_never_write(flag):
 
 @pytest.mark.parametrize('flag', ['--revalidate', '--recheck',
                                   '--apply-edit', '--renormalize'])
-def test_the_free_but_writing_flags_say_what_they_write(flag):
-    """⭐ **「0 成本」不等于「不写盘」** —— 原型 8 条注释都在说这句，而它没有落点。
+def test_the_free_but_writing_flags_are_retired_with_the_old_chain(flag):
+    """⭐ **「0 成本」不等于「不写盘」** 的 F8b 形态：旧链免费写盘一族
+    （revalidate／recheck／apply-edit／renormalize）随旧节点整体退役。
 
-    界面上一个写着「0 成本」的按钮可能归档旧轮、覆盖正式产物、重拼成书 txt。
+    新链没有「免费但写盘」的旗标——免费恢复入口全部经同一付费边界落盘，
+    写效应即对应节点的 `produces`（`WRITE_EFFECTS` 只收纯读旗标）。
+    谁要把这个语义加回来，必须同时登记它的写效应并让本条重新变绿。
     """
-    node = next(n for n, s in NODES.items() if flag in s.flags)
-    assert N.is_paid(node, _args(flag)) is False, f'{flag} 该是 0 成本'
-    assert N.would_write(node, _args(flag)) is True, f'{flag} 免费但**会写盘**'
-    assert N.write_effect(node, _args(flag)), '会写盘就必须说出写什么'
+    assert flag not in WRITE_EFFECTS, f'{flag} 不该再是登记在案的免费旗标'
+    assert all(flag not in spec.flags for spec in NODES.values()), \
+        f'{flag} 不该挂在任何现役节点上'
+    node = next(n for n, s in NODES.items() if s.paid)
+    with pytest.raises(UnsupportedRunMode, match='不接受'):
+        N.build_argv(node, SID, [flag], base=BASE)
+
+
+def test_the_write_effects_table_only_registers_pure_read_flags():
+    """新链 `WRITE_EFFECTS` 只收「纯读」：出现非空写效应即违反 F8a 收敛。"""
+    assert WRITE_EFFECTS == {'--dry-run': '', '--check-only': ''}
 
 
 def test_every_node_writes_by_default():
@@ -243,78 +231,26 @@ def test_an_unrecorded_flag_is_assumed_to_write():
     真正未知的未来 flag，钉住未知不会被当成不写盘。
     """
     assert '--identity' not in WRITE_EFFECTS
-    assert N.would_write('stage7.rename', ['--future-unreviewed-flag']) is True
+    assert N.would_write('str06.stage7.assemble', ['--future-unreviewed-flag']) is True
 
 
-def test_node_specific_write_effects_keep_all_three_identity_behaviors_distinct():
-    """stage4/stage6 只诊断，stage7 写回正式人物表。"""
-    assert NODE_WRITE_EFFECTS == {
-        ('stage6.prepare', '--recover-prepared'):
-            '按原回答补 stage6/prepare.json 与原采用尾账（0 模型）',
-        ('stage6.prepare', '--recover-edit'):
-            '按不可变原决定免费补齐 Prepare 编辑及独立审阅提交',
-        ('stage6.prepare', '--revalidate'): '',
-        ('stage4.design', '--recover-prepared'):
-            '原 producer 已停止后，以独立免费 committer 补完 Stage4A 聚合与原采用尾账',
-        ('stage4.plan', '--recover-prepared'):
-            '原 producer 已停止后，以独立免费 committer 补完 Stage4B 聚合与原采用尾账',
-        ('stage6.hook', '--recover-prepared'):
-            '按原完成组补 stage6/hook.json、原 run 采纳审计及工作单元提交状态（0 模型）',
-        ('stage7.rename', '--recover-prepared'):
-            '按原完成组补 name_map.json、原 run 采纳及工作单元提交状态（0 模型）',
-        # Stage2/Stage4 的 `--close-review` 特例已随批次 B1/B2 审阅/闸退役一并删除。
-        ('stage4.plan', '--identity'): '',
-        ('stage6.hook', '--identity'): '',
-        ('stage7.rename', '--identity'): 'stage7/name_map.json',
-    }
-    assert N.write_effect('stage4.plan', ['--identity']) == ''
-    assert N.write_effect('stage4.plan', ['--identity', '--dry-run']) == ''
-    assert N.write_effect('stage7.rename', ['--identity']) == 'stage7/name_map.json'
-    assert N.write_effect('stage6.hook', ['--identity']) == ''
+def test_node_specific_write_effects_table_is_empty_on_the_new_chain():
+    """F8a 收敛：新链没有「同一旗标在不同节点不同形」的例外——
+    每个节点的全部跑法写效应都等于它自己的 `produces`（纯读旗标除外）。"""
+    assert NODE_WRITE_EFFECTS == {}
+    assert N.write_effect('str06.stage5.body', ['--dry-run']) == ''
+    assert N.write_effect('str06.stage5.body', ['--check-only']) == ''
+    assert N.write_effect('str06.stage4.compile', []) == \
+        ' · '.join(NODES['str06.stage4.compile'].produces)
+    assert N.write_effect('str06.stage7.naming', []) == \
+        ' · '.join(NODES['str06.stage7.naming'].produces)
 
 
 # ───────────────────────── 那条命令（R-11.8 · R-12.3） ─────────────────────────
 
 @pytest.mark.parametrize('node,flag', CASES, ids=lambda v: str(v))
 def test_every_registered_run_mode_builds_a_command(node, flag):
-    # ``--subject-sha256`` 是 recovery 的 hash-bound 参数，不是独立入口；
-    # 单独出现必须继续关闭式拒绝，这张正向矩阵则物化它所属的完整合法组合。
-    flags = (
-        [
-            '--recover-reviewer-rewrite-prepared', 'source-run-1',
-            '--reviewer-rewrite-request-sha256', 'a' * 64,
-            '--reviewer-rewrite-recovery-target-run-id', 'target-run-1',
-            '--reviewer-rewrite-recovery-journal-sha256', 'b' * 64,
-        ]
-        if node == 'stage5.write' and flag in {
-            '--recover-reviewer-rewrite-prepared',
-            '--reviewer-rewrite-request-sha256',
-            '--reviewer-rewrite-recovery-target-run-id',
-            '--reviewer-rewrite-recovery-journal-sha256',
-        }
-        else [
-            '--retire-reviewer-rewrite-request',
-            'stage5/reviewer_rewrite_request.json',
-            '--reviewer-rewrite-request-sha256', 'a' * 64,
-        ]
-        if (node, flag) == ('stage5.write', '--retire-reviewer-rewrite-request')
-        else _stage4_repair_recovery_flags()
-        if node == 'stage4.design' and flag in _STAGE4_REPAIR_RECOVERY_FLAGS
-        else [
-            '--recover-prepared', 'source-run-1',
-            '--actor', 'operator', '--reason', '逐项核对',
-            '--subject-sha256', 'a' * 64,
-        ]
-        if (node, flag) == ('stage5.write', '--subject-sha256')
-        else ['--recover-prepared', 'source-run-1', '--subject-sha256', 'a' * 64]
-        if node in ('stage4.design', 'stage4.plan', 'stage6.prepare', 'stage6.hook',
-                    'stage7.rename') and flag in {
-            '--recover-prepared', '--subject-sha256'}
-        else (_stage5_edit_flags()
-              if node == 'stage5.write' and flag in _STAGE5_EDIT_FLAGS
-              else _args(flag, node))
-    )
-    argv = N.build_argv(node, SID, flags, base=BASE)
+    argv = N.build_argv(node, SID, _args(flag, node), base=BASE)
     assert argv[0] == sys.executable
     assert node in argv and SID in argv
 
@@ -326,7 +262,7 @@ def test_argv_never_hardcodes_the_interpreter_and_carries_the_encoding_flags():
     ⚠ `-X utf8 -u` 管的是「人在终端直接粘这条命令」那一半；
     服务跑子进程那一半由 `child_env()` 管。**两道，不是一道。**
     """
-    argv = N.build_argv('stage5.review', SID, ['--check-only'], base=BASE)
+    argv = N.build_argv('str06.stage4.compile', SID, [], base=BASE)
     assert argv[0] == sys.executable
     assert argv[1:5] == ['-X', 'utf8', '-u', '-m']
     assert argv[5] == N.CLI_MODULE
@@ -348,23 +284,19 @@ def test_a_node_refuses_a_flag_it_does_not_have():
         N.build_argv('stage9.nope', SID, base=BASE)
 
 
-def test_stage2_global_resample_is_paid_and_cannot_hide_another_action():
-    argv = N.build_argv('stage2.global', SID, ['--resample'], base=BASE)
-    assert '--resample' in argv
-    assert N.is_paid('stage2.global', ['--resample']) is True
-    # 语义审阅退役后 `--resample` 只重产 Global 机械事实工作包，不再写审阅账。
-    assert N.write_effect('stage2.global', ['--resample']) == \
-        'stage2/global_grounding.json'
-    with pytest.raises(UnsupportedRunMode, match='必须单独执行'):
-        N.build_argv(
-            'stage2.global', SID, ['--resample', '--purge-role'], base=BASE)
+def test_retired_stage2_resample_face_is_not_registered_anywhere():
+    """旧链 `stage2.global --resample`（必须单独执行的付费重采）随旧链退役；
+    新链付费节点只有 `--check-only` 一个跑法旗标，默认付费路夹带任何
+    未登记旗标时按「会花钱」的未知跑法关闭式处理（`Q-10`）。"""
+    assert all('--resample' not in spec.flags for spec in NODES.values())
+    with pytest.raises(UnsupportedRunMode, match='不接受'):
+        N.build_argv('str06.stage2.source', SID, ['--resample'], base=BASE)
+    assert N.is_paid('str06.stage2.source', ['--check-only', '--resample']) is True
 
 
-@pytest.mark.parametrize('node', [
-    'stage2.analyze', 'stage2.characters', 'stage2.global', 'stage2.blueprint',
-])
-def test_stage2_nodes_refuse_the_retired_review_token(node):
-    """Stage2 语义审阅整体退役：`--review-token` 只属于 Stage4A 与 6/7 的人工凭据。
+@pytest.mark.parametrize('node', tuple(NODES))
+def test_every_node_refuses_the_retired_review_token(node):
+    """Stage2 语义审阅整体退役：`--review-token` 不属于任何现役节点。
 
     旧入口不再被静默容忍——现役 `NodeSpec.flags` 已不收该 flag，拒收开在
     展示与执行共用的 `build_argv` 里（`R-11.8`）。
@@ -373,23 +305,17 @@ def test_stage2_nodes_refuse_the_retired_review_token(node):
         N.build_argv(node, SID, ['--review-token', 'a' * 64], base=BASE)
 
 
-def test_stage4_repair_aggregate_recovery_is_one_exact_free_unprofiled_action():
-    flags = _stage4_repair_recovery_flags()
-    argv = N.build_argv('stage4.design', SID, flags, base=BASE)
-
-    assert N.validate_run('stage4.design', flags) == (
-        '--recover-repair-aggregate',
-        '--source-journal-sha256',
-        '--source-commit-sha256',
-    )
-    assert N.is_paid('stage4.design', flags) is False
-    assert '--yes' not in argv
-    assert not any(token.startswith('--executor-') for token in argv)
-    with pytest.raises(UnsupportedRunMode, match='尚未迁移 flag 组合'):
+def test_stage4_repair_aggregate_recovery_is_retired_with_the_old_chain():
+    """Stage4A prepared 补交恢复面随旧链 stage4.design 退役：旗标不再登记，
+    任何现役节点拒收整条组合（新链恢复入口见各 str06 节点的 lifecycle
+    recovery_entries，全部经付费边界落盘，没有这条 0 模型补交路）。"""
+    for flag in ('--recover-repair-aggregate', '--source-journal-sha256',
+                 '--source-commit-sha256'):
+        assert all(flag not in spec.flags for spec in NODES.values())
+    with pytest.raises(UnsupportedRunMode, match='不接受'):
         N.build_argv(
-            'stage4.design', SID, flags, base=BASE,
-            executor_backend=EXECUTOR_BACKEND,
-        )
+            'str06.stage4.preserve', SID, _stage4_repair_recovery_flags(),
+            base=BASE)
 
 
 @pytest.mark.parametrize('flags', [
@@ -407,27 +333,30 @@ def test_stage4_repair_aggregate_recovery_is_one_exact_free_unprofiled_action():
     [*_stage4_repair_recovery_flags(), 'junk'],
 ])
 def test_stage4_repair_aggregate_recovery_refuses_partial_or_mixed_flags(flags):
+    """旧链补交组合的任何部分/混合形状在现役节点上同样当场拒收。"""
     with pytest.raises(UnsupportedRunMode):
-        N.build_argv('stage4.design', SID, flags, base=BASE)
+        N.build_argv('str06.stage4.preserve', SID, flags, base=BASE)
 
 
-@pytest.mark.parametrize(('index', 'value', 'message'), [
-    (1, '../source-run', 'source run_id 非法'),
-    (3, 'A' * 64, '64 位小写十六进制'),
-    (5, 'bad', '64 位小写十六进制'),
+@pytest.mark.parametrize(('index', 'value'), [
+    (1, '../source-run'),
+    (3, 'A' * 64),
+    (5, 'bad'),
 ])
-def test_stage4_repair_aggregate_recovery_validates_all_identity_values(
-        index, value, message):
+def test_stage4_repair_aggregate_recovery_refuses_all_identity_values(
+        index, value):
+    """旧链补交的 run_id／SHA 值域校验面已随节点退役：换成什么值都拒收。"""
     flags = _stage4_repair_recovery_flags()
     flags[index] = value
-    with pytest.raises(UnsupportedRunMode, match=message):
-        N.build_argv('stage4.design', SID, flags, base=BASE)
+    with pytest.raises(UnsupportedRunMode, match='不接受'):
+        N.build_argv('str06.stage4.preserve', SID, flags, base=BASE)
 
 
 @pytest.mark.parametrize(('node', 'flags', 'step_count'), EXECUTOR_RUN_CASES)
 def test_every_profiled_executor_run_has_one_resolved_argv_and_step_snapshot(
         node, flags, step_count):
-    """11 节点的现役付费组合共用 builder；自动复检永远不继承 agent/egress。"""
+    """9 个 str06 付费节点的默认付费组合共用 builder；自动复检追 `--check-only`，
+    永远不继承 agent/egress。"""
     steps = N.build_steps(
         node, SID, flags, base=BASE,
         executor_backend=EXECUTOR_BACKEND,
@@ -457,23 +386,22 @@ def test_every_profiled_executor_run_has_one_resolved_argv_and_step_snapshot(
     assert producer.egress_authorized is True
     assert '--allow-egress' in producer.argv
 
-    if step_count == 2:
-        follow = steps[1]
-        assert follow.executor_backend is None
-        assert follow.egress_authorized is None
-        assert follow.paid is False
-        assert follow.argv == N.build_argv(
-            node, SID, ['--check-only'], base=BASE)
-        assert '--check-only' in follow.argv
-        assert '--allow-egress' not in follow.argv
-        assert '--yes' not in follow.argv
-        assert not any(token.startswith('--executor-') for token in follow.argv)
-        assert follow.note == N.FOLLOW_CHECK_NOTE
+    follow = steps[1]
+    assert follow.executor_backend is None
+    assert follow.egress_authorized is None
+    assert follow.paid is False
+    assert follow.argv == N.build_argv(
+        node, SID, ['--check-only'], base=BASE)
+    assert '--check-only' in follow.argv
+    assert '--allow-egress' not in follow.argv
+    assert '--yes' not in follow.argv
+    assert not any(token.startswith('--executor-') for token in follow.argv)
+    assert follow.note == N.FOLLOW_CHECK_NOTE
 
 
 def test_profiled_preview_can_freeze_denied_egress_but_cannot_execute_that_argv():
     steps = N.build_steps(
-        'stage2.global', SID, base=BASE,
+        'str06.stage2.source', SID, base=BASE,
         executor_backend=EXECUTOR_BACKEND,
         egress_authorized=False)
 
@@ -481,15 +409,22 @@ def test_profiled_preview_can_freeze_denied_egress_but_cannot_execute_that_argv(
     assert '--allow-egress' not in steps[0].argv
 
 
-def test_executor_egress_must_be_explicit_and_cannot_exist_without_a_profile():
+def test_executor_egress_must_be_explicit_and_direct_llm_nodes_may_carry_it():
+    """带 executor backend 时必须显式给 bool；直连 LLM 节点可无 backend 携带外发授权。
+
+    ⚠ F8c：后半句是新链的接缝修复——`str06.*` 节点的唯一传输面就是直连
+    provider，`--allow-egress` 是它的正文外发授权（I-43 两份授权之一）。
+    旧规则「没有 executor_backend 就不能授权外发」会让编排器构造不出任何
+    可执行付费新链节点的 canonical argv（agent／queue／jobs 全断）。
+    """
     with pytest.raises(UnsupportedRunMode, match='必须显式给 bool'):
         N.build_steps(
-            'stage2.global', SID, base=BASE,
+            'str06.stage2.source', SID, base=BASE,
             executor_backend=EXECUTOR_BACKEND)
-    with pytest.raises(UnsupportedRunMode, match='没有 executor_backend'):
-        N.build_steps(
-            'stage2.global', SID, base=BASE,
-            egress_authorized=True)
+    steps = N.build_steps(
+        'str06.stage2.source', SID, base=BASE, egress_authorized=True)
+    assert '--allow-egress' in steps[0].argv
+    assert steps[0].egress_authorized is True
 
 
 @pytest.mark.parametrize(('node', 'flags'), UNMIGRATED_EXECUTOR_FLAG_CASES)
@@ -505,7 +440,7 @@ def test_profiled_nodes_refuse_every_unmigrated_single_flag(node, flags):
 def test_executor_profile_refuses_unmigrated_nodes_and_unknown_capability_pairs():
     with pytest.raises(UnsupportedRunMode, match='不再接受显式 executor'):
         N.build_steps(
-            'stage4.context', SID, base=BASE,
+            'str06.stage4.compile', SID, base=BASE,
             executor_backend=EXECUTOR_BACKEND,
         )
 
@@ -517,23 +452,33 @@ def test_executor_profile_refuses_unmigrated_nodes_and_unknown_capability_pairs(
     )
     with pytest.raises(UnsupportedRunMode, match='不可执行'):
         N.build_steps(
-            'stage2.global', SID, base=BASE,
+            'str06.stage2.source', SID, base=BASE,
             executor_backend=LegacyExecutorBackend(profile=unknown_model),
         )
 
 
 def test_executor_runtime_registries_close_over_the_same_nodes():
     """能力公开面、跑法矩阵缺任何一边都必须响亮地红。"""
-    # stage6.prepare 已迁入 PROFILED_LLM_RUNS（空 flags 付费走 legacy profile）。
+    # F8b：PROFILED_LLM_RUNS 翻为 9 个 str06. 付费节点的默认（空 flags）跑法；
+    # `--check-only` 是免费复检，不在此表。
     expected = set(LLM_EXECUTOR_NODES)
-    assert len(expected) == len(N.PROFILED_LLM_RUNS) == 10
-    assert sum(len(rows) for rows in N.PROFILED_LLM_RUNS.values()) == 15
+    assert len(expected) == len(N.PROFILED_LLM_RUNS) == 9
+    assert sum(len(rows) for rows in N.PROFILED_LLM_RUNS.values()) == 9
     assert set(N.PROFILED_LLM_RUNS) == expected
 
 
+def test_deterministic_compile_and_assemble_are_structurally_unpaid():
+    """`str06.stage4.compile`／`str06.stage7.assemble` 结构性禁付：不在 executor
+    名单、`spec.paid=False` 且没有任何能把它们变贵的旗标。"""
+    for node in ('str06.stage4.compile', 'str06.stage7.assemble'):
+        assert node not in N.PROFILED_LLM_RUNS
+        assert NODES[node].paid is False
+        assert NODES[node].paid_flags == ()
+        assert N.is_paid(node) is False
+
 
 def test_absent_executor_profile_preserves_the_legacy_argv_shape():
-    argv = N.build_argv('stage2.global', SID, base=BASE)
+    argv = N.build_argv('str06.stage2.source', SID, base=BASE)
     assert not any(token.startswith('--executor-') for token in argv)
     assert '--allow-egress' not in argv
 
@@ -542,9 +487,9 @@ def test_explicit_legacy_backend_freezes_provider_profile_into_argv_and_step():
     backend = LegacyExecutorBackend(profile=LegacyLlmProfile(
         provider='deepseek', model='deepseek-v4-pro',
         reasoning_effort='high', thinking_mode='on'))
-    [step] = N.build_steps(
-        'stage4.design', SID, base=BASE,
-        executor_backend=backend, egress_authorized=True)
+    step = N.build_steps(
+        'str06.stage4.preserve', SID, base=BASE,
+        executor_backend=backend, egress_authorized=True)[0]
 
     assert step.executor_backend == backend
     assert step.executor_backend is not None and step.executor_backend.kind == 'legacy'
@@ -557,18 +502,19 @@ def test_explicit_legacy_backend_freezes_provider_profile_into_argv_and_step():
     assert '--allow-egress' in step.argv
 
 
-def test_legacy_flash_accepts_stage4_after_pro_pin_removal():
-    """2026-09-16：取消 Pro 钉死后 Flash 可冻结 stage4.design argv。"""
+def test_legacy_flash_accepts_every_paid_node_after_pro_pin_removal():
+    """2026-09-16：取消 Pro 钉死后 Flash 可冻结任何现役付费节点 argv。"""
     backend = LegacyExecutorBackend(profile=LegacyLlmProfile(
         provider='deepseek', model='deepseek-flash',
         reasoning_effort='high', thinking_mode='on'))
-    [step] = N.build_steps(
-        'stage4.design', SID, base=BASE,
-        executor_backend=backend, egress_authorized=True)
-    assert step.argv[step.argv.index('--legacy-model') + 1] == 'deepseek-flash'
+    for node in LLM_EXECUTOR_NODES:
+        step = N.build_steps(
+            node, SID, base=BASE,
+            executor_backend=backend, egress_authorized=True)[0]
+        assert step.argv[step.argv.index('--legacy-model') + 1] == 'deepseek-flash'
 
 
-def test_no_current_node_takes_a_mode_and_stage5_rejects_retired_flags():
+def test_no_current_node_takes_a_mode_and_retired_flags_are_refused():
     assert 'mode' not in inspect.signature(N.validate_run).parameters
     assert 'mode' not in inspect.signature(N.build_argv).parameters
     assert 'mode' not in inspect.signature(N.build_steps).parameters
@@ -577,34 +523,32 @@ def test_no_current_node_takes_a_mode_and_stage5_rejects_retired_flags():
                   ['--deep', '1,2,3', '--shallow-rest'],
                   ['--write-contract', 'event-list-v1']):
         with pytest.raises(UnsupportedRunMode, match='不接受'):
-            N.build_argv('stage5.write', SID, flags, base=BASE)
+            N.build_argv('str06.stage5.body', SID, flags, base=BASE)
 
 
-def test_stage5_default_is_full_book_and_chapters_is_the_only_subset_selector():
-    whole = N.build_argv('stage5.write', SID, base=BASE)
+def test_body_default_is_whole_book_and_takes_no_chapter_selector_flag():
+    """新链按章范围由工具驱动的入口级旗标治理（`--body-chapter-limit`），
+    节点 argv 没有 `--mode`／`--chapters`。"""
+    whole = N.build_argv('str06.stage5.body', SID, base=BASE)
     assert '--mode' not in whole and '--chapters' not in whole
-    subset = N.build_argv('stage5.write', SID, ['--chapters', '1,3'], base=BASE)
-    assert subset[subset.index('--chapters') + 1] == '1,3'
+    with pytest.raises(UnsupportedRunMode, match='不接受'):
+        N.build_argv('str06.stage5.body', SID, ['--chapters', '1,3'], base=BASE)
 
 
 def test_stage5_rebuild_draft_is_retired():
     with pytest.raises(UnsupportedRunMode, match='不接受'):
-        N.build_argv('stage5.write', SID, ['--rebuild-draft'], base=BASE)
+        N.build_argv('str06.stage5.body', SID, ['--rebuild-draft'], base=BASE)
 
 
 @pytest.mark.parametrize(('node', 'flags'), [
-    ('stage5.review', ['--check-only', '--wontfix', 'book|draft_missing=人工接受']),
-    # （--retain-pretrim(-batch) 各互斥行已随批次 B3 trim 三选一退役删除——
-    #   flag 不再属于任何节点，validate_run 直接拒收。）
-    ('stage5.write', ['--recheck', '--revise']),
-    ('stage5.write', [
-        '--revalidate', '--actor', '复核员', '--reason', '按当前闸门重判',
-        '--apply-edit', 'stage5_edit.json',
-    ]),
+    ('str06.stage5.body', ['--check-only', '--wontfix', 'book|draft_missing=人工接受']),
+    ('str06.stage5.body', ['--check-only', '--revise']),
+    ('str06.stage5.body', ['--check-only', '--revalidate']),
 ])
-def test_stage5_primary_operations_are_mutually_exclusive(node, flags):
-    """CLI 按分支优先级只会执行一个；preview 不得把另一个 flag 的效果算进去。"""
-    with pytest.raises(UnsupportedRunMode, match='主操作互斥'):
+def test_retired_stage5_operation_pairs_are_refused_on_the_new_chain(node, flags):
+    """旧链 stage5 的主操作互斥行（wontfix／revise／revalidate 组合）随节点退役：
+    旗标本体已不再登记，任何现役节点对整条组合当场拒收。"""
+    with pytest.raises(UnsupportedRunMode, match='不接受'):
         N.build_argv(node, SID, flags, base=BASE)
 
 
@@ -616,147 +560,68 @@ def test_retired_trim_faces_are_not_registered_anywhere() -> None:
         assert flag not in N.WRITE_EFFECTS
         assert flag not in N.VALUED_FLAGS
         with pytest.raises(UnsupportedRunMode, match='不接受'):
-            N.build_argv('stage5.review', SID, [flag, 'x'], base=BASE)
+            N.build_argv('str06.stage5.hook', SID, [flag, 'x'], base=BASE)
 
 
-def test_stage5_reviewer_rewrite_routes_are_closed_paid_and_free_actions() -> None:
-    request_rel = 'stage5/reviewer_rewrite_request.json'
-    request_sha = 'a' * 64
-    checkpoint_flags = [
-        '--recover-reviewer-rewrite-prepared', 'source-run',
-        '--reviewer-rewrite-request-sha256', request_sha,
-    ]
-    prepared_flags = [
-        *checkpoint_flags,
-        '--reviewer-rewrite-recovery-target-run-id', 'target-run',
-        '--reviewer-rewrite-recovery-journal-sha256', 'b' * 64,
-    ]
-    retire_flags = [
-        '--retire-reviewer-rewrite-request', request_rel,
-        '--reviewer-rewrite-request-sha256', request_sha,
-    ]
-
-    paid = ['--reviewer-rewrite', request_rel]
-    assert N.is_paid('stage5.write', paid) is True
-    assert '--yes' in N.build_argv('stage5.write', SID, paid, base=BASE)
-    for flags in (checkpoint_flags, prepared_flags, retire_flags):
-        argv = N.build_argv('stage5.write', SID, flags, base=BASE)
-        assert N.is_paid('stage5.write', flags) is False
-        assert '--yes' not in argv
-        assert not any(token.startswith('--executor-') for token in argv)
-
-    for broken in (
-        checkpoint_flags + [
-            '--reviewer-rewrite-recovery-target-run-id', 'target-run'],
-        checkpoint_flags + [
-            '--reviewer-rewrite-recovery-journal-sha256', 'b' * 64],
-        prepared_flags[:-1],
-        prepared_flags + ['--chapters', '2'],
-    ):
+def test_stage5_reviewer_rewrite_routes_are_retired_with_the_old_chain() -> None:
+    """Stage5 Reviewer rewrite 的 paid／checkpoint／retire 三条路随旧链退役：
+    旗标不再登记在任何现役节点，permit 层也不再为它们铸许可。"""
+    for flag in ('--reviewer-rewrite', '--recover-reviewer-rewrite-prepared',
+                 '--retire-reviewer-rewrite-request',
+                 '--reviewer-rewrite-request-sha256'):
+        assert all(flag not in spec.flags for spec in NODES.values())
         with pytest.raises(UnsupportedRunMode):
-            N.build_argv('stage5.write', SID, broken, base=BASE)
+            N.build_argv('str06.stage5.body', SID, [flag, 'x'], base=BASE)
 
 
 def test_valued_flags_must_carry_a_value_and_bare_flags_must_not():
     """拼错的那条 argv **会真的被执行**，所以两个方向都要当场对上。"""
     with pytest.raises(UnsupportedRunMode, match='要一个值'):
-        N.build_argv('stage4.plan', SID, ['--apply-edit'], base=BASE)
+        N.build_argv('stage0.remove', SID, ['--source'], base=BASE)
     with pytest.raises(UnsupportedRunMode, match='不带值'):
-        N.build_argv('stage5.review', SID, ['--check-only', 'oops'], base=BASE)
+        N.build_argv('str06.stage2.names', SID, ['--check-only', 'oops'], base=BASE)
 
 
 # ───────────────────────── 必填项（2026-08-16 复盘 §六.1） ─────────────────────────
 
-def test_a_node_refuses_to_build_a_command_that_is_missing_a_required_flag():
-    """⭐ **这一条守的是「摊开的那条命令不是一条注定 exit 2 的命令」。**
+def test_no_current_node_carries_required_flags():
+    """⭐ **「摊开的那条命令不是一条注定 exit 2 的命令」的 F8b 形态。**
 
-    此前「必填」只活在节点函数体里（`stage0.approve` 少 revision 乐观锁或 actor/reason
-    就 `TerminalState`），`NodeSpec` 表达不出来 ⇒ `build_argv` 照样拼得出来，
-    `preview` 照着摊开，而 skill 的工作流契约明写「逐字执行 preview 的全部步骤」。
-    ⇒ 拒收挪到 `validate_run`（展示与执行共用的那一处）。
+    拒收机制仍开在 `validate_run`（展示与执行共用），而人工凭据族
+    （approve/edit 的 actor/reason/token）已随旧链退役 ⇒ 现役 13 个节点
+    `required_flags` 全空、`CONDITIONAL_REQUIRED_FLAGS` 空表。
+    谁要给现役节点重新引入必填项，这里会当场红。
     """
-    # stage0/stage7.approve 已退役；未知节点拒收钉住退役面，
-    # 现役必填用 stage7.rename --revalidate 的条件必填钉住。
     with pytest.raises(UnsupportedRunMode, match='未知节点'):
         N.build_argv('stage7.approve', SID, base=BASE)
-    with pytest.raises(UnsupportedRunMode, match='缺必填'):
-        N.build_argv('stage7.rename', SID, ['--revalidate'], base=BASE)
-    argv = N.build_argv(
-        'stage7.rename', SID,
-        ['--revalidate', '--actor', '我', '--reason', '零命中'], base=BASE)
-    assert argv[argv.index('--actor') + 1] == '我'
-    assert argv[argv.index('--reason') + 1] == '零命中'
+    for node, spec in NODES.items():
+        assert spec.required_flags == (), \
+            f'{node} 出现无条件必填 {spec.required_flags}——去补 preview 占位符专测'
+        assert N.missing_required(node, []) == ()
 
 
-def test_the_conditional_required_flags_only_fire_with_their_trigger():
-    """跟着另一条跑法才必填的那些，不带触发 flag 时**不该**被要求。"""
-    # （stage0.edit 条件必填行已随批次 B1 退役；stage5.review
-    #   --retain-pretrim 行已随批次 B3 trim 三选一退役。）
-    assert N.missing_required('stage5.review', ['--check-only']) == ()
-    assert N.missing_required('stage5.write', ['--recover-prepared']) == (
-        '--actor', '--reason', '--subject-sha256')
-    revalidate_nodes = (
-        'stage2.global', 'stage2.blueprint', 'stage4.plan',
-        'stage5.write', 'stage6.hook', 'stage7.rename',
-    )
-    for node in revalidate_nodes:
-        assert N.missing_required(node, ['--revalidate']) == ('--actor', '--reason')
-        assert N.missing_required(
-            node, ['--revalidate', '--actor', '复核员', '--reason', '按当前闸门重判']) == ()
+def test_the_conditional_required_flags_table_is_empty_on_the_new_chain():
+    """「跟着另一条跑法才必填」的条件必填面随旧链 typed edit/recovery 退役；
+    空表是诚实的现状，不是漏登记。"""
+    assert CONDITIONAL_REQUIRED_FLAGS == {}
+    for node, spec in NODES.items():
+        for flag in spec.flags:
+            flags = [flag, 'payload.json'] if flag in VALUED_FLAGS else [flag]
+            assert N.missing_required(node, flags) == ()
 
 
-def test_preview_fills_required_flags_with_placeholders_that_never_run():
-    """`preview` 摊开的是**形状完整**的命令；占位符本身仍跑不通。
-
-    两件事必须同时成立，否则这个机制会从一个病换成另一个病：
-      · 只拒不填 ⇒ preview 直接抛异常，人连命令长什么样都看不到；
-      · 只填不拒 ⇒ `待填·actor` 会被当自报身份写进人工凭据，那条账没人能反查。
-    """
-    # stage7.approve 已退役；占位符语义改用 stage7.rename --revalidate。
-    steps = N.build_steps(
-        'stage7.rename', SID, ['--revalidate'],
-        base=BASE, placeholders=True, follow_check=False)
-    argv = steps[0].argv
-    assert argv[argv.index('--actor') + 1] == '待填·actor'
-    assert argv[argv.index('--reason') + 1] == '待填·reason'
-    assert '占位符' in (steps[0].note or '')
+def test_preview_placeholder_never_runs_even_without_required_flags():
+    """`preview` 的占位符**不是一个值**：真跑那一趟恒被拒，机制不因
+    必填面暂时为空而失效。"""
     with pytest.raises(UnsupportedRunMode, match='占位符'):
         N.build_argv(
-            'stage7.rename', SID,
-            ['--revalidate', '--actor', '待填·actor', '--reason', '真理由'],
+            'stage0.remove', SID, ['--source', N.placeholder_for('--source')],
             base=BASE)
-
-    revalidate = N.build_steps(
-        'stage7.rename', SID, ['--revalidate'],
-        base=BASE, placeholders=True, follow_check=False)[0]
-    assert revalidate.argv[revalidate.argv.index('--actor') + 1] == '待填·actor'
-    assert revalidate.argv[revalidate.argv.index('--reason') + 1] == '待填·reason'
-
-    stage4_recovery = N.build_steps(
-        'stage4.design', SID,
-        ['--recover-repair-aggregate', 'source-run-1'],
-        base=BASE, placeholders=True, follow_check=False)[0]
-    assert stage4_recovery.argv[
-        stage4_recovery.argv.index('--source-journal-sha256') + 1
-    ] == '待填·source-journal-sha256'
-    assert stage4_recovery.argv[
-        stage4_recovery.argv.index('--source-commit-sha256') + 1
-    ] == '待填·source-commit-sha256'
-    with pytest.raises(UnsupportedRunMode, match='占位符'):
-        N.build_argv(
-            'stage4.design', SID,
-            [
-                '--recover-repair-aggregate', 'source-run-1',
-                '--source-journal-sha256', '待填·source-journal-sha256',
-                '--source-commit-sha256', '待填·source-commit-sha256',
-            ],
-            base=BASE,
-        )
 
 
 def test_placeholders_do_not_change_a_command_that_needs_nothing():
     """没有必填项的节点，`placeholders=True` 与真跑必须逐字节同一条（`R-11.8`）。"""
-    for node in ('stage1.partition', 'stage2.global', 'stage7.assemble'):
+    for node in ('stage1.partition', 'str06.stage4.compile', 'str06.stage7.assemble'):
         shown = N.build_steps(node, SID, base=BASE, placeholders=True)
         assert shown[0].argv == N.build_argv(node, SID, base=BASE)
         assert shown[0].note is None
@@ -787,42 +652,47 @@ def test_preview_and_the_real_run_are_the_same_argv():
     显示的与执行的会慢慢分家，而**没有任何东西会出声**。
     ⇒ 摊开显示的那条，必须就是 `build_steps` 里的那条对象本身。
     """
-    for node in ('stage1.partition', 'stage2.global', 'stage6.hook'):
+    for node in ('stage1.partition', 'str06.stage4.compile', 'str06.stage5.hook'):
         steps = N.build_steps(node, SID, base=BASE)
         assert steps[0].argv == N.build_argv(node, SID, base=BASE)
 
 
 def test_a_writing_run_gets_a_follow_up_check():
     """**退出码 0 不等于成功**（F-087：残缺产物退出码 0）。"""
-    steps = N.build_steps('stage6.hook', SID, base=BASE)
+    steps = N.build_steps('str06.stage5.hook', SID, base=BASE)
     assert len(steps) == 2
     assert '--check-only' in steps[1].argv
     assert steps[1].note == N.FOLLOW_CHECK_NOTE
     assert steps[1].paid is False and steps[1].writes == ''
 
 
-def test_a_free_but_writing_run_also_gets_a_follow_up_check():
+def test_the_follow_up_check_criterion_is_writes_not_payment():
     """⭐ **判准是「写不写盘」，不是「花不花钱」** —— 这一格是实测改过的。
 
-    Stage4 的 `--revalidate` 虽然不花钱，仍会提升并重建正式产物；没有追跑就看不到
-    提升后的完整机械结论。
+    新链没有「免费但写盘」的跑法（免费恢复入口经付费边界落盘），所以
+    追检面收敛为：付费默认路追一条复检；免费纯读路（--check-only）不追。
+    谁把「付费且写盘」写回去，免费恢复路就会丢复检——本条钉住方向。
     """
-    flags = _args('--revalidate', 'stage4.plan')
-    steps = N.build_steps('stage4.plan', SID, flags, base=BASE)
-    assert N.is_paid('stage4.plan', flags) is False
+    steps = N.build_steps('str06.stage4.preserve', SID, base=BASE)
+    assert N.is_paid('str06.stage4.preserve') is True
     assert len(steps) == 2 and '--check-only' in steps[1].argv
+    assert N.is_paid('str06.stage4.preserve', ['--check-only']) is False
+    assert len(N.build_steps(
+        'str06.stage4.preserve', SID, ['--check-only'], base=BASE)) == 1
 
 
 def test_the_follow_up_check_is_skipped_when_the_node_cannot_take_it():
     """⚠ 追一条它拒收的命令，作业会在第二步无缘无故失败——**而第一步已经花过钱了**。"""
-    assert '--check-only' not in NODES['stage2.global'].flags
-    assert len(N.build_steps('stage2.global', SID, base=BASE)) == 1
+    assert '--check-only' not in NODES['str06.stage4.compile'].flags
+    assert len(N.build_steps('str06.stage4.compile', SID, base=BASE)) == 1
 
 
 def test_a_non_writing_run_gets_no_follow_up():
     """只看不动的那几条没什么可复检的——它们一个字节都没改。"""
-    assert len(N.build_steps('stage5.review', SID, ['--check-only'], base=BASE)) == 1
-    assert len(N.build_steps('stage4.plan', SID, ['--dry-run'], base=BASE)) == 1
+    assert len(N.build_steps(
+        'str06.stage2.names', SID, ['--check-only'], base=BASE)) == 1
+    assert len(N.build_steps(
+        'stage1.partition', SID, ['--dry-run'], base=BASE)) == 1
 
 
 def test_steps_carry_the_cost_and_write_answers_they_were_asked_for():
@@ -838,7 +708,7 @@ def test_steps_carry_the_cost_and_write_answers_they_were_asked_for():
             node, SID, bare, base=BASE)[0].label
 
 
-# ───────────────── 层 ↔ 复检节点那座桥（骨架 E5 加） ─────────────────
+# ───────────────── 层 ↔ 复检节点那座桥（骨架 E5 加，F8b-2 翻代表语义） ─────────────────
 
 def test_step_label_is_the_one_the_actions_table_publishes():
     """`step_label` 是**界面按钮**与**作业记录里那一步**共用的那一个（`R-11.8`）。
@@ -861,38 +731,83 @@ def test_step_label_ignores_the_value_of_a_valued_flag():
     ⚠ 贵贱（`is_paid`）与写不写（`write_effect`）都走 `flag_tokens` 这一个解析器，
     label 没有理由用第二个。
     """
-    got = N.step_label('stage4.plan', ['--apply-edit', '-weird-path.json'])
-    assert got.endswith('--apply-edit'), got
+    got = N.step_label('stage0.remove', ['--source', '-weird-path.txt'])
+    assert got.endswith('--source'), got
 
 
-def test_every_stage_has_exactly_one_check_node():
-    """`:kind` 是阶段，复检是节点跑法；每个当前阶段必须恰有一座桥。"""
+def test_every_stage_has_a_check_bridge_and_check_node_picks_the_first():
+    """F8b-2：新链复检是**节点级** `--check-only`；层的复检路由只取
+    `NODES` 顺序第一座桥作**代表**（`check_node`）。
+
+    · 零桥仍是登记错误（忘了给节点登记跑法）⇒ `KeyError`；
+    · 多座桥（stage2／stage4／stage5 各有多节点自带复检）不再断言恰一；
+    · 代表桥恒是处理链顺序第一座——消费方只拿它建 `readonly_ctx`，
+      不承载复检调度语义。
+    """
+    expected_bridges = {
+        'stage0': ('stage0.remove',),
+        'stage1': ('stage1.partition',),
+        'stage2': ('str06.stage2.source', 'str06.stage2.names'),
+        'stage4': ('str06.stage4.preserve', 'str06.stage4.body_design',
+                   'str06.stage4.bind', 'str06.stage4.hook_design'),
+        'stage5': ('str06.stage5.hook', 'str06.stage5.body'),
+        'stage7': ('str06.stage7.naming',),
+    }
     for stage in sorted(STAGES):
         got = N.check_nodes(stage)
-        assert len(got) == 1, (
-            f'{stage} 有 {len(got)} 个节点接受 `--check-only`：{got}\n'
+        assert got == expected_bridges[stage], (
+            f'{stage} 的 `--check-only` 桥变了：{got}\n'
             f'→ 0 个：忘了给它登记跑法（`NODES[...].flags`）；'
-            f'→ 2 个以上：`GET /api/novels/:sid/check/{stage}` 不知道该调哪一个')
+            f'→ 顺序漂移：消费方拿 `check_node` 的代表桥建只读上下文')
+        assert N.check_node(stage) == got[0]
     assert N.check_nodes('stage3') == ()
+    with pytest.raises(KeyError, match='0 个节点'):
+        N.check_node('stage3')
 
 
 def test_the_checker_table_covers_exactly_the_current_stages():
-    """CLI 与 HTTP 共用的复检表必须覆盖当前七层。"""
+    """CLI 与 HTTP 共用的层级复检表只覆盖有层级复检器的层。
+
+    ⚠ F8c：新链 Stage2/4/5/7 的复检是**节点级** `--check-only`
+    （`novel/cli/main.py::_run_str06` → `novel/stages/chain.py::execute`），
+    不再经「一层一个 checker 产出 CheckReport」那座桥；`check_only(stage)`
+    对它们 KeyError——未采集不是绿灯，界面必须显示「校验未知」。
+    """
     from novel.stages import check_only, checkable_stages
-    assert checkable_stages() == set(STAGES)
+    assert checkable_stages() == frozenset({'stage0', 'stage1'})
     with pytest.raises(KeyError):
         check_only('stage3')
-    for stage in sorted(STAGES):
+    for stage in sorted(checkable_stages()):
         assert callable(check_only(stage)), f'{stage} 的复检落点不是一个可调用的东西'
+    for stage in ('stage2', 'stage4', 'stage5', 'stage7'):
+        with pytest.raises(KeyError):
+            check_only(stage)  # 新链层没有层级复检器，必须显式 KeyError
 
 
 def test_the_runner_table_covers_exactly_the_current_stages():
-    """CLI 派发表必须覆盖当前七层。"""
+    """CLI 派发表只覆盖有层级 runner 的层；新链节点走 `_run_str06` 分流。
+
+    ⚠ F8c：`_runners()` 只剩 stage0／stage1 两腿；11 个 `str06.` 节点在
+    `_cmd_run` 入口分流到 `_run_str06`（链装配归 `novel/stages/chain.py`），
+    旧链节点按 `RETIRED_NODES` 拒读（legacy_incompatible）。三条路合起来
+    才覆盖 `NODES` 全集——少一条就是一个现役节点在 CLI 上跑不起来。
+    """
     from novel.cli.main import _runners, runnable_stages
-    assert runnable_stages() == set(STAGES), (
+    from contracts.invariants import RETIRED_NODES
+    assert runnable_stages() == frozenset({'stage0', 'stage1'}), (
         f'`novel/cli/main.py::_runners` 覆盖 {sorted(runnable_stages())}，'
-        f'而当前阶段是 {sorted(STAGES)}')
+        f'而带层级 runner 的层是 [stage0, stage1]')
     assert 'stage3' not in _runners()
+    for node in NODES:
+        if NODES[node].stage in ('stage0', 'stage1'):
+            assert NODES[node].stage in _runners(), (
+                f'{node} 的层没有 runner，CLI 上跑不起来')
+        else:
+            assert node.startswith('str06.'), (
+                f'{node} 既不在 stage0/1 runner 表，也不是新链 str06 节点；'
+                f'CLI 入口没有它的派发腿')
+    assert RETIRED_NODES and not (set(RETIRED_NODES) & set(NODES)), (
+        '退役节点不得仍留在现役 NODES')
 
 
 def test_the_flag_surface_covers_all_three_tables():
@@ -903,8 +818,8 @@ def test_the_flag_surface_covers_all_three_tables():
     **那个 flag 在命令行上永远解析不出来**——`argparse` 只会说
     「unrecognized arguments」，而人会以为是自己敲错了。
 
-    `--pick` / `--chapters` 等参数只登记在 `VALUED_FLAGS`，所以这条必须直接验证
-    三表并集；只覆盖免费与付费入口会让这些参数在 CLI 上静默消失。
+    `--source` 现役只登记在 `VALUED_FLAGS`，所以这条必须直接验证
+    三表并集；只覆盖免费与付费入口会让它在 CLI 上静默消失。
     """
     from novel.cli.main import _ALL_FLAGS
     from contracts.invariants import PAID_FLAGS

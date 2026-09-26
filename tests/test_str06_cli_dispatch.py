@@ -8,7 +8,7 @@
    （run_step 的信标身份解析依赖这个形状，不许为切换另起一套）；
 ② `_cmd_run` 把 `str06.` 节点在旧链前置（RunContext／closure）之前分流到
    `_run_str06`，且付费确认仍走同一条 `--yes` 闸；
-③ `_run_str06` 装配的 args 命名空间与 `tools/str06_workflow.execute` 的输入
+③ `_run_str06` 装配的 args 命名空间与 `novel/stages/chain.py::execute` 的输入
    契约逐格相等（腿、book-sid、run-dir、check-only、yes、运行期配置）。
 """
 from __future__ import annotations
@@ -59,7 +59,7 @@ def test_cmd_run_routes_str06_nodes_before_legacy_preconditions(monkeypatch,
         seen['args'] = args
         return None
 
-    monkeypatch.setattr('tools.str06_workflow.execute', fake_execute)
+    monkeypatch.setattr('novel.stages.chain.execute', fake_execute)
     book = tmp_path / 'out' / 'sid-1'
     (book / 'stage1').mkdir(parents=True)
     ns = argparse.Namespace(
@@ -102,3 +102,48 @@ def test_run_str06_refuses_unknown_node_flags(tmp_path):
         yes=True, allow_egress=False)
     with pytest.raises(TerminalState, match='只接受 --check-only'):
         cli._run_str06(ns, ['--replan'], paid=True)
+
+
+def test_history_adoption_credentials_reach_the_chain_assembly(monkeypatch,
+                                                               tmp_path):
+    """F8c：`--wire-dir`／`--adopt-root`／`--reasoning-effort` 是 invocation 面
+    旗标（F7a 历史采用通路的正式入口），必须原样到达 `execute` 的 args。
+
+    它们不是 NodeSpec 跑法旗标：不进 `_flags_of`、不改贵贱/写盘语义，因此
+    `--check-only` 仍可是唯一节点旗标；档位进请求身份（与已购行逐字相等才采用）。
+    """
+    from novel.cli import main as cli
+
+    seen: dict[str, object] = {}
+
+    def fake_execute(args):
+        seen['args'] = args
+        return None
+
+    monkeypatch.setattr('novel.stages.chain.execute', fake_execute)
+    book = tmp_path / 'out' / 'sid-1'
+    (book / 'stage1').mkdir(parents=True)
+    wires = tmp_path / 'f5e' / 'wires'
+    adopt = tmp_path / 'f5e' / 'run'
+    wires.mkdir(parents=True)
+    adopt.mkdir(parents=True)
+    ns = argparse.Namespace(
+        node='str06.stage4.preserve', sid='sid-1', base=str(tmp_path / 'out'),
+        flags=[], check_only=True, yes=False, allow_egress=False, run_id=None,
+        executor_backend=None, executor_profile=None, response_repair=None,
+        source=None, wire_dir=str(wires), adopt_root=[str(adopt)],
+        reasoning_effort='medium')
+    assert cli._cmd_run(ns) == 0
+    args = seen['args']
+    assert args.check_only is True
+    assert args.reasoning_effort == 'medium'
+    assert args.wire_dir == wires
+    assert args.adopt_root == [adopt]
+    # 未给凭证时是明确的空，不是猜的默认目录。
+    bare = argparse.Namespace(
+        **{**vars(ns), 'wire_dir': None, 'adopt_root': [],
+          'reasoning_effort': 'high'})
+    assert cli._cmd_run(bare) == 0
+    assert seen['args'].wire_dir is None
+    assert seen['args'].adopt_root == []
+    assert seen['args'].reasoning_effort == 'high'

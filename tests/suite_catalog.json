@@ -1,12 +1,37 @@
 {
   "change_scopes": {
     "str06": {
+      "_note": "F8c 分流：迁移包 `contracts/schema/str06/`、`novel/stages/str06/`、`novel/llm/str06_*`、`tools/str06_workflow.py` 已拆进正式 per-stage 包与 `novel/llm/paid_requests.py`；选测范围随之改登记**新落点**（范围名 `str06` 是这条链的身份，不是路径前缀）。",
       "paths": [
-        "contracts/schema/str06/*",
-        "novel/stages/str06/*",
-        "novel/llm/str06_requests.py",
-        "novel/llm/str06_run_context.py",
-        "tools/str06_workflow.py",
+        "contracts/schema/source.py",
+        "contracts/schema/design.py",
+        "contracts/schema/grounding.py",
+        "contracts/schema/context.py",
+        "contracts/schema/book_ir.py",
+        "contracts/schema/hook.py",
+        "contracts/schema/naming.py",
+        "contracts/schema/receipt.py",
+        "contracts/schema/execution.py",
+        "contracts/schema/policy.py",
+        "contracts/schema/state.py",
+        "contracts/schema/families.py",
+        "contracts/schema/dependency.py",
+        "contracts/schema/consumption.py",
+        "contracts/schema/retirement.py",
+        "contracts/schema/workflow.py",
+        "contracts/artifacts.py",
+        "novel/stages/stage2/*",
+        "novel/stages/stage4/*",
+        "novel/stages/stage5/*",
+        "novel/stages/stage7/*",
+        "novel/stages/common.py",
+        "novel/stages/chain.py",
+        "novel/llm/paid_requests.py",
+        "novel/views/str06.py",
+        "novel/api/routes/str06.py",
+        "novel/store.py",
+        "novel/work_units.py",
+        "novel/paths.py",
         "docs/schema/str06.md",
         "novel/cli/main.py"
       ],
@@ -36,12 +61,6 @@
     "stage7": []
   },
   "modules": {
-    "tests/test_stage4_agent_boundary.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage4"
-      ]
-    },
     "tests/test_str06_hook.py": {
       "layer": "unit_contract",
       "stages": [
@@ -260,12 +279,6 @@
       "layer": "unit_contract",
       "stages": []
     },
-    "tests/test_apply_edit.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage4"
-      ]
-    },
     "tests/test_approval_cli.py": {
       "layer": "unit_contract",
       "stages": [
@@ -326,13 +339,6 @@
       "layer": "unit_contract",
       "stages": []
     },
-    "tests/test_blueprint_repair_queue.py": {
-      "layer": "stage",
-      "stages": [
-        "stage2",
-        "stage4"
-      ]
-    },
     "tests/test_book_overlap.py": {
       "layer": "unit_contract",
       "stages": []
@@ -369,10 +375,6 @@
       "layer": "unit_contract",
       "stages": []
     },
-    "tests/test_current_corpus_paid_preview.py": {
-      "layer": "unit_contract",
-      "stages": []
-    },
     "tests/test_docs_references.py": {
       "layer": "unit_contract",
       "stages": []
@@ -397,10 +399,6 @@
       "stages": [
         "stage7"
       ]
-    },
-    "tests/test_fixture_registry.py": {
-      "layer": "unit_contract",
-      "stages": []
     },
     "tests/test_frozen_tree.py": {
       "layer": "unit_contract",
@@ -532,110 +530,6 @@
       "layer": "unit_contract",
       "stages": []
     },
-    "tests/test_plot_actor_refs.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage2"
-      ]
-    },
-    "tests/test_plot_actor_resolution.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage2",
-        "stage4"
-      ]
-    },
-    "tests/test_plot_binding.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage4"
-      ]
-    },
-    "tests/test_plot_blueprint.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage2",
-        "stage4"
-      ]
-    },
-    "tests/test_blueprint_v11_compression.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage2",
-        "stage4"
-      ]
-    },
-    "tests/test_plot_continuity.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage2"
-      ]
-    },
-    "tests/test_plot_design.py": {
-      "cases": {
-        "test_blind_distributed_design_and_human_roundtrip": "stage",
-        "test_real_design_producer_after_chapter_and_cross_acceptance": "stage"
-      },
-      "layer": "unit_contract",
-      "stages": [
-        "stage4"
-      ]
-    },
-    "tests/test_plot_edit.py": {
-      "layer": "stage",
-      "stages": [
-        "stage2"
-      ]
-    },
-    "tests/test_plot_edit_http.py": {
-      "layer": "stage",
-      "stages": [
-        "stage2"
-      ]
-    },
-    "tests/test_plot_pipeline.py": {
-      "layer": "regression",
-      "stages": [
-        "stage0",
-        "stage1",
-        "stage2",
-        "stage4",
-        "stage5",
-        "stage7"
-      ]
-    },
-    "tests/test_plot_producer.py": {
-      "layer": "stage",
-      "stages": [
-        "stage2"
-      ]
-    },
-    "tests/test_plot_progress.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage2"
-      ]
-    },
-    "tests/test_plot_repair.py": {
-      "layer": "stage",
-      "stages": [
-        "stage2"
-      ]
-    },
-    "tests/test_plot_semantic_cases.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage2",
-        "stage4"
-      ]
-    },
-    "tests/test_plot_writer.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage4",
-        "stage5"
-      ]
-    },
     "tests/test_prompts.py": {
       "layer": "unit_contract",
       "stages": []
@@ -741,7 +635,7 @@
         "test_numeric_only_fanwai_is_visible_in_the_stage1_view": "stage",
         "test_r114_writes_all_artifacts_and_then_reports_failure": "stage",
         "test_r115_decomposition_is_derived_from_the_current_clean_text": "stage",
-        "test_s1_approval_binds_main_and_hook_and_hook_tampering_revokes_it": "stage",
+        "test_hook_tampering_turns_the_stage1_check_red": "stage",
         "test_same_sid_with_a_different_title_cannot_split_into_two_directories": "stage",
         "test_source_sid_mismatch_is_terminal_before_a_directory_is_created": "stage",
         "test_stage1_cli_propagates_a_written_check_failure": "stage",
@@ -761,175 +655,8 @@
         "stage1"
       ]
     },
-    "tests/test_stage2.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage2"
-      ]
-    },
-    "tests/test_stage2_analyze.py": {
-      "layer": "stage",
-      "stages": [
-        "stage2"
-      ]
-    },
-    "tests/test_stage2_analyze_draft_recovery.py": {
-      "layer": "stage",
-      "stages": [
-        "stage2"
-      ]
-    },
-    "tests/test_stage2_analyze_repair_flow.py": {
-      "layer": "stage",
-      "stages": [
-        "stage2"
-      ]
-    },
-    "tests/test_stage2_blueprint_agent_boundary.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage2"
-      ]
-    },
-    "tests/test_stage2_characters.py": {
-      "cases": {
-        "test_character_add_and_delete_smoke": "stage",
-        "test_character_edit_invalid_target_preserves_formal_projection_and_cost": "stage",
-        "test_character_edit_preflight_is_readonly_and_exact_candidate_commits": "stage",
-        "test_characters_edit_replace_preserves_provenance_and_is_idempotent": "stage",
-        "test_characters_noop_edit_does_not_land_a_round": "stage",
-        "test_explicit_backend_runs_the_same_v3_contract": "stage",
-        "test_frozen_character_baseline_is_read_from_exact_archived_bytes": "stage",
-        "test_independent_characters_generate_through_real_producer_and_store": "stage"
-      },
-      "layer": "unit_contract",
-      "stages": [
-        "stage2"
-      ]
-    },
-    "tests/test_characters_v3_pilot.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage2"
-      ]
-    },
-    "tests/test_stage2_characters_http.py": {
-      "cases": {
-        "test_character_bad_locator_is_rejected_before_write_and_survives_http_cli_restart": "stage",
-        "test_characters_delete_and_add_use_real_cli_and_keep_deletion_receipt": "stage",
-        "test_characters_http_writes_through_real_cli_and_survives_restart": "stage",
-        "test_identity_edit_free_rebind_http_cli_restart_preserves_knowledge_cost": "stage"
-      },
-      "layer": "unit_contract",
-      "stages": [
-        "stage2"
-      ]
-    },
-    "tests/test_stage2_contract_dispatch.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage2"
-      ]
-    },
-    "tests/test_stage2_core_edits.py": {
-      "layer": "stage",
-      "stages": [
-        "stage2"
-      ]
-    },
-    "tests/test_stage2_generation.py": {
-      "cases": {
-        "test_blueprint_resume_after_formal_write_is_idempotent_before_commit_sentinel": "stage",
-        "test_blueprint_resume_after_prepare_before_formal_uses_sealed_candidate": "stage",
-        "test_blueprint_verified_response_recovers_before_prepare_without_wire": "stage",
-        "test_stage2_generation_reaches_a_reloadable_jointly_checked_artifact": "stage",
-        "test_stage2_global_invalid_can_be_revalidated_without_another_llm_call": "stage",
-        "test_stage2_refuses_stale_stage1_before_the_client_can_be_called": "stage",
-        "test_stage2_targeted_regeneration_refreshes_one_chapter_and_merges_book": "stage"
-      },
-      "layer": "unit_contract",
-      "stages": [
-        "stage2"
-      ]
-    },
-    "tests/test_stage2_global_candidate_contract.py": {
-      "cases": {
-        "test_global_provider_has_one_direct_candidate_contract_and_schema": "unit_contract"
-      },
-      "layer": "unit_contract",
-      "stages": [
-        "stage2"
-      ]
-    },
-    "tests/test_stage2_global_core.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage2"
-      ]
-    },
-    "tests/test_stage2_global_evidence_candidates.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage2"
-      ]
-    },
-    "tests/test_stage2_global_evidence_recovery.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage2"
-      ]
-    },
-    "tests/test_stage2_grounding.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage2"
-      ]
-    },
-    "tests/test_stage2_knowledge_flow.py": {
-      "cases": {
-        "test_free_knowledge_edit_changes_no_static_or_blueprint_projection": "stage",
-        "test_global_refuses_missing_static_registry_before_wire": "stage",
-        "test_global_wire_and_disk_have_no_static_character_copy": "stage",
-        "test_knowledge_commit_does_not_own_missing_character_projection": "stage",
-        "test_saved_knowledge_cannot_overwrite_character_identity": "stage"
-      },
-      "layer": "unit_contract",
-      "stages": [
-        "stage2"
-      ]
-    },
     "tests/test_stage2_node_lifecycle.py": {
       "cases": {},
-      "layer": "unit_contract",
-      "stages": [
-        "stage2"
-      ]
-    },
-    "tests/test_stage2_opening.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage2"
-      ]
-    },
-    "tests/test_stage2_paragraphs.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage2"
-      ]
-    },
-    "tests/test_stage2_plot_compiler.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage2"
-      ]
-    },
-    "tests/test_stage2_plot_constraints.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage2"
-      ]
-    },
-    "tests/test_stage2_prompts.py": {
       "layer": "unit_contract",
       "stages": [
         "stage2"
@@ -947,81 +674,7 @@
         "stage2"
       ]
     },
-    "tests/test_stage2_secret_edit.py": {
-      "cases": {
-        "test_an_empty_patch_is_refused": "unit_contract",
-        "test_an_unknown_field_is_refused_by_the_carrier": "unit_contract",
-        "test_the_entry_is_registered_everywhere_it_has_to_be": "unit_contract",
-        "test_two_patches_for_one_secret_are_refused": "unit_contract"
-      },
-      "layer": "stage",
-      "stages": [
-        "stage2"
-      ]
-    },
-    "tests/test_stage2_typed_edit.py": {
-      "cases": {
-        "test_candidate_normalization_terminal_is_business_but_io_is_unknown": "stage",
-        "test_candidate_shape_rejection_hashes_dynamic_validation_location": "stage",
-        "test_collection_delete_refuses_a_dangling_fact_ref_and_keeps_input_unchanged": "stage",
-        "test_global_edit_preflight_rejects_dangling_endpoint_without_writing": "stage",
-        "test_preflight_aggregates_unknown_collection_deletes_into_safe_correction_reason": "stage",
-        "test_relation_window_is_rejected_before_mutating_the_caller": "stage"
-      },
-      "layer": "unit_contract",
-      "stages": [
-        "stage2"
-      ]
-    },
-    "tests/test_stage4.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage4"
-      ]
-    },
     "tests/test_stage4_approval_landed.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage4"
-      ]
-    },
-    "tests/test_stage4_baseline.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage4"
-      ]
-    },
-    "tests/test_stage4_beats.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage4"
-      ]
-    },
-    "tests/test_stage4_binding_context.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage4"
-      ]
-    },
-    "tests/test_stage4_binding_input_contract.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage4"
-      ]
-    },
-    "tests/test_stage4_binding_input_recovery_integration.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage4"
-      ]
-    },
-    "tests/test_stage4_blind.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage4"
-      ]
-    },
-    "tests/test_stage4_context.py": {
       "layer": "unit_contract",
       "stages": [
         "stage4"
@@ -1031,249 +684,6 @@
       "layer": "unit_contract",
       "stages": [
         "stage4"
-      ]
-    },
-    "tests/test_stage4_design_evolution.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage4"
-      ]
-    },
-    "tests/test_stage4_direct_boundary.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage4"
-      ]
-    },
-    "tests/test_stage4_ir_contract.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage4"
-      ]
-    },
-    "tests/test_stage4_legacy_chapter_budget.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage4"
-      ]
-    },
-    "tests/test_stage4_phase_state.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage4"
-      ]
-    },
-    "tests/test_stage4_plan_chapters.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage4"
-      ]
-    },
-    "tests/test_stage4_repair.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage4"
-      ]
-    },
-    "tests/test_stage4_structure_metrics.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage4"
-      ]
-    },
-    "tests/test_stage4_typed_failures.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage4"
-      ]
-    },
-    "tests/test_stage4_v3_integration.py": {
-      "layer": "stage",
-      "stages": [
-        "stage4"
-      ]
-    },
-    "tests/test_stage5.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage5"
-      ]
-    },
-    "tests/test_stage5_closure.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage5"
-      ]
-    },
-    "tests/test_stage5_commit_sweep.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage5"
-      ]
-    },
-    "tests/test_stage5_generation.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage5"
-      ]
-    },
-    "tests/test_stage5_legacy_delivery_recovery.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage5"
-      ]
-    },
-    "tests/test_stage5_measure.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage5"
-      ]
-    },
-    "tests/test_stage5_paragraph_plan.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage5"
-      ]
-    },
-    "tests/test_stage5_prepared_recovery.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage5"
-      ]
-    },
-    "tests/test_stage5_prompts.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage5"
-      ]
-    },
-    "tests/test_stage5_review_status.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage5"
-      ]
-    },
-    "tests/test_stage5_reviewer_rewrite_batch.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage5"
-      ]
-    },
-    "tests/test_stage5_structured.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage5"
-      ]
-    },
-    "tests/test_stage5_trim_batch.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage5"
-      ]
-    },
-    "tests/test_stage5_write_agent_boundary.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage5"
-      ]
-    },
-    "tests/test_stage6.py": {
-      "layer": "unit_contract",
-      "stages": []
-    },
-    "tests/test_stage6_core_consumption.py": {
-      "cases": {
-        "test_prepare_recheck_has_exact_owner_scope_and_reads_independent_decision": "stage",
-        "test_prepare_recheck_rejects_changed_source_and_keeps_prior_acceptance_distinct": "stage"
-      },
-      "layer": "unit_contract",
-      "stages": [
-        "stage5"
-      ]
-    },
-    "tests/test_stage6_hook_content_budget.py": {
-      "layer": "unit_contract",
-      "stages": []
-    },
-    "tests/test_stage6_legacy_delivery_recovery.py": {
-      "layer": "unit_contract",
-      "stages": []
-    },
-    "tests/test_stage6_prepare.py": {
-      "cases": {
-        "test_prepare_schema_explicit_empty_facts_and_strict_source_refs": "unit_contract"
-      },
-      "layer": "stage",
-      "stages": []
-    },
-    "tests/test_stage6_prepare_http.py": {
-      "layer": "stage",
-      "stages": []
-    },
-    "tests/test_stage6_prepare_workflow.py": {
-      "cases": {
-        "test_pending_decision_exposes_exact_free_recovery_and_preserves_budget": "unit_contract"
-      },
-      "layer": "stage",
-      "stages": []
-    },
-    "tests/test_stage6_prepared_cli.py": {
-      "layer": "unit_contract",
-      "stages": []
-    },
-    "tests/test_stage6_prompt_experiments.py": {
-      "layer": "unit_contract",
-      "stages": []
-    },
-    "tests/test_stage6_quality_contract.py": {
-      "layer": "unit_contract",
-      "stages": []
-    },
-    "tests/test_stage6_auto_approve.py": {
-      "layer": "unit_contract",
-      "stages": []
-    },
-    "tests/test_stage6_retry.py": {
-      "layer": "unit_contract",
-      "stages": []
-    },
-    "tests/test_stage7.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage7"
-      ]
-    },
-    "tests/test_stage7_delivery_gate.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage7"
-      ]
-    },
-    "tests/test_stage6_rebuild.py": {
-      "layer": "unit_contract",
-      "stages": []
-    },
-    "tests/test_stage7_hook_reselection.py": {
-      "layer": "unit_contract",
-      "stages": []
-    },
-    "tests/test_stage7_legacy_delivery_recovery.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage7"
-      ]
-    },
-    "tests/test_stage7_subs.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage7"
-      ]
-    },
-    "tests/test_stage_responsibilities.py": {
-      "layer": "stage",
-      "stages": [
-        "stage5",
-        "stage7"
       ]
     },
     "tests/test_start_script.py": {
@@ -1296,52 +706,10 @@
       "layer": "unit_contract",
       "stages": []
     },
-    "tests/test_trim_resolution.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage5"
-      ]
-    },
     "tests/test_upload_autostart.py": {
       "layer": "unit_contract",
       "stages": [
         "stage0"
-      ]
-    },
-    "tests/test_views_stage2.py": {
-      "cases": {
-        "test_a_malformed_artifact_is_409_material_not_404": "stage",
-        "test_a_missing_artifact_is_a_terminal_state_not_an_empty_screen": "stage",
-        "test_spoiler_fields_are_sent_in_full": "stage",
-        "test_the_setting_keys_survive_the_alias_round_trip": "stage",
-        "test_the_view_resolves_ids_and_counts_what_it_could_not": "stage",
-        "test_the_view_writes_nothing": "stage"
-      },
-      "layer": "unit_contract",
-      "stages": [
-        "stage2"
-      ]
-    },
-    "tests/test_views_stage4.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage4"
-      ]
-    },
-    "tests/test_views_stage5.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage5"
-      ]
-    },
-    "tests/test_views_stage6.py": {
-      "layer": "unit_contract",
-      "stages": []
-    },
-    "tests/test_views_stage7.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage7"
       ]
     },
     "tests/test_work_unit_grants.py": {
@@ -1532,6 +900,22 @@
         "test_cmd_run_routes_str06_nodes_before_legacy_preconditions": "stage",
         "test_str06_paid_run_still_requires_yes": "unit_contract",
         "test_run_str06_refuses_unknown_node_flags": "unit_contract"
+      }
+    },
+    "tests/test_str06_product_entry.py": {
+      "layer": "unit_contract",
+      "stages": [
+        "stage0",
+        "stage1",
+        "stage2",
+        "stage4",
+        "stage5",
+        "stage7"
+      ],
+      "cases": {
+        "test_full_chain_from_http_upload_to_stage7_delivery": "stage",
+        "test_legacy_book_is_refused_at_every_product_entry_face": "stage",
+        "test_upload_without_authorization_starts_no_paid_run": "stage"
       }
     }
   },

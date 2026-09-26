@@ -319,17 +319,21 @@ _EDIT_DEFAULTS = {
 }
 
 
-def test_the_edit_defaults_here_are_the_ones_the_stages_actually_use():
-    """守卫的守卫：本节的四个缺省值必须**就是**各层 `EDIT` 常量。
+def test_the_edit_defaults_here_are_the_ones_the_contract_registers():
+    """守卫的守卫：本节的三个缺省值必须**就是**契约登记表里的那三条。
 
+    （F8b-3：旧链 stage4/6/7 producer 的 `EDIT` 常量随模块整层删除；`edit_rel`
+    本身保留，缺省值的真相源收敛到 `contracts/artifacts.py`——三条旧链 edit 路径
+    已进 `RETIRED_ARTIFACT_PATHS`，新链没有 `--apply-edit` 人工写回面。）
     各写一份，下面那五类用例就会在一个**没人用的路径**上全绿。
     """
-    from novel.stages.stage4 import plan
-    from novel.stages.stage6 import hook
-    from novel.stages.stage7 import rename
+    from contracts.artifacts import RETIRED_ARTIFACT_PATHS
 
-    assert {'stage4': plan.EDIT, 'stage6': hook.EDIT,
-            'stage7': rename.EDIT} == _EDIT_DEFAULTS
+    assert {
+        'stage4': RETIRED_ARTIFACT_PATHS['stage4.plan_edit'],
+        'stage6': RETIRED_ARTIFACT_PATHS['stage6.hook_edit'],
+        'stage7': RETIRED_ARTIFACT_PATHS['stage7.name_map_edit'],
+    } == _EDIT_DEFAULTS
 
 
 @pytest.fixture

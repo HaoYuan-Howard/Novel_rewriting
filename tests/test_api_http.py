@@ -31,7 +31,6 @@ from fastapi.testclient import TestClient          # noqa: E402
 from contracts.invariants import STAGES            # noqa: E402
 from novel.api.app import HOST, PORT, UI_HEADER, create_app   # noqa: E402
 from novel.api.routes import jobs as JOB_API       # noqa: E402
-from novel.orchestrator import admission as A      # noqa: E402
 from novel.orchestrator import jobs as J           # noqa: E402
 from novel.orchestrator import queue as Q          # noqa: E402
 from novel.orchestrator.nodes import (             # noqa: E402
@@ -39,7 +38,7 @@ from novel.orchestrator.nodes import (             # noqa: E402
     build_steps,
     flag_tokens,
 )
-from tests import corpus, sandbox                  # noqa: E402
+from tests import sandbox                          # noqa: E402
 
 UI = {UI_HEADER: '1'}
 
@@ -138,57 +137,46 @@ def _empty_book(base, sid: str = '422'):
     return book
 
 
-# ─────────────────────── 审批 POST 的 writer admission ───────────────────────
+# ─────────────────────── 审批写面的 HTTP 面已整体退役 ───────────────────────
 
-def test_approval_post_writes_normally_and_get_stays_read_only(client, base):
-    """正常 POST 落审批账；GET 不为一次读取偷写同名服务状态。"""
-    from novel.work_units import initialize_workflow
-    initialize_workflow(base)
-    _empty_book(base)
-    approval = base / '_service' / 'approvals' / '422.json'
-
-    read = client.get('/api/novels/422/approvals')
-    assert read.status_code == 200, read.text
-    assert not approval.exists(), '审批 GET 不得取得 writer 或顺手落初始化记录'
-
-    written = client.post('/api/novels/422/approvals/reset')
-    assert written.status_code == 200, written.text
-    assert approval.is_file()
-    assert J.REGISTRY.conflicting_holder('422') is None
-
-
-def test_approval_post_refuses_a_live_agent_without_writing(client, base):
-    """API approval 与同书 agent 共用协调口；不能各查一次空表后同时落盘。"""
-    _empty_book(base)
-    approval = base / '_service' / 'approvals' / '422.json'
-    key = J.agent_lock_key('422')
-    holder = 'api-approval-live-agent'
-    J.AGENT_REGISTRY.acquire(key, holder)
-    try:
-        response = client.post('/api/novels/422/approvals/reset')
-    finally:
-        J.AGENT_REGISTRY.release(key, holder)
-
-    assert response.status_code == 409, response.text
-    assert response.json()['kind'] == 'JobConflict'
-    assert not approval.exists()
+#: F8b-3：人工审批闸（reset／backfill／gate／writing／stage5 closure 等）随
+#: 「上传即授权开跑」的全自动单模式退役，`novel/api/routes/approvals.py` 与
+#: `novel/api/approval_stamp.py` 已删除。存量 v9 审批账只由
+#: `novel/orchestrator/approvals.py` 做只读解码（CLI/operator 面），HTTP 上
+#: 不再发布任何 approvals 端点。
+RETIRED_APPROVAL_PATHS = (
+    '/api/novels/422/approvals',
+    '/api/novels/422/approvals/reset',
+    '/api/novels/422/approvals/backfill',
+    '/api/novels/422/approvals/gate/s0',
+    '/api/novels/422/approvals/writing',
+    '/api/novels/422/approvals/stage5',
+    '/api/novels/422/approvals/stage5/template',
+    '/api/novels/422/approvals/stage7/workpack',
+)
 
 
-def test_approval_post_refuses_an_orphan_admission_without_writing(client, base):
-    """服务重启丢了内存表也不能越过盘上尚未闭合的 Commander writer。"""
-    _empty_book(base)
-    parent_run_id = 'api-approval-orphan'
-    approval = base / '_service' / 'approvals' / '422.json'
-    A.open_gate(base, parent_run_id, '422')
-    try:
-        response = client.post('/api/novels/422/approvals/reset')
-    finally:
-        A.close_gate(base, parent_run_id)
-        A.mark_drained(base, parent_run_id)
+def test_the_approval_write_family_is_retired_from_the_http_surface(app, bare):
+    """已删路由不再断言行为，但钉住「不复活」+「不炸」两侧。
 
-    assert response.status_code == 409, response.text
-    assert response.json()['kind'] == 'JobConflict'
-    assert not approval.exists()
+    · 公开接口面（openapi）里一条 approvals 端点都不剩；
+    · 直接请求落**有类型的 404**（`HttpError`），不是 ASGI 500——
+      旧书/旧前端打到这些地址时看到的必须是「这条路不存在」。
+    """
+    published = [p for p in _surface(app)
+                 if p.startswith('/api/novels/{sid}/approvals')]
+    assert not published, f'审批写面复活了：{published}'
+    for path in RETIRED_APPROVAL_PATHS:
+        response = bare.get(path)
+        assert response.status_code == 404, f'{path} → {response.status_code}'
+        body = response.json()
+        assert body['kind'] == 'HttpError', path
+        assert path in body['message'], path
+        # 写方法同样不存在：退役端点不允许「GET 404 而 POST 暗通」。
+        # （POST 落到 SPA catch-all 的 GET-only 路由上 ⇒ 405；两种码都算
+        #  「这条路不能写」，唯独 2xx 不行。）
+        posted = bare.post(path, json={}, headers=UI)
+        assert posted.status_code in (404, 405), f'POST {path} → {posted.status_code}'
 
 
 # ───────────────────────── 一、基础只读端点各一条 200 ─────────────────────────
@@ -205,7 +193,7 @@ def test_original_read_and_preview_endpoints_answer(corpus_client, corpus_app, b
         '/api/enums': ('get', '/api/enums', None),
         '/api/novels': ('get', '/api/novels', None),
         '/api/novels/{sid}': ('get', f'/api/novels/{box.sid}', None),
-        '/api/novels/{sid}/check/{kind}': ('get', f'/api/novels/{box.sid}/check/stage2', None),
+        '/api/novels/{sid}/check/{kind}': ('get', f'/api/novels/{box.sid}/check/stage0', None),
         '/api/jobs': ('get', '/api/jobs', None),
         '/api/jobs/{job_id}': ('get', f'/api/jobs/{job_id}', None),
         '/api/jobs/{job_id}/log': ('get', f'/api/jobs/{job_id}/log', None),
@@ -230,13 +218,18 @@ def test_enums_matches_the_current_contract_over_the_wire(client):
 # ───────────────────────── 二、三种「没有」各不相同 ─────────────────────────
 
 def test_every_stage_answers_a_real_state(corpus_client, box):
-    """七层都答得出当前真实状态。
+    """有层级复检器的层都答得出当前真实状态；新链其余层在边界上就是 400。
 
+    ⚠ F8c：层级复检取值面收到 `novel.stages.checkable_stages()`
+    （stage0／stage1）。Stage2/4/5/7 的复检是**节点级** `--check-only`，
+    没有层级 CheckReport ⇒ 请求它们是 **400**（「你给的层名不在取值面」），
+    不是 404（这本书没有）、更不是 500。
     断言不写死成某一个码：本 fixture 是一个**真书目录**，各层跑到哪一步不同
     （产物齐的答 200、没跑的答 404、产物损坏的答 409）。
     """
+    from novel.stages import checkable_stages
     codes = {}
-    for kind in sorted(STAGES):
+    for kind in sorted(checkable_stages()):
         r = corpus_client.get(f'/api/novels/{box.sid}/check/{kind}')
         codes[kind] = r.status_code
         assert r.status_code in (200, 404, 409), (
@@ -246,26 +239,32 @@ def test_every_stage_answers_a_real_state(corpus_client, box):
     # ⚠ 至少有一层真的答得出 200：全 404 时上面那两句是一对**恒真**的断言，
     #   本条就退化成「这个地址不 500」。
     assert 200 in codes.values(), f'一层都没查成：{codes}'
-    assert len(STAGES) == 7
+    assert set(checkable_stages()) < set(STAGES), (
+        '新链 Stage2/4/5/7 没有层级复检器；若它们又回到取值面，'
+        '说明节点级 --check-only 被画成了第二套层级报告（I-16）')
 
 
-def test_stage5_check_before_any_stage5_review_is_a_typed_404(client, base):
-    """早期书不该查 Stage5；即使手工请求，也只能答“没跑”，不能炸成 ASGI 500。"""
+def test_new_chain_stages_have_no_layer_check_kind(client, base):
+    """Stage2/4/5/7 的层级复检入口随旧链退役：边界 400，不是 404/500。"""
     _empty_book(base)
 
-    response = client.get('/api/novels/422/check/stage5')
-
-    assert response.status_code == 404, response.text
-    body = response.json()
-    assert body['kind'] == 'UpstreamMissing'
-    assert body['hint'] and 'stage5.review' in body['hint']
+    for kind in ('stage2', 'stage4', 'stage5', 'stage7'):
+        response = client.get(f'/api/novels/422/check/{kind}')
+        assert response.status_code == 400, f'{kind} → {response.status_code}'
+        body = response.json()
+        assert body['kind'] == 'BadRequest'
+        assert '--check-only' in body['message'], (
+            '拒绝理由必须指出节点级复检入口，否则读的人不知道该去哪')
 
 
 def test_an_unknown_kind_is_400_and_lists_the_current_stages(client):
     """`:kind` 不在现役阶段里 ⇒ **400 并列出取值面**。400 与 404 是两件事。"""
+    from novel.stages import checkable_stages
     r = client.get('/api/novels/42/check/stage9')
     assert r.status_code == 400
-    assert all(s in r.json()['message'] for s in STAGES)
+    message = r.json()['message']
+    assert all(s in message for s in checkable_stages())
+    assert 'stage9' in message
 
 
 def test_an_unknown_book_is_404_with_an_id_not_a_phrase(client):
@@ -351,10 +350,16 @@ def _surface(app) -> dict[str, list[str]]:
 
 
 def test_the_published_surface_is_exactly_the_current_surface(app):
-    """⭐ 公开接口面写死在这里（基础端点 + Stage 0/1 + 第二阶段读屏）。
+    """⭐ 公开接口面写死在这里（基础端点 + Stage 0/1 + operator/str06 只读监控）。
 
     页面职责见 `web/AGENTS.md`「路由与屏幕职责」。本条钉住实际 HTTP 接口面，
     不复制页面路由；新增或退役端点必须同步调整这份清单并验证其消费者。
+
+    ⚠ F8b-3：旧链读屏/人工写回/审批写面整族退役（stage2 global/characters/
+    analyze-draft/blueprint-reading-workpack、stage4/:o、stage5/:o、
+    review/:o、reading/:o、inbox、approvals 全家、stage7 读屏）；新链只读
+    监控面是 12 条 `str06/candidates/*` GET（列表 + run/characters/
+    blueprint/design/ir/chapters/hook/naming/delivery/book）。
     """
     assert _surface(app) == {
         '/api/agent/capabilities': ['GET'],
@@ -379,42 +384,14 @@ def test_the_published_surface_is_exactly_the_current_surface(app):
         '/api/maintenance/trash/restore/preview': ['POST'],
         '/api/novels': ['GET'],
         '/api/novels/{sid}': ['GET'],
-        '/api/novels/{sid}/approvals': ['GET'],
-        '/api/novels/{sid}/approvals/backfill': ['POST'],
-        # Stage4 design/structure 的 workpack/template/typed apply 已随
-        # 2026-09-15 全自动裁决整体退役；打开条件唯一化为统一机械准入。
-        '/api/novels/{sid}/approvals/gate/{key}': ['POST'],
-        '/api/novels/{sid}/approvals/reset': ['POST'],
-        # Stage5 写作授权/闭合回执的 template/apply 面已随批次 B3（2026-09-15
-        # 全自动裁决）退役；闭合由 stage5.review producer 机械落账。
-        # Stage6 三候选定稿面（approvals/stage6/workpack、stage6、stage6/approve、
-        # stage6/rebuild、stage6/prepare 两端）已随 Stage6 整层退役（F8b）。
         '/api/novels/{sid}/check/{kind}': ['GET'],
-        '/api/novels/{sid}/inbox': ['GET'],
         '/api/novels/{sid}/operator-next': ['GET'],
-        '/api/novels/{sid}/reading/{ordinal}': ['GET'],
-        # review/{ordinal} 人工写回（edit 两端）已随 F8b-2 人工写回族退役；
-        # 只读屏仍保留。
-        '/api/novels/{sid}/review/{ordinal}': ['GET'],
         '/api/novels/{sid}/run': ['GET'],
         '/api/novels/{sid}/run/metrics': ['GET'],
         '/api/novels/{sid}/stage0/report': ['GET'],
         '/api/novels/{sid}/stage0/segments': ['GET'],
         '/api/novels/{sid}/stage1': ['GET'],
         '/api/novels/{sid}/stage1/partition': ['POST'],
-        '/api/novels/{sid}/stage2/analyze-draft': ['GET'],
-        '/api/novels/{sid}/stage2/blueprint-reading-workpack': ['GET'],
-        # stage2 blueprint/global/characters 的 edit/template 写面已随 F8b-2
-        # 人工写回族整族退役。
-        '/api/novels/{sid}/stage2/characters': ['GET'],
-        '/api/novels/{sid}/stage2/global': ['GET'],
-        '/api/novels/{sid}/stage4/{ordinal}': ['GET'],
-        # （stage5 trim retain-pretrim 两端点已随批次 B3 trim 三选一退役；
-        #   stage6 页/定稿/重建/prepare 已随 Stage6 整层退役。）
-        '/api/novels/{sid}/stage5/{ordinal}': ['GET'],
-        # Stage6/7 终审工作包与 stage7 读屏/残留采纳已随人工闸退役与旧链注销
-        # 移除（F8b）：命名与交付监控读 /api/str06/candidates/{candidate}/*，
-        # 成书下载走 /api/str06/candidates/{candidate}/book（download=true）。
         '/api/novels/{sid}/trash': ['POST'],
         '/api/novels/{sid}/work-units/{unit_id}/grant': ['GET', 'POST'],
         '/api/queues': ['GET', 'POST'],
@@ -463,13 +440,14 @@ def test_the_service_writes_nothing_at_all(corpus_client, box):
     client = corpus_client
     before = _tree(box.root)
     for url in ('/api/enums', '/api/novels', f'/api/novels/{box.sid}',
-                f'/api/novels/{box.sid}/check/stage2', '/api/jobs',
-                # 第二阶段读屏（本沙箱里 stage7 是 404——404 也不许写一个字节；
-                # 带全量产物的 0 写断言在 `test_api_screens.py`；stage6 屏已随
-                # Stage6 整层退役删除）。
-                f'/api/novels/{box.sid}/stage2/global',
-                f'/api/novels/{box.sid}/stage7',
-                f'/api/novels/{box.sid}/inbox'):
+                f'/api/novels/{box.sid}/check/stage0', '/api/jobs',
+                f'/api/novels/{box.sid}/run',
+                f'/api/novels/{box.sid}/run/metrics',
+                # 新链只读监控（str06 候选面）；404 也不许写一个字节。
+                # 带全量产物的 0 写断言在 `test_api_screens.py`；旧链
+                # stage2/4/5/7 读屏与 inbox 已随旧链整层退役删除。
+                '/api/str06/candidates',
+                '/api/str06/candidates/probe/run'):
         client.get(url)
     client.post('/api/jobs/preview',
                 json={'sid': box.sid, 'node': 'stage1.partition', 'flags': []})
@@ -643,17 +621,27 @@ def test_profiled_preview_can_show_denied_egress_but_post_cannot_start(
     assert not J.jobs_path(base).exists()
 
 
-def test_http_refuses_egress_authorization_without_an_executor_profile(client):
+def test_http_allows_egress_authorization_for_direct_llm_nodes(client):
+    """F8c：直连 LLM 节点（无 executor profile）可显式授权正文外发。
+
+    新链付费执行的唯一传输面就是直连 provider，`--allow-egress` 是它的
+    source-export 凭据（I-43：付费确认与正文外发是两份独立授权）。旧规则
+    「没有 executor_backend 就不能授权」会让编排器构造不出可执行付费
+    `str06.` 节点的 canonical argv；preview 必须把它带进摊开的命令。
+    """
     response = client.post('/api/jobs/preview', json={
         'sid': '42', 'node': 'str06.stage2.source', 'flags': [],
         'egress_authorized': True,
     })
 
-    assert response.status_code == 400
-    assert response.json()['kind'] == 'UnsupportedRunMode'
-    message = response.json()['message']
-    assert ('executor_backend' in message or 'executor_profile' in message
-            or '外发' in message)
+    assert response.status_code == 200
+    assert '--allow-egress' in response.json()['steps'][0]['argv']
+    # 没给授权时不得伪造：argv 与快照都没有这枚凭据。
+    without = client.post('/api/jobs/preview', json={
+        'sid': '42', 'node': 'str06.stage2.source', 'flags': [],
+    })
+    assert without.status_code == 200
+    assert '--allow-egress' not in without.json()['steps'][0]['argv']
 
 
 @pytest.mark.parametrize(('path', 'node', 'flags'), [
@@ -751,13 +739,16 @@ def _started_record(
 ])
 def test_free_jobs_do_not_request_writing_authorization(
         client, base, monkeypatch, flags):
-    """preview 判为免费的作业路不能被已退役的 writing 审批反向堵死
-    （该审批写面已随批次 B3 退役，本条守卫其不复活）。"""
-    authorized = []
+    """preview 判为免费的作业路不被任何审批授权堵死。
 
-    def refuse_authorization(*args, **kwargs):
-        authorized.append((args, kwargs))
-        raise AssertionError('零成本 Stage5 作业不应申请 writing 授权')
+    F8b-3：writing 授权写面随人工闸整层退役——`novel/api/routes/jobs.py` 不再
+    import approvals，`jobs.start` 的 `prepare` 对现役节点恒为 None。本条钉住
+    两侧：模块面上没有 approvals（复活就是把已退役闸门接回 HTTP），以及零成本
+    作业不铸任何 prepare。
+    """
+    assert not hasattr(JOB_API, 'approvals'), (
+        'jobs 路由不得再持有审批授权面；复活它就是把已退役的 writing 闸'
+        '接回 HTTP 启动路')
 
     def start_without_thread(
             run_base, node, sid, run_flags, *, steps,
@@ -767,7 +758,6 @@ def test_free_jobs_do_not_request_writing_authorization(
         assert egress_authorized is None
         return _started_record(run_base, node, sid, run_flags, steps)
 
-    monkeypatch.setattr(JOB_API.approvals, 'authorize_writing', refuse_authorization)
     monkeypatch.setattr(JOB_API.jobs, 'start', start_without_thread)
 
     response = client.post('/api/jobs', json={
@@ -776,7 +766,6 @@ def test_free_jobs_do_not_request_writing_authorization(
 
     assert response.status_code == 202, response.text
     assert response.json()['start']['paid'] is False
-    assert authorized == []
 
 
 @pytest.mark.parametrize('path', ['/api/jobs/preview', '/api/jobs'])
@@ -791,7 +780,11 @@ def test_free_jobs_do_not_request_writing_authorization(
 ])
 def test_http_jobs_refuse_cli_only_prepared_recovery(
         client, monkeypatch, path, flags):
-    """HTTP job 每次生成新 run_id，不能冒充可复用 target 的 CLI runner。"""
+    """HTTP job 每次生成新 run_id，不能冒充可复用 target 的 CLI runner。
+
+    （F8b-3：该边界不再读审批——`authorize_prepared_recovery` 随人工闸退役；
+    拒绝只剩旗标面这一道，且仍在 argv/job 构造之前。）
+    """
     monkeypatch.setattr(
         JOB_API.jobs, 'plan_start',
         lambda *_args, **_kwargs: pytest.fail(
@@ -800,10 +793,6 @@ def test_http_jobs_refuse_cli_only_prepared_recovery(
         JOB_API.jobs, 'start',
         lambda *_args, **_kwargs: pytest.fail(
             'prepared recovery API 边界不得启动 job'))
-    monkeypatch.setattr(
-        JOB_API.approvals, 'authorize_prepared_recovery',
-        lambda *_args, **_kwargs: pytest.fail(
-            'prepared recovery API 边界不得读取或消费审批'))
 
     response = client.post(path, json={
         'sid': '42', 'node': 'stage5.write', 'flags': flags,

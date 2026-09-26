@@ -1,21 +1,31 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Stage2 Global / Analyze 测试共用 RunContext 夹具（C3：无 Agent CLI）。"""
+"""Stage2 直连（legacy executor）测试共用 RunContext 夹具（C3：无 Agent CLI）。
+
+⚠ **F8b-3 载荷切换**：原文件是旧链 Stage2 Global／Analyze 的共用夹具——它 import 的
+`novel.stages.stage2.extract`、`tests.test_stage2`、`tests.test_stage2_generation` 与
+`tests.stage2_fixtures` 已随旧链整层删除，整个模块无法装载（收集错误）。本文件**不含
+测试用例**（与退役前一致：它是夹具模块，用例在各自文件里）；存活的夹具职责迁到
+`tests/str06_facilities.py`（候选上下文与付费边次）与 `tests/conftest.py`。
+
+保留本文件的原因：`contracts/schema/retirement.py` 把这条登记为
+rewrite_consumer（"global agent 面随 F8b 切新链"），且 `tests/suite_catalog.json`
+仍按模块登记它；删除文件要先改登记表与目录，那属 STR-06 关闭批次，不在本批范围。
+⇒ 这里只放**新链上仍成立的直连 executor 形状**断言面：legacy profile 的构造与
+解析（`novel/cli/main.py::_executor_backend_of` 与 `nodes.resolve_executor_backend`
+的共用形状），保证「直连 LLM 是唯一执行面」这条在夹具层也有落点。
+"""
 from __future__ import annotations
 
-import copy
-from pathlib import Path
+import pytest
 
-from contracts.schema.orchestration import LegacyExecutorBackend, LegacyLlmProfile
-from contracts.schema.stage1 import MainText
-from novel import prov
-from novel.llm.cache import CachePolicy
-from novel.llm.ledger import CostLedger, ledger_path
-from novel.run import RunContext
-from novel.stages.stage2 import extract
-from novel.store import ArtifactStore
-from tests.test_stage2 import main_text
-from tests.test_stage2_generation import _response_global
+from contracts.schema.orchestration import (
+    ExecutorBackend,
+    LegacyExecutorBackend,
+    LegacyLlmProfile,
+)
+from novel.errors import UnsupportedRunMode
+from novel.orchestrator import nodes as N
 
 
 def _profile() -> LegacyLlmProfile:
@@ -31,72 +41,27 @@ def _backend() -> LegacyExecutorBackend:
     return LegacyExecutorBackend(profile=_profile())
 
 
-def _ctx(
-        base: Path, *, with_characters: bool = True, agent: bool = False,
-) -> RunContext:
-    from novel.work_units import initialize_workflow
-
-    del agent  # C3：不再构造 agent profile
-    initialize_workflow(base)
-    book = base / 'global直连_2042'
-    book.mkdir(exist_ok=True)
-    clean = book / 'stage0/clean_text.txt'
-    clean.parent.mkdir(parents=True, exist_ok=True)
-    clean.write_text('synthetic stage0 root\n', encoding='utf-8', newline='')
-    ctx = RunContext(
-        novel_dir=book,
-        node='stage2.global',
-        paid=True,
-        code=prov.code_version(),
-        cache=CachePolicy.default(),
-        ledger=CostLedger(path=ledger_path(base)),
-        executor_backend=_backend(),
-    )
-    ArtifactStore(ctx).write(
-        extract.MAIN_TEXT, MainText.model_validate(main_text()))
-    if with_characters:
-        from tests.stage2_fixtures import seed_character_registry
-
-        seed_character_registry(ctx)
-    return ctx
+def test_legacy_profile_is_the_only_executor_shape():
+    """直连 LLM 是现役唯一执行面：legacy profile 四件套缺一不可。"""
+    with pytest.raises(ValueError):
+        LegacyLlmProfile(provider='deepseek', model='deepseek-v4-pro',
+                         reasoning_effort='high')
+    backend = _backend()
+    assert isinstance(backend, ExecutorBackend)
+    assert backend.kind == 'legacy'
+    assert backend.profile == _profile()
 
 
-def _copy_ctx(
-        ctx: RunContext, *, same_run: bool, paid: bool,
-        agent: bool = False,
-) -> RunContext:
-    del agent
-    assert ctx.ledger.path is not None
-    kwargs = {'run_id': ctx.run_id} if same_run else {}
-    return RunContext(
-        novel_dir=ctx.novel_dir,
-        node=ctx.node,
-        paid=paid,
-        code=prov.code_version(),
-        cache=CachePolicy.default(),
-        ledger=CostLedger(path=ctx.ledger.path, **kwargs),
-        executor_backend=_backend(),
-        **kwargs,
-    )
+def test_nodes_resolve_legacy_backend_and_refuse_agent_kind():
+    """节点表的 executor 解析口只认 legacy；agent kind 与未登记组合关闭式拒绝。"""
+    resolved = N.resolve_executor_backend(
+        'str06.stage5.body', (), _backend())
+    assert isinstance(resolved, LegacyExecutorBackend)
+    assert resolved.profile.model == 'deepseek-v4-pro'
 
-
-def _resume_ctx(ctx: RunContext) -> RunContext:
-    return _copy_ctx(ctx, same_run=True, paid=True)
-
-
-def _new_run_ctx(ctx: RunContext) -> RunContext:
-    return _copy_ctx(ctx, same_run=False, paid=True)
-
-
-def _direct_ctx(ctx: RunContext, *, same_run: bool = False) -> RunContext:
-    return _copy_ctx(ctx, same_run=same_run, paid=True)
-
-
-def _free_ctx(ctx: RunContext) -> RunContext:
-    return _copy_ctx(ctx, same_run=False, paid=False)
-
-
-def _bad_global() -> dict:
-    bad = copy.deepcopy(_response_global())
-    bad['arc_secrets'][0]['revealed_from'] = 99
-    return bad
+    from novel.orchestrator.retired_formats import refuse_agent_backend
+    with pytest.raises(Exception):
+        refuse_agent_backend('夹具层 agent 形状', {'kind': 'agent'})
+    # 未迁移的旧链节点名连显式 profile 都不接（不能静默回退另一套执行面）。
+    with pytest.raises(UnsupportedRunMode, match='不再接受显式 executor profile'):
+        N.resolve_executor_backend('stage4.design', (), _backend())

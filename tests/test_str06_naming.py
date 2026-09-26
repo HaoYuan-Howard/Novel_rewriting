@@ -14,18 +14,18 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from contracts.schema.str06.naming import NameAssignment, NameMapV5, TargetName
-from contracts.schema.str06.source import (
+from contracts.schema.naming import NameAssignment, NameMapV5, TargetName
+from contracts.schema.source import (
     CharactersArtifactV4, CharactersCore, NameStructure,
 )
-from novel.stages.str06.literal_scan import apply_replacements
-from novel.stages.str06.name_structure import (
+from novel.stages.common import apply_replacements
+from novel.stages.stage2.names import (
     compile_name_structure, surname_construction_probe,
 )
-from novel.stages.str06.naming import (
+from novel.stages.stage7.naming import (
     compile_name_map, compile_surface_replacements, diff_proof, naming_projection,
 )
-from novel.stages.str06.assembly import (
+from novel.stages.stage7.assembly import (
     BodyAccess, assemble_delivery, chapter_access, delivery_identity,
 )
 
@@ -357,7 +357,7 @@ def test_surface_replacements_long_name_and_family_forms():
 
 
 def test_same_surface_multiple_values_rejected_same_value_ok():
-    from novel.stages.str06.naming import _record
+    from novel.stages.stage7.naming import _record
     # 同一源字面对应多个不同值：报错并列出 owner，不按替换顺序选
     errors: list[str] = []
     owners: dict[str, str] = {}
@@ -379,7 +379,7 @@ def test_replacement_value_containing_key_rejected():
     tampered['砚哥'] = '沈砚哥里含陈砚'  # 值包含另一 key：链式替换风险
     _, errors = compile_surface_replacements(chars, name_map)
     assert not errors  # 原表干净
-    from novel.stages.str06.naming import _record
+    from novel.stages.stage7.naming import _record
     errors2: list[str] = []
     owners: dict[str, str] = {'陈砚': 'x'}
     table_y = {'陈砚': '沈砚'}
@@ -399,7 +399,7 @@ def test_residual_claims_and_kept_no_false_positives():
     text = '裴书远与裴兄同行'
     renamed, claims = apply_replacements(text, table)
     # 目标名含旧字面：书言/林 出现在替换值里 → 认领区间吸收，不误报
-    from novel.stages.str06.naming import check_residual
+    from novel.stages.stage7.naming import check_residual
     assert check_residual(renamed, table, claims) == []
     # kept 包含映射键：该字面是合法保留面 → 从查禁集剔除
     assert check_residual('裴家老宅', table, (), ('裴',)) == []

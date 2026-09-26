@@ -50,6 +50,10 @@ def _load_unreachable_families() -> None:
     因其他测试的 import 顺序偶然出现。这里显式加载两族，才能让本文件独跑与全量同义。
     ⚠ 用 `import_module` 而不是普通 import：我们要的恰恰是类定义进入子类树的副作用，
     不是在测试里调用那些模块。**把意图写清楚，比压一条警告好。**
+
+    （F8b-3：旧链 `novel.stages.stage2.extract` 随 Stage2 整层删除，它定义的
+    `GlobalEditCandidateRejected`／`_PostEditReviewRejected` 两条 UNREACHABLE 登记
+    已从 `novel/api/errors.py` 撤销；本装载表不再包含已删模块。）
     """
     import importlib
     for m in (
@@ -59,7 +63,6 @@ def _load_unreachable_families() -> None:
         'novel.orchestrator.agent_supervisor',
         'novel.orchestrator.stage2_review_ledger',
         'novel.orchestrator.workflow_transition',
-        'novel.stages.stage2.extract',
     ):
         importlib.import_module(m)
 
@@ -101,13 +104,21 @@ def test_the_unreachable_table_says_why():
     assert H.UNREACHABLE_OVER_HTTP, '表是空的——本文件的对账多半在扫一个空表'
 
 
-def test_compiled_plot_reference_failure_keeps_structure_error_ownership():
-    from novel.stages.stage4.plot_refs import PlotReferenceRefused
+def test_compiled_reference_failure_keeps_structure_error_ownership():
+    """编译期引用/来源闭合失败是**结构错误**（500），不是 4xx，也不在 UNREACHABLE 表里。
 
-    failure = PlotReferenceRefused(2, '已编译计划引用了其他章的节点')
-    assert failure.chapter_ordinal == 2
-    assert H.status_of(failure) == 500
-    assert PlotReferenceRefused.__name__ not in H.UNREACHABLE_OVER_HTTP
+    （F8b-3：旧链 `novel.stages.stage4.plot_refs.py::PlotReferenceRefused`（已编译计划
+    引用其他章节点）随 Stage4 旧链整层退役，其在 HTTP 表的 500 映射一并删除。同族不变量
+    改钉在现役结构拒绝族上：新链 Stage4 编译/Binding 的引用闭合失败同样由
+    `RefusedByStructure` 一族承载——那是代码或持久化契约自相矛盾，必须 500 且留栈，
+    不能被折成 409/422 这类「数据问题」。）
+    """
+    for exc in (
+            E.ProvenanceRefused('已编译计划引用了其他章的节点'),
+            E.ByteFormRefused('x'),
+            E.ValueDomainRefused('x')):
+        assert H.status_of(exc) == 500, type(exc).__name__
+        assert type(exc).__name__ not in H.UNREACHABLE_OVER_HTTP
 
 
 def test_launch_deferred_control_signal_is_explicitly_http_unreachable():

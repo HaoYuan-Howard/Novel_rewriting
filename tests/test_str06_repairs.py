@@ -11,15 +11,16 @@ import sys
 import pytest
 from pydantic import ValidationError
 
-from contracts.schema.str06 import BindingEntry, SemanticBinding, TargetDelta
-from contracts.schema.str06.state import StateAddress, SurfaceIntroduction
-from novel.stages.str06.compile import compile_execution_plan
-from novel.stages.str06.project import project_context
-from novel.stages.str06.fold import fold_accepted_prefix, FoldedState
-from novel.stages.str06.checks import canonical_sha256
-from novel.stages.str06.guard import run_mechanical_guard
-from novel.stages.str06.grounding import assemble_preserve, project_brief, assemble_binding
-from novel.stages.str06.source_compile import ChapterCompiler, assemble_blueprint, chapter_input_snapshot
+from contracts.schema.design import TargetDelta
+from contracts.schema.grounding import BindingEntry, SemanticBinding
+from contracts.schema.state import StateAddress, SurfaceIntroduction
+from novel.stages.stage4.compile import compile_execution_plan
+from novel.stages.common import project_context
+from novel.stages.stage4.fold import fold_accepted_prefix, FoldedState
+from novel.stages.common import canonical_sha256
+from novel.stages.stage4.guard import run_mechanical_guard
+from novel.stages.stage4.grounding import assemble_preserve, project_brief, assemble_binding
+from novel.stages.stage2.source import ChapterCompiler, assemble_blueprint, chapter_input_snapshot
 from tests.str06_facilities import make_context
 from tests.test_str06_execution_ir import _graph, _binding, _cp, _ob
 from tests.test_str06_target import _assemble, _preserve_wire, _source_pair
@@ -128,7 +129,7 @@ def test_compound_obligation_uses_prior_beats_without_premature_whole_fact():
 
 
 def test_scene_overlay_expires_to_book_and_unset_is_not_unknown():
-    from contracts.schema.str06 import Establishment
+    from contracts.schema.execution import Establishment
     base = Establishment(domain='world', key='weather', op='set', value='晴', scope='book', established_by='init')
     temporary = base.model_copy(update={'value': '雨', 'scope': 'scene', 'established_by': 's01#bt1'})
     state = FoldedState().apply('init', [base]).apply('s01', [temporary])
@@ -196,8 +197,8 @@ def test_source_reference_closure_and_no_silent_edge_drop(fault):
 def test_compiler_hash_stable_across_process_seeds():
     code = """from tests.test_str06_repairs import contexts
 from tests.test_str06_execution_ir import _graph,_binding,_cp,_ob
-from novel.stages.str06.checks import canonical_sha256
-from novel.stages.str06.compile import compile_execution_plan
+from novel.stages.common import canonical_sha256
+from novel.stages.stage4.compile import compile_execution_plan
 cp=_cp(_ob('obZ'),_ob('obA'),_ob('obM'));g=_graph();b=_binding(cp)
 p,e=compile_execution_plan(g,b)
 print(canonical_sha256(p),canonical_sha256(contexts(g,b)['s01'][0]))
@@ -209,7 +210,7 @@ print(canonical_sha256(p),canonical_sha256(contexts(g,b)['s01'][0]))
 
 
 def test_paid_response_durable_before_validation_and_reused(tmp_path):
-    from novel.llm.str06_requests import PaidRequestSession
+    from novel.llm.paid_requests import PaidRequestSession
     from novel.llm.transport import ChatRequest, ChatResponse
     from novel.llm.ledger import CostLedger, ledger_path, read_cost_snapshot
     from novel.store import Str06Repository
@@ -244,7 +245,7 @@ def test_paid_response_durable_before_validation_and_reused(tmp_path):
 
 
 def test_target_rc1_missing_semantics_is_rejected():
-    from novel.stages.str06.design_compile import assemble_body_design
+    from novel.stages.stage4.design import assemble_body_design
     from tests.test_str06_target import _design_wire
     wire = _design_wire()
     del wire['initial_state']
@@ -253,7 +254,7 @@ def test_target_rc1_missing_semantics_is_rejected():
 
 @pytest.mark.parametrize('failure', ['transport', 'duplicate_json'])
 def test_failed_request_is_preserved_and_never_automatically_rebought(tmp_path, failure):
-    from novel.llm.str06_requests import PaidRequestSession
+    from novel.llm.paid_requests import PaidRequestSession
     from novel.llm.transport import ChatRequest, ChatResponse
     from novel.llm.ledger import CostLedger, ledger_path, read_cost_snapshot
     from novel.store import Str06Repository

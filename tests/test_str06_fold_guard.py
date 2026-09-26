@@ -8,31 +8,37 @@ ce1→M2、ce2→M3、ce3→M1、ce4→M4、ce6→M6；ce5（M5 surface 时机�
 """
 from __future__ import annotations
 
-from contracts.schema.str06 import (
-    BindingEntry,
-    ChapterAssignment,
-    Establishment,
-    EffectDomain,
-    PreserveCheckpoint,
-    PreserveKind,
-    BodyDesign,
-    SceneDelivery,
-    SceneDriver,
-    SemanticBinding,
-    SourceLineage,
-    SourceObligation,
-    SurfaceRelease,
-    TargetBeat,
-    TargetScene,
-    VerificationIR,
+from contracts.schema.context import (
     KnowledgeEntry,
     StateEntry,
+    SurfaceRelease,
+    VerificationIR,
     WriterBrief,
     WriterContext,
 )
-from contracts.schema.str06.execution import SceneExecutionPlan
-from novel.stages.str06.fold import FoldedState, fold_accepted_prefix
-from novel.stages.str06.guard import (
+from contracts.schema.design import (
+    BodyDesign,
+    ChapterAssignment,
+    SceneDelivery,
+    SceneDriver,
+    TargetBeat,
+    TargetScene,
+)
+from contracts.schema.execution import (
+    EffectDomain,
+    Establishment,
+)
+from contracts.schema.grounding import (
+    BindingEntry,
+    PreserveCheckpoint,
+    SemanticBinding,
+    SourceLineage,
+    SourceObligation,
+)
+from contracts.schema.policy import PreserveKind
+from contracts.schema.execution import SceneExecutionPlan
+from novel.stages.stage4.fold import FoldedState, fold_accepted_prefix
+from novel.stages.stage4.guard import (
     check_binding_beat_refs,
     check_cast_legality,
     check_entry_timing,
@@ -87,7 +93,7 @@ def _context(
     entry_knowledge=(),
     released=(),
 ) -> WriterContext:
-    from contracts.schema.str06.context import BeatIR
+    from contracts.schema.context import BeatIR
     return WriterContext(
         scene_id=scene_id, execution_slice_sha256=H64,
         verification_ir=VerificationIR(
@@ -164,7 +170,7 @@ def test_fold_overwrite_by_later_establishment():
 
 def test_guard_green_path():
     graph = _graph()
-    from contracts.schema.str06.state import SurfaceIntroduction
+    from contracts.schema.state import SurfaceIntroduction
     graph.scenes[1].beats[0].surface_introductions = (SurfaceIntroduction(char_id='ch2', surfaces=('二郎',)),)
     binding = _binding(
         BindingEntry(beat_ref=('s01' + '#bt1'), obligation_id='ob1', scene_id='s01'),
@@ -230,7 +236,7 @@ def test_m4_unreal_carriage_position():
 
 
 def test_m6_illegal_cast_member():
-    from novel.stages.str06.guard import appeared_chars, scene_order
+    from novel.stages.stage4.guard import appeared_chars, scene_order
     graph = _graph()
     order = scene_order(graph)
     # ce6：chX 从未在任何拍出场，却出现在 released_surfaces

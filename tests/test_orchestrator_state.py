@@ -156,7 +156,7 @@ def test_overview_runs_on_the_real_corpus(sid):
     assert [s.stage for s in ov.stages] == list(STAGES)
     # 旧臂目录只作 legacy 证据，不冒充 canonical 完成度。
     novel_dir = paths.resolve_novel_dir(CORPUS, sid)
-    expected_legacy = S.stage5_legacy_paths(novel_dir)
+    expected_legacy = S.legacy_stage5_paths(novel_dir)
     assert ov.stage5_legacy_paths == expected_legacy
 
 
@@ -201,6 +201,8 @@ def test_stage5_live_invalid_is_visible_outside_the_current_plan_set(
     F8b 新链：章稿与 INVALID 双生在 `stage5/body/`（`STR06_STAGE5_BODY`）；
     恢复提问走 `str06.stage5.body`。stage5 的具名 hook 面与本用例无关，
     以 `required_artifacts` 置空隔离（hook 面自己由别处守卫）。
+    ⚠ F8c：`stage5.review` 模块随旧链整层退役，`stage_state` 不再调
+    `review_status`——三格 review 投影如实缺席，本用例也不再需要替它打桩。
     """
     novel_dir = tmp_path / '测试书_1'
     stage5_dir = novel_dir / 'stage5' / 'body'
@@ -219,18 +221,15 @@ def test_stage5_live_invalid_is_visible_outside_the_current_plan_set(
         return _chapter_state(invalid=True).model_copy(update={'rel': rel})
 
     monkeypatch.setattr(S, 'artifact_state', fake_artifact_state)
-    from novel.stages.stage5 import review as stage5_review
-    monkeypatch.setattr(
-        stage5_review, 'review_status',
-        lambda _ctx, _store: SimpleNamespace(
-            state='missing', reasons=('尚无 Review',), review_rel=None),
-    )
 
     stage = S.stage_state(store, 'stage5')
 
     assert stage.done is want_done
     assert stage.reviewable is True
     assert any(row.invalid for row in stage.artifacts)
+    # F8c：旧链 review 面退役 ⇒ 三格如实缺席，不造 'missing' 冒充「还没审」。
+    assert stage.review_state is None and stage.review_reasons == []
+    assert stage.review_rel is None
     if invalid_name.startswith('chx'):
         # ⚠ F8b-3 生产缺口：`resume_verdict` 的通用 INVALID 分支对**已是**
         # `.INVALID` 形态的 rel 直接套 `paths.invalid_of` ⇒ PathRefused。
@@ -286,19 +285,23 @@ def _chapter_state(*, freshness: str = 'fresh', exists: bool = True,
         (_chapter_state(), True, S.RESUME_SKIP),
         (_chapter_state(freshness='stale'), False, S.RESUME_REDO),
         (_chapter_state(freshness='unknown'), None, S.RESUME_UNKNOWN),
-        (_chapter_state(readable=False), False, S.RESUME_REDO),
+        # 逐章分支把「读不回」与「新鲜度判不了」折叠成 UNKNOWN：付费层的章稿
+        # 已经花过钱，schema 读不回来时既不能折成 missing 静默重跑，也不冒充
+        # 「续」——停下来让人看。具名产物那条通用分支才区分 REDO/UNKNOWN。
+        (_chapter_state(readable=False), False, S.RESUME_UNKNOWN),
         (_chapter_state(exists=False), False, S.RESUME_RUN),
     ],
 )
 def test_stage5_completion_validates_each_canonical_chapter(
-    tmp_path, monkeypatch, chapter, done, verdict,
+        tmp_path, monkeypatch, chapter, done, verdict,
 ):
     """文件名齐全不够：付费写作 SKIP 前必须逐章可读且 fresh。
 
     F8b 新链走 `str06.stage5.body` 的通用续跑判定：stale ⇒ REDO、
-    unknown ⇒ UNKNOWN、读不回 ⇒ REDO（跑过但合不上现契约）、缺 ⇒ RUN。
+    unknown/读不回 ⇒ UNKNOWN（付费层不静默重跑）、缺 ⇒ RUN。
     stage5 的具名 hook 面在此隔离（`required_artifacts` 置空），本用例只钉
     逐章校验这条路；hook 面与载体契约的纠缠在 F8b-3 报告登记。
+    ⚠ F8c：`stage5.review` 随旧链退役，`stage_state` 不再调 `review_status`。
     """
     novel_dir = tmp_path / '测试书_1'
     novel_dir.mkdir()
@@ -307,13 +310,6 @@ def test_stage5_completion_validates_each_canonical_chapter(
     monkeypatch.setattr(S, 'chapters_done', lambda _novel_dir: [1])
     monkeypatch.setattr(S, 'planned_chapters', lambda _store: [1])
     monkeypatch.setattr(S, 'artifact_state', lambda _store, _rel: chapter)
-
-    from novel.stages.stage5 import review as stage5_review
-    monkeypatch.setattr(
-        stage5_review, 'review_status',
-        lambda _ctx, _store: SimpleNamespace(
-            state='missing', reasons=('尚无 Review',), review_rel=None),
-    )
 
     stage = S.stage_state(store, 'stage5')
     assert stage.done is done
@@ -373,27 +369,26 @@ def test_stage5_issue_rows_do_not_change_the_summary_artifact_count():
 def test_stage5_live_invalid_is_never_swallowed_into_a_paid_rewrite():
     """live INVALID 不能被静默吞进付费重写。
 
-    F8b 新链的通用判定把「canonical stale 与 .INVALID 并存」判为 REDO 人工断点
-    （stale 分支先于 INVALID 分支）；canonical 仍 fresh 时则给出 0 LLM
-    `--revalidate` 提升路——两条路都不默认重新付费。
+    F8c 新链的 `str06.stage5.body` 判定把 INVALID 放在 stale 之前：盘上有被
+    闸门拦下的稿时，第一句话永远是 0 LLM 提升路（`--revalidate` 同轮重判），
+    「不能提升时再决定是否付费重写」——不论正式稿是 fresh 还是 stale，
+    都不会把未知/被拦下的稿静默折算成一次默认付费重跑。正式稿单纯 stale
+    （没有 INVALID）时的 REDO 人工断点由
+    `test_stale_body_chapter_is_redo_and_replays_through_the_canonical_strategy`
+    钉住。
     """
-    stale_invalid = _chapter_state(freshness='stale', invalid=True)
-    stage = StageState(
-        stage='stage5', artifacts=[stale_invalid], done=False, reviewable=True,
-        chapters_done=[1], review_state='missing', review_reasons=['尚无 Review'],
-    )
-    verdict, why = S.resume_verdict(_overview(stage), 'str06.stage5.body')
-    assert verdict == S.RESUME_REDO
-    assert 'stage5/body/ch01.txt' in why
-
-    fresh_invalid = _chapter_state(invalid=True)
-    stage = StageState(
-        stage='stage5', artifacts=[fresh_invalid], done=False, reviewable=True,
-        chapters_done=[1], review_state='missing', review_reasons=['尚无 Review'],
-    )
-    verdict, why = S.resume_verdict(_overview(stage), 'str06.stage5.body')
-    assert verdict == S.RESUME_RUN
-    assert '--revalidate' in why and '0 LLM' in why
+    for chapter in (_chapter_state(freshness='stale', invalid=True),
+                    _chapter_state(invalid=True)):
+        stage = StageState(
+            stage='stage5', artifacts=[chapter], done=False, reviewable=True,
+            chapters_done=[1],
+        )
+        verdict, why = S.resume_verdict(_overview(stage), 'str06.stage5.body')
+        assert verdict == S.RESUME_RUN
+        assert 'stage5/body/ch01.INVALID.txt' in why
+        assert '--revalidate' in why and '0 LLM' in why
+        # 先给免费路，且明说免费路走不通才谈付费——不是默认重跑。
+        assert why.index('--revalidate') < why.index('付费重写')
 
 
 def test_retired_stage5_draft_is_not_discovered_or_required(tmp_path):
@@ -409,7 +404,7 @@ def test_retired_stage5_draft_is_not_discovered_or_required(tmp_path):
 
     assert set(S.required_artifacts('stage5', novel_dir=novel_dir)) == {
         'stage5/hook/hook.txt', 'stage5/hook/receipt.json'}
-    assert S.stage5_legacy_paths(novel_dir) == []
+    assert S.legacy_stage5_paths(novel_dir) == []
     assert S.chapters_done(novel_dir) == []
 
 
@@ -459,7 +454,7 @@ def test_names_registration_routes_to_skip_or_free_revalidate_not_paid_rerun(inv
     """人物登记 current ⇒ SKIP 不重采付费人物；live INVALID ⇒ 0 LLM 提升路。
 
     旧链「称名投影免费物化」一族随 `stage2.characters`／投影产物退役：
-    新链 overview 不再携带投影行，`stage2_projection_recovery_needed` 恒 False，
+    新链 overview 不再携带投影行，那四个投影恢复谓词整体删除，
     恢复路由全部回到 `str06.stage2.names` 自己的通用判定。
     """
     stage = StageState(
@@ -475,8 +470,7 @@ def test_names_registration_routes_to_skip_or_free_revalidate_not_paid_rerun(inv
     )
     ov = _overview(stage)
 
-    assert not S.stage2_global_projection_blocked(ov)
-    assert not S.stage2_projection_recovery_needed(ov)
+    _assert_retired_projection_predicates()
     verdict, why = S.resume_verdict(ov, 'str06.stage2.names')
     if invalid:
         assert verdict == S.RESUME_RUN
@@ -485,6 +479,22 @@ def test_names_registration_routes_to_skip_or_free_revalidate_not_paid_rerun(inv
     else:
         assert verdict == S.RESUME_SKIP
         assert '--revalidate' not in why
+
+
+def _assert_retired_projection_predicates() -> None:
+    """F8c：旧链 stage2 投影恢复谓词随旧链整层退役，不得以任何形式复活。
+
+    它们只能由旧链节点（`stage2.characters`／`stage2.blueprint`／
+    `stage2.global`）写出，生产入口已按 `RETIRED_NODES` 拒识 ⇒ 新链盘面
+    不可能再产生那些状态；复活其中任何一个都是第二套恢复判据（I-16）。
+    """
+    for retired in (
+        'stage2_global_projection_blocked',
+        'stage2_projection_recovery_needed',
+        'stage2_blueprint_extraction_current',
+        'stage2_blueprint_invalid_recovery_needed',
+    ):
+        assert not hasattr(S, retired), f'{retired} 是旧链谓词，不应随 F8c 复活'
 
 
 def test_invalid_names_registration_keeps_only_zero_llm_revalidation_route():
@@ -499,7 +509,7 @@ def test_invalid_names_registration_keeps_only_zero_llm_revalidation_route():
     )
     ov = _overview(stage)
 
-    assert not S.stage2_projection_recovery_needed(ov)
+    _assert_retired_projection_predicates()
     verdict, why = S.resume_verdict(ov, 'str06.stage2.names')
     assert verdict == S.RESUME_RUN
     assert '--revalidate' in why and '0 LLM' in why
@@ -518,7 +528,7 @@ def test_stale_names_registration_is_not_disguised_as_free_recovery():
     )
     ov = _overview(stage)
 
-    assert not S.stage2_projection_recovery_needed(ov)
+    _assert_retired_projection_predicates()
     assert S.resume_verdict(ov, 'str06.stage2.names')[0] == S.RESUME_REDO
 
 
@@ -575,8 +585,8 @@ def test_source_invalid_is_not_excused_by_current_names_registration(
     )
     ov = _overview(stage)
 
+    _assert_retired_projection_predicates()
     assert S.resume_verdict(ov, 'str06.stage2.names')[0] == S.RESUME_SKIP
-    assert not S.stage2_blueprint_extraction_current(ov)
     verdict, why = S.resume_verdict(ov, 'str06.stage2.source')
     assert verdict == S.RESUME_RUN
     if formal_exists:
@@ -655,7 +665,7 @@ def test_live_blueprint_invalid_routes_only_to_zero_llm_revalidate(formal_exists
     )
     ov = _overview(stage)
 
-    assert not S.stage2_blueprint_invalid_recovery_needed(ov)
+    _assert_retired_projection_predicates()
     verdict, why = S.resume_verdict(ov, 'str06.stage2.source')
     assert verdict == S.RESUME_RUN
     if formal_exists:
@@ -676,7 +686,7 @@ def test_missing_blueprint_without_invalid_remains_a_normal_paid_run():
     )
     ov = _overview(stage)
 
-    assert not S.stage2_blueprint_invalid_recovery_needed(ov)
+    _assert_retired_projection_predicates()
     verdict, why = S.resume_verdict(ov, 'str06.stage2.source')
     assert verdict == S.RESUME_RUN
     assert '产物不在盘上' in why
@@ -749,12 +759,20 @@ def test_chapter_completion_is_not_mistaken_for_a_book_level_gate():
     assert 'stage5.review' in RETIRED_NODES
     verdict, why = S.resume_verdict(ov, 'str06.stage5.body')
     assert verdict == S.RESUME_SKIP, f'章全却没按章数判定：{why}'
-    assert '输出章' not in why
+    # 跳过理由必须是 body 自己的逐章措辞；退役的全书级 review 句式
+    # （「计划里的每个输出章都有成稿了」）不许借尸还魂。
+    assert 'canonical 成稿' in why
+    assert 'review' not in why.lower()
 
 
 def test_retired_review_rounds_do_not_drive_new_chain_skip():
-    """fresh Review 轮次与退役 review_state 只作历史展示，不驱动新链 SKIP：
-    body 按「计划章都有 canonical 成稿」判，hook 按自己的具名产物判。"""
+    """fresh Review 轮次与退役 review_state 只作历史展示，不驱动新链判定。
+
+    body 按「计划章都有 canonical 成稿」判：这里 `done=False` 且没有问题章、
+    缺章可归类 ⇒ UNKNOWN（判不了），**不是**被 review 轮次抬成的 SKIP；
+    hook 按自己的具名产物判 ⇒ SKIP。`rounds_done`／`review_state` 两格在
+    新链的续跑判定里一次都不出现（`stage5.review` 已在 `RETIRED_NODES`）。
+    """
     stage = _stage5(
         chapters=[1], rounds={'stage5.review': [1, 2]}, review_state='fresh')
     stage = stage.model_copy(update={
@@ -765,7 +783,7 @@ def test_retired_review_rounds_do_not_drive_new_chain_skip():
         ],
     })
     ov = _overview(stage)
-    assert S.resume_verdict(ov, 'str06.stage5.body')[0] == S.RESUME_SKIP
+    assert S.resume_verdict(ov, 'str06.stage5.body')[0] == S.RESUME_UNKNOWN
     assert S.resume_verdict(ov, 'str06.stage5.hook')[0] == S.RESUME_SKIP
 
 

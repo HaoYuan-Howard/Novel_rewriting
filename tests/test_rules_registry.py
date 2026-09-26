@@ -63,7 +63,7 @@ def test_every_registered_rule_id_need_is_satisfied_by_its_prompt_surface():
 
 def test_no_live_rule_declares_a_prompt_surface_after_the_cutover():
     """F8a：新链不注册 prompt surface——判据与模型下发面之间的 ID 空间对账随旧链
-    的 `needs_id_spaces` 声明一起退役（新链 prompt 由 `novel/stages/str06/prompts.py`
+    的 `needs_id_spaces` 声明一起退役（新链 prompt 由 `novel/stages/common.py`
     渲染，身份是请求身份而非注册表 surface）。`_validate` 的分支保留为防御：
     任何重新声明 `needs_id_spaces` 的判据必须先注册 surface，否则注册期即红。
     """

@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-test_agent.py —— executor 代跑的计划冻结、事件流、互斥与人工审批闸。
+test_agent.py —— executor 代跑的计划冻结、事件流、互斥与停点收口。
 
 【角色边界】受托 Commander reviewer 已退役（2026-09-15 用户裁决）：本文件只测
-现役 Supervisor 主路——ready executor token 的 canonical 子进程派发、登记过的
-deterministic recovery、交付终验，以及在人工审批闸停止 parent（exit 2 stopped，
-用户过闸后用原配置续跑）。历史 commander 行、席位账与 prompt 构造链已随角色
-删除；它们的只读解码由 test_commander_receipt_recovery / test_reviewer_* 承接。
+现役 Supervisor 主路——ready executor token 的 canonical 子进程派发、交付终验，
+以及在阻断面停止 parent（exit 2 stopped，按 waiting_on 对应恢复入口收口后用原
+配置续跑）。人工审批闸整层退役后**没有过闸动作**，续跑只经 continuation；
+fresh-epoch／deterministic recovery blocker 注册表已清零（通用滚 epoch 机制由
+``tests/test_agent_supervisor.py`` 覆盖）。历史 commander 行、席位账与 prompt
+构造链已随角色删除；它们的只读解码由 test_commander_receipt_recovery /
+test_reviewer_* 承接。
 
 【不在这里测的】真拉起 Claude/Codex CLI——那要账号与模型配额，归端到端实战。
 这里全部把 ``agent._run_step_argv`` 指向零成本 ``python -c`` 子进程。
@@ -145,11 +148,13 @@ def _wait_child(marker_root: Path, stem: str, *, exit_code=0) -> list[str]:
 
 
 def _dispatch(monkeypatch, tmp_root, *, node='stage0.remove',
-              blocking=False, exit_code=0, then='human_gate'):
+              blocking=False, exit_code=0, then='blocked'):
     """让 agent.start 走真实 Supervisor：首个 ready token 派发零成本子进程。
 
     * ``blocking=True``：子进程等到 ``<stem>.go`` 出现才退出（锁/暂停/停止类用例）。
-    * ``then='human_gate'``：动作完成后下一读面停在 stage0.approve 人工闸。
+    * ``then='blocked'``：动作完成后下一读面停在显式停点（阻断面 waiting_on），
+      parent 以 exit 2 stopped 收口——2026-09-15 全自动裁决后新链没有人工闸，
+      这里只验证「派发后重读撞上停点就停」这一现役形状。
     * ``then='pipeline_complete'``：动作完成后进入终验（monkeypatch 前提是
       调用方已替换 ``agent._finalize_run`` 或可接受真实 delivery 子进程）。
     返回 box：reads / dispatched(argv) / markers。
@@ -186,8 +191,9 @@ def _dispatch(monkeypatch, tmp_root, *, node='stage0.remove',
 
     monkeypatch.setattr(agent.operator, 'next_action_at_code', next_action)
     monkeypatch.setattr(agent, '_run_step_argv', step_argv)
-    monkeypatch.setattr(
-        agent, '_delivery_pause_note', lambda *_args, **_kwargs: None)
+    # ⚠ F8c：旧链 stage2.blueprint/stage4.plan「已保留 N 章 checkpoint」的交付
+    #   暂停注记（`agent._delivery_pause_note`）随旧链整层退役——`_run_token`
+    #   现在恒传 `pause_note=None`，harness 无需也不得再替它打桩。
     monkeypatch.setattr(
         agent, '_assess_delivery',
         lambda *_args, **_kwargs: AgentDeliveryOutcome(
@@ -685,7 +691,7 @@ def test_read_tolerates_a_truncated_last_line(base):
     assert len(agent.read_events(base)) == 1
 
 
-# ── 派发主路与人工审批闸 ────────────────────────────────────────────────
+# ── 派发主路与停点收口 ──────────────────────────────────────────────────
 
 def test_ready_token_runs_the_canonical_child_and_new_epochs_have_no_commander_columns(
         base, corpus, monkeypatch, tmp_path):
@@ -797,8 +803,6 @@ def test_stage0_auto_acceptance_feeds_the_run_frontier_and_continuation(
     monkeypatch.setattr(agent.operator, 'next_action_at_code', next_action)
     monkeypatch.setattr(agent, '_run_step_argv', step_argv)
     monkeypatch.setattr(
-        agent, '_delivery_pause_note', lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(
         agent, '_assess_delivery',
         lambda *_args, **_kwargs: AgentDeliveryOutcome(
             state='stopped', reason='首跑停点', checked_at=1))
@@ -837,7 +841,7 @@ def test_stage0_auto_acceptance_feeds_the_run_frontier_and_continuation(
 
 def test_unregistered_deterministic_blocker_keeps_epoch_and_parent_end_in_sync(
         base, corpus, monkeypatch):
-    """表外 blocker 同样落人工闸：epoch_closed 与 ended 的 2/stopped 不得串账。"""
+    """表外 blocker 同样停在人工恢复面：epoch_closed 与 ended 的 2/stopped 不得串账。"""
     monkeypatch.setattr(
         agent.operator, 'next_action_at_code',
         lambda *_args, **_kwargs: SimpleNamespace(
@@ -857,168 +861,82 @@ def test_unregistered_deterministic_blocker_keeps_epoch_and_parent_end_in_sync(
     assert '停在阻断面' in ended.outcome.reason
 
 
-def test_fresh_epoch_blocker_child_uses_fresh_epoch_as_producer_run(
-        base, corpus, monkeypatch, tmp_path):
-    """生产 Supervisor 主路先换 epoch、重读/CAS，再把新 session_run_id 交给子进程。
+def test_fresh_epoch_blocker_wiring_stays_retired(base, corpus, monkeypatch):
+    """⭐ agent 不再登记任何 fresh-epoch / deterministic recovery blocker。
 
-    Stage4 design action 的 typed 人工恢复已随四道闸退役（2026-09-15 全自动
-    裁决）；本组改用仍登记在 ``fresh_epoch_blockers`` 里的 stage5 reviewer
-    rewrite blocker 验证同一机制。
+    F8c：旧链 stage4.design/plan 的 ``producer_requires_new_run`` 预检与
+    stage5 reviewer rewrite 的 0-wire 补尾 waiter 随旧链退役——
+    ``ready_requires_fresh_epoch`` 与 ``fresh_epoch_blockers`` 清空、
+    ``run_blocked_action`` 不再提供（RunSupervisor 要求 callback 与非空
+    注册表成对出现，单留 callback 会违反该不变量）。通用滚 epoch 机制保留
+    在 RunSupervisor 自身，由 ``tests/test_agent_supervisor.py`` 覆盖。
     """
-    flags = ['--reviewer-rewrite', 'stage5/reviewer_rewrite_request.json']
-    marker = tmp_path / 'fresh-epoch-producer-run.txt'
-    reads: list[str] = []
-    runner_epochs: list[ExecutionEpoch] = []
-    live = {'recovered': False}
-    action = SimpleNamespace(
-        node='stage5.write', flags=flags,
-        waiting_on=agent.queue.WAITING_ON_STAGE5_REVIEWER_REWRITE,
-        action_sha256='a' * 64)
+    assert agent.queue.DETERMINISTIC_RECOVERY_WAITING_ON == frozenset()
+    captured: dict[str, object] = {}
+    real_supervisor = agent.RunSupervisor
 
-    def next_action(_base, _sid, *, code):
-        assert code == 'test-code-version'
-        reads.append('after' if live['recovered'] else 'before')
-        if live['recovered']:
-            return SimpleNamespace(
-                state='blocked', code_version=code,
-                action=SimpleNamespace(
-                    waiting_on='manual-after-stage4-action', action_sha256='e' * 64),
-                execution_token=None)
-        return SimpleNamespace(
-            state='blocked', code_version=code, action=action,
-            execution_token=None)
+    def capturing_supervisor(**kwargs):
+        captured.update(kwargs)
+        return real_supervisor(**kwargs)
 
-    monkeypatch.setattr(agent.operator, 'next_action_at_code', next_action)
-
-    def permit_from_next(current, node, actual_flags):
-        # 第一次只发现旧 epoch 的 action；换代后必须重读，才允许铸权。
-        assert reads == ['before', 'before']
-        assert current.action is action
-        assert node == 'stage5.write'
-        assert actual_flags == flags
-        return SimpleNamespace(node=node, flags=list(actual_flags))
-
+    monkeypatch.setattr(agent, 'RunSupervisor', capturing_supervisor)
     monkeypatch.setattr(
-        agent.execution_permit, 'permit_from_next', permit_from_next)
-
-    def run_step_argv(_base, _sid, epoch, permit, *, stem):
-        assert stem == 'recovery-stage5.write'
-        assert permit.node == 'stage5.write'
-        runner_epochs.append(epoch)
-        live['recovered'] = True
-        script = (
-            "from pathlib import Path; "
-            "from novel import prov; "
-            "prov.code_version=lambda: 'test-code-version'; "
-            "from novel.orchestrator import execution_context; "
-            f"ctx=execution_context.load_from_environment({base!r}, '42'); "
-            "assert ctx is not None; "
-            f"Path({str(marker)!r}).write_text(ctx.producer_run_id, "
-            "encoding='utf-8')"
-        )
-        return [sys.executable, '-c', script]
-
-    monkeypatch.setattr(agent, '_run_step_argv', run_step_argv)
-    monkeypatch.setattr(
-        agent, '_delivery_pause_note', lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(
-        agent, '_assess_delivery',
-        lambda *_args, **_kwargs: AgentDeliveryOutcome(
-            state='stopped', reason='Stage4 recovery 主路测试停点', checked_at=1))
-
+        agent.operator, 'next_action_at_code',
+        lambda *_args, **_kwargs: SimpleNamespace(
+            state='blocked', code_version='test-code-version',
+            action=SimpleNamespace(
+                waiting_on='stage0.approve', action_sha256='d' * 64),
+            execution_token=None))
     rec = agent.start(
         base, '42', authorized=True, egress_authorized=True, profiles=_PROFILES)
-    assert agent.wait(rec.run_id, 30)
+    assert agent.wait(rec.run_id, 15)
 
-    events = [row for row in agent.read_events(base) if row.run_id == rec.run_id]
-    opened = [row.epoch for row in events if row.kind == 'epoch_opened']
-    assert len(opened) == 2 and all(epoch is not None for epoch in opened)
-    initial, fresh = opened
-    assert initial.session_run_id != fresh.session_run_id
-    assert fresh.reason == 'continue'
-    assert fresh.argv is None and fresh.prompt_sha256 is None
-    assert runner_epochs == [fresh]
-    assert marker.read_text(encoding='utf-8') == fresh.session_run_id
-    assert reads == ['before', 'before', 'after']
-    assert agent_session_audit.read_events(base) == []
+    assert captured['ready_requires_fresh_epoch'] is None
+    assert captured['fresh_epoch_blockers'] == frozenset()
+    assert captured['deterministic_blockers'] == frozenset()
+    assert captured['run_blocked_action'] is None
 
 
-def test_fresh_epoch_permit_code_drift_rolls_and_freshens_new_exact_action(
+def test_retired_stage5_reviewer_rewrite_blocker_stops_without_dispatch(
         base, corpus, monkeypatch):
-    """permit 的 pre-Popen CAS 漂移滚 code_change；H1/H2 各自只建一次 fresh 边界。"""
-    code = {'value': 'stage4-code-1'}
-    live = {'recovered': False}
-    h1, h2 = '1' * 64, '2' * 64
-    reads: list[tuple[str, str]] = []
-    permit_attempts: list[str] = []
-    runner_epochs: list[ExecutionEpoch] = []
-    monkeypatch.setattr(agent.prov, 'code_version', lambda: code['value'])
+    """已退役的 reviewer-rewrite waiter 现在只是表外 blocker：停在人工恢复面。
 
-    def next_action(_base, _sid, *, code: str):
-        if live['recovered']:
-            reads.append((code, 'terminal'))
-            return SimpleNamespace(
-                state='blocked', code_version=code,
-                action=SimpleNamespace(
-                    waiting_on='manual-after-stage4-drift', action_sha256='e' * 64),
-                execution_token=None)
-        action_sha = h1 if code == 'stage4-code-1' else h2
-        reads.append((code, action_sha))
-        return SimpleNamespace(
-            state='blocked', code_version=code,
+    原用例验证「fresh epoch 换代后把新 session_run_id 交给子进程」；该派发
+    面随旧链补尾 waiter 退役，改守现役行为：这个 waiting_on 不再派发任何
+    子进程、不再滚 epoch，epoch_closed 与 ended 的 2/stopped 同步落账。
+    """
+    dispatched: list[tuple] = []
+    monkeypatch.setattr(
+        agent.operator, 'next_action_at_code',
+        lambda *_args, **_kwargs: SimpleNamespace(
+            state='blocked', code_version='test-code-version',
             action=SimpleNamespace(
                 node='stage5.write',
-                flags=['--reviewer-rewrite', 'stage5/reviewer_rewrite_request.json'],
+                flags=['--reviewer-rewrite',
+                       'stage5/reviewer_rewrite_request.json'],
                 waiting_on=agent.queue.WAITING_ON_STAGE5_REVIEWER_REWRITE,
-                action_sha256=action_sha),
-            execution_token=None)
+                action_sha256='a' * 64),
+            execution_token=None))
 
-    monkeypatch.setattr(agent.operator, 'next_action_at_code', next_action)
-
-    def permit_from_next(current, node, flags):
-        del node
-        permit_attempts.append(current.action.action_sha256)
-        if current.action.action_sha256 == h1:
-            code['value'] = 'stage4-code-2'
-            raise RuntimeError('模拟 permit CAS 期间代码漂移')
-        return SimpleNamespace(node='stage5.write', flags=list(flags))
-
-    monkeypatch.setattr(
-        agent.execution_permit, 'permit_from_next', permit_from_next)
-
-    def run_step_argv(_base, _sid, epoch, _permit, *, stem):
-        assert stem == 'recovery-stage5.write'
-        runner_epochs.append(epoch)
-        live['recovered'] = True
+    def run_step_argv(_base, _sid, epoch, permit, *, stem, **_kwargs):
+        dispatched.append((epoch, permit, stem))
         return [sys.executable, '-c', 'raise SystemExit(0)']
 
     monkeypatch.setattr(agent, '_run_step_argv', run_step_argv)
-    monkeypatch.setattr(
-        agent, '_delivery_pause_note', lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(
-        agent, '_assess_delivery',
-        lambda *_args, **_kwargs: AgentDeliveryOutcome(
-            state='stopped', reason='Stage4 drift 测试停点', checked_at=1))
 
     rec = agent.start(
         base, '42', authorized=True, egress_authorized=True, profiles=_PROFILES)
-    assert agent.wait(rec.run_id, 30)
+    assert agent.wait(rec.run_id, 15)
 
+    assert dispatched == [], '表外 blocker 不得派发任何执行'
     events = [row for row in agent.read_events(base) if row.run_id == rec.run_id]
-    epochs = [row.epoch for row in events if row.kind == 'epoch_opened']
-    assert [epoch.reason for epoch in epochs] == [
-        'initial', 'continue', 'code_change', 'continue']
-    assert len({epoch.session_run_id for epoch in epochs}) == 4
-    assert permit_attempts == [h1, h2]
-    assert reads == [
-        ('stage4-code-1', h1),
-        ('stage4-code-1', h1),
-        ('stage4-code-2', h2),
-        ('stage4-code-2', h2),
-        ('stage4-code-2', 'terminal'),
-    ]
-    assert len(runner_epochs) == 1
-    assert runner_epochs[0] == epochs[-1]
+    opened = [row for row in events if row.kind == 'epoch_opened']
+    assert len(opened) == 1, '没有登记的恢复动作 ⇒ 不滚 fresh epoch'
+    [closed] = [row for row in events if row.kind == 'epoch_closed']
+    [ended] = [row for row in events if row.kind == 'ended']
+    assert closed.exit_code == ended.exit_code == 2
+    assert ended.outcome is not None and ended.outcome.state == 'stopped'
+    assert agent.queue.WAITING_ON_STAGE5_REVIEWER_REWRITE in ended.outcome.reason
     assert agent_session_audit.read_events(base) == []
 
 
@@ -1702,42 +1620,28 @@ def test_partial_gate_open_cleanup_failure_preserves_original_and_releases_write
         actual_mark_drained(base, gate_id)
 
 
-def test_delivery_reports_stage2_semantic_unreviewed_as_disclosure_not_failure(
-        base, monkeypatch):
-    """语义未审随交付如实披露；证明不了的一律不倒成 ready。"""
+def test_delivery_assessment_is_retired_and_never_claims_ready(base, monkeypatch):
+    """旧链交付合格判定随旧链退役：语义未审面只剩退役理由，绝不倒成 ready。
+
+    原用例验证 Stage2 语义未审以 `ready_with_disclosures` 如实披露；F8c 后
+    `delivery.assess` 不再读 Stage4 机械准入、成书或待办面，代码指纹同一性
+    之外一律回答 `unknown` 并指名新链就绪记录的落点
+    （`str06.stage7.assemble` 的 delivery manifest，I-42）。
+    """
+    from novel import prov
     from novel.orchestrator import delivery
-    from novel.orchestrator import mechanical_admission as admission
 
-    novel_dir = Path(base) / 'FQ_隔离交付_77'
-    novel_dir.mkdir()
+    monkeypatch.setattr(prov, 'code_version', lambda: 'same-code')
+    outcome = delivery.assess(base, '77', start_code_version='same-code')
+    assert outcome.state == 'unknown', outcome
+    assert '旧链交付合格判定随旧链退役' in outcome.reason
+    assert 'delivery_manifest.json' in outcome.reason
 
-    class BlueprintStore:
-        @staticmethod
-        def schema_version(_rel):
-            return 7
+    # 旧链坐标（base+sid 的书目录）定位不到候选根，下载面同批显式拒绝。
+    from novel.errors import BlockingFindingsUnresolved
 
-        @staticmethod
-        def read_own(_model, _rel, **_kwargs):
-            return SimpleNamespace(), {}
-
-    monkeypatch.setattr(delivery.prov, 'code_version', lambda: 'same-code')
-    monkeypatch.setattr(
-        delivery.paths, 'resolve_novel_dir', lambda _base, _sid: novel_dir)
-    monkeypatch.setattr(delivery, 'ArtifactStore', lambda _ctx: BlueprintStore())
-    gate = admission.AdmissionCheck(
-        'stage4', True, semantic_unreviewed=True,
-        disclosures=('plot_semantics: 完整剧情、归因与因果不能由形状检查证明',))
-    monkeypatch.setattr(delivery.admission, 'stage4_ready', lambda _b, _s: gate)
-    monkeypatch.setattr(
-        delivery.assemble, 'read_current_book', lambda *_args, **_kwargs: '成书')
-    monkeypatch.setattr(
-        delivery, 'inbox_view', lambda _base, _sid: SimpleNamespace(items=[]))
-
-    outcome = delivery.assess(
-        base, '77', start_code_version='same-code')
-    assert outcome.state == 'ready_with_disclosures'
-    assert 'plot_semantics' in outcome.reason
-    assert admission.SEMANTIC_UNREVIEWED_NOTE in outcome.reason
+    with pytest.raises(BlockingFindingsUnresolved, match='旧链交付合格判定'):
+        delivery.read_deliverable_book(base, '77')
 
 
 def test_an_unknown_code_fingerprint_is_never_read_as_the_same_code(base, monkeypatch):

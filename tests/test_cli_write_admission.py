@@ -15,30 +15,23 @@ from novel.orchestrator import admission, beacon, write_admission
 C = importlib.import_module('novel.cli.main')
 
 
-def test_approval_read_stays_read_only_but_mutation_holds_generic_claim(
-        monkeypatch, tmp_path):
-    admitted = []
+def test_approval_subcommand_is_retired_at_the_cli_entry(monkeypatch, tmp_path):
+    """F8b-3：`approval` 子命令随人工闸整层退役——入口即拒，不留写面。
 
-    @contextmanager
-    def scope(base, sid, *, operation, details):
-        admitted.append((base, sid, operation, details))
-        yield object()
-
-    monkeypatch.setattr(write_admission, 'operation_scope', scope)
-    monkeypatch.setattr(C, '_cmd_approval_admitted', lambda _a: 17)
-
-    read = SimpleNamespace(
-        approval_action='show', base=str(tmp_path), sid='42')
-    assert C._cmd_approval(read) == 17
-    assert admitted == []
-
-    write = SimpleNamespace(
-        approval_action='gate', gate='s2', base=str(tmp_path), sid='42')
-    assert C._cmd_approval(write) == 17
-    assert admitted == [(
-        str(tmp_path), '42', 'approval-gate',
-        {'action': 'gate', 'gate': 's2'},
-    )]
+    （原用例钉「审批读只读／写持 generic claim」；该写面（`_cmd_approval` 与
+    `_cmd_approval_admitted`）已删。同族不变量改钉两半：argparse 面上没有这个
+    子命令（exit 2 invalid choice），模块里也没有这两个函数（S-05 不复活）；
+    存量 v9 账只读解码在 `novel/orchestrator/approvals.py`，HTTP/CLI 都不再写。）
+    """
+    with pytest.raises(SystemExit) as stopped:
+        C.main(['approval', 'gate', '--gate', 's2', '--base', str(tmp_path)])
+    assert stopped.value.code == 2
+    assert not hasattr(C, '_cmd_approval')
+    assert not hasattr(C, '_cmd_approval_admitted')
+    registered = {name
+                  for action in C._parser()._subparsers._group_actions
+                  for name in getattr(action, 'choices', {})}
+    assert 'approval' not in registered, 'approval 子命令复活了'
 
 
 def test_response_repair_holds_generic_claim_without_hashing_reason(

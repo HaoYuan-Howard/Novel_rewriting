@@ -14,26 +14,26 @@ from copy import deepcopy
 
 import pytest
 
-from contracts.schema.str06.hook import HookConstraints
+from contracts.schema.hook import HookConstraints
 from novel.llm.ledger import CostLedger, ledger_path
-from novel.llm.str06_requests import PaidRequestSession
+from novel.llm.paid_requests import PaidRequestSession
 from novel.llm.transport import ChatRequest, ChatResponse
 from novel.store import Str06Repository
-from novel.stages.str06.book_ir import allocate_chapter_budgets, compile_writer_book_ir
-from novel.stages.str06.body_checks import (
+from novel.stages.stage4.book_ir import allocate_chapter_budgets, compile_writer_book_ir
+from novel.stages.stage5.body_checks import (
     chapter_surface_releases, chapter_withheld_literals, validate_chapter_prose,
 )
-from novel.stages.str06.body_writer import (
+from novel.stages.stage5.body import (
     AnsweredText, book_ir_sha256, prior_body_text, sha256_text, write_chapter,
 )
-from novel.stages.str06.render import render_chapter_packet
-from novel.stages.str06.assembly import verify_chapter_chain
-from tools.str06_workflow import run_workflow
+from novel.stages.common import render_chapter_packet
+from novel.stages.stage7.assembly import verify_chapter_chain
+from novel.stages.chain import run_workflow
 from tests.str06_facilities import make_context
 from tests.test_str06_hook import _body_wire, _characters, _full_chain_wires
-from novel.stages.str06.design_compile import assemble_body_design
-from novel.stages.str06.compile import compile_execution_plan
-from novel.stages.str06.grounding import assemble_binding
+from novel.stages.stage4.design import assemble_body_design
+from novel.stages.stage4.compile import compile_execution_plan
+from novel.stages.stage4.grounding import assemble_binding
 
 H64 = 'a' * 64
 
@@ -48,10 +48,10 @@ def _green_design():
 
 
 def _green_binding(body):
-    from contracts.schema.str06.grounding import (
+    from contracts.schema.grounding import (
         PreserveCheckpoint, SourceLineage, SourceObligation,
     )
-    from contracts.schema.str06.policy import PreserveKind
+    from contracts.schema.policy import PreserveKind
     ob = SourceObligation(
         obligation_id='ob01', kind=PreserveKind.EVENT_CORE,
         statement='苏芸娘嫁入陆家且夫君立下旧约',
@@ -215,7 +215,7 @@ def _outcome_kw(band=(0.6, 1.3), total=200):
 
 
 def _answered(text, finish_reason=None, identity='id'):
-    from novel.stages.str06.body_writer import AnsweredText
+    from novel.stages.stage5.body import AnsweredText
     return AnsweredText(text=text, finish_reason=finish_reason, identity=identity,
                         cached=False)
 
@@ -365,7 +365,7 @@ def _make_session(tmp_path, wires, ceiling=None):
 
 
 def _fake_ask(session):
-    from novel.stages.str06.prompts import SYS
+    from novel.stages.common import SYS
     def ask(owner, prompt, validate):
         request = ChatRequest(model='fake', system=SYS, user=prompt,
                               reasoning_effort='high', thinking=True,
@@ -390,7 +390,7 @@ def _fake_body(session):
                               reasoning_effort='high', thinking=True,
                               json_mode=False, max_tokens=4000)
         answered = session.ask_answered(owner, request)
-        from novel.stages.str06.body_writer import AnsweredText
+        from novel.stages.stage5.body import AnsweredText
         return AnsweredText(answered.text, answered.finish_reason,
                             answered.identity, answered.cached)
     return ask_body

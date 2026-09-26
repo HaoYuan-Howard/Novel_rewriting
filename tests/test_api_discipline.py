@@ -29,7 +29,6 @@ from __future__ import annotations
 
 import ast
 import os
-from types import SimpleNamespace
 
 import pytest
 
@@ -74,38 +73,21 @@ def _code_strings(tree: ast.AST) -> list[ast.Constant]:
 
 
 def test_every_approval_post_holds_write_admission_and_gets_stay_read_only():
-    """审批 currentness+write 是一个窗口；纯读 GET 不能顺手取得 writer。"""
+    """审批写面已整体退役；本条改钉「不复活」+ 现役写准入的落点。
+
+    F8b-3：`novel/api/routes/approvals.py` 随人工闸整层删除——审批 currentness+write
+    那个窗口不复存在，存量 v9 账只由 `novel/orchestrator/approvals.py` 做只读解码
+    （CLI/operator 面，HTTP 上一条 approvals 端点都不剩）。
+    · 原左半（POST 持写准入）：现役 API 层写准入 = CSRF 中间件 + 书级作业锁，
+      逐条 POST 的闸门由 `tests/test_api_http.py::test_every_post_route_is_behind_the_gate`
+      与 `test_job_conflict_maps_and_returns_409` 盯着；
+    · 原右半（GET 只读）：由 `tests/test_api_http.py::test_the_service_writes_nothing_at_all`
+      逐字节盯着。
+    """
     path = os.path.join(API_DIR, 'routes', 'approvals.py')
-    tree = ast.parse(open(path, encoding='utf-8').read(), filename=path)
-
-    def is_route(function: ast.FunctionDef, method: str) -> bool:
-        return any(
-            isinstance(decorator, ast.Call)
-            and isinstance(decorator.func, ast.Attribute)
-            and decorator.func.attr == method
-            and isinstance(decorator.func.value, ast.Name)
-            and decorator.func.value.id == 'router'
-            for decorator in function.decorator_list
-        )
-
-    functions = [
-        node for node in tree.body if isinstance(node, ast.FunctionDef)]
-    posts = [function for function in functions if is_route(function, 'post')]
-    gets = [function for function in functions if is_route(function, 'get')]
-    assert posts and gets, 'approvals 路由扫描为空，守卫没有查到真实入口'
-
-    def scope_calls(function: ast.FunctionDef) -> list[ast.Call]:
-        return [
-            node for node in ast.walk(function)
-            if isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Name)
-            and node.func.id == 'operation_scope'
-        ]
-
-    assert all(len(scope_calls(function)) == 1 for function in posts), {
-        function.name: len(scope_calls(function)) for function in posts}
-    assert all(not scope_calls(function) for function in gets), {
-        function.name: len(scope_calls(function)) for function in gets}
+    assert not os.path.exists(path), (
+        '审批写面复活了（S-05）：人工闸退役后 HTTP 不再发布任何 approvals 端点；'
+        '存量账只读解码在 novel/orchestrator/approvals.py')
 
 
 # ───────────────────────── `R-11.1` 只绑回环 ─────────────────────────
@@ -260,12 +242,34 @@ def test_unknown_freshness_actually_happens_on_the_wire():
         box.close()
 
 
+def _frontend_sources():
+    """现役前端全部 TypeScript 源（F8c 后旧链读屏已删，扫描面就是整个 web/src）。"""
+    root = os.path.join(ROOT, 'web', 'src')
+    for dirpath, dirs, files in os.walk(root):
+        dirs[:] = [d for d in dirs if d != '__pycache__']
+        for f in sorted(files):
+            if f.endswith(('.ts', '.tsx')):
+                yield os.path.join(dirpath, f)
+
+
 def test_frontend_does_not_rejudge_anchor_coverage():
-    source = open(os.path.join(
-        ROOT, 'web', 'src', 'screens', 'stage5', 'useStage5Screen.ts'),
-        encoding='utf-8').read()
-    assert 'coverage <' not in source and 'coverage >' not in source
-    assert 'coverage_state' in source
+    """`R-11.4`：锚点覆盖率是服务端判定，前端不做比较、不出档。
+
+    F8c 前守卫只扫 stage5 屏的 hook（那里消费 `coverage_state`）；旧链读屏整层
+    退役后改成扫**整个现役前端**——覆盖面更宽：任何一个屏/组件重新拿锚点覆盖率
+    做比较或自行出档，都当场红。被删的是「重算」，不是「展示」。
+    """
+    import re
+
+    offenders = []
+    for path in _frontend_sources():
+        rel = os.path.relpath(path, ROOT).replace('\\', '/')
+        source = open(path, encoding='utf-8').read()
+        if re.search(r'\bcoverage\s*[<>]=?', source):
+            offenders.append(f'{rel}: 在对锚点覆盖率做比较')
+        if 'coverage_state' in source:
+            offenders.append(f'{rel}: 自行消费覆盖率出档态')
+    assert not offenders, '前端重算了锚点覆盖率：\n' + '\n'.join(offenders)
 
 
 def test_retired_depth_screen_and_public_fields_do_not_survive():
@@ -282,32 +286,40 @@ def test_retired_depth_screen_and_public_fields_do_not_survive():
 
 
 def test_frontend_does_not_rejudge_scene_budget_band():
-    """`R-11.4` 的第二处：前端只展示预算，出档判定在 `/check/stage4`。
+    """`R-11.4` 的第二处：前端只展示预算，出档判定归服务端机械验。
 
-    Stage4 v4 已删除逐场源字数，场级 API 既没有分母也没有判定；章级预算带仍由
-    后端按当前 Stage2 输入计算。守卫同时钉住「不重算」与「逐场分母不复活」。
+    Stage4 v4 已删除逐场源字数，场级 API 既没有分母也没有判定；新链的章级篇幅带
+    判据是 `body_length_band`（stage5 章级机械验）。F8c 前守卫盯 Stage4 屏的 hook
+    与屏幕；旧链读屏整层退役后改盯**现役预算展示面**（候选链只读监控的
+    WriterBookIR 章预算），判据不变：不重算、逐场分母不复活、预算展示本身还在。
     """
     import re
 
-    hook = open(os.path.join(
-        ROOT, 'web', 'src', 'screens', 'stage4', 'useStage4Screen.ts'),
-        encoding='utf-8').read()
-    screen = open(os.path.join(
-        ROOT, 'web', 'src', 'screens', 'stage4', 'Stage4Screen.tsx'),
-        encoding='utf-8').read()
+    targets = []
+    for rel in ('web/src/screens/str06/Str06MonitorScreen.tsx',
+                'web/src/hooks/useStr06Monitor.ts',
+                'web/src/types/str06.ts'):
+        path = os.path.join(ROOT, rel)
+        if not os.path.exists(path):
+            continue
+        source = open(path, encoding='utf-8').read()
+        assert source.strip(), f'{rel} 读成空串——守卫读不到就等于没在查'
+        targets.append((rel, source))
+    assert targets, '现役预算展示面一个都不在盘上——守卫失去扫描对象'
 
     # ① 前端没有出档阈值，也没有对比值做比较
-    for name, source in (('useStage4Screen.ts', hook), ('Stage4Screen.tsx', screen)):
-        assert source.strip(), f'{name} 读成空串——守卫读不到就等于没在查'
+    offenders = []
+    for rel, source in targets:
         for literal in ('0.9', '1.1'):
-            assert literal not in re.sub(r'(?:gridTemplateColumns|ratio)="[^"]*"', '', source), \
-                    f'{name} 里出现了场级出档阈值 {literal}'
-        assert not re.search(r'\braw\s*[<>]|\bratio\s*[<>]', source), \
-            f'{name} 在对预算/源文比值做比较——那是判定，不是显示'
+            if literal in re.sub(r'(?:gridTemplateColumns|ratio)[=:]\s*["\'][^"\']*["\']', '', source):
+                offenders.append(f'{rel}: 出现了场级出档阈值 {literal}')
+        if re.search(r'\b(?:raw|ratio)\s*[<>]=?', source):
+            offenders.append(f'{rel}: 在对预算/源文比值做比较——那是判定，不是显示')
+    assert not offenders, '前端自行出档：\n' + '\n'.join(offenders)
 
     # ② 守卫的守卫：预算展示仍在；被删的是逐场分母与比较，不是预算本身。
-    assert 'budget_chars' in hook, 'Stage4 页面已不再消费预算，守卫失去服务对象'
-    assert 'plan.budget_chars /' not in hook and '/ source' not in hook
+    assert any('length_budget' in source for _, source in targets), \
+        '前端已不再消费章预算，守卫失去服务对象'
 
     # ③ 反向——**问生产落点**，不重拼一份信念：判定在服务端，而且只在章级。
     # （budget_band 旧判据随旧链退役；新链的章级篇幅带判据是 body_length_band
@@ -405,17 +417,14 @@ def test_job_conflict_maps_and_returns_409(monkeypatch):
             '/api/queues/{queue_id}/resume',
             '/api/queues/{queue_id}/items/{item_index}/cancel',
         '/api/novels/{sid}/stage1/partition',
-        '/api/novels/{sid}/approvals/gate/{key}',
-        '/api/novels/{sid}/approvals/backfill',
-        # Stage4 design/structure 与 Stage5 writing/stage5 闭合回执的人工
-        # 提交端点已随 2026-09-15 全自动裁决（批次 B2/B3）退役。
-        '/api/novels/{sid}/approvals/reset',
         '/api/upload',
         # 人工写回路由族（review／stage2 三族／stage7 残留采纳）已随 F8b-2
         # 全自动单模式整族退役：edits.py 只剩空 router，POST 面不再有它们。
         # （stage5 trim retain-pretrim 两端点已随批次 B3 trim 三选一退役。）
         # Prepare 独立写面（edit/review）与 stage7.approve 已随批次 B4 退役。
         # analyze-draft 人工提交面已随批次 C 退役（POST 405；内部 CLI 保留）。
+        # F8b-3：approvals 写面（gate/backfill/reset）随人工闸整层退役，
+        # HTTP 上一条 approvals 端点都不剩（存量账只读解码在 orchestrator 层）。
         # agent 代跑（行为在 `tests/test_api_agent.py`；preview 是 0 成本但仍是 POST）
         '/api/agent/runs',
         '/api/agent/runs/preview',

@@ -17,7 +17,7 @@ import pytest
 from contracts.schema.api import PreviewRequest
 from contracts.schema import encode_artifact
 from contracts.schema.stage0 import RemovedSegment
-from contracts.schema.stage1 import MainText
+from contracts.schema.stage1 import MainText, MainTextSection
 from novel import paths as novel_paths
 from novel.core.ingest import decode_source_bytes
 from novel.errors import (
@@ -30,7 +30,6 @@ from novel.errors import (
     TooFewChapters,
 )
 from novel.orchestrator.jobs import plan_start
-from novel.orchestrator import approvals
 from novel.orchestrator.nodes import build_steps
 from novel.store import ArtifactStore
 from novel.views import ingest as ingest_views
@@ -203,27 +202,33 @@ def test_stage1_cli_propagates_a_written_check_failure(work, capsys):
     assert all((novel_dir / rel).is_file() for rel in (MAIN_TEXT, HOOK_COPY))
 
 
-def test_s1_approval_binds_main_and_hook_and_hook_tampering_revokes_it(work):
-    """s1 人工决定绑定两份材料；只改 hook 也必须立刻撤销。"""
+def test_hook_tampering_turns_the_stage1_check_red(work):
+    """Stage1 两份材料的当前性由机械审计钉死：只改 hook 也必须翻红。
+
+    （F8b-3：旧「s1 人工决定绑定两份材料、篡改即撤销 gate」的审批面随人工闸
+    整层退役——`approvals.approve_gate`／`get` 已删；同族不变量现在由
+    `stage1.partition --check-only` 的机械审计承担：hook_copy.text 必须逐字
+    等于 clean_text 首标记前的前缀，改一个字节复检就红，不靠人记得去撤。）
+    """
     source = _source(work, 'FQ_s1_proof_9901.txt', 'end_marker_then_fanwai')
     base = work / 'Output'
     novel_dir, _removal, _initial = run_source(source, base)
-    approvals.approve_gate(base, '9901', 's0')
     run_partition(_context(novel_dir, 'stage1.partition'))
 
-    approvals.approve_gate(base, '9901', 's1')
-    current = approvals.get(base, '9901')
-    assert current.gate['s1']
-    raw_record = json.loads(approvals._path(base, '9901').read_text(encoding='utf-8'))
-    assert set(raw_record['gate_proofs']['s1']['artifacts']) == {MAIN_TEXT, HOOK_COPY}
+    ctx = _context(novel_dir, 'stage1.partition')
+    assert stage1_checks.run_check_only(ctx).passed
 
     hook_path = novel_dir / HOOK_COPY
-    hook_payload = json.loads(hook_path.read_text(encoding='utf-8'))['text'] + '篡改'
+    payload = json.loads(hook_path.read_text(encoding='utf-8'))
+    payload['text'] = payload['text'] + '篡改'
     hook_path.write_text(
-        json.dumps(encode_artifact(HOOK_COPY, {'text': hook_payload}), ensure_ascii=False),
+        json.dumps(encode_artifact(HOOK_COPY, payload), ensure_ascii=False),
         encoding='utf-8', newline='',
     )
-    assert not approvals.get(base, '9901').gate['s1']
+
+    tampered = stage1_checks.run_check_only(ctx)
+    assert not tampered.passed, 'hook 被改过而复检仍绿——机械审计没在查材料当前性'
+    assert any(line.status == 'hit' for line in tampered.rules)
 
 
 def test_tampered_live_clean_text_refuses_the_read_view(work):
@@ -326,22 +331,22 @@ def test_new_book_plan_has_null_sid_then_a_derived_sid_check(work):
 
 
 def test_prompts_only_expose_the_reading_ordinal():
-    """原文章号是 Stage1 人工诊断，不进入任何模型输入。"""
+    """原文章号是 Stage1 人工诊断，不进入任何模型输入。
+
+    （F8b-3：旧链 Stage2 Global 请求构造器随旧链退役；不变量改钉在两处仍
+    现役的落点上：① `MainText` schema 只有 `chapter_ordinal`——原文章号结构上
+    进不了模型材料；② 逐字进 prompt 的 `render_book` 两个串只写阅读序。）
+    """
     from novel.core.text import render_book
-    from novel.stages.stage2.extract import build_global_request
-    from novel.stages.stage2.knowledge.contract import active_contract
 
     main = MainText.model_validate([
         {'chapter_ordinal': i + 1, 'text': f'第{i + 1}段正文。'}
         for i in range(3)
     ])
-    raw = main.model_dump(mode='json')
+    assert set(MainTextSection.model_fields) == {'chapter_ordinal', 'text'}, (
+        'MainText 出现了阅读序之外的章节字段——原文章号没有结构位置进模型材料')
     body, index = render_book(main)
-    system, user, _candidates = build_global_request(
-        '测试书', raw, active_contract(),
-        character_reference={'char_001': {'canonical': '甲', 'surfaces': ['甲'], 'role': '来信者'}},
-        agent_envelope=True)
-    rendered = '\n'.join((body, index, system, user))
+    rendered = '\n'.join((body, index))
     assert '原文标号' not in rendered and '原文标记' not in rendered
     assert all(f'阅读序第{i}章' in rendered for i in range(1, 4))
 
@@ -629,14 +634,18 @@ def test_missing_transform_and_admitted_states_are_not_conflated(work):
 
 
 def test_execution_eligibility_has_exactly_one_home():
-    """纪律：消费方必须 import 同一个谓词，不许各自复述条件。"""
+    """纪律：消费方必须 import 同一个谓词，不许各自复述条件。
+
+    （F8b-3：`novel/orchestrator/approvals.py` 随人工闸退役只剩存量账只读解码，
+    不再是 stage0 执行资格的消费方——它从 consumers 表移除正是退役的证据；
+    写入口若复活，`tests/test_approvals.py` 的不复活守卫先红。）
+    """
     from pathlib import Path as _Path
 
     consumers = [
         'novel/stages/stage1/partition.py',
         'novel/stages/stage0/checks.py',
         'novel/views/ingest.py',
-        'novel/orchestrator/approvals.py',
     ]
     for rel in consumers:
         text = (_Path(rel)).read_text(encoding='utf-8')
@@ -644,6 +653,11 @@ def test_execution_eligibility_has_exactly_one_home():
             f'{rel} 复述了审批条件——改用 '
             f'novel/stages/stage0/eligibility.py::is_stage0_executable')
         assert 'eligibility' in text, f'{rel} 应经 eligibility 落点判执行资格'
+
+    approvals_text = (_Path('novel/orchestrator/approvals.py')).read_text(encoding='utf-8')
+    assert 'eligibility' not in approvals_text, (
+        'approvals 已只剩存量账只读解码，不该再判 stage0 执行资格；'
+        '重新引入就是把已退役的人工闸接回只读模块')
 
     queue_text = (_Path('novel/orchestrator/queue.py')).read_text(encoding='utf-8')
     assert 'eligibility' not in queue_text, (

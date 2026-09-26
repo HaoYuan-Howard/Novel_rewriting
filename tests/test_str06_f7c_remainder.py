@@ -26,19 +26,19 @@ import json
 
 import pytest
 
-from contracts.schema.str06.execution import EffectDomain
-from contracts.schema.str06.hook import HookConstraints
+from contracts.schema.execution import EffectDomain
+from contracts.schema.hook import HookConstraints
 from novel.llm.ledger import CostLedger, ledger_path, read_cost_snapshot
-from novel.llm.str06_requests import PaidRequestSession, PurchaseRequired, digest
-from novel.stages.str06.body_checks import (
+from novel.llm.paid_requests import PaidRequestSession, PurchaseRequired, digest
+from novel.stages.stage5.body_checks import (
     MAX_BODY_REWRITES, chapter_surface_releases, chapter_withheld_literals,
 )
-from novel.stages.str06.body_writer import AnsweredText, write_chapter
-from novel.stages.str06.book_ir import compile_writer_book_ir
-from novel.stages.str06.compile import compile_execution_plan
-from novel.stages.str06.design_compile import assemble_body_design
-from novel.stages.str06.fold import fold_accepted_prefix
-from novel.stages.str06.project import surface_engine_release
+from novel.stages.stage5.body import AnsweredText, write_chapter
+from novel.stages.stage4.book_ir import compile_writer_book_ir
+from novel.stages.stage4.compile import compile_execution_plan
+from novel.stages.stage4.design import assemble_body_design
+from novel.stages.stage4.fold import fold_accepted_prefix
+from novel.stages.common import surface_engine_release
 from novel.store import Str06Repository
 from novel.work_units import WorkUnitBudget, read_book_budget
 from tests.str06_facilities import make_context
@@ -47,7 +47,7 @@ from tests.test_str06_body import (
 )
 from tests.test_str06_f7a_wiring import _candidate, _request, _session, _source_root, _Transport
 from tests.test_str06_hook import _body_wire, _characters, _full_chain_wires
-from tools.str06_workflow import run_workflow
+from novel.stages.chain import run_workflow
 
 _CHARS = {'fu_jun', 'yun_niang'}
 

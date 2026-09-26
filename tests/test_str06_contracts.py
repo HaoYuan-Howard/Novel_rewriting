@@ -15,40 +15,51 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from contracts.artifacts import STR06_ARTIFACT_RC_VERSIONS
 from contracts.schema import ARTIFACT_SPECS
-from contracts.schema.str06 import (
-    STR06_CONSUMPTION_PROJECTIONS,
-    STR06_DEPENDENCY_RULES,
-    STR06_PATH_FAMILIES,
-    BindingEntry,
-    ChapterAssignment,
+from contracts.schema.book_ir import (
     ChapterIR,
-    ChapterLengthDisclosure,
     ChapterNavEntry,
-    ChapterReceipt,
+    WriterBookIR,
+)
+from contracts.schema.consumption import STR06_CONSUMPTION_PROJECTIONS
+from contracts.schema.context import (
+    VerificationIR,
+    WriterBrief,
+    WriterContext,
+)
+from contracts.schema.dependency import STR06_DEPENDENCY_RULES
+from contracts.schema.design import ChapterAssignment
+from contracts.schema.execution import (
     DependencyEdge,
     Establishment,
     ExecutionSlice,
+)
+from contracts.schema.families import STR06_PATH_FAMILIES
+from contracts.schema.grounding import (
+    BindingEntry,
     IdentityProjection,
     OutputConstraints,
     PreserveCheckpoint,
-    PreserveKind,
-    PreservationPolicy,
     ReconstructionBrief,
     SemanticBinding,
     SourceLineage,
     SourceObligation,
     UnboundEntry,
-    WriterBookIR,
-    WriterContext,
-    WriterBrief,
-    VerificationIR,
 )
-from contracts.schema.str06.grounding import BriefRequirement
-from contracts.schema.str06.design import (
+from contracts.schema.policy import (
+    PreservationPolicy,
+    PreserveKind,
+)
+from contracts.schema.receipt import (
+    ChapterLengthDisclosure,
+    ChapterReceipt,
+)
+from contracts.schema.grounding import BriefRequirement
+from contracts.schema.design import (
     BodyDesign, SceneDelivery, SceneDriver, TargetBeat, TargetScene,
 )
-from contracts.schema.str06.execution import Reinforcement
+from contracts.schema.execution import Reinforcement
 from novel.errors import PathRefused
 from novel.paths import check_rel, check_rel_family, family_input_key
 
@@ -279,7 +290,7 @@ def test_establishment_scope_and_domain_closed():
     Establishment(op='set', established_by='init', subjects=('ch1',), domain='character', key='whereabouts', value='陆家', scope='scene')
     with pytest.raises(ValidationError):
         Establishment(op='set', established_by='init', subjects=('ch1',), domain='character', key='k', value='v', scope='act')
-    from contracts.schema.str06.execution import EffectDomain
+    from contracts.schema.execution import EffectDomain
     assert {d.value for d in EffectDomain} == {
         'character', 'relation', 'knowledge', 'world', 'reader'}
 
@@ -287,7 +298,7 @@ def test_establishment_scope_and_domain_closed():
 # ───────────────────────── WriterContext 双视图 ─────────────────────────
 
 def _ir(scene_id: str) -> VerificationIR:
-    from contracts.schema.str06.context import BeatIR
+    from contracts.schema.context import BeatIR
     return VerificationIR(scene_id=scene_id,
                           obligations=(SourceObligation(**_obligation()),),
                           beats=(BeatIR(beat_ref=f'{scene_id}#bt1', event='提亲',
@@ -316,7 +327,7 @@ def test_verification_ir_requires_beat_positioning():
     """F5：IR 必须携带逐拍定位；跨场景 beat_ref 挂靠被构造期拒绝。"""
     with pytest.raises(ValidationError):
         VerificationIR(scene_id='s01', obligations=(), beats=())
-    from contracts.schema.str06.context import BeatIR
+    from contracts.schema.context import BeatIR
     with pytest.raises(ValidationError, match='别的场景'):
         VerificationIR(scene_id='s01', obligations=(), beats=(
             BeatIR(beat_ref='s02#bt1', event='x', dramatic_intent='y'),))
@@ -450,24 +461,31 @@ def test_dependency_rules_self_consistent():
 def test_str06_live_mounts_come_from_the_candidate_table():
     # 「主仓不出现两套现役定义」的正向守卫：F8a 激活后 str06 家族就是现役
     # 注册面（键即产物相对路径，可含 {nn} 占位），现役 ARTIFACT_SPECS 内
-    # 属于 str06 家族前缀的每个 rel 都必须来自候选产物表，不得出现表外
+    # 属于 str06 家族前缀的每个 rel 都必须来自激活后的产物表
+    # （`contracts/artifacts.py::STR06_ARTIFACT_RC_VERSIONS`），不得出现表外
     # 的第二套定义。
-    from contracts.schema.str06 import STR06_CANDIDATE_ARTIFACTS
-
     live_paths = {key.replace('\\', '/') for key in ARTIFACT_SPECS}
     for family in STR06_PATH_FAMILIES.values():
         for rel in live_paths:
             if not rel.startswith(family.prefix):
                 continue
-            assert rel in STR06_CANDIDATE_ARTIFACTS, (
+            assert rel in STR06_ARTIFACT_RC_VERSIONS, (
                 f'{rel} 挂在现役 ARTIFACT_SPECS 的 {family.prefix} 家族下，'
-                f'但不在候选产物表里：str06 家族的现役挂载只能来自候选表')
+                f'但不在激活产物表里：str06 家族的现役挂载只能来自激活表')
 
 
-def test_str06_subpackage_never_imports_novel():
-    from contracts.schema import str06 as str06_pkg
-    pkg_dir = Path(str06_pkg.__file__).parent
-    for py in pkg_dir.glob('*.py'):
+def test_str06_contracts_never_import_novel():
+    """contracts 层禁止 import novel（I-03）。
+
+    F8c 后新链契约模型是 `contracts/schema/` 顶层模块（迁移包子包已删），本条
+    随之扫**整个 contracts 目录**而不是单个子包：一条反向边都不许有。
+    """
+    contracts_dir = Path(__file__).resolve().parents[1] / 'contracts'
+    scanned = 0
+    for py in sorted(contracts_dir.rglob('*.py')):
+        if '__pycache__' in py.parts:
+            continue
+        scanned += 1
         tree = ast.parse(py.read_text(encoding='utf-8'))
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
@@ -479,3 +497,4 @@ def test_str06_subpackage_never_imports_novel():
             for name in names:
                 assert not name.startswith('novel'), (
                     f'{py.name} import 了 {name}：contracts 层禁止依赖 novel（I-03）')
+    assert scanned >= 40, f'只扫到 {scanned} 个契约层模块——扫描面可能失效'

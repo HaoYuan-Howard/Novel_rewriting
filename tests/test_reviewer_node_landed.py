@@ -3,7 +3,7 @@
 ⚠ Stage6 三候选定稿（`stage6.approve`／`s6r4_` token）与 stage0/stage7 两个人定稿
 闸均已退役（Stage6 整层 F8b；stage0/stage7.approve 更早）：本模块只剩「退役节点
 fail closed」与「已落查询零写盘」两条可达语义，真实 landed 精度反例随旧 producer
-一并退役，登记见 `contracts/schema/str06/retirement.py`（F6d reviewer_node_landed
+一并退役，登记见 `contracts/schema/retirement.py`（F6d reviewer_node_landed
 rewrite_consumer ＋ `@"s6r4_"` remove_entry）。
 """
 from __future__ import annotations

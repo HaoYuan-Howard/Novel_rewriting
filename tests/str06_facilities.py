@@ -7,10 +7,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from contracts.schema.str06 import open_candidate_epoch
+from novel.llm.paid_requests import open_candidate_epoch
 from novel import prov
 from novel.llm.ledger import CostLedger
-from novel.llm.str06_run_context import CandidateRunContext
+from novel.llm.paid_requests import CandidateRunContext
 
 
 def candidate_epoch():
