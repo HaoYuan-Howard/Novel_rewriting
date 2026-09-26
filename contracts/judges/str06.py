@@ -73,7 +73,7 @@ _hard('source_proposition_closure', 'stage2',
 _hard('source_effect_disclosure', 'stage2',
       'effect 可见性形状：必填 on_page/concealed；concealed 必声明已知者并带命题锚', 'R-2.13')
 _hard('source_registered_key_scope', 'stage2',
-      '登记键作用域固定（scene_location/residence/身体状态键按表绑定；退役位置键拒识）', 'R-2.14')
+      '登记键闭集与作用域：表内键作用域由 compiler 绑定（scene/residence/身体状态键）；退役位置键拒识', 'R-2.14')
 _hard('source_fold_consistent', 'stage2',
       'source fold 事件与 Blueprint canonical 一致', 'R-2.4')
 _hard('names_structure_compile', 'stage2',

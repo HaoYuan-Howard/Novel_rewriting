@@ -402,16 +402,33 @@ def test_scene_scope_expires_at_new_boundary():
 
 # ───────────────────────── v13：登记键与已退役位置键 ─────────────────────────
 
-def test_registered_key_scope_is_fixed_by_the_contract():
-    """scene_location 必须声明 scene；residence 必须声明 book（wire 闸）。"""
+def test_registered_key_scope_is_bound_by_the_compiler():
+    """登记键作用域由 compiler 绑定（I-15）：模型声明与表不符→归一化，不是拒绝。
+
+    真书实证（v13 首跑 ch04／ch05）：模型系统性把身体状态声明为 scene；作用域是
+    契约固定事实，属可推导坐标——compiler 绑定，canonical 恒带表内作用域。
+    """
     chars, _, compiler, _ = _compile_pair()
-    for key, wrong in (('scene_location', 'book'), ('residence', 'scene')):
-        _, errs = compiler.compile({
+    for key, declared, bound in (('scene_location', 'book', 'scene'),
+                                 ('residence', 'scene', 'book'),
+                                 ('body_consciousness', 'scene', 'book')):
+        ch2, errs = compiler.compile({
             'beats': [_beat('b02_01', 'a',
                             effects=[_effect({'kind': 'character', 'char_id': 'fu_jun'},
-                                             key, 'x', scope=wrong)])],
+                                             key, 'x', scope=declared)])],
             'causal_edges': []}, 2)
-        assert any('作用域固定为' in e for e in errs), (key, errs)
+        assert ch2 is not None and errs == [], (key, errs)
+        assert ch2.beats[0].effects[0].scope == bound
+
+
+def test_registered_key_scope_is_enforced_at_the_schema_layer():
+    """schema 层仍拒直接构造的错作用域（compiler 归一化之前的兜底）。"""
+    from contracts.schema.source import Effect
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError):
+        Effect.model_validate({'target': {'kind': 'character', 'char_id': 'fu_jun'},
+                               'key': 'scene_location', 'op': 'set', 'value': 'x',
+                               'scope': 'book', 'disclosure': {'visibility': 'on_page'}})
 
 
 def test_retired_whereabouts_key_is_refused_with_a_pointer():

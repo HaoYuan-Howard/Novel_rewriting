@@ -233,6 +233,16 @@ class ChapterCompiler:
         for raw in normalized.get('beats') or []:
             if not isinstance(raw, dict):
                 continue
+            for eff in raw.get('effects') or []:
+                if not isinstance(eff, dict):
+                    continue
+                # 登记键作用域由 compiler 绑定（I-15：可推导坐标不让 LLM 声明）。
+                # 表内键（scene_location／residence／身体状态键）的 scope 是契约
+                # 固定事实，模型声明与表不符时归一化而非拒绝——真书实证模型系统性
+                # 地把身体状态声明为 scene（v13 首跑 ch04／ch05 各 5 处）。
+                registered = REGISTERED_STATE_KEYS.get(eff.get('key'))
+                if registered is not None:
+                    eff['scope'] = registered
             # 拍内两遍：先登记本拍新建（effect 的 concealed 命题、cognition 新建、
             # loop open），再解析全部引用——同一拍里「证实拍建事实效应并引用同一
             # 命题」（D5）因此合法，而跨拍/跨章的悬空引用仍被闭合闸拦下。

@@ -25,7 +25,8 @@ canonical（`novel/stages/stage2/source.py`）。
 slug/beat_id/state_id/constraint_id 前缀与字符集、surface 窗口 from≤until、
 until 只在有明确失效依据时给出（None=仍可用）、relation 禁自环、initial_state
 只引用已登记人物、op/mode/kind 闭集、open 必填非空 question、close 必填非空
-resolution、concealed 必声明已知者且必带命题、登记键作用域固定。跨产物校验
+resolution、concealed 必声明已知者且必带命题、登记键作用域按表（表内键作用域
+由 compile 归一化绑定，schema 层兜底直接构造的错声明）。跨产物校验
 （participants、source_refs 证据闭合、双 owner、相邻因果边、命题与 loop 引用闭合）
 归 compile 机械臂——validator 不越层猜证据集。
 
@@ -53,8 +54,9 @@ Slug = str  # 小写下划线人物键；pattern 在 compile 层统一校验（d
 # 位置分轴：`scene_location`（当前所在，场景作用域，换场即失效）与 `residence`
 # （长期居所，书作用域，换场不清除）——`whereabouts` 退役（一值多义：位置＋藏身＋
 # 身体状态曾塞进同一键）。身体状态各自一键（不塞进位置值），书作用域。作用域由
-# compiler 绑定：拍上声明与表不符即拒。表外维度键自由（英文蛇形），作用域由拍上
-# scope 显式声明。扩展本表是契约变化，随形状升版登记。
+# compiler 绑定：拍上声明与表不符即归一化（I-15，可推导坐标不让 LLM 声明）。
+# 表外维度键自由（英文蛇形），作用域由拍上 scope 显式声明。扩展本表是契约变化，
+# 随形状升版登记。
 REGISTERED_STATE_KEYS: Final[dict[str, str]] = {
     'scene_location': 'scene',
     'residence': 'book',

@@ -69,7 +69,7 @@ Hook 写手不读源引子。
 | `source_loop_lifecycle` | hard | loops 只许 open/close：loop 一次性 open、close 必带 resolution、问题文本不可改写 |
 | `source_proposition_closure` | hard | 命题引用闭合：本地标签/正式 ID 可解析，重抄文本与登记逐字一致 |
 | `source_effect_disclosure` | hard | effect 可见性形状：必填 on_page/concealed；concealed 必声明已知者并带命题锚 |
-| `source_registered_key_scope` | hard | 登记键作用域固定（scene_location/residence/身体状态键按表绑定；退役位置键拒识） |
+| `source_registered_key_scope` | hard | 登记键闭集与作用域：表内键作用域由 compiler 绑定（scene/residence/身体状态键）；退役位置键拒识 |
 | `source_fold_consistent` | hard | fold 事件与 Blueprint canonical 一致（含 e00 只读读数） |
 | `source_fold_events` | metric | fold 事件计数与章分布读数 |
 | `source_fold_concealed_unrevealed` | metric | 书末仍未向读者确认的 concealed 命题（只读报告） |

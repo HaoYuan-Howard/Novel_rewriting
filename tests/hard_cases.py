@@ -647,7 +647,11 @@ def _concealed_without_known_by() -> list:
 
 
 def _registered_key_wrong_scope() -> list:
-    """R-2.14：scene_location 声明 book 作用域（登记键作用域固定）。"""
+    """R-2.14：已退役的位置键（whereabouts 一值多义）在 wire 出现即拒。
+
+    表内登记键的作用域由 compiler 绑定（I-15，声明不符归一化不拒绝）；这一条
+    红例守的是退役键拒识与指针。
+    """
     from novel.stages.stage2.source import ChapterCompiler, compile_book
     from tests.str06_facilities import v13_beat, v13_chapter
     chars, _wcs, errors = compile_book({
@@ -658,11 +662,11 @@ def _registered_key_wrong_scope() -> list:
     assert not errors and chars is not None
     compiler = ChapterCompiler(chars, evidence_ids=('e01_01',))
     _bp, errors = compiler.compile(
-        v13_chapter(v13_beat('b01_01', '位置键作用域声明错',
+        v13_chapter(v13_beat('b01_01', '旧位置键借道',
                              effects=({'target': {'kind': 'character',
                                                   'char_id': 'ch1'},
-                                       'key': 'scene_location', 'op': 'set',
-                                       'value': '正厅', 'scope': 'book',
+                                       'key': 'whereabouts', 'op': 'set',
+                                       'value': '陆家卧房内，藏于床底', 'scope': 'book',
                                        'disclosure': {'visibility': 'on_page'}},))), 1)
     return errors
 
@@ -742,7 +746,7 @@ CASES.update({
     'source_proposition_closure': Case('stage2', _proposition_dangling, '引用未登记命题'),
     'source_effect_disclosure': Case('stage2', _concealed_without_known_by, 'known_by'),
     'source_registered_key_scope': Case(
-        'stage2', _registered_key_wrong_scope, '作用域固定为'),
+        'stage2', _registered_key_wrong_scope, '已退役'),
     'source_surface_anchor_literal': Case(
         'stage2', _surface_anchor_without_literal, '锚点不含该字面'),
     'names_structure_compile': Case(

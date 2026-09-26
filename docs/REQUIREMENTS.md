@@ -819,6 +819,12 @@ F5a–F5d 已闭合按章成文的契约、引擎与免费验证，F5e 已完成
     跨根历史采用不受影响）。改为 allow_patch 时记录缺失即建档（身份／成本／编译三道
     闸不变，记录存在但 sha 不符仍拒），反例
     `test_same_root_owner_patch_bootstraps_and_version_mismatch_refuses`。
+    · **R-2.14 配套修复**：ch04／ch05 各 5 处把身体状态键误声明为 scene——登记键
+    作用域属 I-15 可推导坐标，`ChapterCompiler._normalize` 改在 schema 校验前按表
+    归一化（模型声明不符不再整章拒，canonical 恒带表内作用域）；schema 层保留兜底，
+    判据红例换轨为退役键拒识，ch04 补丁的两处 scope 修订成无害空操作。契约、判据、
+    hard_cases 与文档同批落地，DECISIONS 2026-09-27 一行（含代价披露：模型失误从
+    「被闸拦」变「被静默归一」，语义靠 fold 读数与离线核读兜底）。
     · **明确未覆盖**：ch07–ch11 抽取（批 3 取消，不再购买）、ch05–ch06 语义核读
     （已购未读）、ch03–ch05 三重复（不采样）、段一 Preserve→Design→compile 端到端
     （不跑）、生产 Judge 已取消（语义由人工核读）。生产语义保持 `unver`；ch04 补丁
