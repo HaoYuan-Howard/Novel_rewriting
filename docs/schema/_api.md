@@ -106,7 +106,17 @@ Prompt 选型完成后，`prompt_variants`、`prompt_defaults` 与 `--prompt-var
 | `POST /api/settings/agent-profiles` | `AgentProfileSettingsView`（请求体 `AgentProfileSettingsUpdate`） | CSRF 保护；按 expected revision CAS 保存或清空，只写 `_service/` |
 | `GET /api/novels` | `NovelList` | 新 |
 | `GET /api/novels/:sid` | `NovelOverview` | **复用** `_orchestration.md` |
-| `GET /api/novels/:sid/check/:kind` | `CheckReport` | **复用** `_report.md` |
+| `GET /api/novels/:sid/operator-next` | `OperatorNext`（同一 state/check/inbox 只读快照上的确定性下一动作） | **复用** `_orchestration.md`；headless 执行者的机读口 |
+| `GET /api/novels/:sid/check/:kind` | `CheckReport` | **复用** `_report.md`；`:kind` 取值面只有 `stage0`/`stage1`（新链 Stage2/4/5/7 是节点级 `--check-only`，层名不在取值面 ⇒ 400） |
+| `GET /api/novels/:sid/run` | `RunProgressView`（信标折叠 + 完成度，观察轨迹非判定） | **复用** `_orchestration.md` |
+| `GET /api/novels/:sid/run/metrics?run_id=` | `contracts/schema/run_metrics.py::RunMetricsView`；省略 run_id 为本书跨运行累计 | 只读权威成本、工作单元、运行和会话账；不依赖追加额度资格，不写状态或发模型请求 |
+| `GET /api/novels/:sid/work-units/:unit_id/grant` | `WorkUnitGrantPreview` | **复用** `_orchestration.md`；付费授权的当前工作单元授予预览 |
+| `POST /api/novels/:sid/work-units/:unit_id/grant` | `WorkUnitGrantResult` | 同一授予的显式确认（CSRF 保护；付费与正文外发是两份独立授权） |
+| `GET /api/novels/:sid/stage0/report` | `Stage0Report` | 从 `stage0/revisions.json` 派生的窄视图，见下 |
+| `GET /api/novels/:sid/stage0/segments` | `Stage0Segments` | 新 |
+| `GET /api/novels/:sid/stage1` | `Stage1View`（一次返回连续分区、原文章号诊断与 `anomaly_count`；全部由当前 clean 复扫） | 新 |
+| `POST /api/novels/:sid/stage1/partition` | `JobRecord` | 新 |
+| `POST /api/novels/:sid/trash` | `TrashNovelResult`（请求体 `TrashNovelRequest.expected_title`；整本项目移入 `_service/trash/`） | 新 |
 | `GET /api/jobs?sid=` | `JobList` | 新 |
 | `GET /api/jobs/:id` | `JobRecord` | **复用** `_orchestration.md` |
 | `GET /api/jobs/:id/log?offset=N` | `LogChunk` | 新 |
@@ -119,71 +129,30 @@ Prompt 选型完成后，`prompt_variants`、`prompt_defaults` 与 `--prompt-var
 | `GET /api/queues/:id` | `QueueRun` | **复用** `_orchestration.md` |
 | `POST /api/queues/:id/resume` | `QueueRun`（202；请求体 `QueueResumeRequest`，剩余付费命令要求 `confirmed=true`） | **复用** `_orchestration.md` |
 | `POST /api/queues/:id/items/:index/cancel` | `QueueRun`（只取消尚未开始项） | **复用** `_orchestration.md` |
-| `POST /api/upload?filename=` | `UploadResult`（请求体为原始字节；`authorized=true` 时须幂等键，可附 `run`/`autostart`，见 R-11.28） | 新 |
-| `POST /api/novels/:sid/trash` | `TrashNovelResult`（请求体 `TrashNovelRequest.expected_title`；整本项目移入 `_service/trash/`） | 新 |
+| `POST /api/upload?filename=` | `UploadResult`（请求体为原始字节；`authorized=true` 时须幂等键，可附 `run`/`autostart`，见 R-11.28） | 新；上传即授权开跑（全自动单模式） |
 | `POST /api/maintenance/retention/preview` / `apply` | `RetentionPlanView` / `RetentionApplyResultView`；apply 原样回传完整 plan + `confirmed=true` | 新 |
 | `POST /api/maintenance/trash/restore/preview` / `apply` | `TrashRestorePlanView` / `TrashRestoreResultView`；apply 原样回传完整 plan + `confirmed=true`，真实移动走 CLI child | 新 |
-| `GET /api/novels/:sid/stage0/report` | `Stage0Report` | 从 `stage0/revisions.json` 派生的窄视图，见下 |
-| `GET /api/novels/:sid/stage0/segments` | `Stage0Segments` | 新 |
-| `POST /api/novels/:sid/stage0/edit` | `JobRecord`（请求体 `Stage0EditRequest`） | 新 |
-| `POST /api/novels/:sid/stage0/approve` | `JobRecord`（请求体 `Stage0ApprovalRequest`：`expected_revision_id` + 自报 `actor` + `reason`） | 新 |
-| `GET /api/novels/:sid/stage0/candidate` | `Stage0CandidateView`（待裁决的那条机器 revision + **当前稿的读数**） | 新 |
-| `POST /api/novels/:sid/stage0/candidate/adopt` | `JobRecord`（请求体 `Stage0CandidateDecisionRequest`） | 新 |
-| `POST /api/novels/:sid/stage0/candidate/dismiss` | `JobRecord`（同一请求体） | 新 |
-| `POST /api/novels/:sid/stage1/partition` | `JobRecord` | 新 |
-| `GET /api/novels/:sid/stage1` | `Stage1View`（一次返回连续分区、原文章号诊断与 `anomaly_count`；全部由当前 clean 复扫） | 新 |
-| `GET /api/novels/:sid/approvals` | `ApprovalDoc` | 新 |
-| `GET /api/novels/:sid/approvals/stage5/template` | `Stage5ClosureTemplate` | 只读、0 成本；按当前整书主体生成带 placeholder/token 的关闭式模板，不代签 |
-| `POST /api/novels/:sid/approvals/stage5` | `ApprovalDoc`（请求体 `Stage5ClosureRequest`：actor/reason + opaque `review_token` + typed must-appear/group rulings） | 服务端重建当前完整 closure workpack 后原子保存回执；成功才打开 `gate.s5`，不启动作业 |
-| `POST /api/novels/:sid/approvals/gate/:key` | `ApprovalDoc` | 新；key 只接受 `s0/s1`（gate.s2 与 seen 记录已随 Stage2 语义审阅退役；gate.s4 已随 Stage4 四道人工闸退役，`POST /approvals/design*` 与 `/approvals/structure*` 全部端点同步移除） |
-| `GET /api/novels/:sid/approvals/stage7/workpack` | `Stage7ApprovalWorkpack` v3（绑定 current review identity、opaque validation seal 与完整替换证据；只读、0 LLM；不输出 code/rules 原料） | 定稿前唯一 `s7r3_` opaque-token 阅读面，不自动批准；旧 v2 包只读 |
-| `POST /api/novels/:sid/approvals/writing` | `ApprovalDoc`（请求体 `WritingApprovalRequest`：actor/reason + opaque `review_token`） | 服务端重建当前 Stage1/Plan/WriterContext/测量契约主体；不接受空 body 或 caller 自算 subject，不启动作业 |
-| `POST /api/novels/:sid/approvals/reset` | `ApprovalDoc` | 新 |
-| `POST /api/novels/:sid/approvals/backfill` | `ApprovalBackfillResult`（按盘面显式补录，不在 GET 时静默发生） | 新 |
-| `GET /api/novels/:sid/reading/:o` | `ReadingView` | 新 |
-| `GET /api/novels/:sid/stage2/blueprint-reading-workpack` | `BlueprintReadingWorkpack` | scope=chapter:N 或 cross_chapter（默认跨章全文）；原文与完整剧情节点各一份；只读阅读面，无 token/问题/决定。原 `blueprint-review-workpack` 审阅工作包已随 Stage2 语义审阅退役 |
-| `GET /api/novels/:sid/stage2/global` | `GlobalView` | 新 |
-| `GET /api/novels/:sid/stage2/characters` | `CharacterRegistryView` | 独立人物正式或 INVALID 视图、当前编辑模板与服务端证据片段；不依赖 Global 已生成 |
-| `GET /api/novels/:sid/stage2/analyze-draft?owner=` | `AnalyzeDraftView` | 只读验证已购来源，返回单 owner 原候选、诊断、原文候选及三项来源 SHA；不是正式或已接受产物；prepared 只展示冻结请求 |
-| `POST /api/novels/:sid/stage2/analyze-draft` | `JobRecord`（请求体 `AnalyzeDraftEditRequest`：actor/reason 与 typed `AnalyzeOwnerDraftEdit`） | 服务只写 `_service` 输入；免费 CLI 验证来源、编译并提交单 owner WAL。补尾走已登记 `--recover-analyze-draft`，不重开联合首抽 |
-| `GET /api/novels/:sid/stage2/global/edit/template` | `GlobalEdit` | 当前 typed 编辑骨架（四类事实 patch/replace）；no-op 提交会被 apply 拒绝 |
-| `POST /api/novels/:sid/stage2/global/edit/preview` | `GlobalEditPreview`（请求体 `GlobalEdit`） | 独立只读预检：`result_subject_sha256`、`changed` 与 `hard_hits`，与 apply 共用同一候选判据；预览不是预授权。原 `global-review` 审阅决定 API 已随语义审阅退役 |
-| `POST /api/novels/:sid/stage2/global/edit` | `JobRecord`（请求体 `GlobalEdit`） | 服务仅暂存一次性输入；免费 CLI 经统一 HARD 后提交；HARD 未过时落 `.INVALID` 并返回 CHECK_FAILED |
-| `GET /api/novels/:sid/stage4/:o` | `Stage4View` | 新 |
-| `GET /api/novels/:sid/stage5/:o` | `Stage5View` | 新 |
-| `GET /api/novels/:sid/review/:o` | `ReviewView` | 新 |
-| `GET /api/novels/:sid/inbox` | `InboxView` | 新 |
-| `POST /api/novels/:sid/stage6/prepare/edit/preview` | `Stage6PrepareEditPreview` | token/actor/reason/source_blurb 段落草稿；只读编译、零模型、零产物写入 |
-| `POST /api/novels/:sid/stage6/prepare/edit` | `JobRecord` | 同包 token 与 typed 草稿；服务只存 `_service` 不可变输入，CLI 全量预检后提交，写回不代表接受 |
-| `POST /api/novels/:sid/stage6/prepare/review` | `JobRecord` | token/actor/reason、accept/rework/uncertain、可选完整 typed 编辑；CLI owner 锁内重验，独立于最终 gate.s6 |
-| `GET /api/novels/:sid/stage7` | `Stage7View` | 新 |
-| `GET /api/novels/:sid/stage7/book.txt?download=` | 仅在 Stage7 人物表已批准、输入/正文/文案均 current/fresh 且组装账闭合时返回 UTF-8 纯文本（`download=true` 时为附件）；旧文件仅存在不构成交付资格。⚠ **URL 字面与盘上文件名是两件事**：盘上那份叫 `stage7/<书名>_rewriting.txt`，这条 URL 是稳定的 API 标识符、不随书名变；另存名由 `Content-Disposition` 给出（`filename*=UTF-8''…` 带书名，`filename=` 留 ASCII 回退） | 新 |
-| `GET /api/novels/:sid/stage7/:o` | `Stage7View` | 新 |
-| `GET /api/novels/:sid/run` | `RunProgressView`（信标折叠 + 完成度，观察轨迹非判定） | **复用** `_orchestration.md` |
-| `GET /api/novels/:sid/run/metrics?run_id=` | `contracts/schema/run_metrics.py::RunMetricsView`；省略 run_id 为本书跨运行累计 | 只读权威成本、工作单元、运行和会话账；不依赖追加额度资格，不写状态或发模型请求 |
-| `GET /api/str06/candidates` | `contracts/schema/str06/api.py::Str06CandidateList`（输出根下的候选根与各自 run 级状态；以 workflow 身份记录为标记） | 新；候选链只读监控面（F7d），F8 激活前与现役 `/novels` 面物理分开 |
-| `GET /api/str06/candidates/:candidate/run` | `Str06RunView`（workflow 状态、epoch、节点盘面事实与 ledger 成本；无 badge/passed/counts） | 新；节点 `produced` 是 I/O 事实，不充当业务状态 |
+| `POST /api/agent/runs/preview` | `AgentRunPreview`（与真跑同一构造函数） | 新 |
+| `POST /api/agent/runs` | `AgentRunRecord`（202；请求体 `AgentRunRequest`） | **复用** `_orchestration.md` |
+| `POST /api/agent/runs/batch` | `AgentQueueView`（202） | 批量提交；每条仍走同一计划与身份 |
+| `GET /api/agent/runs?sid=` | `AgentRunList` | 新 |
+| `GET /api/agent/runs/queue` | `AgentQueueView` | 批量队列只读面 |
+| `GET /api/agent/runs/:id/log?offset=N` | `LogChunk`（与作业日志同一形状） | 新 |
+| `GET /api/agent/runs/:id/continuation` | `AgentRunContinuationView` | 续跑面：同身份接 current epoch 的只读投影 |
+| `POST /api/agent/runs/:id/stop` | `AgentRunRecord`（202） | 只受理永久终止：后台先关 admission gate、terminate 全部 Executor 子进程树并 drain，闭合后才追加 ended；stop 后不可 resume，HTTP 返回不冒充 drain 已完成 |
+| `POST /api/agent/runs/:id/pause` | `AgentRunRecord`（202） | 只受理暂停：立即停止接纳新节点，后台等待当前 claim/beacon 闭合后才追加 paused；不取消正常付费节点，HTTP 返回不冒充已 paused |
+| `POST /api/agent/runs/:id/resume` | `AgentRunRecord`（202） | 受理后由后台同身份续 current epoch/provider session；代码或执行契约 漂移时同 parent run 开新 epoch并免费复检 |
+| `GET /api/str06/candidates` | `contracts/schema/api.py::Str06CandidateList`（输出根下的候选根与各自 run 级状态；以 workflow 身份记录为标记） | 新链候选链只读监控面（F7d）；F8 起与现役 `/novels` 面物理分开 |
+| `GET /api/str06/candidates/:candidate/run` | `Str06RunView`（workflow 状态、epoch、节点盘面事实与 ledger 成本；无 badge/passed/counts） | 节点 `produced` 是 I/O 事实，不充当业务状态 |
 | `GET /api/str06/candidates/:candidate/characters` | `Str06CharactersView`（Characters v4 称谓时间窗＋源名称结构） | 新 |
 | `GET /api/str06/candidates/:candidate/blueprint` | `Str06BlueprintView`（Blueprint v12 世界约束、逐章 beats 与因果边） | 新 |
 | `GET /api/str06/candidates/:candidate/design` | `Str06DesignView`（graph／binding：导演说明、章目的、Hook 选择与 Binding 条目） | 新 |
 | `GET /api/str06/candidates/:candidate/ir` | `Str06IrNavView`（WriterBookIR 导航：章预算、章目的、逐场摘要行与称谓释放位置表） | 新 |
-| `GET /api/str06/candidates/:candidate/chapters/:ordinal` | `Str06ChapterView`（章正文＋章回执：机械范围、semantic 恒 unverified、篇幅披露显式） | 新；present=false 与合法空值分开 |
+| `GET /api/str06/candidates/:candidate/chapters/:ordinal` | `Str06ChapterView`（章正文＋章回执：机械范围、semantic 恒 unverified、篇幅披露显式） | present=false 与合法空值分开 |
 | `GET /api/str06/candidates/:candidate/hook` | `Str06HookView`（Hook 成文与机械回执） | 新 |
 | `GET /api/str06/candidates/:candidate/naming` | `Str06NamingView`（NameMap v5 只读投影） | 新 |
 | `GET /api/str06/candidates/:candidate/delivery` | `Str06DeliveryView`（manifest 就绪核对记录与全书篇幅读数） | 新 |
-| `GET /api/str06/candidates/:candidate/book` | UTF-8 纯文本（`stage7/final/{title}_rewriting.txt` 原样流出）；没有成书是 404 不是空 200 | 新；候选链下载面 |
-| `POST /api/agent/runs/preview` | `AgentRunPreview`（与真跑同一构造函数） | 新 |
-| `POST /api/agent/runs` | `AgentRunRecord`（202；请求体 `AgentRunRequest`） | **复用** `_orchestration.md` |
-| `GET /api/agent/runs?sid=` | `AgentRunList` | 新 |
-| `GET /api/agent/runs/:id/log?offset=N` | `LogChunk`（与作业日志同一形状） | 新 |
-| `POST /api/agent/runs/:id/stop` | `AgentRunRecord`（202） | 只受理永久终止：后台先关 admission gate、terminate 全部 Executor 子进程树并 drain，闭合后才追加 ended；stop 后不可 resume，HTTP 返回不冒充 drain 已完成 |
-| `POST /api/agent/runs/:id/pause` | `AgentRunRecord`（202） | 只受理暂停：立即停止接纳新节点，后台等待当前 claim/beacon 闭合后才追加 paused；不取消正常付费节点，HTTP 返回不冒充已 paused |
-| `POST /api/agent/runs/:id/resume` | `AgentRunRecord`（202） | 受理后由后台同身份续 current epoch/provider session；代码或执行契约 漂移时同 parent run 开新 epoch并免费复检 |
-| `POST /api/novels/:sid/review/:o/edit/preview` | `DraftEditPreview`（请求体 `DraftEditPreviewRequest`） | 同步、只读、0 成本；与正式 apply 共用归一/判据/subject 构造，不写一次性文件、产物或 Review |
-| `POST /api/novels/:sid/review/:o/edit` | `JobRecord`（请求体 `DraftEditRequest`） | 新 |
-| `POST /api/novels/:sid/stage5/trim/:o/retain-pretrim` | `JobRecord`（请求体 `TrimResolutionRequest`；只允许保留原稿） | 新 |
-| `POST /api/novels/:sid/stage5/trim/retain-pretrim-batch` | `JobRecord`（请求体 `BatchTrimResolutionRequest`） | 整批先核每章 audit/chapter 双 SHA，任一漂移则零写入；同一 manifest 中断后可幂等续写剩余章 |
-| `POST /api/novels/:sid/stage7/approve` | `JobRecord`（请求体 `NameMapApproveRequest`：actor/reason + opaque `review_token`） | 新 |
+| `GET /api/str06/candidates/:candidate/book` | UTF-8 纯文本（`stage7/final/{title}_rewriting.txt` 原样流出）；没有成书是 404 不是空 200 | 新链下载面（成书 URL 字面与盘上文件名是两件事） |
 
 > #### `ApprovalWorkpack` v2 是只读阅读面，不是决定模板
 >
@@ -215,7 +184,8 @@ Prompt 选型完成后，`prompt_variants`、`prompt_defaults` 与 `--prompt-var
 > 节点正文只保存一次，场景通过 placement 引用；共享证据不等于重复剧情。
 > `reading` 不进 subject/token/proof，纯渲染变化不使接受过期；材料本身的身份仍由
 > 当前消费投影绑定。`metric_only` 只保留摘要，完整读数由逐章 reading 承载。
-> 渲染落点 `novel/stages/stage4/reading.py`。
+> 渲染落点 `novel/views/str06.py::design_view`（旧链 stage4/reading.py 随旧链整层退役；
+> `novel/stages/common.py::render_chapter_packet` 是模型阅读界面的确定性 renderer）。
 
 > #### Stage7 定稿 workpack 把“看到的证据”与 approve 乐观锁绑在一起
 >
@@ -532,12 +502,12 @@ text 为 Stage1 完整本章原文，blueprint 为同章 PlotBlueprint 或 null�
 
 Stage6 三候选定稿面（Stage6View/Stage6PrepareView/Stage6ApprovalWorkpack/HookApproveRequest）已随 Stage6 整层退役（F8b，2026-09-25）：新链开篇 Hook 单输出，只读监控见 `/api/str06/candidates/{candidate}/hook`。
 
-## 五h、`Stage7View` —— S-12 人名替换 + 成书
+## 五h、命名替换只读投影 —— S-12 人名替换 + 成书
 
-**一个模型两问**：书级（`ordinal=null, rows=null`）与逐章对照（两者同非空，
-后置条件焊死）；`:o` 不在判过的章集里 ⇒ 404（资源不存在）。
-⚠ `rows` 用的是 **stage7 同一个替换器**（`novel/stages/stage7/subs.py`）对当前成稿
-现算——不写第二个替换器，也不落盘。
+新链命名面只读监控在 `/api/str06/candidates/:candidate/naming`（`Str06NamingView`）。
+⚠ 替换只有**一个**替换器：`novel/stages/stage7/naming.py::apply_names`（确定性替换表
+`compile_surface_replacements` 派生）——不写第二个替换器，也不落盘。旧链
+`Stage7View`/`subs.py` 随旧链整层退役。
 
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---|---|
@@ -626,25 +596,18 @@ HTTP 侧「书 id 不合法」的产地是**客户端**，那是 400。
 就真的是我们的 bug。**「边界验过之后再抛就是 bug」是一条说得清的线。**
 
 
-### Blueprint 阅读、诊断与进度
+### Blueprint 阅读、诊断与进度（旧链，已退役）
 
-原 BlueprintReviewWorkpack（审阅范围工作包）、KnowledgeLinkSubmission 表单与
-`approvals/blueprint-refinement` 转交复验 API 已随 Stage2 语义审阅退役删除；阅读改用
-`GET /api/novels/:sid/stage2/blueprint-reading-workpack`（scope=chapter:N 或 cross_chapter，
-默认跨章全文；只读、无 token/问题/决定）。
+Stage2 语义审阅、`blueprint-reading-workpack` 阅读工作包、`blueprint/edit` 人工写回面
+与 `Run.blueprint_progress` 字段已随旧 Stage2/4/5/7 链整层退役（STR-06 切换，F8c）：
+`GET /api/novels/:sid/check/:kind` 的取值面只剩 `stage0`/`stage1`，新链的复检是节点级
+`--check-only`；盘面只读投影走 `GET /api/str06/candidates/:candidate/blueprint`
+（Blueprint v12 世界约束、逐章 beats 与因果边）与 `.../run`（节点 `produced` 是 I/O 事实，
+不充当业务状态；ledger 成本单列）。历史形状见 Git，不为退役面保留第二个 HTTP 落点。
 
-Run.blueprint_progress 用轻量验证快照区分检查点与正式提交，按统一机械准入与 freshness
-表达章级可用性；轮询不构建审阅工作包，缺失/未知不作零；重启从持久数据读取。
+### 写作上下文的即时读数（旧链，已退役）
 
-| 端点 | 请求/响应 | 行为 |
-|---|---|---|
-| GET /api/novels/:sid/stage2/blueprint/edit/template | PlotEdit v2 | 当前完整章模板，可指定 chapter_ordinal；bpe2_ token 绑定当前编辑基线 |
-| POST /api/novels/:sid/stage2/blueprint/edit/preview | PlotEdit v2 → PlotEditPreview | 同源编译预检，零写入；actor_bindings 与 Beat/State/constraint 同样使用显式身份操作 |
-| POST /api/novels/:sid/stage2/blueprint/edit | PlotEdit v2 → JobRecord | 服务保存输入，由 CLI producer 编辑；不按列表位置重新分配已存在身份 |
-
-### 写作上下文的即时读数
-
-Stage4 `ctx_chapter` 使用 `CtxChapterView`；章节主体来自当前 WriterContext v10，
-`from_source_ordinals / budget_chars / source_chars` 由章号、场景预算和 Stage1 源正文现算。
-源文缺失或不可读时 `source_chars=null`，界面显示“未知”。展示字段不能作为新任务书提交；
-Stage5 的成稿字数、预算及重合率也经后端唯一度量入口现算，不从 Chapter v3 读取副本。
+Stage4 `ctx_chapter` / `CtxChapterView` / WriterContext v10 与 Stage5 的成稿读数随旧链
+整层退役；新链的等效只读投影是 `GET /api/str06/candidates/:candidate/ir`
+（WriterBookIR 导航：章预算、章目的、逐场摘要行与称谓释放位置表）。源文缺失或不可读时
+相应读数为 null，界面显示“未知”；展示字段不能作为新任务书提交。

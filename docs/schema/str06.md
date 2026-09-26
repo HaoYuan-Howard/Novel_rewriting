@@ -6,7 +6,7 @@
 批次进度、必要证据索引与历史快照入口见 `docs/REQUIREMENTS.md` STR-06；架构裁决见
 `docs/DECISIONS.md` 2026-09-23／2026-09-24。
 
-**RC 边界**：代码落点为 `contracts/schema/str06/` 子包。字段级 schema 保持 RC，
+**RC 边界**：代码落点为 `contracts/schema/` 子包。字段级 schema 保持 RC，
 经反例与真书验证后定版。本子包**不进** `ARTIFACT_SPECS`、不注册
 `NODES`、不进判据注册表；现役链按旧契约验收。F7 通过显式候选契约接入正式设施，
 F8 在分支内切换并退役旧链，F9 书1 经正式入口成书、工程核验与用户人工验收通过后
@@ -38,14 +38,14 @@ Design → Bind → Compile/Context；字段变化不接入现役注册表，正
 | 消费身份 | 绑定本场 D/G 内容、计划、状态、称谓、预算、完整义务语义和支撑拍；全书 checkpoint hash 与 attempt 不进入 slice；无关场内容变化不扩大失效 |
 | Source | 章末快照由 chapter_input_snapshot 严格转为下一章输入；所有证据/人物/recipient 引用闭合；相邻因果保留，坏边报错；validate 不改变跨章注册表 |
 
-`tools/str06_workflow.py` 是隔离链的真实入口。`--source-json` 接收显式的连续源章数组
+`novel/stages/chain.py` 是隔离链的真实入口。`--source-json` 接收显式的连续源章数组
 `[{chapter_ordinal,text}]`；不读取隐藏旧 Stage1 路径。`NOVEL_OUTPUT` 必填，`--run-dir`
 必须位于其中且续跑固定使用同一根。`--wire-dir` 免费采用逐 owner 的 `book_wire.json`、
 `chNN_wire.json`、`preserve_wire.json`、`design_wire.json`、`bind_wire.json`，每份记录字节摘要
 及校验结果。`--repair-manifest` 核对修订前后文件 SHA，变化则拒绝采用；原文件不被覆盖。
 
 缺同请求身份结果时，只有 `--yes --allow-source-export` 同时存在才新购一次。
-`novel/llm/str06_requests.py` 经现有 transport 直连，先保存原响应与用量，再解析、校验；
+`novel/llm/paid_requests.py` 经现有 transport 直连，先保存原响应与用量，再解析、校验；
 形状错误免费恢复，不进行整份 JSON 付费修复。pending/unknown 保持阻断，不自动重购。
 请求身份含 provider、model、完整请求与执行参数；原响应采用与新调用均记入唯一
 `<NOVEL_OUTPUT>/_service/ledger.jsonl`，缓存命中单列，缺失 usage 保持未知。
@@ -72,19 +72,22 @@ RC2 的人工语义修订是显式外部输入，不是 compiler 自然语言猜
 | `receipt.py` | `ChapterReceipt`（章级回执；场景回执与 Fidelity 随取消的生产正文 Judge 退役） | 绑定章序、全书 IR、实际前文、改名前正文、实际请求身份、协议/renderer/校验版本；`semantic` 恒 unverified；只有篇幅偏差可在额度耗尽后 `length_disclosed` 披露放行 |
 | `consumption.py` | 六个消费投影族（world_view／character_exposure／chapter_map／body_access／hook_material／rename_materials） | body_access 按章级有效回执判定；rename_materials 写明 Naming 只读投影与 Apply 唯一应用者的权限分界 |
 | `families.py` | 三级路径家族登记（16 个家族；F5 增 stage4/ir、stage5/body、stage5/acceptance/body，删 stage5/scenes、stage5/acceptance/fidelity） | 来源账键=完整相对路径（不塌两级） |
-| `dependency.py` | 新链依赖方向登记 ＋ 迁移包真实模块 owner 映射与规则 | 目标表自洽；迁移包规则由 AST 对真实文件执行（test_str06_hook） |
+| `dependency.py` | 新链依赖方向登记 ＋ per-stage 真实模块 owner 映射与规则 | 目标表自洽；per-stage 规则由 AST 对真实文件执行（test_str06_hook） |
 | `retirement.py` | F6d 现役 Stage6 链退役登记（纯数据，106 项） | 双向对账：登记项必须真实存在、现役面必须全部在册；随 RC 包 F8 删除 |
 
-对应引擎（`novel/stages/str06/`，F5 新增）：`book_ir.py`（章预算 largest-remainder
-确定性分配＋全书 IR 唯一编译）、`render.py`（确定性 renderer＋版本化 Writer 协议）、
-`body_checks.py`（章级机械校验＋专名禁用面推导）、`body_writer.py`（按章 Writer、
-有限重写与确定性候选选择）。
+对应引擎（F8c 起住正式 per-stage 包，F5 新增）：`novel/stages/stage4/book_ir.py`
+（章预算 largest-remainder 确定性分配＋全书 IR 唯一编译）、
+`novel/stages/common.py`（确定性 renderer＋版本化 Writer 协议）、
+`novel/stages/stage5/body_checks.py`（章级机械校验＋专名禁用面推导）、
+`novel/stages/stage5/body.py`（按章 Writer、有限重写与确定性候选选择）。
+跨 stage 共用的确定性原语（字面扫描、机械判定、prompt 组装、场景投影、阅读界面）
+同住 `novel/stages/common.py`；薄编排与设施装配住 `novel/stages/chain.py`。
 
 跨产物不变量（不由 schema 自身保证，归 F4 机械 Guard）：Binding 的 obligations
 分母必须与采用的 Preserve checkpoint 一致；ExecutionPlan 的依赖图无环；
 entry_state/knowledge 的 `established_by` 均早于本场起点（试点 M2/M3 的迁移）。
 
-当前三级路径按登记家族准入（`contracts/schema/str06/families.py`，16 个家族）；
+当前三级路径按登记家族准入（`contracts/schema/families.py`，16 个家族）；
 家族外多级路径仍拒，两级一般规则不变。实现在 `novel/paths.py`：
 `check_rel_family`（准入）与 `family_input_key`（来源账键=完整路径）。
 家族路径的 INVALID 孪生名与 `_rounds/` 归档布局已登记；接通正式 Store 的版本、
@@ -95,19 +98,19 @@ provenance、freshness 与归档事务归 F7a，不能把路径可用当作设�
 原 F0–F4 的 Prepare 采用 `SourceHookEvidence + TargetOpening|null`，两套坐标分离，
 源 `through_chapter` 不控制目标材料；没有 accepted body 时目标开篇显式未就绪。
 此记录保留其历史证据与 Q-13 纪律；Prepare 消费链已由 F6 的 Hook 正式选择替代，
-`PrepareMaterials`/`SourceHookEvidence`/`TargetOpening` 在 RC3 删除。迁移包依赖规则
+`PrepareMaterials`/`SourceHookEvidence`/`TargetOpening` 在 RC3 删除。per-stage 依赖规则
 （hook_writer／hook_context／hook_design／naming／assembly／name_structure）已由
 AST 测试对真实模块执行（`tests/test_str06_hook.py`），不是纸面检查。
 
 ## 正式设施接入与历史采用（候选契约与设施接线已落；历史采用待 F7a 第三步）
 
 候选节点、产物 schema／版本及 workflow／manifest／execution epoch 身份已前置定义
-（`contracts/schema/str06/candidates.py`，F7a 第一步）：节点表含 paid、lifecycle、
+（`contracts/invariants.py::NODES` 与 `contracts/artifacts.py::ARTIFACT_PATHS`，F7a 第一步）：节点表含 paid、lifecycle、
 flags、produces、免费复检与恢复入口（compile／assemble 以 `executor_content_limit=0`
 结构性禁付）；产物表含家族、schema 版本与唯一执行 writer（模型自带
 `contract_version` 的表值逐字对账）；epoch 身份支持首开、复用、code_drift／
 contract_drift／repair 滚动，假漂移拒绝，滚动不重置累计额度。候选契约作为显式依赖
-传入运行上下文、Store、许可和预算设施（`novel/llm/str06_run_context.py` 与
+传入运行上下文、Store、许可和预算设施（`novel/llm/paid_requests.py` 与
 `Str06Repository(root, context)`）；生产入口继续使用现役注册表。候选身份不借旧节点
 获得许可，不绕过版本校验，不修改全局注册表以启动隔离链。F8 激活同一套已验收定义为
 唯一现役契约，临时 adapter 随接管完成退役。
@@ -129,11 +132,11 @@ candidate_workflow.json`：源输入身份变化与契约表漂移关闭式拒�
 零新购、不复制缓存、不续旧 session），候选根 `outputs/str06_f7a_candidate_20260924`
 与 F5e 交付逐字一致；仍不得据本节原地升级 F5e 根。
 
-owner runner 拆分已落地（F7b）：`novel/stages/str06/runner.py` 按候选节点表编排
+owner runner 拆分已落地（F7b）：`novel/stages/chain.py` 按候选节点表编排
 Stage2 source／names、Stage4 preserve／body_design／hook_design／bind／compile、
 Stage5 body／hook、Stage7 naming／assemble；每个 runner 的输入从盘面读——源 core 与
 BodyDesign 是正式派生产物（`stage2/compiled/book_extraction.json`、
-`stage4/design/body_design.json`），不再只活在内存；`tools/str06_workflow.py` 是薄驱动，
+`stage4/design/body_design.json`），不再只活在内存；`novel/stages/chain.py` 是薄驱动，
 复检用 `--check-only`／`--node`，不新造 check 节点。候选产物落盘保序（同正式
 `_render`）：盘上字符典序即 wire 序，prompt 与已购请求身份按字节复算。
 Stage2 输入已改读正式 Stage1 章数组（F7c 第一步）：`--book-sid` 经正式契约读
@@ -248,7 +251,7 @@ Hook 是同一目标故事的另一种呈现。设计负责材料及顺序、起
 Writer 负责句法、措辞、对白、局部动作、节奏、意象和语气。局部细节不得改变事实或
 成为未经 Design 承接的后续情节依据，不重选材料、改序或突破披露许可。
 
-由 Hook Design 保存必要的正式选择（RC3 落点 `contracts/schema/str06/hook.py`）：
+由 Hook Design 保存必要的正式选择（RC3 落点 `contracts/schema/hook.py`）：
 `pov{person,focalizers}`、`opening_facts[{ref,address,audience}]`（只引用 init 或
 目标拍上真实建立的 StateAddress，按 world/pov/reader 分获准面）、
 `materials[{beat_ref,withheld,presentation?}]`（呈现序，允许乱序冷开）、`concealed`、
@@ -257,7 +260,7 @@ Writer 负责句法、措辞、对白、局部动作、节奏、意象和语气�
 Body/Hook 仍由一份 graph 承载（`PresentationGraph(BodyDesign)+hook` 必填，
 `publish_graph` 唯一发布），无额外 Hook truth 文件；Bind/Compile/Context/Guard
 类型收窄到 `BodyDesign`，从类型上保证 Hook 不影响正文。机械校验臂
-（`novel/stages/str06/hook_design.py`）钉住：引用闭合、withheld ⊆ 该拍 delta、
+（`novel/stages/stage5/hook.py`）钉住：引用闭合、withheld ⊆ 该拍 delta、
 world/pov 起笔事实早于首个材料、reader 不晚于材料视界且不在禁止集、起笔事实不得是
 材料拍 delta、first 恰一人且非 narrator、释放称谓必须是已声明面且不属隐藏人物、
 隐藏人物材料必须 presentation 且不含其字面。
@@ -306,7 +309,7 @@ NameMap 是交付变换契约，不是第五类 semantic truth。Naming 只消�
 正式形状时显式修订 RC 并提供恢复边界，不让 Naming 或 compiler 代替源语义抽取。
 
 v5 的基础面为 `entries[{char_ref, name{family?,given?,full?}|None, aliases{},
-keep_reason?}]`（RC3 落点 `contracts/schema/str06/naming.py`；`full` 由 compiler
+keep_reason?}]`（RC3 落点 `contracts/schema/naming.py`；`full` 由 compiler
 拼接，wire 不携带；name 与 keep_reason 恰好一个）。按源名称结构给出必要名称位：
 源结构登记了姓必须给新姓、登记了名必须给新名，反之不得给；只改化名位的人物允许
 name 全空＋显式 alias 赋值。`absence=unchanged` 不能掩盖模型漏答：compile 以明确
@@ -326,7 +329,7 @@ owner，不能按替换顺序选 owner；共享同姓本身不是冲突。同 fa
 跳过认领区间与合法保留字面——目标名含旧字面、kept 含映射键时不误报；不把所有源名
 字串都列禁词，不调用 LLM 猜测归属。diff proof 用骨架法机械证明差异恰为替换表。
 源身份/名称结构缺失回 Stage2，目标名称缺失或冲突回 Naming，机械实现错误回 compiler。
-Assembly（`novel/stages/str06/assembly.py`）body_access 按 accepted/rejected/missing/
+Assembly（`novel/stages/stage7/assembly.py`）body_access 按 accepted/rejected/missing/
 unknown 四态判定；无 accepted body 时显式 not_ready（F6 只落
 `runtime/delivery/hook_renamed.txt` 与 runtime 组装报告，`stage7/final/` 不落产物）；
 交付身份由（body hash, hook prose hash, 替换表, kept）派生，与 Stage5/Hook 回执分离，
@@ -369,15 +372,18 @@ stage7/final/<书名>_rewriting.txt、stage7/final/delivery_manifest.json
 runtime/progress/、runtime/body_attempts_ch{nn}.json、runtime/admission.json
 ```
 
-正式代码继续按 owner 分包，schema 唯一在 contracts/schema 下；RC 迁移包 F8 分流后
-删除。下表是职责落点，不要求预建空目录或把每个函数做成独立抽象层。
+正式代码继续按 owner 分包，schema 唯一在 contracts/schema 下。⚠ F8c（2026-09-25）：
+RC 迁移包已拆进正式 per-stage 包并删除，下表从「目标代码职责」翻成**现役落点**。
+不要求预建空目录或把每个函数做成独立抽象层。
 
-| owner | 目标代码职责 |
+| owner | 现役落点 |
 |---|---|
-| Stage2 | characters、blueprints 的语义抽取／确定性编译与 acceptance |
-| Stage4 | grounding 的 preserve/bind；design 的 body/hook（含导演说明与章节目的）；单一 graph publisher；compile；WriterBookIR 编译与 hook context；机械 guard |
-| Stage5 | 按章 body writer（机械检查/有限重写/候选选择）；hook writer/validator；必要的公共 receipt 处理 |
-| Stage7 | naming assign、机械 apply、final assemble（章回执链核对、TXT 先落盘、manifest 最后提交）；无故事 resolver 或语义 review 层 |
+| Stage2 | `novel/stages/stage2/source.py`（source 语义抽取／Blueprint 确定性编译／acceptance）、`novel/stages/stage2/names.py`（源名称结构） |
+| Stage4 | `novel/stages/stage4/grounding.py`（preserve/bind）、`novel/stages/stage4/design.py`（body design 含导演说明与章节目的）、`novel/stages/stage5/hook.py`（hook design 与唯一 graph publisher）、`novel/stages/stage4/compile.py`、`novel/stages/stage4/book_ir.py`（WriterBookIR）、`novel/stages/stage5/hook_context.py`、`novel/stages/stage4/guard.py` |
+| Stage5 | `novel/stages/stage5/body.py`（按章 body writer：机械检查/有限重写/候选选择）、`novel/stages/stage5/body_checks.py`、`novel/stages/stage5/hook_writer.py`（hook writer/validator） |
+| Stage7 | `novel/stages/stage7/naming.py`（naming assign 与机械 apply）、`novel/stages/stage7/assembly.py`（final assemble：章回执链核对、TXT 先落盘、manifest 最后提交）；无故事 resolver 或语义 review 层 |
+| 跨 stage 共用 | `novel/stages/common.py`（字面扫描、跨产物机械判定、prompt 原语、场景双视图投影、模型阅读界面 renderer） |
+| 薄编排与装配 | `novel/stages/chain.py`（NODE_ORDER／NODE_RUNNERS／run_node／run_chain＋Stage1 输入、workflow/epoch、付费边界装配）；生产入口 `novel.cli run <node> <sid>` |
 | 跨层设施 | 沿用 repository/store、paths、runtime 和 orchestrator；只抽取真实公共职责 |
 
 依赖单向：Design 禁 Grounding 实现/Blueprint internals/checkpoint 裸读；Grounding 禁

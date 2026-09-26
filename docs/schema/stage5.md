@@ -29,9 +29,9 @@ HookContext（正式输入确定性重建），不读源 hook 文案。
 
 ## 机械验边界
 
-章级机械验（`novel/stages/str06/body_checks.py`）覆盖：非空／编码／叙述外壳、
+章级机械验（`novel/stages/stage5/body_checks.py`）覆盖：非空／编码／叙述外壳、
 未释放专名（硬失败，重写耗尽后无合法候选即停止，不披露放行）、篇幅带（超限只有
-篇幅带可披露）。Hook 机械验（`novel/stages/str06/hook_writer.py`）覆盖：POV 一致、
+篇幅带可披露）。Hook 机械验（`novel/stages/stage5/hook_writer.py`）覆盖：POV 一致、
 起笔事实时序、禁止集零兑现、withheld 字面不出现。机械通过不证明文学质量、章内
 揭示位置或逐场义务兑现——那些维度保持未评披露。
 

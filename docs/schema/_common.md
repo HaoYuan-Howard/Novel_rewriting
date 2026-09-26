@@ -179,12 +179,12 @@ producer 的上游边；`judged` 还要同时保存完整文件指纹与正文�
 | 某条边 `consumed` 是 `null` | **`unknown`**（该边） | 「没声明读了什么」不是「读的东西没变」 |
 | 全部边都取到且相等 | **`fresh`** | |
 
-Stage4 的章级 B 另有登记的 producer 输入契约结论：`binding_input_contract_obsolete`
-表示已证明旧章模型缺少场景 alias 与事实的映射，为 `stale`；`binding_input_contract_unproven`
-表示回执、架构或来源无法证明，为 `unknown`。唯一判定在
-`novel/stages/stage4/binding_input_contract.py::inspect_binding_input_contract`，Store 只在普通边已
-`fresh` 时附加该结论；原有上游漂移、缺失与未知原因不被覆盖。compiled Plan 在完整 A/B 字节
-关系闭合后继承 B 的该结论。真实输入边和对照保留，不伪装成 `consumed_changed`。
+旧链 Stage4 的章级 B 曾另有登记的 producer 输入契约结论（`binding_input_contract_obsolete`
+⇒ `stale`、`binding_input_contract_unproven` ⇒ `unknown`）：判定器
+（stage4/binding_input_contract.py 的 inspect_binding_input_contract）与 Store 的附加边
+随旧链整层退役（F8b-3），两个 reason 键仍由 `contracts/invariants.py` 与 `novel/prov.py` 的
+freshness 映射保留，只服务存量盘面的历史解码；新链 Binding 的输入契约由候选 runner 自身
+（`novel/stages/stage4/`）在编译期证明，不重建第二套层级结论。
 具体识别、授权与恢复边界见 `docs/BACKEND_CONTRACT.md::R-5.10`。
 
 > ### ⚠ 幽灵边必须点名，这是 `Q-4` 亲自点过的一个 bug

@@ -317,18 +317,17 @@ conda run -n novel_refactor python -m pytest -q tests/test_fixture_registry.py
 `--acknowledge-encrypted-offline-target`；该 flag 是操作者对介质的声明，工具本身不提供加密。
 
 
-## Stage4 免费聚合与跨执行补尾
+## Stage4 免费编译与候选生命周期补尾（新链）
 
-Operator/队列由 `novel/stages/stage4/plan_recovery.py` 做完整来源预览后，才发布
-`stage4.design --reaggregate` 或 `stage4.plan --reaggregate`。A 必须已有当前策略与全部章响应，
-B 可以混合机械与已保存成果；缺章/冲突/未知均停止。A 的来源逐单元冻结，允许互补历史运行；
-全部采用不创建模型客户端，随后仍进入正式设计审阅。
-已结束 producer 的 `aggregate-committed.json` 停在 prepared 时，先于审批返回
-`--recover-prepared <source run> --subject-sha256 <proof>`；执行入口和凭据来自现役
-operator/permit，不手选最近 run。此动作不需要付费 profiles，不启动模型客户端。
+STR-06 新链的 Stage4 免费聚合由结构性禁付节点 `str06.stage4.compile` 承担：Design/Hook/Bind
+的已购 wire 经 `--check-only` 或默认免费采用路径编译，全部采用不创建模型客户端。跨执行补尾
+不再是 `--recover-prepared` 一类人工恢复动作，而是候选生命周期自身的
+`chapter_prefix_replay`／`deterministic_replay`（`novel/llm/paid_requests.py::PaidRequestSession`）：
+同请求身份优先免费采用，缺失且未授权时停在该 owner 并报告需要授权（`PurchaseRequired`）。
+付费与正文外发是两份独立授权（`--yes`／`--allow-egress`），入口只有
+`novel.cli run <str06 节点> <sid>`；恢复入口与账务纪律见 `tests/test_str06_f7a_wiring.py`。
 
-恢复分别由 `novel/stages/stage4/design_recovery.py` 和 `novel/stages/stage4/plan_recovery.py`
-复验 A/B，保持原 Candidate 或 Binding/Plan 的准确冻结字节，补齐原工作单元采用与独立恢复执行审计；
-只承认写前基线或冻结目标，ledger 调用不增加。原 Agent parent 必须终态且所有
-epoch drained，执行期间继续持有 owner-stopped lease。证据、LF 审计尾或目标文件
-无法证明时保持 unknown，不清空账本、不修改旧 journal 以跳过守卫。
+旧链的 `stage4.design/plan --reaggregate`、`--recover-prepared` 与
+stage4/design_recovery.py、plan_recovery.py 随旧链整层退役（F8b-3），
+只服务存量 run 的历史解码；旧书按 `legacy_incompatible` 只读拒识，重跑须在独立输出根
+按新链重新上传。

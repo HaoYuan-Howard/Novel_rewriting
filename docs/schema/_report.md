@@ -24,8 +24,8 @@
 
 > ### ⚠ 旧形状长什么样，以及它为什么救不回来
 >
-> 盘上两份冻结抓包（`web/src/mocks/check_stage2.json` ·
-> `check_stage5_review.json`）的顶层十个键：
+> 旧链两份冻结抓包（`check_stage2.json` 与 `check_stage5_review.json`，已随旧链
+> 整层退役从 `web/src/mocks/` 删除，恢复来源为 Git 历史）的顶层十个键：
 > `title` · `sid` · **`oks: str[]`** · `unver[]` · `info[]` · `hard[]` ·
 > `passed` · `hard_count` · `unver_count` · `badge`。
 >

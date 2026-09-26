@@ -1,18 +1,21 @@
-# Stage2 人物登记（Characters v3）
+# Stage2 人物登记（Characters v3 → 新链 Characters v4）
 
 人物登记保存实体身份字面、book-level 称谓与逐次 mention 绑定。公开身份描述**不**进
 Characters（无自由文本 `role`），由 Blueprint State（经 `public_state_ref`）承担。
 
-新书人物唯一 writer 是 `stage2.characters`（稀疏 Extract → 确定性字面回填 → lexicon
-Resolve → Compiler）。`stage2.analyze` 联合首抽**不再**为新书写 Characters；cold-start
-编排为 `characters → global`。存量 `CharactersResponse` / analyze receipt 仅服务历史
-草稿解码，删除条件见 `docs/REQUIREMENTS.md` STR-03-S2-CH。
+⚠ **F8b-3（STR-06 新链）**：旧链 `stage2/characters.json`（Characters v3）、
+`characters_edit.json` 与 `blueprint_character_projection.json` 随旧链整层退役；
+新链人物面是 **Characters v4 称谓时间窗**（`contracts/schema/state.py` 的
+`SurfaceIntroduction`／`SurfaceRelease`，源名称结构见 `contracts/schema/source.py`），
+只读监控在 `GET /api/str06/candidates/:candidate/characters`。旧链独立 typed 编辑
+（`CharactersEdit`）与 `--apply-edit`／`--revalidate` 人工写回面随人工闸退役。
+下文 v3 字段与消费形状只服务存量盘面的历史解码。
 
 | 路径 | 模型与版本 | 用途 |
 |---|---|---|
-| `stage2/characters.json` | `CharacterRegistry` **v3** | 独立人物正式产物 |
-| `stage2/characters_edit.json` | `CharactersEdit` | 人工 typed 编辑输入 |
-| `stage2/blueprint_character_projection.json` | `BlueprintCharacterProjection` | 人物 producer 的确定性章内闭集投影 |
+| `stage2/characters.json` | `CharacterRegistry` **v3** | 独立人物正式产物（存量） |
+| `stage2/characters_edit.json` | `CharactersEdit` | 人工 typed 编辑输入（已退役） |
+| `stage2/blueprint_character_projection.json` | `BlueprintCharacterProjection` | 人物 producer 的确定性章内闭集投影（存量） |
 | `stage2/analyze_receipt.json` 等 | Analyze v1 | **存量**联合首抽来源 / draft repair；新书不写 |
 
 只读当前登记版本；v2 人物拒读、不迁移。
@@ -46,9 +49,11 @@ disposition、可选 `char_id` / `reveals_identity` 与 `evidence_refs`。
 人物与 Global 共用 `CoreEvidenceAnchor`：`chapter_ordinal/start/end/text_sha256`。
 每个正式产物保有自己的 `evidence_anchors`；相同区间得到相同稳定 `ev_…` ID。
 
-机械检查规则见 `novel/stages/stage2/characters/checks.py::CHARACTER_RULES`：
-`character_unattested`、`address_*`、`hedge_words`、`global_evidence_unlocated`，以及
-常驻 UNVER `character_semantics_unverifiable`。
+旧链机械检查规则（stage2/characters/checks.py 的 `CHARACTER_RULES`：`character_unattested`、
+`address_*`、`hedge_words`、`global_evidence_unlocated`，以及常驻 UNVER
+`character_semantics_unverifiable`）随旧链整层退役（F8b-3）；新链人物称谓的机械守卫由
+`contracts/schema/` 的称谓时间窗与 naming 残留硬闸（`naming_residual`）承担，
+语义质量一律 unver 披露，不重建第二套人物判官。
 
 ## 独立编辑与恢复
 

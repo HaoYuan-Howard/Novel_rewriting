@@ -1092,7 +1092,9 @@ adoption 的边界。
 无需本轮至少一个模型 checkpoint。source run/profile/request/schema/checkpoint/session/ledger、
 当前候选与动态 validator 必须全部闭合；歧义或损坏来源不得猜测采用。来源原账保持不变，
 当前 unit lineage 引用 source 身份，历史成本保留在原 ledger，不复制冒充本轮费用。
-具体采用与补尾由 `novel/stages/stage4/plan.py` 及 `novel/llm/stage4_runs.py` 负责。
+旧链的采用与补尾落在 stage4/plan.py 与 stage4_runs.py（随旧链整层退役，F8b-3）；新链同族
+边界由 `novel/llm/paid_requests.py::PaidRequestSession` 的 wire 采用／跨根历史采用与
+`novel/llm/paid_requests.py` 的候选生命周期（chapter_prefix_replay／deterministic_replay）承担。
 
 #### 7.0b Stage6 semantic A/B checkpoint 与 commit journal —— 双盲恢复态，不是公开 HTTP 模型
 

@@ -34,7 +34,7 @@ Design 是 source-blind 的：实际输入只有 Preserve 投影（`project_brie
 
 ## Guard M1–M6
 
-写前机械 Guard 在 `str06.stage4.compile` 聚合执行（`novel/stages/str06/guard.py`）：
+写前机械 Guard 在 `str06.stage4.compile` 聚合执行（`novel/stages/stage4/guard.py`）：
 M1 义务覆盖、M2 提前揭示、M3 提前效应、M4 承载位置、M5 称谓释放、M6 合法人物。
 Guard 零错误不证明小说质量；本节点确定性重跑是 0 成本修复路。
 

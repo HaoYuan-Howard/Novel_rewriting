@@ -13,7 +13,7 @@ agent 负责维护工程上下文、实现与验证，关键取舍和结果直�
 | 工作范围 | 入口与职责 |
 |---|---|
 | 契约定义 | [contracts/AGENTS.md](contracts/AGENTS.md)：节点、schema、判据与版本变更 |
-| 后端实现 | [novel/AGENTS.md](novel/AGENTS.md)：产物、调度、模型调用、服务与恢复；Stage0 局部见 [novel/stages/stage0/AGENTS.md](novel/stages/stage0/AGENTS.md)；Stage2 局部见 [novel/stages/stage2/AGENTS.md](novel/stages/stage2/AGENTS.md) |
+| 后端实现 | [novel/AGENTS.md](novel/AGENTS.md)：产物、调度、模型调用、服务与恢复；Stage0 局部见 [novel/stages/stage0/AGENTS.md](novel/stages/stage0/AGENTS.md)；新链引擎见 `novel/stages/stage2|4|5|7/`（Stage2 局部指南见 `novel/stages/stage2/AGENTS.md`） |
 | 前端实现 | [web/AGENTS.md](web/AGENTS.md)：页面、数据访问、交互与前端验证 |
 | 运行或修改后端测试 | [tests/AGENTS.md](tests/AGENTS.md)：环境、fixture、并行与 corpus |
 | 环境、诊断、备份与工程恢复 | [docs/OPERATIONS.md](docs/OPERATIONS.md)：开发维护 agent 按故障定位入口 |
@@ -137,7 +137,7 @@ UI 称「模型执行配置」。禁止把「不得依赖 legacy implementation�
 stage0/1 之后由 11 个 `str06.<stage>.<owner>` 节点串成（Stage2 源语义与名称结构、
 Stage4 目标故事与确定性编译、Stage5 按章正文与 Hook、Stage7 命名与交付），节点表
 唯一登记在 `contracts/invariants.py::NODES`。Stage6 整层与旧 Stage2/4/5/7 链已退役
-（退役登记见 `contracts/schema/str06/retirement.py`），旧书只读拒识为
+（退役登记见 `contracts/schema/retirement.py`），旧书只读拒识为
 `legacy_incompatible`。历史受托 Commander/Reviewer（含 `<immutable-workpack>`）与
 人工逐 Stage 过闸模式已退役，材料只供存量解码。
 semantic unit 使用独立 prompt/schema，不加载工程 AGENTS、运维手册或额外盘上小说来补充材料。
