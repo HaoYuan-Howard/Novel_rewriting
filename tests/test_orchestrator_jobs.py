@@ -589,11 +589,11 @@ def test_executor_backend_is_frozen_from_plan_through_spawn_and_disk(
     assert record.start.steps[0].egress_authorized is True
     assert spawn.calls == [step.argv for step in record.start.steps]
     argv = spawn.calls[0]
-    assert argv[argv.index('--executor-backend') + 1] == 'legacy'
-    assert argv[argv.index('--legacy-provider') + 1] == resolved.profile.provider
-    assert argv[argv.index('--legacy-model') + 1] == resolved.profile.model
-    assert argv[argv.index('--legacy-effort') + 1] == resolved.profile.reasoning_effort
-    assert argv[argv.index('--legacy-thinking') + 1] == resolved.profile.thinking_mode
+    # F9 实证修复（F8d 遗留③）：直连 LLM 节点 canonical argv 不挂 executor
+    # backend 旗标（`_run_str06` 拒收）；冻结 profile 经 Step/record 落账。
+    assert not any(token.startswith('--executor-') for token in argv)
+    assert not any(token.startswith('--legacy-') for token in argv)
+    assert record.start.steps[0].executor_backend == resolved
     assert '--allow-egress' in argv
     if step_count == 2:
         follow = record.start.steps[1]

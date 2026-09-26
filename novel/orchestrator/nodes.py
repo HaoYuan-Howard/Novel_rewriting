@@ -51,6 +51,12 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 #: CLI 的模块名。**与 `novel/cli/__main__.py` 是同一个东西**，不许在别处再写一份字符串。
 CLI_MODULE = 'novel.cli'
 
+#: 直连 LLM 节点族前缀。**与 `novel/cli/main.py` 的 `str06.` 入口分流是同一路由**：
+#: 这些节点的执行配置来自 `novel.config.load_config()`，命令行拒绝 executor
+#: backend 旗标（`_run_str06`）；`build_argv` 为它们构造 canonical argv 时不挂
+#: `--executor-backend/--legacy-*`，冻结 profiles 只在 run 契约与 UI 面记录。
+DIRECT_LLM_NODE_PREFIX = 'str06.'
+
 #: 追跑那条 `--check-only` 的理由。
 #:
 #: ⚠ **退出码 0 不等于成功**：原型实测 `n2_blueprint` 打印「blueprint 缺章（勿静默）」
@@ -658,7 +664,15 @@ def build_argv(node: str, sid: str | None, flags: Sequence[str] = (), *,
     if sid is not None:
         argv.append(sid)
     argv += list(flags)
-    if isinstance(executor_backend, LegacyExecutorBackend):
+    # ⚠ F8c 解钩外发授权后遗留的同一处（F8d 遗留③，F9 真实产品跑书时实证）：
+    # 直连 LLM 节点（`str06.*`，与 `novel/cli/main.py` 的入口分流同一路由）的
+    # 执行配置来自 `novel.config.load_config()`，命令行**不接受** executor
+    # backend 旗标——`_run_str06` 对 `--executor-backend/--legacy-*` 关闭式
+    # 拒收。编排器从冻结 profiles 解析出的 backend 只是 run 契约／UI 面的
+    # 「模型执行配置」（启动时经 `validate_pipeline_profiles` 校验），不翻译进
+    # argv；否则 agent／queue／jobs 驱动每一个付费新链节点都会 exit 2。
+    if (isinstance(executor_backend, LegacyExecutorBackend)
+            and not node.startswith(DIRECT_LLM_NODE_PREFIX)):
         profile = executor_backend.profile
         argv += [
             '--executor-backend', 'legacy',

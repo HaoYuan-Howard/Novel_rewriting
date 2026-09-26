@@ -22,11 +22,14 @@ fake transport 复用 `tests/test_str06_body.py` 的路由表（同一份 wires�
 **节点执行的子进程缝**换成进程内调用真实 `novel.cli.main.main([...])`
 （`_InProcessPopen`）：被执行的仍是生产 CLI 的同一行代码（`_cmd_run` →
 `_run_str06` → `novel/stages/chain.py::execute`），但 run_step 的
-claim／信标／evidence 三层不在进程内复刻。理由：run_step 在 Commander 上下文里
-会把 executor backend 旗标（`--executor-backend legacy …`）冻进 argv，而
-`_run_str06` 按直连 LLM 纪律拒收这些旗标——这是 F8b 留下的真实接缝（见文件末尾
-「遗留问题」），在测试里复刻它只会得到一次与产品无关的失败，因此按任务允许的
-替身形状执行，并把差异写在这里。两处替身的影响面：
+claim／信标／evidence 三层不在进程内复刻。理由：这三层是 admission/beacon 设施，
+进程内复刻只会把测试变成基础设施的自证；**argv 形状不在豁免之列**——F8b 时
+run_step 会把 executor backend 旗标（`--executor-backend legacy …`）冻进 argv
+而 `_run_str06` 拒收（真实接缝，F9 产品跑书时实证），F9 已在生产
+`nodes.build_argv` 修复：直连 LLM 节点（`str06.`）的 canonical argv 不挂
+`--executor-backend/--legacy-*`（`DIRECT_LLM_NODE_PREFIX`），冻结 profile 只落
+Step／run 契约记录面；本文件的派发断言据此钉住「无 executor 旗标」。两处替身的
+影响面：
 
   · `agent._run_step_argv`：**原样使用生产 `nodes.build_argv`**（含 `--yes` 与
     `--allow-egress`；F8c 已把外发授权与 executor backend 解钩，直连 LLM
@@ -53,6 +56,11 @@ claim／信标／evidence 三层不在进程内复刻。理由：run_step 在 Co
 ① `--check-only` 声明零写盘（`WRITE_EFFECTS`），但候选 repository 的
    provenance 铸账仍会重写产物字节（usage 窗口归零）——本测试只断言零新购与
    交付字节不变，不把重写当作已验收行为。
+② （F9 已修复，记录备查）生产 run_step 曾把 executor backend 旗标
+   （`--executor-backend legacy …`）冻进直连 LLM 节点 argv，`_run_str06` 按
+   直连 LLM 纪律拒收——F9 产品跑书时实证；`nodes.build_argv` 已按
+   `DIRECT_LLM_NODE_PREFIX` 修复（str06 节点不挂 executor 旗标），派发断言
+   钉住新行为，claim／信标／evidence 三层的进程内替身差异仍在文件头说明。
 ③ 产品入口逐节点执行 ⇒ run 级 `runtime/workflow_status.json` 落在最后一次单节点
    执行上（`node_run`），`delivered` 只由单次整链跑法写出；就绪结论的权威记录是
    assemble 最后提交的 manifest（本测试按后者断言，并钉住前者的现状）。
@@ -294,6 +302,16 @@ def test_full_chain_from_http_upload_to_stage7_delivery(base, monkeypatch):
     assert all(item['flags'] == [] for item in box['dispatched'])
     assert [item['stem'] for item in box['dispatched']] == [
         f'ready-{node}' for node in NODE_ORDER]
+    # F9 实证修复（F8d 遗留③）：profiles 冻结了 legacy 默认 backend，但直连 LLM
+    # 节点的 canonical argv 不挂 executor 旗标——否则 `_run_str06` 当场拒收；
+    # 付费节点另带 `--yes`＋`--allow-egress`（I-43 两份授权）。免费节点的 egress
+    # 由本文件的替身统一传 True（生产只对付费节点解析外发授权），不断言那一格。
+    from contracts.invariants import NODES
+    for item in box['dispatched']:
+        assert not any(token.startswith('--executor-') for token in item['argv'])
+        assert not any(token.startswith('--legacy-') for token in item['argv'])
+        if NODES[item['node']].paid:
+            assert '--allow-egress' in item['argv'] and '--yes' in item['argv']
 
     book = paths.resolve_novel_dir(base, '9001')
     # ④ 交付就绪：规划面 pipeline_complete + 成书 + 最后提交的 manifest。

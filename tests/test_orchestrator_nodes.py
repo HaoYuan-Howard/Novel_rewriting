@@ -373,15 +373,12 @@ def test_every_profiled_executor_run_has_one_resolved_argv_and_step_snapshot(
         executor_backend=EXECUTOR_BACKEND,
         egress_authorized=True,
     )
-    assert producer.argv[producer.argv.index('--executor-backend') + 1] == 'legacy'
-    assert producer.argv[producer.argv.index('--legacy-provider') + 1] == \
-        producer.executor_backend.profile.provider
-    assert producer.argv[producer.argv.index('--legacy-model') + 1] == \
-        producer.executor_backend.profile.model
-    assert producer.argv[producer.argv.index('--legacy-effort') + 1] == \
-        producer.executor_backend.profile.reasoning_effort
-    assert producer.argv[producer.argv.index('--legacy-thinking') + 1] == \
-        producer.executor_backend.profile.thinking_mode
+    # F9 实证修复（F8d 遗留③）：直连 LLM 节点的 canonical argv 不挂 executor
+    # backend 旗标（`_run_str06` 对 `--executor-backend/--legacy-*` 关闭式拒收，
+    # 执行配置来自 load_config）；冻结 profile 只落在 Step／run 契约记录面。
+    assert not any(token.startswith('--executor-') for token in producer.argv)
+    assert not any(token.startswith('--legacy-') for token in producer.argv)
+    assert producer.executor_backend == EXECUTOR_BACKEND
     assert '--yes' in producer.argv
     assert producer.egress_authorized is True
     assert '--allow-egress' in producer.argv
@@ -483,7 +480,11 @@ def test_absent_executor_profile_preserves_the_legacy_argv_shape():
     assert '--allow-egress' not in argv
 
 
-def test_explicit_legacy_backend_freezes_provider_profile_into_argv_and_step():
+def test_explicit_legacy_backend_freezes_profile_into_step_but_not_direct_llm_argv():
+    """F9 实证（F8d 遗留③）：str06 直连 LLM 节点的 canonical argv 不挂 executor
+    backend 旗标——`_run_str06` 拒收它们，执行配置来自 `load_config()`；冻结
+    profile 只落在 Step／run 契约与 UI 记录面（启动时已校验）。
+    """
     backend = LegacyExecutorBackend(profile=LegacyLlmProfile(
         provider='deepseek', model='deepseek-v4-pro',
         reasoning_effort='high', thinking_mode='on'))
@@ -493,17 +494,18 @@ def test_explicit_legacy_backend_freezes_provider_profile_into_argv_and_step():
 
     assert step.executor_backend == backend
     assert step.executor_backend is not None and step.executor_backend.kind == 'legacy'
-    assert step.argv[step.argv.index('--executor-backend') + 1] == 'legacy'
-    assert step.argv[step.argv.index('--legacy-provider') + 1] == 'deepseek'
-    assert step.argv[step.argv.index('--legacy-model') + 1] == 'deepseek-v4-pro'
-    assert step.argv[step.argv.index('--legacy-effort') + 1] == 'high'
-    assert step.argv[step.argv.index('--legacy-thinking') + 1] == 'on'
+    assert not any(token.startswith('--executor-') for token in step.argv)
+    assert not any(token.startswith('--legacy-') for token in step.argv)
     assert '--executor-driver' not in step.argv
     assert '--allow-egress' in step.argv
+    assert '--yes' in step.argv
 
 
 def test_legacy_flash_accepts_every_paid_node_after_pro_pin_removal():
-    """2026-09-16：取消 Pro 钉死后 Flash 可冻结任何现役付费节点 argv。"""
+    """2026-09-16：取消 Pro 钉死后 Flash 可冻结任何现役付费节点。
+
+    F9 起直连 LLM 节点 argv 不挂 legacy 旗标，模型断言落到 Step 记录面。
+    """
     backend = LegacyExecutorBackend(profile=LegacyLlmProfile(
         provider='deepseek', model='deepseek-flash',
         reasoning_effort='high', thinking_mode='on'))
@@ -511,7 +513,9 @@ def test_legacy_flash_accepts_every_paid_node_after_pro_pin_removal():
         step = N.build_steps(
             node, SID, base=BASE,
             executor_backend=backend, egress_authorized=True)[0]
-        assert step.argv[step.argv.index('--legacy-model') + 1] == 'deepseek-flash'
+        assert step.executor_backend is not None
+        assert step.executor_backend.profile.model == 'deepseek-flash'
+        assert not any(token.startswith('--legacy-') for token in step.argv)
 
 
 def test_no_current_node_takes_a_mode_and_retired_flags_are_refused():

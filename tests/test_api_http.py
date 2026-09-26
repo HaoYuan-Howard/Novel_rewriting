@@ -586,10 +586,14 @@ def test_executor_backend_is_identical_in_preview_and_start(
     assert [step.model_dump(mode='json') for step in expected_steps] == \
         preview_start['steps']
     argv = preview_start['steps'][0]['argv']
-    assert argv[argv.index('--legacy-provider') + 1] == 'deepseek'
-    assert argv[argv.index('--legacy-model') + 1] == 'deepseek-v4-pro'
-    assert argv[argv.index('--legacy-effort') + 1] == 'high'
-    assert argv[argv.index('--legacy-thinking') + 1] == 'on'
+    # F9 实证修复（F8d 遗留③）：直连 LLM 节点 canonical argv 不挂 executor
+    # backend 旗标（`_run_str06` 拒收）；preview/start 一致性落在 Step 记录面。
+    assert not any(token.startswith('--executor-') for token in argv)
+    assert not any(token.startswith('--legacy-') for token in argv)
+    assert preview_start['executor_backend'] == {
+        'kind': 'legacy', 'profile': {
+            'provider': 'deepseek', 'model': 'deepseek-v4-pro',
+            'reasoning_effort': 'high', 'thinking_mode': 'on'}}
     assert '--allow-egress' in argv
     for follow in preview_start['steps'][1:]:
         assert follow['executor_backend'] is None
