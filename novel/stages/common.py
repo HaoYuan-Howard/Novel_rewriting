@@ -39,8 +39,8 @@ from pydantic import BaseModel
 
 from contracts.schema.book_ir import WriterBookIR
 from contracts.schema.context import (
-    KnowledgeEntry, StateEntry, SurfaceRelease, VerificationIR, WriterBrief,
-    WriterContext, beats_ir,
+    KnowledgeEntry, PendingConfirmation, StateEntry, SurfaceRelease,
+    VerificationIR, WriterBrief, WriterContext, beats_ir,
 )
 from contracts.schema.design import BodyDesign
 from contracts.schema.execution import (
@@ -431,7 +431,13 @@ PRE_CHAPTER_RULE = """
 _PRESERVE_KIND_LINES = '\n'.join(
     f'- {kind}：{definition}' for kind, definition in PRESERVE_KIND_DEFS.items())
 
-PRESERVE_RULES = f"""任务：从源真值选择改写不可丢失的最小语义义务（保存策略 v2）。
+PRESERVE_RULES = f"""任务：从源真值选择改写不可丢失的最小语义义务（保存策略 v3）。
+
+【源真值的形状（v13）】Blueprints 的每一拍是一次状态转移：event 是给人读的事件
+表述；effects 是叙述确立的事实（带可见性 on_page／concealed 与作用域）；cognition
+是认知记录（命题＋持有者＋模式：learns/suspects/confirms/hears_claim/believes/
+asserts）；loops 是悬念（open 带问题、close 带 resolution）。拍上另有场景边界与
+temporal_mode（single＝单次行为、iterative＝重复行为）。
 
 【七类 kind（与 PreservationPolicy 的 PreserveKind 同源，只能取这些值）】
 {_PRESERVE_KIND_LINES}
@@ -443,9 +449,20 @@ PRESERVE_RULES = f"""任务：从源真值选择改写不可丢失的最小语�
 - statement 与 satisfaction 同时保留主客体、必要动机、公开说辞和真实想法的差别：
   公开说辞与真实动机不一致时，两者都写。
 
+【v13 必须保住的两类反差（质量改进批次二的实证缺口）】
+- 说辞与行为的反差：人物自称／对外表态（cognition 的 asserts／hears_claim／
+  believes，或 event 里的自述）与实际行为（effects 与 event 的行动）矛盾时，
+  保的是这层反差本身——不得把自述升格为已成立的内在准则，也不得只留一面；
+- 隐藏与揭示的时点：disclosure=concealed 的事实（带 known_by）与后续 cognition
+  对同一命题的揭示（持有者＋模式）是两件事：reveal 类义务必须写清**谁在何时
+  确认**（含读者），不能只保事实成立。
+
 【satisfaction 写"改写后必须成立什么，才能保住同样的作用"】
 触发与后果的连接点、误会如何形成、何时由谁确认（含读者）、成立的喜剧或反讽效果。
-可替换的细节（具体物件、措辞、场面陈设）不列。
+可替换的细节（具体物件、措辞、场面陈设）不列。temporal_mode=iterative 的重复
+行为：satisfaction 写"重复本身的作用"（日复一日的侵蚀／习惯的养成），不是其中
+任意一次的细节。loop 未收束的问题与 close 时的 resolution：悬念的铺设与兑现方式
+进 satisfaction。
 
 【切分与去重】
 - 一条义务承担一个作用，不整场转写；
@@ -471,9 +488,13 @@ DESIGN_RULES = """仅依据 Brief/Identity/OutputConstraints 设计目标书。�
 目标状态只存会限制后续的持续事实；即时动作留在事件。初始态由你显式选择，不复制源书末态。
 每个状态有 domain(character/relation/knowledge/world/reader), key, subjects(人物1个、关系有序2个),
 holder(knowledge 必填真实 char_id，其它 null), op(set/unset/unknown), value(string 或 null),
-scope(book/scene), knowledge_mode(knowledge 为 known/suspected/heard，其它 null)。
+scope(book/scene), knowledge_mode(knowledge 为 known/suspected/heard/believes，其它 null；
+believes＝持有者以为为真、不代表世界为真，用于传递错误看法)。
 读者延后确认的内容：在其确认拍放 domain=reader 的 target_delta，此前任何位置都不得让
 读者确认；线索、误导与猜测照常安排（受保护的是"何时确认"，不是"能否暗示"）。
+knowledge 的 knowledge_mode：known＝确知、suspected＝怀疑、heard＝听说、believes＝
+持有者以为为真（不代表世界为真）——错误看法（如"芸娘以为夫君已离开"）必须用 believes
+以结构形式传到写手，不得写成 known 让写手当作世界事实演出。
 临时动作环境用 scene；结束的长期状态用 unset；倒叙讲述只能改变当下读者/人物知情，不能倒改当前状态。
 每场 state_reads 显式列出实际需要的状态地址(domain,key,subjects,holder)，不要列全书状态。
 每拍 surface_introductions 只声明该位置首次允许的称谓 [{char_id,surfaces}]，不得一次放开该人物所有称谓；
@@ -671,12 +692,38 @@ def surface_engine_release(graph: BodyDesign, at_scene: str) -> tuple[SurfaceRel
     raise ValueError(f'未知场景 {at_scene}')
 
 
+def pending_reader_confirmations(
+    graph: BodyDesign, scene_index: int,
+) -> tuple[PendingConfirmation, ...]:
+    """本场开头及以后才发生的读者确认（D15）：从 Design 的 reader delta 确定性派生。
+
+    纯函数：同一 graph＋场序 ⇒ 同一清单。确认拍在本场内的标注 in_scene（渲染成
+    「自第 X 拍起可确认」）；在后场的，写手在此之前不得让读者确认——受保护的是
+    「何时确认」，不是「能否暗示」（线索、误导与猜测照常演出）。
+    """
+    items: list[PendingConfirmation] = []
+    for later, scene in enumerate(graph.scenes):
+        if later < scene_index:
+            continue
+        for beat in scene.beats:
+            for delta in beat.target_delta:
+                if delta.domain is not EffectDomain.READER or delta.op != 'set':
+                    continue
+                items.append(PendingConfirmation(
+                    fact=delta.value or '', key=delta.key,
+                    subjects=tuple(delta.subjects),
+                    position=f'{scene.scene_id}#{beat.beat_id}',
+                    in_scene=(later == scene_index)))
+    return tuple(items)
+
+
 def project_context(*, scene_id: str, graph: BodyDesign,
                     plan: ExecutionPlan, binding: SemanticBinding,
                     folded_prefix: FoldedPrefix) -> tuple[WriterContext, ExecutionSlice]:
     """场景双视图与消费身份的确定性投影（纯函数，不落盘、不调 LLM）。"""
     scene = next(s for s in graph.scenes if s.scene_id == scene_id)
     scene_plan = next(s for s in plan.scenes if s.scene_id == scene_id)
+    scene_index = next(i for i, s in enumerate(graph.scenes) if s.scene_id == scene_id)
     entries = sorted((e for e in binding.entries if e.scene_id == scene_id),
                      key=lambda e: e.obligation_id)
     ids = tuple(e.obligation_id for e in entries)
@@ -709,9 +756,11 @@ def project_context(*, scene_id: str, graph: BodyDesign,
     continuity = tuple(f'{r}：{positions[r][2].event}' for r in prior_refs)
     releases = surface_engine_release(graph, scene_id)
     delta = tuple(type(d)(**d.model_dump()) for b in scene.beats for d in b.target_delta)
+    pending = pending_reader_confirmations(graph, scene_index)
     ir = VerificationIR(scene_id=scene_id, obligations=owned, beats=beats_ir(scene_id, scene.beats),
                         entry_state=state, entry_knowledge=knowledge,
                         released_surfaces=releases, planned_delta=delta,
+                        pending_reader_confirmations=pending,
                         prohibitions=tuple(scene.delivery.avoid),
                         continuity_fact_view=continuity)
     facts = tuple(json.dumps(e.model_dump(mode='json'), ensure_ascii=False, sort_keys=True)
@@ -762,7 +811,8 @@ def project_context(*, scene_id: str, graph: BodyDesign,
 # ═════════════════════════════════════════════════════════════════════════════
 
 #: renderer 版本：进入正文请求身份。格式化规则变化必须换版。
-RENDERER_VERSION = 'str06-render-v1'
+#: v2（2026-09-26 质量改进批次二）：事实约束新增「尚未向读者确认的事实」清单（D15）。
+RENDERER_VERSION = 'str06-render-v2'
 
 #: 整书写作约定与自由度（Writer 协议，固定文本）。表达自由边界：entry 是
 #: 起笔已成立的状态、effects 是结束需成立的结果、义务必须实际兑现、局部
@@ -770,13 +820,15 @@ RENDERER_VERSION = 'str06-render-v1'
 #: v2（2026-09-26 质量改进批次 B5）：把「不得新增会改变时间线、身份、前史或
 #: 后续因果的设定」与「未揭示事实不得当作已确认信息叙述」写成显式两条——
 #: 前者管世界设定的精度边界，后者管揭示时点（线索、误导、猜测照常演出）。
-WRITER_PROTOCOL_VERSION = 'str06-body-protocol-v2'
+#: v3（2026-09-26 质量改进批次二）：第 5 条改指向【尚未向读者确认的事实】清单
+#: （compiler 逐场算好的确认位置，D15）——写手不再自行推断何时可确认。
+WRITER_PROTOCOL_VERSION = 'str06-body-protocol-v3'
 WRITER_PROTOCOL = """\
 1. 【事实约束】里标为入场状态（entry）的事实是起笔时已成立的状态：按叙事需要自然带入，不要求开场逐条介绍。
 2. 【事实约束】里的义务与逐拍结果是本章结束后需要成立的结果：通过情节实际完成，不要求用旁白逐条宣布；义务必须实际兑现，仅提到关键词不算完成。
 3. 在事实约束与导演说明的边界内，鼓励创造具体的对白、动作、停顿与即时反应；不因「保险」而一律写成说明文或全面回避心理与对白。
 4. 会改变时间线、身份、前史或后续因果的设定（时令、年龄、时距、身份头衔、人物前史）：输入与前文都没给出的，不新增也不写具体；已给出的保持原精度，不把两条独立的事实合成新的前史。局部布景、陈设与动作照常自由。
-5. 不得把尚未揭示的事实当作已确认的信息来叙述；导演说明安排的线索、误导与猜测照常演出——受保护的是「何时确认」，不是「能否暗示」。
+5. 【尚未向读者确认的事实】清单列出本场开头读者尚未确认的事实及其确认位置：标注「第 X 拍起可确认」的，该拍之前不得作为已确认信息叙述；标注后场位置的，本场之内不得让读者确认。清单管「何时确认」，不管「能否暗示」——线索、误导与猜测照常演出。
 6. 只使用已释放的称谓面；事实约束中标明「第 X 拍起可用」的称谓不得提前使用。
 7. 每一场的 POV 与 voice 是该场的叙述约定；多场 POV 不同时按场切换，不做全书统一。"""
 
@@ -802,6 +854,15 @@ def _scene_view(context: WriterContext) -> str:
     ]
     if brief.delivery_hints:
         parts.append('【拍级表达提示】\n' + '\n'.join(f'- {h}' for h in brief.delivery_hints))
+    if ir.pending_reader_confirmations:
+        lines = []
+        for item in ir.pending_reader_confirmations:
+            if item.in_scene:
+                where = f'本场第 {item.position.split("#", 1)[1]} 拍起可确认'
+            else:
+                where = f'{item.position} 才可确认'
+            lines.append(f'- {item.fact}（{item.key}）——{where}；此前不得让读者确认')
+        parts.append('【尚未向读者确认的事实】\n' + '\n'.join(lines))
     parts.append('【事实约束】\n' + _json({
         'obligations': [_obligation_view(o) for o in ir.obligations],
         'beats': [b.model_dump(mode='json') for b in ir.beats],

@@ -32,7 +32,7 @@ Design → Bind → Compile/Context；字段变化不接入现役注册表，正
 | Brief | `requirements: BriefRequirement[]` 无损保留所有 kind、must、statement、satisfaction；确定性不透明 ID 排序，依赖闭合；无源坐标或源数组顺序 |
 | Binding | 携带采用的完整 `obligations`；每条单一 `beat_ref` 最终验收拍，可有严格较早的 `supporting_beat_refs`；unbound 必保阻止编译，但义务不删除 |
 | Design | 必填 `initial_state` 与每场 `state_reads`；`TargetDelta` 显式 domain/key/subjects/holder/op/value/scope/knowledge_mode；称谓由 initial_surfaces 和逐拍 surface_introductions 释放，且只能释放 Characters 登记过的 surface（称谓闭合） |
-| 状态 | character 一个对象，relation 两个有序对象，knowledge 有真实 holder 与 known/suspected/heard 模式；set/unset/unknown/未建立分离；scene 覆盖退出后恢复 book 底值 |
+| 状态 | character 一个对象，relation 两个有序对象，knowledge 有真实 holder 与 known/suspected/heard/believes 模式（believes＝持有者以为为真，不代表世界为真）；set/unset/unknown/未建立分离；scene 覆盖退出后恢复 book 底值 |
 | Compile | 只消费 D/G，初始态来自 D，义务来自 G；检查完整分母、真实拍、前置与支撑拍序、DAG；实际状态读取亦生成依赖边；集合排序固定 |
 | Context | IR 携带完整义务与满足条件；WriterBrief 携带实质要求、POV、avoid、逐拍提示、局部 entry、明确前场支撑；不累计复制整书历史义务 |
 | 消费身份 | 绑定本场 D/G 内容、计划、状态、称谓、预算、完整义务语义和支撑拍；全书 checkpoint hash 与 attempt 不进入 slice；无关场内容变化不扩大失效 |
@@ -276,7 +276,7 @@ HookContext（`stage4/context/hook/hook.json`，Derived）包含 POV、按 audie
 的起笔事实、按设计序排列的材料投影（presentation，或 event＋未 withheld 的 set
 delta）、禁止揭示、两份 brief、长度边界、可用称谓与 `withheld_literals`（未释放的
 专名字面，由名称结构 ∩ 全部人物专名/带名 surface 推导，不写死人名）。事实渲染保留
-认知维度：domain、holder 与 knowledge_mode（知道/怀疑/听说）随事实文本进入阅读面，
+认知维度：domain、holder 与 knowledge_mode（知道/怀疑/听说/以为为真）随事实文本进入阅读面，
 读者域标明「读者视角成立，人物未必知晓」——写手据此判断呈现边界。起笔事实不是
 镜头描述，也不自动等于全书 T₀；冷开时区分世界已成立、POV 已知、读者获准知道。
 正文 reveal 位置和 Binding 不能单独决定 Hook 披露边界，单个 beat 含须隐藏侧面时由

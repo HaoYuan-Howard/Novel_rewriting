@@ -137,6 +137,36 @@ def test_project_brief_source_blind_projection():
     assert '夫君' in identity[0].identity_statement
 
 
+def test_identity_stable_constraints_come_only_from_the_fact_layer():
+    """2B：身份投影的 stable_constraints 只取事实层（initial_state 的 stable 人物事实）。
+
+    v13 起源侧有 cognition（命题＋持有者＋模式）与 concealed 效应；「谁以为什么」
+    与隐藏事实都不得进入稳定身份约束——认知归属 effects/fact 层管，身份约束只承载
+    叙述确立的稳定事实。CharactersCore 不含 cognition 字段，这里钉住投影不越层。
+    """
+    from tests.str06_facilities import v13_beat, v13_chapter
+    from novel.stages.stage2.source import ChapterCompiler
+    chars, bp, cp = _assemble()
+    # 同一条 source pair 上挂一份带 cognition/concealed 的章 wire：其文本若泄漏进
+    # 身份约束，下面两条断言会红。
+    compiler = ChapterCompiler(chars, evidence_ids=('e01_01',))
+    _ch2, errors = compiler.compile(v13_chapter(v13_beat(
+        'b01_02', '试探', participants=('fu_jun', 'yun'),
+        effects=({'target': {'kind': 'character', 'char_id': 'fu_jun'},
+                  'key': 'scene_location', 'op': 'set', 'value': '床底', 'scope': 'scene',
+                  'disclosure': {'visibility': 'concealed', 'known_by': ['fu_jun']},
+                  'proposition': {'ref': 'p_hide', 'statement': '夫君藏身床底'}},),
+        cognition=({'proposition': {'ref': 'p_believe', 'statement': '芸娘以为夫君已离开'},
+                    'holder': 'yun', 'mode': 'believes'},))), 1)
+    assert not errors, errors
+    _brief, identity = project_brief(cp, chars)
+    dumped = ' '.join(' '.join(i.stable_constraints) for i in identity)
+    assert '床底' not in dumped and '藏身' not in dumped
+    assert '以为' not in dumped and '离开' not in dumped
+    # 事实层的 stable 初始事实照常进入（这里 initial_state 为空 ⇒ 约束为空）
+    assert all(i.stable_constraints == () for i in identity)
+
+
 # ───────────────────────── Bind ─────────────────────────
 
 def test_assemble_binding_full_denominator():

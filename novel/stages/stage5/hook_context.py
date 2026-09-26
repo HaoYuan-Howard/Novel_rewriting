@@ -36,8 +36,9 @@ def _render_subjects(projection: NameProjection, subjects: tuple[str, ...]) -> s
     return '与'.join(_display(projection, s) for s in subjects)
 
 
-#: knowledge 认知模式 → 人读措辞（区分「知道、怀疑、听说」）。
-_KNOWLEDGE_MODES = {'known': '知道', 'suspected': '怀疑', 'heard': '听说'}
+#: knowledge 认知模式 → 人读措辞（区分「知道、怀疑、听说、以为为真」）。
+_KNOWLEDGE_MODES = {'known': '知道', 'suspected': '怀疑', 'heard': '听说',
+                    'believes': '以为为真（不代表世界为真）'}
 
 #: 效果域 → 人读措辞（「读者揭示」与人物知情分开）。
 _DOMAIN_LABELS = {'character': '人物', 'relation': '关系', 'knowledge': '知情',

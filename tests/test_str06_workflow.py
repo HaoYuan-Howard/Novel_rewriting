@@ -215,3 +215,133 @@ def test_changed_hook_copy_refuses_the_old_root_and_changes_requests(tmp_path):
             source_identity='d' * 64, task_id='task-1', configured_model='fake',
             created_at=1759000001)
     assert digest  # 身份函数同源引用（本反例不另算一份）
+
+
+def test_concealed_fact_reaches_writer_as_pending_reader_confirmation(tmp_path):
+    """2F：源侧 concealed 效应＋读者揭示 → Preserve reveal 义务 → Design 在确认拍放
+    reader delta → 写手章包逐场列出「尚未向读者确认的事实」（D15 全链）。
+
+    断言：确认前各场清单列出该事实；确认场标注确认拍；fold 的未揭示报告为空
+    （读者确已在该拍确认）。
+    """
+    book = {
+        'characters': {
+            'fu_jun': {'canonical': '夫君', 'surfaces': [
+                {'surface': '夫君', 'from_chapter': 1, 'until_chapter': None,
+                 'source_refs': ['e01_01']}]},
+            'yun': {'canonical': '云娘', 'surfaces': [
+                {'surface': '云娘', 'from_chapter': 1, 'until_chapter': None,
+                 'source_refs': ['e01_01']}]}},
+        'initial_state': [], 'world_constraints': []}
+    ch01 = v13_chapter(
+        v13_beat('b01_01', '夫君佯称离开，实则藏身床底', participants=('fu_jun',),
+                 effects=({'target': {'kind': 'character', 'char_id': 'fu_jun'},
+                           'key': 'scene_location', 'op': 'set', 'value': '床底',
+                           'scope': 'scene',
+                           'disclosure': {'visibility': 'concealed',
+                                          'known_by': ['fu_jun']},
+                           'proposition': {'ref': 'p_hide',
+                                           'statement': '夫君藏身床底'}},)),
+        v13_beat('b01_02', '床板响动，读者与云娘确认床底有人',
+                 participants=('yun', 'fu_jun'), boundary='continue',
+                 cognition=({'proposition': {'ref': 'p_hide'},
+                             'holder': 'reader', 'mode': 'learns'},)))
+    design = {
+        'initial_state': [],
+        'scenes': [
+            {'scene_id': 's01', 'state_reads': [],
+             'driver': {'focal_actor': 'yun', 'immediate_want': '确认声响来源',
+                        'opposition': '无人可问', 'turn': '决意亲自去看'},
+             'realization_brief': '重心在夜半响动后的试探；压缩寻问无果，'
+                                  '在决意亲自去到处收束，衔接下一场的揭示。',
+             'beats': [{'beat_id': 'bt1', 'event': '夜半响动', 'participants': ['yun'],
+                        'dramatic_intent': '加压', 'target_delta': [], 'delivery_hint': ''}],
+             'delivery': {'pov': 'yun', 'voice': '冷峻', 'avoid': []}},
+            {'scene_id': 's02', 'state_reads': [],
+             'driver': {'focal_actor': 'yun', 'immediate_want': '看清床底',
+                        'opposition': '恐惧', 'turn': '确认'},
+             'realization_brief': '重心在床底确认瞬间；从俯身写到确认，'
+                                  '在反应处收住。',
+             'beats': [{'beat_id': 'bt1', 'event': '确认床底有人',
+                        'participants': ['yun', 'fu_jun'], 'dramatic_intent': '揭示',
+                        'target_delta': [
+                            {'domain': 'reader', 'subjects': [], 'op': 'set',
+                             'scope': 'scene', 'key': 'hiding', 'value': '床底有人'}],
+                        'delivery_hint': ''}],
+             'delivery': {'pov': 'yun', 'voice': '冷峻', 'avoid': []}}],
+        'chapters': [{'chapter_ordinal': 1, 'purpose': '夜半响动到床底确认',
+                      'scene_ids': ['s01', 's02']}],
+        'chapter_weights': {'s01': 0.5, 's02': 0.5}}
+    preserve = {'obligations': [
+        {'obligation_id': 'ob01', 'kind': 'event_core',
+         'statement': '夫君佯称离开实则藏身床底',
+         'lineage': {'blueprint_refs': ['b01_01'], 'character_ids': ['fu_jun']},
+         'must_preserve': True,
+         'satisfaction': '正文呈现佯离与藏身的关系', 'requires': []},
+        {'obligation_id': 'ob02', 'kind': 'reveal',
+         'statement': '读者在床板响动后确认床底有人',
+         'lineage': {'blueprint_refs': ['b01_02'], 'character_ids': ['yun', 'fu_jun']},
+         'must_preserve': True,
+         'satisfaction': '正文呈现确认时点与反应', 'requires': ['ob01']}]}
+    wires = {
+        'book': book, 'ch01': ch01,
+        'names': {
+            'families': {'fam_yun': {'literal': '云', 'forms': []}},
+            'people': {
+                'fu_jun': {'family_id': None, 'given': None, 'aliases': [],
+                           'surface_forms': {'夫君': None}},
+                'yun': {'family_id': 'fam_yun', 'given': '娘', 'aliases': [],
+                        'surface_forms': {'云娘': '{family}{given}'}}}},
+        'preserve': preserve, 'design': design,
+        'bind': {'entries': [
+            {'obligation_id': 'ob01', 'scene_id': 's01', 'beat_ref': 's01#bt1'},
+            {'obligation_id': 'ob02', 'scene_id': 's02', 'beat_ref': 's02#bt1'}],
+            'unbound': []},
+        'hook_design': {
+            'pov': {'person': 'first', 'focalizers': ['yun']},
+            'materials': [{'beat_ref': 's02#bt1', 'withheld': []}],
+            'surface_releases': [], 'forbidden_reveals': [],
+            'design_brief': '从夜半响动切入，快速带过藏身，收在床底确认。',
+            'delivery_brief': '第一人称限知，短句，不解释。'},
+    }
+    repo = Str06Repository(tmp_path / 'book')
+    repo.attach_context(make_context(tmp_path / 'book', ledger=CostLedger(path=None)))
+    requests = []
+
+    def ask(owner, prompt, validate):
+        data = deepcopy(wires[owner])
+        assert not validate(data), (owner, validate(data))
+        requests.append((owner, prompt))
+        repo.context.note_adoption(owner=owner, model='fake', prompts={'user': prompt})
+        return data
+
+    report = run_workflow(
+        repository=repo, chapters=[{'chapter_ordinal': 1,
+                                    'text': '夫君与云娘一处住着。夜半床板响动，云娘确认床底有人。'}],
+        ask=ask,
+        ask_text=lambda owner, prompt: (_ for _ in ()).throw(AssertionError('不跑文本 owner')),
+        ask_body=lambda owner, prompt: (_ for _ in ()).throw(AssertionError('不跑正文 owner')),
+        budget=800)
+    assert report['guard_errors'] == []
+    # 源侧 fold：读者已在 b01_02 确认 ⇒ 未揭示 concealed 报告为空
+    fold = repo.inspect('stage2/acceptance/fold.json')
+    assert fold['concealed_unrevealed'] == []
+    assert fold['chapters']['1']['empty_transition_beats'] == 0
+    # 写手 IR：确认前（s01）列出该事实；确认场（s02）标注确认拍
+    writer_ir = repo.inspect('stage4/ir/writer_book_ir.json')
+    s01, s02 = writer_ir['chapters'][0]['scenes']
+    assert [(p['fact'], p['position'], p['in_scene'])
+            for p in s01['verification_ir']['pending_reader_confirmations']] == [
+        ('床底有人', 's02#bt1', False)]
+    assert [(p['fact'], p['position'], p['in_scene'])
+            for p in s02['verification_ir']['pending_reader_confirmations']] == [
+        ('床底有人', 's02#bt1', True)]
+    # 渲染进写手阅读面
+    from novel.stages.common import render_chapter_packet
+    from novel.store import Str06Repository as _Repo  # noqa: F401（仅示意依赖方向）
+    book_ir = repo.read_model('stage4/ir/writer_book_ir.json')
+    packet = render_chapter_packet(book_ir, 1, {})
+    assert '床底有人（hiding）——s02#bt1 才可确认' in packet
+    # Preserve 提示词带着揭示时点要求（v3 规则）
+    preserve_prompt = next(p for o, p in requests if o == 'preserve')
+    assert '谁在何时确认' in preserve_prompt

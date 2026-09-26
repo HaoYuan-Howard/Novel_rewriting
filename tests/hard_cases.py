@@ -92,6 +92,25 @@ def _guard_m5() -> list:
     return run_mechanical_guard(binding=binding, context=context, graph=graph)
 
 
+def _design_bad_knowledge_mode() -> list:
+    """R-5.12：knowledge 域的知情模式落在闭集外（believes 已入集，其余拒收）。"""
+    from novel.stages.stage4.design import assemble_body_design
+    wire = _design_wire_for_mode()
+    wire['scenes'][0]['beats'][0]['target_delta'].append(
+        {'domain': 'knowledge', 'subjects': [], 'holder': 'ch1', 'op': 'set',
+         'scope': 'book', 'key': 'guess', 'value': '以为夫君已离开',
+         'knowledge_mode': 'imagines'})
+    _body, errors = assemble_body_design(wire, known_char_ids={'ch1'})
+    return errors
+
+
+def _design_wire_for_mode() -> dict:
+    from tests.test_str06_target import _design_wire
+    wire = _design_wire()
+    wire['scenes'][0]['beats'][0]['participants'] = ['ch1']
+    return wire
+
+
 def _guard_m6() -> list:
     """M6：释放面人物尚未由 Design 声明参与或引入。"""
     from contracts.schema.context import SurfaceRelease
@@ -165,6 +184,7 @@ CASES: dict[str, Case] = {
     'guard_m4_carrier_ref': Case('stage4', _guard_m4, 'M4 承载位置'),
     'guard_m5_surface_release': Case('stage4', _guard_m5, 'M5 称谓释放'),
     'guard_m6_cast_legality': Case('stage4', _guard_m6, 'M6 人物合法性'),
+    'design_knowledge_mode_closure': Case('stage4', _design_bad_knowledge_mode, 'knowledge_mode'),
     'body_chapter_complete': Case('stage5', _body_empty, '[non_empty]'),
     'body_withheld_literals': Case('stage5', _body_withheld, '[withheld_literals]'),
     'hook_mechanical': Case('stage5', _hook_withheld, '[withheld_literals]'),

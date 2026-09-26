@@ -131,15 +131,69 @@ function CharactersPane({ chars }: { chars: NonNullable<Monitor['characters']['d
 function BlueprintPane({ blueprint }: { blueprint: NonNullable<Monitor['blueprint']['data']> }) {
   return (
     <Panel>
-      <PaneHeader title={'Blueprint v12 · 源骨架'} meta={<Mono>{blueprint.chapters.length} 章</Mono>} />
+      <PaneHeader title={'Blueprint v13 · 源骨架'} meta={<Mono>{blueprint.chapters.length} 章</Mono>} />
       <div className={'flex flex-col gap-12 px-18 py-16'}>
         {blueprint.chapters.map((chapter) => (
           <div key={chapter.chapter} className={'flex flex-col gap-6'}>
             <SectionTitle note={<Mono>{chapter.beats.length} 拍</Mono>}>第 {chapter.chapter} 章</SectionTitle>
             <ul className={'m-0 flex list-none flex-col gap-4 p-0 text-tag text-ink-2'}>
               {chapter.beats.map((beat) => (
-                <li key={beat.beat_id}>
-                  <Mono className={'text-ink-4'}>{beat.beat_id}</Mono> {beat.event}
+                <li key={beat.beat_id} className={'flex flex-col gap-2'}>
+                  <span>
+                    <Mono className={'text-ink-4'}>{beat.beat_id}</Mono>{' '}
+                    {beat.scene_boundary === 'new' ? <span className={'text-ink-4'}>〔开场景〕</span> : null}
+                    {beat.temporal_mode === 'iterative' ? <span className={'text-ink-4'}>〔重复〕</span> : null}{' '}
+                    {beat.event}
+                  </span>
+                  {beat.effects.length ? (
+                    <span className={'pl-12 text-tag text-ink-3'}>
+                      事实：
+                      {beat.effects.map((eff, i) => (
+                        <span key={i}>
+                          {i ? '；' : ''}
+                          <Mono>{String((eff as Record<string, unknown>).target && JSON.stringify((eff as Record<string, unknown>).target))}</Mono>
+                          {' '}
+                          <Mono>{String((eff as Record<string, unknown>).key)}</Mono>
+                          {'='}
+                          {String((eff as Record<string, unknown>).op)}
+                          {' '}
+                          {String((eff as Record<string, unknown>).value ?? '')}
+                          {((eff as Record<string, unknown>).disclosure as Record<string, unknown> | undefined)?.visibility === 'concealed'
+                            ? '（隐蔽）' : ''}
+                        </span>
+                      ))}
+                    </span>
+                  ) : null}
+                  {beat.cognition.length ? (
+                    <span className={'pl-12 text-tag text-ink-3'}>
+                      认知：
+                      {beat.cognition.map((cog, i) => (
+                        <span key={i}>
+                          {i ? '；' : ''}
+                          <Mono>{String((cog as Record<string, unknown>).proposition && JSON.stringify((cog as Record<string, unknown>).proposition))}</Mono>
+                          {' → '}
+                          {String((cog as Record<string, unknown>).holder)}
+                          {' '}
+                          {String((cog as Record<string, unknown>).mode)}
+                        </span>
+                      ))}
+                    </span>
+                  ) : null}
+                  {beat.loops.length ? (
+                    <span className={'pl-12 text-tag text-ink-3'}>
+                      悬念：
+                      {beat.loops.map((loop, i) => (
+                        <span key={i}>
+                          {i ? '；' : ''}
+                          <Mono>{String((loop as Record<string, unknown>).ref)}</Mono>
+                          {' '}
+                          {String((loop as Record<string, unknown>).op)}
+                          {' '}
+                          {String((loop as Record<string, unknown>).question ?? (loop as Record<string, unknown>).resolution ?? '')}
+                        </span>
+                      ))}
+                    </span>
+                  ) : null}
                 </li>
               ))}
             </ul>

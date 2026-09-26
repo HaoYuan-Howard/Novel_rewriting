@@ -19,6 +19,10 @@ v2（2026-09-26 质量改进批次 B2）：prompt 规则重写——七类 kind 
 按 kind 分列、satisfaction 写「保住同样作用必须成立什么」、must_preserve 改用
 反事实判据、同一事实不跨 kind 重复。类别集合不变，但判据变化会改变 Preserve
 结果，故升版；旧 checkpoint 不重解释。
+v3（2026-09-26 质量改进批次二）：源真值改 v13 拍模型（三类转移＋场景边界＋时间
+模式），prompt 规则随之补写两类必须保住的反差（说辞与行为、隐藏与揭示的时点）、
+iterative 重复行为的作用与 loop 问题／resolution 的兑现。类别集合不变，规则变化
+改变 Preserve 结果，故升版；旧 checkpoint 不重解释。
 """
 from __future__ import annotations
 

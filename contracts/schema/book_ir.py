@@ -84,9 +84,12 @@ class ChapterIR(StrictModel):
 
 
 class WriterBookIR(StrictModel):
-    """全书静态写作 IR（Derived；唯一 writer = stage4 book_ir compiler）。"""
+    """全书静态写作 IR（Derived；唯一 writer = stage4 book_ir compiler）。
 
-    contract_version: Literal['str06-rc4'] = 'str06-rc4'
+    RC5（v13 质量改进批次二）：VerificationIR 带「尚未向读者确认的事实」清单
+    （D15），renderer 与写作协议随升版——正文请求身份随之变化。"""
+
+    contract_version: Literal['str06-rc5'] = 'str06-rc5'
     book_brief: BookBrief
     chapters: tuple[ChapterIR, ...] = Field(min_length=1)
     provenance: FreeProvenance | LlmProvenance | None = Field(

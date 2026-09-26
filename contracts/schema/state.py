@@ -39,10 +39,12 @@ class StateAddress(StrictModel):
 
 
 class StateChange(StateAddress):
+    #: knowledge 域的知情模式（v13 质量改进批次二补 believes）：believes＝持有者
+    #: 以为为真，不代表世界为真——错误看法以此结构形式传到写手（D14）。
     op: Literal['set', 'unset', 'unknown']
     value: str | None
     scope: Literal['book', 'scene']
-    knowledge_mode: Literal['known', 'suspected', 'heard'] | None = None
+    knowledge_mode: Literal['known', 'suspected', 'heard', 'believes'] | None = None
 
     @model_validator(mode='after')
     def _operation(self) -> 'StateChange':

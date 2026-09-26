@@ -120,11 +120,11 @@ class ChapterAssignment(StrictModel):
 
 
 class BodyDesign(StrictModel):
-    """正文选择（canonical body view，RC4）。
+    """正文选择（canonical body view，RC5：v13 质量改进批次二补 believes 知情模式）。
 
     Bind、Compile、Context 与 Guard 的类型都收窄到这里——Hook 不是正文
     写前链路的输入，也不增加义务分母。"""
-    contract_version: Literal['str06-rc4'] = 'str06-rc4'
+    contract_version: Literal['str06-rc5'] = 'str06-rc5'
     graph_id: str = Field(min_length=1)
     initial_state: tuple[TargetDelta, ...]
     initial_surfaces: tuple[SurfaceIntroduction, ...] = ()
@@ -188,7 +188,7 @@ class BodyDesign(StrictModel):
 
 
 class PresentationGraph(BodyDesign):
-    """完整 Target Design canonical artifact（目标 v1，RC4）。
+    """完整 Target Design canonical artifact（目标 v1，RC5：随 BodyDesign 升版）。
 
     `hook` 必填：没有「正文设计完成但 Hook 未定」的中间态 canonical——
     完整 graph 由唯一 publisher 发布（novel/stages/stage5/hook.py）。

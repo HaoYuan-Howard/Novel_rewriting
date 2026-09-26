@@ -95,6 +95,8 @@ _hard('body_design_compile', 'stage4',
       'BodyDesign 编译闭合（场景、拍、章任务与约束合法）', 'R-5.1')
 _hard('design_surface_release_closure', 'stage4',
       'Design 放行面闭合在 Characters 登记面内（未登记字面不得释放）', 'R-5.1')
+_hard('design_knowledge_mode_closure', 'stage4',
+      'Design knowledge 域知情模式闭集（known/suspected/heard/believes；believes 不代表世界为真）', 'R-5.12')
 _hard('chapter_plan_shape', 'stage4',
       '目标章数等于源章数、章序 1..N 连续非空；允许跨章重构', 'R-5.2')
 _hard('length_budget_conserved', 'stage4',

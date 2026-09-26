@@ -218,6 +218,7 @@ Stage4 的四个付费节点按固定序推进：`preserve`（保存策略义务
 | R-5.9 | `BodyDesign`／`PresentationGraph` 的盘上形状由 `ARTIFACT_SPECS` 登记；模型自带 `contract_version` 字面量与候选产物表逐字对账。 | `载体`（`contracts/schema/design.py::BodyDesign`） |
 | R-5.10 | Design 实际输入无源叙述拓扑：`project_brief` 只投影义务与身份，源章拓扑/原文不进 prompt。 | `结构`（`novel/stages/stage4/grounding.py::project_brief`）；prompt 侧隔离守卫见 `B-05` |
 | R-5.11b | 当前组合的产物形状由候选产物表与 `ARTIFACT_SPECS` 登记（22 份书产物：家族＋schema 版本＋唯一 writer；模型自带 `contract_version` 的表值逐字对账），候选根的 workflow 身份记录绑定契约表身份与源输入身份；表漂移即拒绝复用旧根的采用结论。 | `载体`（`contracts/invariants.py::NODES`＋`contracts/artifacts.py::STR06_ARTIFACT_RC_VERSIONS` + `contracts/schema/__init__.py::ARTIFACT_SPECS`）+ `tests/test_str06_candidates.py` 对账 |
+| R-5.12 | **Design 知情词汇含 believes（D14）**：knowledge 域的 `knowledge_mode` 取值域为 known/suspected/heard/believes；believes＝持有者以为为真、不代表世界为真——错误看法以结构形式进入写手入场知情，不得写成 known 让写手当世界事实演出。Preserve 策略 v3 同批登记（源侧说辞/行为反差、concealed 揭示时点、iterative 作用、loop 问题与 resolution）。 | `HARD`（`contracts/schema/state.py::StateChange`＋`novel/stages/common.py::DESIGN_RULES`；反例 `tests/test_str06_execution_ir.py::test_believes_knowledge_enters_writer_view_without_becoming_world_fact`） |
 
 ### R-6 · 确定性编译（stage4 · str06.stage4.compile · 0 成本）
 
@@ -237,6 +238,7 @@ M1–M6 在本节点聚合执行，零错误才放行下游。
 | R-6.8 | **M5 称谓释放**：IR 释放集与 Design 显式释放集一致（同一称谓释放引擎）。 | `HARD`（`novel/stages/stage4/guard.py::run_mechanical_guard`） |
 | R-6.9 | **M6 合法人物**：释放面人物已由 Design 声明参与或引入。 | `HARD`（`novel/stages/stage4/guard.py::check_cast_legality`） |
 | R-6.10 | Guard 零错误不证明小说质量；本节点确定性重跑是 0 成本修复路（`deterministic_replay`）。 | `结构`（`novel/stages/stage4/guard.py::run_mechanical_guard`） |
+| R-6.11 | **尚未向读者确认的事实（D15）**：VerificationIR 带 `pending_reader_confirmations`——compiler 从 Design 的 reader delta 逐场确定性派生（本场开头及以后才发生的读者确认；确认拍在本场内标注「自第 X 拍起可确认」），写手据此不在确认前叙述；不新增 LLM 节点。renderer 与写作协议随清单升版（协议第 5 条指向清单）。 | `结构`（`novel/stages/common.py::pending_reader_confirmations`＋`_scene_view`；反例 `tests/test_str06_execution_ir.py`、`tests/test_str06_workflow.py`） |
 
 ### R-7 · 按章正文（stage5 · str06.stage5.body）
 
@@ -616,7 +618,7 @@ reasoning 已含在 completion 中时不再累加。
 | 非正文剔除（`stage0`，**13 条现役**） | R-0 |
 | 分章（`stage1`，**9 条现役**） | R-1 |
 | 源语义与名称结构（`stage2`，**18 条现役**） | R-2、R-3 |
-| 目标故事与确定性编译（`stage4`，**18 条现役**） | R-5、R-6（含 Guard M1–M6） |
+| 目标故事与确定性编译（`stage4`，**19 条现役**） | R-5、R-6（含 Guard M1–M6） |
 | 按章正文与 Hook（`stage5`，**8 条现役**） | R-7、R-8 |
 | 命名与交付（`stage7`，**8 条现役**） | R-10 |
 

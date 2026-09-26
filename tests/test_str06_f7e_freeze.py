@@ -31,10 +31,12 @@ from novel.llm.paid_requests import candidate_contract_identity
 
 #: F7e 冻结（2026-09-25）时的候选契约身份：节点表＋产物表＋RC 版式＋运行期
 #: 配置的 SHA-256。F8a 激活前若它与现状不等，先改冻结记录再激活。
-#: v13（2026-09-26 质量改进批次二）：Stage2 拍模型改三类转移＋场景分段，blueprints
-#: 与 fold／snapshots 三条产物换 rc5 标签、族版本 rc4→rc5 ⇒ 身份随形状变化同批
-#: 更新（登记见 docs/REQUIREMENTS.md 质量改进批次二；旧形状盘面明确拒读）。
-FROZEN_CONTRACT_IDENTITY = '55132ab2c0d4c391a0a529b385d414a31719773721b79a484444d46e690f4542'
+#: v13（2026-09-26 质量改进批次二）分两批更新：批 1（Stage2 拍模型三类转移，
+#: blueprints/fold/snapshots 换 rc5，族版本 rc4→rc5）；批 2（Design 知情词汇补
+#: believes、Preserve 策略 v3、VerificationIR 增「尚未向读者确认的事实」清单，
+#: body_design/presentation_graph/writer_book_ir 换 rc5）。旧形状盘面明确拒读，
+# 登记见 docs/REQUIREMENTS.md 质量改进批次二。
+FROZEN_CONTRACT_IDENTITY = '7fb5ecfaf8c315035e24d2ca4ba356ca4b9b7e8f348ab84f3eca849b7c5e933b'
 
 #: 冻结时的节点集合（11 个；F8a 激活后翻为正式 NODES）。
 FROZEN_NODES = (

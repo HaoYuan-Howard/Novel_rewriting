@@ -56,7 +56,8 @@ class KnowledgeEntry(StrictModel):
     subjects: tuple[str, ...] = ()
     key: str = Field(min_length=1)
     status: Literal['set', 'unset', 'unknown'] = 'set'
-    mode: Literal['known', 'suspected', 'heard']
+    #: v13（D14）补 believes：持有者以为为真，不代表世界为真。
+    mode: Literal['known', 'suspected', 'heard', 'believes']
 
 
 class BeatIR(StrictModel):
@@ -83,6 +84,21 @@ class BeatIR(StrictModel):
         return self
 
 
+class PendingConfirmation(StrictModel):
+    """尚未向读者确认的事实（D15）：compiler 从 Design 的 reader delta 逐场派生。
+
+    `fact` 是 reader delta 的 value（命题内容）；`position` 是确认位置
+    （`场景#拍`）；`in_scene`＝确认拍是否就在本场（本场内的标注「自第 X 拍起
+    可确认」，后场的写手在此之前不得让读者确认）。
+    """
+
+    fact: str = Field(min_length=1)
+    key: str = Field(min_length=1)
+    subjects: tuple[str, ...] = ()
+    position: str = Field(min_length=1)
+    in_scene: bool
+
+
 class VerificationIR(StrictModel):
     """事实约束视图：写前机械 Guard 的验证输入与写手的硬边界清单。"""
 
@@ -93,6 +109,9 @@ class VerificationIR(StrictModel):
     entry_knowledge: tuple[KnowledgeEntry, ...] = Field(default=(), min_length=0)
     released_surfaces: tuple[SurfaceRelease, ...] = Field(default=(), min_length=0)
     planned_delta: tuple[TargetDelta, ...] = Field(default=(), min_length=0)
+    #: 尚未向读者确认的事实（D15）：本场开头及以后才发生的 reader 确认。
+    pending_reader_confirmations: tuple[PendingConfirmation, ...] = Field(
+        default=(), min_length=0)
     #: 明确禁止事项：只从已有显式限制（delivery.avoid）投影；不从未来剧情猜政策。
     prohibitions: tuple[str, ...] = Field(default=(), min_length=0)
     continuity_fact_view: tuple[str, ...] = Field(
@@ -123,9 +142,11 @@ class WriterBrief(StrictModel):
 
 
 class WriterContext(StrictModel):
-    """双视图载体（Derived；F5 起嵌入 ChapterIR，不再单独落盘成场景文件）。"""
+    """双视图载体（Derived；F5 起嵌入 ChapterIR，不再单独落盘成场景文件）。
 
-    contract_version: Literal['str06-rc4'] = 'str06-rc4'
+    RC5（v13 质量改进批次二）：VerificationIR 带「尚未向读者确认的事实」清单。"""
+
+    contract_version: Literal['str06-rc5'] = 'str06-rc5'
     scene_id: str = Field(min_length=1)
     execution_slice_sha256: str = Field(min_length=64, max_length=64)
     verification_ir: VerificationIR

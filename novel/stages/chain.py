@@ -324,7 +324,7 @@ def run_preserve(ctx: ChainContext) -> dict:
                                   blueprints=blueprint.model_dump(mode='json'))
 
     def preserve_compile(w):
-        return assemble_preserve(w, policy_id='preserve-default', policy_version=2,
+        return assemble_preserve(w, policy_id='preserve-default', policy_version=3,
                                  characters=core, blueprint=blueprint,
                                  provider=ctx.provider, model=ctx.model,
                                  request_sha256=ctx.digest(preserve_prompt))

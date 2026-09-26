@@ -44,6 +44,7 @@ Guard 零错误不证明小说质量；本节点确定性重跑是 0 成本修�
 |---|---|---|
 | `body_design_compile` | hard | BodyDesign 编译闭合 |
 | `design_surface_release_closure` | hard | Design 放行面闭合在 Characters 登记面内（未登记字面不得释放） |
+| `design_knowledge_mode_closure` | hard | Design knowledge 域知情模式闭集（known/suspected/heard/believes；believes 不代表世界为真） |
 | `chapter_plan_shape` | hard | 目标章数等于源章数、章序 1..N 连续非空；允许跨章重构 |
 | `length_budget_conserved` | hard | 章预算 largest-remainder 分配、总和守恒 |
 | `preserve_compile` | hard | Preserve checkpoint 编译闭合 |
@@ -61,5 +62,5 @@ Guard 零错误不证明小说质量；本节点确定性重跑是 0 成本修�
 | `guard_m5_surface_release` | hard | M5 称谓释放一致 |
 | `guard_m6_cast_legality` | hard | M6 合法人物 |
 
-当前注册表共 **18 条**：**16 hard、1 metric、1 unver**。唯一注册表为
+当前注册表共 **19 条**：**17 hard、1 metric、1 unver**。唯一注册表为
 `contracts/judges/str06.py`（F8c 起分流至本层判据模块）。

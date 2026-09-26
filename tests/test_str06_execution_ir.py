@@ -20,7 +20,8 @@ from contracts.schema.source import (
 )
 from novel.stages.stage4.compile import compile_execution_plan, init_establishments
 from novel.stages.stage4.fold import FoldedState, fold_accepted_prefix
-from novel.stages.common import project_context
+from novel.stages.common import project_context, render_chapter_packet
+from novel.stages.stage4.book_ir import compile_writer_book_ir
 
 H64 = 'a' * 64
 
@@ -161,3 +162,101 @@ def test_project_context_dual_view_and_slice_identity():
         scene_id='s02', graph=graph, plan=plan,
         binding=binding, folded_prefix=folded)
     assert slice4.execution_slice_sha256 != slice_.execution_slice_sha256
+
+
+def _reader_delta_graph():
+    """两场各有一个 reader 确认：s01#bt1 确认「床底有人」，s02#bt1 确认「衣柜藏身」。"""
+    return BodyDesign(initial_state=(), graph_id='g2',
+        scenes=(
+            _scene('s01', ('reader', 'hiding', '床底有人')),
+            _scene('s02', ('reader', 'wardrobe', '衣柜藏身'))),
+        chapters=(ChapterAssignment(chapter_ordinal=1, purpose='两次揭示',
+                                    scene_ids=('s01', 's02')),),
+        chapter_weights={'s01': 0.5, 's02': 0.5})
+
+
+def test_pending_reader_confirmations_are_derived_per_scene():
+    """D15：确认前各场列出该事实，确认场标注确认拍，确认后不再列出。"""
+    cp = _cp(_ob('ob1'))
+    graph = _reader_delta_graph()
+    binding = _binding(cp)
+    plan, errors = compile_execution_plan(graph, binding)
+    assert not errors, errors
+    folded = fold_accepted_prefix(plan.scenes[:1])
+    ctx1, _ = project_context(scene_id='s01', graph=graph, plan=plan,
+                              binding=binding, folded_prefix=folded)
+    pending1 = ctx1.verification_ir.pending_reader_confirmations
+    assert [(p.fact, p.position, p.in_scene) for p in pending1] == [
+        ('床底有人', 's01#bt1', True), ('衣柜藏身', 's02#bt1', False)]
+    ctx2, _ = project_context(scene_id='s02', graph=graph, plan=plan,
+                              binding=binding,
+                              folded_prefix=fold_accepted_prefix(plan.scenes[:2]))
+    pending2 = ctx2.verification_ir.pending_reader_confirmations
+    # 床底之事实已在 s01 确认：s02 起不再列入
+    assert [(p.fact, p.position, p.in_scene) for p in pending2] == [
+        ('衣柜藏身', 's02#bt1', True)]
+
+
+def test_pending_confirmations_render_into_the_writer_packet():
+    """清单进正文请求（renderer v2）：本场确认标注「第 X 拍起」，后场标注位置。"""
+    from novel.stages.common import render_chapter_packet
+    cp = _cp(_ob('ob1'))
+    graph = _reader_delta_graph()
+    binding = _binding(cp)
+    plan, _ = compile_execution_plan(graph, binding)
+    book_ir = compile_writer_book_ir(
+        graph=graph, plan=plan, binding=binding, total_budget=1000,
+        length_band=(0.6, 1.3), book_title='t')
+    packet = render_chapter_packet(book_ir, 1, {})
+    assert '【尚未向读者确认的事实】' in packet
+    assert '床底有人（hiding）——本场第 bt1 拍起可确认' in packet
+    assert '衣柜藏身（wardrobe）——s02#bt1 才可确认' in packet
+    assert '第 5 条' not in packet  # 协议编号不出现；条目文本以清单为准
+    assert '【尚未向读者确认的事实】清单列出本场开头读者尚未确认的事实' in packet
+
+
+def test_believes_knowledge_enters_writer_view_without_becoming_world_fact():
+    """D14：believes 从 Design 进入写手入场知情；不被当作世界事实。
+
+    模式：s01 建立「以为夫君已离开」（knowledge/believes），s02 读取它——
+    场内自建立的地址不是入场消费（F5e），误以为要在后场才进 entry_knowledge。
+    """
+    establish = TargetScene(
+        state_reads=(), scene_id='s01',
+        driver=SceneDriver(focal_actor='ch1', immediate_want='w', opposition='o', turn='t'),
+        realization_brief='重心在误以为夫君已离开；展开试探，收在决心留守。',
+        beats=(TargetBeat(
+            beat_id='bt1', event='误以为', participants=('ch1',),
+            dramatic_intent='d',
+            target_delta=(TargetDelta(
+                domain='knowledge', key='left_home', value='以为夫君已离开',
+                holder='ch1', op='set', scope='book', knowledge_mode='believes'),)),),
+        delivery=SceneDelivery(pov='ch1', voice='v'))
+    consume = TargetScene(
+        state_reads=({'domain': 'knowledge', 'subjects': [], 'holder': 'ch1',
+                      'key': 'left_home'},),
+        scene_id='s02',
+        driver=SceneDriver(focal_actor='ch1', immediate_want='w2', opposition='o', turn='t'),
+        realization_brief='重心在据误以为行动；展开试探，收在结果落地。',
+        beats=(TargetBeat(
+            beat_id='bt1', event='据误以为行动', participants=('ch1',),
+            dramatic_intent='d', target_delta=()),),
+        delivery=SceneDelivery(pov='ch1', voice='v'))
+    graph = BodyDesign(initial_state=(), graph_id='g3', scenes=(establish, consume),
+        chapters=(ChapterAssignment(chapter_ordinal=1, purpose='误以为',
+                                    scene_ids=('s01', 's02')),),
+        chapter_weights={'s01': 0.5, 's02': 0.5})
+    binding = _binding(_cp(_ob('ob1')))
+    plan, errors = compile_execution_plan(graph, binding)
+    assert not errors, errors
+    folded = fold_accepted_prefix(plan.scenes)
+    knowledge = folded.entry_knowledge_view()
+    assert [e.mode for e in knowledge] == ['believes']
+    assert knowledge[0].holder == 'ch1'
+    # 人物域状态视图不含这条「以为」——它不是世界事实
+    assert all(e.holder is None for e in folded.entry_state_view('s02#start'))
+    ctx, _ = project_context(scene_id='s02', graph=graph, plan=plan,
+                             binding=binding,
+                             folded_prefix=fold_accepted_prefix(plan.scenes[:1]))
+    assert [e.mode for e in ctx.verification_ir.entry_knowledge] == ['believes']
+    assert ctx.verification_ir.entry_state == ()
