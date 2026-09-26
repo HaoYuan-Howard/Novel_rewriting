@@ -33,12 +33,10 @@
         "novel/work_units.py",
         "novel/paths.py",
         "docs/schema/str06.md",
-        "novel/cli/main.py",
-        "tools/stage2_context_probe.py"
+        "novel/cli/main.py"
       ],
       "tests": [
         "tests/test_str06_*.py",
-        "tests/test_stage2_context_probe.py",
         "tests/test_layering.py",
         "tests/test_test_selection.py"
       ]
@@ -671,12 +669,6 @@
       ]
     },
     "tests/test_stage2_review_ledger.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage2"
-      ]
-    },
-    "tests/test_stage2_context_probe.py": {
       "layer": "unit_contract",
       "stages": [
         "stage2"

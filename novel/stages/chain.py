@@ -802,10 +802,10 @@ def str06_chat_request(cfg, owner: str, prompt: str, *, json_mode: bool, system:
 class PaidBoundary:
     """付费边界装配体：workflow／epoch、ledger、`PaidRequestSession` 与请求构造。
 
-    正式 CLI 节点执行（`execute`）与一次性实验探针（`tools/stage2_context_probe.py`）
-    共用本装配——实验**不另建付费通路**：同一 session、同一 ledger、同一
-    `enforce_request_budget` 闸、同一 workflow／epoch 生命周期。授权仍由调用方
-    显式给出（`--yes`／`--allow-source-export`），本装配不代批。
+    正式 CLI 节点执行（`execute`）经本装配走付费边界——**不另建付费通路**：
+    同一 session、同一 ledger、同一 `enforce_request_budget` 闸、同一 workflow／
+    epoch 生命周期。授权仍由调用方显式给出（`--yes`／`--allow-source-export`），
+    本装配不代批。
     """
 
     repository: Any

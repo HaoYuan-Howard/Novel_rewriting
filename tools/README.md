@@ -40,7 +40,6 @@ scripts/export_plot_types.py、export_plot_fixture.py 与 export_stage2_core_fix
 | `archive_stage3_v1_books.py` | 已完成的 Stage3 v1 两书归档一次性工具（preview 默认，`--execute` 门控） |
 | `effort_ab.py` | FC-13 逐节点 effort 实验一次性 runner |
 | `node_role_table.py` | 一次性节点角色表生成 |
-| `stage2_context_probe.py` | 质量改进批次二 · 批 0 Stage2 上下文/架构探针（0 成本预览默认；`--execute --yes --allow-egress` 才购买；设施装配复用 `novel/stages/chain.py`）。预登记裁决规则见 `docs/REQUIREMENTS.md` 质量改进批次二 · 批 0；结论登记后不为后续批次扩展；批 3 的 ch03–ch05 单臂重复采样仍要用它，该采样完成并与 tests/test_stage2_context_probe.py 同批删除（删除条件见 contracts/schema/retirement.py keep 桶） |
 
 ## F8c 清理记录
 
@@ -48,3 +47,7 @@ scripts/export_plot_types.py、export_plot_fixture.py 与 export_stage2_core_fix
 `stage6_style_ab.py` / `stage6_style_ab_review.py`（Stage6 整层已退役，2026-08-24
 冻结实验的复现面随之关闭）、`characters_v3_m0_pilot.py`（旧 Stage2 characters
 v3 生产链已退役）。另删 `verify_agent_e2e.py` 登记行——该工具已不在盘上。
+stage2_context_probe.py（批 0 Stage2 上下文/架构探针）随质量改进批次二 ·
+批 3 取消而删除：原登记的删除条件是「批 3 的 ch03–ch05 单臂重复采样完成」，批 3
+取消后该采样不再发生，工具及其契约测试同批删除；探针产物与证据留在
+outputs/str06_stage2_probe_20260926/ 只读保留，裁决见 `docs/DECISIONS.md` 批 0 一行。
