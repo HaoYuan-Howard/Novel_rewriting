@@ -206,9 +206,10 @@ def _preserve_bad_wire() -> list:
     from novel.stages.stage4.grounding import assemble_preserve
 
     from contracts.schema.source import (
-        Beat, BlueprintsArtifactV12, ChapterBlueprint, CharacterEntry,
+        BlueprintsArtifactV13, ChapterBlueprint, CharacterEntry,
         CharactersCore, SurfaceWindow,
     )
+    from tests.str06_facilities import v13_beat
     entry = {'obligation_id': 'o1', 'kind': 'event_core', 'statement': 's',
              'must_preserve': True, 'satisfaction': '明确呈现',
              'lineage': {'blueprint_refs': ['b01_01'], 'character_ids': []}}
@@ -219,9 +220,11 @@ def _preserve_bad_wire() -> list:
             canonical='苏姑娘',
             surfaces=(SurfaceWindow(surface='苏姑娘', from_chapter=1,
                                     source_refs=('e01_01',)),))}),
-        blueprint=BlueprintsArtifactV12(chapters=(
-            ChapterBlueprint(chapter=1, beats=(Beat(
-                beat_id='b01_01', event='e', source_refs=('e01_01',)),)),)),
+        blueprint=BlueprintsArtifactV13(chapters=(
+            ChapterBlueprint(chapter=1,
+                             beats=(v13_beat('b01_01', 'e'),),
+                             scenes=({'scene_id': 'sc01', 'beat_ids': ('b01_01',)},),
+                             causal_edges=()),)),
         provider='p', model='m', request_sha256='a' * 64)
     return errors
 
@@ -525,6 +528,7 @@ def _chapter_ordinals_not_dense() -> list:
 def _chapter_blueprint_bad_wire() -> list:
     """逐章 Blueprint 编译闭合：participants 引用人物账之外的人物。"""
     from novel.stages.stage2.source import ChapterCompiler, compile_book
+    from tests.str06_facilities import v13_beat, v13_chapter
     chars, _wcs, errors = compile_book({
         'characters': {'fu_jun': {'canonical': '夫君', 'surfaces': [
             {'surface': '夫君', 'from_chapter': 1, 'until_chapter': None,
@@ -532,31 +536,148 @@ def _chapter_blueprint_bad_wire() -> list:
         'initial_state': [], 'world_constraints': []}, evidence_ids=('e01_01',))
     assert not errors and chars is not None
     compiler = ChapterCompiler(chars, evidence_ids=('e01_01',))
-    _bp, errors = compiler.compile({
-        'beats': [{'beat_id': 'b01_01', 'event': '开篇', 'participants': ['ghost'],
-                   'source_refs': ['e01_01'], 'effects': [], 'reveals': []}],
-        'causal_edges': []}, 1)
+    _bp, errors = compiler.compile(
+        v13_chapter(v13_beat('b01_01', '开篇', participants=('ghost',))), 1)
     return errors
 
 
 def _fold_loop_close_without_open() -> list:
-    """fold 与 Blueprint canonical 一致：close 无对应 open 记事件。"""
-    from contracts.schema.source import (
-        BlueprintsArtifactV12, ChapterBlueprint, CharacterEntry, CharactersCore,
-        SurfaceWindow,
-    )
-    from novel.stages.stage2.source import source_fold
-    chars = CharactersCore(characters={'ch1': CharacterEntry(
-        canonical='夫君',
-        surfaces=(SurfaceWindow(surface='夫君', from_chapter=1,
-                                source_refs=('e01_01',)),))})
-    bp = BlueprintsArtifactV12(chapters=(ChapterBlueprint(chapter=1, beats=(
-        {'beat_id': 'b01_01', 'event': '收束', 'participants': [], 'source_refs': ['e01_01'],
-         'effects': [{'target': {'kind': 'loop', 'loop_id': 'loop_x'},
-                      'key': '悬而未决', 'op': 'close', 'value': None}],
-         'reveals': []},), causal_edges=()),))
-    _snapshots, events = source_fold(chars, bp)
-    return events
+    """v13：close 未开放的悬念在 compile 层即拒（fold 不再可能见到不一致的 canonical）。"""
+    from novel.stages.stage2.source import ChapterCompiler, compile_book
+    from tests.str06_facilities import v13_beat, v13_chapter
+    chars, _wcs, errors = compile_book({
+        'characters': {'ch1': {'canonical': '夫君', 'surfaces': [
+            {'surface': '夫君', 'from_chapter': 1, 'until_chapter': None,
+             'source_refs': ['e01_01']}]}},
+        'initial_state': [], 'world_constraints': []}, evidence_ids=('e01_01',))
+    assert not errors and chars is not None
+    compiler = ChapterCompiler(chars, evidence_ids=('e01_01',))
+    _bp, errors = compiler.compile(
+        v13_chapter(v13_beat('b01_01', '收束',
+                             loops=({'ref': 'loop_x', 'op': 'close',
+                                     'resolution': '收束内容'},))), 1)
+    return errors
+
+
+def _loop_reopened() -> list:
+    """R-2.11：已 open 的 loop 再次 open（问题文本借机改写）。"""
+    from novel.stages.stage2.source import ChapterCompiler, compile_book
+    from tests.str06_facilities import v13_beat, v13_chapter
+    chars, _wcs, errors = compile_book({
+        'characters': {'ch1': {'canonical': '夫君', 'surfaces': [
+            {'surface': '夫君', 'from_chapter': 1, 'until_chapter': None,
+             'source_refs': ['e01_01']}]}},
+        'initial_state': [], 'world_constraints': []}, evidence_ids=('e01_01',))
+    assert not errors and chars is not None
+    compiler = ChapterCompiler(chars, evidence_ids=('e01_01',))
+    _bp, errors = compiler.compile(
+        v13_chapter(v13_beat('b01_01', '开悬念',
+                             loops=({'ref': 'mystery', 'op': 'open',
+                                     'question': '谁在暗中窥伺'},))), 1)
+    assert not errors
+    _bp2, errors = compiler.compile(
+        v13_chapter(v13_beat('b02_01', '再开同一悬念并改写问题',
+                             source_refs=('e02_01',),
+                             loops=({'ref': 'loop01', 'op': 'open',
+                                     'question': '改写后的问题'},))), 2)
+    return errors
+
+
+def _proposition_dangling() -> list:
+    """R-2.12：cognition 引用未登记的命题（跨章正式 ID 不存在）。"""
+    from novel.stages.stage2.source import ChapterCompiler, compile_book
+    from tests.str06_facilities import v13_beat, v13_chapter
+    chars, _wcs, errors = compile_book({
+        'characters': {'ch1': {'canonical': '夫君', 'surfaces': [
+            {'surface': '夫君', 'from_chapter': 1, 'until_chapter': None,
+             'source_refs': ['e01_01']}]}},
+        'initial_state': [], 'world_constraints': []}, evidence_ids=('e01_01',))
+    assert not errors and chars is not None
+    compiler = ChapterCompiler(chars, evidence_ids=('e01_01',))
+    _bp, errors = compiler.compile(
+        v13_chapter(v13_beat('b01_01', '引用幽灵命题',
+                             cognition=({'proposition': {'ref': 'k99'},
+                                         'holder': 'ch1', 'mode': 'learns'},))), 1)
+    return errors
+
+
+def _concealed_without_known_by() -> list:
+    """R-2.13：concealed 效应不声明已知者（揭示链无从闭合）。"""
+    from novel.stages.stage2.source import ChapterCompiler, compile_book
+    from tests.str06_facilities import v13_beat, v13_chapter
+    from pydantic import ValidationError
+    chars, _wcs, errors = compile_book({
+        'characters': {'ch1': {'canonical': '夫君', 'surfaces': [
+            {'surface': '夫君', 'from_chapter': 1, 'until_chapter': None,
+             'source_refs': ['e01_01']}]}},
+        'initial_state': [], 'world_constraints': []}, evidence_ids=('e01_01',))
+    assert not errors and chars is not None
+    compiler = ChapterCompiler(chars, evidence_ids=('e01_01',))
+    try:
+        _bp, errors = compiler.compile(
+            v13_chapter(v13_beat('b01_01', '藏身不声明已知者',
+                                 effects=({'target': {'kind': 'character',
+                                                      'char_id': 'ch1'},
+                                           'key': 'scene_location', 'op': 'set',
+                                           'value': '床底', 'scope': 'scene',
+                                           'disclosure': {'visibility': 'concealed'}},))), 1)
+    except ValidationError as exc:
+        return [str(exc)]
+    return errors
+
+
+def _registered_key_wrong_scope() -> list:
+    """R-2.14：scene_location 声明 book 作用域（登记键作用域固定）。"""
+    from novel.stages.stage2.source import ChapterCompiler, compile_book
+    from tests.str06_facilities import v13_beat, v13_chapter
+    chars, _wcs, errors = compile_book({
+        'characters': {'ch1': {'canonical': '夫君', 'surfaces': [
+            {'surface': '夫君', 'from_chapter': 1, 'until_chapter': None,
+             'source_refs': ['e01_01']}]}},
+        'initial_state': [], 'world_constraints': []}, evidence_ids=('e01_01',))
+    assert not errors and chars is not None
+    compiler = ChapterCompiler(chars, evidence_ids=('e01_01',))
+    _bp, errors = compiler.compile(
+        v13_chapter(v13_beat('b01_01', '位置键作用域声明错',
+                             effects=({'target': {'kind': 'character',
+                                                  'char_id': 'ch1'},
+                                       'key': 'scene_location', 'op': 'set',
+                                       'value': '正厅', 'scope': 'book',
+                                       'disclosure': {'visibility': 'on_page'}},))), 1)
+    return errors
+
+
+def _retired_whereabouts_key() -> list:
+    """R-2.14：已退役的 whereabouts 键（一值多义：位置＋藏身＋身体状态）。"""
+    from novel.stages.stage2.source import ChapterCompiler, compile_book
+    from tests.str06_facilities import v13_beat, v13_chapter
+    chars, _wcs, errors = compile_book({
+        'characters': {'ch1': {'canonical': '夫君', 'surfaces': [
+            {'surface': '夫君', 'from_chapter': 1, 'until_chapter': None,
+             'source_refs': ['e01_01']}]}},
+        'initial_state': [], 'world_constraints': []}, evidence_ids=('e01_01',))
+    assert not errors and chars is not None
+    compiler = ChapterCompiler(chars, evidence_ids=('e01_01',))
+    _bp, errors = compiler.compile(
+        v13_chapter(v13_beat('b01_01', '旧位置键借道',
+                             effects=({'target': {'kind': 'character',
+                                                  'char_id': 'ch1'},
+                                       'key': 'whereabouts', 'op': 'set',
+                                       'value': '陆家卧房内，藏于床底', 'scope': 'book',
+                                       'disclosure': {'visibility': 'on_page'}},))), 1)
+    return errors
+
+
+def _surface_anchor_without_literal() -> list:
+    """R-2.10：称谓的证据锚点段不含该字面（from_chapter 的派生失去依据）。"""
+    from novel.stages.stage2.source import compile_book
+    chars, _wcs, errors = compile_book({
+        'characters': {'ch1': {'canonical': '夫君', 'surfaces': [
+            {'surface': '陆大哥', 'from_chapter': 1, 'until_chapter': None,
+             'source_refs': ['e01_01']}]}},
+        'initial_state': [], 'world_constraints': []},
+        evidence_ids={'e01_01': {'chapter': 1, 'text': '本章根本没出现这个称呼。'}})
+    return errors
 
 
 def _names_structure_uncovered() -> list:
@@ -596,7 +717,14 @@ CASES.update({
     'source_chapter_blueprint': Case(
         'stage2', _chapter_blueprint_bad_wire, '未知人物'),
     'source_fold_consistent': Case(
-        'stage2', _fold_loop_close_without_open, 'close 无对应 open'),
+        'stage2', _fold_loop_close_without_open, '未登记的悬念'),
+    'source_loop_lifecycle': Case('stage2', _loop_reopened, '重复 open'),
+    'source_proposition_closure': Case('stage2', _proposition_dangling, '引用未登记命题'),
+    'source_effect_disclosure': Case('stage2', _concealed_without_known_by, 'known_by'),
+    'source_registered_key_scope': Case(
+        'stage2', _registered_key_wrong_scope, '作用域固定为'),
+    'source_surface_anchor_literal': Case(
+        'stage2', _surface_anchor_without_literal, '锚点不含该字面'),
     'names_structure_compile': Case(
         'stage2', _names_structure_uncovered, '未恰好覆盖'),
     'names_coverage': Case('stage2', _names_coverage_missing_entry, '漏项'),

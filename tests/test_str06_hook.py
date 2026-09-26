@@ -39,7 +39,7 @@ from novel.store import Str06Repository
 from novel.errors import PathRefused
 from novel.llm.ledger import CostLedger
 from novel.paths import check_rel_family
-from tests.str06_facilities import make_context
+from tests.str06_facilities import make_context, v13_beat, v13_chapter
 
 H64 = 'a' * 64
 SRC = '苏芸娘嫁入陆家，唤夫君为陆大哥，苏姑娘陪嫁，陆兄迎娶。'
@@ -654,14 +654,11 @@ def _full_chain_wires():
          'keep_reason': None}]}
     return {
         'book': book,
-        'ch01': {'beats': [
-            {'beat_id': 'b01_01', 'event': '苏芸娘嫁入陆家，夫君立下旧约。',
-             'participants': ['yun_niang', 'fu_jun'], 'source_refs': ['e01_01'],
-             'effects': [], 'reveals': []}], 'causal_edges': []},
-        'ch02': {'beats': [
-            {'beat_id': 'b02_01', 'event': '夫君夜半离家，芸娘发现玉佩之秘。',
-             'participants': ['yun_niang', 'fu_jun'], 'source_refs': ['e02_01'],
-             'effects': [], 'reveals': []}], 'causal_edges': []},
+        'ch01': v13_chapter(v13_beat('b01_01', '苏芸娘嫁入陆家，夫君立下旧约。',
+                                     participants=('yun_niang', 'fu_jun'))),
+        'ch02': v13_chapter(v13_beat('b02_01', '夫君夜半离家，芸娘发现玉佩之秘。',
+                                     participants=('yun_niang', 'fu_jun'),
+                                     source_refs=('e02_01',))),
         'names': chars.name_structure.model_dump(mode='json'),
         'preserve': {'obligations': [
             {'obligation_id': 'ob01', 'kind': 'event_core',

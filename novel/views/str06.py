@@ -195,7 +195,7 @@ def characters_view(base: str | os.PathLike[str], candidate: str) -> Str06Charac
 
 
 def blueprint_view(base: str | os.PathLike[str], candidate: str) -> Str06BlueprintView:
-    """Blueprint v12：世界约束＋逐章 beats（事件／参与者／effects／reveals）与因果边。"""
+    """Blueprint v13：世界约束＋逐章 beats（三类转移、场景边界与时间模式、场景分段）与因果边。"""
     run = _run_dir(base, candidate)
     if run is None:
         return Str06BlueprintView(present=False)
@@ -210,8 +210,13 @@ def blueprint_view(base: str | os.PathLike[str], candidate: str) -> Str06Bluepri
                     beat_id=b['beat_id'], event=b['event'],
                     participants=tuple(b.get('participants') or ()),
                     effects=tuple(b.get('effects') or ()),
-                    reveals=tuple(b.get('reveals') or ()))
+                    cognition=tuple(b.get('cognition') or ()),
+                    loops=tuple(b.get('loops') or ()),
+                    scene_boundary=b.get('scene_boundary'),
+                    temporal_mode=b.get('temporal_mode'))
                 for b in chapter['beats']),
+            scenes=tuple(s.model_dump(mode='json') if hasattr(s, 'model_dump') else s
+                         for s in (chapter.get('scenes') or ())),
             causal_edges=tuple(chapter.get('causal_edges') or ()))
         for chapter in payload.get('chapters') or ())
     return Str06BlueprintView(

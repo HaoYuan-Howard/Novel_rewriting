@@ -1850,7 +1850,7 @@ NODES: Final[dict[str, NodeSpec]] = {
         produces=('runtime/preserve_checkpoint.json',
                   'stage4/grounding/reconstruction_brief.json'),
         lifecycle=NodeLifecycleSpec(
-            'book', '源 core 与 Blueprint v12', 'executor', 'none',
+            'book', '源 core 与 Blueprint v13', 'executor', 'none',
             '机械校验通过即自动接受',
             ('stop',), ('str06.stage4.preserve',), 'executor:book',
             ('saved_response', 'historical_adoption', 'owner_patch'), 4)),
@@ -1921,7 +1921,7 @@ NODES: Final[dict[str, NodeSpec]] = {
         flags=('--check-only',),
         produces=('stage7/naming/name_map.json',),
         lifecycle=NodeLifecycleSpec(
-            'book', 'Characters v4 名称结构与 Blueprint v12', 'executor', 'none',
+            'book', 'Characters v4 名称结构与 Blueprint v13', 'executor', 'none',
             '机械校验通过即 auto 定稿；ApplyNames 是替换唯一应用者',
             ('stop',), ('str06.stage7.naming',), 'executor:book',
             ('saved_response', 'historical_adoption', 'owner_patch'), 4)),

@@ -506,11 +506,12 @@ class CandidateRuntimeConfig(NamedTuple):
 STR06_RUNTIME_CONFIG: Final = CandidateRuntimeConfig()
 
 #: 本族契约的 RC 版式身份（与 `STR06_RC_LABELS` 同源；ledger code 与 slice 业务身份
-#: 引用本常量，避免各处手写字符串漂移）。
-STR06_RC_VERSION: Final = 'str06-rc4'
+#: 引用本常量，避免各处手写字符串漂移）。v13（2026-09-26 质量改进批次二）：Stage2
+#: 拍模型改三类转移（effects／cognition／loops）＋场景边界与时间模式＋章蓝图场景分段。
+STR06_RC_VERSION: Final = 'str06-rc5'
 
 #: 已知 RC 标签面（版本规则见 `contracts/artifacts.py::STR06_ARTIFACT_RC_VERSIONS`）。
-STR06_RC_LABELS: Final = ('str06-rc2', 'str06-rc3', 'str06-rc4')
+STR06_RC_LABELS: Final = ('str06-rc2', 'str06-rc3', 'str06-rc4', 'str06-rc5')
 
 #: epoch 滚动理由面。`initial` 只允许首开；漂移类要求身份确实变化；`repair`
 #: 是 typed 修复的显式 producer 边界（对齐正式 ExecutionEpochReason 的 continue）。

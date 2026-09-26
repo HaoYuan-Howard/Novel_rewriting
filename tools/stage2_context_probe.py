@@ -62,7 +62,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from novel.llm.json_text import normalize_json_text                    # noqa: E402
 from novel.llm.paid_requests import digest                             # noqa: E402
 from novel.stages.chain import (                                       # noqa: E402
-    CHAPTER_PROMPT, SYS, assemble_paid_boundary, build_evidence,
+    SYS, assemble_paid_boundary, build_evidence,
     chapter_extraction_prompt, str06_chat_request,
 )
 from novel.stages.stage2 import (                                      # noqa: E402
@@ -73,14 +73,8 @@ from novel.stages.stage2 import (                                      # noqa: E
 #: 前轮质量验收根（只读）：book 已修订 wire、ch01–05 原响应与 Stage1 输入都在这里。
 DEFAULT_PREFIX_ROOT = Path('outputs/str06_quality_paid_20260926')
 
-#: B／C 臂插入的前文块标题（工具本地；生产布局归批 1C 裁决）。
+#: B 臂插入的前文块标题（工具本地；生产布局归批 1C 的裁决形态）。
 PRIOR_HEADING = '【前文原文】'
-
-#: C 臂的正文优先规则（D11 的探针近似）：快照是带来源的参考，不是正文的替代。
-TEXT_FIRST_RULE = """【快照与正文的关系】上方状态快照是带来源的参考与标识登记，不是正文的
-替代：本拍事实以正文原文为准——不得为迁就快照改写施事、受事或动作主体，也不得因为
-快照里没有就略去正文写出的变化；快照与正文不一致时，按正文记录，快照原值仅作参考。
-每条快照后面的括号标出该状态最后一次由哪一拍（或 initial_state 哪一条）建立。"""
 
 #: 架构探针专用 prompt（批 0 冻结：规则镜像现行 CHAPTER_PROMPT 的字段要求，按
 #: 「单次多章输出」改写跨章表述；不用快照输入，loop 在本次输出内沿用）。
@@ -271,85 +265,31 @@ def prior_text_block(prefix: ProbePrefix, before_chapter: int) -> str:
     return '\n\n'.join(parts)
 
 
-def _probe_tkey(target: dict) -> tuple:
-    """fold 状态键的探针侧镜像（与 `stage2/source.py::_tkey` 同构；一致性由
-    `_annotated_snapshot` 对 `chapter_input_snapshot` 的对账断言兜底）。"""
-    kind = target.get('kind')
-    if kind == 'character':
-        return ('char', target.get('char_id'))
-    if kind == 'relation':
-        return ('rel', target.get('subject'), target.get('object'))
-    if kind == 'loop':
-        return ('loop', target.get('loop_id'))
-    return ('world',)
-
-
-def _render_key(key: tuple) -> str:
-    return f'{key[0][0]}:{",".join(map(str, key[0][1:]))}.{key[1]}'
-
-
-def annotated_snapshot(prefix: ProbePrefix, compiled: list, chapter: int) -> list[str]:
-    """C 臂快照：每条状态带建立来源（D11 探针近似），值与生产 fold 逐条对账。"""
-    state: dict[tuple, dict] = {}
-    for atom in prefix.core.initial_state:
-        target = atom.target.model_dump() if hasattr(atom.target, 'model_dump') else dict(atom.target)
-        state[(_probe_tkey(target), atom.key)] = {
-            'value': atom.value, 'source': f'initial_state {atom.state_id}'}
-    for blueprint in sorted(compiled, key=lambda c: c.chapter):
-        if blueprint.chapter >= chapter:
-            continue
-        for beat in blueprint.beats:
-            for eff in beat.effects:
-                target = eff.target.model_dump() if hasattr(eff.target, 'model_dump') else dict(eff.target)
-                key = (_probe_tkey(target), eff.key)
-                if eff.op in ('set', 'open'):
-                    state[key] = {'value': eff.value, 'source': beat.beat_id}
-                elif eff.op == 'unset' or eff.op == 'close':
-                    state.pop(key, None)
-                elif eff.op == 'add':
-                    cur = (state.get(key) or {}).get('value')
-                    lst = list(cur) if isinstance(cur, list) else ([] if cur is None else [cur])
-                    if eff.value not in lst:
-                        lst.append(eff.value)
-                    state[key] = {'value': lst, 'source': beat.beat_id}
-                elif eff.op == 'remove':
-                    cur = (state.get(key) or {}).get('value')
-                    if isinstance(cur, list) and eff.value in cur:
-                        cur.remove(eff.value)
-                    state[key] = {'value': cur, 'source': beat.beat_id}
-    rendered = [f'{_render_key(k)} = {v["value"]!r}（{v["source"]} 建立）'
-                for k, v in sorted(state.items(), key=str)]
-    # 与生产 fold 对账：左半（键＝值）必须逐条一致——探针侧镜像漂移即红。
-    production = chapter_input_snapshot(prefix.core, assemble_blueprint(
-        prefix.world_constraints, compiled), chapter) if chapter > 1 else initial_snapshot(prefix.core)
-    if sorted(line.split(' = ')[0] for line in rendered) != sorted(
-            line.split(' = ')[0] for line in production):
-        raise SystemExit('C 臂快照镜像与生产 fold 的键集合不一致；探针工具需同步')
-    return rendered
 
 
 def arm_prompt(prefix: ProbePrefix, chapter: int, arm: str, compiled: list) -> str:
-    """第 k 章的臂 prompt。A 逐字走生产组装；B 加前文块；C 再加正文优先规则与
-    带来源快照。"""
+    """第 k 章的臂 prompt。A 逐字走生产组装；B 加前文块；C 已随批 0 退役。
+
+    C 臂的快照镜像（`annotated_snapshot`）是 v12 契约下对 D11 的探针近似；
+    v13 起生产 `source_fold` 的渲染自带来源与标识登记（D11 落地），镜像继续
+    存在只会与生产漂移——按「不为后续批次扩展」的纪律关闭式拒绝。
+    """
     request = chapter_extraction_prompt(
         chapter=chapter, book_characters=prefix.book_wire['characters'], core=prefix.core,
         world_constraints=prefix.world_constraints, compiled=compiled,
         compiler=prefix.compiler, evidence=prefix.evidence)
     if arm == 'A':
         return request.prompt
+    if arm == 'C':
+        raise SystemExit(
+            'C 臂是批 0（v12 契约）专用探针臂，已随批 0 结论登记关闭：v13 起生产 '
+            'CHAPTER_PROMPT 与 source_fold 自带前文与带来源快照（D11），不再需要'
+            '工具内的近似镜像。臂 A/B 仍可用于复证现行请求与前文块。')
     marker = f'【第 {chapter} 章正文】'
     if marker not in request.prompt:
         raise SystemExit(f'CHAPTER_PROMPT 里找不到章正文标记 {marker!r}；模板已变，探针需同步')
     prompt = request.prompt.replace(marker, prior_text_block(prefix, chapter) + '\n\n' + marker, 1)
-    if arm == 'B':
-        return prompt
-    kreg_marker = '【已登记的知识命题】'
-    if kreg_marker not in prompt:
-        raise SystemExit('CHAPTER_PROMPT 里找不到知识命题标记；模板已变，探针需同步')
-    snapshot_lines = annotated_snapshot(prefix, compiled, chapter)
-    prompt = CHAPTER_PROMPT.format(snapshot='\n'.join(snapshot_lines), **request.slots)
-    prompt = prompt.replace(marker, prior_text_block(prefix, chapter) + '\n\n' + marker, 1)
-    return prompt.replace(kreg_marker, TEXT_FIRST_RULE + '\n\n' + kreg_marker, 1)
+    return prompt
 
 
 def arch_prompt(prefix: ProbePrefix, from_ch: int, to_ch: int) -> str:

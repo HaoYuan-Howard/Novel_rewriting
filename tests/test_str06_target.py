@@ -11,8 +11,9 @@ from __future__ import annotations
 from contracts.schema.grounding import SemanticBinding
 from contracts.schema.policy import PreserveKind
 from contracts.schema.source import (
-    BlueprintsArtifactV12, ChapterBlueprint, CharactersCore,
+    BlueprintsArtifactV13, ChapterBlueprint, CharactersCore,
 )
+from tests.str06_facilities import v13_beat
 from novel.stages.stage4.grounding import (
     assemble_binding, assemble_preserve, project_brief,
 )
@@ -29,11 +30,12 @@ def _source_pair():
                     'surfaces': [{'surface': '云娘', 'from_chapter': 1,
                                   'until_chapter': None, 'source_refs': ['e01_01']}]}},
         initial_state=[])
-    bp = BlueprintsArtifactV12(
+    bp = BlueprintsArtifactV13(
         world_constraints=[], chapters=(
-            ChapterBlueprint(chapter=1, beats=(
-                {'beat_id': 'b01_01', 'event': '开篇', 'participants': ['fu_jun'],
-                 'source_refs': ['e01_01'], 'effects': [], 'reveals': []},), causal_edges=()),))
+            ChapterBlueprint(chapter=1,
+                             beats=(v13_beat('b01_01', '开篇', participants=('fu_jun',)),),
+                             scenes=({'scene_id': 'sc01', 'beat_ids': ('b01_01',)},),
+                             causal_edges=()),))
     return chars, bp
 
 

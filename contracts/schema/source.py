@@ -1,22 +1,33 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""source —— Characters v4／Blueprints v12（Source Truth 两份 canonical）RC（F2b／F6）。
+"""source —— Characters v4／Blueprints v13（Source Truth 两份 canonical）RC（F2b／F6／质量改进批次二）。
 
 【形状来源】试点三轮验证的 B 档产物形状（参考件 `_tmp_vnext_run.py`，
 outputs/vnext_probe_b），按终态四类 truth 职责分流：
   • Characters v4：人物条目（canonical + surfaces 时间窗）＋人物/关系 initial_state，
     RC3 起增附独立 `name_structure` 段（源名称结构，owner=Stage2 names 窄调用）。
-  • Blueprints v12：chapters/beats + effects/reveals + causal_edges + world_constraints
-    （书级初始事实／约束归 Blueprint truth）。
+  • Blueprints v13：chapters/beats + 三类转移（effects／cognition／loops）+ causal_edges
+    + world_constraints（书级初始事实／约束归 Blueprint truth）。
 抽取 wire 是一份 book 响应 + 逐章响应（LLM 面）；确定性 compile 分流为这两份
 canonical（`novel/stages/stage2/source.py`）。
+
+【v13 拍模型（质量改进批次二 · D1–D12）】每一拍是一次状态转移：event 只是给人读的
+事件表述，需要延续的变化全部由三类转移承载——
+  • effects（事实）：叙述确立的事实变化，必填可见性（on_page／concealed）与作用域；
+  • cognition（认知）：谁对哪条命题持什么模式（learns/suspects/confirms/hears_claim/
+    believes/asserts），取代 v12 的 reveals；
+  • loops（悬念）：独立数组，op 只有 open/close，close 必填 resolution。
+拍上另带场景边界（new/continue）与 temporal_mode（single/iterative）；场景 id、
+命题与 loop 的正式 ID 由 compiler 生成（I-21），wire 内用本地标签、跨章用 prompt
+列出的正式 ID 引用（D12）。
 
 【RC 不变量（试点校验规则的类型化）】
 slug/beat_id/state_id/constraint_id 前缀与字符集、surface 窗口 from≤until、
 until 只在有明确失效依据时给出（None=仍可用）、relation 禁自环、initial_state
-只引用已登记人物、op/mode/kind 闭集、open 必填非空 value。
-跨产物校验（participants、source_refs 证据闭合、双 owner、相邻因果边）归
-compile 机械臂——validator 不越层猜证据集。
+只引用已登记人物、op/mode/kind 闭集、open 必填非空 question、close 必填非空
+resolution、concealed 必声明已知者且必带命题、登记键作用域固定。跨产物校验
+（participants、source_refs 证据闭合、双 owner、相邻因果边、命题与 loop 引用闭合）
+归 compile 机械臂——validator 不越层猜证据集。
 
 【名称结构（F6）】
 RC2 只有 canonical + surfaces，现役判据靠「首字猜姓」——复姓被截断、纯称谓被
@@ -28,7 +39,7 @@ RC2 只有 canonical + surfaces，现役判据靠「首字猜姓」——复姓�
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, Final
 
 from pydantic import Field, model_validator
 
@@ -36,6 +47,33 @@ from contracts.schema.base import StrictModel
 from contracts.schema.common import FreeProvenance, LlmProvenance
 
 Slug = str  # 小写下划线人物键；pattern 在 compile 层统一校验（dict key 无法带 Field）
+
+# ───────────────────────── 登记键闭集与固定作用域（D8）─────────────────────────
+#
+# 位置分轴：`scene_location`（当前所在，场景作用域，换场即失效）与 `residence`
+# （长期居所，书作用域，换场不清除）——`whereabouts` 退役（一值多义：位置＋藏身＋
+# 身体状态曾塞进同一键）。身体状态各自一键（不塞进位置值），书作用域。作用域由
+# compiler 绑定：拍上声明与表不符即拒。表外维度键自由（英文蛇形），作用域由拍上
+# scope 显式声明。扩展本表是契约变化，随形状升版登记。
+REGISTERED_STATE_KEYS: Final[dict[str, str]] = {
+    'scene_location': 'scene',
+    'residence': 'book',
+    'body_consciousness': 'book',
+    'body_restraint': 'book',
+    'body_head_covering': 'book',
+}
+
+#: 已退役的位置键（v12 的 whereabouts 单键及其近义键）：出现在 wire 即拒，并指向
+#: 分轴后的登记键——「旧名字被静默接受」是抽取漂移的常见入口。
+RETIRED_STATE_KEYS: Final[frozenset[str]] = frozenset(
+    {'whereabouts', 'hiding_place', 'location'})
+
+#: 认知模式闭集（D2）：believes＝持有者以为为真（不代表世界为真）；asserts＝公开主张。
+COGNITION_MODES: Final[tuple[str, ...]] = (
+    'learns', 'suspects', 'confirms', 'hears_claim', 'believes', 'asserts')
+
+#: 认知持有者的非人物保留值：读者与公众知情（读者确认时点由 fold 派生）。
+NON_CHAR_HOLDERS: Final[frozenset[str]] = frozenset({'reader', 'public'})
 
 
 class SurfaceWindow(StrictModel):
@@ -369,20 +407,22 @@ class CharactersArtifactV4(CharactersCore):
 
 
 class EffectTarget(StrictModel):
-    kind: str = Field(pattern=r'^(character|relation|world|loop)$')
+    """事实转移的作用对象：人物、关系或世界。loop 不是世界状态——v13 起悬念走
+    独立的 loops 数组（D1/D10），不再挂成 effect target。"""
+
+    kind: str = Field(pattern=r'^(character|relation|world)$')
     char_id: str | None = None
     subject: str | None = None
     object: str | None = None
-    loop_id: str | None = None
 
     @model_validator(mode='after')
     def _shape_matches_kind(self) -> 'EffectTarget':
         pairs = {
             'character': ('char_id',), 'relation': ('subject', 'object'),
-            'world': (), 'loop': ('loop_id',),
+            'world': (),
         }
         needed = pairs[self.kind]
-        given = [f for f in ('char_id', 'subject', 'object', 'loop_id') if getattr(self, f)]
+        given = [f for f in ('char_id', 'subject', 'object') if getattr(self, f)]
         if self.kind == 'relation' and self.subject == self.object:
             raise ValueError('relation 目标自环')
         if set(given) != set(needed):
@@ -390,42 +430,118 @@ class EffectTarget(StrictModel):
         return self
 
 
-class Effect(StrictModel):
-    """状态的 postcondition：拍结束后仍成立、后续涉及该维度时必须以它为准。"""
+class Disclosure(StrictModel):
+    """effect 的可见性（D3，必填）：on_page＝叙述对读者明示；concealed＝叙述确立
+    但读者此刻不可见——必须声明已知者，并由后续 cognition 经同一命题记录揭示。"""
 
-    target: EffectTarget
-    key: str = Field(min_length=1)
-    op: str = Field(pattern=r'^(set|unset|add|remove|open|close)$')
-    value: Any = None
+    visibility: str = Field(pattern=r'^(on_page|concealed)$')
+    known_by: tuple[str, ...] = Field(default=(), min_length=0)
 
     @model_validator(mode='after')
-    def _op_shape(self) -> 'Effect':
-        if self.op == 'open':
-            if self.target.kind != 'loop':
-                raise ValueError('open/close 只作用于 loop')
-            if not (isinstance(self.value, str) and self.value.strip()):
-                raise ValueError('open 的 value 必须是悬念的问题内容（非空）')
-        if self.op == 'close' and self.target.kind != 'loop':
-            raise ValueError('open/close 只作用于 loop')
+    def _concealed_declares_known(self) -> 'Disclosure':
+        if self.visibility == 'concealed' and not self.known_by:
+            raise ValueError('concealed 效应必须声明已知者（known_by 非空）')
         return self
 
 
-class Reveal(StrictModel):
-    """信息不对称原子命题：认知升级沿用同 key 同 statement，只换 mode/recipients。"""
+class PropositionRef(StrictModel):
+    """命题引用（D2/D12）：同章用 wire 本地标签，跨章用 prompt 列出的正式 ID。
 
-    knowledge_key: str = Field(pattern=r'^[A-Za-z][A-Za-z0-9_.-]*$')
-    statement: str = Field(min_length=1)
-    recipients: tuple[str, ...] = Field(min_length=1)
-    mode: str = Field(pattern=r'^(learns|suspects|confirms|hears_claim)$')
+    新建（本 wire 首次出现）必须带 statement；引用既有命题不得带 statement——
+    「同一命题的文本只建立一次」由形状保证，不靠模型自觉（v12 允许复用 key 时
+    重抄 statement，实测被改写）。标签与正式 ID 的分辨归 compile 层。
+    """
+
+    ref: str = Field(min_length=1)
+    statement: str | None = None
+
+
+class Effect(StrictModel):
+    """事实转移（D1/D2）：叙述确立的事实变化。只记叙述确立的事实（含 unknown）；
+    「谁认为、谁声称什么」只进 cognition，不在这里设 fact/belief/claim 之分。"""
+
+    target: EffectTarget
+    key: str = Field(min_length=1)
+    op: str = Field(pattern=r'^(set|unset|add|remove|unknown)$')
+    value: Any = None
+    scope: str = Field(pattern=r'^(book|scene)$')
+    disclosure: Disclosure
+    #: 命题锚：concealed 必带（揭示链的锚，D3）；说辞被证实时引用同一命题（D5）。
+    proposition: PropositionRef | None = None
+
+    @model_validator(mode='after')
+    def _op_shape(self) -> 'Effect':
+        if self.op == 'set' and self.value is None:
+            raise ValueError('set 需要显式值（空字符串是合法空值）')
+        if self.op in ('unset', 'unknown') and self.value is not None:
+            raise ValueError('unset/unknown 不得伪造值')
+        if self.op in ('add', 'remove') and self.value is None:
+            raise ValueError('add/remove 需要显式值')
+        if self.disclosure.visibility == 'concealed' and self.proposition is None:
+            raise ValueError('concealed 效应必须带命题（后续 cognition 经它记录揭示）')
+        registered = REGISTERED_STATE_KEYS.get(self.key)
+        if registered is not None and registered != self.scope:
+            raise ValueError(
+                f'登记键 {self.key} 的作用域固定为 {registered}，拍上声明了 {self.scope}')
+        return self
+
+
+class Cognition(StrictModel):
+    """认知转移（D1/D2）：谁对哪条命题持什么模式。取代 v12 的 reveals。"""
+
+    proposition: PropositionRef
+    holder: str = Field(min_length=1)
+    mode: str = Field(pattern=r'^(' + '|'.join(COGNITION_MODES) + r')$')
+
+
+class LoopAction(StrictModel):
+    """悬念转移（D10）：新建（open 带问题）或引用已有 loop（close 带 resolution）。
+
+    loop 只能 open 一次；问题文本只出现在 open 处，之后不可改写——v12 把 loop
+    挂成 effect（op open/close）时，模型反复用 set 改写问题文本（F9 与本轮实证），
+    独立数组＋形状约束从此结构性禁绝。
+    """
+
+    ref: str = Field(min_length=1)
+    op: str = Field(pattern=r'^(open|close)$')
+    question: str | None = None
+    resolution: str | None = None
+
+    @model_validator(mode='after')
+    def _op_shape(self) -> 'LoopAction':
+        if self.op == 'open':
+            if not (isinstance(self.question, str) and self.question.strip()):
+                raise ValueError('open 必须带悬念的问题内容（question 非空）')
+            if self.resolution is not None:
+                raise ValueError('open 不得带 resolution')
+        else:
+            if not (isinstance(self.resolution, str) and self.resolution.strip()):
+                raise ValueError('close 必须带 resolution（收束内容）')
+            if self.question is not None:
+                raise ValueError('close 不得改写问题文本')
+        return self
 
 
 class Beat(StrictModel):
+    """一拍＝一次状态转移（D1）：event 给人读；effects／cognition／loops 承载延续。
+
+    会改变后续人物选择、关系、位置、目标、知情或未决问题的内容，必须同时进入三类
+    转移——只留在 event 里该拍就不完整（D7；完整性由 fold 的空转移拍比例读数配合
+    离线核读证明，不加声明字段）。
+    """
+
     beat_id: str = Field(pattern=r'^b[0-9A-Za-z_-]+$')
     event: str = Field(min_length=1)
     participants: tuple[str, ...] = Field(default=(), min_length=0)
     source_refs: tuple[str, ...] = Field(min_length=1)
+    #: 场景边界（D1）：new＝本拍开新场景（旧场景的 scene 作用域状态就此失效）；
+    #: continue＝延续当前场景（可跨章，见 SceneSpan）。
+    scene_boundary: str = Field(pattern=r'^(new|continue)$')
+    #: 时间模式（D1）：single＝单次行为；iterative＝重复行为（如「连续三夜」）。
+    temporal_mode: str = Field(pattern=r'^(single|iterative)$')
     effects: tuple[Effect, ...] = Field(default=(), min_length=0)
-    reveals: tuple[Reveal, ...] = Field(default=(), min_length=0)
+    cognition: tuple[Cognition, ...] = Field(default=(), min_length=0)
+    loops: tuple[LoopAction, ...] = Field(default=(), min_length=0)
 
 
 class CausalEdge(StrictModel):
@@ -440,9 +556,22 @@ class CausalEdge(StrictModel):
         return self
 
 
+class SceneSpan(StrictModel):
+    """compiler 生成的场景分段（D1/D8）：scene_id 全书唯一（按开场序编）。
+
+    跨章场景在其续章的蓝图里同样出现（beat_ids 只收该章的拍）——fold 据此保留
+    局部状态跨章延续，直到下一处 new 边界才失效。
+    """
+
+    scene_id: str = Field(pattern=r'^sc[0-9]+$')
+    beat_ids: tuple[str, ...] = Field(min_length=1)
+
+
 class ChapterBlueprint(StrictModel):
     chapter: int = Field(ge=1)
     beats: tuple[Beat, ...] = Field(min_length=1)
+    #: compiler 生成：本章 beats 的场景分段（与拍序一致、恰好覆盖全部拍）。
+    scenes: tuple[SceneSpan, ...] = Field(min_length=1)
     causal_edges: tuple[CausalEdge, ...] = Field(default=(), min_length=0)
 
     @model_validator(mode='after')
@@ -454,12 +583,22 @@ class ChapterBlueprint(StrictModel):
         for edge in self.causal_edges:
             if edge.to_beat not in known:
                 raise ValueError(f'章 {self.chapter} 因果边 to_beat 不在本章：{edge.to_beat}')
+        spanned = [bid for scene in self.scenes for bid in scene.beat_ids]
+        if sorted(spanned) != sorted(ids):
+            raise ValueError(
+                f'章 {self.chapter} 的场景分段未恰好覆盖全部拍：'
+                f'缺 {sorted(known - set(spanned))} 多 {sorted(set(spanned) - known)}')
         return self
 
 
-class BlueprintsArtifactV12(StrictModel):
-    """`stage2/blueprints/chapter_blueprints.json` 目标 v12（RC）。跨章 from_beat
-    引用的存在性归 compile（需要全书 beat 集合）。"""
+class BlueprintsArtifactV13(StrictModel):
+    """`stage2/blueprints/chapter_blueprints.json` 目标 v13（RC）。
+
+    v13（质量改进批次二）：拍模型从 effects/reveals 改为 effects／cognition／loops
+    三类转移，拍上带场景边界与时间模式，章蓝图带 compiler 生成的场景分段。跨章
+    from_beat 引用的存在性归 compile（需要全书 beat 集合）；命题与 loop 的跨章
+    引用闭合归 compile（正式 ID 登记表）。
+    """
 
     provenance: FreeProvenance | LlmProvenance | None = Field(
         default=None, alias='_provenance', exclude=True)
@@ -467,7 +606,7 @@ class BlueprintsArtifactV12(StrictModel):
     chapters: tuple[ChapterBlueprint, ...] = Field(min_length=1)
 
     @model_validator(mode='after')
-    def _chapters_contiguous(self) -> 'BlueprintsArtifactV12':
+    def _chapters_contiguous(self) -> 'BlueprintsArtifactV13':
         ordinals = [c.chapter for c in self.chapters]
         if sorted(ordinals) != list(range(1, len(ordinals) + 1)):
             raise ValueError(f'章号必须从 1 连续，实得 {sorted(ordinals)}')

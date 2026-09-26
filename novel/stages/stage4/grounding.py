@@ -26,7 +26,7 @@ from contracts.schema.grounding import (
     SemanticBinding, SourceLineage, SourceObligation,
 )
 from contracts.schema.source import (
-    BlueprintsArtifactV12, CharactersCore,
+    BlueprintsArtifactV13, CharactersCore,
 )
 from contracts.schema.grounding import BriefRequirement
 from novel.stages.common import check_binding_covers_checkpoint
@@ -57,7 +57,7 @@ def _reject_unknown_keys(errors: list[str], obj: dict[str, Any], allowed: frozen
 def assemble_preserve(
     wire: dict[str, Any], *,
     policy_id: str, policy_version: int,
-    characters: CharactersCore, blueprint: BlueprintsArtifactV12,
+    characters: CharactersCore, blueprint: BlueprintsArtifactV13,
     provider: str, model: str, request_sha256: str,
 ) -> tuple[PreserveCheckpoint | None, list[str]]:
     """Preserve wire（{'obligations': [...]}）→ checkpoint。确定性校验：

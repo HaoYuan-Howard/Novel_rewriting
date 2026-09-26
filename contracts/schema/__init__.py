@@ -202,7 +202,7 @@ from contracts.schema.stage7 import (
 
 # ── STR-06 新链契约模型（F8a 激活；F8c 分流至正式 stageN 模块后改 import）──
 from contracts.schema.source import (
-    BlueprintsArtifactV12, CharactersArtifactV4, CharactersCore,
+    BlueprintsArtifactV13, CharactersArtifactV4, CharactersCore,
 )
 from contracts.schema.grounding import (
     PreserveCheckpoint, ReconstructionBrief, SemanticBinding,
@@ -292,12 +292,15 @@ ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
     #   字面量（Characters v4／Brief／Binding／Plan／Graph／BookIR／HookContext／
     #   ChapterReceipt／NameMap v5，与候选产物表逐字对账）；② 候选产物表的
     #   `schema_version` RC 标签（rc2→rc3→rc4 的批次定格）。未声明
-    #   `contract_version` 的模型（Blueprints v12、CharactersCore 抽取）按 F8
+    #   `contract_version` 的模型（Blueprints v13、CharactersCore 抽取）按 F8
     #   义务在本注册表登记形状（即本表条目自身），不进模型——往模型加非 exclude
     #   字段会改 `model_dump` 字节，从而改 prompt 与已购请求身份，F7a 的历史
     #   采用会当场失配（`_provenance` 用 exclude=True 正是为守住这条）。
     # Stage2：源语义（str06.stage2.source／names）
-    'stage2/blueprints/chapter_blueprints.json': ArtifactSpec(BlueprintsArtifactV12, 1),
+    # v13（2026-09-26 质量改进批次二）：拍模型改三类转移（effects／cognition／
+    #   loops）＋场景边界与时间模式＋章蓝图场景分段；存量 v12 盘面明确拒读
+    #   （SchemaVersionRefused），由新独立根重新抽取，不做迁移。
+    'stage2/blueprints/chapter_blueprints.json': ArtifactSpec(BlueprintsArtifactV13, 1),
     'stage2/compiled/book_extraction.json': ArtifactSpec(CharactersCore, 1),
     'stage2/characters/characters.json': ArtifactSpec(CharactersArtifactV4, 1),
     # Stage4：目标故事与确定性编译（preserve／body_design／hook_design／bind／compile）

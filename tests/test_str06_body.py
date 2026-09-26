@@ -10,6 +10,7 @@
 """
 from __future__ import annotations
 
+import re
 from copy import deepcopy
 
 import pytest
@@ -341,7 +342,10 @@ class _RoutingTransport:
         if '人物账、初始状态与世界约束' in user:
             return 'book'
         if '拆成有序 beats' in user:
-            return 'ch01' if '第 1 章' in user else 'ch02'
+            # 章正文标记（【第 N 章正文】）的最后一次出现即当前章：前文原文块用
+            # 〔第N章〕方头括号，不会与章正文标记混淆（v13 起章请求带前文）。
+            marks = re.findall(r'【第 (\d+) 章正文】', user)
+            return f'ch{int(marks[-1]):02d}' if marks else 'ch01'
         for owner, marker in (
                 ('names', '登记全书源名称结构'), ('preserve', '最小语义义务'),
                 ('design', '设计目标书'), ('bind', '绑定义务'),

@@ -25,6 +25,8 @@
                    双视图与消费身份（纯函数，不落盘、不调 LLM）。
   五、阅读界面     模型阅读文本的确定性 renderer；只排序、分组、引用解析和
                    格式化，不压缩语义、不改写 brief、不新增模型调用。
+  六、场景叠加     `StateOverlay`：book／scene 两级状态叠加与换场失效（D16：
+                   Stage2 源折叠与 Stage4 计划折叠共用的唯一实现）。
 """
 from __future__ import annotations
 
@@ -280,11 +282,16 @@ BOOK_PROMPT = """任务：通读全书，产出人物账、初始状态与世界
      同一称呼多次复现的并入同一窗口（from 取最早、until 保持 null），不要按出现章各开一条。
      称谓转变本身承担剧情意义时（如临场改口），交由对应章节的 event 表达。
      source_refs 引用证据段 id（见下方清单）。
+     **from_chapter 由 compiler 按证据锚点派生并覆盖你声明的值**：锚点段＝所引证据段中
+     逐字包含该称呼的最早一段，章前文字（e00）的锚点映射到第 1 章（阅读序从 1 开始）；
+     你保证 source_refs 里至少一段逐字包含该称呼即可。
 2. initial_state：只收"第 1 章第一拍之前已经成立"的地基事实，每项
    {{state_id, target, key, value, persistence, knowledge, source_refs}}：
    - state_id：s0_ 前缀 + 小写下划线 slug；
    - target：{{"kind":"character","char_id":"<slug>"}} 或 {{"kind":"relation","subject":"<slug>","object":"<slug>"}}；
    - key：语义维度英文蛇形；一个原子只表达一个维度（财富与相貌分开），不写人物小传；
+     位置类初始事实只收 residence（长期居所）——开场所在是场景作用域，由第 1 章第一个
+     new 拍建立，不进 initial_state；
    - 只收故事开始时已成立的事实：晚章才发生的变化（如后来才购置的产业）绝不倒灌；
      晚章才由人物自陈、又无独立确认的信息（如自报家产）不进 initial_state，
      留给对应章节以 hears_claim 揭示；
@@ -304,26 +311,28 @@ BOOK_PROMPT = """任务：通读全书，产出人物账、初始状态与世界
 输出 JSON 顶层：{{"characters":{{...}},"initial_state":[...],"world_constraints":[...]}}
 个人自述、某家长辈要求不得推广成普遍世界规则；无法由证据确认的规则不写。"""
 
-CHAPTER_PROMPT = """任务：把第 {ch} 章正文拆成有序 beats，并产出每拍的状态效应、知识揭示与因果边。
+CHAPTER_PROMPT = """任务：把第 {ch} 章正文拆成有序 beats。每一拍是一次状态转移：event 是给人读的事件表述，需要延续的变化全部由三类转移承载——effects（事实）、cognition（认知）、loops（悬念）。
 
-【人物表】（participants / targets 只能用这些 id）
+【人物表】（participants / effect target / cognition holder 只能用这些 id）
 {glossary}
 
-【第 {ch} 章开始时的状态快照】（初始状态与前章效应折叠的结果；只写本章"新发生"的改变，
-不要把快照里已有的事实重新 set 一遍）
-{snapshot}
-
-【已登记的知识命题】（knowledge_key -> statement；复用 key 时 statement 必须原样复制登记文本）
+【已登记的命题】（proposition_id -> statement；跨章引用用这些正式 ID，同章引用用本 wire 内的本地标签）
 {kreg}
 
+【未收束的悬念】（loop_id -> question；跨章引用用这些正式 ID）
+{lreg}
+
+【第 {ch} 章开始时的状态快照】（初始状态与前章转移折叠的结果；逐条带来源与标识登记，只写本章"新发生"的改变，不要把快照里已有的事实重新 set 一遍）
+{snapshot}
+
+【此前已有 beat id】（causal_edges 可跨章引用它们）
+{known_beats}
+{prior}
 【第 {ch} 章正文】（每段前的 [eXX_YY] 是证据 id）
 {evidence}
 {pre_chapter}
-【此前已有 beat id】（causal_edges 可跨章引用它们）
-{known_beats}
-
 【要求】
-1. beats：按故事顺序拆拍，每拍 {{"beat_id","event","participants","source_refs","effects","reveals"}}：
+1. beats：按故事顺序拆拍，每拍 {{"beat_id","event","participants","source_refs","scene_boundary","temporal_mode","effects","cognition","loops"}}：
    - event：写"发生了什么"，并保住足以正确演出这一事件的语义——必要前因、关键指代
      （如"他那里"须写明指什么）、已成立的站位（谁在床上/床边/门外）、公开行为与内心
      反应的差别；不要混入动机分析或世界规则。
@@ -331,51 +340,69 @@ CHAPTER_PROMPT = """任务：把第 {ch} 章正文拆成有序 beats，并产出
      不得翻转施事与受事；身份关系必须写明归属（谁的同窗/表亲/好友），不得悬空成"同窗"；
    - 动作的范围与去向以原文为准：走了多远、去了哪里、交给了谁，原文写到哪就记到哪，
      不外推、不补全（没写"送出住处"就不得记成送离住处）；
-   - 人物（含第一人称叙述者）对自己的定性是自述：记进 event，或记成 character 的
-     self_image／public_stance 类键；自述与行为、内心矛盾时两面都保留，不得只留一面，
-     也不得把自述直接当作已成立的内在准则；
-   - participants：本章该拍出场的人物 id（可空数组）；
+   - participants：本拍中实际行动、说话、感知或被直接作用的人物 id（可空数组）；
+     仅被提及者只留在 event，不进 participants；
+   - scene_boundary：new＝本拍开新场景（旧场景的 scene 作用域状态就此失效）；
+     continue＝延续当前场景（可跨章；全书第一个拍必须 new）；
+   - temporal_mode：single＝单次行为；iterative＝重复行为（如"连续三夜"）；
    - source_refs：支撑该拍的证据段 id，1-4 个；
-   - beat_id：b{ch:02d}_<两位序号>，章内唯一。
-2. effects：状态的 postcondition——本拍结束后仍成立、且后续涉及该维度时必须以它为准的事实。
-   每项 {{"target","key","op","value"}}：
+   - beat_id：b{{ch:02d}}_<两位序号>，章内唯一。
+2. effects：事实的 postcondition——本拍结束后仍成立、且后续涉及该维度时必须以它为准的
+   **叙述确立的**事实。每项 {{"target","key","op","value","scope","disclosure"[,"proposition"]}}：
    - target：{{"kind":"character","char_id":...}} | {{"kind":"relation","subject":...,"object":...}} |
-     {{"kind":"world"}} | {{"kind":"loop","loop_id":"loop_<slug>"}}（loop 用于开局未收束的悬念线）；
+     {{"kind":"world"}}；
+   - 只记叙述确立的事实（含 unknown）："谁认为、谁声称什么"只进 cognition；
+     自述与行为、内心矛盾时，事实层只记行为与叙述确立的事实，自述记进 event；
    - 不因"以后可能重要"而存：即时动作、表情、一次冷哼、一次脸红留在 event；
      持续的恐惧/戒备/意图/关系变化才是状态；
    - 同一语义变化只选一个最自然的 owner：人物自己的意图/心态归 character；双方已形成的
-     关系事实归 relation；客观环境归 world；未决问题归 loop。不为"完整"把同一变化
+     关系事实归 relation；客观环境归 world；未决问题归 loops。不为"完整"把同一变化
      在 character 和 relation 各写一遍；
-   - 角色位置只有 whereabouts 一个维度（藏身之处也是位置，如"陆家卧房内，藏于床底"）；
-     某人现身/归来/离开时 set 他自己的 whereabouts，不另开近义键；
+   - 位置分轴（登记键，作用域固定）：当前位置 scene_location（scene 作用域，换场即失效）、
+     长期居所 residence（book 作用域，换场不清除）；身体状态各自一键
+     （body_consciousness／body_restraint／body_head_covering 或新的英文蛇形键），
+     不塞进位置值；whereabouts／hiding_place／location 已退役，用了即拒；
+   - op：set(赋新值)/unset(清除)/add(集合加入)/remove(集合移除)/unknown(显式未知)；
+     set 需要显式值（空字符串是合法空值），unset/unknown 不得带值；
+   - scope：book＝跨场景延续；scene＝本场有效、换场失效；
+   - disclosure（必填）：{{"visibility":...}}。on_page＝叙述对读者明示；
+     concealed＝叙述确立但读者此刻不可见——必须声明 known_by（非空），并带 proposition
+     （新建：ref 本地标签＋statement），由后续 cognition 经同一命题记录揭示；
+   - proposition（可选）：说辞被叙述证实时，在证实拍建立事实效应并引用同一命题
+     （ref 用已登记的本地标签或正式 ID），不得改写其文本；
    - 改变哪个维度就替换哪个键；场景性临时状态（借宿、暂住、暂离）在结束或转移时必须 set
-     对应维度的新值——去向未知就写"去向未交代"，不得留旧值让下游补造；不另开新键；
-   - key 与状态快照同一套语义维度（如 marital_status / fertility / occupation…），新维度用英文蛇形；
-     状态被取代或结束时，对原键 set 新值或 unset，不另开近义键——同一维度全书一个键；
-   - op：set(赋新值)/unset(清除)/add(集合加入)/remove(集合移除)/open(悬念开启)/close(悬念收束)；
-     open/close 的 target 必须是 loop，value 为悬念的问题内容（open 必填非空）；
-     loop 类 effect 必须带 key（悬念线的问题维度，如 hiding_place_suspicion）；loop 目标
-     不可省略 key；快照里已经 open 的同一条 loop 直接沿用其 loop_id，不得重复 open；
+     对应维度的新值——去向未知就写"去向未交代"或 unknown，不得留旧值让下游补造；不另开新键；
    - 无 postcondition 的拍 effects 给空数组。
-3. reveals：只收信息不对称——"谁知道/谁不知道/是怀疑还是确认"会约束后续行为、误解、
-   隐瞒或揭示时才建。每项 {{"knowledge_key","statement","recipients","mode"}}：
-   - knowledge_key 是含义稳定的原子命题键：只在同一人、同一件事、同一次（同一命题）时
-     复用 key；不同次的藏身、不同的约定是不同的命题，各用新 key，不得并成一次确认；
-     同一 key 的 statement 永不改写，认知升级（suspects→confirms）沿用同 key 同 statement，
-     只换 mode 与 recipients；
-   - 普通在场见闻、例行告知、event 已说清的事实不要建 reveal；
-   - recipients：["reader"|"public"|"char_xxx"...]，至少 1 个；char_xxx 必须原样使用下方
-     人物表里的 id（不得改写、加前缀或换人称）；
-   - mode：learns(确凿得知)/suspects(起疑)/confirms(证实怀疑)/hears_claim(听到说法未知真假)；
-   - 公开的表态、改口、说辞属于 event（必要时配 character 的 public_stance 类键），
-     不得据此推导当事人内心偏好或决定已变，除非文本明确写出内心变化。
-4. causal_edges：只收有信息增量的因果——不显然、跨距离、跨章节、setup-payoff，
+3. cognition：认知的 postcondition——谁对哪条命题持什么模式。每项 {{"proposition","holder","mode"}}：
+   - proposition：{{"ref","statement"}}。新建（本 wire 首次出现）必须带 statement；
+     引用既有命题只带 ref（同章用本地标签，跨章用上方正式 ID），重抄文本必须与登记
+     文本逐字一致——同一命题的文本只建立一次；
+   - holder：人物 id 或 reader／public；
+   - mode：learns(确凿得知)/suspects(起疑)/confirms(证实怀疑)/hears_claim(听到说法未知真假)/
+     believes(以为为真，不代表世界为真)/asserts(公开主张)；
+   - 只收会约束后续行为、误解、隐瞒或揭示的信息不对称；普通在场见闻、例行告知、
+     event 已说清的事实不建；
+   - 公开的表态、改口、说辞属于 event，不得据此推导当事人内心偏好或决定已变，
+     除非文本明确写出内心变化。
+4. loops：悬念的 postcondition——独立数组，每项 {{"ref","op","question"/"resolution"}}：
+   - open：新建悬念线，必填 question（问题文本只出现在 open 处，之后不可改写）；
+   - close：引用已有 loop（同章本地标签或上方正式 ID），必填 resolution（收束内容）；
+   - 同一 loop 只能 open 一次；已 open 或已 close 的 id 不得再 open；不同次的藏身、
+     不同的约定是不同的悬念线，不得并成一条；
+   - 无 postcondition 的拍 loops 给空数组。
+5. causal_edges：只收有信息增量的因果——不显然、跨距离、跨章节、setup-payoff，
    或缺失会造成错误因果理解的关系。只看有序 beats 就能自然理解的先后关系
    不建边；相邻拍若有必要的实质因果则保留。每项 {{"from_beat","to_beat","kind"}}，
    kind ∈ causes/motivates/enables/setup_payoff。from 可引用此前章节的 beat，to 是本章 beat。
+6. 连续性契约：会改变后续人物选择、关系、位置、目标、知情或未决问题的内容，必须同时
+   进入 effects／cognition／loops——只留在 event 里，该拍就不完整。三类转移全空的拍
+   合法，但请节制；这类拍的比例会被 fold 按章报出，供离线核读。
+7. 快照与正文的关系：上方快照是带来源的参考与标识登记，不是正文的替代——本拍事实以
+   正文原文为准，不得为迁就快照改写施事、受事或动作主体，也不得因为快照里没有就略去
+   正文写出的变化；快照与正文不一致时，按正文记录。
 
 输出 JSON 顶层：{{"beats":[...],"causal_edges":[...]}}
-不要把财富、位置等不同维度塞入同一个 key。loop 只保留影响后续的未决问题，并复用快照中的 loop_id，收束时 close。"""
+不要把财富、位置等不同维度塞入同一个 key。"""
 
 #: 七类保存类别与 `contracts/schema/policy.py::PreserveKind` 同源（B2）：定义只在
 #: 这里写一遍并渲染进 `PRESERVE_RULES`；类别集合变化必须升 `policy_version`
@@ -792,7 +819,7 @@ def render_chapter_packet(
     book_ir: WriterBookIR, chapter_ordinal: int,
     prior_chapters: Mapping[int, str],
 ) -> str:
-    """章请求 user 段：六层固定结构（协议→规划参考→前文→章目的→场景→交付要求）。
+    """章请求 user 段：六层固定结构（协议→规划参考→前文→章目的的→场景→交付要求）。
 
     纯函数：相同（IR, 章序, 前文）⇒ 相同字节。不检查回执有效性——前文合法性
     由调用方核对章级回执后传入。
@@ -844,3 +871,71 @@ def render_chapter_packet(
     parts.append('3. 整章是一段连续的小说正文：场景之间自然过渡，'
                  '不要输出「场景一」之类的标记或分隔线。')
     return '\n\n'.join(parts) + '\n'
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 六、场景叠加原语（D16：Stage2 源折叠与 Stage4 计划折叠共用的唯一实现）
+#
+# 【为什么上提】Stage2 的 `source_fold`（源侧世界状态）与 Stage4 的
+# `FoldedState`（目标侧计划折叠）是同构的两级叠加：book 作用域跨场景延续、
+# scene 作用域换场失效、unset/unknown/未建立三者分开。两份实现必然漂移
+# （Stage4 那份还带着「试点场景局部状态无衰减」的修补痕迹），故原语落在
+# 本模块，两侧各自把本地变化形状适配成 `OverlayChange` 后共用。
+#
+# 【它不是什么】不猜语义、不补默认值、不修改输入（I-23/I-24）：调用方给
+# 规范变化，本原语只做确定性的叠加与失效。
+# ═════════════════════════════════════════════════════════════════════════════
+
+class OverlayChange(NamedTuple):
+    """一条规范变化：地址＋操作＋值＋作用域＋来源＋模态注释。
+
+    `address` 是调用方规范化的地址元组（Stage2 用
+    `(domain, subjects, key)`，Stage4 用 `StateAddress.address()`）；
+    `op` 含 set/unset/add/remove/unknown——add/remove 的**结果值**由调用方
+    算好（集合运算属各自的 effect 语义），本原语只存条目；`source` 是建立
+    来源（beat_id / `场景#拍` / `state_id`），供快照渲染带来源（D11）；
+    `mode` 是调用方自带的模态注释（目标侧 knowledge 的知情模式；源侧的认知
+    模式不进事实层，由各自的认知折叠承载）。
+    """
+
+    address: tuple
+    op: str
+    value: Any = None
+    scope: str = 'book'
+    source: str = ''
+    mode: str | None = None
+
+
+class StateOverlay:
+    """book／scene 两级状态叠加：scene 覆盖保留 book 底值，换场失效。
+
+    · book 作用域的变化跨场景延续；scene 作用域的变化挂在所属场景上，
+      `expire_scene_scope` 后该地址回到 book 底值（或未建立）；
+    · unset（显式解除）、unknown（显式未知）与未建立（无条目）是三种不同
+      状态——条目按 op 原样保留，消费方自行分辨（I-42）；
+    · 同一地址的 book 建立会清掉此前的 scene 覆盖（书级事实压过局部）。
+    """
+
+    def __init__(self) -> None:
+        self._book: dict[tuple, OverlayChange] = {}
+        self._local: dict[tuple, tuple[str, OverlayChange]] = {}
+
+    def apply(self, scene_id: str, changes: Iterable[OverlayChange]) -> 'StateOverlay':
+        for change in changes:
+            if change.scope == 'book':
+                self._book[change.address] = change
+                self._local.pop(change.address, None)
+            else:
+                self._local[change.address] = (scene_id, change)
+        return self
+
+    def expire_scene_scope(self, scene_id: str) -> 'StateOverlay':
+        self._local = {k: v for k, v in self._local.items() if v[0] != scene_id}
+        return self
+
+    def visible(self) -> dict[tuple, OverlayChange]:
+        """当前可见状态：book 底值被未失效的 scene 覆盖压过。"""
+        return {**self._book, **{k: v[1] for k, v in self._local.items()}}
+
+    def entries(self) -> tuple[OverlayChange, ...]:
+        return tuple(self.visible()[addr] for addr in sorted(self.visible(), key=str))

@@ -183,13 +183,13 @@ def test_source_prior_snapshot_is_latest_and_validation_has_no_side_effect():
         chapter_input_snapshot(chars, assemble_blueprint(wcs, [ch1]), 3)
 
 
-@pytest.mark.parametrize('fault', ['evidence', 'effect_subject', 'recipient', 'bad_edge'])
+@pytest.mark.parametrize('fault', ['evidence', 'effect_subject', 'holder', 'bad_edge'])
 def test_source_reference_closure_and_no_silent_edge_drop(fault):
     _, _, compiler, _ = _compile_pair()
     wire = _chapter_wire()
     if fault == 'evidence': wire['beats'][0]['source_refs'] = ['ghost']
     elif fault == 'effect_subject': wire['beats'][0]['effects'][0]['target']['char_id'] = 'ghost'
-    elif fault == 'recipient': wire['beats'][0]['reveals'][0]['recipients'] = ['ghost']
+    elif fault == 'holder': wire['beats'][0]['cognition'][0]['holder'] = 'ghost'
     else: wire['causal_edges'] = [{'from_beat': 'b01_01', 'to_beat': 'b02_01', 'kind': 'bogus'}]
     assert compiler.compile(wire, 2)[1]
 

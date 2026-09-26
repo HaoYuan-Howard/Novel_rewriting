@@ -130,18 +130,13 @@ class ChainContext:
     digest: Callable[[object], str] | None = None
 
 
-def _segment_sentences(text: str, *, limit: int = 300) -> list[str]:
-    """按句号切段并合并不超 limit 的段（证据切分的唯一实现）。"""
-    segments, buffer = [], ''
-    for sentence in re.split(r'(?<=。)', text):
-        if buffer and len(buffer) + len(sentence) > limit:
-            segments.append(buffer)
-            buffer = sentence
-        else:
-            buffer += sentence
-    if buffer.strip():
-        segments.append(buffer)
-    return segments
+def _segment_sentences(text: str) -> list[str]:
+    """按句号切句（证据切分的唯一实现；v13 细化到句，不再按 300 字合并）。
+
+    只在句号边界切：不并段（并段会把整章短章塌成一段，source_refs 失去分辨力），
+    也不在句中硬切（句子完整性即上下文）。空段丢弃。
+    """
+    return [s for s in re.split(r'(?<=。)', text) if s.strip()]
 
 
 def build_evidence(chapters, hook_copy: str | None = None) -> dict:
@@ -166,6 +161,23 @@ def build_evidence(chapters, hook_copy: str | None = None) -> dict:
 
 def _pre_chapter_evidence_ids(evidence: dict) -> frozenset[str]:
     return frozenset(k for k, v in evidence.items() if v.get('pre_chapter'))
+
+
+def _prior_text(chapters: list[dict], before_chapter: int) -> str:
+    """第 k 章请求的前文原文前缀（批 0 裁决采纳的 C 形态：只读、不带证据 id）。
+
+    只收第 1..k-1 章原文。章前文字（引子）**不进**前文块：e00 只影响开场是已登记
+    规则（R-2.9 一族），引子对第 1 章的影响经其证据段生效，其余各章不因引子变化。
+    快照的「带来源参考、正文优先」契约在 CHAPTER_PROMPT 的要求 7，不在这里重复。
+    """
+    parts: list[str] = []
+    for chapter in chapters:
+        if chapter['chapter_ordinal'] < before_chapter:
+            parts.append(f'〔第{chapter["chapter_ordinal"]}章〕\n{chapter["text"]}')
+    if not parts:
+        return ''
+    return (f'【前文原文】（只读参考，截至第 {before_chapter - 1} 章末；'
+            '不带证据 id，不要求引用）\n\n' + '\n\n'.join(parts) + '\n')
 
 
 def _chapter_ordinal(n: int) -> str:
@@ -204,13 +216,14 @@ class ChapterRequest(NamedTuple):
 
 def chapter_extraction_prompt(
     *, chapter: int, book_characters: dict, core, world_constraints: list,
-    compiled: list, compiler, evidence: dict,
+    compiled: list, compiler, evidence: dict, prior_text: str = '',
 ) -> ChapterRequest:
     """第 k 章抽取请求的 prompt 组装（`run_source` 与批 0 探针共用的唯一实现）。
 
     探针必须逐字复用本函数构造「现行请求」臂：在工具里另抄一份，臂 A 与生产
     请求何时漂移将无人知晓（S-03：实验/兼容逻辑不散落，也不与生产形成第二真相）。
-    快照由 `source_fold` 的同一折叠产出（单一实现，无第二套 fold）。
+    快照由 `source_fold` 的同一折叠产出（单一实现，无第二套 fold）；
+    `prior_text` 是批 0 裁决采纳的前文原文前缀（C 形态；第 1 章为空）。
     """
     snapshot = (initial_snapshot(core) if chapter == 1 else
                 chapter_input_snapshot(core, assemble_blueprint(world_constraints, compiled),
@@ -222,10 +235,14 @@ def chapter_extraction_prompt(
     slots = {
         'ch': chapter,
         'glossary': pack_prompt('人物闭集', characters=book_characters),
-        'kreg': '\n'.join(f'{k} -> {v}' for k, v in compiler.statements.items()),
+        'kreg': '\n'.join(f'{k} -> {v}'
+                          for k, v in compiler.proposition_registry().items()),
+        'lreg': '\n'.join(f'{k} -> {v}'
+                          for k, v in compiler.open_loop_registry().items()),
         'evidence': chapter_evidence,
         'pre_chapter': PRE_CHAPTER_RULE if chapter == 1 else '',
         'known_beats': ', '.join(sorted(compiler.known_beats)),
+        'prior': prior_text,
     }
     prompt = CHAPTER_PROMPT.format(snapshot='\n'.join(snapshot), **slots)
     return ChapterRequest(prompt=prompt, snapshot=snapshot, slots=slots)
@@ -255,7 +272,7 @@ def run_source(ctx: ChainContext) -> dict:
         request = chapter_extraction_prompt(
             chapter=no, book_characters=book['characters'], core=core,
             world_constraints=wcs, compiled=compiled, compiler=compiler,
-            evidence=evidence)
+            evidence=evidence, prior_text=_prior_text(chapters, no))
         snapshots[str(no)] = request.snapshot
         wire = ctx.ask(f'ch{no:02d}', request.prompt, lambda w: compiler.validate(w, no))
         bp, errors = compiler.compile(wire, no)
@@ -265,9 +282,13 @@ def run_source(ctx: ChainContext) -> dict:
     blueprint = assemble_blueprint(wcs, compiled)
     repository.write('stage2/blueprints/chapter_blueprints.json', blueprint)
     repository.write('stage2/compiled/input_snapshots.json', snapshots)
-    _, events = source_fold(core, blueprint, pre_chapter_evidence=pre_chapter)
-    repository.write('stage2/acceptance/fold.json', {'events': events})
-    return {'chapters': len(compiled), 'fold_events': events}
+    # fold 的结构化只读读数：事件＋每章空转移拍比例（D7）＋书末未揭示 concealed。
+    fold = source_fold(core, blueprint, pre_chapter_evidence=pre_chapter,
+                       proposition_registry=compiler.proposition_registry())
+    repository.write('stage2/acceptance/fold.json', {
+        'events': fold.events, 'chapters': fold.chapter_stats,
+        'concealed_unrevealed': fold.concealed_unrevealed})
+    return {'chapters': len(compiled), 'fold_events': fold.events}
 
 
 # ─── stage2 names ────────────────────────────────────────────────────────────

@@ -3766,12 +3766,18 @@ class Str06BlueprintBeatView(StrictModel):
     event: str = Field(min_length=1)
     participants: tuple[str, ...] = ()
     effects: tuple[dict[str, Any], ...] = ()
-    reveals: tuple[dict[str, Any], ...] = ()
+    #: v13（质量改进批次二）：cognition 取代 reveals；loops 独立成数组。
+    cognition: tuple[dict[str, Any], ...] = ()
+    loops: tuple[dict[str, Any], ...] = ()
+    scene_boundary: str | None = None
+    temporal_mode: str | None = None
 
 
 class Str06BlueprintChapterView(StrictModel):
     chapter: int = Field(ge=1)
     beats: tuple[Str06BlueprintBeatView, ...] = Field(min_length=1)
+    #: v13：compiler 生成的场景分段（跨章场景在续章同样出现）。
+    scenes: tuple[dict[str, Any], ...] = ()
     causal_edges: tuple[dict[str, Any], ...] = ()
 
 

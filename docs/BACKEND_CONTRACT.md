@@ -136,13 +136,21 @@ orchestrator 推进，semantic unit 生成；Stage 页只读监控。`HUMAN_NODE
 |---|---|---|
 | R-2.1 | book 级抽取编译闭合：`CharactersCore` 无未知键、无悬空引用、人物闭集自洽；编译错误当场 fail-fast，不落半份产物。 | `HARD`（`novel/stages/stage2/source.py::compile_book`） |
 | R-2.2 | 源章数组阅读序 1..N 密集且非空（`MainText` 模型保证）；目标章数恒等于源章数（同 `R-5.2`）。生产路径读正式 Stage1 产物，`--source-json` 只是开发路径。 | `HARD`（`novel/stages/chain.py::run_chain` + `contracts/schema/stage1.py::MainText`） |
-| R-2.3 | 逐章 Blueprint v12 编译闭合：拍序、引用与状态键合法；逐章输入快照确定性派生（`chapter_input_snapshot`），同输入同快照。 | `HARD`（`novel/stages/stage2/source.py::ChapterCompiler`） |
-| R-2.4 | `source_fold` 事件与 Blueprint canonical 一致（落 `stage2/acceptance/fold.json`）；fold 是机械对账面，不产生新语义。章前文字（e00）的两个分流读数——开场拍对初态同键 set 同值、初态已知者又被开场拍告知——只报告、不阻断。 | `HARD`（`novel/stages/stage2/source.py::source_fold`） |
-| R-2.5 | `CharactersCore` 与 `BlueprintsArtifactV12` 的盘上形状由 `ARTIFACT_SPECS` 登记（这两个模型不声明 `contract_version`，按 F8 义务在注册表登记形状）；不往模型加非 exclude 字段——那会改 `model_dump` 字节、从而改 prompt 与已购请求身份。 | `载体`（`contracts/schema/__init__.py::ARTIFACT_SPECS`） |
+| R-2.3 | 逐章 Blueprint v13 编译闭合：三类转移（effects／cognition／loops）、场景边界与时间模式、participants／认知 holder 闭集、因果边合法；逐章输入快照确定性派生（`chapter_input_snapshot`），同输入同快照。 | `HARD`（`novel/stages/stage2/source.py::ChapterCompiler`） |
+| R-2.4 | `source_fold` 事件与 Blueprint canonical 一致（落 `stage2/acceptance/fold.json`）；fold 是机械对账面，不产生新语义。章前文字（e00）的两个分流读数——开场拍对初态同键 set 同值、初态已知者又被开场拍告知（按**持有者与命题**核对，QP-07 修复）——只报告、不阻断。 | `HARD`（`novel/stages/stage2/source.py::source_fold`） |
+| R-2.5 | `CharactersCore` 与 `BlueprintsArtifactV13` 的盘上形状由 `ARTIFACT_SPECS` 登记（这两个模型不声明 `contract_version`，按 F8 义务在注册表登记形状）；不往模型加非 exclude 字段——那会改 `model_dump` 字节、从而改 prompt 与已购请求身份。 | `载体`（`contracts/schema/__init__.py::ARTIFACT_SPECS`） |
 | R-2.6 | 已购请求身份按字节复算：候选产物落盘用保序序列化（不 `sort_keys`），prompt 与 adoption 身份逐字相等；排序归一会静默改掉 F5e 已购请求的身份。 | `结构`（`novel/store.py::Str06Repository` 的保序序列化） |
 | R-2.7 | fold 事件计数与章分布无条件报出（度量，不是门）；章前文字读数同列上报。 | `度量`（`novel/stages/stage2/source.py::source_fold`） |
 | R-2.8 | **称谓闭合（wire 闸）**：`canonical` 必须逐字等于该人物 `surfaces` 中的某一项。canonical 是内部主键显示名，又作为身份名交给 Design／Hook；未登记字面在替换表里找不到对应新名。不通过走 owner patch，不静默改写。 | `HARD`（`novel/stages/stage2/source.py::compile_book`） |
 | R-2.9 | **组合源身份**：`source_identity` 与 `root_sha1` 由 `main_text.json`＋`hook_copy.json` 两份字节的组合摘要派生（长度前缀，防拼接歧义）。只改章前文字也换源身份 ⇒ 候选根复校关闭式拒绝，旧根不得沿用旧购买；续跑用新独立根。开发路径 `--source-json` 必须显式给出引子或显式声明「无引子」。 | `HARD`（`novel/stages/chain.py::load_stage1_chapters`＋`novel/prov.py::combined_content_sha256`＋`novel/llm/paid_requests.py::init_or_resume_candidate_workflow`） |
+| R-2.10 | **称谓锚点字面（wire 闸）**：每个 surface 的 `from_chapter` 由 compiler 按证据锚点派生并覆盖 wire 声明值（I-15）：锚点段＝所引证据段中逐字包含该称呼的最早一段，章前文字（e00）锚点映射到第 1 章；所引段没有一个逐字包含该称呼即拒（QP-04 根因：章前称谓被标成第 0 章）。 | `HARD`（`novel/stages/stage2/source.py::compile_book`） |
+| R-2.11 | **悬念生命周期**：`loops` 独立成数组，op 只有 open／close；同一 loop 只能 open 一次（已 open 或已 close 的 id 不得再 open），close 必填非空 resolution，问题文本只出现在 open 处、之后不可改写（v12 把 loop 挂成 effect 时模型反复用 set 改写问题文本，F9 与首轮付费验收实证）。 | `HARD`（`contracts/schema/source.py::LoopAction`＋`ChapterCompiler` 引用解析） |
+| R-2.12 | **命题引用闭合**：cognition 与 effect 的命题引用同章用 wire 本地标签、跨章用 prompt 列出的正式 ID（kNN，compiler 生成）；引用未登记命题即拒；复用已登记命题时重抄的 statement 必须与登记文本逐字一致——同一命题的文本只建立一次，由形状保证（v12 允许复用 key 时重抄，实测被改写）。 | `HARD`（`novel/stages/stage2/source.py::ChapterCompiler._normalize`） |
+| R-2.13 | **事实可见性**：每个 effect 必填 `disclosure`（on_page／concealed）；concealed 必须声明 known_by（非空）并带命题锚——叙述确立但读者此刻不可见的事实，由后续 cognition 经同一命题记录揭示；没有可见性，漏记的揭示无法机械发现（QP-05：ch04 床下现身缺确认 reveal，三份样本全缺）。 | `HARD`（`contracts/schema/source.py::Disclosure`／`Effect`） |
+| R-2.14 | **登记键闭集与固定作用域**：`scene_location`（scene 作用域，当前所在）与 `residence`（book 作用域，长期居所）为登记键，身体状态各自一键（不塞进位置值）；作用域由 compiler 绑定，拍上声明与表不符即拒；`whereabouts`／`hiding_place`／`location` 已退役，出现即拒并指向分轴后的键。 | `HARD`（`contracts/schema/source.py::REGISTERED_STATE_KEYS`／`RETIRED_STATE_KEYS`＋`ChapterCompiler`） |
+| R-2.15 | **未揭示 concealed 只读报告**：concealed 效应到书末仍无读者确认（reader 持有者的 learns／confirms）时，按命题列出（statement／建立拍／known_by）落 fold.json；只报告、不阻断。 | `度量`（`novel/stages/stage2/source.py::source_fold`） |
+| R-2.16 | **空转移拍比例**：每章三类转移全空的拍所占比例按章报出（fold.json `chapters`）；这类拍合法——完整性由该读数配合离线核读证明，不加声明字段（D7／D17）。 | `度量`（`novel/stages/stage2/source.py::source_fold`） |
+| R-2.17 | **知情 fold 读数**：认知层按「命题＋持有者＋模式」折叠，快照逐条带来源与标识登记（状态键、loop_id、命题 ID）；读者确认时点由 on_page 效应或 reader 的 learns／confirms 落账。 | `度量`（`novel/stages/stage2/source.py::source_fold`） |
 
 源语义（归因、因果、揭示）的语义正确性不经机械检查证明，随 Stage2 语义未审披露；
 `--check-only` 只允许缓存命中与登记的历史采用，零新购。
@@ -607,7 +615,7 @@ reasoning 已含在 completion 中时不再累加。
 |---|---|
 | 非正文剔除（`stage0`，**13 条现役**） | R-0 |
 | 分章（`stage1`，**9 条现役**） | R-1 |
-| 源语义与名称结构（`stage2`，**10 条现役**） | R-2、R-3 |
+| 源语义与名称结构（`stage2`，**18 条现役**） | R-2、R-3 |
 | 目标故事与确定性编译（`stage4`，**18 条现役**） | R-5、R-6（含 Guard M1–M6） |
 | 按章正文与 Hook（`stage5`，**8 条现役**） | R-7、R-8 |
 | 命名与交付（`stage7`，**8 条现役**） | R-10 |

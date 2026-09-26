@@ -40,12 +40,19 @@ export interface Str06BlueprintBeat {
   event: string
   participants: string[]
   effects: Record<string, unknown>[]
-  reveals: Record<string, unknown>[]
+  /** v13：认知转移（命题＋持有者＋模式），取代 reveals */
+  cognition: Record<string, unknown>[]
+  /** v13：悬念转移（open/close） */
+  loops: Record<string, unknown>[]
+  scene_boundary: string | null
+  temporal_mode: string | null
 }
 
 export interface Str06BlueprintChapter {
   chapter: number
   beats: Str06BlueprintBeat[]
+  /** v13：compiler 生成的场景分段（跨章场景在续章同样出现） */
+  scenes: Record<string, unknown>[]
   causal_edges: Record<string, unknown>[]
 }
 

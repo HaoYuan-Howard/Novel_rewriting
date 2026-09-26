@@ -58,12 +58,22 @@ _hard('source_book_extraction', 'stage2',
       'book 级源抽取编译闭合（CharactersCore 无未知键、无悬空引用）', 'R-2.1')
 _hard('source_canonical_surface', 'stage2',
       'canonical 逐字等于该人物某个已登记 surface（称谓闭合的 wire 闸）', 'R-2.8')
+_hard('source_surface_anchor_literal', 'stage2',
+      '称谓 from_chapter 由证据锚点派生：锚点段逐字包含该 surface，章前锚点映射第 1 章', 'R-2.10')
 _hard('source_identity_covers_hook_copy', 'stage2',
       '源身份覆盖 main_text＋hook_copy 两份字节；只改引子即拒复用旧购买', 'R-2.9')
 _hard('source_chapter_dense_ordinals', 'stage2',
       '源章数组阅读序 1..N 密集且非空', 'R-2.2')
 _hard('source_chapter_blueprint', 'stage2',
-      '逐章 Blueprint v12 编译闭合（拍序、引用与状态键合法）', 'R-2.3')
+      '逐章 Blueprint v13 编译闭合（三类转移、场景分段、participants/holder 闭集、因果边）', 'R-2.3')
+_hard('source_loop_lifecycle', 'stage2',
+      'loops 只许 open/close：loop 一次性 open、close 必带 resolution、问题文本不可改写', 'R-2.11')
+_hard('source_proposition_closure', 'stage2',
+      '命题引用闭合：本地标签/正式 ID 可解析，重抄文本与登记逐字一致', 'R-2.12')
+_hard('source_effect_disclosure', 'stage2',
+      'effect 可见性形状：必填 on_page/concealed；concealed 必声明已知者并带命题锚', 'R-2.13')
+_hard('source_registered_key_scope', 'stage2',
+      '登记键作用域固定（scene_location/residence/身体状态键按表绑定；退役位置键拒识）', 'R-2.14')
 _hard('source_fold_consistent', 'stage2',
       'source fold 事件与 Blueprint canonical 一致', 'R-2.4')
 _hard('names_structure_compile', 'stage2',
@@ -73,6 +83,12 @@ _hard('names_coverage', 'stage2',
 _unver('source_semantics_unver', 'stage2',
        '源语义（归因、因果、揭示）未经语义审阅，保持未评披露', 'R-3.3')
 _metric('source_fold_events', 'stage2', 'fold 事件计数与章分布读数', 'R-2.7')
+_metric('source_fold_concealed_unrevealed', 'stage2',
+        '书末仍未向读者确认的 concealed 命题（只读报告，不阻断）', 'R-2.15')
+_metric('source_fold_empty_transition_ratio', 'stage2',
+        '每章空转移拍比例（三类转移全空的拍所占比例；D7 连续性读数）', 'R-2.16')
+_metric('source_fold_knowledge', 'stage2',
+        '知情 fold 读数（按命题＋持有者＋模式；读者确认时点）', 'R-2.17')
 
 # ── Stage4 目标故事与确定性编译 ──────────────────────────────────────────────
 _hard('body_design_compile', 'stage4',

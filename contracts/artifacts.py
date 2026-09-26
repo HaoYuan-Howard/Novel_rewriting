@@ -209,10 +209,13 @@ def str06_book_rel(title: str) -> str:
 # `tests/test_str06_f7e_freeze.py`。改一条路径就必须同批改这里，否则契约身份
 # 与版本面当场分家。
 STR06_ARTIFACT_RC_VERSIONS: Final[dict[str, str]] = {
-    'stage2/blueprints/chapter_blueprints.json': 'str06-rc2',
+    # v13（2026-09-26 质量改进批次二）：拍模型三类转移＋场景分段；v12 存量拒读。
+    'stage2/blueprints/chapter_blueprints.json': 'str06-rc5',
     'stage2/compiled/book_extraction.json': 'str06-rc2',
-    'stage2/compiled/input_snapshots.json': 'str06-rc2',
-    'stage2/acceptance/fold.json': 'str06-rc2',
+    # v13 同批：快照渲染逐条带来源与标识登记（D11）；fold 读数结构化
+    # （每章空转移拍比例＋书末未揭示 concealed）。
+    'stage2/compiled/input_snapshots.json': 'str06-rc5',
+    'stage2/acceptance/fold.json': 'str06-rc5',
     'stage2/characters/characters.json': 'str06-rc3',
     'runtime/preserve_checkpoint.json': 'str06-rc3',
     'stage4/grounding/reconstruction_brief.json': 'str06-rc3',

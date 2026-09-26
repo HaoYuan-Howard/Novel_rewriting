@@ -1,33 +1,46 @@
-"""单一目标 Fold：按显式地址/操作重放，仅 accepted prefix 的 planned_delta 可传播。"""
+"""单一目标 Fold：按显式地址/操作重放，仅 accepted prefix 的 planned_delta 可传播。
+
+叠加机制用 `novel.stages.common.StateOverlay`（D16：Stage2 源折叠与 Stage4 计划
+折叠共用的唯一实现）；本类只负责把目标侧 `Establishment` 适配成规范变化，并投影
+成消费面视图（StateEntry／KnowledgeEntry）。
+"""
 from __future__ import annotations
 
 from typing import Iterable
+
 from contracts.schema.execution import EffectDomain, Establishment, SceneExecutionPlan
 from contracts.schema.context import KnowledgeEntry, StateEntry
+from novel.stages.common import OverlayChange, StateOverlay
 
 INIT_ANCHOR = 'init'
 
 
 class FoldedState:
     """可重建派生状态；scene 覆盖保留 book 底值，解除/未知/未建立分别表达。"""
+
     def __init__(self) -> None:
-        self._book: dict[tuple, Establishment] = {}
-        self._local: dict[tuple, tuple[str, Establishment]] = {}
+        self._overlay = StateOverlay()
 
     def apply(self, scene_id: str, establishments: Iterable[Establishment]) -> 'FoldedState':
-        for est in establishments:
-            if est.scope == 'book':
-                self._book[est.address()] = est
-            else:
-                self._local[est.address()] = (scene_id, est)
+        self._overlay.apply(scene_id, [
+            OverlayChange(address=e.address(), op=e.op, value=e.value,
+                          scope=e.scope, source=e.established_by,
+                          mode=e.knowledge_mode)
+            for e in establishments])
         return self
 
     def expire_scene_scope(self, scene_id: str) -> 'FoldedState':
-        self._local = {k: v for k, v in self._local.items() if v[0] != scene_id}
+        self._overlay.expire_scene_scope(scene_id)
         return self
 
-    def _visible(self) -> dict[tuple, Establishment]:
-        return {**self._book, **{k: v[1] for k, v in self._local.items()}}
+    def _entry_of(self, change: OverlayChange) -> Establishment:
+        """规范变化还原成 Establishment（地址四段从 address 元组拆回）。"""
+        domain, subjects, holder, key = change.address
+        return Establishment(
+            domain=EffectDomain(domain), key=key, subjects=tuple(subjects),
+            holder=holder or None, op=change.op, value=change.value,
+            scope=change.scope, established_by=change.source,
+            knowledge_mode=change.mode)
 
     def entry_state_view(self, scene_start_anchor: str, domains=(
             EffectDomain.CHARACTER, EffectDomain.RELATION,
@@ -35,7 +48,8 @@ class FoldedState:
         return tuple(StateEntry(
             domain=e.domain, key=e.key, subjects=e.subjects, value=e.value,
             status=e.op, established_by=e.established_by)
-            for _, e in sorted(self._visible().items()) if e.domain in domains)
+            for e in (self._entry_of(c) for c in self._overlay.entries())
+            if e.domain in domains)
 
     def entry_knowledge_view(self) -> tuple[KnowledgeEntry, ...]:
         # 非 set（解除/未知）的 knowledge 项无知情模式可消费；mode 只在 set 上有
@@ -44,10 +58,11 @@ class FoldedState:
             holder=e.holder, subjects=e.subjects, key=e.key,
             mode=e.knowledge_mode or 'known',
             proposition=f'{e.key}={e.value}', status=e.op, established_by=e.established_by)
-            for _, e in sorted(self._visible().items()) if e.domain is EffectDomain.KNOWLEDGE)
+            for e in (self._entry_of(c) for c in self._overlay.entries())
+            if e.domain is EffectDomain.KNOWLEDGE)
 
     def value_of(self, domain: EffectDomain, key: str, *, subjects=(), holder=None) -> str | None:
-        fact = self._visible().get((domain.value, tuple(subjects), holder or '', key))
+        fact = self._overlay.visible().get((domain.value, tuple(subjects), holder or '', key))
         return fact.value if fact and fact.op == 'set' else None
 
 

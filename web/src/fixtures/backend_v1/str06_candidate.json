@@ -285,10 +285,21 @@
        "fu_jun"
       ],
       "effects": [],
-      "reveals": []
+      "scene_boundary": "new",
+      "temporal_mode": "single",
+      "cognition": [],
+      "loops": []
      }
     ],
-    "causal_edges": []
+    "causal_edges": [],
+    "scenes": [
+     {
+      "scene_id": "sc01",
+      "beat_ids": [
+       "b01_01"
+      ]
+     }
+    ]
    },
    {
     "chapter": 2,
@@ -301,10 +312,21 @@
        "fu_jun"
       ],
       "effects": [],
-      "reveals": []
+      "scene_boundary": "new",
+      "temporal_mode": "single",
+      "cognition": [],
+      "loops": []
      }
     ],
-    "causal_edges": []
+    "causal_edges": [],
+    "scenes": [
+     {
+      "scene_id": "sc02",
+      "beat_ids": [
+       "b02_01"
+      ]
+     }
+    ]
    }
   ]
  },

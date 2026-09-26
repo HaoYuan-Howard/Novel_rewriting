@@ -961,7 +961,7 @@
    ],
    "lifecycle": {
     "unit_kind": "strategy_and_chapter",
-    "input_workpack": "正式 Stage1 MainText 章数组（阅读序密集）",
+    "input_workpack": "正式 Stage1 MainText 章数组（阅读序密集）＋hook_copy 章前文字（e00 证据段）",
     "generation_mode": "executor",
     "review_mode": "none",
     "review_scope": "机械校验自证；语义未审以 unver 披露",
@@ -995,7 +995,7 @@
    ],
    "lifecycle": {
     "unit_kind": "book",
-    "input_workpack": "源 core 抽取与完整 MainText",
+    "input_workpack": "源 core 抽取、完整 MainText 与 hook_copy 章前文字",
     "generation_mode": "executor",
     "review_mode": "none",
     "review_scope": "机械校验自证；姓氏构词探针只报告",
@@ -1030,7 +1030,7 @@
    ],
    "lifecycle": {
     "unit_kind": "book",
-    "input_workpack": "源 core 与 Blueprint v12",
+    "input_workpack": "源 core 与 Blueprint v13",
     "generation_mode": "executor",
     "review_mode": "none",
     "review_scope": "机械校验通过即自动接受",
@@ -1273,7 +1273,7 @@
    ],
    "lifecycle": {
     "unit_kind": "book",
-    "input_workpack": "Characters v4 名称结构与 Blueprint v12",
+    "input_workpack": "Characters v4 名称结构与 Blueprint v13",
     "generation_mode": "executor",
     "review_mode": "none",
     "review_scope": "机械校验通过即 auto 定稿；ApplyNames 是替换唯一应用者",

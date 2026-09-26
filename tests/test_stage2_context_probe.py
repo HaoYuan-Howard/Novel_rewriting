@@ -3,12 +3,12 @@
 """test_stage2_context_probe —— 批 0 探针工具的契约测试（纯函数＋CLI 闸）。
 
 【保护什么】探针的价值全在「臂 A 与生产请求逐字一致」：工具另抄一份组装，臂 A
-与生产何时漂移将无人知晓，A/B/C 的对照随之失效。本文件用合成最小中文片段钉住：
+与生产何时漂移将无人知晓，A/B 的对照随之失效。本文件用合成最小中文片段钉住：
   ① 臂 A 恒等于 `chain.chapter_extraction_prompt` 的产出；
   ② 臂 B 只加前文块（位置在章正文标记之前，且 A 的其余内容逐字保留）；
-  ③ 臂 C 的快照逐条带来源、键集与生产 fold 一致，并带正文优先规则；
-  ④ 架构探针 prompt 的形状（章界、证据 id、输出形状、跨章约束）；
-  ⑤ 授权闸：`--execute` 必须同时有 `--yes` 与 `--allow-egress`，互斥组合关闭式拒绝。
+  ③ C 臂是批 0（v12 契约）专用镜像，已随批 0 结论登记关闭——调用即拒绝；
+  ④ 架构探针 prompt 的形状（章界、证据 id、输出形状、跨章规则）；
+  ⑤ 授权闸：`--execute` 必须同时有 `--yes` 与 `--allow-egress`，互斥组合拒绝。
 
 不读本地小说产物、不发请求、不建根——探针的付费路径由真实运行的 preview／执行
 人工核验（预登记裁决规则见 `docs/REQUIREMENTS.md` 质量改进批次二 · 批 0）。
@@ -22,7 +22,7 @@ from novel.stages.chain import build_evidence, chapter_extraction_prompt
 from novel.stages.stage2 import ChapterCompiler, compile_book
 
 CHAPTERS = [
-    {'chapter_ordinal': 1, 'text': '芸娘坐在房里。夫君走进来。说起借种一事。'},
+    {'chapter_ordinal': 1, 'text': '夫君与云娘对坐。说起借种一事。'},
     {'chapter_ordinal': 2, 'text': '表弟登门。夫君招待他。众人各自回房。'},
     {'chapter_ordinal': 3, 'text': '夜里有人推门进来。喊她嫂嫂。芸娘惊醒。'},
 ]
@@ -30,8 +30,8 @@ HOOK_COPY = '新婚夜,夫君告诉芸娘一件事。'
 
 BOOK_WIRE = {
     'characters': {
-        'yun_niang': {'canonical': '芸娘',
-                      'surfaces': [{'surface': '芸娘', 'from_chapter': 1,
+        'yun_niang': {'canonical': '云娘',
+                      'surfaces': [{'surface': '云娘', 'from_chapter': 1,
                                     'until_chapter': None, 'source_refs': ['e01_01']}]},
         'lu_fujun': {'canonical': '夫君',
                      'surfaces': [{'surface': '夫君', 'from_chapter': 1,
@@ -46,20 +46,25 @@ BOOK_WIRE = {
     'world_constraints': [],
 }
 
+#: v13 拍形状：三类转移＋场景边界＋时间模式；effect 必填 scope 与 disclosure。
 CH01_WIRE = {'beats': [
     {'beat_id': 'b01_01', 'event': '夫君说出向表弟借种的谋划',
      'participants': ['yun_niang', 'lu_fujun'], 'source_refs': ['e01_01'],
+     'scene_boundary': 'new', 'temporal_mode': 'single',
      'effects': [{'target': {'kind': 'character', 'char_id': 'lu_fujun'},
-                  'key': 'intent', 'op': 'set', 'value': '向表弟借种生子'}],
-     'reveals': []}],
+                  'key': 'intent', 'op': 'set', 'value': '向表弟借种生子',
+                  'scope': 'book', 'disclosure': {'visibility': 'on_page'}}],
+     'cognition': [], 'loops': []}],
     'causal_edges': []}
 
 CH02_WIRE = {'beats': [
     {'beat_id': 'b02_01', 'event': '表弟登门，夫君在正厅招待',
      'participants': ['lu_fujun'], 'source_refs': ['e02_01'],
+     'scene_boundary': 'new', 'temporal_mode': 'single',
      'effects': [{'target': {'kind': 'character', 'char_id': 'lu_fujun'},
-                  'key': 'whereabouts', 'op': 'set', 'value': '陆家正厅'}],
-     'reveals': []}],
+                  'key': 'scene_location', 'op': 'set', 'value': '陆家正厅',
+                  'scope': 'scene', 'disclosure': {'visibility': 'on_page'}}],
+     'cognition': [], 'loops': []}],
     'causal_edges': []}
 
 
@@ -79,10 +84,6 @@ def _synthetic_prefix() -> P.ProbePrefix:
         root_sha1='y' * 40, book_wire=BOOK_WIRE, book_wire_sha256='z' * 64,
         core=core, world_constraints=wcs, evidence=evidence, prefix_through=2,
         compiled=compiled, compiler=compiler)
-
-
-def _arm_prompt(arm: str, chapter: int = 3) -> str:
-    return P.arm_prompt(_synthetic_prefix(), chapter, arm, _synthetic_prefix().compiled)
 
 
 def test_arm_a_is_byte_identical_to_production_request():
@@ -110,19 +111,10 @@ def test_arm_b_only_inserts_prior_text_before_chapter_marker():
     assert arm_b.replace(P.prior_text_block(prefix, 3) + '\n\n', '', 1) == arm_a
 
 
-def test_arm_c_annotates_snapshot_sources_and_keeps_fold_keys():
+def test_arm_c_is_retired_after_batch_zero():
     prefix = _synthetic_prefix()
-    arm_c = P.arm_prompt(prefix, 3, 'C', prefix.compiled)
-    assert P.TEXT_FIRST_RULE.splitlines()[0] in arm_c
-    assert '（initial_state s0_marriage 建立）' in arm_c
-    assert '（b02_01 建立）' in arm_c
-    # 键集与生产 fold 一致（探针镜像漂移即红）。
-    from novel.stages.stage2 import chapter_input_snapshot, assemble_blueprint
-    production = chapter_input_snapshot(prefix.core, assemble_blueprint(
-        prefix.world_constraints, prefix.compiled), 3)
-    annotated = P.annotated_snapshot(prefix, prefix.compiled, 3)
-    assert sorted(line.split(' = ')[0] for line in annotated) == sorted(
-        line.split(' = ')[0] for line in production)
+    with pytest.raises(SystemExit, match='批 0'):
+        P.arm_prompt(prefix, 3, 'C', prefix.compiled)
 
 
 def test_arch_prompt_carries_chapter_range_evidence_and_output_shape():
@@ -157,7 +149,7 @@ def test_context_readings_extract_qp_signals_mechanically():
     (['--arm', 'A', '--prefix-through', '3'], '前缀不得覆盖'),
     (['--arm', 'A', '--from-ch', '5', '--to-ch', '2'], '章范围非法'),
 ])
-def test_cli_gates_refuse_unsafe_invocations(argv, needle, monkeypatch, capsys):
+def test_cli_gates_refuse_unsafe_invocations(argv, needle, monkeypatch):
     monkeypatch.setattr(P, 'load_probe_prefix',
                         lambda root, through: _synthetic_prefix())
     with pytest.raises(SystemExit) as exc:

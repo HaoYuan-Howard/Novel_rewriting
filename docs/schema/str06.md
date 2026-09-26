@@ -65,7 +65,7 @@ RC2 的人工语义修订是显式外部输入，不是 compiler 自然语言猜
 | `design.py` | `BodyDesign`／`PresentationGraph(BodyDesign)+hook`（RC4：`SceneDriver`/`TargetBeat`/`TargetDelta`/`SceneDelivery`/`ChapterAssignment`） | source-blind（无 source_ref 族字段且 forbid extra）；章号连续 1..N、场景全覆盖、每章非空；hook 必填且 graph 内引用闭合；每场 `realization_brief` 与每章 `purpose` 必填非空（缺省拒读） |
 | `hook.py` | `HookDesign`／`HookContext`／`HookReceipt`／`HookConstraints`（F6，形状未变） | 起笔事实只引用已建立的目标事实；first 恰一人且非 narrator；材料唯一呈现语义口是 presentation；回执 semantic 恒 unverified |
 | `naming.py` | `NameMapV5`／`NameAssignment`／`TargetName`（F6） | name 与 keep_reason 恰好一个；full 由 compiler 拼接；char_ref 唯一 |
-| `source.py` | Characters v4（`CharactersCore` + `name_structure` RC 段）／Blueprints v12（F6 扩） | core view 与 RC2 同形（Preserve sha 不变）；名称结构 surface 恰好覆盖、模板渲染逐字相等、纯称谓不含姓名字面、同姓亲属共享 family_id；canonical 逐字等于某个已登记 surface |
+| `source.py` | Characters v4（`CharactersCore` + `name_structure` RC 段）／Blueprints v13（拍三类转移＋场景分段） | core view 与 RC2 同形（Preserve sha 不变）；名称结构 surface 恰好覆盖、模板渲染逐字相等、纯称谓不含姓名字面、同姓亲属共享 family_id；canonical 逐字等于某个已登记 surface；from_chapter 由证据锚点派生 |
 | `execution.py` | `ExecutionPlan`（establishment/constraint/dependency/reinforcement）与 `ExecutionSlice` | 必保只落 establishment/constraint；`Reinforcement` 无 obligation_id（0..N 不稀释必保）；依赖边禁自指 |
 | `context.py` | `WriterContext` 双视图（`VerificationIR` + `WriterBrief`，RC4 职责重划） | IR 带 `beats` 逐拍定位与 `prohibitions`（从 delivery.avoid 投影）；Brief 只承载呈现（`realization_brief` 原样投影＋driver 摘要＋POV/voice/hints），事实清单不进 Brief；两视图 scene_id 与 `execution_slice_sha256` 同源；attempt/审计字段不进静态 IR |
 | `book_ir.py` | `WriterBookIR`＝`BookBrief`＋`ChapterIR[]`（F5） | BookBrief 是全书约束与确定性导航（不调 LLM 总结、不取 POV 众数、不补造统一文风；禁止项只从已有明确限制及释放位置投影）；ChapterIR 携带章目的、确定性章预算与场景双视图；章号连续、导航与章 IR 一致 |
@@ -157,7 +157,7 @@ Hook 写手仍不读源引子。
 | Truth | 唯一职责 | 目标产物 |
 |---|---|---|
 | Characters | 源人物身份、初始状态、稳定约束及源名称结构 | `stage2/characters/characters.json`（v4） |
-| Blueprint | 源事件、变化、揭示、因果及书级初始事实／约束 | `stage2/blueprints/chapter_blueprints.json`（v12） |
+| Blueprint | 源事件、事实/认知/悬念三类转移、因果及书级初始事实／约束 | `stage2/blueprints/chapter_blueprints.json`（v13） |
 | Target Design | 目标初始语义、正文结构与归章、Body/Hook 呈现选择 | `stage4/design/presentation_graph.json`（v1） |
 | Semantic Binding | Preservation 决定、source lineage、完整保留约束及目标承载 | `stage4/grounding/semantic_binding.json`（v1） |
 

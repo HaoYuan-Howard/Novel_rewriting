@@ -8,7 +8,7 @@ from contracts.artifacts import STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT
 from novel.llm.ledger import CostLedger
 from novel.store import Str06Repository
 from novel.stages.chain import run_workflow
-from tests.str06_facilities import make_context
+from tests.str06_facilities import make_context, v13_beat, v13_chapter
 from tests.test_str06_target import _source_pair, _preserve_wire, _design_wire
 
 
@@ -166,14 +166,11 @@ def test_changed_hook_copy_refuses_the_old_root_and_changes_requests(tmp_path):
                 {'surface': '云娘', 'from_chapter': 1, 'until_chapter': None,
                  'source_refs': ['e01_01']}]}},
             'initial_state': [], 'world_constraints': []},
-        'ch01': {'beats': [
-            {'beat_id': 'b01_01', 'event': '约定成立', 'participants': ['yun', 'fu_jun'],
-             'source_refs': ['e01_01'], 'effects': [], 'reveals': []}], 'causal_edges': []},
-        'ch02': {'beats': [
-            {'beat_id': 'b02_01', 'event': '夜半响动', 'participants': ['yun'],
-             'source_refs': ['e02_01'], 'effects': [], 'reveals': []}], 'causal_edges': []},
+        'ch01': v13_chapter(v13_beat('b01_01', '约定成立',
+                                     participants=('yun', 'fu_jun'))),
+        'ch02': v13_chapter(v13_beat('b02_01', '夜半响动', participants=('yun',),
+                                     source_refs=('e02_01',))),
     }
-
     def run(hook_copy):
         base = tmp_path / f'out_{abs(hash(hook_copy))}'
         base.mkdir(exist_ok=True)
