@@ -60,7 +60,9 @@ F3b 第二本 artifact-only smoke 撤销，不再作为本轮待办或付费点�
 
 ## 当前状态与下一步
 
-**下一批：F9（付费与正文外发分别授权；F8d 工程证据已冻结）。F8a 已于 2026-09-25
+**下一批：质量改进批次二（Stage2 源事实与认知边界；批 1、批 2 免费，批 0 与批 3
+付费需单独授权）。** F9 首轮付费验收未通过（停在 Stage2.source/ch05，见批次勾选），
+文学质量缺口移交本批次；F8a 已于 2026-09-25
 完成：契约与公开规则翻转（候选表原样激活为唯一现役注册面、判据注册表按新坐标重建、
 BACKEND_CONTRACT R-2～R-10 与指南同批改写）全部落地，零模型调用；契约五文件与
 str06 定向套件全绿。F8b-1（CLI 新链可达）、F8b-2（编排状态与服务面收口、legacy
@@ -661,6 +663,48 @@ F5a–F5d 已闭合按章成文的契约、引擎与免费验证，F5e 已完成
     正文与交付五条（新婚夜/死结与剪子/反对换人失言/结尾四处成立、床下藏身在确认拍前未被当作
     已确认叙述、无改变时间线/身份/前史的新设定、Hook 与正文一致、新名全书一致且混合名零次、
     「第N章」齐全）。单列指标（不参与语义判定）：各付费 owner 首次输出成功率。
+    该重跑在质量改进批次二之后执行：批 2 改变 Design 与写手的请求身份，段二正文不复用
+    任何旧结论；段一前提是批 3 的 Stage2 验收通过。
+- [ ] **质量改进批次二 · Stage2 源事实、状态生命周期与认知边界**（2026-09-27 立项；
+    批 1、批 2 免费零模型调用，批 0 与批 3 付费需单独授权）。输入是首轮付费验收的
+    三样本对照（F7e／F9／本轮，登记见 `docs/DECISIONS.md`）：ch03 行为主体误归、
+    ch04 缺读者确认 reveal、ch05 拍末位置与 event 矛盾、loop 用 set 改写、
+    recipients 的 `char_` 前缀等多版本复现问题，根因大都在契约形状与 prompt。设计
+    决定 D1–D17：每拍的变化分 effects（事实）、cognition（认知）、loops（悬念）三类
+    转移，各有唯一归属与生命周期；event 只是给人读的事件表述，不是连续性真值。
+  - [ ] **批 0 · 上下文探针与架构探针**（付费需单独授权；只改模型输入、不改契约）：
+    现行 v12 契约下以 A／B／C 三臂比较第 3 章上下文形态（A 现行、B 加前文原文前缀、
+    C 再加正文优先规则与快照逐条带来源），另以单次多章调用单独回答任务分解架构问题。
+    工具 `tools/stage2_context_probe.py`：先 0 成本 preview 打印请求差异与精确
+    token 数，只有 `--execute --yes` 才购买；每个样本一个独立探针根，不挂
+    `--adopt-root`。预登记裁决规则已冻结（开跑前定、跑后不改）：前文上下文进入生产
+    除非 B／C 编译失败率高于 A 或引入新错误类型；只有 A 失败 ≥2/4 且 B 或 C 失败
+    0/3 才宣称「上下文修复了 QP-01」；架构探针须 3/3 无截断、主体正确、ch04/ch05
+    两项不劣于 F7e 范式才进入生产候选讨论。**限制**：0a 完成后按实际请求重新报价，
+    再取付费与外发授权；未授权不购买。
+  - [ ] **批 1 · 源契约、编译与投影**（免费）：1A `contracts/schema/source.py` 按
+    D1–D12 定义拍三类转移、场景边界（new／continue）与 `temporal_mode`
+    （single／iterative），effect 增 `scope` 与必填 `disclosure`、op 增 `unknown`，
+    登记键闭集与固定作用域（`scene_location`／`residence`／身体状态键），loops 独立
+    成数组且 close 必填 resolution，Blueprint v12→v13；1B `compile_book` 的
+    from_chapter 由锚点派生并加锚点字面校验，`ChapterCompiler` 生成场景 ID、绑定
+    作用域、解析命题标签与引用、loop 一次性与 resolution、recipients 闭集，
+    `source_fold` 重写为事实层＋认知层＋按「命题＋持有者＋模式」的知情 fold（未揭示
+    concealed 只读报告、每章空转移拍比例读数），场景叠加原语上提
+    `novel/stages/common.py` 供 stage4 fold 共用；1C prompt 与前文组装按 D1–D12 与
+    批 0 裁决改写、证据切分细化到句并保留上下文；1D judges 新 HARD 与度量（红例＋
+    绿对照）、R-2 与 schema 文档同步。
+  - [ ] **批 2 · 消费者闭合**（免费）：2A Preserve rules 改写且 policy_version 2→3；
+    2B `project_brief` 的 stable_constraints 只取事实层；2C Design 知情词汇补
+    believes；2D 写手投影新增「尚未向读者确认的事实」清单（由 compiler 从 Design
+    reader delta 逐场派生）并升 renderer 与写作协议版本；2E API／UI 与前端只读展示
+    按事实、认知、悬念分列；2F fake transport 全链（源 concealed＋读者揭示 → Preserve
+    → Brief → Design → 写手章包）加 `test_str06_product_entry.py` 新形状 wire 到交付。
+  - [ ] **批 3 · 真实验收**（付费需单独授权）：新建独立根，stage0/1 免费生成，
+    `str06.stage2.source` 跑全书（开跑前报价并取得授权）；关键章 ch03–ch05 用探针
+    工具以生产 prompt 单臂重复 3 次；离线语义核读按执行计划第六节分项报告（结构
+    首次成功率、语义错误、遗漏、误报、未决项分开，不合成总体通过率），生产语义保持
+    `unver`。通过后按上述 F9 端到端计划继续段一。
 
 ## 恢复、替代与删除条件
 

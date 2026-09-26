@@ -40,6 +40,7 @@ scripts/export_plot_types.py、export_plot_fixture.py 与 export_stage2_core_fix
 | `archive_stage3_v1_books.py` | 已完成的 Stage3 v1 两书归档一次性工具（preview 默认，`--execute` 门控） |
 | `effort_ab.py` | FC-13 逐节点 effort 实验一次性 runner |
 | `node_role_table.py` | 一次性节点角色表生成 |
+| `stage2_context_probe.py` | 质量改进批次二 · 批 0 Stage2 上下文/架构探针（0 成本预览默认；`--execute --yes --allow-egress` 才购买；设施装配复用 `novel/stages/chain.py`）。预登记裁决规则见 `docs/REQUIREMENTS.md` 质量改进批次二 · 批 0；结论登记后随批 0 关闭，不为后续批次扩展 |
 
 ## F8c 清理记录
 

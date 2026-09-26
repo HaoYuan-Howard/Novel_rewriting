@@ -83,6 +83,8 @@ __all__ = [
     'ChainContext', 'NODE_ORDER', 'NODE_RUNNERS', 'Stage1Input', 'THROUGH_NODE',
     'build_evidence', 'derive_total_length_budget', 'execute', 'load_dev_source',
     'load_stage1_chapters', 'run_chain', 'run_node', 'run_workflow',
+    'ChapterRequest', 'PaidBoundary', 'assemble_paid_boundary',
+    'chapter_extraction_prompt', 'str06_chat_request',
 ]
 
 #: 执行序（stage2 → stage4 → stage5 → stage7；与 --through 的腿边界一致）。
@@ -187,6 +189,48 @@ def derive_total_length_budget(chapters: list[dict], *,
 
 # ─── stage2 source ───────────────────────────────────────────────────────────
 
+class ChapterRequest(NamedTuple):
+    """第 k 章抽取请求：prompt 正文＋该章的输入快照渲染＋组装槽值。
+
+    `slots` 是 `CHAPTER_PROMPT.format` 除快照外的其余槽（人物表／知识命题／证据／
+    章前规则／已有 beat）。批 0 探针的 C 臂要换一份「逐条带来源」的快照渲染，用
+    同一组槽值重排 prompt——探针不另抄一份组装，本函数也不为探针长分支。
+    """
+
+    prompt: str
+    snapshot: list[str]
+    slots: dict[str, str]
+
+
+def chapter_extraction_prompt(
+    *, chapter: int, book_characters: dict, core, world_constraints: list,
+    compiled: list, compiler, evidence: dict,
+) -> ChapterRequest:
+    """第 k 章抽取请求的 prompt 组装（`run_source` 与批 0 探针共用的唯一实现）。
+
+    探针必须逐字复用本函数构造「现行请求」臂：在工具里另抄一份，臂 A 与生产
+    请求何时漂移将无人知晓（S-03：实验/兼容逻辑不散落，也不与生产形成第二真相）。
+    快照由 `source_fold` 的同一折叠产出（单一实现，无第二套 fold）。
+    """
+    snapshot = (initial_snapshot(core) if chapter == 1 else
+                chapter_input_snapshot(core, assemble_blueprint(world_constraints, compiled),
+                                       chapter))
+    # 章前文字（e00）只进书级调用与第 1 章：引子只可能影响开场，其余各章不变。
+    chapter_evidence = '\n'.join(
+        f'[{k}] {v["text"]}' for k, v in evidence.items()
+        if v['chapter'] == chapter or (chapter == 1 and v.get('pre_chapter')))
+    slots = {
+        'ch': chapter,
+        'glossary': pack_prompt('人物闭集', characters=book_characters),
+        'kreg': '\n'.join(f'{k} -> {v}' for k, v in compiler.statements.items()),
+        'evidence': chapter_evidence,
+        'pre_chapter': PRE_CHAPTER_RULE if chapter == 1 else '',
+        'known_beats': ', '.join(sorted(compiler.known_beats)),
+    }
+    prompt = CHAPTER_PROMPT.format(snapshot='\n'.join(snapshot), **slots)
+    return ChapterRequest(prompt=prompt, snapshot=snapshot, slots=slots)
+
+
 def run_source(ctx: ChainContext) -> dict:
     repository = ctx.repository
     chapters = ctx.chapters
@@ -208,21 +252,12 @@ def run_source(ctx: ChainContext) -> dict:
     compiler, compiled, snapshots = ChapterCompiler(core, evidence_ids=evidence), [], {}
     for chapter in chapters:
         no = chapter['chapter_ordinal']
-        snapshot = (initial_snapshot(core) if no == 1 else
-                    chapter_input_snapshot(core, assemble_blueprint(wcs, compiled), no))
-        snapshots[str(no)] = snapshot
-        # 章前文字（e00）只进书级调用与第 1 章：引子只可能影响开场，其余各章不变。
-        chapter_evidence = '\n'.join(
-            f'[{k}] {v["text"]}' for k, v in evidence.items()
-            if v['chapter'] == no or (no == 1 and v.get('pre_chapter')))
-        prompt = CHAPTER_PROMPT.format(
-            ch=no, glossary=pack_prompt('人物闭集', characters=book['characters']),
-            snapshot='\n'.join(snapshot),
-            kreg='\n'.join(f'{k} -> {v}' for k, v in compiler.statements.items()),
-            evidence=chapter_evidence,
-            pre_chapter=PRE_CHAPTER_RULE if no == 1 else '',
-            known_beats=', '.join(sorted(compiler.known_beats)))
-        wire = ctx.ask(f'ch{no:02d}', prompt, lambda w: compiler.validate(w, no))
+        request = chapter_extraction_prompt(
+            chapter=no, book_characters=book['characters'], core=core,
+            world_constraints=wcs, compiled=compiled, compiler=compiler,
+            evidence=evidence)
+        snapshots[str(no)] = request.snapshot
+        wire = ctx.ask(f'ch{no:02d}', request.prompt, lambda w: compiler.validate(w, no))
         bp, errors = compiler.compile(wire, no)
         if errors:
             raise ValueError(errors)
@@ -722,6 +757,87 @@ class Stage1Input(NamedTuple):
     root_sha1: str            # 同一组合的 SHA-1（provenance 的根身份格）
 
 
+def str06_chat_request(cfg, owner: str, prompt: str, *, json_mode: bool, system: str,
+                       temperature: float, reasoning_effort: str | None = 'high',
+                       enforce: bool = True) -> ChatRequest:
+    """新链请求构造（`PaidBoundary.build_request` 与批 0 探针预览共用的唯一实现）。
+
+    预览与真实购买走同一构造：token 估算、预算闸与缓存键逐字一致——探针在工具里
+    另拼一个请求，「预览看到的」与「买到的」何时漂移将无人知晓。`enforce=False`
+    只用于历史 wire 采用（不真实发送，也不该被上线预算闸代审）。
+    """
+    request = ChatRequest(model=cfg.model, system=system, user=prompt,
+                          reasoning_effort=reasoning_effort,
+                          thinking=cfg.thinking_mode == 'on',
+                          json_mode=json_mode, max_tokens=65536, temperature=temperature)
+    if enforce:
+        from novel.llm.budget import enforce_request_budget
+        # 完整输入超限就阻断：精确 tokenizer + 官方 framing，不摘要、不截断。
+        enforce_request_budget([request], node='str06', purpose=owner)
+    return request
+
+
+@dataclass
+class PaidBoundary:
+    """付费边界装配体：workflow／epoch、ledger、`PaidRequestSession` 与请求构造。
+
+    正式 CLI 节点执行（`execute`）与一次性实验探针（`tools/stage2_context_probe.py`）
+    共用本装配——实验**不另建付费通路**：同一 session、同一 ledger、同一
+    `enforce_request_budget` 闸、同一 workflow／epoch 生命周期。授权仍由调用方
+    显式给出（`--yes`／`--allow-source-export`），本装配不代批。
+    """
+
+    repository: Any
+    session: PaidRequestSession
+    context: Any
+    cfg: Any
+    provider: str
+    model: str
+
+    def build_request(self, owner: str, prompt: str, *, json_mode: bool, system: str,
+                      temperature: float, reasoning_effort: str | None = 'high',
+                      enforce: bool = True) -> ChatRequest:
+        """新链请求构造；`enforce=False` 只用于历史 wire 采用（不真实发送）。
+
+        预览与真实购买走同一构造：token 估算、预算闸与缓存键因此逐字一致。
+        """
+        return str06_chat_request(
+            self.cfg, owner, prompt, json_mode=json_mode, system=system,
+            temperature=temperature, reasoning_effort=reasoning_effort, enforce=enforce)
+
+
+def assemble_paid_boundary(
+    *, base, run_dir, source_identity: str, root_sha1: str, yes: bool = False,
+    allow_source_export: bool = False, book_call_ceiling: int | None = None,
+    adopt_roots: tuple = (), wire_dir=None, readonly: bool = False,
+) -> PaidBoundary:
+    """把 Stage1 源身份、workflow／epoch、付费边界与预算闸装到一起（execute 与探针共用）。
+
+    `run_dir` 必须位于 `base` 下的隔离根：一个候选根一个 workflow 身份，sid 取
+    根目录名；`readonly`（`--check-only`）只复校不签发新调用。
+    """
+    base_path = Path(base).resolve()
+    run_dir = Path(run_dir).resolve()
+    if not run_dir.is_relative_to(base_path):
+        raise ValueError('run-dir 必须位于 base 下的隔离根')
+    sid = run_dir.relative_to(base_path).as_posix().replace('/', '_')
+    repository = Str06Repository(run_dir)
+    cfg = load_config()
+    workflow, context = init_or_resume_candidate_workflow(
+        repository=repository, base=base_path, code=prov.code_version(),
+        root_sha1=root_sha1, source_identity=source_identity,
+        task_id=require_workflow(base_path).task_id,
+        configured_model='unknown' if wire_dir else cfg.model,
+        created_at=int(time.time()), readonly=readonly)
+    session = PaidRequestSession(
+        repository, context.ledger, DeepSeekTransport(cfg), yes=yes,
+        allow_source_export=allow_source_export, provider=cfg.base_url,
+        book_call_ceiling=book_call_ceiling, sid=sid,
+        adopt_roots=tuple(Path(root) for root in adopt_roots))
+    return PaidBoundary(repository=repository, session=session, context=context,
+                        cfg=cfg, provider=cfg.base_url, model=cfg.model)
+
+
 def load_stage1_chapters(base, sid: str) -> Stage1Input:
     """从正式 Stage1 章数组读候选链源输入（`--book-sid` 生产路径）。
 
@@ -844,8 +960,8 @@ def execute(args) -> None:
     run_dir = args.run_dir.resolve()
     if not run_dir.is_relative_to(base_path):
         raise ValueError('--run-dir 必须位于 NOVEL_OUTPUT 下的隔离根')
-    # 一个 NOVEL_OUTPUT 根一个候选链：facilities 的 sid 取 run 目录名。
-    sid = run_dir.relative_to(base_path).as_posix().replace('/', '_')
+    # 装配体内部按同一规则再取 sid（一个 NOVEL_OUTPUT 根一个候选链）：facilities
+    # 的 sid 取 run 目录名，与这里一致，不为执行面另立一套命名。
     repository = Str06Repository(run_dir)
     if args.book_sid:
         # 生产路径：正式 Stage1 章数组＋章前文字（F7c；C 批起含 hook_copy）。
@@ -878,20 +994,23 @@ def execute(args) -> None:
                 if actual != item['sha256']:
                     raise ValueError(f'owner patch {entry["owner"]} 的 {field_name} 身份变化，拒绝采用')
         repository.write('runtime/repair_manifest.json', manifest)
-    cfg = load_config()
     # workflow／epoch 身份：首开落记录，复用不换身份，代码漂移滚动，源输入变化拒绝。
-    workflow, context = init_or_resume_candidate_workflow(
-        repository=repository, base=base_path, code=prov.code_version(),
-        root_sha1=root_sha1, source_identity=source_identity,
-        task_id=require_workflow(base_path).task_id,
-        configured_model='unknown' if args.wire_dir else cfg.model,
-        created_at=int(time.time()), readonly=args.check_only)
-    ledger = context.ledger
-    session = PaidRequestSession(repository, ledger, DeepSeekTransport(cfg), yes=args.yes,
-                                 allow_source_export=args.allow_source_export,
-                                 provider=cfg.base_url,
-                                 book_call_ceiling=args.book_call_ceiling, sid=sid,
-                                 adopt_roots=tuple(args.adopt_root))
+    # 设施装配与批 0 探针共用（`assemble_paid_boundary`）：实验不另建付费通路。
+    boundary = assemble_paid_boundary(
+        base=base, run_dir=run_dir, source_identity=source_identity,
+        root_sha1=root_sha1, yes=args.yes,
+        allow_source_export=args.allow_source_export,
+        book_call_ceiling=args.book_call_ceiling,
+        adopt_roots=tuple(args.adopt_root), wire_dir=args.wire_dir,
+        readonly=args.check_only)
+    # 换成附着了候选运行上下文（provenance 铸造与 freshness）的同一根 repository：
+    # 正式产物落盘拒绝「无来源账」这条静默路径。
+    repository, session, cfg = boundary.repository, boundary.session, boundary.cfg
+
+    def build_request(owner, prompt, *, json_mode, system, temperature):
+        return boundary.build_request(
+            owner, prompt, json_mode=json_mode, system=system, temperature=temperature,
+            reasoning_effort=args.reasoning_effort, enforce=not args.wire_dir)
 
     def adopt(owner, path, validate, *, system, prompt, json_mode, temperature):
         if args.repair_manifest and (
@@ -930,8 +1049,8 @@ def execute(args) -> None:
                 record['owner_patch_reason'] = patch_reason
             model = record.get('model') or 'unknown'
         repository.write(f'runtime/adopt_{owner}.json', record)
-        context.note_adoption(owner=owner, model=model,
-                              prompts={'system': system, 'user': prompt})
+        boundary.context.note_adoption(owner=owner, model=model,
+                                       prompts={'system': system, 'user': prompt})
         return raw
 
     def wire_path(owner):
@@ -939,17 +1058,6 @@ def execute(args) -> None:
             return None
         path = args.wire_dir / f'{owner}_wire.json'
         return path if path.exists() else None
-
-    def build_request(owner, prompt, *, json_mode, system, temperature):
-        from novel.llm.budget import enforce_request_budget
-        request = ChatRequest(model=cfg.model, system=system, user=prompt,
-                              reasoning_effort=args.reasoning_effort,
-                              thinking=cfg.thinking_mode == 'on',
-                              json_mode=json_mode, max_tokens=65536, temperature=temperature)
-        if not args.wire_dir:
-            # 完整输入超限就阻断：精确 tokenizer + 官方 framing，不摘要、不截断。
-            enforce_request_budget([request], node='str06', purpose=owner)
-        return request
 
     def ask(owner, prompt, validate):
         path = wire_path(owner)
