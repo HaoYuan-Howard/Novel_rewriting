@@ -204,38 +204,52 @@ class ChapterCompiler:
         normalized = deepcopy(wire)
         errors: list[str] = []
 
-        def resolve(prop: dict, where: str) -> None:
-            ref, stmt = prop.get('ref'), prop.get('statement')
-            entry = state.propositions.get(ref)
-            if entry is not None:
-                # 引用既有命题（正式 ID 或本章已登记标签）：重抄文本必须逐字一致。
-                if stmt is not None and stmt != entry['statement']:
-                    errors.append(
-                        f'{where} 复用命题 {entry["id"]} 时重抄的文本与登记不一致'
-                        f'（登记「{entry["statement"]}」）')
-                    return
-                prop['ref'] = entry['id']
+        def register(prop: dict, where: str) -> None:
+            """新建命题：compiler 派正式 ID（I-21），canonical 保留 statement。"""
+            ref, stmt = prop['ref'], prop['statement']
+            if ref in state.propositions:
+                errors.append(f'{where} 命题标签 {ref!r} 与已登记命题或正式 ID 重复')
                 return
-            if stmt is not None:
-                # 新建：compiler 派正式 ID（I-21），canonical 保留 statement。
-                state.prop_seq += 1
-                formal = f'k{state.prop_seq:02d}'
-                state.propositions[ref] = {'id': formal, 'statement': stmt,
-                                           'chapter': chapter}
-                state.propositions[formal] = state.propositions[ref]
-                prop['ref'] = formal
+            state.prop_seq += 1
+            formal = f'k{state.prop_seq:02d}'
+            state.propositions[ref] = {'id': formal, 'statement': stmt,
+                                       'chapter': chapter}
+            state.propositions[formal] = state.propositions[ref]
+            prop['ref'] = formal
+
+        def reference(prop: dict, where: str) -> None:
+            """引用既有命题（正式 ID 或已登记标签）：重抄文本必须逐字一致。"""
+            entry = state.propositions.get(prop['ref'])
+            if entry is None:
+                errors.append(f'{where} 引用未登记命题 {prop["ref"]!r}')
                 return
-            errors.append(f'{where} 引用未登记命题 {ref!r}')
+            if prop.get('statement') is not None and prop['statement'] != entry['statement']:
+                errors.append(
+                    f'{where} 复用命题 {entry["id"]} 时重抄的文本与登记不一致'
+                    f'（登记「{entry["statement"]}」）')
+                return
+            prop['ref'] = entry['id']
 
         for raw in normalized.get('beats') or []:
             if not isinstance(raw, dict):
                 continue
+            # 拍内两遍：先登记本拍新建（effect 的 concealed 命题、cognition 新建、
+            # loop open），再解析全部引用——同一拍里「证实拍建事实效应并引用同一
+            # 命题」（D5）因此合法，而跨拍/跨章的悬空引用仍被闭合闸拦下。
+            propositions: list[tuple[dict, str]] = []
             for eff in raw.get('effects') or []:
                 if isinstance(eff, dict) and isinstance(eff.get('proposition'), dict):
-                    resolve(eff['proposition'], f'beat {raw.get("beat_id")} 的 effect')
+                    propositions.append((eff['proposition'],
+                                         f'beat {raw.get("beat_id")} 的 effect'))
             for cog in raw.get('cognition') or []:
                 if isinstance(cog, dict) and isinstance(cog.get('proposition'), dict):
-                    resolve(cog['proposition'], f'beat {raw.get("beat_id")} 的 cognition')
+                    propositions.append((cog['proposition'],
+                                         f'beat {raw.get("beat_id")} 的 cognition'))
+            registered: set[int] = set()
+            for prop, where in propositions:
+                if prop.get('statement') is not None and prop['ref'] not in state.propositions:
+                    register(prop, where)
+                    registered.add(id(prop))
             for loop in raw.get('loops') or []:
                 if not isinstance(loop, dict):
                     continue
@@ -251,6 +265,7 @@ class ChapterCompiler:
                     state.loops[ref] = {'id': formal, 'question': loop.get('question'),
                                         'open': True, 'chapter': chapter}
                     state.loops[formal] = state.loops[ref]
+                    loop['ref'] = formal
                 else:
                     entry = state.loops.get(ref)
                     if entry is None:
@@ -260,8 +275,10 @@ class ChapterCompiler:
                         errors.append(f'loop {entry["id"]} 已 close，不得重复 close')
                         continue
                     entry['open'] = False
-                    formal = entry['id']
-                loop['ref'] = formal
+                    loop['ref'] = entry['id']
+            for prop, where in propositions:
+                if id(prop) not in registered:
+                    reference(prop, where)
         return normalized, errors
 
     def validate(self, wire: dict[str, Any], chapter: int) -> list[str]:

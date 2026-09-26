@@ -54,12 +54,16 @@ def _book_wire() -> dict:
 
 
 def _effect(target: dict, key: str, value, *, op: str = 'set',
-            scope: str = 'book', visibility: str = 'on_page') -> dict:
+            scope: str = 'book', visibility: str = 'on_page',
+            proposition: dict | None = None) -> dict:
     eff = {'target': target, 'key': key, 'op': op, 'value': value, 'scope': scope,
            'disclosure': {'visibility': visibility}}
     if visibility == 'concealed':
         eff['disclosure']['known_by'] = ['fu_jun']
-        eff['proposition'] = {'ref': f'p_{key}', 'statement': f'{key} 的隐藏事实'}
+        eff['proposition'] = proposition or {
+            'ref': f'p_{key}', 'statement': f'{key} 的隐藏事实'}
+    elif proposition is not None:
+        eff['proposition'] = proposition
     return eff
 
 
@@ -260,6 +264,41 @@ def test_chapter_compiler_rejects_unknown_participant_and_dual_owner():
         'causal_edges': []}
     _, errs = compiler.compile(dual, 2)
     assert any('双 owner' in e for e in errs)
+
+
+def test_same_beat_establish_and_reference_is_legal():
+    """D5：证实拍建事实效应并引用同一拍 cognition 新建的命题——拍内两遍解析。
+
+    真书实证（v13 首跑 ch02 b02_09）：模型把命题文本建在证实拍的 cognition 上，
+    同拍 effect 引用它。单遍（effect 先于 cognition）会误判悬空；两遍后合法，
+    而跨拍悬空引用仍拒（下一条）。
+    """
+    chars, _, compiler, _ = _compile_pair()
+    ch2, errs = compiler.compile({
+        'beats': [
+            _beat('b02_01', '证实',
+                  effects=[_effect({'kind': 'relation', 'subject': 'fu_jun',
+                                    'object': 'yun_niang'},
+                                   'intimacy', '所言不虚',
+                                   proposition={'ref': 'p1'}),
+                           ],
+                  cognition=[{'proposition': {'ref': 'p1',
+                                              'statement': '夫君虽不能行房事，但能以其他方式满足'},
+                              'holder': 'yun_niang', 'mode': 'confirms'}]),
+        ],
+        'causal_edges': []}, 2)
+    assert ch2 is not None and errs == []
+    assert ch2.beats[0].cognition[0].proposition.ref == 'k01'
+    assert ch2.beats[0].effects[0].proposition.ref == 'k01'
+    # 跨拍悬空引用仍拒
+    _, errs = compiler.compile({
+        'beats': [
+            _beat('b03_01', '悬空',
+                  effects=[_effect({'kind': 'character', 'char_id': 'fu_jun'},
+                                   'mood', 'x', proposition={'ref': 'k99'})]),
+        ],
+        'causal_edges': []}, 3)
+    assert any('引用未登记命题' in e for e in errs)
 
 
 def test_chapter_compiler_rejects_unknown_cognition_holder_and_known_by():
