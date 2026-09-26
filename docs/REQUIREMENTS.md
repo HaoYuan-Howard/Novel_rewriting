@@ -712,12 +712,21 @@ F5a–F5d 已闭合按章成文的契约、引擎与免费验证，F5e 已完成
     `novel/stages/common.py` 供 stage4 fold 共用；1C prompt 与前文组装按 D1–D12 与
     批 0 裁决改写、证据切分细化到句并保留上下文；1D judges 新 HARD 与度量（红例＋
     绿对照）、R-2 与 schema 文档同步。
-  - [ ] **批 2 · 消费者闭合**（免费）：2A Preserve rules 改写且 policy_version 2→3；
+  - [x] **批 2 · 消费者闭合**（免费）：2A Preserve rules 改写且 policy_version 2→3；
     2B `project_brief` 的 stable_constraints 只取事实层；2C Design 知情词汇补
     believes；2D 写手投影新增「尚未向读者确认的事实」清单（由 compiler 从 Design
     reader delta 逐场派生）并升 renderer 与写作协议版本；2E API／UI 与前端只读展示
     按事实、认知、悬念分列；2F fake transport 全链（源 concealed＋读者揭示 → Preserve
     → Brief → Design → 写手章包）加 `test_str06_product_entry.py` 新形状 wire 到交付。
+    **2026-09-26 完成（提交 c5cc88f4）**：PRESERVE_RULES v3 补写说辞/行为反差、
+    concealed 揭示时点、iterative 作用与 loop 兑现四类规则；believes 进
+    knowledge_mode 闭集（R-5.12，Design 三产物换 rc5、模型 contract_version 与
+    候选契约身份随冻结纪律更新为 `7fb5ecfa…`）；VerificationIR 带
+    pending_reader_confirmations（R-6.11，renderer v2／协议 v3，确认前列出、确认场
+    标注、确认后不再列出）；身份投影反例钉住 cognition 不进 stable_constraints；
+    监控屏 Blueprint 面板按事实/认知/悬念分列。验证：str06 定向 490 项、契约五文件
+    393 项、API 122 项全绿，前端 typecheck/test/seams/build 全过；fake transport
+    全链断言三态清单与 fold 未揭示报告为空。零模型调用。
   - [ ] **批 3 · 真实验收**（付费需单独授权）：新建独立根，stage0/1 免费生成，
     `str06.stage2.source` 跑全书（开跑前报价并取得授权）；关键章 ch03–ch05 用探针
     工具以生产 prompt 单臂重复 3 次；离线语义核读按执行计划第六节分项报告（结构
