@@ -536,6 +536,32 @@ F5a–F5d 已闭合按章成文的契约、引擎与免费验证，F5e 已完成
     test_prov／test_coverage／test_docs_references／test_rules_registry 共 344 项）＋
     契约 §9.5 五文件 377 项＋前端 typecheck／seams／test(115)／build，全部零失败；
     合入前须按最终提交补全量回归再合。
+  - **2026-09-26 执行状态：付费跑书已启动并部分完成，按用户指示停止，验收未完成**。
+    独立根 `outputs/str06_f9_product_20260926`（stage0/stage1 现行产物：11 章 9724 字、
+    派生预算 10000；开头 288 字引子按 stage1 契约分离进 `hook_copy.json`，新链无消费者，
+    ch1 回溯叙述已覆盖坦白与借种事实）。经产品 HTTP 上传（authorized＋egress_authorized，
+    与前端上传按钮同形；IAB 不支持文件选择器）触发 autostart。**实付 14 次**
+    （source book＋ch01–11 共 12、names 1、preserve 1），77783 prompt＋212744 completion
+    tokens，全部 finish=stop、无截断无失败调用；body_design 及其后未跑。用户审阅产物后
+    指示：先把各节点产物质量提高，再端到端跑书验证——**停在 `str06.stage4.body_design`
+    之前**，孤儿 admission 已显式收口（证据：8765 无监听、无子进程、body_design 零产物、
+    ledger 无该次调用行；run lifecycle 按 R-11.21 保持 unknown，不洗成 stopped）。
+    批次内另修的生产问题：dirty 拒启动闸（用户裁决取消）与直连 LLM 节点 argv 冻结
+    executor backend 旗标（F8d 遗留③，F9 实证）见上一 bullet 与 DECISIONS。
+  - **已实证的合同/流水线缺口清单（质量改进批次的输入；根因大都在提示词/契约形状，
+    不在模型随机性）**：① 章 wire 的 reveal recipients 出现 `char_<id>` 前缀笔误
+    （ch04/ch06）——提示词只约束 participants/targets 的 id 取值面；② loop 类 effect
+    漏 `key`（ch08 一处、ch10 三处）——effects 的 key 必填，loop 目标在提示词示例里
+    不显著；③ names wire 的 surface_forms 与书核 surface 集「恰好相等」的校验 vs 书核
+    抽取漏收（`姓沈的` 源文出现 1 次但书核未录）——核与名称结构的覆盖边界；
+    ④ preserve wire 把 `must_preserve`（布尔）统一写成保全要求字符串（92/92）——提示词
+    字段表未标类型；⑤ fold 记录第 6 章 loop 重复 open——loop 开闭纪律。以上均已按
+    owner patch 先例机械修复（补丁 wire＋patch note 存
+    `outputs/str06_f9_product_20260926/wires/`，采用记录在 run 的 `runtime/adopt_*.json`，
+    原购买成本留在本根 ledger），**修复是症状级的，根因归质量改进批次**。
+  - **恢复入口**：同根续跑身份未漂移（candidate workflow 钉 2a524e8b-dirty.*，
+    本地已购行免费采用）；质量改进若改生产代码/契约，按 F9 规则以最终提交重验工程基线
+    （全量回归＋契约五文件）后再端到端重跑；重跑建议用新独立根，不原地升级本根。
   - 在独立 `NOVEL_OUTPUT` 根经前端上传《夫君的报恩》，自动跑到 stage7；按实际节点、
     配置和可采用结果重新报价。基础约 30 次、正文额外至多 22 次、Hook 额外至多 2 次的
     口径见“成本与授权”；同请求身份已购结果只经 F7a 登记的历史采用通路复用。
