@@ -1830,7 +1830,8 @@ NODES: Final[dict[str, NodeSpec]] = {
                   'stage2/compiled/input_snapshots.json',
                   'stage2/acceptance/fold.json'),
         lifecycle=NodeLifecycleSpec(
-            'strategy_and_chapter', '正式 Stage1 MainText 章数组（阅读序密集）',
+            'strategy_and_chapter',
+            '正式 Stage1 MainText 章数组（阅读序密集）＋hook_copy 章前文字（e00 证据段）',
             'executor', 'none', '机械校验自证；语义未审以 unver 披露',
             ('stop',), ('str06.stage2.source',), 'executor:strategy/chapter',
             ('saved_response', 'historical_adoption', 'owner_patch'), 4)),
@@ -1839,7 +1840,7 @@ NODES: Final[dict[str, NodeSpec]] = {
         flags=('--check-only',),
         produces=('stage2/characters/characters.json',),
         lifecycle=NodeLifecycleSpec(
-            'book', '源 core 抽取与完整 MainText', 'executor', 'none',
+            'book', '源 core 抽取、完整 MainText 与 hook_copy 章前文字', 'executor', 'none',
             '机械校验自证；姓氏构词探针只报告',
             ('stop',), ('str06.stage2.names',), 'executor:book',
             ('saved_response', 'historical_adoption', 'owner_patch'), 4)),

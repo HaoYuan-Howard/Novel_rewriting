@@ -419,6 +419,12 @@ def test_full_pipeline_to_delivery_and_free_recovery(tmp_path):
     final_text = repo.read_text(final_rel)
     assert '楔子' not in final_text  # 系统不添加标题
     assert '柳婉' in final_text and '苏芸娘' not in final_text  # 改名后交付
+    # 章标记由系统按阅读序添加：引子在前不加标题，其后每章一行「第N章」（A4）
+    markers = [line for line in final_text.splitlines()
+               if line.startswith('第') and line.endswith('章')]
+    assert markers == ['第1章', '第2章'], markers
+    assert final_text.index('第1章') < final_text.index('拜堂之夜')
+    assert final_text.index('第2章') < final_text.index('夫君夜半离家')
     manifest = repo.inspect('stage7/final/delivery_manifest.json')
     assert manifest['final_text_sha256'] == repo.file_sha256(repo.path(final_rel))
     assert [c['chapter_ordinal'] for c in manifest['chapters']] == [1, 2]

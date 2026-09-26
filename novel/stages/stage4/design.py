@@ -14,6 +14,9 @@ Context／Guard 消费的 body 视图不含 Hook，Hook 不影响正文。
   ③ `delivery.pov` 若不是 char_id/narrator，而是以某人物 canonical 开头的字符串
      （F5e 实证：`苏芸娘第三人称限知`），按 canonical→char_id 唯一前缀匹配解析为
      该 char_id；无匹配或多义匹配不归一，交由 char_id 校验报错。
+  ④ 称谓面闭合（质量改进批次 A3）：`initial_surfaces` 与逐拍
+     `surface_introductions` 只能释放 Characters 登记过的 surface
+     （`registered_surfaces` 传入；缺省不查，供 source-blind 单测使用）。
 """
 from __future__ import annotations
 
@@ -66,6 +69,7 @@ def assemble_body_design(
     wire: dict[str, Any], *, known_char_ids: set[str],
     constraints: OutputConstraints | None = None,
     char_canonicals: Mapping[str, str] | None = None,
+    registered_surfaces: Mapping[str, set[str]] | None = None,
 ) -> tuple[BodyDesign | None, list[str]]:
     # 仅剥离已明确给出的场景前缀与上述确定性归一，不补猜缺失语义。
     data = deepcopy(wire)
@@ -80,7 +84,7 @@ def assemble_body_design(
     try:
         body = BodyDesign.model_validate(data)
     except (ValidationError, TypeError) as exc:
-        return None, [f'body_design 构造失败：{exc}']
+        return None, [f'book_design 构造失败：{exc}']
     errors = []
     if constraints and len(body.chapters) != constraints.target_chapter_count:
         errors.append('目标章数与 OutputConstraints 不一致')
@@ -104,4 +108,16 @@ def assemble_body_design(
     for item in surfaces:
         if item.char_id not in known_char_ids:
             errors.append(f'称谓释放引用未知 char_id {item.char_id}')
+            continue
+        if registered_surfaces is None:
+            continue
+        # 称谓面闭合：放行的每个字面都必须是 Characters 登记过的 surface。
+        # 未登记字面进替换表会找不到对应新名（F7e 评估实证：Design 放行的称谓
+        # 没和登记面核对）。在生产端尽早失败，不走交付端残留检查兜底。
+        allowed = registered_surfaces.get(item.char_id, set())
+        for surface in item.surfaces:
+            if surface not in allowed:
+                errors.append(
+                    f'称谓释放引用未登记面 {surface!r}（{item.char_id} 已登记：'
+                    f'{sorted(allowed)}）')
     return (None, errors) if errors else (body, [])

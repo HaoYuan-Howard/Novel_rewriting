@@ -326,6 +326,12 @@ def test_full_chain_from_http_upload_to_stage7_delivery(base, monkeypatch):
     final_text = final_path.read_text('utf-8')
     assert '楔子' not in final_text                      # 系统不添加标题
     assert '柳婉' in final_text and '苏芸娘' not in final_text   # 改名后交付
+    # 章标记由系统按阅读序添加（A4）：引子在前不加标题，其后「第N章」齐全且有序
+    markers = [line for line in final_text.splitlines()
+               if line.startswith('第') and line.endswith('章')]
+    assert markers == ['第1章', '第2章'], markers
+    assert final_text.index('第1章') < final_text.index('拜堂之夜')
+    assert final_text.index('第2章') < final_text.index('夫君夜半翻墙而出')
     manifest_path = book / 'stage7' / 'final' / 'delivery_manifest.json'
     manifest = _read_json(manifest_path)
     assert manifest['final_text_sha256'] == hashlib.sha256(

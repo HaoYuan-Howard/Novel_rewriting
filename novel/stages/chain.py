@@ -39,7 +39,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, NamedTuple
 
-from contracts.artifacts import STAGE1_MAIN_TEXT
+from contracts.artifacts import STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT
 from contracts.schema.grounding import OutputConstraints
 from contracts.schema.hook import HookConstraints, HookReceipt
 from contracts.schema.workflow import STR06_RUNTIME_CONFIG
@@ -53,7 +53,7 @@ from novel import paths, prov
 from novel.stages.common import (
     BOOK_PROMPT, CHAPTER_PROMPT, PRESERVE_RULES, DESIGN_RULES, BIND_RULES,
     HOOK_DESIGN_RULES, HOOK_WRITER_SYSTEM, NAMES_RULES, NAMING_RULES, SYS,
-    BODY_WRITER_SYSTEM, pack_prompt,
+    BODY_WRITER_SYSTEM, PRE_CHAPTER_RULE, pack_prompt,
 )
 from novel.stages.stage2 import (
     ChapterCompiler, assemble_blueprint, compile_book, compile_name_structure,
@@ -81,8 +81,8 @@ from novel.work_units import require_workflow
 
 __all__ = [
     'ChainContext', 'NODE_ORDER', 'NODE_RUNNERS', 'Stage1Input', 'THROUGH_NODE',
-    'build_evidence', 'derive_total_length_budget', 'execute', 'load_stage1_chapters',
-    'run_chain', 'run_node', 'run_workflow',
+    'build_evidence', 'derive_total_length_budget', 'execute', 'load_dev_source',
+    'load_stage1_chapters', 'run_chain', 'run_node', 'run_workflow',
 ]
 
 #: 执行序（stage2 → stage4 → stage5 → stage7；与 --through 的腿边界一致）。
@@ -111,6 +111,9 @@ class ChainContext:
     ask_text: Callable[[str, str], tuple[str | None, list[str], str]]
     ask_body: Callable[[str, str], AnsweredText]
     chapters: list[dict]
+    #: 章前文字（源引子）：Stage6 退役后 hook_copy 的唯一消费者是 Stage2.source
+    # （质量改进批次 C）。空字符串＝显式无引子；进 run 级身份与 e00 证据切分。
+    hook_copy: str = ''
     budget: int = 11000
     book_title: str = ''
     hook_constraints: HookConstraints = field(
@@ -125,23 +128,42 @@ class ChainContext:
     digest: Callable[[object], str] | None = None
 
 
-def build_evidence(chapters) -> dict:
-    """源证据切分（stage2 source owner 的 harness 逻辑，F7b 从工具层收回）。"""
+def _segment_sentences(text: str, *, limit: int = 300) -> list[str]:
+    """按句号切段并合并不超 limit 的段（证据切分的唯一实现）。"""
+    segments, buffer = [], ''
+    for sentence in re.split(r'(?<=。)', text):
+        if buffer and len(buffer) + len(sentence) > limit:
+            segments.append(buffer)
+            buffer = sentence
+        else:
+            buffer += sentence
+    if buffer.strip():
+        segments.append(buffer)
+    return segments
+
+
+def build_evidence(chapters, hook_copy: str | None = None) -> dict:
+    """源证据切分（stage2 source owner 的 harness 逻辑，F7b 从工具层收回）。
+
+    章前文字（Stage1 `hook_copy`，即源引子）切成 `e00_*` 段并标 `pre_chapter`：
+    书级调用与第 1 章抽取看得到，其余各章看不到——引子只可能影响开场。引子按
+    信息职责分流（规则在 BOOK_PROMPT／CHAPTER_PROMPT），不对整篇打标签：
+    开场前已成立的状态/知情进 initial_state，实际发生的开场行动进第 1 章 beats，
+    与正文重复的事件以正文为准，预告/概括不进 canonical，判断不了弃权。
+    """
     evidence: dict[str, dict] = {}
+    if hook_copy and hook_copy.strip():
+        for i, segment in enumerate(_segment_sentences(hook_copy), 1):
+            evidence[f'e00_{i:02d}'] = {'chapter': 0, 'text': segment, 'pre_chapter': True}
     for chapter in chapters:
         no, text = chapter['chapter_ordinal'], chapter['text']
-        segments, buffer = [], ''
-        for sentence in re.split(r'(?<=。)', text):
-            if buffer and len(buffer) + len(sentence) > 300:
-                segments.append(buffer)
-                buffer = sentence
-            else:
-                buffer += sentence
-        if buffer.strip():
-            segments.append(buffer)
-        for i, segment in enumerate(segments, 1):
+        for i, segment in enumerate(_segment_sentences(text), 1):
             evidence[f'e{no:02d}_{i:02d}'] = {'chapter': no, 'text': segment}
     return evidence
+
+
+def _pre_chapter_evidence_ids(evidence: dict) -> frozenset[str]:
+    return frozenset(k for k, v in evidence.items() if v.get('pre_chapter'))
 
 
 def _chapter_ordinal(n: int) -> str:
@@ -168,8 +190,11 @@ def derive_total_length_budget(chapters: list[dict], *,
 def run_source(ctx: ChainContext) -> dict:
     repository = ctx.repository
     chapters = ctx.chapters
-    evidence = build_evidence(chapters)
+    evidence = build_evidence(chapters, ctx.hook_copy)
+    pre_chapter = _pre_chapter_evidence_ids(evidence)
     full = '\n'.join(f'〔第{c["chapter_ordinal"]}章〕\n{c["text"]}' for c in chapters)
+    if ctx.hook_copy.strip():
+        full = f'〔章前文字〕\n{ctx.hook_copy}\n\n' + full
     block = '\n'.join(f'[{k}] {v["text"]}' for k, v in evidence.items())
     book = ctx.ask('book', BOOK_PROMPT.format(n=len(chapters), text=full, evidence=block),
                    lambda w: compile_book(w, evidence_ids=evidence)[2])
@@ -186,12 +211,16 @@ def run_source(ctx: ChainContext) -> dict:
         snapshot = (initial_snapshot(core) if no == 1 else
                     chapter_input_snapshot(core, assemble_blueprint(wcs, compiled), no))
         snapshots[str(no)] = snapshot
+        # 章前文字（e00）只进书级调用与第 1 章：引子只可能影响开场，其余各章不变。
+        chapter_evidence = '\n'.join(
+            f'[{k}] {v["text"]}' for k, v in evidence.items()
+            if v['chapter'] == no or (no == 1 and v.get('pre_chapter')))
         prompt = CHAPTER_PROMPT.format(
             ch=no, glossary=pack_prompt('人物闭集', characters=book['characters']),
             snapshot='\n'.join(snapshot),
             kreg='\n'.join(f'{k} -> {v}' for k, v in compiler.statements.items()),
-            evidence='\n'.join(f'[{k}] {v["text"]}' for k, v in evidence.items()
-                               if v['chapter'] == no),
+            evidence=chapter_evidence,
+            pre_chapter=PRE_CHAPTER_RULE if no == 1 else '',
             known_beats=', '.join(sorted(compiler.known_beats)))
         wire = ctx.ask(f'ch{no:02d}', prompt, lambda w: compiler.validate(w, no))
         bp, errors = compiler.compile(wire, no)
@@ -201,7 +230,7 @@ def run_source(ctx: ChainContext) -> dict:
     blueprint = assemble_blueprint(wcs, compiled)
     repository.write('stage2/blueprints/chapter_blueprints.json', blueprint)
     repository.write('stage2/compiled/input_snapshots.json', snapshots)
-    _, events = source_fold(core, blueprint)
+    _, events = source_fold(core, blueprint, pre_chapter_evidence=pre_chapter)
     repository.write('stage2/acceptance/fold.json', {'events': events})
     return {'chapters': len(compiled), 'fold_events': events}
 
@@ -212,6 +241,8 @@ def run_names(ctx: ChainContext) -> dict:
     repository = ctx.repository
     core = repository.read_model('stage2/compiled/book_extraction.json')
     full = '\n'.join(f'〔第{c["chapter_ordinal"]}章〕\n{c["text"]}' for c in ctx.chapters)
+    if ctx.hook_copy.strip():
+        full = f'〔章前文字〕\n{ctx.hook_copy}\n\n' + full
     names_prompt = pack_prompt(NAMES_RULES, characters=core.model_dump(mode='json'),
                                text=full)
     names_wire = ctx.ask('names', names_prompt,
@@ -237,7 +268,7 @@ def run_preserve(ctx: ChainContext) -> dict:
                                   blueprints=blueprint.model_dump(mode='json'))
 
     def preserve_compile(w):
-        return assemble_preserve(w, policy_id='preserve-default', policy_version=1,
+        return assemble_preserve(w, policy_id='preserve-default', policy_version=2,
                                  characters=core, blueprint=blueprint,
                                  provider=ctx.provider, model=ctx.model,
                                  request_sha256=ctx.digest(preserve_prompt))
@@ -269,7 +300,9 @@ def run_body_design(ctx: ChainContext) -> dict:
     def design_compile(w):
         return assemble_body_design(
             w, known_char_ids=set(chars.characters), constraints=constraints,
-            char_canonicals={c.canonical: cid for cid, c in chars.characters.items()})
+            char_canonicals={c.canonical: cid for cid, c in chars.characters.items()},
+            registered_surfaces={cid: {s.surface for s in c.surfaces}
+                                 for cid, c in chars.characters.items()})
 
     dw = ctx.ask('design', design_prompt, lambda w: design_compile(w)[1])
     body, errors = design_compile(dw)
@@ -553,10 +586,9 @@ def run_assemble(ctx: ChainContext) -> dict:
     access = chapter_access(range(1, len(writer_ir.chapters) + 1), committed_receipts)
     chain_problems = verify_chapter_chain(committed_receipts, chapter_prose,
                                           book_ir_sha256=ir_sha)
-    body_text = prior_body_text(chapter_prose) if chapter_prose else None
     hook_sha = sha256_text(prose)
     outcome = assemble_delivery(
-        body_text=body_text, body=access, hook_prose=prose,
+        chapter_prose=chapter_prose, body=access, hook_prose=prose,
         hook_receipt=receipt.model_dump(mode='json'),
         hook_context_sha256=context_sha256(hook_context),
         replacements=replacements, kept_literals=kept_literals)
@@ -673,24 +705,29 @@ def run_chain(ctx: ChainContext, *, through: str = 'stage4',
 # ═════════════════════════════════════════════════════════════════════════════
 
 class Stage1Input(NamedTuple):
-    """候选链的 Stage1 源输入：章数组 + 盘上字节身份 + 根 SHA-1（F7c 生产输入路径）。
+    """候选链的 Stage1 源输入：章数组 + 章前文字 + 盘上字节身份 + 组合 SHA-1。
 
     输入装配属装配体（薄驱动）：读正式 Stage1 章数组要经 `novel.paths` 定位书目录、
     经正式契约解码——确定性引擎段（各 stageN 包与 `novel/stages/common.py`）按纪律
     不 import 现役设施。
+
+    `source_identity`／`root_sha1` 是 **main_text＋hook_copy 两份字节的组合摘要**
+    （长度前缀防拼接歧义）：只改引子也会换源身份，旧根不得沿用旧购买（质量改进
+    批次 C）。Stage6 退役后 hook_copy 的唯一消费者是 Stage2.source。
     """
 
     chapters: list[dict]
-    source_identity: str      # stage1/main_text.json 盘上字节 SHA-256
-    root_sha1: str            # 同一字节的 SHA-1（provenance 的根身份格）
+    hook_copy: str
+    source_identity: str      # main_text＋hook_copy 盘上字节的组合 SHA-256
+    root_sha1: str            # 同一组合的 SHA-1（provenance 的根身份格）
 
 
 def load_stage1_chapters(base, sid: str) -> Stage1Input:
     """从正式 Stage1 章数组读候选链源输入（`--book-sid` 生产路径）。
 
     章数组即全链唯一章节键（阅读序 `chapter_ordinal`，从 1 连续）；目标章数等于
-    源章数由 `MainText` 模型自身保证。`stage1/hook_copy.json` 在新链没有消费者
-    （Hook 设计吃目标 Design 的材料投影），退役边界登记在 REQUIREMENTS。
+    源章数由 `MainText` 模型自身保证。`stage1/hook_copy.json`（章前文字／源引子）
+    随本函数进入 Stage2.source 的 e00 证据段；缺失按空字节参与组合摘要。
     """
     from contracts.schema import artifact_spec, decode_artifact
     book_dir = paths.resolve_novel_dir(Path(base), sid)
@@ -701,15 +738,23 @@ def load_stage1_chapters(base, sid: str) -> Stage1Input:
                 for section in model.root]
     if [c['chapter_ordinal'] for c in chapters] != list(range(1, len(chapters) + 1)):
         raise ValueError('Stage1 章数组必须为非空连续章序列表')
-    return Stage1Input(chapters=chapters,
-                       source_identity=hashlib.sha256(raw).hexdigest(),
-                       root_sha1=prov.content_sha1(raw))
+    hook_path = book_dir / STAGE1_HOOK_COPY
+    hook_raw = hook_path.read_bytes() if hook_path.exists() else b''
+    hook_copy = ''
+    if hook_raw:
+        hook_model = artifact_spec(STAGE1_HOOK_COPY).model.model_validate(
+            decode_artifact(STAGE1_HOOK_COPY,
+                            json.loads(hook_raw.decode('utf-8-sig'))).payload)
+        hook_copy = hook_model.text
+    return Stage1Input(chapters=chapters, hook_copy=hook_copy,
+                       source_identity=prov.combined_content_sha256(raw, hook_raw),
+                       root_sha1=prov.combined_content_sha1(raw, hook_raw))
 
 
 def run_workflow(*, repository, chapters, ask, ask_text, ask_body, budget=11000,
                  through='stage4', provider='manual-adoption', model='unknown',
                  book_title='', hook_constraints=None, length_band=(0.6, 1.3),
-                 body_chapter_limit=None, node_filter=None):
+                 body_chapter_limit=None, node_filter=None, hook_copy=''):
     """记录显式执行状态；失败保留旧产物供恢复，但不能仍宣称上次绿灯有效。
 
     流程编排已归 owner runner（本模块上半）：本函数只装配 ChainContext、驱动
@@ -719,13 +764,14 @@ def run_workflow(*, repository, chapters, ask, ask_text, ask_body, budget=11000,
         target_chars=280, hard_max_chars=360)
     ctx = ChainContext(
         repository=repository, ask=ask, ask_text=ask_text, ask_body=ask_body,
-        chapters=chapters, budget=budget, book_title=book_title,
+        chapters=chapters, hook_copy=hook_copy, budget=budget, book_title=book_title,
         hook_constraints=hook_constraints, length_band=length_band,
         body_chapter_limit=body_chapter_limit, provider=provider, model=model,
         digest=digest)
     status_rel = 'runtime/workflow_status.json'
-    identity = digest({'chapters': chapters, 'budget': budget, 'through': through,
-                       'band': length_band, 'body_limit': body_chapter_limit})
+    identity = digest({'chapters': chapters, 'hook_copy': hook_copy, 'budget': budget,
+                       'through': through, 'band': length_band,
+                       'body_limit': body_chapter_limit})
     repository.write(status_rel, {'status': 'running', 'input_sha256': identity,
                                   'accepted_body': False})
     try:
@@ -752,6 +798,25 @@ def run_workflow(*, repository, chapters, ask, ask_text, ask_body, budget=11000,
     repository.write(status_rel, {'status': final_status, 'input_sha256': identity,
                                   'accepted_body': accepted_body, 'through': through})
     return report
+
+
+def load_dev_source(payload: object) -> tuple[list[dict], str]:
+    """开发路径源输入解析：必须显式给出引子，或显式声明「无引子」——不猜（C 批）。
+
+    形状：`{"chapters":[{chapter_ordinal,text},...], "hook_copy": "引子正文"|null}`。
+    裸章数组（历史形状）不再接受：那等于把「有没有引子」交给调用方默认值。
+    """
+    if not isinstance(payload, dict) or 'hook_copy' not in payload:
+        raise ValueError(
+            '--source-json 必须是 {"chapters":[{chapter_ordinal,text},...], '
+            '"hook_copy": "引子正文" 或 null}：显式给出引子，或显式给 null 声明无引子')
+    unknown = set(payload) - {'chapters', 'hook_copy'}
+    if unknown:
+        raise ValueError(f'源 JSON 携带未知字段：{sorted(unknown)}')
+    chapters = payload['chapters']
+    if not isinstance(chapters, list) or not chapters:
+        raise ValueError('源 JSON 的 chapters 必须是非空章数组')
+    return chapters, payload['hook_copy'] or ''
 
 
 def execute(args) -> None:
@@ -783,15 +848,16 @@ def execute(args) -> None:
     sid = run_dir.relative_to(base_path).as_posix().replace('/', '_')
     repository = Str06Repository(run_dir)
     if args.book_sid:
-        # 生产路径：正式 Stage1 章数组（F7c）。
+        # 生产路径：正式 Stage1 章数组＋章前文字（F7c；C 批起含 hook_copy）。
         stage1 = load_stage1_chapters(base_path, args.book_sid)
-        chapters, source_identity, root_sha1 = (
-            stage1.chapters, stage1.source_identity, stage1.root_sha1)
+        chapters, hook_copy, source_identity, root_sha1 = (
+            stage1.chapters, stage1.hook_copy, stage1.source_identity, stage1.root_sha1)
     else:
+        # 开发路径：源 JSON 必须显式给出引子，或显式声明「无引子」——不猜。
         source_bytes = args.source_json.read_bytes()
         source_identity = hashlib.sha256(source_bytes).hexdigest()
         root_sha1 = prov.content_sha1(source_bytes)
-        chapters = repository.read_external(args.source_json)
+        chapters, hook_copy = load_dev_source(repository.read_external(args.source_json))
     if args.budget is None:
         args.budget = derive_total_length_budget(
             chapters, rounding=STR06_RUNTIME_CONFIG.length_budget_rounding)
@@ -923,7 +989,8 @@ def execute(args) -> None:
         return AnsweredText(text=answered.text, finish_reason=answered.finish_reason,
                             identity=answered.identity, cached=answered.cached)
 
-    print(run_workflow(repository=repository, chapters=chapters, ask=ask, ask_text=ask_text,
+    print(run_workflow(repository=repository, chapters=chapters, hook_copy=hook_copy,
+                       ask=ask, ask_text=ask_text,
                        ask_body=ask_body, budget=args.budget, through=args.through,
                        node_filter=tuple(args.node) or None,
                        provider='manual-adoption' if args.wire_dir else cfg.base_url,

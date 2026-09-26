@@ -178,13 +178,34 @@ def test_earlier_release_set_is_stable_against_later_edits():
     assert '陆大哥' in chapter_surface_releases(edited, 2)
 
 
-def test_release_schedule_records_earliest_chapter():
-    """书级释放位置表记最早引入章；逐场精度仍由场景 IR 的 released_surfaces 把关。"""
+def test_release_schedule_groups_by_character_and_release_chapter():
+    """书级释放位置表按（人物, 实际释放章）分组：后章才放开的面不得提前显示。"""
     book_ir = _ir(_delayed_release_design())
-    schedule = {e.char_id: e for e in book_ir.book_brief.release_schedule}
-    assert schedule['fu_jun'].from_chapter == 2
-    assert set(schedule['fu_jun'].surfaces) == {'夫君', '陆大哥'}
-    assert schedule['yun_niang'].from_chapter == 1
+    schedule = {(e.char_id, e.from_chapter): set(e.surfaces)
+                for e in book_ir.book_brief.release_schedule}
+    assert schedule[('fu_jun', 2)] == {'夫君', '陆大哥'}
+    assert schedule[('yun_niang', 1)] == {'苏芸娘', '芸娘'}
+    assert ('fu_jun', 1) not in schedule, '第 2 章才释放的面不得记成第 1 章'
+
+    # 同一人物跨章释放：两条各自成行，逐章与章级释放集对账
+    wire = _body_wire()
+    wire['initial_surfaces'] = [
+        {'char_id': 'yun_niang', 'surfaces': ['苏姑娘']},
+        {'char_id': 'fu_jun', 'surfaces': ['夫君']}]
+    wire['scenes'][0]['beats'][1]['surface_introductions'] = []
+    wire['scenes'][1]['beats'][1]['surface_introductions'] = [
+        {'char_id': 'yun_niang', 'surfaces': ['苏芸娘', '芸娘']}]
+    design = _assemble(wire)
+    split = _ir(design)
+    rows = sorted((e.from_chapter, e.char_id, tuple(sorted(e.surfaces)))
+                  for e in split.book_brief.release_schedule)
+    assert rows == [(1, 'fu_jun', ('夫君',)), (1, 'yun_niang', ('苏姑娘',)),
+                    (2, 'yun_niang', ('芸娘', '苏芸娘'))], rows
+    # 逐章口径：到该章为止的导航并集 == 章级释放集（同一把尺子）
+    for chapter in (1, 2):
+        nav = {s for e in split.book_brief.release_schedule
+               if e.from_chapter <= chapter for s in e.surfaces}
+        assert nav == chapter_surface_releases(design, chapter)
 
 
 def test_same_chapter_later_scene_does_not_carry_into_earlier_scene():

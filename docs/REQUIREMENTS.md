@@ -309,9 +309,9 @@ F5a–F5d 已闭合按章成文的契约、引擎与免费验证，F5e 已完成
     `contracts/schema/workflow.py::STR06_RUNTIME_CONFIG`（Hook 长度、章篇幅带、
     取整粒度；进契约身份，与付费调用额度分开）。书级正文篇幅从源章总字数向上取整
     确定性派生（`derive_total_length_budget`，本书 10093 字 → 11000，与 F5e 一致），
-    目标章数等于源章数由 MainText 模型保证。**Stage1 hook_copy 边界闭合：新链无消费者**
-    （Hook 设计吃目标 Design 的材料投影，不消费源 hook 文案）——随旧链于 F8 退役，
-    登记见退役表。canary（`outputs/str06_f7c_candidate_20260924`，正式 Stage1 输入＋
+    目标章数等于源章数由 MainText 模型保证。~~**Stage1 hook_copy 边界闭合：新链无消费者**~~
+    （2026-09-26 质量改进批次改写：源引子恢复唯一消费者 `str06.stage2.source`，见
+    F9 下的质量改进批次登记与退役表）。canary（`outputs/str06_f7c_candidate_20260924`，正式 Stage1 输入＋
     `--check-only`）：零新购复现交付（21 行 ledger 全 cached、token 0、交付与 F5e
     逐字一致、delivery_identity 相同、15 ledger-row＋15 batch-documented）；**输入变化
     闸实证**：改动 stage1 一章文本后重跑被 `ProvenanceRefused` 拒绝（旧根采用不覆盖
@@ -538,7 +538,8 @@ F5a–F5d 已闭合按章成文的契约、引擎与免费验证，F5e 已完成
     合入前须按最终提交补全量回归再合。
   - **2026-09-26 执行状态：付费跑书已启动并部分完成，按用户指示停止，验收未完成**。
     独立根 `outputs/str06_f9_product_20260926`（stage0/stage1 现行产物：11 章 9724 字、
-    派生预算 10000；开头 288 字引子按 stage1 契约分离进 `hook_copy.json`，新链无消费者，
+    派生预算 10000；开头 288 字引子按 stage1 契约分离进 `hook_copy.json`
+    （当时新链无消费者；2026-09-26 质量改进批次起它是 `str06.stage2.source` 的正式输入，
     ch1 回溯叙述已覆盖坦白与借种事实）。经产品 HTTP 上传（authorized＋egress_authorized，
     与前端上传按钮同形；IAB 不支持文件选择器）触发 autostart。**实付 14 次**
     （source book＋ch01–11 共 12、names 1、preserve 1），77783 prompt＋212744 completion
@@ -583,6 +584,67 @@ F5a–F5d 已闭合按章成文的契约、引擎与免费验证，F5e 已完成
     修改则复用 F8d 证据。人工验收绑定实际交付的 manifest／成书 hash；成书变化后重新取得
     用户对该版本的结论，字节未变可沿用已有阅读结论并复核身份关联。最终工程证据和用户
     验收同时有效后，一次合入 main，清账关闭 STR-06。
+  - [x] **质量改进批次（2026-09-26，免费；零模型调用）**：按 F7e recheck 评估与用户指示
+    （先提高各节点产物质量，再端到端跑书）实施。做法：确定性缺陷直接修；语义问题只收紧
+    prompt 契约措辞与边界；**不加阶段、节点、Judge、schema 字段或义务 kind**；不让
+    Preserve 读源正文。F9 缺口①–⑤已归并：①（recipients 前缀笔误）②（loop 漏 key）
+    ⑤（loop 重复 open）→ B1 的字段类型与 loop 纪律；③（书核漏收 surface）→ B1 的
+    surface_forms 键逐字相等＋A3 的 canonical 闸；④（must_preserve 全 true）→ B2 的
+    反事实判据。三批改动：
+    - **批 A（确定性接缝）**：A1 称谓释放导航按（人物, 实际释放章）分组（`book_ir._release_schedule`）；
+      A2 HookContext 事实渲染保留 domain/holder/knowledge_mode（`hook_context._render_fact`）；
+      A3 称谓闭合——源侧 canonical 必须是已登记 surface（`compile_book`），目标侧 Design
+      放行面闭合在登记面内（`assemble_body_design` 的 `registered_surfaces`），贯穿反例证明
+      放行面→替换表零残留；A4 成书按阅读序加「第N章」＋分章交付身份
+      （`ASSEMBLY_FORMAT_VERSION`、`delivery_identity(chapter_digests=…)`）。
+    - **批 B（语义契约，只改 prompt 文本与版本号）**：B1 Stage2 抽取纪律（自我定性记自述、
+      动作不外推、knowledge_key 同命题复用、状态键不新开近义、loop 必须带 key 且不重复
+      open、字段类型写清）；B2 Preserve Policy v2（七类 kind 定义同源渲染、statement 按
+      kind、satisfaction 写「保住作用必须成立什么」、must_preserve 反事实判据）；
+      B3 Design（章书写顺序、purpose 只概括本章 scene_ids、voice 不贴情绪标签、读者延后
+      确认用 reader delta）；B4 Hook（presentation 可省略但不得改写、默认 2–4 份材料、
+      局部小动作不带出新情节）；B5 写手协议 v2（世界设定精度边界＋未揭示事实不当已确认叙述）。
+    - **批 C（源引子按信息职责进 Stage2）**：`build_evidence` 把 hook_copy 切成 `e00_*`
+      章前证据段（只进书级调用与第 1 章）；分流规则写进 BOOK_PROMPT 与第 1 章规则；
+      `source_fold` 增加两条只报告读数（开场拍重复建立初态、初态已知者又被开场拍告知）；
+      `Stage1Input` 与候选根源身份改为 main_text＋hook_copy 组合摘要（`prov.combined_content_sha256`，
+      store 完成度 root 边同口径）；`--source-json` 必须显式给出引子或显式声明无引子。
+    - 契约与登记：新增 R-2.8／R-2.9／R-10.10，R-5.1 与 B-21 收窄，R-2 导语／R-8 导语改写；
+      判据注册表 +4 条 HARD（stage2×2、stage4×1、stage7×1，stage2 进 hard_cases 扫描面），
+      `docs/schema/{str06,stage1,stage2,stage4,stage7}.md` 同步；DECISIONS 2026-09-26 记四项裁决。
+      **候选契约身份实测未变**（`04b6fb22…`；`_node_identity` 不含 `input_workpack` 文本），
+      F7e 冻结记录无需更新——计划中「契约身份会随之变化」的预期不成立，如实登记。
+    - 验证（全部免费）：str06 套件＋layering＋选测 331 项、消费面（prov/workflow/
+      artifact_versions/runtime_identity/docs_references/coverage/rules_registry/
+      hard_counterexamples/ingest_fixtures/orchestrator/operator/api/agent）1013 项，
+      合计 1344 项零失败（JUnit 留档 `E:/_tr/quality_batch_{str06,consumers}.xml`）；
+      `test_hard_counterexamples` 逐条真跑新红例；`test_str06_product_entry` 全链
+      （含 e00 臂与章标记断言）通过。前端消费者同批闭合：称谓释放位置表改按
+      （人物, 释放章）分组后同人物可有多条记录，`Str06MonitorScreen` 的 React key
+      由 `char_id` 改为 `char_id@from_chapter`（重复 key 会让监控面丢行）；
+      typecheck／seams／test(115)／build 四项全绿。
+    - **代价披露**：源身份公式变化 ⇒ F9 根等既有候选根在新代码下 workflow 复校被拒
+      （不沿用旧购买），端到端重跑用新独立根；章回执绑定协议版本 v2 与 policy v2 ⇒
+      旧已购正文/Preserve 结论在新输入下不复用。**本批未跑任何真实 LLM**；付费重跑与
+      用户验收见下一条。
+  - **质量改进后的端到端重跑与用户验收**（付费与正文外发分别授权；每臂独立根；stage0/1
+    由 CLI 从源文件免费生成；开跑前重新报价）：分两段——段一 `str06.stage2.source` →
+    `str06.stage4.compile`（本书参照 F9 前 14 次实付口径），段二 Hook、正文 11 章、naming、
+    assemble。验收假设（只判断每个 owner 是否达到预登记要求，不把改善归因到单一规则）：
+    H1 Preserve 义务从「转写」转向「作用」；H2 Design 章目的与分场一致、不改写人物；
+    H3 Hook presentation 不再漂移（有界实验）；H4 Stage2 消除抽取缺口且引子按 owner 正确分流。
+    预登记阅读清单（判据以原文为准，F9/F7e 旧产物只作核对账）：Stage2 四条（女主的自我
+    标榜记为说辞且反差两面都在；离开不外推成「送离住处」；不同次藏身用不同 knowledge_key；
+    第 11 章快照无并存双人选键、无「尚未决定」残留、孕期状态已解除）；引子分流三条
+    （本书 ch01 有引自 e00 的开场拍且与正文不重复、初态无由开场拍首次产生的知情；
+    《三人成行》两臂基本等价；合成样本概括段零引用）；Preserve 七条（女主义务体现口头守礼
+    与内心清醒的反差、失言→自曝→引起怀疑的连接、第二夜误会链、首夜床下确认时点为 reveal、
+    离家半月与摊牌受阻之间不挂因果、无整场转写且 must_preserve 有真实 false、主线事件无漏保）；
+    Design 四条（11 章 purpose 与 scene_ids 一致、不改写女主且 voice 不同质、床下确认拍有
+    reader delta 且此前线索仍在、称谓全部落在登记面内）；Hook 一条（presentation 对照引用拍）；
+    正文与交付五条（新婚夜/死结与剪子/反对换人失言/结尾四处成立、床下藏身在确认拍前未被当作
+    已确认叙述、无改变时间线/身份/前史的新设定、Hook 与正文一致、新名全书一致且混合名零次、
+    「第N章」齐全）。单列指标（不参与语义判定）：各付费 owner 首次输出成功率。
 
 ## 恢复、替代与删除条件
 
@@ -607,7 +669,7 @@ F5a–F5d 已闭合按章成文的契约、引擎与免费验证，F5e 已完成
 | `_tmp_*` harness 与旧链实现 | F7e 登记有效职责与反例，F8c 接管完成后删除代码；付费响应、checkpoint、采用证据、接受正文及质量基线保留或归档 |
 | 现役 Stage6 链整层（prepare/hook/approve、产物家族、批准绑定、API/Views/前端、判据、纯 Stage6 测试） | 已登记于 `contracts/schema/retirement.py::STR06_F6D_RETIREMENT`（106 项，含接管者），`tests/test_str06_retirement.py` 双向对账；F7e 复验、F8a–F8c 按表退役，先迁有效独有反例 |
 | 旧 Stage2／4／5／7 及跨层消费面 | F7e 建补充退役登记，与 Stage6 登记共同覆盖编排、consumption、core、quality、report、API/UI、schema 文档和测试；F8c 按接管证据删除，F8d 验证真实消费者 |
-| Stage1 `hook_copy` | F7c 已判定新链无消费者（Hook 设计吃目标 Design 材料投影）；F8 随旧链退役，覆盖 partition/check、节点产物、审批、source_identity 与 UI 的有效职责，不留无消费者产物作为新链准入条件 |
+| Stage1 `hook_copy` | F7c 曾判定新链无消费者；**2026-09-26 质量改进批次改写**：Stage6 退役后源引子恢复唯一消费者 `str06.stage2.source`（切成 `e00_*` 章前证据段，按信息职责分流进 initial_state／第 1 章 beats，判断不了弃权），并与 main_text 共同构成组合源身份（只改引子即拒复用旧购买）。覆盖 partition/check、节点产物、审批、source_identity 与 UI 的有效职责；不留无消费者产物作为新链准入条件 |
 | 书级正文篇幅、Hook 长度与章篇幅带 | F7c 从正式 MainText 派生书级篇幅、固定目标章数为源章数，Hook／篇幅带有正式配置来源；移除生产路径的 harness 默认值依赖，配置变化进入实际消费身份 |
 | F5e 原输出根与已购证据 | F7a 原根只读、独立候选根显式历史采用，核对请求／响应／来源／成本及零新购同文本重放；F8c 保留或归档，F9 复用同一采用边界，不原地升级或伪造缓存命中 |
 | `tests/test_store.py` 的既存 74 项失败 | 保留 161 收集、87 通过及失败分类的历史记录；F7a-2 已复核与 HEAD 基线逐项一致（49 退役路径夹具＋17 freshness 断言＋8 旧形状，均非 Store 接口相关，零新增）；F7e 登记其余接管者，F8d 有效职责全部通过；不以删除现役反例清零 |

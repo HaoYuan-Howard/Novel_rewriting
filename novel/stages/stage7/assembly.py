@@ -14,11 +14,17 @@ prior_text_sha256 必须等于前 k-1 章已接受文本的规范拼接——这
 前缀」与「全书 IR 变化使全书失效」的可执行面。消费者核对 manifest、当前输入
 及文件 hash，不能仅凭 TXT 存在宣称就绪。
 
+【章标记与分章身份】
+成书按阅读序逐章加「第N章」一行（章号由系统添加，写手协议早已据此约定）；
+引子放最前、不加标题。交付身份对**分章**敏感：有序的
+(chapter_ordinal, prose_sha256) 逐章进身份，拼接相同但分章不同的两份书是不同
+交付（质量改进批次 A4）。章回执与前文链仍绑定不含章号的 `prior_body_text`。
+
 【身份分离】
-交付身份由（接受正文 hash, Hook 回执 prose hash, 替换表, 保留字面）派生，
-与 Stage5 回执、Hook 回执分离：换 NameMap 不使任何接受回执失效，只改变交付
-身份。同一输入字节 + 同一映射 + 同一组装契约 ⇒ 相同交付字节。当前发布使用
-「文件先落盘、manifest 最后提交」。
+交付身份由（逐章正文 hash, Hook 回执 prose hash, 替换表, 保留字面, 组装格式
+版本）派生，与 Stage5 回执、Hook 回执分离：换 NameMap 不使任何接受回执失效，
+只改变交付身份。同一输入字节 + 同一映射 + 同一组装契约 ⇒ 相同交付字节。当前
+发布使用「文件先落盘、manifest 最后提交」。
 """
 from __future__ import annotations
 
@@ -30,6 +36,9 @@ from novel.stages.stage7.naming import apply_names, check_residual
 # `tests/test_layering.py::test_cross_stage_imports_stay_on_the_package_surface`）：
 # Stage7 装配消费 Stage5 的篇幅口径与前文拼接／文本 SHA。
 from novel.stages.stage5 import count_body_chars, prior_body_text, sha256_text
+
+#: 成书组装格式版本：章标记与拼接规则变化必须换版（进交付身份）。
+ASSEMBLY_FORMAT_VERSION = 'str06-assembly-v2'
 
 
 class BodyAccess(NamedTuple):
@@ -151,35 +160,56 @@ def _sorted_mapping(replacements: Mapping[str, str]) -> list[str]:
 
 
 def delivery_identity(
-    *, body_sha256: str, hook_prose_sha256: str,
+    *, chapter_digests: Iterable[str], hook_prose_sha256: str,
     replacements: Mapping[str, str], kept_literals: Iterable[str],
 ) -> str:
-    """交付身份：与 Stage5/Hook 回执分离，换 NameMap 只变这一位。"""
-    parts = [body_sha256, hook_prose_sha256]
+    """交付身份：与 Stage5/Hook 回执分离，换 NameMap 只变这一位。
+
+    `chapter_digests` 是有序的 `'{chapter_ordinal}:{prose_sha256}'`（章序由
+    调用方排好）：分章不同 ⇒ 身份不同，即便拼接字节相同。
+    """
+    parts = [ASSEMBLY_FORMAT_VERSION, hook_prose_sha256]
+    parts.extend(chapter_digests)
     parts.extend(_sorted_mapping(replacements))
     parts.extend(f'keep:{k}' for k in sorted(kept_literals))
     return hashlib.sha256('\x1f'.join(parts).encode('utf-8')).hexdigest()
 
 
+def _chapter_digests(chapter_prose: Mapping[int, str]) -> list[str]:
+    return [f'{ordinal}:{sha256_text(chapter_prose[ordinal])}'
+            for ordinal in sorted(chapter_prose)]
+
+
+def _chapter_marker(ordinal: int) -> str:
+    return f'第{ordinal}章'
+
+
 def assemble_delivery(
-    *, body_text: str | None, body: BodyAccess,
+    *, chapter_prose: Mapping[int, str] | None, body: BodyAccess,
     hook_prose: str | None, hook_receipt: Mapping[str, Any] | None,
     hook_context_sha256: str,
     replacements: Mapping[str, str],
     kept_literals: tuple[str, ...] = (),
 ) -> DeliveryOutcome:
-    """终态组装（纯函数）：改名 → 残留检查 → 组装与身份。
+    """终态组装（纯函数）：改名 → 残留检查 → 按章组装与身份。
 
     任何 not_ready 都不产字节、不产身份；`hook_renamed_text` 只在 hook 改名
     已通过残留检查而 body 侧未就绪时给出（落盘归 runtime/delivery/）。
     """
-    if body_text is None or not body.ready:
-        detail = 'body_not_implemented' if body_text is None else (
+    if not chapter_prose or not body.ready:
+        detail = 'body_not_implemented' if not chapter_prose else (
             f"missing={list(body.missing)} rejected={list(body.rejected)} "
             f"unknown={list(body.unknown)}")
         return DeliveryOutcome(
             status='not_ready', reason=detail, body=body, delivery_bytes=None,
             delivery_identity=None, hook_renamed_text=None)
+    if set(chapter_prose) != set(body.accepted):
+        return DeliveryOutcome(
+            status='not_ready',
+            reason=(f"body_chapter_mismatch: prose={sorted(chapter_prose)} "
+                    f"accepted={sorted(body.accepted)}"),
+            body=body, delivery_bytes=None, delivery_identity=None,
+            hook_renamed_text=None)
     if hook_prose is None or hook_receipt is None:
         return DeliveryOutcome(
             status='not_ready', reason='hook_receipt_missing', body=body,
@@ -204,18 +234,23 @@ def assemble_delivery(
             status='not_ready', reason='hook_residual: ' + '；'.join(problems),
             body=body, delivery_bytes=None, delivery_identity=None,
             hook_renamed_text=None)
-    renamed_body, body_claims = apply_names(body_text, dict(replacements))
-    problems = check_residual(renamed_body, dict(replacements), body_claims, kept_literals)
-    if problems:
-        return DeliveryOutcome(
-            status='not_ready', reason='body_residual: ' + '；'.join(problems),
-            body=body, delivery_bytes=None, delivery_identity=None,
-            hook_renamed_text=renamed_hook)
-    body_sha = hashlib.sha256(body_text.encode('utf-8')).hexdigest()
+    renamed_chapters: dict[int, str] = {}
+    for ordinal in sorted(chapter_prose):
+        renamed, claims = apply_names(chapter_prose[ordinal], dict(replacements))
+        problems = check_residual(renamed, dict(replacements), claims, kept_literals)
+        if problems:
+            return DeliveryOutcome(
+                status='not_ready',
+                reason=f'body_residual: 第{ordinal}章 ' + '；'.join(problems),
+                body=body, delivery_bytes=None, delivery_identity=None,
+                hook_renamed_text=renamed_hook)
+        renamed_chapters[ordinal] = renamed
     identity = delivery_identity(
-        body_sha256=body_sha, hook_prose_sha256=hook_sha,
+        chapter_digests=_chapter_digests(chapter_prose), hook_prose_sha256=hook_sha,
         replacements=replacements, kept_literals=kept_literals)
-    text = renamed_hook + '\n\n' + renamed_body
+    text = '\n\n'.join(
+        [renamed_hook] + [f'{_chapter_marker(ordinal)}\n{renamed_chapters[ordinal]}'
+                          for ordinal in sorted(renamed_chapters)])
     return DeliveryOutcome(
         status='ready', reason='ok', body=body,
         delivery_bytes=text.encode('utf-8'), delivery_identity=identity,

@@ -369,3 +369,235 @@ CASES.update({
     'hook_context_rebuildable': Case('stage4', _hook_context_unresolvable, '起笔事实'),
     'delivery_replayable': Case('stage7', _delivery_not_ready, 'not ready'),
 })
+
+
+# ─── 质量改进批次（2026-09-26）新增 HARD 的最小会红样本 ───────────────────────
+
+def _canonical_not_a_surface() -> list:
+    """称谓闭合：canonical 不在本人 surfaces 里（wire 闸，不过就走 owner patch）。"""
+    from novel.stages.stage2.source import compile_book
+    wire = {
+        'characters': {
+            'fu_jun': {'canonical': '陆夫君', 'surfaces': [
+                {'surface': '夫君', 'from_chapter': 1, 'until_chapter': None,
+                 'source_refs': ['e01_01']}]}},
+        'initial_state': [], 'world_constraints': []}
+    _chars, _wcs, errors = compile_book(wire, evidence_ids=('e01_01',))
+    return errors
+
+
+def _hook_copy_source_identity() -> list:
+    """hook_copy 进源身份：只改章前文字，旧候选根复校关闭式拒绝。"""
+    import json
+    import shutil
+    import tempfile
+    from pathlib import Path
+
+    from contracts.artifacts import STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT
+    from contracts.schema import encode_artifact
+    from novel.llm.ledger import CostLedger
+    from novel.llm.paid_requests import (
+        ProvenanceRefused, init_or_resume_candidate_workflow,
+    )
+    from novel.store import Str06Repository
+    from tests.str06_facilities import make_context
+
+    base = Path(tempfile.mkdtemp(prefix='hard-hook-'))
+    try:
+        book = base / '9001' / 'stage1'
+        book.mkdir(parents=True)
+        chapters = [{'chapter_ordinal': 1, 'text': '云娘提出约定。'},
+                    {'chapter_ordinal': 2, 'text': '第二夜窗外有响动。'}]
+
+        def write_stage1(hook: str) -> None:
+            (book / 'main_text.json').write_bytes(
+                json.dumps(encode_artifact(STAGE1_MAIN_TEXT, chapters),
+                           ensure_ascii=False).encode('utf-8'))
+            (book / 'hook_copy.json').write_bytes(
+                json.dumps(encode_artifact(STAGE1_HOOK_COPY, {'text': hook}),
+                           ensure_ascii=False).encode('utf-8'))
+
+        from novel.stages.chain import load_stage1_chapters
+        write_stage1('新婚夜，夫君坦白借种之约。')
+        first = load_stage1_chapters(base, '9001')
+        repo = Str06Repository(base / 'run')
+        repo.attach_context(make_context(base / 'run', ledger=CostLedger(path=None)))
+        init_or_resume_candidate_workflow(
+            repository=repo, base=base, code='code-x',
+            root_sha1=first.root_sha1, source_identity=first.source_identity,
+            task_id='task-1', configured_model='fake', created_at=1759000000)
+        # 只改引子：源身份换 ⇒ 旧根不得沿用已购结论
+        write_stage1('改过的引子。')
+        second = load_stage1_chapters(base, '9001')
+        if second.source_identity == first.source_identity:
+            return ['只改 hook_copy 但源身份未变：引子不在源身份内']
+        try:
+            init_or_resume_candidate_workflow(
+                repository=repo, base=base, code='code-x',
+                root_sha1=second.root_sha1, source_identity=second.source_identity,
+                task_id='task-1', configured_model='fake', created_at=1759000001)
+        except ProvenanceRefused as exc:
+            return [str(exc)]
+        return ['源身份变化后旧候选根仍被复用']
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+
+
+def _design_surface_not_registered() -> list:
+    """称谓闭合：Design 放行 Characters 未登记的字面。"""
+    from novel.stages.stage4.design import assemble_body_design
+    _body, errors = assemble_body_design(
+        {'initial_state': [], 'scenes': [{
+            'scene_id': 's01', 'state_reads': [],
+            'driver': {'focal_actor': 'yun', 'immediate_want': 'w',
+                       'opposition': 'o', 'turn': 't'},
+            'realization_brief': '重心在约定成立；展开对峙，在立约处收束。',
+            'beats': [{'beat_id': 'bt1', 'event': '约定成立', 'participants': ['yun'],
+                       'dramatic_intent': 'd', 'target_delta': [], 'delivery_hint': '',
+                       'surface_introductions': [
+                           {'char_id': 'yun', 'surfaces': ['云娘子']}]}],
+            'delivery': {'pov': 'yun', 'voice': 'v', 'avoid': []}}],
+         'chapters': [{'chapter_ordinal': 1, 'purpose': '立约', 'scene_ids': ['s01']}],
+         'chapter_weights': {'s01': 1.0}},
+        known_char_ids={'yun'}, registered_surfaces={'yun': {'云娘', '云姑娘'}})
+    return errors
+
+
+def _delivery_chapter_split_mismatch() -> list:
+    """章标记与分章身份：章文本与有效接受章集合不一致 ⇒ 显式未就绪。"""
+    import hashlib
+
+    from novel.stages.stage7.assembly import assemble_delivery, chapter_access
+    hook, context_sha = '楔子。', 'c' * 64
+    receipt = {'hook_context_sha256': context_sha,
+               'prose_sha256': hashlib.sha256(hook.encode('utf-8')).hexdigest(),
+               'request_identity': 'r1', 'validator_version': 'v1',
+               'status': 'accepted', 'mechanical_checks': ('non_empty',),
+               'semantic': 'unverified'}
+    outcome = assemble_delivery(
+        chapter_prose={1: '第一章。', 2: '第二章。'},
+        body=chapter_access([1], {1: {'status': 'accepted'}}),
+        hook_prose=hook, hook_receipt=receipt, hook_context_sha256=context_sha,
+        replacements={}, kept_literals=())
+    if outcome.status == 'ready':
+        return ['章文本与接受章不一致仍组装就绪']
+    return [outcome.reason]
+
+
+CASES.update({
+    'source_canonical_surface': Case('stage2', _canonical_not_a_surface, 'canonical'),
+    'source_identity_covers_hook_copy': Case(
+        'stage2', _hook_copy_source_identity, '源输入身份'),
+    'design_surface_release_closure': Case(
+        'stage4', _design_surface_not_registered, '未登记面'),
+    'delivery_chapter_markers': Case(
+        'stage7', _delivery_chapter_split_mismatch, 'body_chapter_mismatch'),
+})
+
+
+# ─── stage2 既有 HARD 的同批红例（扫描面纳入 stage2 时补齐） ──────────────────
+
+def _book_extraction_dangling() -> list:
+    """book 级抽取编译闭合：surface 的 source_ref 悬空。"""
+    from novel.stages.stage2.source import compile_book
+    wire = {
+        'characters': {'fu_jun': {'canonical': '夫君', 'surfaces': [
+            {'surface': '夫君', 'from_chapter': 1, 'until_chapter': None,
+             'source_refs': ['e99_99']}]}},
+        'initial_state': [], 'world_constraints': []}
+    _chars, _wcs, errors = compile_book(wire, evidence_ids=('e01_01',))
+    return errors
+
+
+def _chapter_ordinals_not_dense() -> list:
+    """源章数组阅读序 1..N 密集：断号由 Stage1 MainText 模型自身拒绝。"""
+    from pydantic import ValidationError
+    from contracts.schema.stage1 import MainText
+    try:
+        MainText.model_validate([
+            {'chapter_ordinal': 1, 'text': '一。'},
+            {'chapter_ordinal': 3, 'text': '三。'}])
+    except ValidationError as exc:
+        return [str(exc)]
+    return ['断号章序被接受']
+
+
+def _chapter_blueprint_bad_wire() -> list:
+    """逐章 Blueprint 编译闭合：participants 引用人物账之外的人物。"""
+    from novel.stages.stage2.source import ChapterCompiler, compile_book
+    chars, _wcs, errors = compile_book({
+        'characters': {'fu_jun': {'canonical': '夫君', 'surfaces': [
+            {'surface': '夫君', 'from_chapter': 1, 'until_chapter': None,
+             'source_refs': ['e01_01']}]}},
+        'initial_state': [], 'world_constraints': []}, evidence_ids=('e01_01',))
+    assert not errors and chars is not None
+    compiler = ChapterCompiler(chars, evidence_ids=('e01_01',))
+    _bp, errors = compiler.compile({
+        'beats': [{'beat_id': 'b01_01', 'event': '开篇', 'participants': ['ghost'],
+                   'source_refs': ['e01_01'], 'effects': [], 'reveals': []}],
+        'causal_edges': []}, 1)
+    return errors
+
+
+def _fold_loop_close_without_open() -> list:
+    """fold 与 Blueprint canonical 一致：close 无对应 open 记事件。"""
+    from contracts.schema.source import (
+        BlueprintsArtifactV12, ChapterBlueprint, CharacterEntry, CharactersCore,
+        SurfaceWindow,
+    )
+    from novel.stages.stage2.source import source_fold
+    chars = CharactersCore(characters={'ch1': CharacterEntry(
+        canonical='夫君',
+        surfaces=(SurfaceWindow(surface='夫君', from_chapter=1,
+                                source_refs=('e01_01',)),))})
+    bp = BlueprintsArtifactV12(chapters=(ChapterBlueprint(chapter=1, beats=(
+        {'beat_id': 'b01_01', 'event': '收束', 'participants': [], 'source_refs': ['e01_01'],
+         'effects': [{'target': {'kind': 'loop', 'loop_id': 'loop_x'},
+                      'key': '悬而未决', 'op': 'close', 'value': None}],
+         'reveals': []},), causal_edges=()),))
+    _snapshots, events = source_fold(chars, bp)
+    return events
+
+
+def _names_structure_uncovered() -> list:
+    """名称结构编译闭合：surface_forms 未恰好覆盖全部 surface。"""
+    from contracts.schema.source import (
+        CharacterEntry, CharactersCore, SurfaceWindow,
+    )
+    from novel.stages.stage2.names import compile_name_structure
+    core = CharactersCore(characters={'ch1': CharacterEntry(
+        canonical='夫君',
+        surfaces=(SurfaceWindow(surface='夫君', from_chapter=1,
+                                source_refs=('e01_01',)),
+                  SurfaceWindow(surface='陆大哥', from_chapter=1,
+                                source_refs=('e01_01',))))})
+    _structure, errors = compile_name_structure(
+        {'families': {'fam_lu': {'literal': '陆', 'forms': []}},
+         'people': {'ch1': {'family_id': 'fam_lu', 'given': None, 'aliases': [],
+                            'surface_forms': {'夫君': None}}}},
+        core, '夫君与陆大哥夜话。')
+    return errors
+
+
+def _names_coverage_missing_entry() -> list:
+    """应改名集合覆盖源名称结构：NameMap 漏项即拒。"""
+    from tests.test_str06_naming import _chars
+    from novel.stages.stage7.naming import compile_name_map
+    _map, errors = compile_name_map(
+        {'entries': [{'char_ref': 'chen_yan', 'name': {'family': '沈', 'given': '砚'}}]},
+        _chars())
+    return errors
+
+
+CASES.update({
+    'source_book_extraction': Case('stage2', _book_extraction_dangling, '悬空'),
+    'source_chapter_dense_ordinals': Case(
+        'stage2', _chapter_ordinals_not_dense, 'chapter_ordinal'),
+    'source_chapter_blueprint': Case(
+        'stage2', _chapter_blueprint_bad_wire, '未知人物'),
+    'source_fold_consistent': Case(
+        'stage2', _fold_loop_close_without_open, 'close 无对应 open'),
+    'names_structure_compile': Case(
+        'stage2', _names_structure_uncovered, '未恰好覆盖'),
+    'names_coverage': Case('stage2', _names_coverage_missing_entry, '漏项'),
+})

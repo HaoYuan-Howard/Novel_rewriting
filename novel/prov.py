@@ -63,6 +63,34 @@ def content_sha1(data: bytes) -> str:
     return hashlib.sha1(data).hexdigest()
 
 
+def _combined(*parts: bytes) -> str:
+    """长度前缀组合：换任何一份、或换拼接切法，都换身份。
+
+    多份字节共同构成一份逻辑输入时（Stage1 章数组＋章前文字）不能直接拼接——
+    直接的字节拼接存在「边界滑动」的等价碰撞（前一份多几个字节、后一份少几个
+    字节可以得到同一串）。逐份报长度再进哈希，碰撞面回到单份哈希。
+    """
+    digest = hashlib.sha256()
+    for part in parts:
+        digest.update(f'{len(part)}:'.encode('utf-8'))
+        digest.update(part)
+    return digest.hexdigest()
+
+
+def combined_content_sha256(*parts: bytes) -> str:
+    """多份字节的组合内容身份（SHA-256，全宽）——逻辑源身份用这一格。"""
+    return _combined(*parts)
+
+
+def combined_content_sha1(*parts: bytes) -> str:
+    """多份字节的组合内容身份（SHA-1，全宽）——root 身份格用这一把。"""
+    digest = hashlib.sha1()
+    for part in parts:
+        digest.update(f'{len(part)}:'.encode('utf-8'))
+        digest.update(part)
+    return digest.hexdigest()
+
+
 def projection_fingerprint(obj: Any) -> str:
     """**本节点真正读到的字段投影** → 10 位指纹（`inputs[].consumed`）。
 

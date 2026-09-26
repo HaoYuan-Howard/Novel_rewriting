@@ -65,6 +65,17 @@ def _assemble():
 
 # ───────────────────────── Preserve ─────────────────────────
 
+def test_preserve_rules_stay_in_sync_with_preserve_kind():
+    """B2：prompt 里的七类 kind 与 `PreserveKind` 闭集同源（不多不少）。"""
+    from novel.stages.common import PRESERVE_KIND_DEFS, PRESERVE_RULES
+    assert set(PRESERVE_KIND_DEFS) == {kind.value for kind in PreserveKind}
+    for kind in PreserveKind:
+        assert kind.value in PRESERVE_RULES
+    # 保存对象与反事实判据都写进了规则文本
+    assert '反事实判据' in PRESERVE_RULES and '布尔' in PRESERVE_RULES
+    assert 'satisfaction' in PRESERVE_RULES and 'statement' in PRESERVE_RULES
+
+
 def test_assemble_preserve_green_and_hash_stable():
     chars, bp, cp = _assemble()
     assert len(cp.obligations) == 3
@@ -210,3 +221,30 @@ def test_assemble_design_green_and_refusals():
     bad['scenes'][0]['source_ref'] = 'b01_01'
     _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'})
     assert errors
+
+
+def test_design_surface_release_must_be_registered():
+    """称谓闭合（A3）：放行面只能取 Characters 登记过的 surface。
+
+    Design 放行未登记字面时替换表找不到对应新名（F7e 评估实证）——生产端尽早
+    失败；`registered_surfaces` 缺省不查（source-blind 单测面）。
+    """
+    registered = {'yun': {'云娘', '云姑娘'}, 'fu_jun': {'夫君'}}
+    wire = _design_wire()
+    wire['initial_surfaces'] = [{'char_id': 'yun', 'surfaces': ['云姑娘']}]
+    body, errors = assemble_body_design(
+        wire, known_char_ids={'yun', 'fu_jun'}, registered_surfaces=registered)
+    assert body is not None and not errors, errors
+
+    bad = _design_wire()
+    bad['initial_surfaces'] = [{'char_id': 'yun', 'surfaces': ['云娘子']}]
+    _, errors = assemble_body_design(
+        bad, known_char_ids={'yun', 'fu_jun'}, registered_surfaces=registered)
+    assert any('未登记面' in e for e in errors)
+
+    bad = _design_wire()
+    bad['scenes'][0]['beats'][0]['surface_introductions'] = [
+        {'char_id': 'fu_jun', 'surfaces': ['陆大哥']}]
+    _, errors = assemble_body_design(
+        bad, known_char_ids={'yun', 'fu_jun'}, registered_surfaces=registered)
+    assert any('未登记面' in e and '陆大哥' in e for e in errors)

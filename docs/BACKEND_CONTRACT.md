@@ -124,19 +124,25 @@ orchestrator 推进，semantic unit 生成；Stage 页只读监控。`HUMAN_NODE
 （`compile_book` → `CharactersCore`，落正式派生产物 `stage2/compiled/book_extraction.json`），
 再逐章编译 Blueprint v12（`ChapterCompiler`，落 `stage2/blueprints/chapter_blueprints.json`）。
 源章原文只进本节点自己的 prompt；下游一律消费编译产物（source-blind），不从源正文推语义。
-章序身份来自正式 Stage1 `MainText`（阅读序 1..N 密集）；输入身份＝该产物盘上字节 SHA-256。
-`source_fold` 把 core 与 Blueprint 折成事件表供机械对账。语义未审以 unver 行常驻披露，
-不产生审批待办。字段见 `docs/schema/stage2.md`。
+章序身份来自正式 Stage1 `MainText`（阅读序 1..N 密集）；**输入身份＝`main_text.json`
+＋`hook_copy.json` 两份盘上字节的组合摘要**（`R-2.9`）——Stage6 退役后章前文字（源引子）
+的唯一消费者就是本节点：它被切成 `e00_*` 证据段进书级调用与第 1 章抽取，按信息职责分流
+（开场前已成立的状态/关系/知情 → `initial_state`；实际发生的开场行动 → 第 1 章 beats；
+与正文重复的事件以正文为准；预告/概括不进 canonical；判断不了弃权），不对整篇引子打标签。
+`source_fold` 把 core 与 Blueprint 折成事件表供机械对账（含章前文字的两个只读读数）。
+语义未审以 unver 行常驻披露，不产生审批待办。字段见 `docs/schema/stage2.md`。
 
 | # | 要求 | 谁在查 |
 |---|---|---|
 | R-2.1 | book 级抽取编译闭合：`CharactersCore` 无未知键、无悬空引用、人物闭集自洽；编译错误当场 fail-fast，不落半份产物。 | `HARD`（`novel/stages/stage2/source.py::compile_book`） |
 | R-2.2 | 源章数组阅读序 1..N 密集且非空（`MainText` 模型保证）；目标章数恒等于源章数（同 `R-5.2`）。生产路径读正式 Stage1 产物，`--source-json` 只是开发路径。 | `HARD`（`novel/stages/chain.py::run_chain` + `contracts/schema/stage1.py::MainText`） |
 | R-2.3 | 逐章 Blueprint v12 编译闭合：拍序、引用与状态键合法；逐章输入快照确定性派生（`chapter_input_snapshot`），同输入同快照。 | `HARD`（`novel/stages/stage2/source.py::ChapterCompiler`） |
-| R-2.4 | `source_fold` 事件与 Blueprint canonical 一致（落 `stage2/acceptance/fold.json`）；fold 是机械对账面，不产生新语义。 | `HARD`（`novel/stages/stage2/source.py::source_fold`） |
+| R-2.4 | `source_fold` 事件与 Blueprint canonical 一致（落 `stage2/acceptance/fold.json`）；fold 是机械对账面，不产生新语义。章前文字（e00）的两个分流读数——开场拍对初态同键 set 同值、初态已知者又被开场拍告知——只报告、不阻断。 | `HARD`（`novel/stages/stage2/source.py::source_fold`） |
 | R-2.5 | `CharactersCore` 与 `BlueprintsArtifactV12` 的盘上形状由 `ARTIFACT_SPECS` 登记（这两个模型不声明 `contract_version`，按 F8 义务在注册表登记形状）；不往模型加非 exclude 字段——那会改 `model_dump` 字节、从而改 prompt 与已购请求身份。 | `载体`（`contracts/schema/__init__.py::ARTIFACT_SPECS`） |
 | R-2.6 | 已购请求身份按字节复算：候选产物落盘用保序序列化（不 `sort_keys`），prompt 与 adoption 身份逐字相等；排序归一会静默改掉 F5e 已购请求的身份。 | `结构`（`novel/store.py::Str06Repository` 的保序序列化） |
-| R-2.7 | fold 事件计数与章分布无条件报出（度量，不是门）。 | `度量`（`novel/stages/stage2/source.py::source_fold`） |
+| R-2.7 | fold 事件计数与章分布无条件报出（度量，不是门）；章前文字读数同列上报。 | `度量`（`novel/stages/stage2/source.py::source_fold`） |
+| R-2.8 | **称谓闭合（wire 闸）**：`canonical` 必须逐字等于该人物 `surfaces` 中的某一项。canonical 是内部主键显示名，又作为身份名交给 Design／Hook；未登记字面在替换表里找不到对应新名。不通过走 owner patch，不静默改写。 | `HARD`（`novel/stages/stage2/source.py::compile_book`） |
+| R-2.9 | **组合源身份**：`source_identity` 与 `root_sha1` 由 `main_text.json`＋`hook_copy.json` 两份字节的组合摘要派生（长度前缀，防拼接歧义）。只改章前文字也换源身份 ⇒ 候选根复校关闭式拒绝，旧根不得沿用旧购买；续跑用新独立根。开发路径 `--source-json` 必须显式给出引子或显式声明「无引子」。 | `HARD`（`novel/stages/chain.py::load_stage1_chapters`＋`novel/prov.py::combined_content_sha256`＋`novel/llm/paid_requests.py::init_or_resume_candidate_workflow`） |
 
 源语义（归因、因果、揭示）的语义正确性不经机械检查证明，随 Stage2 语义未审披露；
 `--check-only` 只允许缓存命中与登记的历史采用，零新购。
@@ -193,7 +199,7 @@ Stage4 的四个付费节点按固定序推进：`preserve`（保存策略义务
 
 | # | 要求 | 谁在查 |
 |---|---|---|
-| R-5.1 | BodyDesign 编译闭合：场景、拍、章任务与约束合法（未知键、悬空引用、非法 POV 当场拒）。 | `HARD`（`novel/stages/stage4/design.py::assemble_body_design`） |
+| R-5.1 | BodyDesign 编译闭合：场景、拍、章任务与约束合法（未知键、悬空引用、非法 POV 当场拒）；**称谓面闭合**——`initial_surfaces` 与逐拍 `surface_introductions` 只能释放 Characters 登记过的 surface（`registered_surfaces` 由 `novel/stages/chain.py::run_body_design` 传入），未登记字面在生产端尽早失败。 | `HARD`（`novel/stages/stage4/design.py::assemble_body_design`） |
 | R-5.2 | **章唯一键（I-40 同款翻转）**：目标章数等于源章数、章序 1..N 连续非空、输出章号恒等于源章号；不合并、不删除、不拆分、不重排**章**，但允许跨章重构（场景可跨源章重组，`from_source_ordinals` 如实记录多源归属）。 | `HARD`（`novel/stages/stage4/design.py::assemble_body_design` + `contracts/schema/grounding.py::OutputConstraints`） |
 | R-5.3 | 章预算按场景权重 largest-remainder 整数分配，总和恰等于书级目标；书级目标从源章总字数向上取整确定性派生（配置取整粒度进契约身份），付费调用额度不参与本计算。 | `HARD`（`novel/stages/stage4/book_ir.py::allocate_chapter_budgets` + `novel/stages/chain.py::derive_total_length_budget`） |
 | R-5.4 | Preserve checkpoint 编译闭合：策略义务完整、来源可溯；ReconstructionBrief 是确定性投影，不新增语义。 | `HARD`（`novel/stages/stage4/grounding.py::assemble_preserve`） |
@@ -245,7 +251,8 @@ M1–M6 在本节点聚合执行，零错误才放行下游。
 
 `str06.stage5.hook` 单产＋机械验＋同 Context 有限重写（首次＋再 2 次，attempt 进请求
 身份）；重写上限内无合法候选即停止并留 attempts 记录，不披露放行。Hook 只消费
-HookContext（正式输入确定性重建），不读源 hook 文案——Stage1 `hook_copy` 在新链无消费者。
+HookContext（正式输入确定性重建），不读源 hook 文案——Stage1 `hook_copy`（章前文字）的
+消费者是 `str06.stage2.source`（`R-2` 导语／`R-2.9`），Hook 写手仍不读源引子。
 
 | # | 要求 | 谁在查 |
 |---|---|---|
@@ -284,6 +291,7 @@ Hook 的必要选择进入 Stage4 正式 Design（`R-5.6`），经 HookContext �
 | R-10.7 | 全书相对书级目标的偏差无条件报出（±10% 读数，度量不是门）；逐章篇幅披露与未评语义分开报告。 | `度量`（`novel/stages/stage7/assembly.py::build_delivery_manifest`） |
 | R-10.8 | `NameMapV5` 与交付 manifest 的盘上形状由 `ARTIFACT_SPECS`／唯一 writer 契约治理；NameMap 是交付变换契约，接受正文、回执与已购证据独立保护。 | `载体`（`contracts/schema/naming.py::NameMapV5`） |
 | R-10.9 | Stage7 不回写 Stage5：投影不落交付、Apply 不改映射（权限分界）；换 NameMap 只影响交付。 | `结构`（`novel/stages/stage7/naming.py::compile_surface_replacements`） |
+| R-10.10 | **章标记与分章身份**：成书按阅读序逐章加「第N章」一行（章号由系统添加，写手协议据此约定不写章号），引子放最前、不加标题；交付身份由有序的 `(chapter_ordinal, prose_sha256)`、Hook 成文 hash、改名映射与保留字面、`ASSEMBLY_FORMAT_VERSION` 派生——拼接相同但分章不同 ⇒ 身份不同。章回执与前文链仍绑定不含章号的 `prior_body_text`。 | `HARD`（`novel/stages/stage7/assembly.py::assemble_delivery`／`delivery_identity`） |
 
 ### R-11 · 人工审阅、模型权限与确定性调度
 
@@ -583,7 +591,7 @@ reasoning 已含在 completion 中时不再累加。
 |---|---|---|
 | **B-19** | Stage5 全书写作授权 | **【已退役 2026-09-15 全自动裁决（批次 B3）】** 是否付费不再逐书逐层由人授权：上传即授权本书全部付费节点（run 启动授权），整批付费确认由 R-13.3 的 `--yes`/`confirmed` 面一次性摊开。存量 `writing/writing_proof` 账只读保留 |
 | **B-20** | 非正文剔除的正确性 | **确定性验不了**——「这一段到底是不是番外」没有结构不变量可查，而正文体已按契约丢弃、盘上不留副本。判据已按 161 本语料标定（27 本命中 / 0 假阳），但那是「在这批语料上没抓错」，不是「对任何输入都不会抓错」。每本必须打印一条「剔除的正确性：本层验不了」 |
-| **B-21** | 改名的替换覆盖率 | **验不了。** 只能替换人物表里有的称呼，人物表漏掉的角色这一层**结构上够不着**——实测漏过一个（靠残留探针捡回来）。别把「残留 0 条」读成「人名都换干净了」 |
+| **B-21** | 改名的替换覆盖率 | **验不了。** 只能替换人物表里有的称呼，人物表漏掉的角色这一层**结构上够不着**——实测漏过一个（靠残留探针捡回来）。别把「残留 0 条」读成「人名都换干净了」。⚠ 2026-09-26 收窄：**Design 放行面已确定性闭合**（`R-5.1`：放行字面必须落在 Characters 登记面内，源侧 canonical 也必须是已登记 surface，`R-2.8`）⇒ 「获准输出的称谓没换干净」这一子类已有机械闸；本 B 只保留人物表本身漏收角色那一段 |
 | **B-22** | 新名的质量 | 时代感与雅俗没有确定性判据。**现役闸门就是「人定稿」那一步**，这一点不会变。同理开篇文案的定稿 |
 | **B-23** | 提不出表面探针的事实 | 新链诚实地把这类事实语义留在未评披露（`R-7.6`），确定性层没有第二把语义尺子证明它是否落地。这不是“查过没事”。同场的 verbatim / keep_value / must_appear 只能守各自材料维度，不能替代事实语义；代词化又已实测会让专名探针假阳。⇒ 先用真书盲读标定，不凭手感开自动阈值 |
 
@@ -599,10 +607,10 @@ reasoning 已含在 completion 中时不再累加。
 |---|---|
 | 非正文剔除（`stage0`，**13 条现役**） | R-0 |
 | 分章（`stage1`，**9 条现役**） | R-1 |
-| 源语义与名称结构（`stage2`，**8 条现役**） | R-2、R-3 |
-| 目标故事与确定性编译（`stage4`，**17 条现役**） | R-5、R-6（含 Guard M1–M6） |
+| 源语义与名称结构（`stage2`，**10 条现役**） | R-2、R-3 |
+| 目标故事与确定性编译（`stage4`，**18 条现役**） | R-5、R-6（含 Guard M1–M6） |
 | 按章正文与 Hook（`stage5`，**8 条现役**） | R-7、R-8 |
-| 命名与交付（`stage7`，**7 条现役**） | R-10 |
+| 命名与交付（`stage7`，**8 条现役**） | R-10 |
 
 `tests/test_coverage.py` 校验双向关联、逐节精确条目数、逐层计数及无遗漏；structural/carrier 的
 实现归属仍由对应 R 行点名，不能因没有注册 Rule 就称它没有任何校验。人审和真正盲区分别明示，B 不冒充测试。

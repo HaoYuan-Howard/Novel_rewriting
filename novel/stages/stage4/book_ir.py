@@ -52,23 +52,27 @@ def allocate_chapter_budgets(graph: BodyDesign, total_budget: int) -> dict[int, 
 
 
 def _release_schedule(graph: BodyDesign) -> tuple[ReleaseScheduleEntry, ...]:
-    """称谓释放导航：每人物每个称谓面的最早可用章（initial 即第 1 章）。"""
-    first: dict[str, dict[str, int]] = {}
+    """称谓释放导航：每个（人物, 实际释放章）一条，按（章, 人物）排序。
+
+    同一人物在不同章释放的面分成多条：写手按章拿到的材料必须能回答「这一章
+    哪些面已放开」，按人物取最早章会把后章才放开的称谓提前暴露给前章（F7e
+    评估实证：Design 把 canonical 当作身份名交给写手，导航却显示首章即全开）。
+    形状不变——仍由 `body_checks.chapter_surface_releases` 逐章对账。
+    """
+    by_chapter: dict[int, dict[str, set[str]]] = {}
     for intro in graph.initial_surfaces:
-        for surface in intro.surfaces:
-            first.setdefault(intro.char_id, {}).setdefault(surface, 1)
+        by_chapter.setdefault(1, {}).setdefault(intro.char_id, set()).update(intro.surfaces)
     chapter_of = {sid: ch.chapter_ordinal for ch in graph.chapters for sid in ch.scene_ids}
     for scene in graph.scenes:
         chapter = chapter_of[scene.scene_id]
         for beat in scene.beats:
             for intro in beat.surface_introductions:
-                for surface in intro.surfaces:
-                    first.setdefault(intro.char_id, {}).setdefault(surface, chapter)
-    return tuple(sorted(
-        (ReleaseScheduleEntry(char_id=cid, surfaces=tuple(sorted(by_surface)),
-                              from_chapter=min(by_surface.values()))
-         for cid, by_surface in first.items()),
-        key=lambda e: e.char_id))
+                by_chapter.setdefault(chapter, {}).setdefault(
+                    intro.char_id, set()).update(intro.surfaces)
+    return tuple(
+        ReleaseScheduleEntry(char_id=cid, surfaces=tuple(sorted(surfaces)), from_chapter=chapter)
+        for chapter in sorted(by_chapter)
+        for cid, surfaces in sorted(by_chapter[chapter].items()))
 
 
 def _scene_line(graph: BodyDesign, scene_id: str) -> str:

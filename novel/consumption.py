@@ -20,7 +20,7 @@ import re
 from typing import Any, Callable, Final, Mapping
 
 from contracts.artifacts import (
-    STAGE0_CLEAN_TEXT, STAGE0_REVISIONS, STAGE1_MAIN_TEXT,
+    STAGE0_CLEAN_TEXT, STAGE0_REVISIONS, STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT,
     STR06_STAGE2_BLUEPRINTS, STR06_STAGE2_BOOK_EXTRACTION,
     STR06_STAGE2_CHARACTERS, STR06_PRESERVE_CHECKPOINT,
     STR06_RECONSTRUCTION_BRIEF, STR06_SEMANTIC_BINDING,
@@ -49,6 +49,15 @@ def stage2_main_text(data: object) -> object:
         (row.get('chapter_ordinal'), row.get('text'))
         for row in data if isinstance(row, dict)
     ]
+
+
+def stage2_hook_copy(data: object) -> object:
+    """Stage2 源抽取与名称结构消费章前文字（源引子）正文。
+
+    Stage6 退役后 hook_copy 的唯一消费者是 Stage2.source（质量改进批次 C）：
+    切成 e00 证据段进书级调用与第 1 章抽取，并参与 names 的字面校验。
+    """
+    return _hook_text(data)
 
 
 def character_knowledge_reference(data: object) -> object:
@@ -482,10 +491,12 @@ CONSUMED_PROJECTIONS: Final[dict[str, dict[str, Projection]]] = {
     # ── STR-06 新链（F8a 激活）──
     'str06.stage2.source': {
         STAGE1_MAIN_TEXT: stage2_main_text,
+        STAGE1_HOOK_COPY: stage2_hook_copy,
     },
     'str06.stage2.names': {
         STR06_STAGE2_BOOK_EXTRACTION: artifact_payload,
         STAGE1_MAIN_TEXT: stage2_main_text,
+        STAGE1_HOOK_COPY: stage2_hook_copy,
     },
     'str06.stage4.preserve': {
         STR06_STAGE2_BOOK_EXTRACTION: artifact_payload,

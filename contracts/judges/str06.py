@@ -56,6 +56,10 @@ _FIX_ASSEMBLE = ('str06.stage7.assemble',)
 # ── Stage2 源语义 ────────────────────────────────────────────────────────────
 _hard('source_book_extraction', 'stage2',
       'book 级源抽取编译闭合（CharactersCore 无未知键、无悬空引用）', 'R-2.1')
+_hard('source_canonical_surface', 'stage2',
+      'canonical 逐字等于该人物某个已登记 surface（称谓闭合的 wire 闸）', 'R-2.8')
+_hard('source_identity_covers_hook_copy', 'stage2',
+      '源身份覆盖 main_text＋hook_copy 两份字节；只改引子即拒复用旧购买', 'R-2.9')
 _hard('source_chapter_dense_ordinals', 'stage2',
       '源章数组阅读序 1..N 密集且非空', 'R-2.2')
 _hard('source_chapter_blueprint', 'stage2',
@@ -73,6 +77,8 @@ _metric('source_fold_events', 'stage2', 'fold 事件计数与章分布读数', '
 # ── Stage4 目标故事与确定性编译 ──────────────────────────────────────────────
 _hard('body_design_compile', 'stage4',
       'BodyDesign 编译闭合（场景、拍、章任务与约束合法）', 'R-5.1')
+_hard('design_surface_release_closure', 'stage4',
+      'Design 放行面闭合在 Characters 登记面内（未登记字面不得释放）', 'R-5.1')
 _hard('chapter_plan_shape', 'stage4',
       '目标章数等于源章数、章序 1..N 连续非空；允许跨章重构', 'R-5.2')
 _hard('length_budget_conserved', 'stage4',
@@ -143,6 +149,9 @@ _hard('delivery_manifest', 'stage7',
       fix=_FIX_ASSEMBLE)
 _hard('delivery_replayable', 'stage7',
       '同输入交付字节一致（确定性重放）', 'R-10.5', fix=_FIX_ASSEMBLE)
+_hard('delivery_chapter_markers', 'stage7',
+      '成书按阅读序逐章加「第N章」，交付身份对分章敏感', 'R-10.10',
+      fix=_FIX_ASSEMBLE)
 _unver('naming_quality_unver', 'stage7',
        '新名的阅读质量未经语义评审，保持未评披露', 'R-10.6', disclosable_unver=True)
 _metric('book_length_deviation', 'stage7',

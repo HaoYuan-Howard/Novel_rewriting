@@ -18,7 +18,10 @@ import pytest
 from tests.hard_cases import CASES
 
 _ROOT = Path(__file__).resolve().parent
-_STAGES = ('stage4', 'stage5', 'stage7')
+#: 质量改进批次（2026-09-26）起 stage2 进扫描面：该层新增了 canonical 称谓闭合与
+#: hook_copy 源身份两条 HARD，反例必须落在本表或 str06 套件里——stage2 此前不在
+#: 扫描面内，那六条既有 HARD 的同批红例一并补齐（不许只有新判据有反例）。
+_STAGES = ('stage2', 'stage4', 'stage5', 'stage7')
 
 
 def _hard_rules() -> dict[str, str]:

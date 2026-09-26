@@ -31,7 +31,7 @@ Design → Bind → Compile/Context；字段变化不接入现役注册表，正
 |---|---|
 | Brief | `requirements: BriefRequirement[]` 无损保留所有 kind、must、statement、satisfaction；确定性不透明 ID 排序，依赖闭合；无源坐标或源数组顺序 |
 | Binding | 携带采用的完整 `obligations`；每条单一 `beat_ref` 最终验收拍，可有严格较早的 `supporting_beat_refs`；unbound 必保阻止编译，但义务不删除 |
-| Design | 必填 `initial_state` 与每场 `state_reads`；`TargetDelta` 显式 domain/key/subjects/holder/op/value/scope/knowledge_mode；称谓由 initial_surfaces 和逐拍 surface_introductions 释放 |
+| Design | 必填 `initial_state` 与每场 `state_reads`；`TargetDelta` 显式 domain/key/subjects/holder/op/value/scope/knowledge_mode；称谓由 initial_surfaces 和逐拍 surface_introductions 释放，且只能释放 Characters 登记过的 surface（称谓闭合） |
 | 状态 | character 一个对象，relation 两个有序对象，knowledge 有真实 holder 与 known/suspected/heard 模式；set/unset/unknown/未建立分离；scene 覆盖退出后恢复 book 底值 |
 | Compile | 只消费 D/G，初始态来自 D，义务来自 G；检查完整分母、真实拍、前置与支撑拍序、DAG；实际状态读取亦生成依赖边；集合排序固定 |
 | Context | IR 携带完整义务与满足条件；WriterBrief 携带实质要求、POV、avoid、逐拍提示、局部 entry、明确前场支撑；不累计复制整书历史义务 |
@@ -60,12 +60,12 @@ RC2 的人工语义修订是显式外部输入，不是 compiler 自然语言猜
 
 | 模块 | 承载 | 关键不变量（构造期表达） |
 |---|---|---|
-| `policy.py` | `PreservationPolicy`（版本化策略）、`PreserveKind` 闭集 | 类别集变化必须升版；执行身份不进 Policy |
+| `policy.py` | `PreservationPolicy`（版本化策略）、`PreserveKind` 闭集 | 类别集或判据变化必须升版（v2＝statement 按 kind 分列、satisfaction 写「保住作用必须成立什么」、must_preserve 反事实判据）；执行身份不进 Policy |
 | `grounding.py` | `SourceObligation` / `PreserveCheckpoint` / `ReconstructionBrief` / `IdentityProjection` / `OutputConstraints` / `SemanticBinding` | 必保义务必有非空 `satisfaction`；checkpoint 无 Design/Bind 字段；Brief 无源章/源拍/叙述顺序/证据定位字段；Binding 是完整 snapshot，entries 与 unbound 不交集 |
 | `design.py` | `BodyDesign`／`PresentationGraph(BodyDesign)+hook`（RC4：`SceneDriver`/`TargetBeat`/`TargetDelta`/`SceneDelivery`/`ChapterAssignment`） | source-blind（无 source_ref 族字段且 forbid extra）；章号连续 1..N、场景全覆盖、每章非空；hook 必填且 graph 内引用闭合；每场 `realization_brief` 与每章 `purpose` 必填非空（缺省拒读） |
 | `hook.py` | `HookDesign`／`HookContext`／`HookReceipt`／`HookConstraints`（F6，形状未变） | 起笔事实只引用已建立的目标事实；first 恰一人且非 narrator；材料唯一呈现语义口是 presentation；回执 semantic 恒 unverified |
 | `naming.py` | `NameMapV5`／`NameAssignment`／`TargetName`（F6） | name 与 keep_reason 恰好一个；full 由 compiler 拼接；char_ref 唯一 |
-| `source.py` | Characters v4（`CharactersCore` + `name_structure` RC 段）／Blueprints v12（F6 扩） | core view 与 RC2 同形（Preserve sha 不变）；名称结构 surface 恰好覆盖、模板渲染逐字相等、纯称谓不含姓名字面、同姓亲属共享 family_id |
+| `source.py` | Characters v4（`CharactersCore` + `name_structure` RC 段）／Blueprints v12（F6 扩） | core view 与 RC2 同形（Preserve sha 不变）；名称结构 surface 恰好覆盖、模板渲染逐字相等、纯称谓不含姓名字面、同姓亲属共享 family_id；canonical 逐字等于某个已登记 surface |
 | `execution.py` | `ExecutionPlan`（establishment/constraint/dependency/reinforcement）与 `ExecutionSlice` | 必保只落 establishment/constraint；`Reinforcement` 无 obligation_id（0..N 不稀释必保）；依赖边禁自指 |
 | `context.py` | `WriterContext` 双视图（`VerificationIR` + `WriterBrief`，RC4 职责重划） | IR 带 `beats` 逐拍定位与 `prohibitions`（从 delivery.avoid 投影）；Brief 只承载呈现（`realization_brief` 原样投影＋driver 摘要＋POV/voice/hints），事实清单不进 Brief；两视图 scene_id 与 `execution_slice_sha256` 同源；attempt/审计字段不进静态 IR |
 | `book_ir.py` | `WriterBookIR`＝`BookBrief`＋`ChapterIR[]`（F5） | BookBrief 是全书约束与确定性导航（不调 LLM 总结、不取 POV 众数、不补造统一文风；禁止项只从已有明确限制及释放位置投影）；ChapterIR 携带章目的、确定性章预算与场景双视图；章号连续、导航与章 IR 一致 |
@@ -140,11 +140,14 @@ BodyDesign 是正式派生产物（`stage2/compiled/book_extraction.json`、
 复检用 `--check-only`／`--node`，不新造 check 节点。候选产物落盘保序（同正式
 `_render`）：盘上字符典序即 wire 序，prompt 与已购请求身份按字节复算。
 Stage2 输入已改读正式 Stage1 章数组（F7c 第一步）：`--book-sid` 经正式契约读
-`stage1/main_text.json`（MainText，阅读序密集校验），源输入身份是该产物盘上字节
-SHA-256 并写入 workflow 记录；目标章数等于源章数由模型保证，书级正文篇幅从源章总
+`stage1/main_text.json`（MainText，阅读序密集校验）与 `stage1/hook_copy.json`
+（章前文字；质量改进批次 C 起它是 Stage2.source 的正式输入，切成 `e00_*` 证据段
+进书级调用与第 1 章抽取），源输入身份是两份盘上字节的组合摘要并写入 workflow
+记录；目标章数等于源章数由模型保证，书级正文篇幅从源章总
 字数向上取整确定性派生（`derive_total_length_budget`），Hook 长度和章篇幅带的正式
 来源是 `STR06_RUNTIME_CONFIG`（进契约身份，与付费调用额度分开），输入或配置变化后
-旧根的采用结论按设计拒绝复用。Stage1 hook_copy 新链无消费者，随旧链于 F8 退役。
+旧根的采用结论按设计拒绝复用。Stage1 hook_copy 的唯一消费者是 Stage2.source；
+Hook 写手仍不读源引子。
 恢复职责（Binding INVALID＋typed witness、owner 停止、同指纹熔断、binding-only 精确
 补尾、public_state_ref 三反例、analyze receipt／draft repair 审计、name_distinctiveness
 消费接管）属 F7c 余项。子批次、验收、红账及删除条件只在 REQUIREMENTS 维护。
@@ -201,7 +204,8 @@ event/delta/释放位置定位）、信息释放位置及明确禁止事项（�
 **全书静态 IR。**`WriterBookIR = BookBrief + ChapterIR[]`，由 compiler 在任何
 正文购买前从（BodyDesign, ExecutionPlan, SemanticBinding）确定性编译并唯一落盘
 `stage4/ir/writer_book_ir.json`。`BookBrief` 汇集已有约束与按阅读序的导航（章
-目的、场景一行摘要、称谓释放位置表）；不调用 LLM 总结、不取场景 POV 众数、
+目的、场景一行摘要、称谓释放位置表——按（人物, 实际释放章）分组，后章才放开的面不得
+提前显示）；不调用 LLM 总结、不取场景 POV 众数、
 不补造统一文风；额外禁止项只从已有明确限制及释放位置投影，不从未来剧情猜政策。
 `ChapterIR` 携带章目的、章预算（按 Design 场景权重 largest-remainder 整数分配，
 总和恰等于书级目标，不对照同号源章长度）与本章场景双视图。Stage4 只生成静态
@@ -212,7 +216,9 @@ event/delta/释放位置定位）、信息释放位置及明确禁止事项（�
 renderer 只排序、分组、引用解析和格式化，不压缩语义、不改写 brief、不新增
 模型调用。正文请求按六层组织：【整书写作约定与自由度】（版本化 Writer 协议：
 entry 是起笔已成立状态、effects 是结束需成立结果、义务必须实际兑现、约束内
-创造自由、局部细节不得产生新的关键因果/知情/后续依赖）→【全书规划参考：作者
+创造自由、局部细节不得产生新的关键因果/知情/后续依赖；v2 起另立两条显式边界——
+会改变时间线/身份/前史/后续因果的设定输入没给就不新增、已给保持原精度，尚未
+揭示的事实不得当作已确认信息叙述而线索/误导/猜测照常演出）→【全书规划参考：作者
 知道，不等于人物或读者已知】→【完整已提交前文】→【本章目的】→【本章各场景：
 导演说明＋事实约束】→【本章交付要求】。完整 `WriterBookIR` 仍进入请求；当前章
 材料集中展示，其余章完整场景 IR 标为规划参考，同一内容不重复展开。全部实质
@@ -254,7 +260,8 @@ Writer 负责句法、措辞、对白、局部动作、节奏、意象和语气�
 由 Hook Design 保存必要的正式选择（RC3 落点 `contracts/schema/hook.py`）：
 `pov{person,focalizers}`、`opening_facts[{ref,address,audience}]`（只引用 init 或
 目标拍上真实建立的 StateAddress，按 world/pov/reader 分获准面）、
-`materials[{beat_ref,withheld,presentation?}]`（呈现序，允许乱序冷开）、`concealed`、
+`materials[{beat_ref,withheld,presentation?}]`（呈现序，允许乱序冷开；默认 2–4 份
+材料、一个核心冲突、留一个未兑现的问题——随篇幅调整的指引，不设机械闸）、`concealed`、
 `surface_releases`、`forbidden_reveals[{ref,address?}]`、两份 brief。具体字段经 F6
 反例定版。compiler 只解析引用、投影与格式化，不解释自然语言 brief 补出缺失选择。
 Body/Hook 仍由一份 graph 承载（`PresentationGraph(BodyDesign)+hook` 必填，
@@ -268,7 +275,9 @@ world/pov 起笔事实早于首个材料、reader 不晚于材料视界且不在
 HookContext（`stage4/context/hook/hook.json`，Derived）包含 POV、按 audience 分组
 的起笔事实、按设计序排列的材料投影（presentation，或 event＋未 withheld 的 set
 delta）、禁止揭示、两份 brief、长度边界、可用称谓与 `withheld_literals`（未释放的
-专名字面，由名称结构 ∩ 全部人物专名/带名 surface 推导，不写死人名）。起笔事实不是
+专名字面，由名称结构 ∩ 全部人物专名/带名 surface 推导，不写死人名）。事实渲染保留
+认知维度：domain、holder 与 knowledge_mode（知道/怀疑/听说）随事实文本进入阅读面，
+读者域标明「读者视角成立，人物未必知晓」——写手据此判断呈现边界。起笔事实不是
 镜头描述，也不自动等于全书 T₀；冷开时区分世界已成立、POV 已知、读者获准知道。
 正文 reveal 位置和 Binding 不能单独决定 Hook 披露边界，单个 beat 含须隐藏侧面时由
 Design 显式 withheld 或 presentation。POV 不按正文多数票猜测，不强制第一人称；
@@ -332,8 +341,9 @@ owner，不能按替换顺序选 owner；共享同姓本身不是冲突。同 fa
 Assembly（`novel/stages/stage7/assembly.py`）body_access 按 accepted/rejected/missing/
 unknown 四态判定；无 accepted body 时显式 not_ready（F6 只落
 `runtime/delivery/hook_renamed.txt` 与 runtime 组装报告，`stage7/final/` 不落产物）；
-交付身份由（body hash, hook prose hash, 替换表, kept）派生，与 Stage5/Hook 回执分离，
-换 NameMap 只变交付身份。
+交付身份由（逐章 (chapter_ordinal, prose_sha256), hook prose hash, 替换表, kept,
+组装格式版本）派生，与 Stage5/Hook 回执分离，换 NameMap 只变交付身份；分章不同
+（拼接相同也算）即不同交付。
 
 Stage5 receipt 绑定改名前正文；Stage7 用有效 NameMap、机械接受的 Hook 与 accepted
 body 替换组装，另行绑定交付身份。同一输入字节、映射和组装契约产生相同交付字节；

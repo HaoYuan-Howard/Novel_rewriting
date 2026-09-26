@@ -9,6 +9,12 @@ ApplyNames 是替换的唯一应用者：章回执链核对 → 单遍替换 →
 manifest 最后提交。Stage7 不改写 Stage5 任何字节；交付可确定性重放，同输入同字节。
 NameMap 是交付变换契约，接受正文、回执与已购证据独立保护。
 
+成书按阅读序逐章加「第N章」一行（章号由系统添加；写手协议据此约定不写章号与标题），
+引子放最前、不加标题。交付身份对**分章**敏感：有序的 `(chapter_ordinal,
+prose_sha256)`、Hook 成文 hash、改名映射与保留字面、`ASSEMBLY_FORMAT_VERSION`
+共同派生——拼接相同但分章不同的两份书是不同的交付。章回执与前文链仍绑定不含章号的
+`prior_body_text`。
+
 ## 现役产物
 
 本层产物**都是 schema v1**（三级路径是切换时新建的命名空间；形状破坏史由模型
@@ -39,8 +45,9 @@ kept 含映射键不误报。换 NameMap 只影响交付，Hook 窄改不使无�
 | `assembly_chapter_chain` | hard | 章回执链核对（IR 身份＋前文链＋正文 hash） |
 | `delivery_manifest` | hard | TXT 先落盘、manifest 最后提交、hash 逐字一致 |
 | `delivery_replayable` | hard | 同输入交付字节一致（零新购重放） |
+| `delivery_chapter_markers` | hard | 成书按阅读序加「第N章」、交付身份对分章敏感 |
 | `naming_quality_unver` | unver | 新名的阅读质量未经语义评审 |
 | `book_length_deviation` | metric | 全书相对书级目标的偏差读数（±10%） |
 
-当前注册表共 **7 条**：**5 hard、1 metric、1 unver**。唯一注册表为
+当前注册表共 **8 条**：**6 hard、1 metric、1 unver**。唯一注册表为
 `contracts/judges/str06.py`（F8c 起分流至本层判据模块）。

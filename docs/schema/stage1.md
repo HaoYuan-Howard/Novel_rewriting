@@ -38,8 +38,11 @@ stage1/hook_copy.json  {text}
 |---|---|---|---|---|
 | `text` | `str` | 是 | 去空白后非空；与当前 clean 从坐标 0 到第一个正文章标记之前的切片逐字相等 | **三源** |
 
-它被 Stage6 文案重写与即时形态度量、Stage7 组装消费。Stage6 页的
-`source_hook_text` 由 Stage6 视图同响应携带，前端不再为这一格额外请求 Stage1。
+它被 Stage2 源抽取消费：切成 `e00_*` 章前证据段进书级调用与第 1 章抽取，按信息职责
+分流（开场前已成立的状态/关系/知情 → `initial_state`；实际发生的开场行动 → 第 1 章
+beats；与正文重复的事件以正文为准；预告/概括不进 canonical；判断不了弃权），并与
+`main_text.json` 共同构成候选链的组合源身份（`docs/BACKEND_CONTRACT.md` `R-2.9`）——
+只改引子也换源身份，旧候选根不得沿用旧购买。Stage6 页与旧链消费者已随 Stage6 整层退役。
 
 ---
 

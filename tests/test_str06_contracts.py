@@ -358,7 +358,7 @@ def _chapter_receipt(**over) -> dict:
     base = dict(
         chapter_ordinal=1, book_ir_sha256=H64, prior_text_sha256=H64,
         prose_sha256=H64, request_identity='req-1',
-        protocol_version='str06-body-protocol-v1', renderer_version='str06-render-v1',
+        protocol_version='str06-body-protocol-v2', renderer_version='str06-render-v1',
         validator_version='str06-body-mechanical-v1', status='accepted',
         mechanical_checks=('non_empty', 'length_band'), length=_length())
     base.update(over)

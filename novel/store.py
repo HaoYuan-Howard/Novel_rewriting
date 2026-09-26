@@ -1768,9 +1768,9 @@ class ArtifactStore:
     # 【为什么需要这座桥】正式读路覆盖不到候选链盘面，两处语义差：
     #   ① 候选产物不带版本信封（`Str06Repository.write` 只落逻辑载荷＋内联
     #      `_provenance`）⇒ `decode_artifact` 一律 `ArtifactVersionError`；
-    #   ② 候选链的根输入是**正式 Stage1 章数组**（F7c 起 `--book-sid` 生产路径），
-    #      `root_clean_sha1` 记那一份产物的 SHA-1，而正式 store 只认
-    #      stage0/clean_text.txt。
+    #   ② 候选链的根输入是**正式 Stage1 章数组＋章前文字**（F7c 起 `--book-sid`
+    #      生产路径；C 批起 hook_copy 进 Stage2.source），`root_clean_sha1` 记那两份
+    #      字节的组合 SHA-1，而正式 store 只认 stage0/clean_text.txt。
     # 后果不是报错而是静默：一本跑完的书在完成度上恒 broken/stale，operator 与
     # 队列据此把每个节点判成 REDO/UNKNOWN 并关闭式停住——真实产品入口的全链因此
     # 跑不通（F8d 实测）。
@@ -1814,14 +1814,15 @@ class ArtifactStore:
     def candidate_freshness(self, rel: str) -> FreshnessReport:
         """候选链产物的新鲜度：root 边对照当前源身份，inputs 走同一把尺子。
 
-        【两种 root 身份，两把尺子】候选链的**规范**源身份是正式 Stage1 章数组
-        （F7c 起 `--book-sid` 生产路径）：产物记的 root 是那一份时，root 边就是
-        完整输入声明——源抽取一类节点的唯一输入就是它，`inputs` 为空也认当前
-        （`Str06Repository._refuse_stale` 同样只认这把尺子）。产物记的是
-        stage0/clean_text.txt（正式 store 写盘的候选路径，存量夹具与正式 producer
-        都走它）时回落正式尺子：root 边对照 clean_text、inputs 照
-        `freshness_of_inputs` 判——**空 inputs 保持 unknown**，写盘闸的 freshness
-        后置条件一个比特都不放宽。
+        【两种 root 身份，两把尺子】候选链的**规范**源身份是正式 Stage1 章数组＋
+        章前文字（F7c 起 `--book-sid` 生产路径；C 批起 hook_copy 也是 Stage2.source
+        的正式输入，root 身份是两份字节的组合摘要，见 `_stage1_root_identity`）：
+        产物记的 root 是那一份时，root 边就是完整输入声明——源抽取一类节点的唯一
+        输入就是它，`inputs` 为空也认当前（`Str06Repository._refuse_stale` 同样只认
+        这把尺子）。产物记的是 stage0/clean_text.txt（正式 store 写盘的候选路径，
+        存量夹具与正式 producer 都走它）时回落正式尺子：root 边对照 clean_text、
+        inputs 照 `freshness_of_inputs` 判——**空 inputs 保持 unknown**，写盘闸的
+        freshness 后置条件一个比特都不放宽。
         """
         try:
             payload = self.candidate_payload(rel)
@@ -1844,7 +1845,7 @@ class ArtifactStore:
             return FreshnessReport('unknown', 'no_provenance')
         recorded = block.get('inputs')
         stage1_edge = self._content_edge(
-            STAGE1_MAIN_TEXT, root_was, self._content_sha1_or_none(STAGE1_MAIN_TEXT))
+            STAGE1_MAIN_TEXT, root_was, self._stage1_root_identity())
         if stage1_edge.state != 'fresh':
             clean_edge = self._content_edge(
                 STAGE0_CLEAN_TEXT, root_was,
@@ -2086,7 +2087,31 @@ class ArtifactStore:
         try:
             return prov.content_sha1(_read_file_bytes(p))
         except OSError as e:
-            raise ArtifactUnreadable(f'{self.ctx.node}: 读不了 {rel} 的内容指纹：{e!r}') from e
+            raise ArtifactUnreadable(f'{self.ctx.node}: 读不了 {rel} 的内容指纹：{e!r}')
+
+    def _stage1_root_identity(self) -> str | None:
+        """候选链规范源身份：Stage1 **main_text＋hook_copy** 两份字节的组合 SHA-1。
+
+        章前文字（源引子）自质量改进批次 C 起是 Stage2.source 的正式输入，
+        `chain.load_stage1_chapters` 的 `root_sha1` 随之覆盖两份字节；完成度面的
+        root 边必须用同一把尺子，否则每个候选节点都会因为「引子也参与输入」被误判
+        成 stale（F8d 桥的实测形状）。
+
+        ⚠ 批次 C 之前落的候选根只记 main_text 一份 SHA-1：那种根在新代码下连
+        workflow 复校都过不了（源身份不匹配，见
+        `init_or_resume_candidate_workflow`）⇒ 这里判 stale 是如实答案，
+        不是误报；续跑按 REQUIREMENTS 用新独立根。
+        """
+        main = self.path(STAGE1_MAIN_TEXT)
+        if not main.is_file():
+            return None
+        hook = self.path(STAGE1_HOOK_COPY)
+        hook_raw = _read_file_bytes(hook) if hook.is_file() else b''
+        try:
+            return prov.combined_content_sha1(_read_file_bytes(main), hook_raw)
+        except OSError as e:
+            raise ArtifactUnreadable(
+                f'{self.ctx.node}: 读不了 Stage1 源身份：{e!r}') from e
 
     @staticmethod
     def _content_edge(key: str, recorded: str, now: str | None) -> prov.EdgeVerdict:

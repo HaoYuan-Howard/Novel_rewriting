@@ -12,6 +12,13 @@ Preserve 只消费 SourceTruth、版本化 Policy 和执行配置；不接收 De
 `PreserveKind` 闭集是初版（试点三轮的保存类别归纳）；F1 反例标定后允许增删，
 但**必须升 `version`**——类别集合的变化会改变 Preserve 结果，旧 checkpoint 的
 身份绑在旧版 Policy 上，不能被静默重解释。
+
+【版本沿革】
+v1（RC 初版）：闭集与 `PRESERVE_RULES` 一行式字段表。
+v2（2026-09-26 质量改进批次 B2）：prompt 规则重写——七类 kind 的定义与保存对象
+按 kind 分列、satisfaction 写「保住同样作用必须成立什么」、must_preserve 改用
+反事实判据、同一事实不跨 kind 重复。类别集合不变，但判据变化会改变 Preserve
+结果，故升版；旧 checkpoint 不重解释。
 """
 from __future__ import annotations
 

@@ -268,6 +268,44 @@ def test_partial_disclosure_single_beat():
     assert material.deltas == ()  # 该拍唯一 delta 被 withheld：单拍部分披露
 
 
+# ───────────────────────── 事实渲染保留认知维度（A2） ─────────────────────────
+
+def _rendered_deltas(*, knowledge_mode: str, holder: str):
+    """同一拍、同一事实，只改认知模式／持有人：返回 HookContext 渲染出的事实文本。"""
+    wire = _body_wire()
+    wire['scenes'][0]['beats'][1]['target_delta'][0]['knowledge_mode'] = knowledge_mode
+    wire['scenes'][0]['beats'][1]['target_delta'][0]['holder'] = holder
+    body, errors = assemble_body_design(wire, known_char_ids={'fu_jun', 'yun_niang'})
+    assert body is not None and not errors, errors
+    hook_wire = _hook_wire()
+    hook_wire['concealed'] = []
+    hook_wire['materials'] = [{'beat_ref': 's01#bt2', 'withheld': [], 'presentation': None}]
+    hook_wire['opening_facts'] = [hook_wire['opening_facts'][0]]
+    hook, errors = assemble_hook_design(hook_wire, body=body,
+                                        known_char_ids={'fu_jun', 'yun_niang'},
+                                        name_projection=_projection())
+    assert hook is not None and not errors, errors
+    graph = publish_graph(body, hook)
+    context, errors = compile_hook_context(
+        graph, _projection(), HookConstraints(target_chars=280, hard_max_chars=360))
+    assert context is not None and not errors, errors
+    return context.materials[0].deltas
+
+
+def test_fact_rendering_keeps_holder_and_knowledge_mode():
+    """知道／怀疑／听说与持有人不同必须渲染后可区分：不得压成同一个事实句。"""
+    known = _rendered_deltas(knowledge_mode='known', holder='yun_niang')
+    suspected = _rendered_deltas(knowledge_mode='suspected', holder='fu_jun')
+    heard = _rendered_deltas(knowledge_mode='heard', holder='yun_niang')
+    assert len(known) == len(suspected) == len(heard) == 1
+    assert '芸娘知道' in known[0] and 'debt_agreement' in known[0]
+    assert '怀疑' in suspected[0] and '知道' not in suspected[0]
+    assert '听说' in heard[0]
+    assert len({known[0], suspected[0], heard[0]}) == 3, '认知维度丢失：三种模式渲染相同'
+    # domain 也进阅读面：knowledge 域与人物域可区分
+    assert '[知情]' in known[0]
+
+
 # ───────────────────────── 反例：引用／混入／时序 ─────────────────────────
 
 def _assemble(wire, body=None):

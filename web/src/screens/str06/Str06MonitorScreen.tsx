@@ -208,7 +208,7 @@ function IrPane({ ir }: { ir: NonNullable<Monitor['ir']['data']> }) {
             <SectionTitle note={'未到位置不得使用对应字面'}>称谓释放位置</SectionTitle>
             <ul className={'m-0 flex list-none flex-col gap-2 p-0 text-tag text-ink-2'}>
               {ir.release_schedule.map((entry) => (
-                <li key={String(entry.char_id)}>
+                <li key={`${String(entry.char_id)}@${String(entry.from_chapter)}`}>
                   <Mono className={'text-ink-4'}>{String(entry.char_id)}</Mono>{' '}
                   {(entry.surfaces as string[]).join('、')}（第{String(entry.from_chapter)}章起）
                 </li>

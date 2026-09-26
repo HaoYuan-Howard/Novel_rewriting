@@ -356,6 +356,60 @@ def test_surface_replacements_long_name_and_family_forms():
     assert [c.literal for c in claims] == ['皇甫珩', '陈砚', '陈家', '云溪居士']
 
 
+def test_released_surfaces_close_over_the_replacement_table():
+    """贯穿（A3）：Design 放行面闭合在登记面内 ⇒ 每个获准输出称谓都换成新名。
+
+    名称结构 → Design 放行面 → NameMap → 替换表：把放行面写进一段正文后，
+    带名称谓零残留、逐一对上新名，且不出现旧姓配新名（陈砚 不得残存）。
+    """
+    from novel.stages.stage4.design import assemble_body_design
+    from novel.stages.stage7.naming import check_residual
+
+    chars = _chars()
+    name_map = _green_map(chars)
+    table, errors = compile_surface_replacements(chars, name_map)
+    assert not errors, errors
+    surface_owner = {s.surface: cid for cid, entry in chars.characters.items()
+                     for s in entry.surfaces}
+    released = ['皇甫珩', '皇甫公子', '陈砚', '陈松', '赵老大', '云溪居士', '夫人']
+    assert all(surface in surface_owner for surface in released), '放行面必须已登记'
+    # 生产端同一道闸：放行面取自登记面才编译得过（registered_surfaces）
+    registered = {cid: {s.surface for s in entry.surfaces}
+                  for cid, entry in chars.characters.items()}
+    design_wire = {
+        'initial_state': [],
+        'scenes': [{
+            'scene_id': 's01', 'state_reads': [],
+            'driver': {'focal_actor': 'huang_fu_heng', 'immediate_want': '见面',
+                       'opposition': '门第', 'turn': '通名'},
+            'realization_brief': '重心在称谓初现；从登门展开，在互通姓名处收束。',
+            'beats': [{'beat_id': 'bt1', 'event': '诸人相见', 'participants': ['huang_fu_heng'],
+                       'dramatic_intent': '登场', 'target_delta': [], 'delivery_hint': '',
+                       'surface_introductions': [
+                           {'char_id': surface_owner[s], 'surfaces': [s]} for s in released]}],
+            'delivery': {'pov': 'huang_fu_heng', 'voice': '平实', 'avoid': []}}],
+        'chapters': [{'chapter_ordinal': 1, 'purpose': '人物逐一登场', 'scene_ids': ['s01']}],
+        'chapter_weights': {'s01': 1.0},
+    }
+    body, errors = assemble_body_design(
+        design_wire, known_char_ids=set(chars.characters),
+        registered_surfaces=registered)
+    assert body is not None and not errors, errors
+
+    prose = '、'.join(released) + '同席。'
+    renamed, claims = apply_replacements(prose, table)
+    assert check_residual(renamed, table, claims, ()) == [], '获准输出的称谓必须全部换成新名'
+    for old, new in (('皇甫珩', '慕容珩'), ('皇甫公子', '慕容公子'),
+                     ('陈砚', '沈砚'), ('陈松', '沈松'), ('赵老大', '柳老大'),
+                     ('云溪居士', '白云先生')):
+        assert table[old] == new and new in renamed
+        assert old not in renamed, f'{old} 未换成本名'
+    assert '夫人' in renamed, '纯称谓不进替换表，原样保留'
+    # 旧姓配新名不得出现（家族新姓一致展开的并集之外）
+    for mixed in ('陈婉', '柳砚', '沈大'):
+        assert mixed not in renamed
+
+
 def test_same_surface_multiple_values_rejected_same_value_ok():
     from novel.stages.stage7.naming import _record
     # 同一源字面对应多个不同值：报错并列出 owner，不按替换顺序选
@@ -440,77 +494,127 @@ def _hook_receipt_dict(prose: str, context_sha: str, status: str = 'accepted') -
 
 def _ready_delivery():
     table = {'裴书远': '林书言'}
-    hook, body_text = '楔子：裴书远夜行。', '正文：裴书远到家。'
+    hook, chapter1 = '楔子：裴书远夜行。', '正文：裴书远到家。'
     context_sha = 'c' * 64
     receipt = _hook_receipt_dict(hook, context_sha)
-    access = chapter_access(['s01'], {'s01': {'status': 'accepted'}})
-    outcome = assemble_delivery(body_text=body_text, body=access, hook_prose=hook,
+    access = chapter_access([1], {1: {'status': 'accepted'}})
+    outcome = assemble_delivery(chapter_prose={1: chapter1}, body=access, hook_prose=hook,
                                 hook_receipt=receipt, hook_context_sha256=context_sha,
                                 replacements=table, kept_literals=())
-    return outcome, table, hook, body_text, context_sha, receipt, access
+    return outcome, table, hook, chapter1, context_sha, receipt, access
 
 
 def test_assembly_replay_is_byte_stable_and_identity_separated():
-    outcome, table, hook, body_text, context_sha, receipt, access = _ready_delivery()
+    outcome, table, hook, chapter1, context_sha, receipt, access = _ready_delivery()
     assert outcome.status == 'ready'
-    assert outcome.delivery_bytes.decode('utf-8') == '楔子：林书言夜行。\n\n正文：林书言到家。'
-    again = assemble_delivery(body_text=body_text, body=access, hook_prose=hook,
+    # 章标记由系统添加：引子在前不加标题，每章一行「第N章」加正文
+    assert outcome.delivery_bytes.decode('utf-8') == (
+        '楔子：林书言夜行。\n\n第1章\n正文：林书言到家。')
+    again = assemble_delivery(chapter_prose={1: chapter1}, body=access, hook_prose=hook,
                               hook_receipt=receipt, hook_context_sha256=context_sha,
                               replacements=table, kept_literals=())
     assert again.delivery_bytes == outcome.delivery_bytes
     assert again.delivery_identity == outcome.delivery_identity
     # 换 NameMap：交付身份变，但 Stage5/Hook 回执的输入原样（回执字段无交付材料）
     other = {'裴书远': '周书言'}
-    changed = assemble_delivery(body_text=body_text, body=access, hook_prose=hook,
+    changed = assemble_delivery(chapter_prose={1: chapter1}, body=access, hook_prose=hook,
                                 hook_receipt=receipt, hook_context_sha256=context_sha,
                                 replacements=other, kept_literals=())
     assert changed.delivery_identity != outcome.delivery_identity
     assert set(receipt) & {'name_map', 'delivery_identity'} == set()
 
 
+def test_delivery_identity_is_sensitive_to_chapter_split():
+    """分章进身份：拼接相同、分章不同 ⇒ 交付身份不同（A4）。"""
+    import hashlib
+
+    def digests(chapters):
+        return [f'{o}:{hashlib.sha256(t.encode("utf-8")).hexdigest()}'
+                for o, t in sorted(chapters.items())]
+
+    joined = '上半。下半。'
+    one = {1: joined}
+    two = {1: '上半。', 2: '下半。'}
+    hook_sha = hashlib.sha256(b'hook').hexdigest()
+    assert delivery_identity(
+        chapter_digests=digests(one), hook_prose_sha256=hook_sha,
+        replacements={}, kept_literals=()) != delivery_identity(
+        chapter_digests=digests(two), hook_prose_sha256=hook_sha,
+        replacements={}, kept_literals=())
+    # 章序也进身份：同两章文本、调换次序即不同交付
+    swapped = {1: '下半。', 2: '上半。'}
+    assert delivery_identity(
+        chapter_digests=digests(two), hook_prose_sha256=hook_sha,
+        replacements={}, kept_literals=()) != delivery_identity(
+        chapter_digests=digests(swapped), hook_prose_sha256=hook_sha,
+        replacements={}, kept_literals=())
+
+
 def test_assembly_not_ready_without_accepted_body():
     table = {'裴书远': '林书言'}
     hook, context_sha = '楔子。', 'c' * 64
     receipt = _hook_receipt_dict(hook, context_sha)
-    outcome = assemble_delivery(body_text=None, body=chapter_access([], {}),
+    outcome = assemble_delivery(chapter_prose=None, body=chapter_access([], {}),
                                 hook_prose=hook, hook_receipt=receipt,
                                 hook_context_sha256=context_sha,
                                 replacements=table, kept_literals=())
     assert outcome.status == 'not_ready'
     assert outcome.reason == 'body_not_implemented'
     assert outcome.delivery_bytes is None and outcome.delivery_identity is None
+    # 有章文本但回执不齐：同样 not_ready，且不制造成功状态
+    partial = assemble_delivery(chapter_prose={1: '正文。'}, body=chapter_access([], {}),
+                                hook_prose=hook, hook_receipt=receipt,
+                                hook_context_sha256=context_sha,
+                                replacements=table, kept_literals=())
+    assert partial.status == 'not_ready' and partial.reason.startswith('missing=')
+    # 章文本与已接受章不一致：显式不匹配，不静默按手头的字节组装
+    mismatch = assemble_delivery(chapter_prose={1: '正文。', 2: '第二章。'},
+                                 body=chapter_access([1], {1: {'status': 'accepted'}}),
+                                 hook_prose=hook, hook_receipt=receipt,
+                                 hook_context_sha256=context_sha,
+                                 replacements=table, kept_literals=())
+    assert mismatch.status == 'not_ready'
+    assert mismatch.reason.startswith('body_chapter_mismatch')
 
 
 def test_assembly_hook_receipt_binding_enforced():
     outcome, *_ = _ready_delivery()
     table = {'裴书远': '林书言'}
-    hook, body_text, context_sha, receipt, access = (
+    hook, chapter1, context_sha, receipt, access = (
         '楔子：裴书远夜行。', '正文：裴书远到家。', 'c' * 64,
         _hook_receipt_dict('楔子：裴书远夜行。', 'c' * 64),
-        chapter_access(['s01'], {'s01': {'status': 'accepted'}}))
-    wrong_ctx = assemble_delivery(body_text=body_text, body=access, hook_prose=hook,
+        chapter_access([1], {1: {'status': 'accepted'}}))
+    wrong_ctx = assemble_delivery(chapter_prose={1: chapter1}, body=access, hook_prose=hook,
                                   hook_receipt=receipt, hook_context_sha256='d' * 64,
                                   replacements=table, kept_literals=())
     assert wrong_ctx.status == 'not_ready' and wrong_ctx.reason == 'hook_context_mismatch'
     tampered_receipt = _hook_receipt_dict('别的成文', context_sha)
-    wrong_prose = assemble_delivery(body_text=body_text, body=access, hook_prose=hook,
+    wrong_prose = assemble_delivery(chapter_prose={1: chapter1}, body=access,
+                                    hook_prose=hook,
                                     hook_receipt=tampered_receipt,
                                     hook_context_sha256=context_sha,
                                     replacements=table, kept_literals=())
     assert wrong_prose.status == 'not_ready' and wrong_prose.reason == 'hook_prose_mismatch'
     rejected = assemble_delivery(
-        body_text=body_text, body=access, hook_prose=hook,
+        chapter_prose={1: chapter1}, body=access, hook_prose=hook,
         hook_receipt=_hook_receipt_dict(hook, context_sha, status='rejected'),
         hook_context_sha256=context_sha, replacements=table, kept_literals=())
     assert rejected.status == 'not_ready' and rejected.reason == 'hook_rejected'
 
 
 def test_delivery_identity_pure_function():
-    assert delivery_identity(body_sha256='a' * 64, hook_prose_sha256='b' * 64,
+    digests = ['1:' + 'a' * 64]
+    assert delivery_identity(chapter_digests=digests, hook_prose_sha256='b' * 64,
                              replacements={'x': 'y'}, kept_literals=('k',)) == \
-        delivery_identity(body_sha256='a' * 64, hook_prose_sha256='b' * 64,
+        delivery_identity(chapter_digests=digests, hook_prose_sha256='b' * 64,
                           replacements={'x': 'y'}, kept_literals=('k',))
-    assert delivery_identity(body_sha256='a' * 64, hook_prose_sha256='b' * 64,
+    assert delivery_identity(chapter_digests=digests, hook_prose_sha256='b' * 64,
                              replacements={'x': 'y'}, kept_literals=()) != \
-        delivery_identity(body_sha256='a' * 64, hook_prose_sha256='b' * 64,
+        delivery_identity(chapter_digests=digests, hook_prose_sha256='b' * 64,
                           replacements={'x': 'y'}, kept_literals=('k',))
+    # 组装格式版本进身份：换版即换身份（旧交付不会与新交付混为一份）
+    assert delivery_identity(chapter_digests=digests, hook_prose_sha256='b' * 64,
+                             replacements={}, kept_literals=()) != \
+        delivery_identity(chapter_digests=['2:' + 'a' * 64],
+                          hook_prose_sha256='b' * 64,
+                          replacements={}, kept_literals=())

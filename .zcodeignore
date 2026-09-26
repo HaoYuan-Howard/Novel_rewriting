@@ -1,0 +1,83 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.tr/
+.test_runtime/
+.test_cache/
+.test_runtime_*/
+.test_cache_*/
+.test_tmp_*/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+.venv/
+venv/
+
+# 运行期产物与语料：不进仓（版权正文 + 会花钱产出的东西）
+Output/
+# ⚠ F7 实跑的落点是**小写** `outputs/`，而上面那条只挡大写的（原型的目录名）。
+#   本机文件系统不分大小写、git 分 ⇒ 那一整棵树带着 8 本的 `stage0/clean_text.txt`
+#   与 `stage1/main_text.json`（**全本版权正文**）以未跟踪状态躺在树里，
+#   `git add -A` 会一次全收进去。这一行就是那次差点发生的事的落点。
+outputs/
+Novel_data/
+Test_data/
+.llm_cache/
+.env
+
+# 前端（web/）
+node_modules/
+dist/
+.vite/
+*.local
+
+# web/.env 只有一个开关 VITE_USE_MOCK，不是密钥，要进仓
+# （上面那条 .env 是无路径的，会连它一起吃掉）
+!/web/.env
+
+# IDE
+.idea/
+.vscode/
+.obsidian/
+
+# 本机 agent 权限与连接设置：不进入代码备份或 Git 远程
+.claude/settings.local.json
+
+# ⚠ `CLAUDE.md` 是**指向 AGENTS.md 的符号链接**，只活在本机。
+#   本仓 `core.symlinks=false`（Windows 默认）⇒ 一旦跟踪它，git 会跟随链接、
+#   把 AGENTS.md 的全文当成第二份普通文件存进去，此后两份会各自漂移
+#   ——而"同一份内容有两个权威"正是 Q-6 要防的那件事。
+#   要在别的机器上复现这条链接：`cd <仓根> && mklink CLAUDE.md AGENTS.md`
+#   （Windows 需管理员或开发者模式）/ `ln -s AGENTS.md CLAUDE.md`（类 Unix）。
+/CLAUDE.md
+
+# ZCode 会话工作区（计划/本地 agent 状态）：只在各人本地存在，不进仓
+.zcode/
+
+# ===== ↑ 以上同步自 .gitignore（「从 .gitignore 同步」只重写以上部分）=====
+.git/
+.hg/
+.svn/
+bower_components/
+jspm_packages/
+site-packages/
+coverage/
+htmlcov/
+lcov-report/
+cmakefiles/
+cmake-build-*/
+bazel-*/
+pods/
+deriveddata/
+storybook-static/
+playwright-report/
+test-results/
+allure-results/
+allure-report/
+cdk.out/
+*.dist-info/
+eggs/
+pip-wheel-metadata/
+wheels/
+# ----- ↑ 以上为 ZCode 默认排除规则（自定义规则请写在本行下方，不会被同步/恢复改动）-----
+# 自定义规则写在下方（本行提示可删除）
