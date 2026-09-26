@@ -26,7 +26,7 @@ from novel.errors import ArtifactUnreadable, TerminalState, UpstreamMissing
 from novel.orchestrator import approvals
 from novel.orchestrator.nodes import check_node
 from novel.orchestrator.state import overview_at, readonly_ctx
-from novel.stages import check_only
+from novel.stages import check_only, checkable_stages
 from novel.store import readonly_snapshot_memo
 
 
@@ -92,13 +92,28 @@ class OperatorReadSnapshot:
     checks: Mapping[str, CheckObservation]
 
     def check(self, stage: str) -> CheckObservation:
-        return self.checks[stage]
+        """本层的复检观测；**没采集的层不是绿灯，也不是 KeyError**。
+
+        F8c：快照只采集有层级复检器的层（stage0/1）；新链 Stage2/4/5/7 的
+        复检是节点级 `--check-only`，不在这个快照里。`inbox_from_snapshot` 与
+        CLI `state` 都按 `STAGES` 逐层读（`.INVALID` 投影与 wontfix 账覆盖
+        全部层）⇒ 对这些层返回**未采集**观测：`report=None`、`error=None`，
+        `for_view()` 给 None，界面显示「校验未知」（I-42：未知≠通过）。
+        不在 `STAGES` 里的层名是拼写错误，仍当场 KeyError——「打错层名」
+        与「这一层没有层级复检器」必须分得开。
+        """
+        observation = self.checks.get(stage)
+        if observation is not None:
+            return observation
+        if stage not in STAGES:
+            raise KeyError(stage)
+        return CheckObservation()
 
 
 def capture_operator_snapshot(
     base: str | os.PathLike[str], sid: str, *, code: str | None = None,
 ) -> OperatorReadSnapshot:
-    """冻结一次 code/overview/七层复检；调用结束即丢弃。
+    """冻结一次 code/overview/各层复检；调用结束即丢弃。
 
     ``code`` 只供已在动作前后各做一次 epoch identity CAS 的 Supervisor；
     普通 CLI/API 不得传入，仍由本函数现场读取仓库身份。
@@ -112,7 +127,10 @@ def capture_operator_snapshot(
     # 复检中的下游审批检查也属于本次读域；否则每个下游消费者
     # 会再次读取 Git，给同一进度响应混入多个代码时点。
     with approvals.read_projection(overview=overview, code=code):
-        for stage in STAGES:
+        # F8c：只采集有层级复检器的层（stage0/1）。Stage2/4/5/7 的复检是
+        # 节点级 `--check-only`，不在这个快照里——`check(stage)` 对它们返回
+        # 未采集，`for_view()` 给 None，界面显示「校验未知」而不是绿灯。
+        for stage in checkable_stages():
             try:
                 report = check_only(stage)(
                     readonly_ctx(novel_dir, check_node(stage), code))
@@ -231,23 +249,8 @@ def read_surface_seal(
         digest.update(approval_head)
     else:
         digest.update(b'approval-head\0missing')
-    from novel.stages.stage2 import analyze
-    from novel.stages.stage2.analyze import draft_recovery as analyze_draft_recovery
-    for path in analyze_draft_recovery.source_paths(novel_dir, code=code):
-        if path.exists():
-            _update_entry(digest, base_path, path)
-        else:
-            digest.update(path.relative_to(base_path).as_posix().encode('utf-8') + b'\0missing')
-    pending_run = analyze.pending_initial_run(novel_dir)
-    if pending_run is not None:
-        from novel.orchestrator import queue
-        root = paths.stage2_analyze_run_path(novel_dir, pending_run)
-        for path in sorted(root.rglob('*.json')):
-            _update_entry(digest, base_path, path)
-        surface = queue.analyze_initial_recovery_surface(base_path, sid, pending_run, code=code)
-        for path in surface.source_paths:
-            if path.exists():
-                _update_entry(digest, base_path, path)
-            else:
-                digest.update(path.relative_to(base_path).as_posix().encode('utf-8') + b'\0missing\n')
+    # ⚠ F8c：旧链 `stage2.analyze` 首跑恢复面（draft_recovery source_paths 与
+    #   pending initial run 树）随 Stage2 旧链整层退役——其节点与恢复旗标不在现役
+    #   `NODES`，新链 `str06.stage2.*` 的输入面由正式 Stage1 产物与已购凭证承载，
+    #   不再有「分析首跑未落盘」这一中间盘面需要进 seal。
     return digest.hexdigest()

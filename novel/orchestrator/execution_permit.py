@@ -7,13 +7,14 @@ token；blocked action 只描述 blocker，恢复命令的 exact node + 全部 f
 交到本模块。ready 只接受 next 原样动作；blocked 只接受本文件策略表登记的恢复组合。
 许可还绑定代码、读面、贵贱、写盘效应，以及已登记外部输入文件的原始字节摘要。
 
-本模块不写服务账、不启动进程、不发请求。付费恢复只调用现役审批层的只读授权口，
-并且必须已经出现在 ``PROFILED_LLM_RUNS``；未完成 executor 迁移的 paid flag
-即使 CLI 认识，也在这里关闭式拒绝。
+本模块不写服务账、不启动进程、不发请求。现役恢复表只登记免费 ``--check-only``
+复检（F8b-3）：旧链恢复旗标族（--revalidate/--apply-edit/--revise/--recover-*）
+与 Stage4/5/6/7 人工闸的专属恢复分支随旧链整层退役，其 blocker 只能由旧链
+planner 发出、生产入口已拒识；付费节点的恢复是候选 runner 自身续跑（F7c），
+不经本表发布付费恢复动作。
 """
 from __future__ import annotations
 
-from novel import runtime_layout
 import hashlib
 import json
 import os
@@ -22,9 +23,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final, Literal
 
-from contracts.artifacts import (
-    STAGE2_GLOBAL_EDIT, STAGE5_REVIEWER_REWRITE_REQUEST,
-)
 from contracts.invariants import NODES
 from contracts.schema.api import (
     ExecutionPermit, ExecutionPermitInput, OperatorNext, OperatorNextDecision,
@@ -33,10 +31,10 @@ from novel import paths, prov
 from novel.errors import (
     ArtifactUnreadable, TerminalState, UnsupportedRunMode, UpstreamMissing,
 )
-from novel.orchestrator import approvals, queue
+from novel.orchestrator import queue
 from novel.orchestrator.inspection import read_surface_seal
 from novel.orchestrator.nodes import (
-    PROFILED_LLM_RUNS, REPO_ROOT, flag_tokens, flag_value,
+    REPO_ROOT, flag_tokens, flag_value,
     is_paid, validate_run, write_effect,
 )
 
@@ -63,23 +61,8 @@ _INBOX = queue.WAITING_ON_INBOX
 _RESUME = queue.WAITING_ON_RESUME_DECISION
 #: 新链节点的通用 blocker 面。
 _STR06 = frozenset({_INBOX, _RESUME})
-_STAGE2_EDIT_COMMIT = queue.WAITING_ON_STAGE2_EDIT_COMMIT
-_STAGE2_EDIT_REVALIDATE = queue.WAITING_ON_STAGE2_EDIT_REVALIDATE
-_INVALID_REVALIDATE = queue.WAITING_ON_INVALID_REVALIDATE
-# Stage4 四道人工闸 blocker 已退役（2026-09-15 全自动裁决）；只剩
-# repair/replan prepared 尾窗的免费恢复面仍登记专属 waiter。
-_STAGE4_DESIGN_REPAIR_COMMIT = queue.WAITING_ON_STAGE4_DESIGN_REPAIR_COMMIT
-_STAGE5_REVIEW = queue.WAITING_ON_REVIEW
-_STAGE5_CLOSURE = queue.WAITING_ON_STAGE5_CLOSURE
-_STAGE5_REVIEWER_REWRITE = queue.WAITING_ON_STAGE5_REVIEWER_REWRITE
-_PREPARED_DELIVERY = queue.WAITING_ON_PREPARED_DELIVERY
 
 _W0 = frozenset({_INBOX, _RESUME})
-# stage2 恢复入口只认统一机械准入 blockers；节点写权仍按知识生产节点登记。
-_W2 = frozenset({_INBOX, _RESUME, _INVALID_REVALIDATE})
-_W4 = frozenset({_INBOX, _RESUME, _INVALID_REVALIDATE})
-_W5 = frozenset({_INBOX, _RESUME, _STAGE5_REVIEW, _STAGE5_CLOSURE, _INVALID_REVALIDATE})
-_W7 = frozenset({_INBOX, _RESUME, _INVALID_REVALIDATE})
 
 
 #: 首批恢复闭集。这里登记的是**全部 flag token**，不是只登记主操作；
@@ -121,8 +104,7 @@ def _policy_index() -> dict[tuple[str, frozenset[str]], RecoveryRunPolicy]:
 RECOVERY_RUN_POLICY_INDEX: Final = _policy_index()
 
 
-ExternalPathScope = Literal[
-    'repo', 'book', 'book_or_service_edit', 'stage4_repair_journal']
+ExternalPathScope = Literal['repo', 'book', 'book_or_service_edit']
 
 #: 会把**文件字节**送进 producer 的 valued flag。actor/reason/hash/run_id 等纯值
 #: 不在这里；漏登记一个文件 flag 会让许可只绑定路径字符串而没绑定真正输入。
@@ -149,18 +131,6 @@ def _resolve_external_path_at(
     base_path = Path(base).resolve()
     novel_dir = paths.resolve_novel_dir(base_path, sid).resolve()
     scope = EXTERNAL_INPUT_POLICIES[(node, flag)]
-    if scope == 'stage4_repair_journal':
-        from novel.llm import stage4_runs
-        from novel.run_identity import check_run_id
-        run_id = check_run_id(raw)
-        candidates = tuple(
-            root / run_id / 'design'
-            / stage4_runs.DESIGN_REPAIR_AGGREGATE_COMMIT_FILE
-            for root in runtime_layout.stage_run_roots(novel_dir, 'stage4'))
-        return next(
-            (target.resolve() for target in candidates if target.is_file()),
-            candidates[0].resolve(),
-        )
     candidate = Path(raw)
     if scope == 'repo':
         return (candidate if candidate.is_absolute() else REPO_ROOT / candidate).resolve()
@@ -187,30 +157,9 @@ def _is_within(path: Path, root: Path) -> bool:
     return True
 
 
-def _is_stage2_edit_commit_replay(
-    *, waiting_on: str | None, node: str, flags: tuple[str, ...],
-) -> bool:
-    """唯一不把 canonical edit 当外部字节输入的 WAL 恢复动作。
-
-    首次 service edit 可能在 input WAL 已落稳、book canonical 尚未生成时硬杀。
-    此时 action/surface seal 已绑定 typed WAL，而 ``global_edit.json`` 正是恢复动作
-    要补出的 target，不能反过来要求它在签 permit 前存在。predicate 同时用于签发
-    与 claim 后复验，避免两侧对同一输入面的理解漂移。
-    """
-    return (
-        waiting_on == _STAGE2_EDIT_COMMIT
-        and node == 'stage2.global'
-        and flags == ('--apply-edit', STAGE2_GLOBAL_EDIT)
-    )
-
-
 def _external_inputs(
     current: OperatorNextDecision, node: str, flags: tuple[str, ...],
 ) -> list[ExecutionPermitInput]:
-    waiting_on = None if current.action is None else current.action.waiting_on
-    if _is_stage2_edit_commit_replay(
-            waiting_on=waiting_on, node=node, flags=flags):
-        return []
     out: list[ExecutionPermitInput] = []
     for flag in flag_tokens(flags):
         if (node, flag) not in EXTERNAL_INPUT_POLICIES:
@@ -222,60 +171,14 @@ def _external_inputs(
             current=current, node=node, flag=flag, raw=raw)
         if not target.is_file():
             raise UpstreamMissing(f'{node} {flag} 外部输入不在盘上：{target}')
-        journal: Mapping[str, Any] | None = None
-        if node == 'stage4.design' and flag == '--recover-repair-aggregate':
-            # repair aggregate 是 Stage4 内部 journal，不是 artifact；permit 层
-            # 只绑 raw bytes，不在这里复制它的版本/字段/self-hash 契约。
-            # 先走 journal owner 的现役 envelope 读路，随后再读同一路径
-            # 铸 raw SHA；两次之间若有漂移，只有返回的 exact raw bytes
-            # 同时通过下面的 SHA 锁才能签发，claim 后还会再读一次。
-            from novel.llm import stage4_runs
-            journal = stage4_runs.validate_design_repair_aggregate_journal_envelope(
-                target, run_id=raw, sid=current.sid)
         try:
             payload = target.read_bytes()
         except OSError as exc:
             raise ArtifactUnreadable(
                 f'读不了 {node} {flag} 外部输入 {target}: {exc!r}') from exc
-        digest = hashlib.sha256(payload).hexdigest()
-        if journal is not None:
-            expected_raw = flag_value(flags, '--source-journal-sha256')
-            expected_commit = flag_value(flags, '--source-commit-sha256')
-            if (digest != expected_raw
-                    or journal.get('commit_sha256') != expected_commit):
-                raise ArtifactUnreadable(
-                    'Stage4 repair recovery 的 journal raw/commit SHA 与 flags 不等')
         out.append(ExecutionPermitInput(
             flag=flag, argument=raw, resolved_path=os.fspath(target),
-            bytes=len(payload), sha256=digest,
-        ))
-    if (
-        node == 'stage5.write'
-        and bool({
-            '--recover-reviewer-rewrite-prepared',
-            '--retire-reviewer-rewrite-request',
-        } & set(flag_tokens(flags)))
-    ):
-        # recovery 的 argv 携 source run 与 request self-hash，真正被恢复器
-        # 消费的 canonical request 原始字节仍须进入 permit CAS。
-        target = paths.artifact_path(
-            paths.resolve_novel_dir(current.base, current.sid),
-            STAGE5_REVIEWER_REWRITE_REQUEST).resolve()
-        if not target.is_file():
-            raise UpstreamMissing(
-                f'Stage5 Reviewer rewrite canonical request 不在盘上：{target}')
-        try:
-            payload = target.read_bytes()
-        except OSError as exc:
-            raise ArtifactUnreadable(
-                f'读不了 Stage5 Reviewer rewrite canonical request：{exc!r}') from exc
-        out.append(ExecutionPermitInput(
-            flag='--reviewer-rewrite-request-sha256',
-            argument=flag_value(
-                flags, '--reviewer-rewrite-request-sha256') or '',
-            resolved_path=os.fspath(target),
-            bytes=len(payload),
-            sha256=hashlib.sha256(payload).hexdigest(),
+            bytes=len(payload), sha256=hashlib.sha256(payload).hexdigest(),
         ))
     return out
 
@@ -297,97 +200,11 @@ def _require_recovery_policy(
     if waiting_on not in row.waiting_on:
         raise UnsupportedRunMode(
             f'{node} {list(tokens)} 不能处理当前 blocker {waiting_on!r}')
-    if waiting_on == queue.WAITING_ON_STAGE6_PREPARE_COMMIT:
-        # Stage6 prepare 接受闸已随 Stage6 整层退役（F8b）：该等待面只会
-        # 出现在旧书历史账里，新链不再发出，也没有可恢复的 producer。
-        raise UnsupportedRunMode(
-            'stage6.prepare WAL 已随 Stage6 整层退役，不再提供恢复许可')
-    if (waiting_on == _STAGE2_EDIT_COMMIT
-            and (node != 'stage2.global'
-                 or flags != ('--apply-edit', STAGE2_GLOBAL_EDIT))):
-        raise UnsupportedRunMode(
-            'reviewed-edit prepared commit 只允许 exact canonical '
-            f'`stage2.global --apply-edit {STAGE2_GLOBAL_EDIT}`')
-    if (waiting_on == _STAGE2_EDIT_REVALIDATE
-            and (node != 'stage2.global'
-                 or flags != tuple(current.action.flags))):
-        raise UnsupportedRunMode(
-            'Stage2 revalidate 补尾只允许逐字重放 operator 冻结的 '
-            'exact actor/reason')
-    if (waiting_on == _STAGE4_DESIGN_REPAIR_COMMIT
-            and (node != 'stage4.design'
-                 or flags != tuple(current.action.flags))):
-        raise UnsupportedRunMode(
-            'Stage4 repair aggregate 补尾只允许逐字重放 operator 冻结的 '
-            'source run/journal raw/commit SHA')
-    if waiting_on == _PREPARED_DELIVERY:
-        if node != current.action.node or flags != tuple(current.action.flags):
-            raise UnsupportedRunMode('交付完成组只能执行 operator 冻结的原 run/proof SHA')
-        recovery = queue.prepared_delivery_recovery_item(
-            current.base, current.sid, code=current.code_version)
-        if (recovery is None or recovery.waiting_on != _PREPARED_DELIVERY
-                or recovery.node != node or tuple(recovery.flags) != flags):
-            raise UnsupportedRunMode('Stage6/7 原完成组证明已变化；拒绝签发旧恢复动作')
-    if waiting_on == _STAGE5_REVIEWER_REWRITE:
-        if node != 'stage5.write' or flags != tuple(current.action.flags):
-            raise UnsupportedRunMode(
-                'Stage5 Reviewer rewrite 只允许逐字执行 operator 按 current '
-                'execution journal 冻结的 paid/recovery argv')
-        from novel.stages.stage5 import reviewer_rewrite
-        from novel.orchestrator import state
 
-        novel_dir = paths.resolve_novel_dir(current.base, current.sid)
-        ctx = state.readonly_ctx(
-            novel_dir, 'stage5.write', current.code_version)
-        execution = reviewer_rewrite.reviewer_rewrite_execution_state(ctx)
-        if execution is None:
-            raise UpstreamMissing('Stage5 Reviewer rewrite canonical request 已缺失')
-        if execution.state == 'ready_paid':
-            expected: tuple[str, ...] | None = (
-                '--reviewer-rewrite', execution.request_rel)
-        elif execution.state == 'recoverable_checkpoint':
-            expected = (
-                '--recover-reviewer-rewrite-prepared',
-                execution.source_run_id or '',
-                '--reviewer-rewrite-request-sha256',
-                execution.request_sha256,
-            )
-        elif execution.state == 'recoverable_prepared':
-            if (execution.recovery_target_run_id is None
-                    or execution.recovery_journal_sha256 is None):
-                raise ArtifactUnreadable(
-                    'Stage5 Reviewer rewrite prepared recovery 缺 target WAL identity')
-            expected = (
-                '--recover-reviewer-rewrite-prepared',
-                execution.source_run_id or '',
-                '--reviewer-rewrite-request-sha256',
-                execution.request_sha256,
-                '--reviewer-rewrite-recovery-target-run-id',
-                execution.recovery_target_run_id,
-                '--reviewer-rewrite-recovery-journal-sha256',
-                execution.recovery_journal_sha256,
-            )
-        elif execution.state == 'expired_unstarted':
-            expected = (
-                '--retire-reviewer-rewrite-request',
-                execution.request_rel,
-                '--reviewer-rewrite-request-sha256',
-                execution.request_sha256,
-            )
-        else:
-            expected = None
-        if expected is None or flags != expected:
-            raise UnsupportedRunMode(
-                'Stage5 Reviewer rewrite execution state 已变化；'
-                '不得沿用旧 paid/recovery argv')
-
-    # 恢复不能越过 blocker 去动更晚层。显式例外是产品链上的真实恢复：
-    # Stage5 Review currentness 由后一个 review 节点重算。
+    # 恢复不能越过 blocker 去动更晚层。恢复表只登记免费 --check-only 复检，
+    # 其 rank 不大于当前 blocker 节点；越闸一律关闭式拒绝。
     rank = {name: index for index, name in enumerate(NODES)}
-    later_exception = (
-        waiting_on == _STAGE5_REVIEW and node == 'stage5.review'
-    )
-    if not later_exception and rank[node] > rank[current.action.node]:
+    if rank[node] > rank[current.action.node]:
         raise UnsupportedRunMode(
             f'{node} 位于当前 blocker {current.action.node} 之后；恢复不得越闸写下游')
 
@@ -553,11 +370,6 @@ def load_execution_permit_file(path: str | os.PathLike[str]) -> ExecutionPermit:
 def _current_external_inputs(permit: ExecutionPermit) -> list[ExecutionPermitInput]:
     """按登记表重读 exact flags 指向的当前原始字节。"""
     exact_flags = tuple(permit.flags)
-    if _is_stage2_edit_commit_replay(
-            waiting_on=permit.waiting_on,
-            node=permit.node,
-            flags=exact_flags):
-        return []
     out: list[ExecutionPermitInput] = []
     for flag in flag_tokens(exact_flags):
         if (permit.node, flag) not in EXTERNAL_INPUT_POLICIES:
@@ -586,39 +398,6 @@ def _current_external_inputs(permit: ExecutionPermit) -> list[ExecutionPermitInp
         out.append(ExecutionPermitInput(
             flag=flag, argument=raw, resolved_path=os.fspath(target),
             bytes=len(payload), sha256=hashlib.sha256(payload).hexdigest(),
-        ))
-    if (
-        permit.node == 'stage5.write'
-        and bool({
-            '--recover-reviewer-rewrite-prepared',
-            '--retire-reviewer-rewrite-request',
-        } & set(flag_tokens(exact_flags)))
-    ):
-        target = paths.artifact_path(
-            paths.resolve_novel_dir(permit.base, permit.sid),
-            STAGE5_REVIEWER_REWRITE_REQUEST).resolve()
-        if not target.is_file():
-            raise ArtifactUnreadable(
-                f'execution permit 的 Reviewer rewrite request 已缺失：{target}')
-        try:
-            before = target.stat()
-            payload = target.read_bytes()
-            after = target.stat()
-        except OSError as exc:
-            raise ArtifactUnreadable(
-                f'execution permit 的 Reviewer rewrite request 不可读：{exc!r}') from exc
-        coordinate = lambda stat: (
-            stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns)
-        if coordinate(before) != coordinate(after) or len(payload) != after.st_size:
-            raise ArtifactUnreadable(
-                'execution permit 的 Reviewer rewrite request 读取期间变化')
-        out.append(ExecutionPermitInput(
-            flag='--reviewer-rewrite-request-sha256',
-            argument=flag_value(
-                exact_flags, '--reviewer-rewrite-request-sha256') or '',
-            resolved_path=os.fspath(target),
-            bytes=len(payload),
-            sha256=hashlib.sha256(payload).hexdigest(),
         ))
     return out
 

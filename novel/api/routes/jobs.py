@@ -20,24 +20,9 @@ from contracts.schema.api import JobList, LogChunk, LogStreamEvent, PreviewReque
 from contracts.schema.orchestration import JobRecord, JobStart
 from novel.api.deps import checked_sid, get_base
 from novel.errors import UnsupportedRunMode, UpstreamMissing
-from novel.orchestrator import approvals, jobs, nodes
+from novel.orchestrator import jobs, nodes
 
 router = APIRouter(prefix='/jobs')
-
-
-def _chapter_selection(flags: list[str]) -> list[int] | None:
-    if '--chapters' not in nodes.flag_tokens(flags):
-        return None
-    raw = nodes.flag_value(flags, '--chapters')
-    try:
-        chapters = [int(value) for value in (raw or '').split(',')]
-    except ValueError as exc:
-        raise UnsupportedRunMode(
-            '--chapters must be comma-separated ordinals') from exc
-    if chapters != sorted(set(chapters)) or any(value < 1 for value in chapters):
-        raise UnsupportedRunMode(
-            '--chapters ordinals must be sorted, unique and positive')
-    return chapters
 
 
 def _refuse_prepared_recovery_api(node: str, flags: list[str]) -> None:
@@ -99,25 +84,9 @@ def start_job(req: PreviewRequest, base: str = Depends(get_base)) -> JobRecord:
     # API 只做占住同书锁后的早反馈；CLI 仍是所有调用方共用的最终执行门。
     # stage2.blueprint / stage4 / stage7.assemble 等付费与正文外的准入由
     # CLI validate_run 统一执行，preview 不走这里，始终可用。
-    tokens = nodes.flag_tokens(req.flags)
-    # Stage4 人工闸已退役（2026-09-15 全自动裁决）：打开条件唯一化为统一
-    # 机械准入，producer 在 subprocess 内终验；API 不再铸任何审批授权。
-    # A 的策略重采只认 B 的 typed infeasible 终态铸成的机器 scope。
-    if req.node == 'stage4.design' and '--replan' in tokens:
-        if sid is None:
-            raise UnsupportedRunMode('stage4.design --replan requires a novel sid')
-        prepares.append(lambda: approvals.cast_infeasible_replan_scope(base, sid))
-    # writing 授权保护的是正文外发 / 付费 LLM 调用。Stage5 同一节点下还有
-    # rebuild/recheck/revalidate/dry-run 等零成本恢复路；若也绑 writing，恢复路
-    # 会在入口处被自己堵死。`planned.paid` 与 preview 展示的是同一份折叠结论，
-    # 本路由不再按 flag 重算一份贵贱。
-    if req.node == 'stage5.write' and planned.paid:
-        if sid is None:
-            raise UnsupportedRunMode('stage5 writing requires a novel sid')
-        chapters = _chapter_selection(req.flags)
-        revise = '--revise' in tokens
-        prepares.append(lambda: approvals.authorize_writing(
-            base, sid, chapters, requires_fresh_review=revise))
+    # F8c：人工闸与写作授权面整层退役（2026-09-15 全自动裁决 → STR-06 新链）。
+    # 付费与正文外发准入由 CLI `validate_run`／`--yes`／`--allow-egress` 统一
+    # 执行，API 不再铸任何审批授权，也不保留旧节点的 prepares 面。
 
     def prepare() -> None:
         for check in prepares:

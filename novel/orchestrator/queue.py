@@ -22,10 +22,6 @@ queue.py —— 批量队列（`R-13`）。**一次排入多本书，人只在�
 """
 from __future__ import annotations
 
-from contracts.artifacts import (
-    STAGE2_GLOBAL_EDIT,
-)
-
 import json
 import os
 import threading
@@ -33,33 +29,24 @@ import time
 import traceback
 import uuid
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
 from pathlib import Path
 
 from contracts.invariants import (
     LEGACY_STAGE5_MODES, NODES, RETIRED_NODES, RETIRED_STAGES, STAGES,
-    SYSTEM_INVALID_REVALIDATE_ACTOR, SYSTEM_INVALID_REVALIDATE_REASON,
 )
-from contracts.schema.api import ApprovalDoc
 from contracts.schema.orchestration import (
     NovelOverview, QueueCounts, QueueEntry, QueueEvent, QueueItem,
     QueueLaneCounts, QueuePlan, QueueRun, QueueStart,
 )
-# ⚠ F8A：`contracts.schema.stage6` 的 import 随 Stage6 整层退役删除（F6d 登记）。
-from contracts.artifacts import STAGE4_BLIND_CANDIDATE
-from novel import paths, prov
+from novel import prov
 from novel.appendlog import append_line
 from novel import exit_codes as X
 from novel.exit_codes import CRASH
 from novel.errors import (
-    ApprovalRequired, ArtifactUnreadable, BlockingFindingsUnresolved,
-    GateBlocked, QueueConflict, TerminalState, UpstreamMissing, UpstreamStale,
-    UpstreamUnproven,
+    ApprovalRequired, QueueConflict, UpstreamMissing,
 )
-from novel.orchestrator import approvals, jobs, state as st
+from novel.orchestrator import jobs, state as st
 from novel.orchestrator.nodes import build_steps, flag_value, shell_line
-from novel.stages.stage4.phase_state import current_infeasible_binding
-from novel.store import ArtifactStore
 
 #: 人做的那几个动作。**队列永不自动排它们**——「人看过之后的裁决」机器替不了。
 #: ⚠ 它们进 `blocked` 而不是被跳过：被跳过的闸门在界面上与「不需要它」长得一样。
@@ -70,26 +57,20 @@ HUMAN_NODES: frozenset[str] = frozenset()
 
 #: 待人工清单非空时挡队列的那个理由（`INBOX_KIND` 的 `invalid`）。
 WAITING_ON_INBOX = 'inbox:invalid'
-# ⚠ Stage2 语义审阅退役：``approval:stage2-*`` 阻断与 reviewed-edit 纠正/终态
-# 恢复随之删除。保留的 EDIT_COMMIT/EDIT_REVALIDATE 是普通 typed 编辑与
-# INVALID 提升的 0-wire WAL 补尾（无审阅语义）。
+# ⚠⚠ F8c：以下常量是**旧链 waiter 名**，只供存量队列账／审批账的只读解码
+# （`novel/orchestrator/reviewer_legacy.py`、`reviewer_action_evidence.py` 与
+# 折叠历史 run 时按原字节解释）。现役规划器只发 `WAITING_ON_INBOX`／
+# `WAITING_ON_LEGACY`／`WAITING_ON_RESUME_DECISION` 三个 blocker；旧链的
+# edit-commit／invalid-revalidate／analyze 修复／stage4 repair／stage5 closure／
+# reviewer-rewrite／stage6 prepare 补尾路只能由旧链节点写出，生产入口已拒识。
 WAITING_ON_STAGE2_EDIT_COMMIT = 'recovery:stage2-global-edit-commit'
 WAITING_ON_STAGE2_EDIT_REVALIDATE = (
     'recovery:stage2-global-edit-revalidate')
-#: 批次 C：live `.INVALID` 的 0-wire 自动提升。常量进入
-#: ``DETERMINISTIC_RECOVERY_WAITING_ON``，由 Supervisor 铸 recovery permit
-#: 后交给 Executor；不再等人填 actor/reason，也不把提升做成普通 ready todo
-#: （避免无书目录时 ``build_steps`` 误伤规划）。
 WAITING_ON_INVALID_REVALIDATE = 'recovery:invalid-revalidate'
 WAITING_ON_ANALYZE_RESPONSE_REPAIR = 'human:stage2-analyze-response-repair'
 WAITING_ON_ANALYZE_RESPONSE_TERMINAL = 'human:stage2-analyze-response-terminal'
 WAITING_ON_ANALYZE_SOURCE = 'human:stage2-analyze-source-unavailable'
 WAITING_ON_ANALYZE_DRAFT_REPAIR = 'human:stage2-analyze-owner-draft-repair'
-# ⚠⚠ Stage4 四道人工闸已整体退役（2026-09-15 全自动裁决）：design 落盘
-# （机械有效）即自动进入 plan，plan 落盘即自动进入 context，唯一打开条件是
-# 统一机械准入（`novel/orchestrator/mechanical_admission.py`）。下列常量不再
-# 由本模块作为 blocker 发出；仅保留名字供历史账只读解码
-# （`novel/orchestrator/reviewer_legacy.py`）引用。
 WAITING_ON_STAGE4_DESIGN_REVIEW = 'approval:stage4-design-review'
 WAITING_ON_STAGE4_BINDING_RESOLUTION = 'approval:stage4-binding-resolution'
 WAITING_ON_STAGE4_STRUCTURE_REPLAN = 'approval:stage4-structure-replan'
@@ -97,22 +78,11 @@ WAITING_ON_STAGE4_STRUCTURE_REVIEW = 'approval:stage4-structure-review'
 # 兼容只 import 常量名的旧调用者；同一退役裁决下的只读别名。
 WAITING_ON_STAGE4_PHASE_APPROVAL = WAITING_ON_STAGE4_DESIGN_REVIEW
 WAITING_ON_STAGE4_REPLAN = WAITING_ON_STAGE4_BINDING_RESOLUTION
-# 仍是现役免费恢复面：repair/replan prepared 尾窗的 0-wire 补尾
-# （`stage4.design --recover-repair-aggregate`）。
 WAITING_ON_STAGE4_DESIGN_REPAIR_COMMIT = \
     'recovery:stage4-design-repair-aggregate-commit'
-# ⚠⚠ Stage5 两道人工闸已随批次 B3 退役（2026-09-15 全自动裁决）：
-#   `approval:stage5-writing`（写作授权）并入 run 启动授权（上传即授权本书
-#   全部付费节点），队列不再为 stage5.write 索取任何授权 blocker；
-#   `approval:stage5-closure`（闭合回执）由 Review 机械判定自动闭合
-#   （producer 以 `system:stage5-auto` 落账）。常量仅为历史账只读解码保留，
-#   见 `_blocked_why` 与 `reviewer_legacy` 的历史投影。
 WAITING_ON_WRITING_APPROVAL = 'approval:stage5-writing'
 WAITING_ON_REVIEW = 'stage5:review-currentness'
 WAITING_ON_STAGE5_CLOSURE = 'approval:stage5-closure'
-# ⚠⚠ stage6.prepare 接受闸已随批次 B4 退役：机械校验通过即
-#   `system:stage6-prepare-auto` 自动 accept。常量 ``WAITING_ON_STAGE6_PREPARE``
-#   只读保留供历史账解码，现役队列不再发出。
 WAITING_ON_STAGE6_PREPARE = 'approval:stage6-prepare'
 WAITING_ON_STAGE6_PREPARE_COMMIT = 'recovery:stage6-prepare-edit'
 WAITING_ON_STAGE5_REVIEWER_REWRITE = 'recovery:stage5-reviewer-rewrite'
@@ -123,18 +93,15 @@ WAITING_ON_RESUME_DECISION = 'resume:manual-decision'
 WAITING_ON_RESTART_CONFIRMATION = 'queue:restart-confirmation'
 WAITING_ON_REPLAN = 'queue:plan-changed'
 
-#: 已有 typed 人审决定、只差按它执行的 blocker。它不是新的 Commander 任务：
-#: Supervisor 必须现场铸 recovery permit，再把 exact node/flags 交给 Executor。
-#: 独立成闭集，避免任何普通人工 blocker 因“碰巧带 steps”被自动执行。
-DETERMINISTIC_RECOVERY_WAITING_ON: frozenset[str] = frozenset({
-    WAITING_ON_STAGE2_EDIT_COMMIT,
-    WAITING_ON_STAGE2_EDIT_REVALIDATE,
-    WAITING_ON_INVALID_REVALIDATE,
-    WAITING_ON_STAGE4_DESIGN_REPAIR_COMMIT,
-    WAITING_ON_STAGE5_REVIEWER_REWRITE,
-    WAITING_ON_PREPARED_DELIVERY,
-    WAITING_ON_STAGE6_PREPARE_COMMIT,
-})
+#: 已有 typed 决定、只差按它执行的 blocker 闭集：Supervisor 只对这个集合里的
+#: waiting_on 现场铸 recovery permit 并交给 Executor，避免任何普通人工 blocker
+#: 因“碰巧带 steps”被自动执行。
+#: ⚠⚠ F8c：**现役为空集**。旧链的 0-wire 补尾 waiter（edit-commit／invalid-
+#: revalidate／stage4 repair／reviewer-rewrite／prepared-delivery／stage6
+#: prepare-edit）随旧链退役；新链的恢复是候选 runner 自身续跑（`--check-only`
+#: 免费复检与精确补尾，F7c），不经队列发布补尾 argv。blocked 即停在那里并如实
+#: 报告，不猜成可执行命令。
+DETERMINISTIC_RECOVERY_WAITING_ON: frozenset[str] = frozenset()
 
 
 def chapters_from_flags(flags: Sequence[str]) -> list[int] | None:
@@ -169,129 +136,6 @@ def nodes_up_to(until_stage: str) -> list[str]:
         raise ValueError(f'未知 stage {until_stage!r}，取值面是 {list(STAGES)}')
     cap = _stage_index(until_stage)
     return [n for n, spec in NODES.items() if _stage_index(spec.stage) <= cap]
-
-
-@dataclass(frozen=True)
-class AnalyzeInitialRecoverySurface:
-    """原 Analyze 待恢复来源的只读坐标；不解析修复候选为通过，也不补任何账。"""
-    waiting_on: str | None
-    why: str
-    source_paths: tuple[Path, ...]
-
-
-def analyze_initial_recovery_surface(base, sid: str, source_run: str, *, code: str | None = None
-                                     ) -> AnalyzeInitialRecoverySurface:
-    from novel import work_units
-    from novel.llm import run_journal as agent_runs, response_repair
-    from novel.llm.ledger import ledger_path
-    from novel.stages.stage2 import analyze
-    book = paths.resolve_novel_dir(base, sid)
-    current_code = code if code is not None else prov.code_version()
-    current = st.readonly_ctx(book, analyze.NODE, current_code)
-    historical, _record, run_path = agent_runs._historical_run_context(
-        current, analyze.run_spec(), source_run_id=source_run, ledger_source_path=ledger_path(base))
-    source_paths = [run_path]
-    budget = work_units.budget_for(current, scope=work_units.executor_scope(
-        analyze.NODE, analyze.NODE, {'chapter': None}))
-    source_paths.append(budget.path)
-    last = budget.latest_turn()
-    if last is not None:
-        if last.run_id != source_run:
-            raise ArtifactUnreadable('原 Analyze owner 与工作单元最后内容轮不一致')
-        source_paths.extend(budget.directory / f'{digest}.json' for digest in (
-            last.request_payload_sha256, last.response_sha256, last.recovery_sha256) if digest is not None)
-    checkpoint_dir = analyze.run_spec().checkpoint_dir(historical)
-    # 已形成 checkpoint/prepared 的恢复仍由原 producer 验证；调度不重建同一候选。
-    has_checkpoint = checkpoint_dir.is_dir() and any(checkpoint_dir.glob('rev-*.json'))
-    waiting_on = None
-    why = '复验原联合回答并补齐首次冻结提交（0 模型；必须使用原代码）'
-    if historical.code != current_code:
-        waiting_on = WAITING_ON_ANALYZE_SOURCE
-        why = '原 Analyze 代码与当前不同；用冻结原代码排空旧 owner，不能跨代码恢复或重新首抽'
-    elif not has_checkpoint and (last is None or last.response_sha256 is None):
-        waiting_on = WAITING_ON_ANALYZE_SOURCE
-        why = '原 Analyze 尚无可核验的完整响应或 checkpoint；保留原 owner，核对原执行状态，不能重新购买'
-    if last is not None and last.recovery_sha256 is not None:
-        custody = budget.recovery_proof(last.turn_id)
-        acceptance = custody.get('acceptance')
-        if custody.get('kind') != 'executor-response-custody-v1' or not isinstance(acceptance, dict):
-            raise ArtifactUnreadable('原 Analyze 完整响应缺运输 custody')
-        identity = agent_runs.response_repair_identity(historical, analyze.run_spec(), acceptance)
-        chain = agent_runs.canonical_sha256(identity)
-        directory = paths.rejected_response_path(book, chain, str(acceptance['attempt_id']))
-        source_paths.extend(directory / name for name in (
-            response_repair.REJECTION_FILE, response_repair.ORIGINAL_FILE,
-            response_repair.RESOLUTION_FILE, response_repair.OUTCOME_FILE))
-        records = response_repair.records_for_chain(book, chain)
-        if len(records) > 1:
-            raise ArtifactUnreadable('原 Analyze 响应修复链有多个候选，不能猜测调度')
-        if records:
-            record = records[0]
-            if (record.root != directory
-                    or record.rejection.get('agent_response_repair_identity') != identity
-                    or record.rejection.get('run_id') != source_run):
-                raise ArtifactUnreadable('原 Analyze 响应修复记录与原 owner 不一致')
-            if record.resolution is None:
-                source_paths.append(directory / response_repair.CANDIDATE_FILE)
-                waiting_on = WAITING_ON_ANALYZE_RESPONSE_REPAIR
-                why = (f'原 Analyze 响应待免费修复：attempt={record.attempt_id}；编辑隔离 candidate.json '
-                       '并以 response-repair 封存决定后，再恢复同一原 run')
-            elif (record.resolution.get('action') == 'decline'
-                    or (record.outcome is not None and record.outcome.get('decision') in {'rejected', 'declined'})):
-                waiting_on = WAITING_ON_ANALYZE_RESPONSE_TERMINAL
-                why = '原 Analyze 响应修复已放弃或复验失败；唯一修复额度已用，保留原响应与 owner，禁止自动重买'
-            else:
-                # 提交只证明候选封存；真实 schema/HARD 仍由免费 producer 重验。
-                agent_runs.response_repair_binding(historical, analyze.run_spec(), acceptance, record)
-                if historical.code == current_code:
-                    waiting_on = None
-                    why = '原 Analyze 响应修复决定已封存；免费复验同一原 schema 并补原 run 提交，不新增内容轮'
-    return AnalyzeInitialRecoverySurface(waiting_on, why, tuple(sorted(set(source_paths))))
-
-
-def stage2_core_recovery_item(base, sid: str, *, code: str | None = None) -> QueueItem | None:
-    """先完成已保存的恢复事实；部分提交不能被重新抽取遮蔽。"""
-    from novel.stages.stage2 import analyze
-    from novel.stages.stage2.analyze import (
-        draft_recovery as analyze_draft_recovery,
-        recovery as analyze_recovery,
-    )
-    book = paths.find_novel_dir(base, sid)
-    if book is None:
-        return None
-    source_run = analyze.pending_initial_run(book)
-    if source_run is not None:
-        flags = ['--recover-analyze-run', source_run]
-        surface = analyze_initial_recovery_surface(base, sid, source_run, code=code)
-        return QueueItem(sid=sid, node='stage2.analyze', flags=flags,
-            steps=[] if surface.waiting_on else build_steps('stage2.analyze', sid, flags, base=base),
-            waiting_on=surface.waiting_on, why=surface.why)
-    drafts = analyze_draft_recovery.status(book, code=code)
-    prepared = [row for row in drafts if row['state'] == 'prepared']
-    if prepared:
-        # 独立 owner WAL 在正式文件存在后也必须先补尾；不能启动另一侧普通写。
-        owner = prepared[0]['owner']
-        flags = ['--recover-analyze-draft']
-        return QueueItem(sid=sid, node=owner, flags=flags,
-            steps=build_steps(owner, sid, flags, base=base),
-            why='按原 owner 草稿订正决定补齐冻结提交（0 模型）')
-    if analyze_recovery.pending(base, sid, code=code) is not None:
-        issue = analyze_recovery.pending_compilation_issue(base, sid, code=code)
-        if issue is not None:
-            return QueueItem(sid=sid, node='stage2.global', flags=['--emit-analyze-draft-template'],
-                steps=[], waiting_on=WAITING_ON_ANALYZE_DRAFT_REPAIR, why=issue)
-        flags = ['--recover-analyze']
-        return QueueItem(sid=sid, node='stage2.global', flags=flags,
-            steps=build_steps('stage2.global', sid, flags, base=base),
-            why='人物已修好，从原联合回答免费编译 GlobalDraft（0 模型）')
-    invalid_drafts = [row for row in drafts if row['state'] == 'draft_invalid']
-    if invalid_drafts:
-        owner = invalid_drafts[0]['owner']
-        return QueueItem(sid=sid, node=owner, flags=['--emit-analyze-draft-template'], steps=[],
-            waiting_on=WAITING_ON_ANALYZE_DRAFT_REPAIR,
-            why=(f'原联合回答的 {owner} 草稿尚不能编译；使用 --emit-analyze-draft-template '
-                 '查看原候选与冻结身份，订正后 --repair-analyze-draft 提交；不重新购买联合首抽'))
-    return None
 
 
 def _upstream_invalid(ov, stage: str) -> list[str]:
@@ -331,33 +175,6 @@ def _human_gate_satisfied(base: str | os.PathLike[str], sid: str, node: str) -> 
     return False
 
 
-def _stage4_replan_required(base: str | os.PathLike[str], sid: str) -> bool:
-    """B 已对当前 A 落下 fresh typed infeasible 终态时，唯一后继是 A 重采。
-
-    2026-09-15 全自动裁决后这不再是人工闸：队列直接把预算内
-    `stage4.design --replan` 排成普通 todo；预算耗尽由工作单元
-    WorkUnitBudgetExhausted 给出终态。
-    """
-    novel_dir = paths.resolve_novel_dir(base, sid)
-    store = ArtifactStore(st.readonly_ctx(
-        novel_dir, 'stage4.plan', approvals.projection_code()))
-    return current_infeasible_binding(store) is not None
-
-
-def prepared_delivery_recovery_item(
-    base: str | os.PathLike[str], sid: str, *, code: str, until_stage: str = 'stage7',
-) -> QueueItem | None:
-    """producer 严格检查后才发布免费补尾；此查询不补账、不因文件存在发命令。
-
-    ⚠ F8b-3（S-05 deprecation）：旧链尾窗恢复面随旧链退役——它的两个 producer
-    （stage4 design/plan prepared recovery）只能由旧链节点写出，而生产入口已
-    拒识旧节点，队列可规划的书不可能再产生新的未闭提交组。新链的恢复是候选
-    runner 自身续跑（F7c 精确补尾），不再经队列发布补尾项。本函数停用为恒
-    None，随 F8c 与旧链整层删除。
-    """
-    return None
-
-
 def plan_book(base: str | os.PathLike[str], sid: str, *, until_stage: str,
               follow_check: bool = True) -> tuple[list[QueueItem], list[QueueItem]]:
     """一本书的 `(要跑的, 被挡住的)`。**纯函数**（只读盘，不写、不发请求）。
@@ -378,317 +195,46 @@ def plan_book_from_overview(
     *,
     until_stage: str,
     follow_check: bool = True,
-    approval_doc: ApprovalDoc | None = None,
     allow_deterministic_redo: bool = False,
 ) -> tuple[list[QueueItem], list[QueueItem]]:
     """按一份已冻结完成度规划 lane；判定正文与 :func:`plan_book` 唯一共享。
 
     ``allow_deterministic_redo`` 只供每步后都会重新采快照的 AgentRun operator。
     普通多步队列保持默认 ``False``，不能把一份冻结计划扩张成后续重采授权。
+
+    ⚠⚠ F8c：规划器只按 `NODES`（现役 11 个 `str06.` 节点＋stage0/1）**通用派生**。
+    旧链的节点专属分支全部随旧链退役删除：stage2 analyze/characters/global/
+    blueprint 的恢复面、stage4 design/plan 的人工闸与统一机械准入名册、
+    stage5 write/review 的闭合回执与 reviewer-rewrite、stage6 prepare 接受闸、
+    prepared delivery 0-wire 补尾。理由不是「它们没用了」而是「它们只能由旧链
+    节点写出，而生产入口已拒识旧节点」——新书的盘面不可能再产生那些状态；
+    新链的恢复是候选 runner 自身续跑（F7c：binding-only 精确补尾、同指纹熔断），
+    不经队列发布补尾 argv。live `.INVALID` 一律走收件箱关闭式阻断：现役节点
+    旗标面只有 `--check-only`，没有 0-wire 自动提升 argv，绝不能把「没有实现
+    恢复」解释成「同意再付一次钱」。
     """
-    if approval_doc is not None and approval_doc.sid != sid:
-        raise ValueError(
-            f'审批投影属于 {approval_doc.sid!r}，不是当前书 {sid!r}')
-    if STAGES.index(until_stage) >= STAGES.index('stage2'):
-        core_recovery = stage2_core_recovery_item(base, sid, code=approvals.projection_code())
-        if core_recovery is not None:
-            return ([], [core_recovery]) if core_recovery.waiting_on else ([core_recovery], [])
-    if STAGES.index(until_stage) >= STAGES.index('stage4'):
-        recovery = prepared_delivery_recovery_item(base, sid, code=approvals.projection_code(), until_stage=until_stage)
-        if recovery is not None:
-            # 先补原提交，不能让 fresh formal/已有 semantic 序号吞掉采纳尾窗，
-            # 更不能让后续 approve 改动原目标，致原证明永远无法补齐。
-            return [], [recovery]
     todo: list[QueueItem] = []
     blocked: list[QueueItem] = []
     #: ⚠ **一旦挡住，其后的项一律跟着挡住**——那才叫「挡住队列」（`R-13.5`）。
     #: 只挡住那一项而让后面的照跑，等于让下游拿着一份没人签过字的上游继续走。
     stuck: str | None = None
-    # Review 的当前 freshness 只描述**建队列这一刻**的主体。
-    # 同一快照若已排入可执行 writer，它成功后 canonical 章集/正文必然改变；
-    # 此时不能拿旧主体上的 fresh 回答“写完后还要不要
-    # 验收”。这格只记本次 plan 已经真正排入的 runnable writer；
-    # blocked writer 仍由 ``stuck`` 传递，不伪装成会在本次改变主体。
-    stage5_write_will_run = False
-    #: 批次 B3：机械闭合回执待落账时本 lane 已排入 0 成本 review 补算项；
-    #  stage6 在同一快照内必须等它完成后再重新规划。
-    closure_relearn_planned = False
-    planned_nodes = nodes_up_to(until_stage)
-    if 'stage2.analyze' in planned_nodes:
-        # Characters v3：冷启动永不优先联合 analyze；人物/知识走独立 producer。
-        # pending analyze recovery 仍由上方 stage2_core_recovery_item 单独处理。
-        planned_nodes.remove('stage2.analyze')
-    reviewer_rewrite_execution = None
-    closure_state = 'unreadable'
-    if 'stage5.review' in planned_nodes:
-        # Stage5 机械闭合视图一次读取（批次 B3）：review 节点的闭合补算
-        # 消费同一份结论，不在 lane 内各自重判。
-        if approval_doc is not None:
-            closure_view = approval_doc.closure
-        else:
-            try:
-                closure_view = approvals.stage5_closure_view(base, sid)
-            except (
-                ApprovalRequired, UpstreamMissing, ArtifactUnreadable,
-                GateBlocked, UpstreamStale, UpstreamUnproven,
-                BlockingFindingsUnresolved,
-            ):
-                closure_view = None
-        closure_state = (
-            'unreadable' if closure_view is None else closure_view.state)
-    if 'stage5.write' in planned_nodes:
-        # canonical request 是已完成 Commander 决定的唯一消费入口。它必须在
-        # stage5.write 的普通 SKIP、旧 Review currentness 与写作授权之前读取；
-        # 否则完整章集会把待执行 request 吞成“已经写完”，或旧 Review 会把
-        # 精确恢复反向堵住。不存在 request 才返回 None；坏文件一律上抛。
-        from novel.stages.stage5 import reviewer_rewrite
-
-        novel_dir = paths.find_novel_dir(base, sid)
-        # 尚未摄入的书没有 request；仍让冻结 overview 给出最早缺失节点。
-        # 已有书的坏 request 继续由 producer 上抛，不能当成不存在。
-        if novel_dir is not None:
-            reviewer_rewrite_execution = (
-                reviewer_rewrite.reviewer_rewrite_execution_state(
-                    st.readonly_ctx(
-                        novel_dir, 'stage5.write', approvals.projection_code())))
-    planning_stage2_global = 'stage2.global' in planned_nodes
-    naming_projection_blocked = (
-        planning_stage2_global and st.stage2_global_projection_blocked(ov)
-    )
-    edit_commit_flags = (
-        st.stage2_edit_commit_recovery_flags(base, sid)
-        if planning_stage2_global else None
-    )
-    edit_commit_action = (
-        'revalidate'
-        if edit_commit_flags
-        and edit_commit_flags[0] == '--revalidate'
-        else 'apply_edit' if edit_commit_flags else None
-    )
-    edit_commit = edit_commit_action == 'apply_edit'
-    edit_revalidate = bool(
-        planning_stage2_global
-        and edit_commit_action == 'revalidate'
-    )
-
-    for node in planned_nodes:
+    for node in nodes_up_to(until_stage):
         spec = NODES[node]
-        blueprint_repair_reason = None
-        stage4_design_replan_flags: tuple[str, ...] | None = None
-        stage5_reviewer_rewrite_flags: tuple[str, ...] | None = None
-        stage5_reviewer_rewrite_no_action = False
-        prepare_auto_accept = False
-        invalid_auto_revalidate = False
-        stage2_rework = None
-        projection_recovery = (
-            node == 'stage2.characters'
-            and st.stage2_projection_recovery_needed(ov)
-        )
-        knowledge_rebind = (
-            node == 'stage2.global'
-            and st.stage2_knowledge_rebind_needed(base, sid, ov)
-        )
-        projection_blocked = (
-            node == 'stage2.characters'
-            and naming_projection_blocked
-        )
-        blueprint_invalid_recovery = (
-            node == 'stage2.blueprint'
-            and st.stage2_blueprint_invalid_recovery_needed(ov)
-        )
         why_blocked = stuck
-        if why_blocked is None and node in HUMAN_NODES:
-            if not _gate_is_reachable(ov, spec.stage):
-                continue                             # 还没轮到它，不是「在等人」
-            if _human_gate_satisfied(base, sid, node):
-                continue                             # 人已经完成这道闸
-            why_blocked = node                       # 在等这一步的那个人
-        if (why_blocked is None and node == 'stage2.global'
-                and edit_commit):
-            # prepared journal 优先于 partial 提交的表象；只让 Executor 重放
-            # book canonical edit（0 wire）。
-            why_blocked = WAITING_ON_STAGE2_EDIT_COMMIT
-        if (why_blocked is None and node == 'stage2.global'
-                and edit_revalidate):
-            why_blocked = WAITING_ON_STAGE2_EDIT_REVALIDATE
-        if (why_blocked is None
-                and (projection_blocked or blueprint_invalid_recovery)):
-            # 两种状态都已有可恢复的问题稿，且下一步需要人提供 typed 决策。
-            # 队列不能替人造 actor/reason，更不能把 RUN 解释成默认再付一次钱。
-            why_blocked = WAITING_ON_INBOX
-        # Blueprint 与 Stage4 付费相由统一机械准入衔接：必要产物可读、当前、
-        # 无未恢复 INVALID，且所需机械检查全部通过（语义未审只披露不阻断）。
-        # 2026-09-15 全自动裁决后 stage4.plan 的打开条件同样是机械准入；
-        # stage4.context（免费）在下方单独判同一族机械条件。
-        # ⚠ 先于通用 upstream-invalid 分类：Stage2/Stage4 的 `.INVALID` 是明确的
-        # 准入阻断，理由要精确到产物。
-        if why_blocked is None and spec.paid and node in (
-                'stage2.blueprint', 'stage4.design', 'stage4.plan'):
-            from novel.orchestrator import mechanical_admission as admission
-            gate = (admission.blueprint_generation_ready(base, sid)
-                    if node == 'stage2.blueprint'
-                    else admission.stage4_plan_ready(base, sid)
-                    if node == 'stage4.plan'
-                    else admission.stage4_ready(base, sid))
-            if not gate.ok:
-                why_blocked = WAITING_ON_INBOX
-                blueprint_repair_reason = '统一机械准入未通过：' + '；'.join(gate.blocking)
-            elif node == 'stage2.blueprint':
-                from novel.stages.stage2.blueprint.diagnostics import read_repair_diagnostics
-                try:
-                    diagnostic = read_repair_diagnostics(base, sid, code=approvals.projection_code())
-                except (ArtifactUnreadable, UpstreamMissing, UpstreamStale, UpstreamUnproven) as exc:
-                    why_blocked = WAITING_ON_INBOX
-                    blueprint_repair_reason = str(exc)
-                else:
-                    if diagnostic is not None and diagnostic['diagnostics']:
-                        why_blocked = WAITING_ON_INBOX
-                        blueprint_repair_reason = '; '.join(
-                            row['detail'] + '。' + row['recovery'] for row in diagnostic['diagnostics'])
-
         if why_blocked is None:
             ghosts = _upstream_invalid(ov, spec.stage)
             if ghosts:
+                # 严格上游里有被闸门拦下的稿：本节点的正式输入不完整。
                 why_blocked = WAITING_ON_INBOX
-
         verdict, why = st.resume_verdict(ov, node)
-        if blueprint_repair_reason is not None:
-            why = blueprint_repair_reason
-        if projection_recovery and why_blocked is None:
-            verdict, why = st.RESUME_RUN, '人物正式登记可用；免费重建称名投影'
-        elif knowledge_rebind and why_blocked is None:
-            verdict, why = st.RESUME_RUN, '仅人物独立登记改变；免费重验已有知识引用并重绑来源'
-        deterministic_redo_flags: tuple[str, ...] | None = None
-        if (why_blocked is None and node == 'stage5.write'
-                and reviewer_rewrite_execution is not None):
-            execution = reviewer_rewrite_execution
-            if execution.state == 'ready_paid':
-                stage5_reviewer_rewrite_flags = (
-                    '--reviewer-rewrite', execution.request_rel)
-                why_blocked = WAITING_ON_STAGE5_REVIEWER_REWRITE
-            elif execution.state in {
-                    'recoverable_checkpoint', 'recoverable_prepared'}:
-                if execution.source_run_id is None:
-                    raise ArtifactUnreadable(
-                        'Reviewer rewrite 可恢复态缺 source run_id')
-                recovery_flags = (
-                    '--recover-reviewer-rewrite-prepared',
-                    execution.source_run_id,
-                    '--reviewer-rewrite-request-sha256',
-                    execution.request_sha256,
-                )
-                if execution.state == 'recoverable_prepared':
-                    if (execution.recovery_target_run_id is None
-                            or execution.recovery_journal_sha256 is None):
-                        raise ArtifactUnreadable(
-                            'Reviewer rewrite prepared recovery 缺 exact target WAL identity')
-                    recovery_flags += (
-                        '--reviewer-rewrite-recovery-target-run-id',
-                        execution.recovery_target_run_id,
-                        '--reviewer-rewrite-recovery-journal-sha256',
-                        execution.recovery_journal_sha256,
-                    )
-                stage5_reviewer_rewrite_flags = recovery_flags
-                why_blocked = WAITING_ON_STAGE5_REVIEWER_REWRITE
-            elif execution.state == 'expired_unstarted':
-                stage5_reviewer_rewrite_flags = (
-                    '--retire-reviewer-rewrite-request',
-                    execution.request_rel,
-                    '--reviewer-rewrite-request-sha256',
-                    execution.request_sha256,
-                )
-                why_blocked = WAITING_ON_STAGE5_REVIEWER_REWRITE
-            elif execution.state == 'in_flight_or_unknown':
-                # 旧 owner/执行状态尚不能证明可重放；没有任何诚实 argv。
-                # 仍保持在 rewrite 专属 waiter，且显式 steps=[]；不能退回 stale
-                # Review、默认 writer 或新 Reviewer，也不能把空 flags 误作 paid argv。
-                why_blocked = WAITING_ON_STAGE5_REVIEWER_REWRITE
-                stage5_reviewer_rewrite_no_action = True
-            elif execution.state in {'landed_invalid', 'landed_rejected'}:
-                # request 已消费，绝不能再发同一 paid rewrite。现役 inbox 同时
-                # 展示 .INVALID 与 rejected revision，并提供各自人工恢复面。
-                why_blocked = WAITING_ON_INBOX
-            elif execution.state == 'consumed_resolved':
-                # request 已由 immutable terminal/expiry receipt 消费；它不再
-                # 挡住正常 Stage5 currentness，下一格会按 stale Review 发布
-                # 0 成本 stage5.review，而不是再次打开 Writer 或 Reviewer。
-                pass
-            elif execution.state != 'landed_formal':
-                raise ArtifactUnreadable(
-                    f'未知 Reviewer rewrite execution state：{execution.state!r}')
-        if (why_blocked is None and node == 'stage4.design'
-                and verdict == st.RESUME_SKIP
-                and _stage4_replan_required(base, sid)):
-            # B 的 typed infeasible 已是正式终态：2026-09-15 全自动裁决后不再
-            # 等人工 resolution，唯一后继是预算内自动整书重采 A（普通付费
-            # todo）。生产者按机器铸造的 typed scope 消费它；预算耗尽时该
-            # 工作单元以 WorkUnitBudgetExhausted 终态失败。
-            stage4_design_replan_flags = ('--replan',)
-            verdict = st.RESUME_RUN
-            why = ('Stage4B 已对当前候选落盘 typed infeasible；预算内自动整书'
-                   '重采 Stage4A，预算耗尽即本工作单元 WorkUnitBudgetExhausted 终态')
-        if (
-            why_blocked is None
-            and verdict == st.RESUME_RUN
-            and st.live_invalid_artifacts(ov, node)
-            and not projection_recovery
-            and stage2_rework is None
-        ):
-            # ``resume_verdict`` 必须如实描述“默认重跑会发生什么”，但 queue 不能
-            # 把这句警告继续冻结成一条付费 argv。批次 C：有 ``--revalidate`` 的
-            # 节点由队列以固定 system 审计身份自动排 0-wire 提升；没有该入口的
-            # 节点仍 blocked，绝不把“没实现恢复”解释成“同意再付一次钱”。
-            if '--revalidate' in spec.flags:
-                invalid_auto_revalidate = True
-                why_blocked = WAITING_ON_INVALID_REVALIDATE
-                verdict, why = st.RESUME_RUN, (
-                    '本层有 live .INVALID——零成本 --revalidate（'
-                    f'{SYSTEM_INVALID_REVALIDATE_ACTOR}）同轮重判并留不可变审计')
-            else:
-                why_blocked = WAITING_ON_INBOX
-        # Stage4 人工闸已退役（2026-09-15 全自动裁决）：design 落盘（机械有效）
-        # 即自动进入 plan（上方统一机械准入），plan 落盘（机械有效）即自动
-        # 进入 context。context 的机械准入单独判，理由精确到产物。
-        if why_blocked is None and node == 'stage4.context' \
-                and verdict != st.RESUME_SKIP:
-            from novel.orchestrator import mechanical_admission as admission
-            gate = admission.stage4_context_ready(base, sid)
-            if not gate.ok:
-                why_blocked = WAITING_ON_INBOX
-                why = '统一机械准入未通过：' + '；'.join(gate.blocking)
-        # ⚠ F8A：Stage6 机械闭合闸与 prepare 接受闸两个 planning 块随 Stage6
-        #   整层退役删除（F6d 登记）。Hook 的必要选择进 Stage4 正式 Design，
-        #   成文在 Stage5 单产（`str06.stage5.hook`），没有定稿链也没有
-        #   prepare 接受面。
-        review_follows_planned_write = (
-            node == 'stage5.review'
-            and stage5_write_will_run
-            and verdict == st.RESUME_SKIP)
-        closure_relearn_needed = (
-            node == 'stage5.review'
-            and not stage5_write_will_run
-            and verdict == st.RESUME_SKIP
-            and closure_state in ('ready', 'expired'))
-        if (why_blocked is None and verdict == st.RESUME_SKIP
-                and not review_follows_planned_write
-                and not closure_relearn_needed):
-            continue                                 # 已存在即跳过
-        if why_blocked is None and review_follows_planned_write:
-            # 当前 Review 即使 fresh，前一项 writer 落盘后也必须按新主体
-            # 重算。把它显式排入零成本 step；writer 若失败，队列的
-            # “停在那里”仍会让这一项 not_run。
-            verdict = st.RESUME_RUN
-            why = 'stage5.write 已排入本次队列；落盘后必须按新 canonical 主体零成本重算 Review'
-        if why_blocked is None and closure_relearn_needed:
-            # 机械闭合回执（批次 B3）由 review producer 自动落账；工作包已可
-            # 闭合而回执未落（ready/expired）时，唯一缺的就是一次 0 成本重算。
-            verdict = st.RESUME_RUN
-            closure_relearn_planned = True
-            why = ('Stage5 机械闭合待落账：零成本重算 Review，producer 以 '
-                   'system:stage5-auto 自动落机械闭合回执后再放行 Stage6')
-
         if why_blocked is None and verdict == st.RESUME_LEGACY:
             why_blocked = WAITING_ON_LEGACY
+        if (why_blocked is None and verdict == st.RESUME_RUN
+                and st.live_invalid_artifacts(ov, node)):
+            # 本层自己的 live `.INVALID`：没有可自动排入的提升路 ⇒ 收件箱阻断，
+            # 且不冻结任何默认付费 argv（见模块 docstring 的 F8c 段）。
+            why_blocked = WAITING_ON_INBOX
+        deterministic_redo_flags: tuple[str, ...] | None = None
         if (why_blocked is None and verdict == st.RESUME_REDO
                 and allow_deterministic_redo):
             deterministic_redo_flags = st.operator_redo_flags(ov, node)
@@ -701,131 +247,17 @@ def plan_book_from_overview(
             # 单步 operator 能拿到 state 登记并证明过的 canonical flags。仅仅把
             # ``allow`` 打开并不放宽 file_changed/unreadable/INVALID 等关闭式分支。
             why_blocked = WAITING_ON_RESUME_DECISION
-
-        # 称名投影只由人物 producer 拥有，缺失时沿同一免费复验入口恢复；
-        # 人物独立登记改变后，Global 沿免费 `--renormalize` 重验引用并重绑来源。
+        if why_blocked is None and verdict == st.RESUME_SKIP:
+            continue                                 # 已存在即跳过
         flags: list[str] = (
-            list(edit_commit_flags or ())
-            if node == 'stage2.global' and edit_commit
-            else list(edit_commit_flags or ())
-            if node == 'stage2.global' and edit_revalidate
-            else list(stage4_design_replan_flags)
-            if stage4_design_replan_flags is not None
-            else list(stage5_reviewer_rewrite_flags)
-            if stage5_reviewer_rewrite_flags is not None
-            else list(deterministic_redo_flags)
+            list(deterministic_redo_flags)
             if deterministic_redo_flags is not None
-            else ['--revalidate', '--actor', 'system:projection-recovery',
-                  '--reason', '从当前人物登记免费重建称名投影']
-            if projection_recovery
-            else ['--renormalize']
-            if knowledge_rebind
-            else ['--revalidate']
-            if prepare_auto_accept
-            else ['--revalidate', '--actor', SYSTEM_INVALID_REVALIDATE_ACTOR,
-                  '--reason', SYSTEM_INVALID_REVALIDATE_REASON]
-            if invalid_auto_revalidate
             else []
         )
-        if node == 'stage4.plan' and why_blocked is None and not flags:
-            from novel.stages.stage4 import plan_recovery
-            book = paths.find_novel_dir(base, sid)
-            if book is not None and (book / STAGE4_BLIND_CANDIDATE).is_file():
-                if plan_recovery.reaggregate_available(
-                        st.readonly_ctx(book, node, approvals.projection_code())):
-                    flags = ['--reaggregate']
-                    why = '当前所有章可机械确定或采用有效历史；免费聚合后进入结构审阅'
-        if node == 'stage4.design' and why_blocked is None and not flags:
-            from novel.stages.stage4 import design_response_recovery, plan_recovery
-            book = paths.find_novel_dir(base, sid)
-            if book is not None:
-                recovery_ctx = st.readonly_ctx(book, node, approvals.projection_code())
-                if design_response_recovery.available(recovery_ctx):
-                    flags = ['--recover-responses']
-                    why = '已保存原回答但 checkpoint 未完成；先免费恢复再计算缺失工作'
-                elif plan_recovery.reaggregate_available(recovery_ctx):
-                    flags = ['--reaggregate']
-                    why = '当前策略与全部章节均有有效历史响应；免费聚合后进入设计审阅'
         steps = None
-        if stage5_reviewer_rewrite_no_action:
-            steps = []
-        if (projection_blocked
-                or blueprint_invalid_recovery
-                or (naming_projection_blocked
-                    and stuck == WAITING_ON_INBOX)):
-            # 称名面未收口时，Global 之后的 blocked 项也不能残留被冻结的
-            # 付费命令；否则恢复确认界面仍会把“不允许执行”展示成潜在花费。
-            steps = []
-        if node == 'stage5.write':
-            stage5_state = next(
-                (stage for stage in ov.stages if stage.stage == 'stage5'), None)
-            has_live_invalid = bool(
-                stage5_state is not None
-                and any(a.invalid for a in stage5_state.artifacts))
-            review_not_current = bool(
-                stage5_state is not None
-                and stage5_state.review_state not in (None, 'missing', 'fresh'))
-            review_blocks_paid_write = bool(
-                review_not_current and deterministic_redo_flags is None)
-
-            # 本层两道闸按恢复成本排序（批次 B3：独立写作授权已并入 run 启动
-            # 授权，队列不再索取）：先处理 0 LLM INVALID；普通续写再免费重跑
-            # 旧 Review。若 operator 已证明上游 consumed-change 并导出精确重写
-            # 章，旧 Review 绑定的是旧正文，不能反向卡住重建；新章落盘后下一
-            # 轮自然会免费重算 Review。其余上游 stuck / legacy / REDO / UNKNOWN
-            # 已在上面占住 blocker。
-            if why_blocked is None and has_live_invalid and not invalid_auto_revalidate:
-                # 通用 live-INVALID 分支未接手时（例如缺 --revalidate），仍 blocked。
-                why_blocked = WAITING_ON_INBOX
-            if why_blocked is None and review_blocks_paid_write:
-                why_blocked = WAITING_ON_REVIEW
-            if (stage5_reviewer_rewrite_flags is None
-                    and ((has_live_invalid and not invalid_auto_revalidate)
-                         or review_blocks_paid_write)):
-                steps = []
-
-        if why_blocked in (
-            WAITING_ON_INBOX,
-            WAITING_ON_STAGE5_CLOSURE,
-            WAITING_ON_INVALID_REVALIDATE,
-        ):
-            # 人审/相位决定完成前，当前队列快照里不放下游付费 argv。状态改变后
-            # 必须重新 plan，不能把旧快照重解释为新授权。
-            # INVALID 自动提升的 exact argv 由 flags 携带，steps 留给 Supervisor
-            # 铸 recovery permit 后再冻结——规划期不解析书目录。
-            steps = []
-        if (why_blocked == WAITING_ON_STAGE5_REVIEWER_REWRITE
-                and node != 'stage5.write'):
-            # 只有当前 writer 携 exact request/recovery argv；同一 blocker
-            # 向下游传播时不得冻结任何后续付费命令。
-            steps = []
-        if (why_blocked == WAITING_ON_STAGE2_EDIT_COMMIT
-                and node != 'stage2.global'):
-            # 只有当前 prepared commit 本身携 canonical 0-wire argv；向下游传播
-            # blocker 时绝不冻结任何后续付费命令。
-            steps = []
-        if (why_blocked == WAITING_ON_STAGE2_EDIT_REVALIDATE
-                and node != 'stage2.global'):
-            # revalidate 只属于当前 Stage2 Global；下游不得继承其 argv。
-            steps = []
-
-        if verdict == st.RESUME_LEGACY or why_blocked == WAITING_ON_RESUME_DECISION:
-            steps = []
-
-        if steps is None and why_blocked is not None and node in HUMAN_NODES:
-            # ⚠⚠ **人还没签字之前，这道闸没有一条「诚实的可执行命令」可以快照。**
-            # `stage7.approve` 的 argv 必填 `--actor` / `--reason`（人此刻还没给出的
-            # 东西）⇒ `build_steps` 会抛 `UnsupportedRunMode`。而这一项本来就是
-            # `blocked`，它要回答的是「在等谁」，不是「怎么跑」。
-            # ⚠ 曾经这里无条件 `build_steps`：于是一本「stage0 还没人批」的书会让
-            #   **整条队列计划当场抛异常**——CLI `queue --plan-only` 退出码 2、
-            #   HTTP 400，而真正的事实只是「在等人批准 stage0」。
-            # ⇒ 与上面 `stage5.write` 缺写作授权时**同一处置**：留空命令面。
-            #   人给出裁决之后命令面本来就会变，那时旧队列本就需要重排。
-            #
-            # `why_blocked` 也可能是更早节点留下的 ``stuck``。此时后续人工节点
-            # 同样不能调用 ``build_steps``：它缺少尚未发生的人类 pick/actor/reason/hash，
-            # 规划器的职责只是把上游阻塞传播到底，而不是提前伪造一条人工命令。
+        if why_blocked is not None:
+            # 任何 blocker 都不冻结命令面（尤其是下游付费 argv）：状态改变后必须
+            # 重新 plan，不能把旧快照重解释为新授权。
             steps = []
         if steps is None:
             steps = build_steps(
@@ -839,65 +271,28 @@ def plan_book_from_overview(
             waiting_on=why_blocked,
         )
         (blocked if why_blocked else todo).append(item)
-        if node == 'stage5.write' and why_blocked is None:
-            stage5_write_will_run = True
         if why_blocked and stuck is None:
             stuck = why_blocked
     return todo, blocked
-
-
 def _blocked_why(
     waiting_on: str, verdict_why: str,
 ) -> str:
-    if waiting_on == WAITING_ON_INVALID_REVALIDATE:
-        return (
-            '本层 live `.INVALID` 待 0-wire 自动提升：Supervisor 将以 '
-            f'`{SYSTEM_INVALID_REVALIDATE_ACTOR}` 重放 `--revalidate`；'
-            f'{verdict_why}')
+    # F8c：现役队列只发三个 blocker（INBOX／LEGACY／RESUME_DECISION）；旧链的
+    # stage2 edit-commit／stage4 repair／stage5 closure／reviewer-rewrite／
+    # stage6 prepare 提升路随旧链退役删除。`approval:` 前缀保留为编排错误哨兵
+    # （现役链没有任何审批闸，出现即 fail loud）；其余未登记名字走通用句式，
+    # 存量队列账（`read_events` 折叠的历史 run）按原字节解码，不改写历史。
     if waiting_on == WAITING_ON_INBOX:
         return (
-            '上游或本层有被闸门拦下的稿：有 ``--revalidate`` 的节点由队列以 '
-            f'`{SYSTEM_INVALID_REVALIDATE_ACTOR}` 自动 0-wire 提升；本项仍 blocked '
-            '表示当前节点没有可自动排入的提升路或另有机械准入阻断；'
+            '上游或本层有被闸门拦下的稿：现役节点旗标面只有 `--check-only`，'
+            '没有 0-wire 自动提升 argv ⇒ 队列关闭式阻断，不冻结默认付费重跑；'
             f'{verdict_why}')
-    if waiting_on == WAITING_ON_STAGE5_CLOSURE:
-        return (
-            'Stage5 机械闭合未落账：闭合由 Review 机械判定自动完成（批次 B3，'
-            'producer 以 system:stage5-auto 落回执），没有人工回执路径。缺章/'
-            '.INVALID/阻断级判定先走各自恢复面；工作包可闭合（ready/expired）'
-            '时零成本重跑 `stage5.review` 即自动落账；'
-            f'{verdict_why}')
-    if waiting_on == WAITING_ON_STAGE5_REVIEWER_REWRITE:
-        return (
-            'Stage5 顶部 Commander 已把批量关闭式 rewrite 决定落成 current '
-            'hash-bound request；当前只允许按 execution journal 发布 exact paid '
-            'writer 或 0-wire prepared recovery，不再调用 Commander，也不退回默认'
-            f'写作。执行终态后重新规划并免费重算 Review；{verdict_why}')
-    if waiting_on == WAITING_ON_STAGE2_EDIT_COMMIT:
-        return (
-            'Stage2 typed 编辑已留下 hash-bound prepared journal；当前只能由 '
-            'Executor 以 canonical global_edit.json 零 wire 补齐正式产物并 '
-            f'readback，不能重采付费 Global；{verdict_why}')
-    if waiting_on == WAITING_ON_STAGE2_EDIT_REVALIDATE:
-        return (
-            'Stage2 INVALID 已按与 producer 相同的 restore/normalize/HARD '
-            '尺子确认无阻断；当前只允许 Executor 按冻结 actor/reason 做 '
-            '0-wire revalidate，并由 prepared journal 补齐正式 bundle；'
-            f'{verdict_why}')
-    if waiting_on == WAITING_ON_REVIEW:
-        return ('Stage5 Review 不是 fresh，旧结论不得驱动付费作业；'
-                f'先零成本运行 `stage5.review`；{verdict_why}')
     if waiting_on == WAITING_ON_LEGACY:
         return f'{verdict_why}；旧产物只读保留，必须显式重建 canonical Stage5'
     if waiting_on == WAITING_ON_RESUME_DECISION:
         return (
             '续跑结论要求人工决定，队列不会把 REDO/UNKNOWN 猜成可执行命令；'
             f'{verdict_why}')
-    # ⚠ F8A：以下两支只服务存量队列账的只读解码；现役队列不再发出 stage6 blocker。
-    if waiting_on == 'stage6.prepare':
-        return (
-            '等待 stage6.prepare 机械通过并由 system:stage6-prepare-auto '
-            f'自动接受；{verdict_why}')
     if waiting_on.startswith('approval:'):
         return (
             f'编排错误：现役队列不应再发出已退役审批闸 `{waiting_on}`；'

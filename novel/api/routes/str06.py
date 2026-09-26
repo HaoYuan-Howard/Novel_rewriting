@@ -22,7 +22,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import PlainTextResponse
 
-from contracts.schema.str06.api import (
+from contracts.schema.api import (
     Str06BlueprintView, Str06CandidateList, Str06CharactersView, Str06ChapterView,
     Str06DeliveryView, Str06DesignView, Str06HookView, Str06IrNavView,
     Str06NamingView, Str06RunView,

@@ -3,12 +3,18 @@
 """跨 run（臂）对比读数器。**只读**：不写盘、不发请求、不产生新判定。
 
 给模型/思考 A/B 用：N 个 `--arm`（每臂一个 base，同一个 sid），把
-  ① 成本（账本 token 事实，生成/判官分账）      ② 墙钟（span 分段 + Σlatency 双口径）
+  ① 成本（账本 token 事实，生成/指挥分账）        ② 墙钟（span 分段 + Σlatency 双口径）
   ③ 质量闸（各层 badge / 四态计数 / HARD 残留） ④ `sev='metric'` 全量读数
-  ⑤ inbox 全类                                   ⑥ 语义审判摘要
-  ⑦ 账本健康（限流/超时/重试）                   ⑧ 成书统计
+  ⑤ inbox 全类                                   ⑥ 账本健康（限流/超时/重试）
+  ⑦ 成书统计
 摆成「列=臂」的 markdown 矩阵。**它是读数器不是判官**（R-13.6）：判定语义只归
 check 报告；质量细排名一律不出——单次跑不可归因（`docs/DECISIONS.md`）。
+
+【F8a：判官面整面删除】语义审判（`stage6.semantic` 判官节点与各臂
+`semantic_{n}.json` 产物）随 2026-09-15 全自动裁决退役，新链无对应物
+（STR-06 的语义未评以 `unver` 披露，不再有判官分账与审判摘要）⇒
+`JUDGE_NODES`、`semantic_digest`、`diff_semantic` 与 `--compare-semantic`
+一并删除；成本只剩指挥（Commander role）与生成两类。
 
 ⚠ 钱：账本只有 token 事实（Q-10 明令不存价格）。`--rates` 传一张**带日期**的费率表
   JSON 时才折算；折算只进 stdout/实验报告，不落任何仓内产物。
@@ -21,7 +27,6 @@ check 报告；质量细排名一律不出——单次跑不可归因（`docs/DE
   python -X utf8 tools/ab_compare.py --sid <sid> \\
       --arm pro_think=<abs>/ab/pro_think --arm flash_think=... \\
       [--rates rates.json] [--gap-seconds 600] [--source 源.txt] [--json out.json]
-  python -X utf8 tools/ab_compare.py --compare-semantic A.json B.json
 """
 from __future__ import annotations
 
@@ -43,10 +48,6 @@ from novel.orchestrator.nodes import check_node              # noqa: E402
 from novel.orchestrator.state import readonly_ctx            # noqa: E402
 from novel.stages import check_only                          # noqa: E402
 from novel.orchestrator.inbox_projection import inbox_view                     # noqa: E402
-
-#: 判官节点。质量测量仪器与生成分账（A/B 里判官统一固定配置，成本不归臂）。
-#: ⚠ `stage5.semantic` 于 2026-08-17 下线，判官节点只剩一个。
-JUDGE_NODES = frozenset({'stage6.semantic'})
 
 #: 章头两种实测形态：`第N章/回` 行头（可带标题），或**独行裸数字**（成书实测是后者）。
 _CH_MARK = re.compile(r'^(?:第[0-9一二三四五六七八九十百千两]{1,7}[章回]|\d{1,4}\s*$)', re.M)
@@ -92,7 +93,7 @@ def _tok(rows: list[dict], key: str) -> tuple[int, int, int]:
 
 
 def cost_table(rows: list[dict]) -> dict:
-    """按 node / Commander role 聚成本事实；生成、判官与指挥分账。"""
+    """按 node / Commander role 聚成本事实；生成与指挥分账。"""
     out: dict[str, dict] = {}
     groups = {_cost_group(row) for row in rows}
     for node in sorted(groups):
@@ -131,7 +132,6 @@ def cost_table(rows: list[dict]) -> dict:
         fallback_steps = sum(max(0, len(configs) - 1) for configs in by_purpose.values())
         cache_total = ph + pm
         out[node] = {
-            'judge': node in JUDGE_NODES,
             'models': sorted({r.get('model') for r in nr if r.get('model')}),
             'calls_made': len(wire),
             'calls_cached': len(nr) - len(wire),
@@ -229,45 +229,6 @@ def stage_reports(base: str, sid: str) -> dict[str, dict]:
     return out
 
 
-# ── 语义审判摘要 ────────────────────────────────────────────────────────────
-
-def _latest(novel_dir: Path, stage_dir: str) -> Path | None:
-    got = sorted((novel_dir / stage_dir).glob('semantic_*.json'),
-                 key=lambda p: int(p.stem.split('_')[1]))
-    return got[-1] if got else None
-
-
-def semantic_digest(base: str, sid: str) -> dict:
-    novel_dir = Path(paths.resolve_novel_dir(base, sid))
-    out: dict = {}
-    p5 = _latest(novel_dir, 'stage5')
-    if p5 is not None:
-        d = json.loads(p5.read_text(encoding='utf-8'))
-        out['stage5'] = {
-            'file': p5.name,
-            'judge_model': (d.get('_provenance') or {}).get('model'),
-            'review_seq': d.get('mechanical_review_seq'),
-            'secret_status': dict(Counter(s.get('status') for s in d.get('secrets', []))),
-            'chapter_coverage': dict(Counter(c.get('coverage') for c in d.get('chapters', []))),
-            'chapters_uncertain': sum(1 for c in d.get('chapters', [])
-                                      if c.get('uncertainty_reason')),
-        }
-    p6 = _latest(novel_dir, 'stage6')
-    if p6 is not None:
-        d = json.loads(p6.read_text(encoding='utf-8'))
-        per_label: dict[str, Counter] = defaultdict(Counter)
-        for dec in d.get('decisions', []):
-            per_label[dec.get('label', '?')][dec.get('status')] += 1
-        out['stage6'] = {
-            'file': p6.name,
-            'judge_model': (d.get('_provenance') or {}).get('model'),
-            'hook_file_sha1': d.get('hook_file_sha1'),
-            'decision_status': dict(Counter(x.get('status') for x in d.get('decisions', []))),
-            'per_label': {k: dict(v) for k, v in sorted(per_label.items())},
-        }
-    return out
-
-
 # ── inbox / 成书 ─────────────────────────────────────────────────────────────
 
 def inbox_digest(base: str, sid: str) -> dict:
@@ -298,43 +259,6 @@ def book_stats(base: str, sid: str, source: str | None) -> dict:
             out['ratio_chars_no_ws'] = round(
                 out['book']['chars_no_ws'] / src['chars_no_ws'], 3)
     return out
-
-
-# ── 判官一致性：两份 semantic 产物逐条对比 ──────────────────────────────────
-
-def diff_semantic(file_a: str, file_b: str) -> dict:
-    a = json.loads(Path(file_a).read_text(encoding='utf-8'))
-    b = json.loads(Path(file_b).read_text(encoding='utf-8'))
-    if 'secrets' in a:                                   # stage5 形
-        ka = {s['secret_id']: s for s in a.get('secrets', [])}
-        kb = {s['secret_id']: s for s in b.get('secrets', [])}
-        flips = [{'secret_id': k,
-                  'a': {'status': ka[k].get('status'),
-                        'earliest_chapter': ka[k].get('earliest_chapter')},
-                  'b': {'status': kb[k].get('status'),
-                        'earliest_chapter': kb[k].get('earliest_chapter')}}
-                 for k in sorted(ka.keys() & kb.keys())
-                 if ka[k].get('status') != kb[k].get('status')]
-        cov_a = {c['output_ordinal']: c.get('coverage') for c in a.get('chapters', [])}
-        cov_b = {c['output_ordinal']: c.get('coverage') for c in b.get('chapters', [])}
-        cov_flips = [{'chapter': k, 'a': cov_a[k], 'b': cov_b[k]}
-                     for k in sorted(cov_a.keys() & cov_b.keys())
-                     if cov_a[k] != cov_b[k]]
-        total = len(ka.keys() & kb.keys())
-        return {'kind': 'stage5', 'compared_secrets': total,
-                'secret_flips': flips, 'coverage_flips': cov_flips,
-                'only_in_a': sorted(ka.keys() - kb.keys()),
-                'only_in_b': sorted(kb.keys() - ka.keys())}
-    ka = {(d['label'], d['claim_id']): d.get('status') for d in a.get('decisions', [])}
-    kb = {(d['label'], d['claim_id']): d.get('status') for d in b.get('decisions', [])}
-    flips = [{'label': lb, 'claim_id': cid, 'a': ka[(lb, cid)], 'b': kb[(lb, cid)]}
-             for lb, cid in sorted(ka.keys() & kb.keys())
-             if ka[(lb, cid)] != kb[(lb, cid)]]
-    return {'kind': 'stage6', 'compared_decisions': len(ka.keys() & kb.keys()),
-            'flips': flips,
-            'only_in_a': len(ka.keys() - kb.keys()),
-            'only_in_b': len(kb.keys() - ka.keys()),
-            'same_hook_sha1': a.get('hook_file_sha1') == b.get('hook_file_sha1')}
 
 
 # ── 折钱（只在给了 --rates 时；结果不落仓内产物） ────────────────────────────
@@ -407,12 +331,11 @@ def render(sid: str, arms: dict[str, dict], rates: dict | None) -> str:
     arm_line = ', '.join('{}={}'.format(n, arms[n]['base']) for n in names)
     L: list[str] = [f'# 跨臂对比 · sid={sid}', '', f'臂：{arm_line}', '']
 
-    L += ['## ① 成本（token 事实；指挥/生成/判官分账；cached 行实付 0 不计入）', '',
+    L += ['## ① 成本（token 事实；指挥/生成分账；cached 行实付 0 不计入）', '',
           _row(['node / role', '账'] + names), _row(['---'] * (len(names) + 2))]
     all_nodes = sorted({n for a in arms.values() for n in a['cost']})
     for node in all_nodes:
-        tag = ('指挥' if node == 'role:commander' else
-               '判官' if node in JUDGE_NODES else '生成')
+        tag = ('指挥' if node == 'role:commander' else '生成')
         for key, label in (('calls_made', '真调用'), ('calls_cached', '缓存命中'),
                            ('prompt_tokens', 'prompt'),
                            ('completion_tokens', 'completion（已含 reasoning）'),
@@ -455,8 +378,7 @@ def render(sid: str, arms: dict[str, dict], rates: dict | None) -> str:
             L.append(_row([f'{node}·{tag}', label] + cells))
     for scope, pred in (
             ('指挥合计', lambda nd: nd == 'role:commander'),
-            ('生成合计', lambda nd: nd != 'role:commander' and nd not in JUDGE_NODES),
-            ('判官合计', lambda nd: nd in JUDGE_NODES)):
+            ('生成合计', lambda nd: nd != 'role:commander')):
         for key in ('prompt_tokens', 'completion_tokens', 'reasoning_tokens', 'calls_made'):
             cells = [_fmt_int(sum(c[key] for nd, c in arms[n]['cost'].items() if pred(nd)))
                      for n in names]
@@ -482,8 +404,7 @@ def render(sid: str, arms: dict[str, dict], rates: dict | None) -> str:
               _row(['范围'] + names), _row(['---'] * (len(names) + 1))]
         for scope, pred in (
                 ('指挥', lambda nd: nd == 'role:commander'),
-                ('生成', lambda nd: nd != 'role:commander' and nd not in JUDGE_NODES),
-                ('判官', lambda nd: nd in JUDGE_NODES)):
+                ('生成', lambda nd: nd != 'role:commander')):
             cells = []
             for n in names:
                 money = money_of({nd: c for nd, c in arms[n]['cost'].items() if pred(nd)},
@@ -552,11 +473,7 @@ def render(sid: str, arms: dict[str, dict], rates: dict | None) -> str:
                   [f'{arms[n]["inbox"]["total"]} / {arms[n]["inbox"]["wontfix"]}'
                    for n in names]))
 
-    L += ['', '## ⑥ 语义审判摘要（判官模型以各臂产物 `_provenance.model` 为准）', '']
-    for n in names:
-        L.append(f'- **{n}**: {json.dumps(arms[n]["semantic"], ensure_ascii=False)}')
-
-    L += ['', '## ⑦ 账本健康', '', _row(['项'] + names), _row(['---'] * (len(names) + 1))]
+    L += ['', '## ⑥ 账本健康', '', _row(['项'] + names), _row(['---'] * (len(names) + 1))]
     for key, label in (('errors', '错误(按 kind)'), ('retries', '重试行数')):
         cells = []
         for n in names:
@@ -569,7 +486,7 @@ def render(sid: str, arms: dict[str, dict], rates: dict | None) -> str:
                 cells.append(str(sum(c['retries'] for c in arms[n]['cost'].values())))
         L.append(_row([label] + cells))
 
-    L += ['', '## ⑧ 成书统计（成书三查的读数面；判定仍归人工三查）', '']
+    L += ['', '## ⑦ 成书统计（成书三查的读数面；判定仍归人工三查）', '']
     for n in names:
         L.append(f'- **{n}**: {json.dumps(arms[n]["book"], ensure_ascii=False)}')
     L.append('')
@@ -588,13 +505,7 @@ def main() -> int:
     ap.add_argument('--gap-seconds', type=float, default=600.0)
     ap.add_argument('--source', help='源书 txt（给了才算成书比值）')
     ap.add_argument('--json', dest='json_out', help='把全量结构化结果另存一份 JSON')
-    ap.add_argument('--compare-semantic', nargs=2, metavar=('A', 'B'),
-                    help='判官一致性：对比两份 semantic_{n}.json')
     a = ap.parse_args()
-
-    if a.compare_semantic:
-        print(json.dumps(diff_semantic(*a.compare_semantic), ensure_ascii=False, indent=2))
-        return 0
 
     if not a.sid or not a.arm:
         ap.error('矩阵模式需要 --sid 与至少一个 --arm 名=path')
@@ -610,7 +521,6 @@ def main() -> int:
             'wall': wall_table(rows, a.gap_seconds),
             'quality': stage_reports(base, a.sid),
             'inbox': inbox_digest(base, a.sid),
-            'semantic': semantic_digest(base, a.sid),
             'book': book_stats(base, a.sid, a.source),
         }
     rates = json.loads(Path(a.rates).read_text(encoding='utf-8')) if a.rates else None

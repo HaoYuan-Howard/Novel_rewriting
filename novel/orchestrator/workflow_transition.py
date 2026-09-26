@@ -3,6 +3,12 @@
 只有显式登记的相邻 manifest 可以推进。prepared 冻结精确字节、全盘保留清单、
 配对来源代码的接受和排空证明；manifest CAS 后由 completed 闭合消费者入口。
 工作单元仍使用原 task_id，旧预算、profiles、决定和付费回答一个字节也不改。
+
+⚠ F8c 收口：v4→v5 迁移随旧链退役。它唯一的新产物是 Blueprint 人物称名投影的
+免费重编译，编译器 `novel.stages.stage2.shared.character_refs` 已随旧链整层
+删除，投影本身也是 `RETIRED_ARTIFACT_PATHS` 里的退役产物；本模块不手抄旧编译
+器，v4 基础按 legacy_incompatible 只读拒识。**现役只剩 v5→v6**：它不重编译
+任何已验收产物（`WorkflowTransitionPreparedV2` 钉死 projections 为空）。
 """
 from __future__ import annotations
 
@@ -16,15 +22,10 @@ import sys
 import tempfile
 import time
 from contextlib import ExitStack, contextmanager
-from contextvars import ContextVar
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 from uuid import uuid4
 
-from contracts.artifacts import (
-    ARTIFACT_PATHS, RETIRED_ARTIFACT_PATHS, STAGE1_MAIN_TEXT,
-    STAGE2_BLUEPRINT_CHARACTER_PROJECTION, STAGE2_CHARACTERS,
-)
 from contracts.schema.workflow import (
     WorkflowManifestV4, WorkflowManifestV5, WorkflowManifestV6, WorkflowManifestV7,
     WorkflowManifestV8, WorkflowManifestV9,
@@ -46,8 +47,10 @@ class WorkflowTransitionRefused(TerminalState):
 # 旧 v4~v6 输出与成本账原样保留，由冻结旧代码读取；v7 只允许 clean base 初始化。
 _MANIFEST_MODELS = {4: WorkflowManifestV4, 5: WorkflowManifestV5, 6: WorkflowManifestV6,
                     7: WorkflowManifestV7, 8: WorkflowManifestV8, 9: WorkflowManifestV9}
-_TRANSITION_PAIRS = {4: (WorkflowManifestV5, WorkflowTransitionPreparedV1, WorkflowTransitionProofV1),
-                     5: (WorkflowManifestV6, WorkflowTransitionPreparedV2, WorkflowTransitionProofV2)}
+# ⚠ F8c：v4→v5 配对已删（人物投影重编译依赖已删的 stage2.shared 纯编译器，
+#   见模块 docstring）。`_manifest` 仍登记 v4 只为把旧盘面解码成一句明确的
+#   「没有登记此来源的下一版显式迁移」，不是还能迁。
+_TRANSITION_PAIRS = {5: (WorkflowManifestV6, WorkflowTransitionPreparedV2, WorkflowTransitionProofV2)}
 
 
 def _manifest(raw: bytes):
@@ -66,18 +69,9 @@ def _pair(source):
         return _TRANSITION_PAIRS[source.schema_version]
     except KeyError as exc:
         raise WorkflowTransitionRefused('没有登记此来源的下一版显式迁移') from exc
-_CORE_KEYS = frozenset({
-    'stage2.analyze_receipt', 'stage2.analyze_recovery', 'stage2.analyze_owner_draft_edit',
-    'stage2.analyze_characters_draft_repair', 'stage2.analyze_global_draft_repair',
-    'stage2.characters', 'stage2.characters_edit', 'stage2.global_grounding',
-    'stage2.global_review', 'stage2.global_review_decisions', 'stage2.global_edit',
-    'stage2.global_edit_failure', 'stage2.global_edit_input_commit', 'stage2.global_edit_commit',
-    'stage2.blueprint_character_projection',
-})
-# 直连首抽的已购回答侧车：不进 ARTIFACT_PATHS，但仍是 Stage2 Core 恢复证据。
-_CORE_RECOVERY_SIDECARS = frozenset({'analyze_legacy_checkpoint'})
+# Stage2 Core 的三个旧节点键：服务运行身份扫描仍按它们认已购回答的归属
+# （v4 的 Core 白名单与投影重编译面已随 F8c 退役，见 `_assert_downstream_empty`）。
 _CORE_NODES = frozenset({'stage2.analyze', 'stage2.characters', 'stage2.global'})
-_ACTIVE_TRANSITION: ContextVar[tuple[str, str, str] | None] = ContextVar('workflow_transition_owner', default=None)
 
 
 def _sha(raw: bytes) -> str:
@@ -280,86 +274,20 @@ def _inventory(base: Path) -> dict[str, str]:
     return dict(sorted(result.items()))
 
 
-def _projection_target(base: Path, sid: str, code: str) -> tuple[bytes, str, str]:
-    """调用 Characters 的同一纯编译器；不补空绑定，不发布/重写 Core。"""
-    from contracts.schema.characters import CharacterRegistry
-    from contracts.schema.stage1 import MainText
-    from novel.orchestrator.state import readonly_ctx
-    from novel.stages.stage2.shared.character_refs import materialize_blueprint_character_projection
-    from novel.store import ArtifactStore
-    store = ArtifactStore(readonly_ctx(paths.resolve_novel_dir(base, sid), 'stage2.characters', code))
-    registry, char_sha = store.read_own_with_sha256(CharacterRegistry, STAGE2_CHARACTERS)
-    main, main_sha = store.read_own_with_sha256(MainText, STAGE1_MAIN_TEXT)
-    target = materialize_blueprint_character_projection(
-        registry.model_dump(mode='json')['characters'], main.model_dump(mode='json'))
-    return store._render(STAGE2_BLUEPRINT_CHARACTER_PROJECTION, target), char_sha, main_sha
-
-
-def _projection_plans(base: Path, proof: WorkflowTransitionProofV1,
-                      code: str) -> dict[str, WorkflowTransitionProjectionV1]:
-    result = {}
-    for sid in proof.accepted_books:
-        path = paths.resolve_novel_dir(base, sid) / STAGE2_BLUEPRINT_CHARACTER_PROJECTION
-        source = _raw(path) if path.exists() else None
-        target, char_sha, main_sha = _projection_target(base, sid, code)
-        result[sid] = WorkflowTransitionProjectionV1(
-            relative_path=path.relative_to(base).as_posix(),
-            source_json=source.decode('utf-8') if source is not None else None,
-            source_sha256=_sha(source) if source is not None else None,
-            target_json=target.decode('utf-8'), target_sha256=_sha(target),
-            characters_sha256=char_sha, main_text_sha256=main_sha)
-    return result
-
-
 def _preserved_unchanged(base: Path, prepared: WorkflowTransitionPreparedV1) -> None:
     current = _inventory(base)
     expected = dict(prepared.preserved_files)
-    for value in prepared.projections.values():
-        actual = current.pop(value.relative_path, None)
-        if actual not in (value.source_sha256, value.target_sha256):
-            raise WorkflowTransitionRefused('人物投影不是冻结 source/target；拒绝第三方修改')
-        expected.pop(value.relative_path, None)
     if current != expected:
         raise WorkflowTransitionRefused('保留文件变化；不得丢弃 profiles、ledger、审批或原回答')
 
 
-def projection_commit_material(store, transition_id: str, prepared_sha256: str):
-    """Store 的专用窄授权：只能采用 prepared 中该书的确定性人物投影。"""
-    base = _plain(store.ctx.novel_dir.parent)
-    if _ACTIVE_TRANSITION.get() != (str(base), transition_id, prepared_sha256):
-        raise WorkflowTransitionRefused('人物投影写口只允许已持离线 owner 锁的当前迁移')
-    prepared, digest = _prepared(base, transition_id)
-    if digest != prepared_sha256 or _completed(base, prepared, digest) is not None:
-        raise WorkflowTransitionRefused('投影写入不属于当前待提交迁移')
-    expected_pointer = WorkflowTransitionPendingV1(transition_id=transition_id, prepared_sha256=digest)
-    if _read(paths.workflow_transition_pending_path(base), WorkflowTransitionPendingV1) != expected_pointer:
-        raise WorkflowTransitionRefused('投影提交缺当前迁移围栏')
-    if _raw(paths.workflow_manifest_path(base)) not in (
-            prepared.source_manifest_json.encode('utf-8'), prepared.target_manifest_json.encode('utf-8')):
-        raise WorkflowTransitionRefused('投影提交时 manifest 偏离冻结 source/target')
-    value = prepared.projections.get(store.ctx.sid)
-    path = store.path(STAGE2_BLUEPRINT_CHARACTER_PROJECTION)
-    if value is None or _plain(path).relative_to(base).as_posix() != value.relative_path:
-        raise WorkflowTransitionRefused('此路径不在当前迁移的投影授权内')
-    _preserved_unchanged(base, prepared)
-    target, char_sha, main_sha = _projection_target(base, store.ctx.sid, prepared.target_code_version)
-    if (target != value.target_json.encode('utf-8') or _sha(target) != value.target_sha256
-            or (char_sha, main_sha) != (value.characters_sha256, value.main_text_sha256)):
-        raise WorkflowTransitionRefused('人物投影与冻结输入或现役编译结果不一致')
-    return path, value.source_json.encode('utf-8') if value.source_json is not None else None, target
+def _assert_downstream_empty(base: Path, files: dict[str, str]) -> None:
+    """文件、历史及运行身份一起扫描；没有 formal 不证明尚未购买下游回答。
 
-
-def _assert_downstream_empty(base: Path, files: dict[str, str], *, source_version: int = 4) -> None:
-    """文件、历史及运行身份一起扫描；没有 formal 不证明尚未购买下游回答。"""
-    # ⚠ v4 根允许合法持有随后退役的 Core 材料（global_review 等）；
-    # 它们的落点在 RETIRED_ARTIFACT_PATHS，不能因退役而从白名单消失。
-    allowed = {Path(ARTIFACT_PATHS.get(key) or RETIRED_ARTIFACT_PATHS[key]).stem
-               for key in _CORE_KEYS} | set(_CORE_RECOVERY_SIDECARS)
-    forbidden = {'stage3', 'stage4', 'stage5', 'stage6', 'stage7', '_stage4_runs',
-                 '_stage5_runs', '_stage6_runs', '_stage7_runs', 'blueprint', 'blueprints',
-                 'knowledge_links'}
-    if source_version == 5:
-        forbidden = {'stage6', 'stage7', '_stage6_runs', '_stage7_runs'}
+    ⚠ F8c：只剩 v5→v6 一种来源。v4 的 Stage2 Core 白名单与投影重编译面随
+    旧链退役，旧 v4 基础按 legacy_incompatible 只读拒识，不走本迁移器。
+    """
+    forbidden = {'stage6', 'stage7', '_stage6_runs', '_stage7_runs'}
     for path in base.rglob('*'):
         _plain(path)
         parts = path.relative_to(base).parts
@@ -374,12 +302,6 @@ def _assert_downstream_empty(base: Path, files: dict[str, str], *, source_versio
         for stage in parts[1:]:
             if stage in forbidden:
                 raise WorkflowTransitionRefused('目标契约的下游已有产物或历史；不能自动迁移')
-        if source_version == 4 and 'stage2' in parts:
-            name = Path(rel).name
-            if not any(name == stem + '.json' or name.startswith(stem + '.')
-                       or stem == 'global_review_decisions' and name.startswith(stem + '_')
-                       for stem in allowed):
-                raise WorkflowTransitionRefused('Stage2 下游已有 formal/INVALID/history 或未知材料')
     service = paths.service_runs_dir(base)
     if service.exists():
         for path in service.rglob('*'):
@@ -420,8 +342,10 @@ def _assert_downstream_empty(base: Path, files: dict[str, str], *, source_versio
             elif isinstance(value, dict):
                 for key, item in value.items():
                     if key in {'node', 'producer_node', 'purpose', 'activity'} and isinstance(item, str):
-                        allowed_stage = item.startswith(('stage0.', 'stage1.')) or (
-                            source_version == 5 and item.startswith(('stage2.', 'stage4.', 'stage5.')))
+                        # v5 来源允许 stage0/1 与 Stage2 Core、Stage4/5 已购回答；
+                        # 更晚层（stage6/7 及退役键）一个也不认。
+                        allowed_stage = item.startswith(
+                            ('stage0.', 'stage1.', 'stage2.', 'stage4.', 'stage5.'))
                         if item.startswith('stage') and not (allowed_stage
                                 or any(item == node or item.startswith(node + '.') for node in _CORE_NODES)):
                             raise WorkflowTransitionRefused('下游已有运行、工作单元或已购回答')
@@ -564,15 +488,22 @@ print(json.dumps({'logs':hashes,'owner_ids':sorted(parents),
 '''
 
 
-def _source_proof(base: Path, source_code: Path, code: str, *, accepted: bool, source_version: int = 4) -> WorkflowTransitionProofV1 | WorkflowTransitionProofV2:
+def _source_proof(base: Path, source_code: Path, code: str, *, accepted: bool) -> WorkflowTransitionProofV1 | WorkflowTransitionProofV2:
+    """在冻结来源 checkout 里跑只读排空证明。
+
+    ⚠ 子进程的 `PYTHONPATH`/cwd 精确指向来源 checkout：脚本 import 的
+    `novel.stages.stage2.global_review`／`novel.stages.stage5.closure` 等旧链
+    模块由**来源代码**解析，不经过现役树——这正是「外部来源代码只读自己的
+    生命周期」的边界。F8c 后唯一可迁移来源是 v5，故 source_version 固定为 5。
+    """
     environment = {**os.environ, 'PYTHONDONTWRITEBYTECODE': '1', 'PYTHONPATH': str(source_code)}
     response = subprocess.run([sys.executable, '-B', '-X', 'utf8', '-c', _SOURCE_PROOF,
-        str(base), code, 'accept' if accepted else 'lifecycle', str(source_version)], cwd=source_code,
+        str(base), code, 'accept' if accepted else 'lifecycle', '5'], cwd=source_code,
         env=environment, capture_output=True, timeout=60)
     if response.returncode:
         raise WorkflowTransitionRefused('来源代码不能证明全 owner 排空及 Stage2 语义接受；先按原代码恢复')
     try:
-        return _TRANSITION_PAIRS[source_version][2].model_validate_json(response.stdout)
+        return _TRANSITION_PAIRS[5][2].model_validate_json(response.stdout)
     except ValueError as exc:
         raise WorkflowTransitionRefused('来源代码的离线证明不可读取') from exc
 
@@ -598,19 +529,10 @@ def _prepared(base: Path, transition_id: str) -> tuple[WorkflowTransitionPrepare
             or target.transition_ref != WorkflowTransitionRefV1(
                 transition_id=transition_id, source_manifest_sha256=value.source_manifest_sha256)):
         raise WorkflowTransitionRefused('源目标身份、精确字节或迁移引用不闭合')
-    if source.schema_version == 4 and set(value.projections) != set(value.source_proof.accepted_books):
-        raise WorkflowTransitionRefused('人物投影集合与来源接受集合不一致')
-    for sid, projection in value.projections.items():
-        parts = Path(projection.relative_path).parts
-        if (len(parts) != 3 or Path(*parts[1:]).as_posix() != STAGE2_BLUEPRINT_CHARACTER_PROJECTION
-                or paths.derive_source_meta(parts[0])[0] != sid
-                or projection.relative_path != Path(*parts).as_posix()
-                or value.preserved_files.get(projection.relative_path) != projection.source_sha256
-                or (projection.source_json is not None
-                    and _sha(projection.source_json.encode('utf-8')) != projection.source_sha256)
-                or _sha(projection.target_json.encode('utf-8')) != projection.target_sha256
-                or projection.characters_sha256 != value.source_proof.accepted_books[sid].characters_sha256):
-            raise WorkflowTransitionRefused('人物投影原目标路径、字节或输入身份不闭合')
+    # ⚠ F8c：v4→v5 的「人物投影集合与来源接受集合一致」校验随投影重编译面
+    # 一并退役；`_pair` 已在上面把 v4 来源关闭式拒绝，走不到这里。
+    if value.projections:
+        raise WorkflowTransitionRefused('现役迁移不重编译任何产物；人物投影面已随旧链退役')
     return value, _sha(raw)
 
 
@@ -663,8 +585,12 @@ def preview(*, base: Path, source_code: Path, service_ports: tuple[int, ...],
     source_raw = _raw(paths.workflow_manifest_path(base))
     source = _manifest(source_raw)
     target_model, prepared_model, _ = _pair(source)
-    if source.schema_version == 5:
-        require_transition_completed(base, source, source_raw)
+    if source.schema_version != 5:
+        # `_pair` 只登记 v5→v6；v4 及更早的来源在此关闭式拒绝（见模块 docstring）。
+        raise WorkflowTransitionRefused(
+            f'manifest v{source.schema_version} 没有登记可用的显式迁移；'
+            '旧基础按 legacy_incompatible 只读拒识')
+    require_transition_completed(base, source, source_raw)
     source_commit = _code_identity(source_code)
     target_commit = _code_identity(Path(__file__).resolve().parents[2])
     identity = _sha(uuid4().bytes)
@@ -697,9 +623,11 @@ def preview(*, base: Path, source_code: Path, service_ports: tuple[int, ...],
         if _raw(paths.workflow_manifest_path(base)) != source_raw:
             raise WorkflowTransitionRefused('来源 manifest 在 preview 前已变化')
         inventory = _inventory(base)
-        _assert_downstream_empty(base, inventory, source_version=source.schema_version)
-        proof = _source_proof(base, source_code, source_commit, accepted=True, source_version=source.schema_version)
-        projections = _projection_plans(base, proof, target_commit) if source.schema_version == 4 else {}
+        _assert_downstream_empty(base, inventory)
+        proof = _source_proof(base, source_code, source_commit, accepted=True)
+        # v5→v6 不重编译任何已验收产物：人物投影面随旧链退役，projections 恒空
+        # （`WorkflowTransitionPreparedV2` 的校验器也钉死这一点）。
+        projections: dict[str, WorkflowTransitionProjectionV1] = {}
         if (inventory != _inventory(base) or source_commit != _code_identity(source_code)
                 or target_commit != _code_identity(Path(__file__).resolve().parents[2])):
             raise WorkflowTransitionRefused('preview 期间来源文件或代码变化')
@@ -766,8 +694,8 @@ def apply(*, base: Path, transition_id: str, expected_prepared_sha256: str,
         if raw not in (prepared.source_manifest_json.encode('utf-8'), prepared.target_manifest_json.encode('utf-8')):
             raise WorkflowTransitionRefused('manifest 已不是冻结 source/target；拒绝覆盖第三方修改')
         _preserved_unchanged(base, prepared)
-        _assert_downstream_empty(base, prepared.preserved_files, source_version=_manifest(prepared.source_manifest_json.encode()).schema_version)
-        proof = _source_proof(base, source_code, prepared.source_code_version, accepted=False, source_version=_manifest(prepared.source_manifest_json.encode()).schema_version)
+        _assert_downstream_empty(base, prepared.preserved_files)
+        proof = _source_proof(base, source_code, prepared.source_code_version, accepted=False)
         expected_proof = prepared.source_proof.model_copy(update={'accepted_books': {}})
         if proof != expected_proof:
             raise WorkflowTransitionRefused('离线生命周期证明变化；不得追认迟到 owner')
@@ -779,16 +707,7 @@ def apply(*, base: Path, transition_id: str, expected_prepared_sha256: str,
             pointer.unlink()
         _immutable(base, pointer, expected_pointer)
         owners_unchanged()
-        from novel.orchestrator.state import readonly_ctx
-        from novel.store import ArtifactStore
-        token = _ACTIVE_TRANSITION.set((str(base), transition_id, digest))
-        try:
-            for sid in prepared.projections:
-                store = ArtifactStore(readonly_ctx(paths.resolve_novel_dir(base, sid),
-                                                  'stage2.characters', prepared.target_code_version))
-                store.apply_workflow_projection_transition(transition_id, digest)
-        finally:
-            _ACTIVE_TRANSITION.reset(token)
+        # v5→v6 不写任何小说产物：没有人物投影重编译，也没有 Store 窄授权写口。
         _cas_manifest(base, prepared)
         _preserved_unchanged(base, prepared)
         done = WorkflowTransitionCompletedV1(transition_id=transition_id,

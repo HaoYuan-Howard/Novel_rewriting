@@ -1,37 +1,24 @@
-"""只读确认 Reviewer 的精确节点批准已由正式 producer 落盘。
+"""只读确认 Reviewer 的精确节点批准已由正式 producer 落盘（已退役模式留档）。
 
 此口只补 canonical 批准落盘到工作单元 mark_adopted 之间的尾窗。它不授予审批、
 不把当前 gate 当作原动作证明，也不重建旧工作包。原 token 对照批准时保存的
 workpack SHA，当前适用性仍由 producer 的主体与 stable review identity 判据复验。
 
-⚠ Stage6 三候选定稿（`stage6.approve`／`s6r4_` token／slot 槽位）已随 Stage6
+⚠ Stage6 三候选定稿（`stage6.approve`／`s6r4_` token／slot 槽位）随 Stage6
 整层退役（F8b）：新链 Hook 单输出、无候选槽位，本模块不再解码该节点的历史
-认领；Stage4 四道人工闸已随 2026-09-15 全自动裁决退役。
+认领；Stage4 四道人工闸随 2026-09-15 全自动裁决退役。
+
+⚠ F8c：stage7 人名表定稿的落账解码段（旧 Stage7 整包内 `rename` 模块的
+NameMap 逐字段比对）随旧 Stage7 整包删除。曾可认领的两个批准节点
+（`stage0.approve`／`stage7.approve`）均已不在 `NODES`，本模块作为已退役模式的
+历史反例保留（测试桶登记），只剩「退役节点 fail closed」与「已落查询零写盘」
+两条可达语义——真实 landed 精度反例随旧 producer 一并退役，登记见
+`contracts/schema/retirement.py`（F6d reviewer_node_landed rewrite_consumer
+＋ `@"s6r4_"` remove_entry）。
 """
 from __future__ import annotations
 
 from pathlib import Path
-
-from contracts.invariants import NODES
-from contracts.schema.stage7 import NameMap
-from novel import paths
-from novel.errors import ArtifactUnreadable
-from novel.orchestrator.state import readonly_ctx
-from novel.store import ArtifactStore
-
-
-def _values(flags: tuple[str, ...], keys: frozenset[str]) -> dict[str, str] | None:
-    """关闭式读取 canonical flag 对；缺失、重复或额外参数均不能认领。"""
-    if len(flags) != len(keys) * 2:
-        return None
-    values: dict[str, str] = {}
-    for key, value in zip(flags[::2], flags[1::2], strict=True):
-        if key not in keys or key in values or not isinstance(value, str):
-            return None
-        if not value.strip():
-            return None
-        values[key] = value
-    return values if frozenset(values) == keys else None
 
 
 def approval_action_landed(
@@ -39,47 +26,10 @@ def approval_action_landed(
 ) -> bool:
     """原动作与正式批准逐字段一致才返回 True；未知/损坏不转成已落盘。
 
-    不支持的节点、缺产物或历史批准缺持久身份返回 False，由原恢复流程继续处理。
-    读盘、schema、producer 校验错误原样上抛，调用方须保留工作单元与原回答证据。
+    ⚠ 认领面已随旧链清空：两个曾可认领的批准节点（`stage0.approve`／
+    `stage7.approve`）退役后不在 `NODES`，一律 **fail closed** 返回 False，由原
+    恢复流程继续——既不让 `readonly_ctx` 的 RunContext 校验把一次只读探测炸成
+    ValueError，也不把已退役节点的历史决定认领成现役工作单元的落盘证据。本
+    函数零写盘：不读审批、不落产物、不动工作单元与费用账。
     """
-    keys = {
-        'stage0.approve': frozenset({'--expected-revision-id', '--actor', '--reason'}),
-        'stage7.approve': frozenset({'--actor', '--reason', '--review-token'}),
-    }.get(node)
-    # 键在册但节点已退役（stage0.approve／stage7.approve 均随旧链退役）时
-    # **fail closed**：返回 False 让原恢复流程继续，不得让 readonly_ctx 的
-    # RunContext 校验把一次只读探测炸成 ValueError。
-    if keys is None or node not in NODES:
-        return False
-    values = _values(flags, keys)
-    if values is None:
-        return False
-    book = paths.find_novel_dir(base, sid)
-    if book is None:
-        return False
-    store = ArtifactStore(readonly_ctx(book, node, code))
-    actor, reason = values['--actor'].strip(), values['--reason'].strip()
-    if node == 'stage0.approve':
-        # stage0.approve 已退役；v3 transform 无 approval 格，历史认领路径关闭。
-        return False
-
-    from novel.stages.stage7 import rename
-
-    if not store.exists(rename.REL):
-        return False
-    art, _ = store.read_own(NameMap, rename.REL)
-    approved = art.approved
-    if (approved is None or approved.actor != actor or approved.reason != reason
-            or approved.workpack_sha256 is None
-            or approved.review_identity_sha256 is None
-            or values['--review-token'] != f's7r3_{approved.workpack_sha256}'):
-        return False
-    pack = rename.approval_workpack(store)
-    if (pack.current_approval != approved
-            or pack.decision_subject_sha256 != approved.subject_sha256
-            or not rename.approval_is_current(store, art)):
-        return False
-    rebound, _ = store.read_own(NameMap, rename.REL)
-    if rebound != art:
-        raise ArtifactUnreadable(f'{node} 批准在已落查询期间变化，不能认领原决定')
-    return True
+    return False

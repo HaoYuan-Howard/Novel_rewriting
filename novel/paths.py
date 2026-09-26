@@ -91,10 +91,6 @@ def book_budget_path(base: str | os.PathLike[str], sid: str) -> Path:
     return service_runs_dir(base) / check_sid(sid) / 'book_budget.json'
 
 
-def rebuild_intents_path(base: str | os.PathLike[str], sid: str) -> Path:
-    """改选重建意图账（append-only JSONL，outbox 语义）。"""
-    return service_runs_dir(base) / check_sid(sid) / 'rebuild_intents.jsonl'
-
 
 def upload_autostart_intents_path(base: str | os.PathLike[str]) -> Path:
     """上传即自动开跑意图账（base 级全局 append-only JSONL，按幂等键折叠）。"""
@@ -347,7 +343,7 @@ def check_rel_deep(rel: str) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# STR-06 登记家族的多级路径（F0；见 contracts/schema/str06/families.py）
+# STR-06 登记家族的多级路径（F0；见 contracts/schema/families.py）
 # ─────────────────────────────────────────────────────────────────────────────
 
 def check_rel_family(rel: str) -> str:
@@ -357,13 +353,13 @@ def check_rel_family(rel: str) -> str:
     本函数要求路径落在 `STR06_PATH_FAMILIES` 登记的前缀内，家族外的多级路径照样
     拒——两级一般规则（`check_rel`）一寸不放。
     """
-    from contracts.schema.str06.families import family_for
+    from contracts.schema.families import family_for
 
     norm = _check(rel, depth=None)
     if family_for(norm) is None:
         raise PathRefused(
             f'产物路径 {rel!r} 不在任何 STR-06 登记家族内；未登记的多级路径不予准入'
-            f'（登记表见 contracts/schema/str06/families.py::STR06_PATH_FAMILIES）')
+            f'（登记表见 contracts/schema/families.py::STR06_PATH_FAMILIES）')
     return norm
 
 
@@ -1460,7 +1456,7 @@ def stage5_trim_audit_ordinal(rel: str) -> int | None:
 
 def str06_artifact_path(root: Path, rel: str) -> Path:
     """RC 产物仅接受已登记路径家族，并拒绝链接越过隔离根。"""
-    from contracts.schema.str06.families import family_for
+    from contracts.schema.families import family_for
     normalized = check_rel_family(rel)
     if family_for(normalized) is None:
         raise PathRefused('STR-06 路径未登记家族')

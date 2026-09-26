@@ -18,7 +18,6 @@ main.py —— `python -X utf8 -u -m novel.cli <子命令> …`
     reconcile                       jobs/编排账/Stage2 假预算的 0 成本 typed 恢复
     doctor --llm-transport          0 成本探测 DeepSeek DNS/TCP/TLS/HTTP；不发正文/密钥
     response-repair <sid>           0 成本：提交/放弃一份隔离的结构化响应修复稿
-    approval <show|backfill|seen|gate|close-stage2|template|apply>  0 成本审批 façade
     workflow transition <preview|apply|recover>  离线免费推进工作流 manifest，保留原任务与预算
 
 ⚠ **这张表就是 `--help` 打印出来的那一份**（argparse 的 `description` 直接取本 docstring），
@@ -47,12 +46,10 @@ import traceback
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
-from pydantic import ValidationError
-
 from contracts.invariants import (
     FREE_ENTRIES, NODES,
     PAID_FLAGS, PROGRESS_PHASES, RETIRED_NODES,
-    STAGES, STAGE5_CLOSED_EXEMPT_FLAGS, VALUED_FLAGS,
+    STAGES, VALUED_FLAGS,
 )
 from contracts.schema.orchestration import (
     ExecutorBackend, LegacyExecutorBackend,
@@ -63,7 +60,7 @@ from novel.orchestrator import execution_context
 from novel import exit_codes as X
 from novel.errors import (
     ApprovalRequired, RefusedByStructure, TerminalState,
-    UnsupportedRunMode, UpstreamMissing,
+    UnsupportedRunMode,
 )
 from novel.orchestrator import admission, beacon
 from novel.orchestrator import nodes as N
@@ -142,6 +139,18 @@ def _parser() -> argparse.ArgumentParser:
         help='同全局 --run-id；兼容放在 run 子命令之后')
     r.add_argument('--yes', action='store_true',
                    help='确认这一次会花钱（付费跑法必填）')
+    # ── 新链调用凭证（不是 NodeSpec 跑法旗标：不进 `_flags_of`、不改贵贱/写盘
+    # 语义，与 `--yes`／`--base` 同属 invocation 面）─────────────────────────
+    # `--wire-dir`／`--adopt-root` 是 F7a 登记的**历史采用通路**：同请求身份的
+    # 已购结果经 wire 字节或源根 ledger 行免费复用，身份不符明确阻断、不补购。
+    # `--reasoning-effort` 进请求身份（档位与已购行逐字相等才采用）。
+    r.add_argument('--wire-dir', default=None,
+                   help='已购 wire 目录（历史采用：同请求身份免费复用，不补购）')
+    r.add_argument('--adopt-root', action='append', default=[],
+                   help='已购来源输出根（可重复；ledger 行身份核验后免费采用）')
+    r.add_argument('--reasoning-effort', default='high',
+                   choices=('low', 'medium', 'high'),
+                   help='新链请求的 reasoning effort 档位（进请求身份）')
 
     with_run_args(sub.add_parser('preview', help='0 成本：打印将要执行的命令'))
 
@@ -229,37 +238,13 @@ def _parser() -> argparse.ArgumentParser:
     rr.add_argument('sid')
     rr.add_argument('--base', required=True)
     target = rr.add_mutually_exclusive_group(required=True)
-    target.add_argument('--attempt', help='历史/单项路径：拒绝记录的 16 位 attempt_id')
-    target.add_argument('--batch', help='Stage2 一次性 repair_manifest.json')
+    # F8c：`--batch`（Stage2 一次性 repair_manifest）随旧链 Stage2 修复面退役；
+    # 单项 attempt 路径是通用响应修复的唯一入口。
+    target.add_argument('--attempt', help='拒绝记录的 16 位 attempt_id')
     rr.add_argument('--actor', required=True)
-    rr.add_argument('--reason', help='单项路径必填；batch 的 reason 逐项写在 decisions 里')
-    rr.add_argument('--decisions', help='batch 路径必填：完整 submit|decline 决定 JSON')
+    rr.add_argument('--reason', help='必填：本次修复/放弃的理由')
     rr.add_argument('--decline', action='store_true',
                     help='明确放弃本次修复额度；重跑原节点后进入下一采')
-
-    approval = sub.add_parser(
-        'approval', help='0 成本审批 façade：只读 show/template 与 typed apply')
-    approval_sub = approval.add_subparsers(dest='approval_action', required=True)
-
-    approval_show = approval_sub.add_parser('show', help='只读输出当前审批公开视图')
-    approval_show.add_argument('sid')
-    approval_show.add_argument('--base', required=True)
-
-    approval_backfill = approval_sub.add_parser(
-        'backfill', help='按当前正式盘面补录可证明的检查单；旧审批版本不迁移')
-    approval_backfill.add_argument('sid')
-    approval_backfill.add_argument('--base', required=True)
-
-    approval_gate = approval_sub.add_parser(
-        'gate', help='批准当前 s0/s1；s4/s5 已随全自动裁决退役'
-                     '（s4=机械准入，s5=机械闭合回执）')
-    approval_gate.add_argument('gate', choices=('s0', 's1'))
-    approval_gate.add_argument('sid')
-    approval_gate.add_argument('--base', required=True)
-
-    # ⚠ `approval template/apply` 的 writing/stage5 面已随批次 B3（2026-09-15
-    #   全自动裁决）退役删除：写作授权并入 run 启动授权，闭合回执由
-    #   `stage5.review` producer 机械落账。
 
     workflow = sub.add_parser('workflow', help='工作流契约的显式离线维护（0 成本）')
     workflow_sub = workflow.add_subparsers(dest='workflow_cmd', required=True)
@@ -351,12 +336,12 @@ def _executor_backend_of(a: argparse.Namespace) -> ExecutorBackend | None:
 def _runners() -> dict[str, Callable[[RunContext, list[str]], int]]:
     """`stage` → 跑法派发。`_dispatch` 与 `runnable_stages` 共用这一张当前表。
 
-    ⚠ Stage6 整层随 STR-06 切换退役（F8b）：`_runners` 不再有 `stage6` 腿；
-    旧链节点在 `_cmd_run` 入口即按 `RETIRED_NODES` 拒读（legacy_incompatible）。
+    ⚠⚠ F8c：**只剩 stage0／stage1 两条腿**。旧链 stage2／4／5／7 的 runner 随
+    旧链整层退役删除——`_cmd_run` 入口按 `RETIRED_NODES` 拒读旧节点
+    （legacy_incompatible），11 个 `str06.` 节点在入口分流到 `_run_str06`，
+    两者都到不了这张表。Stage6 腿更早（F8b）已删。
     """
-    return {'stage0': _run_stage0, 'stage1': _run_stage1, 'stage2': _run_stage2,
-            'stage4': _run_stage4, 'stage5': _run_stage5,
-            'stage7': _run_stage7}
+    return {'stage0': _run_stage0, 'stage1': _run_stage1}
 
 
 def runnable_stages() -> frozenset[str]:
@@ -380,11 +365,12 @@ def _run_str06(a: argparse.Namespace, flags: list[str], *, paid: bool) -> int:
 
     与旧链 runner 的分工：编排（节点表、argv、许可、信标）仍归 orchestrator；
     链装配（Stage1 输入、workflow／epoch、付费边界、恢复入口）归
-    `tools/str06_workflow.py::execute`——两边共用同一条装配路径，不为切换长第二套。
+    `novel/stages/chain.py::execute`（F8c 起与 runner 同模块，它是装配体）——
+    两边共用同一条装配路径，不为切换长第二套。
     产物落本书目录的三级家族路径（`contracts/artifacts.py` 的 rel 键）。
     """
-    from contracts.schema.str06 import STR06_RUNTIME_CONFIG
-    from tools.str06_workflow import execute
+    from contracts.schema.workflow import STR06_RUNTIME_CONFIG
+    from novel.stages.chain import execute
 
     if a.sid is None:
         raise TerminalState(f'{a.node} 要已有书 sid（正式 Stage1 输入）')
@@ -393,6 +379,11 @@ def _run_str06(a: argparse.Namespace, flags: list[str], *, paid: bool) -> int:
     if unknown:
         raise TerminalState(
             f'{a.node} 只接受 --check-only，实得多余旗标 {sorted(unknown)}')
+    # 历史采用凭证与 effort 档位是 invocation 面（见 parser 注释）：只在新链
+    # 分流点之后读取，旧链节点到不了这里。
+    wire_dir = getattr(a, 'wire_dir', None)
+    adopt_root = [Path(root) for root in (getattr(a, 'adopt_root', None) or [])]
+    reasoning_effort = getattr(a, 'reasoning_effort', None) or 'high'
     # str06 节点走直连 LLM 唯一通道，不接受任何 executor backend 旗标；
     # 先于书目录解析拒绝，别让 retired 参数被书缺失的报错掩盖。
     if getattr(a, 'executor_backend', None) is not None or any(
@@ -410,7 +401,7 @@ def _run_str06(a: argparse.Namespace, flags: list[str], *, paid: bool) -> int:
         base=os.path.abspath(os.fspath(a.base)),
         source_json=None,
         run_dir=novel_dir,
-        wire_dir=None,
+        wire_dir=Path(wire_dir) if wire_dir else None,
         repair_manifest=None,
         through=_STR06_THROUGH[a.node],
         book_sid=a.sid,
@@ -422,9 +413,9 @@ def _run_str06(a: argparse.Namespace, flags: list[str], *, paid: bool) -> int:
         body_chapter_limit=None,
         book_call_ceiling=None,
         book_title=paths.title_of(novel_dir),
-        reasoning_effort='high',
+        reasoning_effort=reasoning_effort,
         check_only='--check-only' in tokens,
-        adopt_root=[],
+        adopt_root=adopt_root,
         node=[a.node],
         yes=bool(a.yes),
         # 正文外发授权与付费确认是两份独立授权（I-43）：CLI 的 --allow-egress
@@ -590,185 +581,6 @@ def _run_stage1(ctx: RunContext, flags: list[str]) -> int:
 
 
 
-def _run_stage2(ctx: RunContext, flags: list[str]) -> int:
-    from novel.store import ArtifactStore
-    """Stage2 人物、必要知识与逐章 Blueprint 的生成、编辑和免费恢复。
-
-    ⚠ 派发按 **stage** 分而节点由 `ctx.node` 带着 ⇒ **先按节点分岔**（形态同 stage4/stage7）。
-    全书与逐章两条付费生成路径均已接入；其余 flag 是各自的 0 成本操作。
-    """
-    from novel.stages.stage2 import extract
-
-    tokens = set(N.flag_tokens(flags))
-
-    if ctx.node in ('stage2.characters', 'stage2.global') and tokens & {
-            '--emit-analyze-draft-template', '--repair-analyze-draft', '--recover-analyze-draft'}:
-        from contracts.artifacts import STAGE2_ANALYZE_OWNER_DRAFT_EDIT
-        from contracts.schema import encode_artifact
-        from contracts.schema.analyze_draft import AnalyzeOwnerDraftEdit
-        from novel.stages.stage2.analyze import draft_recovery as analyze_draft_recovery
-        if '--emit-analyze-draft-template' in tokens:
-            print(json.dumps(encode_artifact(STAGE2_ANALYZE_OWNER_DRAFT_EDIT,
-                analyze_draft_recovery.edit_template(ctx)), ensure_ascii=False, indent=2))
-            return X.OK
-        if '--recover-analyze-draft' in tokens:
-            analyze_draft_recovery.recover(ctx)
-        else:
-            source = paths.analyze_draft_edit_input(ctx.novel_dir, _valued(flags, '--repair-analyze-draft'))
-            request = ArtifactStore(ctx).read_external(AnalyzeOwnerDraftEdit, STAGE2_ANALYZE_OWNER_DRAFT_EDIT, source)
-            analyze_draft_recovery.repair(ctx, request, actor=_valued(flags, '--actor') or '',
-                                          reason=_valued(flags, '--reason') or '')
-        print('  ✓ 已免费物化该 owner 的联合草稿；仍需统一审阅')
-        return X.OK
-
-    if ctx.node == 'stage2.analyze':
-        from novel.stages.stage2 import analyze
-        if '--recover-analyze-run' in tokens:
-            from novel.stages.stage2.analyze import recovery as analyze_recovery
-            analyze_recovery.recover_initial(ctx, _valued(flags, '--recover-analyze-run') or '')
-            print('  ✓ 已按原冻结目标补齐共享首抽提交（0 模型）')
-            return X.OK
-        if '--dry-run' in tokens:
-            print(analyze.SYSTEM)
-            print(analyze.prepare(ctx).user)
-            return X.OK
-        receipt = analyze.run(ctx, _llm_client(ctx))
-        formal = sum(1 for row in receipt.materializations if row.state == 'formal')
-        print(f'  ✓ stage2.analyze 已落盘回执；两侧 formal={formal}/2')
-        return X.OK
-
-    if ctx.node == 'stage2.characters':
-        from contracts.artifacts import STAGE2_CHARACTERS_EDIT
-        from contracts.schema import encode_artifact
-        from contracts.schema.characters import CharactersEdit
-        from novel.stages.stage2 import characters
-        from novel.store import ArtifactStore
-        if '--dry-run' in tokens:
-            print(characters.SYSTEM)
-            print(characters.prepare(ctx).user)
-            return X.OK
-        if '--emit-edit-template' in tokens:
-            print(json.dumps(encode_artifact(
-                STAGE2_CHARACTERS_EDIT, characters.edit_template(ctx)),
-                ensure_ascii=False, indent=2))
-            return X.OK
-        if '--apply-edit' in tokens:
-            source = paths.characters_edit_input(ctx.novel_dir, _valued(flags, '--apply-edit'))
-            store = ArtifactStore(ctx)
-            edit = store.read_external(CharactersEdit, STAGE2_CHARACTERS_EDIT, source)
-            characters.apply_edit(ctx, edit, actor=_valued(flags, '--actor') or '',
-                                  reason=_valued(flags, '--reason') or '')
-            print('  ✓ 人物登记已按 typed 编辑落盘（0 模型）')
-            return X.OK
-        if '--revalidate' in tokens:
-            passed, report = characters.revalidate(
-                ctx, actor=_valued(flags, '--actor') or '', reason=_valued(flags, '--reason') or '')
-            print(render(report))
-            return X.OK if passed else X.CHECK_FAILED
-        if '--resample' in tokens:
-            characters.run_resample(ctx, _llm_client(ctx))
-        else:
-            characters.run(ctx, _llm_client(ctx))
-        print('  ✓ 静态人物登记已落盘；语义未审以报告 unver 披露')
-        return X.OK
-
-    if ctx.node == 'stage2.global':
-        if '--recover-analyze' in tokens:
-            from novel.stages.stage2.analyze import recovery as analyze_recovery
-            analyze_recovery.recover(ctx)
-            print('  ✓ 已从原共享首抽回答免费物化 Global')
-            return X.OK
-        if '--emit-edit-template' in tokens:
-            print(extract.global_edit_template_json(ctx))
-            return X.OK
-        if '--revalidate' in tokens:
-            promoted, report = extract.run_revalidate(
-                ctx, actor=_valued(flags, '--actor') or '',
-                reason=_valued(flags, '--reason') or '')
-            print(render(report))
-            print('  ✓ 已提升为正式全局底座（0 成本）' if promoted
-                  else '  ✗ 仍有阻断级问题，未提升；问题稿留在 .INVALID')
-            return X.OK if promoted else X.CHECK_FAILED
-        if '--renormalize' in tokens:
-            return _report_exit(extract.run_renormalize(ctx))
-        if '--apply-edit' in tokens:
-            artifact, report = extract.run_apply_edit(
-                ctx, _valued(flags, '--apply-edit') or '')
-            print(render(report))
-            print(f'  ✓ Stage2 typed 人工订正已落为新一轮'
-                  f'（{len(artifact.arc_secrets)} 条跨章秘密 / '
-                  f'{len(artifact.world_rules)} 条世界规则）；'
-                  f'证据与时间窗口已复验，后续按真实业务依赖判定新鲜度')
-            return X.OK if report.passed else X.CHECK_FAILED
-        if '--resample' in tokens:
-            extract.run_resample(ctx, _llm_client(ctx))
-            print('  ✓ stage2 全书事实底座已绕过问题缓存重新采样并落盘')
-            return X.OK
-        extract.run_global(ctx, _llm_client(ctx))
-        print('  ✓ stage2 全书事实底座已落盘；语义未审以报告 unver 披露')
-        return X.OK
-
-    # ── `stage2.blueprint` ────────────────────────────────────────────────
-    if '--emit-edit-template' in tokens:
-        from novel.stages.stage2.blueprint.edit import edit_template_json
-
-        print(edit_template_json(ctx), end='')
-        return X.OK
-
-    if '--validate-edit' in tokens:
-        from novel.stages.stage2.blueprint.edit import validate_edit
-
-        preview = validate_edit(
-            ctx, _valued(flags, '--validate-edit') or '')
-        print(preview.model_dump_json(indent=2))
-        print('  只读预检完成：与 apply 共用 schema、全书 Stage2 HARD '
-              '与非目标章恒等守卫；未归档、未写 INVALID、未记费用')
-        # 预览成功本身即是 OK；候选能否应用由 typed
-        # ``would_apply/hard_hits`` 表达。纯预览不能返回语义为
-        # “正式结果已落盘但红”的 exit 1。
-        return X.OK
-
-    if '--apply-edit' in tokens:
-        from novel.stages.stage2.blueprint.edit import apply_edit
-
-        artifact, report = apply_edit(
-            ctx, _valued(flags, '--apply-edit') or '')
-        print(render(report))
-        print('  ✓ 完整剧情已按 typed 编辑更新（0 模型）')
-        return X.OK if report.passed else X.CHECK_FAILED
-
-    if '--revalidate' in tokens:
-        promoted, report = extract.run_revalidate(
-            ctx, actor=_valued(flags, '--actor') or '',
-            reason=_valued(flags, '--reason') or '')
-        print(render(report))
-        print('  ✓ 已提升为正式逐章蓝图（0 成本）' if promoted
-              else '  ✗ 仍有阻断级问题，未提升；问题稿留在 .INVALID')
-        return X.OK if promoted else X.CHECK_FAILED
-
-    if '--check-only' in tokens:
-        report = extract.run_check_only(ctx)
-        print(render(report))
-        return X.OK if report.passed else X.CHECK_FAILED
-
-    chapters = _chapters_of(_valued(flags, '--chapters'))
-
-    if '--dry-run' in tokens:
-        system, user = extract.build_prompt(ctx, chapters=chapters)
-        print(f'── system（{len(system)} 字）──\n{system}')
-        print(f'\n── user（{len(user)} 字）──\n{user}')
-        return X.OK
-
-    if '--renormalize' in tokens:
-        return _report_exit(extract.run_renormalize(ctx))
-    if chapters:
-        from novel.llm.cache import CachePolicy
-        ctx.cache = CachePolicy.refresh()
-    report = extract.run_blueprint(ctx, _llm_client(ctx), chapters=chapters)
-    print('  ✓ stage2 逐章蓝图已落盘；语义未审以报告 unver 披露')
-    print(render(report))
-    return X.OK if report.passed else X.CHECK_FAILED
-
 
 def _chapters_of(raw: str | None) -> tuple[int, ...]:
     """`--chapters 2,7` → `(2, 7)`。**空值不等于「全书」，那是两条不同的路**——
@@ -792,501 +604,6 @@ def _report_exit(report: object) -> int:
         raise TypeError(f'expected CheckReport, got {type(report).__name__}')
     print(render(report))
     return X.OK if report.passed else X.CHECK_FAILED
-
-
-def _run_stage4(ctx: RunContext, flags: list[str]) -> int:
-    """Stage4 v4：两个独立付费相 + 一条 0 成本上下文组装路。
-
-    2026-09-15 全自动裁决后 stage4 的唯一打开条件是统一机械准入：A 落盘
-    （机械有效）即自动进入 B，B 落盘即自动进入 context；本函数只保留
-    免费恢复面与付费生成路，不再有审批授权与 close-review 收口。
-    ⚠ `stage4.context` 的 `flags=()` 是终态：它本身就是那个动作。
-    """
-    from novel.stages.stage4 import plan
-
-    tokens = set(N.flag_tokens(flags))
-
-    if ctx.node == 'stage4.context':
-        report = plan.run_context(ctx)
-        print(f'  ✓ 写作上下文已重建：{plan.CTX_REL}（0 成本）')
-        print(render(report))
-        return X.OK if report.passed else X.CHECK_FAILED
-
-    if ctx.node == 'stage4.design':
-        if '--recover-responses' in tokens:
-            from novel.stages.stage4 import design_response_recovery
-            count = design_response_recovery.recover(ctx)
-            print(f'  ✓ 已按原身份补齐 {count} 个回答的 checkpoint（0 模型）；重新读取下一操作')
-            return X.OK
-        if '--recover-prepared' in tokens:
-            from novel.stages.stage4 import design_recovery
-            artifact = design_recovery.recover_prepared(
-                ctx, source_run_id=_valued(flags, '--recover-prepared') or '',
-                proof_sha256=_valued(flags, '--subject-sha256') or '')
-            print(f'  ✓ Stage4A 原聚合已免费补尾：{len(artifact.output_chapters)} 章；原成本账保持不变')
-            return X.OK
-        if '--reaggregate' in tokens:
-            artifact = plan.run_design_reaggregate(ctx)
-            print(f'  ✓ Stage4A 已按当前材料采用并聚合 {len(artifact.output_chapters)} 章（0 模型）')
-            return X.OK
-        if '--recover-repair-aggregate' in tokens:
-            artifact = plan.run_design_repair_aggregate_recovery(
-                ctx,
-                source_run_id=(
-                    _valued(flags, '--recover-repair-aggregate') or ''),
-                source_journal_sha256=(
-                    _valued(flags, '--source-journal-sha256') or ''),
-                source_commit_sha256=(
-                    _valued(flags, '--source-commit-sha256') or ''),
-            )
-            print(
-                '  ✓ Stage4A repair/replan prepared 提交尾窗已按 '
-                f'raw/self 双 SHA 补齐：{len(artifact.output_chapters)} 章'
-                '（0 次模型调用）')
-            return X.OK
-        if '--dry-run' in tokens:
-            system, user = plan.build_design_prompt(ctx)
-            print('── Stage4A 策略请求预览 ──\n'
-                  '这里只展示第 1 条整书策略请求；策略通过后，程序才会按当前'
-                  '真相图确定性生成 N 条 local-alias 单章请求，按本次冻结并发配置执行（默认 4 路）。')
-            print(f'── system（{len(system)} 字）──\n{system}')
-            print(f'\n── user（{len(user)} 字；不含原文/源序/beat/材料）──\n{user}')
-            return X.OK
-        repair_scope = None
-        if '--replan' in tokens:
-            # 人工闸退役后策略重采只认 B 的 typed infeasible 终态铸成的
-            # 机器 scope；不再有 review token。
-            from novel.orchestrator import approvals
-            repair_scope = approvals.cast_infeasible_replan_scope(
-                ctx.novel_dir.parent, ctx.sid)
-            from novel.llm.cache import CachePolicy
-            ctx.cache = CachePolicy.refresh()
-        artifact = plan.run_design(
-            ctx,
-            _llm_client(ctx),
-            repair_scope=repair_scope,
-        )
-        action = '已按 typed infeasible 终态预算内自动重采并落盘' \
-            if '--replan' in tokens else '已落盘'
-        print(f'  ✓ Stage4A 盲结构候选{action}：{len(artifact.output_chapters)} 章。'
-              '机械准入通过后 stage4.plan 自动执行')
-        return X.OK
-
-    if '--recover-prepared' in tokens:
-        from novel.stages.stage4 import plan_recovery
-        outcome = plan_recovery.recover_prepared(
-            ctx, source_run_id=_valued(flags, '--recover-prepared') or '',
-            proof_sha256=_valued(flags, '--subject-sha256') or '')
-        from contracts.schema.stage4 import EvidenceBinding
-        if isinstance(outcome, EvidenceBinding):
-            print('  Stage4B 原聚合已免费补尾，保留 typed infeasible 结论')
-            return X.CHECK_FAILED
-        print('  ✓ Stage4B 原聚合已由新执行免费补尾，原成本账保持不变')
-        return _report_exit(outcome)
-
-    if '--reaggregate' in tokens:
-        outcome = plan.run_reaggregate(ctx)
-        from contracts.schema.stage4 import EvidenceBinding
-        if isinstance(outcome, EvidenceBinding):
-            print('  Stage4B 已落盘 typed infeasible 结论（0 次新模型调用）')
-            return X.CHECK_FAILED
-        print('  ✓ Stage4B 来源已复验，免费聚合及提交已完成')
-        return _report_exit(outcome)
-
-    if '--check-only' in tokens:
-        report = plan.run_check_only(ctx)
-        print(render(report))
-        return X.OK if report.passed else X.CHECK_FAILED
-
-    if '--dry-run' in tokens:
-        system, user = plan.build_prompt(ctx)
-        print(f'── system（{len(system)} 字）──\n{system}')
-        print(f'\n── user（{len(user)} 字）──\n{user}')
-        return X.OK
-
-    if '--identity' in tokens:
-        n_beats, report = plan.run_identity(ctx)
-        print(f'── 恒等基线 ── 每源章一输出章、每拍照源字数给预算，共 {n_beats} 拍；'
-              '仅内存诊断，不写盘')
-        print(render(report))
-        # ⚠ **不拿 badge 当退出码**：它量的是「判据有没有把合法情况排除在外」，
-        #   红了先怀疑判据、不是先怀疑数据。跑完了就是 0。
-        return X.OK
-
-    if '--names-only' in tokens:
-        rows = plan.run_names_only(ctx)
-        print(f'── 逐章可用名册 ── {len(rows)} 章（0 成本，只吃 stage1+stage2，不写盘）')
-        for o, avail, held in rows:
-            print(f'  ch{o}: 叫得出 {len(avail)} 人 {sorted(avail.values())[:8]}'
-                  + (f' · 还叫不出 {len(held)} 人 {held[:6]}' if held else ''))
-        print('  ⚠ 叫法**会随章变**（退回的是「到本章为止出现最多的有据称呼」）——'
-              '只有 char_id 的集合是单调的')
-        return X.OK
-
-    if '--revalidate' in tokens:
-        report = plan.run_revalidate(
-            ctx, actor=_valued(flags, '--actor') or '',
-            reason=_valued(flags, '--reason') or '')
-        print(render(report))
-        print('  ✓ 已提升为正式计划；写作上下文须在最终结构审批后单独重建（0 成本）' if report.passed
-              else '  ✗ 仍有阻断级问题，未提升；问题稿留在 .INVALID')
-        return X.OK if report.passed else X.CHECK_FAILED
-
-    if '--apply-edit' in tokens:
-        report = plan.run_apply_edit(ctx, _valued(flags, '--apply-edit') or '')
-        print(render(report))
-        print('  ✓ 人工计划修订已落为新一轮；写作上下文须在最终结构审批后单独重建')
-        return X.OK if report.passed else X.CHECK_FAILED
-
-    if '--apply-binding' in tokens:
-        outcome = plan.run_apply_binding(
-            ctx, _valued(flags, '--apply-binding') or '')
-        from contracts.schema.stage4 import EvidenceBinding
-        if isinstance(outcome, EvidenceBinding) and outcome.status == 'infeasible':
-            print('  ✗ 人工 EvidenceBinding 已由代码证明 infeasible 并正式落盘；'
-                  '未生成或覆盖计划')
-            return X.CHECK_FAILED
-        print(render(outcome))
-        print('  ✓ 人工 EvidenceBinding 已经同一编译/HARD 口生成计划；'
-              '写作上下文须在最终结构审批后单独重建')
-        return X.OK if outcome.passed else X.CHECK_FAILED
-
-    # Stage4B 付费路：只绑定已经冻结的 A 候选，不能重规划；打开条件是
-    # 统一机械准入（queue/operator 已判），producer 在任何 wire 前再复验。
-    client = _llm_client(ctx)
-    outcome = plan.run_plan(ctx, client)
-    # B 的 ``infeasible`` 是一份已落盘、可审计的 typed 负结论，
-    # 不是“命令没跑成”。因此返回 exit 1（landed_red），不伪造
-    # CheckReport；exit 2 会与 ``exit_codes.landed`` 的唯一口径相反。
-    from contracts.schema.stage4 import EvidenceBinding
-    if isinstance(outcome, EvidenceBinding):
-        if outcome.status != 'infeasible':
-            raise RefusedByStructure(
-                'stage4.plan 返回了未编译的 bound EvidenceBinding')
-        print('  ✗ Stage4B 已落盘 typed infeasible 证据结论，'
-              '未生成或覆盖正式计划')
-        for witness in outcome.infeasibility_proof or []:
-            print(f'    ch{witness.chapter_ordinal} · {witness.constraint_code} · '
-                  f'{len(witness.scenes)} scene / {len(witness.closed_refs)} closed ref')
-        print('  → 只有代码给出的 typed proof 可到达本终态；'
-              '下一轮队列将预算内自动重采 Stage4A（--replan）')
-        return X.CHECK_FAILED
-    report = outcome
-    print('  ✓ Stage4B 证据绑定与计划编译已完成；下一步是最终逐章结构审批，'
-          '随后单独运行 0 成本 stage4.context，再签 writing 授权')
-    print(render(report))
-    return X.OK if report.passed else X.CHECK_FAILED
-
-
-def _require_stage5_reviewer_rewrite_ready(
-        ctx: RunContext, request_rel: str,
-        ) -> tuple[int, ...]:
-    """在任何 Stage5 writer client/driver 构造前复核 current request。"""
-    from contracts.artifacts import STAGE5_REVIEWER_REWRITE_REQUEST
-    from novel.stages.stage5 import reviewer_rewrite
-
-    if request_rel != STAGE5_REVIEWER_REWRITE_REQUEST:
-        raise TerminalState(
-            'Stage5 Reviewer rewrite 只接受 current canonical request 路径')
-    probe = reviewer_rewrite.current_reviewer_rewrite_request(
-        ctx, request_rel)
-    if probe is None or probe.execution.state != 'ready_paid':
-        raise TerminalState(
-            'Stage5 Reviewer rewrite request 当前不是可付费首发态；'
-            '请按 queue 发布的 exact recovery/outcome 继续')
-    return reviewer_rewrite.ready_reviewer_rewrite_targets(ctx, request_rel)
-
-
-def _run_stage5(ctx: RunContext, flags: list[str]) -> int:
-    """Stage5 的 canonical 闭卷写作与全书验收入口。
-
-    不带 `--chapters` 写全书；带它只写指定阅读序章。旧 deep/shallow 布局只作
-    `legacy_incompatible` 证据，不再存在可执行选择器。
-
-    ⚠ 写作节点**没有 `--check-only`**：机械复检由 `stage5.review` 承担 ⇒ 对外 check 节点是 review。
-    ⚠ `stage5.semantic`（书级语义审判）于 2026-08-17 整节点下线，本函数不再有那一支。
-    """
-    from novel.stages.stage5 import review, write
-
-    tokens = set(N.flag_tokens(flags))
-    chapters = _valued(flags, '--chapters')
-
-    if ctx.node == 'stage5.review':
-        # ⚠ trim 三选一人工 CLI 面（--retain-pretrim(-batch) /
-        # --request-reviewer-rewrite）已随批次 B3（2026-09-15 全自动裁决）
-        # 退役：超限章由 `run_review` 内的机械处置自动落账——预算内自动
-        # 落 typed 定向改写 request，预算耗尽后机械保留并披露交付。
-        if '--wontfix' in tokens:
-            report = review.mark_wontfix(ctx, _valued(flags, '--wontfix') or '')
-            print(render(report))
-            print('  ✓ 豁免已记进 stage5/wontfix.json。'
-                  '⚠ **豁免不删结论**：它照常列在报告与界面上，只是不进反哺、不占待人工')
-            return X.OK if report.passed else X.CHECK_FAILED
-        if '--check-only' in tokens:
-            report = review.run_check_only(ctx)
-            print(render(report))
-            return X.OK if report.passed else X.CHECK_FAILED
-        stray = tokens - {'--wontfix', '--check-only'}
-        if stray:
-            raise TerminalState(
-                f'stage5.review 不接受 {sorted(stray)}；trim 三选一人工面已随'
-                '批次 B3 退役，超限章由 run_review 的机械处置自动落账')
-        rev, report = review.run_review(ctx)
-        print(f'  ✓ 全书验收：{len(rev.chapters)} 章 · 书级 {len(rev.book)} 条')
-        print(render(report))
-        # ⚠⚠ **本层徽章结构上永远到不了 `pass`**（5 条 `unver`）⇒ 最好是 amber + 退出码 0。
-        #    拿 `passed` 当退出码是对的：`amber` 的 `passed` 为真，只有真命中 hard 才非零。
-        return X.OK if report.passed else X.CHECK_FAILED
-
-    # ── 以下是 `stage5.write` ────────────────────────────────────────────────
-    if '--dry-run' in tokens:
-        system, user, _mat = write.build_prompt(ctx, chapters)
-        print(f'── system（{len(system)} 字）──\n{system}')
-        print(f'\n── user（{len(user)} 字）──\n{user}')
-        return X.OK
-
-    if '--preview-edit' in tokens:
-        if chapters:
-            raise TerminalState(
-                '--preview-edit 由编辑文件名绑定章号，不接受 --chapters')
-        preview = write.run_edit_preview(
-            ctx, _valued(flags, '--preview-edit') or '')
-        print(preview.model_dump_json(indent=2))
-        return X.OK
-
-    if '--recheck' in tokens:
-        report = write.run_recheck(ctx, chapters)
-        print(render(report))
-        return X.OK if report.passed else X.CHECK_FAILED
-
-    if '--revalidate' in tokens:
-        report = write.run_revalidate(
-            ctx, actor=_valued(flags, '--actor') or '',
-            reason=_valued(flags, '--reason') or '', chapters=chapters)
-        print(render(report))
-        return X.OK if report.passed else X.CHECK_FAILED
-
-    if '--apply-edit' in tokens:
-        if chapters:
-            raise TerminalState('--apply-edit 由编辑文件内的 output_ordinal 绑定章号，不接受 --chapters')
-        report = write.run_apply_edit(
-            ctx,
-            _valued(flags, '--apply-edit') or '',
-            actor=_valued(flags, '--actor') or '',
-            reason=_valued(flags, '--reason') or '',
-            current_chapter_sha256=(
-                _valued(flags, '--current-chapter-sha256') or ''),
-            preview_subject_sha256=(
-                _valued(flags, '--preview-subject-sha256') or ''),
-            confirmation=_valued(flags, '--edit-confirmation') or '',
-        )
-        print(render(report))
-        return X.OK if report.passed else X.CHECK_FAILED
-
-    if '--emit-prepared-recovery-workpack' in tokens:
-        workpack = write.build_prepared_recovery_workpack(
-            ctx, _valued(flags, '--emit-prepared-recovery-workpack') or '')
-        print(workpack.model_dump_json(indent=2))
-        return X.OK
-
-    if '--recover-prepared' in tokens:
-        report = write.run_prepared_recovery(
-            ctx,
-            _valued(flags, '--recover-prepared') or '',
-            actor=_valued(flags, '--actor') or '',
-            reason=_valued(flags, '--reason') or '',
-            subject_sha256=_valued(flags, '--subject-sha256') or '',
-        )
-        print(render(report))
-        print('  ✓ 历史 prepared checkpoint 已按当前代码 0-wire 收口；'
-              '请单独运行 `stage5.review` 做全书验收')
-        return X.OK if report.passed else X.CHECK_FAILED
-
-    if '--recover-reviewer-rewrite-prepared' in tokens:
-        from novel.stages.stage5 import reviewer_rewrite
-        source_run_id = (
-            _valued(flags, '--recover-reviewer-rewrite-prepared') or '')
-        request_sha256 = (
-            _valued(flags, '--reviewer-rewrite-request-sha256') or '')
-        recovery_target_run_id = _valued(
-            flags, '--reviewer-rewrite-recovery-target-run-id')
-        recovery_journal_sha256 = _valued(
-            flags, '--reviewer-rewrite-recovery-journal-sha256')
-        execution = reviewer_rewrite.reviewer_rewrite_execution_state(
-            ctx, request_sha256=request_sha256)
-        if (
-            execution is None
-            or execution.state not in {
-                'recoverable_checkpoint', 'recoverable_prepared'}
-            or execution.source_run_id != source_run_id
-            or execution.request_sha256 != request_sha256
-            or execution.recovery_target_run_id != recovery_target_run_id
-            or execution.recovery_journal_sha256 != recovery_journal_sha256
-        ):
-            raise TerminalState(
-                'Stage5 Reviewer rewrite prepared recovery 与 current '
-                'request/execution journal 不一致')
-        report = write.run_reviewer_rewrite_prepared_recovery(
-            ctx, source_run_id, request_sha256,
-            recovery_target_run_id=recovery_target_run_id,
-            recovery_journal_sha256=recovery_journal_sha256)
-        print(render(report))
-        print('  ✓ Stage5 Reviewer 单章改写已 0-wire 补完提交尾窗；'
-              '请单独运行 stage5.review 重算全书验收')
-        return X.OK if report.passed else X.CHECK_FAILED
-
-    if '--retire-reviewer-rewrite-request' in tokens:
-        from novel.stages.stage5 import reviewer_rewrite
-        request_rel = (
-            _valued(flags, '--retire-reviewer-rewrite-request') or '')
-        request_sha256 = (
-            _valued(flags, '--reviewer-rewrite-request-sha256') or '')
-        execution = reviewer_rewrite.reviewer_rewrite_execution_state(
-            ctx, request_rel, request_sha256=request_sha256)
-        if (
-            execution is None
-            or execution.state != 'expired_unstarted'
-            or execution.request_rel != request_rel
-            or execution.request_sha256 != request_sha256
-        ):
-            raise TerminalState(
-                'Stage5 Reviewer rewrite expiry retire 与 current sealed '
-                'request/execution 状态不一致')
-        disposition = (
-            reviewer_rewrite.retire_expired_reviewer_rewrite_request(
-                ctx, request_rel, request_sha256))
-        print('  ✓ Stage5 Reviewer rewrite 过期且未启动的 request 已 0-wire '
-              f'消费：{disposition.disposition_sha256}')
-        return X.OK
-
-    # 两种付费调用模式均遵循 AGENTS.md 的付费与正文外发授权边界。
-    from novel.llm import stage5_runs
-    reviewer_rewrite_rel = _valued(flags, '--reviewer-rewrite')
-    if reviewer_rewrite_rel is not None:
-        _require_stage5_reviewer_rewrite_ready(ctx, reviewer_rewrite_rel)
-    else:
-        stage5_runs.refuse_foreign_prepared_before_wire(ctx, chapters)
-    if chapters:
-        # 定向重生成必须真的重新采样；否则 prompt 不变会静默命中旧问题稿的缓存。
-        selected = _chapters_of(chapters)
-        chapters = ','.join(str(n) for n in selected)
-        from novel.llm.cache import CachePolicy
-        ctx.cache = CachePolicy.refresh()
-    client = _llm_client(ctx)
-    if reviewer_rewrite_rel is not None:
-        report = write.run_reviewer_rewrite(
-            ctx, client, reviewer_rewrite_rel)
-    elif '--revise' in tokens:
-        report = write.run_revise(ctx, client, chapters)
-    else:
-        report = write.run_write(ctx, client, chapters)
-    print(render(report))
-    print('  ✓ 逐章成稿已落盘——跑 `stage5.review`（0 成本）看全书验收'
-          if report.passed
-          else '  ✗ 本轮仍有阻断稿；正式稿与 .INVALID 状态见上方报告')
-    return X.OK if report.passed else X.CHECK_FAILED
-
-
-def _run_stage7(ctx: RunContext, flags: list[str]) -> int:
-    """stage7 的十二条路。**十一条 0 成本，一条付费。**
-
-    ⚠⚠ **本层是第一个「一个 stage 三个节点」的层**（`stage7.rename` / `.assemble` /
-    `.approve`）。派发按 **stage** 分（`_runners` 那张表的键就是 stage），
-    节点由 `ctx.node` 带着 ⇒ 这里要**先按节点分两次岔，再按 flag 分**。
-    """
-    from novel.stages.stage7 import assemble, rename
-
-    tokens = set(N.flag_tokens(flags))
-
-    if ctx.node == 'stage7.rename' and '--recover-prepared' in tokens:
-        rename.recover_prepared_rename(
-            ctx, source_run_id=_valued(flags, '--recover-prepared') or '',
-            proof_sha256=_valued(flags, '--subject-sha256') or '')
-        print('  ✓ 已按原完成组补齐人名表提交与采纳尾账（0 模型）')
-        return X.OK
-
-    if ctx.node == 'stage7.assemble':
-        path, art, report = assemble.run_assemble(ctx)
-        bt = art.book_txt
-        print(f'  ✓ 成书已导出：{path}'
-              + (f'（{bt.chars} 字 / {bt.chapters} 章）' if bt else ''))
-        print(render(report))
-        return X.OK if report.passed else X.CHECK_FAILED
-
-    if ctx.node == 'stage7.approve':
-        raise TerminalState(
-            'stage7.approve 已退役（批次 B4）；人名表由 stage7.rename '
-            '在机械校验通过后自动 seal，请改跑 stage7.rename / --recheck')
-
-    if '--emit-edit-template' in tokens:
-        print(rename.edit_template_json())
-        return X.OK
-
-    if '--check-only' in tokens:
-        report = rename.run_check_only(ctx)
-        print(render(report))
-        return X.OK if report.passed else X.CHECK_FAILED
-
-    if '--dry-run' in tokens:
-        system, user, _mat = rename.build_prompt(ctx)
-        print(f'── system（{len(system)} 字）──\n{system}')
-        print(f'\n── user（{len(user)} 字）──\n{user}')
-        return X.OK
-
-    if '--identity' in tokens:
-        base, report = rename.run_identity(ctx)
-        print(f'── 恒等基线 ── {base.chapters} 章 + 文案 + 书名，'
-              f'{"逐字节无损" if base.roundtrip_ok else f"不守恒：{base.mismatches}"}')
-        for line in base.blind:
-            print(f'  ⚠ 验不了：{line}')
-        print(render(report))
-        # ⚠ 恒等基线**不拿 badge 当退出码**：它量的是「替换器在恒等下守不守恒」，
-        # 而报告里那些 unver 说的是本层的常态。跑完了就是 0。
-        return X.OK
-
-    if '--recheck' in tokens:
-        _art, report = rename.run_recheck(ctx)
-        print(render(report))
-        return X.OK if report.passed else X.CHECK_FAILED
-
-    if '--rebind-review' in tokens:
-        _art, report = rename.run_rebind_review(ctx)
-        print(render(report))
-        print('  ✓ 旧 Stage7 人工决定已保留，既有成书字节未退休')
-        return X.OK if report.passed else X.CHECK_FAILED
-
-    if '--revalidate' in tokens:
-        promoted, report = rename.run_revalidate(
-            ctx, actor=_valued(flags, '--actor') or '',
-            reason=_valued(flags, '--reason') or '')
-        print(render(report))
-        print('  ✓ 已提升为正式产物（0 成本）' if promoted
-              else '  ✗ 仍有阻断级问题，未提升；问题稿留在 .INVALID')
-        return X.OK if promoted else X.CHECK_FAILED
-
-    if '--apply-edit' in tokens:
-        _art, report = rename.run_apply_edit(ctx, _valued(flags, '--apply-edit') or '')
-        print(render(report))
-        return X.OK if report.passed else X.CHECK_FAILED
-
-    if '--validate-edit' in tokens:
-        _art, report = rename.run_validate_edit(
-            ctx, _valued(flags, '--validate-edit') or '')
-        print(render(report))
-        print('  只读预检完成：没有归档、覆盖、退休成书或写入任何产物')
-        return X.OK if report.passed else X.CHECK_FAILED
-
-    if '--adopt-residual' in tokens:
-        _art, report = rename.run_adopt_residual(
-            ctx, _valued(flags, '--adopt-residual') or '')
-        print(render(report))
-        return X.OK if report.passed else X.CHECK_FAILED
-
-    # 付费路：遵循 AGENTS.md 的付费与正文外发授权边界。
-    client = _llm_client(ctx)
-    rename.run_rename(ctx, client)
-    print('  ✓ stage7 人物表已落盘并自动定稿——可继续 `stage7.assemble` 成书')
-    return X.OK
 
 
 def _valued(flags: list[str], name: str) -> str | None:
@@ -1539,9 +856,9 @@ def _cmd_run(a: argparse.Namespace) -> int:
             f'--response-repair 当前只接受 agent，实得 {repair_mode!r}')
     ctx = RunContext.open(
         a.base, a.sid, a.node, paid=paid,
-        repair_rejected_responses=(
-            repair_mode == 'agent'
-            or (paid and a.node == 'stage2.blueprint')),
+        # F8c：`stage2.blueprint` 的蓝图修复臂随旧链退役；响应修复只保留显式
+        # `--response-repair agent` 这一条通用入口。
+        repair_rejected_responses=(repair_mode == 'agent'),
         executor_backend=executor_backend,
         executor_profile=(
             executor_backend.profile
@@ -1557,61 +874,10 @@ def _cmd_run(a: argparse.Namespace) -> int:
     parent_id = getattr(ctx, 'parent_run_id', run_id)
     if parent_id != run_id:
         print(f'  parent_run_id : {parent_id}', file=sys.stderr)
-    # Stage2 机械准入是**运行边界**：Blueprint 生成前要求人物/Global/原文/
-    # 称名投影机械可用；Stage4 起另要求完整 Blueprint。语义结论不在这里判定，
-    # 以报告 unver 与统一准入的披露表达（`novel/orchestrator/mechanical_admission.py`）。
-    if paid and a.node in {'stage2.blueprint', 'stage4.design', 'stage4.plan',
-                           'stage4.context', 'stage7.assemble'}:
-        from novel.orchestrator import mechanical_admission as admission
-        target = 'stage2.blueprint' if a.node == 'stage2.blueprint' else 'stage4'
-        gate = (admission.blueprint_generation_ready(a.base, a.sid) if target == 'stage2.blueprint'
-                else admission.stage4_ready(a.base, a.sid))
-        if not gate.ok:
-            raise UpstreamMissing(
-                f'{a.node} 的统一机械准入未通过：' + '；'.join(gate.blocking))
-    # API 的 prepare 只做早反馈；手敲 CLI 也必须经过同一座权威门，且要在
-    # `_dispatch` 构造任何 LLM 请求之前同时证明：当前结构逐章已接受、writing
-    # 已独立授权、选章没有越过当前计划。0 成本恢复 flag 的 ``paid=False`` 不进来。
-    run_tokens = set(N.flag_tokens(flags))
-    if a.node == 'stage5.write' and '--recover-prepared' in run_tokens:
-        from novel.llm import stage5_runs
-        from novel.orchestrator import approvals
-        source_run_id = _valued(flags, '--recover-prepared') or ''
-        source_chapters = sorted(stage5_runs.source_prepared_envelopes(
-            ctx, source_run_id))
-        approvals.authorize_prepared_recovery(
-            a.base, a.sid, source_chapters)
-    elif paid and a.node == 'stage5.write':
-        from novel.orchestrator import approvals
-        reviewer_rewrite_rel = _valued(flags, '--reviewer-rewrite')
-        reviewer_rewrite_target = (
-            _require_stage5_reviewer_rewrite_ready(
-                ctx, reviewer_rewrite_rel)
-            if reviewer_rewrite_rel is not None else None
-        )
-        approvals.authorize_writing(
-            a.base,
-            a.sid,
-            (list(reviewer_rewrite_target)
-             if reviewer_rewrite_target is not None
-             else list(_chapters_of(_valued(flags, '--chapters'))) or None),
-            requires_fresh_review='--revise' in N.flag_tokens(flags),
-            reviewer_rewrite_request_rel=reviewer_rewrite_rel,
-        )
-    # Stage5 闭合闸落在**所有真实执行最终汇合的运行边界**（手敲 CLI、API jobs、
-    # headless agent 子 CLI 都经过这里）：stage7 的任何写效果跑法都要求
-    # 当前 typed closure 回执已打开 gate.s5。0 成本只读跑法（--check-only 等）
-    # 仍可运行，否则人连开闸需要的证据都拿不到（R 系硬闸与恢复面同批交付）。
-    # ⚠ Stage6 prepare/hook 两项随 Stage6 整层退役（F8b）：该层不再有写效果节点。
-    prepared_delivery_recovery = (
-        a.node == 'stage7.rename'
-        and run_tokens == {'--recover-prepared', '--subject-sha256'})
-    if (a.node in ('stage7.rename', 'stage7.assemble')
-            and not prepared_delivery_recovery
-            and not (run_tokens and run_tokens <= set(STAGE5_CLOSED_EXEMPT_FLAGS))):
-        from novel.stages.stage5 import closure as stage5_closure
-        from novel.store import ArtifactStore
-        stage5_closure.require_stage5_closed(ArtifactStore(ctx))
+    # F8c：Stage2/4/5/7 旧链的运行边界闸（统一机械准入名册、stage5.write 写作
+    # 授权与 reviewer-rewrite 复核、stage7 的 closure 闸）随旧链退役删除——
+    # 那些节点已不在 NODES，str06 节点在函数开头分流到 `_run_str06`，付费与
+    # 正文外发边界在 PaidRequestSession 内闭合。stage0/1 没有付费节点。
     return _dispatch(a.node, ctx, flags)
 
 
@@ -1961,10 +1227,8 @@ def _cmd_response_repair(a: argparse.Namespace) -> int:
 
     details = {
         'attempt': a.attempt,
-        'batch': a.batch,
         'run_id': a.run_id,
         'decline': bool(a.decline),
-        'decisions_input': a.decisions,
         'actor': a.actor,
     }
     with operation_scope(
@@ -1973,42 +1237,14 @@ def _cmd_response_repair(a: argparse.Namespace) -> int:
 
 
 def _cmd_response_repair_admitted(a: argparse.Namespace) -> int:
-    """封存受托 agent 的修复/放弃决定；真正复验发生在原节点重跑时。"""
+    """封存 agent 的修复/放弃决定；真正复验发生在原节点重跑时。
+
+    F8c：Stage2 一次性 batch repair_manifest 面随旧链退役（其 resume 命令
+    `stage2.blueprint --yes` 已拒识）；单项 attempt 是唯一入口。
+    """
     from novel.llm import response_repair
 
     novel_dir = paths.resolve_novel_dir(a.base, a.sid)
-    if a.batch:
-        if a.decline or a.reason:
-            raise TerminalState(
-                'batch 每项的 submit|decline 与 reason 必须全部写进 --decisions；'
-                '不能再混用单项 --decline/--reason')
-        if not a.decisions:
-            raise TerminalState('response-repair --batch 必须同时给 --decisions <json>')
-        from novel.llm import stage2_runs
-        resume = stage2_runs.manifest_resume_metadata(a.batch)
-        run_id = str(resume['run_id'])
-        if a.run_id is not None and a.run_id != run_id:
-            raise TerminalState(
-                f'--run-id={a.run_id!r} 与 batch manifest run_id={run_id!r} 不一致；'
-                '拒绝写 batch resolution')
-        target = stage2_runs.submit_batch(
-            novel_dir, a.batch, a.decisions, actor=a.actor)
-        print(f'  ✓ 已原子封存整份 batch resolution：{target}')
-        print('  ⚠ 这不是通过；原节点会逐项重跑当前 schema/validator，再整书联合 HARD')
-        print('  → 用同一身份 resume：')
-        required_environment = resume['required_environment']
-        architecture = str(resume['architecture'])
-        env_key = next(iter(required_environment))
-        print(f'  ⚠ 必须保持 {env_key}={architecture!r}；'
-              'architecture 没有 CLI flag，不得从当前默认反推')
-        resume_flags = ' '.join(str(flag) for flag in resume['flags'])
-        suffix = f' {resume_flags}' if resume_flags else ''
-        print('    python -X utf8 -u -m novel.cli '
-              f'--run-id {run_id} run stage2.blueprint {a.sid} '
-              f'--base "{a.base}" --yes{suffix}')
-        return X.OK
-    if a.decisions:
-        raise TerminalState('--decisions 只与 --batch 同用')
     if not a.reason:
         raise TerminalState('response-repair --attempt 必须给非空 --reason')
     pending = response_repair.find_attempt(novel_dir, a.attempt)
@@ -2021,16 +1257,8 @@ def _cmd_response_repair_admitted(a: argparse.Namespace) -> int:
     record = response_repair.submit(
         novel_dir, a.attempt, actor=a.actor, reason=a.reason,
         decline=a.decline)
-    if record.rejection.get('resume_node') == 'stage2.analyze':
-        source_run = run_identity.check_run_id(record.rejection.get('run_id'))
-        if a.decline:
-            print('  ✓ 已保留原响应和放弃决定；共享首抽保持停止，不自动购买下一采')
-        else:
-            print(f'  ✓ 已封存修复候选：{record.root / response_repair.CANDIDATE_FILE}')
-            print('  ⚠ 封存不是接受；免费入口仍复验原 schema、来源和两侧编译结果。')
-            print(f'  → python -X utf8 -u -m novel.cli run stage2.analyze {a.sid} '
-                  f'--base "{a.base}" --recover-analyze-run {source_run}')
-        return X.OK
+    # F8c：旧链 `stage2.analyze --recover-analyze-run` 的共享首抽恢复提示随
+    # 旧链退役；通用恢复提示统一为「重跑原节点，让候选经过原 schema/validator 闸」。
     if a.decline:
         print(f'  ✓ 已放弃 attempt={a.attempt} 的唯一修复额度；请重跑原节点进入下一采')
     else:
@@ -2041,54 +1269,6 @@ def _cmd_response_repair_admitted(a: argparse.Namespace) -> int:
         print(f'  → resume 必须显式复用 run_id：{run_id}')
     return X.OK
 
-
-_APPROVAL_WRITE_ACTIONS = frozenset({
-    'backfill', 'seen', 'gate', 'close-stage2',
-})
-
-
-def _cmd_approval(a: argparse.Namespace) -> int:
-    """只读 façade 直读；四类写动作持有 generic admission。"""
-    if a.approval_action not in _APPROVAL_WRITE_ACTIONS:
-        return _cmd_approval_admitted(a)
-
-    from novel.orchestrator.write_admission import operation_scope
-
-    details = {'action': a.approval_action}
-    for name in ('surface', 'view', 'gate', 'input'):
-        value = getattr(a, name, None)
-        if value is not None:
-            details[name] = value
-    with operation_scope(
-            a.base, a.sid,
-            operation=f'approval-{a.approval_action}', details=details):
-        return _cmd_approval_admitted(a)
-
-
-def _cmd_approval_admitted(a: argparse.Namespace) -> int:
-    """可审计审批 CLI：只读 show + backfill/gate(s0,s1)。
-
-    Stage4 design/structure 工作包、模板与 typed apply 已随四道人工闸退役；
-    Stage5 writing/闭合（closure）人工面已随批次 B3（2026-09-15 全自动裁决）
-    退役——闭合由 `stage5.review` producer 以 system:stage5-auto 机械落账；
-    Stage6/7 终审工作包（approval workpack）随人工闸退役整体移除（F8b）——
-    命名与交付监控读 `/api/str06/candidates/{candidate}/*` 只读面。
-    """
-    from novel.orchestrator import approvals
-
-    if a.approval_action == 'show':
-        result = approvals.get(a.base, a.sid)
-    elif a.approval_action == 'backfill':
-        result = approvals.backfill_from_disk(a.base, a.sid)
-    elif a.approval_action == 'gate':
-        if a.gate == 's4':  # argparse 已关闭；保留服务调用前的纵深防线。
-            raise ApprovalRequired(
-                'gate.s4 已退役：Stage4 唯一打开条件是统一机械准入')
-        result = approvals.approve_gate(a.base, a.sid, a.gate)
-    else:
-        raise TerminalState(f'未登记的审批动作：{a.approval_action!r}')
-    print(result.model_dump_json(indent=2))
-    return X.OK
 
 
 def _cmd_mark(a: argparse.Namespace) -> int:
@@ -2187,7 +1367,6 @@ _CMDS = {'run': _cmd_run, 'preview': _cmd_preview,
          'queue-resume': _cmd_queue_resume,
          'jobs': _cmd_jobs, 'reconcile': _cmd_reconcile, 'doctor': _cmd_doctor,
          'response-repair': _cmd_response_repair,
-         'approval': _cmd_approval,
          'workflow': _cmd_workflow,
          'mark': _cmd_mark}
 

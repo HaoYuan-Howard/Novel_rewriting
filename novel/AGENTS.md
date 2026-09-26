@@ -13,7 +13,7 @@
 | 问题 | 入口 |
 |---|---|
 | 产物、依赖与历史采用 | `novel/store.py`、`novel/paths.py`、`novel/consumption.py`、`novel/prov.py` |
-| 本层生成、重验或人工编辑 | `novel/stages/` 对应 stage 的 producer 与恢复模块；对应 `docs/schema/`；Stage2 局部不变量见 `novel/stages/stage2/AGENTS.md` |
+| 本层生成、重验或人工编辑 | `novel/stages/` 对应 stage 的 producer 与恢复模块；对应 `docs/schema/`；新链引擎在 `novel/stages/stage2|4|5|7/`（Stage2 局部指南见 `novel/stages/stage2/AGENTS.md`） |
 | 下一动作、授权、并发与暂停 | `novel/orchestrator/operator.py`、`novel/orchestrator/execution_permit.py`、`novel/orchestrator/agent_supervisor.py` |
 | 历史审阅决定的解码与执行 | `novel/orchestrator/reviewer_legacy.py`（Commander 退役后的迁入地）、`novel/orchestrator/reviewer_action_evidence.py` |
 | Executor、传输与成本 | `novel/llm/providers.py`、`novel/llm/run_journal.py`、`novel/llm/`、`novel/work_units.py` |

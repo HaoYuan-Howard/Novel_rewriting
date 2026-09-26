@@ -22,7 +22,7 @@ ARTIFACT_PATHS: Final[dict[str, str]] = {
     'stage1.hook_copy': 'stage1/hook_copy.json',
     # ── STR-06 新链（F8a 激活；键即相对路径）──────────────────────────────
     # 【为什么新链的键是路径本身】三条理由，都指向「不许有第二份命名」：
-    # ① 候选产物表（`contracts/schema/str06/candidates.py::STR06_CANDIDATE_ARTIFACTS`）
+    # ① 候选产物表（`contracts/schema/workflow.py::STR06_CANDIDATE_ARTIFACTS`）
     #   就以 rel 为键，F8a 激活的是同一张表——再套一层符号名就是两份会漂的真相（I-16）；
     # ② 三级家族路径的来源账键是**完整相对路径**（`paths.family_input_key`），
     #   路径即键时账键与注册键天然一致，反查不会塌级；
@@ -196,6 +196,42 @@ def str06_body_receipt_rel(ordinal: int) -> str:
 def str06_book_rel(title: str) -> str:
     """新链成书路径（`stage7/final/{title}_rewriting.txt`）。"""
     return artifact_rel('stage7/final/{title}_rewriting.txt', title=title)
+
+
+# ── 新链产物的 RC 批次标签（F8a 激活；F8c 分流自候选产物表）──────────────────
+# 【它为什么单独一张表】`ARTIFACT_PATHS` 答「路径叫什么」，本表答「盘上形状是哪
+# 一批定格的」。两者是同一份产物的两格不同事实：路径进来源账键与消费路由，RC
+# 标签进候选契约身份（`candidate_contract_identity` 的输入之一）与
+# `contracts/schema/workflow.py::RC_LABELS` 的版本面。信封版本（`current_version`）
+# 对「切换时新建的命名空间」不携带信息（盘上没有旧信封字节可读），形状史由
+# ① 模型自带 `contract_version` 字面量 与 ② 本表 两条线承载。
+# ⚠ 表键与 `ARTIFACT_PATHS` 的新链条目**逐字相等**（22 条）；对账在
+# `tests/test_str06_f7e_freeze.py`。改一条路径就必须同批改这里，否则契约身份
+# 与版本面当场分家。
+STR06_ARTIFACT_RC_VERSIONS: Final[dict[str, str]] = {
+    'stage2/blueprints/chapter_blueprints.json': 'str06-rc2',
+    'stage2/compiled/book_extraction.json': 'str06-rc2',
+    'stage2/compiled/input_snapshots.json': 'str06-rc2',
+    'stage2/acceptance/fold.json': 'str06-rc2',
+    'stage2/characters/characters.json': 'str06-rc3',
+    'runtime/preserve_checkpoint.json': 'str06-rc3',
+    'stage4/grounding/reconstruction_brief.json': 'str06-rc3',
+    'stage4/grounding/semantic_binding.json': 'str06-rc3',
+    'stage4/compiled/execution_plan.json': 'str06-rc3',
+    'stage4/acceptance/guard/compile.json': 'str06-rc3',
+    'stage4/acceptance/guard/report.json': 'str06-rc4',
+    'stage4/design/body_design.json': 'str06-rc4',
+    'stage4/design/presentation_graph.json': 'str06-rc4',
+    'stage4/context/hook/hook.json': 'str06-rc3',
+    'stage4/ir/writer_book_ir.json': 'str06-rc4',
+    'stage5/hook/hook.txt': 'str06-rc3',
+    'stage5/hook/receipt.json': 'str06-rc3',
+    'stage5/body/ch{nn}.txt': 'str06-rc4',
+    'stage5/acceptance/body/ch{nn}.json': 'str06-rc4',
+    'stage7/naming/name_map.json': 'str06-rc3',
+    'stage7/final/{title}_rewriting.txt': 'str06-rc4',
+    'stage7/final/delivery_manifest.json': 'str06-rc4',
+}
 
 
 # ── 旧链路径常量（F8a 起全部移入退役表；只供旧盘只读识别与拒绝）──────────

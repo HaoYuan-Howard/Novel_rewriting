@@ -30,12 +30,12 @@
 
 用法：
   # 0 成本预览：只摊开覆盖后的显式配置与将要透传的 argv，不跑
-  python -X utf8 tools/effort_ab.py --set stage7.rename=low -- \\
-      run stage7.rename --sid <sid> --base <臂 base> --yes
+  python -X utf8 tools/effort_ab.py --set str06.stage5.body=low -- \
+      run str06.stage5.body --sid <sid> --base <臂 base> --yes
 
   # 真跑（`--execute` 是本工具这一层的显式闸；付费闸仍是被透传的 `--yes`）
-  python -X utf8 tools/effort_ab.py --set stage7.rename=low --execute -- \\
-      run stage7.rename --sid <sid> --base <臂 base> --yes
+  python -X utf8 tools/effort_ab.py --set str06.stage5.body=low --execute -- \
+      run str06.stage5.body --sid <sid> --base <臂 base> --yes
 """
 from __future__ import annotations
 

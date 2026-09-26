@@ -1,38 +1,43 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-admission.py —— 统一机械准入（Stage2 语义审阅退役后的唯一 Stage2 下游闸）。
+mechanical_admission.py —— 旧链统一机械准入名册（F8c：随旧链退役收空壳）。
 
-【它回答什么】「这次真实执行所需的上游，此刻能不能免费证明机械可用」：
-必要产物可读、当前有效、无未恢复 INVALID，且所需机械检查全部通过。
-CLI `run`、调度（queue/operator）、最低读取边界（approvals spawns）与交付检查
-共用这里返回的同一结论；任何一方都不再复述第二套 Stage2 审阅条件。
+【它曾经回答什么】「这次真实执行所需的上游，此刻能不能免费证明机械可用」：
+必要产物可读、当前、无未恢复 INVALID，且所需机械检查全部通过。CLI `run`、
+调度（queue/operator）、最低读取边界（approvals spawns）与交付检查曾共用这里
+返回的同一结论。
 
-【它不回答什么】机械检查不证明人物完整、主张获原文支持或剧情抽取正确。
-Stage2 语义审阅（Global 逐项审阅、Blueprint 章审与跨章复核）已整体退役；
-语义结论在报告中以 ``unver`` 行常驻披露（``SEMANTIC_UNREVIEWED_RULES``），
-不阻断生成，也不产生审批待办。语义未审最终随交付披露。
+【F8c 现状（S-05 deprecation）】名册的四个入口（``blueprint_generation_ready``
+／``stage4_ready``／``stage4_plan_ready``／``stage4_context_ready``）全部钉在
+旧节点键（stage2.blueprint／stage4.design／stage4.plan／stage4.context）上，
+其机械检查实现（`novel.stages.stage2.checks`／`extract`、
+`novel.stages.stage4.current_infeasible_binding`）已随旧链整层删除。新链
+（11 个 `str06.*` 节点）的准入判定逐节点由 `novel/orchestrator/queue.py` 与
+`state.py` 的完成度/续跑判定承担：登记缺失 ⇒ 普通付费 todo，live `.INVALID`
+⇒ 收件箱阻断，未证明 ⇒ `unknown` 留人——**不查询本名册**
+（`tests/test_orchestrator_queue.py` 钉住：新链节点不得查询退役准入名册）。
 
-【为什么不能只看 CheckReport.passed】``passed == (badge != 'fail')``，而
-badge 在存在 unver/skipped 时仍是 amber（passed=True）。准入要求
-**机械检查缺失、未运行或不可判仍阻断**：现场重跑 0 成本检查，把
-``skipped`` 与机械类 ``unver`` 视为不可判并阻断，只有登记过的语义类
-``unver`` 降为披露。
+⇒ 四个入口改为关闭式拒判（``ok=False``，不再 import 任何已删模块）：旧链
+消费者（queue/approvals/cli/delivery 的旧节点分支）走到这里得到的是「已退役」
+而不是一份假装通过的准入或一次 AttributeError 崩溃。
+
+【仍被消费的部分】
+  · ``AdmissionCheck`` —— 准入结论的形状（queue/approvals/cli 的旧节点分支与
+    测试只认这三个字段）。
+  · ``SEMANTIC_UNREVIEWED_RULES`` / ``SEMANTIC_UNREVIEWED_NOTE`` ——
+    Q-13 披露分层的唯一落点：语义未审的 ``unver`` 只披露不阻断，取值面由
+    `contracts.rules` 的 ``disclosable_unver`` 位派生；现由
+    `tests/test_rules_registry.py` 对账守护（`delivery.py` 的旧链交付判定已
+    随 F8c 改写，新链交付披露若需要这句话，落点由 delivery owner 决定）。
+
+【删除条件（S-03：集中 + 明确条件）】待 queue.py / approvals.py /
+cli/main.py / delivery.py 的旧节点分支随各自 F8c 批次删除后，本模块整体删除；
+届时 ``SEMANTIC_UNREVIEWED_*`` 迁入其唯一仍在消费的交付披露模块。
 """
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass, field
-from pathlib import Path
-
-from contracts.artifacts import (
-    STAGE1_MAIN_TEXT, STAGE2_BLUEPRINT_CHARACTER_PROJECTION,
-    STAGE2_CHAPTER_BLUEPRINTS, STAGE2_CHARACTERS, STAGE2_GLOBAL_GROUNDING,
-)
-from novel import paths
-from novel.errors import NovelError
-from novel.orchestrator import state as st
-from novel.store import ArtifactStore
 
 #: 语义未审的登记规则。这些 ``unver`` 行**不阻断**机械准入，只作为
 # “Stage2 语义未审”披露输出；表外任何 ``unver``/``skipped`` 都按
@@ -50,6 +55,12 @@ SEMANTIC_UNREVIEWED_NOTE = (
     'Stage2 语义未审：机械检查只证明形状、引用与证据闭合，'
     '不证明人物完整、主张获原文支持或剧情抽取正确')
 
+#: 旧节点名册的统一退役理由。四个入口都原样返回它，不各自编一句。
+_RETIRED_REASON = (
+    '旧链统一机械准入名册已随旧链整层退役（F8c）：该名册只服务旧节点键，'
+    '新链 str06.* 节点的准入由 queue/state 的完成度与续跑判定承担，'
+    '不查询本名册')
+
 
 @dataclass(frozen=True)
 class AdmissionCheck:
@@ -65,250 +76,30 @@ class AdmissionCheck:
     disclosures: tuple[str, ...] = field(default_factory=tuple)
 
 
-def _overview(base, sid):
-    return st.overview(base, sid)
+def _retired(target: str) -> AdmissionCheck:
+    """旧节点准入入口的关闭式拒判：不崩溃、不假装通过、不查询已删检查。"""
+    return AdmissionCheck(target, False, blocking=(_RETIRED_REASON,))
 
 
-def _artifact_rows(ov):
-    """全部层级的 {rel: 行} 索引；准入跨层检查原文与 Stage2 产物。"""
-    return {row.rel: row for stage in ov.stages for row in stage.artifacts}
+def blueprint_generation_ready(base, sid) -> AdmissionCheck:
+    """旧链 `stage2.blueprint` 生成前准入（已退役，见模块 docstring）。"""
+    del base, sid
+    return _retired('stage2.blueprint')
 
 
-def _artifact_blocking(rows: dict, rel: str, *, label: str) -> tuple[str, ...]:
-    """产物级的机械可用性：存在、可读、当前、无 live INVALID。"""
-    row = rows.get(rel)
-    if row is None or not row.exists:
-        return (f'{label}（{rel}）不存在，先运行对应生成入口',)
-    if row.invalid:
-        return (f'{label}（{rel}）有未恢复 INVALID；'
-                f'先运行对应节点的 --revalidate 免费重判',)
-    if not row.readable:
-        return (f'{label}（{rel}）按当前契约读不回来',)
-    if row.freshness == 'stale':
-        return (f'{label}（{rel}）已过期（{row.reason}）；先按恢复入口免费复验',)
-    if row.freshness == 'unknown':
-        return (f'{label}（{rel}）新鲜度不可判（{row.reason}）；先人工核对来源账',)
-    return ()
+def stage4_ready(base, sid) -> AdmissionCheck:
+    """旧链 `stage4.design` 生成前准入（已退役，见模块 docstring）。"""
+    del base, sid
+    return _retired('stage4')
 
 
-def _classify_outcomes(outcomes) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    """把单节点检查的 ``Outcome`` 列表分成 (阻断, 语义披露)。
-
-    只分类本次真正运行的判据；全报告里「注册了但本节点不跑」的规则不在这里，
-    避免把未运行误报成阻断。结论（有 findings）阻断；``unver_why`` 不可判——
-    除登记过的语义披露外都阻断，不能把「没查成」当成「通过」。
-    """
-    blocking, disclosures = [], []
-    for outcome in outcomes:
-        if outcome.unver_why is not None:
-            if outcome.rule in SEMANTIC_UNREVIEWED_RULES:
-                disclosures.append(f'{outcome.rule}: {outcome.unver_why}')
-            else:
-                blocking.append(f'{outcome.rule}: {outcome.unver_why}')
-        else:
-            blocking.extend(
-                f'{outcome.rule}: {finding.detail}' for finding in outcome.findings)
-    return tuple(blocking), tuple(disclosures)
+def stage4_plan_ready(base, sid) -> AdmissionCheck:
+    """旧链 `stage4.plan` 生成前准入（已退役，见模块 docstring）。"""
+    del base, sid
+    return _retired('stage4.plan')
 
 
-def _classify_rows(rule_rows) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    """把整份 ``CheckReport`` 的 ``RuleLine`` 列表分成 (阻断, 语义披露)。
-
-    ``hit`` 是硬结论；``skipped``/``unver`` 是不可判——除登记过的语义披露外
-    都阻断。联合检查应跑全部规则，出现 skipped 本身就是不可判。
-    """
-    blocking, disclosures = [], []
-    for row in rule_rows:
-        if row.status == 'hit':
-            blocking.extend(
-                f'{row.rule}: {finding.detail}' for finding in row.findings)
-        elif row.status in ('unver', 'skipped'):
-            if row.rule in SEMANTIC_UNREVIEWED_RULES:
-                disclosures.append(f'{row.rule}: {row.why}')
-            else:
-                blocking.append(f'{row.rule}: {row.why}')
-    return tuple(blocking), tuple(disclosures)
-
-
-def characters_ready(ctx) -> AdmissionCheck:
-    """人物层自身职责：登记与称名投影可读、当前、机械检查通过。
-
-    蓝图生成前由 :func:`blueprint_generation_ready` 复用；人物生成/恢复入口
-    也可以用它做早反馈，但真实执行边界仍会在 producer 内再验一次。
-    """
-    from contracts.schema.characters import CharacterRegistry
-    from contracts.schema.stage1 import MainText
-    from contracts.schema.stage2 import BlueprintCharacterProjection
-    from novel.stages.stage2 import checks as stage2_checks
-    store = ArtifactStore(ctx)
-    try:
-        registry = store.read(CharacterRegistry, STAGE2_CHARACTERS)
-        store.read_own(BlueprintCharacterProjection,
-                       STAGE2_BLUEPRINT_CHARACTER_PROJECTION, require_current=True)
-        main_text = [
-            row.model_dump(mode='json', by_alias=True)
-            for row in store.read(MainText, STAGE1_MAIN_TEXT).root]
-    except NovelError as exc:
-        return AdmissionCheck('stage2.characters', False, blocking=(str(exc),))
-    outcomes = stage2_checks.check_characters(
-        registry.model_dump(mode='json', by_alias=True), list(main_text))
-    blocking, disclosures = _classify_outcomes(outcomes)
-    return AdmissionCheck('stage2.characters', not blocking, blocking=blocking,
-                          semantic_unreviewed=bool(disclosures),
-                          disclosures=disclosures)
-
-
-def blueprint_generation_ready(base: str | os.PathLike[str], sid: str) -> AdmissionCheck:
-    """Blueprint 生成前的统一机械准入：人物、Global、原文与称名投影。
-
-    只检查人物与 Global 各自职责内的机械检查，不消费 Blueprint——避免
-    人物生成被尚未生成的 Blueprint 判为失败。
-    """
-    from novel.orchestrator.approvals import projection_code
-    blocking: list[str] = []
-    disclosures: list[str] = []
-    ov = _overview(base, sid)
-    rows = _artifact_rows(ov)
-    for rel, label in (
-        (STAGE1_MAIN_TEXT, '原文切分'),
-        (STAGE2_CHARACTERS, '人物登记'),
-        (STAGE2_BLUEPRINT_CHARACTER_PROJECTION, '称名投影'),
-        (STAGE2_GLOBAL_GROUNDING, 'Global 全书事实'),
-    ):
-        blocking.extend(_artifact_blocking(rows, rel, label=label))
-    if blocking:
-        return AdmissionCheck('stage2.blueprint', False, blocking=tuple(blocking))
-    code = projection_code()
-    novel_dir = Path(paths.resolve_novel_dir(base, sid))
-    characters_check = characters_ready(
-        st.readonly_ctx(novel_dir, 'stage2.characters', code))
-    blocking.extend(characters_check.blocking)
-    disclosures.extend(characters_check.disclosures)
-    if blocking:
-        return AdmissionCheck('stage2.blueprint', False, blocking=tuple(blocking),
-                              semantic_unreviewed=bool(disclosures),
-                              disclosures=disclosures)
-    global_check = _global_mechanical(novel_dir, code)
-    blocking.extend(global_check[0])
-    disclosures.extend(global_check[1])
-    return AdmissionCheck('stage2.blueprint', not blocking, blocking=tuple(blocking),
-                          semantic_unreviewed=bool(disclosures),
-                          disclosures=disclosures)
-
-
-def _global_mechanical(novel_dir: Path, code: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    """Global 生成自身职责：不消费 Blueprint 的机械检查。"""
-    from contracts.schema.knowledge import KnowledgeGrounding
-    from contracts.schema.characters import CharacterRegistry
-    from contracts.schema.stage1 import MainText
-    from novel.stages.stage2 import checks as stage2_checks
-    store = ArtifactStore(st.readonly_ctx(novel_dir, 'stage2.global', code))
-    global_g = store.read(KnowledgeGrounding, STAGE2_GLOBAL_GROUNDING)
-    registry = store.read(CharacterRegistry, STAGE2_CHARACTERS)
-    main_text = [
-        row.model_dump(mode='json', by_alias=True)
-        for row in store.read(MainText, STAGE1_MAIN_TEXT).root]
-    outcomes = stage2_checks.check_global(
-        global_g.model_dump(mode='json', by_alias=True), list(main_text),
-        characters=registry.model_dump(mode='json', by_alias=True))
-    return _classify_outcomes(outcomes)
-
-
-def stage4_ready(base: str | os.PathLike[str], sid: str) -> AdmissionCheck:
-    """Stage4A 生成前的统一机械准入：完整 Blueprint 及 Stage2 全部必要产物。
-
-    完整 Stage2 检查覆盖全部必要产物；任何一项机械不可判都阻断。
-    """
-    from novel.orchestrator.approvals import projection_code
-    from novel.stages.stage2 import checks as stage2_checks
-    from novel.stages.stage2 import extract as stage2_extract
-    base_ready = blueprint_generation_ready(base, sid)
-    blocking = list(base_ready.blocking)
-    disclosures = list(base_ready.disclosures)
-    if blocking:
-        return AdmissionCheck('stage4', False, blocking=tuple(blocking),
-                              semantic_unreviewed=bool(disclosures),
-                              disclosures=disclosures)
-    ov = _overview(base, sid)
-    rows = _artifact_rows(ov)
-    blocking.extend(_artifact_blocking(
-        rows, STAGE2_CHAPTER_BLUEPRINTS, label='完整 Blueprint'))
-    if blocking:
-        return AdmissionCheck('stage4', False, blocking=tuple(blocking),
-                              semantic_unreviewed=bool(disclosures),
-                              disclosures=disclosures)
-    code = projection_code()
-    novel_dir = Path(paths.resolve_novel_dir(base, sid))
-    ctx = st.readonly_ctx(novel_dir, 'stage2.blueprint', code)
-    try:
-        report = stage2_extract.run_check_only(ctx)
-    except NovelError as exc:
-        return AdmissionCheck('stage4', False,
-                              blocking=(f'Stage2 联合机械检查不可判：{exc}',),
-                              semantic_unreviewed=bool(disclosures),
-                              disclosures=disclosures)
-    more_blocking, more_disclosures = _classify_rows(report.rules)
-    blocking.extend(more_blocking)
-    disclosures.extend(more_disclosures)
-    return AdmissionCheck('stage4', not blocking, blocking=tuple(blocking),
-                          semantic_unreviewed=bool(disclosures),
-                          disclosures=disclosures)
-
-
-def stage4_plan_ready(base: str | os.PathLike[str], sid: str) -> AdmissionCheck:
-    """Stage4B 生成前的统一机械准入（2026-09-15 全自动裁决后唯一打开条件）。
-
-    Stage2 底座仍须机械可用，且当前 Stage4A 盲候选可读、有效、无未恢复
-    INVALID。人工 all-accept 票不再是条件；「候选与当前 Stage2 投影漂移、
-    构造性绑定预检不闭合」等由 producer 在任何 wire 前关闭式复验。
-    当前存在 fresh typed infeasible 终态时不在此阻断——队列把预算内
-    `stage4.design --replan` 排成 todo，B 的早退由 producer 守住。
-    """
-    from contracts.artifacts import STAGE4_BLIND_CANDIDATE
-    from novel.orchestrator.approvals import projection_code
-    base_ready = stage4_ready(base, sid)
-    blocking = list(base_ready.blocking)
-    disclosures = list(base_ready.disclosures)
-    if blocking:
-        return AdmissionCheck('stage4.plan', False, blocking=tuple(blocking),
-                              semantic_unreviewed=bool(disclosures),
-                              disclosures=disclosures)
-    rows = _artifact_rows(_overview(base, sid))
-    blocking.extend(_artifact_blocking(
-        rows, STAGE4_BLIND_CANDIDATE, label='Stage4A 盲候选'))
-    return AdmissionCheck('stage4.plan', not blocking, blocking=tuple(blocking),
-                          semantic_unreviewed=bool(disclosures),
-                          disclosures=disclosures)
-
-
-def stage4_context_ready(base: str | os.PathLike[str], sid: str) -> AdmissionCheck:
-    """stage4.context（免费）组装前的统一机械准入。
-
-    STR-03-S4：正式计划 ``plan_chapters.json`` 已退役。准入只要求 Design 候选与
-    Stage4B 证据绑定可读、当前、无未恢复 INVALID，且无 fresh typed infeasible。
-    Context 从 Design + Grounding + SourceView 确定性编译 Writer IR。
-    """
-    from contracts.artifacts import STAGE4_BLIND_CANDIDATE, STAGE4_EVIDENCE_BINDING
-    from novel.orchestrator.approvals import projection_code
-    from novel.stages.stage4 import current_infeasible_binding
-    blocking: list[str] = []
-    rows = _artifact_rows(_overview(base, sid))
-    for rel, label in (
-        (STAGE4_BLIND_CANDIDATE, 'Stage4A Design 候选'),
-        (STAGE4_EVIDENCE_BINDING, 'Stage4B 证据绑定'),
-    ):
-        blocking.extend(_artifact_blocking(rows, rel, label=label))
-    if blocking:
-        return AdmissionCheck('stage4.context', False, blocking=tuple(blocking))
-    code = projection_code()
-    novel_dir = Path(paths.resolve_novel_dir(base, sid))
-    store = ArtifactStore(st.readonly_ctx(novel_dir, 'stage4.plan', code))
-    if current_infeasible_binding(store) is not None:
-        return AdmissionCheck('stage4.context', False, blocking=(
-            '当前候选存在 fresh typed infeasible 终态；先由预算内 '
-            '`stage4.design --replan` 重采 Stage4A，再重跑 Stage4B',))
-    return AdmissionCheck('stage4.context', True)
-
-
-def semantic_unreviewed_disclosure() -> str:
-    return SEMANTIC_UNREVIEWED_NOTE
+def stage4_context_ready(base, sid) -> AdmissionCheck:
+    """旧链 `stage4.context` 组装前准入（已退役，见模块 docstring）。"""
+    del base, sid
+    return _retired('stage4.context')

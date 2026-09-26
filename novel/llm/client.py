@@ -980,7 +980,9 @@ class LlmClient:
         """
         self._purpose_progress[purpose] = progress
         active_rungs = self._active_rungs_for(rungs, purpose=purpose)
-        if recovery_policy not in (None, 'stage2-blueprint-v1'):
+        if recovery_policy is not None:
+            # F8c：stage2-blueprint-v1 策略随旧链 Stage2 整层退役；
+            # 新链付费恢复走候选 runner 自身续跑，不经 client 恢复策略。
             raise ValueError(f'{purpose}: 未登记的内容恢复策略 {recovery_policy!r}')
         active_models = self._models
         derived = required_top_level(model_cls)
@@ -1139,37 +1141,39 @@ class LlmClient:
         errors: list[str] = []
 
         def human_batch_already_resolved() -> bool:
-            if recovery_policy != 'stage2-blueprint-v1':
-                return False
-            from novel.llm import stage2_runs
-            return stage2_runs.human_batch_resolved(
-                self.ctx.novel_dir, self.ctx.run_id)
+            # F8c：Stage2 人工 batch 恢复面随旧链退役；不再有已解决批。
+            return False
 
         def worth_content_recovery(
                 resp: ChatResponse, *, gate: str, model_index: int,
                 why: str | None = None,
         ) -> bool:
-            """Stage2 只留 Flash 定向恢复 + Pro 重建各一次；其余节点保持旧策略。
+            """通用处置：走法仍由 `_worth_resampling` 一家管（截断不重采）。
 
-            schema/validator 上可确定性消化的失败（A/B）不触发同档付费重采。
+            （F8c：stage2-blueprint-v1 的确定性失败臂随旧链退役。）
+
+            ⚠⚠ 这里恢复的是模块 docstring 立的不变量：「通用非 Stage2 路径里，
+            捞不动时走法不变——`_answer_lost` 与 `_worth_resampling` 仍负责原来的
+            内容采样策略」。F8c 收口时若把旧 Stage2 的 answer_lost/length 直送 Pro
+            与单 Pro constraint rebuild 两支提到通用路径前面，`ask_json` 会与
+            `ask_text` 分家：同一份截断响应在文本入口不重采、在 JSON 入口多付一采
+            （`tests/test_llm.py` 钉住这两条）。
+
+            **单 Pro 的 constraint rebuild 槽只在真有隔离修复链时保留**：那时第二采
+            经 `request_for_sample` 换的是**不同 request mode** 的定向修复/约束
+            重建包，不是同配置重采；没有修复链时第二采就是原 prompt 原档位的
+            重复请求，必须回到 `_worth_resampling`（截断与 answer_lost 直送 Pro，
+            其余形状拒同档再采一次）。
             """
-            if recovery_policy != 'stage2-blueprint-v1':
-                return _worth_resampling(resp)
-            from novel.stages.stage2.blueprint.recovery_policy import (
-                blueprint_failure_is_deterministic)
-            if blueprint_failure_is_deterministic(gate=gate, why=why):
-                return False
-            # 显式把主模型配置成 Pro 时没有 Flash→Pro 的第二个 model slot；首采
-            # 被拒后仍保留一次**同 Pro、不同 request mode** 的 constraint rebuild。
-            # 这不是同配置重采，answer_lost/length 也直接进入这一动作。
-            if (len(active_models) == 1
-                    and active_models[0] == PRO_FALLBACK_MODEL
-                    and model_index == 0):
-                return True
-            if resp.finish_reason == 'length' or gate == 'answer_lost':
-                return False
-            # Pro 的第一次已经是 constraint rebuild；再采一份同动作只会重付。
-            return model_index == 0
+            _ = recovery_policy
+            if repair_chain_id is not None:
+                # 显式把主模型配置成 Pro 时没有 Flash→Pro 的第二个 model slot；首采
+                # 被拒后仍保留一次**同 Pro、不同 request mode** 的 constraint rebuild。
+                if (len(active_models) == 1
+                        and active_models[0] == PRO_FALLBACK_MODEL
+                        and model_index == 0):
+                    return True
+            return _worth_resampling(resp)
 
         # 每份 rejection 的实际请求不能信盘上自报；repair_records 会用当前
         # prompt/模型链/档位重建并核验后，把唯一 ChatRequest 留在这里供 agent /

@@ -667,8 +667,11 @@ def build_argv(node: str, sid: str | None, flags: Sequence[str] = (), *,
             '--legacy-effort', profile.reasoning_effort,
             '--legacy-thinking', profile.thinking_mode,
         ]
-        if egress_authorized:
-            argv.append('--allow-egress')
+    # ⚠ F8c：正文外发授权与 executor backend 解钩——直连 LLM 节点
+    # （`str06.*`，无 backend 旗标）同样要把它带上命令行，否则编排器驱动
+    # 付费新链节点时永远缺这枚独立授权（I-43：付费与外发是两份授权）。
+    if egress_authorized:
+        argv.append('--allow-egress')
     argv += ['--base', os.path.abspath(os.fspath(base))]
     if is_paid(node, flags):
         # ⚠ **付费跑法在命令行上必须带 `--yes`**（`Q-10`：花钱前必须人确认）。
@@ -767,13 +770,21 @@ def resolve_executor_egress(
     backend: ExecutorBackend | None,
     egress_authorized: bool | None,
 ) -> bool | None:
-    """把请求默认收成执行快照；正文外发授权不能脱离 executor backend。"""
+    """把请求默认收成执行快照；正文外发授权与付费确认是两份独立授权（I-43）。
+
+    ⚠ F8c：直连 LLM 节点（`str06.*`，无 executor backend）**也要能显式授权
+    正文外发**——新链付费执行的唯一传输面就是直连 provider，`--allow-egress`
+    是它的 source-export 凭据（`novel/cli/main.py::_run_str06` 同读这一枚）。
+    此前「没有 backend 就不能授权」是为旧 executor 面立规；把它套到新链上，
+    编排器就构造不出任何带外发授权的 canonical argv，agent／queue／jobs 驱动
+    付费节点全断。故 `backend is None` 时显式 `True` 是合法授权，不是伪造。
+    """
     if backend is None:
+        if egress_authorized is True:
+            return True
         if egress_authorized is None or egress_authorized is False:
             return None
-        raise UnsupportedRunMode(
-            '--allow-egress 只授权显式 executor；没有 executor_backend 时'
-            '不能伪造外发授权')
+        raise UnsupportedRunMode('正文外发授权必须是显式 bool')
     if type(egress_authorized) is not bool:
         raise UnsupportedRunMode(
             'executor_backend 必须显式给 bool 正文外发授权；预览可给 false，执行必须为 true')

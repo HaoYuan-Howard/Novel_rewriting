@@ -42,36 +42,30 @@ SAMPLE_LEN = 60
 LONG_STR = 40          # 超过这个长度的字符串不当枚举候选看
 
 # 产物清单：(标签, 相对 glob, 顶层是不是数组)
+# ⚠ F8a：清单随 STR-06 切新链坐标（旧 stage2/4/5/6/7 路径产物整链退役，旧盘只读
+#   拒识为 legacy_incompatible，新根上不会再出现）。旧链的 review/hook 轮次归档
+#   （`_rounds/`）、`.INVALID` 稿与 rejected 归档面随旧链删除，不在此列。
 ARTIFACTS = [
     ('stage1/main_text.json',        'stage1/main_text.json'),
     ('stage1/hook_copy.json',        'stage1/hook_copy.json'),
-    ('stage2/global_grounding.json', 'stage2/global_grounding.json'),
-    ('stage2/chapter_blueprints.json', 'stage2/chapter_blueprints.json'),
-    ('stage4/plan_chapters.json',    'stage4/plan_chapters.json'),
-    ('stage4/writer_context.json',   'stage4/writer_context.json'),
+    ('stage2/compiled/book_extraction.json', 'stage2/compiled/book_extraction.json'),
+    ('stage2/blueprints/chapter_blueprints.json',
+     'stage2/blueprints/chapter_blueprints.json'),
+    ('stage2/characters/characters.json', 'stage2/characters/characters.json'),
+    ('stage4/compiled/execution_plan.json', 'stage4/compiled/execution_plan.json'),
+    ('stage4/ir/writer_book_ir.json', 'stage4/ir/writer_book_ir.json'),
+    ('stage4/design/body_design.json', 'stage4/design/body_design.json'),
+    ('stage4/design/presentation_graph.json', 'stage4/design/presentation_graph.json'),
+    ('stage4/context/hook/hook.json', 'stage4/context/hook/hook.json'),
+    ('stage4/grounding/semantic_binding.json',
+     'stage4/grounding/semantic_binding.json'),
     # 章号至少补齐两位，但可以超过 99；末尾再钉一位数字，避免把形状不同的
-    # `.INVALID` / `.rejected` 一起吞进正式章样本。
-    ('stage5/chNN.json',             'stage5/ch[0-9]*[0-9].json'),
-    ('stage5/chNN.INVALID.json',     'stage5/ch[0-9]*[0-9].INVALID.json'),
-    # Stage5 有人工写回与付费返工，修前取值可能只留在归档。正式稿与 INVALID
-    # 是同一 Chapter schema，但分开报告；rejected 是另一份 schema，不混进来。
-    ('stage5/_rounds/chNN.rN.json',
-     'stage5/_rounds/ch[0-9]*[0-9].r[0-9]*.json'),
-    ('stage5/_rounds/chNN.INVALID.rN.json',
-     'stage5/_rounds/ch[0-9]*[0-9].INVALID.r[0-9]*.json'),
-    ('stage5/review_N.json',         'stage5/review_*.json'),
-    ('stage6/hook.json',             'stage6/hook.json'),
-    # 归档是**整份拷贝**（与 hook.json 逐字段同形）。单列一行不是为了看它长什么样，
-    # 是为了让「归档里有没有出现过正式产物没有的形状」这个问题**有答案**——
-    # 而不是靠「它们应该同形」这个假设。
-    ('stage6/_rounds/hook.rN.json',  'stage6/_rounds/hook*.json'),
-    ('stage7/name_map.json',         'stage7/name_map.json'),
-    # 同 stage6：归档是整份拷贝，单列一行是为了让「归档里有没有出现过正式产物没有的形状」
-    # 这个问题**有答案**。stage7 的归档比 stage6 密（一本 4 轮），更值得单看。
-    ('stage7/_rounds/name_map.rN.json', 'stage7/_rounds/name_map*.json'),
-    # 人工编辑面。它不是节点产的，是**人（前端 / 手写）产的输入**——
-    # 但它落在产物目录里、被 `--apply-edit` 当决策集吃掉，所以它的形状同样是契约。
-    ('stage7/name_map_edit.json',    'stage7/name_map_edit.json'),
+    # `.INVALID` 孪生（str06 bind 的 typed witness）一起吞进正式章样本。
+    ('stage5/acceptance/body/chNN.json',
+     'stage5/acceptance/body/ch[0-9]*[0-9].json'),
+    ('stage7/naming/name_map.json',  'stage7/naming/name_map.json'),
+    ('stage7/final/delivery_manifest.json',
+     'stage7/final/delivery_manifest.json'),
 ]
 
 

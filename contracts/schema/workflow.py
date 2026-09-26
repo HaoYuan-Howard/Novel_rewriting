@@ -466,3 +466,114 @@ class BookContentBudgetV1(FrozenModel):
     @property
     def remaining(self) -> int:
         return self.ceiling + sum(g.additional for g in self.grants) - self.used
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 附：STR-06 候选链的运行期配置与 workflow／epoch 身份记录
+# （F8c 分流自 `contracts/schema/str06/candidates.py`；原样搬迁，字段未动）
+#
+# 【为什么住在 workflow.py】这两族记录描述的是「一次候选根运行的身份窗口」，
+# 与上面的 WorkUnit／BookBudget 同属运行账家族，都不是小说产物。节点表与产物表
+# 已在 F8a 激活进 `contracts/invariants.py::NODES` 与 `contracts/artifacts.py`，
+# 本段只保留**运行期配置**与**身份记录模型**——不为切换保留第二张节点/产物表
+# （S-04）。
+#
+# 【与付费调用额度的分界】配置进 prompt 与 IR，从而进请求身份；额度
+# （`--book-call-ceiling`、工作单元／整书总闸）只闸新购次数，不进语义身份。
+# CLI 旗标可覆盖配置，但覆盖值同样经 prompt／IR 进入身份——配置变化不误旧结果。
+# ─────────────────────────────────────────────────────────────────────────────
+
+from typing import Final, NamedTuple
+
+
+class CandidateRuntimeConfig(NamedTuple):
+    """候选链运行期配置的**正式来源**（F7c）：Hook 长度、章篇幅带与书级篇幅
+    取整粒度。与付费调用额度（`--book-call-ceiling`、工作单元／整书总闸）是两件
+    事：配置进 prompt 与 IR，从而进请求身份；额度只闸新购次数，不进语义身份。
+
+    CLI 旗标可覆盖，但覆盖值同样经 prompt／IR 进入身份——配置变化不误用旧结果。
+    """
+
+    hook_target_chars: int = 280
+    hook_hard_max_chars: int = 360
+    length_band_low: float = 0.6
+    length_band_high: float = 1.3
+    #: 书级正文篇幅从源 MainText 章节总字数向上取整的粒度（保留全书篇幅边界）。
+    length_budget_rounding: int = 1000
+
+
+#: 现役候选运行期配置（版本随 RC 表一起进契约身份）。
+STR06_RUNTIME_CONFIG: Final = CandidateRuntimeConfig()
+
+#: 本族契约的 RC 版式身份（与 `STR06_RC_LABELS` 同源；ledger code 与 slice 业务身份
+#: 引用本常量，避免各处手写字符串漂移）。
+STR06_RC_VERSION: Final = 'str06-rc4'
+
+#: 已知 RC 标签面（版本规则见 `contracts/artifacts.py::STR06_ARTIFACT_RC_VERSIONS`）。
+STR06_RC_LABELS: Final = ('str06-rc2', 'str06-rc3', 'str06-rc4')
+
+#: epoch 滚动理由面。`initial` 只允许首开；漂移类要求身份确实变化；`repair`
+#: 是 typed 修复的显式 producer 边界（对齐正式 ExecutionEpochReason 的 continue）。
+EPOCH_REASONS: Final = ('initial', 'code_drift', 'contract_drift', 'repair')
+
+#: 候选节点身份的**激活补齐格**（F8c）：`candidate_contract_identity()` 的输入
+#: 里有两格没有随 F8a 激活进 `contracts/invariants.py::NODES`——
+#: ① 免费节点（compile／assemble）的 `session_scope`：冻结表按 executor 面登记
+#:    `executor:book`，而 NODES 登记 `'none'`（它们确实不跑 executor，调度面
+#:    说的是真话）；候选身份要的是冻结基线那一格。
+#: ② `str06.stage7.assemble` 的 `owner`：语义 owner 是 `stage7.assembly`，节点
+#:    id 却是 `str06.stage7.assemble`（命名历史，F7a 定版）。
+#: 其余 owner 一律由节点 id 去掉 `str06.` 前缀派生（10/11 如此），不在这里抄
+#: 第二份节点表（S-04）。
+#: ⚠ 本表存在的唯一理由是**逐字复算 F7e 冻结身份**：盘上
+#: `runtime/candidate_workflow.json` 记的正是那个 SHA-256，算法一漂移，全部既有
+#: 候选根都会被 `check_candidate_workflow` 判「契约表已漂移」而拒绝消费已购
+#: 证据——那是行为变化，不是搬家。对账在 `tests/test_str06_f7e_freeze.py`。
+STR06_NODE_IDENTITY_EXTRAS: Final[dict[str, dict[str, str]]] = {
+    'str06.stage4.compile': {'session_scope': 'executor:book'},
+    'str06.stage7.assemble': {'session_scope': 'executor:book',
+                              'owner': 'stage7.assembly'},
+}
+
+
+def candidate_node_owner(node_id: str) -> str:
+    """候选节点的语义 owner：节点 id 去掉 `str06.` 前缀，例外按 EXTRAS 登记。
+
+    10/11 个节点由前缀派生；`str06.stage7.assemble` 的语义 owner 是
+    `stage7.assembly`（命名历史），单独登记。消费方（views 监控面、契约身份）
+    共用本函数，不各自拆字符串。
+    """
+    extra = STR06_NODE_IDENTITY_EXTRAS.get(node_id, {})
+    return extra.get('owner', node_id[len('str06.'):])
+
+
+class CandidateEpoch(NamedTuple):
+    """候选 workflow 的一段身份稳定的执行窗口。
+
+    epoch_id 由（契约表身份、code_version、ordinal、理由、task_id、
+    session_run_id、前一 epoch_id）确定性派生；ordinal 单调递增，链条可验证。
+    """
+
+    epoch_id: str
+    ordinal: int
+    reason: str
+    contract_version: str
+    code_version: str
+    task_id: str
+    session_run_id: str
+    created_at: int
+
+
+class CandidateWorkflow(NamedTuple):
+    """候选根的 workflow 身份记录（落盘 `runtime/candidate_workflow.json`）。
+
+    绑定 epoch、契约表身份与源输入身份；不含路径（记录随根自定位）。
+    `source_identity` 在 F7c 改读正式 Stage1 章数组前是源 JSON 的完整字节
+    SHA-256，之后是 Stage1 输入的身份摘要——消费形状变化必须换身份，
+    不能沿用旧根的采用结论。
+    """
+
+    epoch: CandidateEpoch
+    contract_identity: str
+    source_identity: str
+    created_at: int

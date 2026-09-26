@@ -59,7 +59,6 @@ from novel.errors import (
 )
 from novel.orchestrator.agent import AgentBusy
 from novel.orchestrator.jobs import JobConflict
-from novel.stages.stage4.plot_refs import PlotReferenceRefused
 from novel.work_units import WorkUnitBudgetExhausted, WorkUnitRefused
 
 #: CSRF 闸门没过（`R-11.2`）。**不是一个异常** —— 它在请求进到业务代码**之前**就被拦下。
@@ -138,9 +137,6 @@ STATUS: dict[type[NovelError], int] = {
     #: ⚠ 500 的响应体里**只出类名与一句人话，不出栈**——那份正文是不外流的版权内容，
     #: 而栈里可能带着它。栈留在服务端日志里（`R-11.1` 第四条理由）。
     ProvenanceRefused: 500,
-    #: 正式计划的跨主体引用在编译后仍不闭合，是结构断言失败；候选阶段
-    #: 同一失败先落 placement_ref/typed repair，不借 HTTP 默认格掩盖编译器缺口。
-    PlotReferenceRefused: 500,
     #: accepted model 的独立 actual/session/ledger/driver 证据自相矛盾，
     #: 与一般来源账冲突同属代码或持久化契约错误，不是可重试的用户输入。
     AgentModelIdentityRefused: 500,
@@ -182,17 +178,13 @@ UNREACHABLE_OVER_HTTP: dict[str, str] = {
     'Stage2ReviewBudgetRefused': (
         '已退役 Stage2 独立账的只读审计解码异常；当前 API、CLI 和 Supervisor '
         '只消费 work_units，不调用旧账读取器'),
-    'GlobalEditCandidateRejected': (
-        'Stage2 GlobalEdit 的纯内存候选边界；canonical CLI 会把它映射为终态退出码，'
-        'Agent Supervisor 预检也会先转成私有控制流并在席位账内闭合，HTTP 路由不会接到异常对象'),
+    # ⚠ F8b-3：`GlobalEditCandidateRejected`／`_PostEditReviewRejected` 两条随
+    # Stage2 人工写回整族退役（定义模块已删）——登记一并撤销，幽灵名字会被
+    # `test_the_unreachable_table_names_real_classes` 当场报出来。
     '_LaunchDeferredByControl': (
         'RunSupervisor 在 launch ticket 线性化前发现 pause/stop 的内部控制信号；'
         '它只在 Supervisor.run 内被捕获并转成 paused/stopped lifecycle，'
         '不会从公开 pause/stop HTTP 路由作为异常对象返回'),
-    '_PostEditReviewRejected': (
-        'Stage2 reviewed-edit 修后复核的 producer 私有控制流；只在 canonical '
-        'CLI 子进程内抛出，并由 run_apply_edit 先落 typed GlobalEditFailure 后'
-        '映射为终态退出码，HTTP 父进程拿不到异常对象'),
     'ContextBudgetRefused': '供应商上下文预算预检在缓存/网络之前拒绝请求。它只由付费节点的'
                             'LLM 子进程抛出，父进程只看到终态退出码',
     'ResponseRepairRequired': '结构化响应在下一采之前暂停，等待受托 agent 修复或放弃。'

@@ -53,7 +53,6 @@ from contracts.invariants import (
     LEGACY_STAGE2_COMMANDER_SEAT_PURPOSES as STAGE2_COMMANDER_SEAT_PURPOSES,
 )
 from contracts.schema.base import FrozenModel, StrictModel
-from contracts.schema.plot_review import BlueprintRunProgress
 from contracts.schema.common import Sha256
 
 #: 枚举一律从 `contracts.invariants` 取，不在本文件重抄（同 `common.py` / `report.py`）。
@@ -320,18 +319,17 @@ class Step(FrozenModel):
     @model_validator(mode='after')
     def _executor_egress_shape(self) -> Step:
         argv_authorized = '--allow-egress' in self.argv
-        if self.executor_backend is None:
-            if self.egress_authorized is not None:
-                raise ValueError('没有 executor_backend 的 Step 不能携带正文外发授权')
-            if argv_authorized:
-                raise ValueError('没有 executor_backend 的 Step.argv 不能夹带 --allow-egress')
-            return self
-        if not self.paid:
-            raise ValueError('0 成本 step 不能携带 executor_backend')
-        # ``None`` 既要读旧盘，也会由旧记录的公共 HTTP 投影显式发成 null；不能靠
-        # fields_set 猜它来自哪一边。新执行的“必须显式 bool”由唯一 builder 边界守。
-        if argv_authorized is not (self.egress_authorized is True):
+        # ⚠ F8c：正文外发授权与 executor backend 解钩。直连 LLM 节点
+        # （`str06.*`，无 backend 旗标）同样携带这枚独立授权（I-43）——
+        # 旧规则「没有 backend 就不能有授权」是为旧 executor 面立规，套到
+        # 新链上会让编排器构造不出可执行付费新链节点的 canonical argv。
+        # 一致性判据不分 backend：argv 与字段必须同进同出。
+        if argv_authorized != (self.egress_authorized is True):
             raise ValueError('Step.egress_authorized 与 argv 的 --allow-egress 不一致')
+        if self.egress_authorized is not None and not self.paid:
+            raise ValueError('0 成本 step 不能携带正文外发授权')
+        if self.executor_backend is not None and not self.paid:
+            raise ValueError('0 成本 step 不能携带 executor_backend')
         return self
 
 
@@ -408,18 +406,22 @@ class JobStart(StrictModel):
         if any(step.executor_backend is not None and not step.paid
                for step in self.steps):
             raise ValueError('0 成本 step 不能携带 executor_backend')
-        profiled_steps = [
-            step for step in self.steps if step.executor_backend is not None
+        egress_steps = [
+            step for step in self.steps if step.egress_authorized is not None
         ]
         if self.executor_backend is None:
-            if self.egress_authorized is not None:
-                raise ValueError('没有 executor_backend 的 JobStart 不能携带正文外发授权')
+            # ⚠ F8c：直连 LLM 作业（无 executor backend）可携带显式正文外发
+            # 授权；历史 JobStart 缺授权但 step 已带快照仍然拒绝（不对称=漂移）。
+            if self.egress_authorized is None and egress_steps:
+                raise ValueError('JobStart 缺外发授权，但 step 已带授权快照')
         elif self.egress_authorized is None:
-            if any(step.egress_authorized is not None for step in profiled_steps):
+            if any(step.egress_authorized is not None for step in egress_steps):
                 raise ValueError('历史 JobStart 缺外发授权，但 step 已带授权快照')
-        elif any(step.egress_authorized is not self.egress_authorized
-                 for step in profiled_steps):
-            raise ValueError('JobStart.egress_authorized 与付费 executor steps[] 不一致')
+        if egress_steps and any(
+            step.egress_authorized is not self.egress_authorized
+            for step in egress_steps
+        ):
+            raise ValueError('JobStart.egress_authorized 与 steps[] 的外发授权不一致')
         return self
 
 
@@ -749,8 +751,13 @@ class RunResumeFrontierView(StrictModel):
         if self.state == 'blocked' and not self.waiting_on:
             raise ValueError('blocked 续跑点必须明确 waiting_on')
         if self.state == 'blocked' and self.next_handler not in {
-                'executor', 'human'}:
-            raise ValueError('blocked 的 next_handler 必须是 executor/human')
+                'executor', 'human', 'unknown'}:
+            # ⚠ F8c：`DETERMINISTIC_RECOVERY_WAITING_ON` 现为空集（旧链 0-wire
+            #   补尾 waiter 随旧链退役）⇒ planner 给出的未登记 waiting_on 由
+            #   `operator._frontier_view` 按 fail-closed 投影为 `unknown`
+            #   （RUN_NEXT_HANDLERS 已含该值）：如实说「没有人在处理」，
+            #   不伪装成 executor/human 等待一个永不到来的动作。
+            raise ValueError('blocked 的 next_handler 必须是 executor/human/unknown')
         return self
 
 
@@ -825,7 +832,6 @@ class RunProgressView(StrictModel):
     work_units: list[WorkUnitView] | None = None
     work_units_unavailable_reason: str | None = None
     current_recovery_actions: list[str] | None = None
-    blueprint_progress: BlueprintRunProgress | None = None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2524,38 +2530,6 @@ class QueueRun(StrictModel):
                 raise ValueError(f'queue counts for {sid!r} do not match its entries')
         if set(self.counts_by_sid) != set(self.start.sids):
             raise ValueError('queue counts must contain exactly the declared novels')
-        return self
-
-
-class RebuildEventV1(FrozenModel):
-    """改选重建意图账的一条 append-only 事件（2026-09-15 全自动裁决）。
-
-    【它回答什么】「改选请求已接受」与「立即取得执行资源」分开：pick 作业落盘后
-    先持久化重建意图（outbox），资源忙则保持排队，资源释放或服务重启 reconcile
-    时由确定性 drain 消费。消费幂等——重建只进白名单节点
-    （`contracts/invariants.py::DETERMINISTIC_REBUILD_NODES`）+ 只读交付终验，
-    可安全重放。
-
-    【版本竞争】`approved_text_sha1`/`candidates_sha1` 记录意图铸成时的期望版本，
-    仅供审计与展示；drain 执行时永远以**当前盘面期望**为准（assemble 从当前
-    state 全量重放），后发选择自然胜出，迟到意图不会覆盖新选择。
-    """
-
-    schema_version: Literal[1] = 1
-    event: Literal['requested', 'consumed', 'failed']
-    sid: str = Field(min_length=1)
-    intent_id: str = Field(pattern=r'^[a-zA-Z0-9_-]{8,64}$')
-    node: Literal['stage7.assemble']
-    approved_slot: Literal['c1', 'c2', 'c3'] | None = None
-    approved_text_sha1: str = Field(pattern=r'^[0-9a-f]{10}$')
-    candidates_sha1: str = Field(pattern=r'^[0-9a-f]{10}$')
-    created_at: int = Field(ge=0)
-    reason: str = Field(default='', max_length=2000)
-
-    @model_validator(mode='after')
-    def _closed_events_carry_reason(self) -> 'RebuildEventV1':
-        if self.event == 'failed' and not self.reason.strip():
-            raise ValueError('failed 事件必须说明原因')
         return self
 
 

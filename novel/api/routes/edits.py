@@ -8,7 +8,7 @@
 `naming_residual` 机械验硬闸守卫，不存在待人工核验的改选或采纳面。
 
 本模块只保留空 router 以维持 app 的模块面稳定；路由族、typed 请求模型与
-前端消费已在 F8b 同批删除，历史形状见 Git 与 `contracts/schema/str06/
+前端消费已在 F8b 同批删除，历史形状见 Git 与 `contracts/schema/
 retirement.py` 的登记。
 '''
 from __future__ import annotations

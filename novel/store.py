@@ -36,32 +36,30 @@ import re
 import tempfile
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator, TypeVar, cast
 
 from pydantic import BaseModel, ValidationError
 
 from contracts.artifacts import (
+    ARTIFACT_PATHS,
     STAGE0_CLEAN_TEXT, STAGE0_REVISIONS,
     STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT,
-    STAGE2_ANALYZE_RECEIPT, STAGE2_BLUEPRINT_CHARACTER_PROJECTION, STAGE2_CHAPTER_BLUEPRINTS, STAGE2_CHARACTERS,
+    STAGE2_ANALYZE_RECEIPT, STAGE2_BLUEPRINT_CHARACTER_PROJECTION, STAGE2_CHARACTERS,
     STAGE2_GLOBAL_GROUNDING,
-    STAGE4_BLIND_CANDIDATE, STAGE4_EVIDENCE_BINDING,
-    STAGE4_WRITER_CONTEXT,
     STR06_DELIVERY_MANIFEST, STR06_HOOK_RECEIPT, STR06_HOOK_TEXT,
+    STR06_STAGE5_BODY_RECEIPT, artifact_rel,
 )
+from contracts.invariants import NODES
 from contracts.schema import (
-    ArtifactVersionError, HumanApproval, InputEdge, Provenance, RevalidationAudit,
-    artifact_spec, decode_artifact, encode_artifact,
+    ARTIFACT_SPECS, ArtifactVersionError, HumanApproval, InputEdge, Provenance,
+    RevalidationAudit, artifact_spec, decode_artifact, encode_artifact,
 )
-from contracts.schema.stage4 import EvidenceBinding
-from contracts.schema.str06.candidates import candidate_artifact
 from novel import paths, prov
 from novel.consumption import (
     canonical_rel, context_inputs_for,
     producer_node, project_consumed,
-    projection_for,
 )
 from novel.errors import (
     ApprovalRequired, ArtifactUnreadable, ByteFormRefused, PathRefused,
@@ -72,6 +70,53 @@ from novel.run import RunContext
 
 M = TypeVar('M', bound=BaseModel)
 T = TypeVar('T')
+
+
+def _rel_pattern(rel: str) -> re.Pattern[str]:
+    """把产物路径模板编译成匹配式：`{nn}` = 两位章序，`{title}` = 单个路径段。"""
+    parts = re.split(r'(\{nn\}|\{title\})', rel)
+    regex = ''.join(r'\d{2}' if p == '{nn}' else r'[^/]+' if p == '{title}'
+                    else re.escape(p) for p in parts)
+    return re.compile(f'^{regex}$')
+
+
+def candidate_artifact(rel: str) -> str | None:
+    """按路径取已登记的产物模板：先精确匹配，再按 `{nn}`／`{title}` 模式匹配。
+
+    未登记返回 None——调用方据此**不记来源边、不复算新鲜度、不铸来源账**，而不是
+    猜一个家族落账。F8c 前本函数住在 `contracts/schema/str06/candidates.py`（读
+    候选产物表）；节点表与产物表已在 F8a 激活进 `contracts/invariants.py::NODES`
+    与 `contracts/artifacts.py`，本函数随之落到 repository 层，匹配规则一字未改
+    （章序仍必须两位）。
+    """
+    normalized = str(rel).replace('\\', '/')
+    if normalized in ARTIFACT_PATHS:
+        return normalized
+    for template in ARTIFACT_PATHS:
+        if '{' in template and _rel_pattern(template).match(normalized):
+            return template
+    return None
+
+
+def _writer_of(template: str) -> str:
+    """已登记产物模板的唯一执行 writer（I-25）：`NODES` 里 `produces` 含该模板的节点。
+
+    入参是 `candidate_artifact` 解析出的**模板**（如 `stage5/body/ch{nn}.txt`），
+    不是具体章路径——writer 按模板登记，逐章产物共享同一个执行 writer。
+    """
+    for node_id, node in NODES.items():
+        if template in node.produces:
+            return node_id
+    raise ProvenanceRefused(f'已登记产物无执行 writer：{template}')
+
+
+def _artifact_model(rel: str | None):
+    """已登记 JSON 产物的契约模型；自由形态派生记录与正文返回 None。"""
+    if rel is None or rel.endswith('.txt'):
+        return None
+    return ARTIFACT_SPECS[rel].model if rel in ARTIFACT_SPECS else None
+
+
 
 #: 产物里那个来源账字段的**盘上键名**。模型侧字段叫 `provenance`（`_` 开头在 Pydantic 里
 #: 是私有属性），靠 `Field(alias='_provenance')` 对上；这里按 alias 找，不按字段名猜。
@@ -1579,14 +1624,6 @@ class ArtifactStore:
         """
         p = self.path(rel)
         if not _is_file(p):
-            # 称名 HARD 时 producer **有意不发布** projection；这不是普通 missing，
-            # 而是一条必须传到 state/queue/consumer 的前置闸。其余缺失产物仍按
-            # 既有契约抛 ``UpstreamMissing``，不把不存在伪装成可判 freshness。
-            if rel == STAGE2_BLUEPRINT_CHARACTER_PROJECTION:
-                deterministic = self._deterministic_freshness(rel)
-                if (deterministic is not None
-                        and deterministic.reason == 'global_naming_blocked'):
-                    return deterministic
             raise UpstreamMissing(f'{self.ctx.node}: 要判新鲜度的 {rel} 不在盘上')
 
         # 这六份确定性/字节形态产物没有通用 `_provenance.inputs` 槽位，但盘上已经有
@@ -1595,6 +1632,12 @@ class ArtifactStore:
         deterministic = self._deterministic_freshness(rel)
         if deterministic is not None:
             return deterministic
+
+        # 候选链（str06）盘面（F8d 桥）：产物不带版本信封、`root_clean_sha1` 记的是
+        # 正式 Stage1 章数组字节——正式信封与 stage0 root 语义都覆盖不到它，改走
+        # 候选桥；判据仍是同一把 `prov.freshness`（见 `candidate_freshness`）。
+        if candidate_artifact(rel) is not None:
+            return self.candidate_freshness(rel)
 
         try:
             raw_data = json.loads(_read_file_bytes(p).decode('utf-8'))
@@ -1619,10 +1662,6 @@ class ArtifactStore:
         report = self.freshness_of_inputs(rel, recorded)
         if isinstance(data, dict) and (data.get(PROVENANCE_KEY) or {}).get('shared_analysis_source'):
             report = self._shared_analysis_freshness(data, report)
-        if canonical_rel(rel) == STAGE2_GLOBAL_GROUNDING and isinstance(data, dict):
-            return self._knowledge_character_freshness(data, report)
-        if canonical_rel(rel) == STAGE4_EVIDENCE_BINDING:
-            return self._stage4_binding_input_freshness(data, report)
         return report
 
 
@@ -1643,27 +1682,6 @@ class ArtifactStore:
             recorded_file=shared.receipt_sha256, now_file=actual,
             recorded_consumed=None, now_consumed=None)
         return FreshnessReport(edge.state, edge.reason, (*ordinary.edges, edge))
-
-    def _knowledge_character_freshness(self, data: dict, ordinary: FreshnessReport) -> FreshnessReport:
-        """Global 编译依赖按必要身份投影复算；生成来源单独证明。"""
-        if ordinary.state != 'fresh':
-            return ordinary
-        from contracts.schema.characters import CharacterRegistry
-        from novel.stages.stage2.knowledge.grounding import knowledge_reference_sha256
-        recorded = data.get('characters_reference_sha256')
-        try:
-            if self.exists(paths.invalid_of(STAGE2_CHARACTERS)):
-                raise ProvenanceRefused('当前人物仍有 INVALID')
-            registry = self.read_own(CharacterRegistry, STAGE2_CHARACTERS)[0]
-            current = knowledge_reference_sha256(registry)
-        except (ArtifactUnreadable, UpstreamMissing, ProvenanceRefused, ValueError):
-            return FreshnessReport('unknown', 'consumed_unresolved', ordinary.edges)
-        if recorded == current:
-            return ordinary
-        edge = prov.EdgeVerdict(key=STAGE2_CHARACTERS, state='stale', reason='consumed_changed',
-            recorded_file=None, now_file=self._file_fp_of_key(STAGE2_CHARACTERS),
-            recorded_consumed=recorded, now_consumed=current)
-        return FreshnessReport('stale', 'consumed_changed', (*ordinary.edges, edge))
 
     def freshness_of_inputs(self, rel: str, recorded: dict | None) -> FreshnessReport:
         """同 `freshness`，但**来源账由调用方给**——用于还没落盘的那一份。
@@ -1686,86 +1704,6 @@ class ArtifactStore:
             consumed_now=lambda key: self._consumed_fp_of_key(node, key),
         )
 
-    @staticmethod
-    def _stage4_binding_input_freshness(
-        binding: object, ordinary: FreshnessReport,
-    ) -> FreshnessReport:
-        """仅在真实输入可证 fresh 后附加登记的章级 B 输入契约尺。
-
-        上游已真实 consumed_changed 时沿原 REDO 权威重建；那份授权不是
-        未知 receipt 带来的。只有下方 known_obsolete 才进入本次专用恢复。
-        """
-        if ordinary.state != 'fresh':
-            return ordinary
-        from novel.stages.stage4.binding_input_contract import (
-            inspect_binding_input_contract,
-        )
-        verdict = inspect_binding_input_contract(binding)
-        if verdict.state == 'known_obsolete':
-            return FreshnessReport(
-                'stale', 'binding_input_contract_obsolete', ordinary.edges)
-        if verdict.state == 'unproven':
-            return FreshnessReport(
-                'unknown', 'binding_input_contract_unproven', ordinary.edges)
-        return ordinary
-
-    def _stage4_plan_phase_freshness(
-        self, plan: dict[str, Any], ordinary: FreshnessReport,
-    ) -> FreshnessReport:
-        """把 A/B 完整字节绑定叠加到普通业务投影 freshness。
-
-        普通边仍保留 ``recorded_consumed/now_consumed``，但 ``compiled`` 计划不能因
-        业务投影相同就忽略版本化文件的字节变化。完整 SHA 不符时，用同一个真实产物
-        key 覆盖该边的文件判定；human 计划没有 A/B 编译身份，原样返回普通报告。
-        """
-        # 动态 import 避免 store 初始化反向牵入整个 Stage4 producer；纯比较函数本身
-        # 不读盘，check 与写盘后置条件也调用同一份实现。
-        from novel.stages.stage4.phase_binding import verify_plan_phase_artifacts
-
-        links = verify_plan_phase_artifacts(
-            plan, sha256_now=self.full_sha256_or_none)
-        if not links:
-            return ordinary
-
-        edges = list(ordinary.edges)
-        positions = {edge.key: index for index, edge in enumerate(edges)}
-        for link in links:
-            if link.state == 'match':
-                continue
-            current = edges[positions[link.key]] if link.key in positions else None
-            # compiled 计划额外绑定 A/B 完整字节，但不能把普通 freshness 已经
-            # 证明的 declared projection 变化洗成手工 ``file_changed``：那会把
-            # 本可由 producer 0 歧义重做的 consumed_changed 错送人工恢复。只有
-            # 普通投影仍 match、而未消费字节单独变化时，才是真 file_changed。
-            reason = (
-                'ghost' if link.state == 'ghost'
-                else 'consumed_changed'
-                if current is not None and current.reason == 'consumed_changed'
-                else 'file_changed'
-            )
-            state = 'unknown' if reason == 'ghost' else 'stale'
-            exact = prov.EdgeVerdict(
-                key=link.key,
-                state=state,
-                reason=reason,
-                recorded_file=link.expected_sha256,
-                now_file=link.now_sha256,
-                recorded_consumed=(current.recorded_consumed if current else None),
-                now_consumed=(current.now_consumed if current else None),
-            )
-            if current is None:
-                positions[link.key] = len(edges)
-                edges.append(exact)
-            else:
-                edges[positions[link.key]] = exact
-        report = self._content_report(tuple(edges)) if edges else ordinary
-        if report.state != 'fresh' or any(link.state != 'match' for link in links):
-            return report
-        # 完整 A/B SHA 已对证；Plan 只能继承这份真实 B 的输入契约，
-        # 不能对另一版 B 的 receipt 作推断。human Plan 上方 links=() 已返回。
-        binding, _raw = self.read_own(EvidenceBinding, STAGE4_EVIDENCE_BINDING)
-        return self._stage4_binding_input_freshness(binding, report)
-
     def _deterministic_freshness(self, rel: str) -> FreshnessReport | None:
         """没有通用来源块的产物，用其既有确定性指纹回答同一个问题。
 
@@ -1786,8 +1724,11 @@ class ArtifactStore:
             return self._stage0_clean_freshness()
         if rel in (STAGE1_MAIN_TEXT, STAGE1_HOOK_COPY):
             return self._stage1_freshness(rel)
-        if rel == STAGE2_BLUEPRINT_CHARACTER_PROJECTION:
-            return self._blueprint_character_projection_freshness()
+        # ⚠ 新链 Hook 成文是字节产物（没有 `_provenance` 槽位），身份由章级回执族的
+        #   `receipt.json::prose_sha256` 承载。这条分支此前一不小心写在
+        #   `_stage1_freshness` 的 return 之后（不可达），`stage5/hook/hook.txt`
+        #   于是恒 `unknown/no_provenance`——`test_every_produced_artifact_without_
+        #   provenance_reaches_the_deterministic_bridge` 当场抓住了它。
         if rel == STR06_HOOK_TEXT:
             return self._hook_prose_freshness()
         # ⚠ 成书的 rel 带书名 ⇒ **不能与 `STAGE7_BOOK` 直接比**（那是模板）。
@@ -1800,7 +1741,7 @@ class ArtifactStore:
     def _hook_prose_freshness(self) -> FreshnessReport:
         """`stage5/hook/hook.txt` 的身份由章级回执族的 `receipt.json::prose_sha256`
         （绑定改名前正文）承载；字节产物本身没有 `_provenance` 槽位。"""
-        receipt = self._freshness_payload(STR06_HOOK_RECEIPT)
+        receipt = self._receipt_payload(STR06_HOOK_RECEIPT)
         expected = receipt.get('prose_sha256') if receipt is not None else None
         if not isinstance(expected, str) or not expected:
             return FreshnessReport('unknown', 'no_provenance')
@@ -1808,110 +1749,160 @@ class ArtifactStore:
             STR06_HOOK_TEXT, expected, self._content_sha256_or_none(STR06_HOOK_TEXT))
         return self._content_report((edge,))
 
-    def _blueprint_character_projection_freshness(self) -> FreshnessReport:
-        """称名投影只来自人物 producer 与 MainText；知识、关系和规则没有该输入边。
+    def _receipt_payload(self, rel: str) -> dict[str, Any] | None:
+        """回执类 companion 的盘上载荷：正式信封读不了就按候选格式读（F8d 桥）。
 
-        live 人物 INVALID 优先，坏载体保持 unknown。语境或静态身份只有实际改变
-        逐章可选称名集合时才使投影 stale，不能按整份人物文件 SHA 扩大失效。
+        章级/Hook 回执是候选链产物（不带版本信封），正式 `decode_artifact` 会以
+        `ArtifactVersionError` 拒读；同一份字节换候选读路即可，不为它补信封。
         """
-        recorded = self._freshness_payload(STAGE2_BLUEPRINT_CHARACTER_PROJECTION)
-        characters_invalid = paths.invalid_of(STAGE2_CHARACTERS)
-        characters_rel = (
-            characters_invalid if self.exists(characters_invalid)
-            else STAGE2_CHARACTERS
-        )
-        characters_loaded, characters_payload = self._projection_payload(characters_rel)
-        main_loaded, main_payload = self._projection_payload(STAGE1_MAIN_TEXT)
-        if not characters_loaded or not main_loaded:
-            if recorded is None:
-                return FreshnessReport('unknown', 'no_provenance')
-            missing = characters_rel if not characters_loaded else STAGE1_MAIN_TEXT
-            edge = prov.EdgeVerdict(
-                key=missing, state='unknown', reason='ghost',
-                recorded_file=None, now_file=None,
-                recorded_consumed=prov.projection_fingerprint(recorded),
-                now_consumed=None,
-            )
-            return FreshnessReport('unknown', 'ghost', (edge,))
-
         try:
-            # ``decode_artifact`` 只核版本信封，不替业务模型证明载体完整。
-            # Blueprint 可以从 ``.INVALID`` 提前启动的前提是它仍是一份完整、
-            # schema-valid 的 GlobalGrounding；若人工改坏 role/relation 等未消费字段，
-            # 不能仅因 ``entities.characters`` 还能读就把问题稿称为可用底座。
-            from contracts.schema.stage1 import MainText
-            from contracts.schema.characters import CharacterRegistry
+            payload = self._freshness_payload(rel)
+        except ArtifactUnreadable:
+            if candidate_artifact(rel) is None:
+                raise
+            payload = self.candidate_payload(rel)
+        return payload if isinstance(payload, dict) else None
 
-            grounding = CharacterRegistry.model_validate(characters_payload)
-            main_text = MainText.model_validate(main_payload)
-            grounding_payload = grounding.model_dump(by_alias=True, mode='json')
-            characters = grounding_payload['characters']
-            sections = [
-                section.model_dump(by_alias=True, mode='json')
-                for section in main_text.root
-            ]
-            # Global 的非称名 HARD 可以与 Blueprint 并行；但重名、全角色无据、
-            # 代词称谓等命中会让当前称名闭集本身不稳定。此时即使投影字节恰好
-            # 与上一版相同，也不能把它叫作 fresh 并提前花一次 Blueprint 的钱。
-            from novel.stages.stage2 import checks as stage2_checks
+    # ─── 候选链（str06）盘面的完成度桥（F8d） ─────────────────────────────
+    #
+    # 【为什么需要这座桥】正式读路覆盖不到候选链盘面，两处语义差：
+    #   ① 候选产物不带版本信封（`Str06Repository.write` 只落逻辑载荷＋内联
+    #      `_provenance`）⇒ `decode_artifact` 一律 `ArtifactVersionError`；
+    #   ② 候选链的根输入是**正式 Stage1 章数组**（F7c 起 `--book-sid` 生产路径），
+    #      `root_clean_sha1` 记那一份产物的 SHA-1，而正式 store 只认
+    #      stage0/clean_text.txt。
+    # 后果不是报错而是静默：一本跑完的书在完成度上恒 broken/stale，operator 与
+    # 队列据此把每个节点判成 REDO/UNKNOWN 并关闭式停住——真实产品入口的全链因此
+    # 跑不通（F8d 实测）。
+    #
+    # 【桥的形状】不迁移盘面、不加信封：按候选格式直读盘上 JSON，用**同一把**
+    # `novel/prov.py::freshness` 判 `_provenance.inputs`，root 边按产物自己记的
+    # 源身份对照当前盘面（Stage1 章数组是候选链的规范身份；正式 store 写盘的候选
+    # 路径记 stage0/clean_text，回落正式尺子）——与 `Str06Repository._refuse_stale`
+    # 是同一把尺子的两个调用点，不为完成度另造第二份算法。**删除条件**：候选产物
+    # 统一走正式信封与 root 身份（F8c 分流收口）后，本段整段消失。
 
-            naming_blockers = (
-                stage2_checks.blueprint_projection_blockers(
-                    global_g=grounding_payload,
-                    main_text=sections,
-                )
-                # 这道闸只服务“从 schema-valid 问题稿提前并行 Blueprint”。
-                # formal Global 按正式投影逐值比较：变化就 stale，不把已有
-                # 正式产物的普通漂移泛化成另一种人工等待态。
-                if characters_rel == characters_invalid else ()
-            )
-            if naming_blockers:
-                edge = prov.EdgeVerdict(
-                    key=characters_rel,
-                    state='unknown',
-                    reason='global_naming_blocked',
-                    recorded_file=None,
-                    now_file=self._file_fp_of_key(characters_rel),
-                    recorded_consumed=(
-                        prov.projection_fingerprint(recorded)
-                        if recorded is not None else None
-                    ),
-                    now_consumed=None,
-                )
-                return FreshnessReport(
-                    'unknown', 'global_naming_blocked', (edge,))
-            if recorded is None:
-                return FreshnessReport('unknown', 'no_provenance')
-            from novel.stages.stage2.shared.character_refs import (
-                materialize_blueprint_character_projection,
-            )
-            expected = materialize_blueprint_character_projection(
-                characters, sections).model_dump(by_alias=True, mode='json')
-        except (AttributeError, KeyError, IndexError, TypeError, ValueError,
-                ValidationError):
-            if recorded is None:
-                return FreshnessReport('unknown', 'no_provenance')
-            edge = prov.EdgeVerdict(
-                key=characters_rel, state='unknown', reason='consumed_unresolved',
-                recorded_file=None, now_file=self._file_fp_of_key(characters_rel),
-                recorded_consumed=prov.projection_fingerprint(recorded),
-                now_consumed=None,
-            )
-            return FreshnessReport('unknown', 'consumed_unresolved', (edge,))
+    def candidate_payload(self, rel: str) -> Any:
+        """候选链产物的盘上逻辑载荷：不带版本信封，`_provenance` 内联在顶层。"""
+        return json.loads(_read_file_bytes(self.path(rel)).decode('utf-8'))
 
-        recorded_fp = prov.projection_fingerprint(recorded)
-        expected_fp = prov.projection_fingerprint(expected)
-        reason = 'match' if recorded_fp == expected_fp else 'consumed_changed'
-        state = 'fresh' if reason == 'match' else 'stale'
+    def candidate_readable(self, rel: str) -> bool:
+        """候选产物读得回来吗：JSON 可解析（正文按 UTF-8 可解码），且（已登记模型的）
+        载荷过当前 schema。"""
+        if str(rel).endswith('.txt'):
+            try:
+                _read_file_bytes(self.path(rel)).decode('utf-8')
+            except (OSError, UnicodeDecodeError):
+                return False
+            return True
+        try:
+            payload = self.candidate_payload(rel)
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            return False
+        if not isinstance(payload, dict):
+            return False
+        model = _artifact_model(candidate_artifact(rel))
+        if model is None:                       # 自由形态派生记录：JSON 对象即算可读
+            return True
+        try:
+            model.model_validate(
+                {key: value for key, value in payload.items() if key != PROVENANCE_KEY})
+        except (ValidationError, ValueError):
+            return False
+        return True
+
+    def candidate_freshness(self, rel: str) -> FreshnessReport:
+        """候选链产物的新鲜度：root 边对照当前源身份，inputs 走同一把尺子。
+
+        【两种 root 身份，两把尺子】候选链的**规范**源身份是正式 Stage1 章数组
+        （F7c 起 `--book-sid` 生产路径）：产物记的 root 是那一份时，root 边就是
+        完整输入声明——源抽取一类节点的唯一输入就是它，`inputs` 为空也认当前
+        （`Str06Repository._refuse_stale` 同样只认这把尺子）。产物记的是
+        stage0/clean_text.txt（正式 store 写盘的候选路径，存量夹具与正式 producer
+        都走它）时回落正式尺子：root 边对照 clean_text、inputs 照
+        `freshness_of_inputs` 判——**空 inputs 保持 unknown**，写盘闸的 freshness
+        后置条件一个比特都不放宽。
+        """
+        try:
+            payload = self.candidate_payload(rel)
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            # 字节产物（章正文）没有 JSON 载荷：身份由绑定它的回执承载。
+            deterministic = self._candidate_deterministic_freshness(rel)
+            if deterministic is not None:
+                return deterministic
+            raise ArtifactUnreadable(
+                f'{rel} 不是合法 JSON，判不了新鲜度：{exc!r}') from exc
+        block = payload.get(PROVENANCE_KEY) if isinstance(payload, dict) else None
+        if not isinstance(block, dict):
+            # 没有来源账的候选产物：身份由绑定它的回执／成书字节承载。
+            deterministic = self._candidate_deterministic_freshness(rel)
+            if deterministic is not None:
+                return deterministic
+            return FreshnessReport('unknown', 'no_provenance')
+        root_was = block.get('root_clean_sha1')
+        if not isinstance(root_was, str) or not root_was:
+            return FreshnessReport('unknown', 'no_provenance')
+        recorded = block.get('inputs')
+        stage1_edge = self._content_edge(
+            STAGE1_MAIN_TEXT, root_was, self._content_sha1_or_none(STAGE1_MAIN_TEXT))
+        if stage1_edge.state != 'fresh':
+            clean_edge = self._content_edge(
+                STAGE0_CLEAN_TEXT, root_was,
+                self._content_sha1_or_none(STAGE0_CLEAN_TEXT))
+            if clean_edge.state != 'fresh':
+                return self._content_report((clean_edge,))
+            report = self.freshness_of_inputs(rel, recorded)
+            if report.state != 'fresh':
+                return report
+            return self._content_report((clean_edge, *report.edges))
+        if not recorded:
+            return self._content_report((stage1_edge,))
+        # 候选链的来源边多数只记文件级指纹（`CandidateRunContext.record_edge` 的
+        # `consumed` 恒空：投影注册表不覆盖候选链）⇒ 走正式 `freshness_of_inputs`
+        # 同一把尺子（声明了投影的边照旧按 consumed 判），只把「没声明读了什么、
+        # 但字节未变」的边按文件身份落成 fresh：`consumed_undeclared` 的前置条件
+        # 就是 `was_file == now_file`，不把它升级成 unknown——那会让每个已跑完的
+        # 节点都停在人工裁决面。字节变了照旧 stale，不放过。
+        report = self.freshness_of_inputs(rel, recorded)
         edges = tuple(
-            prov.EdgeVerdict(
-                key=key, state=state, reason=reason,
-                recorded_file=None, now_file=self._file_fp_of_key(key),
-                recorded_consumed=recorded_fp, now_consumed=expected_fp,
-            )
-            for key in (characters_rel, STAGE1_MAIN_TEXT)
-        )
-        return FreshnessReport(state, reason, edges)
+            replace(edge, state='fresh', reason='match')
+            if edge.reason == 'consumed_undeclared' else edge
+            for edge in report.edges)
+        return self._content_report((stage1_edge, *edges))
+
+    def _candidate_deterministic_freshness(self, rel: str) -> FreshnessReport | None:
+        """没有 `_provenance` 的候选产物：身份由绑定它的回执／manifest 承载。"""
+        normalized = str(rel).replace('\\', '/')
+        prose = re.fullmatch(r'stage5/body/ch(\d+)\.txt', normalized)
+        if prose is not None:
+            # 章正文的账在绑定它的章回执上（与 Hook 成文同一形状）。
+            receipt_rel = artifact_rel(STR06_STAGE5_BODY_RECEIPT,
+                                       nn=int(prose.group(1)))
+            receipt = self._receipt_payload(receipt_rel)
+            if receipt is None:
+                return None
+            expected = receipt.get('prose_sha256')
+            if not isinstance(expected, str) or not expected:
+                return FreshnessReport('unknown', 'no_provenance')
+            edge = self._content_edge(
+                normalized, expected, self._content_sha256_or_none(normalized))
+            return self._content_report((edge,))
+        if normalized == STR06_DELIVERY_MANIFEST:
+            # 交付 manifest 是就绪记录：**没有来源账的旧形态**用它自己记的成书字节
+            # （与 `_book_freshness` 同一枚指纹的两个方向）。带 `_provenance` 的
+            # 现行形态走通用来源账路（assemble 节点的 inputs 才是它的账）。
+            book_rel = paths.book_txt_rel(self.ctx.novel_dir)
+            manifest = self._raw_json_payload(STR06_DELIVERY_MANIFEST)
+            if manifest is None:
+                return None
+            if isinstance(manifest.get(PROVENANCE_KEY), dict):
+                return None
+            expected = manifest.get('final_text_sha256')
+            if not isinstance(expected, str) or not expected:
+                return FreshnessReport('unknown', 'no_provenance')
+            return self._content_report((self._content_edge(
+                book_rel, expected, self._content_sha256_or_none(book_rel)),))
+        return None
 
     def _stage0_revisions_freshness(self) -> FreshnessReport:
         """`stage0/revisions.json`：这份 transform 是照盘上**现在这份原文**建的吗？
@@ -2498,40 +2489,6 @@ class ArtifactStore:
                 f'→ 这是载体层的 bug（多半是某个三态键在落盘形态里被抹掉了），不是数据问题'
             ) from e
 
-    def apply_workflow_projection_transition(self, transition_id: str,
-                                             prepared_sha256: str) -> Path:
-        """离线迁移的唯一产物例外：按冻结输入免费重编译人物投影。
-
-        不开放普通写闸、不迁人物/Global。迁移 owner 持有全盘写锁；这里仍核验
-        prepared、pending、确切根路径、现役纯编译结果及 source/target 原字节 CAS。
-        原投影字节永久留在 prepared，任一窗口均可由同一免费事务补尾。
-        """
-        from novel import work_units
-        from novel.orchestrator.workflow_transition import (
-            WorkflowTransitionRefused, projection_commit_material,
-        )
-        path, source, target = projection_commit_material(self, transition_id, prepared_sha256)
-        current = path.read_bytes() if path.exists() else None
-        if current == target:
-            return path
-        if current != source:
-            raise WorkflowTransitionRefused('人物投影已不是冻结原字节；拒绝覆盖第三方修改')
-        path.parent.mkdir(parents=True, exist_ok=True)
-        fd, temporary = tempfile.mkstemp(prefix='.transition-', dir=_filesystem_path(path.parent))
-        try:
-            with os.fdopen(fd, 'wb') as stream:
-                stream.write(target)
-                stream.flush()
-                os.fsync(stream.fileno())
-            # 写临时文件期间也可能有未遵循 owner 协议的第三方；提交前再次核验。
-            if (path.read_bytes() if path.exists() else None) != source:
-                raise WorkflowTransitionRefused('人物投影提交前原字节变化')
-            work_units._replace_snapshot(Path(temporary), path)
-        finally:
-            Path(temporary).unlink(missing_ok=True)
-        if path.read_bytes() != target:
-            raise WorkflowTransitionRefused('人物投影提交后读回不等于冻结目标')
-        return path
 
     @staticmethod
     def _replace_atomically(p: Path, data: bytes) -> None:
@@ -2654,9 +2611,9 @@ class Str06Repository:
         payload = value.model_dump(mode='json') if isinstance(value, BaseModel) else value
         if self.context is not None:
             spec = candidate_artifact(rel)
-            if spec is not None and spec.form == 'json':
+            if spec is not None and not spec.endswith('.txt'):
                 # 已登记产物落盘即带来源账；正文（text）的账在绑定它的回执上。
-                provenance = self.context.provenance_for(spec.writer, rel, owners=owners)
+                provenance = self.context.provenance_for(_writer_of(spec), rel, owners=owners)
                 payload = {**payload, '_provenance': provenance.to_disk()}
         elif candidate_artifact(rel) is not None:
             raise ProvenanceRefused(
@@ -2720,12 +2677,13 @@ class Str06Repository:
         消费它）。读路径仍走 `read`——记账与过期拒绝照常。
         """
         spec = candidate_artifact(rel)
-        if spec is None or spec.model is None:
+        model = _artifact_model(spec)
+        if spec is None or model is None:
             raise ProvenanceRefused(f'{rel} 未登记契约模型，不能按模型读')
         data = self.read(rel)
         if isinstance(data, dict):
             data = {k: v for k, v in data.items() if k != '_provenance'}
-        return spec.model.model_validate(data)
+        return model.model_validate(data)
 
     # ── INVALID 孪生与 _rounds 归档（F7a-2：路径与写入事务接正式机制） ──────
 
@@ -2756,12 +2714,12 @@ class Str06Repository:
             # 能回去的那份，不允许第二次被拦的稿静默覆盖第一次。
             self._archive(invalid, prov.next_round(seen))
         spec = candidate_artifact(paths.formal_of(invalid))
-        if spec is not None and spec.form == 'json':
+        if spec is not None and not spec.endswith('.txt'):
             if self.context is None:
                 raise ProvenanceRefused(
                     f'{rel} 是已登记候选产物，但 repository 未附加上下文：'
                     '拒绝在无来源账的情况下写 INVALID 孪生')
-            provenance = self.context.provenance_for(spec.writer, invalid, owners=owners)
+            provenance = self.context.provenance_for(_writer_of(spec), invalid, owners=owners)
             provenance = provenance.model_copy(update={'gates_skipped': list(problems)})
             payload = value.model_dump(mode='json') if isinstance(value, BaseModel) else value
             payload = {**payload, '_provenance': provenance.to_disk()}

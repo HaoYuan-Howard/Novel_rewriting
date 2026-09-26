@@ -43,15 +43,22 @@ def checked_sid(sid: str) -> str:
 
 
 def checked_kind(kind: str) -> str:
-    """校验报告的 `:kind`。**取值面 = `invariants.STAGES`，不手写第二份清单。**
+    """校验报告的 `:kind`。**取值面 = `novel.stages.checkable_stages()`**，不手写第二份清单。
 
-    当前报告 kind 直接从 `STAGES` 派生；公开形状见 `docs/schema/_api.md`，不保存原型别名。
+    ⚠ F8c：新链 Stage2/4/5/7 的复检是**节点级** `--check-only`
+    （`novel.cli run <str06节点> <sid> --check-only`），没有层级 CheckReport
+    ⇒ 这两个层不在本取值面里，请求它们得到 400 并被告知正确入口。
 
-    ⚠ **不在七个现役值里 ⇒ 400 并把七个列出来**，而不是 404：
+    ⚠ **不在取值面里 ⇒ 400 并把可选值列出来**，而不是 404：
     404 是「这本书没有」，400 是「你给的这个层名不存在」，两件事。
     """
-    if kind not in STAGES:
+    from novel.stages import checkable_stages
+    stages = checkable_stages()
+    if kind not in stages:
         raise HTTPException(
             status_code=BAD_REQUEST,
-            detail=f'未知的校验层 {kind!r}。七个取值：{list(STAGES)}')
+            detail=(
+                f'未知的校验层 {kind!r}。层级复检取值：{sorted(stages)}；'
+                'Stage2/4/5/7 的复检是节点级 --check-only'
+                '（novel.cli run <str06 节点> <sid> --check-only）'))
     return kind

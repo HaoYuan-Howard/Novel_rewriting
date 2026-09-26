@@ -194,25 +194,25 @@ from contracts.schema.stage5 import (
 )
 # ⚠ F8a：`contracts.schema.stage6` / `stage6_prepare` 两个模块的 import 与
 #   ARTIFACT_SPECS 挂载（八项）随 Stage6 整层退役删除（F6d 登记，F8c 删文件）。
-#   Hook 的契约形状由 `contracts/schema/str06/hook.py`（HookContext/HookReceipt）承接。
+#   Hook 的契约形状由 `contracts/schema/hook.py`（HookContext/HookReceipt）承接。
 from contracts.schema.stage7 import (
     BookTxt, CharacterPatch, ExtraSub, IdentityBaseline, NameDecision, NameMap,
     NameMapEdit, NameMapResponse, Residual, StemBaseline,
 )
 
 # ── STR-06 新链契约模型（F8a 激活；F8c 分流至正式 stageN 模块后改 import）──
-from contracts.schema.str06.source import (
+from contracts.schema.source import (
     BlueprintsArtifactV12, CharactersArtifactV4, CharactersCore,
 )
-from contracts.schema.str06.grounding import (
+from contracts.schema.grounding import (
     PreserveCheckpoint, ReconstructionBrief, SemanticBinding,
 )
-from contracts.schema.str06.execution import ExecutionPlan
-from contracts.schema.str06.design import BodyDesign, PresentationGraph
-from contracts.schema.str06.hook import HookContext, HookReceipt
-from contracts.schema.str06.book_ir import WriterBookIR
-from contracts.schema.str06.receipt import ChapterReceipt
-from contracts.schema.str06.naming import NameMapV5
+from contracts.schema.execution import ExecutionPlan
+from contracts.schema.design import BodyDesign, PresentationGraph
+from contracts.schema.hook import HookContext, HookReceipt
+from contracts.schema.book_ir import WriterBookIR
+from contracts.schema.receipt import ChapterReceipt
+from contracts.schema.naming import NameMapV5
 
 class ArtifactVersionError(ValueError):
     """一份产物不是当前注册版本。错误恒带文件与版本。

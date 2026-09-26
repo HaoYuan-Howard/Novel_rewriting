@@ -1,11 +1,19 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""novel.stages —— 七个现役层的产地。**一层一个子包**，移植一层加一个。
+"""novel.stages —— 各现役层的产地。**一层一个子包**，移植一层加一个。
 
 【本模块只放一样东西：`stage` → 它那条 0 成本复检的实现】
 它是 `--check-only` 与 `GET /api/novels/:sid/check/:kind` 的**共用落点**。
-两个入口各自 `from novel.stages.stageN import ...` 一次，就是同一张映射的两份，
-映射覆盖七个现役层（Stage3 已退役），并由 CLI 与 HTTP 共用。
+两个入口各自 `from novel.stages.stageN import ...` 一次，就是同一张映射的两份。
+
+⚠⚠ **F8c：这张表只剩 stage0／stage1 两行。** Stage2/4/5/7 的复检随 STR-06
+新链切换改为**节点级**：每个 `str06.` 节点自带 `--check-only`（免费复检＝
+只允许缓存／wire 采用，需要新购就停在 owner 并写 needs_authorization），
+入口是 `novel.cli run <str06节点> <sid> --check-only`；盘面只读投影走
+`novel/views/str06.py`（`/api/str06/candidates/{candidate}/*`）。旧链那套
+「一层一个 checker 产出 CheckReport」的桥（stage2 extract／stage4 plan／
+stage5 review／stage7 rename）随旧链整层退役删除——不把 `--check-only`
+重新画成层级报告，那会是同一事实的第二个落点（I-16）。
 """
 from __future__ import annotations
 
@@ -23,30 +31,15 @@ def _checkers() -> dict[str, Callable[[RunContext], CheckReport]]:
     """
     from novel.stages.stage0 import checks as stage0_checks
     from novel.stages.stage1 import checks as stage1_checks
-    from novel.stages.stage2 import extract
-    from novel.stages.stage4 import plan
-    from novel.stages.stage5 import review
-    from novel.stages.stage6 import hook
-    from novel.stages.stage7 import rename
-    # ⚠ stage5 挂的是**验收相**（`stage5.review`），不是写作相：判据表两相共用一张，
-    #   而 `--check-only` 那条路读的是验收报告这份产物。写作节点没有 `--check-only`
-    #   （它的 `flags` 里就没有），`check_nodes('stage5')` 因此恰好是一个。
-    # ⚠ stage2 挂的是**逐章那一相**（`stage2.blueprint`）——`NODES` 里只有它带 `--check-only`。
-    #   而那一相**两份产物一起读**（判 `canonical_unique` 要 global、
-    #   判 `present_ids_dangling` 要 registry）⇒「全书那一相的判据没有 0 成本复检」
-    #   这句话不成立：判据表只有一张，两个节点共用。
     return {'stage0': stage0_checks.run_check_only,
-            'stage1': stage1_checks.run_check_only,
-            'stage2': extract.run_check_only, 'stage4': plan.run_check_only,
-            'stage5': review.run_check_only,
-            'stage6': hook.run_check_only, 'stage7': rename.run_check_only}
+            'stage1': stage1_checks.run_check_only}
 
 
 def check_only(stage: str) -> Callable[[RunContext], CheckReport]:
-    """返回当前层的 0 成本复检函数。"""
+    """返回当前层的 0 成本复检函数；没有层级复检的层（新链 stage2/4/5/7）KeyError。"""
     return _checkers()[stage]
 
 
 def checkable_stages() -> frozenset[str]:
-    """本表覆盖的当前阶段；从 `_checkers()` 派生，不另抄清单。"""
+    """本表覆盖的阶段；从 `_checkers()` 派生，不另抄清单。"""
     return frozenset(_checkers())

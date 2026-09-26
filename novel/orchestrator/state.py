@@ -24,13 +24,8 @@ import re
 
 from contracts.artifacts import (
     ARTIFACT_PATHS, BOOK_SCOPED_PATHS, STAGE1_MAIN_TEXT,
-    STAGE2_BLUEPRINT_CHARACTER_PROJECTION, STAGE2_CHAPTER_BLUEPRINTS,
-    STAGE2_CHARACTERS, STAGE2_GLOBAL_EDIT, STAGE2_GLOBAL_EDIT_COMMIT, STAGE2_GLOBAL_EDIT_FAILURE,
-    STAGE2_GLOBAL_EDIT_INPUT_COMMIT, STAGE2_GLOBAL_GROUNDING, STAGE2_KNOWLEDGE_LINKS,
-    STAGE4_BLIND_CANDIDATE, STAGE4_EVIDENCE_BINDING,
-    STAGE4_PLAN_CHAPTERS, STAGE4_WRITER_CONTEXT,
-    STAGE5_CHAPTER, artifact_rel, STR06_BODY_DESIGN, STR06_STAGE5_BODY,
-    STR06_STAGE5_BODY_RECEIPT,
+    STAGE2_BLUEPRINT_CHARACTER_PROJECTION, STR06_BODY_DESIGN, artifact_rel,
+    STR06_STAGE5_BODY, STR06_STAGE5_BODY_RECEIPT,
 )
 
 import os
@@ -39,22 +34,31 @@ from pathlib import Path
 from contracts.invariants import (
     LEGACY_STAGE5_MODES, NODES, OPERATOR_REDO_STRATEGIES, RESUME_VERDICTS, STAGES,
 )
-from contracts.schema import ARTIFACTS, artifact_key, artifact_spec
+from contracts.schema import ARTIFACTS, artifact_spec
 from contracts.schema.orchestration import (
     ArtifactState, NovelOverview, OverviewSummary, StageState,
 )
-from contracts.schema.stage2 import (
-    GlobalEdit, GlobalEditCommit, GlobalEditFailure, GlobalEditInputCommit,
-)
-from contracts.schema.knowledge import KnowledgeGrounding
-from contracts.schema.stage4 import EvidenceBinding
 from novel import paths, prov
-from novel.errors import ArtifactUnreadable, ProvenanceRefused, TerminalState, UpstreamMissing, UpstreamStale
+from novel.errors import ArtifactUnreadable, UpstreamMissing
 from novel.llm.cache import CachePolicy
 from novel.llm.ledger import CostLedger
 from novel.run import RunContext
-from novel.stages.stage5.measure import legacy_stage5_paths as stage5_legacy_paths
-from novel.store import ArtifactStore
+from novel.store import ArtifactStore, Str06Repository, candidate_artifact
+
+
+def legacy_stage5_paths(novel_dir: Path) -> list[str]:
+    """列出旧 `stage5/deep|shallow` 布局的根，不枚举内部文件（F8c 本地化）。
+
+    原实现在已退役的 `novel.stages.stage5.measure`；这是 review/state/API 共用的
+    纯发现面：旧产物必须显式说 `legacy_incompatible`，不能因 canonical 装载器
+    看不见它们而被说成 missing。消费方只需要知道「哪一条旧臂存在」；空目录仍是
+    旧布局证据。**只读探针**：不解析内容、不迁移、不当成 missing。
+    """
+    return [
+        f'stage5/{old_arm}'
+        for old_arm in ('deep', 'shallow')
+        if (novel_dir / f'stage5/{old_arm}').is_dir()
+    ]
 
 #: `produces` 里带 `{}` 的那些：逐份不定，存在性不能靠一次 `is_file()`。
 _PLACEHOLDER = '{'
@@ -127,6 +131,38 @@ def required_artifacts(stage: str, *,
 _BODY_RECEIPT_RE = re.compile(r'stage5/acceptance/body/ch\d+\.json')
 
 
+def _candidate_artifact_state(store: ArtifactStore, rel: str, st: os.stat_result, *,
+                              invalid: bool, invalid_freshness, invalid_reason,
+                              ) -> ArtifactState:
+    """候选链产物在盘上的处境（F8d 桥；判据见 `ArtifactStore.candidate_freshness`）。
+
+    与正式分支同一形状：`exists`／`readable`／`freshness`／`invalid` 四格分开，
+    「不知道」不折成 fresh，也不折成 missing。章回执额外保留文件名与章序的跨路径
+    绑定——`ch01.json` 里装一份合法的第 2 章，不能算第 1 章已完成。
+    """
+    try:
+        report = store.candidate_freshness(rel)
+        fresh, reason, ghosts = report.state, report.reason, list(report.ghosts)
+    except (ArtifactUnreadable, UpstreamMissing):
+        fresh, reason, ghosts = 'unknown', 'no_provenance', []
+    readable = store.candidate_readable(rel)
+    if readable and _BODY_RECEIPT_RE.fullmatch(rel):
+        try:
+            payload = store.candidate_payload(rel)
+        except (ArtifactUnreadable, UpstreamMissing, OSError, ValueError):
+            payload = None
+        ordinal = payload.get('chapter_ordinal') if isinstance(payload, dict) else None
+        readable = (isinstance(ordinal, int)
+                    and rel == artifact_rel(STR06_STAGE5_BODY_RECEIPT, nn=ordinal))
+    return ArtifactState(
+        rel=rel, exists=True, bytes=st.st_size, mtime=int(st.st_mtime),
+        freshness=fresh, reason=reason, ghosts=ghosts,
+        display_freshness=fresh, invalid=invalid,
+        invalid_freshness=invalid_freshness, invalid_reason=invalid_reason,
+        readable=readable,
+        condition=('invalid' if invalid else 'unreadable' if not readable else 'ready'))
+
+
 def artifact_state(store: ArtifactStore, rel: str) -> ArtifactState:
     """一份产物此刻的处境。**不存在 ⇒ `unknown`，不是 `fresh`。**
 
@@ -165,6 +201,15 @@ def artifact_state(store: ArtifactStore, rel: str) -> ArtifactState:
                              condition='invalid' if invalid else 'missing')
 
     st = p.stat()
+    if candidate_artifact(rel) is not None and hasattr(store, 'candidate_readable'):
+        # 候选链（str06）盘面（F8d 桥）：不带版本信封、root 身份是 Stage1 章数组，
+        # 正式读路覆盖不到——可读性与新鲜度按候选格式判，见 `ArtifactStore`
+        # 的桥段（同一把 `prov.freshness` 尺子，不为完成度另造尺子）。
+        # ⚠ `hasattr` 是给测试桩的最小礼貌：只实现正式读面的 store 仍走正式分支
+        #    （章回执的跨路径绑定在那里照常生效）。
+        return _candidate_artifact_state(store, rel, st, invalid=invalid,
+                                         invalid_freshness=invalid_freshness,
+                                         invalid_reason=invalid_reason)
     try:
         report = store.freshness(rel)
         fresh, reason, ghosts = report.state, report.reason, list(report.ghosts)
@@ -290,14 +335,25 @@ def planned_chapters(store: ArtifactStore) -> list[int] | None:
     已退役的 ``plan_chapters.json``。
     """
     try:
-        from contracts.artifacts import STR06_BODY_DESIGN
         design, _raw = store.read_own(STR06_BODY_DESIGN, STR06_BODY_DESIGN)
     except (ArtifactUnreadable, UpstreamMissing):
+        # 候选链盘面（F8d 桥）：BodyDesign 不带版本信封，正式读路读不回来；
+        # 按候选格式读同一份产物——章集分母不能因为读路差异变成「判不了」。
+        design = _candidate_body_design(store)
+    if design is None:
         return None
     out = getattr(design, 'chapters', None)
     if out is None:
         return None
     return sorted(int(c.chapter_ordinal) for c in out)
+
+
+def _candidate_body_design(store: ArtifactStore):
+    """候选根上的 BodyDesign（F8d 桥）；读不回来返回 `None`，不猜章集。"""
+    try:
+        return Str06Repository(store.ctx.novel_dir).read_model(STR06_BODY_DESIGN)
+    except (ArtifactUnreadable, UpstreamMissing, OSError, ValueError):
+        return None
 
 
 def stage1_chapter_count(store: ArtifactStore) -> int | None:
@@ -397,11 +453,14 @@ def stage_state(store: ArtifactStore, stage: str) -> StageState:
             else:
                 done = (bool(want) and not missing and not issues
                         and not hook_issues)
-        legacy = stage5_legacy_paths(store.ctx.novel_dir)
-        from novel.stages.stage5.review import review_status
-        review = review_status(store.ctx, store)
-        if review.state == 'legacy_incompatible':
-            legacy = sorted(set([*legacy, *review.reasons]))
+        legacy = legacy_stage5_paths(store.ctx.novel_dir)
+        # ⚠⚠ F8c：`stage5.review`（全书验收轮次面）随旧链整层退役——它读的
+        #   `stage5/review_{n}.json` 是退役产物键，`novel.stages.stage5.review`
+        #   模块已删。新链没有全书级 review 闸（章级机械验由 `str06.stage5.body`
+        #   的 body_checks 承接，交付残留归 `str06.stage7.assembly`）⇒ 三格
+        #   **如实缺席**：不 import 已删模块（那会让整本 overview 崩），也不造
+        #   一个 `missing` 冒充「还没审」——那一格的问题在新链不存在。
+        #   旧双臂布局的只读识别仍由上面的 `legacy_stage5_paths` 负责。
         return StageState(
             stage=stage, artifacts=arts, done=done, chapters_done=written,
             rounds_done=rounds,
@@ -410,8 +469,6 @@ def stage_state(store: ArtifactStore, stage: str) -> StageState:
             reviewable=(bool(written) or bool(invalid_ordinals)
                         or bool(malformed_invalids)),
             legacy_incompatible=bool(legacy), legacy_paths=legacy,
-            review_state=review.state, review_reasons=list(review.reasons),
-            review_rel=review.review_rel,
         )
 
     done = all(a.exists and a.readable
@@ -508,7 +565,7 @@ def overview_at(novel_dir: Path, code: str) -> NovelOverview:
     完成度与复检报告绑定到**同一个**代码指纹时复用。它不缓存，也不把报告
     塞进 ``NovelOverview``（HTTP 的完成度响应仍然 verdict-free）。
     """
-    legacy = stage5_legacy_paths(novel_dir)
+    legacy = legacy_stage5_paths(novel_dir)
 
     #: 每层挑**本层第一个产它的节点**当提问者，理由见 `readonly_ctx`。
     asker = {s: next((n for n, sp in NODES.items() if sp.stage == s and sp.produces), None)
@@ -554,11 +611,18 @@ def artifacts_for_node(ov: NovelOverview, node: str) -> list[ArtifactState]:
     stage = next((item for item in ov.stages if item.stage == spec.stage), None)
     if stage is None:
         return []
-    if node == 'stage5.write':
+    if node == 'str06.stage5.body':
         # 逐章路径是模板，Stage5 完成度只把问题章物化进 artifacts。
         return list(stage.artifacts)
     selected = [item for item in stage.artifacts if item.rel in spec.produces]
     if not spec.stage_required:
+        return selected
+    if spec.stage == 'stage5':
+        # ⚠⚠ Stage5 的 `artifacts` 只物化**问题行**（干净书不把几十份章稿逐行塞进
+        # 公共状态）：本节点 produces 全都健康时，它一行都没有。此时回落整层会把
+        # **章稿**缺失算到 Hook 节点头上——实测 Supervisor 据此对一个已成功的节点
+        # 反复派发（F8d 全链集成跑出来的死循环：每轮 rc=0、盘面不变、永远不推进）。
+        # Hook 节点只认自己的两行：不在盘上（或坏/陈旧）才是它自己的 missing。
         return selected
     return selected or list(stage.artifacts)
 
@@ -585,250 +649,6 @@ def live_invalid_artifacts(ov: NovelOverview, node: str) -> list[ArtifactState]:
 #: ⚠⚠ `unknown` 折进 `run` 的代价是**真金白银**：那意味着队列会去重跑一个
 #: 可能已经写完的付费层。折进 `skip` 更坏（跳过一个根本没跑的层，
 #: 而下游会拿着半份成品继续走）。⇒ 它只能是第四个值，由人来看那句话。
-def stage2_global_projection_blocked(ov: NovelOverview) -> bool:
-    """静态人物 INVALID 是否让 Blueprint 称名投影暂不可消费。"""
-    stage = next(
-        (candidate for candidate in getattr(ov, 'stages', ())
-         if candidate.stage == 'stage2'),
-        None,
-    )
-    if stage is None:
-        return False
-    by_rel = {artifact.rel: artifact for artifact in stage.artifacts}
-    grounding = by_rel.get(STAGE2_CHARACTERS)
-    projection = by_rel.get(STAGE2_BLUEPRINT_CHARACTER_PROJECTION)
-    return bool(
-        grounding is not None and grounding.invalid
-        and projection is not None and projection.freshness == 'unknown'
-        and projection.reason == 'global_naming_blocked'
-    )
-
-
-def stage2_projection_recovery_needed(ov: NovelOverview) -> bool:
-    """人物正式登记 current，但其确定性称名投影缺失或过期时免费重建。
-
-    live INVALID 先交人物免费编辑/复验；不能为缺一份投影重新购买整书抽取。
-    """
-    if stage2_global_projection_blocked(ov):
-        return False
-    stage = next(
-        (candidate for candidate in getattr(ov, 'stages', ())
-         if candidate.stage == 'stage2'),
-        None,
-    )
-    if stage is None:
-        return False
-    by_rel = {artifact.rel: artifact for artifact in stage.artifacts}
-    grounding = by_rel.get(STAGE2_CHARACTERS)
-    projection = by_rel.get(STAGE2_BLUEPRINT_CHARACTER_PROJECTION)
-    if grounding is None or projection is None:
-        return False
-    source_available = bool(
-        not grounding.invalid and grounding.exists and grounding.readable
-        and grounding.freshness == 'fresh'
-    )
-    projection_current = bool(
-        projection.exists and projection.readable
-        and projection.freshness == 'fresh'
-    )
-    return source_available and not projection_current
-
-
-def stage2_invalid_projection_ready(ov: NovelOverview) -> bool:
-    """最新 Global 已是 INVALID、但 Blueprint 所需投影已经 current/fresh 吗。"""
-    stage = next(
-        (candidate for candidate in getattr(ov, 'stages', ())
-         if candidate.stage == 'stage2'),
-        None,
-    )
-    if stage is None:
-        return False
-    by_rel = {artifact.rel: artifact for artifact in stage.artifacts}
-    grounding = by_rel.get(STAGE2_GLOBAL_GROUNDING)
-    projection = by_rel.get(STAGE2_BLUEPRINT_CHARACTER_PROJECTION)
-    return bool(
-        grounding is not None and grounding.invalid
-        and projection is not None and projection.exists and projection.readable
-        and projection.freshness == 'fresh'
-    )
-
-
-def stage2_global_edit_terminal_failure_needed(
-    base: str | os.PathLike[str], sid: str, *, code: str | None = None,
-) -> bool:
-    """GlobalEdit 是否已有只能由人给出后继动作的 durable terminal。"""
-    novel_dir = paths.find_novel_dir(base, sid)
-    if novel_dir is None:
-        return False
-    from novel.orchestrator.approvals import projection_code
-    ctx = readonly_ctx(
-        novel_dir, 'stage2.global', code or projection_code())
-    store = ArtifactStore(ctx)
-    if not store.exists(STAGE2_GLOBAL_EDIT_FAILURE):
-        return False
-    failure = store.read_own(
-        GlobalEditFailure, STAGE2_GLOBAL_EDIT_FAILURE)[0]
-    from novel.stages.stage2 import extract as stage2_extract
-    if failure.failure_kind in {
-            'ordinary_hard_gate', 'ordinary_candidate_validation'}:
-        stage2_extract._validated_ordinary_failure_inputs(  # noqa: SLF001
-            store, failure, allow_human_invalid=True)
-        return True
-    if failure.failure_kind != 'hard_gate':
-        return False
-    # reviewed HARD 的原始 INVALID 仍归 correction/自动 revalidate；只有不可变
-    # baseline 证明业务内容已被人改过，才切到人工 successor 面。
-    stage2_extract._validated_failure_inputs(  # noqa: SLF001
-        ctx, store, failure)
-    audit = store.revalidation_audit(
-        STAGE2_GLOBAL_GROUNDING, KnowledgeGrounding,
-        actor='system:stage2-terminal-probe',
-        reason='只读识别 reviewed GlobalEdit INVALID 是否由人编辑',
-    )
-    return audit.edited_by_human
-
-
-def stage2_edit_commit_recovery_flags(
-    base: str | os.PathLike[str], sid: str, *, code: str | None = None,
-) -> tuple[str, ...] | None:
-    """返回 durable Stage2 Global 动作唯一允许的 exact 0-wire argv。
-
-    revalidate journal 冻结的是发起本次提升的真实 ``actor/reason``；人工动作
-    硬杀后的恢复必须逐字复用它们，不能被 planner 改写成 system 身份。
-    Stage2 语义审阅退役后不再有 reviewed edit 的 canonical_pending 分支。
-    """
-    novel_dir = paths.find_novel_dir(base, sid)
-    if novel_dir is None:
-        return None
-    from novel.orchestrator.approvals import projection_code
-    ctx = readonly_ctx(
-        novel_dir, 'stage2.global', code or projection_code())
-    store = ArtifactStore(ctx)
-    if store.exists(STAGE2_GLOBAL_EDIT_INPUT_COMMIT):
-        # 完整 typed read 本身就是 planner 对 canonical WAL 的关闭式校验。
-        store.read_own(
-            GlobalEditInputCommit, STAGE2_GLOBAL_EDIT_INPUT_COMMIT)
-        return ('--apply-edit', STAGE2_GLOBAL_EDIT)
-    if not store.exists(STAGE2_GLOBAL_EDIT_COMMIT):
-        return None
-    # 坏 journal 让 planner 关闭式失败；不能把 partial bundle 当普通 stale/
-    # UNKNOWN 再交给 Commander 或付费 Global。
-    journal = store.read_own(
-        GlobalEditCommit, STAGE2_GLOBAL_EDIT_COMMIT)[0]
-    if journal.state != 'prepared':
-        return None
-    if journal.action_kind == 'apply_edit':
-        return ('--apply-edit', STAGE2_GLOBAL_EDIT)
-    audit = journal.target.global_grounding.provenance.revalidation_audit
-    if audit is None:
-        raise ArtifactUnreadable(
-            'prepared revalidate journal 的 target 缺 typed revalidation audit')
-    return ('--revalidate', '--actor', audit.actor, '--reason', audit.reason)
-
-
-def stage2_edit_commit_recovery_action(
-    base: str | os.PathLike[str], sid: str, *, code: str | None = None,
-) -> str | None:
-    """返回 durable 动作的 verb；exact argv 由 recovery_flags 单源给出。"""
-    flags = stage2_edit_commit_recovery_flags(
-        base, sid, code=code)
-    if flags is None:
-        return None
-    return 'revalidate' if flags[0] == '--revalidate' else 'apply_edit'
-
-
-def stage2_edit_commit_recovery_needed(
-    base: str | os.PathLike[str], sid: str, *, code: str | None = None,
-) -> bool:
-    """是否存在只能由 0-wire deterministic action 补尾的动作事实。"""
-    return stage2_edit_commit_recovery_action(
-        base, sid, code=code) is not None
-
-
-def stage2_projection_source_unproven(ov: NovelOverview) -> str | None:
-    """只缺投影时，盘上人物登记是否存在但不能证明可作免费底座。
-
-    这种盘面既不是首次生成，也不能擅自拿坏/unknown 人物登记重物化。返回原因让
-    ``resume_verdict`` 保持 UNKNOWN；最重要的是不让通用 ``missing`` 分支把一份
-    已存在的昂贵产物解释成“默认再采一次”。stale 仍走既有 REDO 分支。
-    """
-    stage = next(
-        (candidate for candidate in getattr(ov, 'stages', ())
-         if candidate.stage == 'stage2'),
-        None,
-    )
-    if stage is None:
-        return None
-    by_rel = {artifact.rel: artifact for artifact in stage.artifacts}
-    grounding = by_rel.get(STAGE2_CHARACTERS)
-    projection = by_rel.get(STAGE2_BLUEPRINT_CHARACTER_PROJECTION)
-    if grounding is None or projection is None:
-        return None
-    projection_current = bool(
-        projection.exists and projection.readable
-        and projection.freshness == 'fresh'
-    )
-    if projection_current or grounding.invalid or not grounding.exists:
-        return None
-    if not grounding.readable:
-        return '正式人物登记存在但按当前 schema/version 读不回来'
-    if grounding.freshness == 'unknown':
-        return (
-            '正式人物登记存在但来源 freshness '
-            f'为 unknown/{grounding.reason}')
-    return None
-
-
-def stage2_knowledge_rebind_needed(
-    base: str | os.PathLike[str], sid: str, ov: NovelOverview,
-) -> bool:
-    """只由知识 producer 证明人物投影之外的边未变；不从 stale 一词猜修复权限。"""
-    stage = next((row for row in ov.stages if row.stage == 'stage2'), None)
-    if stage is None:
-        return False
-    knowledge = next((row for row in stage.artifacts if row.rel == STAGE2_GLOBAL_GROUNDING), None)
-    if knowledge is None or not (knowledge.exists and knowledge.readable
-                                  and not knowledge.invalid and knowledge.freshness == 'stale'):
-        return False
-    book = paths.find_novel_dir(base, sid)
-    if book is None:
-        return False
-    from novel.stages.stage2.characters.rebind import prepare_if_changed
-    try:
-        ctx = readonly_ctx(book, 'stage2.global', prov.code_version())
-        return prepare_if_changed(ArtifactStore(ctx), STAGE2_GLOBAL_GROUNDING) is not None
-    except (TerminalState, ProvenanceRefused):
-        # 原 unknown/stale 状态仍由 overview 保留；这里仅否定免费重绑动作的资格。
-        return False
-
-
-def stage2_blueprint_extraction_current(ov: NovelOverview) -> bool:
-    """E 的正式 Blueprint 完成与 C 后继关联物化分开，缺关联不得重购抽取。"""
-    stage = next((row for row in ov.stages if row.stage == 'stage2'), None)
-    artifact = next((row for row in stage.artifacts if row.rel == STAGE2_CHAPTER_BLUEPRINTS),
-                    None) if stage is not None else None
-    return bool(artifact is not None and artifact.exists and artifact.readable
-                and not artifact.invalid and artifact.freshness == 'fresh')
-
-
-def stage2_blueprint_invalid_recovery_needed(ov: NovelOverview) -> bool:
-    """canonical Blueprint 行是否有一份 live ``.INVALID`` 等待免费提升。"""
-    stage = next(
-        (candidate for candidate in getattr(ov, 'stages', ())
-         if candidate.stage == 'stage2'),
-        None,
-    )
-    if stage is None:
-        return False
-    blueprint = next(
-        (artifact for artifact in stage.artifacts
-         if artifact.rel == STAGE2_CHAPTER_BLUEPRINTS),
-        None,
-    )
-    return bool(
-        blueprint is not None and blueprint.invalid
-    )
-
 
 def resume_verdict(
     ov: NovelOverview, node: str, *, flags: tuple[str, ...] = (),
@@ -845,15 +665,11 @@ def resume_verdict(
     本函数只如实分类，不把 `redo` 压成 `run`。普通队列仍对后三态关闭式停止；
     AgentRun 的单步 operator 只能再经 :func:`operator_redo_flags` 证明存在唯一的
     canonical 重放参数，且每执行一步后重新采快照，才允许执行其中一小部分 `redo`。
+
+    F8c：旧链节点（stage2.analyze／characters／blueprint、stage4.design／plan、
+    stage5.review／write、stage6／stage7 旧键）的专属分支随旧链退役删除——它们
+    已不在 `NODES`，由下面 `spec is None` 早退覆盖；剩下的判定全部按 `spec` 通用派生。
     """
-    # 明确工作单元动作不同于“补缺产物”：产物已存在也不能吞掉待消费的
-    # typed 返工或接受补提交。队列负责凭据当前性，producer 在执行时再核验。
-    if node == 'stage2.analyze':
-        return RESUME_RUN, '联合首抽由 producer 在请求前复验无历史来源，分别保存人物与知识'
-    if node == 'stage2.global' and flags and flags[0] == '--recover-analyze':
-        return RESUME_RUN, '按已购来源执行免费恢复'
-    if node in {'stage4.design', 'stage4.plan'} and flags == ('--close-review',):
-        return RESUME_RUN, '零模型复验全部审阅义务的历史覆盖并绑定当前审批证据'
     spec = NODES.get(node)
     if spec is None:
         return RESUME_RUN, f'未知节点 {node!r}'
@@ -865,46 +681,7 @@ def resume_verdict(
             '旧 Stage5 契约不兼容：' + ', '.join(st.legacy_paths)
             + '。它们是只读历史证据，不会当成 missing 或触发静默付费重跑')
 
-    if node == 'stage2.characters' and stage2_global_projection_blocked(ov):
-        return RESUME_RUN, (
-            '最新人物候选的称名 HARD 尚未收口，Blueprint 投影为 '
-            '`unknown/global_naming_blocked`；先运行 '
-            '`stage2.characters --apply-edit <stage2/characters_edit.json>` 修正称名，'
-            '或人工确认后运行 '
-            '`stage2.characters --revalidate --actor system:invalid-revalidate --reason <audit>`（均为 0 LLM）。'
-            '不得用 `--renormalize` 洗成可消费投影，也不得重采付费人物登记')
-    if node == 'stage2.characters' and stage2_projection_recovery_needed(ov):
-        return RESUME_RUN, (
-            f'{STAGE2_BLUEPRINT_CHARACTER_PROJECTION} 缺失、损坏或未绑定当前称名底座；'
-            '当前人物登记已足够确定性重建它，运行 '
-            '`stage2.characters --revalidate --actor system:invalid-revalidate --reason <audit>`（0 LLM）')
-    if node == 'stage2.characters':
-        unproven = stage2_projection_source_unproven(ov)
-        if unproven is not None:
-            return RESUME_UNKNOWN, (
-                f'{unproven}，同时称名投影缺失/损坏/未证明 current。'
-                '不得因伴生产物少一份就排默认付费抽取；先人工核对人物登记，'
-                '可只读诊断或尝试人物 --revalidate（0 LLM），'
-                '命令若读不回会关闭式失败')
-    if (node == 'stage2.blueprint'
-            and stage2_blueprint_invalid_recovery_needed(ov)):
-        return RESUME_RUN, (
-            '盘上有 live `stage2/chapter_blueprints.INVALID.json`；只先运行 '
-            '`stage2.blueprint --revalidate --actor system:invalid-revalidate --reason <audit>`（0 LLM）'
-            '按当前判据重判。队列不得构造默认付费 Blueprint argv；'
-            '免费提升仍失败时再由人决定是否定向重生成')
-
-    if node == 'stage5.review':
-        if st.review_state == 'fresh':
-            return RESUME_SKIP, f'{st.review_rel} 已绑定当前 RULES、章集与 canonical 正文'
-        why = '；'.join(st.review_reasons) or (st.review_state or 'unknown')
-        if st.review_state == 'missing':
-            return RESUME_RUN, why
-        if st.review_state == 'stale':
-            return RESUME_REDO, f'Stage5 Review 已陈旧：{why}；先零成本重算'
-        return RESUME_UNKNOWN, f'Stage5 Review 当前无法确认：{why}'
-
-    # ⭐ 轮次编号产物（`review_{n}` / `semantic_{n}`）：**它有自己的账，不看 stage 级 `done`**。
+    # ⭐ 轮次编号产物：**它有自己的账，不看 stage 级 `done`**。
     #
     # ⚠⚠ 这一支是实跑改出来的。此前它落进下面那条「逐章类」分支，于是
     # `stage5.review`（0 成本全书验收）与当时的 `stage5.semantic`（付费书级语义审判，
@@ -934,8 +711,9 @@ def resume_verdict(
         return RESUME_RUN, (
             f'{node} 盘上一轮都没有（{", ".join(numbered)}）')
 
-    # 逐章类的层：结论挂在「计划里的每个输出章都有成稿吗」上，而那可能是**判不了**。
-    if node == 'stage5.write':
+    # 逐章类的层（F8c：`stage5.write` → `str06.stage5.body`）：结论挂在
+    # 「计划里的每个输出章都有成稿吗」上，而那可能是**判不了**的。
+    if node == 'str06.stage5.body':
         got = len(st.chapters_done)
         if st.done is True:
             return RESUME_SKIP, (
@@ -982,22 +760,9 @@ def resume_verdict(
             f'{spec.stage} 的 canonical 章集合与当前计划不一致，'
             '但没有可安全归类为缺章的项；请先人工核对计划与多余章稿')
 
-    if node == 'stage2.blueprint' and stage2_blueprint_extraction_current(ov):
-        links = next((row for row in st.artifacts if row.rel == STAGE2_KNOWLEDGE_LINKS), None)
-        if links is not None and links.exists and (not links.readable or links.freshness == 'unknown'):
-            return RESUME_UNKNOWN, (
-                '旧盘遗留的知识关联文件损坏或不可判；保留正式 Blueprint，'
-                '先人工核对该退役文件（v7 不再生成与消费）')
-        return RESUME_SKIP, '正式 Blueprint 抽取已完成；下游由统一机械准入判定'
-
     mine = artifacts_for_node(ov, node)
     stale = [a for a in mine if a.freshness == 'stale']
     if stale:
-        if any(a.reason == 'binding_input_contract_obsolete' for a in stale):
-            return RESUME_REDO, (
-                '已证明旧章级 Stage4B 缺场景与事实/材料的输入映射契约；'
-                '在当前 Stage4A 全章接受与有效付费授权下只重建 B，'
-                '旧结构决定与原模型账保留历史，不把该问题转成 A 修订。')
         return RESUME_REDO, (
             f'上游变过：{", ".join(a.rel for a in stale)} 已陈旧 '
             f'（{", ".join(sorted({a.reason for a in stale}))}）。'
@@ -1036,21 +801,6 @@ def resume_verdict(
     return RESUME_SKIP, f'{spec.stage} 已完成且不陈旧——已存在即跳过'
 
 
-def _stage5_chapter_ordinal(rel: str) -> int | None:
-    """从路径注册表的模板反解 canonical Stage5 章号；不重抄路径字面。"""
-    prefix, marker, suffix = STR06_STAGE5_BODY.partition('{nn}')
-    if not marker or not rel.startswith(prefix) or not rel.endswith(suffix):
-        return None
-    end = len(rel) - len(suffix) if suffix else len(rel)
-    raw = rel[len(prefix):end]
-    if not raw.isdigit():
-        return None
-    ordinal = int(raw)
-    if ordinal < 1 or artifact_rel(STR06_STAGE5_BODY, nn=ordinal) != rel:
-        return None
-    return ordinal
-
-
 def _consumed_redo_surface(artifacts: list[ArtifactState]) -> bool:
     """每份 stale 输出都汇总为消费变更，且既有输出没有未知、坏稿或恢复面。"""
     stale = [artifact for artifact in artifacts if artifact.freshness == 'stale']
@@ -1075,8 +825,14 @@ def operator_redo_flags(ov: NovelOverview, node: str) -> tuple[str, ...] | None:
     ``consumed_changed``。汇总为 ``file_changed`` 可能来自未声明消费、旧契约或人工改
     字节，unreadable/盘上既有却 unknown/INVALID 又各有自己的恢复路；把这些状态猜成
     重采会重新花钱，还可能覆盖唯一问题稿。缺失输出可由同一 canonical producer 一并
-    补齐。Stage5 Review 是单独登记的零成本、编号新增策略，其专用 currentness 明确为
-    stale 时可直接重算。
+    补齐。
+
+    F8c：旧链的 ``review``（Stage5 Review 轮次面）与 ``stale_chapters``
+    （`stage5.write --chapters`）策略随旧链退役删除——现役节点只登记
+    ``canonical``，`contracts/invariants.py::OPERATOR_REDO_STRATEGIES`
+    的取值面同批收敛为 `('canonical',)`。下面那条断言因此从「挡未登记策略」
+    收紧为「除 canonical 外一律当场炸」：节点表若再出现旧策略名，红在这里，
+    不会静默走回猜 flags 的老路。
     """
     spec = NODES.get(node)
     strategy = spec.operator_redo if spec is not None else None
@@ -1088,39 +844,7 @@ def operator_redo_flags(ov: NovelOverview, node: str) -> tuple[str, ...] | None:
     if verdict != RESUME_REDO:
         return None
 
-    if strategy == 'review':
-        stage = next(
-            (candidate for candidate in ov.stages if candidate.stage == spec.stage),
-            None,
-        )
-        return () if stage is not None and stage.review_state == 'stale' else None
-
     artifacts = artifacts_for_node(ov, node)
-    if (node == 'stage4.plan'
-            and any(a.reason == 'binding_input_contract_obsolete' for a in artifacts)
-            and all(
-                not a.invalid and a.readable
-                and (not a.exists or a.freshness == 'fresh'
-                     or a.freshness == 'stale' and a.reason in {
-                         'binding_input_contract_obsolete', 'consumed_changed'})
-                for a in artifacts)):
-        # Store 已证明旧章级输入契约，A all-accept、paid/permit 与并发身份
-        # 仍由原 queue/CLI/producer 守卫；这里只允许 canonical B 重建。
-        return ()
     if not _consumed_redo_surface(artifacts):
         return None
-    if strategy == 'canonical':
-        return ()
-
-    assert strategy == 'stale_chapters'
-    targets = [
-        artifact for artifact in artifacts
-        if not artifact.exists or artifact.freshness == 'stale'
-    ]
-    ordinals = [_stage5_chapter_ordinal(artifact.rel) for artifact in targets]
-    if not ordinals or any(ordinal is None for ordinal in ordinals):
-        return None
-    exact = sorted({int(ordinal) for ordinal in ordinals if ordinal is not None})
-    if len(exact) != len(ordinals):
-        return None
-    return '--chapters', ','.join(str(ordinal) for ordinal in exact)
+    return ()

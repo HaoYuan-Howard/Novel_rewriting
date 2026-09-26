@@ -19,7 +19,7 @@ from contracts.schema.api import WorkUnitGrantPreview, WorkUnitGrantRequest, Wor
 from novel.api.deps import checked_sid, get_base
 from novel.errors import UpstreamMissing
 from novel.orchestrator import beacon, operator, work_unit_grants
-from novel.views import work_units, run_metrics, blueprint_progress
+from novel.views import work_units, run_metrics
 from contracts.schema.run_metrics import RunMetricsView
 
 router = APIRouter(prefix='/novels')
@@ -58,7 +58,6 @@ def get_run_progress(sid: str = Depends(checked_sid),
         with operator.progress_read_snapshot(base, sid) as (ov, resume_frontier):
             stage_done = {st.stage: st.done for st in ov.stages}
             units, units_unavailable = work_units.get(base, sid)
-            blueprint = blueprint_progress.get(base, sid, units)
     except UpstreamMissing:
         stage_done = {s: None for s in STAGES}
         resume_frontier = RunResumeFrontierView(
@@ -69,7 +68,6 @@ def get_run_progress(sid: str = Depends(checked_sid),
             verified_skipped_count=0,
         )
         units, units_unavailable = work_units.get(base, sid)
-        blueprint = blueprint_progress.get(base, sid, units)
     identity = approval_work_unit(resume_frontier.waiting_on or '')
     current_node = identity[0] if identity else resume_frontier.node
     current_scope = identity[1] if identity else None
@@ -87,5 +85,4 @@ def get_run_progress(sid: str = Depends(checked_sid),
         events_tail=[beacon.event_view(event) for event in events[-beacon.TAIL:]],
         work_units=units, work_units_unavailable_reason=units_unavailable,
         current_recovery_actions=recovery,
-        blueprint_progress=blueprint,
     )

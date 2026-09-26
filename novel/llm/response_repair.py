@@ -346,16 +346,8 @@ def _record_at(root: Path) -> RepairRecord:
     physical = (_read_json(physical_path) if physical_path.is_file() else None)
     if physical is not None:
         _validate_single_resolution(physical_path, rejection, physical)
-    # Stage2 的新 workpack 只有一份原子 batch resolution；不能为了复用 client
-    # 状态机再偷偷给每个 attempt 写一份单项决定。这里把 batch 中当前那一项投影成
-    # 旧的只读 resolution 形状，写权威仍只有 batch 文件一个。
-    from novel.llm import stage2_runs
-    batch = stage2_runs.batch_resolution_for_attempt(root.parents[2], str(
-        rejection.get('attempt_id') or ''))
-    if physical is not None and batch is not None:
-        raise TerminalState(
-            f'{root} 同时存在单项与 batch resolution；响应修复出现双权威源')
-    resolution = physical if physical is not None else batch
+    # F8c：Stage2 原子 batch resolution 随旧链退役；单项 resolution 是唯一权威。
+    resolution = physical
     outcome = (_read_json(root / OUTCOME_FILE)
                if (root / OUTCOME_FILE).is_file() else None)
     return RepairRecord(root, rejection, resolution, outcome)
@@ -425,54 +417,46 @@ def submit(novel_dir: Path, attempt_id: str, *, actor: str, reason: str,
     actor, reason = actor.strip(), reason.strip()
     if not actor or not reason:
         raise TerminalState('响应修复提交必须显式给非空 actor 与 reason')
-    from novel.llm import stage2_runs
-    novel_dir = Path(novel_dir)
-    # 锁顺序固定为书级 ownership → 本模块线程锁 → 单项 resolution 文件锁。
-    # batch 收编的「尚无单项决定」检查与这里的 batch_owner 复检因此不再留窗口。
-    with stage2_runs.repair_ownership_lock(novel_dir):
-        located = find_attempt(novel_dir, attempt_id)
-        if owner := stage2_runs.batch_owner(novel_dir, attempt_id):
-            raise TerminalState(
-                f'attempt_id={attempt_id} 已属于 Stage2 batch manifest {owner[0]}；'
-                '禁止再走单项 submit，必须一次提交完整 decisions 集合')
-        with _LOCK:
-            with process_append_lock(located.root / RESOLUTION_FILE):
-                # 跨进程锁拿到以后仍须重读；不能拿锁前快照作决定。
-                record = _record_at(located.root)
-                if not record.eligible:
-                    raise TerminalState(
-                        f'attempt_id={attempt_id} 的 gate={record.rejection.get("gate")} '
-                        '不在通用 agent 修复面；只能让原节点进入带失败证据的后继模型请求')
-                if record.resolution is not None:
-                    raise TerminalState(
-                        f'attempt_id={attempt_id} 已有不可变修复决定；每个响应最多修复一次')
-                payload: dict[str, Any] = {
-                    'version': VERSION, 'submitted_at': _now(),
-                    'attempt_id': attempt_id, 'actor': actor, 'reason': reason,
-                    'action': 'decline' if decline else 'submit',
-                }
-                if not decline:
-                    candidate_path = record.root / CANDIDATE_FILE
-                    try:
-                        raw = candidate_path.read_bytes()
-                        candidate = json.loads(raw.decode('utf-8'))
-                    except FileNotFoundError:
-                        raise UpstreamMissing(
-                            f'请先创建/编辑固定候选文件 {candidate_path}') from None
-                    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-                        raise ArtifactUnreadable(
-                            f'候选 {candidate_path} 不是合法 UTF-8 JSON：{exc}') from exc
-                    payload['candidate'] = candidate
-                    payload['candidate_sha256'] = hashlib.sha256(raw).hexdigest()
-                    payload['candidate_payload_sha256'] = _canonical_sha(candidate)
-                payload['resolution_sha256'] = _single_resolution_sha(payload)
-                _atomic_json(record.root / RESOLUTION_FILE, payload)
-                return _record_at(record.root)
+    # 锁顺序收敛为本模块线程锁 → 单项 resolution 文件锁
+    # （F8c：书级 ownership 与 batch 复检随旧链退役）。
+    located = find_attempt(Path(novel_dir), attempt_id)
+    with _LOCK:
+        with process_append_lock(located.root / RESOLUTION_FILE):
+            # 拿锁后仍须重读；不能拿锁前快照作决定。
+            record = _record_at(located.root)
+            if not record.eligible:
+                raise TerminalState(
+                    f'attempt_id={attempt_id} 的 gate={record.rejection.get("gate")} '
+                    '不在通用 agent 修复面；只能让原节点进入带失败证据的后继模型请求')
+            if record.resolution is not None:
+                raise TerminalState(
+                    f'attempt_id={attempt_id} 已有不可变修复决定；每个响应最多修复一次')
+            payload: dict[str, Any] = {
+                'version': VERSION, 'submitted_at': _now(),
+                'attempt_id': attempt_id, 'actor': actor, 'reason': reason,
+                'action': 'decline' if decline else 'submit',
+            }
+            if not decline:
+                candidate_path = record.root / CANDIDATE_FILE
+                try:
+                    raw = candidate_path.read_bytes()
+                    candidate = json.loads(raw.decode('utf-8'))
+                except FileNotFoundError:
+                    raise UpstreamMissing(
+                        f'请先创建/编辑固定候选文件 {candidate_path}') from None
+                except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+                    raise ArtifactUnreadable(
+                        f'候选 {candidate_path} 不是合法 UTF-8 JSON：{exc}') from exc
+                payload['candidate'] = candidate
+                payload['candidate_sha256'] = hashlib.sha256(raw).hexdigest()
+                payload['candidate_payload_sha256'] = _canonical_sha(candidate)
+            payload['resolution_sha256'] = _single_resolution_sha(payload)
+            _atomic_json(record.root / RESOLUTION_FILE, payload)
+            return _record_at(record.root)
 
 
 def submit_deterministic(record: RepairRecord, candidate: Any, *, rule: str) -> RepairRecord:
     """封存一次代码可证明不改变语义叶子的机械修复；与 agent 共用一次额度。"""
-    from novel.llm import stage2_runs
     raw = json.dumps(candidate, ensure_ascii=False, sort_keys=True,
                      separators=(',', ':')).encode('utf-8')
     payload = {
@@ -485,21 +469,15 @@ def submit_deterministic(record: RepairRecord, candidate: Any, *, rule: str) -> 
         'candidate_payload_sha256': _canonical_sha(candidate),
     }
     payload['resolution_sha256'] = _single_resolution_sha(payload)
-    novel_dir = record.root.parents[2]
-    with stage2_runs.repair_ownership_lock(novel_dir):
-        if owner := stage2_runs.batch_owner(novel_dir, record.attempt_id):
-            raise TerminalState(
-                f'attempt_id={record.attempt_id} 已属于 Stage2 batch manifest {owner[0]}；'
-                'batch 收编后不再产生单项 deterministic resolution')
-        with _LOCK:
-            with process_append_lock(record.root / RESOLUTION_FILE):
-                current = _record_at(record.root)
-                if current.resolution is not None:
-                    raise TerminalState(
-                        f'attempt_id={record.attempt_id} 已有修复决定；'
-                        '机械与 agent 共用一次额度')
-                _atomic_json(record.root / RESOLUTION_FILE, payload)
-                return _record_at(record.root)
+    with _LOCK:
+        with process_append_lock(record.root / RESOLUTION_FILE):
+            current = _record_at(record.root)
+            if current.resolution is not None:
+                raise TerminalState(
+                    f'attempt_id={record.attempt_id} 已有修复决定；'
+                    '机械与 agent 共用一次额度')
+            _atomic_json(record.root / RESOLUTION_FILE, payload)
+            return _record_at(record.root)
 
 
 def write_outcome(record: RepairRecord, *, decision: str, gate: str | None,

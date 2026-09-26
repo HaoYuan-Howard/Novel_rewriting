@@ -39,7 +39,6 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import NamedTuple
 
-from contracts.artifacts import STAGE5_REVIEWER_REWRITE_REQUEST
 from contracts.invariants import NODES
 from contracts.schema.api import ExecutionPermit, OperatorNext, OperatorNode
 from contracts.schema.orchestration import (
@@ -66,7 +65,7 @@ from novel.errors import (
 from novel.model_slots import MODEL_BOOK_DIR_ENV
 from novel.orchestrator import (
     admission, execution_permit, jobs, operator, queue,
-    retired_formats, reviewer_action_evidence, service_lifecycle, state,
+    retired_formats, service_lifecycle,
 )
 from novel.orchestrator.agent_supervisor import (
     ExecutionTurnResult, LaunchTicket, PrelaunchIdentityDrift, RunSupervisor,
@@ -74,7 +73,6 @@ from novel.orchestrator.agent_supervisor import (
 )
 from novel.orchestrator.jobs import JobConflict, JobRegistry, service_dir
 from novel.orchestrator.nodes import shell_line
-from novel.store import ArtifactStore
 from novel.work_units import require_workflow
 
 RUNS_FILENAME = 'agent_runs.jsonl'
@@ -781,32 +779,6 @@ def _run_step_argv(
     ]
 
 
-def _reconcile_landed_stage5_reviewer_rewrite_action(
-        base: str, sid: str, *, code: str,
-        current_parent_run_id: str | None = None) -> None:
-    """typed/current request 成功后把 active action 原字节移入 authority archive。
-
-    归档而非删除，保证 queue/permit/paid/recovery 始终能重验 Commander 来源；
-    active→archive 任一硬杀窗都可由下一 parent 幂等补完，scanner 不会把已被
-    canonical request 精确引用的回答再次当作未执行 action。
-    ⚠ 批次 B3：机械 trim 改写 request（system:stage5-auto）的权威即其绑定的
-    fresh Review 原字节，没有也不需要 Commander authority seal——直接跳过。
-    """
-    from novel.stages.stage5 import reviewer_rewrite
-
-    novel_dir = paths.resolve_novel_dir(base, sid)
-    ctx = state.readonly_ctx(novel_dir, 'stage5.write', code)
-    if not ArtifactStore(ctx).exists(STAGE5_REVIEWER_REWRITE_REQUEST):
-        return
-    request, request_file_sha256 = (
-        reviewer_rewrite.load_reviewer_rewrite_batch(ctx))
-    if reviewer_action_evidence.is_mechanical_rewrite_request(request):
-        return
-    reviewer_action_evidence.seal_reviewer_rewrite_authority(
-        base, sid, request, request_file_sha256,
-        current_parent_run_id=current_parent_run_id or '')
-
-
 # 三、并发闸与排队
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1278,58 +1250,6 @@ def _assess_delivery(base: str, sid: str, *, code_version: str,
                     f'{type(exc).__name__}: {exc}'))
 
 
-def _delivery_pause_note(
-        base: str, sid: str, epoch: ExecutionEpoch,
-        node: str, rc: int,
-) -> str | None:
-    """只从 producer 自己落下并严格校验的凭据开放同 run resume。"""
-    if rc != 2 or node not in ('stage2.blueprint', 'stage4.plan'):
-        return None
-    novel_dir = paths.find_novel_dir(base, sid)
-    if novel_dir is None:
-        return None
-    if node == 'stage2.blueprint':
-        from novel.llm import stage2_runs
-        recovery = stage2_runs.read_delivery_recovery(
-            novel_dir, epoch.epoch_id, sid=sid, code=epoch.code_version)
-        label = 'Stage2 blueprint'
-        unit = '章'
-    else:
-        from novel.llm import stage4_runs
-        recovery = stage4_runs.read_plan_delivery_recovery(
-            novel_dir, epoch.epoch_id, sid=sid, code=epoch.code_version)
-        label = 'Stage4 plan'
-        unit = '个歧义章'
-    if recovery is None:
-        return None
-    completed = recovery['completed_chapters']
-    pending = recovery['pending_chapters']
-    failures = recovery['failures']
-    kind_labels = {
-        'authentication': '登录状态失效',
-        'connection': '网络连接中断',
-        'provider_transient': '供应商瞬时拒绝',
-        'rate_limit': '供应商限流',
-        'server_error': '供应商服务异常',
-        'timeout': '请求超时',
-        'usage_limit': '账号用量窗口已满',
-    }
-    failure_labels = '、'.join(sorted({
-        f'{kind_labels.get(str(row["error_kind"]), row["error_kind"])}'
-        f'{"/HTTP " + str(row["status"]) if row["status"] else ""}'
-        f'/已尝试 {row["attempts"]} 次'
-        for row in failures
-    }))
-    pending_text = '、'.join(str(chapter) for chapter in pending[:12])
-    if len(pending) > 12:
-        pending_text += '…'
-    return (
-        f'{label} 的 Agent 交付暂不可用（{failure_labels}）；本轮已保留 '
-        f'{len(completed)}/{recovery["total_chapters"]} {unit} checkpoint，'
-        f'待补第 {pending_text} 章。当前 parent/epoch 保持不变；'
-        '确认账号、额度或网络恢复后点“继续”，只请求缺章。')
-
-
 def start(base: str | os.PathLike[str], sid: str, *, authorized: bool,
           egress_authorized: bool,
           profiles: PipelineAgentProfiles | None,
@@ -1681,37 +1601,22 @@ def _start_planned(plan: AgentRunPlan, *,
         rc, timed_out, failure_detail = _run_supervisor_process(
             epoch, argv, launch_ticket, label=stem,
             environment_overrides=environment_overrides)
-        pause_note = (
-            None if timed_out else
-            _delivery_pause_note(base, sid, epoch, permit.node, rc))
+        # ⚠ F8c：旧链 `stage2.blueprint`/`stage4.plan` 的「已保留 N 章
+        #   checkpoint，待补第 x 章」交付暂停注记随旧链整层退役——那两个节点
+        #   与它们的 producer journal 读取口都不在现役 `NODES`；新链付费节点的
+        #   续跑由候选 runner 自身（F7c 精确补尾）承担，不经本注记开放 resume。
         return _action_outcome(
             epoch, rc, timed_out, label=stem,
-            failure_detail=failure_detail, pause_note=pause_note)
+            failure_detail=failure_detail, pause_note=None)
 
     def _read_operator_next(epoch: ExecutionEpoch) -> OperatorNext:
         # 新 base 不读取旧四席次数账。producer journal / typed 接受各自补提交；
         # 工作单元保存原回答，planner 重启不会重新发放预算。
-        _reconcile_landed_stage5_reviewer_rewrite_action(
-            base, sid, code=epoch.code_version,
-            current_parent_run_id=run_id)
+        # ⚠ F8c：旧链 `stage5.write` reviewer rewrite 的 authority 归档对账
+        #   （`_reconcile_landed_stage5_reviewer_rewrite_action`）随该节点与
+        #   canonical request 产物一并退役；新链无 typed edit request 面。
         return operator.next_action_at_code(
             base, sid, code=epoch.code_version)
-
-    def _ready_requires_fresh_epoch(epoch: ExecutionEpoch, current: OperatorNext) -> bool:
-        action = current.action
-        if (current.state != 'ready' or action is None
-                or action.node not in {'stage4.design', 'stage4.plan'}
-                or tuple(action.flags) not in {(), ('--reaggregate',)}):
-            return False
-        from novel.stages.stage4.design_rebuild import producer_requires_new_run
-        ctx = state.readonly_ctx(paths.resolve_novel_dir(base, sid), action.node, epoch.code_version)
-        ctx.run_id, ctx.parent_run_id = epoch.session_run_id, run_id
-        from novel.llm.ledger import CostLedger
-        ctx.ledger = CostLedger(path=None, run_id=ctx.run_id, parent_run_id=ctx.parent_run_id)
-        backend = plan.profiles.executor_overrides.get(action.node, plan.profiles.executor_default)
-        if isinstance(backend, LegacyExecutorBackend):
-            ctx.executor_profile = backend.profile
-        return producer_requires_new_run(ctx)
 
     def _run_ready_action(
             epoch: ExecutionEpoch, current: OperatorNext,
@@ -1721,40 +1626,6 @@ def _start_planned(plan: AgentRunPlan, *,
             raise RuntimeError('ready next 缺 execution token')
         permit = current.execution_token
         return _run_token(epoch, permit, launch_ticket, stem=f'ready-{permit.node}')
-
-    def _run_blocked_action(
-            epoch: ExecutionEpoch, current: OperatorNext,
-            launch_ticket: LaunchTicket) -> SupervisorActionResult:
-        """执行 Supervisor 已按关闭注册表选中的 deterministic recovery。"""
-        action = current.action
-        if (current.state != 'blocked' or action is None
-                or action.waiting_on not in queue.DETERMINISTIC_RECOVERY_WAITING_ON):
-            raise RuntimeError('Supervisor 交入了未登记的 deterministic blocker')
-        if (action.waiting_on == queue.WAITING_ON_STAGE5_REVIEWER_REWRITE
-                and not action.flags):
-            # queue 的 unknown 分支明确没有可执行 argv；它仍占住专属 waiter，
-            # 但不能被空 flags 解释成默认付费写作，也不能重开模型席位。
-            return SupervisorActionResult(
-                exit_code=2, continue_ready=False,
-                outcome=AgentDeliveryOutcome(
-                    state='unknown', checked_at=int(time.time()),
-                    reason=('Stage5 Reviewer 改写执行证据尚不能证明可恢复；'
-                            '当前没有可执行动作，保留原候选与执行账等待恢复')))
-        try:
-            permit = execution_permit.permit_from_next(
-                current, action.node, action.flags)
-        except Exception as exc:
-            # permit 是 Popen 前的末端 live CAS。只有这里能证明 ticket 尚未
-            # commit；身份已漂移时通知 Supervisor 换 epoch 重读。身份仍 current
-            # 的 schema/surface 错误必须原样成为故障，不能泛化成 rollover。
-            if not _epoch_identity_current(epoch):
-                raise PrelaunchIdentityDrift(
-                    'deterministic permit 形成前 execution identity 已漂移') from exc
-            raise
-        recovered = _run_token(
-            epoch, permit, launch_ticket,
-            stem=f'recovery-{permit.node}')
-        return recovered
 
     def _finalize_run(
             epoch: ExecutionEpoch,
@@ -1785,15 +1656,22 @@ def _start_planned(plan: AgentRunPlan, *,
         set_quiesced=_set_quiesced,
         initial_epoch=initial_epoch,
         read_operator_next=_read_operator_next,
-        ready_requires_fresh_epoch=_ready_requires_fresh_epoch,
+        # ⚠ F8c：`ready_requires_fresh_epoch`（旧链 stage4.design/plan 的
+        #   producer_requires_new_run 预检）与 stage5 reviewer rewrite 的
+        #   fresh-epoch blocker 随旧链退役：现役恢复表只登记免费 --check-only
+        #   复检，没有需要独立 producer 身份的 paid/recovery 动作。
+        #   RunSupervisor 的通用滚 epoch 机制保留（其自身用例仍覆盖）。
+        ready_requires_fresh_epoch=None,
         run_ready_action=_run_ready_action,
-        run_blocked_action=_run_blocked_action,
+        # ⚠ F8c：`DETERMINISTIC_RECOVERY_WAITING_ON` 已随旧链补尾 waiter 清零
+        #   （新链恢复是候选 runner 自身续跑，不经队列发布补尾 argv）⇒ 现役没有
+        #   任何登记 blocker 可执行，blocked 一律停在人工恢复面并如实报告。此处
+        #   不再提供 run_blocked_action：RunSupervisor 要求「callback 与非空
+        #   blockers 注册表成对提供」，单留 callback 会直接违反该不变量。
+        #   Supervisor 的通用滚 epoch / blocked 路由机制保留，由其自身用例覆盖。
+        run_blocked_action=None,
         deterministic_blockers=queue.DETERMINISTIC_RECOVERY_WAITING_ON,
-        # stage4 design action 的人工 typed 恢复已随四道闸退役；
-        # fresh-epoch 保护只剩 stage5 reviewer rewrite。
-        fresh_epoch_blockers=frozenset({
-            queue.WAITING_ON_STAGE5_REVIEWER_REWRITE,
-        }),
+        fresh_epoch_blockers=frozenset(),
         finalize_run=_finalize_run,
         pause_before_node=plan.pause_before_node)
     with _SUPERVISORS_LOCK:

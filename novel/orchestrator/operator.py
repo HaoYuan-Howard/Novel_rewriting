@@ -16,10 +16,9 @@ from contextlib import contextmanager
 from collections.abc import Iterator
 from dataclasses import dataclass
 
-from contracts.artifacts import STAGE2_GLOBAL_EDIT
 from contracts.invariants import INBOX_KIND, NODES, STAGES
 from contracts.schema.api import (
-    ApprovalDoc, ExecutionPermit, InboxItem, InboxView, OperatorAction, OperatorNext,
+    ExecutionPermit, InboxItem, InboxView, OperatorAction, OperatorNext,
     OperatorNextDecision,
 )
 from contracts.schema.orchestration import (
@@ -84,14 +83,13 @@ class _LanePlan:
 
 
 def _lane_from_snapshot(
-    snapshot: OperatorReadSnapshot, approval_doc: ApprovalDoc,
+    snapshot: OperatorReadSnapshot,
 ) -> _LanePlan:
-    """从同一 overview/approval 坐标选最早动作，并保留被 planner 跳过的前缀。"""
+    """从同一 overview 坐标选最早动作，并保留被 planner 跳过的前缀。"""
     sid = snapshot.sid
     todo, blocked = queue.plan_book_from_overview(
         snapshot.base, sid, snapshot.overview,
         until_stage=STAGES[-1], follow_check=True,
-        approval_doc=approval_doc,
         # AgentRun 每个 action 落盘后都会重新进入本函数采新快照；因此能消费
         # queue/state 共同证明的 canonical REDO，不会冻结一串旧下游 argv。
         allow_deterministic_redo=True)
@@ -143,14 +141,12 @@ def _next_from_snapshot(snapshot: OperatorReadSnapshot) -> OperatorNext:
     # 一本后期书会在一次 next 内 fork 出二十多个代码时点与 git 子进程。
     with approvals.read_projection(
             overview=snapshot.overview, code=snapshot.code):
-        approval_doc = approvals.get(
-            snapshot.base, sid,
-            overview=snapshot.overview, code=snapshot.code,
-            include_spawns=False, operator_projection=True)
+        # F8c：审批投影随人工闸整层退役——新链无 gate、无 closure、无 spawns，
+        # operator 只保留这份 invocation-scoped 代码坐标（queue 的
+        # `projection_code()` 仍在这里取指纹），不再构造 ApprovalDoc。
         inbox = inbox_from_snapshot(
-            snapshot, approval_doc=approval_doc,
-            _final_cas_owner=_OPERATOR_FINAL_CAS)
-        lane = _lane_from_snapshot(snapshot, approval_doc)
+            snapshot, _final_cas_owner=_OPERATOR_FINAL_CAS)
+        lane = _lane_from_snapshot(snapshot)
 
     decision = OperatorNextDecision(
         base=os.fspath(snapshot.base), sid=sid,
@@ -176,39 +172,16 @@ def _next_from_snapshot(snapshot: OperatorReadSnapshot) -> OperatorNext:
     )
 
 
-def _review_state_projection(approval_doc: ApprovalDoc | None) -> list[dict[str, str]] | None:
-    """同一 operator 快照的有效审批原状态；节点路径只从 NODES 登记读取。"""
-    if approval_doc is None:
-        return None
-    source = approval_doc.model_dump(mode='python')
-    rows = []
-    for node, spec in NODES.items():
-        life = spec.lifecycle
-        if life is None or not life.approval_projection:
-            continue
-        value = source
-        for key in life.approval_projection:
-            value = value.get(key) if isinstance(value, dict) else None
-        status = ('accepted' if value else 'not_accepted') if isinstance(value, bool) else value
-        # 批次 B4：部分节点仍有 approval_projection（gate/prepare 读面），
-        # 但人工 approval_bindings 已空；scope 回退到投影末键。
-        if life.approval_bindings:
-            scope = life.approval_bindings[0][1]
-        else:
-            scope = life.approval_projection[-1]
-        rows.append({'node': node, 'scope': scope,
-                     'state': status if isinstance(status, str) else 'unknown'})
-    return rows
-
-
-def _frontier_view(lane: _LanePlan, approval_doc: ApprovalDoc | None = None) -> RunResumeFrontierView:
+def _frontier_view(lane: _LanePlan) -> RunResumeFrontierView:
+    # F8c：人工闸与语义审阅面整层退役——`review_states`（gate/prepare 的
+    # 审批原状态投影）不再有数据源，诚实在形状上保持 null，不造空列表冒充
+    # 「审过且全 not_accepted」。字段本身留给兼容旧前端读数。
     action = lane.action
-    review_states = _review_state_projection(approval_doc)
     if lane.state == 'pipeline_complete':
         return RunResumeFrontierView(
             state='pipeline_complete',
             why='当前快照下现役节点已全部越过；最终交付仍以终验包为准',
-            next_handler='none', review_states=review_states,
+            next_handler='none', review_states=None,
             verified_skipped_nodes=list(lane.verified_skipped_nodes),
             verified_skipped_count=len(lane.verified_skipped_nodes),
         )
@@ -219,9 +192,10 @@ def _frontier_view(lane: _LanePlan, approval_doc: ApprovalDoc | None = None) -> 
     elif action.waiting_on in queue.DETERMINISTIC_RECOVERY_WAITING_ON:
         handler = 'executor'
     else:
-        # 受托 Commander reviewer 已退役：除登记过的 deterministic recovery
-        # 外，一切审批闸都属于人工，等用户在 Stage 页面过闸后原配置续跑。
-        handler = 'human'
+        # 人工闸已整层退役（2026-09-15 全自动裁决 → STR-06 新链）：除登记过的
+        # deterministic recovery 外没有等待面；走到这里说明 planner 给了
+        # 未登记的 waiting_on，按 fail-closed 报 unknown 而不是假装有人在处理。
+        handler = 'unknown'
     return RunResumeFrontierView(
         state=lane.state,
         node=action.node,
@@ -232,7 +206,7 @@ def _frontier_view(lane: _LanePlan, approval_doc: ApprovalDoc | None = None) -> 
         waiting_on=action.waiting_on,
         paid=action.paid,
         writes=action.writes,
-        next_handler=handler, review_states=review_states,
+        next_handler=handler, review_states=None,
         verified_skipped_nodes=list(lane.verified_skipped_nodes),
         verified_skipped_count=len(lane.verified_skipped_nodes),
     )
@@ -264,12 +238,8 @@ def progress_read_snapshot(
         with approvals.read_projection(overview=snapshot.overview, code=snapshot.code):
             # ⚠ F8b-3（S-05）：旧链 prepared 提交尾窗 lane 已随 operator 拆除，
             # 进度前沿与 next_action 消费同一条 lane 推导。
-            approval_doc = approvals.get(
-                snapshot.base, sid,
-                overview=snapshot.overview, code=snapshot.code,
-                include_spawns=False, operator_projection=True)
-            lane = _lane_from_snapshot(snapshot, approval_doc)
-            yield snapshot.overview, _frontier_view(lane, approval_doc)
+            lane = _lane_from_snapshot(snapshot)
+            yield snapshot.overview, _frontier_view(lane)
             _require_snapshot_current(snapshot)
 
 

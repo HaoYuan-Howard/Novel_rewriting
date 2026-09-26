@@ -1,60 +1,49 @@
 # Stage2 局部架构
 
-本文件维护 Stage2 的局部不变量与目录约束。跨 Stage 硬闸见根 `AGENTS.md` 的 I-\* / S-\*；
-产品行为与 R 编号见 `docs/BACKEND_CONTRACT.md`；字段形状见 `docs/schema/stage2.md` 与
-`contracts/schema/`。不复制根不变量全文。
+本文件维护 Stage2（STR-06 新链）的局部不变量与目录约束。跨 Stage 硬闸见根
+`AGENTS.md` 的 I-\* / S-\*；产品行为与 R 编号见 `docs/BACKEND_CONTRACT.md`；字段
+形状见 `docs/schema/` 与 `contracts/schema/`。不复制根不变量全文。
 
-心智公式：LLM = understand → Resolver = reconcile（仅必要时）→ Compiler = normalize →
-Canonical = truth → Projection = expose → Validator = enforce。
+⚠ F8c（2026-09-25）：本包由 STR-06 迁移包的 Stage2 两个 owner
+分流重建，**不是旧 Stage2 链的回流**（旧链整层已退役，只读拒识为
+`legacy_incompatible`）。目录形状按新链 owner 重写，不复用旧包的
+`analyze/characters/knowledge/blueprint/shared` 分层。
+
+心智公式：LLM = understand → Compiler = normalize → Canonical = truth →
+Projection = expose → Validator = enforce。
 
 ## 局部不变量（S2-\*）
 
 | 编号 | 规则 |
 |---|---|
-| S2-1 | Stage2 的外部业务真相只有已登记的正式 artifact。中间 candidate / semantic payload / recovery state 均不是下游 API。 |
-| S2-2 | LLM 只负责语义购买；不得直接写正式 artifact。Characters 与 Global 共享一次 analyze 购买，但拥有独立的 compile / INVALID / edit / recovery 生命周期。 |
-| S2-3 | Compiler 只做确定性转换：ID、ref、anchor、closed-set binding、normalization、projection。禁止补猜语义。 |
-| S2-4 | 跨单元 reconcile 只在真实需要时存在。当前 Blueprint continuity 为 0-LLM；不得为架构对称制造空 Resolver。 |
-| S2-5 | Projection 是 canonical artifact 的只读派生视图，不得反写 truth，也不得形成第二真相源。 |
-| S2-6 | 已购买响应的 parse / wire / schema-shape 问题不得触发 paid resample。优先 deterministic recovery / typed repair；无法合法恢复则 INVALID，不得以重新购买掩盖契约或编译器缺陷。validator 本身不得修改 artifact。 |
-| S2-7 | Blueprint 付费 chapter semantic extraction 不依赖前章 continuity，因此必须允许并行。章请求仍读取本章 source evidence 与 Characters/Global 的只读 projection，`entry continuity = ∅`（empty state dependency，非 empty context）。跨章 dependency 仅允许存在于 0-LLM continuity；Compile 消费 continuity 结果，是否串行由数据依赖决定。 |
-| S2-8 | Stage2 只产出 artifact、projection 与机械证明。是否进入下一节点由 orchestrator 决定。 |
+| S2-1 | Stage2 的外部业务真相只有已登记的正式 artifact（`contracts/artifacts.py::ARTIFACT_PATHS` 的 `stage2/**` 键）。中间 wire／snapshot／recovery 状态都不是下游 API。 |
+| S2-2 | LLM 只负责语义购买；不得直接写正式 artifact。付费响应的 parse／shape 问题走免费修复，不得重新购买掩盖契约或编译器缺陷。 |
+| S2-3 | Compiler 只做确定性转换：ID、ref、anchor、closed-set binding、normalization、projection。禁止补猜语义（I-20／I-21）。 |
+| S2-4 | Projection 是 canonical artifact 的只读派生视图，不得反写 truth，也不得形成第二真相源（I-16）。 |
+| S2-5 | 源抽取的 core 与章 Blueprint 落为正式派生产物（`stage2/compiled/book_extraction.json`、`stage2/blueprints/chapter_blueprints.json`）：下游 owner 的单节点输入从盘面闭合，不靠内存传递。 |
+| S2-6 | Stage2 只产出 artifact、projection 与机械证明。是否进入下一节点由 orchestrator 决定；producer／compile 不得顺手启动下游节点。 |
 
 ## 目录约束
 
-外层按 owner 切分：
-
 ```text
 stage2/
-  analyze/      # 联合语义购买与双侧 draft custody
-  characters/   # 人物 owner：compile / edit / checks / projection 发布
-  knowledge/    # 知识 owner（产品节点 stage2.global；包名避 Python 关键字）
-  blueprint/    # 剧情 owner：章语义 / continuity / compile / checks / recovery
-  shared/       # 多 owner 无状态原语
+  source.py  # stage2.source owner：book＋chNN 语义抽取、Blueprint 编译、证据折叠
+  names.py   # stage2.names owner：源名称结构窄调用并发布 Characters v4
 ```
 
 - 正式 schema 只在 `contracts/schema/`（及 `docs/schema/`）；stage2 不复制 schema truth。
-- `shared/` 准入：被 ≥2 个 Stage2 owner 使用，且自身不拥有业务状态。
-  - 可进：evidence 原语、paragraph addressing、ref helpers、locator normalize。
-  - 禁进：characters 专属 rebind、blueprint continuity、knowledge 专属业务编译。
-- 不为对称铺 `semantic/` / `resolve/` / `canonical/` 空目录树；公式落在各 owner 内部模块。
-
-## Admission 边界
-
-- Stage2 产出机械事实与证明（产物可读、检查通过、projection 可用等）。
-- `novel/orchestrator/mechanical_admission.py` 消费这些证明并决定是否启动下一节点。
-- producer / compile 不得顺手启动下游节点。
+- 跨 stage 共用的确定性原语（字面扫描、机械判定、prompt 组装、场景投影、阅读界面
+  渲染）住 `novel/stages/common.py`，不在本包复制第二份。
+- 薄编排与设施装配住 `novel/stages/chain.py`；本包不 import `novel.llm`／
+  `novel.store`／`novel.orchestrator`（守卫见 `tests/test_str06_invariants.py`）。
+- 不为对称铺空目录树；公式落在各 owner 内部模块。
 
 ## 现役公开面
 
-| Owner | 权威 path |
-|---|---|
-| blueprint | `novel/stages/stage2/blueprint/`（生产臂 `producer.py`） |
-| analyze | `novel/stages/stage2/analyze/`（`purchase` / `recovery` / `draft_recovery`） |
-| characters | `novel/stages/stage2/characters/`（`registry` / `checks` / `rebind`；v3 试点 `candidates` / `compile_v3`，见 STR-03-S2-CH） |
-| knowledge | `novel/stages/stage2/knowledge/`（产品 `stage2.global`；生产臂 `producer.py`） |
-| shared | `novel/stages/stage2/shared/`（`paragraphs` / `character_refs` / `core_evidence` / `normalize` / `evidence_candidates` / `materialize`） |
-| 双臂 CLI 面 | `novel/stages/stage2/extract.py`（只转发 knowledge+blueprint producer，无业务实现） |
+| Owner | 权威 path | 节点 |
+|---|---|---|
+| source | `novel/stages/stage2/source.py` | `str06.stage2.source` |
+| names | `novel/stages/stage2/names.py` | `str06.stage2.names` |
 
-下游跨 Stage 应优先消费正式 artifact 与登记投影，禁止依赖 semantic / recovery
-中间态（S2-1）。
+下游跨 Stage 应优先消费正式 artifact 与登记投影，禁止依赖 wire／snapshot 中间态
+（S2-1）。

@@ -1,28 +1,31 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""novel.stages.stage7 —— 人名替换与成书。**全链最后一层，唯一产出交付物的一层。**
+"""novel.stages.stage7 —— STR-06 新链 Stage7：命名与成书装配。
 
-【本层与前面几层的四处形状差异，都是承重的】
+【本地块】
+  · `naming.py`   NameMap v5 赋值与确定性替换／残留硬闸（`str06.stage7.naming`）。
+  · `assembly.py` 改名替换与成书装配：TXT 先落盘、manifest 最后提交
+                  （`str06.stage7.assemble`）。
 
-**① 模型只写两个键。** 响应只有 `surname_map` 与 `characters[]`，产物里另外那些顶层键
-——`subs` / `kept` / `applied` / `residual` / `baselines` / `book` / `book_txt`……
-**一个字都不经模型**。正文字节由 `subs.apply_subs` 单次扫描搬运，**模型连正文都看不到**。
-⇒ 本层的零消费审计比前几层可靠：下发材料由 `prompts.build_material` 从 registry 现造，
-它**不读 `name_map` 的任何一个字段**。
-
-**② 中文没有词边界 —— 这是本节点全部的风险，也是三道防线的由来。**
-保留项进 alternation 当恒等条目（`结构`，`R-10.3`）· 称呼最短 2 字（`R-10.3c`）·
-多主称呼一律否决（`R-10.3d`）。**第一道必须是结构性的**：某本 `char_011` 唯一的称呼是
-单字「姐」，而「姐姐」在成稿里有 4 处——「姐」是**单主**，多主那道抓不到它，
-只剩一道**词表**防线。把「姐姐」编进正则，这件事就与词表判得准不准无关了。
-
-**③ 一个 stage 三个节点**（`stage7.rename` / `stage7.approve` / `stage7.assemble`），
-本仓第一个这样的层。CLI 派发按 **stage** 分，节点由 `ctx.node` 带着。
-
-**④ 判据一条都不上移到载体，而理由是【两个叠加】。** stage5 是「重试太贵」、
-stage6 是「自救太便宜」——本层**两条同时成立**：拒收 ⇒ 本层唯一那次付费调用整个作废；
-而 `--apply-edit` 收完整决策集，人直接改对，0 成本。
-⇒ 与 stage4 相反，本层**不给响应侧开 `extra='forbid'`**（模型多写一个键不会坏事，
-`build_name_map` 只挑它认识的键），**但不许静默**——多出来的键要报一行。
-⚠ 唯一该归载体的是**人写的编辑文件**（`NameMapEdit`）：拒收的代价是人改一行。
+【包级公开面】跨 stage 只许 `from novel.stages.stage7 import X`；深路径 import
+本包内部模块一律禁止（守卫见
+`tests/test_layering.py::test_cross_stage_imports_stay_on_the_package_surface`）。
+本包经 `novel.stages.stage5` 的公开面消费篇幅口径与前文拼接。
 """
+from __future__ import annotations
+
+from novel.stages.stage7.assembly import (
+    BodyAccess, DeliveryOutcome, assemble_delivery, build_delivery_manifest,
+    chapter_access, delivery_identity, verify_chapter_chain,
+)
+from novel.stages.stage7.naming import (
+    NAMING_VALIDATOR_VERSION, apply_names, check_residual, compile_name_map,
+    compile_surface_replacements, diff_proof, naming_projection,
+)
+
+__all__ = [
+    'BodyAccess', 'DeliveryOutcome', 'NAMING_VALIDATOR_VERSION', 'apply_names',
+    'assemble_delivery', 'build_delivery_manifest', 'chapter_access',
+    'check_residual', 'compile_name_map', 'compile_surface_replacements',
+    'delivery_identity', 'diff_proof', 'naming_projection', 'verify_chapter_chain',
+]

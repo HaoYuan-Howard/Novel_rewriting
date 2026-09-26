@@ -1,10 +1,24 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Agent 进程结束后的交付终验。
+"""Agent 进程结束后的交付终验（旧链合格判定已随旧链退役）。
 
-这不是另一个流水线节点，也不读取 agent 的自然语言日志。它只从当前注册产物、
-Stage2 typed 决策、待办视图和可下载成书重新得出结论。
-CLI、下载与自动收尾共用同一读面；没有报告生成或报告存在性要求。
+【现状（F8c）】旧链的交付合格判定——Stage2 Blueprint 时效、Stage4 机械准入、
+`stage7.assemble` 成书读取、待办阻塞/披露面——随旧 Stage2/4/5/7 链整体退役。
+新链的就绪判定内化在 `novel/stages/stage7/assembly.py::run_assemble`：章回执链、
+Hook 回执与改名残留都在组装节点闭验，就绪记录落
+`stage7/final/delivery_manifest.json`（文件先落盘、manifest 最后提交），由
+`novel/views/str06.py::delivery_view` 经
+`GET /api/str06/candidates/{candidate}/delivery` 只读核对。
+
+【本模块还剩什么】`assess` 保留代码指纹同一性证明（started 事件 vs 当前指纹）
+与显式收口：判定不了时说 `unknown`，绝不倒成 `ready`。旧链坐标（`base`+`sid`
+的书目录）定位不到候选根，也不再有旧链成书可读；在 agent 终验改到新链坐标
+（候选根 + delivery manifest）之前，本模块只如实回答「无法证明本次跑可交付」，
+不把未知洗成通过（I-42）。
+
+⚠ 这不是另一个流水线节点，也不读取 agent 的自然语言日志；CLI、下载与自动
+收尾共用同一读面。`read_deliverable_book` 与 `main` 的入口形状保持不变，供
+agent 代跑终验（`novel/orchestrator/agent.py`）在切换期间的调用契约不破。
 """
 from __future__ import annotations
 
@@ -14,17 +28,15 @@ import time
 from pathlib import Path
 
 from contracts.schema.orchestration import AgentDeliveryOutcome
-from contracts.schema.stage2 import ChapterBlueprints
-from contracts.artifacts import STAGE2_CHAPTER_BLUEPRINTS
-from novel import paths, prov
-from novel.errors import ArtifactUnreadable, TerminalState
-from novel.orchestrator import mechanical_admission as admission
-from novel.orchestrator.state import readonly_ctx
-from novel.orchestrator.inspection import read_surface_seal
+from novel import prov
+from novel.errors import UpstreamUnproven
 from novel.prov import CODE_UNKNOWN
-from novel.stages.stage7 import assemble
-from novel.store import ArtifactStore
-from novel.orchestrator.inbox_projection import inbox_view
+
+#: 旧链交付判定退役后的统一原因：新链就绪记录在候选根的 delivery manifest。
+_RETIRED_DELIVERY_REASON = (
+    '旧链交付合格判定随旧链退役；新链就绪记录是 str06.stage7.assemble 写的 '
+    'stage7/final/delivery_manifest.json，经 '
+    'GET /api/str06/candidates/{candidate}/delivery 只读核对')
 
 
 def _outcome(state: str, reason: str) -> AgentDeliveryOutcome:
@@ -49,86 +61,19 @@ def assess(base: str | Path, sid: str, *, start_code_version: str | None,
         return _outcome(
             'stopped',
             f'运行期间代码指纹变化：start={start_code_version}，end={current_code}')
-
-    try:
-        _text, outcome = _current_delivery(base, sid, current_code)
-        return outcome
-    except (ArtifactUnreadable, TerminalState, OSError, ValueError) as exc:
-        return _outcome('stopped', f'交付条件未满足：{type(exc).__name__}: {exc}')
-    except Exception as exc:  # noqa: BLE001 —— 终验自己失败不能冒充产品失败或成功
-        return _outcome('unknown', f'交付终验无法完成：{type(exc).__name__}: {exc}')
-
-
-def _current_delivery(base: str | Path, sid: str, current_code: str
-                      ) -> tuple[str | None, AgentDeliveryOutcome]:
-    before = read_surface_seal(base, sid)
-    text, outcome = _read_delivery(base, sid, current_code)
-    if read_surface_seal(base, sid) != before or prov.code_version() != current_code:
-        raise ArtifactUnreadable('交付校验期间代码、产物或审批变化；请刷新重验')
-    return text, outcome
-
-
-def _read_delivery(base: str | Path, sid: str, current_code: str
-                   ) -> tuple[str | None, AgentDeliveryOutcome]:
-    novel_dir = paths.resolve_novel_dir(base, sid)
-    blueprint_store = ArtifactStore(readonly_ctx(
-        novel_dir, 'stage2.blueprint', current_code))
-    blueprint_store.read_own(
-        ChapterBlueprints, STAGE2_CHAPTER_BLUEPRINTS,
-        require_current=True)
-    # Stage2 语义审阅已退役：交付只要求统一机械准入通过；语义结论不再宣称
-    # “blocking 面全 PASS”，而是如实披露 Stage2 语义未审。
-    gate = admission.stage4_ready(base, sid)
-    if not gate.ok:
-        return None, _outcome(
-            'stopped',
-            f'Stage2 机械准入未通过：{"; ".join(gate.blocking)}')
-
-    book_ctx = readonly_ctx(novel_dir, 'stage7.assemble', current_code)
-    text = assemble.read_current_book(book_ctx)
-
-    # 交付终验：机械准入已在 assemble 闸内复验；此处再钉 basis 取值面与
-    # Q-13 披露分层——ready_with_disclosures 只装质量类（verification /
-    # human_only / semantic_unreviewed），完整性 unknown 不得经披露绕过。
-    inbox = inbox_view(base, sid)
-    blocking = [item for item in inbox.items if item.delivery_effect == 'blocking']
-    if blocking:
-        sample = '；'.join(f'{item.stage}/{item.kind}/{item.rule}'
-                          for item in blocking[:5])
-        return None, _outcome(
-            'stopped', f'仍有 {len(blocking)} 条交付阻塞待办：{sample}')
-    disclosures = [
-        item for item in inbox.items if item.delivery_effect == 'disclosure'
-    ]
-    if gate.semantic_unreviewed or disclosures:
-        parts: list[str] = []
-        if gate.semantic_unreviewed:
-            parts.append(admission.SEMANTIC_UNREVIEWED_NOTE)
-            if gate.disclosures:
-                parts.append('; '.join(gate.disclosures))
-        if disclosures:
-            parts.append(
-                f'另有 {len(disclosures)} 条质量类披露'
-                f'（verification/human_only 等，不挡下载）')
-        return text, _outcome(
-            'ready_with_disclosures',
-            '成书与机械准入均通过；' + '；'.join(parts))
-    return text, _outcome(
-        'ready',
-        '成书当前可下载、无质量披露余额')
+    return _outcome('unknown', _RETIRED_DELIVERY_REASON)
 
 
 def read_deliverable_book(base: str | Path, sid: str) -> str:
     """下载共用交付判定，异常继续使用原 typed 恢复协议。"""
-    from novel.errors import BlockingFindingsUnresolved, UpstreamUnproven
+    from novel.errors import BlockingFindingsUnresolved
 
     code = prov.code_version()
     if code == CODE_UNKNOWN:
         raise UpstreamUnproven('代码身份不可用，无法证明当前交付')
-    text, outcome = _current_delivery(base, sid, code)
-    if outcome.state not in ('ready', 'ready_with_disclosures') or text is None:
-        raise BlockingFindingsUnresolved(outcome.reason, rules=[], hint='查看待办并完成对应恢复后重验')
-    return text
+    raise BlockingFindingsUnresolved(
+        _RETIRED_DELIVERY_REASON, rules=[],
+        hint='新链成书就绪核对见 GET /api/str06/candidates/{candidate}/delivery')
 
 
 def main(argv: list[str] | None = None) -> int:

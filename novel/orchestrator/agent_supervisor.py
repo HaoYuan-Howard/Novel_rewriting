@@ -27,7 +27,6 @@ from contracts.schema.api import OperatorNext, OperatorNode
 from contracts.schema.orchestration import (
     AgentDeliveryOutcome, AgentRunEvent, AgentRunExitOrigin, ExecutionEpoch,
 )
-from novel.orchestrator import queue
 from novel.orchestrator.jobs import JobConflict
 
 
@@ -38,8 +37,7 @@ class PrelaunchIdentityDrift(RuntimeError):
 def range_boundary_reason(current: OperatorNext, boundary: OperatorNode) -> str | None:
     """按登记工作流与实际动作 owner 守排他上界，返修不按发现问题的下游位置猜。
 
-    联合首抽会物化两侧，不能借其较早的编排名跨过 Characters/Global 上界。
-    Stage0 edit 仍修改剔除 revision，使用该产物 owner 的位置；未知闭拒。
+    联合首抽会物化两侧，不能借其较早的编排名跨过上游上界；未知闭拒。
     """
     rank = {node: index for index, node in enumerate(PIPELINE_STEPS)}
     if boundary not in rank or set(rank) != set(NODES):
@@ -50,15 +48,17 @@ def range_boundary_reason(current: OperatorNext, boundary: OperatorNode) -> str 
     if node not in rank:
         return f'本次范围边界为 {boundary}；当前动作 owner 未登记，停止并排空'
     # blocked.node 是被挡住的下游，尚不是本轮动作的裁决属主。
-    # 复用唯一的 blocker→owner 登记，让 Global 在 Blueprint 上界前完成裁决；
-    # 不能因为“Blueprint 正等待 Global”就把 Global 的接受也截掉。
+    # 复用唯一的 blocker→owner 登记，让上游在更晚层的上界前完成裁决；
+    # 不能因为“下游正等待上游”就把上游的处置也截掉。
     if current.state == 'blocked':
         waiting_on = getattr(current.action, 'waiting_on', None)
         review_owner = approval_work_unit(waiting_on) if isinstance(waiting_on, str) else None
         if review_owner is not None:
             node = review_owner[0]
-    owners = (NODES[node].lifecycle.repair_owners if node == 'stage2.analyze'
-              else ('stage0.remove',) if node == 'stage0.edit' else (node,))
+    # ⚠ F8c：旧链 `stage2.analyze` 的 repair_owners 展开与 `stage0.edit` 的
+    # 产物 owner 改派随两节点退役；现役每个动作的 owner 就是它自己
+    # （`NODES[node].lifecycle.repair_owners` 亦为 (node,)）。
+    owners = (NODES[node].lifecycle.repair_owners if node in NODES else (node,))
     if not owners or any(owner not in rank for owner in owners):
         return f'本次范围边界为 {boundary}；当前动作物化归属未知，停止并排空'
     if max(rank[owner] for owner in owners) >= rank[boundary] or node == boundary:
@@ -176,8 +176,12 @@ def _human_gate_turn(waiting_on: str) -> ExecutionTurnResult:
 
     - ``approval:*``：编排 bug（闸已退役却仍发出）→ failed
     - ``human:*`` / ``inbox:*`` / ``resume:*``：精确故障话术 → stopped
-    - 其余（含 Stage5 机械闭合等）：保留可续跑指引 → stopped
+    - 其余：保留可续跑指引 → stopped
     pause/stop 不经本函数。
+
+    ⚠ F8c：Stage5 机械闭合闸（`WAITING_ON_STAGE5_CLOSURE`）与 stage5.review
+    收敛账随旧链退役，其专属话术分支一并删除；更早层的等待面统一走
+    ``human:``/``inbox:``/``resume:`` 前缀与末尾兜底。
     """
     if waiting_on.startswith('approval:'):
         return ExecutionTurnResult(
@@ -188,12 +192,7 @@ def _human_gate_turn(waiting_on: str) -> ExecutionTurnResult:
                 reason=(
                     f'编排错误：现役队列不应再发出已退役审批闸 `{waiting_on}`；'
                     '请修复调度后再跑')))
-    if waiting_on == queue.WAITING_ON_STAGE5_CLOSURE:
-        reason = (
-            f'停在 Stage5 机械闭合闸：{waiting_on}；工作包仍有正文阻断'
-            '（缺章/.INVALID/阻断级判定），先按各恢复面收口并零成本重跑 '
-            'stage5.review，机械闭合回执会自动落账')
-    elif waiting_on.startswith('human:'):
+    if waiting_on.startswith('human:'):
         reason = (
             f'停在人工恢复面：{waiting_on}；按该 blocker 对应的 typed 恢复'
             '入口收口后用原配置续跑（不是 Stage 页审批闸）')

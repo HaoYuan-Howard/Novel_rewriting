@@ -1,9 +1,22 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""0 成本重算 Stage5 文风漂移基线；只读取显式 ``--base``，不探测旁仓。
+"""0 成本重算新链 Stage5 正文风格基线；只读取显式 ``--base``，不探测旁仓。
 
-输出分 calibration / validation 两半，并同时报告源文体裁分布、canonical 成稿的效应量、
-漂移命中率和真实修订对的内容回归。它不改阈值；阈值变更必须基于输出另行评审。
+【F8a 换新链坐标后收窄为纯确定性标定】
+输入换成新链落点：源文读 ``stage1/main_text.json``（MainText），逐章正文读
+``stage5/body/ch{nn}.txt``（改名前 canonical 正文，字节形态产物）。旧链的
+``stage5/chNN.json``（Chapter 的 warns/errs/rule id/overlap 字段）、``stage5``
+review 轮次归档（``_rounds/ch*.r*.json``）与 ``checks.trim_regressions``
+修订对随正文 Judge 与人工 review 面一并退役（F7e 登记，旧盘只读拒识为
+``legacy_incompatible``）⇒ 修订对（revision_pairs）与判据命中面
+（rule_hits/blocking_chapters）在本链没有对应物，整面删除，不伪造空读数。
+
+输出只剩两半：calibration / validation 对半拆分（sha256 目录名定线，
+确定性、可复跑），以及源文体裁分布与 canonical 成稿的效应量（引语保留、
+段落/句长比值、破折号与短串密度）。它不改阈值；阈值变更必须基于输出另行评审。
+
+⚠ 本工具**不再有注册判据面**：旧 RULES 风格判据 id 已随判据表退役，
+``tests/test_style_calibration.py`` 钉住「旧风格判据不得在现役注册表复活」。
 """
 from __future__ import annotations
 
@@ -16,25 +29,15 @@ import statistics
 from pathlib import Path
 from typing import Any, Iterable
 
-from pydantic import ValidationError
-
-from contracts.schema import ArtifactVersionError, decode_artifact
+from contracts.schema import decode_artifact
 from contracts.schema.stage1 import MainText
-from contracts.schema.stage5 import Chapter
 from novel import paths
 from novel.core.measure import measure
 from novel.core.style import dash_per_1k, short_run_per_1k
 from novel.core.text import quote_count
-from novel.errors import ArtifactUnreadable, TerminalState, UpstreamMissing
-from novel.orchestrator.state import readonly_ctx
-from novel.stages.stage5 import checks, review
-from novel.store import ArtifactStore
 
-RULES = (
-    'dialogue_fewer', 'dialogue_broken',
-    'dialogue_ratio_drift', 'band_drift', 'para_len_drift',
-    'layout_drift', 'short_run_report',
-)
+#: 新链逐章正文（字节形态产物；章号两位补零，可超两位）。
+_BODY_RE = re.compile(r'ch(\d+)\.txt')
 
 
 def _json(path: Path, rel: str) -> Any:
@@ -60,14 +63,6 @@ def _median(values: Iterable[float]) -> float | None:
     return round(statistics.median(xs), 4) if xs else None
 
 
-def _rule_ids(chapter: Chapter) -> list[str]:
-    out: list[str] = []
-    for line in [*chapter.warns, *(chapter.errs or [])]:
-        if line.startswith('[') and ']' in line:
-            out.append(line[1:line.index(']')])
-    return out
-
-
 def _split(names: list[str]) -> dict[str, str]:
     split = {
         name: ('validation' if int(hashlib.sha256(name.encode('utf-8')).hexdigest()[:8], 16) % 5 == 0
@@ -82,52 +77,21 @@ def _split(names: list[str]) -> dict[str, str]:
     return split
 
 
-def _revision_pairs(novel_dir: Path, live: dict[int, Chapter]) -> list[dict[str, Any]]:
-    try:
-        ctx = readonly_ctx(novel_dir, 'stage5.review', 'style-calibration')
-        book = review.load_book(ctx, ArtifactStore(ctx))
-    except (ArtifactUnreadable, ArtifactVersionError, TerminalState,
-            UpstreamMissing, ValidationError):
-        # 旧书缺上游时，主基线仍可读；修订对明确为空，不伪造。
-        return []
-    out: list[dict[str, Any]] = []
-    rounds = novel_dir / 'stage5' / '_rounds'
-    if not rounds.is_dir():
-        return out
-    for archived_path in sorted(rounds.glob('ch*.r*.json')):
-        match = re.fullmatch(r'ch(\d+)\.r(\d+)\.json', archived_path.name)
+def _body_chapters(novel_dir: Path) -> dict[int, str]:
+    """新链逐章正文：`stage5/body/ch{nn}.txt` -> `{章号: 正文}。
+
+    章号恒等于源章号（`I-40`），正文是改名前 canonical 稿；没有回执也可读
+    （本工具只做文本度量，不回读回执）。
+    """
+    directory = novel_dir / 'stage5' / 'body'
+    if not directory.is_dir():
+        return {}
+    out: dict[int, str] = {}
+    for path in sorted(directory.glob('ch[0-9]*.txt')):
+        match = _BODY_RE.fullmatch(path.name)
         if match is None:
             continue
-        ordinal, round_no = int(match.group(1)), int(match.group(2))
-        current = live.get(ordinal)
-        entry = book.chapters.get(ordinal)
-        if current is None or entry is None:
-            continue
-        rel = f'stage5/_rounds/{archived_path.name}'
-        previous = Chapter.model_validate(_json(archived_path, rel))
-        before = measure(previous.text)
-        after = measure(current.text)
-        regressions = checks.trim_regressions(previous.text, current.text, entry, book)
-        out.append({
-            'chapter': ordinal,
-            'archived_round': round_no,
-            'origin': getattr(current.provenance, 'origin', None),
-            'content_regressions': regressions,
-            'style': {
-                'dialogue_ratio': [
-                    None if before is None else before.dialogue_ratio,
-                    None if after is None else after.dialogue_ratio,
-                ],
-                'avg_paragraph_chars': [
-                    None if before is None else before.avg_paragraph_chars,
-                    None if after is None else after.avg_paragraph_chars,
-                ],
-                'avg_sentence_chars': [
-                    None if before is None else before.avg_sentence_chars,
-                    None if after is None else after.avg_sentence_chars,
-                ],
-            },
-        })
+        out[int(match.group(1))] = path.read_text(encoding='utf-8')
     return out
 
 
@@ -137,7 +101,6 @@ def analyze(base: Path) -> dict[str, Any]:
     names = [directory.name for directory in novel_dirs]
     split_of = _split(names)
     books: list[dict[str, Any]] = []
-    revisions: list[dict[str, Any]] = []
 
     for novel_dir in novel_dirs:
         main_rel = 'stage1/main_text.json'
@@ -145,23 +108,15 @@ def analyze(base: Path) -> dict[str, Any]:
         source_by_chapter = {row.chapter_ordinal: row.text for row in main.root}
         source = '\n'.join(row.text for row in main.root)
         source_measure = measure(source)
-        live: dict[int, Chapter] = {}
         drafts: list[dict[str, Any]] = []
-        directory = novel_dir / 'stage5'
-        for path in sorted(directory.glob('ch[0-9]*.json')):
-            if re.fullmatch(r'ch\d+\.json', path.name) is None:
-                continue
-            rel = f'stage5/{path.name}'
-            chapter = Chapter.model_validate(_json(path, rel))
-            live[chapter.output_ordinal] = chapter
-            source_chapter = ''.join(
-                source_by_chapter.get(value, '') for value in chapter.from_source_ordinals)
+        for ordinal, text in sorted(_body_chapters(novel_dir).items()):
+            source_chapter = source_by_chapter.get(ordinal, '')
             src_measure = measure(source_chapter)
-            got_measure = measure(chapter.text)
+            got_measure = measure(text)
             src_quotes = quote_count(source_chapter)
-            got_quotes = quote_count(chapter.text)
+            got_quotes = quote_count(text)
             drafts.append({
-                'chapter': chapter.output_ordinal,
+                'chapter': ordinal,
                 'quote_preservation': (round(got_quotes / src_quotes, 4)
                                        if src_quotes else None),
                 'paragraph_ratio': (
@@ -170,13 +125,7 @@ def analyze(base: Path) -> dict[str, Any]:
                 'sentence_ratio': (
                     round(got_measure.avg_sentence_chars / src_measure.avg_sentence_chars, 4)
                     if got_measure and src_measure and src_measure.avg_sentence_chars else None),
-                'overlap_excl_verbatim': chapter.overlap_excl_verbatim,
-                'rules': _rule_ids(chapter),
-                'has_blocking_error': bool(chapter.errs),
             })
-        revisions.extend(
-            {'book': novel_dir.name, 'split': split_of[novel_dir.name], **row}
-            for row in _revision_pairs(novel_dir, live))
         books.append({
             'book': novel_dir.name,
             'split': split_of[novel_dir.name],
@@ -209,9 +158,6 @@ def analyze(base: Path) -> dict[str, Any]:
             'median_sentence_ratio': _median(
                 row['sentence_ratio'] for row in draft_rows
                 if row['sentence_ratio'] is not None),
-            'blocking_chapters': sum(row['has_blocking_error'] for row in draft_rows),
-            'rule_hits': {
-                rule: sum(rule in row['rules'] for row in draft_rows) for rule in RULES},
         }
         summaries[split] = {
             'books': len(chosen),
@@ -224,19 +170,11 @@ def analyze(base: Path) -> dict[str, Any]:
         }
 
     return {
-        'schema_version': 2,
+        'schema_version': 3,
         'base': str(base.resolve()),
         'split_rule': 'sha256(dirname) mod 5 == 0; 小样本无 validation 时最后一本回退为 validation',
         'books': books,
         'summaries': summaries,
-        'revision_pairs': revisions,
-        'decision': {
-            'layout_drift': '纯换行、不改字，UNIQUE，可进定向修订',
-            'dialogue_fewer/dialogue_ratio_drift/band_drift/para_len_drift':
-                '自由度高，保持 INFO 并转人工；不得默认付费反哺',
-            'short_run_report': '保持 metric；体裁 p95 只作参照，不升告警',
-            'revision_guard': '任何付费修订都先过 trim_regressions；退化只重采样一次，仍退化则保留旧稿',
-        },
     }
 
 

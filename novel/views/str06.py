@@ -22,7 +22,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from contracts.schema.str06.api import (
+from contracts.schema.api import (
     Str06BlueprintBeatView, Str06BlueprintChapterView, Str06BlueprintView,
     Str06CandidateList, Str06CandidateSummary, Str06ChapterReceiptView,
     Str06ChapterView, Str06CharacterView, Str06CharactersView,
@@ -33,12 +33,13 @@ from contracts.schema.str06.api import (
     Str06NameStructureView, Str06NamingEntryView, Str06NamingView, Str06NodeView,
     Str06RunView, Str06SurfaceWindowView,
 )
-from contracts.schema.str06.candidates import STR06_CANDIDATE_NODES
+from contracts.invariants import NODES
+from contracts.schema.workflow import candidate_node_owner
 from novel.errors import ArtifactUnreadable
 from novel.store import Str06Repository
 from novel.work_unit_usage import read_cost_snapshot
 
-#: 候选根内运行目录的固定名（tools/str06_workflow.py 的 `--run-dir` 约定；
+#: 候选根内运行目录的固定名（`novel/stages/chain.py::execute` 的 `--run-dir` 约定；
 #: 直接就是把书产物放在候选根下的旧布局也认，见 `_run_dir`）。
 RUN_DIRNAME = 'run'
 #: 候选 workflow 身份记录（候选根的身份标记）。
@@ -129,7 +130,7 @@ def _titled_files(run: Path, rel_pattern: str) -> list[Path]:
 
 def _node_produced(run: Path, node_id: str) -> bool:
     """节点产物在盘上吗（I/O 事实）：produces 里任一模式有落盘文件即真。"""
-    for rel in STR06_CANDIDATE_NODES[node_id].produces:
+    for rel in NODES[node_id].produces:
         if '{nn}' in rel:
             if _chapter_files(run, rel):
                 return True
@@ -431,9 +432,10 @@ def run_view(base: str | os.PathLike[str], candidate: str) -> Str06RunView:
     workflow = _inspect(run, WORKFLOW_REL) or {}
     epoch_payload = workflow.get('epoch') or {}
     nodes = tuple(
-        Str06NodeView(node=spec.node, stage=spec.stage, owner=spec.owner,
-                      paid=spec.paid, produced=_node_produced(run, spec.node))
-        for spec in STR06_CANDIDATE_NODES.values())
+        Str06NodeView(node=node_id, stage=spec.stage,
+                      owner=candidate_node_owner(node_id),
+                      paid=spec.paid, produced=_node_produced(run, node_id))
+        for node_id, spec in NODES.items() if node_id.startswith('str06.'))
     return Str06RunView(
         candidate=candidate, present=True,
         status=status.get('status'), failed_node=status.get('failed_node'),

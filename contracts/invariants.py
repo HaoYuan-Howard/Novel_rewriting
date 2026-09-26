@@ -1599,12 +1599,12 @@ STAGE5_EDIT_CONFIRMATIONS: Final = ('formal', 'working_draft')
 PARTIAL_REWRITE_FLAGS: Final = ()
 
 #: 带值 flag：值说的是「这个值是什么」。F8a 后收录新链工具驱动
-#: （`tools/str06_workflow.py`）的入口级取值旗标——它们进 argv，因此
+#: （`novel/stages/chain.py`）的入口级取值旗标——它们进 argv，因此
 #: `flag_tokens` 必须知道值不是旗标；节点级旗标仍只有 `--check-only`。
 REQUIRED_PLACEHOLDER_PREFIX: Final = '待填·'
 
 VALUED_FLAGS: Final = {
-    # ⚠ F8A：本表收敛为**节点级**带值旗标。工具驱动（`tools/str06_workflow.py`）的
+    # ⚠ F8A：本表收敛为**节点级**带值旗标。工具驱动（`novel/stages/chain.py`）的
     # 入口级取值旗标（--node／--through／--run-dir／--wire-dir／--adopt-root／
     # --book-sid／--budget／--reasoning-effort…）由工具自己的 argparse 治理——
     # 它们不进节点 argv（编排经 `novel.cli run <node> <sid>` 派发），登记在这里
@@ -1644,10 +1644,15 @@ NODE_WRITE_EFFECTS: Final = {}
 # label、需求节、完成度和写入面都从本表派生，避免在多个消费者中手写平行清单。
 
 
+#: AgentRun 单步 operator 可登记的自动 REDO 策略（取值面，闭集）。
+#: ⚠ F8c 收敛：`stale_chapters`（旧 `stage5.write --chapters` 的章行导出）与
+#: `review`（Stage5 Review 轮次面）两个策略随旧链退役删除，其使用者（旧节点键）
+#: 已整体移入 `RETIRED_NODES`；现役 `NODES` 只登记 `canonical`。取值面随之收敛
+#: 为一项——多留一个没人登记的名字，就是给「猜一组 flags」留一道门（判据 32：
+#: 没人用的取值与没人查的约束同形）。将来确有两种合法重放参数时，先有消费者
+#: 再加名字，不为预留扩大闭集。
 OPERATOR_REDO_STRATEGIES: Final = (
     'canonical',          # 默认 flags 会完整重建本节点当前正式输出
-    'stale_chapters',     # 从 stale/missing 章行导出精确 ``--chapters``
-    'review',             # Stage5 Review 的 currentness 已由专用状态面回答
 )
 
 
@@ -1777,7 +1782,7 @@ class NodeSpec(NamedTuple):
 #: 这不是重复登记：**一层要哪几份**取的是本层各节点的并集。
 #: 全部作业单元。⚠ 顺序即处理链顺序，队列与断点续跑都按它排。
 #:
-#: 【F8a 翻转：候选链成为唯一现役链】本表由 `contracts/schema/str06/candidates.py`
+#: 【F8a 翻转：候选链成为唯一现役链】本表由 `contracts/schema/workflow.py`
 #: 的候选节点表**原样激活**（F7e 冻结基线，`tests/test_str06_f7e_freeze.py` 钉住）：
 #: 11 个 `str06.` 前缀节点取代旧 Stage2/4/5/6/7 全部 14 个节点键。旧键整体移入
 #: `RETIRED_NODES` 只供 append-only 作业历史解码，不 preview、不调度、不建新队列。
@@ -1812,7 +1817,7 @@ NODES: Final[dict[str, NodeSpec]] = {
                                  produces=(artifact_paths.STAGE1_MAIN_TEXT,
                                            artifact_paths.STAGE1_HOOK_COPY),
                                  operator_redo='canonical'),
-    # ── STR-06 新链（F8a 激活；owner runner 见 novel/stages/str06/runner.py）──
+    # ── STR-06 新链（F8a 激活；owner runner 见 novel/stages/chain.py）──
     # 恢复入口沿用候选生命周期：saved_response（本地已购行）、historical_adoption
     # （F7a 登记的跨根历史采用）、owner_patch（基线身份核验后的语义修复）、
     # chapter_prefix_replay（章前缀免费重放）、same_context_rewrite（同 Context

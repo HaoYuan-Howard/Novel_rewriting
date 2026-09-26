@@ -23,7 +23,6 @@ from contracts.invariants import (
     BOOK_CONTENT_CALL_CEILING_DEFAULT, NODES, RETIRED_APPROVAL_BINDINGS,
     RETIRED_NODES, approval_work_unit, approval_scope_allowed,
 )
-from contracts.schema.str06.candidates import STR06_CANDIDATE_NODES
 from contracts.schema.workflow import (
     BookBudgetGrantV1, BookContentBudgetV1, WorkflowManifestV6,
     WorkflowManifestV7, WorkflowManifestV8, WorkflowManifestV9, WorkUnitAttempt, WorkUnitBlobV1,
@@ -310,30 +309,22 @@ def _book_budget_path(base: str | os.PathLike[str], sid: str) -> Path:
 
 
 def node_lifecycle_spec(node: str):
-    """节点生命周期解析：现役 `NODES` 优先，未登记再查 STR-06 候选表（F7a）。
+    """节点生命周期解析：现役 `NODES` 唯一来源，未登记再查只读退役表。
 
-    【为什么正式设施要认候选身份】STR-06 隔离链的候选节点（`str06.*`）在 F8 前
-    不进现役 `NODES`，但它的付费内容调用必须落在**同一套**持久工作单元与整书
-    总闸上：另建一套候选预算账就是第二份真相源（I-17），两本账对不上的那天
-    没有任何机械判据能发现。因此这里只做身份解析、不做行为分支——候选节点
-    原样复用 `WorkUnitBudget` 的全部正式语义（未闭合轮拒绝、内容上限、总闸、
-    登记账、坏账关闭式拒绝）。候选表里 `executor_content_limit=0` 的免费节点
-    （compile／assemble）会被正式的角色闸直接拒绝建模，机械禁付。
+    【为什么不再回退候选表】STR-06 候选节点（`str06.*`）已在 F8a 激活进
+    `NODES`，付费内容调用始终落在**同一套**持久工作单元与整书总闸上——不建
+    第二份预算账（I-17）。原 F7a 的「现役表优先、未登记回退候选表」分支随
+    F8c 删除条件（STR-06-F8c）一并删除：候选表已不存在，未登记节点一律
+    `WorkUnitRefused`。
 
-    【删除条件】STR-06-F8c：候选定义激活进正式 `NODES` 后，本回退随候选表一起
-    删除，未登记节点一律 `WorkUnitRefused`（回到现役行为）。
-
-    返回 `NodeLifecycleSpec`（现役）或 `CandidateLifecycle`（候选）；两者都带
-    `unit_kind` 与 `executor_content_limit`，调用方只消费这两个字段。
+    返回 `NodeLifecycleSpec`（现役）或 `_RetiredNodeLifecycle`（退役只读解码）；
+    两者都带 `unit_kind` 与 `executor_content_limit`，调用方只消费这两个字段。
     """
     if node in NODES:
         spec = NODES[node].lifecycle
         if spec is None:
             raise WorkUnitRefused(f'现役节点未登记执行生命周期：{node}')
         return spec
-    candidate = STR06_CANDIDATE_NODES.get(node)
-    if candidate is not None:
-        return candidate.lifecycle
     if node in RETIRED_NODES:
         # ⚠ F8b-3：退役节点只服务存量书历史账的只读解码（Commander
         # read_only 路径）；`executor_content_limit=0` 让一切新建模

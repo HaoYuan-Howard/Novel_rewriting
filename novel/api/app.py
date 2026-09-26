@@ -33,8 +33,8 @@ from fastapi.staticfiles import StaticFiles
 from contracts.schema.api import ErrorBody
 from novel.api.errors import CSRF_REFUSED, status_of
 from novel.api.routes import (
-    agent, agent_capabilities, approvals, checks, edits, enums, ingest, jobs,
-    maintenance, novels, queues, run, screens, settings, str06,
+    agent, agent_capabilities, checks, edits, enums, ingest, jobs,
+    maintenance, novels, queues, run, settings, str06,
 )
 from novel.errors import NovelError
 from novel.output_root import require_active
@@ -71,7 +71,7 @@ UI_DIST = os.path.join(
     'web', 'dist')
 
 #: SPA 的入口文档。前端是 `BrowserRouter`（`web/src/main.tsx`），所以深链接刷新时
-#: 服务器收到的是 `/novels/<sid>/stage5` 这种路径——磁盘上没有对应文件，
+#: 服务器收到的是 `/str06/candidates/<name>` 这种路径——磁盘上没有对应文件，
 #: 必须把它交回同一份 `index.html`，由前端路由自己解析。
 UI_INDEX = 'index.html'
 
@@ -133,29 +133,6 @@ def _mount_ui(app: FastAPI, dist: str) -> None:
         return FileResponse(index)
 
 
-def _drain_pending_rebuilds(base: str) -> None:
-    """启动时消费各书未闭合的改选重建意图；失败不阻断服务起来。"""
-    import warnings
-
-    from novel import paths
-    from novel.orchestrator import rebuild
-    runs_root = paths.service_runs_dir(base)
-    if not runs_root.is_dir():
-        return
-    for book_dir in sorted(runs_root.iterdir()):
-        if not book_dir.is_dir():
-            continue
-        sid = book_dir.name
-        if not rebuild.pending_intents(base, sid):
-            continue
-        try:
-            rebuild.drain_with_jobs(base, sid)
-        except Exception as exc:  # noqa: BLE001 - 单书失败不拦其他书与服务
-            warnings.warn(
-                f'启动重建 reconcile 失败（sid={sid}）：{type(exc).__name__}: {exc}',
-                RuntimeWarning, stacklevel=2)
-
-
 def _drain_pending_upload_autostarts(base: str) -> None:
     """启动时消费未闭合的上传自动开跑意图；失败不阻断服务起来。"""
     import warnings
@@ -196,9 +173,6 @@ def create_app(base: str | os.PathLike[str],
         # creation.  Startup only resumes those frozen commands after job and
         # artifact reconciliation; it never creates a new paid plan.
         queue_runner.resume_incomplete(app.state.base)
-        # 改选重建意图的启动 reconcile（2026-09-15 全自动裁决）：崩溃留在
-        # requested 的意图在此续消费；只进确定性白名单节点，0 模型。
-        _drain_pending_rebuilds(app.state.base)
         # 上传自动开跑意图的启动 reconcile（R-11.28）：stage0 已成功但尚未
         # run_started 的意图在此补一次 agent.start；stage0 失败不开付费 run。
         _drain_pending_upload_autostarts(app.state.base)
@@ -265,7 +239,7 @@ def create_app(base: str | os.PathLike[str],
 
     for router in (
         enums.router, novels.router, checks.router, jobs.router, queues.router,
-        ingest.router, approvals.router, screens.router, edits.router,
+        ingest.router, edits.router,
         run.router, agent_capabilities.router, agent.router, settings.router,
         maintenance.router, str06.router,
     ):
