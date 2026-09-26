@@ -7,7 +7,10 @@
 
 **2026-09-24 重置**：STR-01～STR-05 退出活动面；仍有效的旧义务已合入本计划。
 完整原字节保存在 [重置前快照](archive/REQUIREMENTS_20260923_before_str06_reset.md.snapshot)，
-SHA-256：`c7c7c9b2ac08de5f59e2db0556c77f491ce52b872d66b4f9caba92a86d64bccc`。
+SHA-256：`58132800359d5ef6b98d39aad57c98657253cd37373b902400d7d587903a1bdc`
+（2026-09-26 复核值：对 Git 提交 blob 的原字节计算。此前登记的 `c7c7c9b2…` 与 blob
+字节（LF 行尾，git 规范化后）和工作树字节（CRLF 行尾，autocrlf 检出后）都不相等，
+从未核验通过，按“身份不符就如实更正”处置；内容完整性以单提交单 blob 为准）。
 快照只供历史检索，不作为另一份活动计划；旧编号只作来源索引，不能据归档宣称任务完成。
 
 ## 目标与范围
@@ -653,15 +656,16 @@ Character Continuity、Natural Progression、Local Prose Coherence；未评或�
 
 | 材料／入口 | 后续用途与限制 |
 |---|---|
-| `outputs/str06_repair_20260923/` | 当前 RC2 单书修订证据：前后 SHA manifest、独立 wires、owner 采用记录、28 场 Context、JUnit／replay；优先核对这一版 |
-| `outputs/str06_f2b_smoke_20260923_162444/` | Source Truth 历史基线；两类当时质量披露与 RC2 修复覆盖关系见快照 |
-| `outputs/str06_f3_smoke_20260923_171800/`、`outputs/str06_f4_dryrun_20260923_172702/` | RC1 Target／IR 历史基线，不能绕过 RC2 形状与实际输入身份验证 |
-| `outputs/str06_f3_smoke_20260923_165735/` | 首跑 Binding 场景成环反例；续跑换目录导致额外 2 次购买，禁止照搬 |
-| `outputs/review_stage4_c/` 的 taxonomy.md、labeled_assertions.json、judge_slim_report.json | F5 的 11 条 labeled 断言、误报／漏报、判据边界与原始报告；完整文件 SHA 在快照 |
-| `outputs/vnext_stage4_r1/`、`outputs/vnext_stage4_r2/`、`outputs/vnext_stage4_bbase/`、`outputs/vnext_probe_b2/` | 旧成文、冻结对照及窄 patch 案例，F8c 核对有效职责与证据接管后归档；均非当前 canonical |
-| `outputs/str06_f5e_body_20260924/run` | F5e 已完成的 RC4 隔离成书与恢复证据，原根只读；F7a 在独立候选根显式历史采用并核对原字节，F9 仍需正式入口与用户验收 |
-| `_tmp_vnext_guard.py`、`_tmp_vnext_judge_slim.py`、`_tmp_vnext_writer.py`、`_tmp_calib_under_spec.py` | 标定及反例资产，按新 contract 改写，不恢复旧架构、不作为现役执行入口 |
-| `_tmp_hook_v3.py`、`_tmp_stage7_v3.py` | F6 原型参考；先去单书假设，再证明真源／消费／恢复，不能直接转正 |
+| ~~`outputs/str06_repair_20260923/`~~ | **2026-09-26 已不在盘上**（未跟踪证据，清理临时产物时一并删除，未经 Git 保存，不可恢复）。原用途：RC2 单书修订证据（前后 SHA manifest、独立 wires、owner 采用记录、28 场 Context、JUnit／replay）。其有效职责已由现役反例承接（恢复/窄修复/回执链入口见下表 tests 行） |
+| ~~`outputs/str06_f2b_smoke_20260923_162444/`~~ | **2026-09-26 已不在盘上**（未跟踪，不可恢复）。原用途：Source Truth 历史基线；当时质量披露见重置前快照 |
+| ~~`outputs/str06_f3_smoke_20260923_171800/`、`outputs/str06_f4_dryrun_20260923_172702/`~~ | **2026-09-26 已不在盘上**（未跟踪，不可恢复）。原用途：RC1 Target／IR 历史基线；现行判据以 F8a 新坐标契约为准，不再核对旧形状 |
+| ~~`outputs/str06_f3_smoke_20260923_165735/`~~ | **2026-09-26 已不在盘上**（未跟踪，不可恢复）。原用途：首跑 Binding 成环反例；「续跑必须同 run 目录」的教训已进 LESSONS 与候选根身份机制 |
+| ~~`outputs/review_stage4_c/`~~ | **2026-09-26 已不在盘上**（未跟踪，不可恢复）。原用途：F5 的 11 条 labeled 断言与判据边界；labeled 断言已作为质量反例迁入现役测试面 |
+| ~~`outputs/vnext_stage4_r1/`、`outputs/vnext_stage4_r2/`、`outputs/vnext_stage4_bbase/`、`outputs/vnext_probe_b2/`~~ | **2026-09-26 已不在盘上**（未跟踪，不可恢复）。原用途：旧成文、冻结对照及窄 patch 案例；均非当前 canonical，F8c 后无接管义务 |
+| `outputs/str06_f5e_body_20260924/run` | **盘上仍在（只读）**：F5e 已完成的 RC4 隔离成书与恢复证据；F7a 起独立候选根显式历史采用并核对原字节，F9 的采用配方（`--wire-dir`/`--adopt-root`）以它为来源根 |
+| `outputs/str06_f7a_candidate_20260924/`、`outputs/str06_f7b_candidate_20260924/`、`outputs/str06_f7c_candidate_20260924/`、`outputs/str06_f7e_recheck_20260925/` | **盘上仍在（只读）**：F7a–F7e 候选根与采用台账；F7e recheck 根是 F9 零新购复现配方的复验来源（25 行 ledger 全 cached、成书与 F5e 逐字一致） |
+| ~~`_tmp_vnext_guard.py`、`_tmp_vnext_judge_slim.py`、`_tmp_vnext_writer.py`、`_tmp_calib_under_spec.py`~~ | **2026-09-26 已不在盘上**（未跟踪草稿，不可恢复）。原用途：标定及反例资产；其有效结论已固化进现役判据与测试（Guard M1–M6、Judge 边界知识见下方“必须保留的知识”） |
+| ~~`_tmp_hook_v3.py`、`_tmp_stage7_v3.py`~~ | **2026-09-26 已不在盘上**（未跟踪草稿，不可恢复）。原用途：F6 原型参考；原型结论已由 F6 现役实现（hook_design/hook_writer/naming/assembly）承载 |
 | `tests/test_str06_contracts.py`、`tests/test_str06_invariants.py`、`tests/test_str06_fold_guard.py` | 已落的新链契约、跨产物、章级回执绑定、窄失效、交付与 Fold／Guard 反例入口 |
 | `tests/test_str06_source.py`、`tests/test_str06_target.py`、`tests/test_str06_execution_ir.py`、`tests/test_str06_repairs.py`、`tests/test_str06_workflow.py` | Source／Target／IR／修复与隔离入口回归，选测按真实影响，不凭文件名宣布全链通过 |
 | `tests/test_str06_body.py` | F5 按章成文链免费反例入口：章预算分配、双视图 IR 同源、renderer 分层与 lineage 剥离、机械检查全分支、重写与候选选择、回执链核对、fake transport 全链到交付＋零新购恢复＋IR 失效边界 |

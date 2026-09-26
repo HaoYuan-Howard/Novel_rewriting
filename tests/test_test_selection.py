@@ -127,7 +127,12 @@ def test_real_changed_stage_path_includes_direct_unit_tests_and_downstream_consu
     # test_stage7_delivery_gate）已随旧链删除。删除路径按删除前基线恢复
     # 旧边后，选测面仍须非空（「零影响」会静默跳过该看的测试），且不得把
     # 已删除的消费者算进集合。
-    result = S.plan(S.load_catalog(), changed=('novel/stages/stage6/semantic.py',))
+    # ⚠ 删除已发生在提交 9e905963（F8c 分流）里，默认基线（HEAD）不再含该
+    # 路径 ⇒ 必须显式给**删除前**基线 04fe2aa3（F8c 之父），否则走的是
+    # 「基线不可证明 ⇒ 完整工程集合」的兜底分支，恢复旧边这条正路没被验到。
+    result = S.plan(S.load_catalog(),
+                    changed=('novel/stages/stage6/semantic.py',),
+                    changed_base='04fe2aa3')
     assert result.modules
     assert any('恢复删除前基线' in reason for reason in result.reasons)
     assert not ({'tests/test_stage6.py', 'tests/test_stage7_delivery_gate.py'}

@@ -25,12 +25,12 @@
 | `probe_nonbody_word.py` | NONBODY_KINDS 增词前的门槛探针 | `docs/BACKEND_CONTRACT.md` |
 | `validate_style_transfer.py` | 离线不含正文的风格迁移校验 | `docs/schema/style_transfer_validation.md` |
 
-### 已退役的剧情链导出工具（随旧链整层退役，待删）
+### 已退役的剧情链导出工具（2026-09-26 清理删除）
 
-`scripts/export_plot_types.py`、`export_plot_fixture.py` 与 `export_stage2_core_fixture.py`
-的产物（剧情链 TypeScript 类型与 `plot_v1` 夹具）已随旧 Stage2/4/5/7 链整层退役
-（STR-06 切换 F8c）从盘上删除，恢复来源为 Git 历史；三个脚本本身仍在盘上待同一迁移
-批次移除，**不要**再运行它们——它们导入的契约模块已随旧链删除。新链的只读监控夹具是
+scripts/export_plot_types.py、export_plot_fixture.py 与 export_stage2_core_fixture.py
+（已删路径按 DECISIONS 纪律纯文本书写，不假装现役落点）
+连同其产物（剧情链 TypeScript 类型与 `plot_v1` 夹具）已随旧 Stage2/4/5/7 链整层退役
+（STR-06 切换 F8c）从盘上删除，恢复来源为 Git 历史。新链的只读监控夹具是
 `web/src/fixtures/backend_v1/str06_candidate.json`（合成候选根，fake transport 产物）。
 
 ## 冻结实验与一次性（只读历史，不接新任务）
