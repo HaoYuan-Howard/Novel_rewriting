@@ -89,12 +89,12 @@ unknown），ch01–ch04 的工程验证与离线语义验收已登记。B6b 前
 | F0／F1／F2a | RC 契约、路径／依赖守卫、确定性 Fold／Guard、局部身份与窄修复反例已实现；F0 contract 25 项通过，详细记录见快照 |
 | F2b | 《夫君的报恩》Source Semantics 冒烟：16 次付费、58.9k prompt＋164.1k completion；源 v4/v12 重载、引用及 fold 检查；当时质量披露保留在快照 |
 | F3 | 单书 Preserve／Design／Bind 冒烟：5 次付费、68.7k＋104.1k tokens；69 义务、28 场、99 拍、11 章；换目录导致额外 2 次购买的教训保留 |
-| F4 | 单书 RC1 planned-only 干跑：28 场、零模型调用、计划连续性可重放；不是 accepted body 或阅读验收；第二本未验证，现移交后续 Golden |
+| F4 | 单书 RC1 planned-only 干跑：28 场、零模型调用、计划连续性可重放；不是 accepted body 或阅读验收；~~第二本未验证，现移交后续 Golden~~（旧待验口径已被 2026-09-27 D7／D10 取代：第二本固定为 Workbench 短篇《三人成行》、排在 B6，不再是待验项） |
 | RC2 | Source／Brief／Design／Binding／Compile／Context 的真书审阅修复与隔离入口已落；11 章、69 义务、28 场，零新增模型调用；定向 96/96、契约与路径 484/484；仅改 ob55 满足条件时仅 s27 消费身份变化 |
 | F4R | 红账三项清偿（2026-09-24，零模型调用）：uploads 死引用删除后 test_store 恢复收集 161 项（HEAD 上是 collection error）；深导入 grandfather 补账 11 条（分母 77→88，stale 核对无消失边）；`_SHAPE_BREAKS` 补三条 v3 账。定向组合 485/485 绿（upload_autostart／layering／artifact_versions／stage0_revisions／stage01／stage2_characters）。test_store 87/161 绿，74 失败是修复收集后显形的既存夹具脱节（非本批引入），见 F4R 条目遗留登记 |
 | F6 | Hook 链与 Stage7 终态契约＋引擎＋免费反例（2026-09-24，F6c 另付 4 次）：RC3（Characters 增 name_structure、graph 必填 hook、投影族六族、家族 +stage5/hook、stage7/naming、stage7/final）；Hook 唯一 publisher、确定性 HookContext、hook_writer 机械验＋同 Context 有限重写、NameMap v5／ApplyNames／Assembly、Stage2 names 窄调用与名称投影、迁移包依赖规则 AST 真实执行、F6d 退役登记 106 项双向对账。定向 str06＋layering 171/171、契约 §9.5 五文件 426/426；RC2 wire 在 RC3 代码下重编译：28 场 WriterContext（去版本/身份）与 replay 盘面逐字一致、checkpoint sha 不变。全量非 corpus 回归 4902 通过、420 失败/错误与 HEAD 基线逐项一致（零新增失败，全部为分支既有账，含 test_store 74 与两个既有收集错误文件，已忽略不计入）。F6c 付费冒烟已完成（见批次勾选） |
 | F5a–F5d | 按章成文链免费面（2026-09-24，零模型调用）：RC4（Design 增 `realization_brief`/`purpose` 必填、双视图职责重划＋`BeatIR` 逐拍定位、`WriterBookIR`、`ChapterReceipt` 章级回执、家族 +stage4/ir、stage5/body、stage5/acceptance/body，删场景正文旧家族；生产正文 Judge 与场景回执/Fidelity 退役）；章预算 largest-remainder 确定性分配；确定性 renderer＋版本化 Writer 协议（六层阅读面、lineage 不进阅读面、完整 IR＋完整前文进请求、超限由精确 tokenizer 容量闸阻断）；`body_checks` 章级机械验（硬失败不能披露放行，只有篇幅带可披露）；按章 Writer 同输入有限重写＋确定性候选选择（偏差最小、平局取较晚）；工具层缓存先于授权、`--book-call-ceiling` 锁内准入、`--check-only`、`--body-chapter-limit`；Stage7 章回执链核对、TXT 先落盘 manifest 最后提交、全书 ±10% 偏差读数。str06 定向 156/156、契约 §9.5 五文件＋layering＋选测＋版本账全绿。真实成文与开发性阅读已由 F5e 完成，见下行 |
-| F5e | 真书重跑与按章成书（2026-09-24 完成，用户授权付费）：候选 run 固定 `outputs/str06_f5e_body_20260924/run`。11 章全部提交（23 场 69 义务 Guard 零错误）、交付就绪：成书 11461 字（全书偏差 +1.63%，逐章 414–1730 字全部带内、零篇幅披露）、改名 11 处零残留、manifest 与文件 hash 一致；同根重放零新购、交付字节一致。成本实付：成功新购 23 次（design×2 含 1 次 high 档截断浪费、bind、hook_design、hook_writer、正文 16 次＝11 基础＋5 次专名释放重写；naming/names/preserve/book/chNN 经核验输入一致免费采用）＋1 次 TransportError 空行；合计约 111 万 prompt＋23 万 completion tokens。工程修正见提交 67077990（`--reasoning-effort`、T₀ 非 set 等价归一、场内自建非 entry、pov/weights/mode 归一、body_chNN owner）。**阅读验收（agent 开发性，非用户验收／非 Golden）**：楔子与 11 章通读——六维无硬伤；无机械复述状态、无逐场重开场、义务实际演出（坦白/下跪/称谓纪律/床底与房梁反转）、导演 brief 指定的展开压缩有效、楔子无提前兑现且结尾「嫂嫂，开门」与楔子悬念呼应；专名释放纪律在正文侧 5 次重写全部闭环。**限制披露**：章级机械检查不证明章内揭示位置与逐场义务兑现；正文 Judge 已取消，语义未评如实保留；单书短篇样本，长篇/多线的 IR 容量与前文增长（实测章 prompt 53.9k→60.9k tokens 线性增长）仍未验证，现移交后续 Golden；F9 用户验收尚待完成 |
+| F5e | 真书重跑与按章成书（2026-09-24 完成，用户授权付费）：候选 run 固定 `outputs/str06_f5e_body_20260924/run`。11 章全部提交（23 场 69 义务 Guard 零错误）、交付就绪：成书 11461 字（全书偏差 +1.63%，逐章 414–1730 字全部带内、零篇幅披露）、改名 11 处零残留、manifest 与文件 hash 一致；同根重放零新购、交付字节一致。成本实付：成功新购 23 次（design×2 含 1 次 high 档截断浪费、bind、hook_design、hook_writer、正文 16 次＝11 基础＋5 次专名释放重写；naming/names/preserve/book/chNN 经核验输入一致免费采用）＋1 次 TransportError 空行；合计约 111 万 prompt＋23 万 completion tokens。工程修正见提交 67077990（`--reasoning-effort`、T₀ 非 set 等价归一、场内自建非 entry、pov/weights/mode 归一、body_chNN owner）。**阅读验收（agent 开发性，非用户验收／非 Golden）**：楔子与 11 章通读——六维无硬伤；无机械复述状态、无逐场重开场、义务实际演出（坦白/下跪/称谓纪律/床底与房梁反转）、导演 brief 指定的展开压缩有效、楔子无提前兑现且结尾「嫂嫂，开门」与楔子悬念呼应；专名释放纪律在正文侧 5 次重写全部闭环。**限制披露**：章级机械检查不证明章内揭示位置与逐场义务兑现；正文 Judge 已取消，语义未评如实保留；单书短篇样本；~~长篇/多线的 IR 容量与前文增长（实测章 prompt 53.9k→60.9k tokens 线性增长）仍未验证，现移交后续 Golden~~——该待验义务已按 2026-09-27 D7 删除（产品范围固定短篇、永不做长篇；53.9k→60.9k 属旧章包形态读数，D2 改章包后随构造消失，新链读数在 B4／B6 重报）；用户验收由 B6b 承接（F9 口径，D1），尚待完成 |
 
 RC2 修复覆盖此前“第二轮再优化”的暂缓安排，不能重新把已修问题记作待办。当前正式
 编译输入是 D/G；不从 Preserve checkpoint 裸读补语义。`novel/stages/chain.py` 取代
@@ -171,7 +171,7 @@ fake transport，B6 付费与正文外发分别授权。
     名称位与源结构一致、纯称谓保留、11 处替换零残留；Assembly 显式 not_ready
     （body_not_implemented）。同根重放零新调用、10 份关键产物字节一致。
     **质量披露**：机械通过与人工核读不等于成书质量验收；楔子的冲突、信息升级、悬念与
-    不提前兑现已按 str06.md 阅读项核读，F5e 已完成成书开发性阅读，用户验收归 F9，跨书质量结论归后续 Golden。真书证据
+    不提前兑现已按 str06.md 阅读项核读，F5e 已完成成书开发性阅读，用户验收归 F9（D1 后由 B6b 承接），跨书质量结论归后续 Golden。真书证据
     修复一处：names wire 允许家族对象内与键一致的冗余 family_id（归一，不一致报错）。
   - [x] F6d 退役准备：`contracts/schema/retirement.py` 登记 106 项（节点与编排、
     产物与版本账、批准绑定 s6/s6r4_/HookApprovalResolution、API/Views/前端 Stage6 面、
@@ -935,7 +935,9 @@ completion 16554–42515，high effort）、F9 根 `outputs/str06_f9_product_202
 （names 8920/17532；preserve 18569/54928）、F7e recheck 采用记录里的 F5e 实付
 （design 11952/61040、bind 36150/32146、hook_design 25656/18672、hook_writer 1571/4195、
 body_ch01–ch11 prompt 54258–61050、completion 684–6563）、F6c 冒烟（names 8.6k prompt、
-hook_design 17.3k/32.4k、naming 0.8k/1.9k）。表值为「prompt / completion 合计（含
+hook_design 17.3k/32.4k、naming 0.8k/1.9k——原始冒烟根 `outputs/str06_f6_smoke_f6_smoke_12`
+已不在盘上，本批无法逐行重读；数字取自 2026-09-24 本文档 F6c 条目登记，仅与该登记
+内部一致）。表值为「prompt / completion 合计（含
 reasoning）」量级；DeepSeek usage 当前不单独报 reasoning（上述 ledger `reasoning_tokens`
 全为 null），B1 的逐次分列按传输实际能力闭合，取不到时保持 null 不猜。
 
@@ -1088,6 +1090,7 @@ Golden 不代替独立的 current-schema corpus 验收。
 | ~~`outputs/str06_f3_smoke_20260923_165735/`~~ | **2026-09-26 已不在盘上**（未跟踪，不可恢复）。原用途：首跑 Binding 成环反例；「续跑必须同 run 目录」的教训已进 LESSONS 与候选根身份机制 |
 | ~~`outputs/review_stage4_c/`~~ | **2026-09-26 已不在盘上**（未跟踪，不可恢复）。原用途：F5 的 11 条 labeled 断言与判据边界；labeled 断言已作为质量反例迁入现役测试面 |
 | ~~`outputs/vnext_stage4_r1/`、`outputs/vnext_stage4_r2/`、`outputs/vnext_stage4_bbase/`、`outputs/vnext_probe_b2/`~~ | **2026-09-26 已不在盘上**（未跟踪，不可恢复）。原用途：旧成文、冻结对照及窄 patch 案例；均非当前 canonical，F8c 后无接管义务 |
+| ~~`outputs/str06_f6_smoke_f6_smoke_12/`~~ | **2026-09-27 核实已不在盘上**（未跟踪，不可恢复；2026-09-26 的清理登记清单未含此根，此处补登）。原用途：F6c 付费冒烟证据（4 次实付、names／hook_design／hook_writer／naming token 读数与 Hook／NameMap 核读）。其 token 数字与质量披露只保留在本文档 F6c 条目登记（2026-09-24），此后无法逐行重读 |
 | `outputs/str06_f5e_body_20260924/run` | **盘上仍在（只读）**：F5e 已完成的 RC4 隔离成书与恢复证据；F7a 起独立候选根显式历史采用并核对原字节，F9 的采用配方（`--wire-dir`/`--adopt-root`）以它为来源根 |
 | `outputs/str06_f7a_candidate_20260924/`、`outputs/str06_f7b_candidate_20260924/`、`outputs/str06_f7c_candidate_20260924/`、`outputs/str06_f7e_recheck_20260925/` | **盘上仍在（只读）**：F7a–F7e 候选根与采用台账；F7e recheck 根是 F9 零新购复现配方的复验来源（25 行 ledger 全 cached、成书与 F5e 逐字一致） |
 | `outputs/str06_f9_product_20260926/`、`outputs/str06_v13_verify_20260926/`、`outputs/str06_stage2_probe_20260926/`、`outputs/str06_e2e_product_20260926/` | **盘上仍在（只读）**：F9 首轮付费验收（14 次实付、停在 body_design 前、owner patch 证据与付费验收报告）、v13 验证轮（book＋ch01–ch06 逐次 token 读数、_patch_wires/ 补丁件、ch01–ch04 语义验收账）、批 0 探针产物（A/B/C 臂与架构探针、probe_report.json）、fake 全链产品入口证据；B0 token 量级表与 B6 对照读数的依据来源 |
