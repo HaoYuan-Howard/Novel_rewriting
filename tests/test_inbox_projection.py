@@ -342,7 +342,7 @@ def test_generic_invalid_checks_the_producer_revalidate_flag_before_schema_versi
         refuse_version_read=True)
     rows = I._invalid_items(store, 'stage2')
     assert len(rows) == 1 and rows[0].kind == 'rejected'
-    assert rows[0].rule == 'str06.stage2.source'
+    assert rows[0].rule == 'str06.stage2.compile'  # B2：Blueprint 的 writer 是 compile（D9）
     assert '_rounds/' in rows[0].how
     # 新链无 --revalidate 提升口：how 必须明说不存在入口，而不是拼假命令。
     assert '没有可执行的 INVALID 提升入口' in rows[0].how

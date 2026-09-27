@@ -37,7 +37,8 @@ B0–B5 全部 fake transport、零模型调用；付费与正文外发只在 B6
 目标架构（Stage2 五节点、章包三件套、执行设施、提交顺序、精确失效）唯一登记在
 [str06.md](schema/str06.md)；本文件维护批次进度、验收与删除条件，批次表见下方
 「职责解耦批次（B0–B6）」。F7/F8 的隔离 worktree、候选接人与分支切换均已按原口径
-完成（见批次勾选）；F8a 起现役注册面即新链 11 节点，B2 扩为 14 个（stage0/1 另计）。
+完成（见批次勾选）；F8a 起现役注册面即新链 11 节点，**B2 前半（2026-09-27）已扩为
+14 个**（Stage2 五节点，`str06.stage2.source` 退役；stage0/1 另计）。
 
 旧书保持 `legacy_incompatible`，独立根重建，不手补旧产物、不继承旧批准、不清 ledger。
 新协议改变全部请求身份，历史采用（F7a 通路）在新链上不会命中；旧输出根与已购证据
@@ -69,17 +70,24 @@ F8 的免费反例仍须验证合法跨章布局可以编译、接受和交付�
 
 ## 当前状态与下一步
 
-**下一批：B2 Stage2 五节点重建（免费，fake transport）。** 2026-09-27 用户裁决职责解耦计划
-（D1–D10）取代 F9 与质量改进批次二的剩余项，成为唯一活动计划：批次表 B0–B6 见
-「职责解耦批次」；B0 登记与 B1 执行设施（前半 2026-09-27 提交 5f74bd78、后半同日
-完成：截断即停 D6、`max_tokens` 131072、ExecutionProfile run 启动冻结与 effort 面
-low/high/max、并发登记改 `str06.stage5.body`）均已闭合，故障注入全绿。
+**当前批次：B2 Stage2 五节点重建（免费，fake transport）——前半已落地，接线进行中。**
+2026-09-27 用户裁决职责解耦计划（D1–D10）取代 F9 与质量改进批次二的剩余项，成为唯一
+活动计划：批次表 B0–B6 见「职责解耦批次」；B0 登记与 B1 执行设施（前半 2026-09-27
+提交 5f74bd78、后半同日完成：截断即停 D6、`max_tokens` 131072、ExecutionProfile run
+启动冻结与 effort 面 low/high/max、并发登记改 `str06.stage5.body`）均已闭合，故障注入
+全绿。**B2 前半（2026-09-27）已落地**：五节点注册面一次性改齐（`NODES` 14 节点、
+`LLM_EXECUTOR_NODES`、`PIPELINE_PARALLEL_NODES` 增 `str06.stage2.chapters`、观察产物
+四件与 RC6、候选契约身份重钉 `a0f5fb5e…`）、观察与关联协议
+（`contracts/schema/observation.py`，`stage2-observation-v1`，I-13 显式版本化、
+模型输出面去机械化）、Resolver（`novel/stages/stage2/resolver.py`，句段闭集选择＋
+逐字锚唯一定位＋R-2.10 称谓锚点，`compile_book` 委托同一实现）与公开规则改版
+（`R-2.3`／`R-2.10`／`R-2.12`／`R-2.17`）；`chain.py` 旧接线（11 节点 runner、
+付费 owner→节点映射）由 B2 后续提交改齐，切换期相关链路测试红是登记状态。
 此前状态：F4R、F6、F5a–F5e、F7a–F7e、F8a–F8d 均已完成——F8c（迁移包分流＋旧链整层
 删除）把 `contracts/schema/str06/`、`novel/stages/str06/`、`novel/llm/str06_*`、
-`tools/str06_workflow.py` 全部解散分流进正式包；现役注册面是新链 11 节点
-（`contracts/invariants.py::NODES`，激活基线契约身份 `04b6fb22…`，由
-`tests/test_str06_f7e_freeze.py` 钉住；质量改进批次二批 2 后 Design 三产物换 rc5，
-候选契约身份随之更新为 `7fb5ecfa…`，表内任何变化须先改冻结记录）；F8d 默认非
+`tools/str06_workflow.py` 全部解散分流进正式包；F8a 激活基线契约身份 `04b6fb22…`、
+质量改进批次二批 2 后 Design 三产物换 rc5 时为 `7fb5ecfa…`（历史基线，Git 可查；
+B2 起由 `tests/test_str06_f7e_freeze.py` 重钉，表内任何变化须先改冻结记录）；F8d 默认非
 corpus 回归 3034 项零失败、零错误、零未说明跳过。F9 首轮付费验收未通过，按用户
 指示停在 `str06.stage4.body_design` 之前；质量改进批次（免费）与批次二批 0–2 已
 完成、批 3 已取消；v13 验证轮实购 book＋ch01–ch06（7 次成功＋1 次 TransportError
@@ -855,7 +863,7 @@ B0–B5 全部 fake transport、零模型调用，付费与正文外发只在 B6
 |---|---|---|
 | [x] B0 契约与文档 | 登记 2026-09-27 裁决 D1–D10（DECISIONS 各行，注明覆盖的旧行）与契约/版本/文档变更清单（节点增删与 R 条款改写归 B2–B4 执行）；候选根运行记录映射表与删除条件（见下）；各付费节点 reasoning 与正文 token 预期量级（见下）；替换 F9 与被覆盖的「本轮之后」内容；删除长篇、多线与容量增长待验项；清理质量改进批次二的残留勾选 | §9.5 五文件；文档引用检查（test_docs_references 等五文件覆盖） |
 | [x] B1 执行设施 | 身份与记录对齐（SemanticRequest／ContentRevision／ProviderAttempt／AcceptanceRecord／CommitBundle，逐项映射候选根四类运行记录）、attempt 与传输重试（按是否已送达分类）、空回答救回（D5）、失败分类与恢复（str06.md 失败表）、额度（整书总闸按 attempt 计数、unknown 计入）、并发槽位（登记面本批完成；运行接入归 B4 `novel/model_slots.py` 逐章并发）、配置贯通（ExecutionProfile run 启动冻结，删执行时 `load_config()` 重读；effort 取值面与 NodeSpec 一致；`max_tokens` 131072）、provenance 显式化（删 `CandidateRunContext` 共享窗口）、CommitBundle；先写空回答回归反例（含现役 `write_chapter` 第二轮 `candidates[-1]` `IndexError` 场景）。**2026-09-27 前半已落地（fake transport，零模型调用）**：五层记录对齐工作单元账（`WorkUnitAttempt.response_sha256`、`AcceptanceRecordV1`、`CommitBundleV1`＋seal）、Runtime 耐久响应引用（`novel/llm/paid_requests.py::DurableAnswer`／`send`／`AdoptionRef`，`ExecutionError` 带 stage/node/item/phase/code/context）、传输按是否已送达分类重试（`transport._classify` 读超时＝unknown 不重试）、D5 空回答救回＋同轮重试＋空回答不占请求身份（两处现役缺陷修复：`write_chapter` IndexError、空正文 answered 落盘重跑复现）、provenance 显式引用纯函数构造＋ledger 精确 attempt 行聚合（删共享窗口与时间窗归账）、CommitBundle 封存（`runtime/commit/`，采用状态从 seal 派生）、候选根 request/validation/admission/adopt 写路退役（旧根只读保留）、整书总闸按 attempt 计数（unknown 占额、重启不重置，`--book-call-ceiling` 从同一准入账派生）；反例与完成条件证据 `tests/test_str06_runtime_records.py` 10 项＋str06/layering 定向 431 项＋契约五文件 393 项全绿。**2026-09-27 后半已落地（fake transport，零模型调用），B1 完成**：截断即停——`send` 对 `finish_reason='length'` 统一抛 `ExecutionError(code='truncated', phase='accept')`（缓存命中与历史采用同样停止，重放免费命中同一截断响应不再付费；attempt 留证、ledger 行带 finish_reason 与 reasoning/正文 token；不重试、不加预算；`write_chapter` 截断稿即停该章不重写不进候选，`R-12.2` 的截断触发重写旧处置随 D6 退役）；`max_tokens` 统一 `LLM_MAX_OUTPUT_TOKENS`＝131072（`contracts/invariants.py`）；ExecutionProfile run 启动冻结（`novel/stages/chain.py::ExecutionProfile`／`freeze_execution_profile`——`load_config()` 唯一执行期调用点是 `execute`，`assemble_paid_boundary` 删除重读通道；effort 取值面 low/high/max 与 NodeSpec 一致、CLI 移除 medium；单次运行上限从持久准入账 ceiling＋grants 派生、产品路径冻结传入付费边界、显式 `--book-call-ceiling` 优先）；并发登记改新链逐章节点（`PIPELINE_PARALLEL_NODES＝('str06.stage5.body',)`，退役键 `stage2.blueprint`/`stage4.design`/`stage4.plan`/`stage5.write` 与四个 `STAGE*_MAX_CONCURRENCY` 常量删除，`R-12.1c` 结构证据同批换轨）；停止顺序断言补强（预算竞争停止后已封存 CommitBundle 完好、不再外发）。后半证据：`tests/test_str06_runtime_records.py` 17 项、str06 契约/退役/layering/选测定向 282 项、链路与产品入口 108 项、契约五文件、付费设施与 API 114 项、CLI 与 agent 能力面 108 项全绿。**移交注记**：`str06.stage2.chapters` 未在现役注册表（B2 建节点时同步登记进 `PIPELINE_PARALLEL_NODES`）；并发槽位运行接入随 B4 逐章并发（B4 行已登记 `novel/model_slots.py`） | 故障注入全绿：空回答、截断、多 attempt、权限拒绝、未知执行、预算竞争、重启不重置、各提交窗口崩溃 |
-| [ ] B2 Stage2 | 五个节点（`str06.stage2.book`／`chapters`／`names`／`associate`／`compile`，见 str06.md 节点表；`str06.stage2.source` 退役；公开节点 11→14；同步 `contracts/invariants.py::NODES`、`LLM_EXECUTOR_NODES`、`PIPELINE_PARALLEL_NODES`（B1 移交：把 `str06.stage2.chapters` 登记进并发覆盖表）、冻结记录 `tests/test_str06_f7e_freeze.py` 与候选契约身份）、观察与关联协议、Resolver、compile 双真源发布（Characters＋Blueprint 唯一 writer，`stage2/compiled/book_extraction.json` 退役）；Stage4 改读 canonical；同步根 `AGENTS.md` 与 `novel/AGENTS.md` 的节点数、`novel/stages/stage2/AGENTS.md` 的 S2-5／目录约束／现役公开面（五 owner）、`docs/BACKEND_CONTRACT.md` 节点计数行与 `web/AGENTS.md` run 屏节点数描述 | 下方「各批验收细节 · Stage2」全部项 |
+| [ ] B2 Stage2 | 五个节点（`str06.stage2.book`／`chapters`／`names`／`associate`／`compile`，见 str06.md 节点表；`str06.stage2.source` 退役；公开节点 11→14；同步 `contracts/invariants.py::NODES`、`LLM_EXECUTOR_NODES`、`PIPELINE_PARALLEL_NODES`（B1 移交：把 `str06.stage2.chapters` 登记进并发覆盖表）、冻结记录 `tests/test_str06_f7e_freeze.py` 与候选契约身份）、观察与关联协议、Resolver、compile 双真源发布（Characters＋Blueprint 唯一 writer，`stage2/compiled/book_extraction.json` 退役）；Stage4 改读 canonical；同步根 `AGENTS.md` 与 `novel/AGENTS.md` 的节点数、`novel/stages/stage2/AGENTS.md` 的 S2-5／目录约束／现役公开面（五 owner）、`docs/BACKEND_CONTRACT.md` 节点计数行与 `web/AGENTS.md` run 屏节点数描述。**2026-09-27 前半已落地（fake transport，零模型调用）**：五节点注册面一次性改齐（`NODES` 14 节点、`LLM_EXECUTOR_NODES` 11 付费、`PIPELINE_PARALLEL_NODES` 增 `str06.stage2.chapters`、产物表 24 份——新增观察产物四件 `stage2/observations/{book,ch{nn},names,associate}.json` 并退役 `stage2/compiled/{book_extraction,input_snapshots}.json`、RC 版式升 `str06-rc6`、候选契约身份重钉 `a0f5fb5e…`）；观察与关联协议 `contracts/schema/observation.py`（`stage2-observation-v1`：book／chapters／associate／names 四观察，显式版本化 I-13；拍号/状态与约束编号/命题与 loop 正式 ID/章序不在 wire，人物 slug 留给模型；章观察只含章内本地句柄，无因果边；associate 只选已给句柄，五类配对）；Resolver `novel/stages/stage2/resolver.py`（句段 id 闭集选择、逐字锚唯一定位、missing/ambiguous/unknown/自指精确 issue，不模糊匹配不猜笔误；R-2.10 称谓锚点派生收敛为唯一实现，`compile_book._derive_from_chapter` 委托）；注册面消费表同步（`PROFILED_LLM_RUNS`、`RECOVERY_RUN_POLICIES`、`_STR06_THROUGH`、`CONSUMED_PROJECTIONS` 五节点投影、`executor_scope` 章分支、候选根初始化默认绑定改 `str06.stage2.book`）；公开规则改版 `R-2.3`（章观察互不依赖、只含章内句柄）／`R-2.10`（wire 不带窗口坐标、Resolver 落点）／`R-2.12`（章内句柄闭合、跨章同一性归 associate）／`R-2.17`（fold 只消费 canonical、无快照）；文档同步（根／novel／stage2／web AGENTS、BACKEND_CONTRACT 节点计数与 R 行、docs/schema/stage2.md 五节点协议、str06.md 实施边界）。contract 证据：`tests/test_str06_stage2_protocol.py` 20 项＋契约 §9.5 五文件 265 项＋注册表与付费设施定向（candidates/free/orchestrator_nodes/agent_capabilities/invariants/execution_permit/report/runtime_operator/llm_budget 等）全绿。**移交注记（接线红账，B2 后续提交闭合）**：`chain.py` 仍挂旧 11 节点 runner 与 `_owner_unit` 的 book/chNN→source 映射；切换期红面＝stage2/全链链路（test_str06_workflow／f7a_wiring／repairs／f7c_remainder／body／hook／views）、队列与状态语义（test_orchestrator_queue／state 23 项，source 节点的 INVALID 路由与 operator redo 语义待按五节点重写）、付费边界 owner 映射（test_str06_runtime_records 3 项、test_work_units 2 项）、store 取样面（test_store 46 项随双真源发布换观察产物样例）、corpus 清单（test_corpus_manifest 12 项随 B6 线换新产物面）；`R-6.11` 按 DECISIONS D4 归 B3 改写 | 下方「各批验收细节 · Stage2」全部项 |
 | [ ] B3 Stage4 | 协议瘦身与 compiler 生成 ID/预算、Design 新字段（跨章依赖进 TargetDesign 结构化字段）、读者确认地址（D4）、按拍读取（先读旧值后写新值）、T₀ 语义（unknown/unset/未建立与合法空值分开，F5e 垫底失败保留为回归反例）、章闭包、Hook Design 与 publish_graph／HookContext 代码归位 Stage4 包 | 下方「各批验收细节 · Stage4 章闭包」全部项 |
 | [ ] B4 Stage5/7 | 章包写手与验证（Writer/Validator 只收本章章包，D2）、并发（默认 4，经 `novel/model_slots.py`）、集合恢复（按有效提交集合补缺）、回执改绑（绑定章包摘要/请求身份/验证版本/改名前正文摘要，`R-7.4`、`R-10.3` 相应改写）、截断即停（D6）、Stage7 集合核对与按阅读序组装 | 下方「各批验收细节 · Stage5/7 与 Runtime」全部项 |
 | [ ] B5 产品与退役 | 上传、自动编排、CLI/API/UI 接入 14 节点与 attempt、失败类别、恢复状态；删除旧路径（S-05：现役 11 节点 runner 形态、候选根四类运行记录写路与 admission 平行计数等）；随删除条件清理 `tests/suite_catalog.json` 的 `change_scopes.str06` 等迁移登记 | 真实 HTTP 上传到 Stage7 的 fake 全链；默认非 corpus 回归＋前端 test/typecheck/seams/build |

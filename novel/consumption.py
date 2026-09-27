@@ -21,7 +21,9 @@ from typing import Any, Callable, Final, Mapping
 
 from contracts.artifacts import (
     STAGE0_CLEAN_TEXT, STAGE0_REVISIONS, STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT,
-    STR06_STAGE2_BLUEPRINTS, STR06_STAGE2_BOOK_EXTRACTION,
+    STR06_STAGE2_BLUEPRINTS,
+    STR06_STAGE2_OBS_ASSOCIATE, STR06_STAGE2_OBS_BOOK, STR06_STAGE2_OBS_CHAPTER,
+    STR06_STAGE2_OBS_NAMES,
     STR06_STAGE2_CHARACTERS, STR06_PRESERVE_CHECKPOINT,
     STR06_RECONSTRUCTION_BRIEF, STR06_SEMANTIC_BINDING,
     STR06_EXECUTION_PLAN, STR06_BODY_DESIGN, STR06_PRESENTATION_GRAPH,
@@ -488,22 +490,39 @@ CONSUMED_PROJECTIONS: Final[dict[str, dict[str, Projection]]] = {
         STAGE0_REVISIONS: stage1_stage0_source,
         STAGE0_CLEAN_TEXT: artifact_payload,
     },
-    # ── STR-06 新链（F8a 激活）──
-    'str06.stage2.source': {
+    # ── STR-06 新链（F8a 激活；B2 五节点重建，D3/D9）──
+    # Stage2 五 owner 的投影面：book 吃 Stage1 两份字节；chapters 吃 book 观察
+    # 与 MainText（前文原文，互不依赖）；names 吃 book 观察与全文；associate 吃
+    # book 与 chapters 观察的句柄投影；compile 吃四份观察并发布双真源。
+    # Stage4 一律改读 canonical（Characters／Blueprint），不再有派生输入面。
+    'str06.stage2.book': {
         STAGE1_MAIN_TEXT: stage2_main_text,
         STAGE1_HOOK_COPY: stage2_hook_copy,
+    },
+    'str06.stage2.chapters': {
+        STR06_STAGE2_OBS_BOOK: artifact_payload,
+        STAGE1_MAIN_TEXT: stage2_main_text,
     },
     'str06.stage2.names': {
-        STR06_STAGE2_BOOK_EXTRACTION: artifact_payload,
+        STR06_STAGE2_OBS_BOOK: artifact_payload,
         STAGE1_MAIN_TEXT: stage2_main_text,
         STAGE1_HOOK_COPY: stage2_hook_copy,
     },
+    'str06.stage2.associate': {
+        STR06_STAGE2_OBS_BOOK: artifact_payload,
+        STR06_STAGE2_OBS_CHAPTER: artifact_payload,
+    },
+    'str06.stage2.compile': {
+        STR06_STAGE2_OBS_BOOK: artifact_payload,
+        STR06_STAGE2_OBS_CHAPTER: artifact_payload,
+        STR06_STAGE2_OBS_NAMES: artifact_payload,
+        STR06_STAGE2_OBS_ASSOCIATE: artifact_payload,
+    },
     'str06.stage4.preserve': {
-        STR06_STAGE2_BOOK_EXTRACTION: artifact_payload,
+        STR06_STAGE2_CHARACTERS: artifact_payload,
         STR06_STAGE2_BLUEPRINTS: artifact_payload,
     },
     'str06.stage4.body_design': {
-        STR06_STAGE2_BOOK_EXTRACTION: artifact_payload,
         STR06_PRESERVE_CHECKPOINT: artifact_payload,
         STR06_STAGE2_CHARACTERS: artifact_payload,
     },
@@ -515,7 +534,6 @@ CONSUMED_PROJECTIONS: Final[dict[str, dict[str, Projection]]] = {
         STR06_BODY_DESIGN: artifact_payload,
         STR06_STAGE2_CHARACTERS: artifact_payload,
         STR06_PRESERVE_CHECKPOINT: artifact_payload,
-        STR06_STAGE2_BOOK_EXTRACTION: artifact_payload,
     },
     'str06.stage4.compile': {
         STR06_PRESENTATION_GRAPH: artifact_payload,

@@ -252,8 +252,8 @@ def test_plan_refuses_missing_profiles_while_preview_remains_zero_cost(base):
 def test_plan_echoes_the_frozen_boundary_and_refuses_unknown_nodes(base):
     planned = agent.plan(
         base, '42', authorized=False, egress_authorized=False,
-        profiles=_PROFILES, pause_before_node='str06.stage2.source')
-    assert planned.pause_before_node == 'str06.stage2.source'
+        profiles=_PROFILES, pause_before_node='str06.stage2.book')
+    assert planned.pause_before_node == 'str06.stage2.book'
     with pytest.raises(Exception, match='登记节点'):
         agent.plan(
             base, '42', authorized=False, egress_authorized=False,

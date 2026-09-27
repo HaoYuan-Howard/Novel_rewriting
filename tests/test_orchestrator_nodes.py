@@ -129,9 +129,10 @@ UNMIGRATED_EXECUTOR_FLAG_CASES = [
 def test_the_matrix_actually_has_rows():
     """参数化表算空时，下面几十条会**全绿**——而那正是最坏的情况。"""
     assert len(CASES) >= 14, f'node × flag 只铺出 {len(CASES)} 行，节点表多半被清空了'
-    # F8a 翻转：现役节点表 = stage0/stage1 两座 + 11 个 str06. 节点（Stage6 整层
-    # 与旧 Stage2/4/5/7 链已入 RETIRED_NODES）。加节点就来改这个数。
-    assert len(NODES) == 13, f'节点数变成 {len(NODES)} 了——是有意加的就来改这个数'
+    # F8a 翻转：现役节点表 = stage0/stage1 两座 + str06. 节点（Stage6 整层
+    # 与旧 Stage2/4/5/7 链已入 RETIRED_NODES）。B2 五节点重建（2026-09-27）：
+    # Stage2 拆五 owner，11→14。加节点就来改这个数。
+    assert len(NODES) == 16, f'节点数变成 {len(NODES)} 了——是有意加的就来改这个数'
 
 
 # ───────────────────────── 贵贱（R-11.7 · Q-10） ─────────────────────────
@@ -290,8 +291,8 @@ def test_retired_stage2_resample_face_is_not_registered_anywhere():
     未登记旗标时按「会花钱」的未知跑法关闭式处理（`Q-10`）。"""
     assert all('--resample' not in spec.flags for spec in NODES.values())
     with pytest.raises(UnsupportedRunMode, match='不接受'):
-        N.build_argv('str06.stage2.source', SID, ['--resample'], base=BASE)
-    assert N.is_paid('str06.stage2.source', ['--check-only', '--resample']) is True
+        N.build_argv('str06.stage2.book', SID, ['--resample'], base=BASE)
+    assert N.is_paid('str06.stage2.book', ['--check-only', '--resample']) is True
 
 
 @pytest.mark.parametrize('node', tuple(NODES))
@@ -398,7 +399,7 @@ def test_every_profiled_executor_run_has_one_resolved_argv_and_step_snapshot(
 
 def test_profiled_preview_can_freeze_denied_egress_but_cannot_execute_that_argv():
     steps = N.build_steps(
-        'str06.stage2.source', SID, base=BASE,
+        'str06.stage2.book', SID, base=BASE,
         executor_backend=EXECUTOR_BACKEND,
         egress_authorized=False)
 
@@ -416,10 +417,10 @@ def test_executor_egress_must_be_explicit_and_direct_llm_nodes_may_carry_it():
     """
     with pytest.raises(UnsupportedRunMode, match='必须显式给 bool'):
         N.build_steps(
-            'str06.stage2.source', SID, base=BASE,
+            'str06.stage2.book', SID, base=BASE,
             executor_backend=EXECUTOR_BACKEND)
     steps = N.build_steps(
-        'str06.stage2.source', SID, base=BASE, egress_authorized=True)
+        'str06.stage2.book', SID, base=BASE, egress_authorized=True)
     assert '--allow-egress' in steps[0].argv
     assert steps[0].egress_authorized is True
 
@@ -449,25 +450,25 @@ def test_executor_profile_refuses_unmigrated_nodes_and_unknown_capability_pairs(
     )
     with pytest.raises(UnsupportedRunMode, match='不可执行'):
         N.build_steps(
-            'str06.stage2.source', SID, base=BASE,
+            'str06.stage2.book', SID, base=BASE,
             executor_backend=LegacyExecutorBackend(profile=unknown_model),
         )
 
 
 def test_executor_runtime_registries_close_over_the_same_nodes():
     """能力公开面、跑法矩阵缺任何一边都必须响亮地红。"""
-    # F8b：PROFILED_LLM_RUNS 翻为 9 个 str06. 付费节点的默认（空 flags）跑法；
-    # `--check-only` 是免费复检，不在此表。
+    # F8b：PROFILED_LLM_RUNS 翻为 11 个 str06. 付费节点（B2 五节点重建后）
+    # 的默认（空 flags）跑法；`--check-only` 是免费复检，不在此表。
     expected = set(LLM_EXECUTOR_NODES)
-    assert len(expected) == len(N.PROFILED_LLM_RUNS) == 9
-    assert sum(len(rows) for rows in N.PROFILED_LLM_RUNS.values()) == 9
+    assert len(expected) == len(N.PROFILED_LLM_RUNS) == 11
+    assert sum(len(rows) for rows in N.PROFILED_LLM_RUNS.values()) == 11
     assert set(N.PROFILED_LLM_RUNS) == expected
 
 
 def test_deterministic_compile_and_assemble_are_structurally_unpaid():
-    """`str06.stage4.compile`／`str06.stage7.assemble` 结构性禁付：不在 executor
-    名单、`spec.paid=False` 且没有任何能把它们变贵的旗标。"""
-    for node in ('str06.stage4.compile', 'str06.stage7.assemble'):
+    """三个确定性 compile／assemble 结构性禁付：不在 executor 名单、
+    `spec.paid=False` 且没有任何能把它们变贵的旗标。"""
+    for node in ('str06.stage2.compile', 'str06.stage4.compile', 'str06.stage7.assemble'):
         assert node not in N.PROFILED_LLM_RUNS
         assert NODES[node].paid is False
         assert NODES[node].paid_flags == ()
@@ -475,7 +476,7 @@ def test_deterministic_compile_and_assemble_are_structurally_unpaid():
 
 
 def test_absent_executor_profile_preserves_the_legacy_argv_shape():
-    argv = N.build_argv('str06.stage2.source', SID, base=BASE)
+    argv = N.build_argv('str06.stage2.book', SID, base=BASE)
     assert not any(token.startswith('--executor-') for token in argv)
     assert '--allow-egress' not in argv
 
@@ -751,7 +752,8 @@ def test_every_stage_has_a_check_bridge_and_check_node_picks_the_first():
     expected_bridges = {
         'stage0': ('stage0.remove',),
         'stage1': ('stage1.partition',),
-        'stage2': ('str06.stage2.source', 'str06.stage2.names'),
+        'stage2': ('str06.stage2.book', 'str06.stage2.chapters',
+                   'str06.stage2.names', 'str06.stage2.associate'),
         'stage4': ('str06.stage4.preserve', 'str06.stage4.body_design',
                    'str06.stage4.bind', 'str06.stage4.hook_design'),
         'stage5': ('str06.stage5.hook', 'str06.stage5.body'),

@@ -87,7 +87,8 @@ def test_node_table_integrity():
 
 
 def test_free_nodes_structurally_cannot_pay():
-    for node_id in ('str06.stage4.compile', 'str06.stage7.assemble'):
+    for node_id in ('str06.stage2.compile', 'str06.stage4.compile',
+                    'str06.stage7.assemble'):
         spec = CANDIDATE_NODES[node_id]
         assert spec.paid is False
         assert spec.lifecycle.executor_content_limit == 0

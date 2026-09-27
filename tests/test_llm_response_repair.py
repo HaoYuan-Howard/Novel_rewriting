@@ -60,13 +60,13 @@ def _ctx(base: Path) -> RunContext:
     # 由 str06.stage2.source 承接（scope=strategy / chapter:N，见 executor_scope）。
     run_id = _RUN_IDS.setdefault(base, new_run_id())
     return RunContext.open(
-        base, '123', 'str06.stage2.source', paid=True,
+        base, '123', 'str06.stage2.book', paid=True,
         repair_rejected_responses=True, run_id=run_id)
 
 
 def _ctx_for_run(base: Path, run_id: str) -> RunContext:
     return RunContext.open(
-        base, '123', 'str06.stage2.source', paid=True,
+        base, '123', 'str06.stage2.book', paid=True,
         repair_rejected_responses=True, run_id=run_id)
 
 
@@ -658,7 +658,7 @@ def test_untrusted_candidate_cannot_forge_the_recovery_packet_boundary():
 
 def test_plain_cli_keeps_independent_resampling_without_failure_packets():
     base = _base()
-    ctx = RunContext.open(base, '123', 'str06.stage2.source', paid=True)
+    ctx = RunContext.open(base, '123', 'str06.stage2.book', paid=True)
     responses = [_bad(), _bad(), _bad(PRO_FALLBACK_MODEL), _good(PRO_FALLBACK_MODEL)]
     transport = FakeTransport(responder=lambda _request, index: responses[index])
     got = _ask(_client(ctx, transport))

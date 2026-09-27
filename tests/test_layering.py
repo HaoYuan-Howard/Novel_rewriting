@@ -932,24 +932,27 @@ def test_stage2_owner_shims_cannot_return():
     都已删；不得以同名模块或整族回流。
 
     ⚠ F8c（2026-09-25）方向调整：`novel/stages/stage2/` **被新链 per-stage 包
-    原地重建**（只住 `source.py`／`names.py` 两个 owner 引擎），因此本条不再断言
+    原地重建**（`source.py`／`names.py` 两个 owner 引擎），因此本条不再断言
     「整包不得存在」——包回来了不等于旧链回来，**模块名**才说了算。旧 Stage2 的
     blueprint／analyze／characters／knowledge／shared 五族与全部顶层 shim 一个
-    都不许回来；新链包里也只许有那两个模块（多一个就是旧链回流的第一级台阶）。
+    都不许回来；模块面按登记owner 收紧（多一个就是旧链回流的第一级台阶）。
+    ⚠ B2（2026-09-27）五节点重建（D9）：`resolver.py`（证据定位设施）入列；
+    book／chapters／associate／compile 四个 owner 模块随 B2 后续接线入列时
+    同步更新本清单。
     """
     import importlib.util
     from pathlib import Path
 
     stages = Path(__file__).resolve().parents[1] / 'novel' / 'stages'
     root = stages / 'stage2'
-    # F8c：新链 stage2 包必须落位，且只住两个 owner 引擎模块。
+    # F8c＋B2：新链 stage2 包必须落位，模块面按现役 owner 登记。
     assert root.is_dir(), (
         f'novel/stages/stage2/ 不在（{root}）——F8c 分流后新链 Stage2 引擎'
         f'（source／names）应落位')
     present = sorted(p.stem for p in root.glob('*.py'))
-    assert present == ['__init__', 'names', 'source'], (
+    assert present == ['__init__', 'names', 'resolver', 'source'], (
         f'novel/stages/stage2/ 的模块面变了：{present}；'
-        f'新链 Stage2 只许 __init__／names／source')
+        f'现役只许 __init__／names／resolver／source（B2 后续接线扩五 owner 时同步）')
     banned = [
         'plot_checks', 'plot_compile', 'plot_continuity', 'plot_diagnostics',
         'plot_edit', 'plot_inputs', 'plot_prompts', 'plot_recovery',

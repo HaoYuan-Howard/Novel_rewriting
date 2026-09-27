@@ -183,7 +183,7 @@ def test_paid_recovery_rows_are_gone_and_drift_is_rejected():
     assert not {'--revise', '--reviewer-rewrite'} & set(VALUED_FLAGS)
     assert '--rebind-review' not in FREE_ENTRIES
     assert '--rebind-review' not in VALUED_FLAGS
-    for node in ('str06.stage2.source', 'str06.stage5.body', 'str06.stage7.naming'):
+    for node in ('str06.stage2.book', 'str06.stage5.body', 'str06.stage7.naming'):
         assert '--rebind-review' not in NODES[node].flags
 
 

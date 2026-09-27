@@ -21,8 +21,10 @@ def candidate_epoch():
                                 session_run_id='run-1', created_at=1759000000)
 
 
-def make_context(root: Path, *, ledger: CostLedger, node: str = 'str06.stage2.source',
+def make_context(root: Path, *, ledger: CostLedger, node: str = 'str06.stage2.book',
                  configured_model: str = 'fake', readonly: bool = False) -> CandidateRunContext:
+    """默认节点是 Stage2 书级观察 owner（B2 五节点重建后 `str06.stage2.source`
+    已退役；断言具体节点账的测试显式传 `node=`）。"""
     return CandidateRunContext(
         root=root, node=node, epoch=candidate_epoch(), code=prov.code_version(),
         ledger=ledger, root_sha1='a' * 40,

@@ -37,7 +37,7 @@ from tests.str06_facilities import make_context
 _SOURCE = 'b' * 64
 
 
-def _repo(tmp_path, *, node='str06.stage2.source'):
+def _repo(tmp_path, *, node='str06.stage2.book'):
     repo = Str06Repository(tmp_path / 'run')
     repo.attach_context(make_context(
         tmp_path / 'run', ledger=CostLedger(path=None), node=node))

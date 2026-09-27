@@ -31,9 +31,10 @@ npm run build                       # web/dist，供后端同源托管
 
 ## 产品边界
 
-- 产品现役为**全自动单模式**（确定性 orchestrator 推进）。现役链是 11 个
-  `str06.` 节点（Stage2 源语义与名称结构 → Stage4 目标故事与确定性编译 → Stage5
-  按章正文与 Hook → Stage7 命名与交付）；Stage6 整层与三候选改选面已退役，
+- 产品现役为**全自动单模式**（确定性 orchestrator 推进）。现役链是 14 个
+  `str06.` 节点（B2 五节点重建，2026-09-27 D9：Stage2 book／chapters／names／
+  associate／compile → Stage4 目标故事与确定性编译 → Stage5 按章正文与 Hook →
+  Stage7 命名与交付）；Stage6 整层与三候选改选面已退役，
   `/n/:sid/stage6` 路由与 `approveHook` 写面随 F8b 删除。F8c 起旧链读屏
   （read / global / stage4 / stage5 / stage7）、待办屏（inbox）与人工闸整族
   （approvals / workpack / reset）连同路由、数据缝、类型与 mock 一并退役：
@@ -87,7 +88,7 @@ npm run build                       # web/dist，供后端同源托管
 | `/` | 语料库、顺序批量上传（上传前授权并自动开跑）、逐书状态与批量代跑；维护/回收站入口。书名为打开入口，筛选在页头，卡片保持紧凑 |
 | `/settings` | 当前 output base 的默认模型执行配置与节点覆盖偏好；只消费 capability，保存/清空走 revision CAS |
 | `/n/:sid` | 重定向到 Stage0；`/n/:sid` 下只剩 run / stage0 / stage1 三个可达屏 |
-| `/n/:sid/run` | 全链进度（stage0.remove、stage1.partition 与 11 个 `str06.` 节点顺序）、事件、工作单元耗时/token 与累计额度；可选择本次运行或跨运行累计，展开尝试和所属日志；节点顺序、续跑前沿、下一处理者和可用动作全部来自后端。层级复检不在这屏：`/check` 取值面只剩 stage0/stage1，结论归那两屏的 CheckPanel |
+| `/n/:sid/run` | 全链进度（stage0.remove、stage1.partition 与 14 个 `str06.` 节点顺序）、事件、工作单元耗时/token 与累计额度；可选择本次运行或跨运行累计，展开尝试和所属日志；节点顺序、续跑前沿、下一处理者和可用动作全部来自后端。层级复检不在这屏：`/check` 取值面只剩 stage0/stage1，结论归那两屏的 CheckPanel |
 | `/n/:sid/stage0` | 整本剔除只读监控；完整原文默认展开。上传已自动开跑时通常不需在此发起作业 |
 | `/n/:sid/stage1` | 校验结论与切分只读展示；章节索引、切分正文和一次开篇文案，按后端诊断标出重号/缺号/倒退 |
 | `/str06/:candidate` | STR-06 链只读监控：workflow 状态、节点盘面事实、ledger 成本、Characters／Blueprint／Design／WriterBookIR 导航、章正文与章回执、Hook、NameMap 与成书 manifest，以及成书全文下载。不进左导航、无 check 面板、无写按钮。真实书的 run 目录里也有 `runtime/candidate_workflow.json`，书名 sid 同样可作为 candidate 名监控真实跑书 |

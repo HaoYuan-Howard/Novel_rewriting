@@ -29,10 +29,12 @@ ARTIFACT_PATHS: Final[dict[str, str]] = {
     # ③ `{nn}`／`{title}` 占位符由 `artifact_regex` 编译（见 `contracts/schema/__init__.py`），
     #   与符号键的 `artifact_rel(name, nn=…)` 是同一套占位符语义。
     # Stage0/1 保持符号键不变——那一层不在本轮范围，它的消费者照旧。
-    # ── Stage2（str06.stage2.source／names）──
+    # ── Stage2（B2 五节点：book／chapters／names／associate／compile）──
+    'stage2/observations/book.json': 'stage2/observations/book.json',
+    'stage2/observations/ch{nn}.json': 'stage2/observations/ch{nn}.json',
+    'stage2/observations/names.json': 'stage2/observations/names.json',
+    'stage2/observations/associate.json': 'stage2/observations/associate.json',
     'stage2/blueprints/chapter_blueprints.json': 'stage2/blueprints/chapter_blueprints.json',
-    'stage2/compiled/book_extraction.json': 'stage2/compiled/book_extraction.json',
-    'stage2/compiled/input_snapshots.json': 'stage2/compiled/input_snapshots.json',
     'stage2/acceptance/fold.json': 'stage2/acceptance/fold.json',
     'stage2/characters/characters.json': 'stage2/characters/characters.json',
     # ── Stage4（preserve／body_design／hook_design／bind／compile）──
@@ -110,6 +112,12 @@ RETIRED_ARTIFACT_PATHS: Final[dict[str, str]] = {
     'stage2.knowledge_links': 'stage2/knowledge_links.json',
     'stage2.global_review': 'stage2/global_review.json',
     'stage2.global_review_decisions': 'stage2/global_review_decisions.json',
+    # ── B2 五节点重建退役（2026-09-27，D3/D9）：联合抽取的派生输入面──
+    # book_extraction 由 compile 直接发布 Characters 双真源取代（D9）；
+    # input_snapshots 随 D3「章观察互不依赖」退役（不再有逐章输入快照）。
+    # 旧根上的同类文件只读保留，新协议下新根全量重购（I-13，无转换层）。
+    'stage2.compiled.book_extraction': 'stage2/compiled/book_extraction.json',
+    'stage2.compiled.input_snapshots': 'stage2/compiled/input_snapshots.json',
     'stage3.style_grounding': 'stage3/style_grounding.json',
     # STR-03-S4：正式计划退役；章集/预算/对账边拆入 Design + Context provenance。
     'stage4.plan_chapters': 'stage4/plan_chapters.json',
@@ -160,11 +168,16 @@ STAGE1_HOOK_COPY = artifact_rel('stage1.hook_copy')
 # ── STR-06 新链路径常量（F8a 激活；键即 rel，常量只是便利别名）────────────
 # 新链 runner／store／state 一律直接写 rel 字面（与候选产物表同一来源）；
 # 这些常量只服务「同一个路径在多处出现」的场合，不构成第二份命名权威。
+STR06_STAGE2_OBS_BOOK = artifact_rel('stage2/observations/book.json')
+STR06_STAGE2_OBS_CHAPTER = artifact_rel('stage2/observations/ch{nn}.json')
+STR06_STAGE2_OBS_NAMES = artifact_rel('stage2/observations/names.json')
+STR06_STAGE2_OBS_ASSOCIATE = artifact_rel('stage2/observations/associate.json')
 STR06_STAGE2_BLUEPRINTS = artifact_rel('stage2/blueprints/chapter_blueprints.json')
-STR06_STAGE2_BOOK_EXTRACTION = artifact_rel('stage2/compiled/book_extraction.json')
-STR06_STAGE2_INPUT_SNAPSHOTS = artifact_rel('stage2/compiled/input_snapshots.json')
 STR06_STAGE2_FOLD = artifact_rel('stage2/acceptance/fold.json')
 STR06_STAGE2_CHARACTERS = artifact_rel('stage2/characters/characters.json')
+# ⚠ B2 退役派生输入（2026-09-27，D3/D9）：只能识别与拒绝，不再提供读写。
+STR06_STAGE2_BOOK_EXTRACTION = RETIRED_ARTIFACT_PATHS['stage2.compiled.book_extraction']
+STR06_STAGE2_INPUT_SNAPSHOTS = RETIRED_ARTIFACT_PATHS['stage2.compiled.input_snapshots']
 STR06_PRESERVE_CHECKPOINT = artifact_rel('runtime/preserve_checkpoint.json')
 STR06_RECONSTRUCTION_BRIEF = artifact_rel('stage4/grounding/reconstruction_brief.json')
 STR06_SEMANTIC_BINDING = artifact_rel('stage4/grounding/semantic_binding.json')
@@ -181,6 +194,11 @@ STR06_STAGE5_BODY = artifact_rel('stage5/body/ch{nn}.txt')
 STR06_STAGE5_BODY_RECEIPT = artifact_rel('stage5/acceptance/body/ch{nn}.json')
 STR06_NAME_MAP = artifact_rel('stage7/naming/name_map.json')
 STR06_DELIVERY_MANIFEST = artifact_rel('stage7/final/delivery_manifest.json')
+
+
+def str06_chapter_observation_rel(ordinal: int) -> str:
+    """新链逐章观察路径（`stage2/observations/ch{nn}.json`，B2 五节点）。"""
+    return artifact_rel('stage2/observations/ch{nn}.json', nn=ordinal)
 
 
 def str06_body_rel(ordinal: int) -> str:
@@ -209,12 +227,17 @@ def str06_book_rel(title: str) -> str:
 # `tests/test_str06_f7e_freeze.py`。改一条路径就必须同批改这里，否则契约身份
 # 与版本面当场分家。
 STR06_ARTIFACT_RC_VERSIONS: Final[dict[str, str]] = {
+    # rc6（2026-09-27 B2 五节点重建，D3/D8/D9）：观察与关联协议落地
+    # （`contracts/schema/observation.py`，协议版本 stage2-observation-v1）；
+    # 联合抽取的派生输入（book_extraction／input_snapshots）退役，Characters
+    # 与 Blueprint 改由 str06.stage2.compile 作为唯一 writer 发布。
+    'stage2/observations/book.json': 'str06-rc6',
+    'stage2/observations/ch{nn}.json': 'str06-rc6',
+    'stage2/observations/names.json': 'str06-rc6',
+    'stage2/observations/associate.json': 'str06-rc6',
     # v13（2026-09-26 质量改进批次二）：拍模型三类转移＋场景分段；v12 存量拒读。
     'stage2/blueprints/chapter_blueprints.json': 'str06-rc5',
-    'stage2/compiled/book_extraction.json': 'str06-rc2',
-    # v13 同批：快照渲染逐条带来源与标识登记（D11）；fold 读数结构化
-    # （每章空转移拍比例＋书末未揭示 concealed）。
-    'stage2/compiled/input_snapshots.json': 'str06-rc5',
+    # v13 同批：fold 读数结构化（每章空转移拍比例＋书末未揭示 concealed）。
     'stage2/acceptance/fold.json': 'str06-rc5',
     'stage2/characters/characters.json': 'str06-rc3',
     'runtime/preserve_checkpoint.json': 'str06-rc3',

@@ -31,7 +31,7 @@ from novel.report import builder as report_builder
 from novel.report import build, render
 from novel.report.findings import ran, unverifiable
 
-NODE = 'str06.stage2.source'
+NODE = 'str06.stage2.book'
 STAGE = 'stage2'
 
 
@@ -142,7 +142,7 @@ def test_a_valued_fix_route_gets_its_chapters_from_machine_evidence(monkeypatch)
     rule = Rule(
         rule='demo_chapters', stage='stage2', item='示例', sev='hard',
         who_checks='HARD', requirement='R-3.5', owner='stage2',
-        fix=('str06.stage2.source', '--chapters'),
+        fix=('str06.stage2.book', '--chapters'),
         fix_args_from_finding=('--chapters',),
     )
     route = report_builder._fix_route(
@@ -159,7 +159,7 @@ def test_a_valued_fix_route_without_an_argument_says_it_is_unavailable(monkeypat
     rule = Rule(
         rule='demo_chapters', stage='stage2', item='示例', sev='hard',
         who_checks='HARD', requirement='R-3.5', owner='stage2',
-        fix=('str06.stage2.source', '--chapters'),
+        fix=('str06.stage2.book', '--chapters'),
         fix_args_from_finding=('--chapters',),
     )
     route = report_builder._fix_route(

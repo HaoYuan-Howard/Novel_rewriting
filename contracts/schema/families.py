@@ -27,9 +27,11 @@ class PathFamily(NamedTuple):
 
     prefix:            目录前缀（以 `/` 结尾）；家族内文件名模式由各 owner 契约束
                        （如 `scene_{nnn}.json`），路径层不管内容命名。
-    kind:              canonical / derived / report / prose / runtime / audit。
-                       正文与付费 checkpoint 不是可随意删除的缓存——kind 即删除
-                       政策的输入（F8 收口前不得实现任何按 kind 的清理）。
+    kind:              canonical / semantic / derived / report / prose / runtime /
+                       audit。正文、付费 checkpoint 与付费观察决定不是可随意
+                       删除的缓存——kind 即删除政策的输入（F8 收口前不得实现
+                       任何按 kind 的清理）。`semantic`（B2）＝付费 semantic unit
+                       的观察/关联决定（已购恢复证据，非派生缓存）。
     writer_owner:      唯一 writer（I-25）；登记为语义 owner 名，F2–F5 落实到模块。
     """
 
@@ -41,12 +43,16 @@ class PathFamily(NamedTuple):
 #: 家族键 → 身份。键用 `str06.<owner>.<family>` 命名，防与现役 `ARTIFACT_PATHS`
 #: 的 `stageN.<name>` 键撞语义空间。
 STR06_PATH_FAMILIES: Final[dict[str, PathFamily]] = {
+    # B2 五节点观察家族（2026-09-27，D3/D8/D9）：观察与关联决定是付费的
+    # 内部材料（已购恢复证据），不是可重建派生物也不是普通缓存——kind 取
+    # 'semantic'（删除政策输入：与 canonical 同级保留，不随派生物清理）。
+    'str06.stage2.observations': PathFamily(
+        prefix='stage2/observations/', kind='semantic', writer_owner='stage2.semantic'),
+    # Characters／Blueprint 双真源的唯一 writer 是 str06.stage2.compile（D9）。
     'str06.stage2.characters': PathFamily(
-        prefix='stage2/characters/', kind='canonical', writer_owner='stage2.characters'),
+        prefix='stage2/characters/', kind='canonical', writer_owner='stage2.compile'),
     'str06.stage2.blueprints': PathFamily(
-        prefix='stage2/blueprints/', kind='canonical', writer_owner='stage2.blueprint'),
-    'str06.stage2.compiled': PathFamily(
-        prefix='stage2/compiled/', kind='derived', writer_owner='stage2.compiler'),
+        prefix='stage2/blueprints/', kind='canonical', writer_owner='stage2.compile'),
     'str06.stage2.acceptance': PathFamily(
         prefix='stage2/acceptance/', kind='audit', writer_owner='stage2.acceptance'),
     'str06.stage4.design': PathFamily(

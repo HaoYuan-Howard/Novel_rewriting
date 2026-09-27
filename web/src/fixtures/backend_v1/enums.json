@@ -736,8 +736,10 @@
   4
  ],
  "agent_executor_nodes": [
-  "str06.stage2.source",
+  "str06.stage2.book",
+  "str06.stage2.chapters",
   "str06.stage2.names",
+  "str06.stage2.associate",
   "str06.stage4.preserve",
   "str06.stage4.body_design",
   "str06.stage4.bind",
@@ -805,8 +807,11 @@
  "pipeline_steps": [
   "stage0.remove",
   "stage1.partition",
-  "str06.stage2.source",
+  "str06.stage2.book",
+  "str06.stage2.chapters",
   "str06.stage2.names",
+  "str06.stage2.associate",
+  "str06.stage2.compile",
   "str06.stage4.preserve",
   "str06.stage4.body_design",
   "str06.stage4.bind",
@@ -945,8 +950,8 @@
     "approval_projection": []
    }
   },
-  "str06.stage2.source": {
-   "label": "Stage2 源语义抽取（book＋chNN）与确定性 Blueprint 编译",
+  "str06.stage2.book": {
+   "label": "Stage2 书级观察（人物候选、称谓及证据、初态、世界约束）",
    "paid": true,
    "stage": "stage2",
    "section": "R-2",
@@ -954,13 +959,10 @@
     "--check-only"
    ],
    "produces": [
-    "stage2/blueprints/chapter_blueprints.json",
-    "stage2/compiled/book_extraction.json",
-    "stage2/compiled/input_snapshots.json",
-    "stage2/acceptance/fold.json"
+    "stage2/observations/book.json"
    ],
    "lifecycle": {
-    "unit_kind": "strategy_and_chapter",
+    "unit_kind": "book",
     "input_workpack": "正式 Stage1 MainText 章数组（阅读序密集）＋hook_copy 章前文字（e00 证据段）",
     "generation_mode": "executor",
     "review_mode": "none",
@@ -969,9 +971,43 @@
      "stop"
     ],
     "repair_owners": [
-     "str06.stage2.source"
+     "str06.stage2.book"
     ],
-    "session_scope": "executor:strategy/chapter",
+    "session_scope": "executor:book",
+    "recovery_entries": [
+     "saved_response",
+     "historical_adoption",
+     "owner_patch"
+    ],
+    "executor_content_limit": 4,
+    "approval_bindings": [],
+    "approval_projection": []
+   }
+  },
+  "str06.stage2.chapters": {
+   "label": "Stage2 逐章观察（事件与三类转移；互不依赖，D3）",
+   "paid": true,
+   "stage": "stage2",
+   "section": "R-2",
+   "flags": [
+    "--check-only"
+   ],
+   "produces": [
+    "stage2/observations/ch{nn}.json"
+   ],
+   "lifecycle": {
+    "unit_kind": "chapter",
+    "input_workpack": "书级人物表（book 观察）、本章句段与第 1..k-1 章原文、抽取协议",
+    "generation_mode": "executor",
+    "review_mode": "none",
+    "review_scope": "机械校验自证；章观察互不依赖，缺失单元恢复不重购已存结果（D3）",
+    "repair_actions": [
+     "stop"
+    ],
+    "repair_owners": [
+     "str06.stage2.chapters"
+    ],
+    "session_scope": "executor:chapter",
     "recovery_entries": [
      "saved_response",
      "historical_adoption",
@@ -983,7 +1019,7 @@
    }
   },
   "str06.stage2.names": {
-   "label": "Stage2 源名称结构窄调用并发布 Characters v4",
+   "label": "Stage2 源名称结构观察（家族、名、化名、称谓构词）",
    "paid": true,
    "stage": "stage2",
    "section": "R-3",
@@ -991,11 +1027,11 @@
     "--check-only"
    ],
    "produces": [
-    "stage2/characters/characters.json"
+    "stage2/observations/names.json"
    ],
    "lifecycle": {
     "unit_kind": "book",
-    "input_workpack": "源 core 抽取、完整 MainText 与 hook_copy 章前文字",
+    "input_workpack": "书级人物表（book 观察）、完整 MainText 与 hook_copy 章前文字",
     "generation_mode": "executor",
     "review_mode": "none",
     "review_scope": "机械校验自证；姓氏构词探针只报告",
@@ -1012,6 +1048,73 @@
      "owner_patch"
     ],
     "executor_content_limit": 4,
+    "approval_bindings": [],
+    "approval_projection": []
+   }
+  },
+  "str06.stage2.associate": {
+   "label": "Stage2 跨章关联（同一命题、同维状态、悬念配对、跨章因果与续场，D8）",
+   "paid": true,
+   "stage": "stage2",
+   "section": "R-2",
+   "flags": [
+    "--check-only"
+   ],
+   "produces": [
+    "stage2/observations/associate.json"
+   ],
+   "lifecycle": {
+    "unit_kind": "book",
+    "input_workpack": "book 与 chapters 观察的句柄及最小文本（compiler 投影）",
+    "generation_mode": "executor",
+    "review_mode": "none",
+    "review_scope": "机械校验自证；只选已给句柄，未决项保持未决、不默认合并或默认不同（D8）",
+    "repair_actions": [
+     "stop"
+    ],
+    "repair_owners": [
+     "str06.stage2.associate"
+    ],
+    "session_scope": "executor:book",
+    "recovery_entries": [
+     "saved_response",
+     "historical_adoption",
+     "owner_patch"
+    ],
+    "executor_content_limit": 4,
+    "approval_bindings": [],
+    "approval_projection": []
+   }
+  },
+  "str06.stage2.compile": {
+   "label": "Stage2 确定性编译：解析证据、生成 ID、执行关联，发布 Characters＋Blueprint（D9）",
+   "paid": false,
+   "stage": "stage2",
+   "section": "R-2",
+   "flags": [],
+   "produces": [
+    "stage2/characters/characters.json",
+    "stage2/blueprints/chapter_blueprints.json",
+    "stage2/acceptance/fold.json"
+   ],
+   "lifecycle": {
+    "unit_kind": "book",
+    "input_workpack": "book／chapters／names／associate 四份观察",
+    "generation_mode": "deterministic",
+    "review_mode": "none",
+    "review_scope": "未决项拒绝发布并按 item 报告（D8）；双真源唯一 writer（D9）",
+    "repair_actions": [
+     "recompute",
+     "stop"
+    ],
+    "repair_owners": [
+     "str06.stage2.compile"
+    ],
+    "session_scope": "none",
+    "recovery_entries": [
+     "deterministic_replay"
+    ],
+    "executor_content_limit": 0,
     "approval_bindings": [],
     "approval_projection": []
    }
@@ -1416,19 +1519,43 @@
    "required_inputs": []
   },
   {
-   "kind": "str06.stage2.source",
-   "label": "Stage2 源语义抽取（book＋chNN）与确定性 Blueprint 编译",
+   "kind": "str06.stage2.book",
+   "label": "Stage2 书级观察（人物候选、称谓及证据、初态、世界约束）",
    "extra": null,
    "paid": true,
    "free_flag": null,
-   "writes": "stage2/blueprints/chapter_blueprints.json · stage2/compiled/book_extraction.json · stage2/compiled/input_snapshots.json · stage2/acceptance/fold.json",
+   "writes": "stage2/observations/book.json",
    "writes_disk": true,
    "needs_value": null,
    "required_inputs": []
   },
   {
-   "kind": "str06.stage2.source",
-   "label": "Stage2 源语义抽取（book＋chNN）与确定性 Blueprint 编译 --check-only",
+   "kind": "str06.stage2.book",
+   "label": "Stage2 书级观察（人物候选、称谓及证据、初态、世界约束） --check-only",
+   "extra": [
+    "--check-only"
+   ],
+   "paid": false,
+   "free_flag": "--check-only",
+   "writes": "",
+   "writes_disk": false,
+   "needs_value": null,
+   "required_inputs": []
+  },
+  {
+   "kind": "str06.stage2.chapters",
+   "label": "Stage2 逐章观察（事件与三类转移；互不依赖，D3）",
+   "extra": null,
+   "paid": true,
+   "free_flag": null,
+   "writes": "stage2/observations/ch{nn}.json",
+   "writes_disk": true,
+   "needs_value": null,
+   "required_inputs": []
+  },
+  {
+   "kind": "str06.stage2.chapters",
+   "label": "Stage2 逐章观察（事件与三类转移；互不依赖，D3） --check-only",
    "extra": [
     "--check-only"
    ],
@@ -1441,18 +1568,18 @@
   },
   {
    "kind": "str06.stage2.names",
-   "label": "Stage2 源名称结构窄调用并发布 Characters v4",
+   "label": "Stage2 源名称结构观察（家族、名、化名、称谓构词）",
    "extra": null,
    "paid": true,
    "free_flag": null,
-   "writes": "stage2/characters/characters.json",
+   "writes": "stage2/observations/names.json",
    "writes_disk": true,
    "needs_value": null,
    "required_inputs": []
   },
   {
    "kind": "str06.stage2.names",
-   "label": "Stage2 源名称结构窄调用并发布 Characters v4 --check-only",
+   "label": "Stage2 源名称结构观察（家族、名、化名、称谓构词） --check-only",
    "extra": [
     "--check-only"
    ],
@@ -1460,6 +1587,41 @@
    "free_flag": "--check-only",
    "writes": "",
    "writes_disk": false,
+   "needs_value": null,
+   "required_inputs": []
+  },
+  {
+   "kind": "str06.stage2.associate",
+   "label": "Stage2 跨章关联（同一命题、同维状态、悬念配对、跨章因果与续场，D8）",
+   "extra": null,
+   "paid": true,
+   "free_flag": null,
+   "writes": "stage2/observations/associate.json",
+   "writes_disk": true,
+   "needs_value": null,
+   "required_inputs": []
+  },
+  {
+   "kind": "str06.stage2.associate",
+   "label": "Stage2 跨章关联（同一命题、同维状态、悬念配对、跨章因果与续场，D8） --check-only",
+   "extra": [
+    "--check-only"
+   ],
+   "paid": false,
+   "free_flag": "--check-only",
+   "writes": "",
+   "writes_disk": false,
+   "needs_value": null,
+   "required_inputs": []
+  },
+  {
+   "kind": "str06.stage2.compile",
+   "label": "Stage2 确定性编译：解析证据、生成 ID、执行关联，发布 Characters＋Blueprint（D9）",
+   "extra": null,
+   "paid": false,
+   "free_flag": null,
+   "writes": "stage2/characters/characters.json · stage2/blueprints/chapter_blueprints.json · stage2/acceptance/fold.json",
+   "writes_disk": true,
    "needs_value": null,
    "required_inputs": []
   },

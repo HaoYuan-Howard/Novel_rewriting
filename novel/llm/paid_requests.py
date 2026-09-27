@@ -1327,8 +1327,11 @@ def init_or_resume_candidate_workflow(
             workflow = record
     ledger = CostLedger(path=ledger_path(Path(base)),
                         parent_run_id=workflow.epoch.session_run_id)
+    # B2（2026-09-27）：`str06.stage2.source` 退役；候选根初始化的默认绑定
+    # 改挂链首付费节点 `str06.stage2.book`（owner 级记账仍由 `_owner_unit`
+    # 按 owner 名解析，本默认只服务根级 provenance 附加面）。
     context = CandidateRunContext(
-        root=repository.root, node='str06.stage2.source', epoch=workflow.epoch,
+        root=repository.root, node='str06.stage2.book', epoch=workflow.epoch,
         code=code, ledger=ledger, root_sha1=root_sha1,
         configured_model=configured_model, readonly=readonly)
     repository.attach_context(context)

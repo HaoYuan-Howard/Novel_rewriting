@@ -467,12 +467,12 @@ PIPELINE_TOTAL_CONCURRENCY_MIN: Final = 1
 PIPELINE_TOTAL_CONCURRENCY_MAX: Final = 32
 PIPELINE_CONCURRENCY_TRIALS: Final = (4, 6, 8)
 #: 并发覆盖只支持**新链逐章节点**（B1）：键必须已在 `NODES` 登记。现役注册表
-#: 只有 `str06.stage5.body`（正文逐章 owner，scope=chapter:N）；
-#: `str06.stage2.chapters` 由 B2 建节点时同步登记进本表（删除条件：B2 落地）。
-#: 旧链键 `stage2.blueprint`／`stage4.design`／`stage4.plan`／`stage5.write`
+#: 两个逐章 owner：`str06.stage2.chapters`（章观察，B2 五节点重建时登记）与
+#: `str06.stage5.body`（正文逐章 owner，scope=chapter:N）。旧链键
+#: `stage2.blueprint`／`stage4.design`／`stage4.plan`／`stage5.write`
 #: 已随旧链退役删除（str06.md「额度、并发与配置」）。并发度不进语义身份。
 PIPELINE_PARALLEL_NODES: Final = (
-    'str06.stage5.body',)
+    'str06.stage2.chapters', 'str06.stage5.body')
 #: 新链逐章节点的单供应商稳定性护栏：并发档位上限由
 #: `PIPELINE_CONCURRENCY_TRIALS` 发布（不再为退役旧链节点保留 8 的特例）。
 STRUCTURE_APPROVAL_DECISIONS: Final = ('accept', 'request_replan')
@@ -1795,6 +1795,9 @@ class NodeSpec(NamedTuple):
 #: 11 个 `str06.` 前缀节点取代旧 Stage2/4/5/6/7 全部 14 个节点键。旧键整体移入
 #: `RETIRED_NODES` 只供 append-only 作业历史解码，不 preview、不调度、不建新队列。
 #: Stage6 整层退役（`STAGES` 不再含 `stage6`，`RETIRED_STAGES` 登记）。
+#: 【B2 五节点重建（2026-09-27，D9）】`str06.stage2.source` 退役，Stage2 扩为
+#: book／chapters／names／associate／compile 五 owner，公开节点 11→14；冻结
+#: 基线随 B2 重新钉定（`tests/test_str06_f7e_freeze.py`）。
 #:
 #: 【为什么 `str06.` 前缀原样保留】候选身份在 F7a–F7e 已完成付费对账、 epoch 与
 #: ledger 记账；切换时改命名空间等于让全部已购证据的身份悬空。前缀同时从结构上
@@ -1826,32 +1829,68 @@ NODES: Final[dict[str, NodeSpec]] = {
                                            artifact_paths.STAGE1_HOOK_COPY),
                                  operator_redo='canonical'),
     # ── STR-06 新链（F8a 激活；owner runner 见 novel/stages/chain.py）──
+    # B2（2026-09-27 职责解耦 D3/D8/D9）：Stage2 按语义单元与作用域拆五节点，
+    # `str06.stage2.source`（book＋chNN 联合抽取）退役。观察与关联协议见
+    # `contracts/schema/observation.py`；compile 是 Characters＋Blueprint 双真源
+    # 的唯一 writer（`stage2/compiled/book_extraction.json` 派生输入退役）。
     # 恢复入口沿用候选生命周期：saved_response（本地已购行）、historical_adoption
     # （F7a 登记的跨根历史采用）、owner_patch（基线身份核验后的语义修复）、
     # chapter_prefix_replay（章前缀免费重放）、same_context_rewrite（同 Context
     # 有限重写）、deterministic_replay（确定性节点免费重算）。
-    'str06.stage2.source': NodeSpec(
-        'stage2', 'R-2', True, 'Stage2 源语义抽取（book＋chNN）与确定性 Blueprint 编译',
+    'str06.stage2.book': NodeSpec(
+        'stage2', 'R-2', True, 'Stage2 书级观察（人物候选、称谓及证据、初态、世界约束）',
         flags=('--check-only',),
-        produces=('stage2/blueprints/chapter_blueprints.json',
-                  'stage2/compiled/book_extraction.json',
-                  'stage2/compiled/input_snapshots.json',
-                  'stage2/acceptance/fold.json'),
+        produces=('stage2/observations/book.json',),
         lifecycle=NodeLifecycleSpec(
-            'strategy_and_chapter',
+            'book',
             '正式 Stage1 MainText 章数组（阅读序密集）＋hook_copy 章前文字（e00 证据段）',
             'executor', 'none', '机械校验自证；语义未审以 unver 披露',
-            ('stop',), ('str06.stage2.source',), 'executor:strategy/chapter',
+            ('stop',), ('str06.stage2.book',), 'executor:book',
+            ('saved_response', 'historical_adoption', 'owner_patch'), 4)),
+    'str06.stage2.chapters': NodeSpec(
+        'stage2', 'R-2', True, 'Stage2 逐章观察（事件与三类转移；互不依赖，D3）',
+        flags=('--check-only',),
+        produces=('stage2/observations/ch{nn}.json',),
+        lifecycle=NodeLifecycleSpec(
+            'chapter',
+            '书级人物表（book 观察）、本章句段与第 1..k-1 章原文、抽取协议',
+            'executor', 'none',
+            '机械校验自证；章观察互不依赖，缺失单元恢复不重购已存结果（D3）',
+            ('stop',), ('str06.stage2.chapters',), 'executor:chapter',
             ('saved_response', 'historical_adoption', 'owner_patch'), 4)),
     'str06.stage2.names': NodeSpec(
-        'stage2', 'R-3', True, 'Stage2 源名称结构窄调用并发布 Characters v4',
+        'stage2', 'R-3', True, 'Stage2 源名称结构观察（家族、名、化名、称谓构词）',
         flags=('--check-only',),
-        produces=('stage2/characters/characters.json',),
+        produces=('stage2/observations/names.json',),
         lifecycle=NodeLifecycleSpec(
-            'book', '源 core 抽取、完整 MainText 与 hook_copy 章前文字', 'executor', 'none',
+            'book', '书级人物表（book 观察）、完整 MainText 与 hook_copy 章前文字',
+            'executor', 'none',
             '机械校验自证；姓氏构词探针只报告',
             ('stop',), ('str06.stage2.names',), 'executor:book',
             ('saved_response', 'historical_adoption', 'owner_patch'), 4)),
+    'str06.stage2.associate': NodeSpec(
+        'stage2', 'R-2', True,
+        'Stage2 跨章关联（同一命题、同维状态、悬念配对、跨章因果与续场，D8）',
+        flags=('--check-only',),
+        produces=('stage2/observations/associate.json',),
+        lifecycle=NodeLifecycleSpec(
+            'book', 'book 与 chapters 观察的句柄及最小文本（compiler 投影）',
+            'executor', 'none',
+            '机械校验自证；只选已给句柄，未决项保持未决、不默认合并或默认不同（D8）',
+            ('stop',), ('str06.stage2.associate',), 'executor:book',
+            ('saved_response', 'historical_adoption', 'owner_patch'), 4)),
+    'str06.stage2.compile': NodeSpec(
+        'stage2', 'R-2', False,
+        'Stage2 确定性编译：解析证据、生成 ID、执行关联，发布 Characters＋Blueprint（D9）',
+        produces=('stage2/characters/characters.json',
+                  'stage2/blueprints/chapter_blueprints.json',
+                  'stage2/acceptance/fold.json'),
+        lifecycle=NodeLifecycleSpec(
+            'book', 'book／chapters／names／associate 四份观察',
+            'deterministic', 'none',
+            '未决项拒绝发布并按 item 报告（D8）；双真源唯一 writer（D9）',
+            ('recompute', 'stop'), ('str06.stage2.compile',), 'none',
+            ('deterministic_replay',), 0)),
     'str06.stage4.preserve': NodeSpec(
         'stage4', 'R-5', True, 'Stage4 Preserve（保存策略义务）与 ReconstructionBrief 投影',
         flags=('--check-only',),
@@ -2024,7 +2063,8 @@ RETIRED_APPROVAL_BINDINGS: Final[Mapping[str, tuple[tuple[str, str], ...]]] = {
 #: 本表显式列值而不从 ``NODES`` 现算，配套闭合测试守 ``spec.paid`` 双向一致：
 #: 新增付费节点却没接 executor、或代码节点误标 paid，两种漂移都必须响亮地红。
 LLM_EXECUTOR_NODES: Final = (
-    'str06.stage2.source', 'str06.stage2.names',
+    'str06.stage2.book', 'str06.stage2.chapters', 'str06.stage2.names',
+    'str06.stage2.associate',
     'str06.stage4.preserve', 'str06.stage4.body_design', 'str06.stage4.bind',
     'str06.stage4.hook_design',
     'str06.stage5.body', 'str06.stage5.hook',

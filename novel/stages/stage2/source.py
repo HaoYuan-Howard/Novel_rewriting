@@ -45,34 +45,16 @@ def _slug_ok(slug: str) -> bool:
     return bool(re.fullmatch(r'[a-z0-9_]+', slug))
 
 
-def _chapter_of_evidence(ref: str) -> int:
-    """证据段 id 的章序：`e00_*`＝章前文字（0），`eNN_*`＝第 NN 章。"""
-    import re
-    m = re.fullmatch(r'e(\d+)_\d+', ref)
-    if m is None:
-        raise ValueError(f'证据段 id 形状非法：{ref!r}')
-    return int(m.group(1))
-
-
 def _derive_from_chapter(surface: str, source_refs, segments: dict) -> tuple[int, str | None]:
     """称谓 from_chapter 的锚点派生（D12/I-15）：compiler 算，不让 LLM 重复生成。
 
-    锚点＝所引证据段中**逐字包含该 surface** 的最早一段；章前锚点（e00）映射到
-    第 1 章（阅读序从 1 开始）。没有任何被引段包含该字面即拒——那是抽取把锚点
-    指错了地方（QP-04 的根因：章前文字的称谓被标成第 0 章）。调用方只给 id、
-    不给段文本时（单元测试的合成证据面）按 id 前缀派生，字面闸无从核对。
+    规则与实现唯一落在 `novel/stages/stage2/resolver.py::EvidenceResolver`
+    （B2 起 Resolver 是 Stage2 全部证据定位的唯一实现，S-03：兼容/共用逻辑
+    不散落）；本函数只保留旧 compile_book 的调用形状（(chapter, 问题串)）。
     """
-    known = [(ref, segments[ref]) for ref in source_refs if ref in segments]
-    if known:
-        hits = [(ref, seg) for ref, seg in known
-                if surface in ((seg or {}).get('text') or '')]
-        if not hits:
-            return 0, (f'surface {surface!r} 的证据锚点不含该字面'
-                       f'（source_refs={list(source_refs)}）')
-        chapter = min((seg or {}).get('chapter', 0) for _ref, seg in hits)
-    else:
-        chapter = min((_chapter_of_evidence(ref) for ref in source_refs), default=0)
-    return max(chapter, 1), None
+    from novel.stages.stage2.resolver import EvidenceResolver
+    chapter, issue = EvidenceResolver(segments).surface_chapter(surface, source_refs)
+    return (chapter if chapter is not None else 0), (issue.message if issue else None)
 
 
 def compile_book(

@@ -354,7 +354,7 @@ def test_invalid_run_id_is_a_stable_cli_input_error_before_context(
 
     with pytest.raises(SystemExit) as stopped:
         _run(
-            *head, 'run', 'str06.stage2.source', 'book-1',
+            *head, 'run', 'str06.stage2.book', 'book-1',
             '--base', str(tmp_path), '--yes')
 
     assert stopped.value.code == X.TERMINAL_STATE == 2
@@ -666,7 +666,7 @@ def test_paid_nodes_follow_the_global_default_model_without_pins(monkeypatch):
     plan = M._llm_client(RunContext.open(
         base, '123', 'str06.stage4.bind', paid=True, write_ledger=False))
     other = M._llm_client(RunContext.open(
-        base, '123', 'str06.stage2.source', paid=True, write_ledger=False))
+        base, '123', 'str06.stage2.book', paid=True, write_ledger=False))
 
     assert design.model == 'deepseek-flash' == config.DEFAULT_MODEL
     assert plan.model == 'deepseek-flash'
@@ -721,8 +721,9 @@ RETIRED_AGENT_BACKEND_ARGS = (
 # 八个已迁移节点的正向面；Stage5 的 flag 组合是四种不同业务身份，不能
 # 只测“节点在名单里”后让 `_dispatch` 静默吞掉 chapters/revise。
 _PROFILED_RUN_CASES = (
-    # F8a/F8b：现役付费面 9 个 str06 节点，旗标面只有 --check-only。
-    pytest.param('str06.stage2.source', [], {}, id='stage2-source'),
+    # F8a/F8b；B2（2026-09-27）五节点重建后付费面 11 个 str06 节点，
+    # 旗标面只有 --check-only（样本逐表同步）。
+    pytest.param('str06.stage2.book', [], {}, id='stage2-book'),
     pytest.param('str06.stage2.names', [], {}, id='stage2-names'),
     pytest.param('str06.stage4.preserve', [], {}, id='stage4-preserve'),
     pytest.param('str06.stage4.body_design', [], {}, id='stage4-body-design'),

@@ -35,10 +35,10 @@
 ## 调度与模型边界
 
 - orchestrator 只执行 planner 的冻结 action；`HUMAN_NODES` 为空（2026-09-15 全自动裁决，
-  批次 B4），命中 `approval:*` waiting_on 为编排 bug（fail-closed）。F8a 起现役链是
-  11 个 `str06.` 节点（`contracts/invariants.py::NODES`），没有任何人工闸或改选面。
-  （过渡注记：2026-09-27 职责解耦裁决将在 B2 把 Stage2 拆为五节点、公开节点扩为 14，
-  届时同步本数；见 `docs/schema/str06.md` 与 `docs/REQUIREMENTS.md`。）
+  批次 B4），命中 `approval:*` waiting_on 为编排 bug（fail-closed）。现役链是 14 个
+  `str06.` 节点（`contracts/invariants.py::NODES`；B2 五节点重建，2026-09-27 D9——
+  Stage2 拆 book／chapters／names／associate／compile，`str06.stage2.source` 退役），
+  没有任何人工闸或改选面。见 `docs/schema/str06.md` 与 `docs/REQUIREMENTS.md`。
   run 停在精确恢复/披露面后续跑。semantic unit 在校验过的空 cwd 中运行；
   不要把工程指南、skill 或额外盘上材料加入模型上下文。
 - 业务工作单元、execution epoch 与 provider session 分开；代码 漂移走新 epoch，原 profiles 与累计额度保留。

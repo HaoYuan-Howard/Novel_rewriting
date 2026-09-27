@@ -47,8 +47,8 @@ orchestrator 推进，semantic unit 生成；Stage 页只读监控。`HUMAN_NODE
 - `chapter_ordinal` 是阅读序整数；输出章号恒等于源章号，不合并、不删除、不拆分、不重排
   **章**；允许跨章重构——场景可跨源章重组（`R-5.2`，STR-06 翻转后 `I-40` 的同款表述）。
 - stage 表示产物/schema/报告层，node 表示作业，二者不是一一对应。节点唯一登记在
-  `contracts/invariants.py::NODES`（F8a 起为 11 个 `str06.` 前缀新链节点），label 和
-  `STAGE_SECTIONS` 从注册表派生，不手写第二套映射。
+  `contracts/invariants.py::NODES`（F8a 起 `str06.` 前缀新链节点；B2 五节点重建后
+  为 14 个），label 和 `STAGE_SECTIONS` 从注册表派生，不手写第二套映射。
 - 作业 id 为 `<stage>.<动词>`（新链为 `str06.<stage>.<owner>`）；复检是 `--check-only`
   flag，不造 check 节点，Stage3 无现役产物或节点。
 - Stage5 按章串行成文，唯一正文落 `stage5/body/chNN.txt`（章级回执
@@ -118,39 +118,50 @@ orchestrator 推进，semantic unit 生成；Stage 页只读监控。`HUMAN_NODE
 纯数字番外仍需人工兜底；章号倒退不能直接当作番外。覆盖游走必须独立核对原文，不能与分章结果自证。
 精确字段见 `docs/schema/stage1.md`，边界与阈值带反例见 `tests/test_ingest_fixtures.py`。
 
-### R-2 · 源语义抽取（stage2 · str06.stage2.source）
+### R-2 · 源语义观察与编译（stage2 · B2 五节点）
 
-新链 Stage2 只有一个付费节点：`str06.stage2.source` 先对全书做一次 book 级联合抽取
-（`compile_book` → `CharactersCore`，落正式派生产物 `stage2/compiled/book_extraction.json`），
-再逐章编译 Blueprint v12（`ChapterCompiler`，落 `stage2/blueprints/chapter_blueprints.json`）。
-源章原文只进本节点自己的 prompt；下游一律消费编译产物（source-blind），不从源正文推语义。
-章序身份来自正式 Stage1 `MainText`（阅读序 1..N 密集）；**输入身份＝`main_text.json`
-＋`hook_copy.json` 两份盘上字节的组合摘要**（`R-2.9`）——Stage6 退役后章前文字（源引子）
-的唯一消费者就是本节点：它被切成 `e00_*` 证据段进书级调用与第 1 章抽取，按信息职责分流
-（开场前已成立的状态/关系/知情 → `initial_state`；实际发生的开场行动 → 第 1 章 beats；
-与正文重复的事件以正文为准；预告/概括不进 canonical；判断不了弃权），不对整篇引子打标签。
-`source_fold` 把 core 与 Blueprint 折成事件表供机械对账（含章前文字的两个只读读数）。
+**B2（2026-09-27 职责解耦 D3/D8/D9）**：Stage2 按语义单元与作用域拆五个节点——
+`str06.stage2.book`（书级观察：人物候选、称谓及证据、初态、世界约束）、
+`str06.stage2.chapters`（逐章观察，互不依赖可并行）、`str06.stage2.names`（源名称
+结构观察）、`str06.stage2.associate`（跨章关联）与免费 `str06.stage2.compile`
+（解析证据、生成 ID、执行关联，发布 Characters＋Blueprint 双真源；唯一 writer）。
+`str06.stage2.source`（book＋chNN 联合抽取）退役；派生输入
+`stage2/compiled/book_extraction.json` 与 `stage2/compiled/input_snapshots.json`
+退役，Stage4 改读 canonical。观察与关联协议显式版本化
+（`contracts/schema/observation.py`，`stage2-observation-v1`；I-13，无运行时转换层，
+旧根只读，新协议下新根全量重购）。模型输出面去机械化（I-20/I-21）：拍号、
+状态/约束编号、命题/loop/场景正式 ID、章序、offset、hash 一律由 compiler 生成；
+人物 slug 仍由模型给出（可读语义句柄）。证据定位归 Resolver
+（`novel/stages/stage2/resolver.py`：句段 id 闭集选择、逐字锚唯一定位）。
+源章原文只进观察节点自己的 prompt；下游一律消费编译产物（source-blind），
+不从源正文推语义。章序身份来自正式 Stage1 `MainText`（阅读序 1..N 密集）；
+**输入身份＝`main_text.json`＋`hook_copy.json` 两份盘上字节的组合摘要**（`R-2.9`）
+——章前文字（源引子）切成 `e00_*` 证据段进书级观察与第 1 章观察，按信息职责分流
+（开场前已成立的状态/关系/知情 → 初态；实际发生的开场行动 → 第 1 章拍；
+与正文重复的事件以正文为准；预告/概括不进 canonical；判断不了弃权），
+不对整篇引子打标签。`source_fold` 把 core 与 Blueprint 折成事件表供机械对账
+（含章前文字的两个只读读数）。
 语义未审以 unver 行常驻披露，不产生审批待办。字段见 `docs/schema/stage2.md`。
 
 | # | 要求 | 谁在查 |
 |---|---|---|
 | R-2.1 | book 级抽取编译闭合：`CharactersCore` 无未知键、无悬空引用、人物闭集自洽；编译错误当场 fail-fast，不落半份产物。 | `HARD`（`novel/stages/stage2/source.py::compile_book`） |
 | R-2.2 | 源章数组阅读序 1..N 密集且非空（`MainText` 模型保证）；目标章数恒等于源章数（同 `R-5.2`）。生产路径读正式 Stage1 产物，`--source-json` 只是开发路径。 | `HARD`（`novel/stages/chain.py::run_chain` + `contracts/schema/stage1.py::MainText`） |
-| R-2.3 | 逐章 Blueprint v13 编译闭合：三类转移（effects／cognition／loops）、场景边界与时间模式、participants／认知 holder 闭集、因果边合法；逐章输入快照确定性派生（`chapter_input_snapshot`），同输入同快照。 | `HARD`（`novel/stages/stage2/source.py::ChapterCompiler`） |
+| R-2.3 | 章观察与编译闭合（B2）：章观察（`ChapterObservation`）只含有序事件＋三类转移＋场景边界＋时间模式＋证据，**只含章内本地句柄**——没有前章快照、命题/loop 登记表、beat 表与因果边（D3）；章观察互不依赖，前章编译或关联失败不改变后章请求，缺失单元恢复不重购已存结果。participants／认知 holder 闭集、命题与 loop 引用闭合（本章登记表）与场景分段生成归 compile；拍号按事件列表序派发。 | `HARD`（`contracts/schema/observation.py::ChapterObservation`；compile 引擎随 B2 后续提交接线） |
 | R-2.4 | `source_fold` 事件与 Blueprint canonical 一致（落 `stage2/acceptance/fold.json`）；fold 是机械对账面，不产生新语义。章前文字（e00）的两个分流读数——开场拍对初态同键 set 同值、初态已知者又被开场拍告知（按**持有者与命题**核对，QP-07 修复）——只报告、不阻断。 | `HARD`（`novel/stages/stage2/source.py::source_fold`） |
 | R-2.5 | `CharactersCore` 与 `BlueprintsArtifactV13` 的盘上形状由 `ARTIFACT_SPECS` 登记（这两个模型不声明 `contract_version`，按 F8 义务在注册表登记形状）；不往模型加非 exclude 字段——那会改 `model_dump` 字节、从而改 prompt 与已购请求身份。 | `载体`（`contracts/schema/__init__.py::ARTIFACT_SPECS`） |
 | R-2.6 | 已购请求身份按字节复算：候选产物落盘用保序序列化（不 `sort_keys`），prompt 与 adoption 身份逐字相等；排序归一会静默改掉 F5e 已购请求的身份。 | `结构`（`novel/store.py::Str06Repository` 的保序序列化） |
 | R-2.7 | fold 事件计数与章分布无条件报出（度量，不是门）；章前文字读数同列上报。 | `度量`（`novel/stages/stage2/source.py::source_fold`） |
 | R-2.8 | **称谓闭合（wire 闸）**：`canonical` 必须逐字等于该人物 `surfaces` 中的某一项。canonical 是内部主键显示名，又作为身份名交给 Design／Hook；未登记字面在替换表里找不到对应新名。不通过走 owner patch，不静默改写。 | `HARD`（`novel/stages/stage2/source.py::compile_book`） |
 | R-2.9 | **组合源身份**：`source_identity` 与 `root_sha1` 由 `main_text.json`＋`hook_copy.json` 两份字节的组合摘要派生（长度前缀，防拼接歧义）。只改章前文字也换源身份 ⇒ 候选根复校关闭式拒绝，旧根不得沿用旧购买；续跑用新独立根。开发路径 `--source-json` 必须显式给出引子或显式声明「无引子」。 | `HARD`（`novel/stages/chain.py::load_stage1_chapters`＋`novel/prov.py::combined_content_sha256`＋`novel/llm/paid_requests.py::init_or_resume_candidate_workflow`） |
-| R-2.10 | **称谓锚点字面（wire 闸）**：每个 surface 的 `from_chapter` 由 compiler 按证据锚点派生并覆盖 wire 声明值（I-15）：锚点段＝所引证据段中逐字包含该称呼的最早一段，章前文字（e00）锚点映射到第 1 章；所引段没有一个逐字包含该称呼即拒（QP-04 根因：章前称谓被标成第 0 章）。 | `HARD`（`novel/stages/stage2/source.py::compile_book`） |
+| R-2.10 | **称谓锚点字面（wire 闸）**：每个 surface 的 `from_chapter` 由 compiler 按证据锚点派生（B2 起 wire 不带窗口坐标）：锚点段＝所引证据段中逐字包含该称呼的最早一段，章前文字（e00）锚点映射到第 1 章；所引段没有一个逐字包含该称呼即拒（QP-04 根因：章前称谓被标成第 0 章）。锚点派生唯一实现在 Stage2 Resolver。 | `HARD`（`novel/stages/stage2/resolver.py::EvidenceResolver.surface_chapter`） |
 | R-2.11 | **悬念生命周期**：`loops` 独立成数组，op 只有 open／close；同一 loop 只能 open 一次（已 open 或已 close 的 id 不得再 open），close 必填非空 resolution，问题文本只出现在 open 处、之后不可改写（v12 把 loop 挂成 effect 时模型反复用 set 改写问题文本，F9 与首轮付费验收实证）。 | `HARD`（`contracts/schema/source.py::LoopAction`＋`ChapterCompiler` 引用解析） |
-| R-2.12 | **命题引用闭合**：cognition 与 effect 的命题引用同章用 wire 本地标签、跨章用 prompt 列出的正式 ID（kNN，compiler 生成）；**同一拍内后建的命题可被本拍其它转移引用**（D5 证实拍模式：事实效应引用同拍 cognition 新建的命题，v13 首跑 ch02 b02_09 实证），跨拍／跨章引用未登记命题即拒；复用已登记命题时重抄的 statement 必须与登记文本逐字一致——同一命题的文本只建立一次，由形状保证（v12 允许复用 key 时重抄，实测被改写）。 | `HARD`（`novel/stages/stage2/source.py::ChapterCompiler._normalize`） |
+| R-2.12 | **命题引用闭合（B2 版）**：命题与 loop 的引用用**章内本地句柄**（wire `ref`，不进 canonical）；新建（首次出现）必带 statement，引用不带文本——同一命题的文本只建立一次，由形状保证。**同一拍内后建的命题可被本拍其它转移引用**（D5 证实拍模式）；同章跨拍引用须已登记；**章间不引用**（D3 去登记表）——跨章同一性（同一命题、同维状态、悬念开合、跨章因果）由 `str06.stage2.associate` 只选已给句柄建立，配不上即未决，compile 拒绝发布并按 item 报告（D8）。正式 ID（kNN／loopNN）由 compiler 生成。 | `HARD`（`contracts/schema/observation.py`；compile 引擎随 B2 后续提交接线） |
 | R-2.13 | **事实可见性**：每个 effect 必填 `disclosure`（on_page／concealed）；concealed 必须声明 known_by（非空）并带命题锚——叙述确立但读者此刻不可见的事实，由后续 cognition 经同一命题记录揭示；没有可见性，漏记的揭示无法机械发现（QP-05：ch04 床下现身缺确认 reveal，三份样本全缺）。 | `HARD`（`contracts/schema/source.py::Disclosure`／`Effect`） |
 | R-2.14 | **登记键闭集与作用域绑定**：`scene_location`（scene 作用域，当前所在）与 `residence`（book 作用域，长期居所）为登记键，身体状态各自一键（不塞进位置值）；表内键作用域由 compiler 按表绑定（I-15，模型声明不符即归一化，canonical 恒带表内作用域）；`whereabouts`／`hiding_place`／`location` 已退役，出现即拒并指向分轴后的键。 | `HARD`（`contracts/schema/source.py::REGISTERED_STATE_KEYS`／`RETIRED_STATE_KEYS`＋`ChapterCompiler` 绑定与拒识） |
 | R-2.15 | **未揭示 concealed 只读报告**：concealed 效应到书末仍无读者确认（reader 持有者的 learns／confirms）时，按命题列出（statement／建立拍／known_by）落 fold.json；只报告、不阻断。 | `度量`（`novel/stages/stage2/source.py::source_fold`） |
 | R-2.16 | **空转移拍比例**：每章三类转移全空的拍所占比例按章报出（fold.json `chapters`）；这类拍合法——完整性由该读数配合离线核读证明，不加声明字段（D7／D17）。 | `度量`（`novel/stages/stage2/source.py::source_fold`） |
-| R-2.17 | **知情 fold 读数**：认知层按「命题＋持有者＋模式」折叠，快照逐条带来源与标识登记（状态键、loop_id、命题 ID）；读者确认时点由 on_page 效应或 reader 的 learns／confirms 落账。 | `度量`（`novel/stages/stage2/source.py::source_fold`） |
+| R-2.17 | **知情 fold 读数**：源 fold 只消费 canonical transitions（认知层按「命题＋持有者＋模式」折叠；D3 起不再派生逐章输入快照）；未揭示 concealed、空转移拍比例等读数保留——度量，不是门；读者确认时点由 on_page 效应或 reader 的 learns／confirms 落账。 | `度量`（`novel/stages/stage2/source.py::source_fold`） |
 
 源语义（归因、因果、揭示）的语义正确性不经机械检查证明，随 Stage2 语义未审披露；
 `--check-only` 只允许缓存命中与登记的历史采用，零新购。
@@ -404,7 +415,7 @@ Hook 的必要选择进入 Stage4 正式 Design（`R-5.6`），经 HookContext �
 | R-13.2 | **一本书同时只跑一个作业**这条不变，Stage5 也没有书内互斥例外；队列只决定顺序，不放宽互斥 | **`结构`**（互斥键唯一落点 `novel/orchestrator/jobs.py::active_key`；队列不碰它） |
 | R-13.3 | **花钱的项必须一次性预先确认**，不能因为「排进队列了」就变成静默扣费。确认时摊开的仍是**将要执行的那些命令**。⚠ **2026-08-29 用户裁定修订（TODO-45 批次 3）**：durable queue/job 父记录下**身份完全闭合的同一 run**，其原付费授权可跨重启自动续跑——前提同时满足：durable start 中 `paid_confirmed=true` 且正文外发授权仍有效；run/代码/argv/输入/candidate/审批/profile/模型/effort 完全未漂移；仍在原 max-turn/token cap 内；provider session/checkpoint 身份可精确对证（checkpoint 恢复的既有关闭式校验）；不切 provider、不 fallback、不新造命令。自动续跑 = 新 `job_id`（execution）+ `recovered_from_job_id` + 原 `run_id`。任一字段缺失、legacy（原 started 无 run 身份）、漂移或可能串错 session 时停止并落持久 restart-confirmation 提醒，不自动猜；**从未启动过的付费项与手工 CLI 不自动复活**，仍需 CLI `queue-resume --yes` / API `{"confirmed":true}`。恢复会重新逐字展示创建时冻结的剩余付费命令；调用底层 runner 本身不构成授权 | **`结构`**（`novel/orchestrator/queue.py::confirm` / `_confirm_resume` / `::_auto_resume_block_reason` / `resume_incomplete`；`novel/orchestrator/jobs.py::plan_start` 的 run_id/recovered_from_job_id 与 `::_run_steps` 的 env 注入）+ **`人`**（创建与每次不可自动续跑的付费恢复各完成当轮确认，见 `B-19`） |
 | R-13.4 | 任一项未绿 → **同书停在那里**，不跳过、不继续往下扣费；另一书继续。exit 1 单列为 `landed_red`：正式产物已经落盘，但本次 typed 结论不通过（包括报告阻断红行与 Stage4B `infeasible`），不能误报成命令没跑成或没有落盘的 `failed`。它与 `failed` 一样会停住该书 lane，并把后续项记 `not_run` 等人处理；四类计数不得合并 | **`结构`**（`novel/exit_codes.py::landed` + `novel/orchestrator/queue.py::_run_lane`；`QueueLaneCounts` 分列 done / landed_red / failed / not_run）+ 两书一红一成与一败一成回归 |
-| R-13.5 | 需要人裁决的闸门会挡住队列并明确说出在等谁。**F8a 起新链没有任何人工闸**：11 个 `str06.` 节点全自动推进，机械验拦下的稿进 `.INVALID` 孪生留证后 fail-fast 停在 owner，恢复入口是 `--check-only`（缓存／登记的历史采用）与候选生命周期登记的 saved_response／historical_adoption／owner_patch／chapter_prefix_replay／same_context_rewrite／deterministic_replay——没有审阅 blocker，也没有 `gate.*` 待办。旧链的 stage2 机械准入、stage6.prepare 自动接受、三候选定稿与人名表定稿面随旧链退役；存量书的审批账只读解码，新书不产生 typed 决定。普通 durable 多步队列遇到 `redo/unknown` 仍必须形成无命令的 `resume:manual-decision`，不能把冻结快照上的「要重来/判不了」伪装成 runnable；AgentRun 单步 operator 的 exact REDO 例外照旧（节点在 `NodeSpec.operator_redo` 登记唯一策略、汇总 reason 全是 declared projection 的 `consumed_changed`、无 unreadable／unknown／INVALID），每落一步重新规划并铸同快照 execution token。 | **`结构`**（`novel/orchestrator/queue.py::plan_book_from_overview` + `novel/orchestrator/state.py::operator_redo_flags` + `novel/orchestrator/operator.py::_next_from_snapshot` + 新链无审批闸回归） |
+| R-13.5 | 需要人裁决的闸门会挡住队列并明确说出在等谁。**F8a 起新链没有任何人工闸**：14 个 `str06.` 节点（B2 五节点重建，D9）全自动推进，机械验拦下的稿进 `.INVALID` 孪生留证后 fail-fast 停在 owner，恢复入口是 `--check-only`（缓存／登记的历史采用）与候选生命周期登记的 saved_response／historical_adoption／owner_patch／chapter_prefix_replay／same_context_rewrite／deterministic_replay——没有审阅 blocker，也没有 `gate.*` 待办。旧链的 stage2 机械准入、stage6.prepare 自动接受、三候选定稿与人名表定稿面随旧链退役；存量书的审批账只读解码，新书不产生 typed 决定。普通 durable 多步队列遇到 `redo/unknown` 仍必须形成无命令的 `resume:manual-decision`，不能把冻结快照上的「要重来/判不了」伪装成 runnable；AgentRun 单步 operator 的 exact REDO 例外照旧（节点在 `NodeSpec.operator_redo` 登记唯一策略、汇总 reason 全是 declared projection 的 `consumed_changed`、无 unreadable／unknown／INVALID），每落一步重新规划并铸同快照 execution token。 | **`结构`**（`novel/orchestrator/queue.py::plan_book_from_overview` + `novel/orchestrator/state.py::operator_redo_flags` + `novel/orchestrator/operator.py::_next_from_snapshot` + 新链无审批闸回归） |
 | R-13.6 | 队列本身**不产生新的判定**，也不放宽任何落盘闸门 | **`结构`**（`tests/test_layering.py::test_the_queue_cannot_reach_the_judgement_layer`：`queue.py` 够不到 `novel.report`，连「顺手判一下」都做不到） |
 | R-13.7 | 不同小说的作业可以并行执行；互斥范围只落在各自 `sid`。每个后台作业独立启动 CLI 子进程，一本书失败或阻塞不占用另一本书的键 | `结构`（`novel/orchestrator/queue.py::_execute` 每书一个线程，调用 `novel/orchestrator/jobs.py::start`；互斥仍唯一落在 `novel/orchestrator/jobs.py::active_key`）+ barrier 证明两本书同时进入子进程的回归 |
 | R-13.8 | 正常主路的权威时间线由确定性 RunSupervisor、agent lifecycle events、admission claim、node beacon 与付费 ledger **自动形成**；Executor 不得在 prompt 或正常主路中手工调用 telemetry，历史 Commander 账只读。`_service/operator_phases/<session_id>.jsonl` 只保留 legacy/诊断兼容：它与上述权威账正交，不进入 `NODES`、不冒充模型调用、不成为交付闸；缺失、未闭合或无法联结时完整 phase 墙钟分解必须是 unknown，不能据此阻断运行或洗成 0。若显式诊断使用该账，phase 仍闭合为 preflight/inspect/preview/execute/review/approve/finalize/verify，区间并集不重复计时，余量为 unattributed；prompt、正文、reason、argv、路径、密钥、模型 token/价格不得落账，宿主 usage 越界时声明 `unavailable_host_boundary`，不拿墙钟估成本 | `结构`（`novel/orchestrator/agent_supervisor.py` + agent event/admission/beacon/ledger fold + `novel/orchestrator/operator_telemetry.py::summarize` 的 legacy 诊断）+ 无手工埋点主路、缺账 unknown、隐私与 layering 回归 |

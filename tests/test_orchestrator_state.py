@@ -140,7 +140,9 @@ def test_pattern_artifacts_never_leave_a_stage_without_a_completion_anchor():
                  for rel in spec.produces if '{' in rel}
     # stage7 自 2026-08-19 起也带模板（交付物按书名命名），但它是**书级参数化**：
     # 解析之后仍是一份具名产物，所以它的锚点比另外一层多一个——成书自己就是锚。
-    assert patterned == {'stage5', 'stage7'}
+    # B2（2026-09-27）五节点重建：`stage2/observations/ch{nn}.json` 让 stage2
+    # 也进入逐章产物面（完成度逐章计数随 B2 后续接线接上，D3）。
+    assert patterned == {'stage2', 'stage5', 'stage7'}
     for stage in sorted(patterned - {'stage5'}):
         assert S.required_artifacts(stage, novel_dir=Path('FQ_测试书_42')), \
             f'{stage} 只剩逐份不定的产物，完成度失去了可 is_file() 的锚点'

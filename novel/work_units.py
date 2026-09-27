@@ -1426,18 +1426,17 @@ def validate_reviewer_record(base: str | os.PathLike[str], sid: str, record: Any
 def executor_scope(node: str, purpose: str, progress: Any = None) -> str:
     """只从登记的业务拓扑取 scope，修复 purpose 不铸新单元。
 
-    ⚠ F8b-3：本表按现役候选表 unit_kind 登记新链 9 个付费节点；旧链节点键
-    已随 F8a 退役（不再接受任何模型工作单元）。章级抽取（chNN）与按章成文
-    （body）的 purpose／progress 带显式章号，`strategy` 是 book＋chNN 联合
-    抽取的整书单元。
+    ⚠ F8b-3：本表按现役 `NODES` 的 unit_kind 登记付费节点；旧链节点键已随
+    F8a 退役（不再接受任何模型工作单元）。B2（2026-09-27）五节点重建（D9）：
+    章观察（`str06.stage2.chapters`）与按章成文（body）的 purpose／progress
+    带显式章号；联合抽取的 `strategy` 整书单元随 `str06.stage2.source` 退役。
     """
-    if node in ('str06.stage2.names', 'str06.stage4.preserve',
+    if node in ('str06.stage2.book', 'str06.stage2.names',
+                'str06.stage2.associate', 'str06.stage4.preserve',
                 'str06.stage4.body_design', 'str06.stage4.hook_design',
                 'str06.stage4.bind', 'str06.stage5.hook', 'str06.stage7.naming'):
         return 'book'
-    if node in ('str06.stage2.source', 'str06.stage5.body'):
-        if node == 'str06.stage2.source' and ('strategy' in purpose or purpose == 'book'):
-            return 'strategy'
+    if node in ('str06.stage2.chapters', 'str06.stage5.body'):
         chapter = getattr(progress, 'chapter_ordinal', None)
         if chapter is None:
             chapter = getattr(progress, 'chapter', None)

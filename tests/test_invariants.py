@@ -184,7 +184,7 @@ def test_unmeasured_nodes_keep_the_default_high_effort():
     assert all(spec.effort in (None, 'low', 'high') for spec in inv.NODES.values())
     assert 'stage3.style' not in inv.NODES
     # F8A：新链全部付费节点跟随全局默认（2026-09-16 裁决：全链 DeepSeek Flash）。
-    assert inv.NODES['str06.stage2.source'].effort is None
+    assert inv.NODES['str06.stage2.book'].effort is None
     assert inv.NODES['str06.stage5.body'].effort is None
 
 
@@ -201,10 +201,11 @@ def test_no_nodes_pin_a_model_over_the_global_default():
 
 def test_free_nodes_are_the_ones_without_llm():
     free = {node for node, spec in inv.NODES.items() if not spec.paid}
-    # F8A：新链免费节点 = stage0/1（范围外）＋ 两个结构性禁付的确定性节点。
+    # F8A：新链免费节点 = stage0/1（范围外）＋ 结构性禁付的确定性节点
+    #（B2 起 Stage2 的 compile 也是确定性免费节点，D9）。
     assert free == {
         'stage0.remove', 'stage1.partition',
-        'str06.stage4.compile', 'str06.stage7.assemble',
+        'str06.stage2.compile', 'str06.stage4.compile', 'str06.stage7.assemble',
     }
 
 
@@ -371,9 +372,9 @@ def test_stage0_admission_covers_mechanical_passed_shape():
 def test_node_lifecycle_covers_real_nodes_and_preserves_boundaries():
     from contracts.invariants import NODES
 
-    # F8a（STR-06 切换）：旧链 16 个节点整体退役，新链 11 个 str06. 节点 +
-    # stage0.remove / stage1.partition（范围外保留）= 13。
-    assert len(NODES) == 13
+    # F8a（STR-06 切换）：旧链 16 个节点整体退役；B2（2026-09-27）五节点
+    # 重建后为 14 个 str06. 节点 + stage0.remove / stage1.partition = 16。
+    assert len(NODES) == 16
     assert all(spec.lifecycle is not None for spec in NODES.values())
     for node, spec in NODES.items():
         life = spec.lifecycle
@@ -384,15 +385,17 @@ def test_node_lifecycle_covers_real_nodes_and_preserves_boundaries():
         assert not life.approval_bindings, node
         # 付费节点 4 次内容调用上限；确定性节点 0（结构性禁付）。
         assert life.executor_content_limit == (4 if spec.paid else 0), node
-    # 确定性节点确实是确定性生成模式。
+    # 确定性节点确实是确定性生成模式（B2 起 Stage2 compile 亦然）。
+    assert NODES['str06.stage2.compile'].lifecycle.generation_mode == 'deterministic'
     assert NODES['str06.stage4.compile'].lifecycle.generation_mode == 'deterministic'
     assert NODES['str06.stage7.assemble'].lifecycle.generation_mode == 'deterministic'
     assert NODES['stage1.partition'].lifecycle.review_mode == 'none'
-    # 单元粒度如实区分：book／chapter／strategy_and_chapter 三种都在表内。
+    # 单元粒度如实区分：B2 五节点重建（D9）后现役只有 book／chapter 两种——
+    # `strategy_and_chapter` 随联合抽取节点退役，取值面保留只为存量解码。
     kinds = {spec.lifecycle.unit_kind for spec in NODES.values()}
-    assert {'book', 'chapter', 'strategy_and_chapter'} <= kinds, kinds
-    # 同阶段不同 owner 的会话作用域不串。
-    assert (NODES['str06.stage2.source'].lifecycle.session_scope
+    assert kinds == {'book', 'chapter'}, kinds
+    # 同阶段不同 owner 的会话作用域不串（B2：逐章观察 owner 与书级 owner）。
+    assert (NODES['str06.stage2.chapters'].lifecycle.session_scope
             != NODES['str06.stage2.names'].lifecycle.session_scope)
 
 

@@ -1,24 +1,23 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""test_str06_f7e_freeze —— F7e 候选冻结：F8 激活基线钉在测试里（免费）。
+"""test_str06_f7e_freeze —— 候选契约冻结基线钉在测试里（免费）。
 
-【冻结什么】F8a 激活候选节点、产物与判据时翻的正是迁移包
-`contracts/schema/str06/candidates.py` 那两张表。本文件把 F7e 冻结时的契约身份、
-节点／产物计数与运行期配置写成字面快照：表里任何一行变化都会改变
-`candidate_contract_identity()`，本测试当场红——F8 不能「顺手多激活一个节点」
-而不改冻结记录。
+【冻结什么】激活的节点表（`contracts/invariants.py::NODES`）、产物表
+（`contracts/artifacts.py::ARTIFACT_PATHS`＋`STR06_ARTIFACT_RC_VERSIONS`）与
+运行期配置。本文件把冻结时的契约身份、节点／产物计数写成字面快照：表里任何
+一行变化都会改变 `candidate_contract_identity()`，本测试当场红——不能
+「顺手多激活一个节点」而不改冻结记录。
 
-【F8c 分流后冻结面落在哪】迁移包已删除，节点表在
-`contracts/invariants.py::NODES`、产物表在
-`contracts/artifacts.py::ARTIFACT_PATHS`＋`STR06_ARTIFACT_RC_VERSIONS`、
-运行期配置与身份记录模型在 `contracts/schema/workflow.py`。**冻结值一字未改**：
-`candidate_contract_identity()` 仍逐字复算 F7e 基线的那个 SHA-256（盘上
-`runtime/candidate_workflow.json` 记的就是它，改了全部既有候选根都会被判
-「契约表已漂移」而拒绝消费已购证据）——本文件继续钉住这一点。
+【B2 重新冻结（2026-09-27）】职责解耦 D9 把 Stage2 拆为五节点
+（book／chapters／names／associate／compile），`str06.stage2.source` 退役，
+公开节点 11→14；观察与关联协议落地（`contracts/schema/observation.py`，
+stage2-observation-v1），联合抽取派生输入（book_extraction／input_snapshots）
+退役。F7e 基线（11 节点，`7fb5ecfa…`）原样保存在 Git 历史里；旧候选根按
+「契约表已漂移」拒读，只读保留，新协议下新根全量重购（I-13，无转换层）。
 
 【为什么不只靠激活表自己的对账】`test_str06_candidates.py` 查的是表内自洽
-（runner／writer／版本逐字相等）；本文件查的是**表与 F7e 冻结基线**相等：
-前者防表内部撒谎，后者防表在 F7e→F8 之间漂移。
+（runner／writer／版本逐字相等）；本文件查的是**表与冻结基线**相等：
+前者防表内部撒谎，后者防表在批次之间无登记漂移。
 """
 from __future__ import annotations
 
@@ -29,18 +28,16 @@ from contracts.schema.workflow import (
 )
 from novel.llm.paid_requests import candidate_contract_identity
 
-#: F7e 冻结（2026-09-25）时的候选契约身份：节点表＋产物表＋RC 版式＋运行期
-#: 配置的 SHA-256。F8a 激活前若它与现状不等，先改冻结记录再激活。
-#: v13（2026-09-26 质量改进批次二）分两批更新：批 1（Stage2 拍模型三类转移，
-#: blueprints/fold/snapshots 换 rc5，族版本 rc4→rc5）；批 2（Design 知情词汇补
-#: believes、Preserve 策略 v3、VerificationIR 增「尚未向读者确认的事实」清单，
-#: body_design/presentation_graph/writer_book_ir 换 rc5）。旧形状盘面明确拒读，
-# 登记见 docs/REQUIREMENTS.md 质量改进批次二。
-FROZEN_CONTRACT_IDENTITY = '7fb5ecfaf8c315035e24d2ca4ba356ca4b9b7e8f348ab84f3eca849b7c5e933b'
+#: B2 重新冻结（2026-09-27）时的候选契约身份：节点表＋产物表＋RC 版式＋运行期
+#: 配置的 SHA-256。表内任何一行变化都会改变它——先改本记录并登记原因
+#: （REQUIREMENTS／DECISIONS），再动表。
+FROZEN_CONTRACT_IDENTITY = 'a0f5fb5edc5e0f2b2217833daff451edd9eaf9302dc8cfc8afc255a89e0b56b4'
 
-#: 冻结时的节点集合（11 个；F8a 激活后翻为正式 NODES）。
+#: 冻结时的节点集合（14 个：stage0/1 两座＋Stage2 五节点＋Stage4 五＋Stage5 两
+#: ＋Stage7 两）。
 FROZEN_NODES = (
-    'str06.stage2.names', 'str06.stage2.source',
+    'str06.stage2.associate', 'str06.stage2.book', 'str06.stage2.chapters',
+    'str06.stage2.compile', 'str06.stage2.names',
     'str06.stage4.bind', 'str06.stage4.body_design', 'str06.stage4.compile',
     'str06.stage4.hook_design', 'str06.stage4.preserve',
     'str06.stage5.body', 'str06.stage5.hook',
@@ -61,17 +58,19 @@ def _candidate_nodes() -> dict:
 
 def test_frozen_contract_identity_matches_the_live_tables():
     assert candidate_contract_identity() == FROZEN_CONTRACT_IDENTITY, (
-        '候选契约身份与 F7e 冻结基线不符：F8a 激活前先更新本文件的冻结记录，'
+        '候选契约身份与 B2 冻结基线不符：先更新本文件的冻结记录，'
         '并在 REQUIREMENTS 登记变化原因（不静默改冻结面）')
 
 
 def test_frozen_node_set_matches_the_live_table():
     nodes = _candidate_nodes()
     assert tuple(sorted(nodes)) == FROZEN_NODES
-    assert len(nodes) == 11
+    assert len(nodes) == 14
     paid = sorted(n for n, spec in nodes.items() if spec.paid)
     free = sorted(n for n, spec in nodes.items() if not spec.paid)
-    assert len(paid) == 9 and free == ['str06.stage4.compile', 'str06.stage7.assemble'], (
+    assert len(paid) == 11
+    assert free == ['str06.stage2.compile', 'str06.stage4.compile',
+                    'str06.stage7.assemble'], (
         '付费／免费节点面变化：compile 与 assemble 必须保持 executor_content_limit=0 '
         '结构性禁付')
 
@@ -81,20 +80,22 @@ def test_frozen_runtime_config_matches():
 
 
 def test_frozen_artifact_table_shape():
-    """22 份书产物；每条的 writer 是表内节点、schema_version 非空。"""
-    assert len(STR06_ARTIFACT_RC_VERSIONS) == 22
+    """24 份书产物；每条的 writer 是表内节点、schema_version 非空。"""
+    assert len(STR06_ARTIFACT_RC_VERSIONS) == 24
     for rel, version in STR06_ARTIFACT_RC_VERSIONS.items():
         assert rel in ARTIFACT_PATHS, f'{rel}: 未激活进 ARTIFACT_PATHS'
         writer = next((n for n, spec in _candidate_nodes().items()
                        if rel in spec.produces), None)
         assert writer is not None, f'{rel}: writer 不是候选节点'
         assert version.startswith('str06-rc'), f'{rel}: 版本标签形状'
-    # 模式产物（{nn}／{title}）恰好三份：冻结面不含第二处逐章／逐书名路径。
+    # 模式产物（{nn}／{title}）恰好四份：冻结面不含第二处逐章／逐书名路径。
     patterned = sorted(rel for rel in STR06_ARTIFACT_RC_VERSIONS
                        if '{nn}' in rel or '{title}' in rel)
-    assert patterned == ['stage5/acceptance/body/ch{nn}.json', 'stage5/body/ch{nn}.txt',
+    assert patterned == ['stage2/observations/ch{nn}.json',
+                         'stage5/acceptance/body/ch{nn}.json',
+                         'stage5/body/ch{nn}.txt',
                          'stage7/final/{title}_rewriting.txt'], patterned
 
 
 def test_frozen_rc_version_label():
-    assert STR06_RC_VERSION == 'str06-rc5'
+    assert STR06_RC_VERSION == 'str06-rc6'

@@ -148,7 +148,7 @@ def test_next_uses_one_snapshot_and_the_shared_queue_lane(monkeypatch, tmp_path)
     snapshot = _snapshot(tmp_path)
     calls = _wire(
         monkeypatch, snapshot,
-        todo=[_ready('str06.stage2.source')],
+        todo=[_ready('str06.stage2.book')],
         blocked=[_blocked('stage1.partition', Q.WAITING_ON_INBOX)])
 
     got = O.next_action(tmp_path, 'book-1')
@@ -188,7 +188,7 @@ def test_retired_blocker_has_no_execution_token(
 def test_ready_action_carries_the_canonical_safety_axes_and_stable_hash(
         monkeypatch, tmp_path):
     snapshot = _snapshot(tmp_path)
-    _wire(monkeypatch, snapshot, todo=[_ready('str06.stage2.source')], blocked=[])
+    _wire(monkeypatch, snapshot, todo=[_ready('str06.stage2.book')], blocked=[])
 
     first = O.next_action(tmp_path, 'book-1')
     second = O.next_action(tmp_path, 'book-1')
@@ -197,7 +197,7 @@ def test_ready_action_carries_the_canonical_safety_axes_and_stable_hash(
     assert first.action is not None
     assert first.action.resume_verdict == 'run'
     assert first.action.paid is True
-    assert first.action.writes == ' · '.join(NODES['str06.stage2.source'].produces)
+    assert first.action.writes == ' · '.join(NODES['str06.stage2.book'].produces)
     assert first.action.action_sha256 == second.action.action_sha256
     assert len(first.action.action_sha256) == 64
     assert first.execution_token is not None
@@ -212,8 +212,8 @@ def test_ready_redo_keeps_its_verdict_and_gets_an_execution_token(
     """REDO 被安全准入后仍叫 REDO，不靠改名成 RUN 绕过五态契约。"""
     snapshot = _snapshot(tmp_path)
     item = QueueItem(
-        sid='book-1', node='str06.stage2.source', flags=[],
-        steps=[_step('str06.stage2.source')],
+        sid='book-1', node='str06.stage2.book', flags=[],
+        steps=[_step('str06.stage2.book')],
         why='redo：源语义的实际消费投影已更新')
     _wire(monkeypatch, snapshot, todo=[item], blocked=[])
     monkeypatch.setattr(
@@ -226,7 +226,7 @@ def test_ready_redo_keeps_its_verdict_and_gets_an_execution_token(
     assert got.action is not None and got.action.resume_verdict == 'redo'
     assert got.action.waiting_on is None
     assert got.execution_token is not None
-    assert got.execution_token.node == 'str06.stage2.source'
+    assert got.execution_token.node == 'str06.stage2.book'
 
 
 def test_action_hash_binds_the_surface_seal(monkeypatch, tmp_path):

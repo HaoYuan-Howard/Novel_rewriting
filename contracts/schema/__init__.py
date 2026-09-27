@@ -204,6 +204,9 @@ from contracts.schema.stage7 import (
 from contracts.schema.source import (
     BlueprintsArtifactV13, CharactersArtifactV4, CharactersCore,
 )
+from contracts.schema.observation import (
+    AssociateObservation, BookObservation, ChapterObservation, NamesObservation,
+)
 from contracts.schema.grounding import (
     PreserveCheckpoint, ReconstructionBrief, SemanticBinding,
 )
@@ -292,7 +295,7 @@ ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
     #   字面量（Characters v4／Brief／Binding／Plan／Graph／BookIR／HookContext／
     #   ChapterReceipt／NameMap v5，与候选产物表逐字对账）；② 候选产物表的
     #   `schema_version` RC 标签（rc2→rc3→rc4 的批次定格）。未声明
-    #   `contract_version` 的模型（Blueprints v13、CharactersCore 抽取）按 F8
+    #   `contract_version` 的模型（Blueprints v13）按 F8
     #   义务在本注册表登记形状（即本表条目自身），不进模型——往模型加非 exclude
     #   字段会改 `model_dump` 字节，从而改 prompt 与已购请求身份，F7a 的历史
     #   采用会当场失配（`_provenance` 用 exclude=True 正是为守住这条）。
@@ -300,8 +303,14 @@ ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
     # v13（2026-09-26 质量改进批次二）：拍模型改三类转移（effects／cognition／
     #   loops）＋场景边界与时间模式＋章蓝图场景分段；存量 v12 盘面明确拒读
     #   （SchemaVersionRefused），由新独立根重新抽取，不做迁移。
+    # B2 五节点观察与关联协议（2026-09-27，D3/D8/D9）：协议版本由模型自带的
+    # `protocol_version` 字面量承载（I-13 显式版本化，无运行时转换层）；联合
+    # 抽取派生输入 `stage2/compiled/book_extraction.json` 已退役（D9）。
+    'stage2/observations/book.json': ArtifactSpec(BookObservation, 1),
+    'stage2/observations/ch{nn}.json': ArtifactSpec(ChapterObservation, 1),
+    'stage2/observations/names.json': ArtifactSpec(NamesObservation, 1),
+    'stage2/observations/associate.json': ArtifactSpec(AssociateObservation, 1),
     'stage2/blueprints/chapter_blueprints.json': ArtifactSpec(BlueprintsArtifactV13, 1),
-    'stage2/compiled/book_extraction.json': ArtifactSpec(CharactersCore, 1),
     'stage2/characters/characters.json': ArtifactSpec(CharactersArtifactV4, 1),
     # Stage4：目标故事与确定性编译（preserve／body_design／hook_design／bind／compile）
     'runtime/preserve_checkpoint.json': ArtifactSpec(PreserveCheckpoint, 1),
@@ -525,4 +534,7 @@ __all__ = [
     'ARTIFACT_SPECS', 'ARTIFACTS', 'ARTIFACT_ROUTES',
     'artifact_regex', 'formal_artifact_rel', 'artifact_key', 'artifact_spec',
     'decode_artifact', 'encode_artifact',
+    # B2 观察与关联协议（contracts/schema/observation.py）
+    'AssociateObservation', 'BookObservation', 'ChapterObservation',
+    'NamesObservation', 'STAGE2_OBSERVATION_PROTOCOL',
 ]

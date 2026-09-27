@@ -487,10 +487,12 @@ def test_preview_refuses_a_flag_that_node_does_not_have(client):
 
 
 _EXECUTOR_PROFILE_HTTP_CASES = (
-    # F8a/F8b：现役注册面是 9 个 str06 付费节点，节点旗标面只有 --check-only
-    #（付费 token 组合即空 flags）。
-    ('str06.stage2.source', (), 2),
+    # F8a/F8b；B2（2026-09-27）五节点重建后付费面 11 个，节点旗标面只有
+    # --check-only（付费 token 组合即空 flags）。
+    ('str06.stage2.book', (), 2),
+    ('str06.stage2.chapters', (), 2),
     ('str06.stage2.names', (), 2),
+    ('str06.stage2.associate', (), 2),
     ('str06.stage4.preserve', (), 2),
     ('str06.stage4.body_design', (), 2),
     ('str06.stage4.bind', (), 2),
@@ -606,7 +608,7 @@ def test_profiled_preview_can_show_denied_egress_but_post_cannot_start(
         client, base):
     # C2a/C2b：执行面 legacy-only——egress 拒绝职责改由 legacy backend 承担。
     request = {
-        'sid': '42', 'node': 'str06.stage2.source', 'flags': [],
+        'sid': '42', 'node': 'str06.stage2.book', 'flags': [],
         'executor_backend': {'kind': 'legacy', 'profile': {
             'provider': 'deepseek', 'model': 'deepseek-v4-pro',
             'reasoning_effort': 'high', 'thinking_mode': 'on'}},
@@ -634,7 +636,7 @@ def test_http_allows_egress_authorization_for_direct_llm_nodes(client):
     `str06.` 节点的 canonical argv；preview 必须把它带进摊开的命令。
     """
     response = client.post('/api/jobs/preview', json={
-        'sid': '42', 'node': 'str06.stage2.source', 'flags': [],
+        'sid': '42', 'node': 'str06.stage2.book', 'flags': [],
         'egress_authorized': True,
     })
 
@@ -642,15 +644,15 @@ def test_http_allows_egress_authorization_for_direct_llm_nodes(client):
     assert '--allow-egress' in response.json()['steps'][0]['argv']
     # 没给授权时不得伪造：argv 与快照都没有这枚凭据。
     without = client.post('/api/jobs/preview', json={
-        'sid': '42', 'node': 'str06.stage2.source', 'flags': [],
+        'sid': '42', 'node': 'str06.stage2.book', 'flags': [],
     })
     assert without.status_code == 200
     assert '--allow-egress' not in without.json()['steps'][0]['argv']
 
 
 @pytest.mark.parametrize(('path', 'node', 'flags'), [
-    ('/api/jobs/preview', 'str06.stage2.source', ['--purge-role']),
-    ('/api/jobs', 'str06.stage2.source', ['--purge-role']),
+    ('/api/jobs/preview', 'str06.stage2.book', ['--purge-role']),
+    ('/api/jobs', 'str06.stage2.book', ['--purge-role']),
     ('/api/jobs/preview', 'str06.stage5.body', ['--chapters', '1']),
     ('/api/jobs', 'str06.stage5.body', ['--chapters', '1']),
     ('/api/jobs/preview', 'stage4.context', []),
@@ -858,7 +860,7 @@ def test_paid_blueprint_job_starts_without_a_semantic_review_gate(
     monkeypatch.setattr(JOB_API.jobs, 'start', start_without_thread)
 
     response = client.post('/api/jobs', json={
-        'sid': '42', 'node': 'str06.stage2.source', 'flags': [],
+        'sid': '42', 'node': 'str06.stage2.book', 'flags': [],
     })
 
     assert response.status_code == 202, response.text

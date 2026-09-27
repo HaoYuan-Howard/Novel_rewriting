@@ -352,7 +352,9 @@ def runnable_stages() -> frozenset[str]:
 
 #: 新链节点 → `--through` 腿（单节点执行时腿只作记录；node_filter 决定实际范围）。
 _STR06_THROUGH = {
-    'str06.stage2.source': 'stage2', 'str06.stage2.names': 'stage2',
+    'str06.stage2.book': 'stage2', 'str06.stage2.chapters': 'stage2',
+    'str06.stage2.names': 'stage2', 'str06.stage2.associate': 'stage2',
+    'str06.stage2.compile': 'stage2',
     'str06.stage4.preserve': 'stage4', 'str06.stage4.body_design': 'stage4',
     'str06.stage4.hook_design': 'stage4', 'str06.stage4.bind': 'stage4',
     'str06.stage4.compile': 'stage4',

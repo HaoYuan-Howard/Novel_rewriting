@@ -6,11 +6,14 @@
 验收与删除条件唯一见 `docs/REQUIREMENTS.md`；架构裁决见 `docs/DECISIONS.md`。
 
 **实施边界**：B0–B5 全部 fake transport、零模型调用，付费与正文外发只在 B6 按实际
-报价分别授权。B0 只登记不改代码：现役代码在 B2–B5 切换前仍是 11 节点链
-（`contracts/invariants.py::NODES`，F8a 激活；激活基线契约身份 `04b6fb22…`、质量
-改进批次二批 2 后随 Design 换 rc5 更新为 `7fb5ecfa…`，由 `tests/test_str06_f7e_freeze.py`
-钉住，表内任何变化须先改冻结记录）。下文「目标」各节是 B1–B5 的实施依据；「现役实装」
-各节描述切换前仍然有效的契约与落点，B2 起逐批由目标形态取代。
+报价分别授权。**B2 前半（2026-09-27）已落地注册面**：`contracts/invariants.py::NODES`
+扩为 14 个公开节点（Stage2 五节点，`str06.stage2.source` 退役），观察与关联协议
+（`contracts/schema/observation.py`）与 Resolver（`novel/stages/stage2/resolver.py`）
+落地，冻结基线随 B2 重新钉定（`a0f5fb5e…`，`tests/test_str06_f7e_freeze.py`）；
+`novel/stages/chain.py` 的旧接线（11 节点 runner 与付费 owner 映射）由 B2 后续提交
+改齐。F8a 激活基线契约身份 `04b6fb22…`、质量改进批次二批 2 后随 Design 换 rc5 更新为
+`7fb5ecfa…`（历史基线，见 Git 历史）。下文「目标」各节是 B1–B5 的实施依据；
+「现役实装」各节描述切换期仍然有效的契约与落点，B2 起逐批由目标形态取代。
 
 ## 目标总览：职责与数据流
 
@@ -70,8 +73,10 @@ Binding 不维护第二份初始态。
    读数保留（度量，不是门，`R-2.17`）。
 
 现役 v13 契约（拍三类转移 effects/cognition/loops、场景边界、`temporal_mode`，见
-`contracts/schema/source.py` 与 `R-2.3`/`R-2.12`）是五节点重建的起点；五节点协议、
-Resolver 与双真源发布由 B2 显式升版，不在本批改代码。
+`contracts/schema/source.py` 与 `R-2.3`/`R-2.12`）是五节点重建的起点。B2 前半已落地：
+观察与关联协议（`contracts/schema/observation.py`，`stage2-observation-v1`）、Resolver
+（`novel/stages/stage2/resolver.py`）与节点/产物注册（RC6）；compile 双真源发布的
+引擎接线与 Stage4 改读 canonical 由 B2 后续提交闭合。
 
 ## Stage4：把章依赖编译完整（目标）
 
@@ -147,9 +152,9 @@ ExecutionProfile run 启动冻结（`novel/stages/chain.py::ExecutionProfile`／
 `freeze_execution_profile`；`load_config()` 的唯一执行期调用点是 `execute`，
 `assemble_paid_boundary` 只消费冻结 profile；effort 取值面 low/high/max，
 CLI 的 medium 移除；整书上限从持久准入账派生传入付费边界）、并发登记改
-新链逐章节点（`PIPELINE_PARALLEL_NODES＝('str06.stage5.body',)`，旧链键与
-四个 `STAGE*_MAX_CONCURRENCY` 常量删除；`str06.stage2.chapters` 由 B2 建节点
-时登记；槽位运行接入随 B4 逐章并发）。反例与完成条件见
+新链逐章节点（B2 起 `PIPELINE_PARALLEL_NODES＝('str06.stage2.chapters',
+'str06.stage5.body')`，旧链键与四个 `STAGE*_MAX_CONCURRENCY` 常量删除；
+槽位运行接入随 B4 逐章并发）。反例与完成条件见
 `tests/test_str06_runtime_records.py`（17 项故障注入）。
 
 ### 身份与记录：对齐现有工作单元账，不另起第二套
@@ -198,7 +203,7 @@ CLI 的 medium 移除；整书上限从持久准入账派生传入付费边界�
   NodeSpec 一致（low/high/max，CLI 的 medium 已移除）；`max_tokens` 统一
   `LLM_MAX_OUTPUT_TOKENS`＝131072；产品路径把 run 冻结的整书上限传到付费边界。
 - 并发登记已是新链逐章节点：`PIPELINE_PARALLEL_NODES＝('str06.stage5.body',)`，
-  退役节点名与旧链上限常量已删除；`str06.stage2.chapters` 由 B2 建节点时同步
+  退役节点名与旧链上限常量已删除；`str06.stage2.chapters` 已随 B2 建节点同步
   登记。并发 4 在新链未实测，靠 429 重试兜底；此前实测（旧 agent 驱动）32 并发
   大半章被秒退、3 并发正常；B6 报出 429 与重试计数。
 - 每个付费节点的 reasoning 与正文 token 逐次报出；预期量级表登记在

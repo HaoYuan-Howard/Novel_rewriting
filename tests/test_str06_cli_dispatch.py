@@ -23,9 +23,9 @@ from novel.orchestrator import nodes as node_planner
 
 def test_build_argv_keeps_the_run_shape_for_str06_nodes():
     argv = node_planner.build_argv(
-        'str06.stage2.source', 'sid-1', (), base='E:/out')
+        'str06.stage2.book', 'sid-1', (), base='E:/out')
     assert argv[argv.index('run')] == 'run'
-    assert argv[argv.index('run') + 1] == 'str06.stage2.source'
+    assert argv[argv.index('run') + 1] == 'str06.stage2.book'
     assert argv[argv.index('run') + 2] == 'sid-1'
     base_at = argv.index('--base')
     assert argv[base_at + 1].endswith('out')
@@ -33,7 +33,7 @@ def test_build_argv_keeps_the_run_shape_for_str06_nodes():
     assert '--yes' in argv
     # --check-only 是免费复检：is_paid 翻 False，argv 不再带 --yes。
     free = node_planner.build_argv(
-        'str06.stage2.source', 'sid-1', ('--check-only',), base='E:/out')
+        'str06.stage2.book', 'sid-1', ('--check-only',), base='E:/out')
     assert '--yes' not in free
     assert '--check-only' in free
 
@@ -63,7 +63,7 @@ def test_cmd_run_routes_str06_nodes_before_legacy_preconditions(monkeypatch,
     book = tmp_path / 'out' / 'sid-1'
     (book / 'stage1').mkdir(parents=True)
     ns = argparse.Namespace(
-        node='str06.stage2.source', sid='sid-1', base=str(tmp_path / 'out'),
+        node='str06.stage2.book', sid='sid-1', base=str(tmp_path / 'out'),
         flags=[], yes=True, allow_egress=False, run_id=None,
         executor_backend=None, executor_profile=None, response_repair=None,
         source=None)
@@ -71,7 +71,7 @@ def test_cmd_run_routes_str06_nodes_before_legacy_preconditions(monkeypatch,
     rc = cli._cmd_run(ns)
     assert rc == 0
     args = seen['args']
-    assert args.node == ['str06.stage2.source']
+    assert args.node == ['str06.stage2.book']
     assert args.book_sid == 'sid-1'
     assert args.through == 'stage2'
     assert args.check_only is False

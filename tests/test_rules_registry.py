@@ -182,7 +182,7 @@ def test_a_fix_route_is_accepted_when_the_node_and_flag_both_exist():
     下面每条 `pytest.raises` 都会绿，而真表一条也注册不进来。
     """
     reg = Registry()
-    reg.register(_s2(rule='r_fix_free', fix=('str06.stage2.source', '--check-only')))
+    reg.register(_s2(rule='r_fix_free', fix=('str06.stage2.book', '--check-only')))
     reg.register(_s2(rule='r_fix_recheck', fix=('str06.stage2.names', '--check-only')))
     assert len(reg) == 2
 
@@ -201,7 +201,7 @@ def test_a_fix_route_may_not_name_a_flag_the_node_does_not_accept():
     一句「修法：…」。实例：`--revise` 是旧链 stage5 的，新链节点接不了它。
     """
     with pytest.raises(ValueError, match='不在 `NODES'):
-        Registry().register(_s2(fix=('str06.stage2.source', '--revise')))
+        Registry().register(_s2(fix=('str06.stage2.book', '--revise')))
 
 
 def test_a_fix_route_may_not_point_at_another_layer():
@@ -214,7 +214,7 @@ def test_a_fix_route_needs_at_least_one_flag():
     """只写节点名 = 「去跑一次默认路径」，而付费节点的默认路径**要花钱**
     ——那对一条声称 0 成本的修复路是假话。"""
     with pytest.raises(ValueError, match='至少要'):
-        Registry().register(_s2(fix=('str06.stage2.source',)))
+        Registry().register(_s2(fix=('str06.stage2.book',)))
 
 
 def test_no_live_rule_uses_a_valued_fix_route_after_the_cutover():
@@ -239,7 +239,7 @@ def test_the_fix_route_is_what_makes_the_cost_colour_derivable():
     free = _s2(rule='r_c_free', fix=('str06.stage4.compile',))
     assert is_paid(free.fix[0], free.fix[1:]) is False
     assert is_paid('str06.stage5.body', ()) is True
-    assert is_paid('str06.stage2.source', ('--check-only',)) is False
+    assert is_paid('str06.stage2.book', ('--check-only',)) is False
 
 
 def test_wordlist_rule_must_declare_its_baseline():

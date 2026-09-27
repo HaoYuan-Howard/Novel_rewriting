@@ -612,12 +612,13 @@ class CandidateRuntimeConfig(NamedTuple):
 STR06_RUNTIME_CONFIG: Final = CandidateRuntimeConfig()
 
 #: 本族契约的 RC 版式身份（与 `STR06_RC_LABELS` 同源；ledger code 与 slice 业务身份
-#: 引用本常量，避免各处手写字符串漂移）。v13（2026-09-26 质量改进批次二）：Stage2
-#: 拍模型改三类转移（effects／cognition／loops）＋场景边界与时间模式＋章蓝图场景分段。
-STR06_RC_VERSION: Final = 'str06-rc5'
+#: 引用本常量，避免各处手写字符串漂移）。rc6（2026-09-27 B2 五节点重建）：Stage2
+#: 按语义单元与作用域拆五节点（D9），观察与关联协议落地
+#（`contracts/schema/observation.py`，stage2-observation-v1）；联合抽取派生输入退役。
+STR06_RC_VERSION: Final = 'str06-rc6'
 
 #: 已知 RC 标签面（版本规则见 `contracts/artifacts.py::STR06_ARTIFACT_RC_VERSIONS`）。
-STR06_RC_LABELS: Final = ('str06-rc2', 'str06-rc3', 'str06-rc4', 'str06-rc5')
+STR06_RC_LABELS: Final = ('str06-rc2', 'str06-rc3', 'str06-rc4', 'str06-rc5', 'str06-rc6')
 
 #: epoch 滚动理由面。`initial` 只允许首开；漂移类要求身份确实变化；`repair`
 #: 是 typed 修复的显式 producer 边界（对齐正式 ExecutionEpochReason 的 continue）。
@@ -637,6 +638,7 @@ EPOCH_REASONS: Final = ('initial', 'code_drift', 'contract_drift', 'repair')
 #: 候选根都会被 `check_candidate_workflow` 判「契约表已漂移」而拒绝消费已购
 #: 证据——那是行为变化，不是搬家。对账在 `tests/test_str06_f7e_freeze.py`。
 STR06_NODE_IDENTITY_EXTRAS: Final[dict[str, dict[str, str]]] = {
+    'str06.stage2.compile': {'session_scope': 'executor:book'},
     'str06.stage4.compile': {'session_scope': 'executor:book'},
     'str06.stage7.assemble': {'session_scope': 'executor:book',
                               'owner': 'stage7.assembly'},

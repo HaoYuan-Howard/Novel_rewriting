@@ -41,7 +41,7 @@ def _ctx() -> RunContext:
     book.mkdir()
     return RunContext(
         novel_dir=book,
-        node='str06.stage2.source',
+        node='str06.stage2.book',
         paid=True,
         code='budget-test',
         cache=CachePolicy.default(),
@@ -176,13 +176,13 @@ def test_official_tokenizer_and_two_message_framing_have_locked_counts():
 
 @pytest.mark.parametrize('input_tokens', [903_999, 904_000])
 def test_inside_and_exact_context_boundary_pass(input_tokens):
-    got = validate_budget(_estimate(input_tokens), node='str06.stage2.source', purpose='global')
+    got = validate_budget(_estimate(input_tokens), node='str06.stage2.book', purpose='global')
     assert got.total_tokens <= 1_000_000
 
 
 def test_one_token_over_context_boundary_is_an_explanatory_terminal_state():
     with pytest.raises(ContextBudgetRefused) as caught:
-        validate_budget(_estimate(904_001), node='str06.stage2.source', purpose='global')
+        validate_budget(_estimate(904_001), node='str06.stage2.book', purpose='global')
     err = caught.value
     assert issubclass(type(err), TerminalState)
     assert (err.input_tokens, err.max_tokens, err.context_limit) == (904_001, 96_000, 1_000_000)
@@ -202,7 +202,7 @@ def test_declared_output_above_provider_limit_is_rejected():
 
 def test_unknown_model_fails_closed_before_any_tokenizer_guess():
     with pytest.raises(ContextBudgetRefused, match='没有已验证') as caught:
-        enforce_request_budget((_req(model='future-model'),), node='str06.stage2.source', purpose='global')
+        enforce_request_budget((_req(model='future-model'),), node='str06.stage2.book', purpose='global')
     assert caught.value.input_tokens is None
     assert '预算预检拒绝' in str(caught.value) and '模型兜底' in str(caught.value)
 
@@ -264,8 +264,8 @@ def test_over_limit_touches_no_cache_transport_or_ledger_even_if_a_hit_exists(en
     client = LlmClient(ctx, transport, cache=cache, budget_checker=checker)
 
     with pytest.raises(ContextBudgetRefused):
-        # ⚠ `str06.stage2.source` 的整书单元按 purpose 显式登记（`executor_scope`），
-        #   不是旧链那种节点名自带 scope；`book` 是它整书联合抽取的现役 purpose。
+        # ⚠ Stage2 书级 owner（B2 起 `str06.stage2.book`）的 scope 由
+        #   `executor_scope` 按 unit_kind 登记；`book` purpose 命中 book 单元。
         if entry == 'text':
             client.ask_text('sys', 'usr', purpose='book')
         else:
@@ -287,5 +287,5 @@ def test_preflight_checks_every_distinct_ladder_framing_before_side_effects():
 
     enforce_request_budget(
         tuple(_req(thinking=thinking) for thinking in (True, True, False)),
-        node='str06.stage2.source', purpose='global', counter=count)
+        node='str06.stage2.book', purpose='global', counter=count)
     assert seen == [('high', True), ('high', False)]

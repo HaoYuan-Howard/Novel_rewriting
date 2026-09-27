@@ -562,7 +562,8 @@ def test_parallel_registry_registers_new_chain_chapter_node_only():
     """并发登记改新链逐章节点：退役旧链键删除，键必须在 NODES 且逐章 scope。"""
     from contracts.invariants import NODES, PIPELINE_PARALLEL_NODES, RETIRED_NODES
 
-    assert PIPELINE_PARALLEL_NODES == ('str06.stage5.body',)
+    # B2（2026-09-27）：章观察 owner `str06.stage2.chapters` 登记进并发覆盖表。
+    assert PIPELINE_PARALLEL_NODES == ('str06.stage2.chapters', 'str06.stage5.body')
     for node in PIPELINE_PARALLEL_NODES:
         assert node in NODES, f'并发覆盖节点必须在现役注册表：{node}'
         assert node not in RETIRED_NODES

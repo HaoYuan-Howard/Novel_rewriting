@@ -4,6 +4,7 @@
       "_note": "F8c 分流：迁移包 `contracts/schema/str06/`、`novel/stages/str06/`、`novel/llm/str06_*`、`tools/str06_workflow.py` 已拆进正式 per-stage 包与 `novel/llm/paid_requests.py`；选测范围随之改登记**新落点**（范围名 `str06` 是这条链的身份，不是路径前缀）。",
       "paths": [
         "contracts/schema/source.py",
+        "contracts/schema/observation.py",
         "contracts/schema/design.py",
         "contracts/schema/grounding.py",
         "contracts/schema/context.py",
@@ -102,6 +103,12 @@
       "stages": [
         "stage2",
         "stage4"
+      ]
+    },
+    "tests/test_str06_stage2_protocol.py": {
+      "layer": "unit_contract",
+      "stages": [
+        "stage2"
       ]
     },
     "tests/test_str06_fold_guard.py": {

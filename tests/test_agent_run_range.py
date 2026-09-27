@@ -77,13 +77,13 @@ def test_range_allows_upstream_repair_then_stops_at_preserve_without_reviewer():
 
 
 def test_joint_owner_and_repair_owner_cannot_evade_range_order():
-    # F8a：联合抽取折叠为 str06.stage2.source（book＋chNN 联合物化），旧
-    # stage2.analyze 的多 owner 面随旧链退役；现役守卫同一方向：上界处的
-    # 动作不启动，严格早于上界才放行。
+    # F8a 候选链无多 owner 面；B2（2026-09-27）后取 stage2 链首节点
+    # `str06.stage2.book` 作样本。现役守卫方向：上界处的动作不启动，
+    # 严格早于上界才放行。
     assert range_boundary_reason(
-        _current('str06.stage2.source'), 'str06.stage2.source') is not None
+        _current('str06.stage2.book'), 'str06.stage2.book') is not None
     assert range_boundary_reason(
-        _current('str06.stage2.source'), 'str06.stage2.names') is None
+        _current('str06.stage2.book'), 'str06.stage2.names') is None
     # 旧联合节点 stage2.analyze 已退役：不在运行范围取值面里，关闭式拒排，
     # 不借历史编排位逃过现役上界。
     assert range_boundary_reason(
@@ -105,21 +105,21 @@ def test_range_uses_registered_owner_not_blocked_consumer():
     # Stage4 审阅席位已随 2026-09-15 全自动裁决退役：保留的 blocker→owner
     # 只读登记全部指向已退役 owner ⇒ 运行范围关闭式拒排（物化归属未知），
     # 不让 blocked 消费者借历史席位在现役链上继续物化。
-    seated = _current('str06.stage2.source', state='blocked',
+    seated = _current('str06.stage2.book', state='blocked',
                       waiting_on=WAITING_ON_STAGE4_DESIGN_REVIEW)
     assert range_boundary_reason(seated, 'str06.stage4.compile') is not None
     for _owner, bindings in RETIRED_APPROVAL_BINDINGS.items():
         for waiting_on, _scope in bindings:
             owner_node, _owner_scope = approval_work_unit(waiting_on)
             assert owner_node not in NODES
-            blocked = _current('str06.stage2.source', state='blocked',
+            blocked = _current('str06.stage2.book', state='blocked',
                                waiting_on=waiting_on)
             assert range_boundary_reason(blocked, 'str06.stage4.compile') is not None
     # 未登记 blocker 不做历史席位重映射：blocked 消费者按自身编排位参与范围判定。
-    consumer = _current('str06.stage2.source', state='blocked',
+    consumer = _current('str06.stage2.book', state='blocked',
                         waiting_on='unregistered-blocker')
     assert range_boundary_reason(consumer, 'str06.stage4.compile') is None
-    assert range_boundary_reason(consumer, 'str06.stage2.source') is not None
+    assert range_boundary_reason(consumer, 'str06.stage2.book') is not None
 
 
 def test_none_boundary_keeps_original_persistent_contract_identity():
@@ -131,8 +131,8 @@ def test_none_boundary_keeps_original_persistent_contract_identity():
         original = model.model_dump(mode='json')
         assert 'pause_before_node' not in original
         assert type(model).model_validate({**original, 'pause_before_node': None}).model_dump(mode='json') == original
-        bounded = model.model_copy(update={'pause_before_node': 'str06.stage2.source'})
-        assert type(model).model_validate(bounded.model_dump(mode='json')).pause_before_node == 'str06.stage2.source'
+        bounded = model.model_copy(update={'pause_before_node': 'str06.stage2.book'})
+        assert type(model).model_validate(bounded.model_dump(mode='json')).pause_before_node == 'str06.stage2.book'
 
 
 def test_http_range_start_drains_owner_and_restart_continuation_preserves_boundary(tmp_path, monkeypatch):
@@ -178,9 +178,9 @@ def test_http_range_start_drains_owner_and_restart_continuation_preserves_bounda
         assert expanded.status_code == 200, expanded.text
         assert expanded.json()['pause_before_node'] is None
         assert expanded.json()['profiles'] == old['profiles']
-        explicit = restarted.post('/api/agent/runs/preview', json={**continued, 'pause_before_node': 'str06.stage2.source'})
+        explicit = restarted.post('/api/agent/runs/preview', json={**continued, 'pause_before_node': 'str06.stage2.book'})
         assert explicit.status_code == 200, explicit.text
-        assert explicit.json()['pause_before_node'] == 'str06.stage2.source'
+        assert explicit.json()['pause_before_node'] == 'str06.stage2.book'
         second = restarted.post('/api/agent/runs', json=continued)
         assert second.status_code == 202, second.text
         assert agent.wait(second.json()['run_id'], 60)

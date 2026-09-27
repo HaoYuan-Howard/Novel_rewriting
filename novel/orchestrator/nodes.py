@@ -70,11 +70,14 @@ FOLLOW_CHECK_NOTE = '自动追跑：退出码 0 也可能是残缺产物'
 #: 因为节点在名单里就拿到 executor profile。因此唯一判据是
 #: ``(node, flag token set)``，值只列**已经完整迁移**的组合。
 #: ⚠⚠ F8b 翻转：旧链 10 键随 ``RETIRED_NODES`` 退役；新链付费纵切经 F5e 真实
-#: 成书与 F7a PaidRequestSession 边界验证，9 个 ``str06.`` 付费节点的完整迁移
-#: 跑法都是默认 argv（``--check-only`` 是免费复检，不在此表）。
+#: 成书与 F7a PaidRequestSession 边界验证，付费节点的完整迁移跑法都是默认 argv
+#: （``--check-only`` 是免费复检，不在此表）。B2（2026-09-27）五节点重建：
+#: `str06.stage2.source` 退役，book／chapters／associate 三个观察 owner 入表。
 PROFILED_LLM_RUNS: dict[str, tuple[frozenset[str], ...]] = {
-    'str06.stage2.source': (frozenset(),),
+    'str06.stage2.book': (frozenset(),),
+    'str06.stage2.chapters': (frozenset(),),
     'str06.stage2.names': (frozenset(),),
+    'str06.stage2.associate': (frozenset(),),
     'str06.stage4.preserve': (frozenset(),),
     'str06.stage4.body_design': (frozenset(),),
     'str06.stage4.bind': (frozenset(),),

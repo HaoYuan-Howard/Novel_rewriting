@@ -155,7 +155,7 @@ def test_fold_six_states():
     events = [
         _ev(10, 'stage0.remove', 'start'),
         _ev(20, 'stage0.remove', 'end', exit_code=0),
-        _ev(30, 'str06.stage2.source', 'start'),                       # 还在跑
+        _ev(30, 'str06.stage2.book', 'start'),                       # 还在跑
         _ev(35, 'str06.stage2.names', 'start'),
         _ev(36, 'str06.stage2.names', 'end', exit_code=1),         # 落盘但红
         _ev(40, 'stage1.partition', 'start'),
@@ -166,8 +166,8 @@ def test_fold_six_states():
     assert [s.seq for s in steps] == list(range(1, len(NODES) + 1))
     assert by_node['stage0.remove'].beacon == 'ok'
     assert by_node['stage0.remove'].last_exit == 0
-    assert by_node['str06.stage2.source'].beacon == 'running'
-    assert by_node['str06.stage2.source'].elapsed == 70
+    assert by_node['str06.stage2.book'].beacon == 'running'
+    assert by_node['str06.stage2.book'].elapsed == 70
     assert by_node['str06.stage2.names'].beacon == 'landed_red'
     assert by_node['str06.stage2.names'].last_exit == 1
     assert by_node['stage1.partition'].beacon == 'stopped'

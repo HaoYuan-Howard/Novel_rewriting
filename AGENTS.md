@@ -134,11 +134,12 @@ UI 称「模型执行配置」。禁止把「不得依赖 legacy implementation�
    最终盘面，不能只凭函数存在、编译或单测通过。
 
 自动跑书由确定性 orchestrator 推进；Stage 页只读监控。现役链是 STR-06 新链：
-stage0/1 之后由 11 个 `str06.<stage>.<owner>` 节点串成（Stage2 源语义与名称结构、
-Stage4 目标故事与确定性编译、Stage5 按章正文与 Hook、Stage7 命名与交付），节点表
-唯一登记在 `contracts/invariants.py::NODES`。**过渡注记（2026-09-27）**：职责解耦
-裁决 D1–D9 将把 Stage2 拆为五节点、公开节点扩为 14 个（B2 落地时同步本数与相关
-局部指南）；目标架构见 `docs/schema/str06.md`，批次见 `docs/REQUIREMENTS.md`。
+stage0/1 之后由 14 个 `str06.<stage>.<owner>` 节点串成（**B2 五节点重建（2026-09-27，
+D9）**：Stage2 book／chapters／names／associate／compile 五 owner，联合抽取节点
+`str06.stage2.source` 退役；Stage4 目标故事与确定性编译、Stage5 按章正文与 Hook、
+Stage7 命名与交付），节点表唯一登记在 `contracts/invariants.py::NODES`。观察与
+关联协议见 `contracts/schema/observation.py`，目标架构见 `docs/schema/str06.md`，
+批次见 `docs/REQUIREMENTS.md`。
 Stage6 整层与旧 Stage2/4/5/7 链已退役
 （退役登记见 `contracts/schema/retirement.py`），旧书只读拒识为
 `legacy_incompatible`。历史受托 Commander/Reviewer（含 `<immutable-workpack>`）与

@@ -171,7 +171,7 @@ def test_revalidate_is_hidden_from_user_action_catalog(paid_payload):
         for flag in spec['flags'] if flag == '--revalidate'
     ]
     # 新链的免费复检入口是节点级 --check-only。
-    assert {'--check-only'} <= set(paid_payload['job_kinds']['str06.stage2.source']['flags'])
+    assert {'--check-only'} <= set(paid_payload['job_kinds']['str06.stage2.book']['flags'])
 
 
 def test_stage5_edit_credential_actions_are_retired(paid_payload):

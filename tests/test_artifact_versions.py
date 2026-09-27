@@ -352,8 +352,10 @@ def test_unreadable_current_artifacts_do_not_take_down_read_only_aggregation(tmp
         }), ensure_ascii=False),
         encoding='utf-8')
     malformed = json.dumps({'_schema_version': 1}, ensure_ascii=False)
-    (book / 'stage2' / 'compiled').mkdir()
-    (book / 'stage2' / 'compiled' / 'book_extraction.json').write_text(
+    # B2（2026-09-27）：`stage2/compiled/book_extraction.json` 已退役（D9）；
+    # 损坏样本改用现役观察产物（Characters core 的同族形状闸不变）。
+    (book / 'stage2' / 'characters').mkdir()
+    (book / 'stage2' / 'characters' / 'characters.json').write_text(
         malformed, encoding='utf-8')
 
     ov = overview(root, '123')

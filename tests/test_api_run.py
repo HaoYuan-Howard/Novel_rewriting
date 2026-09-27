@@ -70,7 +70,7 @@ def test_beacon_events_fold_into_steps(client):
     # 改用现役节点名钉同一组状态。
     beacon.append(base, _ev(10, 'stage0.remove', 'start'))
     beacon.append(base, _ev(20, 'stage0.remove', 'end', exit_code=0))
-    beacon.append(base, _ev(30, 'str06.stage2.source', 'start'))
+    beacon.append(base, _ev(30, 'str06.stage2.book', 'start'))
     beacon.append(base, _ev(31, 'str06.stage2.names', 'end', exit_code=1))
     beacon.append(base, _ev(32, 'stage1.partition', 'end', exit_code=2))
     beacon.append(base, _ev(33, 'str06.stage4.preserve', 'end', exit_code=70))
@@ -79,8 +79,8 @@ def test_beacon_events_fold_into_steps(client):
     by_node = {s['node']: s for s in d['steps']}
     assert by_node['stage0.remove']['beacon'] == 'ok'
     assert by_node['stage0.remove']['last_exit'] == 0
-    assert by_node['str06.stage2.source']['beacon'] == 'running'
-    assert by_node['str06.stage2.source']['elapsed'] is not None
+    assert by_node['str06.stage2.book']['beacon'] == 'running'
+    assert by_node['str06.stage2.book']['elapsed'] is not None
     assert by_node['str06.stage2.names']['beacon'] == 'landed_red'
     assert by_node['str06.stage2.names']['last_exit'] == 1
     assert by_node['stage1.partition']['beacon'] == 'stopped'
@@ -114,7 +114,7 @@ def test_retired_valued_flag_is_refused_at_http_preview(client):
     response = c.post(
         '/api/jobs/preview',
         headers={UI_HEADER: '1'},
-        json={'sid': '42', 'node': 'str06.stage2.source',
+        json={'sid': '42', 'node': 'str06.stage2.book',
               'flags': ['--chapters', '11']},
     )
     assert response.status_code == 400, response.text
