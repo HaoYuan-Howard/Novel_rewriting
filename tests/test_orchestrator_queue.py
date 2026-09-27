@@ -19,8 +19,8 @@ import pytest
 from pydantic import ValidationError
 
 from contracts.artifacts import (
-    STR06_STAGE2_BLUEPRINTS, STR06_STAGE2_CHARACTERS, STR06_STAGE5_BODY,
-    artifact_rel,
+    STR06_STAGE2_BLUEPRINTS, STR06_STAGE2_CHARACTERS, STR06_STAGE2_OBS_ASSOCIATE,
+    STR06_STAGE2_OBS_NAMES, STR06_STAGE5_BODY, artifact_rel,
 )
 from contracts.invariants import NODES, RETIRED_NODES, STAGES
 from contracts.schema.orchestration import (
@@ -357,9 +357,11 @@ def test_new_chain_nodes_do_not_route_through_the_retired_admission_roster(
         queue_base, monkeypatch):
     """统一机械准入名册仍钉在旧节点（stage2.blueprint／stage4.*）上：
     新链付费/免费节点规划不经过它——准入未过时不再有「整条停在收件箱」的
-    旧链形状（F8b-3 记录：str06 节点的准入接线属 F8c，缺口见报告）。"""
+    旧链形状（F8b-3 记录：str06 节点的准入接线属 F8c，缺口见报告）。
+    B2 五节点（D9）：Stage2 代表节点随 `str06.stage2.source` 退役换为
+    `str06.stage2.book`。"""
     nodes = [
-        'str06.stage2.source', 'str06.stage4.body_design',
+        'str06.stage2.book', 'str06.stage4.body_design',
         'str06.stage4.bind', 'str06.stage4.compile',
     ]
     monkeypatch.setattr(Q, 'nodes_up_to', lambda _until: nodes)
@@ -435,27 +437,35 @@ def test_queue_routes_names_registration_between_paid_todo_and_inbox_block(
     assert '--yes' in argv and '--renormalize' not in argv
 
 
-def test_live_invalid_names_blocks_source_downstream_without_paid_argv(
+def test_live_invalid_character_registration_blocks_associate_and_compile(
         queue_base, monkeypatch):
-    """人物登记 live INVALID：本节点与下游 `str06.stage2.source` 都停在收件箱，
-    不另造付费 argv（称名不可信时不重采、不重抽）。"""
+    """人物登记（compile 发布的 canonical `characters.json`）live INVALID：
+    关联与编译都停在收件箱，不另造付费 argv（称名不可信时不重关联、
+    不重发布）。names 观察自己的产物 current ⇒ SKIP，不连带被抬进
+    恢复队列。
+
+    B2 五节点（D9）：`str06.stage2.source` 退役——人物登记唯一 writer
+    换为免费 `str06.stage2.compile`，下游阻断面随之换轨。
+    """
     monkeypatch.setattr(
         Q, 'nodes_up_to',
-        lambda _until: ['str06.stage2.names', 'str06.stage2.source'])
-    names = ArtifactState(
+        lambda _until: [
+            'str06.stage2.names', 'str06.stage2.associate',
+            'str06.stage2.compile'])
+    names_view = ArtifactState(
+        rel=STR06_STAGE2_OBS_NAMES, exists=True, bytes=1, mtime=1,
+        freshness='fresh', reason='match', display_freshness='fresh',
+        invalid=False, invalid_freshness=None, invalid_reason=None,
+        readable=True, condition='ready',
+    )
+    characters = ArtifactState(
         rel=STR06_STAGE2_CHARACTERS, exists=True, bytes=1, mtime=1,
         freshness='fresh', reason='match', display_freshness='fresh',
         invalid=True, invalid_freshness='unknown',
         invalid_reason='no_provenance', readable=True, condition='invalid',
     )
-    blueprint = ArtifactState(
-        rel=STR06_STAGE2_BLUEPRINTS, exists=False, bytes=None, mtime=None,
-        freshness='unknown', reason='no_provenance', display_freshness='missing',
-        invalid=False, invalid_freshness=None, invalid_reason=None,
-        readable=True, condition='missing',
-    )
     ov = SimpleNamespace(stages=[StageState(
-        stage='stage2', artifacts=[names, blueprint],
+        stage='stage2', artifacts=[names_view, characters],
         done=False, reviewable=True,
     )])
     monkeypatch.setattr(Q.st, 'overview', lambda _base, _sid: ov)
@@ -465,7 +475,7 @@ def test_live_invalid_names_blocks_source_downstream_without_paid_argv(
 
     assert todo == []
     assert [item.node for item in blocked] == [
-        'str06.stage2.names', 'str06.stage2.source']
+        'str06.stage2.associate', 'str06.stage2.compile']
     assert all(item.waiting_on == Q.WAITING_ON_INBOX for item in blocked)
     assert all(item.steps == [] for item in blocked)
     assert '--revalidate' in blocked[0].why
@@ -500,13 +510,17 @@ def test_queue_never_auto_runs_unproven_names_registration(
     assert item.waiting_on == Q.WAITING_ON_RESUME_DECISION
 
 
-def test_queue_does_not_auto_rerun_invalid_source_after_names_are_ready(
+def test_queue_does_not_auto_rerun_invalid_blueprint_after_characters_are_ready(
         queue_base, monkeypatch):
-    """抽取面 live INVALID 阻断本节点与下游命名；人物登记 current 不能
-    代替它——也不复活旧链的 system 自动提升 argv。"""
+    """蓝图 live INVALID 阻断编译与下游命名；人物登记 current 不能
+    代替它——也不复活旧链的 system 自动提升 argv。
+
+    B2 五节点（D9）：`str06.stage2.source` 退役，蓝图唯一 writer 是
+    `str06.stage2.compile`，下游阻断面换轨到 compile → naming。
+    """
     monkeypatch.setattr(
         Q, 'nodes_up_to',
-        lambda _until: ['str06.stage2.source', 'str06.stage7.naming'])
+        lambda _until: ['str06.stage2.compile', 'str06.stage7.naming'])
 
     def artifact(rel, *, exists=True, invalid=False):
         return ArtifactState(
@@ -538,36 +552,49 @@ def test_queue_does_not_auto_rerun_invalid_source_after_names_are_ready(
 
     assert todo == []
     assert [item.node for item in blocked] == [
-        'str06.stage2.source', 'str06.stage7.naming']
+        'str06.stage2.compile', 'str06.stage7.naming']
     assert all(item.steps == [] for item in blocked)
     assert all(item.waiting_on == Q.WAITING_ON_INBOX for item in blocked)
 
 
-def test_stale_source_blueprints_stop_the_queue_without_free_rebind_lanes(
+def test_stale_blueprints_stop_the_queue_without_free_rebind_lanes(
         queue_base, monkeypatch):
     """人物独立登记改变的免费重绑面随 `stage2.global` 退役：新链上 stale
-    蓝图只能停在 REDO 人工断点，排在付费重抽之前的免费步骤不复存在。"""
+    蓝图只能停在 REDO 人工断点，排在付费重抽之前的免费步骤不复存在。
+
+    B2 五节点（D9）：蓝图唯一 writer 是免费 `str06.stage2.compile`——
+    stale 蓝图时观察三 owner（产物 current）全部 SKIP 不重跑，compile
+    停在 REDO 人工断点等待显式决定，`--renormalize` 免费重绑旗标不得
+    复活。
+    """
     assert not hasattr(S, 'stage2_knowledge_rebind_needed'), (
         '免费重绑谓词应随 stage2.global 退役删除')
     monkeypatch.setattr(
         Q, 'nodes_up_to',
-        lambda _until: ['str06.stage2.names', 'str06.stage2.source'])
-    blueprint = ArtifactState(
-        rel=STR06_STAGE2_BLUEPRINTS,
-        exists=True, bytes=1, mtime=1,
-        freshness='stale', reason='consumed_changed',
-        display_freshness='stale',
-        invalid=False, invalid_freshness=None, invalid_reason=None,
-        readable=True, condition='ready',
-    )
-    names = ArtifactState(
-        rel=STR06_STAGE2_CHARACTERS, exists=True, bytes=1, mtime=1,
-        freshness='fresh', reason='match', display_freshness='fresh',
-        invalid=False, invalid_freshness=None, invalid_reason=None,
-        readable=True, condition='ready',
-    )
+        lambda _until: [
+            'str06.stage2.names', 'str06.stage2.associate',
+            'str06.stage2.compile'])
+
+    def artifact(rel):
+        return ArtifactState(
+            rel=rel, exists=True, bytes=1, mtime=1,
+            freshness=('stale' if rel == STR06_STAGE2_BLUEPRINTS else 'fresh'),
+            reason=('consumed_changed' if rel == STR06_STAGE2_BLUEPRINTS
+                    else 'match'),
+            display_freshness=(
+                'stale' if rel == STR06_STAGE2_BLUEPRINTS else 'fresh'),
+            invalid=False, invalid_freshness=None, invalid_reason=None,
+            readable=True, condition='ready',
+        )
+
     ov = SimpleNamespace(stages=[StageState(
-        stage='stage2', artifacts=[names, blueprint],
+        stage='stage2',
+        artifacts=[
+            artifact(STR06_STAGE2_OBS_NAMES),
+            artifact(STR06_STAGE2_OBS_ASSOCIATE),
+            artifact(STR06_STAGE2_CHARACTERS),
+            artifact(STR06_STAGE2_BLUEPRINTS),
+        ],
         done=False, reviewable=True,
     )])
     monkeypatch.setattr(Q.st, 'overview', lambda _base, _sid: ov)
@@ -575,8 +602,8 @@ def test_stale_source_blueprints_stop_the_queue_without_free_rebind_lanes(
     todo, blocked = Q.plan_book(
         queue_base, 'book-a', until_stage='stage2', follow_check=False)
 
-    assert todo == [], 'names current 即 SKIP；免费重绑项不得再被排入'
-    assert [item.node for item in blocked] == ['str06.stage2.source']
+    assert todo == [], '观察产物 current 即 SKIP；免费重绑项不得再被排入'
+    assert [item.node for item in blocked] == ['str06.stage2.compile']
     assert blocked[0].waiting_on == Q.WAITING_ON_RESUME_DECISION
     assert blocked[0].steps == []
     assert '--renormalize' not in blocked[0].why
@@ -588,8 +615,10 @@ def test_stale_source_blueprints_stop_the_queue_without_free_rebind_lanes(
 )
 def test_queue_refuses_unknown_blueprint_input_migration_and_paid_wire(
         queue_base, monkeypatch, formal_exists, invalid):
-    """旧来源没有免费迁移或默认付费的队列指令（`str06.stage2.source`）。"""
-    monkeypatch.setattr(Q, 'nodes_up_to', lambda _until: ['str06.stage2.source'])
+    """旧来源没有免费迁移或默认付费的队列指令（B2 换轨：蓝图唯一
+    writer `str06.stage2.compile`，D9）。"""
+    monkeypatch.setattr(
+        Q, 'nodes_up_to', lambda _until: ['str06.stage2.compile'])
 
     blueprint = ArtifactState(
         rel=STR06_STAGE2_BLUEPRINTS,
@@ -619,7 +648,7 @@ def test_queue_refuses_unknown_blueprint_input_migration_and_paid_wire(
 
     assert todo == [] and len(blocked) == 1
     item = blocked[0]
-    assert item.node == 'str06.stage2.source'
+    assert item.node == 'str06.stage2.compile'
     assert item.flags == [] and item.steps == []
     assert '--renormalize' not in item.why
     assert item.waiting_on == (
@@ -627,9 +656,12 @@ def test_queue_refuses_unknown_blueprint_input_migration_and_paid_wire(
 
 
 @pytest.mark.parametrize('formal_exists', [False, True])
-def test_queue_live_source_invalid_has_no_default_paid_argv(
+def test_queue_live_blueprint_invalid_has_no_default_paid_argv(
         queue_base, monkeypatch, formal_exists):
-    monkeypatch.setattr(Q, 'nodes_up_to', lambda _until: ['str06.stage2.source'])
+    """B2 换轨：蓝图唯一 writer `str06.stage2.compile`（D9）——live
+    `.INVALID` 收件箱关闭式阻断，无默认付费 argv。"""
+    monkeypatch.setattr(
+        Q, 'nodes_up_to', lambda _until: ['str06.stage2.compile'])
     blueprint = ArtifactState(
         rel=STR06_STAGE2_BLUEPRINTS, exists=formal_exists,
         bytes=(1 if formal_exists else None),
@@ -651,7 +683,7 @@ def test_queue_live_source_invalid_has_no_default_paid_argv(
 
     assert todo == [] and len(blocked) == 1
     item = blocked[0]
-    assert item.node == 'str06.stage2.source'
+    assert item.node == 'str06.stage2.compile'
     assert item.waiting_on == Q.WAITING_ON_INBOX
     assert item.steps == [] and item.flags == []
     # 队列自己的话：现役旗标面只有 --check-only，没有 0-wire 自动提升 argv。
@@ -664,9 +696,17 @@ def test_queue_live_source_invalid_has_no_default_paid_argv(
         assert '产物不在盘上' in item.why
 
 
-def test_queue_missing_source_without_invalid_keeps_default_paid_plan(
+def test_queue_missing_blueprint_without_invalid_keeps_a_plain_compile_todo(
         queue_base, monkeypatch):
-    monkeypatch.setattr(Q, 'nodes_up_to', lambda _until: ['str06.stage2.source'])
+    """蓝图从未落盘且无 INVALID ⇒ 编译按普通 todo 排入，不是 blocker。
+
+    B2 换轨（D9）：蓝图唯一 writer 是免费 `str06.stage2.compile`——
+    「缺失 ⇒ 默认付费计划」的旧口径随 `str06.stage2.source` 退役；
+    职责保持：缺失走普通 producer 重算路（这里免费、不带 `--yes`、
+    不冻结任何恢复旗标），队列不会猜一条别的命令。
+    """
+    monkeypatch.setattr(
+        Q, 'nodes_up_to', lambda _until: ['str06.stage2.compile'])
     blueprint = ArtifactState(
         rel=STR06_STAGE2_BLUEPRINTS, exists=False, bytes=None, mtime=None,
         freshness='unknown', reason='no_provenance', display_freshness='missing',
@@ -683,9 +723,9 @@ def test_queue_missing_source_without_invalid_keeps_default_paid_plan(
 
     assert blocked == [] and len(todo) == 1
     item = todo[0]
-    assert item.node == 'str06.stage2.source' and item.flags == []
-    assert item.steps and any(step.paid for step in item.steps)
-    assert '--yes' in item.steps[0].argv
+    assert item.node == 'str06.stage2.compile' and item.flags == []
+    assert item.steps and not any(step.paid for step in item.steps)
+    assert '--yes' not in item.steps[0].argv
 
 
 def test_upstream_stage2_live_invalid_blocks_stage4_via_the_ghost_surface(

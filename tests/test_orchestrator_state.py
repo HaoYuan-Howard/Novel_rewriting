@@ -16,8 +16,8 @@ import pytest
 
 from contracts.artifacts import (
     ARTIFACT_PATHS, BOOK_SCOPED_PATHS, STR06_STAGE2_BLUEPRINTS,
-    STR06_STAGE2_CHARACTERS, STR06_STAGE5_BODY, STR06_STAGE5_BODY_RECEIPT,
-    artifact_rel,
+    STR06_STAGE2_CHARACTERS, STR06_STAGE2_OBS_NAMES, STR06_STAGE5_BODY,
+    STR06_STAGE5_BODY_RECEIPT, artifact_rel,
 )
 from contracts.invariants import NODES, RETIRED_NODES, STAGES
 from contracts.schema import ARTIFACTS
@@ -566,15 +566,18 @@ def test_existing_unproven_names_registration_never_becomes_a_default_paid_run(
 @pytest.mark.parametrize('formal_exists', [False, True])
 def test_source_invalid_is_not_excused_by_current_names_registration(
         formal_exists):
-    """抽取面 live INVALID 仍须修复；人物登记 current 不能代替知识/抽取接受。
+    """canonical 抽取产物 live INVALID 仍须修复；人物登记 current 不能代替
+    知识/抽取接受。
 
-    旧链「Global INVALID + 投影就绪」场景随 `stage2.global` 退役：新链的
-    对应面是 `str06.stage2.source` 自己的 live INVALID——names SKIP 不连带
-    把 source 抬成可跳过。
+    B2 五节点（D9）：`str06.stage2.source` 退役后，Characters／Blueprint
+    双真源的唯一 writer 是免费的 `str06.stage2.compile`——canonical 面
+    live INVALID 时向 compile 提问；names 观察自己的产物 current 即
+    SKIP，不连带把 compile 抬成可跳过。
     """
     stage = StageState(
         stage='stage2',
         artifacts=[
+            _stage2_artifact(STR06_STAGE2_OBS_NAMES),
             _stage2_artifact(STR06_STAGE2_CHARACTERS),
             _stage2_artifact(
                 STR06_STAGE2_BLUEPRINTS,
@@ -589,7 +592,7 @@ def test_source_invalid_is_not_excused_by_current_names_registration(
 
     _assert_retired_projection_predicates()
     assert S.resume_verdict(ov, 'str06.stage2.names')[0] == S.RESUME_SKIP
-    verdict, why = S.resume_verdict(ov, 'str06.stage2.source')
+    verdict, why = S.resume_verdict(ov, 'str06.stage2.compile')
     assert verdict == S.RESUME_RUN
     if formal_exists:
         assert '--revalidate' in why
@@ -598,7 +601,11 @@ def test_source_invalid_is_not_excused_by_current_names_registration(
 
 
 def test_old_blueprint_inputs_remain_unknown_without_migration():
-    """来源账不足以证明 current 的正式蓝图保持 UNKNOWN，不猜迁移。"""
+    """来源账不足以证明 current 的正式蓝图保持 UNKNOWN，不猜迁移。
+
+    B2：蓝图唯一 writer 是 `str06.stage2.compile`（D9），恢复提问换轨到
+    compile；unknown 不因节点换轨折成 run。
+    """
     stage = StageState(
         stage='stage2',
         artifacts=[
@@ -611,7 +618,7 @@ def test_old_blueprint_inputs_remain_unknown_without_migration():
     )
     ov = _overview(stage)
 
-    verdict, why = S.resume_verdict(ov, 'str06.stage2.source')
+    verdict, why = S.resume_verdict(ov, 'str06.stage2.compile')
     assert verdict == S.RESUME_UNKNOWN
     assert '--renormalize' not in why
 
@@ -626,7 +633,8 @@ def test_unknown_input_invalid_keeps_normal_validation_route(
     """未知来源 INVALID 不能借共存正式稿追认；提升仍须 producer 复验。
 
     新链通用判定里 INVALID 分支先于「读不回」分支：两态都路由到
-    RUN + 0 LLM 提升建议；纯缺失仍是普通付费 RUN 的措辞。
+    RUN + 0 LLM 提升建议；纯缺失仍是普通重算 RUN 的措辞。B2：提问
+    节点换轨到蓝图唯一 writer `str06.stage2.compile`（D9）。
     """
     stage = StageState(
         stage='stage2',
@@ -644,7 +652,7 @@ def test_unknown_input_invalid_keeps_normal_validation_route(
     )
     ov = _overview(stage)
 
-    verdict, why = S.resume_verdict(ov, 'str06.stage2.source')
+    verdict, why = S.resume_verdict(ov, 'str06.stage2.compile')
     assert verdict == S.RESUME_RUN
     assert '--renormalize' not in why
     assert fragment in why
@@ -652,7 +660,11 @@ def test_unknown_input_invalid_keeps_normal_validation_route(
 
 @pytest.mark.parametrize('formal_exists', [False, True])
 def test_live_blueprint_invalid_routes_only_to_zero_llm_revalidate(formal_exists):
-    """live `.INVALID` 只给 0 LLM 提升路；投影恢复面已随旧链退役。"""
+    """live `.INVALID` 只给 0 LLM 提升路；投影恢复面已随旧链退役。
+
+    B2：蓝图唯一 writer 是 `str06.stage2.compile`（D9），live INVALID
+    的收件箱/重算路由换轨到 compile 提问。
+    """
     stage = StageState(
         stage='stage2',
         artifacts=[
@@ -668,7 +680,7 @@ def test_live_blueprint_invalid_routes_only_to_zero_llm_revalidate(formal_exists
     ov = _overview(stage)
 
     _assert_retired_projection_predicates()
-    verdict, why = S.resume_verdict(ov, 'str06.stage2.source')
+    verdict, why = S.resume_verdict(ov, 'str06.stage2.compile')
     assert verdict == S.RESUME_RUN
     if formal_exists:
         assert '--revalidate' in why and '0 LLM' in why
@@ -676,8 +688,14 @@ def test_live_blueprint_invalid_routes_only_to_zero_llm_revalidate(formal_exists
         assert '产物不在盘上' in why
 
 
-def test_missing_blueprint_without_invalid_remains_a_normal_paid_run():
-    """蓝图从未落盘 ⇒ 普通付费 RUN 的「产物不在盘上」，没有免费路可猜。"""
+def test_missing_blueprint_without_invalid_remains_a_plain_compile_run():
+    """蓝图从未落盘 ⇒ compile 普通重算 RUN 的「产物不在盘上」，没有别的
+    免费恢复旗标可猜。
+
+    B2：compile（D9）本身是确定性免费节点——「普通付费 RUN」的旧措辞随
+    `str06.stage2.source` 退役；职责保持：缺失走普通 producer 重算路，
+    不折成 skip、不发明恢复旗标。
+    """
     stage = StageState(
         stage='stage2',
         artifacts=[
@@ -689,19 +707,22 @@ def test_missing_blueprint_without_invalid_remains_a_normal_paid_run():
     ov = _overview(stage)
 
     _assert_retired_projection_predicates()
-    verdict, why = S.resume_verdict(ov, 'str06.stage2.source')
+    verdict, why = S.resume_verdict(ov, 'str06.stage2.compile')
     assert verdict == S.RESUME_RUN
     assert '产物不在盘上' in why
+    assert '--revalidate' not in why
 
 
 @pytest.mark.parametrize(
     ('reason', 'expected'),
     [('consumed_changed', None), ('file_changed', None)],
 )
-def test_source_node_has_no_operator_replay_for_stale_blueprints(
+def test_compile_node_has_no_operator_replay_for_stale_blueprints(
         reason, expected):
-    """`str06.stage2.source` 未登记 operator_redo：普通队列 REDO 停人工，
-    AgentRun 单步 operator 也不得猜重放（旧 Blueprint canonical 重放面退役）。"""
+    """`str06.stage2.compile` 未登记 operator_redo：普通队列 REDO 停人工，
+    AgentRun 单步 operator 也不得猜重放（旧 Blueprint canonical 重放面退役；
+    B2 换轨后 compile 是蓝图唯一 writer，同样不登记——重发布是免费
+    producer 的事，operator 不猜 flags）。"""
     stage = StageState(
         stage='stage2',
         artifacts=[_stage2_artifact(
@@ -712,14 +733,17 @@ def test_source_node_has_no_operator_replay_for_stale_blueprints(
     )
     ov = _overview(stage)
 
-    assert S.resume_verdict(ov, 'str06.stage2.source')[0] == S.RESUME_REDO
-    assert S.operator_redo_flags(ov, 'str06.stage2.source') == expected
+    assert S.resume_verdict(ov, 'str06.stage2.compile')[0] == S.RESUME_REDO
+    assert S.operator_redo_flags(ov, 'str06.stage2.compile') == expected
 
 
 @pytest.mark.parametrize('reason', ['consumed_unresolved', 'no_provenance'])
 def test_unknown_blueprint_rows_are_not_generalized_into_migration_or_rebind(
         reason: str):
-    """unknown 原因不精确时，不得擅自解释成可迁移旧账或免费重绑。"""
+    """unknown 原因不精确时，不得擅自解释成可迁移旧账或免费重绑。
+
+    B2：提问换轨到蓝图唯一 writer `str06.stage2.compile`（D9）。
+    """
     stage = StageState(
         stage='stage2',
         artifacts=[
@@ -733,7 +757,7 @@ def test_unknown_blueprint_rows_are_not_generalized_into_migration_or_rebind(
     )
     ov = _overview(stage)
 
-    assert S.resume_verdict(ov, 'str06.stage2.source')[0] == S.RESUME_UNKNOWN
+    assert S.resume_verdict(ov, 'str06.stage2.compile')[0] == S.RESUME_UNKNOWN
 
 
 def _stage5(*, chapters: list[int], rounds: dict[str, list[int]],
