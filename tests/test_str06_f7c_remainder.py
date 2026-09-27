@@ -32,15 +32,15 @@ from novel.llm.ledger import CostLedger, ledger_path, read_cost_snapshot
 from novel.llm.paid_requests import (
     PaidRequestSession, PurchaseRequired, digest, ask_json,
 )
-from novel.stages.stage5.body_checks import (
-    MAX_BODY_REWRITES, chapter_surface_releases, chapter_withheld_literals,
-)
+from novel.stages.stage5.body_checks import MAX_BODY_REWRITES
 from novel.stages.stage5.body import AnsweredText, write_chapter
-from novel.stages.stage4.book_ir import compile_writer_book_ir
+from novel.stages.stage4.book_ir import (
+    chapter_surface_releases, chapter_withheld_literals, compile_writer_book_ir,
+)
 from novel.stages.stage4.compile import compile_execution_plan
 from novel.stages.stage4.design import assemble_body_design
 from novel.stages.stage4.fold import fold_accepted_prefix
-from novel.stages.common import surface_engine_release
+from novel.stages.common import packet_sha256, project_chapter_packet, surface_engine_release
 from novel.store import Str06Repository
 from novel.work_units import WorkUnitBudget, read_book_budget
 from tests.str06_facilities import make_context
@@ -77,9 +77,12 @@ def _ir(body):
     binding = _green_binding(body)
     plan, errors = compile_execution_plan(body, binding)
     assert not errors, errors
+    chars = _characters()
     return compile_writer_book_ir(graph=body, plan=plan, binding=binding,
                                   total_budget=2000, length_band=(0.6, 1.3),
-                                  book_title='报恩')
+                                  book_title='报恩',
+                                  projection=chars.name_projection(),
+                                  structure=chars.name_structure)
 
 
 def _scene_releases(book_ir, chapter: int, scene: int = 0) -> dict[str, set[str]]:
@@ -122,29 +125,24 @@ def test_withheld_literal_is_hard_failure_never_disclosed():
     """未释放专名是硬失败：重写耗尽后无合法候选即停止，不按披露放行。"""
     body = _delayed_release_design()
     book_ir = _ir(body)
-    chars = _characters()
+    packet = project_chapter_packet(book_ir, 1)
     dirty = '芸娘望着空房，' * 100 + '陆大哥没有回来。'
     clean = '芸娘坐在窗前，烛火摇了三摇，门外没有脚步声。' * 30
     answers = [AnsweredText(text=dirty, finish_reason='stop',
                             identity=f'attempt-{i}', cached=False)
                for i in range(1 + MAX_BODY_REWRITES)]
-    outcome = write_chapter(book_ir=book_ir, graph=body,
-                            projection=chars.name_projection(), chapter_ordinal=1,
-                            committed={}, ask=lambda prompt: answers.pop(0),
-                            structure=chars.name_structure)
+    outcome = write_chapter(packet=packet, ask=lambda prompt: answers.pop(0))
     assert outcome.prose is None and outcome.receipt is None, '硬失败不得披露放行'
     assert len(outcome.attempts) == 1 + MAX_BODY_REWRITES
     assert all(any(e.startswith('[withheld_literals]') for e in a.errors)
                for a in outcome.attempts)
     # 同一把标尺下，只用已释放称谓的稿正常接受（纪律针对未释放面，不是全部专名）。
-    ok = write_chapter(book_ir=book_ir, graph=body,
-                       projection=chars.name_projection(), chapter_ordinal=1,
-                       committed={},
+    ok = write_chapter(packet=packet,
                        ask=lambda prompt: AnsweredText(text=clean, finish_reason='stop',
-                                                       identity='clean', cached=False),
-                       structure=chars.name_structure)
+                                                       identity='clean', cached=False))
     assert ok.prose == clean and ok.receipt is not None
     assert ok.receipt.status == 'accepted' and ok.length_disclosed is False
+    assert ok.receipt.packet_sha256 == packet_sha256(packet)
 
 
 # ────────────────── public_state_ref 接管 · ② 跨章携入 ──────────────────────
@@ -257,8 +255,11 @@ def test_unset_public_state_is_carried_as_explicit_removal():
     binding = _green_binding(body)
     plan, errors = compile_execution_plan(body, binding)
     assert not errors, errors
+    chars = _characters()
     book_ir = compile_writer_book_ir(graph=body, plan=plan, binding=binding,
-                                     total_budget=2000, length_band=(0.6, 1.3))
+                                     total_budget=2000, length_band=(0.6, 1.3),
+                                     projection=chars.name_projection(),
+                                     structure=chars.name_structure)
     entry = [e for e in book_ir.chapter(3).scenes[0].verification_ir.entry_state
              if e.key == 'whereabouts']
     assert len(entry) == 1, '解除项必须显式到达消费面，不得静默消失'

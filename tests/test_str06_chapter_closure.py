@@ -28,7 +28,15 @@ from novel.stages.stage4.book_ir import (
 from novel.stages.stage4.compile import compile_execution_plan, init_establishments
 from novel.stages.stage4.design import assemble_body_design
 from novel.stages.stage4.fold import fold_accepted_prefix
-from novel.stages.common import project_context, render_chapter_packet
+from novel.stages.common import (
+    packet_sha256, project_chapter_packet, project_context, render_chapter_packet,
+)
+from tests.test_str06_hook import _characters as _name_source
+
+
+def _projection():
+    """最小名称投影（compile 的材料参数）：真实人物表投影，禁用面非空。"""
+    return _name_source().name_projection()
 from contracts.schema.workflow import STAGE4_DESIGN_PROTOCOL
 
 H64 = 'a' * 64
@@ -95,7 +103,8 @@ def _slices(graph, binding=None) -> dict[tuple, str]:
     """（章序, 场景）→ 消费身份：章包级失效判定的读取面。"""
     plan, binding = _plan(graph, binding)
     ir = compile_writer_book_ir(graph=graph, plan=plan, binding=binding,
-                                total_budget=1000, length_band=(0.6, 1.3))
+                                total_budget=1000, length_band=(0.6, 1.3),
+                                projection=_projection(), structure=None)
     return {(c.chapter_ordinal, ctx.scene_id): ctx.execution_slice_sha256
             for c in ir.chapters for ctx in c.scenes}
 
@@ -103,7 +112,8 @@ def _slices(graph, binding=None) -> dict[tuple, str]:
 def _entry_state(graph, scene_id, binding=None):
     plan, binding = _plan(graph, binding)
     ir = compile_writer_book_ir(graph=graph, plan=plan, binding=binding,
-                                total_budget=1000, length_band=(0.6, 1.3))
+                                total_budget=1000, length_band=(0.6, 1.3),
+                                projection=_projection(), structure=None)
     for chapter in ir.chapters:
         for ctx in chapter.scenes:
             if ctx.scene_id == scene_id:
@@ -129,7 +139,8 @@ def test_read_before_write_keeps_entry_old_value():
         chapters=[(1, ('s01',)), (2, ('s02',))])
     plan, _ = _plan(graph)
     ir = compile_writer_book_ir(graph=graph, plan=plan, binding=_binding(graph),
-                                total_budget=1000, length_band=(0.6, 1.3))
+                                total_budget=1000, length_band=(0.6, 1.3),
+                                projection=_projection(), structure=None)
     s02 = ir.chapter(2).scenes[0]
     entry = [e for e in s02.verification_ir.entry_state if e.key == 'x']
     assert entry and entry[0].value == '旧值', '入场读取必须携带本场写入前的旧值'
@@ -153,7 +164,8 @@ def test_read_after_write_resolves_new_value_and_misplacement_is_refused():
         chapters=[(1, ('s01',))])
     plan, _ = _plan(graph)
     ir = compile_writer_book_ir(graph=graph, plan=plan, binding=_binding(graph),
-                                total_budget=1000, length_band=(0.6, 1.3))
+                                total_budget=1000, length_band=(0.6, 1.3),
+                                projection=_projection(), structure=None)
     s01 = ir.chapter(1).scenes[0]
     assert not [e for e in s01.verification_ir.entry_state if e.key == 'x'], \
         '拍读取不是起笔已成立——场内建立值不进 entry 视图（M3 语义不被稀释）'
@@ -388,7 +400,8 @@ def test_reader_confirmation_projects_only_into_consuming_scenes():
     graph = _confirmation_graph()
     plan, binding = _plan(graph)
     ir = compile_writer_book_ir(graph=graph, plan=plan, binding=binding,
-                                total_budget=3000, length_band=(0.6, 1.3))
+                                total_budget=3000, length_band=(0.6, 1.3),
+                                projection=_projection(), structure=None)
     pending = {ctx.scene_id: ctx.verification_ir.pending_reader_confirmations
                for c in ir.chapters for ctx in c.scenes}
     assert [(p.fact, p.position, p.in_scene) for p in pending['s01']] == [
@@ -396,7 +409,7 @@ def test_reader_confirmation_projects_only_into_consuming_scenes():
     assert [(p.fact, p.in_scene) for p in pending['s02']] == [
         ('床底有人', True)], '读取并在本场确认的场景是消费者'
     assert pending['s03'] == (), '不消费该地址的场景不投影'
-    packets = {c.chapter_ordinal: render_chapter_packet(ir, c.chapter_ordinal, {})
+    packets = {c.chapter_ordinal: render_chapter_packet(project_chapter_packet(ir, c.chapter_ordinal))
                for c in ir.chapters}
     assert '本场第 b02 拍起可确认' in packets[2], '确认拍在本场内的标注'
     assert 's02#b02 才可确认' in packets[1], '后场确认对前章标注位置'

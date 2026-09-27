@@ -37,7 +37,7 @@ from typing import Any, Iterable, Mapping, NamedTuple, Protocol
 
 from pydantic import BaseModel
 
-from contracts.schema.book_ir import WriterBookIR
+from contracts.schema.book_ir import ChapterIR, ChapterWriterPacket, PacketBrief, RealizationContract, WriterBookIR
 from contracts.schema.context import (
     KnowledgeEntry, PendingConfirmation, StateEntry, SurfaceRelease,
     VerificationIR, WriterBrief, WriterContext, beats_ir,
@@ -180,21 +180,21 @@ def check_plan_matches_graph(
 
 
 def check_chapter_receipt(
-    receipt, *, book_ir_sha256: str,
-    prior_text_sha256: str, prose_sha256: str,
+    receipt, *, packet_sha256: str, prose_sha256: str,
 ) -> list[str]:
-    """章级回执与当前输入的绑定核对：旧回执配新输入必须拒绝。
+    """章级回执与当前章包/正文的绑定核对：旧回执配新输入必须拒绝。
 
-    全书 IR 变化使全部回执失效；第 k 章前文变化使该章回执失效；正文字节变化
-    使回执与文本脱钩。三份绑定逐一核对（I-16：回执不是第二份业务权威）。
+    本章章包变化（导演说明、实际依赖、验证材料、预算——重编译后投影变化）
+    使**该章**回执失效；正文字节变化使回执与文本脱钩。不再绑定全书 IR 与
+    前文链（D2，`R-7.4` 改写）：写手只收当前章包，各章独立有效、可集合恢复。
+    逐份核对（I-16：回执不是第二份业务权威）。
     """
     problems: list[str] = []
     if receipt.status != 'accepted':
         problems.append(f'回执状态为 {receipt.status}，不构成有效提交')
-    if receipt.book_ir_sha256 != book_ir_sha256:
-        problems.append('book_ir_sha256 与当前全书 IR 不一致（IR 变化使全书回执失效）')
-    if receipt.prior_text_sha256 != prior_text_sha256:
-        problems.append('prior_text_sha256 与当前有效前文不一致（前缀变化使本章失效）')
+    if receipt.packet_sha256 != packet_sha256:
+        problems.append('packet_sha256 与当前编译出的章包摘要不一致'
+                        '（章包变化使本章回执失效）')
     if receipt.prose_sha256 != prose_sha256:
         problems.append('prose_sha256 与章文本不匹配（回执与正文脱钩）')
     return problems
@@ -205,9 +205,8 @@ def affected_chapters(
 ) -> set[int]:
     """场景级窄修复 → 章级失效范围：受影响场景所在的目标章。
 
-    第 k 章内任何场景输入变化 ⇒ 第 k 章回执失效；后续章因前文变化按
-    「连续有效章前缀」语义另行截断（见 check_chapter_receipt 的 prior 绑定）。
-    """
+    第 k 章内任何场景输入变化 ⇒ 重编译后第 k 章章包变化 ⇒ 该章回执失效
+    （D2 章包绑定；无前文链传导，见 check_chapter_receipt）。"""
     scene_chapter = {sid: ch.chapter_ordinal for ch in graph.chapters for sid in ch.scene_ids}
     return {scene_chapter[sid] for sid in directly_affected_scenes if sid in scene_chapter}
 
@@ -933,7 +932,7 @@ def project_context(*, scene_id: str, graph: BodyDesign,
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# 五、模型阅读界面 renderer（原 `render.py`）
+# 五、章包投影与模型阅读界面 renderer（原 `render.py`；D2 章包化，B4）
 #
 # 【内部 IR 与模型阅读文本分别定义】
 # renderer 只排序、分组、引用解析和格式化：不压缩语义、不改写 brief、不新增
@@ -941,17 +940,21 @@ def project_context(*, scene_id: str, graph: BodyDesign,
 # 释放位置、逐拍结果）可追溯地进入模型输入；source lineage、源章拓扑与审计
 # 字段在格式化时剥离，不进 Writer 阅读面。
 #
-# 【分层与完整输入】
-# 完整 WriterBookIR 进入请求：当前章材料集中展示，其余章完整场景 IR 明确标为
-# 规划参考（作者知道 ≠ 人物或读者已知）；已提交前文按章完整给出。首版不自动
-# 缩短上下文——完整输入超限由预算闸阻断，不静默摘要或截断。
+# 【章包三件套（D2）】
+# Writer 与 Validator 只收当前章包（PacketBrief＋ChapterIR＋RealizationContract）：
+# 不含前文正文、其他章 IR、导航与称谓总表。章包由 `project_chapter_packet`
+# 从完整 WriterBookIR 确定性投影——完整 IR 保留供存储与审计，章包从不落盘
+# （I-16）；章包摘要（`packet_sha256`）进请求身份与章级回执，验证材料
+# （禁用字面）随章包走 validator、不进阅读面。
 # ═════════════════════════════════════════════════════════════════════════════
 
 #: renderer 版本：进入正文请求身份。格式化规则变化必须换版。
 #: v2（2026-09-26 质量改进批次二）：事实约束新增「尚未向读者确认的事实」清单（D15）。
 #: v3（2026-09-27 B3 前半）：清单条目带确认的事实地址（D4）；新增【整书风格与
 #: 人物声线】书级层（TargetDesign 结构化投影）。
-RENDERER_VERSION = 'str06-render-v3'
+#: v4（2026-09-27 B4，D2）：章包化——去掉【全书规划参考】（导航与其他章 IR）、
+#: 【完整已提交前文】与称谓总表；只渲染当前章包三件套。
+RENDERER_VERSION = 'str06-render-v4'
 
 #: 整书写作约定与自由度（Writer 协议，固定文本）。表达自由边界：entry 是
 #: 起笔已成立的状态、effects 是结束需成立的结果、义务必须实际兑现、局部
@@ -1022,47 +1025,73 @@ def _scene_view(context: WriterContext) -> str:
     return '\n'.join(parts)
 
 
-def render_chapter_packet(
-    book_ir: WriterBookIR, chapter_ordinal: int,
-    prior_chapters: Mapping[int, str],
-) -> str:
-    """章请求 user 段：六层固定结构（协议→规划参考→前文→章目的的→场景→交付要求）。
+def project_chapter_materials(book_ir: WriterBookIR, chapter_ordinal: int) -> ChapterIR:
+    """章 IR 的取用面：断言章存在且验证材料已由 compile 算好（D2）。
 
-    纯函数：相同（IR, 章序, 前文）⇒ 相同字节。不检查回执有效性——前文合法性
-    由调用方核对章级回执后传入。
+    「称谓许可与禁用字面**双双为空**」只可能是 compile 未带名称数据——合法
+    空值分开（I-42）：有名字的书，禁用字面至少含未释放的专名；本仓产品面
+    （Stage2 book 观察）要求人物候选带称谓及证据，零名书不在产品面。缺材料
+    关闭式失败，不让 validator 静默放行专名泄漏（I-34）。
     """
     chapter = book_ir.chapter(chapter_ordinal)
+    if not chapter.released_surfaces and not chapter.withheld_literals:
+        raise ValueError(
+            f'第 {chapter_ordinal} 章验证材料缺失（称谓许可/禁用字面必须在 '
+            'compile 时算好，D2）；请经 str06.stage4.compile 重建 WriterBookIR')
+    return chapter
+
+
+def project_chapter_packet(book_ir: WriterBookIR, chapter_ordinal: int) -> ChapterWriterPacket:
+    """运行时章包投影（D2 唯一产地）：完整 WriterIR → 当前章三件套。
+
+    纯函数、确定性：相同（IR, 章序）⇒ 相同章包与摘要。导航、称谓总表与
+    其他章 IR 不进章包；验证材料随 ChapterIR 携带（validator 消费，不渲染）。
+    章包从不落盘（I-16：WriterBookIR 是唯一正式产物）。
+    """
+    chapter = project_chapter_materials(book_ir, chapter_ordinal)
     brief = book_ir.book_brief
+    low = round(chapter.length_budget * brief.length_band_low)
+    high = round(chapter.length_budget * brief.length_band_high)
+    return ChapterWriterPacket(
+        book_brief=PacketBrief(
+            book_title=brief.book_title, book_style=brief.book_style,
+            character_voices=brief.character_voices,
+            target_chapter_count=brief.target_chapter_count,
+            total_length_budget=brief.total_length_budget,
+            length_band_low=brief.length_band_low,
+            length_band_high=brief.length_band_high),
+        chapter=chapter,
+        realization_contract=RealizationContract(
+            protocol_version=WRITER_PROTOCOL_VERSION, target_chars=chapter.length_budget,
+            band_low=low, band_high=high))
+
+
+def packet_sha256(packet: ChapterWriterPacket) -> str:
+    """章包摘要（规范化 JSON 的 SHA-256）：章级回执的章包绑定与请求身份输入。
+
+    覆盖章包全部内容（含验证材料）：Writer 阅读面或 validator 材料任一变化
+    都换摘要——「当前章包与请求不变」是回执继续有效的唯一依据。
+    """
+    payload = json.dumps(packet.model_dump(mode='json'), ensure_ascii=False,
+                         sort_keys=True, separators=(',', ':'))
+    return hashlib.sha256(payload.encode('utf-8')).hexdigest()
+
+
+def render_chapter_packet(packet: ChapterWriterPacket) -> str:
+    """章请求 user 段（章包化，v4）：协议→书级→章目的→本章场景→交付要求。
+
+    纯函数：相同章包 ⇒ 相同字节。不含前文正文、其他章 IR、导航与称谓总表
+    （D2）；禁用字面是 validator 材料，不渲染。
+    """
+    chapter = packet.chapter
+    brief = packet.book_brief
+    contract = packet.realization_contract
     parts: list[str] = ['【整书写作约定与自由度】', WRITER_PROTOCOL]
 
     parts.append('\n【整书风格与人物声线】（全书一致的叙述约定，TargetDesign 结构化投影）')
     parts.append(f'风格：{brief.book_style}')
     for voice in brief.character_voices:
         parts.append(f'{voice.char_id} 的声线：{voice.voice}')
-
-    parts.append('\n【全书规划参考：作者知道，不等于人物或读者已知】')
-    parts.append('导航（其余各章材料在下方「规划参考」内完整给出）：')
-    for nav in brief.chapters:
-        lines = '\n'.join(f'  - {line}' for line in nav.scene_lines)
-        parts.append(f'第{nav.chapter_ordinal}章：{nav.purpose}\n{lines}')
-    if brief.release_schedule:
-        parts.append('称谓释放位置（未到位置不得使用对应字面）：')
-        parts.extend(
-            f'  - {entry.char_id}：{"、".join(entry.surfaces)}（第{entry.from_chapter}章起）'
-            for entry in brief.release_schedule)
-    for other in book_ir.chapters:
-        if other.chapter_ordinal == chapter_ordinal:
-            continue
-        parts.append(f'—— 第{other.chapter_ordinal}章（规划参考）——')
-        for context in other.scenes:
-            parts.append(_scene_view(context))
-
-    parts.append('\n【完整已提交前文】')
-    if prior_chapters:
-        for ordinal in sorted(prior_chapters):
-            parts.append(f'〔第{ordinal}章〕\n{prior_chapters[ordinal]}')
-    else:
-        parts.append('（本章为全书第一章，无前文）')
 
     parts.append('\n【本章目的】')
     parts.append(f'第{chapter.chapter_ordinal}章：{chapter.purpose}')
@@ -1071,13 +1100,11 @@ def render_chapter_packet(
     for context in chapter.scenes:
         parts.append(_scene_view(context))
 
-    low = round(chapter.length_budget * brief.length_band_low)
-    high = round(chapter.length_budget * brief.length_band_high)
     parts.append('\n【本章交付要求】')
     parts.append(
         f'1. 一次写出本章完整正文：覆盖本章全部场景，按场景阅读序连续成文；'
-        f'篇幅目标约 {chapter.length_budget} 字（按非空白字符计），'
-        f'合法区间 [{low}, {high}] 字。')
+        f'篇幅目标约 {contract.target_chars} 字（按非空白字符计），'
+        f'合法区间 [{contract.band_low}, {contract.band_high}] 字。')
     parts.append('2. 直接输出正文本身：不要章号与标题（章号由系统添加），'
                  '不要场景 id、任何解释、前言、后缀或 markdown 围栏。')
     parts.append('3. 整章是一段连续的小说正文：场景之间自然过渡，'

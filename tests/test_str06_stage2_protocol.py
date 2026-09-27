@@ -90,8 +90,8 @@ def test_observation_artifacts_are_registered_with_rc6():
                 'stage2/observations/names.json', 'stage2/observations/associate.json'):
         assert rel in ARTIFACT_PATHS and rel in ARTIFACT_SPECS
         assert STR06_ARTIFACT_RC_VERSIONS[rel] == 'str06-rc6'
-    # 观察产物冻结在 rc6（B2 身份）；RC 版式头随 B3 前半升 rc7
-    assert STR06_RC_VERSION == 'str06-rc7' and 'str06-rc6' in STR06_RC_LABELS
+    # 观察产物冻结在 rc6（B2 身份）；RC 版式头随 B4 章包写手升 rc8
+    assert STR06_RC_VERSION == 'str06-rc8' and 'str06-rc6' in STR06_RC_LABELS
     assert str06_chapter_observation_rel(3) == 'stage2/observations/ch03.json'
     assert artifact_rel('stage2/observations/ch{nn}.json', nn=12) == \
         'stage2/observations/ch12.json'

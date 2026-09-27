@@ -135,7 +135,7 @@ publisher（`novel/stages/stage4/hook.py`）与 HookContext 编译
   代价是权重变化会波及多章预算（见精确失效表；机械规则
   `novel/stages/stage4/book_ir.py::chapters_with_budget_change` 已随 B3 前半落地）。
 
-### ChapterWriterPacket（目标三件套）
+### ChapterWriterPacket（三件套；B4 落地）
 
 ```text
 ChapterWriterPacket
@@ -149,23 +149,35 @@ ChapterWriterPacket
 └── RealizationContract：写作协议与交付要求
 ```
 
+**落地状态（2026-09-27，B4 前半）**：`contracts/schema/book_ir.py::ChapterWriterPacket`
+（rc8）三件套落地；章级验证材料（`ChapterIR.released_surfaces`／
+`withheld_literals`）由 `novel/stages/stage4/book_ir.py::compile_writer_book_ir`
+在 compile 时算好（projection/structure 为必填参数），推导唯一产地随 Stage4
+编译器；投影唯一产地 `novel/stages/common.py::project_chapter_packet`，摘要
+`packet_sha256` 覆盖章包全部内容（含验证材料）进请求身份与章级回执。
+
 完整 WriterIR 保留供存储与审计；运行时确定性投影章包，不另落重复章包文件。Compiler
 证明**已声明依赖的引用闭合**；语义依赖是否遗漏归质量验收，机械检查不冒充证明。
 
-## Stage5/7：独立实现与集合恢复（目标）
+## Stage5/7：独立实现与集合恢复（B4 前半已落地）
 
-- Writer 与 Validator 只收当前章包，不读前文正文、Design、Characters 或其他章 IR
-  （D2）。Stage5 只做语言实现；新增跨章事实没有机械检测手段，按 `R-7.6` 扩充未评披露
-  （转场、跨章无名细节、声线归 B6 阅读）。
-- 各章与 Hook 独立执行、验证、提交；单书默认并发 4
-  （`contracts/invariants.py::PIPELINE_DEFAULT_CONCURRENCY`），经 `novel/model_slots.py`
-  共享书级与供应商槽位；并发度不进语义身份。
-- 恢复按有效提交集合：已完成 1、2、4、6 章时只补 3、5；局部失败保留其他合法结果；
-  授权、账务或取消故障关闭相应准入。
-- 每章首次＋最多两次内容重写保持；截断不再触发重写（D6，见执行设施失败表）。
-- 章回执绑定章包摘要、请求身份、验证版本与改名前正文摘要，不再绑定全书 IR 与前文链
-  （`R-7.4`、`R-10.3` 由 B4 改写）；Stage7 逐章核对回执与当前编译出的章包摘要一致、
-  集合齐备，再按阅读序组装交付。
+- **已落地（2026-09-27，rc8）**：Writer 与 Validator 只收当前章包
+  （`novel/stages/stage5/body.py::write_chapter` 的唯一输入是 `ChapterWriterPacket`），
+  不读前文正文、Design、Characters 或其他章 IR（D2）。Stage5 只做语言实现；新增跨章
+  事实没有机械检测手段，按 `R-7.6` 扩充未评披露（转场、跨章无名细节、声线归 B6 阅读）。
+- **已落地**：各章独立执行、验证、提交；`str06.stage5.body` 待补章经
+  `novel/model_slots.py::pipeline_model_slot` 共享书级（4）与供应商（8）总槽并发执行，
+  并发度默认 4（`contracts/invariants.py::PIPELINE_DEFAULT_CONCURRENCY`，由
+  `novel/config.py::concurrency_for` 读出）、不进语义身份。Hook 仍是独立节点
+  （`str06.stage5.hook`）。
+- **已落地**：恢复按有效提交集合（`novel/stages/chain.py::_committed_set`）：已完成
+  1、2、4、6 章时只补 3、5；局部失败保留其他合法结果（失败清单落
+  `runtime/body_failures.json`），授权、账务或取消故障以原始类型关闭相应准入。
+- **已落地**：每章首次＋最多两次内容重写保持；截断不再触发重写（D6，见执行设施失败表）。
+- **已落地**：章回执（rc5）绑定章包摘要、请求身份、验证版本与改名前正文摘要，不再绑定
+  全书 IR 与前文链（`R-7.4`、`R-10.3` 已改写）；Stage7 逐章核对回执与当前编译出的章包
+  摘要一致（`novel/stages/stage7/assembly.py::verify_chapter_receipts`）、集合齐备，
+  再按阅读序组装交付。
 
 ## 执行设施（目标；B1）
 
@@ -187,7 +199,9 @@ ExecutionProfile run 启动冻结（`novel/stages/chain.py::ExecutionProfile`／
 CLI 的 medium 移除；整书上限从持久准入账派生传入付费边界）、并发登记改
 新链逐章节点（B2 起 `PIPELINE_PARALLEL_NODES＝('str06.stage2.chapters',
 'str06.stage5.body')`，旧链键与四个 `STAGE*_MAX_CONCURRENCY` 常量删除；
-槽位运行接入随 B4 逐章并发）。反例与完成条件见
+槽位运行接入已随 B4 逐章并发落地：`run_body` 待补章经
+`novel/model_slots.py::pipeline_model_slot` 共享书级（4）与供应商（8）总槽）。
+反例与完成条件见
 `tests/test_str06_runtime_records.py`（17 项故障注入）。
 
 ### 身份与记录：对齐现有工作单元账，不另起第二套
@@ -281,8 +295,8 @@ seal → 标记采用（可由 seal 重建）。任一窗口中断优先免费�
 | `contracts/schema/source.py` | Characters v4（`CharactersCore`＋`name_structure`）／Blueprints v13（拍三类转移＋场景分段，质量改进批次二 D1–D17） | 名称结构 surface 恰好覆盖、模板渲染逐字相等；canonical 逐字等于某个已登记 surface；from_chapter 由证据锚点派生（`R-2.10`）；命题引用闭合与同拍两遍解析（`R-2.12`）；登记键作用域由 compiler 绑定 |
 | `contracts/schema/execution.py` | `ExecutionPlan`（establishment/constraint/dependency/reinforcement）与 `ExecutionSlice` | 必保只落 establishment/constraint；依赖边禁自指 |
 | `contracts/schema/context.py` | `WriterContext` 双视图（`VerificationIR`＋`WriterBrief`） | IR 带 `beats` 逐拍定位与 `prohibitions`；Brief 只承载呈现；两视图 scene_id 与 slice 身份同源 |
-| `contracts/schema/book_ir.py` | `WriterBookIR`＝`BookBrief`＋`ChapterIR[]` | BookBrief 确定性导航（不调 LLM 总结、不取 POV 众数、不补造统一文风）；章预算 largest-remainder 整数分配 |
-| `contracts/schema/receipt.py` | `ChapterReceipt`（章级回执） | 绑定章序、全书 IR、实际前文、改名前正文、实际请求身份、协议/校验版本；只有篇幅偏差可在额度耗尽后披露放行 |
+| `contracts/schema/book_ir.py` | `WriterBookIR`＝`BookBrief`＋`ChapterIR[]`；rc8 起含 `ChapterWriterPacket` 章包三件套 | BookBrief 确定性导航（不调 LLM 总结、不取 POV 众数、不补造统一文风）；章预算 largest-remainder 整数分配；章级验证材料 compile 时算好（D2） |
+| `contracts/schema/receipt.py` | `ChapterReceipt`（章级回执，rc5） | 绑定章序、章包摘要、改名前正文、实际请求身份、协议/renderer/校验版本；不绑全书 IR 与前文链（D2）；只有篇幅偏差可在额度耗尽后披露放行 |
 | `contracts/schema/consumption.py` | 六个消费投影族 | body_access 按章级有效回执判定；rename_materials 写明 Naming 只读投影与 Apply 唯一应用者 |
 | `contracts/schema/families.py` | 三级路径家族登记（16 个家族） | 来源账键=完整相对路径 |
 | `contracts/schema/dependency.py` | 新链依赖方向登记＋per-stage 模块 owner 规则 | 由 AST 对真实文件执行（`tests/test_str06_hook.py`） |
@@ -311,15 +325,16 @@ Design 实现；Compile/Context 禁 LLM 和草稿；Stage5 只消费 WriterIR/ac
 Writer 禁 Body prose、源 Hook 和源小说。Stage7 只消费正式契约与已接受文本，不得反向
 修改 truth 或依赖 Stage2/4/5 internals；validator 不修输入，repository 不决策。
 
-### 按章成文链（现役；B4 换章包写手）
+### 按章成文链（B4 章包写手已落地；「完整 IR＋完整前文」旧形态退役）
 
-现役正文严格按章串行：每次读取完整 `WriterBookIR` 与全部有效前文，一次输出当前整章
-自然正文；renderer 六层阅读面（协议→规划参考→完整前文→章目的→本章场景→交付要求），
-协议/renderer/prompt 版本化进请求身份。章篇幅带默认 `[0.6, 1.3] × 预算`，每章首次＋
-最多两次重写（上一稿＋typed 机械错误），硬检查失败不能披露放行、只有篇幅偏差可披露。
-提交顺序：原响应耐久保存 → 编译与检查 → 选定候选 → 原子写正文 → 原子写章回执。
-此形态的已知代价（完整 IR 与完整前文使章级 prompt 线性增长至 53.9k–60.9k）由 D2
-章包三件套在 B4 取代；截断处置由 D6 改为即停。
+旧形态（完整 WriterBookIR＋全部有效前文进请求，章级 prompt 53.9k–60.9k 线性增长）
+已由 D2 章包三件套取代（2026-09-27，rc8）。现役：每章运行时从完整 `WriterBookIR`
+确定性投影章包（`project_chapter_packet`），renderer 五层阅读面（协议→书级→章目的→
+本章场景→交付要求），请求只含当前章包；协议/renderer/请求身份按章包摘要进回执。
+章篇幅带默认 `[0.6, 1.3] × 预算`，每章首次＋最多两次重写（上一稿＋typed 机械错误），
+硬检查失败不能披露放行、只有篇幅偏差可披露；截断即停（D6）。
+提交顺序：原响应耐久保存 → 编译与检查 → 选定候选 → 原子写正文 → 原子写章回执；
+各章经共享总槽并发执行，恢复按有效提交集合补缺。
 
 ### Hook 的正式选择与确定性投影（现役；B3 代码归位 Stage4，语义不变）
 
@@ -379,7 +394,8 @@ stage5/acceptance/body/ch{nn}.json
 stage5/hook/hook.txt、stage5/hook/receipt.json
 stage7/naming/name_map.json
 stage7/final/<书名>_rewriting.txt、stage7/final/delivery_manifest.json
-runtime/progress/、runtime/body_attempts_ch{nn}.json、runtime/revisions/<owner>.json、
+runtime/progress/、runtime/body_attempts_ch{nn}.json、runtime/body_failures.json、
+runtime/revisions/<owner>.json、
 runtime/commit/<node>/<seal16>_<artifact>.json
 ```
 

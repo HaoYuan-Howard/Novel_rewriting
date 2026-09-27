@@ -25,6 +25,7 @@ from contracts.schema.workflow import (
     STAGE4_BIND_PROTOCOL, STAGE4_DESIGN_PROTOCOL, STAGE4_HOOK_DESIGN_PROTOCOL,
     STAGE4_PRESERVE_PROTOCOL, STR06_RC_VERSION,
 )
+from tests.test_str06_hook import _characters
 from novel.stages.stage4.book_ir import (
     allocate_chapter_budgets, chapters_with_budget_change, compile_writer_book_ir,
 )
@@ -124,7 +125,8 @@ def test_four_protocols_are_independent_literals():
     assert STAGE4_HOOK_DESIGN_PROTOCOL == 'stage4-hook-design-v1'
     assert len({STAGE4_PRESERVE_PROTOCOL, STAGE4_DESIGN_PROTOCOL,
                 STAGE4_BIND_PROTOCOL, STAGE4_HOOK_DESIGN_PROTOCOL}) == 4
-    assert STR06_RC_VERSION == 'str06-rc7'
+    # RC 版式头随 B4 章包写手（D2）升 rc8
+    assert STR06_RC_VERSION == 'str06-rc8'
 
 
 def test_design_wire_without_protocol_is_refused():
@@ -236,11 +238,13 @@ def test_book_style_and_voices_project_into_book_brief_and_packet():
     assert not errors, errors
     ir = compile_writer_book_ir(graph=body, plan=plan, binding=binding,
                                 total_budget=1000, length_band=(0.6, 1.3),
-                                book_title='t')
+                                book_title='t',
+                                projection=_characters().name_projection(),
+                                structure=None)
     assert ir.book_brief.book_style.startswith('冷峻克制')
     assert ir.book_brief.character_voices[0].char_id == 'yun'
-    from novel.stages.common import render_chapter_packet
-    packet = render_chapter_packet(ir, 1, {})
+    from novel.stages.common import project_chapter_packet, render_chapter_packet
+    packet = render_chapter_packet(project_chapter_packet(ir, 1))
     assert '【整书风格与人物声线】' in packet
     assert '冷峻克制的第三人称叙事' in packet
     assert 'yun 的声线：短句、少感叹' in packet

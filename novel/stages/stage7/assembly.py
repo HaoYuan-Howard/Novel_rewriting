@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""assembly —— Stage7 终态组装：章级就绪、交付与身份（F5/F6）。
+"""assembly —— Stage7 终态组装：章集合就绪、交付与身份（F5/F6；rc8 集合核对）。
 
 【就绪边界】
 `chapter_access` 按有效接受回执判断正文就绪，缺失／未知／拒绝分开列出（I-42）。
@@ -8,17 +8,18 @@
 方不得落任何 `stage7/final/` 正文产物；改名后 Hook 仍可写
 `runtime/delivery/hook_renamed.txt`（可重建派生）。
 
-【回执链核对】
-`verify_chapter_chain` 按（全书 IR 身份, 前文链）逐章核对回执绑定：第 k 章的
-prior_text_sha256 必须等于前 k-1 章已接受文本的规范拼接——这是「连续有效章
-前缀」与「全书 IR 变化使全书失效」的可执行面。消费者核对 manifest、当前输入
-及文件 hash，不能仅凭 TXT 存在宣称就绪。
+【回执集合核对（D2，`R-10.3` 改写）】
+`verify_chapter_receipts` 逐章核对回执与**当前编译出的章包**：回执状态有效、
+章包摘要与当前投影一致、正文字节与回执绑定。各章独立有效（不再核对全书 IR
+与前文链）：章包变化的章单独失效重做，其余章的合法提交不受影响；集合齐备
+才装配就绪。消费者核对 manifest、当前输入及文件 hash，不能仅凭 TXT 存在
+宣称就绪。
 
 【章标记与分章身份】
 成书按阅读序逐章加「第N章」一行（章号由系统添加，写手协议早已据此约定）；
 引子放最前、不加标题。交付身份对**分章**敏感：有序的
 (chapter_ordinal, prose_sha256) 逐章进身份，拼接相同但分章不同的两份书是不同
-交付（质量改进批次 A4）。章回执与前文链仍绑定不含章号的 `prior_body_text`。
+交付（质量改进批次 A4）。章回执绑定不含章号的改名前正文摘要。
 
 【身份分离】
 交付身份由（逐章正文 hash, Hook 回执 prose hash, 替换表, 保留字面, 组装格式
@@ -34,8 +35,8 @@ from typing import Any, Iterable, Mapping, NamedTuple
 from novel.stages.stage7.naming import apply_names, check_residual
 # 跨 stage 只走包级公开面（守卫见
 # `tests/test_layering.py::test_cross_stage_imports_stay_on_the_package_surface`）：
-# Stage7 装配消费 Stage5 的篇幅口径与前文拼接／文本 SHA。
-from novel.stages.stage5 import count_body_chars, prior_body_text, sha256_text
+# Stage7 装配消费 Stage5 的篇幅口径与文本 SHA。
+from novel.stages.stage5 import count_body_chars, sha256_text
 
 #: 成书组装格式版本：章标记与拼接规则变化必须换版（进交付身份）。
 ASSEMBLY_FORMAT_VERSION = 'str06-assembly-v2'
@@ -90,34 +91,31 @@ class DeliveryOutcome(NamedTuple):
     hook_renamed_text: str | None    # 可重建派生；落盘归 runtime/delivery/
 
 
-def verify_chapter_chain(
+def verify_chapter_receipts(
     receipts: Mapping[int, Mapping[str, Any]],
     chapter_prose: Mapping[int, str],
-    *, book_ir_sha256: str,
+    *, packet_sha256_by_ordinal: Mapping[int, str],
 ) -> list[str]:
-    """逐章核对回执链：IR 身份、前文链、正文字节三方绑定（连续有效章前缀）。
+    """章回执集合核对（`R-10.3`，rc8）：逐章回执与当前章包、正文三方绑定。
 
-    返回问题清单（空 = 全部绑定成立）。任何一章断裂即停止通过——后续章即使
-    回执存在也不能越过断点当作有效前缀。
+    每一章独立核对：状态有效、`packet_sha256` 与当前编译出的章包摘要一致、
+    正文 hash 与回执绑定。返回问题清单（空 = 集合内全部绑定成立）；各章
+    问题分别报告——某章失效不截断其他章的有效性（D2 章包语义；恢复按有效
+    提交集合补缺）。
     """
     problems: list[str] = []
-    committed: dict[int, str] = {}
     for ordinal in sorted(receipts):
         receipt = receipts[ordinal]
         if receipt.get('status') != 'accepted':
             problems.append(f'第{ordinal}章回执状态为 {receipt.get("status")!r}')
-            break
-        if receipt.get('book_ir_sha256') != book_ir_sha256:
-            problems.append(f'第{ordinal}章回执绑定的是另一份全书 IR')
-            break
+            continue
+        expected = packet_sha256_by_ordinal.get(ordinal)
+        if expected is None or receipt.get('packet_sha256') != expected:
+            problems.append(f'第{ordinal}章回执绑定的是另一版章包（章包已重编译）')
+            continue
         prose = chapter_prose.get(ordinal)
         if prose is None or sha256_text(prose) != receipt.get('prose_sha256'):
             problems.append(f'第{ordinal}章文本与回执 prose_sha256 脱钩')
-            break
-        if receipt.get('prior_text_sha256') != sha256_text(prior_body_text(committed)):
-            problems.append(f'第{ordinal}章回执的 prior_text_sha256 与前文链不一致')
-            break
-        committed[ordinal] = prose
     return problems
 
 

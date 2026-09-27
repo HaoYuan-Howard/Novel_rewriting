@@ -4,13 +4,20 @@
 
 【compiler 只投影，不解释】
 从（BodyDesign, ExecutionPlan, SemanticBinding）按阅读序折叠出每场的双视图，
-加上章目的、确定性章预算与导航，组装全书静态写作 IR。不调用 LLM、不修改
-输入、不从自然语言补语义；canonical `realization_brief`／`purpose` 原样投影。
+加上章目的、确定性章预算、导航与章级验证材料，组装全书静态写作 IR。不调用
+LLM、不修改输入、不从自然语言补语义；canonical `realization_brief`／`purpose`
+原样投影。
 
 【章预算】
 按 Design 场景权重汇总成章权重，整数分配保证总和恰等于书级目标
 （largest remainder，同余数按章序先后）——不对照同号源章长度。章预算是
 ChapterIR 的业务内容：改变预算即改变全书 IR 身份。
+
+【章级验证材料（D2，B4）】
+称谓许可（第 k 章含之前已释放的称谓字面）与禁用字面（全部专名／带名 surface
+及家族级构词 − 已释放称谓）由 compiler 在 compile 时算好并写进 ChapterIR；
+Stage5 的 Writer／Validator 只收章包，不再现场推导（不读 Design／Characters）。
+`chapter_withheld_literals` 与 Hook 的 withheld 同一推导纪律：不写死人名。
 """
 from __future__ import annotations
 
@@ -22,8 +29,58 @@ from contracts.schema.book_ir import (
 from contracts.schema.design import BodyDesign
 from contracts.schema.execution import ExecutionPlan
 from contracts.schema.grounding import SemanticBinding
+from contracts.schema.source import NameProjection, NameStructure, render_form
 from novel.stages.stage4.fold import fold_accepted_prefix
 from novel.stages.common import project_context
+
+
+def chapter_surface_releases(graph: BodyDesign, chapter_ordinal: int) -> set[str]:
+    """第 k 章（含）之前已释放的称谓字面：initial + 前 k 章内引入位置（D2：compile
+    时算好的章级称谓许可，机械 validator 的认领面）。"""
+    released = {s for intro in graph.initial_surfaces for s in intro.surfaces}
+    chapter_of = {sid: ch.chapter_ordinal for ch in graph.chapters for sid in ch.scene_ids}
+    for scene in graph.scenes:
+        if chapter_of[scene.scene_id] > chapter_ordinal:
+            continue
+        for beat in scene.beats:
+            for intro in beat.surface_introductions:
+                released.update(intro.surfaces)
+    return released
+
+
+def _family_form_literals(projection: NameProjection,
+                          structure: NameStructure | None) -> set[str]:
+    """家族级构词（families[].forms）渲染出的字面（同字面家族的构词取并集）。"""
+    if structure is None:
+        return set()
+    by_literal: dict[str, set[str]] = {}
+    for family in structure.families.values():
+        for item in family.forms:
+            try:
+                by_literal.setdefault(family.literal, set()).add(
+                    render_form(item.form, family=family.literal, given=None, aliases={}))
+            except ValueError:
+                continue
+    literals: set[str] = set()
+    for entry in projection.by_person:
+        literals |= by_literal.get(entry.family_literal or '', set())
+    return literals
+
+
+def chapter_withheld_literals(
+    projection: NameProjection, graph: BodyDesign, chapter_ordinal: int,
+    structure: NameStructure | None = None,
+) -> tuple[str, ...]:
+    """第 k 章不得出现的专名字面 = 全部人物专名/带名 surface（含家族级构词渲染）
+    − 第 k 章前已释放的称谓。与 Hook withheld 同一推导纪律：不写死人名（D2：
+    compile 时算好，随章 IR 携带；validator 检查面，不进 Writer 阅读面）。"""
+    all_names: set[str] = set(projection.proper_literals)
+    for entry in projection.by_person:
+        all_names.update(entry.name_bearing_surfaces)
+    all_names |= _family_form_literals(projection, structure)
+    withheld = all_names - chapter_surface_releases(graph, chapter_ordinal)
+    withheld.discard('')
+    return tuple(sorted(withheld))
 
 
 def chapter_scene_weights(graph: BodyDesign) -> dict[int, float]:
@@ -102,8 +159,14 @@ def _scene_line(graph: BodyDesign, scene_id: str) -> str:
 def compile_writer_book_ir(
     *, graph: BodyDesign, plan: ExecutionPlan, binding: SemanticBinding,
     total_budget: int, length_band: tuple[float, float], book_title: str = '',
+    projection: NameProjection, structure: NameStructure | None = None,
 ) -> WriterBookIR:
-    """全书静态写作 IR 的唯一产地。纯函数：不落盘、不调 LLM、不修改输入。"""
+    """全书静态写作 IR 的唯一产地。纯函数：不落盘、不调 LLM、不修改输入。
+
+    `projection`／`structure`（Characters 的名称投影与名称结构）只用于在
+    compile 时算好章级验证材料（D2）；材料写进 ChapterIR 后，Stage5 不再
+    接触 Characters 或 Design。
+    """
     budgets = allocate_chapter_budgets(graph, total_budget)
     chapters: list[ChapterIR] = []
     nav: list[ChapterNavEntry] = []
@@ -118,11 +181,15 @@ def compile_writer_book_ir(
             contexts.append(context)
             lines.append(_scene_line(graph, scene_id))
             scenes_before += 1
+        ordinal = assignment.chapter_ordinal
         chapters.append(ChapterIR(
-            chapter_ordinal=assignment.chapter_ordinal, purpose=assignment.purpose,
-            length_budget=budgets[assignment.chapter_ordinal], scenes=tuple(contexts)))
+            chapter_ordinal=ordinal, purpose=assignment.purpose,
+            length_budget=budgets[ordinal], scenes=tuple(contexts),
+            released_surfaces=tuple(sorted(chapter_surface_releases(graph, ordinal))),
+            withheld_literals=chapter_withheld_literals(projection, graph, ordinal,
+                                                        structure)))
         nav.append(ChapterNavEntry(
-            chapter_ordinal=assignment.chapter_ordinal, purpose=assignment.purpose,
+            chapter_ordinal=ordinal, purpose=assignment.purpose,
             scene_ids=tuple(assignment.scene_ids), scene_lines=tuple(lines)))
     brief = BookBrief(
         book_title=book_title,

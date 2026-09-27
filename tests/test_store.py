@@ -561,16 +561,17 @@ def _edit_extraction(view: dict, edited: str) -> None:
 
 
 #: 新链下游消费家族：(节点, 下游产物, 上游产物)。投影统一 `artifact_payload`。
+#: （B2 五节点重建起 preserve 的 canonical 上游是 Characters；旧抽取派生输入
+#: `stage2/compiled/book_extraction.json` 已退役，不再作上游格。）
 DOWNSTREAM_FAMILY = (
-    ('str06.stage4.preserve', STR06_RECONSTRUCTION_BRIEF,
-     STR06_STAGE2_BOOK_EXTRACTION),
+    ('str06.stage4.preserve', STR06_RECONSTRUCTION_BRIEF, STR06_STAGE2_CHARACTERS),
     ('str06.stage4.body_design', STR06_BODY_DESIGN, STR06_STAGE2_CHARACTERS),
     ('str06.stage4.hook_design', STR06_PRESENTATION_GRAPH, STR06_STAGE2_CHARACTERS),
     ('str06.stage7.naming', STR06_NAME_MAP, STR06_STAGE2_CHARACTERS),
     ('str06.stage7.assemble', STR06_DELIVERY_MANIFEST, STR06_STAGE2_CHARACTERS),
 )
 
-#: 与旧链 grounding 集群对应的前两格（stage4 产地 × stage2 抽取上游）。
+#: Stage4 产地的上游格（canonical Characters；载荷形状同 CharactersCore core view）。
 STAGE4_EXTRACTION_FAMILY = DOWNSTREAM_FAMILY[:2]
 
 

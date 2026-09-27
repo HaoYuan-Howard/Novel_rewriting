@@ -390,10 +390,9 @@ def test_concealed_fact_reaches_writer_as_pending_reader_confirmation(tmp_path):
         assert pending[0]['address'] == {'domain': 'world', 'key': 'hiding',
                                          'subjects': [], 'holder': None}
     # 渲染进写手阅读面（地址可追溯）
-    from novel.stages.common import render_chapter_packet
-    from novel.store import Str06Repository as _Repo  # noqa: F401（仅示意依赖方向）
+    from novel.stages.common import project_chapter_packet, render_chapter_packet
     book_ir = repo.read_model('stage4/ir/writer_book_ir.json')
-    packet = render_chapter_packet(book_ir, 1, {})
+    packet = render_chapter_packet(project_chapter_packet(book_ir, 1))
     assert '床底有人（world:hiding）——sc02#b01 才可确认' in packet
     # Preserve 提示词带着揭示时点要求（v3 规则）
     preserve_prompt = next(p for o, p in requests if o == 'preserve')

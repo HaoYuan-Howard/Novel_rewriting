@@ -170,11 +170,12 @@ def _naming_residual() -> list:
 
 
 def _chain_broken() -> list:
-    """章回执与正文 hash 脱钩：回执链断裂，装配未就绪。"""
-    from novel.stages.stage7.assembly import verify_chapter_chain
-    receipts = {1: {'status': 'accepted', 'book_ir_sha256': 'a' * 64,
-                    'prose_sha256': 'b' * 64, 'prior_text_sha256': 'c' * 64}}
-    return verify_chapter_chain(receipts, {1: '推门进屋。'}, book_ir_sha256='a' * 64)
+    """章回执与当前章包脱钩：集合核对报出，装配未就绪（D2 rc8）。"""
+    from novel.stages.stage7.assembly import verify_chapter_receipts
+    receipts = {1: {'status': 'accepted', 'packet_sha256': 'a' * 64,
+                    'prose_sha256': 'b' * 64}}
+    return verify_chapter_receipts(receipts, {1: '推门进屋。'},
+                                   packet_sha256_by_ordinal={1: 'a' * 64})
 
 
 CASES: dict[str, Case] = {
@@ -359,21 +360,21 @@ def _body_out_of_band() -> list:
 
 
 def _receipt_stale() -> list:
-    """章回执绑定：旧回执配新 IR 必须拒绝（三份绑定逐一核对）。"""
+    """章回执绑定：旧回执配新章包必须拒绝（rc5 章包绑定，逐一核对）。"""
     from contracts.schema.receipt import ChapterReceipt
     from novel.stages.common import check_chapter_receipt
 
     from contracts.schema.receipt import ChapterLengthDisclosure
     receipt = ChapterReceipt(
-        contract_version='str06-rc4', chapter_ordinal=1, status='accepted',
-        book_ir_sha256='a' * 64, prior_text_sha256='b' * 64,
+        contract_version='str06-rc5', chapter_ordinal=1, status='accepted',
+        packet_sha256='a' * 64,
         prose_sha256='c' * 64, request_identity='r1',
         protocol_version='p1', renderer_version='r1', validator_version='v1',
         mechanical_checks=('non_empty',), length=ChapterLengthDisclosure(
             char_count=100, target_chars=100, band_low=60, band_high=130,
             within_band=True, deviation_ratio=0.0))
-    return check_chapter_receipt(receipt, book_ir_sha256='d' * 64,
-                                 prior_text_sha256='b' * 64, prose_sha256='c' * 64)
+    return check_chapter_receipt(receipt, packet_sha256='d' * 64,
+                                 prose_sha256='c' * 64)
 
 
 def _hook_rejected_no_formal() -> list:
@@ -403,7 +404,7 @@ def _delivery_not_ready() -> list:
 
 CASES.update({
     'body_length_band': Case('stage5', _body_out_of_band, '[length_band]'),
-    'chapter_receipt_binding': Case('stage5', _receipt_stale, 'book_ir_sha256'),
+    'chapter_receipt_binding': Case('stage5', _receipt_stale, 'packet_sha256'),
     'hook_receipt_binding': Case('stage5', _hook_rejected_no_formal,
                                  '[withheld_literals]'),
     'body_design_compile': Case('stage4', _body_design_bad_wire, '构造失败'),

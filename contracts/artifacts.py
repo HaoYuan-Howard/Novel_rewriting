@@ -255,11 +255,15 @@ STR06_ARTIFACT_RC_VERSIONS: Final[dict[str, str]] = {
     'stage4/context/hook/hook.json': 'str06-rc3',
     # rc7 同批：BookBrief 带整书风格与稳定人物声线；PendingConfirmation 带事实
     # 地址（D4），投影按地址精确到消费该地址的章包。
-    'stage4/ir/writer_book_ir.json': 'str06-rc7',
+    # rc8（2026-09-27 B4，D2）：ChapterIR 增章级验证材料（称谓许可、禁用字面
+    # compile 时算好）；完整 IR 只作存储与审计，运行时按章投影章包、不落盘。
+    'stage4/ir/writer_book_ir.json': 'str06-rc8',
     'stage5/hook/hook.txt': 'str06-rc3',
     'stage5/hook/receipt.json': 'str06-rc3',
     'stage5/body/ch{nn}.txt': 'str06-rc4',
-    'stage5/acceptance/body/ch{nn}.json': 'str06-rc4',
+    # rc5（rc8 同批）：回执改绑章包摘要＋请求身份＋验证版本＋改名前正文摘要，
+    # 不再绑定全书 IR 与前文链（D2）；各章独立有效，支持集合恢复。
+    'stage5/acceptance/body/ch{nn}.json': 'str06-rc5',
     'stage7/naming/name_map.json': 'str06-rc3',
     'stage7/final/{title}_rewriting.txt': 'str06-rc4',
     'stage7/final/delivery_manifest.json': 'str06-rc4',

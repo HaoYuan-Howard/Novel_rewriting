@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""receipt —— 章级接受回执（F5 RC4）。
+"""receipt —— 章级接受回执（F5；rc5 起绑定章包摘要，D2）。
 
 【为什么是章级】
-正文严格按章串行生成、一次输出整章自然正文；整章自由正文不提供可靠的场景
-边界，接受与提交的最小单位因此是章。场景级 SceneReceipt 与 FidelityVerdict
+各章独立成文、一次输出整章自然正文；整章自由正文不提供可靠的场景边界，
+接受与提交的最小单位因此是章。场景级 SceneReceipt 与 FidelityVerdict
 随生产正文 Judge 一并退役（取消 Judge 是已确认产品方向；机械检查不证明章内
 揭示位置或逐场义务兑现，这一限制如实进入披露）。
 
-【绑定语义】
-回执绑定：章序、全书 IR 身份（`book_ir_sha256`，IR 任何 Writer 可见变化使全
-书回执失效）、实际前文（`prior_text_sha256`，第 k 章正文改变使后缀失效）、
-改名前正文、被接受 attempt 的实际请求身份、协议与校验版本。无有效回执的
-文本不能作为前文或交付输入。`prose_sha256` 绑定改名前正文：换 NameMap 不使
-回执失效，只改变交付身份。
+【绑定语义（rc5，2026-09-27 B4）】
+回执绑定：章序、章包摘要（`packet_sha256`，Writer 实际可见章包＋验证材料的
+规范身份；当前章包变化只使该章回执失效）、改名前正文（`prose_sha256`）、
+被接受 attempt 的实际请求身份、协议、renderer 与校验版本。**不再绑定全书 IR
+与前文链（D2）**：写手只收当前章包，各章独立有效、可乱序提交与集合恢复。
+无有效回执的正文不能作为交付输入。换 NameMap 不使回执失效，只改变交付身份。
 
 【语义边界】
 回执只记录机械结果；`semantic` 恒为 `unverified`——机械通过不升级为语义已验
@@ -53,11 +53,12 @@ class ChapterLengthDisclosure(StrictModel):
 class ChapterReceipt(StrictModel):
     """章级接受回执（`stage5/acceptance/body/ch{nn}.json`）。"""
 
-    contract_version: Literal['str06-rc4'] = 'str06-rc4'
+    contract_version: Literal['str06-rc5'] = 'str06-rc5'
     chapter_ordinal: int = Field(ge=1)
-    book_ir_sha256: str = Field(min_length=64, max_length=64)
-    prior_text_sha256: str = Field(min_length=64, max_length=64,
-                                   description='本章之前全部有效前文（改名前）的身份；第 1 章为空文本 SHA')
+    packet_sha256: str = Field(
+        min_length=64, max_length=64,
+        description='章包摘要：被接受请求实际可见章包（PacketBrief＋ChapterIR＋'
+                    'RealizationContract）与验证材料的规范身份；章包变化使本章回执失效')
     prose_sha256: str = Field(min_length=64, max_length=64,
                               description='绑定改名前本章正文')
     request_identity: str = Field(min_length=1, description='被接受 attempt 的实际请求身份')
@@ -77,7 +78,7 @@ class ChapterReceipt(StrictModel):
 
     @model_validator(mode='after')
     def _hash_charset(self) -> 'ChapterReceipt':
-        for name in ('book_ir_sha256', 'prior_text_sha256', 'prose_sha256'):
+        for name in ('packet_sha256', 'prose_sha256'):
             value = getattr(self, name)
             if any(c not in '0123456789abcdef' for c in value):
                 raise ValueError(f'{name} 必须是小写十六进制 SHA-256')

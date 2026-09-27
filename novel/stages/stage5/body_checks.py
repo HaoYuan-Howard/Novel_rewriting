@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""body_checks —— 章级正文机械 validator 与专名禁用面推导（F5，Stage5）。
+"""body_checks —— 章级正文机械 validator（F5/D2，Stage5）。
 
 【能查什么、不能证明什么】
 整章自由正文不提供可靠的场景边界，机械检查只覆盖章级明确事项：非空、编码、
 包装（围栏/章号标题/场景标记）、未释放专名字面与篇幅带。机械通过**不证明**
 章内揭示位置、逐场义务兑现或成文质量——限制如实进入交付披露，回执 semantic
 恒 unverified。
+
+【验证材料随章包（D2，B4）】
+禁用字面与称谓许可在 compile 时算好并随 ChapterIR 携带（推导唯一产地
+`novel/stages/stage4/book_ir.py`）；本模块只消费章包材料做检查，不再接触
+Design／Characters。
 
 【失败分级】
 硬失败（non_empty/encoding/no_wrapper/withheld_literals/truncated）：有额度则
@@ -17,8 +22,6 @@ from __future__ import annotations
 
 import re
 
-from contracts.schema.design import BodyDesign
-from contracts.schema.source import NameProjection, NameStructure, render_form
 from novel.stages.common import claim_spans, uncovered_occurrences
 
 #: 机械 validator 的版本：章级回执 validator_version 记这一位，规则变化必须换版。
@@ -43,59 +46,15 @@ def count_body_chars(text: str) -> int:
     return sum(1 for c in text if not c.isspace())
 
 
-def chapter_surface_releases(graph: BodyDesign, chapter_ordinal: int) -> set[str]:
-    """第 k 章（含）之前已释放的称谓字面：initial + 前 k 章内引入位置。"""
-    released = {s for intro in graph.initial_surfaces for s in intro.surfaces}
-    chapter_of = {sid: ch.chapter_ordinal for ch in graph.chapters for sid in ch.scene_ids}
-    for scene in graph.scenes:
-        if chapter_of[scene.scene_id] > chapter_ordinal:
-            continue
-        for beat in scene.beats:
-            for intro in beat.surface_introductions:
-                released.update(intro.surfaces)
-    return released
-
-
-def _family_form_literals(projection: NameProjection,
-                          structure: NameStructure | None) -> set[str]:
-    """家族级构词（families[].forms）渲染出的字面（同字面家族的构词取并集）。"""
-    if structure is None:
-        return set()
-    by_literal: dict[str, set[str]] = {}
-    for family in structure.families.values():
-        for item in family.forms:
-            try:
-                by_literal.setdefault(family.literal, set()).add(
-                    render_form(item.form, family=family.literal, given=None, aliases={}))
-            except ValueError:
-                continue
-    literals: set[str] = set()
-    for entry in projection.by_person:
-        literals |= by_literal.get(entry.family_literal or '', set())
-    return literals
-
-
-def chapter_withheld_literals(
-    projection: NameProjection, graph: BodyDesign, chapter_ordinal: int,
-    structure: NameStructure | None = None,
-) -> tuple[str, ...]:
-    """第 k 章不得出现的专名字面 = 全部人物专名/带名 surface（含家族级构词渲染）
-    − 第 k 章前已释放的称谓。与 Hook withheld 同一推导纪律：不写死人名。"""
-    all_names: set[str] = set(projection.proper_literals)
-    for entry in projection.by_person:
-        all_names.update(entry.name_bearing_surfaces)
-    all_names |= _family_form_literals(projection, structure)
-    withheld = all_names - chapter_surface_releases(graph, chapter_ordinal)
-    withheld.discard('')
-    return tuple(sorted(withheld))
-
-
 def validate_chapter_prose(
     text: str, *, withheld_literals: tuple[str, ...], released_surfaces,
     target_chars: int, band_low: int, band_high: int,
     scene_markers: tuple[str, ...] = (),
 ) -> list[str]:
-    """章级机械校验：只报告，不修改；错误带检查项名（I-36）。"""
+    """章级机械校验：只报告，不修改；错误带检查项名（I-36）。
+
+    `withheld_literals`／`released_surfaces` 来自当前章包（compile 时算好）。
+    """
     errors: list[str] = []
     body = (text or '').strip()
     if not body:

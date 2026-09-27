@@ -619,11 +619,14 @@ STR06_RUNTIME_CONFIG: Final = CandidateRuntimeConfig()
 #: hook_design，见下方 `STAGE4_*_PROTOCOL`），Design wire 瘦身——场景/拍 ID、
 #: 复合引用、权重归一与整数预算改由 compiler 生成（I-21）；TargetDesign 增结构化
 #: 跨章字段；读者确认必填事实地址（D4）。
-STR06_RC_VERSION: Final = 'str06-rc7'
+#: rc8（2026-09-27 B4）：章包写手（D2）——WriterBookIR 增章级验证材料并升
+#: `str06-rc8`；章回执改绑章包摘要（回执升 `str06-rc5`），不再绑定全书 IR
+#: 与前文链。
+STR06_RC_VERSION: Final = 'str06-rc8'
 
 #: 已知 RC 标签面（版本规则见 `contracts/artifacts.py::STR06_ARTIFACT_RC_VERSIONS`）。
 STR06_RC_LABELS: Final = ('str06-rc2', 'str06-rc3', 'str06-rc4', 'str06-rc5', 'str06-rc6',
-                          'str06-rc7')
+                          'str06-rc7', 'str06-rc8')
 
 #: Stage4 四个付费语义节点的独立 wire 协议（B3 前半；各节点独立演进，升版互不
 #: 牵连）。wire 顶层 `protocol_version` 与对应常量逐字对账，漏带或错带即拒

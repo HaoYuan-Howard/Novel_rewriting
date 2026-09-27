@@ -42,6 +42,7 @@ import json
 import os
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Final, NamedTuple
@@ -50,7 +51,9 @@ from contracts.artifacts import (
     STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT, str06_chapter_observation_rel,
 )
 from contracts.invariants import (
-    BOOK_CONTENT_CALL_CEILING_DEFAULT, LLM_MAX_OUTPUT_TOKENS,
+    BOOK_CONTENT_CALL_CEILING_DEFAULT,
+    LLM_MAX_OUTPUT_TOKENS, PIPELINE_BOOK_CONCURRENCY,
+    PIPELINE_DEFAULT_CONCURRENCY, PIPELINE_PROVIDER_CONCURRENCY,
 )
 from contracts.schema.grounding import OutputConstraints
 from contracts.schema.hook import HookConstraints, HookReceipt
@@ -63,10 +66,11 @@ from novel.llm.paid_requests import (
 )
 from novel.llm.transport import ChatRequest, DeepSeekTransport
 from novel import paths, prov
+from novel.model_slots import pipeline_model_slot
 from novel.stages.common import (
     NAMES_RULES, PRESERVE_RULES, DESIGN_RULES, BIND_RULES,
     HOOK_DESIGN_RULES, HOOK_WRITER_SYSTEM, NAMING_RULES, SYS,
-    BODY_WRITER_SYSTEM, pack_prompt,
+    BODY_WRITER_SYSTEM, pack_prompt, packet_sha256, project_chapter_packet,
 )
 from novel.stages.stage2 import (
     NamesObservation, STAGE2_OBSERVATION_PROTOCOL, book_observation_prompt,
@@ -82,15 +86,15 @@ from novel.stages.stage4 import (
 )
 from novel.stages.stage5 import (
     AnsweredText, HOOK_VALIDATOR_VERSION, MAX_REWRITES, MECHANICAL_CHECKS,
-    book_ir_sha256, build_hook_user_prompt,
+    build_hook_user_prompt,
     build_rewrite_user_prompt, context_sha256,
-    prior_body_text, sha256_text, validate_hook_prose,
+    sha256_text, validate_hook_prose,
     write_chapter,
 )
 from novel.stages.stage7 import (
     apply_names, assemble_delivery, build_delivery_manifest, chapter_access,
     check_residual, compile_name_map, compile_surface_replacements,
-    naming_projection, verify_chapter_chain,
+    naming_projection, verify_chapter_receipts,
 )
 from novel.store import Str06Repository
 from novel.work_units import read_book_budget, require_workflow
@@ -153,6 +157,9 @@ class ChainContext:
     #: llm 设施（`novel/stages/common.py` 与各 stageN 包的纪律对本模块放宽：
     #: 它是装配体，但引擎段仍不得反向依赖这里）。
     digest: Callable[[object], str] | None = None
+    #: 逐章正文并发度（run 启动时冻结；经 `novel/config.py::concurrency_for` 读出，
+    #: 默认 `PIPELINE_DEFAULT_CONCURRENCY`）。并发度不进语义身份（`R-12.1c`）。
+    concurrency: int = PIPELINE_DEFAULT_CONCURRENCY
 
 
 def _segment_sentences(text: str) -> list[str]:
@@ -520,7 +527,9 @@ def run_compile_stage4(ctx: ChainContext) -> dict:
     writer_ir = compile_writer_book_ir(graph=graph, plan=plan, binding=binding,
                                        total_budget=ctx.budget,
                                        length_band=ctx.length_band,
-                                       book_title=ctx.book_title)
+                                       book_title=ctx.book_title,
+                                       projection=projection,
+                                       structure=chars.name_structure)
     problems = []
     for chapter_ir in writer_ir.chapters:
         for context in chapter_ir.scenes:
@@ -595,40 +604,45 @@ def run_hook(ctx: ChainContext) -> dict:
             'pov': hook_context.pov.model_dump(mode='json')}
 
 
-# ─── stage5 body ─────────────────────────────────────────────────────────────
+# ─── stage5 body（章包写手：独立成章、并发、集合恢复；D2，B4） ────────────────
 
-def prior_sha(committed: dict[int, str]) -> str:
-    return sha256_text(prior_body_text(committed))
+def _packet_digests(writer_ir) -> dict[int, str]:
+    """当前编译下每章的章包摘要（Stage5 回执绑定与 Stage7 核对共用）。"""
+    return {chapter.chapter_ordinal: packet_sha256(
+                project_chapter_packet(writer_ir, chapter.chapter_ordinal))
+            for chapter in writer_ir.chapters}
 
 
-def _committed_prefix(repository, writer_ir, ir_sha, target_chapters):
-    """恢复：从连续有效章前缀装载已提交正文与回执；首个断裂处停止。
+def _committed_set(repository, digests: dict[int, str], target_chapters: int):
+    """集合恢复：逐章独立装载有效提交（回执＋正文＋章包摘要三方绑定）。
 
-    回执绑定当前全书 IR 与实际前文；正文文件与回执 prose_sha256 必须逐字一致。
-    无有效回执的文本不能作为前文（崩溃窗口：正文已写、回执未写 → 本章重做）。
-    读回执时遇到上游过期（IR／前文已变）同样视为前缀断裂——该章按新身份重做，
-    与回执自身的 IR 绑定校验是同一语义的两道闸。
+    各章互不依赖（D2）：某章缺失、章包过期或正文脱钩只使**该章**回到待补
+    集合，其余章的合法提交原样保留（I-31）——已完成 1、2、4、6 章时只补
+    3、5。崩溃窗口（正文已写、回执未写）按「无有效回执」处理：本章重做，
+    同请求身份免费重放闭合（`R-7.4`）。
+
+    回执装载走 `inspect`（不记来源边、不做输入新鲜度）：章包摘要
+    （packet_sha256）是比输入边新鲜度更强的逐章绑定——章回执的合法输入只有
+    当前 IR，若经 `read` 装载会把其他章回执字节记进来源边，一章重做即误判
+    他章 stale，破坏「各章独立有效」。
     """
-    from novel.errors import ProvenanceRefused, UpstreamStale
     from novel.stages.common import check_chapter_receipt
+    from pydantic import ValidationError
     committed: dict[int, str] = {}
     receipts: dict[int, dict] = {}
     for ordinal in range(1, target_chapters + 1):
         rel_receipt = f'stage5/acceptance/body/{_chapter_ordinal(ordinal)}.json'
         rel_prose = f'stage5/body/{_chapter_ordinal(ordinal)}.txt'
         try:
-            receipt = repository.read(rel_receipt)
-        except (FileNotFoundError, UpstreamStale, ProvenanceRefused):
-            break
-        try:
+            receipt = repository.inspect(rel_receipt)
             prose = repository.read_text(rel_prose)
-        except FileNotFoundError:
-            break
+            model = _receipt_model(receipt)
+        except (FileNotFoundError, ValidationError):
+            continue
         problems = check_chapter_receipt(
-            _receipt_model(receipt), book_ir_sha256=ir_sha,
-            prior_text_sha256=prior_sha(committed), prose_sha256=sha256_text(prose))
+            model, packet_sha256=digests[ordinal], prose_sha256=sha256_text(prose))
         if problems:
-            break
+            continue
         committed[ordinal] = prose
         receipts[ordinal] = receipt
     return committed, receipts
@@ -639,39 +653,78 @@ def _receipt_model(receipt: dict):
     return ChapterReceipt.model_validate(receipt)
 
 
+def _write_and_commit_chapter(ctx: ChainContext, packet, ordinal: int):
+    """单章独立执行、验证、提交（每章一个 owner 产物组；I-25/I-31）。"""
+    repository = ctx.repository
+    outcome = write_chapter(
+        packet=packet,
+        ask=lambda prompt: ctx.ask_body(f'body_{_chapter_ordinal(ordinal)}', prompt))
+    repository.write(f'runtime/body_attempts_{_chapter_ordinal(ordinal)}.json',
+                     {'attempts': [a._asdict() for a in outcome.attempts]})
+    if outcome.prose is None or outcome.receipt is None:
+        repository.write('runtime/workflow_status.json', {
+            'status': 'body_rejected', 'accepted_body': False, 'chapter': ordinal,
+            'detail': '重写额度内无合法候选（硬检查未全过）；该章无提交'})
+        raise ValueError(f'第{ordinal}章在重写额度内无合法候选；先人工复核')
+    # 原子写正文 → 原子写章回执（提交完成）；拒绝候选留证在 attempts 记录。
+    repository.write_text(f'stage5/body/{_chapter_ordinal(ordinal)}.txt', outcome.prose)
+    repository.write(f'stage5/acceptance/body/{_chapter_ordinal(ordinal)}.json',
+                     outcome.receipt, owners=(f'body_{_chapter_ordinal(ordinal)}',),
+                     refs=(outcome.ref,) if outcome.ref is not None else ())
+    return outcome
+
+
 def run_body(ctx: ChainContext) -> dict:
+    """`str06.stage5.body`：章包写手——各章独立成文、并发执行、集合恢复（D2，B4）。
+
+    输入是当前编译的 WriterBookIR（完整 IR 保留供存储与审计，I-16）；每章
+    运行时确定性投影章包，Writer/Validator 只收当前章包——不读前文正文、
+    Design、Characters 或其他章 IR。待补集合按有效提交集合计算（只补缺章）；
+    待补章经 `novel/model_slots.py` 的书级＋供应商总槽并发执行（默认
+    `PIPELINE_DEFAULT_CONCURRENCY`，并发度不进语义身份）。单章失败不污染
+    其他章的合法结果（I-31）：全部待补章收敛后按第一章序的原始失败上抛，
+    失败清单留证 `runtime/body_failures.json`；授权／账务／取消故障保持
+    原始类型（授权闸与 typed 状态在 run 级闭合）。
+    """
     repository = ctx.repository
     writer_ir = repository.read_model('stage4/ir/writer_book_ir.json')
-    graph = repository.read_model('stage4/design/presentation_graph.json')
-    chars = repository.read_model('stage2/characters/characters.json')
-    projection = chars.name_projection()
-    ir_sha = book_ir_sha256(writer_ir)
     target_chapters = (min(ctx.body_chapter_limit, len(writer_ir.chapters))
                        if ctx.body_chapter_limit is not None else len(writer_ir.chapters))
-    committed, committed_receipts = _committed_prefix(repository, writer_ir, ir_sha,
-                                                      target_chapters)
-    for ordinal in range(len(committed) + 1, target_chapters + 1):
-        outcome = write_chapter(
-            book_ir=writer_ir, graph=graph, projection=projection,
-            chapter_ordinal=ordinal, committed=committed,
-            structure=chars.name_structure,
-            ask=lambda prompt, ordinal=ordinal: ctx.ask_body(
-                f'body_{_chapter_ordinal(ordinal)}', prompt))
-        repository.write(f'runtime/body_attempts_{_chapter_ordinal(ordinal)}.json',
-                         {'attempts': [a._asdict() for a in outcome.attempts]})
-        if outcome.prose is None or outcome.receipt is None:
-            repository.write('runtime/workflow_status.json', {
-                'status': 'body_rejected', 'accepted_body': False,
-                'chapter': ordinal,
-                'detail': '重写额度内无合法候选（硬检查未全过）；停止后续章'})
-            raise ValueError(f'第{ordinal}章在重写额度内无合法候选；先人工复核')
-        # 原子写正文 → 原子写章回执（提交完成）；拒绝候选留证在 attempts 记录。
-        repository.write_text(f'stage5/body/{_chapter_ordinal(ordinal)}.txt', outcome.prose)
-        repository.write(f'stage5/acceptance/body/{_chapter_ordinal(ordinal)}.json',
-                         outcome.receipt, owners=(f'body_{_chapter_ordinal(ordinal)}',),
-                         refs=(outcome.ref,) if outcome.ref is not None else ())
-        committed[ordinal] = outcome.prose
-        committed_receipts[ordinal] = outcome.receipt.model_dump(mode='json')
+    digests = _packet_digests(writer_ir)
+    committed, committed_receipts = _committed_set(repository, digests, target_chapters)
+    todo = [ordinal for ordinal in range(1, target_chapters + 1)
+            if ordinal not in committed]
+    packets = {ordinal: project_chapter_packet(writer_ir, ordinal) for ordinal in todo}
+    failures: dict[int, BaseException] = {}
+    if todo:
+        workers = max(1, min(ctx.concurrency, len(todo)))
+
+        def _one(ordinal: int):
+            # 书级与供应商总槽（`novel/model_slots.py`）：等待期取消或配置拒绝
+            # 都表示尚未开始供应商调用；槽位等待不进请求身份（`R-12.1c`）。
+            with pipeline_model_slot(repository.root, ctx.provider,
+                                     per_book=PIPELINE_BOOK_CONCURRENCY,
+                                     per_provider=PIPELINE_PROVIDER_CONCURRENCY):
+                return _write_and_commit_chapter(ctx, packets[ordinal], ordinal)
+
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {pool.submit(_one, ordinal): ordinal for ordinal in todo}
+            for future in as_completed(futures):
+                ordinal = futures[future]
+                try:
+                    outcome = future.result()
+                except Exception as exc:  # 单章失败就地定位（I-31），其余章继续
+                    failures[ordinal] = exc
+                    continue
+                committed[ordinal] = outcome.prose
+                committed_receipts[ordinal] = outcome.receipt.model_dump(mode='json')
+    if failures:
+        repository.write('runtime/body_failures.json', {'chapters': {
+            str(ordinal): {'failure_kind': type(exc).__name__, 'detail': str(exc)}
+            for ordinal, exc in sorted(failures.items())}})
+        # 其余章的合法提交已在盘上（I-31）；按第一章序的原始失败上抛——
+        # PurchaseRequired／ExecutionError 保持原类型，run 级状态据此闭合。
+        raise failures[min(failures)]
     body_complete = len(committed) == len(writer_ir.chapters)
     return {'body_chapters': sorted(committed), 'body_complete': body_complete,
             'length_disclosed_chapters': [
@@ -712,9 +765,9 @@ def run_assemble(ctx: ChainContext) -> dict:
     binding = repository.read_model('stage4/grounding/semantic_binding.json')
     receipt = repository.read_model('stage5/hook/receipt.json')
     prose = repository.read_text('stage5/hook/hook.txt')
-    ir_sha = book_ir_sha256(writer_ir)
-    committed, committed_receipts = _committed_prefix(
-        repository, writer_ir, ir_sha, len(writer_ir.chapters))
+    digests = _packet_digests(writer_ir)
+    committed, committed_receipts = _committed_set(
+        repository, digests, len(writer_ir.chapters))
     replacements, errors = compile_surface_replacements(chars, name_map)
     if errors:
         raise ValueError(errors)
@@ -728,8 +781,8 @@ def run_assemble(ctx: ChainContext) -> dict:
     repository.write_text('runtime/delivery/hook_renamed.txt', renamed_hook)
     chapter_prose = {k: committed[k] for k in sorted(committed)}
     access = chapter_access(range(1, len(writer_ir.chapters) + 1), committed_receipts)
-    chain_problems = verify_chapter_chain(committed_receipts, chapter_prose,
-                                          book_ir_sha256=ir_sha)
+    chain_problems = verify_chapter_receipts(
+        committed_receipts, chapter_prose, packet_sha256_by_ordinal=digests)
     hook_sha = sha256_text(prose)
     outcome = assemble_delivery(
         chapter_prose=chapter_prose, body=access, hook_prose=prose,
@@ -1068,11 +1121,13 @@ def load_stage1_chapters(base, sid: str) -> Stage1Input:
 def run_workflow(*, repository, chapters, ask, ask_text, ask_body, budget=11000,
                  through='stage4', provider='manual-adoption', model='unknown',
                  book_title='', hook_constraints=None, length_band=(0.6, 1.3),
-                 body_chapter_limit=None, node_filter=None, hook_copy=''):
+                 body_chapter_limit=None, node_filter=None, hook_copy='',
+                 concurrency: int = PIPELINE_DEFAULT_CONCURRENCY):
     """记录显式执行状态；失败保留旧产物供恢复，但不能仍宣称上次绿灯有效。
 
     流程编排已归 owner runner（本模块上半）：本函数只装配 ChainContext、驱动
-    节点计划并落 run 级状态（F7b 薄驱动）。
+    节点计划并落 run 级状态（F7b 薄驱动）。`concurrency` 是正文逐章并发度
+    （run 启动时冻结；并发度不进语义身份，`R-12.1c`）。
     """
     hook_constraints = hook_constraints or HookConstraints(
         target_chars=280, hard_max_chars=360)
@@ -1081,7 +1136,7 @@ def run_workflow(*, repository, chapters, ask, ask_text, ask_body, budget=11000,
         chapters=chapters, hook_copy=hook_copy, budget=budget, book_title=book_title,
         hook_constraints=hook_constraints, length_band=length_band,
         body_chapter_limit=body_chapter_limit, provider=provider, model=model,
-        digest=digest)
+        digest=digest, concurrency=concurrency)
     status_rel = 'runtime/workflow_status.json'
     identity = digest({'chapters': chapters, 'hook_copy': hook_copy, 'budget': budget,
                        'through': through, 'band': length_band,
@@ -1338,4 +1393,5 @@ def execute(args) -> None:
                        hook_constraints=HookConstraints(target_chars=args.hook_target_chars,
                                                          hard_max_chars=args.hook_hard_max),
                        length_band=(args.body_band_low, args.body_band_high),
-                       body_chapter_limit=args.body_chapter_limit))
+                       body_chapter_limit=args.body_chapter_limit,
+                       concurrency=cfg.concurrency_for('str06.stage5.body')))

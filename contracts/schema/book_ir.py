@@ -1,19 +1,28 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""book_ir —— WriterBookIR：全书静态写作 IR（F5 RC4）。
+"""book_ir —— WriterBookIR（全书静态写作 IR）与 ChapterWriterPacket（章包三件套）。
 
 【Derived 定位与失效语义】
 WriterBookIR 由 compiler 从（BodyDesign, ExecutionPlan, SemanticBinding, 篇幅
 政策）确定性投影，唯一落盘 `stage4/ir/writer_book_ir.json`；不是第五类 truth。
-它是正文请求身份的一部分：IR 的任何 Writer 可见变化（包括未来章的场景
-brief）改变全书请求，全部正文重新核验——章级回执绑定 `book_ir_sha256`。
+完整 WriterIR 保留供存储与审计；**运行时按章确定性投影章包（D2），不另落
+重复章包文件（I-16）**。正文请求身份只绑定 Writer 实际可见的章包：某章章包
+变化只使该章回执失效，无关的未来剧情变化不再波及（精确失效表，
+`docs/schema/str06.md`）。
 
 【两层结构】
-BookBrief 汇集已有全书约束与按阅读序的确定性导航：不调用 LLM 总结、不取场景
-POV 众数、不补造统一文风；额外禁止项只从已有明确限制及释放位置投影，不从
-未来剧情猜政策。ChapterIR 携带章目的、篇幅目标与本章场景的 WriterContext
-（双视图沿用 context.py 载体）；场景上下文在 Stage4 一次成型，Stage5 不反向
-读取正文补写 IR。
+BookBrief 汇集全书约束与按阅读序的确定性导航（导航与称谓总表只作审计面，
+不进章包）：不调用 LLM 总结、不取场景 POV 众数、不补造统一文风。ChapterIR
+携带章目的、篇幅目标、本章场景的 WriterContext（双视图沿用 context.py 载体）
+与章级验证材料（称谓许可、禁用字面——compile 时算好，D2）；场景上下文在
+Stage4 一次成型，Stage5 不反向读取正文补写 IR。
+
+【章包三件套（D2，B4）】
+`ChapterWriterPacket`＝PacketBrief（整书风格、稳定声线与表达规则；不含导航、
+其他章内容与称谓总表）＋ChapterIR（含验证材料）＋RealizationContract（写作
+协议与交付要求）。Writer 与 Validator 只收当前章包：不读前文正文、Design、
+Characters 或其他章 IR。章包是运行时确定性投影，从不落盘。rc8（2026-09-27
+B4）：章 IR 增章级验证材料；新增章包模型。
 """
 from __future__ import annotations
 
@@ -27,8 +36,8 @@ from contracts.schema.context import WriterContext
 from contracts.schema.design import CharacterVoice
 from contracts.schema.state import SurfaceRelease
 
-__all__ = ['BookBrief', 'ChapterIR', 'ChapterNavEntry', 'ReleaseScheduleEntry',
-           'WriterBookIR']
+__all__ = ['BookBrief', 'ChapterIR', 'ChapterNavEntry', 'ChapterWriterPacket',
+           'PacketBrief', 'RealizationContract', 'ReleaseScheduleEntry', 'WriterBookIR']
 
 
 class ChapterNavEntry(StrictModel):
@@ -76,12 +85,22 @@ class BookBrief(StrictModel):
 
 
 class ChapterIR(StrictModel):
-    """单章静态写作输入：章目的、篇幅目标与本章场景的双视图上下文。"""
+    """单章静态写作输入：章目的、篇幅目标、本章场景的双视图上下文与验证材料。
+
+    rc8（D2，B4）：称谓许可（章级已释放字面，validator 的认领面）与禁用字面
+    （validator 的检查面；不进 Writer 阅读面）在 compile 时算好并随章 IR
+    携带——Stage5 只做语言实现，不再从 Design／Characters 现场推导。
+    """
 
     chapter_ordinal: int = Field(ge=1)
     purpose: str = Field(min_length=1)
     length_budget: int = Field(ge=1)
     scenes: tuple[WriterContext, ...] = Field(min_length=1)
+    #: 章级已释放称谓字面（本章含之前全部释放位置的并集；机械 validator 的认领面）。
+    released_surfaces: tuple[str, ...] = Field(default=(), min_length=0)
+    #: 本章禁用字面（全部专名／带名 surface 与家族级构词 − 已释放称谓；
+    #: 机械 validator 的检查面，不渲染进 Writer 阅读面）。
+    withheld_literals: tuple[str, ...] = Field(default=(), min_length=0)
 
     @model_validator(mode='after')
     def _scenes_unique(self) -> 'ChapterIR':
@@ -95,9 +114,11 @@ class WriterBookIR(StrictModel):
     """全书静态写作 IR（Derived；唯一 writer = stage4 book_ir compiler）。
 
     rc7（B3 前半）：BookBrief 带整书风格与稳定人物声线（TargetDesign 结构化
-    投影）；VerificationIR 的「尚未向读者确认的事实」按地址投影（D4）。"""
+    投影）；VerificationIR 的「尚未向读者确认的事实」按地址投影（D4）。
+    rc8（D2，B4）：ChapterIR 增章级验证材料；完整 IR 只作存储与审计面，
+    运行时经 `ChapterWriterPacket` 按章投影。"""
 
-    contract_version: Literal['str06-rc7'] = 'str06-rc7'
+    contract_version: Literal['str06-rc8'] = 'str06-rc8'
     book_brief: BookBrief
     chapters: tuple[ChapterIR, ...] = Field(min_length=1)
     provenance: FreeProvenance | LlmProvenance | None = Field(
@@ -130,4 +151,69 @@ class WriterBookIR(StrictModel):
                 if scene.scene_id in seen:
                     raise ValueError(f'scene {scene.scene_id} 在全书 IR 中重复')
                 seen.add(scene.scene_id)
+        return self
+
+
+class PacketBrief(StrictModel):
+    """章包书级层（D2）：整书风格、稳定人物声线与表达规则。
+
+    不含导航（`BookBrief.chapters`）、其他章内容与称谓总表
+    （`BookBrief.release_schedule`）——那些是全书审计面，不是本章写手的输入。
+    """
+
+    book_title: str = Field(default='', min_length=0)
+    book_style: str = Field(min_length=1)
+    character_voices: tuple[CharacterVoice, ...] = Field(default=(), min_length=0)
+    target_chapter_count: int = Field(ge=1)
+    total_length_budget: int = Field(ge=1)
+    length_band_low: float = Field(gt=0)
+    length_band_high: float = Field(gt=0)
+
+    @model_validator(mode='after')
+    def _band_ordered(self) -> 'PacketBrief':
+        if self.length_band_low >= self.length_band_high:
+            raise ValueError('篇幅带下界必须小于上界')
+        return self
+
+
+class RealizationContract(StrictModel):
+    """章包交付层（D2）：写作协议版本与本章交付要求（compiler 从章预算与篇幅带派生）。
+
+    协议正文（表达自由边界、确认清单纪律、称谓纪律等固定条款）由 renderer 按
+    `protocol_version` 渲染；这里只携带身份与逐章参数，不复制协议文本
+    （I-11：协议文本的唯一权威在 `novel/stages/common.py::WRITER_PROTOCOL`）。
+    """
+
+    protocol_version: str = Field(min_length=1)
+    target_chars: int = Field(ge=1)
+    band_low: int = Field(ge=0)
+    band_high: int = Field(ge=0)
+
+    @model_validator(mode='after')
+    def _band_ordered(self) -> 'RealizationContract':
+        if self.band_low > self.band_high:
+            raise ValueError('篇幅带下界不得大于上界')
+        return self
+
+
+class ChapterWriterPacket(StrictModel):
+    """章包三件套（D2）：Writer 与 Validator 的**唯一**输入面。
+
+    PacketBrief＋ChapterIR（含验证材料）＋RealizationContract。运行时由
+    compiler 从 WriterBookIR 确定性投影（`novel/stages/common.py::
+    project_chapter_packet`），**从不落盘**（I-16：完整 WriterIR 是唯一正式
+    产物，章包是它的派生视图）；章包摘要进章级回执（`packet_sha256`）与
+    请求身份。Writer 不读前文正文、Design、Characters 或其他章 IR。
+    """
+
+    book_brief: PacketBrief
+    chapter: ChapterIR
+    realization_contract: RealizationContract
+
+    @model_validator(mode='after')
+    def _chapter_in_book(self) -> 'ChapterWriterPacket':
+        if self.chapter.chapter_ordinal > self.book_brief.target_chapter_count:
+            raise ValueError(
+                f'章 {self.chapter.chapter_ordinal} 超出全书章数 '
+                f'{self.book_brief.target_chapter_count}')
         return self

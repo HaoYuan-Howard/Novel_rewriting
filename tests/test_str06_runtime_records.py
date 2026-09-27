@@ -33,7 +33,7 @@ from novel.llm.transport import ChatRequest, ChatResponse
 from novel.store import Str06Repository
 from novel.stages.stage5.body import AnsweredText, write_chapter
 from tests.str06_facilities import make_context
-from tests.test_str06_body import _outcome_kw, _answered
+from tests.test_str06_body import _answered, _packet_kw
 
 
 # ─── 反例①：章首个回答为空，第二轮不得取 candidates[-1] 崩溃 ────────────────────
@@ -53,7 +53,7 @@ def test_empty_first_body_answer_resends_packet_instead_of_indexerror():
             return _answered(good, identity='id-2')
 
     fake = EmptyThenGood()
-    outcome = write_chapter(**_outcome_kw(), ask=fake)
+    outcome = write_chapter(**_packet_kw(), ask=fake)
     assert outcome.prose == good
     assert outcome.request_identity == 'id-2'
     # 空回答不携带上一稿：第二轮重发同一份章包（同请求身份 → 同轮重试）。

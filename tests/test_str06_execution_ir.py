@@ -21,8 +21,16 @@ from contracts.schema.source import (
 )
 from novel.stages.stage4.compile import compile_execution_plan, init_establishments
 from novel.stages.stage4.fold import FoldedState, fold_accepted_prefix
-from novel.stages.common import project_context, render_chapter_packet
+from novel.stages.common import (
+    project_chapter_packet, project_context, render_chapter_packet,
+)
 from novel.stages.stage4.book_ir import compile_writer_book_ir
+from tests.test_str06_hook import _characters as _name_source
+
+
+def _projection():
+    """最小名称投影（compile 的材料参数，D2）：真实人物表投影。"""
+    return _name_source().name_projection()
 
 H64 = 'a' * 64
 
@@ -237,8 +245,9 @@ def test_pending_confirmations_render_into_the_writer_packet():
     plan, _ = compile_execution_plan(graph, binding)
     book_ir = compile_writer_book_ir(
         graph=graph, plan=plan, binding=binding, total_budget=1000,
-        length_band=(0.6, 1.3), book_title='t')
-    packet = render_chapter_packet(book_ir, 1, {})
+        length_band=(0.6, 1.3), book_title='t',
+        projection=_projection(), structure=None)
+    packet = render_chapter_packet(project_chapter_packet(book_ir, 1))
     assert '【尚未向读者确认的事实】' in packet
     assert '床底有人（world:hiding）——本场第 bt1 拍起可确认' in packet
     assert '衣柜藏身（world:wardrobe）——s03#bt1 才可确认' in packet

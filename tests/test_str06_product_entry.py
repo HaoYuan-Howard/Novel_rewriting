@@ -95,7 +95,7 @@ from novel.orchestrator import (  # noqa: E402
     agent, agent_settings, operator, queue, state,
 )
 from novel.stages.chain import NODE_ORDER  # noqa: E402
-from novel.stages.stage5.body import prior_body_text, sha256_text  # noqa: E402
+from novel.stages.stage5.body import sha256_text  # noqa: E402
 from tests.test_str06_body import _RoutingTransport  # noqa: E402
 from tests.test_str06_hook import _full_chain_wires  # noqa: E402
 
@@ -343,7 +343,7 @@ def test_full_chain_from_http_upload_to_stage7_delivery(base, monkeypatch):
     report = _read_json(book / 'runtime' / 'delivery' / 'assembly_report.json')
     assert report['assembly']['status'] == 'ready' and report['chain_problems'] == []
 
-    # ⑤ 章连续非空 + 章级回执链（IR 身份 / 前文链 / 正文字节三方绑定）。
+    # ⑤ 章连续非空 + 章级回执绑定（章包摘要 / 改名前正文字节，D2 rc5；无前文链）。
     receipts = {}
     for ordinal in (1, 2):
         prose = (book / f'stage5/body/ch{ordinal:02d}.txt').read_text('utf-8')
@@ -353,10 +353,10 @@ def test_full_chain_from_http_upload_to_stage7_delivery(base, monkeypatch):
         assert receipt['prose_sha256'] == sha256_text(prose)
         assert receipt['length_disclosed'] is False, '假正文应落在章篇幅带内'
         receipts[ordinal] = receipt
-    assert receipts[1]['prior_text_sha256'] == sha256_text('')
-    assert receipts[2]['prior_text_sha256'] == sha256_text(prior_body_text(
-        {1: (book / 'stage5/body/ch01.txt').read_text('utf-8')}))
-    assert receipts[1]['book_ir_sha256'] == receipts[2]['book_ir_sha256']
+    assert len(receipts[1]['packet_sha256']) == 64
+    assert 'prior_text_sha256' not in receipts[2]
+    assert 'book_ir_sha256' not in receipts[2]
+    assert receipts[1]['packet_sha256'] != receipts[2]['packet_sha256']
     for entry in manifest['chapters']:
         assert entry['prose_sha256'] == receipts[entry['chapter_ordinal']]['prose_sha256']
 

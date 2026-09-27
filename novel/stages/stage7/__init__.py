@@ -10,13 +10,13 @@
 【包级公开面】跨 stage 只许 `from novel.stages.stage7 import X`；深路径 import
 本包内部模块一律禁止（守卫见
 `tests/test_layering.py::test_cross_stage_imports_stay_on_the_package_surface`）。
-本包经 `novel.stages.stage5` 的公开面消费篇幅口径与前文拼接。
+本包经 `novel.stages.stage5` 的公开面消费篇幅口径与文本 SHA。
 """
 from __future__ import annotations
 
 from novel.stages.stage7.assembly import (
     BodyAccess, DeliveryOutcome, assemble_delivery, build_delivery_manifest,
-    chapter_access, delivery_identity, verify_chapter_chain,
+    chapter_access, delivery_identity, verify_chapter_receipts,
 )
 from novel.stages.stage7.naming import (
     NAMING_VALIDATOR_VERSION, apply_names, check_residual, compile_name_map,
@@ -27,5 +27,5 @@ __all__ = [
     'BodyAccess', 'DeliveryOutcome', 'NAMING_VALIDATOR_VERSION', 'apply_names',
     'assemble_delivery', 'build_delivery_manifest', 'chapter_access',
     'check_residual', 'compile_name_map', 'compile_surface_replacements',
-    'delivery_identity', 'diff_proof', 'naming_projection', 'verify_chapter_chain',
+    'delivery_identity', 'diff_proof', 'naming_projection', 'verify_chapter_receipts',
 ]

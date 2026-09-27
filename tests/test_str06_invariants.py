@@ -184,7 +184,7 @@ def test_plan_matches_graph_green_and_red():
 
 def _chapter_receipt(**over) -> ChapterReceipt:
     base = dict(
-        chapter_ordinal=1, book_ir_sha256=H64, prior_text_sha256=H64B,
+        chapter_ordinal=1, packet_sha256=H64,
         prose_sha256=('c' * 64), request_identity='req-1',
         protocol_version='p1', renderer_version='r1', validator_version='v1',
         status='accepted', mechanical_checks=('non_empty', 'length_band'),
@@ -197,20 +197,16 @@ def _chapter_receipt(**over) -> ChapterReceipt:
 
 def test_chapter_receipt_rejects_stale_inputs():
     receipt = _chapter_receipt()
-    assert check_chapter_receipt(receipt, book_ir_sha256=H64,
-                                 prior_text_sha256=H64B, prose_sha256='c' * 64) == []
+    assert check_chapter_receipt(receipt, packet_sha256=H64,
+                                 prose_sha256='c' * 64) == []
 
-    # 全书 IR 变化（含未来章 brief）→ 全部回执失效
-    problems = check_chapter_receipt(receipt, book_ir_sha256=H64B,
-                                     prior_text_sha256=H64B, prose_sha256='c' * 64)
-    assert any('book_ir_sha256' in p for p in problems)
-    # 前缀正文变化 → 本章失效
-    problems = check_chapter_receipt(receipt, book_ir_sha256=H64,
-                                     prior_text_sha256='d' * 64, prose_sha256='c' * 64)
-    assert any('prior_text_sha256' in p for p in problems)
+    # 章包变化（本章导演说明/实际依赖/验证材料/预算）→ 本章回执失效（D2 章包绑定）
+    problems = check_chapter_receipt(receipt, packet_sha256=H64B,
+                                     prose_sha256='c' * 64)
+    assert any('packet_sha256' in p for p in problems)
     # 正文与回执脱钩（文本被改）→ 拒绝
-    problems = check_chapter_receipt(receipt, book_ir_sha256=H64,
-                                     prior_text_sha256=H64B, prose_sha256='e' * 64)
+    problems = check_chapter_receipt(receipt, packet_sha256=H64,
+                                     prose_sha256='e' * 64)
     assert any('prose_sha256' in p for p in problems)
     # 换 NameMap 不影响接受回执：回执字段里没有任何交付材料
     assert 'name_map' not in ChapterReceipt.model_fields

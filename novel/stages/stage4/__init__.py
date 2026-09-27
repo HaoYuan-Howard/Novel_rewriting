@@ -15,7 +15,8 @@
   · `guard.py`     写前 M1–M6 机械闸（只读验证、只写报告出口）。
   · `fold.py`      单一目标 Fold：accepted prefix 的 planned_delta 重放。
   · `book_ir.py`   WriterBookIR 确定性编译（章预算 largest-remainder 分配；权重
-                   变化的整数预算传导规则 `chapters_with_budget_change`）。
+                   变化的整数预算传导规则 `chapters_with_budget_change`；章级
+                   验证材料——称谓许可／禁用字面——compile 时算好，D2）。
 
 Hook 的设计、publisher 与 Context 编译按节点所属 Stage 住本包（B3 后半）；
 Hook 成文（`hook_writer.py`）仍在 stage5——语义边界不变（`R-5.6`／`R-6.3`）。
@@ -27,8 +28,8 @@ Hook 成文（`hook_writer.py`）仍在 stage5——语义边界不变（`R-5.6`
 from __future__ import annotations
 
 from novel.stages.stage4.book_ir import (
-    allocate_chapter_budgets, chapter_scene_weights, chapters_with_budget_change,
-    compile_writer_book_ir,
+    allocate_chapter_budgets, chapter_scene_weights, chapter_surface_releases,
+    chapter_withheld_literals, chapters_with_budget_change, compile_writer_book_ir,
 )
 from novel.stages.stage4.compile import compile_execution_plan, init_establishments
 from novel.stages.stage4.design import assemble_body_design
@@ -47,7 +48,8 @@ from novel.stages.stage4.hook_context import compile_hook_context
 __all__ = [
     'FoldedState', 'allocate_chapter_budgets', 'appeared_chars',
     'assemble_binding', 'assemble_body_design', 'assemble_hook_design',
-    'assemble_preserve', 'chapter_scene_weights', 'chapters_with_budget_change',
+    'assemble_preserve', 'chapter_scene_weights', 'chapter_surface_releases',
+    'chapter_withheld_literals', 'chapters_with_budget_change',
     'check_binding_beat_refs',
     'check_cast_legality', 'check_entry_timing', 'check_obligation_coverage',
     'compile_execution_plan', 'compile_hook_context', 'compile_writer_book_ir',
