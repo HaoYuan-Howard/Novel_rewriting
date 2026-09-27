@@ -276,18 +276,15 @@ BOOK_PROMPT = """任务：通读全书，产出人物账、初始状态与世界
 1. characters：为每个有名字或反复出场的人物建条目，键为小写下划线 slug（如 yun_niang）：
    - canonical：全书最稳定的称呼（内部主键显示名，不承担"何时可公开"语义）；
      **必须逐字等于该人物 surfaces 中的某一项**——没登记的字面不能当 canonical；
-   - surfaces：数组，每项 {{surface, from_chapter, until_chapter, source_refs}}。
-     从 from_chapter 起该称呼出现即可解析到这个人物；until_chapter 只在文本给出明确失效依据时
-     才填（如身份揭晓后旧称不再使用），否则一律 null——"最后一次采到"不等于"从此不能用"。
-     同一称呼多次复现的并入同一窗口（from 取最早、until 保持 null），不要按出现章各开一条。
-     称谓转变本身承担剧情意义时（如临场改口），交由对应章节的 event 表达。
-     source_refs 引用证据段 id（见下方清单）。
-     **from_chapter 由 compiler 按证据锚点派生并覆盖你声明的值**：锚点段＝所引证据段中
-     逐字包含该称呼的最早一段，章前文字（e00）的锚点映射到第 1 章（阅读序从 1 开始）；
-     你保证 source_refs 里至少一段逐字包含该称呼即可。
+   - surfaces：数组，每项 {{surface, source_refs}}。同一称呼多次复现的并成一条，
+     不要按出现章各开一条；称谓转变本身承担剧情意义时（如临场改口），交由对应
+     章节的 event 表达。source_refs 引用证据段 id（见下方清单），且**至少一段
+     逐字包含该称呼**——释放窗口（从哪章起可用）由 compiler 按证据锚点派生，
+     你不输出章号；
+   - 同一人物 surfaces 内不得重复登记同一称呼。
 2. initial_state：只收"第 1 章第一拍之前已经成立"的地基事实，每项
-   {{state_id, target, key, value, persistence, knowledge, source_refs}}：
-   - state_id：s0_ 前缀 + 小写下划线 slug；
+   {{target, key, value, persistence, knowledge, source_refs}}（不输出编号，编号由
+   compiler 生成）：
    - target：{{"kind":"character","char_id":"<slug>"}} 或 {{"kind":"relation","subject":"<slug>","object":"<slug>"}}；
    - key：语义维度英文蛇形；一个原子只表达一个维度（财富与相貌分开），不写人物小传；
      位置类初始事实只收 residence（长期居所）——开场所在是场景作用域，由第 1 章第一个
@@ -298,41 +295,31 @@ BOOK_PROMPT = """任务：通读全书，产出人物账、初始状态与世界
    - 判断、预期、担忧、动机自陈不是状态，不进 initial_state（它们属于 beats）；
    - persistence：stable=全书不变量；mutable=仅是初始值；stable 不等于"全书资料都可倒灌"；
    - knowledge：只在"谁知道"构成后续约束时给 {{"known_by":[...],"reader_knows":bool}}，
-     且记录的是故事开始那一刻谁已知道，不是你读完全书后的状态；
+     且记录的是故事开始那一刻谁已知道，不是你读完全书后的状态；known_by 只能填
+     本表人物 slug，读者知情用 reader_knows 表达；
    - source_refs：1-3 个证据段 id。
 3. world_constraints：只收这样的规则——写手若不知道它，就可能写出一个世界观不允许发生的事件。
-   每项 {{constraint_id, kind, statement, source_refs}}，kind ∈ hard_rule/social_norm/institutional_fact/setting_constant，
-   constraint_id 用 wc_ 前缀 slug。人物个人判断、单次事件的教训、人物动机、
-   已在具体情节中自然体现的背景知识都不要收。没有就给空数组。
+   每项 {{kind, statement, source_refs}}（不输出编号），kind ∈ hard_rule/social_norm/institutional_fact/setting_constant。
+   人物个人判断、单次事件的教训、人物动机、已在具体情节中自然体现的背景知识都不要收。
+   没有就给空数组。
 
 【证据段 id 清单】（source_refs 只能从中选）
 {evidence}
 
-输出 JSON 顶层：{{"characters":{{...}},"initial_state":[...],"world_constraints":[...]}}
+输出 JSON 顶层：{{"protocol_version":"stage2-observation-v1","characters":{{...}},"initial_state":[...],"world_constraints":[...]}}
 个人自述、某家长辈要求不得推广成普遍世界规则；无法由证据确认的规则不写。"""
 
 CHAPTER_PROMPT = """任务：把第 {ch} 章正文拆成有序 beats。每一拍是一次状态转移：event 是给人读的事件表述，需要延续的变化全部由三类转移承载——effects（事实）、cognition（认知）、loops（悬念）。
 
-【人物表】（participants / effect target / cognition holder 只能用这些 id）
+【人物表】（participants / effect target / cognition holder 只能用这些 slug）
 {glossary}
-
-【已登记的命题】（proposition_id -> statement；跨章引用用这些正式 ID，同章引用用本 wire 内的本地标签）
-{kreg}
-
-【未收束的悬念】（loop_id -> question；跨章引用用这些正式 ID）
-{lreg}
-
-【第 {ch} 章开始时的状态快照】（初始状态与前章转移折叠的结果；逐条带来源与标识登记，只写本章"新发生"的改变，不要把快照里已有的事实重新 set 一遍）
-{snapshot}
-
-【此前已有 beat id】（causal_edges 可跨章引用它们）
-{known_beats}
 {prior}
 【第 {ch} 章正文】（每段前的 [eXX_YY] 是证据 id）
 {evidence}
 {pre_chapter}
 【要求】
-1. beats：按故事顺序拆拍，每拍 {{"beat_id","event","participants","source_refs","scene_boundary","temporal_mode","effects","cognition","loops"}}：
+1. beats：按故事顺序拆拍，每拍 {{"event","participants","source_refs","scene_boundary","temporal_mode","effects","cognition","loops"}}。
+   **不输出拍号**：拍号由 compiler 按列表序派发，列表序即事件序：
    - event：写"发生了什么"，并保住足以正确演出这一事件的语义——必要前因、关键指代
      （如"他那里"须写明指什么）、已成立的站位（谁在床上/床边/门外）、公开行为与内心
      反应的差别；不要混入动机分析或世界规则。
@@ -340,13 +327,13 @@ CHAPTER_PROMPT = """任务：把第 {ch} 章正文拆成有序 beats。每一拍
      不得翻转施事与受事；身份关系必须写明归属（谁的同窗/表亲/好友），不得悬空成"同窗"；
    - 动作的范围与去向以原文为准：走了多远、去了哪里、交给了谁，原文写到哪就记到哪，
      不外推、不补全（没写"送出住处"就不得记成送离住处）；
-   - participants：本拍中实际行动、说话、感知或被直接作用的人物 id（可空数组）；
+   - participants：本拍中实际行动、说话、感知或被直接作用的人物 slug（可空数组）；
      仅被提及者只留在 event，不进 participants；
    - scene_boundary：new＝本拍开新场景（旧场景的 scene 作用域状态就此失效）；
-     continue＝延续当前场景（可跨章；全书第一个拍必须 new）；
+     continue＝延续当前场景。全书第一个拍必须 new；第 1 章之后的章若开场直接延续
+     上一章末尾的同一场景，第一拍用 continue，否则 new；
    - temporal_mode：single＝单次行为；iterative＝重复行为（如"连续三夜"）；
-   - source_refs：支撑该拍的证据段 id，1-4 个；
-   - beat_id：b{{ch:02d}}_<两位序号>，章内唯一。
+   - source_refs：支撑该拍的**本章**证据段 id，1-4 个。
 2. effects：事实的 postcondition——本拍结束后仍成立、且后续涉及该维度时必须以它为准的
    **叙述确立的**事实。每项 {{"target","key","op","value","scope","disclosure"[,"proposition"]}}：
    - target：{{"kind":"character","char_id":...}} | {{"kind":"relation","subject":...,"object":...}} |
@@ -366,18 +353,18 @@ CHAPTER_PROMPT = """任务：把第 {ch} 章正文拆成有序 beats。每一拍
      set 需要显式值（空字符串是合法空值），unset/unknown 不得带值；
    - scope：book＝跨场景延续；scene＝本场有效、换场失效；
    - disclosure（必填）：{{"visibility":...}}。on_page＝叙述对读者明示；
-     concealed＝叙述确立但读者此刻不可见——必须声明 known_by（非空），并带 proposition
-     （新建：ref 本地标签＋statement），由后续 cognition 经同一命题记录揭示；
+     concealed＝叙述确立但读者此刻不可见——必须声明 known_by（非空，只填人物表 slug），
+     并带 proposition（本地句柄 ref＋statement），由后续 cognition 经同一命题记录揭示；
    - proposition（可选）：说辞被叙述证实时，在证实拍建立事实效应并引用同一命题
-     （ref 用已登记的本地标签或正式 ID），不得改写其文本；
+     （ref 用本章已建立的本地句柄），不得改写其文本；
    - 改变哪个维度就替换哪个键；场景性临时状态（借宿、暂住、暂离）在结束或转移时必须 set
      对应维度的新值——去向未知就写"去向未交代"或 unknown，不得留旧值让下游补造；不另开新键；
    - 无 postcondition 的拍 effects 给空数组。
 3. cognition：认知的 postcondition——谁对哪条命题持什么模式。每项 {{"proposition","holder","mode"}}：
    - proposition：{{"ref","statement"}}。新建（本 wire 首次出现）必须带 statement；
-     引用既有命题只带 ref（同章用本地标签，跨章用上方正式 ID），重抄文本必须与登记
-     文本逐字一致——同一命题的文本只建立一次；
-   - holder：人物 id 或 reader／public；
+     引用本章已建立的命题只带 ref，重抄文本必须与首次登记逐字一致——同一命题的
+     文本只建立一次；
+   - holder：人物 slug 或 reader／public；
    - mode：learns(确凿得知)/suspects(起疑)/confirms(证实怀疑)/hears_claim(听到说法未知真假)/
      believes(以为为真，不代表世界为真)/asserts(公开主张)；
    - 只收会约束后续行为、误解、隐瞒或揭示的信息不对称；普通在场见闻、例行告知、
@@ -386,22 +373,22 @@ CHAPTER_PROMPT = """任务：把第 {ch} 章正文拆成有序 beats。每一拍
      除非文本明确写出内心变化。
 4. loops：悬念的 postcondition——独立数组，每项 {{"ref","op","question"/"resolution"}}：
    - open：新建悬念线，必填 question（问题文本只出现在 open 处，之后不可改写）；
-   - close：引用已有 loop（同章本地标签或上方正式 ID），必填 resolution（收束内容）；
-   - 同一 loop 只能 open 一次；已 open 或已 close 的 id 不得再 open；不同次的藏身、
-     不同的约定是不同的悬念线，不得并成一条；
+   - close：必填 resolution（收束内容）。本章 open 过的悬念用其本地句柄 close；
+     前文章节开启、本章收束的悬念，同样用一个本章新本地句柄落账（resolution 必填，
+     问题文本不必知道）——跨章开合配对由后续关联节点建立，你不输出任何正式编号；
+   - 同一句柄只能 open 一次；不同次的藏身、不同的约定是不同的悬念线，不得并成一条；
    - 无 postcondition 的拍 loops 给空数组。
-5. causal_edges：只收有信息增量的因果——不显然、跨距离、跨章节、setup-payoff，
-   或缺失会造成错误因果理解的关系。只看有序 beats 就能自然理解的先后关系
-   不建边；相邻拍若有必要的实质因果则保留。每项 {{"from_beat","to_beat","kind"}}，
-   kind ∈ causes/motivates/enables/setup_payoff。from 可引用此前章节的 beat，to 是本章 beat。
+5. 命题与悬念的句柄纪律：句柄（ref）是本章内的可读本地标签；同一句柄的 statement／
+   question 文本只建立一次，冲突即拒。与前面章节相关的命题、悬念，不要猜它们在别章
+   的编号或原文措辞——按本章视角新建本地句柄并写清本章可证的内容；跨章同一性
+   （同一命题、悬念开合配对）由关联节点只选已给句柄建立。
 6. 连续性契约：会改变后续人物选择、关系、位置、目标、知情或未决问题的内容，必须同时
    进入 effects／cognition／loops——只留在 event 里，该拍就不完整。三类转移全空的拍
-   合法，但请节制；这类拍的比例会被 fold 按章报出，供离线核读。
-7. 快照与正文的关系：上方快照是带来源的参考与标识登记，不是正文的替代——本拍事实以
-   正文原文为准，不得为迁就快照改写施事、受事或动作主体，也不得因为快照里没有就略去
-   正文写出的变化；快照与正文不一致时，按正文记录。
+   合法，但请节制；这类拍的比例会被按章报出，供离线核读。
+7. 前文与正文的关系：上方前文原文是只读参考——本拍事实以本章正文原文为准，不得为迁就
+   前文改写施事、受事或动作主体；前文与正文不一致时，按正文记录。
 
-输出 JSON 顶层：{{"beats":[...],"causal_edges":[...]}}
+输出 JSON 顶层：{{"protocol_version":"stage2-observation-v1","beats":[...]}}
 不要把财富、位置等不同维度塞入同一个 key。"""
 
 #: 七类保存类别与 `contracts/schema/policy.py::PreserveKind` 同源（B2）：定义只在

@@ -111,6 +111,17 @@
         "stage2"
       ]
     },
+    "tests/test_str06_stage2_owners.py": {
+      "layer": "unit_contract",
+      "stages": [
+        "stage2"
+      ],
+      "cases": {
+        "test_prior_chapter_failure_does_not_change_later_chapter_request": "stage",
+        "test_missing_chapter_unit_recovery_replays_without_repurchase": "stage",
+        "test_stage2_observation_leg_persists_observations_and_names_remount": "stage"
+      }
+    },
     "tests/test_str06_fold_guard.py": {
       "layer": "unit_contract",
       "stages": [

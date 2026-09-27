@@ -936,9 +936,10 @@ def test_stage2_owner_shims_cannot_return():
     「整包不得存在」——包回来了不等于旧链回来，**模块名**才说了算。旧 Stage2 的
     blueprint／analyze／characters／knowledge／shared 五族与全部顶层 shim 一个
     都不许回来；模块面按登记owner 收紧（多一个就是旧链回流的第一级台阶）。
-    ⚠ B2（2026-09-27）五节点重建（D9）：`resolver.py`（证据定位设施）入列；
-    book／chapters／associate／compile 四个 owner 模块随 B2 后续接线入列时
-    同步更新本清单。
+    ⚠ B2（2026-09-27）五节点重建（D9）：`resolver.py`（证据定位设施）、
+    `book.py`／`chapters.py`（book／chapters 观察 owner，B2 第二步接线）入列；
+    `associate`／`compile` 两个 owner 模块随 B2 后续接线入列时同步更新本清单，
+    `source.py` 随接线完成退役删除。
     """
     import importlib.util
     from pathlib import Path
@@ -950,9 +951,11 @@ def test_stage2_owner_shims_cannot_return():
         f'novel/stages/stage2/ 不在（{root}）——F8c 分流后新链 Stage2 引擎'
         f'（source／names）应落位')
     present = sorted(p.stem for p in root.glob('*.py'))
-    assert present == ['__init__', 'names', 'resolver', 'source'], (
+    assert present == ['__init__', 'book', 'chapters', 'names', 'resolver',
+                       'source'], (
         f'novel/stages/stage2/ 的模块面变了：{present}；'
-        f'现役只许 __init__／names／resolver／source（B2 后续接线扩五 owner 时同步）')
+        f'现役只许 __init__／book／chapters／names／resolver／source'
+        '（B2 后续接线扩 associate／compile 时同步）')
     banned = [
         'plot_checks', 'plot_compile', 'plot_continuity', 'plot_diagnostics',
         'plot_edit', 'plot_inputs', 'plot_prompts', 'plot_recovery',

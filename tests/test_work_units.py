@@ -282,7 +282,7 @@ def test_saved_response_cannot_be_replaced_or_tampered(tmp_path):
 
 
 def test_recovery_proof_keeps_original_response(tmp_path):
-    budget = WorkUnitBudget(tmp_path, '42', 'str06.stage2.source', scope='chapter:3')
+    budget = WorkUnitBudget(tmp_path, '42', 'str06.stage2.chapters', scope='chapter:3')
     turn = budget.reserve(sha('a'), run_id='first')
     budget.save_response(turn.turn_id, {'raw': '答复'})
     budget.save_recovery(turn.turn_id, {'accepted': 'checkpoint'})
@@ -358,7 +358,7 @@ def test_open_readers_do_not_block_parallel_chapter_registration_or_ledger_updat
     from novel import work_units
 
     base = tmp_path / '逐章共享快照'
-    first = WorkUnitBudget(base, '42', 'str06.stage2.source', scope='chapter:1')
+    first = WorkUnitBudget(base, '42', 'str06.stage2.chapters', scope='chapter:1')
     first_turn = first.reserve(sha('第一章'), run_id='parallel-chapters')
     registry_before = first.registry_path.read_bytes()
     ledger_before = first.path.read_bytes()
@@ -366,7 +366,7 @@ def test_open_readers_do_not_block_parallel_chapter_registration_or_ledger_updat
     # 保持真实 OS 读取句柄打开；Windows 必须共享删除权限才能完成下面的原子替换。
     with (work_units._open_snapshot(first.registry_path) as old_registry,
           work_units._open_snapshot(first.path) as old_ledger):
-        second = WorkUnitBudget(base, '42', 'str06.stage2.source', scope='chapter:2')
+        second = WorkUnitBudget(base, '42', 'str06.stage2.chapters', scope='chapter:2')
         second.reserve(sha('第二章'), run_id='parallel-chapters')
         first.record_attempt(first_turn.turn_id, attempt_id='chapter-one-wire', outcome='ok')
 

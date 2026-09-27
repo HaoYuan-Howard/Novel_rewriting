@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from contracts.rules import REGISTRY, Rule
 
-# ─── Stage2：源语义（str06.stage2.source／names）──────────────────────────────
+# ─── Stage2：源语义（str06.stage2.book／chapters／names／associate／compile）──
 
 
 def _hard(rule: str, stage: str, item: str, requirement: str, **kw) -> Rule:

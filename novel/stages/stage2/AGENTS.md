@@ -8,9 +8,13 @@
 `str06.stage2.book`／`chapters`／`names`／`associate`（付费观察与关联）＋
 `str06.stage2.compile`（免费确定性编译）；`str06.stage2.source`（book＋chNN
 联合抽取）退役。观察与关联协议在 `contracts/schema/observation.py`
-（`stage2-observation-v1`，显式版本化 I-13）。book／chapters／associate／compile
-的 owner 模块与 `chain.py` 接线由 B2 后续提交落地；`source.py` 在接线完成前
-仍承载现役引擎，不新增功能（S-05 deprecation）。
+（`stage2-observation-v1`，显式版本化 I-13）。**B2 第二步（2026-09-27）已落地**：
+book／chapters 两 owner 引擎（`book.py`／`chapters.py`）与 `chain.py` 接线
+（`run_book`／`run_chapters` 替换 `run_source`，`run_names` 重挂书级观察输入，
+names 引擎不变）、付费 owner 记账映射改挂新节点；`associate`／`compile` 的
+owner 模块与 runner 由 B2 后续提交落地（compile 是 Characters＋Blueprint 双真源
+唯一 writer）。`source.py` 不再被链消费（S-05 deprecation），其 fold／编译
+反例由后续 compile owner 接管后删除。
 
 心智公式：LLM = understand → Resolver = locate → Compiler = normalize →
 Canonical = truth → Projection = expose → Validator = enforce。
@@ -30,9 +34,11 @@ Canonical = truth → Projection = expose → Validator = enforce。
 
 ```text
 stage2/
-  source.py    # 旧 source owner 引擎（B2 接线完成前现役；不新增功能，S-05）
-  names.py     # stage2.names owner：源名称结构窄调用（语义协议不变，D9）
+  book.py      # str06.stage2.book owner：书级观察引擎（闭集/锚点/canonical 闭合＋core view 投影，B2）
+  chapters.py  # str06.stage2.chapters owner：逐章观察引擎（本章证据闭集/作用域归一/章内句柄纪律，D3，B2）
+  names.py     # stage2.names owner：源名称结构窄调用（语义协议不变，D9；输入已重挂 book 观察）
   resolver.py  # Stage2 证据 Resolver：句段闭集选择与逐字锚唯一定位（B2）
+  source.py    # 旧 source owner 引擎（链已不消费；反例由 compile owner 接管后删除，S-05）
 ```
 
 - 正式 schema 只在 `contracts/schema/`（及 `docs/schema/`）；stage2 不复制 schema truth。
@@ -47,12 +53,14 @@ stage2/
 
 | Owner | 权威 path | 节点 |
 |---|---|---|
-| source（旧，B2 接线期） | `novel/stages/stage2/source.py` | `str06.stage2.source`（已退役， runner 下线随 B2 后续提交） |
+| book | `novel/stages/stage2/book.py` | `str06.stage2.book` |
+| chapters | `novel/stages/stage2/chapters.py` | `str06.stage2.chapters`（并发节点集合已登记） |
 | names | `novel/stages/stage2/names.py` | `str06.stage2.names` |
 | resolver | `novel/stages/stage2/resolver.py` | 供 book／chapters／associate／compile 调用的定位设施 |
+| source（旧，已停用） | `novel/stages/stage2/source.py` | `str06.stage2.source`（已退役；runner 已下线） |
 
-（book／chapters／associate／compile 四个 owner 的引擎模块与接线由 B2 后续提交
-落地后回填本表；节点注册面已在 `contracts/invariants.py::NODES` 生效。）
+（`associate`／`compile` 两个 owner 的引擎模块与 runner 由 B2 后续提交落地后
+回填本表。）
 
 下游跨 Stage 应优先消费正式 artifact 与登记投影，禁止依赖 wire 中间态
 （S2-1）。

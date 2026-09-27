@@ -4,7 +4,7 @@
 
 【为什么拆】原 harness 把「读输入 → LLM → compile → 落盘 → 状态」缠在一个长函数
 里，单节点无法重跑、输入无法从盘面闭合。本模块按 `contracts/invariants.py::NODES`
-把流程拆成 11 个 owner runner：每个 runner 只做本节点的编排——从 repository 读
+把流程拆成 owner runner：每个 runner 只做本节点的编排——从 repository 读
 本节点的正式输入、调 owner 引擎、经付费边界取已购响应、写本节点产物
 （provenance 随写随铸）。harness 逻辑（证据切分、身份投影、状态记录）随之归
 owner；`execute` 只剩参数、设施装配与计划推进（薄驱动）。
@@ -14,10 +14,17 @@ owner；`execute` 只剩参数、设施装配与计划推进（薄驱动）。
 都落在表内节点上，produces 与唯一 writer 一致。复检走 `--check-only`（免费采用与
 重放），不新造 check 节点。
 
+【B2 五节点重建（2026-09-27，D9）】Stage2 由联合抽取 `str06.stage2.source`
+改为 book／chapters／names／associate／compile 五 owner：book 与 chapters
+产出观察（`stage2/observations/*.json`），names 重挂到书级观察输入，
+associate 与 compile 的 runner 由 B2 后续提交落地（compile 是 Characters＋
+Blueprint 双真源唯一 writer）。`run_source` 与派生输入
+`stage2/compiled/book_extraction.json` 随之退役（D3/D9）。
+
 【输入闭合边界（F7b 已知限制，F7c 收口）】源章仍由调用方经 `ChainContext.chapters`
 传入（F7c 起改读正式 Stage1 章数组）；其余输入一律从盘面读——单节点重放因此可能。
-源抽取的 core 与 BodyDesign 落为正式派生产物（`stage2/compiled/book_extraction.json`、
-`stage4/design/body_design.json`），不再是只活在内存里的中间态。
+Stage4 的 BodyDesign 落为正式派生产物（`stage4/design/body_design.json`），
+不再是只活在内存里的中间态。
 
 【本模块是装配体（F8c）】`execute`／`run_workflow`／`load_stage1_chapters` 原属
 原工具层隔离驱动（已删除）；分流后与 runner 同模块——它是这条链唯一把
@@ -39,12 +46,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Final, NamedTuple
 
-from contracts.artifacts import STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT
+from contracts.artifacts import (
+    STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT, str06_chapter_observation_rel,
+)
 from contracts.invariants import (
     BOOK_CONTENT_CALL_CEILING_DEFAULT, LLM_MAX_OUTPUT_TOKENS,
 )
 from contracts.schema.grounding import OutputConstraints
 from contracts.schema.hook import HookConstraints, HookReceipt
+from contracts.schema.observation import STAGE2_OBSERVATION_PROTOCOL
 from contracts.schema.workflow import STR06_RUNTIME_CONFIG
 from novel.config import Config, load_config
 from novel.llm.paid_requests import (
@@ -54,13 +64,14 @@ from novel.llm.paid_requests import (
 from novel.llm.transport import ChatRequest, DeepSeekTransport
 from novel import paths, prov
 from novel.stages.common import (
-    BOOK_PROMPT, CHAPTER_PROMPT, PRESERVE_RULES, DESIGN_RULES, BIND_RULES,
-    HOOK_DESIGN_RULES, HOOK_WRITER_SYSTEM, NAMES_RULES, NAMING_RULES, SYS,
-    BODY_WRITER_SYSTEM, PRE_CHAPTER_RULE, pack_prompt,
+    NAMES_RULES, PRESERVE_RULES, DESIGN_RULES, BIND_RULES,
+    HOOK_DESIGN_RULES, HOOK_WRITER_SYSTEM, NAMING_RULES, SYS,
+    BODY_WRITER_SYSTEM, pack_prompt,
 )
 from novel.stages.stage2 import (
-    ChapterCompiler, assemble_blueprint, compile_book, compile_name_structure,
-    chapter_input_snapshot, initial_snapshot, merge_name_structure, source_fold,
+    NamesObservation, book_observation_prompt, chapter_observation_prompt,
+    character_core_view, compile_book_observation, compile_chapter_observation,
+    compile_name_structure,
 )
 from novel.stages.stage4 import (
     assemble_binding, assemble_body_design,
@@ -87,13 +98,15 @@ __all__ = [
     'Stage1Input', 'THROUGH_NODE',
     'build_evidence', 'derive_total_length_budget', 'execute', 'load_dev_source',
     'load_stage1_chapters', 'run_chain', 'run_node', 'run_workflow',
-    'ChapterRequest', 'PaidBoundary', 'assemble_paid_boundary',
-    'chapter_extraction_prompt', 'str06_chat_request',
+    'PaidBoundary', 'assemble_paid_boundary', 'str06_chat_request',
 ]
 
 #: 执行序（stage2 → stage4 → stage5 → stage7；与 --through 的腿边界一致）。
+#: B2 五节点重建（D9）：Stage2 的 associate／compile runner 由 B2 后续提交
+#: 落地；届时本序与 NODE_RUNNERS 双向闭合。
 NODE_ORDER: tuple[str, ...] = (
-    'str06.stage2.source', 'str06.stage2.names',
+    'str06.stage2.book', 'str06.stage2.chapters', 'str06.stage2.names',
+    'str06.stage2.associate', 'str06.stage2.compile',
     'str06.stage4.preserve', 'str06.stage4.body_design', 'str06.stage4.bind',
     'str06.stage4.hook_design', 'str06.stage4.compile',
     'str06.stage5.hook', 'str06.stage5.body',
@@ -101,10 +114,10 @@ NODE_ORDER: tuple[str, ...] = (
 )
 
 #: --through 腿 → 跑到哪个节点为止（含）。
-THROUGH_NODE = {'stage2': 'str06.stage2.names', 'stage4': 'str06.stage4.compile',
+THROUGH_NODE = {'stage2': 'str06.stage2.compile', 'stage4': 'str06.stage4.compile',
                 'stage5': 'str06.stage5.body', 'stage7': 'str06.stage7.assemble'}
 
-FINAL_STATUS = {'stage2': 'names_applied', 'stage4': 'planned_validated',
+FINAL_STATUS = {'stage2': 'stage2_compiled', 'stage4': 'planned_validated',
                 'stage5': 'body_hook_accepted_mechanical', 'stage7': 'delivered'}
 
 
@@ -150,10 +163,10 @@ def _segment_sentences(text: str) -> list[str]:
 
 
 def build_evidence(chapters, hook_copy: str | None = None) -> dict:
-    """源证据切分（stage2 source owner 的 harness 逻辑，F7b 从工具层收回）。
+    """源证据切分（book／chapters 观察共用的 harness 逻辑，F7b 从工具层收回）。
 
     章前文字（Stage1 `hook_copy`，即源引子）切成 `e00_*` 段并标 `pre_chapter`：
-    书级调用与第 1 章抽取看得到，其余各章看不到——引子只可能影响开场。引子按
+    书级调用与第 1 章观察看得到，其余各章看不到——引子只可能影响开场。引子按
     信息职责分流（规则在 BOOK_PROMPT／CHAPTER_PROMPT），不对整篇打标签：
     开场前已成立的状态/知情进 initial_state，实际发生的开场行动进第 1 章 beats，
     与正文重复的事件以正文为准，预告/概括不进 canonical，判断不了弃权。
@@ -167,27 +180,6 @@ def build_evidence(chapters, hook_copy: str | None = None) -> dict:
         for i, segment in enumerate(_segment_sentences(text), 1):
             evidence[f'e{no:02d}_{i:02d}'] = {'chapter': no, 'text': segment}
     return evidence
-
-
-def _pre_chapter_evidence_ids(evidence: dict) -> frozenset[str]:
-    return frozenset(k for k, v in evidence.items() if v.get('pre_chapter'))
-
-
-def _prior_text(chapters: list[dict], before_chapter: int) -> str:
-    """第 k 章请求的前文原文前缀（批 0 裁决采纳的 C 形态：只读、不带证据 id）。
-
-    只收第 1..k-1 章原文。章前文字（引子）**不进**前文块：e00 只影响开场是已登记
-    规则（R-2.9 一族），引子对第 1 章的影响经其证据段生效，其余各章不因引子变化。
-    快照的「带来源参考、正文优先」契约在 CHAPTER_PROMPT 的要求 7，不在这里重复。
-    """
-    parts: list[str] = []
-    for chapter in chapters:
-        if chapter['chapter_ordinal'] < before_chapter:
-            parts.append(f'〔第{chapter["chapter_ordinal"]}章〕\n{chapter["text"]}')
-    if not parts:
-        return ''
-    return (f'【前文原文】（只读参考，截至第 {before_chapter - 1} 章末；'
-            '不带证据 id，不要求引用）\n\n' + '\n\n'.join(parts) + '\n')
 
 
 def _chapter_ordinal(n: int) -> str:
@@ -209,110 +201,88 @@ def derive_total_length_budget(chapters: list[dict], *,
     return -(-total // rounding) * rounding
 
 
-# ─── stage2 source ───────────────────────────────────────────────────────────
+# ─── stage2 book／chapters（B2 五节点：观察 owner，D3/D9） ──────────────────
 
-class ChapterRequest(NamedTuple):
-    """第 k 章抽取请求：prompt 正文＋该章的输入快照渲染＋组装槽值。
+def run_book(ctx: ChainContext) -> dict:
+    """`str06.stage2.book`：书级一次调用——人物候选、称谓及证据、初态、世界约束。
 
-    `slots` 是 `CHAPTER_PROMPT.format` 除快照外的其余槽（人物表／知识命题／证据／
-    章前规则／已有 beat）。批 0 探针的 C 臂要换一份「逐条带来源」的快照渲染，用
-    同一组槽值重排 prompt——探针不另抄一份组装，本函数也不为探针长分支。
+    输入是全书原文（含 e00 引子句段）与证据句段清单；输出观察 wire 落
+    `stage2/observations/book.json`，作为 Characters 与 Blueprint 两份真源的
+    素材（canonical 由 compile 发布，D9）。机械闸（闭集、锚点、canonical
+    闭合）在 owner 引擎里，失败即停在该 owner（免费修复，不重购）。
     """
-
-    prompt: str
-    snapshot: list[str]
-    slots: dict[str, str]
-
-
-def chapter_extraction_prompt(
-    *, chapter: int, book_characters: dict, core, world_constraints: list,
-    compiled: list, compiler, evidence: dict, prior_text: str = '',
-) -> ChapterRequest:
-    """第 k 章抽取请求的 prompt 组装（`run_source` 与批 0 探针共用的唯一实现）。
-
-    探针必须逐字复用本函数构造「现行请求」臂：在工具里另抄一份，臂 A 与生产
-    请求何时漂移将无人知晓（S-03：实验/兼容逻辑不散落，也不与生产形成第二真相）。
-    快照由 `source_fold` 的同一折叠产出（单一实现，无第二套 fold）；
-    `prior_text` 是批 0 裁决采纳的前文原文前缀（C 形态；第 1 章为空）。
-    """
-    snapshot = (initial_snapshot(core) if chapter == 1 else
-                chapter_input_snapshot(core, assemble_blueprint(world_constraints, compiled),
-                                       chapter))
-    # 章前文字（e00）只进书级调用与第 1 章：引子只可能影响开场，其余各章不变。
-    chapter_evidence = '\n'.join(
-        f'[{k}] {v["text"]}' for k, v in evidence.items()
-        if v['chapter'] == chapter or (chapter == 1 and v.get('pre_chapter')))
-    slots = {
-        'ch': chapter,
-        'glossary': pack_prompt('人物闭集', characters=book_characters),
-        'kreg': '\n'.join(f'{k} -> {v}'
-                          for k, v in compiler.proposition_registry().items()),
-        'lreg': '\n'.join(f'{k} -> {v}'
-                          for k, v in compiler.open_loop_registry().items()),
-        'evidence': chapter_evidence,
-        'pre_chapter': PRE_CHAPTER_RULE if chapter == 1 else '',
-        'known_beats': ', '.join(sorted(compiler.known_beats)),
-        'prior': prior_text,
-    }
-    prompt = CHAPTER_PROMPT.format(snapshot='\n'.join(snapshot), **slots)
-    return ChapterRequest(prompt=prompt, snapshot=snapshot, slots=slots)
-
-
-def run_source(ctx: ChainContext) -> dict:
     repository = ctx.repository
-    chapters = ctx.chapters
-    evidence = build_evidence(chapters, ctx.hook_copy)
-    pre_chapter = _pre_chapter_evidence_ids(evidence)
-    full = '\n'.join(f'〔第{c["chapter_ordinal"]}章〕\n{c["text"]}' for c in chapters)
-    if ctx.hook_copy.strip():
-        full = f'〔章前文字〕\n{ctx.hook_copy}\n\n' + full
-    block = '\n'.join(f'[{k}] {v["text"]}' for k, v in evidence.items())
-    book, book_ref = ctx.ask(
-        'book', BOOK_PROMPT.format(n=len(chapters), text=full, evidence=block),
-        lambda w: compile_book(w, evidence_ids=evidence)[2])
-    core, wcs, errors = compile_book(book, evidence_ids=evidence)
+    evidence = build_evidence(ctx.chapters, ctx.hook_copy)
+    prompt = book_observation_prompt(chapters=ctx.chapters, hook_copy=ctx.hook_copy,
+                                     evidence=evidence)
+    wire, book_ref = ctx.ask(
+        'book', prompt,
+        lambda w: compile_book_observation(w, evidence=evidence)[1])
+    observation, errors = compile_book_observation(wire, evidence=evidence)
     if errors:
         raise ValueError(errors)
-    # core 落为正式派生产物：names／preserve 的单节点输入从盘面闭合。
-    repository.write('stage2/compiled/book_extraction.json', core,
+    repository.write('stage2/observations/book.json', observation,
                      owners=('book',), refs=(book_ref,))
-    compiler, compiled, snapshots = ChapterCompiler(core, evidence_ids=evidence), [], {}
-    chapter_refs: list = []
-    for chapter in chapters:
+    return {'characters': len(observation.characters),
+            'initial_state': len(observation.initial_state),
+            'world_constraints': len(observation.world_constraints)}
+
+
+def _chapter_evidence(evidence: dict, chapter: int) -> dict:
+    """第 k 章的证据句段闭集：本章句段；第 1 章另见章前文字（e00）。"""
+    return {k: v for k, v in evidence.items()
+            if v['chapter'] == chapter or (chapter == 1 and v.get('pre_chapter'))}
+
+
+def run_chapters(ctx: ChainContext) -> dict:
+    """`str06.stage2.chapters`：逐章并行观察——只含章内局部句柄（D3）。
+
+    输入是本章句段、第 1..k-1 章原文、书级人物表（盘上 book 观察）与抽取
+    协议；**第 k 章请求不依赖任何前章产物**（没有快照、登记表与 beat 表），
+    前章编译或关联失败不改变后章请求。逐章停：失败定位到该章 item，已落盘
+    的章观察保持有效，恢复按请求身份重放、不重购已存结果（I-30/I-31）。
+    """
+    repository = ctx.repository
+    book = repository.read_model('stage2/observations/book.json')
+    evidence = build_evidence(ctx.chapters, ctx.hook_copy)
+    observed: list[int] = []
+    for chapter in ctx.chapters:
         no = chapter['chapter_ordinal']
-        request = chapter_extraction_prompt(
-            chapter=no, book_characters=book['characters'], core=core,
-            world_constraints=wcs, compiled=compiled, compiler=compiler,
-            evidence=evidence, prior_text=_prior_text(chapters, no))
-        snapshots[str(no)] = request.snapshot
-        wire, ch_ref = ctx.ask(f'ch{no:02d}', request.prompt,
-                               lambda w: compiler.validate(w, no))
-        chapter_refs.append(ch_ref)
-        bp, errors = compiler.compile(wire, no)
+        chapter_evidence = _chapter_evidence(evidence, no)
+        prompt = chapter_observation_prompt(chapter=no, book=book,
+                                            chapters=ctx.chapters,
+                                            evidence=chapter_evidence)
+        wire, ch_ref = ctx.ask(
+            f'ch{no:02d}', prompt,
+            lambda w, ev=chapter_evidence: compile_chapter_observation(
+                w, evidence_ids=frozenset(ev))[1])
+        observation, errors = compile_chapter_observation(
+            wire, evidence_ids=frozenset(chapter_evidence))
         if errors:
-            raise ValueError(errors)
-        compiled.append(bp)
-    blueprint = assemble_blueprint(wcs, compiled)
-    refs = (book_ref, *chapter_refs)
-    repository.write('stage2/blueprints/chapter_blueprints.json', blueprint,
-                     owners=('book', *(ref.owner for ref in chapter_refs)), refs=refs)
-    repository.write('stage2/compiled/input_snapshots.json', snapshots,
-                     refs=refs, claim_usage=False)
-    # fold 的结构化只读读数：事件＋每章空转移拍比例（D7）＋书末未揭示 concealed。
-    fold = source_fold(core, blueprint, pre_chapter_evidence=pre_chapter,
-                       proposition_registry=compiler.proposition_registry())
-    repository.write('stage2/acceptance/fold.json', {
-        'events': fold.events, 'chapters': fold.chapter_stats,
-        'concealed_unrevealed': fold.concealed_unrevealed},
-        refs=refs, claim_usage=False)
-    return {'chapters': len(compiled), 'fold_events': fold.events}
+            # 缺陷定位到章 item（I-31）：不污染其余章的合法结果。
+            raise ValueError(f'第{no}章观察校验失败：{errors}')
+        repository.write(str06_chapter_observation_rel(no), observation,
+                         owners=(f'ch{no:02d}',), refs=(ch_ref,))
+        observed.append(no)
+    return {'chapters': len(observed)}
 
 
 # ─── stage2 names ────────────────────────────────────────────────────────────
 
 def run_names(ctx: ChainContext) -> dict:
+    """`str06.stage2.names`：源名称结构观察（引擎不变，D9 只重挂输入）。
+
+    输入改挂书级观察（`stage2/observations/book.json` 的人物表投影）＋完整
+    MainText 与 hook_copy；名称结构 wire 落 `stage2/observations/names.json`。
+    Characters 的合并发布归 compile（S2-5 唯一 writer），本节点不再写
+    characters.json。
+    """
     repository = ctx.repository
-    core = repository.read_model('stage2/compiled/book_extraction.json')
+    book = repository.read_model('stage2/observations/book.json')
+    evidence = build_evidence(ctx.chapters, ctx.hook_copy)
+    core, errors = character_core_view(book, evidence=evidence)
+    if errors:
+        raise ValueError(errors)
     full = '\n'.join(f'〔第{c["chapter_ordinal"]}章〕\n{c["text"]}' for c in ctx.chapters)
     if ctx.hook_copy.strip():
         full = f'〔章前文字〕\n{ctx.hook_copy}\n\n' + full
@@ -323,11 +293,10 @@ def run_names(ctx: ChainContext) -> dict:
     structure, errors = compile_name_structure(names_wire, core, full)
     if errors:
         raise ValueError(errors)
-    chars, errors = merge_name_structure(core, structure)
-    if errors:
-        raise ValueError(errors)
-    repository.write('stage2/characters/characters.json', chars, owners=('names',),
-                     refs=(names_ref,))
+    observation = NamesObservation(protocol_version=STAGE2_OBSERVATION_PROTOCOL,
+                                   structure=structure)
+    repository.write('stage2/observations/names.json', observation,
+                     owners=('names',), refs=(names_ref,))
     return {'name_structure_people': len(structure.people)}
 
 
@@ -716,7 +685,8 @@ def run_assemble(ctx: ChainContext) -> dict:
 
 
 NODE_RUNNERS: dict[str, Callable[[ChainContext], dict]] = {
-    'str06.stage2.source': run_source,
+    'str06.stage2.book': run_book,
+    'str06.stage2.chapters': run_chapters,
     'str06.stage2.names': run_names,
     'str06.stage4.preserve': run_preserve,
     'str06.stage4.body_design': run_body_design,

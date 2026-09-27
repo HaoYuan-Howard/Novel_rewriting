@@ -9,11 +9,19 @@
 报价分别授权。**B2 前半（2026-09-27）已落地注册面**：`contracts/invariants.py::NODES`
 扩为 14 个公开节点（Stage2 五节点，`str06.stage2.source` 退役），观察与关联协议
 （`contracts/schema/observation.py`）与 Resolver（`novel/stages/stage2/resolver.py`）
-落地，冻结基线随 B2 重新钉定（`a0f5fb5e…`，`tests/test_str06_f7e_freeze.py`）；
-`novel/stages/chain.py` 的旧接线（11 节点 runner 与付费 owner 映射）由 B2 后续提交
-改齐。F8a 激活基线契约身份 `04b6fb22…`、质量改进批次二批 2 后随 Design 换 rc5 更新为
-`7fb5ecfa…`（历史基线，见 Git 历史）。下文「目标」各节是 B1–B5 的实施依据；
-「现役实装」各节描述切换期仍然有效的契约与落点，B2 起逐批由目标形态取代。
+落地，冻结基线随 B2 重新钉定（`a0f5fb5e…`，`tests/test_str06_f7e_freeze.py`）。
+**B2 第二步（2026-09-27）已落地 book／chapters 接线**：`novel/stages/stage2/book.py`
+（书级观察 owner：闭集、`R-2.10` 锚点、`R-2.8` canonical 闭合）与
+`novel/stages/stage2/chapters.py`（逐章观察 owner：本章证据闭集、`R-2.14` 作用域
+归一、章内句柄纪律；请求互不依赖 D3）两 owner 引擎入列，`chain.py` 的
+`run_source` 与派生输入 `stage2/compiled/book_extraction.json` 写路退役，
+`run_names` 重挂书级观察输入（names 引擎不变，D9），付费 owner 记账映射
+（`_owner_unit`）改挂 `str06.stage2.book`／`str06.stage2.chapters`；
+`associate`／`compile` 的 runner 与 Stage4 改读 canonical 由 B2 后续提交闭合
+（切换期全链链路测试红是登记状态）。F8a 激活基线契约身份 `04b6fb22…`、质量改进
+批次二批 2 后随 Design 换 rc5 更新为 `7fb5ecfa…`（历史基线，见 Git 历史）。
+下文「目标」各节是 B1–B5 的实施依据；「现役实装」各节描述切换期仍然有效的契约
+与落点，B2 起逐批由目标形态取代。
 
 ## 目标总览：职责与数据流
 
@@ -255,17 +263,22 @@ seal → 标记采用（可由 seal 重建）。任一窗口中断优先免费�
 | `contracts/schema/dependency.py` | 新链依赖方向登记＋per-stage 模块 owner 规则 | 由 AST 对真实文件执行（`tests/test_str06_hook.py`） |
 | `contracts/schema/retirement.py` | F6d/F7e 退役登记（历史台账） | 双向对账；保留至 STR-06 关闭 |
 
-引擎落点（现役）：`novel/stages/stage2/source.py`（source 抽取＋Blueprint 编译＋fold）、
-`novel/stages/stage2/names.py`、`novel/stages/stage4/grounding.py`（preserve/bind）、
+引擎落点（现役）：`novel/stages/stage2/book.py`（book 观察 owner，B2 第二步）、
+`novel/stages/stage2/chapters.py`（chapters 观察 owner，B2 第二步）、
+`novel/stages/stage2/names.py`、`novel/stages/stage2/resolver.py`（证据定位唯一实现）、
+`novel/stages/stage2/source.py`（旧联合抽取引擎，接线完成后退役）、
+`novel/stages/stage4/grounding.py`（preserve/bind）、
 `novel/stages/stage4/design.py`、`novel/stages/stage5/hook.py`（hook design 与唯一
 graph publisher）、`novel/stages/stage4/compile.py`、`novel/stages/stage4/book_ir.py`、
 `novel/stages/stage5/hook_context.py`、`novel/stages/stage4/guard.py`、
 `novel/stages/stage5/body.py`（按章 writer）、`novel/stages/stage5/body_checks.py`、
 `novel/stages/stage5/hook_writer.py`、`novel/stages/stage7/naming.py`、
 `novel/stages/stage7/assembly.py`；跨 stage 共用原语与 renderer 住
-`novel/stages/common.py`；薄编排与设施装配住 `novel/stages/chain.py`（11 个 owner
-runner，生产入口 `novel.cli run <node> <sid>`）。B2–B4 的目标落点（Stage2 五 owner、
-Hook 代码归位 Stage4）由对应批次落地后回填本表。
+`novel/stages/common.py`；薄编排与设施装配住 `novel/stages/chain.py`（14 节点执行序；
+book／chapters／names 及 Stage4/5/7 的 12 个 runner 在位，`str06.stage2.associate`／
+`str06.stage2.compile` 两个 runner 由 B2 后续提交落地，生产入口
+`novel.cli run <node> <sid>`）。B2–B4 的其余目标落点（Hook 代码归位 Stage4）由
+对应批次落地后回填本表。
 
 依赖单向：Design 禁 Grounding 实现/Blueprint internals/checkpoint 裸读；Grounding 禁
 Design 实现；Compile/Context 禁 LLM 和草稿；Stage5 只消费 WriterIR/acceptance；Hook

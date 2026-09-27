@@ -147,7 +147,11 @@ def test_stage1_source_identity_covers_hook_copy(tmp_path):
 
 
 def test_changed_hook_copy_refuses_the_old_root_and_changes_requests(tmp_path):
-    """只改引子：候选根复校拒绝；book 与 ch01 的请求身份随之变化。"""
+    """只改引子：候选根复校拒绝；book 与 ch01 的观察请求随之变化（C 批，B2 换轨）。
+
+    B2 五节点（D3）：e00 证据只进书级观察与第 1 章观察；其余各章请求不因引子
+    变化（也不因任何前章产物变化）。
+    """
     from novel.llm.paid_requests import (
         ProvenanceRefused, digest, init_or_resume_candidate_workflow,
     )
@@ -156,19 +160,25 @@ def test_changed_hook_copy_refuses_the_old_root_and_changes_requests(tmp_path):
     chapters = [{'chapter_ordinal': 1, 'text': '云娘提出约定，夫君知晓真相。'},
                 {'chapter_ordinal': 2, 'text': '第二夜窗外有响动。'}]
     wires = {
-        'book': {'characters': {
+        'book': {'protocol_version': 'stage2-observation-v1', 'characters': {
             'fu_jun': {'canonical': '夫君', 'surfaces': [
-                {'surface': '夫君', 'from_chapter': 1, 'until_chapter': None,
-                 'source_refs': ['e01_01']}]},
+                {'surface': '夫君', 'source_refs': ['e01_01']}]},
             'yun': {'canonical': '云娘', 'surfaces': [
-                {'surface': '云娘', 'from_chapter': 1, 'until_chapter': None,
-                 'source_refs': ['e01_01']}]}},
+                {'surface': '云娘', 'source_refs': ['e01_01']}]}},
             'initial_state': [], 'world_constraints': []},
-        'ch01': v13_chapter(v13_beat('b01_01', '约定成立',
-                                     participants=('yun', 'fu_jun'))),
-        'ch02': v13_chapter(v13_beat('b02_01', '夜半响动', participants=('yun',),
-                                     source_refs=('e02_01',))),
+        'ch01': {'protocol_version': 'stage2-observation-v1', 'beats': [
+            {'event': '约定成立', 'participants': ['yun', 'fu_jun'],
+             'source_refs': ['e01_01'], 'scene_boundary': 'new',
+             'temporal_mode': 'single', 'effects': [], 'cognition': [],
+             'loops': []}]},
+        'ch02': {'protocol_version': 'stage2-observation-v1', 'beats': [
+            {'event': '夜半响动', 'participants': ['yun'],
+             'source_refs': ['e02_01'], 'scene_boundary': 'new',
+             'temporal_mode': 'single', 'effects': [], 'cognition': [],
+             'loops': []}]},
     }
+    stage2_nodes = ['str06.stage2.book', 'str06.stage2.chapters']
+
     def run(hook_copy):
         base = tmp_path / f'out_{abs(hash(hook_copy))}'
         base.mkdir(exist_ok=True)
@@ -177,6 +187,9 @@ def test_changed_hook_copy_refuses_the_old_root_and_changes_requests(tmp_path):
         prompts: dict[str, str] = {}
 
         def ask(owner, prompt, validate):
+            data = deepcopy(wires[owner])
+            errors = validate(data)
+            assert not errors, (owner, errors)
             prompts[owner] = prompt
             return deepcopy(wires[owner]), synthetic_ref(owner, prompt)
 
@@ -186,7 +199,7 @@ def test_changed_hook_copy_refuses_the_old_root_and_changes_requests(tmp_path):
                 AssertionError('本反例不跑文本 owner')),
             ask_body=lambda owner, prompt: (_ for _ in ()).throw(
                 AssertionError('本反例不跑正文 owner')),
-            budget=800, through='stage2', node_filter=['str06.stage2.source'])
+            budget=800, through='stage2', node_filter=stage2_nodes)
         return base, repo, prompts, report
 
     with_hook, repo_hook, prompts_hook, _ = run('新婚夜，夫君坦白借种之约。')

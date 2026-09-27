@@ -618,10 +618,9 @@ def test_build_evidence_splits_hook_copy_into_e00_segments():
 
 
 def test_pre_chapter_evidence_only_reaches_book_and_first_chapter():
-    """e00 只进书级调用与第 1 章 prompt 的证据面；其余各章不变。"""
-    from novel.stages.chain import _pre_chapter_evidence_ids
+    """e00 只进书级调用与第 1 章观察的证据面；其余各章不变（B2 换轨到五节点）。"""
     evidence = build_evidence([_CH01, _CH02], '引子第一句。引子第二句。')
-    pre = _pre_chapter_evidence_ids(evidence)
+    pre = {k for k, v in evidence.items() if v.get('pre_chapter')}
     assert pre and all(k.startswith('e00_') for k in pre)
     for no in (1, 2):
         visible = [k for k, v in evidence.items()

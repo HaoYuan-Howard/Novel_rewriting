@@ -105,12 +105,12 @@ _NODE_PREFIX = 'str06.'
 
 #: runner 词汇 owner → 节点 owner 末段。F7b 拆 owner runner 后各 owner 自持身份，
 #: 过渡期归属表 `STR06_OWNER_UNITS` 按退役登记删除（`docs/REQUIREMENTS.md`
-#: STR-06-F7b）：节点归属现在由 owner 名**当场解析**。这三个 owner 名与节点 owner
-#: 末段不同形（`book` 是 stage2.source 的书级调用、`design` 是
+#: STR-06-F7b）：节点归属现在由 owner 名**当场解析**。B2 五节点重建（D9）后
+#: `book` 即 `str06.stage2.book` 自身（旧「book 是 source 的书级调用」别名随
+#: 联合抽取退役）；这两个 owner 名与节点 owner 末段不同形（`design` 是
 #: stage4.body_design 的书级调用、`hook_writer` 的节点 owner 末段是 `hook`），
 #: 显式登记；其余 owner 名即节点 owner 末段（`names`→`stage2.names`）。
 _RUNNER_OWNER_ALIASES: Final[dict[str, str]] = {
-    'book': 'source',
     'design': 'body_design',
     'hook_writer': 'hook',
 }
@@ -310,19 +310,18 @@ def _execution_error(message: str, *, code: str, node: str, item: str,
 def _owner_unit(owner: str) -> tuple[str, str]:
     """owner → （候选节点 id, 工作单元 scope）。模块级纯解析（ref/错误构造共用）。
 
-    逐章 owner（`chNN`／`body_chNN`）带章序 scope；书级 owner 的 scope 沿用
-    runner 词汇（`book` 是 strategy，其余是 book）。节点归属由 owner 名当场
+    逐章 owner（`chNN`＝章观察、`body_chNN`＝按章成文）带章序 scope；书级
+    owner 的 scope 沿用 runner 词汇（B2 五节点起 `book` 即 str06.stage2.book，
+    `strategy` 整书单元随 str06.stage2.source 退役）。节点归属由 owner 名当场
     解析：别名表 → 节点 owner 末段 → `NODES` 的 `str06.` 命名空间，hit 不到
     就关闭式上抛，不猜一个节点记账。
     """
     match = re.fullmatch(r'ch(\d+)', owner)
     if match:
-        return 'str06.stage2.source', f'chapter:{int(match.group(1))}'
+        return 'str06.stage2.chapters', f'chapter:{int(match.group(1))}'
     match = re.fullmatch(r'body_ch(\d+)', owner)
     if match:
         return 'str06.stage5.body', f'chapter:{int(match.group(1))}'
-    if owner == 'book':
-        return 'str06.stage2.source', 'strategy'
     node = _OWNER_NODES.get(_RUNNER_OWNER_ALIASES.get(owner, owner))
     if node is None:
         raise ValueError(f'未登记付费 owner 的候选节点归属：{owner}')
