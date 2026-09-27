@@ -27,7 +27,7 @@ from contracts.schema.workflow import (
     BookBudgetGrantV1, BookContentBudgetV1, WorkflowManifestV6,
     WorkflowManifestV7, WorkflowManifestV8, WorkflowManifestV9, WorkUnitAttempt, WorkUnitBlobV1,
     WorkUnitContentTurn, WorkUnitGroupBlobV1, WorkUnitLedgerV2,
-    WorkUnitRegistryV1, WorkUnitProcessing,
+    WorkUnitRegistryV1, WorkUnitProcessing, CommitBundleV1, commit_bundle_seal,
 )
 from contracts.schema.work_unit_recovery import CommanderFailureRecoveryReceipt
 from novel import paths
@@ -36,6 +36,41 @@ from novel.errors import TerminalState
 
 if TYPE_CHECKING:
     from novel.run import RunContext
+
+
+def sealed_commit_bundles(root: Path) -> list[tuple[Path, CommitBundleV1]]:
+    """候选根 ``runtime/commit/`` 的全部已封存提交记录（seal 不符即关闭式拒绝）。
+
+    **采用状态从 seal 派生**（B1）：恢复路径据此判断哪些内容轮已被正式提交
+    采用；记录损坏不是「当它不存在」，而是显式停止。
+    """
+    from novel.errors import ProvenanceRefused
+
+    commit_dir = Path(root) / 'runtime' / 'commit'
+    if not commit_dir.is_dir():
+        return []
+    found: list[tuple[Path, CommitBundleV1]] = []
+    for path in sorted(commit_dir.rglob('*.json')):
+        payload = _read_json_dict(path)
+        if commit_bundle_seal(payload) != payload.get('seal'):
+            raise ProvenanceRefused(f'CommitBundle 记录 seal 不符：{path}')
+        found.append((path, CommitBundleV1.model_validate(payload)))
+    return found
+
+
+def _read_json_dict(path: Path) -> dict:
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f'JSON 重复键：{key}')
+            result[key] = value
+        return result
+
+    data = json.loads(path.read_text(encoding='utf-8-sig'), object_pairs_hook=unique)
+    if not isinstance(data, dict):
+        raise ValueError(f'CommitBundle 记录不是 JSON object：{path}')
+    return data
 
 
 class WorkUnitRefused(TerminalState):
@@ -667,7 +702,9 @@ class WorkUnitBudget:
             row = WorkUnitAttempt(attempt_id=attempt_id, outcome=outcome,
                                   provider_session_id=provider_session_id,
                                   request_fingerprint=(request_fingerprint or
-                                      (previous.request_fingerprint if previous else None)))
+                                      (previous.request_fingerprint if previous else None)),
+                                  response_sha256=(previous.response_sha256
+                                                   if previous else None))
             if previous is not None:
                 if previous == row:
                     return
@@ -675,6 +712,30 @@ class WorkUnitBudget:
                     raise WorkUnitRefused('网络尝试终态不能覆盖')
             attempts = tuple(a for a in turn.attempts if a.attempt_id != attempt_id) + (row,)
             self._replace(ledger, turn.model_copy(update={'attempts': attempts}))
+
+    def record_attempt_response(self, turn_id: str, attempt_id: str,
+                                payload: dict[str, Any]) -> str:
+        """原响应按 attempt 耐久存储并被 attempt 引用（ProviderAttempt 层，B1）。
+
+        blob 与既有响应证据同目录同形状（``WorkUnitBlobV1``，内容寻址）；引用
+        一经写入不可覆盖为另一份回答。空回答同样留证（failed attempt 的证据），
+        但不置轮级响应——空回答不占据请求身份（D5）。
+        """
+        with path_transaction_lock(self.path):
+            ledger = self._read()
+            turn = self._turn(ledger, turn_id)
+            found = [a for a in turn.attempts if a.attempt_id == attempt_id]
+            if len(found) != 1:
+                raise WorkUnitRefused('attempt 不属于当前内容轮')
+            blob = WorkUnitBlobV1(unit_id=self.unit_id, turn_id=turn_id, payload=payload)
+            digest = _digest(blob.model_dump(mode='json'))
+            if found[0].response_sha256 not in (None, digest):
+                raise WorkUnitRefused('同一 attempt 不能覆盖为另一个回答')
+            self._replace(ledger, turn.model_copy(update={'attempts': tuple(
+                a.model_copy(update={'response_sha256': digest})
+                if a.attempt_id == attempt_id else a for a in turn.attempts)}))
+            _write(self.base, self.directory / f'{digest}.json', blob)
+            return digest
 
     def save_response(self, turn_id: str, payload: dict[str, Any]) -> str:
         with path_transaction_lock(self.path):
@@ -760,6 +821,101 @@ class WorkUnitBudget:
                 or blob.unit_id != self.unit_id or blob.turn_id != turn_id):
             raise WorkUnitRefused('工作单元响应身份不一致')
         return blob.payload
+
+    # ── B1 执行设施：按请求身份的可用响应与同轮续发 ────────────────────────
+
+    def usable_response(self, request_sha256: str
+                        ) -> tuple[ContentReservation, dict[str, Any], str, str] | None:
+        """该请求身份最近一次**可用**的已交付回答（免费采用）。
+
+        只认 ``outcome='ok'`` 且非空的 attempt 响应：空回答以 failed attempt
+        留证，**不占据请求身份**（D5）——重跑同一请求身份必须能拿到新回答，
+        而不是免费读回同一空壳。返回 (reservation, payload, attempt_id,
+        response_sha256)。blob 缺失或身份漂移是坏账，关闭式拒绝。
+        """
+        with path_transaction_lock(self.path):
+            ledger = self._read()
+            for turn in reversed(ledger.turns):
+                if turn.request_sha256 != request_sha256:
+                    continue
+                for attempt in reversed(turn.attempts):
+                    if attempt.outcome != 'ok' or not attempt.response_sha256:
+                        continue
+                    blob = _read(self.base,
+                                 self.directory / f'{attempt.response_sha256}.json',
+                                 WorkUnitBlobV1)
+                    if (_digest(blob.model_dump(mode='json')) != attempt.response_sha256
+                            or blob.unit_id != self.unit_id
+                            or blob.turn_id != turn.turn_id):
+                        raise WorkUnitRefused('attempt 级响应证据身份漂移')
+                    payload = blob.payload
+                    response = payload.get('response') if isinstance(payload, dict) else None
+                    if (not isinstance(response, dict)
+                            or not (response.get('content') or '').strip()):
+                        raise WorkUnitRefused('ok attempt 的响应证据为空或损坏')
+                    return (ContentReservation(self.unit_id, turn.turn_id, turn.ordinal),
+                            payload, attempt.attempt_id, attempt.response_sha256)
+            return None
+
+    def open_turn(self, request_sha256: str) -> WorkUnitContentTurn | None:
+        """该请求身份仍未闭合的内容轮（崩溃后同轮续发；无则 None）。"""
+        ledger = self._read()
+        for turn in reversed(ledger.turns):
+            if turn.request_sha256 == request_sha256 and turn.state == 'reserved':
+                return turn
+        return None
+
+    def unknown_turn(self, request_sha256: str) -> WorkUnitContentTurn | None:
+        """该请求身份仍处于 unknown 的内容轮（先恢复对账，不自动重购）。"""
+        ledger = self._read()
+        for turn in reversed(ledger.turns):
+            if turn.request_sha256 == request_sha256 and turn.state == 'unknown':
+                return turn
+        return None
+
+    def attempts_of(self, turn_id: str) -> int:
+        return len(self._turn(self._read(), turn_id).attempts)
+
+    def attempt_request_payload(self, turn_id: str, attempt_id: str) -> dict[str, Any]:
+        """读取一次 attempt 的耐久原响应证据（含响应与请求工作包）。"""
+        turn = self._turn(self._read(), turn_id)
+        found = [a for a in turn.attempts if a.attempt_id == attempt_id]
+        if len(found) != 1 or not found[0].response_sha256:
+            raise WorkUnitRefused('attempt 缺耐久响应证据')
+        digest = found[0].response_sha256
+        blob = _read(self.base, self.directory / f'{digest}.json', WorkUnitBlobV1)
+        if (_digest(blob.model_dump(mode='json')) != digest
+                or blob.unit_id != self.unit_id or blob.turn_id != turn_id):
+            raise WorkUnitRefused('attempt 级响应证据身份漂移')
+        return blob.payload
+
+    def save_acceptance(self, turn_id: str, attempt_id: str,
+                        payload: dict[str, Any]) -> str:
+        """AcceptanceRecord 落为 attempt 级证据 blob（``accept_<attempt_id>.json``）。
+
+        取代候选根逐请求 ``validation_*.json``；证据按 attempt 寻址，幂等重写
+        同一 attempt 的同一份记录，不覆盖其它 attempt 的记录。
+        """
+        with path_transaction_lock(self.path):
+            ledger = self._read()
+            self._turn(ledger, turn_id)
+            blob = WorkUnitBlobV1(unit_id=self.unit_id, turn_id=turn_id, payload=payload)
+            digest = _digest(blob.model_dump(mode='json'))
+            _write(self.base, self.directory / f'accept_{attempt_id}.json', blob)
+            return digest
+
+    def acceptance_records(self) -> tuple[tuple[str, dict[str, Any]], ...]:
+        """读取本单元全部接受分项记录（按盘上文件名，损坏即拒绝）。"""
+        result: list[tuple[str, dict[str, Any]]] = []
+        if not self.directory.exists():
+            return ()
+        for path in sorted(self.directory.glob('accept_*.json')):
+            blob = _read(self.base, path, WorkUnitBlobV1)
+            if blob.unit_id != self.unit_id:
+                raise WorkUnitRefused('接受记录不属于当前工作单元')
+            attempt_id = path.stem.removeprefix('accept_')
+            result.append((attempt_id, blob.payload))
+        return tuple(result)
 
     def request_payload(self, turn_id: str) -> dict[str, Any]:
         turn = self.turn(turn_id)

@@ -8,7 +8,7 @@ from contracts.artifacts import STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT
 from novel.llm.ledger import CostLedger
 from novel.store import Str06Repository
 from novel.stages.chain import run_workflow
-from tests.str06_facilities import make_context, v13_beat, v13_chapter
+from tests.str06_facilities import make_context, synthetic_ref, v13_beat, v13_chapter
 from tests.test_str06_target import _source_pair, _preserve_wire, _design_wire
 
 
@@ -43,9 +43,7 @@ def test_stage2_stage4_repository_replay_and_writer_consumer(tmp_path):
         data = deepcopy(wires[owner])
         assert not validate(data), (owner, validate(data))
         requests.append((owner, prompt))
-        repo.context.note_adoption(owner=owner, model='fake',
-                                   prompts={'user': prompt})
-        return data
+        return data, synthetic_ref(owner, prompt)
     def ask_text(owner, prompt):
         raise AssertionError('stage4 干跑不应调用文本 owner')
     repo = Str06Repository(tmp_path / 'book')
@@ -180,9 +178,7 @@ def test_changed_hook_copy_refuses_the_old_root_and_changes_requests(tmp_path):
 
         def ask(owner, prompt, validate):
             prompts[owner] = prompt
-            repo.context.note_adoption(owner=owner, model='fake',
-                                       prompts={'user': prompt})
-            return deepcopy(wires[owner])
+            return deepcopy(wires[owner]), synthetic_ref(owner, prompt)
 
         report = run_workflow(
             repository=repo, chapters=chapters, hook_copy=hook_copy, ask=ask,
@@ -312,8 +308,7 @@ def test_concealed_fact_reaches_writer_as_pending_reader_confirmation(tmp_path):
         data = deepcopy(wires[owner])
         assert not validate(data), (owner, validate(data))
         requests.append((owner, prompt))
-        repo.context.note_adoption(owner=owner, model='fake', prompts={'user': prompt})
-        return data
+        return data, synthetic_ref(owner, prompt)
 
     report = run_workflow(
         repository=repo, chapters=[{'chapter_ordinal': 1,

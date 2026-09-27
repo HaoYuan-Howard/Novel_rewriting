@@ -210,7 +210,7 @@ print(canonical_sha256(p),canonical_sha256(contexts(g,b)['s01'][0]))
 
 
 def test_paid_response_durable_before_validation_and_reused(tmp_path):
-    from novel.llm.paid_requests import PaidRequestSession
+    from novel.llm.paid_requests import ExecutionError, PaidRequestSession, ask_json
     from novel.llm.transport import ChatRequest, ChatResponse
     from novel.llm.ledger import CostLedger, ledger_path, read_cost_snapshot
     from novel.store import Str06Repository
@@ -228,11 +228,11 @@ def test_paid_response_durable_before_validation_and_reused(tmp_path):
     request = ChatRequest(model='fake', system='s', user='u', reasoning_effort='high',
                           thinking=True, json_mode=True, max_tokens=50)
     with pytest.raises(ValueError, match='免费修复'):
-        session.ask('bind', request, lambda _: ['缺必保义务'])
+        ask_json(session, 'bind', request, lambda _: ['缺必保义务'])
     # 跨 session、同请求，免费重新校验已购原响应。
     session2 = PaidRequestSession(repo, CostLedger(path=ledger_path(tmp_path)), transport,
                                   provider='fake', sid='book')
-    assert session2.ask('bind', request, lambda _: []) == {'entries': []}
+    assert ask_json(session2, 'bind', request, lambda _: [])[0] == {'entries': []}
     assert transport.calls == 1
     rows, _ = read_cost_snapshot(tmp_path)
     assert len([r for r in rows if not r['cached']]) == 1
@@ -241,7 +241,7 @@ def test_paid_response_durable_before_validation_and_reused(tmp_path):
     assert rows[1]['prompt_tokens'] == rows[1]['completion_tokens'] == 0
     assert sum(row['completion_tokens'] for row in rows) == 20
     with pytest.raises(ValueError, match='--yes'):
-        session2.ask('bind', replace(request, user='changed'), lambda _: [])
+        ask_json(session2, 'bind', replace(request, user='changed'), lambda _: [])
 
 
 def test_same_root_owner_patch_bootstraps_and_version_mismatch_refuses(tmp_path):
@@ -304,7 +304,7 @@ def test_target_rc1_missing_semantics_is_rejected():
 
 @pytest.mark.parametrize('failure', ['transport', 'duplicate_json'])
 def test_failed_request_is_preserved_and_never_automatically_rebought(tmp_path, failure):
-    from novel.llm.paid_requests import PaidRequestSession
+    from novel.llm.paid_requests import ExecutionError, PaidRequestSession, ask_json
     from novel.llm.transport import ChatRequest, ChatResponse
     from novel.llm.ledger import CostLedger, ledger_path, read_cost_snapshot
     from novel.store import Str06Repository
@@ -324,10 +324,10 @@ def test_failed_request_is_preserved_and_never_automatically_rebought(tmp_path, 
                                  sid='book')
     request = ChatRequest(model='fake', system='s', user='u', reasoning_effort='high',
                           thinking=True, json_mode=True, max_tokens=50)
-    with pytest.raises((ValueError, TimeoutError)):
-        session.ask('design', request, lambda _: [])
-    with pytest.raises(ValueError):
-        session.ask('design', request, lambda _: [])
+    with pytest.raises(Exception, match='结果未知|形状失败'):
+        ask_json(session, 'design', request, lambda _: [])
+    with pytest.raises((ValueError, ExecutionError)):
+        ask_json(session, 'design', request, lambda _: [])
     assert transport.calls == 1
     rows, partial = read_cost_snapshot(tmp_path)
     assert not partial and len([r for r in rows if not r['cached']]) == 1

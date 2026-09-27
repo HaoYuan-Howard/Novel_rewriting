@@ -281,10 +281,19 @@ class WorkflowTransitionCompletedV1(FrozenModel):
 
 
 class WorkUnitAttempt(FrozenModel):
+    """ProviderAttempt 层：一次实际外发（每内容轮至多
+    `contracts/invariants.py::WORK_UNIT_MAX_DELIVERY_ATTEMPTS` 次）。
+
+    ``response_sha256`` 是**按 attempt 耐久存储的原响应**的引用（工作单元目录内
+    同名 blob）：原响应不再挂在请求身份名下——空回答以 ``failed`` attempt 留证，
+    不占据请求身份（D5）；``outcome='ok'`` 只授予非空回答。
+    """
+
     attempt_id: str = Field(min_length=1)
     outcome: Literal['started', 'ok', 'error', 'failed', 'unknown', 'not_started', 'interrupted']
     provider_session_id: str | None = None
     request_fingerprint: Sha256 | None = None
+    response_sha256: Sha256 | None = None
 
 
 class WorkUnitContentTurn(FrozenModel):
@@ -466,6 +475,103 @@ class BookContentBudgetV1(FrozenModel):
     @property
     def remaining(self) -> int:
         return self.ceiling + sum(g.additional for g in self.grants) - self.used
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# B1 执行设施：AcceptanceRecord 与 CommitBundle（运行记录五层的其余两层）
+#
+# 【五层与工作单元账的对齐】SemanticRequest＝工作单元 (node, scope)＋请求身份
+# （``WorkUnitContentTurn.request_sha256``＋请求工作包 blob）；ContentRevision＝
+# ``WorkUnitContentTurn``（内容轮额度沿用）；ProviderAttempt＝``WorkUnitAttempt``
+# （原响应按 attempt 存储并被 attempt 引用）。下面两个模型补齐其余两层，取代候选根
+# 的逐请求 ``validation_*.json`` 与独立 ``adopt_*.json`` 写路
+# （映射表见 `docs/REQUIREMENTS.md`「候选根运行记录映射与删除条件」）。
+# ─────────────────────────────────────────────────────────────────────────────
+
+class AcceptanceRecordV1(FrozenModel):
+    """AcceptanceRecord 层：一次已交付响应（按 attempt）的接受分项记录。
+
+    解析、救回（D5）、引用解析、编译与机械验证的分项结果落在这里；语义判定
+    **恒 ``unver``**（I-42：未经标定的语义保持未验证，不冒充通过）。取代候选根
+    逐请求的 ``runtime/validation_<身份>.json``。
+    """
+
+    schema_version: Literal[1] = 1
+    node: str = Field(min_length=1)
+    scope: str = Field(min_length=1)
+    owner: str = Field(min_length=1)
+    #: 历史／wire 采用没有工作单元内容轮（turn_id 为空）；新购必填于运行时。
+    turn_id: str = ''
+    attempt_id: str = Field(min_length=1)
+    request_sha256: Sha256
+    mode: Literal['json', 'text']
+    parse: Literal['ok', 'failed', 'empty']
+    #: D5 空回答救回：``reasoning``＝空回答从 reasoning 整段救回；文本调用恒 none。
+    salvage: Literal['none', 'reasoning'] = 'none'
+    errors: tuple[str, ...] = ()
+    accepted: bool
+    semantic: Literal['unver'] = 'unver'
+    created_at: int = Field(ge=0)
+
+
+class CommitInputRef(FrozenModel):
+    """输入清单的一条边：键与盘上字节指纹（与 `InputEdge.file` 同一 10 位指纹）。"""
+
+    key: str = Field(min_length=1)
+    fingerprint: str = Field(pattern=r'^[0-9a-f]{10}$')
+
+
+class CommitAdoptionRef(FrozenModel):
+    """CommitBundle 里的采用证据：指向被采用响应的精确 ProviderAttempt。"""
+
+    owner: str = Field(min_length=1)
+    node: str = Field(min_length=1)
+    request_sha256: str = Field(default='', min_length=0)
+    unit_id: str = Field(default='', min_length=0)
+    turn_id: str = Field(default='', min_length=0)
+    attempt_id: str = Field(default='', min_length=0)
+    response_sha256: str = Field(default='', min_length=0)
+    model: str = Field(min_length=1)
+    #: 历史采用／owner patch 的证据边界（cost_link 三档、patch 基线身份与理由）。
+    historical: dict[str, Any] | None = None
+    patch: dict[str, Any] | None = None
+
+
+class CommitOutputRef(FrozenModel):
+    key: str = Field(min_length=1)
+    sha256: Sha256
+
+
+class CommitBundleV1(FrozenModel):
+    """CommitBundle 层：一次正式提交的记录（输入清单、采用证据、输出摘要与 seal）。
+
+    ``seal`` 是除 seal 外全部字段的确定性摘要：**采用状态从 seal 派生**——一条
+    内容轮被某份已封存 bundle 的 ``adoptions`` 引用即视为已采纳，不再依赖进程内
+    窗口或独立 adopt 文件（映射表见 REQUIREMENTS）。落盘于候选根
+    ``runtime/commit/``，随根自定位；seal 不符即记录损坏，关闭式拒绝。
+    """
+
+    schema_version: Literal[1] = 1
+    node: str = Field(min_length=1)
+    artifact: str = Field(min_length=1)
+    artifact_sha256: Sha256
+    inputs: tuple[CommitInputRef, ...] = ()
+    adoptions: tuple[CommitAdoptionRef, ...] = ()
+    outputs: tuple[CommitOutputRef, ...] = ()
+    run_id: str = Field(min_length=1)
+    created_at: int = Field(ge=0)
+    seal: Sha256
+
+
+def commit_bundle_seal(payload: dict[str, Any]) -> str:
+    """CommitBundle 的 seal：除 ``seal`` 外全部字段的确定性 SHA-256（纯函数）。"""
+    import hashlib
+    import json
+
+    material = {key: value for key, value in payload.items() if key != 'seal'}
+    return hashlib.sha256(json.dumps(material, ensure_ascii=False, sort_keys=True,
+                                     separators=(',', ':'), allow_nan=False)
+                          .encode('utf-8')).hexdigest()
 
 
 # ─────────────────────────────────────────────────────────────────────────────

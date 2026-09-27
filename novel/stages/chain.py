@@ -45,8 +45,8 @@ from contracts.schema.hook import HookConstraints, HookReceipt
 from contracts.schema.workflow import STR06_RUNTIME_CONFIG
 from novel.config import load_config
 from novel.llm.paid_requests import (
-    PaidRequestSession, PurchaseRequired, digest,
-    init_or_resume_candidate_workflow,
+    ExecutionError, PaidRequestSession, PurchaseRequired, AdoptionRef, digest,
+    ask_json, ask_text_once, init_or_resume_candidate_workflow,
 )
 from novel.llm.transport import ChatRequest, DeepSeekTransport
 from novel import paths, prov
@@ -106,11 +106,17 @@ FINAL_STATUS = {'stage2': 'names_applied', 'stage4': 'planned_validated',
 
 @dataclass
 class ChainContext:
-    """一次链执行的显式依赖：repository、付费边界回调与运行参数。"""
+    """一次链执行的显式依赖：repository、付费边界回调与运行参数。
+
+    B1：付费回调返回**耐久响应引用**——`ask` 返回 ``(data, ref)``，`ask_text`
+    返回 ``(text, errors, ref)``，`ask_body` 返回带 ``ref`` 的 `AnsweredText`；
+    runner 把本次写盘实际依据的引用显式传给 `repository.write(refs=...)`，
+    provenance 与 CommitBundle 由引用纯函数构造（无进程内共享采用窗口）。
+    """
 
     repository: Any
-    ask: Callable[[str, str, Callable], Any]
-    ask_text: Callable[[str, str], tuple[str | None, list[str], str]]
+    ask: Callable[[str, str, Callable], tuple[Any, Any]]
+    ask_text: Callable[[str, str], tuple[str | None, list[str], Any]]
     ask_body: Callable[[str, str], AnsweredText]
     chapters: list[dict]
     #: 章前文字（源引子）：Stage6 退役后 hook_copy 的唯一消费者是 Stage2.source
@@ -257,16 +263,17 @@ def run_source(ctx: ChainContext) -> dict:
     if ctx.hook_copy.strip():
         full = f'〔章前文字〕\n{ctx.hook_copy}\n\n' + full
     block = '\n'.join(f'[{k}] {v["text"]}' for k, v in evidence.items())
-    book = ctx.ask('book', BOOK_PROMPT.format(n=len(chapters), text=full, evidence=block),
-                   lambda w: compile_book(w, evidence_ids=evidence)[2])
+    book, book_ref = ctx.ask(
+        'book', BOOK_PROMPT.format(n=len(chapters), text=full, evidence=block),
+        lambda w: compile_book(w, evidence_ids=evidence)[2])
     core, wcs, errors = compile_book(book, evidence_ids=evidence)
     if errors:
         raise ValueError(errors)
     # core 落为正式派生产物：names／preserve 的单节点输入从盘面闭合。
     repository.write('stage2/compiled/book_extraction.json', core,
-                     owners=('book', 'ch01', 'ch02', 'ch03', 'ch04', 'ch05', 'ch06',
-                             'ch07', 'ch08', 'ch09', 'ch10', 'ch11'))
+                     owners=('book',), refs=(book_ref,))
     compiler, compiled, snapshots = ChapterCompiler(core, evidence_ids=evidence), [], {}
+    chapter_refs: list = []
     for chapter in chapters:
         no = chapter['chapter_ordinal']
         request = chapter_extraction_prompt(
@@ -274,20 +281,26 @@ def run_source(ctx: ChainContext) -> dict:
             world_constraints=wcs, compiled=compiled, compiler=compiler,
             evidence=evidence, prior_text=_prior_text(chapters, no))
         snapshots[str(no)] = request.snapshot
-        wire = ctx.ask(f'ch{no:02d}', request.prompt, lambda w: compiler.validate(w, no))
+        wire, ch_ref = ctx.ask(f'ch{no:02d}', request.prompt,
+                               lambda w: compiler.validate(w, no))
+        chapter_refs.append(ch_ref)
         bp, errors = compiler.compile(wire, no)
         if errors:
             raise ValueError(errors)
         compiled.append(bp)
     blueprint = assemble_blueprint(wcs, compiled)
-    repository.write('stage2/blueprints/chapter_blueprints.json', blueprint)
-    repository.write('stage2/compiled/input_snapshots.json', snapshots)
+    refs = (book_ref, *chapter_refs)
+    repository.write('stage2/blueprints/chapter_blueprints.json', blueprint,
+                     owners=('book', *(ref.owner for ref in chapter_refs)), refs=refs)
+    repository.write('stage2/compiled/input_snapshots.json', snapshots,
+                     refs=refs, claim_usage=False)
     # fold 的结构化只读读数：事件＋每章空转移拍比例（D7）＋书末未揭示 concealed。
     fold = source_fold(core, blueprint, pre_chapter_evidence=pre_chapter,
                        proposition_registry=compiler.proposition_registry())
     repository.write('stage2/acceptance/fold.json', {
         'events': fold.events, 'chapters': fold.chapter_stats,
-        'concealed_unrevealed': fold.concealed_unrevealed})
+        'concealed_unrevealed': fold.concealed_unrevealed},
+        refs=refs, claim_usage=False)
     return {'chapters': len(compiled), 'fold_events': fold.events}
 
 
@@ -301,15 +314,16 @@ def run_names(ctx: ChainContext) -> dict:
         full = f'〔章前文字〕\n{ctx.hook_copy}\n\n' + full
     names_prompt = pack_prompt(NAMES_RULES, characters=core.model_dump(mode='json'),
                                text=full)
-    names_wire = ctx.ask('names', names_prompt,
-                         lambda w: compile_name_structure(w, core, full)[1])
+    names_wire, names_ref = ctx.ask(
+        'names', names_prompt, lambda w: compile_name_structure(w, core, full)[1])
     structure, errors = compile_name_structure(names_wire, core, full)
     if errors:
         raise ValueError(errors)
     chars, errors = merge_name_structure(core, structure)
     if errors:
         raise ValueError(errors)
-    repository.write('stage2/characters/characters.json', chars, owners=('names',))
+    repository.write('stage2/characters/characters.json', chars, owners=('names',),
+                     refs=(names_ref,))
     return {'name_structure_people': len(structure.people)}
 
 
@@ -329,13 +343,18 @@ def run_preserve(ctx: ChainContext) -> dict:
                                  provider=ctx.provider, model=ctx.model,
                                  request_sha256=ctx.digest(preserve_prompt))
 
-    pw = ctx.ask('preserve', preserve_prompt, lambda w: preserve_compile(w)[1])
+    pw, preserve_ref = ctx.ask('preserve', preserve_prompt,
+                               lambda w: preserve_compile(w)[1])
     checkpoint, errors = preserve_compile(pw)
     if errors:
         raise ValueError(errors)
-    repository.write('runtime/preserve_checkpoint.json', checkpoint, owners=('preserve',))
+    repository.write('runtime/preserve_checkpoint.json', checkpoint,
+                     owners=('preserve',), refs=(preserve_ref,))
     brief, identities = project_brief(checkpoint, core)
-    repository.write('stage4/grounding/reconstruction_brief.json', brief)
+    # reconstruction_brief 是同一份付费产出（Preserve checkpoint）投影出的
+    # 第二个 key：生成事实继承，用量不再认领同一批 attempt 行。
+    repository.write('stage4/grounding/reconstruction_brief.json', brief,
+                     refs=(preserve_ref,), claim_usage=False)
     return {'obligations': len(checkpoint.obligations)}
 
 
@@ -360,12 +379,13 @@ def run_body_design(ctx: ChainContext) -> dict:
             registered_surfaces={cid: {s.surface for s in c.surfaces}
                                  for cid, c in chars.characters.items()})
 
-    dw = ctx.ask('design', design_prompt, lambda w: design_compile(w)[1])
+    dw, design_ref = ctx.ask('design', design_prompt, lambda w: design_compile(w)[1])
     body, errors = design_compile(dw)
     if errors:
         raise ValueError(errors)
     # BodyDesign 落为正式派生产物：bind／hook_design 的单节点输入从盘面闭合。
-    repository.write('stage4/design/body_design.json', body, owners=('design',))
+    repository.write('stage4/design/body_design.json', body, owners=('design',),
+                     refs=(design_ref,))
     return {'scenes': len(body.scenes)}
 
 
@@ -381,7 +401,7 @@ def run_bind(ctx: ChainContext) -> dict:
                                            for o in checkpoint.obligations])
     # 校验闸在节点自身（不在 ask 回调）：机械闸拦下的稿要落到本产物的
     # .INVALID 孪生上（typed witness），ask 只负责取回并耐久原响应。
-    bw = ctx.ask('bind', bind_prompt, lambda w: [])
+    bw, bind_ref = ctx.ask('bind', bind_prompt, lambda w: [])
     binding, errors = assemble_binding(bw, checkpoint, positions)
     if errors:
         # Binding INVALID＋typed witness：机械闸拦下的稿进 .INVALID 孪生
@@ -389,9 +409,11 @@ def run_bind(ctx: ChainContext) -> dict:
         # 停在该 owner——不静默放行、不自动重购（I-34／Q-13）。
         repository.write_invalid(
             'stage4/grounding/semantic_binding.json',
-            {'wire': bw, 'errors': list(errors)}, problems=tuple(errors))
+            {'wire': bw, 'errors': list(errors)}, problems=tuple(errors),
+            refs=(bind_ref,))
         raise ValueError(f'bind 机械校验失败；INVALID 孪生已留证：{errors}')
-    repository.write('stage4/grounding/semantic_binding.json', binding, owners=('bind',))
+    repository.write('stage4/grounding/semantic_binding.json', binding,
+                     owners=('bind',), refs=(bind_ref,))
     return {'entries': len(binding.entries), 'unbound': len(binding.unbound)}
 
 
@@ -414,13 +436,14 @@ def run_hook_design(ctx: ChainContext) -> dict:
         return assemble_hook_design(w, body=body, known_char_ids=set(chars.characters),
                                     name_projection=projection)
 
-    hw = ctx.ask('hook_design', hook_design_prompt, lambda w: hook_design_compile(w)[1])
+    hw, hook_design_ref = ctx.ask('hook_design', hook_design_prompt,
+                                  lambda w: hook_design_compile(w)[1])
     hook, errors = hook_design_compile(hw)
     if errors:
         raise ValueError(errors)
     graph = publish_graph(body, hook)
     repository.write('stage4/design/presentation_graph.json', graph,
-                     owners=('design', 'hook_design'))
+                     owners=('design', 'hook_design'), refs=(hook_design_ref,))
     return {'materials': len(hook.materials)}
 
 
@@ -464,42 +487,52 @@ def run_compile(ctx: ChainContext) -> dict:
 
 # ─── stage5 hook ─────────────────────────────────────────────────────────────
 
-def _write_hook(hook_context, ask_text) -> tuple[str | None, list[dict], str]:
-    """单产 + 机械验 + 同 Context 有限重写（stage5 hook owner 的成文编排）。"""
+def _write_hook(hook_context, ask_text) -> tuple[str | None, list[dict], Any]:
+    """单产 + 机械验 + 同 Context 有限重写（stage5 hook owner 的成文编排）。
+
+    B1：空回答（响应为空）在**同一内容轮**内重发原始 Hook 请求（同请求身份 →
+    同轮下一 attempt，D5 不救回文本）；机械校验失败才构成修订（新请求身份、
+    新内容轮）。
+    """
     attempts: list[dict] = []
     errors: list[str] = []
-    identity = ''
+    ref = None
+    prose_seen = False
     for attempt in range(1 + MAX_REWRITES):
-        prompt = (build_hook_user_prompt(hook_context) if attempt == 0
+        prompt = (build_hook_user_prompt(hook_context) if not prose_seen
                   else build_rewrite_user_prompt(hook_context, errors))
-        prose, response_errors, answered = ask_text('hook_writer', prompt)
-        identity = answered
+        prose, response_errors, answered_ref = ask_text('hook_writer', prompt)
+        ref = answered_ref if answered_ref is not None else ref
         if prose is None:
             errors = response_errors or ['响应为空']
             attempts.append({'attempt': attempt + 1, 'chars': 0, 'errors': errors})
             continue
+        prose_seen = True
         errors = validate_hook_prose(prose, hook_context)
         attempts.append({'attempt': attempt + 1, 'chars': len(prose), 'errors': errors})
         if not errors:
-            return prose, attempts, identity
-    return None, attempts, identity
+            return prose, attempts, ref
+    return None, attempts, ref
 
 
 def run_hook(ctx: ChainContext) -> dict:
     repository = ctx.repository
     hook_context = repository.read_model('stage4/context/hook/hook.json')
-    prose, attempts_log, attempt_identity = _write_hook(hook_context, ctx.ask_text)
+    prose, attempts_log, hook_ref = _write_hook(hook_context, ctx.ask_text)
     status = 'hook_accepted_mechanical' if prose is not None else 'hook_rejected'
     receipt = HookReceipt(
         hook_context_sha256=context_sha256(hook_context),
         prose_sha256=sha256_text(prose or ''),
-        request_identity=attempt_identity,
+        request_identity=(hook_ref.request_sha256 if hook_ref is not None
+                          else 'unidentified'),
         validator_version=HOOK_VALIDATOR_VERSION,
         status='accepted' if prose is not None else 'rejected',
         mechanical_checks=MECHANICAL_CHECKS)
     if prose is not None:
         repository.write_text('stage5/hook/hook.txt', prose)
-    repository.write('stage5/hook/receipt.json', receipt, owners=('hook_writer',))
+    repository.write('stage5/hook/receipt.json', receipt, owners=('hook_writer',),
+                     refs=(hook_ref,) if hook_ref is not None and prose is not None
+                     else ())
     repository.write('runtime/hook_attempts.json', {'attempts': attempts_log})
     if prose is None:
         repository.write('runtime/workflow_status.json',
@@ -582,7 +615,8 @@ def run_body(ctx: ChainContext) -> dict:
         # 原子写正文 → 原子写章回执（提交完成）；拒绝候选留证在 attempts 记录。
         repository.write_text(f'stage5/body/{_chapter_ordinal(ordinal)}.txt', outcome.prose)
         repository.write(f'stage5/acceptance/body/{_chapter_ordinal(ordinal)}.json',
-                         outcome.receipt, owners=(f'body_{_chapter_ordinal(ordinal)}',))
+                         outcome.receipt, owners=(f'body_{_chapter_ordinal(ordinal)}',),
+                         refs=(outcome.ref,) if outcome.ref is not None else ())
         committed[ordinal] = outcome.prose
         committed_receipts[ordinal] = outcome.receipt.model_dump(mode='json')
     body_complete = len(committed) == len(writer_ir.chapters)
@@ -599,11 +633,12 @@ def run_naming(ctx: ChainContext) -> dict:
     blueprint = repository.read_model('stage2/blueprints/chapter_blueprints.json')
     naming_prompt = pack_prompt(NAMING_RULES, book_title=ctx.book_title,
                                 projection=naming_projection(chars, blueprint))
-    nw = ctx.ask('naming', naming_prompt, lambda w: compile_name_map(w, chars)[1])
+    nw, naming_ref = ctx.ask('naming', naming_prompt, lambda w: compile_name_map(w, chars)[1])
     name_map, errors = compile_name_map(nw, chars)
     if errors:
         raise ValueError(errors)
-    repository.write('stage7/naming/name_map.json', name_map, owners=('naming',))
+    repository.write('stage7/naming/name_map.json', name_map, owners=('naming',),
+                     refs=(naming_ref,))
     return {'entries': len(name_map.entries)}
 
 
@@ -735,6 +770,10 @@ def run_chain(ctx: ChainContext, *, through: str = 'stage4',
                 pass
             status.update({'status': 'failed', 'failed_node': node_id,
                            'failure_kind': type(exc).__name__, 'detail': str(exc)})
+            if isinstance(exc, ExecutionError):
+                # 执行设施统一错误形状：stage/node/item/phase/code/context（I-36）。
+                status.update(exc.as_status())
+                status['failed_node'] = exc.node or node_id
             repository.write('runtime/workflow_status.json', status)
             raise
         if node_id == 'str06.stage5.body':
@@ -1034,18 +1073,23 @@ def execute(args) -> None:
             reasoning_effort=args.reasoning_effort, enforce=not args.wire_dir)
 
     def adopt(owner, path, validate, *, system, prompt, json_mode, temperature):
+        """wire 采用：核验后落修订记录（ContentRevision 层），返回显式采用引用。"""
         if args.repair_manifest and (
                 owner not in adopted or Path(adopted[owner]['path']).resolve() != path.resolve()
                 or repository.file_sha256(path) != adopted[owner]['sha256']):
             raise ValueError(f'{owner} wire 不在已核实修订 manifest 内')
         raw = repository.read_external(path)
         errors = validate(raw)
-        record = {
-            'owner': owner, 'path': str(path.resolve()),
+        revision = {
+            'owner': owner, 'kind': 'wire_adoption', 'mode': 'wire-adoption',
+            'path': str(path.resolve()),
             'sha256': repository.file_sha256(path),
-            'new_paid_calls': 0, 'historical_usage': None, 'errors': errors}
+            'request_sha256': 'wire-adoption',
+            'new_paid_calls': 0, 'historical_usage': None, 'errors': errors,
+            'created_at': int(time.time())}
         if errors:
-            repository.write(f'runtime/adopt_{owner}.json', record)
+            revision['kind'] = 'wire_rejected'
+            repository.write(f'runtime/revisions/{owner}.json', revision)
             raise ValueError(f'{owner} 免费采用失败：{errors}')
         # F7a-3：wire 采用登记身份／成本绑定——注册源根有同请求身份已购行时三方
         # 绑定（身份／响应／成本），否则退到采用链（批次口径）或如实标未核。
@@ -1055,6 +1099,7 @@ def execute(args) -> None:
                                     temperature=temperature)
             identity = digest({'owner': owner, 'provider': session.provider,
                                'request': request.cache_payload()})
+            revision['request_sha256'] = identity
             allow_patch, patch_reason = False, None
             note_path = (args.wire_dir / f'{owner}_patch_note.json'
                          if args.wire_dir else None)
@@ -1064,15 +1109,30 @@ def execute(args) -> None:
                     raise ValueError(
                         f'{owner} patch note 的基线身份与当前请求不一致，拒绝采用')
                 allow_patch, patch_reason = True, note.get('reason')
-            record.update(session.bind_wire_adoption(owner, identity, path,
-                                                     allow_patch=allow_patch))
-            if patch_reason:
-                record['owner_patch_reason'] = patch_reason
-            model = record.get('model') or 'unknown'
-        repository.write(f'runtime/adopt_{owner}.json', record)
-        boundary.context.note_adoption(owner=owner, model=model,
-                                       prompts={'system': system, 'user': prompt})
-        return raw
+            bound = session.bind_wire_adoption(owner, identity, path,
+                                               allow_patch=allow_patch)
+            revision.update({
+                'mode': bound.get('mode'), 'cost_link': bound.get('cost_link'),
+                'source_root': bound.get('source_root'),
+                'attempt_id': bound.get('attempt_id'),
+                'model': bound.get('model'), 'owner_patch': bound.get('owner_patch', False),
+                'historical_usage': bound.get('historical_usage'),
+                'adoption_chain_verified': bound.get('adoption_chain_verified', False)})
+            if bound.get('owner_patch'):
+                # owner patch 是无外发的修订：绑定基线请求身份与修订说明。
+                revision['patch'] = {'baseline_request_sha256': identity,
+                                     'reason': patch_reason}
+            model = bound.get('model') or 'unknown'
+        repository.write(f'runtime/revisions/{owner}.json', revision)
+        ref = AdoptionRef(
+            owner=owner, model=model, prompts={'system': system, 'user': prompt},
+            request_sha256=revision['request_sha256'],
+            historical=({k: revision[k] for k in
+                         ('mode', 'cost_link', 'source_root', 'attempt_id',
+                          'historical_usage', 'new_paid_calls')
+                         if revision.get(k) is not None} if args.adopt_root else None),
+            patch=revision.get('patch'))
+        return raw, ref
 
     def wire_path(owner):
         if not args.wire_dir:
@@ -1083,40 +1143,44 @@ def execute(args) -> None:
     def ask(owner, prompt, validate):
         path = wire_path(owner)
         if path is not None:
-            return adopt(owner, path, validate, system=SYS, prompt=prompt,
-                         json_mode=True, temperature=0.3)
+            raw, ref = adopt(owner, path, validate, system=SYS, prompt=prompt,
+                             json_mode=True, temperature=0.3)
+            return raw, ref
         request = build_request(owner, prompt, json_mode=True, system=SYS, temperature=0.3)
-        return session.ask(owner, request, validate)
+        return ask_json(session, owner, request, validate)
 
     def ask_text(owner, prompt):
         path = wire_path(owner)
         if path is not None:
-            raw = adopt(owner, path, lambda w: [], system=HOOK_WRITER_SYSTEM,
-                        prompt=prompt, json_mode=False, temperature=0.7)
+            raw, ref = adopt(owner, path, lambda w: [], system=HOOK_WRITER_SYSTEM,
+                             prompt=prompt, json_mode=False, temperature=0.7)
             prose = (raw.get('prose') or '').strip() if isinstance(raw, dict) else ''
             if not prose:
                 raise ValueError(f'{owner} wire 文本为空')
-            return prose, [], 'wire-adoption'
+            return prose, [], ref
         request = build_request(owner, prompt, json_mode=False, system=HOOK_WRITER_SYSTEM,
                                 temperature=0.7)
-        answered = session.ask_answered(owner, request)
-        return answered.text, answered.errors, answered.identity
+        text, errors, answer = ask_text_once(session, owner, request)
+        return text, errors, answer.adoption_ref(
+            prompts={'system': HOOK_WRITER_SYSTEM, 'user': prompt})
 
     def ask_body(owner, prompt):
         path = wire_path(owner)
         if path is not None:
-            raw = adopt(owner, path, lambda w: [], system=BODY_WRITER_SYSTEM,
-                        prompt=prompt, json_mode=False, temperature=0.7)
+            raw, ref = adopt(owner, path, lambda w: [], system=BODY_WRITER_SYSTEM,
+                             prompt=prompt, json_mode=False, temperature=0.7)
             prose = (raw.get('prose') or '').strip() if isinstance(raw, dict) else ''
             if not prose:
                 raise ValueError(f'{owner} wire 文本为空')
             return AnsweredText(text=prose, finish_reason=None, identity='wire-adoption',
-                                cached=True)
+                                cached=True, ref=ref)
         request = build_request(owner, prompt, json_mode=False, system=BODY_WRITER_SYSTEM,
                                 temperature=0.7)
-        answered = session.ask_answered(owner, request)
-        return AnsweredText(text=answered.text, finish_reason=answered.finish_reason,
-                            identity=answered.identity, cached=answered.cached)
+        text, errors, answer = ask_text_once(session, owner, request)
+        return AnsweredText(text=text, finish_reason=answer.finish_reason,
+                            identity=answer.request_sha256, cached=answer.cached,
+                            ref=answer.adoption_ref(
+                                prompts={'system': BODY_WRITER_SYSTEM, 'user': prompt}))
 
     print(run_workflow(repository=repository, chapters=chapters, hook_copy=hook_copy,
                        ask=ask, ask_text=ask_text,

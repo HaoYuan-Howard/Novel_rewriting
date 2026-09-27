@@ -39,6 +39,9 @@ def _error_kind(*, status: int | None = None, exception_name: str = '') -> str:
     if isinstance(status, int):
         return 'server_error' if status >= 500 else 'http_error'
     name = exception_name.lower()
+    if 'read' in name and 'timeout' in name:
+        # 读超时＝请求已送达、响应未回：结果未知，不得当网络抖动重试（B1）。
+        return 'read_timeout'
     if 'timeout' in name:
         return 'timeout'
     if 'connect' in name:
@@ -283,7 +286,13 @@ def _retryable_http_status(status: int) -> bool:
 
 
 def _classify(e: Exception) -> TransportError:
-    """SDK 异常 → 该不该重试。**判定只有这一处**，调用方不许自己认措辞。"""
+    """SDK 异常 → 该不该重试。**判定只有这一处**，调用方不许自己认措辞。
+
+    B1（按是否已送达分类）：连接/DNS/TLS 失败与连接超时是**未送达**，可重试；
+    读超时是**已送达后结果未知**（``kind='read_timeout'``），重试会重复付费，
+    必须交由上层记 unknown。SDK 会把 httpx 超时包进 ``APIConnectionError``，
+    因此沿 ``__cause__`` 链认原始异常名。
+    """
     status = getattr(e, 'status_code', None) or getattr(e, 'status', None)
     name = type(e).__name__
     if isinstance(status, int):
@@ -291,10 +300,17 @@ def _classify(e: Exception) -> TransportError:
                               retryable=_retryable_http_status(status),
                               status=status,
                               kind=_error_kind(status=status, exception_name=name))
+    cause_names = []
+    cause = getattr(e, '__cause__', None)
+    while cause is not None and len(cause_names) < 5:
+        cause_names.append(type(cause).__name__)
+        cause = getattr(cause, '__cause__', None)
+    chain = ' '.join([name, *cause_names])
     # 没有状态码时只重试可识别的超时/连接异常；任意本地异常不能被当成网络抖动。
-    kind = _error_kind(exception_name=name)
-    return TransportError(f'{type(e).__name__}: {e}',
-                          retryable=kind in ('timeout', 'connection'), kind=kind)
+    # 沿异常链认原始名（SDK 把 httpx 超时包进 APIConnectionError）。
+    kind = _error_kind(exception_name=chain)
+    retryable = kind in ('timeout', 'connection')
+    return TransportError(f'{type(e).__name__}: {e}', retryable=retryable, kind=kind)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

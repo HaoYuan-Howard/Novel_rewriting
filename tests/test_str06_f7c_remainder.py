@@ -29,7 +29,9 @@ import pytest
 from contracts.schema.execution import EffectDomain
 from contracts.schema.hook import HookConstraints
 from novel.llm.ledger import CostLedger, ledger_path, read_cost_snapshot
-from novel.llm.paid_requests import PaidRequestSession, PurchaseRequired, digest
+from novel.llm.paid_requests import (
+    PaidRequestSession, PurchaseRequired, digest, ask_json,
+)
 from novel.stages.stage5.body_checks import (
     MAX_BODY_REWRITES, chapter_surface_releases, chapter_withheld_literals,
 )
@@ -293,8 +295,8 @@ def test_same_request_identity_is_purchased_once_across_consumers(tmp_path):
     transport = _Transport()
     base, repo, ledger, session = _session(tmp_path, transport)
     request = _request()
-    assert session.ask('bind', request, lambda _: []) == {'entries': []}
-    assert session.ask('bind', request, lambda _: []) == {'entries': []}
+    assert ask_json(session, 'bind', request, lambda _: [])[0] == {'entries': []}
+    assert ask_json(session, 'bind', request, lambda _: [])[0] == {'entries': []}
     assert transport.calls == 1, '同请求身份不得二次付费'
     rows, partial = read_cost_snapshot(base)
     assert not partial and len(rows) == 2
@@ -309,11 +311,11 @@ def test_adopted_request_replay_is_idempotent_without_double_count(tmp_path):
     """采用重放幂等：记录字节不变、零新购、候选根不出现任何实付行。"""
     root, identity, request = _source_root(tmp_path)
     base, repo, ledger, session = _candidate(tmp_path, root)
-    session.ask('bind', request, lambda _: [])
-    record_first = repo.inspect('runtime/adopt_bind.json')
+    ask_json(session, 'bind', request, lambda _: [])
+    record_first = repo.inspect('runtime/revisions/bind.json')
     rows_first, _ = read_cost_snapshot(base)
-    session.ask('bind', request, lambda _: [])
-    assert repo.inspect('runtime/adopt_bind.json') == record_first, '采用记录不得造重复实体'
+    ask_json(session, 'bind', request, lambda _: [])
+    assert repo.inspect('runtime/revisions/bind.json') == record_first, '采用记录不得造重复实体'
     rows_second, _ = read_cost_snapshot(base)
     assert len(rows_second) == len(rows_first) + 1
     assert all(r['cached'] and r['prompt_tokens'] == 0 and r['completion_tokens'] == 0
@@ -326,15 +328,16 @@ def test_tampered_local_request_row_blocks_replay_and_repurchase(tmp_path):
     transport = _Transport()
     base, repo, ledger, session = _session(tmp_path, transport)
     request = _request()
-    session.ask('bind', request, lambda _: [])
-    rel = ('runtime/request_'
-           + digest({'owner': 'bind', 'provider': 'fake',
-                     'request': request.cache_payload()}) + '.json')
-    row = repo.inspect(rel)
-    row['content'] = '{"entries": [{"被改": true}]}'
-    repo.path(rel).write_text(json.dumps(row, ensure_ascii=False), encoding='utf-8')
-    with pytest.raises(ValueError, match='内容损坏'):
-        session.ask('bind', request, lambda _: [])
+    answer = ask_json(session, 'bind', request, lambda _: [])[1]
+    # 新存储：耐久响应是工作单元账里的 attempt blob——篡改它（I-16 反例迁移）。
+    unit = WorkUnitBudget(base, 'book', 'str06.stage4.bind', 'executor', 'book')
+    turn = unit._read().turns[0]
+    blob_rel = unit.directory / f'{turn.response_sha256}.json'
+    payload = json.loads(blob_rel.read_text(encoding='utf-8'))
+    payload['payload']['response']['content'] = '{"entries": [{"被改": true}]}'
+    blob_rel.write_text(json.dumps(payload, ensure_ascii=False), encoding='utf-8')
+    with pytest.raises(Exception, match='漂移'):
+        ask_json(session, 'bind', request, lambda _: [])
     assert transport.calls == 1, '响应损坏不得触发第二次付费'
 
 

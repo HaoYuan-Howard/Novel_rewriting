@@ -34,6 +34,7 @@ import json
 import os
 import re
 import tempfile
+import time
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
@@ -2630,16 +2631,36 @@ class Str06Repository:
             f'候选产物 {rel} 的上游已过期（{changed}）；在生成或付费请求前拒绝消费。'
             '请先从对应 owner 重建当前候选根上的产物')
 
-    def write(self, rel: str, value: Any, *, owners: tuple[str, ...] | None = None) -> Path:
+    def write(self, rel: str, value: Any, *, owners: tuple[str, ...] | None = None,
+              refs: tuple = (), claim_usage: bool = True) -> Path:
+        """落盘一份产物；已登记 JSON 产物带来源账，付费产物须带显式采用引用。
+
+        `refs` 是 B1 的**显式采用引用**（`AdoptionRef`）：provenance 由纯函数按
+        引用构造，正式提交同时封存一份 CommitBundle（输入清单＋采用证据＋输出
+        摘要＋seal，落 `runtime/commit/`，采用状态从 seal 派生）。`owners` 保留
+        作调用方语义标注，不再充当采用窗口的过滤键。``claim_usage=False`` 用于
+        同一份付费产出的第二个 key（生成事实继承，用量不重复认领）。
+        """
         path = self.path(rel)
         path.parent.mkdir(parents=True, exist_ok=True)
         payload = value.model_dump(mode='json') if isinstance(value, BaseModel) else value
+        bundle = None
         if self.context is not None:
             spec = candidate_artifact(rel)
             if spec is not None and not spec.endswith('.txt'):
                 # 已登记产物落盘即带来源账；正文（text）的账在绑定它的回执上。
-                provenance = self.context.provenance_for(_writer_of(spec), rel, owners=owners)
+                provenance = self.context.provenance_for(_writer_of(spec), rel, refs=refs,
+                                                         claim_usage=claim_usage)
                 payload = {**payload, '_provenance': provenance.to_disk()}
+                if refs:
+                    bundle = self.context.commit_bundle(
+                        node=_writer_of(spec), rel=rel,
+                        artifact_sha256=hashlib.sha256(json.dumps(
+                            payload, ensure_ascii=False, indent=2,
+                            allow_nan=False).encode('utf-8')).hexdigest(),
+                        inputs=provenance.inputs, refs=tuple(refs),
+                        run_id=self.context.ledger.run_id,
+                        created_at=int(time.time()))
         elif candidate_artifact(rel) is not None:
             raise ProvenanceRefused(
                 f'{rel} 是已登记候选产物，但 repository 未附加上下文：'
@@ -2661,6 +2682,28 @@ class Str06Repository:
             Path(temporary).unlink(missing_ok=True)
         if path.read_bytes() != data:
             raise ValueError(f'RC 产物读回字节不一致：{rel}')
+        if bundle is not None:
+            # 先产物后封存：封存写失败时产物已在盘上，重跑免费重放会重新封存。
+            self._write_commit_bundle(bundle)
+        return path
+
+    def _write_commit_bundle(self, bundle: dict) -> Path:
+        """CommitBundle 原子落盘：``runtime/commit/<node>/<seal16>_<slug>.json``。"""
+        slug = Path(bundle['artifact']).stem
+        rel = f"runtime/commit/{bundle['node']}/{bundle['seal'][:16]}_{slug}.json"
+        path = self.path(rel)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        data = json.dumps(bundle, ensure_ascii=False, indent=2,
+                          allow_nan=False).encode('utf-8')
+        fd, temporary = tempfile.mkstemp(prefix='.rc-', suffix='.tmp', dir=path.parent)
+        try:
+            with os.fdopen(fd, 'wb') as stream:
+                stream.write(data)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, path)
+        finally:
+            Path(temporary).unlink(missing_ok=True)
         return path
 
     def write_text(self, rel: str, text: str) -> Path:
@@ -2724,7 +2767,8 @@ class Str06Repository:
             self.path(paths.rounds_dir_of(formal)), paths.stem_of(formal))
 
     def write_invalid(self, rel: str, value: Any, *,
-                      problems: tuple[str, ...], owners: tuple[str, ...] | None = None) -> Path:
+                      problems: tuple[str, ...], owners: tuple[str, ...] | None = None,
+                      refs: tuple = ()) -> Path:
         """被机械闸拦下的稿进 `.INVALID` 孪生：正式位不写，`gates_skipped` 留痕。
 
         先归档孪生上已有的历史轮次再覆写——归档是出事之后唯一能回去的那份，
@@ -2744,12 +2788,12 @@ class Str06Repository:
                 raise ProvenanceRefused(
                     f'{rel} 是已登记候选产物，但 repository 未附加上下文：'
                     '拒绝在无来源账的情况下写 INVALID 孪生')
-            provenance = self.context.provenance_for(_writer_of(spec), invalid, owners=owners)
+            provenance = self.context.provenance_for(_writer_of(spec), invalid, refs=refs)
             provenance = provenance.model_copy(update={'gates_skipped': list(problems)})
             payload = value.model_dump(mode='json') if isinstance(value, BaseModel) else value
             payload = {**payload, '_provenance': provenance.to_disk()}
             return self._write_payload(invalid, payload)
-        return self.write(invalid, value, owners=owners)
+        return self.write(invalid, value, owners=owners, refs=refs)
 
     def promote_invalid(self, rel: str) -> Path:
         """把 `.INVALID` 孪生提升为正式位（字节原样， provenance 不重铸）。

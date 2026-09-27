@@ -39,7 +39,7 @@ from novel.store import Str06Repository
 from novel.errors import PathRefused
 from novel.llm.ledger import CostLedger
 from novel.paths import check_rel_family
-from tests.str06_facilities import make_context, v13_beat, v13_chapter
+from tests.str06_facilities import synthetic_ref, make_context, v13_beat, v13_chapter
 
 H64 = 'a' * 64
 SRC = '苏芸娘嫁入陆家，唤夫君为陆大哥，苏姑娘陪嫁，陆兄迎娶。'
@@ -688,17 +688,14 @@ def test_through_stage7_full_chain_replay_and_authorization_gate(tmp_path):
             if owner not in wires:
                 raise PurchaseRequired(owner)
             counter.append(owner)
-            # 假 ask 也要履行付费边界的采用登记（provenance 的生成事实）。
-            repo.context.note_adoption(owner=owner, model='fake',
-                                       prompts={'user': prompt})
-            return deepcopy(wires[owner])
+            # 假 ask 也要返回显式采用引用（provenance 的生成事实来源）。
+            return deepcopy(wires[owner]), synthetic_ref(owner, prompt)
         return ask
 
     def make_text(repo):
         def ask_text(owner, prompt):
-            repo.context.note_adoption(owner=owner, model='fake',
-                                       prompts={'user': prompt})
-            return '苏芸娘望着空房。', [], 'wire-adoption'
+            return ('苏芸娘望着空房。', [],
+                    synthetic_ref(owner, prompt))
         return ask_text
 
     def ask_body(owner, prompt):

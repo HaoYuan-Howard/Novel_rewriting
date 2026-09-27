@@ -18,7 +18,9 @@ from novel.llm.paid_requests import open_candidate_epoch
 from contracts.schema.hook import HookConstraints
 from novel.errors import ProvenanceRefused, UpstreamStale
 from novel.llm.ledger import CostLedger, ledger_path, read_cost_snapshot
-from novel.llm.paid_requests import PaidRequestSession, PurchaseRequired
+from novel.llm.paid_requests import (
+    AdoptionRef, ExecutionError, PaidRequestSession, PurchaseRequired, ask_json,
+)
 from novel.llm.transport import ChatRequest, ChatResponse
 from novel.store import Str06Repository
 from novel.work_units import (
@@ -65,9 +67,9 @@ def test_registered_write_carries_provenance_by_node_cost(tmp_path):
 
 def test_llm_provenance_records_adopted_model_and_prompts(tmp_path):
     repo = _repo(tmp_path, node='str06.stage7.naming')
-    repo.context.note_adoption(owner='naming', model='deepseek-chat',
-                               prompts={'system': '系统', 'user': '用户'})
-    repo.write('stage7/naming/name_map.json', {'entries': []})
+    ref = AdoptionRef(owner='naming', model='deepseek-chat',
+                      prompts={'system': '系统', 'user': '用户'})
+    repo.write('stage7/naming/name_map.json', {'entries': []}, refs=(ref,))
     provenance = repo.inspect('stage7/naming/name_map.json')['_provenance']
     assert provenance['model'] == 'fake' and provenance['adopted_models'] == ['deepseek-chat']
     assert any(k.startswith('naming.') for k in provenance['prompts'])
@@ -76,7 +78,7 @@ def test_llm_provenance_records_adopted_model_and_prompts(tmp_path):
 
 def test_paid_write_without_adoption_evidence_is_refused(tmp_path):
     repo = _repo(tmp_path, node='str06.stage7.naming')
-    with pytest.raises(ProvenanceRefused, match='没有已采用响应'):
+    with pytest.raises(ProvenanceRefused, match='显式采用引用'):
         repo.write('stage7/naming/name_map.json', {'entries': []})
 
 
@@ -163,7 +165,7 @@ def _session(tmp_path, transport, *, yes=True, sid='book'):
 def test_new_call_takes_work_unit_turn_and_ledger_attribution(tmp_path):
     transport = _Transport()
     base, repo, ledger, session = _session(tmp_path, transport)
-    data = session.ask('bind', _request(), lambda _: [])
+    data, _answer = ask_json(session, 'bind', _request(), lambda _: [])
     assert data == {'entries': []}
     assert transport.calls == 1
     unit = WorkUnitBudget(base, 'book', 'str06.stage4.bind', 'executor', 'book')
@@ -176,18 +178,19 @@ def test_new_call_takes_work_unit_turn_and_ledger_attribution(tmp_path):
     assert row['node'] == 'str06.stage4.bind' and row['sid'] == 'book'
     assert row['cached'] is False and row['purpose'] == 'bind'
     assert row['prompt_tokens'] == 7 and row['completion_tokens'] == 20
-    # 产物采纳后轮次转 adopted，单元可继续取轮。
-    repo.write('stage4/grounding/semantic_binding.json', {'x': 1}, owners=('bind',))
-    assert unit._read().turns[0].state == 'adopted'
+    # 产物采纳后单元可继续取轮；采用状态由下一次取轮时从封存证据对账。
+    ask_json(session, 'bind', _request(user='第二个请求'), lambda _: [])
+    assert unit._read().turns[0].state == 'failed', '未封存轮在下一次 reserve 前关闭'
+    assert unit._read().turns[1].state == 'delivered'
 
 
 def test_cached_replay_costs_nothing_and_keeps_ledger_row(tmp_path):
     transport = _Transport()
     base, repo, ledger, session = _session(tmp_path, transport)
-    session.ask('bind', _request(), lambda _: [])
+    ask_json(session, 'bind', _request(), lambda _: [])
     session2 = PaidRequestSession(repo, CostLedger(path=ledger_path(base)), transport,
                                   provider='fake', sid='book')
-    assert session2.ask('bind', _request(), lambda _: []) == {'entries': []}
+    assert ask_json(session2, 'bind', _request(), lambda _: [])[0] == {'entries': []}
     assert transport.calls == 1, '同请求身份必须免费采用'
     rows, _ = read_cost_snapshot(base)
     assert len(rows) == 2 and rows[1]['cached'] is True
@@ -198,7 +201,7 @@ def test_unauthorized_new_call_stops_at_owner_without_touching_budget(tmp_path):
     transport = _Transport()
     base, repo, ledger, session = _session(tmp_path, transport, yes=False)
     with pytest.raises(PurchaseRequired, match='--yes'):
-        session.ask('bind', _request(), lambda _: [])
+        ask_json(session, 'bind', _request(), lambda _: [])
     assert transport.calls == 0
     assert read_book_budget(base, 'book') is None, '未授权不得建账'
 
@@ -206,17 +209,18 @@ def test_unauthorized_new_call_stops_at_owner_without_touching_budget(tmp_path):
 def test_unit_content_limit_and_unadopted_turn_close(tmp_path):
     transport = _Transport()
     base, repo, ledger, session = _session(tmp_path, transport)
-    for index in range(4):
-        session.ask('bind', _request(user=f'第{index}次'), lambda _: [])
+    answers = [ask_json(session, 'bind', _request(user=f'第{index}次'), lambda _: [])[1]
+               for index in range(4)]
     unit = WorkUnitBudget(base, 'book', 'str06.stage4.bind', 'executor', 'book')
     # 前三次新购都没有产物采纳：每次 reserve 前未采纳轮被 mark_rejected 关闭
     # （保留原回答、不返还轮次，对齐正式 continued_content_work 语义）。
     assert [t.state for t in unit._read().turns] == ['failed', 'failed', 'failed', 'delivered']
     with pytest.raises(WorkUnitBudgetExhausted, match='内容预算已耗尽'):
-        session.ask('bind', _request(user='第5次'), lambda _: [])
+        ask_json(session, 'bind', _request(user='第5次'), lambda _: [])
     # 第 5 次未取到轮：reserve 前未采纳轮已被关闭，四轮终态全 closed；
     # 生成事实不丢——产物的 provenance 完整记录窗口内四次采用的模型与 prompt。
-    repo.write('stage4/grounding/semantic_binding.json', {'x': 1}, owners=('bind',))
+    repo.write('stage4/grounding/semantic_binding.json', {'x': 1}, owners=('bind',),
+               refs=(answers[-1].ref,))
     assert [t.state for t in unit._read().turns] == ['failed'] * 4
     provenance = repo.inspect('stage4/grounding/semantic_binding.json')['_provenance']
     assert provenance['adopted_models'] == ['fake']
@@ -230,10 +234,10 @@ def test_unknown_turn_blocks_repurchase_until_reconciled(tmp_path):
 
     transport = Failing()
     base, repo, ledger, session = _session(tmp_path, transport)
-    with pytest.raises(TimeoutError):
-        session.ask('bind', _request(), lambda _: [])
-    with pytest.raises(ValueError, match='先恢复'):
-        session.ask('bind', _request(), lambda _: [])
+    with pytest.raises(ExecutionError, match='结果未知'):
+        ask_json(session, 'bind', _request(), lambda _: [])
+    with pytest.raises(ExecutionError, match='先恢复'):
+        ask_json(session, 'bind', _request(), lambda _: [])
     unit = WorkUnitBudget(base, 'book', 'str06.stage4.bind', 'executor', 'book')
     turn = unit._read().turns[0]
     assert turn.state == 'unknown' and turn.reason_code == 'TimeoutError'
@@ -242,16 +246,16 @@ def test_unknown_turn_blocks_repurchase_until_reconciled(tmp_path):
 def test_book_budget_gate_persists_across_sessions(tmp_path):
     transport = _Transport()
     base, repo, ledger, session = _session(tmp_path, transport)
-    session.ask('bind', _request(), lambda _: [])
+    ask_json(session, 'bind', _request(), lambda _: [])
     budget = read_book_budget(base, 'book')
     assert budget is not None and budget.used == 1
-    session.ask('bind', _request(user='再来'), lambda _: [])
+    ask_json(session, 'bind', _request(user='再来'), lambda _: [])
     assert read_book_budget(base, 'book').used == 2
     # 新 session 读同一份持久账：重启不重置已消耗额度（Q-10）。
     session2 = PaidRequestSession(repo, CostLedger(path=ledger_path(base)), transport,
                                   yes=True, allow_source_export=True, provider='fake',
                                   sid='book')
-    session2.ask('bind', _request(user='第三次'), lambda _: [])
+    ask_json(session2, 'bind', _request(user='第三次'), lambda _: [])
     assert read_book_budget(base, 'book').used == 3
 
 
@@ -359,9 +363,9 @@ def _candidate(tmp_path, adopt_root):
 def test_historical_adoption_zero_new_purchase_and_no_double_count(tmp_path):
     root, identity, request = _source_root(tmp_path)
     base, repo, ledger, session = _candidate(tmp_path, root)
-    data = session.ask('bind', request, lambda _: [])
+    data, _answer = ask_json(session, 'bind', request, lambda _: [])
     assert data == {'entries': []}
-    record = repo.inspect('runtime/adopt_bind.json')
+    record = repo.inspect('runtime/revisions/bind.json')
     assert record['mode'] == 'historical-adoption' and record['new_paid_calls'] == 0
     assert record['cost_link'] == 'ledger-row'
     assert record['historical_usage'] == {'prompt_tokens': 11, 'completion_tokens': 22,
@@ -373,8 +377,12 @@ def test_historical_adoption_zero_new_purchase_and_no_double_count(tmp_path):
     assert len(rows) == 1 and rows[0]['cached'] is True
     assert rows[0]['completion_tokens'] == 0, '历史实付不得在候选根重复计费'
     assert rows[0]['cache_policy'] == 'historical-adoption'
-    # provenance 的生成事实来自源行真实模型。
-    repo.write('stage4/grounding/semantic_binding.json', {'x': 1}, owners=('bind',))
+    # provenance 的生成事实来自源行真实模型（显式引用）。
+    repo.write('stage4/grounding/semantic_binding.json', {'x': 1}, owners=('bind',),
+               refs=(AdoptionRef(owner='bind', model='deepseek-flash',
+                                 prompts={'system': '系统', 'user': '用户'},
+                                 request_sha256=identity,
+                                 historical={'cost_link': 'ledger-row'}),))
     provenance = repo.inspect('stage4/grounding/semantic_binding.json')['_provenance']
     assert provenance['adopted_models'] == ['deepseek-flash']
 
@@ -382,15 +390,15 @@ def test_historical_adoption_zero_new_purchase_and_no_double_count(tmp_path):
 def test_historical_adoption_blocks_corrupted_evidence(tmp_path):
     root, identity, request = _source_root(tmp_path, tamper='content')
     base, repo, ledger, session = _candidate(tmp_path, root)
-    with pytest.raises(ValueError, match='内容损坏'):
-        session.ask('bind', request, lambda _: [])
+    with pytest.raises(ExecutionError, match='内容损坏'):
+        ask_json(session, 'bind', request, lambda _: [])
 
 
 def test_historical_adoption_blocks_identity_mismatch(tmp_path):
     root, identity, request = _source_root(tmp_path, tamper='identity')
     base, repo, ledger, session = _candidate(tmp_path, root)
-    with pytest.raises(ValueError, match='身份损坏'):
-        session.ask('bind', request, lambda _: [])
+    with pytest.raises(ExecutionError, match='身份损坏'):
+        ask_json(session, 'bind', request, lambda _: [])
 
 
 def test_historical_adoption_blocks_unknown_paid_status(tmp_path):
@@ -398,15 +406,15 @@ def test_historical_adoption_blocks_unknown_paid_status(tmp_path):
     # 抹掉源根成本账里的付费行：付费状态未知 → 拒绝采用。
     (tmp_path / 'source' / '_service' / 'ledger.jsonl').write_text('', encoding='utf-8')
     base, repo, ledger, session = _candidate(tmp_path, root)
-    with pytest.raises(ValueError, match='原成本关联'):
-        session.ask('bind', request, lambda _: [])
+    with pytest.raises(ExecutionError, match='原成本关联'):
+        ask_json(session, 'bind', request, lambda _: [])
 
 
 def test_unregistered_owner_falls_through_to_authorization(tmp_path):
     root, identity, request = _source_root(tmp_path)
     base, repo, ledger, session = _candidate(tmp_path, root)
     with pytest.raises(PurchaseRequired, match='--yes'):
-        session.ask('naming', request, lambda _: [])
+        ask_json(session, 'naming', request, lambda _: [])
 
 
 # ─── F7c 恢复职责：INVALID 留痕／owner 停止／同指纹熔断／崩溃补尾 ─────────────
@@ -457,7 +465,7 @@ def test_same_fingerprint_failure_never_rebuys(tmp_path):
     request = _request()
     for _ in range(3):
         with pytest.raises(ValueError, match='免费修复'):
-            session.ask('bind', request, lambda _: ['形状不合约定'])
+            ask_json(session, 'bind', request, lambda _: ['形状不合约定'])
     assert transport.calls == 1, '同指纹失败不得重复计费'
     rows, _ = read_cost_snapshot(base)
     # 缓存命中按 Q-11 每次记一行：1 行实付 + 2 行零 token 缓存，不重复计费。

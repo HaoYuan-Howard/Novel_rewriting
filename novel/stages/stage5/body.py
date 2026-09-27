@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Mapping, NamedTuple
+from typing import Any, Mapping, NamedTuple
 
 from contracts.schema.book_ir import WriterBookIR
 from contracts.schema.design import BodyDesign
@@ -33,12 +33,17 @@ from novel.stages.common import (
 
 
 class AnsweredText(NamedTuple):
-    """一次文本请求的已回答行：调用方（工具层）从 PaidRequestSession 取得。"""
+    """一次文本请求的已回答行：调用方（工具层）从 Runtime 取得。
+
+    ``ref`` 是 B1 的显式采用引用（`AdoptionRef`）：正式提交按它封存
+    CommitBundle；无 Runtime 的测试/合成路径可为 None。
+    """
 
     text: str | None
     finish_reason: str | None
     identity: str
     cached: bool
+    ref: Any = None
 
 
 class ChapterAttempt(NamedTuple):
@@ -59,6 +64,7 @@ class ChapterOutcome(NamedTuple):
     attempts: tuple[ChapterAttempt, ...]
     request_identity: str
     length_disclosed: bool
+    ref: Any = None
 
 
 def prior_body_text(committed: Mapping[int, str]) -> str:
@@ -107,15 +113,19 @@ def write_chapter(
     target = chapter.length_budget
 
     attempts: list[ChapterAttempt] = []
-    candidates: list[tuple[str, str, list[str]]] = []   # (identity, prose, errors)
+    candidates: list[tuple[str, str, list[str], Any]] = []   # (identity, prose, errors, ref)
     errors: list[str] = []
     identity = ''
+    previous: str | None = None   # 重写基线：最近一份非空回答（空回答不进基线）
     for attempt in range(1 + MAX_BODY_REWRITES):
-        prompt = (packet if attempt == 0
-                  else _rewrite_prompt(packet, candidates[-1][1], errors))
+        prompt = (packet if previous is None
+                  else _rewrite_prompt(packet, previous, errors))
         answered = ask(prompt)
         identity = answered.identity
         if answered.text is None:
+            # B1/D5：空回答计一次失败留证；重发同一份章包（同请求身份 → Runtime
+            # 在同一内容轮内续发下一 attempt），不再取上一稿（修复 candidates[-1]
+            # IndexError：重跑必然复现的现役缺陷）。
             errors = ['[non_empty] 响应为空']
             attempts.append(ChapterAttempt(attempt + 1, identity, answered.finish_reason,
                                            0, tuple(errors)))
@@ -129,13 +139,14 @@ def write_chapter(
             errors.append('[truncated] 响应被截断（finish_reason=length），不得作为成文')
         attempts.append(ChapterAttempt(attempt + 1, identity, answered.finish_reason,
                                        count_body_chars(prose), tuple(errors)))
-        candidates.append((identity, prose, errors))
+        candidates.append((identity, prose, errors, answered.ref))
+        previous = prose
         if not errors:
             return _outcome(prose, identity, attempts, book_ir, chapter_ordinal,
-                            prior, low, high, target, disclosed=False)
+                            prior, low, high, target, disclosed=False, ref=answered.ref)
 
     # 额度耗尽：通过全部硬检查的候选里按相对偏差最小、平局取较晚者。
-    legal = [(identity, prose) for identity, prose, errs in candidates
+    legal = [(identity, prose, ref) for identity, prose, errs, ref in candidates
              if not any(e.startswith(('[non_empty]', '[encoding]', '[no_wrapper]',
                                       '[withheld_literals]', '[truncated]'))
                         for e in errs)]
@@ -143,18 +154,20 @@ def write_chapter(
         return ChapterOutcome(prose=None, receipt=None,
                               attempts=tuple(attempts), request_identity=identity,
                               length_disclosed=False)
-    chosen_identity, chosen_prose = min(
+    chosen_identity, chosen_prose, chosen_ref = min(
         enumerate(legal),
         key=lambda item: (abs(count_body_chars(item[1][1]) - target) / target,
                           -item[0]))[1]
     disclosed = not (low <= count_body_chars(chosen_prose) <= high)
     return _outcome(chosen_prose, chosen_identity, attempts, book_ir,
-                    chapter_ordinal, prior, low, high, target, disclosed=disclosed)
+                    chapter_ordinal, prior, low, high, target, disclosed=disclosed,
+                    ref=chosen_ref)
 
 
 def _outcome(prose: str, identity: str, attempts: list[ChapterAttempt],
              book_ir: WriterBookIR, chapter_ordinal: int, prior: str,
-             low: int, high: int, target: int, *, disclosed: bool) -> ChapterOutcome:
+             low: int, high: int, target: int, *, disclosed: bool,
+             ref=None) -> ChapterOutcome:
     count = count_body_chars(prose)
     receipt = ChapterReceipt(
         chapter_ordinal=chapter_ordinal, book_ir_sha256=book_ir_sha256(book_ir),
@@ -169,4 +182,5 @@ def _outcome(prose: str, identity: str, attempts: list[ChapterAttempt],
             deviation_ratio=round((count - target) / target, 4)),
         length_disclosed=disclosed)
     return ChapterOutcome(prose=prose, receipt=receipt, attempts=tuple(attempts),
-                          request_identity=identity, length_disclosed=disclosed)
+                          request_identity=identity, length_disclosed=disclosed,
+                          ref=ref)

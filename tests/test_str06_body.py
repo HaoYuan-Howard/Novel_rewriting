@@ -368,36 +368,23 @@ def _make_session(tmp_path, wires, ceiling=None):
     return repo, session, transport
 
 
+def _candidates_base(repo):
+    return repo.root.parent
+
+
 def _fake_ask(session):
-    from novel.stages.common import SYS
-    def ask(owner, prompt, validate):
-        request = ChatRequest(model='fake', system=SYS, user=prompt,
-                              reasoning_effort='high', thinking=True,
-                              json_mode=True, max_tokens=1000)
-        return session.ask(owner, request, validate)
-    return ask
+    from tests.str06_facilities import json_ask
+    return json_ask(session)
 
 
 def _fake_text(session):
-    def ask_text(owner, prompt):
-        request = ChatRequest(model='fake', system='楔子写手', user=prompt,
-                              reasoning_effort='high', thinking=True,
-                              json_mode=False, max_tokens=1000)
-        answered = session.ask_answered(owner, request)
-        return answered.text, answered.errors, answered.identity
-    return ask_text
+    from tests.str06_facilities import text_ask
+    return text_ask(session)
 
 
 def _fake_body(session):
-    def ask_body(owner, prompt):
-        request = ChatRequest(model='fake', system='正文写手', user=prompt,
-                              reasoning_effort='high', thinking=True,
-                              json_mode=False, max_tokens=4000)
-        answered = session.ask_answered(owner, request)
-        from novel.stages.stage5.body import AnsweredText
-        return AnsweredText(answered.text, answered.finish_reason,
-                            answered.identity, answered.cached)
-    return ask_body
+    from tests.str06_facilities import body_ask
+    return body_ask(session)
 
 
 def _chapters():
@@ -437,10 +424,10 @@ def test_full_pipeline_to_delivery_and_free_recovery(tmp_path):
     receipt2 = repo.inspect('stage5/acceptance/body/ch02.json')
     assert receipt2['status'] == 'accepted'
     assert receipt2['length_disclosed'] is False
-    # 新购账：9 个 JSON owner + hook_writer + 2 章 body = 12 次新购
+    # 新购账：9 个 JSON owner + hook_writer + 2 章 body = 12 次外发（attempt 计数）
     assert len(transport.calls) == 12
-    admission = repo.read('runtime/admission.json')['new_calls']
-    assert admission == 12
+    from novel.work_units import read_book_budget
+    assert read_book_budget(_candidates_base(repo), 'run').used == 12, 'admission 平行计数已删，整书总闸是唯一准入账'
 
     # ── 同根恢复：零新调用、交付字节一致 ──
     calls_before = len(transport.calls)

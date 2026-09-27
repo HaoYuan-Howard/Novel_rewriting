@@ -362,7 +362,9 @@ def test_full_chain_from_http_upload_to_stage7_delivery(base, monkeypatch):
 
     # ⑥ fake transport 也走真实 reserve／记账：12 次新购、真实 token、节点归属正确。
     assert len(transport.calls) == 12
-    assert _read_json(book / 'runtime' / 'admission.json')['new_calls'] == 12
+    # B1：admission 平行计数退役，整书总闸（按 attempt 计数）是唯一准入账。
+    from novel.work_units import read_book_budget
+    assert read_book_budget(base, '联调样本_9001').used == 12
     rows = _ledger_rows(base)
     paid = [row for row in rows if not row['cached']]
     assert len(paid) == 12

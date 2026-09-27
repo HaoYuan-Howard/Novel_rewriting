@@ -131,6 +131,19 @@ ChapterWriterPacket
 
 ## 执行设施（目标；B1）
 
+**落地状态（2026-09-27，B1 前半）**：身份与记录层已落地——五层记录对齐工作单元账
+（`WorkUnitAttempt` 增 attempt 级响应引用；`AcceptanceRecordV1`／`CommitBundleV1`
+落 `contracts/schema/workflow.py`）、Runtime 改耐久响应引用
+（`novel/llm/paid_requests.py::DurableAnswer`／`send`，错误统一
+`ExecutionError` 带 stage/node/item/phase/code/context）、D5 空回答救回与同轮
+重试、provenance 显式引用纯函数构造（`AdoptionRef`＋
+`CostLedger.usage_for_attempt_rows` 精确 attempt 行聚合，删共享窗口与时间窗
+归账）、CommitBundle 封存落候选根 `runtime/commit/`（采用状态从
+seal 派生）、候选根 request/validation/admission/adopt 四类写路按映射表退役
+（额度按 attempt 计数已随多 attempt 落地；并发槽位、ExecutionProfile run 启动
+冻结与 effort 取值面归 B1 后半）。反例与完成条件见
+`tests/test_str06_runtime_records.py`。
+
 ### 身份与记录：对齐现有工作单元账，不另起第二套
 
 | 层 | 含义 | 落点 |
@@ -315,12 +328,14 @@ stage5/acceptance/body/ch{nn}.json
 stage5/hook/hook.txt、stage5/hook/receipt.json
 stage7/naming/name_map.json
 stage7/final/<书名>_rewriting.txt、stage7/final/delivery_manifest.json
-runtime/progress/、runtime/body_attempts_ch{nn}.json、runtime/admission.json
+runtime/progress/、runtime/body_attempts_ch{nn}.json、runtime/revisions/<owner>.json、
+runtime/commit/<node>/<seal16>_<artifact>.json
 ```
 
 正文与已购证据不可按「非 semantic truth」批量清理；kind 登记是删除政策的输入。
 运行记录五层（SemanticRequest／ContentRevision／ProviderAttempt／AcceptanceRecord/
-CommitBundle）在 B1 落地后取代候选根四类运行记录的写路（映射表见 REQUIREMENTS）。
+CommitBundle）已按 B1 前半落地，取代候选根四类运行记录（request／validation/
+admission／adopt）的写路（映射表见 REQUIREMENTS）；旧输出根的同类文件只读保留。
 
 ### 消费投影（现役六族）
 

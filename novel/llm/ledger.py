@@ -593,6 +593,11 @@ class CostLedger:
     #: 且 ``path=None`` 的测试/缓存路径同样必须保留这条联结。
     _request_fingerprints: dict[str, str] = field(default_factory=dict, repr=False)
 
+    #: 本 run 已记账 attempt 行的精确镜像（B1）：``usage_for_attempt_rows`` 在
+    #: 本 run 内直接用它聚合；跨 run 的行从盘上 JSONL 按 attempt_id 精确取出。
+    #: 与时间窗刻度无关——provenance 的成本只来自被显式引用的 attempt 行。
+    _attempt_rows: dict[str, dict[str, Any]] = field(default_factory=dict, repr=False)
+
     #: 本 run 的 ``attempt_id → 实际响应模型`` 精确索引。与请求指纹同一条联结：
     #: 内容闸只记 attempt id，产物来源账据此反查最终采纳的是 Flash 还是 Pro，
     #: 不能从 client 的主模型配置猜。
@@ -749,6 +754,12 @@ class CostLedger:
                         f'attempt_id={attempt_id} 同时指向两个 response_sha256：'
                         f'{previous_response!r} / {response_sha256!r}')
                 self._response_sha256s[attempt_id] = response_sha256
+                self._attempt_rows[attempt_id] = {
+                    'attempt_id': attempt_id, 'sid': sid, 'node': node,
+                    'purpose': purpose, 'request_fingerprint': request_fingerprint,
+                    'cached': cached,
+                    'prompt_tokens': prompt_tokens, 'completion_tokens': completion_tokens,
+                    'reasoning_tokens': reasoning_tokens}
 
             if cached:
                 self.calls_cached += 1
@@ -875,6 +886,66 @@ class CostLedger:
                     f'accepted attempt_id={attempt_id!r} 在本 run 的成本账里没有 model；'
                     '拒绝按 client 主模型估算')
             return value
+
+    def usage_for_attempt_rows(self, attempt_ids: Iterable[str], *, sid: str,
+                               node: str | None) -> Usage | None:
+        """按**精确 attempt 行**聚合用量（B1）；不依赖时间窗刻度与当前实例起点。
+
+        provenance 的成本只来自被显式引用的 attempt 行（I-17）：本 run 已记账的
+        行用内存镜像，其余（跨 run 免费采用的原购买行）从盘上 JSONL 按
+        ``attempt_id`` 精确取出。每个命中行都复核 sid/node/请求指纹；没有盘上
+        账本时缺行即关闭式拒绝，不按当前累计值猜。空集合返回 ``None``
+        （这份产物没有可归属的模型调用，不是 0）。
+        """
+        wanted: list[str] = []
+        for attempt_id in attempt_ids:
+            if not isinstance(attempt_id, str) or not attempt_id:
+                raise ProvenanceRefused('attempt usage 聚合含空 attempt_id')
+            if attempt_id not in wanted:
+                wanted.append(attempt_id)
+        if not wanted:
+            return None
+        rows: dict[str, dict[str, Any]] = {}
+        with self._lock:
+            for attempt_id in wanted:
+                row = self._attempt_rows.get(attempt_id)
+                if row is not None:
+                    rows[attempt_id] = row
+        missing = [a for a in wanted if a not in rows]
+        if missing:
+            if self.path is None:
+                raise ProvenanceRefused(
+                    f'attempt {sorted(missing)} 不在本 run 成本账且账本无盘上路径；'
+                    '拒绝按累计值或零猜它的成本')
+            for row in read_jsonl_rows(self.path):
+                attempt_id = row.get('attempt_id')
+                if isinstance(attempt_id, str) and attempt_id in missing:
+                    if attempt_id in rows:
+                        raise ProvenanceRefused(
+                            f'attempt {attempt_id} 在成本账重复出现')
+                    rows[str(attempt_id)] = row
+                    missing.remove(attempt_id)
+        if missing:
+            raise ProvenanceRefused(
+                f'被引用的 attempt {sorted(missing)} 不在成本账；拒绝把成本记成零')
+        counter = _UsageCounter()
+        for attempt_id in wanted:
+            row = rows[attempt_id]
+            if row.get('sid') != sid or row.get('node') != node:
+                raise ProvenanceRefused(
+                    f'attempt {attempt_id} 属于 sid/node='
+                    f'{row.get("sid")}/{row.get("node")}，与产物归属 {sid}/{node} 不一致；'
+                    '拒绝串账')
+            if row.get('cached') is True:
+                counter.calls_cached += 1
+            else:
+                counter.calls_made += 1
+            for key in TOKEN_KINDS:
+                value = row.get(key)
+                if isinstance(value, int) and not isinstance(value, bool):
+                    counter.tokens[key] += value
+                    counter.seen[key] += 1
+        return counter.usage()
 
     def attempt_ids_for(self, *, purpose: str,
                         request_fingerprints: Iterable[str]) -> tuple[str, ...]:
