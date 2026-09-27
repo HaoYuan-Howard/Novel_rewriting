@@ -320,7 +320,7 @@ Hook 的必要选择进入 Stage4 正式 Design（`R-5.6`），经 HookContext �
 |---|---|---|
 | R-10.1 | NameMap v5 编译闭合：名称位一致、无姓氏冲突、保留项合法（带理由）。 | `HARD`（`novel/stages/stage7/naming.py::compile_name_map`） |
 | R-10.2 | ApplyNames 单遍替换后旧名零残留（遵守 claimed/kept；目标名含旧字面不误报）。 | `HARD`（`novel/stages/stage7/naming.py::check_residual`）；残留 0 条不等于人名都换干净（替换覆盖率验不了），见 `B-21` |
-| R-10.3 | 章回执集合核对（D2，rc8）：逐章回执状态、当前编译出的章包摘要与正文 hash 三方绑定；集合齐备才装配就绪（not_ready 显式），某章失效不截断其他章有效性。 | `HARD`（`novel/stages/stage7/assembly.py::verify_chapter_receipts`） |
+| R-10.3 | 章回执集合核对（D2，rc8；B4 后半补五态）：逐章回执状态、当前编译出的章包摘要与正文 hash 三方绑定；有效／缺失／拒绝／未知／失效（绑定不成立的接受态回执）五态分开按 item 报告（I-42），不静默跳过；集合齐备才装配就绪（not_ready 显式，不落新交付），某章失效不截断其他章有效性。 | `HARD`（`novel/stages/stage7/assembly.py::verify_chapter_receipts`／`chapter_access`，共用 `_binding_problems`） |
 | R-10.4 | TXT 先落盘、manifest 最后提交；manifest 与文件 hash 逐字一致，消费者核对 manifest 才算就绪。 | `HARD`（`novel/stages/stage7/assembly.py::build_delivery_manifest`） |
 | R-10.5 | 同输入交付字节一致（确定性重放）；重放只允许缓存与登记的历史采用，零新购。 | `HARD`（`novel/stages/stage7/assembly.py::assemble_delivery`） |
 | R-10.6 | 新名的阅读质量未经语义评审，保持未评披露。 | `INFO`（`naming_quality_unver` 明示 `UNVER`，进交付披露）；新名质量没有确定性判据，见 `B-22` |

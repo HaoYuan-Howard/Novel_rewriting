@@ -178,6 +178,17 @@ ChapterWriterPacket
   全书 IR 与前文链（`R-7.4`、`R-10.3` 已改写）；Stage7 逐章核对回执与当前编译出的章包
   摘要一致（`novel/stages/stage7/assembly.py::verify_chapter_receipts`）、集合齐备，
   再按阅读序组装交付。
+- **已落地（2026-09-28，B4 后半）**：Stage7 集合核对升级为五态按 item 报告（I-42）——
+  `run_assemble` 逐章装载盘上回执与正文原样（`inspect`，不经 `_committed_set` 预过滤），
+  与当前编译出的章包摘要逐章核对（分类与逐条问题共用
+  `novel/stages/stage7/assembly.py::_binding_problems`）：有效／缺失／拒绝／未知／
+  失效（stale＝接受态回执但章包换版或正文脱钩，须重做、不是缺失）分开列进
+  `runtime/delivery/assembly_report.json`；not_ready 不落新交付、旧 manifest 原样。
+  乱序完成得到相同有序交付（组装按阅读序加章标记、身份按有序
+  `(chapter_ordinal, prose_sha256)` 派生，并发完成顺序不影响交付字节）；Hook 失败停
+  在 `str06.stage5.hook`，章提交与已交付字节原样保留，恢复输入后全链零新购复原。
+  顺带修复 Hook 拒绝回执写路在付费 provenance 闸下必被 `ProvenanceRefused` 拦下、
+  掩盖 typed 失败的缺陷（拒绝回执现引用实际 attempt；无已应答 attempt 不伪造写盘）。
 
 ## 执行设施（目标；B1）
 

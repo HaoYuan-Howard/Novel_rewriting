@@ -3,17 +3,20 @@
 """assembly —— Stage7 终态组装：章集合就绪、交付与身份（F5/F6；rc8 集合核对）。
 
 【就绪边界】
-`chapter_access` 按有效接受回执判断正文就绪，缺失／未知／拒绝分开列出（I-42）。
-没有覆盖全部目标章的有效回执时 `assemble_delivery` 显式返回 `not_ready`——调用
-方不得落任何 `stage7/final/` 正文产物；改名后 Hook 仍可写
+`chapter_access` 按盘上回执逐章分类就绪面（I-42 五态）：有效（accepted）／
+缺失（无回执）／拒绝（rejected）／未知（status 不可解）／失效（stale：状态
+accepted 但与当前章包摘要或正文 hash 绑定不成立）。五态互不吞并——失效不是
+缺失（回执在盘上，只是不再绑定当前编译），缺失也不是未知。没有覆盖全部目标
+章的有效回执时 `assemble_delivery` 显式返回 `not_ready` 并按 item 列出各态
+章序——调用方不得落任何 `stage7/final/` 正文产物；改名后 Hook 仍可写
 `runtime/delivery/hook_renamed.txt`（可重建派生）。
 
 【回执集合核对（D2，`R-10.3` 改写）】
 `verify_chapter_receipts` 逐章核对回执与**当前编译出的章包**：回执状态有效、
-章包摘要与当前投影一致、正文字节与回执绑定。各章独立有效（不再核对全书 IR
-与前文链）：章包变化的章单独失效重做，其余章的合法提交不受影响；集合齐备
-才装配就绪。消费者核对 manifest、当前输入及文件 hash，不能仅凭 TXT 存在
-宣称就绪。
+章包摘要与当前投影一致、正文字节与回执绑定（与 `chapter_access` 的失效分类
+共用同一逐章实现）。各章独立有效（不再核对全书 IR 与前文链）：章包变化的章
+单独失效重做，其余章的合法提交不受影响；集合齐备才装配就绪。消费者核对
+manifest、当前输入及文件 hash，不能仅凭 TXT 存在宣称就绪。
 
 【章标记与分章身份】
 成书按阅读序逐章加「第N章」一行（章号由系统添加，写手协议早已据此约定）；
@@ -43,41 +46,76 @@ ASSEMBLY_FORMAT_VERSION = 'str06-assembly-v2'
 
 
 class BodyAccess(NamedTuple):
-    """章级正文就绪判定：四态分开，不合并成布尔。"""
+    """章级正文就绪判定：五态分开，不合并成布尔（I-42）。"""
 
     accepted: tuple[int, ...]
     missing: tuple[int, ...]
     rejected: tuple[int, ...]
     unknown: tuple[int, ...]
+    #: 状态 accepted 但绑定不成立（章包重编译或正文脱钩）：回执在盘上、
+    #: 须重做，不是缺失。缺省分类（不给核对材料）恒为空。
+    stale: tuple[int, ...] = ()
 
     @property
     def ready(self) -> bool:
-        return bool(self.accepted) and not (self.missing or self.rejected or self.unknown)
+        return bool(self.accepted) and not (self.missing or self.rejected
+                                            or self.unknown or self.stale)
+
+
+def _binding_problems(
+    receipt: Mapping[str, Any], *, packet_sha256: str | None, prose: str | None,
+) -> list[str]:
+    """单章三方绑定核对（共用实现）：状态有效 → 章包摘要一致 → 正文 hash 一致。
+
+    与章序无关；`verify_chapter_receipts` 聚合为逐条文字报告（`R-10.3`），
+    `chapter_access` 据此把接受态回执分类为有效或失效。首个问题即返回：
+    章包已换版时正文脱钩与否不再追加（重做时一并闭合）。
+    """
+    if receipt.get('status') != 'accepted':
+        return [f'回执状态为 {receipt.get("status")!r}']
+    if packet_sha256 is None or receipt.get('packet_sha256') != packet_sha256:
+        return ['回执绑定的是另一版章包（章包已重编译）']
+    if prose is None or sha256_text(prose) != receipt.get('prose_sha256'):
+        return ['文本与回执 prose_sha256 脱钩']
+    return []
 
 
 def chapter_access(
     expected_ordinals: Iterable[int],
     receipts: Mapping[int, Mapping[str, Any]],
+    *,
+    packet_sha256_by_ordinal: Mapping[int, str] | None = None,
+    chapter_prose: Mapping[int, str] | None = None,
 ) -> BodyAccess:
-    """章序 → 回执 dict（含 status）判定就绪面。
+    """章序 → 盘上回执逐章分类就绪面（I-42 五态）。
 
     accepted=有效接受回执；missing=无回执；rejected=被拒回执；
-    unknown=回执存在但缺 status 或状态值不可解（不得当作通过）。
+    unknown=回执存在但缺 status 或状态值不可解（不得当作通过）；
+    stale=状态 accepted 但与当前编译出的章包摘要或正文 hash 绑定不成立
+    （失效须重做；与 `verify_chapter_receipts` 共用 `_binding_problems`）。
+    缺省只按 status 分类（`stale` 恒空）；同时给出 `packet_sha256_by_ordinal`
+    与 `chapter_prose` 时，接受态回执逐一核对三方绑定（Stage7 集合核对入口）。
     """
-    accepted, missing, rejected, unknown = [], [], [], []
+    accepted, missing, rejected, unknown, stale = [], [], [], [], []
+    verify = packet_sha256_by_ordinal is not None and chapter_prose is not None
     for ordinal in expected_ordinals:
         receipt = receipts.get(ordinal)
         if receipt is None:
             missing.append(ordinal)
             continue
-        status = receipt.get('status')
-        if status == 'accepted':
-            accepted.append(ordinal)
-        elif status == 'rejected':
+        if receipt.get('status') == 'accepted':
+            if verify and _binding_problems(
+                    receipt, packet_sha256=packet_sha256_by_ordinal.get(ordinal),
+                    prose=chapter_prose.get(ordinal)):
+                stale.append(ordinal)
+            else:
+                accepted.append(ordinal)
+        elif receipt.get('status') == 'rejected':
             rejected.append(ordinal)
         else:
             unknown.append(ordinal)
-    return BodyAccess(tuple(accepted), tuple(missing), tuple(rejected), tuple(unknown))
+    return BodyAccess(tuple(accepted), tuple(missing), tuple(rejected),
+                      tuple(unknown), tuple(stale))
 
 
 class DeliveryOutcome(NamedTuple):
@@ -105,17 +143,11 @@ def verify_chapter_receipts(
     """
     problems: list[str] = []
     for ordinal in sorted(receipts):
-        receipt = receipts[ordinal]
-        if receipt.get('status') != 'accepted':
-            problems.append(f'第{ordinal}章回执状态为 {receipt.get("status")!r}')
-            continue
-        expected = packet_sha256_by_ordinal.get(ordinal)
-        if expected is None or receipt.get('packet_sha256') != expected:
-            problems.append(f'第{ordinal}章回执绑定的是另一版章包（章包已重编译）')
-            continue
-        prose = chapter_prose.get(ordinal)
-        if prose is None or sha256_text(prose) != receipt.get('prose_sha256'):
-            problems.append(f'第{ordinal}章文本与回执 prose_sha256 脱钩')
+        for problem in _binding_problems(
+                receipts[ordinal],
+                packet_sha256=packet_sha256_by_ordinal.get(ordinal),
+                prose=chapter_prose.get(ordinal)):
+            problems.append(f'第{ordinal}章{problem}')
     return problems
 
 
@@ -196,8 +228,8 @@ def assemble_delivery(
     """
     if not chapter_prose or not body.ready:
         detail = 'body_not_implemented' if not chapter_prose else (
-            f"missing={list(body.missing)} rejected={list(body.rejected)} "
-            f"unknown={list(body.unknown)}")
+            f"missing={list(body.missing)} stale={list(body.stale)} "
+            f"rejected={list(body.rejected)} unknown={list(body.unknown)}")
         return DeliveryOutcome(
             status='not_ready', reason=detail, body=body, delivery_bytes=None,
             delivery_identity=None, hook_renamed_text=None)

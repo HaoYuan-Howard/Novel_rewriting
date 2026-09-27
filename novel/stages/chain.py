@@ -592,9 +592,13 @@ def run_hook(ctx: ChainContext) -> dict:
         mechanical_checks=MECHANICAL_CHECKS)
     if prose is not None:
         repository.write_text('stage5/hook/hook.txt', prose)
-    repository.write('stage5/hook/receipt.json', receipt, owners=('hook_writer',),
-                     refs=(hook_ref,) if hook_ref is not None and prose is not None
-                     else ())
+    if hook_ref is not None:
+        # 拒绝回执同样引用实际 attempt（拒绝结论以这些耐久响应为证）；付费节点
+        # 不写无引用产物（provenance 闸，B4 前实测：refs=() 在此路径必被
+        # ProvenanceRefused 拦下、typed 失败被掩盖）。无已应答 attempt 时不伪造
+        # 写盘——失败证据留在 attempts 记录与 run 状态，随后按 typed 失败上抛。
+        repository.write('stage5/hook/receipt.json', receipt, owners=('hook_writer',),
+                         refs=(hook_ref,))
     repository.write('runtime/hook_attempts.json', {'attempts': attempts_log})
     if prose is None:
         repository.write('runtime/workflow_status.json',
@@ -765,9 +769,31 @@ def run_assemble(ctx: ChainContext) -> dict:
     binding = repository.read_model('stage4/grounding/semantic_binding.json')
     receipt = repository.read_model('stage5/hook/receipt.json')
     prose = repository.read_text('stage5/hook/hook.txt')
+    # Stage7 集合核对（R-10.3）：逐章装载盘上回执与正文原样（inspect，不记来源
+    # 边、不经 _committed_set 预过滤——预过滤只能用于恢复补缺，不能替 Stage7
+    # 隐瞒盘上事实），再与当前编译出的章包摘要逐章核对。分类与逐条问题共用
+    # 同一逐章绑定实现（assembly._binding_problems）：有效/缺失/拒绝/未知/失效
+    # 五态分开（I-42），不一致或缺口按 item 报告，不静默跳过。
     digests = _packet_digests(writer_ir)
-    committed, committed_receipts = _committed_set(
-        repository, digests, len(writer_ir.chapters))
+    expected = range(1, len(writer_ir.chapters) + 1)
+    raw_receipts: dict[int, dict] = {}
+    raw_prose: dict[int, str] = {}
+    for ordinal in expected:
+        try:
+            raw_receipts[ordinal] = repository.inspect(
+                f'stage5/acceptance/body/{_chapter_ordinal(ordinal)}.json')
+        except FileNotFoundError:
+            continue
+        try:
+            raw_prose[ordinal] = repository.read_text(
+                f'stage5/body/{_chapter_ordinal(ordinal)}.txt')
+        except FileNotFoundError:
+            continue
+    access = chapter_access(expected, raw_receipts, packet_sha256_by_ordinal=digests,
+                            chapter_prose=raw_prose)
+    chapter_prose = {ordinal: raw_prose[ordinal] for ordinal in access.accepted}
+    chain_problems = verify_chapter_receipts(
+        raw_receipts, raw_prose, packet_sha256_by_ordinal=digests)
     replacements, errors = compile_surface_replacements(chars, name_map)
     if errors:
         raise ValueError(errors)
@@ -779,10 +805,6 @@ def run_assemble(ctx: ChainContext) -> dict:
     if residual:
         raise ValueError(f'Hook 改名残留：{residual}')
     repository.write_text('runtime/delivery/hook_renamed.txt', renamed_hook)
-    chapter_prose = {k: committed[k] for k in sorted(committed)}
-    access = chapter_access(range(1, len(writer_ir.chapters) + 1), committed_receipts)
-    chain_problems = verify_chapter_receipts(
-        committed_receipts, chapter_prose, packet_sha256_by_ordinal=digests)
     hook_sha = sha256_text(prose)
     outcome = assemble_delivery(
         chapter_prose=chapter_prose, body=access, hook_prose=prose,
@@ -790,7 +812,9 @@ def run_assemble(ctx: ChainContext) -> dict:
         hook_context_sha256=context_sha256(hook_context),
         replacements=replacements, kept_literals=kept_literals)
     report = {'mode': 'body+hook+naming', 'accepted_body': access.ready and not chain_problems,
-              'chapters': len(writer_ir.chapters), 'committed_chapters': sorted(committed),
+              'chapters': len(writer_ir.chapters),
+              'committed_chapters': sorted(access.accepted),
+              'body_access': {k: list(v) for k, v in access._asdict().items()},
               'scenes': len(graph.scenes), 'obligations': len(binding.obligations),
               'chain_problems': chain_problems,
               'hook': {'chars': len(prose), 'renamed_chars': len(renamed_hook),
@@ -805,7 +829,8 @@ def run_assemble(ctx: ChainContext) -> dict:
         manifest = build_delivery_manifest(
             delivery_identity=outcome.delivery_identity,
             final_text_sha256=repository.file_sha256(repository.path(final_rel)),
-            receipts=committed_receipts, chapter_prose=chapter_prose,
+            receipts={ordinal: raw_receipts[ordinal] for ordinal in access.accepted},
+            chapter_prose=chapter_prose,
             hook_prose_sha256=hook_sha,
             name_map_sha256=repository.file_sha256(
                 repository.path('stage7/naming/name_map.json')),

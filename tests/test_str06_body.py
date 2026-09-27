@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import re
+import time
 from copy import deepcopy
 
 import pytest
@@ -373,19 +374,21 @@ GOOD_CH2 = '夫君夜半离家，芸娘在他枕下发现玉佩，字迹陌生�
 class _RoutingTransport:
     """按 owner 路由的假 transport：JSON owner 走 wires，文本 owner 出正文。
 
-    `truncate` 指定的章 owner 返回 finish_reason=length（D6 截断即停反例）。
+    `truncate` 指定的章 owner 返回 finish_reason=length（D6 截断即停反例）；
+    `hook_text` 可替换 Hook 成文（Hook 失败反例用，默认原文）。
     """
 
-    def __init__(self, wires, truncate=()):
+    def __init__(self, wires, truncate=(), hook_text='苏芸娘望着空房。'):
         self.wires = wires
         self.truncate = tuple(truncate)
+        self.hook_text = hook_text
         self.calls: list[str] = []
 
     def send(self, request: ChatRequest) -> ChatResponse:
         owner = self._owner(request)
         self.calls.append(owner)
         if owner == 'hook_writer':
-            return ChatResponse(content='苏芸娘望着空房。', finish_reason='stop',
+            return ChatResponse(content=self.hook_text, finish_reason='stop',
                                 usage={'prompt_tokens': 10, 'completion_tokens': 5},
                                 model='fake')
         if owner.startswith('body_ch'):
@@ -430,8 +433,31 @@ class _RoutingTransport:
         raise AssertionError(f'无法路由的请求：{user[:80]}')
 
 
-def _make_session(tmp_path, wires, ceiling=None, truncate=(), name='out'):
-    transport = _RoutingTransport(wires, truncate=truncate)
+class _ReorderedTransport(_RoutingTransport):
+    """第 2 章提交先落盘、第 1 章才拿到响应的假 transport（乱序完成场景）。
+
+    等待发生在 transport 内（付费会话不跨 transport.send 持锁），第 2 章的
+    请求、提交不依赖第 1 章（D3/D2），因此不会死锁；60 秒保底把「乱序前提
+    未成立」变成显式失败而不是挂起。
+    """
+
+    def __init__(self, wires, wait_for):
+        super().__init__(wires)
+        self._wait_for = wait_for
+
+    def send(self, request: ChatRequest) -> ChatResponse:
+        if self._owner(request) == 'body_ch01':
+            deadline = time.monotonic() + 60.0
+            while not self._wait_for.exists():
+                if time.monotonic() > deadline:
+                    raise AssertionError('乱序前提不成立：第 2 章未先于第 1 章提交')
+                time.sleep(0.01)
+        return super().send(request)
+
+
+def _make_session(tmp_path, wires, ceiling=None, truncate=(), name='out', transport=None):
+    if transport is None:
+        transport = _RoutingTransport(wires, truncate=truncate)
     base = tmp_path / name
     base.mkdir(exist_ok=True)
     repo = Str06Repository(base / 'run')
@@ -477,14 +503,15 @@ def _ledger_purpose_counts(repo, purpose: str) -> int:
                and _json.loads(line).get('purpose') == purpose)
 
 
-def _run(repo, session, *, budget=2000, concurrency=4):
+def _run(repo, session, *, budget=2000, concurrency=4, node_filter=None, hook_max=360):
     return run_workflow(repository=repo, chapters=_chapters(),
                         ask=_fake_ask(session), ask_text=_fake_text(session),
                         ask_body=_fake_body(session),
                         budget=budget, through='stage7', book_title='报恩',
                         hook_constraints=HookConstraints(target_chars=10,
-                                                         hard_max_chars=360),
-                        length_band=(0.01, 0.05), concurrency=concurrency)
+                                                         hard_max_chars=hook_max),
+                        length_band=(0.01, 0.05), concurrency=concurrency,
+                        node_filter=node_filter)
 
 
 def test_full_pipeline_to_delivery_and_free_recovery(tmp_path):
@@ -624,3 +651,150 @@ def test_book_call_ceiling_stops_generation(tmp_path):
     with pytest.raises(ValueError, match='book-call-ceiling'):
         _run(repo, session)
     assert repo.read('runtime/workflow_status.json')['status'] == 'failed'
+
+
+# ───────────────────────── B4 后半：Stage7 集合核对、乱序交付与 Hook 失败 ──────
+
+def test_assemble_reports_stale_and_missing_per_item(tmp_path):
+    """Stage7 集合核对（R-10.3/I-42）：失效与缺失按 item 分开报告、不静默跳过。
+
+    某章章包摘要失效（回执在盘上、绑定旧章包）报 stale 而不是 missing；缺口
+    报 missing。not_ready 不落新交付（旧 manifest 原样保留，消费者仍以它为
+    准），他章合法提交不受影响；修复经同请求身份免费重放闭合，交付字节不变。
+    """
+    wires = _full_chain_wires()
+    repo, session, transport = _make_session(tmp_path, wires)
+    report = _run(repo, session)
+    assert report['assembly']['status'] == 'ready'
+    final_rel = 'stage7/final/报恩_rewriting.txt'
+    delivered = repo.path(final_rel).read_bytes()
+    manifest_before = repo.inspect('stage7/final/delivery_manifest.json')
+
+    # ── 某章章包摘要失效：回执在盘上但绑定旧章包 → stale（不是 missing）──
+    import json as _json
+    tampered = repo.inspect('stage5/acceptance/body/ch02.json')
+    tampered['packet_sha256'] = 'f' * 64
+    repo.path('stage5/acceptance/body/ch02.json').write_text(
+        _json.dumps(tampered, ensure_ascii=False), encoding='utf-8')
+    report2 = _run(repo, session, node_filter=('str06.stage7.assemble',))
+    assert report2['assembly']['status'] == 'not_ready'
+    assert 'stale=[2]' in report2['assembly']['reason'], report2['assembly']['reason']
+    assert report2['body_access']['stale'] == [2]
+    assert report2['body_access']['accepted'] == [1]
+    assert report2['accepted_body'] is False
+    assert report2['chain_problems'] == ['第2章回执绑定的是另一版章包（章包已重编译）']
+    # 盘面留证同按 item 报告；不落新交付，旧 manifest 原样（文件先落盘、manifest
+    # 最后提交的既存交付不被未就绪重跑触碰）
+    assert repo.inspect('runtime/delivery/assembly_report.json')['body_access']['stale'] == [2]
+    assert repo.path(final_rel).read_bytes() == delivered
+    assert repo.inspect('stage7/final/delivery_manifest.json') == manifest_before
+    # 他章的合法提交不受该章失效影响
+    assert repo.inspect('stage5/acceptance/body/ch01.json')['status'] == 'accepted'
+    # 修复：该章按有效提交集合重做，同请求身份免费重放，交付字节不变
+    calls_before = len(transport.calls)
+    report3 = _run(repo, session)
+    assert len(transport.calls) == calls_before
+    assert report3['assembly']['status'] == 'ready'
+    assert repo.path(final_rel).read_bytes() == delivered
+    assert repo.inspect('stage5/acceptance/body/ch02.json')['status'] == 'accepted'
+
+    # ── 缺口（无回执）：missing 按 item 报告；正文仍在盘上（合法提交未被破坏）──
+    repo.path('stage5/acceptance/body/ch01.json').unlink()
+    report4 = _run(repo, session, node_filter=('str06.stage7.assemble',))
+    assert report4['assembly']['status'] == 'not_ready'
+    assert 'missing=[1]' in report4['assembly']['reason'], report4['assembly']['reason']
+    assert report4['body_access']['missing'] == [1]
+    assert report4['body_access']['accepted'] == [2]
+    assert repo.read_text('stage5/body/ch01.txt') == GOOD_CH1
+    assert report4['chain_problems'] == []
+    # 补缺：同请求身份免费重放，集合重新齐备，交付不变
+    report5 = _run(repo, session)
+    assert len(transport.calls) == calls_before
+    assert report5['assembly']['status'] == 'ready'
+    assert repo.path(final_rel).read_bytes() == delivered
+
+
+def test_out_of_order_completion_yields_identical_ordered_delivery(tmp_path):
+    """乱序完成得到相同有序交付（I-40/R-10.10）。
+
+    第 2 章先提交落盘、第 1 章后提交：组装按阅读序加「第N章」标记、身份按
+    有序 (chapter_ordinal, prose_sha256) 派生——与按序完成的交付字节、身份、
+    manifest 完全一致（并发完成顺序不影响交付）。
+    """
+    wires = _full_chain_wires()
+    base = tmp_path / 'reordered'
+    base.mkdir()
+    transport_a = _ReorderedTransport(
+        deepcopy(wires),
+        wait_for=base / 'run' / 'stage5' / 'acceptance' / 'body' / 'ch02.json')
+    repo_a, session_a, _ = _make_session(tmp_path, wires, name='reordered',
+                                         transport=transport_a)
+    report_a = _run(repo_a, session_a)
+    assert report_a['assembly']['status'] == 'ready'
+    # 乱序前提成立：第 2 章回执先于第 1 章落盘
+    mt1 = repo_a.path('stage5/acceptance/body/ch01.json').stat().st_mtime
+    mt2 = repo_a.path('stage5/acceptance/body/ch02.json').stat().st_mtime
+    assert mt2 < mt1, (mt1, mt2)
+
+    repo_b, session_b, _ = _make_session(tmp_path, deepcopy(wires), name='ordered')
+    report_b = _run(repo_b, session_b)
+    assert report_b['assembly']['status'] == 'ready'
+    # 乱序完成与按序完成：相同有序交付（字节、身份、manifest 完全一致）
+    assert repo_a.path('stage7/final/报恩_rewriting.txt').read_bytes() == \
+        repo_b.path('stage7/final/报恩_rewriting.txt').read_bytes()
+    assert report_a['assembly']['delivery_identity'] == report_b['assembly']['delivery_identity']
+    manifest_a = repo_a.inspect('stage7/final/delivery_manifest.json')
+    manifest_b = repo_b.inspect('stage7/final/delivery_manifest.json')
+    assert manifest_a == manifest_b
+    assert [c['chapter_ordinal'] for c in manifest_a['chapters']] == [1, 2]
+
+
+def test_hook_failure_keeps_other_legal_commits_and_recovers_free(tmp_path):
+    """Hook 失败不破坏其他合法提交（I-31）：章提交与已交付字节原样保留。
+
+    Hook Design 输入变化 → 新 HookContext（章包摘要不变，章提交仍有效）；
+    Hook 写手在重写额度内机械不过 → 停在 `str06.stage5.hook`，正文/命名/
+    组装不被触碰；恢复原始输入后全链零新购，交付字节复原。
+    """
+    wires = _full_chain_wires()
+    repo, session, transport = _make_session(tmp_path, wires)
+    report = _run(repo, session)
+    assert report['assembly']['status'] == 'ready'
+    final_rel = 'stage7/final/报恩_rewriting.txt'
+    delivered = repo.path(final_rel).read_bytes()
+    receipts_before = {ordinal: repo.path(
+        f'stage5/acceptance/body/ch{ordinal:02d}.json').read_bytes() for ordinal in (1, 2)}
+    body1_before = repo.path('stage5/body/ch01.txt').read_bytes()
+
+    # ── Hook 输入变化（新 HookContext，章包不变）＋ Hook 写手机械不过 ──
+    wires_hook_changed = deepcopy(wires)
+    wires_hook_changed['hook_design']['delivery_brief'] = '倒叙开场，先深夜后新婚夜。'
+    transport.wires = wires_hook_changed
+    transport.hook_text = '超' * 400  # 超过 hard_max，[length] 每次都失败
+    calls_before = len(transport.calls)
+    with pytest.raises(ValueError, match='Hook 写作'):
+        _run(repo, session, hook_max=300)
+    status = repo.read('runtime/workflow_status.json')
+    assert status['status'] == 'failed' and status['failed_node'] == 'str06.stage5.hook'
+    # 新 HookContext 是新请求身份：hook_design 1 次＋hook_writer 2 次外发
+    # （第 3 轮重写提示与第 2 轮逐字相同 → 同请求身份命中缓存，不再外发）；
+    # 正文、命名、组装不被触碰
+    assert transport.calls[calls_before:] == ['hook_design'] + ['hook_writer'] * 2
+    for ordinal in (1, 2):
+        assert repo.path(f'stage5/acceptance/body/ch{ordinal:02d}.json').read_bytes() == \
+            receipts_before[ordinal]
+    assert repo.path('stage5/body/ch01.txt').read_bytes() == body1_before
+    assert repo.path(final_rel).read_bytes() == delivered
+
+    # ── 恢复原始输入：全链缓存命中零新购，交付复原 ──
+    transport.wires = wires
+    transport.hook_text = '苏芸娘望着空房。'
+    calls_after_run2 = len(transport.calls)
+    report2 = _run(repo, session)
+    assert len(transport.calls) == calls_after_run2
+    assert report2['assembly']['status'] == 'ready'
+    assert repo.path(final_rel).read_bytes() == delivered
+    for ordinal in (1, 2):
+        assert repo.path(f'stage5/acceptance/body/ch{ordinal:02d}.json').read_bytes() == \
+            receipts_before[ordinal]
+    assert repo.read('runtime/workflow_status.json')['status'] == 'delivered'

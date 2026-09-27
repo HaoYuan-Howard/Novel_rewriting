@@ -486,6 +486,49 @@ def test_body_access_states_separated():
     assert not access.ready
 
 
+def test_chapter_access_separates_stale_from_missing_and_rejected():
+    """I-42 五态：有效／缺失／拒绝／未知／失效分开（R-10.3 绑定分类）。
+
+    失效（stale）＝状态 accepted 但与当前章包摘要或正文 hash 绑定不成立——
+    回执在盘上、须重做，不是缺失。分类与 `verify_chapter_receipts` 共用同一
+    逐章绑定实现；不给核对材料时只按 status 分类（stale 恒空）。
+    """
+    import hashlib
+
+    def sha(text: str) -> str:
+        return hashlib.sha256(text.encode('utf-8')).hexdigest()
+
+    digests = {1: '1' * 64, 2: '2' * 64, 3: '3' * 64, 4: '4' * 64}
+    prose = {1: '第一章。', 2: '第二章。', 3: '第三章。', 4: '第四章。'}
+    receipts = {
+        1: {'status': 'accepted', 'packet_sha256': digests[1],
+            'prose_sha256': sha(prose[1])},
+        # 章包换版：失效，不是缺失
+        2: {'status': 'accepted', 'packet_sha256': 'f' * 64,
+            'prose_sha256': sha(prose[2])},
+        # 正文脱钩：同样失效
+        3: {'status': 'accepted', 'packet_sha256': digests[3],
+            'prose_sha256': sha('被改过的第三章')},
+        4: {'status': 'accepted', 'packet_sha256': digests[4],
+            'prose_sha256': sha(prose[4])},
+        5: {'status': 'rejected', 'packet_sha256': digests[1],
+            'prose_sha256': sha(prose[1])},
+        6: {'notes': '回执存在但状态不可解'},
+    }
+    access = chapter_access(range(1, 8), receipts,
+                            packet_sha256_by_ordinal=digests, chapter_prose=prose)
+    assert access.accepted == (1, 4)
+    assert access.stale == (2, 3)
+    assert access.rejected == (5,)
+    assert access.unknown == (6,)
+    assert access.missing == (7,)
+    assert not access.ready
+    # 缺省（不给核对材料）只按 status 分类：接受态不核对绑定，stale 恒空
+    status_only = chapter_access(range(1, 4), receipts)
+    assert status_only.accepted == (1, 2, 3)
+    assert status_only.stale == ()
+
+
 def _hook_receipt_dict(prose: str, context_sha: str, status: str = 'accepted') -> dict:
     import hashlib
     return {'hook_context_sha256': context_sha, 'prose_sha256':
