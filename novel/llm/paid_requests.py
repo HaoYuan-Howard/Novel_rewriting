@@ -19,10 +19,13 @@ STR-06 候选链的运行上下文、workflow／epoch 身份与候选契约身�
 未送达（连接/DNS/TLS 失败、连接超时、429、5xx）在同一内容轮内有界退避重试
 （`TransportRetryPolicy` 2/4/8 秒）；已送达后结果未知（读超时）记 unknown、
 不自动重试（`transport._classify` 不再对超时一刀切）。正常结束但正文为空记一次
-失败 attempt（留证、如实计费），由调用方在同轮内重发。每次外发前整书总闸
-（`_service/runs/<sid>/book_budget.json` 持久账）按 attempt 计数一次——unknown
-也计入、重启不重置；`book_call_ceiling` 从同一准入账派生。单元内容轮上限与
-总闸同一把锁序结算，不建第二本预算账（I-17）；ledger 是成本唯一权威。
+失败 attempt（留证、如实计费），由调用方在同轮内重发。截断
+（``finish_reason='length'``，上限 `contracts.invariants.LLM_MAX_OUTPUT_TOKENS`
+＝131072）是节点设计缺陷：即停该 item，不重试、不加预算（D6）。每次外发前
+整书总闸（`_service/runs/<sid>/book_budget.json` 持久账）按 attempt 计数一次
+——unknown 也计入、重启不重置；`book_call_ceiling` 从同一准入账派生。
+单元内容轮上限与总闸同一把锁序结算，不建第二本预算账（I-17）；ledger 是成本
+唯一权威。
 
 【五层记录】SemanticRequest＝工作单元 (node, scope)＋请求身份（冻结请求工作包
 随 `reserve` 落 blob）；ContentRevision＝`WorkUnitContentTurn`（owner patch 是
@@ -379,7 +382,8 @@ class PaidRequestSession:
         不接收任何业务回调。返回的 `DurableAnswer` 是耐久响应引用；空回答
         （``text is None``）同样留证并由调用方决定救回/重试。未送达的传输失败
         在同一内容轮内按退避重试（占尝试额度）；已送达后结果未知记 unknown、
-        不自动重试；尝试额度（每轮 4 次）耗尽即显式停止。
+        不自动重试；尝试额度（每轮 4 次）耗尽即显式停止。截断（
+        ``finish_reason='length'``，D6）即停该 item，不重试、不加预算。
         """
         node, scope = _owner_unit(owner)
         identity = digest({'owner': owner, 'provider': self.provider,
@@ -395,16 +399,43 @@ class PaidRequestSession:
         usable = unit.usable_response(identity)
         if usable is not None:
             reservation, payload, attempt_id, response_sha = usable
-            return self._reuse(owner, request, identity, unit, reservation,
-                               payload, attempt_id, response_sha)
+            return self._guard_truncated(
+                self._reuse(owner, request, identity, unit, reservation,
+                            payload, attempt_id, response_sha),
+                request, node, scope)
         # ② 登记的显式历史采用（F7a；同请求身份行为不变）。
         adopted = self._adopted(owner, request, identity)
         if adopted is not None:
-            return adopted
+            return self._guard_truncated(adopted, request, node, scope)
         # ③ 授权闸（缓存先于授权拒绝；未授权停在该 owner）。
         if not self.yes or not self.allow_source_export:
             raise PurchaseRequired(owner)
-        return self._purchase(owner, request, identity, unit, node, scope)
+        return self._guard_truncated(
+            self._purchase(owner, request, identity, unit, node, scope),
+            request, node, scope)
+
+    def _guard_truncated(self, answer: DurableAnswer, request: ChatRequest,
+                         node: str, scope: str) -> DurableAnswer:
+        """D6：截断（``finish_reason='length'``）是节点设计缺陷——即停该 item。
+
+        原响应已按 attempt 耐久留证，ledger 行带 finish_reason 与完整 usage
+        （reasoning 与正文 token 如实在账、unknown 不洗成零）；不自动重试、
+        不加预算。缓存命中与历史采用的截断响应同样停止——修复节点设计
+        （协议／prompt 变化）会换请求身份，不会读回同一截断壳再付费。
+        """
+        if answer.finish_reason != 'length':
+            return answer
+        usage = answer.usage or {}
+        raise _execution_error(
+            f'{answer.owner} 响应被截断（finish_reason=length，'
+            f'max_tokens={request.max_tokens}）；节点设计缺陷：停在该 item，'
+            '不重试、不加预算，回查协议与 token 量级（D6）',
+            code='truncated', node=node, item=scope, phase='accept',
+            context={'attempt_id': answer.attempt_id, 'cached': answer.cached,
+                     'max_tokens': request.max_tokens,
+                     'prompt_tokens': usage.get('prompt_tokens'),
+                     'completion_tokens': usage.get('completion_tokens'),
+                     'reasoning_tokens': usage.get('reasoning_tokens')})
 
     def _reuse(self, owner, request, identity, unit, reservation, payload,
                attempt_id, response_sha) -> DurableAnswer:

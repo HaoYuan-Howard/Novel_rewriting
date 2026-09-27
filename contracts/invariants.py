@@ -466,12 +466,15 @@ PIPELINE_PROVIDER_CONCURRENCY: Final = 8
 PIPELINE_TOTAL_CONCURRENCY_MIN: Final = 1
 PIPELINE_TOTAL_CONCURRENCY_MAX: Final = 32
 PIPELINE_CONCURRENCY_TRIALS: Final = (4, 6, 8)
+#: 并发覆盖只支持**新链逐章节点**（B1）：键必须已在 `NODES` 登记。现役注册表
+#: 只有 `str06.stage5.body`（正文逐章 owner，scope=chapter:N）；
+#: `str06.stage2.chapters` 由 B2 建节点时同步登记进本表（删除条件：B2 落地）。
+#: 旧链键 `stage2.blueprint`／`stage4.design`／`stage4.plan`／`stage5.write`
+#: 已随旧链退役删除（str06.md「额度、并发与配置」）。并发度不进语义身份。
 PIPELINE_PARALLEL_NODES: Final = (
-    'stage2.blueprint', 'stage4.design', 'stage4.plan', 'stage5.write')
-STAGE2_BLUEPRINT_MAX_CONCURRENCY: Final = 8
-STAGE4_DESIGN_MAX_CONCURRENCY: Final = 8
-STAGE4_PLAN_MAX_CONCURRENCY: Final = 8
-STAGE5_WRITE_MAX_CONCURRENCY: Final = 8
+    'str06.stage5.body',)
+#: 新链逐章节点的单供应商稳定性护栏：并发档位上限由
+#: `PIPELINE_CONCURRENCY_TRIALS` 发布（不再为退役旧链节点保留 8 的特例）。
 STRUCTURE_APPROVAL_DECISIONS: Final = ('accept', 'request_replan')
 STRUCTURE_APPROVAL_STATES: Final = (
     'unavailable', 'missing', 'accepted', 'replan_requested', 'expired',
@@ -1669,6 +1672,11 @@ WORK_UNIT_GRANT_ADDITIONS: Final = (1, 2, 3, 4)
 #: 追加只能显式人工（`novel/work_units.py::grant_book_budget`），
 #: 自动恢复路径不得追加。
 BOOK_CONTENT_CALL_CEILING_DEFAULT: Final = 512
+#: 全部付费节点的统一输出上限（2026-09-27 D6）：截断（finish_reason=length）是
+#: 节点设计缺陷——停在该 item、记录 reasoning 与正文 token，不自动重试、不加预算；
+#: 根因从协议瘦身与量级表（`docs/REQUIREMENTS.md` B0）解决，不以降 effort 代替。
+#: 取代现役 65536（旧调用因 16k thinking 截断的历史教训由上限与量级表吸收）。
+LLM_MAX_OUTPUT_TOKENS: Final = 131072
 #: 确定性重建白名单（2026-09-15 全自动裁决；F8a 随节点表翻为新链键）：改选等
 #: 后置决定触发的自动重建只允许进入这些节点（全部 `paid=False`、确定性）加交付终验
 #: （`novel/orchestrator/delivery.py`）。任何自动重建路径不得触发付费节点——

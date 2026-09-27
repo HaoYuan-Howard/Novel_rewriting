@@ -131,7 +131,7 @@ ChapterWriterPacket
 
 ## 执行设施（目标；B1）
 
-**落地状态（2026-09-27，B1 前半）**：身份与记录层已落地——五层记录对齐工作单元账
+**落地状态（2026-09-27，B1 完成）**：身份与记录层已落地——五层记录对齐工作单元账
 （`WorkUnitAttempt` 增 attempt 级响应引用；`AcceptanceRecordV1`／`CommitBundleV1`
 落 `contracts/schema/workflow.py`）、Runtime 改耐久响应引用
 （`novel/llm/paid_requests.py::DurableAnswer`／`send`，错误统一
@@ -139,10 +139,18 @@ ChapterWriterPacket
 重试、provenance 显式引用纯函数构造（`AdoptionRef`＋
 `CostLedger.usage_for_attempt_rows` 精确 attempt 行聚合，删共享窗口与时间窗
 归账）、CommitBundle 封存落候选根 `runtime/commit/`（采用状态从
-seal 派生）、候选根 request/validation/admission/adopt 四类写路按映射表退役
-（额度按 attempt 计数已随多 attempt 落地；并发槽位、ExecutionProfile run 启动
-冻结与 effort 取值面归 B1 后半）。反例与完成条件见
-`tests/test_str06_runtime_records.py`。
+seal 派生）、候选根 request/validation/admission/adopt 四类写路按映射表退役、
+额度按 attempt 计数。**B1 后半**：截断即停（`send` 对
+`finish_reason='length'` 统一抛 `code='truncated'`，缓存命中同样停止，不重试、
+不加预算；`max_tokens` 统一 131072＝`LLM_MAX_OUTPUT_TOKENS`）、
+ExecutionProfile run 启动冻结（`novel/stages/chain.py::ExecutionProfile`／
+`freeze_execution_profile`；`load_config()` 的唯一执行期调用点是 `execute`，
+`assemble_paid_boundary` 只消费冻结 profile；effort 取值面 low/high/max，
+CLI 的 medium 移除；整书上限从持久准入账派生传入付费边界）、并发登记改
+新链逐章节点（`PIPELINE_PARALLEL_NODES＝('str06.stage5.body',)`，旧链键与
+四个 `STAGE*_MAX_CONCURRENCY` 常量删除；`str06.stage2.chapters` 由 B2 建节点
+时登记；槽位运行接入随 B4 逐章并发）。反例与完成条件见
+`tests/test_str06_runtime_records.py`（17 项故障注入）。
 
 ### 身份与记录：对齐现有工作单元账，不另起第二套
 
@@ -185,15 +193,14 @@ seal 派生）、候选根 request/validation/admission/adopt 四类写路按映
 - 内容轮与物理尝试分开计额；拆出 attempts 不隐式扩大授权；缓存采用不耗额度；未知费用
   不计为零。
 - ExecutionProfile 在 run 启动时冻结，经 CLI、Runtime、transport 实参、请求身份到
-  ledger 全程贯通：删除执行时重读 `load_config()`（现役
-  `novel/stages/chain.py::assemble_paid_boundary` 的路径）的通道；effort 取值面与
-  NodeSpec 一致（low/high/max，移除 CLI 的 medium）；`max_tokens` 取 131072；产品路径
-  把 run 冻结的整书上限传到付费边界。
-- 并发登记改为新链逐章节点（chapters、body），删除
-  `contracts/invariants.py::PIPELINE_PARALLEL_NODES` 中的退役节点名（现值
-  `stage2.blueprint`/`stage4.design`/`stage4.plan`/`stage5.write` 全部是退役旧链键）。
-  并发 4 在新链未实测，靠 429 重试兜底；此前实测（旧 agent 驱动）32 并发大半章被秒退、
-  3 并发正常；B6 报出 429 与重试计数。
+  ledger 全程贯通（已落地：`novel/stages/chain.py::ExecutionProfile`）：执行时重读
+  `load_config()` 的通道已删除（唯一执行期调用点是 `execute`）；effort 取值面与
+  NodeSpec 一致（low/high/max，CLI 的 medium 已移除）；`max_tokens` 统一
+  `LLM_MAX_OUTPUT_TOKENS`＝131072；产品路径把 run 冻结的整书上限传到付费边界。
+- 并发登记已是新链逐章节点：`PIPELINE_PARALLEL_NODES＝('str06.stage5.body',)`，
+  退役节点名与旧链上限常量已删除；`str06.stage2.chapters` 由 B2 建节点时同步
+  登记。并发 4 在新链未实测，靠 429 重试兜底；此前实测（旧 agent 驱动）32 并发
+  大半章被秒退、3 并发正常；B6 报出 429 与重试计数。
 - 每个付费节点的 reasoning 与正文 token 逐次报出；预期量级表登记在
   `docs/REQUIREMENTS.md`（B0），超出即回查节点设计（D6）。
 

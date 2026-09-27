@@ -131,12 +131,19 @@ def write_chapter(
                                            0, tuple(errors)))
             continue
         prose = answered.text
+        if answered.finish_reason == 'length':
+            # D6：截断是节点设计缺陷——即停该章，不重写、不进候选；截断稿
+            # 不得作为成文（响应到不了这里的路径已由 Runtime 的 truncated
+            # 错误拦下，本分支只服务不经 Runtime 的合成/测试 ask）。
+            attempts.append(ChapterAttempt(
+                attempt + 1, identity, answered.finish_reason,
+                count_body_chars(prose),
+                ('[truncated] 响应被截断（finish_reason=length），即停该章（D6）',)))
+            break
         errors = validate_chapter_prose(
             prose, withheld_literals=withheld, released_surfaces=released,
             target_chars=target, band_low=low, band_high=high,
             scene_markers=scene_markers)
-        if answered.finish_reason == 'length':
-            errors.append('[truncated] 响应被截断（finish_reason=length），不得作为成文')
         attempts.append(ChapterAttempt(attempt + 1, identity, answered.finish_reason,
                                        count_body_chars(prose), tuple(errors)))
         candidates.append((identity, prose, errors, answered.ref))
@@ -146,9 +153,10 @@ def write_chapter(
                             prior, low, high, target, disclosed=False, ref=answered.ref)
 
     # 额度耗尽：通过全部硬检查的候选里按相对偏差最小、平局取较晚者。
+    # （截断稿自 D6 起即停、不进候选，不在过滤集内。）
     legal = [(identity, prose, ref) for identity, prose, errs, ref in candidates
              if not any(e.startswith(('[non_empty]', '[encoding]', '[no_wrapper]',
-                                      '[withheld_literals]', '[truncated]'))
+                                      '[withheld_literals]'))
                         for e in errs)]
     if not legal:
         return ChapterOutcome(prose=None, receipt=None,

@@ -37,13 +37,16 @@ import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, NamedTuple
+from typing import Any, Callable, Final, NamedTuple
 
 from contracts.artifacts import STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT
+from contracts.invariants import (
+    BOOK_CONTENT_CALL_CEILING_DEFAULT, LLM_MAX_OUTPUT_TOKENS,
+)
 from contracts.schema.grounding import OutputConstraints
 from contracts.schema.hook import HookConstraints, HookReceipt
 from contracts.schema.workflow import STR06_RUNTIME_CONFIG
-from novel.config import load_config
+from novel.config import Config, load_config
 from novel.llm.paid_requests import (
     ExecutionError, PaidRequestSession, PurchaseRequired, AdoptionRef, digest,
     ask_json, ask_text_once, init_or_resume_candidate_workflow,
@@ -77,10 +80,11 @@ from novel.stages.stage7 import (
     naming_projection, verify_chapter_chain,
 )
 from novel.store import Str06Repository
-from novel.work_units import require_workflow
+from novel.work_units import read_book_budget, require_workflow
 
 __all__ = [
-    'ChainContext', 'NODE_ORDER', 'NODE_RUNNERS', 'Stage1Input', 'THROUGH_NODE',
+    'ChainContext', 'ExecutionProfile', 'NODE_ORDER', 'NODE_RUNNERS',
+    'Stage1Input', 'THROUGH_NODE',
     'build_evidence', 'derive_total_length_budget', 'execute', 'load_dev_source',
     'load_stage1_chapters', 'run_chain', 'run_node', 'run_workflow',
     'ChapterRequest', 'PaidBoundary', 'assemble_paid_boundary',
@@ -817,19 +821,99 @@ class Stage1Input(NamedTuple):
     root_sha1: str            # 同一组合的 SHA-1（provenance 的根身份格）
 
 
-def str06_chat_request(cfg, owner: str, prompt: str, *, json_mode: bool, system: str,
-                       temperature: float, reasoning_effort: str | None = 'high',
-                       enforce: bool = True) -> ChatRequest:
-    """新链请求构造（`PaidBoundary.build_request` 与批 0 探针预览共用的唯一实现）。
+#: effort 取值面与 `NodeSpec.effort` 一致（`contracts/invariants.py`）：
+#: `medium` 虽被 API 收但被服务端静默映射回 `high`，CLI 已随 B1 移除（D6 裁决）。
+STR06_EFFORT_LEVELS: Final = ('low', 'high', 'max')
 
-    预览与真实购买走同一构造：token 估算、预算闸与缓存键逐字一致——探针在工具里
-    另拼一个请求，「预览看到的」与「买到的」何时漂移将无人知晓。`enforce=False`
+
+@dataclass(frozen=True)
+class ExecutionProfile:
+    """run 启动时冻结的执行配置（B1）：模型、effort、thinking、max_tokens 与整书上限。
+
+    【只冻结一次】``cfg``（传输与模型配置：api_key、base_url、proxy、timeout、
+    thinking_mode）由 CLI／orchestrator 在 run 启动时读入——`load_config()` 在
+    执行期的唯一调用点是 `execute`。此后同一份 profile 经 Runtime（请求身份）、
+    transport 实参（DeepSeekTransport 客户端参数）到 ledger（effort/max_tokens
+    逐行入账）全程贯通：**一次 run 内环境或 `.env` 变化不再改变请求身份或账面
+    归属**，执行中重读配置的通道已删除（I-16：profile 是本次 run 的权威执行事实）。
+
+    【effort 取值面】与 `NodeSpec.effort` 一致：low／high／max。
+    【max_tokens】统一 `LLM_MAX_OUTPUT_TOKENS`＝131072（D6）；截断即停，
+    不以降档或调小上限代替。
+    【整书上限】单次运行上限从同一准入账派生（I-17）：显式 `--book-call-ceiling`
+    优先；否则冻结持久总闸的 ceiling＋grants（账缺失用
+    `BOOK_CONTENT_CALL_CEILING_DEFAULT`）。运行中人工追加不改变本 run 的停止点，
+    重启后生效——重启不重置、不隐式扩大授权。
+    """
+
+    cfg: Config
+    reasoning_effort: str
+    max_tokens: int = LLM_MAX_OUTPUT_TOKENS
+    book_call_ceiling: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.reasoning_effort not in STR06_EFFORT_LEVELS:
+            raise ValueError(
+                f'effort 取值面是 {STR06_EFFORT_LEVELS}（与 NodeSpec 一致），'
+                f'得到 {self.reasoning_effort!r}')
+        if self.max_tokens != LLM_MAX_OUTPUT_TOKENS:
+            raise ValueError(
+                f'全部付费节点 max_tokens 统一 {LLM_MAX_OUTPUT_TOKENS}（D6），'
+                f'得到 {self.max_tokens!r}；截断处置靠节点设计，不靠调小上限')
+        if self.book_call_ceiling is not None and (
+                isinstance(self.book_call_ceiling, bool)
+                or not isinstance(self.book_call_ceiling, int)
+                or self.book_call_ceiling < 1):
+            raise ValueError('book_call_ceiling 必须是正整数或 None')
+
+    @property
+    def model(self) -> str:
+        return self.cfg.model
+
+    @property
+    def provider(self) -> str:
+        return self.cfg.base_url
+
+    @property
+    def thinking(self) -> bool:
+        return self.cfg.thinking_mode == 'on'
+
+
+def freeze_execution_profile(
+        *, cfg: Config, reasoning_effort: str, base, sid: str,
+        book_call_ceiling: int | None = None) -> ExecutionProfile:
+    """冻结一次 run 的执行配置：effort 校验 + 整书上限从持久准入账派生。
+
+    上限判定顺序：显式值（工具路径 `--book-call-ceiling`）→ 持久总闸
+    ceiling＋grants（`read_book_budget`；坏账关闭式上抛，不把坏账当零）
+    → `BOOK_CONTENT_CALL_CEILING_DEFAULT`（首跑账尚未建立）。
+    """
+    if book_call_ceiling is None:
+        budget = read_book_budget(base, sid)
+        if budget is None:
+            book_call_ceiling = BOOK_CONTENT_CALL_CEILING_DEFAULT
+        else:
+            book_call_ceiling = budget.ceiling + sum(
+                g.additional for g in budget.grants)
+    return ExecutionProfile(cfg=cfg, reasoning_effort=reasoning_effort,
+                            book_call_ceiling=book_call_ceiling)
+
+
+def str06_chat_request(profile: ExecutionProfile, owner: str, prompt: str, *,
+                       json_mode: bool, system: str, temperature: float,
+                       enforce: bool = True) -> ChatRequest:
+    """新链请求构造：模型、effort、thinking 与 max_tokens 全部取自冻结的 profile。
+
+    预览与真实购买走同一构造：token 估算、预算闸与缓存键逐字一致。
+    请求身份（model／effort／thinking／max_tokens 因此全在
+    `ChatRequest.cache_payload()` 里）与 ledger 行（同列逐行入账）由同一份
+    profile 决定——配置贯通到身份与账，没有第二条读取通道。`enforce=False`
     只用于历史 wire 采用（不真实发送，也不该被上线预算闸代审）。
     """
-    request = ChatRequest(model=cfg.model, system=system, user=prompt,
-                          reasoning_effort=reasoning_effort,
-                          thinking=cfg.thinking_mode == 'on',
-                          json_mode=json_mode, max_tokens=65536, temperature=temperature)
+    request = ChatRequest(model=profile.model, system=system, user=prompt,
+                          reasoning_effort=profile.reasoning_effort,
+                          thinking=profile.thinking, json_mode=json_mode,
+                          max_tokens=profile.max_tokens, temperature=temperature)
     if enforce:
         from novel.llm.budget import enforce_request_budget
         # 完整输入超限就阻断：精确 tokenizer + 官方 framing，不摘要、不截断。
@@ -850,31 +934,33 @@ class PaidBoundary:
     repository: Any
     session: PaidRequestSession
     context: Any
-    cfg: Any
+    profile: ExecutionProfile
     provider: str
     model: str
 
     def build_request(self, owner: str, prompt: str, *, json_mode: bool, system: str,
-                      temperature: float, reasoning_effort: str | None = 'high',
-                      enforce: bool = True) -> ChatRequest:
-        """新链请求构造；`enforce=False` 只用于历史 wire 采用（不真实发送）。
+                      temperature: float, enforce: bool = True) -> ChatRequest:
+        """新链请求构造；effort 与 max_tokens 来自 run 冻结的 profile。
 
         预览与真实购买走同一构造：token 估算、预算闸与缓存键因此逐字一致。
         """
         return str06_chat_request(
-            self.cfg, owner, prompt, json_mode=json_mode, system=system,
-            temperature=temperature, reasoning_effort=reasoning_effort, enforce=enforce)
+            self.profile, owner, prompt, json_mode=json_mode, system=system,
+            temperature=temperature, enforce=enforce)
 
 
 def assemble_paid_boundary(
-    *, base, run_dir, source_identity: str, root_sha1: str, yes: bool = False,
-    allow_source_export: bool = False, book_call_ceiling: int | None = None,
+    *, base, run_dir, source_identity: str, root_sha1: str, profile: ExecutionProfile,
+    yes: bool = False, allow_source_export: bool = False,
     adopt_roots: tuple = (), wire_dir=None, readonly: bool = False,
 ) -> PaidBoundary:
-    """把 Stage1 源身份、workflow／epoch、付费边界与预算闸装到一起（execute 与探针共用）。
+    """把 Stage1 源身份、workflow／epoch、付费边界与预算闸装到一起。
 
-    `run_dir` 必须位于 `base` 下的隔离根：一个候选根一个 workflow 身份，sid 取
-    根目录名；`readonly`（`--check-only`）只复校不签发新调用。
+    `profile` 必须由调用方在 run 启动时冻结（`freeze_execution_profile`）：
+    本装配**不再读执行期配置**——`load_config()` 不在这里，一次 run 内
+    环境／`.env` 变化不影响请求身份、传输实参与账面归属。`run_dir` 必须位于
+    `base` 下的隔离根：一个候选根一个 workflow 身份，sid 取根目录名；
+    `readonly`（`--check-only`）只复校不签发新调用。
     """
     base_path = Path(base).resolve()
     run_dir = Path(run_dir).resolve()
@@ -882,20 +968,20 @@ def assemble_paid_boundary(
         raise ValueError('run-dir 必须位于 base 下的隔离根')
     sid = run_dir.relative_to(base_path).as_posix().replace('/', '_')
     repository = Str06Repository(run_dir)
-    cfg = load_config()
     workflow, context = init_or_resume_candidate_workflow(
         repository=repository, base=base_path, code=prov.code_version(),
         root_sha1=root_sha1, source_identity=source_identity,
         task_id=require_workflow(base_path).task_id,
-        configured_model='unknown' if wire_dir else cfg.model,
+        configured_model='unknown' if wire_dir else profile.model,
         created_at=int(time.time()), readonly=readonly)
     session = PaidRequestSession(
-        repository, context.ledger, DeepSeekTransport(cfg), yes=yes,
-        allow_source_export=allow_source_export, provider=cfg.base_url,
-        book_call_ceiling=book_call_ceiling, sid=sid,
+        repository, context.ledger, DeepSeekTransport(profile.cfg), yes=yes,
+        allow_source_export=allow_source_export, provider=profile.provider,
+        book_call_ceiling=profile.book_call_ceiling, sid=sid,
         adopt_roots=tuple(Path(root) for root in adopt_roots))
     return PaidBoundary(repository=repository, session=session, context=context,
-                        cfg=cfg, provider=cfg.base_url, model=cfg.model)
+                        profile=profile, provider=profile.provider,
+                        model=profile.model)
 
 
 def load_stage1_chapters(base, sid: str) -> Stage1Input:
@@ -1055,22 +1141,30 @@ def execute(args) -> None:
                     raise ValueError(f'owner patch {entry["owner"]} 的 {field_name} 身份变化，拒绝采用')
         repository.write('runtime/repair_manifest.json', manifest)
     # workflow／epoch 身份：首开落记录，复用不换身份，代码漂移滚动，源输入变化拒绝。
-    # 设施装配与批 0 探针共用（`assemble_paid_boundary`）：实验不另建付费通路。
+    # 执行配置在 run 启动时冻结一次（B1）：`load_config()` 的唯一执行期调用点
+    # 在这里，此后同一份 ExecutionProfile 贯通 Runtime、transport、请求身份与
+    # ledger——执行中重读配置的通道不存在。
+    cfg = load_config()
+    sid = run_dir.relative_to(base_path).as_posix().replace('/', '_')
+    profile = freeze_execution_profile(
+        cfg=cfg,
+        reasoning_effort=getattr(args, 'reasoning_effort', None) or 'high',
+        base=base_path, sid=sid,
+        book_call_ceiling=getattr(args, 'book_call_ceiling', None))
     boundary = assemble_paid_boundary(
         base=base, run_dir=run_dir, source_identity=source_identity,
-        root_sha1=root_sha1, yes=args.yes,
+        root_sha1=root_sha1, profile=profile, yes=args.yes,
         allow_source_export=args.allow_source_export,
-        book_call_ceiling=args.book_call_ceiling,
         adopt_roots=tuple(args.adopt_root), wire_dir=args.wire_dir,
         readonly=args.check_only)
     # 换成附着了候选运行上下文（provenance 铸造与 freshness）的同一根 repository：
     # 正式产物落盘拒绝「无来源账」这条静默路径。
-    repository, session, cfg = boundary.repository, boundary.session, boundary.cfg
+    repository, session = boundary.repository, boundary.session
 
     def build_request(owner, prompt, *, json_mode, system, temperature):
         return boundary.build_request(
             owner, prompt, json_mode=json_mode, system=system, temperature=temperature,
-            reasoning_effort=args.reasoning_effort, enforce=not args.wire_dir)
+            enforce=not args.wire_dir)
 
     def adopt(owner, path, validate, *, system, prompt, json_mode, temperature):
         """wire 采用：核验后落修订记录（ContentRevision 层），返回显式采用引用。"""
@@ -1186,8 +1280,8 @@ def execute(args) -> None:
                        ask=ask, ask_text=ask_text,
                        ask_body=ask_body, budget=args.budget, through=args.through,
                        node_filter=tuple(args.node) or None,
-                       provider='manual-adoption' if args.wire_dir else cfg.base_url,
-                       model='unknown' if args.wire_dir else cfg.model,
+                       provider='manual-adoption' if args.wire_dir else profile.provider,
+                       model='unknown' if args.wire_dir else profile.model,
                        book_title=args.book_title,
                        hook_constraints=HookConstraints(target_chars=args.hook_target_chars,
                                                          hard_max_chars=args.hook_hard_max),

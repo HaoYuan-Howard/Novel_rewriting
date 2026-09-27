@@ -132,11 +132,11 @@ def test_history_adoption_credentials_reach_the_chain_assembly(monkeypatch,
         flags=[], check_only=True, yes=False, allow_egress=False, run_id=None,
         executor_backend=None, executor_profile=None, response_repair=None,
         source=None, wire_dir=str(wires), adopt_root=[str(adopt)],
-        reasoning_effort='medium')
+        reasoning_effort='low')
     assert cli._cmd_run(ns) == 0
     args = seen['args']
     assert args.check_only is True
-    assert args.reasoning_effort == 'medium'
+    assert args.reasoning_effort == 'low'
     assert args.wire_dir == wires
     assert args.adopt_root == [adopt]
     # 未给凭证时是明确的空，不是猜的默认目录。

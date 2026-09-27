@@ -149,8 +149,9 @@ def _parser() -> argparse.ArgumentParser:
     r.add_argument('--adopt-root', action='append', default=[],
                    help='已购来源输出根（可重复；ledger 行身份核验后免费采用）')
     r.add_argument('--reasoning-effort', default='high',
-                   choices=('low', 'medium', 'high'),
-                   help='新链请求的 reasoning effort 档位（进请求身份）')
+                   choices=('low', 'high', 'max'),
+                   help='新链请求的 reasoning effort 档位（进请求身份；'
+                        '与 NodeSpec 取值面一致，medium 已移除——B1/D6）')
 
     with_run_args(sub.add_parser('preview', help='0 成本：打印将要执行的命令'))
 

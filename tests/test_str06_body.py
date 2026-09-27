@@ -266,11 +266,14 @@ def test_write_chapter_selects_min_deviation_late_tie_and_blocks():
                          _answered(same3, identity='c')])
     outcome = write_chapter(**kw, ask=fake)
     assert outcome.prose == same3
-    # 截断按硬失败处理：即使重写额度耗尽也不能提交
-    fake = _FakeAnswers([_answered('苏芸娘问旧约。', finish_reason='length')] * 3)
+    # 截断即停（D6）：不重写、不进候选，该章无合法候选即停止
+    fake = _FakeAnswers([_answered('苏芸娘问旧约。', finish_reason='length'),
+                         _answered('备用稿不应被问到', identity='never')])
     outcome = write_chapter(**kw, ask=fake)
     assert outcome.prose is None
-    assert any(a.errors and a.errors[-1].startswith('[truncated]') for a in outcome.attempts)
+    assert len(outcome.attempts) == 1, '截断即停在该 item，不消耗重写额度（D6）'
+    assert outcome.attempts[0].errors[-1].startswith('[truncated]')
+    assert len(fake.prompts) == 1, '截断后不得再发起重写请求'
 
 
 # ───────────────────────── 回执链核对 ─────────────────────────

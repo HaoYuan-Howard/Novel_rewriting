@@ -255,15 +255,8 @@ _WITHHELD: dict[str, str] = {
     'PIPELINE_TOTAL_CONCURRENCY_MAX': '总槽配置范围由 Agent capability 发布',
     'PIPELINE_CONCURRENCY_TRIALS': '并发实验档位由 Agent capability 发布',
     'PIPELINE_PARALLEL_NODES': '并发覆盖节点由 Agent capability 发布',
-    'STAGE2_BLUEPRINT_MAX_CONCURRENCY': (
-        'Stage2 Blueprint 逐章 Agent session 的供应商稳定性护栏；'
-        '它是后端编排参数，不是前端可调取值面'),
-    'STAGE5_WRITE_MAX_CONCURRENCY': 'Stage5 写作与受托批量改写共用的后端章节并发上限，前端不另行判定',
-    'STAGE4_PLAN_MAX_CONCURRENCY': (
-        'Stage4B 章级池的供应商稳定性护栏（批次 4），与 A 的逐章池同因不发：'
-        '它是后端编排参数，不是前端可调取值面'),
-    'STAGE4_DESIGN_MAX_CONCURRENCY': 'Stage4A 私有 session 的供应商稳定性护栏；'
-                                     '它是后端编排参数，不是前端可调取值面',
+    'LLM_MAX_OUTPUT_TOKENS': '全部付费节点的统一输出上限（D6）；截断即停由后端执行，'
+                             '前端不据此改判或重试',
     # ── stage7（人名替换与成书）──
     'MIN_SURFACE': '判据阈值（能进替换面的称呼最短几个字）。前端拿到就能自己判'
                    '「这条映射合不合法」，而那条判据在 stage7',

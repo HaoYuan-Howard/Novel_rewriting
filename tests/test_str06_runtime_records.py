@@ -364,8 +364,12 @@ def test_budget_competition_stops_at_ceiling_with_attempt_accounting(tmp_path):
                      hook_constraints=HookConstraints(target_chars=10,
                                                       hard_max_chars=360),
                      length_band=(0.01, 0.05))
-    from novel.work_units import read_book_budget
+    from novel.work_units import read_book_budget, sealed_commit_bundles
     assert read_book_budget(base, 'run').used == 2, '恰好停在第二笔外发，不静默超限'
+    # 停止顺序（B1）：准入已关（不再外发），已完成提交窗口的封存记录
+    # 完好无损（seal 全部通过核对），书级账不因停止被重置或追加。
+    for _path, bundle in sealed_commit_bundles(repo.root):
+        assert bundle.seal and bundle.adoptions
 
 
 def test_not_delivered_transport_failure_retries_within_same_turn(tmp_path):
@@ -400,3 +404,175 @@ def test_not_delivered_transport_failure_retries_within_same_turn(tmp_path):
     rows, partial = read_cost_snapshot(base)
     assert not partial and len([r for r in rows if not r['cached']]) == 2
     assert rows[0]['error_kind'] == 'rate_limit' and rows[0]['will_retry'] is True
+
+
+# ─── B1 后半：截断即停（D6）＋ExecutionProfile 冻结贯通＋并发登记 ───────────────
+
+def test_truncated_answer_stops_item_without_retry_or_extra_budget(tmp_path):
+    """截断（finish_reason=length）：即停该 item，留证、不重试、不加预算（D6）。"""
+    from novel.llm.paid_requests import ExecutionError
+
+    class Truncated:
+        def __init__(self):
+            self.calls = 0
+
+        def send(self, request):
+            self.calls += 1
+            return ChatResponse(
+                content='{"entries": [', reasoning='想了一半被切断',
+                finish_reason='length',
+                usage={'prompt_tokens': 700, 'completion_tokens': 131072,
+                       'reasoning_tokens': 90000},
+                model='fake')
+
+    transport = Truncated()
+    base, repo, ledger, session = _make_session(tmp_path, transport)
+    with pytest.raises(ExecutionError) as excinfo:
+        ask_json(session, 'bind', _request(), lambda _: [])
+    err = excinfo.value
+    assert err.code == 'truncated' and err.phase == 'accept'
+    assert err.context['completion_tokens'] == 131072
+    assert err.context['reasoning_tokens'] == 90000, '截断必须如实记录 reasoning 与正文 token'
+    assert transport.calls == 1, '截断不自动重试'
+    from novel.work_units import WorkUnitBudget, read_book_budget
+    unit = WorkUnitBudget(base, 'book', 'str06.stage4.bind', 'executor', 'book')
+    turn = unit._read().turns[0]
+    assert turn.state == 'delivered', '截断响应已完整交付并耐久留证'
+    assert [a.outcome for a in turn.attempts] == ['ok'], 'ok 留证保证重跑免费命中，不自动重购'
+    assert read_book_budget(base, 'book').used == 1, '外发占额一次，截断不追加预算'
+    rows, partial = read_cost_snapshot(base)
+    assert not partial
+    paid = [r for r in rows if not r['cached']]
+    assert len(paid) == 1 and paid[0]['finish_reason'] == 'length'
+    assert paid[0]['completion_tokens'] == 131072 and paid[0]['reasoning_tokens'] == 90000
+
+
+def test_truncated_cached_replay_stops_again_without_rebuying(tmp_path):
+    """重启重放命中同一截断响应：仍即停，不重购、不换回答。"""
+    from novel.llm.paid_requests import ExecutionError
+
+    class Truncated:
+        def __init__(self):
+            self.calls = 0
+
+        def send(self, request):
+            self.calls += 1
+            return ChatResponse(content='{"entries": [', finish_reason='length',
+                                usage={'prompt_tokens': 700, 'completion_tokens': 131072},
+                                model='fake')
+
+    transport = Truncated()
+    base, repo, ledger, session = _make_session(tmp_path, transport)
+    with pytest.raises(ExecutionError, match='截断'):
+        ask_json(session, 'bind', _request(), lambda _: [])
+    replay = PaidRequestSession(repo, CostLedger(path=ledger_path(base)), transport,
+                                provider='fake', sid='book')
+    with pytest.raises(ExecutionError) as excinfo:
+        ask_json(replay, 'bind', _request(), lambda _: [])
+    assert excinfo.value.code == 'truncated'
+    assert transport.calls == 1, '免费命中同一截断响应，不得再付费重购'
+    assert excinfo.value.context['cached'] is True
+
+
+def test_execution_profile_freezes_config_for_whole_run():
+    """ExecutionProfile：effort/max_tokens 取值面收紧；配置只冻结一次。"""
+    from novel.config import Config
+    from novel.stages.chain import (
+        ExecutionProfile, STR06_EFFORT_LEVELS, str06_chat_request,
+    )
+    from contracts.invariants import LLM_MAX_OUTPUT_TOKENS
+
+    assert STR06_EFFORT_LEVELS == ('low', 'high', 'max')
+    cfg = Config(model='fake-model', thinking_mode='on')
+    profile = ExecutionProfile(cfg=cfg, reasoning_effort='high')
+    assert profile.max_tokens == LLM_MAX_OUTPUT_TOKENS == 131072
+    for bad in ('medium', 'xhigh', '', 'HIGH'):
+        with pytest.raises(ValueError, match='effort'):
+            ExecutionProfile(cfg=cfg, reasoning_effort=bad)
+    with pytest.raises(ValueError, match='131072'):
+        ExecutionProfile(cfg=cfg, reasoning_effort='high', max_tokens=65536)
+    request = str06_chat_request(profile, 'bind', '提示', json_mode=True,
+                                 system='系统', temperature=0.7, enforce=False)
+    assert request.model == 'fake-model'
+    assert request.reasoning_effort == 'high' and request.thinking is True
+    assert request.max_tokens == 131072, '全部付费节点统一 131072（D6）'
+    # 请求身份与 ledger 列由同一份 profile 决定：model/effort/thinking/max_tokens
+    # 全部落在 cache_payload（= 请求身份）里。
+    payload = request.cache_payload()
+    assert payload['max_tokens'] == 131072 and payload['reasoning_effort'] == 'high'
+
+
+def test_assemble_paid_boundary_never_rereads_config_at_execution(tmp_path):
+    """删执行时 `load_config()` 重读：装配只消费 run 启动时冻结的 profile。"""
+    import novel.stages.chain as chain_mod
+    from novel.config import Config
+    from novel.stages.chain import assemble_paid_boundary, freeze_execution_profile
+
+    base = tmp_path / 'out'
+    base.mkdir()
+    from novel.work_units import require_workflow
+    require_workflow(base)
+    cfg = Config(model='frozen-model')
+    profile = freeze_execution_profile(cfg=cfg, reasoning_effort='low',
+                                       base=base, sid='run')
+    assert profile.book_call_ceiling == 512, '账缺失时冻结默认整书上限'
+
+    original_load_config = chain_mod.load_config
+
+    def _refuse(*a, **kw):
+        raise AssertionError('执行期不得重读 load_config()')
+
+    chain_mod.load_config = _refuse
+    try:
+        boundary = assemble_paid_boundary(
+            base=base, run_dir=base / 'run',
+            source_identity='a' * 64, root_sha1='b' * 40, profile=profile)
+    finally:
+        chain_mod.load_config = original_load_config
+    assert boundary.model == 'frozen-model'
+    assert boundary.session.transport.cfg is profile.cfg, 'transport 实参来自冻结 profile'
+    assert boundary.session.book_call_ceiling == 512, '整书上限贯通到付费边界'
+    assert boundary.profile.reasoning_effort == 'low'
+
+
+def test_execution_profile_ceiling_derives_from_admission_ledger(tmp_path):
+    """单次运行上限从同一准入账派生：ceiling＋grants；显式值优先（I-17）。"""
+    from novel.config import Config
+    from novel.stages.chain import freeze_execution_profile
+    from novel.work_units import grant_book_budget, read_book_budget
+
+    base = tmp_path / 'out'
+    base.mkdir()
+    from novel.work_units import require_workflow
+    require_workflow(base)
+    profile = freeze_execution_profile(cfg=Config(), reasoning_effort='high',
+                                       base=base, sid='book')
+    assert profile.book_call_ceiling == 512
+    grant_book_budget(base, 'book', actor='人工', reason='追加', additional=3)
+    budget = read_book_budget(base, 'book')
+    profile2 = freeze_execution_profile(cfg=Config(), reasoning_effort='high',
+                                        base=base, sid='book')
+    assert profile2.book_call_ceiling == budget.ceiling + 3 == 515, '含显式追加'
+    profile3 = freeze_execution_profile(cfg=Config(), reasoning_effort='high',
+                                        base=base, sid='book', book_call_ceiling=7)
+    assert profile3.book_call_ceiling == 7, '显式 --book-call-ceiling 优先'
+
+
+def test_parallel_registry_registers_new_chain_chapter_node_only():
+    """并发登记改新链逐章节点：退役旧链键删除，键必须在 NODES 且逐章 scope。"""
+    from contracts.invariants import NODES, PIPELINE_PARALLEL_NODES, RETIRED_NODES
+
+    assert PIPELINE_PARALLEL_NODES == ('str06.stage5.body',)
+    for node in PIPELINE_PARALLEL_NODES:
+        assert node in NODES, f'并发覆盖节点必须在现役注册表：{node}'
+        assert node not in RETIRED_NODES
+        spec = NODES[node].lifecycle
+        assert spec is not None and spec.unit_kind == 'chapter', \
+            f'{node} 必须是逐章节点（scope=chapter:N）'
+    for legacy in ('stage2.blueprint', 'stage4.design', 'stage4.plan', 'stage5.write'):
+        assert legacy not in PIPELINE_PARALLEL_NODES, '退役旧链键已删除'
+    from contracts.schema.orchestration import PipelineConcurrency
+    overrides = PipelineConcurrency(node_overrides={'str06.stage5.body': 4})
+    assert overrides.node_overrides == {'str06.stage5.body': 4}
+    with pytest.raises(ValueError, match='逐章节点'):
+        PipelineConcurrency(node_overrides={'stage4.design': 4})
