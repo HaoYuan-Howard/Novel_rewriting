@@ -377,19 +377,21 @@ def test_released_surfaces_close_over_the_replacement_table():
     registered = {cid: {s.surface for s in entry.surfaces}
                   for cid, entry in chars.characters.items()}
     design_wire = {
+        'protocol_version': 'stage4-design-v1',
+        'book_style': '平实克制的第三人称叙事。',
         'initial_state': [],
         'scenes': [{
-            'scene_id': 's01', 'state_reads': [],
+            'state_reads': [],
             'driver': {'focal_actor': 'huang_fu_heng', 'immediate_want': '见面',
                        'opposition': '门第', 'turn': '通名'},
             'realization_brief': '重心在称谓初现；从登门展开，在互通姓名处收束。',
-            'beats': [{'beat_id': 'bt1', 'event': '诸人相见', 'participants': ['huang_fu_heng'],
+            'beats': [{'event': '诸人相见', 'participants': ['huang_fu_heng'],
                        'dramatic_intent': '登场', 'target_delta': [], 'delivery_hint': '',
                        'surface_introductions': [
                            {'char_id': surface_owner[s], 'surfaces': [s]} for s in released]}],
             'delivery': {'pov': 'huang_fu_heng', 'voice': '平实', 'avoid': []}}],
-        'chapters': [{'chapter_ordinal': 1, 'purpose': '人物逐一登场', 'scene_ids': ['s01']}],
-        'chapter_weights': {'s01': 1.0},
+        'chapters': [{'purpose': '人物逐一登场', 'scenes': 1}],
+        'scene_weights': [1],
     }
     body, errors = assemble_body_design(
         design_wire, known_char_ids=set(chars.characters),

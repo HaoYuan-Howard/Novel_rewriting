@@ -1,0 +1,367 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""test_str06_stage4_protocol —— Stage4 四协议独立版化与 B3 前半契约反例。
+
+【验证边界】四个付费语义节点的 wire 协议版本逐字对账（漏带/错带即拒，I-13）；
+Design wire 瘦身的 compiler 派生面（场景/拍 ID、章切片、权重归一、跨章锚定，
+I-21）；TargetDesign 结构化跨章字段与人物闭集；读者确认的事实地址（D4：
+漏填即拒、悬空即拒、确认不早于建立、按地址投影）；章预算的最大余数传导
+（精确失效表：权重变化按整数预算变化波及多章）；Bind 输入投影的最小闭集。
+真实付费链路语义质量归 B6，不在本文件伪造。
+"""
+from __future__ import annotations
+
+import pytest
+from pydantic import ValidationError
+
+from contracts.schema.design import (
+    BodyDesign, ChapterAssignment, OngoingAction, Promise, SceneDelivery,
+    SceneDriver, TargetBeat, TargetDelta, TargetScene,
+)
+from contracts.schema.grounding import PreserveCheckpoint, SourceLineage, SourceObligation
+from contracts.schema.policy import PreserveKind
+from contracts.schema.state import StateAddress
+from contracts.schema.workflow import (
+    STAGE4_BIND_PROTOCOL, STAGE4_DESIGN_PROTOCOL, STAGE4_HOOK_DESIGN_PROTOCOL,
+    STAGE4_PRESERVE_PROTOCOL, STR06_RC_VERSION,
+)
+from novel.stages.stage4.book_ir import (
+    allocate_chapter_budgets, chapters_with_budget_change, compile_writer_book_ir,
+)
+from novel.stages.stage4.compile import compile_execution_plan
+from novel.stages.stage4.design import assemble_body_design
+from novel.stages.stage4.grounding import (
+    assemble_binding, assemble_preserve, project_binding_space,
+)
+from novel.stages.stage5.hook import assemble_hook_design
+
+H64 = 'a' * 64
+
+
+# ───────────────────────── 构造器 ─────────────────────────
+
+def _wire() -> dict:
+    """两场三拍的 design wire：覆盖章切片、相对权重、跨章字段与 reader 确认。"""
+    return {
+        'protocol_version': STAGE4_DESIGN_PROTOCOL,
+        'book_style': '冷峻克制的第三人称叙事，重日常细节里的异样。',
+        'character_voices': [{'char_id': 'yun', 'voice': '短句、少感叹'}],
+        'standing_goals': [{'char_id': 'yun', 'goal': '查清夫君的底细'}],
+        'ongoing_actions': [{'char_id': 'yun', 'action': '暗中跟随夫君',
+                             'started_at': {'scene': 1, 'beat': 3}}],
+        'open_questions': [{'question': '玉佩上的字是谁刻的',
+                            'planted_at': {'scene': 2, 'beat': 2}}],
+        'promises': [{'maker': 'fu_jun', 'to': 'yun', 'content': '再不隐瞒',
+                      'made_at': {'scene': 1, 'beat': 2}}],
+        'initial_state': [
+            {'domain': 'character', 'subjects': ['yun'], 'holder': None,
+             'key': 'marital_status', 'op': 'set', 'value': '新婚'}],
+        'initial_surfaces': [{'char_id': 'yun', 'surfaces': ['云娘']}],
+        'scenes': [
+            {'state_reads': [],
+             'driver': {'focal_actor': 'yun', 'immediate_want': '安度新婚',
+                        'opposition': '夫君的怪异', 'turn': '立约'},
+             'realization_brief': '重心在婚礼到立约的落差；展开洞房对坐，在旧约处收住。',
+             'beats': [
+                 {'event': '拜堂', 'participants': ['yun', 'fu_jun'],
+                  'dramatic_intent': '成礼', 'target_delta': [
+                      {'domain': 'relation', 'subjects': ['yun', 'fu_jun'],
+                       'op': 'set', 'scope': 'book', 'key': 'marital_status',
+                       'value': '夫妻'}], 'delivery_hint': ''},
+                 {'event': '夫君立约', 'participants': ['yun', 'fu_jun'],
+                  'dramatic_intent': '埋线', 'target_delta': [], 'delivery_hint': ''},
+                 {'event': '云娘起疑', 'participants': ['yun'],
+                  'dramatic_intent': '转向', 'target_delta': [
+                      {'domain': 'reader', 'subjects': [], 'op': 'set',
+                       'scope': 'scene', 'key': 'debt', 'value': '夫君身负旧约',
+                       'confirms': {'domain': 'relation', 'subjects': ['yun', 'fu_jun'],
+                                    'holder': None, 'key': 'marital_status'}}],
+                  'delivery_hint': ''}],
+             'delivery': {'pov': 'yun', 'voice': '冷峻', 'avoid': []}},
+            {'state_reads': [{'domain': 'relation', 'subjects': ['yun', 'fu_jun'],
+                              'key': 'marital_status'}],
+             'driver': {'focal_actor': 'yun', 'immediate_want': '求证',
+                        'opposition': '无凭据', 'turn': '发现玉佩'},
+             'realization_brief': '重心在玉佩的发现；压缩等待，在字面露出时收束。',
+             'beats': [
+                 {'event': '翻检妆匣', 'participants': ['yun'],
+                  'dramatic_intent': '推进', 'target_delta': [], 'delivery_hint': ''},
+                 {'event': '发现玉佩刻字', 'participants': ['yun'],
+                  'dramatic_intent': '揭示', 'target_delta': [], 'delivery_hint': ''}],
+             'delivery': {'pov': 'yun', 'voice': '冷峻', 'avoid': []}}],
+        'chapters': [{'purpose': '新婚之夜埋下旧约之疑', 'scenes': 1},
+                     {'purpose': '玉佩之谜浮出水面', 'scenes': 1}],
+        'scene_weights': [2, 1],
+    }
+
+
+def _green() -> BodyDesign:
+    body, errors = assemble_body_design(_wire(), known_char_ids={'yun', 'fu_jun'})
+    assert body is not None and not errors, errors
+    return body
+
+
+def _checkpoint(*obligation_ids: str) -> PreserveCheckpoint:
+    return PreserveCheckpoint(
+        checkpoint_id='cp1', policy_id='p', policy_version=1,
+        characters_sha256=H64, blueprints_sha256=H64, provider='x', model='y',
+        request_sha256='r' * 64,
+        obligations=tuple(SourceObligation(
+            obligation_id=oid, kind=PreserveKind.EVENT_CORE, statement=f'义务{oid}',
+            lineage=SourceLineage(blueprint_refs=('b01_01',), character_ids=('yun',)),
+            must_preserve=True, satisfaction='正文呈现')
+            for oid in obligation_ids),
+        checkpoint_sha256=H64)
+
+
+# ───────────────────────── 四协议独立版化 ─────────────────────────
+
+def test_four_protocols_are_independent_literals():
+    """每个付费语义节点一个独立协议字面量：演进互不牵连（B3 前半）。"""
+    assert STAGE4_PRESERVE_PROTOCOL == 'stage4-preserve-v1'
+    assert STAGE4_DESIGN_PROTOCOL == 'stage4-design-v1'
+    assert STAGE4_BIND_PROTOCOL == 'stage4-bind-v1'
+    assert STAGE4_HOOK_DESIGN_PROTOCOL == 'stage4-hook-design-v1'
+    assert len({STAGE4_PRESERVE_PROTOCOL, STAGE4_DESIGN_PROTOCOL,
+                STAGE4_BIND_PROTOCOL, STAGE4_HOOK_DESIGN_PROTOCOL}) == 4
+    assert STR06_RC_VERSION == 'str06-rc7'
+
+
+def test_design_wire_without_protocol_is_refused():
+    bad = _wire()
+    del bad['protocol_version']
+    _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'})
+    assert any('protocol_version' in e for e in errors)
+
+
+def test_hook_design_wire_without_protocol_is_refused():
+    body = _green()
+    from tests.test_str06_hook import _characters
+    projection = _characters().name_projection()
+    _, errors = assemble_hook_design(
+        {'pov': {'person': 'first', 'focalizers': ['yun']},
+         'materials': [{'beat_ref': {'scene': 'sc01', 'beat': 'b02'}, 'withheld': []}],
+         'forbidden_reveals': [], 'design_brief': '组织。', 'delivery_brief': '一句话。'},
+        body=body, known_char_ids={'yun', 'fu_jun'}, name_projection=projection)
+    assert any('protocol_version' in e for e in errors)
+
+
+# ───────────────────────── compiler 生成 ID／归章／权重（I-21） ─────────────
+
+def test_compiler_dispatches_ids_slices_chapters_and_normalizes_weights():
+    body = _green()
+    # 场景/拍 ID 按列表序派发
+    assert [s.scene_id for s in body.scenes] == ['sc01', 'sc02']
+    assert [b.beat_id for b in body.scenes[0].beats] == ['b01', 'b02', 'b03']
+    assert [b.beat_id for b in body.scenes[1].beats] == ['b01', 'b02']
+    # 章切片：章号连续、场景按阅读序切分
+    assert [(c.chapter_ordinal, c.scene_ids) for c in body.chapters] == [
+        (1, ('sc01',)), (2, ('sc02',))]
+    # 权重归一：相对重点 [2,1] → 和为 1
+    assert body.chapter_weights == {'sc01': 2 / 3, 'sc02': 1 / 3}
+    # 整数预算总和恰等于书级目标（largest remainder）
+    budgets = allocate_chapter_budgets(body, 1000)
+    assert sum(budgets.values()) == 1000
+    assert budgets == {1: 667, 2: 333}
+
+
+def test_cross_chapter_anchors_resolve_to_canonical_refs():
+    """跨章条目的 {"scene","beat"} 分量由 compiler 解析成 `场景#拍`。"""
+    body = _green()
+    assert body.ongoing_actions[0].started_at == 'sc01#b03'
+    assert body.open_questions[0].planted_at == 'sc02#b02'
+    assert body.promises[0].made_at == 'sc01#b02'
+
+
+def test_cross_chapter_anchor_out_of_range_is_refused():
+    bad = _wire()
+    bad['ongoing_actions'][0]['started_at'] = {'scene': 3, 'beat': 1}
+    _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'})
+    assert any('不存在的场景' in e for e in errors)
+    bad = _wire()
+    bad['open_questions'][0]['planted_at'] = {'scene': 2, 'beat': 9}
+    _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'})
+    assert any('不存在的拍' in e for e in errors)
+    bad = _wire()
+    bad['promises'][0]['made_at'] = 'sc01#b02'  # 模型写复合引用（旧形状）即拒
+    _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'})
+    assert any('锚定形状非法' in e for e in errors)
+
+
+def test_cross_chapter_char_ids_must_be_known():
+    bad = _wire()
+    bad['character_voices'] = [{'char_id': 'ghost', 'voice': 'v'}]
+    _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'})
+    assert any('CharacterVoice 引用未知 char_id' in e for e in errors)
+    bad = _wire()
+    bad['standing_goals'] = [{'char_id': 'ghost', 'goal': 'g'}]
+    _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'})
+    assert any('StandingGoal 引用未知 char_id' in e for e in errors)
+    bad = _wire()
+    bad['promises'] = [{'maker': 'ghost', 'content': 'c',
+                        'made_at': {'scene': 1, 'beat': 2}}]
+    _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'})
+    assert any('Promise 引用未知 char_id' in e for e in errors)
+
+
+def test_book_style_is_required_on_canonical():
+    """整书风格是 TargetDesign 的必填字段：缺省即拒，不用空串兜底。"""
+    with pytest.raises(ValidationError):
+        BodyDesign(
+            graph_id='g', book_style='', initial_state=(),
+            scenes=(TargetScene(
+                scene_id='s01', state_reads=(),
+                driver=SceneDriver(focal_actor='ch1', immediate_want='w',
+                                   opposition='o', turn='t'),
+                realization_brief='重心；收束。',
+                beats=(TargetBeat(beat_id='b01', event='e', participants=('ch1',),
+                                  dramatic_intent='d'),),
+                delivery=SceneDelivery(pov='ch1', voice='v')),),
+            chapters=(ChapterAssignment(chapter_ordinal=1, purpose='p',
+                                        scene_ids=('s01',)),))
+
+
+def test_book_style_and_voices_project_into_book_brief_and_packet():
+    """书级条目随 BookBrief 进每章请求（不再只写在导演说明里）。"""
+    body = _green()
+    checkpoint = _checkpoint('ob01')
+    from contracts.schema.grounding import BindingEntry, SemanticBinding
+    binding = SemanticBinding(
+        binding_id='b1', preserve_checkpoint_sha256=H64,
+        obligations=checkpoint.obligations,
+        entries=(BindingEntry(obligation_id='ob01', scene_id='sc01',
+                              beat_ref='sc01#b02'),),
+        unbound=())
+    plan, errors = compile_execution_plan(body, binding)
+    assert not errors, errors
+    ir = compile_writer_book_ir(graph=body, plan=plan, binding=binding,
+                                total_budget=1000, length_band=(0.6, 1.3),
+                                book_title='t')
+    assert ir.book_brief.book_style.startswith('冷峻克制')
+    assert ir.book_brief.character_voices[0].char_id == 'yun'
+    from novel.stages.common import render_chapter_packet
+    packet = render_chapter_packet(ir, 1, {})
+    assert '【整书风格与人物声线】' in packet
+    assert '冷峻克制的第三人称叙事' in packet
+    assert 'yun 的声线：短句、少感叹' in packet
+
+
+# ───────────────────────── 读者确认的事实地址（D4） ─────────────────────────
+
+def test_reader_confirmation_without_address_is_refused():
+    """D4：reader set 漏填 confirms 即拒（schema 构造期）。"""
+    with pytest.raises(ValidationError, match='confirms'):
+        TargetDelta(domain='reader', subjects=(), key='hiding', op='set',
+                    scope='scene', value='床底有人')
+    # 非 reader 域不得携带 confirms
+    with pytest.raises(ValidationError, match='confirms'):
+        TargetDelta(domain='world', subjects=(), key='hiding', op='set',
+                    scope='book', value='床底有人',
+                    confirms=StateAddress(domain='world', key='hiding'))
+    # confirms 不得指向读者确认本身
+    with pytest.raises(ValidationError, match='事实地址'):
+        TargetDelta(domain='reader', subjects=(), key='hiding', op='set',
+                    scope='scene', value='床底有人',
+                    confirms=StateAddress(domain='reader', key='other'))
+
+
+def test_reader_confirmation_must_reference_an_established_fact():
+    """D4 引用闭合：确认地址必须真实建立，且确认不早于建立。"""
+    bad = _wire()
+    bad['scenes'][0]['beats'][2]['target_delta'][0]['confirms'] = {
+        'domain': 'world', 'subjects': [], 'holder': None, 'key': 'ghost_fact'}
+    _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'})
+    assert any('从未建立' in e for e in errors)
+
+    # 确认早于建立：确认指向的地址首次建立在确认拍之后的场景
+    bad = _wire()
+    bad['scenes'][0]['beats'][2]['target_delta'][0]['confirms'] = {
+        'domain': 'world', 'subjects': [], 'holder': None, 'key': 'hiding'}
+    bad['scenes'][1]['beats'][1]['target_delta'] = [
+        {'domain': 'world', 'subjects': [], 'op': 'set', 'scope': 'book',
+         'key': 'hiding', 'value': '床底有人'}]
+    _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'})
+    assert any('早于事实建立' in e for e in errors)
+
+
+def test_reader_confirmation_is_projected_by_address_only():
+    """D4 地址维度：确认只投影进实际消费该地址的场景（读取或写入）。"""
+    from novel.stages.common import pending_reader_confirmations
+    body = _green()
+    # sc01 写 relation:marital_status 且 reader 确认指向它 ⇒ 在清单
+    first = pending_reader_confirmations(body, 0)
+    assert [(p.fact, p.position, p.in_scene) for p in first] == [
+        ('夫君身负旧约', 'sc01#b03', True)]
+    assert first[0].address.address() == ('relation', ('yun', 'fu_jun'), '', 'marital_status')
+    # 确认已发生在过去（sc01） ⇒ sc02 起不再列入（时序维度，D15）
+    assert pending_reader_confirmations(body, 1) == ()
+    # 不消费该地址的场景 ⇒ 清单为空（按地址的精确投影）
+    sliced = body.model_copy(update={'scenes': (body.scenes[1],),
+                                     'chapters': (ChapterAssignment(
+                                         chapter_ordinal=1, purpose='p',
+                                         scene_ids=('sc02',)),)})
+    sliced.scenes[0].state_reads = ()
+    assert pending_reader_confirmations(sliced, 0) == ()
+
+
+# ───────────────────────── 章预算的最大余数传导 ─────────────────────────
+
+def _canonical_with_weights(weights: dict[str, float]) -> BodyDesign:
+    return _green().model_copy(update={'chapter_weights': weights})
+
+
+def test_budget_change_propagates_by_integer_allocation():
+    """精确失效表：场景权重变化按整数预算变化传导，可能波及多章。"""
+    old = _canonical_with_weights({'sc01': 0.5, 'sc02': 0.5})
+    new = _canonical_with_weights({'sc01': 0.8, 'sc02': 0.2})
+    # 1000：等权 (500, 500) → 加权 (800, 200)：两章预算都变
+    assert allocate_chapter_budgets(old, 1000) == {1: 500, 2: 500}
+    assert allocate_chapter_budgets(new, 1000) == {1: 800, 2: 200}
+    assert chapters_with_budget_change(old, new, 1000) == {1, 2}
+    # 余数重分配：等权 1001 时低章号拿余数；把 sc01 权重微调到 0.6 后余数归 sc02
+    near = _canonical_with_weights({'sc01': 0.6, 'sc02': 0.4})
+    assert allocate_chapter_budgets(old, 1001) == {1: 501, 2: 500}
+    assert allocate_chapter_budgets(near, 1001) == {1: 601, 2: 400}
+    assert chapters_with_budget_change(old, near, 1001) == {1, 2}
+    # 权重不变 ⇒ 无章受影响
+    assert chapters_with_budget_change(old, old.model_copy(), 1001) == set()
+    # 只有部分章变化：大幅倾斜时小权重章预算可能保持
+    assert chapters_with_budget_change(old, new, 10) <= {1, 2}
+
+
+# ───────────────────────── Bind 输入投影（最小承载选择面） ────────────────
+
+def test_binding_space_projects_obligations_and_scene_beats_only():
+    """Bind 输入投影：义务清单＋场景/拍闭集；不回显导演说明／delta／称谓面。"""
+    import json
+    checkpoint = _checkpoint('ob01', 'ob02')
+    space = project_binding_space(checkpoint, _green())
+    assert space['protocol_version'] == STAGE4_BIND_PROTOCOL
+    assert [o['obligation_id'] for o in space['obligations']] == ['ob01', 'ob02']
+    assert space['obligations'][0]['statement'] == '义务ob01'
+    assert [(s['scene_id'], [b['beat_id'] for b in s['beats']])
+            for s in space['scenes']] == [('sc01', ['b01', 'b02', 'b03']),
+                                          ('sc02', ['b01', 'b02'])]
+    dumped = json.dumps(space, ensure_ascii=False)
+    for smuggled in ('realization_brief', 'target_delta', 'surface_introductions',
+                     'delivery_hint', 'knowledge_mode'):
+        assert smuggled not in dumped, smuggled
+
+
+def test_binding_supporting_refs_compose_and_stay_in_the_denominator():
+    """支撑拍分量 → 复合引用；义务闭集外的承载精确拒。"""
+    checkpoint = _checkpoint('ob01')
+    wire = {'protocol_version': STAGE4_BIND_PROTOCOL, 'entries': [
+        {'obligation_id': 'ob01', 'scene': 'sc01', 'beat': 'b03',
+         'supporting': [{'scene': 'sc01', 'beat': 'b01'},
+                        {'scene': 'sc02', 'beat': 'b01'}]}], 'unbound': []}
+    positions = {'sc01': {'b01', 'b02', 'b03'}, 'sc02': {'b01', 'b02'}}
+    binding, errors = assemble_binding(wire, checkpoint, positions)
+    assert not errors, errors
+    entry = binding.entries[0]
+    assert entry.beat_ref == 'sc01#b03'
+    assert entry.supporting_beat_refs == ('sc01#b01', 'sc02#b01')
+
+    wire['entries'][0]['supporting'].append({'scene': 'sc02', 'beat': 'b99'})
+    _, errors = assemble_binding(wire, checkpoint, positions)
+    assert any('真实拍' in e for e in errors)

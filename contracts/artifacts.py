@@ -246,14 +246,16 @@ STR06_ARTIFACT_RC_VERSIONS: Final[dict[str, str]] = {
     'stage4/compiled/execution_plan.json': 'str06-rc3',
     'stage4/acceptance/guard/compile.json': 'str06-rc3',
     'stage4/acceptance/guard/report.json': 'str06-rc4',
-    # rc5（2026-09-26 质量改进批次二）：Design 知情词汇补 believes（D14）、
-    # Preserve 策略升 v3——形状/判据变化，旧 Design 与 Preserve 产物拒读不复用。
-    'stage4/design/body_design.json': 'str06-rc5',
-    'stage4/design/presentation_graph.json': 'str06-rc5',
+    # rc7（2026-09-27 B3 前半）：Stage4 四协议独立版化（stage4-{preserve,design,
+    # bind,hook-design}-v1），Design wire 瘦身——场景/拍 ID、复合引用、权重归一
+    # 与整数预算由 compiler 生成（I-21）；TargetDesign 增结构化跨章字段；读者
+    # 确认必填事实地址（D4）。形状/判据变化，旧 Design／graph／WriterIR 拒读。
+    'stage4/design/body_design.json': 'str06-rc7',
+    'stage4/design/presentation_graph.json': 'str06-rc7',
     'stage4/context/hook/hook.json': 'str06-rc3',
-    # rc5（2026-09-26 质量改进批次二）：VerificationIR 新增「尚未向读者确认的
-    # 事实」清单（D15），renderer 与写作协议升版——正文请求身份随之变化。
-    'stage4/ir/writer_book_ir.json': 'str06-rc5',
+    # rc7 同批：BookBrief 带整书风格与稳定人物声线；PendingConfirmation 带事实
+    # 地址（D4），投影按地址精确到消费该地址的章包。
+    'stage4/ir/writer_book_ir.json': 'str06-rc7',
     'stage5/hook/hook.txt': 'str06-rc3',
     'stage5/hook/receipt.json': 'str06-rc3',
     'stage5/body/ch{nn}.txt': 'str06-rc4',

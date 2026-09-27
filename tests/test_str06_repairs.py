@@ -39,8 +39,8 @@ def contexts(graph, binding):
 def test_diamond_requires_is_not_cycle_and_brief_all_kinds_are_closed():
     chars, bp = _source_pair()
     wire = _preserve_wire()
-    wire['obligations'][0]['requires'] = ['ob02', 'ob03']
-    wire['obligations'][1]['requires'] = ['ob03']
+    wire['obligations'][0]['requires'] = [2, 3]
+    wire['obligations'][1]['requires'] = [3]
     cp, errors = assemble_preserve(wire, policy_id='p', policy_version=1, characters=chars,
                                   blueprint=bp, provider='x', model='x', request_sha256='a'*64)
     assert not errors, errors
@@ -54,11 +54,14 @@ def test_diamond_requires_is_not_cycle_and_brief_all_kinds_are_closed():
 
 def test_binding_accepts_full_wire_beat_id_and_rejects_omission():
     _, _, cp = _assemble()
-    wire = {'entries': [{'obligation_id': o.obligation_id, 'scene_id': 's01', 'beat_ref': 's01#bt1'}
+    wire = {'protocol_version': 'stage4-bind-v1', 'entries': [
+        {'obligation_id': o.obligation_id, 'scene': 's01', 'beat': 'bt1'}
                         for o in cp.obligations], 'unbound': []}
-    binding, errors = assemble_binding(wire, cp, {'s01': {'s01#bt1'}})
+    binding, errors = assemble_binding(wire, cp, {'s01': {'bt1'}})
     assert not errors and binding.obligations == cp.obligations
-    del wire['entries'][0]['beat_ref']
+    assert binding.entries[0].beat_ref == 's01#bt1'
+    # 承载拍缺项（闭集外）即拒：分量必须取投影给出的真实拍
+    del wire['entries'][0]['beat']
     assert assemble_binding(wire, cp, {'s01': {'bt1'}})[1]
 
 

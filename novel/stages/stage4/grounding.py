@@ -1,18 +1,27 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""grounding —— Preserve／Bind 的确定性组件（F3）。
+"""grounding —— Preserve／Bind 的确定性组件（F3；B3 前半换协议）。
 
 【分工】语义判断（哪些必保、如何承载）是 Preserve／Bind 两次 book-level LLM
 调用的职责（harness 组装付费请求）；本模块是确定性臂：
-  • `assemble_preserve`：Preserve wire → PreserveCheckpoint（校验：义务 id
-    唯一、requires 引用闭合且无环、lineage 引用真实 beat/char、必保必有
-    satisfaction——后者由 schema 构造期保证；checkpoint hash 由规范化字节
-    计算）。
+  • `assemble_preserve`：Preserve wire → PreserveCheckpoint。B3 前半起模型
+    不输出义务编号（I-21）：obligation_id 由 compiler 按列表序派发
+    （`ob{序:02d}`），`requires` 用 1-based 列表序号表达、compiler 重写为
+    正式 ID。校验：requires 引用闭合且无环、lineage 引用真实 beat/char、
+    必保必有 satisfaction——后者由 schema 构造期保证；checkpoint hash 由
+    规范化字节计算。
   • `project_brief`：checkpoint →（ReconstructionBrief, IdentityProjection）。
-    Brief 投影全部类别及满足条件（去源坐标，引用改为不带源顺序的需求 ID）；IdentityProjection 从 Characters v4 公共投影。
+    Brief 投影全部类别及满足条件（去源坐标，引用改为不带源顺序的需求 ID）；
+    IdentityProjection 从 Characters v4 公共投影。
     Design 拿到的是这两份 + OutputConstraints，**读不到 checkpoint 内部**。
-  • `assemble_binding`：Bind wire → SemanticBinding（跨产物校验复用 F1 的
-    check_binding_covers_checkpoint；完整发布，unbound 保留义务）。
+  • `project_binding_space`：Bind 的输入投影（B3 前半）——义务清单（正式
+    obligation_id 闭集）与场景/拍闭集（scene_id、每拍 beat_id＋event＋
+    participants），不再向模型回显整个 Design。
+  • `assemble_binding`：Bind wire → SemanticBinding。B3 前半起 wire 不写
+    复合引用（I-21）：承载位置给 {obligation_id, scene, beat} 与支撑拍
+    [{scene, beat}]——三个分量都只能取投影给出的闭集内单 ID，`场景#拍`
+    复合引用由 compiler 组成。跨产物校验复用 F1 的
+    check_binding_covers_checkpoint；完整发布，unbound 保留义务。
 
 不修改输入；不落盘（落盘归 harness／repository）。
 """
@@ -21,6 +30,7 @@ from __future__ import annotations
 import hashlib
 from typing import Any
 
+from contracts.schema.design import BodyDesign
 from contracts.schema.grounding import (
     IdentityProjection, PreserveCheckpoint, ReconstructionBrief,
     SemanticBinding, SourceLineage, SourceObligation,
@@ -29,6 +39,9 @@ from contracts.schema.source import (
     BlueprintsArtifactV13, CharactersCore,
 )
 from contracts.schema.grounding import BriefRequirement
+from contracts.schema.workflow import (
+    STAGE4_BIND_PROTOCOL, STAGE4_PRESERVE_PROTOCOL,
+)
 from novel.stages.common import check_binding_covers_checkpoint
 from pydantic import ValidationError
 
@@ -39,11 +52,14 @@ def _sha256_payload(obj: Any) -> str:
         json.dumps(obj, ensure_ascii=False, sort_keys=True).encode('utf-8')).hexdigest()
 
 
-#: wire 键白名单（Q-1：多余键在 compile 入口报错，不静默丢弃）
-_OBLIGATION_KEYS = frozenset({'obligation_id', 'kind', 'statement', 'lineage',
+#: wire 键白名单（Q-1：多余键在 compile 入口报错，不静默丢弃）。
+#: B3 前半：Preserve 不收 obligation_id（compiler 派发），requires 是 1-based
+#: 序号数组；Bind 的承载位置是 {scene, beat} 单 ID 分量（复合引用 compiler 组）。
+_OBLIGATION_KEYS = frozenset({'kind', 'statement', 'lineage',
                               'must_preserve', 'satisfaction', 'requires'})
 _LINEAGE_KEYS = frozenset({'blueprint_refs', 'character_ids'})
-_ENTRY_KEYS = frozenset({'obligation_id', 'scene_id', 'beat_ref', 'supporting_beat_refs'})
+_ENTRY_KEYS = frozenset({'obligation_id', 'scene', 'beat', 'supporting'})
+_SUPPORTING_KEYS = frozenset({'scene', 'beat'})
 _UNBOUND_KEYS = frozenset({'obligation_id', 'owner', 'reason'})
 
 
@@ -60,45 +76,58 @@ def assemble_preserve(
     characters: CharactersCore, blueprint: BlueprintsArtifactV13,
     provider: str, model: str, request_sha256: str,
 ) -> tuple[PreserveCheckpoint | None, list[str]]:
-    """Preserve wire（{'obligations': [...]}）→ checkpoint。确定性校验：
-    id 唯一、requires 闭合无环、lineage 的 beat/char 引用真实。
+    """Preserve wire（stage4-preserve-v1：{'obligations': [...]}）→ checkpoint。
+
+    确定性校验：协议版本、requires 序号闭合无环、lineage 的 beat/char 引用
+    真实；义务编号由 compiler 按列表序派发（I-21），模型不输出 ID。
     `characters_sha256` 绑定 core view（characters + initial_state）——名称结构
     修订不使已购 checkpoint 失效（F6 裁决）。"""
     errors: list[str] = []
-    _reject_unknown_keys(errors, wire, frozenset({'obligations'}), 'Preserve')
+    if wire.get('protocol_version') != STAGE4_PRESERVE_PROTOCOL:
+        errors.append(f'protocol_version 必须是 {STAGE4_PRESERVE_PROTOCOL}，'
+                      f'实得 {wire.get("protocol_version")!r}（I-13 无隐式迁移）')
+    _reject_unknown_keys(errors, wire, frozenset({'protocol_version', 'obligations'}),
+                         'Preserve')
     raw = wire.get('obligations') or []
     if not raw:
-        return None, ['obligations 缺失或为空']
+        return None, ['obligations 缺失或为空'] + errors
     beat_ids = {b.beat_id for c in blueprint.chapters for b in c.beats}
     char_ids = set(characters.characters)
-    ids: list[str] = []
-    for item in raw:
-        oid = item.get('obligation_id')
-        ids.append(oid)
-        _reject_unknown_keys(errors, item, _OBLIGATION_KEYS, f'义务 {oid}')
+    for ordinal, item in enumerate(raw, start=1):
+        _reject_unknown_keys(errors, item, _OBLIGATION_KEYS, f'义务 {ordinal}')
         _reject_unknown_keys(errors, item.get('lineage') or {}, _LINEAGE_KEYS,
-                             f'义务 {oid}.lineage')
+                             f'义务 {ordinal}.lineage')
         for ref in (item.get('lineage') or {}).get('blueprint_refs') or []:
             if ref not in beat_ids:
-                errors.append(f'义务 {oid} lineage 引用未知 beat：{ref}')
+                errors.append(f'义务 {ordinal} lineage 引用未知 beat：{ref}')
         for ref in (item.get('lineage') or {}).get('character_ids') or []:
             if ref not in char_ids:
-                errors.append(f'义务 {oid} lineage 引用未知人物：{ref}')
-    if len(set(ids)) != len(ids):
-        errors.append('obligation_id 重复')
-    known = set(ids)
-    for item in raw:
-        for req in item.get('requires') or []:
-            if req not in known:
-                errors.append(f"义务 {item.get('obligation_id')} requires 引用未知义务：{req}")
+                errors.append(f'义务 {ordinal} lineage 引用未知人物：{ref}')
+    if errors:
+        return None, errors
+    # ID 派发（I-21）：obligation_id 按列表序生成；requires 是 1-based 列表
+    # 序号，compiler 重写为正式 ID——自指与越界在此精确拒。
+    dispatched = [f'ob{i:02d}' for i in range(1, len(raw) + 1)]
+    graph: dict[str, list[str]] = {}
+    for ordinal, (item, oid) in enumerate(zip(raw, dispatched), start=1):
+        requires = item.get('requires') or []
+        resolved: list[str] = []
+        for ref in requires:
+            if not isinstance(ref, int) or isinstance(ref, bool) or not 1 <= ref <= len(raw):
+                errors.append(f'义务 {ordinal} 的 requires 序号越界：{ref!r}'
+                              f'（1-{len(raw)}；不得自指）')
+                continue
+            if ref == ordinal:
+                errors.append(f'义务 {ordinal} 的 requires 不得自指')
+                continue
+            resolved.append(dispatched[ref - 1])
+        graph[oid] = resolved
     if errors:
         return None, errors
     # requires DAG 无环（存在即报，不给拓扑）
-    graph: dict[str, list[str]] = {
-        item['obligation_id']: list(item.get('requires') or []) for item in raw}
     for start in graph:
         seen: set[str] = set()
-        stack = list(graph[start])
+        stack: list[str] = list(graph[start])
         while stack:
             node = stack.pop()
             if node == start:
@@ -107,21 +136,21 @@ def assemble_preserve(
             if node in seen:
                 continue
             seen.add(node)
-            stack.extend(graph.get(node, []))
+            stack.extend(graph.get(node, ()))
     if errors:
         return None, errors
     try:
         obligations = tuple(
             SourceObligation(
-                obligation_id=o['obligation_id'], kind=o['kind'],
+                obligation_id=oid, kind=o['kind'],
                 statement=o['statement'],
                 lineage=SourceLineage(
                     blueprint_refs=tuple((o.get('lineage') or {}).get('blueprint_refs') or []),
                     character_ids=tuple((o.get('lineage') or {}).get('character_ids') or [])),
                 must_preserve=o['must_preserve'],
                 satisfaction=o.get('satisfaction') or '',
-                requires=tuple(o.get('requires') or []))
-            for o in raw)
+                requires=tuple(graph[oid]))
+            for oid, o in zip(dispatched, raw))
     except (ValidationError, KeyError) as exc:
         return None, [f'义务构造失败：{exc}']
     checkpoint = PreserveCheckpoint(
@@ -175,33 +204,82 @@ def project_brief(
     return brief, identity
 
 
+def project_binding_space(
+    checkpoint: PreserveCheckpoint, body: BodyDesign,
+) -> dict[str, Any]:
+    """Bind 的输入投影（B3 前半）：承载选择的最小闭集，不回显整个 Design。
+
+    模型需要的是「每条义务要保什么」与「每个拍发生了什么」——driver、导演
+    说明、delta 全量与称谓释放都不进承载选择的输入。义务 id 与场景/拍 id 是
+    compiler 派发的正式 ID（闭集选择，不是模型生成）。纯函数。"""
+    return {
+        'protocol_version': STAGE4_BIND_PROTOCOL,
+        'obligations': [
+            {'obligation_id': o.obligation_id, 'kind': o.kind.value
+             if hasattr(o.kind, 'value') else str(o.kind),
+             'statement': o.statement, 'must_preserve': o.must_preserve,
+             'satisfaction': o.satisfaction, 'requires': list(o.requires)}
+            for o in checkpoint.obligations],
+        'scenes': [
+            {'scene_id': scene.scene_id,
+             'beats': [{'beat_id': beat.beat_id, 'event': beat.event,
+                        'participants': list(beat.participants)}
+                       for beat in scene.beats]}
+            for scene in body.scenes],
+    }
+
+
 def assemble_binding(
     wire: dict[str, Any], checkpoint: PreserveCheckpoint,
     known_scene_beats: dict[str, set[str]],
 ) -> tuple[SemanticBinding | None, list[str]]:
-    """Bind wire（{'entries': [...], 'unbound': [...]}）→ 完整 SemanticBinding。
+    """Bind wire（stage4-bind-v1）→ 完整 SemanticBinding。
 
-    校验：beat_ref 落真实拍（M4 面）、分母一致（复用 F1 checks）。
-    known_scene_beats: scene_id → 该场景真实 beat_id 集合（来自 Design graph）。
+    wire 的承载位置是 {obligation_id, scene, beat}（支撑拍同）——三个分量都
+    只能取投影给出的闭集内单 ID；`场景#拍` 复合引用由 compiler 组成（I-21，
+    模型不写复合引用）。校验：分量落真实拍（M4 面）、分母一致（复用 F1
+    checks）。known_scene_beats: scene_id → 该场景真实 beat_id 集合（来自
+    Design canonical）。
     """
     errors: list[str] = []
-    _reject_unknown_keys(errors, wire, frozenset({'entries', 'unbound'}), 'Bind')
+    if wire.get('protocol_version') != STAGE4_BIND_PROTOCOL:
+        errors.append(f'protocol_version 必须是 {STAGE4_BIND_PROTOCOL}，'
+                      f'实得 {wire.get("protocol_version")!r}（I-13 无隐式迁移）')
+    _reject_unknown_keys(errors, wire, frozenset({'protocol_version', 'entries', 'unbound'}),
+                         'Bind')
     denominator = {o.obligation_id for o in checkpoint.obligations}
+
+    def _ref(item: dict[str, Any], where: str) -> str | None:
+        """{scene, beat} 分量 → `场景#拍` 复合引用；闭集外精确拒。"""
+        scene, beat = item.get('scene'), item.get('beat')
+        if scene not in known_scene_beats:
+            errors.append(f'{where} 引用未知场景：{scene}')
+            return None
+        if beat not in known_scene_beats[scene]:
+            errors.append(f'{where} 的拍不是 {scene!r} 的真实拍：{beat}')
+            return None
+        return f'{scene}#{beat}'
+
+    canonical_entries: list[dict[str, Any]] = []
     for entry in wire.get('entries') or []:
         _reject_unknown_keys(errors, entry, _ENTRY_KEYS, 'entries')
-        scene = entry.get('scene_id')
-        if scene not in known_scene_beats:
-            errors.append(f"entries 引用未知场景：{scene}")
+        if entry.get('obligation_id') not in denominator:
+            errors.append(f"entries 混入 checkpoint 外义务：{entry.get('obligation_id')}")
+        ref = _ref(entry, f"承载 {entry.get('obligation_id')}")
+        if ref is None:
             continue
-        refs = [entry.get('beat_ref'), *(entry.get('supporting_beat_refs') or [])]
-        for ref in refs:
-            if not isinstance(ref, str) or '#' not in ref:
-                errors.append(f'承载位置必须显式给出真实拍：{ref}')
+        supporting: list[str] = []
+        for raw in entry.get('supporting') or []:
+            if not isinstance(raw, dict):
+                errors.append(f"承载 {entry.get('obligation_id')} 的支撑拍形状非法：{raw!r}")
                 continue
-            sid, local = ref.split('#', 1)
-            known = {b.split('#', 1)[-1] for b in known_scene_beats.get(sid, set())}
-            if local not in known:
-                errors.append(f'承载 beat_ref 不是 {sid!r} 的真实拍：{ref}')
+            _reject_unknown_keys(errors, raw, _SUPPORTING_KEYS, 'supporting')
+            supported = _ref(raw, f"支撑 {entry.get('obligation_id')}")
+            if supported is not None:
+                supporting.append(supported)
+        canonical_entries.append({'obligation_id': entry.get('obligation_id'),
+                                  'scene_id': entry.get('scene'), 'beat_ref': ref,
+                                  'supporting_beat_refs': supporting})
     for unbound in wire.get('unbound') or []:
         _reject_unknown_keys(errors, unbound, _UNBOUND_KEYS, 'unbound')
         if unbound.get('obligation_id') not in denominator:
@@ -209,7 +287,7 @@ def assemble_binding(
     if errors:
         return None, errors
     try:
-        entries = tuple(_binding_entry(e) for e in wire.get('entries') or [])
+        entries = tuple(_binding_entry(e) for e in canonical_entries)
         unbound = tuple(_unbound_entry(u) for u in wire.get('unbound') or [])
         binding = SemanticBinding(
             binding_id=f'bind_{checkpoint.checkpoint_id}',
@@ -229,7 +307,6 @@ def _binding_entry(raw: dict[str, Any]):
         obligation_id=raw['obligation_id'], scene_id=raw['scene_id'],
         beat_ref=raw['beat_ref'],
         supporting_beat_refs=tuple(raw.get('supporting_beat_refs') or ()))
-
 
 def _unbound_entry(raw: dict[str, Any]):
     from contracts.schema.grounding import UnboundEntry

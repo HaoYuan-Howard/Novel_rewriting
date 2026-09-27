@@ -63,7 +63,7 @@ def _scene(scene_id: str, *participants: str) -> TargetScene:
 
 def _graph() -> BodyDesign:
     return BodyDesign(initial_state=(),
-        graph_id='g1',
+        graph_id='g1', book_style='冷峻克制的第三人称叙事。',
         scenes=(_scene('s01', 'ch1'), _scene('s02', 'ch1', 'ch2'), _scene('s03', 'ch1')),
         chapters=(
             ChapterAssignment(chapter_ordinal=1, purpose='起', scene_ids=('s01',)),

@@ -40,16 +40,18 @@ def _source_pair():
 
 
 def _preserve_wire():
-    return {'obligations': [
-        {'obligation_id': 'ob01', 'kind': 'event_core', 'statement': '借种之约成立',
+    """stage4-preserve-v1 形状（B3 前半）：模型不输出义务编号，requires 用
+    1-based 列表序号表达。"""
+    return {'protocol_version': 'stage4-preserve-v1', 'obligations': [
+        {'kind': 'event_core', 'statement': '借种之约成立',
          'lineage': {'blueprint_refs': ['b01_01'], 'character_ids': ['fu_jun', 'yun']},
          'must_preserve': True, 'satisfaction': '正文呈现约定被提出且被接受',
          'requires': []},
-        {'obligation_id': 'ob02', 'kind': 'reveal', 'statement': '云娘知晓真相',
+        {'kind': 'reveal', 'statement': '云娘知晓真相',
          'lineage': {'blueprint_refs': ['b01_01'], 'character_ids': ['yun']},
          'must_preserve': True, 'satisfaction': '正文呈现知晓时刻与反应',
-         'requires': ['ob01']},
-        {'obligation_id': 'ob03', 'kind': 'identity', 'statement': '夫君身份约束',
+         'requires': [1]},
+        {'kind': 'identity', 'statement': '夫君身份约束',
          'lineage': {'blueprint_refs': [], 'character_ids': ['fu_jun']},
          'must_preserve': False, 'satisfaction': '', 'requires': []},
     ]}
@@ -81,6 +83,9 @@ def test_preserve_rules_stay_in_sync_with_preserve_kind():
 def test_assemble_preserve_green_and_hash_stable():
     chars, bp, cp = _assemble()
     assert len(cp.obligations) == 3
+    # compiler 派发（I-21）：义务编号按列表序生成；requires 序号重写为正式 ID
+    assert [o.obligation_id for o in cp.obligations] == ['ob01', 'ob02', 'ob03']
+    assert cp.obligations[1].requires == ('ob01',)
     # 同输入重放 → 同 checkpoint hash（paid checkpoint 的可恢复身份）
     cp2, _ = assemble_preserve(
         _preserve_wire(), policy_id='preserve-default', policy_version=1,
@@ -106,17 +111,47 @@ def test_assemble_preserve_rejects_dangling_and_cycles():
         provider='x', model='y', request_sha256='r' * 64)
     assert any('未知 beat' in e for e in errors)
 
-    cyclic = {'obligations': [
-        {'obligation_id': 'obA', 'kind': 'event_core', 'statement': 'a',
+    cyclic = {'protocol_version': 'stage4-preserve-v1', 'obligations': [
+        {'kind': 'event_core', 'statement': 'a',
          'lineage': {'blueprint_refs': ['b01_01'], 'character_ids': []},
-         'must_preserve': False, 'satisfaction': '', 'requires': ['obB']},
-        {'obligation_id': 'obB', 'kind': 'event_core', 'statement': 'b',
+         'must_preserve': False, 'satisfaction': '', 'requires': [2]},
+        {'kind': 'event_core', 'statement': 'b',
          'lineage': {'blueprint_refs': ['b01_01'], 'character_ids': []},
-         'must_preserve': False, 'satisfaction': '', 'requires': ['obA']}]}
+         'must_preserve': False, 'satisfaction': '', 'requires': [1]}]}
     _, errors = assemble_preserve(
         cyclic, policy_id='p', policy_version=1, characters=chars, blueprint=bp,
         provider='x', model='y', request_sha256='r' * 64)
     assert any('成环' in e for e in errors)
+
+    # 编号不是模型的输出（I-21）：带 obligation_id 的旧形状拒收
+    stale = _preserve_wire()
+    stale['obligations'][0]['obligation_id'] = 'ob01'
+    _, errors = assemble_preserve(
+        stale, policy_id='p', policy_version=1, characters=chars, blueprint=bp,
+        provider='x', model='y', request_sha256='r' * 64)
+    assert any('未知字段' in e for e in errors)
+
+    # requires 序号越界 / 自指精确拒
+    oob = _preserve_wire()
+    oob['obligations'][1]['requires'] = [9]
+    _, errors = assemble_preserve(
+        oob, policy_id='p', policy_version=1, characters=chars, blueprint=bp,
+        provider='x', model='y', request_sha256='r' * 64)
+    assert any('越界' in e for e in errors)
+    self_ref = _preserve_wire()
+    self_ref['obligations'][1]['requires'] = [2]
+    _, errors = assemble_preserve(
+        self_ref, policy_id='p', policy_version=1, characters=chars, blueprint=bp,
+        provider='x', model='y', request_sha256='r' * 64)
+    assert any('自指' in e for e in errors)
+
+    # 协议版本漏带/错带即拒（I-13 无隐式迁移）
+    wrong = _preserve_wire()
+    wrong['protocol_version'] = 'stage4-preserve-v9'
+    _, errors = assemble_preserve(
+        wrong, policy_id='p', policy_version=1, characters=chars, blueprint=bp,
+        provider='x', model='y', request_sha256='r' * 64)
+    assert any('protocol_version' in e for e in errors)
 
 
 # ───────────────────────── Brief 投影 ─────────────────────────
@@ -169,58 +204,88 @@ def test_identity_stable_constraints_come_only_from_the_fact_layer():
 
 # ───────────────────────── Bind ─────────────────────────
 
+BPV = 'stage4-bind-v1'
+
+
 def test_assemble_binding_full_denominator():
     chars, bp, cp = _assemble()
-    scenes = {'s01': {'bt1'}}
-    wire = {'entries': [
-        {'obligation_id': 'ob01', 'scene_id': 's01', 'beat_ref': 's01#bt1'},
-        {'obligation_id': 'ob02', 'scene_id': 's01', 'beat_ref': 's01#bt1'},
+    scenes = {'sc01': {'b01'}}
+    wire = {'protocol_version': BPV, 'entries': [
+        {'obligation_id': 'ob01', 'scene': 'sc01', 'beat': 'b01'},
+        {'obligation_id': 'ob02', 'scene': 'sc01', 'beat': 'b01'},
     ], 'unbound': [
         {'obligation_id': 'ob03', 'owner': 'design', 'reason': '身份约束随人物携带'}]}
     binding, errors = assemble_binding(wire, cp, scenes)
     assert binding is not None and not errors, errors
     assert isinstance(binding, SemanticBinding)
+    # 复合引用由 compiler 组成（I-21）：wire 只给 {scene, beat} 分量
+    assert binding.entries[0].beat_ref == 'sc01#b01'
+    assert binding.entries[0].scene_id == 'sc01'
 
     # 红：义务消失（半份 Binding）
-    dropped = {'entries': wire['entries'][:1], 'unbound': wire['unbound']}
+    dropped = {'protocol_version': BPV, 'entries': wire['entries'][:1],
+               'unbound': wire['unbound']}
     _, errors = assemble_binding(dropped, cp, scenes)
     assert any('消失' in e for e in errors)
 
-    # 红：beat_ref 指向不存在的拍（M4 面）
-    ghost = {'entries': [
-        {'obligation_id': 'ob01', 'scene_id': 's01', 'beat_ref': 's01#ghost'},
-        {'obligation_id': 'ob02', 'scene_id': 's01', 'beat_ref': 's01#bt1'}],
+    # 红：拍分量指向不存在的拍（M4 面；闭集外精确拒，不猜笔误）
+    ghost = {'protocol_version': BPV, 'entries': [
+        {'obligation_id': 'ob01', 'scene': 'sc01', 'beat': 'b99'},
+        {'obligation_id': 'ob02', 'scene': 'sc01', 'beat': 'b01'}],
         'unbound': wire['unbound']}
     _, errors = assemble_binding(ghost, cp, scenes)
     assert any('真实拍' in e for e in errors)
 
+    # 红：未知场景
+    stray = {'protocol_version': BPV, 'entries': [
+        {'obligation_id': 'ob01', 'scene': 'sc99', 'beat': 'b01'}],
+        'unbound': [{'obligation_id': 'ob02', 'owner': 'design', 'reason': 'x'},
+                    {'obligation_id': 'ob03', 'owner': 'design', 'reason': 'y'}]}
+    _, errors = assemble_binding(stray, cp, scenes)
+    assert any('未知场景' in e for e in errors)
+
     # 红：unbound 混入 checkpoint 外义务
-    invented = {'entries': wire['entries'],
+    invented = {'protocol_version': BPV, 'entries': wire['entries'],
                 'unbound': wire['unbound'] + [
                     {'obligation_id': 'obX', 'owner': 'design', 'reason': 'x'}]}
     _, errors = assemble_binding(invented, cp, scenes)
     assert any('checkpoint 外' in e for e in errors)
 
+    # 红：模型写复合引用（旧形状）即拒——引用由 compiler 组成
+    stale = {'protocol_version': BPV, 'entries': [
+        {'obligation_id': 'ob01', 'scene_id': 'sc01', 'beat_ref': 'sc01#b01'}],
+        'unbound': wire['unbound']}
+    _, errors = assemble_binding(stale, cp, scenes)
+    assert any('未知字段' in e for e in errors)
+
+    # 红：协议版本错带
+    wrong = dict(wire, protocol_version='stage4-bind-v9')
+    _, errors = assemble_binding(wrong, cp, scenes)
+    assert any('protocol_version' in e for e in errors)
+
 
 # ───────────────────────── Design 组装 ─────────────────────────
 
 def _design_wire():
+    """stage4-design-v1 形状（B3 前半）：模型不输出任何 ID／归章引用／归一权重。"""
     return {
+        'protocol_version': 'stage4-design-v1',
+        'book_style': '冷峻克制的第三人称叙事，重对话张力。',
         'initial_state': [],
         'scenes': [
-            {'scene_id': 's01', 'state_reads': [],
+            {'state_reads': [],
              'driver': {'focal_actor': 'yun', 'immediate_want': '保全婚姻',
                         'opposition': '家族压力', 'turn': '约定'},
              'realization_brief': '重心在约定成立的承诺瞬间；从家族施压的晚宴写起，'
                                   '展开两人独处的对峙，在立约处收住，衔接下一场的兑现。',
              'beats': [
-                 {'beat_id': 'bt1', 'event': '约定成立', 'participants': ['yun', 'fu_jun'],
+                 {'event': '约定成立', 'participants': ['yun', 'fu_jun'],
                   'dramatic_intent': '立誓', 'target_delta': [
                       {'domain': 'relation', 'subjects': ['yun', 'fu_jun'], 'op': 'set', 'scope': 'book', 'key': 'marital_status', 'value': '夫妻'}],
                   'delivery_hint': ''}],
              'delivery': {'pov': 'yun', 'voice': '冷峻', 'avoid': []}}],
-        'chapters': [{'chapter_ordinal': 1, 'purpose': '婚姻从名分走向盟约', 'scene_ids': ['s01']}],
-        'chapter_weights': {'s01': 1.0},
+        'chapters': [{'purpose': '婚姻从名分走向盟约', 'scenes': 1}],
+        'scene_weights': [2],
     }
 
 
@@ -228,7 +293,14 @@ def test_assemble_design_green_and_refusals():
     body, errors = assemble_body_design(
         _design_wire(), known_char_ids={'yun', 'fu_jun'})
     assert body is not None and not errors, errors
+    # compiler 派发（I-21）：场景/拍 ID、归章引用、权重归一都在 canonical 落地
+    assert body.scenes[0].scene_id == 'sc01'
+    assert body.scenes[0].beats[0].beat_id == 'b01'
     assert body.scenes[0].beats[0].target_delta[0].domain == 'relation'
+    assert body.chapters[0].chapter_ordinal == 1
+    assert body.chapters[0].scene_ids == ('sc01',)
+    assert body.chapter_weights == {'sc01': 1.0}
+    assert body.book_style.startswith('冷峻克制')
     # RC4：导演说明与章节目的作为 canonical 内容被组装保留
     assert body.scenes[0].realization_brief.startswith('重心在')
     assert body.chapters[0].purpose == '婚姻从名分走向盟约'
@@ -243,16 +315,43 @@ def test_assemble_design_green_and_refusals():
     _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'})
     assert errors
 
+    # 章切片的场数与场景总数不一致（每章非空、全覆盖由 compiler 核对）
     bad = _design_wire()
-    bad['chapters'][0]['scene_ids'] = ['sX']
+    bad['chapters'][0]['scenes'] = 2
     _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'})
-    assert errors
+    assert any('章切片总数' in e for e in errors)
 
-    # source-blind：混入 source_ref 即拒（schema 层）
+    # source-blind：混入 source_ref 即拒（wire 白名单 + schema 层双保险）
     bad = _design_wire()
     bad['scenes'][0]['source_ref'] = 'b01_01'
     _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'})
     assert errors
+
+    # 协议版本漏带/错带即拒（I-13 无隐式迁移）
+    bad = _design_wire()
+    bad['protocol_version'] = 'stage4-design-v9'
+    _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'})
+    assert any('protocol_version' in e for e in errors)
+
+    # 模型写可派生字段即拒（I-21：ID 由 compiler 生成）
+    bad = _design_wire()
+    bad['scenes'][0]['scene_id'] = 's01'
+    _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'})
+    assert any('未知字段' in e for e in errors)
+    bad = _design_wire()
+    bad['scenes'][0]['beats'][0]['beat_id'] = 'bt1'
+    _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'})
+    assert any('未知字段' in e for e in errors)
+
+    # 权重是相对重点数组，不是归一 dict（I-21：归一由 compiler 完成）
+    bad = _design_wire()
+    bad['scene_weights'] = {'sc01': 1.0}
+    _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'})
+    assert any('scene_weights' in e for e in errors)
+    bad = _design_wire()
+    bad['scene_weights'] = [0]
+    _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'})
+    assert any('正数数组' in e for e in errors)
 
 
 def test_design_surface_release_must_be_registered():

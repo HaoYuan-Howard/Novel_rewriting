@@ -615,10 +615,25 @@ STR06_RUNTIME_CONFIG: Final = CandidateRuntimeConfig()
 #: 引用本常量，避免各处手写字符串漂移）。rc6（2026-09-27 B2 五节点重建）：Stage2
 #: 按语义单元与作用域拆五节点（D9），观察与关联协议落地
 #（`contracts/schema/observation.py`，stage2-observation-v1）；联合抽取派生输入退役。
-STR06_RC_VERSION: Final = 'str06-rc6'
+#: rc7（2026-09-27 B3 前半）：Stage4 四协议独立版化（preserve/design/bind/
+#: hook_design，见下方 `STAGE4_*_PROTOCOL`），Design wire 瘦身——场景/拍 ID、
+#: 复合引用、权重归一与整数预算改由 compiler 生成（I-21）；TargetDesign 增结构化
+#: 跨章字段；读者确认必填事实地址（D4）。
+STR06_RC_VERSION: Final = 'str06-rc7'
 
 #: 已知 RC 标签面（版本规则见 `contracts/artifacts.py::STR06_ARTIFACT_RC_VERSIONS`）。
-STR06_RC_LABELS: Final = ('str06-rc2', 'str06-rc3', 'str06-rc4', 'str06-rc5', 'str06-rc6')
+STR06_RC_LABELS: Final = ('str06-rc2', 'str06-rc3', 'str06-rc4', 'str06-rc5', 'str06-rc6',
+                          'str06-rc7')
+
+#: Stage4 四个付费语义节点的独立 wire 协议（B3 前半；各节点独立演进，升版互不
+#: 牵连）。wire 顶层 `protocol_version` 与对应常量逐字对账，漏带或错带即拒
+#: （I-13：本仓无隐式通用迁移）。模型只表达选择、结构与相对篇幅重点；场景/拍
+#: ID（`sc{序:02d}`／`b{序:02d}`，按列表序派发）、复合引用（`场景#拍`）、
+#: 权重归一与整数预算全部由 compiler 生成（I-21）。
+STAGE4_PRESERVE_PROTOCOL: Final = 'stage4-preserve-v1'
+STAGE4_DESIGN_PROTOCOL: Final = 'stage4-design-v1'
+STAGE4_BIND_PROTOCOL: Final = 'stage4-bind-v1'
+STAGE4_HOOK_DESIGN_PROTOCOL: Final = 'stage4-hook-design-v1'
 
 #: epoch 滚动理由面。`initial` 只允许首开；漂移类要求身份确实变化；`repair`
 #: 是 typed 修复的显式 producer 边界（对齐正式 ExecutionEpochReason 的 continue）。

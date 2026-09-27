@@ -94,7 +94,7 @@ def test_participation_alone_never_releases_a_surface():
     """参与不等于揭示：未声明释放的人物不进 usable_surfaces，其带名面进禁用面。"""
     body = _delayed_release_design()
     book_ir = _ir(body)
-    releases = surface_engine_release(body, 's01')
+    releases = surface_engine_release(body, 'sc01')
     assert {r.char_id for r in releases} == {'yun_niang'}, 'participants 不得冒充已释放称谓'
     assert _scene_releases(book_ir, 1)['yun_niang'] == {'苏芸娘', '芸娘'}
     assert 'fu_jun' not in _scene_releases(book_ir, 1)
@@ -213,8 +213,7 @@ def test_release_schedule_groups_by_character_and_release_chapter():
 def test_same_chapter_later_scene_does_not_carry_into_earlier_scene():
     """同章内后场引入不向前场携入：s01 不见陆大哥，s02 才见。"""
     wire = _body_wire()
-    wire['chapters'] = [{'chapter_ordinal': 1, 'purpose': '新婚之夜与夜半异动',
-                         'scene_ids': ['s01', 's02']}]
+    wire['chapters'] = [{'purpose': '新婚之夜与夜半异动', 'scenes': 2}]
     wire['scenes'][1]['beats'][0]['surface_introductions'] = [
         {'char_id': 'fu_jun', 'surfaces': ['陆大哥']}]
     body = _assemble(wire)
@@ -237,20 +236,18 @@ def _unset_chain_wire(*, final_op: str) -> dict:
         {'domain': 'character', 'subjects': ['fu_jun'], 'holder': None,
          'key': 'whereabouts', 'op': final_op, 'value': None, 'scope': 'book'}]
     wire['scenes'].append({
-        'scene_id': 's03',
         'state_reads': [{'domain': 'character', 'subjects': ['fu_jun'], 'holder': None,
                          'key': 'whereabouts'}],
         'driver': {'focal_actor': 'yun_niang', 'immediate_want': '确认夫君去向',
                    'opposition': '无人可问', 'turn': '决意亲自去寻'},
         'realization_brief': '重心在空堂回响；压缩寻问无果，在决意亲自去寻处收束。',
         'beats': [
-            {'beat_id': 'bt1', 'event': '芸娘寻问无果', 'participants': ['yun_niang'],
+            {'event': '芸娘寻问无果', 'participants': ['yun_niang'],
              'dramatic_intent': '加压', 'target_delta': [], 'delivery_hint': '',
              'surface_introductions': []}],
         'delivery': {'pov': 'yun_niang', 'voice': '冷峻', 'avoid': []}})
-    wire['chapters'].append({'chapter_ordinal': 3, 'purpose': '寻问无果后决意亲寻',
-                             'scene_ids': ['s03']})
-    wire['chapter_weights'] = {'s01': 0.5, 's02': 0.3, 's03': 0.2}
+    wire['chapters'].append({'purpose': '寻问无果后决意亲寻', 'scenes': 1})
+    wire['scene_weights'] = [5, 3, 2]
     return wire
 
 
@@ -416,8 +413,8 @@ def test_paid_artifact_replay_after_lost_commit_is_free(tmp_path):
 def test_invalid_twin_rerun_archives_rounds_without_rebuy(tmp_path):
     """同指纹再次拦下：旧孪生先进归档再覆写，正式位不写、wire 不重购。"""
     wires = _full_chain_wires()
-    wires['bind'] = {'entries': [{'obligation_id': 'ob01', 'scene_id': 's01',
-                                  'beat_ref': 's01#bt99'}], 'unbound': []}
+    wires['bind'] = {'protocol_version': 'stage4-bind-v1', 'entries': [
+        {'obligation_id': 'ob01', 'scene': 'sc01', 'beat': 'b99'}], 'unbound': []}
     base, repo, session, transport = _routing_session(tmp_path, wires, yes=True)
     with pytest.raises(ValueError, match='INVALID 孪生已留证'):
         _run(repo, session)

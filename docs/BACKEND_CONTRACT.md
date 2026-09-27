@@ -229,8 +229,10 @@ Stage4 的四个付费节点按固定序推进：`preserve`（保存策略义务
 | R-5.8 | 章预算相对场景权重的分布读数无条件报出（度量，不是门）。 | `度量`（`novel/stages/stage4/book_ir.py::allocate_chapter_budgets`）；场景轻重与披露顺序的审美无 ground truth，见 `B-17`／`B-02` |
 | R-5.9 | `BodyDesign`／`PresentationGraph` 的盘上形状由 `ARTIFACT_SPECS` 登记；模型自带 `contract_version` 字面量与候选产物表逐字对账。 | `载体`（`contracts/schema/design.py::BodyDesign`） |
 | R-5.10 | Design 实际输入无源叙述拓扑：`project_brief` 只投影义务与身份，源章拓扑/原文不进 prompt。 | `结构`（`novel/stages/stage4/grounding.py::project_brief`）；prompt 侧隔离守卫见 `B-05` |
-| R-5.11b | 当前组合的产物形状由候选产物表与 `ARTIFACT_SPECS` 登记（22 份书产物：家族＋schema 版本＋唯一 writer；模型自带 `contract_version` 的表值逐字对账），候选根的 workflow 身份记录绑定契约表身份与源输入身份；表漂移即拒绝复用旧根的采用结论。 | `载体`（`contracts/invariants.py::NODES`＋`contracts/artifacts.py::STR06_ARTIFACT_RC_VERSIONS` + `contracts/schema/__init__.py::ARTIFACT_SPECS`）+ `tests/test_str06_candidates.py` 对账 |
+| R-5.11b | 当前组合的产物形状由候选产物表与 `ARTIFACT_SPECS` 登记（24 份书产物：家族＋schema 版本＋唯一 writer；模型自带 `contract_version` 的表值逐字对账），候选根的 workflow 身份记录绑定契约表身份与源输入身份；表漂移即拒绝复用旧根的采用结论。 | `载体`（`contracts/invariants.py::NODES`＋`contracts/artifacts.py::STR06_ARTIFACT_RC_VERSIONS` + `contracts/schema/__init__.py::ARTIFACT_SPECS`）+ `tests/test_str06_candidates.py` 对账 |
 | R-5.12 | **Design 知情词汇含 believes（D14）**：knowledge 域的 `knowledge_mode` 取值域为 known/suspected/heard/believes；believes＝持有者以为为真、不代表世界为真——错误看法以结构形式进入写手入场知情，不得写成 known 让写手当世界事实演出。Preserve 策略 v3 同批登记（源侧说辞/行为反差、concealed 揭示时点、iterative 作用、loop 问题与 resolution）。 | `HARD`（`contracts/schema/state.py::StateChange`＋`novel/stages/common.py::DESIGN_RULES`；反例 `tests/test_str06_execution_ir.py::test_believes_knowledge_enters_writer_view_without_becoming_world_fact`） |
+| R-5.13 | **Stage4 四协议独立版化与 compiler 生成派生面（B3 前半，rc7）**：Preserve／Design／Bind／Hook Design 各用独立 wire 协议（`stage4-{preserve,design,bind,hook-design}-v1`，顶层 `protocol_version` 逐字对账，漏带/错带即拒）；模型只表达选择、结构与相对篇幅重点——义务编号（Preserve 列表序派发＋requires 序号重写）、场景/拍 ID（`sc{序:02d}`／`b{序:02d}`）、归章切片、跨章锚定复合引用、权重归一（相对重点正数数组→和为 1）与整数预算全部由 compiler 生成，wire 白名单外的 ID/复合引用/归一权重键即拒（I-21/Q-1）。Bind 输入是承载选择的最小投影（义务清单＋场景/拍闭集），不回显 Design 全量。 | `结构`（`novel/stages/stage4/design.py::assemble_body_design`＋`novel/stages/stage4/grounding.py`＋`contracts/schema/workflow.py::STAGE4_PRESERVE_PROTOCOL` 等四常量；反例 `tests/test_str06_stage4_protocol.py`、`tests/test_str06_target.py`、`tests/hard_cases.py`） |
+| R-5.14 | **TargetDesign 结构化跨章依赖（B3 前半）**：整书风格（`book_style` 必填）、稳定人物声线（`character_voices`）、持续目标、进行中行动、悬念与承诺是 BodyDesign 的正式字段——后文需要记住的事实必须进结构化字段，不得只写在导演说明里；书级条目随 BookBrief 进每章请求；锚定条目（`场景#拍`）引用闭合由 schema 构造期校验，主体人物闭集由 assemble 校验。 | `结构`（`contracts/schema/design.py::BodyDesign`＋`novel/stages/stage4/book_ir.py::compile_writer_book_ir`；反例 `tests/test_str06_stage4_protocol.py`） |
 
 ### R-6 · 确定性编译（stage4 · str06.stage4.compile · 0 成本）
 
@@ -250,7 +252,8 @@ M1–M6 在本节点聚合执行，零错误才放行下游。
 | R-6.8 | **M5 称谓释放**：IR 释放集与 Design 显式释放集一致（同一称谓释放引擎）。 | `HARD`（`novel/stages/stage4/guard.py::run_mechanical_guard`） |
 | R-6.9 | **M6 合法人物**：释放面人物已由 Design 声明参与或引入。 | `HARD`（`novel/stages/stage4/guard.py::check_cast_legality`） |
 | R-6.10 | Guard 零错误不证明小说质量；本节点确定性重跑是 0 成本修复路（`deterministic_replay`）。 | `结构`（`novel/stages/stage4/guard.py::run_mechanical_guard`） |
-| R-6.11 | **尚未向读者确认的事实（D15）**：VerificationIR 带 `pending_reader_confirmations`——compiler 从 Design 的 reader delta 逐场确定性派生（本场开头及以后才发生的读者确认；确认拍在本场内标注「自第 X 拍起可确认」），写手据此不在确认前叙述；不新增 LLM 节点。renderer 与写作协议随清单升版（协议第 5 条指向清单）。 | `结构`（`novel/stages/common.py::pending_reader_confirmations`＋`_scene_view`；反例 `tests/test_str06_execution_ir.py`、`tests/test_str06_workflow.py`） |
+| R-6.11 | **尚未向读者确认的事实（D15/D4）**：VerificationIR 带 `pending_reader_confirmations`——compiler 从 Design 的 reader delta 确定性派生；每条读者确认必须声明它确认的事实地址（`TargetDelta.confirms`，漏填即拒），投影只进实际消费该地址的场景（读取或写入；确认拍在本场内标注「自第 X 拍起可确认」），确认前不作为已确认信息；不新增 LLM 节点。renderer 与写作协议随清单升版。 | `结构`（`novel/stages/common.py::pending_reader_confirmations`＋`_scene_view`；反例 `tests/test_str06_execution_ir.py`、`tests/test_str06_stage4_protocol.py`、`tests/test_str06_workflow.py`） |
+| R-6.12 | **章预算的最大余数传导（B3 前半）**：章预算保持全书 largest-remainder 整数分配、总和恰等于书级目标；场景相对篇幅（权重）变化按整数预算变化传导（可能波及多章），受影响章＝整数预算变化的章（确定性纯函数）。 | `结构`（`novel/stages/stage4/book_ir.py::chapters_with_budget_change`；反例 `tests/test_str06_stage4_protocol.py::test_budget_change_propagates_by_integer_allocation`） |
 
 ### R-7 · 按章正文（stage5 · str06.stage5.body）
 

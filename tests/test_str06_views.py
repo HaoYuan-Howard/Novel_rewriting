@@ -89,11 +89,11 @@ def test_views_cover_the_whole_delivered_chain(base):
 
     design = views.design_view(base, name)
     assert design.present and design.graph_id
-    assert [s.scene_id for s in design.scenes] == ['s01', 's02']
+    assert [s.scene_id for s in design.scenes] == ['sc01', 'sc02']
     assert design.scenes[0].realization_brief, '导演说明原样进监控面'
     assert [c.chapter_ordinal for c in design.chapters] == [1, 2]
     assert design.hook is not None and design.hook.person == 'first'
-    assert list(design.hook.materials) == ['s02#bt1', 's01#bt2'], '按设计序（乱序冷开合法）'
+    assert list(design.hook.materials) == ['sc02#b01', 'sc01#b02'], '按设计序（乱序冷开合法）'
     assert design.binding is not None and design.binding.obligations == 1
 
     ir = views.ir_nav_view(base, name)

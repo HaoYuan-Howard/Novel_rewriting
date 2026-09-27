@@ -51,6 +51,22 @@ def allocate_chapter_budgets(graph: BodyDesign, total_budget: int) -> dict[int, 
     return floors
 
 
+def chapters_with_budget_change(
+    old: BodyDesign, new: BodyDesign, total_budget: int,
+) -> set[int]:
+    """场景相对篇幅（权重）变化的失效传导（精确失效表第二行的机械规则）。
+
+    章预算是全书 largest-remainder 归一（`allocate_chapter_budgets`）——一个
+    场景的权重变化会改变整数余数分配，可能波及多章；受影响章＝整数预算变化
+    的章。这是「重投影候选范围」的判定材料（付费重写范围仍由义务/导演说明的
+    直接受影响集另行判定）。纯函数。
+    """
+    before = allocate_chapter_budgets(old, total_budget)
+    after = allocate_chapter_budgets(new, total_budget)
+    return {ch for ch in set(before) | set(after)
+            if before.get(ch) != after.get(ch)}
+
+
 def _release_schedule(graph: BodyDesign) -> tuple[ReleaseScheduleEntry, ...]:
     """称谓释放导航：每个（人物, 实际释放章）一条，按（章, 人物）排序。
 
@@ -109,7 +125,10 @@ def compile_writer_book_ir(
             chapter_ordinal=assignment.chapter_ordinal, purpose=assignment.purpose,
             scene_ids=tuple(assignment.scene_ids), scene_lines=tuple(lines)))
     brief = BookBrief(
-        book_title=book_title, target_chapter_count=len(graph.chapters),
+        book_title=book_title,
+        book_style=graph.book_style,
+        character_voices=tuple(graph.character_voices),
+        target_chapter_count=len(graph.chapters),
         total_length_budget=total_budget, length_band_low=length_band[0],
         length_band_high=length_band[1], chapters=tuple(nav),
         release_schedule=_release_schedule(graph))

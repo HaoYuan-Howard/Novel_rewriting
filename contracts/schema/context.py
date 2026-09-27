@@ -85,16 +85,19 @@ class BeatIR(StrictModel):
 
 
 class PendingConfirmation(StrictModel):
-    """尚未向读者确认的事实（D15）：compiler 从 Design 的 reader delta 逐场派生。
+    """尚未向读者确认的事实（D15 派生；B3 前半起按地址投影，D4）。
 
-    `fact` 是 reader delta 的 value（命题内容）；`position` 是确认位置
-    （`场景#拍`）；`in_scene`＝确认拍是否就在本场（本场内的标注「自第 X 拍起
-    可确认」，后场的写手在此之前不得让读者确认）。
+    `fact` 是 reader delta 的 value（命题内容）；`address` 是它确认的事实
+    地址（reader delta 的 `confirms`，D4 必填的机械面）；`position` 是确认
+    位置（`场景#拍`）；`in_scene`＝确认拍是否就在本场（本场内的标注「自第
+    X 拍起可确认」，后场的写手在此之前不得让读者确认）。投影只进入实际
+    消费该地址的章包（读取或写入该地址的场景）；确认前不作为已确认信息。
     """
 
     fact: str = Field(min_length=1)
     key: str = Field(min_length=1)
     subjects: tuple[str, ...] = ()
+    address: StateAddress
     position: str = Field(min_length=1)
     in_scene: bool
 
@@ -144,9 +147,10 @@ class WriterBrief(StrictModel):
 class WriterContext(StrictModel):
     """双视图载体（Derived；F5 起嵌入 ChapterIR，不再单独落盘成场景文件）。
 
-    RC5（v13 质量改进批次二）：VerificationIR 带「尚未向读者确认的事实」清单。"""
+    rc7（B3 前半）：PendingConfirmation 带事实地址（D4），投影按地址精确到
+    消费该地址的章包。"""
 
-    contract_version: Literal['str06-rc5'] = 'str06-rc5'
+    contract_version: Literal['str06-rc7'] = 'str06-rc7'
     scene_id: str = Field(min_length=1)
     execution_slice_sha256: str = Field(min_length=64, max_length=64)
     verification_ir: VerificationIR

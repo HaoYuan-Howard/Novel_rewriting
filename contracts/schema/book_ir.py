@@ -24,6 +24,7 @@ from pydantic import Field, model_validator
 from contracts.schema.base import StrictModel
 from contracts.schema.common import FreeProvenance, LlmProvenance
 from contracts.schema.context import WriterContext
+from contracts.schema.design import CharacterVoice
 from contracts.schema.state import SurfaceRelease
 
 __all__ = ['BookBrief', 'ChapterIR', 'ChapterNavEntry', 'ReleaseScheduleEntry',
@@ -49,9 +50,16 @@ class ReleaseScheduleEntry(StrictModel):
 
 
 class BookBrief(StrictModel):
-    """全书约束与导航：Writer 阅读面的书级事实，全部为确定性投影。"""
+    """全书约束与导航：Writer 阅读面的书级事实，全部为确定性投影。
+
+    rc7（B3 前半）：整书风格与稳定人物声线从 TargetDesign 结构化字段投影
+    （`BodyDesign.book_style`／`character_voices`）——不再只写在导演说明里。"""
 
     book_title: str = Field(default='', min_length=0)
+    #: 整书风格（canonical `BodyDesign.book_style` 原样投影）。
+    book_style: str = Field(min_length=1)
+    #: 稳定人物声线（canonical `BodyDesign.character_voices` 原样投影）。
+    character_voices: tuple[CharacterVoice, ...] = Field(default=(), min_length=0)
     target_chapter_count: int = Field(ge=1)
     total_length_budget: int = Field(ge=1)
     #: 章篇幅带（相对本章预算的合法区间）；篇幅偏差是唯一可披露放行的软检查。
@@ -86,10 +94,10 @@ class ChapterIR(StrictModel):
 class WriterBookIR(StrictModel):
     """全书静态写作 IR（Derived；唯一 writer = stage4 book_ir compiler）。
 
-    RC5（v13 质量改进批次二）：VerificationIR 带「尚未向读者确认的事实」清单
-    （D15），renderer 与写作协议随升版——正文请求身份随之变化。"""
+    rc7（B3 前半）：BookBrief 带整书风格与稳定人物声线（TargetDesign 结构化
+    投影）；VerificationIR 的「尚未向读者确认的事实」按地址投影（D4）。"""
 
-    contract_version: Literal['str06-rc5'] = 'str06-rc5'
+    contract_version: Literal['str06-rc7'] = 'str06-rc7'
     book_brief: BookBrief
     chapters: tuple[ChapterIR, ...] = Field(min_length=1)
     provenance: FreeProvenance | LlmProvenance | None = Field(

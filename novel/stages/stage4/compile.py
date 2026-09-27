@@ -9,12 +9,19 @@ from contracts.schema.grounding import SemanticBinding
 from novel.stages.stage4.guard import check_binding_beat_refs
 
 
+def _establishment(delta, established_by: str) -> Establishment:
+    """TargetDelta → Establishment：剥读者确认元数据（confirms 是 D4 的投影面，
+    不是状态建立事实——Establishment 只承载可折叠的状态语义）。"""
+    payload = {k: v for k, v in delta.model_dump().items() if k != 'confirms'}
+    return Establishment(**payload, established_by=established_by)
+
+
 def init_establishments(graph: BodyDesign) -> tuple[Establishment, ...]:
     """T₀ = Init(initial_state)；op != 'set' 的初始项在 T₀ 无语义（没有可解除、
     也没有可标记为 unknown 的既有事实——「未建立」本身就是缺省），等价归一跳过。
     F5e 真书实证：模型用 unknown 初始项表达「尚未知晓」，与缺席等价且会毒化
     entry fold（unknown 消费阻断），故在 T₀ 装载处统一跳过。"""
-    return tuple(Establishment(**d.model_dump(), established_by='init')
+    return tuple(_establishment(d, 'init')
                  for d in graph.initial_state if d.op == 'set')
 
 
@@ -84,7 +91,7 @@ def compile_execution_plan(
     scenes = []
     for scene in graph.scenes:
         establishments = tuple(
-            Establishment(**d.model_dump(), established_by=f'{scene.scene_id}#{b.beat_id}')
+            _establishment(d, f'{scene.scene_id}#{b.beat_id}')
             for b in scene.beats for d in b.target_delta)
         # scene 覆盖与 book 真值分别保存；临时覆盖不抹掉长期底值。
         net = {}

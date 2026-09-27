@@ -11,6 +11,7 @@ from contracts.schema.design import (
     ChapterAssignment, BodyDesign, SceneDelivery, SceneDriver,
     TargetBeat, TargetDelta, TargetScene,
 )
+from contracts.schema.state import StateAddress
 from contracts.schema.context import WriterBrief
 from contracts.schema.execution import EffectDomain
 from contracts.schema.grounding import BindingEntry, SourceLineage
@@ -57,7 +58,7 @@ def _scene(sid, *deltas):
 
 def _graph():
     return BodyDesign(initial_state=(),
-        graph_id='g1',
+        graph_id='g1', book_style='冷暖转换的第三人称叙事。',
         scenes=(_scene('s01', ('world', 'season', '秋'), ('character', 'mood', '冷')),
                 _scene('s02', ('character', 'mood', '回暖'))),
         chapters=(ChapterAssignment(chapter_ordinal=1, purpose='冷暖转换',
@@ -164,41 +165,71 @@ def test_project_context_dual_view_and_slice_identity():
     assert slice4.execution_slice_sha256 != slice_.execution_slice_sha256
 
 
+def _reader_scene(sid, *, establish=None, confirms=None, reads=()):
+    """reader 图的场景构造：establish＝本场建立的 world 事实；confirms＝本场
+    读者确认的（事实地址, 命题内容）。"""
+    deltas = []
+    if establish is not None:
+        key, value = establish
+        deltas.append(TargetDelta(domain='world', key=key, value=value,
+                                  subjects=(), op='set', scope='book'))
+    for key, value in (confirms or ()):
+        deltas.append(TargetDelta(
+            domain='reader', key=key, value=value, subjects=(), op='set',
+            scope='scene', confirms=StateAddress(domain='world', key=key,
+                                                 subjects=(), holder=None)))
+    return TargetScene(state_reads=reads, scene_id=sid,
+        driver=SceneDriver(focal_actor='ch1', immediate_want='w', opposition='o', turn='t'),
+        realization_brief=f'重心在{sid}的核心对峙；展开转折，收在结果落地。',
+        beats=(TargetBeat(beat_id='bt1', event=f'事件{sid}', participants=('ch1',),
+                          dramatic_intent='d', target_delta=tuple(deltas)),),
+        delivery=SceneDelivery(pov='ch1', voice='v'))
+
+
 def _reader_delta_graph():
-    """两场各有一个 reader 确认：s01#bt1 确认「床底有人」，s02#bt1 确认「衣柜藏身」。"""
+    """三场两确认（D4 地址维度）：
+    s01 建立 world:hiding（不确认）；s02 确认 hiding 并建立 world:wardrobe；
+    s03 确认 wardrobe。s01 不消费 wardrobe ⇒ 其清单不含 wardrobe 确认。"""
     return BodyDesign(initial_state=(), graph_id='g2',
+        book_style='冷暖转换的第三人称叙事。',
         scenes=(
-            _scene('s01', ('reader', 'hiding', '床底有人')),
-            _scene('s02', ('reader', 'wardrobe', '衣柜藏身'))),
+            _reader_scene('s01', establish=('hiding', '床底有人')),
+            _reader_scene('s02', establish=('wardrobe', '衣柜藏身'),
+                          confirms=(('hiding', '床底有人'),)),
+            _reader_scene('s03', confirms=(('wardrobe', '衣柜藏身'),))),
         chapters=(ChapterAssignment(chapter_ordinal=1, purpose='两次揭示',
-                                    scene_ids=('s01', 's02')),),
-        chapter_weights={'s01': 0.5, 's02': 0.5})
+                                    scene_ids=('s01', 's02', 's03')),),
+        chapter_weights={'s01': 1 / 3, 's02': 1 / 3, 's03': 1 / 3})
 
 
-def test_pending_reader_confirmations_are_derived_per_scene():
-    """D15：确认前各场列出该事实，确认场标注确认拍，确认后不再列出。"""
-    cp = _cp(_ob('ob1'))
+def test_pending_reader_confirmations_are_projected_by_address():
+    """D15＋D4：确认前按地址投影——只进实际消费该地址的场景清单。
+
+    时序：本场起点之后的确认才列（确认场标注确认拍，确认后不再列入）；
+    地址：本场不读不写的事实，其后续确认不进本场清单（后章读者确认变化只
+    影响章包引用该地址的章）。"""
+    from novel.stages.common import pending_reader_confirmations
     graph = _reader_delta_graph()
-    binding = _binding(cp)
-    plan, errors = compile_execution_plan(graph, binding)
-    assert not errors, errors
-    folded = fold_accepted_prefix(plan.scenes[:1])
-    ctx1, _ = project_context(scene_id='s01', graph=graph, plan=plan,
-                              binding=binding, folded_prefix=folded)
-    pending1 = ctx1.verification_ir.pending_reader_confirmations
-    assert [(p.fact, p.position, p.in_scene) for p in pending1] == [
-        ('床底有人', 's01#bt1', True), ('衣柜藏身', 's02#bt1', False)]
-    ctx2, _ = project_context(scene_id='s02', graph=graph, plan=plan,
-                              binding=binding,
-                              folded_prefix=fold_accepted_prefix(plan.scenes[:2]))
-    pending2 = ctx2.verification_ir.pending_reader_confirmations
-    # 床底之事实已在 s01 确认：s02 起不再列入
-    assert [(p.fact, p.position, p.in_scene) for p in pending2] == [
-        ('衣柜藏身', 's02#bt1', True)]
+    # s01 只写 world:hiding：清单含 hiding@s02，不含 wardrobe@s03（地址不相干）
+    assert [(p.fact, p.position, p.in_scene) for p in
+            pending_reader_confirmations(graph, 0)] == [
+        ('床底有人', 's02#bt1', False)]
+    # s02 确认 hiding（in_scene）并写 wardrobe：清单含 wardrobe@s03
+    assert [(p.fact, p.position, p.in_scene) for p in
+            pending_reader_confirmations(graph, 1)] == [
+        ('床底有人', 's02#bt1', True), ('衣柜藏身', 's03#bt1', False)]
+    # s03 确认 wardrobe：hiding 已在过去确认，不再列入
+    assert [(p.fact, p.position, p.in_scene) for p in
+            pending_reader_confirmations(graph, 2)] == [
+        ('衣柜藏身', 's03#bt1', True)]
+    # 每条清单带确认的事实地址（D4 机械面）
+    items = pending_reader_confirmations(graph, 1)
+    assert [(p.address.domain.value, p.address.key) for p in items] == [
+        ('world', 'hiding'), ('world', 'wardrobe')]
 
 
 def test_pending_confirmations_render_into_the_writer_packet():
-    """清单进正文请求（renderer v2）：本场确认标注「第 X 拍起」，后场标注位置。"""
+    """清单进正文请求（renderer v3）：条目带确认的事实地址（D4）。"""
     from novel.stages.common import render_chapter_packet
     cp = _cp(_ob('ob1'))
     graph = _reader_delta_graph()
@@ -209,10 +240,10 @@ def test_pending_confirmations_render_into_the_writer_packet():
         length_band=(0.6, 1.3), book_title='t')
     packet = render_chapter_packet(book_ir, 1, {})
     assert '【尚未向读者确认的事实】' in packet
-    assert '床底有人（hiding）——本场第 bt1 拍起可确认' in packet
-    assert '衣柜藏身（wardrobe）——s02#bt1 才可确认' in packet
+    assert '床底有人（world:hiding）——本场第 bt1 拍起可确认' in packet
+    assert '衣柜藏身（world:wardrobe）——s03#bt1 才可确认' in packet
     assert '第 5 条' not in packet  # 协议编号不出现；条目文本以清单为准
-    assert '【尚未向读者确认的事实】清单列出本场开头读者尚未确认的事实' in packet
+    assert '本场实际涉及、且读者尚未确认的事实' in packet
 
 
 def test_believes_knowledge_enters_writer_view_without_becoming_world_fact():
@@ -242,7 +273,8 @@ def test_believes_knowledge_enters_writer_view_without_becoming_world_fact():
             beat_id='bt1', event='据误以为行动', participants=('ch1',),
             dramatic_intent='d', target_delta=()),),
         delivery=SceneDelivery(pov='ch1', voice='v'))
-    graph = BodyDesign(initial_state=(), graph_id='g3', scenes=(establish, consume),
+    graph = BodyDesign(initial_state=(), graph_id='g3', book_style='误以为。',
+                       scenes=(establish, consume),
         chapters=(ChapterAssignment(chapter_ordinal=1, purpose='误以为',
                                     scene_ids=('s01', 's02')),),
         chapter_weights={'s01': 0.5, 's02': 0.5})

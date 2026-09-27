@@ -63,8 +63,9 @@ def _green_binding(body):
         blueprints_sha256=H64, provider='x', model='y', request_sha256='r' * 64,
         obligations=(ob,), checkpoint_sha256=H64)
     positions = {s.scene_id: {b.beat_id for b in s.beats} for s in body.scenes}
-    wire = {'entries': [{'obligation_id': 'ob01', 'scene_id': 's01', 'beat_ref': 's01#bt2',
-                         'supporting_beat_refs': ['s01#bt1']}], 'unbound': []}
+    wire = {'protocol_version': 'stage4-bind-v1',
+            'entries': [{'obligation_id': 'ob01', 'scene': 'sc01', 'beat': 'b02',
+                         'supporting': [{'scene': 'sc01', 'beat': 'b01'}]}], 'unbound': []}
     binding, errors = assemble_binding(wire, cp, positions)
     assert binding is not None and not errors, errors
     return binding
@@ -90,7 +91,7 @@ def test_chapter_budgets_sum_to_total_and_are_deterministic():
     assert budgets == {1: 501, 2: 500}  # 0.5/0.5 权重 + 最大余数给低章号
     assert allocate_chapter_budgets(body, 1001) == budgets
     # 权重变化 → 预算变化（预算是 IR 业务内容）
-    weighted = body.model_copy(update={'chapter_weights': {'s01': 0.8, 's02': 0.2}})
+    weighted = body.model_copy(update={'chapter_weights': {'sc01': 0.8, 'sc02': 0.2}})
     assert allocate_chapter_budgets(weighted, 1000)[2] == 200
 
 
@@ -111,7 +112,7 @@ def test_writer_book_ir_projects_canonically():
                 [b.event for b in scene.beats]  # 逐拍事实定位
             assert [d.value for d in context.verification_ir.planned_delta] == \
                 [d.value for b in scene.beats for d in b.target_delta]
-    # 称谓释放导航：initial 即第 1 章；芸娘在 s01#bt2（第 1 章）释放
+    # 称谓释放导航：initial 即第 1 章；芸娘在 sc01#b02（第 1 章）释放
     schedule = {e.char_id: e for e in writer_ir.book_brief.release_schedule}
     assert schedule['yun_niang'].from_chapter == 1
     assert '芸娘' in schedule['yun_niang'].surfaces
@@ -130,7 +131,7 @@ def test_renderer_layered_layout_and_traceability():
     assert '第一章的正文。' in packet
     assert '洞房夜夫君立约' in packet and '芸娘发现玉佩秘密' in packet
     # 知情模式、否定条件、释放位置可追溯
-    assert 'known' in packet and '第 bt2 拍起才可使用' in packet
+    assert 'known' in packet and '第 b02 拍起才可使用' in packet
     assert '玉佩刻着沈字' in packet  # planned_delta 事实值进入阅读面
     # source lineage（b01_01）不进 Writer 阅读面
     assert 'b01_01' not in packet and 'blueprint_refs' not in packet
@@ -353,7 +354,7 @@ class _RoutingTransport:
             return f'ch{int(marks[-1]):02d}' if marks else 'ch01'
         for owner, marker in (
                 ('names', '登记全书源名称结构'), ('preserve', '最小语义义务'),
-                ('design', '设计目标书'), ('bind', '绑定义务'),
+                ('design', '设计目标书'), ('bind', '承载位置'),
                 ('hook_design', '读者入口'), ('naming', '表层姓名')):
             if marker in user:
                 return owner
@@ -475,7 +476,11 @@ def test_full_pipeline_to_delivery_and_free_recovery(tmp_path):
                                                   hard_max_chars=360),
                  length_band=(0.01, 0.05))
     new_calls = len(transport.calls) - calls_before
-    assert new_calls == 5  # design + bind + hook_design（内嵌 design）+ 两章 body；hook_writer/naming 缓存命中
+    # B3 前半起 bind 的输入只含承载选择面（义务＋场景/拍闭集）：导演说明变化
+    # 不改变承载选择，bind 请求身份不变、缓存命中。
+    assert new_calls == 4  # design + hook_design（内嵌 design）+ 两章 body
+    # bind 输入不含导演说明：确认 bind wire 未被重新请求
+    assert transport.calls[-new_calls:].count('bind') == 0
     assert repo.read('runtime/workflow_status.json')['status'] == 'delivered'
 
 

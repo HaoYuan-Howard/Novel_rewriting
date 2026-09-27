@@ -28,8 +28,16 @@ brief 中涉及关键行动、持久认知变化、秘密、承诺或因果条�
 【Hook 与正文同一份 graph（F6）】
 `BodyDesign` 承载正文选择；`PresentationGraph(BodyDesign)` 增加必填 `hook`。
 顺序是 Body Design → Hook Design → publish_graph 发布完整 graph：不让两个
-producer 轮流改 canonical，不用空 Hook 默认值冒充完成。Bind／Compile／Context
-的类型收窄到 `BodyDesign`，从类型上保证 Hook 不影响正文。
+producer 轮流改 canonical，不用空 Hook 默认值冒充完成。Bind／Compile／
+Context／Guard 的类型收窄到 `BodyDesign`，从类型上保证 Hook 不影响正文。
+
+【B3 前半（rc7）：wire 协议独立版化 + compiler 生成派生面】
+Design 的模型 wire（`stage4-design-v1`）只表达选择、结构与相对篇幅重点：
+场景/拍 ID（`sc{序:02d}`／`b{序:02d}`，按列表序派发）、归章复合引用（章切片）、
+复合锚定引用（{"scene","beat"} 1-based 分量）、权重归一（相对重点正数数组 →
+和为 1 的 dict）全部由 compiler（`novel/stages/stage4/design.py`）生成（I-21）。
+本模块的 canonical 形状是 compiler 的**输出**与 Bind／Hook Design／compile 的
+**输入**：正式 ID 与归一权重在这里落地一次，下游不再重算（I-16）。
 """
 from __future__ import annotations
 
@@ -38,7 +46,7 @@ from pydantic import Field, model_validator
 from contracts.schema.base import StrictModel
 from contracts.schema.common import FreeProvenance, LlmProvenance
 from contracts.schema.hook import HookDesign
-from contracts.schema.state import StateAddress, StateChange, SurfaceIntroduction
+from contracts.schema.state import EffectDomain, StateAddress, StateChange, SurfaceIntroduction
 from typing import Literal
 import math
 
@@ -58,10 +66,31 @@ class TargetDelta(StateChange):
     domain 闭集保留「人物／关系、人物知情、世界事实、读者揭示」的必要区别，
     不迁旧 PlotState ontology。value 必须 mechanically applicable——表达成键值
     （enum/受控词表），不是自由散文；具体取值面 F1 反例标定后收紧。
+
+    【读者确认的事实地址（D4/R-6.11，B3 前半起必填）】
+    reader 域的 set（一次读者确认）必须经 `confirms` 声明它确认的事实地址
+    （StateAddress，domain 不得是 reader 本身）——漏填即拒；确认地址必须真实
+    建立且不早于建立位置（机械闭合归 assemble_body_design）。compiler 只把
+    未确认项投影到消费该地址的章包并标注确认拍（按地址的精确投影，取代逐场
+    全量清单）；确认前该事实不作为已确认信息。
     """
 
     #: 语义等价归上游判断；Compiler 不解释自然语言补猜事实——所以这里没有
     #: 「等价于源 XX」的备注字段，要写等价判断就升到 Design 上游的语义层。
+
+    confirms: 'StateAddress | None' = None
+
+    @model_validator(mode='after')
+    def _reader_confirmation_address(self) -> 'TargetDelta':
+        is_reader_set = self.domain is EffectDomain.READER and self.op == 'set'
+        if is_reader_set and self.confirms is None:
+            raise ValueError(
+                f'读者确认 {self.key!r} 必须声明所确认的事实地址（confirms，D4 漏填即拒）')
+        if not is_reader_set and self.confirms is not None:
+            raise ValueError('confirms 只有 reader 域的 set（读者确认）可以携带')
+        if self.confirms is not None and self.confirms.domain is EffectDomain.READER:
+            raise ValueError('confirms 必须指向事实地址，不得指向读者确认本身')
+        return self
 
 
 class TargetBeat(StrictModel):
@@ -81,6 +110,70 @@ class SceneDelivery(StrictModel):
     pov: str = Field(min_length=1, description='视角 char_id 或 narrator')
     voice: str = Field(min_length=1, description='口吻/register 声明')
     avoid: tuple[str, ...] = Field(default=(), min_length=0)
+
+
+# ───────────────────────── TargetDesign 的结构化跨章依赖（B3 前半） ───────────
+#
+# 后文需要记住的事实必须进结构化字段，不能只写在导演说明（realization_brief）
+# 里。书级条目（风格、声线、持续目标）随 BookBrief 进每章请求；锚定条目（进行
+# 中行动、悬念、承诺）带「场景#拍」复合引用——wire 里模型只给 {"scene","beat"}
+# 分量（B3 前半起模型不输出任何 ID），复合引用由 compiler 派发 ID 后组成；
+# schema 构造期只校验引用闭合（锚必须是本书真实拍）。
+
+class CharacterVoice(StrictModel):
+    """稳定人物声线：一个人物全书的口吻约定（进 BookBrief，全书一致）。"""
+
+    char_id: str = Field(min_length=1)
+    voice: str = Field(min_length=1)
+
+
+class StandingGoal(StrictModel):
+    """持续目标：人物当前在途、跨章持续追求的目标（入场起有效）。"""
+
+    char_id: str = Field(min_length=1)
+    goal: str = Field(min_length=1)
+
+
+class OngoingAction(StrictModel):
+    """进行中行动：已启动、尚未完成、后文要接续的行动。
+
+    `started_at` 是行动启动拍的复合引用（`场景#拍`）；wire 给
+    {"scene","beat"} 1-based 分量，compiler 派发 ID 后解析。"""
+
+    char_id: str = Field(min_length=1)
+    action: str = Field(min_length=1)
+    started_at: str = Field(min_length=1, description='场景#拍 复合引用')
+
+
+class OpenQuestion(StrictModel):
+    """跨章悬念：已向读者/人物打开、后文要回答的未决问题。
+
+    `planted_at` 是问题植入拍的复合引用；问题文本只在此登记一次。"""
+
+    question: str = Field(min_length=1)
+    planted_at: str = Field(min_length=1, description='场景#拍 复合引用')
+
+
+class Promise(StrictModel):
+    """承诺：人物间的约定，后文需要兑现或背叛。
+
+    `made_at` 是承诺发生拍的复合引用；`to` 可空（对读者/不特定对象的承诺）。"""
+
+    maker: str = Field(min_length=1)
+    content: str = Field(min_length=1)
+    made_at: str = Field(min_length=1, description='场景#拍 复合引用')
+    to: str | None = None
+
+
+def _parse_anchor(raw: object) -> 'tuple[int, int] | None':
+    """wire 锚定分量 {"scene": i, "beat": j} → (i, j)；形状非法返回 None。"""
+    if not isinstance(raw, dict):
+        return None
+    scene, beat = raw.get('scene'), raw.get('beat')
+    if not isinstance(scene, int) or not isinstance(beat, int) \
+            or isinstance(scene, bool) or isinstance(beat, bool):
+        return None
+    return scene, beat
 
 
 class TargetScene(StrictModel):
@@ -120,24 +213,45 @@ class ChapterAssignment(StrictModel):
 
 
 class BodyDesign(StrictModel):
-    """正文选择（canonical body view，RC5：v13 质量改进批次二补 believes 知情模式）。
+    """正文选择（canonical body view；rc7：B3 前半——TargetDesign 结构化跨章
+    依赖与读者确认地址）。
 
     Bind、Compile、Context 与 Guard 的类型都收窄到这里——Hook 不是正文
-    写前链路的输入，也不增加义务分母。"""
-    contract_version: Literal['str06-rc5'] = 'str06-rc5'
+    写前链路的输入，也不增加义务分母。
+
+    【结构化跨章依赖（B3 前半）】整书风格（`book_style`）、稳定人物声线
+    （`character_voices`）、持续目标（`standing_goals`）、进行中行动
+    （`ongoing_actions`）、悬念（`open_questions`）与承诺（`promises`）
+    是 TargetDesign 的正式字段：后文需要记住的事实必须进这里，不能只写在
+    导演说明里。compiler 把书级条目投影进 BookBrief（随每章请求下发）；
+    锚定条目的章包投影归章闭包（B3 后半）。
+    """
+    contract_version: Literal['str06-rc7'] = 'str06-rc7'
     graph_id: str = Field(min_length=1)
+    #: 整书风格（叙述质地与表达规则的书面声明；进 BookBrief）。
+    book_style: str = Field(min_length=1)
     initial_state: tuple[TargetDelta, ...]
     initial_surfaces: tuple[SurfaceIntroduction, ...] = ()
     scenes: tuple[TargetScene, ...] = Field(min_length=1)
     chapters: tuple[ChapterAssignment, ...] = Field(min_length=1)
-    #: 章／场权重：目标预算分配的依据（不对照同号源章长度）
+    #: 章／场权重：目标预算分配的依据（不对照同号源章长度）。
+    #: wire 端是相对重点正数数组，归一（和为 1）由 compiler 完成（I-21）。
     chapter_weights: dict[str, float] = Field(default_factory=dict)
+    character_voices: tuple[CharacterVoice, ...] = ()
+    standing_goals: tuple[StandingGoal, ...] = ()
+    ongoing_actions: tuple[OngoingAction, ...] = ()
+    open_questions: tuple[OpenQuestion, ...] = ()
+    promises: tuple[Promise, ...] = ()
 
     def beat(self, scene_id: str, beat_id: str) -> 'TargetBeat | None':
         scene = next((s for s in self.scenes if s.scene_id == scene_id), None)
         if scene is None:
             return None
         return next((b for b in scene.beats if b.beat_id == beat_id), None)
+
+    def beat_refs(self) -> set[str]:
+        """全书全部合法复合引用（`场景#拍`）闭集：锚定校验的基准。"""
+        return {f'{s.scene_id}#{b.beat_id}' for s in self.scenes for b in s.beats}
 
     def declared_surfaces(self) -> dict[str, set[str]]:
         """Design 已声明的称谓面（char_id → surface 集合）：Hook 释放校验的基准。"""
@@ -184,6 +298,18 @@ class BodyDesign(StrictModel):
                    for sid in c.scene_ids]
         if ordered != [s.scene_id for s in self.scenes]:
             raise ValueError('scenes 必须按目标章内阅读序排列')
+        return self
+
+    @model_validator(mode='after')
+    def _cross_chapter_anchors_close(self) -> 'BodyDesign':
+        """结构化跨章条目的引用闭合：锚必须是本书真实拍（构造期表达）。"""
+        beat_refs = self.beat_refs()
+        for item in (*self.ongoing_actions, *self.open_questions, *self.promises):
+            anchor = getattr(item, 'started_at', None) or getattr(
+                item, 'planted_at', None) or getattr(item, 'made_at', None)
+            if anchor not in beat_refs:
+                raise ValueError(f'跨章条目锚定 {anchor!r} 不是本书真实拍'
+                                 f'（{type(item).__name__}）')
         return self
 
 

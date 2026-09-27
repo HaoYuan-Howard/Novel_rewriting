@@ -77,7 +77,7 @@ from novel.stages.stage2 import (
 from novel.stages.stage4 import (
     assemble_binding, assemble_body_design,
     assemble_preserve, compile_execution_plan, compile_writer_book_ir,
-    project_brief, run_mechanical_guard,
+    project_binding_space, project_brief, run_mechanical_guard,
 )
 from novel.stages.stage5 import (
     AnsweredText, HOOK_VALIDATOR_VERSION, MAX_REWRITES, MECHANICAL_CHECKS,
@@ -447,13 +447,14 @@ def run_bind(ctx: ChainContext) -> dict:
     repository = ctx.repository
     body = repository.read_model('stage4/design/body_design.json')
     checkpoint = repository.read_model('runtime/preserve_checkpoint.json')
-    positions = {s.scene_id: {b.beat_id for b in s.beats} for s in body.scenes}
-    bind_prompt = pack_prompt(BIND_RULES, design=body.model_dump(mode='json'),
-                              obligations=[o.model_dump(mode='json')
-                                           for o in checkpoint.obligations])
+    # Bind 的输入投影（B3 前半）：义务清单＋场景/拍闭集的最小承载选择面，
+    # 不回显整个 Design；wire 只给闭集内分量，复合引用由 assemble 组成。
+    space = project_binding_space(checkpoint, body)
+    bind_prompt = pack_prompt(BIND_RULES, **space)
     # 校验闸在节点自身（不在 ask 回调）：机械闸拦下的稿要落到本产物的
     # .INVALID 孪生上（typed witness），ask 只负责取回并耐久原响应。
     bw, bind_ref = ctx.ask('bind', bind_prompt, lambda w: [])
+    positions = {s.scene_id: {b.beat_id for b in s.beats} for s in body.scenes}
     binding, errors = assemble_binding(bw, checkpoint, positions)
     if errors:
         # Binding INVALID＋typed witness：机械闸拦下的稿进 .INVALID 孪生

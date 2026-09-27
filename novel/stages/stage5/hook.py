@@ -19,6 +19,7 @@ patch（提取已购 wire、最小修订、经 --wire-dir 采用留证），不�
 """
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any
 
 from pydantic import ValidationError
@@ -26,12 +27,29 @@ from pydantic import ValidationError
 from contracts.schema.design import BodyDesign, PresentationGraph
 from contracts.schema.hook import HookDesign
 from contracts.schema.source import NameProjection
+from contracts.schema.workflow import STAGE4_HOOK_DESIGN_PROTOCOL
 
 _WIRE_KEYS = frozenset({
-    'pov', 'opening_facts', 'materials', 'concealed', 'surface_releases',
-    'forbidden_reveals', 'design_brief', 'delivery_brief'})
+    'protocol_version', 'pov', 'opening_facts', 'materials', 'concealed',
+    'surface_releases', 'forbidden_reveals', 'design_brief', 'delivery_brief'})
 
 Init = 'init'
+
+
+def _resolve_ref(raw: Any, where: str, errors: list[str]) -> str | None:
+    """wire 位置引用 → canonical 复合引用（B3 前半：模型不写复合引用，I-21）。
+
+    `'init'` 原样保留；否则必须是 {"scene": scene_id, "beat": beat_id} 分量
+    （闭集内单 ID），compiler 组成 `场景#拍`。"""
+    if raw == Init:
+        return Init
+    if isinstance(raw, dict) and set(raw) == {'scene', 'beat'}:
+        scene, beat = raw['scene'], raw['beat']
+        if isinstance(scene, str) and scene and isinstance(beat, str) and beat:
+            return f'{scene}#{beat}'
+    errors.append(f'{where} 的位置引用形状非法：{raw!r}'
+                  f'（应为 "init" 或 {{"scene": 场景id, "beat": 拍id}}）')
+    return None
 
 
 def _address_key(raw: dict[str, Any] | None) -> tuple | None:
@@ -100,12 +118,40 @@ def assemble_hook_design(
     wire: dict[str, Any], *, body: BodyDesign, known_char_ids: set[str],
     name_projection: NameProjection,
 ) -> tuple[HookDesign | None, list[str]]:
-    """Hook Design wire → HookDesign（canonical 候选，待 publish_graph 发布）。"""
+    """Hook Design wire（stage4-hook-design-v1）→ HookDesign
+    （canonical 候选，待 publish_graph 发布）。
+
+    B3 前半：wire 顶层 `protocol_version` 逐字对账；位置引用只给
+    {"scene","beat"} 分量（或 "init"），复合引用由本 compiler 组成——
+    wire 先解析成 canonical 形状再走既有校验与 schema 构造。"""
     errors: list[str] = []
+    if wire.get('protocol_version') != STAGE4_HOOK_DESIGN_PROTOCOL:
+        errors.append(f'protocol_version 必须是 {STAGE4_HOOK_DESIGN_PROTOCOL}，'
+                      f'实得 {wire.get("protocol_version")!r}（I-13 无隐式迁移）')
     extra = set(wire) - _WIRE_KEYS
     if extra:
         errors.append(f'Hook Design wire 携带未知字段 {sorted(extra)}'
                       '（源 Hook 证据、义务字段与自由 state0 文本不收）')
+    if errors:
+        return None, errors
+    data = deepcopy(wire)
+    data.pop('protocol_version', None)  # wire 协议版本不进 canonical
+    for item in data.get('materials') or []:
+        ref = _resolve_ref(item.get('beat_ref'), 'materials', errors)
+        if ref is not None:
+            item['beat_ref'] = ref
+    for item in data.get('opening_facts') or []:
+        ref = _resolve_ref(item.get('ref'), 'opening_facts', errors)
+        if ref is not None:
+            item['ref'] = ref
+    for item in data.get('forbidden_reveals') or []:
+        ref = _resolve_ref(item.get('ref'), 'forbidden_reveals', errors)
+        if ref is not None:
+            item['ref'] = ref
+    if errors:
+        return None, errors
+    wire = data
+
     positions = _position(body)
     deltas = _beat_deltas(body)
     concealed = set(wire.get('concealed') or [])

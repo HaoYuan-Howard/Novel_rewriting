@@ -197,13 +197,17 @@ CASES: dict[str, Case] = {
 # ─── 其余 HARD 的最小会红样本（编译闭合一族） ────────────────────────────────
 
 def _body_design_bad_wire() -> list:
-    """BodyDesign 编译闭合：非法 POV（未知人物）当场拒。"""
+    """BodyDesign 编译闭合：非法 POV（未知人物）当场拒（stage4-design-v1 形状）。"""
     from novel.stages.stage4.design import assemble_body_design
     _body, errors = assemble_body_design(
-        {'scenes': [{'scene_id': 's01',
-                     'beats': [{'beat_id': 'bt1', 'event': 'e',
-                                'participants': ['ch1']}],
-                     'delivery': {'pov': 'ghost', 'voice': 'v'}}]},
+        {'protocol_version': 'stage4-design-v1', 'book_style': '冷峻。',
+         'chapters': [{'purpose': 'e', 'scenes': 1}],
+         'scenes': [{'beats': [{'event': 'e', 'participants': ['ch1'],
+                                'dramatic_intent': 'd'}],
+                     'delivery': {'pov': 'ghost', 'voice': 'v'},
+                     'driver': {'focal_actor': 'ch1', 'immediate_want': 'w',
+                                'opposition': 'o', 'turn': 't'},
+                     'realization_brief': '重心在e；展开后收束。'}]},
         known_char_ids={'ch1'})
     return errors
 
@@ -222,7 +226,7 @@ def _chapter_count_mismatch() -> list:
 
 
 def _preserve_bad_wire() -> list:
-    """Preserve 编译闭合：obligation_id 重复拒收。"""
+    """Preserve 编译闭合：模型带 obligation_id 即拒——编号由 compiler 派发（I-21）。"""
     from novel.stages.stage4.grounding import assemble_preserve
 
     from contracts.schema.source import (
@@ -234,7 +238,7 @@ def _preserve_bad_wire() -> list:
              'must_preserve': True, 'satisfaction': '明确呈现',
              'lineage': {'blueprint_refs': ['b01_01'], 'character_ids': []}}
     _checkpoint, errors = assemble_preserve(
-        {'obligations': [entry, dict(entry)]},
+        {'protocol_version': 'stage4-preserve-v1', 'obligations': [entry]},
         policy_id='preserve-default', policy_version=1,
         characters=CharactersCore(characters={'ch1': CharacterEntry(
             canonical='苏姑娘',
@@ -270,8 +274,8 @@ def _binding_unclosed() -> list:
     from novel.stages.stage4.grounding import assemble_binding
 
     _model, errors = assemble_binding(
-        {'entries': [{'obligation_id': 'ghost', 'scene_id': 's01',
-                      'beat_ref': 's01#bt1', 'supporting_beat_refs': []}],
+        {'protocol_version': 'stage4-bind-v1',
+         'entries': [{'obligation_id': 'ghost', 'scene': 's01', 'beat': 'bt1'}],
          'unbound': []},
         _checkpoint_with('o1'), known_scene_beats={'s01': {'bt1'}})
     return errors
@@ -284,7 +288,9 @@ def _hook_design_bad_wire() -> list:
 
     graph, projection, _context = _green_pair()
     _hook, errors = assemble_hook_design(
-        {'materials': [{'beat_ref': 's99#bt1', 'presentation': '倒叙材料'}],
+        {'protocol_version': 'stage4-hook-design-v1',
+         'materials': [{'beat_ref': {'scene': 's99', 'beat': 'bt1'},
+                        'presentation': '倒叙材料'}],
          'opening_facts': [], 'forbidden_reveals': []},
         body=graph, known_char_ids=set(), name_projection=projection)
     return errors
@@ -385,7 +391,7 @@ CASES.update({
     'chapter_plan_shape': Case('stage4', _chapter_count_mismatch, '章'),
     'length_budget_conserved': Case('stage4', _chapter_count_mismatch, '章'),
     'preserve_compile': Case('stage4', _preserve_bad_wire, 'obligation'),
-    'binding_mechanical': Case('stage4', _binding_unclosed, 'Binding'),
+    'binding_mechanical': Case('stage4', _binding_unclosed, 'checkpoint 外'),
     'hook_design_mechanical': Case('stage4', _hook_design_bad_wire, '材料引用不存在的拍'),
     'execution_plan_compile': Case('stage4', _plan_unclosed, 'Binding'),
     'writer_ir_dual_view': Case('stage4', _hook_context_unresolvable, '起笔事实'),
@@ -470,18 +476,18 @@ def _design_surface_not_registered() -> list:
     """称谓闭合：Design 放行 Characters 未登记的字面。"""
     from novel.stages.stage4.design import assemble_body_design
     _body, errors = assemble_body_design(
-        {'initial_state': [], 'scenes': [{
-            'scene_id': 's01', 'state_reads': [],
+        {'protocol_version': 'stage4-design-v1', 'book_style': '冷峻。',
+         'initial_state': [], 'scenes': [{
+            'state_reads': [],
             'driver': {'focal_actor': 'yun', 'immediate_want': 'w',
                        'opposition': 'o', 'turn': 't'},
             'realization_brief': '重心在约定成立；展开对峙，在立约处收束。',
-            'beats': [{'beat_id': 'bt1', 'event': '约定成立', 'participants': ['yun'],
+            'beats': [{'event': '约定成立', 'participants': ['yun'],
                        'dramatic_intent': 'd', 'target_delta': [], 'delivery_hint': '',
                        'surface_introductions': [
                            {'char_id': 'yun', 'surfaces': ['云娘子']}]}],
             'delivery': {'pov': 'yun', 'voice': 'v', 'avoid': []}}],
-         'chapters': [{'chapter_ordinal': 1, 'purpose': '立约', 'scene_ids': ['s01']}],
-         'chapter_weights': {'s01': 1.0}},
+         'chapters': [{'purpose': '立约', 'scenes': 1}], 'scene_weights': [1]},
         known_char_ids={'yun'}, registered_surfaces={'yun': {'云娘', '云姑娘'}})
     return errors
 

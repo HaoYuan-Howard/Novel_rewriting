@@ -206,7 +206,7 @@ def _scene(scene_id: str) -> TargetScene:
 
 def _graph(**over) -> dict:
     base = dict(
-        graph_id='g1', initial_state=(),
+        graph_id='g1', initial_state=(), book_style='冷峻克制的第三人称叙事。',
         scenes=(_scene('s01'), _scene('s02')),
         chapters=(ChapterAssignment(chapter_ordinal=1, purpose='婚约破裂，主角立誓', scene_ids=('s01',)),
                   ChapterAssignment(chapter_ordinal=2, purpose='家族反扑，退路收窄', scene_ids=('s02',))),

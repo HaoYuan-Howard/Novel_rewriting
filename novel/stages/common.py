@@ -418,7 +418,7 @@ PRE_CHAPTER_RULE = """
 _PRESERVE_KIND_LINES = '\n'.join(
     f'- {kind}：{definition}' for kind, definition in PRESERVE_KIND_DEFS.items())
 
-PRESERVE_RULES = f"""任务：从源真值选择改写不可丢失的最小语义义务（保存策略 v3）。
+PRESERVE_RULES = f"""任务：从源真值选择改写不可丢失的最小语义义务（保存策略 v3；wire 协议 stage4-preserve-v1）。
 
 【源真值的形状（v13）】Blueprints 的每一拍是一次状态转移：event 是给人读的事件
 表述；effects 是叙述确立的事实（带可见性 on_page／concealed 与作用域）；cognition
@@ -463,53 +463,108 @@ temporal_mode（single＝单次行为、iterative＝重复行为）。
 删除或合并该项后，只要会改变关键状态转移、因果连接、揭示时点、身份关系、
 setup/payoff 或结局条件中的任何一项，就填 true；否则填 false（可综合）。
 不得泛化世界规则，不把肉体亲密误解成爱情。
-requires 仅必要先决条件，不能成环。跨多个源拍的复合义务允许由多个目标拍共同支持。
-每项 obligation_id,kind,statement,lineage{{blueprint_refs,character_ids}},
-must_preserve(布尔 true/false),satisfaction,requires。
-返回 {{obligations:[...]}}。"""
 
-DESIGN_RULES = """仅依据 Brief/Identity/OutputConstraints 设计目标书。所有类别义务及 satisfaction 都要考虑。
-人物动机与阅读效果以义务为准：brief、voice、dramatic_intent 只做呈现表达，不得改写
-义务给出的事实、动机与满足条件。不增加无证据的人物偏好、价值判断或社会规则。
+【wire 形状（编号由 compiler 生成，你不输出任何 ID）】
+- 义务按列表序书写；**不输出义务编号**——编号由 compiler 按列表序派发；
+- 每项 kind,statement,lineage{{blueprint_refs,character_ids}},
+  must_preserve(布尔 true/false),satisfaction,requires；
+- lineage 的 blueprint_refs／character_ids 只能取源真值给出的 id（闭集选择）；
+- requires 用 **1-based 列表序号**引用其它义务（如第 2 项依赖第 1 项写 [1]），
+  不得自指，只收必要先决条件；
+- wire 顶层：{{"protocol_version":"stage4-preserve-v1","obligations":[...]}}。
+返回一个 JSON object，不要围栏、不要解释。"""
+
+DESIGN_RULES = """任务：仅依据 Brief/Identity/OutputConstraints 设计目标书
+（wire 协议 stage4-design-v1）。你是整书一次调用的结构设计者：只表达**选择、
+结构与相对篇幅重点**——场景/拍编号、归章、复合引用、权重归一与整数预算全部由
+compiler 生成，你不输出任何 ID、编号或归一化数值（I-21）。
+所有类别义务及 satisfaction 都要考虑。人物动机与阅读效果以义务为准：brief、
+voice、dramatic_intent 只做呈现表达，不得改写义务给出的事实、动机与满足条件。
+不增加无证据的人物偏好、价值判断或社会规则。
 自由设计场景，但不为每条义务机械拆场。
 目标状态只存会限制后续的持续事实；即时动作留在事件。初始态由你显式选择，不复制源书末态。
-每个状态有 domain(character/relation/knowledge/world/reader), key, subjects(人物1个、关系有序2个),
-holder(knowledge 必填真实 char_id，其它 null), op(set/unset/unknown), value(string 或 null),
-scope(book/scene), knowledge_mode(knowledge 为 known/suspected/heard/believes，其它 null；
-believes＝持有者以为为真、不代表世界为真，用于传递错误看法)。
-读者延后确认的内容：在其确认拍放 domain=reader 的 target_delta，此前任何位置都不得让
-读者确认；线索、误导与猜测照常安排（受保护的是"何时确认"，不是"能否暗示"）。
+
+【结构化跨章依赖（后文要记住的事实必须进字段，不得只写在导演说明里）】
+- book_style（必填）：整书叙述风格与表达规则的书面声明（进每章请求）；
+- character_voices: [{char_id, voice}]：需要全书保持一致声线的人物及其口吻约定；
+- standing_goals: [{char_id, goal}]：人物当前在途、跨章持续追求的目标；
+- ongoing_actions: [{char_id, action, started_at}]：已启动、尚未完成、后文要
+  接续的行动；
+- open_questions: [{question, planted_at}]：已打开、后文要回答的悬念（问题文本
+  只在此登记一次）；
+- promises: [{maker, to, content, made_at}]：人物间的承诺（后文要兑现或背叛）；
+  to 是对象 char_id，对读者或不特定对象的承诺不写。
+锚定位置 started_at/planted_at/made_at 写 {"scene": 场序, "beat": 拍序}
+（1-based 序号，指向你下方 scenes/beats 列表中的位置；不是字符串编号）。
+
+【状态词表】
+每个状态有 domain(character/relation/knowledge/world/reader), key, subjects(人物1个、
+关系有序2个), holder(knowledge 必填真实 char_id，其它 null), op(set/unset/unknown),
+value(string 或 null), scope(book/scene), knowledge_mode(knowledge 为
+known/suspected/heard/believes，其它不写该键；believes＝持有者以为为真、不代表世界
+为真，用于传递错误看法)。初始态一律 book 作用域，不写 scope 键（compiler 填）。
 knowledge 的 knowledge_mode：known＝确知、suspected＝怀疑、heard＝听说、believes＝
-持有者以为为真（不代表世界为真）——错误看法（如"芸娘以为夫君已离开"）必须用 believes
-以结构形式传到写手，不得写成 known 让写手当作世界事实演出。
-临时动作环境用 scene；结束的长期状态用 unset；倒叙讲述只能改变当下读者/人物知情，不能倒改当前状态。
-每场 state_reads 显式列出实际需要的状态地址(domain,key,subjects,holder)，不要列全书状态。
-每拍 surface_introductions 只声明该位置首次允许的称谓 [{char_id,surfaces}]，不得一次放开该人物所有称谓；
-initial_surfaces 与 surface_introductions 里的每个称谓字面都只能取输入身份投影给出的可用称呼
-（该人物已登记的称谓面），未登记的字面一律不得释放。
-driver.focal_actor 写本场推动变化的人物，immediate_want 写其此刻想要什么，opposition 写具体
-的阻力（谁／什么在挡、怎么挡，不写"命运""现实"这类空转词），turn 写局势在哪里转向。
-每场 realization_brief 必填非空：本场怎样演出来——重心在哪里、人物如何理解局面、哪些内容展开或
-略写、转折怎样显现、在哪里收住、如何衔接邻场；一段自然语言，不规定逐句正文，不拆成情绪/镜头/
-五感等字段，也不逐拍复述事件（拍的事实在 beats 里）。voice 只写可操作的叙述口吻要求
-（人称距离、句式节奏、对白密度），不贴情绪标签。brief 只承载呈现方向：凡涉及关键行动、持久认知
-变化、秘密、承诺或因果条件的表述，必须同时体现在 driver/event/target_delta/surface_introductions
-等正式字段，不得只写在 brief 里。
-chapters 每项按 {{chapter_ordinal, scene_ids, purpose}} 的顺序书写，三项都必填：purpose 只概括
-本章 scene_ids 里已设计的变化，不单独增加事件或结果。
-返回 initial_state,initial_surfaces,scenes,chapters,chapter_weights。
-scenes 每项 scene_id,driver{focal_actor,immediate_want,opposition,turn},state_reads,realization_brief,
-beats[{beat_id(场内短 ID),event,participants,dramatic_intent,target_delta,delivery_hint,surface_introductions}],
-delivery{{pov,voice,avoid}}。chapters:[{{chapter_ordinal,purpose,scene_ids}}] 连续1..N、非空、全部场景恰好归一章；
-scenes 与 chapters 阅读顺序一致。chapter_weights 覆盖所有场景，均为正且总和1。
+持有者以为为真（不代表世界为真）——错误看法（如"芸娘以为夫君已离开"）必须用
+believes 以结构形式传到写手，不得写成 known 让写手当作世界事实演出。
+
+【读者确认必须声明事实地址（D4，漏填即拒）】
+读者延后确认的内容：在其确认拍放 domain=reader 的 target_delta，且必填
+confirms——它确认的**事实地址** {domain,key,subjects,holder}，指向 initial_state
+或此前某拍已确立的 set（domain 不得是 reader）；确认不得早于事实建立。此前任何
+位置都不得让读者确认；线索、误导与猜测照常安排（受保护的是"何时确认"，
+不是"能否暗示"）。
+临时动作环境用 scene；结束的长期状态用 unset；倒叙讲述只能改变当下读者/人物知情，
+不能倒改当前状态。
+
+【场景与拍（只写结构与语义，不写编号）】
+每场 state_reads 显式列出实际需要的状态地址(domain,key,subjects,holder)，不要列
+全书状态。每拍 surface_introductions 只声明该位置首次允许的称谓 [{char_id,surfaces}]，
+不得一次放开该人物所有称谓；initial_surfaces 与 surface_introductions 里的每个
+称谓字面都只能取输入身份投影给出的可用称呼（该人物已登记的称谓面），未登记的
+字面一律不得释放。
+driver.focal_actor 写本场推动变化的人物，immediate_want 写其此刻想要什么，opposition
+写具体的阻力（谁／什么在挡、怎么挡，不写"命运""现实"这类空转词），turn 写局势
+在哪里转向。
+每场 realization_brief 必填非空：本场怎样演出来——重心在哪里、人物如何理解局面、
+哪些内容展开或略写、转折怎样显现、在哪里收住、如何衔接邻场；一段自然语言，不规定
+逐句正文，不拆成情绪/镜头/五感等字段，也不逐拍复述事件（拍的事实在 beats 里）。
+voice 只写可操作的叙述口吻要求（人称距离、句式节奏、对白密度），不贴情绪标签。
+brief 只承载呈现方向：凡涉及关键行动、持久认知变化、秘密、承诺或因果条件的表述，
+必须同时体现在 driver/event/target_delta/surface_introductions 等正式字段，不得
+只写在 brief 里。
+
+【wire 形状（顶层键：protocol_version, book_style, character_voices,
+standing_goals, ongoing_actions, open_questions, promises, initial_state,
+initial_surfaces, scenes, chapters, scene_weights）】
+- scenes 按阅读序排列：[{driver{focal_actor,immediate_want,opposition,turn},
+  state_reads, realization_brief, beats, delivery{pov,voice,avoid}}]；**不写
+  scene_id**——编号由 compiler 按列表序派发；
+- beats 按故事序排列：[{event, participants, dramatic_intent, delivery_hint,
+  target_delta, surface_introductions}]；**不写 beat_id**——编号由 compiler
+  按列表序派发；
+- chapters 按阅读序给章切片：[{purpose, scenes: 本章场数}]——purpose 只概括本章
+  场景里已设计的变化，不单独增加事件或结果；全部场景恰好按序切成连续的章，
+  每章至少一场，章数必须等于 OutputConstraints 的 target_chapter_count；
+- scene_weights：与 scenes 等长的正数数组，表达各场的相对篇幅重点（如 [3,1,2]）；
+  **不求和为 1**——归一与整数章预算由 compiler 按全书最大余数分配完成。
+返回一个 JSON object（protocol_version 为 "stage4-design-v1"），不要围栏、不要解释。
 """
 
-BIND_RULES = """按完整事件、状态变化与实质满足条件绑定义务。
+BIND_RULES = """任务：把每条保存义务绑定到目标故事的确切承载位置
+（wire 协议 stage4-bind-v1）。你只做承载选择：义务 id 与场景/拍 id 都取输入
+投影给出的闭集（选择，不是生成）；"场景#拍" 复合引用由 compiler 组成，你不写。
 每条义务恰好一次进入 entries 或 unbound；不得为凑覆盖率虚绑。
-entries:[{obligation_id,scene_id,beat_ref:场景#场内拍,supporting_beat_refs:[]}]
-单一最终验收拍必须能完成 satisfaction；复合义务前半部分用明确的较早 supporting_beat_refs 引用。
-若 A requires B，B 的完成位置必须不晚于 A；同场也检查拍序。支撑拍必须早于最终验收拍。
-无法兑现的必保义务也必须放入 unbound:[{obligation_id,owner:design|grounding,reason}]，不能删或改义务。
+entries:[{obligation_id, scene, beat, supporting}]
+- obligation_id 只能取义务清单给出的 id；
+- scene/beat 只能取场景闭集里的 scene_id 与该场的 beat_id：单一最终验收拍必须
+  能单独完成 satisfaction；复合义务前半部分用 supporting:[{scene, beat}] 给明确
+  的较早支撑拍；
+- 若 A requires B，B 的完成位置必须不晚于 A；同场也检查拍序；支撑拍必须早于
+  最终验收拍。
+无法兑现的必保义务也必须放入 unbound:[{obligation_id,owner:design|grounding,
+reason}]，不能删或改义务。
+wire 顶层：{"protocol_version":"stage4-bind-v1","entries":[...],"unbound":[...]}。
+返回一个 JSON object，不要围栏、不要解释。
 """
 
 NAMES_RULES = """任务：登记全书源名称结构（姓氏家族、名、化名与每个表层称谓的构词）。
@@ -533,7 +588,9 @@ NAMES_RULES = """任务：登记全书源名称结构（姓氏家族、名、化
      · 模板渲染结果必须与 surface 逐字一致；纯称谓里不得含本人姓或名字面。
 输出 JSON 顶层：{"families":{...},"people":{...}}"""
 
-HOOK_DESIGN_RULES = """任务：为整本小说设计读者入口（楔子）的结构设计。只输出设计 JSON，不写 prose。
+HOOK_DESIGN_RULES = """任务：为整本小说设计读者入口（楔子）的结构设计。只输出设计 JSON，不写 prose
+（wire 协议 stage4-hook-design-v1）。位置引用只给分量（scene=场景 id、beat=拍 id，
+都取输入骨架给出的闭集；复合引用由 compiler 组成，你不写）。
 
 你看到的骨架是正文设计（BodyDesign）：唯一事件真相。楔子不是 Scene 0，不是正文
 第一场的压缩版，而是从已设计好的故事中重新选择最有吸引力的一条进入路径。
@@ -543,7 +600,8 @@ HOOK_DESIGN_RULES = """任务：为整本小说设计读者入口（楔子）的
 - 倒叙、flash-forward、跨场景取材、合并、压缩，只要语义合法；
 - materials 的排列按读者接收信息的顺序，可以不同于故事时序——这正是倒叙授权。
 
-materials（默认 2-4 条，按呈现序；这只是随篇幅调整的指引，不是机械闸）：每条 {beat_ref:"场景#拍", withheld:[地址], presentation}。
+materials（默认 2-4 条，按呈现序；这只是随篇幅调整的指引，不是机械闸）：每条
+{beat_ref:{"scene":...,"beat":...}, withheld:[地址], presentation}。
 - 每加入一份材料，读者对局面的理解必须升级；最后一份材料必须能天然收束楔子；
 - 围绕一个核心冲突取材，并给读者留下一个未兑现的问题；
 - 不选只属于后期 payoff 的拍；人物对事件的完整处理（追问、伦理辩论、对峙）不属于楔子；
@@ -558,7 +616,7 @@ pov：{person: first|third, focalizers:[人物 id]}。first 恰好一人且不�
 第三人称允许多视角。视角由你显式设计，系统不做多数票、不强制第一人称。
 
 opening_facts（2-5 条）：楔子开场前已成立、且获准使用的目标事实。每条
-{ref:"init"或"场景#拍", address:{domain,key,subjects,holder}, audience}。
+{ref:"init"或{"scene":...,"beat":...}, address:{domain,key,subjects,holder}, audience}。
 - address 必须是该位置实际建立的状态地址；只写事实，不写镜头
   （场景、位置、动作、表情描述一律不许）；
 - audience：world=世界已成立；pov=POV 人物已知；reader=读者获准知道。
@@ -570,14 +628,15 @@ surface_releases：楔子中允许使用的称谓 [{char_id, surfaces}]——只
 声明的称谓面里选；隐藏人物不得释放。
 
 forbidden_reveals（2-4 条）：后文真实存在、楔子不得提前兑现的关键揭示。每条
-{ref:"场景#拍", address:null 或 {domain,key,subjects,holder}}。
+{ref:"init"或{"scene":...,"beat":...}, address:null 或 {domain,key,subjects,holder}}。
 
 design_brief（120-300 字）：这些材料如何组织成楔子的写作要求，逐项覆盖——
 入口（从什么状态或画面进入）、哪些材料快速带过、冲突如何升级、重点展开哪里、
 给读者留下什么问题、在哪里切断。只谈组织方式，不谈措辞。
 delivery_brief（一句话）：文风机制与口吻（人称、节奏、对白密度），呈现自由交给写手。
 
-只输出一个 JSON 对象（不要围栏、不要解释）：
+只输出一个 JSON 对象（protocol_version 为 "stage4-hook-design-v1"；不要围栏、
+不要解释）：
 {"pov":{...},"opening_facts":[...],"materials":[...],"concealed":[...],
  "surface_releases":[...],"forbidden_reveals":[...],"design_brief":"...","delivery_brief":"..."}"""
 
@@ -682,24 +741,39 @@ def surface_engine_release(graph: BodyDesign, at_scene: str) -> tuple[SurfaceRel
 def pending_reader_confirmations(
     graph: BodyDesign, scene_index: int,
 ) -> tuple[PendingConfirmation, ...]:
-    """本场开头及以后才发生的读者确认（D15）：从 Design 的 reader delta 确定性派生。
+    """本场开头读者尚未确认的事实（D15 派生；B3 前半起按地址投影，D4）。
 
-    纯函数：同一 graph＋场序 ⇒ 同一清单。确认拍在本场内的标注 in_scene（渲染成
-    「自第 X 拍起可确认」）；在后场的，写手在此之前不得让读者确认——受保护的是
-    「何时确认」，不是「能否暗示」（线索、误导与猜测照常演出）。
+    纯函数：同一 graph＋场序 ⇒ 同一清单。两个维度：
+    · **时序**：只列本场起点及以后才发生的读者确认（确认拍在本场内的标注
+      in_scene，渲染成「自第 X 拍起可确认」；后场的写手在此之前不得让读者
+      确认）；
+    · **地址（D4）**：每条读者确认必须声明它确认的事实地址（reader delta 的
+      `confirms`）；清单只投影**本场实际消费该地址**的项——本场 state_reads
+      读取、或本场拍写入（确认拍所在场写入的正是 confirms 地址）。不消费该
+      地址的场景不拿这条清单；由此「后章读者确认变化」只影响章包内引用该
+      地址的章。确认前不作为已确认信息——受保护的是「何时确认」，不是
+      「能否暗示」（线索、误导与猜测照常演出）。
     """
+    scene = graph.scenes[scene_index]
+    addressed = {r.address() for r in scene.state_reads}
+    for beat in scene.beats:
+        for delta in beat.target_delta:
+            if delta.confirms is not None:
+                addressed.add(delta.confirms.address())
+            addressed.add(delta.address())
     items: list[PendingConfirmation] = []
-    for later, scene in enumerate(graph.scenes):
-        if later < scene_index:
-            continue
-        for beat in scene.beats:
+    for later in range(scene_index, len(graph.scenes)):
+        for beat in graph.scenes[later].beats:
             for delta in beat.target_delta:
                 if delta.domain is not EffectDomain.READER or delta.op != 'set':
+                    continue
+                if delta.confirms.address() not in addressed:
                     continue
                 items.append(PendingConfirmation(
                     fact=delta.value or '', key=delta.key,
                     subjects=tuple(delta.subjects),
-                    position=f'{scene.scene_id}#{beat.beat_id}',
+                    address=delta.confirms,
+                    position=f'{graph.scenes[later].scene_id}#{beat.beat_id}',
                     in_scene=(later == scene_index)))
     return tuple(items)
 
@@ -799,7 +873,9 @@ def project_context(*, scene_id: str, graph: BodyDesign,
 
 #: renderer 版本：进入正文请求身份。格式化规则变化必须换版。
 #: v2（2026-09-26 质量改进批次二）：事实约束新增「尚未向读者确认的事实」清单（D15）。
-RENDERER_VERSION = 'str06-render-v2'
+#: v3（2026-09-27 B3 前半）：清单条目带确认的事实地址（D4）；新增【整书风格与
+#: 人物声线】书级层（TargetDesign 结构化投影）。
+RENDERER_VERSION = 'str06-render-v3'
 
 #: 整书写作约定与自由度（Writer 协议，固定文本）。表达自由边界：entry 是
 #: 起笔已成立的状态、effects 是结束需成立的结果、义务必须实际兑现、局部
@@ -809,15 +885,19 @@ RENDERER_VERSION = 'str06-render-v2'
 #: 前者管世界设定的精度边界，后者管揭示时点（线索、误导、猜测照常演出）。
 #: v3（2026-09-26 质量改进批次二）：第 5 条改指向【尚未向读者确认的事实】清单
 #: （compiler 逐场算好的确认位置，D15）——写手不再自行推断何时可确认。
-WRITER_PROTOCOL_VERSION = 'str06-body-protocol-v3'
+#: v4（2026-09-27 B3 前半）：第 5 条升级为按地址投影的清单（D4：条目带确认的
+#: 事实地址，只覆盖本场实际消费的地址）；新增第 8 条整书风格与人物声线约定
+#: （TargetDesign 结构化字段的消费面）。
+WRITER_PROTOCOL_VERSION = 'str06-body-protocol-v4'
 WRITER_PROTOCOL = """\
 1. 【事实约束】里标为入场状态（entry）的事实是起笔时已成立的状态：按叙事需要自然带入，不要求开场逐条介绍。
 2. 【事实约束】里的义务与逐拍结果是本章结束后需要成立的结果：通过情节实际完成，不要求用旁白逐条宣布；义务必须实际兑现，仅提到关键词不算完成。
 3. 在事实约束与导演说明的边界内，鼓励创造具体的对白、动作、停顿与即时反应；不因「保险」而一律写成说明文或全面回避心理与对白。
 4. 会改变时间线、身份、前史或后续因果的设定（时令、年龄、时距、身份头衔、人物前史）：输入与前文都没给出的，不新增也不写具体；已给出的保持原精度，不把两条独立的事实合成新的前史。局部布景、陈设与动作照常自由。
-5. 【尚未向读者确认的事实】清单列出本场开头读者尚未确认的事实及其确认位置：标注「第 X 拍起可确认」的，该拍之前不得作为已确认信息叙述；标注后场位置的，本场之内不得让读者确认。清单管「何时确认」，不管「能否暗示」——线索、误导与猜测照常演出。
+5. 【尚未向读者确认的事实】清单列出本场实际涉及、且读者尚未确认的事实（带确认的事实地址）及其确认位置：标注「第 X 拍起可确认」的，该拍之前不得作为已确认信息叙述；标注后场位置的，本场之内不得让读者确认。清单管「何时确认」，不管「能否暗示」——线索、误导与猜测照常演出。
 6. 只使用已释放的称谓面；事实约束中标明「第 X 拍起可用」的称谓不得提前使用。
-7. 每一场的 POV 与 voice 是该场的叙述约定；多场 POV 不同时按场切换，不做全书统一。"""
+7. 每一场的 POV 与 voice 是该场的叙述约定；多场 POV 不同时按场切换，不做全书统一。
+8. 【整书风格与人物声线】是全书一致的叙述约定：风格与声线声明约束全部章节的叙述质地，不得随章漂移；与单场 voice 冲突时，书级约定管质地、场级 voice 管本场口吻的具体操作。"""
 
 
 def _json(value) -> str:
@@ -844,11 +924,14 @@ def _scene_view(context: WriterContext) -> str:
     if ir.pending_reader_confirmations:
         lines = []
         for item in ir.pending_reader_confirmations:
+            addr = item.address
+            what = (f'{item.fact}（{addr.domain.value}:{addr.key}'
+                    + (f'/{addr.holder}' if addr.holder else '') + '）')
             if item.in_scene:
                 where = f'本场第 {item.position.split("#", 1)[1]} 拍起可确认'
             else:
                 where = f'{item.position} 才可确认'
-            lines.append(f'- {item.fact}（{item.key}）——{where}；此前不得让读者确认')
+            lines.append(f'- {what}——{where}；此前不得让读者确认')
         parts.append('【尚未向读者确认的事实】\n' + '\n'.join(lines))
     parts.append('【事实约束】\n' + _json({
         'obligations': [_obligation_view(o) for o in ir.obligations],
@@ -875,6 +958,11 @@ def render_chapter_packet(
     chapter = book_ir.chapter(chapter_ordinal)
     brief = book_ir.book_brief
     parts: list[str] = ['【整书写作约定与自由度】', WRITER_PROTOCOL]
+
+    parts.append('\n【整书风格与人物声线】（全书一致的叙述约定，TargetDesign 结构化投影）')
+    parts.append(f'风格：{brief.book_style}')
+    for voice in brief.character_voices:
+        parts.append(f'{voice.char_id} 的声线：{voice.voice}')
 
     parts.append('\n【全书规划参考：作者知道，不等于人物或读者已知】')
     parts.append('导航（其余各章材料在下方「规划参考」内完整给出）：')

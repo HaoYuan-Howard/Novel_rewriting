@@ -94,6 +94,17 @@ Binding 不维护第二份初始态。
 
 ## Stage4：把章依赖编译完整（目标）
 
+**落地状态（2026-09-27，B3 前半，rc7）**：四协议独立版化与 Design 瘦身已落地
+（`STAGE4_{PRESERVE,DESIGN,BIND,HOOK_DESIGN}_PROTOCOL`，wire 顶层
+`protocol_version` 逐字对账，漏带/错带即拒）；场景/拍 ID（`sc{序:02d}`／
+`b{序:02d}`）、归章切片、复合锚定引用、权重归一与整数预算由 compiler 生成
+（`novel/stages/stage4/design.py`，I-21）；TargetDesign 结构化跨章字段
+（book_style／character_voices／standing_goals／ongoing_actions／open_questions／
+promises）落地，书级条目随 BookBrief 进每章请求；读者确认必填事实地址（D4，
+schema 构造期 + assemble 引用闭合），投影按地址精确到消费该地址的章包；
+预算传导机械规则 `chapters_with_budget_change` 落地。按拍读取（先读旧值后写
+新值）、T₀ 语义、章闭包与 Hook 代码归位 Stage4 包归 B3 后半。
+
 - Preserve、Design、Bind、Hook Design 各用独立协议；模型只表达选择、结构和相对篇幅
   重点，场景/拍 ID、复合引用、权重归一与整数预算由 compiler 生成。协议瘦身（不回显
   输入、不写可派生字段）以 Design 为首要对象——Design 是整书一次调用（全局归章与跨章
@@ -114,7 +125,8 @@ Binding 不维护第二份初始态。
   的代码迁回 Stage4 包（B3）；Hook 语义边界不变（见现役实装一节）。
 - 章预算保持全书最大余数分配（现役
   `novel/stages/stage4/book_ir.py::allocate_chapter_budgets`），总和恰等于书级目标；
-  代价是权重变化会波及多章预算（见精确失效表）。
+  代价是权重变化会波及多章预算（见精确失效表；机械规则
+  `novel/stages/stage4/book_ir.py::chapters_with_budget_change` 已随 B3 前半落地）。
 
 ### ChapterWriterPacket（目标三件套）
 
@@ -238,7 +250,7 @@ seal → 标记采用（可由 seal 重建）。任一窗口中断优先免费�
 | 变化 | 影响 |
 |---|---|
 | 某章导演说明或其实际依赖变化 | 重编译后章包变化的章 |
-| 场景相对篇幅（权重）变化 | 整数预算变化的章（全书归一，可能波及多章） |
+| 场景相对篇幅（权重）变化 | 整数预算变化的章（全书归一，可能波及多章；`chapters_with_budget_change`） |
 | 后章读者确认变化 | 只影响章包引用该确认地址的章 |
 | 第 5 章正文重写 | 第 5 章及最终组装 |
 | BookBrief（整书风格、稳定声线）变化 | 全部正文 |

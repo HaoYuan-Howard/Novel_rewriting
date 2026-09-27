@@ -593,8 +593,8 @@ def test_stage4_reads_only_canonical(tmp_path):
     brief, identities = project_brief(
         __import__('novel.stages.stage4.grounding', fromlist=['assemble_preserve'])
         .assemble_preserve(
-            {'obligations': [
-                {'obligation_id': 'ob01', 'kind': 'event_core',
+            {'protocol_version': 'stage4-preserve-v1', 'obligations': [
+                {'kind': 'event_core',
                  'statement': '夫君藏身床底',
                  'lineage': {'blueprint_refs': ['b01_01'], 'character_ids': ['fu_jun']},
                  'must_preserve': True, 'satisfaction': '呈现藏身', 'requires': []}]},

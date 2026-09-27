@@ -97,7 +97,9 @@ def _graph(scenes, chapters) -> BodyDesign:
     chapters = [ChapterAssignment(chapter_ordinal=c.chapter_ordinal,
                                   purpose=f'章{c.chapter_ordinal}目的',
                                   scene_ids=c.scene_ids) for c in chapters]
-    return BodyDesign(initial_state=(), graph_id='g1', scenes=tuple(scenes), chapters=tuple(chapters))
+    return BodyDesign(initial_state=(), graph_id='g1',
+                      book_style='冷峻克制的第三人称叙事。',
+                      scenes=tuple(scenes), chapters=tuple(chapters))
 
 
 def _plan(*scene_ids: str, deps: dict[str, list[str]] | None = None) -> ExecutionPlan:
