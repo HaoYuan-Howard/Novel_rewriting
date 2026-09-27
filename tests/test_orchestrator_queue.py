@@ -920,13 +920,16 @@ def test_stage5_plan_uses_one_authorized_whole_book_command(
 def _assert_retired_stage5_engine_package() -> None:
     """F8c：旧 Stage5 引擎（reviewer_rewrite 一族）删除；journal 消费面不得复活。
 
-    ⚠ F8c 把 `novel/stages/stage5/` **原地重建**为新链 Stage5 包（body／body_checks／
-    hook／hook_writer／hook_context），因此本条不再断言「整包不存在」，改为核对
-    旧 reviewer-rewrite 引擎模块已删、新链模块已落位——包回来不等于旧链回来。
+    ⚠ F8c 把 `novel/stages/stage5/` **原地重建**为新链 Stage5 包（body／
+    body_checks／hook_writer）；B3 后半再把 Hook 设计与唯一 graph publisher
+    （`hook.py`）与 HookContext 编译（`hook_context.py`）归位 Stage4 包——
+    本条核对旧 reviewer-rewrite 引擎模块已删、新链模块按现行归属落位
+    （B3 归位登记见 docs/REQUIREMENTS.md B3 行与 F7e 新链落位清单）。
     """
     import importlib.util
     from pathlib import Path
 
+    import novel.stages.stage4 as stage4
     import novel.stages.stage5 as stage5
     root = Path(stage5.__file__).parent
     present = sorted(p.stem for p in root.glob('*.py'))
@@ -936,8 +939,11 @@ def _assert_retired_stage5_engine_package() -> None:
         assert name not in present, (
             f'旧 Stage5 引擎模块复活：novel/stages/stage5/{name}.py；'
             f'reviewer rewrite journal 不应再被消费')
-    for name in ('body', 'body_checks', 'hook', 'hook_writer', 'hook_context'):
+    for name in ('body', 'body_checks', 'hook_writer'):
         assert name in present, f'新链 Stage5 模块未落位：{name}'
+    stage4_present = sorted(p.stem for p in Path(stage4.__file__).parent.glob('*.py'))
+    for name in ('hook', 'hook_context'):
+        assert name in stage4_present, f'Hook 模块未归位 Stage4 包：{name}'
     assert importlib.util.find_spec('novel.llm.stage5_runs') is None, (
         '旧 Stage5 付费臂应随 F8c 删除；reviewer rewrite journal 不应再被消费')
 

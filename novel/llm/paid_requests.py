@@ -835,8 +835,22 @@ class PaidRequestSession:
         return None
 
     def _write_revision(self, owner: str, record: dict) -> None:
-        """ContentRevision 记录（取代 ``runtime/adopt_<owner>.json`` 写路）。"""
-        self.repository.write(f'runtime/revisions/{owner}.json', record)
+        """ContentRevision 记录（取代 ``runtime/adopt_<owner>.json`` 写路）。
+
+        幂等（I-30/I-31）：同一采用事实重放不重写盘上记录——除建档时刻
+        `created_at` 外逐字段相等即视为同一实体，保留首次建档字节；不同采用
+        事实（换源根／换 attempt）才覆盖重记。记录损坏则抛错暴露，不静默覆盖
+        证据（I-34）。
+        """
+        rel = f'runtime/revisions/{owner}.json'
+        path = self.repository.path(rel)
+        if path.is_file():
+            existing = json.loads(path.read_text(encoding='utf-8'))
+            stable = {k: v for k, v in record.items() if k != 'created_at'}
+            prior = {k: v for k, v in existing.items() if k != 'created_at'}
+            if prior == stable:
+                return
+        self.repository.write(rel, record)
 
     def _record_adoption(self, owner, request, identity, row) -> None:
         """采用在候选根账内只记一行零 token 的 cached 行（新 attempt_id）。
