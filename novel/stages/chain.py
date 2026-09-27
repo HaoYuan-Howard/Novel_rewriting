@@ -69,9 +69,10 @@ from novel.stages.common import (
     BODY_WRITER_SYSTEM, pack_prompt,
 )
 from novel.stages.stage2 import (
-    NamesObservation, book_observation_prompt, chapter_observation_prompt,
-    character_core_view, compile_book_observation, compile_chapter_observation,
-    compile_name_structure,
+    NamesObservation, STAGE2_OBSERVATION_PROTOCOL, book_observation_prompt,
+    chapter_observation_prompt, character_core_view, compile_associate_observation,
+    compile_book_observation, compile_chapter_observation, compile_name_structure,
+    compile_source_truth, associate_observation_prompt, project_association_space,
 )
 from novel.stages.stage4 import (
     assemble_binding, assemble_body_design,
@@ -300,11 +301,89 @@ def run_names(ctx: ChainContext) -> dict:
     return {'name_structure_people': len(structure.people)}
 
 
+# ─── stage2 associate／compile（B2 五节点：关联与双真源发布，D8/D9） ─────────
+
+def run_associate(ctx: ChainContext) -> dict:
+    """`str06.stage2.associate`：跨章关联——只选已给句柄建立同一性与引用（D8）。
+
+    输入是 compiler 从 book 与 chapters 观察投影的句柄闭集及最小文本；输出观察
+    wire 落 `stage2/observations/associate.json`。缺项、歧义、冲突保持未决——
+    未决项由 compile 拒绝发布并按 item 报告，本节点不默认合并也不默认不同。
+    机械闸（闭集、自指、跨章形状）在 owner 引擎里，失败即停在该 owner（免费
+    修复，不重购）。
+    """
+    repository = ctx.repository
+    book = repository.read_model('stage2/observations/book.json')
+    chapters = _read_chapter_observations(repository, ctx.chapters)
+    space = project_association_space(book, chapters)
+    prompt = associate_observation_prompt(space)
+    wire, associate_ref = ctx.ask(
+        'associate', prompt, lambda w: compile_associate_observation(w, space)[1])
+    observation, errors = compile_associate_observation(wire, space)
+    if errors:
+        raise ValueError(errors)
+    repository.write('stage2/observations/associate.json', observation,
+                     owners=('associate',), refs=(associate_ref,))
+    return {'same_proposition': len(observation.same_proposition),
+            'same_state_dimension': len(observation.same_state_dimension),
+            'loop_pairing': len(observation.loop_pairing),
+            'cross_chapter_cause': len(observation.cross_chapter_cause),
+            'scene_continuation': len(observation.scene_continuation)}
+
+
+def _read_chapter_observations(
+        repository, chapters: list[dict]) -> dict[int, Any]:
+    """按章序读全部章观察（单节点输入从盘面闭合，不靠内存传递）。"""
+    return {chapter['chapter_ordinal']:
+            repository.read_model(str06_chapter_observation_rel(
+                chapter['chapter_ordinal']))
+            for chapter in chapters}
+
+
+def run_compile(ctx: ChainContext) -> dict:
+    """`str06.stage2.compile`：解析证据、生成 ID、执行关联，发布双真源（D9）。
+
+    Characters 与 Blueprint 两份真源的**唯一 writer**（S2-5/I-25）：四份观察 +
+    证据句段 → 同一结果一次成形后落盘（来源账边记录四份观察）；fold 读数随发
+    （`R-2.17` 度量不是门）。存在未决项时**拒绝发布并按 item 报告**（D8）——
+    不写半份 canonical，恢复走 owner patch 或 associate 定向修订。
+    """
+    repository = ctx.repository
+    book = repository.read_model('stage2/observations/book.json')
+    chapters = _read_chapter_observations(repository, ctx.chapters)
+    names = repository.read_model('stage2/observations/names.json')
+    associate = repository.read_model('stage2/observations/associate.json')
+    evidence = build_evidence(ctx.chapters, ctx.hook_copy)
+    outcome = compile_source_truth(book=book, chapters=chapters, names=names,
+                                   associate=associate, evidence=evidence)
+    if outcome.undecided:
+        raise ValueError(
+            f'存在 {len(outcome.undecided)} 项未决，拒绝发布 canonical（D8；'
+            '恢复走 owner patch 或 associate 定向修订）：'
+            + '；'.join(outcome.undecided))
+    if outcome.errors:
+        raise ValueError(f'compile 机械缺陷：{outcome.errors}')
+    assert outcome.characters is not None and outcome.blueprint is not None
+    repository.write('stage2/characters/characters.json', outcome.characters,
+                     owners=('compile',))
+    repository.write('stage2/blueprints/chapter_blueprints.json', outcome.blueprint,
+                     owners=('compile',))
+    repository.write('stage2/acceptance/fold.json', outcome.fold,
+                     owners=('compile',))
+    return {'characters': len(outcome.characters.characters),
+            'initial_state': len(outcome.characters.initial_state),
+            'chapters': len(outcome.blueprint.chapters),
+            'undecided': 0}
+
+
 # ─── stage4 preserve ─────────────────────────────────────────────────────────
 
 def run_preserve(ctx: ChainContext) -> dict:
     repository = ctx.repository
-    core = repository.read_model('stage2/compiled/book_extraction.json')
+    # Stage4 只读 canonical（S2-5/D9）：人物 core 由 Characters 投影，不读
+    # 观察与派生输入（`stage2/compiled/book_extraction.json` 已退役）。
+    chars = repository.read_model('stage2/characters/characters.json')
+    core = chars.core_view()
     blueprint = repository.read_model('stage2/blueprints/chapter_blueprints.json')
     preserve_prompt = pack_prompt(PRESERVE_RULES,
                                   characters=core.model_dump(mode='json'),
@@ -335,10 +414,10 @@ def run_preserve(ctx: ChainContext) -> dict:
 
 def run_body_design(ctx: ChainContext) -> dict:
     repository = ctx.repository
-    core = repository.read_model('stage2/compiled/book_extraction.json')
+    chars = repository.read_model('stage2/characters/characters.json')
+    core = chars.core_view()
     checkpoint = repository.read_model('runtime/preserve_checkpoint.json')
     brief, identities = project_brief(checkpoint, core)
-    chars = repository.read_model('stage2/characters/characters.json')
     constraints = OutputConstraints(target_chapter_count=len(ctx.chapters),
                                     total_length_budget=ctx.budget)
     design_prompt = pack_prompt(DESIGN_RULES, brief=brief.model_dump(mode='json'),
@@ -397,8 +476,7 @@ def run_hook_design(ctx: ChainContext) -> dict:
     body = repository.read_model('stage4/design/body_design.json')
     chars = repository.read_model('stage2/characters/characters.json')
     checkpoint = repository.read_model('runtime/preserve_checkpoint.json')
-    core = repository.read_model('stage2/compiled/book_extraction.json')
-    _, identities = project_brief(checkpoint, core)
+    _, identities = project_brief(checkpoint, chars.core_view())
     projection = chars.name_projection()
     hook_design_prompt = pack_prompt(
         HOOK_DESIGN_RULES, book_title=ctx.book_title, design=body.model_dump(mode='json'),
@@ -422,7 +500,7 @@ def run_hook_design(ctx: ChainContext) -> dict:
 
 # ─── stage4 compile（Guard＋WriterBookIR＋HookContext，确定性） ───────────────
 
-def run_compile(ctx: ChainContext) -> dict:
+def run_compile_stage4(ctx: ChainContext) -> dict:
     repository = ctx.repository
     graph = repository.read_model('stage4/design/presentation_graph.json')
     binding = repository.read_model('stage4/grounding/semantic_binding.json')
@@ -688,11 +766,13 @@ NODE_RUNNERS: dict[str, Callable[[ChainContext], dict]] = {
     'str06.stage2.book': run_book,
     'str06.stage2.chapters': run_chapters,
     'str06.stage2.names': run_names,
+    'str06.stage2.associate': run_associate,
+    'str06.stage2.compile': run_compile,
     'str06.stage4.preserve': run_preserve,
     'str06.stage4.body_design': run_body_design,
     'str06.stage4.bind': run_bind,
     'str06.stage4.hook_design': run_hook_design,
-    'str06.stage4.compile': run_compile,
+    'str06.stage4.compile': run_compile_stage4,
     'str06.stage5.hook': run_hook,
     'str06.stage5.body': run_body,
     'str06.stage7.naming': run_naming,

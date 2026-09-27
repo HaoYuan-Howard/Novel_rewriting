@@ -1,4 +1,8 @@
-"""Stage2→Stage4 RC4 真实隔离入口的离线阶段测试（语义 wire 固定，不请求 LLM）。"""
+"""Stage2→Stage4 RC4 真实隔离入口的离线阶段测试（语义 wire 固定，不请求 LLM）。
+
+B2 五节点（D9）：Stage2 的 fake wire 是观察协议形状（book/chNN/associate），
+canonical 双真源由 `str06.stage2.compile` 免费发布；Stage4 只读 canonical。
+"""
 import json
 from copy import deepcopy
 
@@ -8,23 +12,43 @@ from contracts.artifacts import STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT
 from novel.llm.ledger import CostLedger
 from novel.store import Str06Repository
 from novel.stages.chain import run_workflow
-from tests.str06_facilities import make_context, synthetic_ref, v13_beat, v13_chapter
-from tests.test_str06_target import _source_pair, _preserve_wire, _design_wire
+from tests.str06_facilities import make_context, synthetic_ref
+from tests.test_str06_target import _preserve_wire, _design_wire
+
+PV = 'stage2-observation-v1'
+
+
+def _obs_beat(event, refs, **over):
+    beat = {'event': event, 'participants': [], 'source_refs': list(refs),
+            'scene_boundary': 'new', 'temporal_mode': 'single',
+            'effects': [], 'cognition': [], 'loops': []}
+    beat.update(over)
+    return beat
 
 
 def test_stage2_stage4_repository_replay_and_writer_consumer(tmp_path):
-    chars, bp = _source_pair()
+    book = {'protocol_version': PV, 'characters': {
+        'fu_jun': {'canonical': '夫君', 'surfaces': [
+            {'surface': '夫君', 'source_refs': ['e01_01']}]},
+        'yun': {'canonical': '云娘', 'surfaces': [
+            {'surface': '云娘', 'source_refs': ['e01_01']}]}},
+        'initial_state': [], 'world_constraints': []}
     wires = {
-        'book': {**chars.model_dump(mode='json'), 'world_constraints': []},
-        'ch01': {'beats': [b.model_dump(mode='json') for b in bp.chapters[0].beats], 'causal_edges': []},
+        'book': book,
+        'ch01': {'protocol_version': PV, 'beats': [
+            _obs_beat('云娘提出约定，夫君知晓真相。', ('e01_01',),
+                      participants=('yun', 'fu_jun'))]},
         'names': {
             'families': {'fam_yun': {'literal': '云', 'forms': []}},
             'people': {
                 'fu_jun': {'family_id': None, 'given': None, 'aliases': [],
                            'surface_forms': {'夫君': None}},
                 'yun': {'family_id': 'fam_yun', 'given': '娘', 'aliases': [],
-                        'surface_forms': {'云娘': '{family}{given}'}},
-            }},
+                        'surface_forms': {'云娘': '{family}{given}'}}},
+        },
+        'associate': {'protocol_version': PV, 'same_proposition': [],
+                      'same_state_dimension': [], 'loop_pairing': [],
+                      'cross_chapter_cause': [], 'scene_continuation': []},
         'preserve': _preserve_wire(), 'design': _design_wire(),
         'bind': {'entries': [{'obligation_id': f'ob{i:02}', 'scene_id': 's01', 'beat_ref': 's01#bt1'}
                              for i in range(1, 4)], 'unbound': []},
@@ -55,6 +79,10 @@ def test_stage2_stage4_repository_replay_and_writer_consumer(tmp_path):
                               AssertionError('stage4 干跑不应调用正文 owner')),
                           budget=800)
     assert report['guard_errors'] == [] and report['accepted_body'] is False
+    # canonical 双真源由 compile 发布；观察与派生输入退役面不在盘上
+    assert repo.inspect('stage2/characters/characters.json')['contract_version']
+    assert repo.inspect('stage2/blueprints/chapter_blueprints.json')['chapters']
+    assert not (tmp_path / 'book/stage2/compiled/book_extraction.json').exists()
     # WriterBookIR 唯一落盘；场景上下文嵌入其中（不再单独写场景文件）
     writer_ir = repo.inspect('stage4/ir/writer_book_ir.json')
     assert writer_ir['book_brief']['target_chapter_count'] == 1
@@ -230,31 +258,30 @@ def test_concealed_fact_reaches_writer_as_pending_reader_confirmation(tmp_path):
     """2F：源侧 concealed 效应＋读者揭示 → Preserve reveal 义务 → Design 在确认拍放
     reader delta → 写手章包逐场列出「尚未向读者确认的事实」（D15 全链）。
 
+    B2 五节点：concealed 建立与读者揭示在**同章**（章内句柄引用闭合归 compile）；
+    跨章版本由 associate 配对承接（见 test_str06_stage2_publish）。
     断言：确认前各场清单列出该事实；确认场标注确认拍；fold 的未揭示报告为空
     （读者确已在该拍确认）。
     """
-    book = {
-        'characters': {
-            'fu_jun': {'canonical': '夫君', 'surfaces': [
-                {'surface': '夫君', 'from_chapter': 1, 'until_chapter': None,
-                 'source_refs': ['e01_01']}]},
-            'yun': {'canonical': '云娘', 'surfaces': [
-                {'surface': '云娘', 'from_chapter': 1, 'until_chapter': None,
-                 'source_refs': ['e01_01']}]}},
+    book = {'protocol_version': PV, 'characters': {
+        'fu_jun': {'canonical': '夫君', 'surfaces': [
+            {'surface': '夫君', 'source_refs': ['e01_01']}]},
+        'yun': {'canonical': '云娘', 'surfaces': [
+            {'surface': '云娘', 'source_refs': ['e01_01']}]}},
         'initial_state': [], 'world_constraints': []}
-    ch01 = v13_chapter(
-        v13_beat('b01_01', '夫君佯称离开，实则藏身床底', participants=('fu_jun',),
-                 effects=({'target': {'kind': 'character', 'char_id': 'fu_jun'},
-                           'key': 'scene_location', 'op': 'set', 'value': '床底',
-                           'scope': 'scene',
-                           'disclosure': {'visibility': 'concealed',
-                                          'known_by': ['fu_jun']},
-                           'proposition': {'ref': 'p_hide',
-                                           'statement': '夫君藏身床底'}},)),
-        v13_beat('b01_02', '床板响动，读者与云娘确认床底有人',
-                 participants=('yun', 'fu_jun'), boundary='continue',
-                 cognition=({'proposition': {'ref': 'p_hide'},
-                             'holder': 'reader', 'mode': 'learns'},)))
+    ch01 = {'protocol_version': PV, 'beats': [
+        _obs_beat('夫君佯称离开，实则藏身床底', ('e01_01',), participants=('fu_jun',),
+                  effects=[{'target': {'kind': 'character', 'char_id': 'fu_jun'},
+                            'key': 'scene_location', 'op': 'set', 'value': '床底',
+                            'scope': 'scene',
+                            'disclosure': {'visibility': 'concealed',
+                                           'known_by': ['fu_jun']},
+                            'proposition': {'ref': 'p_hide',
+                                            'statement': '夫君藏身床底'}}]),
+        _obs_beat('床板响动，读者与云娘确认床底有人', ('e01_01',),
+                  participants=('yun', 'fu_jun'), scene_boundary='continue',
+                  cognition=[{'proposition': {'ref': 'p_hide'},
+                              'holder': 'reader', 'mode': 'learns'}])]}
     design = {
         'initial_state': [],
         'scenes': [
@@ -301,6 +328,9 @@ def test_concealed_fact_reaches_writer_as_pending_reader_confirmation(tmp_path):
                            'surface_forms': {'夫君': None}},
                 'yun': {'family_id': 'fam_yun', 'given': '娘', 'aliases': [],
                         'surface_forms': {'云娘': '{family}{given}'}}}},
+        'associate': {'protocol_version': PV, 'same_proposition': [],
+                      'same_state_dimension': [], 'loop_pairing': [],
+                      'cross_chapter_cause': [], 'scene_continuation': []},
         'preserve': preserve, 'design': design,
         'bind': {'entries': [
             {'obligation_id': 'ob01', 'scene_id': 's01', 'beat_ref': 's01#bt1'},

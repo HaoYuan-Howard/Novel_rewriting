@@ -330,7 +330,9 @@ def test_restarted_run_reuses_purchased_answers_across_sessions(tmp_path):
     calls_first = len(transport.calls)
     _run_chain(repo, base, transport, tmp_path)
     purchased = len(transport.calls) - calls_first
-    assert purchased == 12
+    # B2 五节点：book＋ch01–ch02＋names＋associate＋preserve＋design＋bind＋
+    # hook_design＋naming＝10 个 JSON owner，加 hook_writer 与两章 body＝13。
+    assert purchased == 13
     from novel.work_units import read_book_budget
     used_after_first = read_book_budget(base, 'run').used
     assert used_after_first == purchased, '每次外发各计一次（含空回答等失败 attempt）'

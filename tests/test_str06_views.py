@@ -127,9 +127,10 @@ def test_views_cover_the_whole_delivered_chain(base):
     run = views.run_view(base, name)
     assert run.present and run.status == 'delivered' and run.accepted_body is True
     assert run.epoch is not None and run.epoch.reason == 'initial'
-    assert len(run.nodes) == 11 and all(n.produced for n in run.nodes), '全链后每个节点都有产物'
+    # B2 五节点（D9）：现役注册面 14 个 str06 节点，全链后每个节点都有产物。
+    assert len(run.nodes) == 14 and all(n.produced for n in run.nodes), '全链后每个节点都有产物'
     cost = run.cost
-    assert cost.present and cost.new_paid_rows == 12 and cost.cached_rows == 0
+    assert cost.present and cost.new_paid_rows == 13 and cost.cached_rows == 0
     assert cost.prompt_tokens is not None and cost.unknown_cost_rows == 0
     assert cost.per_node, '成本按候选节点归属'
 

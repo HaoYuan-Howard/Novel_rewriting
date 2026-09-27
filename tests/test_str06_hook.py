@@ -644,8 +644,24 @@ def test_new_families_admitted_and_rest_refused():
 # ───────────────────────── 工作流（stage 层，fake ask） ─────────────────────────
 
 def _full_chain_wires():
+    """B2 五节点观察协议下的全链 fake wires（book/chNN/associate 新形状）。"""
     chars = _characters()
-    book = {**chars.core_view().model_dump(mode='json'), 'world_constraints': []}
+    book = {
+        'protocol_version': 'stage2-observation-v1',
+        'characters': {
+            slug: {'canonical': entry.canonical,
+                   'surfaces': [{'surface': s.surface, 'source_refs': ['e01_01']}
+                                for s in entry.surfaces]}
+            for slug, entry in chars.characters.items()},
+        'initial_state': [], 'world_constraints': []}
+
+    def beat(event, refs, **over):
+        wire = {'event': event, 'participants': [], 'source_refs': list(refs),
+                'scene_boundary': 'new', 'temporal_mode': 'single',
+                'effects': [], 'cognition': [], 'loops': []}
+        wire.update(over)
+        return wire
+
     hook_wire = _hook_wire()
     naming_wire = {'entries': [
         {'char_ref': 'fu_jun', 'name': {'family': '顾', 'given': None}, 'aliases': {},
@@ -654,12 +670,17 @@ def _full_chain_wires():
          'keep_reason': None}]}
     return {
         'book': book,
-        'ch01': v13_chapter(v13_beat('b01_01', '苏芸娘嫁入陆家，夫君立下旧约。',
-                                     participants=('yun_niang', 'fu_jun'))),
-        'ch02': v13_chapter(v13_beat('b02_01', '夫君夜半离家，芸娘发现玉佩之秘。',
-                                     participants=('yun_niang', 'fu_jun'),
-                                     source_refs=('e02_01',))),
+        'ch01': {'protocol_version': 'stage2-observation-v1', 'beats': [
+            beat('苏芸娘嫁入陆家，夫君立下旧约。', ('e01_01',),
+                 participants=('yun_niang', 'fu_jun'))]},
+        'ch02': {'protocol_version': 'stage2-observation-v1', 'beats': [
+            beat('夫君夜半离家，芸娘发现玉佩之秘。', ('e02_01',),
+                 participants=('yun_niang', 'fu_jun'))]},
         'names': chars.name_structure.model_dump(mode='json'),
+        'associate': {'protocol_version': 'stage2-observation-v1',
+                      'same_proposition': [], 'same_state_dimension': [],
+                      'loop_pairing': [], 'cross_chapter_cause': [],
+                      'scene_continuation': []},
         'preserve': {'obligations': [
             {'obligation_id': 'ob01', 'kind': 'event_core',
              'statement': '苏芸娘嫁入陆家且夫君立下旧约',

@@ -47,7 +47,6 @@ WORKFLOW_REL = 'runtime/candidate_workflow.json'
 #: run 级执行状态（业务状态的唯一来源）。
 STATUS_REL = 'runtime/workflow_status.json'
 #: 章序模式（与候选产物表的 `{nn}` 一致）。
-_NN = re.compile(r'^ch(\d+)\.txt$')
 #: 书名模式（与候选产物表的 `{title}` 一致）。
 _TITLE = re.compile(r'^(.*)_rewriting\.txt$')
 
@@ -106,14 +105,26 @@ def _pattern_dir(run: Path, rel_pattern: str) -> Path | None:
     return directory
 
 
+#: 逐章产物文件名的前缀/后缀从模式解析（`ch{nn}.txt`／`ch{nn}.json` 同一扫描器）。
+_CHAPTER_PREFIX = 'ch'
+
+
+def _chapter_name_re(rel_pattern: str) -> re.Pattern[str]:
+    """`stage5/body/ch{nn}.txt` → ``^ch(\\d+)\\.txt$``（后缀随模式，不写死）。"""
+    tail = rel_pattern.rsplit('/', 1)[-1]
+    suffix = re.escape(tail.split('{nn}', 1)[1])
+    return re.compile(rf'^{_CHAPTER_PREFIX}(\d+){suffix}$')
+
+
 def _chapter_files(run: Path, rel_pattern: str) -> list[tuple[int, Path]]:
-    """把 `ch{nn}.txt` 模式解析成盘上实际的 (章序, 路径)，按章序排序。"""
+    """把 `ch{nn}.txt`／`ch{nn}.json` 模式解析成盘上实际的 (章序, 路径)，按章序排序。"""
     directory = _pattern_dir(run, rel_pattern)
     if directory is None:
         return []
+    name_re = _chapter_name_re(rel_pattern)
     found = []
     for entry in sorted(directory.iterdir()):
-        match = _NN.match(entry.name)
+        match = name_re.match(entry.name)
         if match and entry.is_file():
             found.append((int(match.group(1)), entry))
     return sorted(found)

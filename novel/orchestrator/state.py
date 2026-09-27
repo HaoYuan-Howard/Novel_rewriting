@@ -25,7 +25,7 @@ import re
 from contracts.artifacts import (
     ARTIFACT_PATHS, BOOK_SCOPED_PATHS, STAGE1_MAIN_TEXT,
     STAGE2_BLUEPRINT_CHARACTER_PROJECTION, STR06_BODY_DESIGN, artifact_rel,
-    STR06_STAGE5_BODY, STR06_STAGE5_BODY_RECEIPT,
+    STR06_STAGE2_OBS_CHAPTER, STR06_STAGE5_BODY, STR06_STAGE5_BODY_RECEIPT,
 )
 
 import os
@@ -277,6 +277,31 @@ def chapters_done(novel_dir: Path) -> list[int]:
     return sorted(out)
 
 
+def stage2_observations_done(novel_dir: Path) -> list[int]:
+    """规范 `stage2/observations/ch{nn}.json` 已落盘的章号（B2；D3 逐章观察）。
+
+    【为什么要有这一口】`ch{nn}` 是逐章占位符模板——既不是非模板的
+    `required_artifacts` 行，也不是 `{n}` 轮次产物；通用完成度对它**整体失明**。
+    若不给逐章观察单独的账，Supervisor 会对一个已成功的 chapters 节点
+    反复派发（F8d 同形死循环：每轮 rc=0、盘面不变、永远不推进）。
+    与 `chapters_done` 同一条纪律：只认产物目录生成的规范路径，
+    `.INVALID.json` 孪生不数（被闸拦下的观察不算「已完成」）。
+    """
+    d = novel_dir / 'stage2' / 'observations'
+    if not d.is_dir():
+        return []
+    out = []
+    for p in sorted(d.glob('ch*.json')):
+        digits = ''.join(c for c in p.stem if c.isdigit())
+        if not digits:
+            continue
+        ordinal = int(digits)
+        expected = novel_dir / artifact_rel(STR06_STAGE2_OBS_CHAPTER, nn=ordinal)
+        if p == expected:
+            out.append(ordinal)
+    return sorted(out)
+
+
 def stage5_invalid_inventory(novel_dir: Path) -> tuple[list[int], list[str]]:
     """发现 live Chapter INVALID；规范章号与坏命名分开返回。
 
@@ -477,7 +502,13 @@ def stage_state(store: ArtifactStore, stage: str) -> StageState:
     reviewable = done is True or any(
         a.exists and a.readable for a in arts)
     legacy = _legacy_ghosts(arts)
+    # B2（D3）：stage2 的章观察是逐章模板产物，通用 `arts` 看不见它们；
+    # 逐章的账记进 `chapters_done`，供 `resume_verdict` 的 chapters 节点分支
+    # 判「源章全都观察过了没有」（同 stage5 的章账纪律，互不顶替）。
+    written = (stage2_observations_done(store.ctx.novel_dir)
+               if stage == 'stage2' else [])
     return StageState(stage=stage, artifacts=arts, done=done,
+                      chapters_done=written,
                       rounds_done=rounds, reviewable=reviewable,
                       legacy_incompatible=bool(legacy), legacy_paths=legacy)
 
@@ -710,6 +741,31 @@ def resume_verdict(
                 f'要重判就显式再跑一次这个节点')
         return RESUME_RUN, (
             f'{node} 盘上一轮都没有（{", ".join(numbered)}）')
+
+    # 逐章观察（B2 五节点：`str06.stage2.chapters`，D3）：结论挂在「源章全都
+    # 观察过了」上。`ch{nn}` 模板在通用完成度里没有行——若不单开一条账，
+    # 这个已成功的节点会被 Supervisor 反复派发（F8d 同形死循环，实测复现）。
+    if node == 'str06.stage2.chapters':
+        stale_upstream = [a for a in st.artifacts if a.freshness == 'stale']
+        if stale_upstream:
+            return RESUME_REDO, (
+                f'上游变过：{", ".join(a.rel for a in stale_upstream)} 已陈旧 '
+                f'（{", ".join(sorted({a.reason for a in stale_upstream}))}）。'
+                '⚠ 这不是「续」，是「重来」——续下去会把新旧两版上游拼进同一本书')
+        want = ov.chapters
+        got = st.chapters_done
+        if want is None:
+            return RESUME_UNKNOWN, (
+                '判不了：stage1 章数不可得，无法证明章观察齐了。'
+                '⚠ 按没跑完重跑会重复付费，先人工核对 stage1 产物')
+        missing = [n for n in range(1, want + 1) if n not in got]
+        if not missing:
+            return RESUME_SKIP, (
+                f'全部 {want} 章的观察都已在盘上且当前'
+                '（D3：章观察互不依赖，缺失单元才需要重跑）')
+        return RESUME_RUN, (
+            f'第 {missing} 章的观察尚未落盘（D3：逐章停，'
+            '恢复按请求身份免费重放已存章）')
 
     # 逐章类的层（F8c：`stage5.write` → `str06.stage5.body`）：结论挂在
     # 「计划里的每个输出章都有成稿吗」上，而那可能是**判不了**的。

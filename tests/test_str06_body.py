@@ -344,6 +344,8 @@ class _RoutingTransport:
             return 'body_ch01' if '【本章目的】\n\n第1章' in user else 'body_ch02'
         if '人物账、初始状态与世界约束' in user:
             return 'book'
+        if '跨章关联' in user:
+            return 'associate'
         if '拆成有序 beats' in user:
             # 章正文标记（【第 N 章正文】）的最后一次出现即当前章：前文原文块用
             # 〔第N章〕方头括号，不会与章正文标记混淆（v13 起章请求带前文）。
@@ -427,10 +429,10 @@ def test_full_pipeline_to_delivery_and_free_recovery(tmp_path):
     receipt2 = repo.inspect('stage5/acceptance/body/ch02.json')
     assert receipt2['status'] == 'accepted'
     assert receipt2['length_disclosed'] is False
-    # 新购账：9 个 JSON owner + hook_writer + 2 章 body = 12 次外发（attempt 计数）
-    assert len(transport.calls) == 12
+    # 新购账：B2 五节点 10 个 JSON owner + hook_writer + 2 章 body = 13 次外发
+    assert len(transport.calls) == 13
     from novel.work_units import read_book_budget
-    assert read_book_budget(_candidates_base(repo), 'run').used == 12, 'admission 平行计数已删，整书总闸是唯一准入账'
+    assert read_book_budget(_candidates_base(repo), 'run').used == 13, 'admission 平行计数已删，整书总闸是唯一准入账'
 
     # ── 同根恢复：零新调用、交付字节一致 ──
     calls_before = len(transport.calls)

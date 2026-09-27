@@ -377,14 +377,15 @@ def test_unauthorized_stop_then_authorized_rerun_pays_exactly_once(tmp_path):
     assert not transport.calls, '未授权不得发出任何请求'
     rows, _ = read_cost_snapshot(base)
     assert rows == [] and read_book_budget(base, 'run') is None, '未授权不得建账'
-    # 授权后同根重跑：12 次新购与全新运行逐项一致（未授权尝试不留下任何计费实体）。
+    # 授权后同根重跑：13 次新购与全新运行逐项一致（未授权尝试不留下任何计费实体）。
+    # （B2 五节点：新增 associate 关联调用，见 REQUIREMENTS D8/D9 报价口径）
     authorized = PaidRequestSession(repo, CostLedger(path=ledger_path(base)), transport,
                                     yes=True, allow_source_export=True,
                                     provider='fake', sid='run')
     _run(repo, authorized)
-    assert len(transport.calls) == 12
+    assert len(transport.calls) == 13
     paid = [r for r in read_cost_snapshot(base)[0] if not r['cached']]
-    assert len(paid) == 12
+    assert len(paid) == 13
     assert repo.read('runtime/workflow_status.json')['status'] == 'delivered'
 
 
@@ -398,9 +399,10 @@ def test_paid_artifact_replay_after_lost_commit_is_free(tmp_path):
     business_before = {k: v for k, v in
                        repo.inspect('stage2/characters/characters.json').items()
                        if k != '_provenance'}
-    # 崩溃窗口：已付费的 characters 产物在盘上丢失（已购响应仍在）→ 重放补提交。
+    # 崩溃窗口：观察链齐备但 canonical 在盘上丢失 → compile 单节点免费重放补发布
+    # （B2 起 Characters 的唯一 writer 是 str06.stage2.compile，S2-5/D9）。
     repo.path('stage2/characters/characters.json').unlink()
-    _run(repo, session, node_filter=['str06.stage2.names'])
+    _run(repo, session, node_filter=['str06.stage2.compile'])
     assert len(transport.calls) == calls_before, '漏补提交的重放不得新购'
     business_after = {k: v for k, v in
                       repo.inspect('stage2/characters/characters.json').items()

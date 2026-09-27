@@ -111,6 +111,18 @@
         "stage2"
       ]
     },
+    "tests/test_str06_stage2_publish.py": {
+      "layer": "unit_contract",
+      "stages": [
+        "stage2",
+        "stage4"
+      ],
+      "cases": {
+        "test_dangling_cross_chapter_reference_stays_undecided_and_blocks": "stage",
+        "test_publish_full_stage2_leg_writes_both_truths_under_one_outcome": "stage",
+        "test_stage4_reads_only_canonical": "stage"
+      }
+    },
     "tests/test_str06_stage2_owners.py": {
       "layer": "unit_contract",
       "stages": [

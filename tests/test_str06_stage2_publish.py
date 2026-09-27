@@ -1,0 +1,604 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""test_str06_stage2_publish —— str06.stage2.associate／compile 的 contract 与
+stage 测试（B2 第三步；D8/D9，fake ask 零模型调用）。
+
+【验证边界】docs/REQUIREMENTS.md「各批验收细节 · Stage2（B2）」的全部项：
+  • 关联协议的机械闸——只选已给句柄（不存在证据）、自指配对、跨章形状；
+  • compile 的未决项纪律——缺项/歧义/冲突保持未决，拒绝发布并按 item 报告，
+    不默认合并也不默认不同（D8）；
+  • 第八节逐项——同名不同人、同义命题、状态键近义合并、重复引文、不存在
+    证据、错误嵌套、同拍引用、跨章因果、悬念开合、跨章续场；后文身份确认不
+    提前改变角色知情、读者确认或初始事实；
+  • 双真源唯一 writer（S2-5/I-25）——`stage2/compiled/book_extraction.json`
+    退役，Stage4 只凭 canonical 运行；源 fold 只消费 canonical transitions
+    （`R-2.17`，度量不是门）。
+语义正确性（配得对不对）归付费 semantic unit，保持 unver 披露。
+"""
+from __future__ import annotations
+
+from copy import deepcopy
+import json
+
+import pytest
+
+from contracts.schema.observation import STAGE2_OBSERVATION_PROTOCOL as PV
+from novel.llm.ledger import CostLedger
+from novel.store import Str06Repository
+from novel.stages.chain import build_evidence, run_workflow
+from novel.stages.stage2 import (
+    associate_observation_prompt, compile_associate_observation,
+    compile_source_truth, project_association_space,
+)
+from tests.str06_facilities import make_context, synthetic_ref
+
+HOOK = '新婚夜，夫君坦白借种之约。'
+CHAPTERS = [
+    {'chapter_ordinal': 1, 'text': '夫君藏进床底。云娘听见床板响动。'},
+    {'chapter_ordinal': 2, 'text': '云娘质问床底的人。夫君说出实情。'},
+    {'chapter_ordinal': 3, 'text': '天亮后夫君把话说开。陆家宅子恢复安静。'},
+]
+EVIDENCE = build_evidence(CHAPTERS, HOOK)
+
+
+def _beat(event, refs, **over):
+    beat = {'event': event, 'participants': [], 'source_refs': list(refs),
+            'scene_boundary': 'new', 'temporal_mode': 'single',
+            'effects': [], 'cognition': [], 'loops': []}
+    beat.update(over)
+    return beat
+
+
+def _book_wire(*, extra_characters: dict | None = None) -> dict:
+    characters = {
+        'fu_jun': {'canonical': '夫君', 'surfaces': [
+            {'surface': '夫君', 'source_refs': ['e01_01']}]},
+        'yun_niang': {'canonical': '云娘', 'surfaces': [
+            {'surface': '云娘', 'source_refs': ['e01_02']}]},
+    }
+    characters.update(extra_characters or {})
+    return {'protocol_version': PV, 'characters': characters,
+            'initial_state': [], 'world_constraints': []}
+
+
+def _hide_effect(*, known_by=('fu_jun',)) -> dict:
+    return {'target': {'kind': 'character', 'char_id': 'fu_jun'},
+            'key': 'scene_location', 'op': 'set', 'value': '床底', 'scope': 'scene',
+            'disclosure': {'visibility': 'concealed', 'known_by': list(known_by)},
+            'proposition': {'ref': 'p_hide', 'statement': '夫君藏身床底'}}
+
+
+def _chapter_wires() -> dict[str, dict]:
+    """三章观察：ch1 建立 concealed p_hide＋悬念 q_id；ch3 跨章 close＋读者揭示。"""
+    ch01 = {'protocol_version': PV, 'beats': [
+        _beat('夫君藏进床底', ('e01_01',), participants=('fu_jun',),
+              effects=[_hide_effect()]),
+        _beat('床底是谁的悬念开场', ('e01_02',), scene_boundary='continue',
+              loops=[{'ref': 'q_id', 'op': 'open', 'question': '床底的人是谁？'}]),
+    ]}
+    ch02 = {'protocol_version': PV, 'beats': [
+        _beat('同义命题：床底有人这件事再次被确认', ('e02_01',),
+              participants=('yun_niang',),
+              cognition=[{'proposition': {'ref': 'p_known', 'statement': '床底藏着人'},
+                          'holder': 'yun_niang', 'mode': 'learns'}]),
+    ]}
+    ch03 = {'protocol_version': PV, 'beats': [
+        _beat('床底的人现身', ('e03_01',), participants=('fu_jun',),
+              effects=[{'target': {'kind': 'character', 'char_id': 'fu_jun'},
+                        'key': 'scene_location', 'op': 'set', 'value': '床沿',
+                        'scope': 'scene',
+                        'disclosure': {'visibility': 'on_page'}}]),
+        _beat('读者与云娘确认床底的人是夫君', ('e03_01',), scene_boundary='continue',
+              participants=('yun_niang', 'fu_jun'),
+              cognition=[{'proposition': {'ref': 'p_hide'},
+                          'holder': 'reader', 'mode': 'learns'}],
+              loops=[{'ref': 'q_id', 'op': 'close', 'resolution': '床底的人是夫君'}]),
+    ]}
+    return {'ch01': ch01, 'ch02': ch02, 'ch03': ch03}
+
+
+def _associate_wire(**over) -> dict:
+    wire = {'protocol_version': PV,
+            'same_proposition': [{'left': 'ch01.p_hide', 'right': 'ch03.p_hide'}],
+            'same_state_dimension': [],
+            'loop_pairing': [{'open': 'ch01.q_id', 'close': 'ch03.q_id'}],
+            'cross_chapter_cause': [],
+            'scene_continuation': []}
+    wire.update(over)
+    return wire
+
+
+def _names_wire() -> dict:
+    return {'families': {'f_lu': {'literal': '陆', 'forms': []}},
+            'people': {
+                'fu_jun': {'family_id': 'f_lu', 'given': None, 'aliases': [],
+                           'surface_forms': {'夫君': None}},
+                'yun_niang': {'family_id': None, 'given': None, 'aliases': [],
+                              'surface_forms': {'云娘': None}}}}
+
+
+def _full_stage2_wires() -> dict:
+    return {'book': _book_wire(), **_chapter_wires(),
+            'names': _names_wire(), 'associate': _associate_wire()}
+
+
+STAGE2_NODES = ['str06.stage2.book', 'str06.stage2.chapters', 'str06.stage2.names',
+                'str06.stage2.associate', 'str06.stage2.compile']
+
+
+class _AcceptingAsk:
+    def __init__(self, wires: dict[str, dict]):
+        self.wires = wires
+        self.prompts: dict[str, str] = {}
+
+    def __call__(self, owner: str, prompt: str, validate):
+        errors = validate(deepcopy(self.wires[owner]))
+        assert not errors, (owner, errors)
+        self.prompts[owner] = prompt
+        return deepcopy(self.wires[owner]), synthetic_ref(owner, prompt)
+
+
+def _run_stage2(tmp_path, name: str, wires: dict[str, dict]):
+    repo = Str06Repository(tmp_path / name)
+    repo.attach_context(make_context(tmp_path / name, ledger=CostLedger(path=None)))
+    ask = _AcceptingAsk(wires)
+    report = run_workflow(
+        repository=repo, chapters=deepcopy(CHAPTERS), hook_copy=HOOK, ask=ask,
+        ask_text=lambda owner, prompt: (_ for _ in ()).throw(AssertionError('no text')),
+        ask_body=lambda owner, prompt: (_ for _ in ()).throw(AssertionError('no body')),
+        budget=800, through='stage2', node_filter=STAGE2_NODES)
+    return repo, ask, report
+
+
+# ───────────────────────── associate owner：只选已给句柄 ─────────────────────────
+
+
+def _space():
+    book, errors = _compile_book()
+    assert errors == []
+    chapters = {n: _compile_chapter(n) for n in (1, 2, 3)}
+    return project_association_space(book, chapters)
+
+
+def _compile_book():
+    from novel.stages.stage2 import compile_book_observation
+    return compile_book_observation(_book_wire(), evidence=EVIDENCE)
+
+
+def _compile_chapter(no: int):
+    from novel.stages.stage2 import compile_chapter_observation
+    wire = _chapter_wires()[f'ch{no:02d}']
+    ids = frozenset(k for k, v in EVIDENCE.items()
+                    if v['chapter'] == no or (no == 1 and v.get('pre_chapter')))
+    observation, errors = compile_chapter_observation(wire, evidence_ids=ids)
+    assert errors == [], errors
+    return observation
+
+
+def test_associate_projection_covers_all_five_handle_classes():
+    space = _space()
+    for handle in ('ch01.p_hide', 'ch02.p_known', 'ch03.p_hide'):
+        assert handle in space.propositions, handle
+    assert space.propositions['ch01.p_hide'].statement == '夫君藏身床底'
+    assert 'ch01.q_id' in space.loop_opens and 'ch03.q_id' in space.loop_closes
+    assert 'ch01.b1' in space.beats and 'ch03.b2' in space.beats
+    assert 'ch01.k1.scene_location' in space.states
+    assert 'ch01.sc1' in space.scenes and 'ch03.sc1' in space.scenes
+
+
+def test_associate_prompt_is_deterministic_and_handle_only():
+    space = _space()
+    prompt = associate_observation_prompt(space)
+    assert prompt == associate_observation_prompt(project_association_space(
+        _compile_book()[0], {n: _compile_chapter(n) for n in (1, 2, 3)}))
+    assert 'ch01.p_hide' in prompt and 'ch03.q_id' in prompt
+    assert '床底的人是谁' in prompt, '最小文本进请求'
+    assert 'k01' not in prompt and 'loop01' not in prompt, '正式 ID 不进关联请求（I-21）'
+
+
+def test_associate_wire_green_and_never_modifies_input():
+    space = _space()
+    wire = _associate_wire()
+    raw = json.dumps(wire, ensure_ascii=False, sort_keys=True)
+    observation, errors = compile_associate_observation(wire, space)
+    assert errors == [] and observation is not None
+    assert json.dumps(wire, ensure_ascii=False, sort_keys=True) == raw, 'I-24'
+
+
+def test_associate_refuses_handles_outside_the_closed_set():
+    """不存在证据：编造/缩写/跨类混用的句柄逐条精确拒（不猜笔误）。"""
+    space = _space()
+    wire = _associate_wire(
+        same_proposition=[{'left': 'ch01.p_hide', 'right': 'ch01.p_hidden'}],
+        loop_pairing=[{'open': 'ch01.q_id', 'close': 'ch03.q_close'}])
+    _obs, errors = compile_associate_observation(wire, space)
+    assert any('ch01.p_hidden' in e and '投影闭集' in e for e in errors), errors
+    assert any('ch03.q_close' in e and '投影闭集' in e for e in errors), errors
+
+
+def test_associate_refuses_self_and_same_chapter_pairings():
+    space = _space()
+    wire = _associate_wire(
+        same_proposition=[{'left': 'ch01.p_hide', 'right': 'ch01.p_hide'}],
+        same_state_dimension=[{'left': 'ch01.k1.scene_location',
+                               'right': 'ch01.k2.scene_location'}])
+    wire['cross_chapter_cause'] = [{'from_beat': 'ch01.b1', 'to_beat': 'ch01.b2',
+                                    'kind': 'causes'}]
+    _obs, errors = compile_associate_observation(wire, space)
+    assert any('自指' in e for e in errors), errors
+    assert any('同在第 1 章' in e for e in errors), errors
+
+
+def test_associate_rejects_wrong_role_loop_handles():
+    """悬念句柄按角色分闭集：open 槽里放 close 句柄即精确拒。"""
+    space = _space()
+    wire = _associate_wire(loop_pairing=[{'open': 'ch03.q_id', 'close': 'ch03.q_id'}])
+    _obs, errors = compile_associate_observation(wire, space)
+    assert any('ch03.q_id' in e and '投影闭集' in e for e in errors), errors
+
+
+# ───────────────────────── compile：第八节逐项（正例） ─────────────────────────
+
+
+def test_publish_full_stage2_leg_writes_both_truths_under_one_outcome(tmp_path):
+    repo, _ask, _report = _run_stage2(tmp_path, 'leg', _full_stage2_wires())
+    status = repo.read('runtime/workflow_status.json')
+    assert status['status'] == 'node_run'
+    assert not (tmp_path / 'leg/stage2/compiled/book_extraction.json').exists(), \
+        '派生输入退役（D9）'
+    chars = repo.inspect('stage2/characters/characters.json')
+    bp = repo.inspect('stage2/blueprints/chapter_blueprints.json')
+    assert chars['contract_version'] and bp['chapters']
+    # 单一提交记录：双真源 + fold 的来源账都落在四份观察与 Stage1 输入上（I-16/I-25）。
+    for rel in ('stage2/characters/characters.json',
+                'stage2/blueprints/chapter_blueprints.json',
+                'stage2/acceptance/fold.json'):
+        inputs = repo.inspect(rel)['_provenance']['inputs']
+        keys = set(inputs)
+        assert any('observations/book.json' in k for k in keys), (rel, keys)
+        assert any('observations/associate.json' in k for k in keys), (rel, keys)
+
+
+def test_same_name_two_persons_stay_separate(tmp_path):
+    """同名不同人：两个 slug 各自登记同一称呼字面——不合并、替换表各认各的。"""
+    wires = _full_stage2_wires()
+    wires['book'] = _book_wire(extra_characters={
+        # 「大夫」式同名：第 3 章另有一个「夫君」称呼的人物（同名字面、不同人）
+        'fu_jun_jr': {'canonical': '夫君', 'surfaces': [
+            {'surface': '夫君', 'source_refs': ['e03_01']}]}})
+    wires['names']['people']['fu_jun_jr'] = {
+        'family_id': 'f_lu', 'given': None, 'aliases': [], 'surface_forms': {'夫君': None}}
+    repo, _ask, _report = _run_stage2(tmp_path, 'two_persons', wires)
+    chars = repo.inspect('stage2/characters/characters.json')
+    assert set(chars['characters']) == {'fu_jun', 'fu_jun_jr', 'yun_niang'}
+    assert chars['characters']['fu_jun']['canonical'] == '夫君'
+    assert chars['characters']['fu_jun_jr']['canonical'] == '夫君'
+    # 两人的窗口各自派生（R-2.10）：同名但不共享时间窗。
+    surfaces_fu = {s['surface'] for s in chars['characters']['fu_jun']['surfaces']}
+    surfaces_jr = {s['surface'] for s in chars['characters']['fu_jun_jr']['surfaces']}
+    assert surfaces_fu == surfaces_jr == {'夫君'}
+    from_chapters = {
+        slug: [s['from_chapter'] for s in chars['characters'][slug]['surfaces']]
+        for slug in ('fu_jun', 'fu_jun_jr')}
+    assert from_chapters == {'fu_jun': [1], 'fu_jun_jr': [3]}
+
+
+def test_synonymous_propositions_merge_into_one_formal_id(tmp_path):
+    """同义命题：两章独立建立的同义命题经配对合并——同一正式 ID、最早文本为准。"""
+    wires = _full_stage2_wires()
+    wires['associate']['same_proposition'] = [
+        {'left': 'ch01.p_hide', 'right': 'ch02.p_known'},
+        {'left': 'ch01.p_hide', 'right': 'ch03.p_hide'}]
+    repo, _ask, _report = _run_stage2(tmp_path, 'synonym', wires)
+    bp = repo.inspect('stage2/blueprints/chapter_blueprints.json')
+    ch1, ch2, ch3 = bp['chapters']
+    assert ch1['beats'][0]['effects'][0]['proposition']['ref'] == 'k01'
+    assert ch2['beats'][0]['cognition'][0]['proposition']['ref'] == 'k01', \
+        '同义命题合并后引用同一正式 ID'
+    assert ch3['beats'][1]['cognition'][0]['proposition']['ref'] == 'k01'
+    assert ch2['beats'][0]['cognition'][0]['proposition']['ref'] != 'p_known', \
+        '本地句柄不进 canonical（I-21）'
+
+
+def test_without_pairing_same_text_props_stay_separate(tmp_path):
+    """不默认合并：associate 没配对的同文命题保持两个正式 ID（语义判断归模型）。"""
+    wires = _full_stage2_wires()
+    wires['ch02'] = {'protocol_version': PV, 'beats': [
+        _beat('床底有人这件事再次被独立建立', ('e02_01',), participants=('yun_niang',),
+              effects=[_hide_effect()])]}  # 同 statement 文本、新本地句柄
+    repo, _ask, report = _run_stage2(tmp_path, 'no_pair', wires)
+    assert report['undecided'] == 0
+    bp = repo.inspect('stage2/blueprints/chapter_blueprints.json')
+    refs = [bp['chapters'][i]['beats'][0]['effects'][0]['proposition']['ref']
+            for i in (0, 1)]
+    assert refs[0] != refs[1], '未配对的同名命题不合并，也不报未决'
+
+
+def test_state_key_near_synonyms_unify_to_canonical_key(tmp_path):
+    """状态键近义合并：同维配对把后章键归一到最早确立者的键（I-15）。"""
+    wires = _full_stage2_wires()
+    wires['book']['initial_state'] = [
+        {'target': {'kind': 'relation', 'subject': 'fu_jun', 'object': 'yun_niang'},
+         'key': 'trust', 'value': '低', 'persistence': 'mutable',
+         'knowledge': None, 'source_refs': ['e00_01']}]
+    wires['ch02']['beats'][0]['effects'] = [{
+        'target': {'kind': 'relation', 'subject': 'fu_jun', 'object': 'yun_niang'},
+        'key': 'trust_level', 'op': 'set', 'value': '回升', 'scope': 'book',
+        'disclosure': {'visibility': 'on_page'}}]
+    wires['associate']['same_state_dimension'] = [
+        {'left': 'book.k1.trust', 'right': 'ch02.k1.trust_level'}]
+    repo, _ask, report = _run_stage2(tmp_path, 'near_key', wires)
+    assert report['undecided'] == 0
+    chars = repo.inspect('stage2/characters/characters.json')
+    assert chars['initial_state'][0]['key'] == 'trust'
+    bp = repo.inspect('stage2/blueprints/chapter_blueprints.json')
+    effect = bp['chapters'][1]['beats'][0]['effects'][0]
+    assert effect['key'] == 'trust', '近义键归一到最早确立者的 canonical key'
+    assert effect['scope'] == 'book'
+
+
+def test_cross_chapter_cause_lands_in_the_to_chapter(tmp_path):
+    """跨章因果：from（ch1 建立）→ to（ch3 揭示）落到 to 章蓝图，正式拍号。"""
+    wires = _full_stage2_wires()
+    wires['associate']['cross_chapter_cause'] = [
+        {'from_beat': 'ch01.b1', 'to_beat': 'ch03.b2', 'kind': 'setup_payoff'}]
+    repo, _ask, _report = _run_stage2(tmp_path, 'cause', wires)
+    bp = repo.inspect('stage2/blueprints/chapter_blueprints.json')
+    assert [c['causal_edges'] for c in bp['chapters'][:2]] == [[], []]
+    edges = bp['chapters'][2]['causal_edges']
+    assert [(e['from_beat'], e['to_beat'], e['kind']) for e in edges] == [
+        ('b01_01', 'b03_02', 'setup_payoff')]
+
+
+def test_loop_open_close_pairing_across_chapters(tmp_path):
+    """悬念开合：ch1 open 与 ch3 close 经配对共享同一正式 ID；章内自开自闭免配对。"""
+    wires = _full_stage2_wires()
+    repo, _ask, report = _run_stage2(tmp_path, 'loops', wires)
+    assert report['undecided'] == 0
+    bp = repo.inspect('stage2/blueprints/chapter_blueprints.json')
+    open_ref = bp['chapters'][0]['beats'][1]['loops'][0]['ref']
+    close_ref = bp['chapters'][2]['beats'][1]['loops'][0]['ref']
+    assert open_ref == close_ref, '跨章开合配对后共享同一正式 ID'
+    # 章内自开自闭：ch2 自开自收，不需要配对。
+    wires = _full_stage2_wires()
+    wires['ch02']['beats'][0]['loops'] = [
+        {'ref': 'q_local', 'op': 'open', 'question': '今晚还有响动吗？'}]
+    wires['ch02']['beats'].append(
+        _beat('今夜安静', ('e02_01',), scene_boundary='continue',
+              loops=[{'ref': 'q_local', 'op': 'close', 'resolution': '没有响动'}]))
+    repo2, _ask2, report2 = _run_stage2(tmp_path, 'local_loop', wires)
+    assert report2['undecided'] == 0
+    bp2 = repo2.inspect('stage2/blueprints/chapter_blueprints.json')
+    local = bp2['chapters'][1]['beats']
+    assert local[0]['loops'][0]['ref'] == local[1]['loops'][0]['ref']
+
+
+def test_scene_continuation_via_boundary_and_via_pairing(tmp_path):
+    """跨章续场：continue 边界确定性续场；配对可否决下一章自称 new 的边界。"""
+    # ① continue 边界：ch1 末场景延续到 ch2 开场（同一 scene_id，跨章 span）。
+    wires = _full_stage2_wires()
+    wires['ch02']['beats'][0]['scene_boundary'] = 'continue'
+    repo, _ask, report = _run_stage2(tmp_path, 'seam_continue', wires)
+    assert report['undecided'] == 0
+    bp = repo.inspect('stage2/blueprints/chapter_blueprints.json')
+    ch1_last = bp['chapters'][0]['scenes'][-1]['scene_id']
+    ch2_first = bp['chapters'][1]['scenes'][0]['scene_id']
+    assert ch1_last == ch2_first
+    # ② 配对否决 new：ch3 自称 new，associate 判定与 ch2 末场同场。
+    wires = _full_stage2_wires()
+    wires['associate']['scene_continuation'] = [
+        {'left': 'ch02.sc1', 'right': 'ch03.sc1'}]
+    repo2, _ask2, report2 = _run_stage2(tmp_path, 'seam_pair', wires)
+    assert report2['undecided'] == 0
+    bp2 = repo2.inspect('stage2/blueprints/chapter_blueprints.json')
+    ch2_scene = bp2['chapters'][1]['scenes'][-1]['scene_id']
+    assert bp2['chapters'][2]['scenes'][0]['scene_id'] == ch2_scene
+    # ③ fold 消费 canonical：跨章续场内 scene 作用域状态不过期（同 scene_id）。
+    fold = repo.inspect('stage2/acceptance/fold.json')
+    assert fold['chapters']['3']['beats'] == 2
+
+
+def test_later_confirmation_does_not_rewrite_earlier_facts(tmp_path):
+    """后文身份确认不提前改变：ch3 的读者揭示不移动 ch1 的事实/知情/初态时点。"""
+    wires = _full_stage2_wires()
+    wires['book']['initial_state'] = [
+        {'target': {'kind': 'relation', 'subject': 'fu_jun', 'object': 'yun_niang'},
+         'key': 'marital_status', 'value': '夫妻', 'persistence': 'stable',
+         'knowledge': None, 'source_refs': ['e00_01']}]
+    repo, _ask, _report = _run_stage2(tmp_path, 'no_rewrite', wires)
+    chars = repo.inspect('stage2/characters/characters.json')
+    bp = repo.inspect('stage2/blueprints/chapter_blueprints.json')
+    # 初态原样保留（stable，且不被后文改写）
+    assert chars['initial_state'][0]['value'] == '夫妻'
+    assert chars['initial_state'][0]['persistence'] == 'stable'
+    # ch1 的 concealed 建立拍仍是 b01_01；ch3 的读者确认仍记在 ch3 自己的拍
+    fold = repo.inspect('stage2/acceptance/fold.json')
+    assert fold['concealed_unrevealed'] == [], '配对后读者已在 ch3 确认'
+    knowledge = [line for line in fold['snapshots']['3'] if line.startswith('prop')]
+    assert any('reader=learns(b03_02)' in line for line in knowledge), knowledge
+    assert any('yun_niang=learns(b02_01)' in line for line in knowledge), \
+        'ch2 的知情记录保留在自己的拍上'
+    # 建立拍未被移动：ch1 effect 的 proposition 仍锚在 b01_01
+    assert bp['chapters'][0]['beats'][0]['beat_id'] == 'b01_01'
+    assert bp['chapters'][0]['beats'][0]['effects'][0]['disclosure'] == {
+        'visibility': 'concealed', 'known_by': ['fu_jun']}
+
+
+# ───────────────────────── compile：未决项与机械缺陷（反例） ─────────────────────────
+
+
+def test_dangling_cross_chapter_reference_stays_undecided_and_blocks(tmp_path):
+    """缺项保持未决：悬空跨章引用没有配对 → 拒绝发布并按 item 报告，不落半份。"""
+    wires = _full_stage2_wires()
+    wires['associate']['same_proposition'] = []  # ch3 对 p_hide 的引用悬空
+    repo = Str06Repository(tmp_path / 'dangling')
+    repo.attach_context(make_context(tmp_path / 'dangling', ledger=CostLedger(path=None)))
+    with pytest.raises(ValueError, match='未决') as excinfo:
+        run_workflow(
+            repository=repo, chapters=deepcopy(CHAPTERS), hook_copy=HOOK,
+            ask=_AcceptingAsk(wires),
+            ask_text=lambda o, p: (_ for _ in ()).throw(AssertionError('')),
+            ask_body=lambda o, p: (_ for _ in ()).throw(AssertionError('')),
+            budget=800, through='stage2', node_filter=STAGE2_NODES)
+    assert 'ch03.p_hide' in str(excinfo.value), excinfo.value
+    assert '没有配对' in str(excinfo.value)
+    assert not (tmp_path / 'dangling/stage2/characters/characters.json').exists(), \
+        '未决时不写半份 canonical'
+    assert not (tmp_path / 'dangling/stage2/blueprints/chapter_blueprints.json').exists()
+    status = repo.read('runtime/workflow_status.json')
+    assert status['failed_node'] == 'str06.stage2.compile'
+
+
+def test_unpaired_cross_chapter_loop_close_is_undecided(tmp_path):
+    """悬念 close 未配对：保持未决，不默认丢弃（R-2.11/D8）。"""
+    wires = _full_stage2_wires()
+    wires['associate']['loop_pairing'] = []
+    with pytest.raises(ValueError, match='未决'):
+        _run_stage2(tmp_path, 'unpaired_loop', wires)
+
+
+def test_pairing_class_without_any_statement_is_undecided(tmp_path):
+    """冲突保持未决：配对类里没有任何 statement（两处都是引用）→ 不猜文本。"""
+    wires = _full_stage2_wires()
+    wires['ch02']['beats'][0]['cognition'] = [
+        {'proposition': {'ref': 'p_ghost'}, 'holder': 'yun_niang', 'mode': 'suspects'}]
+    wires['associate']['same_proposition'] = [
+        {'left': 'ch02.p_ghost', 'right': 'ch03.p_hide'}]
+    with pytest.raises(ValueError, match='statement'):
+        _run_stage2(tmp_path, 'no_statement', wires)
+
+
+def test_time_inverted_pairing_is_undecided(tmp_path):
+    """时序倒转：ch1 的引用配到 ch3 才确立的命题——不默认前移。"""
+    wires = _full_stage2_wires()
+    # ch1 悬空引用 p_fwd；ch3 独立确立 p_late；配对把它们声明为同一命题。
+    wires['ch01']['beats'][1]['cognition'] = [
+        {'proposition': {'ref': 'p_fwd'}, 'holder': 'yun_niang', 'mode': 'suspects'}]
+    wires['ch03']['beats'][0]['effects'][0]['proposition'] = {
+        'ref': 'p_late', 'statement': '夫君现身床沿'}
+    wires['associate']['same_proposition'] = [
+        {'left': 'ch01.p_hide', 'right': 'ch03.p_hide'},
+        {'left': 'ch01.p_fwd', 'right': 'ch03.p_late'}]
+    with pytest.raises(ValueError, match='时序倒转'):
+        _run_stage2(tmp_path, 'inverted', wires)
+
+
+def test_state_pairing_with_different_targets_is_undecided(tmp_path):
+    """作用对象不同不是同一维度：同维配对目标不一致即未决冲突。"""
+    wires = _full_stage2_wires()
+    wires['associate']['same_state_dimension'] = [
+        {'left': 'ch01.k1.scene_location', 'right': 'ch03.k1.scene_location'}]
+    # ch3 的 effect 作用对象与 ch1 相同 ⇒ 合法；改成不同对象即冲突
+    wires['ch03']['beats'][0]['effects'][0]['target'] = {
+        'kind': 'character', 'char_id': 'yun_niang'}
+    with pytest.raises(ValueError, match='作用对象不一致'):
+        _run_stage2(tmp_path, 'state_conflict', wires)
+
+
+def test_duplicate_loop_close_is_undecided(tmp_path):
+    """R-2.11：已 close 的悬念不得重复 close——第二个 close 配到同一 open 即未决。"""
+    wires = _full_stage2_wires()
+    wires['ch02']['beats'][0]['loops'] = [
+        {'ref': 'q_again', 'op': 'close', 'resolution': '又一次收束'}]
+    wires['associate']['loop_pairing'] = [
+        {'open': 'ch01.q_id', 'close': 'ch02.q_again'},
+        {'open': 'ch01.q_id', 'close': 'ch03.q_id'}]
+    with pytest.raises(ValueError, match='不得重复 close'):
+        _run_stage2(tmp_path, 'double_close', wires)
+
+
+def test_loop_pairing_to_later_open_is_undecided(tmp_path):
+    """时序倒转：close 配到的 open 在更晚的章才建立——保持未决。"""
+    wires = _full_stage2_wires()
+    wires['ch02']['beats'][0]['loops'] = [
+        {'ref': 'q_early', 'op': 'close', 'resolution': '提前收束'}]
+    wires['ch03']['beats'][0]['loops'] = [
+        {'ref': 'q_late', 'op': 'open', 'question': '更晚才开的悬念'}]
+    wires['associate']['loop_pairing'] = [
+        {'open': 'ch01.q_id', 'close': 'ch03.q_id'},
+        {'open': 'ch03.q_late', 'close': 'ch02.q_early'}]
+    with pytest.raises(ValueError, match='时序倒转'):
+        _run_stage2(tmp_path, 'inverted_loop', wires)
+
+
+def test_scene_continuation_layout_violations_are_undecided(tmp_path):
+    """续场配对越位：左端非该章末场 / 右端非首场 / 右端被占用 → 未决。"""
+    wires = _full_stage2_wires()
+    wires['associate']['scene_continuation'] = [
+        {'left': 'ch01.sc1', 'right': 'ch03.sc1'}]  # ch1 与 ch3 不相邻
+    with pytest.raises(ValueError, match='未决'):
+        _run_stage2(tmp_path, 'seam_gap', wires)
+    wires = _full_stage2_wires()
+    wires['associate']['scene_continuation'] = [
+        {'left': 'ch02.sc1', 'right': 'ch03.sc1'},
+        {'left': 'ch01.sc1', 'right': 'ch03.sc1'}]  # 右端被占用两次
+    with pytest.raises(ValueError, match='未决'):
+        _run_stage2(tmp_path, 'seam_double', wires)
+
+
+def test_wrong_nesting_and_missing_evidence_rejected_at_owners():
+    """错误嵌套（proposition 误置 disclosure）在章观察协议层拒；book 观察拒悬空证据。"""
+    from novel.stages.stage2 import compile_chapter_observation
+    wire = _chapter_wires()['ch01']
+    wire['beats'][0]['effects'][0]['disclosure']['proposition'] = {
+        'ref': 'p_hide', 'statement': '夫君藏身床底'}
+    ids = frozenset(k for k, v in EVIDENCE.items()
+                    if v['chapter'] == 1 or v.get('pre_chapter'))
+    _obs, errors = compile_chapter_observation(wire, evidence_ids=ids)
+    assert any('协议校验失败' in e for e in errors), errors
+    from novel.stages.stage2 import compile_book_observation
+    book = _book_wire()
+    book['characters']['fu_jun']['surfaces'][0]['source_refs'] = ['e09_99']
+    _obs, errors = compile_book_observation(book, evidence=EVIDENCE)
+    assert any('e09_99' in e and '闭集之外' in e for e in errors), errors
+
+
+def test_duplicate_citation_is_ambiguous_not_guessed():
+    """重复引文：逐字锚在所引句段内出现多次 → ambiguous_literal，不模糊匹配。"""
+    from novel.stages.stage2 import EvidenceResolver
+    resolver = EvidenceResolver({'e01_01': {'chapter': 1, 'text': '夫君看夫君。'}})
+    hit, issues = resolver.locate('夫君', ('e01_01',))
+    assert hit is None and issues[0].code == 'ambiguous_literal'
+    assert len(issues[0].context['hits']) == 2
+
+
+def test_fold_readouts_are_metrics_from_canonical_only(tmp_path):
+    """R-2.17：fold 只消费 canonical transitions；空转移拍比例与未揭示是度量不是门。"""
+    wires = _full_stage2_wires()
+    repo, _ask, _report = _run_stage2(tmp_path, 'fold', wires)
+    fold = repo.inspect('stage2/acceptance/fold.json')
+    assert fold['chapters']['1']['beats'] == 2
+    # ch1 两拍各带转移（concealed 效应＋悬念 open）⇒ 空转移拍比例读数为 0。
+    assert fold['chapters']['1']['empty_transition_beats'] == 0
+    assert fold['chapters']['1']['empty_ratio'] == 0.0
+    assert fold['events'] == [], '本样本无 stable 改写、无开场重复建立读数'
+
+
+def test_stage4_reads_only_canonical(tmp_path):
+    """下游只凭 canonical 运行：Stage4 腿的请求材料来自 Characters/Blueprint 投影。"""
+    from novel.stages.chain import run_workflow as _run
+    from novel.stages.common import DESIGN_RULES, PRESERVE_RULES, pack_prompt
+    from novel.stages.stage4 import project_brief
+
+    repo, _ask, _report = _run_stage2(tmp_path, 'downstream', _full_stage2_wires())
+    chars = repo.read_model('stage2/characters/characters.json')
+    core = chars.core_view()
+    blueprint = repo.read_model('stage2/blueprints/chapter_blueprints.json')
+    # Preserve 的输入材料 = canonical core view（人物表）＋ Blueprint v13。
+    preserve_prompt = pack_prompt(PRESERVE_RULES,
+                                  characters=core.model_dump(mode='json'),
+                                  blueprints=blueprint.model_dump(mode='json'))
+    assert '夫君' in preserve_prompt and '床底' in preserve_prompt
+    # Design 的身份投影来自 Characters core（不含名称结构变更面）。
+    brief, identities = project_brief(
+        __import__('novel.stages.stage4.grounding', fromlist=['assemble_preserve'])
+        .assemble_preserve(
+            {'obligations': [
+                {'obligation_id': 'ob01', 'kind': 'event_core',
+                 'statement': '夫君藏身床底',
+                 'lineage': {'blueprint_refs': ['b01_01'], 'character_ids': ['fu_jun']},
+                 'must_preserve': True, 'satisfaction': '呈现藏身', 'requires': []}]},
+            policy_id='p', policy_version=3, characters=core, blueprint=blueprint,
+            provider='fake', model='fake', request_sha256='r' * 64)[0], core)
+    assert identities and all(i.char_id in {'fu_jun', 'yun_niang'} for i in identities)
+    assert DESIGN_RULES  # 规则面常量在位（生产 prompt 由 run_body_design 组装）

@@ -361,17 +361,18 @@ def test_full_chain_from_http_upload_to_stage7_delivery(base, monkeypatch):
         assert entry['prose_sha256'] == receipts[entry['chapter_ordinal']]['prose_sha256']
 
     # ⑥ fake transport 也走真实 reserve／记账：12 次新购、真实 token、节点归属正确。
-    assert len(transport.calls) == 12
+    assert len(transport.calls) == 13
     # B1：admission 平行计数退役，整书总闸（按 attempt 计数）是唯一准入账。
     from novel.work_units import read_book_budget
-    assert read_book_budget(base, '联调样本_9001').used == 12
+    assert read_book_budget(base, '联调样本_9001').used == 13
     rows = _ledger_rows(base)
     paid = [row for row in rows if not row['cached']]
-    assert len(paid) == 12
+    assert len(paid) == 13
     assert all(row['prompt_tokens'] > 0 and row['completion_tokens'] > 0
                for row in paid)
     assert {row['node'] for row in paid} == {
-        'str06.stage2.source', 'str06.stage2.names', 'str06.stage4.preserve',
+        'str06.stage2.book', 'str06.stage2.chapters', 'str06.stage2.names',
+        'str06.stage2.associate', 'str06.stage4.preserve',
         'str06.stage4.body_design', 'str06.stage4.bind', 'str06.stage4.hook_design',
         'str06.stage5.hook', 'str06.stage5.body', 'str06.stage7.naming'}
     assert all(row['sid'] == '联调样本_9001' for row in paid)
@@ -399,7 +400,7 @@ def test_full_chain_from_http_upload_to_stage7_delivery(base, monkeypatch):
     assert operator.next_action(base, '9001').state == 'pipeline_complete'
 
     # ⑧ `--check-only`：对已付费节点免费复检——零新购、不签新调用。
-    for node in ('str06.stage2.source', 'str06.stage5.body'):
+    for node in ('str06.stage2.book', 'str06.stage5.body'):
         assert cli.main(['run', node, '9001', '--base', str(base),
                          '--check-only']) == 0
         assert len(transport.calls) == calls_before

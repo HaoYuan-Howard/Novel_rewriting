@@ -33,11 +33,7 @@ from contracts.schema.source import (
     BlueprintsArtifactV13, ChapterBlueprint, CharactersCore, SceneSpan,
     WorldConstraint,
 )
-from novel.stages.common import OverlayChange, StateOverlay
 from pydantic import ValidationError
-
-#: 认知模式中构成「确认时点」的模态：读者/人物只有 learns／confirms 算确认。
-CONFIRMING_MODES: frozenset[str] = frozenset({'learns', 'confirms'})
 
 
 def _slug_ok(slug: str) -> bool:
@@ -403,256 +399,21 @@ def assemble_blueprint(
         chapters=tuple(chapters))
 
 
-# ───────────────────────── source fold（单一实现，F3 与逐章 prompt 共用） ─────────────────────────
+# ───────────────────────── source fold（已迁 compile owner，S-03 唯一实现） ─────────────
 
-def _target_dict(target) -> dict[str, Any]:
-    d = target.model_dump() if hasattr(target, 'model_dump') else dict(target)
-    return {k: v for k, v in d.items() if v is not None}
-
-
-def _tkey(target: dict[str, Any]) -> tuple:
-    kind = target.get('kind')
-    if kind == 'character':
-        return ('char', target.get('char_id'))
-    if kind == 'relation':
-        return ('rel', target.get('subject'), target.get('object'))
-    return ('world',)
-
-
-def _state_key(target: dict[str, Any], key: str) -> tuple:
-    """事实层地址：领域＋作用对象＋键（与目标侧 StateAddress 同构的两段式）。"""
-    return (_tkey(target), key)
-
-
-def _render_entry(address: tuple, change: OverlayChange) -> str:
-    """一条事实的渲染（D11：逐条带来源）。unset/unknown 显式表达，不与未建立混淆；
-    scene 作用域标注换场失效。"""
-    label = f'{address[0][0]}:{",".join(map(str, address[0][1:]))}.{address[1]}'
-    suffix = change.source
-    if change.scope == 'scene':
-        suffix += '，换场失效'
-    if change.op == 'unset':
-        return f'{label} = unset（{suffix} 解除）'
-    if change.op == 'unknown':
-        return f'{label} = unknown（{suffix} 显式未知）'
-    return f'{label} = {change.value!r}（{suffix} 建立）'
-
-
-def _render_initial(atom) -> str:
-    target = _target_dict(atom.target)
-    label = f'{_tkey(target)[0]}:{",".join(map(str, _tkey(target)[1:]))}.{atom.key}'
-    suffix = f'initial_state {atom.state_id} 建立'
-    if atom.knowledge is not None:
-        known = list(atom.knowledge.known_by) + (['reader'] if atom.knowledge.reader_knows else [])
-        if known:
-            suffix += f'；初始已知: {",".join(known)}'
-    return f'{label} = {atom.value!r}（{suffix}）'
-
-
-@dataclass
-class FoldResult:
-    """source_fold 的结构化输出（快照＋只读读数；不改输入）。"""
-
-    snapshots: dict[int, list[str]]
-    events: list[str]
-    #: 每章读数：beats／空转移拍数／比例（D7）
-    chapter_stats: dict[int, dict[str, Any]]
-    #: 书末仍未向读者确认的 concealed 命题（只读报告）
-    concealed_unrevealed: list[dict[str, Any]]
-
-
-class _Folder:
-    """三类转移的确定性折叠：事实层（共用叠加原语）＋认知层＋读者确认时点。"""
-
-    def __init__(self, characters: CharactersCore):
-        self.overlay = StateOverlay()
-        #: 认知层：(命题正式 ID, 持有者) → {'mode', 'at'}
-        self.knowledge: dict[tuple[str, str], dict[str, str]] = {}
-        #: 读者确认时点：命题正式 ID → 首次确认的 beat（on_page 效应即确认）
-        self.reader_confirmed: dict[str, str] = {}
-        #: concealed 命题：正式 ID → {'established', 'known_by'}
-        self.concealed: dict[str, dict[str, Any]] = {}
-        #: 开放悬念：正式 ID → question
-        self.open_loops: dict[str, str] = {}
-        self.events: list[str] = []
-        self.initial_values: dict[tuple, Any] = {}
-        #: 当前值为 stable（initial_state 的 persistence=stable）的地址
-        self.stable: set[tuple] = set()
-        self.open_scene: str | None = None
-        for atom in characters.initial_state:
-            address = _state_key(_target_dict(atom.target), atom.key)
-            self.initial_values[address] = deepcopy(atom.value)
-            if atom.persistence == 'stable':
-                self.stable.add(address)
-
-    def seed(self, characters: CharactersCore) -> None:
-        for atom in characters.initial_state:
-            scope = REGISTERED_STATE_KEYS.get(atom.key, 'book')
-            self.overlay.apply('__init__', [OverlayChange(
-                address=_state_key(_target_dict(atom.target), atom.key),
-                op='set', value=deepcopy(atom.value), scope=scope,
-                source=f'initial_state {atom.state_id}')])
-
-    def apply_beat(self, beat: Beat, scene_id: str, chapter: int,
-                   pre: frozenset[str]) -> bool:
-        """折叠一拍；返回该拍是否三类转移全空（D7 读数）。"""
-        cites_pre = bool(pre) and any(ref in pre for ref in beat.source_refs)
-        if cites_pre:
-            # 读数一（与 stable 改写并存、互不排斥）：开场拍对初态同键 set 同值。
-            for eff in beat.effects:
-                if eff.op != 'set':
-                    continue
-                address = _state_key(_target_dict(eff.target), eff.key)
-                if (address in self.initial_values
-                        and self.initial_values[address] == deepcopy(eff.value)):
-                    self.events.append(
-                        f'[fold] 第{chapter}章开场拍 {beat.beat_id} 对初始状态同键 set 同值 '
-                        f'{address}（同一事实两处 canonical 化？）')
-        for eff in beat.effects:
-            self._apply_effect(eff, beat, scene_id, chapter)
-        for cog in beat.cognition:
-            self._apply_cognition(cog, beat)
-        for loop in beat.loops:
-            self._apply_loop(loop, beat)
-        return not (beat.effects or beat.cognition or beat.loops)
-
-    def _apply_effect(self, eff, beat: Beat, scene_id: str, chapter: int) -> None:
-        address = _state_key(_target_dict(eff.target), eff.key)
-        scope = REGISTERED_STATE_KEYS.get(eff.key, eff.scope)
-        if eff.op == 'set' and address in self.stable:
-            self.events.append(f'[fold] 第{chapter}章 stable 事实被改写 {address}')
-            self.stable.discard(address)
-        value = deepcopy(eff.value)
-        if eff.op in ('add', 'remove'):
-            current = self.overlay.visible().get(address)
-            if current is None or current.value is None:
-                lst: list = []
-            elif isinstance(current.value, list):
-                lst = list(current.value)
-            else:
-                lst = [current.value]
-            if eff.op == 'add' and eff.value not in lst:
-                lst.append(eff.value)
-            if eff.op == 'remove' and eff.value in lst:
-                lst.remove(eff.value)
-            value = lst
-        self.overlay.apply(scene_id, [OverlayChange(
-            address=address, op='set' if eff.op in ('add', 'remove') else eff.op,
-            value=value, scope=scope, source=beat.beat_id)])
-        if eff.proposition is not None:
-            prop = eff.proposition.ref
-            if eff.disclosure.visibility == 'concealed':
-                # 隐藏事实：等后续 cognition（经同一命题）记录揭示；读者确认时点
-                # 由 reader 持有者的 learns/confirms 落账。
-                self.concealed.setdefault(prop, {
-                    'established': beat.beat_id,
-                    'known_by': list(eff.disclosure.known_by)})
-            else:
-                # 叙述明示的事实：读者在该拍即确认，无需等待 cognition。
-                self.reader_confirmed.setdefault(prop, beat.beat_id)
-
-    def _apply_cognition(self, cog, beat: Beat) -> None:
-        prop = cog.proposition.ref
-        self.knowledge[(prop, cog.holder)] = {'mode': cog.mode, 'at': beat.beat_id}
-        if cog.holder == 'reader' and cog.mode in CONFIRMING_MODES:
-            self.reader_confirmed.setdefault(prop, beat.beat_id)
-
-    def _apply_loop(self, loop, beat: Beat) -> None:
-        if loop.op == 'open':
-            self.open_loops[loop.ref] = loop.question or ''
-        else:
-            self.open_loops.pop(loop.ref, None)
-
-    def render(self) -> list[str]:
-        lines = [_render_entry(address, change)
-                 for address, change in sorted(self.overlay.visible().items(), key=str)]
-        lines.extend(f'loop {ref} = {question!r}（open）'
-                     for ref, question in sorted(self.open_loops.items()))
-        for (prop, holder), entry in sorted(self.knowledge.items()):
-            note = ('' if prop not in self.concealed or prop in self.reader_confirmed
-                    else '（concealed 未向读者确认）')
-            lines.append(f'prop {prop} 知情: {holder}={entry["mode"]}({entry["at"]}){note}')
-        return lines
-
-
-def initial_snapshot(characters: CharactersCore) -> list[str]:
-    """第 1 章起点快照 = initial_state 渲染（source_fold 的章 0 部分）。"""
-    return [_render_initial(atom) for atom in characters.initial_state]
-
-
-def source_fold(
-    characters: CharactersCore, blueprint: BlueprintsArtifactV13,
-    *, pre_chapter_evidence: frozenset[str] = frozenset(),
-    proposition_registry: dict[str, str] | None = None,
-) -> FoldResult:
-    """确定性折叠：事实层＋认知层＋读者确认时点，返回结构化只读读数。
-
-    章内快照 = initial_state + 此前各章三类转移的累计结果（book 底值＋开放场景
-    的 scene 覆盖，跨章场景延续到下一处 new 边界才失效）。**不修改输入**（I-24）。
-
-    【章前文字（e00）的两条只读读数】`pre_chapter_evidence` 给出章前证据段 id
-    （源引子切分）。引子按信息职责分流（开场前已成立 → initial_state；开场行动 →
-    第 1 章 beats）有两条可机械侧写的面，**只报告、不阻断、不猜**：
-      · 开场拍对初态同键 set 了同值（疑似同一事实两处 canonical 化）；
-      · 初态已知者又在引用同一 e00 证据段的拍里被告知——按**持有者与命题**核对
-        （QP-07：旧实现只比较共享证据段，不核对知情者与命题，四条读数均属误报）；
-        报告同时给出 initial_state 条与命题 ID，是否同一事实留人工核读。
-    """
-    folder = _Folder(characters)
-    folder.seed(characters)
-    pre = frozenset(pre_chapter_evidence or ())
-    initial_known = [atom for atom in characters.initial_state if atom.knowledge is not None]
-    snapshots: dict[int, list[str]] = {0: initial_snapshot(characters)}
-    chapter_stats: dict[int, dict[str, Any]] = {}
-    for chapter_bp in sorted(blueprint.chapters, key=lambda c: c.chapter):
-        scene_of = {bid: span.scene_id for span in chapter_bp.scenes for bid in span.beat_ids}
-        empty = 0
-        for beat in chapter_bp.beats:
-            scene_id = scene_of[beat.beat_id]
-            if scene_id != folder.open_scene:
-                # 新场景开场：旧场景的 scene 作用域状态失效（D16 原语）。
-                if folder.open_scene is not None:
-                    folder.overlay.expire_scene_scope(folder.open_scene)
-                folder.open_scene = scene_id
-            cites_pre = bool(pre) and any(ref in pre for ref in beat.source_refs)
-            if cites_pre:
-                for cog in beat.cognition:
-                    if cog.mode not in CONFIRMING_MODES:
-                        continue
-                    for atom in initial_known:
-                        shared = sorted(set(atom.source_refs) & set(beat.source_refs) & pre)
-                        if not shared:
-                            continue
-                        already = (cog.holder in atom.knowledge.known_by
-                                   or (cog.holder == 'reader' and atom.knowledge.reader_knows))
-                        if not already:
-                            continue
-                        folder.events.append(
-                            f'[fold] 第{chapter_bp.chapter}章开场拍 {beat.beat_id} 又把初始'
-                            f'已知 {atom.state_id}（known_by 含 {cog.holder}）告知，命题 '
-                            f'{cog.proposition.ref} 模式 {cog.mode}（证据段 {shared}；'
-                            '是否同一事实待人工核读）')
-            if folder.apply_beat(beat, scene_id, chapter_bp.chapter, pre):
-                empty += 1
-        snapshots[chapter_bp.chapter] = folder.render()
-        total = len(chapter_bp.beats)
-        chapter_stats[chapter_bp.chapter] = {
-            'beats': total, 'empty_transition_beats': empty,
-            'empty_ratio': round(empty / total, 3) if total else 0.0}
-    registry = proposition_registry or {}
-    concealed_unrevealed = [
-        {'proposition': prop, 'statement': registry.get(prop),
-         'established': entry['established'], 'known_by': entry['known_by']}
-        for prop, entry in sorted(folder.concealed.items())
-        if prop not in folder.reader_confirmed]
-    return FoldResult(snapshots=snapshots, events=folder.events,
-                      chapter_stats=chapter_stats,
-                      concealed_unrevealed=concealed_unrevealed)
+# 【B2 五节点重建（D9）】源 fold 的唯一实现迁到 `novel/stages/stage2/compile.py`
+# （str06.stage2.compile owner，R-2.17：只消费 canonical transitions）。本模块
+# 只保留 re-export 供既有反例（test_str06_source 等）继续钉同一实现；随
+# `source.py` 整包退役（S-05）一并消失。`chapter_input_snapshot`（逐章输入快照）
+# 是 D3 退役面，仅供旧反例解码，新链不消费。
+from novel.stages.stage2.compile import (  # noqa: E402,F401（委托 re-export）
+    CONFIRMING_MODES, FoldResult, initial_snapshot, source_fold,
+)
 
 
 def chapter_input_snapshot(characters: CharactersCore,
                            blueprint: BlueprintsArtifactV13, next_chapter: int) -> list[str]:
-    """严格消费连续前缀，禁止取不到章快照时退回初始态。"""
+    """严格消费连续前缀，禁止取不到章快照时退回初始态。（D3 退役面；只供旧反例）"""
     ordinals = [c.chapter for c in blueprint.chapters]
     if ordinals != list(range(1, next_chapter)):
         raise ValueError(f'第 {next_chapter} 章输入需要连续的 1..{next_chapter - 1} 章前缀')
