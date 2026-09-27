@@ -224,7 +224,7 @@ Stage4 的四个付费节点按固定序推进：`preserve`（保存策略义务
 | R-5.3 | 章预算按场景权重 largest-remainder 整数分配，总和恰等于书级目标；书级目标从源章总字数向上取整确定性派生（配置取整粒度进契约身份），付费调用额度不参与本计算。 | `HARD`（`novel/stages/stage4/book_ir.py::allocate_chapter_budgets` + `novel/stages/chain.py::derive_total_length_budget`） |
 | R-5.4 | Preserve checkpoint 编译闭合：策略义务完整、来源可溯；ReconstructionBrief 是确定性投影，不新增语义。 | `HARD`（`novel/stages/stage4/grounding.py::assemble_preserve`） |
 | R-5.5 | Bind 机械校验通过才落正式位；拦下的稿进 `.INVALID` 孪生（`gates_skipped`＝问题清单、wire 原样留证）后 fail-fast，停在 owner；同指纹不重购（原响应已耐久，重放走缓存）。 | `HARD`（`novel/stages/stage4/grounding.py::assemble_binding` + `novel/stages/chain.py::run_bind`）；修复被驳回后没有下一条路，见 `B-18` |
-| R-5.6 | Hook 设计机械校验通过（必要选择落在正式 Design、材料倒叙冷开有序、禁止揭示与 withheld 字面合法）；PresentationGraph 唯一 publisher 是 hook_design 节点。 | `HARD`（`novel/stages/stage5/hook.py::assemble_hook_design`／`publish_graph`） |
+| R-5.6 | Hook 设计机械校验通过（必要选择落在正式 Design、材料倒叙冷开有序、禁止揭示与 withheld 字面合法）；PresentationGraph 唯一 publisher 是 hook_design 节点。 | `HARD`（`novel/stages/stage4/hook.py::assemble_hook_design`／`publish_graph`） |
 | R-5.7 | 目标故事与导演说明的语义质量未经语义审阅，保持未评披露。 | `INFO`（`design_semantics_unver` 明示 `UNVER`）；自由文本发明与提前泄底见 `B-06`，身份描述泄露见 `B-14` |
 | R-5.8 | 章预算相对场景权重的分布读数无条件报出（度量，不是门）。 | `度量`（`novel/stages/stage4/book_ir.py::allocate_chapter_budgets`）；场景轻重与披露顺序的审美无 ground truth，见 `B-17`／`B-02` |
 | R-5.9 | `BodyDesign`／`PresentationGraph` 的盘上形状由 `ARTIFACT_SPECS` 登记；模型自带 `contract_version` 字面量与候选产物表逐字对账。 | `载体`（`contracts/schema/design.py::BodyDesign`） |
@@ -244,7 +244,7 @@ M1–M6 在本节点聚合执行，零错误才放行下游。
 |---|---|---|
 | R-6.1 | ExecutionPlan 编译闭合：四类执行语义与依赖边合法。 | `HARD`（`novel/stages/stage4/compile.py::compile_execution_plan`） |
 | R-6.2 | WriterBookIR 双视图同源：VerificationIR 事实不遗漏、WriterBrief 只投影呈现；同一编译输入两次产出字节一致。 | `HARD`（`novel/stages/stage4/book_ir.py::compile_writer_book_ir`） |
-| R-6.3 | HookContext 仅凭正式输入可确定性重建（PresentationGraph＋名称投影＋Hook 配置）；同输入字节一致，不依赖旧 session 或内存态。 | `HARD`（`novel/stages/stage5/hook_context.py::compile_hook_context`） |
+| R-6.3 | HookContext 仅凭正式输入可确定性重建（PresentationGraph＋名称投影＋Hook 配置）；同输入字节一致，不依赖旧 session 或内存态。 | `HARD`（`novel/stages/stage4/hook_context.py::compile_hook_context`） |
 | R-6.4 | **M1 义务覆盖**：本场 owner 的义务完整进入 IR，内容逐条一致。 | `HARD`（`novel/stages/stage4/guard.py::check_obligation_coverage`） |
 | R-6.5 | **M2 提前揭示**：`entry_knowledge` 的 `established_by` 早于本场起点。 | `HARD`（`novel/stages/stage4/guard.py::check_entry_timing`） |
 | R-6.6 | **M3 提前效应**：`entry_state` 的 `established_by` 早于本场起点。 | `HARD`（`novel/stages/stage4/guard.py::check_entry_timing`） |
@@ -254,6 +254,7 @@ M1–M6 在本节点聚合执行，零错误才放行下游。
 | R-6.10 | Guard 零错误不证明小说质量；本节点确定性重跑是 0 成本修复路（`deterministic_replay`）。 | `结构`（`novel/stages/stage4/guard.py::run_mechanical_guard`） |
 | R-6.11 | **尚未向读者确认的事实（D15/D4）**：VerificationIR 带 `pending_reader_confirmations`——compiler 从 Design 的 reader delta 确定性派生；每条读者确认必须声明它确认的事实地址（`TargetDelta.confirms`，漏填即拒），投影只进实际消费该地址的场景（读取或写入；确认拍在本场内标注「自第 X 拍起可确认」），确认前不作为已确认信息；不新增 LLM 节点。renderer 与写作协议随清单升版。 | `结构`（`novel/stages/common.py::pending_reader_confirmations`＋`_scene_view`；反例 `tests/test_str06_execution_ir.py`、`tests/test_str06_stage4_protocol.py`、`tests/test_str06_workflow.py`） |
 | R-6.12 | **章预算的最大余数传导（B3 前半）**：章预算保持全书 largest-remainder 整数分配、总和恰等于书级目标；场景相对篇幅（权重）变化按整数预算变化传导（可能波及多章），受影响章＝整数预算变化的章（确定性纯函数）。 | `结构`（`novel/stages/stage4/book_ir.py::chapters_with_budget_change`；反例 `tests/test_str06_stage4_protocol.py::test_budget_change_propagates_by_integer_allocation`） |
+| R-6.13 | **章闭包：按拍读取与 T₀ 语义（B3 后半）**——状态读取定位到入场或具体拍（`StateRead.at`，wire 给 1-based 拍序由 compiler 解析），按「先读旧值、后写新值」解析：入场读取解析本场写入前的旧值（本场会写该地址不再是删除入场读取的理由），拍读取在该拍之前的建立上解析（先写后读）；T₀ 保留 unknown（显式值未知）、unset（显式解除）、set（含合法空值）与未建立的区别，不以 op 过滤初始项。compiler 按阅读序折叠逐场证明**已声明依赖的引用闭合**——读取在定位点未建立、作用域已失效或解析到 unknown 即 fail fast（`str06.stage4.compile` 免费重验）；语义依赖是否遗漏归质量验收，机械检查不冒充证明。「值未知」（unknown）与「人物不知道」（知情缺席或 believes）在 Design 词汇分开。 | `HARD`（`novel/stages/common.py::scene_read_views`＋`novel/stages/stage4/compile.py::init_establishments`＋`contracts/schema/state.py::StateRead`；反例 `tests/test_str06_chapter_closure.py`） |
 
 ### R-7 · 按章正文（stage5 · str06.stage5.body）
 
@@ -284,7 +285,7 @@ HookContext（正式输入确定性重建），不读源 hook 文案——Stage1
 |---|---|---|
 | R-8.1 | Hook 机械验通过：POV 与 Design 一致、起笔事实时序合法、禁止集零兑现、withheld 字面不出现。 | `HARD`（`novel/stages/stage5/hook_writer.py::validate_hook_prose`）；不剧透与「只引用正文真实句子」没有确定性防线，见 `B-12` |
 | R-8.2 | Hook 回执绑定 HookContext 身份、正文 hash 与请求身份；拒绝稿不落正式位。 | `HARD`（`novel/stages/stage5/hook_writer.py::validate_hook_prose` + `novel/stages/chain.py::run_hook`） |
-| R-8.3 | Hook 成文不扩大正文失效面：只改 Hook 不使无关正文接受失效（窄修改边界）。 | `结构`（`novel/stages/stage5/hook_context.py::compile_hook_context`） |
+| R-8.3 | Hook 成文不扩大正文失效面：只改 Hook 不使无关正文接受失效（窄修改边界）。 | `结构`（`novel/stages/stage4/hook_context.py::compile_hook_context`） |
 | R-8.4 | `HookReceipt` 的盘上形状由 `ARTIFACT_SPECS` 登记；机械通过不证明不剧透、材料顺序遵守与吸引力。 | `载体`（`contracts/schema/hook.py::HookReceipt`） |
 
 ### R-9 · 开篇文案（stage6 · 已退役）
@@ -634,7 +635,7 @@ reasoning 已含在 completion 中时不再累加。
 | 非正文剔除（`stage0`，**13 条现役**） | R-0 |
 | 分章（`stage1`，**9 条现役**） | R-1 |
 | 源语义与名称结构（`stage2`，**18 条现役**） | R-2、R-3 |
-| 目标故事与确定性编译（`stage4`，**19 条现役**） | R-5、R-6（含 Guard M1–M6） |
+| 目标故事与确定性编译（`stage4`，**20 条现役**） | R-5、R-6（含 Guard M1–M6） |
 | 按章正文与 Hook（`stage5`，**8 条现役**） | R-7、R-8 |
 | 命名与交付（`stage7`，**8 条现役**） | R-10 |
 

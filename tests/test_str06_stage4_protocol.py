@@ -33,7 +33,7 @@ from novel.stages.stage4.design import assemble_body_design
 from novel.stages.stage4.grounding import (
     assemble_binding, assemble_preserve, project_binding_space,
 )
-from novel.stages.stage5.hook import assemble_hook_design
+from novel.stages.stage4.hook import assemble_hook_design
 
 H64 = 'a' * 64
 

@@ -7,15 +7,18 @@
                    B3 前半：场景/拍 ID、归章、权重归一与锚定引用由 compiler 生成）。
   · `grounding.py` Preserve／ReconstructionBrief 投影／Bind 输入投影／Bind
                    （`str06.stage4.preserve`、`str06.stage4.bind`）。
-  · `compile.py`   ExecutionPlan 确定性编译（`str06.stage4.compile`）。
+  · `hook.py`      Hook Design 的确定性校验臂与唯一 graph publisher
+                   （`str06.stage4.hook_design`；B3 后半自 stage5 包归位）。
+  · `hook_context.py` HookContext 确定性投影（`str06.stage4.compile` 的一段；
+                   B3 后半自 stage5 包归位）。
+  · `compile.py`   ExecutionPlan 确定性编译＋章闭包证明（`str06.stage4.compile`）。
   · `guard.py`     写前 M1–M6 机械闸（只读验证、只写报告出口）。
   · `fold.py`      单一目标 Fold：accepted prefix 的 planned_delta 重放。
   · `book_ir.py`   WriterBookIR 确定性编译（章预算 largest-remainder 分配；权重
                    变化的整数预算传导规则 `chapters_with_budget_change`）。
 
-⚠ Hook 面不住本包：Hook 设计（`hook_design`）与 HookContext 编译在 F8c 分流时
-落进 `novel/stages/stage5/`（`hook.py`／`hook_context.py`），与 Hook 成文
-（`hook_writer.py`）同包——「Hook 是一个面」按模块聚拢，不按节点所属 Stage 拆开。
+Hook 的设计、publisher 与 Context 编译按节点所属 Stage 住本包（B3 后半）；
+Hook 成文（`hook_writer.py`）仍在 stage5——语义边界不变（`R-5.6`／`R-6.3`）。
 
 【包级公开面】跨 stage 只许 `from novel.stages.stage4 import X`；深路径 import
 本包内部模块一律禁止（守卫见
@@ -38,14 +41,17 @@ from novel.stages.stage4.guard import (
     check_entry_timing, check_obligation_coverage, run_mechanical_guard,
     scene_order,
 )
+from novel.stages.stage4.hook import assemble_hook_design, publish_graph
+from novel.stages.stage4.hook_context import compile_hook_context
 
 __all__ = [
     'FoldedState', 'allocate_chapter_budgets', 'appeared_chars',
-    'assemble_binding', 'assemble_body_design',
+    'assemble_binding', 'assemble_body_design', 'assemble_hook_design',
     'assemble_preserve', 'chapter_scene_weights', 'chapters_with_budget_change',
     'check_binding_beat_refs',
     'check_cast_legality', 'check_entry_timing', 'check_obligation_coverage',
-    'compile_execution_plan', 'compile_writer_book_ir', 'fold_accepted_prefix',
+    'compile_execution_plan', 'compile_hook_context', 'compile_writer_book_ir',
+    'fold_accepted_prefix',
     'init_establishments', 'project_binding_space', 'project_brief',
-    'run_mechanical_guard', 'scene_order',
+    'publish_graph', 'run_mechanical_guard', 'scene_order',
 ]

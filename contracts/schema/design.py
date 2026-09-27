@@ -46,7 +46,9 @@ from pydantic import Field, model_validator
 from contracts.schema.base import StrictModel
 from contracts.schema.common import FreeProvenance, LlmProvenance
 from contracts.schema.hook import HookDesign
-from contracts.schema.state import EffectDomain, StateAddress, StateChange, SurfaceIntroduction
+from contracts.schema.state import (
+    EffectDomain, StateAddress, StateChange, StateRead, SurfaceIntroduction,
+)
 from typing import Literal
 import math
 
@@ -181,7 +183,9 @@ class TargetScene(StrictModel):
     driver: SceneDriver
     beats: tuple[TargetBeat, ...] = Field(min_length=1)
     delivery: SceneDelivery
-    state_reads: tuple[StateAddress, ...]
+    #: 已声明状态读取（B3 后半 StateRead）：定位到入场或具体拍，按「先读旧值、
+    #: 后写新值」解析；闭合证明归 compile（章闭包）。
+    state_reads: tuple[StateRead, ...]
     #: 本场怎样演出来（导演说明）：场景重心、理解推进、展开与压缩、关键转折
     #: 及收束、邻场衔接；不规定逐句正文。必填非空——缺省即拒读（RC4）。
     realization_brief: str = Field(min_length=1)

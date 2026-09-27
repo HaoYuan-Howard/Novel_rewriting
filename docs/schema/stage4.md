@@ -61,6 +61,7 @@ Guard 零错误不证明小说质量；本节点确定性重跑是 0 成本修�
 | `guard_m4_carrier_ref` | hard | M4 承载位置真实 |
 | `guard_m5_surface_release` | hard | M5 称谓释放一致 |
 | `guard_m6_cast_legality` | hard | M6 合法人物 |
+| `chapter_closure_read_resolution` | hard | 章闭包：已声明状态读取在定位点闭合（先读旧值后写新值；unknown/unset/未建立分开） |
 
-当前注册表共 **19 条**：**17 hard、1 metric、1 unver**。唯一注册表为
+当前注册表共 **20 条**：**18 hard、1 metric、1 unver**。唯一注册表为
 `contracts/judges/str06.py`（F8c 起分流至本层判据模块）。

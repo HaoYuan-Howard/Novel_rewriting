@@ -38,6 +38,26 @@ class StateAddress(StrictModel):
         return self.domain.value, self.subjects, self.holder or '', self.key
 
 
+class StateRead(StateAddress):
+    """状态读取声明（B3 后半）：定位到入场或场内具体拍，按「先读旧值、后写
+    新值」解析。
+
+    `at=None` 定位到**入场**——读取本场写入前的旧值（本场会写该地址不再是
+    删除入场读取的理由，F5e 实证那会迫使 Design 用 unknown 初态垫底）；
+    `at` 给场内拍 id（compiler 派发的 `b{序:02d}`）定位到**该拍之前**——先写
+    后读的「新值」读取。任何读取在其定位点没有已建立事实即拒（章闭包证明，
+    `novel/stages/common.py::scene_read_views`）。
+    """
+
+    at: str | None = None
+
+    @model_validator(mode='after')
+    def _anchor_shape(self) -> 'StateRead':
+        if self.at is not None and '#' in self.at:
+            raise ValueError('读取定位是场内拍 id；完整引用由 compiler 组成')
+        return self
+
+
 class StateChange(StateAddress):
     #: knowledge 域的知情模式（v13 质量改进批次二补 believes）：believes＝持有者
     #: 以为为真，不代表世界为真——错误看法以此结构形式传到写手（D14）。

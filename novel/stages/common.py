@@ -33,7 +33,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from typing import Iterable, Mapping, NamedTuple, Protocol
+from typing import Any, Iterable, Mapping, NamedTuple, Protocol
 
 from pydantic import BaseModel
 
@@ -44,7 +44,7 @@ from contracts.schema.context import (
 )
 from contracts.schema.design import BodyDesign
 from contracts.schema.execution import (
-    EffectDomain, ExecutionPlan, ExecutionSlice,
+    EffectDomain, Establishment, ExecutionPlan, ExecutionSlice,
 )
 from contracts.schema.grounding import SemanticBinding
 from contracts.schema.workflow import STR06_RC_VERSION
@@ -506,6 +506,19 @@ known/suspected/heard/believes，其它不写该键；believes＝持有者以为
 knowledge 的 knowledge_mode：known＝确知、suspected＝怀疑、heard＝听说、believes＝
 持有者以为为真（不代表世界为真）——错误看法（如"芸娘以为夫君已离开"）必须用
 believes 以结构形式传到写手，不得写成 known 让写手当作世界事实演出。
+op=unknown 表示「值未知」：该维度已确立但此刻值未定／未交代——它不是「人物
+不知道」；「人物不知道」用 knowledge 域表达：知情缺席（不建该人物的知识条目）
+或 believes（持有者以为为真）。初始态里 unset 表示「故事开始前已显式解除」，
+没有该维度就是未建立，不要造占位项。
+
+【状态读取：先读旧值、后写新值】
+每场 state_reads 只列实际需要的状态地址，并定位到入场或具体拍：
+- 缺省定位到入场＝读取本场写入**前**的旧值（本场会写该地址不影响入场读取）；
+- 要读本场自己写入**后**的新值，写 {"at": 拍序}（1-based，指向本场 beats 列表
+  中的位置）定位到该拍——定位在写入之前的读取拿旧值，定位在写入之后的读取
+  拿新值；
+- 任何读取在其定位点没有已建立的事实会整书拒编译（未建立或作用域已失效）。
+不要为凑读取用 unknown 初始项「垫底」——那会阻断消费，"值未知"不是这么用的。
 
 【读者确认必须声明事实地址（D4，漏填即拒）】
 读者延后确认的内容：在其确认拍放 domain=reader 的 target_delta，且必填
@@ -517,8 +530,7 @@ confirms——它确认的**事实地址** {domain,key,subjects,holder}，指向
 不能倒改当前状态。
 
 【场景与拍（只写结构与语义，不写编号）】
-每场 state_reads 显式列出实际需要的状态地址(domain,key,subjects,holder)，不要列
-全书状态。每拍 surface_introductions 只声明该位置首次允许的称谓 [{char_id,surfaces}]，
+每拍 surface_introductions 只声明该位置首次允许的称谓 [{char_id,surfaces}]，
 不得一次放开该人物所有称谓；initial_surfaces 与 surface_introductions 里的每个
 称谓字面都只能取输入身份投影给出的可用称呼（该人物已登记的称谓面），未登记的
 字面一律不得释放。
@@ -704,13 +716,19 @@ class FoldedPrefix(Protocol):
     """`project_context` 需要的折叠前缀面（结构类型，避免反向依赖具体 stage 包）。
 
     实现方是 Stage4 的 `FoldedState`（`novel/stages/stage4/fold.py`）；这里只
-    声明用到的两个视图入口，本模块因此不必 import 任何 stage 包（I-03／I-05）。
+    声明用到的视图入口，本模块因此不必 import 任何 stage 包（I-03／I-05）。
     """
 
     def entry_state_view(self, scene_start_anchor: str, domains=()) -> tuple[StateEntry, ...]:
         ...
 
     def entry_knowledge_view(self) -> tuple[KnowledgeEntry, ...]:
+        ...
+
+    def with_scene_changes(
+        self, scene_id: str, changes: Iterable[Establishment]) -> 'FoldedPrefix':
+        """同态派生（B3 后半）：在不改变原 fold 的前提下叠加场内、读取位置
+        之前的建立——「先写后读」的拍读取在此视图上解析。"""
         ...
 
 
@@ -778,6 +796,74 @@ def pending_reader_confirmations(
     return tuple(items)
 
 
+def scene_read_views(*, scene, establishments: tuple[Establishment, ...],
+                     folded_prefix: FoldedPrefix,
+                     ) -> tuple[tuple[StateEntry, ...], tuple[KnowledgeEntry, ...], list[str]]:
+    """已声明状态读取的确定性解析（B3 后半）：定位到入场或具体拍，按
+    「先读旧值、后写新值」解析。
+
+    · 入场读取（`StateRead.at is None`）解析**本场写入前**的折叠状态——本场
+      会写该地址不再是删除入场读取的理由（取消 B3 前的行为）：先读旧值是合法
+      且必要的消费，新值经所写拍的 BeatIR 到达写手；
+    · 拍读取（`at`＝场内拍 id）在该拍**之前**的建立上解析（先写后读）——其值
+      同样经所写拍的 BeatIR 到达写手，这里只做闭合证明，不进 entry 视图
+      （entry 的语义是「起笔已成立」；场内建立值进 entry 会向写手说谎并触发
+      M3）；
+    · 任何读取在其定位点没有已建立事实（未建立／scene 作用域已失效）报错；
+      解析到 unknown 报错（I-42：未经标定不得当作通过；unknown 初态垫底会
+      毒化 fold，F5e 失败保留为回归反例）。
+
+    compile（章闭包证明，`str06.stage4.compile`）与 `project_context`（写手
+    投影）共用本实现，两处语义不漂移（I-16）。纯函数，不修改输入。
+    """
+    beat_order = {b.beat_id: i for i, b in enumerate(scene.beats)}
+    by_index: dict[int, list[Establishment]] = {}
+    for est in establishments:
+        anchor = est.established_by.rsplit('#', 1)[-1]
+        idx = beat_order.get(anchor)
+        if idx is None:
+            continue
+        by_index.setdefault(idx, []).append(est)
+    entry_state = folded_prefix.entry_state_view(f'{scene.scene_id}#start')
+    entry_knowledge = folded_prefix.entry_knowledge_view()
+    state: dict[tuple, StateEntry] = {}
+    knowledge: dict[tuple, KnowledgeEntry] = {}
+    errors: list[str] = []
+    for read in scene.state_reads:
+        if read.at is None:
+            view_state, view_knowledge = entry_state, entry_knowledge
+            where = f'{scene.scene_id}（入场）'
+        else:
+            idx = beat_order.get(read.at)
+            if idx is None:
+                errors.append(f'{scene.scene_id} 的读取定位 {read.at!r} 不是本场真实拍'
+                              '（章闭包；返回 Design 修复）')
+                continue
+            changes = [c for i in range(idx) for c in by_index.get(i, ())]
+            view = folded_prefix.with_scene_changes(scene.scene_id, changes)
+            view_state, view_knowledge = view.entry_state_view(''), view.entry_knowledge_view()
+            where = f'{scene.scene_id}#{read.at}'
+        if read.domain is EffectDomain.KNOWLEDGE:
+            probe = ('knowledge', read.subjects, read.holder, read.key)
+            found = next((e for e in view_knowledge
+                          if ('knowledge', e.subjects, e.holder, e.key) == probe), None)
+        else:
+            probe = read.address()
+            found = next((e for e in view_state if e.address() == probe), None)
+        if found is None:
+            errors.append(f'{where} 消费了未建立状态：{read.key}；读取必须定位到'
+                          '事实建立之后（未建立或作用域已失效；返回 Design 修复）')
+            continue
+        if found.status == 'unknown':
+            errors.append(f'{where} 消费状态为 unknown；不得当作通过'
+                          '（unknown 初态垫底毒化 fold，F5e 反例）')
+            continue
+        if read.at is None:  # 只有入场读取进 entry 视图（拍读取的值经 BeatIR 到达写手）
+            (knowledge if read.domain is EffectDomain.KNOWLEDGE else state)[probe] = found
+    ordered = lambda d: tuple(d[k] for k in sorted(d, key=str))  # noqa: E731
+    return ordered(state), ordered(knowledge), errors
+
+
 def project_context(*, scene_id: str, graph: BodyDesign,
                     plan: ExecutionPlan, binding: SemanticBinding,
                     folded_prefix: FoldedPrefix) -> tuple[WriterContext, ExecutionSlice]:
@@ -790,23 +876,13 @@ def project_context(*, scene_id: str, graph: BodyDesign,
     ids = tuple(e.obligation_id for e in entries)
     obmap = {o.obligation_id: o for o in binding.obligations}
     owned = tuple(obmap[oid] for oid in ids)
-    reads = {r.address() for r in scene.state_reads}
-    # 场内自建立的地址不是入场消费：该事实在本场中途才成立，经 BeatIR/planned_delta
-    # 到达写手；把它当 entry 事实只会迫使 Design 用 unknown 初始项「垫底」（F5e 实证）。
-    # 未建立且场内也不自建的消费仍然报错——幻觉护栏不变。
-    scene_established = {e.address() for e in scene_plan.establishments}
-    reads = {a for a in reads if a not in scene_established}
-    state = tuple(e for e in folded_prefix.entry_state_view(f'{scene_id}#start')
-                  if e.address() in reads)
-    knowledge = tuple(e for e in folded_prefix.entry_knowledge_view()
-                      if ('knowledge', e.subjects, e.holder, e.key) in reads)
-    available = {e.address() for e in state} | {
-        ('knowledge', e.subjects, e.holder, e.key) for e in knowledge}
-    missing = reads - available
-    if missing:
-        raise ValueError(f'{scene_id} 消费了未建立状态：{sorted(missing)}；返回 Design 修复')
-    if any(e.status == 'unknown' for e in (*state, *knowledge)):
-        raise ValueError(f'{scene_id} 消费状态为 unknown；不得当作通过')
+    # 状态读取按「先读旧值、后写新值」解析（B3 后半，与 compile 共用同一实现）；
+    # 未建立／unknown 消费在这里同样 fail fast（幻觉护栏不变）。
+    state, knowledge, read_errors = scene_read_views(
+        scene=scene, establishments=scene_plan.establishments,
+        folded_prefix=folded_prefix)
+    if read_errors:
+        raise ValueError('；'.join(read_errors))
     # 跨场义务只携带明确的已完成支撑拍；绝不把整条复合义务当作先前真值。
     positions = {f'{s.scene_id}#{b.beat_id}': (i, j, b)
                  for i, s in enumerate(graph.scenes) for j, b in enumerate(s.beats)}
@@ -1055,6 +1131,14 @@ class StateOverlay:
     def __init__(self) -> None:
         self._book: dict[tuple, OverlayChange] = {}
         self._local: dict[tuple, tuple[str, OverlayChange]] = {}
+
+    def copy(self) -> 'StateOverlay':
+        """同态拷贝（B3 后半）：`with_scene_changes` 的派生视图用它保原 fold 不变。
+        OverlayChange 是不可变 NamedTuple，浅拷贝字典即安全。"""
+        clone = StateOverlay()
+        clone._book = dict(self._book)
+        clone._local = dict(self._local)
+        return clone
 
     def apply(self, scene_id: str, changes: Iterable[OverlayChange]) -> 'StateOverlay':
         for change in changes:

@@ -176,7 +176,7 @@ def test_str06_scope_keeps_contracts_replay_and_layering_without_old_stage_closu
     # `novel/stages/chain.py`，于是 stage0/1 的 CLI 面（test_stage01）是
     # **真实传递消费者**——登记范围不得把范围外真实消费者截掉
     # （selection 的理由串「不排除范围外真实消费者」是同一判据）。
-    engine = S.plan(catalog, changed=('novel/stages/stage5/hook_context.py',))
+    engine = S.plan(catalog, changed=('novel/stages/stage4/hook_context.py',))
     assert expected | {'tests/test_layering.py', 'tests/test_test_selection.py',
                        'tests/test_stage01.py'} <= engine.modules
     assert engine.modules < set(catalog['modules'])
@@ -344,7 +344,7 @@ def test_real_pytest_selects_only_stage_cases_and_reports_exact_collection(tmp_p
 def test_real_pytest_document_and_str06_selection_excludes_unrelated_tests(tmp_path):
     report = tmp_path / 'str06.json'
     result = _pytest(tmp_path, '--collect-only', '--changed', 'docs/schema/str06.md',
-                     '--changed', 'novel/stages/stage5/hook_context.py',
+                     '--changed', 'novel/stages/stage4/hook_context.py',
                      '--changed-base', 'HEAD', '--selection-report', str(report))
     assert result.returncode == 0, result.stdout + result.stderr
     data = json.loads(report.read_text(encoding='utf-8'))

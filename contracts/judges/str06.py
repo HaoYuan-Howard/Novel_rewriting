@@ -131,6 +131,9 @@ _hard('guard_m5_surface_release', 'stage4',
       'M5 称谓释放集与 Design 显式释放集一致', 'R-6.8', fix=_FIX_COMPILE)
 _hard('guard_m6_cast_legality', 'stage4',
       'M6 释放面人物已由 Design 声明参与或引入', 'R-6.9', fix=_FIX_COMPILE)
+_hard('chapter_closure_read_resolution', 'stage4',
+      '章闭包：已声明状态读取在定位点闭合（先读旧值后写新值；unknown/unset/'
+      '未建立分开，T₀ 不洗白非 set 初态）', 'R-6.13', fix=_FIX_COMPILE)
 _unver('design_semantics_unver', 'stage4',
        '目标故事与导演说明的语义质量未经语义审阅，保持未评披露', 'R-5.7')
 _metric('scene_budget_distribution', 'stage4',

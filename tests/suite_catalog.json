@@ -665,6 +665,12 @@
         "test_book_call_ceiling_stops_generation": "stage"
       }
     },
+    "tests/test_str06_chapter_closure.py": {
+      "layer": "unit_contract",
+      "stages": [
+        "stage4"
+      ]
+    },
     "tests/test_str06_candidates.py": {
       "layer": "unit_contract",
       "stages": [

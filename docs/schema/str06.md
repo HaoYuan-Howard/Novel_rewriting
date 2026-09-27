@@ -94,7 +94,7 @@ Binding 不维护第二份初始态。
 
 ## Stage4：把章依赖编译完整（目标）
 
-**落地状态（2026-09-27，B3 前半，rc7）**：四协议独立版化与 Design 瘦身已落地
+**落地状态（2026-09-27，B3 前半＋后半，rc7）**：四协议独立版化与 Design 瘦身已落地
 （`STAGE4_{PRESERVE,DESIGN,BIND,HOOK_DESIGN}_PROTOCOL`，wire 顶层
 `protocol_version` 逐字对账，漏带/错带即拒）；场景/拍 ID（`sc{序:02d}`／
 `b{序:02d}`）、归章切片、复合锚定引用、权重归一与整数预算由 compiler 生成
@@ -102,8 +102,15 @@ Binding 不维护第二份初始态。
 （book_style／character_voices／standing_goals／ongoing_actions／open_questions／
 promises）落地，书级条目随 BookBrief 进每章请求；读者确认必填事实地址（D4，
 schema 构造期 + assemble 引用闭合），投影按地址精确到消费该地址的章包；
-预算传导机械规则 `chapters_with_budget_change` 落地。按拍读取（先读旧值后写
-新值）、T₀ 语义、章闭包与 Hook 代码归位 Stage4 包归 B3 后半。
+预算传导机械规则 `chapters_with_budget_change` 落地。**B3 后半已落地**：
+状态读取定位到入场或具体拍（`StateRead.at`，wire 给 1-based 拍序由 compiler
+解析），按「先读旧值、后写新值」解析（`novel/stages/common.py::scene_read_views`
+是 compile 章闭包证明与写手投影的唯一实现，取消「本场会写该地址就删除全部
+入场读取」）；T₀ 保留 unknown／unset／set（含合法空值）与未建立的区别
+（`novel/stages/stage4/compile.py::init_establishments` 不再按 op 过滤）；
+compiler 按阅读序折叠逐场证明已声明依赖的引用闭合；Hook 设计与唯一 graph
+publisher（`novel/stages/stage4/hook.py`）与 HookContext 编译
+（`novel/stages/stage4/hook_context.py`）已归位 Stage4 包。
 
 - Preserve、Design、Bind、Hook Design 各用独立协议；模型只表达选择、结构和相对篇幅
   重点，场景/拍 ID、复合引用、权重归一与整数预算由 compiler 生成。协议瘦身（不回显
@@ -114,15 +121,15 @@ schema 构造期 + assemble 引用闭合），投影按地址精确到消费该�
   跨章依赖；后文需要记住的事实必须进结构化字段，不能只写在导演说明里。
 - **读者确认必须声明它确认的事实地址（D4，必填，漏填即拒）**；compiler 把未确认项
   投影进引用该地址的章包，并标注确认拍（现役 `R-6.11` 的逐场全量清单升级为按地址投影）。
-- 状态读取定位到入场或具体拍，按「先读旧值、后写新值」解析；取消「本场会写该地址就
-  删除全部入场读取」（现役 `novel/stages/common.py::project_context` 的行为）。
-- 初态保留 unknown、unset、未建立与合法空值的区别，取消无条件丢弃非 set 初态（现役
-  `novel/stages/stage4/compile.py::init_establishments` 的行为）；Design 词汇同时分开
-  「值未知」与「人物不知道」（后者用知情缺席或 believes 表达）。F5e「用 unknown 初态
-  垫底、毒化 fold」的失败保留为回归反例。
-- Hook 设计与唯一 graph publisher（现役 `novel/stages/stage5/hook.py::publish_graph`）、
-  HookContext 编译（现役 `novel/stages/stage5/hook_context.py::compile_hook_context`）
-  的代码迁回 Stage4 包（B3）；Hook 语义边界不变（见现役实装一节）。
+- 状态读取定位到入场或具体拍，按「先读旧值、后写新值」解析；「本场会写该地址就
+  删除全部入场读取」的旧行为已取消（B3 后半，`novel/stages/common.py::scene_read_views`）。
+- 初态保留 unknown、unset、未建立与合法空值的区别，非 set 初态不再无条件丢弃
+  （B3 后半，`novel/stages/stage4/compile.py::init_establishments`）；Design 词汇同时
+  分开「值未知」与「人物不知道」（后者用知情缺席或 believes 表达）。F5e「用 unknown
+  初态垫底、毒化 fold」的失败保留为回归反例（`tests/test_str06_chapter_closure.py`）。
+- Hook 设计与唯一 graph publisher（`novel/stages/stage4/hook.py::publish_graph`）、
+  HookContext 编译（`novel/stages/stage4/hook_context.py::compile_hook_context`）
+  的代码已迁回 Stage4 包（B3 后半）；Hook 语义边界不变（见现役实装一节）。
 - 章预算保持全书最大余数分配（现役
   `novel/stages/stage4/book_ir.py::allocate_chapter_budgets`），总和恰等于书级目标；
   代价是权重变化会波及多章预算（见精确失效表；机械规则
@@ -289,16 +296,15 @@ seal → 标记采用（可由 seal 重建）。任一窗口中断优先免费�
 B2 第三步）、`novel/stages/stage2/source.py`（旧联合抽取引擎，链已不消费；
 反例迁移完成后删除，S-05）、
 `novel/stages/stage4/grounding.py`（preserve/bind）、
-`novel/stages/stage4/design.py`、`novel/stages/stage5/hook.py`（hook design 与唯一
-graph publisher）、`novel/stages/stage4/compile.py`、`novel/stages/stage4/book_ir.py`、
-`novel/stages/stage5/hook_context.py`、`novel/stages/stage4/guard.py`、
+`novel/stages/stage4/design.py`、`novel/stages/stage4/hook.py`（hook design 与唯一
+graph publisher，B3 后半归位）、`novel/stages/stage4/compile.py`、`novel/stages/stage4/book_ir.py`、
+`novel/stages/stage4/hook_context.py`（B3 后半归位）、`novel/stages/stage4/guard.py`、
 `novel/stages/stage5/body.py`（按章 writer）、`novel/stages/stage5/body_checks.py`、
 `novel/stages/stage5/hook_writer.py`、`novel/stages/stage7/naming.py`、
 `novel/stages/stage7/assembly.py`；跨 stage 共用原语与 renderer 住
 `novel/stages/common.py`；薄编排与设施装配住 `novel/stages/chain.py`（14 节点执行序；
 全部 14 个 runner 在位——含 `run_associate`／`run_compile`（B2 第三步），
-生产入口 `novel.cli run <node> <sid>`）。B2–B4 的其余目标落点（Hook 代码归位 Stage4）由
-对应批次落地后回填本表。
+生产入口 `novel.cli run <node> <sid>`）。
 
 依赖单向：Design 禁 Grounding 实现/Blueprint internals/checkpoint 裸读；Grounding 禁
 Design 实现；Compile/Context 禁 LLM 和草稿；Stage5 只消费 WriterIR/acceptance；Hook

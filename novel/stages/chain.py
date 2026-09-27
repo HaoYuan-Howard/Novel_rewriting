@@ -75,15 +75,16 @@ from novel.stages.stage2 import (
     compile_source_truth, associate_observation_prompt, project_association_space,
 )
 from novel.stages.stage4 import (
-    assemble_binding, assemble_body_design,
-    assemble_preserve, compile_execution_plan, compile_writer_book_ir,
-    project_binding_space, project_brief, run_mechanical_guard,
+    assemble_binding, assemble_body_design, assemble_hook_design,
+    assemble_preserve, compile_execution_plan, compile_hook_context,
+    compile_writer_book_ir, project_binding_space, project_brief,
+    publish_graph, run_mechanical_guard,
 )
 from novel.stages.stage5 import (
     AnsweredText, HOOK_VALIDATOR_VERSION, MAX_REWRITES, MECHANICAL_CHECKS,
-    assemble_hook_design, book_ir_sha256, build_hook_user_prompt,
-    build_rewrite_user_prompt, compile_hook_context, context_sha256,
-    prior_body_text, publish_graph, sha256_text, validate_hook_prose,
+    book_ir_sha256, build_hook_user_prompt,
+    build_rewrite_user_prompt, context_sha256,
+    prior_body_text, sha256_text, validate_hook_prose,
     write_chapter,
 )
 from novel.stages.stage7 import (

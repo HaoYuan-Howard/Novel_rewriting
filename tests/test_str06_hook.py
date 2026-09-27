@@ -27,8 +27,8 @@ from contracts.schema.source import (
     CharactersArtifactV4, NameStructure,
 )
 from novel.stages.stage4.design import assemble_body_design
-from novel.stages.stage5.hook_context import compile_hook_context
-from novel.stages.stage5.hook import assemble_hook_design, publish_graph
+from novel.stages.stage4.hook_context import compile_hook_context
+from novel.stages.stage4.hook import assemble_hook_design, publish_graph
 from novel.stages.stage5.hook_writer import (
     MAX_REWRITES, build_hook_user_prompt, build_rewrite_user_prompt,
     validate_hook_prose,
@@ -628,7 +628,7 @@ def test_migration_dependency_rules_executed_on_real_modules():
 def test_dependency_rule_scan_actually_finds_violations():
     from contracts.schema.dependency import STR06_MIGRATION_DEPENDENCY_RULES
     rule = next(r for r in STR06_MIGRATION_DEPENDENCY_RULES
-                if r.module == 'novel.stages.stage5.hook_context')
+                if r.module == 'novel.stages.stage4.hook_context')
     assert _matches('novel.llm.paid_requests', rule.forbids)
     assert not _matches('contracts.schema.hook', rule.forbids)
     # 若真实文件违例，上面的真实执行测试会红；这里证明扫描器本身有牙齿

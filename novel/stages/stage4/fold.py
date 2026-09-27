@@ -33,6 +33,16 @@ class FoldedState:
         self._overlay.expire_scene_scope(scene_id)
         return self
 
+    def with_scene_changes(self, scene_id: str,
+                           changes: Iterable[Establishment]) -> 'FoldedState':
+        """同态派生（B3 后半）：在副本上叠加场内、读取位置之前的建立，原 fold
+        不变——「先写后读」的拍读取在（前文折叠＋已写拍）上解析（先读旧值、
+        后写新值；`common.scene_read_views` 消费本入口）。"""
+        clone = FoldedState()
+        clone._overlay = self._overlay.copy()
+        clone.apply(scene_id, changes)
+        return clone
+
     def _entry_of(self, change: OverlayChange) -> Establishment:
         """规范变化还原成 Establishment（地址四段从 address 元组拆回）。"""
         domain, subjects, holder, key = change.address

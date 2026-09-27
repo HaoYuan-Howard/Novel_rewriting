@@ -13,7 +13,7 @@ from pydantic import ValidationError
 
 from contracts.schema.design import TargetDelta
 from contracts.schema.grounding import BindingEntry, SemanticBinding
-from contracts.schema.state import StateAddress, SurfaceIntroduction
+from contracts.schema.state import StateRead, SurfaceIntroduction
 from novel.stages.stage4.compile import compile_execution_plan
 from novel.stages.common import project_context
 from novel.stages.stage4.fold import fold_accepted_prefix, FoldedState
@@ -105,14 +105,16 @@ def test_actual_business_change_invalidates_only_own_context(change):
 def test_state_read_change_invalidates_consumer_and_unknown_blocks():
     cp = _cp(_ob('ob1'))
     graph, binding = _graph(), _binding(cp)
-    graph.scenes[1].state_reads = (StateAddress(domain='world', key='season'),)
+    graph.scenes[1].state_reads = (StateRead(domain='world', key='season'),)
     before = contexts(graph, binding)
     graph.scenes[0].beats[0].target_delta[0].value = '冬'
     assert before['s02'][1] != contexts(graph, binding)['s02'][1]
     graph.scenes[0].beats[0].target_delta = (TargetDelta(
         domain='world', key='season', op='unknown', value=None, scope='book'),)
-    with pytest.raises(ValueError, match='unknown'):
-        contexts(graph, binding)
+    # unknown 消费在 compile 的章闭包证明即拦下（fail fast，免费重验），
+    # 不留给写手投影（I-34；B3 后半起证明与投影共用同一解析实现）。
+    _, errors = compile_execution_plan(graph, binding)
+    assert any('unknown' in e for e in errors)
 
 
 def test_compound_obligation_uses_prior_beats_without_premature_whole_fact():

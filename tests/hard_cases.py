@@ -284,7 +284,7 @@ def _binding_unclosed() -> list:
 def _hook_design_bad_wire() -> list:
     """Hook 设计机械校验：材料引用不存在的拍。"""
     from tests.test_str06_hook import _green_pair
-    from novel.stages.stage5.hook import assemble_hook_design
+    from novel.stages.stage4.hook import assemble_hook_design
 
     graph, projection, _context = _green_pair()
     _hook, errors = assemble_hook_design(
@@ -315,11 +315,30 @@ def _plan_unclosed() -> list:
     return errors
 
 
+def _chapter_closure_unclosed() -> list:
+    """章闭包（R-6.13）：已声明状态读取在其定位点未建立（没有任何建立点）。"""
+    from contracts.schema.grounding import BindingEntry
+    from contracts.schema.state import StateRead
+    from tests.test_str06_fold_guard import _binding, _graph
+    from novel.stages.stage4.compile import compile_execution_plan
+
+    graph = _graph()
+    mutated = graph.model_copy(update={
+        'scenes': (graph.scenes[0],
+                   graph.scenes[1].model_copy(update={
+                       'state_reads': (StateRead(domain='world', key='season'),)}),
+                   graph.scenes[2])})
+    binding = _binding(BindingEntry(obligation_id='ob1', scene_id='s01',
+                                    beat_ref='s01#bt1'))
+    _plan, errors = compile_execution_plan(mutated, binding)
+    return errors
+
+
 def _hook_context_unresolvable() -> list:
     """HookContext 仅凭正式输入可重建：起笔事实在引用处未建立即拒。"""
     from contracts.schema.hook import HookConstraints
     from tests.test_str06_hook import _green_pair
-    from novel.stages.stage5.hook_context import compile_hook_context
+    from novel.stages.stage4.hook_context import compile_hook_context
 
     _body, graph, _context = _green_pair()
     from tests.test_str06_hook import _projection
@@ -394,6 +413,8 @@ CASES.update({
     'binding_mechanical': Case('stage4', _binding_unclosed, 'checkpoint 外'),
     'hook_design_mechanical': Case('stage4', _hook_design_bad_wire, '材料引用不存在的拍'),
     'execution_plan_compile': Case('stage4', _plan_unclosed, 'Binding'),
+    'chapter_closure_read_resolution': Case('stage4', _chapter_closure_unclosed,
+                                            '未建立'),
     'writer_ir_dual_view': Case('stage4', _hook_context_unresolvable, '起笔事实'),
     'hook_context_rebuildable': Case('stage4', _hook_context_unresolvable, '起笔事实'),
     'delivery_replayable': Case('stage7', _delivery_not_ready, 'not ready'),

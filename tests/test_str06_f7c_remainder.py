@@ -278,11 +278,10 @@ def test_unknown_state_blocks_consumption_while_unset_does_not():
     """unknown 阻断消费（不得当作通过）；unset 不阻断但显式携带——两态不相混。"""
     body = _assemble(_unset_chain_wire(final_op='unknown'))
     binding = _green_binding(body)
-    plan, errors = compile_execution_plan(body, binding)
-    assert not errors, errors
-    with pytest.raises(ValueError, match='unknown'):
-        compile_writer_book_ir(graph=body, plan=plan, binding=binding,
-                               total_budget=2000, length_band=(0.6, 1.3))
+    # unknown 消费在 compile 的章闭包证明即拦下（B3 后半：证明与投影共用
+    # scene_read_views，fail fast 免费重验），不等到写手投影。
+    _, errors = compile_execution_plan(body, binding)
+    assert any('unknown' in e for e in errors), errors
 
 
 # ───────────── analyze receipt／draft repair 审计 · 不重复付费 ───────────────

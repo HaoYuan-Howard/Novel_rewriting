@@ -114,11 +114,12 @@ STR06_CROSS_CUTTING_RULES: Final[tuple[str, ...]] = (
 # 本身已删除，迁移包路径不再有执行对象。
 
 #: per-stage 真实模块 → 语义 owner（families.writer_owner 的模块级落点）。
+#: B3 后半：hook／hook_context 按节点所属 Stage 归位 Stage4 包。
 STR06_MIGRATION_MODULE_OWNERS: Final[dict[str, str]] = {
     'novel.stages.common': 'shared.compiler',
     'novel.stages.stage2.names': 'stage2.names',
-    'novel.stages.stage5.hook': 'stage4.hook_design',
-    'novel.stages.stage5.hook_context': 'stage4.context',
+    'novel.stages.stage4.hook': 'stage4.hook_design',
+    'novel.stages.stage4.hook_context': 'stage4.context',
     'novel.stages.stage5.hook_writer': 'stage5.hook_writer',
     'novel.stages.stage7.naming': 'stage7.naming',
     'novel.stages.stage7.assembly': 'stage7.assembly',
@@ -129,7 +130,7 @@ _STAGE457 = (
     'novel.stages.stage2.source', 'novel.stages.stage2.names',
     'novel.stages.stage4.grounding', 'novel.stages.stage4.design',
     'novel.stages.stage4.compile', 'novel.stages.stage4.book_ir',
-    'novel.stages.stage5.hook', 'novel.stages.stage5.hook_context',
+    'novel.stages.stage4.hook', 'novel.stages.stage4.hook_context',
     'novel.stages.stage5.hook_writer', 'novel.stages.stage5.body',
     'novel.stages.stage5.body_checks',
     'novel.stages.stage7.naming', 'novel.stages.stage7.assembly',
@@ -142,17 +143,20 @@ STR06_MIGRATION_DEPENDENCY_RULES: Final[tuple[DependencyRule, ...]] = (
         allows=('contracts.schema.source', 'contracts.schema.base',
                 'novel.stages.common'),
         forbids=_STAGE457 + ('novel.llm', 'novel.llm.*')),
-    # hook_context 是纯投影：禁止 LLM 与 Stage2/4/5/7 语义模块。
+    # hook_context 是纯投影（Stage4 context owner）：禁止 LLM 与 Stage2/4/5/7 语义模块。
     DependencyRule(
-        module='novel.stages.stage5.hook_context',
+        module='novel.stages.stage4.hook_context',
         allows=('contracts.schema.*',),
         forbids=('novel.llm', 'novel.llm.*', 'novel.stages.common')
-        + tuple(m for m in _STAGE457 if m != 'novel.stages.stage5.hook_context')),
-    # hook（Stage4 hook_design 的确定性臂）禁止 LLM 与 Stage5 写手／Stage7 模块。
+        + tuple(m for m in _STAGE457 if m != 'novel.stages.stage4.hook_context')),
+    # hook（Stage4 hook_design 的确定性臂与唯一 publisher）禁止 LLM 与
+    # Stage5 写手／Stage7 模块，也不依赖 Stage4 编译面。
     DependencyRule(
-        module='novel.stages.stage5.hook',
+        module='novel.stages.stage4.hook',
         allows=('contracts.schema.*',),
         forbids=('novel.llm', 'novel.llm.*', 'novel.stages.common',
+                 'novel.stages.stage4.compile', 'novel.stages.stage4.book_ir',
+                 'novel.stages.stage4.fold', 'novel.stages.stage4.guard',
                  'novel.stages.stage5.hook_writer', 'novel.stages.stage7.naming',
                  'novel.stages.stage7.assembly')),
     # hook_writer 只能消费 hook／receipt 契约：禁止 LLM 与 Stage2/4/7 模块。

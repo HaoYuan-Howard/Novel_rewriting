@@ -3,12 +3,13 @@
 """novel.stages.stage5 —— STR-06 新链 Stage5：Hook 成文与按章正文。
 
 【本地块】
-  · `hook.py`        Hook 设计与 `publish_graph`（节点 `str06.stage4.hook_design`
-                     的确定性臂；F8c 分流时按「Hook 面归 stage5 包」的落点安排）。
-  · `hook_context.py` HookContext 确定性编译（节点 `str06.stage4.compile` 的一段）。
   · `hook_writer.py`  Hook 成文：同 Context 有限重写＋机械验（`str06.stage5.hook`）。
   · `body.py`        按章正文成文（`str06.stage5.body`）：机械检查＋有限重写＋章级回执。
   · `body_checks.py` 章级机械判定与篇幅口径（validator：只验证并报告）。
+
+Hook 设计与唯一 graph publisher、HookContext 编译已按节点所属 Stage 归位
+Stage4 包（B3 后半：`novel/stages/stage4/hook.py`／`hook_context.py`）；
+本包只保留 Stage5 的语言实现面。
 
 【包级公开面】跨 stage 只许 `from novel.stages.stage5 import X`；深路径 import
 本包内部模块一律禁止（守卫见
@@ -26,8 +27,6 @@ from novel.stages.stage5.body_checks import (
     chapter_surface_releases, chapter_withheld_literals, count_body_chars,
     validate_chapter_prose,
 )
-from novel.stages.stage5.hook import assemble_hook_design, publish_graph
-from novel.stages.stage5.hook_context import compile_hook_context
 from novel.stages.stage5.hook_writer import (
     HOOK_VALIDATOR_VERSION, MAX_REWRITES, MECHANICAL_CHECKS,
     build_hook_user_prompt, build_rewrite_user_prompt, context_sha256,
@@ -37,9 +36,9 @@ from novel.stages.stage5.hook_writer import (
 __all__ = [
     'AnsweredText', 'BODY_MECHANICAL_CHECKS', 'BODY_VALIDATOR_VERSION',
     'ChapterAttempt', 'ChapterOutcome', 'HOOK_VALIDATOR_VERSION', 'MAX_BODY_REWRITES',
-    'MAX_REWRITES', 'MECHANICAL_CHECKS', 'assemble_hook_design',
+    'MAX_REWRITES', 'MECHANICAL_CHECKS',
     'book_ir_sha256', 'build_hook_user_prompt', 'build_rewrite_user_prompt',
-    'chapter_surface_releases', 'chapter_withheld_literals', 'compile_hook_context',
-    'context_sha256', 'count_body_chars', 'prior_body_text', 'publish_graph',
+    'chapter_surface_releases', 'chapter_withheld_literals',
+    'context_sha256', 'count_body_chars', 'prior_body_text',
     'sha256_text', 'validate_chapter_prose', 'validate_hook_prose', 'write_chapter',
 ]

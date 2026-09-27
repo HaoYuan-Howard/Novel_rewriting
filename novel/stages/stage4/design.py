@@ -12,6 +12,9 @@ Design wire（`stage4-design-v1`）只表达选择、结构与相对篇幅重点
   ④ 复合锚定引用：ongoing_actions/open_questions/promises 的 {"scene","beat"}
      1-based 分量解析成 `场景#拍`，越界精确拒。
   ⑤ initial_state 一律 book 作用域（schema 强制），wire 不带 scope，compiler 填。
+  ⑧ 状态读取定位（B3 后半）：state_reads 的 "at"（1-based 拍序）解析成场内
+     beat_id，缺省定位到入场——先读旧值、后写新值；定位闭合在本模块校验，
+     读取时序闭合归 compile 的章闭包证明。
 
 【确定性归一（F5e 真书实证；不补猜语义）】
   ⑥ 非 knowledge 域的 `knowledge_mode` 一律剥离——schema 只允许 knowledge 带
@@ -50,6 +53,9 @@ _INITIAL_KEYS = frozenset({'domain', 'key', 'subjects', 'holder', 'op', 'value',
 _SCENE_KEYS = frozenset({'driver', 'state_reads', 'realization_brief', 'delivery', 'beats'})
 _BEAT_KEYS = frozenset({'event', 'participants', 'dramatic_intent', 'delivery_hint',
                         'target_delta', 'surface_introductions'})
+#: 状态读取声明（B3 后半）：地址四段＋可选读取定位 `at`（1-based 拍序，
+#: compiler 解析成场内 beat_id；缺省定位到入场＝先读旧值）。
+_READ_KEYS = frozenset({'domain', 'key', 'subjects', 'holder', 'at'})
 
 
 def _scene_id(index: int) -> str:
@@ -143,6 +149,30 @@ def _resolve_cross_chapter(data: dict[str, Any], errors: list[str]) -> None:
                                      errors, f'{group}.{anchor_key}')
             if anchor is not None:
                 item[anchor_key] = anchor
+
+
+def _resolve_reads(data: dict[str, Any], errors: list[str]) -> None:
+    """状态读取的定位解析（B3 后半，先读旧值、后写新值）：wire 的 `at`
+    （1-based 拍序）→ 场内 beat_id；缺省定位到入场。键白名单外即拒，
+    越界定位精确拒——定位错场内拍是设计者对「事实在哪一拍建立」的误解，
+    不猜（Resolver 纪律）。"""
+    for index, scene in enumerate(data.get('scenes') or [], start=1):
+        if not isinstance(scene, dict):
+            continue
+        beats = len(scene.get('beats') or ())
+        for read in scene.get('state_reads') or []:
+            if not isinstance(read, dict):
+                continue
+            _reject_unknown_keys(errors, read, _READ_KEYS,
+                                 f'第 {index} 场 state_reads')
+            at = read.get('at')
+            if at is None:
+                continue
+            if not isinstance(at, int) or isinstance(at, bool) or not 1 <= at <= beats:
+                errors.append(f'第 {index} 场 state_reads 的读取定位非法：{at!r}'
+                              f'（应为 1-{beats} 的拍序；缺省定位到入场）')
+                continue
+            read['at'] = _beat_id(at)
 
 
 def _build_canonical(data: dict[str, Any], errors: list[str]) -> dict[str, Any]:
@@ -252,6 +282,8 @@ def assemble_body_design(
     _resolve_cross_chapter(data, errors)
     if not errors:
         _build_canonical(data, errors)
+    if not errors:
+        _resolve_reads(data, errors)
     if errors:
         return None, errors
     try:
@@ -266,6 +298,12 @@ def assemble_body_design(
         for cid in (scene.driver.focal_actor, scene.delivery.pov):
             if cid not in known_char_ids and cid != 'narrator':
                 errors.append(f'{scene.scene_id} 引用未知 char_id {cid}')
+        # 读取定位闭合（B3 后半）：拍读取的 at 必须是本场真实拍（先读旧值、
+        # 后写新值的定位面；时序闭合归 compile 的章闭包证明）。
+        beat_ids = {b.beat_id for b in scene.beats}
+        for read in scene.state_reads:
+            if read.at is not None and read.at not in beat_ids:
+                errors.append(f'{scene.scene_id} 的读取定位 {read.at!r} 不是本场真实拍')
         addressed.extend(scene.state_reads)
         for beat in scene.beats:
             for cid in beat.participants:
