@@ -16,7 +16,7 @@ SHA-256：`58132800359d5ef6b98d39aad57c98657253cd37373b902400d7d587903a1bdc`
 ## 目标与范围
 
 Stage2 负责源语义；Stage4 负责目标故事、Body/Hook 呈现设计与确定性 WriterIR；Stage5
-负责正文串行实现和单篇 Hook；Stage7 负责 Naming、机械 ApplyNames 与 Assembly。
+负责正文逐章独立并发实现和单篇 Hook；Stage7 负责 Naming、机械 ApplyNames 与 Assembly。
 四类故事语义真源保持 Characters／Blueprint／TargetDesign／SemanticBinding；NameMap
 是交付变换契约，接受正文、回执与已购证据独立保护。Stage6 整层退役，不重排阶段号。
 
@@ -70,7 +70,18 @@ F8 的免费反例仍须验证合法跨章布局可以编译、接受和交付�
 
 ## 当前状态与下一步
 
-**当前批次：B2 Stage2 五节点重建（免费，fake transport）——五节点引擎与接线全部落地，B2 验收已闭合。**
+**当前状态（2026-09-28）：B1–B5 主干与收尾已实现，D11 已提前合入 main；B6 尚未完成。**
+同日按理想设计审计确认：Stage2 关联投影丢失对象与句柄碰撞、Stage4 拍级读取漏入章包、
+四类跨章字段缺消费者。既有批次的测试成绩保留其原范围，不再据此宣称依赖闭包已完整兑现。
+用户本次要求提供具体执行文档；下方「目标导向整改与优化执行方案」是本文件内的后续提案，
+不是第二份活动计划，也不代表已经实施、采纳新的架构裁决或取得付费／正文外发授权。
+2026-09-28 该提案已吸收改写为 `PLAN.md` 的批次登记（唯一活动计划）：执行顺序
+R0→R1→R2→R3→R4→R6→R5→B6-A→B6-B→R7，B6 拆两步、R6 前置于 R5，14 节点为默认
+执行拓扑而非不变量（对应 `PLAN.md` 已裁决第 4 条）。本节保留为细则素材与验收口径，
+不再作为并行提案维护；冲突处以 `PLAN.md`「已裁决」为准，裁决由 R4 批写入
+`docs/DECISIONS.md`，各批交付记录按「批次交付与验收」纪律登记进本文件。
+
+**此前 B0–B2 实施记录：**
 2026-09-27 用户裁决职责解耦计划（D1–D10）取代 F9 与质量改进批次二的剩余项，成为唯一
 活动计划：批次表 B0–B6 见「职责解耦批次」；B0 登记与 B1 执行设施（前半 2026-09-27
 提交 5f74bd78、后半同日完成：截断即停 D6、`max_tokens` 131072、ExecutionProfile run
@@ -126,13 +137,370 @@ RC2 修复覆盖此前“第二轮再优化”的暂缓安排，不能重新把�
 仍未验证：B6 工程复验、用户对正式交付的
 验收（B6b）。B5 已闭合上传/API 接入面、失败类别与恢复状态展示及旧路径删除
 （fake 全链由 `tests/test_str06_product_entry.py` 两条链路驱动：进程内逐节点与
-真实 `run_step`/`novel.cli` 子进程；前端接入面归下一位工程师）。旧链读数中的「章级 prompt 53.9k→60.9k 线性增长」属旧章包形态（完整
+真实 `run_step`/`novel.cli` 子进程；前端接入及收尾见 B5 与收尾批记录）。旧链读数中的「章级 prompt 53.9k→60.9k 线性增长」属旧章包形态（完整
 IR＋完整前文）；D2 改章包后此问题随构造消失，新链读数在 B4（renderer 字节，免费）与
 B6（真实用量）重新报出。F6c 的 Hook 机械通过不证明不剧透、遵守材料顺序、POV 正确或
 吸引人；F5e 成书中的同源 Hook 连读属于开发性阅读，不能当作用户验收或一般化质量结论。
 原 Prepare 消费干跑和 Hook／Stage7 付费原型只能证明当时范围；F6c 冒烟的 RC3 design
 产物在 RC4 下拒读，不作为 F5e 输入。正文或章级回执不存在时，Assembly 明确未就绪，
 不制造成功状态。
+
+## 目标导向整改与优化执行方案（2026-09-28 提案）
+
+### 目的、边界与实施顺序
+
+本轮优先保证：源事实能正确表达、目标设计能完整送达 Writer、已购结果能可靠恢复、
+最终成书与当前接受集合一致。架构纯度、prompt 长度和吞吐优化都以这些目标为约束。
+保留短篇范围、四类语义真源、14 节点主链、章数与阅读序不变、独立章写手、只读监控页，
+不恢复 Stage6、前文正文依赖、生产语义 Judge 或人工逐 Stage 过闸。
+
+推荐路线是：先修已复现的信息损失，再完成跨章语义的显式消费和统一发布证明，最后做
+真实产品入口验收。Binding 暂保留现役冻结义务快照；不以删除快照或新增常驻评审调用
+换取表面上的职责整齐。与现役契约不同的建议在下表单列，实施前取得用户采纳并写入
+`docs/DECISIONS.md` 与 `docs/schema/str06.md`；本次仅交付文档，不提前修改可执行契约。
+
+| 提案取舍 | 推荐方案与原因 | 代价／另一选择 |
+|---|---|---|
+| 跨章目标、行动、问题、承诺的生命周期 | 由 TargetDesign owner 显式声明建立、消费与终止／仍开放；compiler 只执行声明，沿用现有 typed transition 与地址体系，避免另外造一份 Global | 需要升版 Design 语义协议和 canonical／IR；只把当前四份列表广播给每章，无法正确处理关闭与提前披露，不推荐 |
+| 同一地址多次改写后的读者确认 | 推荐确认绑定确认拍当时有效的那次事实建立；若要确认已被覆盖的历史事实，owner 显式引用该版本 | 地址本身不足以区分多个历史值；此细化须与 D4 核实并正式登记，不能由 compiler 按叙述文字猜测 |
+| 写作身份与验证身份 | 请求只绑定 Writer 真正看到的材料；回执分别绑定写作材料、验证材料／版本与正文，validator-only 变化先免费重验 | 现役 packet_sha256 仍包含验证材料；细化身份需同批修改回执、采用、恢复和 Stage7 消费，不可只删 hash 字段 |
+| 发布权威 | 将现有 CommitBundle 升级为多输出组的统一发布证明，免费与付费产物同规；专门业务检查继续存在 | 影响 Store、恢复、CLI/API/UI，需要故障注入与一次完整回归；保留专门规则可维持现状，但不能再声称 seal 是统一发布权威 |
+| 协议升级与已购采用 | 按实际改变的 semantic unit 升版；新增受限的现役 attempt 采用入口，只复用身份与证据完全一致的旧回答 | 现有跨根采用不能直接覆盖所有现役记录；未补入口前不能承诺免费复用。另一选择是新根全部重购，损失可核验的既购资产，不推荐 |
+| Binding 是否立即改为纯 edge | 本轮保留“Preserve 唯一语义 owner 的冻结义务快照＋Bind 只读映射边”；核实没有另一条可独立改写义务的正式入口 | 明确不满足理想文的纯 edge 定义。若坚持纯 edge，需将完整义务语义迁入 TargetDesign 的独立保留要求区，并同步 Preserve／Design／Bind／Guard／恢复；不得直接删义务分母。另经架构裁决立项 |
+
+**吸收登记（2026-09-28）**：A0–A6 已按下列对应并入 `PLAN.md` 批次——A0→R0
+（AUD-01/02 随 R1、AUD-03/04 随 R2、AUD-05 随 R6 转绿）；A1→R1；A2／A3→R2；
+A4 发布与恢复→R6，其中 A4a「现役记录受限采用」不立项（新协议无已购产物，B6-A
+实购重建，旧盘面只读保留）；A5→R4＋R5；A6→R5；B6→B6-A／B6-B；「后续优化」
+表→R7。未单列残留维持现役：Binding 纯 edge 不做（保留义务快照，见 `PLAN.md`
+设计原则「保留不动」）；同址多次改写后的读者确认版本规则不变，R2 落地时若需
+owner 显式引用历史版本，先经用户裁决。下表 A0–A6 及各小节保留原文作细则素材，
+状态与交付以 `PLAN.md` 批次为跟踪面，A0–A6 勾选框不再作为第二份活动清单维护。
+
+下表 A0–A6 是 B5 后、B6 前的整改提案，不替换历史批次编号；所有状态初始为未实施。
+生命周期、确认版本、身份契约、发布权威和新采用协议的实施依赖上表采纳。
+确定性缺陷的反例与修复可独立推进，
+不必等待 Binding 纯 edge 的讨论。B6 及后续 Golden 的既有授权、样本和关闭口径不因本提案改变。
+
+| 批次 | 交付物 | 依赖与完成门槛 |
+|---|---|---|
+| [ ] A0 反例与边界基线 | 将审计反例固化为正式测试，登记最终消费与恢复矩阵 | 第一批；旧行为确实失败，绿对照有效；确认上表待裁决项 |
+| [ ] A1 Stage2 关联无损 | typed 对象投影、无碰撞句柄、同一 registry 的关联与 canonical 编译 | A0 后可实现；完整勾选另依赖 A4a 的现役记录采用验收，合法关联真实发布并被 Stage4 消费 |
+| [ ] A2 逐消费点状态闭包 | 每次显式读取的值进入对应 Writer 输入，身份随真实消费改变 | A0；跨章／本场写后读／知识域／失效边界全部闭合；可与 A1 分文件推进 |
+| [ ] A3 跨章语义完整消费 | 持续目标、行动、问题、承诺的生命周期与章包投影 | A2＋生命周期方案采纳；无漏项、无提前作为已发生事实、关闭后不继续当开放项 |
+| [ ] A4 发布与恢复统一 | 多输出组封存、统一正式读口、免费补尾及旧记录受限采用 | 发布与采用方案采纳；A4a 可先独立验收，发布集成等待 A1–A3 形状冻结，不要求其先全部勾选 |
+| [ ] A5 产品与登记收口 | 编排、CLI、API、下载、前端、生命周期登记消费同一后端证明 | A1–A4；真实子进程 fake 全链、失败与恢复、刷新及重启读回一致 |
+| [ ] A6 最终工程基线 | 默认非 corpus 回归、契约五文件、前端四件与恢复证据 | A5；按最终代码统一验收，然后进入 B6a/B6b |
+| [ ] B6 真实验收 | 按最终版本和授权生成《夫君的报恩》，工程核验后用户通读 | A6；报价与授权、真实结果与质量结论分别记录，不用旧形态成书替代 |
+
+### A0：把已知缺口变成可执行验收
+
+审计基线为提交 `0e380364`（当时工作分支与本地 main 一致）。当日免费定向 102 项通过，
+0 失败、0 错误、0 跳过，包含真实 HTTP → Supervisor → CLI 子进程 → Stage7 → 服务重启
+读回；模型全部 fake。另做的内存及隔离盘面反例揭示下列缺口。102 项通过只证明原分母，
+不替代新增反例；临时日志不是长期唯一证据，A0 将反例及输入保存在正式测试中。
+
+| 编号 | 必须固化的反例 | 原行为与通过标准 |
+|---|---|---|
+| AUD-01 | 合法 StateTarget／EffectTarget 的人物、关系、world 输入 | 原投影将 typed 对象变成空 dict，prompt 显示 world；修复后各对象、关系方向与 key/value 原样到达关联输入 |
+| AUD-02 | 初态 bob.trust；同章两拍分别写 alice.trust_level 与 bob.trust_level，关联只选择 bob | 原跨拍同名句柄覆盖，compiler 将同一关联套给两拍并误拒；修复后两个句柄独立，合法 bob 关联可发布，alice 不受影响 |
+| AUD-03 | 前章建立口令，后章在具体 beat 读取，当前场不重写 | 原 compile/Guard 通过，但章包与 prompt 无值；改前章值后后章摘要不变。修复后值到达消费点且相关身份改变，无关章不变 |
+| AUD-04 | 当前四类合法非空字段；新协议另补完整生命周期样例 | 原添加字段后 WriterIR 完全不变；修复后每个已声明消费有真实输入；采纳生命周期契约后，再验证建立前、建立拍、有效期和关闭后 |
+| AUD-05 | fake 全链生成后，删除全部 CommitBundle，再只运行 Stage7 组装 | 原 14 份 bundle 全删仍可读且 assemble=ready；统一发布启用后正式消费必须拒绝，恢复可从原证据免费补尾再交付 |
+
+AUD-05 属拟采纳发布契约的反例，AUD-04 的新增生命周期义务同样先完成契约裁决再启用；
+当前四字段漏包仍按现役契约证明。不要把新业务规则改写成“早已要求如此”。
+这些反例均须走真实 producer/compiler、packet renderer 和消费端，
+不能只断言 helper 输出。A0 同时确认现役五态、章包摘要、请求身份、回执和发布证据各管什么，
+避免用一个 ready 布尔值包办所有状态。
+
+落点：`tests/test_str06_stage2_publish.py`、`tests/test_str06_chapter_closure.py`、
+`tests/test_str06_stage4_protocol.py`、`tests/test_str06_body.py`、
+`tests/test_str06_runtime_records.py` 与 `tests/test_str06_product_entry.py`。
+新增用例按真实职责登记到 `tests/suite_catalog.json`，保留原有正反例分母。
+
+### A1：修复源状态关联的表示边界
+
+改动入口：`novel/stages/stage2/associate.py`、`novel/stages/stage2/compile.py`、
+`contracts/schema/observation.py`、`novel/stages/chain.py`。先读
+`novel/stages/stage2/AGENTS.md`，保持 compile 是 Characters／Blueprint 唯一 writer。
+
+1. 状态目标投影接受契约声明的 typed 对象并显式序列化；未知类型、缺必要字段均精确报错。
+   world 是合法显式类型，不能拿 `{}` 兜底表示“推测是 world”。人物关系保留主客体方向。
+2. 按观察位置生成关联句柄，例如章、拍、该拍第几个 effect；key 是载荷，不承担唯一性。
+   book 初态使用自己的命名空间。编码仅由 compiler 生成，关联模型只选择已给闭集。
+3. 同一份 registry 同时服务 prompt、闭集检查和最终编译；每个句柄指向唯一原始 atom。
+   compiler 直接查 registry，不在另一处重写 occurrence 计数规则。构建时发现重复键即拒绝，
+   不依赖 dict 后写覆盖。检查数量守恒与往返定位；不得用“同 key”自动归并状态维度。
+4. 关联配对保留同对象、方向、时间和作用域约束；同义性仍由 associate 决定。
+   原样保留 missing／ambiguous／undecided，问题定位到 node、章、拍、句柄和源证据。
+5. 将 associate 协议与 book／chapters／names 的协议分别管理。本次改变句柄含义和输入材料，
+   associate 必须升版；没有变化的三类观察协议与 prompt 不顺带变更。同步 schema 冻结账、
+   artifact 版本登记和实际消费者；canonical 若没有形状变化，不为迁移方便虚构升版。
+
+恢复边界：旧关联回答建立在丢对象／丢条目的空间上，不做句柄字符串替换后继续采用。
+已损失的语义不能由 compiler 猜回。当前 owner patch 要求原基线请求身份匹配，不能假定
+它已经支持跨协议修订；可在新闭集上明确形成新的语义修订，由 A4a 登记跨版本证据与新请求
+关系并重新验收，或经授权执行 associate 定向新请求。新语义修订不是旧回答缓存命中，
+禁止只替换旧句柄或给旧请求重贴身份。
+book／chapters／names 仅在请求身份、schema 与原响应证据完全匹配时有资格复用。
+当前候选契约身份闸与现役跨根采用能力仍需 A4 补齐；未实际走通前报告“具备复用条件，
+采用入口待完成”，不能报告“已免费迁移”。新根重建，不覆盖旧证据或清空 ledger。
+
+完成条件：AUD-01/02 转绿；同对象跨拍多次赋值、不同对象同键、反向关系、同拍多 effect、
+跨章同维与未决配对均有正反例。真实 Stage2 五节点发布双真源，源 fold 值正确，Stage4
+直接消费 canonical；未改变的观察请求逐字一致。A1 核心实现可先验收，完整勾选等待 A4a，
+期间记录“核心实现完成、迁移验收待完成”。采用验收必须从现役 B1 记录生成旧根，经新根
+真实入口证明 book／逐章 chapters／names 免费采用，旧 associate 不直接采用，新关联按
+新请求执行；第二次相同请求零新购。fake transport 精确核对调用和采用计数，证据损坏或
+账未知时阻断，不默默回退到付费购买。
+
+### A2：使每次显式读取真正到达 Writer
+
+改动入口：`novel/stages/common.py` 的读取解析与 Context 投影、
+`novel/stages/stage4/compile.py`、`novel/stages/stage4/fold.py`、
+`novel/stages/stage4/book_ir.py`，以及 `contracts/schema/context.py`、
+`contracts/schema/book_ir.py`、`contracts/schema/execution.py`、`contracts/schema/state.py`。
+身份与回执调整还须同批覆盖 `contracts/schema/receipt.py`、`novel/stages/stage5/body.py`、
+`novel/stages/stage7/assembly.py`、`novel/stages/chain.py` 的摘要、采用、恢复与组装检查。
+
+1. 统一产出“已解析读取”：消费场／拍、typed 地址、该时点实际值、状态类别、认知模式、
+   作用域和建立来源。Guard、Writer 投影与依赖计算使用同一结果；不再存在只验证到值、
+   却因 `at` 非空将值丢弃的分支。来源细节放验证／审计视图，Writer 只看写作所需内容。
+   依赖边从实际读到的建立来源生成，删除独立 `last_writer` 扫描形成的近似边；Guard 对账
+   每条声明恰有一个正确时点的解析结果，并已进入对应 IR，而不只验证已有 entry 合法。
+2. 入场读取按场前状态解析；拍级读取按该拍之前的状态解析，遵守先读旧值、后写新值。
+   本场更早的写入应遮蔽上游旧值，当前拍／未来拍的写入不能倒流。把拍级解析值放到
+   对应 BeatIR 的明确输入位置，不把同一地址多个时点的不同值压成一份 entry 值。
+3. knowledge 必须带 holder 与目标侧认知模式 known／suspected／heard／believes；
+   传闻、怀疑或相信不能升级为世界事实。源侧模式转换必须经显式语义声明与契约处理。
+   unknown、unset、合法空值、未建立和作用域失效分别处理；保持现役合法性判据，
+   不以空值默认通过，不从源小说或前章正文补猜。
+4. 未来保护从章包实际引用的地址推导；事实成立、角色得知、读者确认分别保持时点。
+   补足语义输入不意味着允许 Writer 提前确认秘密；保护信息与实际读取值共同到达消费者。
+   同址重写的确认版本规则按上表采纳后执行，覆盖解除后重建与场景覆盖；未明确的历史
+   版本引用回 owner，不把某一版本的确认自动套给该地址的所有值。
+5. 章包摘要包含真实写作内容与契约版本；provider 请求身份由最终实际请求构造。
+   验证输入、验证版本与正文 hash 由回执单独绑定。调试来源、时间戳、seal 等运行元数据
+   不混入语义身份；仅 validator 变化走免费重验，不伪造成 Writer 输入变化而重购。
+   这是待实施的身份／回执契约细化：现役 packet_sha256 仍包含验证材料，必须显式升版并
+   同步全部摘要消费者，不得为让旧回执通过而删校验或把旧摘要改贴到新包。
+
+完成条件：AUD-03 转绿，且覆盖前章读取在 entry／具体拍、本场先写后读、同地址多次读写、
+跨场失效、knowledge、unknown/unset、未确认秘密。两类变形测试必须同时成立：改变真实
+上游依赖后，最终 prompt 与受影响章身份相应改变；改变无关未来信息时，当前章 prompt
+和身份不变。还要验证旧回执拒绝、未变章继续采用、受影响章有明确恢复入口。
+
+测试主入口：`tests/test_str06_chapter_closure.py`、`tests/test_str06_execution_ir.py`、
+`tests/test_str06_fold_guard.py`、`tests/test_str06_body.py`、`tests/test_str06_invariants.py`。
+不能仅给 entry 视图补值后宣布完成，必须检查最终 renderer 输出及 Stage5 的真实请求。
+
+### A3：把跨章目标、行动、问题与承诺接入状态机
+
+改动入口：`contracts/schema/design.py`、`contracts/schema/execution.py`、
+`contracts/schema/context.py`、`contracts/schema/book_ir.py`，以及
+`novel/stages/stage4/design.py`、`novel/stages/stage4/fold.py`、
+`novel/stages/stage4/compile.py`、`novel/stages/stage4/book_ir.py`、`novel/stages/common.py`。
+同步检查 `novel/stages/stage4/hook.py`、`novel/stages/stage4/hook_context.py` 与
+`novel/stages/stage5/hook_writer.py` 的真实消费，不能只修正文而让 Hook 仍漏掉相关承诺或泄漏答案。
+
+现有四字段不足以免费推导完整生命周期：standing_goals 只有人物与文本；其余三个
+只声明 started_at／planted_at／made_at，没有结束、回答、兑现或失效的位置，也未声明
+所有消费位置。因此不能从自然语言猜完成时间，也不能把“字段存在”当作章闭包完成。
+
+推荐契约把“条目定义”与“状态变化”分开，但仍都归 TargetDesign：条目保存一次语义内容，
+变化进入显式 transition，消费通过引用声明；编译器生成正式 ID 和时间坐标。
+不要另建可人工改写的 GoalsTruth／PromiseTruth。具体字段形状在采纳方案后由 canonical
+schema 定义，本文不另存第二份 JSON 契约。
+
+| 类别 | semantic owner 必须决定 | compiler 必须交付 |
+|---|---|---|
+| 持续目标 | 是整书稳定约束，还是会改变的在途目标；动态目标何时建立、改变／放弃，哪些场消费 | 稳定约束按正式书级范围投影；动态目标按状态与消费时点投影，不能一律广播 |
+| 进行中行动 | 启动、完成／中断／结尾仍在进行，以及后章何处接续 | 当前进展与本章应发生的 transition；完成后不继续称“正在进行” |
+| 开放问题 | 向哪些角色／读者打开、回答／取消／结尾保持开放及消费位置 | 谁此时知道什么、哪些仍未解决、何时允许回答；开放问题本身不泄漏答案 |
+| 承诺 | 承诺主体与对象、作出、履行／违背／解除／结尾仍有效及消费位置 | 本章生效的约束与需要落实的变化；未作出前不能当已承诺，履行与违背不混同 |
+
+“尚未解决”是合法显式状态；没有终止位置不能默认解释为某种结局。章节按实际消费时点
+携带需要的条目状态、显式引用的历史／关闭结果、本章要执行的变化及保护条件；本章较晚才建立的条目须
+锚定到对应拍，不能提前写入入场状态。未解析引用或互相矛盾的生命周期回到 Design owner，
+不得删字段后放行。词面与因果含义由 LLM 决定，ID、排序、当前态、影响集合由 compiler 计算。
+
+迁移要求：新增语义无法从旧 Design 确定性补齐，旧记录只读保留；允许明确 owner patch
+补语义或授权后的 Design 定向修订，再免费重编译。不能用全部空数组填充新版本，不能
+把缺失语义记成合法空。协议、canonical、IR／renderer 与回执的变化分别版本化，避免一次
+统升所有节点 prompt。A2 的已解析读取实现复用到本批，不另写平行的时间线解释器。
+
+完成条件：AUD-04 转绿；四类逐项覆盖开启前、开启拍、跨章携入、关闭拍、关闭后、结尾
+仍开放、错误锚点、不同知情者和读者揭示。测试必须证明增加、修改、删除一个实际被消费
+的条目会改变相应 Writer 输入；仅导航或无关未来条目变化不扩大失效。同步覆盖
+`tests/test_str06_hook.py` 的 Hook 设计、Context、成文与恢复。使用纯人工构造的
+最小两章样例即可免费验结构，效果是否自然留给 B6 阅读，不能据 schema 合法声称质量提高。
+
+### A4：统一发布证明，并把免费恢复先做完
+
+设施入口：`contracts/schema/workflow.py`、`novel/store.py`、`novel/work_units.py`、
+`novel/llm/paid_requests.py`、`novel/paths.py`、`novel/stages/chain.py`。
+推荐复用并升版 CommitBundle，不增加第二个发布数据库、独立 published 标志或第二本成本账。
+Runtime 的 send 继续只返回耐久回答，不接受领域 compile／validate 回调。
+
+| 子项 | 可独立交付的条件 |
+|---|---|
+| A4a 现役记录受限采用 | 先补当前 WorkUnitAttempt／blob 的跨根读面与显式修订证据；用 A1 的新协议做真实采用验收，交回 A1 勾选依据；不等待全部发布改造 |
+| A4b 提交契约与恢复原语 | 明确多输出组、幂等提交身份、prepare 字节与封存验证；免费补尾先于硬闸开放 |
+| A4c 正式 writer／reader 接入 | A1–A3 形状冻结后，全部产物组接同一发布口，真实读口消费同一证明，删本批旁路 |
+| A4d 故障与产品验收 | 提交窗口、并发、版本变更、坏证据、重启、采用与费用全部闭合，再交 A5 |
+
+发布完整性与业务有效性是两件事：seal 证明某组输出按某组输入完整发布，不能证明小说正确、
+回执仍新鲜或交付当前可用。读取依次核对发布组、契约／引用与业务当前性；既有章包、正文
+摘要、NameMap 残留和 delivery manifest 检查继续保留。Stage0/1 维持现有机制，本批统一范围
+是现役 STR-06 Stage2/4/5/7 正式产物，不借机扩大整层重构。
+
+**提交协议与恢复：**
+
+1. 根据唯一 writer 登记输出组与依赖。Stage2 两真源同组；免费 Stage4 编译的一组派生
+   输出同组；每章正文＋章回执、Hook＋Hook 回执、最终 TXT＋delivery manifest 各自同组。
+   不把不同 semantic owner 强行捆成整书事务。观察材料等下游正式读取的付费中间产物也
+   有发布证明；原响应和诊断文件保持执行证据身份。
+2. prepare 耐久保存确切待写字节、输入版本与摘要、输出摘要、契约和显式采用引用。
+   免费输出允许没有付费引用；不能继续仅在 `refs` 非空时才封存。
+   同一准备记录重试沿用同一提交身份，不因 created_at 或进程重启制造重复业务版本。
+3. 只在短提交窗口持锁，复验读集未变化，再写组内输出并逐字回读，最后原子写 seal。
+   LLM 调用不持有提交锁。正式读口取得一致快照并使用该快照字节，防止校验后又读取一份
+   已被替换的内容；并发章不能混用彼此的回执、provenance 或费用归属。
+4. 无 seal、seal 损坏、组内缺文件或摘要不符都不能作为正式输入。诊断 inspect 可展示
+   未发布证据，但须明确状态，不能经 API、下载或 orchestrator ready 反向放行。
+   崩溃导致半组覆盖时允许停在可恢复状态，不拼接旧组与新组冒充完整发布。
+5. 历史提交不可改写；当前版本选择有显式组身份与版本关系，不凭 mtime 或目录排序猜。
+   没有匹配的完整发布组就报告缺口；元数据索引只能由封存记录重建，不成为第二权威。
+6. seal 前崩溃先复验输入、契约、compiler 与 validator 版本；一致才用 prepare 的确切
+   字节补尾，处理版本改变则按当前规则免费重编译／重验。prepare 缺失时，免费派生物
+   从完整有效的正式输入重算；付费语义或正文还须有准确的原耐久回答与采用证据。
+   输入变化则旧 prepare 失效，重新计算真实受影响范围；unknown attempt 先对账，
+   不自动重购。不得为任意孤立文件直接“补盖章”。
+
+特别区分“历史已采用”与“当前已发布”：旧 bundle 曾合法采用某 paid turn 的事实，不能因
+新输出覆盖旧路径而撤销，更不能重置额度。当前消费才要求输出与当前发布组匹配并通过
+currentness。原响应、accepted prose、历史 seal、ledger 保留，未变输入的购买资格不丢失。
+
+**受限采用与版本切换：**
+
+- 为本次登记的旧版本提供显式来源根读取，核对现役 SemanticRequest／ContentRevision／
+  WorkUnitAttempt blob、原响应摘要和 ledger 成本关联。当前旧 request 文件采用入口不能
+  直接当作这项能力已存在；测试要从现役 B1 记录生成旧根，再经真实新根入口采用。
+- 原请求字节、模型／参数、来源身份与协议一致才复用回答；改变材料或要求的节点回到所属
+  owner。只读旧 schema 用于迁移诊断，不让旧 canonical 直接混入新消费者。
+- 将发布摘要与语义消费摘要分开：增加 seal 或补运行元数据不应改变未变的 Writer 请求。
+  字段／材料／renderer 真改变时，按实际章包重新判断；验证器变化先免费重验。
+- 在本文件登记受限 reader 的支持版本、调用入口、退出条件。它只服务显式迁移，完成旧根
+  采用且没有在途恢复后删除；不扩成隐式通用迁移，也不改旧根和旧账。
+
+必须先完成上述免费恢复入口，再启用新的发布硬闸（I-42）。完成条件包含：prepare 前后、
+第一个输出写后、全部输出写后、seal 前后、采用记账前后的逐窗口崩溃；缺／坏 seal、错
+digest、输入竞争、两章并发、旧根采用、费用归属、重启不重置、零新购补尾。AUD-05 需验证
+“拒正式消费 → 免费恢复 → 重新交付”，不能只把 ready 改为 false。
+
+### A5：让真实消费者与工程登记收口
+
+入口：`novel/orchestrator/state.py`、`novel/orchestrator/delivery.py`、
+`novel/views/str06.py`、`novel/api/routes/str06.py`、`contracts/schema/api.py`、
+`contracts/invariants.py`、`web/src/types/str06.ts`、
+`web/src/screens/str06/Str06MonitorScreen.tsx` 及现役 fixture。
+
+- 编排只消费节点完成／恢复证明，错误回到精确 owner，不自动推理怎样修小说。
+  核查整书 Agent 终验当前仍保留的退役 unknown 路径，使真实新链终态、交付视图与下载
+  共同使用后端证明；退出码、文件存在、manifest present 都不能单独宣告可交付。
+- Stage5 集合恢复和 Stage7 逐章核对接 A4 正式快照；只补需要处理的章，保留他章合法提交。
+  变动 NameMap 只触发相应变换与交付，正文不回流到 Characters／Blueprint／Design。
+- API 分开表达 missing、unpublished、invalid、stale、unknown 和业务接受结果，不把它们
+  粗暴压成同一个失败或空列表；公开枚举的具体形状先在后端契约定义，UI 只消费结论。
+  新的“未发布”是持久化状态，不擅自替换现有业务五态。同步 types、fixtures、路由与测试。
+- 更新生命周期登记中“完整前文／已提交章前缀／chapter_prefix_replay”等旧定义为真实章包
+  与集合恢复语义；检查调用方与公开枚举后再改名，不能只改字符串破坏恢复兼容。
+  当前说明同步到 schema 文档；历史执行记录标为历史，不删除真实旧证据。
+- 清理仅限本轮造成的废路径、重复投影与 adapter；不要为目录整齐重排所有 Stage 或拆一轮
+  无行为收益的模块。现役纯 compiler、validator、repository 的边界用依赖测试保护。
+
+完成条件：真实 HTTP 上传 → 自动编排 → 真实 CLI 子进程 → 发布组 → Stage7 → 下载，
+均使用 fake transport；增加漏依赖、未封存、缺章、Hook 失败、NameMap 修改、服务重启场景。
+分别检查进程终态、后端业务结论、字节与 UI 状态；不能继续只断言下载文件存在。
+新硬闸通过现有 CLI／恢复控制面可解除，Stage 屏保持只读，不新增人工批准按钮。
+
+### A6：验证矩阵、执行命令与批次交付
+
+| 批次 | 定向验证入口（按真实变更补直接消费者） | 本批不得省略的证据 |
+|---|---|---|
+| A1 | stage2 protocol／owners／publish、source、workflow、受影响 Stage4 | 句柄唯一与数量守恒、真实合法发布、错误对象拒绝、原观察请求不变 |
+| A2/A3 | chapter_closure、stage4_protocol、execution_ir、fold_guard、body、invariants | 值真实出现在 renderer、两向失效测试、四类语义全生命周期、免费恢复 |
+| A4 | runtime_records、store、work_units、workflow、body、naming、views | 每个崩溃窗口、组内一致性、现役记录采用、坏证据拒绝、费用不重复 |
+| A5 | product_entry、API HTTP/screens、views、CLI dispatch、orchestrator、前端四件 | 真子进程 fake 全链、终态／下载一致、刷新与重启、失效恢复 |
+
+表中模块简称对应现役测试文件，实际执行先用选择报告核对范围；新测试模块须登记。
+每个形状稳定的 schema／节点／API 批次补契约 §9.5 五文件。A1–A5 子批次使用定向证据，
+不因提交或登记重复全仓。A4 涉及共享持久化；其完整回归是否提前执行按根指南评估，
+影响无法用明确消费者闭合时必须提前跑，不能以等 A6 为理由排除未知影响。
+
+A6 按最终生产代码、契约与测试基础设施集合执行一次默认非 corpus 回归；前端已改变则
+执行 test/typecheck/seams/build。工程基线此后若再改，按 B6a 规则重验，不复用过期成绩。
+corpus、真实成书阅读、Golden 分别报告；机械通过不证明文学质量。
+
+Windows 使用 `novel_refactor`，agent 的 pytest 按 `tests/AGENTS.md` 在沙箱外执行；
+当前 worktree 路径过长，固定复用 `E:/_tr` 与 `.test_cache`，不得并行跑共享根。
+以下为执行配方，不表示本次写文档已经运行整改测试：
+
+```powershell
+# A1 定向起点；按最终影响补消费者，不使用它冒充完整验收。
+& 'D:\Miniconda\envs\novel_refactor\python.exe' -B -m pytest -q -n 0 -x tests/test_str06_stage2_protocol.py tests/test_str06_stage2_owners.py tests/test_str06_stage2_publish.py tests/test_str06_source.py --basetemp=E:/_tr -o cache_dir=.test_cache --junitxml=.test_cache/str06-a1.xml
+
+# 形状稳定后的契约五文件。
+& 'D:\Miniconda\envs\novel_refactor\python.exe' -B -m pytest -q -n 0 tests/test_docs_references.py tests/test_coverage.py tests/test_rules_registry.py tests/test_hard_counterexamples.py tests/test_ingest_fixtures.py --basetemp=E:/_tr -o cache_dir=.test_cache --junitxml=.test_cache/str06-contract.xml
+
+# A6 最终工程回归；不再加路径或缩小分母的选择条件。
+& 'D:\Miniconda\envs\novel_refactor\python.exe' -B -m pytest -q -n 4 --dist loadgroup -m "not corpus" --basetemp=E:/_tr -o cache_dir=.test_cache --junitxml=.test_cache/str06-engineering.xml
+
+# 在 web 目录依次执行。
+npm run test
+npm run typecheck
+npm run seams
+npm run build
+```
+
+每批交付必须在本节更新：状态／提交、契约版本、受影响请求与产物、反例编号、准确的
+通过／失败／skip 分母、真实消费与恢复证据、剩余问题及下一批。每条 adapter 都有删除条件。
+文档、代码、测试闭合后才能勾选；本轮文档完成不勾选 A0–A6。
+
+### B6 执行与后续优化次序
+
+1. A6 后冻结代码、协议、配置、输入和输出根。先盘点可核验的已购回答与不可采用节点，
+   按实际章数、模型参数、重试规则与剩余额度给出会话报价；付费与正文外发分别授权。
+   仍用 `NOVEL_DATA`／`NOVEL_CORPUS` 读取指定 Workbench，`NOVEL_OUTPUT` 独立输出，
+   不覆盖源语料或旧验证根。本次编写方案没有核查这些语料与旧输出，记为“没查”。
+2. 从真实产品入口生成《夫君的报恩》。失败定位 node/item：确定性缺陷免费修；语义缺口
+   回所属 owner 窄修订；pending／unknown 先恢复。不得为了拿到成书临时关闭新闸或整书
+   反复重购。逐调用保留 provider/model、耗时、token、reasoning、缓存与未知费用。
+3. 开发 agent 在验收会话中先核查章连续非空、回执与发布组、改名零残留、交付字节、
+   下载、重启恢复、ledger；再离线通读全书和 Hook，对照源书与 F5e 基线，给用户当前
+   版本成书与问题记录。这是开发性验收，不给整书 Agent／Runtime 新增语义评审节点。
+   阅读重点为事实／因果／知情／揭示，以及转场重开、重复交代、无名细节冲突、声线漂移。
+   - **人工阅读验收协议（占位）**：维度、记录方式与归因取值的协议全文见 `PLAN.md`
+     「人工阅读验收协议」节；R4 批正式登记进本节，B6-A 与 B6-B 共用。上文阅读重点是
+     工程核查与开发性阅读视角的补充，协议登记后以协议维度为准，不另立第二份维度表。
+4. 用户通读结论绑定确切成书版本。遵守 D1/D11：工程缺陷修复，文学意见登记为下一轮输入；
+   已提前合入 main 不表示 B6 完成。机械回执仍保留语义未评，不由免费 Guard 代签质量通过。
+5. STR-06 关闭后的文学优化仍依现有“本轮之后”执行，再做 D10 两本短篇 Golden；
+   B6c 保留为该后续质量工作编号，不把它提前当作本提案的常驻生成节点或更改关闭条件。
+
+后续优化按实证推进，不与 A1–A6 混为无边界重构：
+
+| 顺序 | 优化对象 | 决策证据与约束 |
+|---|---|---|
+| 质量优先 | 漏保／过保、源结构泄漏、目标因果、衔接、声线和导演说明 | 从 B6 的具体章／拍反例定位 Source、Design、Binding 或 Writer；先确认章包是否已充分提供语义，再改所属 prompt；不让 Writer 代做缺失规划 |
+| 输入精度 | 无关人物声线、重复约束、重复状态与冗长协议 | A2/A3 完整后统计实际 renderer 字节与真实 token；只按显式依赖裁剪。全书声线现为正式书级材料，收窄需同步契约和对照验证；不截断、概括掉必要事实 |
+| 付费效率 | 局部失败重跑、相同请求复用、重试与并发 | 先看请求身份与采用命中、429/unknown、活跃时间和成本分母，再调槽位；并发度不进语义身份。保留 D6 上限与截断即停，不降 effort 掩盖设计问题 |
+| 质量回归 | 两本固定短篇的六维评价 | 先升级 `tests/golden.py` 的退役 rubric 引用，再冻结样本、baseline、评价协议和成本；人工为主，模型辅助另授权；评价变化先重评现有成书，不自动重生成 |
+
+执行方案的最终成功标准是：已声明语义完整到达实际消费者，未声明的语义不被确定性代码
+猜造；无关改动不扩大付费失效；未发布或证据不全不能伪装交付；真实成书的工程结果与
+文学评价分别有证据。到达这一状态后再按测量结果优化成本与速度。
 
 ## 批次交付与验收
 
