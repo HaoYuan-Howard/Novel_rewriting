@@ -18,7 +18,15 @@ Stage7 交付、页面刷新与服务重启读回一致的 fake 全链钉在
 `load_config()` 重读的最后残留）删除；`nodes.validate_run` 的旧链逐节点分支与
 主操作互斥表、ledger 的旧链 prepared recovery 审计族、consumption 的
 stage4/5/6/7 死投影函数随之清偿；test_store 旧链 store 族红账（40 项）随采样面
-换轨（NameMap v5×canonical Characters、names×book 观察）清零。
+换轨（NameMap v5×canonical Characters、names×book 观察）清零。**B5 收尾批
+（2026-09-28）**：终审遗留 S-05 尾项清偿——consumption 的
+`stage4_plan_blueprints`／`stage7_hook`／`character_knowledge_reference`
+三个零调用方死投影删除（后两者曾属旧链 stage2.source／stage7.rename 注册位），
+陈旧 docstring 与旧链分节头更正；run 视图补失败类别与盘面证据投影——
+`Str06RunView` 直投影 `workflow_status.json` 的失败形状（`failure_kind`／`detail`，
+ExecutionError 另带 `error_code/stage/node/item/phase/context`）与
+`runtime/body_failures.json`、`runtime/delivery/assembly_report.json` 两份盘面
+留证（前端 str06 监控屏可展示失败类别与 item 定位）。
 **B2 前半（2026-09-27）已落地注册面**：`contracts/invariants.py::NODES`
 扩为 14 个公开节点（Stage2 五节点，`str06.stage2.source` 退役），观察与关联协议
 （`contracts/schema/observation.py`）与 Resolver（`novel/stages/stage2/resolver.py`）
@@ -196,7 +204,8 @@ ChapterWriterPacket
   与当前编译出的章包摘要逐章核对（分类与逐条问题共用
   `novel/stages/stage7/assembly.py::_binding_problems`）：有效／缺失／拒绝／未知／
   失效（stale＝接受态回执但章包换版或正文脱钩，须重做、不是缺失）分开列进
-  `runtime/delivery/assembly_report.json`；not_ready 不落新交付、旧 manifest 原样。
+  `runtime/delivery/assembly_report.json`（收尾批起随 `Str06RunView.assembly_report`
+  直投影进监控面，五态与逐条问题原样转出）；not_ready 不落新交付、旧 manifest 原样。
   乱序完成得到相同有序交付（组装按阅读序加章标记、身份按有序
   `(chapter_ordinal, prose_sha256)` 派生，并发完成顺序不影响交付字节）；Hook 失败停
   在 `str06.stage5.hook`，章提交与已交付字节原样保留，恢复输入后全链零新购复原。

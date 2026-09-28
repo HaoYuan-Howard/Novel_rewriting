@@ -213,12 +213,59 @@ export interface Str06Epoch {
   session_run_id: string | null
 }
 
+/** 章级局部失败留证（B4）：runtime/body_failures.json 的只读投影，item 是章序。 */
+export interface Str06BodyFailureChapter {
+  chapter_ordinal: number
+  failure_kind: string
+  detail: string
+}
+
+export interface Str06BodyFailuresView {
+  present: boolean
+  chapters: Str06BodyFailureChapter[]
+}
+
+/** 章就绪五态（I-42）：unknown 不作零；stale（回执在、绑定不成立）不是 missing。 */
+export interface Str06BodyAccess {
+  accepted: number[]
+  missing: number[]
+  rejected: number[]
+  unknown: number[]
+  stale: number[]
+}
+
+export interface Str06AssemblyOutcome {
+  status: string | null
+  reason: string | null
+  delivery_identity: string | null
+}
+
+/** runtime/delivery/assembly_report.json 的只读投影（Stage7 集合核对）。 */
+export interface Str06AssemblyReportView {
+  present: boolean
+  accepted_body: boolean | null
+  body_access: Str06BodyAccess | null
+  chain_problems: string[]
+  assembly: Str06AssemblyOutcome | null
+}
+
 export interface Str06RunView {
   candidate: string
   present: boolean
   status: string | null
   failed_node: string | null
   accepted_body: boolean | null
+  /** 失败形状直投影（workflow_status.json）：任何失败带 kind/detail；ExecutionError 另带 error_* 六字段。 */
+  failure_kind: string | null
+  detail: string | null
+  error_code: string | null
+  error_stage: string | null
+  error_node: string | null
+  error_item: string | null
+  error_phase: string | null
+  error_context: Record<string, unknown> | null
+  body_failures: Str06BodyFailuresView | null
+  assembly_report: Str06AssemblyReportView | null
   epoch: Str06Epoch | null
   nodes: Str06Node[]
   cost: Str06LedgerCost | null

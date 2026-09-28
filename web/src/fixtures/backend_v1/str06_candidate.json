@@ -15,6 +15,32 @@
   "status": "delivered",
   "failed_node": null,
   "accepted_body": true,
+  "failure_kind": null,
+  "detail": null,
+  "error_code": null,
+  "error_stage": null,
+  "error_node": null,
+  "error_item": null,
+  "error_phase": null,
+  "error_context": null,
+  "body_failures": null,
+  "assembly_report": {
+   "present": true,
+   "accepted_body": true,
+   "body_access": {
+    "accepted": [1, 2],
+    "missing": [],
+    "rejected": [],
+    "unknown": [],
+    "stale": []
+   },
+   "chain_problems": [],
+   "assembly": {
+    "status": "ready",
+    "reason": "ok",
+    "delivery_identity": "53d4885521e612b7be0d606cb55e3ffd387052d6dfdb7b383bc24870fec83a9c"
+   }
+  },
   "epoch": {
    "epoch_id": "95478c68ab0a210f5ff791fd36b3417eb88599c9c21be8bb3d4d89803f728aa4",
    "ordinal": 1,

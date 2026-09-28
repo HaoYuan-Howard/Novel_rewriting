@@ -23,7 +23,9 @@ from pathlib import Path
 from typing import Any
 
 from contracts.schema.api import (
+    Str06AssemblyOutcomeView, Str06AssemblyReportView,
     Str06BlueprintBeatView, Str06BlueprintChapterView, Str06BlueprintView,
+    Str06BodyAccessView, Str06BodyFailureChapterView, Str06BodyFailuresView,
     Str06CandidateList, Str06CandidateSummary, Str06ChapterReceiptView,
     Str06ChapterView, Str06CharacterView, Str06CharactersView,
     Str06DesignBindingView, Str06DesignChapterView, Str06DesignHookView,
@@ -46,6 +48,10 @@ RUN_DIRNAME = 'run'
 WORKFLOW_REL = 'runtime/candidate_workflow.json'
 #: run 级执行状态（业务状态的唯一来源）。
 STATUS_REL = 'runtime/workflow_status.json'
+#: 章级局部失败留证（B4：`str06.stage5.body` 并发收集后按章落盘）。
+BODY_FAILURES_REL = 'runtime/body_failures.json'
+#: Stage7 集合核对报告（B4 后半：五态按 item）。
+ASSEMBLY_REPORT_REL = 'runtime/delivery/assembly_report.json'
 #: 章序模式（与候选产物表的 `{nn}` 一致）。
 #: 书名模式（与候选产物表的 `{title}` 一致）。
 _TITLE = re.compile(r'^(.*)_rewriting\.txt$')
@@ -439,8 +445,54 @@ def _ledger_cost(candidate_root: Path) -> Str06LedgerCostView:
             for node, node_rows in sorted(per_node.items())))
 
 
+def _body_failures_view(run: Path) -> Str06BodyFailuresView | None:
+    """`runtime/body_failures.json` 直投影；无文件返回 None（不冒充合法空值）。
+
+    章序键由唯一 writer（`run_body`）以 `str(int)` 落盘；畸形文件在构造处
+    fail fast（I-34），不静默丢条——失败留证丢一条比整面 500 更坏。
+    """
+    payload = _inspect(run, BODY_FAILURES_REL)
+    if payload is None:
+        return None
+    chapters = payload.get('chapters') if isinstance(payload, dict) else None
+    if not isinstance(chapters, dict):
+        chapters = {}
+    return Str06BodyFailuresView(
+        present=True,
+        chapters=tuple(
+            Str06BodyFailureChapterView(
+                chapter_ordinal=int(ordinal),
+                failure_kind=str(row['failure_kind']), detail=str(row['detail']))
+            for ordinal, row in sorted(chapters.items(), key=lambda kv: int(kv[0]))
+            if isinstance(row, dict)))
+
+
+def _assembly_report_view(run: Path) -> Str06AssemblyReportView | None:
+    """`runtime/delivery/assembly_report.json` 直投影：五态按 item、结论与逐条问题。"""
+    payload = _inspect(run, ASSEMBLY_REPORT_REL)
+    if payload is None:
+        return None
+    access = payload.get('body_access') if isinstance(payload, dict) else None
+    outcome = payload.get('assembly') if isinstance(payload, dict) else None
+    return Str06AssemblyReportView(
+        present=True,
+        accepted_body=payload.get('accepted_body'),
+        body_access=Str06BodyAccessView(
+            accepted=tuple(access.get('accepted') or ()),
+            missing=tuple(access.get('missing') or ()),
+            rejected=tuple(access.get('rejected') or ()),
+            unknown=tuple(access.get('unknown') or ()),
+            stale=tuple(access.get('stale') or ()))
+        if isinstance(access, dict) else None,
+        chain_problems=tuple(payload.get('chain_problems') or ()),
+        assembly=Str06AssemblyOutcomeView(
+            status=outcome.get('status'), reason=outcome.get('reason'),
+            delivery_identity=outcome.get('delivery_identity'))
+        if isinstance(outcome, dict) else None)
+
+
 def run_view(base: str | os.PathLike[str], candidate: str) -> Str06RunView:
-    """候选根总览：workflow 状态、epoch、节点盘面事实与成本账。"""
+    """候选根总览：workflow 状态、失败形状、章级失败留证、集合核对报告与成本账。"""
     run = _run_dir(base, candidate)
     if run is None:
         return Str06RunView(candidate=candidate, present=False)
@@ -456,6 +508,16 @@ def run_view(base: str | os.PathLike[str], candidate: str) -> Str06RunView:
         candidate=candidate, present=True,
         status=status.get('status'), failed_node=status.get('failed_node'),
         accepted_body=status.get('accepted_body'),
+        failure_kind=status.get('failure_kind'),
+        detail=status.get('detail'),
+        error_code=status.get('error_code'),
+        error_stage=status.get('error_stage'),
+        error_node=status.get('error_node'),
+        error_item=status.get('error_item'),
+        error_phase=status.get('error_phase'),
+        error_context=status.get('error_context'),
+        body_failures=_body_failures_view(run),
+        assembly_report=_assembly_report_view(run),
         epoch=Str06EpochView(
             epoch_id=epoch_payload['epoch_id'], ordinal=epoch_payload['ordinal'],
             reason=epoch_payload['reason'],

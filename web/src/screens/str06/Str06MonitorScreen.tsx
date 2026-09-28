@@ -4,6 +4,11 @@ import { Panel, PaneHeader, SectionTitle } from '@/components/ui/Panel'
 import { Prose } from '@/components/ui/Prose'
 import { LoadFailed } from '@/components/state/States'
 import { useStr06Monitor } from '@/hooks/useStr06Monitor'
+import type {
+  Str06AssemblyReportView,
+  Str06BodyFailuresView,
+  Str06RunView,
+} from '@/types/str06'
 
 type Monitor = ReturnType<typeof useStr06Monitor>
 
@@ -71,6 +76,9 @@ function RunPane({ run }: { run: NonNullable<Monitor['run']['data']> }) {
           : null}</>}
       />
       <div className={'flex flex-col gap-12 px-18 py-16'}>
+        {run.failure_kind ? <FailureShape run={run} /> : null}
+        {run.body_failures ? <BodyFailures failures={run.body_failures} /> : null}
+        {run.assembly_report ? <AssemblyReport report={run.assembly_report} /> : null}
         <div className={'flex flex-wrap gap-x-24 gap-y-6 text-tag text-ink-3'}>
           <span>epoch <Mono>{run.epoch ? run.epoch.ordinal : '—'}</Mono>（{run.epoch?.reason ?? 'unknown'}）</span>
           <span>accepted_body <Mono>{String(run.accepted_body)}</Mono></span>
@@ -101,6 +109,78 @@ function RunPane({ run }: { run: NonNullable<Monitor['run']['data']> }) {
         ) : null}
       </div>
     </Panel>
+  )
+}
+
+/** 失败形状是 workflow_status.json 的直投影：类别、code／phase／item 定位与 context 原样呈现。 */
+function FailureShape({ run }: { run: Str06RunView }) {
+  const context = run.error_context ?? {}
+  return (
+    <div data-testid={'str06-run-failure'} className={'flex flex-col gap-4 rounded-btn bg-sunken px-12 py-10'}>
+      <div className={'flex flex-wrap gap-x-24 gap-y-6 text-tag text-ink-2'}>
+        <span>失败类别 <Mono>{run.failure_kind}</Mono></span>
+        {run.error_code ? <span>code <Mono>{run.error_code}</Mono></span> : null}
+        {run.error_phase ? <span>phase <Mono>{run.error_phase}</Mono></span> : null}
+        {run.error_stage ? <span>stage <Mono>{run.error_stage}</Mono></span> : null}
+        {run.error_node ? <span>node <Mono>{run.error_node}</Mono></span> : null}
+        {run.error_item ? <span>item <Mono>{run.error_item}</Mono></span> : null}
+      </div>
+      {Object.keys(context).length ? (
+        <span className={'text-tag text-ink-4'}>
+          context <Mono>{JSON.stringify(context)}</Mono>
+        </span>
+      ) : null}
+      {run.detail ? <span className={'text-tag text-ink-3'}>{run.detail}</span> : null}
+    </div>
+  )
+}
+
+/** 章级失败留证（B4）：逐章类别与详情；缺席（null）与空清单是两回事。 */
+function BodyFailures({ failures }: { failures: Str06BodyFailuresView }) {
+  return (
+    <div data-testid={'str06-body-failures'} className={'flex flex-col gap-4'}>
+      <SectionTitle note={'局部失败不吞其他章的合法提交（I-31）'}>章级失败留证</SectionTitle>
+      <ul className={'m-0 flex list-none flex-col gap-4 p-0 text-tag'}>
+        {failures.chapters.map((chapter) => (
+          <li key={chapter.chapter_ordinal} className={'flex flex-col gap-2'}>
+            <span>
+              第 {chapter.chapter_ordinal} 章 · <Mono>{chapter.failure_kind}</Mono>
+            </span>
+            <span className={'text-ink-4'}>{chapter.detail}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
+/** Stage7 集合核对报告：五态分开、不并零；not_ready 的 reason 与逐条问题原样呈现。 */
+function AssemblyReport({ report }: { report: Str06AssemblyReportView }) {
+  const access = report.body_access
+  const list = (ordinals: number[]) => ordinals.join('、') || '无'
+  return (
+    <div data-testid={'str06-assembly-report'} className={'flex flex-col gap-6'}>
+      <SectionTitle note={report.assembly?.status ? `assembly ${report.assembly.status}` : undefined}>
+        Stage7 集合核对
+      </SectionTitle>
+      {access ? (
+        <div className={'flex flex-wrap gap-x-24 gap-y-6 text-tag text-ink-3'}>
+          <span>有效 <Mono>{list(access.accepted)}</Mono></span>
+          <span>缺失 <Mono>{list(access.missing)}</Mono></span>
+          <span>拒绝 <Mono>{list(access.rejected)}</Mono></span>
+          <span>未知 <Mono>{list(access.unknown)}</Mono></span>
+          <span>失效 <Mono>{list(access.stale)}</Mono></span>
+        </div>
+      ) : null}
+      {report.chain_problems.length ? (
+        <ul className={'m-0 flex list-none flex-col gap-2 p-0 text-tag text-ink-3'}>
+          {report.chain_problems.map((problem, index) => <li key={index}>{problem}</li>)}
+        </ul>
+      ) : null}
+      {report.assembly && report.assembly.status !== 'ready' && report.assembly.reason ? (
+        <span className={'text-tag text-ink-3'}>not_ready：{report.assembly.reason}</span>
+      ) : null}
+    </div>
   )
 }
 

@@ -5,7 +5,10 @@
 【验证边界】fake transport 全链造一个合成候选根，逐个监控面核对盘面事实：
 Characters v4、Blueprint v12、graph／binding（Hook 与导演说明）、WriterBookIR
 导航、章正文与章回执（机械范围／语义未评／篇幅披露）、Hook 与回执、NameMap v5、
-成书 manifest 与下载、Run 节点图与 ledger 成本。半程候选根（--through stage4）
+成书 manifest 与下载、Run 节点图与 ledger 成本，以及 run 面的失败形状
+（failure_kind／detail／ExecutionError 的 error_* 六字段，I-36）、章级失败留证
+（`runtime/body_failures.json`）与 Stage7 集合核对五态报告
+（`runtime/delivery/assembly_report.json`）。半程候选根（--through stage4）
 的 present=false 与 unknown 分开；不存在的候选根与非法候选名在 HTTP 上是 404。
 
 【纪律对账（与现役 api 同构）】响应模型不抄字面量取值面、不带判定字段
@@ -73,6 +76,34 @@ def base(tmp_path):
     return _candidate_root(tmp_path, _full_chain_wires())
 
 
+def _failed_candidate_root(tmp_path) -> Path:
+    """fake transport 截断反例（body_ch02 finish_reason=length）⇒ 失败候选根。
+
+    第 1 章合法提交保留，第 2 章截断即停（D6）⇒ run 级状态带失败形状、
+    章级失败留证落盘；Stage7 未跑 ⇒ 集合核对报告缺席。
+    """
+    root = tmp_path / 'cand'
+    root.mkdir(exist_ok=True)
+    repo = Str06Repository(root / 'run')
+    ledger = CostLedger(path=ledger_path(root))
+    repo.attach_context(make_context(root / 'run', ledger=ledger))
+    session = PaidRequestSession(
+        repo, ledger, _RoutingTransport(_full_chain_wires(), truncate=('body_ch02',)),
+        yes=True, allow_source_export=True, provider='fake', sid='run')
+    with pytest.raises(Exception):
+        run_workflow(repository=repo, chapters=_chapters(),
+                     ask=_fake_ask(session), ask_text=_fake_text(session),
+                     ask_body=_fake_body(session), budget=2000, through='stage7',
+                     book_title='报恩',
+                     hook_constraints=HookConstraints(target_chars=10, hard_max_chars=360),
+                     length_band=(0.01, 0.05))
+    init_or_resume_candidate_workflow(
+        repository=repo, base=tmp_path, code='code-test', root_sha1='a' * 40,
+        source_identity='b' * 64, task_id='task-1', configured_model='fake',
+        created_at=1759000000)
+    return tmp_path
+
+
 # ─────────────────────────────── views 纯函数 ───────────────────────────────
 
 def test_views_cover_the_whole_delivered_chain(base):
@@ -133,6 +164,91 @@ def test_views_cover_the_whole_delivered_chain(base):
     assert cost.present and cost.new_paid_rows == 13 and cost.cached_rows == 0
     assert cost.prompt_tokens is not None and cost.unknown_cost_rows == 0
     assert cost.per_node, '成本按候选节点归属'
+    # 收尾批：成功形状的失败面是 None（不是空对象冒充「查过没事」）；
+    # 集合核对报告就绪、五态全覆盖（空态是合法空，不是 unknown）。
+    assert run.failure_kind is None and run.detail is None
+    assert run.error_code is None and run.body_failures is None
+    report = run.assembly_report
+    assert report is not None and report.present
+    assert report.accepted_body is True
+    assert report.body_access is not None
+    assert report.body_access.accepted == (1, 2)
+    assert report.body_access.missing == () and report.body_access.rejected == ()
+    assert report.body_access.unknown == () and report.body_access.stale == ()
+    assert report.chain_problems == ()
+    assert report.assembly is not None and report.assembly.status == 'ready'
+    assert report.assembly.delivery_identity == delivery.delivery_identity
+
+
+def test_run_view_projects_failure_shape_and_chapter_failures(tmp_path):
+    """失败类别与 item 定位直投影（收尾批缺口 1）；章级失败留证同面（缺口 2）。
+
+    视图字段与盘上 run 级状态逐字一致——前端不发明读数；body_failures 按
+    章序留证（I-31 局部失败定位到 item）；Stage7 未跑 ⇒ 报告缺席是 None。
+    """
+    base = _failed_candidate_root(tmp_path)
+    run = views.run_view(base, 'cand')
+    assert run.present and run.status == 'failed'
+    assert run.failed_node == 'str06.stage5.body'
+    assert run.failure_kind == 'ExecutionError'
+    assert run.error_code == 'truncated' and run.error_phase == 'accept'
+    assert run.error_node == 'str06.stage5.body'
+    assert run.error_item == 'chapter:2', 'item 是工作单元章序 scope，不是 owner 名'
+    # 直投影对账：视图与盘上 workflow_status.json 逐字相等（含 context）。
+    disk = Str06Repository(base / 'cand' / 'run').inspect(
+        'runtime/workflow_status.json')
+    assert run.failure_kind == disk['failure_kind']
+    assert run.detail == disk['detail']
+    for field in ('error_code', 'error_stage', 'error_node', 'error_item',
+                  'error_phase', 'error_context'):
+        assert getattr(run, field) == disk.get(field), field
+    # 章级失败留证：第 2 章截断；第 1 章合法提交不在失败清单。
+    assert run.body_failures is not None and run.body_failures.present
+    assert [c.chapter_ordinal for c in run.body_failures.chapters] == [2]
+    assert run.body_failures.chapters[0].failure_kind == 'ExecutionError'
+    assert run.body_failures.chapters[0].detail
+    # 没跑到 Stage7：报告缺席是 None，不造空报告冒充「核对过」。
+    assert run.assembly_report is None
+    # HTTP 面与视图同形（同一 response_model，字段不丢）。
+    with TestClient(create_app(base)) as client:
+        response = client.get('/api/str06/candidates/cand/run')
+        assert response.status_code == 200
+        assert response.json() == json.loads(run.model_dump_json())
+
+
+def test_run_view_projects_assembly_report_five_states(base):
+    """Stage7 集合核对五态按 item 进 run 面（I-42：失效不是缺失、unknown 不作零）。"""
+    import json as _json
+    repo = Str06Repository(base / 'cand' / 'run')
+    tampered = repo.inspect('stage5/acceptance/body/ch02.json')
+    tampered['packet_sha256'] = 'f' * 64
+    repo.path('stage5/acceptance/body/ch02.json').write_text(
+        _json.dumps(tampered, ensure_ascii=False), encoding='utf-8')
+    ledger = CostLedger(path=ledger_path(base / 'cand'))
+    repo.attach_context(make_context(base / 'cand' / 'run', ledger=ledger))
+    session = PaidRequestSession(repo, ledger, _RoutingTransport(_full_chain_wires()),
+                                 yes=True, allow_source_export=True, provider='fake',
+                                 sid='run')
+    run_workflow(repository=repo, chapters=_chapters(),
+                 ask=_fake_ask(session), ask_text=_fake_text(session),
+                 ask_body=_fake_body(session), budget=2000, through='stage7',
+                 book_title='报恩',
+                 hook_constraints=HookConstraints(target_chars=10, hard_max_chars=360),
+                 length_band=(0.01, 0.05),
+                 node_filter=('str06.stage7.assemble',))
+    run = views.run_view(base, 'cand')
+    report = run.assembly_report
+    assert report is not None and report.present
+    assert report.accepted_body is False
+    assert report.body_access is not None
+    assert report.body_access.stale == (2,) and report.body_access.accepted == (1,)
+    assert report.body_access.missing == () and report.body_access.unknown == ()
+    assert report.body_access.rejected == ()
+    assert report.assembly is not None and report.assembly.status == 'not_ready'
+    assert 'stale=[2]' in report.assembly.reason
+    assert any('第2章' in problem for problem in report.chain_problems)
+    # 章级失败留证与失败形状不受 assemble 单节点重跑影响（本次没有正文失败）。
+    assert run.body_failures is None
 
 
 def test_half_run_candidate_keeps_present_and_missing_apart(tmp_path):
@@ -140,6 +256,9 @@ def test_half_run_candidate_keeps_present_and_missing_apart(tmp_path):
     base = _candidate_root(tmp_path, _full_chain_wires(), through='stage4')
     run = views.run_view(base, 'cand')
     assert run.status == 'planned_validated' and run.accepted_body is False
+    # 半程没有失败、没有失败留证、没有集合核对：三个都是 None，不是空对象。
+    assert run.failure_kind is None and run.body_failures is None
+    assert run.assembly_report is None
     produced = {n.node for n in run.nodes if n.produced}
     assert 'str06.stage5.body' not in produced and 'str06.stage7.assemble' not in produced
     assert views.chapter_view(base, 'cand', 1).present is False

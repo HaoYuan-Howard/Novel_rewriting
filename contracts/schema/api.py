@@ -3960,14 +3960,72 @@ class Str06EpochView(StrictModel):
     session_run_id: str | None = None
 
 
+class Str06BodyFailureChapterView(StrictModel):
+    """章级局部失败留证（B4）：item 是章序；类别与详情直投影，不并零。"""
+
+    chapter_ordinal: int = Field(ge=1)
+    failure_kind: str = Field(min_length=1)
+    detail: str
+
+
+class Str06BodyFailuresView(StrictModel):
+    """`runtime/body_failures.json` 的只读投影：视图缺席（None）＝无此留证文件。"""
+
+    present: bool
+    chapters: tuple[Str06BodyFailureChapterView, ...] = ()
+
+
+class Str06BodyAccessView(StrictModel):
+    """章就绪五态（I-42）：accepted／missing／rejected／unknown／stale 按章序分开。"""
+
+    accepted: tuple[int, ...] = ()
+    missing: tuple[int, ...] = ()
+    rejected: tuple[int, ...] = ()
+    unknown: tuple[int, ...] = ()
+    stale: tuple[int, ...] = ()
+
+
+class Str06AssemblyOutcomeView(StrictModel):
+    """组装结论：not_ready 显式给 reason，不落新交付。"""
+
+    status: str | None = None
+    reason: str | None = None
+    delivery_identity: str | None = None
+
+
+class Str06AssemblyReportView(StrictModel):
+    """`runtime/delivery/assembly_report.json` 的只读投影（Stage7 集合核对）。"""
+
+    present: bool
+    accepted_body: bool | None = None
+    body_access: Str06BodyAccessView | None = None
+    chain_problems: tuple[str, ...] = ()
+    assembly: Str06AssemblyOutcomeView | None = None
+
+
 class Str06RunView(StrictModel):
-    """候选根的一次运行总览：workflow 状态、epoch、节点盘面事实与成本账。"""
+    """候选根的一次运行总览：workflow 状态、失败形状、epoch、节点盘面事实与成本账。
+
+    失败形状是 `runtime/workflow_status.json` 的直投影：`failure_kind`／`detail`
+    对任何失败；`error_*` 六字段是 ExecutionError 的显式错误形状（I-36）——
+    非执行设施失败（如机械 ValueError）只有前三者，缺失保持 None，不补空串。
+    """
 
     candidate: str = Field(min_length=1)
     present: bool
     status: str | None = None
     failed_node: str | None = None
     accepted_body: bool | None = None
+    failure_kind: str | None = None
+    detail: str | None = None
+    error_code: str | None = None
+    error_stage: str | None = None
+    error_node: str | None = None
+    error_item: str | None = None
+    error_phase: str | None = None
+    error_context: dict[str, Any] | None = None
+    body_failures: Str06BodyFailuresView | None = None
+    assembly_report: Str06AssemblyReportView | None = None
     epoch: Str06EpochView | None = None
     nodes: tuple[Str06NodeView, ...] = ()
     cost: Str06LedgerCostView | None = None

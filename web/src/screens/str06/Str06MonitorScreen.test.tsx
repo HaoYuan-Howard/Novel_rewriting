@@ -78,6 +78,63 @@ describe('Str06MonitorScreen', () => {
     expect(screen.getByText(delivery.delivery_identity!.slice(0, 12))).toBeInTheDocument()
     expect(screen.getByText(String(delivery.length_reading!.whole_book_deviation_ratio)))
       .toBeInTheDocument()
+
+    // 集合核对报告（收尾批）：五态原样呈现，空态是「无」，不是 unknown。
+    const report = await screen.findByTestId('str06-assembly-report')
+    expect(report).toHaveTextContent('Stage7 集合核对')
+    expect(report).toHaveTextContent('assembly ready')
+    expect(report).toHaveTextContent('有效')
+    expect(report).toHaveTextContent('1、2')
+    // 成功 run 不渲染失败块（失败形状缺席是 null，不是空对象）。
+    expect(screen.queryByTestId('str06-run-failure')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('str06-body-failures')).not.toBeInTheDocument()
+  })
+
+  it('renders the failure shape and chapter failures straight from the run view', async () => {
+    const candidate = 'cand'
+    const recorded = await mockApi.getStr06Run(candidate)
+    // 失败形状是服务端直投影（workflow_status.json + body_failures.json）；
+    // 前端不发明读数，只呈现类别、code/phase/item 定位与逐章留证。
+    const failedRun = {
+      ...recorded,
+      status: 'failed',
+      failed_node: 'str06.stage5.body',
+      accepted_body: false,
+      failure_kind: 'ExecutionError',
+      detail: '第2章截断即停（finish_reason=length），不重写、不进候选',
+      error_code: 'truncated',
+      error_stage: '',
+      error_node: 'str06.stage5.body',
+      error_item: 'chapter:2',
+      error_phase: 'accept',
+      error_context: { owner: 'body_ch02' },
+      body_failures: {
+        present: true,
+        chapters: [
+          { chapter_ordinal: 2, failure_kind: 'ExecutionError', detail: '截断的开头。' },
+        ],
+      },
+      assembly_report: null,
+    }
+    stubCandidateApi(candidate)
+    vi.spyOn(api, 'getStr06Run').mockResolvedValue(failedRun)
+    vi.spyOn(api, 'getStr06Chapter').mockImplementation((_c, o) =>
+      mockApi.getStr06Chapter(candidate, o))
+
+    renderCandidate(candidate)
+
+    expect(await screen.findByText('STR-06 候选链 · 只读监控')).toBeInTheDocument()
+    expect(await screen.findByText('failed')).toBeInTheDocument()
+    const failure = screen.getByTestId('str06-run-failure')
+    expect(failure).toHaveTextContent('ExecutionError')
+    expect(failure).toHaveTextContent('truncated')
+    expect(failure).toHaveTextContent('chapter:2')
+    expect(failure).toHaveTextContent('body_ch02')
+    const failures = screen.getByTestId('str06-body-failures')
+    expect(failures).toHaveTextContent('第 2 章')
+    expect(failures).toHaveTextContent('ExecutionError')
+    // Stage7 未跑：报告缺席（null）不渲染，不造「核对过」的空面。
+    expect(screen.queryByTestId('str06-assembly-report')).not.toBeInTheDocument()
   })
 
   it('keeps a missing candidate as an error, never as the recorded root', async () => {
