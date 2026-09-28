@@ -19,9 +19,9 @@ names 引擎不变）、付费 owner 记账映射改挂新节点。**B2 第三�
 源 fold 唯一实现随迁本模块）；`chain.py` 的 `run_associate`／`run_compile`
 入列，Stage4 三腿（Preserve／BodyDesign／HookDesign）改读 canonical——
 `stage2/compiled/book_extraction.json` 派生输入写路随之退役（D9）。
-`source.py` 不再被链消费（S-05 deprecation）：本包只保留它对旧反例的
-ChapterCompiler／compile_book 面，源 fold 已由 `compile.py` 接管（source.py
-内是对 compile 的委托 re-export）；其反例迁移完成后整包删除。
+旧联合抽取引擎已随 B5（2026-09-28）S-05 整包删除：反例全部迁至五 owner 引擎，
+源 fold 唯一实现住 `compile.py`（历史落点与删除登记见
+`docs/REQUIREMENTS.md` B5 行与 `docs/DECISIONS.md`，原文按 Git 历史读取）。
 
 心智公式：LLM = understand → Resolver = locate → Compiler = normalize →
 Canonical = truth → Projection = expose → Validator = enforce。
@@ -48,7 +48,6 @@ stage2/
   compile.py   # str06.stage2.compile owner：双真源唯一发布引擎（ID 生成/关联执行/未决拒发＋源 fold 唯一实现，D9，B2）
   names.py     # stage2.names owner：源名称结构窄调用（语义协议不变，D9；输入已重挂 book 观察）
   resolver.py  # Stage2 证据 Resolver：句段闭集选择与逐字锚唯一定位（B2）
-  source.py    # 旧 source owner 引擎（链已不消费；fold 已迁 compile.py，反例迁移后整包删除，S-05）
 ```
 
 - 正式 schema 只在 `contracts/schema/`（及 `docs/schema/`）；stage2 不复制 schema truth。
@@ -69,7 +68,6 @@ stage2/
 | associate | `novel/stages/stage2/associate.py` | `str06.stage2.associate` |
 | compile | `novel/stages/stage2/compile.py` | `str06.stage2.compile`（免费；双真源唯一 writer） |
 | resolver | `novel/stages/stage2/resolver.py` | 供 book／chapters／associate／compile 调用的定位设施 |
-| source（旧，已停用） | `novel/stages/stage2/source.py` | `str06.stage2.source`（已退役；runner 已下线） |
 
 下游跨 Stage 应优先消费正式 artifact 与登记投影，禁止依赖 wire 中间态
 （S2-1）。
