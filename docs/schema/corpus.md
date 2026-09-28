@@ -13,19 +13,22 @@ manifest 不含书名、原文、prompt 或生成正文，只记录：
 - 每本书的 ledger 行数、wire / local-cache 分区、outcome、模型、思考档位与 token 覆盖；
 - 精确 pytest skip allowlist（nodeid + reason）。
 
-成书在 manifest 中登记模板 rel `stage7/{title}_rewriting.txt`，但 SHA-256 取盘上按书名命名的
-实体字节；这样既不泄漏书名，又与 `contracts/artifacts.py::ARTIFACT_PATHS['stage7.book']`
-保持同一落点。
+成书在 manifest 中登记模板 rel `stage7/final/{title}_rewriting.txt`，但 SHA-256 取盘上按书名
+命名的实体字节；这样既不泄漏书名，落点也与 `contracts/schema/corpus.py::BOOK_TEMPLATE_REL`
+保持唯一。
 
-Stage2 current 盘面必须含独立人物登记、必要知识、review、ChapterBlueprints、知识关联和
-`stage2/blueprint_character_projection.json` v1。称名投影由 `stage2.characters` 从当前 formal
-人物登记及 MainText 免费物化；缺失时由该节点的 `--revalidate` 恢复，不重抽知识。知识关联
-由 `stage2.blueprint --close-review` 消费已保存的 typed 决定免费物化。
+Stage2 current 盘面按 B2 五节点登记：书级观察 owner 三份
+（`stage2/observations/{book,names,associate}.json`）、逐章观察
+`stage2/observations/ch01.json`～`chNN.json`，以及免费 `str06.stage2.compile` 一次成形发布的
+Characters＋Blueprint 双真源（`stage2/characters/characters.json`、
+`stage2/blueprints/chapter_blueprints.json`）与 fold 读数 `stage2/acceptance/fold.json`。
+联合抽取的派生输入 `stage2/compiled/{book_extraction,input_snapshots}.json` 已随 B2 退役；
+它们出现在盘上会被 `tests/corpus_manifest.py::_artifact_inventory` 按「未登记 JSON」拒绝。
 
-Stage5 current 盘面必须恰有 `stage5/ch01.json`～`stage5/chNN.json` 与
-`stage5/review_1.json`；不得出现旧 `stage5/deep|shallow/` 目录来替代
-canonical 章。正式章和 Review 均为 schema v3；版本逐份从 registry 现算，不能手补
-marker 冒充 current producer。
+Stage5 current 盘面必须恰有 `stage5/body/ch01.txt`～`chNN.txt` 与成对的章级机械回执
+`stage5/acceptance/body/ch01.json`～`chNN.json`（canonical ch01..chNN 连续全覆盖，正文与回执
+缺一即拒），外加 `stage5/hook/hook.txt` 与 `stage5/hook/receipt.json`。JSON 产物的 schema
+版本逐份从 registry 现算，不能手补 marker 冒充 current producer。
 
 ## 生成与验证
 
@@ -50,10 +53,11 @@ conda run -n novel_refactor python -m tests.corpus_manifest verify `
 -m novel.cli run <paid-node> <sid> --base <isolated-current-corpus> --yes
 ```
 
-所有节点（包括 `stage5.write` 与 `stage6.semantic`）的冻结 flags 都恰为 `--base --yes`；
-`stage5.write` 不再带 `--deep` / `--shallow-rest` / `--mode`，`stage5.semantic` 已退役。
-两书 × 九个付费节点 = 当前 18 条 dispatch（含独立人物抽取），校验器按两个 current 元组现算条数与顺序，
-不信本文数字。`preview`、`mark` 或缺少 `run` 的展示命令不能冒充 production dispatch。
+所有付费节点的冻结 flags 都恰为 `--base --yes`（旧链的 `--advisory`／`--deep` 等已随节点
+退役，多一个 flag 即拒）。两书 × 11 个付费节点 = 当前 22 条 dispatch，校验器按
+`contracts/schema/corpus.py` 的 `CURRENT_CORPUS_BOOKS × CURRENT_CORPUS_PAID_NODES`
+两个现役元组现算条数、节点面与顺序，不信本文数字。
+`preview`、`mark` 或缺少 `run` 的展示命令不能冒充 production dispatch。
 
 最终硬验收显式指定**盘面与 manifest 两个身份**：
 
@@ -69,15 +73,15 @@ conda run -n novel_refactor python -m pytest --require-corpus
 corpus 还要求 local cache hit 为 0、每个 dispatch 节点均有非零 wire 行；每个 token 列分别记录
 reported/null 行数，分母不闭合就失败。
 
-manifest 的 `commands` 字段必须是 `-m novel.cli run <node> <sid> ... --yes` 的 18 条真实
-付费 production dispatch：每书各一条 Stage2 global/blueprint、Stage4 A `design`、
-Stage4 B `plan`、Stage5 write、Stage6 hook/semantic、Stage7 rename。机械测量由 Stage5/6 从
-Stage1 即时执行，不是 dispatch，也不在 required artifacts 中。`stage6.semantic` 只带 `--base --yes`
-（`--advisory` 已随自动放行门一并删除）；canonical `stage5.write` 也只带 `--base --yes`，
-默认补齐当前计划的全部缺章。
-ledger 必须对两书、九个付费节点逐一有非零记录并与这 18 条命令对账；Stage4 A/B 是两次
-独立付费 dispatch，不能用 B 相的一行账或最终计划替代 A 相的调用与中间产物。
-条数按 2 书 × 9 付费节点现算；独立人物抽取是本期增加的两条，不得从优化后的分母剔除。条数以
+manifest 的 `commands` 字段必须是 `-m novel.cli run <node> <sid> ... --yes` 的 22 条真实
+付费 production dispatch：每书各一条 `CURRENT_CORPUS_PAID_NODES` 里的节点——Stage2 四个
+观察 owner（book／chapters／names／associate）、Stage4 四相（preserve／body_design／bind／
+hook_design）、Stage5 hook／body、Stage7 naming。确定性编译（`str06.stage2.compile`／
+`str06.stage4.compile`）与交付装配（`str06.stage7.assemble`）结构性禁付，不是 dispatch，
+但它们的产物（fold、guard 报告、WriterBookIR 等）仍在 required artifacts 中。
+ledger 必须对两书、11 个付费节点逐一有非零记录并与这 22 条命令对账；各付费相是
+独立 dispatch，不能用别相的一行账或中间产物替代。
+条数按 2 书 × 11 付费节点现算；条数以
 `contracts/schema/corpus.py` 的 `CURRENT_CORPUS_BOOKS × CURRENT_CORPUS_PAID_NODES` 为准。
 `preview`、`mark` 或缺 `run` 的展示命令不能冒充生产 dispatch。
 

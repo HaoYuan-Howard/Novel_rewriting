@@ -112,9 +112,10 @@ def test_every_json_artifact_a_node_produces_has_a_model():
 
     ⚠ 两张表分家的形态是**静默的**：`ARTIFACTS` 查不到 ⇒ `artifact_state`
     跳过模型校验 ⇒ 那份产物**永远 `readable=True`**，哪怕它根本读不回来。
-    ⚠ F8b 新链：`input_snapshots`／`fold`／guard 两份是确定性 compiler 的
+    ⚠ F8b 新链：`fold`／guard 两份是确定性 compiler 的
     无信封派生 JSON（`contracts/schema/corpus.py::ENVELOPE_LESS_JSON_RELS`，
-    形状由唯一 writer 的契约治理）；`delivery_manifest` 是 run 自述清单，
+    形状由唯一 writer 的契约治理；B2 起 `input_snapshots` 随派生输入退役
+    移出集合）；`delivery_manifest` 是 run 自述清单，
     由外层 corpus manifest 承担身份（见 `required_current_corpus_artifacts` 注）。
     ⚠ 字节形态（`clean_text.txt`／成书／hook.txt）按设计不在 `ARTIFACTS` 里。
     """

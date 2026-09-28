@@ -41,7 +41,7 @@ def test_documented_script_entrypoint_bootstraps_repo_imports(tmp_path):
 
 def _ledger_row(
     *, cached: bool, prompt, hit, miss, completion, reasoning,
-    sid: str = '123', node: str = 'str06.stage2.source',
+    sid: str = '123', node: str = 'str06.stage2.book',
 ):
     return {
         'sid': sid, 'node': node, 'cached': cached, 'outcome': 'ok', 'model': 'model-v1',
@@ -124,9 +124,10 @@ def _manifest_raw() -> dict:
 def test_current_corpus_tracks_both_paid_stage4_phases_and_their_outputs():
     """冻结语料清单是两本书硬验收的身份集，刻意不自动跟随新增付费节点。
 
-    STR-06 F8a 后现役付费面是 9 个 `str06.` 节点，冻结清单同步翻新链坐标；
-    冻结书盘在新链下按 `legacy_incompatible` 拒读，current-schema corpus 验收
-    等语料重生成批次（REQUIREMENTS「本轮范围外」），本测试锁的是**坐标不漂移**。
+    STR-06 B2 五节点重建后现役付费面是 11 个 `str06.` 节点（Stage2 四个观察
+    owner），冻结清单同步翻新链坐标；冻结书盘在新链下按 `legacy_incompatible`
+    拒读，current-schema corpus 验收等语料重生成批次（REQUIREMENTS「本轮范围
+    外」），本测试锁的是**坐标不漂移**。
     """
     assert CURRENT_CORPUS_PAID_NODES == tuple(
         node for node, spec in NODES.items() if spec.paid)
@@ -134,11 +135,17 @@ def test_current_corpus_tracks_both_paid_stage4_phases_and_their_outputs():
         node for node in CURRENT_CORPUS_PAID_NODES if NODES[node].stage == 'stage4'
     ) == ('str06.stage4.preserve', 'str06.stage4.body_design',
           'str06.stage4.bind', 'str06.stage4.hook_design')
-    # 2 书 × 9 付费节点 = 18 条 production dispatch。
-    assert len(CURRENT_CORPUS_BOOKS) * len(CURRENT_CORPUS_PAID_NODES) == 18
+    # 2 书 × 11 付费节点 = 22 条 production dispatch。
+    assert len(CURRENT_CORPUS_BOOKS) * len(CURRENT_CORPUS_PAID_NODES) == 22
     required = required_current_corpus_artifacts(17)
     assert 'stage2/characters/characters.json' in required
     assert 'stage1/hook_copy.json' not in required, 'hook_copy 随旧链退役，不再是必备面'
+    # B2 五节点：书级观察 owner 三份与逐章观察进必备面；联合抽取派生输入退役。
+    assert {'stage2/observations/book.json', 'stage2/observations/names.json',
+            'stage2/observations/associate.json',
+            'stage2/observations/ch01.json'} <= required
+    assert 'stage2/compiled/book_extraction.json' not in required
+    assert 'stage2/compiled/input_snapshots.json' not in required
 
     stage4_paid_outputs = {
         rel
@@ -213,7 +220,7 @@ def test_ledger_manifest_partitions_cannot_claim_impossible_counts():
     with pytest.raises(ValidationError, match='outcomes 计数之和'):
         CorpusLedgerSummary(
             rows=1, wire_attempts=1, local_cache_hits=0,
-            nodes={'str06.stage2.source': 1}, outcomes={}, models={'m': 1},
+            nodes={'str06.stage2.book': 1}, outcomes={}, models={'m': 1},
             reasoning_efforts={'high': 1},
             **{key: token for key in corpus_manifest._TOKEN_COLUMNS})
     with pytest.raises(ValidationError, match='token total'):
@@ -396,7 +403,7 @@ def test_observe_is_text_free_and_verification_detects_any_inventory_or_ledger_d
     ]
 
     rows.append(_ledger_row(
-        sid=CURRENT_CORPUS_BOOKS[0][0], node='str06.stage2.source',
+        sid=CURRENT_CORPUS_BOOKS[0][0], node='str06.stage2.associate',
         cached=True, prompt=None, hit=None, miss=None, completion=None, reasoning=None))
     with pytest.raises(ValueError, match='独立空本地缓存'):
         corpus_manifest.verify(tmp_path, manifest)
@@ -455,7 +462,7 @@ def test_observe_is_text_free_and_verification_detects_any_inventory_or_ledger_d
         one['codes'] = {'frozen-code'}
 
     rows.append(_ledger_row(
-        sid='999', node='str06.stage2.source', cached=False,
+        sid='999', node='str06.stage2.book', cached=False,
         prompt=1, hit=0, miss=1, completion=1, reasoning=0))
     with pytest.raises(ValueError, match='ledger SID'):
         corpus_manifest.verify(tmp_path, manifest)
@@ -504,12 +511,12 @@ def test_inventory_refuses_a_raw_non_current_version(tmp_path):
     这条的语义变成「raw marker 必须直接等于 current」，仍然值钱：
     盘面清点要的是**盘上那个数字**，不是解码器愿意接受的那个数字。
     """
-    rel = 'stage2/compiled/book_extraction.json'
+    rel = 'stage2/observations/book.json'
     spec = artifact_spec(rel)
     assert spec is not None
 
     book = tmp_path / 'book_123'
-    target = book / 'stage2' / 'compiled' / 'book_extraction.json'
+    target = book / 'stage2' / 'observations' / 'book.json'
     target.parent.mkdir(parents=True)
     # raw marker 检查先于 payload 解码，形状无关；故意给非 current 版本号。
     target.write_text(json.dumps({

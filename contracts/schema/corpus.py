@@ -17,19 +17,23 @@ Sha256 = Annotated[str, StringConstraints(pattern=r'^[0-9a-f]{64}$')]
 # hard-acceptance identity for the two books and the paid production dispatches
 # enumerated right below.  The two tuples ARE the frozen set -- the dated workflow
 # review that first froze it has been retired, so do not reintroduce a second
-# hand-copied list in prose; see docs/BACKEND_CONTRACT.md section 10.
+# hand-copied list in prose; see docs/schema/corpus.md.
 CURRENT_CORPUS_BOOKS: tuple[tuple[str, int], ...] = (
     ('2019402867061048656', 17),
     ('1668963766200045568', 25),
 )
-#: STR-06 F8a 激活后的现役付费面（`contracts/invariants.py::NODES` 逐字派生：
-#: 9 个 `str06.` 付费节点；`str06.stage4.compile`／`str06.stage7.assemble`
-#: 结构性禁付，不派发 production dispatch）。
-#: ⚠ 冻结书盘在语料重生成批次前没有新链产物；current-schema corpus 验收随该
-#: 批次另行执行（REQUIREMENTS「本轮范围外」），本清单只锁定当期现役坐标。
+#: STR-06 现役付费面（`contracts/invariants.py::NODES` 的 11 个付费节点，顺序即
+#: NODES 声明序；B2 五节点重建起 Stage2 是 book／chapters／names／associate 四个
+#: 付费 owner；`str06.stage4.compile`／`str06.stage7.assemble` 结构性禁付，不派发
+#: production dispatch）。冻结清单刻意**不自动跟随**新增付费节点：
+#: `tests/test_corpus_manifest.py` 用「== NODES 全部付费节点」逼每次翻新成为显式决定。
+#: ⚠ 冻结书盘在语料重生成批次（B6 线）前没有新链产物；current-schema corpus
+#: 验收随该批次另行执行（REQUIREMENTS「本轮范围外」），本清单只锁定当期现役坐标。
 CURRENT_CORPUS_PAID_NODES: tuple[str, ...] = (
-    'str06.stage2.source',
+    'str06.stage2.book',
+    'str06.stage2.chapters',
     'str06.stage2.names',
+    'str06.stage2.associate',
     'str06.stage4.preserve',
     'str06.stage4.body_design',
     'str06.stage4.bind',
@@ -47,9 +51,10 @@ BOOK_TEMPLATE_REL = 'stage7/final/{title}_rewriting.txt'
 #: schema 版本可钉（`_schema_version` 信封只用于登记了 ARTIFACT_SPECS 的模型
 #: 产物）。清单对它们照样逐字节 hash 计账——封闭集合，盘上多出一份未登记
 #: JSON 仍然被 `_artifact_inventory` 拒绝，不因本集合静默放宽。
+#: ⚠ B2（D3）：`stage2/compiled/input_snapshots.json` 随「章观察互不依赖」退役，
+#: 已移出本集合；它在盘上出现就是「未登记 JSON」。
 ENVELOPE_LESS_JSON_RELS: frozenset[str] = frozenset({
     'stage2/acceptance/fold.json',
-    'stage2/compiled/input_snapshots.json',
     'stage4/acceptance/guard/compile.json',
     'stage4/acceptance/guard/report.json',
 })
@@ -65,10 +70,15 @@ def required_current_corpus_artifacts(chapters: int) -> frozenset[str]:
         # ⚠ `stage1/hook_copy.json` 随旧链退役（F7c 判定：新链 Hook 设计吃目标
         #   Design 的材料投影，无消费者），不再是一本合格语料书的必备面。
         'stage1/main_text.json',
-        # str06.stage2.source／names 的正式产物。
+        # B2 五节点（D3/D9）：book／names／associate 三份书级观察 owner 产物；
+        # 逐章观察 `stage2/observations/ch{nn}.json` 在下面按章成对补齐。
+        # 联合抽取的派生输入 `stage2/compiled/{book_extraction,input_snapshots}.json`
+        # 已退役（D3/D9），不在必备面。
+        'stage2/observations/book.json',
+        'stage2/observations/names.json',
+        'stage2/observations/associate.json',
+        # str06.stage2.compile（免费）双真源发布＋fold 读数。
         'stage2/blueprints/chapter_blueprints.json',
-        'stage2/compiled/book_extraction.json',
-        'stage2/compiled/input_snapshots.json',
         'stage2/acceptance/fold.json',
         'stage2/characters/characters.json',
         # str06.stage4.preserve（运行时 checkpoint 落在 runtime/ 家族）。
@@ -99,8 +109,10 @@ def required_current_corpus_artifacts(chapters: int) -> frozenset[str]:
         #   hash），由外层 corpus manifest 承担身份，不重复入册。
         BOOK_TEMPLATE_REL,
     }
-    # str06.stage5.body：正文与章级机械回执成对，ch01..chNN 连续全覆盖。
+    # str06.stage2.chapters（逐章观察）与 str06.stage5.body（正文＋章级机械回执
+    # 成对）：ch01..chNN 连续全覆盖。
     for ordinal in range(1, chapters + 1):
+        fixed.add(f'stage2/observations/ch{ordinal:02d}.json')
         fixed.add(f'stage5/body/ch{ordinal:02d}.txt')
         fixed.add(f'stage5/acceptance/body/ch{ordinal:02d}.json')
     return frozenset(fixed)
