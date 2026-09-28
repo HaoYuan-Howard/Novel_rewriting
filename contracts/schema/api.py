@@ -4003,12 +4003,54 @@ class Str06AssemblyReportView(StrictModel):
     assembly: Str06AssemblyOutcomeView | None = None
 
 
+class Str06OwnerIssueItemView(StrictModel):
+    """一条 typed 机械问题的监控投影（R3）：code／item／message 直投影。"""
+
+    code: str = Field(min_length=1)
+    item: str = ''
+    message: str = Field(min_length=1)
+    context: dict[str, Any] = Field(default_factory=dict)
+
+
+class Str06OwnerIssueRecordView(StrictModel):
+    """一个 owner 的跨节点回派账投影（`runtime/issues/<owner>.json`）。
+
+    ``rounds_total`` 是该 owner 终身已发起的修订轮数（resolve 不复位）；
+    ``status`` 取值面归 `OwnerIssueFileV1`，视图层不抄第二份字面量。
+    """
+
+    owner: str = Field(min_length=1)
+    node: str = Field(min_length=1)
+    raised_by: str = Field(min_length=1)
+    status: str = Field(min_length=1)
+    rounds_total: int = Field(ge=0)
+    fingerprint: str = Field(min_length=1)
+    issues: tuple[Str06OwnerIssueItemView, ...] = Field(min_length=1)
+    updated_at: int = Field(ge=0)
+
+
+class Str06OwnerIssuesView(StrictModel):
+    """修订轮的只读投影（R3）：`runtime/issues/` 全部回派账，open 与 resolved
+    都在（resolved 是历史留账，轮数供监控面读取）。
+
+    ``rounds_cap`` 是每 owner 终身修订轮上限（契约常量
+    `contracts/invariants.py::OWNER_REVISION_MAX_ROUNDS`）的投影——上限属后端
+    契约，前端不抄字面量。视图缺席（None）＝ 从未起过修订轮。
+    """
+
+    present: bool
+    rounds_cap: int = Field(ge=1)
+    records: tuple[Str06OwnerIssueRecordView, ...] = ()
+
+
 class Str06RunView(StrictModel):
     """候选根的一次运行总览：workflow 状态、失败形状、epoch、节点盘面事实与成本账。
 
     失败形状是 `runtime/workflow_status.json` 的直投影：`failure_kind`／`detail`
     对任何失败；`error_*` 六字段是 ExecutionError 的显式错误形状（I-36）——
     非执行设施失败（如机械 ValueError）只有前三者，缺失保持 None，不补空串。
+    修订轮（R3）由 `owner_issues` 携带；停止原因在失败形状里（含按 item 的
+    typed 问题清单），两者并排呈现、不互相推导。
     """
 
     candidate: str = Field(min_length=1)
@@ -4026,6 +4068,7 @@ class Str06RunView(StrictModel):
     error_context: dict[str, Any] | None = None
     body_failures: Str06BodyFailuresView | None = None
     assembly_report: Str06AssemblyReportView | None = None
+    owner_issues: Str06OwnerIssuesView | None = None
     epoch: Str06EpochView | None = None
     nodes: tuple[Str06NodeView, ...] = ()
     cost: Str06LedgerCostView | None = None

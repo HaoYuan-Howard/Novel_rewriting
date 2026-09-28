@@ -13,6 +13,12 @@ Characters v4、Blueprint v12、graph／binding（Hook 与导演说明）、Writ
 
 【纪律对账（与现役 api 同构）】响应模型不抄字面量取值面、不带判定字段
 （badge／passed／counts）、契约层不 import web 栈；监控读口不写产物盘。
+
+【R3 监控面（PLAN.md R3 末行）】修订轮与停止原因：跨节点回派账
+（`runtime/issues/<owner>.json`，OwnerIssueFileV1）投影进 run 面——owner／
+node／raised_by／status／rounds_total 与逐条 typed 问题；停止原因仍在
+failure_kind／detail 直投影（OwnerRevisionStop 的承载消息含按 item 的
+问题清单）。从未起过修订轮的根 owner_issues 是 null（I-42：缺席不是空账）。
 """
 from __future__ import annotations
 
@@ -29,6 +35,7 @@ from fastapi.testclient import TestClient          # noqa: E402
 from contracts.schema import api as str06_api   # noqa: E402
 from contracts.schema.hook import HookConstraints      # noqa: E402
 from novel.api.app import create_app                         # noqa: E402
+from novel.errors import ArtifactUnreadable                  # noqa: E402
 from novel.llm.ledger import CostLedger, ledger_path, read_cost_snapshot   # noqa: E402
 from novel.llm.paid_requests import PaidRequestSession      # noqa: E402
 from novel.llm.paid_requests import init_or_resume_candidate_workflow  # noqa: E402
@@ -168,6 +175,8 @@ def test_views_cover_the_whole_delivered_chain(base):
     # 集合核对报告就绪、五态全覆盖（空态是合法空，不是 unknown）。
     assert run.failure_kind is None and run.detail is None
     assert run.error_code is None and run.body_failures is None
+    # 干净链从没起过修订轮：回派账缺席是 None（R3 监控面）。
+    assert run.owner_issues is None
     report = run.assembly_report
     assert report is not None and report.present
     assert report.accepted_body is True
@@ -259,6 +268,8 @@ def test_half_run_candidate_keeps_present_and_missing_apart(tmp_path):
     # 半程没有失败、没有失败留证、没有集合核对：三个都是 None，不是空对象。
     assert run.failure_kind is None and run.body_failures is None
     assert run.assembly_report is None
+    # 也没起过任何修订轮：回派账缺席是 None，不是空账本。
+    assert run.owner_issues is None
     produced = {n.node for n in run.nodes if n.produced}
     assert 'str06.stage5.body' not in produced and 'str06.stage7.assemble' not in produced
     assert views.chapter_view(base, 'cand', 1).present is False
@@ -270,6 +281,104 @@ def test_half_run_candidate_keeps_present_and_missing_apart(tmp_path):
     assert views.characters_view(base, 'cand').present
     assert views.design_view(base, 'cand').present
     assert views.ir_nav_view(base, 'cand').present
+
+
+# ───────────────────────── R3 监控面：修订轮与停止原因 ─────────────────────────
+
+def _faulted_candidate_root(tmp_path, *, fault_once: bool, name: str) -> Path:
+    """R0 故障注入底座（obligation_unbound）跑一条候选链 ⇒ 带 issues 记录的根。
+
+    `fault_once=True`：受影响 owner 首响应带故障、修订轮返回干净 wire——链经
+    修订自愈跑完（回派账 resolved 留轮数）；`fault_once=False`：粘性故障 ⇒
+    同问题集重现按 item 停（回派账 open、run 级失败形状带停止原因）。
+    """
+    from tests.str06_facilities import json_ask, text_ask
+    from tests.str06_faults import FaultTransport, looped_full_chain_wires
+    from tests.test_str06_body import _make_session
+
+    wires = looped_full_chain_wires()
+    root = tmp_path / name
+    root.mkdir(exist_ok=True)
+    repo = Str06Repository(root / 'run')
+    ledger = CostLedger(path=ledger_path(root))
+    repo.attach_context(make_context(root / 'run', ledger=ledger))
+    session = PaidRequestSession(
+        repo, ledger, FaultTransport(wires, 'obligation_unbound', fault_once),
+        yes=True, allow_source_export=True, provider='fake', sid='run')
+    try:
+        run_workflow(repository=repo, chapters=_chapters(),
+                     ask=json_ask(session), ask_text=text_ask(session),
+                     ask_body=lambda owner, prompt: None, budget=2000,
+                     through='stage7', book_title='报恩',
+                     hook_constraints=HookConstraints(target_chars=10,
+                                                      hard_max_chars=360),
+                     body_chapter_limit=0)
+    except Exception:
+        pass          # 粘性故障停在 OwnerRevisionStop；失败形状由链自己留痕
+    init_or_resume_candidate_workflow(
+        repository=repo, base=root, code='code-test', root_sha1='a' * 40,
+        source_identity='b' * 64, task_id='task-1', configured_model='fake',
+        created_at=1759000000)
+    return root.parent
+
+
+def test_run_view_projects_revision_rounds_of_a_healed_chain(tmp_path):
+    """修订轮投影（R3）：经修订自愈的链，回派账 resolved 留轮数与 typed 问题。"""
+    base = _faulted_candidate_root(tmp_path, fault_once=True, name='healed')
+    run = views.run_view(base, 'healed')
+    assert run.present
+    issues = run.owner_issues
+    assert issues is not None and issues.present, '回派账在盘上，投影不得缺席'
+    assert issues.rounds_cap == 2, '修订轮上限是契约常量的投影，前端不抄'
+    assert [r.owner for r in issues.records] == ['design']
+    record = issues.records[0]
+    assert record.node == 'str06.stage4.body_design'
+    assert record.raised_by == 'str06.stage4.compile'
+    assert record.status == 'resolved' and record.rounds_total == 1
+    assert record.fingerprint and record.updated_at >= 0
+    assert record.issues[0].code == 'must_keep_unbound'
+    assert record.issues[0].item == 'ob01'
+    assert '必保义务' in record.issues[0].message
+    assert record.issues[0].context == {'unbound_owner': 'design'}
+    # 自愈链没有失败形状：停止原因缺席是 None，不是空串。
+    assert run.failure_kind is None and run.detail is None
+    # HTTP 面与视图同形（同一 response_model，字段不丢）。
+    with TestClient(create_app(base)) as client:
+        response = client.get('/api/str06/candidates/healed/run')
+        assert response.status_code == 200
+        assert response.json() == json.loads(run.model_dump_json())
+
+
+def test_run_view_shows_stop_reason_with_open_issue_rounds(tmp_path):
+    """停止原因（R3）：粘性故障按 item 停 ⇒ failure_kind/detail 直投影带
+    typed 问题清单；回派账 open、轮数留证。"""
+    base = _faulted_candidate_root(tmp_path, fault_once=False, name='stuck')
+    run = views.run_view(base, 'stuck')
+    assert run.present and run.status == 'failed'
+    assert run.failure_kind == 'OwnerRevisionStop'
+    assert '同一问题集重复即停' in (run.detail or '')
+    assert '必保义务 ob01' in (run.detail or ''), '停止消息按 item 定位'
+    assert run.failed_node == 'str06.stage4.compile'
+    issues = run.owner_issues
+    assert issues is not None and issues.records[0].status == 'open'
+    assert issues.records[0].rounds_total == 1
+    assert issues.records[0].owner == 'design'
+    with TestClient(create_app(base)) as client:
+        response = client.get('/api/str06/candidates/stuck/run')
+        assert response.status_code == 200
+        assert response.json()['failure_kind'] == 'OwnerRevisionStop'
+
+
+def test_corrupt_issue_record_fails_fast_instead_of_reading_as_none(tmp_path):
+    """回派账形状损坏 ⇒ 监控面显式拒绝（I-34）：它是修订路由的输入，
+    不能静默当作「没有问题」继续。"""
+    base = _candidate_root(tmp_path, _full_chain_wires(), through='stage4')
+    issues_dir = base / 'cand' / 'run' / 'runtime' / 'issues'
+    issues_dir.mkdir(parents=True)
+    (issues_dir / 'associate.json').write_text('{"schema_version": 1}',
+                                               encoding='utf-8')
+    with pytest.raises(ArtifactUnreadable, match='associate.json'):
+        views.run_view(base, 'cand')
 
 
 def test_free_recovery_adds_only_cached_rows(base):

@@ -7,6 +7,7 @@ import { useStr06Monitor } from '@/hooks/useStr06Monitor'
 import type {
   Str06AssemblyReportView,
   Str06BodyFailuresView,
+  Str06OwnerIssuesView,
   Str06RunView,
 } from '@/types/str06'
 
@@ -77,6 +78,7 @@ function RunPane({ run }: { run: NonNullable<Monitor['run']['data']> }) {
       />
       <div className={'flex flex-col gap-12 px-18 py-16'}>
         {run.failure_kind ? <FailureShape run={run} /> : null}
+        {run.owner_issues ? <OwnerIssues issues={run.owner_issues} /> : null}
         {run.body_failures ? <BodyFailures failures={run.body_failures} /> : null}
         {run.assembly_report ? <AssemblyReport report={run.assembly_report} /> : null}
         <div className={'flex flex-wrap gap-x-24 gap-y-6 text-tag text-ink-3'}>
@@ -131,6 +133,52 @@ function FailureShape({ run }: { run: Str06RunView }) {
         </span>
       ) : null}
       {run.detail ? <span className={'text-tag text-ink-3'}>{run.detail}</span> : null}
+    </div>
+  )
+}
+
+/**
+ * 修订轮（R3 跨节点回派）：`runtime/issues/<owner>.json` 的只读投影。
+ * open 与 resolved 都在（resolved 是历史留账，轮数不复位）；轮数上限
+ * rounds_cap 由后端投影，前端不抄契约常量。停止原因不在本块推导——它在
+ * 失败形状（workflow_status.json）里，两面并排呈现。
+ */
+function OwnerIssues({ issues }: { issues: Str06OwnerIssuesView }) {
+  return (
+    <div data-testid={'str06-owner-issues'} className={'flex flex-col gap-6'}>
+      <SectionTitle note={'只修 typed 机械问题；轮数是终身额度，复验通过不复位'}>
+        修订轮 · 跨节点回派
+      </SectionTitle>
+      {issues.records.length ? (
+        <ul className={'m-0 flex list-none flex-col gap-8 p-0 text-tag'}>
+          {issues.records.map((record) => (
+            <li key={record.owner} className={'flex flex-col gap-4'}>
+              <div className={'flex flex-wrap items-baseline gap-x-16 gap-y-4'}>
+                <span className={'text-ink-2'}>
+                  <Mono>{record.owner}</Mono> · 修订轮{' '}
+                  <Mono>{record.rounds_total}</Mono>／<Mono>{issues.rounds_cap}</Mono> ·{' '}
+                  <Mono>{record.status}</Mono>
+                </span>
+                <span className={'text-ink-4'}>
+                  回派 {record.node}（由 {record.raised_by} 发现）
+                </span>
+              </div>
+              <ul className={'m-0 flex list-none flex-col gap-2 p-0 text-ink-3'}>
+                {record.issues.map((issue, index) => (
+                  <li key={`${issue.code}-${issue.item}-${index}`}>
+                    <Mono className={'text-ink-4'}>{issue.code}</Mono>
+                    {issue.item ? <Mono className={'text-ink-4'}>[{issue.item}]</Mono> : null}
+                    {' '}
+                    {issue.message}
+                  </li>
+                ))}
+              </ul>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <span className={'text-tag text-ink-4'}>没有回派账记录（目录在、账为空）。</span>
+      )}
     </div>
   )
 }

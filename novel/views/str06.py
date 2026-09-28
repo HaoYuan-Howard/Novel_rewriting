@@ -33,10 +33,11 @@ from contracts.schema.api import (
     Str06DeliveryView, Str06EpochView, Str06HookView, Str06IrChapterView,
     Str06IrNavView, Str06LedgerCostView, Str06LedgerNodeCostView,
     Str06NameStructureView, Str06NamingEntryView, Str06NamingView, Str06NodeView,
+    Str06OwnerIssueItemView, Str06OwnerIssueRecordView, Str06OwnerIssuesView,
     Str06RunView, Str06SurfaceWindowView,
 )
-from contracts.invariants import NODES
-from contracts.schema.workflow import candidate_node_owner
+from contracts.invariants import NODES, OWNER_REVISION_MAX_ROUNDS
+from contracts.schema.workflow import OwnerIssueFileV1, candidate_node_owner
 from novel.errors import ArtifactUnreadable
 from novel.store import Str06Repository
 from novel.work_unit_usage import read_cost_snapshot
@@ -50,6 +51,8 @@ WORKFLOW_REL = 'runtime/candidate_workflow.json'
 STATUS_REL = 'runtime/workflow_status.json'
 #: 章级局部失败留证（B4：`str06.stage5.body` 并发收集后按章落盘）。
 BODY_FAILURES_REL = 'runtime/body_failures.json'
+#: 跨节点回派账目录（R3：`runtime/issues/<owner>.json`，每 owner 一份）。
+ISSUES_DIR_REL = 'runtime/issues'
 #: Stage7 集合核对报告（B4 后半：五态按 item）。
 ASSEMBLY_REPORT_REL = 'runtime/delivery/assembly_report.json'
 #: 章序模式（与候选产物表的 `{nn}` 一致）。
@@ -491,6 +494,42 @@ def _assembly_report_view(run: Path) -> Str06AssemblyReportView | None:
         if isinstance(outcome, dict) else None)
 
 
+def _owner_issues_view(run: Path) -> Str06OwnerIssuesView | None:
+    """修订轮的只读投影（R3）：`runtime/issues/<owner>.json` 全部回派账。
+
+    目录缺席（从未起过修订轮）返回 None；open 与 resolved 都投（resolved 是
+    历史留账，轮数供监控面读取）。记录形状损坏显式拒绝（I-34）——它是修订
+    路由的输入，不能静默当作「没有问题」。停止原因不在这里推导：它在
+    `workflow_status.json` 的失败形状里，两面并排呈现。
+    """
+    directory = _pattern_dir(run, f'{ISSUES_DIR_REL}/_*.json')
+    if directory is None:
+        return None
+    records = []
+    for entry in sorted(directory.iterdir()):
+        if not entry.name.endswith('.json') or not entry.is_file():
+            continue
+        payload = _inspect(run, f'{ISSUES_DIR_REL}/{entry.name}')
+        try:
+            record = OwnerIssueFileV1.model_validate(payload)
+        except ValueError as exc:
+            raise ArtifactUnreadable(
+                f'回派账 {ISSUES_DIR_REL}/{entry.name} 形状损坏：{exc}；'
+                '它是修订路由的输入，拒绝当作「没有问题」继续') from exc
+        records.append(Str06OwnerIssueRecordView(
+            owner=record.owner, node=record.node, raised_by=record.raised_by,
+            status=record.status, rounds_total=record.rounds_total,
+            fingerprint=record.fingerprint, updated_at=record.updated_at,
+            issues=tuple(
+                Str06OwnerIssueItemView(
+                    code=issue.code, item=issue.item, message=issue.message,
+                    context=issue.context)
+                for issue in record.issues)))
+    return Str06OwnerIssuesView(
+        present=True, rounds_cap=OWNER_REVISION_MAX_ROUNDS,
+        records=tuple(records))
+
+
 def run_view(base: str | os.PathLike[str], candidate: str) -> Str06RunView:
     """候选根总览：workflow 状态、失败形状、章级失败留证、集合核对报告与成本账。"""
     run = _run_dir(base, candidate)
@@ -518,6 +557,7 @@ def run_view(base: str | os.PathLike[str], candidate: str) -> Str06RunView:
         error_context=status.get('error_context'),
         body_failures=_body_failures_view(run),
         assembly_report=_assembly_report_view(run),
+        owner_issues=_owner_issues_view(run),
         epoch=Str06EpochView(
             epoch_id=epoch_payload['epoch_id'], ordinal=epoch_payload['ordinal'],
             reason=epoch_payload['reason'],

@@ -936,7 +936,10 @@
         "test_candidate_reads_over_http_match_the_views": "stage",
         "test_half_run_candidate_keeps_present_and_missing_apart": "stage",
         "test_run_view_projects_failure_shape_and_chapter_failures": "stage",
-        "test_run_view_projects_assembly_report_five_states": "stage"
+        "test_run_view_projects_assembly_report_five_states": "stage",
+        "test_run_view_projects_revision_rounds_of_a_healed_chain": "stage",
+        "test_run_view_shows_stop_reason_with_open_issue_rounds": "stage",
+        "test_corrupt_issue_record_fails_fast_instead_of_reading_as_none": "stage"
       }
     },
     "tests/test_str06_workflow.py": {

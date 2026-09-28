@@ -41,6 +41,7 @@
     "delivery_identity": "53d4885521e612b7be0d606cb55e3ffd387052d6dfdb7b383bc24870fec83a9c"
    }
   },
+  "owner_issues": null,
   "epoch": {
    "epoch_id": "95478c68ab0a210f5ff791fd36b3417eb88599c9c21be8bb3d4d89803f728aa4",
    "ordinal": 1,

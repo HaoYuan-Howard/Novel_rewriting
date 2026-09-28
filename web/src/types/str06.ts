@@ -249,6 +249,41 @@ export interface Str06AssemblyReportView {
   assembly: Str06AssemblyOutcome | null
 }
 
+/** 一条 typed 机械问题（R3 自愈）：code／item／message 与路由 context 直投影。 */
+export interface Str06OwnerIssueItem {
+  code: string
+  item: string
+  message: string
+  context: Record<string, unknown>
+}
+
+/**
+ * 一个 owner 的跨节点回派账（runtime/issues/<owner>.json，R3）。
+ * rounds_total 是终身已发起的修订轮数（resolve 不复位）；status 取值面归后端
+ * 产物契约，前端不抄第二份字面量。
+ */
+export interface Str06OwnerIssueRecord {
+  owner: string
+  node: string
+  raised_by: string
+  status: string
+  rounds_total: number
+  fingerprint: string
+  issues: Str06OwnerIssueItem[]
+  updated_at: number
+}
+
+/**
+ * 修订轮的只读投影（R3）：open 与 resolved 都在（resolved 是历史留账）。
+ * rounds_cap 是每 owner 终身修订轮上限的后端投影，前端不抄契约常量；
+ * 缺席（null）＝ 从未起过修订轮。
+ */
+export interface Str06OwnerIssuesView {
+  present: boolean
+  rounds_cap: number
+  records: Str06OwnerIssueRecord[]
+}
+
 export interface Str06RunView {
   candidate: string
   present: boolean
@@ -266,6 +301,8 @@ export interface Str06RunView {
   error_context: Record<string, unknown> | null
   body_failures: Str06BodyFailuresView | null
   assembly_report: Str06AssemblyReportView | null
+  /** 修订轮（R3）：runtime/issues/ 的回派账；停止原因在失败形状里，两面并排。 */
+  owner_issues: Str06OwnerIssuesView | null
   epoch: Str06Epoch | null
   nodes: Str06Node[]
   cost: Str06LedgerCost | null

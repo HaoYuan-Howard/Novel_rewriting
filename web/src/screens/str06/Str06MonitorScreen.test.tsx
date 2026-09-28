@@ -88,6 +88,8 @@ describe('Str06MonitorScreen', () => {
     // 成功 run 不渲染失败块（失败形状缺席是 null，不是空对象）。
     expect(screen.queryByTestId('str06-run-failure')).not.toBeInTheDocument()
     expect(screen.queryByTestId('str06-body-failures')).not.toBeInTheDocument()
+    // 干净链从没起过修订轮：回派账缺席是 null，不渲染空账本。
+    expect(screen.queryByTestId('str06-owner-issues')).not.toBeInTheDocument()
   })
 
   it('renders the failure shape and chapter failures straight from the run view', async () => {
@@ -135,6 +137,71 @@ describe('Str06MonitorScreen', () => {
     expect(failures).toHaveTextContent('ExecutionError')
     // Stage7 未跑：报告缺席（null）不渲染，不造「核对过」的空面。
     expect(screen.queryByTestId('str06-assembly-report')).not.toBeInTheDocument()
+  })
+
+  it('renders revision rounds next to the stop reason straight from the run view', async () => {
+    const candidate = 'cand'
+    const recorded = await mockApi.getStr06Run(candidate)
+    // R3 监控面：修订轮（runtime/issues 回派账投影）与停止原因（失败形状直投影）
+    // 并排呈现——轮数上限 rounds_cap 由后端投影，前端不抄契约常量；status、
+    // code、item 都是后端事实，前端不发明读数。
+    const revisedRun = {
+      ...recorded,
+      status: 'failed',
+      failed_node: 'str06.stage4.compile',
+      failure_kind: 'OwnerRevisionStop',
+      detail:
+        'str06.stage4.compile 的修订要求没有进展：design 修订后同一问题集原样重现，' +
+        '按 item 停（同一问题集重复即停）：must_keep_unbound[ob01]：必保义务 ob01 尚未承载',
+      owner_issues: {
+        present: true,
+        rounds_cap: 2,
+        records: [
+          {
+            owner: 'design',
+            node: 'str06.stage4.body_design',
+            raised_by: 'str06.stage4.compile',
+            status: 'open',
+            rounds_total: 1,
+            fingerprint: 'a'.repeat(64),
+            issues: [
+              {
+                code: 'must_keep_unbound',
+                item: 'ob01',
+                message: '必保义务 ob01 尚未承载（owner=design；目标场景缺承载）',
+                context: { unbound_owner: 'design' },
+              },
+            ],
+            updated_at: 1790269950,
+          },
+        ],
+      },
+    }
+    stubCandidateApi(candidate)
+    vi.spyOn(api, 'getStr06Run').mockResolvedValue(revisedRun)
+    vi.spyOn(api, 'getStr06Chapter').mockImplementation((_c, o) =>
+      mockApi.getStr06Chapter(candidate, o))
+
+    renderCandidate(candidate)
+
+    expect(await screen.findByText('STR-06 候选链 · 只读监控')).toBeInTheDocument()
+    const rounds = await screen.findByTestId('str06-owner-issues')
+    expect(rounds).toHaveTextContent('修订轮 · 跨节点回派')
+    expect(rounds).toHaveTextContent('design')
+    expect(rounds).toHaveTextContent('open')
+    expect(rounds).toHaveTextContent('must_keep_unbound')
+    expect(rounds).toHaveTextContent('ob01')
+    expect(rounds).toHaveTextContent('必保义务 ob01 尚未承载')
+    expect(rounds).toHaveTextContent('str06.stage4.body_design')
+    expect(rounds).toHaveTextContent('str06.stage4.compile')
+    // 修订轮 1／2：分子来自盘上回派账，分母是后端投影的契约常量。
+    expect(rounds).toHaveTextContent('1')
+    expect(rounds).toHaveTextContent('2')
+    // 停止原因与修订轮并排：失败形状直投影（含按 item 的 typed 问题清单）。
+    const failure = screen.getByTestId('str06-run-failure')
+    expect(failure).toHaveTextContent('OwnerRevisionStop')
+    expect(failure).toHaveTextContent('同一问题集重复即停')
+    expect(failure).toHaveTextContent('must_keep_unbound[ob01]')
   })
 
   it('keeps a missing candidate as an error, never as the recorded root', async () => {
