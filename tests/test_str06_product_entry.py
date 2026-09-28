@@ -71,7 +71,9 @@ import contextlib
 import hashlib
 import io
 import json
+import os
 import subprocess
+import sys
 import traceback
 from types import SimpleNamespace
 
@@ -504,3 +506,168 @@ def test_upload_without_authorization_starts_no_paid_run(base, monkeypatch):
     assert body['job']['state'] == 'ok'
     assert body.get('autostart') is None and body.get('run') is None
     assert starts == []
+
+
+# ───────────────────── 四、真实 CLI 子进程全链 + 服务重启读回（B5） ─────────────────────
+#
+# 【B5 完成条件】「真实 HTTP 上传 → 自动编排 → CLI 子进程 → Repository → Stage7
+# 交付，页面刷新与服务重启后读回一致」。与第一节的全链测试互补：那里把节点执行
+# 的**子进程缝**换成进程内调用（run_step 的 claim／信标／evidence 三层不在进程内
+# 复刻）；本节把这条缝**原样交还给生产**——Supervisor 起**真的**
+# `novel.orchestrator.run_step` 子进程，run_step 再起**真的** `novel.cli run
+# <node>` 子进程，fake transport 经 `sitecustomize`（PYTHONPATH 注入）在子进程
+# 内替换 `novel.stages.chain.DeepSeekTransport`——I-51 的 fake transport 边界
+# 保持零真实模型调用，付费仍走 PaidRequestSession 同一条路。
+#
+# 代码身份用 `real_code_version`：run_step 子进程会真实重算
+# `prov.code_version()` 并与 execution token 对账，进程内替换的确定性测试身份
+# 过不了这道闸（见 tests/conftest.py::_stable_code_version）。测试期间仓库无
+# 写入，脏树指纹稳定。
+
+_SITECUSTOMIZE_SOURCE = """
+import os, sys
+
+if os.environ.get('NOVEL_B5_FAKE_TRANSPORT') == '1':
+    repo = os.environ['NOVEL_B5_FAKE_REPO']
+    if repo not in sys.path:
+        sys.path.insert(0, repo)
+    import novel.stages.chain as _chain
+    from novel.llm.transport import ChatResponse
+    from tests.test_str06_body import _RoutingTransport
+    from tests.test_str06_hook import _full_chain_wires
+
+    _BODY_TEXTS = {'ch01': '拜堂之夜，红烛高烧，苏芸娘望着夫君，把心头那句旧约问了个明白。夫君沉吟许久，才说这桩婚事不是寻常姻缘，而是多年前许下的承诺，今日不过是要兑现它。她想起陪嫁那夜，母亲拉着她的手说，做人妻子的本分是守住这个家，也要守住自己的心，莫叫一时的委屈改了性子。烛火摇了三摇，窗外风声渐紧，芸娘把旧约的每一条都记在心里，知道往后的日子都要照着这句话走下去，一步也错不得。天快亮时，夫君起身告辞，说此去是为了查明一桩旧案的真相，叫她不必等候，也不必牵挂，门要关好，灯要留一盏。她送他到门前，没有回头，只怕一回头就失了底气，叫他也跟着为难。回到房中，芸娘把旧约压在枕下，暗暗告诉自己，无论将来发生什么，这个家的门要一直开着，灯也要一直亮着。晨光透进窗纸，照见一地烛泪，她忽然觉得，从前怕的黑夜，也不过如此，只要心里有了着落，再长的夜也能坐到天亮。', 'ch02': '夫君夜半翻墙而出，芸娘在他枕下发现一方玉佩，刻着的字面陌生，不像家中旧物。她把玉佩藏回原处，只怕惊动了谁，索性坐到天明，把昨夜至今的每一件事都翻来覆去地想。起初她疑心夫君有了别的心思，可想起他临行前的眼神，又觉得不像，反倒像是怕牵连了谁。天将明时，她在灯下把那方玉佩的穗子拆开又系上，忽然想起母亲说过，旧家曾有一位亲人早年出走在远方，此去经年，杳无音信。她把这点疑惑按在心底，决定等夫君回来再问个明白，问的时候还要装作无意，免得他为难。鸡叫三遍，门外有了动静，芸娘起身梳洗，把鬓发理得平平的，像是什么也没有发生过，只是那方玉佩的凉意，一整日都留在她的指尖上，连写字的时候也跟着颤。她想起旧约里那句无论将来发生什么，忽然觉得这句话原是说给自己听的。'}
+
+    class _EntryTransport(_RoutingTransport):
+        # 正文两章换成带内长度的稿（与本文件进程内 _EntryTransport 同一形状）。
+
+        def send(self, request):
+            owner = self._owner(request)
+            if owner.startswith('body_ch'):
+                self.calls.append(owner)
+                key = 'ch01' if owner.endswith('ch01') else 'ch02'
+                return ChatResponse(
+                    content=_BODY_TEXTS[key], finish_reason='stop',
+                    usage={'prompt_tokens': 100, 'completion_tokens': 40},
+                    model='fake')
+            return super().send(request)
+
+    _chain.DeepSeekTransport = lambda cfg: _EntryTransport(_full_chain_wires())
+"""
+
+
+@pytest.mark.real_code_version
+def test_service_full_chain_real_subprocess_and_restart_readback(base, tmp_path,
+                                                                 monkeypatch):
+    """HTTP 上传 → Supervisor → 真实 run_step/CLI 子进程 → Stage7 交付；
+    页面刷新与服务重启（新建服务实例）后的只读读回逐字节一致。"""
+    from pathlib import Path
+
+    repo_root = str(Path(__file__).resolve().parents[1])
+
+    # ① fake transport 经 sitecustomize 注入子进程（PYTHONPATH + 环境门）。
+    fake_site = tmp_path / 'fake_transport_site'
+    fake_site.mkdir()
+    (fake_site / 'sitecustomize.py').write_text(_SITECUSTOMIZE_SOURCE,
+                                                encoding='utf-8')
+    monkeypatch.setenv('NOVEL_B5_FAKE_TRANSPORT', '1')
+    monkeypatch.setenv('NOVEL_B5_FAKE_REPO', repo_root)
+    existing = os.environ.get('PYTHONPATH')
+    monkeypatch.setenv(
+        'PYTHONPATH',
+        str(fake_site) + (os.pathsep + existing if existing else ''))
+
+    # ② 最小合法基座：stage0/stage1 经真实 CLI 子进程落盘（零模型调用）。
+    source = base.parent / 'input_9003.txt'
+    source.write_text(SOURCE_TEXT, encoding='utf-8')
+    for argv in (
+            [sys.executable, '-B', '-m', 'novel.cli', 'run', 'stage0.remove',
+             '--source', str(source), '--base', str(base)],
+            [sys.executable, '-B', '-m', 'novel.cli', 'run', 'stage1.partition',
+             '9003', '--base', str(base)]):
+        proc = subprocess.run(argv, cwd=repo_root, capture_output=True)
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+
+    settings = agent_settings.read(base)
+    agent_settings.update(base, profiles=_profiles(),
+                          expected_revision=settings.revision)
+
+    # ③ 真实 HTTP 上传（两项授权）⇒ 上传作业子进程跑 stage0 + autostart。
+    with TestClient(create_app(base)) as client:
+        response = client.post(
+            '/api/upload',
+            params={'filename': 'input_9003.txt', 'authorized': 'true',
+                    'egress_authorized': 'true',
+                    'idempotency_key': 'b5-subprocess-9003'},
+            content=SOURCE_TEXT.encode('utf-8'),
+            headers={UI_HEADER: '1', 'Content-Type': 'application/octet-stream'})
+    assert response.status_code == 200, response.text
+    uploaded = response.json()
+    assert uploaded['sid'] == '9003'
+    assert uploaded['autostart'] == 'started'
+    run_id = uploaded['run']['run_id']
+
+    # ④ Supervisor 逐动作驱动真实子进程到 stage7 交付。
+    assert agent.wait(run_id, 1800), 'agent 代跑未在时限内收口'
+    record = next(row for row in agent.records(base) if row.run_id == run_id)
+    assert record.ended is not None and record.outcome is not None
+
+    book = paths.resolve_novel_dir(base, '9003')
+    final_path = book / paths.book_txt_rel(book)
+    manifest_path = book / 'stage7' / 'final' / 'delivery_manifest.json'
+    assert final_path.is_file(), '真实子进程链没有交付成书'
+    final_bytes = final_path.read_bytes()
+    manifest = _read_json(manifest_path)
+    manifest_before = manifest_path.read_bytes()
+    assert manifest['final_text_sha256'] == hashlib.sha256(final_bytes).hexdigest()
+    assert [c['chapter_ordinal'] for c in manifest['chapters']] == [1, 2]
+    assert '苏芸娘' not in final_bytes.decode('utf-8')
+    assert '柳婉' in final_bytes.decode('utf-8')
+
+    # ⑤ 付费账：fake transport 的每一跳都经真实 PaidRequestSession 入账
+    #    （13 次新购、11 个付费节点、unknown 不冒充零）。
+    rows = _ledger_rows(base)
+    paid = [row for row in rows
+            if row['sid'] == book.name and not row['cached']]
+    assert len(paid) == 13
+    assert {row['node'] for row in paid} == {
+        'str06.stage2.book', 'str06.stage2.chapters', 'str06.stage2.names',
+        'str06.stage2.associate', 'str06.stage4.preserve',
+        'str06.stage4.body_design', 'str06.stage4.bind',
+        'str06.stage4.hook_design', 'str06.stage5.hook', 'str06.stage5.body',
+        'str06.stage7.naming'}
+
+    # ⑥ 只读监控面：run/delivery/book 三面读回，页面刷新与重启前后一致。
+    candidate = book.name                     # 候选根＝书目录名（title_sid）
+    def _read_faces(client):
+        run_face = client.get(f'/api/str06/candidates/{candidate}/run')
+        delivery_face = client.get(f'/api/str06/candidates/{candidate}/delivery')
+        book_face = client.get(f'/api/str06/candidates/{candidate}/book')
+        assert run_face.status_code == 200, run_face.text
+        assert delivery_face.status_code == 200, delivery_face.text
+        assert book_face.status_code == 200, book_face.text
+        return (run_face.json(), delivery_face.json(), book_face.text)
+
+    with TestClient(create_app(base)) as client:
+        first = _read_faces(client)
+        refreshed = _read_faces(client)             # 页面刷新：同一服务再读一次
+    with TestClient(create_app(base)) as client:    # 服务重启：全新服务实例
+        restarted = _read_faces(client)
+
+    assert refreshed == first, '页面刷新后读回不一致'
+    assert restarted == first, '服务重启后读回不一致'
+    run_face, delivery_face, book_text = restarted
+    assert run_face['present'] is True
+    nodes = {n['node'] for n in run_face['nodes']}
+    from contracts.invariants import NODES
+    assert nodes == {node for node in NODES if node.startswith('str06.')},         'run 面的节点集合必须恰为现役 14 节点的 str06 全集'
+    assert delivery_face['present'] is True
+    assert delivery_face['final_text_sha256'] == manifest['final_text_sha256']
+    assert book_text == final_bytes.decode('utf-8')
+
+    # ⑦ 零调用恢复：全部就绪后再次 agent.start ⇒ 零派发、零新购、交付原样。
+    second = agent.start(base, '9003', authorized=True, egress_authorized=True,
+                         profiles=_profiles())
+    assert agent.wait(second.run_id, 600)
+    assert final_path.read_bytes() == final_bytes
+    assert manifest_path.read_bytes() == manifest_before,         '零派发的代跑不得改写交付 manifest'

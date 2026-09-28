@@ -1,7 +1,7 @@
 {
   "change_scopes": {
     "str06": {
-      "_note": "F8c 分流：迁移包 `contracts/schema/str06/`、`novel/stages/str06/`、`novel/llm/str06_*`、`tools/str06_workflow.py` 已拆进正式 per-stage 包与 `novel/llm/paid_requests.py`；选测范围随之改登记**新落点**（范围名 `str06` 是这条链的身份，不是路径前缀）。",
+      "_note": "B5（S-05）迁移登记清理：F8c 分流叙事与旧路径引用已删除，本条不再指向任何已删除路径；`str06` 范围转为该链的**现役选测范围**（路径与 tests 清单均实存、与真实导入消费者取并集）。",
       "paths": [
         "contracts/schema/source.py",
         "contracts/schema/observation.py",
@@ -809,7 +809,8 @@
       "cases": {
         "test_full_chain_from_http_upload_to_stage7_delivery": "stage",
         "test_legacy_book_is_refused_at_every_product_entry_face": "stage",
-        "test_upload_without_authorization_starts_no_paid_run": "stage"
+        "test_upload_without_authorization_starts_no_paid_run": "stage",
+        "test_service_full_chain_real_subprocess_and_restart_readback": "stage"
       }
     },
     "tests/test_str06_repairs.py": {

@@ -6,7 +6,20 @@
 验收与删除条件唯一见 `docs/REQUIREMENTS.md`；架构裁决见 `docs/DECISIONS.md`。
 
 **实施边界**：B0–B5 全部 fake transport、零模型调用，付费与正文外发只在 B6 按实际
-报价分别授权。**B2 前半（2026-09-27）已落地注册面**：`contracts/invariants.py::NODES`
+报价分别授权。**B5（2026-09-28）已落地产品接入与旧路径删除（S-05）**：
+上传→autostart→Supervisor→**真实 `run_step`／`novel.cli` 子进程**→Repository→
+Stage7 交付、页面刷新与服务重启读回一致的 fake 全链钉在
+`tests/test_str06_product_entry.py::test_service_full_chain_real_subprocess_and_restart_readback`
+（fake transport 经 `sitecustomize` 注入子进程，`real_code_version` 过 run_step
+代码身份闸；13 次付费、11 个付费节点、`--check-only` 追跑零新购、二次
+`agent.start` 零派发）；旧联合抽取引擎 `novel/stages/stage2/source.py` 整包删除
+（反例迁至五 owner 引擎，`tests/test_str06_source.py`／`tests/hard_cases.py`
+换轨）；`_llm_client`／`create_legacy_client`／`default_legacy_backend`（执行期
+`load_config()` 重读的最后残留）删除；`nodes.validate_run` 的旧链逐节点分支与
+主操作互斥表、ledger 的旧链 prepared recovery 审计族、consumption 的
+stage4/5/6/7 死投影函数随之清偿；test_store 旧链 store 族红账（40 项）随采样面
+换轨（NameMap v5×canonical Characters、names×book 观察）清零。
+**B2 前半（2026-09-27）已落地注册面**：`contracts/invariants.py::NODES`
 扩为 14 个公开节点（Stage2 五节点，`str06.stage2.source` 退役），观察与关联协议
 （`contracts/schema/observation.py`）与 Resolver（`novel/stages/stage2/resolver.py`）
 落地，冻结基线随 B2 重新钉定（`a0f5fb5e…`，`tests/test_str06_f7e_freeze.py`）。
@@ -318,8 +331,7 @@ seal → 标记采用（可由 seal 重建）。任一窗口中断优先免费�
 `novel/stages/stage2/names.py`、`novel/stages/stage2/resolver.py`（证据定位唯一实现）、
 `novel/stages/stage2/associate.py`（跨章关联 owner，B2 第三步）、
 `novel/stages/stage2/compile.py`（双真源唯一发布 owner＋源 fold 唯一实现，
-B2 第三步）、`novel/stages/stage2/source.py`（旧联合抽取引擎，链已不消费；
-反例迁移完成后删除，S-05）、
+B2 第三步；旧联合抽取 `source.py` 已随 B5/S-05 整包删除，反例已迁五 owner 引擎）、
 `novel/stages/stage4/grounding.py`（preserve/bind）、
 `novel/stages/stage4/design.py`、`novel/stages/stage4/hook.py`（hook design 与唯一
 graph publisher，B3 后半归位）、`novel/stages/stage4/compile.py`、`novel/stages/stage4/book_ir.py`、

@@ -111,6 +111,11 @@ _DECLARED_ABSENT: dict[str, str] = {
         'F8c（2026-09-25）分流后删除：实现搬进 novel/stages/stage2|stage4|stage5|'
         'stage7/＋novel/stages/common.py＋novel/stages/chain.py。'
         'REQUIREMENTS 引用它的段落正是记录这次分流'),
+    'novel/stages/stage2/source.py': (
+        'B5（2026-09-28）S-05 删除：旧联合抽取引擎自 B2 五节点重建起链上不消费，'
+        '反例已迁五 owner 引擎（book/chapters/associate/compile），源 fold 唯一'
+        '实现住 `novel/stages/stage2/compile.py`。DECISIONS/REQUIREMENTS 引用'
+        '它的段落正是记录历史落点与这次删除'),
 }
 
 _ID = re.compile(r'`(R-\d+\.\d+[a-z]?|Q-\d+|B-\d+)`')

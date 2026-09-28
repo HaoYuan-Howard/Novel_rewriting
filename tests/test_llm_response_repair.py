@@ -57,7 +57,7 @@ def _ctx(base: Path) -> RunContext:
     # 这一族测的多个 ``_ctx`` 就是同一次跨 CLI resume；
     # 新账不再允许靠 sid/purpose 把另一 run 的成本接过来。
     # 旧 stage2.global/stage2.blueprint 已整族退役；book＋chNN 联合抽取
-    # 由 str06.stage2.source 承接（scope=strategy / chapter:N，见 executor_scope）。
+    # 由 str06.stage2.book／chapters 承接（scope=book / chapter:N，B2 五节点）。
     run_id = _RUN_IDS.setdefault(base, new_run_id())
     return RunContext.open(
         base, '123', 'str06.stage2.book', paid=True,
@@ -87,7 +87,7 @@ def _good(model: str = 'deepseek-flash') -> ChatResponse:
 
 
 def _ask(client: LlmClient) -> RepairResponse:
-    # 整书级 purpose：str06.stage2.source 的 book 级单元按登记叫 `strategy`。
+    # 整书级 purpose：str06.stage2.book 的 book 级单元按登记叫 `book`（B2）。
     return client.ask_json('system', 'user', model_cls=RepairResponse,
                            purpose='strategy:repair.p')
 

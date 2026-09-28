@@ -91,7 +91,6 @@ def book_budget_path(base: str | os.PathLike[str], sid: str) -> Path:
     return service_runs_dir(base) / check_sid(sid) / 'book_budget.json'
 
 
-
 def upload_autostart_intents_path(base: str | os.PathLike[str]) -> Path:
     """上传即自动开跑意图账（base 级全局 append-only JSONL，按幂等键折叠）。"""
     return service_dir(base) / 'upload_autostart_intents.jsonl'
@@ -1251,40 +1250,6 @@ def legacy_stage5_chapter_checkpoint_dir(
 ) -> Path:
     return legacy_stage5_chapter_run_path(
         novel_dir, run_id, chapter) / 'checkpoints'
-
-
-def stage5_prepared_recovery_manifest_path(
-        novel_dir: str | os.PathLike[str], run_id: str,
-) -> Path:
-    """target run 的整书 prepared recovery 不可变 manifest。"""
-    from novel.run_identity import check_run_id
-
-    return (_service_stage_runs_dir(novel_dir, 'stage5')
-            / check_run_id(run_id) / 'prepared_recovery.json')
-
-
-def legacy_stage5_prepared_recovery_manifest_path(
-        novel_dir: str | os.PathLike[str], run_id: str,
-) -> Path:
-    from novel.run_identity import check_run_id
-
-    return (_legacy_stage_runs_dir(novel_dir, STAGE5_RUNS_DIRNAME)
-            / check_run_id(run_id) / 'prepared_recovery.json')
-
-
-def stage5_chapter_recovery_journal_path(
-        novel_dir: str | os.PathLike[str], run_id: str, chapter: int,
-) -> Path:
-    """一章跨 run replacement 的两相 journal；不覆盖 source committed.json。"""
-    return (stage5_chapter_run_path(novel_dir, run_id, chapter)
-            / 'prepared_recovery.json')
-
-
-def legacy_stage5_chapter_recovery_journal_path(
-        novel_dir: str | os.PathLike[str], run_id: str, chapter: int,
-) -> Path:
-    return (legacy_stage5_chapter_run_path(novel_dir, run_id, chapter)
-            / 'prepared_recovery.json')
 
 
 def stage5_chapter_commit_lock_path(

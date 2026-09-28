@@ -346,15 +346,9 @@ def _legacy_message(surface: str, refs) -> str:
             f'（source_refs={list(refs)}）')
 
 
-def test_compile_book_delegates_to_the_resolver():
-    """旧 compile_book 的锚点派生与 Resolver 同一实现（S-03，无第二真相）。"""
-    from novel.stages.stage2.source import _derive_from_chapter
-    segment = {'chapter': 2, 'text': '第二夜窗外有响动。'}
-    assert _derive_from_chapter('夫君', ['e02_01'], {'e02_01': segment}) == (
-        0, _legacy_message('夫君', ['e02_01']))
-    assert _derive_from_chapter('响动', ['e02_01'], {'e02_01': segment}) == (2, None)
-    assert _derive_from_chapter('夫君', ['e00_01'],
-                                {'e00_01': {'chapter': 0, 'text': '夫君坦白。'}}) == (1, None)
+# ⚠ B5（S-05）：`test_compile_book_delegates_to_the_resolver` 随旧联合抽取引擎
+# 的委托 shim（`source.py::_derive_from_chapter`）删除；R-2.10 唯一实现的
+# 消息一致性已由上方 resolver 用例（`_legacy_message` 逐字对账）钉住。
 
 
 def test_evidence_ref_chapter_mapping():

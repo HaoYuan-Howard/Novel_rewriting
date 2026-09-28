@@ -1564,7 +1564,7 @@ IDENTITY_BLIND: Final = (
 #: 每一层确定性的部分都必须能 0 成本重算，否则修自己的 bug 要付费（需求 Q-3）。
 #: **命名体系本身是资产**：同一个语义在不同节点上必须叫同一个名字。
 #:
-#: 【F8a 翻转后只剩两个】新链 11 个节点的节点级旗标只有 `--check-only`（免费复检：
+#: 新链节点的节点级旗标只有 `--check-only`（免费复检：
 #: 本地已购行／登记的历史采用与确定性重放，零新购）；Stage0/1 保留 `--dry-run`。
 #: 旧链的 typed edit／recovery／revalidate 一族随旧节点整体退役（F7e 登记）——
 #: 新链的语义修复走 owner patch（基线身份核验），机械复检走 `--check-only`，
@@ -1792,7 +1792,7 @@ class NodeSpec(NamedTuple):
 #:
 #: 【F8a 翻转：候选链成为唯一现役链】本表由 `contracts/schema/workflow.py`
 #: 的候选节点表**原样激活**（F7e 冻结基线，`tests/test_str06_f7e_freeze.py` 钉住）：
-#: 11 个 `str06.` 前缀节点取代旧 Stage2/4/5/6/7 全部 14 个节点键。旧键整体移入
+#: `str06.` 前缀节点取代旧 Stage2/4/5/6/7 全部节点键；B2 起现役面为 14 个节点。 旧键整体移入
 #: `RETIRED_NODES` 只供 append-only 作业历史解码，不 preview、不调度、不建新队列。
 #: Stage6 整层退役（`STAGES` 不再含 `stage6`，`RETIRED_STAGES` 登记）。
 #: 【B2 五节点重建（2026-09-27，D9）】`str06.stage2.source` 退役，Stage2 扩为
@@ -2080,7 +2080,7 @@ AgentAvailability = Literal['ready', 'missing', 'unknown', 'unauthenticated']
 #: ⚠ 两张表分开而不是合并成一个可调用的谓词：必填这件事要能被 `preview`
 #: **0 成本地摊开**（渲染占位符），谓词做不到——它只能回答是/否，说不出缺哪几个。
 #:
-#: ⇒ F8a 翻转后本表为空：新链 11 个节点的全部旗标只有 `--check-only`（无条件
+#: ⇒ F8a 翻转后本表为空：新链节点的全部旗标只有 `--check-only`（无条件
 #: 出现在 `flags` 列，且不改变免费性以外的身份），旧链的 typed edit／recovery
 #: 条件必填面随旧节点整体退役。表保留是因为**结构仍被消费**（`required_flags`
 #: 查它、`nodes.missing_required` 查它）；空表是诚实的现状，不是漏登记。

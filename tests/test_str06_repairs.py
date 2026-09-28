@@ -13,6 +13,7 @@ from pydantic import ValidationError
 
 from contracts.schema.design import TargetDelta
 from contracts.schema.grounding import BindingEntry, SemanticBinding
+from contracts.schema.observation import STAGE2_OBSERVATION_PROTOCOL as PV
 from contracts.schema.state import StateRead, SurfaceIntroduction
 from novel.stages.stage4.compile import compile_execution_plan
 from novel.stages.common import project_context
@@ -20,11 +21,10 @@ from novel.stages.stage4.fold import fold_accepted_prefix, FoldedState
 from novel.stages.common import canonical_sha256
 from novel.stages.stage4.guard import run_mechanical_guard
 from novel.stages.stage4.grounding import assemble_preserve, project_brief, assemble_binding
-from novel.stages.stage2.source import ChapterCompiler, assemble_blueprint, chapter_input_snapshot
+from novel.stages.stage2 import compile_source_truth
 from tests.str06_facilities import make_context
 from tests.test_str06_execution_ir import _graph, _binding, _cp, _ob
 from tests.test_str06_target import _assemble, _preserve_wire, _source_pair
-from tests.test_str06_source import _compile_pair, _chapter_wire
 
 
 def contexts(graph, binding):
@@ -176,27 +176,66 @@ def test_named_absent_character_and_introduction_beat_reach_writer():
     assert run_mechanical_guard(binding=binding, context=context, graph=graph) == []
 
 
-def test_source_prior_snapshot_is_latest_and_validation_has_no_side_effect():
-    chars, wcs, compiler, ch1 = _compile_pair()
-    before = deepcopy(compiler.__dict__)
-    assert compiler.validate(_chapter_wire(), 2) == []
-    assert compiler.__dict__ == before
-    ch2, _ = compiler.compile(_chapter_wire(), 2)
-    snapshot = chapter_input_snapshot(chars, assemble_blueprint(wcs, [ch1, ch2]), 3)
-    assert any('wariness' in item for item in snapshot)
-    with pytest.raises(ValueError, match='连续'):
-        chapter_input_snapshot(chars, assemble_blueprint(wcs, [ch1]), 3)
+# ⚠ B5（S-05）：`test_source_prior_snapshot_is_latest_and_validation_has_no_side_effect`
+# 已随 D3 退役面（逐章输入快照 chapter_input_snapshot）删除——章观察互不依赖后
+# 「前章快照严格前缀」没有对象；validator 不改输入由
+# tests/test_str06_stage2_owners.py::test_book_observation_never_modifies_the_wire 承接。
 
 
-@pytest.mark.parametrize('fault', ['evidence', 'effect_subject', 'holder', 'bad_edge'])
+def _stage2_outcome_with_ch02(ch02: dict):
+    """ch02 观察替换成红例、其余走绿底座 → compile_source_truth。"""
+    from tests.test_str06_stage2_publish import (
+        EVIDENCE, _associate_wire, _book_wire, _chapter_wires, _names_wire,
+    )
+    from novel.stages.stage2 import (
+        AssociateObservation, BookObservation, ChapterObservation, NamesObservation,
+    )
+    chapters = _chapter_wires()
+    chapters['ch02'] = ch02
+    return compile_source_truth(
+        book=BookObservation.model_validate(_book_wire()),
+        chapters={no: ChapterObservation.model_validate(chapters[f'ch{no:02d}'])
+                  for no in range(1, len(chapters) + 1)},
+        names=NamesObservation.model_validate(
+            {'protocol_version': PV, 'structure': _names_wire()}),
+        associate=AssociateObservation.model_validate(_associate_wire()),
+        evidence=EVIDENCE)
+
+
+@pytest.mark.parametrize('fault', ['evidence', 'effect_subject', 'holder'])
 def test_source_reference_closure_and_no_silent_edge_drop(fault):
-    _, _, compiler, _ = _compile_pair()
-    wire = _chapter_wire()
-    if fault == 'evidence': wire['beats'][0]['source_refs'] = ['ghost']
-    elif fault == 'effect_subject': wire['beats'][0]['effects'][0]['target']['char_id'] = 'ghost'
-    elif fault == 'holder': wire['beats'][0]['cognition'][0]['holder'] = 'ghost'
-    else: wire['causal_edges'] = [{'from_beat': 'b01_01', 'to_beat': 'b02_01', 'kind': 'bogus'}]
-    assert compiler.compile(wire, 2)[1]
+    """章观察的引用闭合（D3 章内证据；人物闭集归 compile）。旧链因果边形状随
+    D3「章观察无因果边」退役——跨章因果改经 associate 配对（见
+    tests/test_str06_stage2_publish.py::test_cross_chapter_cause_lands_in_the_to_chapter）。"""
+    ch02 = {'protocol_version': PV, 'beats': [{
+        'event': '云娘向夫君试探', 'participants': ['yun_niang', 'fu_jun'],
+        'source_refs': ['e02_01'], 'scene_boundary': 'new',
+        'temporal_mode': 'single',
+        'effects': [{'target': {'kind': 'character', 'char_id': 'yun_niang'},
+                     'key': 'wariness', 'op': 'set', 'value': '高',
+                     'scope': 'book', 'disclosure': {'visibility': 'on_page'}}],
+        'cognition': [{'proposition': {'ref': 'p_secret',
+                                       'statement': '借种之约是夫妻共同秘密'},
+                       'holder': 'yun_niang', 'mode': 'learns'}],
+        'loops': []}]}
+    beat = ch02['beats'][0]
+    if fault == 'effect_subject':
+        beat['effects'][0]['target']['char_id'] = 'ghost'
+        outcome = _stage2_outcome_with_ch02(ch02)
+        findings = outcome.errors + outcome.undecided
+    elif fault == 'holder':
+        beat['cognition'][0]['holder'] = 'ghost'
+        outcome = _stage2_outcome_with_ch02(ch02)
+        findings = outcome.errors + outcome.undecided
+    else:
+        # 本章证据句段闭集归章观察 owner（引用闭集之外的段 id 即精确 issue）。
+        from tests.test_str06_stage2_publish import EVIDENCE
+        from novel.stages.stage2 import compile_chapter_observation
+        beat['source_refs'] = ['ghost']
+        ch02['beats'][0]['source_refs'] = ['ghost']
+        _observation, findings = compile_chapter_observation(
+            ch02, evidence_ids=frozenset(EVIDENCE))
+    assert findings, fault
 
 
 def test_compiler_hash_stable_across_process_seeds():

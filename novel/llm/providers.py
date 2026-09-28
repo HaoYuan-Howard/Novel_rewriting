@@ -19,7 +19,7 @@ from typing import Final
 from contracts.invariants import (
     LLM_EXECUTOR_NODES, LegacyLlmProvider, NODES,
 )
-from contracts.schema.orchestration import LegacyExecutorBackend, LegacyLlmProfile
+from contracts.schema.orchestration import LegacyLlmProfile
 from novel.errors import UnsupportedRunMode
 
 
@@ -46,7 +46,14 @@ class LegacyProviderSpec:
 
 
 class LegacyLlmDriver(ABC):
-    """一个直接 LLM API provider 的完整扩展缝。"""
+    """一个直接 LLM API provider 的完整扩展缝。
+
+    ⚠ B5（S-05）：`default_profile`／`create_client` 及模块级
+    `default_legacy_backend`／`create_legacy_client` 已删——它们的运行配置读取
+    （执行期 `load_config()`）与 client 构造自新链改走 run 启动冻结的
+    `ExecutionProfile`＋`chain.PaidBoundary` 后就没有生产调用方；provider 的
+    现役职责只剩能力矩阵发布与 profile 校验。
+    """
 
     @property
     @abstractmethod
@@ -58,14 +65,6 @@ class LegacyLlmDriver(ABC):
         self, profile: LegacyLlmProfile, *, node: str | None = None,
     ) -> LegacyLlmProfile:
         """关闭式校验并返回可冻结的精确快照。"""
-
-    @abstractmethod
-    def default_profile(self, *, node: str) -> LegacyLlmProfile:
-        """把 provider 的安全运行配置解析成一个节点的显式行为快照。"""
-
-    @abstractmethod
-    def create_client(self, ctx, profile: LegacyLlmProfile):
-        """构造真实 LLM client；只允许在付费节点即将执行时调用。"""
 
 
 _DEEPSEEK_THINKING: Final = (
@@ -148,44 +147,6 @@ class DeepSeekLegacyDriver(LegacyLlmDriver):
                 f'{reason}')
         return LegacyLlmProfile.model_validate(profile.model_dump(mode='json'))
 
-    def default_profile(self, *, node: str) -> LegacyLlmProfile:
-        from novel.config import load_config
-
-        cfg = load_config()
-        thinking = cfg.thinking_mode
-        effort = 'low' if thinking == 'off' else (NODES[node].effort or 'high')
-        profile = LegacyLlmProfile(
-            provider='deepseek',
-            model=NODES[node].model or cfg.model,
-            reasoning_effort=effort,
-            thinking_mode=thinking,
-        )
-        return self.validate_profile(profile, node=node)
-
-    def create_client(self, ctx, profile: LegacyLlmProfile):
-        checked = self.validate_profile(profile, node=ctx.node)
-        from novel.config import load_config
-        from novel.llm.cache import ResponseCache
-        from novel.llm.client import LlmClient
-        from novel.llm.transport import DeepSeekTransport
-
-        cfg = load_config()
-        return LlmClient(
-            ctx,
-            DeepSeekTransport(cfg),
-            cache=ResponseCache(cfg.cache_dir),
-            model=checked.model,
-            thinking_mode=checked.thinking_mode,
-            effort=checked.reasoning_effort,
-            max_retries=cfg.max_retries,
-            backoff_base=cfg.backoff_base,
-            concurrency=cfg.concurrency_for(ctx.node),
-            concurrency_policy=cfg.concurrency_policy,
-            # 2026-09-16：全链 Flash 真跑——显式选中的 legacy 模型不得再静默
-            # Flash→Pro 兜底；要 Pro 必须在 profile 里选 deepseek-v4-pro。
-            enable_model_fallback=False,
-        )
-
 
 _DRIVERS: Final[tuple[LegacyLlmDriver, ...]] = (DeepSeekLegacyDriver(),)
 _DRIVER_BY_ID: Final = {driver.spec.id: driver for driver in _DRIVERS}
@@ -210,18 +171,8 @@ def validate_legacy_profile(
     return driver_for(profile.provider).validate_profile(profile, node=node)
 
 
-def default_legacy_backend(*, node: str) -> LegacyExecutorBackend:
-    return LegacyExecutorBackend(
-        profile=driver_for('deepseek').default_profile(node=node))
-
-
-def create_legacy_client(ctx, profile: LegacyLlmProfile):
-    return driver_for(profile.provider).create_client(ctx, profile)
-
-
 __all__ = [
     'DeepSeekLegacyDriver', 'LegacyLlmDriver', 'LegacyModelSpec',
-    'LegacyProviderSpec', 'LegacyThinkingSpec', 'create_legacy_client',
-    'default_legacy_backend', 'driver_for', 'provider_specs',
+    'LegacyProviderSpec', 'LegacyThinkingSpec', 'driver_for', 'provider_specs',
     'validate_legacy_profile',
 ]

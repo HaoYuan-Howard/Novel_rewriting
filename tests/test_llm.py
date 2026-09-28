@@ -2020,21 +2020,34 @@ def test_every_free_flag_runs_without_an_api_key():
     assert 'DEEPSEEK_API_KEY' in str(e.value)
 
 
-def test_cli_client_uses_the_configured_persistent_cache(monkeypatch):
-    """两个 CLI 进程必须能共享缓存；内存缓存会让每次重跑都重新付费。"""
-    from novel.cli import main as cli
-
-    cache_dir = Path(tempfile.mkdtemp()) / 'responses'
-    monkeypatch.setenv('NOVEL_CACHE_DIR', str(cache_dir))
-    client = cli._llm_client(_ctx())
-    assert client.cache.dir == cache_dir
+# ⚠ B5（S-05）：`test_cli_client_uses_the_configured_persistent_cache` 随旧链
+# client 构造口 `_llm_client` 删除——新链的「同请求不重购」由候选根的耐久响应
+# 承载（零新购复验钉在
+# tests/test_str06_product_entry.py::test_service_full_chain_real_subprocess_
+# and_restart_readback 的 `--check-only` 追跑与二次 agent.start）。
 
 
-def test_cli_client_wires_the_thinking_mode(monkeypatch):
-    """接线断了的话，A/B 的两个 nothink 臂会**静默**跑成默认档——必须钉住这条线。"""
-    from novel.cli import main as cli
+def test_thinking_mode_env_wiring_reaches_the_frozen_profile(monkeypatch):
+    """DEEPSEEK_THINKING=off 一路到冻结 profile 与请求：nothink 臂不得静默跑默认档。
+
+    B5：原 `_llm_client` 的 nothink 阶梯接线随旧链 client 构造口删除；新链的
+    thinking 取舍在 run 启动冻结（B1，`novel/stages/chain.py::ExecutionProfile`），
+    本条钉住 env → cfg → profile → ChatRequest 整条线不再有断点。
+    """
+    import os
+
+    from novel.config import load_config
+    from novel.stages.chain import ExecutionProfile, str06_chat_request
 
     monkeypatch.setenv('DEEPSEEK_THINKING', 'off')
-    assert cli._llm_client(_ctx())._rungs is NOTHINK_RUNGS
+    cfg = load_config(env=dict(os.environ))
+    assert cfg.thinking_mode == 'off'
+    profile = ExecutionProfile(cfg=cfg, reasoning_effort='low')
+    assert profile.thinking is False
+    request = str06_chat_request(profile, 'bind', '提示', json_mode=True,
+                                 system='系统', temperature=0.7, enforce=False)
+    assert request.thinking is False
+
     monkeypatch.delenv('DEEPSEEK_THINKING', raising=False)
-    assert cli._llm_client(_ctx())._rungs is LADDER
+    cfg_on = load_config(env=dict(os.environ, DEEPSEEK_THINKING='on'))
+    assert ExecutionProfile(cfg=cfg_on, reasoning_effort='low').thinking is True

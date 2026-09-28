@@ -86,7 +86,9 @@ OLD_STAGE_MODULES = (
 
 #: 新链 per-stage 引擎模块（F8c 分流后的落点；必须全部在盘上）。
 NEW_STAGE_MODULES = (
-    'novel/stages/stage2/__init__.py', 'novel/stages/stage2/source.py',
+    # ⚠ B5（S-05）：`stage2/source.py` 旧联合抽取引擎已删，模块面由
+    # `tests/test_layering.py::test_stage2_owner_shims_cannot_return` 钉住。
+    'novel/stages/stage2/__init__.py',
     'novel/stages/stage2/names.py',
     'novel/stages/stage4/__init__.py', 'novel/stages/stage4/design.py',
     'novel/stages/stage4/grounding.py', 'novel/stages/stage4/compile.py',

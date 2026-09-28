@@ -28,16 +28,14 @@ import sys
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 
-from contracts.artifacts import STAGE5_REVIEWER_REWRITE_REQUEST
 from contracts.invariants import (
     CONDITIONAL_REQUIRED_FLAGS, FREE_ENTRIES, NODES, NODE_WRITE_EFFECTS,
-    REQUIRED_PLACEHOLDER_PREFIX, STAGE5_EDIT_CONFIRMATIONS, VALUED_FLAGS,
-    WRITE_EFFECTS,
+    REQUIRED_PLACEHOLDER_PREFIX, VALUED_FLAGS, WRITE_EFFECTS,
 )
 from contracts.schema.orchestration import (
     ExecutorBackend, LegacyExecutorBackend, LegacyLlmProfile, Step,
 )
-from novel import paths as novel_paths, run_identity
+from novel import paths as novel_paths
 from novel.orchestrator.executor_capabilities import (
     AgentProfileRefused, validate_executor_backend,
 )
@@ -89,67 +87,8 @@ PROFILED_LLM_RUNS: dict[str, tuple[frozenset[str], ...]] = {
 
 PROFILED_LLM_NODES = tuple(PROFILED_LLM_RUNS)
 
-#: 各节点的“主操作”。其余 ``--chapters`` / ``--actor`` /
-#: ``--reason`` 都只是这些操作的参数，不参与互斥。Stage4A
-#: 的 ``--replan`` 是一次真重采，与只预览的 ``--dry-run`` 不可同时成立。
-#:
-#: ⚠ 顺序不是装饰：``novel.cli.main::_run_stage4`` / ``::_run_stage5``
-#: 正是按这些 flag 的分支优先级派发。若一次允许两个主操作，CLI 只执行
-#: 排在前面的那个，而 ``write_effect``
-#: 可能被排在后面的 ``--dry-run`` / ``--check-only`` 盖成“不写盘”，preview 就会
-#: 对实际写盘说假话。这里关闭式拒收，展示与执行共用同一道门。
-_PRIMARY_OPERATIONS = {
-    'stage2.analyze': frozenset({'--dry-run', '--recover-analyze-run'}),
-    'stage2.characters': frozenset({
-        '--dry-run', '--revalidate', '--apply-edit', '--emit-edit-template', '--resample',
-        '--emit-analyze-draft-template', '--repair-analyze-draft', '--recover-analyze-draft',
-    }),
-    'stage2.global': frozenset({
-        '--recover-analyze',
-        '--emit-analyze-draft-template', '--repair-analyze-draft', '--recover-analyze-draft',
-        '--renormalize', '--resample', '--revalidate',
-        '--apply-edit', '--emit-edit-template',
-    }),
-    'stage2.blueprint': frozenset({
-        '--dry-run', '--check-only', '--renormalize',
-        '--revalidate', '--emit-edit-template',
-        '--validate-edit', '--apply-edit',
-    }),
-    # stage4 人工闸退役（2026-09-15 全自动裁决）：close-review 随之退役；
-    # --replan 是付费主操作，与只预览的 --dry-run 互斥。
-    'stage4.design': frozenset({
-        '--dry-run', '--replan', '--reaggregate', '--recover-prepared',
-        '--recover-responses', '--recover-repair-aggregate',
-    }),
-    'stage4.plan': frozenset({
-        '--dry-run', '--check-only', '--revalidate', '--names-only',
-        '--identity', '--apply-edit', '--apply-binding', '--reaggregate',
-        '--recover-prepared',
-    }),
-    'stage5.write': frozenset({
-        '--dry-run', '--recheck', '--revalidate', '--preview-edit',
-        '--apply-edit', '--revise', '--reviewer-rewrite',
-        '--emit-prepared-recovery-workpack', '--recover-prepared',
-        '--recover-reviewer-rewrite-prepared',
-        '--retire-reviewer-rewrite-request',
-    }),
-    'stage5.review': frozenset({
-        '--wontfix', '--check-only',
-    }),
-    'stage6.prepare': frozenset({
-        '--dry-run', '--revalidate', '--emit-edit-template',
-        '--recover-edit', '--recover-prepared',
-    }),
-    'stage6.hook': frozenset({
-        '--dry-run', '--check-only', '--identity', '--recheck', '--revalidate',
-        '--apply-edit', '--wontfix', '--rebind-review', '--recover-prepared',
-    }),
-    'stage7.rename': frozenset({
-        '--dry-run', '--check-only', '--identity', '--recheck', '--revalidate',
-        '--apply-edit', '--emit-edit-template', '--adopt-residual',
-        '--validate-edit', '--rebind-review', '--recover-prepared',
-    }),
-}
+#: 旧链「主操作互斥」表已随旧链 runner 形态删除（B5，S-05）：现役 str06
+#: 节点每个付费跑法只有默认 argv 与 --check-only，没有多主操作并存面。
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -234,218 +173,9 @@ def validate_run(node: str, flags: Sequence[str] = (), *,
             f'现有 {len(NODES)} 个：{", ".join(sorted(NODES))}')
     spec = NODES[node]
     tokens = flag_tokens(flags)
-    if node == 'stage4.design' and '--reaggregate' in tokens and set(tokens) != {'--reaggregate'}:
-        raise UnsupportedRunMode('Stage4A --reaggregate 只免费汇合已保存来源，不接受新的生成参数')
-    if node == 'stage4.design' and '--recover-responses' in tokens and set(tokens) != {'--recover-responses'}:
-        raise UnsupportedRunMode('Stage4A --recover-responses 只恢复原回答，不接受新的生成参数')
-    if node == 'stage2.global' and '--resample' in tokens:
-        if set(tokens) != {'--resample'}:
-            raise UnsupportedRunMode(
-                'stage2.global --resample 必须单独执行；它会重新采样整份全局响应')
-    if node == 'stage5.write' and '--emit-prepared-recovery-workpack' in tokens:
-        expected = {'--emit-prepared-recovery-workpack'}
-        if set(tokens) != expected:
-            raise UnsupportedRunMode(
-                'stage5.write --emit-prepared-recovery-workpack 是纯读动作，'
-                '不得与 executor/profile/egress/chapters/revise/repair 或人工写回参数混用')
-    if node == 'stage5.write' and '--preview-edit' in tokens:
-        if set(tokens) != {'--preview-edit'}:
-            raise UnsupportedRunMode(
-                'stage5.write --preview-edit 是纯读动作，只接受人工稿路径；'
-                '不得混入 apply 凭据、chapters、revise 或其他操作')
-    if node == 'stage5.write' and '--apply-edit' in tokens:
-        expected = {
-            '--apply-edit', '--actor', '--reason', '--current-chapter-sha256',
-            '--preview-subject-sha256', '--edit-confirmation',
-        }
-        # 先把「两个主操作同时出现」留给下面的通用互斥判据报错；这里仅在
-        # apply-edit 是唯一主操作时核它自己的完整凭据面。否则同一个非法 argv
-        # 会因新增一格 apply 凭据而从稳定的“主操作互斥”漂成另一类错误。
-        other_primary = (
-            set(tokens) & _PRIMARY_OPERATIONS.get(node, frozenset())
-        ) - {'--apply-edit'}
-        if not other_primary and set(tokens) != expected:
-            raise UnsupportedRunMode(
-                'stage5.write --apply-edit 只接受人工稿路径与必填的 actor/reason/'
-                'current-chapter-sha256/preview-subject-sha256/edit-confirmation；'
-                '不得与 chapters/revise 或其他操作混用')
-        confirmation = flag_value(flags, '--edit-confirmation')
-        confirmation_is_placeholder = (
-            allow_placeholders
-            and confirmation == placeholder_for('--edit-confirmation')
-        )
-        if (not other_primary and not confirmation_is_placeholder
-                and confirmation not in STAGE5_EDIT_CONFIRMATIONS):
-            raise UnsupportedRunMode(
-                'stage5.write --edit-confirmation 只接受 '
-                f'{list(STAGE5_EDIT_CONFIRMATIONS)}，实得 {confirmation!r}')
-    edit_credentials = {
-        '--current-chapter-sha256', '--preview-subject-sha256',
-        '--edit-confirmation',
-    }
-    if (node == 'stage5.write' and set(tokens) & edit_credentials
-            and '--apply-edit' not in tokens):
-        raise UnsupportedRunMode(
-            'Stage5 改稿双锁与确认参数只绑定 --apply-edit；不得被其他跑法静默忽略')
-    if node == 'stage5.write' and '--recover-prepared' in tokens:
-        expected = {'--recover-prepared', '--actor', '--reason', '--subject-sha256'}
-        if set(tokens) != expected:
-            raise UnsupportedRunMode(
-                'stage5.write --recover-prepared 只接受 source run_id 与必填的 '
-                '--actor/--reason/--subject-sha256；不得与 chapters/revise/'
-                'response-repair 或其他操作混用')
-    if node in ('stage4.design', 'stage4.plan', 'stage6.prepare', 'stage6.hook', 'stage7.rename') and '--recover-prepared' in tokens:
-        expected = {'--recover-prepared', '--subject-sha256'}
-        if set(tokens) != expected or len(flags) != 2 * len(expected):
-            raise UnsupportedRunMode(
-                f'{node} --recover-prepared 只接受原 source run_id 与 --subject-sha256；'
-                '不得混入生成、人工编辑或 response-repair')
-        source = flag_value(flags, '--recover-prepared') or ''
-        if not (allow_placeholders and source == placeholder_for('--recover-prepared')):
-            try:
-                run_identity.check_run_id(source)
-            except ValueError as exc:
-                raise UnsupportedRunMode(f'{node} 原 source run_id 非法：{exc}') from exc
-        digest = flag_value(flags, '--subject-sha256') or ''
-        if (not (allow_placeholders and digest == placeholder_for('--subject-sha256'))
-                and re.fullmatch(r'[0-9a-f]{64}', digest) is None):
-            raise UnsupportedRunMode('--subject-sha256 必须是 64 位小写十六进制 SHA-256')
-    if (node in ('stage4.design', 'stage4.plan', 'stage6.prepare', 'stage6.hook', 'stage7.rename') and '--subject-sha256' in tokens
-            and '--recover-prepared' not in tokens):
-        raise UnsupportedRunMode(f'{node} --subject-sha256 只绑定 --recover-prepared')
-    if node == 'stage5.write' and '--reviewer-rewrite' in tokens:
-        if set(tokens) != {'--reviewer-rewrite'}:
-            raise UnsupportedRunMode(
-                'stage5.write --reviewer-rewrite 只接受 current canonical request 路径；'
-                '不得与 chapters/revise/人工编辑或恢复参数混用')
-    reviewer_rewrite_recovery_credentials = {
-        '--reviewer-rewrite-request-sha256',
-        '--reviewer-rewrite-recovery-target-run-id',
-        '--reviewer-rewrite-recovery-journal-sha256',
-    }
-    if (node == 'stage5.write'
-            and '--recover-reviewer-rewrite-prepared' in tokens):
-        base_expected = {
-            '--recover-reviewer-rewrite-prepared',
-            '--reviewer-rewrite-request-sha256',
-        }
-        prepared_expected = {
-            *base_expected,
-            '--reviewer-rewrite-recovery-target-run-id',
-            '--reviewer-rewrite-recovery-journal-sha256',
-        }
-        token_set = set(tokens)
-        if (token_set not in (base_expected, prepared_expected)
-                or len(flags) != 2 * len(token_set)):
-            raise UnsupportedRunMode(
-                'stage5.write --recover-reviewer-rewrite-prepared 只接受 source run_id '
-                '与 canonical request SHA；prepared WAL 已存在时还必须同时携 exact '
-                'target run_id/journal SHA。不得与 paid rewrite、chapters/revise、'
-                'executor/profile 或其他操作混用')
-        source_run_id = flag_value(
-            flags, '--recover-reviewer-rewrite-prepared') or ''
-        try:
-            run_identity.check_run_id(source_run_id)
-        except ValueError as exc:
-            raise UnsupportedRunMode(
-                f'Stage5 Reviewer rewrite source run_id 非法：{exc}') from exc
-        request_sha256 = flag_value(
-            flags, '--reviewer-rewrite-request-sha256') or ''
-        if (request_sha256
-                != placeholder_for('--reviewer-rewrite-request-sha256')
-                and re.fullmatch(r'[0-9a-f]{64}', request_sha256) is None):
-            raise UnsupportedRunMode(
-                '--reviewer-rewrite-request-sha256 必须是 64 位小写十六进制 SHA-256')
-        if token_set == prepared_expected:
-            target_run_id = flag_value(
-                flags, '--reviewer-rewrite-recovery-target-run-id') or ''
-            try:
-                run_identity.check_run_id(target_run_id)
-            except ValueError as exc:
-                raise UnsupportedRunMode(
-                    f'Stage5 Reviewer rewrite recovery target run_id 非法：{exc}') from exc
-            journal_sha256 = flag_value(
-                flags, '--reviewer-rewrite-recovery-journal-sha256') or ''
-            if (journal_sha256
-                    != placeholder_for(
-                        '--reviewer-rewrite-recovery-journal-sha256')
-                    and re.fullmatch(r'[0-9a-f]{64}', journal_sha256) is None):
-                raise UnsupportedRunMode(
-                    '--reviewer-rewrite-recovery-journal-sha256 必须是 '
-                    '64 位小写十六进制 SHA-256')
-    if (node == 'stage5.write'
-            and '--retire-reviewer-rewrite-request' in tokens):
-        expected = {
-            '--retire-reviewer-rewrite-request',
-            '--reviewer-rewrite-request-sha256',
-        }
-        if set(tokens) != expected or len(flags) != 2 * len(expected):
-            raise UnsupportedRunMode(
-                'stage5.write --retire-reviewer-rewrite-request 只接受 canonical '
-                'request 路径与 request self SHA；不得与 paid/recovery/写作参数混用')
-        if flag_value(
-                flags, '--retire-reviewer-rewrite-request'
-        ) not in {
-            STAGE5_REVIEWER_REWRITE_REQUEST,
-            placeholder_for('--retire-reviewer-rewrite-request'),
-        }:
-            raise UnsupportedRunMode(
-                'stage5.write --retire-reviewer-rewrite-request 只接受 canonical request')
-        request_sha256 = flag_value(
-            flags, '--reviewer-rewrite-request-sha256') or ''
-        if (request_sha256
-                != placeholder_for('--reviewer-rewrite-request-sha256')
-                and re.fullmatch(r'[0-9a-f]{64}', request_sha256) is None):
-            raise UnsupportedRunMode(
-                '--reviewer-rewrite-request-sha256 必须是 64 位小写十六进制 SHA-256')
-    if (node == 'stage5.write'
-            and set(tokens) & reviewer_rewrite_recovery_credentials
-            and '--recover-reviewer-rewrite-prepared' not in tokens
-            and '--retire-reviewer-rewrite-request' not in tokens):
-        raise UnsupportedRunMode(
-            'Reviewer rewrite recovery credentials 只绑定 '
-            '--recover-reviewer-rewrite-prepared 或 '
-            '--retire-reviewer-rewrite-request；不得被其他写作跑法静默忽略')
-    if (node == 'stage5.write' and '--subject-sha256' in tokens
-            and '--recover-prepared' not in tokens):
-        raise UnsupportedRunMode(
-            'stage5.write --subject-sha256 只绑定 --recover-prepared 工作包；'
-            '不能把孤立 subject 静默忽略后落到默认付费写作')
-    # （stage5.review --request-reviewer-rewrite 校验分支已随批次 B3 trim 三选一
-    #   退役删除；该 flag 不再属于任何节点，validate_run 直接拒收。）
-    stage4_recovery_credentials = {
-        '--source-journal-sha256', '--source-commit-sha256',
-    }
-    if node == 'stage4.design' and '--recover-repair-aggregate' in tokens:
-        expected = {'--recover-repair-aggregate', *stage4_recovery_credentials}
-        # 三个 valued flag 必须各出现一次、各消费一个值；flag-token 集合相同
-        # 仍不能让尾随裸值越过 preview/start，等 child argparse 才失败。
-        if set(tokens) != expected or len(flags) != 2 * len(expected):
-            raise UnsupportedRunMode(
-                'stage4.design --recover-repair-aggregate 只接受 source run_id '
-                '与必填的 journal raw/self 两枚 SHA；不得与 review-token/'
-                'replan、executor/profile、人工写回或其他操作混用')
-        source_run_id = flag_value(flags, '--recover-repair-aggregate') or ''
-        try:
-            run_identity.check_run_id(source_run_id)
-        except ValueError as exc:
-            raise UnsupportedRunMode(
-                f'Stage4 repair aggregate source run_id 非法：{exc}') from exc
-        for credential in sorted(stage4_recovery_credentials):
-            value = flag_value(flags, credential) or ''
-            # 精确的 preview 占位符要留给下方通用分支统一处理：
-            # preview 可展示，真跑则以“占位符”而不是误导性的 SHA 格式错误拒绝。
-            value_is_placeholder = value == placeholder_for(credential)
-            if (not value_is_placeholder
-                    and re.fullmatch(r'[0-9a-f]{64}', value) is None):
-                raise UnsupportedRunMode(
-                    f'{credential} 必须是 64 位小写十六进制 SHA-256')
-    if (node == 'stage4.design'
-            and set(tokens) & stage4_recovery_credentials
-            and '--recover-repair-aggregate' not in tokens):
-        raise UnsupportedRunMode(
-            'Stage4 repair aggregate journal raw/self SHA 只绑定 '
-            '--recover-repair-aggregate；不得被默认付费设计静默忽略')
+    # ⚠ B5（S-05）：旧链节点的全部逐节点校验分支与主操作互斥表已随旧链 runner
+    # 形态删除——本函数先于一切拒绝 node not in NODES（RETIRED_NODES 的 argv
+    # 面走 legacy_incompatible），那些分支自 F8c 起就是不可达代码。
 
     bad = [f for f in tokens if f not in spec.flags]
     if bad:
@@ -454,10 +184,6 @@ def validate_run(node: str, flags: Sequence[str] = (), *,
             f'⚠ 如果这条跑法**现役后端真的在跑**，那就是节点表漏登记了——'
             f'补进 `NODES[{node!r}].flags`，别在这里绕过去')
 
-    primary = sorted(set(tokens) & _PRIMARY_OPERATIONS.get(node, frozenset()))
-    if len(primary) > 1:
-        raise UnsupportedRunMode(
-            f'{node} 主操作互斥，一次只能选择一个，不能同时使用 {primary}')
     # 带值 / 不带值都要当场对上：拼错的那条 argv **会真的被执行**。
     seq = list(flags)
     for i, tok in enumerate(seq):

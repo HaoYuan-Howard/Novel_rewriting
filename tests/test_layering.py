@@ -932,15 +932,16 @@ def test_stage2_owner_shims_cannot_return():
     都已删；不得以同名模块或整族回流。
 
     ⚠ F8c（2026-09-25）方向调整：`novel/stages/stage2/` **被新链 per-stage 包
-    原地重建**（`source.py`／`names.py` 两个 owner 引擎），因此本条不再断言
-    「整包不得存在」——包回来了不等于旧链回来，**模块名**才说了算。旧 Stage2 的
-    blueprint／analyze／characters／knowledge／shared 五族与全部顶层 shim 一个
-    都不许回来；模块面按登记owner 收紧（多一个就是旧链回流的第一级台阶）。
+    原地重建**，因此本条不再断言「整包不得存在」——包回来了不等于旧链回来，
+    **模块名**才说了算。旧 Stage2 的 blueprint／analyze／characters／knowledge／
+    shared 五族与全部顶层 shim 一个都不许回来；模块面按登记 owner 收紧
+    （多一个就是旧链回流的第一级台阶）。
     ⚠ B2（2026-09-27）五节点重建（D9）：`resolver.py`（证据定位设施）、
     `book.py`／`chapters.py`（book／chapters 观察 owner，B2 第二步接线）、
     `associate.py`（跨章关联 owner）与 `compile.py`（双真源唯一发布 owner＋
-    源 fold 唯一实现）已入列；`source.py` 链已不消费（S-05 deprecation），
-    其反例迁移完成后整包删除（B2 第三步起 compile.py 是 fold 的唯一实现）。
+    源 fold 唯一实现）已入列。
+    ⚠ B5（2026-09-28，S-05）：旧联合抽取引擎 `source.py` 整包删除——链自 B2
+    起不消费，反例已迁到五 owner 引擎；模块面随之收窄。
     """
     import importlib.util
     from pathlib import Path
@@ -950,13 +951,13 @@ def test_stage2_owner_shims_cannot_return():
     # F8c＋B2：新链 stage2 包必须落位，模块面按现役 owner 登记。
     assert root.is_dir(), (
         f'novel/stages/stage2/ 不在（{root}）——F8c 分流后新链 Stage2 引擎'
-        f'（source／names）应落位')
+        f'（book／chapters／names／associate／compile）应落位')
     present = sorted(p.stem for p in root.glob('*.py'))
     assert present == ['__init__', 'associate', 'book', 'chapters', 'compile',
-                       'names', 'resolver', 'source'], (
+                       'names', 'resolver'], (
         f'novel/stages/stage2/ 的模块面变了：{present}；'
-        f'现役只许 __init__／associate／book／chapters／compile／names／'
-        'resolver／source')
+        f'现役只许 __init__／associate／book／chapters／compile／names／resolver'
+        '（旧联合抽取 source.py 已随 S-05 删除）')
     banned = [
         'plot_checks', 'plot_compile', 'plot_continuity', 'plot_diagnostics',
         'plot_edit', 'plot_inputs', 'plot_prompts', 'plot_recovery',
@@ -979,8 +980,8 @@ def test_stage2_owner_shims_cannot_return():
             f'novel/stages/stage2/{sub}/ 整族回来了——旧 Stage2 链已随 F8c 删除')
     # 守卫的守卫：新链 Stage2 实现确实住在正式 stage2 包里（而不是又回到某个
     # 迁移包），扫错目录时上面几条会静静地绿。
-    assert (root / 'source.py').is_file() and (root / 'names.py').is_file(), (
-        'novel/stages/stage2/{source,names}.py 不在——扫描目标错了')
+    assert (root / 'book.py').is_file() and (root / 'names.py').is_file(), (
+        'novel/stages/stage2/{book,names}.py 不在——扫描目标错了')
 
 
 def test_the_api_layer_has_no_second_argv_builder():

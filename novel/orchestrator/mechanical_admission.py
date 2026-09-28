@@ -13,7 +13,7 @@ mechanical_admission.py —— 旧链统一机械准入名册（F8c：随旧链�
 旧节点键（stage2.blueprint／stage4.design／stage4.plan／stage4.context）上，
 其机械检查实现（`novel.stages.stage2.checks`／`extract`、
 `novel.stages.stage4.current_infeasible_binding`）已随旧链整层删除。新链
-（11 个 `str06.*` 节点）的准入判定逐节点由 `novel/orchestrator/queue.py` 与
+（14 个 `str06.*` 节点）的准入判定逐节点由 `novel/orchestrator/queue.py` 与
 `state.py` 的完成度/续跑判定承担：登记缺失 ⇒ 普通付费 todo，live `.INVALID`
 ⇒ 收件箱阻断，未证明 ⇒ `unknown` 留人——**不查询本名册**
 （`tests/test_orchestrator_queue.py` 钉住：新链节点不得查询退役准入名册）。

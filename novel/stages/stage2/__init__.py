@@ -6,8 +6,9 @@
 （str06.stage2.chapters：逐章观察 owner，互不依赖 D3）、`associate.py`
 （str06.stage2.associate：跨章关联 owner，D8）、`compile.py`（str06.stage2.compile：
 双真源唯一发布 owner＋源 fold 读数，D9）、`names.py`（源名称结构窄调用）、
-`resolver.py`（B2 证据 Resolver：句段闭集选择与逐字锚定位）、`source.py`
-（旧联合抽取引擎；链已不消费，S-05 deprecation——其反例迁移完成后整包删除）。
+`resolver.py`（B2 证据 Resolver：句段闭集选择与逐字锚定位）。
+旧联合抽取引擎 `source.py` 已随 S-05 删除（B5）：链自 B2 起不消费，
+源 fold 唯一实现住 `compile.py`。
 节点表唯一登记在 `contracts/invariants.py::NODES`；观察与关联协议在
 `contracts/schema/observation.py`（B2：book／chapters／names／associate／compile
 五 owner）。
@@ -44,19 +45,16 @@ from novel.stages.stage2.names import (
 from novel.stages.stage2.resolver import (
     AnchorHit, EvidenceResolver, ResolverIssue,
 )
-from novel.stages.stage2.source import (
-    ChapterCompiler, assemble_blueprint, chapter_input_snapshot, compile_book,
-)
 
 __all__ = [
     'AnchorHit', 'AssociationSpace', 'AssociateObservation', 'BeatHandle',
-    'BookObservation', 'ChapterCompiler', 'ChapterObservation', 'CompileOutcome',
+    'BookObservation', 'ChapterObservation', 'CompileOutcome',
     'CONFIRMING_MODES', 'EvidenceResolver', 'FoldResult', 'LoopHandle',
     'NamesObservation', 'ProbeFinding', 'PropositionHandle', 'ResolverIssue',
     'STAGE2_OBSERVATION_PROTOCOL', 'SceneHandle', 'StateHandle',
-    'assemble_blueprint', 'associate_observation_prompt',
-    'chapter_input_snapshot', 'chapter_observation_prompt', 'chapter_prior_text',
-    'character_core_view', 'compile_associate_observation', 'compile_book',
+    'associate_observation_prompt',
+    'chapter_observation_prompt', 'chapter_prior_text',
+    'character_core_view', 'compile_associate_observation',
     'compile_book_observation', 'compile_chapter_observation',
     'compile_name_structure', 'compile_source_truth', 'initial_snapshot',
     'merge_name_structure', 'project_association_space', 'source_fold',

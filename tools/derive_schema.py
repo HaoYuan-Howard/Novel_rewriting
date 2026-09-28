@@ -48,7 +48,12 @@ LONG_STR = 40          # 超过这个长度的字符串不当枚举候选看
 ARTIFACTS = [
     ('stage1/main_text.json',        'stage1/main_text.json'),
     ('stage1/hook_copy.json',        'stage1/hook_copy.json'),
-    ('stage2/compiled/book_extraction.json', 'stage2/compiled/book_extraction.json'),
+    # ⚠ B2/B5：联合抽取派生输入 `stage2/compiled/book_extraction.json` 已退役
+    #   （D9，写路与读取全部停止）；book／chapters 观察是 Stage2 的现役产物面。
+    ('stage2/observations/book.json', 'stage2/observations/book.json'),
+    ('stage2/observations/chNN.json', 'stage2/observations/ch[0-9]*[0-9].json'),
+    ('stage2/observations/names.json', 'stage2/observations/names.json'),
+    ('stage2/observations/associate.json', 'stage2/observations/associate.json'),
     ('stage2/blueprints/chapter_blueprints.json',
      'stage2/blueprints/chapter_blueprints.json'),
     ('stage2/characters/characters.json', 'stage2/characters/characters.json'),

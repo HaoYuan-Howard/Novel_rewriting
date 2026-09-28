@@ -25,8 +25,13 @@ from novel.orchestrator import jobs, nodes
 router = APIRouter(prefix='/jobs')
 
 
-def _refuse_prepared_recovery_api(node: str, flags: list[str]) -> None:
-    """拒绝必须由 Supervisor 绑定内部证据/复用 target 的 orchestration action。"""
+def _refuse_prepared_recovery_api(flags: list[str]) -> None:
+    """拒绝必须由 Supervisor 绑定内部证据/复用 target 的 orchestration action。
+
+    ⚠ B5（S-05）：`node == 'stage5.write'` 的旧链限定已删——这些 hash-bound
+    旗标本就不登记在任何现役节点；边界按旗标本身拒绝，与提交时点名的节点无关
+    （旧链节点名不再给这道 API 边界当钥匙）。
+    """
     tokens = set(nodes.flag_tokens(flags))
     reviewer_rewrite = tokens & {
         '--request-reviewer-rewrite',
@@ -42,7 +47,7 @@ def _refuse_prepared_recovery_api(node: str, flags: list[str]) -> None:
             'POST /api/jobs/preview 与 POST /api/jobs 不接受客户端旁路提交')
     recovery = tokens & {
         '--emit-prepared-recovery-workpack', '--recover-prepared'}
-    if node == 'stage5.write' and recovery:
+    if recovery:
         selected = ', '.join(sorted(recovery))
         raise UnsupportedRunMode(
             f'{selected} 只允许由能显式复用同一 target run_id 的 CLI runner 执行；'
@@ -75,7 +80,7 @@ def list_jobs(sid: str | None = Query(default=None),
 @router.post('', response_model=JobRecord, status_code=202)
 def start_job(req: PreviewRequest, base: str = Depends(get_base)) -> JobRecord:
     sid = checked_sid(req.sid) if req.sid is not None else None
-    _refuse_prepared_recovery_api(req.node, req.flags)
+    _refuse_prepared_recovery_api(req.flags)
     planned = jobs.plan_start(
         req.node, sid, req.flags, base=base,
         executor_backend=req.executor_backend,
@@ -197,7 +202,7 @@ def preview_job(req: PreviewRequest, base: str = Depends(get_base)) -> JobStart:
     ⚠ 它与真启动端点都经过全局 CSRF 中间件；预览本身仍然 0 成本、无写盘。
     """
     sid = checked_sid(req.sid) if req.sid is not None else None
-    _refuse_prepared_recovery_api(req.node, req.flags)
+    _refuse_prepared_recovery_api(req.flags)
     # Preview accepts an otherwise well-shaped action before the human has
     # supplied its required audit values.  ``nodes.build_steps`` fills those
     # omissions with visibly non-executable ``待填·...`` tokens.  POST /jobs

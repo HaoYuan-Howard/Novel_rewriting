@@ -54,8 +54,8 @@ _FIX_COMPILE = ('str06.stage4.compile',)
 _FIX_ASSEMBLE = ('str06.stage7.assemble',)
 
 # ── Stage2 源语义 ────────────────────────────────────────────────────────────
-_hard('source_book_extraction', 'stage2',
-      'book 级源抽取编译闭合（CharactersCore 无未知键、无悬空引用）', 'R-2.1')
+_hard('source_book_observation', 'stage2',
+      'book 观察编译闭合（CharactersCore 无未知键、无悬空引用）', 'R-2.1')
 _hard('source_canonical_surface', 'stage2',
       'canonical 逐字等于该人物某个已登记 surface（称谓闭合的 wire 闸）', 'R-2.8')
 _hard('source_surface_anchor_literal', 'stage2',

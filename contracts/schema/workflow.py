@@ -666,7 +666,7 @@ STR06_NODE_IDENTITY_EXTRAS: Final[dict[str, dict[str, str]]] = {
 def candidate_node_owner(node_id: str) -> str:
     """候选节点的语义 owner：节点 id 去掉 `str06.` 前缀，例外按 EXTRAS 登记。
 
-    10/11 个节点由前缀派生；`str06.stage7.assemble` 的语义 owner 是
+    其余 `str06.` 节点由前缀派生；`str06.stage7.assemble` 的语义 owner 是
     `stage7.assembly`（命名历史），单独登记。消费方（views 监控面、契约身份）
     共用本函数，不各自拆字符串。
     """

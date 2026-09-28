@@ -101,7 +101,7 @@ book 观察与全文（字面校验含章前文字）；`str06.stage2.associate`
 
 | 判据 | sev | 要求 |
 |---|---|---|
-| `source_book_extraction` | hard | book 观察编译闭合（无未知键、无悬空引用、slug 闭集自洽） |
+| `source_book_observation` | hard | book 观察编译闭合（无未知键、无悬空引用、slug 闭集自洽） |
 | `source_canonical_surface` | hard | canonical 逐字等于该人物某个已登记 surface |
 | `source_surface_anchor_literal` | hard | 称谓 from_chapter 由证据锚点派生：锚点段逐字包含该 surface，章前锚点映射第 1 章（Resolver 唯一实现） |
 | `source_identity_covers_hook_copy` | hard | 源身份覆盖 main_text＋hook_copy 两份字节 |

@@ -74,9 +74,11 @@ def get_run_progress(sid: str = Depends(checked_sid),
     recovery = None if units is None or resume_frontier.state == 'unknown' else [
         f"{row['scope']}: {row['recovery_action']}" for row in units
         if row['node'] == current_node and row['role'] == resume_frontier.next_handler
-        and (current_scope is None or row['scope'] == current_scope
-             or (current_node == 'stage2.blueprint' and row['state'] in {'reserved', 'unknown', 'delivered'}))
+        and (current_scope is None or row['scope'] == current_scope)
         and row['recovery_action'] is not None]
+    # ⚠ B5（S-05）：`current_node == 'stage2.blueprint'` 的状态放行特例已删——
+    # 那是旧链联合抽取节点的 recovery 兼容分支，`approval_work_unit` 的历史
+    # 只读表里没有这个键，F8c 后恒不可达。
     return RunProgressView(
         sid=sid,
         resume_frontier=resume_frontier,

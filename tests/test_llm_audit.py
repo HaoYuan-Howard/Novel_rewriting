@@ -28,7 +28,7 @@ from novel.llm.cache import (
 )
 from novel.llm.client import JSON_OBJECT_MODE, LlmClient
 from novel.llm.ledger import (
-    AUDIT_REL, CostLedger, audit_path, prepared_recovery_audit_row,
+    AUDIT_REL, CostLedger, audit_path,
 )
 from novel.llm.transport import ChatRequest, ChatResponse, FakeTransport
 from novel.errors import ProvenanceRefused
@@ -143,39 +143,10 @@ def test_epoch_run_rows_keep_logical_identity_and_explicit_parent_link():
     assert all(row['parent_run_id'] == parent_run_id for row in [*wire, *audit])
 
 
-def test_prepared_recovery_current_parent_is_strict_but_historical_lineage_reads(
-        tmp_path: Path):
-    path = tmp_path / 'ledger.jsonl'
-    ledger = CostLedger(
-        path=path, run_id='epoch-recovery-target',
-        parent_run_id='agent-recovery-parent')
-    values = {
-        'sid': '123', 'purpose': 'stage5.write:ch1', 'chapter': 1,
-        'source_run_id': 'source-run', 'source_code': 'source-code',
-        'source_run_identity_sha256': '1' * 64,
-        'source_run_file_sha256': '2' * 64,
-        'source_commit_sha256': '3' * 64,
-        'source_commit_file_sha256': '4' * 64,
-        'source_checkpoint_sha256': '5' * 64,
-        'source_checkpoint_file_sha256': '6' * 64,
-        'source_attempt_id': 'a' * 16,
-        'source_response_sha256': '7' * 64,
-        'source_adoption_id': '8' * 64,
-        'subject_sha256': '9' * 64,
-        'actor': 'agent:test', 'reason': '验证 parent 归因',
-        'artifact': 'stage5/ch01.json',
-        'artifact_fingerprint': 'b' * 10,
-    }
-    ledger.note_prepared_recovery_adoption(**values)
-    expected = prepared_recovery_audit_row(
-        target_run_id=ledger.run_id, **values)
-
-    ledger.require_prepared_recovery_adoption(expected_row=expected)
-    [actual] = _rows(path.with_name(AUDIT_REL[-1]))
-    assert actual['parent_run_id'] == ledger.parent_run_id
-
-    historical_reader = CostLedger(path=path, run_id='later-reader-run')
-    historical_reader.require_prepared_recovery_lineage(expected_row=expected)
+# ⚠ B5（S-05）：`test_prepared_recovery_current_parent_is_strict_but_historical_
+# lineage_reads` 已随旧链 Stage5 prepared recovery 审计面（`--recover-prepared`
+# 一族）删除——现役恢复入口只有候选生命周期登记的 chapter_prefix_replay／
+# saved_response／historical_adoption／owner_patch／deterministic_replay。
 
 
 @pytest.mark.parametrize('tail_kind', ['valid_json_without_lf', 'partial_json'])

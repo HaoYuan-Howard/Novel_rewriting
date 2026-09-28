@@ -127,7 +127,7 @@ STR06_MIGRATION_MODULE_OWNERS: Final[dict[str, str]] = {
 
 #: Stage2/4/5/7 各语义模块的集合缩写（跨 stage 禁入面）。
 _STAGE457 = (
-    'novel.stages.stage2.source', 'novel.stages.stage2.names',
+    'novel.stages.stage2.names',
     'novel.stages.stage4.grounding', 'novel.stages.stage4.design',
     'novel.stages.stage4.compile', 'novel.stages.stage4.book_ir',
     'novel.stages.stage4.hook', 'novel.stages.stage4.hook_context',
@@ -177,7 +177,7 @@ STR06_MIGRATION_DEPENDENCY_RULES: Final[tuple[DependencyRule, ...]] = (
     DependencyRule(
         module='novel.stages.stage7.naming',
         allows=('contracts.schema.*', 'novel.stages.common'),
-        forbids=('novel.llm', 'novel.llm.*', 'novel.stages.stage2.source',
+        forbids=('novel.llm', 'novel.llm.*',
                  'novel.stages.stage4.grounding', 'novel.stages.stage4.design',
                  'novel.stages.stage4.compile', 'novel.stages.stage4.book_ir',
                  'novel.stages.stage5.hook')),
@@ -187,7 +187,7 @@ STR06_MIGRATION_DEPENDENCY_RULES: Final[tuple[DependencyRule, ...]] = (
                 'novel.stages.stage7.naming', 'novel.stages.stage5',
                 'novel.stages.stage5.body_checks', 'novel.stages.stage5.body'),
         forbids=('novel.llm', 'novel.llm.*', 'novel.stages.stage5.hook_writer',
-                 'novel.stages.stage2.source', 'novel.stages.stage2.names',
+                 'novel.stages.stage2.names',
                  'novel.stages.stage4.grounding', 'novel.stages.stage4.design',
                  'novel.stages.stage4.compile', 'novel.stages.stage4.book_ir',
                  'novel.stages.stage5.hook')),

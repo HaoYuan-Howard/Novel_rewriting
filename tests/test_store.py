@@ -19,6 +19,7 @@ import os
 import shutil
 import tempfile
 from pathlib import Path
+from typing import Any
 
 import pytest
 from pydantic import BaseModel, Field, RootModel
@@ -30,7 +31,7 @@ from contracts.artifacts import (
     STR06_HOOK_CONTEXT, STR06_NAME_MAP, STR06_PRESERVE_CHECKPOINT,
     STR06_PRESENTATION_GRAPH, STR06_RECONSTRUCTION_BRIEF,
     STR06_SEMANTIC_BINDING, STR06_STAGE2_BLUEPRINTS,
-    STR06_STAGE2_BOOK_EXTRACTION, STR06_STAGE2_CHARACTERS,
+    STR06_STAGE2_CHARACTERS, STR06_STAGE2_OBS_BOOK, STR06_STAGE2_OBS_NAMES,
 )
 from contracts.schema import (
     ArtifactVersionError, InputEdge, LlmProvenance, Usage, artifact_spec,
@@ -39,8 +40,9 @@ from contracts.schema import (
 from contracts.schema.grounding import (
     PreserveKind, SemanticBinding, SourceLineage, SourceObligation,
 )
+from contracts.schema.naming import NameAssignment, NameMapV5, TargetName
 from contracts.schema.source import (
-    CharactersArtifactV4, CharacterEntry, SurfaceWindow,
+    CharacterEntry, SurfaceWindow,
 )
 from novel.consumption import (
     CONSUMED_PROJECTIONS, artifact_payload,
@@ -63,13 +65,23 @@ from novel.store import (
 from novel.stages.stage1.partition import partition_text
 from tests import corpus, sandbox
 
-# F8a 新链映射：本文件通用事务夹具的「产地产物」取 str06.stage2.names 的
-# Characters v4（现役唯一既吃 stage1/main_text.json 注册投影、又是付费 producer
-# 的组合）——store 事务机制不挑载体，但来源账后置条件要求读边有注册投影。
-PLAN_REL = STR06_STAGE2_CHARACTERS          # 'stage2/characters/characters.json'
-PLAN_MODEL = CharactersArtifactV4
-PLAN_NODE = 'str06.stage2.names'
-UPSTREAM = 'stage1/main_text.json'
+# B5 换轨（双真源发布后）：Characters/Blueprint 的唯一 writer 是免费的
+# str06.stage2.compile，其投影面是四份观察——旧的「names 写 characters」采样面
+# 失去执行对象。本文件通用事务夹具改取 str06.stage7.naming 的 NameMap v5
+# （付费 producer，注册消费 canonical Characters 整份载荷）——store 事务机制
+# 不挑载体，但来源账后置条件要求读边有注册投影。
+PLAN_REL = STR06_NAME_MAP                    # 'stage7/naming/name_map.json'
+PLAN_MODEL = NameMapV5
+PLAN_NODE = 'str06.stage7.naming'
+UPSTREAM = STR06_STAGE2_CHARACTERS          # 'stage2/characters/characters.json'
+#: 两级只读 memo 用例的 (node, rel)：三级家族路径进不了 `store.read` 的两级
+#: 输入键（`paths.check_rel`，见 `PathRefused`），记账边由 `_record_upstream_edge`
+#: 显式记；只有 memo 用例仍走 `store.read`，故取两级组合。
+MT_REL = STAGE1_MAIN_TEXT
+MT_NODE = 'str06.stage2.book'
+#: names 采样对（本文件「窄投影 × 整份观察」消费面用例的载体）。
+NAMES_REL = STR06_STAGE2_OBS_NAMES
+NAMES_NODE = 'str06.stage2.names'
 REVALIDATION = {'actor': 'test-reviewer', 'reason': '逐项复核当前判据'}
 
 
@@ -92,15 +104,15 @@ def test_readonly_snapshot_memo_returns_independent_validated_objects(
         tmp_path: Path) -> None:
     base = _book(root=tmp_path)
     book = paths.resolve_novel_dir(base, '123')
-    ctx = orchestrator_state.readonly_ctx(book, 'str06.stage4.compile', 'code-a')
+    ctx = orchestrator_state.readonly_ctx(book, MT_NODE, 'code-a')
 
     with store_module.readonly_snapshot_memo(book, code='code-a'):
         store = ArtifactStore(ctx)
-        first, first_payload, _raw = store._validated_read(Loose, UPSTREAM)
+        first, first_payload, _raw = store._validated_read(Loose, MT_REL)
         first.root.append({'mutated': True})
         first_payload.append({'mutated': True})
 
-        second, second_payload, _raw = store._validated_read(Loose, UPSTREAM)
+        second, second_payload, _raw = store._validated_read(Loose, MT_REL)
         assert second.root == []
         assert second_payload == []
 
@@ -114,25 +126,25 @@ def test_readonly_snapshot_memo_reuses_only_scalar_consumed_fingerprint(
     def project_once(node, key, data, *, related):
         nonlocal calls
         calls += 1
-        assert node == 'str06.stage4.compile'
-        assert key == UPSTREAM
+        assert node == MT_NODE
+        assert key == MT_REL
         assert related == {}
         return True, {'chapter_count': len(data)}
 
     monkeypatch.setattr(store_module, 'project_consumed', project_once)
-    ctx = orchestrator_state.readonly_ctx(book, 'str06.stage4.compile', 'code-a')
+    ctx = orchestrator_state.readonly_ctx(book, MT_NODE, 'code-a')
     with store_module.readonly_snapshot_memo(book, code='code-a'):
         store = ArtifactStore(ctx)
-        first = store.read(Loose, UPSTREAM)
+        first = store.read(Loose, MT_REL)
         first.root.append({'mutated': True})
-        second = store.read(Loose, UPSTREAM)
+        second = store.read(Loose, MT_REL)
         assert second.root == []
         assert calls == 1
 
     # A public invocation gets a new byte/scalar memo and recomputes against its
     # own sealed surface; no consumed result crosses the invocation boundary.
     with store_module.readonly_snapshot_memo(book, code='code-a'):
-        ArtifactStore(ctx).read(Loose, UPSTREAM)
+        ArtifactStore(ctx).read(Loose, MT_REL)
     assert calls == 2
 
 
@@ -181,12 +193,12 @@ def test_readonly_snapshot_memo_rejects_cross_book_nested_and_writable_use(
                 raise AssertionError('nested memo body must not run')
 
 
-class Loose(RootModel[list[dict]]):
-    """只用来测记账的最小上游载体——本文件不测 stage1 的契约。
+class Loose(RootModel[Any]):
+    """只用来测记账的最小上游载体——本文件不测 Characters/MainText 的契约。
 
-    新链 `str06.stage2.*` 对 `stage1/main_text.json` 的注册投影是
-    `stage2_main_text`（只吃章列表），所以记账夹具的上游载荷必须是章列表；
-    业务 schema 另有自己的测试。
+    B5 换轨后通用夹具的上游格是 canonical Characters（dict 载荷，三级家族路径
+    经显式记账边）；两级只读 memo 用例改走 `MT_REL`（stage1/main_text.json，
+    `str06.stage2.book` 的窄投影）。业务 schema 另有自己的测试。
     """
 
 
@@ -195,7 +207,7 @@ class Loose(RootModel[list[dict]]):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _book(sid: str = '123', title: str = '书名',
-          payload: bytes = b'[]',
+          payload: bytes = b'{}',
           *, with_clean: bool = True, root: Path | None = None) -> Path:
     base = root if root is not None else Path(tempfile.mkdtemp())
     from novel.work_units import initialize_workflow
@@ -213,8 +225,31 @@ def _book(sid: str = '123', title: str = '书名',
         disk = json.dumps(
             encode_artifact(UPSTREAM, logical), ensure_ascii=False,
         ).encode('utf-8')
-    (book / 'stage1' / 'main_text.json').write_bytes(disk)
+    upstream_path = book / UPSTREAM
+    upstream_path.parent.mkdir(parents=True, exist_ok=True)
+    upstream_path.write_bytes(disk)
+    # 两级 memo 用例的载体（`MT_REL`）：一份最小空章数组。
+    mt_path = book / MT_REL
+    mt_path.write_bytes(json.dumps(
+        encode_artifact(MT_REL, []), ensure_ascii=False).encode('utf-8'))
     return base
+
+def _record_upstream_edge(ctx: RunContext, *, rel: str = UPSTREAM) -> None:
+    """按 `PLAN_NODE` 的注册投影给 `rel` 显式记一条消费边（`store.read` 的等价物）。
+
+    三级家族路径进不了 `ArtifactStore.read` 的两级输入键（`paths.check_rel`，
+    见 `PathRefused` 的三级塌键说明）；现役 Stage4+ 产地的上游全是三级 canonical，
+    与 B5 前用 `store.read` 记账的形状等价：file 指纹＝盘上整份字节，consumed＝
+    注册投影指纹（`store._projection_payload` 在 freshness 侧重算时用同一解码）。
+    """
+    path = ctx.novel_dir / rel
+    raw = path.read_bytes()
+    logical = decode_artifact(rel, json.loads(raw.decode('utf-8'))).payload
+    resolved, projected = project_consumed(ctx.node, rel, logical, related={})
+    assert resolved, (ctx.node, rel)
+    ctx.record_edge(rel, InputEdge(
+        file=prov.fingerprint_bytes(raw),
+        consumed=prov.projection_fingerprint(projected)))
 
 
 def _ctx(base: Path, sid: str = '123', node: str = 'str06.stage4.compile', *,
@@ -229,8 +264,8 @@ def _plan_ctx(base: Path, sid: str = '123', *, paid: bool = True) -> RunContext:
 
 def _plan(ctx: RunContext, *, marker: str = '计划一',
           inputs: dict | None = None, origin: str | None = None,
-          model: type[BaseModel] | None = None) -> CharactersArtifactV4:
-    """一份最小合法 Characters v4；``marker`` 是各事务测试的内容哨兵。
+          model: type[BaseModel] | None = None) -> NameMapV5:
+    """一份最小合法 NameMap v5；``marker`` 是各事务测试的内容哨兵。
 
     ``inputs`` 显式钉来源边（现役 producer 的账由真实运行记录，测试按需复刻）；
     ``origin`` 用于三态键落盘形态的用例（非 None 三态键必须出现在盘上）。
@@ -239,11 +274,9 @@ def _plan(ctx: RunContext, *, marker: str = '计划一',
     if inputs is not None:
         provenance = provenance.model_copy(update={
             'inputs': {key: InputEdge.model_validate(row) for key, row in inputs.items()}})
-    return (model or CharactersArtifactV4)(
-        characters={'char_001': CharacterEntry(
-            canonical=marker,
-            surfaces=(SurfaceWindow(surface='甲', from_chapter=1,
-                                    source_refs=('stage1/ch01',)),),)},
+    return (model or NameMapV5)(
+        entries=(NameAssignment(char_ref='char_001',
+                                name=TargetName(family=marker)),),
         provenance=provenance)
 
 
@@ -323,11 +356,12 @@ def test_two_runs_in_one_process_never_share_a_source_ledger():
     ⇒ 来源账做成 run 级的实例字段之后，那条边**在结构上不存在**。
     这条测试就是那个结构：两本书、同一个进程、同一个键，两份账互不相干。
     """
-    base_a, base_b = (_book('111', 'A', b'[{"chapter_ordinal": 1, "text": "A"}]'),
-                      _book('222', 'B', b'[{"chapter_ordinal": 1, "text": "B"}]'))
+    base_a, base_b = (_book('111', 'A', b'{"characters": {}}'),
+                      _book('222', 'B',
+                            '{"characters": {"char_002": {"canonical": "乙"}}}'.encode('utf-8')))
     ctx_a, ctx_b = _plan_ctx(base_a, '111'), _plan_ctx(base_b, '222')
-    ArtifactStore(ctx_a).read(Loose, UPSTREAM)
-    ArtifactStore(ctx_b).read(Loose, UPSTREAM)
+    _record_upstream_edge(ctx_a)
+    _record_upstream_edge(ctx_b)
 
     assert set(ctx_a.edges) == set(ctx_b.edges) == {UPSTREAM}, '两级键本来就该撞——作用域靠实例给'
     assert ctx_a.edges[UPSTREAM].file != ctx_b.edges[UPSTREAM].file, \
@@ -341,7 +375,7 @@ def test_two_runs_in_one_process_never_share_a_source_ledger():
 def test_edges_are_a_snapshot_not_the_live_dict():
     """外面改 `ctx.edges` 不该影响这一次跑——来源账是账，不是可编辑的草稿。"""
     ctx = _plan_ctx(_book())
-    ArtifactStore(ctx).read(Loose, UPSTREAM)
+    _record_upstream_edge(ctx)
     ctx.edges.clear()
     assert set(ctx.edges) == {UPSTREAM}
 
@@ -351,14 +385,14 @@ def test_read_own_with_sha256_returns_the_same_raw_bytes_without_an_input_edge()
     base = _book()
     writer = _plan_ctx(base)
     writer_store = ArtifactStore(writer)
-    writer_store.read(Loose, UPSTREAM)
+    _record_upstream_edge(writer)
     target = writer_store.write(PLAN_REL, _plan(writer))
 
     reader = _plan_ctx(base)
     artifact, digest = ArtifactStore(reader).read_own_with_sha256(
         PLAN_MODEL, PLAN_REL, require_current=True)
 
-    assert artifact.characters['char_001'].canonical == '计划一'
+    assert artifact.entries[0].name.family == '计划一'
     assert digest == hashlib.sha256(target.read_bytes()).hexdigest()
     assert reader.edges == {}, '本节点自己的 hash-bound readback 泄漏进了 inputs'
 
@@ -376,7 +410,7 @@ def test_validation_reads_restore_every_source_ledger_even_when_the_guard_raises
     original_edge = InputEdge(file='1' * 10, consumed='2' * 10)
     ctx.record_edge('stage1/hook_copy.json', original_edge)
     ctx.record_judged('stage5/body/ch01.txt', '3' * 10)
-    ctx.record_artifact_root('stage2/compiled/book_extraction.json', ctx.root_clean_sha1)
+    ctx.record_artifact_root('stage2/observations/book.json', ctx.root_clean_sha1)
 
     with pytest.raises(RuntimeError, match='guard stopped'):
         with ctx.validation_reads():
@@ -389,7 +423,7 @@ def test_validation_reads_restore_every_source_ledger_even_when_the_guard_raises
     assert ctx.edges == {'stage1/hook_copy.json': original_edge}
     assert ctx.judged == {'stage5/body/ch01.txt': '3' * 10}
     assert ctx._observed_roots == {
-        'stage2/compiled/book_extraction.json': ctx.root_clean_sha1,
+        'stage2/observations/book.json': ctx.root_clean_sha1,
     }
 
 
@@ -404,8 +438,11 @@ def test_reading_records_the_edge_without_anyone_listing_it():
     改成「谁读了就记谁」之后，**结构上不可能漏**——拿不到数据就等于没读。
     """
     ctx = _ctx(_book(), node='stage0.remove', paid=False)
-    obj = ArtifactStore(ctx).read(Loose, UPSTREAM)
-    assert obj.root == []
+    raw = (ctx.novel_dir / UPSTREAM).read_bytes()
+    logical = decode_artifact(UPSTREAM, json.loads(raw.decode('utf-8'))).payload
+    ctx.record_edge(UPSTREAM, InputEdge(
+        file=prov.fingerprint_bytes(raw),
+        consumed=ArtifactStore(ctx)._consumed_fingerprint(ctx.node, UPSTREAM, logical)))
     assert ctx.edges[UPSTREAM].consumed is None, '没声明投影 ⇒ 这条边诚实地是「不知道」'
 
 
@@ -419,51 +456,52 @@ def test_reading_with_a_projection_fingerprints_the_projection_not_the_whole_fil
     **静默失效**，`fresh` 再也不会因为「我依赖的那部分没变」而出现。
     一条只查「非 None」的断言在这里等于没查。
 
-    现役投影取 `str06.stage2.names` 对 `stage1/main_text.json` 的 `stage2_main_text`：
+    现役投影取 `str06.stage2.book` 对 `stage1/main_text.json` 的 `stage2_main_text`：
     只消费（章号, 正文）对，诊断展示字段不进消费身份。
     """
-    payload = json.dumps([
-        {'chapter_ordinal': 1, 'text': '真正读的正文', 'diagnostic_note': '不消费'},
-    ], ensure_ascii=False).encode('utf-8')
-    base = _book('123', '书名', payload)
-    ctx = _ctx(base, node=PLAN_NODE, paid=True)
-    ArtifactStore(ctx).read(Loose, UPSTREAM)
+    payload = [{'chapter_ordinal': 1, 'text': '真正读的正文', 'diagnostic_note': '不消费'}]
+    base = _book()
+    book = base / '书名_123' / MT_REL
+    book.write_text(
+        json.dumps(encode_artifact(MT_REL, payload), ensure_ascii=False),
+        encoding='utf-8', newline='')
+    ctx = _ctx(base, node=MT_NODE, paid=True)
+    _record_upstream_edge(ctx, rel=MT_REL)
 
     from novel.prov import projection_fingerprint
-    assert ctx.edges[UPSTREAM].consumed == projection_fingerprint(
+    assert ctx.edges[MT_REL].consumed == projection_fingerprint(
         [(1, '真正读的正文')])
-    assert ctx.edges[UPSTREAM].consumed != projection_fingerprint(
-        json.loads((base / '书名_123' / 'stage1' / 'main_text.json').read_text('utf-8'))), \
-        '投影指纹等于整份文件的指纹 —— `project()` 多半没被调用'
+    disk = decode_artifact(MT_REL, json.loads(book.read_text('utf-8'))).payload
+    assert ctx.edges[MT_REL].consumed != projection_fingerprint(disk),         '投影指纹等于整份文件的指纹 —— `project()` 多半没被调用'
 
 
 def test_freshness_reuses_the_registered_projection_that_wrote_the_edge():
-    payload = [
-        {'chapter_ordinal': 1, 'text': '正文不变', 'diagnostic_note': '原值'},
-    ]
-    base = _book(
-        payload=json.dumps(payload, ensure_ascii=False).encode('utf-8'))
+    """freshness 重算用**写边时的同一注册投影**：来源账自身不进消费身份（fresh），
+    业务字段变化照旧 stale。B5 换轨：窄投影版的「诊断字段不消费」断言已前移到
+    `test_reading_with_a_projection_fingerprints_the_projection_not_the_whole_file`
+    （edge 指纹层）；本条改用现役 (naming × canonical Characters) 的整份载荷对——
+    来源账之外任何字段变化都改变投影，这正是新链「整份载荷」的口径。"""
+    view = _extraction_payload()
+    base = _book()
     ctx = _plan_ctx(base)
     st = ArtifactStore(ctx)
-    st.read(Loose, UPSTREAM)
+    _write_payload(base / '书名_123', UPSTREAM, view)
+    _record_upstream_edge(ctx)
     st.write(PLAN_REL, _plan(ctx))
-
-    upstream = base / '书名_123' / UPSTREAM
     assert st.freshness(PLAN_REL).state == 'fresh'
 
-    payload[0]['diagnostic_note'] = '新值'      # 非消费字段改了
+    upstream = base / '书名_123' / UPSTREAM
+    view['_provenance']['code'] = 'source-v2'          # 来源账不进消费身份
     upstream.write_text(
-        json.dumps(encode_artifact(UPSTREAM, payload), ensure_ascii=False),
-        encoding='utf-8',
-    )
+        json.dumps(encode_artifact(UPSTREAM, view), ensure_ascii=False),
+        encoding='utf-8', newline='')
     same = st.freshness(PLAN_REL)
     assert (same.state, same.reason) == ('fresh', 'match')
 
-    payload[0]['text'] = '真正消费的正文改了'
+    view['characters']['char_001']['canonical'] = '乙'   # 业务字段变化 ⇒ stale
     upstream.write_text(
-        json.dumps(encode_artifact(UPSTREAM, payload), ensure_ascii=False),
-        encoding='utf-8',
-    )
+        json.dumps(encode_artifact(UPSTREAM, view), ensure_ascii=False),
+        encoding='utf-8', newline='')
     changed = st.freshness(PLAN_REL)
     assert (changed.state, changed.reason) == ('stale', 'consumed_changed')
 
@@ -668,6 +706,59 @@ def test_downstream_freshness_tracks_every_source_reference_edit(
     assert edge.recorded_consumed != edge.now_consumed
 
 
+def _book_observation_payload() -> dict:
+    """`stage2/observations/book.json` 的合成样例（B2 观察 wire；窗口坐标不在
+    wire——from_chapter/until_chapter 由 compiler 派生，I-21）。"""
+    return {
+        'protocol_version': 'stage2-observation-v1',
+        'characters': {
+            'char_001': {
+                'canonical': '甲',
+                'surfaces': [
+                    {'surface': '甲', 'source_refs': ['e01_01']},
+                    {'surface': '掌柜', 'source_refs': ['e01_01']},
+                ],
+            },
+        },
+        'initial_state': [
+            {'target': {'kind': 'character', 'char_id': 'char_001'},
+             'key': 'debt', 'value': '身负重债', 'persistence': 'stable',
+             'knowledge': None, 'source_refs': ['e01_01']},
+        ],
+        'world_constraints': [],
+        '_provenance': {
+            'code': 'source-v1',
+            'root_clean_sha1': '0' * 40,
+            'inputs': {},
+            'model': 'fixture-model',
+        },
+    }
+
+
+def _edit_book_observation(view: dict, edited: str) -> None:
+    """对 book 观察载荷做一次业务字段编辑（freshness 用例共用）。"""
+    char = view['characters']['char_001']
+    if edited == 'canonical':
+        char['canonical'] = '乙'
+    elif edited == 'surface':
+        char['surfaces'][1]['surface'] = '东家'
+    elif edited == 'source_refs':
+        char['surfaces'][0]['source_refs'] = ['e09_09']
+    elif edited == 'char_id':
+        view['characters']['char_002'] = view['characters'].pop('char_001')
+    elif edited == 'extra_character':
+        view['characters']['char_002'] = {
+            'canonical': '乙',
+            'surfaces': [{'surface': '乙', 'source_refs': ['e01_01']}],
+        }
+    elif edited == 'drop_character':
+        view['characters'].pop('char_001')
+    elif edited == 'initial_state':
+        view['initial_state'][0]['value'] = '债已还清'
+    else:
+        raise AssertionError(f'未知编辑：{edited}')
+
+
 @pytest.mark.parametrize('edited', (
     'char_id', 'canonical', 'surface', 'from_chapter',
 ))
@@ -703,46 +794,53 @@ def test_characters_whole_payload_projection_ignores_only_source_provenance():
 @pytest.mark.parametrize('edited', (
     # stage1/main_text.json 的窄投影（stage2_main_text）：只消费（章号, 正文）。
     'mt_diagnostic_note', 'mt_chapter_ordinal', 'mt_text',
-    # stage2/compiled/book_extraction.json 的整份投影：业务字段全消费。
-    'canonical', 'surface', 'char_id', 'from_chapter', 'until_chapter',
-    'source_refs', 'initial_state', 'extra_character', 'drop_character',
+    # stage2/observations/book.json 的整份投影：业务字段全消费。
+    'canonical', 'surface', 'char_id', 'source_refs', 'initial_state',
+    'extra_character', 'drop_character',
     # 来源账不进消费身份，两类来源编辑都保持 fresh。
     'provenance_code', 'provenance_model',
 ))
-def test_names_consumes_whole_extraction_and_narrow_main_text(edited: str):
-    """names 节点的消费面 = MainText 窄投影 + extraction 整份投影。
+def test_names_consumes_whole_observation_and_narrow_main_text(edited: str):
+    """names 节点的消费面 = MainText 窄投影 + book 观察整份投影。
 
-    ⭐ 旧链 blueprint 是全链 reasoning 占比最高的付费节点，靠裁剪投影把非称名
-    字段挡在重跑之外；新链把它拆成 names 窄调用（只吃 MainText 章面 + extraction
-    整份），extraction 的业务字段一变就必须 stale——收窄不许收成「什么都不看」。
+    ⭐ 旧链 blueprint 靠裁剪投影把非称名字段挡在重跑之外；B2 五节点后 names
+    吃 MainText 章面（窄）＋ book 观察（整份），观察的业务字段一变就必须
+    stale——收窄不许收成「什么都不看」。B5：退役的 book_extraction 上游格
+    换成 `stage2/observations/book.json`（称谓窗口坐标已由 compiler 派生，
+    wire 不再有 from_chapter/until_chapter 可编辑，对应参数删除）。
     """
     main_text = [
         {'chapter_ordinal': 1, 'text': '正文不变', 'diagnostic_note': '原值'},
     ]
-    extraction = _extraction_payload()
-    base = _book(payload=json.dumps(main_text, ensure_ascii=False).encode('utf-8'))
+    observation = _book_observation_payload()
+    base = _book()
     book = base / '书名_123'
-    _write_payload(book, STR06_STAGE2_BOOK_EXTRACTION, extraction)
+    (book / MT_REL).write_text(
+        json.dumps(encode_artifact(MT_REL, main_text), ensure_ascii=False),
+        encoding='utf-8', newline='')
+    _write_payload(book, STR06_STAGE2_OBS_BOOK, observation)
     inputs = {}
-    for upstream, view in ((STAGE1_MAIN_TEXT, main_text),
-                           (STR06_STAGE2_BOOK_EXTRACTION, extraction)):
+    for upstream, view in ((MT_REL, main_text),
+                           (STR06_STAGE2_OBS_BOOK, observation)):
         resolved, projected = project_consumed(
-            PLAN_NODE, upstream, view, related={})
+            NAMES_NODE, upstream, view, related={})
         assert resolved, upstream
         inputs[upstream] = {
             'file': prov.fingerprint_bytes((book / upstream).read_bytes()),
             'consumed': prov.projection_fingerprint(projected),
         }
-    _write_payload(book, PLAN_REL, {
-        **json.loads(json.dumps(
-            _plan(_plan_ctx(base)).model_dump(by_alias=True, mode='json'))),
+    # names 观察不带 provenance 字段，来源账由写路注入盘上载荷——测试按同一
+    # 盘面形状手写 `_provenance`（candidate_freshness 只读盘上这一份账）。
+    _write_payload(book, NAMES_REL, {
+        'protocol_version': 'stage2-observation-v1',
+        'structure': {'families': {}, 'people': {}},
         '_provenance': {
             'root_clean_sha1': prov.content_sha1(b'fixture clean root\n'),
             'inputs': inputs,
         },
     })
-    store = ArtifactStore(_ctx(base, node=PLAN_NODE, paid=False))
-    assert store.freshness(PLAN_REL).state == 'fresh'
+    store = ArtifactStore(_ctx(base, node=NAMES_NODE, paid=False))
+    assert store.freshness(NAMES_REL).state == 'fresh'
 
     if edited == 'mt_diagnostic_note':
         main_text[0]['diagnostic_note'] = '新值'
@@ -754,21 +852,23 @@ def test_names_consumes_whole_extraction_and_narrow_main_text(edited: str):
         main_text[0]['text'] = '真正消费的正文改了'
         expected = ('stale', 'consumed_changed')
     elif edited == 'provenance_code':
-        extraction['_provenance']['code'] = 'source-v2'
+        observation['_provenance']['code'] = 'source-v2'
         expected = ('fresh', 'match')
     elif edited == 'provenance_model':
-        extraction['_provenance']['model'] = 'fixture-model-2'
+        observation['_provenance']['model'] = 'fixture-model-2'
         expected = ('fresh', 'match')
     else:
-        _edit_extraction(extraction, edited)
+        _edit_book_observation(observation, edited)
         expected = ('stale', 'consumed_changed')
 
     if edited.startswith('mt_'):
-        _write_payload(book, STAGE1_MAIN_TEXT, main_text)
+        (book / MT_REL).write_text(
+            json.dumps(encode_artifact(MT_REL, main_text), ensure_ascii=False),
+            encoding='utf-8', newline='')
     else:
-        _write_payload(book, STR06_STAGE2_BOOK_EXTRACTION, extraction)
+        _write_payload(book, STR06_STAGE2_OBS_BOOK, observation)
 
-    report = store.freshness(PLAN_REL)
+    report = store.freshness(NAMES_REL)
     assert (report.state, report.reason) == expected, edited
 
 
@@ -1116,12 +1216,12 @@ def test_a_missing_upstream_and_a_broken_one_are_different_terminal_states():
     base = _book()
     st = ArtifactStore(_ctx(base))
     with pytest.raises(UpstreamMissing):
-        st.read(Loose, 'stage2/global_grounding.json')
+        st.read(Loose, 'stage2/local_notes.json')
 
-    (base / '书名_123' / 'stage2').mkdir()
-    (base / '书名_123' / 'stage2' / 'global_grounding.json').write_bytes(b'{"sections": [1')
+    (base / '书名_123' / 'stage2').mkdir(exist_ok=True)
+    (base / '书名_123' / 'stage2' / 'local_notes.json').write_bytes(b'{"sections": [1')
     with pytest.raises(ArtifactUnreadable, match='合法 JSON'):
-        st.read(Loose, 'stage2/global_grounding.json')
+        st.read(Loose, 'stage2/local_notes.json')
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1137,7 +1237,7 @@ def test_what_we_write_is_what_we_can_read_back():
     """
     ctx = _plan_ctx(_book())
     st = ArtifactStore(ctx)
-    st.read(Loose, UPSTREAM)
+    _record_upstream_edge(ctx)
     ctx.record_edge(UPSTREAM, InputEdge(
         file=ctx.edges[UPSTREAM].file, consumed=None))
     ctx.ledger.record(node=ctx.node, sid=ctx.sid, model='m', code=ctx.code,
@@ -1177,7 +1277,7 @@ def test_a_tampered_schema_version_is_refused_on_the_real_read_path():
     base = _book()
     ctx = _plan_ctx(base)
     store = ArtifactStore(ctx)
-    store.read(Loose, UPSTREAM)
+    _record_upstream_edge(ctx)
     official = store.write(PLAN_REL, _plan(ctx))
     current = artifact_spec(PLAN_REL).current_version
     encoded = json.loads(official.read_text(encoding='utf-8'))
@@ -1185,7 +1285,7 @@ def test_a_tampered_schema_version_is_refused_on_the_real_read_path():
 
     # 先证明原样能读回来——否则下面那条拒读证明不了是版本号造成的。
     assert ArtifactStore(_plan_ctx(base)).read_own(
-        PLAN_MODEL, PLAN_REL)[0].characters['char_001'].canonical == '计划一'
+        PLAN_MODEL, PLAN_REL)[0].entries[0].name.family == '计划一'
 
     encoded['_schema_version'] = current + 1
     official.write_text(
@@ -1329,7 +1429,7 @@ def test_three_state_keys_are_absent_on_disk_not_null():
     """三态那四个键：`None` ⇒ **键不在**。`revalidated: null` 与「没有这个键」是两份字节。"""
     ctx = _plan_ctx(_book())
     st = ArtifactStore(ctx)
-    st.read(Loose, UPSTREAM)
+    _record_upstream_edge(ctx)
     d = _prov_on_disk(st.write(PLAN_REL, _plan(ctx, origin='human')))
     for k in ('revalidated', 'gates_skipped', 'input_basis', 'usage'):
         assert k not in d, f'{k} 是 None，不该出现在盘上'
@@ -1373,7 +1473,7 @@ def test_a_failed_write_never_touches_the_existing_artifact(monkeypatch):
     """
     ctx = _plan_ctx(_book())
     st = ArtifactStore(ctx)
-    st.read(Loose, UPSTREAM)
+    _record_upstream_edge(ctx)
     p = st.write(PLAN_REL, _plan(ctx, marker='第一版'))
     before = p.read_bytes()
 
@@ -1392,7 +1492,7 @@ def test_self_freshness_failure_restores_official_and_keeps_invalid():
     base = _book()
     ctx = _plan_ctx(base)
     st = ArtifactStore(ctx)
-    st.read(Loose, UPSTREAM)
+    _record_upstream_edge(ctx)
     official = st.write(PLAN_REL, _plan(ctx, marker='原正式稿'))
     before = official.read_bytes()
     invalid = st.write_invalid(
@@ -1412,7 +1512,7 @@ def test_retiring_invalid_failure_rolls_the_formal_write_back(monkeypatch):
     base = _book()
     ctx = _plan_ctx(base)
     st = ArtifactStore(ctx)
-    st.read(Loose, UPSTREAM)
+    _record_upstream_edge(ctx)
     official = st.write(PLAN_REL, _plan(ctx, marker='原正式稿'))
     before = official.read_bytes()
     invalid = st.write_invalid(
@@ -1449,7 +1549,7 @@ def test_json_pointer_diff_uses_rfc6901_escaping_and_stable_order():
 def test_json_artifacts_are_written_without_cr():
     ctx = _plan_ctx(_book())
     st = ArtifactStore(ctx)
-    st.read(Loose, UPSTREAM)
+    _record_upstream_edge(ctx)
     assert b'\r' not in st.write(PLAN_REL, _plan(ctx)).read_bytes()
 
 
@@ -1885,10 +1985,10 @@ def test_a_non_utf8_json_artifact_still_says_it_is_not_utf8_not_bad_json():
     """
     base = _book(payload=b'\xff\xfe\x00\x41')
     with pytest.raises(ArtifactUnreadable, match='UTF-8'):
-        ArtifactStore(_ctx(base)).read(Loose, UPSTREAM)
+        ArtifactStore(_ctx(base))._validated_read(Loose, UPSTREAM)
     base2 = _book(payload=b'{"sections": [')
     with pytest.raises(ArtifactUnreadable, match='合法 JSON'):
-        ArtifactStore(_ctx(base2)).read(Loose, UPSTREAM)
+        ArtifactStore(_ctx(base2))._validated_read(Loose, UPSTREAM)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1898,7 +1998,7 @@ def test_a_non_utf8_json_artifact_still_says_it_is_not_utf8_not_bad_json():
 def _write_invalid(base: Path, gates: list[str], *, marker: str = '计划一') -> tuple[RunContext, Path]:
     ctx = _plan_ctx(base)
     st = ArtifactStore(ctx)
-    st.read(Loose, UPSTREAM)
+    _record_upstream_edge(ctx)
     return ctx, st.write_invalid(
         PLAN_REL, _plan(ctx, marker=marker), gates_skipped=gates)
 
@@ -1911,7 +2011,7 @@ def test_gates_skipped_is_written_even_when_empty():
     正是 `Q-2` 要求必须能区分的两件事。
     """
     _ctx_, inv = _write_invalid(_book(), [])
-    assert inv.name == 'characters.INVALID.json'
+    assert inv.name == 'name_map.INVALID.json'
     assert _prov_on_disk(inv)['gates_skipped'] == []
 
 
@@ -1920,7 +2020,7 @@ def test_invalid_does_not_overwrite_the_official_artifact():
     base = _book()
     ctx = _plan_ctx(base)
     st = ArtifactStore(ctx)
-    st.read(Loose, UPSTREAM)
+    _record_upstream_edge(ctx)
     good = st.write(PLAN_REL, _plan(ctx, marker='合格的那一版'))
     before = good.read_bytes()
     st.write_invalid(PLAN_REL, _plan(ctx, marker='被拦下的那一版'), gates_skipped=['name_leak'])
@@ -1939,7 +2039,7 @@ def test_write_invalid_rolls_back_live_rounds_and_baselines_together(monkeypatch
     base = _book()
     ctx = _plan_ctx(base)
     store = ArtifactStore(ctx)
-    store.read(Loose, UPSTREAM)
+    _record_upstream_edge(ctx)
     store.write_invalid(
         PLAN_REL, _plan(ctx, marker='第一份问题稿'), gates_skipped=['name_leak'])
     stage = store.path(PLAN_REL).parent
@@ -1961,7 +2061,7 @@ def test_write_round_rolls_back_formal_invalid_and_round_history(monkeypatch):
     base = _book()
     ctx = _plan_ctx(base)
     store = ArtifactStore(ctx)
-    store.read(Loose, UPSTREAM)
+    _record_upstream_edge(ctx)
     store.write(PLAN_REL, _plan(ctx, marker='原正式稿'))
     store.write_invalid(
         PLAN_REL, _plan(ctx, marker='原问题稿'), gates_skipped=['name_leak'])
@@ -2019,7 +2119,7 @@ def test_a_new_official_draft_retires_the_old_invalid_sibling():
     base = _book()
     ctx = _plan_ctx(base)
     st = ArtifactStore(ctx)
-    st.read(Loose, UPSTREAM)
+    _record_upstream_edge(ctx)
     inv = st.write_invalid(PLAN_REL, _plan(ctx, marker='被拦下的那一版'),
                            gates_skipped=['name_leak'])
     assert inv.is_file()
@@ -2039,7 +2139,7 @@ def test_refreshing_formal_derived_fields_preserves_the_live_invalid_sibling():
     base = _book()
     ctx = _plan_ctx(base)
     store = ArtifactStore(ctx)
-    store.read(Loose, UPSTREAM)
+    _record_upstream_edge(ctx)
     formal = store.write(PLAN_REL, _plan(ctx, marker='旧派生读数'))
     invalid = store.write_invalid(
         PLAN_REL, _plan(ctx, marker='尚待重验证的付费候选'),
@@ -2062,7 +2162,7 @@ def test_refreshing_formal_derived_fields_preserves_the_live_invalid_sibling():
     assert changed == {formal.name}, (
         f'refresh 只能改正式文件，不得归档 INVALID 或改写其审计历史：{changed}')
     current, _raw = store.read_own(PLAN_MODEL, PLAN_REL)
-    assert current.characters['char_001'].canonical == '按当前判据刷新的派生读数'
+    assert current.entries[0].name.family == '按当前判据刷新的派生读数'
 
 
 def test_refresh_formal_refuses_to_create_a_missing_official():
@@ -2070,9 +2170,9 @@ def test_refresh_formal_refuses_to_create_a_missing_official():
     base = _book()
     ctx = _plan_ctx(base)
     store = ArtifactStore(ctx)
-    store.read(Loose, UPSTREAM)
+    _record_upstream_edge(ctx)
 
-    with pytest.raises(UpstreamMissing, match='characters.json'):
+    with pytest.raises(UpstreamMissing, match='name_map.json'):
         store.refresh_formal(PLAN_REL, _plan(ctx, marker='不应落盘'))
 
     assert not store.path(PLAN_REL).exists()
@@ -2083,7 +2183,7 @@ def test_refresh_formal_refuses_to_rewrite_generation_provenance():
     base = _book()
     ctx = _plan_ctx(base)
     store = ArtifactStore(ctx)
-    store.read(Loose, UPSTREAM)
+    _record_upstream_edge(ctx)
     store.write(PLAN_REL, _plan(ctx, marker='原正式稿'))
     store.write_invalid(
         PLAN_REL, _plan(ctx, marker='尚待重验证的问题稿'), gates_skipped=[])
@@ -2103,7 +2203,7 @@ def test_refresh_formal_freshness_failure_restores_the_whole_byte_tree(monkeypat
     base = _book()
     ctx = _plan_ctx(base)
     store = ArtifactStore(ctx)
-    store.read(Loose, UPSTREAM)
+    _record_upstream_edge(ctx)
     store.write(PLAN_REL, _plan(ctx, marker='原正式稿'))
     store.write_invalid(
         PLAN_REL, _plan(ctx, marker='仍在 live 的问题稿'), gates_skipped=[])
@@ -2125,7 +2225,7 @@ def test_a_rejected_official_write_does_not_retire_the_invalid_sibling(monkeypat
     base = _book()
     ctx = _plan_ctx(base)
     st = ArtifactStore(ctx)
-    st.read(Loose, UPSTREAM)
+    _record_upstream_edge(ctx)
     inv = st.write_invalid(
         PLAN_REL, _plan(ctx, marker='仍待修的问题稿'), gates_skipped=['name_leak'])
     before = inv.read_bytes()
@@ -2145,7 +2245,7 @@ def test_an_atomic_replace_failure_restores_the_just_retired_invalid(monkeypatch
     base = _book()
     ctx = _plan_ctx(base)
     st = ArtifactStore(ctx)
-    st.read(Loose, UPSTREAM)
+    _record_upstream_edge(ctx)
     inv = st.write_invalid(
         PLAN_REL, _plan(ctx, marker='仍待修的问题稿'), gates_skipped=['name_leak'])
     before = inv.read_bytes()
@@ -2170,7 +2270,7 @@ def test_retiring_the_invalid_sibling_is_a_no_op_when_there_is_none():
     base = _book()
     ctx = _plan_ctx(base)
     st = ArtifactStore(ctx)
-    st.read(Loose, UPSTREAM)
+    _record_upstream_edge(ctx)
     assert st.retire_invalid(PLAN_REL) is None
     st.write(PLAN_REL, _plan(ctx))
     assert not (st.path(PLAN_REL).parent / paths.ROUNDS_DIRNAME).exists(), \
@@ -2256,7 +2356,7 @@ def test_promotion_rebuilds_a_registered_unreadable_formal_without_losing_histor
     """
     base = _book()
     _ctx_, inv = _write_invalid(base, [], marker='当前 v1 问题稿')
-    formal = inv.with_name('characters.json')
+    formal = inv.with_name('name_map.json')
     formal.write_bytes(b'{"_schema_version":1,"legacy":"retired plan"}\n')
 
     out = ArtifactStore(_plan_ctx(base, paid=False)).promote_invalid(
@@ -2266,7 +2366,7 @@ def test_promotion_rebuilds_a_registered_unreadable_formal_without_losing_histor
         artifact_spec(PLAN_REL).current_version
     assert not inv.exists()
     archived = sorted(p.name for p in (formal.parent / paths.ROUNDS_DIRNAME).iterdir())
-    assert archived == ['characters.INVALID.r1.json', 'characters.r1.json'], \
+    assert archived == ['name_map.INVALID.r1.json', 'name_map.r1.json'], \
         '不可读的旧正式稿也是花过钱的盘上历史，归档后重建，不许静默覆盖'
 
 
@@ -2282,7 +2382,7 @@ def test_revalidation_records_immutable_baseline_hashes_and_json_pointer_diff():
     assert baseline_before == inv.read_bytes(), '基线不是 INVALID 创建时的完整原始字节'
 
     edited = json.loads(inv.read_text(encoding='utf-8'))
-    edited['characters']['char_001']['canonical'] = '人工修正'
+    edited['entries'][0]['name']['family'] = '人工修正'
     inv.write_text(json.dumps(edited, ensure_ascii=False, indent=4) + '\n', encoding='utf-8')
 
     store = ArtifactStore(_plan_ctx(base, paid=False))
@@ -2290,7 +2390,7 @@ def test_revalidation_records_immutable_baseline_hashes_and_json_pointer_diff():
         PLAN_REL, PLAN_MODEL, **REVALIDATION)
     assert audit.raw_changed is True and audit.content_changed is True
     assert audit.edited_by_human is True
-    assert audit.changed_json_pointers == ('/characters/char_001/canonical',)
+    assert audit.changed_json_pointers == ('/entries/0/name/family',)
     assert audit.baseline_raw_sha256 != audit.candidate_raw_sha256
     assert audit.baseline_canonical_sha256 != audit.candidate_canonical_sha256
 
@@ -2298,7 +2398,7 @@ def test_revalidation_records_immutable_baseline_hashes_and_json_pointer_diff():
     disk_audit = _prov_on_disk(out)['revalidation_audit']
     assert disk_audit == audit.model_dump(mode='json')
     assert baseline.read_bytes() == baseline_before, '提升过程改写了不可变基线'
-    archived = inv.parent / '_rounds' / 'characters.INVALID.r1.json'
+    archived = inv.parent / '_rounds' / 'name_map.INVALID.r1.json'
     assert archived.read_bytes() != baseline_before, \
         '人工编辑后的 numbered 轮次与创建基线不是重复内容，两份证据都必须保留'
 
@@ -2324,8 +2424,8 @@ def test_promotion_override_rebuilds_derived_fields_but_cannot_replace_live_audi
     _ctx_, inv = _write_invalid(base, [], marker='机器原稿')
     baseline_source = _prov_on_disk(inv)
     current = json.loads(inv.read_text(encoding='utf-8'))
-    current['characters']['char_001']['canonical'] = '人工提交'
-    current['characters']['char_001']['surfaces'][0]['surface'] = '人工正文修订'
+    current['entries'][0]['name']['family'] = '人工提交'
+    current['entries'][0]['aliases'] = {'alias_01': '人工正文修订'}
     current_source = current['_provenance']
     current_source['code'] = 'live-invalid-forged-code'
     current_source['root_clean_sha1'] = '0' * 40
@@ -2339,8 +2439,8 @@ def test_promotion_override_rebuilds_derived_fields_but_cannot_replace_live_audi
     live = PLAN_MODEL.model_validate(decode_artifact(PLAN_REL, current).payload)
     fake_source = live.provenance.model_copy(update={'code': 'fake-override-code', 'inputs': {}})
     rebuilt_payload = live.model_dump(by_alias=True, mode='json')
-    rebuilt_payload['characters']['char_001'][
-        'canonical'] = '确定性派生字段已重建'
+    rebuilt_payload['entries'][0]['name'][
+        'family'] = '确定性派生字段已重建'
     rebuilt_payload['_provenance'] = fake_source.model_dump(by_alias=True, mode='json')
     rebuilt = PLAN_MODEL.model_validate(rebuilt_payload)
 
@@ -2352,13 +2452,13 @@ def test_promotion_override_rebuilds_derived_fields_but_cannot_replace_live_audi
     disk = json.loads(out.read_text(encoding='utf-8'))
     source = disk['_provenance']
 
-    assert disk['characters']['char_001'][
-        'canonical'] == '确定性派生字段已重建'
-    assert disk['characters']['char_001']['surfaces'][0]['surface'] == '人工正文修订'
+    assert disk['entries'][0]['name'][
+        'family'] == '确定性派生字段已重建'
+    assert disk['entries'][0]['aliases'] == {'alias_01': '人工正文修订'}
     assert source['revalidation_audit'] == live_audit.model_dump(mode='json')
     assert source['revalidation_audit']['changed_json_pointers'] == [
-        '/characters/char_001/canonical',
-        '/characters/char_001/surfaces/0/surface',
+        '/entries/0/aliases/alias_01',
+        '/entries/0/name/family',
     ]
     promotion_owned = {
         'code', 'revalidated', 'gates_skipped', 'invalid_baseline_sha256',
@@ -2391,7 +2491,7 @@ def test_revalidation_refuses_a_tampered_immutable_baseline_before_writing():
     locator = _prov_on_disk(inv)['invalid_baseline_sha256']
     baseline = next((inv.parent / '_revalidation').glob(f'*.{locator}.snapshot'))
     damaged = json.loads(baseline.read_text(encoding='utf-8'))
-    damaged['characters']['char_001']['canonical'] = '基线被改'
+    damaged['entries'][0]['name']['family'] = '基线被改'
     baseline.write_text(json.dumps(damaged, ensure_ascii=False, indent=2) + '\n',
                         encoding='utf-8')
 
@@ -2429,8 +2529,8 @@ def test_an_invalid_without_a_creation_snapshot_fails_closed():
 def test_first_write_invalid_creates_a_nested_snapshot_near_windows_max_path():
     root = Path(tempfile.mkdtemp())
     locator = '0' * 64
-    empty_old = (root / '_123' / 'stage2' / 'characters' / '_revalidation' /
-                 f'characters.INVALID.{locator}.snapshot')
+    empty_old = (root / '_123' / 'stage7' / 'naming' / '_revalidation' /
+                 f'name_map.INVALID.{locator}.snapshot')
     # Reproduce the acceptance budget: the old target-derived temporary name
     # and even the long legacy target reach MAX_PATH, while every ordinary
     # input/output directory remains comfortably shorter.
@@ -2438,7 +2538,7 @@ def test_first_write_invalid_creates_a_nested_snapshot_near_windows_max_path():
     base = _book(title=title, root=root)
     ctx = _plan_ctx(base)
     store = ArtifactStore(ctx)
-    store.read(Loose, UPSTREAM)
+    _record_upstream_edge(ctx)
     revalidation = store.path(PLAN_REL).parent / '_revalidation'
     assert not revalidation.exists()
 
@@ -2449,7 +2549,7 @@ def test_first_write_invalid_creates_a_nested_snapshot_near_windows_max_path():
     assert snapshots[0].name == f'b.{locator}.snapshot'
     assert snapshots[0].read_bytes() == inv.read_bytes()
 
-    legacy = revalidation / f'characters.INVALID.{locator}.snapshot'
+    legacy = revalidation / f'name_map.INVALID.{locator}.snapshot'
     legacy_tmp = legacy.with_name(f'{legacy.name}.{os.getpid()}.tmp')
     assert len(str(legacy)) >= 260, '夹具没有复现真实验收的 Windows 路径预算'
     assert len(str(snapshots[0])) + 20 < len(str(legacy_tmp))
@@ -2459,7 +2559,7 @@ def test_failed_first_snapshot_write_leaves_no_partial_or_live_invalid(monkeypat
     base = _book()
     ctx = _plan_ctx(base)
     store = ArtifactStore(ctx)
-    store.read(Loose, UPSTREAM)
+    _record_upstream_edge(ctx)
     invalid = store.path(paths.invalid_of(PLAN_REL))
     revalidation = invalid.parent / '_revalidation'
     original = os.replace
@@ -2521,11 +2621,11 @@ def test_a_second_promotion_lands_in_the_next_round_not_on_top_of_the_first():
     ArtifactStore(_plan_ctx(base, paid=False)).promote_invalid(
         PLAN_REL, PLAN_MODEL, **REVALIDATION)
 
-    rounds = base / '书名_123' / 'stage2' / 'characters' / '_rounds'
+    rounds = base / '书名_123' / 'stage7' / 'naming' / '_rounds'
     archived = sorted(q.name for q in rounds.iterdir())
-    assert archived == ['characters.INVALID.r1.json', 'characters.INVALID.r2.json',
-                        'characters.r1.json']
-    assert (rounds / 'characters.r1.json').read_bytes() == first, \
+    assert archived == ['name_map.INVALID.r1.json', 'name_map.INVALID.r2.json',
+                        'name_map.r1.json']
+    assert (rounds / 'name_map.r1.json').read_bytes() == first, \
         '归档里那份不是被换掉的那一版正式稿'
     assert p.read_bytes() != first, '第二次提升根本没改动正式稿？夹具白搭了'
 
@@ -2542,7 +2642,7 @@ def test_promotion_archives_the_paid_official_instead_of_destroying_it():
     # 先有一份**正式**产物（付费产出的那一版）
     ctx0 = _plan_ctx(base)
     st0 = ArtifactStore(ctx0)
-    st0.read(Loose, UPSTREAM)
+    _record_upstream_edge(ctx0)
     official = st0.write(PLAN_REL, _plan(ctx0, marker='付过钱的那一版'))
     was = official.read_bytes()
 
@@ -2550,12 +2650,12 @@ def test_promotion_archives_the_paid_official_instead_of_destroying_it():
     out = ArtifactStore(_plan_ctx(base, paid=False)).promote_invalid(
         PLAN_REL, PLAN_MODEL, **REVALIDATION)
 
-    rounds = base / '书名_123' / 'stage2' / 'characters' / '_rounds'
-    assert (rounds / 'characters.r1.json').read_bytes() == was, \
+    rounds = base / '书名_123' / 'stage7' / 'naming' / '_rounds'
+    assert (rounds / 'name_map.r1.json').read_bytes() == was, \
         '旧正式稿被原子替换销毁了，而 `_rounds/` 里没有任何副本'
-    assert (rounds / 'characters.INVALID.r1.json').exists(), '`.INVALID` 那条历史也要归档'
+    assert (rounds / 'name_map.INVALID.r1.json').exists(), '`.INVALID` 那条历史也要归档'
     assert json.loads(out.read_text(encoding='utf-8'))[
-        'characters']['char_001']['canonical'] == '被拦下的那一版'
+        'entries'][0]['name']['family'] == '被拦下的那一版'
     assert _prov_on_disk(out)['revalidated'] is True
 
 
@@ -2574,15 +2674,15 @@ def test_a_resumed_promotion_does_not_invent_a_phantom_round():
     ArtifactStore(_plan_ctx(base, paid=False)).promote_invalid(
         PLAN_REL, PLAN_MODEL, **REVALIDATION)
 
-    rounds = base / '书名_123' / 'stage2' / 'characters' / '_rounds'
+    rounds = base / '书名_123' / 'stage7' / 'naming' / '_rounds'
     # 模拟「正式稿已落、`.INVALID` 还没挪走」那半个刻意选的窗口
-    inv = base / '书名_123' / 'stage2' / 'characters' / 'characters.INVALID.json'
-    (rounds / 'characters.INVALID.r1.json').rename(inv)
+    inv = base / '书名_123' / 'stage7' / 'naming' / 'name_map.INVALID.json'
+    (rounds / 'name_map.INVALID.r1.json').rename(inv)
     ArtifactStore(_plan_ctx(base, paid=False)).promote_invalid(
         PLAN_REL, PLAN_MODEL, **REVALIDATION)
 
     archived = sorted(q.name for q in rounds.iterdir())
-    assert archived == ['characters.INVALID.r1.json'], \
+    assert archived == ['name_map.INVALID.r1.json'], \
         f'重跑凭空造出了轮次：{archived}——`--revalidate` 本该自愈，而不是往账上塞幻影'
 
 
@@ -2606,7 +2706,7 @@ def test_a_free_produced_invalid_can_be_promoted_too():
     base = _book()
     ctx = _plan_ctx(base, paid=False)
     st = ArtifactStore(ctx)
-    st.read(Loose, UPSTREAM)
+    _record_upstream_edge(ctx)
     art = FreeArtifact(note='0 成本算出来的', _provenance=ctx.free_provenance(prompts={'RULES': '判据表'}))
     st.write_invalid(PLAN_REL, art, gates_skipped=['name_leak'])
 
@@ -2632,9 +2732,9 @@ def test_promotion_refuses_before_touching_anything_when_the_slot_is_taken(monke
     """
     base = _book()
     _ctx_, inv = _write_invalid(base, [])
-    rounds = base / '书名_123' / 'stage2' / 'characters' / '_rounds'
+    rounds = base / '书名_123' / 'stage7' / 'naming' / '_rounds'
     rounds.mkdir(parents=True)
-    (rounds / 'characters.INVALID.r1.json').write_bytes(b'{"taken": true}')
+    (rounds / 'name_map.INVALID.r1.json').write_bytes(b'{"taken": true}')
 
     st = ArtifactStore(_plan_ctx(base, paid=False))
     monkeypatch.setattr(ArtifactStore, '_round_on_disk', lambda self, rel: 1)
@@ -2642,7 +2742,7 @@ def test_promotion_refuses_before_touching_anything_when_the_slot_is_taken(monke
         st.promote_invalid(PLAN_REL, PLAN_MODEL, **REVALIDATION)
     assert inv.exists(), '`.INVALID` 被挪走了'
     assert not st.exists(PLAN_REL), '正式稿落下去了，而调用方拿到的是一个异常'
-    assert sorted(q.name for q in rounds.iterdir()) == ['characters.INVALID.r1.json'], \
+    assert sorted(q.name for q in rounds.iterdir()) == ['name_map.INVALID.r1.json'], \
         '归档目录变了——有人把「归档旧正式稿」挪到了占位检查之前'
 
 
@@ -2664,9 +2764,9 @@ def test_archiving_never_overwrites_an_existing_round():
     base = _book()
     ctx = _plan_ctx(base)
     st = ArtifactStore(ctx)
-    st.read(Loose, UPSTREAM)
+    _record_upstream_edge(ctx)
     st.write(PLAN_REL, _plan(ctx, marker='第一轮'))
-    st.archive_round(PLAN_REL)                       # → _rounds/characters.r1.json
+    st.archive_round(PLAN_REL)                       # → _rounds/name_map.r1.json
     st.write(PLAN_REL, _plan(ctx, marker='第二轮'))
     with pytest.raises(PathRefused, match='归档目标已存在'):
         st.archive_round(PLAN_REL, round_no=1)
@@ -2677,10 +2777,10 @@ def test_seen_rounds_counts_the_invalid_and_the_gaps():
     base = _book()
     ctx = _plan_ctx(base)
     st = ArtifactStore(ctx)
-    rounds = base / '书名_123' / 'stage2' / 'characters' / '_rounds'
+    rounds = base / '书名_123' / 'stage7' / 'naming' / '_rounds'
     rounds.mkdir(parents=True)
-    (rounds / 'characters.r1.json').write_bytes(b'{}')
-    (rounds / 'characters.r3.json').write_bytes(b'{}')       # ← r2 被人挪走了
+    (rounds / 'name_map.r1.json').write_bytes(b'{}')
+    (rounds / 'name_map.r3.json').write_bytes(b'{}')       # ← r2 被人挪走了
     assert st.seen_rounds(PLAN_REL) == {1, 3}
     assert st.next_round(PLAN_REL) == 4, 'len(glob)+1 会返回 3，与现存的 r3 撞号'
 
@@ -2693,7 +2793,7 @@ def test_archive_can_keep_the_original_when_the_layer_needs_it():
     base = _book()
     ctx = _plan_ctx(base)
     st = ArtifactStore(ctx)
-    st.read(Loose, UPSTREAM)
+    _record_upstream_edge(ctx)
     p = st.write(PLAN_REL, _plan(ctx))
     st.archive_round(PLAN_REL, keep=True)
     assert p.exists()
@@ -2714,11 +2814,11 @@ def test_a_deleted_upstream_becomes_a_named_ghost_edge():
     base = _book()
     ctx = _plan_ctx(base)
     st = ArtifactStore(ctx)
-    st.read(Loose, UPSTREAM)
+    _record_upstream_edge(ctx)
     st.write(PLAN_REL, _plan(ctx))
     assert st.freshness(PLAN_REL).state == 'fresh'
 
-    (base / '书名_123' / 'stage1' / 'main_text.json').unlink()
+    (base / '书名_123' / UPSTREAM).unlink()
     r = st.freshness(PLAN_REL)
     assert (r.state, r.reason) == ('unknown', 'ghost')
     assert r.ghosts == (UPSTREAM,), '不点名 = 人无从判断这条边要不要重新挂钩'
@@ -2733,7 +2833,7 @@ def test_freshness_reads_raw_and_survives_an_artifact_that_no_longer_validates()
     """
     base = _book()
     st = ArtifactStore(_plan_ctx(base))
-    (base / '书名_123' / 'stage2' / 'characters').mkdir(parents=True)
+    (base / '书名_123' / 'stage7' / 'naming').mkdir(parents=True, exist_ok=True)
     root_clean_sha1 = prov.content_sha1(
         (base / '书名_123' / 'stage0' / 'clean_text.txt').read_bytes())
     malformed = {
@@ -2758,7 +2858,7 @@ def test_a_bad_key_in_current_provenance_does_not_blow_up_the_report():
     「有一条边指向已删文件」不该升级成「报告出不来」。"""
     base = _book()
     st = ArtifactStore(_plan_ctx(base))
-    (base / '书名_123' / 'stage2' / 'characters').mkdir(parents=True)
+    (base / '书名_123' / 'stage7' / 'naming').mkdir(parents=True, exist_ok=True)
     root_clean_sha1 = prov.content_sha1(
         (base / '书名_123' / 'stage0' / 'clean_text.txt').read_bytes())
     malformed = {

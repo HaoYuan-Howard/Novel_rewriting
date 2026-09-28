@@ -179,21 +179,29 @@ def test_identity_stable_constraints_come_only_from_the_fact_layer():
     与隐藏事实都不得进入稳定身份约束——认知归属 effects/fact 层管，身份约束只承载
     叙述确立的稳定事实。CharactersCore 不含 cognition 字段，这里钉住投影不越层。
     """
-    from tests.str06_facilities import v13_beat, v13_chapter
-    from novel.stages.stage2.source import ChapterCompiler
+    from novel.stages.stage2 import ChapterObservation
     chars, bp, cp = _assemble()
-    # 同一条 source pair 上挂一份带 cognition/concealed 的章 wire：其文本若泄漏进
-    # 身份约束，下面两条断言会红。
-    compiler = ChapterCompiler(chars, evidence_ids=('e01_01',))
-    _ch2, errors = compiler.compile(v13_chapter(v13_beat(
-        'b01_02', '试探', participants=('fu_jun', 'yun'),
-        effects=({'target': {'kind': 'character', 'char_id': 'fu_jun'},
-                  'key': 'scene_location', 'op': 'set', 'value': '床底', 'scope': 'scene',
-                  'disclosure': {'visibility': 'concealed', 'known_by': ['fu_jun']},
-                  'proposition': {'ref': 'p_hide', 'statement': '夫君藏身床底'}},),
-        cognition=({'proposition': {'ref': 'p_believe', 'statement': '芸娘以为夫君已离开'},
-                    'holder': 'yun', 'mode': 'believes'},))), 1)
-    assert not errors, errors
+    # v13 的章观察形状确实承载 cognition/concealed（B5：旧联合抽取 ChapterCompiler
+    # 已删，改按观察协议直接构造同一形状）；其文本若泄漏进身份约束，下面两条
+    # 断言会红。
+    observation = ChapterObservation.model_validate({
+        'protocol_version': 'stage2-observation-v1', 'beats': [{
+            'event': '试探', 'participants': ['fu_jun', 'yun'],
+            'source_refs': ['e01_01'], 'scene_boundary': 'new',
+            'temporal_mode': 'single',
+            'effects': [{'target': {'kind': 'character', 'char_id': 'fu_jun'},
+                         'key': 'scene_location', 'op': 'set', 'value': '床底',
+                         'scope': 'scene',
+                         'disclosure': {'visibility': 'concealed',
+                                        'known_by': ['fu_jun']},
+                         'proposition': {'ref': 'p_hide',
+                                         'statement': '夫君藏身床底'}}],
+            'cognition': [{'proposition': {'ref': 'p_believe',
+                                           'statement': '芸娘以为夫君已离开'},
+                           'holder': 'yun', 'mode': 'believes'}],
+            'loops': []}]})
+    assert observation.beats[0].cognition
+    assert observation.beats[0].effects[0].disclosure.visibility == 'concealed'
     _brief, identity = project_brief(cp, chars)
     dumped = ' '.join(' '.join(i.stable_constraints) for i in identity)
     assert '床底' not in dumped and '藏身' not in dumped

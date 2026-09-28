@@ -339,7 +339,7 @@ def _runners() -> dict[str, Callable[[RunContext, list[str]], int]]:
 
     ⚠⚠ F8c：**只剩 stage0／stage1 两条腿**。旧链 stage2／4／5／7 的 runner 随
     旧链整层退役删除——`_cmd_run` 入口按 `RETIRED_NODES` 拒读旧节点
-    （legacy_incompatible），11 个 `str06.` 节点在入口分流到 `_run_str06`，
+    （legacy_incompatible），14 个 `str06.` 节点在入口分流到 `_run_str06`，
     两者都到不了这张表。Stage6 腿更早（F8b）已删。
     """
     return {'stage0': _run_stage0, 'stage1': _run_stage1}
@@ -445,38 +445,10 @@ def _dispatch(node: str, ctx: RunContext, flags: list[str]) -> int:
     return _runners()[NODES[node].stage](ctx, flags)
 
 
-def _llm_client(ctx: RunContext):
-    """运行期 LLM 客户端的唯一构造口；所有 CLI 节点共用配置与持久化缓存。"""
-    backend = getattr(ctx, 'executor_backend', None)
-    from novel.orchestrator.retired_formats import refuse_agent_backend
-    refuse_agent_backend('legacy LLM client 构造口', backend)
-    if isinstance(backend, LegacyExecutorBackend):
-        from novel.llm.providers import create_legacy_client
-        return create_legacy_client(ctx, backend.profile)
-
-    # 无 discriminator 只承接升级前的独立 CLI/作业记录；新的 AgentRun 链不会到这里。
-    from novel.config import load_config
-    from novel.llm.cache import ResponseCache
-    from novel.llm.client import LlmClient
-    from novel.llm.transport import DeepSeekTransport
-
-    cfg = load_config()
-    # ⚠ 节点钉死的模型优先于全局配置：`NodeSpec.model` 是两类例外的形状落点
-    #   （`stage6.semantic` 的证据力、Stage4 A/B 两个全书节点的重采粒度；
-    #   `DEEPSEEK_MODEL` /
-    #   `DEFAULT_MODEL` 换不掉它们），其余节点 '' = 跟随全局默认。
-    return LlmClient(
-        ctx,
-        DeepSeekTransport(cfg),
-        cache=ResponseCache(cfg.cache_dir),
-        model=NODES[ctx.node].model or cfg.model,
-        thinking_mode=cfg.thinking_mode,
-        effort=NODES[ctx.node].effort,
-        max_retries=cfg.max_retries,
-        backoff_base=cfg.backoff_base,
-        concurrency=cfg.concurrency_for(ctx.node),
-        concurrency_policy=cfg.concurrency_policy,
-    )
+# ⚠ B5（S-05）：旧「运行期 LLM client 唯一构造口」`_llm_client` 已删——它的
+# 两条腿分别是退役的 legacy provider factory 与执行期 `load_config()` 重读，
+# 且自 str06 节点分流进 `_run_str06` → `chain.execute` 后就没有生产调用方。
+# 新链的传输与配置经 run 启动冻结的 `ExecutionProfile` 贯通（B1）。
 
 
 def _run_stage0_source(
@@ -747,7 +719,7 @@ def _cmd_run(a: argparse.Namespace) -> int:
     # 真加了又会落到默认付费分支。入口先走与 preview 共用的节点校验。
     if a.node in RETIRED_NODES:
         # 旧链节点随 STR-06 切换整体退役（F8b）：现役 NODES 只有 stage0/1 与
-        # 11 个 str06. 节点。旧书只读识别为 legacy_incompatible，不继承旧批准
+        # 14 个 str06. 节点。旧书只读识别为 legacy_incompatible，不继承旧批准
         # 或接受记录；要重跑必须在独立根经新链重建。
         raise TerminalState(
             f'节点 {a.node!r} 已随旧链退役（legacy_incompatible）：现役链是 '

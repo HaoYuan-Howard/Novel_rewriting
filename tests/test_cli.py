@@ -602,75 +602,20 @@ def test_context_budget_refusal_exits_two_without_a_stack_and_keeps_the_action(m
     assert 'input_tokens=904001' in err and '行动：缩短整本正文' in err
 
 
-@pytest.mark.corpus
-def test_a_model_ladder_that_runs_out_is_a_terminal_state_not_a_crash(
-        box, monkeypatch, capsys):
-    """⭐ **降级阶梯走完仍拿不到东西 ≠ 程序崩了。** 它是 `2`，且不打栈。
+def test_paid_nodes_follow_the_global_default_model_without_pins():
+    """⭐ 现役付费节点 ``model=''``：一律跟随 ``DEEPSEEK_MODEL`` / 全局默认。
 
-    这是上一条的**反面**，两条必须成对存在：
-      · 真编程错误 → `70` + 栈（上一条）
-      · 模型四档全空 → `2` + 一句人话（本条）
-
-    `LlmFailed` 的 docstring 一直写着「显式终态」，而它此前挂在 `NovelError` 上
-    ⇒ 落 `main()` 的 `except Exception` 兜底 ⇒ **exit 70 + 一段栈**。
-    于是 stage2/3/4/6/7 每一次「模型这回没给出可用 JSON」都长成一次崩溃，
-    编排层读到的是「结论未知」，人读到的是「程序坏了」。
-
-    ⚠ 本条 0 成本：`FakeTransport` 不发任何请求，四档全返回空 content
-    （实测那个形态——答案全写进了 reasoning，`finish_reason='stop'` 不是截断）。
+    2026-09-16 用户裁决：取消 Stage4 Pro 钉死。B5 换轨：这条断言原先经已删除的
+    `_llm_client` 构造口验证；新链的模型选择在 run 启动冻结的 `ExecutionProfile`
+    （`novel/stages/chain.py`，`model = cfg.model`）＋ provider 能力矩阵
+    （`NodeSpec.model` 非 '' 的节点从 flash 的 executor 面排除）两处生效——
+    本条在注册面钉住「没有任何付费节点被钉死在特定模型」。
     """
-    from novel.cli import main as M
-    from novel.llm.client import LlmClient
-    from novel.llm.transport import ChatResponse, FakeTransport
+    from contracts.invariants import LLM_EXECUTOR_NODES, NODES
 
-    empty = ChatResponse(content='', reasoning='想了很多，但答案没流出来',
-                         finish_reason='stop', usage=None)
-    fake = FakeTransport.always(empty)
-    monkeypatch.setattr(M, '_llm_client', lambda ctx: LlmClient(
-        ctx, fake, cache=None, model='deepseek-v4-pro', sleep=lambda _s: None))
-
-    rc = _run('run', 'stage2.global', box.sid, '--yes', '--base', str(box.root))
-
-    assert rc == X.TERMINAL_STATE, (
-        f'阶梯耗尽给了 {rc}（{X.MEANING.get(rc, "没有这个码")}）——'
-        f'{X.CRASH} 会让编排层把「模型没给出东西」记成「进程崩了，结论未知」')
-    err = capsys.readouterr().err
-    assert 'Traceback' not in err, '显式终态不打栈：打了栈就是在说这是个 bug'
-    assert '阶梯' in err or '没有可用' in err, '报错要说清是模型那一侧走不下去了'
-    assert len(fake.calls) >= 2, (
-        '守卫的守卫：只发了 %d 次请求——阶梯根本没走完，本条测的是别的东西'
-        % len(fake.calls))
-
-
-def test_paid_nodes_follow_the_global_default_model_without_pins(monkeypatch):
-    """⭐ `_llm_client` 是全链唯一的 client 构造口：`NodeSpec.model` 在这里生效。
-
-    2026-09-16 用户裁决：取消 stage4 Pro 钉死；现役付费节点 ``model=''``，
-    一律跟随 ``DEEPSEEK_MODEL`` / 全局默认（flash）。
-    """
-    import tempfile
-    from pathlib import Path
-
-    from novel import config
-    from novel.cli import main as M
-    from novel.run import RunContext
-
-    base = Path(tempfile.mkdtemp())
-    (base / '书名_123' / 'stage1').mkdir(parents=True, exist_ok=True)
-    monkeypatch.setattr(
-        config, 'load_config',
-        lambda: config.Config(api_key=None, model='deepseek-flash'))
-
-    design = M._llm_client(RunContext.open(
-        base, '123', 'str06.stage4.body_design', paid=True, write_ledger=False))
-    plan = M._llm_client(RunContext.open(
-        base, '123', 'str06.stage4.bind', paid=True, write_ledger=False))
-    other = M._llm_client(RunContext.open(
-        base, '123', 'str06.stage2.book', paid=True, write_ledger=False))
-
-    assert design.model == 'deepseek-flash' == config.DEFAULT_MODEL
-    assert plan.model == 'deepseek-flash'
-    assert other.model == 'deepseek-flash'
+    pinned = {node: NODES[node].model for node in LLM_EXECUTOR_NODES
+              if NODES[node].model}
+    assert pinned == {}, f'付费节点不得钉死模型：{pinned}'
 
 
 @pytest.mark.corpus
@@ -820,25 +765,6 @@ def test_agent_argv_never_round_trips_through_cli_into_run_context(
 
 
 
-def test_legacy_backend_uses_provider_factory_instead_of_implicit_deepseek(
-        monkeypatch):
-    from novel.cli import main as M
-    from novel.llm import providers
-
-    backend = LegacyExecutorBackend(profile=LegacyLlmProfile(
-        provider='deepseek', model='deepseek-v4-pro',
-        reasoning_effort='high', thinking_mode='on'))
-    ctx = SimpleNamespace(node='stage4.design', executor_backend=backend)
-    sentinel = object()
-    seen = []
-    monkeypatch.setattr(
-        providers, 'create_legacy_client',
-        lambda actual_ctx, profile: seen.append((actual_ctx, profile)) or sentinel)
-
-    assert M._llm_client(ctx) is sentinel
-    assert seen == [(ctx, backend.profile)]
-
-
 @pytest.mark.parametrize(
     ('node', 'flags', 'expected_agent_kwargs'), _PROFILED_RUN_CASES)
 def test_profiled_dispatch_never_constructs_a_deepseek_client(
@@ -850,9 +776,7 @@ def test_profiled_dispatch_never_constructs_a_deepseek_client(
     monkeypatch.setattr(
         M, 'RunContext',
         SimpleNamespace(open=lambda *_args, **_kwargs: opened.append(_kwargs)))
-    monkeypatch.setattr(
-        M, '_llm_client',
-        lambda _ctx: pytest.fail('退役 backend 不得构造任何 LLM client'))
+    # B5：`_llm_client` 构造口已随旧链删除；str06 分流在 client 构造之前拒绝。
 
     rc = _run(
         'run', node, 'book-1', *flags, *RETIRED_AGENT_BACKEND_ARGS,

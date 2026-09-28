@@ -425,15 +425,13 @@ CASES.update({
 # ─── 质量改进批次（2026-09-26）新增 HARD 的最小会红样本 ───────────────────────
 
 def _canonical_not_a_surface() -> list:
-    """称谓闭合：canonical 不在本人 surfaces 里（wire 闸，不过就走 owner patch）。"""
-    from novel.stages.stage2.source import compile_book
-    wire = {
-        'characters': {
-            'fu_jun': {'canonical': '陆夫君', 'surfaces': [
-                {'surface': '夫君', 'from_chapter': 1, 'until_chapter': None,
-                 'source_refs': ['e01_01']}]}},
-        'initial_state': [], 'world_constraints': []}
-    _chars, _wcs, errors = compile_book(wire, evidence_ids=('e01_01',))
+    """称谓闭合：canonical 不在本人 surfaces 里（book 观察闸，不过就走 owner patch）。"""
+    from tests.test_str06_stage2_publish import EVIDENCE, _book_wire
+    from novel.stages.stage2 import compile_book_observation
+    wire = _book_wire(extra_characters={
+        'ghost_yun': {'canonical': '陆夫人', 'surfaces': [
+            {'surface': '云姑娘', 'source_refs': ['e01_02']}]}})
+    _observation, errors = compile_book_observation(wire, evidence=EVIDENCE)
     return errors
 
 
@@ -536,7 +534,8 @@ def _delivery_chapter_split_mismatch() -> list:
 
 
 CASES.update({
-    'source_canonical_surface': Case('stage2', _canonical_not_a_surface, 'canonical'),
+    'source_canonical_surface': Case(
+        'stage2', _canonical_not_a_surface, '不是其 surface 之一'),
     'source_identity_covers_hook_copy': Case(
         'stage2', _hook_copy_source_identity, '源输入身份'),
     'design_surface_release_closure': Case(
@@ -547,16 +546,41 @@ CASES.update({
 
 
 # ─── stage2 既有 HARD 的同批红例（扫描面纳入 stage2 时补齐） ──────────────────
+#
+# 【B5（S-05）】红例全部换轨五 owner 引擎（旧联合抽取 compile_book／ChapterCompiler
+# 已删）；共用底座取 `tests/test_str06_stage2_publish.py` 的绿观察 wires。
+
+def _stage2_outcome(*, book=None, chapters=None, names=None, associate=None):
+    """四份观察 → `compile_source_truth`（未决项在 `outcome.undecided`）。"""
+    from tests.test_str06_stage2_publish import (
+        EVIDENCE, _associate_wire, _book_wire, _chapter_wires, _names_wire,
+    )
+    from novel.stages.stage2 import (
+        AssociateObservation, BookObservation, ChapterObservation,
+        NamesObservation, compile_source_truth,
+    )
+    ch_wires = chapters if chapters is not None else _chapter_wires()
+    return compile_source_truth(
+        book=BookObservation.model_validate(
+            book if book is not None else _book_wire()),
+        chapters={no: ChapterObservation.model_validate(ch_wires[f'ch{no:02d}'])
+                  for no in range(1, len(ch_wires) + 1)},
+        names=NamesObservation.model_validate({
+            'protocol_version': 'stage2-observation-v1',
+            'structure': names if names is not None else _names_wire()}),
+        associate=AssociateObservation.model_validate(
+            associate if associate is not None else _associate_wire()),
+        evidence=EVIDENCE)
+
 
 def _book_extraction_dangling() -> list:
-    """book 级抽取编译闭合：surface 的 source_ref 悬空。"""
-    from novel.stages.stage2.source import compile_book
-    wire = {
-        'characters': {'fu_jun': {'canonical': '夫君', 'surfaces': [
-            {'surface': '夫君', 'from_chapter': 1, 'until_chapter': None,
-             'source_refs': ['e99_99']}]}},
-        'initial_state': [], 'world_constraints': []}
-    _chars, _wcs, errors = compile_book(wire, evidence_ids=('e01_01',))
+    """book 观察编译闭合：surface 的 source_ref 悬空（句段闭集之外的 id）。"""
+    from tests.test_str06_stage2_publish import EVIDENCE, _book_wire
+    from novel.stages.stage2 import compile_book_observation
+    wire = _book_wire(extra_characters={
+        'fu_jun': {'canonical': '夫君', 'surfaces': [
+            {'surface': '夫君', 'source_refs': ['e99_99']}]}})
+    _observation, errors = compile_book_observation(wire, evidence=EVIDENCE)
     return errors
 
 
@@ -574,103 +598,67 @@ def _chapter_ordinals_not_dense() -> list:
 
 
 def _chapter_blueprint_bad_wire() -> list:
-    """逐章 Blueprint 编译闭合：participants 引用人物账之外的人物。"""
-    from novel.stages.stage2.source import ChapterCompiler, compile_book
-    from tests.str06_facilities import v13_beat, v13_chapter
-    chars, _wcs, errors = compile_book({
-        'characters': {'fu_jun': {'canonical': '夫君', 'surfaces': [
-            {'surface': '夫君', 'from_chapter': 1, 'until_chapter': None,
-             'source_refs': ['e01_01']}]}},
-        'initial_state': [], 'world_constraints': []}, evidence_ids=('e01_01',))
-    assert not errors and chars is not None
-    compiler = ChapterCompiler(chars, evidence_ids=('e01_01',))
-    _bp, errors = compiler.compile(
-        v13_chapter(v13_beat('b01_01', '开篇', participants=('ghost',))), 1)
-    return errors
+    """章观察编译闭合：participants 引用书级人物账之外的人物（闭集归 compile，R-2.3）。"""
+    from tests.test_str06_stage2_publish import _chapter_wires
+    outcome = _stage2_outcome(chapters={**_chapter_wires(), 'ch01': {
+        'protocol_version': 'stage2-observation-v1', 'beats': [
+            {'event': '开篇', 'participants': ['ghost'],
+             'source_refs': ['e01_01'], 'scene_boundary': 'new',
+             'temporal_mode': 'single', 'effects': [], 'cognition': [],
+             'loops': []}]}})
+    return outcome.errors + outcome.undecided
 
 
 def _fold_loop_close_without_open() -> list:
-    """v13：close 未开放的悬念在 compile 层即拒（fold 不再可能见到不一致的 canonical）。"""
-    from novel.stages.stage2.source import ChapterCompiler, compile_book
-    from tests.str06_facilities import v13_beat, v13_chapter
-    chars, _wcs, errors = compile_book({
-        'characters': {'ch1': {'canonical': '夫君', 'surfaces': [
-            {'surface': '夫君', 'from_chapter': 1, 'until_chapter': None,
-             'source_refs': ['e01_01']}]}},
-        'initial_state': [], 'world_constraints': []}, evidence_ids=('e01_01',))
-    assert not errors and chars is not None
-    compiler = ChapterCompiler(chars, evidence_ids=('e01_01',))
-    _bp, errors = compiler.compile(
-        v13_chapter(v13_beat('b01_01', '收束',
-                             loops=({'ref': 'loop_x', 'op': 'close',
-                                     'resolution': '收束内容'},))), 1)
-    return errors
+    """悬念 close 没有本章 open 也没有开合配对：保持未决（fold 不会见到不一致 canonical）。"""
+    from tests.test_str06_stage2_publish import _associate_wire
+    outcome = _stage2_outcome(
+        associate={**_associate_wire(), 'loop_pairing': []})
+    return outcome.errors + outcome.undecided
 
 
 def _loop_reopened() -> list:
-    """R-2.11：已 open 的 loop 再次 open（问题文本借机改写）。"""
-    from novel.stages.stage2.source import ChapterCompiler, compile_book
-    from tests.str06_facilities import v13_beat, v13_chapter
-    chars, _wcs, errors = compile_book({
-        'characters': {'ch1': {'canonical': '夫君', 'surfaces': [
-            {'surface': '夫君', 'from_chapter': 1, 'until_chapter': None,
-             'source_refs': ['e01_01']}]}},
-        'initial_state': [], 'world_constraints': []}, evidence_ids=('e01_01',))
-    assert not errors and chars is not None
-    compiler = ChapterCompiler(chars, evidence_ids=('e01_01',))
-    _bp, errors = compiler.compile(
-        v13_chapter(v13_beat('b01_01', '开悬念',
-                             loops=({'ref': 'mystery', 'op': 'open',
-                                     'question': '谁在暗中窥伺'},))), 1)
-    assert not errors
-    _bp2, errors = compiler.compile(
-        v13_chapter(v13_beat('b02_01', '再开同一悬念并改写问题',
-                             source_refs=('e02_01',),
-                             loops=({'ref': 'loop01', 'op': 'open',
-                                     'question': '改写后的问题'},))), 2)
+    """R-2.11：同一悬念句柄本章内重复 open（章观察 owner 的自含纪律）。"""
+    from tests.test_str06_stage2_publish import EVIDENCE
+    from novel.stages.stage2 import compile_chapter_observation
+    wire = {'protocol_version': 'stage2-observation-v1', 'beats': [
+        {'event': '开悬念', 'participants': [], 'source_refs': ['e01_01'],
+         'scene_boundary': 'new', 'temporal_mode': 'single', 'effects': [],
+         'cognition': [],
+         'loops': [{'ref': 'q_x', 'op': 'open', 'question': '谁在暗中窥伺'}]},
+        {'event': '再开同一悬念', 'participants': [], 'source_refs': ['e01_02'],
+         'scene_boundary': 'continue', 'temporal_mode': 'single', 'effects': [],
+         'cognition': [],
+         'loops': [{'ref': 'q_x', 'op': 'open', 'question': '改写后的问题'}]},
+    ]}
+    _observation, errors = compile_chapter_observation(
+        wire, evidence_ids=frozenset(EVIDENCE))
     return errors
 
 
 def _proposition_dangling() -> list:
-    """R-2.12：cognition 引用未登记的命题（跨章正式 ID 不存在）。"""
-    from novel.stages.stage2.source import ChapterCompiler, compile_book
-    from tests.str06_facilities import v13_beat, v13_chapter
-    chars, _wcs, errors = compile_book({
-        'characters': {'ch1': {'canonical': '夫君', 'surfaces': [
-            {'surface': '夫君', 'from_chapter': 1, 'until_chapter': None,
-             'source_refs': ['e01_01']}]}},
-        'initial_state': [], 'world_constraints': []}, evidence_ids=('e01_01',))
-    assert not errors and chars is not None
-    compiler = ChapterCompiler(chars, evidence_ids=('e01_01',))
-    _bp, errors = compiler.compile(
-        v13_chapter(v13_beat('b01_01', '引用幽灵命题',
-                             cognition=({'proposition': {'ref': 'k99'},
-                                         'holder': 'ch1', 'mode': 'learns'},))), 1)
-    return errors
+    """R-2.12：跨章命题引用没有配对——保持未决，不猜（D8）。"""
+    from tests.test_str06_stage2_publish import _associate_wire
+    outcome = _stage2_outcome(
+        associate={**_associate_wire(), 'same_proposition': []})
+    return outcome.errors + outcome.undecided
 
 
 def _concealed_without_known_by() -> list:
     """R-2.13：concealed 效应不声明已知者（揭示链无从闭合）。"""
-    from novel.stages.stage2.source import ChapterCompiler, compile_book
-    from tests.str06_facilities import v13_beat, v13_chapter
-    from pydantic import ValidationError
-    chars, _wcs, errors = compile_book({
-        'characters': {'ch1': {'canonical': '夫君', 'surfaces': [
-            {'surface': '夫君', 'from_chapter': 1, 'until_chapter': None,
-             'source_refs': ['e01_01']}]}},
-        'initial_state': [], 'world_constraints': []}, evidence_ids=('e01_01',))
-    assert not errors and chars is not None
-    compiler = ChapterCompiler(chars, evidence_ids=('e01_01',))
-    try:
-        _bp, errors = compiler.compile(
-            v13_chapter(v13_beat('b01_01', '藏身不声明已知者',
-                                 effects=({'target': {'kind': 'character',
-                                                      'char_id': 'ch1'},
-                                           'key': 'scene_location', 'op': 'set',
-                                           'value': '床底', 'scope': 'scene',
-                                           'disclosure': {'visibility': 'concealed'}},))), 1)
-    except ValidationError as exc:
-        return [str(exc)]
+    from tests.test_str06_stage2_publish import EVIDENCE
+    from novel.stages.stage2 import compile_chapter_observation
+    wire = {'protocol_version': 'stage2-observation-v1', 'beats': [
+        {'event': '藏身不声明已知者', 'participants': [], 'source_refs': ['e01_01'],
+         'scene_boundary': 'new', 'temporal_mode': 'single',
+         'effects': [{'target': {'kind': 'character', 'char_id': 'fu_jun'},
+                      'key': 'scene_location', 'op': 'set', 'value': '床底',
+                      'scope': 'scene',
+                      'disclosure': {'visibility': 'concealed'}}],
+         'cognition': [], 'loops': []},
+    ]}
+    _observation, errors = compile_chapter_observation(
+        wire, evidence_ids=frozenset(EVIDENCE))
     return errors
 
 
@@ -680,55 +668,31 @@ def _registered_key_wrong_scope() -> list:
     表内登记键的作用域由 compiler 绑定（I-15，声明不符归一化不拒绝）；这一条
     红例守的是退役键拒识与指针。
     """
-    from novel.stages.stage2.source import ChapterCompiler, compile_book
-    from tests.str06_facilities import v13_beat, v13_chapter
-    chars, _wcs, errors = compile_book({
-        'characters': {'ch1': {'canonical': '夫君', 'surfaces': [
-            {'surface': '夫君', 'from_chapter': 1, 'until_chapter': None,
-             'source_refs': ['e01_01']}]}},
-        'initial_state': [], 'world_constraints': []}, evidence_ids=('e01_01',))
-    assert not errors and chars is not None
-    compiler = ChapterCompiler(chars, evidence_ids=('e01_01',))
-    _bp, errors = compiler.compile(
-        v13_chapter(v13_beat('b01_01', '旧位置键借道',
-                             effects=({'target': {'kind': 'character',
-                                                  'char_id': 'ch1'},
-                                       'key': 'whereabouts', 'op': 'set',
-                                       'value': '陆家卧房内，藏于床底', 'scope': 'book',
-                                       'disclosure': {'visibility': 'on_page'}},))), 1)
-    return errors
-
-
-def _retired_whereabouts_key() -> list:
-    """R-2.14：已退役的 whereabouts 键（一值多义：位置＋藏身＋身体状态）。"""
-    from novel.stages.stage2.source import ChapterCompiler, compile_book
-    from tests.str06_facilities import v13_beat, v13_chapter
-    chars, _wcs, errors = compile_book({
-        'characters': {'ch1': {'canonical': '夫君', 'surfaces': [
-            {'surface': '夫君', 'from_chapter': 1, 'until_chapter': None,
-             'source_refs': ['e01_01']}]}},
-        'initial_state': [], 'world_constraints': []}, evidence_ids=('e01_01',))
-    assert not errors and chars is not None
-    compiler = ChapterCompiler(chars, evidence_ids=('e01_01',))
-    _bp, errors = compiler.compile(
-        v13_chapter(v13_beat('b01_01', '旧位置键借道',
-                             effects=({'target': {'kind': 'character',
-                                                  'char_id': 'ch1'},
-                                       'key': 'whereabouts', 'op': 'set',
-                                       'value': '陆家卧房内，藏于床底', 'scope': 'book',
-                                       'disclosure': {'visibility': 'on_page'}},))), 1)
+    from tests.test_str06_stage2_publish import EVIDENCE
+    from novel.stages.stage2 import compile_chapter_observation
+    wire = {'protocol_version': 'stage2-observation-v1', 'beats': [
+        {'event': '旧位置键借道', 'participants': [], 'source_refs': ['e01_01'],
+         'scene_boundary': 'new', 'temporal_mode': 'single',
+         'effects': [{'target': {'kind': 'character', 'char_id': 'fu_jun'},
+                      'key': 'whereabouts', 'op': 'set',
+                      'value': '陆家卧房内，藏于床底', 'scope': 'book',
+                      'disclosure': {'visibility': 'on_page'}}],
+         'cognition': [], 'loops': []},
+    ]}
+    _observation, errors = compile_chapter_observation(
+        wire, evidence_ids=frozenset(EVIDENCE))
     return errors
 
 
 def _surface_anchor_without_literal() -> list:
     """R-2.10：称谓的证据锚点段不含该字面（from_chapter 的派生失去依据）。"""
-    from novel.stages.stage2.source import compile_book
-    chars, _wcs, errors = compile_book({
-        'characters': {'ch1': {'canonical': '夫君', 'surfaces': [
-            {'surface': '陆大哥', 'from_chapter': 1, 'until_chapter': None,
-             'source_refs': ['e01_01']}]}},
-        'initial_state': [], 'world_constraints': []},
-        evidence_ids={'e01_01': {'chapter': 1, 'text': '本章根本没出现这个称呼。'}})
+    from tests.test_str06_stage2_publish import _book_wire
+    from novel.stages.stage2 import compile_book_observation
+    wire = _book_wire(extra_characters={
+        'fu_jun': {'canonical': '陆大哥', 'surfaces': [
+            {'surface': '陆大哥', 'source_refs': ['e01_01']}]}})
+    _observation, errors = compile_book_observation(wire, evidence={
+        'e01_01': {'chapter': 1, 'text': '本章根本没出现这个称呼。'}})
     return errors
 
 
@@ -763,15 +727,16 @@ def _names_coverage_missing_entry() -> list:
 
 
 CASES.update({
-    'source_book_extraction': Case('stage2', _book_extraction_dangling, '悬空'),
+    'source_book_observation': Case('stage2', _book_extraction_dangling, '闭集之外'),
     'source_chapter_dense_ordinals': Case(
         'stage2', _chapter_ordinals_not_dense, 'chapter_ordinal'),
     'source_chapter_blueprint': Case(
         'stage2', _chapter_blueprint_bad_wire, '未知人物'),
     'source_fold_consistent': Case(
-        'stage2', _fold_loop_close_without_open, '未登记的悬念'),
+        'stage2', _fold_loop_close_without_open, '没有开合配对'),
     'source_loop_lifecycle': Case('stage2', _loop_reopened, '重复 open'),
-    'source_proposition_closure': Case('stage2', _proposition_dangling, '引用未登记命题'),
+    'source_proposition_closure': Case(
+        'stage2', _proposition_dangling, '悬空的跨章引用'),
     'source_effect_disclosure': Case('stage2', _concealed_without_known_by, 'known_by'),
     'source_registered_key_scope': Case(
         'stage2', _registered_key_wrong_scope, '已退役'),
