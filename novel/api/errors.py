@@ -178,6 +178,14 @@ UNREACHABLE_OVER_HTTP: dict[str, str] = {
     'Stage2ReviewBudgetRefused': (
         '已退役 Stage2 独立账的只读审计解码异常；当前 API、CLI 和 Supervisor '
         '只消费 work_units，不调用旧账读取器'),
+    # R6 统一发布权威：`read_model` 的 seal 校验只在链执行的 CLI 子进程内冒泡
+    # （HTTP 父进程只看到终态退出码）；编排侧唯一调用点
+    # `state.py::_candidate_body_design` 把它捕获成未知章集（fail-closed），
+    # HTTP 只读监控面走 `inspect` 诊断口、不受 seal 约束——异常对象到不了 HTTP 层。
+    'UnsealedArtifact': (
+        '正式输入的 seal/摘要校验（R6）只在链执行的 CLI 子进程内抛出；编排侧'
+        '唯一读取点 `_candidate_body_design` 已把它折叠成未知章集，HTTP 监控面'
+        '走 inspect 诊断口不触发正式消费'),
     # ⚠ F8b-3：`GlobalEditCandidateRejected`／`_PostEditReviewRejected` 两条随
     # Stage2 人工写回整族退役（定义模块已删）——登记一并撤销，幽灵名字会被
     # `test_the_unreachable_table_names_real_classes` 当场报出来。

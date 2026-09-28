@@ -319,8 +319,14 @@ def test_scope_registration_rejects_missing_tests(tmp_path):
 
 
 def _pytest(tmp_path, *args):
+    # ⚠ 嵌套 pytest 的 basetemp 锚在**本 worker 的 basetemp 根**（`tmp_path.parent`），
+    #   不是本测试自己的 tmp 目录：外层闸门（如 `-n 4 --basetemp=E:/_tr/<名>`）之下，
+    #   每测试目录名再占 ~31 字符，嵌套 basetemp 叠上 Stage0 的最长临时归档后缀
+    #   （conftest 预检按 204 字符预算）就会撞 MAX_PATH——外层预检只核
+    #   `<外层根>\popen-gwN`，看不到这个再嵌套的深度。锚到 worker 根后，只要
+    #   外层自己过得了预检，嵌套层就还剩 ~26 字符余量。cache_dir 仍按测试隔离。
     result = subprocess.run(
-        [sys.executable, '-B', '-m', 'pytest', '-n', '0', '--basetemp', str(tmp_path / 't'),
+        [sys.executable, '-B', '-m', 'pytest', '-n', '0', '--basetemp', str(tmp_path.parent / 't'),
          '-o', f'cache_dir={tmp_path / "c"}', *args], cwd=S.ROOT,
         capture_output=True, text=True, encoding='utf-8', timeout=180)
     return result

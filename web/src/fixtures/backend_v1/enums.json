@@ -1342,10 +1342,10 @@
    ],
    "lifecycle": {
     "unit_kind": "chapter",
-    "input_workpack": "WriterBookIR 与已提交章前缀（实际前文）",
+    "input_workpack": "章包（WriterBookIR 逐章确定性投影；各章独立，唯一输入面）",
     "generation_mode": "executor",
     "review_mode": "none",
-    "review_scope": "章级机械验（硬失败不披露放行，只有篇幅带可披露）；原子写正文→章回执；无合法候选停止后续章",
+    "review_scope": "章级机械验（硬失败不披露放行，只有篇幅带可披露）；原子写正文→章回执；无合法候选停该章（各章独立，其余章照常；失败清单留证 runtime/body_failures.json）",
     "repair_actions": [
      "stop"
     ],
@@ -1354,7 +1354,7 @@
     ],
     "session_scope": "executor:chapter",
     "recovery_entries": [
-     "chapter_prefix_replay",
+     "committed_set_recovery",
      "saved_response",
      "historical_adoption",
      "owner_patch"

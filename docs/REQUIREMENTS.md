@@ -1438,6 +1438,22 @@ B6-A／B6-B 分别授权；R 批全部 fake transport、零模型调用。
     r3_selfheal）、product_entry 整文件六项（JUnit 分母 6/0/0/0）全绿；前端四件
     （test 117 项／typecheck／seams／build）在 web/ 实跑通过。完整非 corpus
     回归由编排脚本以 `-n 4 --dist loadgroup -m "not corpus"` 独立复跑作最终闸门。
+  - 闸门复跑收口（同日）：首轮完整回归红 6 项、三类根因，全部修复——
+    ① `tests/test_test_selection.py` 的 `test_real_pytest_*` 四项：嵌套 pytest 的
+    basetemp 原先锚在本测试自己的 tmp 目录，外层闸门根（如 `E:/_tr/<闸门名>`）
+    加 `popen-gwN` 加 31 字符测试名后，叠上 Stage0 最长临时归档后缀（预检按
+    204 字符预算）撞 MAX_PATH，嵌套 run 在 conftest 预检处 exit 4（先按闸门形状
+    `-n 4 --basetemp=E:/_tr/gate-r5full` 复现红）。修复：`_pytest` 把嵌套
+    basetemp 锚到 worker 根（`tmp_path.parent`，与 `test_corpus_manifest` 的
+    短根先例同形状），外层过预检即留足余量；同深度复跑整文件 41 项全绿。
+    ② `test_api_errors`：R6 新增 `UnsealedArtifact` 未登记归属——按结构证据归
+    `UNREACHABLE_OVER_HTTP`（`read_model` 的 seal 校验只在链执行 CLI 子进程冒泡；
+    编排侧唯一读取点 `_candidate_body_design` 已折叠成未知章集；HTTP 监控走
+    inspect 诊断口）。
+    ③ `test_api_enums`：R4「stage5.body 生命周期如实化」后
+    `web/src/fixtures/backend_v1/enums.json` 未重生成（单键 `job_kinds` 漂移，
+    stale 为空）。经 `tools/regen_web_enums_fixture.py` 重生成，diff 恰为该批
+    三处生命周期字段；前端无代码消费旧值，seams/typecheck/test 复跑通过。
 
 ## 职责解耦批次（2026-09-27 起；B0–B6）
 
