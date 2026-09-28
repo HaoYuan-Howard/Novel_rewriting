@@ -1413,6 +1413,32 @@ B6-A／B6-B 分别授权；R 批全部 fake transport、零模型调用。
     `test_concurrent_gate_initialization_never_reads_half_written_slot`
     （受控放大真实窗口，先红后绿）；两用例连同所在文件各复跑 5／3 遍全绿。
 
+- [x] **R5 · 最终零成本产品回归（免费；B6 前基线）**（2026-09-29 完成）：
+  - 契约 §9.5 五文件全绿；补齐 PLAN.md R5 点名的产品路径缺口——R3 故障注入与
+    R6 发布此前只在链层（`run_workflow` 直驱）验证，本批把两节钉进
+    `tests/test_str06_product_entry.py` 的真实子进程产品链（HTTP 上传 →
+    Supervisor → 真实 run_step/CLI 子进程 → 交付 → 重启读回）：
+    `test_faulted_product_entry_heals_via_revision_and_delivers`（missing_pairing
+    ＋fault_once：associate 首响应带故障、修订轮改对——14 笔实付如实多记一笔
+    修订轮，全链照常交付，重启读回一致，二次代跑零新购）与
+    `test_seal_loss_refuses_formal_consume_then_free_recovery_reseals`
+    （交付后删全部 CommitBundle：单跑组装显式终态拒读「未封存」；按执行序以
+    同一 canonical argv 重跑全部节点零新购、交付字节不变、重新封存；恢复后
+    单跑组装放行，服务重启读回与丢失前一致）。
+  - 故障注入底座扩参：`tests/str06_faults.py::FaultTransport`／
+    `install_fault_transport` 新增 `body_texts`（产品链按源书派生的章篇幅带
+    需要带内章稿；故障只施加 JSON 面，正文面与故障面互不干扰），子进程经
+    sitecustomize＋环境门注入，带内章稿走独立 JSON 文件（子进程不 import
+    测试模块）。首跑红例即该底座键裁剪错误（`body_ch01`→`'01'`），同批修复。
+  - 收口 R4/R6 登记遗留红：`tests/test_str06_stage2_owners.py`（threading.Barrier）
+    补进 `tests/conftest.py::_SERIAL_TEST_MODULES`，test_layering 串行登记检查
+    转绿——`-n 4 --dist loadgroup` 完整回归不再被该项卡住。
+  - 验证（fake transport、零付费、`-n 0`、独立 basetemp）：契约 §9.5 五文件、
+    test_layering、test_test_selection、str06_faults 消费方（semantic_delivery／
+    r3_selfheal）、product_entry 整文件六项（JUnit 分母 6/0/0/0）全绿；前端四件
+    （test 117 项／typecheck／seams／build）在 web/ 实跑通过。完整非 corpus
+    回归由编排脚本以 `-n 4 --dist loadgroup -m "not corpus"` 独立复跑作最终闸门。
+
 ## 职责解耦批次（2026-09-27 起；B0–B6）
 
 裁决 D1–D10 各行见 [DECISIONS.md](DECISIONS.md) 2026-09-27；目标架构（Stage2 五节点、

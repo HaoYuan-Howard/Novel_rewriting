@@ -671,3 +671,267 @@ def test_service_full_chain_real_subprocess_and_restart_readback(base, tmp_path,
     assert agent.wait(second.run_id, 600)
     assert final_path.read_bytes() == final_bytes
     assert manifest_path.read_bytes() == manifest_before,         '零派发的代跑不得改写交付 manifest'
+
+
+# ───────────────────── 五、R3 故障注入：产品链靠修订跑完（真实子进程） ─────────────
+#
+# 【R5 补齐】PLAN.md R5：fake 全链**产品路径**必须含 R3 故障注入与 R6 发布两节。
+# 与第四节（干净 wires 的 B5 全链）同一形状——HTTP 上传 → Supervisor → 真实
+# run_step/CLI 子进程 → 交付 → 重启读回——本节把 fake 模型换成 R0 的故障注入
+# 底座（`tests/str06_faults.py`）：`missing_pairing`＋`fault_once=True`，受影响
+# owner（associate）的**首响应**删掉悬念配对，验收即拦（左移：compile 干跑的
+# 未决项归它自己），修订轮（`ask_json` 有界内容轮，同节点子进程内）拿到干净
+# wire「改对了」。正文两章换成带内长度的稿（`FaultTransport(body_texts=…)`，
+# 故障只施加 JSON 面）。语义断言：修订轮真实多一笔实付、全链照常交付、
+# 重启读回一致、二次代跑零新购。
+
+_FAULT_SITECUSTOMIZE_SOURCE = """
+import os, sys
+
+_fault = os.environ.get('NOVEL_STR06_FAULT')
+if _fault:
+    _repo = os.environ['NOVEL_STR06_FAULT_REPO']
+    if _repo not in sys.path:
+        sys.path.insert(0, _repo)
+    import json as _json
+    with open(os.environ['NOVEL_STR06_FAULT_BODY'], encoding='utf-8') as _fh:
+        _body = _json.load(_fh)
+    from tests.str06_faults import install_fault_transport
+    install_fault_transport(_fault, fault_once=True, body_texts=_body)
+"""
+
+
+def _install_fault_site(monkeypatch, tmp_path, fault: str) -> None:
+    """故障注入 sitecustomize：PYTHONPATH＋环境门（与 B5 的 fake transport 同纪律）。
+
+    带内章稿经独立 JSON 文件传入——子进程只 import `tests.str06_faults`，
+    不把整个测试模块拖进每个 CLI 子进程。
+    """
+    from pathlib import Path
+
+    repo_root = str(Path(__file__).resolve().parents[1])
+    fake_site = tmp_path / 'fault_site'
+    fake_site.mkdir()
+    (fake_site / 'sitecustomize.py').write_text(
+        _FAULT_SITECUSTOMIZE_SOURCE, encoding='utf-8')
+    (fake_site / 'body_texts.json').write_text(
+        json.dumps({'ch01': GOOD_CH01, 'ch02': GOOD_CH02}, ensure_ascii=False),
+        encoding='utf-8')
+    monkeypatch.setenv('NOVEL_STR06_FAULT', fault)
+    monkeypatch.setenv('NOVEL_STR06_FAULT_REPO', repo_root)
+    monkeypatch.setenv('NOVEL_STR06_FAULT_BODY',
+                       str(fake_site / 'body_texts.json'))
+    existing = os.environ.get('PYTHONPATH')
+    monkeypatch.setenv(
+        'PYTHONPATH',
+        str(fake_site) + (os.pathsep + existing if existing else ''))
+
+
+def _run_cli_subprocess(argv, cwd: str):
+    """真实 CLI 子进程（产品节点执行的 canonical 形状）；失败即带全输出报红。"""
+    proc = subprocess.run(argv, cwd=cwd, capture_output=True)
+    assert proc.returncode == 0, (argv, proc.stdout, proc.stderr)
+    return proc
+
+
+@pytest.mark.real_code_version
+def test_faulted_product_entry_heals_via_revision_and_delivers(base, tmp_path,
+                                                               monkeypatch):
+    """R3×产品入口：脚本化模型错误经有界修订自愈，全链照常交付并可重启读回。"""
+    from pathlib import Path
+
+    repo_root = str(Path(__file__).resolve().parents[1])
+    _install_fault_site(monkeypatch, tmp_path, 'missing_pairing')
+
+    # ① 最小合法基座：stage0/stage1 真实 CLI 子进程（免费确定性节点）。
+    source = base.parent / 'input_9004.txt'
+    source.write_text(SOURCE_TEXT, encoding='utf-8')
+    for argv in (
+            [sys.executable, '-B', '-m', 'novel.cli', 'run', 'stage0.remove',
+             '--source', str(source), '--base', str(base)],
+            [sys.executable, '-B', '-m', 'novel.cli', 'run', 'stage1.partition',
+             '9004', '--base', str(base)]):
+        _run_cli_subprocess(argv, repo_root)
+
+    settings = agent_settings.read(base)
+    agent_settings.update(base, profiles=_profiles(),
+                          expected_revision=settings.revision)
+
+    # ② 真实 HTTP 上传（两项授权）⇒ autostart 起 Supervisor。
+    with TestClient(create_app(base)) as client:
+        response = client.post(
+            '/api/upload',
+            params={'filename': 'input_9004.txt', 'authorized': 'true',
+                    'egress_authorized': 'true',
+                    'idempotency_key': 'r5-fault-9004'},
+            content=SOURCE_TEXT.encode('utf-8'),
+            headers={UI_HEADER: '1', 'Content-Type': 'application/octet-stream'})
+    assert response.status_code == 200, response.text
+    uploaded = response.json()
+    assert uploaded['sid'] == '9004' and uploaded['autostart'] == 'started'
+    run_id = uploaded['run']['run_id']
+
+    # ③ Supervisor 驱动真实子进程：故障轮被拦下、修订轮改对、全链到交付。
+    assert agent.wait(run_id, 1800), '故障注入链未在时限内靠修订收口'
+    book = paths.resolve_novel_dir(base, '9004')
+    final_path = book / paths.book_txt_rel(book)
+    manifest_path = book / 'stage7/final/delivery_manifest.json'
+    assert final_path.is_file(), '修订自愈后的链没有交付成书'
+    final_bytes = final_path.read_bytes()
+    manifest = _read_json(manifest_path)
+    assert manifest['final_text_sha256'] == hashlib.sha256(
+        final_bytes).hexdigest()
+    assert [c['chapter_ordinal'] for c in manifest['chapters']] == [1, 2]
+    final_text = final_bytes.decode('utf-8')
+    assert '柳婉' in final_text and '苏芸娘' not in final_text
+
+    # ④ 修订轮真实发生并如实计费：13 笔干净外发＋1 笔 associate 修订轮实付；
+    #    整书总闸按 attempt 合账（I-17/I-43）。
+    rows = _ledger_rows(base)
+    paid = [row for row in rows
+            if row['sid'] == book.name and not row['cached']]
+    assert len(paid) == 14, '受影响 owner 应恰好多一笔修订轮实付'
+    associate_rows = [row for row in paid
+                      if row['node'] == 'str06.stage2.associate']
+    assert len(associate_rows) == 2, 'associate 一原轮＋一修订轮'
+    from novel.work_units import read_book_budget
+    assert read_book_budget(base, book.name).used == 14
+
+    # ⑤ 重启读回：全新服务实例三面读回一致，成书与交付摘要互相咬合。
+    candidate = book.name
+    with TestClient(create_app(base)) as client:
+        run_face = client.get(f'/api/str06/candidates/{candidate}/run')
+        delivery_face = client.get(
+            f'/api/str06/candidates/{candidate}/delivery')
+        book_face = client.get(f'/api/str06/candidates/{candidate}/book')
+        assert run_face.status_code == 200, run_face.text
+        assert delivery_face.status_code == 200, delivery_face.text
+        assert book_face.status_code == 200, book_face.text
+        assert delivery_face.json()['final_text_sha256'] == \
+            manifest['final_text_sha256']
+        assert book_face.text == final_text
+
+    # ⑥ 全部就绪后再次代跑：零新购、交付字节不变。
+    rows_before = list(rows)
+    second = agent.start(base, '9004', authorized=True,
+                         egress_authorized=True, profiles=_profiles())
+    assert agent.wait(second.run_id, 600)
+    assert final_path.read_bytes() == final_bytes
+    assert _ledger_rows(base) == rows_before, '二次代跑不得新购'
+
+
+# ───────────────────── 六、R6 发布权威：封存丢失拒绝正式消费，免费恢复重封存 ───────
+#
+# 【R5 补齐】R6 的 seal 语义此前只在链层验证（`tests/test_str06_runtime_records.py`）；
+# 本节把它钉在产品路径上：干净全链交付后抹掉全部 CommitBundle（封存窗口崩溃
+# 形态），单跑组装节点必须显式终态拒读（`UnsealedArtifact`，exit 2——不是照旧
+# ready）；恢复走**产品节点执行的同一 canonical argv** 按执行序重跑——付费段按
+# 请求身份缓存重放、免费段确定性重编译，零新购、交付字节不变、重新封存；恢复
+# 后单跑组装重新放行，服务重启读回与丢失前一致。
+
+@pytest.mark.real_code_version
+def test_seal_loss_refuses_formal_consume_then_free_recovery_reseals(
+        base, tmp_path, monkeypatch):
+    from pathlib import Path
+
+    repo_root = str(Path(__file__).resolve().parents[1])
+
+    # ① fake transport 经 sitecustomize 注入子进程（与 B5 同一形状）。
+    fake_site = tmp_path / 'fake_transport_site'
+    fake_site.mkdir()
+    (fake_site / 'sitecustomize.py').write_text(_SITECUSTOMIZE_SOURCE,
+                                                encoding='utf-8')
+    monkeypatch.setenv('NOVEL_B5_FAKE_TRANSPORT', '1')
+    monkeypatch.setenv('NOVEL_B5_FAKE_REPO', repo_root)
+    existing = os.environ.get('PYTHONPATH')
+    monkeypatch.setenv(
+        'PYTHONPATH',
+        str(fake_site) + (os.pathsep + existing if existing else ''))
+
+    # ② 干净全链：基座 + HTTP 上传 + Supervisor 真实子进程到交付。
+    source = base.parent / 'input_9005.txt'
+    source.write_text(SOURCE_TEXT, encoding='utf-8')
+    for argv in (
+            [sys.executable, '-B', '-m', 'novel.cli', 'run', 'stage0.remove',
+             '--source', str(source), '--base', str(base)],
+            [sys.executable, '-B', '-m', 'novel.cli', 'run', 'stage1.partition',
+             '9005', '--base', str(base)]):
+        _run_cli_subprocess(argv, repo_root)
+
+    settings = agent_settings.read(base)
+    agent_settings.update(base, profiles=_profiles(),
+                          expected_revision=settings.revision)
+
+    with TestClient(create_app(base)) as client:
+        response = client.post(
+            '/api/upload',
+            params={'filename': 'input_9005.txt', 'authorized': 'true',
+                    'egress_authorized': 'true',
+                    'idempotency_key': 'r5-seal-9005'},
+            content=SOURCE_TEXT.encode('utf-8'),
+            headers={UI_HEADER: '1', 'Content-Type': 'application/octet-stream'})
+    assert response.status_code == 200, response.text
+    uploaded = response.json()
+    assert uploaded['sid'] == '9005' and uploaded['autostart'] == 'started'
+    run_id = uploaded['run']['run_id']
+    assert agent.wait(run_id, 1800), 'agent 代跑未在时限内收口'
+
+    book = paths.resolve_novel_dir(base, '9005')
+    final_path = book / paths.book_txt_rel(book)
+    manifest_path = book / 'stage7/final/delivery_manifest.json'
+    assert final_path.is_file(), '干净链没有交付成书'
+    final_bytes = final_path.read_bytes()
+    manifest = _read_json(manifest_path)
+    assert manifest['final_text_sha256'] == hashlib.sha256(
+        final_bytes).hexdigest()
+
+    # ③ 封存窗口崩溃：抹掉全部 CommitBundle（产物字节都在、发布证明全失）。
+    bundles = list((book / 'runtime' / 'commit').rglob('*.json'))
+    assert bundles, '正式提交必须先有封存记录'
+    for bundle in bundles:
+        bundle.unlink()
+
+    # ④ 正式消费拒绝：单跑组装（生产 canonical argv、真实子进程）⇒ 显式终态
+    #    exit 2＋「未封存」——统一发布权威面前没有 seal 就不是正式输入。
+    from novel.orchestrator import nodes as node_planner
+    assemble_argv = node_planner.build_argv(
+        'str06.stage7.assemble', '9005', [], base=base, egress_authorized=True)
+    refused = subprocess.run(assemble_argv, cwd=repo_root, capture_output=True)
+    assert refused.returncode == 2, (refused.stdout, refused.stderr)
+    assert '未封存' in (refused.stdout + refused.stderr).decode('utf-8')
+
+    # ⑤ 免费恢复：按执行序重跑全部节点（同一 canonical argv 构造点）——
+    #    付费段缓存重放、免费段确定性重编译，零新购、交付字节不变、重新封存。
+    rows_before = _ledger_rows(base)
+    for node in NODE_ORDER:
+        argv = node_planner.build_argv(
+            node, '9005', [], base=base, egress_authorized=True)
+        _run_cli_subprocess(argv, repo_root)
+    fresh_rows = _ledger_rows(base)[len(rows_before):]
+    assert not [row for row in fresh_rows if not row['cached']], \
+        '恢复重跑不得产生任何新购（缓存重放行须全为 cached）'
+    assert final_path.read_bytes() == final_bytes, '恢复不得改写交付字节'
+    resealed = list((book / 'runtime' / 'commit').rglob('*.json'))
+    assert len(resealed) >= 12, '重跑必须把全部重写产物重新封存'
+
+    # ⑥ 恢复后单跑组装重新放行；交付摘要与字节仍与丢失前一致。
+    _run_cli_subprocess(assemble_argv, repo_root)
+    manifest_after = _read_json(manifest_path)
+    assert manifest_after['final_text_sha256'] == manifest['final_text_sha256']
+    assert final_path.read_bytes() == final_bytes
+
+    # ⑦ 服务重启读回与丢失前一致；零派发代跑不改交付。
+    candidate = book.name
+    with TestClient(create_app(base)) as client:
+        delivery_face = client.get(
+            f'/api/str06/candidates/{candidate}/delivery')
+        book_face = client.get(f'/api/str06/candidates/{candidate}/book')
+        assert delivery_face.status_code == 200, delivery_face.text
+        assert book_face.status_code == 200, book_face.text
+        assert delivery_face.json()['final_text_sha256'] == \
+            manifest['final_text_sha256']
+        assert book_face.text == final_bytes.decode('utf-8')
+    second = agent.start(base, '9005', authorized=True,
+                         egress_authorized=True, profiles=_profiles())
+    assert agent.wait(second.run_id, 600)
+    assert final_path.read_bytes() == final_bytes

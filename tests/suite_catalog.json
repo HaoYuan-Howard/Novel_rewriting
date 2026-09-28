@@ -813,7 +813,9 @@
         "test_full_chain_from_http_upload_to_stage7_delivery": "stage",
         "test_legacy_book_is_refused_at_every_product_entry_face": "stage",
         "test_upload_without_authorization_starts_no_paid_run": "stage",
-        "test_service_full_chain_real_subprocess_and_restart_readback": "stage"
+        "test_service_full_chain_real_subprocess_and_restart_readback": "stage",
+        "test_faulted_product_entry_heals_via_revision_and_delivers": "stage",
+        "test_seal_loss_refuses_formal_consume_then_free_recovery_reseals": "stage"
       }
     },
     "tests/test_str06_r2_contracts.py": {

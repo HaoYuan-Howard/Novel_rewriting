@@ -92,9 +92,13 @@ class FaultTransport:
     应答（同一份 wires 形状），只在 JSON 面上施加故障。``fault_once=True``
     时故障只施加到受影响 owner 的**首次**响应——修订轮（R3）拿到干净 wire，
     供「修订成功走完全链」的正例；默认持续施加（无进展停止的反例）。
+
+    ``body_texts``（R5 产品入口用）：链级用例的默认章稿只有 35／37 字，落不进
+    产品入口按源书派生的章篇幅带（如 [300, 650]）——走真实 CLI 的产品链测试
+    传入带内长度的章稿，正文面与故障面互不干扰（故障只施加 JSON owner）。
     """
 
-    def __init__(self, wires, fault=None, fault_once=False):
+    def __init__(self, wires, fault=None, fault_once=False, body_texts=None):
         from tests.test_str06_body import _RoutingTransport
 
         self._wires = wires
@@ -102,6 +106,7 @@ class FaultTransport:
         self._inner = _RoutingTransport(apply_fault(wires, fault))
         self.fault = fault
         self.fault_once = fault_once
+        self.body_texts = dict(body_texts) if body_texts else None
         self._served_faulty: set[str] = set()
 
     @property
@@ -123,6 +128,14 @@ class FaultTransport:
         from novel.llm.transport import ChatResponse
 
         owner = self._owner_of(request)
+        if self.body_texts is not None and owner.startswith('body_ch'):
+            key = owner[len('body_'):]          # 'body_ch01' → 'ch01'
+            text = self.body_texts[key]        # 缺章即 KeyError：关闭式，不兜底
+            self._inner.calls.append(owner)
+            return ChatResponse(content=text, finish_reason='stop',
+                                usage={'prompt_tokens': 100,
+                                       'completion_tokens': 40},
+                                model='fake')
         if (self.fault_once and self.fault == 'obligation_unbound'
                 and owner == 'design' and '【修订要求】' in request.user):
             # 回派修订轮的脚本化「改对了」：design 补一个承载拍，bind 的输入
@@ -177,17 +190,20 @@ def _revised_design_wires(wires: dict) -> dict:
     return revised
 
 
-def install_fault_transport(fault: str, fault_once: bool = False):
+def install_fault_transport(fault: str, fault_once: bool = False,
+                            body_texts: dict[str, str] | None = None):
     """把 FaultTransport 挂上生产付费缝（sitecustomize 的注入点）。
 
     `novel.stages.chain` 构造 `PaidRequestSession` 时唯一读取的 transport 工厂
     就是 `DeepSeekTransport`（与 `tests/test_str06_product_entry.py` 的进程内
-    注入同一缝）。幂等：重复调用只替换不叠加。
+    注入同一缝）。幂等：重复调用只替换不叠加。``body_texts`` 见
+    `FaultTransport`（R5 产品链测试传带内章稿）。
     """
     from novel.stages import chain as _chain
 
     wires = looped_full_chain_wires()
-    _chain.DeepSeekTransport = lambda cfg: FaultTransport(wires, fault, fault_once)
+    _chain.DeepSeekTransport = lambda cfg: FaultTransport(
+        wires, fault, fault_once, body_texts=body_texts)
     return fault
 
 
