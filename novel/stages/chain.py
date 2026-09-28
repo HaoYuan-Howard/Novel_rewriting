@@ -104,7 +104,7 @@ from novel.stages.stage7 import (
     check_residual, compile_name_map, compile_surface_replacements,
     naming_projection, verify_chapter_receipts,
 )
-from novel.store import Str06Repository
+from novel.store import PublishItem, Str06Repository
 from novel.work_units import read_book_budget, require_workflow
 
 __all__ = [
@@ -435,12 +435,15 @@ def run_compile(ctx: ChainContext) -> dict:
     if outcome.errors:
         raise ValueError(f'compile 机械缺陷：{outcome.errors}')
     assert outcome.characters is not None and outcome.blueprint is not None
-    repository.write('stage2/characters/characters.json', outcome.characters,
-                     owners=('compile',))
-    repository.write('stage2/blueprints/chapter_blueprints.json', outcome.blueprint,
-                     owners=('compile',))
-    repository.write('stage2/acceptance/fold.json', outcome.fold,
-                     owners=('compile',))
+    # R6 输出组发布：双真源＋fold 读数同一组、一个 seal（免费产物同样封存）。
+    repository.publish((
+        PublishItem(rel='stage2/characters/characters.json',
+                    value=outcome.characters, owners=('compile',)),
+        PublishItem(rel='stage2/blueprints/chapter_blueprints.json',
+                    value=outcome.blueprint, owners=('compile',)),
+        PublishItem(rel='stage2/acceptance/fold.json', value=outcome.fold,
+                    owners=('compile',)),
+    ))
     resolve_owner_issues(repository, owner='associate',
                          raised_by='str06.stage2.compile')
     return {'characters': len(outcome.characters.characters),
@@ -475,13 +478,15 @@ def run_preserve(ctx: ChainContext) -> dict:
     checkpoint, errors = preserve_compile(pw)
     if errors:
         raise ValueError(errors)
-    repository.write('runtime/preserve_checkpoint.json', checkpoint,
-                     owners=('preserve',), refs=(preserve_ref,))
     brief, identities = project_brief(checkpoint, core, blueprint)
-    # reconstruction_brief 是同一份付费产出（Preserve checkpoint）投影出的
-    # 第二个 key：生成事实继承，用量不再认领同一批 attempt 行。
-    repository.write('stage4/grounding/reconstruction_brief.json', brief,
-                     refs=(preserve_ref,), claim_usage=False)
+    # R6 输出组发布：checkpoint 与它的投影 brief 同组一个 seal——同一份付费
+    # 产出的第二个 key（生成事实继承，用量不重复认领）。
+    repository.publish((
+        PublishItem(rel='runtime/preserve_checkpoint.json', value=checkpoint,
+                    owners=('preserve',), refs=(preserve_ref,)),
+        PublishItem(rel='stage4/grounding/reconstruction_brief.json', value=brief,
+                    refs=(preserve_ref,), claim_usage=False),
+    ))
     return {'obligations': len(checkpoint.obligations)}
 
 
@@ -589,22 +594,26 @@ def run_compile_stage4(ctx: ChainContext) -> dict:
     body_design（design）或 preserve（grounding），写 `runtime/issues/<owner>.json`
     并抛 `OwnerRevisionRequired`；未映射 owner 显式停（E-8）。复验通过时回写
     resolved。
+
+    R6 验过才发布：四个正式派生产物（execution_plan／hook 上下文／写手 IR／
+    packet 指标）在全部机械判定通过后按**输出组**一次发布（免费产物同样
+    封存）；失败结果只进诊断面（guard/compile.json 与 guard/report.json
+    留证问题清单），正式位不落未验证字节。
     """
     repository = ctx.repository
     graph = repository.read_model('stage4/design/presentation_graph.json')
     binding = repository.read_model('stage4/grounding/semantic_binding.json')
     chars = repository.read_model('stage2/characters/characters.json')
     plan, errors = compile_execution_plan(graph, binding)
+    # 诊断面：机械编译问题留证（正式组不发布）。
     repository.write('stage4/acceptance/guard/compile.json', {'errors': errors})
     _backfill_must_keep_unbound(repository, binding)
     if errors:
         raise ValueError(errors)
-    repository.write('stage4/compiled/execution_plan.json', plan)
     projection = chars.name_projection()
     hook_context, errors = compile_hook_context(graph, projection, ctx.hook_constraints)
     if errors:
         raise ValueError(errors)
-    repository.write('stage4/context/hook/hook.json', hook_context)
     writer_ir = compile_writer_book_ir(graph=graph, plan=plan, binding=binding,
                                        total_budget=ctx.budget,
                                        length_band=ctx.length_band,
@@ -616,19 +625,25 @@ def run_compile_stage4(ctx: ChainContext) -> dict:
         for context in chapter_ir.scenes:
             problems.extend(run_mechanical_guard(binding=binding, context=context,
                                                  graph=graph))
-    repository.write('stage4/ir/writer_book_ir.json', writer_ir)
-    # WriterPacket 指标（R2.8）：派生读数、audit_only、重算免费；逐章记录
-    # 分区条目数、基线事实数、活跃/受保护线程数、重复比例与必须写出密度。
-    repository.write('stage4/acceptance/packet_metrics.json',
-                     packet_metrics(writer_ir))
     guard_report = {'mode': 'planned-only', 'accepted_body': False,
                     'chapters': len(writer_ir.chapters), 'scenes': len(graph.scenes),
                     'obligations': len(binding.obligations), 'guard_errors': problems,
                     'chapter_budgets': {c.chapter_ordinal: c.length_budget
                                         for c in writer_ir.chapters}}
+    # 失败结果只进诊断：guard report 先落（问题清单与预算读数留证），正式位不写。
     repository.write('stage4/acceptance/guard/report.json', guard_report)
     if problems:
         raise ValueError(problems)
+    # R6 输出组发布：Guard 全绿后四个正式派生产物同一组、一个 seal。
+    repository.publish((
+        PublishItem(rel='stage4/compiled/execution_plan.json', value=plan),
+        PublishItem(rel='stage4/context/hook/hook.json', value=hook_context),
+        PublishItem(rel='stage4/ir/writer_book_ir.json', value=writer_ir),
+        # WriterPacket 指标（R2.8）：派生读数、audit_only、重算免费；逐章记录
+        # 分区条目数、基线事实数、活跃/受保护线程数、重复比例与必须写出密度。
+        PublishItem(rel='stage4/acceptance/packet_metrics.json',
+                    value=packet_metrics(writer_ir)),
+    ))
     resolve_owner_issues(repository, owner='design',
                          raised_by='str06.stage4.compile')
     resolve_owner_issues(repository, owner='preserve',
@@ -731,15 +746,19 @@ def run_hook(ctx: ChainContext) -> dict:
         validator_version=HOOK_VALIDATOR_VERSION,
         status='accepted' if prose is not None else 'rejected',
         mechanical_checks=MECHANICAL_CHECKS)
+    items: list[PublishItem] = []
     if prose is not None:
-        repository.write_text('stage5/hook/hook.txt', prose)
+        items.append(PublishItem(rel='stage5/hook/hook.txt', text=prose))
     if hook_ref is not None:
         # 拒绝回执同样引用实际 attempt（拒绝结论以这些耐久响应为证）；付费节点
         # 不写无引用产物（provenance 闸，B4 前实测：refs=() 在此路径必被
         # ProvenanceRefused 拦下、typed 失败被掩盖）。无已应答 attempt 时不伪造
         # 写盘——失败证据留在 attempts 记录与 run 状态，随后按 typed 失败上抛。
-        repository.write('stage5/hook/receipt.json', receipt, owners=('hook_writer',),
-                         refs=(hook_ref,))
+        items.append(PublishItem(rel='stage5/hook/receipt.json', value=receipt,
+                                 owners=('hook_writer',), refs=(hook_ref,)))
+    # R6 输出组发布：Hook 正文与回执同组一个 seal（正文字节进回执组的输出摘要）。
+    if items:
+        repository.publish(tuple(items))
     repository.write('runtime/hook_attempts.json', {'attempts': attempts_log})
     if prose is None:
         repository.write('runtime/workflow_status.json',
@@ -813,11 +832,16 @@ def _write_and_commit_chapter(ctx: ChainContext, packet, ordinal: int):
             'status': 'body_rejected', 'accepted_body': False, 'chapter': ordinal,
             'detail': '重写额度内无合法候选（硬检查未全过）；该章无提交'})
         raise ValueError(f'第{ordinal}章在重写额度内无合法候选；先人工复核')
-    # 原子写正文 → 原子写章回执（提交完成）；拒绝候选留证在 attempts 记录。
-    repository.write_text(f'stage5/body/{_chapter_ordinal(ordinal)}.txt', outcome.prose)
-    repository.write(f'stage5/acceptance/body/{_chapter_ordinal(ordinal)}.json',
-                     outcome.receipt, owners=(f'body_{_chapter_ordinal(ordinal)}',),
-                     refs=(outcome.ref,) if outcome.ref is not None else ())
+    # R6 输出组发布：章正文与章回执同组一个 seal——正文先落、回执最后提交
+    # （提交完成），拒绝候选留证在 attempts 记录。
+    repository.publish((
+        PublishItem(rel=f'stage5/body/{_chapter_ordinal(ordinal)}.txt',
+                    text=outcome.prose),
+        PublishItem(rel=f'stage5/acceptance/body/{_chapter_ordinal(ordinal)}.json',
+                    value=outcome.receipt,
+                    owners=(f'body_{_chapter_ordinal(ordinal)}',),
+                    refs=(outcome.ref,) if outcome.ref is not None else ()),
+    ))
     return outcome
 
 
@@ -969,18 +993,23 @@ def run_assemble(ctx: ChainContext) -> dict:
                            'delivery_identity': outcome.delivery_identity}}
     if outcome.status == 'ready':
         final_rel = f'stage7/final/{ctx.book_title or "book"}_rewriting.txt'
-        # 文件先落盘，manifest 最后提交：消费者核对 manifest 才算就绪。
-        repository.write_text(final_rel, outcome.delivery_bytes.decode('utf-8'))
+        final_bytes = outcome.delivery_bytes
+        # R6 输出组发布：最终 TXT 与 delivery manifest 同组一个 seal——文件先
+        # 落盘、manifest 最后提交，消费者核对 manifest（及其 seal）才算就绪；
+        # manifest 内嵌的交付字节摘要按待写字节预计算（与落盘后文件摘要一致）。
         manifest = build_delivery_manifest(
             delivery_identity=outcome.delivery_identity,
-            final_text_sha256=repository.file_sha256(repository.path(final_rel)),
+            final_text_sha256=hashlib.sha256(final_bytes).hexdigest(),
             receipts={ordinal: raw_receipts[ordinal] for ordinal in access.accepted},
             chapter_prose=chapter_prose,
             hook_prose_sha256=hook_sha,
             name_map_sha256=repository.file_sha256(
                 repository.path('stage7/naming/name_map.json')),
             total_length_budget=ctx.budget)
-        repository.write('stage7/final/delivery_manifest.json', manifest)
+        repository.publish((
+            PublishItem(rel=final_rel, text=final_bytes.decode('utf-8')),
+            PublishItem(rel='stage7/final/delivery_manifest.json', value=manifest),
+        ))
         repository.write('runtime/delivery/assembly_report.json', report)
         return report
     repository.write('runtime/delivery/assembly_report.json', report)

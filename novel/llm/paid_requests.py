@@ -1300,8 +1300,14 @@ class CandidateRunContext:
     def commit_bundle(self, *, node: str, rel: str, artifact_sha256: str,
                       inputs: dict[str, InputEdge],
                       refs: tuple, run_id: str,
-                      created_at: int) -> dict:
-        """构造一份 CommitBundle 记录（含 seal；落盘归调用方）。"""
+                      created_at: int,
+                      outputs: tuple[CommitOutputRef, ...] | None = None) -> dict:
+        """构造一份 CommitBundle 记录（含 seal；落盘归调用方）。
+
+        ``outputs`` 是输出组（R6 统一发布权威）的全部成员：单项发布缺省为
+        ``rel`` 本身；多产物组（如 Stage2 双真源＋fold、每章正文＋章回执）传
+        全组 ``(key, sha256)``，``rel`` 保持为主产物键。
+        """
         refs = tuple(_as_adoption_ref(ref) for ref in refs)
         bundle = CommitBundleV1(
             node=node, artifact=rel, artifact_sha256=artifact_sha256,
@@ -1313,7 +1319,8 @@ class CandidateRunContext:
                 turn_id=ref.turn_id, attempt_id=ref.attempt_id,
                 response_sha256=ref.response_sha256, model=ref.model or 'unknown',
                 historical=ref.historical, patch=ref.patch) for ref in refs),
-            outputs=(CommitOutputRef(key=rel, sha256=artifact_sha256),),
+            outputs=(outputs if outputs is not None
+                     else (CommitOutputRef(key=rel, sha256=artifact_sha256),)),
             run_id=run_id, created_at=created_at, seal='0' * 64)
         payload = bundle.model_dump(mode='json')
         payload['seal'] = commit_bundle_seal(payload)

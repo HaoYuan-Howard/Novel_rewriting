@@ -272,7 +272,7 @@ def _full_chain_wires():
     return make()
 
 
-def _run_chain(repo, base, transport, tmp_path, *, ceiling=None):
+def _run_chain(repo, base, transport, tmp_path, *, ceiling=None, node_filter=None):
     from novel.stages.chain import run_workflow
     from tests.test_str06_body import _RoutingTransport, _chapters
     from tests.str06_facilities import body_ask, json_ask, text_ask
@@ -286,7 +286,7 @@ def _run_chain(repo, base, transport, tmp_path, *, ceiling=None):
                         budget=2000, through='stage7', book_title='报恩',
                         hook_constraints=HookConstraints(target_chars=10,
                                                          hard_max_chars=360),
-                        length_band=(0.01, 0.05))
+                        length_band=(0.01, 0.05), node_filter=node_filter)
 
 
 def test_commit_bundle_loss_replays_and_reseals_free(tmp_path):
@@ -315,6 +315,101 @@ def test_commit_bundle_loss_replays_and_reseals_free(tmp_path):
     assert repo.path(final_rel).read_bytes() == final_before
     resealed = list((base / 'run' / 'runtime' / 'commit').rglob('*.json'))
     assert len(resealed) >= 12, '重跑必须把全部重写产物重新封存'
+
+
+# ─── R6 统一发布权威：免费产物同样封存；正式读取校验 seal 与摘要（AUD-05） ──────
+
+def _wired_repo(tmp_path):
+    """全链 fake 设施（repo 附上下文＋路由 transport；链由调用方驱动）。"""
+    from tests.test_str06_body import _RoutingTransport
+    wires = _full_chain_wires()
+    base = tmp_path / 'out'
+    base.mkdir()
+    repo = Str06Repository(base / 'run')
+    repo.attach_context(make_context(base / 'run', ledger=CostLedger(path=ledger_path(base))))
+    transport = _RoutingTransport(wires)
+    return repo, base, transport
+
+
+def test_free_artifacts_are_sealed_like_paid_ones(tmp_path):
+    """免费产物同样封存：无采用引用的正式写盘也落 CommitBundle（adoptions 空）。
+
+    不另立付费/免费两套发布语义（R6）：`read_model` 的 seal 校验面前，免费
+    compile 产物与付费产物同规。
+    """
+    repo, base, _transport = _wired_repo(tmp_path)
+    repo.write('stage4/ir/writer_book_ir.json', {'book_brief': {}, 'chapters': []})
+    bundles = [b for b in commit_bundles(repo.root)
+               if b.artifact == 'stage4/ir/writer_book_ir.json']
+    assert len(bundles) == 1, '免费（无采用引用）的正式产物必须同样封存发布证明'
+    bundle = bundles[0]
+    assert bundle.adoptions == ()
+    assert [o.key for o in bundle.outputs] == ['stage4/ir/writer_book_ir.json']
+    assert bundle.seal
+
+
+def test_unsealed_formal_read_is_refused_then_free_recovery_reseals(tmp_path):
+    """AUD-05：删掉全部 CommitBundle 后，单跑 Stage7 组装的正式消费必须拒绝。
+
+    原行为是 bundle 全删仍可读且 assemble=ready（读取路径不看 seal）。统一发布
+    权威启用后：未封存的产物不是正式输入；恢复走重跑全链——付费段按请求身份
+    免费重放、免费段确定性重编译，零新购，交付字节不变，再单跑组装重新就绪。
+    """
+    from novel.errors import UnsealedArtifact
+    repo, base, transport = _wired_repo(tmp_path)
+    _run_chain(repo, base, transport, tmp_path)
+    final_rel = 'stage7/final/报恩_rewriting.txt'
+    final_before = repo.path(final_rel).read_bytes()
+    calls_before = len(transport.calls)
+    bundles = list((base / 'run' / 'runtime' / 'commit').rglob('*.json'))
+    assert bundles, '正式提交必须封存 CommitBundle'
+    for bundle in bundles:
+        bundle.unlink()
+    # 只跑 Stage7 组装：正式输入全部未封存 ⇒ 拒绝消费（不能照旧 ready）。
+    with pytest.raises(UnsealedArtifact, match='未封存'):
+        _run_chain(repo, base, transport, tmp_path,
+                   node_filter=('str06.stage7.assemble',))
+    # 免费恢复：重跑全链按请求身份重放并重新封存，再交付。
+    report = _run_chain(repo, base, transport, tmp_path)
+    assert report['assembly']['status'] == 'ready'
+    assert len(transport.calls) == calls_before, '恢复补尾不得新购'
+    assert repo.path(final_rel).read_bytes() == final_before
+    resealed = list((base / 'run' / 'runtime' / 'commit').rglob('*.json'))
+    assert len(resealed) >= 12, '重跑必须把全部重写产物重新封存'
+    # 恢复后单跑组装重新放行；摘要漂移的产物仍拒（seal＋摘要双校验）。
+    report = _run_chain(repo, base, transport, tmp_path,
+                        node_filter=('str06.stage7.assemble',))
+    assert report['assembly']['status'] == 'ready'
+    ir_path = repo.path('stage4/ir/writer_book_ir.json')
+    ir_path.write_text(ir_path.read_text(encoding='utf-8') + '\n', encoding='utf-8')
+    with pytest.raises(UnsealedArtifact, match='摘要'):
+        repo.read_model('stage4/ir/writer_book_ir.json')
+
+
+def test_compile_stage4_keeps_formal_positions_unpublished_on_guard_failure(
+        tmp_path, monkeypatch):
+    """R6 验过才发布：机械 Guard 拦下时正式位不发布，失败结果只进诊断面。
+
+    现行为在 Guard 判定前就把 writer_book_ir／packet_metrics 写进正式位——
+    失败结果冒充可交付。修复后：问题清单只进 guard report（诊断），四个正式
+    派生产物（execution_plan／hook 上下文／写手 IR／packet 指标）一概不落盘。
+    """
+    from novel.stages import chain as chain_module
+    repo, base, transport = _wired_repo(tmp_path)
+    monkeypatch.setattr(
+        chain_module, 'run_mechanical_guard',
+        lambda **kwargs: ['M-TEST 注入的机械问题：必保义务未承载'])
+    with pytest.raises(ValueError, match='M-TEST'):
+        _run_chain(repo, base, transport, tmp_path)
+    # 失败结果只进诊断：guard report 留证问题清单（逐场景各报一次）。
+    report = repo.inspect('stage4/acceptance/guard/report.json')
+    assert report['guard_errors'], 'Guard 问题必须留证在诊断面'
+    assert set(report['guard_errors']) == {'M-TEST 注入的机械问题：必保义务未承载'}
+    # 正式位不发布（未被验证过的结果不是可交付物）。
+    assert not repo.path('stage4/ir/writer_book_ir.json').exists()
+    assert not repo.path('stage4/acceptance/packet_metrics.json').exists()
+    assert not repo.path('stage4/context/hook/hook.json').exists()
+    assert not repo.path('stage4/compiled/execution_plan.json').exists()
 
 
 def test_restarted_run_reuses_purchased_answers_across_sessions(tmp_path):

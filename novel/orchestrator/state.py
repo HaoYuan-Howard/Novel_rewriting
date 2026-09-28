@@ -374,10 +374,16 @@ def planned_chapters(store: ArtifactStore) -> list[int] | None:
 
 
 def _candidate_body_design(store: ArtifactStore):
-    """候选根上的 BodyDesign（F8d 桥）；读不回来返回 `None`，不猜章集。"""
+    """候选根上的 BodyDesign（F8d 桥）；读不回来返回 `None`，不猜章集。
+
+    未封存（R6 发布校验拒绝）同样按未知章集处理：不能证明已发布的计划
+    不参与完成度判定，交重跑免费补封存。
+    """
+    from novel.errors import UnsealedArtifact
     try:
         return Str06Repository(store.ctx.novel_dir).read_model(STR06_BODY_DESIGN)
-    except (ArtifactUnreadable, UpstreamMissing, OSError, ValueError):
+    except (ArtifactUnreadable, UpstreamMissing, UnsealedArtifact,
+            OSError, ValueError):
         return None
 
 

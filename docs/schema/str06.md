@@ -424,17 +424,30 @@ seal → 标记采用（可由 seal 重建）。任一窗口中断优先免费�
 执行与提交，最后释放书级锁。`--check-only` 继续表示零新购复验，可执行恢复写入，文档
 不得称为纯只读检查。
 
-### 发布权威与读取校验（目标，R6；B6 前落地）
+### 发布权威与读取校验（现役，R6 已落地；2026-09-29）
 
 裁决 2 把统一发布权威前置于 B6，让 B6-A 真正代表「最终产品链第一次接真实模型」。
-目标形态（尚未实施，读取路径当前不校验 seal——AUD-05）：
+现役形态（AUD-05 已转绿：删掉全部 seal 后正式消费被拒，免费恢复后重新交付）：
 
-- `novel/store.py::Str06Repository` 按**输出组**发布：先写组内产物、再写组 seal；
-  免费产物同样封存，不另立付费/免费两套发布语义。
-- `read_model` 对正式输入校验 seal 与摘要；seal 缺失或不符即拒绝正式消费
-  （fail fast，I-34），失败结果只进诊断面、不冒充可交付。
-- `run_compile_stage4` 等付费节点改为**验过才发布**；新协议没有任何已购产物，
-  不需要补封或迁移层（I-13），崩溃窗口靠 prepare 与耐久响应免费补尾。
+- `novel/store.py::Str06Repository` 按**输出组**发布（`publish`＋`PublishItem`）：
+  组内产物先铸账、渲染全部字节再落盘，全部逐字回读后写**组 seal**——输出组对应
+  `NODES.produces` 上同 writer 的产物集合（Stage2 双真源＋fold、Preserve checkpoint＋
+  brief、Stage4 免费编译四产物、每章正文＋章回执、Hook＋Hook 回执、最终 TXT＋
+  delivery manifest）；单项写 `write` 是单项组。**免费产物同样封存**（免费 bundle 的
+  `adoptions` 为空），不另立付费/免费两套发布语义；组内跨 writer 即编排缺陷 fail fast。
+- `read_model` 对正式输入校验 seal 与摘要（`UnsealedArtifact`，显式终态 2）：没有
+  覆盖当前字节的已封存 CommitBundle——未封存、seal 损坏（`sealed_commit_bundles`
+  关闭式上抛）或摘要不符——即拒绝正式消费，失败结果只进诊断面、不冒充可交付；
+  诊断 `inspect` 可展示未发布证据但不反向放行。编排侧候选桥
+  （`novel/orchestrator/state.py::_candidate_body_design`）对未封存按未知章集处理。
+- `run_compile_stage4` 等**验过才发布**：Guard 问题非空时四个正式派生产物
+  （execution_plan／hook 上下文／写手 IR／packet 指标）一概不落盘，问题清单只进
+  guard report 诊断；新协议没有任何已购产物，不需要补封或迁移层（I-13）。
+- 崩溃窗口（组内产物已写、seal 未写）靠免费补尾：重跑所属 owner，付费段按请求
+  身份重放耐久响应（`WorkUnitBudget.usable_response`）、免费段确定性重编译，零新购
+  重新发布并封存（复用 `CommitBundleV1` 与 `sealed_commit_bundles`，无第二本账）。
+  反例：`tests/test_str06_runtime_records.py`（免费封存／未封存拒绝＋免费恢复＋
+  Guard 失败不发布正式位）。
 
 ## 精确失效（目标）
 

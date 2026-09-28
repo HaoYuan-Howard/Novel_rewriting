@@ -200,6 +200,18 @@ class UpstreamUnproven(TerminalState):
     """
 
 
+class UnsealedArtifact(TerminalState):
+    """要读的正式产物在盘上，但没有覆盖其当前字节的已封存发布证明（R6）。
+
+    ⚠ **与 `UpstreamMissing`／`UpstreamStale` 分开**：那两条说的是「产物不在」与
+    「产物过期」；本条说的是「产物**没有作为正式输入发布过**」——组内产物未全部
+    落盘、封存未写（崩溃窗口）、或产物字节与 seal 记录的摘要不符（被篡改/半写）。
+    恢复路也不同且免费：重跑所属 owner，付费段按请求身份重放耐久响应、免费段
+    确定性重编译，重新发布并封存后再消费。诊断面（`inspect`）不受本条约束，
+    可以继续展示未发布证据，但不得反向放行正式消费。
+    """
+
+
 class ArtifactUnreadable(TerminalState):
     """盘上那份在，但读不出来：不是合法 JSON、或不合当前 schema。
 

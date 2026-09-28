@@ -39,7 +39,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Callable, Iterable, Iterator, TypeVar, cast
+from typing import Any, Callable, Iterable, Iterator, NamedTuple, TypeVar, cast
 
 from pydantic import BaseModel, ValidationError
 
@@ -57,6 +57,7 @@ from contracts.schema import (
     ARTIFACT_SPECS, ArtifactVersionError, HumanApproval, InputEdge, Provenance,
     RevalidationAudit, artifact_spec, decode_artifact, encode_artifact,
 )
+from contracts.schema.workflow import CommitOutputRef
 from novel import paths, prov
 from novel.consumption import (
     canonical_rel, context_inputs_for,
@@ -64,7 +65,8 @@ from novel.consumption import (
 )
 from novel.errors import (
     ApprovalRequired, ArtifactUnreadable, ByteFormRefused, PathRefused,
-    ProvenanceRefused, TerminalState, UpstreamMissing, UpstreamStale,
+    ProvenanceRefused, TerminalState, UnsealedArtifact, UpstreamMissing,
+    UpstreamStale,
 )
 from novel.prov import FreshnessReport
 from novel.run import RunContext
@@ -2545,6 +2547,22 @@ class ArtifactStore:
                     pass
 
 
+class PublishItem(NamedTuple):
+    """输出组的一项（R6 统一发布权威）：JSON 产物（`value`）或文本产物（`text`）。
+
+    恰给其一：`.txt` 走 `text`（账在绑定它的回执上，字节仍进组 seal 的输出
+    摘要）；其余登记产物走 `value`，落盘即带来源账。`refs`／`claim_usage`
+    语义同 `Str06Repository.write`。
+    """
+
+    rel: str
+    value: Any = None
+    text: str | None = None
+    owners: tuple[str, ...] = ()
+    refs: tuple = ()
+    claim_usage: bool = True
+
+
 class Str06Repository:
     """隔离 RC 产物的持久化口（F7a-2 起接正式 Store 机制；F8 分流删除）。
 
@@ -2567,6 +2585,12 @@ class Str06Repository:
     【context 是显式依赖】构造后必须 `attach_context` 附上候选运行上下文再写
     正式产物；未附着时写已登记产物**关闭式拒绝**——不存在「无来源账的正式
     产物」这条静默路径。读取旧根／外部文件不依赖上下文。
+
+    【R6 统一发布权威】正式产物按**输出组**发布（`publish`）：组内产物先落盘、
+    再写组 seal；免费产物同样封存（不另立付费/免费两套发布语义）。
+    `read_model` 对正式输入校验 seal 与摘要——未封存、seal 损坏或摘要不符都
+    不是正式输入（AUD-05），恢复靠重跑所属 owner 免费补尾；诊断面 `inspect`
+    可展示未发布证据，但不反向放行正式消费。
     """
 
     def __init__(self, root: Path, context=None):
@@ -2633,43 +2657,121 @@ class Str06Repository:
 
     def write(self, rel: str, value: Any, *, owners: tuple[str, ...] | None = None,
               refs: tuple = (), claim_usage: bool = True) -> Path:
-        """落盘一份产物；已登记 JSON 产物带来源账，付费产物须带显式采用引用。
+        """落盘一份产物（单项输出组）：带来源账并**封存发布证明**（R6）。
 
         `refs` 是 B1 的**显式采用引用**（`AdoptionRef`）：provenance 由纯函数按
-        引用构造，正式提交同时封存一份 CommitBundle（输入清单＋采用证据＋输出
-        摘要＋seal，落 `runtime/commit/`，采用状态从 seal 派生）。`owners` 保留
-        作调用方语义标注，不再充当采用窗口的过滤键。``claim_usage=False`` 用于
-        同一份付费产出的第二个 key（生成事实继承，用量不重复认领）。
+        引用构造，付费产物须带显式引用。**免费产物（`refs` 为空）同样封存**
+        CommitBundle（输入清单＋采用证据＋输出摘要＋seal，落 `runtime/commit/`，
+        采用状态从 seal 派生；免费 bundle 的 `adoptions` 为空）——不另立
+        付费/免费两套发布语义。`owners` 保留作调用方语义标注，不充当采用窗口
+        的过滤键。``claim_usage=False`` 用于同一份付费产出的第二个 key（生成
+        事实继承，用量不重复认领）。多产物同组发布走 `publish`（组内产物先
+        落盘、再写组 seal）。
         """
-        path = self.path(rel)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        payload = value.model_dump(mode='json') if isinstance(value, BaseModel) else value
-        bundle = None
-        if self.context is not None:
-            spec = candidate_artifact(rel)
-            if spec is not None and not spec.endswith('.txt'):
-                # 已登记产物落盘即带来源账；正文（text）的账在绑定它的回执上。
-                provenance = self.context.provenance_for(_writer_of(spec), rel, refs=refs,
-                                                         claim_usage=claim_usage)
-                payload = {**payload, '_provenance': provenance.to_disk()}
-                if refs:
-                    bundle = self.context.commit_bundle(
-                        node=_writer_of(spec), rel=rel,
-                        artifact_sha256=hashlib.sha256(json.dumps(
-                            payload, ensure_ascii=False, indent=2,
-                            allow_nan=False).encode('utf-8')).hexdigest(),
-                        inputs=provenance.inputs, refs=tuple(refs),
-                        run_id=self.context.ledger.run_id,
-                        created_at=int(time.time()))
-        elif candidate_artifact(rel) is not None:
+        return self.publish((PublishItem(
+            rel=rel, value=value, owners=owners or (), refs=refs,
+            claim_usage=claim_usage),))[0]
+
+    def publish(self, items: tuple['PublishItem', ...] | list['PublishItem']
+                ) -> tuple[Path, ...]:
+        """按输出组发布（R6 统一发布权威）：先写组内全部产物，再写组 seal。
+
+        组是同一 writer 的一次正式提交单位——`NODES.produces` 上同组的产物
+        （Stage2 双真源＋fold、Stage4 免费编译的一组派生输出、每章正文＋章回执、
+        Hook＋Hook 回执、最终 TXT＋delivery manifest）一次成形、一个 seal；
+        不把不同 semantic owner 捆成整书事务。纪律：
+
+        · 铸账、渲染全部字节**完成后才开始落盘**（中途拒绝不留半组字节）；
+        · 组内产物逐字回读核对后**才写 seal**：封存写失败或封存前崩溃时，组内
+          产物已在盘上但不是正式输入（`read_model` 校验 seal 与摘要，AUD-05），
+          重跑所属 owner 免费补尾——付费段按请求身份重放耐久响应，免费段确定
+          性重编译——重新发布并封存（`I-30` 幂等重跑、零新购）；
+        · 组内全部已登记 JSON 产物必须同 writer（一个输出组一个唯一 writer，
+          `I-25`）；跨 writer 的编排错误在此 fail fast。
+        """
+        if not items:
+            raise ProvenanceRefused('publish 拒绝空输出组：没有产物就没有发布事实')
+        prepared: list[tuple['PublishItem', bytes, Any]] = []
+        writers: list[str] = []
+        inputs: dict[str, InputEdge] = {}
+        refs: list = []
+        for item in items:
+            data, provenance = self._prepare_item(item)
+            prepared.append((item, data, provenance))
+            spec = candidate_artifact(item.rel)
+            if provenance is not None:
+                writer = _writer_of(spec)
+                if writer not in writers:
+                    writers.append(writer)
+                for key, edge in provenance.inputs.items():
+                    if key in inputs and inputs[key].file != edge.file:
+                        raise ProvenanceRefused(f'输出组内输入边指纹冲突：{key}')
+                    inputs[key] = edge
+            for ref in item.refs:
+                if ref not in refs:
+                    refs.append(ref)
+        if len(writers) > 1:
             raise ProvenanceRefused(
-                f'{rel} 是已登记候选产物，但 repository 未附加上下文：'
-                '拒绝在无来源账的情况下写正式产物')
-        # 保序序列化（同正式 store 的 _render，不 sort_keys）：盘上字符典序即
-        # wire 序，prompt 与已购请求身份按字节复算——排序会把 F5e 已购请求的
-        # 身份静默改掉，历史采用随之失配。
-        data = json.dumps(payload, ensure_ascii=False, indent=2,
-                          allow_nan=False).encode('utf-8')
+                f'输出组跨 writer 发布（{writers}）：一个输出组只有一个唯一 writer')
+        written: list[Path] = []
+        for item, data, _provenance in prepared:
+            path = self.path(item.rel)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            self._atomic_write(path, data)
+            if path.read_bytes() != data:
+                raise ValueError(f'RC 产物读回字节不一致：{item.rel}')
+            written.append(path)
+        if writers:
+            # 组 seal：全部产物落盘并核对后才封存（免费产物同样封存）。
+            primary_index = next(index for index, (_item, _data, provenance)
+                                 in enumerate(prepared) if provenance is not None)
+            primary, primary_data, _p = prepared[primary_index]
+            bundle = self.context.commit_bundle(
+                node=writers[0], rel=primary.rel,
+                artifact_sha256=hashlib.sha256(primary_data).hexdigest(),
+                inputs=inputs, refs=tuple(refs),
+                run_id=self.context.ledger.run_id,
+                created_at=int(time.time()),
+                outputs=tuple(CommitOutputRef(
+                    key=item.rel, sha256=hashlib.sha256(data).hexdigest())
+                    for item, data, _provenance in prepared))
+            self._write_commit_bundle(bundle)
+        return tuple(written)
+
+    def _prepare_item(self, item: 'PublishItem') -> tuple[bytes, Any]:
+        """渲染输出组一项的落盘字节并铸来源账（纯准备，不落盘）。
+
+        文本产物（`.txt`）不带来源账：正文（text）的账在绑定它的回执上——同组
+        回执的 seal 以输出摘要覆盖正文字节。序列化保序（同 `write`，不
+        sort_keys）：盘上字符典序即 wire 序，prompt 与已购请求身份按字节复算。
+        """
+        if (item.text is None) == (item.value is None):
+            raise ProvenanceRefused(
+                f'{item.rel} 输出组项必须恰给 value（JSON）或 text（文本）之一')
+        spec = candidate_artifact(item.rel)
+        if item.text is not None:
+            if spec is not None and not spec.endswith('.txt'):
+                raise ProvenanceRefused(f'{item.rel} 是已登记 JSON 产物，不能按文本发布')
+            return item.text.encode('utf-8'), None
+        payload = (item.value.model_dump(mode='json')
+                   if isinstance(item.value, BaseModel) else item.value)
+        provenance = None
+        if spec is not None and not spec.endswith('.txt'):
+            if self.context is None:
+                raise ProvenanceRefused(
+                    f'{item.rel} 是已登记候选产物，但 repository 未附加上下文：'
+                    '拒绝在无来源账的情况下写正式产物')
+            # 已登记产物落盘即带来源账；正文（text）的账在绑定它的回执上。
+            provenance = self.context.provenance_for(
+                _writer_of(spec), item.rel, refs=item.refs,
+                claim_usage=item.claim_usage)
+            payload = {**payload, '_provenance': provenance.to_disk()}
+        return (json.dumps(payload, ensure_ascii=False, indent=2,
+                           allow_nan=False).encode('utf-8'), provenance)
+
+    @staticmethod
+    def _atomic_write(path: Path, data: bytes) -> None:
+        """OS 原子替换落盘（同目录临时文件→`os.replace`）；失败清理临时文件。"""
         # RC 与现役共用 OS 原子替换语义，不调用现役 Stage 实现或私有产物编排。
         fd, temporary = tempfile.mkstemp(prefix='.rc-', suffix='.tmp', dir=path.parent)
         try:
@@ -2680,12 +2782,6 @@ class Str06Repository:
             os.replace(temporary, path)
         finally:
             Path(temporary).unlink(missing_ok=True)
-        if path.read_bytes() != data:
-            raise ValueError(f'RC 产物读回字节不一致：{rel}')
-        if bundle is not None:
-            # 先产物后封存：封存写失败时产物已在盘上，重跑免费重放会重新封存。
-            self._write_commit_bundle(bundle)
-        return path
 
     def _write_commit_bundle(self, bundle: dict) -> Path:
         """CommitBundle 原子落盘：``runtime/commit/<node>/<seal16>_<slug>.json``。"""
@@ -2695,15 +2791,7 @@ class Str06Repository:
         path.parent.mkdir(parents=True, exist_ok=True)
         data = json.dumps(bundle, ensure_ascii=False, indent=2,
                           allow_nan=False).encode('utf-8')
-        fd, temporary = tempfile.mkstemp(prefix='.rc-', suffix='.tmp', dir=path.parent)
-        try:
-            with os.fdopen(fd, 'wb') as stream:
-                stream.write(data)
-                stream.flush()
-                os.fsync(stream.fileno())
-            os.replace(temporary, path)
-        finally:
-            Path(temporary).unlink(missing_ok=True)
+        self._atomic_write(path, data)
         return path
 
     def write_text(self, rel: str, text: str) -> Path:
@@ -2711,15 +2799,7 @@ class Str06Repository:
         path = self.path(rel)
         path.parent.mkdir(parents=True, exist_ok=True)
         data = text.encode('utf-8')
-        fd, temporary = tempfile.mkstemp(prefix='.rc-', suffix='.tmp', dir=path.parent)
-        try:
-            with os.fdopen(fd, 'wb') as stream:
-                stream.write(data)
-                stream.flush()
-                os.fsync(stream.fileno())
-            os.replace(temporary, path)
-        finally:
-            Path(temporary).unlink(missing_ok=True)
+        self._atomic_write(path, data)
         if path.read_bytes() != data:
             raise ValueError(f'RC 产物读回字节不一致：{rel}')
         return path
@@ -2743,15 +2823,41 @@ class Str06Repository:
         剥掉盘上 `_provenance` 键再校验：来源账是盘上事实，不进计算用的模型
         （模型不声明该字段时 `extra='forbid'` 会拒读；声明的模型也不在此路上
         消费它）。读路径仍走 `read`——记账与过期拒绝照常。
+
+        R6 统一发布权威：正式输入另须通过**发布校验**（`_require_sealed`，先于
+        记账与过期判定——未发布的产物根本不是输入）——没有覆盖当前字节的
+        已封存 CommitBundle（seal＋摘要双校验）即拒绝消费（AUD-05）；诊断面走
+        `inspect` 不受此限。
         """
         spec = candidate_artifact(rel)
         model = _artifact_model(spec)
         if spec is None or model is None:
             raise ProvenanceRefused(f'{rel} 未登记契约模型，不能按模型读')
+        self._require_sealed(rel)
         data = self.read(rel)
         if isinstance(data, dict):
             data = {k: v for k, v in data.items() if k != '_provenance'}
         return model.model_validate(data)
+
+    def _require_sealed(self, rel: str) -> None:
+        """正式输入的发布校验（R6）：无覆盖当前字节的已封存组即拒绝消费。
+
+        封存记录损坏（seal 不符）由 `sealed_commit_bundles` 关闭式上抛，不是
+        「当它不存在」；组内缺文件、摘要不符与本条同走 `UnsealedArtifact`
+        （fail fast，`I-34`），恢复入口免费：重跑所属 owner 重新发布并封存。
+        """
+        from novel.work_units import sealed_commit_bundles
+
+        digest = hashlib.sha256(self.path(rel).read_bytes()).hexdigest()
+        for _path, bundle in sealed_commit_bundles(self.root):
+            if any(output.key == rel and output.sha256 == digest
+                   for output in bundle.outputs):
+                return
+        raise UnsealedArtifact(
+            f'{rel} 没有覆盖当前字节的已封存 CommitBundle（统一发布权威，AUD-05）：'
+            '未封存或摘要不符的产物不是正式输入。恢复入口：重跑所属 owner 节点'
+            '（付费段按请求身份免费重放、免费段确定性重编译，零新购），'
+            '重新发布并封存后再消费')
 
     # ── INVALID 孪生与 _rounds 归档（F7a-2：路径与写入事务接正式机制） ──────
 

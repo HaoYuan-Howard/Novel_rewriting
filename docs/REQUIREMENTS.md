@@ -1364,6 +1364,45 @@ B6-A／B6-B 分别授权；R 批全部 fake transport、零模型调用。
     M8 全程绿）；ThreadFold 补「开启前」入场快照断言。复核无遗留红：str06
     全集＋§9.5 五文件＋layering 936 项全绿（`-n 0`、fake、零付费）。
 
+- [x] **R6 · 统一发布权威（免费；seal 验过才发布）**（2026-09-29 完成；AUD-05
+  转绿，反例与修复同批）：
+  - `novel/store.py::Str06Repository` 新增**输出组发布** `publish`＋`PublishItem`：
+    铸账渲染全部字节后才落盘，组内产物逐字回读后写一个组 seal（`CommitBundleV1`
+    不变形状，`outputs` 覆盖全组、`artifact` 保持主产物键）；输出组＝
+    `NODES.produces` 同 writer 集合（Stage2 双真源＋fold、Preserve checkpoint＋
+    brief、Stage4 免费编译四产物、每章正文＋章回执、Hook＋回执、最终 TXT＋
+    delivery manifest），组内跨 writer 即拒。`write` 收敛为单项组；**免费产物
+    同样封存**（免费 bundle `adoptions` 为空），不再有「只有 `refs` 非空才封存」
+    的付费/免费两套发布语义。落盘纪律抽 `_atomic_write` 共用（OS 原子替换）。
+  - `read_model` 对正式输入校验 seal 与摘要：新增 `UnsealedArtifact`（显式终态
+    2，携带免费恢复入口）——无覆盖当前字节的封存、seal 损坏（`sealed_commit_bundles`
+    关闭式上抛）或摘要漂移都拒绝正式消费；诊断 `inspect` 不受限。编排侧候选桥
+    `_candidate_body_design` 对未封存按未知章集处理（fail-closed）。
+  - `run_compile_stage4` 改**验过才发布**：机械 Guard 问题非空时 execution_plan／
+    hook 上下文／写手 IR／packet 指标四个正式位一概不落盘，问题清单只进
+    guard report 诊断；`run_hook`／`_write_and_commit_chapter`／`run_assemble` 的
+    正文＋回执（manifest）改同组发布，正文字节进组 seal 的输出摘要。
+  - 反例（先红后绿，`tests/test_str06_runtime_records.py`）：①免费产物封存
+    （免费写盘也落 bundle、`adoptions` 空）；②AUD-05——fake 全链交付后删全部
+    CommitBundle，单跑 Stage7 组装必须拒绝（原行为仍 ready），重跑全链零新购、
+    交付字节不变、重新封存，恢复后单跑组装重新就绪，产物字节漂移仍拒（seal＋
+    摘要双校验）；③Guard 失败不发布正式位（问题只进诊断）。崩溃窗口靠重跑
+    免费补尾（付费段请求身份重放、免费段确定性重编译），无补封或迁移层
+    （新协议无已购产物，I-13）。
+  - 验证（fake transport、零付费、`-n 0`）：str06 全集（runtime_records／
+    f7a_wiring／body／hook／stage2_publish／workflow／r3_selfheal／candidates／
+    f7c_remainder／repairs／stage2_owners／r2_engine／r2_contracts／
+    execution_ir／chapter_closure／stage4_protocol／semantic_delivery／f7e_freeze／
+    fold_guard／naming／target／cli_dispatch／contracts／invariants／source／
+    stage2_protocol／views／retirement／f7e_retirement）＋product_entry（真实
+    子进程 fake 全链 4 项）＋orchestrator_state＋paths＋store＋layering（除
+    一项与本批无关的既有失败，见下）＋test_test_selection 全绿。已知无关红：
+    test_layering 的并发模块 serial 登记检查因 `tests/test_str06_stage2_owners.py`
+    （threading.Barrier）未登记 serial 组失败，干净 HEAD 复核同样失败
+    （R4 遗留，非本批引入）。文档：
+    `docs/schema/str06.md` 发布权威节由「目标」改「现役」；
+    `tests/suite_catalog.json` 登记三条新用例（模块 stages 补 stage7）。
+
 ## 职责解耦批次（2026-09-27 起；B0–B6）
 
 裁决 D1–D10 各行见 [DECISIONS.md](DECISIONS.md) 2026-09-27；目标架构（Stage2 五节点、
