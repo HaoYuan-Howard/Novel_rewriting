@@ -395,7 +395,8 @@ def test_concealed_fact_reaches_writer_as_pending_reader_confirmation(tmp_path):
     from novel.stages.common import project_chapter_packet, render_chapter_packet
     book_ir = repo.read_model('stage4/ir/writer_book_ir.json')
     packet = render_chapter_packet(project_chapter_packet(book_ir, 1))
-    assert '床底有人（world:hiding）——sc02#b01 才可确认' in packet
+    assert '「床底有人」本章之内不得让读者确认' in packet
+    assert 'sc02#b01' not in packet and 'world:hiding' not in packet
     # Preserve 提示词带着揭示时点要求（v3 规则）
     preserve_prompt = next(p for o, p in requests if o == 'preserve')
     assert '谁在何时确认' in preserve_prompt

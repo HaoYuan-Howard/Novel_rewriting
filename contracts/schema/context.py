@@ -32,6 +32,14 @@ IR——本版起 `BeatIR.reads` 携带该拍定位点上已解析的读取值�
 三种呈现身份——must_realize／continuity／guard_only——由 renderer 按 E-4
 分支分节，IR 只携带事实）。`WriterPacket` 是写手层章包的唯一 canonical
 （I-11）：按 delivery_mode 分节、全部自然语言条目、无内部 ID 与字段名。
+
+【R2 引擎批（同版内 additive）：编译器补齐的入场基线】
+`background_state`／`background_knowledge` 承载「在 Design 声明的读取之外，
+按参与者机械补齐的入场状态」（人物域、参与者之间的关系域、持有者为参与者
+的知情域；世界域不在补齐面）。与 `entry_state`（声明读取的解析值，
+must_respect）分开成字段是机械必需：分区渲染要区分「本场依赖的事实」与
+「需要时才用的背景」，而章包内没有可推导该区别的第二真相源（I-16：不用
+投影规则猜身份）。两者都由 `project_context` 在同一折叠前缀上派生。
 """
 from __future__ import annotations
 
@@ -175,6 +183,12 @@ class VerificationIR(StrictModel):
     #: 入场时开放、与参与者相关、本场无操作的线程（R2.4，continuity／
     #: guard_only 数据面；主体在场过滤后的投影）。
     open_threads: tuple[OpenThreadIR, ...] = Field(default=(), min_length=0)
+    #: 编译器按参与者机械补齐的入场状态（R2 引擎批，background 呈现）：
+    #: 人物域（主体参与）、参与者之间的关系域、持有者为参与者的知情域；
+    #: 不含已声明读取的地址（那些以 must_respect 进 entry 视图）。
+    background_state: tuple[StateEntry, ...] = Field(default=(), min_length=0)
+    #: 同上（知情域）：持有者为参与者、未声明读取的入场已知命题。
+    background_knowledge: tuple[KnowledgeEntry, ...] = Field(default=(), min_length=0)
 
     @model_validator(mode='after')
     def _beats_belong_to_scene(self) -> 'VerificationIR':

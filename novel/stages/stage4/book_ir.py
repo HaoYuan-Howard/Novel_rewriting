@@ -18,6 +18,12 @@ ChapterIR 的业务内容：改变预算即改变全书 IR 身份。
 及家族级构词 − 已释放称谓）由 compiler 在 compile 时算好并写进 ChapterIR；
 Stage5 的 Writer／Validator 只收章包，不再现场推导（不读 Design／Characters）。
 `chapter_withheld_literals` 与 Hook 的 withheld 同一推导纪律：不写死人名。
+
+【线程折叠（R2.4，设计原则 4）】跨章语义不走状态叠加：`compile_writer_book_ir`
+用独立的 `ThreadFold` 按阅读序重放拍上的线程操作，逐场把 thread_ops（本场
+操作，must_realize 数据面）与 open_threads（入场快照，continuity／guard_only
+数据面）交给 `project_context` 进 VerificationIR；M8 与
+`guard.expected_thread_faces` 对账，漂移当场红。
 """
 from __future__ import annotations
 
@@ -31,7 +37,7 @@ from contracts.schema.design import BodyDesign, ChapterAssignment
 from contracts.schema.execution import ExecutionPlan
 from contracts.schema.grounding import SemanticBinding
 from contracts.schema.source import NameProjection, NameStructure, render_form
-from novel.stages.stage4.fold import fold_accepted_prefix
+from novel.stages.stage4.fold import ThreadFold, fold_accepted_prefix
 from novel.stages.common import project_context
 
 
@@ -199,13 +205,19 @@ def compile_writer_book_ir(
     nav: list[ChapterNavEntry] = []
     scenes_before = 0
     previous_assignment: ChapterAssignment | None = None
+    # 线程独立折叠（R2.4）：跨章重放一次，逐场把 thread_ops／open_threads 交给
+    # 投影（M8 与 guard.expected_thread_faces 对账；缺省不接线时 M8 当场红）。
+    thread_fold = ThreadFold()
     for assignment in sorted(graph.chapters, key=lambda c: c.chapter_ordinal):
         contexts, lines = [], []
         for scene_id in assignment.scene_ids:
+            scene = next(s for s in graph.scenes if s.scene_id == scene_id)
+            thread_ops, open_threads = thread_fold.apply(scene)
             context, _slice = project_context(
                 scene_id=scene_id, graph=graph, plan=plan, binding=binding,
                 folded_prefix=fold_accepted_prefix(
-                    plan.scenes[:scenes_before], initial=plan.initial_establishments))
+                    plan.scenes[:scenes_before], initial=plan.initial_establishments),
+                thread_ops=thread_ops, open_threads=open_threads)
             contexts.append(context)
             lines.append(_scene_line(graph, scene_id))
             scenes_before += 1

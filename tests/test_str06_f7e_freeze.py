@@ -46,6 +46,13 @@ B2 基线（14 节点，`a0f5fb5e…`）原样保存在 Git 历史里；既有�
 `str06-rc6`）。节点集合与运行期配置不变。R1 基线（14 节点，`0d546fda…`）
 原样保存在 Git 历史里；既有候选根按「契约表已漂移」拒读，只读保留。
 
+【R2 引擎批重新冻结（2026-09-28 同日）】WriterPacket 指标落盘：
+`stage4/acceptance/packet_metrics.json`（audit 报面，`str06-rc10`）进
+`str06.stage4.compile` 的 produces 与产物表（E-6 同批闭合——完成度判定与
+来源账覆盖该文件）。节点集合与运行期配置不变。R2 契约批基线
+（14 节点，`b8501a9d…`）原样保存在 Git 历史里；既有候选根按「契约表已
+漂移」拒读，只读保留（新协议无已购产物，重算免费）。
+
 【为什么不只靠激活表自己的对账】`test_str06_candidates.py` 查的是表内自洽
 （runner／writer／版本逐字相等）；本文件查的是**表与冻结基线**相等：
 前者防表内部撒谎，后者防表在批次之间无登记漂移。
@@ -59,10 +66,10 @@ from contracts.schema.workflow import (
 )
 from novel.llm.paid_requests import candidate_contract_identity
 
-#: R2 重新冻结（2026-09-28 语义送达）时的候选契约身份：节点表＋产物表＋RC
-#: 版式＋运行期配置的 SHA-256。表内任何一行变化都会改变它——先改本记录并
-#: 登记原因（REQUIREMENTS／DECISIONS），再动表。
-FROZEN_CONTRACT_IDENTITY = 'b8501a9d7cffdd18b7db03ac46cef006fff1e4cabd38756a0bb24e637f06039b'
+#: R2 引擎批重新冻结（2026-09-28 packet_metrics 落盘）时的候选契约身份：
+#: 节点表＋产物表＋RC 版式＋运行期配置的 SHA-256。表内任何一行变化都会改变
+#: 它——先改本记录并登记原因（REQUIREMENTS／DECISIONS），再动表。
+FROZEN_CONTRACT_IDENTITY = 'a14a9ef09fe79d30c6ab2e7c979e562bd10f4db00e928bfc04224928fe984d89'
 
 #: 冻结时的节点集合（14 个：stage0/1 两座＋Stage2 五节点＋Stage4 五＋Stage5 两
 #: ＋Stage7 两）。
@@ -111,8 +118,8 @@ def test_frozen_runtime_config_matches():
 
 
 def test_frozen_artifact_table_shape():
-    """24 份书产物；每条的 writer 是表内节点、schema_version 非空。"""
-    assert len(STR06_ARTIFACT_RC_VERSIONS) == 24
+    """25 份书产物；每条的 writer 是表内节点、schema_version 非空。"""
+    assert len(STR06_ARTIFACT_RC_VERSIONS) == 25
     for rel, version in STR06_ARTIFACT_RC_VERSIONS.items():
         assert rel in ARTIFACT_PATHS, f'{rel}: 未激活进 ARTIFACT_PATHS'
         writer = next((n for n, spec in _candidate_nodes().items()

@@ -240,7 +240,7 @@ def test_pending_reader_confirmations_are_projected_by_address():
 
 
 def test_pending_confirmations_render_into_the_writer_packet():
-    """清单进正文请求（renderer v3）：条目带确认的事实地址（D4）。"""
+    """清单进正文请求（renderer v5：禁区分区，自然时点表述，无地址机械位）。"""
     from novel.stages.common import render_chapter_packet
     cp = _cp(_ob('ob1'))
     graph = _reader_delta_graph()
@@ -251,11 +251,12 @@ def test_pending_confirmations_render_into_the_writer_packet():
         length_band=(0.6, 1.3), book_title='t',
         projection=_projection(), structure=None)
     packet = render_chapter_packet(project_chapter_packet(book_ir, 1))
-    assert '【尚未向读者确认的事实】' in packet
-    assert '床底有人（world:hiding）——本场第 bt1 拍起可确认' in packet
-    assert '衣柜藏身（world:wardrobe）——s03#bt1 才可确认' in packet
-    assert '第 5 条' not in packet  # 协议编号不出现；条目文本以清单为准
-    assert '本场实际涉及、且读者尚未确认的事实' in packet
+    assert '【禁区】' in packet
+    # 确认拍在本场内：自然拍序表述；不再带 world:key／拍 id 机械位
+    assert '「床底有人」须到本场第1拍起才可向读者确认' in packet
+    assert 'world:hiding' not in packet and 'bt1' not in packet
+    # 后场确认：本章禁区表述
+    assert '「衣柜藏身」本章之内不得让读者确认' in packet
 
 
 def test_believes_knowledge_enters_writer_view_without_becoming_world_fact():

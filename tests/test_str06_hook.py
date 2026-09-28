@@ -92,7 +92,9 @@ def _body_wire() -> dict:
             {'char_id': 'yun_niang', 'surfaces': ['苏芸娘']},
             {'char_id': 'fu_jun', 'surfaces': ['夫君']}],
         'scenes': [
-            {'state_reads': [],
+            {'state_reads': [
+                 {'domain': 'character', 'subjects': ['yun_niang'],
+                  'holder': None, 'key': 'marital_status'}],
              'driver': {'focal_actor': 'yun_niang', 'immediate_want': '安度新婚',
                         'opposition': '夫君的怪异', 'turn': '立约'},
              'realization_brief': '重心在拜堂到立约的落差；从婚礼喧闹写起，展开洞房对坐，'
@@ -299,17 +301,20 @@ def _rendered_deltas(*, knowledge_mode: str, holder: str):
 
 
 def test_fact_rendering_keeps_holder_and_knowledge_mode():
-    """知道／怀疑／听说与持有人不同必须渲染后可区分：不得压成同一个事实句。"""
+    """知道／怀疑／听说与持有人不同必须渲染后可区分：不得压成同一个事实句。
+
+    R2 起 key slug（debt_agreement）不进阅读面——认知维度由「持有者＋模式措辞」
+    承载，值文本原样来自 delta。"""
     known = _rendered_deltas(knowledge_mode='known', holder='yun_niang')
     suspected = _rendered_deltas(knowledge_mode='suspected', holder='fu_jun')
     heard = _rendered_deltas(knowledge_mode='heard', holder='yun_niang')
     assert len(known) == len(suspected) == len(heard) == 1
-    assert '芸娘知道' in known[0] and 'debt_agreement' in known[0]
-    assert '怀疑' in suspected[0] and '知道' not in suspected[0]
+    assert '芸娘确知' in known[0] and 'debt_agreement' not in known[0]
+    assert '怀疑' in suspected[0] and '确知' not in suspected[0]
     assert '听说' in heard[0]
     assert len({known[0], suspected[0], heard[0]}) == 3, '认知维度丢失：三种模式渲染相同'
-    # domain 也进阅读面：knowledge 域与人物域可区分
-    assert '[知情]' in known[0]
+    # 认知归属（持有者）进阅读面且可区分
+    assert '芸娘' in known[0] and '夫君' in suspected[0]
 
 
 # ───────────────────────── 反例：引用／混入／时序 ─────────────────────────

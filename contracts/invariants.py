@@ -1934,6 +1934,7 @@ NODES: Final[dict[str, NodeSpec]] = {
         produces=('stage4/compiled/execution_plan.json',
                   'stage4/acceptance/guard/compile.json',
                   'stage4/acceptance/guard/report.json',
+                  'stage4/acceptance/packet_metrics.json',
                   'stage4/context/hook/hook.json',
                   'stage4/ir/writer_book_ir.json'),
         lifecycle=NodeLifecycleSpec(

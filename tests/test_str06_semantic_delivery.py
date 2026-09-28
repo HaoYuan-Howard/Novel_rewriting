@@ -105,6 +105,9 @@ def _delivery_face() -> set[str]:
     _face_paths('chapter_packet.realization_contract', RealizationContract, face)
     _face_paths('hook_context', HookContext, face)
     _face_paths('name_map', NameMapV5, face)
+    # packet_metrics.json 是 dict 落盘的观测面（I-38：不进领域 schema，无模型可
+    # 走）；以文件级路径进面——登记为 audit_only／not_delivered。
+    face.add('stage4/acceptance/packet_metrics.json')
     return face
 
 
@@ -129,92 +132,25 @@ def test_registry_entries_are_well_formed():
 
 
 def test_r2_pending_face_gaps_form_a_closed_documented_set():
-    """R2 收口清单是闭集：变更（尤其清零）必须显式改这里，不许静默漂移。"""
+    """R2 收口清单是闭集：WriterPacket 分区渲染落地后必须**清零**（R2 完成项
+    「R0 守卫全绿」）；后续任何新 pending 都必须显式登记待收口原因。"""
     pending = {path for path, spec in STR06_FIELD_DELIVERY.items()
                if spec.r2_face_pending}
-    assert pending == {
-        # ── 正文阅读面（v4 renderer 把 VerificationIR JSON 倾倒进 prompt）──
-        'writer_book_ir.book_brief.character_voices[].char_id',
-        'writer_book_ir.book_brief.world_rules',
-        'writer_book_ir.chapters[].continuity.entry.transition',
-        'writer_book_ir.chapters[].continuity.entry.carryover',
-        'writer_book_ir.chapters[].continuity.entry.recap',
-        'writer_book_ir.chapters[].continuity.previous_ending.driver_turn',
-        'writer_book_ir.chapters[].continuity.previous_ending.final_beat_event',
-        'writer_book_ir.chapters[].continuity.previous_ending.present_chars',
-        'writer_book_ir.chapters[].scenes[].scene_id',
-        'writer_book_ir.chapters[].scenes[].writer_brief.scene_id',
-        'writer_book_ir.chapters[].scenes[].writer_brief.usable_surfaces[].surfaces',
-        'writer_book_ir.chapters[].scenes[].verification_ir.beats[].beat_ref',
-        'writer_book_ir.chapters[].scenes[].verification_ir.beats[].deltas[].key',
-        'writer_book_ir.chapters[].scenes[].verification_ir.beats[].deltas[].op',
-        'writer_book_ir.chapters[].scenes[].verification_ir.beats[].deltas[].scope',
-        'writer_book_ir.chapters[].scenes[].verification_ir.beats[].deltas[]'
-        '.confirms.domain',
-        'writer_book_ir.chapters[].scenes[].verification_ir.beats[].deltas[]'
-        '.confirms.key',
-        'writer_book_ir.chapters[].scenes[].verification_ir.beats[].deltas[]'
-        '.confirms.subjects',
-        'writer_book_ir.chapters[].scenes[].verification_ir.beats[].deltas[]'
-        '.confirms.holder',
-        'writer_book_ir.chapters[].scenes[].verification_ir.beats[]'
-        '.surface_introductions',
-        'writer_book_ir.chapters[].scenes[].verification_ir.beats[].reads',
-        'writer_book_ir.chapters[].scenes[].verification_ir.entry_state[].key',
-        'writer_book_ir.chapters[].scenes[].verification_ir.entry_state[].status',
-        'writer_book_ir.chapters[].scenes[].verification_ir.entry_state[].established_by',
-        'writer_book_ir.chapters[].scenes[].verification_ir.entry_knowledge[].key',
-        'writer_book_ir.chapters[].scenes[].verification_ir.entry_knowledge[].status',
-        'writer_book_ir.chapters[].scenes[].verification_ir.entry_knowledge[].established_by',
-        'writer_book_ir.chapters[].scenes[].verification_ir.obligations[].obligation_id',
-        'writer_book_ir.chapters[].scenes[].verification_ir.obligations[].kind',
-        'writer_book_ir.chapters[].scenes[].verification_ir.obligations[].must_preserve',
-        'writer_book_ir.chapters[].scenes[].verification_ir.obligations[].requires',
-        'writer_book_ir.chapters[].scenes[].verification_ir.planned_delta[].key',
-        'writer_book_ir.chapters[].scenes[].verification_ir.planned_delta[].op',
-        'writer_book_ir.chapters[].scenes[].verification_ir.planned_delta[].scope',
-        'writer_book_ir.chapters[].scenes[].verification_ir.planned_delta[]'
-        '.confirms.domain',
-        'writer_book_ir.chapters[].scenes[].verification_ir.planned_delta[]'
-        '.confirms.key',
-        'writer_book_ir.chapters[].scenes[].verification_ir.planned_delta[]'
-        '.confirms.subjects',
-        'writer_book_ir.chapters[].scenes[].verification_ir.planned_delta[]'
-        '.confirms.holder',
-        'writer_book_ir.chapters[].scenes[].verification_ir.released_surfaces[].char_id',
-        'writer_book_ir.chapters[].scenes[].verification_ir.thread_ops[].subject',
-        'writer_book_ir.chapters[].scenes[].verification_ir.thread_ops[].text',
-        'writer_book_ir.chapters[].scenes[].verification_ir.thread_ops[].progress',
-        'writer_book_ir.chapters[].scenes[].verification_ir.thread_ops[].resolution',
-        'writer_book_ir.chapters[].scenes[].verification_ir.open_threads[].subject',
-        'writer_book_ir.chapters[].scenes[].verification_ir.open_threads[].text',
-        'writer_book_ir.chapters[].scenes[].verification_ir.pending_reader_confirmations[]'
-        '.key',
-        'writer_book_ir.chapters[].scenes[].verification_ir.pending_reader_confirmations[]'
-        '.address.domain',
-        'writer_book_ir.chapters[].scenes[].verification_ir.pending_reader_confirmations[]'
-        '.address.holder',
-        'writer_book_ir.chapters[].scenes[].verification_ir.pending_reader_confirmations[]'
-        '.address.key',
-        # ── Hook 阅读面（当前整份 HookContext JSON 倾倒进 prompt）──
-        'hook_context.contract_version',
-        'hook_context.opening_facts[].audience',
-        'hook_context.opening_facts[].established_by',
-        'hook_context.materials[].beat_ref',
-        'hook_context.usable_surfaces[].char_id',
-        'hook_context.withheld_literals',
-    }, 'R2 待收口集合变化：请核对 PLAN.md R2 完成项「R0 守卫全绿」后同批更新'
+    assert pending == set(), (
+        f'R2 引擎批后不得残留待收口条目（每条须写明原因并登记收口批次）：'
+        f'{sorted(pending)}')
 
 
 def test_all_seven_delivery_modes_are_declared():
     declared = {spec.delivery_mode for spec in STR06_FIELD_DELIVERY.values()}
-    # background 当前无独立 canonical 字段：R2 的编译器补齐投影落地后产生，
-    # 现以投影规则注记在 entry_state[].value（同一字段按投影规则逐场决定）。
-    assert declared == {mode for mode in DeliveryMode} - {DeliveryMode.BACKGROUND}
-    via_note = [path for path, spec in STR06_FIELD_DELIVERY.items()
-                if 'background' in spec.mode_note]
-    assert via_note == [
-        'writer_book_ir.chapters[].scenes[].verification_ir.entry_state[].value']
+    # R2 引擎批起七档齐全：background 落在 background_state／background_knowledge
+    # （编译器按参与者补齐的入场基线，R2.3）。
+    assert declared == set(DeliveryMode)
+    background_fields = [path for path, spec in STR06_FIELD_DELIVERY.items()
+                         if spec.delivery_mode is DeliveryMode.BACKGROUND]
+    assert background_fields and all(
+        '.background_state[' in p or '.background_knowledge[' in p
+        for p in background_fields), background_fields
 
 
 # ═══════════════ 二、检查 2＋3：变异只动登记章；变异值只进对应送达面 ═══════════════
@@ -381,8 +317,12 @@ def _body_mutations() -> list[_BodyMutation]:
         return _patch_scene_ir(ir, 1, 'sc01', entry_state=(_INJECTED_ENTRY,))
 
     def entry_established(ir):
-        mutated = _INJECTED_ENTRY.model_copy(update={'established_by': 'sc01#b01'})
-        return _patch_scene_ir(ir, 1, 'sc01', entry_state=(mutated,))
+        # 只改既有条目的来源锚（audit 位）：交付值保持不变，阅读面必须不动
+        scene = _scene(ir, 1, 'sc01')
+        entries = list(scene.verification_ir.entry_state)
+        assert entries, '绿基座的入场视图不应为空'
+        entries[0] = entries[0].model_copy(update={'established_by': 'sc01#b01'})
+        return _patch_scene_ir(ir, 1, 'sc01', entry_state=tuple(entries))
 
     def entry_knowledge(ir):
         return _patch_scene_ir(ir, 2, 'sc02', entry_knowledge=(_INJECTED_KNOWLEDGE,))
@@ -696,15 +636,17 @@ def test_hook_mutations_reach_only_hook_face(green_hook, green_ir, path, update,
 
 
 def test_hook_audit_only_material_stays_out_of_body_face(green_hook, green_ir):
-    """Hook 的 audit_only 面：provenance 不进 Hook 阅读面；withheld_literals 的
-    阅读面清零归 R2（当前整份 JSON 倾倒使其可见，登记为 r2_face_pending）。"""
+    """Hook 的 audit_only 面：provenance 与禁用字面都不进 Hook 阅读面。
+
+    R2 分层渲染落地：withheld_literals 是 validator 检查材料，整列清零后
+    Hook prompt 逐字节不变（此前随 JSON 倾倒可见，已收口）。"""
     prompt = _hook_prompt(green_hook)
     assert '_provenance' not in prompt
     spec = STR06_FIELD_DELIVERY['hook_context.withheld_literals']
-    assert spec.delivery_mode is DeliveryMode.AUDIT_ONLY and spec.r2_face_pending
-    # 现状钉板：禁用字面今天随 JSON 倾倒可见——R2 Hook 分层渲染后本断言翻向
+    assert spec.delivery_mode is DeliveryMode.AUDIT_ONLY
     assert _hook_prompt(green_hook.model_copy(
-        update={'withheld_literals': ('钩禁字面九九',)})) != prompt
+        update={'withheld_literals': ('钩禁字面九九',)})) == prompt, (
+        '禁用字面是 validator 材料，不得进入 Hook 阅读面')
 
 
 # ═══════════════ 六、故障注入 fake 底座（R3 复用；本批只验证注入有效） ═══════════════

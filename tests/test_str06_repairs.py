@@ -172,7 +172,7 @@ def test_named_absent_character_and_introduction_beat_reach_writer():
     context = contexts(graph, binding)['s02'][0]
     assert 'ch2' not in graph.scenes[1].beats[0].participants
     assert context.writer_brief.usable_surfaces[0].char_id == 'ch2'
-    assert '第 bt1 拍起才可使用：裴公子' in context.writer_brief.delivery_hints
+    assert '第 1 拍起才可使用：裴公子' in context.writer_brief.delivery_hints
     assert run_mechanical_guard(binding=binding, context=context, graph=graph) == []
 
 

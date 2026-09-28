@@ -44,6 +44,8 @@ ARTIFACT_PATHS: Final[dict[str, str]] = {
     'stage4/compiled/execution_plan.json': 'stage4/compiled/execution_plan.json',
     'stage4/acceptance/guard/compile.json': 'stage4/acceptance/guard/compile.json',
     'stage4/acceptance/guard/report.json': 'stage4/acceptance/guard/report.json',
+    # R2.8：WriterPacket 逐章指标（派生读数；I-38 不进领域 schema，dict 落盘）
+    'stage4/acceptance/packet_metrics.json': 'stage4/acceptance/packet_metrics.json',
     'stage4/design/body_design.json': 'stage4/design/body_design.json',
     'stage4/design/presentation_graph.json': 'stage4/design/presentation_graph.json',
     'stage4/context/hook/hook.json': 'stage4/context/hook/hook.json',
@@ -184,6 +186,7 @@ STR06_SEMANTIC_BINDING = artifact_rel('stage4/grounding/semantic_binding.json')
 STR06_EXECUTION_PLAN = artifact_rel('stage4/compiled/execution_plan.json')
 STR06_GUARD_COMPILE = artifact_rel('stage4/acceptance/guard/compile.json')
 STR06_GUARD_REPORT = artifact_rel('stage4/acceptance/guard/report.json')
+STR06_PACKET_METRICS = artifact_rel('stage4/acceptance/packet_metrics.json')
 STR06_BODY_DESIGN = artifact_rel('stage4/design/body_design.json')
 STR06_PRESENTATION_GRAPH = artifact_rel('stage4/design/presentation_graph.json')
 STR06_HOOK_CONTEXT = artifact_rel('stage4/context/hook/hook.json')
@@ -250,6 +253,8 @@ STR06_ARTIFACT_RC_VERSIONS: Final[dict[str, str]] = {
     'stage4/compiled/execution_plan.json': 'str06-rc3',
     'stage4/acceptance/guard/compile.json': 'str06-rc3',
     'stage4/acceptance/guard/report.json': 'str06-rc4',
+    # rc10 同批新增（R2.8 引擎批）：compile 落盘的 WriterPacket 指标（audit_only）。
+    'stage4/acceptance/packet_metrics.json': 'str06-rc10',
     # rc7（2026-09-27 B3 前半）：Stage4 四协议独立版化（stage4-{preserve,design,
     # bind,hook-design}-v1），Design wire 瘦身——场景/拍 ID、复合引用、权重归一
     # 与整数预算由 compiler 生成（I-21）；TargetDesign 增结构化跨章字段；读者

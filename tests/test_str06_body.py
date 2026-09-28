@@ -157,9 +157,10 @@ def test_renderer_only_contains_the_current_packet():
     prior_ch1 = '第一章的正文。'
     packet2 = project_chapter_packet(writer_ir, 2)
     body2 = render_chapter_packet(packet2)
-    # 章包层结构：协议→书级→章目的→本章场景→交付要求
-    for section in ('【整书写作约定与自由度】', '【整书风格与人物声线】',
-                    '【本章目的】', '【本章各场景：导演说明＋事实约束】', '【本章交付要求】'):
+    # 章包层结构（v5 分区渲染）：协议→六分区→交付要求
+    for section in ('【整书写作约定与自由度】', '【必须写出】', '【不可违背】',
+                    '【承接】', '【导演说明】', '【背景】', '【禁区】',
+                    '【本章交付要求】'):
         assert section in body2
     # 前文正文与其他章 IR 不进请求
     assert prior_ch1 not in body2
@@ -168,17 +169,19 @@ def test_renderer_only_contains_the_current_packet():
     assert '洞房夜夫君立约' not in body2, '第 1 章的场景 IR 不得进第 2 章请求'
     # 称谓总表（释放位置导航）不进请求
     assert '称谓释放位置' not in body2 and '释放位置（未到位置不得使用对应字面）' not in body2
-    # 本章材料可追溯：本章目的、本章场景、知情模式与逐拍结果都在
+    # 本章材料可追溯：本章场景事件、知情措辞与逐拍结果都在（自然语言条目）
     assert '玉佩之谜浮出水面' in body2 and '夫君夜半离家' in body2
-    assert 'known' in body2 and '玉佩刻着沈字' in body2
-    # source lineage（b01_01）不进 Writer 阅读面
+    assert '确知' in body2 and '玉佩刻着沈字' in body2
+    # source lineage（b01_01）与内部 ID 不进 Writer 阅读面
     assert 'b01_01' not in body2 and 'blueprint_refs' not in body2
+    assert 'sc01' not in body2 and 'sc02' not in body2
+    assert 'yun_niang' not in body2 and 'fu_jun' not in body2
     # 同章包 ⇒ 同字节
     assert body2 == render_chapter_packet(project_chapter_packet(writer_ir, 2))
-    # 第 1 章的章包不含第 2 章材料；场内称谓释放位置仍可见
+    # 第 1 章的章包不含第 2 章材料；场内称谓释放位置以自然拍序表述
     body1 = render_chapter_packet(project_chapter_packet(writer_ir, 1))
     assert '夫君夜半离家' not in body1 and prior_ch1 not in body1
-    assert '第 b02 拍起才可使用' in body1
+    assert '第 2 拍起才可使用：芸娘' in body1
 
 
 def test_packet_changes_only_when_its_own_inputs_change():
@@ -436,7 +439,8 @@ class _RoutingTransport:
         if '楔子' in request.system:
             return 'hook_writer'
         if '【本章交付要求】' in user:
-            return 'body_ch01' if '【本章目的】\n\n第1章' in user else 'body_ch02'
+            # v5 分区渲染：章目的在「导演说明」分区（「本章目的（第N章）：…」）
+            return 'body_ch01' if '本章目的（第1章）' in user else 'body_ch02'
         if '人物账、初始状态与世界约束' in user:
             return 'book'
         if '跨章关联' in user:

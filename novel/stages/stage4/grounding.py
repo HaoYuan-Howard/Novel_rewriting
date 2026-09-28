@@ -12,6 +12,8 @@
     规范化字节计算。
   • `project_brief`：checkpoint →（ReconstructionBrief, IdentityProjection）。
     Brief 投影全部类别及满足条件（去源坐标，引用改为不带源顺序的需求 ID）；
+    Blueprint 的 world_constraints 机械填入 `book_constraints`（R2.5 世界
+    约束通道——Design 侧决定沿用或改写成目标 world_rules）。
     IdentityProjection 从 Characters v4 公共投影。
     Design 拿到的是这两份 + OutputConstraints，**读不到 checkpoint 内部**。
   • `project_binding_space`：Bind 的输入投影（B3 前半）——义务清单（正式
@@ -171,10 +173,16 @@ def assemble_preserve(
 
 def project_brief(
     checkpoint: PreserveCheckpoint, characters: CharactersCore,
+    blueprint: BlueprintsArtifactV13 | None = None,
 ) -> tuple[ReconstructionBrief, tuple[IdentityProjection, ...]]:
     """checkpoint → (Brief, IdentityProjection)。Design 的全部语义输入。
 
     所有义务类型、must 与 satisfaction 无损进入 source-blind Brief；因果闭合。
+    `book_constraints`（R2.5 世界约束通道）：Blueprint 的 world_constraints
+    的 statement 原样机械填入（AUD 反例「世界约束没有通道」——恒空即红）；
+    目标侧是否沿用或改写由 Design 决定（wire v2 的 world_rules），compiler
+    不做语义推断。`blueprint` 缺省 None 仅供不触世界约束的存量调用，正式
+    链路（run_preserve／run_body_design）必须传入。
     """
     # 不以源义务序号暴露叙述顺序；所有类型与满足条件等量投影，依赖闭合。
     core_ids = {o.obligation_id: 'req_' + hashlib.sha256(
@@ -189,7 +197,9 @@ def project_brief(
     brief = ReconstructionBrief(
         brief_id=f'brief_{checkpoint.checkpoint_id}',
         preserve_checkpoint_sha256=checkpoint.checkpoint_sha256,
-        requirements=cores)
+        requirements=cores,
+        book_constraints=tuple(wc.statement for wc in blueprint.world_constraints)
+        if blueprint is not None else ())
     identity = tuple(
         IdentityProjection(
             char_id=slug,

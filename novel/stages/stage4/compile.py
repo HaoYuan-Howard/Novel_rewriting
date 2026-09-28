@@ -4,6 +4,13 @@ B3 后半：本模块同时承载**章闭包证明**——每个已声明状态�
 或具体拍）解析到已建立事实（先读旧值、后写新值，与写手投影共用
 `novel/stages/common.py::scene_read_views` 同一实现）；已声明依赖的引用闭合由
 compile 机械证明，语义依赖是否遗漏归质量验收，机械检查不冒充证明。
+
+R2（引擎批）：依赖边改由**实际解析来源**生成——声明读取解析到的建立场
+（`SceneReadViews.read_anchors`）与参与者背景补齐的事实来源场
+（`participant_background`，同一折叠前缀、同一实现）。`last_writer` 位置扫描
+删除：它按「最近一次 book 写入」猜来源，拍级读取解析到本场自写值时会产出
+跨场假边，参与者背景的事实来源又完全不在其视野内（依赖算完整，Machine IR
+以完整为先）。
 """
 from __future__ import annotations
 
@@ -12,7 +19,7 @@ from contracts.schema.execution import (
     ConstraintSpec, DependencyEdge, Establishment, ExecutionPlan, SceneExecutionPlan,
 )
 from contracts.schema.grounding import SemanticBinding
-from novel.stages.common import scene_read_views
+from novel.stages.common import participant_background, scene_read_views
 from novel.stages.stage4.fold import FoldedState
 from novel.stages.stage4.guard import check_binding_beat_refs
 
@@ -85,33 +92,40 @@ def compile_execution_plan(
                 errors.append(f'义务依赖逆序/成环：{req} 必须不晚于 {oid}')
             if predecessor.scene_id != entry.scene_id:
                 edges.add((predecessor.scene_id, entry.scene_id))
-    # 实际状态读取也产生前置边，否则变更后的重投影闭包会漏掉状态消费者。
-    last_writer: dict[tuple, str] = {}
-    for scene in graph.scenes:
-        for read in scene.state_reads:
-            before = last_writer.get(read.address())
-            if before and before != scene.scene_id:
-                edges.add((before, scene.scene_id))
-        for beat in scene.beats:
-            for delta in beat.target_delta:
-                if delta.scope == 'book':
-                    last_writer[delta.address()] = scene.scene_id
-    # 章闭包证明（B3 后半）：按阅读序折叠，逐场解析已声明读取——任何读取在其
-    # 定位点（入场或具体拍）没有已建立事实（未建立／scene 作用域已失效）或解析到
-    # unknown 都在这里 fail fast（str06.stage4.compile 免费重验），不留给写手投影。
+    # 依赖边＝义务/支撑拍边＋**实际解析来源**边（R2）：
+    # · 每条声明读取在其定位点解析到的建立场（read_anchors；'init' 无边）；
+    # · 参与者背景补齐的事实来源场（packet 的 background 分区消费这些值，
+    #   来源变化即章包变化——依赖算完整）。解析到本场自写的值不产跨场边。
+    scene_ids = {scene.scene_id for scene in graph.scenes}
     scene_establishments = {
         scene.scene_id: tuple(
             _establishment(d, f'{scene.scene_id}#{b.beat_id}')
             for b in scene.beats for d in b.target_delta)
         for scene in graph.scenes}
     folded = FoldedState().apply('__init__', init_establishments(graph))
+    resolved_edges: dict[tuple[str, str], str] = {}
     for scene in graph.scenes:
         views = scene_read_views(
             scene=scene, establishments=scene_establishments[scene.scene_id],
             folded_prefix=folded)
         errors.extend(views.errors)
+        background_state, background_knowledge = participant_background(
+            scene=scene, folded_prefix=folded)
+        read_anchors = set(views.read_anchors)
+        baseline_anchors = {e.established_by for e in background_state}
+        baseline_anchors |= {e.established_by for e in background_knowledge}
+        for anchor in read_anchors:
+            source = anchor.split('#', 1)[0]
+            if source not in ('init', scene.scene_id) and source in scene_ids:
+                resolved_edges.setdefault((source, scene.scene_id), 'resolved_read')
+        for anchor in baseline_anchors:
+            source = anchor.split('#', 1)[0]
+            if source not in ('init', scene.scene_id) and source in scene_ids:
+                resolved_edges.setdefault((source, scene.scene_id),
+                                          'supplemented_baseline')
         folded.apply(scene.scene_id, scene_establishments[scene.scene_id])
         folded.expire_scene_scope(scene.scene_id)
+    edges |= set(resolved_edges)
     if errors:
         return None, errors
     scenes = []
@@ -129,7 +143,9 @@ def compile_execution_plan(
         scenes.append(SceneExecutionPlan(
             scene_id=scene.scene_id, establishments=establishments,
             constraints=constraints,
-            dependencies=tuple(DependencyEdge(before=a, after=b, kind='obligation_or_support')
-                               for a, b in sorted(edges) if b == scene.scene_id),
+            dependencies=tuple(DependencyEdge(
+                before=a, after=b,
+                kind=resolved_edges.get((a, b), 'obligation_or_support'))
+                for a, b in sorted(edges) if b == scene.scene_id),
             planned_delta=tuple(net[k] for k in sorted(net))))
     return ExecutionPlan(initial_establishments=init_establishments(graph), scenes=tuple(scenes)), []

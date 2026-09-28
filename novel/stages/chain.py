@@ -71,7 +71,7 @@ from novel.stages.common import (
     NAMES_RULES, PRESERVE_RULES, DESIGN_RULES, BIND_RULES,
     HOOK_DESIGN_RULES, HOOK_WRITER_SYSTEM, NAMING_RULES, SYS,
     BODY_WRITER_SYSTEM, ChapterIdentities, chapter_identities, pack_prompt,
-    project_chapter_packet,
+    packet_metrics, project_chapter_packet,
 )
 from novel.stages.stage2 import (
     NamesObservation, STAGE2_OBSERVATION_PROTOCOL, book_observation_prompt,
@@ -411,7 +411,7 @@ def run_preserve(ctx: ChainContext) -> dict:
         raise ValueError(errors)
     repository.write('runtime/preserve_checkpoint.json', checkpoint,
                      owners=('preserve',), refs=(preserve_ref,))
-    brief, identities = project_brief(checkpoint, core)
+    brief, identities = project_brief(checkpoint, core, blueprint)
     # reconstruction_brief 是同一份付费产出（Preserve checkpoint）投影出的
     # 第二个 key：生成事实继承，用量不再认领同一批 attempt 行。
     repository.write('stage4/grounding/reconstruction_brief.json', brief,
@@ -426,7 +426,8 @@ def run_body_design(ctx: ChainContext) -> dict:
     chars = repository.read_model('stage2/characters/characters.json')
     core = chars.core_view()
     checkpoint = repository.read_model('runtime/preserve_checkpoint.json')
-    brief, identities = project_brief(checkpoint, core)
+    blueprint = repository.read_model('stage2/blueprints/chapter_blueprints.json')
+    brief, identities = project_brief(checkpoint, core, blueprint)
     constraints = OutputConstraints(target_chapter_count=len(ctx.chapters),
                                     total_length_budget=ctx.budget)
     design_prompt = pack_prompt(DESIGN_RULES, brief=brief.model_dump(mode='json'),
@@ -486,7 +487,8 @@ def run_hook_design(ctx: ChainContext) -> dict:
     body = repository.read_model('stage4/design/body_design.json')
     chars = repository.read_model('stage2/characters/characters.json')
     checkpoint = repository.read_model('runtime/preserve_checkpoint.json')
-    _, identities = project_brief(checkpoint, chars.core_view())
+    blueprint = repository.read_model('stage2/blueprints/chapter_blueprints.json')
+    _, identities = project_brief(checkpoint, chars.core_view(), blueprint)
     projection = chars.name_projection()
     hook_design_prompt = pack_prompt(
         HOOK_DESIGN_RULES, book_title=ctx.book_title, design=body.model_dump(mode='json'),
@@ -537,6 +539,10 @@ def run_compile_stage4(ctx: ChainContext) -> dict:
             problems.extend(run_mechanical_guard(binding=binding, context=context,
                                                  graph=graph))
     repository.write('stage4/ir/writer_book_ir.json', writer_ir)
+    # WriterPacket 指标（R2.8）：派生读数、audit_only、重算免费；逐章记录
+    # 分区条目数、基线事实数、活跃/受保护线程数、重复比例与必须写出密度。
+    repository.write('stage4/acceptance/packet_metrics.json',
+                     packet_metrics(writer_ir))
     guard_report = {'mode': 'planned-only', 'accepted_body': False,
                     'chapters': len(writer_ir.chapters), 'scenes': len(graph.scenes),
                     'obligations': len(binding.obligations), 'guard_errors': problems,

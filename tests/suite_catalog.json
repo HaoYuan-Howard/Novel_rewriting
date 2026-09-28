@@ -820,6 +820,16 @@
         "stage5"
       ]
     },
+    "tests/test_str06_r2_engine.py": {
+      "layer": "unit_contract",
+      "stages": [
+        "stage4",
+        "stage5"
+      ],
+      "cases": {
+        "test_packet_metrics_file_is_registered_and_written": "stage"
+      }
+    },
     "tests/test_str06_repairs.py": {
       "layer": "unit_contract",
       "stages": [

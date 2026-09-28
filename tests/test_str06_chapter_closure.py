@@ -414,8 +414,8 @@ def test_reader_confirmation_projects_only_into_consuming_scenes():
     assert pending['s03'] == (), '不消费该地址的场景不投影'
     packets = {c.chapter_ordinal: render_chapter_packet(project_chapter_packet(ir, c.chapter_ordinal))
                for c in ir.chapters}
-    assert '本场第 b02 拍起可确认' in packets[2], '确认拍在本场内的标注'
-    assert 's02#b02 才可确认' in packets[1], '后场确认对前章标注位置'
+    assert '须到本场第2拍起才可向读者确认' in packets[2], '确认拍在本场内的标注'
+    assert '本章之内不得让读者确认' in packets[1], '后场确认对前章的禁区标注'
 
 
 def test_reader_confirmation_without_address_is_refused_at_schema():

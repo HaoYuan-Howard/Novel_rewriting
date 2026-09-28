@@ -1309,6 +1309,35 @@ B6-A／B6-B 分别授权；R 批全部 fake transport、零模型调用。
     （52 项）、layering／invariants／chapter_closure／execution_ir／fold_guard
     （72 项）全绿。文档：stage2.md／str06.md／BACKEND_CONTRACT R-2 行／
     stage2 AGENTS 同步。
+- [x] **R2 · Stage4 语义送达＋两层 IR（免费；契约批 3bfb7e17＋引擎批同日完成）**
+  （AUD-03/04、世界约束通道、承接转绿；fake 全链绿）：
+  - 契约批（3bfb7e17）：Design v2（拍上线程 threads／书级 world_rules／章级
+    entry；四个静态跨章列表删除）；拍级读取值挂拍；WriterPacket 分区模型；
+    ChapterIR.continuity 数据面；回执身份拆分（rc6）；M7/M8 判据；升版
+    rc10／renderer v5／写手协议 v5。
+  - 引擎批：`compile.py` 依赖边改由**实际解析来源**生成（`SceneReadViews.
+    read_anchors`＋参与者背景来源场；`last_writer` 扫描删除——假边红例与漏边
+    红例见 test_str06_r2_engine）；`fold.py` 新增**独立 ThreadFold**（共用
+    guard.scene_order，与 M8 基准逐场一致）；`project_context` 按参与者机械
+    补齐入场基线进 `background_state`／`background_knowledge`（background 档
+    有了 canonical 实例）；`grounding.project_brief` 把 Blueprint 的
+    world_constraints 机械填入 `book_constraints`（恒空通道打通）；renderer
+    v5＝WriterPacket 六分区渲染（写手视图清零内部 ID／字段名／char slug／
+    禁用字面；R0 守卫全绿——`r2_face_pending` 清零）；Hook 分层渲染＋线程
+    收束机械并入禁区（E-3 读法 b：不动 wire，见 PLAN.md 执行提示回写）；
+    compile 写 `stage4/acceptance/packet_metrics.json`（E-6：produces／产物表
+    ／路径家族／送达登记 audit_only 同批闭合；冻结重钉 `a14a9ef0…`，25 份产物）。
+  - `planned_delta`（扁平效应副本）与 `writer_brief.usable_surfaces`（冗余称谓
+    面）改登记 audit_only——同一语义分别经 beats[].deltas 与 released_surfaces
+    逐拍/按场送达（避免同值双区）；`_render_fact`／知识条目去 key= 机器位。
+  - 新反例（先红后绿，tests/test_str06_r2_engine 21 项）：ThreadFold 与 M8
+    基准逐场一致；假边/漏边/绿对照三例；背景补齐三域与声明读取排重；
+    book_constraints；六分区渲染与分区归属；内部 ID 清零；承接自然措辞；
+    禁区自然时点；Hook 禁区并入（视界外收束/未收问题/视界后才开不进）；
+    指标逐章读数与真实链落盘。
+  - 验证（fake transport、零付费、`-n 0`）：str06 全集 631 项全绿；契约
+    §9.5 五文件＋layering＋api_discipline＋test_selection＋非 str06 消费面
+    （api_errors／cli／llm／orchestrator×2／report／workflow_transition）全绿。
 
 ## 职责解耦批次（2026-09-27 起；B0–B6）
 

@@ -247,6 +247,12 @@
 「保留不动：四类语义真源」与「四类跨章字段」（R2.4 要删除的 `BodyDesign.standing_goals`／`ongoing_actions`／`open_questions`／`promises`，`contracts/schema/design.py:245-248`）字面易混。仓内术语锚点：`docs/REQUIREMENTS.md:20` 定义四类故事语义真源＝Characters／Blueprint／TargetDesign／SemanticBinding（复核时另有人读成「Stage2 四份语义观察」，也与跨章字段不同）。执行者若把「四类语义真源」读成跨章字段清单，则与裁决 3／R2.4「删除四个静态列表」直接矛盾——删字段与保字段两种做法产物相反。R2 开工先按锚点消歧，并把「保留不动」句改写成点名定义。
 
 **E-3（medium）· R2.7：`forbidden_reveals` 引用线程 close 缺 wire 落点。**
+  **R2 引擎批已消歧（2026-09-28，读法 b）**：compiler 把未到时点的线程 close 机械
+  并入禁区（`novel/stages/stage4/hook_context.py` 的 `_protected_thread_entries`：材料视界内开启且主体
+  与楔子人物相关——视界外收束进 resolution 禁区、全书未收的 question 进「不得
+  给出答案」禁区；视界后才开启的线不进）。不动 `ForbiddenReveal` wire、不升
+  `STAGE4_HOOK_DESIGN_PROTOCOL`（R2.9 升版清单本就不含它）；并入项直接追加进
+  `HookContext.forbidden_reveals`（已是渲染字符串面，无形状变化）。
 `ForbiddenReveal.ref` 是 `OpeningRef`（'init' 或 场景#拍，`contracts/schema/hook.py:75-79`）；`PresentationGraph` 对 forbidden_reveals 也只校验拍引用（`contracts/schema/design.py:370-372`）。要「引用线程的 close」须扩 wire，同步升 `STAGE4_HOOK_DESIGN_PROTOCOL` 并改 `contracts/schema/hook.py`——但 R2.9 升版清单不含该协议、「关键文件」契约清单不含 hook.py。另一读法是 compiler 把未到时点的线程 close 机械并入禁区（不动 wire）。两种做法产物不同，R2 开工先定读法并补齐对应同步清单。
 
 **E-4（medium）· R2.4「呈现分三种身份」表：线程 `delivery_mode` 归类二义。**

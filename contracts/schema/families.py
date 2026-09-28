@@ -71,6 +71,10 @@ STR06_PATH_FAMILIES: Final[dict[str, PathFamily]] = {
         prefix='stage4/context/', kind='derived', writer_owner='stage4.context'),
     'str06.stage4.acceptance.guard': PathFamily(
         prefix='stage4/acceptance/guard/', kind='report', writer_owner='stage4.guard'),
+    # R2.8：compile 的 WriterPacket 指标（audit 报面；先采数、不设阈值）。
+    # ⚠ 前缀宽于 guard 家族，必须排在其后——家族匹配按插入序取首个命中。
+    'str06.stage4.acceptance.metrics': PathFamily(
+        prefix='stage4/acceptance/', kind='report', writer_owner='stage4.compile'),
     # 正文按章成文（F5）：ch{nn}.txt 是 prose，章级 attempts 记录是 audit；
     # 按文件区分，登记在同一家族（同 stage5.hook 的先例）。
     'str06.stage5.body': PathFamily(

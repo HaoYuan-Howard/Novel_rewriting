@@ -258,9 +258,10 @@ def test_book_style_and_voices_project_into_book_brief_and_packet():
     assert ir.book_brief.character_voices[0].char_id == 'yun'
     from novel.stages.common import project_chapter_packet, render_chapter_packet
     packet = render_chapter_packet(project_chapter_packet(ir, 1))
-    assert '【整书风格与人物声线】' in packet
+    # v5 分区渲染：书级风格与声线进「导演说明」分区
+    assert '【导演说明】' in packet
     assert '冷峻克制的第三人称叙事' in packet
-    assert 'yun 的声线：短句、少感叹' in packet
+    assert '声线：短句、少感叹' in packet
 
 
 # ───────────────────────── 读者确认的事实地址（D4） ─────────────────────────
