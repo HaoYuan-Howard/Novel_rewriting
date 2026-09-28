@@ -45,6 +45,10 @@ from contracts.schema.source import (
     WorldConstraint,
 )
 from novel.stages.common import OverlayChange, StateOverlay
+from novel.stages.stage2.associate import (
+    AssociationSpace, book_state_handle, chapter_state_handle,
+    project_association_space, serialize_target, target_label,
+)
 from novel.stages.stage2.book import character_core_view
 
 #: 认知模式中构成「确认时点」的模态：读者/人物只有 learns／confirms 算确认。
@@ -97,15 +101,18 @@ class _Union:
         return [item for item in self._parent if self.find(item) == root]
 
 
-def _state_rank(handle: str) -> tuple:
-    """状态句柄的确定性序：book（chapter=0）在前，其后按（章，出现序）。"""
-    if handle.startswith('book.'):
-        occurrence = handle.split('.')[1]
-        return (0, int(occurrence[1:]) if occurrence[1:].isdigit() else 0, handle)
-    match = re.fullmatch(r'ch(\d+)\.k(\d+)\..*', handle)
-    if match is None:
-        return (99, 0, handle)
-    return (int(match.group(1)), int(match.group(2)), handle)
+def _state_rank(handle: str, space: AssociationSpace) -> tuple:
+    """状态句柄的确定性序（E-5 同步面）：book（chapter=0）在前，其后按
+    （章，拍，效应序）。
+
+    序取自**唯一关联登记表**的 typed 字段（`StateHandle`），不做第二处字符串
+    解析——句柄形状改版时本函数不依赖正则，不会静默退化成 fallback rank。
+    不在登记表的句柄（陈旧 wire 句柄）排最末，永不成为 canonical。
+    """
+    entry = space.states.get(handle)
+    if entry is None:
+        return (99, 0, 0, handle)
+    return (entry.chapter, entry.beat_ordinal, entry.effect_ordinal, handle)
 
 
 # ───────────────────────── 编译结果 ─────────────────────────
@@ -128,15 +135,6 @@ class CompileOutcome:
         return not self.undecided and not self.errors
 
 
-def _target_label(target: Mapping[str, Any]) -> str:
-    kind = target.get('kind')
-    if kind == 'character':
-        return f'character({target.get("char_id")})'
-    if kind == 'relation':
-        return f'relation({target.get("subject")}×{target.get("object")})'
-    return 'world'
-
-
 def _state_address(target: Any, key: str) -> tuple:
     """事实层地址：领域＋作用对象＋键（与目标侧 StateAddress 同构的两段式）。"""
     data = target.model_dump() if hasattr(target, 'model_dump') else dict(target)
@@ -155,14 +153,17 @@ class _StateClasses:
     """状态维度等价类（同维合并，I-15）：canonical key＝类内最早确立者的键。
 
     作用对象一致性在登记时核对：同类成员目标不同即未决冲突——不同对象的
-    「同一维度」不成立，不默认合并。
+    「同一维度」不成立，不默认合并（含反向关系：主客体方向区分对象）。
+    确定性序查**唯一关联登记表**（`space`；R1 v2 位置编码）。
     """
 
-    def __init__(self, associate: AssociateObservation) -> None:
+    def __init__(self, associate: AssociateObservation,
+                 space: AssociationSpace) -> None:
+        self._space = space
         self._union = _Union()
         for pair in associate.same_state_dimension:
-            self._union.union(pair.left, _state_rank(pair.left),
-                              pair.right, _state_rank(pair.right))
+            self._union.union(pair.left, _state_rank(pair.left, space),
+                              pair.right, _state_rank(pair.right, space))
         self._targets: dict[str, dict[str, Any]] = {}
         self._canonical: dict[str, str] = {}
         self._rank_of: dict[str, str] = {}
@@ -172,8 +173,8 @@ class _StateClasses:
         self._targets.setdefault(root, dict(target))
         # canonical key＝类内最早确立者（rank 序）；键本身的字典序不作依据。
         current = self._canonical.get(root)
-        if current is None or _state_rank(handle) < _state_rank(
-                self._rank_of[root]):
+        if current is None or _state_rank(handle, self._space) < _state_rank(
+                self._rank_of[root], self._space):
             self._canonical[root] = key
             self._rank_of[root] = handle
 
@@ -187,7 +188,7 @@ class _StateClasses:
         if expected is not None and expected and dict(target) != expected:
             undecided.append(
                 f'{where} 的同维配对作用对象不一致（类内已有 '
-                f'{_target_label(expected)}，此处 {_target_label(target)}）——'
+                f'{target_label(expected)}，此处 {target_label(target)}）——'
                 '不同对象不是同一维度，保持未决')
             return key
         self.register(handle, target, key)
@@ -195,10 +196,16 @@ class _StateClasses:
 
 
 class _BookCompile:
-    """跨章编译状态：命题/悬念正式 ID、等价类、续场与跨章因果。"""
+    """跨章编译状态：命题/悬念正式 ID、等价类、续场与跨章因果。
 
-    def __init__(self, *, slugs: set[str], associate: AssociateObservation) -> None:
+    R1 v2：持有**唯一关联登记表**（`space`）——状态句柄定位与确定性序都查表，
+    不在本模块重写编码（E-5：`_state_rank`／初态句柄／章效应句柄同批对齐）。
+    """
+
+    def __init__(self, *, slugs: set[str], associate: AssociateObservation,
+                 space: AssociationSpace) -> None:
         self.slugs = slugs
+        self.space = space
         self.prop_seq = 0
         self.loop_seq = 0
         self.scene_seq = 0
@@ -235,7 +242,7 @@ class _BookCompile:
         #: 悬空的跨章命题引用：解析推迟到全部章建立之后（可判定时序倒转）。
         self.pending_props: list[tuple[dict, str, str]] = []
         #: 状态维度等价类。
-        self.state_classes = _StateClasses(associate)
+        self.state_classes = _StateClasses(associate, space)
 
     # ── 命题登记与引用解析 ────────────────────────────────────────────────
 
@@ -329,15 +336,23 @@ def compile_source_truth(
     errors.extend(core_errors)
     if core is None:
         return outcome
-    state = _BookCompile(slugs=set(core.characters), associate=associate)
+    # 唯一关联登记表（R1 v2）：与 run_associate 的 prompt／闭集核对同一投影——
+    # 状态句柄定位与确定性序都查表，不在 compile 重写编码。
+    space = project_association_space(book, chapters)
+    state = _BookCompile(slugs=set(core.characters), associate=associate, space=space)
 
     # ② 初态：生成 s0_* 编号；同维配对可把初态键归一到类内 canonical key。
     initial_atoms: list[InitialStateAtom] = []
     for index, atom in enumerate(book.initial_state, 1):
-        target = {k: v for k, v in atom.target.model_dump().items() if v is not None}
-        handle = f'book.k{index}.{atom.key}'
-        key = state.state_classes.canonical_key(
-            handle, target, atom.key, f'initial_state {atom.key}', undecided)
+        target = serialize_target(atom.target, where=f'initial_state {atom.key}')
+        handle = book_state_handle(index, atom.key)
+        if handle not in space.states:
+            errors.append(
+                f'初态句柄 {handle!r} 不在关联登记表内（投影与编译位置编码漂移）')
+            key = atom.key
+        else:
+            key = state.state_classes.canonical_key(
+                handle, target, atom.key, f'initial_state {atom.key}', undecided)
         initial_atoms.append(InitialStateAtom(
             state_id=f's0_{index:02d}', target=atom.target, key=key, value=atom.value,
             persistence=atom.persistence, knowledge=atom.knowledge,
@@ -469,12 +484,18 @@ def _compile_chapter(
             if holder not in state.slugs | NON_CHAR_HOLDERS:
                 errors.append(f'{where} cognition holder 引用未知人物 {holder}')
         # —— 状态同维合并（I-15：canonical key 按类归一；改在副本上）——
-        for occurrence, effect in enumerate(beat.get('effects') or [], 1):
-            target = {k: v for k, v in (effect.get('target') or {}).items()
-                      if v is not None}
-            handle = f'ch{chapter:02d}.k{occurrence}.{effect.get("key")}'
-            effect['key'] = state.state_classes.canonical_key(
-                handle, target, effect.get('key'), where, undecided)
+        # 句柄查唯一关联登记表（R1 v2 位置编码 ch{nn}.b{拍}.e{效应序}.{key}）。
+        for effect_ordinal, effect in enumerate(beat.get('effects') or [], 1):
+            target = serialize_target(effect.get('target') or {}, where=where)
+            handle = chapter_state_handle(chapter, ordinal, effect_ordinal,
+                                          effect.get('key'))
+            if handle not in state.space.states:
+                errors.append(
+                    f'{where} 的状态句柄 {handle!r} 不在关联登记表内'
+                    '（投影与编译位置编码漂移）')
+            else:
+                effect['key'] = state.state_classes.canonical_key(
+                    handle, target, effect.get('key'), where, undecided)
             # 归一后的键若是登记键，作用域随 canonical key 重新绑定（R-2.14）。
             registered_scope = REGISTERED_STATE_KEYS.get(effect.get('key'))
             if registered_scope is not None:

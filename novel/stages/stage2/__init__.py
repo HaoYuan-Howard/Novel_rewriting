@@ -20,13 +20,14 @@
 from __future__ import annotations
 
 from contracts.schema.observation import (
-    STAGE2_OBSERVATION_PROTOCOL, AssociateObservation, BookObservation,
-    ChapterObservation, NamesObservation,
+    STAGE2_ASSOCIATE_PROTOCOL, STAGE2_OBSERVATION_PROTOCOL, AssociateObservation,
+    BookObservation, ChapterObservation, NamesObservation,
 )
 from novel.stages.stage2.associate import (
     AssociationSpace, BeatHandle, LoopHandle, PropositionHandle, SceneHandle,
-    StateHandle, associate_observation_prompt, compile_associate_observation,
-    project_association_space,
+    StateHandle, associate_observation_prompt, book_state_handle,
+    chapter_state_handle, compile_associate_observation, project_association_space,
+    serialize_target, target_label,
 )
 from novel.stages.stage2.book import (
     book_observation_prompt, character_core_view, compile_book_observation,
@@ -51,12 +52,14 @@ __all__ = [
     'BookObservation', 'ChapterObservation', 'CompileOutcome',
     'CONFIRMING_MODES', 'EvidenceResolver', 'FoldResult', 'LoopHandle',
     'NamesObservation', 'ProbeFinding', 'PropositionHandle', 'ResolverIssue',
-    'STAGE2_OBSERVATION_PROTOCOL', 'SceneHandle', 'StateHandle',
-    'associate_observation_prompt',
+    'STAGE2_ASSOCIATE_PROTOCOL', 'STAGE2_OBSERVATION_PROTOCOL', 'SceneHandle',
+    'StateHandle',
+    'associate_observation_prompt', 'book_state_handle',
     'chapter_observation_prompt', 'chapter_prior_text',
-    'character_core_view', 'compile_associate_observation',
+    'chapter_state_handle', 'character_core_view',
+    'compile_associate_observation',
     'compile_book_observation', 'compile_chapter_observation',
     'compile_name_structure', 'compile_source_truth', 'initial_snapshot',
-    'merge_name_structure', 'project_association_space', 'source_fold',
-    'surname_construction_probe',
+    'merge_name_structure', 'project_association_space', 'serialize_target',
+    'source_fold', 'surname_construction_probe', 'target_label',
 ]

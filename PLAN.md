@@ -164,7 +164,7 @@
    - 相邻章在延续与背景两节中的重复比例；
    - 目标篇幅与"必须写出"的密度。
    - 在送达登记里标为 `audit_only`。
-9. **升版**：`STAGE4_DESIGN_PROTOCOL` v2（线程、`world_rules`、`entry`）、IR rc9、回执、`RENDERER_VERSION` v5、`WRITER_PROTOCOL_VERSION` v5。
+9. **升版**：`STAGE4_DESIGN_PROTOCOL` v2（线程、`world_rules`、`entry`）、IR rc10（rc9 已被 R1 的 associate 观察形状占用）、回执、`RENDERER_VERSION` v5、`WRITER_PROTOCOL_VERSION` v5。
 - 完成：
   - AUD-03/04、世界规则、承接的反例转绿；R0 守卫全绿（含分区与身份检查）；
   - 写手视图无内部 ID；

@@ -6,9 +6,14 @@
 的输出面（观察与关联决定，归已购恢复证据，不是普通缓存），以及 `names` 观察的
 落盘载体。它们是 wire 协议：由 compiler 解析、执行关联并发布 canonical
 （Characters＋Blueprint，唯一 writer `str06.stage2.compile`）。协议升级 = 改
-`STAGE2_OBSERVATION_PROTOCOL` 字面量并同步本模块模型——旧协议盘面按版本字面量
-关闭式拒读，不做运行时转换层（I-13：本仓无隐式通用迁移；旧根只读，新协议下
-新根全量重购）。
+版本字面量并同步本模块模型——旧协议盘面按版本字面量关闭式拒读，不做运行时
+转换层（I-13：本仓无隐式通用迁移；旧根只读，新协议下新根全量重购）。
+
+【associate 独立版本（R1，2026-09-28）】关联协议与三类观察协议分别管理：
+`STAGE2_ASSOCIATE_PROTOCOL`（stage2-associate-v2）只升 associate——typed 作用
+对象显式序列化（人物／关系方向／world）、状态句柄位置编码
+（``ch{nn}.b{拍}.e{效应序}.{key}``／``book.e{条目序}.{key}``）。三类观察的请求
+与字面量逐字不变（PLAN.md R1；A1.5）。
 
 【模型输出面去机械化（I-20/I-21）】协议里**没有**这些字段，模型想给也没处给：
 拍号（事件序即列表序，拍号由 compiler 按序派发）、状态/约束编号
@@ -38,9 +43,15 @@ from contracts.schema.source import (
     Cognition, Effect, KnowledgeSpec, LoopAction, NameStructure, StateTarget,
 )
 
-#: 观察与关联协议的版本字面量（进请求身份与盘面信封；I-13 显式版本化）。
-#: 升版 = 换字面量＋改模型＋登记（REQUIREMENTS／DECISIONS），不做转换层。
+#: 观察协议（book／chapters／names 三类共用）的版本字面量（进请求身份与盘面
+#: 信封；I-13 显式版本化）。升版 = 换字面量＋改模型＋登记（REQUIREMENTS／
+#: DECISIONS），不做转换层。
 STAGE2_OBSERVATION_PROTOCOL: Final = 'stage2-observation-v1'
+
+#: 关联协议（associate 独立）的版本字面量（R1，2026-09-28 升 v2）：typed 作用
+#: 对象显式序列化＋状态句柄位置编码。句柄含义与输入材料已变，旧关联回答不做
+#: 句柄替换后继续采用（A1.5：恢复边界）。
+STAGE2_ASSOCIATE_PROTOCOL: Final = 'stage2-associate-v2'
 
 #: 观察句柄（associate 输入/输出）：compiler 投影的闭集成员标识。
 #: 形状只锁字符集与长度；成员资格（只选已给句柄）归 compile 对闭集核对。
@@ -215,9 +226,10 @@ class SceneContinuation(StrictModel):
 
 class AssociateObservation(StrictModel):
     """`str06.stage2.associate` 的输出：只选已给句柄（闭集成员资格归 compile
-    对投影句柄核对），只建立同一性与引用（D8）。"""
+    对投影句柄核对），只建立同一性与引用（D8）。句柄为 compiler 位置编码
+    （R1 v2；见 `novel/stages/stage2/associate.py` 的登记表）。"""
 
-    protocol_version: Literal['stage2-observation-v1']
+    protocol_version: Literal['stage2-associate-v2']
     same_proposition: tuple[PropositionPairing, ...] = Field(default=(), min_length=0)
     same_state_dimension: tuple[StateDimensionPairing, ...] = Field(default=(), min_length=0)
     loop_pairing: tuple[LoopPairing, ...] = Field(default=(), min_length=0)

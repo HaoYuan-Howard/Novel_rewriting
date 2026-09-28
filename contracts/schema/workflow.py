@@ -622,11 +622,14 @@ STR06_RUNTIME_CONFIG: Final = CandidateRuntimeConfig()
 #: rc8（2026-09-27 B4）：章包写手（D2）——WriterBookIR 增章级验证材料并升
 #: `str06-rc8`；章回执改绑章包摘要（回执升 `str06-rc5`），不再绑定全书 IR
 #: 与前文链。
-STR06_RC_VERSION: Final = 'str06-rc8'
+#: rc9（2026-09-28 R1 关联无损）：associate 观察协议独立升版
+#: `stage2-associate-v2`（typed 作用对象显式序列化＋状态句柄位置编码），
+#: 见 `contracts/schema/observation.py`；三类观察协议不变。
+STR06_RC_VERSION: Final = 'str06-rc9'
 
 #: 已知 RC 标签面（版本规则见 `contracts/artifacts.py::STR06_ARTIFACT_RC_VERSIONS`）。
 STR06_RC_LABELS: Final = ('str06-rc2', 'str06-rc3', 'str06-rc4', 'str06-rc5', 'str06-rc6',
-                          'str06-rc7', 'str06-rc8')
+                          'str06-rc7', 'str06-rc8', 'str06-rc9')
 
 #: Stage4 四个付费语义节点的独立 wire 协议（B3 前半；各节点独立演进，升版互不
 #: 牵连）。wire 顶层 `protocol_version` 与对应常量逐字对账，漏带或错带即拒

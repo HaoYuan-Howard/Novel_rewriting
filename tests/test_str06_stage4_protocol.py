@@ -125,8 +125,8 @@ def test_four_protocols_are_independent_literals():
     assert STAGE4_HOOK_DESIGN_PROTOCOL == 'stage4-hook-design-v1'
     assert len({STAGE4_PRESERVE_PROTOCOL, STAGE4_DESIGN_PROTOCOL,
                 STAGE4_BIND_PROTOCOL, STAGE4_HOOK_DESIGN_PROTOCOL}) == 4
-    # RC 版式头随 B4 章包写手（D2）升 rc8
-    assert STR06_RC_VERSION == 'str06-rc8'
+    # RC 版式头随 R1 关联无损升 rc9（B4 章包写手曾升 rc8）
+    assert STR06_RC_VERSION == 'str06-rc9'
 
 
 def test_design_wire_without_protocol_is_refused():

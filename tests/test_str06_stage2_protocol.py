@@ -22,7 +22,9 @@ from contracts.schema import (
     ARTIFACT_SPECS, AssociateObservation, BookObservation, ChapterObservation,
     NamesObservation,
 )
-from contracts.schema.observation import STAGE2_OBSERVATION_PROTOCOL
+from contracts.schema.observation import (
+    STAGE2_ASSOCIATE_PROTOCOL, STAGE2_OBSERVATION_PROTOCOL,
+)
 from contracts.schema.source import FamilyEntry, NameStructure, PersonNameStructure
 from contracts.schema.workflow import STR06_RC_LABELS, STR06_RC_VERSION
 from novel.stages.stage2 import EvidenceResolver, ResolverIssue
@@ -87,11 +89,16 @@ def test_retired_derived_inputs_are_refused_paths():
 
 def test_observation_artifacts_are_registered_with_rc6():
     for rel in ('stage2/observations/book.json', 'stage2/observations/ch{nn}.json',
-                'stage2/observations/names.json', 'stage2/observations/associate.json'):
+                'stage2/observations/names.json'):
         assert rel in ARTIFACT_PATHS and rel in ARTIFACT_SPECS
         assert STR06_ARTIFACT_RC_VERSIONS[rel] == 'str06-rc6'
-    # 观察产物冻结在 rc6（B2 身份）；RC 版式头随 B4 章包写手升 rc8
-    assert STR06_RC_VERSION == 'str06-rc8' and 'str06-rc6' in STR06_RC_LABELS
+    # R1：associate 观察独立升版（stage2-associate-v2），形状升 rc9；三类观察
+    # 冻结在 rc6（B2 身份）不动。RC 版式头随 R1 升 rc9。
+    assert ARTIFACT_SPECS['stage2/observations/associate.json']
+    assert STR06_ARTIFACT_RC_VERSIONS['stage2/observations/associate.json'] == 'str06-rc9'
+    assert STR06_RC_VERSION == 'str06-rc9'
+    for label in ('str06-rc6', 'str06-rc9'):
+        assert label in STR06_RC_LABELS
     assert str06_chapter_observation_rel(3) == 'stage2/observations/ch03.json'
     assert artifact_rel('stage2/observations/ch{nn}.json', nn=12) == \
         'stage2/observations/ch12.json'
@@ -245,9 +252,28 @@ def test_chapter_observation_green_with_local_handles():
 
 # ───────────────────────── associate 只选已给句柄（D8） ─────────────────────────
 
+def test_associate_protocol_is_independently_versioned():
+    """R1：associate 独立升版 stage2-associate-v2；三类观察协议字面量逐字不变。
+
+    旧协议字面量对 associate 关闭式拒读（I-13：无运行时转换层）——句柄含义与
+    输入材料已变，旧回答不做句柄替换后继续采用（PLAN.md R1／A1.5）。
+    """
+    assert STAGE2_ASSOCIATE_PROTOCOL == 'stage2-associate-v2'
+    assert STAGE2_OBSERVATION_PROTOCOL == 'stage2-observation-v1'
+    empty = {'same_proposition': [], 'same_state_dimension': [], 'loop_pairing': [],
+             'cross_chapter_cause': [], 'scene_continuation': []}
+    obs = AssociateObservation.model_validate(
+        {'protocol_version': STAGE2_ASSOCIATE_PROTOCOL, **empty})
+    assert obs.protocol_version == STAGE2_ASSOCIATE_PROTOCOL
+    with pytest.raises(ValidationError):
+        AssociateObservation.model_validate(
+            {'protocol_version': 'stage2-observation-v1', **empty}), \
+        '旧协议字面量对 associate 关闭式拒读'
+
+
 def test_associate_observation_shape_and_closed_handle_charset():
     obs = AssociateObservation.model_validate({
-        'protocol_version': STAGE2_OBSERVATION_PROTOCOL,
+        'protocol_version': STAGE2_ASSOCIATE_PROTOCOL,
         'same_proposition': [{'left': 'c01:p_secret', 'right': 'c03:p2'}],
         'same_state_dimension': [{'left': 'c01:e1', 'right': 'c02:e3'}],
         'loop_pairing': [{'open': 'c01:q_night', 'close': 'c03:q9'}],
@@ -259,16 +285,16 @@ def test_associate_observation_shape_and_closed_handle_charset():
     assert obs.cross_chapter_cause[0].kind == 'setup_payoff'
     with pytest.raises(ValidationError):
         AssociateObservation.model_validate({
-            'protocol_version': STAGE2_OBSERVATION_PROTOCOL,
+            'protocol_version': STAGE2_ASSOCIATE_PROTOCOL,
             'cross_chapter_cause': [{'from_beat': 'c01:b01', 'to_beat': 'c01:b01',
                                      'kind': 'causes'}]}), '因果边自指'
     with pytest.raises(ValidationError):
         AssociateObservation.model_validate({
-            'protocol_version': STAGE2_OBSERVATION_PROTOCOL,
+            'protocol_version': STAGE2_ASSOCIATE_PROTOCOL,
             'same_proposition': [{'left': '带 空格', 'right': 'c02:p1'}]})
     with pytest.raises(ValidationError):
         AssociateObservation.model_validate({
-            'protocol_version': STAGE2_OBSERVATION_PROTOCOL,
+            'protocol_version': STAGE2_ASSOCIATE_PROTOCOL,
             'same_proposition': [{'left': 'c01:p1', 'right': 'c02:p1',
                                   'note': '闭集之外的字段不收'}]})
 

@@ -1272,6 +1272,44 @@ B6-A／B6-B 分别授权；R 批全部 fake transport、零模型调用。
     `docs/schema/str06.md` 增「字段级送达登记」节；`tests/suite_catalog.json` 登记
     新模块（三条链级用例标 stage）。
 
+- [x] **R1 · Stage2 关联无损（associate 协议 v2，免费）**（2026-09-28 完成；AUD-01/02
+  转绿，反例与修复同批）：
+  - `novel/stages/stage2/associate.py`：typed 作用对象显式序列化
+    `serialize_target`（人物带 char_id、关系保留主客体方向、world 是显式类型；
+    未知类型／缺必要字段／字段与 kind 不匹配／关系自环精确报错，不再拿空 dict
+    兜底显示 world——AUD-01）；状态句柄改位置编码
+    `ch{nn}.b{拍}.e{效应序}.{key}`，book 初态独立命名空间 `book.e{条目序}.{key}`
+    （key 只是载荷不承担唯一性——AUD-02 的句柄碰撞根因）；`AssociationSpace`
+    成为**唯一关联登记表**，`add_state` 构建时重复句柄即拒。
+  - `novel/stages/stage2/compile.py`：初态与章效应句柄经登记表构造函数定位并
+    对表核对（漂移即机械错误，不再第二处重写 occurrence 计数）；`_state_rank`
+    改查登记表 typed 字段（E-5 消歧结论：`_state_rank` 正则、book 前缀解析、
+    初态句柄构造与章拍句柄构造四处同批对齐——序取自唯一登记表后该类
+    「静默退化为 fallback rank」结构性消失）；`_target_label` 双份复制收敛到
+    associate 的 `target_label`（I-11）。
+  - `contracts/schema/observation.py`：`STAGE2_ASSOCIATE_PROTOCOL`＝
+    `stage2-associate-v2`（`AssociateObservation.protocol_version` Literal 同步，
+    旧字面量关闭式拒读）；book／chapters／names 三类观察请求与字面量逐字不变。
+    观察产物 `stage2/observations/associate.json` 形状升 `str06-rc9`
+    （`STR06_ARTIFACT_RC_VERSIONS`＋`STR06_RC_VERSION`/`STR06_RC_LABELS`，冻结
+    重钉 `0d546fda…`，B4 基线入 Git 历史）；canonical 无形状变化不升版（A1.5）。
+    PLAN.md R2.9 的「IR rc9」同批改写为 rc10（rc9 被本批占用）。
+  - 新反例（先红后绿）：AUD-01 typed 标签到达关联输入；AUD-02 同章两拍不同对象
+    同名键句柄独立、只配一方可发布另一方不受影响；句柄数量守恒；登记表重复句柄
+    即拒；同对象跨章同维发布、不同对象同键未决、反向关系未决、同章跨拍配对拒、
+    协议字面量独立升版。现存测试同步换新句柄与新字面量（publish／protocol／
+    hook／workflow；hard_cases／source／faults 经共用夹具继承）。
+  - 验证（fake transport、零付费、`-n 0`）：定向 stage2 集
+    test_str06_stage2_publish（36）＋test_str06_stage2_protocol（21）＋
+    test_str06_stage2_owners＋test_str06_source＋test_str06_workflow＋
+    test_str06_f7e_freeze＋test_str06_stage4_protocol（116 项）；全链消费面
+    test_str06_hook＋test_str06_body＋test_str06_semantic_delivery＋
+    test_str06_f7c_remainder＋test_str06_runtime_records（126 项）；外围
+    product_entry／repairs／views／store（199 项）、hard_counterexamples／target
+    （52 项）、layering／invariants／chapter_closure／execution_ir／fold_guard
+    （72 项）全绿。文档：stage2.md／str06.md／BACKEND_CONTRACT R-2 行／
+    stage2 AGENTS 同步。
+
 ## 职责解耦批次（2026-09-27 起；B0–B6）
 
 裁决 D1–D10 各行见 [DECISIONS.md](DECISIONS.md) 2026-09-27；目标架构（Stage2 五节点、

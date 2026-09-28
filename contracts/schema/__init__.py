@@ -205,7 +205,8 @@ from contracts.schema.source import (
     BlueprintsArtifactV13, CharactersArtifactV4, CharactersCore,
 )
 from contracts.schema.observation import (
-    AssociateObservation, BookObservation, ChapterObservation, NamesObservation,
+    STAGE2_ASSOCIATE_PROTOCOL, STAGE2_OBSERVATION_PROTOCOL, AssociateObservation,
+    BookObservation, ChapterObservation, NamesObservation,
 )
 from contracts.schema.grounding import (
     PreserveCheckpoint, ReconstructionBrief, SemanticBinding,
@@ -536,5 +537,5 @@ __all__ = [
     'decode_artifact', 'encode_artifact',
     # B2 观察与关联协议（contracts/schema/observation.py）
     'AssociateObservation', 'BookObservation', 'ChapterObservation',
-    'NamesObservation', 'STAGE2_OBSERVATION_PROTOCOL',
+    'NamesObservation', 'STAGE2_ASSOCIATE_PROTOCOL', 'STAGE2_OBSERVATION_PROTOCOL',
 ]

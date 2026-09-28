@@ -30,6 +30,14 @@ B2 基线（14 节点，`a0f5fb5e…`）原样保存在 Git 历史里；既有�
 `29cc19d0…`）原样保存在 Git 历史里；既有候选根按「契约表已漂移」拒读，
 只读保留，新协议下新根全量重购（I-13，无转换层）。
 
+【R1 重新冻结（2026-09-28）】Stage2 关联无损：associate 观察协议独立升版
+`stage2-associate-v2`（`contracts/schema/observation.py`；typed 作用对象显式
+序列化＋状态句柄位置编码），观察产物 `stage2/observations/associate.json`
+形状升 `str06-rc9`。三类观察协议（book／chapters／names）字面量与请求逐字
+不变；canonical（Characters／Blueprint）无形状变化，不升版（A1.5）。节点
+集合与运行期配置不变。B4 基线（14 节点，`d552b280…`）原样保存在 Git 历史
+里；既有候选根按「契约表已漂移」拒读，只读保留。
+
 【为什么不只靠激活表自己的对账】`test_str06_candidates.py` 查的是表内自洽
 （runner／writer／版本逐字相等）；本文件查的是**表与冻结基线**相等：
 前者防表内部撒谎，后者防表在批次之间无登记漂移。
@@ -43,10 +51,10 @@ from contracts.schema.workflow import (
 )
 from novel.llm.paid_requests import candidate_contract_identity
 
-#: B4 前半重新冻结（2026-09-27）时的候选契约身份：节点表＋产物表＋RC 版式＋
-#: 运行期配置的 SHA-256。表内任何一行变化都会改变它——先改本记录并登记原因
-#: （REQUIREMENTS／DECISIONS），再动表。
-FROZEN_CONTRACT_IDENTITY = 'd552b280832b37fd4a5dffc12496f8f22d2eafa9296908a556f22957be910577'
+#: R1 重新冻结（2026-09-28 关联无损）时的候选契约身份：节点表＋产物表＋RC
+#: 版式＋运行期配置的 SHA-256。表内任何一行变化都会改变它——先改本记录并
+#: 登记原因（REQUIREMENTS／DECISIONS），再动表。
+FROZEN_CONTRACT_IDENTITY = '0d546fdadae1bd1c64f8665020a3432306694ca4ae17171cd040b66b27ccc216'
 
 #: 冻结时的节点集合（14 个：stage0/1 两座＋Stage2 五节点＋Stage4 五＋Stage5 两
 #: ＋Stage7 两）。
@@ -73,7 +81,7 @@ def _candidate_nodes() -> dict:
 
 def test_frozen_contract_identity_matches_the_live_tables():
     assert candidate_contract_identity() == FROZEN_CONTRACT_IDENTITY, (
-        '候选契约身份与 B2 冻结基线不符：先更新本文件的冻结记录，'
+        '候选契约身份与 R1 冻结基线不符：先更新本文件的冻结记录，'
         '并在 REQUIREMENTS 登记变化原因（不静默改冻结面）')
 
 
@@ -113,4 +121,4 @@ def test_frozen_artifact_table_shape():
 
 
 def test_frozen_rc_version_label():
-    assert STR06_RC_VERSION == 'str06-rc8'
+    assert STR06_RC_VERSION == 'str06-rc9'
