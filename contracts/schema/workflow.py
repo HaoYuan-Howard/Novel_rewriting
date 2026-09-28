@@ -625,19 +625,28 @@ STR06_RUNTIME_CONFIG: Final = CandidateRuntimeConfig()
 #: rc9（2026-09-28 R1 关联无损）：associate 观察协议独立升版
 #: `stage2-associate-v2`（typed 作用对象显式序列化＋状态句柄位置编码），
 #: 见 `contracts/schema/observation.py`；三类观察协议不变。
-STR06_RC_VERSION: Final = 'str06-rc9'
+#: rc10（2026-09-28 R2 语义送达）：Design wire 升 `stage4-design-v2`（拍上线程
+#: `threads`、书级 `world_rules`、章级 `entry`；四个静态跨章列表删除，AUD-04）；
+#: WriterBookIR／WriterContext 升 `str06-rc10`（拍级读取值挂拍、线程投影面、
+#: continuity 分区、world_rules 进书级层）；章回执身份拆分（回执升 `str06-rc6`，
+#: 写手视图／验证输入／Machine 审计三把摘要）；renderer 与写手协议升 v5。
+STR06_RC_VERSION: Final = 'str06-rc10'
 
 #: 已知 RC 标签面（版本规则见 `contracts/artifacts.py::STR06_ARTIFACT_RC_VERSIONS`）。
 STR06_RC_LABELS: Final = ('str06-rc2', 'str06-rc3', 'str06-rc4', 'str06-rc5', 'str06-rc6',
-                          'str06-rc7', 'str06-rc8', 'str06-rc9')
+                          'str06-rc7', 'str06-rc8', 'str06-rc9', 'str06-rc10')
 
 #: Stage4 四个付费语义节点的独立 wire 协议（B3 前半；各节点独立演进，升版互不
 #: 牵连）。wire 顶层 `protocol_version` 与对应常量逐字对账，漏带或错带即拒
 #: （I-13：本仓无隐式通用迁移）。模型只表达选择、结构与相对篇幅重点；场景/拍
 #: ID（`sc{序:02d}`／`b{序:02d}`，按列表序派发）、复合引用（`场景#拍`）、
 #: 权重归一与整数预算全部由 compiler 生成（I-21）。
+#: design v2（R2）：beats 增 `threads`（本地标签，compiler 派发 `th{nn}`）、顶层增
+#: `world_rules`、chapters 增 `entry`（第 1 章可省——compiler 填固定开篇，其余章
+#: 必填）；standing_goals／ongoing_actions／open_questions／promises 四键关闭式
+#: 拒读（AUD-04 无消费者，裁决 3 改独立线程结构）。
 STAGE4_PRESERVE_PROTOCOL: Final = 'stage4-preserve-v1'
-STAGE4_DESIGN_PROTOCOL: Final = 'stage4-design-v1'
+STAGE4_DESIGN_PROTOCOL: Final = 'stage4-design-v2'
 STAGE4_BIND_PROTOCOL: Final = 'stage4-bind-v1'
 STAGE4_HOOK_DESIGN_PROTOCOL: Final = 'stage4-hook-design-v1'
 

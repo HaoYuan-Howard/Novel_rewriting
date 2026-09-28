@@ -38,6 +38,17 @@ Design 的模型 wire（`stage4-design-v1`）只表达选择、结构与相对�
 和为 1 的 dict）全部由 compiler（`novel/stages/stage4/design.py`）生成（I-21）。
 本模块的 canonical 形状是 compiler 的**输出**与 Bind／Hook Design／compile 的
 **输入**：正式 ID 与归一权重在这里落地一次，下游不再重算（I-16）。
+
+【R2（rc10，2026-09-28）：跨章线程＋world_rules＋entry，删四个静态列表】
+裁决 3：跨章字段改**独立线程结构**——`TargetBeat.threads` 与源侧 loops 对称，
+open（kind 闭集＋主体＋文本，question 不写答案）→ advance（进展说明）→
+close（按 kind 限定的结局闭集＋简短收束）。线程是**拍上的操作**，不是书的
+静态清单：AUD-04 实证 `standing_goals`／`ongoing_actions`／`open_questions`／
+`promises` 四个静态列表没有任何消费者，本版删除（wire 旧键关闭式拒读）。
+canonical ref 由 compiler 按 open 先后派发 `th{nn}`（I-21）；wire 用本地标签。
+`world_rules` 是目标侧书级世界边界（由 Design 决定沿用或改写源侧约束）；
+`ChapterAssignment.entry` 是很薄的章间承接声明（裁决 7：编译器不猜），
+第 1 章固定为开篇形态。
 """
 from __future__ import annotations
 
@@ -49,7 +60,7 @@ from contracts.schema.hook import HookDesign
 from contracts.schema.state import (
     EffectDomain, StateAddress, StateChange, StateRead, SurfaceIntroduction,
 )
-from typing import Literal
+from typing import Final, Literal
 import math
 
 
@@ -95,14 +106,89 @@ class TargetDelta(StateChange):
         return self
 
 
+#: 目标侧线程的四类（R2.4，与源侧语义面同源）：goal＝人物在途追求；
+#: action＝已启动未完成的行动；question＝向读者/人物打开的未决问题（open 的
+#: text 只写问题本身，**不写答案**——答案语义归 close 的 resolution）；
+#: promise＝人物间需要兑现或背叛的约定。
+ThreadKind = Literal['goal', 'action', 'question', 'promise']
+
+#: close 的结局闭集（按 kind 限定，R2.4 登记）：结局取值必须落在所属线程
+#: kind 的闭集内——goal 达成/放弃/被取代；action 完成/中止/失败；
+#: question 已回答/撤销；promise 兑现/违背/解除。闭集外的结局即拒。
+THREAD_ENDINGS: Final[dict[str, tuple[str, ...]]] = {
+    'goal': ('achieved', 'abandoned', 'superseded'),
+    'action': ('completed', 'aborted', 'failed'),
+    'question': ('answered', 'dismissed'),
+    'promise': ('fulfilled', 'broken', 'released'),
+}
+
+
+class ThreadAction(StrictModel):
+    """目标侧线程操作（R2.4，与源侧 `LoopAction` 对称）：拍上的跨章转移。
+
+    与退役的四个静态跨章列表的区别：线程不是书的静态清单，而是拍上的
+    open→advance→close 操作——「后文需要记住的跨章语义」由生命周期承载，
+    折叠走独立 ThreadFold（状态走现有叠加折叠，设计原则 4）。
+
+    · `open`：kind（闭集）＋主体＋文本；文本只在此写一次，之后不可改写
+      （question 的 text 不写答案）；
+    · `advance`：进展说明（progress），不改写声明内容；
+    · `close`：结局（ending，取自所属 kind 的闭集 `THREAD_ENDINGS`）＋
+      简短收束（resolution）；kind 由 open 声明，close 不重复携带。
+    · `ref`：canonical 线程 id，compiler 按 open 先后派发 `th{nn}`（I-21）；
+      wire 用模型自选的本地标签（open 带 `tag`，advance/close 带 `ref` 引用）。
+    """
+
+    ref: str = Field(min_length=1, pattern=r'^th\d{2,}$',
+                     description='compiler 派发的线程 id（th{nn}）')
+    op: Literal['open', 'advance', 'close']
+    kind: ThreadKind | None = None
+    subject: str | None = Field(default=None, min_length=1,
+                                description='线程主体（char_id）')
+    text: str | None = Field(default=None, min_length=1,
+                             description='声明文本（只写在 open 处）')
+    progress: str | None = Field(default=None, min_length=1)
+    ending: str | None = Field(default=None, min_length=1)
+    resolution: str | None = Field(default=None, min_length=1)
+
+    @model_validator(mode='after')
+    def _op_shape(self) -> 'ThreadAction':
+        if self.op == 'open':
+            if self.kind is None or self.subject is None \
+                    or not (self.text or '').strip():
+                raise ValueError('open 必须带 kind、主体和文本（question 不写答案）')
+            if self.progress is not None or self.ending is not None \
+                    or self.resolution is not None:
+                raise ValueError('open 不得携带进展或结局载荷')
+        elif self.op == 'advance':
+            if not (self.progress or '').strip():
+                raise ValueError('advance 必须带进展说明')
+            if self.kind is not None or self.subject is not None \
+                    or self.text is not None or self.ending is not None \
+                    or self.resolution is not None:
+                raise ValueError('advance 只带进展说明（声明内容以 open 为准，不改写）')
+        else:
+            if self.ending is None or self.resolution is None \
+                    or not self.resolution.strip():
+                raise ValueError('close 必须带结局（按 kind 闭集）与简短收束')
+            if self.kind is not None or self.subject is not None \
+                    or self.text is not None or self.progress is not None:
+                raise ValueError('close 只带结局与收束（kind 由 open 声明，不重复）')
+        return self
+
+
 class TargetBeat(StrictModel):
     beat_id: str = Field(min_length=1)
     event: str = Field(min_length=1, description='事件内核（target 语言）')
-    participants: tuple[str, ...] = Field(min_length=0)
+    participants: tuple[str, ...] = Field(default=(), min_length=0)
     dramatic_intent: str = Field(min_length=1)
     target_delta: tuple[TargetDelta, ...] = Field(default=(), min_length=0)
     delivery_hint: str = Field(default='', min_length=0)
     surface_introductions: tuple[SurfaceIntroduction, ...] = ()
+    #: 拍上的跨章线程操作（R2.4）：open/advance/close；生命周期闭合由
+    #: BodyDesign 构造期校验（open 一次、操作不早于 open、close 后无操作、
+    #: ending 落在所属 kind 的闭集）。
+    threads: tuple[ThreadAction, ...] = ()
 
 
 class SceneDelivery(StrictModel):
@@ -116,11 +202,12 @@ class SceneDelivery(StrictModel):
 
 # ───────────────────────── TargetDesign 的结构化跨章依赖（B3 前半） ───────────
 #
-# 后文需要记住的事实必须进结构化字段，不能只写在导演说明（realization_brief）
-# 里。书级条目（风格、声线、持续目标）随 BookBrief 进每章请求；锚定条目（进行
-# 中行动、悬念、承诺）带「场景#拍」复合引用——wire 里模型只给 {"scene","beat"}
-# 分量（B3 前半起模型不输出任何 ID），复合引用由 compiler 派发 ID 后组成；
-# schema 构造期只校验引用闭合（锚必须是本书真实拍）。
+# 后文需要记住的事实进结构化字段，不能只写在导演说明（realization_brief）里。
+# rc10（R2）起跨章语义只有两条正式通道：拍上的线程操作（`TargetBeat.threads`，
+# 折叠走 ThreadFold）与书级条目（`book_style`／`character_voices`／
+# `world_rules` 随 BookBrief 进每章请求）。rc7 的四个静态锚定列表
+# （standing_goals／ongoing_actions／open_questions／promises）没有任何消费者
+# （AUD-04），已删除——wire 旧键关闭式拒读，不走迁移（I-13）。
 
 class CharacterVoice(StrictModel):
     """稳定人物声线：一个人物全书的口吻约定（进 BookBrief，全书一致）。"""
@@ -129,46 +216,35 @@ class CharacterVoice(StrictModel):
     voice: str = Field(min_length=1)
 
 
-class StandingGoal(StrictModel):
-    """持续目标：人物当前在途、跨章持续追求的目标（入场起有效）。"""
+class ChapterEntry(StrictModel):
+    """章间承接声明（R2.6，裁决 7）：很薄的衔接方式，由 Design 声明、编译器不猜。
 
-    char_id: str = Field(min_length=1)
-    goal: str = Field(min_length=1)
+    与上一章的衔接只声明三件事：怎样接（transition 闭集）、什么延续进来
+    （carryover，可空）、要不要给读者重新定向（recap 闭集）。渲染成 continuity
+    分区的自然语言（「上一章收在……；本章以时间跳跃开场，不复述上章结尾」），
+    不规定逐句正文。
+    """
 
+    #: 衔接方式闭集：紧接上一章末尾／时间跳跃／切到别处／换视角／新场景开场。
+    transition: Literal['immediate_continuation', 'time_skip', 'location_cut',
+                        'pov_shift', 'new_scene']
+    #: 延续到本章的动作或张力（可选；一句话，不展开成写作任务）。
+    carryover: str | None = Field(default=None, min_length=1)
+    #: 复述策略：不复述上一章结尾／用一两句重新定向。
+    recap: Literal['do_not_recap', 'brief_orientation']
 
-class OngoingAction(StrictModel):
-    """进行中行动：已启动、尚未完成、后文要接续的行动。
-
-    `started_at` 是行动启动拍的复合引用（`场景#拍`）；wire 给
-    {"scene","beat"} 1-based 分量，compiler 派发 ID 后解析。"""
-
-    char_id: str = Field(min_length=1)
-    action: str = Field(min_length=1)
-    started_at: str = Field(min_length=1, description='场景#拍 复合引用')
-
-
-class OpenQuestion(StrictModel):
-    """跨章悬念：已向读者/人物打开、后文要回答的未决问题。
-
-    `planted_at` 是问题植入拍的复合引用；问题文本只在此登记一次。"""
-
-    question: str = Field(min_length=1)
-    planted_at: str = Field(min_length=1, description='场景#拍 复合引用')
-
-
-class Promise(StrictModel):
-    """承诺：人物间的约定，后文需要兑现或背叛。
-
-    `made_at` 是承诺发生拍的复合引用；`to` 可空（对读者/不特定对象的承诺）。"""
-
-    maker: str = Field(min_length=1)
-    content: str = Field(min_length=1)
-    made_at: str = Field(min_length=1, description='场景#拍 复合引用')
-    to: str | None = None
+    @classmethod
+    def opening(cls) -> 'ChapterEntry':
+        """第 1 章的固定开篇形态：没有上一章可承接（new_scene＋不复述＋无延续）。"""
+        return cls(transition='new_scene', carryover=None, recap='do_not_recap')
 
 
 def _parse_anchor(raw: object) -> 'tuple[int, int] | None':
-    """wire 锚定分量 {"scene": i, "beat": j} → (i, j)；形状非法返回 None。"""
+    """wire 锚定分量 {"scene": i, "beat": j} → (i, j)；形状非法返回 None。
+
+    rc10（R2）起唯一消费方是 Hook Design 的位置引用校验（`hook.py`）；
+    四个静态跨章列表退役后 Design wire 不再有锚定条目。
+    """
     if not isinstance(raw, dict):
         return None
     scene, beat = raw.get('scene'), raw.get('beat')
@@ -203,11 +279,14 @@ class ChapterAssignment(StrictModel):
 
     `purpose` 是本章承担的核心变化（概括章内已设计的变化，不单独增加事件或
     结果）——为一次整章写作提供方向；compiler 不从场景事件猜这一层语义（RC4）。
+    `entry` 是本章与上一章的承接声明（R2.6，裁决 7：必填，编译器不猜）；
+    第 1 章固定为开篇形态（`ChapterEntry.opening()`），BodyDesign 构造期校验。
     """
 
     chapter_ordinal: int = Field(ge=1)
     purpose: str = Field(min_length=1)
     scene_ids: tuple[str, ...] = Field(min_length=1)
+    entry: ChapterEntry
 
     @model_validator(mode='after')
     def _no_duplicate_scenes(self) -> 'ChapterAssignment':
@@ -217,23 +296,24 @@ class ChapterAssignment(StrictModel):
 
 
 class BodyDesign(StrictModel):
-    """正文选择（canonical body view；rc7：B3 前半——TargetDesign 结构化跨章
-    依赖与读者确认地址）。
+    """正文选择（canonical body view；rc10：R2 语义送达——线程、world_rules、entry）。
 
     Bind、Compile、Context 与 Guard 的类型都收窄到这里——Hook 不是正文
     写前链路的输入，也不增加义务分母。
 
-    【结构化跨章依赖（B3 前半）】整书风格（`book_style`）、稳定人物声线
-    （`character_voices`）、持续目标（`standing_goals`）、进行中行动
-    （`ongoing_actions`）、悬念（`open_questions`）与承诺（`promises`）
-    是 TargetDesign 的正式字段：后文需要记住的事实必须进这里，不能只写在
-    导演说明里。compiler 把书级条目投影进 BookBrief（随每章请求下发）；
-    锚定条目的章包投影归章闭包（B3 后半）。
+    【结构化跨章依赖（rc10）】整书风格（`book_style`）、稳定人物声线
+    （`character_voices`）与书级世界边界（`world_rules`）是 TargetDesign 的
+    正式书级字段，随 BookBrief 进每章请求；跨章语义走拍上的线程操作
+    （`TargetBeat.threads`，折叠走 ThreadFold）。rc7 的四个静态锚定列表
+    已删除（AUD-04：无消费者；裁决 3）。
     """
-    contract_version: Literal['str06-rc7'] = 'str06-rc7'
+    contract_version: Literal['str06-rc10'] = 'str06-rc10'
     graph_id: str = Field(min_length=1)
     #: 整书风格（叙述质地与表达规则的书面声明；进 BookBrief）。
     book_style: str = Field(min_length=1)
+    #: 书级世界边界（目标侧，R2.5：由 Design 决定沿用或改写源侧 world_constraints；
+    #: 以 must_respect 进每章——「作为世界边界，不要讲解」）。
+    world_rules: tuple[str, ...] = ()
     initial_state: tuple[TargetDelta, ...]
     initial_surfaces: tuple[SurfaceIntroduction, ...] = ()
     scenes: tuple[TargetScene, ...] = Field(min_length=1)
@@ -242,10 +322,6 @@ class BodyDesign(StrictModel):
     #: wire 端是相对重点正数数组，归一（和为 1）由 compiler 完成（I-21）。
     chapter_weights: dict[str, float] = Field(default_factory=dict)
     character_voices: tuple[CharacterVoice, ...] = ()
-    standing_goals: tuple[StandingGoal, ...] = ()
-    ongoing_actions: tuple[OngoingAction, ...] = ()
-    open_questions: tuple[OpenQuestion, ...] = ()
-    promises: tuple[Promise, ...] = ()
 
     def beat(self, scene_id: str, beat_id: str) -> 'TargetBeat | None':
         scene = next((s for s in self.scenes if s.scene_id == scene_id), None)
@@ -302,18 +378,45 @@ class BodyDesign(StrictModel):
                    for sid in c.scene_ids]
         if ordered != [s.scene_id for s in self.scenes]:
             raise ValueError('scenes 必须按目标章内阅读序排列')
+        first = next(c for c in self.chapters if c.chapter_ordinal == 1)
+        if first.entry != ChapterEntry.opening():
+            raise ValueError('第 1 章的 entry 固定为开篇'
+                             '（new_scene＋do_not_recap＋无 carryover），不得另行声明')
         return self
 
     @model_validator(mode='after')
-    def _cross_chapter_anchors_close(self) -> 'BodyDesign':
-        """结构化跨章条目的引用闭合：锚必须是本书真实拍（构造期表达）。"""
-        beat_refs = self.beat_refs()
-        for item in (*self.ongoing_actions, *self.open_questions, *self.promises):
-            anchor = getattr(item, 'started_at', None) or getattr(
-                item, 'planted_at', None) or getattr(item, 'made_at', None)
-            if anchor not in beat_refs:
-                raise ValueError(f'跨章条目锚定 {anchor!r} 不是本书真实拍'
-                                 f'（{type(item).__name__}）')
+    def _threads_lifecycle_close(self) -> 'BodyDesign':
+        """线程生命周期闭合（M8 的 schema 面，按阅读序扫描）：
+
+        open 只能一次（声明文本只写在 open 处）；advance/close 不得早于 open；
+        close 后不得再操作；close 的 ending 必须取自所属线程 kind 的闭集
+        （`THREAD_ENDINGS`，kind 由 open 声明）。结尾仍开放的线程合法
+        （书末留线是设计自由，读数归 fold 报告）。
+        """
+        opened: dict[str, tuple[str, bool]] = {}   # ref -> (kind, 已关闭)
+        for scene in self.scenes:
+            for beat in scene.beats:
+                for thread in beat.threads:
+                    where = f'{scene.scene_id}#{beat.beat_id} 的线程 {thread.ref}'
+                    if thread.op == 'open':
+                        if thread.ref in opened:
+                            raise ValueError(f'{where} 只能开启一次'
+                                             '（声明文本只写在 open 处）')
+                        opened[thread.ref] = (thread.kind, False)
+                        continue
+                    state = opened.get(thread.ref)
+                    if state is None:
+                        raise ValueError(f'{where} 的 {thread.op} 早于开启'
+                                         '（open 必须先出现）')
+                    kind, closed = state
+                    if closed:
+                        raise ValueError(f'{where} 已关闭，不得再操作')
+                    if thread.op == 'close':
+                        if thread.ending not in THREAD_ENDINGS[kind]:
+                            raise ValueError(
+                                f'{where} 的结局 {thread.ending!r} 不在 {kind} 的'
+                                f'闭集 {THREAD_ENDINGS[kind]} 内')
+                        opened[thread.ref] = (kind, True)
         return self
 
 

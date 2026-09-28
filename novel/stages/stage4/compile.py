@@ -106,10 +106,10 @@ def compile_execution_plan(
         for scene in graph.scenes}
     folded = FoldedState().apply('__init__', init_establishments(graph))
     for scene in graph.scenes:
-        _, _, read_errors = scene_read_views(
+        views = scene_read_views(
             scene=scene, establishments=scene_establishments[scene.scene_id],
             folded_prefix=folded)
-        errors.extend(read_errors)
+        errors.extend(views.errors)
         folded.apply(scene.scene_id, scene_establishments[scene.scene_id])
         folded.expire_scene_scope(scene.scene_id)
     if errors:

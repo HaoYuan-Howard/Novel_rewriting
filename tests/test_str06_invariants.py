@@ -62,6 +62,13 @@ H64B = 'b' * 64
 
 # ───────────────────────── fixture 构造器 ─────────────────────────
 
+def _entry(ordinal: int):
+    """测试章节的承接声明：第 1 章固定开篇，其余 time_skip 直切（R2.6）。"""
+    from contracts.schema.design import ChapterEntry
+    return (ChapterEntry.opening() if ordinal == 1 else
+            ChapterEntry(transition='time_skip', recap='do_not_recap'))
+
+
 def _obligation(oid: str, must: bool = True) -> SourceObligation:
     return SourceObligation(
         obligation_id=oid, kind=PreserveKind.EVENT_CORE, statement=f'义务{oid}',
@@ -96,7 +103,9 @@ def _scene(scene_id: str) -> TargetScene:
 def _graph(scenes, chapters) -> BodyDesign:
     chapters = [ChapterAssignment(chapter_ordinal=c.chapter_ordinal,
                                   purpose=f'章{c.chapter_ordinal}目的',
-                                  scene_ids=c.scene_ids) for c in chapters]
+                                  scene_ids=c.scene_ids,
+                                  entry=getattr(c, 'entry', None) or _entry(
+                                      c.chapter_ordinal)) for c in chapters]
     return BodyDesign(initial_state=(), graph_id='g1',
                       book_style='冷峻克制的第三人称叙事。',
                       scenes=tuple(scenes), chapters=tuple(chapters))
@@ -174,7 +183,8 @@ def test_binding_covers_checkpoint_green_and_red():
 def test_plan_matches_graph_green_and_red():
     graph = _graph(
         [_scene('s01'), _scene('s02')],
-        [ChapterAssignment(chapter_ordinal=1, purpose='章1目的', scene_ids=('s01', 's02'))])
+        [ChapterAssignment(chapter_ordinal=1, purpose='章1目的', scene_ids=('s01', 's02'),
+    entry=_entry(1))])
     assert check_plan_matches_graph(graph, _plan('s01', 's02')) == []
     assert '未被编译' in check_plan_matches_graph(graph, _plan('s01'))[0]
     assert '引用了' in check_plan_matches_graph(graph, _plan('s01', 's02', 's03'))[0]
@@ -184,7 +194,8 @@ def test_plan_matches_graph_green_and_red():
 
 def _chapter_receipt(**over) -> ChapterReceipt:
     base = dict(
-        chapter_ordinal=1, packet_sha256=H64,
+        chapter_ordinal=1, writer_view_sha256=H64, validation_sha256='b' * 64,
+        machine_view_sha256='d' * 64,
         prose_sha256=('c' * 64), request_identity='req-1',
         protocol_version='p1', renderer_version='r1', validator_version='v1',
         status='accepted', mechanical_checks=('non_empty', 'length_band'),
@@ -196,16 +207,38 @@ def _chapter_receipt(**over) -> ChapterReceipt:
 
 
 def test_chapter_receipt_rejects_stale_inputs():
+    from novel.stages.common import ChapterIdentities
     receipt = _chapter_receipt()
-    assert check_chapter_receipt(receipt, packet_sha256=H64,
+    good = ChapterIdentities(writer_view_sha256=H64, validation_sha256='b' * 64,
+                             machine_view_sha256='d' * 64)
+    assert check_chapter_receipt(receipt, identities=good,
                                  prose_sha256='c' * 64) == []
 
-    # 章包变化（本章导演说明/实际依赖/验证材料/预算）→ 本章回执失效（D2 章包绑定）
-    problems = check_chapter_receipt(receipt, packet_sha256=H64B,
-                                     prose_sha256='c' * 64)
-    assert any('packet_sha256' in p for p in problems)
+    # 写手视图变化（本章导演说明/实际依赖/预算）→ 本章回执失效（rc6 身份拆分）
+    problems = check_chapter_receipt(
+        receipt,
+        identities=ChapterIdentities(writer_view_sha256=H64B,
+                                     validation_sha256='b' * 64,
+                                     machine_view_sha256='d' * 64),
+        prose_sha256='c' * 64)
+    assert any('writer_view_sha256' in p for p in problems)
+    # 验证输入变化（禁用字面/称谓许可/篇幅带）→ 同样失效
+    problems = check_chapter_receipt(
+        receipt,
+        identities=ChapterIdentities(writer_view_sha256=H64,
+                                     validation_sha256='f' * 64,
+                                     machine_view_sha256='d' * 64),
+        prose_sha256='c' * 64)
+    assert any('validation_sha256' in p for p in problems)
+    # Machine 层摘要仅审计：变化不触发重购
+    assert check_chapter_receipt(
+        receipt,
+        identities=ChapterIdentities(writer_view_sha256=H64,
+                                     validation_sha256='b' * 64,
+                                     machine_view_sha256='9' * 64),
+        prose_sha256='c' * 64) == []
     # 正文与回执脱钩（文本被改）→ 拒绝
-    problems = check_chapter_receipt(receipt, packet_sha256=H64,
+    problems = check_chapter_receipt(receipt, identities=good,
                                      prose_sha256='e' * 64)
     assert any('prose_sha256' in p for p in problems)
     # 换 NameMap 不影响接受回执：回执字段里没有任何交付材料
@@ -265,7 +298,8 @@ def test_cross_chapter_merge_layout_passes_contract_chain():
     assert check_binding_covers_checkpoint(cp, binding) == []
     graph = _graph(
         [_scene('s01')],
-        [ChapterAssignment(chapter_ordinal=1, purpose='章1目的', scene_ids=('s01',))])  # 1 个目标章
+        [ChapterAssignment(chapter_ordinal=1, purpose='章1目的', scene_ids=('s01',),
+    entry=_entry(1))])  # 1 个目标章
     assert check_plan_matches_graph(graph, _plan('s01')) == []
 
 
@@ -279,8 +313,10 @@ def test_cross_chapter_split_layout_passes_contract_chain():
     assert check_binding_covers_checkpoint(cp, binding) == []
     graph = _graph(
         [_scene('s01'), _scene('s02')],
-        [ChapterAssignment(chapter_ordinal=1, purpose='章1目的', scene_ids=('s01',)),
-         ChapterAssignment(chapter_ordinal=2, purpose='章2目的', scene_ids=('s02',))])
+        [ChapterAssignment(chapter_ordinal=1, purpose='章1目的', scene_ids=('s01',),
+    entry=_entry(1)),
+         ChapterAssignment(chapter_ordinal=2, purpose='章2目的', scene_ids=('s02',),
+              entry=_entry(2))])
     assert check_plan_matches_graph(graph, _plan('s01', 's02')) == []
 
 
@@ -289,9 +325,12 @@ def test_same_ordinal_different_semantics_not_conflated():
     用 chapter_map 的形状纪律表达（scene→chapter 是唯一权威，不存在源章换算）。"""
     graph = _graph(
         [_scene('s01'), _scene('s02'), _scene('s03')],
-        [ChapterAssignment(chapter_ordinal=1, purpose='章1目的', scene_ids=('s01',)),
-         ChapterAssignment(chapter_ordinal=2, purpose='章2目的', scene_ids=('s02',)),
-         ChapterAssignment(chapter_ordinal=3, purpose='章3目的', scene_ids=('s03',))])
+        [ChapterAssignment(chapter_ordinal=1, purpose='章1目的', scene_ids=('s01',),
+    entry=_entry(1)),
+         ChapterAssignment(chapter_ordinal=2, purpose='章2目的', scene_ids=('s02',),
+              entry=_entry(2)),
+         ChapterAssignment(chapter_ordinal=3, purpose='章3目的', scene_ids=('s03',),
+              entry=_entry(3))])
     mapping = {c.chapter_ordinal: list(c.scene_ids) for c in graph.chapters}
     assert mapping == {1: ['s01'], 2: ['s02'], 3: ['s03']}
     # BodyDesign 上不存在任何「源章」字段可供换算（F0 已测 smuggle）；

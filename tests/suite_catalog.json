@@ -813,6 +813,13 @@
         "test_service_full_chain_real_subprocess_and_restart_readback": "stage"
       }
     },
+    "tests/test_str06_r2_contracts.py": {
+      "layer": "unit_contract",
+      "stages": [
+        "stage4",
+        "stage5"
+      ]
+    },
     "tests/test_str06_repairs.py": {
       "layer": "unit_contract",
       "stages": [

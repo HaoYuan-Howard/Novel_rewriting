@@ -24,9 +24,10 @@ from __future__ import annotations
 import math
 
 from contracts.schema.book_ir import (
-    BookBrief, ChapterIR, ChapterNavEntry, ReleaseScheduleEntry, WriterBookIR,
+    BookBrief, ChapterContinuity, ChapterIR, ChapterNavEntry,
+    PreviousChapterEnding, ReleaseScheduleEntry, WriterBookIR,
 )
-from contracts.schema.design import BodyDesign
+from contracts.schema.design import BodyDesign, ChapterAssignment
 from contracts.schema.execution import ExecutionPlan
 from contracts.schema.grounding import SemanticBinding
 from contracts.schema.source import NameProjection, NameStructure, render_form
@@ -156,6 +157,32 @@ def _scene_line(graph: BodyDesign, scene_id: str) -> str:
             f'受阻于「{scene.driver.opposition}」')
 
 
+def _chapter_continuity(
+    graph: BodyDesign, assignment_previous: ChapterAssignment | None,
+    assignment: ChapterAssignment,
+) -> ChapterContinuity:
+    """章级承接数据面（R2.6）：本章 entry＋上一章末场的机械投影。
+
+    纯机械推导（I-21）：上一章末场＝该章 scene_ids 的最后一场；驱动转折＝
+    末场 driver.turn 原样；末拍事件＝末场最后一拍 event 原样；在场人物＝
+    末拍 participants 原序；「收尾时所在」只投影末场锚——Design 无地点字段，
+    不猜地点语义。第 1 章 `previous_ending=None`（entry 固定开篇）。
+    """
+    previous_ending: PreviousChapterEnding | None = None
+    if assignment_previous is not None:
+        last_scene_id = assignment_previous.scene_ids[-1]
+        last_scene = next(s for s in graph.scenes if s.scene_id == last_scene_id)
+        last_beat = last_scene.beats[-1]
+        previous_ending = PreviousChapterEnding(
+            chapter_ordinal=assignment_previous.chapter_ordinal,
+            ending_scene_id=last_scene_id,
+            driver_turn=last_scene.driver.turn,
+            final_beat_event=last_beat.event,
+            present_chars=tuple(last_beat.participants))
+    return ChapterContinuity(entry=assignment.entry,
+                             previous_ending=previous_ending)
+
+
 def compile_writer_book_ir(
     *, graph: BodyDesign, plan: ExecutionPlan, binding: SemanticBinding,
     total_budget: int, length_band: tuple[float, float], book_title: str = '',
@@ -171,6 +198,7 @@ def compile_writer_book_ir(
     chapters: list[ChapterIR] = []
     nav: list[ChapterNavEntry] = []
     scenes_before = 0
+    previous_assignment: ChapterAssignment | None = None
     for assignment in sorted(graph.chapters, key=lambda c: c.chapter_ordinal):
         contexts, lines = [], []
         for scene_id in assignment.scene_ids:
@@ -185,15 +213,18 @@ def compile_writer_book_ir(
         chapters.append(ChapterIR(
             chapter_ordinal=ordinal, purpose=assignment.purpose,
             length_budget=budgets[ordinal], scenes=tuple(contexts),
+            continuity=_chapter_continuity(graph, previous_assignment, assignment),
             released_surfaces=tuple(sorted(chapter_surface_releases(graph, ordinal))),
             withheld_literals=chapter_withheld_literals(projection, graph, ordinal,
                                                         structure)))
         nav.append(ChapterNavEntry(
             chapter_ordinal=ordinal, purpose=assignment.purpose,
             scene_ids=tuple(assignment.scene_ids), scene_lines=tuple(lines)))
+        previous_assignment = assignment
     brief = BookBrief(
         book_title=book_title,
         book_style=graph.book_style,
+        world_rules=tuple(graph.world_rules),
         character_voices=tuple(graph.character_voices),
         target_chapter_count=len(graph.chapters),
         total_length_budget=total_budget, length_band_low=length_band[0],

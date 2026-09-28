@@ -12,7 +12,8 @@
   · `hook_context.py` HookContext 确定性投影（`str06.stage4.compile` 的一段；
                    B3 后半自 stage5 包归位）。
   · `compile.py`   ExecutionPlan 确定性编译＋章闭包证明（`str06.stage4.compile`）。
-  · `guard.py`     写前 M1–M6 机械闸（只读验证、只写报告出口）。
+  · `guard.py`     写前 M1–M8 机械闸（M7 声明读取已解析进 IR、M8 线程投影；
+                   只读验证、只写报告出口）。
   · `fold.py`      单一目标 Fold：accepted prefix 的 planned_delta 重放。
   · `book_ir.py`   WriterBookIR 确定性编译（章预算 largest-remainder 分配；权重
                    变化的整数预算传导规则 `chapters_with_budget_change`；章级
@@ -39,8 +40,9 @@ from novel.stages.stage4.grounding import (
 )
 from novel.stages.stage4.guard import (
     appeared_chars, check_binding_beat_refs, check_cast_legality,
-    check_entry_timing, check_obligation_coverage, run_mechanical_guard,
-    scene_order,
+    check_entry_timing, check_obligation_coverage, check_read_projection,
+    check_thread_lifecycle, check_thread_projection, expected_thread_faces,
+    run_mechanical_guard, scene_order,
 )
 from novel.stages.stage4.hook import assemble_hook_design, publish_graph
 from novel.stages.stage4.hook_context import compile_hook_context
@@ -52,8 +54,9 @@ __all__ = [
     'chapter_withheld_literals', 'chapters_with_budget_change',
     'check_binding_beat_refs',
     'check_cast_legality', 'check_entry_timing', 'check_obligation_coverage',
+    'check_read_projection', 'check_thread_lifecycle', 'check_thread_projection',
     'compile_execution_plan', 'compile_hook_context', 'compile_writer_book_ir',
-    'fold_accepted_prefix',
+    'expected_thread_faces', 'fold_accepted_prefix',
     'init_establishments', 'project_binding_space', 'project_brief',
     'publish_graph', 'run_mechanical_guard', 'scene_order',
 ]

@@ -212,7 +212,10 @@ from contracts.schema.grounding import (
     PreserveCheckpoint, ReconstructionBrief, SemanticBinding,
 )
 from contracts.schema.execution import ExecutionPlan
-from contracts.schema.design import BodyDesign, PresentationGraph
+from contracts.schema.design import (
+    THREAD_ENDINGS, BodyDesign, ChapterAssignment, ChapterEntry,
+    PresentationGraph, ThreadAction, ThreadKind,
+)
 from contracts.schema.hook import HookContext, HookReceipt
 from contracts.schema.book_ir import WriterBookIR
 from contracts.schema.receipt import ChapterReceipt

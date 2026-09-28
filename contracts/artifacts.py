@@ -254,20 +254,28 @@ STR06_ARTIFACT_RC_VERSIONS: Final[dict[str, str]] = {
     # bind,hook-design}-v1），Design wire 瘦身——场景/拍 ID、复合引用、权重归一
     # 与整数预算由 compiler 生成（I-21）；TargetDesign 增结构化跨章字段；读者
     # 确认必填事实地址（D4）。形状/判据变化，旧 Design／graph／WriterIR 拒读。
-    'stage4/design/body_design.json': 'str06-rc7',
-    'stage4/design/presentation_graph.json': 'str06-rc7',
+    # rc10（2026-09-28 R2 语义送达）：Design wire 升 stage4-design-v2——拍上线程
+    # （threads）、书级 world_rules、章级 entry；四个静态跨章列表删除（AUD-04）。
+    'stage4/design/body_design.json': 'str06-rc10',
+    'stage4/design/presentation_graph.json': 'str06-rc10',
     'stage4/context/hook/hook.json': 'str06-rc3',
     # rc7 同批：BookBrief 带整书风格与稳定人物声线；PendingConfirmation 带事实
     # 地址（D4），投影按地址精确到消费该地址的章包。
     # rc8（2026-09-27 B4，D2）：ChapterIR 增章级验证材料（称谓许可、禁用字面
     # compile 时算好）；完整 IR 只作存储与审计，运行时按章投影章包、不落盘。
-    'stage4/ir/writer_book_ir.json': 'str06-rc8',
+    # rc10（R2）：拍级读取值挂拍（AUD-03）、线程投影面、continuity 分区与
+    # 书级 world_rules 进 BookBrief——IR 形状升 rc10。
+    'stage4/ir/writer_book_ir.json': 'str06-rc10',
     'stage5/hook/hook.txt': 'str06-rc3',
     'stage5/hook/receipt.json': 'str06-rc3',
     'stage5/body/ch{nn}.txt': 'str06-rc4',
     # rc5（rc8 同批）：回执改绑章包摘要＋请求身份＋验证版本＋改名前正文摘要，
     # 不再绑定全书 IR 与前文链（D2）；各章独立有效，支持集合恢复。
-    'stage5/acceptance/body/ch{nn}.json': 'str06-rc5',
+    # rc6（rc10 同批，R2 身份拆分）：packet_sha256 单摘要拆成写手视图摘要
+    # （writer_view_sha256，材料含 renderer 与写手协议版本）＋验证输入摘要
+    # （validation_sha256：禁用字面、称谓许可、篇幅带）＋Machine 审计摘要
+    # （machine_view_sha256，仅审计不触发重购）。
+    'stage5/acceptance/body/ch{nn}.json': 'str06-rc6',
     'stage7/naming/name_map.json': 'str06-rc3',
     'stage7/final/{title}_rewriting.txt': 'str06-rc4',
     'stage7/final/delivery_manifest.json': 'str06-rc4',

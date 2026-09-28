@@ -40,7 +40,9 @@ from novel.stages.stage4.book_ir import (
 from novel.stages.stage4.compile import compile_execution_plan
 from novel.stages.stage4.design import assemble_body_design
 from novel.stages.stage4.fold import fold_accepted_prefix
-from novel.stages.common import packet_sha256, project_chapter_packet, surface_engine_release
+from novel.stages.common import (
+    chapter_identities, project_chapter_packet, surface_engine_release,
+)
 from novel.store import Str06Repository
 from novel.work_units import WorkUnitBudget, read_book_budget
 from tests.str06_facilities import make_context
@@ -142,7 +144,8 @@ def test_withheld_literal_is_hard_failure_never_disclosed():
                                                        identity='clean', cached=False))
     assert ok.prose == clean and ok.receipt is not None
     assert ok.receipt.status == 'accepted' and ok.length_disclosed is False
-    assert ok.receipt.packet_sha256 == packet_sha256(packet)
+    assert ok.receipt.writer_view_sha256 == chapter_identities(
+        packet).writer_view_sha256
 
 
 # ────────────────── public_state_ref 接管 · ② 跨章携入 ──────────────────────
@@ -244,7 +247,9 @@ def _unset_chain_wire(*, final_op: str) -> dict:
              'dramatic_intent': '加压', 'target_delta': [], 'delivery_hint': '',
              'surface_introductions': []}],
         'delivery': {'pov': 'yun_niang', 'voice': '冷峻', 'avoid': []}})
-    wire['chapters'].append({'purpose': '寻问无果后决意亲寻', 'scenes': 1})
+    wire['chapters'].append({'purpose': '寻问无果后决意亲寻', 'scenes': 1,
+                             'entry': {'transition': 'immediate_continuation',
+                                       'recap': 'do_not_recap'}})
     wire['scene_weights'] = [5, 3, 2]
     return wire
 

@@ -15,9 +15,11 @@ IR。验证材料（称谓许可、禁用字面）已在 compile 时算好并随
 者；没有合法候选则该章无提交。截断（finish_reason=length）是节点设计缺陷：
 即停该章，不重写、不进候选。
 
-【回执绑定（rc5）】
-章回执绑定章包摘要（`packet_sha256`）、请求身份、验证版本与改名前正文摘要；
-不再绑定全书 IR 与前文链（`R-7.4` 改写）。
+【回执绑定（rc6 身份拆分）】
+章回执分别绑定写手视图摘要（`writer_view_sha256`，材料含 renderer 与写手协议
+版本）、验证输入摘要（`validation_sha256`：禁用字面、称谓许可、篇幅带）与
+Machine 审计摘要（`machine_view_sha256`，仅审计不触发重购）；不再绑定全书 IR
+与前文链（`R-7.4` 改写）。
 
 【边界】
 本模块不落盘（正文/回执/attempt 记录的写入归调用方的 repository 编排）；
@@ -31,7 +33,7 @@ from typing import Any, NamedTuple
 from contracts.schema.receipt import ChapterLengthDisclosure, ChapterReceipt
 from novel.stages.common import (
     RENDERER_VERSION, WRITER_PROTOCOL_VERSION, ChapterWriterPacket,
-    packet_sha256, render_chapter_packet,
+    chapter_identities, render_chapter_packet,
 )
 from novel.stages.stage5.body_checks import (
     BODY_MECHANICAL_CHECKS, BODY_VALIDATOR_VERSION, MAX_BODY_REWRITES,
@@ -164,9 +166,12 @@ def _outcome(packet: ChapterWriterPacket, prose: str, identity: str,
              low: int, high: int, target: int, *, disclosed: bool,
              ref=None) -> ChapterOutcome:
     count = count_body_chars(prose)
+    identities = chapter_identities(packet)
     receipt = ChapterReceipt(
         chapter_ordinal=packet.chapter.chapter_ordinal,
-        packet_sha256=packet_sha256(packet),
+        writer_view_sha256=identities.writer_view_sha256,
+        validation_sha256=identities.validation_sha256,
+        machine_view_sha256=identities.machine_view_sha256,
         prose_sha256=sha256_text(prose),
         request_identity=identity or 'unidentified',
         protocol_version=WRITER_PROTOCOL_VERSION,

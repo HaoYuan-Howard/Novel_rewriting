@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""receipt —— 章级接受回执（F5；rc5 起绑定章包摘要，D2）。
+"""receipt —— 章级接受回执（F5；rc5 起绑定章包摘要，D2；rc6 拆分绑定身份）。
 
 【为什么是章级】
 各章独立成文、一次输出整章自然正文；整章自由正文不提供可靠的场景边界，
@@ -8,12 +8,21 @@
 随生产正文 Judge 一并退役（取消 Judge 是已确认产品方向；机械检查不证明章内
 揭示位置或逐场义务兑现，这一限制如实进入披露）。
 
-【绑定语义（rc5，2026-09-27 B4）】
-回执绑定：章序、章包摘要（`packet_sha256`，Writer 实际可见章包＋验证材料的
-规范身份；当前章包变化只使该章回执失效）、改名前正文（`prose_sha256`）、
-被接受 attempt 的实际请求身份、协议、renderer 与校验版本。**不再绑定全书 IR
-与前文链（D2）**：写手只收当前章包，各章独立有效、可乱序提交与集合恢复。
-无有效回执的正文不能作为交付输入。换 NameMap 不使回执失效，只改变交付身份。
+【绑定语义（rc6，2026-09-28 R2：身份拆分）】
+回执分别绑定三把摘要（`novel/stages/common.py::chapter_identities`）：
+
+  · `writer_view_sha256`——写手视图摘要：写手实际可见的章包阅读面（renderer
+    渲染字节），材料含 renderer 与写手协议版本。写手看到的变化（导演说明、
+    义务、拍事实、篇幅目标、协议或渲染版本）⇒ 该章重购；
+  · `validation_sha256`——验证输入摘要：禁用字面、称谓许可与篇幅带。验证
+    材料变化 ⇒ 旧机械验证不再成立，同样触发重做；
+  · `machine_view_sha256`——Machine 层摘要，**仅审计**：只改 Machine 层字段
+    （写手不可见、验证器不消费的工程位，如消费身份摘要）不触发重购。
+
+正文绑定（`prose_sha256`）、被接受 attempt 的实际请求身份、协议、renderer
+与校验版本照旧。**不绑定全书 IR 与前文链（D2）**：写手只收当前章包，各章
+独立有效、可乱序提交与集合恢复。无有效回执的正文不能作为交付输入。
+换 NameMap 不使回执失效，只改变交付身份。
 
 【语义边界】
 回执只记录机械结果；`semantic` 恒为 `unverified`——机械通过不升级为语义已验
@@ -53,12 +62,21 @@ class ChapterLengthDisclosure(StrictModel):
 class ChapterReceipt(StrictModel):
     """章级接受回执（`stage5/acceptance/body/ch{nn}.json`）。"""
 
-    contract_version: Literal['str06-rc5'] = 'str06-rc5'
+    contract_version: Literal['str06-rc6'] = 'str06-rc6'
     chapter_ordinal: int = Field(ge=1)
-    packet_sha256: str = Field(
+    writer_view_sha256: str = Field(
         min_length=64, max_length=64,
-        description='章包摘要：被接受请求实际可见章包（PacketBrief＋ChapterIR＋'
-                    'RealizationContract）与验证材料的规范身份；章包变化使本章回执失效')
+        description='写手视图摘要（rc6 身份拆分）：写手实际可见的章包阅读面'
+                    '（renderer 渲染字节，材料含 renderer 与写手协议版本）；'
+                    '写手可见面变化使本章回执失效（重购）')
+    validation_sha256: str = Field(
+        min_length=64, max_length=64,
+        description='验证输入摘要（rc6 身份拆分）：禁用字面、称谓许可与篇幅带；'
+                    '验证材料变化使旧机械验证不再成立（重做）')
+    machine_view_sha256: str = Field(
+        min_length=64, max_length=64,
+        description='Machine 层摘要（仅审计，rc6）：只改 Machine 层字段不触发'
+                    '重购；用于对账与漂移诊断，不进回执核对')
     prose_sha256: str = Field(min_length=64, max_length=64,
                               description='绑定改名前本章正文')
     request_identity: str = Field(min_length=1, description='被接受 attempt 的实际请求身份')
@@ -78,7 +96,8 @@ class ChapterReceipt(StrictModel):
 
     @model_validator(mode='after')
     def _hash_charset(self) -> 'ChapterReceipt':
-        for name in ('packet_sha256', 'prose_sha256'):
+        for name in ('writer_view_sha256', 'validation_sha256',
+                     'machine_view_sha256', 'prose_sha256'):
             value = getattr(self, name)
             if any(c not in '0123456789abcdef' for c in value):
                 raise ValueError(f'{name} 必须是小写十六进制 SHA-256')

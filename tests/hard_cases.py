@@ -170,12 +170,17 @@ def _naming_residual() -> list:
 
 
 def _chain_broken() -> list:
-    """章回执与当前章包脱钩：集合核对报出，装配未就绪（D2 rc8）。"""
+    """章回执与当前编译脱钩：集合核对报出，装配未就绪（D2；rc6 身份拆分）。"""
     from novel.stages.stage7.assembly import verify_chapter_receipts
-    receipts = {1: {'status': 'accepted', 'packet_sha256': 'a' * 64,
+    receipts = {1: {'status': 'accepted', 'writer_view_sha256': 'c' * 64,
+                    'validation_sha256': 'b' * 64, 'machine_view_sha256': 'd' * 64,
                     'prose_sha256': 'b' * 64}}
-    return verify_chapter_receipts(receipts, {1: '推门进屋。'},
-                                   packet_sha256_by_ordinal={1: 'a' * 64})
+    from novel.stages.common import ChapterIdentities
+    return verify_chapter_receipts(
+        receipts, {1: '推门进屋。'},
+        identities_by_ordinal={1: ChapterIdentities(
+            writer_view_sha256='c' * 64, validation_sha256='b' * 64,
+            machine_view_sha256='d' * 64)})
 
 
 CASES: dict[str, Case] = {
@@ -198,10 +203,10 @@ CASES: dict[str, Case] = {
 # ─── 其余 HARD 的最小会红样本（编译闭合一族） ────────────────────────────────
 
 def _body_design_bad_wire() -> list:
-    """BodyDesign 编译闭合：非法 POV（未知人物）当场拒（stage4-design-v1 形状）。"""
+    """BodyDesign 编译闭合：非法 POV（未知人物）当场拒（stage4-design-v2 形状）。"""
     from novel.stages.stage4.design import assemble_body_design
     _body, errors = assemble_body_design(
-        {'protocol_version': 'stage4-design-v1', 'book_style': '冷峻。',
+        {'protocol_version': 'stage4-design-v2', 'book_style': '冷峻。',
          'chapters': [{'purpose': 'e', 'scenes': 1}],
          'scenes': [{'beats': [{'event': 'e', 'participants': ['ch1'],
                                 'dramatic_intent': 'd'}],
@@ -360,21 +365,26 @@ def _body_out_of_band() -> list:
 
 
 def _receipt_stale() -> list:
-    """章回执绑定：旧回执配新章包必须拒绝（rc5 章包绑定，逐一核对）。"""
+    """章回执绑定：旧回执配新章包必须拒绝（rc6 身份拆分，逐一核对）。"""
     from contracts.schema.receipt import ChapterReceipt
-    from novel.stages.common import check_chapter_receipt
+    from novel.stages.common import ChapterIdentities, check_chapter_receipt
 
     from contracts.schema.receipt import ChapterLengthDisclosure
     receipt = ChapterReceipt(
-        contract_version='str06-rc5', chapter_ordinal=1, status='accepted',
-        packet_sha256='a' * 64,
+        contract_version='str06-rc6', chapter_ordinal=1, status='accepted',
+        writer_view_sha256='a' * 64, validation_sha256='b' * 64,
+        machine_view_sha256='e' * 64,
         prose_sha256='c' * 64, request_identity='r1',
         protocol_version='p1', renderer_version='r1', validator_version='v1',
         mechanical_checks=('non_empty',), length=ChapterLengthDisclosure(
             char_count=100, target_chars=100, band_low=60, band_high=130,
             within_band=True, deviation_ratio=0.0))
-    return check_chapter_receipt(receipt, packet_sha256='d' * 64,
-                                 prose_sha256='c' * 64)
+    return check_chapter_receipt(
+        receipt,
+        identities=ChapterIdentities(writer_view_sha256='d' * 64,
+                                     validation_sha256='b' * 64,
+                                     machine_view_sha256='e' * 64),
+        prose_sha256='c' * 64)
 
 
 def _hook_rejected_no_formal() -> list:
@@ -404,7 +414,7 @@ def _delivery_not_ready() -> list:
 
 CASES.update({
     'body_length_band': Case('stage5', _body_out_of_band, '[length_band]'),
-    'chapter_receipt_binding': Case('stage5', _receipt_stale, 'packet_sha256'),
+    'chapter_receipt_binding': Case('stage5', _receipt_stale, 'writer_view_sha256'),
     'hook_receipt_binding': Case('stage5', _hook_rejected_no_formal,
                                  '[withheld_literals]'),
     'body_design_compile': Case('stage4', _body_design_bad_wire, '构造失败'),
@@ -496,7 +506,7 @@ def _design_surface_not_registered() -> list:
     """称谓闭合：Design 放行 Characters 未登记的字面。"""
     from novel.stages.stage4.design import assemble_body_design
     _body, errors = assemble_body_design(
-        {'protocol_version': 'stage4-design-v1', 'book_style': '冷峻。',
+        {'protocol_version': 'stage4-design-v2', 'book_style': '冷峻。',
          'initial_state': [], 'scenes': [{
             'state_reads': [],
             'driver': {'focal_actor': 'yun', 'immediate_want': 'w',

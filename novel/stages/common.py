@@ -49,7 +49,6 @@ from contracts.schema.execution import (
 from contracts.schema.grounding import SemanticBinding
 from contracts.schema.workflow import STR06_RC_VERSION
 
-
 # ═════════════════════════════════════════════════════════════════════════════
 # 一、字面扫描（原 `literal_scan.py`）
 # ═════════════════════════════════════════════════════════════════════════════
@@ -180,21 +179,27 @@ def check_plan_matches_graph(
 
 
 def check_chapter_receipt(
-    receipt, *, packet_sha256: str, prose_sha256: str,
+    receipt, *, identities: 'ChapterIdentities', prose_sha256: str,
 ) -> list[str]:
-    """章级回执与当前章包/正文的绑定核对：旧回执配新输入必须拒绝。
+    """章级回执与当前章包/正文的绑定核对（rc6 身份拆分）：旧回执配新输入必须拒绝。
 
-    本章章包变化（导演说明、实际依赖、验证材料、预算——重编译后投影变化）
-    使**该章**回执失效；正文字节变化使回执与文本脱钩。不再绑定全书 IR 与
-    前文链（D2，`R-7.4` 改写）：写手只收当前章包，各章独立有效、可集合恢复。
+    写手视图摘要（writer_view_sha256）与验证输入摘要（validation_sha256）分别
+    核对——写手可见面变化（导演说明、实际依赖、预算、协议或渲染版本）或验证
+    材料变化（禁用字面、称谓许可、篇幅带）都使**该章**回执失效；Machine 层
+    摘要（machine_view_sha256）**不参与核对**（仅审计：只改 Machine 层字段不
+    触发重购）。正文字节变化使回执与文本脱钩。不再绑定全书 IR 与前文链
+    （D2，`R-7.4` 改写）：写手只收当前章包，各章独立有效、可集合恢复。
     逐份核对（I-16：回执不是第二份业务权威）。
     """
     problems: list[str] = []
     if receipt.status != 'accepted':
         problems.append(f'回执状态为 {receipt.status}，不构成有效提交')
-    if receipt.packet_sha256 != packet_sha256:
-        problems.append('packet_sha256 与当前编译出的章包摘要不一致'
-                        '（章包变化使本章回执失效）')
+    if receipt.writer_view_sha256 != identities.writer_view_sha256:
+        problems.append('writer_view_sha256 与当前编译出的写手视图摘要不一致'
+                        '（写手可见面变化使本章回执失效，须重购）')
+    if receipt.validation_sha256 != identities.validation_sha256:
+        problems.append('validation_sha256 与当前编译出的验证输入摘要不一致'
+                        '（禁用字面/称谓许可/篇幅带变化，须重做）')
     if receipt.prose_sha256 != prose_sha256:
         problems.append('prose_sha256 与章文本不匹配（回执与正文脱钩）')
     return problems
@@ -474,8 +479,8 @@ setup/payoff 或结局条件中的任何一项，就填 true；否则填 false�
 返回一个 JSON object，不要围栏、不要解释。"""
 
 DESIGN_RULES = """任务：仅依据 Brief/Identity/OutputConstraints 设计目标书
-（wire 协议 stage4-design-v1）。你是整书一次调用的结构设计者：只表达**选择、
-结构与相对篇幅重点**——场景/拍编号、归章、复合引用、权重归一与整数预算全部由
+（wire 协议 stage4-design-v2）。你是整书一次调用的结构设计者：只表达**选择、
+结构与相对篇幅重点**——场景/拍编号、归章、线程编号、权重归一与整数预算全部由
 compiler 生成，你不输出任何 ID、编号或归一化数值（I-21）。
 所有类别义务及 satisfaction 都要考虑。人物动机与阅读效果以义务为准：brief、
 voice、dramatic_intent 只做呈现表达，不得改写义务给出的事实、动机与满足条件。
@@ -483,18 +488,26 @@ voice、dramatic_intent 只做呈现表达，不得改写义务给出的事实�
 自由设计场景，但不为每条义务机械拆场。
 目标状态只存会限制后续的持续事实；即时动作留在事件。初始态由你显式选择，不复制源书末态。
 
-【结构化跨章依赖（后文要记住的事实必须进字段，不得只写在导演说明里）】
+【书级声明（后文要记住的书级事实进字段，不得只写在导演说明里）】
 - book_style（必填）：整书叙述风格与表达规则的书面声明（进每章请求）；
-- character_voices: [{char_id, voice}]：需要全书保持一致声线的人物及其口吻约定；
-- standing_goals: [{char_id, goal}]：人物当前在途、跨章持续追求的目标；
-- ongoing_actions: [{char_id, action, started_at}]：已启动、尚未完成、后文要
-  接续的行动；
-- open_questions: [{question, planted_at}]：已打开、后文要回答的悬念（问题文本
-  只在此登记一次）；
-- promises: [{maker, to, content, made_at}]：人物间的承诺（后文要兑现或背叛）；
-  to 是对象 char_id，对读者或不特定对象的承诺不写。
-锚定位置 started_at/planted_at/made_at 写 {"scene": 场序, "beat": 拍序}
-（1-based 序号，指向你下方 scenes/beats 列表中的位置；不是字符串编号）。
+- world_rules: [字符串]：目标书的世界边界（可沿用或改写输入身份里的世界约束）；
+  每条一句话、可机械遵守的规则（如「术法须以寿命为代价」），不写成设定散文；
+- character_voices: [{char_id, voice}]：需要全书保持一致声线的人物及其口吻约定。
+
+【跨章线程（拍上的操作；后文要接续的跨章语义全在这里，不写静态清单）】
+beats 里的 threads 是拍上的线程操作，分三种：
+- open：{op, tag, kind, subject, text}——开一条新线。kind∈goal(在途目标)/
+  action(进行中行动)/question(未决问题)/promise(待兑现承诺)；subject 是主体
+  char_id；text 是一句声明（**question 只写问题本身，不写答案**；文本只在此
+  写一次，之后不可改写）；tag 是你自选的本地标签（全书唯一，只用字母数字）。
+- advance：{op, ref, progress}——推进一条已开的线（ref＝开线时的 tag），
+  progress 一句话说明本拍进展到哪。
+- close：{op, ref, ending, resolution}——收线（ref＝tag）。结局按 kind 取值：
+  goal→achieved/abandoned/superseded；action→completed/aborted/failed；
+  question→answered/dismissed；promise→fulfilled/broken/released。
+  resolution 一句话简短收束（question 的答案要点写在这里）。
+每条线只能 open 一次；advance/close 不得早于 open；close 之后不得再操作。
+结尾仍开放的线是合法的（留线是设计自由）。
 
 【状态词表】
 每个状态有 domain(character/relation/knowledge/world/reader), key, subjects(人物1个、
@@ -541,24 +554,31 @@ driver.focal_actor 写本场推动变化的人物，immediate_want 写其此刻�
 逐句正文，不拆成情绪/镜头/五感等字段，也不逐拍复述事件（拍的事实在 beats 里）。
 voice 只写可操作的叙述口吻要求（人称距离、句式节奏、对白密度），不贴情绪标签。
 brief 只承载呈现方向：凡涉及关键行动、持久认知变化、秘密、承诺或因果条件的表述，
-必须同时体现在 driver/event/target_delta/surface_introductions 等正式字段，不得
+必须同时体现在 driver/event/target_delta/threads/surface_introductions 等正式字段，不得
 只写在 brief 里。
 
-【wire 形状（顶层键：protocol_version, book_style, character_voices,
-standing_goals, ongoing_actions, open_questions, promises, initial_state,
-initial_surfaces, scenes, chapters, scene_weights）】
+【章间承接（每章必填的薄 entry；第 1 章不用写）】
+chapters 里第 2 章起每章带 entry: {transition, carryover?, recap}：
+- transition∈immediate_continuation(紧接上一章末尾)/time_skip(时间跳跃)/
+  location_cut(切到别处)/pov_shift(换视角)/new_scene(新场景开场)；
+- carryover（可选）：延续到本章的动作或张力，一句话；
+- recap∈do_not_recap(不复述上一章结尾)/brief_orientation(一两句重新定向)。
+第 1 章固定为开篇，不写 entry（compiler 填固定值）。
+
+【wire 形状（顶层键：protocol_version, book_style, world_rules,
+character_voices, initial_state, initial_surfaces, scenes, chapters, scene_weights）】
 - scenes 按阅读序排列：[{driver{focal_actor,immediate_want,opposition,turn},
   state_reads, realization_brief, beats, delivery{pov,voice,avoid}}]；**不写
   scene_id**——编号由 compiler 按列表序派发；
 - beats 按故事序排列：[{event, participants, dramatic_intent, delivery_hint,
-  target_delta, surface_introductions}]；**不写 beat_id**——编号由 compiler
-  按列表序派发；
-- chapters 按阅读序给章切片：[{purpose, scenes: 本章场数}]——purpose 只概括本章
-  场景里已设计的变化，不单独增加事件或结果；全部场景恰好按序切成连续的章，
-  每章至少一场，章数必须等于 OutputConstraints 的 target_chapter_count；
+  target_delta, surface_introductions, threads}]；**不写 beat_id**——编号由
+  compiler 按列表序派发；
+- chapters 按阅读序给章切片：[{purpose, scenes: 本章场数, entry?}]——purpose
+  只概括本章场景里已设计的变化，不单独增加事件或结果；全部场景恰好按序切成
+  连续的章，每章至少一场，章数必须等于 OutputConstraints 的 target_chapter_count；
 - scene_weights：与 scenes 等长的正数数组，表达各场的相对篇幅重点（如 [3,1,2]）；
   **不求和为 1**——归一与整数章预算由 compiler 按全书最大余数分配完成。
-返回一个 JSON object（protocol_version 为 "stage4-design-v1"），不要围栏、不要解释。
+返回一个 JSON object（protocol_version 为 "stage4-design-v2"），不要围栏、不要解释。
 """
 
 BIND_RULES = """任务：把每条保存义务绑定到目标故事的确切承载位置
@@ -795,19 +815,33 @@ def pending_reader_confirmations(
     return tuple(items)
 
 
+class SceneReadViews(NamedTuple):
+    """已声明状态读取的解析结果（R2，AUD-03）：入场视图＋拍级挂拍值＋错误。
+
+    `beat_reads` 键是场内 beat_id、值是该拍定位点上解析到的条目（先写后读）；
+    投影方经 `beats_ir(reads_by_beat=...)` 把值挂到对应 BeatIR（M7 判据面）。
+    """
+
+    entry_state: tuple[StateEntry, ...]
+    entry_knowledge: tuple[KnowledgeEntry, ...]
+    beat_reads: dict[str, tuple['StateEntry | KnowledgeEntry', ...]]
+    errors: list[str]
+
+
 def scene_read_views(*, scene, establishments: tuple[Establishment, ...],
                      folded_prefix: FoldedPrefix,
-                     ) -> tuple[tuple[StateEntry, ...], tuple[KnowledgeEntry, ...], list[str]]:
+                     ) -> SceneReadViews:
     """已声明状态读取的确定性解析（B3 后半）：定位到入场或具体拍，按
     「先读旧值、后写新值」解析。
 
     · 入场读取（`StateRead.at is None`）解析**本场写入前**的折叠状态——本场
       会写该地址不再是删除入场读取的理由（取消 B3 前的行为）：先读旧值是合法
-      且必要的消费，新值经所写拍的 BeatIR 到达写手；
-    · 拍读取（`at`＝场内拍 id）在该拍**之前**的建立上解析（先写后读）——其值
-      同样经所写拍的 BeatIR 到达写手，这里只做闭合证明，不进 entry 视图
-      （entry 的语义是「起笔已成立」；场内建立值进 entry 会向写手说谎并触发
-      M3）；
+      且必要的消费，新值经所写拍的 BeatIR 到达写手；解析值进 entry 视图；
+    · 拍读取（`at`＝场内拍 id）在该拍**之前**的建立上解析（先写后读）——
+      解析值挂到对应拍（`beat_reads`，R2 起**进 IR**：AUD-03 实证此前只做
+      闭合证明、值漏包，写手拿不到「本场依赖的事实」）；不进 entry 视图
+      （entry 的语义是「起笔已成立」；场内建立值进 entry 会向写手说谎并
+      触发 M3）；
     · 任何读取在其定位点没有已建立事实（未建立／scene 作用域已失效）报错；
       解析到 unknown 报错（I-42：未经标定不得当作通过；unknown 初态垫底会
       毒化 fold，F5e 失败保留为回归反例）。
@@ -827,6 +861,7 @@ def scene_read_views(*, scene, establishments: tuple[Establishment, ...],
     entry_knowledge = folded_prefix.entry_knowledge_view()
     state: dict[tuple, StateEntry] = {}
     knowledge: dict[tuple, KnowledgeEntry] = {}
+    beat_reads: dict[str, list[StateEntry | KnowledgeEntry]] = {}
     errors: list[str] = []
     for read in scene.state_reads:
         if read.at is None:
@@ -857,10 +892,14 @@ def scene_read_views(*, scene, establishments: tuple[Establishment, ...],
             errors.append(f'{where} 消费状态为 unknown；不得当作通过'
                           '（unknown 初态垫底毒化 fold，F5e 反例）')
             continue
-        if read.at is None:  # 只有入场读取进 entry 视图（拍读取的值经 BeatIR 到达写手）
+        if read.at is None:      # 入场读取进 entry 视图
             (knowledge if read.domain is EffectDomain.KNOWLEDGE else state)[probe] = found
+        else:                    # 拍级读取的解析值挂到对应拍（R2，AUD-03）
+            beat_reads.setdefault(read.at, []).append(found)
     ordered = lambda d: tuple(d[k] for k in sorted(d, key=str))  # noqa: E731
-    return ordered(state), ordered(knowledge), errors
+    return SceneReadViews(ordered(state), ordered(knowledge),
+                          {beat: tuple(values) for beat, values in beat_reads.items()},
+                          errors)
 
 
 def project_context(*, scene_id: str, graph: BodyDesign,
@@ -876,12 +915,15 @@ def project_context(*, scene_id: str, graph: BodyDesign,
     obmap = {o.obligation_id: o for o in binding.obligations}
     owned = tuple(obmap[oid] for oid in ids)
     # 状态读取按「先读旧值、后写新值」解析（B3 后半，与 compile 共用同一实现）；
-    # 未建立／unknown 消费在这里同样 fail fast（幻觉护栏不变）。
-    state, knowledge, read_errors = scene_read_views(
+    # 未建立／unknown 消费在这里同样 fail fast（幻觉护栏不变）。R2 起**两类读取
+    # 的解析值都进 IR**：入场值进 entry 视图，拍级值挂到对应拍（AUD-03）。
+    views = scene_read_views(
         scene=scene, establishments=scene_plan.establishments,
         folded_prefix=folded_prefix)
-    if read_errors:
-        raise ValueError('；'.join(read_errors))
+    state, knowledge, beat_reads = (
+        views.entry_state, views.entry_knowledge, views.beat_reads)
+    if views.errors:
+        raise ValueError('；'.join(views.errors))
     # 跨场义务只携带明确的已完成支撑拍；绝不把整条复合义务当作先前真值。
     positions = {f'{s.scene_id}#{b.beat_id}': (i, j, b)
                  for i, s in enumerate(graph.scenes) for j, b in enumerate(s.beats)}
@@ -893,7 +935,9 @@ def project_context(*, scene_id: str, graph: BodyDesign,
     releases = surface_engine_release(graph, scene_id)
     delta = tuple(type(d)(**d.model_dump()) for b in scene.beats for d in b.target_delta)
     pending = pending_reader_confirmations(graph, scene_index)
-    ir = VerificationIR(scene_id=scene_id, obligations=owned, beats=beats_ir(scene_id, scene.beats),
+    ir = VerificationIR(scene_id=scene_id, obligations=owned,
+                        beats=beats_ir(scene_id, scene.beats,
+                                       reads_by_beat=beat_reads),
                         entry_state=state, entry_knowledge=knowledge,
                         released_surfaces=releases, planned_delta=delta,
                         pending_reader_confirmations=pending,
@@ -944,7 +988,8 @@ def project_context(*, scene_id: str, graph: BodyDesign,
 # Writer 与 Validator 只收当前章包（PacketBrief＋ChapterIR＋RealizationContract）：
 # 不含前文正文、其他章 IR、导航与称谓总表。章包由 `project_chapter_packet`
 # 从完整 WriterBookIR 确定性投影——完整 IR 保留供存储与审计，章包从不落盘
-# （I-16）；章包摘要（`packet_sha256`）进请求身份与章级回执，验证材料
+# （I-16）；章回执的三把分层摘要（`chapter_identities`：写手视图／验证
+# 输入／Machine 审计）与请求身份从章包派生，验证材料
 # （禁用字面）随章包走 validator、不进阅读面。
 # ═════════════════════════════════════════════════════════════════════════════
 
@@ -954,7 +999,11 @@ def project_context(*, scene_id: str, graph: BodyDesign,
 #: 人物声线】书级层（TargetDesign 结构化投影）。
 #: v4（2026-09-27 B4，D2）：章包化——去掉【全书规划参考】（导航与其他章 IR）、
 #: 【完整已提交前文】与称谓总表；只渲染当前章包三件套。
-RENDERER_VERSION = 'str06-render-v4'
+#: v5（2026-09-28 R2）：两层 IR——章包携带拍级读取解析值（BeatIR.reads）、
+#: continuity 分区数据面与书级 world_rules；写手视图摘要（回执身份拆分）以本
+#: 版本＋渲染字节为材料。六分区 WriterPacket 渲染正文（写手协议 v5）随 R2
+#: 引擎批落地，落地前后本版本号都标识「写手可见面已变化」。
+RENDERER_VERSION = 'str06-render-v5'
 
 #: 整书写作约定与自由度（Writer 协议，固定文本）。表达自由边界：entry 是
 #: 起笔已成立的状态、effects 是结束需成立的结果、义务必须实际兑现、局部
@@ -967,7 +1016,10 @@ RENDERER_VERSION = 'str06-render-v4'
 #: v4（2026-09-27 B3 前半）：第 5 条升级为按地址投影的清单（D4：条目带确认的
 #: 事实地址，只覆盖本场实际消费的地址）；新增第 8 条整书风格与人物声线约定
 #: （TargetDesign 结构化字段的消费面）。
-WRITER_PROTOCOL_VERSION = 'str06-body-protocol-v4'
+#: v5（2026-09-28 R2）：随两层 IR 换版——正文输入新增拍级读取值（以事实约束
+#: 呈现）与书级 world_rules；六分区协议正文（必须写出／不可违背／承接／导演
+#: 说明／背景／禁区）随 R2 引擎批重写，本版本号先行登记身份（旧回执全部失效）。
+WRITER_PROTOCOL_VERSION = 'str06-body-protocol-v5'
 WRITER_PROTOCOL = """\
 1. 【事实约束】里标为入场状态（entry）的事实是起笔时已成立的状态：按叙事需要自然带入，不要求开场逐条介绍。
 2. 【事实约束】里的义务与逐拍结果是本章结束后需要成立的结果：通过情节实际完成，不要求用旁白逐条宣布；义务必须实际兑现，仅提到关键词不算完成。
@@ -1055,6 +1107,7 @@ def project_chapter_packet(book_ir: WriterBookIR, chapter_ordinal: int) -> Chapt
     return ChapterWriterPacket(
         book_brief=PacketBrief(
             book_title=brief.book_title, book_style=brief.book_style,
+            world_rules=brief.world_rules,
             character_voices=brief.character_voices,
             target_chapter_count=brief.target_chapter_count,
             total_length_budget=brief.total_length_budget,
@@ -1067,14 +1120,57 @@ def project_chapter_packet(book_ir: WriterBookIR, chapter_ordinal: int) -> Chapt
 
 
 def packet_sha256(packet: ChapterWriterPacket) -> str:
-    """章包摘要（规范化 JSON 的 SHA-256）：章级回执的章包绑定与请求身份输入。
+    """章包摘要（规范化 JSON 的 SHA-256）：覆盖章包**全部**内容的整包身份。
 
-    覆盖章包全部内容（含验证材料）：Writer 阅读面或 validator 材料任一变化
-    都换摘要——「当前章包与请求不变」是回执继续有效的唯一依据。
+    R0 送达守卫与漂移诊断的比较面（任何字段变异都换摘要）。回执绑定自 rc6
+    起改用 `chapter_identities` 的三把分层摘要（写手视图／验证输入／Machine），
+    不再直接消费本摘要。
     """
     payload = json.dumps(packet.model_dump(mode='json'), ensure_ascii=False,
                          sort_keys=True, separators=(',', ':'))
     return hashlib.sha256(payload.encode('utf-8')).hexdigest()
+
+
+class ChapterIdentities(NamedTuple):
+    """章回执的三把分层摘要（rc6 身份拆分，R2.1）。
+
+    · `writer_view_sha256`：写手实际可见的阅读面（renderer 渲染字节），材料含
+      renderer 与写手协议版本——变化 ⇒ 该章重购；
+    · `validation_sha256`：验证输入（禁用字面、称谓许可、篇幅带）——变化 ⇒
+      旧机械验证不再成立，须重做；
+    · `machine_view_sha256`：整包 Machine 层摘要，**仅审计**——只改 Machine 层
+      字段不触发重购。
+    """
+
+    writer_view_sha256: str
+    validation_sha256: str
+    machine_view_sha256: str
+
+
+def chapter_identities(packet: ChapterWriterPacket) -> ChapterIdentities:
+    """章包 → 回执三把分层摘要（rc6 唯一产地；纯函数）。
+
+    写手视图的材料是当前 renderer 的渲染字节＋renderer 版本＋写手协议版本
+    （协议版本随 RealizationContract 进包，这里显式进摘要材料以自证身份）。
+    R2 引擎批把阅读面切换成 WriterPacket 六分区渲染后，本函数的写手视图材料
+    同步切换为分区渲染字节（schema 不变，摘要随写手可见面变化而换——正是
+    绑定语义）。
+    """
+    writer_material = {
+        'renderer_version': RENDERER_VERSION,
+        'writer_protocol_version': packet.realization_contract.protocol_version,
+        'writer_view_text': render_chapter_packet(packet),
+    }
+    validation_material = {
+        'released_surfaces': list(packet.chapter.released_surfaces),
+        'withheld_literals': list(packet.chapter.withheld_literals),
+        'band_low': packet.realization_contract.band_low,
+        'band_high': packet.realization_contract.band_high,
+    }
+    return ChapterIdentities(
+        writer_view_sha256=_sha(writer_material),
+        validation_sha256=_sha(validation_material),
+        machine_view_sha256=packet_sha256(packet))
 
 
 def render_chapter_packet(packet: ChapterWriterPacket) -> str:

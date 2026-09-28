@@ -57,6 +57,7 @@ from contracts.schema.receipt import (
 )
 from contracts.schema.grounding import BriefRequirement
 from contracts.schema.design import (
+    ChapterEntry,
     BodyDesign, SceneDelivery, SceneDriver, TargetBeat, TargetScene,
 )
 from contracts.schema.execution import Reinforcement
@@ -208,8 +209,12 @@ def _graph(**over) -> dict:
     base = dict(
         graph_id='g1', initial_state=(), book_style='冷峻克制的第三人称叙事。',
         scenes=(_scene('s01'), _scene('s02')),
-        chapters=(ChapterAssignment(chapter_ordinal=1, purpose='婚约破裂，主角立誓', scene_ids=('s01',)),
-                  ChapterAssignment(chapter_ordinal=2, purpose='家族反扑，退路收窄', scene_ids=('s02',))),
+        chapters=(ChapterAssignment(chapter_ordinal=1, purpose='婚约破裂，主角立誓',
+                                    scene_ids=('s01',), entry=ChapterEntry.opening()),
+                  ChapterAssignment(chapter_ordinal=2, purpose='家族反扑，退路收窄',
+                                    scene_ids=('s02',),
+                                    entry=ChapterEntry(transition='time_skip',
+                                                       recap='do_not_recap'))),
     )
     base.update(over)
     return base
@@ -250,22 +255,33 @@ def test_presentation_graph_chapter_invariants():
     # 章号必须从 1 连续
     with pytest.raises(ValidationError):
         BodyDesign(**_graph(chapters=(
-            ChapterAssignment(chapter_ordinal=2, purpose='起', scene_ids=('s01',)),
-            ChapterAssignment(chapter_ordinal=3, purpose='承', scene_ids=('s02',)))))
+            ChapterAssignment(chapter_ordinal=2, purpose='起', scene_ids=('s01',),
+                             entry=ChapterEntry(transition='time_skip',
+                                                recap='do_not_recap')),
+            ChapterAssignment(chapter_ordinal=3, purpose='承', scene_ids=('s02',),
+                             entry=ChapterEntry(transition='new_scene',
+                                                recap='brief_orientation')))))
     # 场景必须全部归章
     with pytest.raises(ValidationError, match='未归章'):
         BodyDesign(**_graph(chapters=(ChapterAssignment(
-            chapter_ordinal=1, purpose='起', scene_ids=('s01',)),)))
+            chapter_ordinal=1, purpose='起', scene_ids=('s01',),
+            entry=ChapterEntry.opening()),)))
     # 归章引用不存在的场景
     with pytest.raises(ValidationError, match='不存在'):
         BodyDesign(**_graph(chapters=(
-            ChapterAssignment(chapter_ordinal=1, purpose='起', scene_ids=('s01',)),
-            ChapterAssignment(chapter_ordinal=2, purpose='承', scene_ids=('s02', 'sX')),)))
+            ChapterAssignment(chapter_ordinal=1, purpose='起', scene_ids=('s01',),
+                             entry=ChapterEntry.opening()),
+            ChapterAssignment(chapter_ordinal=2, purpose='承', scene_ids=('s02', 'sX'),
+                             entry=ChapterEntry(transition='time_skip',
+                                                recap='do_not_recap')),)))
     # 同一场景归两章
     with pytest.raises(ValidationError, match='多章'):
         BodyDesign(**_graph(chapters=(
-            ChapterAssignment(chapter_ordinal=1, purpose='起', scene_ids=('s01',)),
-            ChapterAssignment(chapter_ordinal=2, purpose='承', scene_ids=('s01',)))))
+            ChapterAssignment(chapter_ordinal=1, purpose='起', scene_ids=('s01',),
+                             entry=ChapterEntry.opening()),
+            ChapterAssignment(chapter_ordinal=2, purpose='承', scene_ids=('s01',),
+                             entry=ChapterEntry(transition='immediate_continuation',
+                                                recap='do_not_recap')))))
     # 权重引用不存在的场景
     with pytest.raises(ValidationError, match='chapter_weights'):
         BodyDesign(**_graph(chapter_weights={'sX': 1.0}))
@@ -356,9 +372,10 @@ def _length(**over) -> dict:
 
 def _chapter_receipt(**over) -> dict:
     base = dict(
-        chapter_ordinal=1, packet_sha256=H64,
+        chapter_ordinal=1, writer_view_sha256=H64, validation_sha256='b' * 64,
+        machine_view_sha256='c' * 64,
         prose_sha256=H64, request_identity='req-1',
-        protocol_version='str06-body-protocol-v4', renderer_version='str06-render-v4',
+        protocol_version='str06-body-protocol-v5', renderer_version='str06-render-v5',
         validator_version='str06-body-mechanical-v1', status='accepted',
         mechanical_checks=('non_empty', 'length_band'), length=_length())
     base.update(over)
@@ -378,6 +395,8 @@ def test_chapter_receipt_binds_inputs_and_rejects_metadata():
     # hash 字符集：大写/非十六进制在构造期即拒
     with pytest.raises(ValidationError):
         ChapterReceipt(**_chapter_receipt(prose_sha256='A' * 64))
+    with pytest.raises(ValidationError):
+        ChapterReceipt(**_chapter_receipt(writer_view_sha256='A' * 64))
     # 篇幅披露窗口自洽
     with pytest.raises(ValidationError):
         ChapterReceipt(**_chapter_receipt(length=_length(band_low=2000, band_high=1)))

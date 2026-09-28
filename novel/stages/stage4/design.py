@@ -1,16 +1,19 @@
-"""Body Design wire 的确定性组装与派生面生成（B3 前半重写）。
+"""Body Design wire 的确定性组装与派生面生成（B3 前半重写；R2 升 v2）。
 
-【compiler 生成 ID／归章／权重归一（I-21，B3 前半）】
-Design wire（`stage4-design-v1`）只表达选择、结构与相对篇幅重点——模型不输出
+【compiler 生成 ID／归章／权重（I-21，B3 前半）】
+Design wire（`stage4-design-v2`）只表达选择、结构与相对篇幅重点——模型不输出
 任何 ID、复合引用或归一权重。本模块是唯一派生点：
   ① 场景/拍 ID 按列表序派发：`sc{序:02d}`／`b{序:02d}`；wire 带 scene_id／
      beat_id 键即拒（「不写可派生字段」的机械面，Q-1 白名单）。
-  ② 归章是章切片：wire 的 chapters=[{purpose, scenes:N}]，compiler 按场景阅读
-     序连续切片派发 ChapterAssignment（章号连续、全覆盖、每章非空由构造保证）。
+  ② 归章是章切片：wire 的 chapters=[{purpose, scenes:N, entry?}]，compiler 按
+     场景阅读序连续切片派发 ChapterAssignment（章号连续、全覆盖、每章非空由
+     构造保证）；entry（R2 章缝合，裁决 7）第 1 章可省——compiler 填固定开篇，
+     带值必须逐字等于开篇形态，其余章必填（缺失即拒，不猜）。
   ③ 权重归一：wire 的 scene_weights 是与场景等长的正数数组（相对重点），
      compiler 归一成和为 1 的 {scene_id: weight}；缺省不登记（下游均分）。
-  ④ 复合锚定引用：ongoing_actions/open_questions/promises 的 {"scene","beat"}
-     1-based 分量解析成 `场景#拍`，越界精确拒。
+  ④ 线程编号（R2）：beats[].threads 的本地标签（open 带 `tag`，advance/close
+     带 `ref` 引用）由 compiler 按 open 先后派发 `th{nn}`；未开启先引用、
+     重复开标签、关闭后操作精确拒。
   ⑤ initial_state 一律 book 作用域（schema 强制），wire 不带 scope，compiler 填。
   ⑧ 状态读取定位（B3 后半）：state_reads 的 "at"（1-based 拍序）解析成场内
      beat_id，缺省定位到入场——先读旧值、后写新值；定位闭合在本模块校验，
@@ -26,7 +29,9 @@ Design wire（`stage4-design-v1`）只表达选择、结构与相对篇幅重点
 
 【协议与键白名单】wire 顶层 `protocol_version` 必须逐字等于
 `STAGE4_DESIGN_PROTOCOL`（I-13：漏带/错带即拒，无隐式迁移）；顶层与各嵌套层
-键白名单外的键拒绝，不静默丢弃（Q-1）。
+键白名单外的键拒绝，不静默丢弃（Q-1）。v2 起 standing_goals／ongoing_actions／
+open_questions／promises 四键在白名单外——四个静态跨章列表已退役（AUD-04），
+跨章语义走拍上的 threads。
 
 【读者确认的事实地址（D4/R-6.11）】reader 域 set 的 `confirms` 必填由 schema
 构造期表达；这里做引用闭合的机械证明：确认地址必须真实建立（initial_state 或
@@ -39,23 +44,31 @@ from typing import Any, Mapping
 
 from pydantic import ValidationError
 
-from contracts.schema.design import BodyDesign
+from contracts.schema.design import BodyDesign, ChapterEntry
 from contracts.schema.grounding import OutputConstraints
 from contracts.schema.workflow import STAGE4_DESIGN_PROTOCOL
 
-#: wire 顶层键白名单（Q-1：多余键在 compile 入口报错，不静默丢弃）。
+#: wire 顶层键白名单（Q-1：多余键在 compile 入口报错，不静默丢弃）。v2 起四个
+#: 静态跨章列表（standing_goals／ongoing_actions／open_questions／promises）
+#: 不在白名单内——已退役（AUD-04），旧键当场拒读。
 _WIRE_KEYS = frozenset({
-    'protocol_version', 'book_style', 'character_voices', 'standing_goals',
-    'ongoing_actions', 'open_questions', 'promises', 'initial_state',
-    'initial_surfaces', 'scenes', 'chapters', 'scene_weights'})
+    'protocol_version', 'book_style', 'world_rules', 'character_voices',
+    'initial_state', 'initial_surfaces', 'scenes', 'chapters', 'scene_weights'})
 _INITIAL_KEYS = frozenset({'domain', 'key', 'subjects', 'holder', 'op', 'value',
                            'knowledge_mode', 'confirms'})
 _SCENE_KEYS = frozenset({'driver', 'state_reads', 'realization_brief', 'delivery', 'beats'})
 _BEAT_KEYS = frozenset({'event', 'participants', 'dramatic_intent', 'delivery_hint',
-                        'target_delta', 'surface_introductions'})
+                        'target_delta', 'surface_introductions', 'threads'})
 #: 状态读取声明（B3 后半）：地址四段＋可选读取定位 `at`（1-based 拍序，
 #: compiler 解析成场内 beat_id；缺省定位到入场＝先读旧值）。
 _READ_KEYS = frozenset({'domain', 'key', 'subjects', 'holder', 'at'})
+#: 线程操作（R2 v2）：open 带 tag/kind/subject/text；advance 带 ref/progress；
+#: close 带 ref/ending/resolution（键集按 op 收紧，多余键拒绝）。
+_THREAD_KEYS = frozenset({'op', 'tag', 'ref', 'kind', 'subject', 'text',
+                          'progress', 'ending', 'resolution'})
+#: 章切片（R2 v2）：purpose＋场数＋可选 entry（第 1 章可省）。
+_CHAPTER_KEYS = frozenset({'purpose', 'scenes', 'entry'})
+_ENTRY_KEYS = frozenset({'transition', 'carryover', 'recap'})
 
 
 def _scene_id(index: int) -> str:
@@ -111,44 +124,62 @@ def _normalize_delta(data: dict[str, Any]) -> None:
             item['scope'] = 'book'
 
 
-def _resolve_anchor(raw: Any, beats_of: dict[int, int],
-                    errors: list[str], where: str) -> str | None:
-    """wire 锚定分量 {"scene": i, "beat": j}（1-based）→ `sc{i:02d}#b{j:02d}`。"""
-    parsed = None
-    if isinstance(raw, dict) and 'scene' in raw and 'beat' in raw:
-        scene, beat = raw.get('scene'), raw.get('beat')
-        if (isinstance(scene, int) and not isinstance(scene, bool)
-                and isinstance(beat, int) and not isinstance(beat, bool)):
-            parsed = (scene, beat)
-    if parsed is None:
-        errors.append(f'{where} 的锚定形状非法：{raw!r}（应为 {{"scene": 序, "beat": 序}}）')
-        return None
-    scene, beat = parsed
-    if scene not in beats_of:
-        errors.append(f'{where} 的锚定引用不存在的场景：第 {scene} 场'
-                      f'（全书 {len(beats_of)} 场）')
-        return None
-    if not 1 <= beat <= beats_of[scene]:
-        errors.append(
-            f'{where} 的锚定引用不存在的拍：第 {scene} 场只有 {beats_of[scene]} 拍')
-        return None
-    return f'{_scene_id(scene)}#{_beat_id(beat)}'
+def _resolve_threads(data: dict[str, Any], errors: list[str]) -> None:
+    """线程本地标签 → canonical `th{nn}`（R2 v2，I-21：编号由 compiler 派发）。
 
+    按阅读序扫 beats[].threads：open 携带 `tag`（全书唯一本地标签）并按 open
+    先后派发 `th{nn}`；advance/close 经 `ref` 引用标签，compiler 换成正式 id。
+    重复开同一标签、引用未开启的标签、键集与 op 不符在此精确拒；close 后继续
+    操作、结局闭集越界由 canonical schema 构造期拒绝（M8 同判据）。
+    """
+    dispatch: dict[str, str] = {}      # tag -> th{nn}
+    counter = 0
 
-def _resolve_cross_chapter(data: dict[str, Any], errors: list[str]) -> None:
-    """跨章条目的锚定分量 → 复合引用（canonical 形状）。"""
-    beats_of = {index: len(scene.get('beats') or ())
-                for index, scene in enumerate(data.get('scenes') or [], start=1)}
-    for group, anchor_key in (('ongoing_actions', 'started_at'),
-                              ('open_questions', 'planted_at'),
-                              ('promises', 'made_at')):
-        for item in data.get(group) or []:
-            if not isinstance(item, dict):
+    def _thread_id() -> str:
+        nonlocal counter
+        counter += 1
+        return f'th{counter:02d}'
+
+    for index, scene in enumerate(data.get('scenes') or [], start=1):
+        if not isinstance(scene, dict):
+            continue
+        for beat_index, beat in enumerate(scene.get('beats') or [], start=1):
+            if not isinstance(beat, dict):
                 continue
-            anchor = _resolve_anchor(item.get(anchor_key), beats_of,
-                                     errors, f'{group}.{anchor_key}')
-            if anchor is not None:
-                item[anchor_key] = anchor
+            where = f'第 {index} 场第 {beat_index} 拍 threads'
+            threads = beat.get('threads') or []
+            if not isinstance(threads, list):
+                errors.append(f'{where} 必须是数组')
+                continue
+            resolved = []
+            for item in threads:
+                if not isinstance(item, dict) or not _reject_unknown_keys(
+                        errors, item, _THREAD_KEYS, where):
+                    continue
+                op = item.get('op')
+                if op == 'open':
+                    tag = item.get('tag')
+                    if not isinstance(tag, str) or not tag.strip():
+                        errors.append(f'{where} 的 open 必须带本地标签 tag')
+                        continue
+                    if tag in dispatch:
+                        errors.append(f'{where} 重复开启标签 {tag!r}（线程只能开一次）')
+                        continue
+                    thread_id = _thread_id()
+                    dispatch[tag] = thread_id
+                    resolved.append({**{k: v for k, v in item.items() if k != 'tag'},
+                                     'ref': thread_id})
+                elif op in ('advance', 'close'):
+                    ref = item.get('ref')
+                    if not isinstance(ref, str) or ref not in dispatch:
+                        errors.append(
+                            f'{where} 的 {op} 引用了未开启的线程标签：{ref!r}')
+                        continue
+                    resolved.append({**item, 'ref': dispatch[ref]})
+                else:
+                    errors.append(f'{where} 的 op 必须是 open/advance/close，'
+                                  f'实得 {op!r}')
+            beat['threads'] = resolved
 
 
 def _resolve_reads(data: dict[str, Any], errors: list[str]) -> None:
@@ -187,18 +218,46 @@ def _build_canonical(data: dict[str, Any], errors: list[str]) -> dict[str, Any]:
             beat['beat_id'] = _beat_id(beat_index)
     slices = []
     for chapter_ordinal, chapter in enumerate(data.get('chapters') or [], start=1):
-        count = chapter.get('scenes') if isinstance(chapter, dict) else None
+        if not isinstance(chapter, dict) or \
+                not _reject_unknown_keys(errors, chapter, _CHAPTER_KEYS,
+                                         f'第 {chapter_ordinal} 章'):
+            errors.append(f'第 {chapter_ordinal} 章的切片形状非法：'
+                          f'{chapter!r}（应为 {{purpose, scenes, entry?}}）')
+            return data
+        count = chapter.get('scenes')
         if not isinstance(count, int) or isinstance(count, bool) or count < 1:
             errors.append(f'第 {chapter_ordinal} 章的切片形状非法：'
                           f'{chapter.get("scenes")!r}（应为正整数场数）')
             return data
-        slices.append((chapter_ordinal, chapter.get('purpose'), count))
+        entry_raw = chapter.get('entry')
+        if isinstance(entry_raw, dict):
+            _reject_unknown_keys(errors, entry_raw, _ENTRY_KEYS,
+                                 f'第 {chapter_ordinal} 章 entry')
+        try:
+            entry = (ChapterEntry.model_validate(entry_raw)
+                     if entry_raw is not None else None)
+        except Exception as exc:      # 形状错误聚合进 errors，不在此抛
+            errors.append(f'第 {chapter_ordinal} 章 entry 形状非法：{exc}')
+            return data
+        if chapter_ordinal == 1:
+            # 第 1 章固定为开篇（裁决 7 的唯一例外：不是设计选择，compiler 填）；
+            # 带值必须等于开篇形态——不静默改写模型给的错值。
+            if entry is not None and entry != ChapterEntry.opening():
+                errors.append('第 1 章的 entry 固定为开篇（new_scene＋do_not_recap'
+                              '＋无 carryover）；可省略由 compiler 填，不得另行声明')
+                return data
+            entry = ChapterEntry.opening()
+        elif entry is None:
+            errors.append(f'第 {chapter_ordinal} 章缺少 entry（章间承接由 Design '
+                          '声明，编译器不猜；R2.6）')
+            return data
+        slices.append((chapter_ordinal, chapter.get('purpose'), count, entry))
     assigned, cursor = [], 0
-    for chapter_ordinal, purpose, count in slices:
+    for chapter_ordinal, purpose, count, entry in slices:
         chunk = scene_ids[cursor:cursor + count]
         cursor += count
         assigned.append({'chapter_ordinal': chapter_ordinal, 'purpose': purpose,
-                         'scene_ids': tuple(chunk)})
+                         'scene_ids': tuple(chunk), 'entry': entry})
     if cursor != len(scene_ids):
         errors.append(f'章切片总数 {cursor} 与场景总数 {len(scene_ids)} 不一致'
                       '（每章至少一场，全部场景恰好归一章）')
@@ -251,7 +310,7 @@ def assemble_body_design(
     char_canonicals: Mapping[str, str] | None = None,
     registered_surfaces: Mapping[str, set[str]] | None = None,
 ) -> tuple[BodyDesign | None, list[str]]:
-    """Design wire（stage4-design-v1）→ canonical BodyDesign。
+    """Design wire（stage4-design-v2）→ canonical BodyDesign。
 
     纯函数：不落盘、不调 LLM、不改输入 wire（deepcopy 后组装）。全部错误聚合
     返回，有错不产出半份 canonical（I-34）。
@@ -272,6 +331,10 @@ def assemble_body_design(
     for item in wire.get('initial_state') or []:
         if isinstance(item, dict):
             _reject_unknown_keys(errors, item, _INITIAL_KEYS, f'初始态 {item.get("key")}')
+    for index, rule in enumerate(wire.get('world_rules') or [], start=1):
+        if not isinstance(rule, str) or not rule.strip():
+            errors.append(f'world_rules 第 {index} 条必须是非空字符串（一句话、'
+                          '可机械遵守的世界边界）')
     if errors:
         return None, errors
     data = deepcopy(wire)
@@ -279,7 +342,7 @@ def assemble_body_design(
     _normalize(data)
     _normalize_povs(data, char_canonicals)
     _normalize_delta(data)
-    _resolve_cross_chapter(data, errors)
+    _resolve_threads(data, errors)
     if not errors:
         _build_canonical(data, errors)
     if not errors:
@@ -304,7 +367,7 @@ def assemble_body_design(
         for read in scene.state_reads:
             if read.at is not None and read.at not in beat_ids:
                 errors.append(f'{scene.scene_id} 的读取定位 {read.at!r} 不是本场真实拍')
-        addressed.extend(scene.state_reads)
+            addressed.extend(scene.state_reads)
         for beat in scene.beats:
             for cid in beat.participants:
                 if cid not in known_char_ids:
@@ -330,15 +393,17 @@ def assemble_body_design(
                 errors.append(
                     f'称谓释放引用未登记面 {surface!r}（{item.char_id} 已登记：'
                     f'{sorted(allowed)}）')
-    # 结构化跨章条目的人物闭集（book_style/voice/goal/action/promise 的主体
-    # 必须是本书人物；漏报会让写手拿到不存在人物的声线或目标）。
-    for group in (body.character_voices, body.standing_goals, body.ongoing_actions):
-        for item in group:
-            if item.char_id not in known_char_ids:
-                errors.append(f'{type(item).__name__} 引用未知 char_id {item.char_id}')
-    for item in body.promises:
-        for cid in (item.maker, *((item.to,) if item.to else ())):
-            if cid not in known_char_ids:
-                errors.append(f'Promise 引用未知 char_id {cid}')
+    # 结构化跨章条目的人物闭集（R2：书级声线与线程主体必须是本书人物；漏报
+    # 会让写手拿到不存在人物的声线或线程）。
+    for item in body.character_voices:
+        if item.char_id not in known_char_ids:
+            errors.append(f'CharacterVoice 引用未知 char_id {item.char_id}')
+    for scene in body.scenes:
+        for beat in scene.beats:
+            for thread in beat.threads:
+                if thread.op == 'open' and thread.subject not in known_char_ids:
+                    errors.append(
+                        f'ThreadAction 引用未知 char_id {thread.subject}'
+                        f'（{scene.scene_id}#{beat.beat_id} 的 {thread.ref}）')
     _check_confirmation_closures(body, errors)
     return (None, errors) if errors else (body, [])

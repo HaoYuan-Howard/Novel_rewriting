@@ -290,7 +290,7 @@ def test_concealed_fact_reaches_writer_as_pending_reader_confirmation(tmp_path):
                   cognition=[{'proposition': {'ref': 'p_hide'},
                               'holder': 'reader', 'mode': 'learns'}])]}
     design = {
-        'protocol_version': 'stage4-design-v1',
+        'protocol_version': 'stage4-design-v2',
         'book_style': '冷峻克制的第三人称叙事。',
         'initial_state': [],
         'scenes': [

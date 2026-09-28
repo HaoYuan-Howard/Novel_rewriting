@@ -14,8 +14,8 @@ from __future__ import annotations
 import pytest
 
 from contracts.schema.design import (
-    BodyDesign, ChapterAssignment, SceneDelivery, SceneDriver, TargetBeat,
-    TargetDelta, TargetScene,
+    BodyDesign, ChapterAssignment, ChapterEntry, SceneDelivery, SceneDriver,
+    TargetBeat, TargetDelta, TargetScene,
 )
 from contracts.schema.grounding import (
     BindingEntry, SemanticBinding, SourceLineage, SourceObligation,
@@ -73,7 +73,10 @@ def _graph(scenes, chapters, initial=()) -> BodyDesign:
         graph_id='g', book_style='冷峻克制的第三人称叙事。',
         initial_state=tuple(initial), scenes=tuple(scenes),
         chapters=tuple(ChapterAssignment(chapter_ordinal=o, purpose=f'第{o}章',
-                                         scene_ids=sids)
+                                         scene_ids=sids,
+                                         entry=(ChapterEntry.opening() if o == 1 else
+                                                ChapterEntry(transition='time_skip',
+                                                             recap='do_not_recap')))
                        for o, sids in chapters),
         chapter_weights={s.scene_id: 1 / n for s in scenes})
 

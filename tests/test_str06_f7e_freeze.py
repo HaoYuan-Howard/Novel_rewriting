@@ -38,6 +38,14 @@ B2 基线（14 节点，`a0f5fb5e…`）原样保存在 Git 历史里；既有�
 集合与运行期配置不变。B4 基线（14 节点，`d552b280…`）原样保存在 Git 历史
 里；既有候选根按「契约表已漂移」拒读，只读保留。
 
+【R2 重新冻结（2026-09-28）】语义送达与两层 IR：Design wire 升
+`stage4-design-v2`（拍上线程 threads、书级 world_rules、章级 entry；四个静态
+跨章列表删除，AUD-04），Stage4 设计产物（body_design／presentation_graph）
+形状升 `str06-rc10`；WriterBookIR 升 `str06-rc10`（拍级读取值挂拍、线程投影
+面、continuity 分区、world_rules 进书级层）；章回执身份拆分（回执升
+`str06-rc6`）。节点集合与运行期配置不变。R1 基线（14 节点，`0d546fda…`）
+原样保存在 Git 历史里；既有候选根按「契约表已漂移」拒读，只读保留。
+
 【为什么不只靠激活表自己的对账】`test_str06_candidates.py` 查的是表内自洽
 （runner／writer／版本逐字相等）；本文件查的是**表与冻结基线**相等：
 前者防表内部撒谎，后者防表在批次之间无登记漂移。
@@ -51,10 +59,10 @@ from contracts.schema.workflow import (
 )
 from novel.llm.paid_requests import candidate_contract_identity
 
-#: R1 重新冻结（2026-09-28 关联无损）时的候选契约身份：节点表＋产物表＋RC
+#: R2 重新冻结（2026-09-28 语义送达）时的候选契约身份：节点表＋产物表＋RC
 #: 版式＋运行期配置的 SHA-256。表内任何一行变化都会改变它——先改本记录并
 #: 登记原因（REQUIREMENTS／DECISIONS），再动表。
-FROZEN_CONTRACT_IDENTITY = '0d546fdadae1bd1c64f8665020a3432306694ca4ae17171cd040b66b27ccc216'
+FROZEN_CONTRACT_IDENTITY = 'b8501a9d7cffdd18b7db03ac46cef006fff1e4cabd38756a0bb24e637f06039b'
 
 #: 冻结时的节点集合（14 个：stage0/1 两座＋Stage2 五节点＋Stage4 五＋Stage5 两
 #: ＋Stage7 两）。
@@ -121,4 +129,4 @@ def test_frozen_artifact_table_shape():
 
 
 def test_frozen_rc_version_label():
-    assert STR06_RC_VERSION == 'str06-rc9'
+    assert STR06_RC_VERSION == 'str06-rc10'

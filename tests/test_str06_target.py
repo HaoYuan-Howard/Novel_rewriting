@@ -275,9 +275,9 @@ def test_assemble_binding_full_denominator():
 # ───────────────────────── Design 组装 ─────────────────────────
 
 def _design_wire():
-    """stage4-design-v1 形状（B3 前半）：模型不输出任何 ID／归章引用／归一权重。"""
+    """stage4-design-v2 形状（R2）：模型不输出任何 ID／归章引用／归一权重。"""
     return {
-        'protocol_version': 'stage4-design-v1',
+        'protocol_version': 'stage4-design-v2',
         'book_style': '冷峻克制的第三人称叙事，重对话张力。',
         'initial_state': [],
         'scenes': [

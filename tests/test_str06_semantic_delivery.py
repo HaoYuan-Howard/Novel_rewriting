@@ -135,6 +135,13 @@ def test_r2_pending_face_gaps_form_a_closed_documented_set():
     assert pending == {
         # ── 正文阅读面（v4 renderer 把 VerificationIR JSON 倾倒进 prompt）──
         'writer_book_ir.book_brief.character_voices[].char_id',
+        'writer_book_ir.book_brief.world_rules',
+        'writer_book_ir.chapters[].continuity.entry.transition',
+        'writer_book_ir.chapters[].continuity.entry.carryover',
+        'writer_book_ir.chapters[].continuity.entry.recap',
+        'writer_book_ir.chapters[].continuity.previous_ending.driver_turn',
+        'writer_book_ir.chapters[].continuity.previous_ending.final_beat_event',
+        'writer_book_ir.chapters[].continuity.previous_ending.present_chars',
         'writer_book_ir.chapters[].scenes[].scene_id',
         'writer_book_ir.chapters[].scenes[].writer_brief.scene_id',
         'writer_book_ir.chapters[].scenes[].writer_brief.usable_surfaces[].surfaces',
@@ -152,6 +159,7 @@ def test_r2_pending_face_gaps_form_a_closed_documented_set():
         '.confirms.holder',
         'writer_book_ir.chapters[].scenes[].verification_ir.beats[]'
         '.surface_introductions',
+        'writer_book_ir.chapters[].scenes[].verification_ir.beats[].reads',
         'writer_book_ir.chapters[].scenes[].verification_ir.entry_state[].key',
         'writer_book_ir.chapters[].scenes[].verification_ir.entry_state[].status',
         'writer_book_ir.chapters[].scenes[].verification_ir.entry_state[].established_by',
@@ -174,6 +182,12 @@ def test_r2_pending_face_gaps_form_a_closed_documented_set():
         'writer_book_ir.chapters[].scenes[].verification_ir.planned_delta[]'
         '.confirms.holder',
         'writer_book_ir.chapters[].scenes[].verification_ir.released_surfaces[].char_id',
+        'writer_book_ir.chapters[].scenes[].verification_ir.thread_ops[].subject',
+        'writer_book_ir.chapters[].scenes[].verification_ir.thread_ops[].text',
+        'writer_book_ir.chapters[].scenes[].verification_ir.thread_ops[].progress',
+        'writer_book_ir.chapters[].scenes[].verification_ir.thread_ops[].resolution',
+        'writer_book_ir.chapters[].scenes[].verification_ir.open_threads[].subject',
+        'writer_book_ir.chapters[].scenes[].verification_ir.open_threads[].text',
         'writer_book_ir.chapters[].scenes[].verification_ir.pending_reader_confirmations[]'
         '.key',
         'writer_book_ir.chapters[].scenes[].verification_ir.pending_reader_confirmations[]'
@@ -438,10 +452,37 @@ def _body_mutations() -> list[_BodyMutation]:
         chapter = next(c for c in ir.chapters if c.chapter_ordinal == 2)
         return _patch_chapter(ir, 2, length_budget=chapter.length_budget + 200)
 
+    def world_rules(ir):
+        return _book_brief(ir, world_rules=ir.book_brief.world_rules
+                           + ('变异边界九九',))
+
+    def entry_transition(ir):
+        from contracts.schema.book_ir import ChapterContinuity
+        from contracts.schema.design import ChapterEntry
+        chapter = next(c for c in ir.chapters if c.chapter_ordinal == 2)
+        continuity = ChapterContinuity(
+            entry=ChapterEntry(transition='pov_shift', recap='do_not_recap'),
+            previous_ending=chapter.continuity.previous_ending)
+        return _patch_chapter(ir, 2, continuity=continuity)
+
+    def thread_ops(ir):
+        from contracts.schema.context import ThreadOpIR
+        return _patch_scene_ir(ir, 2, 'sc02', thread_ops=(ThreadOpIR(
+            ref='th01', op='advance', kind='question', subject='yun_niang',
+            text='玉佩藏着什么', progress='变异线程九九'),))
+
+    def open_threads(ir):
+        from contracts.schema.context import OpenThreadIR
+        return _patch_scene_ir(ir, 2, 'sc02', open_threads=(OpenThreadIR(
+            ref='th02', kind='goal', subject='fu_jun', text='变异开放线九九',
+            opened_at='sc01#b01'),))
+
     return [
         # ── 书级（every_chapter）──
         _BodyMutation('writer_book_ir.book_brief.book_style', None, '变异风格九九',
                       lambda ir: _book_brief(ir, book_style='变异风格九九')),
+        _BodyMutation('writer_book_ir.book_brief.world_rules', None, '变异边界九九',
+                      world_rules),
         _BodyMutation('writer_book_ir.book_brief.length_band_low', None, None,
                       lambda ir: _book_brief(ir, length_band_low=0.61)),
         _BodyMutation('writer_book_ir.book_brief.book_title', None, '变异书名九九',
@@ -463,6 +504,13 @@ def _body_mutations() -> list[_BodyMutation]:
                       '禁露字面九九', withheld),
         _BodyMutation('writer_book_ir.chapters[].released_surfaces', 2,
                       '变异面九九', surfaces),
+        # ── R2 契约面：承接与线程（Machine 层已进章包，阅读面归分区渲染）──
+        _BodyMutation('writer_book_ir.chapters[].continuity.entry.transition', 2,
+                      None, entry_transition),
+        _BodyMutation('writer_book_ir.chapters[].scenes[].verification_ir'
+                      '.thread_ops[].progress', 2, '变异线程九九', thread_ops),
+        _BodyMutation('writer_book_ir.chapters[].scenes[].verification_ir'
+                      '.open_threads[].text', 2, '变异开放线九九', open_threads),
         # ── 场景/条目级 ──
         _BodyMutation('writer_book_ir.chapters[].scenes[].writer_brief'
                       '.realization_brief', 1, '变异导演九九', realization),

@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 from contracts.schema.design import (
+    ChapterEntry,
     ChapterAssignment, BodyDesign, SceneDelivery, SceneDriver,
     TargetBeat, TargetDelta, TargetScene,
 )
@@ -70,7 +71,8 @@ def _graph():
         scenes=(_scene('s01', ('world', 'season', '秋'), ('character', 'mood', '冷')),
                 _scene('s02', ('character', 'mood', '回暖'))),
         chapters=(ChapterAssignment(chapter_ordinal=1, purpose='冷暖转换',
-                                    scene_ids=('s01', 's02')),),
+                                    scene_ids=('s01', 's02'),
+                                    entry=ChapterEntry.opening()),),
         chapter_weights={'s01': 0.6, 's02': 0.4})
 
 
@@ -206,7 +208,8 @@ def _reader_delta_graph():
                           confirms=(('hiding', '床底有人'),)),
             _reader_scene('s03', confirms=(('wardrobe', '衣柜藏身'),))),
         chapters=(ChapterAssignment(chapter_ordinal=1, purpose='两次揭示',
-                                    scene_ids=('s01', 's02', 's03')),),
+                                    scene_ids=('s01', 's02', 's03'),
+                                    entry=ChapterEntry.opening()),),
         chapter_weights={'s01': 1 / 3, 's02': 1 / 3, 's03': 1 / 3})
 
 
@@ -285,7 +288,8 @@ def test_believes_knowledge_enters_writer_view_without_becoming_world_fact():
     graph = BodyDesign(initial_state=(), graph_id='g3', book_style='误以为。',
                        scenes=(establish, consume),
         chapters=(ChapterAssignment(chapter_ordinal=1, purpose='误以为',
-                                    scene_ids=('s01', 's02')),),
+                                    scene_ids=('s01', 's02'),
+                                    entry=ChapterEntry.opening()),),
         chapter_weights={'s01': 0.5, 's02': 0.5})
     binding = _binding(_cp(_ob('ob1')))
     plan, errors = compile_execution_plan(graph, binding)

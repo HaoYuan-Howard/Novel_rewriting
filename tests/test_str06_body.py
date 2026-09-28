@@ -30,7 +30,8 @@ from novel.stages.stage5.body import (
     AnsweredText, sha256_text, write_chapter,
 )
 from novel.stages.common import (
-    packet_sha256, project_chapter_packet, render_chapter_packet,
+    chapter_identities, packet_sha256, project_chapter_packet,
+    render_chapter_packet,
 )
 from novel.stages.stage7.assembly import verify_chapter_receipts
 from novel.stages.chain import run_workflow
@@ -288,7 +289,8 @@ def test_write_chapter_first_pass_and_rewrite_identity():
     outcome = write_chapter(**kw, ask=fake)
     assert outcome.prose == good and outcome.receipt.status == 'accepted'
     assert not outcome.receipt.length_disclosed
-    assert outcome.receipt.packet_sha256 == packet_sha256(kw['packet'])
+    assert outcome.receipt.writer_view_sha256 == chapter_identities(
+        kw['packet']).writer_view_sha256
     assert len(outcome.attempts) == 1
     # 重写：同章包 + 上一稿 + typed 错误进 prompt
     bad = '字' * 500
@@ -343,25 +345,45 @@ def test_verify_chapter_receipts_checks_each_chapter_against_its_packet():
     import hashlib
     def sha(t):
         return hashlib.sha256(t.encode('utf-8')).hexdigest()
-    sha1, sha2 = '1' * 64, '2' * 64
+    sha1, sha2, vsha = '1' * 64, '2' * 64, '9' * 64
     prose1, prose2 = '第一章', '第二章'
-    r1 = {'status': 'accepted', 'packet_sha256': sha1, 'prose_sha256': sha(prose1)}
-    r2 = {'status': 'accepted', 'packet_sha256': sha2, 'prose_sha256': sha(prose2)}
-    digests = {1: sha1, 2: sha2}
+
+    def identities(writer_view, validation=vsha):
+        from novel.stages.common import ChapterIdentities
+        return ChapterIdentities(writer_view_sha256=writer_view,
+                                 validation_sha256=validation,
+                                 machine_view_sha256='e' * 64)
+
+    r1 = {'status': 'accepted', 'writer_view_sha256': sha1,
+          'validation_sha256': vsha, 'machine_view_sha256': 'e' * 64,
+          'prose_sha256': sha(prose1)}
+    r2 = {'status': 'accepted', 'writer_view_sha256': sha2,
+          'validation_sha256': vsha, 'machine_view_sha256': 'e' * 64,
+          'prose_sha256': sha(prose2)}
+    ids = {1: identities(sha1), 2: identities(sha2)}
     assert verify_chapter_receipts({1: r1, 2: r2}, {1: prose1, 2: prose2},
-                                  packet_sha256_by_ordinal=digests) == []
-    # 某章章包重编译 → 仅该章失效，其他章独立有效（不再有前缀断裂）
-    r2_stale = dict(r2, packet_sha256='f' * 64)
+                                  identities_by_ordinal=ids) == []
+    # 某章写手视图重编译 → 仅该章失效，其他章独立有效（不再有前缀断裂）
+    r2_stale = dict(r2, writer_view_sha256='f' * 64)
     problems = verify_chapter_receipts({1: r1, 2: r2_stale}, {1: prose1, 2: prose2},
-                                       packet_sha256_by_ordinal=digests)
+                                       identities_by_ordinal=ids)
     assert len(problems) == 1 and '第2章' in problems[0]
+    # 验证输入变化（禁用字面/篇幅带）→ 同样失效（rc6 身份拆分：分别绑定）
+    r2_validation = dict(r2, validation_sha256='7' * 64)
+    problems = verify_chapter_receipts({1: r1, 2: r2_validation}, {1: prose1, 2: prose2},
+                                       identities_by_ordinal=ids)
+    assert len(problems) == 1 and '验证输入' in problems[0]
+    # Machine 层摘要不参与核对（仅审计）
+    r2_machine = dict(r2, machine_view_sha256='6' * 64)
+    assert verify_chapter_receipts({1: r1, 2: r2_machine}, {1: prose1, 2: prose2},
+                                   identities_by_ordinal=ids) == []
     # 文本被改 → 该章脱钩
     problems = verify_chapter_receipts({1: r1}, {1: '被改过的第一章'},
-                                       packet_sha256_by_ordinal=digests)
+                                       identities_by_ordinal=ids)
     assert problems and '第1章' in problems[0]
     # 拒绝回执显式报出
     problems = verify_chapter_receipts({1: dict(r1, status='rejected')}, {1: prose1},
-                                       packet_sha256_by_ordinal=digests)
+                                       identities_by_ordinal=ids)
     assert problems and 'rejected' in problems[0]
 
 
@@ -541,10 +563,10 @@ def test_full_pipeline_to_delivery_and_free_recovery(tmp_path):
     receipt2 = repo.inspect('stage5/acceptance/body/ch02.json')
     assert receipt2['status'] == 'accepted'
     assert receipt2['length_disclosed'] is False
-    assert len(receipt2['packet_sha256']) == 64
+    assert len(receipt2['writer_view_sha256']) == 64
     assert 'book_ir_sha256' not in receipt2 and 'prior_text_sha256' not in receipt2
     # 章包摘要互不相同（各章章包独立），正文摘要绑定改名前文本
-    assert receipt1['packet_sha256'] != receipt2['packet_sha256']
+    assert receipt1['writer_view_sha256'] != receipt2['writer_view_sha256']
     assert receipt1['prose_sha256'] == sha256_text(GOOD_CH1)
     # 新购账：B2 五节点 10 个 JSON owner + hook_writer + 2 章 body = 13 次外发
     assert len(transport.calls) == 13
@@ -607,7 +629,7 @@ def test_concurrency_level_does_not_enter_semantic_identity(tmp_path):
     for ordinal in (1, 2):
         ra = repo_a.inspect(f'stage5/acceptance/body/ch{ordinal:02d}.json')
         rb = repo_b.inspect(f'stage5/acceptance/body/ch{ordinal:02d}.json')
-        assert ra['packet_sha256'] == rb['packet_sha256']
+        assert ra['writer_view_sha256'] == rb['writer_view_sha256']
         assert ra['prose_sha256'] == rb['prose_sha256']
     assert repo_a.path('stage7/final/报恩_rewriting.txt').read_bytes() == \
         repo_b.path('stage7/final/报恩_rewriting.txt').read_bytes()
@@ -673,7 +695,7 @@ def test_assemble_reports_stale_and_missing_per_item(tmp_path):
     # ── 某章章包摘要失效：回执在盘上但绑定旧章包 → stale（不是 missing）──
     import json as _json
     tampered = repo.inspect('stage5/acceptance/body/ch02.json')
-    tampered['packet_sha256'] = 'f' * 64
+    tampered['writer_view_sha256'] = 'f' * 64
     repo.path('stage5/acceptance/body/ch02.json').write_text(
         _json.dumps(tampered, ensure_ascii=False), encoding='utf-8')
     report2 = _run(repo, session, node_filter=('str06.stage7.assemble',))
@@ -682,7 +704,8 @@ def test_assemble_reports_stale_and_missing_per_item(tmp_path):
     assert report2['body_access']['stale'] == [2]
     assert report2['body_access']['accepted'] == [1]
     assert report2['accepted_body'] is False
-    assert report2['chain_problems'] == ['第2章回执绑定的是另一版章包（章包已重编译）']
+    assert report2['chain_problems'] == [
+        '第2章回执绑定的是另一版写手视图（章包已重编译，须重购）']
     # 盘面留证同按 item 报告；不落新交付，旧 manifest 原样（文件先落盘、manifest
     # 最后提交的既存交付不被未就绪重跑触碰）
     assert repo.inspect('runtime/delivery/assembly_report.json')['body_access']['stale'] == [2]

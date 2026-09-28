@@ -81,9 +81,9 @@ def _characters() -> CharactersArtifactV4:
 
 
 def _body_wire() -> dict:
-    """stage4-design-v1 形状（B3 前半）：无 ID／章切片／相对权重数组。"""
+    """stage4-design-v2 形状（R2）：无 ID／章切片／相对权重数组；threads＋entry。"""
     return {
-        'protocol_version': 'stage4-design-v1',
+        'protocol_version': 'stage4-design-v2',
         'book_style': '冷峻克制的限知叙事，重日常细节里的异样。',
         'initial_state': [
             {'domain': 'character', 'subjects': ['yun_niang'], 'holder': None,
@@ -135,7 +135,8 @@ def _body_wire() -> dict:
                   'delivery_hint': '', 'surface_introductions': []}],
              'delivery': {'pov': 'yun_niang', 'voice': '冷峻', 'avoid': []}}],
         'chapters': [{'purpose': '新婚之夜埋下旧约之疑', 'scenes': 1},
-                     {'purpose': '玉佩之谜浮出水面', 'scenes': 1}],
+                     {'purpose': '玉佩之谜浮出水面', 'scenes': 1,
+                      'entry': {'transition': 'time_skip', 'recap': 'do_not_recap'}}],
         'scene_weights': [1, 1],
     }
 

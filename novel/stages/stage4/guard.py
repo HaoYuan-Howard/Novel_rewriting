@@ -1,15 +1,21 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """机械 Guard：M1 完整义务内容、M2/M3 已建立输入时序、M4 真实承载拍、
-M5 显式称谓释放、M6 合法人物。未知锚拒绝；只报告，不修复或修改输入。
+M5 显式称谓释放、M6 合法人物、M7 声明读取已解析进 IR（R2，AUD-03）、
+M8 线程生命周期与投影（R2）。未知锚拒绝；只报告，不修复或修改输入。
 """
 from __future__ import annotations
 
 from typing import Mapping
 
-from contracts.schema.context import WriterContext
-from contracts.schema.design import BodyDesign
+from contracts.schema.context import (
+    KnowledgeEntry, OpenThreadIR, StateEntry, ThreadOpIR, WriterContext,
+)
+from contracts.schema.design import (
+    THREAD_ENDINGS, BodyDesign, TargetScene,
+)
 from contracts.schema.grounding import SemanticBinding
+from contracts.schema.state import EffectDomain
 
 
 
@@ -105,22 +111,183 @@ def appeared_chars(
     return appeared
 
 
+# ───────────────────────── M7：声明读取已解析并进入 IR（R2，AUD-03） ─────────
+
+def _read_resolves_in(
+    read, entries: tuple[StateEntry | KnowledgeEntry, ...],
+) -> bool:
+    """读取地址在候选条目里是否解析到（与 scene_read_views 同一探测逻辑）。"""
+    for entry in entries:
+        if read.domain is EffectDomain.KNOWLEDGE:
+            if (('knowledge', entry.subjects, entry.holder, entry.key)
+                    == ('knowledge', read.subjects, read.holder, read.key)):
+                return True
+        elif entry.address() == read.address():
+            return True
+    return False
+
+
+def check_read_projection(scene: TargetScene, context: WriterContext) -> list[str]:
+    """M7：每条声明读取都已解析并进入 IR（AUD-03 的判据面）。
+
+    入场读取（`at is None`）的解析值必须出现在 entry_state／entry_knowledge；
+    拍级读取（`at`＝场内拍）的解析值必须挂到对应拍的 `BeatIR.reads`。
+    解析本身（未建立／unknown／定位闭合）由章闭包证明在 compile 期 fail fast；
+    M7 钉的是「解析结果确实到达了 IR」——值漏包（写手拿不到本场依赖的事实）
+    在这里红。
+    """
+    ir = context.verification_ir
+    problems: list[str] = []
+    beats = {b.beat_ref.rsplit('#', 1)[-1]: b for b in ir.beats}
+    for read in scene.state_reads:
+        where = f'{scene.scene_id}（入场）' if read.at is None \
+            else f'{scene.scene_id}#{read.at}'
+        if read.at is None:
+            reached = _read_resolves_in(read, ir.entry_state) or \
+                _read_resolves_in(read, ir.entry_knowledge)
+        else:
+            beat = beats.get(read.at)
+            reached = beat is not None and _read_resolves_in(read, beat.reads)
+        if not reached:
+            problems.append(
+                f'M7 声明读取未进入 IR：{where} 的 {read.key}（'
+                + ('入场值不在 entry 视图' if read.at is None
+                   else '拍级解析值未挂到对应拍') + '；AUD-03）')
+    return problems
+
+
+# ───────────────────────── M8：线程生命周期与投影（R2.4） ───────────────────
+
+def check_thread_lifecycle(graph: BodyDesign) -> list[str]:
+    """M8 生命周期段：open 一次、操作不早于 open、close 后无操作、结局闭集。
+
+    canonical schema 构造期已按同一判据拒绝（`BodyDesign._threads_lifecycle_
+    close`）；本函数对读回的图（盘面/消费面）复核同一判据——两处语义同源，
+    防解码面与投影面漂移。
+    """
+    problems: list[str] = []
+    opened: dict[str, tuple[str, bool]] = {}
+    for scene in graph.scenes:
+        for beat in scene.beats:
+            for thread in beat.threads:
+                where = f'{scene.scene_id}#{beat.beat_id} 的线程 {thread.ref}'
+                if thread.op == 'open':
+                    if thread.ref in opened:
+                        problems.append(f'M8 {where} 只能开启一次')
+                        continue
+                    opened[thread.ref] = (thread.kind, False)
+                    continue
+                state = opened.get(thread.ref)
+                if state is None:
+                    problems.append(f'M8 {where} 的 {thread.op} 早于开启')
+                    continue
+                kind, closed = state
+                if closed:
+                    problems.append(f'M8 {where} 已关闭，不得再操作')
+                    continue
+                if thread.op == 'close':
+                    if thread.ending not in THREAD_ENDINGS[kind]:
+                        problems.append(
+                            f'M8 {where} 的结局 {thread.ending!r} 不在 {kind} '
+                            f'闭集 {THREAD_ENDINGS[kind]} 内')
+                    opened[thread.ref] = (kind, True)
+    return problems
+
+
+def expected_thread_faces(
+    graph: BodyDesign, scene: TargetScene,
+) -> tuple[tuple[ThreadOpIR, ...], tuple[OpenThreadIR, ...]]:
+    """一场的期望线程投影（M8 判据面；投影方的单一基准，E-4 分支的机械执行）。
+
+    · `thread_ops`＝本场各拍上的线程操作（阅读序），携带声明内容（kind/
+      subject/text 来自 open——文本只写一次）与 op 载荷 → must_realize 身份；
+    · `open_threads`＝**入场时点**仍开放、主体与本场参与者相关、本场无操作
+      的线程 → renderer 按 kind 分节（question→guard_only，其余→continuity）；
+      不相关的开放线程不投影（全场景保护不等于每场提醒）。
+    「与参与者相关」＝线程主体 ∈ 本场 participants∪{focal_actor}∪{pov（人物）}。
+    纯函数；ThreadFold（fold.py）折叠后须与本基准一致。
+    """
+    order = scene_order(graph)
+    current = order.get(scene.scene_id, 0)
+    participants = {p for b in scene.beats for p in b.participants}
+    participants.add(scene.driver.focal_actor)
+    if scene.delivery.pov != 'narrator':
+        participants.add(scene.delivery.pov)
+    operated = {t.ref for b in scene.beats for t in b.threads}   # E-4：先判本场操作
+    ops: list[ThreadOpIR] = []
+    opened: dict[str, list] = {}    # ref -> [kind, subject, text, anchor, closed]
+    open_snapshot: tuple[OpenThreadIR, ...] | None = None
+    for other in graph.scenes:
+        if open_snapshot is None and order.get(other.scene_id, 0) == current:
+            open_snapshot = tuple(
+                OpenThreadIR(ref=ref, kind=state[0], subject=state[1],
+                             text=state[2], opened_at=state[3])
+                for ref, state in sorted(opened.items())
+                if not state[4] and ref not in operated
+                and state[1] in participants)
+        for beat in other.beats:
+            for thread in beat.threads:
+                if thread.op == 'open':
+                    opened[thread.ref] = [thread.kind, thread.subject, thread.text,
+                                          f'{other.scene_id}#{beat.beat_id}', False]
+                elif thread.ref not in opened:
+                    continue        # 生命周期非法归 M8 生命周期段报告
+                if order.get(other.scene_id, 0) == current:
+                    state = opened[thread.ref]
+                    payload = ({} if thread.op == 'open' else
+                               {'progress': thread.progress}
+                               if thread.op == 'advance' else
+                               {'ending': thread.ending,
+                                'resolution': thread.resolution})
+                    ops.append(ThreadOpIR(ref=thread.ref, op=thread.op,
+                                          kind=state[0], subject=state[1],
+                                          text=state[2], **payload))
+                if thread.op == 'close':
+                    opened[thread.ref][4] = True
+    return tuple(ops), open_snapshot or ()
+
+
+def check_thread_projection(graph: BodyDesign, context: WriterContext) -> list[str]:
+    """M8 投影段：应投影的线程已进入 IR（thread_ops／open_threads 对账）。"""
+    scene = next((s for s in graph.scenes if s.scene_id == context.scene_id), None)
+    if scene is None:
+        return [f'M8 场景 {context.scene_id} 不在 Design 内（线程投影无从对账）']
+    expected_ops, expected_open = expected_thread_faces(graph, scene)
+    ir = context.verification_ir
+    problems: list[str] = []
+    if tuple(ir.thread_ops) != expected_ops:
+        problems.append(
+            f'M8 本场线程操作未按 Design 投影进 IR：期望 '
+            f'{[(t.ref, t.op) for t in expected_ops]}，实得 '
+            f'{[(t.ref, t.op) for t in ir.thread_ops]}（must_realize 身份漏包）')
+    if tuple(ir.open_threads) != expected_open:
+        problems.append(
+            f'M8 开放线程未按参与者相关性投影进 IR：期望 '
+            f'{[(t.ref, t.kind) for t in expected_open]}，实得 '
+            f'{[(t.ref, t.kind) for t in ir.open_threads]}（continuity/guard_only '
+            '身份漏包或过度提醒）')
+    return problems
+
+
 def run_mechanical_guard(
     *,
     binding: SemanticBinding,
     context: WriterContext,
     graph: BodyDesign,
 ) -> list[str]:
-    """写前 M1–M6 的唯一聚合入口，使用同一称谓释放引擎。"""
+    """写前 M1–M8 的唯一聚合入口，使用同一称谓释放引擎。"""
     from novel.stages.common import surface_engine_release
     expected_surfaces = surface_engine_release(graph, context.scene_id)
     surface_errors = ([] if context.verification_ir.released_surfaces == expected_surfaces
                       else ['M5 称谓释放与 Design 显式释放集不一致'])
     order = scene_order(graph)
     appeared = appeared_chars(graph, order, context.scene_id)
+    scene = next((s for s in graph.scenes if s.scene_id == context.scene_id), None)
+    read_errors = check_read_projection(scene, context) if scene is not None else []
     return (
         surface_errors + check_obligation_coverage(binding, context)
         + check_entry_timing(context, order)
         + check_binding_beat_refs(binding, graph)
         + check_cast_legality(context, graph, appeared)
+        + read_errors + check_thread_projection(graph, context)
     )

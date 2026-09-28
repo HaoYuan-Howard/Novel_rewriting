@@ -17,6 +17,7 @@ from contracts.schema.context import (
     WriterContext,
 )
 from contracts.schema.design import (
+    ChapterEntry,
     BodyDesign,
     ChapterAssignment,
     SceneDelivery,
@@ -66,9 +67,14 @@ def _graph() -> BodyDesign:
         graph_id='g1', book_style='冷峻克制的第三人称叙事。',
         scenes=(_scene('s01', 'ch1'), _scene('s02', 'ch1', 'ch2'), _scene('s03', 'ch1')),
         chapters=(
-            ChapterAssignment(chapter_ordinal=1, purpose='起', scene_ids=('s01',)),
-            ChapterAssignment(chapter_ordinal=2, purpose='承', scene_ids=('s02',)),
-            ChapterAssignment(chapter_ordinal=3, purpose='转', scene_ids=('s03',)),
+            ChapterAssignment(chapter_ordinal=1, purpose='起', scene_ids=('s01',),
+                              entry=ChapterEntry.opening()),
+            ChapterAssignment(chapter_ordinal=2, purpose='承', scene_ids=('s02',),
+                              entry=ChapterEntry(transition='immediate_continuation',
+                                                 recap='do_not_recap')),
+            ChapterAssignment(chapter_ordinal=3, purpose='转', scene_ids=('s03',),
+                              entry=ChapterEntry(transition='location_cut',
+                                                 recap='brief_orientation')),
         ))
 
 

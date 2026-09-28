@@ -63,18 +63,23 @@ class BodyAccess(NamedTuple):
 
 
 def _binding_problems(
-    receipt: Mapping[str, Any], *, packet_sha256: str | None, prose: str | None,
+    receipt: Mapping[str, Any], *, identities, prose: str | None,
 ) -> list[str]:
-    """单章三方绑定核对（共用实现）：状态有效 → 章包摘要一致 → 正文 hash 一致。
+    """单章绑定核对（共用实现，rc6 身份拆分）：状态有效 → 写手视图摘要一致 →
+    验证输入摘要一致 → 正文 hash 一致。
 
     与章序无关；`verify_chapter_receipts` 聚合为逐条文字报告（`R-10.3`），
     `chapter_access` 据此把接受态回执分类为有效或失效。首个问题即返回：
-    章包已换版时正文脱钩与否不再追加（重做时一并闭合）。
+    写手视图已换版时验证材料/正文脱钩与否不再追加（重做时一并闭合）。
+    `identities` 是 `novel.stages.common::chapter_identities` 的三把分层摘要；
+    Machine 层摘要不参与核对（仅审计）。
     """
     if receipt.get('status') != 'accepted':
         return [f'回执状态为 {receipt.get("status")!r}']
-    if packet_sha256 is None or receipt.get('packet_sha256') != packet_sha256:
-        return ['回执绑定的是另一版章包（章包已重编译）']
+    if identities is None or receipt.get('writer_view_sha256') != identities.writer_view_sha256:
+        return ['回执绑定的是另一版写手视图（章包已重编译，须重购）']
+    if receipt.get('validation_sha256') != identities.validation_sha256:
+        return ['回执的验证输入摘要与当前编译不一致（禁用字面/称谓许可/篇幅带已变化）']
     if prose is None or sha256_text(prose) != receipt.get('prose_sha256'):
         return ['文本与回执 prose_sha256 脱钩']
     return []
@@ -84,20 +89,20 @@ def chapter_access(
     expected_ordinals: Iterable[int],
     receipts: Mapping[int, Mapping[str, Any]],
     *,
-    packet_sha256_by_ordinal: Mapping[int, str] | None = None,
+    identities_by_ordinal: Mapping[int, Any] | None = None,
     chapter_prose: Mapping[int, str] | None = None,
 ) -> BodyAccess:
     """章序 → 盘上回执逐章分类就绪面（I-42 五态）。
 
     accepted=有效接受回执；missing=无回执；rejected=被拒回执；
     unknown=回执存在但缺 status 或状态值不可解（不得当作通过）；
-    stale=状态 accepted 但与当前编译出的章包摘要或正文 hash 绑定不成立
-    （失效须重做；与 `verify_chapter_receipts` 共用 `_binding_problems`）。
-    缺省只按 status 分类（`stale` 恒空）；同时给出 `packet_sha256_by_ordinal`
-    与 `chapter_prose` 时，接受态回执逐一核对三方绑定（Stage7 集合核对入口）。
+    stale=状态 accepted 但与当前编译出的写手视图/验证输入摘要或正文 hash 绑定
+    不成立（失效须重做；与 `verify_chapter_receipts` 共用 `_binding_problems`）。
+    缺省只按 status 分类（`stale` 恒空）；同时给出 `identities_by_ordinal`
+    与 `chapter_prose` 时，接受态回执逐一核对绑定（Stage7 集合核对入口）。
     """
     accepted, missing, rejected, unknown, stale = [], [], [], [], []
-    verify = packet_sha256_by_ordinal is not None and chapter_prose is not None
+    verify = identities_by_ordinal is not None and chapter_prose is not None
     for ordinal in expected_ordinals:
         receipt = receipts.get(ordinal)
         if receipt is None:
@@ -105,7 +110,7 @@ def chapter_access(
             continue
         if receipt.get('status') == 'accepted':
             if verify and _binding_problems(
-                    receipt, packet_sha256=packet_sha256_by_ordinal.get(ordinal),
+                    receipt, identities=identities_by_ordinal.get(ordinal),
                     prose=chapter_prose.get(ordinal)):
                 stale.append(ordinal)
             else:
@@ -132,11 +137,13 @@ class DeliveryOutcome(NamedTuple):
 def verify_chapter_receipts(
     receipts: Mapping[int, Mapping[str, Any]],
     chapter_prose: Mapping[int, str],
-    *, packet_sha256_by_ordinal: Mapping[int, str],
+    *, identities_by_ordinal: Mapping[int, Any],
 ) -> list[str]:
-    """章回执集合核对（`R-10.3`，rc8）：逐章回执与当前章包、正文三方绑定。
+    """章回执集合核对（`R-10.3`，rc6 身份拆分）：逐章回执与当前写手视图/
+    验证输入摘要、正文三方绑定。
 
-    每一章独立核对：状态有效、`packet_sha256` 与当前编译出的章包摘要一致、
+    每一章独立核对：状态有效、`writer_view_sha256`／`validation_sha256` 与
+    当前编译出的分层摘要一致（Machine 层摘要仅审计，不参与核对）、
     正文 hash 与回执绑定。返回问题清单（空 = 集合内全部绑定成立）；各章
     问题分别报告——某章失效不截断其他章的有效性（D2 章包语义；恢复按有效
     提交集合补缺）。
@@ -145,7 +152,7 @@ def verify_chapter_receipts(
     for ordinal in sorted(receipts):
         for problem in _binding_problems(
                 receipts[ordinal],
-                packet_sha256=packet_sha256_by_ordinal.get(ordinal),
+                identities=identities_by_ordinal.get(ordinal),
                 prose=chapter_prose.get(ordinal)):
             problems.append(f'第{ordinal}章{problem}')
     return problems

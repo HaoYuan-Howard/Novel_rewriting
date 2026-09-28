@@ -15,8 +15,8 @@ import pytest
 from pydantic import ValidationError
 
 from contracts.schema.design import (
-    BodyDesign, ChapterAssignment, OngoingAction, Promise, SceneDelivery,
-    SceneDriver, TargetBeat, TargetDelta, TargetScene,
+    BodyDesign, ChapterAssignment, ChapterEntry, SceneDelivery,
+    SceneDriver, TargetBeat, TargetDelta, TargetScene, ThreadAction,
 )
 from contracts.schema.grounding import PreserveCheckpoint, SourceLineage, SourceObligation
 from contracts.schema.policy import PreserveKind
@@ -42,18 +42,13 @@ H64 = 'a' * 64
 # ───────────────────────── 构造器 ─────────────────────────
 
 def _wire() -> dict:
-    """两场三拍的 design wire：覆盖章切片、相对权重、跨章字段与 reader 确认。"""
+    """两场三拍的 design wire v2：章切片、相对权重、线程、world_rules、entry
+    与 reader 确认（四个静态跨章列表已退役，AUD-04）。"""
     return {
         'protocol_version': STAGE4_DESIGN_PROTOCOL,
         'book_style': '冷峻克制的第三人称叙事，重日常细节里的异样。',
         'character_voices': [{'char_id': 'yun', 'voice': '短句、少感叹'}],
-        'standing_goals': [{'char_id': 'yun', 'goal': '查清夫君的底细'}],
-        'ongoing_actions': [{'char_id': 'yun', 'action': '暗中跟随夫君',
-                             'started_at': {'scene': 1, 'beat': 3}}],
-        'open_questions': [{'question': '玉佩上的字是谁刻的',
-                            'planted_at': {'scene': 2, 'beat': 2}}],
-        'promises': [{'maker': 'fu_jun', 'to': 'yun', 'content': '再不隐瞒',
-                      'made_at': {'scene': 1, 'beat': 2}}],
+        'world_rules': ['术法须以寿命为代价'],
         'initial_state': [
             {'domain': 'character', 'subjects': ['yun'], 'holder': None,
              'key': 'marital_status', 'op': 'set', 'value': '新婚'}],
@@ -70,7 +65,11 @@ def _wire() -> dict:
                        'op': 'set', 'scope': 'book', 'key': 'marital_status',
                        'value': '夫妻'}], 'delivery_hint': ''},
                  {'event': '夫君立约', 'participants': ['yun', 'fu_jun'],
-                  'dramatic_intent': '埋线', 'target_delta': [], 'delivery_hint': ''},
+                  'dramatic_intent': '埋线', 'target_delta': [], 'delivery_hint': '',
+                  'threads': [{'op': 'open', 'tag': 't1', 'kind': 'question',
+                               'subject': 'yun', 'text': '玉佩上的字是谁刻的'},
+                              {'op': 'open', 'tag': 't2', 'kind': 'promise',
+                               'subject': 'fu_jun', 'text': '再不隐瞒'}]},
                  {'event': '云娘起疑', 'participants': ['yun'],
                   'dramatic_intent': '转向', 'target_delta': [
                       {'domain': 'reader', 'subjects': [], 'op': 'set',
@@ -88,10 +87,15 @@ def _wire() -> dict:
                  {'event': '翻检妆匣', 'participants': ['yun'],
                   'dramatic_intent': '推进', 'target_delta': [], 'delivery_hint': ''},
                  {'event': '发现玉佩刻字', 'participants': ['yun'],
-                  'dramatic_intent': '揭示', 'target_delta': [], 'delivery_hint': ''}],
+                  'dramatic_intent': '揭示', 'target_delta': [], 'delivery_hint': '',
+                  'threads': [{'op': 'close', 'ref': 't1', 'ending': 'answered',
+                               'resolution': '刻着沈字，指向旧案'}]}],
              'delivery': {'pov': 'yun', 'voice': '冷峻', 'avoid': []}}],
         'chapters': [{'purpose': '新婚之夜埋下旧约之疑', 'scenes': 1},
-                     {'purpose': '玉佩之谜浮出水面', 'scenes': 1}],
+                     {'purpose': '玉佩之谜浮出水面', 'scenes': 1,
+                      'entry': {'transition': 'time_skip',
+                                'carryover': '云娘的疑心未消',
+                                'recap': 'brief_orientation'}}],
         'scene_weights': [2, 1],
     }
 
@@ -120,13 +124,13 @@ def _checkpoint(*obligation_ids: str) -> PreserveCheckpoint:
 def test_four_protocols_are_independent_literals():
     """每个付费语义节点一个独立协议字面量：演进互不牵连（B3 前半）。"""
     assert STAGE4_PRESERVE_PROTOCOL == 'stage4-preserve-v1'
-    assert STAGE4_DESIGN_PROTOCOL == 'stage4-design-v1'
+    assert STAGE4_DESIGN_PROTOCOL == 'stage4-design-v2'
     assert STAGE4_BIND_PROTOCOL == 'stage4-bind-v1'
     assert STAGE4_HOOK_DESIGN_PROTOCOL == 'stage4-hook-design-v1'
     assert len({STAGE4_PRESERVE_PROTOCOL, STAGE4_DESIGN_PROTOCOL,
                 STAGE4_BIND_PROTOCOL, STAGE4_HOOK_DESIGN_PROTOCOL}) == 4
-    # RC 版式头随 R1 关联无损升 rc9（B4 章包写手曾升 rc8）
-    assert STR06_RC_VERSION == 'str06-rc9'
+    # RC 版式头随 R2 语义送达升 rc10（R1 关联无损曾升 rc9）
+    assert STR06_RC_VERSION == 'str06-rc10'
 
 
 def test_design_wire_without_protocol_is_refused():
@@ -167,27 +171,41 @@ def test_compiler_dispatches_ids_slices_chapters_and_normalizes_weights():
     assert budgets == {1: 667, 2: 333}
 
 
-def test_cross_chapter_anchors_resolve_to_canonical_refs():
-    """跨章条目的 {"scene","beat"} 分量由 compiler 解析成 `场景#拍`。"""
+def test_thread_tags_dispatch_to_canonical_refs():
+    """线程本地标签由 compiler 按 open 先后派发 `th{nn}`（I-21）。"""
     body = _green()
-    assert body.ongoing_actions[0].started_at == 'sc01#b03'
-    assert body.open_questions[0].planted_at == 'sc02#b02'
-    assert body.promises[0].made_at == 'sc01#b02'
+    threads = [t for s in body.scenes for b in s.beats for t in b.threads]
+    assert [(t.ref, t.op) for t in threads] == [
+        ('th01', 'open'), ('th02', 'open'), ('th01', 'close')]
+    assert threads[0].kind == 'question' and threads[0].subject == 'yun'
+    assert threads[2].ending == 'answered'
+    # world_rules 与 entry 原样落 canonical（第 1 章固定开篇）
+    assert body.world_rules == ('术法须以寿命为代价',)
+    assert body.chapters[0].entry == ChapterEntry.opening()
+    assert body.chapters[1].entry.carryover == '云娘的疑心未消'
 
 
-def test_cross_chapter_anchor_out_of_range_is_refused():
+def test_thread_wire_bad_references_are_refused():
     bad = _wire()
-    bad['ongoing_actions'][0]['started_at'] = {'scene': 3, 'beat': 1}
+    bad['scenes'][1]['beats'][1]['threads'][0]['ref'] = 't_unknown'
     _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'})
-    assert any('不存在的场景' in e for e in errors)
+    assert any('未开启' in e for e in errors)
     bad = _wire()
-    bad['open_questions'][0]['planted_at'] = {'scene': 2, 'beat': 9}
+    bad['scenes'][0]['beats'][1]['threads'][1]['tag'] = 't1'   # 重复开标签
     _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'})
-    assert any('不存在的拍' in e for e in errors)
+    assert any('重复开启' in e for e in errors)
     bad = _wire()
-    bad['promises'][0]['made_at'] = 'sc01#b02'  # 模型写复合引用（旧形状）即拒
+    bad['scenes'][1]['beats'][1]['threads'][0]['ending'] = 'fulfilled'
     _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'})
-    assert any('锚定形状非法' in e for e in errors)
+    assert any('闭集' in e or '构造失败' in e for e in errors), errors
+
+
+def test_retired_static_lists_are_refused_on_wire():
+    """AUD-04：四个静态跨章列表退役——wire 旧键关闭式拒读（I-13 无迁移）。"""
+    bad = _wire()
+    bad['standing_goals'] = [{'char_id': 'yun', 'goal': '查清夫君的底细'}]
+    _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'})
+    assert any('standing_goals' in e and '未知字段' in e for e in errors)
 
 
 def test_cross_chapter_char_ids_must_be_known():
@@ -196,14 +214,9 @@ def test_cross_chapter_char_ids_must_be_known():
     _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'})
     assert any('CharacterVoice 引用未知 char_id' in e for e in errors)
     bad = _wire()
-    bad['standing_goals'] = [{'char_id': 'ghost', 'goal': 'g'}]
+    bad['scenes'][0]['beats'][1]['threads'][0]['subject'] = 'ghost'
     _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'})
-    assert any('StandingGoal 引用未知 char_id' in e for e in errors)
-    bad = _wire()
-    bad['promises'] = [{'maker': 'ghost', 'content': 'c',
-                        'made_at': {'scene': 1, 'beat': 2}}]
-    _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'})
-    assert any('Promise 引用未知 char_id' in e for e in errors)
+    assert any('ThreadAction 引用未知 char_id ghost' in e for e in errors)
 
 
 def test_book_style_is_required_on_canonical():
@@ -303,7 +316,8 @@ def test_reader_confirmation_is_projected_by_address_only():
     sliced = body.model_copy(update={'scenes': (body.scenes[1],),
                                      'chapters': (ChapterAssignment(
                                          chapter_ordinal=1, purpose='p',
-                                         scene_ids=('sc02',)),)})
+                                         scene_ids=('sc02',),
+                                         entry=ChapterEntry.opening()),)})
     sliced.scenes[0].state_reads = ()
     assert pending_reader_confirmations(sliced, 0) == ()
 

@@ -51,7 +51,7 @@
 6. **分层冻结**：语义层在 B6-A 前冻结，写作层经 canary 收敛后再冻结。
 7. **先量后优**：运行指标之外加 WriterPacket 指标，先采数、不设阈值。
 
-**保留不动**：D1–D11；四类语义真源与 owner 边界；Design 源盲；章写手与章观察各自独立；Binding 的义务快照（只修文档声明）；不设生产语义 Judge。
+**保留不动**：D1–D11；四类故事语义真源（Characters／Blueprint／TargetDesign／SemanticBinding，`docs/REQUIREMENTS.md` 术语锚点；**不是** R2.4 删除的四个静态跨章字段）与 owner 边界；Design 源盲；章写手与章观察各自独立；Binding 的义务快照（只修文档声明）；不设生产语义 Judge。
 
 ## 执行顺序
 
@@ -251,6 +251,7 @@
 
 **E-4（medium）· R2.4「呈现分三种身份」表：线程 `delivery_mode` 归类二义。**
 行 2「开放中、与参与者相关、本场无操作→continuity」与行 3「开放中的问题线程→guard_only」交集非空（问题线程也有主体）；R0 也只说「否则是延续或禁区」未给分支条件。`delivery_mode` 是单值，归入哪区使渲染分区、packet 指标（活跃／受保护线程计数）与 R0 检查 3 的分区断言都不同。R2 须补可机械执行的分支条件（示例：先判本场操作，再判保护类，其余才进 continuity），并与 R0 登记表同批闭合。
+  **R2 契约批已闭合（2026-09-28）**：分支条件落在 `contracts/schema/consumption.py`（`open_threads[].text` 的 mode_note：先判本场操作→must_realize，再判保护类（question）→guard_only，其余→continuity；按参与者相关性过滤，不相关不投影）与 `novel/stages/stage4/guard.py::expected_thread_faces`（机械执行面，M8 对账基准）。
 
 **E-5（low）· R1：状态句柄改形状的同步清单不完整。**
 句柄改 `ch{nn}.b{拍}.e{效应序}.{key}` 时，除 `associate.py` 投影与闭集核对外，`_state_rank` 的 `ch(\d+)\.k(\d+)` 正则与 book 前缀序解析（`novel/stages/stage2/compile.py:100-108`）及同文件 338 行（book 句柄 `book.k{index}.{key}` 构造）、475 行（章拍句柄 `ch{chapter}.k{occurrence}.{key}` 构造）都要同批改。「唯一关联登记表」共用清单只点名 prompt、闭集核对与 `_StateClasses`；漏改 `_state_rank` 时不报错，同维合并的 canonical key（类内最早确立者排序）静默退化为 fallback rank。

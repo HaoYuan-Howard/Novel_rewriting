@@ -355,10 +355,10 @@ def test_full_chain_from_http_upload_to_stage7_delivery(base, monkeypatch):
         assert receipt['prose_sha256'] == sha256_text(prose)
         assert receipt['length_disclosed'] is False, '假正文应落在章篇幅带内'
         receipts[ordinal] = receipt
-    assert len(receipts[1]['packet_sha256']) == 64
+    assert len(receipts[1]['writer_view_sha256']) == 64
     assert 'prior_text_sha256' not in receipts[2]
     assert 'book_ir_sha256' not in receipts[2]
-    assert receipts[1]['packet_sha256'] != receipts[2]['packet_sha256']
+    assert receipts[1]['writer_view_sha256'] != receipts[2]['writer_view_sha256']
     for entry in manifest['chapters']:
         assert entry['prose_sha256'] == receipts[entry['chapter_ordinal']]['prose_sha256']
 

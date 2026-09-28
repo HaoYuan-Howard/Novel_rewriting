@@ -221,7 +221,7 @@ def test_run_view_projects_assembly_report_five_states(base):
     import json as _json
     repo = Str06Repository(base / 'cand' / 'run')
     tampered = repo.inspect('stage5/acceptance/body/ch02.json')
-    tampered['packet_sha256'] = 'f' * 64
+    tampered['writer_view_sha256'] = 'f' * 64
     repo.path('stage5/acceptance/body/ch02.json').write_text(
         _json.dumps(tampered, ensure_ascii=False), encoding='utf-8')
     ledger = CostLedger(path=ledger_path(base / 'cand'))

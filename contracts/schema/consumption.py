@@ -201,6 +201,11 @@ STR06_FIELD_DELIVERY: dict[str, FieldDeliverySpec] = {
     'writer_book_ir.book_brief.book_style': _spec(
         'writer_book_ir.book_brief.book_style', consumers=(_W,), scope=_EVERY,
         mode=DeliveryMode.CREATIVE_GUIDANCE, note='书级风格（TargetDesign 投影）'),
+    'writer_book_ir.book_brief.world_rules': _spec(
+        'writer_book_ir.book_brief.world_rules', consumers=(_W,), scope=_EVERY,
+        mode=DeliveryMode.MUST_RESPECT, pending=True,
+        note='书级世界边界（R2.5 目标侧，Design 决定沿用或改写）：作为世界边界'
+             '遵守、不要讲解；随章包携带，分区渲染落地前不出现在阅读面'),
     'writer_book_ir.book_brief.character_voices[].char_id': _spec(
         'writer_book_ir.book_brief.character_voices[].char_id', consumers=(_A,),
         scope=_EVERY, mode=DeliveryMode.AUDIT_ONLY, pending=True,
@@ -266,6 +271,40 @@ STR06_FIELD_DELIVERY: dict[str, FieldDeliverySpec] = {
         'writer_book_ir.chapters[].withheld_literals', consumers=(_V,),
         scope=_CHAP, mode=DeliveryMode.AUDIT_ONLY,
         note='本章禁用字面：validator 检查面，不进写手阅读面'),
+    # ── WriterBookIR：章级承接数据面（R2.6 continuity 分区）────────────────
+    'writer_book_ir.chapters[].continuity.entry.transition': _spec(
+        'writer_book_ir.chapters[].continuity.entry.transition', consumers=(_W,),
+        scope=_CHAP, mode=DeliveryMode.CONTINUITY, pending=True,
+        note='章间衔接方式闭集（第 1 章固定开篇）；renderer 措辞成承接句，'
+             '分区渲染落地前不出现在阅读面'),
+    'writer_book_ir.chapters[].continuity.entry.carryover': _spec(
+        'writer_book_ir.chapters[].continuity.entry.carryover', consumers=(_W,),
+        scope=_CHAP, mode=DeliveryMode.CONTINUITY, pending=True,
+        note='延续到本章的动作或张力（自然延续，不复述成任务）'),
+    'writer_book_ir.chapters[].continuity.entry.recap': _spec(
+        'writer_book_ir.chapters[].continuity.entry.recap', consumers=(_W,),
+        scope=_CHAP, mode=DeliveryMode.CONTINUITY, pending=True,
+        note='复述策略（不复述/一两句重新定向）'),
+    'writer_book_ir.chapters[].continuity.previous_ending.chapter_ordinal': _spec(
+        'writer_book_ir.chapters[].continuity.previous_ending.chapter_ordinal',
+        consumers=(_A,), scope=_CHAP, mode=DeliveryMode.AUDIT_ONLY,
+        note='上一章章号（机械锚，审计位）'),
+    'writer_book_ir.chapters[].continuity.previous_ending.ending_scene_id': _spec(
+        'writer_book_ir.chapters[].continuity.previous_ending.ending_scene_id',
+        consumers=(_A,), scope=_CHAP, mode=DeliveryMode.AUDIT_ONLY,
+        note='上一章末场锚（Design 无地点字段，不猜地点语义；审计位）'),
+    'writer_book_ir.chapters[].continuity.previous_ending.driver_turn': _spec(
+        'writer_book_ir.chapters[].continuity.previous_ending.driver_turn',
+        consumers=(_W,), scope=_CHAP, mode=DeliveryMode.CONTINUITY, pending=True,
+        note='上一章末场驱动转折（承接措辞素材：上一章收在……）'),
+    'writer_book_ir.chapters[].continuity.previous_ending.final_beat_event': _spec(
+        'writer_book_ir.chapters[].continuity.previous_ending.final_beat_event',
+        consumers=(_W,), scope=_CHAP, mode=DeliveryMode.CONTINUITY, pending=True,
+        note='上一章末拍事件（承接措辞素材，不复述）'),
+    'writer_book_ir.chapters[].continuity.previous_ending.present_chars': _spec(
+        'writer_book_ir.chapters[].continuity.previous_ending.present_chars',
+        consumers=(_W,), scope=_CHAP, mode=DeliveryMode.CONTINUITY, pending=True,
+        note='上一章末拍在场人物（R2 解析为目标姓名后送达）'),
     # ── WriterBookIR：场景层（WriterContext 双视图）───────────────────────
     'writer_book_ir.chapters[].scenes[].contract_version': _spec(
         'writer_book_ir.chapters[].scenes[].contract_version', consumers=(_A,),
@@ -399,6 +438,69 @@ STR06_FIELD_DELIVERY: dict[str, FieldDeliverySpec] = {
         '.surface_introductions', consumers=(_W, _V), scope=_SCENE,
         mode=DeliveryMode.MUST_RESPECT, pending=True,
         note='称谓时点（第 X 拍起可用）；当前以拍 id 表述，R2 以自然时点表述'),
+    # VerificationIR：拍级读取解析值（R2，AUD-03）与线程投影面（R2.4）
+    'writer_book_ir.chapters[].scenes[].verification_ir.beats[].reads': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.beats[].reads',
+        consumers=(_W,), scope=_SCENE, mode=DeliveryMode.MUST_RESPECT, pending=True,
+        note='拍级读取的解析值（先写后读）：本场依赖的事实，挂到对应拍送达；'
+             '当前随 JSON 倾倒可见（含 established_by 等机械位），分区渲染后以'
+             '自然语言条目送达'),
+    'writer_book_ir.chapters[].scenes[].verification_ir.thread_ops[].ref': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.thread_ops[].ref',
+        consumers=(_A,), scope=_SCENE, mode=DeliveryMode.AUDIT_ONLY,
+        note='线程 id（th{nn}，机械位，不进阅读面）'),
+    'writer_book_ir.chapters[].scenes[].verification_ir.thread_ops[].op': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.thread_ops[].op',
+        consumers=(_A,), scope=_SCENE, mode=DeliveryMode.AUDIT_ONLY,
+        note='操作类型（open/advance/close；renderer 按此措辞，slug 不进阅读面）'),
+    'writer_book_ir.chapters[].scenes[].verification_ir.thread_ops[].kind': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.thread_ops[].kind',
+        consumers=(_A,), scope=_SCENE, mode=DeliveryMode.AUDIT_ONLY,
+        note='线程类别（goal/action/question/promise；措辞分支位，不进阅读面）'),
+    'writer_book_ir.chapters[].scenes[].verification_ir.thread_ops[].subject': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.thread_ops[].subject',
+        consumers=(_W,), scope=_SCENE, mode=DeliveryMode.MUST_REALIZE, pending=True,
+        note='线程主体（R2 解析为目标姓名后送达）'),
+    'writer_book_ir.chapters[].scenes[].verification_ir.thread_ops[].text': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.thread_ops[].text',
+        consumers=(_W,), scope=_SCENE, mode=DeliveryMode.MUST_REALIZE, pending=True,
+        note='线程声明文本（open 处只写一次）：本场推进/收束它'),
+    'writer_book_ir.chapters[].scenes[].verification_ir.thread_ops[].progress': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.thread_ops[].progress',
+        consumers=(_W,), scope=_SCENE, mode=DeliveryMode.MUST_REALIZE, pending=True,
+        note='本拍进展说明'),
+    'writer_book_ir.chapters[].scenes[].verification_ir.thread_ops[].ending': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.thread_ops[].ending',
+        consumers=(_A,), scope=_SCENE, mode=DeliveryMode.AUDIT_ONLY,
+        note='结局 slug（按 kind 闭集；语义经 resolution 送达，slug 不进阅读面）'),
+    'writer_book_ir.chapters[].scenes[].verification_ir.thread_ops[].resolution': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.thread_ops[].resolution',
+        consumers=(_W,), scope=_SCENE, mode=DeliveryMode.MUST_REALIZE, pending=True,
+        note='收线收束（一句话；question 的答案要点）'),
+    'writer_book_ir.chapters[].scenes[].verification_ir.open_threads[].ref': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.open_threads[].ref',
+        consumers=(_A,), scope=_SCENE, mode=DeliveryMode.AUDIT_ONLY,
+        note='开放线程 id（机械位，不进阅读面）'),
+    'writer_book_ir.chapters[].scenes[].verification_ir.open_threads[].kind': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.open_threads[].kind',
+        consumers=(_A,), scope=_SCENE, mode=DeliveryMode.AUDIT_ONLY,
+        note='线程类别（guard_only／continuity 的分支位：question→禁区，'
+             '其余→延续；E-4）'),
+    'writer_book_ir.chapters[].scenes[].verification_ir.open_threads[].subject': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.open_threads[].subject',
+        consumers=(_W,), scope=_SCENE, mode=DeliveryMode.CONTINUITY, pending=True,
+        note='开放线程主体（与参与者相关、本场无操作才投影；R2 解析为目标姓名'
+             '后按 kind 分区送达）'),
+    'writer_book_ir.chapters[].scenes[].verification_ir.open_threads[].text': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.open_threads[].text',
+        consumers=(_W,), scope=_SCENE, mode=DeliveryMode.CONTINUITY, pending=True,
+        note='开放线程声明文本：按投影规则逐场决定身份——question→guard_only'
+             '（不得提前回答、不主动提醒），其余→continuity（仍影响人物选择，'
+             '不必点明；E-4 分支：先判本场操作，再判保护类）'),
+    'writer_book_ir.chapters[].scenes[].verification_ir.open_threads[].opened_at': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.open_threads[]'
+        '.opened_at', consumers=(_A,), scope=_SCENE, mode=DeliveryMode.AUDIT_ONLY,
+        note='开启位置锚（审计位，不进阅读面）'),
     # VerificationIR：入场视图
     'writer_book_ir.chapters[].scenes[].verification_ir.entry_state[].domain': _spec(
         'writer_book_ir.chapters[].scenes[].verification_ir.entry_state[].domain',

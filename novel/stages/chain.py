@@ -70,7 +70,8 @@ from novel.model_slots import pipeline_model_slot
 from novel.stages.common import (
     NAMES_RULES, PRESERVE_RULES, DESIGN_RULES, BIND_RULES,
     HOOK_DESIGN_RULES, HOOK_WRITER_SYSTEM, NAMING_RULES, SYS,
-    BODY_WRITER_SYSTEM, pack_prompt, packet_sha256, project_chapter_packet,
+    BODY_WRITER_SYSTEM, ChapterIdentities, chapter_identities, pack_prompt,
+    project_chapter_packet,
 )
 from novel.stages.stage2 import (
     NamesObservation, STAGE2_OBSERVATION_PROTOCOL, book_observation_prompt,
@@ -610,14 +611,16 @@ def run_hook(ctx: ChainContext) -> dict:
 
 # ─── stage5 body（章包写手：独立成章、并发、集合恢复；D2，B4） ────────────────
 
-def _packet_digests(writer_ir) -> dict[int, str]:
-    """当前编译下每章的章包摘要（Stage5 回执绑定与 Stage7 核对共用）。"""
-    return {chapter.chapter_ordinal: packet_sha256(
+def _packet_identities(writer_ir) -> dict[int, 'ChapterIdentities']:
+    """当前编译下每章的回执分层摘要（rc6 身份拆分；Stage5 恢复绑定与 Stage7
+    核对共用同一产地——写手视图／验证输入／Machine 审计三把）。"""
+    return {chapter.chapter_ordinal: chapter_identities(
                 project_chapter_packet(writer_ir, chapter.chapter_ordinal))
             for chapter in writer_ir.chapters}
 
 
-def _committed_set(repository, digests: dict[int, str], target_chapters: int):
+def _committed_set(repository, identities: dict[int, 'ChapterIdentities'],
+                  target_chapters: int):
     """集合恢复：逐章独立装载有效提交（回执＋正文＋章包摘要三方绑定）。
 
     各章互不依赖（D2）：某章缺失、章包过期或正文脱钩只使**该章**回到待补
@@ -626,7 +629,7 @@ def _committed_set(repository, digests: dict[int, str], target_chapters: int):
     同请求身份免费重放闭合（`R-7.4`）。
 
     回执装载走 `inspect`（不记来源边、不做输入新鲜度）：章包摘要
-    （packet_sha256）是比输入边新鲜度更强的逐章绑定——章回执的合法输入只有
+    （写手视图与验证输入摘要）是比输入边新鲜度更强的逐章绑定——章回执的合法输入只有
     当前 IR，若经 `read` 装载会把其他章回执字节记进来源边，一章重做即误判
     他章 stale，破坏「各章独立有效」。
     """
@@ -644,7 +647,7 @@ def _committed_set(repository, digests: dict[int, str], target_chapters: int):
         except (FileNotFoundError, ValidationError):
             continue
         problems = check_chapter_receipt(
-            model, packet_sha256=digests[ordinal], prose_sha256=sha256_text(prose))
+            model, identities=identities[ordinal], prose_sha256=sha256_text(prose))
         if problems:
             continue
         committed[ordinal] = prose
@@ -694,8 +697,9 @@ def run_body(ctx: ChainContext) -> dict:
     writer_ir = repository.read_model('stage4/ir/writer_book_ir.json')
     target_chapters = (min(ctx.body_chapter_limit, len(writer_ir.chapters))
                        if ctx.body_chapter_limit is not None else len(writer_ir.chapters))
-    digests = _packet_digests(writer_ir)
-    committed, committed_receipts = _committed_set(repository, digests, target_chapters)
+    identities = _packet_identities(writer_ir)
+    committed, committed_receipts = _committed_set(repository, identities,
+                                                   target_chapters)
     todo = [ordinal for ordinal in range(1, target_chapters + 1)
             if ordinal not in committed]
     packets = {ordinal: project_chapter_packet(writer_ir, ordinal) for ordinal in todo}
@@ -774,7 +778,7 @@ def run_assemble(ctx: ChainContext) -> dict:
     # 隐瞒盘上事实），再与当前编译出的章包摘要逐章核对。分类与逐条问题共用
     # 同一逐章绑定实现（assembly._binding_problems）：有效/缺失/拒绝/未知/失效
     # 五态分开（I-42），不一致或缺口按 item 报告，不静默跳过。
-    digests = _packet_digests(writer_ir)
+    identities = _packet_identities(writer_ir)
     expected = range(1, len(writer_ir.chapters) + 1)
     raw_receipts: dict[int, dict] = {}
     raw_prose: dict[int, str] = {}
@@ -789,11 +793,12 @@ def run_assemble(ctx: ChainContext) -> dict:
                 f'stage5/body/{_chapter_ordinal(ordinal)}.txt')
         except FileNotFoundError:
             continue
-    access = chapter_access(expected, raw_receipts, packet_sha256_by_ordinal=digests,
+    access = chapter_access(expected, raw_receipts,
+                            identities_by_ordinal=identities,
                             chapter_prose=raw_prose)
     chapter_prose = {ordinal: raw_prose[ordinal] for ordinal in access.accepted}
     chain_problems = verify_chapter_receipts(
-        raw_receipts, raw_prose, packet_sha256_by_ordinal=digests)
+        raw_receipts, raw_prose, identities_by_ordinal=identities)
     replacements, errors = compile_surface_replacements(chars, name_map)
     if errors:
         raise ValueError(errors)

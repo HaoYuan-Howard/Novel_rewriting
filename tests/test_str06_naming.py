@@ -377,7 +377,7 @@ def test_released_surfaces_close_over_the_replacement_table():
     registered = {cid: {s.surface for s in entry.surfaces}
                   for cid, entry in chars.characters.items()}
     design_wire = {
-        'protocol_version': 'stage4-design-v1',
+        'protocol_version': 'stage4-design-v2',
         'book_style': '平实克制的第三人称叙事。',
         'initial_state': [],
         'scenes': [{
@@ -498,25 +498,32 @@ def test_chapter_access_separates_stale_from_missing_and_rejected():
     def sha(text: str) -> str:
         return hashlib.sha256(text.encode('utf-8')).hexdigest()
 
+    from novel.stages.common import ChapterIdentities
     digests = {1: '1' * 64, 2: '2' * 64, 3: '3' * 64, 4: '4' * 64}
+    identities = {n: ChapterIdentities(writer_view_sha256=d, validation_sha256='9' * 64,
+                                       machine_view_sha256='e' * 64)
+                  for n, d in digests.items()}
     prose = {1: '第一章。', 2: '第二章。', 3: '第三章。', 4: '第四章。'}
+
+    def receipt(writer_view, ordinal):
+        return {'status': 'accepted', 'writer_view_sha256': writer_view,
+                'validation_sha256': '9' * 64, 'machine_view_sha256': 'e' * 64,
+                'prose_sha256': sha(prose[ordinal])}
+
     receipts = {
-        1: {'status': 'accepted', 'packet_sha256': digests[1],
-            'prose_sha256': sha(prose[1])},
-        # 章包换版：失效，不是缺失
-        2: {'status': 'accepted', 'packet_sha256': 'f' * 64,
-            'prose_sha256': sha(prose[2])},
+        1: receipt(digests[1], 1),
+        # 写手视图换版：失效，不是缺失
+        2: receipt('f' * 64, 2),
         # 正文脱钩：同样失效
-        3: {'status': 'accepted', 'packet_sha256': digests[3],
-            'prose_sha256': sha('被改过的第三章')},
-        4: {'status': 'accepted', 'packet_sha256': digests[4],
-            'prose_sha256': sha(prose[4])},
-        5: {'status': 'rejected', 'packet_sha256': digests[1],
+        3: receipt(digests[3], 3) | {'prose_sha256': sha('被改过的第三章')},
+        4: receipt(digests[4], 4),
+        5: {'status': 'rejected', 'writer_view_sha256': digests[1],
+            'validation_sha256': '9' * 64, 'machine_view_sha256': 'e' * 64,
             'prose_sha256': sha(prose[1])},
         6: {'notes': '回执存在但状态不可解'},
     }
     access = chapter_access(range(1, 8), receipts,
-                            packet_sha256_by_ordinal=digests, chapter_prose=prose)
+                            identities_by_ordinal=identities, chapter_prose=prose)
     assert access.accepted == (1, 4)
     assert access.stale == (2, 3)
     assert access.rejected == (5,)
