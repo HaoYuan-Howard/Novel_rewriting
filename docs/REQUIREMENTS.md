@@ -1402,6 +1402,16 @@ B6-A／B6-B 分别授权；R 批全部 fake transport、零模型调用。
     （R4 遗留，非本批引入）。文档：
     `docs/schema/str06.md` 发布权威节由「目标」改「现役」；
     `tests/suite_catalog.json` 登记三条新用例（模块 stages 补 stage7）。
+  - 闸门复跑收口（同日）：独立 basetemp 复跑暴露
+    `novel/model_slots.py::prepare_model_slot_gate` 的 create-then-write 竞态——
+    `open(path,'xb')` 先落零长度文件、write/fsync 随后，run_chapters／run_body
+    逐章线程并发首开总槽时，第二个初始化者把活初始化误判成「损坏」
+    （ModelSlotUnavailable，R4 并发面遗留、非 R6 引入）。修复：初始化循环序列化
+    进 `capacity.json` 的事务锁（线程＋进程，`path_transaction_lock`），等待者
+    只在完整文件出现后核对；崩溃残留的零长度槽文件仍按损坏关闭式拒绝。
+    反例见 tests/test_model_slots.py 的
+    `test_concurrent_gate_initialization_never_reads_half_written_slot`
+    （受控放大真实窗口，先红后绿）；两用例连同所在文件各复跑 5／3 遍全绿。
 
 ## 职责解耦批次（2026-09-27 起；B0–B6）
 

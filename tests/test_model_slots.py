@@ -130,6 +130,64 @@ def test_capacity_changes_require_drain_and_corruption_never_resets(tmp_path):
     assert target.read_text(encoding='utf-8') == '{broken'
 
 
+def test_concurrent_gate_initialization_never_reads_half_written_slot(
+        tmp_path, monkeypatch):
+    """并发初始化不得把「创建后未写完」的活初始化误判成槽文件损坏。
+
+    R6 闸门实测红例（run_chapters 两章线程并发首开总槽）：``open(path, 'xb')``
+    先落一个零长度文件、write/fsync 随后才补内容；第二个初始化者在这个窗口
+    进入 FileExistsError 分支，把活初始化读成「损坏」关闭式上抛。修复把初始化
+    序列化进 capacity.json 的事务锁（线程＋进程）——等待者只在完整文件出现后
+    核对；真正崩溃残留的零长度文件仍按损坏拒绝（上例的 fail-closed 不变）。
+    """
+    import builtins
+
+    gate_dir = tmp_path / 'slots'
+    gate_dir.mkdir()
+    window_open = threading.Event()
+    release = threading.Event()
+    triggered = threading.Event()
+    real_open = builtins.open
+
+    def slowed_open(path, mode='r', *args, **kwargs):
+        handle = real_open(path, mode, *args, **kwargs)
+        if ('xb' in mode and str(path).endswith('slot-00.lock')
+                and not triggered.is_set()):
+            # 受控放大「文件已创建、内容未写」的真实窗口（create-then-write）。
+            triggered.set()
+            window_open.set()
+            assert release.wait(5), '窗口钩子等待释放超时'
+        return handle
+
+    monkeypatch.setattr(builtins, 'open', slowed_open)
+    failures: list[BaseException] = []
+
+    def initializer():
+        try:
+            prepare_model_slot_gate(gate_dir, capacity=2)
+        except BaseException as exc:  # 线程内异常收集后由主断言统一裁决
+            failures.append(exc)
+
+    one = threading.Thread(target=initializer)
+    one.start()
+    assert window_open.wait(5), '必须真实进入「已创建未写完」窗口'
+    slot00 = gate_dir / 'slot-00.lock'
+    assert slot00.is_file() and slot00.stat().st_size == 0, \
+        '前置事实：create-then-write 的中间态确实零长度可见'
+    two = threading.Thread(target=initializer)
+    two.start()
+    # 无修复：第二个初始化者立即误判损坏；有修复：在事务锁上等待首初始化完成。
+    two.join(0.3)
+    release.set()
+    one.join(5)
+    two.join(5)
+    assert not one.is_alive() and not two.is_alive()
+    assert failures == [], f'并发初始化不得被误判为损坏：{failures}'
+    for name in ('slot-00.lock', 'slot-01.lock'):
+        path = gate_dir / name
+        assert path.is_file() and path.stat().st_size >= 1, f'{name} 终态必须健康'
+
+
 def _hold_process_slot(book, entered):
     import time
     with pipeline_model_slot(book, 'openai', per_book=1, per_provider=1):

@@ -160,7 +160,16 @@ def pipeline_model_slot(novel_dir: Path, provider: str, *, per_book: int = 4,
 def prepare_model_slot_gate(
     root: str | os.PathLike[str], *, capacity: int,
 ) -> dict[str, str]:
-    """初始化一份固定容量的锁目录，并返回可下发给子进程的环境片段。"""
+    """初始化一份固定容量的锁目录，并返回可下发给子进程的环境片段。
+
+    初始化在 ``capacity.json`` 的事务锁（线程＋进程）内完成：``open(path,'xb')``
+    先落一个零长度文件、write/fsync 随后才补内容，并发的第二个初始化者会在
+    这个窗口里把活初始化误判成「损坏」（run_chapters／run_body 逐章线程并发
+    首开总槽时实测）；锁内等待者只在完整文件出现后核对。真正崩溃残留的
+    零长度文件仍按损坏关闭式拒绝。⚠ 锁不可重入：已持有
+    ``path_transaction_lock(<root>/capacity.json)`` 的调用方不得再进本函数
+    （现役唯一调用面 ``_prepare_group`` 在自有锁外调用）。
+    """
     if (not isinstance(capacity, int) or isinstance(capacity, bool)
             or not 1 <= capacity <= _MAX_CAPACITY):
         raise ValueError(f'模型调用槽容量必须在 1..{_MAX_CAPACITY}')
@@ -168,16 +177,17 @@ def prepare_model_slot_gate(
     target.mkdir(parents=True, exist_ok=True)
     if target.is_symlink() or not target.is_dir():
         raise ValueError(f'模型调用槽根必须是普通目录：{target}')
-    for index in range(capacity):
-        path = target / _slot_name(index)
-        try:
-            with open(path, 'xb') as handle:
-                handle.write(b'0')
-                handle.flush()
-                os.fsync(handle.fileno())
-        except FileExistsError:
-            if path.is_symlink() or not path.is_file() or path.stat().st_size < 1:
-                raise ValueError(f'模型调用槽文件损坏：{path}') from None
+    with path_transaction_lock(target / 'capacity.json'):
+        for index in range(capacity):
+            path = target / _slot_name(index)
+            try:
+                with open(path, 'xb') as handle:
+                    handle.write(b'0')
+                    handle.flush()
+                    os.fsync(handle.fileno())
+            except FileExistsError:
+                if path.is_symlink() or not path.is_file() or path.stat().st_size < 1:
+                    raise ValueError(f'模型调用槽文件损坏：{path}') from None
     return {
         MODEL_SLOT_DIR_ENV: str(target),
         MODEL_SLOT_CAPACITY_ENV: str(capacity),
