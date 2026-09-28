@@ -1234,6 +1234,44 @@ fake transport，B6 付费与正文外发分别授权。
     采用链已可走通（F-4 修复后），验证根本身作为只读证据保留，补丁是否正式采用由
     用户定。
 
+## 质量重设计批次（2026-09-28 起；R0–R7，依据 PLAN.md）
+
+批次表与裁决见 `PLAN.md`（唯一活动计划；本节只登记交付记录）。付费与正文外发只在
+B6-A／B6-B 分别授权；R 批全部 fake transport、零模型调用。
+
+- [x] **R0 · 语义送达与送达方式守卫＋故障注入底座（免费）**（2026-09-28 完成）：
+  - `contracts/schema/consumption.py` 新增字段级送达登记
+    `STR06_FIELD_DELIVERY`（128 项）：送达链 canonical 面（WriterBookIR、章包派生
+    RealizationContract、HookContext、NameMapV5）逐叶子字段登记消费者
+    （writer_packet/hook_context/naming/validator/audit）、受影响章范围
+    （every_chapter/chapter_field/scene_owner/hook_only/naming_only/not_delivered）与
+    `delivery_mode` 七档（must_realize/must_respect/continuity/creative_guidance/
+    background/guard_only/audit_only）；background 当前无独立字段（R2 编译器补齐投影
+    产生），以投影规则注记在 `entry_state[].value`。顺带把六族投影的 source_owners
+    从退役节点名（stage2.characters 等）换成 `NODES` 现役名。
+  - 守卫 `tests/test_str06_semantic_delivery.py`（51 项）：①canonical 字段未登记即红
+    （面走查双向对账）；②变异只动登记范围的章（`project_chapter_packet`＋
+    `packet_sha256` 比较面，29 个变异用例覆盖六档身份与全部范围规则）；③变异值只进
+    其 delivery_mode 对应送达面（audit_only 材料进章包但不进阅读面；Hook 面同理）；
+    ④写手视图无 audit_only 内容（禁用字面清单、lineage、provenance、导航与称谓总表；
+    语义文本中的源侧字面属 R2 renderer 目标名解析问题，非本检查对象）。当前 v4
+    renderer 仍 JSON 倾倒 VerificationIR／HookContext，`sc01#b02` 式 ID、
+    `established_by` 与字段名的阅读面清零以 `r2_face_pending` 登记为闭集
+    （41 条），R2 WriterPacket 落地后必须清零——对应 R2 完成项「R0 守卫全绿」。
+  - 故障注入 fake 底座 `tests/str06_faults.py`：五类脚本化模型式错误（证据 id 越界、
+    未知 slug、漏配对、必保义务未承载、wire 多键）＋带跨章悬念的绿基线 wires；经
+    PaidRequestSession＋fake transport 走真实链入口，实测拦截位——book 校验闭集、
+    compile 的 participants 闭集与未决拒绝（D8）、stage4 compile 的必保义务覆盖
+    Guard（bind 对带 owner 的 unbound 是合法返回）、`_decode_json` 重复键拒绝；
+    sitecustomize 注入路径（环境门 `NOVEL_STR06_FAULT`）与
+    `tests/test_str06_product_entry.py` 的 B5 注入同形，子进程注入有环境门双向验证。
+    本批不接修订逻辑（R3 复用）。
+  - 验证：`tests/test_str06_semantic_delivery.py` 51/51；定向同跑 test_str06_contracts、
+    test_test_selection、test_docs_references、test_coverage（295/295）与
+    test_str06_body、test_str06_hook（引其夹具，43/43）；零真实付费。文档：
+    `docs/schema/str06.md` 增「字段级送达登记」节；`tests/suite_catalog.json` 登记
+    新模块（三条链级用例标 stage）。
+
 ## 职责解耦批次（2026-09-27 起；B0–B6）
 
 裁决 D1–D10 各行见 [DECISIONS.md](DECISIONS.md) 2026-09-27；目标架构（Stage2 五节点、

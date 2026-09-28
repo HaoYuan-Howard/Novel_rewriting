@@ -330,7 +330,7 @@ seal → 标记采用（可由 seal 重建）。任一窗口中断优先免费�
 | `contracts/schema/context.py` | `WriterContext` 双视图（`VerificationIR`＋`WriterBrief`） | IR 带 `beats` 逐拍定位与 `prohibitions`；Brief 只承载呈现；两视图 scene_id 与 slice 身份同源 |
 | `contracts/schema/book_ir.py` | `WriterBookIR`＝`BookBrief`＋`ChapterIR[]`；rc8 起含 `ChapterWriterPacket` 章包三件套 | BookBrief 确定性导航（不调 LLM 总结、不取 POV 众数、不补造统一文风）；章预算 largest-remainder 整数分配；章级验证材料 compile 时算好（D2） |
 | `contracts/schema/receipt.py` | `ChapterReceipt`（章级回执，rc5） | 绑定章序、章包摘要、改名前正文、实际请求身份、协议/renderer/校验版本；不绑全书 IR 与前文链（D2）；只有篇幅偏差可在额度耗尽后披露放行 |
-| `contracts/schema/consumption.py` | 六个消费投影族 | body_access 按章级有效回执判定；rename_materials 写明 Naming 只读投影与 Apply 唯一应用者 |
+| `contracts/schema/consumption.py` | 六个消费投影族＋字段级送达登记（R0） | body_access 按章级有效回执判定；rename_materials 写明 Naming 只读投影与 Apply 唯一应用者；字段级登记见下节 |
 | `contracts/schema/families.py` | 三级路径家族登记（16 个家族） | 来源账键=完整相对路径 |
 | `contracts/schema/dependency.py` | 新链依赖方向登记＋per-stage 模块 owner 规则 | 由 AST 对真实文件执行（`tests/test_str06_hook.py`） |
 | `contracts/schema/retirement.py` | F6d/F7e 退役登记（历史台账） | 双向对账；保留至 STR-06 关闭 |
@@ -446,6 +446,23 @@ admission／adopt）的写路（映射表见 REQUIREMENTS）；旧输出根的�
 | body_access | 有效 receipt 与 accepted body；未就绪显式返回 |
 | hook_material | 正式 Hook Design 选择与 compiled target 的最小投影，不读 Body prose/Source Hook |
 | rename_materials | Naming 用身份/源名称结构/风格投影；Apply/Assembly 用 Characters、NameMap 与接受文本，两种权限分开 |
+
+### 字段级送达登记（R0，2026-09-28）
+
+`contracts/schema/consumption.py::STR06_FIELD_DELIVERY` 把送达粒度降到字段：送达链
+canonical 产物（WriterBookIR、章包派生的 RealizationContract、HookContext、NameMapV5）
+的每个叶子字段都登记消费者（写手章包分区／HookContext／Naming／验证器／仅审计）、
+受影响章范围（every_chapter／chapter_field／scene_owner／hook_only／naming_only／
+not_delivered）与 `delivery_mode` 七档身份（must_realize／must_respect／continuity／
+creative_guidance／background／guard_only／audit_only）；同一字段可按投影规则逐场
+决定身份（如入场状态：声明读取解析值=must_respect，R2 起编译器补齐的入场状态=
+background）。守卫在 `tests/test_str06_semantic_delivery.py`：canonical 字段未登记即红、
+变异只动登记章（`packet_sha256` 比较面）、变异值只进对应送达面、写手视图无
+audit_only 材料。当前 renderer（v4）仍以 JSON 倾倒 VerificationIR／HookContext，
+`sc01#b02` 式 ID、`established_by` 与字段名的阅读面清零由 R2 的 WriterPacket 分区
+渲染收口（登记表 `r2_face_pending` 为待收口闭集）。故障注入 fake 底座
+（`tests/str06_faults.py`，五类脚本化模型式错误＋sitecustomize 注入路径）供 R3
+修订循环与 R5 产品路径测试复用。
 
 ## 验收与关闭（B6）
 

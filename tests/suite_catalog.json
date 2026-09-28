@@ -839,6 +839,20 @@
         "test_acceptance_record_replaces_validation_file_and_adopts_by_seal": "stage"
       }
     },
+    "tests/test_str06_semantic_delivery.py": {
+      "layer": "unit_contract",
+      "stages": [
+        "stage2",
+        "stage4",
+        "stage5",
+        "stage7"
+      ],
+      "cases": {
+        "test_fault_base_green_baseline_completes_the_chain": "stage",
+        "test_each_injected_fault_fails_fast_at_its_mechanical_gate": "stage",
+        "test_sitecustomize_injection_is_env_gated": "stage"
+      }
+    },
     "tests/test_str06_source.py": {
       "layer": "unit_contract",
       "stages": [

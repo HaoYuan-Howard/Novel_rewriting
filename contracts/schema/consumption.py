@@ -19,6 +19,18 @@ stage6.prepare，改按 Stage5 有效接受回执过滤。`rename_materials` 写
 目标时点由 Design／Binding／ExecutionPlan 的明确语义位置**派生**（坐标=目标场景/
 章），不能直接换算源章号，也不能用 Binding lineage 猜缺失语义。双坐标投影必须
 分别表达。
+
+【R0 字段级送达登记（2026-09-28，PLAN.md「以小说质量为中心」批次 R0）】
+六族投影回答「哪类信息给谁」；`STR06_FIELD_DELIVERY` 把粒度降到**字段**：送达链
+canonical 产物（WriterBookIR／RealizationContract／HookContext／NameMapV5）的每个
+叶子字段都要登记消费者、受影响章范围与 `delivery_mode`（七档，见枚举）。守卫在
+`tests/test_str06_semantic_delivery.py`：未登记即红、变异只动登记章、变异值只进
+对应送达面、写手视图无 audit_only 内容。同一字段的 delivery_mode 可按投影规则
+逐场决定（见 `mode_note`，例如入场状态：声明读取的解析值是 must_respect，R2 起
+编译器按参与者补齐的入场状态以 background 送达）。`r2_face_pending` 登记「当前
+v4 renderer 尚未按该身份送达」的条目——正文面是 VerificationIR JSON 倾倒、Hook
+面是整份 Context 倾倒，`sc01#b02` 式 ID／`established_by`／字段名的清零归 R2
+WriterPacket 分区渲染（R2 完成项含「R0 守卫全绿」）。
 """
 from __future__ import annotations
 
@@ -44,46 +56,678 @@ class ProjectionFamilySpec(StrictModel):
     coordinate: ProjectionCoordinate
 
 
-#: 六个投影族（F6 改版后的登记清单）。
+#: 六个投影族（F6 改版后的登记清单；R0 起来源 owner 用 `NODES` 现役节点名）。
 STR06_CONSUMPTION_PROJECTIONS: dict[str, ProjectionFamilySpec] = {
     'world_view': ProjectionFamilySpec(
         name='world_view',
         shape_note='era／setting／world rules／relations／secrets 的目标有效视图'
                    '（按目标位置生效/失效折叠后的视图）',
-        source_owners=('stage2.characters', 'stage2.blueprint', 'stage4.semantic_binding',
-                       'stage4.design'),
+        source_owners=('str06.stage2.compile', 'str06.stage4.bind',
+                       'str06.stage4.body_design'),
         coordinate=ProjectionCoordinate.TARGET),
     'character_exposure': ProjectionFamilySpec(
         name='character_exposure',
         shape_note='Characters 身份与称谓 + 目标实际建立／揭示／使用位置'
                    '（源时点=源事实；目标时点=Design/Binding/ExecutionPlan 派生）',
-        source_owners=('stage2.characters', 'stage4.semantic_binding',
-                       'stage4.compiled'),
+        source_owners=('str06.stage2.compile', 'str06.stage4.bind',
+                       'str06.stage4.compile'),
         coordinate=ProjectionCoordinate.DUAL),
     'chapter_map': ProjectionFamilySpec(
         name='chapter_map',
         shape_note='scene→target chapter 映射与目标章集分母（输出 N 章的权威分母）',
-        source_owners=('stage4.design', 'stage4.compile'),
+        source_owners=('str06.stage4.body_design', 'str06.stage4.compile'),
         coordinate=ProjectionCoordinate.TARGET),
     'body_access': ProjectionFamilySpec(
         name='body_access',
         shape_note='accepted body 的完整读取与目标开篇读取'
                    '（按 Stage5 有效接受回执过滤场景正文；缺失/未知/拒绝分开列出）',
-        source_owners=('stage5.receipt', 'stage5.body'),
+        source_owners=('str06.stage5.body',),
         coordinate=ProjectionCoordinate.DUAL),
     'hook_material': ProjectionFamilySpec(
         name='hook_material',
         shape_note='Hook 的正式选择（PresentationGraph.hook）到 HookContext 的确定性投影：'
                    'POV、起笔事实、按设计序材料、禁止揭示、可用称谓与 withheld 字面',
-        source_owners=('stage4.design', 'stage2.characters', 'stage5.hook'),
+        source_owners=('str06.stage4.hook_design', 'str06.stage2.compile',
+                       'str06.stage5.hook'),
         coordinate=ProjectionCoordinate.TARGET),
     'rename_materials': ProjectionFamilySpec(
         name='rename_materials',
         shape_note='Naming 只消费名称结构与稳定身份的只读投影；ApplyNames 是替换的'
                    '唯一应用者（权限分界：投影不落交付，Apply 不改映射）',
-        source_owners=('stage2.characters', 'stage2.blueprint', 'stage7.naming'),
+        source_owners=('str06.stage2.compile', 'str06.stage7.naming'),
         coordinate=ProjectionCoordinate.DUAL),
 }
 
 #: 坐标枚举的闭环自检材料：六个族必须全部有坐标域。
 PROJECTION_COORDINATES = ProjectionCoordinate
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 字段级送达登记（R0）：delivery_mode 七档、消费者五类、章范围六则。
+# 这是数据表（不是实现）；投影与渲染的唯一产地在 novel/stages/，本表是它们的
+# 送达契约对照面。守卫测试按本表对 `project_chapter_packet`／`packet_sha256`／
+# `render_chapter_packet`／Hook prompt 做变异验证。
+# ═════════════════════════════════════════════════════════════════════════════
+
+class DeliveryMode(str, Enum):
+    """一个字段送达写手时的身份与显著度（PLAN.md R0 语义表）。"""
+
+    MUST_REALIZE = 'must_realize'          # 正文中实际写出：本章拍事件与目标效应、
+                                          # 义务满足条件、本场线程操作
+    MUST_RESPECT = 'must_respect'          # 不得违背、不必提及：本场依赖的事实、
+                                          # 知情边界、称谓许可、世界规则、场景 avoid
+    CONTINUITY = 'continuity'              # 自然延续、不复述：承接与无操作的开放线程
+    CREATIVE_GUIDANCE = 'creative_guidance'  # 创作方向：导演说明、驱动、风格、声线、
+                                          # 表达提示、章目的
+    BACKGROUND = 'background'              # 需要时才用：编译器按参与者补齐的入场状态
+    GUARD_ONLY = 'guard_only'              # 不主动提示、不提前兑现：未到时点的读者
+                                          # 确认、开放期间受保护的问题线程
+    AUDIT_ONLY = 'audit_only'              # 写手看不到：ID、地址、来源、依赖边、
+                                          # Guard 材料、禁用字面（只给验证器）
+
+
+class DeliveryConsumer(str, Enum):
+    """字段级送达的消费者闭集。"""
+
+    WRITER_PACKET = 'writer_packet'   # 写手章包分区（正文写手的输入面）
+    HOOK_CONTEXT = 'hook_context'     # HookContext（楔子写手的输入面）
+    NAMING = 'naming'                 # Naming／ApplyNames（改名面）
+    VALIDATOR = 'validator'           # 机械验证器（认领/检查材料）
+    AUDIT = 'audit'                   # 仅审计（存储/对账/追溯）
+
+
+class DeliveryScope(str, Enum):
+    """受影响章的范围规则（章包摘要变化的机械可判定面）。"""
+
+    EVERY_CHAPTER = 'every_chapter'   # 书级字段：每章章包都携带，变异动全部章
+    CHAPTER_FIELD = 'chapter_field'   # 章级字段：只进该章章包（验证材料、章目的）
+    SCENE_OWNER = 'scene_owner'       # 场景/条目级：只进含该场景的章
+    HOOK_ONLY = 'hook_only'           # 只进 HookContext，不进正文章包
+    NAMING_ONLY = 'naming_only'       # 只进 Naming/Apply 面
+    NOT_DELIVERED = 'not_delivered'   # 不进任何写手面（导航/总表/传输身份等审计位）
+
+
+class FieldDeliverySpec(StrictModel):
+    """一个 canonical 字段的送达登记项。
+
+    `delivery_mode` 是该字段送达写手的主身份；同一字段按投影规则逐场决定身份的
+    （如线程、入场状态）在 `mode_note` 写明分支条件。`r2_face_pending` 只描述
+    「当前 v4 阅读面尚未按该身份送达」的现状，不改变契约目标；R2 的 WriterPacket
+    分区渲染落地后该位必须清零（对应 R2 完成项「R0 守卫全绿」）。
+    """
+
+    field_path: str = Field(min_length=1, description='送达面 canonical 字段路径')
+    consumers: tuple[DeliveryConsumer, ...] = Field(min_length=1)
+    scope: DeliveryScope
+    delivery_mode: DeliveryMode
+    mode_note: str = ''
+    r2_face_pending: bool = False
+
+
+def _spec(path: str, *, consumers: tuple[DeliveryConsumer, ...], scope: DeliveryScope,
+          mode: DeliveryMode, note: str = '', pending: bool = False) -> FieldDeliverySpec:
+    return FieldDeliverySpec(field_path=path, consumers=consumers, scope=scope,
+                             delivery_mode=mode, mode_note=note, r2_face_pending=pending)
+
+
+_W = DeliveryConsumer.WRITER_PACKET
+_H = DeliveryConsumer.HOOK_CONTEXT
+_N = DeliveryConsumer.NAMING
+_V = DeliveryConsumer.VALIDATOR
+_A = DeliveryConsumer.AUDIT
+_EVERY = DeliveryScope.EVERY_CHAPTER
+_CHAP = DeliveryScope.CHAPTER_FIELD
+_SCENE = DeliveryScope.SCENE_OWNER
+_HOOK = DeliveryScope.HOOK_ONLY
+_NAME = DeliveryScope.NAMING_ONLY
+_NONE = DeliveryScope.NOT_DELIVERED
+
+_ID_PENDING = ('工程 ID／地址位；当前 v4 renderer 随 JSON 倾倒可见，'
+               'R2 WriterPacket 以自然语言/解析名送达后清零')
+
+#: 字段级送达登记（R0）。键=字段路径；面与守卫见模块头【R0 字段级送达登记】。
+STR06_FIELD_DELIVERY: dict[str, FieldDeliverySpec] = {
+    # ── WriterBookIR：书级层（BookBrief）──────────────────────────────────
+    'writer_book_ir.contract_version': _spec(
+        'writer_book_ir.contract_version', consumers=(_A,), scope=_NONE,
+        mode=DeliveryMode.AUDIT_ONLY, note='IR 版本身份，不投影进章包'),
+    'writer_book_ir.provenance': _spec(
+        'writer_book_ir.provenance', consumers=(_A,), scope=_NONE,
+        mode=DeliveryMode.AUDIT_ONLY, note='来源账（exclude 传输位）'),
+    'writer_book_ir.book_brief.book_title': _spec(
+        'writer_book_ir.book_brief.book_title', consumers=(_A,), scope=_EVERY,
+        mode=DeliveryMode.AUDIT_ONLY,
+        note='书名用于交付命名与审计；写手阅读面不渲染（系统加章号，不加书名）'),
+    'writer_book_ir.book_brief.book_style': _spec(
+        'writer_book_ir.book_brief.book_style', consumers=(_W,), scope=_EVERY,
+        mode=DeliveryMode.CREATIVE_GUIDANCE, note='书级风格（TargetDesign 投影）'),
+    'writer_book_ir.book_brief.character_voices[].char_id': _spec(
+        'writer_book_ir.book_brief.character_voices[].char_id', consumers=(_A,),
+        scope=_EVERY, mode=DeliveryMode.AUDIT_ONLY, pending=True,
+        note=_ID_PENDING + '；声线行应以目标姓名指认人物'),
+    'writer_book_ir.book_brief.character_voices[].voice': _spec(
+        'writer_book_ir.book_brief.character_voices[].voice', consumers=(_W,),
+        scope=_EVERY, mode=DeliveryMode.CREATIVE_GUIDANCE, note='稳定人物声线'),
+    'writer_book_ir.book_brief.target_chapter_count': _spec(
+        'writer_book_ir.book_brief.target_chapter_count', consumers=(_V, _A),
+        scope=_EVERY, mode=DeliveryMode.AUDIT_ONLY,
+        note='章包章序上界的机械校验面'),
+    'writer_book_ir.book_brief.total_length_budget': _spec(
+        'writer_book_ir.book_brief.total_length_budget', consumers=(_A,),
+        scope=_EVERY, mode=DeliveryMode.AUDIT_ONLY, note='篇幅预算审计位'),
+    'writer_book_ir.book_brief.length_band_low': _spec(
+        'writer_book_ir.book_brief.length_band_low', consumers=(_W, _V),
+        scope=_EVERY, mode=DeliveryMode.MUST_RESPECT, note='篇幅带（交付要求）'),
+    'writer_book_ir.book_brief.length_band_high': _spec(
+        'writer_book_ir.book_brief.length_band_high', consumers=(_W, _V),
+        scope=_EVERY, mode=DeliveryMode.MUST_RESPECT, note='篇幅带（交付要求）'),
+    # 导航与称谓总表是全书审计面（book_ir.py 头注），不进章包
+    'writer_book_ir.book_brief.chapters[].chapter_ordinal': _spec(
+        'writer_book_ir.book_brief.chapters[].chapter_ordinal', consumers=(_A,),
+        scope=_NONE, mode=DeliveryMode.AUDIT_ONLY, note='导航索引（审计面）'),
+    'writer_book_ir.book_brief.chapters[].purpose': _spec(
+        'writer_book_ir.book_brief.chapters[].purpose', consumers=(_A,),
+        scope=_NONE, mode=DeliveryMode.AUDIT_ONLY,
+        note='导航目的（审计面）；送达写手的副本是 chapters[].purpose'),
+    'writer_book_ir.book_brief.chapters[].scene_ids': _spec(
+        'writer_book_ir.book_brief.chapters[].scene_ids', consumers=(_A,),
+        scope=_NONE, mode=DeliveryMode.AUDIT_ONLY, note=_ID_PENDING),
+    'writer_book_ir.book_brief.chapters[].scene_lines': _spec(
+        'writer_book_ir.book_brief.chapters[].scene_lines', consumers=(_A,),
+        scope=_NONE, mode=DeliveryMode.AUDIT_ONLY, note='导航摘要（审计面）'),
+    'writer_book_ir.book_brief.release_schedule[].char_id': _spec(
+        'writer_book_ir.book_brief.release_schedule[].char_id', consumers=(_A,),
+        scope=_NONE, mode=DeliveryMode.AUDIT_ONLY,
+        note='称谓释放总表（审计面）；章内许可经 ChapterIR.released_surfaces 送达'),
+    'writer_book_ir.book_brief.release_schedule[].surfaces': _spec(
+        'writer_book_ir.book_brief.release_schedule[].surfaces', consumers=(_A,),
+        scope=_NONE, mode=DeliveryMode.AUDIT_ONLY, note='称谓释放总表（审计面）'),
+    'writer_book_ir.book_brief.release_schedule[].from_chapter': _spec(
+        'writer_book_ir.book_brief.release_schedule[].from_chapter',
+        consumers=(_A,), scope=_NONE, mode=DeliveryMode.AUDIT_ONLY,
+        note='称谓释放总表（审计面）'),
+    # ── WriterBookIR：章层（ChapterIR）────────────────────────────────────
+    'writer_book_ir.chapters[].chapter_ordinal': _spec(
+        'writer_book_ir.chapters[].chapter_ordinal', consumers=(_W, _V),
+        scope=_CHAP, mode=DeliveryMode.CREATIVE_GUIDANCE,
+        note='阅读序坐标（I-40），随【本章目的】行送达，不是工程 ID'),
+    'writer_book_ir.chapters[].purpose': _spec(
+        'writer_book_ir.chapters[].purpose', consumers=(_W,), scope=_CHAP,
+        mode=DeliveryMode.CREATIVE_GUIDANCE, note='章目的'),
+    'writer_book_ir.chapters[].length_budget': _spec(
+        'writer_book_ir.chapters[].length_budget', consumers=(_W, _V),
+        scope=_CHAP, mode=DeliveryMode.MUST_RESPECT, note='章篇幅目标（交付要求）'),
+    'writer_book_ir.chapters[].released_surfaces': _spec(
+        'writer_book_ir.chapters[].released_surfaces', consumers=(_V,),
+        scope=_CHAP, mode=DeliveryMode.AUDIT_ONLY,
+        note='章级已释放称谓并集：机械 validator 的认领面；'
+             '写手许可经场景级 released_surfaces 送达'),
+    'writer_book_ir.chapters[].withheld_literals': _spec(
+        'writer_book_ir.chapters[].withheld_literals', consumers=(_V,),
+        scope=_CHAP, mode=DeliveryMode.AUDIT_ONLY,
+        note='本章禁用字面：validator 检查面，不进写手阅读面'),
+    # ── WriterBookIR：场景层（WriterContext 双视图）───────────────────────
+    'writer_book_ir.chapters[].scenes[].contract_version': _spec(
+        'writer_book_ir.chapters[].scenes[].contract_version', consumers=(_A,),
+        scope=_SCENE, mode=DeliveryMode.AUDIT_ONLY, note='视图版本（审计位）'),
+    'writer_book_ir.chapters[].scenes[].scene_id': _spec(
+        'writer_book_ir.chapters[].scenes[].scene_id', consumers=(_A,),
+        scope=_SCENE, mode=DeliveryMode.AUDIT_ONLY, pending=True,
+        note=_ID_PENDING + '；场景以自然语言标示'),
+    'writer_book_ir.chapters[].scenes[].execution_slice_sha256': _spec(
+        'writer_book_ir.chapters[].scenes[].execution_slice_sha256',
+        consumers=(_A,), scope=_SCENE, mode=DeliveryMode.AUDIT_ONLY,
+        note='消费身份摘要（审计位）'),
+    # VerificationIR：义务
+    'writer_book_ir.chapters[].scenes[].verification_ir.obligations[]'
+    '.obligation_id': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.obligations[]'
+        '.obligation_id', consumers=(_A,), scope=_SCENE,
+        mode=DeliveryMode.AUDIT_ONLY, pending=True, note=_ID_PENDING),
+    'writer_book_ir.chapters[].scenes[].verification_ir.obligations[].kind': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.obligations[].kind',
+        consumers=(_A,), scope=_SCENE, mode=DeliveryMode.AUDIT_ONLY,
+        pending=True, note=_ID_PENDING + '；义务以自然语言任务送达'),
+    'writer_book_ir.chapters[].scenes[].verification_ir.obligations[].statement': (
+        _spec('writer_book_ir.chapters[].scenes[].verification_ir.obligations[]'
+              '.statement', consumers=(_W,), scope=_SCENE,
+              mode=DeliveryMode.MUST_REALIZE, note='本场义务')),
+    'writer_book_ir.chapters[].scenes[].verification_ir.obligations[]'
+    '.lineage.blueprint_refs': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.obligations[]'
+        '.lineage.blueprint_refs', consumers=(_A,), scope=_SCENE,
+        mode=DeliveryMode.AUDIT_ONLY, note='源坐标（renderer 剥离，审计位）'),
+    'writer_book_ir.chapters[].scenes[].verification_ir.obligations[]'
+    '.lineage.character_ids': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.obligations[]'
+        '.lineage.character_ids', consumers=(_A,), scope=_SCENE,
+        mode=DeliveryMode.AUDIT_ONLY, note='源坐标（renderer 剥离，审计位）'),
+    'writer_book_ir.chapters[].scenes[].verification_ir.obligations[]'
+    '.must_preserve': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.obligations[]'
+        '.must_preserve', consumers=(_A,), scope=_SCENE,
+        mode=DeliveryMode.AUDIT_ONLY, pending=True,
+        note=_ID_PENDING + '；必保义务以「必须写出」身份送达'),
+    'writer_book_ir.chapters[].scenes[].verification_ir.obligations[].satisfaction': (
+        _spec('writer_book_ir.chapters[].scenes[].verification_ir.obligations[]'
+              '.satisfaction', consumers=(_W,), scope=_SCENE,
+              mode=DeliveryMode.MUST_REALIZE, note='义务满足条件')),
+    'writer_book_ir.chapters[].scenes[].verification_ir.obligations[].requires': (
+        _spec('writer_book_ir.chapters[].scenes[].verification_ir.obligations[]'
+              '.requires', consumers=(_A,), scope=_SCENE,
+              mode=DeliveryMode.AUDIT_ONLY, pending=True,
+              note='依赖边（审计位）；R2 以 M 守卫材料呈现，不进阅读面')),
+    # VerificationIR：拍
+    'writer_book_ir.chapters[].scenes[].verification_ir.scene_id': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.scene_id',
+        consumers=(_A,), scope=_SCENE, mode=DeliveryMode.AUDIT_ONLY,
+        note='双视图同源锚（审计位，dump 不含本键）'),
+    'writer_book_ir.chapters[].scenes[].verification_ir.beats[].beat_ref': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.beats[].beat_ref',
+        consumers=(_A,), scope=_SCENE, mode=DeliveryMode.AUDIT_ONLY, pending=True,
+        note=_ID_PENDING + '；拍以序号/事件指认'),
+    'writer_book_ir.chapters[].scenes[].verification_ir.beats[].event': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.beats[].event',
+        consumers=(_W,), scope=_SCENE, mode=DeliveryMode.MUST_REALIZE,
+        note='本章拍的事件'),
+    'writer_book_ir.chapters[].scenes[].verification_ir.beats[].dramatic_intent': (
+        _spec('writer_book_ir.chapters[].scenes[].verification_ir.beats[]'
+              '.dramatic_intent', consumers=(_W,), scope=_SCENE,
+              mode=DeliveryMode.CREATIVE_GUIDANCE, note='拍级导演意图')),
+    'writer_book_ir.chapters[].scenes[].verification_ir.beats[].deltas[].domain': (
+        _spec('writer_book_ir.chapters[].scenes[].verification_ir.beats[]'
+              '.deltas[].domain', consumers=(_W,), scope=_SCENE,
+              mode=DeliveryMode.MUST_REALIZE,
+              note='目标效应的作用域维度（R2 以自然语言效应句送达）')),
+    'writer_book_ir.chapters[].scenes[].verification_ir.beats[].deltas[].subjects': (
+        _spec('writer_book_ir.chapters[].scenes[].verification_ir.beats[]'
+              '.deltas[].subjects', consumers=(_W,), scope=_SCENE,
+              mode=DeliveryMode.MUST_REALIZE,
+              note='效应作用对象；R2 解析为目标姓名后送达')),
+    'writer_book_ir.chapters[].scenes[].verification_ir.beats[].deltas[].holder': (
+        _spec('writer_book_ir.chapters[].scenes[].verification_ir.beats[]'
+              '.deltas[].holder', consumers=(_W,), scope=_SCENE,
+              mode=DeliveryMode.MUST_REALIZE,
+              note='知情持有者；R2 解析为目标姓名后送达')),
+    'writer_book_ir.chapters[].scenes[].verification_ir.beats[].deltas[].key': (
+        _spec('writer_book_ir.chapters[].scenes[].verification_ir.beats[]'
+              '.deltas[].key', consumers=(_A,), scope=_SCENE,
+              mode=DeliveryMode.AUDIT_ONLY, pending=True, note=_ID_PENDING)),
+    'writer_book_ir.chapters[].scenes[].verification_ir.beats[].deltas[].op': (
+        _spec('writer_book_ir.chapters[].scenes[].verification_ir.beats[]'
+              '.deltas[].op', consumers=(_A,), scope=_SCENE,
+              mode=DeliveryMode.AUDIT_ONLY, pending=True, note=_ID_PENDING)),
+    'writer_book_ir.chapters[].scenes[].verification_ir.beats[].deltas[].value': (
+        _spec('writer_book_ir.chapters[].scenes[].verification_ir.beats[]'
+              '.deltas[].value', consumers=(_W,), scope=_SCENE,
+              mode=DeliveryMode.MUST_REALIZE, note='本章拍的目标效应')),
+    'writer_book_ir.chapters[].scenes[].verification_ir.beats[].deltas[].scope': (
+        _spec('writer_book_ir.chapters[].scenes[].verification_ir.beats[]'
+              '.deltas[].scope', consumers=(_A,), scope=_SCENE,
+              mode=DeliveryMode.AUDIT_ONLY, pending=True,
+              note='作用域机械位（book/scene）；R2 折进效应句')),
+    'writer_book_ir.chapters[].scenes[].verification_ir.beats[].deltas[]'
+    '.knowledge_mode': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.beats[].deltas[]'
+        '.knowledge_mode', consumers=(_W,), scope=_SCENE,
+        mode=DeliveryMode.MUST_RESPECT, note='知情边界（known/suspected/…）'),
+    'writer_book_ir.chapters[].scenes[].verification_ir.beats[].deltas[]'
+    '.confirms.domain': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.beats[].deltas[]'
+        '.confirms.domain', consumers=(_A,), scope=_SCENE,
+        mode=DeliveryMode.AUDIT_ONLY, pending=True,
+        note='reader 确认的事实地址（派生 pending confirmations 的机械位）；'
+             + _ID_PENDING),
+    'writer_book_ir.chapters[].scenes[].verification_ir.beats[].deltas[]'
+    '.confirms.key': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.beats[].deltas[]'
+        '.confirms.key', consumers=(_A,), scope=_SCENE,
+        mode=DeliveryMode.AUDIT_ONLY, pending=True, note=_ID_PENDING),
+    'writer_book_ir.chapters[].scenes[].verification_ir.beats[].deltas[]'
+    '.confirms.subjects': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.beats[].deltas[]'
+        '.confirms.subjects', consumers=(_A,), scope=_SCENE,
+        mode=DeliveryMode.AUDIT_ONLY, pending=True, note=_ID_PENDING),
+    'writer_book_ir.chapters[].scenes[].verification_ir.beats[].deltas[]'
+    '.confirms.holder': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.beats[].deltas[]'
+        '.confirms.holder', consumers=(_A,), scope=_SCENE,
+        mode=DeliveryMode.AUDIT_ONLY, pending=True, note=_ID_PENDING),
+    'writer_book_ir.chapters[].scenes[].verification_ir.beats[]'
+    '.surface_introductions': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.beats[]'
+        '.surface_introductions', consumers=(_W, _V), scope=_SCENE,
+        mode=DeliveryMode.MUST_RESPECT, pending=True,
+        note='称谓时点（第 X 拍起可用）；当前以拍 id 表述，R2 以自然时点表述'),
+    # VerificationIR：入场视图
+    'writer_book_ir.chapters[].scenes[].verification_ir.entry_state[].domain': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.entry_state[].domain',
+        consumers=(_W,), scope=_SCENE, mode=DeliveryMode.MUST_RESPECT,
+        note='本场依赖的事实（入场读取解析值）'),
+    'writer_book_ir.chapters[].scenes[].verification_ir.entry_state[].subjects': (
+        _spec('writer_book_ir.chapters[].scenes[].verification_ir.entry_state[]'
+              '.subjects', consumers=(_W,), scope=_SCENE,
+              mode=DeliveryMode.MUST_RESPECT, note='事实作用对象（R2 解析为姓名）')),
+    'writer_book_ir.chapters[].scenes[].verification_ir.entry_state[].holder': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.entry_state[].holder',
+        consumers=(_W,), scope=_SCENE, mode=DeliveryMode.MUST_RESPECT,
+        note='事实持有者（R2 解析为姓名）'),
+    'writer_book_ir.chapters[].scenes[].verification_ir.entry_state[].key': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.entry_state[].key',
+        consumers=(_A,), scope=_SCENE, mode=DeliveryMode.AUDIT_ONLY,
+        pending=True, note=_ID_PENDING),
+    'writer_book_ir.chapters[].scenes[].verification_ir.entry_state[].value': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.entry_state[].value',
+        consumers=(_W,), scope=_SCENE, mode=DeliveryMode.MUST_RESPECT,
+        note='按投影规则逐场决定：声明读取的解析值=must_respect；'
+             'R2 起编译器按参与者补齐的入场状态=background（背景是约束，不是任务）'),
+    'writer_book_ir.chapters[].scenes[].verification_ir.entry_state[].status': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.entry_state[].status',
+        consumers=(_A,), scope=_SCENE, mode=DeliveryMode.AUDIT_ONLY,
+        pending=True, note=_ID_PENDING),
+    'writer_book_ir.chapters[].scenes[].verification_ir.entry_state[].established_by': (
+        _spec('writer_book_ir.chapters[].scenes[].verification_ir.entry_state[]'
+              '.established_by', consumers=(_A,), scope=_SCENE,
+              mode=DeliveryMode.AUDIT_ONLY, pending=True,
+              note='来源锚（场景#拍）；' + _ID_PENDING)),
+    'writer_book_ir.chapters[].scenes[].verification_ir.entry_knowledge[].holder': (
+        _spec('writer_book_ir.chapters[].scenes[].verification_ir.entry_knowledge[]'
+              '.holder', consumers=(_W,), scope=_SCENE,
+              mode=DeliveryMode.MUST_RESPECT, note='知情边界（R2 解析为姓名）')),
+    'writer_book_ir.chapters[].scenes[].verification_ir.entry_knowledge[]'
+    '.proposition': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.entry_knowledge[]'
+        '.proposition', consumers=(_W,), scope=_SCENE,
+        mode=DeliveryMode.MUST_RESPECT, note='知情边界（入场已知命题）'),
+    'writer_book_ir.chapters[].scenes[].verification_ir.entry_knowledge[]'
+    '.established_by': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.entry_knowledge[]'
+        '.established_by', consumers=(_A,), scope=_SCENE,
+        mode=DeliveryMode.AUDIT_ONLY, pending=True, note='来源锚；' + _ID_PENDING),
+    'writer_book_ir.chapters[].scenes[].verification_ir.entry_knowledge[].subjects': (
+        _spec('writer_book_ir.chapters[].scenes[].verification_ir.entry_knowledge[]'
+              '.subjects', consumers=(_W,), scope=_SCENE,
+              mode=DeliveryMode.MUST_RESPECT, note='命题主语（R2 解析为姓名）')),
+    'writer_book_ir.chapters[].scenes[].verification_ir.entry_knowledge[].key': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.entry_knowledge[].key',
+        consumers=(_A,), scope=_SCENE, mode=DeliveryMode.AUDIT_ONLY,
+        pending=True, note=_ID_PENDING),
+    'writer_book_ir.chapters[].scenes[].verification_ir.entry_knowledge[].status': (
+        _spec('writer_book_ir.chapters[].scenes[].verification_ir.entry_knowledge[]'
+              '.status', consumers=(_A,), scope=_SCENE,
+              mode=DeliveryMode.AUDIT_ONLY, pending=True, note=_ID_PENDING)),
+    'writer_book_ir.chapters[].scenes[].verification_ir.entry_knowledge[].mode': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.entry_knowledge[].mode',
+        consumers=(_W,), scope=_SCENE, mode=DeliveryMode.MUST_RESPECT,
+        note='知情模态（known/suspected/heard/believes）'),
+    # VerificationIR：称谓与拍级效应的扁平投影
+    'writer_book_ir.chapters[].scenes[].verification_ir.released_surfaces[].char_id': (
+        _spec('writer_book_ir.chapters[].scenes[].verification_ir.released_surfaces[]'
+              '.char_id', consumers=(_A,), scope=_SCENE,
+              mode=DeliveryMode.AUDIT_ONLY, pending=True, note=_ID_PENDING)),
+    'writer_book_ir.chapters[].scenes[].verification_ir.released_surfaces[].surfaces': (
+        _spec('writer_book_ir.chapters[].scenes[].verification_ir.released_surfaces[]'
+              '.surfaces', consumers=(_W, _V), scope=_SCENE,
+              mode=DeliveryMode.MUST_RESPECT, note='本场可用称谓（许可面）')),
+    'writer_book_ir.chapters[].scenes[].verification_ir.planned_delta[].domain': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.planned_delta[].domain',
+        consumers=(_W,), scope=_SCENE, mode=DeliveryMode.MUST_REALIZE,
+        note='扁平目标效应（与 beats[].deltas 同语义）'),
+    'writer_book_ir.chapters[].scenes[].verification_ir.planned_delta[].subjects': (
+        _spec('writer_book_ir.chapters[].scenes[].verification_ir.planned_delta[]'
+              '.subjects', consumers=(_W,), scope=_SCENE,
+              mode=DeliveryMode.MUST_REALIZE, note='效应作用对象（R2 解析为姓名）')),
+    'writer_book_ir.chapters[].scenes[].verification_ir.planned_delta[].holder': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.planned_delta[].holder',
+        consumers=(_W,), scope=_SCENE, mode=DeliveryMode.MUST_REALIZE,
+        note='知情持有者（R2 解析为姓名）'),
+    'writer_book_ir.chapters[].scenes[].verification_ir.planned_delta[].key': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.planned_delta[].key',
+        consumers=(_A,), scope=_SCENE, mode=DeliveryMode.AUDIT_ONLY,
+        pending=True, note=_ID_PENDING),
+    'writer_book_ir.chapters[].scenes[].verification_ir.planned_delta[].op': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.planned_delta[].op',
+        consumers=(_A,), scope=_SCENE, mode=DeliveryMode.AUDIT_ONLY,
+        pending=True, note=_ID_PENDING),
+    'writer_book_ir.chapters[].scenes[].verification_ir.planned_delta[].value': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.planned_delta[].value',
+        consumers=(_W,), scope=_SCENE, mode=DeliveryMode.MUST_REALIZE,
+        note='扁平目标效应值'),
+    'writer_book_ir.chapters[].scenes[].verification_ir.planned_delta[].scope': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.planned_delta[].scope',
+        consumers=(_A,), scope=_SCENE, mode=DeliveryMode.AUDIT_ONLY,
+        pending=True, note='作用域机械位；R2 折进效应句'),
+    'writer_book_ir.chapters[].scenes[].verification_ir.planned_delta[]'
+    '.knowledge_mode': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.planned_delta[]'
+        '.knowledge_mode', consumers=(_W,), scope=_SCENE,
+        mode=DeliveryMode.MUST_RESPECT, note='知情边界'),
+    'writer_book_ir.chapters[].scenes[].verification_ir.planned_delta[]'
+    '.confirms.domain': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.planned_delta[]'
+        '.confirms.domain', consumers=(_A,), scope=_SCENE,
+        mode=DeliveryMode.AUDIT_ONLY, pending=True, note='确认地址（机械位）；'
+        + _ID_PENDING),
+    'writer_book_ir.chapters[].scenes[].verification_ir.planned_delta[]'
+    '.confirms.key': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.planned_delta[]'
+        '.confirms.key', consumers=(_A,), scope=_SCENE,
+        mode=DeliveryMode.AUDIT_ONLY, pending=True, note=_ID_PENDING),
+    'writer_book_ir.chapters[].scenes[].verification_ir.planned_delta[]'
+    '.confirms.subjects': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.planned_delta[]'
+        '.confirms.subjects', consumers=(_A,), scope=_SCENE,
+        mode=DeliveryMode.AUDIT_ONLY, pending=True, note=_ID_PENDING),
+    'writer_book_ir.chapters[].scenes[].verification_ir.planned_delta[]'
+    '.confirms.holder': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.planned_delta[]'
+        '.confirms.holder', consumers=(_A,), scope=_SCENE,
+        mode=DeliveryMode.AUDIT_ONLY, pending=True, note=_ID_PENDING),
+    # VerificationIR：读者确认与禁区
+    'writer_book_ir.chapters[].scenes[].verification_ir'
+    '.pending_reader_confirmations[].fact': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir'
+        '.pending_reader_confirmations[].fact', consumers=(_W,), scope=_SCENE,
+        mode=DeliveryMode.GUARD_ONLY,
+        note='未到时点的读者确认：不主动提示、不提前兑现（禁区）'),
+    'writer_book_ir.chapters[].scenes[].verification_ir'
+    '.pending_reader_confirmations[].key': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir'
+        '.pending_reader_confirmations[].key', consumers=(_A,), scope=_SCENE,
+        mode=DeliveryMode.AUDIT_ONLY, pending=True, note=_ID_PENDING),
+    'writer_book_ir.chapters[].scenes[].verification_ir'
+    '.pending_reader_confirmations[].subjects': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir'
+        '.pending_reader_confirmations[].subjects', consumers=(_A,),
+        scope=_SCENE, mode=DeliveryMode.AUDIT_ONLY,
+        note='确认主语（机械位；禁区条目以自然语言送达）'),
+    'writer_book_ir.chapters[].scenes[].verification_ir'
+    '.pending_reader_confirmations[].address.domain': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir'
+        '.pending_reader_confirmations[].address.domain', consumers=(_A,),
+        scope=_SCENE, mode=DeliveryMode.AUDIT_ONLY, pending=True, note=_ID_PENDING),
+    'writer_book_ir.chapters[].scenes[].verification_ir'
+    '.pending_reader_confirmations[].address.key': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir'
+        '.pending_reader_confirmations[].address.key', consumers=(_A,),
+        scope=_SCENE, mode=DeliveryMode.AUDIT_ONLY, pending=True, note=_ID_PENDING),
+    'writer_book_ir.chapters[].scenes[].verification_ir'
+    '.pending_reader_confirmations[].address.subjects': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir'
+        '.pending_reader_confirmations[].address.subjects', consumers=(_A,),
+        scope=_SCENE, mode=DeliveryMode.AUDIT_ONLY,
+        note='确认地址主语（机械位，不渲染）'),
+    'writer_book_ir.chapters[].scenes[].verification_ir'
+    '.pending_reader_confirmations[].address.holder': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir'
+        '.pending_reader_confirmations[].address.holder', consumers=(_A,),
+        scope=_SCENE, mode=DeliveryMode.AUDIT_ONLY, pending=True, note=_ID_PENDING),
+    'writer_book_ir.chapters[].scenes[].verification_ir'
+    '.pending_reader_confirmations[].position': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir'
+        '.pending_reader_confirmations[].position', consumers=(_W,),
+        scope=_SCENE, mode=DeliveryMode.GUARD_ONLY,
+        note='确认时点（何时可确认）；R2 以自然时点表述'),
+    'writer_book_ir.chapters[].scenes[].verification_ir'
+    '.pending_reader_confirmations[].in_scene': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir'
+        '.pending_reader_confirmations[].in_scene', consumers=(_A,),
+        scope=_SCENE, mode=DeliveryMode.AUDIT_ONLY,
+        note='确认拍是否在本场（机械分支位，不渲染）'),
+    'writer_book_ir.chapters[].scenes[].verification_ir.prohibitions': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.prohibitions',
+        consumers=(_W, _V), scope=_SCENE, mode=DeliveryMode.MUST_RESPECT,
+        note='场景 avoid（显式禁止事项）'),
+    'writer_book_ir.chapters[].scenes[].verification_ir.continuity_fact_view': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.continuity_fact_view',
+        consumers=(_W,), scope=_SCENE, mode=DeliveryMode.CONTINUITY,
+        note='前场已接受义务的事实视图；R2 与章 entry 合成承接分区，不复述'),
+    # WriterBrief：呈现视图
+    'writer_book_ir.chapters[].scenes[].writer_brief.scene_id': _spec(
+        'writer_book_ir.chapters[].scenes[].writer_brief.scene_id',
+        consumers=(_A,), scope=_SCENE, mode=DeliveryMode.AUDIT_ONLY,
+        pending=True, note=_ID_PENDING),
+    'writer_book_ir.chapters[].scenes[].writer_brief.realization_brief': _spec(
+        'writer_book_ir.chapters[].scenes[].writer_brief.realization_brief',
+        consumers=(_W,), scope=_SCENE, mode=DeliveryMode.CREATIVE_GUIDANCE,
+        note='导演说明（canonical 原样投影，不得改写）'),
+    'writer_book_ir.chapters[].scenes[].writer_brief.scene_driver_summary': _spec(
+        'writer_book_ir.chapters[].scenes[].writer_brief.scene_driver_summary',
+        consumers=(_W,), scope=_SCENE, mode=DeliveryMode.CREATIVE_GUIDANCE,
+        note='场景驱动（want/opposition/turn）'),
+    'writer_book_ir.chapters[].scenes[].writer_brief.pov': _spec(
+        'writer_book_ir.chapters[].scenes[].writer_brief.pov', consumers=(_W,),
+        scope=_SCENE, mode=DeliveryMode.CREATIVE_GUIDANCE, note='本场叙述约定'),
+    'writer_book_ir.chapters[].scenes[].writer_brief.voice': _spec(
+        'writer_book_ir.chapters[].scenes[].writer_brief.voice', consumers=(_W,),
+        scope=_SCENE, mode=DeliveryMode.CREATIVE_GUIDANCE, note='本场口吻'),
+    'writer_book_ir.chapters[].scenes[].writer_brief.delivery_hints': _spec(
+        'writer_book_ir.chapters[].scenes[].writer_brief.delivery_hints',
+        consumers=(_W,), scope=_SCENE, mode=DeliveryMode.CREATIVE_GUIDANCE,
+        note='拍级表达提示（含称谓时点提示）'),
+    'writer_book_ir.chapters[].scenes[].writer_brief.usable_surfaces[].char_id': _spec(
+        'writer_book_ir.chapters[].scenes[].writer_brief.usable_surfaces[]'
+        '.char_id', consumers=(_A,), scope=_SCENE, mode=DeliveryMode.AUDIT_ONLY,
+        note='可用称谓的人物位（与 released_surfaces 冗余的查询面）'),
+    'writer_book_ir.chapters[].scenes[].writer_brief.usable_surfaces[].surfaces': (
+        _spec('writer_book_ir.chapters[].scenes[].writer_brief.usable_surfaces[]'
+              '.surfaces', consumers=(_W, _V), scope=_SCENE,
+              mode=DeliveryMode.MUST_RESPECT, pending=True,
+              note='当前阅读面经 verification_ir.released_surfaces 送达（本字段'
+                   '冗余未渲染）；R2 合并称谓许可面后清零')),
+    # ── 章包派生层（RealizationContract；由协议版本/章预算/篇幅带派生）────
+    'chapter_packet.realization_contract.protocol_version': _spec(
+        'chapter_packet.realization_contract.protocol_version', consumers=(_A,),
+        scope=_EVERY, mode=DeliveryMode.AUDIT_ONLY,
+        note='写手协议版本（审计位；协议正文由 renderer 渲染）'),
+    'chapter_packet.realization_contract.target_chars': _spec(
+        'chapter_packet.realization_contract.target_chars', consumers=(_W, _V),
+        scope=_EVERY, mode=DeliveryMode.MUST_RESPECT, note='本章篇幅目标'),
+    'chapter_packet.realization_contract.band_low': _spec(
+        'chapter_packet.realization_contract.band_low', consumers=(_W, _V),
+        scope=_EVERY, mode=DeliveryMode.MUST_RESPECT, note='篇幅合法区间下界'),
+    'chapter_packet.realization_contract.band_high': _spec(
+        'chapter_packet.realization_contract.band_high', consumers=(_W, _V),
+        scope=_EVERY, mode=DeliveryMode.MUST_RESPECT, note='篇幅合法区间上界'),
+    # ── HookContext（楔子写手唯一输入）────────────────────────────────────
+    'hook_context.contract_version': _spec(
+        'hook_context.contract_version', consumers=(_A,), scope=_HOOK,
+        mode=DeliveryMode.AUDIT_ONLY, pending=True,
+        note='当前 Hook prompt 整份 JSON 倾倒；R2 分层渲染后清零'),
+    'hook_context.provenance': _spec(
+        'hook_context.provenance', consumers=(_A,), scope=_HOOK,
+        mode=DeliveryMode.AUDIT_ONLY, note='来源账（exclude 传输位）'),
+    'hook_context.pov.person': _spec(
+        'hook_context.pov.person', consumers=(_H,), scope=_HOOK,
+        mode=DeliveryMode.CREATIVE_GUIDANCE, note='Hook 叙述人称'),
+    'hook_context.pov.focalizers': _spec(
+        'hook_context.pov.focalizers', consumers=(_H,), scope=_HOOK,
+        mode=DeliveryMode.CREATIVE_GUIDANCE,
+        note='视角人物（R2 解析为目标姓名后送达）'),
+    'hook_context.opening_facts[].audience': _spec(
+        'hook_context.opening_facts[].audience', consumers=(_A,), scope=_HOOK,
+        mode=DeliveryMode.AUDIT_ONLY, pending=True, note='获准面分组（机械位）'),
+    'hook_context.opening_facts[].established_by': _spec(
+        'hook_context.opening_facts[].established_by', consumers=(_A,),
+        scope=_HOOK, mode=DeliveryMode.AUDIT_ONLY, pending=True,
+        note='来源锚；' + _ID_PENDING),
+    'hook_context.opening_facts[].text': _spec(
+        'hook_context.opening_facts[].text', consumers=(_H,), scope=_HOOK,
+        mode=DeliveryMode.CONTINUITY,
+        note='起笔事实按投影规则决定身份：以延续/背景呈现（R2.7），'
+             '不作为写作任务复述'),
+    'hook_context.materials[].beat_ref': _spec(
+        'hook_context.materials[].beat_ref', consumers=(_A,), scope=_HOOK,
+        mode=DeliveryMode.AUDIT_ONLY, pending=True, note=_ID_PENDING),
+    'hook_context.materials[].presentation': _spec(
+        'hook_context.materials[].presentation', consumers=(_H,), scope=_HOOK,
+        mode=DeliveryMode.MUST_REALIZE,
+        note='材料必须写出（隐藏侧面/隐藏人物时的显式呈现）'),
+    'hook_context.materials[].event': _spec(
+        'hook_context.materials[].event', consumers=(_H,), scope=_HOOK,
+        mode=DeliveryMode.MUST_REALIZE, note='材料按设计序写出'),
+    'hook_context.materials[].deltas': _spec(
+        'hook_context.materials[].deltas', consumers=(_H,), scope=_HOOK,
+        mode=DeliveryMode.MUST_REALIZE, note='材料附带的未隐藏效应投影'),
+    'hook_context.forbidden_reveals': _spec(
+        'hook_context.forbidden_reveals', consumers=(_H, _V), scope=_HOOK,
+        mode=DeliveryMode.GUARD_ONLY, note='禁止提前兑现的揭示（禁区）'),
+    'hook_context.design_brief': _spec(
+        'hook_context.design_brief', consumers=(_H,), scope=_HOOK,
+        mode=DeliveryMode.CREATIVE_GUIDANCE, note='材料组织方式'),
+    'hook_context.delivery_brief': _spec(
+        'hook_context.delivery_brief', consumers=(_H,), scope=_HOOK,
+        mode=DeliveryMode.CREATIVE_GUIDANCE, note='文风机制与口吻'),
+    'hook_context.target_chars': _spec(
+        'hook_context.target_chars', consumers=(_H, _V), scope=_HOOK,
+        mode=DeliveryMode.MUST_RESPECT, note='Hook 篇幅目标'),
+    'hook_context.hard_max_chars': _spec(
+        'hook_context.hard_max_chars', consumers=(_H, _V), scope=_HOOK,
+        mode=DeliveryMode.MUST_RESPECT, note='Hook 硬上限（validator 检查面）'),
+    'hook_context.usable_surfaces[].char_id': _spec(
+        'hook_context.usable_surfaces[].char_id', consumers=(_A,), scope=_HOOK,
+        mode=DeliveryMode.AUDIT_ONLY, pending=True, note=_ID_PENDING),
+    'hook_context.usable_surfaces[].surfaces': _spec(
+        'hook_context.usable_surfaces[].surfaces', consumers=(_H, _V),
+        scope=_HOOK, mode=DeliveryMode.MUST_RESPECT, note='Hook 可用称谓'),
+    'hook_context.withheld_literals': _spec(
+        'hook_context.withheld_literals', consumers=(_V,), scope=_HOOK,
+        mode=DeliveryMode.AUDIT_ONLY, pending=True,
+        note='Hook 禁用字面（validator 检查面）；当前随 JSON 倾倒可见，'
+             'R2 Hook 分层渲染后清零'),
+    # ── NameMapV5（改名面；不经任何写手）──────────────────────────────────
+    'name_map.contract_version': _spec(
+        'name_map.contract_version', consumers=(_N, _A), scope=_NAME,
+        mode=DeliveryMode.AUDIT_ONLY, note='交付变换版本（审计位）'),
+    'name_map.provenance': _spec(
+        'name_map.provenance', consumers=(_A,), scope=_NAME,
+        mode=DeliveryMode.AUDIT_ONLY, note='来源账（exclude 传输位）'),
+    'name_map.entries[].char_ref': _spec(
+        'name_map.entries[].char_ref', consumers=(_N,), scope=_NAME,
+        mode=DeliveryMode.AUDIT_ONLY, note='改名对象（机械位）'),
+    'name_map.entries[].name.family': _spec(
+        'name_map.entries[].name.family', consumers=(_N,), scope=_NAME,
+        mode=DeliveryMode.AUDIT_ONLY,
+        note='目标姓氏；写手看不到（替换发生在 Apply，正文按许可称谓成文）'),
+    'name_map.entries[].name.given': _spec(
+        'name_map.entries[].name.given', consumers=(_N,), scope=_NAME,
+        mode=DeliveryMode.AUDIT_ONLY, note='目标名（Apply 应用位）'),
+    'name_map.entries[].name.full': _spec(
+        'name_map.entries[].name.full', consumers=(_N,), scope=_NAME,
+        mode=DeliveryMode.AUDIT_ONLY, note='compiler 拼接的全名（审计位）'),
+    'name_map.entries[].aliases': _spec(
+        'name_map.entries[].aliases', consumers=(_N,), scope=_NAME,
+        mode=DeliveryMode.AUDIT_ONLY, note='化名赋值（Apply 应用位）'),
+    'name_map.entries[].keep_reason': _spec(
+        'name_map.entries[].keep_reason', consumers=(_N, _A), scope=_NAME,
+        mode=DeliveryMode.AUDIT_ONLY, note='合法保留的理由（在案登记）'),
+}
+
+#: 七档身份的闭环自检：当前 canonical 面有实例的六档全部有登记条目；background
+#: 尚无独立字段（R2 的编译器补齐投影落地后产生），以投影规则注记在
+#: entry_state[].value 的 mode_note 里——守卫测试钉住这一对应关系。
+assert {spec.delivery_mode for spec in STR06_FIELD_DELIVERY.values()} == \
+    set(DeliveryMode) - {DeliveryMode.BACKGROUND}
+assert [path for path, spec in STR06_FIELD_DELIVERY.items()
+        if 'background' in spec.mode_note] == [
+    'writer_book_ir.chapters[].scenes[].verification_ir.entry_state[].value']
