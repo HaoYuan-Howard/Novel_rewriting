@@ -1338,6 +1338,13 @@ B6-A／B6-B 分别授权；R 批全部 fake transport、零模型调用。
   - 验证（fake transport、零付费、`-n 0`）：str06 全集 631 项全绿；契约
     §9.5 五文件＋layering＋api_discipline＋test_selection＋非 str06 消费面
     （api_errors／cli／llm／orchestrator×2／report／workflow_transition）全绿。
+  - 收绿批（R2 完成清单逐项复核）：AUD-03/04 反例**正身**落测——前章建立、
+    后章拍级读取、当前场不重写：值挂拍进 IR 与「不可违背」分区，变异前章值
+    只动建立章与读取章（test_str06_chapter_closure）；Design 级线程增／改
+    （open 文本／advance 进展）／删（收束）经真实编译链按消费面传导（操作章、
+    携入章、主体相关远章变；不相关章不变，删收束＝结尾仍开放的合法显式状态，
+    M8 全程绿）；ThreadFold 补「开启前」入场快照断言。复核无遗留红：str06
+    全集＋§9.5 五文件＋layering 936 项全绿（`-n 0`、fake、零付费）。
 
 ## 职责解耦批次（2026-09-27 起；B0–B6）
 

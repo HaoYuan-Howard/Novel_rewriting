@@ -365,6 +365,64 @@ def test_real_dependency_change_only_affects_related_chapters():
     assert after[(3, 's03')] == before[(3, 's03')], '无依赖章的章包不变'
 
 
+def test_beat_read_from_prior_chapter_reaches_packet_and_identity():
+    """AUD-03 反例正身（REQUIREMENTS「AUD 审计反例」第 3 行）：前章建立
+    口令、后章在**具体 beat** 读取、当前场不重写——解析值挂到该拍进 IR 与
+    写手视图；变异前章值后，读取章的章包身份与阅读面随之改变，无关章不变。
+    （R2 前红：解析只做闭合证明，值不进 IR——改前章值后读取章摘要不变。）"""
+    def _graph_beat_read(write_value: str) -> BodyDesign:
+        return _graph(
+            scenes=[
+                _scene('s01', (_beat(1, '前章建立口令',
+                                     (_delta('world', 'x', value=write_value),)),)),
+                # 当前场不重写 x：只有拍级读取（at=b02）
+                _scene('s02', (_beat(1, '后章铺垫'), _beat(2, '灯下对出口令')),
+                       reads=(StateRead(domain='world', key='x', at='b02'),)),
+                _scene('s03', (_beat(1, '无关章'),)),
+            ],
+            chapters=[(1, ('s01',)), (2, ('s02',)), (3, ('s03',))])
+
+    def _ir(graph: BodyDesign):
+        plan, binding = _plan(graph)
+        return compile_writer_book_ir(graph=graph, plan=plan, binding=binding,
+                                      total_budget=1000, length_band=(0.6, 1.3),
+                                      projection=_projection(), structure=None)
+
+    # ── 值到达消费点：挂到读取拍进 IR，不混进 entry 视图 ──
+    ir = _ir(_graph_beat_read('口令甲'))
+    s02 = ir.chapter(2).scenes[0]
+    assert not [e for e in s02.verification_ir.entry_state if e.key == 'x'], \
+        '拍级读取不是起笔已成立——值不得混进 entry 视图'
+    b02 = next(b for b in s02.verification_ir.beats if b.beat_ref == 's02#b02')
+    assert [(e.key, e.value, e.established_by) for e in b02.reads] == \
+        [('x', '口令甲', 's01#b01')], '前章建立的值必须挂到后章读取拍'
+    b01 = next(b for b in s02.verification_ir.beats if b.beat_ref == 's02#b01')
+    assert b01.reads == (), '没有声明读取的拍不带值'
+
+    # ── 写手视图（真实 renderer 的分区字节，不只断言 helper）──
+    from tests.test_str06_r2_engine import _blocks
+    render2 = render_chapter_packet(project_chapter_packet(ir, 2))
+    assert '口令甲' in _blocks(render2)['不可违背'], '拍级读取值以必须遵守送达'
+    assert '第2拍依赖的事实' in render2
+
+    # ── 变异前章值：读取章身份与阅读面改变，无关章不变 ──
+    before_slices = _slices(_graph_beat_read('口令甲'))
+    ir_old = _ir(_graph_beat_read('口令甲'))
+    ir_new = _ir(_graph_beat_read('口令乙'))
+    after_slices = _slices(_graph_beat_read('口令乙'))
+    assert after_slices[(1, 's01')] != before_slices[(1, 's01')]
+    assert after_slices[(2, 's02')] != before_slices[(2, 's02')], \
+        '拍级读取消费了 s01 的写入——读取章消费身份必须失效'
+    assert after_slices[(3, 's03')] == before_slices[(3, 's03')], \
+        '未消费该地址的章不受波及'
+    old_d = {n: packet_sha256(project_chapter_packet(ir_old, n)) for n in (1, 2, 3)}
+    new_d = {n: packet_sha256(project_chapter_packet(ir_new, n)) for n in (1, 2, 3)}
+    assert new_d[1] != old_d[1] and new_d[2] != old_d[2] and new_d[3] == old_d[3]
+    render_new = render_chapter_packet(project_chapter_packet(ir_new, 2))
+    assert '口令乙' in _blocks(render_new)['不可违背']
+    assert '口令甲' not in render_new, '旧值不得残留阅读面'
+
+
 def test_weight_change_propagates_through_integer_budgets():
     """权重变化按失效率传导：受影响章＝整数预算变化的章（最大余数归一），
     预算不变的章不受波及。"""

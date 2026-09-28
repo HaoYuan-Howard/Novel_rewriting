@@ -250,12 +250,18 @@ def test_thread_fold_faces_match_the_guard_baseline_on_every_scene():
 
 
 def test_thread_fold_covers_the_thread_lifecycle_faces():
-    """逐类覆盖：本场操作（must_realize 数据面）、跨章携入、推进、收束、
-    关闭后不再投影、结尾仍开放、与参与者相关性过滤。"""
+    """逐类覆盖：开启前、本场操作（must_realize 数据面）、跨章携入、推进、
+    收束、关闭后不再投影、结尾仍开放、与参与者相关性过滤。"""
     from novel.stages.stage4.fold import ThreadFold
     body = _rich_design()
     fold = ThreadFold()
     faces = {scene.scene_id: fold.apply(scene) for scene in body.scenes}
+    # sc01（开启前）：三条线都在本场才开——入场快照不含尚未开启的线程；
+    # 开启操作以 must_realize 数据面落位
+    ops_sc01, open_sc01 = faces['sc01']
+    assert [(t.ref, t.op) for t in ops_sc01] == [
+        ('th01', 'open'), ('th02', 'open'), ('th03', 'open')]
+    assert open_sc01 == (), '开启前（入场时点）不得投影尚未开启的线程'
     # sc02：advance＋close＋open 都在本场（must_realize 数据面）
     ops_sc02, open_sc02 = faces['sc02']
     assert [(t.ref, t.op) for t in ops_sc02] == [
@@ -299,6 +305,154 @@ def test_sc03_open_threads_split_by_kind_in_ir():
     assert {(t.ref, t.kind) for t in sc03.verification_ir.open_threads} == {
         ('th02', 'goal'), ('th03', 'question'), ('th04', 'promise')}
     assert sc03.verification_ir.thread_ops == ()
+
+
+def test_design_thread_mutations_flow_to_packets_by_consumer():
+    """AUD-04 反例正身（REQUIREMENTS「AUD 审计反例」第 4 行）：Design 级线程的
+    增／改／删经真实编译链改变**实际消费该条目**的章包身份与阅读面；无操作
+    且主体不相关的章不变。R2 前红：旧静态跨章列表加字段后 WriterIR 完全不变。
+    基座：ch1 开 goal(th01)＋question(th02)；ch2 推进 th01、收束 th02；
+    ch3（ch1 参与、无操作）携入开放的 th01；ch4（只有 ch3）不相关不投影。"""
+    from contracts.schema.design import (
+        BodyDesign, ChapterAssignment, ChapterEntry, SceneDelivery, SceneDriver,
+        TargetBeat, TargetScene, ThreadAction,
+    )
+    from contracts.schema.state import SurfaceIntroduction
+    from novel.stages.stage4.book_ir import compile_writer_book_ir
+    from novel.stages.stage4.compile import compile_execution_plan
+    from novel.stages.stage4.guard import run_mechanical_guard
+    from novel.stages.common import packet_sha256
+
+    def _scene(sid, participants, threads=()):
+        return TargetScene(
+            scene_id=sid, state_reads=(),
+            driver=SceneDriver(focal_actor=participants[0], immediate_want='w',
+                               opposition='o', turn='t'),
+            realization_brief=f'重心在{sid}；展开后收束。',
+            beats=(TargetBeat(beat_id='b01', event=f'{sid}的当拍事件',
+                              participants=participants, dramatic_intent='d',
+                              target_delta=(), threads=threads),),
+            delivery=SceneDelivery(pov=participants[0], voice='冷峻'))
+
+    def _design():
+        return BodyDesign(
+            graph_id='tm', book_style='冷峻克制的第三人称叙事。',
+            initial_state=(),
+            initial_surfaces=(SurfaceIntroduction(char_id='ch1', surfaces=('阿砚',)),
+                              SurfaceIntroduction(char_id='ch2', surfaces=('阿璧',)),
+                              SurfaceIntroduction(char_id='ch3', surfaces=('掌柜',))),
+            scenes=(_scene('s01', ('ch1', 'ch2'), (
+                        ThreadAction(ref='th01', op='open', kind='goal',
+                                     subject='ch1', text='夺回家产'),
+                        ThreadAction(ref='th02', op='open', kind='question',
+                                     subject='ch1', text='玉佩藏着什么'))),
+                    _scene('s02', ('ch1', 'ch2'), (
+                        ThreadAction(ref='th01', op='advance', progress='查到线索'),
+                        ThreadAction(ref='th02', op='close', ending='answered',
+                                     resolution='刻着沈字，指向旧案'))),
+                    _scene('s03', ('ch1',)),
+                    _scene('s04', ('ch3',))),
+            chapters=(
+                ChapterAssignment(chapter_ordinal=1, purpose='开线',
+                                  scene_ids=('s01',), entry=ChapterEntry.opening()),
+                ChapterAssignment(chapter_ordinal=2, purpose='推进与收束',
+                                  scene_ids=('s02',),
+                                  entry=ChapterEntry(transition='time_skip',
+                                                     recap='do_not_recap')),
+                ChapterAssignment(chapter_ordinal=3, purpose='携入',
+                                  scene_ids=('s03',),
+                                  entry=ChapterEntry(transition='location_cut',
+                                                     recap='brief_orientation')),
+                ChapterAssignment(chapter_ordinal=4, purpose='不相关',
+                                  scene_ids=('s04',),
+                                  entry=ChapterEntry(transition='new_scene',
+                                                     recap='do_not_recap'))))
+
+    def _compile(graph):
+        binding = _no_obligation_binding()
+        plan, errors = compile_execution_plan(graph, binding)
+        assert not errors, errors
+        ir = compile_writer_book_ir(graph=graph, plan=plan, binding=binding,
+                                    total_budget=1000, length_band=(0.6, 1.3),
+                                    projection=_chars().name_projection(),
+                                    structure=None)
+        for chapter in ir.chapters:
+            for context in chapter.scenes:
+                problems = run_mechanical_guard(binding=binding, context=context,
+                                                graph=graph)
+                assert not problems, (context.scene_id, problems)
+        return ir
+
+    def _digests(ir):
+        return {n: packet_sha256(project_chapter_packet(ir, n))
+                for n in (1, 2, 3, 4)}
+
+    def _with_scene_threads(graph, sid, threads):
+        scenes = tuple(s.model_copy(update={'beats': (
+            s.beats[0].model_copy(update={'threads': tuple(threads)}),)})
+            if s.scene_id == sid else s for s in graph.scenes)
+        return graph.model_copy(update={'scenes': scenes})
+
+    # ── 基线：各消费面把线程送达对应分区（M8 对账全绿）──
+    base_ir = _compile(_design())
+    base = _digests(base_ir)
+    assert '推进线索' in _blocks(_render(base_ir, 2))['必须写出']
+    assert '查到线索' in _blocks(_render(base_ir, 2))['必须写出']
+    assert '收束线索' in _blocks(_render(base_ir, 2))['必须写出']
+    assert '刻着沈字，指向旧案' in _blocks(_render(base_ir, 2))['必须写出']
+    assert '夺回家产' in _blocks(_render(base_ir, 3))['承接'], \
+        '开放的 goal 由无操作的相关章以 continuity 携入'
+    assert '玉佩藏着什么' not in _render(base_ir, 3), \
+        'th02 已收束——收束后不再投影'
+    assert '夺回家产' not in _render(base_ir, 4), \
+        '主体不相关的章不投影（全场景保护不等于每场提醒）'
+
+    # ── 增：ch1 新开一条 ch3 为主体的线——操作章与主体相关的 ch4 变，其余不变 ──
+    added = _with_scene_threads(_design(), 's01', (
+        ThreadAction(ref='th01', op='open', kind='goal', subject='ch1',
+                     text='夺回家产'),
+        ThreadAction(ref='th02', op='open', kind='question', subject='ch1',
+                     text='玉佩藏着什么'),
+        ThreadAction(ref='th03', op='open', kind='goal', subject='ch3',
+                     text='守住药铺')))
+    ir_added = _compile(added)
+    changed = {n for n, d in _digests(ir_added).items() if d != base[n]}
+    assert changed == {1, 4}, changed
+    assert '守住药铺' in _blocks(_render(ir_added, 4))['承接'], \
+        '跨章携入的新线到达主体相关的远章'
+    assert '守住药铺' not in _render(ir_added, 3)
+
+    # ── 改（open 文本只写一次）：操作章、携推进载荷的章与携入章都变 ──
+    retitled = _with_scene_threads(_design(), 's01', (
+        ThreadAction(ref='th01', op='open', kind='goal', subject='ch1',
+                     text='夺回家业'),
+        ThreadAction(ref='th02', op='open', kind='question', subject='ch1',
+                     text='玉佩藏着什么')))
+    ir_retitled = _compile(retitled)
+    changed = {n for n, d in _digests(ir_retitled).items() if d != base[n]}
+    assert changed == {1, 2, 3}, changed
+    assert '夺回家业' in _blocks(_render(ir_retitled, 2))['必须写出']
+    assert '夺回家业' in _blocks(_render(ir_retitled, 3))['承接']
+    assert '夺回家产' not in _render(ir_retitled, 3)
+
+    # ── 改（advance 进展）：只动承载该操作的章 ──
+    progressed = _with_scene_threads(_design(), 's02', (
+        ThreadAction(ref='th01', op='advance', progress='查到新线索'),
+        ThreadAction(ref='th02', op='close', ending='answered',
+                     resolution='刻着沈字，指向旧案')))
+    ir_progressed = _compile(progressed)
+    changed = {n for n, d in _digests(ir_progressed).items() if d != base[n]}
+    assert changed == {2}, changed
+    assert '查到新线索' in _blocks(_render(ir_progressed, 2))['必须写出']
+
+    # ── 删（收束）：th02 结尾仍开放（合法显式状态）→ 携入章新增禁区 ──
+    unclosed = _with_scene_threads(_design(), 's02', (
+        ThreadAction(ref='th01', op='advance', progress='查到线索'),))
+    ir_unclosed = _compile(unclosed)
+    changed = {n for n, d in _digests(ir_unclosed).items() if d != base[n]}
+    assert changed == {2, 3}, changed
+    assert '玉佩藏着什么' in _blocks(_render(ir_unclosed, 3))['禁区'], \
+        '删除收束后开放的问题线程改以 guard_only 保护'
 
 
 # ═════════════════ 二、依赖边改由实际解析来源生成（第 2 项） ═════════════════
