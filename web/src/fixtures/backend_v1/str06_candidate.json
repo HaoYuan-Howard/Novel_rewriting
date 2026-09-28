@@ -23,9 +23,16 @@
   },
   "nodes": [
    {
-    "node": "str06.stage2.source",
+    "node": "str06.stage2.book",
     "stage": "stage2",
-    "owner": "stage2.source",
+    "owner": "stage2.book",
+    "paid": true,
+    "produced": true
+   },
+   {
+    "node": "str06.stage2.chapters",
+    "stage": "stage2",
+    "owner": "stage2.chapters",
     "paid": true,
     "produced": true
    },
@@ -34,6 +41,20 @@
     "stage": "stage2",
     "owner": "stage2.names",
     "paid": true,
+    "produced": true
+   },
+   {
+    "node": "str06.stage2.associate",
+    "stage": "stage2",
+    "owner": "stage2.associate",
+    "paid": true,
+    "produced": true
+   },
+   {
+    "node": "str06.stage2.compile",
+    "stage": "stage2",
+    "owner": "stage2.compile",
+    "paid": false,
     "produced": true
    },
    {
@@ -51,16 +72,16 @@
     "produced": true
    },
    {
-    "node": "str06.stage4.hook_design",
+    "node": "str06.stage4.bind",
     "stage": "stage4",
-    "owner": "stage4.hook_design",
+    "owner": "stage4.bind",
     "paid": true,
     "produced": true
    },
    {
-    "node": "str06.stage4.bind",
+    "node": "str06.stage4.hook_design",
     "stage": "stage4",
-    "owner": "stage4.bind",
+    "owner": "stage4.hook_design",
     "paid": true,
     "produced": true
    },
@@ -72,16 +93,16 @@
     "produced": true
    },
    {
-    "node": "str06.stage5.body",
+    "node": "str06.stage5.hook",
     "stage": "stage5",
-    "owner": "stage5.body",
+    "owner": "stage5.hook",
     "paid": true,
     "produced": true
    },
    {
-    "node": "str06.stage5.hook",
+    "node": "str06.stage5.body",
     "stage": "stage5",
-    "owner": "stage5.hook",
+    "owner": "stage5.body",
     "paid": true,
     "produced": true
    },
@@ -102,16 +123,16 @@
   ],
   "cost": {
    "present": true,
-   "rows": 12,
-   "new_paid_rows": 12,
+   "rows": 13,
+   "new_paid_rows": 13,
    "cached_rows": 0,
-   "prompt_tokens": 300,
-   "completion_tokens": 175,
+   "prompt_tokens": 510,
+   "completion_tokens": 265,
    "reasoning_tokens": null,
    "unknown_cost_rows": 0,
    "per_node": [
     {
-     "node": "str06.stage2.names",
+     "node": "str06.stage2.associate",
      "rows": 1,
      "new_paid_rows": 1,
      "cached_rows": 0,
@@ -120,12 +141,30 @@
      "reasoning_tokens": null
     },
     {
-     "node": "str06.stage2.source",
-     "rows": 3,
-     "new_paid_rows": 3,
+     "node": "str06.stage2.book",
+     "rows": 1,
+     "new_paid_rows": 1,
      "cached_rows": 0,
-     "prompt_tokens": 30,
-     "completion_tokens": 30,
+     "prompt_tokens": 10,
+     "completion_tokens": 10,
+     "reasoning_tokens": null
+    },
+    {
+     "node": "str06.stage2.chapters",
+     "rows": 2,
+     "new_paid_rows": 2,
+     "cached_rows": 0,
+     "prompt_tokens": 20,
+     "completion_tokens": 20,
+     "reasoning_tokens": null
+    },
+    {
+     "node": "str06.stage2.names",
+     "rows": 1,
+     "new_paid_rows": 1,
+     "cached_rows": 0,
+     "prompt_tokens": 10,
+     "completion_tokens": 10,
      "reasoning_tokens": null
     },
     {
@@ -169,8 +208,8 @@
      "rows": 2,
      "new_paid_rows": 2,
      "cached_rows": 0,
-     "prompt_tokens": 200,
-     "completion_tokens": 80,
+     "prompt_tokens": 400,
+     "completion_tokens": 160,
      "reasoning_tokens": null
     },
     {
@@ -196,7 +235,7 @@
  },
  "characters": {
   "present": true,
-  "contract_version": "str06-rc3",
+  "contract_version": null,
   "characters": [
    {
     "char_id": "fu_jun",
@@ -614,8 +653,8 @@
    },
    "length_disclosed": false,
    "request_identity": "f5e3192863f41a8f21a05c950913d8c6bcf65c19084cdf958db9c2766c66ea0c",
-   "protocol_version": "str06-body-protocol-v1",
-   "renderer_version": "str06-render-v1",
+   "protocol_version": "str06-body-protocol-v4",
+   "renderer_version": "str06-render-v4",
    "validator_version": "str06-body-mechanical-v1"
   }
  },

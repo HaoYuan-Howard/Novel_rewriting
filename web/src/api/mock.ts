@@ -593,21 +593,25 @@ function mockStage1View(): Stage1View {
 
 /* ---------------------------------------------------------- 跑书进度样例 */
 
-/** mock 的静态镜像；真实响应由后端直接从 NODES 派生。 */
+/** mock 的静态镜像（B2 五节点重建后 14 个 `str06.` 节点，B5 对齐）；
+ *  真实响应由后端直接从 NODES 派生。label/paid 与 `contracts/invariants.py::NODES` 逐字对账。 */
 const PIPELINE_STEPS: { node: string; label: string; paid: boolean }[] = [
   { node: 'stage0.remove', label: 'stage0 非正文剔除', paid: false },
   { node: 'stage1.partition', label: 'stage1 分章', paid: false },
-  { node: 'str06.stage2.source', label: 'Stage2 源语义抽取与确定性 Blueprint 编译', paid: true },
-  { node: 'str06.stage2.names', label: 'Stage2 源名称结构窄调用并发布 Characters v4', paid: true },
-  { node: 'str06.stage4.preserve', label: 'Stage4 Preserve 与 ReconstructionBrief 投影', paid: true },
-  { node: 'str06.stage4.body_design', label: 'Stage4 目标故事与导演说明设计', paid: true },
-  { node: 'str06.stage4.bind', label: 'Stage4 Bind（义务到目标位置绑定）', paid: true },
-  { node: 'str06.stage4.hook_design', label: 'Stage4 Hook 设计与 PresentationGraph 发布', paid: true },
-  { node: 'str06.stage4.compile', label: 'Stage4 确定性编译（ExecutionPlan/Guard/WriterBookIR/HookContext）', paid: false },
-  { node: 'str06.stage5.hook', label: 'Stage5 Hook 成文', paid: true },
-  { node: 'str06.stage5.body', label: 'Stage5 按章正文成文', paid: true },
-  { node: 'str06.stage7.naming', label: 'Stage7 Naming（NameMap v5 赋值）', paid: true },
-  { node: 'str06.stage7.assemble', label: 'Stage7 改名替换与成书装配', paid: false },
+  { node: 'str06.stage2.book', label: 'Stage2 书级观察（人物候选、称谓及证据、初态、世界约束）', paid: true },
+  { node: 'str06.stage2.chapters', label: 'Stage2 逐章观察（事件与三类转移；互不依赖，D3）', paid: true },
+  { node: 'str06.stage2.names', label: 'Stage2 源名称结构观察（家族、名、化名、称谓构词）', paid: true },
+  { node: 'str06.stage2.associate', label: 'Stage2 跨章关联（同一命题、同维状态、悬念配对、跨章因果与续场，D8）', paid: true },
+  { node: 'str06.stage2.compile', label: 'Stage2 确定性编译：解析证据、生成 ID、执行关联，发布 Characters＋Blueprint（D9）', paid: false },
+  { node: 'str06.stage4.preserve', label: 'Stage4 Preserve（保存策略义务）与 ReconstructionBrief 投影', paid: true },
+  { node: 'str06.stage4.body_design', label: 'Stage4 目标故事与导演说明设计（BodyDesign）', paid: true },
+  { node: 'str06.stage4.bind', label: 'Stage4 Bind（义务到目标位置绑定，完整 canonical snapshot）', paid: true },
+  { node: 'str06.stage4.hook_design', label: 'Stage4 Hook 设计并经 publish_graph 唯一发布 PresentationGraph', paid: true },
+  { node: 'str06.stage4.compile', label: 'Stage4 确定性编译：ExecutionPlan／Guard／WriterBookIR／HookContext', paid: false },
+  { node: 'str06.stage5.hook', label: 'Stage5 Hook 成文（同 Context 有限重写＋机械验）', paid: true },
+  { node: 'str06.stage5.body', label: 'Stage5 按章正文成文（机械检查＋有限重写＋章级回执）', paid: true },
+  { node: 'str06.stage7.naming', label: 'Stage7 Naming（NameMap v5 赋值；Apply 归 assembly）', paid: true },
+  { node: 'str06.stage7.assemble', label: 'Stage7 改名替换与成书装配（TXT 先落盘、manifest 最后提交）', paid: false },
 ]
 
 /** 静态样例：全节点 pending + 空事件流 + 全 null 的 stage_done。 */

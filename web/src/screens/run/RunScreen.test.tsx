@@ -46,7 +46,7 @@ describe('RunScreen 交付终验', () => {
       resume_frontier: {
         ...run.resume_frontier, next_handler: 'human',
         review_states: [
-          { node: 'str06.stage2.source', scope: 'book', state: 'accepted' },
+          { node: 'str06.stage2.book', scope: 'book', state: 'accepted' },
           { node: 'str06.stage2.names', scope: 'book', state: 'uncertain' },
         ],
       },
@@ -58,7 +58,7 @@ describe('RunScreen 交付终验', () => {
     vi.spyOn(api, 'getAgentRuns').mockResolvedValue({ runs: [] })
     renderRoute(<RunScreen />, `/n/${SAMPLE_SID}/run`)
     expect(await screen.findByText('下一处理者：人工（只读监控面上的例外动作）')).toBeVisible()
-    expect(screen.getByText('str06.stage2.source · book：accepted')).toBeVisible()
+    expect(screen.getByText('str06.stage2.book · book：accepted')).toBeVisible()
     expect(screen.getByText('str06.stage2.names · book：uncertain')).toBeVisible()
     expect(screen.getByText('当前恢复：book: replay_response')).toBeVisible()
   })
@@ -415,9 +415,9 @@ describe('RunScreen 节点图与完成度', () => {
   it('默认折叠 operator 已确认无需重跑的前缀，并显示真实续跑处理者', async () => {
     const run = await mockApi.getRunProgress(SAMPLE_SID)
     const next = run.steps.find((step) => step.node === 'str06.stage2.names')
-    const running = run.steps.find((step) => step.node === 'str06.stage2.source')
+    const running = run.steps.find((step) => step.node === 'str06.stage2.book')
     if (!next) throw new Error('mock pipeline 缺 str06.stage2.names')
-    if (!running) throw new Error('mock pipeline 缺 str06.stage2.source')
+    if (!running) throw new Error('mock pipeline 缺 str06.stage2.book')
     running.beacon = 'running'
     const skipped = run.steps
       .filter((step) => step.seq < next.seq && step.node !== running.node)
@@ -443,8 +443,8 @@ describe('RunScreen 节点图与完成度', () => {
     renderRoute(<RunScreen />, `/n/${SAMPLE_SID}/run`)
 
     const frontier = await screen.findByTestId('resume-frontier')
-    expect(frontier).toHaveTextContent('下一节点：Stage2 源名称结构窄调用并发布 Characters v4')
-    expect(frontier).toHaveTextContent('当前执行：Stage2 源语义抽取与确定性 Blueprint 编译（str06.stage2.source）')
+    expect(frontier).toHaveTextContent('下一节点：Stage2 源名称结构观察（家族、名、化名、称谓构词）')
+    expect(frontier).toHaveTextContent('当前执行：Stage2 书级观察（人物候选、称谓及证据、初态、世界约束）（str06.stage2.book）')
     expect(frontier).toHaveTextContent('下一处理者：Executor（执行既有决定）')
     expect(screen.getByRole('button', { name: '跳到下一节点' })).toBeEnabled()
     expect(screen.queryAllByTitle('stage0.remove')).toHaveLength(0)

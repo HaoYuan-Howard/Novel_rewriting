@@ -77,9 +77,9 @@ async function source(sid = SID) {
     ...initial,
     stage_done: { ...initial.stage_done, stage1: false },
     steps: initial.steps.map((step) => ({ ...step,
-      beacon: step.node === 'str06.stage2.source' ? 'running' : 'pending',
-      last_ts: step.node === 'str06.stage2.source' ? 10 : null,
-      last_exit: null, elapsed: step.node === 'str06.stage2.source' ? 1 : null,
+      beacon: step.node === 'str06.stage2.book' ? 'running' : 'pending',
+      last_ts: step.node === 'str06.stage2.book' ? 10 : null,
+      last_exit: null, elapsed: step.node === 'str06.stage2.book' ? 1 : null,
     })),
     events_tail: [],
   }
@@ -123,12 +123,12 @@ async function source(sid = SID) {
         stage_done: { ...progress.stage_done, stage1: true },
         resume_frontier: { ...progress.resume_frontier, state: 'ready', node: next.node,
           seq: next.seq, label: next.label, waiting_on: null, next_handler: 'executor' },
-        steps: progress.steps.map((step) => step.node === 'str06.stage2.source'
+        steps: progress.steps.map((step) => step.node === 'str06.stage2.book'
           ? { ...step, beacon: 'ok', last_exit: 0, last_ts: 12, elapsed: null }
           : step.node === 'str06.stage2.names'
             ? { ...step, beacon: 'running', last_ts: 13, elapsed: 1 } : step),
-        events_tail: [{ ts: 12, sid, run_id: active.run_id, execution_id: 'source-complete',
-          node: 'str06.stage2.source', phase: 'end', exit_code: 0, note: null, beacon: 'ok' }],
+        events_tail: [{ ts: 12, sid, run_id: active.run_id, execution_id: 'book-complete',
+          node: 'str06.stage2.book', phase: 'end', exit_code: 0, note: null, beacon: 'ok' }],
       }
     },
     tick: () => {
@@ -201,7 +201,7 @@ describe('Agent 进展驱动书级读模型刷新', () => {
     live.setFresh()
     live.advance()
     // 不手工失效，也不重挂页面；只等 useRunProgress 的现役 2.5 秒轮询。
-    expect(await screen.findByText('下一节点：Stage2 源名称结构窄调用并发布 Characters v4', {}, { timeout: 4500 }))
+    expect(await screen.findByText('下一节点：Stage2 源名称结构观察（家族、名、化名、称谓构词）', {}, { timeout: 4500 }))
       .toBeVisible()
     expect(qc.getQueryData(qk.novel(SID))).toEqual(live.freshNovel)
     expect(qc.getQueryData(qk.check(SID, 'stage0'))).toEqual(live.freshReport)
