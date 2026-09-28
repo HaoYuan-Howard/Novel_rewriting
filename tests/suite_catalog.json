@@ -3,6 +3,7 @@
     "str06": {
       "_note": "B5（S-05）迁移登记清理：F8c 分流叙事与旧路径引用已删除，本条不再指向任何已删除路径；`str06` 范围转为该链的**现役选测范围**（路径与 tests 清单均实存、与真实导入消费者取并集）。",
       "paths": [
+        "contracts/invariants.py",
         "contracts/schema/source.py",
         "contracts/schema/observation.py",
         "contracts/schema/design.py",
@@ -26,6 +27,7 @@
         "novel/stages/stage5/*",
         "novel/stages/stage7/*",
         "novel/stages/common.py",
+        "novel/stages/owner_revision.py",
         "novel/stages/chain.py",
         "novel/llm/paid_requests.py",
         "novel/views/str06.py",
@@ -34,7 +36,8 @@
         "novel/work_units.py",
         "novel/paths.py",
         "docs/schema/str06.md",
-        "novel/cli/main.py"
+        "novel/cli/main.py",
+        "novel/orchestrator/state.py"
       ],
       "tests": [
         "tests/test_str06_*.py",
@@ -1009,6 +1012,22 @@
     "tests/test_zero_paid_call_invariants.py": {
       "layer": "unit_contract",
       "stages": []
+    },
+    "tests/test_str06_r3_selfheal.py": {
+      "layer": "stage",
+      "stages": [
+        "stage2",
+        "stage4",
+        "stage5"
+      ],
+      "cases": {
+        "test_route_table_closes_code_and_owner_axes": "unit_contract",
+        "test_issue_record_write_bounds_and_resolve": "unit_contract",
+        "test_ask_json_revises_nonconforming_answer_within_budget": "unit_contract",
+        "test_ask_json_stops_when_issue_set_repeats": "unit_contract",
+        "test_ask_json_stops_after_round_cap_with_changing_issue_sets": "unit_contract",
+        "test_recovery_after_revision_stop_replays_free": "unit_contract"
+      }
     }
   },
   "version": 1

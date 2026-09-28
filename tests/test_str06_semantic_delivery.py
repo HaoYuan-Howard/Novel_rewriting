@@ -692,30 +692,38 @@ def test_fault_base_green_baseline_completes_the_chain(tmp_path):
 
 
 @pytest.mark.parametrize('fault,signature,disk_gate', [
-    ('evidence_out_of_range', ('book 校验失败', 'e99_99'),
+    ('evidence_out_of_range', ('book 校验失败', 'e99_99', '同一问题集重复即停'),
      lambda repo: not repo.path('stage2/observations/book.json').exists()),
-    ('unknown_slug', ('compile 机械缺陷', 'participants 引用未知人物 ghost'),
-     lambda repo: (repo.path('stage2/observations/associate.json').is_file()
-                   and not repo.path('stage2/characters/characters.json')
+    # R3 左移：participants 人物闭集在章观察验收即查（不再攒到 compile）。
+    ('unknown_slug', ('ch01 校验失败', 'participants 引用未知人物 ghost'),
+     lambda repo: (repo.path('stage2/observations/book.json').is_file()
+                   and not repo.path('stage2/observations/ch01.json').exists())),
+    # R3 左移：associate 验收做 compile 干跑，未决项归它自己（同节点修订后
+    # 仍缺 ⇒ 同问题集停）。
+    ('missing_pairing', ('associate 校验失败', '关联未决', 'q_yu'),
+     lambda repo: (repo.path('stage2/observations/ch02.json').is_file()
+                   and not repo.path('stage2/observations/associate.json')
                    .is_file())),
-    ('missing_pairing', ('未决', 'q_yu'),
-     lambda repo: (repo.path('stage2/observations/associate.json').is_file()
-                   and not repo.path('stage2/characters/characters.json')
-                   .is_file())),
-    ('obligation_unbound', ('必保义务 ob01 尚未承载',),
+    ('obligation_unbound', ('必保义务 ob01 尚未承载', '同一问题集原样重现'),
      # bind 对「必保义务进 unbound」的稿是合法返回（owner 路由在案），拦下它的
-     # 是 stage4 compile 的义务覆盖 Guard——R3 的回派规则正是把这类问题按
-     # unbound.owner 回 body_design／preserve。
+     # 是 stage4 compile 的义务覆盖 Guard——R3 的回派规则把这类问题按
+     # unbound.owner 回 body_design／preserve；粘性故障下回派修订后原样复现，
+     # 按item停（issues 记录在案）。
      lambda repo: (repo.path('stage4/grounding/semantic_binding.json').is_file()
                    and repo.path('stage4/acceptance/guard/compile.json').is_file()
+                   and repo.path('runtime/issues/design.json').is_file()
                    and not repo.path('stage4/compiled/execution_plan.json')
                    .is_file())),
-    ('duplicate_json_key', ('book 校验失败', '重复键'),
+    ('duplicate_json_key', ('book 校验失败', '重复键', '同一问题集重复即停'),
      lambda repo: not repo.path('stage2/observations/book.json').exists()),
 ])
 def test_each_injected_fault_fails_fast_at_its_mechanical_gate(
         tmp_path, fault, signature, disk_gate):
-    """五类脚本化模型式错误各自在真实链入口被 typed 机械闸拦下（R3 的修复对象）。"""
+    """五类脚本化模型式错误各自在真实链入口被 typed 机械闸拦下（R3 修复对象）。
+
+    R3 起粘性故障先经有界修订（原轮＋一次修订轮），修订后原样复现才停——
+    停止消息携带 typed 问题，且不再无限付费（详见
+    `tests/test_str06_r3_selfheal.py` 的修订成功正例）。"""
     runner, repo = _fault_run(tmp_path, fault, fault)
     with pytest.raises(ValueError) as excinfo:
         runner()

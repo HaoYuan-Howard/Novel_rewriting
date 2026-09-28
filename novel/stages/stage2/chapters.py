@@ -16,9 +16,12 @@
 也没有因果边。前章编译或关联失败不改变后章请求；缺失单元恢复不重购已存
 结果（重放按请求身份免费命中）。
 
-【职责边界（`R-2.3`/`R-2.12` 登记的分派）】participants／认知 holder 闭集、
+【职责边界（`R-2.3`/`R-2.12` 登记的分派）】participants 闭集在 R3（2026-09-28）
+**左移到本章验收**：请求里唯一的跨节点输入就是书级人物表，participants 引用
+表外 slug 当场就是精确 issue（同节点修订轮修复，不再攒到 compile 才爆）；
+compile 侧的闭集核对保留（发布前防御）。认知 holder／effect target 闭集、
 命题与 loop 引用闭合（本章登记表两遍解析）、场景分段生成与拍号／正式 ID
-派发归 `str06.stage2.compile`；跨章同一性归 `str06.stage2.associate`（D8）。
+派发仍归 `str06.stage2.compile`；跨章同一性归 `str06.stage2.associate`（D8）。
 本模块只验收观察的自含形状并原样落盘（I-24/I-36：只读验证，错误聚合）。
 """
 from __future__ import annotations
@@ -146,23 +149,34 @@ def _conflict(statements: dict[str, str], prop: dict, where: str,
 
 
 def compile_chapter_observation(
-    wire: Any, *, evidence_ids: Iterable[str],
+    wire: Any, *, evidence_ids: Iterable[str], chapter: int | None = None,
+    character_slugs: Iterable[str] | None = None,
 ) -> tuple[ChapterObservation | None, list[str]]:
     """第 k 章 wire → (ChapterObservation, errors)：章观察的全部 owner 机械闸。
 
     `evidence_ids` 是**本章**证据句段闭集（含第 1 章可见的 e00 段）；引用
-    本章闭集之外的段 id 即精确 issue——观察只含章内证据（D3）。wire 不被
-    修改（I-24）；错误逐条聚合，含 Resolver 的精确 issue 消息。
+    本章闭集之外的段 id 即精确 issue——观察只含章内证据（D3）。
+    `character_slugs` 是书级人物表 slug 闭集（R3 左移）：beats 的 participants
+    引用表外人物当场报 issue（措辞与 compile 的 `R-2.3` 核对一致，compile 侧
+    保留为发布前防御）。wire 不被修改（I-24）；错误逐条聚合，含 Resolver 的
+    精确 issue 消息。
     """
     errors: list[str] = []
     if not isinstance(wire, dict):
         return None, ['chapter wire 必须是 JSON object']
     resolver = EvidenceResolver(list(evidence_ids))
-    for raw in wire.get('beats') or []:
+    slugs = frozenset(character_slugs) if character_slugs is not None else None
+    for ordinal, raw in enumerate(wire.get('beats') or [], 1):
         if not isinstance(raw, dict):
             continue
+        where = f'第{chapter if chapter is not None else "?"}章拍{ordinal}'
         for issue in resolver.check_closed_set(tuple(raw.get('source_refs') or ())):
             errors.append(f'beat {raw.get("event", "")[:20]}：{issue.message}')
+        if slugs is not None:
+            for person in raw.get('participants') or []:
+                if person not in slugs:
+                    errors.append(f'{where} participants 引用未知人物 {person}'
+                                  '（人物闭集在章观察验收即查，R3 左移）')
     _chapter_handle_discipline(wire.get('beats') or [], errors)
     normalized = _normalize_registered_scopes(wire, errors)
     try:

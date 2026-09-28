@@ -5,6 +5,7 @@ from typing import Any, Literal
 
 from pydantic import Field, model_validator
 
+from contracts.invariants import OWNER_REVISION_MAX_ROUNDS
 from contracts.schema.base import FrozenModel
 from contracts.schema.common import Sha256
 
@@ -716,3 +717,113 @@ class CandidateWorkflow(NamedTuple):
     contract_identity: str
     source_identity: str
     created_at: int
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# R3 自愈（2026-09-28 裁决 1）：OwnerIssue 与机械问题的修订路由
+#
+# 【只修 typed、可定位的机械问题】路由范围限定 schema、闭集、锚点、引用闭合、
+# 关联未决与必保义务未承载；文学质量永不进入自动修复（语义保持 unver）。
+# 【两个闭轴】code 轴：未知 code 一律停（不猜路由）；owner 轴：
+# `must_keep_unbound` 的 `unbound.owner` 只认 `UNBOUND_OWNER_ROUTES` 登记的
+# 两个值（与 BIND_RULES 的 `design|grounding` 闭集同一取值面），未映射即停
+# （E-8：wire 上 `owner` 是自由 str，闭合责任落在路由表，不放给 schema 宽容）。
+# ─────────────────────────────────────────────────────────────────────────────
+
+class OwnerIssueV1(FrozenModel):
+    """一条 typed、可定位的机械问题（R3 自愈面的唯一 issue 形状）。
+
+    起点复用 `novel/stages/stage2/resolver.py::ResolverIssue` 的三格
+    （code／message／context），增补 ``item`` 作为修订定位（章序、义务 id 或
+    句柄）。``code`` 的取值面与路由在下方两张表里闭合，未知 code 由路由停。
+    """
+
+    code: str = Field(min_length=1)
+    item: str = ''
+    message: str = Field(min_length=1)
+    context: dict[str, Any] = Field(default_factory=dict)
+
+
+class OwnerIssueFileV1(FrozenModel):
+    """`runtime/issues/<owner>.json`：跨节点回派账（下游写、上游读、下游清）。
+
+    ``rounds_total`` 是该 owner **终身**已发起的修订轮数（上限
+    ``contracts.invariants.OWNER_REVISION_MAX_ROUNDS``；「每单元最多 2 轮」，
+    耗尽即停给人，不复位）；``fingerprint`` 是问题集摘要——下游再次发现同
+    指纹即无进展，按 item 停。``status='resolved'`` 由复验通过的下游回写，
+    轮数与指纹留账供监控面读取。
+    """
+
+    schema_version: Literal[1] = 1
+    #: 被要求修订的 owner（runner 词汇：associate／design／preserve）。
+    owner: str = Field(min_length=1)
+    #: 修订目标节点 id（路由表 `revise_upstream:<节点>` 的落点）。
+    node: str = Field(min_length=1)
+    #: 发现问题的下游节点 id（回派由它发起、复验由它清账）。
+    raised_by: str = Field(min_length=1)
+    status: Literal['open', 'resolved']
+    rounds_total: int = Field(ge=0, le=OWNER_REVISION_MAX_ROUNDS)
+    fingerprint: str = Field(min_length=1)
+    issues: tuple[OwnerIssueV1, ...] = Field(min_length=1)
+    updated_at: int = Field(ge=0)
+
+
+def owner_issues_rel(owner: str) -> str:
+    """跨节点回派账的唯一落点（runtime 家族，非版本化书产物）。"""
+    return f'runtime/issues/{owner}.json'
+
+
+#: issue code 闭集：前四码逐字复用 Resolver 的精确码（R3 起点），后三码是
+#: 自愈面新增的归并码。扩码必须同批更新路由表与守卫测试（未知 code 一律停）。
+OWNER_ISSUE_CODES: Final = (
+    'unknown_segment',     # 引用了闭集之外的句段 id（Resolver）
+    'missing_literal',     # 逐字锚在所引句段内不存在（Resolver）
+    'ambiguous_literal',   # 逐字锚出现多次、无法唯一定位（Resolver）
+    'anchor_conflict',     # 逐字锚命中分散在多个句段（Resolver）
+    'schema_violation',    # wire 形状／协议字面量／重复键（同节点）
+    'association_undecided',   # 关联未决（D8）：回派 associate
+    'must_keep_unbound',   # 必保义务未承载：按 unbound.owner 回 body_design/preserve
+)
+
+#: code → `revise_self`｜`revise_upstream:<节点>`｜（未登记即 stop）。
+#: `revise_upstream:unbound_owner` 是占位：目标节点按 issue 携带的
+#: `unbound.owner` 经 `UNBOUND_OWNER_ROUTES` 解析，未映射即停（owner 轴闭合）。
+OWNER_ISSUE_ROUTES: Final[dict[str, str]] = {
+    'unknown_segment': 'revise_self',
+    'missing_literal': 'revise_self',
+    'ambiguous_literal': 'revise_self',
+    'anchor_conflict': 'revise_self',
+    'schema_violation': 'revise_self',
+    'association_undecided': 'revise_upstream:str06.stage2.associate',
+    'must_keep_unbound': 'revise_upstream:unbound_owner',
+}
+
+#: `UnboundEntry.owner` → 回派目标节点（取值面与 BIND_RULES 的 design|grounding
+#: 闭集一致；wire 字段保持 str，闭合责任在本表，未映射即停）。
+UNBOUND_OWNER_ROUTES: Final[dict[str, str]] = {
+    'design': 'str06.stage4.body_design',
+    'grounding': 'str06.stage4.preserve',
+}
+
+
+def route_owner_issue(code: str, *, unbound_owner: str = '') -> tuple[str, str]:
+    """一条 issue 的修订路由：``(action, target)``。
+
+    ``action`` ∈ ``{'revise_self', 'revise_upstream', 'stop'}``；``target`` 是
+    目标节点 id（revise_self 时为空串）或停止原因（stop 时）。未知 code、
+    未映射的 ``unbound_owner`` 一律 stop——机械问题路由本身不猜（E-8）。
+    """
+    route = OWNER_ISSUE_ROUTES.get(code)
+    if route is None:
+        return 'stop', f'未知问题码 {code!r}（闭集={OWNER_ISSUE_CODES}；一律停）'
+    if route == 'revise_self':
+        return 'revise_self', ''
+    target = route.partition(':')[2]
+    if target == 'unbound_owner':
+        node = UNBOUND_OWNER_ROUTES.get(unbound_owner)
+        if node is None:
+            return ('stop',
+                    f'unbound.owner {unbound_owner!r} 未映射（闭集='
+                    f'{tuple(UNBOUND_OWNER_ROUTES)}；一律停）')
+        return 'revise_upstream', node
+    return 'revise_upstream', target

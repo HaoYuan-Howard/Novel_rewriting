@@ -25,7 +25,8 @@
 ``fault_sitecustomize_source()`` 写出的 sitecustomize（PYTHONPATH）＋环境门
 （``NOVEL_STR06_FAULT``）替换 ``novel.stages.chain.DeepSeekTransport``——与
 `tests/test_str06_product_entry.py` 的 B5 注入同一形状。R0 只验证「注入确实产生
-typed 机械失败」，不接修订逻辑。
+typed 机械失败」；R3 起复用本底座验证修订（``fault_once=True`` 时受影响 owner
+的首响应带故障、修订轮返回干净 wire——「改对了」的脚本化模型）。
 """
 from __future__ import annotations
 
@@ -88,24 +89,55 @@ class FaultTransport:
     """按故障路由的假 transport：wires 走 JSON 面，多键故障返回原始坏文本。
 
     复用 `tests/test_str06_body.py::_RoutingTransport` 的路由嗅探与正文/楔子
-    应答（同一份 wires 形状），只在 JSON 面上施加故障。
+    应答（同一份 wires 形状），只在 JSON 面上施加故障。``fault_once=True``
+    时故障只施加到受影响 owner 的**首次**响应——修订轮（R3）拿到干净 wire，
+    供「修订成功走完全链」的正例；默认持续施加（无进展停止的反例）。
     """
 
-    def __init__(self, wires, fault=None):
+    def __init__(self, wires, fault=None, fault_once=False):
         from tests.test_str06_body import _RoutingTransport
 
+        self._wires = wires
+        self._clean_wires = apply_fault(wires, None)
         self._inner = _RoutingTransport(apply_fault(wires, fault))
         self.fault = fault
+        self.fault_once = fault_once
+        self._served_faulty: set[str] = set()
 
     @property
     def calls(self) -> list[str]:
         return self._inner.calls
 
+    def _owner_of(self, request) -> str:
+        return self._inner._owner(request)
+
+    def _send_clean(self, request):
+        saved = self._inner.wires
+        self._inner.wires = self._clean_wires
+        try:
+            return self._inner.send(request)
+        finally:
+            self._inner.wires = saved
+
     def send(self, request):
         from novel.llm.transport import ChatResponse
 
-        if self.fault == 'duplicate_json_key' and \
-                self._inner._owner(request) == 'book':
+        owner = self._owner_of(request)
+        if (self.fault_once and self.fault == 'obligation_unbound'
+                and owner == 'design' and '【修订要求】' in request.user):
+            # 回派修订轮的脚本化「改对了」：design 补一个承载拍，bind 的输入
+            # 随之变化（新请求身份）→ 重问拿到干净承载 wire——跨节点回派因此
+            # 能靠修订走完全链（R3 完成标准）。
+            saved = self._inner.wires
+            self._inner.wires = _revised_design_wires(self._wires)
+            try:
+                return self._inner.send(request)
+            finally:
+                self._inner.wires = saved
+        if self.fault == 'duplicate_json_key' and owner == 'book':
+            if self.fault_once and 'book' in self._served_faulty:
+                return self._send_clean(request)
+            self._served_faulty.add('book')
             self._inner.calls.append('book')
             return ChatResponse(
                 content='{"protocol_version": "stage2-observation-v1",'
@@ -113,10 +145,39 @@ class FaultTransport:
                 finish_reason='stop',
                 usage={'prompt_tokens': 10, 'completion_tokens': 10},
                 model='fake')
+        if self.fault_once and owner in _FAULT_TARGET_OWNERS.get(self.fault, ()):
+            if owner in self._served_faulty:
+                return self._send_clean(request)   # 修订轮：模型「改对了」
+            self._served_faulty.add(owner)
         return self._inner.send(request)
 
 
-def install_fault_transport(fault: str):
+#: 每类故障受影响的 owner（fault_once 的施加面）。
+_FAULT_TARGET_OWNERS = {
+    'evidence_out_of_range': ('book',),
+    'unknown_slug': ('ch01',),
+    'missing_pairing': ('associate',),
+    'obligation_unbound': ('bind',),
+    'duplicate_json_key': ('book',),
+}
+
+
+def _revised_design_wires(wires: dict) -> dict:
+    """`obligation_unbound` 回派修订轮的 design wire：补一个必保义务承载拍。
+
+    复制 sc01 首拍为承载拍（改事件与意图文本）：设计语义真的变了——bind 的
+    投影闭集随之变化（新请求身份），干净 bind wire（ob01→sc01#b02）照常合法。
+    """
+    revised = deepcopy(apply_fault(wires, None))
+    scene = revised['design']['scenes'][0]
+    carrier = deepcopy(scene['beats'][0])
+    carrier['event'] = '修订补拍：为必保义务补一个承载位'
+    carrier['dramatic_intent'] = '补承载'
+    scene['beats'].append(carrier)
+    return revised
+
+
+def install_fault_transport(fault: str, fault_once: bool = False):
     """把 FaultTransport 挂上生产付费缝（sitecustomize 的注入点）。
 
     `novel.stages.chain` 构造 `PaidRequestSession` 时唯一读取的 transport 工厂
@@ -126,7 +187,7 @@ def install_fault_transport(fault: str):
     from novel.stages import chain as _chain
 
     wires = looped_full_chain_wires()
-    _chain.DeepSeekTransport = lambda cfg: FaultTransport(wires, fault)
+    _chain.DeepSeekTransport = lambda cfg: FaultTransport(wires, fault, fault_once)
     return fault
 
 

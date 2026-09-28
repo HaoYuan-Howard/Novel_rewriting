@@ -36,7 +36,7 @@ from contracts.invariants import (
 )
 from contracts.schema import ARTIFACTS, artifact_spec
 from contracts.schema.orchestration import (
-    ArtifactState, NovelOverview, OverviewSummary, StageState,
+    ArtifactState, NovelOverview, OverviewSummary, OwnerIssueState, StageState,
 )
 from novel import paths, prov
 from novel.errors import ArtifactUnreadable, UpstreamMissing
@@ -589,6 +589,37 @@ def readonly_ctx(novel_dir: Path, node: str, code: str) -> RunContext:
                       readonly=True)
 
 
+def _owner_issue_states(novel_dir: Path) -> list['OwnerIssueState']:
+    """读盘上 open 的跨节点修订问题（R3；`runtime/issues/<owner>.json`）。
+
+    resolved 不进投影（留账不是待修订）；文件损坏即显式拒绝——它是续跑判定
+    的输入，静默当「没有问题」会把修订循环变成静默跳过（I-34）。
+    """
+    import json as _json
+
+    from contracts.schema.workflow import OwnerIssueFileV1
+
+    states: list[OwnerIssueState] = []
+    issues_dir = novel_dir / 'runtime' / 'issues'
+    if not issues_dir.is_dir():
+        return states
+    for path in sorted(issues_dir.glob('*.json')):
+        try:
+            record = OwnerIssueFileV1.model_validate(
+                _json.loads(path.read_text(encoding='utf-8')))
+        except ValueError as exc:
+            raise ValueError(
+                f'回派账 {path.name} 形状损坏：{exc}；拒绝当作「没有问题」继续，'
+                '先修复或删除该记录再续跑') from exc
+        if record.status != 'open':
+            continue
+        states.append(OwnerIssueState(
+            owner=record.owner, node=record.node, raised_by=record.raised_by,
+            rounds_total=record.rounds_total,
+            codes=sorted({issue.code for issue in record.issues})))
+    return states
+
+
 def overview_at(novel_dir: Path, code: str) -> NovelOverview:
     """用调用方已经冻结的只读坐标构造完成度。
 
@@ -619,6 +650,7 @@ def overview_at(novel_dir: Path, code: str) -> NovelOverview:
         chapters=stage1_chapter_count(chapter_store),
         stages=stages,
         stage5_legacy_paths=legacy,
+        owner_issues=_owner_issue_states(novel_dir),
         summary=overview_summary(stages),
     )
 
@@ -697,6 +729,10 @@ def resume_verdict(
     AgentRun 的单步 operator 只能再经 :func:`operator_redo_flags` 证明存在唯一的
     canonical 重放参数，且每执行一步后重新采快照，才允许执行其中一小部分 `redo`。
 
+    R3（2026-09-28）：盘上 open 的 typed issue 记录（`runtime/issues/`）指向
+    本节点时判 `owner_revision` REDO——它先于新鲜度分支（问题是下游报告的
+    机械缺陷，不是上游变了），执行通道见 :func:`operator_redo_flags`。
+
     F8c：旧链节点（stage2.analyze／characters／blueprint、stage4.design／plan、
     stage5.review／write、stage6／stage7 旧键）的专属分支随旧链退役删除——它们
     已不在 `NODES`，由下面 `spec is None` 早退覆盖；剩下的判定全部按 `spec` 通用派生。
@@ -711,6 +747,20 @@ def resume_verdict(
         return RESUME_LEGACY, (
             '旧 Stage5 契约不兼容：' + ', '.join(st.legacy_paths)
             + '。它们是只读历史证据，不会当成 missing 或触发静默付费重跑')
+
+    # R3 跨节点回派（2026-09-28）：盘上有 open 的 typed issue 记录指向本节点时，
+    # 它按 owner 修订重跑——**即使本节点产物存在且新鲜**（问题不是新鲜度，是
+    # 下游已经报告的机械缺陷）。此判定先于一切存在性/新鲜度分支；普通队列对
+    # REDO 仍关闭式停止，AgentRun 单步 operator 经登记的 owner_revision 策略执行。
+    # （`getattr` 只为测试里不带该格的 SimpleNamespace 概览——正式模型恒带默认空表。）
+    issue = next((i for i in getattr(ov, 'owner_issues', ()) if i.node == node), None)
+    if issue is not None:
+        from contracts.invariants import OWNER_REVISION_MAX_ROUNDS
+        return RESUME_REDO, (
+            f'owner_revision：{issue.raised_by} 报告 typed 机械问题'
+            f'（{", ".join(issue.codes)}），修订轮 {issue.rounds_total}/'
+            f'{OWNER_REVISION_MAX_ROUNDS}——本节点产物即使新鲜也按 owner 修订'
+            '重跑；修订要求随 `runtime/issues/` 记录进请求身份')
 
     # ⭐ 轮次编号产物：**它有自己的账，不看 stage 级 `done`**。
     #
@@ -884,10 +934,11 @@ def operator_redo_flags(ov: NovelOverview, node: str) -> tuple[str, ...] | None:
     补齐。
 
     F8c：旧链的 ``review``（Stage5 Review 轮次面）与 ``stale_chapters``
-    （`stage5.write --chapters`）策略随旧链退役删除——现役节点只登记
-    ``canonical``，`contracts/invariants.py::OPERATOR_REDO_STRATEGIES`
-    的取值面同批收敛为 `('canonical',)`。下面那条断言因此从「挡未登记策略」
-    收紧为「除 canonical 外一律当场炸」：节点表若再出现旧策略名，红在这里，
+    （`stage5.write --chapters`）策略随旧链退役删除。R3（2026-09-28）新增
+    ``owner_revision``：只认**盘上 open 的 typed issue 记录**证明的修订重跑
+    （`resume_verdict` 的 owner_revision 分支），同样只经默认 flags 重跑本节点；
+    stale／unknown 等其余 REDO 面对该策略仍然关闭——修订重跑不是新鲜度重采的
+    后门。未登记策略名一律当场炸：节点表若再出现闭集外的名字，红在这里，
     不会静默走回猜 flags 的老路。
     """
     spec = NODES.get(node)
@@ -899,6 +950,12 @@ def operator_redo_flags(ov: NovelOverview, node: str) -> tuple[str, ...] | None:
     verdict, _why = resume_verdict(ov, node)
     if verdict != RESUME_REDO:
         return None
+
+    if strategy == 'owner_revision':
+        # R3：只有 open issue 指向本节点才可自动修订重跑；verdict 的 REDO 若来自
+        # 新鲜度（无 open issue），该策略关闭——不把修订通道当重采后门。
+        return () if any(issue.node == node
+                         for issue in getattr(ov, 'owner_issues', ())) else None
 
     artifacts = artifacts_for_node(ov, node)
     if not _consumed_redo_surface(artifacts):

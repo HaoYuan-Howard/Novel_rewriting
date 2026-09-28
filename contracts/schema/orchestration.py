@@ -2263,6 +2263,20 @@ class OverviewSummary(StrictModel):
     latest_mtime: int | None
 
 
+class OwnerIssueState(StrictModel):
+    """R3 自愈：盘上仍 open 的跨节点修订问题投影（`runtime/issues/<owner>.json`）。
+
+    只投影响调度判定的格子（完整问题清单在记录文件里，监控面按需另读）；
+    resolved 记录不进本投影——它是历史留账，不是待修订状态。
+    """
+
+    owner: str = Field(min_length=1)
+    node: str = Field(min_length=1)
+    raised_by: str = Field(min_length=1)
+    rounds_total: int = Field(ge=0)
+    codes: list[str] = Field(min_length=1)
+
+
 class NovelOverview(StrictModel):
     """一本书跑到哪了。**由产物存在性 + 来源新鲜度判定，不靠进度文件**（`R-14.1`）。"""
 
@@ -2278,6 +2292,10 @@ class NovelOverview(StrictModel):
 
     #: 旧 v1 `stage5/deep|shallow` 盘面的只读证据路径；空列表 = 没有 legacy。
     stage5_legacy_paths: list[str] = Field(default_factory=list)
+
+    #: R3：open 的 owner 修订问题（空列表 = 没有待修订回派）。只服务续跑判定
+    #: 与监控投影，不改变产物完成度语义。
+    owner_issues: list[OwnerIssueState] = Field(default_factory=list)
 
     summary: OverviewSummary
 

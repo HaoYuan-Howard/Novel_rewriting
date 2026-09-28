@@ -1650,12 +1650,15 @@ NODE_WRITE_EFFECTS: Final = {}
 #: AgentRun 单步 operator 可登记的自动 REDO 策略（取值面，闭集）。
 #: ⚠ F8c 收敛：`stale_chapters`（旧 `stage5.write --chapters` 的章行导出）与
 #: `review`（Stage5 Review 轮次面）两个策略随旧链退役删除，其使用者（旧节点键）
-#: 已整体移入 `RETIRED_NODES`；现役 `NODES` 只登记 `canonical`。取值面随之收敛
-#: 为一项——多留一个没人登记的名字，就是给「猜一组 flags」留一道门（判据 32：
-#: 没人用的取值与没人查的约束同形）。将来确有两种合法重放参数时，先有消费者
-#: 再加名字，不为预留扩大闭集。
+#: 已整体移入 `RETIRED_NODES`。R3（2026-09-28）为跨节点回派新增 `owner_revision`
+#: ——只允许由**盘上 open 的 typed issue 记录**（`runtime/issues/<owner>.json`）
+#: 证明的修订重跑；它与 `canonical` 一样只经默认 flags 重跑本节点，不猜参数。
+#: 多留一个没人登记的名字，就是给「猜一组 flags」留一道门（判据 32：没人用的
+#: 取值与没人查的约束同形）。将来确有两种合法重放参数时，先有消费者再加名字，
+#: 不为预留扩大闭集。
 OPERATOR_REDO_STRATEGIES: Final = (
     'canonical',          # 默认 flags 会完整重建本节点当前正式输出
+    'owner_revision',     # R3：下游 typed issue 回派的 owner 修订重跑（open 记录证明）
 )
 
 
@@ -1663,6 +1666,11 @@ WORKFLOW_ROLE_CONTRACT: Final = 'pipeline-cost-latency-v2'
 WORK_UNIT_EXECUTOR_MAX_CONTENT_CALLS: Final = 4
 WORK_UNIT_MAX_DELIVERY_ATTEMPTS: Final = 4
 WORK_UNIT_GRANT_ADDITIONS: Final = (1, 2, 3, 4)
+#: R3 自愈（2026-09-28 裁决 1）：同一 owner 的**自动付费修订轮**上限。
+#: 「每单元最多 2 轮，同一问题集重复即停」——ask_json 的同节点修订内容轮与
+#: 跨节点回派（`runtime/issues/<owner>.json` 的 `rounds_total`）共用本上限；
+#: 耗尽即停给人（owner patch／人工重跑），不隐式扩大授权。
+OWNER_REVISION_MAX_ROUNDS: Final = 2
 #: 整书级付费内容调用总闸（2026-09-15 全自动裁决）。
 #: 工作单元额度按 `(node, scope)` 各自记账，防不住跨单元的总量失控；本闸在
 #: `reserve` 时对整本书的**全部**内容调用合账设绝对上限。量级依据：正常完成
@@ -1872,6 +1880,7 @@ NODES: Final[dict[str, NodeSpec]] = {
         'stage2', 'R-2', True,
         'Stage2 跨章关联（同一命题、同维状态、悬念配对、跨章因果与续场，D8）',
         flags=('--check-only',),
+        operator_redo='owner_revision',
         produces=('stage2/observations/associate.json',),
         lifecycle=NodeLifecycleSpec(
             'book', 'book 与 chapters 观察的句柄及最小文本（compiler 投影）',
@@ -1894,6 +1903,7 @@ NODES: Final[dict[str, NodeSpec]] = {
     'str06.stage4.preserve': NodeSpec(
         'stage4', 'R-5', True, 'Stage4 Preserve（保存策略义务）与 ReconstructionBrief 投影',
         flags=('--check-only',),
+        operator_redo='owner_revision',
         produces=('runtime/preserve_checkpoint.json',
                   'stage4/grounding/reconstruction_brief.json'),
         lifecycle=NodeLifecycleSpec(
@@ -1904,6 +1914,7 @@ NODES: Final[dict[str, NodeSpec]] = {
     'str06.stage4.body_design': NodeSpec(
         'stage4', 'R-5', True, 'Stage4 目标故事与导演说明设计（BodyDesign）',
         flags=('--check-only',),
+        operator_redo='owner_revision',
         produces=('stage4/design/body_design.json',),
         lifecycle=NodeLifecycleSpec(
             'book', 'Preserve checkpoint、身份投影与 Characters v4', 'executor', 'none',

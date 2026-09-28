@@ -135,7 +135,11 @@ class _AcceptingAsk:
 
     def __call__(self, owner: str, prompt: str, validate):
         errors = validate(deepcopy(self.wires[owner]))
-        assert not errors, (owner, errors)
+        if errors:
+            # R3 左移后，机械问题（含 associate 的 compile 干跑未决项）在 owner
+            # 验收即报；测试 fake 以 ValueError 呈现，与生产 ask_json 的修订
+            # 停止路径同型（本 fake 不带修订循环，问题即终态）。
+            raise ValueError(f'{owner} 校验失败：{errors}')
         self.prompts[owner] = prompt
         return deepcopy(self.wires[owner]), synthetic_ref(owner, prompt)
 
@@ -430,7 +434,10 @@ def test_later_confirmation_does_not_rewrite_earlier_facts(tmp_path):
 
 
 def test_dangling_cross_chapter_reference_stays_undecided_and_blocks(tmp_path):
-    """缺项保持未决：悬空跨章引用没有配对 → 拒绝发布并按 item 报告，不落半份。"""
+    """缺项保持未决：悬空跨章引用没有配对 → 拒绝发布并按 item 报告，不落半份。
+
+    R3 左移：未决在 associate 验收的 compile 干跑即报（作为它自己的问题），
+    canonical 照旧不落半份；compile 侧的拒绝发布保留为防御（同判据）。"""
     wires = _full_stage2_wires()
     wires['associate']['same_proposition'] = []  # ch3 对 p_hide 的引用悬空
     repo = Str06Repository(tmp_path / 'dangling')
@@ -448,7 +455,7 @@ def test_dangling_cross_chapter_reference_stays_undecided_and_blocks(tmp_path):
         '未决时不写半份 canonical'
     assert not (tmp_path / 'dangling/stage2/blueprints/chapter_blueprints.json').exists()
     status = repo.read('runtime/workflow_status.json')
-    assert status['failed_node'] == 'str06.stage2.compile'
+    assert status['failed_node'] == 'str06.stage2.associate'
 
 
 def test_unpaired_cross_chapter_loop_close_is_undecided(tmp_path):

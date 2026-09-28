@@ -133,6 +133,9 @@ _WITHHELD: dict[str, str] = {
     'OPERATOR_REDO_STRATEGIES': (
         'AgentRun 对 REDO 的内部关闭式重放策略；前端只消费 OperatorNext '
         '已经判定出的 exact flags 与 execution token，不自行选择或重算策略'),
+    'OWNER_REVISION_MAX_ROUNDS': (
+        'R3 自动修订轮上限只由付费边界与回派账强制；前端显示后端 issue 记录里'
+        '的 rounds_total 投影，不自行判断剩余额度'),
     'OPERATOR_NEXT_STATES': (
         'OperatorNext 响应自身已携严格状态；它是只读调度结果，'
         '不是 /api/enums 供界面构造的动作选项'),

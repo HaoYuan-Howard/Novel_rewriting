@@ -58,7 +58,10 @@ from contracts.invariants import (
 from contracts.schema.grounding import OutputConstraints
 from contracts.schema.hook import HookConstraints, HookReceipt
 from contracts.schema.observation import STAGE2_OBSERVATION_PROTOCOL
-from contracts.schema.workflow import STR06_RUNTIME_CONFIG
+from contracts.schema.workflow import (
+    OWNER_REVISION_MAX_ROUNDS, STR06_RUNTIME_CONFIG, OwnerIssueV1,
+    route_owner_issue,
+)
 from novel.config import Config, load_config
 from novel.llm.paid_requests import (
     ExecutionError, PaidRequestSession, PurchaseRequired, AdoptionRef, digest,
@@ -78,6 +81,10 @@ from novel.stages.stage2 import (
     chapter_observation_prompt, character_core_view, compile_associate_observation,
     compile_book_observation, compile_chapter_observation, compile_name_structure,
     compile_source_truth, associate_observation_prompt, project_association_space,
+)
+from novel.stages.owner_revision import (
+    OwnerRevisionRequired, OwnerRevisionStop, discover_owner_issues,
+    open_issue_record, resolve_owner_issues, revision_prompt_for_owner,
 )
 from novel.stages.stage4 import (
     assemble_binding, assemble_body_design, assemble_hook_design,
@@ -264,8 +271,9 @@ def run_chapters(ctx: ChainContext) -> dict:
                                             evidence=chapter_evidence)
         wire, ch_ref = ctx.ask(
             f'ch{no:02d}', prompt,
-            lambda w, ev=chapter_evidence: compile_chapter_observation(
-                w, evidence_ids=frozenset(ev))[1])
+            lambda w, ev=chapter_evidence, n=no: compile_chapter_observation(
+                w, evidence_ids=frozenset(ev), chapter=n,
+                character_slugs=frozenset(book.characters))[1])
         observation, errors = compile_chapter_observation(
             wire, evidence_ids=frozenset(chapter_evidence))
         if errors:
@@ -317,17 +325,35 @@ def run_associate(ctx: ChainContext) -> dict:
 
     输入是 compiler 从 book 与 chapters 观察投影的句柄闭集及最小文本；输出观察
     wire 落 `stage2/observations/associate.json`。缺项、歧义、冲突保持未决——
-    未决项由 compile 拒绝发布并按 item 报告，本节点不默认合并也不默认不同。
-    机械闸（闭集、自指、跨章形状）在 owner 引擎里，失败即停在该 owner（免费
-    修复，不重购）。
+    **R3 左移**：验收时做一次 compile 干跑，未决项作为本节点自己的问题（同节点
+    修订内容轮修复，不再攒到 compile 才爆）；compile 侧的未决拒绝发布保留
+    （崩溃窗口／单节点重跑／owner patch 后的防御）。跨节点回派的 open 记录
+    在案时，修订要求并入 prompt（原请求＋上一版＋typed 问题）。
     """
     repository = ctx.repository
     book = repository.read_model('stage2/observations/book.json')
     chapters = _read_chapter_observations(repository, ctx.chapters)
+    # 干跑是校验面（不是生产输入）：names 经 inspect 读（剥掉盘上 `_provenance`），
+    # 不记来源边——校验读不成 associate 的生产依赖。
+    _names_payload = repository.inspect('stage2/observations/names.json')
+    names = NamesObservation.model_validate(
+        {k: v for k, v in _names_payload.items() if k != '_provenance'})
+    evidence = build_evidence(ctx.chapters, ctx.hook_copy)
     space = project_association_space(book, chapters)
-    prompt = associate_observation_prompt(space)
-    wire, associate_ref = ctx.ask(
-        'associate', prompt, lambda w: compile_associate_observation(w, space)[1])
+    prompt = revision_prompt_for_owner(
+        repository, 'associate', associate_observation_prompt(space),
+        'stage2/observations/associate.json')
+
+    def _validate(w):
+        observation, errors = compile_associate_observation(w, space)
+        if errors:
+            return errors
+        outcome = compile_source_truth(book=book, chapters=chapters, names=names,
+                                       associate=observation, evidence=evidence)
+        return [f'关联未决（compile 干跑，未决项归本节点修复）：{message}'
+                for message in outcome.undecided]
+
+    wire, associate_ref = ctx.ask('associate', prompt, _validate)
     observation, errors = compile_associate_observation(wire, space)
     if errors:
         raise ValueError(errors)
@@ -354,8 +380,10 @@ def run_compile(ctx: ChainContext) -> dict:
 
     Characters 与 Blueprint 两份真源的**唯一 writer**（S2-5/I-25）：四份观察 +
     证据句段 → 同一结果一次成形后落盘（来源账边记录四份观察）；fold 读数随发
-    （`R-2.17` 度量不是门）。存在未决项时**拒绝发布并按 item 报告**（D8）——
-    不写半份 canonical，恢复走 owner patch 或 associate 定向修订。
+    （`R-2.17` 度量不是门）。存在未决项时**拒绝发布**（D8）——R3 起未决项按
+    `association_undecided` 回派 associate：写 `runtime/issues/associate.json`
+    并抛 `OwnerRevisionRequired`（无进展／额度耗尽按 item 停）；复验通过时
+    回写 resolved。不写半份 canonical。
     """
     repository = ctx.repository
     book = repository.read_model('stage2/observations/book.json')
@@ -366,10 +394,12 @@ def run_compile(ctx: ChainContext) -> dict:
     outcome = compile_source_truth(book=book, chapters=chapters, names=names,
                                    associate=associate, evidence=evidence)
     if outcome.undecided:
-        raise ValueError(
-            f'存在 {len(outcome.undecided)} 项未决，拒绝发布 canonical（D8；'
-            '恢复走 owner patch 或 associate 定向修订）：'
-            + '；'.join(outcome.undecided))
+        discover_owner_issues(
+            repository, raised_by='str06.stage2.compile', owner='associate',
+            node='str06.stage2.associate',
+            issues=[OwnerIssueV1(code='association_undecided', item='',
+                                 message=message)
+                    for message in outcome.undecided])
     if outcome.errors:
         raise ValueError(f'compile 机械缺陷：{outcome.errors}')
     assert outcome.characters is not None and outcome.blueprint is not None
@@ -379,6 +409,8 @@ def run_compile(ctx: ChainContext) -> dict:
                      owners=('compile',))
     repository.write('stage2/acceptance/fold.json', outcome.fold,
                      owners=('compile',))
+    resolve_owner_issues(repository, owner='associate',
+                         raised_by='str06.stage2.compile')
     return {'characters': len(outcome.characters.characters),
             'initial_state': len(outcome.characters.initial_state),
             'chapters': len(outcome.blueprint.chapters),
@@ -394,9 +426,11 @@ def run_preserve(ctx: ChainContext) -> dict:
     chars = repository.read_model('stage2/characters/characters.json')
     core = chars.core_view()
     blueprint = repository.read_model('stage2/blueprints/chapter_blueprints.json')
-    preserve_prompt = pack_prompt(PRESERVE_RULES,
-                                  characters=core.model_dump(mode='json'),
-                                  blueprints=blueprint.model_dump(mode='json'))
+    preserve_prompt = revision_prompt_for_owner(
+        repository, 'preserve',
+        pack_prompt(PRESERVE_RULES, characters=core.model_dump(mode='json'),
+                    blueprints=blueprint.model_dump(mode='json')),
+        'runtime/preserve_checkpoint.json')
 
     def preserve_compile(w):
         return assemble_preserve(w, policy_id='preserve-default', policy_version=3,
@@ -430,9 +464,12 @@ def run_body_design(ctx: ChainContext) -> dict:
     brief, identities = project_brief(checkpoint, core, blueprint)
     constraints = OutputConstraints(target_chapter_count=len(ctx.chapters),
                                     total_length_budget=ctx.budget)
-    design_prompt = pack_prompt(DESIGN_RULES, brief=brief.model_dump(mode='json'),
-                                identities=[i.model_dump(mode='json') for i in identities],
-                                constraints=constraints.model_dump(mode='json'))
+    design_prompt = revision_prompt_for_owner(
+        repository, 'design',
+        pack_prompt(DESIGN_RULES, brief=brief.model_dump(mode='json'),
+                    identities=[i.model_dump(mode='json') for i in identities],
+                    constraints=constraints.model_dump(mode='json')),
+        'stage4/design/body_design.json')
 
     def design_compile(w):
         return assemble_body_design(
@@ -513,12 +550,21 @@ def run_hook_design(ctx: ChainContext) -> dict:
 # ─── stage4 compile（Guard＋WriterBookIR＋HookContext，确定性） ───────────────
 
 def run_compile_stage4(ctx: ChainContext) -> dict:
+    """`str06.stage4.compile`：确定性编译（ExecutionPlan／Guard／IR／HookContext）。
+
+    R3：必保义务未承载（bind 的合法 unbound 返回在此被义务覆盖 Guard 拦下）按
+    `must_keep_unbound` 回派——`unbound.owner` 经路由表闭集解析回
+    body_design（design）或 preserve（grounding），写 `runtime/issues/<owner>.json`
+    并抛 `OwnerRevisionRequired`；未映射 owner 显式停（E-8）。复验通过时回写
+    resolved。
+    """
     repository = ctx.repository
     graph = repository.read_model('stage4/design/presentation_graph.json')
     binding = repository.read_model('stage4/grounding/semantic_binding.json')
     chars = repository.read_model('stage2/characters/characters.json')
     plan, errors = compile_execution_plan(graph, binding)
     repository.write('stage4/acceptance/guard/compile.json', {'errors': errors})
+    _backfill_must_keep_unbound(repository, binding)
     if errors:
         raise ValueError(errors)
     repository.write('stage4/compiled/execution_plan.json', plan)
@@ -551,7 +597,63 @@ def run_compile_stage4(ctx: ChainContext) -> dict:
     repository.write('stage4/acceptance/guard/report.json', guard_report)
     if problems:
         raise ValueError(problems)
+    resolve_owner_issues(repository, owner='design',
+                         raised_by='str06.stage4.compile')
+    resolve_owner_issues(repository, owner='preserve',
+                         raised_by='str06.stage4.compile')
     return guard_report
+
+
+#: 回派目标节点 → runner 词汇 owner（issue 记录文件名与修订 prompt 的键）。
+_REVISION_TARGET_OWNERS: Final[dict[str, str]] = {
+    'str06.stage2.associate': 'associate',
+    'str06.stage4.body_design': 'design',
+    'str06.stage4.preserve': 'preserve',
+}
+
+
+class _NullObligation:
+    """占位：obligation_id 不在 checkpoint 分母时按非必保处理（分母不闭合另有
+    Guard 报错，本函数不重复拦）。"""
+
+    must_preserve = False
+
+
+_NULL_OBLIGATION = _NullObligation()
+
+
+def _backfill_must_keep_unbound(repository, binding) -> None:
+    """必保义务未承载 → 按 unbound.owner 回派（E-8：owner 轴闭集外显式停）。
+
+    多个目标时按执行序先回派最早的节点；其余目标在复验后的下一轮发现里
+    继续走同一入口（每 owner 独立记轮，互不挤占额度）。
+    """
+    obligations = {o.obligation_id: o for o in binding.obligations}
+    unbound_must = [entry for entry in binding.unbound
+                    if (obligations.get(entry.obligation_id)
+                        or _NULL_OBLIGATION).must_preserve]
+    if not unbound_must:
+        return
+    grouped: dict[tuple[str, str], list[OwnerIssueV1]] = {}
+    for entry in unbound_must:
+        action, target = route_owner_issue('must_keep_unbound',
+                                           unbound_owner=entry.owner)
+        if action != 'revise_upstream':
+            raise ValueError(
+                f'必保义务 {entry.obligation_id} 未承载且无法路由（{target}）；'
+                'owner 轴闭集外一律停，不猜回派目标')
+        owner = _REVISION_TARGET_OWNERS.get(target)
+        if owner is None:
+            raise ValueError(f'回派目标 {target} 未登记 runner owner（编排缺陷）')
+        grouped.setdefault((owner, target), []).append(OwnerIssueV1(
+            code='must_keep_unbound', item=entry.obligation_id,
+            message=f'必保义务 {entry.obligation_id} 尚未承载'
+                    f'（owner={entry.owner}；{entry.reason}）',
+            context={'unbound_owner': entry.owner}))
+    for (owner, target), issues in sorted(
+            grouped.items(), key=lambda item: NODE_ORDER.index(item[0][1])):
+        discover_owner_issues(repository, raised_by='str06.stage4.compile',
+                              owner=owner, node=target, issues=issues)
 
 
 # ─── stage5 hook ─────────────────────────────────────────────────────────────
@@ -879,6 +981,23 @@ def run_node(node_id: str, ctx: ChainContext) -> dict:
     return runner(ctx)
 
 
+def _record_failure(ctx: ChainContext, node_id: str, exc: Exception) -> None:
+    """owner 停止的 run 级留痕：失败归属精确到候选节点（含 R3 回派停止）。"""
+    repository = ctx.repository
+    status: dict[str, Any] = {}
+    try:
+        status = repository.read('runtime/workflow_status.json')
+    except FileNotFoundError:
+        pass
+    status.update({'status': 'failed', 'failed_node': node_id,
+                   'failure_kind': type(exc).__name__, 'detail': str(exc)})
+    if isinstance(exc, ExecutionError):
+        # 执行设施统一错误形状：stage/node/item/phase/code/context（I-36）。
+        status.update(exc.as_status())
+        status['failed_node'] = exc.node or node_id
+    repository.write('runtime/workflow_status.json', status)
+
+
 def run_chain(ctx: ChainContext, *, through: str = 'stage4',
               node_filter: tuple[str, ...] | None = None) -> tuple[dict, str, bool]:
     """按候选节点表顺序执行到 through 腿（或 node_filter 指定节点集合）。"""
@@ -899,32 +1018,39 @@ def run_chain(ctx: ChainContext, *, through: str = 'stage4',
             raise ValueError(f'未登记的候选节点：{sorted(unknown)}')
     report: dict[str, Any] = {}
     accepted_body = False
-    for node_id in NODE_ORDER:
+    #: R3 跨节点回派：执行位置按序推进，`OwnerRevisionRequired` 把位置回跳到
+    #: 修订目标（目标必须更早且在本次选中集合内）；有界性由盘上 issue 记录
+    #: 保证（每 owner 最多 OWNER_REVISION_MAX_ROUNDS 轮、同问题集重复即停），
+    #: 这里只执行回跳、不另记第二本账（I-17）。
+    order_index = {node: index for index, node in enumerate(NODE_ORDER)}
+    index = 0
+    while index < len(NODE_ORDER):
+        node_id = NODE_ORDER[index]
         if selected is not None and node_id not in selected:
+            index += 1
             continue
         try:
             report.update(run_node(node_id, ctx))
+        except OwnerRevisionRequired as exc:
+            target = exc.node
+            if (target not in order_index or order_index[target] >= index
+                    or (selected is not None and target not in selected)):
+                # 回派目标不在本腿更早处（或不在选中集合）：单节点重跑路径，
+                # 交编排层按 issue 记录重规划（resume_verdict 判 owner_revision）。
+                _record_failure(ctx, node_id, exc)
+                raise
+            index = order_index[target]
+            continue
         except Exception as exc:
             # owner 停止：失败归属精确到候选节点，run 级状态留痕后外抛；
             # 后续节点不再执行（不继续问模型、不放行半成品）。
-            repository = ctx.repository
-            status = {}
-            try:
-                status = repository.read('runtime/workflow_status.json')
-            except FileNotFoundError:
-                pass
-            status.update({'status': 'failed', 'failed_node': node_id,
-                           'failure_kind': type(exc).__name__, 'detail': str(exc)})
-            if isinstance(exc, ExecutionError):
-                # 执行设施统一错误形状：stage/node/item/phase/code/context（I-36）。
-                status.update(exc.as_status())
-                status['failed_node'] = exc.node or node_id
-            repository.write('runtime/workflow_status.json', status)
+            _record_failure(ctx, node_id, exc)
             raise
         if node_id == 'str06.stage5.body':
             accepted_body = report.get('body_complete', False)
         if selected is None and node_id == boundary:
             break
+        index += 1
     if selected is None:
         status = FINAL_STATUS[through]
         if through == 'stage5' and not accepted_body:

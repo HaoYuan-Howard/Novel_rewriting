@@ -271,19 +271,20 @@ def test_paid_response_durable_before_validation_and_reused(tmp_path):
                                  provider='fake', sid='book')
     request = ChatRequest(model='fake', system='s', user='u', reasoning_effort='high',
                           thinking=True, json_mode=True, max_tokens=50)
-    with pytest.raises(ValueError, match='免费修复'):
+    with pytest.raises(ValueError, match='同一问题集重复即停'):
         ask_json(session, 'bind', request, lambda _: ['缺必保义务'])
-    # 跨 session、同请求，免费重新校验已购原响应。
+    # R3：原轮＋一次修订轮后同问题集停（有界，不无限付费）；跨 session、同
+    # 请求，免费重新校验已购原响应——恢复零外发。
     session2 = PaidRequestSession(repo, CostLedger(path=ledger_path(tmp_path)), transport,
                                   provider='fake', sid='book')
     assert ask_json(session2, 'bind', request, lambda _: [])[0] == {'entries': []}
-    assert transport.calls == 1
+    assert transport.calls == 2
     rows, _ = read_cost_snapshot(tmp_path)
-    assert len([r for r in rows if not r['cached']]) == 1
+    assert len([r for r in rows if not r['cached']]) == 2
     assert len([r for r in rows if r['cached']]) == 1
     assert rows[0]['completion_tokens'] == 20 and rows[0]['reasoning_tokens'] is None
-    assert rows[1]['prompt_tokens'] == rows[1]['completion_tokens'] == 0
-    assert sum(row['completion_tokens'] for row in rows) == 20
+    assert rows[2]['prompt_tokens'] == rows[2]['completion_tokens'] == 0
+    assert sum(row['completion_tokens'] for row in rows) == 40
     with pytest.raises(ValueError, match='--yes'):
         ask_json(session2, 'bind', replace(request, user='changed'), lambda _: [])
 
@@ -372,7 +373,11 @@ def test_failed_request_is_preserved_and_never_automatically_rebought(tmp_path, 
         ask_json(session, 'design', request, lambda _: [])
     with pytest.raises((ValueError, ExecutionError)):
         ask_json(session, 'design', request, lambda _: [])
-    assert transport.calls == 1
+    # R3：wire 形状失败先经一次有界修订轮（原轮＋修订轮＝2 次外发，同问题集
+    # 重复即停）；unknown 侧不自动重试，保持 1 次。第二次调用全部按请求身份
+    # 免费重放，外发数不再增长。
+    expected_calls = 1 if failure == 'transport' else 2
+    assert transport.calls == expected_calls
     rows, partial = read_cost_snapshot(tmp_path)
-    assert not partial and len([r for r in rows if not r['cached']]) == 1
+    assert not partial and len([r for r in rows if not r['cached']]) == expected_calls
     assert rows[0]['prompt_tokens'] is None and rows[0]['completion_tokens'] is None

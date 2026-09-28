@@ -160,10 +160,15 @@ def test_operator_redo_strategies_are_closed_and_explicit_per_node():
     }
     # F8a：新链登记 operator_redo 的节点 = stage1.partition（范围外）＋
     # 按章正文与装配（默认路径完整重建本节点当前正式输出）。
+    # R3（2026-09-28）：跨节点回派的三个上游 owner 登记 owner_revision——只认
+    # 盘上 open 的 typed issue 记录（runtime/issues/），不是新鲜度重采的后门。
     assert registered == {
         'stage1.partition': 'canonical',
         'str06.stage5.body': 'canonical',
         'str06.stage7.assemble': 'canonical',
+        'str06.stage2.associate': 'owner_revision',
+        'str06.stage4.preserve': 'owner_revision',
+        'str06.stage4.body_design': 'owner_revision',
     }
     assert set(registered.values()) <= set(inv.OPERATOR_REDO_STRATEGIES)
     assert all(

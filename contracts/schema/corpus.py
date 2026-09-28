@@ -57,6 +57,9 @@ ENVELOPE_LESS_JSON_RELS: frozenset[str] = frozenset({
     'stage2/acceptance/fold.json',
     'stage4/acceptance/guard/compile.json',
     'stage4/acceptance/guard/report.json',
+    # R2.8 的 WriterPacket 指标（E-6 尾账，2026-09-28 R3 批收口）：audit_only
+    # 派生读数、重算免费，与 guard 两份同族——确定性 compiler 的无信封 JSON。
+    'stage4/acceptance/packet_metrics.json',
 })
 
 
@@ -92,6 +95,9 @@ def required_current_corpus_artifacts(chapters: int) -> frozenset[str]:
         'stage4/compiled/execution_plan.json',
         'stage4/acceptance/guard/compile.json',
         'stage4/acceptance/guard/report.json',
+        # R2.8 的 WriterPacket 指标（E-6 尾账，随 R3 批收口）：成功 run 的
+        # 完整表面包含这份 audit_only 派生读数。
+        'stage4/acceptance/packet_metrics.json',
         'stage4/context/hook/hook.json',
         'stage4/ir/writer_book_ir.json',
         # str06.stage5.hook。

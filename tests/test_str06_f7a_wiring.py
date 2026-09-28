@@ -464,12 +464,16 @@ def test_same_fingerprint_failure_never_rebuys(tmp_path):
                                  allow_source_export=True, provider='fake', sid='book')
     request = _request()
     for _ in range(3):
-        with pytest.raises(ValueError, match='免费修复'):
+        with pytest.raises(ValueError, match='同一问题集重复即停'):
             ask_json(session, 'bind', request, lambda _: ['形状不合约定'])
-    assert transport.calls == 1, '同指纹失败不得重复计费'
+    # R3（2026-09-28 裁决 1）：非空但不过闸先经**一次**有界修订轮（原轮＋修订轮
+    # ＝2 次外发），修订后问题集原样重现即停；此后每次重问都按请求身份免费
+    # 重放——不再重复计费。修订轮本身如实入账（I-43）。
+    assert transport.calls == 2, '原轮＋一次修订轮后同指纹停，不无限付费'
     rows, _ = read_cost_snapshot(base)
-    # 缓存命中按 Q-11 每次记一行：1 行实付 + 2 行零 token 缓存，不重复计费。
-    assert len([r for r in rows if not r['cached']]) == 1
+    # 缓存命中按 Q-11 每次记一行：2 行实付（原轮＋修订轮）＋4 行零 token 缓存
+    # （两次重问各重放两轮），不重复计费。
+    assert len([r for r in rows if not r['cached']]) == 2
     assert all(r['prompt_tokens'] == 0 and r['completion_tokens'] == 0
                for r in rows if r['cached'])
 
