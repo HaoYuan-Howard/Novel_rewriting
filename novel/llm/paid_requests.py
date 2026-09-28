@@ -54,6 +54,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -374,6 +375,12 @@ class PaidRequestSession:
         self.retry_policy = retry_policy or TransportRetryPolicy(
             max_retries=WORK_UNIT_MAX_DELIVERY_ATTEMPTS - 1, backoff_base=2.0)
         self._units: dict[str, WorkUnitBudget] = {}
+        # R4 伴修：run 冻结的整书上限是「检查→预留」的临界区——并发 owner
+        # （stage2 章观察／stage5 正文逐章）同时进入时 check-then-act 会集体
+        # 通过同一道闸、静默超限。会话内锁把临界区串行化；持久账自身的跨进程
+        # 一致性仍由 `reserve_book_call` 的账锁保证。锁序恒为 会话→单元→整书，
+        # 两处取锁点都以本锁为最外层，不构成环。
+        self._book_gate_lock = threading.Lock()
 
     # ── Runtime 主口：一次耐久外发 ──────────────────────────────────────────
 
@@ -486,16 +493,21 @@ class PaidRequestSession:
             reservation = ContentReservation(unit.unit_id, turn.turn_id, turn.ordinal)
         else:
             # 单次运行上限从同一准入账（整书总闸持久账）派生：外发前按 attempt 判。
-            if self.book_call_ceiling is not None and self._book_used() >= self.book_call_ceiling:
-                raise _execution_error(
-                    f'{owner}：本次运行外发已达 --book-call-ceiling={self.book_call_ceiling}；'
-                    '停止生成，不静默超限',
-                    code='book_call_ceiling', node=node, item=scope, phase='reserve')
-            self._close_unadopted(unit)
-            # 首 wire 前取正式内容轮：单元上限 + 整书总闸同一把锁序结算；
-            # 冻结请求工作包随轮落 blob（SemanticRequest 层）。
-            reservation = unit.reserve(identity, run_id=self.run_id,
-                                       request_payload=request.cache_payload())
+            # ⚠ 检查→预留必须在会话锁内成对完成（R4）：并发 owner 同时读到同一
+            #   used 值会集体过闸，把「不静默超限」变成竞态超限
+            #   （`test_budget_competition_stops_at_ceiling_with_attempt_accounting`）。
+            with self._book_gate_lock:
+                if self.book_call_ceiling is not None and (
+                        self._book_used() >= self.book_call_ceiling):
+                    raise _execution_error(
+                        f'{owner}：本次运行外发已达 --book-call-ceiling={self.book_call_ceiling}；'
+                        '停止生成，不静默超限',
+                        code='book_call_ceiling', node=node, item=scope, phase='reserve')
+                self._close_unadopted(unit)
+                # 首 wire 前取正式内容轮：单元上限 + 整书总闸同一把锁序结算；
+                # 冻结请求工作包随轮落 blob（SemanticRequest 层）。
+                reservation = unit.reserve(identity, run_id=self.run_id,
+                                           request_payload=request.cache_payload())
         turn_id = reservation.turn_id
         attempts_used = len(unit.turn(turn_id).attempts)
         response = None
@@ -610,20 +622,25 @@ class PaidRequestSession:
             system=request.system, user=request.user)
 
     def _gate_attempt(self, owner, node, scope, attempt_no) -> None:
-        """同轮续发的外发闸：整书总闸持久账（unknown 也占额、重启不重置）。"""
-        if self.book_call_ceiling is not None and self._book_used() >= self.book_call_ceiling:
-            raise _execution_error(
-                f'{owner}：本次运行外发已达 --book-call-ceiling={self.book_call_ceiling}；'
-                '停止生成，不静默超限',
-                code='book_call_ceiling', node=node, item=scope, phase='reserve',
-                context={'attempt': attempt_no})
-        try:
-            reserve_book_call(self.base, self.sid,
-                              task_id=self._unit_for(owner).identity['task_id'])
-        except WorkUnitBudgetExhausted as exc:
-            raise _execution_error(str(exc), code='book_budget_exhausted',
-                                   node=node, item=scope, phase='reserve',
-                                   context={'attempt': attempt_no}) from exc
+        """同轮续发的外发闸：整书总闸持久账（unknown 也占额、重启不重置）。
+
+        检查与 +1 同在会话锁内成对完成（R4）：并发 owner 的续发不得竞态过闸。
+        """
+        with self._book_gate_lock:
+            if self.book_call_ceiling is not None and (
+                    self._book_used() >= self.book_call_ceiling):
+                raise _execution_error(
+                    f'{owner}：本次运行外发已达 --book-call-ceiling={self.book_call_ceiling}；'
+                    '停止生成，不静默超限',
+                    code='book_call_ceiling', node=node, item=scope, phase='reserve',
+                    context={'attempt': attempt_no})
+            try:
+                reserve_book_call(self.base, self.sid,
+                                  task_id=self._unit_for(owner).identity['task_id'])
+            except WorkUnitBudgetExhausted as exc:
+                raise _execution_error(str(exc), code='book_budget_exhausted',
+                                       node=node, item=scope, phase='reserve',
+                                       context={'attempt': attempt_no}) from exc
 
     def _book_used(self) -> int:
         budget = read_book_budget(self.base, self.sid)

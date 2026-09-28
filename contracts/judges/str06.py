@@ -147,7 +147,8 @@ _hard('body_withheld_literals', 'stage5',
 _hard('body_length_band', 'stage5',
       '章篇幅落在配置篇幅带内；超限只有篇幅带可披露，硬失败不披露', 'R-7.3')
 _hard('chapter_receipt_binding', 'stage5',
-      '章回执绑定章序、全书 IR、实际前文、改名前正文与请求身份', 'R-7.4')
+      '章回执绑定章序、章包摘要（写手视图/验证输入）、请求身份与改名前正文摘要',
+      'R-7.4')
 _hard('hook_mechanical', 'stage5',
       'Hook 机械验通过（POV、起笔事实时序、禁止集与 withheld 字面）', 'R-8.1')
 _hard('hook_receipt_binding', 'stage5',

@@ -101,6 +101,27 @@ def test_paid_nodes_have_check_only_recheck():
             assert '--check-only' in spec.flags, node_id
 
 
+def test_stage5_body_lifecycle_registers_packet_input_and_set_recovery():
+    """R4：`str06.stage5.body` 的生命周期如实登记章包输入与集合恢复语义（D2/B4）。
+
+    旧登记写着「WriterBookIR 与已提交章前缀（实际前文）」＋恢复入口
+    `chapter_prefix_replay`——那是 D2 之前的串行前文链语义；现役实现各章只收
+    章包投影（不读前文正文），恢复按有效提交集合只补缺章（回执＋正文＋章包
+    摘要三方绑定）。登记经 `/api/enums` 与职责表流向监控面，与实现漂移就是
+    第二套语义（I-16）；`chapter_prefix_replay` 改名后旧名不得残留在任何节点。
+    """
+    life = CANDIDATE_NODES['str06.stage5.body'].lifecycle
+    assert '章包' in life.input_workpack, life.input_workpack
+    assert '前文' not in life.input_workpack and '前缀' not in life.input_workpack
+    assert 'committed_set_recovery' in life.recovery_entries
+    assert 'chapter_prefix_replay' not in life.recovery_entries
+    for node_id, spec in CANDIDATE_NODES.items():
+        assert 'chapter_prefix_replay' not in spec.lifecycle.recovery_entries, node_id
+    # 审阅面同步集合语义：无合法候选停该章，其余章照常——不是停后续章。
+    assert '停该章' in life.review_scope, life.review_scope
+    assert '停止后续章' not in life.review_scope
+
+
 def test_artifact_table_integrity():
     rels = list(CANDIDATE_ARTIFACTS)
     assert len(rels) == len(set(rels))

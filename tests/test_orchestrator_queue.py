@@ -349,8 +349,8 @@ def test_live_invalid_blocks_the_node_without_freezing_a_default_paid_argv(
     # 队列自己的话：现役旗标面只有 --check-only，没有 0-wire 自动提升 argv。
     assert '--check-only' in blocked[0].why
     assert '没有 0-wire 自动提升 argv' in blocked[0].why
-    # 续跑判定仍给出 0 LLM 手动提升路的建议（不自动执行）。
-    assert '--revalidate' in blocked[0].why and '0 LLM' in blocked[0].why
+    # 续跑判定仍给出手动免费路的建议（不自动执行）：节点级 --check-only 免费复检。
+    assert f'`{node} --check-only`' in blocked[0].why and '免费复检' in blocked[0].why
 
 
 def test_new_chain_nodes_do_not_route_through_the_retired_admission_roster(
@@ -426,7 +426,7 @@ def test_queue_routes_names_registration_between_paid_todo_and_inbox_block(
         assert todo == [] and len(blocked) == 1
         assert blocked[0].waiting_on == Q.WAITING_ON_INBOX
         assert blocked[0].flags == [] and blocked[0].steps == []
-        assert '--revalidate' in blocked[0].why
+        assert '`str06.stage2.names --check-only`' in blocked[0].why
         return
     assert blocked == [] and len(todo) == 1
     item = todo[0]
@@ -478,7 +478,7 @@ def test_live_invalid_character_registration_blocks_associate_and_compile(
         'str06.stage2.associate', 'str06.stage2.compile']
     assert all(item.waiting_on == Q.WAITING_ON_INBOX for item in blocked)
     assert all(item.steps == [] for item in blocked)
-    assert '--revalidate' in blocked[0].why
+    assert '免费' in blocked[0].why and '--revalidate' not in blocked[0].why
 
 
 @pytest.mark.parametrize('readable', [False, True])
@@ -690,8 +690,10 @@ def test_queue_live_blueprint_invalid_has_no_default_paid_argv(
     assert '--check-only' in item.why
     assert '没有 0-wire 自动提升 argv' in item.why
     if formal_exists:
-        # 正式稿在盘上时，续跑判定给出 0 LLM 手动提升路的建议。
-        assert '--revalidate' in item.why and '0 LLM' in item.why
+        # 正式稿在盘上时，续跑判定给出手动免费路的建议（compile 确定性重跑重算）。
+        assert '确定性' in item.why and '免费' in item.why
+        # compile 不收 --check-only：建议里不得出现它的节点级复检旗标。
+        assert '`str06.stage2.compile --check-only`' not in item.why
     else:
         assert '产物不在盘上' in item.why
 

@@ -1621,7 +1621,7 @@ VALUED_FLAGS: Final = {
 #: F8a 后只剩两条纯读旗标：`--check-only`（免费复检）与 `--dry-run`。
 #: 旧链的免费但写盘一族（revalidate／apply-edit／recover-prepared…）随旧节点
 #: 整体退役；新链的免费恢复入口（saved_response／historical_adoption／
-#: owner_patch／chapter_prefix_replay／deterministic_replay）全部经同一付费
+#: owner_patch／committed_set_recovery／deterministic_replay）全部经同一付费
 #: 边界落盘，写效应即对应节点的 `produces`，无需逐旗标覆盖。
 WRITE_EFFECTS: Final = {
     '--dry-run': '',
@@ -1843,8 +1843,9 @@ NODES: Final[dict[str, NodeSpec]] = {
     # 的唯一 writer（`stage2/compiled/book_extraction.json` 派生输入退役）。
     # 恢复入口沿用候选生命周期：saved_response（本地已购行）、historical_adoption
     # （F7a 登记的跨根历史采用）、owner_patch（基线身份核验后的语义修复）、
-    # chapter_prefix_replay（章前缀免费重放）、same_context_rewrite（同 Context
-    # 有限重写）、deterministic_replay（确定性节点免费重算）。
+    # committed_set_recovery（有效提交集合恢复：只补缺章，崩溃窗口按请求身份
+    # 免费重放）、same_context_rewrite（同 Context 有限重写）、deterministic_replay
+    # （确定性节点免费重算）。
     'str06.stage2.book': NodeSpec(
         'stage2', 'R-2', True, 'Stage2 书级观察（人物候选、称谓及证据、初态、世界约束）',
         flags=('--check-only',),
@@ -1969,11 +1970,12 @@ NODES: Final[dict[str, NodeSpec]] = {
         produces=('stage5/body/ch{nn}.txt', 'stage5/acceptance/body/ch{nn}.json'),
         operator_redo='canonical',
         lifecycle=NodeLifecycleSpec(
-            'chapter', 'WriterBookIR 与已提交章前缀（实际前文）', 'executor', 'none',
-            '章级机械验（硬失败不披露放行，只有篇幅带可披露）；'
-            '原子写正文→章回执；无合法候选停止后续章',
+            'chapter', '章包（WriterBookIR 逐章确定性投影；各章独立，唯一输入面）',
+            'executor', 'none',
+            '章级机械验（硬失败不披露放行，只有篇幅带可披露）；原子写正文→章回执；'
+            '无合法候选停该章（各章独立，其余章照常；失败清单留证 runtime/body_failures.json）',
             ('stop',), ('str06.stage5.body',), 'executor:chapter',
-            ('chapter_prefix_replay', 'saved_response', 'historical_adoption',
+            ('committed_set_recovery', 'saved_response', 'historical_adoption',
              'owner_patch'), 4)),
     'str06.stage7.naming': NodeSpec(
         'stage7', 'R-10', True, 'Stage7 Naming（NameMap v5 赋值；Apply 归 assembly）',

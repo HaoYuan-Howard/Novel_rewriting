@@ -13,16 +13,22 @@ unver 披露。
 """
 from __future__ import annotations
 
+import contextlib
 import json
+import threading
 from copy import deepcopy
 
 import pytest
 
+from contracts.invariants import (
+    PIPELINE_BOOK_CONCURRENCY, PIPELINE_PROVIDER_CONCURRENCY,
+)
 from contracts.schema.observation import STAGE2_OBSERVATION_PROTOCOL
 from novel.llm.ledger import CostLedger, ledger_path
 from novel.llm.paid_requests import PaidRequestSession
 from novel.llm.transport import ChatRequest, ChatResponse
 from novel.store import Str06Repository
+from novel.stages import chain as chain_module
 from novel.stages.chain import build_evidence, run_workflow
 from novel.stages.stage2 import (
     book_observation_prompt, chapter_observation_prompt, chapter_prior_text,
@@ -325,7 +331,74 @@ def test_stage2_observation_leg_persists_observations_and_names_remount(tmp_path
     # names 的输入投影：人物表来自 book 观察（R-2.10 锚点派生的窗口可读）
     names_prompt = next(p for o, p in ask.prompts if o == 'names')
     assert 'fu_jun' in names_prompt and '云娘' in names_prompt
-    assert [owner for owner, _p in ask.prompts] == ['book', 'ch01', 'ch02', 'ch03', 'names']
+    # 章观察自 R4 起经线程池并发：book 仍在全部章之前、names 在全部章之后，
+    # 章与章之间完成顺序不定（并发不串输入，D3 请求互不依赖）。
+    owners = [owner for owner, _p in ask.prompts]
+    assert owners[0] == 'book' and owners[-1] == 'names'
+    assert sorted(owners[1:-1]) == ['ch01', 'ch02', 'ch03']
+
+
+def test_chapter_observations_share_body_slot_and_pool_concurrency(
+        tmp_path, monkeypatch):
+    """R4：逐章观察与正文写手同一并发纪律——书级＋供应商总槽内线程池并发。
+
+    旧实现是串行 for 循环且不占模型总槽：同一条付费边界长出两种纪律，
+    逐章观察会把书级/供应商容量限制整个绕开。本例用三章 Barrier 证明观察
+    真正在池里并发执行（并发峰值＝章数），且每章付费调用都发生在
+    `pipeline_model_slot` 之内、容量与 `run_body` 同一组常量（R-12.1c）。
+    """
+    real_slot = chain_module.pipeline_model_slot
+    slot_lock = threading.Lock()
+    slot_calls: list[dict] = []
+    slot_use = {'active': 0, 'peak': 0}
+
+    @contextlib.contextmanager
+    def recording_slot(novel_dir, provider, *, per_book, per_provider, **kwargs):
+        with slot_lock:
+            slot_calls.append({'provider': provider, 'per_book': per_book,
+                               'per_provider': per_provider})
+            slot_use['active'] += 1
+            slot_use['peak'] = max(slot_use['peak'], slot_use['active'])
+        try:
+            with real_slot(novel_dir, provider, per_book=per_book,
+                           per_provider=per_provider, **kwargs):
+                yield
+        finally:
+            with slot_lock:
+                slot_use['active'] -= 1
+
+    monkeypatch.setattr(chain_module, 'pipeline_model_slot', recording_slot)
+
+    parties = len(CHAPTERS)
+    barrier = threading.Barrier(parties, timeout=5)
+
+    class _GatedAsk(_AcceptingAsk):
+        """章观察 ask 在屏障处会齐：只有三章真正并发时才一起放行。"""
+
+        def __call__(self, owner: str, prompt: str, validate):
+            if owner.startswith('ch'):
+                try:
+                    barrier.wait()
+                except threading.BrokenBarrierError:
+                    pass    # 串行实现下屏障超时破裂——正是本例要抓的红
+            return super().__call__(owner, prompt, validate)
+
+    wires = {'book': _book_wire(), 'ch01': CH01_WIRE, 'ch02': CH02_VARIANT_A,
+             'ch03': CH03_WIRE, 'names': _names_wire()}
+    repo = _make_repo(tmp_path, 'slotted')
+    run_workflow(
+        repository=repo, chapters=deepcopy(CHAPTERS), hook_copy=HOOK,
+        ask=_GatedAsk(wires),
+        ask_text=lambda owner, prompt: (_ for _ in ()).throw(AssertionError('')),
+        ask_body=lambda owner, prompt: (_ for _ in ()).throw(AssertionError('')),
+        budget=800, through='stage2', node_filter=_stage2_filter(),
+        concurrency=4)
+    assert slot_use['peak'] == parties, \
+        f'三章观察应在共享总槽内并发执行（峰值 {slot_use["peak"]}≠{parties}）'
+    assert len(slot_calls) == parties, '每章付费调用各自进出一次总槽'
+    assert {c['per_book'] for c in slot_calls} == {PIPELINE_BOOK_CONCURRENCY}
+    assert {c['per_provider'] for c in slot_calls} == {PIPELINE_PROVIDER_CONCURRENCY}
+    assert {c['provider'] for c in slot_calls} == {'manual-adoption'}
 
 
 def test_prior_chapter_failure_does_not_change_later_chapter_request(tmp_path):
@@ -340,9 +413,10 @@ def test_prior_chapter_failure_does_not_change_later_chapter_request(tmp_path):
     var_ch03 = next(p for o, p in var_ask.prompts if o == 'ch03')
     assert var_ch03 == ref_ch03, '第 3 章请求与第 2 章观察内容无关（D3）'
 
-    # 编译失败：停在该章 item，已落盘的章观察保持有效（I-31/I-36）。
+    # 编译失败：单章失败隔离（R4，I-31/I-36）——ch02 停在该章 item，
+    # ch01/ch03 的合法观察照常落盘并保持有效；失败清单留证，按第一章序上抛。
     broken = dict(base_wires)
-    broken['ch02'] = _chapter_wire(_beat('窗外有响动', ('e09_09',)))
+    broken['ch02'] = _chapter_wire(_beat('窗外有响动', ('e09_99',)))
     repo = _make_repo(tmp_path, 'broken')
     ask = _AcceptingAsk(broken)
     with pytest.raises(ValueError, match='ch02 校验失败'):
@@ -353,7 +427,12 @@ def test_prior_chapter_failure_does_not_change_later_chapter_request(tmp_path):
             budget=800, through='stage2', node_filter=_stage2_filter())
     assert repo.path('stage2/observations/ch01.json').exists()
     assert not repo.path('stage2/observations/ch02.json').exists()
-    assert not repo.path('stage2/observations/ch03.json').exists()
+    assert repo.path('stage2/observations/ch03.json').exists(), \
+        'ch02 失败不得拦下 ch03 的合法结果（单章失败隔离）'
+    failures = repo.inspect('runtime/chapter_observation_failures.json')
+    assert [int(k) for k in failures['chapters']] == [2]
+    assert failures['chapters']['2']['failure_kind'] == 'ValueError'
+    assert 'e09_99' in failures['chapters']['2']['detail']
     status = repo.read('runtime/workflow_status.json')
     assert status['failed_node'] == 'str06.stage2.chapters'
     assert status['failure_kind'] == 'ValueError'
@@ -409,11 +488,14 @@ def test_missing_chapter_unit_recovery_replays_without_repurchase(tmp_path):
 
     run()
     first_calls = list(transport.calls)
-    assert first_calls == ['book', 'ch01', 'ch02', 'ch03', 'names']
+    # 章观察并发（R4）后完成顺序不定：按相位断言（book 先、names 后、章居中）。
+    assert first_calls[0] == 'book' and first_calls[-1] == 'names'
+    assert sorted(first_calls[1:-1]) == ['ch01', 'ch02', 'ch03']
     before = repo.path('stage2/observations/ch02.json').read_bytes()
     # 崩溃窗口：第 2 章观察缺失（写盘未完成），其余已存 → 恢复零新购。
     repo.path('stage2/observations/ch02.json').unlink()
     run()
-    assert transport.calls == first_calls, '重放按请求身份免费命中，不重购任何单元'
+    assert sorted(transport.calls) == sorted(first_calls), \
+        '重放按请求身份免费命中，不重购任何单元'
     assert repo.path('stage2/observations/ch02.json').read_bytes() == before, \
         '恢复的字节与已购结果一致（I-30）'

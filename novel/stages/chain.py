@@ -165,8 +165,9 @@ class ChainContext:
     #: llm 设施（`novel/stages/common.py` 与各 stageN 包的纪律对本模块放宽：
     #: 它是装配体，但引擎段仍不得反向依赖这里）。
     digest: Callable[[object], str] | None = None
-    #: 逐章正文并发度（run 启动时冻结；经 `novel/config.py::concurrency_for` 读出，
-    #: 默认 `PIPELINE_DEFAULT_CONCURRENCY`）。并发度不进语义身份（`R-12.1c`）。
+    #: 逐章并发度（R4 起 stage2 章观察与 stage5 正文共用同一冻结值；run 启动时
+    #: 经 `novel/config.py::concurrency_for` 读出，默认 `PIPELINE_DEFAULT_CONCURRENCY`）。
+    #: 并发度不进语义身份（`R-12.1c`）。
     concurrency: int = PIPELINE_DEFAULT_CONCURRENCY
 
 
@@ -256,33 +257,64 @@ def run_chapters(ctx: ChainContext) -> dict:
 
     输入是本章句段、第 1..k-1 章原文、书级人物表（盘上 book 观察）与抽取
     协议；**第 k 章请求不依赖任何前章产物**（没有快照、登记表与 beat 表），
-    前章编译或关联失败不改变后章请求。逐章停：失败定位到该章 item，已落盘
-    的章观察保持有效，恢复按请求身份重放、不重购已存结果（I-30/I-31）。
+    前章编译或关联失败不改变后章请求。各章与 `run_body` 同一并发纪律：经
+    `novel/model_slots.py` 的书级＋供应商总槽在线程池并发执行（并发度 run
+    启动时冻结、不进语义身份，`R-12.1c`）。单章失败隔离（I-31）：失败定位
+    到该章 item、其余章照常执行，已落盘的章观察保持有效；全部待补章收敛后
+    按第一章序的原始失败上抛（授权／账务故障保持原始类型），失败清单留证
+    `runtime/chapter_observation_failures.json`，恢复按请求身份重放、不重购
+    已存结果（I-30/I-31）。
     """
     repository = ctx.repository
     book = repository.read_model('stage2/observations/book.json')
     evidence = build_evidence(ctx.chapters, ctx.hook_copy)
-    observed: list[int] = []
-    for chapter in ctx.chapters:
-        no = chapter['chapter_ordinal']
-        chapter_evidence = _chapter_evidence(evidence, no)
-        prompt = chapter_observation_prompt(chapter=no, book=book,
-                                            chapters=ctx.chapters,
-                                            evidence=chapter_evidence)
-        wire, ch_ref = ctx.ask(
-            f'ch{no:02d}', prompt,
-            lambda w, ev=chapter_evidence, n=no: compile_chapter_observation(
-                w, evidence_ids=frozenset(ev), chapter=n,
-                character_slugs=frozenset(book.characters))[1])
-        observation, errors = compile_chapter_observation(
-            wire, evidence_ids=frozenset(chapter_evidence))
-        if errors:
-            # 缺陷定位到章 item（I-31）：不污染其余章的合法结果。
-            raise ValueError(f'第{no}章观察校验失败：{errors}')
-        repository.write(str06_chapter_observation_rel(no), observation,
-                         owners=(f'ch{no:02d}',), refs=(ch_ref,))
-        observed.append(no)
-    return {'chapters': len(observed)}
+    failures: dict[int, BaseException] = {}
+    observed = 0
+
+    def _one(no: int) -> None:
+        # 书级与供应商总槽（`novel/model_slots.py`）：等待期取消或配置拒绝
+        # 都表示尚未开始供应商调用；槽位等待不进请求身份（`R-12.1c`）。
+        with pipeline_model_slot(repository.root, ctx.provider,
+                                 per_book=PIPELINE_BOOK_CONCURRENCY,
+                                 per_provider=PIPELINE_PROVIDER_CONCURRENCY):
+            chapter_evidence = _chapter_evidence(evidence, no)
+            prompt = chapter_observation_prompt(chapter=no, book=book,
+                                                chapters=ctx.chapters,
+                                                evidence=chapter_evidence)
+            wire, ch_ref = ctx.ask(
+                f'ch{no:02d}', prompt,
+                lambda w, ev=chapter_evidence, n=no: compile_chapter_observation(
+                    w, evidence_ids=frozenset(ev), chapter=n,
+                    character_slugs=frozenset(book.characters))[1])
+            observation, errors = compile_chapter_observation(
+                wire, evidence_ids=frozenset(chapter_evidence))
+            if errors:
+                # 缺陷定位到章 item（I-31）：不污染其余章的合法结果。
+                raise ValueError(f'第{no}章观察校验失败：{errors}')
+            repository.write(str06_chapter_observation_rel(no), observation,
+                             owners=(f'ch{no:02d}',), refs=(ch_ref,))
+
+    ordinals = [chapter['chapter_ordinal'] for chapter in ctx.chapters]
+    workers = max(1, min(ctx.concurrency, len(ordinals)))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(_one, no): no for no in ordinals}
+        for future in as_completed(futures):
+            try:
+                future.result()
+            except Exception as exc:  # 单章失败就地定位（I-31），其余章继续
+                failures[futures[future]] = exc
+                continue
+            observed += 1
+    if failures:
+        repository.write('runtime/chapter_observation_failures.json',
+                         {'chapters': {str(no): {
+                             'failure_kind': type(exc).__name__,
+                             'detail': str(exc)}
+                             for no, exc in sorted(failures.items())}})
+        # 其余章的合法观察已在盘上（I-31）；按第一章序的原始失败上抛——
+        # PurchaseRequired／ExecutionError 保持原类型，run 级状态据此闭合。
+        raise failures[min(failures)]
+    return {'chapters': observed}
 
 
 # ─── stage2 names ────────────────────────────────────────────────────────────

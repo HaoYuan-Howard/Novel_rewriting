@@ -1420,12 +1420,26 @@ def stage5_trim_audit_ordinal(rel: str) -> int | None:
 
 
 def str06_artifact_path(root: Path, rel: str) -> Path:
-    """RC 产物仅接受已登记路径家族，并拒绝链接越过隔离根。"""
+    """RC 产物仅接受已登记路径家族，并拒绝链接越过隔离输出根。
+
+    ⚠⚠ Windows 并发建目录窗口（R4 伴修）：`resolve` 只对已存在段查询
+    getfinalpathname——兄弟线程竞相建中间目录时，同一根下的深路径可能解析回
+    `\\?\\` 扩展长度前缀形态而根保持普通形态。两种形态直接 `is_relative_to`
+    会把隔离根内的合法路径误判成越根（并发章写者实跑复现；与
+    `novel/work_units.py::_safe` 登记过的同一疾病）。⇒ containment 比较前
+    两侧同剥扩展前缀；真越根（符号链接解析出根外）仍会被剥完后的比较拦下。
+    """
     from contracts.schema.families import family_for
     normalized = check_rel_family(rel)
     if family_for(normalized) is None:
         raise PathRefused('STR-06 路径未登记家族')
-    target = (root.resolve() / normalized).resolve()
-    if not target.is_relative_to(root.resolve()):
+    root_resolved = root.resolve()
+    target = (root_resolved / normalized).resolve()
+    target_text = str(target)
+    root_text = str(root_resolved)
+    if os.name == 'nt':
+        target_text = target_text.removeprefix('\\\\?\\')
+        root_text = root_text.removeprefix('\\\\?\\')
+    if not Path(target_text).is_relative_to(Path(root_text)):
         raise PathRefused('STR-06 产物路径越过隔离输出根')
     return target

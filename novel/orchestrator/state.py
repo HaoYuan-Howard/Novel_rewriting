@@ -833,9 +833,9 @@ def resume_verdict(
             return RESUME_RUN, (
                 f'盘上有被闸门拦下的稿：'
                 f'{", ".join(invalid_rels)}。'
-                '先尝试 0 LLM 提升路 '
-                '`--revalidate --actor system:invalid-revalidate --reason <audit>`；'
-                '它会按当前判据关闭式重判，不能提升时再决定是否付费重写')
+                f'先尝试免费复检 `{node} --check-only`'
+                '（不签发新付费调用，按请求身份重放已购响应并按当前判据关闭式重判）；'
+                '不能提升时再决定是否付费重写')
         stale = [a for a in st.artifacts if a.freshness == 'stale']
         if stale:
             return RESUME_REDO, (
@@ -885,13 +885,20 @@ def resume_verdict(
         # ⚠⚠ **理由必须说出队列真正会做什么。** 原来这句写着「不必重新付费」而
         #   函数返回的是 `run`——队列照着它去**重跑并重新付费**了一个付费节点（实测）。
         #   一句与动作相反的解释，比不解释更贵。
+        # ⚠ R4：恢复建议只给**现役**免费面。`--revalidate` 旗标族已随旧链整层
+        #   退役（F8b-3）：照旧文案跑只会被入口拒识。付费节点给节点级
+        #   `--check-only` 免费复检；确定性免费节点（flags 为空）重跑即免费
+        #   重算——不把不收 `--check-only` 的节点也塞这个旗标。
+        free_route = (
+            f'`{node} --check-only`（免费复检：不签发新付费调用，'
+            '按请求身份重放并按当前判据关闭式重判）' if spec.paid else
+            '重跑本节点（确定性节点，重跑即免费重算并按当前判据重判）')
         return RESUME_RUN, (
             f'盘上有比正式稿更晚、被闸门拦下的稿：'
             f'{", ".join(a.rel if paths.is_invalid(a.rel) else paths.invalid_of(a.rel) for a in invalid)}。'
             f'⚠ 队列会按原命令**重跑本节点**（付费节点=重新付费）；'
-            '想先省钱就手动跑 0 LLM 提升路 '
-            '`--revalidate --actor system:invalid-revalidate --reason <audit>`（同轮重判并留不可变审计），'
-            '或确认后再排队')
+            f'想先省钱就走免费路 {free_route}，'
+            '不能提升时再决定是否排队，或确认后再排队')
     unreadable = [a for a in mine if not a.readable]
     if unreadable:
         return RESUME_REDO, (

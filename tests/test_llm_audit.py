@@ -145,7 +145,7 @@ def test_epoch_run_rows_keep_logical_identity_and_explicit_parent_link():
 
 # ⚠ B5（S-05）：`test_prepared_recovery_current_parent_is_strict_but_historical_
 # lineage_reads` 已随旧链 Stage5 prepared recovery 审计面（`--recover-prepared`
-# 一族）删除——现役恢复入口只有候选生命周期登记的 chapter_prefix_replay／
+# 一族）删除——现役恢复入口只有候选生命周期登记的 committed_set_recovery／
 # saved_response／historical_adoption／owner_patch／deterministic_replay。
 
 

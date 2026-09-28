@@ -466,3 +466,36 @@ def test_the_uploads_layout_has_exactly_one_spelling():
     assert paths.service_dir('X') == Path('X') / paths.SERVICE_DIRNAME
     tail = paths.uploaded_source_tail(paths.uploads_dir('X') / _DIGEST / '书名_123.txt')
     assert tail == (_DIGEST, '书名_123.txt')
+
+
+def test_str06_artifact_path_survives_mixed_extended_prefix_resolve(
+        tmp_path, monkeypatch):
+    r"""R4 伴修：Windows 并发建目录窗口 resolve 混合普通/扩展长度前缀——
+    隔离根内路径不得被误判越根。
+
+    实跑复现（R4 批）：并发主线章写者（stage2 章观察／stage5 body）在
+    `runtime/commit/<node>/` 间歇性抛 `PathRefused`——getfinalpathname 只对
+    已存在段生效，兄弟线程竞相建中间目录时深路径解析回 `\\?\` 前缀形态而
+    根保持普通形态； containment 比较必须两侧同剥前缀（与
+    `novel/work_units.py::_safe` 登记过的同一疾病）。真越根仍由 resolve
+    暴露、家族外路径仍由 `check_rel_family` 拒。
+    """
+    if os.name != 'nt':
+        pytest.skip('混合前缀形态只在 Windows 出现')
+    extended_prefix = '\\\\?\\'
+    real_resolve = Path.resolve
+
+    def mixed_resolve(self, strict=False):
+        value = real_resolve(self, strict=strict)
+        text = str(value).replace('\\', '/')
+        if 'runtime/commit/' in text and text.endswith('.json'):
+            return Path(extended_prefix + str(value))
+        return value
+
+    monkeypatch.setattr(Path, 'resolve', mixed_resolve)
+    root = tmp_path / 'run'
+    (root / 'runtime/commit/str06.stage2.chapters').mkdir(parents=True)
+    rel = 'runtime/commit/str06.stage2.chapters/ee949a7b1abf3ff6_ch01.json'
+    path = paths.str06_artifact_path(root, rel)
+    assert str(path).removeprefix(extended_prefix).startswith(
+        str(real_resolve(root)))

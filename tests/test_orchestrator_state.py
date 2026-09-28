@@ -239,7 +239,7 @@ def test_stage5_live_invalid_is_visible_outside_the_current_plan_set(
         # 坏命名稿的状态可见性已在上面钉住；恢复提问的崩溃登记在报告。
         return
     verdict, why = S.resume_verdict(_overview(stage), 'str06.stage5.body')
-    assert verdict == S.RESUME_RUN and '--revalidate' in why
+    assert verdict == S.RESUME_RUN and '--check-only' in why
 
 
 @pytest.mark.parametrize('payload', ['{', '{"_schema_version": 1}'])
@@ -373,8 +373,8 @@ def test_stage5_live_invalid_is_never_swallowed_into_a_paid_rewrite():
     """live INVALID 不能被静默吞进付费重写。
 
     F8c 新链的 `str06.stage5.body` 判定把 INVALID 放在 stale 之前：盘上有被
-    闸门拦下的稿时，第一句话永远是 0 LLM 提升路（`--revalidate` 同轮重判），
-    「不能提升时再决定是否付费重写」——不论正式稿是 fresh 还是 stale，
+    闸门拦下的稿时，第一句话永远是免费复检路（`--check-only` 不签发新付费
+    调用），「不能提升时再决定是否付费重写」——不论正式稿是 fresh 还是 stale，
     都不会把未知/被拦下的稿静默折算成一次默认付费重跑。正式稿单纯 stale
     （没有 INVALID）时的 REDO 人工断点由
     `test_stale_body_chapter_is_redo_and_replays_through_the_canonical_strategy`
@@ -389,9 +389,40 @@ def test_stage5_live_invalid_is_never_swallowed_into_a_paid_rewrite():
         verdict, why = S.resume_verdict(_overview(stage), 'str06.stage5.body')
         assert verdict == S.RESUME_RUN
         assert 'stage5/body/ch01.INVALID.txt' in why
-        assert '--revalidate' in why and '0 LLM' in why
+        assert '--check-only' in why and '--revalidate' not in why
         # 先给免费路，且明说免费路走不通才谈付费——不是默认重跑。
-        assert why.index('--revalidate') < why.index('付费重写')
+        assert why.index('--check-only') < why.index('付费重写')
+
+
+def test_invalid_recovery_advice_only_offers_current_free_surfaces():
+    """R4：INVALID 恢复建议只给现役免费面，不教人跑已退役旗标。
+
+    旧文案建议 `--revalidate --actor system:invalid-revalidate …`——该旗标族
+    已随旧链整层退役（F8b-3，`RECOVERY_RUN_POLICIES` 只收 `--check-only`），
+    照跑只会被入口拒识：一句兑现不了的承诺比不解释更贵。付费节点给节点级
+    `--check-only` 免费复检；确定性免费节点（compile 的 flags 为空）给重跑
+    重算，不把不收 `--check-only` 的节点也塞这个旗标。
+    """
+    # 付费节点（stage5.body 分支）：免费复检先于付费重写。
+    stage = StageState(
+        stage='stage5', artifacts=[_chapter_state(invalid=True)],
+        done=False, reviewable=True, chapters_done=[1])
+    verdict, why = S.resume_verdict(_overview(stage), 'str06.stage5.body')
+    assert verdict == S.RESUME_RUN
+    assert '`str06.stage5.body --check-only`' in why
+    assert '--revalidate' not in why and '--apply-edit' not in why
+    # 确定性免费节点（通用分支）：重跑即免费重算，不给它不收的旗标。
+    assert NODES['str06.stage2.compile'].flags == (), \
+        '前提：确定性免费节点不收任何跑法旗标（含 --check-only）'
+    stage = StageState(
+        stage='stage2',
+        artifacts=[_stage2_artifact(STR06_STAGE2_BLUEPRINTS, invalid=True)],
+        done=False, reviewable=True)
+    verdict, why = S.resume_verdict(_overview(stage), 'str06.stage2.compile')
+    assert verdict == S.RESUME_RUN
+    assert '--check-only' not in why, 'compile 不收 --check-only，不得建议它'
+    assert '--revalidate' not in why
+    assert '确定性' in why and '免费' in why
 
 
 def test_retired_stage5_draft_is_not_discovered_or_required(tmp_path):
@@ -454,7 +485,7 @@ def _stage2_artifact(
 
 @pytest.mark.parametrize('invalid', [False, True])
 def test_names_registration_routes_to_skip_or_free_revalidate_not_paid_rerun(invalid):
-    """人物登记 current ⇒ SKIP 不重采付费人物；live INVALID ⇒ 0 LLM 提升路。
+    """人物登记 current ⇒ SKIP 不重采付费人物；live INVALID ⇒ 免费复检路。
 
     旧链「称名投影免费物化」一族随 `stage2.characters`／投影产物退役：
     新链 overview 不再携带投影行，那四个投影恢复谓词整体删除，
@@ -477,11 +508,11 @@ def test_names_registration_routes_to_skip_or_free_revalidate_not_paid_rerun(inv
     verdict, why = S.resume_verdict(ov, 'str06.stage2.names')
     if invalid:
         assert verdict == S.RESUME_RUN
-        assert '--revalidate' in why and '0 LLM' in why
+        assert '--check-only' in why and '免费' in why
         assert '--renormalize' not in why
     else:
         assert verdict == S.RESUME_SKIP
-        assert '--revalidate' not in why
+        assert '--check-only' not in why
 
 
 def _assert_retired_projection_predicates() -> None:
@@ -515,7 +546,7 @@ def test_invalid_names_registration_keeps_only_zero_llm_revalidation_route():
     _assert_retired_projection_predicates()
     verdict, why = S.resume_verdict(ov, 'str06.stage2.names')
     assert verdict == S.RESUME_RUN
-    assert '--revalidate' in why and '0 LLM' in why
+    assert '--check-only' in why and '免费' in why
     assert '--renormalize' not in why and '--apply-edit' not in why
 
 
@@ -596,7 +627,8 @@ def test_source_invalid_is_not_excused_by_current_names_registration(
     verdict, why = S.resume_verdict(ov, 'str06.stage2.compile')
     assert verdict == S.RESUME_RUN
     if formal_exists:
-        assert '--revalidate' in why
+        assert '免费' in why and '--revalidate' not in why
+        assert '--check-only' not in why, 'compile 不收 --check-only'
     else:
         assert '产物不在盘上' in why
 
@@ -626,15 +658,15 @@ def test_old_blueprint_inputs_remain_unknown_without_migration():
 
 @pytest.mark.parametrize(('formal_exists', 'formal_readable', 'fragment'), [
     (False, True, '产物不在盘上'),
-    (True, True, '--revalidate'),
-    (True, False, '--revalidate'),
+    (True, True, '免费'),
+    (True, False, '免费'),
 ])
 def test_unknown_input_invalid_keeps_normal_validation_route(
         formal_exists, formal_readable, fragment):
     """未知来源 INVALID 不能借共存正式稿追认；提升仍须 producer 复验。
 
     新链通用判定里 INVALID 分支先于「读不回」分支：两态都路由到
-    RUN + 0 LLM 提升建议；纯缺失仍是普通重算 RUN 的措辞。B2：提问
+    RUN + 免费复检/重算建议；纯缺失仍是普通重算 RUN 的措辞。B2：提问
     节点换轨到蓝图唯一 writer `str06.stage2.compile`（D9）。
     """
     stage = StageState(
@@ -661,10 +693,11 @@ def test_unknown_input_invalid_keeps_normal_validation_route(
 
 @pytest.mark.parametrize('formal_exists', [False, True])
 def test_live_blueprint_invalid_routes_only_to_zero_llm_revalidate(formal_exists):
-    """live `.INVALID` 只给 0 LLM 提升路；投影恢复面已随旧链退役。
+    """live `.INVALID` 只给免费复检/重算路；投影恢复面已随旧链退役。
 
     B2：蓝图唯一 writer 是 `str06.stage2.compile`（D9），live INVALID
-    的收件箱/重算路由换轨到 compile 提问。
+    的收件箱/重算路由换轨到 compile 提问；compile 是确定性免费节点，
+    建议的是重跑重算，不是它不收的 `--check-only`。
     """
     stage = StageState(
         stage='stage2',
@@ -684,7 +717,8 @@ def test_live_blueprint_invalid_routes_only_to_zero_llm_revalidate(formal_exists
     verdict, why = S.resume_verdict(ov, 'str06.stage2.compile')
     assert verdict == S.RESUME_RUN
     if formal_exists:
-        assert '--revalidate' in why and '0 LLM' in why
+        assert '免费' in why and '--revalidate' not in why
+        assert '--check-only' not in why and '确定性' in why
     else:
         assert '产物不在盘上' in why
 

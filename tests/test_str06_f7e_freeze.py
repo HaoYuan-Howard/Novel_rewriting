@@ -53,6 +53,15 @@ B2 基线（14 节点，`a0f5fb5e…`）原样保存在 Git 历史里；既有�
 （14 节点，`b8501a9d…`）原样保存在 Git 历史里；既有候选根按「契约表已
 漂移」拒读，只读保留（新协议无已购产物，重算免费）。
 
+【R4 重新冻结（2026-09-28）】`str06.stage5.body` 的生命周期登记如实化：
+`chapter_prefix_replay`（D2 之前的串行前文链语义）改名
+`committed_set_recovery`（有效提交集合恢复：只补缺章，崩溃窗口按请求身份
+免费重放），input_workpack／review_scope 同步章包输入与单章失败隔离语义。
+恢复入口名进契约身份（`_node_identity` 的 recovery_entries），故重新冻结。
+节点集合、产物表与运行期配置不变。R2 引擎批基线（14 节点，
+`a14a9ef0…`）原样保存在 Git 历史里；既有候选根按「契约表已漂移」拒读，
+只读保留（新协议无已购产物，重算免费）。
+
 【为什么不只靠激活表自己的对账】`test_str06_candidates.py` 查的是表内自洽
 （runner／writer／版本逐字相等）；本文件查的是**表与冻结基线**相等：
 前者防表内部撒谎，后者防表在批次之间无登记漂移。
@@ -66,10 +75,11 @@ from contracts.schema.workflow import (
 )
 from novel.llm.paid_requests import candidate_contract_identity
 
-#: R2 引擎批重新冻结（2026-09-28 packet_metrics 落盘）时的候选契约身份：
-#: 节点表＋产物表＋RC 版式＋运行期配置的 SHA-256。表内任何一行变化都会改变
-#: 它——先改本记录并登记原因（REQUIREMENTS／DECISIONS），再动表。
-FROZEN_CONTRACT_IDENTITY = 'a14a9ef09fe79d30c6ab2e7c979e562bd10f4db00e928bfc04224928fe984d89'
+#: R4 重新冻结（2026-09-28 stage5.body 恢复入口改名 committed_set_recovery）
+#: 时的候选契约身份：节点表＋产物表＋RC 版式＋运行期配置的 SHA-256。表内任何
+#: 一行变化都会改变它——先改本记录并登记原因（REQUIREMENTS／DECISIONS），
+#: 再动表。
+FROZEN_CONTRACT_IDENTITY = '7f5b11fd29aa3978be8878dd00c84ca3bbd081e55adbbee65f88932abc213350'
 
 #: 冻结时的节点集合（14 个：stage0/1 两座＋Stage2 五节点＋Stage4 五＋Stage5 两
 #: ＋Stage7 两）。
@@ -96,7 +106,7 @@ def _candidate_nodes() -> dict:
 
 def test_frozen_contract_identity_matches_the_live_tables():
     assert candidate_contract_identity() == FROZEN_CONTRACT_IDENTITY, (
-        '候选契约身份与 R1 冻结基线不符：先更新本文件的冻结记录，'
+        '候选契约身份与 R4 冻结基线不符：先更新本文件的冻结记录，'
         '并在 REQUIREMENTS 登记变化原因（不静默改冻结面）')
 
 
