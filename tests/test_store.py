@@ -1102,21 +1102,18 @@ def test_registered_projections_survive_malformed_upstream(malformed: object):
 def test_projection_marks_missing_character_maps_empty(malformed: object):
     """缺地图与空地图分得开：前者算不出（None），后者是合法空值——都不许抛。
 
-    （F8b-3：旧夹具经 stage2 shared 的 character_ref_inventory 读「entities →
-    characters」两层；现役同域落点是 `novel.consumption.stage2_main_text`
-    （`str06.stage2.source` 的注册投影）与 `character_knowledge_reference`
-    （人物身份闭集投影）：整份载荷不是数组/字典 ⇒ None；空数组 ⇒ 空清单。）
+    （F8b-3 首登记；收尾批复核：`character_knowledge_reference` 随 B2 五节点
+    重建失去全部注册位并删除，`str06.stage2.source` 亦退役。现役同域裁剪投影
+    是 `novel.consumption.stage2_main_text`——`str06.stage2.book/chapters/names`
+    三节点的注册投影：整份载荷不是数组 ⇒ None；空数组 ⇒ 空清单。）
     """
-    from novel.consumption import character_knowledge_reference, stage2_main_text
+    from novel.consumption import stage2_main_text
 
-    # 畸形一律算不出或合法空，不许抛：`None` 是「算不出」，`{}`／`[]` 是「空的」。
+    # 畸形一律算不出，不许抛：`None` 是「算不出」，`[]` 是「空的」。
     for payload in (malformed, {'characters': malformed}, {'root': [malformed]}):
         assert stage2_main_text(payload) is None, payload
-        got = character_knowledge_reference(payload)
-        assert got is None or got == {}, (payload, got)
-    # 合法空值不是错误：空章数组／空人物图都该给出空清单（与「缺地图」分得开）。
+    # 合法空值不是错误：空章数组该给出空清单（与「缺地图」分得开）。
     assert stage2_main_text([]) == []
-    assert character_knowledge_reference({'characters': {}}) == {}
 
 
 def test_stage7_naming_projection_tracks_role_sent_to_rename_prompt():

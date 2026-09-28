@@ -1770,7 +1770,7 @@ class ArtifactStore:
     #   ① 候选产物不带版本信封（`Str06Repository.write` 只落逻辑载荷＋内联
     #      `_provenance`）⇒ `decode_artifact` 一律 `ArtifactVersionError`；
     #   ② 候选链的根输入是**正式 Stage1 章数组＋章前文字**（F7c 起 `--book-sid`
-    #      生产路径；C 批起 hook_copy 进 Stage2.source），`root_clean_sha1` 记那两份
+    #      生产路径；C 批起 hook_copy 进 Stage2 请求），`root_clean_sha1` 记那两份
     #      字节的组合 SHA-1，而正式 store 只认 stage0/clean_text.txt。
     # 后果不是报错而是静默：一本跑完的书在完成度上恒 broken/stale，operator 与
     # 队列据此把每个节点判成 REDO/UNKNOWN 并关闭式停住——真实产品入口的全链因此
@@ -1816,8 +1816,8 @@ class ArtifactStore:
         """候选链产物的新鲜度：root 边对照当前源身份，inputs 走同一把尺子。
 
         【两种 root 身份，两把尺子】候选链的**规范**源身份是正式 Stage1 章数组＋
-        章前文字（F7c 起 `--book-sid` 生产路径；C 批起 hook_copy 也是 Stage2.source
-        的正式输入，root 身份是两份字节的组合摘要，见 `_stage1_root_identity`）：
+        章前文字（F7c 起 `--book-sid` 生产路径；C 批起 hook_copy 也是 Stage2 的
+        正式输入，root 身份是两份字节的组合摘要，见 `_stage1_root_identity`）：
         产物记的 root 是那一份时，root 边就是完整输入声明——源抽取一类节点的唯一
         输入就是它，`inputs` 为空也认当前（`Str06Repository._refuse_stale` 同样只认
         这把尺子）。产物记的是 stage0/clean_text.txt（正式 store 写盘的候选路径，
@@ -2093,7 +2093,7 @@ class ArtifactStore:
     def _stage1_root_identity(self) -> str | None:
         """候选链规范源身份：Stage1 **main_text＋hook_copy** 两份字节的组合 SHA-1。
 
-        章前文字（源引子）自质量改进批次 C 起是 Stage2.source 的正式输入，
+        章前文字（源引子）自质量改进批次 C 起是 Stage2 的正式输入，
         `chain.load_stage1_chapters` 的 `root_sha1` 随之覆盖两份字节；完成度面的
         root 边必须用同一把尺子，否则每个候选节点都会因为「引子也参与输入」被误判
         成 stale（F8d 桥的实测形状）。

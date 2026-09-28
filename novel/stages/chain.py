@@ -942,7 +942,8 @@ class Stage1Input(NamedTuple):
 
     `source_identity`／`root_sha1` 是 **main_text＋hook_copy 两份字节的组合摘要**
     （长度前缀防拼接歧义）：只改引子也会换源身份，旧根不得沿用旧购买（质量改进
-    批次 C）。Stage6 退役后 hook_copy 的唯一消费者是 Stage2.source。
+    批次 C）。现役消费者是 Stage2 book／names（B2 五节点；chapters 互不依赖、
+    不吃引子）。
     """
 
     chapters: list[dict]
@@ -1119,7 +1120,7 @@ def load_stage1_chapters(base, sid: str) -> Stage1Input:
 
     章数组即全链唯一章节键（阅读序 `chapter_ordinal`，从 1 连续）；目标章数等于
     源章数由 `MainText` 模型自身保证。`stage1/hook_copy.json`（章前文字／源引子）
-    随本函数进入 Stage2.source 的 e00 证据段；缺失按空字节参与组合摘要。
+    随本函数进入 Stage2 book／names 的 e00 证据段；缺失按空字节参与组合摘要。
     """
     from contracts.schema import artifact_spec, decode_artifact
     book_dir = paths.resolve_novel_dir(Path(base), sid)

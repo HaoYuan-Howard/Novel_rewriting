@@ -24,7 +24,7 @@ Blueprint（`stage2/blueprints/chapter_blueprints.json`）＋ fold 读数。
 compiler 自己的副本上（归一是 compile 的职责本身，I-24 不拦 compiler）。
 语义判断归付费 semantic unit；配得对不对保持 unver 披露，机械检查不冒充证明。
 `chapter_input_snapshot`（逐章输入快照）不随迁——D3 起章观察互不依赖，快照
-退役；它仍留在旧引擎 `source.py` 里供旧反例解码，新链不消费。
+退役；旧引擎 `source.py` 已随 B5 整包删除（S-05），新链没有这个产物面。
 """
 from __future__ import annotations
 

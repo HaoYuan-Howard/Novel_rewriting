@@ -54,49 +54,20 @@ def stage2_main_text(data: object) -> object:
 
 
 def stage2_hook_copy(data: object) -> object:
-    """Stage2 源抽取与名称结构消费章前文字（源引子）正文。
+    """Stage2 book／names 消费章前文字（源引子）正文（B2 五节点，D3/D9）。
 
-    Stage6 退役后 hook_copy 的唯一消费者是 Stage2.source（质量改进批次 C）：
-    切成 e00 证据段进书级调用与第 1 章抽取，并参与 names 的字面校验。
+    引子切成 e00 证据段进书级观察与名称结构观察，并参与 names 的字面校验；
+    chapters 互不依赖（D3），不吃引子。
     """
     return _hook_text(data)
 
 
-def character_knowledge_reference(data: object) -> object:
-    """知识请求只读的人物身份；请求、引用 SHA 和 freshness 共用同一投影。
-
-    只传名称闭集与登记字面，不发送称呼者、语境、生效时点、证据原文或 role。
-    只认 v3 ``canonical_surface`` / ``surfaces``；空 surfaces 回退到 canonical。
-    """
-    if not isinstance(data, dict) or not isinstance(data.get('characters'), dict):
-        return None
-    rows = {}
-    for cid, value in sorted(data['characters'].items()):
-        if not isinstance(value, dict):
-            return None
-        canonical = value.get('canonical_surface')
-        if not isinstance(canonical, str) or not canonical.strip():
-            return None
-        surface_rows = value.get('surfaces')
-        if not isinstance(surface_rows, list):
-            return None
-        surfaces = []
-        for address in surface_rows:
-            if not isinstance(address, dict) or not isinstance(address.get('surface'), str):
-                return None
-            surfaces.append(address['surface'])
-        if not surfaces:
-            # 仅关系称谓登记的实体（如「女儿」）可能暂无 book-level surfaces；
-            # Global 仍须能引用 canonical。
-            surfaces = [canonical]
-        rows[cid] = {
-            'canonical_surface': canonical,
-            'surfaces': sorted(set(surfaces)),
-        }
-    return rows
+def _hook_text(data: object) -> object:
+    """章前文字（源引子）的正文取值；载荷不是字典或缺席返回 None（算不出）。"""
+    return (data or {}).get('text') if isinstance(data, dict) else None
 
 
-# ── stage2.blueprint ─────────────────────────────────────────────────────────
+# ── stage1.partition ──────────────────────────────────────────────────────────
 
 
 def stage1_stage0_source(data: object) -> object:
@@ -107,41 +78,6 @@ def stage1_stage0_source(data: object) -> object:
     if not isinstance(source, dict):
         return None
     return source.get('normalized_source_sha1')
-
-
-# ── stage4.plan / stage4.context ─────────────────────────────────────────────
-
-
-def stage4_plan_blueprints(data: object) -> object:
-    """B 的真实材料包括完整节点、状态、约束及证据；元数据不进入消费身份。"""
-    if not isinstance(data, dict):
-        return None
-    return sorted(data.get('blueprints') or [], key=lambda row: row['chapter_ordinal'])
-
-
-# ── stage5.write / stage5.review ─────────────────────────────────────────────
-
-
-# ── stage6.hook ───────────────────────────────────────────────────────────────
-
-def _hook_text(data: object) -> object:
-    """当前文案生成消费的原作文案正文。"""
-    return (data or {}).get('text') if isinstance(data, dict) else None
-
-
-# ── stage7.rename ─────────────────────────────────────────────────────────────
-
-
-def stage7_hook(data: object) -> object:
-    """改名对 hook 的消费投影 = **候选集文本列表**（免费改选裁决，2026-09-15）。
-
-    改选只换 `approved`，候选集合不变 ⇒ 投影不变 ⇒ NameMap 不 stale；
-    候选集合变化（重新生成 / apply-edit 改字）⇒ stale。
-    """
-    if not isinstance(data, dict):
-        return None
-    return [c.get('text') or ''
-            for c in (data.get('candidates') or []) if isinstance(c, dict)]
 
 
 # 每一格的键都是本节点**真正消费**的上游产物相对路径；值是那份上游的投影。
