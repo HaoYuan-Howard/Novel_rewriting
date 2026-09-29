@@ -1197,6 +1197,7 @@ STR06_F7E_TEST_KEEP: dict[str, str] = {
     'test_invariants.py': '根不变量与取值面唯一源',
     'test_layering.py': '依赖守卫；grandfather 边 F8c 已清零（旧链 75 条随整层删除消化，只剩 6 条 stage0/stage1 范围外边继续冻结）',
     'test_model_slots.py': '模型槽位',
+    'test_network_settings.py': '付费外发网络偏好（c252e8b9 新增；存储 CAS 与直连默认）',
     'test_output_root_archive.py': '输出根归档',
     'test_prov.py': 'provenance 原语',
     'test_provider_probe.py': 'provider 只读探针',

@@ -89,8 +89,8 @@ from novel.stages.owner_revision import (
 from novel.stages.stage4 import (
     assemble_binding, assemble_body_design, assemble_hook_design,
     assemble_preserve, compile_execution_plan, compile_hook_context,
-    compile_writer_book_ir, project_binding_space, project_brief,
-    publish_graph, run_mechanical_guard,
+    compile_writer_book_ir, obligation_core_id, project_binding_space,
+    project_brief, publish_graph, run_mechanical_guard,
 )
 from novel.stages.stage5 import (
     AnsweredText, HOOK_VALIDATOR_VERSION, MAX_REWRITES, MECHANICAL_CHECKS,
@@ -706,10 +706,29 @@ _NULL_OBLIGATION = _NullObligation()
 def _backfill_must_keep_unbound(repository, binding) -> None:
     """必保义务未承载 → 按 unbound.owner 回派（E-8：owner 轴闭集外显式停）。
 
+    R8a-3：定位与消息一律用 Design 可见的源盲 core id
+    （`novel/stages/stage4/grounding.py::obligation_core_id` 唯一铸造口），
+    Bind reason 里出现的源序号同批映射——Design 源盲，obNN 近似源文顺序，
+    对它是不可解析的噪声（canary 20260929b 实证）。context 带 typed 的依赖
+    义务（含其当前承载位置）与参与人物，供修订 prompt 机械引用。
+
     多个目标时按执行序先回派最早的节点；其余目标在复验后的下一轮发现里
     继续走同一入口（每 owner 独立记轮，互不挤占额度）。
     """
     obligations = {o.obligation_id: o for o in binding.obligations}
+    core_of = {oid: obligation_core_id(oid) for oid in obligations}
+    carriers = {
+        oid: sorted(entry.beat_ref for entry in binding.entries
+                    if entry.obligation_id == oid)
+        for oid in obligations}
+    # 长id 先替换，防 ob1 抢先吃掉 ob10 的前缀。
+    by_length = sorted(core_of, key=len, reverse=True)
+
+    def _blind(text: str) -> str:
+        for oid in by_length:
+            text = text.replace(oid, core_of[oid])
+        return text
+
     unbound_must = [entry for entry in binding.unbound
                     if (obligations.get(entry.obligation_id)
                         or _NULL_OBLIGATION).must_preserve]
@@ -726,11 +745,24 @@ def _backfill_must_keep_unbound(repository, binding) -> None:
         owner = _REVISION_TARGET_OWNERS.get(target)
         if owner is None:
             raise ValueError(f'回派目标 {target} 未登记 runner owner（编排缺陷）')
+        obligation = obligations[entry.obligation_id]
+        core_id = core_of[entry.obligation_id]
         grouped.setdefault((owner, target), []).append(OwnerIssueV1(
-            code='must_keep_unbound', item=entry.obligation_id,
-            message=f'必保义务 {entry.obligation_id} 尚未承载'
-                    f'（owner={entry.owner}；{entry.reason}）',
-            context={'unbound_owner': entry.owner}))
+            code='must_keep_unbound', item=core_id,
+            message=_blind(f'必保义务 {entry.obligation_id} 尚未承载'
+                           f'（owner={entry.owner}；{entry.reason}）'),
+            context={
+                'unbound_owner': entry.owner,
+                'core_id': core_id,
+                'kind': (obligation.kind.value if hasattr(obligation.kind, 'value')
+                         else str(obligation.kind)),
+                'summary': obligation.statement,
+                'requires_cores': sorted(core_of[dep]
+                                         for dep in obligation.requires),
+                'dependency_carriers': {core_of[dep]: carriers[dep]
+                                        for dep in obligation.requires},
+                'participants': sorted(obligation.lineage.character_ids),
+            }))
     for (owner, target), issues in sorted(
             grouped.items(), key=lambda item: NODE_ORDER.index(item[0][1])):
         discover_owner_issues(repository, raised_by='str06.stage4.compile',

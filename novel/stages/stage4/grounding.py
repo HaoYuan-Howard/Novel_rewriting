@@ -171,6 +171,17 @@ def assemble_preserve(
     return checkpoint.model_copy(update={'checkpoint_sha256': content_hash}), []
 
 
+def obligation_core_id(obligation_id: str) -> str:
+    """源义务 id（obNN，近似源文顺序）→ Design 可见的源盲 core id。
+
+    唯一铸造口：Brief 投影（`project_brief`）与跨节点回派（compile 的
+    `must_keep_unbound` 定位）共用同一映射——Design 源盲，它的修订提示里
+    不出现源序号（R8a-3）。确定性纯函数（同一 id 恒同一 core id）。
+    """
+    return 'req_' + hashlib.sha256(
+        obligation_id.encode('utf-8')).hexdigest()[:16]
+
+
 def project_brief(
     checkpoint: PreserveCheckpoint, characters: CharactersCore,
     blueprint: BlueprintsArtifactV13 | None = None,
@@ -185,8 +196,8 @@ def project_brief(
     链路（run_preserve／run_body_design）必须传入。
     """
     # 不以源义务序号暴露叙述顺序；所有类型与满足条件等量投影，依赖闭合。
-    core_ids = {o.obligation_id: 'req_' + hashlib.sha256(
-        o.obligation_id.encode('utf-8')).hexdigest()[:16] for o in checkpoint.obligations}
+    core_ids = {o.obligation_id: obligation_core_id(o.obligation_id)
+                for o in checkpoint.obligations}
     cores = tuple(sorted((
         BriefRequirement(
             core_id=core_ids[o.obligation_id], summary=o.statement,

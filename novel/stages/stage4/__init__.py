@@ -40,7 +40,8 @@ from novel.stages.stage4.fold import (
     FoldedState, ThreadFold, fold_accepted_prefix, fold_thread_faces,
 )
 from novel.stages.stage4.grounding import (
-    assemble_binding, assemble_preserve, project_binding_space, project_brief,
+    assemble_binding, assemble_preserve, obligation_core_id,
+    project_binding_space, project_brief,
 )
 from novel.stages.stage4.guard import (
     appeared_chars, check_binding_beat_refs, check_cast_legality,
@@ -61,6 +62,7 @@ __all__ = [
     'check_read_projection', 'check_thread_lifecycle', 'check_thread_projection',
     'compile_execution_plan', 'compile_hook_context', 'compile_writer_book_ir',
     'expected_thread_faces', 'fold_accepted_prefix', 'fold_thread_faces',
-    'init_establishments', 'project_binding_space', 'project_brief',
+    'init_establishments', 'obligation_core_id', 'project_binding_space',
+    'project_brief',
     'publish_graph', 'run_mechanical_guard', 'scene_order',
 ]

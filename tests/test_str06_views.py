@@ -497,9 +497,13 @@ def test_run_view_projects_revision_rounds_of_a_healed_chain(tmp_path, monkeypat
     assert record.status == 'resolved' and record.rounds_total == 1
     assert record.fingerprint and record.updated_at >= 0
     assert record.issues[0].code == 'must_keep_unbound'
-    assert record.issues[0].item == 'ob01'
+    # R8a-3：定位用 Design 可见的源盲 core id（obNN 不出现在修订提示里）。
+    from novel.stages.stage4 import obligation_core_id
+    assert record.issues[0].item == obligation_core_id('ob01')
     assert '必保义务' in record.issues[0].message
-    assert record.issues[0].context == {'unbound_owner': 'design'}
+    assert 'ob01' not in record.issues[0].message
+    assert record.issues[0].context['core_id'] == obligation_core_id('ob01')
+    assert record.issues[0].context['unbound_owner'] == 'design'
     # 自愈链没有失败形状：停止原因缺席是 None，不是空串。
     assert run.failure_kind is None and run.detail is None
     # HTTP 面与视图同形（同一 response_model，字段不丢）。
@@ -518,7 +522,9 @@ def test_run_view_shows_stop_reason_with_open_issue_rounds(tmp_path, monkeypatch
     assert run.present and run.status == 'failed'
     assert run.failure_kind == 'OwnerRevisionStop'
     assert '同一问题集重复即停' in (run.detail or '')
-    assert '必保义务 ob01' in (run.detail or ''), '停止消息按 item 定位'
+    from novel.stages.stage4 import obligation_core_id
+    assert f'必保义务 {obligation_core_id("ob01")}' in (run.detail or ''), \
+        '停止消息按 item 定位（源盲 core id）'
     assert run.failed_node == 'str06.stage4.compile'
     issues = run.owner_issues
     assert issues is not None and issues.records[0].status == 'open'

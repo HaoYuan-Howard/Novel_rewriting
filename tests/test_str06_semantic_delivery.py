@@ -705,7 +705,9 @@ def test_fault_base_green_baseline_completes_the_chain(tmp_path, monkeypatch):
      lambda repo: (repo.path('stage2/observations/ch02.json').is_file()
                    and not repo.path('stage2/observations/associate.json')
                    .is_file())),
-    ('obligation_unbound', ('必保义务 ob01 尚未承载', '同一问题集原样重现'),
+    # R8a-3：定位与消息用 Design 可见的源盲 core id（ob01→req_…），修订提示
+    # 不出现源序号；签名断言 req_ 前缀与「必保义务 … 尚未承载」分开匹配。
+    ('obligation_unbound', ('必保义务 ', '尚未承载', 'req_', '同一问题集原样重现'),
      # bind 对「必保义务进 unbound」的稿是合法返回（owner 路由在案），拦下它的
      # 是 stage4 compile 的义务覆盖 Guard——R3 的回派规则把这类问题按
      # unbound.owner 回 body_design／preserve；粘性故障下回派修订后原样复现，

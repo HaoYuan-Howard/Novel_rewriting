@@ -28,6 +28,7 @@ from contracts.schema.workflow import (
 from novel.llm.ledger import CostLedger, ledger_path, read_cost_snapshot
 from novel.llm.paid_requests import PaidRequestSession, ask_json
 from novel.llm.transport import ChatRequest, ChatResponse
+from novel.stages.stage4 import obligation_core_id
 from novel.stages.owner_revision import (
     OwnerRevisionRequired, OwnerRevisionStop, discover_owner_issues,
     owner_product_digest, read_owner_issue_file, resolve_owner_issues,
@@ -345,10 +346,17 @@ def test_no_progress_backfill_stops_per_item_without_repaying_bind(tmp_path,
                      through='stage7', book_title='报恩',
                      hook_constraints=HookConstraints(target_chars=10,
                                                       hard_max_chars=360))
-    assert '必保义务 ob01' in str(excinfo.value)
+    assert f'必保义务 {obligation_core_id("ob01")}' in str(excinfo.value)
     record = read_owner_issue_file(repo, 'design')
     assert record.status == 'open' and record.rounds_total == 1
     assert record.node == 'str06.stage4.body_design'
+    # R8a-3：定位与消息都是 Design 可见的源盲 core id，revision prompt 里
+    # 不出现 ob 序号；context 带 typed 的依赖与承载事实。
+    assert record.issues[0].item == obligation_core_id('ob01')
+    assert 'ob01' not in record.issues[0].message
+    assert record.issues[0].context['core_id'] == obligation_core_id('ob01')
+    assert record.issues[0].context['unbound_owner'] == 'design'
+    assert 'summary' in record.issues[0].context
     assert repo.path('stage4/grounding/semantic_binding.json').is_file()
     assert not repo.path('stage4/compiled/execution_plan.json').exists()
     # 回派真实发生（design 原轮＋修订轮），但 bind 只有一次外发——design 语义
