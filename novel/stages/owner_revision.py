@@ -21,6 +21,10 @@
     后反复重买 owner」里打转（B6-A canary 根实证）。
   • v1 盘上记录经 :func:`read_owner_issue_file` 集中迁移（迁移登记与删除条件
     见 `contracts/schema/workflow.py::owner_issue_record_of_payload`）。
+  • 报错与监控里的三类上限各自分名（R8a-4），不再共用「修订轮」一个词：
+    **节点内校验重问**（`ask_json` 同 wire 修订，≤OWNER_REVISION_MAX_ROUNDS）、
+    **跨节点回派修订轮**（本模块，每 owner 终身）、**工作单元内容轮额度**
+    （`novel/work_units.py` 的 reserve，耗尽走 grant 追加）。
 
 【边界】路由闭集（code 轴与 unbound.owner 轴）唯一登记在
 `contracts/schema/workflow.py`；本模块不判断文学质量、不修复语义、不猜测
@@ -174,8 +178,8 @@ def discover_owner_issues(repository, *, raised_by: str, owner: str, node: str,
             against_sha256=against_sha256, issues=issues,
             updated_at=updated_at))
         raise OwnerRevisionStop(
-            f'{raised_by} 的修订要求没有进展：{owner} 修订后同一问题集原样重现，'
-            f'按 item 停（同一问题集重复即停）：{_messages(issues)}',
+            f'跨节点回派修订轮·{raised_by} 的修订要求没有进展：{owner} 修订后'
+            f'同一问题集原样重现，按 item 停（同一问题集重复即停）：{_messages(issues)}',
             node=node, owner=owner, issues=issues)
     rounds = existing.rounds_total if existing is not None else 0
     if rounds >= OWNER_REVISION_MAX_ROUNDS:
@@ -185,7 +189,7 @@ def discover_owner_issues(repository, *, raised_by: str, owner: str, node: str,
             against_sha256=against_sha256, issues=issues,
             updated_at=updated_at))
         raise OwnerRevisionStop(
-            f'{owner} 的修订轮额度（{OWNER_REVISION_MAX_ROUNDS}）已耗尽，'
+            f'{owner} 的跨节点回派修订轮额度（{OWNER_REVISION_MAX_ROUNDS}）已耗尽，'
             f'按 item 停给人（剩余修复走 owner patch 或人工重跑）：'
             f'{_messages(issues)}',
             node=node, owner=owner, issues=issues)
@@ -196,7 +200,7 @@ def discover_owner_issues(repository, *, raised_by: str, owner: str, node: str,
         updated_at=updated_at))
     raise OwnerRevisionRequired(
         f'{raised_by} 发现 {len(issues)} 项 typed 机械问题，回派 {node} 按 owner '
-        f'修订重跑（修订轮 {rounds + 1}/{OWNER_REVISION_MAX_ROUNDS}）：'
+        f'修订重跑（跨节点回派修订轮 {rounds + 1}/{OWNER_REVISION_MAX_ROUNDS}）：'
         f'{_messages(issues)}',
         node=node, owner=owner, issues=issues)
 

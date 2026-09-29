@@ -785,14 +785,14 @@ def resume_verdict(
                 and issue.rounds_total < OWNER_REVISION_MAX_ROUNDS:
             return RESUME_REDO, (
                 f'owner_revision：{issue.raised_by} 报告 typed 机械问题'
-                f'（{", ".join(issue.codes)}），修订轮 {issue.rounds_total}/'
+                f'（{", ".join(issue.codes)}），跨节点回派修订轮 {issue.rounds_total}/'
                 f'{OWNER_REVISION_MAX_ROUNDS}，owner 产物未变（摘要＝against）——'
                 '本节点产物即使新鲜也按 owner 修订重跑；'
                 '修订要求随 `runtime/issues/` 记录进请求身份')
         if getattr(issue, 'product_sha256', None) == issue.against_sha256:
             return RESUME_UNKNOWN, (
                 f'owner_revision：{issue.raised_by} 报告 typed 机械问题'
-                f'（{", ".join(issue.codes)}），修订轮 {issue.rounds_total}/'
+                f'（{", ".join(issue.codes)}），跨节点回派修订轮 {issue.rounds_total}/'
                 f'{OWNER_REVISION_MAX_ROUNDS} 已耗尽且 owner 产物未变——'
                 '按 item 停给人（owner patch 或人工重跑），不自动重买')
 

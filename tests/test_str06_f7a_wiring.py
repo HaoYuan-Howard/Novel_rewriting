@@ -215,7 +215,7 @@ def test_unit_content_limit_and_unadopted_turn_close(tmp_path):
     # 前三次新购都没有产物采纳：每次 reserve 前未采纳轮被 mark_rejected 关闭
     # （保留原回答、不返还轮次，对齐正式 continued_content_work 语义）。
     assert [t.state for t in unit._read().turns] == ['failed', 'failed', 'failed', 'delivered']
-    with pytest.raises(WorkUnitBudgetExhausted, match='内容预算已耗尽'):
+    with pytest.raises(WorkUnitBudgetExhausted, match='内容轮额度已耗尽'):
         ask_json(session, 'bind', _request(user='第5次'), lambda _: [])
     # 第 5 次未取到轮：reserve 前未采纳轮已被关闭，四轮终态全 closed；
     # 生成事实不丢——产物的 provenance 完整记录窗口内四次采用的模型与 prompt。

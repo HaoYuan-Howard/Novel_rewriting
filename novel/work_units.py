@@ -625,8 +625,8 @@ class WorkUnitBudget:
                 raise WorkUnitRefused('已有未闭合内容请求；须先对账，不能重新调用模型')
             if len(ledger.turns) >= ledger.content_limit:
                 raise WorkUnitBudgetExhausted(
-                    f'本工作单元内容预算已耗尽（{len(ledger.turns)}/{ledger.content_limit}），'
-                    '请免费恢复、人工编辑或明确申请追加额度')
+                    f'本工作单元内容轮额度已耗尽（{len(ledger.turns)}/'
+                    f'{ledger.content_limit}），请免费恢复、人工编辑或明确申请追加额度')
             # 整书总闸在单元账写入之前判：被拒时单元账不留下未闭合的
             # reserved 轮；反向（总闸已 +1 而单元账写失败）只是保守多计
             # 一次，不构成付费风险。

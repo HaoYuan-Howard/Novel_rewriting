@@ -1084,13 +1084,13 @@ def ask_json(session: PaidRequestSession, owner: str, request: ChatRequest,
             fingerprint = digest(sorted(errors))
             if fingerprint == last_fingerprint:
                 raise ValueError(
-                    f'{owner} 校验失败：修订后问题集原样重现（同一问题集重复即停，'
-                    f'不无限付费）；原响应已按 attempt 留证，剩余修复走 owner patch '
-                    f'或人工重跑：{errors}')
+                    f'{owner} 校验失败：节点内校验重问后问题集原样重现'
+                    '（同一问题集重复即停，不无限付费）；原响应已按 attempt 留证，'
+                    f'剩余修复走 owner patch 或人工重跑：{errors}')
             if revisions >= OWNER_REVISION_MAX_ROUNDS:
                 raise ValueError(
-                    f'{owner} 校验失败：修订轮（{OWNER_REVISION_MAX_ROUNDS}）已耗尽'
-                    '仍不过闸，停止；原响应已留证，剩余修复走 owner patch 或人工'
+                    f'{owner} 校验失败：节点内校验重问轮（≤{OWNER_REVISION_MAX_ROUNDS}）'
+                    '已耗尽仍不过闸，停止；原响应已留证，剩余修复走 owner patch 或人工'
                     f'重跑：{errors}')
             revisions += 1
             last_fingerprint = fingerprint

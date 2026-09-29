@@ -209,7 +209,7 @@ def test_ask_json_stops_after_round_cap_with_changing_issue_sets(tmp_path):
     transport = _ScriptedTransport(
         ['{"v": 1}', '{"v": 2}', '{"v": 3}'])
     base, _repo, session = _json_session(tmp_path, transport)
-    with pytest.raises(ValueError, match='修订轮（2）已耗尽'):
+    with pytest.raises(ValueError, match='节点内校验重问轮（≤2）已耗尽'):
         ask_json(session, 'bind', _request(),
                  lambda w: [f'问题第{w["v"]}类'] if w.get('v') != 4 else [])
     assert len(transport.calls) == 3, '原轮＋两轮修订即到上限'
