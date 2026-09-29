@@ -9,7 +9,7 @@
   世界约束没有通道（`ReconstructionBrief.book_constraints` 恒空）；章包没有「承接」。
 - Stage2 关联投影丢了作用对象，状态句柄会碰撞（AUD-01/02）。
 - 系统不会自愈：v13 验证轮 5 次首响应里，ch04 那次有 4 类错误被闸拦
-  （`docs/REQUIREMENTS.md:1179`）；F9 停在 body_design 之前。
+  （见 `docs/DECISIONS.md` 2026-09-26「v13 验证轮」行）；F9 停在 body_design 之前。
 - 发布权威名不副实：读取路径不看 seal（AUD-05）。
 - 新链从没接过真实模型。
 
@@ -191,7 +191,7 @@
 
 ### R4 漂移收口、文档与阅读验收协议
 - `run_chapters` 复用 `run_body` 的 `pipeline_model_slot` 与线程池并发，单章失败隔离。
-- `str06.stage5.body` 的生命周期改为章包输入与集合恢复语义（先查 `chapter_prefix_replay` 的调用方）；`state.py` 里提示已退役 `--revalidate` 的文案改正。
+- `str06.stage5.body` 的生命周期改为章包输入与集合恢复语义（先查 `committed_set_recovery` 的调用方）；`state.py` 里提示已退役 `--revalidate` 的文案改正。
 - 文档：
   - `docs/schema/str06.md`（两层 IR、送达方式、线程、承接、自愈、发布）；
   - `docs/BACKEND_CONTRACT.md` 的 R-5.14；
@@ -253,7 +253,7 @@
 「`resume_verdict` 把上游判为修订重跑」没有写进哪张许可表。现行契约：普通队列对 redo 关闭式停止（`novel/orchestrator/state.py:695-698`）；redo 仅 AgentRun 单步 operator 经 `operator_redo_flags` 执行，且要求节点登记 `operator_redo` 策略＋每份 stale 输出的权威汇总 reason 均为 `consumed_changed`（`novel/orchestrator/state.py:860-905`）；`OPERATOR_REDO_STRATEGIES` 只有 `('canonical',)`（`contracts/invariants.py:1657-1659`）；回派目标 `str06.stage2.associate`／`str06.stage4.preserve`／`str06.stage4.body_design` 均未登记 `operator_redo`（`contracts/invariants.py:1871-1912`），且回派场景上游产物新鲜、不满足 `consumed_changed`。「登记 `owner_revision`」进哪张表、是否动 `EXECUTION_PERMIT_KINDS`（现为 `('ready', 'recovery')`，`contracts/invariants.py:77`）的 recovery 许可，均未写。两种读法——只改判定、把修订停给人；或新增自动执行通道——产物不同，直接影响 R3 完成标准「故障注入 fake 全链靠修订跑完」。
 
 **E-2（medium）·「设计原则」保留不动清单 vs R2.4：两个「四类」未消歧。**
-「保留不动：四类语义真源」与「四类跨章字段」（R2.4 要删除的 `BodyDesign.standing_goals`／`ongoing_actions`／`open_questions`／`promises`，`contracts/schema/design.py:245-248`）字面易混。仓内术语锚点：`docs/REQUIREMENTS.md:20` 定义四类故事语义真源＝Characters／Blueprint／TargetDesign／SemanticBinding（复核时另有人读成「Stage2 四份语义观察」，也与跨章字段不同）。执行者若把「四类语义真源」读成跨章字段清单，则与裁决 3／R2.4「删除四个静态列表」直接矛盾——删字段与保字段两种做法产物相反。R2 开工先按锚点消歧，并把「保留不动」句改写成点名定义。
+「保留不动：四类语义真源」与「四类跨章字段」（R2.4 要删除的 `BodyDesign.standing_goals`／`ongoing_actions`／`open_questions`／`promises`，`contracts/schema/design.py:245-248`）字面易混。仓内术语锚点：`docs/REQUIREMENTS.md`「目标与范围」定义四类故事语义真源＝Characters／Blueprint／TargetDesign／SemanticBinding（复核时另有人读成「Stage2 四份语义观察」，也与跨章字段不同）。执行者若把「四类语义真源」读成跨章字段清单，则与裁决 3／R2.4「删除四个静态列表」直接矛盾——删字段与保字段两种做法产物相反。R2 开工先按锚点消歧，并把「保留不动」句改写成点名定义。
 
 **E-3（medium）· R2.7：`forbidden_reveals` 引用线程 close 缺 wire 落点。**
   **R2 引擎批已消歧（2026-09-28，读法 b）**：compiler 把未到时点的线程 close 机械

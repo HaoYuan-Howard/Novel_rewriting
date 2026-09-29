@@ -5,21 +5,22 @@
 
 | 文档 | 负责的语义 |
 |---|---|
+| [str06](str06.md) | STR-06 新链架构总纲：14 节点、两层 IR、自愈、发布权威与恢复 |
 | [stage0](stage0.md) | 剔除决定、原文身份与 clean 的确定性物化 |
-| [stage1](stage1.md) | 原文分章、开篇文案及即时章号诊断 |
-| [characters](characters.md) | 人物主体、提及证据与称名投影 |
-| [stage2](stage2.md) | Global grounding、Blueprint 原子事实、统一机械准入与生成依赖 |
-| [stage4](stage4.md) | A 盲设计、B 证据绑定、计划与写作上下文 |
-| [stage5](stage5.md) | canonical 正文、Review、人工改稿、trim 与授权改写恢复 |
-| [stage7](stage7.md) | 改名决策、替换和可交付小说 |
+| [stage1](stage1.md) | 原文分章、源引子（hook_copy）物化与即时章号诊断 |
+| [stage2](stage2.md) | 源语义观察、名称结构、关联与编译（五节点协议与判据） |
+| [stage4](stage4.md) | 目标故事：Preserve／BodyDesign／Bind／HookDesign 与确定性编译、Guard |
+| [stage5](stage5.md) | 按章正文与 Hook 成文（body／hook 两节点） |
+| [stage7](stage7.md) | 命名（naming）与成书组装（assemble） |
 | [_common](_common.md) | provenance、freshness、用量、归档及共有字段 |
 | [_report](_report.md) | 当前 CheckReport 的输出语义 |
-| [_orchestration](_orchestration.md) | 作业、Supervisor、执行 epoch、审批与运行记录 |
+| [_orchestration](_orchestration.md) | 作业、编排、执行 epoch 与运行记录 |
 | [_api](_api.md) | HTTP 读写协议与前端消费约束 |
-| [work_units](work_units.md) | 工作单元、内容轮、恢复来源和累计额度 |
+| [work_units](work_units.md) | 工作单元账、整书额度闸、追加授权与按原配置继续 |
 | [corpus](corpus.md) | current-schema 语料 manifest 与硬验收分母 |
-| [evaluation](evaluation.md) | 语义候选证据、统计边界与人工裁决 |
-| [style_transfer_validation](style_transfer_validation.md) | 文风保留的验收对象和测量边界 |
+
+旧链退役文档（characters、evaluation、style_transfer_validation 等）已删除，历史原文按
+Git 查询；存量旧书按 `legacy_incompatible` 只读拒识，不需要当前形状说明。
 
 ## 类型、版本与路径
 

@@ -1,8 +1,8 @@
 # 工程运维手册
 
 本文供开发维护 agent 和维护者查环境、部署、测试、诊断与工程恢复。它不被 Executor 加载，也不参与
-确定性调度。正常使用通过前端自动跑书或人工各 Stage 页面完成；受托 Commander 审阅角色已退役
-（2026-09-15），自动跑书在人工审批闸停止、过闸后原配置续跑。
+确定性调度。产品为全自动单模式：上传即授权开跑，Stage 页只读监控；历史人工审批闸与
+受托审阅角色均已整层退役。
 页面应提供阻塞原因、材料与可用动作，不要求用户先读本手册。产品语义见
 `docs/BACKEND_CONTRACT.md`，前端开发见 `web/AGENTS.md`。
 
@@ -41,72 +41,10 @@ conda run -n novel_refactor python -X utf8 -u -m novel.cli operator next <sid> -
 需要的 exact execution token；不得重新扫描全链或凭聊天记忆推演下一步。`operator permit` 只保留给
 blocked recovery 和诊断兼容，blocked action hash 本身不是恢复许可。
 
-## 新旧工作流的执行边界
-
-当前 manifest v6 登记 `stage6-prepare-v1`、`independent-hook-preparation-v1` 及初始化产物版本快照，
-普通入口只接受当前版本，独立空根才可初始化；旧 manifest、事实蓝图和审批不自动迁移。首次合法写入前固定
-`_service/workflow.json`；其后所有节点、直接 producer、审批和恢复共用该身份，不另建执行 epoch。
-不得删除 manifest、工作单元账或原审批来重新初始化；旧 base 的读取与诊断不授予新写入权限。
-
-已登记的版本推进为 Gate A 的 v4 → Gate B 的 v5、Gate B 的 v5 → Gate C 的 v6。前者用冻结来源
-代码收口 Stage2 实际语义接受，后者还须证明 Stage5 当前闭合。排空所有 owner，停止服务、队列调度器
-和独立 CLI，再在干净、固定提交的目标代码中执行：
-
-```powershell
-conda run -n novel_refactor python -m novel.cli workflow transition preview --base <原输出根> --source-code <冻结来源checkout> --port <原服务端口> --stopped-pid <已退出的服务PID> --offline-ack --actor codex --reason <推进理由>
-conda run -n novel_refactor python -m novel.cli workflow transition apply --base <原输出根> --transition-id <preview返回ID> --prepared-sha256 <preview返回摘要> --yes
-```
-
-多个原服务端口/PID分别重复对应参数。`--offline-ack` 明确包括未监听端口的独立 CLI；工具同时占住
-声明端口、检查 PID、持有现有 writer/owner 文件锁，并用来源代码复核生命周期完整分母和实际 Core 接受。
-来源 checkout 必须仍是对应干净提交；当前工作区已经修改时，另建固定该提交的 checkout，不能冒称旧版本。
-
-preview 保存不可变 `_service/workflow_transitions/<ID>/prepared.json` 和 pending 围栏，绑定原 manifest、
-目标 manifest、两侧代码、全盘保留清单及审批来源。apply 只按精确 source/target 原字节提交；原 task_id、
-created_at、profiles、累计 ledger、工作单元、人物、Global 和审批保持原字节。唯一派生产物例外是
-Characters 的独立 Blueprint 人物投影：调用现役纯编译器补全呈现绑定，原/目标投影及 Characters/MainText
-输入摘要一起冻结，不用默认空值兼容旧投影，也不据旧 gate bool 签发新审批。
-
-任何目标下游 formal、INVALID、history、checkpoint、prepared 或已购回答残留都拒绝推进，不能删文件绕过。
-投影、manifest 或 completed 的任一提交窗口中断，都用同一 ID/SHA 免费补尾：
-
-```powershell
-conda run -n novel_refactor python -m novel.cli workflow transition recover --base <原输出根> --transition-id <原ID> --prepared-sha256 <原摘要> --yes
-```
-
-若 preview 在返回前中断，从该目录的不可变 prepared 取 ID，并对原始文件计算 SHA-256；不能重新生成
-另一份 prepared。第三方改动不是可恢复的 source/target 窗口，必须停下核对。completed 未闭合时普通写口
-拒绝；completed 重放只返回原回执，不重新检查已开始的下游或重开事务。这些命令不调用模型、不增加或重置
-内容额度；后续运行仍开新 execution epoch，并按原 profiles、原累计额度继续。v5 → v6 保留全部 Stage4–5
-产物、审批、运行来源，不重建人物投影；仅拒绝 Stage6/7 的 formal、INVALID、history、prepared、checkpoint
-和已购回答残留。两个版本对保留各自不可变回执与恢复，不能泛开任意 manifest 升级。
-
-上一迁移已写 completed、但 pending 指针尚未清理时，下一迁移只在旧回执闭合且旧 target 原字节
-恰等于新 source 时接管围栏。新 prepared 已保存而指针交接中断，仍用新 ID/SHA recover；代码在
-离线、来源清单和生命周期证明全部通过后才清理旧指针。不要手删 pending 或改写旧 completed。
-
-本分支改造前的冻结基线为 `6473b78053ddb66eb111e835e41eb8d1f120eec7`。存量中断任务先核对原
-run 审计中的代码身份，再在匹配的旧代码工作区使用该版本的恢复入口；不能仅因主分支名相同就认为版本匹配。
-对于确认属于上述基线的旧任务，可建立独立、固定提交的恢复工作区：
-
-```powershell
-git worktree add --detach .worktrees/legacy-workflow-6473b78 6473b78053ddb66eb111e835e41eb8d1f120eec7
-```
-
-在该工作区读取对应版本的运维入口，沿用原 base、账本与审批恢复。
-如果原任务属于其他代码身份，先恢复对应的原版本；代码身份缺失或脏工作区内容无法复原时保持停点。
-不得用当前版本替旧 base 补造新预算、两份 Stage2 接受证明或当前版本产物。
-
-token/耗时优化前的工程基线是 `24e4cf42c76309adaf1f4ee4df0dca3cdbea4d37`；采用
-`workflow-role-boundaries-v1` 的根仍与其真实原代码身份配对恢复。人工追加在运行页工作单元
-详情预览后提交，默认一次、单次一至四次；它不清账，也不代替付费与正文外发授权。
-“按原配置继续”复用历史完整 profiles，缺配置或原 owner 未排空则明确拒绝。完整 schema 与
-停止、幂等和累计成本边界见 `docs/schema/work_units.md`。
-
 ## AgentRun 与流水线恢复
 
-自动运行的暂停、恢复、停止和按原配置继续使用跑书页；Stage 页只读监控（Stage6 三候选
-改选除外）。工程诊断先查询 `python -m novel.cli --help` 和目标子命令 `--help`。内部执行入口为
+自动运行的暂停、恢复、停止和按原配置继续使用跑书页；Stage 页只读监控。工程诊断先查询
+`python -m novel.cli --help` 和目标子命令 `--help`。内部执行入口为
 `novel/orchestrator/run_step.py`；命名 scratch
 诊断在 `novel/orchestrator/preflight.py`。这些模块均可用 `python -m <模块名> --help` 查看参数。
 运行代码和 workpack 身份覆盖必要资源；当前 start/epoch 使用 `identity_version=3`（引擎
@@ -120,17 +58,14 @@ effort/thinking）。本地 Agent CLI（`kind=agent` / driver / execution_mode�
 如需其他 HTTP transport，须独立接入，不能复用 DeepSeek 的预算与 thinking 语义。
 正文外发授权与费用确认彼此独立。
 
-无回答的传输失败（历史 Commander 工作单元；角色已退役，仅存量书收口）可由开发维护 agent 免费收口：先用
+无回答的传输失败可由开发维护 agent 免费收口：先用
 `python -m novel.orchestrator.work_unit_recovery --base <根> --sid <sid> --unit-id <id> --turn-id <id>`
 取得预览；将 `preview_token`、执行者 `actor`、核实理由 `reason` 写入 JSON 后，同命令增加
 `--apply-request <JSON路径>`。该入口逐项核成本、session、原请求、日志和 owner 排空证据，
 只把已确认失败的 unknown 改为 failed，不生成语义决定、不退还额度、不清除未知用量。
 存在已购回答或证据缺失时继续阻断，先恢复原结果；同一请求重放幂等。该入口不是产品跑书步骤；
 admission 账沿用历史命名（`commander_admissions.jsonl`），现役 executor 同一入口收口。
-
-历史 Agent CLI 整书验收工具 `tools/verify_agent_e2e.py` 与 `claude-code-glm` driver 已随
-单 Executor 硬切删除；存量 `ledger.jsonl` 仍全行可读（含历史 `error_kind` 词表），不重建
-运行时对象。现役关闭式验收改走定向 pytest / 交付终验，不另维护 agent-only 九节点报告。
+现役关闭式验收走定向 pytest / 交付终验，不维护 agent-only 验收报告。
 
 ### 小说流水线成本与耗时配对观测
 
@@ -139,18 +74,8 @@ admission 账沿用历史命名（`commander_admissions.jsonl`），现役 execu
 standalone 的等价入口为 `NOVEL_CONCURRENCY_POLICY` JSON；受管运行从冻结 profiles 下发，宿主环境
 不能覆盖它。原配置续跑保留该配置。总槽在同一输出根内跨书、跨进程共享，不同实验输出根彼此隔离。
 调整总槽容量前先排空旧调用；容量记录损坏时停止检查，不删除配置继续试跑。
-
-### 性能配对工具的退役边界
-
-Stage2 语义审阅退役（2026-09，工作流 v7）同批删除了读数与配对工具：`tools/workflow_metrics.py`
-的主体是 Stage2 Commander 工作单元、审阅状态与 `global_review` 盘面读数，`tools/workflow_pairs.py`
-只消费前者的冻结报告，`tools/stage2_acceptance.py` 是更早的五轮历史解释器。三者的历史实现与
-解释边界由 Git 历史保存，历史实验记录不再由现役代码解释。
-
-TODO-49 记录的 token/墙钟目标与“首轮、局部返工、故障恢复分开取证”的实验纪律仍然有效；
-但在 v7 工作流上重新执行性能配对前，须先按新的节点面重建只读读数工具并在本节登记协议，
-不能拿旧工具或旧报告的结论充当 v7 基线。工程测试、语料验收与性能实验继续分开报告；
-成本只认 `_service/ledger.jsonl`，reasoning 只作为 completion 子口径，不再次相加。
+工程测试、语料验收与性能实验分开报告；成本只认 `_service/ledger.jsonl`，reasoning 只作为
+completion 子口径，不再次相加；重做性能配对前先按现役节点面重建只读读数工具并登记协议。
 
 ### 当前运行的收尾与恢复
 
@@ -215,7 +140,7 @@ pytest 汇总行有时到不了宿主工具输出；需要精确 passed/skipped 
 call 与 teardown，再对少量代表用例使用 cProfile；profiler 的附加开销不与普通测试秒数混比。
 
 ```powershell
-& 'D:/Miniconda/envs/novel_refactor/python.exe' -B -m pytest -n 0 tests/test_agent.py tests/test_stage4_binding_input_recovery_integration.py tests/test_stage4_plan_chapters.py --durations=35 --basetemp=E:/_tr -o cache_dir=.test_cache --junitxml=.test_cache/test-hotspots.xml
+& 'D:/Miniconda/envs/novel_refactor/python.exe' -B -m pytest -n 0 tests/test_agent.py tests/test_str06_body.py tests/test_str06_workflow.py --durations=35 --basetemp=E:/_tr -o cache_dir=.test_cache --junitxml=.test_cache/test-hotspots.xml
 ```
 
 JUnit 的单用例 time 合并准备、执行与清理；不能据此把整个慢用例归因于某一阶段。首项 setup 还可能
@@ -327,7 +252,7 @@ STR-06 新链的 Stage4 免费聚合由结构性禁付节点 `str06.stage4.compi
 付费与正文外发是两份独立授权（`--yes`／`--allow-egress`），入口只有
 `novel.cli run <str06 节点> <sid>`；恢复入口与账务纪律见 `tests/test_str06_f7a_wiring.py`。
 
-旧链的 `stage4.design/plan --reaggregate`、`--recover-prepared` 与
-stage4/design_recovery.py、plan_recovery.py 随旧链整层退役（F8b-3），
-只服务存量 run 的历史解码；旧书按 `legacy_incompatible` 只读拒识，重跑须在独立输出根
-按新链重新上传。
+旧书按 `legacy_incompatible` 只读拒识，重跑须在独立输出根按新链重新上传
+（裁决见 `docs/DECISIONS.md` 2026-09-09～10「一次整根切换」行）；旧链恢复动作
+（reaggregate／recover-prepared 一类）已随旧链整层退役，历史解码按 Git 与
+`contracts/schema/retirement.py` 台账读取。
