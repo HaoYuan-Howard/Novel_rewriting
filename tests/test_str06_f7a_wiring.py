@@ -20,6 +20,7 @@ from novel.errors import ProvenanceRefused, UpstreamStale
 from novel.llm.ledger import CostLedger, ledger_path, read_cost_snapshot
 from novel.llm.paid_requests import (
     AdoptionRef, ExecutionError, PaidRequestSession, PurchaseRequired, ask_json,
+    digest,
 )
 from novel.llm.transport import ChatRequest, ChatResponse
 from novel.store import Str06Repository
@@ -497,3 +498,91 @@ def test_crash_tail_replays_exact_without_new_purchase(tmp_path):
     assert transport.calls == calls_before, '崩溃补尾不得新购'
     assert repo.path('stage7/final/报恩_rewriting.txt').read_bytes() == final_before
     assert repo.inspect('runtime/workflow_status.json')['status'] == 'delivered'
+
+
+# ─── R8a-6：agent 流源根的工作单元耐久证据（无 runtime/request_*） ────────────
+
+def _work_unit_source_root(tmp_path, *, content='{"entries": []}'):
+    """agent 流形态的源根：不落 runtime/request_<identity>.json，同请求身份的
+    已购事实只在源 base 的工作单元账（请求 blob＋attempt 响应）与成本账里。"""
+    from novel.work_units import WorkUnitBudget, initialize_workflow
+
+    source_base = tmp_path / 'source-wu'
+    initialize_workflow(source_base)
+    root = source_base / 'run'
+    request = _request()
+    identity = digest({'owner': 'bind', 'provider': 'fake',
+                       'request': request.cache_payload()})
+    ledger = CostLedger(path=ledger_path(source_base))
+    unit = WorkUnitBudget(source_base, 'run', 'str06.stage4.bind',
+                          'executor', 'book')
+    turn = unit.reserve(
+        identity, run_id='agent-run-wu', agent_run_id='agent-run-wu',
+        agent_epoch_id='epoch-wu', candidate_session_run_id='cand-sess-wu',
+        request_payload={'owner': 'bind', 'provider': 'fake',
+                         'request': request.cache_payload()})
+    payload = {'attempt_id': 'att-wu', 'attempt': 1,
+               'response': {'content': content, 'reasoning': None,
+                            'usage': {'prompt_tokens': 11, 'completion_tokens': 22},
+                            'model': 'deepseek-flash', 'finish_reason': 'stop'},
+               'request_payload': request.cache_payload()}
+    unit.record_attempt(turn.turn_id, attempt_id='att-wu', outcome='ok',
+                        request_fingerprint=identity)
+    unit.record_attempt_response(turn.turn_id, 'att-wu', payload)
+    unit.save_response(turn.turn_id, payload)
+    unit.finish(turn.turn_id, outcome='delivered')
+    ledger.record(node='str06.stage4.bind', sid='run', model='deepseek-flash',
+                  request_model='fake', code='str06-rc4', attempt=1, max_attempts=1,
+                  will_retry=False, cached=False, cache_policy='request-identity',
+                  purpose='bind', attempt_id='att-wu', request_fingerprint=identity,
+                  outcome='ok', prompt_tokens=11, completion_tokens=22)
+    return root, identity, request
+
+
+def test_historical_adoption_from_work_unit_evidence(tmp_path):
+    """同请求身份在源根工作单元账（agent 流，无 request 文件）⇒ 三方绑定
+    等价 ledger-row 档；零新购、历史实付不重复计费。"""
+    root, identity, request = _work_unit_source_root(tmp_path)
+    base, repo, ledger, session = _candidate(tmp_path, root)
+    data, _answer = ask_json(session, 'bind', request, lambda _: [])
+    assert data == {'entries': []}
+    record = repo.inspect('runtime/revisions/bind.json')
+    assert record['mode'] == 'historical-adoption'
+    assert record['cost_link'] == 'ledger-row'
+    assert record['attempt_id'] == 'att-wu'
+    assert 'work_units' in record['source_rel']
+    assert record['historical_usage'] == {'prompt_tokens': 11,
+                                          'completion_tokens': 22,
+                                          'reasoning_tokens': None}
+    rows, _ = read_cost_snapshot(base)
+    assert len(rows) == 1 and rows[0]['cached'] is True
+    assert rows[0]['completion_tokens'] == 0
+
+
+def test_historical_adoption_blocks_work_unit_without_cost_row(tmp_path):
+    """反例：工作单元证据在、源成本行被抹 ⇒ 付费状态未知，拒绝采用。"""
+    root, identity, request = _work_unit_source_root(tmp_path)
+    (tmp_path / 'source-wu' / '_service' / 'ledger.jsonl').write_text(
+        '', encoding='utf-8')
+    base, repo, ledger, session = _candidate(tmp_path, root)
+    with pytest.raises(ValueError, match='原成本关联'):
+        ask_json(session, 'bind', request, lambda _: [])
+
+
+def test_wire_adoption_binds_work_unit_evidence(tmp_path):
+    """wire 采用：agent 流源根的工作单元证据闭合 ledger-row 档（canary
+    20260929b 的 owner patch 因此不再被迫 unverified）。"""
+    root, identity, request = _work_unit_source_root(tmp_path)
+    base, repo, ledger, session = _candidate(tmp_path, root)
+    wire = tmp_path / 'bind_wire.json'
+    wire.write_text('{"entries":[]}', encoding='utf-8')
+    bound = session.bind_wire_adoption('bind', identity, wire)
+    assert bound['cost_link'] == 'ledger-row'
+    assert bound['mode'] == 'historical-adoption'
+    assert bound['attempt_id'] == 'att-wu'
+    assert 'work_units' in bound['source_rel']
+    # wire 与已购响应不一致且无 patch 链 ⇒ 拒绝（不静默降档到 unverified）。
+    other = tmp_path / 'bind_wire_other.json'
+    other.write_text('{"entries": [{"x": 1}]}', encoding='utf-8')
+    with pytest.raises(ValueError, match='不一致'):
+        session.bind_wire_adoption('bind', identity, other)

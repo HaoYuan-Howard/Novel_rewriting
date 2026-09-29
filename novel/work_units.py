@@ -515,6 +515,10 @@ class WorkUnitBudget:
             raise WorkUnitRefused('工作单元登记账身份漂移')
         return registry
 
+    def digest_of(self, blob: WorkUnitBlobV1) -> str:
+        """blob 内容摘要的同一把尺（外部只读校验用，R8a-6 采用证据）。"""
+        return _digest(blob.model_dump(mode='json'))
+
     def _read(self) -> WorkUnitLedgerV2:
         if not self.path.exists():
             if self.unit_id in self._registry().unit_ids:

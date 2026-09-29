@@ -73,9 +73,9 @@ from contracts.schema.workflow import (
     STR06_NODE_IDENTITY_EXTRAS, STR06_RUNTIME_CONFIG,
     AcceptanceRecordV1, CandidateEpoch, CandidateWorkflow, candidate_node_owner,
     commit_bundle_seal, CommitAdoptionRef, CommitBundleV1, CommitInputRef,
-    CommitOutputRef,
+    CommitOutputRef, WorkUnitBlobV1,
 )
-from novel.errors import ProvenanceRefused
+from novel.errors import ProvenanceRefused, TerminalState
 from novel.llm.json_text import normalize_json_text
 from novel.llm.ledger import CostLedger, ledger_path, read_cost_snapshot
 from novel.llm.retry import TransportRetryPolicy
@@ -864,6 +864,58 @@ class PaidRequestSession:
                 cached=True, attempts_used=0,
                 attempts_max=WORK_UNIT_MAX_DELIVERY_ATTEMPTS,
                 system=request.system, user=request.user, historical=historical)
+        # R8a-6：同请求身份在源根工作单元账里的已购事实（agent 流不落
+        # runtime/request_*；证据三方绑定见 _work_unit_evidence）。
+        for root in self.adopt_roots:
+            evidence = _work_unit_evidence(root, owner, identity)
+            if evidence is None:
+                continue
+            response = evidence['payload'].get('response') or {}
+            cost = evidence['cost_row']
+            historical = {
+                'owner': owner, 'mode': 'historical-adoption',
+                'source_root': str(root.resolve()),
+                'source_rel': evidence['blob_rel'],
+                'identity': identity,
+                'attempt_id': evidence['attempt'].attempt_id,
+                'provider': cost.get('provider'), 'model': response.get('model'),
+                'historical_usage': {
+                    'prompt_tokens': cost.get('prompt_tokens'),
+                    'completion_tokens': cost.get('completion_tokens'),
+                    'reasoning_tokens': cost.get('reasoning_tokens')},
+                'new_paid_calls': 0, 'cost_link': 'ledger-row', 'errors': []}
+            self._write_revision(owner, {
+                'owner': owner,
+                'kind': 'historical_adoption',
+                'mode': 'historical-adoption',
+                'request_sha256': identity,
+                'attempt_id': evidence['attempt'].attempt_id,
+                'model': response.get('model'),
+                'source_root': str(root.resolve()),
+                'source_rel': evidence['blob_rel'],
+                'cost_link': 'ledger-row',
+                'historical_usage': historical['historical_usage'],
+                'new_paid_calls': 0,
+                'created_at': int(time.time())})
+            self._record_adoption(owner, request, identity, {
+                'status': 'answered', 'model': response.get('model'),
+                'provider': cost.get('provider'),
+                'content': response.get('content'),
+                'reasoning': response.get('reasoning'),
+                'finish_reason': response.get('finish_reason'),
+                'usage': response.get('usage'),
+                'attempt_id': evidence['attempt'].attempt_id})
+            return DurableAnswer(
+                owner=owner, request_sha256=identity, sid=self.sid,
+                unit_id=self._unit_for(owner).unit_id,
+                turn_id='', ordinal=0, attempt_id=evidence['attempt'].attempt_id,
+                response_sha256='', content=response.get('content'),
+                reasoning=response.get('reasoning'),
+                finish_reason=response.get('finish_reason'),
+                usage=response.get('usage'), model=response.get('model') or request.model,
+                cached=True, attempts_used=0,
+                attempts_max=WORK_UNIT_MAX_DELIVERY_ATTEMPTS,
+                system=request.system, user=request.user, historical=historical)
         return None
 
     def _write_revision(self, owner: str, record: dict) -> None:
@@ -905,10 +957,14 @@ class PaidRequestSession:
                            allow_patch: bool = False) -> dict:
         """wire 采用的身份／成本绑定（F7a-3）：返回并入采用记录的字段。
 
-        证据分两轮扫描，逐档下降但都如实登记：
+        证据分三轮扫描，逐档下降但都如实登记：
         · 第一轮（`ledger-row`）：任一注册源根有同请求身份的已购行，成本关联
           唯一且真实；wire 字节与其响应内容相等——身份、响应、成本三方绑定；
-        · 第二轮（`batch-documented`）：源根 `adopt_<owner>.json` 记录与本 wire
+        · 第二轮（`ledger-row`，R8a-6）：源根**工作单元账**的耐久证据（请求
+          blob＋attempt 响应＋按 attempt_id 关联的成本行）——agent 流购买不落
+          `runtime/request_<identity>.json`，它的已购事实只在这里（canary
+          20260929b 的 owner patch 因此被迫 unverified）；
+        · 第三轮（`batch-documented`）：源根 `adopt_<owner>.json` 记录与本 wire
           字节一致（采用链可验），原购买根的逐请求账未持久（F2b 批次证据），
           成本只到批次口径；
         · 都没有（`unverified`）：仅形状校验，采用记录如实标注。
@@ -967,6 +1023,44 @@ class PaidRequestSession:
                 raise ValueError(
                     f'{owner} wire 与采用源 {root} 的已购响应内容不一致，且无匹配的 '
                     'owner patch 采用链，拒绝采用')
+        # R8a-6 第二档（work-unit 耐久证据）：agent 流购买不落
+        # runtime/request_<identity>.json，同请求身份的已购事实在工作单元账里
+        # （请求 blob＋attempt 响应＋按 attempt_id 关联的成本行）——三方绑定
+        # 等价 ledger-row 档；wire 不一致仍走 owner patch 链或显式拒。
+        for root in self.adopt_roots:
+            evidence = _work_unit_evidence(root, owner, identity)
+            if evidence is None:
+                continue
+            response = evidence['payload'].get('response') or {}
+            cost = evidence['cost_row']
+            usage = {'prompt_tokens': cost.get('prompt_tokens'),
+                     'completion_tokens': cost.get('completion_tokens'),
+                     'reasoning_tokens': cost.get('reasoning_tokens')}
+            if _same_json_payload(wire_path, response.get('content') or ''):
+                return {'mode': 'historical-adoption', 'cost_link': 'ledger-row',
+                        'source_root': str(root.resolve()),
+                        'source_rel': evidence['blob_rel'],
+                        'identity': identity,
+                        'attempt_id': evidence['attempt'].attempt_id,
+                        'provider': cost.get('provider'),
+                        'model': response.get('model'),
+                        'historical_usage': usage}
+            recorded = self._adopt_record(root, owner)
+            if allow_patch and (recorded is None
+                                or recorded.get('sha256') == wire_sha):
+                return {'mode': 'historical-adoption', 'cost_link': 'ledger-row',
+                        'owner_patch': True,
+                        'source_root': str(root.resolve()),
+                        'source_rel': evidence['blob_rel'],
+                        'identity': identity,
+                        'attempt_id': evidence['attempt'].attempt_id,
+                        'provider': cost.get('provider'),
+                        'model': response.get('model'),
+                        'historical_usage': usage}
+            if recorded is None or recorded.get('sha256') != wire_sha:
+                raise ValueError(
+                    f'{owner} wire 与采用源 {root} 的工作单元已购响应内容不一致，'
+                    '且无匹配的 owner patch 采用链，拒绝采用')
         for root in self.adopt_roots:
             recorded = self._adopt_record(root, owner)
             if recorded is not None and recorded.get('sha256') == wire_sha:
@@ -1135,6 +1229,61 @@ def _content_sha256(content: str | None) -> str | None:
     if content is None:
         return None
     return hashlib.sha256(content.encode('utf-8')).hexdigest()
+
+
+def _work_unit_evidence(root: Path, owner: str, identity: str) -> dict | None:
+    """源根工作单元的耐久采用证据（R8a-6）：请求 blob＋attempt 响应＋成本行。
+
+    agent 流的购买不落 ``runtime/request_<identity>.json``——同请求身份的
+    已购事实完整留在源根的工作单元账里：turn（``request_sha256``）→ ok
+    attempt（``request_fingerprint``＋响应 blob）→ 源 base 成本账里按
+    attempt_id 关联的唯一真实付费行。三方齐全返回证据字典；**该身份在源根
+    没有轮**返回 None（交下一档）；账损坏（blob 摘要漂移、请求工作包缺失、
+    成本账有尾）显式拒绝——不静默降档（I-34）。
+    """
+    node, scope = _owner_unit(owner)
+    source_base = root.parent
+    source_sid = root.name.replace('/', '_')
+    try:
+        unit = WorkUnitBudget(source_base, source_sid, node, 'executor', scope)
+        ledger = unit._read()
+    except (OSError, ValueError, TerminalState):
+        # 源 base 没有现役 workflow／登记账不可读＝该根无工作单元证据，交下一档。
+        return None
+    turn = next((t for t in reversed(ledger.turns)
+                 if t.request_sha256 == identity), None)
+    if turn is None or turn.request_payload_sha256 is None:
+        return None
+    attempt = next((a for a in reversed(turn.attempts)
+                    if a.request_fingerprint == identity and a.outcome == 'ok'
+                    and a.response_sha256), None)
+    if attempt is None:
+        return None
+    blob_path = unit.directory / f'{attempt.response_sha256}.json'
+    request_blob = unit.directory / f'{turn.request_payload_sha256}.json'
+    if not request_blob.is_file():
+        raise ValueError(
+            f'{owner} 采用源 {root} 的工作单元请求工作包缺失（账损坏），拒绝采用')
+    blob = WorkUnitBlobV1.model_validate(
+        Str06Repository.read_external(blob_path))
+    if (unit.digest_of(blob) != attempt.response_sha256
+            or blob.unit_id != unit.unit_id or blob.turn_id != turn.turn_id):
+        raise ValueError(
+            f'{owner} 采用源 {root} 的工作单元响应证据身份漂移，拒绝采用')
+    rows, partial = read_cost_snapshot(source_base)
+    if partial:
+        raise ValueError(f'采用源 {root} 的成本账有未提交尾，先恢复再采用')
+    original = [r for r in rows
+                if r.get('attempt_id') == attempt.attempt_id
+                and r.get('request_fingerprint') == identity]
+    if len(original) != 1 or original[0].get('cached') \
+            or original[0].get('outcome') != 'ok':
+        raise ValueError(
+            f'{owner} 采用源 {root} 缺原成本关联（attempt_id＋指纹无唯一'
+            '真实付费行）；付费状态未知，拒绝采用')
+    return {'unit': unit, 'turn': turn, 'attempt': attempt, 'payload': blob.payload,
+            'cost_row': original[0], 'blob_rel': blob_path.relative_to(
+                source_base).as_posix()}
 
 
 def _same_json_payload(path: Path, content: str) -> bool:
