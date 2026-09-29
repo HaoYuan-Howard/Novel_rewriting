@@ -515,6 +515,8 @@ beats 里的 threads 是拍上的线程操作，分三种：
 value(string 或 null), scope(book/scene), knowledge_mode(knowledge 为
 known/suspected/heard/believes，其它不写该键；believes＝持有者以为为真、不代表世界
 为真，用于传递错误看法)。初始态一律 book 作用域，不写 scope 键（compiler 填）。
+拍上的 target_delta **每条必写 scope**：持续到后续场景的事实用 book；只在
+本场内成立的临时动作环境用 scene——缺 scope 键即拒（机械校验，无默认值）。
 knowledge 的 knowledge_mode：known＝确知、suspected＝怀疑、heard＝听说、believes＝
 持有者以为为真（不代表世界为真）——错误看法（如"芸娘以为夫君已离开"）必须用
 believes 以结构形式传到写手，不得写成 known 让写手当作世界事实演出。

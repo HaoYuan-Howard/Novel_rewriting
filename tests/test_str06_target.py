@@ -412,6 +412,10 @@ def test_design_rules_pin_pov_shape():
     assert '一场只有一个视角' in DESIGN_RULES
     assert '不写数组' in DESIGN_RULES
     assert '"narrator"' in DESIGN_RULES
+    # 同类钉（第二轮实证）：拍上 target_delta 的 scope 必填——run2 新购 27 条
+    # 全漏写键（run1 恰好 39/39 全写），值形不写明就是掷骰子。
+    assert '每条必写 scope' in DESIGN_RULES
+    assert '无默认值' in DESIGN_RULES
 
 
 def test_design_surface_release_must_be_registered():

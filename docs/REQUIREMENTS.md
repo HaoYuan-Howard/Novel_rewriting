@@ -1552,6 +1552,34 @@ B6-A／B6-B 分别授权；R 批全部 fake transport、零模型调用。
     pov 归一/typed 拒两测＋DESIGN_RULES 值形钉；定向面
     `test_stage4_design_contract_v3`／`test_str06_f7e_freeze`／
     `test_str06_stage2_publish`／`hard_cases` 全绿（JUnit 50/0/0）。
+  - **续跑结果（同日）**：修复后重购 body_design（82.7k completion tokens）pov
+    27/27 全过；新卡点＝`target_delta` 缺 `scope`×27（另 3 条 beats too_short 是
+    其下游）——同类根因（状态词表只写键名未说拍上必填），run1 恰好 39/39 全写、
+    run2 整批漏写。处置：① `DESIGN_RULES` 状态词表补「拍上 target_delta 每条
+    必写 scope（无默认值）」（第二个值形钉）；② 本轮按证据走 owner patch——
+    同书同模型前一已购答案 39/39 全部 `scope:'book'`（五域无例外），turn-4 补
+    `'book'`×27 后本地全量校验过，`--wire-dir` 免费采用（修订记录如实标
+    `wire-adoption/unverified`，基线身份＝turn-4 请求身份，0 新付费）。
+  - **链路后续**：bind 实购通过（`semantic_binding.json`）；hook_design 实购
+    通过（`presentation_graph.json`，3 次调用）；`str06.stage4.compile` 正确
+    触发 R3 回派——bind 报 5 条必保义务 unbound（owner=design，依赖顺序：
+    前置义务承载场景晚于依赖义务语义场景，ob05/09/28/43/45），issue 记录落
+    `runtime/issues/design.json`（修订轮 1/2）。
+  - **遗留阻塞（用户级裁决待定）**：
+    ① design 工作单元内容预算 4/4 耗尽（3 轮烧在 pov 修复前＋1 轮新购），修订
+    轮被拦；设计好的出口「单元人工追加额度」在 agent 流单元上被
+    `成本 owner 与原 producer 的 execution epoch 不闭合` 拒绝——agent 流成本行
+    的 parent（epoch session uuid）与 AgentRun 身份不闭合，且 canary 中途代码
+    修复使 epoch 按 code_drift/code_change 多次滚动，需工程批修 grant 的 owner
+    证明面（含对历史轮次的适配）；
+    ② 5 条依赖顺序冲突的修复是语义决定（design 重排场景或 bind 重选承载位），
+    不适合无人裁决的 owner patch；
+    ③ agent 流购买不落 `runtime/request_<identity>.json`（legacy 直连证据面），
+    owner patch 采用只能 `unverified` 绑定——证据桥接属 S-04 双写禁区，如需
+    ledger-row 级绑定应在 agent 流补正式证据出口。
+  - 运行教训：canary 期间在仓根增删临时脚本会改变脏树代码身份，每次 CLI 拉起
+    都滚 `code_change` epoch（run2 连滚 4 个）——canary 会话应保持工作树稳定或
+    批间提交。
 
 ## 职责解耦批次（2026-09-27 起；B0–B6）
 
