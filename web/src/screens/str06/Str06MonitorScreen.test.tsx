@@ -87,7 +87,15 @@ describe('Str06MonitorScreen', () => {
     expect(report).toHaveTextContent('1、2')
     // 成功 run 不渲染失败块（失败形状缺席是 null，不是空对象）。
     expect(screen.queryByTestId('str06-run-failure')).not.toBeInTheDocument()
-    expect(screen.queryByTestId('str06-body-failures')).not.toBeInTheDocument()
+    // 逐章留证（D3/W2）是「最近一次完成执行」的合法空清单：两块并排呈现，
+    // 无失败章——与「没执行过」的缺席 null 是两件事。
+    const bodyFailures = screen.getByTestId('str06-body-failures')
+    expect(bodyFailures).toHaveTextContent('正文 · 逐章失败留证')
+    expect(bodyFailures).toHaveTextContent('最近一次完成执行')
+    expect(bodyFailures).toHaveTextContent('无失败章')
+    const observationFailures = screen.getByTestId('str06-chapter-observation-failures')
+    expect(observationFailures).toHaveTextContent('章观察 · 逐章失败留证')
+    expect(observationFailures).toHaveTextContent('无失败章')
     // 干净链从没起过修订轮：回派账缺席是 null，不渲染空账本。
     expect(screen.queryByTestId('str06-owner-issues')).not.toBeInTheDocument()
   })
@@ -112,9 +120,12 @@ describe('Str06MonitorScreen', () => {
       error_context: { owner: 'body_ch02' },
       body_failures: {
         present: true,
+        requested: [1, 2],
+        attempted: [1, 2],
         chapters: [
           { chapter_ordinal: 2, failure_kind: 'ExecutionError', detail: '截断的开头。' },
         ],
+        recorded_at: 1790269950,
       },
       assembly_report: null,
     }
@@ -135,6 +146,9 @@ describe('Str06MonitorScreen', () => {
     const failures = screen.getByTestId('str06-body-failures')
     expect(failures).toHaveTextContent('第 2 章')
     expect(failures).toHaveTextContent('ExecutionError')
+    // 请求范围与实际执行章是「最近一次完成执行」的事实，原样呈现。
+    expect(failures).toHaveTextContent('请求')
+    expect(failures).toHaveTextContent('实际执行')
     // Stage7 未跑：报告缺席（null）不渲染，不造「核对过」的空面。
     expect(screen.queryByTestId('str06-assembly-report')).not.toBeInTheDocument()
   })

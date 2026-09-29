@@ -56,7 +56,7 @@ STR06_API_PY = Path(str06_api.__file__)
 _STR06_MODELS = tuple(name for name in dir(str06_api) if name.startswith('Str06'))
 
 
-def _candidate_root(tmp_path, wires, *, through='stage7') -> Path:
+def _candidate_root(tmp_path, wires, *, through='stage7', body_chapters=None) -> Path:
     """fake transport 全链 + workflow 身份记录 ⇒ 一个合成候选根（返回输出根）。"""
     root = tmp_path / 'cand'
     root.mkdir(exist_ok=True)
@@ -70,7 +70,7 @@ def _candidate_root(tmp_path, wires, *, through='stage7') -> Path:
                  ask_body=_fake_body(session), budget=2000, through=through,
                  book_title='报恩',
                  hook_constraints=HookConstraints(target_chars=10, hard_max_chars=360),
-                 length_band=(0.01, 0.05))
+                 length_band=(0.01, 0.05), body_chapters=body_chapters)
     init_or_resume_candidate_workflow(
         repository=repo, base=root, code='code-test', root_sha1='a' * 40,
         source_identity='b' * 64, task_id='task-1', configured_model='fake',
@@ -174,7 +174,18 @@ def test_views_cover_the_whole_delivered_chain(base):
     # 收尾批：成功形状的失败面是 None（不是空对象冒充「查过没事」）；
     # 集合核对报告就绪、五态全覆盖（空态是合法空，不是 unknown）。
     assert run.failure_kind is None and run.detail is None
-    assert run.error_code is None and run.body_failures is None
+    assert run.error_code is None
+    # 逐章留证（D3/W2）：「最近一次完成执行」语义——干净链的正文与章观察都
+    # 完成过且无失败 ⇒ 合法空清单（连同 requested/attempted/recorded_at），
+    # 不是 None（缺席＝该节点没有完成执行）。
+    assert run.body_failures is not None and run.body_failures.present
+    assert run.body_failures.chapters == ()
+    assert run.body_failures.requested == (1, 2)
+    assert run.body_failures.attempted == (1, 2)
+    assert run.body_failures.recorded_at is not None
+    assert run.chapter_observation_failures is not None
+    assert run.chapter_observation_failures.chapters == ()
+    assert run.chapter_observation_failures.requested == (1, 2)
     # 干净链从没起过修订轮：回派账缺席是 None（R3 监控面）。
     assert run.owner_issues is None
     report = run.assembly_report
@@ -216,6 +227,13 @@ def test_run_view_projects_failure_shape_and_chapter_failures(tmp_path):
     assert [c.chapter_ordinal for c in run.body_failures.chapters] == [2]
     assert run.body_failures.chapters[0].failure_kind == 'ExecutionError'
     assert run.body_failures.chapters[0].detail
+    # requested/attempted（D3/W2）：本次请求全书、两章都进了执行器。
+    assert run.body_failures.requested == (1, 2)
+    assert run.body_failures.attempted == (1, 2)
+    assert run.body_failures.recorded_at is not None
+    # 章观察顺利完成 ⇒ 它自己的留证是合法空清单，与正文失败并存不混。
+    assert run.chapter_observation_failures is not None
+    assert run.chapter_observation_failures.chapters == ()
     # 没跑到 Stage7：报告缺席是 None，不造空报告冒充「核对过」。
     assert run.assembly_report is None
     # HTTP 面与视图同形（同一 response_model，字段不丢）。
@@ -256,8 +274,10 @@ def test_run_view_projects_assembly_report_five_states(base):
     assert report.assembly is not None and report.assembly.status == 'not_ready'
     assert 'stale=[2]' in report.assembly.reason
     assert any('第2章' in problem for problem in report.chain_problems)
-    # 章级失败留证与失败形状不受 assemble 单节点重跑影响（本次没有正文失败）。
-    assert run.body_failures is None
+    # 章级失败留证与失败形状不受 assemble 单节点重跑影响：仍是完成执行时的
+    # 合法空清单（D3/W2——assemble 不写正文留证，也不该抹掉它）。
+    assert run.body_failures is not None and run.body_failures.chapters == ()
+    assert run.body_failures.requested == (1, 2) and run.body_failures.attempted == (1, 2)
 
 
 def test_half_run_candidate_keeps_present_and_missing_apart(tmp_path):
@@ -267,6 +287,11 @@ def test_half_run_candidate_keeps_present_and_missing_apart(tmp_path):
     assert run.status == 'planned_validated' and run.accepted_body is False
     # 半程没有失败、没有失败留证、没有集合核对：三个都是 None，不是空对象。
     assert run.failure_kind is None and run.body_failures is None
+    # 章观察已经完成执行过（stage2 在 stage4 之前）⇒ 它的留证是合法空清单，
+    # 与从未执行的正文（None）分开（I-42：缺席≠空）。
+    assert run.chapter_observation_failures is not None
+    assert run.chapter_observation_failures.chapters == ()
+    assert run.chapter_observation_failures.requested == (1, 2)
     assert run.assembly_report is None
     # 也没起过任何修订轮：回派账缺席是 None，不是空账本。
     assert run.owner_issues is None
@@ -283,16 +308,150 @@ def test_half_run_candidate_keeps_present_and_missing_apart(tmp_path):
     assert views.ir_nav_view(base, 'cand').present
 
 
+# ───────────────────────── D3/W2：逐章失败留证（章观察 × 正文） ─────────────
+
+def test_chapter_observation_failures_project_the_last_completed_execution(
+        tmp_path, monkeypatch):
+    """章观察逐章失败留证（D3/W2）：失败投影 requested/attempted/chapters。
+
+    粘性故障（unknown_slug）⇒ 第 1 章观察修订后同问题集停 ⇒ 失败按章留证；
+    正文从未执行 ⇒ 它的留证缺席（None），两个字段不互相冒充。
+    """
+    from tests.str06_facilities import json_ask, text_ask, stub_body_runner
+    from tests.str06_faults import FaultTransport, looped_full_chain_wires
+    from tests.test_str06_body import _make_session
+
+    root = tmp_path / 'obs'
+    root.mkdir(exist_ok=True)
+    repo = Str06Repository(root / 'run')
+    ledger = CostLedger(path=ledger_path(root))
+    repo.attach_context(make_context(root / 'run', ledger=ledger))
+    sticky = FaultTransport(looped_full_chain_wires(), 'unknown_slug')
+    session = PaidRequestSession(repo, ledger, sticky, yes=True,
+                                 allow_source_export=True, provider='fake', sid='run')
+    stub_body_runner(monkeypatch)
+    with pytest.raises(Exception, match='ch01 校验失败'):
+        run_workflow(repository=repo, chapters=_chapters(),
+                     ask=json_ask(session), ask_text=text_ask(session),
+                     ask_body=lambda owner, prompt: None, budget=2000,
+                     through='stage7', book_title='报恩',
+                     hook_constraints=HookConstraints(target_chars=10,
+                                                      hard_max_chars=360))
+    init_or_resume_candidate_workflow(
+        repository=repo, base=root, code='code-test', root_sha1='a' * 40,
+        source_identity='b' * 64, task_id='task-1', configured_model='fake',
+        created_at=1759000000)
+
+    run = views.run_view(tmp_path, 'obs')
+    assert run.status == 'failed' and run.failed_node == 'str06.stage2.chapters'
+    failures = run.chapter_observation_failures
+    assert failures is not None and failures.present
+    assert failures.requested == (1, 2), '章观察的 requested 是全部源章'
+    assert failures.attempted == (1, 2)
+    assert [c.chapter_ordinal for c in failures.chapters] == [1]
+    assert failures.chapters[0].failure_kind == 'ValueError'
+    assert 'ghost' in failures.chapters[0].detail
+    assert failures.recorded_at is not None
+    # 两个逐章留证互不冒充：正文从未执行 ⇒ 缺席（None），不是空清单。
+    assert run.body_failures is None
+    # HTTP 面与视图同形（同一 response_model，字段不丢）。
+    with TestClient(create_app(tmp_path)) as client:
+        response = client.get('/api/str06/candidates/obs/run')
+        assert response.status_code == 200
+        assert response.json() == json.loads(run.model_dump_json())
+
+
+def test_body_failures_clear_after_authorized_recovery(tmp_path):
+    """恢复后留证清空（D3/W2）：未授权执行把 PurchaseRequired 按章留证，
+    授权重跑完成 ⇒ 同一文件改写成合法空清单——不是删文件冒充没执行过。"""
+    root = tmp_path / 'auth'
+    root.mkdir(exist_ok=True)
+    repo = Str06Repository(root / 'run')
+    ledger = CostLedger(path=ledger_path(root))
+    repo.attach_context(make_context(root / 'run', ledger=ledger))
+    authorized = PaidRequestSession(
+        repo, ledger, _RoutingTransport(_full_chain_wires()), yes=True,
+        allow_source_export=True, provider='fake', sid='run')
+    # 语义层先跑完（付费授权在）；正文单独一次未授权执行。
+    run_workflow(repository=repo, chapters=_chapters(),
+                 ask=_fake_ask(authorized), ask_text=_fake_text(authorized),
+                 ask_body=_fake_body(authorized), budget=2000, through='stage4',
+                 book_title='报恩',
+                 hook_constraints=HookConstraints(target_chars=10, hard_max_chars=360),
+                 length_band=(0.01, 0.05))
+    init_or_resume_candidate_workflow(
+        repository=repo, base=root, code='code-test', root_sha1='a' * 40,
+        source_identity='b' * 64, task_id='task-1', configured_model='fake',
+        created_at=1759000000)
+    unauthorized = PaidRequestSession(
+        repo, ledger, _RoutingTransport(_full_chain_wires()), yes=False,
+        allow_source_export=False, provider='fake', sid='run')
+    with pytest.raises(Exception, match='未授权新调用'):
+        run_workflow(repository=repo, chapters=_chapters(),
+                     ask=_fake_ask(unauthorized), ask_text=_fake_text(unauthorized),
+                     ask_body=_fake_body(unauthorized), budget=2000,
+                     node_filter=('str06.stage5.body',), book_title='报恩',
+                     hook_constraints=HookConstraints(target_chars=10,
+                                                      hard_max_chars=360),
+                     length_band=(0.01, 0.05))
+    run = views.run_view(tmp_path, 'auth')
+    assert run.status == 'needs_authorization'
+    blocked = run.body_failures
+    assert blocked is not None and blocked.present
+    assert blocked.requested == (1, 2) and blocked.attempted == (1, 2)
+    assert [c.chapter_ordinal for c in blocked.chapters] == [1, 2]
+    assert all(c.failure_kind == 'PurchaseRequired' for c in blocked.chapters)
+
+    # 恢复：授权后重跑同一节点 ⇒ 完成执行无失败 ⇒ 留证改写成合法空清单。
+    run_workflow(repository=repo, chapters=_chapters(),
+                 ask=_fake_ask(authorized), ask_text=_fake_text(authorized),
+                 ask_body=_fake_body(authorized), budget=2000,
+                 node_filter=('str06.stage5.body',), book_title='报恩',
+                 hook_constraints=HookConstraints(target_chars=10, hard_max_chars=360),
+                 length_band=(0.01, 0.05))
+    healed = views.run_view(tmp_path, 'auth')
+    cleared = healed.body_failures
+    assert cleared is not None and cleared.present, '文件仍在，不是删掉冒充没跑过'
+    assert cleared.chapters == () and cleared.requested == (1, 2)
+    assert cleared.attempted == (1, 2) and cleared.recorded_at is not None
+
+
+def test_body_failures_project_the_selected_chapter_range(tmp_path):
+    """canary 选章（W1）进逐章留证：requested=attempted=选中章，不是全书。"""
+    base = _candidate_root(tmp_path, _full_chain_wires(), body_chapters=(2,))
+    run = views.run_view(base, 'cand')
+    failures = run.body_failures
+    assert failures is not None and failures.present
+    assert failures.requested == (2,) and failures.attempted == (2,)
+    assert failures.chapters == ()
+    # 选章只作调用元数据：run 级状态里是可审计的独立字段，视图直投影。
+    assert run.status == 'assembly_not_ready'
+    assert run.body_failures.recorded_at is not None
+
+
+def test_chapter_failures_view_refuses_malformed_file(tmp_path):
+    """畸形留证 fail fast（I-34）：丢一条失败比整面 500 更坏，不静默清空。"""
+    base = _candidate_root(tmp_path, _full_chain_wires())
+    repo = Str06Repository(base / 'cand' / 'run')
+    broken = repo.path('runtime/body_failures.json')
+    import json as _json
+    broken.write_text(_json.dumps({'requested': [1, 2], 'attempted': [1]},
+                                  ensure_ascii=False), encoding='utf-8')
+    with pytest.raises(ArtifactUnreadable, match='形状损坏'):
+        views.run_view(base, 'cand')
+
+
 # ───────────────────────── R3 监控面：修订轮与停止原因 ─────────────────────────
 
-def _faulted_candidate_root(tmp_path, *, fault_once: bool, name: str) -> Path:
+def _faulted_candidate_root(tmp_path, monkeypatch, *, fault_once: bool,
+                            name: str) -> Path:
     """R0 故障注入底座（obligation_unbound）跑一条候选链 ⇒ 带 issues 记录的根。
 
     `fault_once=True`：受影响 owner 首响应带故障、修订轮返回干净 wire——链经
     修订自愈跑完（回派账 resolved 留轮数）；`fault_once=False`：粘性故障 ⇒
     同问题集重现按 item 停（回派账 open、run 级失败形状带停止原因）。
     """
-    from tests.str06_facilities import json_ask, text_ask
+    from tests.str06_facilities import json_ask, text_ask, stub_body_runner
     from tests.str06_faults import FaultTransport, looped_full_chain_wires
     from tests.test_str06_body import _make_session
 
@@ -305,14 +464,14 @@ def _faulted_candidate_root(tmp_path, *, fault_once: bool, name: str) -> Path:
     session = PaidRequestSession(
         repo, ledger, FaultTransport(wires, 'obligation_unbound', fault_once),
         yes=True, allow_source_export=True, provider='fake', sid='run')
+    stub_body_runner(monkeypatch)
     try:
         run_workflow(repository=repo, chapters=_chapters(),
                      ask=json_ask(session), ask_text=text_ask(session),
                      ask_body=lambda owner, prompt: None, budget=2000,
                      through='stage7', book_title='报恩',
                      hook_constraints=HookConstraints(target_chars=10,
-                                                      hard_max_chars=360),
-                     body_chapter_limit=0)
+                                                      hard_max_chars=360))
     except Exception:
         pass          # 粘性故障停在 OwnerRevisionStop；失败形状由链自己留痕
     init_or_resume_candidate_workflow(
@@ -322,9 +481,10 @@ def _faulted_candidate_root(tmp_path, *, fault_once: bool, name: str) -> Path:
     return root.parent
 
 
-def test_run_view_projects_revision_rounds_of_a_healed_chain(tmp_path):
+def test_run_view_projects_revision_rounds_of_a_healed_chain(tmp_path, monkeypatch):
     """修订轮投影（R3）：经修订自愈的链，回派账 resolved 留轮数与 typed 问题。"""
-    base = _faulted_candidate_root(tmp_path, fault_once=True, name='healed')
+    base = _faulted_candidate_root(tmp_path, monkeypatch, fault_once=True,
+                                   name='healed')
     run = views.run_view(base, 'healed')
     assert run.present
     issues = run.owner_issues
@@ -349,10 +509,11 @@ def test_run_view_projects_revision_rounds_of_a_healed_chain(tmp_path):
         assert response.json() == json.loads(run.model_dump_json())
 
 
-def test_run_view_shows_stop_reason_with_open_issue_rounds(tmp_path):
+def test_run_view_shows_stop_reason_with_open_issue_rounds(tmp_path, monkeypatch):
     """停止原因（R3）：粘性故障按 item 停 ⇒ failure_kind/detail 直投影带
     typed 问题清单；回派账 open、轮数留证。"""
-    base = _faulted_candidate_root(tmp_path, fault_once=False, name='stuck')
+    base = _faulted_candidate_root(tmp_path, monkeypatch, fault_once=False,
+                                   name='stuck')
     run = views.run_view(base, 'stuck')
     assert run.present and run.status == 'failed'
     assert run.failure_kind == 'OwnerRevisionStop'

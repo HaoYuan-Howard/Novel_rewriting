@@ -25,7 +25,7 @@ from typing import Any
 from contracts.schema.api import (
     Str06AssemblyOutcomeView, Str06AssemblyReportView,
     Str06BlueprintBeatView, Str06BlueprintChapterView, Str06BlueprintView,
-    Str06BodyAccessView, Str06BodyFailureChapterView, Str06BodyFailuresView,
+    Str06BodyAccessView, Str06BodyFailureChapterView, Str06ChapterFailuresView,
     Str06CandidateList, Str06CandidateSummary, Str06ChapterReceiptView,
     Str06ChapterView, Str06CharacterView, Str06CharactersView,
     Str06DesignBindingView, Str06DesignChapterView, Str06DesignHookView,
@@ -49,8 +49,10 @@ RUN_DIRNAME = 'run'
 WORKFLOW_REL = 'runtime/candidate_workflow.json'
 #: run 级执行状态（业务状态的唯一来源）。
 STATUS_REL = 'runtime/workflow_status.json'
-#: 章级局部失败留证（B4：`str06.stage5.body` 并发收集后按章落盘）。
+#: 章级局部失败留证（D3/W2：`str06.stage5.body` 逐章执行器收敛后按章落盘）。
 BODY_FAILURES_REL = 'runtime/body_failures.json'
+#: 章观察的逐章失败留证（D3/W2：`str06.stage2.chapters`，与正文同形）。
+CHAPTER_OBSERVATION_FAILURES_REL = 'runtime/chapter_observation_failures.json'
 #: 跨节点回派账目录（R3：`runtime/issues/<owner>.json`，每 owner 一份）。
 ISSUES_DIR_REL = 'runtime/issues'
 #: Stage7 集合核对报告（B4 后半：五态按 item）。
@@ -448,26 +450,36 @@ def _ledger_cost(candidate_root: Path) -> Str06LedgerCostView:
             for node, node_rows in sorted(per_node.items())))
 
 
-def _body_failures_view(run: Path) -> Str06BodyFailuresView | None:
-    """`runtime/body_failures.json` 直投影；无文件返回 None（不冒充合法空值）。
+def _chapter_failures_view(run: Path, rel: str) -> Str06ChapterFailuresView | None:
+    """逐章失败留证的直投影（D3/W2；章观察与正文共用同一实现）。
 
-    章序键由唯一 writer（`run_body`）以 `str(int)` 落盘；畸形文件在构造处
-    fail fast（I-34），不静默丢条——失败留证丢一条比整面 500 更坏。
+    「最近一次完成执行」形状 `{requested, attempted, chapters, recorded_at}`；
+    无文件返回 None（该节点还没有一次完成执行，不冒充合法空清单）。文件畸形
+    在此 fail fast（I-34）——失败留证丢一条比整面 500 更坏。
     """
-    payload = _inspect(run, BODY_FAILURES_REL)
+    payload = _inspect(run, rel)
     if payload is None:
         return None
-    chapters = payload.get('chapters') if isinstance(payload, dict) else None
-    if not isinstance(chapters, dict):
-        chapters = {}
-    return Str06BodyFailuresView(
-        present=True,
-        chapters=tuple(
+    try:
+        requested = tuple(int(n) for n in payload['requested'])
+        attempted = tuple(int(n) for n in payload['attempted'])
+        recorded_at = int(payload['recorded_at'])
+        chapters = payload['chapters']
+        if not isinstance(chapters, dict):
+            raise ValueError('chapters 必须是章序 → 失败详情的映射')
+        rows = tuple(
             Str06BodyFailureChapterView(
                 chapter_ordinal=int(ordinal),
                 failure_kind=str(row['failure_kind']), detail=str(row['detail']))
             for ordinal, row in sorted(chapters.items(), key=lambda kv: int(kv[0]))
-            if isinstance(row, dict)))
+            if isinstance(row, dict))
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ArtifactUnreadable(
+            f'{rel} 形状损坏：{exc}；它是逐章失败留证，'
+            '拒绝静默丢条或当作「没有问题」继续') from exc
+    return Str06ChapterFailuresView(
+        present=True, requested=requested, attempted=attempted, recorded_at=recorded_at,
+        chapters=rows)
 
 
 def _assembly_report_view(run: Path) -> Str06AssemblyReportView | None:
@@ -555,7 +567,9 @@ def run_view(base: str | os.PathLike[str], candidate: str) -> Str06RunView:
         error_item=status.get('error_item'),
         error_phase=status.get('error_phase'),
         error_context=status.get('error_context'),
-        body_failures=_body_failures_view(run),
+        body_failures=_chapter_failures_view(run, BODY_FAILURES_REL),
+        chapter_observation_failures=_chapter_failures_view(
+            run, CHAPTER_OBSERVATION_FAILURES_REL),
         assembly_report=_assembly_report_view(run),
         owner_issues=_owner_issues_view(run),
         epoch=Str06EpochView(

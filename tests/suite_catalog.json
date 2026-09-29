@@ -956,7 +956,11 @@
         "test_run_view_projects_assembly_report_five_states": "stage",
         "test_run_view_projects_revision_rounds_of_a_healed_chain": "stage",
         "test_run_view_shows_stop_reason_with_open_issue_rounds": "stage",
-        "test_corrupt_issue_record_fails_fast_instead_of_reading_as_none": "stage"
+        "test_corrupt_issue_record_fails_fast_instead_of_reading_as_none": "stage",
+        "test_chapter_observation_failures_project_the_last_completed_execution": "stage",
+        "test_body_failures_clear_after_authorized_recovery": "stage",
+        "test_body_failures_project_the_selected_chapter_range": "stage",
+        "test_chapter_failures_view_refuses_malformed_file": "stage"
       }
     },
     "tests/test_str06_workflow.py": {

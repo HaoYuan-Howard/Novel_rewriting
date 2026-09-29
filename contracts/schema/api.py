@@ -3968,11 +3968,21 @@ class Str06BodyFailureChapterView(StrictModel):
     detail: str
 
 
-class Str06BodyFailuresView(StrictModel):
-    """`runtime/body_failures.json` 的只读投影：视图缺席（None）＝无此留证文件。"""
+class Str06ChapterFailuresView(StrictModel):
+    """逐章失败留证的只读投影（D3/W2）：章观察与正文共用一个形状（I-11）。
+
+    「最近一次完成执行」语义：`requested` 是本次请求的章范围（章观察＝全部
+    源章；正文＝调用层选章 `body_chapters` 或全书）；`attempted` 是本次实际
+    进入逐章执行器的章（正文不含已提交章）；`chapters` 是 `attempted` 的失败
+    子集（合法空清单＝完成执行无失败）；`recorded_at` 是记录时间。视图缺席
+    （None）＝该节点还没有一次完成执行——缺席与合法空清单是两件事（I-42）。
+    """
 
     present: bool
+    requested: tuple[int, ...] = ()
+    attempted: tuple[int, ...] = ()
     chapters: tuple[Str06BodyFailureChapterView, ...] = ()
+    recorded_at: int | None = Field(default=None, ge=0)
 
 
 class Str06BodyAccessView(StrictModel):
@@ -4050,7 +4060,9 @@ class Str06RunView(StrictModel):
     对任何失败；`error_*` 六字段是 ExecutionError 的显式错误形状（I-36）——
     非执行设施失败（如机械 ValueError）只有前三者，缺失保持 None，不补空串。
     修订轮（R3）由 `owner_issues` 携带；停止原因在失败形状里（含按 item 的
-    typed 问题清单），两者并排呈现、不互相推导。
+    typed 问题清单），两者并排呈现、不互相推导。逐章失败留证（D3/W2）按
+    「最近一次完成执行」语义分节点呈现：`body_failures`（正文）与
+    `chapter_observation_failures`（章观察）同一形状。
     """
 
     candidate: str = Field(min_length=1)
@@ -4066,7 +4078,8 @@ class Str06RunView(StrictModel):
     error_item: str | None = None
     error_phase: str | None = None
     error_context: dict[str, Any] | None = None
-    body_failures: Str06BodyFailuresView | None = None
+    body_failures: Str06ChapterFailuresView | None = None
+    chapter_observation_failures: Str06ChapterFailuresView | None = None
     assembly_report: Str06AssemblyReportView | None = None
     owner_issues: Str06OwnerIssuesView | None = None
     epoch: Str06EpochView | None = None

@@ -23,7 +23,20 @@
   "error_item": null,
   "error_phase": null,
   "error_context": null,
-  "body_failures": null,
+  "body_failures": {
+   "present": true,
+   "requested": [1, 2],
+   "attempted": [1, 2],
+   "chapters": [],
+   "recorded_at": 1790269950
+  },
+  "chapter_observation_failures": {
+   "present": true,
+   "requested": [1, 2],
+   "attempted": [1, 2],
+   "chapters": [],
+   "recorded_at": 1790269950
+  },
   "assembly_report": {
    "present": true,
    "accepted_body": true,

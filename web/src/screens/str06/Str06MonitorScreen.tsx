@@ -6,7 +6,7 @@ import { LoadFailed } from '@/components/state/States'
 import { useStr06Monitor } from '@/hooks/useStr06Monitor'
 import type {
   Str06AssemblyReportView,
-  Str06BodyFailuresView,
+  Str06ChapterFailuresView,
   Str06OwnerIssuesView,
   Str06RunView,
 } from '@/types/str06'
@@ -79,7 +79,14 @@ function RunPane({ run }: { run: NonNullable<Monitor['run']['data']> }) {
       <div className={'flex flex-col gap-12 px-18 py-16'}>
         {run.failure_kind ? <FailureShape run={run} /> : null}
         {run.owner_issues ? <OwnerIssues issues={run.owner_issues} /> : null}
-        {run.body_failures ? <BodyFailures failures={run.body_failures} /> : null}
+        {run.chapter_observation_failures || run.body_failures ? (
+          <div className={'grid grid-cols-2 gap-12'}>
+            <ChapterFailures failures={run.chapter_observation_failures} title={'章观察'}
+                             testId={'str06-chapter-observation-failures'} />
+            <ChapterFailures failures={run.body_failures} title={'正文'}
+                             testId={'str06-body-failures'} />
+          </div>
+        ) : null}
         {run.assembly_report ? <AssemblyReport report={run.assembly_report} /> : null}
         <div className={'flex flex-wrap gap-x-24 gap-y-6 text-tag text-ink-3'}>
           <span>epoch <Mono>{run.epoch ? run.epoch.ordinal : '—'}</Mono>（{run.epoch?.reason ?? 'unknown'}）</span>
@@ -184,10 +191,35 @@ function OwnerIssues({ issues }: { issues: Str06OwnerIssuesView }) {
 }
 
 /** 章级失败留证（B4）：逐章类别与详情；缺席（null）与空清单是两回事。 */
-function BodyFailures({ failures }: { failures: Str06BodyFailuresView }) {
+/**
+ * 逐章失败留证（D3/W2）：「最近一次完成执行」的请求范围、实际执行章与失败
+ * 子集原样呈现。合法空清单＝完成执行且无失败（与「查过没事」的缺席 null 是
+ * 两件事，I-42）；局部失败不吞其他章的合法提交（I-31）。
+ */
+function ChapterFailures({ title, failures, testId }: {
+  title: string
+  failures: Str06ChapterFailuresView | null
+  testId: string
+}) {
+  const list = (ordinals: number[]) => ordinals.join('、') || '无'
+  if (!failures) {
+    return (
+      <div data-testid={testId} className={'flex flex-col gap-4 rounded-btn bg-sunken px-12 py-10'}>
+        <SectionTitle note={'最近一次完成执行'}>{title} · 逐章失败留证</SectionTitle>
+        <span className={'text-tag text-ink-4'}>
+          这个节点还没有一次完成执行（present=null，不是空清单）。
+        </span>
+      </div>
+    )
+  }
   return (
-    <div data-testid={'str06-body-failures'} className={'flex flex-col gap-4'}>
-      <SectionTitle note={'局部失败不吞其他章的合法提交（I-31）'}>章级失败留证</SectionTitle>
+    <div data-testid={testId} className={'flex flex-col gap-4 rounded-btn bg-sunken px-12 py-10'}>
+      <SectionTitle note={'最近一次完成执行'}>{title} · 逐章失败留证</SectionTitle>
+      <div className={'flex flex-wrap gap-x-24 gap-y-6 text-tag text-ink-3'}>
+        <span>请求 <Mono>{list(failures.requested)}</Mono></span>
+        <span>实际执行 <Mono>{list(failures.attempted)}</Mono></span>
+        <span>记录 <Mono>{failures.recorded_at ?? '—'}</Mono></span>
+      </div>
       <ul className={'m-0 flex list-none flex-col gap-4 p-0 text-tag'}>
         {failures.chapters.map((chapter) => (
           <li key={chapter.chapter_ordinal} className={'flex flex-col gap-2'}>
@@ -197,6 +229,9 @@ function BodyFailures({ failures }: { failures: Str06BodyFailuresView }) {
             <span className={'text-ink-4'}>{chapter.detail}</span>
           </li>
         ))}
+        {failures.chapters.length === 0 ? (
+          <li className={'text-ink-4'}>无失败章（完成执行，合法空清单）</li>
+        ) : null}
       </ul>
     </div>
   )

@@ -213,16 +213,25 @@ export interface Str06Epoch {
   session_run_id: string | null
 }
 
-/** 章级局部失败留证（B4）：runtime/body_failures.json 的只读投影，item 是章序。 */
+/** 章级局部失败留证（B4）：章序 → 类别与详情直投影，item 是章序。 */
 export interface Str06BodyFailureChapter {
   chapter_ordinal: number
   failure_kind: string
   detail: string
 }
 
-export interface Str06BodyFailuresView {
+/**
+ * 逐章失败留证（D3/W2）：「最近一次完成执行」语义，章观察与正文共用同一形状。
+ * requested＝本次请求的章范围；attempted＝实际进入逐章执行器的章（正文不含
+ * 已提交章）；chapters 是 attempted 的失败子集；recorded_at 是记录时间。
+ * 缺席（null）＝该节点还没有一次完成执行——与合法空清单是两件事（I-42）。
+ */
+export interface Str06ChapterFailuresView {
   present: boolean
+  requested: number[]
+  attempted: number[]
   chapters: Str06BodyFailureChapter[]
+  recorded_at: number | null
 }
 
 /** 章就绪五态（I-42）：unknown 不作零；stale（回执在、绑定不成立）不是 missing。 */
@@ -299,7 +308,9 @@ export interface Str06RunView {
   error_item: string | null
   error_phase: string | null
   error_context: Record<string, unknown> | null
-  body_failures: Str06BodyFailuresView | null
+  body_failures: Str06ChapterFailuresView | null
+  /** 章观察的逐章失败留证（D3/W2）：与正文同形、互不冒充。 */
+  chapter_observation_failures: Str06ChapterFailuresView | null
   assembly_report: Str06AssemblyReportView | null
   /** 修订轮（R3）：runtime/issues/ 的回派账；停止原因在失败形状里，两面并排。 */
   owner_issues: Str06OwnerIssuesView | null
