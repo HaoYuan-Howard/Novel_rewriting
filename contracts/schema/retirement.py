@@ -1180,6 +1180,7 @@ STR06_F7E_TEST_KEEP: dict[str, str] = {
     'test_appendlog.py': '追加日志原语',
     'test_archive_stage3_v1_books.py': 'Stage3 已退役书的拒读反例',
     'test_backup_snapshot.py': '备份快照',
+    'test_canary_chapters.py': 'B6-A canary 选章工具（只读 sealed WriterBookIR；机械选章规则与计数口径）',
     'test_c2b_import_gate.py': '导入闸守卫',
     'test_corpus_fixtures.py': 'corpus fixtures',
     'test_corpus_manifest.py': 'corpus manifest 冻结',
