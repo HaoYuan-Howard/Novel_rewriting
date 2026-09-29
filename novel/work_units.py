@@ -616,6 +616,8 @@ class WorkUnitBudget:
 
     def reserve(self, request_sha256: str, *, run_id: str,
                 session_run_id: str = '',
+                agent_run_id: str = '', agent_epoch_id: str = '',
+                candidate_session_run_id: str = '',
                 request_payload: dict[str, Any] | None = None) -> ContentReservation:
         with path_transaction_lock(self.path):
             ledger = self._read()
@@ -634,7 +636,13 @@ class WorkUnitBudget:
             turn = WorkUnitContentTurn(
                 turn_id=uuid4().hex, ordinal=len(ledger.turns) + 1,
                 request_sha256=request_sha256, run_id=run_id,
-                session_run_id=session_run_id, created_at=int(time.time()))
+                session_run_id=session_run_id,
+                # R8a-5：执行身份三格随轮入账——追加额度的 owner 证明按记录的
+                # 关系闭合，不再事后从成本行反推（parent_run_id 是候选根 epoch
+                # 会话，不是 AgentRun）。
+                agent_run_id=agent_run_id, agent_epoch_id=agent_epoch_id,
+                candidate_session_run_id=candidate_session_run_id,
+                created_at=int(time.time()))
             if request_payload is not None:
                 blob = WorkUnitBlobV1(unit_id=self.unit_id, turn_id=turn.turn_id,
                                       payload=request_payload)

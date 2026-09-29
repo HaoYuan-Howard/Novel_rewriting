@@ -305,6 +305,15 @@ class WorkUnitContentTurn(FrozenModel):
     request_payload_sha256: Sha256 | None = None
     run_id: str = Field(min_length=1)
     session_run_id: str = ''
+    #: R8a-5（2026-09-29 canary 实证）：reserve 时的执行身份三格。agent 流经
+    #: ``NOVEL_COMMANDER_*`` 成对注入；``agent_run_id`` 与 ``run_id``（producer
+    #: run，即成本行 ``run_id``）在 agent 流同值，显式双写供归属证明交叉核对；
+    #: 空串＝手敲直连轮（无 AgentRun 外层）。``candidate_session_run_id`` 是候选
+    #: 根 workflow epoch 的 session uuid——成本行 ``parent_run_id`` 的真身，此前
+    #: 被误当 AgentRun id 导致追加额度证明永不闭合。
+    agent_run_id: str = ''
+    agent_epoch_id: str = ''
+    candidate_session_run_id: str = ''
     state: Literal['reserved', 'delivered', 'failed', 'unknown', 'adopted'] = 'reserved'
     reason_code: str = ''
     response_sha256: Sha256 | None = None

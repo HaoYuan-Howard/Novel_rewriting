@@ -38,7 +38,9 @@ def cost_evidence(budget: work_units.WorkUnitBudget, ledger: WorkUnitLedgerV2) -
             row = match_attempt(ledger, turn, attempt, rows)
             if row is None:
                 continue
-            turn_owners.add(str(row.get('parent_run_id') or turn.run_id))
+            # R8a-5：归属按 reserve 时记录的执行身份（agent 流＝AgentRun run），
+            # 不再读成本行 parent_run_id——那是候选根 epoch 会话，不是 AgentRun。
+            turn_owners.add(turn.agent_run_id or turn.run_id)
             selected.append(row)
         if len(turn_owners) > 1:
             raise work_units.WorkUnitRefused('同一内容轮映射到多个 owner')
@@ -54,6 +56,17 @@ def cost_evidence(budget: work_units.WorkUnitBudget, ledger: WorkUnitLedgerV2) -
 
 def owner_stop_proof(budget: work_units.WorkUnitBudget, ledger: WorkUnitLedgerV2,
                  owners: set[str], cost_rows: list[dict]) -> dict:
+    """追加额度前的 owner 停止证明（R8a-5 重写归属轴）。
+
+    归属按内容轮 reserve 时**记录**的执行身份三格闭合：agent 流的轮记录
+    ``agent_run_id``（＝producer run＝成本行 ``run_id``）、``agent_epoch_id`` 与
+    候选根 epoch 会话（成本行 ``parent_run_id`` 的真身）——证明即验证记录的
+    关系成立：AgentRun 在账、sid 相符、epoch 属于它、成本行两枚身份与记录
+    逐行一致。历史轮次（三格为空，R8a 之前写下的）按「成本行 run_id＝
+    turn.run_id＝已结束且排空的 AgentRun」闭合；无 AgentRun 外层的手敲直连轮
+    沿用终态豁免。此前把 ``parent_run_id`` 当 AgentRun id 对账，agent 流的
+    追加额度证明永不闭合（canary 20260929b 实证）。
+    """
     from novel.orchestrator import agent
     run_rows = read_rows(agent.runs_path(budget.base), '工作单元恢复 AgentRun 账')
     runs = agent.fold([AgentRunEvent.replay_validate(row) for row in run_rows])
@@ -62,16 +75,44 @@ def owner_stop_proof(budget: work_units.WorkUnitBudget, ledger: WorkUnitLedgerV2
         for row in read_rows(agent_session_audit.audit_path(budget.base), '工作单元恢复 session 账')])
     selected_sessions = []
     for turn in ledger.turns:
-        cost_owners = {str(row.get('parent_run_id') or turn.run_id) for row in cost_rows
-                       if row.get('attempt_id') in {item.attempt_id for item in turn.attempts}}
-        for owner in cost_owners - {turn.run_id}:
-            matches = [run for run in runs if run.run_id == owner and run.start.sid == ledger.sid
-                       and sum(epoch.session_run_id == turn.run_id for epoch in run.epochs) == 1]
+        turn_attempts = {item.attempt_id for item in turn.attempts}
+        rows_for_turn = [row for row in cost_rows
+                         if row.get('attempt_id') in turn_attempts]
+        if turn.agent_run_id:
+            matches = [run for run in runs if run.run_id == turn.agent_run_id
+                       and run.start.sid == ledger.sid]
             if len(matches) != 1:
-                raise work_units.WorkUnitRefused('成本 owner 与原 producer 的 execution epoch 不闭合')
+                raise work_units.WorkUnitRefused(
+                    f'内容轮记录的 AgentRun {turn.agent_run_id} 不在账上或 sid 不符'
+                    '（agent 流执行身份不闭合）')
+            if turn.agent_run_id != turn.run_id:
+                raise work_units.WorkUnitRefused(
+                    '内容轮记录的 AgentRun 身份与 producer run 不一致（单元账损坏）')
+            if turn.agent_epoch_id not in {e.epoch_id
+                                           for e in matches[0].epochs}:
+                raise work_units.WorkUnitRefused(
+                    f'内容轮记录的 execution epoch 不属于 AgentRun '
+                    f'{turn.agent_run_id}（执行身份不闭合）')
+            for row in rows_for_turn:
+                if str(row.get('parent_run_id') or '') \
+                        != turn.candidate_session_run_id:
+                    raise work_units.WorkUnitRefused(
+                        '内容轮成本行 parent_run_id 与记录的候选根 epoch 会话'
+                        '不闭合（串账）')
+            # 终态与排空由下方 relevant_runs 段按 owner 统一证明。
+            continue
         if not turn.session_run_id:
-            # legacy 直连不建 agent session；内容轮已终态失败时仍须允许人工追加，
-            # 否则 Flash CLI 耗尽 4 次后会被永久卡住。在途/未知仍 fail-closed。
+            # R8a-5 历史轮次：agent 流在 R8a 之前写下的轮没有三格，但它的
+            # producer run（成本行 run_id）就是 AgentRun run id——同 sid 唯一
+            # 命中即按「已结束且排空」闭合（同样由 relevant_runs 段证明）。
+            legacy_runs = [run for run in runs if run.run_id == turn.run_id
+                           and run.start.sid == ledger.sid]
+            if len(legacy_runs) > 1:
+                raise work_units.WorkUnitRefused('同一 producer run 命中多条 AgentRun（账损坏）')
+            if legacy_runs:
+                continue
+            # 手敲直连轮（无 AgentRun 外层）：内容轮已终态失败时仍须允许人工
+            # 追加，否则 CLI 耗尽 4 次后会被永久卡住。在途/未知仍 fail-closed。
             if turn.state in ('failed', 'rejected'):
                 if any(item.outcome in ('started', 'unknown', 'interrupted')
                        for item in turn.attempts):

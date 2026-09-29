@@ -231,3 +231,148 @@ def test_second_grant_is_cumulative_and_cannot_change_prior_authorization(tmp_pa
     work_unit_grants.apply(tmp_path, ctx.sid, budget.unit_id, _request(view))
     assert budget.remaining == 2 and budget._read().content_limit == 7
     assert budget._read().grants[0] == first.grant
+
+
+# ── R8a-5：agent 流执行身份三格的 owner 停止证明（canary 20260929b 反例） ──
+
+def _append_ended_agent_run(base, *, run_id: str, epoch_id: str, sid: str) -> None:
+    """手工落一条已结束且排空的 AgentRun 账（v2：started/epoch_opened/epoch_closed/ended）。"""
+    from contracts.schema.orchestration import (
+        AgentDeliveryOutcome, AgentRunEvent, AgentRunStart, ExecutionEpoch,
+        RunContractV2,
+    )
+    from novel.orchestrator import agent as agent_mod
+
+    profiles = {
+        'schema_version': 4,
+        'executor_default': {
+            'kind': 'legacy', 'profile': {
+                'provider': 'deepseek', 'model': 'deepseek-v4-pro',
+                'reasoning_effort': 'high', 'thinking_mode': 'on'}},
+        'executor_overrides': {},
+    }
+    agent_mod.append(base, AgentRunEvent(
+        wire_version=2, run_id=run_id, kind='started', ts=10,
+        start=AgentRunStart(sid=sid, base=str(base), argv=None, prompt=None,
+                            authorized=True, egress_authorized=True),
+        contract=RunContractV2.model_validate(
+            {'sid': sid, 'base': str(base), 'authorized': True,
+             'egress_authorized': True, 'profiles': profiles})))
+    agent_mod.append(base, AgentRunEvent(
+        wire_version=2, run_id=run_id, kind='epoch_opened', ts=11,
+        epoch=ExecutionEpoch(
+            epoch_id=epoch_id, ordinal=1, reason='initial',
+            protocol_version='llm-executor/v1', code_version=prov.code_version(),
+            identity_version=3, engine_kind='direct_llm',
+            engine_version='r8a-test', session_run_id=run_id + '-session')))
+    agent_mod.append(base, AgentRunEvent(
+        wire_version=2, run_id=run_id, kind='epoch_closed', ts=20,
+        epoch_id=epoch_id, exit_code=2, drain_state='drained'))
+    agent_mod.append(base, AgentRunEvent(
+        wire_version=2, run_id=run_id, kind='ended', ts=21, exit_code=2,
+        outcome=AgentDeliveryOutcome(
+            state='stopped', reason='额度耗尽停给人（测试夹具）', checked_at=21)))
+
+
+def _exhaust_under_agent(base, *, run_id: str, epoch_id: str,
+                         candidate_session: str):
+    """agent 流耗尽四轮：成本行 run_id=AgentRun id、parent_run_id=候选根会话。"""
+    from novel.orchestrator import agent as agent_mod
+
+    _append_ended_agent_run(base, run_id=run_id, epoch_id=epoch_id,
+                            sid='42')
+    ctx = _ctx(base)
+    ledger = CostLedger(path=ledger_path(base), run_id=run_id,
+                        parent_run_id=candidate_session)
+    ctx.ledger = ledger
+    budget = WorkUnitBudget(base, ctx.sid, ctx.node)
+    for index in range(4):
+        fingerprint = _sha(f'agent-req-{index}')
+        turn = budget.reserve(
+            fingerprint, run_id=run_id, agent_run_id=run_id,
+            agent_epoch_id=epoch_id,
+            candidate_session_run_id=candidate_session)
+        budget.record_attempt(
+            turn.turn_id, attempt_id=f'a-att-{index}', outcome='error',
+            request_fingerprint=fingerprint)
+        ledger.record(
+            sid=ctx.sid, node=ctx.node, model=_profile().model,
+            code=ctx.code, cached=False, cache_policy=ctx.cache.name,
+            outcome='error', prompt_tokens=10, completion_tokens=3,
+            reasoning_tokens=2, purpose=ctx.node, attempt_id=f'a-att-{index}',
+            request_fingerprint=fingerprint, latency_ms=12)
+        budget.finish(turn.turn_id, outcome='failed')
+    assert budget.used == 4
+    return ctx, budget
+
+
+def test_agent_flow_grant_closes_on_recorded_execution_identity(tmp_path):
+    """R8a-5 正例：三格在案的轮，owner 证明按记录关系闭合——不再把成本行
+    parent_run_id（候选根 epoch 会话）当 AgentRun（canary 20260929b 反例）。"""
+    ctx, budget = _exhaust_under_agent(
+        tmp_path, run_id='agent-run-r8a', epoch_id='epoch-r8a-1',
+        candidate_session='candidate-epoch-session-1')
+    view = work_unit_grants.inspect(tmp_path, ctx.sid, budget.unit_id)
+    assert view.available, view.reason
+    work_unit_grants.apply(tmp_path, ctx.sid, budget.unit_id, _request(view))
+    assert budget.remaining == 1
+
+
+def test_agent_flow_legacy_turns_close_on_producer_run_as_agent_run(tmp_path):
+    """R8a-5 历史轮次：三格为空的 R8a 前轮，按「成本行 run_id＝turn.run_id＝
+    已结束且排空的 AgentRun」闭合（canary 根的存量轮即此形态）。"""
+    from novel.orchestrator import agent as agent_mod
+
+    _append_ended_agent_run(tmp_path, run_id='agent-run-legacy',
+                            epoch_id='epoch-legacy-1', sid='42')
+    ctx = _ctx(tmp_path)
+    ledger = CostLedger(path=ledger_path(tmp_path), run_id='agent-run-legacy',
+                        parent_run_id='candidate-epoch-session-old')
+    ctx.ledger = ledger
+    budget = WorkUnitBudget(tmp_path, ctx.sid, ctx.node)
+    for index in range(4):
+        fingerprint = _sha(f'legacy-req-{index}')
+        turn = budget.reserve(fingerprint, run_id='agent-run-legacy')
+        budget.record_attempt(
+            turn.turn_id, attempt_id=f'l-att-{index}', outcome='error',
+            request_fingerprint=fingerprint)
+        ledger.record(
+            sid=ctx.sid, node=ctx.node, model=_profile().model,
+            code=ctx.code, cached=False, cache_policy=ctx.cache.name,
+            outcome='error', prompt_tokens=10, completion_tokens=3,
+            reasoning_tokens=2, purpose=ctx.node, attempt_id=f'l-att-{index}',
+            request_fingerprint=fingerprint, latency_ms=12)
+        budget.finish(turn.turn_id, outcome='failed')
+    view = work_unit_grants.inspect(tmp_path, ctx.sid, budget.unit_id)
+    assert view.available, view.reason
+
+
+def test_agent_flow_recorded_identity_must_exist_in_agent_account(tmp_path):
+    """R8a-5 反例：三格在案但记录的 AgentRun 不在账上 ⇒ 显式拒绝（不静默放行）。"""
+    from novel.orchestrator.work_unit_evidence import (
+        cost_evidence, load_budget, owner_stop_proof,
+    )
+
+    ctx = _ctx(tmp_path)
+    ledger = CostLedger(path=ledger_path(tmp_path), run_id='ghost-agent-run',
+                        parent_run_id='candidate-session-ghost')
+    budget = WorkUnitBudget(tmp_path, ctx.sid, ctx.node)
+    turn = budget.reserve(
+        _sha('ghost-req'), run_id='ghost-agent-run',
+        agent_run_id='ghost-agent-run', agent_epoch_id='ghost-epoch',
+        candidate_session_run_id='candidate-session-ghost')
+    budget.record_attempt(
+        turn.turn_id, attempt_id='g-att-0', outcome='error',
+        request_fingerprint=_sha('ghost-req'))
+    ledger.record(
+        sid=ctx.sid, node=ctx.node, model=_profile().model,
+        code=ctx.code, cached=False, cache_policy=ctx.cache.name,
+        outcome='error', prompt_tokens=10, completion_tokens=3,
+        reasoning_tokens=2, purpose=ctx.node, attempt_id='g-att-0',
+        request_fingerprint=_sha('ghost-req'), latency_ms=12)
+    budget.finish(turn.turn_id, outcome='failed')
+    loaded = load_budget(tmp_path, ctx.sid, budget.unit_id)
+    ledger_view = loaded._read()
+    _costs, rows, owners = cost_evidence(loaded, ledger_view)
+    with pytest.raises(WorkUnitRefused, match='AgentRun'):
+        owner_stop_proof(loaded, ledger_view, owners, rows)

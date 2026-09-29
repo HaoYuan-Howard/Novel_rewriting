@@ -20,6 +20,12 @@ from collections.abc import Mapping
 
 RUN_ID_ENV = 'NOVEL_RUN_ID'
 
+#: AgentRun（整书代跑）外层身份注入子进程的两枚环境名。单点登记在本模块：
+#: orchestrator 的 execution_context 与 llm 侧的付费边界（R8a-5 reserve 记录
+#: 执行身份）都要读写它们，放任何一侧都会逼另一侧反向 import（I-03）。
+COMMANDER_RUN_ID_ENV = 'NOVEL_COMMANDER_RUN_ID'
+COMMANDER_EPOCH_ID_ENV = 'NOVEL_COMMANDER_EPOCH_ID'
+
 # run_id 将作为恢复索引与观测联结键。在这里拒绝空白、路径分隔符与
 # 控制字符，后续落 run-scoped 目录时就不需要再造一把不同的尺子。
 _RUN_ID = re.compile(r'[a-z0-9][a-z0-9_-]{0,127}\Z')
@@ -39,6 +45,25 @@ def inherited_run_id(env: Mapping[str, str] | None = None) -> str | None:
     source = os.environ if env is None else env
     value = source.get(RUN_ID_ENV)
     return check_run_id(value) if value is not None else None
+
+
+def commander_identity(
+        env: Mapping[str, str] | None = None) -> tuple[str, str] | None:
+    """读子进程环境里的 AgentRun run／epoch 身份（R8a-5 执行身份三格的来源）。
+
+    ``None``＝手敲直连（无 AgentRun 外层）；两枚必须**成对**出现，半份上下文
+    是编排错误，显式拒绝而不是静默当手敲。
+    """
+    source = os.environ if env is None else env
+    run_id = source.get(COMMANDER_RUN_ID_ENV)
+    epoch_id = source.get(COMMANDER_EPOCH_ID_ENV)
+    if run_id is None and epoch_id is None:
+        return None
+    if run_id is None or epoch_id is None:
+        raise ValueError(
+            f'{COMMANDER_RUN_ID_ENV}/{COMMANDER_EPOCH_ID_ENV} 必须成对出现；'
+            '半份 AgentRun 上下文是编排错误，拒绝当作手敲直连')
+    return check_run_id(run_id), check_run_id(epoch_id)
 
 
 def new_run_id() -> str:

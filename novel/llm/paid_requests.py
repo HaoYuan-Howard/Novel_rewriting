@@ -61,6 +61,7 @@ from pathlib import Path
 from typing import Any, Callable, Final, NamedTuple
 
 from contracts.artifacts import ARTIFACT_PATHS, STR06_ARTIFACT_RC_VERSIONS
+from novel import run_identity
 from contracts.invariants import (
     NODES, OWNER_REVISION_MAX_ROUNDS, WORK_UNIT_MAX_DELIVERY_ATTEMPTS,
 )
@@ -370,6 +371,13 @@ class PaidRequestSession:
         self.base = ledger.path.parent.parent
         self.sid = sid
         self.run_id = ledger.run_id
+        # R8a-5：agent 流的 AgentRun run／epoch 身份（NOVEL_COMMANDER_* 成对）；
+        # 手敲直连为 ('', '')。候选根 epoch 会话恒等于 ledger.parent_run_id
+        #（init_or_resume_candidate_workflow 的唯一构造口），不另传。
+        commander = run_identity.commander_identity()
+        self.agent_run_id, self.agent_epoch_id = (
+            commander if commander is not None else ('', ''))
+        self.candidate_session_run_id = ledger.parent_run_id
         self.adopt_roots = tuple(Path(root) for root in adopt_roots)
         # 未送达重试：首发＋最多 3 次，退避 2/4/8 秒（str06.md 失败表）。
         self.retry_policy = retry_policy or TransportRetryPolicy(
@@ -505,9 +513,14 @@ class PaidRequestSession:
                         code='book_call_ceiling', node=node, item=scope, phase='reserve')
                 self._close_unadopted(unit)
                 # 首 wire 前取正式内容轮：单元上限 + 整书总闸同一把锁序结算；
-                # 冻结请求工作包随轮落 blob（SemanticRequest 层）。
-                reservation = unit.reserve(identity, run_id=self.run_id,
-                                           request_payload=request.cache_payload())
+                # 冻结请求工作包随轮落 blob（SemanticRequest 层）。执行身份三格
+                # 随轮入账（R8a-5）：owner 证明按记录的关系闭合。
+                reservation = unit.reserve(
+                    identity, run_id=self.run_id,
+                    agent_run_id=self.agent_run_id,
+                    agent_epoch_id=self.agent_epoch_id,
+                    candidate_session_run_id=self.candidate_session_run_id,
+                    request_payload=request.cache_payload())
         turn_id = reservation.turn_id
         attempts_used = len(unit.turn(turn_id).attempts)
         response = None

@@ -33,9 +33,11 @@ from novel.orchestrator.executor_capabilities import validate_pipeline_profiles
 from novel.errors import TerminalState
 
 
-COMMANDER_RUN_ID_ENV = 'NOVEL_COMMANDER_RUN_ID'
+#: run/epoch 两枚的**环境名**单点登记在 `novel/run_identity.py`（下层，llm 侧
+#: reserve 也要读它）；这里 re-export 保持本模块既有引用面不变。
+COMMANDER_RUN_ID_ENV = run_identity.COMMANDER_RUN_ID_ENV
 COMMANDER_CONTRACT_SHA256_ENV = 'NOVEL_COMMANDER_CONTRACT_SHA256'
-COMMANDER_EPOCH_ID_ENV = 'NOVEL_COMMANDER_EPOCH_ID'
+COMMANDER_EPOCH_ID_ENV = run_identity.COMMANDER_EPOCH_ID_ENV
 COMMANDER_EPOCH_SHA256_ENV = 'NOVEL_COMMANDER_EPOCH_SHA256'
 COMMANDER_ADMISSION_ID_ENV = 'NOVEL_COMMANDER_ADMISSION_ID'
 CONTRACT_PROTOCOL = 'novel-commander-context/v1'
