@@ -1611,6 +1611,10 @@ B6-A／B6-B 分别授权；R 批全部 fake transport、零模型调用。
       daughter@ch09（锚 ch10），ch10/11 不误报，保持阻断闸。
     · 前批遗留一并收口：api.py 字面量纪律（NetworkEgressMode 单点）、
       test_network_settings 入桶、network_settings layering 读写允许表。
+    · **R8d 收口**：`_tmp_*` 移出 worktree（E:/_r8_tmp_archive 保留）；默认非
+      corpus 完整回归两轮——首轮 3423 项 5 红（3 本批文本面＋2 前批遗留
+      c252e8b9），修复后终轮 **3423 项 0 失败 0 错误**（含契约五文件）；
+      前端无改动（监控页未变，API 增字段为 additive），前端验证按登记条件免跑。
     · 限制：R8b 的「prompt 形状段由模型 JSON Schema 生成」未做（保持手写
       文本＋pydantic 校验同批对齐，schema 生成留后续批）；B6-A 新根全新购
       待报价授权（见收尾报告）。
