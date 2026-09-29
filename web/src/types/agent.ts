@@ -101,6 +101,30 @@ export interface AgentProfileSettingsUpdate {
   expected_revision: string
 }
 
+/** 付费外发的网络通道。`direct` 是产品默认：长请求经代理有过 60 秒墙的实测教训。 */
+export type NetworkMode = 'direct' | 'proxy'
+
+export interface NetworkPreference {
+  mode: NetworkMode
+  /** mode='proxy' 时必填的 http(s) 地址；direct 时必须为 null。 */
+  proxy_url: string | null
+}
+
+export interface NetworkSettingsView {
+  state: AgentProfileSettingsState
+  network: NetworkPreference | null
+  revision: string
+  /** unix 秒；从未保存或文件不可读时为 null。 */
+  updated_at: number | null
+  issue: string | null
+}
+
+export interface NetworkSettingsUpdate {
+  /** null = 显式清空，回到默认直连。 */
+  network: NetworkPreference | null
+  expected_revision: string
+}
+
 /** 发起参数。两项授权彼此独立，都会原样进入 prompt 与审计记录。 */
 export interface RunContinuationSource {
   run_id: string

@@ -673,13 +673,22 @@ def active_run(base: str | os.PathLike[str], *, registry: JobRegistry = REGISTRY
 
 
 def _model_runtime_env(base: Path, sid: str, profiles: PipelineAgentProfiles) -> dict[str, str]:
-    """实际子执行只用本次 plan 冻结的并发配置，不继承宿主的隐式提速参数。"""
+    """实际子执行只用本次 plan 冻结的并发配置，不继承宿主的隐式提速参数。
+
+    网络偏好（直连/代理）也在这一格注入：付费外发只发生在这些子进程里，
+    默认直连并显式给空串，压过本机 `.env` 可能残留的 `DEEPSEEK_PROXY`——
+    B6-A 首次实跑 31 次 attempt 就是被那台机器上的旧代理值烧掉的（约 60 秒
+    连接墙；直连同规格请求 0.7–32.9 秒）。
+    """
     from contracts.schema.orchestration import PipelineConcurrency
     from novel.config import DEFAULT_CONCURRENCY, ENV_KEYS
+    from novel.orchestrator import network_settings
     policy = profiles.concurrency or PipelineConcurrency()
-    return {ENV_KEYS['concurrency_policy']: policy.model_dump_json(),
-            ENV_KEYS['concurrency']: str(DEFAULT_CONCURRENCY),
-            MODEL_BOOK_DIR_ENV: str(paths.resolve_novel_dir(base, sid))}
+    env = {ENV_KEYS['concurrency_policy']: policy.model_dump_json(),
+           ENV_KEYS['concurrency']: str(DEFAULT_CONCURRENCY),
+           MODEL_BOOK_DIR_ENV: str(paths.resolve_novel_dir(base, sid))}
+    env.update(network_settings.proxy_env(base))
+    return env
 
 
 def _cancel_action_owner(run_id: str) -> bool:

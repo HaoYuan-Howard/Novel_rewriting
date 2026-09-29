@@ -17,6 +17,8 @@ import type {
   AgentBatchRequest,
   AgentProfileSettingsUpdate,
   AgentProfileSettingsView,
+  NetworkSettingsUpdate,
+  NetworkSettingsView,
   AgentQueueView,
   AgentRunLogChunk,
   AgentRunPreview,
@@ -105,6 +107,10 @@ export interface Api {
   getAgentProfileSettings(): Promise<AgentProfileSettingsView>
   /** CAS 保存/清空常用配置；不改变任何历史或排队中的 run 快照。 */
   saveAgentProfileSettings(req: AgentProfileSettingsUpdate): Promise<AgentProfileSettingsView>
+  /** 当前 output base 的网络偏好（付费外发直连/代理）；默认直连。 */
+  getNetworkSettings(): Promise<NetworkSettingsView>
+  /** CAS 保存/清空网络偏好；run 起跑时注入付费子进程，不影响已启动的 run。 */
+  saveNetworkSettings(req: NetworkSettingsUpdate): Promise<NetworkSettingsView>
   /** 0 成本预览：与真跑同一构造函数。两项授权都进 prompt，任一勾选变化都重新 preview。 */
   getAgentRunContinuation(runId: string): Promise<AgentRunContinuationView>
   previewAgentRun(req: AgentRunRequest): Promise<AgentRunPreview>

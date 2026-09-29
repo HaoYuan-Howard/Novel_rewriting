@@ -689,6 +689,10 @@ SCRATCH_DIRNAME = 'scratch'
 #: 也不含 API key、登录凭据、付费授权或正文外发授权。
 AGENT_PROFILE_SETTINGS_FILENAME = 'agent_profile_settings.json'
 
+#: 当前 output base 的网络偏好（付费外发走不走代理）。同样是服务设置；
+#: 代理地址不进任何语义身份，也不进小说产物。
+NETWORK_SETTINGS_FILENAME = 'network_settings.json'
+
 #: 内容地址的形状。认死 64 位小写十六进制——**认不出就不是上传目录**，
 #: 与其猜一个不如答「不知道」（`novel/core/source.py` 的重锚以此为前提）。
 _CONTENT_ADDRESS = re.compile(r'[0-9a-f]{64}')
@@ -739,6 +743,11 @@ def scratch_dir(base: str | os.PathLike[str]) -> Path:
 def agent_profile_settings_path(base: str | os.PathLike[str]) -> Path:
     """``<base>/_service/agent_profile_settings.json``；只声明路径，不摸盘。"""
     return service_dir(base) / AGENT_PROFILE_SETTINGS_FILENAME
+
+
+def network_settings_path(base: str | os.PathLike[str]) -> Path:
+    """``<base>/_service/network_settings.json``；只声明路径，不摸盘。"""
+    return service_dir(base) / NETWORK_SETTINGS_FILENAME
 
 
 def _service_segment(value: str, *, label: str) -> str:

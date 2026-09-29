@@ -20,6 +20,7 @@ import type { Api } from '@/types/api'
 import type {
   AgentCapabilitiesResponse,
   AgentProfileSettingsView,
+  NetworkSettingsView,
   AgentQueueView,
   AgentRunLogChunk,
   AgentRunPreview,
@@ -715,6 +716,15 @@ function mockAgentRunRecord(req: AgentRunRequest): AgentRunRecord {
   }
 }
 
+let mockNetworkSettingsSequence = 0
+let mockNetworkSettings: NetworkSettingsView = {
+  state: 'unset',
+  network: null,
+  revision: '0'.repeat(64),
+  updated_at: null,
+  issue: null,
+}
+
 let mockAgentSettingsSequence = 0
 let mockAgentProfileSettings: AgentProfileSettingsView = {
   state: 'unset',
@@ -874,6 +884,35 @@ export const mockApi: Api = {
     return later({
       ...mockAgentProfileSettings,
       profiles: cloneMockProfiles(mockAgentProfileSettings.profiles),
+    })
+  },
+  getNetworkSettings: () => later({
+    ...mockNetworkSettings,
+    network: mockNetworkSettings.network === null
+      ? null
+      : { ...mockNetworkSettings.network },
+  }),
+  saveNetworkSettings: (req) => {
+    if (req.expected_revision !== mockNetworkSettings.revision) {
+      return fail(new ApiError('server', '/settings/network', {
+        status: 409,
+        backendKind: 'NetworkSettingsConflict',
+        message: '网络偏好已被另一个页面更新；请重读后再保存',
+      }))
+    }
+    mockNetworkSettingsSequence += 1
+    mockNetworkSettings = {
+      state: req.network === null ? 'unset' : 'configured',
+      network: req.network === null ? null : { ...req.network },
+      revision: mockNetworkSettingsSequence.toString(16).padStart(64, '0'),
+      updated_at: Date.now() / 1000,
+      issue: null,
+    }
+    return later({
+      ...mockNetworkSettings,
+      network: mockNetworkSettings.network === null
+        ? null
+        : { ...mockNetworkSettings.network },
     })
   },
   getAgentRunContinuation: async () => { throw new Error('离线样本没有历史运行停止证明；请连接真实服务。') },

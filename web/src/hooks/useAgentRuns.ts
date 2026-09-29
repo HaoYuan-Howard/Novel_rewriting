@@ -6,6 +6,8 @@ import type {
   AgentProfileSettingsUpdate,
   AgentRunRecord,
   AgentRunRequest,
+  NetworkSettingsUpdate,
+  NetworkSettingsView,
 } from '@/types/agent'
 import { useSid } from './useRouteParams'
 import { agentReadIdentity, useBookReadModelsRefresh } from './useBookReadModelsRefresh'
@@ -35,6 +37,28 @@ export function useAgentProfileSettings(enabled = true) {
     gcTime: 0,
     refetchOnMount: 'always',
     refetchOnWindowFocus: 'always',
+  })
+}
+
+export function useNetworkSettings(enabled = true) {
+  return useQuery<NetworkSettingsView>({
+    enabled,
+    queryKey: qk.networkSettings(),
+    queryFn: () => api.getNetworkSettings(),
+    staleTime: 0,
+    gcTime: 0,
+    refetchOnMount: 'always',
+    refetchOnWindowFocus: 'always',
+  })
+}
+
+export function useSaveNetworkSettings() {
+  const qc = useQueryClient()
+  return useMutation<NetworkSettingsView, unknown, NetworkSettingsUpdate>({
+    mutationFn: (req) => api.saveNetworkSettings(req),
+    onSuccess: (next) => {
+      qc.setQueryData(qk.networkSettings(), next)
+    },
   })
 }
 

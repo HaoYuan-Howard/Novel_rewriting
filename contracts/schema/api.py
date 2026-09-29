@@ -39,6 +39,7 @@ import json
 import re
 from collections.abc import Mapping
 from typing import Annotated, Any, Literal, TypeAlias
+from urllib.parse import urlsplit
 
 from pydantic import Field, field_validator, model_serializer, model_validator
 
@@ -908,6 +909,69 @@ class AgentProfileSettingsUpdate(StrictModel):
     """保存或清空常用配置；revision 是防多标签页静默覆盖的 CAS。"""
 
     profiles: PipelineAgentProfiles | None
+    expected_revision: Sha256
+
+
+class NetworkPreference(StrictModel):
+    """付费外发走不走代理（`novel/config.py` 的 `DEEPSEEK_PROXY` 那一格）。
+
+    `direct` 是产品默认：长请求（high effort 章观察）经本地代理会在约 60 秒被
+    切断，那一类失败在 ledger 里记成 connection 类 attempt 并重试到上限——
+    2026-09-29 B6-A 首次实跑 31 次 attempt 就是这么烧掉的。代理地址本身是
+    运行环境配置，不进任何语义身份；这里只保存用户偏好，与 API key 同级的
+    「本机网络」一格，不写进小说产物、不进 run 身份。
+    """
+
+    mode: Literal['direct', 'proxy']
+    proxy_url: str | None = Field(default=None, min_length=1)
+
+    @model_validator(mode='after')
+    def _mode_matches_url(self) -> NetworkPreference:
+        if self.mode == 'direct':
+            if self.proxy_url is not None:
+                raise ValueError('直连模式不得带代理地址')
+        else:
+            if self.proxy_url is None:
+                raise ValueError('走代理模式必须给代理地址')
+            parsed = urlsplit(self.proxy_url)
+            if parsed.scheme not in ('http', 'https') or not parsed.netloc:
+                raise ValueError('代理地址必须是合法的 http(s) URL')
+        return self
+
+
+class NetworkSettingsView(StrictModel):
+    """当前 output base 的网络偏好；三态与 CAS 语义同常用 Agent 配置。
+
+    `unset`（未配置）按直连处置——产品默认不开代理；只有在设置里显式选
+    「走代理」并在本 run 起跑前保存，付费子进程才会带上代理地址。
+    """
+
+    state: AgentProfileSettingsState
+    network: NetworkPreference | None
+    revision: Sha256
+    updated_at: float | None = Field(default=None, ge=0)
+    issue: str | None = Field(default=None, min_length=1)
+
+    @model_validator(mode='after')
+    def _state_matches_payload(self) -> NetworkSettingsView:
+        if self.state == 'configured':
+            if self.network is None or self.updated_at is None or self.issue is not None:
+                raise ValueError('configured 必须带 network/updated_at 且不得带 issue')
+        elif self.state == 'unset':
+            if self.network is not None or self.issue is not None:
+                raise ValueError('unset 不得带 network 或 issue')
+        elif self.state == 'unreadable':
+            if self.network is not None or self.issue is None:
+                raise ValueError('unreadable 必须只带 issue，不得带 network')
+            if self.updated_at is not None:
+                raise ValueError('unreadable 的更新时间无法可信读取，必须为 null')
+        return self
+
+
+class NetworkSettingsUpdate(StrictModel):
+    """保存或清空网络偏好；revision 是防多标签页静默覆盖的 CAS。"""
+
+    network: NetworkPreference | None
     expected_revision: Sha256
 
 

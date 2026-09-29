@@ -104,6 +104,8 @@ Prompt 选型完成后，`prompt_variants`、`prompt_defaults` 与 `--prompt-var
 | `GET /api/agent/capabilities` | `AgentCapabilitiesResponse`（registry 能力 + 本机 CLI/版本只读探针） | Agent 表单与设置页的唯一选项源；no-store |
 | `GET /api/settings/agent-profiles` | `AgentProfileSettingsView`（当前 output base 的用户常用配置） | no-store；保留 unset/configured/unreadable 三态 |
 | `POST /api/settings/agent-profiles` | `AgentProfileSettingsView`（请求体 `AgentProfileSettingsUpdate`） | CSRF 保护；按 expected revision CAS 保存或清空，只写 `_service/` |
+| `GET /api/settings/network` | `NetworkSettingsView`（当前 output base 的付费外发网络偏好） | no-store；三态 unset/configured/unreadable；未配置按直连 |
+| `POST /api/settings/network` | `NetworkSettingsView`（请求体 `NetworkSettingsUpdate`） | CSRF 保护；CAS 保存或清空；run 起跑时注入付费子进程的 `DEEPSEEK_PROXY`，直连显式给空串压过 `.env` 残留；不影响已启动的 run |
 | `GET /api/novels` | `NovelList` | 新 |
 | `GET /api/novels/:sid` | `NovelOverview` | **复用** `_orchestration.md` |
 | `GET /api/novels/:sid/operator-next` | `OperatorNext`（同一 state/check/inbox 只读快照上的确定性下一动作） | **复用** `_orchestration.md`；headless 执行者的机读口 |

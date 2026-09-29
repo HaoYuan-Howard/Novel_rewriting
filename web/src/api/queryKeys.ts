@@ -59,6 +59,8 @@ export const qk = {
   agentCapabilities: () => ['agentCapabilities'] as const,
   /** 当前 output base 只有一份；revision 由响应承载，不把旧值拼进 key。 */
   agentProfileSettings: () => ['agentProfileSettings'] as const,
+  /** 当前 output base 只有一份网络偏好；revision 由响应承载。 */
+  networkSettings: () => ['networkSettings'] as const,
   /** 队列是**全 base 一份**，不带 sid：它回答的是「这台机器上现在跑着几本」。 */
   agentQueue: () => ['agentQueue'] as const,
   agentRunLog: (id: string) => ['agentRunLog', id] as const,

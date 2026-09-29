@@ -8,9 +8,11 @@ from fastapi import APIRouter, Depends, Response
 from contracts.schema.api import (
     AgentProfileSettingsUpdate,
     AgentProfileSettingsView,
+    NetworkSettingsUpdate,
+    NetworkSettingsView,
 )
 from novel.api.deps import get_base
-from novel.orchestrator import agent_settings
+from novel.orchestrator import agent_settings, network_settings
 
 
 router = APIRouter(prefix='/settings')
@@ -33,5 +35,26 @@ def save_agent_profiles(
     return agent_settings.update(
         base,
         profiles=request.profiles,
+        expected_revision=request.expected_revision,
+    )
+
+
+@router.get('/network', response_model=NetworkSettingsView)
+def get_network(
+    response: Response,
+    base: str = Depends(get_base),
+) -> NetworkSettingsView:
+    response.headers['Cache-Control'] = 'no-store'
+    return network_settings.read(base)
+
+
+@router.post('/network', response_model=NetworkSettingsView)
+def save_network(
+    request: NetworkSettingsUpdate,
+    base: str = Depends(get_base),
+) -> NetworkSettingsView:
+    return network_settings.update(
+        base,
+        network=request.network,
         expected_revision=request.expected_revision,
     )

@@ -14,6 +14,7 @@ import type { Api } from '@/types/api'
 import type {
   AgentCapabilitiesResponse,
   AgentProfileSettingsView,
+  NetworkSettingsView,
   AgentQueueView,
   AgentRunLogChunk,
   AgentRunPreview,
@@ -448,6 +449,9 @@ export const realApi: Api = {
     get<AgentProfileSettingsView>('/settings/agent-profiles'),
   saveAgentProfileSettings: (req) =>
     post<AgentProfileSettingsView>('/settings/agent-profiles', req),
+  getNetworkSettings: () => get<NetworkSettingsView>('/settings/network'),
+  saveNetworkSettings: (req) =>
+    post<NetworkSettingsView>('/settings/network', req),
   getAgentRunContinuation: (runId) => get<AgentRunContinuationView>(`/agent/runs/${encodeURIComponent(runId)}/continuation`),
   previewAgentRun: (req) => post<AgentRunPreview>('/agent/runs/preview', req),
   startAgentRun: (req) => post<AgentRunRecord>('/agent/runs', req),

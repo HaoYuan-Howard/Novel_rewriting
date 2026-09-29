@@ -431,6 +431,8 @@ def test_job_conflict_maps_and_returns_409(monkeypatch):
         '/api/novels/{sid}/work-units/{unit_id}/grant',
         # 当前 output base 的用户常用 profiles；只写 _service，且用 revision CAS。
         '/api/settings/agent-profiles',
+        # 当前 output base 的网络偏好（直连/代理）；同样只写 _service、CAS 保护。
+        '/api/settings/network',
         '/api/agent/runs/{run_id}/pause',
         '/api/agent/runs/{run_id}/resume',
         '/api/agent/runs/{run_id}/stop',

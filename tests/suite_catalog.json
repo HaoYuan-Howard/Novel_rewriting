@@ -118,6 +118,10 @@
       "layer": "unit_contract",
       "stages": []
     },
+    "tests/test_network_settings.py": {
+      "layer": "unit_contract",
+      "stages": []
+    },
     "tests/test_agent_supervisor.py": {
       "layer": "unit_contract",
       "stages": [

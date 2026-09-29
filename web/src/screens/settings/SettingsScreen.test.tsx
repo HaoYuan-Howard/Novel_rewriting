@@ -5,8 +5,10 @@ import { renderRoute } from '@/test/render'
 import type {
   AgentProfileSettingsUpdate,
   AgentProfileSettingsView,
+  NetworkSettingsUpdate,
+  NetworkSettingsView,
 } from '@/types/agent'
-import { screen, waitFor } from '@testing-library/react'
+import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { SettingsScreen } from './SettingsScreen'
@@ -34,6 +36,13 @@ describe('SettingsScreen', () => {
   beforeEach(() => {
     vi.spyOn(api, 'getAgentCapabilities').mockResolvedValue(agentCapabilities(null))
     vi.spyOn(api, 'getAgentProfileSettings').mockResolvedValue(CONFIGURED)
+    vi.spyOn(api, 'getNetworkSettings').mockResolvedValue({
+      state: 'unset',
+      network: null,
+      revision: 'e'.repeat(64),
+      updated_at: null,
+      issue: null,
+    })
   })
 
   it('按读取 revision 保存完整常用配置，不把产品 default_profiles 改成用户偏好', async () => {
@@ -176,5 +185,72 @@ describe('SettingsScreen', () => {
       expected_revision: 'c'.repeat(64),
     }))
     expect(await screen.findByText('尚未配置')).toBeVisible()
+  })
+
+  it('网络偏好默认直连，可在设置页切到走代理并带地址保存', async () => {
+    const user = userEvent.setup()
+    const save = vi.spyOn(api, 'saveNetworkSettings').mockImplementation(
+      async (req: NetworkSettingsUpdate): Promise<NetworkSettingsView> => ({
+        state: req.network === null ? 'unset' : 'configured',
+        network: req.network,
+        revision: 'f'.repeat(64),
+        updated_at: 4,
+        issue: null,
+      }),
+    )
+
+    renderRoute(<SettingsScreen />, '/n/book-1/settings')
+    const card = await screen.findByTestId('network-settings')
+    expect(within(card).getByText('未配置（按直连）')).toBeVisible()
+    expect(within(card).getByLabelText('直连（默认）')).toBeChecked()
+    // 没有改动时保存不可点：不把「读到的默认」当成一次用户选择。
+    expect(within(card).getByRole('button', { name: '保存网络偏好' })).toBeDisabled()
+
+    await user.click(within(card).getByLabelText('走代理'))
+    await user.type(within(card).getByPlaceholderText('http://127.0.0.1:7890'), 'http://127.0.0.1:7890')
+    const saveButton = within(card).getByRole('button', { name: '保存网络偏好' })
+    await waitFor(() => expect(saveButton).toBeEnabled())
+    await user.click(saveButton)
+
+    await waitFor(() => expect(save).toHaveBeenCalledWith({
+      network: { mode: 'proxy', proxy_url: 'http://127.0.0.1:7890' },
+      expected_revision: 'e'.repeat(64),
+    }))
+    expect(within(card).getByText('已配置')).toBeVisible()
+    expect(within(card).getByDisplayValue('http://127.0.0.1:7890')).toBeVisible()
+  })
+
+  it('走代理但地址为空时拒绝保存', async () => {
+    const user = userEvent.setup()
+    const save = vi.spyOn(api, 'saveNetworkSettings')
+
+    renderRoute(<SettingsScreen />, '/n/book-1/settings')
+    const card = await screen.findByTestId('network-settings')
+    await user.click(within(card).getByLabelText('走代理'))
+
+    expect(within(card).getByText('走代理必须填代理地址。')).toBeVisible()
+    expect(within(card).getByRole('button', { name: '保存网络偏好' })).toBeDisabled()
+    expect(save).not.toHaveBeenCalled()
+  })
+
+  it('网络偏好 409 冲突时如实提示且不覆盖', async () => {
+    const user = userEvent.setup()
+    vi.spyOn(api, 'saveNetworkSettings').mockRejectedValue(
+      new ApiError('server', '/settings/network', {
+        status: 409,
+        backendKind: 'NetworkSettingsConflict',
+        message: '网络偏好已被另一个页面更新',
+      }),
+    )
+
+    renderRoute(<SettingsScreen />, '/n/book-1/settings')
+    const card = await screen.findByTestId('network-settings')
+    await user.click(within(card).getByLabelText('走代理'))
+    await user.type(within(card).getByPlaceholderText('http://127.0.0.1:7890'), 'http://127.0.0.1:9999')
+    const saveButton = within(card).getByRole('button', { name: '保存网络偏好' })
+    await waitFor(() => expect(saveButton).toBeEnabled())
+    await user.click(saveButton)
+
+    expect(await within(card).findByText(/另一个页面已经更新了网络偏好/)).toBeVisible()
   })
 })

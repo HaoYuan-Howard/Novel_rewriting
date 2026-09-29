@@ -21,6 +21,7 @@ import type {
   AgentCapabilitiesResponse,
   AgentProfileSettingsView,
 } from '@/types/agent'
+import { NetworkSettingsCard } from './NetworkSettingsCard'
 
 function initialDraft(
   capabilities: AgentCapabilitiesResponse,
@@ -231,6 +232,8 @@ export function SettingsScreen() {
           ) : null}
         </aside>
       </div>
+
+      <NetworkSettingsCard />
     </section>
   )
 }
