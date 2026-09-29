@@ -62,6 +62,16 @@ B2 基线（14 节点，`a0f5fb5e…`）原样保存在 Git 历史里；既有�
 `a14a9ef0…`）原样保存在 Git 历史里；既有候选根按「契约表已漂移」拒读，
 只读保留（新协议无已购产物，重算免费）。
 
+【语义冻结闸（2026-09-29，裁决 D8）】用户在 R5b 合入后裁决 Stage2/4 语义层按
+main tip 现状冻结（`world_constraints` 不拆）：Stage2 观察协议 book／chapters／names
+共 `stage2-observation-v1`、associate 独立 `stage2-associate-v2`，Stage4 四 wire
+协议 `stage4-preserve-v1`／`stage4-design-v2`／`stage4-bind-v1`／
+`stage4-hook-design-v1`，连同上方全部契约表基线。按 PLAN.md 分层冻结，写作层
+（renderer v5、WriterPacket 呈现、写手协议 v5）不在本闸内——canary 收敛后再冻。
+B6-A／B6-B 期间任何语义层升版都意味着已购 Stage2/4 产物作废、须重购，属用户级
+议程：先取得用户裁决，再改常量并在 REQUIREMENTS 登记；本文件与各协议测试同向
+拦截（字面量漂移当场红）。
+
 【为什么不只靠激活表自己的对账】`test_str06_candidates.py` 查的是表内自洽
 （runner／writer／版本逐字相等）；本文件查的是**表与冻结基线**相等：
 前者防表内部撒谎，后者防表在批次之间无登记漂移。
@@ -70,8 +80,12 @@ from __future__ import annotations
 
 from contracts.artifacts import ARTIFACT_PATHS, STR06_ARTIFACT_RC_VERSIONS
 from contracts.invariants import NODES
+from contracts.schema.observation import (
+    STAGE2_ASSOCIATE_PROTOCOL, STAGE2_OBSERVATION_PROTOCOL,
+)
 from contracts.schema.workflow import (
-    STR06_RC_VERSION, STR06_RUNTIME_CONFIG,
+    STAGE4_BIND_PROTOCOL, STAGE4_DESIGN_PROTOCOL, STAGE4_HOOK_DESIGN_PROTOCOL,
+    STAGE4_PRESERVE_PROTOCOL, STR06_RC_VERSION, STR06_RUNTIME_CONFIG,
 )
 from novel.llm.paid_requests import candidate_contract_identity
 
@@ -147,3 +161,34 @@ def test_frozen_artifact_table_shape():
 
 def test_frozen_rc_version_label():
     assert STR06_RC_VERSION == 'str06-rc10'
+
+
+#: 语义冻结闸（2026-09-29，裁决 D8）钉住的语义层协议字面量。键是常量名、值是
+#: 冻结时的字面量。契约表基线（节点／产物／RC／配置）已由上方身份测试钉住；
+#: 协议字面量是 `candidate_contract_identity` 的输入之外的第二条线，单独钉，
+#: 否则一次「顺手升版」不会改变身份哈希、静默混用不同协议的已购产物。
+#: 写作层版本（`RENDERER_VERSION`／`WRITER_PROTOCOL_VERSION`）不在此表——
+#: 分层冻结，canary 收敛后再冻（PLAN.md）。
+FROZEN_SEMANTIC_PROTOCOLS = {
+    'STAGE2_OBSERVATION_PROTOCOL': 'stage2-observation-v1',
+    'STAGE2_ASSOCIATE_PROTOCOL': 'stage2-associate-v2',
+    'STAGE4_PRESERVE_PROTOCOL': 'stage4-preserve-v1',
+    'STAGE4_DESIGN_PROTOCOL': 'stage4-design-v2',
+    'STAGE4_BIND_PROTOCOL': 'stage4-bind-v1',
+    'STAGE4_HOOK_DESIGN_PROTOCOL': 'stage4-hook-design-v1',
+}
+
+
+def test_frozen_semantic_protocols_match_the_live_literals():
+    live = {
+        'STAGE2_OBSERVATION_PROTOCOL': STAGE2_OBSERVATION_PROTOCOL,
+        'STAGE2_ASSOCIATE_PROTOCOL': STAGE2_ASSOCIATE_PROTOCOL,
+        'STAGE4_PRESERVE_PROTOCOL': STAGE4_PRESERVE_PROTOCOL,
+        'STAGE4_DESIGN_PROTOCOL': STAGE4_DESIGN_PROTOCOL,
+        'STAGE4_BIND_PROTOCOL': STAGE4_BIND_PROTOCOL,
+        'STAGE4_HOOK_DESIGN_PROTOCOL': STAGE4_HOOK_DESIGN_PROTOCOL,
+    }
+    assert live == FROZEN_SEMANTIC_PROTOCOLS, (
+        '语义层协议字面量与 2026-09-29 语义冻结闸（裁决 D8）不符：升版意味着已购 '
+        'Stage2/4 产物作废、须重购，先取得用户裁决并在 REQUIREMENTS 登记，'
+        '再更新本冻结记录')

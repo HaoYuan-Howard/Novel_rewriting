@@ -1506,6 +1506,32 @@ B6-A／B6-B 分别授权；R 批全部 fake transport、零模型调用。
     typecheck／seams／build）在 web/ 实跑通过。完整非 corpus 回归在合入前按
     最终提交集合执行一次（动了生产代码与契约，见根指南门槛）。
 
+- [x] **语义冻结闸 · Stage2/4 语义层按现状冻结（B6-A 前置闸；免费）**
+  （2026-09-29 完成）：用户在 R5b 合入后裁决 D8——按合入后 main tip（`0508b447`）
+  冻结语义层，`world_constraints` 不拆。本批只登记与加测试，未动任何被冻结面；
+  冻结面自 `0508b447` 起逐字有效（契约表身份哈希不变）。冻结面（与
+  `tests/test_str06_f7e_freeze.py` 的冻结记录逐字对账）：
+
+  | 层 | 冻结内容 |
+  |---|---|
+  | Stage2 观察协议 | book／chapters／names 共用 `stage2-observation-v1`；associate 独立 `stage2-associate-v2`（R1 起） |
+  | Stage4 wire 协议 | `stage4-preserve-v1`／`stage4-design-v2`／`stage4-bind-v1`／`stage4-hook-design-v1` |
+  | canonical 版式 | `STR06_RC_VERSION`＝`str06-rc10`；Stage2/4 canonical 产物版本照 `contracts/artifacts.py::STR06_ARTIFACT_RC_VERSIONS`（Characters rc3、chapter_blueprints rc5、fold rc5、preserve_checkpoint rc3、reconstruction_brief rc3、semantic_binding rc3、execution_plan rc3、guard report rc4、packet_metrics／body_design／presentation_graph／writer_book_ir rc10、stage4 hook rc3） |
+  | 契约表 | 节点表 14（付费 11、免费 compile×2＋assemble）、产物表 25 份、运行期配置——由原 `candidate_contract_identity()` 冻结基线继续钉 |
+  | 边界 | 四类语义真源（Characters／Blueprint／TargetDesign／SemanticBinding）与 owner 边界；`world_constraints` 通道维持 Blueprint 观察 → grounding 机械填 `book_constraints` → Design `world_rules` 决策沿用／改写，不拆字段、不添节点 |
+
+  - 分层冻结边界（PLAN.md）：写作层（renderer v5、WriterPacket 呈现、写手协议 v5）
+    不在本闸内，B6-A canary 收敛后再冻；本闸不代签语义未评项，B6 阅读验收协议不变。
+  - 机械拦截：`tests/test_str06_f7e_freeze.py` 新增语义协议冻结钉
+    （`FROZEN_SEMANTIC_PROTOCOLS` 六条字面量，与契约表身份冻结同文件）——协议
+    字面量不是 `candidate_contract_identity` 的输入，单靠身份哈希拦不住「顺手升版」
+    静默混用不同协议的已购产物，故单独钉；漂移即红，红因写「先取得用户裁决并登记
+    再动」。
+  - 生效范围：B6-A／B6-B 期间任何语义层升版＝已购 Stage2/4 产物作废、须重购，
+    属用户级议程；写作层问题仍按 PLAN.md B6-A 第 5 条只重跑 canary 写手。
+  - 验证（免费、`-n 0`、独立 basetemp）：`tests/test_str06_f7e_freeze.py` 全绿
+    （含新增语义协议冻结钉与既有身份／节点／产物／配置四查）。
+
 ## 职责解耦批次（2026-09-27 起；B0–B6）
 
 裁决 D1–D10 各行见 [DECISIONS.md](DECISIONS.md) 2026-09-27；目标架构（Stage2 五节点、
