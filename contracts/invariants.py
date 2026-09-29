@@ -260,6 +260,12 @@ AgentExecutionMode = str
 #: C3 起只回 legacy providers 面）与 ``/settings/agent-profiles``。
 AgentProfileSettingsState = Literal['unset', 'configured', 'unreadable']
 
+#: 付费外发网络偏好（``/settings/network``，2026-09-29 c252e8b9）的两态闭集：
+#: ``direct`` 是产品默认（本地代理会切断长请求），``proxy`` 须带 http(s) 地址。
+#: 存储（`novel/orchestrator/network_settings.py`）与 API 视图共用本别名，
+#: 不在 api.py 里抄第二份字面量。
+NetworkEgressMode = Literal['direct', 'proxy']
+
 #: accepted checkpoint 采用模型身份的两种证据来源。``provider-reported``
 #: 表示 provider 明确回显且与请求精确相等；``driver-enforced`` 保留给历史
 #: Agent CLI 账只读解码（C3 起新写入不再产生该证据）。

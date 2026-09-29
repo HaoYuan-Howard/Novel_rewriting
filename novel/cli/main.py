@@ -437,7 +437,17 @@ def _run_str06(a: argparse.Namespace, flags: list[str], *, paid: bool) -> int:
         # 即新链付费边界的 source-export 凭据。
         allow_source_export=bool(getattr(a, 'allow_egress', False)),
     )
-    execute(args)
+    from novel.stages.owner_revision import OwnerRevisionRequired, OwnerRevisionStop
+    try:
+        execute(args)
+    except (OwnerRevisionRequired, OwnerRevisionStop) as exc:
+        # R8a：单节点路径的回派／停止是**已落盘的 typed 负结论**（issue 记录在
+        # `runtime/issues/<owner>.json`，修订轮与轮额度都在账上）——exit 1 让
+        # 编排器按 landed 重规划（resume_verdict 的 owner_revision 分支）。此前
+        # 作未捕获异常出去是 exit 70（「结论未知」），既掩盖盘面事实，又让队列
+        # 把「查出了问题」记成「压根没跑成」。
+        print(f'\n✗ 回派负结论已落盘（exit 1，勿当崩溃）：{exc}', file=sys.stderr)
+        return X.CHECK_FAILED
     return 0
 
 

@@ -14,6 +14,14 @@
   • 下游复验通过后经 :func:`resolve_owner_issues` 置 ``status='resolved'``；
     ``rounds_total`` 留账不复位（「每单元最多 2 轮」是终身上限，耗尽停给人）。
 
+【R8a（2026-09-29 canary 实证）：记录增 ``against_sha256``，写读同批升 v2】
+  • 每次发现都记下判定时 owner 正式产物（`OWNER_PRODUCT_RELS`）的字节摘要；
+    调度门控（`resume_verdict` 的 owner_revision 分支）只在当前摘要仍等于它时
+    判修订 REDO——owner 修订写回后 issue 仍 open，若照旧 REDO 会在「改退出码
+    后反复重买 owner」里打转（B6-A canary 根实证）。
+  • v1 盘上记录经 :func:`read_owner_issue_file` 集中迁移（迁移登记与删除条件
+    见 `contracts/schema/workflow.py::owner_issue_record_of_payload`）。
+
 【边界】路由闭集（code 轴与 unbound.owner 轴）唯一登记在
 `contracts/schema/workflow.py`；本模块不判断文学质量、不修复语义、不猜测
 路由——未知 code／未映射 owner 一律停。issue 记录是 runtime 状态，不是版本化
@@ -22,18 +30,21 @@
 """
 from __future__ import annotations
 
+import hashlib
+from pathlib import Path
 from typing import NoReturn
 
 from contracts.invariants import OWNER_REVISION_MAX_ROUNDS
 from contracts.schema.workflow import (
-    OwnerIssueFileV1, OwnerIssueV1, owner_issues_rel,
+    OWNER_PRODUCT_RELS, OwnerIssueFileV2, OwnerIssueV1,
+    owner_issue_record_of_payload, owner_issues_rel,
 )
 from novel.llm.paid_requests import revision_user_prompt
 
 __all__ = [
     'OwnerRevisionRequired', 'OwnerRevisionStop', 'discover_owner_issues',
-    'open_issue_record', 'read_owner_issue_file', 'resolve_owner_issues',
-    'revision_prompt_for_owner',
+    'open_issue_record', 'owner_product_digest', 'owner_product_digest_at',
+    'read_owner_issue_file', 'resolve_owner_issues', 'revision_prompt_for_owner',
 ]
 
 
@@ -79,8 +90,34 @@ def _fingerprint(issues: tuple[OwnerIssueV1, ...] | list[OwnerIssueV1]) -> str:
                           ).hexdigest()
 
 
-def read_owner_issue_file(repository, owner: str) -> OwnerIssueFileV1 | None:
-    """读该 owner 的回派账；无记录返回 None，损坏即显式拒绝（不静默当没有）。"""
+def owner_product_digest_at(root: Path, owner: str) -> str:
+    """owner 正式产物（`OWNER_PRODUCT_RELS`）当前字节的 SHA-256（R8a 门控的尺子）。
+
+    未登记 owner、产物不在盘上都是编排缺陷（issue 只能由读过该产物的下游写
+    下）——显式拒绝，不猜摘要。
+    """
+    rel = OWNER_PRODUCT_RELS.get(owner)
+    if rel is None:
+        raise ValueError(
+            f'owner {owner!r} 未登记正式产物（闭集={sorted(OWNER_PRODUCT_RELS)}）')
+    path = Path(root) / rel
+    if not path.is_file():
+        raise ValueError(
+            f'owner {owner!r} 的正式产物 {rel} 不在盘上，记不了 against 摘要')
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def owner_product_digest(repository, owner: str) -> str:
+    """`owner_product_digest_at` 的 repository 版（写口与读口共用同一把尺）。"""
+    return owner_product_digest_at(repository.root, owner)
+
+
+def read_owner_issue_file(repository, owner: str) -> OwnerIssueFileV2 | None:
+    """读该 owner 的回派账（统一升 v2 形状）；无记录返回 None，损坏即显式拒绝。
+
+    v1 盘上记录按登记迁移补 ``against_sha256``（迁移语义与删除条件见
+    `contracts/schema/workflow.py::owner_issue_record_of_payload`）。
+    """
     import json as _json
 
     path = repository.path(owner_issues_rel(owner))
@@ -88,14 +125,16 @@ def read_owner_issue_file(repository, owner: str) -> OwnerIssueFileV1 | None:
         return None
     payload = _json.loads(path.read_text(encoding='utf-8'))
     try:
-        return OwnerIssueFileV1.model_validate(payload)
+        return owner_issue_record_of_payload(
+            payload, lambda record_owner:
+                owner_product_digest(repository, record_owner))
     except ValueError as exc:
         raise ValueError(
             f'{owner} 的回派账 {owner_issues_rel(owner)} 形状损坏：{exc}；'
             '它是修订路由的输入，拒绝当作「没有问题」继续') from exc
 
 
-def open_issue_record(repository, owner: str) -> OwnerIssueFileV1 | None:
+def open_issue_record(repository, owner: str) -> OwnerIssueFileV2 | None:
     """当前仍 open 的回派账（上游 owner 重跑的修订上下文；resolved 不算）。"""
     record = read_owner_issue_file(repository, owner)
     if record is None or record.status != 'open':
@@ -114,6 +153,9 @@ def discover_owner_issues(repository, *, raised_by: str, owner: str, node: str,
       记录保持原轮数（最新问题集仍写盘留证）；
     · ``rounds_total`` 已达上限：额度耗尽停给人（owner patch／人工重跑）。
 
+    三条路径都记 ``against_sha256``＝本次判定时的 owner 产物摘要（R8a）：调度
+    门控据此区分「owner 还没动」与「owner 已改稿等复验」。
+
     幂等对账（I-30/I-31）：崩溃在写盘后、修订前，重放会读到同一 open 记录并
     得到同一停止结论，不重复起轮。
     """
@@ -122,32 +164,36 @@ def discover_owner_issues(repository, *, raised_by: str, owner: str, node: str,
     issues = tuple(issues)
     existing = read_owner_issue_file(repository, owner)
     fingerprint = _fingerprint(issues)
+    against_sha256 = owner_product_digest(repository, owner)
     updated_at = _now()
     if existing is not None and existing.status == 'open' \
             and existing.fingerprint == fingerprint:
-        repository.write(owner_issues_rel(owner), OwnerIssueFileV1(
+        repository.write(owner_issues_rel(owner), OwnerIssueFileV2(
             owner=owner, node=node, raised_by=raised_by, status='open',
             rounds_total=existing.rounds_total, fingerprint=fingerprint,
-            issues=issues, updated_at=updated_at))
+            against_sha256=against_sha256, issues=issues,
+            updated_at=updated_at))
         raise OwnerRevisionStop(
             f'{raised_by} 的修订要求没有进展：{owner} 修订后同一问题集原样重现，'
             f'按 item 停（同一问题集重复即停）：{_messages(issues)}',
             node=node, owner=owner, issues=issues)
     rounds = existing.rounds_total if existing is not None else 0
     if rounds >= OWNER_REVISION_MAX_ROUNDS:
-        repository.write(owner_issues_rel(owner), OwnerIssueFileV1(
+        repository.write(owner_issues_rel(owner), OwnerIssueFileV2(
             owner=owner, node=node, raised_by=raised_by, status='open',
             rounds_total=rounds, fingerprint=fingerprint,
-            issues=issues, updated_at=updated_at))
+            against_sha256=against_sha256, issues=issues,
+            updated_at=updated_at))
         raise OwnerRevisionStop(
             f'{owner} 的修订轮额度（{OWNER_REVISION_MAX_ROUNDS}）已耗尽，'
             f'按 item 停给人（剩余修复走 owner patch 或人工重跑）：'
             f'{_messages(issues)}',
             node=node, owner=owner, issues=issues)
-    repository.write(owner_issues_rel(owner), OwnerIssueFileV1(
+    repository.write(owner_issues_rel(owner), OwnerIssueFileV2(
         owner=owner, node=node, raised_by=raised_by, status='open',
         rounds_total=rounds + 1, fingerprint=fingerprint,
-        issues=issues, updated_at=updated_at))
+        against_sha256=against_sha256, issues=issues,
+        updated_at=updated_at))
     raise OwnerRevisionRequired(
         f'{raised_by} 发现 {len(issues)} 项 typed 机械问题，回派 {node} 按 owner '
         f'修订重跑（修订轮 {rounds + 1}/{OWNER_REVISION_MAX_ROUNDS}）：'
@@ -156,14 +202,15 @@ def discover_owner_issues(repository, *, raised_by: str, owner: str, node: str,
 
 
 def resolve_owner_issues(repository, *, owner: str, raised_by: str) -> None:
-    """下游复验通过：open 记录置 resolved（轮数与指纹留账，不复位）。"""
+    """下游复验通过：open 记录置 resolved（轮数、指纹与 against 摘要留账，不复位）。"""
     record = read_owner_issue_file(repository, owner)
     if record is None or record.status != 'open':
         return
-    repository.write(owner_issues_rel(owner), OwnerIssueFileV1(
+    repository.write(owner_issues_rel(owner), OwnerIssueFileV2(
         owner=record.owner, node=record.node, raised_by=raised_by,
         status='resolved', rounds_total=record.rounds_total,
-        fingerprint=record.fingerprint, issues=record.issues,
+        fingerprint=record.fingerprint,
+        against_sha256=record.against_sha256, issues=record.issues,
         updated_at=_now()))
 
 

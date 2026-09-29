@@ -1,6 +1,7 @@
 """新工作流的运行账；它不是小说产物，也不替代成本或审批证据。"""
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
 from typing import Any, Literal
 
 from pydantic import Field, model_validator
@@ -745,13 +746,11 @@ class OwnerIssueV1(FrozenModel):
 
 
 class OwnerIssueFileV1(FrozenModel):
-    """`runtime/issues/<owner>.json`：跨节点回派账（下游写、上游读、下游清）。
+    """`runtime/issues/<owner>.json`（v1，R8a 之前写下）：读侧兼容形状。
 
-    ``rounds_total`` 是该 owner **终身**已发起的修订轮数（上限
-    ``contracts.invariants.OWNER_REVISION_MAX_ROUNDS``；「每单元最多 2 轮」，
-    耗尽即停给人，不复位）；``fingerprint`` 是问题集摘要——下游再次发现同
-    指纹即无进展，按 item 停。``status='resolved'`` 由复验通过的下游回写，
-    轮数与指纹留账供监控面读取。
+    v1 与 v2 的差别只有 ``against_sha256``（v2 增）。盘上 v1 记录经
+    :func:`owner_issue_record_of_payload` 集中迁移升到 v2，读写两侧不再
+    各自处理两种形状；本模型只作迁移源，不用于新写盘。
     """
 
     schema_version: Literal[1] = 1
@@ -768,9 +767,71 @@ class OwnerIssueFileV1(FrozenModel):
     updated_at: int = Field(ge=0)
 
 
+class OwnerIssueFileV2(FrozenModel):
+    """`runtime/issues/<owner>.json`（v2，R8a 起唯一写盘形状）：回派账增
+    ``against_sha256``——发现节点判定时 owner 正式产物
+    （`OWNER_PRODUCT_RELS`）的字节摘要。
+
+    调度门控只认这份摘要：owner 当前产物摘要仍等于 ``against_sha256`` 时，
+    `resume_verdict` 才判修订 REDO；已变（owner 修订写回或人工 patch）就不
+    再回头重买 owner，等下游按新鲜度复验（compile 通过置 resolved，再发现按
+    现有轮次规则计数或停）。其余格子语义同 v1（轮数终身、不复位；同指纹
+    无进展即停）。
+    """
+
+    schema_version: Literal[2] = 2
+    owner: str = Field(min_length=1)
+    node: str = Field(min_length=1)
+    raised_by: str = Field(min_length=1)
+    status: Literal['open', 'resolved']
+    rounds_total: int = Field(ge=0, le=OWNER_REVISION_MAX_ROUNDS)
+    fingerprint: str = Field(min_length=1)
+    against_sha256: Sha256
+    issues: tuple[OwnerIssueV1, ...] = Field(min_length=1)
+    updated_at: int = Field(ge=0)
+
+
 def owner_issues_rel(owner: str) -> str:
     """跨节点回派账的唯一落点（runtime 家族，非版本化书产物）。"""
     return f'runtime/issues/{owner}.json'
+
+
+#: 回派 owner → 其正式产物 rel（``against_sha256`` 的对照物；owner 轴取值面
+#: 与 `UNBOUND_OWNER_ROUTES` 的映射目标一致）。未登记 owner 在 digest 计算口
+#: 显式拒绝——闭集责任在本表，不放给调用方各自猜。
+OWNER_PRODUCT_RELS: Final[dict[str, str]] = {
+    'associate': 'stage2/observations/associate.json',
+    'design': 'stage4/design/body_design.json',
+    'preserve': 'runtime/preserve_checkpoint.json',
+}
+
+
+def owner_issue_record_of_payload(
+        payload: Mapping[str, Any],
+        product_sha256_of: Callable[[str], str],
+) -> OwnerIssueFileV2:
+    """回派账的统一读口：v2 原样、v1 集中迁移（S-03），一律升到 v2 形状。
+
+    v1 的 ``against_sha256`` 由 ``product_sha256_of(owner)`` 给出 owner 正式
+    产物的**当前**摘要——v1 语义下回派以未捕获异常（exit 70）告终、owner 从
+    未有机会修订，「当前」即「判定时」。迁移是集中兼容层，删除条件：付费与
+    开发根盘上不再存在 `schema_version=1` 的回派账（canary 20260929b 根只读
+    归档即满足）。未知版本号显式拒绝（I-34）。
+    """
+    version = payload.get('schema_version')
+    if version == 2:
+        return OwnerIssueFileV2.model_validate(dict(payload))
+    if version == 1:
+        legacy = OwnerIssueFileV1.model_validate(dict(payload))
+        return OwnerIssueFileV2(
+            owner=legacy.owner, node=legacy.node, raised_by=legacy.raised_by,
+            status=legacy.status, rounds_total=legacy.rounds_total,
+            fingerprint=legacy.fingerprint,
+            against_sha256=product_sha256_of(legacy.owner),
+            issues=legacy.issues, updated_at=legacy.updated_at)
+    raise ValueError(
+        f'回派账 schema_version 未知：{version!r}（取值面 1|2；'
+        '未知形状不得静默当作任何一种语义继续）')
 
 
 #: issue code 闭集：前四码逐字复用 Resolver 的精确码（R3 起点），后三码是

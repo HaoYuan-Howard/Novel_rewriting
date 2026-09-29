@@ -50,6 +50,7 @@ from contracts.invariants import (
     PIPELINE_PARALLEL_NODES, PIPELINE_CONCURRENCY_TRIALS, PIPELINE_DEFAULT_CONCURRENCY,
     PIPELINE_TOTAL_CONCURRENCY_MIN, PIPELINE_TOTAL_CONCURRENCY_MAX,
     AgentProfileSettingsState,
+    NetworkEgressMode,
     ANCHOR_COVERAGE_STATE,
     ANCHOR_COVERAGE_WARN,
     APPROVAL_GATES,
@@ -922,7 +923,7 @@ class NetworkPreference(StrictModel):
     「本机网络」一格，不写进小说产物、不进 run 身份。
     """
 
-    mode: Literal['direct', 'proxy']
+    mode: NetworkEgressMode
     proxy_url: str | None = Field(default=None, min_length=1)
 
     @model_validator(mode='after')
@@ -4090,7 +4091,9 @@ class Str06OwnerIssueRecordView(StrictModel):
     """一个 owner 的跨节点回派账投影（`runtime/issues/<owner>.json`）。
 
     ``rounds_total`` 是该 owner 终身已发起的修订轮数（resolve 不复位）；
-    ``status`` 取值面归 `OwnerIssueFileV1`，视图层不抄第二份字面量。
+    ``status`` 取值面归 `OwnerIssueFileV2`，视图层不抄第二份字面量。
+    ``against_sha256``（R8a）是发现节点判定时的 owner 产物摘要——监控面据此
+    对照「open 记录 + owner 已改稿（盘面摘要已变）＝等下游复验」的中间态。
     """
 
     owner: str = Field(min_length=1)
@@ -4099,6 +4102,7 @@ class Str06OwnerIssueRecordView(StrictModel):
     status: str = Field(min_length=1)
     rounds_total: int = Field(ge=0)
     fingerprint: str = Field(min_length=1)
+    against_sha256: str = Field(min_length=64, max_length=64)
     issues: tuple[Str06OwnerIssueItemView, ...] = Field(min_length=1)
     updated_at: int = Field(ge=0)
 

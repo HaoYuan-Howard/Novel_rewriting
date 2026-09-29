@@ -23,6 +23,8 @@ from typing import Literal
 
 from pydantic import Field
 
+from contracts.invariants import NetworkEgressMode
+
 from contracts.schema.api import NetworkPreference, NetworkSettingsView
 from contracts.schema.base import StrictModel
 from novel import paths
@@ -33,7 +35,8 @@ _SCHEMA_VERSION = 1
 _ABSENT_REVISION_BYTES = b'network-settings:absent:v1'
 
 #: 未配置时的处置：产品默认直连。显式选 proxy 才在付费子进程带上地址。
-DEFAULT_NETWORK_MODE: Literal['direct', 'proxy'] = 'direct'
+#: 闭集别名单点登记在 `contracts.invariants.NetworkEgressMode`。
+DEFAULT_NETWORK_MODE: NetworkEgressMode = 'direct'
 
 
 class _StoredNetworkSettings(StrictModel):

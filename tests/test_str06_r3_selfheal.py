@@ -22,7 +22,7 @@ from pathlib import Path
 import pytest
 
 from contracts.schema.workflow import (
-    OWNER_ISSUE_CODES, UNBOUND_OWNER_ROUTES, OwnerIssueFileV1, OwnerIssueV1,
+    OWNER_ISSUE_CODES, UNBOUND_OWNER_ROUTES, OwnerIssueV1,
     owner_issues_rel, route_owner_issue,
 )
 from novel.llm.ledger import CostLedger, ledger_path, read_cost_snapshot
@@ -30,7 +30,7 @@ from novel.llm.paid_requests import PaidRequestSession, ask_json
 from novel.llm.transport import ChatRequest, ChatResponse
 from novel.stages.owner_revision import (
     OwnerRevisionRequired, OwnerRevisionStop, discover_owner_issues,
-    read_owner_issue_file, resolve_owner_issues,
+    owner_product_digest, read_owner_issue_file, resolve_owner_issues,
 )
 from novel.store import Str06Repository
 from tests.str06_facilities import make_context, synthetic_ref
@@ -60,6 +60,7 @@ def test_route_table_closes_code_and_owner_axes():
 def test_issue_record_write_bounds_and_resolve(tmp_path):
     """回派账：首见起轮、同指纹无进展停、额度耗尽停给人、复验清账不复位。"""
     repo = _bare_repo(tmp_path)
+    _put_owner_product(repo, 'associate', b'{"pairing": "v1"}')
     issues = [OwnerIssueV1(code='association_undecided', item='',
                            message='loop q_yu 缺配对')]
     with pytest.raises(OwnerRevisionRequired) as first:
@@ -69,6 +70,7 @@ def test_issue_record_write_bounds_and_resolve(tmp_path):
     assert first.value.node == 'str06.stage2.associate'
     record = read_owner_issue_file(repo, 'associate')
     assert record.status == 'open' and record.rounds_total == 1
+    assert record.against_sha256 == _digest(b'{"pairing": "v1"}')
 
     # 同问题集原样重现：无进展，按 item 停（轮数不涨）。
     with pytest.raises(OwnerRevisionStop, match='没有进展'):
@@ -92,15 +94,49 @@ def test_issue_record_write_bounds_and_resolve(tmp_path):
                               owner='associate', node='str06.stage2.associate',
                               issues=third)
 
-    # 复验清账：resolved 留轮数（终身额度不复位），再发现仍按额度停。
+    # 复验清账：resolved 留轮数（终身额度不复位），against 摘要随账留痕。
     resolve_owner_issues(repo, owner='associate', raised_by='str06.stage2.compile')
     resolved = read_owner_issue_file(repo, 'associate')
     assert resolved.status == 'resolved' and resolved.rounds_total == 2
+    assert resolved.against_sha256 == _digest(b'{"pairing": "v1"}')
     with pytest.raises(OwnerRevisionStop, match='额度'):
         discover_owner_issues(repo, raised_by='str06.stage2.compile',
                               owner='associate', node='str06.stage2.associate',
                               issues=[OwnerIssueV1(code='association_undecided',
                                                    item='', message='新回合也吃额度')])
+
+
+def test_issue_record_v1_migration_reads_current_digest(tmp_path):
+    """v1 盘上账（R8a 之前）读侧升 v2：against 补 owner 产物当前摘要（集中迁移）。"""
+    import json as _json
+
+    repo = _bare_repo(tmp_path)
+    _put_owner_product(repo, 'design', b'{"scenes": []}')
+    legacy_payload = {
+        'schema_version': 1, 'owner': 'design',
+        'node': 'str06.stage4.body_design', 'raised_by': 'str06.stage4.compile',
+        'status': 'open', 'rounds_total': 1,
+        'fingerprint': 'f' * 64,
+        'issues': [{'code': 'must_keep_unbound', 'item': 'ob01',
+                    'message': '必保义务 ob01 尚未承载'}],
+        'updated_at': 100,
+    }
+    # v1 记录是 R8a 前的裸盘面：直接按字节落文件，不走 publish 封存。
+    issue_path = repo.path(owner_issues_rel('design'))
+    issue_path.parent.mkdir(parents=True, exist_ok=True)
+    issue_path.write_text(_json.dumps(legacy_payload), encoding='utf-8')
+    migrated = read_owner_issue_file(repo, 'design')
+    assert migrated.against_sha256 == _digest(b'{"scenes": []}')
+    assert migrated.rounds_total == 1 and migrated.status == 'open'
+    # 未知版本号显式拒绝，不静默当任何一种语义。
+    issue_path.write_text(_json.dumps(dict(legacy_payload, schema_version=7)),
+                          encoding='utf-8')
+    with pytest.raises(ValueError, match='schema_version'):
+        read_owner_issue_file(repo, 'design')
+    # owner 产物闭集外的 digest 请求显式拒绝。
+    from novel.stages.owner_revision import owner_product_digest_at
+    with pytest.raises(ValueError, match='未登记正式产物'):
+        owner_product_digest_at(repo.root, 'nobody')
 
 
 # ═══════════════ 二、同节点修订：ask_json（unit_contract＋付费边界） ═══════════════
@@ -405,6 +441,9 @@ def test_resume_verdict_marks_owner_revision_redo_before_freshness(tmp_path,
     entry = next(i for i in ov.owner_issues if i.node == 'str06.stage4.body_design')
     assert entry.owner == 'design' and entry.rounds_total == 1
     assert 'must_keep_unbound' in entry.codes
+    # 粘性故障链停止时 against 已刷新到「最后一次判定的产物摘要」：产物未变
+    # ⇒ 门控放行 owner_revision REDO（修订轮未耗尽）。
+    assert entry.product_sha256 == entry.against_sha256
     verdict, why = S.resume_verdict(ov, 'str06.stage4.body_design')
     assert verdict == S.RESUME_REDO and 'owner_revision' in why
     # 无 open issue 指向的节点不受 owner_revision 影响：bind 走常规新鲜度判定
@@ -415,13 +454,51 @@ def test_resume_verdict_marks_owner_revision_redo_before_freshness(tmp_path,
 
     # resolved 后：投影不再携带该条，判定回到常规面。
     record = read_owner_issue_file(_repo, 'design')
-    _repo.write(owner_issues_rel('design'), OwnerIssueFileV1(
+    from contracts.schema.workflow import OwnerIssueFileV2
+    _repo.write(owner_issues_rel('design'), OwnerIssueFileV2(
         owner=record.owner, node=record.node, raised_by=record.raised_by,
         status='resolved', rounds_total=record.rounds_total,
-        fingerprint=record.fingerprint, issues=record.issues,
-        updated_at=record.updated_at))
+        fingerprint=record.fingerprint, against_sha256=record.against_sha256,
+        issues=record.issues, updated_at=record.updated_at))
     ov2 = S.overview_at(_repo.root, _prov_code())
     assert all(i.node != 'str06.stage4.body_design' for i in ov2.owner_issues)
+
+
+def test_resume_verdict_owner_revision_digest_gate(tmp_path, monkeypatch):
+    """R8a 门控三分支：产物未变⇒REDO；产物已变⇒不再 owner 重买（等下游复验）；
+    轮额度耗尽且产物未变⇒停给人（unknown）。"""
+    from novel.orchestrator import state as S
+
+    repo, ov = _stuck_overview(tmp_path, monkeypatch)
+    assert 'str06.stage4.body_design' in {
+        i.node for i in ov.owner_issues}
+
+    # ① owner 修订写回（产物字节变化）：门控不再判 owner_revision——不回头
+    # 重买 owner，等下游按新鲜度复验清账。
+    design_path = repo.path('stage4/design/body_design.json')
+    design_path.write_bytes(design_path.read_bytes() + b'\n')
+    ov_revised = S.overview_at(repo.root, _prov_code())
+    entry = next(i for i in ov_revised.owner_issues
+                 if i.node == 'str06.stage4.body_design')
+    assert entry.product_sha256 != entry.against_sha256
+    verdict, why = S.resume_verdict(ov_revised, 'str06.stage4.body_design')
+    assert 'owner_revision' not in why, why
+
+    # ② 轮额度耗尽且产物未变：unknown 停给人，不自动重买。
+    record = read_owner_issue_file(repo, 'design')
+    from contracts.invariants import OWNER_REVISION_MAX_ROUNDS
+    from contracts.schema.workflow import OwnerIssueFileV2
+    repo.write(owner_issues_rel('design'), OwnerIssueFileV2(
+        owner=record.owner, node=record.node, raised_by=record.raised_by,
+        status='open', rounds_total=OWNER_REVISION_MAX_ROUNDS,
+        fingerprint=record.fingerprint,
+        against_sha256=owner_product_digest(repo, 'design'),
+        issues=record.issues, updated_at=record.updated_at))
+    ov_spent = S.overview_at(repo.root, _prov_code())
+    verdict, why = S.resume_verdict(ov_spent, 'str06.stage4.body_design')
+    assert verdict == S.RESUME_UNKNOWN and '耗尽' in why
+    # operator 的 owner_revision 自动重放通道随之关闭（unknown 不发 flags）。
+    assert S.operator_redo_flags(ov_spent, 'str06.stage4.body_design') is None
 
 
 def test_operator_gets_empty_flags_and_durable_queue_stays_closed(tmp_path,
@@ -454,3 +531,18 @@ def _bare_repo(tmp_path) -> Str06Repository:
     repo = Str06Repository(base / 'run')
     repo.attach_context(make_context(base / 'run', ledger=CostLedger(path=ledger_path(base))))
     return repo
+
+
+def _digest(payload: bytes) -> str:
+    import hashlib
+
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _put_owner_product(repo: Str06Repository, owner: str, payload: bytes) -> None:
+    """把 owner 正式产物按裸字节落盘（R8a 门控只看字节摘要，形状与本测试无关）。"""
+    from contracts.schema.workflow import OWNER_PRODUCT_RELS
+
+    path = repo.path(OWNER_PRODUCT_RELS[owner])
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(payload)

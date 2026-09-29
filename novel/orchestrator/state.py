@@ -599,11 +599,22 @@ def _owner_issue_states(novel_dir: Path) -> list['OwnerIssueState']:
     """读盘上 open 的跨节点修订问题（R3；`runtime/issues/<owner>.json`）。
 
     resolved 不进投影（留账不是待修订）；文件损坏即显式拒绝——它是续跑判定
-    的输入，静默当「没有问题」会把修订循环变成静默跳过（I-34）。
+    的输入，静默当「没有问题」会把修订循环变成静默跳过（I-34）。v1 记录经
+    统一读口迁移升 v2（R8a）；``product_sha256`` 采本快照时的当前摘要（None＝
+    owner 产物不在盘上，门控见 `resume_verdict` 的 owner_revision 分支）。
     """
     import json as _json
 
-    from contracts.schema.workflow import OwnerIssueFileV1
+    from contracts.schema.workflow import (
+        OWNER_PRODUCT_RELS, owner_issue_record_of_payload,
+    )
+    from novel.stages.owner_revision import owner_product_digest_at
+
+    def _digest_or_none(record_owner: str) -> str | None:
+        try:
+            return owner_product_digest_at(novel_dir, record_owner)
+        except ValueError:
+            return None
 
     states: list[OwnerIssueState] = []
     issues_dir = novel_dir / 'runtime' / 'issues'
@@ -611,8 +622,9 @@ def _owner_issue_states(novel_dir: Path) -> list['OwnerIssueState']:
         return states
     for path in sorted(issues_dir.glob('*.json')):
         try:
-            record = OwnerIssueFileV1.model_validate(
-                _json.loads(path.read_text(encoding='utf-8')))
+            record = owner_issue_record_of_payload(
+                _json.loads(path.read_text(encoding='utf-8')),
+                lambda record_owner: owner_product_digest_at(novel_dir, record_owner))
         except ValueError as exc:
             raise ValueError(
                 f'回派账 {path.name} 形状损坏：{exc}；拒绝当作「没有问题」继续，'
@@ -622,7 +634,9 @@ def _owner_issue_states(novel_dir: Path) -> list['OwnerIssueState']:
         states.append(OwnerIssueState(
             owner=record.owner, node=record.node, raised_by=record.raised_by,
             rounds_total=record.rounds_total,
-            codes=sorted({issue.code for issue in record.issues})))
+            codes=sorted({issue.code for issue in record.issues}),
+            against_sha256=record.against_sha256,
+            product_sha256=_digest_or_none(record.owner)))
     return states
 
 
@@ -758,15 +772,29 @@ def resume_verdict(
     # 它按 owner 修订重跑——**即使本节点产物存在且新鲜**（问题不是新鲜度，是
     # 下游已经报告的机械缺陷）。此判定先于一切存在性/新鲜度分支；普通队列对
     # REDO 仍关闭式停止，AgentRun 单步 operator 经登记的 owner_revision 策略执行。
+    # R8a 门控（2026-09-29）：REDO 只在 owner 当前产物摘要仍等于记录的
+    # ``against_sha256`` 时成立——摘要已变说明 owner 已修订写回（或人工 patch），
+    # 此时再 REDO 会在「重买 owner → 复验仍 open → 再重买」里打转；正确去向是
+    # 落到常规分支（产物新鲜即 skip），由下游按新鲜度 REDO 复验清账。轮额度
+    # 耗尽且产物未变则停给人（unknown），不自动重买。
     # （`getattr` 只为测试里不带该格的 SimpleNamespace 概览——正式模型恒带默认空表。）
     issue = next((i for i in getattr(ov, 'owner_issues', ()) if i.node == node), None)
     if issue is not None:
         from contracts.invariants import OWNER_REVISION_MAX_ROUNDS
-        return RESUME_REDO, (
-            f'owner_revision：{issue.raised_by} 报告 typed 机械问题'
-            f'（{", ".join(issue.codes)}），修订轮 {issue.rounds_total}/'
-            f'{OWNER_REVISION_MAX_ROUNDS}——本节点产物即使新鲜也按 owner 修订'
-            '重跑；修订要求随 `runtime/issues/` 记录进请求身份')
+        if getattr(issue, 'product_sha256', None) == issue.against_sha256 \
+                and issue.rounds_total < OWNER_REVISION_MAX_ROUNDS:
+            return RESUME_REDO, (
+                f'owner_revision：{issue.raised_by} 报告 typed 机械问题'
+                f'（{", ".join(issue.codes)}），修订轮 {issue.rounds_total}/'
+                f'{OWNER_REVISION_MAX_ROUNDS}，owner 产物未变（摘要＝against）——'
+                '本节点产物即使新鲜也按 owner 修订重跑；'
+                '修订要求随 `runtime/issues/` 记录进请求身份')
+        if getattr(issue, 'product_sha256', None) == issue.against_sha256:
+            return RESUME_UNKNOWN, (
+                f'owner_revision：{issue.raised_by} 报告 typed 机械问题'
+                f'（{", ".join(issue.codes)}），修订轮 {issue.rounds_total}/'
+                f'{OWNER_REVISION_MAX_ROUNDS} 已耗尽且 owner 产物未变——'
+                '按 item 停给人（owner patch 或人工重跑），不自动重买')
 
     # ⭐ 轮次编号产物：**它有自己的账，不看 stage 级 `done`**。
     #

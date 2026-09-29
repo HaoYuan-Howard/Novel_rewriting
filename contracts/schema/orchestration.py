@@ -2268,6 +2268,11 @@ class OwnerIssueState(StrictModel):
 
     只投影响调度判定的格子（完整问题清单在记录文件里，监控面按需另读）；
     resolved 记录不进本投影——它是历史留账，不是待修订状态。
+
+    R8a 门控两格：``against_sha256`` 是发现节点判定时的 owner 产物摘要（记录
+    原文）；``product_sha256`` 是**本快照时**的同一产物摘要（None＝产物不在盘
+    上）。`resume_verdict` 的 owner_revision 分支只在两者相等时判修订 REDO——
+    相等说明 owner 还没动过，不等说明已改稿、该等下游复验。
     """
 
     owner: str = Field(min_length=1)
@@ -2275,6 +2280,8 @@ class OwnerIssueState(StrictModel):
     raised_by: str = Field(min_length=1)
     rounds_total: int = Field(ge=0)
     codes: list[str] = Field(min_length=1)
+    against_sha256: str = Field(min_length=64, max_length=64)
+    product_sha256: str | None = None
 
 
 class NovelOverview(StrictModel):

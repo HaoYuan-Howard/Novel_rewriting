@@ -37,7 +37,7 @@ from contracts.schema.api import (
     Str06RunView, Str06SurfaceWindowView,
 )
 from contracts.invariants import NODES, OWNER_REVISION_MAX_ROUNDS
-from contracts.schema.workflow import OwnerIssueFileV1, candidate_node_owner
+from contracts.schema.workflow import candidate_node_owner
 from novel.errors import ArtifactUnreadable
 from novel.store import Str06Repository
 from novel.work_unit_usage import read_cost_snapshot
@@ -517,13 +517,18 @@ def _owner_issues_view(run: Path) -> Str06OwnerIssuesView | None:
     directory = _pattern_dir(run, f'{ISSUES_DIR_REL}/_*.json')
     if directory is None:
         return None
+    from contracts.schema.workflow import owner_issue_record_of_payload
+    from novel.stages.owner_revision import owner_product_digest_at
+
     records = []
     for entry in sorted(directory.iterdir()):
         if not entry.name.endswith('.json') or not entry.is_file():
             continue
         payload = _inspect(run, f'{ISSUES_DIR_REL}/{entry.name}')
         try:
-            record = OwnerIssueFileV1.model_validate(payload)
+            record = owner_issue_record_of_payload(
+                payload,
+                lambda record_owner: owner_product_digest_at(run, record_owner))
         except ValueError as exc:
             raise ArtifactUnreadable(
                 f'回派账 {ISSUES_DIR_REL}/{entry.name} 形状损坏：{exc}；'
@@ -531,7 +536,8 @@ def _owner_issues_view(run: Path) -> Str06OwnerIssuesView | None:
         records.append(Str06OwnerIssueRecordView(
             owner=record.owner, node=record.node, raised_by=record.raised_by,
             status=record.status, rounds_total=record.rounds_total,
-            fingerprint=record.fingerprint, updated_at=record.updated_at,
+            fingerprint=record.fingerprint, against_sha256=record.against_sha256,
+            updated_at=record.updated_at,
             issues=tuple(
                 Str06OwnerIssueItemView(
                     code=issue.code, item=issue.item, message=issue.message,
