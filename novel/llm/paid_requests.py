@@ -1188,7 +1188,10 @@ def ask_json(session: PaidRequestSession, owner: str, request: ChatRequest,
             # 非空但解析/校验失败：R3 有上限修订。同一问题集重复（修订后原样
             # 重现）即停；额度耗尽即停——两停都按 item 留 typed 问题，剩余修复
             # 走 owner patch 或人工重跑，不隐式扩大授权。
-            fingerprint = digest(sorted(errors))
+            # R8b.3：无进展指纹用「位置模式」集合（消息首个冒号前的定位段），
+            # 不用全文——措辞微调（如实得值摘要变化）不再被误判成有进展。
+            heads = sorted(str(e).split('：', 1)[0][:80] for e in errors)
+            fingerprint = digest(heads)
             if fingerprint == last_fingerprint:
                 raise ValueError(
                     f'{owner} 校验失败：节点内校验重问后问题集原样重现'

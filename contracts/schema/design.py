@@ -592,7 +592,7 @@ class DesignWireV3(StrictModel):
     book_style: str = Field(min_length=1)
     world_rules: tuple[str, ...] = Field(default=(), min_length=0)
     character_voices: tuple[CharacterVoice, ...] = Field(default=(), min_length=0)
-    initial_state: tuple[DesignWireInitial, ...] = Field(default=(), min_length=0)
+    initial_state: tuple[DesignWireInitial, ...] = Field(min_length=0)
     initial_surfaces: tuple[SurfaceIntroduction, ...] = Field(default=(), min_length=0)
     scenes: tuple[DesignWireScene, ...] = Field(min_length=1)
     chapters: tuple[DesignWireChapter, ...] = Field(min_length=1)
