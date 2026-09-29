@@ -1814,7 +1814,7 @@ class NodeSpec(NamedTuple):
 #: 【`flags` 那一列】新链每个付费节点只接受 `--check-only`（免费复检：缓存／wire
 #: 采用与确定性重放，零新购）；两个确定性节点（compile／assemble）本身免费，
 #: `flags=()` 是终态。入口级旗标（`--through`／`--node`／`--wire-dir`／
-#: `--adopt-root`／`--body-chapter-limit` 等）属工具驱动不属于节点身份
+#: `--adopt-root`／`--body-chapters` 等）属工具驱动不属于节点身份
 #: （候选节点表 `flags` 列的同一纪律）。
 #:
 #: 【`produces` 那一列】值与候选产物表逐字相等（对账在
@@ -1864,7 +1864,9 @@ NODES: Final[dict[str, NodeSpec]] = {
             'chapter',
             '书级人物表（book 观察）、本章句段与第 1..k-1 章原文、抽取协议',
             'executor', 'none',
-            '机械校验自证；章观察互不依赖，缺失单元恢复不重购已存结果（D3）',
+            '机械校验自证；章观察互不依赖，缺失单元恢复不重购已存结果（D3）；'
+            '逐章失败留证 runtime/chapter_observation_failures.json'
+            '（「最近一次完成执行」形状，与正文留证同形共用）',
             ('stop',), ('str06.stage2.chapters',), 'executor:chapter',
             ('saved_response', 'historical_adoption', 'owner_patch'), 4)),
     'str06.stage2.names': NodeSpec(
@@ -1973,7 +1975,9 @@ NODES: Final[dict[str, NodeSpec]] = {
             'chapter', '章包（WriterBookIR 逐章确定性投影；各章独立，唯一输入面）',
             'executor', 'none',
             '章级机械验（硬失败不披露放行，只有篇幅带可披露）；原子写正文→章回执；'
-            '无合法候选停该章（各章独立，其余章照常；失败清单留证 runtime/body_failures.json）',
+            '无合法候选停该章（各章独立，其余章照常；逐章失败留证 '
+            'runtime/body_failures.json——「最近一次完成执行」形状：'
+            'requested/attempted/chapters/recorded_at，与章观察同形共用）',
             ('stop',), ('str06.stage5.body',), 'executor:chapter',
             ('committed_set_recovery', 'saved_response', 'historical_adoption',
              'owner_patch'), 4)),

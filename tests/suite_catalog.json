@@ -665,8 +665,19 @@
       ],
       "cases": {
         "test_full_pipeline_to_delivery_and_free_recovery": "stage",
-        "test_book_call_ceiling_stops_generation": "stage"
+        "test_book_call_ceiling_stops_generation": "stage",
+        "test_body_chapters_selection_writes_only_selected_chapters": "stage",
+        "test_body_chapters_full_run_after_canary_only_fills_missing": "stage",
+        "test_body_chapters_rejects_invalid_selection_before_any_call": "stage",
+        "test_body_chapters_does_not_enter_request_or_receipt_identity": "stage",
+        "test_chapter_failure_keeps_other_legal_commits_and_stops_truncated": "stage"
       }
+    },
+    "tests/test_canary_chapters.py": {
+      "layer": "unit_contract",
+      "stages": [
+        "stage4"
+      ]
     },
     "tests/test_str06_chapter_closure.py": {
       "layer": "unit_contract",

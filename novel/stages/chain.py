@@ -111,7 +111,8 @@ __all__ = [
     'ChainContext', 'ExecutionProfile', 'NODE_ORDER', 'NODE_RUNNERS',
     'Stage1Input', 'THROUGH_NODE',
     'build_evidence', 'derive_total_length_budget', 'execute', 'load_dev_source',
-    'load_stage1_chapters', 'run_chain', 'run_node', 'run_workflow',
+    'load_stage1_chapters', 'resolve_body_chapters', 'run_chain', 'run_node',
+    'run_workflow',
     'PaidBoundary', 'assemble_paid_boundary', 'str06_chat_request',
 ]
 
@@ -133,6 +134,13 @@ THROUGH_NODE = {'stage2': 'str06.stage2.compile', 'stage4': 'str06.stage4.compil
 
 FINAL_STATUS = {'stage2': 'stage2_compiled', 'stage4': 'planned_validated',
                 'stage5': 'body_hook_accepted_mechanical', 'stage7': 'delivered'}
+
+#: 逐章失败留证（W2/D3）：「最近一次完成执行」语义——正常完成写空清单、带失败
+#: 完成在上抛之前写失败子集；崩溃不写，文件缺失＝该节点还没有一次完成执行。
+#: 章观察（`str06.stage2.chapters`）与正文（`str06.stage5.body`）共用一个形状
+#: （I-11）：`{requested, attempted, chapters, recorded_at}`。
+BODY_FAILURES_REL = 'runtime/body_failures.json'
+CHAPTER_OBSERVATION_FAILURES_REL = 'runtime/chapter_observation_failures.json'
 
 
 @dataclass
@@ -158,7 +166,12 @@ class ChainContext:
     hook_constraints: HookConstraints = field(
         default_factory=lambda: HookConstraints(target_chars=280, hard_max_chars=360))
     length_band: tuple[float, float] = (0.6, 1.3)
-    body_chapter_limit: int | None = None
+    #: 正文目标章集合（W1/D2 调用层选章）：None＝全书；非空 tuple＝恰好这些章。
+    #: 只作调用元数据——记入 `runtime/workflow_status.json` 的独立字段供审计；
+    #: 不进 run 身份摘要、请求身份、章回执三把摘要、provenance、CommitBundle
+    #: 或契约身份（`NodeSpec.flags` 不变）。从 canary 续跑到全书时，已提交章
+    #: 的采用与恢复身份不变（集合恢复按目标集合补缺）。
+    body_chapters: tuple[int, ...] | None = None
     provider: str = 'manual-adoption'
     model: str = 'unknown'
     #: canonical JSON 摘要（请求身份）；由调用方从付费边界注入——chain 层不 import
@@ -252,6 +265,26 @@ def _chapter_evidence(evidence: dict, chapter: int) -> dict:
             if v['chapter'] == chapter or (chapter == 1 and v.get('pre_chapter'))}
 
 
+def _write_chapter_failures(repository, rel: str, *, requested: tuple[int, ...],
+                            attempted: tuple[int, ...],
+                            failures: dict[int, BaseException]) -> None:
+    """逐章失败留证（D3/W2）：「最近一次完成执行」的逐章失败清单。
+
+    形状 `{requested, attempted, chapters, recorded_at}`：`requested` 是本次
+    请求的章范围（章观察＝全部源章；正文＝`body_chapters` 或全书）；`attempted`
+    是本次实际进入逐章执行器的章（正文不含已提交章）；`chapters` 是
+    `attempted` 的失败子集。写盘走 repository 的原子替换；崩溃不写，文件
+    缺失因此表示「这个节点还没有一次完成执行」（I-42）。
+    """
+    repository.write(rel, {
+        'requested': list(requested),
+        'attempted': list(attempted),
+        'chapters': {str(ordinal): {'failure_kind': type(exc).__name__,
+                                    'detail': str(exc)}
+                     for ordinal, exc in sorted(failures.items())},
+        'recorded_at': int(time.time())})
+
+
 def run_chapters(ctx: ChainContext) -> dict:
     """`str06.stage2.chapters`：逐章并行观察——只含章内局部句柄（D3）。
 
@@ -260,10 +293,11 @@ def run_chapters(ctx: ChainContext) -> dict:
     前章编译或关联失败不改变后章请求。各章与 `run_body` 同一并发纪律：经
     `novel/model_slots.py` 的书级＋供应商总槽在线程池并发执行（并发度 run
     启动时冻结、不进语义身份，`R-12.1c`）。单章失败隔离（I-31）：失败定位
-    到该章 item、其余章照常执行，已落盘的章观察保持有效；全部待补章收敛后
-    按第一章序的原始失败上抛（授权／账务故障保持原始类型），失败清单留证
-    `runtime/chapter_observation_failures.json`，恢复按请求身份重放、不重购
-    已存结果（I-30/I-31）。
+    到该章 item、其余章照常执行，已落盘的章观察保持有效；全部章收敛后按
+    第一章序的原始失败上抛（授权／账务故障保持原始类型），逐章失败清单按
+    「最近一次完成执行」留证 `runtime/chapter_observation_failures.json`
+    （D3/W2：正常完成写空清单，文件缺失＝本节点没有完成执行），恢复按请求
+    身份重放、不重购已存结果（I-30/I-31）。
     """
     repository = ctx.repository
     book = repository.read_model('stage2/observations/book.json')
@@ -305,12 +339,12 @@ def run_chapters(ctx: ChainContext) -> dict:
                 failures[futures[future]] = exc
                 continue
             observed += 1
+    # 「最近一次完成执行」逐章留证（D3/W2）：正常完成写空清单；带失败完成在
+    # 上抛之前写失败子集。章观察无集合恢复，requested＝attempted＝全部源章。
+    _write_chapter_failures(repository, CHAPTER_OBSERVATION_FAILURES_REL,
+                            requested=tuple(ordinals), attempted=tuple(ordinals),
+                            failures=failures)
     if failures:
-        repository.write('runtime/chapter_observation_failures.json',
-                         {'chapters': {str(no): {
-                             'failure_kind': type(exc).__name__,
-                             'detail': str(exc)}
-                             for no, exc in sorted(failures.items())}})
         # 其余章的合法观察已在盘上（I-31）；按第一章序的原始失败上抛——
         # PurchaseRequired／ExecutionError 保持原类型，run 级状态据此闭合。
         raise failures[min(failures)]
@@ -770,6 +804,31 @@ def run_hook(ctx: ChainContext) -> dict:
 
 # ─── stage5 body（章包写手：独立成章、并发、集合恢复；D2，B4） ────────────────
 
+def resolve_body_chapters(body_chapters: tuple[int, ...] | None,
+                          chapter_count: int) -> tuple[int, ...]:
+    """正文目标章集合的机械选章规则（W1/D2）：None＝全书；非空 tuple＝恰好这些章。
+
+    `()`、乱序、重复、越出 1..chapter_count 一律在任何付费调用之前
+    ValueError 拒绝（I-34：不静默截断、不按默认补全）。返回升序目标章号。
+    """
+    if body_chapters is None:
+        return tuple(range(1, chapter_count + 1))
+    if not body_chapters:
+        raise ValueError(
+            'body_chapters 不允许为空集合：None 表示全书，空集合没有语义')
+    if any(isinstance(n, bool) or not isinstance(n, int) for n in body_chapters):
+        raise ValueError(f'body_chapters 必须是整数章号：{body_chapters!r}')
+    if list(body_chapters) != sorted(body_chapters):
+        raise ValueError(f'body_chapters 必须按章序升序给出：{body_chapters}')
+    if len(set(body_chapters)) != len(body_chapters):
+        raise ValueError(f'body_chapters 不允许重复章号：{body_chapters}')
+    if body_chapters[0] < 1 or body_chapters[-1] > chapter_count:
+        raise ValueError(
+            f'body_chapters 越出 1..{chapter_count}：{body_chapters}；'
+            '不静默截断，选章前先核对章数')
+    return tuple(body_chapters)
+
+
 def _packet_identities(writer_ir) -> dict[int, 'ChapterIdentities']:
     """当前编译下每章的回执分层摘要（rc6 身份拆分；Stage5 恢复绑定与 Stage7
     核对共用同一产地——写手视图／验证输入／Machine 审计三把）。"""
@@ -779,13 +838,14 @@ def _packet_identities(writer_ir) -> dict[int, 'ChapterIdentities']:
 
 
 def _committed_set(repository, identities: dict[int, 'ChapterIdentities'],
-                  target_chapters: int):
+                  target: tuple[int, ...]):
     """集合恢复：逐章独立装载有效提交（回执＋正文＋章包摘要三方绑定）。
 
     各章互不依赖（D2）：某章缺失、章包过期或正文脱钩只使**该章**回到待补
     集合，其余章的合法提交原样保留（I-31）——已完成 1、2、4、6 章时只补
     3、5。崩溃窗口（正文已写、回执未写）按「无有效回执」处理：本章重做，
-    同请求身份免费重放闭合（`R-7.4`）。
+    同请求身份免费重放闭合（`R-7.4`）。`target` 是本次目标章集合（W1 选章；
+    不在集合内的章既不装载也不触碰）。
 
     回执装载走 `inspect`（不记来源边、不做输入新鲜度）：章包摘要
     （写手视图与验证输入摘要）是比输入边新鲜度更强的逐章绑定——章回执的合法输入只有
@@ -796,7 +856,7 @@ def _committed_set(repository, identities: dict[int, 'ChapterIdentities'],
     from pydantic import ValidationError
     committed: dict[int, str] = {}
     receipts: dict[int, dict] = {}
-    for ordinal in range(1, target_chapters + 1):
+    for ordinal in target:
         rel_receipt = f'stage5/acceptance/body/{_chapter_ordinal(ordinal)}.json'
         rel_prose = f'stage5/body/{_chapter_ordinal(ordinal)}.txt'
         try:
@@ -850,22 +910,23 @@ def run_body(ctx: ChainContext) -> dict:
 
     输入是当前编译的 WriterBookIR（完整 IR 保留供存储与审计，I-16）；每章
     运行时确定性投影章包，Writer/Validator 只收当前章包——不读前文正文、
-    Design、Characters 或其他章 IR。待补集合按有效提交集合计算（只补缺章）；
-    待补章经 `novel/model_slots.py` 的书级＋供应商总槽并发执行（默认
-    `PIPELINE_DEFAULT_CONCURRENCY`，并发度不进语义身份）。单章失败不污染
-    其他章的合法结果（I-31）：全部待补章收敛后按第一章序的原始失败上抛，
-    失败清单留证 `runtime/body_failures.json`；授权／账务／取消故障保持
-    原始类型（授权闸与 typed 状态在 run 级闭合）。
+    Design、Characters 或其他章 IR。目标章集合由 `resolve_body_chapters`
+    机械确定（W1/D2：`None`＝全书；非空 tuple＝恰好这些章，`()`／乱序／
+    重复／越界在任何付费调用之前拒绝）。待补集合按有效提交集合在目标集合
+    内计算（只补缺章）；待补章经 `novel/model_slots.py` 的书级＋供应商总槽
+    并发执行（默认 `PIPELINE_DEFAULT_CONCURRENCY`，并发度不进语义身份）。
+    单章失败不污染其他章的合法结果（I-31）：全部待补章收敛后按第一章序的
+    原始失败上抛，失败清单留证 `runtime/body_failures.json`（「最近一次
+    完成执行」语义，D3/W2：正常完成写空清单，缺失＝本节点没有完成执行）；
+    授权／账务／取消故障保持原始类型（授权闸与 typed 状态在 run 级闭合）。
+    选章（`ctx.body_chapters`）只作调用元数据，不进任何身份。
     """
     repository = ctx.repository
     writer_ir = repository.read_model('stage4/ir/writer_book_ir.json')
-    target_chapters = (min(ctx.body_chapter_limit, len(writer_ir.chapters))
-                       if ctx.body_chapter_limit is not None else len(writer_ir.chapters))
+    target = resolve_body_chapters(ctx.body_chapters, len(writer_ir.chapters))
     identities = _packet_identities(writer_ir)
-    committed, committed_receipts = _committed_set(repository, identities,
-                                                   target_chapters)
-    todo = [ordinal for ordinal in range(1, target_chapters + 1)
-            if ordinal not in committed]
+    committed, committed_receipts = _committed_set(repository, identities, target)
+    todo = tuple(ordinal for ordinal in target if ordinal not in committed)
     packets = {ordinal: project_chapter_packet(writer_ir, ordinal) for ordinal in todo}
     failures: dict[int, BaseException] = {}
     if todo:
@@ -890,10 +951,12 @@ def run_body(ctx: ChainContext) -> dict:
                     continue
                 committed[ordinal] = outcome.prose
                 committed_receipts[ordinal] = outcome.receipt.model_dump(mode='json')
+    # 「最近一次完成执行」逐章留证（D3/W2）：带失败完成在上抛之前写一次，
+    # 正常完成写空清单（此时 failures 为空）。崩溃不写 ⇒ 文件缺失表示本节点
+    # 还没有一次完成执行（I-42：缺席与合法空清单是两件事）。
+    _write_chapter_failures(repository, BODY_FAILURES_REL,
+                            requested=target, attempted=todo, failures=failures)
     if failures:
-        repository.write('runtime/body_failures.json', {'chapters': {
-            str(ordinal): {'failure_kind': type(exc).__name__, 'detail': str(exc)}
-            for ordinal, exc in sorted(failures.items())}})
         # 其余章的合法提交已在盘上（I-31）；按第一章序的原始失败上抛——
         # PurchaseRequired／ExecutionError 保持原类型，run 级状态据此闭合。
         raise failures[min(failures)]
@@ -1345,13 +1408,16 @@ def load_stage1_chapters(base, sid: str) -> Stage1Input:
 def run_workflow(*, repository, chapters, ask, ask_text, ask_body, budget=11000,
                  through='stage4', provider='manual-adoption', model='unknown',
                  book_title='', hook_constraints=None, length_band=(0.6, 1.3),
-                 body_chapter_limit=None, node_filter=None, hook_copy='',
+                 body_chapters=None, node_filter=None, hook_copy='',
                  concurrency: int = PIPELINE_DEFAULT_CONCURRENCY):
     """记录显式执行状态；失败保留旧产物供恢复，但不能仍宣称上次绿灯有效。
 
     流程编排已归 owner runner（本模块上半）：本函数只装配 ChainContext、驱动
     节点计划并落 run 级状态（F7b 薄驱动）。`concurrency` 是正文逐章并发度
-    （run 启动时冻结；并发度不进语义身份，`R-12.1c`）。
+    （run 启动时冻结；并发度不进语义身份，`R-12.1c`）。`body_chapters` 是
+    调用层选章（W1/D2）：只作调用元数据记入 `runtime/workflow_status.json`
+    的独立字段供审计，**不进** `input_sha256` 身份摘要、请求身份、回执或
+    provenance——从 canary 续跑到全书不改变任何已提交章的采用与恢复身份。
     """
     hook_constraints = hook_constraints or HookConstraints(
         target_chars=280, hard_max_chars=360)
@@ -1359,21 +1425,24 @@ def run_workflow(*, repository, chapters, ask, ask_text, ask_body, budget=11000,
         repository=repository, ask=ask, ask_text=ask_text, ask_body=ask_body,
         chapters=chapters, hook_copy=hook_copy, budget=budget, book_title=book_title,
         hook_constraints=hook_constraints, length_band=length_band,
-        body_chapter_limit=body_chapter_limit, provider=provider, model=model,
+        body_chapters=body_chapters, provider=provider, model=model,
         digest=digest, concurrency=concurrency)
     status_rel = 'runtime/workflow_status.json'
     identity = digest({'chapters': chapters, 'hook_copy': hook_copy, 'budget': budget,
-                       'through': through, 'band': length_band,
-                       'body_limit': body_chapter_limit})
+                       'through': through, 'band': length_band})
+    #: 选章只作调用元数据（W1/D2）：run 级状态各态都带上这个审计字段。
+    audit_chapters = list(body_chapters) if body_chapters is not None else None
     repository.write(status_rel, {'status': 'running', 'input_sha256': identity,
-                                  'accepted_body': False})
+                                  'accepted_body': False,
+                                  'body_chapters': audit_chapters})
     try:
         report, final_status, accepted_body = run_chain(
             ctx, through=through, node_filter=tuple(node_filter) if node_filter else None)
     except PurchaseRequired as exc:
         repository.write(status_rel, {
             'status': 'needs_authorization', 'input_sha256': identity,
-            'accepted_body': False, 'blocked_owner': exc.owner, 'detail': str(exc)})
+            'accepted_body': False, 'blocked_owner': exc.owner, 'detail': str(exc),
+            'body_chapters': audit_chapters})
         raise
     except Exception as exc:
         # run_chain 已按候选节点留痕（failed_node）；此处只补 run 级身份，
@@ -1389,7 +1458,8 @@ def run_workflow(*, repository, chapters, ask, ask_text, ask_body, budget=11000,
         repository.write(status_rel, status)
         raise
     repository.write(status_rel, {'status': final_status, 'input_sha256': identity,
-                                  'accepted_body': accepted_body, 'through': through})
+                                  'accepted_body': accepted_body, 'through': through,
+                                  'body_chapters': audit_chapters})
     return report
 
 
@@ -1617,5 +1687,5 @@ def execute(args) -> None:
                        hook_constraints=HookConstraints(target_chars=args.hook_target_chars,
                                                          hard_max_chars=args.hook_hard_max),
                        length_band=(args.body_band_low, args.body_band_high),
-                       body_chapter_limit=args.body_chapter_limit,
+                       body_chapters=args.body_chapters,
                        concurrency=cfg.concurrency_for('str06.stage5.body')))

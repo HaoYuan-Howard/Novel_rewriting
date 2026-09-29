@@ -115,3 +115,23 @@ def synthetic_ref(owner: str, prompt: str = '', model: str = 'fake',
     from novel.llm.paid_requests import AdoptionRef
     return AdoptionRef(owner=owner, model=model, prompts={'user': prompt},
                        request_sha256=request_sha256)
+
+
+# ─── W1 选章：正文 runner 的测试替身 ───
+
+def stub_body_runner(monkeypatch):
+    """把 `str06.stage5.body` 的 runner 换成如实报告零提交的替身（W1/D2）。
+
+    替代已退役的 `body_chapter_limit=0`：那个开关让目标集合退化成空前缀，
+    「选了零章」不是一次说得通的执行。替身不进付费路径、不碰正文
+    盘面，`body_complete=False` 如实报告；`run_body` 的选章规则、集合恢复与
+    逐章留证由 `tests/test_str06_body.py` 自己覆盖。调用方原有的 `ask_body`
+    抛错守卫保留——真被调用说明替身没装上。
+    """
+    from novel.stages import chain
+
+    def stub(_ctx):
+        return {'body_chapters': (), 'body_complete': False,
+                'length_disclosed_chapters': []}
+
+    monkeypatch.setitem(chain.NODE_RUNNERS, 'str06.stage5.body', stub)

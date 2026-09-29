@@ -202,11 +202,11 @@ def test_recovery_after_revision_stop_replays_free(tmp_path):
 
 # ═══════════════ 三、左移校验（stage） ═══════════════
 
-def _chain_runner(tmp_path, fault, name, fault_once=False):
+def _chain_runner(tmp_path, monkeypatch, fault, name, fault_once=False):
     """用（可选故障化的）wires 走真实链入口；返回 (runner, repo, transport)。"""
     from contracts.schema.hook import HookConstraints
     from novel.stages.chain import run_workflow
-    from tests.str06_facilities import json_ask, text_ask
+    from tests.str06_facilities import json_ask, text_ask, stub_body_runner
     from tests.test_str06_body import _chapters, _make_session
 
     wires = looped_full_chain_wires()
@@ -214,21 +214,23 @@ def _chain_runner(tmp_path, fault, name, fault_once=False):
         tmp_path, wires, name=name, transport=FaultTransport(wires, fault, fault_once))
 
     def ask_body(owner, prompt):
-        raise AssertionError('自愈用例不在正文 owner 注入故障（body_chapter_limit=0）')
+        raise AssertionError('自愈用例不在正文 owner 注入故障（正文 runner 已 stub）')
+
+    stub_body_runner(monkeypatch)
 
     def runner():
         return run_workflow(
             repository=repo, chapters=_chapters(), ask=json_ask(session),
             ask_text=text_ask(session), ask_body=ask_body, budget=2000,
             through='stage7', book_title='报恩',
-            hook_constraints=HookConstraints(target_chars=10, hard_max_chars=360),
-            body_chapter_limit=0)
+            hook_constraints=HookConstraints(target_chars=10, hard_max_chars=360))
     return runner, repo, transport
 
 
-def test_unknown_slug_is_caught_at_chapter_acceptance(tmp_path):
+def test_unknown_slug_is_caught_at_chapter_acceptance(tmp_path, monkeypatch):
     """左移：participants 人物闭集在章观察验收即查——不再攒到 compile。"""
-    runner, repo, _transport = _chain_runner(tmp_path, 'unknown_slug', 'slug')
+    runner, repo, _transport = _chain_runner(tmp_path, monkeypatch,
+                                             'unknown_slug', 'slug')
     with pytest.raises(ValueError) as excinfo:
         runner()
     message = str(excinfo.value)
@@ -238,9 +240,10 @@ def test_unknown_slug_is_caught_at_chapter_acceptance(tmp_path):
         '章观察验收失败不落盘半份产物'
 
 
-def test_missing_pairing_is_caught_at_associate_dry_run(tmp_path):
+def test_missing_pairing_is_caught_at_associate_dry_run(tmp_path, monkeypatch):
     """左移：associate 验收做 compile 干跑，未决项归它自己（同节点修订后停）。"""
-    runner, repo, transport = _chain_runner(tmp_path, 'missing_pairing', 'pairing')
+    runner, repo, transport = _chain_runner(tmp_path, monkeypatch,
+                                            'missing_pairing', 'pairing')
     with pytest.raises(ValueError) as excinfo:
         runner()
     message = str(excinfo.value)
@@ -253,12 +256,12 @@ def test_missing_pairing_is_caught_at_associate_dry_run(tmp_path):
 # ═══════════════ 四、全链靠修订走完（stage；R3 完成标准） ═══════════════
 
 @pytest.mark.parametrize('fault', FAULTS)
-def test_faulted_full_chain_completes_via_revision(tmp_path, fault):
+def test_faulted_full_chain_completes_via_revision(tmp_path, monkeypatch, fault):
     """五类故障经修订自愈：fault_once（修订轮「改对了」）后全链照常交付面。"""
-    runner, repo, transport = _chain_runner(tmp_path, fault, f'once-{fault}',
-                                            fault_once=True)
+    runner, repo, transport = _chain_runner(tmp_path, monkeypatch, fault,
+                                            f'once-{fault}', fault_once=True)
     report = runner()
-    assert report['assembly']['status'] == 'not_ready'   # body_chapter_limit=0
+    assert report['assembly']['status'] == 'not_ready'   # 正文 runner 已 stub
     assert repo.path('stage2/characters/characters.json').is_file()
     assert repo.path('stage4/ir/writer_book_ir.json').is_file()
     assert repo.path('stage4/compiled/execution_plan.json').is_file()
@@ -282,11 +285,12 @@ def test_faulted_full_chain_completes_via_revision(tmp_path, fault):
 
 # ═══════════════ 五、跨节点回派（stage） ═══════════════
 
-def test_no_progress_backfill_stops_per_item_without_repaying_bind(tmp_path):
+def test_no_progress_backfill_stops_per_item_without_repaying_bind(tmp_path,
+                                                                   monkeypatch):
     """粘性故障：design 修订后 bind 原样复现 ⇒ 同问题集按 item 停；上游语义
     未变的 bind 不重新购买（缓存重放），额度只记一轮。"""
     from tests.test_str06_body import _chapters, _make_session
-    from tests.str06_facilities import json_ask, text_ask
+    from tests.str06_facilities import json_ask, text_ask, stub_body_runner
     from novel.stages.chain import run_workflow
     from contracts.schema.hook import HookConstraints
 
@@ -296,15 +300,15 @@ def test_no_progress_backfill_stops_per_item_without_repaying_bind(tmp_path):
         transport=FaultTransport(wires, 'obligation_unbound'))
 
     def ask_body(owner, prompt):
-        raise AssertionError('本用例 body_chapter_limit=0')
+        raise AssertionError('本用例正文 runner 已 stub')
 
+    stub_body_runner(monkeypatch)
     with pytest.raises(OwnerRevisionStop, match='没有进展') as excinfo:
         run_workflow(repository=repo, chapters=_chapters(), ask=json_ask(session),
                      ask_text=text_ask(session), ask_body=ask_body, budget=2000,
                      through='stage7', book_title='报恩',
                      hook_constraints=HookConstraints(target_chars=10,
-                                                      hard_max_chars=360),
-                     body_chapter_limit=0)
+                                                      hard_max_chars=360))
     assert '必保义务 ob01' in str(excinfo.value)
     record = read_owner_issue_file(repo, 'design')
     assert record.status == 'open' and record.rounds_total == 1
@@ -378,25 +382,26 @@ def test_compile_backfills_associate_and_revision_heals(tmp_path):
 
 # ═══════════════ 六、调度面：resume_verdict／operator／队列（stage） ═══════════════
 
-def _stuck_overview(tmp_path):
+def _stuck_overview(tmp_path, monkeypatch):
     """跑一条粘性 obligation_unbound 链到停止，返回 (repo, overview)。"""
     from novel import prov as _prov
     from novel.orchestrator import state as S
 
     _runner, repo, _transport = _chain_runner(
-        tmp_path, 'obligation_unbound', 'verdict')
+        tmp_path, monkeypatch, 'obligation_unbound', 'verdict')
     with pytest.raises(OwnerRevisionStop):
         _runner()
     ov = S.overview_at(repo.root, _prov.code_version())
     return repo, ov
 
 
-def test_resume_verdict_marks_owner_revision_redo_before_freshness(tmp_path):
+def test_resume_verdict_marks_owner_revision_redo_before_freshness(tmp_path,
+                                                                   monkeypatch):
     """open issue ⇒ 上游判修订重跑（即使其产物新鲜）；复验 resolved 后回到
     常规判定。"""
     from novel.orchestrator import state as S
 
-    _repo, ov = _stuck_overview(tmp_path)
+    _repo, ov = _stuck_overview(tmp_path, monkeypatch)
     entry = next(i for i in ov.owner_issues if i.node == 'str06.stage4.body_design')
     assert entry.owner == 'design' and entry.rounds_total == 1
     assert 'must_keep_unbound' in entry.codes
@@ -419,13 +424,14 @@ def test_resume_verdict_marks_owner_revision_redo_before_freshness(tmp_path):
     assert all(i.node != 'str06.stage4.body_design' for i in ov2.owner_issues)
 
 
-def test_operator_gets_empty_flags_and_durable_queue_stays_closed(tmp_path):
+def test_operator_gets_empty_flags_and_durable_queue_stays_closed(tmp_path,
+                                                                  monkeypatch):
     """AgentRun 单步 operator 经登记的 owner_revision 策略拿到空 flags；普通
     durable 队列对同一 REDO 关闭式停止（R-14.4 不放宽）。"""
     from novel.orchestrator import queue as Q
     from novel.orchestrator import state as S
 
-    _repo, ov = _stuck_overview(tmp_path)
+    _repo, ov = _stuck_overview(tmp_path, monkeypatch)
     assert S.operator_redo_flags(ov, 'str06.stage4.body_design') == ()
     # 未登记 owner_revision 的节点即使 REDO 也拿不到自动重放（不猜 flags）。
     assert S.operator_redo_flags(ov, 'str06.stage4.bind') is None

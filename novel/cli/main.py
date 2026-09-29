@@ -152,6 +152,12 @@ def _parser() -> argparse.ArgumentParser:
                    choices=('low', 'high', 'max'),
                    help='新链请求的 reasoning effort 档位（进请求身份；'
                         '与 NodeSpec 取值面一致，medium 已移除——B1/D6）')
+    # `--body-chapters` 是正文选章的调用层参数（W1/D2，B6-A canary 用）：
+    # 只对 `str06.stage5.body` 有效；编排器的 `build_argv` 永不生成它，产品端
+    # 仍是全书自动。它只作调用元数据（审计字段），不进请求身份与章回执。
+    r.add_argument('--body-chapters', default=None,
+                   help='正文目标章集合（逗号分隔阅读序章号，如 1,6,10）；'
+                        '只对 str06.stage5.body 有效，省略＝全书')
 
     with_run_args(sub.add_parser('preview', help='0 成本：打印将要执行的命令'))
 
@@ -382,6 +388,12 @@ def _run_str06(a: argparse.Namespace, flags: list[str], *, paid: bool) -> int:
     if unknown:
         raise TerminalState(
             f'{a.node} 只接受 --check-only，实得多余旗标 {sorted(unknown)}')
+    # 正文选章是调用层参数（W1/D2）：只对 str06.stage5.body 有效，其余节点带
+    # 这个参数当场拒绝——不为一个节点开的口子被别的节点安静地继承。
+    body_chapters = _body_chapters_of(getattr(a, 'body_chapters', None))
+    if body_chapters is not None and a.node != 'str06.stage5.body':
+        raise TerminalState(
+            f'--body-chapters 只对 str06.stage5.body 有效，收到 {a.node}')
     # 历史采用凭证与 effort 档位是 invocation 面（见 parser 注释）：只在新链
     # 分流点之后读取，旧链节点到不了这里。
     wire_dir = getattr(a, 'wire_dir', None)
@@ -413,7 +425,7 @@ def _run_str06(a: argparse.Namespace, flags: list[str], *, paid: bool) -> int:
         hook_hard_max=STR06_RUNTIME_CONFIG.hook_hard_max_chars,
         body_band_low=STR06_RUNTIME_CONFIG.length_band_low,
         body_band_high=STR06_RUNTIME_CONFIG.length_band_high,
-        body_chapter_limit=None,
+        body_chapters=body_chapters,
         book_call_ceiling=None,
         book_title=paths.title_of(novel_dir),
         reasoning_effort=reasoning_effort,
@@ -570,6 +582,22 @@ def _chapters_of(raw: str | None) -> tuple[int, ...]:
             raise TerminalState(f'--chapters 只收逗号分隔的阅读序章号，收到 {raw!r}')
         got.append(int(part))
     return tuple(sorted(set(got)))
+
+
+def _body_chapters_of(raw: str | None) -> tuple[int, ...] | None:
+    """`--body-chapters 2` → `(2,)`；省略（None）＝全书（W1/D2）。
+
+    空值拒绝：给出参数就必须是非空章号集合——「显式给了却什么也没选」在
+    调用层就停，不留给链层猜。合法性（越界等）由链层
+    `resolve_body_chapters` 按章数判定，CLI 不重复第二套口径。
+    """
+    if raw is None:
+        return None
+    got = _chapters_of(raw)
+    if not got:
+        raise TerminalState(
+            '--body-chapters 不接收空值：省略表示全书，给出就必须是非空章号')
+    return got
 
 
 def _report_exit(report: object) -> int:

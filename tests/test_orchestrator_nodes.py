@@ -532,12 +532,15 @@ def test_no_current_node_takes_a_mode_and_retired_flags_are_refused():
 
 
 def test_body_default_is_whole_book_and_takes_no_chapter_selector_flag():
-    """新链按章范围由工具驱动的入口级旗标治理（`--body-chapter-limit`），
+    """新链按章范围由工具驱动的入口级旗标治理（`--body-chapters`），
     节点 argv 没有 `--mode`／`--chapters`。"""
     whole = N.build_argv('str06.stage5.body', SID, base=BASE)
     assert '--mode' not in whole and '--chapters' not in whole
     with pytest.raises(UnsupportedRunMode, match='不接受'):
         N.build_argv('str06.stage5.body', SID, ['--chapters', '1,3'], base=BASE)
+    # `--body-chapters` 是 CLI 调用层参数，只认手敲；编排器的 argv 构造面
+    # 永远不生成它——产品端（agent 代跑）因此仍是全书自动。
+    assert '--body-chapters' not in whole
 
 
 def test_stage5_rebuild_draft_is_retired():

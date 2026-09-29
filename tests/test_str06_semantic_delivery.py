@@ -651,16 +651,16 @@ def test_hook_audit_only_material_stays_out_of_body_face(green_hook, green_ir):
 
 # ═══════════════ 六、故障注入 fake 底座（R3 复用；本批只验证注入有效） ═══════════════
 
-def _fault_run(tmp_path, fault, name):
+def _fault_run(tmp_path, monkeypatch, fault, name):
     """用（可选故障化的）wires 走真实链入口：PaidRequestSession＋fake transport。
 
-    返回 ``(runner, repo)``：runner 触发一次 `run_workflow`（body_chapter_limit=0，
-    正文不在故障注入面内）；repo 供盘面证据断言。
+    返回 ``(runner, repo)``：runner 触发一次 `run_workflow`（正文 runner 已
+    stub，正文不在故障注入面内）；repo 供盘面证据断言。
     """
     from contracts.schema.hook import HookConstraints
     from novel.stages.chain import run_workflow
     from tests.str06_faults import FaultTransport, looped_full_chain_wires
-    from tests.str06_facilities import json_ask, text_ask
+    from tests.str06_facilities import json_ask, text_ask, stub_body_runner
     from tests.test_str06_body import _chapters, _make_session
 
     wires = looped_full_chain_wires()
@@ -670,21 +670,22 @@ def _fault_run(tmp_path, fault, name):
     def ask_body(owner, prompt):
         raise AssertionError('故障用例不得走到正文 owner')
 
+    stub_body_runner(monkeypatch)
+
     def runner():
         return run_workflow(
             repository=repo, chapters=_chapters(), ask=json_ask(session),
             ask_text=text_ask(session), ask_body=ask_body, budget=2000,
             through='stage7', book_title='报恩',
-            hook_constraints=HookConstraints(target_chars=10, hard_max_chars=360),
-            body_chapter_limit=0)
+            hook_constraints=HookConstraints(target_chars=10, hard_max_chars=360))
     return runner, repo
 
 
-def test_fault_base_green_baseline_completes_the_chain(tmp_path):
+def test_fault_base_green_baseline_completes_the_chain(tmp_path, monkeypatch):
     """基线必须是绿的：带跨章悬念的 wires（无故障）能走通 stage2→stage4 编译。"""
-    runner, repo = _fault_run(tmp_path, None, 'green')
+    runner, repo = _fault_run(tmp_path, monkeypatch, None, 'green')
     report = runner()
-    assert report['assembly']['status'] == 'not_ready'   # body_chapter_limit=0
+    assert report['assembly']['status'] == 'not_ready'   # 正文 runner 已 stub
     assert 'body_not_implemented' in report['assembly']['reason']
     # 编译真跑到 Stage4：双真源与 WriterBookIR 都已发布
     assert repo.path('stage2/characters/characters.json').is_file()
@@ -718,13 +719,13 @@ def test_fault_base_green_baseline_completes_the_chain(tmp_path):
      lambda repo: not repo.path('stage2/observations/book.json').exists()),
 ])
 def test_each_injected_fault_fails_fast_at_its_mechanical_gate(
-        tmp_path, fault, signature, disk_gate):
+        tmp_path, monkeypatch, fault, signature, disk_gate):
     """五类脚本化模型式错误各自在真实链入口被 typed 机械闸拦下（R3 修复对象）。
 
     R3 起粘性故障先经有界修订（原轮＋一次修订轮），修订后原样复现才停——
     停止消息携带 typed 问题，且不再无限付费（详见
     `tests/test_str06_r3_selfheal.py` 的修订成功正例）。"""
-    runner, repo = _fault_run(tmp_path, fault, fault)
+    runner, repo = _fault_run(tmp_path, monkeypatch, fault, fault)
     with pytest.raises(ValueError) as excinfo:
         runner()
     message = str(excinfo.value)

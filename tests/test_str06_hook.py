@@ -39,7 +39,7 @@ from novel.store import Str06Repository
 from novel.errors import PathRefused
 from novel.llm.ledger import CostLedger
 from novel.paths import check_rel_family
-from tests.str06_facilities import synthetic_ref, make_context, v13_beat, v13_chapter
+from tests.str06_facilities import synthetic_ref, make_context, v13_beat, v13_chapter, stub_body_runner
 
 H64 = 'a' * 64
 SRC = '苏芸娘嫁入陆家，唤夫君为陆大哥，苏姑娘陪嫁，陆兄迎娶。'
@@ -719,7 +719,7 @@ def _full_chain_wires():
     }
 
 
-def test_through_stage7_full_chain_replay_and_authorization_gate(tmp_path):
+def test_through_stage7_full_chain_replay_and_authorization_gate(tmp_path, monkeypatch):
     from novel.stages.chain import PurchaseRequired, run_workflow
     wires = _full_chain_wires()
     chapters = [
@@ -742,11 +742,12 @@ def test_through_stage7_full_chain_replay_and_authorization_gate(tmp_path):
         return ask_text
 
     def ask_body(owner, prompt):
-        raise AssertionError('body_chapter_limit=0 不应调用正文 owner')
+        raise AssertionError('正文 runner 已 stub，不应调用正文 owner')
 
     from copy import deepcopy
     repo = Str06Repository(tmp_path / 'run')
     repo.attach_context(make_context(tmp_path / 'run', ledger=CostLedger(path=None)))
+    stub_body_runner(monkeypatch)
     counter: list[str] = []
     report = run_workflow(repository=repo, chapters=chapters,
                           ask=make_ask(wires, counter, repo),
@@ -754,8 +755,7 @@ def test_through_stage7_full_chain_replay_and_authorization_gate(tmp_path):
                           ask_body=ask_body,
                           budget=2000, through='stage7', book_title='报恩',
                           hook_constraints=HookConstraints(target_chars=10,
-                                                           hard_max_chars=360),
-                          body_chapter_limit=0)
+                                                           hard_max_chars=360))
     assert report['assembly']['status'] == 'not_ready'
     assert report['assembly']['reason'] == 'body_not_implemented'
     assert report['accepted_body'] is False
@@ -778,8 +778,7 @@ def test_through_stage7_full_chain_replay_and_authorization_gate(tmp_path):
                  ask=make_ask(wires, counter, repo), ask_text=make_text(repo),
                  ask_body=ask_body,
                  budget=2000, through='stage7', book_title='报恩',
-                 hook_constraints=HookConstraints(target_chars=10, hard_max_chars=360),
-                 body_chapter_limit=0)
+                 hook_constraints=HookConstraints(target_chars=10, hard_max_chars=360))
     after = {rel: repo.path(rel).read_bytes() for rel in before}
     assert before == after
     assert counter  # fake wire 命中与真实 wire-dir 采用语义一致（0 付费调用）

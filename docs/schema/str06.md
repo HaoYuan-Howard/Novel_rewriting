@@ -26,7 +26,9 @@ stage4/5/6/7 死投影函数随之清偿；test_store 旧链 store 族红账（4
 `Str06RunView` 直投影 `workflow_status.json` 的失败形状（`failure_kind`／`detail`，
 ExecutionError 另带 `error_code/stage/node/item/phase/context`）与
 `runtime/body_failures.json`、`runtime/delivery/assembly_report.json` 两份盘面
-留证（前端 str06 监控屏可展示失败类别与 item 定位）。
+留证（前端 str06 监控屏可展示失败类别与 item 定位）。**R5b（2026-09-29）**：
+逐章失败留证改「最近一次完成执行」语义并扩到章观察（两份同形共用），调用层
+选章 `--body-chapters`（canary）只作元数据不进身份（详见「Stage5 按章正文」节）。
 **以小说质量为中心的重设计（PLAN.md，2026-09-28；R0–R3 已落地，R4 批登记本文件）**：
 审计结论「最后一公里断了」（付费语义漏送达写手、跨章字段无消费者、系统不自愈、
 发布权威名不副实）催生八项裁决（`docs/DECISIONS.md` 2026-09-28 行）与批次
@@ -36,9 +38,9 @@ R0→R1→R2→R3→R4→R6→R5→B6-A→B6-B→R7。已落地：R0 字段级�
 R1 associate 协议升 `stage2-associate-v2`；R2 两层 IR 与 rc10（WriterPacket 六分区、
 renderer v5、写手协议 v5、拍上线程与 ThreadFold、章缝合 `entry`、世界规则通道、
 回执身份拆分 rc6、Guard M7/M8）；R3 typed 自愈（`OwnerIssueV1` 路由表、有界修订轮、
-跨节点回派 `owner_revision`、监控面 `owner_issues`）。R6 统一发布权威前置于 B6
-（目标见「发布权威与读取校验」节，尚未实施）。14 节点是默认执行拓扑、不是不变量
-（裁决 4）。
+跨节点回派 `owner_revision`、监控面 `owner_issues`）。R6 统一发布权威已落地
+（2026-09-29；输出组 seal、免费同封存与正式读取校验，见「发布权威与读取校验」节）。
+14 节点是默认执行拓扑、不是不变量（裁决 4）。
 **B2 前半（2026-09-27）已落地注册面**：`contracts/invariants.py::NODES`
 扩为 14 个公开节点（Stage2 五节点，`str06.stage2.source` 退役），观察与关联协议
 （`contracts/schema/observation.py`）与 Resolver（`novel/stages/stage2/resolver.py`）
@@ -318,8 +320,18 @@ world_constraints 机械填入 `ReconstructionBrief.book_constraints`（世界�
   `novel/config.py::concurrency_for` 读出）、不进语义身份。Hook 仍是独立节点
   （`str06.stage5.hook`）。
 - **已落地**：恢复按有效提交集合（`novel/stages/chain.py::_committed_set`）：已完成
-  1、2、4、6 章时只补 3、5；局部失败保留其他合法结果（失败清单落
-  `runtime/body_failures.json`），授权、账务或取消故障以原始类型关闭相应准入。
+  1、2、4、6 章时只补 3、5；局部失败保留其他合法结果，授权、账务或取消故障以
+  原始类型关闭相应准入。
+- **已落地（2026-09-29，R5b/D3）**：逐章失败留证按「**最近一次完成执行**」语义
+  落盘，正文与章观察（`str06.stage2.chapters`）共用一个形状（I-11）：
+  `{requested, attempted, chapters, recorded_at}`——`requested` 是本次请求的章范围
+  （正文＝调用层选章 `--body-chapters` 或全书），`attempted` 是实际进入逐章执行器
+  的章（正文不含已提交章），`chapters` 是 `attempted` 的失败子集。正常完成写一次
+  空清单、带失败完成在上抛前写一次、崩溃不写：**文件缺失＝该节点还没有一次完成
+  执行**（与合法空清单是两件事，I-42）。选章只作调用元数据（记入
+  `runtime/workflow_status.json` 的 `body_chapters` 审计字段），不进请求身份、
+  章回执三把摘要、provenance 或契约身份——从 canary 续跑到全书不改变已提交章
+  的采用与恢复身份（W1）。
 - **已落地**：每章首次＋最多两次内容重写保持；截断不再触发重写（D6，见执行设施失败表）。
 - **已落地**：章回执（rc6 身份拆分，R2）绑定写手视图摘要（renderer＋写手协议版本＋
   渲染字节）、验证输入摘要（禁用字面／称谓许可／篇幅带）、请求身份与改名前正文摘要，
@@ -570,7 +582,7 @@ canonical。按源名称结构给出必要名称位（登记了姓必须给新�
 needs_authorization），pending/unknown 不自动重购或释放额度；未采纳轮在下一次 reserve
 前关闭且拒绝证据保留。恢复入口沿用候选生命周期：saved_response、historical_adoption
 （`--adopt-root` 登记源根，身份/响应/成本三方核对，不复制缓存、不续旧 session）、
-owner_patch（基线身份核验；同根补丁允许记录缺失即建档，F-4）、chapter_prefix_replay、
+owner_patch（基线身份核验；同根补丁允许记录缺失即建档，F-4）、committed_set_recovery、
 same_context_rewrite、deterministic_replay。`novel/work_units.py` 的
 `node_lifecycle_spec` 以 NODES 优先、候选表回退。历史采用配方（`--wire-dir`／
 `--adopt-root`／`--reasoning-effort`）与零新购复验口径见 `docs/REQUIREMENTS.md` F9
@@ -593,7 +605,8 @@ stage5/acceptance/body/ch{nn}.json
 stage5/hook/hook.txt、stage5/hook/receipt.json
 stage7/naming/name_map.json
 stage7/final/<书名>_rewriting.txt、stage7/final/delivery_manifest.json
-runtime/progress/、runtime/body_attempts_ch{nn}.json、runtime/body_failures.json、
+runtime/progress/、runtime/body_attempts_ch{nn}.json、
+runtime/body_failures.json、runtime/chapter_observation_failures.json、
 runtime/revisions/<owner>.json、runtime/issues/<owner>.json、
 runtime/commit/<node>/<seal16>_<artifact>.json
 ```

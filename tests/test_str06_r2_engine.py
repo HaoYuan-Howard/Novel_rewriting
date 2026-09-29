@@ -864,7 +864,7 @@ def test_packet_metrics_reports_per_chapter_readouts():
     assert chapters[2]['baseline_facts'] == 7
 
 
-def test_packet_metrics_file_is_registered_and_written(tmp_path):
+def test_packet_metrics_file_is_registered_and_written(tmp_path, monkeypatch):
     """E-6：produces／产物表／路径家族／送达登记同批闭合；真实链 compile 落盘。"""
     from contracts.artifacts import ARTIFACT_PATHS, STR06_ARTIFACT_RC_VERSIONS
     from contracts.invariants import NODES
@@ -882,7 +882,7 @@ def test_packet_metrics_file_is_registered_and_written(tmp_path):
     from contracts.schema.hook import HookConstraints
     from novel.stages.chain import run_workflow
     from tests.str06_faults import looped_full_chain_wires
-    from tests.str06_facilities import json_ask, text_ask
+    from tests.str06_facilities import json_ask, text_ask, stub_body_runner
     from tests.test_str06_body import _chapters, _make_session
     wires = looped_full_chain_wires()
     repo, session, _transport = _make_session(tmp_path, wires, name='metrics')
@@ -890,12 +890,12 @@ def test_packet_metrics_file_is_registered_and_written(tmp_path):
     def ask_body(owner, prompt):
         raise AssertionError('指标用例不得走到正文 owner')
 
+    stub_body_runner(monkeypatch)
     run_workflow(repository=repo, chapters=_chapters(), ask=json_ask(session),
                  ask_text=text_ask(session), ask_body=ask_body, budget=2000,
                  through='stage7', book_title='报恩',
                  hook_constraints=HookConstraints(target_chars=10,
-                                                  hard_max_chars=360),
-                 body_chapter_limit=0)
+                                                  hard_max_chars=360))
     metrics_path = repo.path(rel)
     assert metrics_path.is_file(), 'compile 必须写出 packet_metrics.json'
     import json

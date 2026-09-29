@@ -529,15 +529,24 @@ def _ledger_purpose_counts(repo, purpose: str) -> int:
                and _json.loads(line).get('purpose') == purpose)
 
 
-def _run(repo, session, *, budget=2000, concurrency=4, node_filter=None, hook_max=360):
+def _ledger_rows(repo, purpose: str) -> list[dict]:
+    """ledger 里该 owner（purpose）的全部行（按写入序；身份断言用）。"""
+    import json as _json
+    path = repo.root.parent / '_service' / 'ledger.jsonl'
+    return [_json.loads(line) for line in path.read_text(encoding='utf-8').splitlines()
+            if line.strip() and _json.loads(line).get('purpose') == purpose]
+
+
+def _run(repo, session, *, budget=2000, concurrency=4, node_filter=None, hook_max=360,
+         body_chapters=None, through='stage7'):
     return run_workflow(repository=repo, chapters=_chapters(),
                         ask=_fake_ask(session), ask_text=_fake_text(session),
                         ask_body=_fake_body(session),
-                        budget=budget, through='stage7', book_title='报恩',
+                        budget=budget, through=through, book_title='报恩',
                         hook_constraints=HookConstraints(target_chars=10,
                                                          hard_max_chars=hook_max),
                         length_band=(0.01, 0.05), concurrency=concurrency,
-                        node_filter=node_filter)
+                        node_filter=node_filter, body_chapters=body_chapters)
 
 
 def test_full_pipeline_to_delivery_and_free_recovery(tmp_path):
@@ -621,6 +630,92 @@ def test_full_pipeline_to_delivery_and_free_recovery(tmp_path):
     assert repo.read('runtime/workflow_status.json')['status'] == 'delivered'
 
 
+# ───────────────────────── W1/D2：调用层选章（canary）与身份隔离 ─────────────
+
+def test_body_chapters_selection_writes_only_selected_chapters(tmp_path):
+    """canary 选章（W1/D2）：`body_chapters=(2,)` 只写第 2 章，第 1 章不被触碰。"""
+    wires = _full_chain_wires()
+    repo, session, transport = _make_session(tmp_path, wires)
+    _run(repo, session, through='stage4')            # 链跑到正文前（不买正文）
+    calls_before = list(transport.calls)
+    report = _run(repo, session, node_filter=('str06.stage5.body',),
+                  body_chapters=(2,))
+    assert report['body_chapters'] == [2]
+    assert report['body_complete'] is False, '部分完成不是全书就绪'
+    assert transport.calls[len(calls_before):] == ['body_ch02']
+    assert repo.read_text('stage5/body/ch02.txt') == GOOD_CH2
+    assert repo.inspect('stage5/acceptance/body/ch02.json')['status'] == 'accepted'
+    assert not repo.path('stage5/body/ch01.txt').exists()
+    # 逐章留证（D3/W2）：requested=attempted=(2,)，本次无失败
+    evidence = repo.inspect('runtime/body_failures.json')
+    assert evidence['requested'] == [2] and evidence['attempted'] == [2]
+    assert evidence['chapters'] == {}
+
+
+def test_body_chapters_full_run_after_canary_only_fills_missing(tmp_path):
+    """canary 后不带参数整跑：只补缺章（0 或 1 次新调用），无重写 wire。"""
+    wires = _full_chain_wires()
+    repo, session, transport = _make_session(tmp_path, wires)
+    _run(repo, session, through='stage4')
+    _run(repo, session, node_filter=('str06.stage5.body',), body_chapters=(2,))
+    calls_before = len(transport.calls)
+    receipt_before = repo.path('stage5/acceptance/body/ch02.json').read_bytes()
+    seal_dir = repo.root / 'runtime' / 'commit' / 'str06.stage5.body'
+    seals_before = {p.name: p.read_bytes() for p in seal_dir.glob('*_ch02.json')}
+    assert seals_before, 'canary 章的正式提交必须已封存'
+    report = _run(repo, session)                    # 整书续跑（不含选章参数）
+    assert report['assembly']['status'] == 'ready'
+    assert report['body_complete'] is True
+    assert transport.calls[calls_before:].count('body_ch01') == 1
+    assert transport.calls[calls_before:].count('body_ch02') == 0, 'canary 章不重买'
+    # canary 章的回执字节与 seal 在整跑后不变（已提交章身份稳定）
+    assert repo.path('stage5/acceptance/body/ch02.json').read_bytes() == receipt_before
+    assert {p.name: p.read_bytes() for p in seal_dir.glob('*_ch02.json')} == seals_before
+
+
+def test_body_chapters_rejects_invalid_selection_before_any_call(tmp_path):
+    """`()`／乱序／重复／越界在任何正文调用之前拒绝（I-34），不静默截断。"""
+    wires = _full_chain_wires()
+    repo, session, transport = _make_session(tmp_path, wires)
+    _run(repo, session, through='stage4')
+    calls_before = len(transport.calls)
+    for bad in ((), (2, 1), (1, 1), (0,), (3,)):
+        with pytest.raises(ValueError, match='body_chapters'):
+            _run(repo, session, node_filter=('str06.stage5.body',),
+                 body_chapters=bad)
+    assert transport.calls[calls_before:] == [], '拒绝发生在付费调用之前'
+
+
+def test_body_chapters_does_not_enter_request_or_receipt_identity(tmp_path):
+    """身份约束（W1）：选章只作调用元数据——canary 章与整书跑出的同一章，
+    请求身份与回执三把摘要逐字相等。"""
+    wires = _full_chain_wires()
+    canary_repo, canary_session, _ = _make_session(tmp_path, wires, name='canary')
+    _run(canary_repo, canary_session, through='stage4')
+    _run(canary_repo, canary_session, node_filter=('str06.stage5.body',),
+         body_chapters=(2,))
+
+    whole_repo, whole_session, _ = _make_session(tmp_path, wires, name='whole')
+    _run(whole_repo, whole_session)
+
+    canary_row = next(r for r in _ledger_rows(canary_repo, 'body_ch02')
+                      if not r['cached'])
+    whole_row = next(r for r in _ledger_rows(whole_repo, 'body_ch02')
+                     if not r['cached'])
+    assert canary_row['request_fingerprint'] == whole_row['request_fingerprint']
+    canary_receipt = canary_repo.inspect('stage5/acceptance/body/ch02.json')
+    whole_receipt = whole_repo.inspect('stage5/acceptance/body/ch02.json')
+    for field in ('writer_view_sha256', 'validation_sha256', 'machine_view_sha256'):
+        assert canary_receipt[field] == whole_receipt[field], field
+    assert canary_receipt['prose_sha256'] == whole_receipt['prose_sha256']
+    # 选章也不进 run 级身份摘要：只作审计字段记在 workflow_status.json
+    canary_status = canary_repo.read('runtime/workflow_status.json')
+    assert canary_status['body_chapters'] == [2]
+    whole_status = whole_repo.read('runtime/workflow_status.json')
+    assert whole_status['body_chapters'] is None
+    assert canary_status['input_sha256'] == whole_status['input_sha256']
+
+
 def test_concurrency_level_does_not_enter_semantic_identity(tmp_path):
     """并发度不进语义身份：并发 1 与并发 4 得到相同请求身份集合与相同交付。"""
     wires = _full_chain_wires()
@@ -669,6 +764,17 @@ def test_chapter_failure_keeps_other_legal_commits_and_stops_truncated(tmp_path)
         _run(repo, session)
     assert len(transport.calls) == calls_before
     assert repo.read_text('stage5/body/ch01.txt') == GOOD_CH1
+    assert set(repo.inspect('runtime/body_failures.json')['chapters']) == {'2'}
+
+    # 恢复（D3/W2）：截断是节点设计缺陷——换请求身份（预算变化）且模型不再
+    # 截断时正文完成执行 ⇒ 同一留证文件改写为合法空清单（不是删文件）。
+    transport.truncate = ()
+    report = _run(repo, session, budget=2100)
+    assert report['assembly']['status'] == 'ready'
+    evidence = repo.inspect('runtime/body_failures.json')
+    assert evidence['chapters'] == {}
+    assert evidence['requested'] == [1, 2] and evidence['attempted'] == [1, 2]
+    assert evidence['recorded_at'] > 0
 
 
 def test_book_call_ceiling_stops_generation(tmp_path):

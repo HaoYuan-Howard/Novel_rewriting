@@ -23,6 +23,7 @@
 | `book_overlap.py` | 成书与源文逐章 20 字重叠读数（回映射走新链 compile 替换表） | `tests/test_book_overlap.py` |
 | `derive_schema.py` | 从盘上产物反推观察 schema（新链坐标；观察 ≠ 契约） | `docs/schema/_README.md` |
 | `probe_nonbody_word.py` | NONBODY_KINDS 增词前的门槛探针 | `docs/BACKEND_CONTRACT.md` |
+| `canary_chapters.py` | B6-A canary 选章（只读 sealed WriterBookIR；逐章计分＋三章＋下一条命令） | `tests/test_canary_chapters.py`、`docs/schema/str06.md` |
 | `validate_style_transfer.py` | 离线不含正文的风格迁移校验 | `docs/schema/style_transfer_validation.md` |
 
 ### 已退役的剧情链导出工具（2026-09-26 清理删除）
