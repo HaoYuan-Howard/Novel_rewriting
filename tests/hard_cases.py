@@ -121,6 +121,40 @@ def _guard_m6() -> list:
     return check_cast_legality(context, _graph(), appeared={'ch1'})
 
 
+def _guard_m7() -> list:
+    """M7：声明的读取没有进入 IR（入场值不在 entry 视图、拍级值未挂拍）。
+
+    R2/AUD-03 判据面：s02 声明了入场读取与拍级读取各一条，IR 两条都没带
+    （拍级视图也没有挂值）——写手拿不到本场依赖的事实，在此红。
+    """
+    from contracts.schema.context import (
+        BeatIR, VerificationIR, WriterBrief, WriterContext,
+    )
+    from tests.test_str06_r2_contracts import _read_graph
+    from novel.stages.stage4.guard import check_read_projection
+
+    scene = _read_graph().scenes[1]                       # s02：声明了两条读取
+    ir = VerificationIR(
+        scene_id='s02', obligations=(),
+        beats=(BeatIR(beat_ref='s02#b01', event='点灯', dramatic_intent='d'),
+               BeatIR(beat_ref='s02#b02', event='灯下翻检', dramatic_intent='d')))
+    context = WriterContext(
+        scene_id='s02', execution_slice_sha256='a' * 64, verification_ir=ir,
+        writer_brief=WriterBrief(scene_id='s02', realization_brief='重心；收束。',
+                                 scene_driver_summary='ch1 想查', pov='ch1',
+                                 voice='冷峻'))
+    return check_read_projection(scene, context)
+
+
+def _guard_m8() -> list:
+    """M8：本场线程操作未按 Design 投影进 IR（must_realize 身份漏包）。"""
+    from tests.test_str06_r2_contracts import _project, _thread_graph
+    from novel.stages.stage4.guard import check_thread_projection
+
+    graph = _thread_graph()
+    return check_thread_projection(graph, _project('s02', graph))
+
+
 def _body_withheld() -> list:
     """未释放专名进正文：硬失败（重写耗尽后无合法候选即停止，不披露放行）。"""
     from novel.stages.stage5.body_checks import validate_chapter_prose
@@ -190,6 +224,9 @@ CASES: dict[str, Case] = {
     'guard_m4_carrier_ref': Case('stage4', _guard_m4, 'M4 承载位置'),
     'guard_m5_surface_release': Case('stage4', _guard_m5, 'M5 称谓释放'),
     'guard_m6_cast_legality': Case('stage4', _guard_m6, 'M6 人物合法性'),
+    'guard_m7_read_projection': Case('stage4', _guard_m7, 'M7 声明读取未进入 IR'),
+    'guard_m8_thread_lifecycle': Case('stage4', _guard_m8,
+                                     'M8 本场线程操作未按 Design 投影进 IR'),
     'design_knowledge_mode_closure': Case('stage4', _design_bad_knowledge_mode, 'knowledge_mode'),
     'body_chapter_complete': Case('stage5', _body_empty, '[non_empty]'),
     'body_withheld_literals': Case('stage5', _body_withheld, '[withheld_literals]'),

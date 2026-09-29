@@ -322,7 +322,7 @@ conda run -n novel_refactor python -m pytest -q tests/test_fixture_registry.py
 STR-06 新链的 Stage4 免费聚合由结构性禁付节点 `str06.stage4.compile` 承担：Design/Hook/Bind
 的已购 wire 经 `--check-only` 或默认免费采用路径编译，全部采用不创建模型客户端。跨执行补尾
 不再是 `--recover-prepared` 一类人工恢复动作，而是候选生命周期自身的
-`chapter_prefix_replay`／`deterministic_replay`（`novel/llm/paid_requests.py::PaidRequestSession`）：
+`committed_set_recovery`／`deterministic_replay`（`novel/llm/paid_requests.py::PaidRequestSession`）：
 同请求身份优先免费采用，缺失且未授权时停在该 owner 并报告需要授权（`PurchaseRequired`）。
 付费与正文外发是两份独立授权（`--yes`／`--allow-egress`），入口只有
 `novel.cli run <str06 节点> <sid>`；恢复入口与账务纪律见 `tests/test_str06_f7a_wiring.py`。

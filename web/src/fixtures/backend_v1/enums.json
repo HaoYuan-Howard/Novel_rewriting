@@ -1275,7 +1275,7 @@
     "input_workpack": "PresentationGraph、SemanticBinding 与 Characters v4",
     "generation_mode": "deterministic",
     "review_mode": "none",
-    "review_scope": "Guard M1–M6 写前机械校验；零错误才放行",
+    "review_scope": "Guard M1–M8 写前机械校验；零错误才放行",
     "repair_actions": [
      "recompute",
      "stop"

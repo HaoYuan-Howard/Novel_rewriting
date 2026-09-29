@@ -244,7 +244,7 @@ RFC 6901 `changed_json_pointers`。因此「判据变了、原稿原样提升」
 `contracts/invariants.py::PARTIAL_REWRITE_FLAGS` 为空表，`Provenance.partial_rewrite`
 在类型上结构不可达（`Literal[None]`，只能为 `None`）。新链没有「同一份产物被 0 成本
 路部分改写」的形状——免费恢复入口（saved_response／historical_adoption／owner_patch／
-chapter_prefix_replay／deterministic_replay）全部整份重写本节点产物，写效应即该节点
+committed_set_recovery／deterministic_replay）全部整份重写本节点产物，写效应即该节点
 的 `produces`。字段保留在载体上只为存量产物解码，不再有新写入方。
 
 存量盘面上带 `partial_rewrite` 的产物是旧链字节，随旧根与冻结旧代码配对读取；

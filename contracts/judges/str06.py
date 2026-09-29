@@ -131,6 +131,13 @@ _hard('guard_m5_surface_release', 'stage4',
       'M5 称谓释放集与 Design 显式释放集一致', 'R-6.8', fix=_FIX_COMPILE)
 _hard('guard_m6_cast_legality', 'stage4',
       'M6 释放面人物已由 Design 声明参与或引入', 'R-6.9', fix=_FIX_COMPILE)
+_hard('guard_m7_read_projection', 'stage4',
+      'M7 每条声明读取都已解析并进入 IR（入场值进 entry 视图、拍级值挂对应拍；'
+      'AUD-03 判据面）', 'R-6.14', fix=_FIX_COMPILE)
+_hard('guard_m8_thread_lifecycle', 'stage4',
+      'M8 线程生命周期与投影：开一次、操作不早于开、关闭后无操作、结局闭集；'
+      '应投影的线程操作与开放线程按 Design 进 IR（must_realize 身份不漏包）',
+      'R-6.15', fix=_FIX_COMPILE)
 _hard('chapter_closure_read_resolution', 'stage4',
       '章闭包：已声明状态读取在定位点闭合（先读旧值后写新值；unknown/unset/'
       '未建立分开，T₀ 不洗白非 set 初态）', 'R-6.13', fix=_FIX_COMPILE)

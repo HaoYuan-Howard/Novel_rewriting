@@ -29,14 +29,20 @@ Design 是 source-blind 的：实际输入只有 Preserve 投影（`project_brie
 | `stage4/compiled/execution_plan.json` | `ExecutionPlan` | `str06.stage4.compile` | 四类执行语义与依赖边 |
 | `stage4/acceptance/guard/compile.json` | 自由形态派生记录 | `str06.stage4.compile` | Guard 编译错误清单 |
 | `stage4/acceptance/guard/report.json` | 自由形态派生记录 | `str06.stage4.compile` | Guard 报告（planned-only 读数） |
+| `stage4/acceptance/packet_metrics.json` | 自由形态派生记录 | `str06.stage4.compile` | WriterPacket 逐章指标（分区条目数、基线事实数、活跃/受保护线程数、重复比例、必须写出密度；audit_only 读数） |
 | `stage4/context/hook/hook.json` | `HookContext` | `str06.stage4.compile` | HookContext 确定性投影（POV、起笔事实、材料序、禁止集、称谓释放） |
 | `stage4/ir/writer_book_ir.json` | `WriterBookIR` | `str06.stage4.compile` | 全书静态写作 IR（BookBrief 导航＋ChapterIR 双视图） |
 
-## Guard M1–M6
+## Guard M1–M8
 
 写前机械 Guard 在 `str06.stage4.compile` 聚合执行（`novel/stages/stage4/guard.py`）：
-M1 义务覆盖、M2 提前揭示、M3 提前效应、M4 承载位置、M5 称谓释放、M6 合法人物。
-Guard 零错误不证明小说质量；本节点确定性重跑是 0 成本修复路。
+M1 义务覆盖、M2 提前揭示、M3 提前效应、M4 承载位置、M5 称谓释放、M6 合法人物、
+M7 声明读取已解析进 IR（入场值进 entry 视图、拍级值挂对应拍，AUD-03）、
+M8 线程生命周期与投影（开一次、时序闭合、结局闭集；thread_ops／open_threads
+按 Design 进 IR）。聚合入口遍历判据登记表 `GUARD_CHECKS`（判据码 → 检查函数，
+M2/M3 共用 `check_entry_timing`），码集合与判据注册表的 `guard_m{n}_*` 逐码对账
+（防漂移断言在 `tests/test_hard_counterexamples.py`）。Guard 零错误不证明小说
+质量；本节点确定性重跑是 0 成本修复路。
 
 ## 判据表
 
@@ -61,7 +67,9 @@ Guard 零错误不证明小说质量；本节点确定性重跑是 0 成本修�
 | `guard_m4_carrier_ref` | hard | M4 承载位置真实 |
 | `guard_m5_surface_release` | hard | M5 称谓释放一致 |
 | `guard_m6_cast_legality` | hard | M6 合法人物 |
+| `guard_m7_read_projection` | hard | M7 声明读取已解析并进入 IR（入场值进 entry 视图、拍级值挂对应拍） |
+| `guard_m8_thread_lifecycle` | hard | M8 线程生命周期合法且按 Design 投影进 IR（thread_ops／open_threads） |
 | `chapter_closure_read_resolution` | hard | 章闭包：已声明状态读取在定位点闭合（先读旧值后写新值；unknown/unset/未建立分开） |
 
-当前注册表共 **20 条**：**18 hard、1 metric、1 unver**。唯一注册表为
+当前注册表共 **22 条**：**20 hard、1 metric、1 unver**。唯一注册表为
 `contracts/judges/str06.py`（F8c 起分流至本层判据模块）。

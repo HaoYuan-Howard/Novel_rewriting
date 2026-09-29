@@ -79,3 +79,35 @@ def test_each_counterexample_actually_reddens_its_target_rule(rule):
         f'{rule} 的样本结论不是非空字符串：{findings!r}')
     assert any(case.expect in finding for finding in findings), (
         f'{rule} 的样本没有命中 {case.expect!r}，只产出了 {findings}')
+
+
+def test_guard_checks_table_matches_registry_and_red_cases():
+    """运行时 Guard 表 ↔ 判据注册表 ↔ 红例三方一致（R5b/W3 防漂移）。
+
+    `novel/stages/stage4/guard.py::GUARD_CHECKS` 的判据码集合必须等于
+    `contracts/judges/str06.py` 里 `guard_m{n}_*` 规则的码集合；每个码还要有
+    一个真会红、且产出以该码开头问题的样本。注册表加一条而 Guard 表没有
+    （或反过来、或新码没有红例）当场红——「表里在查」与「注册表在管」分家
+    正是本轮要收口的漂移形状。
+    """
+    from novel.stages.stage4.guard import GUARD_CHECKS
+
+    table_codes = set(GUARD_CHECKS)
+    registered = {f'M{match.group(1)}' for rule in _hard_rules()
+                  if (match := re.match(r'guard_m(\d+)_', rule))}
+    assert table_codes == registered, (
+        f'Guard 表与判据注册表的码集合不一致：表 {sorted(table_codes)}，'
+        f'注册表 {sorted(registered)}；登记新判据要同批进 `GUARD_CHECKS`、'
+        '注册表与红例，三处只改两处就是漂移')
+    cased: set[str] = set()
+    for rule, case in CASES.items():
+        match = re.match(r'guard_m(\d+)_', rule)
+        if match is None:
+            continue
+        code = f'M{match.group(1)}'
+        findings = case.build()
+        assert any(finding.startswith(code) for finding in findings), (
+            f'{rule} 的红例没有产出以 {code} 开头的问题：{findings}')
+        cased.add(code)
+    missing = sorted(table_codes - cased)
+    assert not missing, f'这些判据码没有会红的样本：{missing}'

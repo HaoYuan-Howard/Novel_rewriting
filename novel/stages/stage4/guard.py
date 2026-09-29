@@ -6,7 +6,8 @@ M8 线程生命周期与投影（R2）。未知锚拒绝；只报告，不修复
 """
 from __future__ import annotations
 
-from typing import Mapping
+from dataclasses import dataclass
+from typing import Callable, Final, Mapping
 
 from contracts.schema.context import (
     KnowledgeEntry, OpenThreadIR, StateEntry, ThreadOpIR, WriterContext,
@@ -269,25 +270,63 @@ def check_thread_projection(graph: BodyDesign, context: WriterContext) -> list[s
     return problems
 
 
+@dataclass(frozen=True)
+class _GuardScope:
+    """一次 Guard 聚合的共享输入（表构造时算一次，各检查只读；I-24）。"""
+
+    binding: SemanticBinding
+    context: WriterContext
+    graph: BodyDesign
+    order: Mapping[str, int]
+    appeared: frozenset[str]
+    scene: TargetScene | None
+    expected_surfaces: tuple
+
+
+#: 写前 Guard 的判据登记表：判据码 → 检查函数（``_GuardScope`` → 问题清单）。
+#: `run_mechanical_guard` 只遍历本表；一个函数可对应多码（M2/M3 共用
+#: `check_entry_timing`——提前揭示与提前效应是同一时序判据的两面）。
+#:
+#: ⚠ 表序即聚合输出序，**冻结在表驱动化之前的历史顺序**（M5 在前不是笔误）：
+#: `stage4/acceptance/guard/report.json` 的 `guard_errors` 是留证字节，不为
+#: 「好看」换序。码集合与判据注册表（`contracts/judges/str06.py` 的
+#: `guard_m{n}_*`）必须逐码相等——`tests/test_hard_counterexamples.py`
+#: 的防漂移断言钉住这一点：注册表加一条而表里没有（或反过来）当场红。
+GUARD_CHECKS: Final[Mapping[str, Callable[[_GuardScope], list[str]]]] = {
+    'M5': lambda s: (
+        [] if s.context.verification_ir.released_surfaces == s.expected_surfaces
+        else ['M5 称谓释放与 Design 显式释放集不一致']),
+    'M1': lambda s: check_obligation_coverage(s.binding, s.context),
+    'M2': lambda s: check_entry_timing(s.context, s.order),
+    'M3': lambda s: check_entry_timing(s.context, s.order),
+    'M4': lambda s: check_binding_beat_refs(s.binding, s.graph),
+    'M6': lambda s: check_cast_legality(s.context, s.graph, s.appeared),
+    'M7': lambda s: (
+        check_read_projection(s.scene, s.context) if s.scene is not None else []),
+    'M8': lambda s: check_thread_projection(s.graph, s.context),
+}
+
+
 def run_mechanical_guard(
     *,
     binding: SemanticBinding,
     context: WriterContext,
     graph: BodyDesign,
 ) -> list[str]:
-    """写前 M1–M8 的唯一聚合入口，使用同一称谓释放引擎。"""
+    """写前 M1–M8 的唯一聚合入口：遍历 `GUARD_CHECKS` 登记表（R5b 表驱动化）。
+
+    行为与表驱动化之前逐字一致：共享输入（阅读序、合法在场、称谓释放期望、
+    本场 scene）在此算一次，各检查只读它们；聚合顺序即表序（见 `GUARD_CHECKS`
+    的顺序冻结说明）。
+    """
     from novel.stages.common import surface_engine_release
-    expected_surfaces = surface_engine_release(graph, context.scene_id)
-    surface_errors = ([] if context.verification_ir.released_surfaces == expected_surfaces
-                      else ['M5 称谓释放与 Design 显式释放集不一致'])
     order = scene_order(graph)
-    appeared = appeared_chars(graph, order, context.scene_id)
-    scene = next((s for s in graph.scenes if s.scene_id == context.scene_id), None)
-    read_errors = check_read_projection(scene, context) if scene is not None else []
-    return (
-        surface_errors + check_obligation_coverage(binding, context)
-        + check_entry_timing(context, order)
-        + check_binding_beat_refs(binding, graph)
-        + check_cast_legality(context, graph, appeared)
-        + read_errors + check_thread_projection(graph, context)
-    )
+    scope = _GuardScope(
+        binding=binding, context=context, graph=graph, order=order,
+        appeared=frozenset(appeared_chars(graph, order, context.scene_id)),
+        scene=next((s for s in graph.scenes if s.scene_id == context.scene_id), None),
+        expected_surfaces=surface_engine_release(graph, context.scene_id))
+    problems: list[str] = []
+    for check in GUARD_CHECKS.values():
+        problems.extend(check(scope))
+    return problems

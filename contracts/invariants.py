@@ -1953,7 +1953,7 @@ NODES: Final[dict[str, NodeSpec]] = {
                   'stage4/ir/writer_book_ir.json'),
         lifecycle=NodeLifecycleSpec(
             'book', 'PresentationGraph、SemanticBinding 与 Characters v4',
-            'deterministic', 'none', 'Guard M1–M6 写前机械校验；零错误才放行',
+            'deterministic', 'none', 'Guard M1–M8 写前机械校验；零错误才放行',
             ('recompute', 'stop'), ('str06.stage4.compile',), 'none',
             ('deterministic_replay',), 0)),
     'str06.stage5.hook': NodeSpec(
