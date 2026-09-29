@@ -45,10 +45,10 @@ def _chars():
 
 
 def _rich_wire() -> dict:
-    """stage4-design-v2：threads（四条线覆盖开启前/推进/收束/结尾仍开放）、
+    """stage4-design-v3：threads（四条线覆盖开启前/推进/收束/结尾仍开放）、
     world_rules、entry、拍级读取与读者确认。线程文本避开第 1 章禁用字面。"""
     return {
-        'protocol_version': 'stage4-design-v2',
+        'protocol_version': 'stage4-design-v3',
         'book_style': '冷峻克制的限知叙事，重日常细节里的异样。',
         'world_rules': ['术法须以寿命为代价', '官府不涉异事'],
         'character_voices': [

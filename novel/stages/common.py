@@ -474,16 +474,21 @@ setup/payoff 或结局条件中的任何一项，就填 true；否则填 false�
   must_preserve(布尔 true/false),satisfaction,requires；
 - lineage 的 blueprint_refs／character_ids 只能取源真值给出的 id（闭集选择）；
 - requires 用 **1-based 列表序号**引用其它义务（如第 2 项依赖第 1 项写 [1]），
-  不得自指，只收必要先决条件；
+  不得自指，只收必要先决条件——**只写因果或信息前提**（不承载它就立不起来），
+  源文先后顺序本身不是依赖：两件事只是先后发生、没有谁依赖谁时不得写
+  requires（写出来会把改写顺序错误地锁死）；
 - wire 顶层：{{"protocol_version":"stage4-preserve-v1","obligations":[...]}}。
 返回一个 JSON object，不要围栏、不要解释。"""
 
 DESIGN_RULES = """任务：仅依据 Brief/Identity/OutputConstraints 设计目标书
-（wire 协议 stage4-design-v2）。你是整书一次调用的结构设计者：只表达**选择、
+（wire 协议 stage4-design-v3）。你是整书一次调用的结构设计者：只表达**选择、
 结构与相对篇幅重点**——场景/拍编号、归章、线程编号、权重归一与整数预算全部由
 compiler 生成，你不输出任何 ID、编号或归一化数值（I-21）。
-所有类别义务及 satisfaction 都要考虑。人物动机与阅读效果以义务为准：brief、
-voice、dramatic_intent 只做呈现表达，不得改写义务给出的事实、动机与满足条件。
+所有类别义务及 satisfaction 都要考虑。**依赖顺序**：被其它义务 requires_cores
+依赖的义务必须**在依赖方之前完成**——承载位置（拍序）先于依赖方的承载位
+（同场按拍序）；顺序颠倒会让依赖义务永远绑不到位。人物动机与阅读效果以
+义务为准：brief、voice、dramatic_intent 只做呈现表达，不得改写义务给出
+的事实、动机与满足条件。
 不增加无证据的人物偏好、价值判断或社会规则。
 自由设计场景，但不为每条义务机械拆场。
 目标状态只存会限制后续的持续事实；即时动作留在事件。初始态由你显式选择，不复制源书末态。
@@ -584,7 +589,7 @@ character_voices, initial_state, initial_surfaces, scenes, chapters, scene_weigh
   连续的章，每章至少一场，章数必须等于 OutputConstraints 的 target_chapter_count；
 - scene_weights：与 scenes 等长的正数数组，表达各场的相对篇幅重点（如 [3,1,2]）；
   **不求和为 1**——归一与整数章预算由 compiler 按全书最大余数分配完成。
-返回一个 JSON object（protocol_version 为 "stage4-design-v2"），不要围栏、不要解释。
+返回一个 JSON object（protocol_version 为 "stage4-design-v3"），不要围栏、不要解释。
 """
 
 BIND_RULES = """任务：把每条保存义务绑定到目标故事的确切承载位置

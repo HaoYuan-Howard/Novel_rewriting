@@ -477,3 +477,123 @@ class PresentationGraph(BodyDesign):
             if char_id not in char_ids:
                 raise ValueError(f'hook.concealed 引用了 graph 外的人物：{char_id}')
         return self
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# wire v3（stage4-design-v3，R8b／D8 修订 2026-09-29）
+#
+# 初始态与拍上 target_delta **分开建模**：拍上 `scope` 必填（无默认——漏写
+# 即一次报出，不再靠 prompt 提醒）；初始态作用域恒 book（写 scene 即拒，
+# canonical 由 compiler 填）。形状一次校验、全部错误合并报告（B6-A canary
+# 实证：此前手写键白名单逐层早退，四轮修订分别卡在 scope→avoid→pov→scope）。
+# 人物／称谓闭集依赖本书集合，留在 assemble（`assemble_body_design`）按
+# `known_char_ids`／`registered_surfaces` 判——pydantic 模型只钉**书的无关**
+# 形状。pov 只收字符串（单元素数组折叠与 canonical 前缀匹配已删，I-21：
+# 不按名字猜人，闭集外直接拒）。
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+class DesignWireInitial(TargetDelta):
+    """wire v3 初始态：作用域恒 book（带 scene 即拒；compiler 落 canonical 填）。"""
+
+    scope: Literal['book'] = 'book'
+
+
+class DesignWireThread(StrictModel):
+    """wire v3 线程操作：open 用本地标签 tag，advance/close 用 ref 引它；
+    canonical `th{nn}` 由 compiler 按 open 先后派发（I-21）。键集按 op 收紧。"""
+
+    op: Literal['open', 'advance', 'close']
+    tag: str | None = Field(default=None, min_length=1)
+    ref: str | None = Field(default=None, min_length=1)
+    kind: ThreadKind | None = None
+    subject: str | None = Field(default=None, min_length=1)
+    text: str | None = Field(default=None, min_length=1)
+    progress: str | None = Field(default=None, min_length=1)
+    ending: str | None = Field(default=None, min_length=1)
+    resolution: str | None = Field(default=None, min_length=1)
+
+    @model_validator(mode='after')
+    def _op_shape(self) -> 'DesignWireThread':
+        if self.op == 'open':
+            if self.tag is None or self.kind is None or self.subject is None \
+                    or not (self.text or '').strip():
+                raise ValueError('open 必须带 tag、kind、主体和文本（question 不写答案）')
+            if self.ref is not None or self.progress is not None \
+                    or self.ending is not None or self.resolution is not None:
+                raise ValueError('open 不带 ref、进展或结局载荷')
+        elif self.op == 'advance':
+            if self.ref is None or not (self.progress or '').strip():
+                raise ValueError('advance 必须带 ref（开线标签）与进展说明')
+            if self.tag is not None or self.kind is not None \
+                    or self.subject is not None or self.text is not None \
+                    or self.ending is not None or self.resolution is not None:
+                raise ValueError('advance 只带 ref 与进展（声明内容以 open 为准）')
+        else:
+            if self.ref is None or self.ending is None \
+                    or not (self.resolution or '').strip():
+                raise ValueError('close 必须带 ref、结局（按 kind 闭集）与收束')
+            if self.tag is not None or self.kind is not None \
+                    or self.subject is not None or self.text is not None \
+                    or self.progress is not None:
+                raise ValueError('close 只带 ref、结局与收束（kind 由 open 声明）')
+        return self
+
+
+class DesignWireRead(StateAddress):
+    """wire v3 状态读取：`at` 是 1-based 拍序（int），compiler 解析成场内 beat_id；
+    缺省定位到入场（先读旧值）。"""
+
+    at: int | None = Field(default=None, ge=1)
+
+
+class DesignWireDelivery(StrictModel):
+    """wire v3 场景交付：pov 只收**字符串**（闭集在 assemble 判）。"""
+
+    pov: str = Field(min_length=1)
+    voice: str = Field(min_length=1)
+    avoid: tuple[str, ...] = Field(default=(), min_length=0)
+
+
+class DesignWireBeat(StrictModel):
+    """wire v3 拍：不写 beat_id（compiler 按列表序派发）。"""
+
+    event: str = Field(min_length=1)
+    participants: tuple[str, ...] = Field(default=(), min_length=0)
+    dramatic_intent: str = Field(min_length=1)
+    delivery_hint: str = Field(default='', min_length=0)
+    target_delta: tuple[TargetDelta, ...] = Field(default=(), min_length=0)
+    surface_introductions: tuple[SurfaceIntroduction, ...] = ()
+    threads: tuple[DesignWireThread, ...] = ()
+
+
+class DesignWireScene(StrictModel):
+    """wire v3 场景：不写 scene_id（compiler 按列表序派发）。"""
+
+    driver: SceneDriver
+    state_reads: tuple[DesignWireRead, ...] = ()
+    realization_brief: str = Field(min_length=1)
+    delivery: DesignWireDelivery
+    beats: tuple[DesignWireBeat, ...] = Field(min_length=1)
+
+
+class DesignWireChapter(StrictModel):
+    """wire v3 章切片：purpose＋场数＋可选 entry（第 1 章可省，compiler 填开篇）。"""
+
+    purpose: str = Field(min_length=1)
+    scenes: int = Field(ge=1)
+    entry: ChapterEntry | None = None
+
+
+class DesignWireV3(StrictModel):
+    """`stage4-design-v3` wire 顶层：形状在此一次校验（extra 键即拒）。"""
+
+    protocol_version: Literal['stage4-design-v3']
+    book_style: str = Field(min_length=1)
+    world_rules: tuple[str, ...] = Field(default=(), min_length=0)
+    character_voices: tuple[CharacterVoice, ...] = Field(default=(), min_length=0)
+    initial_state: tuple[DesignWireInitial, ...] = Field(default=(), min_length=0)
+    initial_surfaces: tuple[SurfaceIntroduction, ...] = Field(default=(), min_length=0)
+    scenes: tuple[DesignWireScene, ...] = Field(min_length=1)
+    chapters: tuple[DesignWireChapter, ...] = Field(min_length=1)
+    scene_weights: tuple[float, ...] = Field(min_length=1)

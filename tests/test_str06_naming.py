@@ -377,7 +377,7 @@ def test_released_surfaces_close_over_the_replacement_table():
     registered = {cid: {s.surface for s in entry.surfaces}
                   for cid, entry in chars.characters.items()}
     design_wire = {
-        'protocol_version': 'stage4-design-v2',
+        'protocol_version': 'stage4-design-v3',
         'book_style': '平实克制的第三人称叙事。',
         'initial_state': [],
         'scenes': [{

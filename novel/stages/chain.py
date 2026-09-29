@@ -546,7 +546,6 @@ def run_body_design(ctx: ChainContext) -> dict:
     def design_compile(w):
         return assemble_body_design(
             w, known_char_ids=set(chars.characters), constraints=constraints,
-            char_canonicals={c.canonical: cid for cid, c in chars.characters.items()},
             registered_surfaces={cid: {s.surface for s in c.surfaces}
                                  for cid, c in chars.characters.items()})
 

@@ -644,7 +644,7 @@ def test_r2_version_constants():
         STAGE4_DESIGN_PROTOCOL, STR06_RC_LABELS, STR06_RC_VERSION,
     )
     from novel.stages.common import RENDERER_VERSION, WRITER_PROTOCOL_VERSION
-    assert STAGE4_DESIGN_PROTOCOL == 'stage4-design-v2'
+    assert STAGE4_DESIGN_PROTOCOL == 'stage4-design-v3'
     assert STR06_RC_VERSION == 'str06-rc10'          # rc9 已被 R1 的 associate 占用
     assert 'str06-rc10' in STR06_RC_LABELS
     assert RENDERER_VERSION == 'str06-render-v5'
@@ -662,7 +662,7 @@ def test_r2_version_constants():
 def _wire_v2() -> dict:
     """两章三拍的 design wire v2：threads（本地标签）＋world_rules＋entry。"""
     return {
-        'protocol_version': 'stage4-design-v2',
+        'protocol_version': 'stage4-design-v3',
         'book_style': '冷峻克制的第三人称叙事。',
         'world_rules': ['术法须以寿命为代价'],
         'initial_state': [
@@ -736,7 +736,7 @@ def test_wire_v2_refuses_retired_four_lists_and_bad_shapes():
     bad = _wire_v2()
     bad['standing_goals'] = [{'char_id': 'yun', 'goal': '查清底细'}]
     _, errors = _assemble_v2(bad)
-    assert any('未知字段' in e and 'standing_goals' in e for e in errors), errors
+    assert any('Extra inputs' in e and 'standing_goals' in e for e in errors), errors
 
     bad = _wire_v2()
     bad['scenes'][1]['beats'][0]['threads'][0]['ref'] = 't_unknown'

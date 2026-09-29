@@ -28,7 +28,11 @@ Design wire（`stage4-design-v2`）只表达选择、结构与相对篇幅重点
      前缀匹配解析。多元素数组、空或非字符串元素不猜「主要视角是谁」——逐场
      typed 报错，交由修订轮或人工修复；无匹配或多义匹配不归一，交由 char_id
      校验报错。
-两类归一都是无损形状转换：不改任何事件、状态、数值与 brief 语义。
+【R8b／v3（D8 修订 2026-09-29）】wire 形状改由 pydantic 模型族
+（`contracts/schema/design.py::DesignWireV3`）**一次校验、合并报告**——
+初始态与拍上 target_delta 分开建模（拍上 scope 必填、无默认；初始态恒 book），
+逐字段错误按位置摊开，不再逐层早退；pov 只收字符串且闭集外直拒（单元素
+数组折叠与 canonical 前缀匹配删除，I-21）。
 
 【协议与键白名单】wire 顶层 `protocol_version` 必须逐字等于
 `STAGE4_DESIGN_PROTOCOL`（I-13：漏带/错带即拒，无隐式迁移）；顶层与各嵌套层
@@ -42,7 +46,6 @@ open_questions／promises 四键在白名单外——四个静态跨章列表已
 """
 from __future__ import annotations
 
-from copy import deepcopy
 from typing import Any, Mapping
 
 from pydantic import ValidationError
@@ -54,14 +57,6 @@ from contracts.schema.workflow import STAGE4_DESIGN_PROTOCOL
 #: wire 顶层键白名单（Q-1：多余键在 compile 入口报错，不静默丢弃）。v2 起四个
 #: 静态跨章列表（standing_goals／ongoing_actions／open_questions／promises）
 #: 不在白名单内——已退役（AUD-04），旧键当场拒读。
-_WIRE_KEYS = frozenset({
-    'protocol_version', 'book_style', 'world_rules', 'character_voices',
-    'initial_state', 'initial_surfaces', 'scenes', 'chapters', 'scene_weights'})
-_INITIAL_KEYS = frozenset({'domain', 'key', 'subjects', 'holder', 'op', 'value',
-                           'knowledge_mode', 'confirms'})
-_SCENE_KEYS = frozenset({'driver', 'state_reads', 'realization_brief', 'delivery', 'beats'})
-_BEAT_KEYS = frozenset({'event', 'participants', 'dramatic_intent', 'delivery_hint',
-                        'target_delta', 'surface_introductions', 'threads'})
 #: 状态读取声明（B3 后半）：地址四段＋可选读取定位 `at`（1-based 拍序，
 #: compiler 解析成场内 beat_id；缺省定位到入场＝先读旧值）。
 _READ_KEYS = frozenset({'domain', 'key', 'subjects', 'holder', 'at'})
@@ -102,35 +97,6 @@ def _normalize(data: dict[str, Any]) -> None:
             for item in beat.get('target_delta') or []:
                 if isinstance(item, dict) and item.get('domain') != 'knowledge':
                     item.pop('knowledge_mode', None)
-
-
-def _normalize_povs(data: dict[str, Any],
-                    char_canonicals: Mapping[str, str] | None,
-                    errors: list[str]) -> None:
-    """pov 两级无损归一：单元素数组折叠 → canonical 前缀唯一匹配 → char_id。
-
-    多元素数组／空／非字符串元素不猜「主要视角是谁」（I-21），逐场 typed
-    报错——修订轮据此可修复，不再落成 pydantic 字符串类型的报错墙。
-    """
-    for index, scene in enumerate(data.get('scenes') or [], start=1):
-        delivery = scene.get('delivery') or {}
-        pov = delivery.get('pov')
-        if isinstance(pov, list):
-            if len(pov) == 1 and isinstance(pov[0], str) and pov[0].strip():
-                pov = pov[0]
-                delivery['pov'] = pov
-            else:
-                errors.append(
-                    f'第 {index} 场 delivery.pov 必须是单个字符串（本场叙述视角'
-                    f'人物的 char_id 或 "narrator"；一场只有一个视角），实得 {pov!r}'
-                    '——多人物在场也只选其中一人作视角，不写数组')
-                continue
-        if not isinstance(pov, str) or pov == 'narrator' or not char_canonicals:
-            continue
-        matches = {cid for canonical, cid in char_canonicals.items()
-                   if canonical and pov.startswith(canonical)}
-        if len(matches) == 1:
-            delivery['pov'] = next(iter(matches))
 
 
 def _normalize_delta(data: dict[str, Any]) -> None:
@@ -184,7 +150,11 @@ def _resolve_threads(data: dict[str, Any], errors: list[str]) -> None:
                         continue
                     thread_id = _thread_id()
                     dispatch[tag] = thread_id
-                    resolved.append({**{k: v for k, v in item.items() if k != 'tag'},
+                    # v3：wire 模型 dump 会带出全部 None 默认字段（tag/ref/
+                    # progress…）；canonical ThreadAction 闭集拒绝多余键——
+                    # 组装时剥 None 与 tag，只留真实载荷。
+                    resolved.append({**{k: v for k, v in item.items()
+                                        if k != 'tag' and v is not None},
                                      'ref': thread_id})
                 elif op in ('advance', 'close'):
                     ref = item.get('ref')
@@ -192,7 +162,9 @@ def _resolve_threads(data: dict[str, Any], errors: list[str]) -> None:
                         errors.append(
                             f'{where} 的 {op} 引用了未开启的线程标签：{ref!r}')
                         continue
-                    resolved.append({**item, 'ref': dispatch[ref]})
+                    resolved.append({**{k: v for k, v in item.items()
+                                        if k != 'ref' and v is not None},
+                                     'ref': dispatch[ref]})
                 else:
                     errors.append(f'{where} 的 op 必须是 open/advance/close，'
                                   f'实得 {op!r}')
@@ -321,44 +293,74 @@ def _check_confirmation_closures(body: BodyDesign, errors: list[str]) -> None:
                         f'{key} 建立于 {established}（确认不得早于建立）')
 
 
+def _wire_model_errors(exc: Exception) -> list[str]:
+    """pydantic ValidationError → 按位置展开的逐字段错误（一次全报，R8b）。
+
+    B6-A canary 实证：手写键白名单逐层早退＋末尾一次性 `str(exc)` 报错墙，
+    四轮修订分别卡在 scope→avoid→pov→scope。这里把每条错误的**位置模式**
+    （`scenes[2].delivery.pov`）逐条摊开，与其它面的错误合并成一份报告。
+    """
+    entries: list[str] = []
+    for err in exc.errors():    # type: ignore[union-attr]
+        loc = '.'.join(str(part) for part in err.get('loc') or ()) or '<顶层>'
+        entries.append((loc, str(err.get('type') or ''), err.get('msg')))
+    # 子项已报错的容器级 too_short 是连带噪声，不单列（R8b.3）。
+    if any(kind != 'too_short' for _loc, kind, _msg in entries):
+        entries = [item for item in entries if item[1] != 'too_short']
+    return [f'{loc}：{msg}（按 wire v3 形状逐处修正）'
+            for loc, _kind, msg in entries] or [str(exc)]
+
+
+def _check_pov_closed_set(data: dict[str, Any], known_char_ids: set[str],
+                          errors: list[str]) -> None:
+    """pov 严格闭集（R8b）：只收本书 char_id 或 "narrator"。
+
+    v2 的单元素数组折叠与 canonical 前缀匹配已删（I-21：不按名字猜人）——
+    闭集外直接拒，与其它错误合并一份报告。
+    """
+    for index, scene in enumerate(data.get('scenes') or [], start=1):
+        if not isinstance(scene, dict):
+            continue
+        pov = (scene.get('delivery') or {}).get('pov')
+        # 非字符串 pov（数组等）由 pydantic 形状面报，这里只管字符串闭集。
+        if isinstance(pov, str) and pov != 'narrator'                 and pov not in known_char_ids:
+            errors.append(
+                f'第 {index} 场 delivery.pov 必须是本书 char_id 或 "narrator"'
+                f'（闭集），实得 {pov!r}——一场只有一个视角人物，不写数组、'
+                '不写称呼或描述句；可用值只取输入身份投影给出的 char_id 字面')
+
+
 def assemble_body_design(
     wire: dict[str, Any], *, known_char_ids: set[str],
     constraints: OutputConstraints | None = None,
-    char_canonicals: Mapping[str, str] | None = None,
     registered_surfaces: Mapping[str, set[str]] | None = None,
 ) -> tuple[BodyDesign | None, list[str]]:
-    """Design wire（stage4-design-v2）→ canonical BodyDesign。
+    """Design wire（stage4-design-v3）→ canonical BodyDesign。
 
-    纯函数：不落盘、不调 LLM、不改输入 wire（deepcopy 后组装）。全部错误聚合
-    返回，有错不产出半份 canonical（I-34）。
+    纯函数：不落盘、不调 LLM、不改输入 wire（deepcopy 后组装）。**一次校验、
+    合并报告**（R8b）：wire 形状由 pydantic 模型族（`DesignWireV3`）一次判，
+    逐字段错误按位置摊开；闭集（人物／称谓）与语义闭合面在通过形状后同一份
+    报告聚合，不再逐层早退遮住后层（B6-A canary 四轮修订实证）。有错不产出
+    半份 canonical（I-34）。
     """
+    from contracts.schema.design import DesignWireV3
+
     errors: list[str] = []
     if wire.get('protocol_version') != STAGE4_DESIGN_PROTOCOL:
         errors.append(f'protocol_version 必须是 {STAGE4_DESIGN_PROTOCOL}，'
                       f'实得 {wire.get("protocol_version")!r}（I-13 无隐式迁移）')
-    _reject_unknown_keys(errors, wire, _WIRE_KEYS, 'Design')
-    for index, scene in enumerate(wire.get('scenes') or [], start=1):
-        if isinstance(scene, dict):
-            if not _reject_unknown_keys(errors, scene, _SCENE_KEYS, f'第 {index} 场'):
-                continue
-            for beat_index, beat in enumerate(scene.get('beats') or [], start=1):
-                if isinstance(beat, dict):
-                    _reject_unknown_keys(errors, beat, _BEAT_KEYS,
-                                         f'第 {index} 场第 {beat_index} 拍')
-    for item in wire.get('initial_state') or []:
-        if isinstance(item, dict):
-            _reject_unknown_keys(errors, item, _INITIAL_KEYS, f'初始态 {item.get("key")}')
-    for index, rule in enumerate(wire.get('world_rules') or [], start=1):
-        if not isinstance(rule, str) or not rule.strip():
-            errors.append(f'world_rules 第 {index} 条必须是非空字符串（一句话、'
-                          '可机械遵守的世界边界）')
-    if errors:
-        return None, errors
-    data = deepcopy(wire)
-    data.setdefault('graph_id', 'pg_main')
+    try:
+        model = DesignWireV3.model_validate(wire)
+    except ValidationError as exc:
+        # 形状失败不遮闭集面（R8b：canary 第 1 份实证——pov 描述句与 scope
+        # 缺失同报，修订一轮收掉全部三类，而不是逐层早退打四轮）。
+        _check_pov_closed_set(wire, known_char_ids, errors)
+        return None, errors + _wire_model_errors(exc)
+    data = model.model_dump(mode='json')
+    data['graph_id'] = 'pg_main'
     _normalize(data)
-    _normalize_povs(data, char_canonicals, errors)
     _normalize_delta(data)
+    _check_pov_closed_set(data, known_char_ids, errors)
     _resolve_threads(data, errors)
     if not errors:
         _build_canonical(data, errors)
@@ -369,7 +371,10 @@ def assemble_body_design(
     try:
         body = BodyDesign.model_validate(data)
     except (ValidationError, TypeError) as exc:
-        return None, [f'book_design 构造失败：{exc}']
+        shape_errors = (_wire_model_errors(exc)
+                        if isinstance(exc, ValidationError) else [str(exc)])
+        return None, [f'book_design 构造失败：{entry}'
+                      for entry in shape_errors]
     if constraints and len(body.chapters) != constraints.target_chapter_count:
         errors.append('目标章数与 OutputConstraints 不一致')
     addressed = list(body.initial_state)

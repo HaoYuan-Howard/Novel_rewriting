@@ -39,7 +39,7 @@ B2 基线（14 节点，`a0f5fb5e…`）原样保存在 Git 历史里；既有�
 里；既有候选根按「契约表已漂移」拒读，只读保留。
 
 【R2 重新冻结（2026-09-28）】语义送达与两层 IR：Design wire 升
-`stage4-design-v2`（拍上线程 threads、书级 world_rules、章级 entry；四个静态
+`stage4-design-v3`（拍上线程 threads、书级 world_rules、章级 entry；四个静态
 跨章列表删除，AUD-04），Stage4 设计产物（body_design／presentation_graph）
 形状升 `str06-rc10`；WriterBookIR 升 `str06-rc10`（拍级读取值挂拍、线程投影
 面、continuity 分区、world_rules 进书级层）；章回执身份拆分（回执升
@@ -65,7 +65,7 @@ B2 基线（14 节点，`a0f5fb5e…`）原样保存在 Git 历史里；既有�
 【语义冻结闸（2026-09-29，裁决 D8）】用户在 R5b 合入后裁决 Stage2/4 语义层按
 main tip 现状冻结（`world_constraints` 不拆）：Stage2 观察协议 book／chapters／names
 共 `stage2-observation-v1`、associate 独立 `stage2-associate-v2`，Stage4 四 wire
-协议 `stage4-preserve-v1`／`stage4-design-v2`／`stage4-bind-v1`／
+协议 `stage4-preserve-v1`／`stage4-design-v3`／`stage4-bind-v1`／
 `stage4-hook-design-v1`，连同上方全部契约表基线。按 PLAN.md 分层冻结，写作层
 （renderer v5、WriterPacket 呈现、写手协议 v5）不在本闸内——canary 收敛后再冻。
 B6-A／B6-B 期间任何语义层升版都意味着已购 Stage2/4 产物作废、须重购，属用户级
@@ -173,7 +173,7 @@ FROZEN_SEMANTIC_PROTOCOLS = {
     'STAGE2_OBSERVATION_PROTOCOL': 'stage2-observation-v1',
     'STAGE2_ASSOCIATE_PROTOCOL': 'stage2-associate-v2',
     'STAGE4_PRESERVE_PROTOCOL': 'stage4-preserve-v1',
-    'STAGE4_DESIGN_PROTOCOL': 'stage4-design-v2',
+    'STAGE4_DESIGN_PROTOCOL': 'stage4-design-v3',
     'STAGE4_BIND_PROTOCOL': 'stage4-bind-v1',
     'STAGE4_HOOK_DESIGN_PROTOCOL': 'stage4-hook-design-v1',
 }

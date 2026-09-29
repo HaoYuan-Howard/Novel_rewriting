@@ -81,9 +81,9 @@ def _characters() -> CharactersArtifactV4:
 
 
 def _body_wire() -> dict:
-    """stage4-design-v2 形状（R2）：无 ID／章切片／相对权重数组；threads＋entry。"""
+    """stage4-design-v3 形状（R2）：无 ID／章切片／相对权重数组；threads＋entry。"""
     return {
-        'protocol_version': 'stage4-design-v2',
+        'protocol_version': 'stage4-design-v3',
         'book_style': '冷峻克制的限知叙事，重日常细节里的异样。',
         'initial_state': [
             {'domain': 'character', 'subjects': ['yun_niang'], 'holder': None,

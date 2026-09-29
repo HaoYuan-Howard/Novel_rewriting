@@ -240,10 +240,10 @@ CASES: dict[str, Case] = {
 # ─── 其余 HARD 的最小会红样本（编译闭合一族） ────────────────────────────────
 
 def _body_design_bad_wire() -> list:
-    """BodyDesign 编译闭合：非法 POV（未知人物）当场拒（stage4-design-v2 形状）。"""
+    """BodyDesign 编译闭合：非法 POV（未知人物）当场拒（stage4-design-v3 形状）。"""
     from novel.stages.stage4.design import assemble_body_design
     _body, errors = assemble_body_design(
-        {'protocol_version': 'stage4-design-v2', 'book_style': '冷峻。',
+        {'protocol_version': 'stage4-design-v3', 'book_style': '冷峻。',
          'chapters': [{'purpose': 'e', 'scenes': 1}],
          'scenes': [{'beats': [{'event': 'e', 'participants': ['ch1'],
                                 'dramatic_intent': 'd'}],
@@ -543,7 +543,7 @@ def _design_surface_not_registered() -> list:
     """称谓闭合：Design 放行 Characters 未登记的字面。"""
     from novel.stages.stage4.design import assemble_body_design
     _body, errors = assemble_body_design(
-        {'protocol_version': 'stage4-design-v2', 'book_style': '冷峻。',
+        {'protocol_version': 'stage4-design-v3', 'book_style': '冷峻。',
          'initial_state': [], 'scenes': [{
             'state_reads': [],
             'driver': {'focal_actor': 'yun', 'immediate_want': 'w',

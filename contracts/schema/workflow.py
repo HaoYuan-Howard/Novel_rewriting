@@ -657,7 +657,7 @@ STR06_RC_LABELS: Final = ('str06-rc2', 'str06-rc3', 'str06-rc4', 'str06-rc5', 's
 #: 必填）；standing_goals／ongoing_actions／open_questions／promises 四键关闭式
 #: 拒读（AUD-04 无消费者，裁决 3 改独立线程结构）。
 STAGE4_PRESERVE_PROTOCOL: Final = 'stage4-preserve-v1'
-STAGE4_DESIGN_PROTOCOL: Final = 'stage4-design-v2'
+STAGE4_DESIGN_PROTOCOL: Final = 'stage4-design-v3'
 STAGE4_BIND_PROTOCOL: Final = 'stage4-bind-v1'
 STAGE4_HOOK_DESIGN_PROTOCOL: Final = 'stage4-hook-design-v1'
 

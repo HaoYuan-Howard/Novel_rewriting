@@ -124,7 +124,7 @@ def _checkpoint(*obligation_ids: str) -> PreserveCheckpoint:
 def test_four_protocols_are_independent_literals():
     """每个付费语义节点一个独立协议字面量：演进互不牵连（B3 前半）。"""
     assert STAGE4_PRESERVE_PROTOCOL == 'stage4-preserve-v1'
-    assert STAGE4_DESIGN_PROTOCOL == 'stage4-design-v2'
+    assert STAGE4_DESIGN_PROTOCOL == 'stage4-design-v3'
     assert STAGE4_BIND_PROTOCOL == 'stage4-bind-v1'
     assert STAGE4_HOOK_DESIGN_PROTOCOL == 'stage4-hook-design-v1'
     assert len({STAGE4_PRESERVE_PROTOCOL, STAGE4_DESIGN_PROTOCOL,
@@ -205,7 +205,7 @@ def test_retired_static_lists_are_refused_on_wire():
     bad = _wire()
     bad['standing_goals'] = [{'char_id': 'yun', 'goal': '查清夫君的底细'}]
     _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'})
-    assert any('standing_goals' in e and '未知字段' in e for e in errors)
+    assert any('standing_goals' in e and 'Extra inputs' in e for e in errors)
 
 
 def test_cross_chapter_char_ids_must_be_known():

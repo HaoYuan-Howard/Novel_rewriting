@@ -275,9 +275,9 @@ def test_assemble_binding_full_denominator():
 # ───────────────────────── Design 组装 ─────────────────────────
 
 def _design_wire():
-    """stage4-design-v2 形状（R2）：模型不输出任何 ID／归章引用／归一权重。"""
+    """stage4-design-v3 形状（R2）：模型不输出任何 ID／归章引用／归一权重。"""
     return {
-        'protocol_version': 'stage4-design-v2',
+        'protocol_version': 'stage4-design-v3',
         'book_style': '冷峻克制的第三人称叙事，重对话张力。',
         'initial_state': [],
         'scenes': [
@@ -341,15 +341,16 @@ def test_assemble_design_green_and_refusals():
     _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'})
     assert any('protocol_version' in e for e in errors)
 
-    # 模型写可派生字段即拒（I-21：ID 由 compiler 生成）
+    # 模型写可派生字段即拒（I-21：ID 由 compiler 生成；v3 由 pydantic
+    # extra=forbid 承担白名单）
     bad = _design_wire()
     bad['scenes'][0]['scene_id'] = 's01'
     _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'})
-    assert any('未知字段' in e for e in errors)
+    assert any('Extra inputs' in e for e in errors), errors
     bad = _design_wire()
     bad['scenes'][0]['beats'][0]['beat_id'] = 'bt1'
     _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'})
-    assert any('未知字段' in e for e in errors)
+    assert any('Extra inputs' in e for e in errors), errors
 
     # 权重是相对重点数组，不是归一 dict（I-21：归一由 compiler 完成）
     bad = _design_wire()
@@ -359,45 +360,39 @@ def test_assemble_design_green_and_refusals():
     bad = _design_wire()
     bad['scene_weights'] = [0]
     _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'})
-    assert any('正数数组' in e for e in errors)
+    assert errors
 
 
 def test_design_pov_shape_normalization_and_refusal():
-    """B6-A 实证：pov 三种失形（描述句→数组）的机械面。
-
-    单元素数组无损折叠（再组合 canonical 前缀归一）；多元素数组不猜「主要
-    视角是谁」——逐场 typed 拒，修订轮可据此修复，不落 pydantic 报错墙。
-    """
+    """R8b／v3：pov 只收字符串（本书 char_id 或 narrator），闭集外一律 typed
+    拒——单元素数组折叠与 canonical 前缀匹配已删（I-21：不按名字猜人）。"""
+    # 字符串 char_id：绿路径不动
     wire = _design_wire()
-    wire['scenes'][0]['delivery']['pov'] = ['yun']
     body, errors = assemble_body_design(wire, known_char_ids={'yun', 'fu_jun'})
     assert body is not None and not errors, errors
     assert body.scenes[0].delivery.pov == 'yun'
 
-    # 单元素数组先折叠、再走 canonical 前缀归一（F5e 面与新折叠的组合）
-    wire = _design_wire()
-    wire['scenes'][0]['delivery']['pov'] = ['云娘第三人称限知']
-    body, errors = assemble_body_design(
-        wire, known_char_ids={'yun', 'fu_jun'},
-        char_canonicals={'云娘': 'yun', '夫君': 'fu_jun'})
-    assert body is not None and not errors, errors
-    assert body.scenes[0].delivery.pov == 'yun'
-
-    # 多元素数组：选谁是语义判断，compiler 不猜（I-21）
-    wire = _design_wire()
-    wire['scenes'][0]['delivery']['pov'] = ['yun', 'fu_jun']
-    body, errors = assemble_body_design(wire, known_char_ids={'yun', 'fu_jun'})
-    assert body is None
-    assert any('delivery.pov 必须是单个字符串' in e for e in errors), errors
-
-    # 空数组／非字符串元素同面拒收
-    for bad_pov in ([], ['']):
+    # 数组（单元素/多元素/空/非字符串/称呼描述句）一律拒——不折叠、不猜
+    for bad_pov in (['yun'], ['yun', 'fu_jun'], [], [''], ['云娘第三人称限知']):
         wire = _design_wire()
         wire['scenes'][0]['delivery']['pov'] = bad_pov
-        body, errors = assemble_body_design(
-            wire, known_char_ids={'yun', 'fu_jun'})
-        assert body is None
-        assert any('delivery.pov 必须是单个字符串' in e for e in errors)
+        body, errors = assemble_body_design(wire, known_char_ids={'yun', 'fu_jun'})
+        assert body is None, bad_pov
+        assert any('pov' in e for e in errors), (bad_pov, errors)
+
+    # 闭集外的字符串（称呼/描述句/未登记人名）同样 typed 拒
+    for bad_pov in ('云娘', '云娘第三人称限知', 'narratorr'):
+        wire = _design_wire()
+        wire['scenes'][0]['delivery']['pov'] = bad_pov
+        body, errors = assemble_body_design(wire, known_char_ids={'yun', 'fu_jun'})
+        assert body is None, bad_pov
+        assert any('必须是本书 char_id' in e for e in errors), (bad_pov, errors)
+
+    # narrator 合法
+    wire = _design_wire()
+    wire['scenes'][0]['delivery']['pov'] = 'narrator'
+    body, errors = assemble_body_design(wire, known_char_ids={'yun', 'fu_jun'})
+    assert body is not None and not errors, errors
 
 
 def test_design_rules_pin_pov_shape():
