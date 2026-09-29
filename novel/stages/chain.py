@@ -1200,7 +1200,8 @@ def run_chain(ctx: ChainContext, *, through: str = 'stage4',
                            if record is not None else None)
             verdict, _gate_why = (
                 revision_gate(record.against_sha256, product_sha,
-                              record.rounds_total)
+                              record.rounds_total,
+                              no_progress=record.no_progress)
                 if record is not None else ('wait_reverify', '无 open 记录'))
             if (verdict != 'redo' or target not in order_index
                     or order_index[target] >= index

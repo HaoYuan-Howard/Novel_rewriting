@@ -117,6 +117,20 @@ def _step_identity(argv: list[str], fallback_sid: str | None) -> tuple[str, str]
     return node, sid
 
 
+def _open_revision_skips_follow_check(base, sid: str, node: str) -> bool:
+    """节点是否处于 open 的跨节点回派账下（追跑闸，R8a）；盘面读不了按 False。"""
+    from novel.stages.owner_revision import open_issue_targets_node
+    from novel.store import Str06Repository
+
+    try:
+        novel_dir = paths.find_novel_dir(base, sid)
+        if novel_dir is None:
+            return False
+        return open_issue_targets_node(Str06Repository(novel_dir), node)
+    except (OSError, ValueError):
+        return False
+
+
 def _mark(base: str, sid: str, node: str, phase: str,
           exit_code: int | None = None, *, note: str | None = None,
           execution_id: str,
@@ -439,6 +453,14 @@ def _main(argv: list[str] | None = None) -> int:
                     args.expect_code_version, phase=f'{step.label} 执行前'):
                 return X.TERMINAL_STATE
             node, sid = _step_identity(step.argv, args.sid)
+            if step_index > 0 and _open_revision_skips_follow_check(
+                    args.base, sid, node):
+                # R8a：owner 修订轮写回后，追跑的 --check-only 会推导出未购买
+                # 的新身份（修订 prompt 含上一版全文，写回即变）——修订循环的
+                # 验证权威是提出问题的下游复验，不是 owner 自己的免费复检。
+                print(f'    ⏭ 跳过追跑：{node} 有 open 的跨节点回派账，'
+                      '等下游复验清账', file=sys.stderr)
+                continue
             execution_id = run_identity.new_run_id()
             mark_rc = _mark(
                 args.base, sid, node, 'start', note=evidence_note,

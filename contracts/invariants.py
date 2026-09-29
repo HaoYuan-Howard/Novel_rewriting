@@ -1903,6 +1903,7 @@ NODES: Final[dict[str, NodeSpec]] = {
         produces=('stage2/characters/characters.json',
                   'stage2/blueprints/chapter_blueprints.json',
                   'stage2/acceptance/fold.json'),
+        operator_redo='canonical',
         lifecycle=NodeLifecycleSpec(
             'book', 'book／chapters／names／associate 四份观察',
             'deterministic', 'none',
@@ -1933,6 +1934,7 @@ NODES: Final[dict[str, NodeSpec]] = {
     'str06.stage4.bind': NodeSpec(
         'stage4', 'R-5', True, 'Stage4 Bind（义务到目标位置绑定，完整 canonical snapshot）',
         flags=('--check-only',),
+        operator_redo='canonical',
         produces=('stage4/grounding/semantic_binding.json',),
         lifecycle=NodeLifecycleSpec(
             'book', 'BodyDesign 与 Preserve obligations', 'executor', 'none',
@@ -1943,6 +1945,7 @@ NODES: Final[dict[str, NodeSpec]] = {
     'str06.stage4.hook_design': NodeSpec(
         'stage4', 'R-5', True, 'Stage4 Hook 设计并经 publish_graph 唯一发布 PresentationGraph',
         flags=('--check-only',),
+        operator_redo='canonical',
         produces=('stage4/design/presentation_graph.json',),
         lifecycle=NodeLifecycleSpec(
             'book', 'BodyDesign、Characters v4 与身份投影', 'executor', 'none',
@@ -1957,6 +1960,7 @@ NODES: Final[dict[str, NodeSpec]] = {
                   'stage4/acceptance/packet_metrics.json',
                   'stage4/context/hook/hook.json',
                   'stage4/ir/writer_book_ir.json'),
+        operator_redo='canonical',
         lifecycle=NodeLifecycleSpec(
             'book', 'PresentationGraph、SemanticBinding 与 Characters v4',
             'deterministic', 'none', 'Guard M1–M8 写前机械校验；零错误才放行',
@@ -1965,6 +1969,7 @@ NODES: Final[dict[str, NodeSpec]] = {
     'str06.stage5.hook': NodeSpec(
         'stage5', 'R-8', True, 'Stage5 Hook 成文（同 Context 有限重写＋机械验）',
         flags=('--check-only',),
+        operator_redo='canonical',
         produces=('stage5/hook/hook.txt', 'stage5/hook/receipt.json'),
         lifecycle=NodeLifecycleSpec(
             'book', 'HookContext（正式输入确定性重建）', 'executor', 'none',
@@ -1990,6 +1995,7 @@ NODES: Final[dict[str, NodeSpec]] = {
     'str06.stage7.naming': NodeSpec(
         'stage7', 'R-10', True, 'Stage7 Naming（NameMap v5 赋值；Apply 归 assembly）',
         flags=('--check-only',),
+        operator_redo='canonical',
         produces=('stage7/naming/name_map.json',),
         lifecycle=NodeLifecycleSpec(
             'book', 'Characters v4 名称结构与 Blueprint v13', 'executor', 'none',

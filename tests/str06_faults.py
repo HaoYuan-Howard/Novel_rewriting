@@ -30,7 +30,9 @@ typed 机械失败」；R3 起复用本底座验证修订（``fault_once=True`` 
 """
 from __future__ import annotations
 
+import os
 from copy import deepcopy
+from pathlib import Path
 
 #: 环境门：sitecustomize 只有看到它才注入（不设即完全不动生产导入）。
 FAULT_ENV = 'NOVEL_STR06_FAULT'
@@ -108,6 +110,30 @@ class FaultTransport:
         self.fault_once = fault_once
         self.body_texts = dict(body_texts) if body_texts else None
         self._served_faulty: set[str] = set()
+        # R8a 验收：supervisor 每节点一个子进程，进程内 `_served_faulty` 会随
+        # 进程重置、bind 每个新子进程都重新吃到故障 wire——「fault_once」在
+        # 多进程产品链上不成立。环境门 NOVEL_STR06_FAULT_ONCE_STICKY 指向一个
+        # 状态文件（owner 集合，追加写）：跨子进程只施一次故障，之后的响应
+        # 一律干净（与进程内自愈用例同语义）。
+        sticky = os.environ.get('NOVEL_STR06_FAULT_ONCE_STICKY')
+        self._sticky_path = Path(sticky) if sticky else None
+
+    def _sticky_served(self) -> set[str]:
+        if self._sticky_path is None or not self._sticky_path.is_file():
+            return set()
+        import json as _json
+
+        return set(_json.loads(self._sticky_path.read_text(encoding='utf-8')))
+
+    def _sticky_mark(self, owner: str) -> None:
+        if self._sticky_path is None:
+            return
+        import json as _json
+
+        served = self._sticky_served() | {owner}
+        self._sticky_path.parent.mkdir(parents=True, exist_ok=True)
+        self._sticky_path.write_text(
+            _json.dumps(sorted(served)), encoding='utf-8')
 
     @property
     def calls(self) -> list[str]:
@@ -148,9 +174,9 @@ class FaultTransport:
             finally:
                 self._inner.wires = saved
         if self.fault == 'duplicate_json_key' and owner == 'book':
-            if self.fault_once and 'book' in self._served_faulty:
+            if self.fault_once and self._fault_already_served('book'):
                 return self._send_clean(request)
-            self._served_faulty.add('book')
+            self._mark_fault_served('book')
             self._inner.calls.append('book')
             return ChatResponse(
                 content='{"protocol_version": "stage2-observation-v1",'
@@ -159,10 +185,20 @@ class FaultTransport:
                 usage={'prompt_tokens': 10, 'completion_tokens': 10},
                 model='fake')
         if self.fault_once and owner in _FAULT_TARGET_OWNERS.get(self.fault, ()):
-            if owner in self._served_faulty:
+            if self._fault_already_served(owner):
                 return self._send_clean(request)   # 修订轮：模型「改对了」
-            self._served_faulty.add(owner)
+            self._mark_fault_served(owner)
         return self._inner.send(request)
+
+    def _fault_already_served(self, owner: str) -> bool:
+        if owner in self._served_faulty:
+            return True
+        return owner in self._sticky_served()
+
+    def _mark_fault_served(self, owner: str) -> None:
+        self._served_faulty.add(owner)
+        if self._sticky_path is not None and owner not in self._sticky_served():
+            self._sticky_mark(owner)
 
 
 #: 每类故障受影响的 owner（fault_once 的施加面）。

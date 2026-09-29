@@ -47,9 +47,9 @@ from novel.llm.paid_requests import revision_user_prompt
 
 __all__ = [
     'OwnerRevisionRequired', 'OwnerRevisionStop', 'discover_owner_issues',
-    'open_issue_record', 'owner_product_digest', 'owner_product_digest_at',
-    'read_owner_issue_file', 'resolve_owner_issues', 'revision_gate',
-    'revision_prompt_for_owner',
+    'open_issue_record', 'open_issue_targets_node', 'owner_product_digest',
+    'owner_product_digest_at', 'read_owner_issue_file', 'resolve_owner_issues',
+    'revision_gate', 'revision_prompt_for_owner',
 ]
 
 
@@ -118,7 +118,7 @@ def owner_product_digest(repository, owner: str) -> str:
 
 
 def revision_gate(against_sha256: str, product_sha256: str | None,
-                  rounds_total: int) -> tuple[str, str]:
+                  rounds_total: int, no_progress: bool = False) -> tuple[str, str]:
     """owner_revision 门控的唯一判定（R8a）：进程内回跳与 `resume_verdict` 共用。
 
     返回 ``(结论, 一句话)``，结论闭集：
@@ -126,13 +126,19 @@ def revision_gate(against_sha256: str, product_sha256: str | None,
     · ``wait_reverify``——产物已变（修订写回或人工 patch）：不再回头重买，
       等下游按新鲜度复验清账（``product_sha256`` 为 None——产物不在盘上——
       同此档，交常规存在性分支）；
-    · ``stopped``——轮额度耗尽且产物未变：按 item 停给人，不自动重买。
+    · ``stopped``——轮额度耗尽、或同指纹重现（``no_progress``，修订被证明
+      无效）且产物未变：按 item 停给人，不自动重买。
     """
     if product_sha256 == against_sha256:
-        if rounds_total < OWNER_REVISION_MAX_ROUNDS:
+        if rounds_total < OWNER_REVISION_MAX_ROUNDS and not no_progress:
             return 'redo', (
                 f'owner 产物未变（摘要＝against），跨节点回派修订轮 '
                 f'{rounds_total}/{OWNER_REVISION_MAX_ROUNDS}——按 owner 修订重跑')
+        if no_progress:
+            return 'stopped', (
+                '修订后同一问题集原样重现（no_progress，修订被证明无效）且 '
+                'owner 产物未变——按 item 停给人（owner patch 或人工重跑），'
+                '不自动重买')
         return 'stopped', (
             f'跨节点回派修订轮 {rounds_total}/{OWNER_REVISION_MAX_ROUNDS} 已耗尽'
             '且 owner 产物未变——按 item 停给人（owner patch 或人工重跑），'
@@ -140,6 +146,21 @@ def revision_gate(against_sha256: str, product_sha256: str | None,
     return 'wait_reverify', (
         'owner 产物摘要已变（against 之后有修订写回或人工 patch）——不再回头'
         '重买 owner，等下游按新鲜度复验（通过置 resolved，再发现按轮次规则）')
+
+
+def open_issue_targets_node(repository, node: str) -> bool:
+    """盘上是否有 open 的回派账指向该节点（run_step 追跑闸等编排面用，只读）。
+
+    修订轮的请求身份含「上一版全文」：owner 写回后，自动追跑的 `--check-only`
+    会推导出**未购买的新身份**（缓存必 miss）。修订循环的验证权威是提出问题的
+    下游（compile 复验清账），不是 owner 自己的免费复检——open 期间跳过追跑。
+    """
+    for owner in OWNER_PRODUCT_RELS:
+        record = read_owner_issue_file(repository, owner)
+        if record is not None and record.status == 'open' \
+                and record.node == node:
+            return True
+    return False
 
 
 def read_owner_issue_file(repository, owner: str) -> OwnerIssueFileV2 | None:
@@ -201,7 +222,7 @@ def discover_owner_issues(repository, *, raised_by: str, owner: str, node: str,
         repository.write(owner_issues_rel(owner), OwnerIssueFileV2(
             owner=owner, node=node, raised_by=raised_by, status='open',
             rounds_total=existing.rounds_total, fingerprint=fingerprint,
-            against_sha256=against_sha256, issues=issues,
+            against_sha256=against_sha256, no_progress=True, issues=issues,
             updated_at=updated_at))
         raise OwnerRevisionStop(
             f'跨节点回派修订轮·{raised_by} 的修订要求没有进展：{owner} 修订后'
@@ -212,7 +233,7 @@ def discover_owner_issues(repository, *, raised_by: str, owner: str, node: str,
         repository.write(owner_issues_rel(owner), OwnerIssueFileV2(
             owner=owner, node=node, raised_by=raised_by, status='open',
             rounds_total=rounds, fingerprint=fingerprint,
-            against_sha256=against_sha256, issues=issues,
+            against_sha256=against_sha256, no_progress=False, issues=issues,
             updated_at=updated_at))
         raise OwnerRevisionStop(
             f'{owner} 的跨节点回派修订轮额度（{OWNER_REVISION_MAX_ROUNDS}）已耗尽，'
@@ -240,7 +261,8 @@ def resolve_owner_issues(repository, *, owner: str, raised_by: str) -> None:
         owner=record.owner, node=record.node, raised_by=raised_by,
         status='resolved', rounds_total=record.rounds_total,
         fingerprint=record.fingerprint,
-        against_sha256=record.against_sha256, issues=record.issues,
+        against_sha256=record.against_sha256,
+        no_progress=record.no_progress, issues=record.issues,
         updated_at=_now()))
 
 

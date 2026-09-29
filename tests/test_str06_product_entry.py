@@ -1146,3 +1146,122 @@ def test_agent_run_pauses_before_body_cli_canary_then_continuation_delivers(
     assert agent.wait(second.run_id, 600)
     assert _ledger_rows(base) == rows_final, '二次代跑不得新购'
     assert final_path.read_bytes() == final_bytes
+
+
+# ───────────────────── 七、R8a 验收：跨节点回派经单节点子进程重规划闭环 ────────
+#
+# 【为什么单独一条】obligation_unbound 的修订目标（body_design）在 compile
+# 之前的执行序上；supervisor 每步只派一个 `novel.cli run <node>` 子进程——
+# 进程内回跳到不了它，唯一出路是 compile 子进程以**已落盘负结论**退出
+# （R8a-1：exit 1，此前是未捕获异常 exit 70），编排器按 issue 记录重规划
+# （resume_verdict 判 owner_revision REDO），design 修订重跑后下游按新鲜度
+# 复验、compile 通过清账。这条链同时压过 against_sha256 门控（design 写回后
+# 不得再判 REDO）与 req_ 定位（修订提示不含 obNN）。
+
+@pytest.mark.real_code_version
+def test_obligation_unbound_replans_across_single_node_subprocesses(base,
+                                                                    tmp_path,
+                                                                    monkeypatch):
+    """R8a×产品入口：compile exit 1 → 编排重规划 design 修订 → 下游复验 →
+    交付；全程无 exit 70、无重复购买。"""
+    from pathlib import Path
+
+    from novel.orchestrator import agent
+    from novel.orchestrator import agent_settings
+
+    repo_root = str(Path(__file__).resolve().parents[1])
+    _install_fault_site(monkeypatch, tmp_path, 'obligation_unbound')
+    # R8a：supervisor 每节点一个子进程——fault_once 需跨子进程粘滞（状态文件），
+    # 否则 bind 的每个新子进程首答都重新吃到故障 wire，一轮修订永远治不好。
+    monkeypatch.setenv('NOVEL_STR06_FAULT_ONCE_STICKY',
+                       str(tmp_path / 'fault_once_served.json'))
+
+    source = base.parent / 'input_9005.txt'
+    source.write_text(SOURCE_TEXT, encoding='utf-8')
+    for argv in (
+            [sys.executable, '-B', '-m', 'novel.cli', 'run', 'stage0.remove',
+             '--source', str(source), '--base', str(base)],
+            [sys.executable, '-B', '-m', 'novel.cli', 'run', 'stage1.partition',
+             '9005', '--base', str(base)]):
+        _run_cli_subprocess(argv, repo_root)
+    settings = agent_settings.read(base)
+    agent_settings.update(base, profiles=_profiles(),
+                          expected_revision=settings.revision)
+
+    with TestClient(create_app(base)) as client:
+        response = client.post(
+            '/api/upload',
+            params={'filename': 'input_9005.txt', 'authorized': 'true',
+                    'egress_authorized': 'true',
+                    'idempotency_key': 'r8a-replan-9005'},
+            content=SOURCE_TEXT.encode('utf-8'),
+            headers={UI_HEADER: '1', 'Content-Type': 'application/octet-stream'})
+    assert response.status_code == 200, response.text
+    uploaded = response.json()
+    assert uploaded['sid'] == '9005' and uploaded['autostart'] == 'started'
+    run_id = uploaded['run']['run_id']
+    assert agent.wait(run_id, 1800), '跨节点回派链未在时限内经重规划收口'
+
+    book = paths.resolve_novel_dir(base, '9005')
+    assert (book / paths.book_txt_rel(book)).is_file(), '回派重规划后没有交付成书'
+
+    # ① 回派负结论以 exit 1 落盘（不是 exit 70 的未捕获异常）：子进程日志里
+    #    有落盘标记、没有崩溃标记。
+    from novel.orchestrator.agent import run_log_path
+    log_bytes = run_log_path(base, run_id).read_bytes().decode('utf-8', 'replace')
+    assert '回派负结论已落盘（exit 1' in log_bytes
+    assert '未捕获异常（exit 70' not in log_bytes
+
+    # ② 回派账：resolved、一轮、against 摘要在案；定位是源盲 core id。
+    from novel.stages.owner_revision import read_owner_issue_file
+    from novel.stages.stage4 import obligation_core_id
+    from novel.store import Str06Repository
+    record = read_owner_issue_file(Str06Repository(book), 'design')
+    assert record is not None and record.status == 'resolved'
+    assert record.rounds_total == 1
+    assert len(record.against_sha256) == 64
+    assert record.issues[0].item == obligation_core_id('ob01')
+    assert 'ob01' not in record.issues[0].message
+
+    # ③ 修订提示不含 obNN：design 修订轮的请求工作包（blob）里，修订要求以
+    #    req_ core id 定位。
+    revision_payload = _turn_request_payload(base, book, 'str06.stage4.body_design',
+                                             ordinal=2)
+    messages = revision_payload['messages']
+    revision_user = messages[-1]['content']
+    assert '【修订要求】' in revision_user
+    assert obligation_core_id('ob01') in revision_user
+    assert 'ob01' not in revision_user, '修订提示不得出现源序号（Design 源盲）'
+
+    # ④ 付费账：受影响 owner 各恰好多一笔修订/重问实付；总闸按 attempt 合账。
+    rows = _ledger_rows(base)
+    paid = [row for row in rows
+            if row['sid'] == book.name and not row['cached']]
+    from collections import Counter
+    by_purpose = Counter(row['purpose'] for row in paid)
+    assert by_purpose['design'] == 2, 'design 一原轮＋一修订轮'
+    assert by_purpose['bind'] == 2, 'bind 首答（合法 unbound）＋重规划后重问'
+    assert by_purpose['hook_design'] == 2, 'hook_design 随 design 修订重编译'
+    from novel.work_units import read_book_budget
+    assert read_book_budget(base, book.name).used == len(paid)
+
+    # ⑤ 二次代跑：零新购（两步间崩溃重启的免费恢复同构：按请求身份重放）。
+    rows_before = list(rows)
+    second = agent.start(base, '9005', authorized=True,
+                         egress_authorized=True, profiles=_profiles())
+    assert agent.wait(second.run_id, 600)
+    assert _ledger_rows(base) == rows_before, '二次代跑不得新购'
+
+
+def _turn_request_payload(base, book, node: str, *, ordinal: int) -> dict:
+    """某节点工作单元第 N 内容轮的请求工作包 blob（reserve 时冻结的 prompt 面）。"""
+    from contracts.schema.workflow import WorkUnitBlobV1
+    from novel.work_units import WorkUnitBudget
+
+    unit = WorkUnitBudget(base, book.name, node, 'executor', 'book')
+    turns = [t for t in unit._read().turns if t.ordinal == ordinal]
+    assert len(turns) == 1, f'第 {ordinal} 轮不唯一'
+    blob = WorkUnitBlobV1.model_validate(json.loads(
+        (unit.directory / f'{turns[0].request_payload_sha256}.json')
+        .read_text(encoding='utf-8')))
+    return blob.payload

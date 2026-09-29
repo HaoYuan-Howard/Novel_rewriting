@@ -750,14 +750,13 @@ def test_missing_blueprint_without_invalid_remains_a_plain_compile_run():
 
 @pytest.mark.parametrize(
     ('reason', 'expected'),
-    [('consumed_changed', None), ('file_changed', None)],
+    [('consumed_changed', ()), ('file_changed', None)],
 )
-def test_compile_node_has_no_operator_replay_for_stale_blueprints(
+def test_compile_node_operator_replay_needs_cascade_proof(
         reason, expected):
-    """`str06.stage2.compile` 未登记 operator_redo：普通队列 REDO 停人工，
-    AgentRun 单步 operator 也不得猜重放（旧 Blueprint canonical 重放面退役；
-    B2 换轨后 compile 是蓝图唯一 writer，同样不登记——重发布是免费
-    producer 的事，operator 不猜 flags）。"""
+    """`str06.stage2.compile` 的 REDO 重放面（R8a 起确定性 compile 登记
+    canonical）：consumed_changed 照旧自动；file_changed 只在修订级联（open
+    账 owner 产物已变）时放行，平时仍停人工。"""
     stage = StageState(
         stage='stage2',
         artifacts=[_stage2_artifact(
@@ -770,6 +769,15 @@ def test_compile_node_has_no_operator_replay_for_stale_blueprints(
 
     assert S.resume_verdict(ov, 'str06.stage2.compile')[0] == S.RESUME_REDO
     assert S.operator_redo_flags(ov, 'str06.stage2.compile') == expected
+    # 修订级联面：open 账的 owner 产物已变（wait_reverify）⇒ file_changed 也
+    # 经默认 flags 重放。
+    from contracts.schema.orchestration import OwnerIssueState
+    ov = ov.model_copy(update={'owner_issues': [OwnerIssueState(
+        owner='design', node='str06.stage4.body_design',
+        raised_by='str06.stage4.compile', rounds_total=1,
+        codes=['must_keep_unbound'],
+        against_sha256='a' * 64, product_sha256='b' * 64)]})
+    assert S.operator_redo_flags(ov, 'str06.stage2.compile') == ()
 
 
 @pytest.mark.parametrize('reason', ['consumed_unresolved', 'no_provenance'])

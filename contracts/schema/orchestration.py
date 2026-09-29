@@ -2282,6 +2282,8 @@ class OwnerIssueState(StrictModel):
     codes: list[str] = Field(min_length=1)
     against_sha256: str = Field(min_length=64, max_length=64)
     product_sha256: str | None = None
+    #: 同指纹重现（修订无进展）——门控据此停给人，不自动重买（R8a）。
+    no_progress: bool = False
 
 
 class NovelOverview(StrictModel):

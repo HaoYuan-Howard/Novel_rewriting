@@ -636,7 +636,8 @@ def _owner_issue_states(novel_dir: Path) -> list['OwnerIssueState']:
             rounds_total=record.rounds_total,
             codes=sorted({issue.code for issue in record.issues}),
             against_sha256=record.against_sha256,
-            product_sha256=_digest_or_none(record.owner)))
+            product_sha256=_digest_or_none(record.owner),
+            no_progress=record.no_progress))
     return states
 
 
@@ -784,7 +785,8 @@ def resume_verdict(
         verdict, why_gate = revision_gate(
             issue.against_sha256,
             getattr(issue, 'product_sha256', None),
-            issue.rounds_total)
+            issue.rounds_total,
+            no_progress=getattr(issue, 'no_progress', False))
         if verdict == 'redo':
             return RESUME_REDO, (
                 f'owner_revision：{issue.raised_by} 报告 typed 机械问题'
@@ -961,6 +963,32 @@ def _consumed_redo_surface(artifacts: list[ArtifactState]) -> bool:
     )
 
 
+def _revision_cascade_surface(artifacts: list[ArtifactState], ov) -> bool:
+    """回派级联面（R8a）：open 账的 owner 产物已变时，下游陈旧是修订写回的
+    **预期后果**——`file_changed` 也接受 canonical 重放。
+
+    只在确有 open 的跨节点回派账、且其 owner 当前产物摘要已偏离 against
+    （本轮修订真实落盘，`revision_gate` 的 wait_reverify 态）时放宽；平时
+    file_changed 维持关闭式（人工改字节的保护不放宽，B6-A canary 前的判据
+    原样保留）。unreadable／unknown／INVALID 照旧拒绝。
+    """
+    issues = getattr(ov, 'owner_issues', ()) or ()
+    if not any(getattr(issue, 'product_sha256', None) is not None
+               and issue.product_sha256 != issue.against_sha256
+               for issue in issues):
+        return False
+    stale = [artifact for artifact in artifacts if artifact.freshness == 'stale']
+    if not stale or any(artifact.reason not in ('consumed_changed', 'file_changed')
+                        for artifact in stale):
+        return False
+    return not any(
+        artifact.invalid
+        or (artifact.exists and not artifact.readable)
+        or (artifact.exists and artifact.freshness == 'unknown')
+        for artifact in artifacts
+    )
+
+
 def operator_redo_flags(ov: NovelOverview, node: str) -> tuple[str, ...] | None:
     """给 AgentRun 单步 operator 导出唯一、安全的 REDO flags。
 
@@ -979,8 +1007,11 @@ def operator_redo_flags(ov: NovelOverview, node: str) -> tuple[str, ...] | None:
     ``owner_revision``：只认**盘上 open 的 typed issue 记录**证明的修订重跑
     （`resume_verdict` 的 owner_revision 分支），同样只经默认 flags 重跑本节点；
     stale／unknown 等其余 REDO 面对该策略仍然关闭——修订重跑不是新鲜度重采的
-    后门。未登记策略名一律当场炸：节点表若再出现闭集外的名字，红在这里，
-    不会静默走回猜 flags 的老路。
+    后门。R8a（2026-09-29）新增**修订级联面**：open 账的 owner 产物已变
+    （`revision_gate` 判 wait_reverify）时，下游 file_changed 陈旧是修订写回的
+    预期后果，canonical 策略节点据此经默认 flags 重放；平时 file_changed 仍
+    关闭式停给人。未登记策略名一律当场炸：节点表若再出现闭集外的名字，红在
+    这里，不会静默走回猜 flags 的老路。
     """
     spec = NODES.get(node)
     strategy = spec.operator_redo if spec is not None else None
@@ -994,11 +1025,16 @@ def operator_redo_flags(ov: NovelOverview, node: str) -> tuple[str, ...] | None:
 
     if strategy == 'owner_revision':
         # R3：只有 open issue 指向本节点才可自动修订重跑；verdict 的 REDO 若来自
-        # 新鲜度（无 open issue），该策略关闭——不把修订通道当重采后门。
-        return () if any(issue.node == node
-                         for issue in getattr(ov, 'owner_issues', ())) else None
+        # 新鲜度（无 open issue），走 R8a 修订级联面——上游真值被修订轮改写时，
+        # 本节点按同一 canonical 面经默认 flags 重放（不猜参数）。
+        if any(issue.node == node for issue in getattr(ov, 'owner_issues', ())):
+            return ()
+        if _revision_cascade_surface(artifacts_for_node(ov, node), ov):
+            return ()
+        return None
 
     artifacts = artifacts_for_node(ov, node)
-    if not _consumed_redo_surface(artifacts):
+    if not (_consumed_redo_surface(artifacts)
+            or _revision_cascade_surface(artifacts, ov)):
         return None
     return ()

@@ -162,9 +162,18 @@ def test_operator_redo_strategies_are_closed_and_explicit_per_node():
     # 按章正文与装配（默认路径完整重建本节点当前正式输出）。
     # R3（2026-09-28）：跨节点回派的三个上游 owner 登记 owner_revision——只认
     # 盘上 open 的 typed issue 记录（runtime/issues/），不是新鲜度重采的后门。
+    # R8a（2026-09-29）：修订级联面需要中下游节点登记 canonical——owner 修订
+    # 写回后，下游（含确定性 compile 与成文面）按默认 flags 重放；级联外的
+    # file_changed 仍关闭式停给人。
     assert registered == {
         'stage1.partition': 'canonical',
+        'str06.stage2.compile': 'canonical',
+        'str06.stage4.bind': 'canonical',
+        'str06.stage4.hook_design': 'canonical',
+        'str06.stage4.compile': 'canonical',
+        'str06.stage5.hook': 'canonical',
         'str06.stage5.body': 'canonical',
+        'str06.stage7.naming': 'canonical',
         'str06.stage7.assemble': 'canonical',
         'str06.stage2.associate': 'owner_revision',
         'str06.stage4.preserve': 'owner_revision',
@@ -176,7 +185,9 @@ def test_operator_redo_strategies_are_closed_and_explicit_per_node():
         for node, strategy in registered.items()
         if strategy == 'canonical'
     )
-    assert 'str06.stage4.compile' not in registered
+    # R8a 起 `str06.stage4.compile`／`str06.stage2.compile` 等确定性节点也登记
+    # canonical：修订级联需要它们可派发（免费确定性重发布，零付费风险）；级联
+    # 外的 file_changed 仍关闭式（见 state._revision_cascade_surface）。
     # 旧链节点键已整体移入 RETIRED_NODES，不再出现在 NODES。
     for retired in ('stage7.approve', 'stage6.approve', 'stage5.write'):
         assert retired not in inv.NODES

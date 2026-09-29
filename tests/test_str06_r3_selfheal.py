@@ -441,19 +441,20 @@ def _stuck_overview(tmp_path, monkeypatch):
 
 def test_resume_verdict_marks_owner_revision_redo_before_freshness(tmp_path,
                                                                    monkeypatch):
-    """open issue ⇒ 上游判修订重跑（即使其产物新鲜）；复验 resolved 后回到
-    常规判定。"""
+    """open issue ⇒ 上游判修订重跑（即使其产物新鲜）；同指纹无进展（R8a）
+    改判停给人；复验 resolved 后回到常规判定。"""
     from novel.orchestrator import state as S
 
     _repo, ov = _stuck_overview(tmp_path, monkeypatch)
     entry = next(i for i in ov.owner_issues if i.node == 'str06.stage4.body_design')
     assert entry.owner == 'design' and entry.rounds_total == 1
     assert 'must_keep_unbound' in entry.codes
-    # 粘性故障链停止时 against 已刷新到「最后一次判定的产物摘要」：产物未变
-    # ⇒ 门控放行 owner_revision REDO（修订轮未耗尽）。
+    # 粘性故障链停止时 against 已刷新到「最后一次判定的产物摘要」；同指纹
+    # 无进展（no_progress）⇒ 修订被证明无效，停给人，不再自动重买（R8a）。
     assert entry.product_sha256 == entry.against_sha256
+    assert entry.no_progress is True
     verdict, why = S.resume_verdict(ov, 'str06.stage4.body_design')
-    assert verdict == S.RESUME_REDO and 'owner_revision' in why
+    assert verdict == S.RESUME_UNKNOWN and 'no_progress' in why
     # 无 open issue 指向的节点不受 owner_revision 影响：bind 走常规新鲜度判定
     # （测试仓库的候选桥新鲜度面是 unknown——那不是本批语义，只钉「不背
     # owner_revision 的锅」）。
@@ -467,7 +468,8 @@ def test_resume_verdict_marks_owner_revision_redo_before_freshness(tmp_path,
         owner=record.owner, node=record.node, raised_by=record.raised_by,
         status='resolved', rounds_total=record.rounds_total,
         fingerprint=record.fingerprint, against_sha256=record.against_sha256,
-        issues=record.issues, updated_at=record.updated_at))
+        no_progress=record.no_progress, issues=record.issues,
+        updated_at=record.updated_at))
     ov2 = S.overview_at(_repo.root, _prov_code())
     assert all(i.node != 'str06.stage4.body_design' for i in ov2.owner_issues)
 
@@ -517,7 +519,8 @@ def test_operator_gets_empty_flags_and_durable_queue_stays_closed(tmp_path,
     from novel.orchestrator import state as S
 
     _repo, ov = _stuck_overview(tmp_path, monkeypatch)
-    assert S.operator_redo_flags(ov, 'str06.stage4.body_design') == ()
+    # no_progress（R8a）：修订被证明无效——owner 的自动重放通道关闭，停给人。
+    assert S.operator_redo_flags(ov, 'str06.stage4.body_design') is None
     # 未登记 owner_revision 的节点即使 REDO 也拿不到自动重放（不猜 flags）。
     assert S.operator_redo_flags(ov, 'str06.stage4.bind') is None
     todo, blocked = Q.plan_book_from_overview(
@@ -570,3 +573,17 @@ def test_revision_gate_is_the_single_owner_revision_verdict():
     # 产物不在盘上：交常规存在性分支，不自动重买。
     verdict, _why = revision_gate(against, None, rounds_total=1)
     assert verdict == 'wait_reverify'
+
+
+def test_revision_gate_no_progress_stops_for_human():
+    """R8a：同指纹重现（修订被证明无效）⇒ stopped——复验会刷新 against，
+    光看轮数会在「1/2＋产物未变」上打转成付费循环（产品链实测）。"""
+    from novel.stages.owner_revision import revision_gate
+
+    against = 'a' * 64
+    verdict, why = revision_gate(against, against, rounds_total=1,
+                                 no_progress=True)
+    assert verdict == 'stopped' and 'no_progress' in why
+    # 无进展标记缺省时维持原判（轮未耗尽 ⇒ redo）。
+    verdict, _ = revision_gate(against, against, rounds_total=1)
+    assert verdict == 'redo'

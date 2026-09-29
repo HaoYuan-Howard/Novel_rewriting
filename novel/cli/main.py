@@ -437,6 +437,7 @@ def _run_str06(a: argparse.Namespace, flags: list[str], *, paid: bool) -> int:
         # 即新链付费边界的 source-export 凭据。
         allow_source_export=bool(getattr(a, 'allow_egress', False)),
     )
+    from novel.llm.paid_requests import PurchaseRequired
     from novel.stages.owner_revision import OwnerRevisionRequired, OwnerRevisionStop
     try:
         execute(args)
@@ -448,6 +449,12 @@ def _run_str06(a: argparse.Namespace, flags: list[str], *, paid: bool) -> int:
         # 把「查出了问题」记成「压根没跑成」。
         print(f'\n✗ 回派负结论已落盘（exit 1，勿当崩溃）：{exc}', file=sys.stderr)
         return X.CHECK_FAILED
+    except PurchaseRequired as exc:
+        # R8a 验收实测：授权停止是**设计内终态**（「停在该 owner，报告需要
+        # 授权」），不是崩溃——此前穿透成 exit 70 会被读成「结论未知」。典型
+        # 触发：修订轮写回后追跑的 --check-only 推导出未购买的新身份。
+        print(f'\n✗ 显式终态（缺少付费/外发授权）：{exc}', file=sys.stderr)
+        return X.TERMINAL_STATE
     return 0
 
 

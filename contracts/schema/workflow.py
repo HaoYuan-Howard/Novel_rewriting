@@ -796,6 +796,9 @@ class OwnerIssueFileV2(FrozenModel):
     rounds_total: int = Field(ge=0, le=OWNER_REVISION_MAX_ROUNDS)
     fingerprint: str = Field(min_length=1)
     against_sha256: Sha256
+    #: R8a：同指纹重现（修订无进展）置 True——调度门控据此停给人，不再自动
+    #: 重买 owner（复验会刷新 against，光看轮数会在「1/2＋产物未变」上打转）。
+    no_progress: bool = False
     issues: tuple[OwnerIssueV1, ...] = Field(min_length=1)
     updated_at: int = Field(ge=0)
 
