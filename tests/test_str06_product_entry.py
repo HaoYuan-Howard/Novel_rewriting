@@ -8,7 +8,9 @@
 `queue.plan`）**不打桩**：节点顺序、贵贱、写盘与恢复判定全部由现役 `NODES` 派生。
 fake transport 复用 `tests/test_str06_body.py` 的路由表（同一份 wires），正文按章
 给出落在章篇幅带内的稿——真实调用走 `PaidRequestSession` 的 reserve／记账／缓存
-同一条路（I-51：不依赖真实线上 LLM）。
+同一条路（I-51：不依赖真实线上 LLM）。第七节（R5b）另验 B6-A 前置链：HTTP 起跑
+→ 正文前暂停 → CLI 选章 canary → HTTP 续跑只补剩余正文 → 交付，续跑是新 run
+（continuation 指向原 run）。
 
 【基座形状】最小合法 base = `initialize_workflow` + stage0/stage1 产物（经真实
 `novel.cli run` 落盘）；上传触发 autostart 后 Supervisor 的第一个 ready 动作就是
@@ -934,4 +936,213 @@ def test_seal_loss_refuses_formal_consume_then_free_recovery_reseals(
     second = agent.start(base, '9005', authorized=True,
                          egress_authorized=True, profiles=_profiles())
     assert agent.wait(second.run_id, 600)
+    assert final_path.read_bytes() == final_bytes
+
+
+# ───────────────────── 七、R5b：HTTP 起跑 → CLI canary → HTTP 续跑（B6-A 前置链） ─────
+#
+# 【R5b 完成条件】PLAN.md R5b W4：AgentRun 跑语义层 → 停在正文前 → CLI 写 canary
+# 章 → AgentRun 续跑 → 有效提交集合恢复 → 只购买剩余正文。fake transport 经
+# sitecustomize 注入真实子进程（与第四、六节同一形状）；HTTP 面（上传／起跑／
+# 续跑）与 CLI 节点执行（canary）都走产品代码同一行（I-51：零真实模型调用）。
+#
+# ⚠ 与计划稿的一处如实修正：`body_access`（章就绪五态）只在
+# `str06.stage7.assemble` 写过 `runtime/delivery/assembly_report.json` 之后才
+# 可读，而 assemble 需要 name_map——canary 时刻 naming 尚未跑，监控面上没有
+# body_access。故 canary 时刻断言盘面事实（只落 ch02）＋`state`（正文未完成）
+# ＋逐章留证（requested/attempted/chapters）；`body_access` 与 canary 章字节
+# 不变的断言放在续跑交付后（那时 accepted 应为全书两章）。
+#
+# ⚠ 「续跑」在产品里是**新 run**（continuation 指向原 run），不是恢复同一个
+# run 记录——本节据此断言两个 run_id 不同。
+
+@pytest.mark.real_code_version
+def test_agent_run_pauses_before_body_cli_canary_then_continuation_delivers(
+        base, tmp_path, monkeypatch):
+    """B6-A 前置链：语义层自动跑 → CLI 选章 canary → 续跑只补剩余正文 → 交付。"""
+    from pathlib import Path
+
+    repo_root = str(Path(__file__).resolve().parents[1])
+
+    # ① fake transport 经 sitecustomize 注入子进程（与 B5 同一形状）。
+    fake_site = tmp_path / 'canary_site'
+    fake_site.mkdir()
+    (fake_site / 'sitecustomize.py').write_text(_SITECUSTOMIZE_SOURCE,
+                                                encoding='utf-8')
+    monkeypatch.setenv('NOVEL_B5_FAKE_TRANSPORT', '1')
+    monkeypatch.setenv('NOVEL_B5_FAKE_REPO', repo_root)
+    existing = os.environ.get('PYTHONPATH')
+    monkeypatch.setenv(
+        'PYTHONPATH',
+        str(fake_site) + (os.pathsep + existing if existing else ''))
+
+    # ② 未经授权的 HTTP 上传：只跑免费 stage0（不起付费 run、不留 autostart）；
+    #    stage1 经真实 CLI 子进程补齐（免费确定性节点），备好语义层的正式输入。
+    with TestClient(create_app(base)) as client:
+        response = client.post(
+            '/api/upload', params={'filename': 'input_9006.txt'},
+            content=SOURCE_TEXT.encode('utf-8'),
+            headers={UI_HEADER: '1', 'Content-Type': 'application/octet-stream'})
+    assert response.status_code == 200, response.text
+    uploaded = response.json()
+    assert uploaded['sid'] == '9006'
+    assert uploaded.get('autostart') is None and uploaded.get('run') is None, \
+        '未授权上传不得起付费 run'
+    assert uploaded['job']['state'] == 'ok'
+    _run_cli_subprocess(
+        [sys.executable, '-B', '-m', 'novel.cli', 'run', 'stage1.partition',
+         '9006', '--base', str(base)], repo_root)
+
+    settings = agent_settings.read(base)
+    agent_settings.update(base, profiles=_profiles(),
+                          expected_revision=settings.revision)
+
+    # ③ 经 HTTP 起 AgentRun：两项授权＋fake profiles＋正文前暂停。
+    with TestClient(create_app(base)) as client:
+        started = client.post('/api/agent/runs', json={
+            'sid': '9006', 'authorized': True, 'egress_authorized': True,
+            'profiles': json.loads(_profiles().model_dump_json()),
+            'pause_before_node': 'str06.stage5.body'},
+            headers={UI_HEADER: '1'})
+    assert started.status_code == 202, started.text
+    run_id = started.json()['run_id']
+    assert agent.wait(run_id, 1800), '语义层代跑未在时限内停在正文前'
+
+    book = paths.resolve_novel_dir(base, '9006')
+    # Supervisor 跑完 Stage2、Stage4 与 Hook 后停在正文前：盘上有语义层与 Hook
+    # 产物，没有任何正文交付痕迹。
+    for rel in ('stage2/characters/characters.json',
+                'stage2/blueprints/chapter_blueprints.json',
+                'stage4/ir/writer_book_ir.json', 'stage5/hook/hook.txt'):
+        assert (book / rel).is_file(), rel
+    assert not (book / 'stage5/body').exists(), '停在正文前不得落任何正文'
+    assert not (book / 'stage7/naming/name_map.json').exists()
+    rows = _ledger_rows(base)
+    paid = [row for row in rows if row['sid'] == book.name and not row['cached']]
+    from contracts.invariants import NODES
+    before_body = list(NODE_ORDER)[:list(NODE_ORDER).index('str06.stage5.body')]
+    assert {row['node'] for row in paid} == {
+        node for node in before_body if NODES[node].paid}, (
+        '应恰好是正文之前跑过的付费节点（两个 compile 免费、不入账）')
+    assert len(paid) == 10, '语义层含 ch01/ch02 两次章观察共 10 次外发'
+    assert not any(row['purpose'].startswith('body_') for row in rows), \
+        '正文一行都没有'
+    record = next(row for row in agent.records(base) if row.run_id == run_id)
+    assert record.ended is not None and record.outcome is not None
+    assert record.outcome.state == 'stopped'
+    assert 'str06.stage5.body' in (record.outcome.reason or ''), \
+        '停止原因必须点明范围边界，不冒充 pipeline_complete'
+
+    # ④ CLI canary：真实子进程执行选章正文（`--body-chapters 2`，fake 书第 2 章
+    #    是非前缀子集——前缀式 canary 在 2 章书上与整书无异，测不出集合恢复）。
+    canary_argv = [sys.executable, '-B', '-m', 'novel.cli', 'run',
+                   'str06.stage5.body', '9006', '--base', str(base),
+                   '--yes', '--allow-egress', '--body-chapters', '2']
+    _run_cli_subprocess(canary_argv, repo_root)
+    # 只落 ch02 的正文与回执；ch01 未被触碰（选章不静默补全）。
+    assert (book / 'stage5/body/ch02.txt').read_text('utf-8') == GOOD_CH02
+    assert _read_json(book / 'stage5/acceptance/body/ch02.json')['status'] == 'accepted'
+    assert not (book / 'stage5/body/ch01.txt').exists()
+    assert not (book / 'stage5/acceptance/body/ch01.json').exists()
+    canary_receipt = (book / 'stage5/acceptance/body/ch02.json').read_bytes()
+    canary_prose = (book / 'stage5/body/ch02.txt').read_bytes()
+    # 逐章留证：「最近一次完成执行」＝请求且只执行了选中章，无失败。
+    evidence = _read_json(book / 'runtime/body_failures.json')
+    assert evidence['requested'] == [2] and evidence['attempted'] == [2]
+    assert evidence['chapters'] == {}
+    # 选章只作调用元数据：run 级状态记审计字段，不进任何身份。
+    status = _read_json(book / 'runtime/workflow_status.json')
+    assert status['body_chapters'] == [2]
+    # state 判正文未完成：stage5／stage7 都未就绪，成书未落盘。
+    state_proc = subprocess.run(
+        [sys.executable, '-B', '-m', 'novel.cli', 'state', '9006',
+         '--base', str(base)], cwd=repo_root, capture_output=True)
+    assert state_proc.returncode == 0, state_proc.stdout + state_proc.stderr
+    state_out = state_proc.stdout.decode('utf-8')
+    assert '✓ stage5' not in state_out and '✓ stage7' not in state_out
+    assert not (book / 'stage7' / 'final').exists(), '正文未完成不得有交付目录'
+
+    # ⑤ HTTP 续跑：指向原 run 的新 run（continuation），显式解除范围上界。
+    rows_before = _ledger_rows(base)
+    with TestClient(create_app(base)) as client:
+        cont = client.get(f'/api/agent/runs/{run_id}/continuation')
+        assert cont.status_code == 200, cont.text
+        source = cont.json()
+        assert source['available'] is True, source
+        assert source['pause_before_node'] == 'str06.stage5.body'
+        resumed = client.post('/api/agent/runs', json={
+            'sid': '9006', 'authorized': True, 'egress_authorized': True,
+            'profiles': json.loads(_profiles().model_dump_json()),
+            'continuation': source['source'], 'pause_before_node': None},
+            headers={UI_HEADER: '1'})
+    assert resumed.status_code == 202, resumed.text
+    continued_run = resumed.json()['run_id']
+    assert continued_run != run_id, '续跑是新 run，不是恢复同一个 run 记录'
+    assert agent.wait(continued_run, 1800), '续跑未在时限内收口'
+
+    # 新增 ledger 行恰好是 body_ch01 一行加 naming 一行：其余付费节点（book、
+    # 章观察、names、associate、四个 Stage4 节点、hook）与 canary 的 body_ch02
+    # 零新行（已提交章不进待补集合，不重购）。
+    fresh = [row for row in _ledger_rows(base)[len(rows_before):]
+             if row['sid'] == book.name]
+    fresh_paid = [row for row in fresh if not row['cached']]
+    assert sorted(row['purpose'] for row in fresh_paid) == ['body_ch01', 'naming'], \
+        fresh_paid
+    assert sorted({row['node'] for row in fresh_paid}) == [
+        'str06.stage5.body', 'str06.stage7.naming']
+    # canary 章的回执与正文字节在整跑后不变（已提交章的采用与恢复身份稳定）。
+    assert (book / 'stage5/acceptance/body/ch02.json').read_bytes() == canary_receipt
+    assert (book / 'stage5/body/ch02.txt').read_bytes() == canary_prose
+
+    # 交付就绪：成书按阅读序带两章、改名后无旧名残留。
+    final_path = book / paths.book_txt_rel(book)
+    assert final_path.is_file(), '续跑没有交付成书'
+    final_bytes = final_path.read_bytes()
+    final_text = final_bytes.decode('utf-8')
+    markers = [line for line in final_text.splitlines()
+               if line.startswith('第') and line.endswith('章')]
+    assert markers == ['第1章', '第2章'], markers
+    assert '柳婉' in final_text and '苏芸娘' not in final_text
+    manifest = _read_json(book / 'stage7/final/delivery_manifest.json')
+    assert manifest['final_text_sha256'] == hashlib.sha256(final_bytes).hexdigest()
+    assert [c['chapter_ordinal'] for c in manifest['chapters']] == [1, 2]
+    # 章就绪五态（R5b 修正点）：全书两章都有效，没有 missing/stale。
+    report = _read_json(book / 'runtime/delivery/assembly_report.json')
+    assert report['body_access']['accepted'] == [1, 2]
+    assert report['body_access']['missing'] == [] and report['body_access']['stale'] == []
+    assert report['assembly']['status'] == 'ready' and report['chain_problems'] == []
+
+    # ⑥ 服务重启读回：三面与盘面逐字一致（沿用第四节的读回形状）。
+    candidate = book.name
+
+    def _read_faces():
+        run_face = client.get(f'/api/str06/candidates/{candidate}/run')
+        delivery_face = client.get(f'/api/str06/candidates/{candidate}/delivery')
+        book_face = client.get(f'/api/str06/candidates/{candidate}/book')
+        assert run_face.status_code == 200, run_face.text
+        assert delivery_face.status_code == 200, delivery_face.text
+        assert book_face.status_code == 200, book_face.text
+        return (run_face.json(), delivery_face.json(), book_face.text)
+
+    with TestClient(create_app(base)) as client:
+        first = _read_faces()
+        assert first[0]['present'] is True and first[1]['present'] is True
+        assert first[1]['final_text_sha256'] == manifest['final_text_sha256']
+        assert first[2] == final_text
+    with TestClient(create_app(base)) as client:      # 重启：全新服务实例
+        restarted = _read_faces()
+    assert restarted == first, '服务重启后读回不一致'
+    # 监控面的逐章留证与正文裁决：合法空清单＋全书 accepted。
+    run_view = first[0]
+    assert run_view['body_failures']['chapters'] == []
+    assert run_view['body_failures']['requested'] == [1, 2]
+    assert run_view['assembly_report']['body_access']['accepted'] == [1, 2]
+    assert operator.next_action(base, '9006').state == 'pipeline_complete'
+
+    # ⑦ 全部就绪后再次代跑：零派发、零新购、交付字节不变。
+    rows_final = _ledger_rows(base)
+    second = agent.start(base, '9006', authorized=True,
+                         egress_authorized=True, profiles=_profiles())
+    assert agent.wait(second.run_id, 600)
+    assert _ledger_rows(base) == rows_final, '二次代跑不得新购'
     assert final_path.read_bytes() == final_bytes
