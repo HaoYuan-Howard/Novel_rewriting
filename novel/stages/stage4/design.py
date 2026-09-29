@@ -22,9 +22,12 @@ Design wire（`stage4-design-v2`）只表达选择、结构与相对篇幅重点
 【确定性归一（F5e 真书实证；不补猜语义）】
   ⑥ 非 knowledge 域的 `knowledge_mode` 一律剥离——schema 只允许 knowledge 带
      模式；模型会在 reader 揭示上装饰 `'known'`，该值在其它域无语义可保留。
-  ⑦ `delivery.pov` 若不是 char_id/narrator，而是以某人物 canonical 开头的字符串
-     （F5e 实证：`苏芸娘第三人称限知`），按 canonical→char_id 唯一前缀匹配解析为
-     该 char_id；无匹配或多义匹配不归一，交由 char_id 校验报错。
+  ⑦ `delivery.pov` 两级形状归一（均无损）：单元素字符串数组（B6-A 实证：模型
+     按「本场有谁」填 `['yun_niang']`）先折叠成该字符串；再对以某人物 canonical
+     开头的字符串（F5e 实证：`苏芸娘第三人称限知`）按 canonical→char_id 唯一
+     前缀匹配解析。多元素数组、空或非字符串元素不猜「主要视角是谁」——逐场
+     typed 报错，交由修订轮或人工修复；无匹配或多义匹配不归一，交由 char_id
+     校验报错。
 两类归一都是无损形状转换：不改任何事件、状态、数值与 brief 语义。
 
 【协议与键白名单】wire 顶层 `protocol_version` 必须逐字等于
@@ -101,14 +104,28 @@ def _normalize(data: dict[str, Any]) -> None:
                     item.pop('knowledge_mode', None)
 
 
-def _normalize_povs(data: dict[str, Any], char_canonicals: Mapping[str, str] | None) -> None:
-    """canonical 前缀唯一匹配 → char_id；匹配不到保持原样让校验报错。"""
-    if not char_canonicals:
-        return
-    for scene in data.get('scenes') or []:
+def _normalize_povs(data: dict[str, Any],
+                    char_canonicals: Mapping[str, str] | None,
+                    errors: list[str]) -> None:
+    """pov 两级无损归一：单元素数组折叠 → canonical 前缀唯一匹配 → char_id。
+
+    多元素数组／空／非字符串元素不猜「主要视角是谁」（I-21），逐场 typed
+    报错——修订轮据此可修复，不再落成 pydantic 字符串类型的报错墙。
+    """
+    for index, scene in enumerate(data.get('scenes') or [], start=1):
         delivery = scene.get('delivery') or {}
         pov = delivery.get('pov')
-        if not isinstance(pov, str) or pov == 'narrator':
+        if isinstance(pov, list):
+            if len(pov) == 1 and isinstance(pov[0], str) and pov[0].strip():
+                pov = pov[0]
+                delivery['pov'] = pov
+            else:
+                errors.append(
+                    f'第 {index} 场 delivery.pov 必须是单个字符串（本场叙述视角'
+                    f'人物的 char_id 或 "narrator"；一场只有一个视角），实得 {pov!r}'
+                    '——多人物在场也只选其中一人作视角，不写数组')
+                continue
+        if not isinstance(pov, str) or pov == 'narrator' or not char_canonicals:
             continue
         matches = {cid for canonical, cid in char_canonicals.items()
                    if canonical and pov.startswith(canonical)}
@@ -340,7 +357,7 @@ def assemble_body_design(
     data = deepcopy(wire)
     data.setdefault('graph_id', 'pg_main')
     _normalize(data)
-    _normalize_povs(data, char_canonicals)
+    _normalize_povs(data, char_canonicals, errors)
     _normalize_delta(data)
     _resolve_threads(data, errors)
     if not errors:

@@ -1532,6 +1532,27 @@ B6-A／B6-B 分别授权；R 批全部 fake transport、零模型调用。
   - 验证（免费、`-n 0`、独立 basetemp）：`tests/test_str06_f7e_freeze.py` 全绿
     （含新增语义协议冻结钉与既有身份／节点／产物／配置四查）。
 
+- [x] **B6-A canary 事件修复 · Design prompt 补 pov 值形＋数组形状归一**
+  （2026-09-29，付费 canary 实证倒逼）：`str06_b6a_canary_20260929b` 跑到
+  `str06.stage4.body_design`，三轮（原请求＋两轮修订）全被 schema 拒，修订轮在
+  pov 的三种失形间振荡——描述句（`"第三人称限制，贴芸娘"`，过 str 但 char_id
+  闭集拒）→原样重现→char_id 数组（`['yun_niang','pei_shu_yuan']`，string_type
+  拒×28）。根因：`DESIGN_RULES` wire 形状节只给了 `delivery{pov,voice,avoid}`
+  键名，从未说明 pov 的值形（单字符串闭集），模型按「本场有谁」理解。
+  - 修复（用户会话内诊断并指示）：① `DESIGN_RULES` 补 delivery 三键值形——
+    pov 单个字符串（char_id 闭集或 `"narrator"`，一场一视角，不写数组/描述句）；
+    ② `novel/stages/stage4/design.py::_normalize_povs` 两级无损归一——单元素
+    字符串数组先折叠再走 F5e canonical 前缀匹配；多元素数组/空/非字符串元素
+    不猜「主要视角是谁」（I-21），逐场 typed 报错，修订轮可据此修复。
+  - 冻结面核对：wire 协议字面量 `stage4-design-v2` 不动，冻结闸四查＋语义协议
+    六钉全绿——本次是 prompt 值形澄清与 compiler 形状归一，不是语义层升版；
+    已购 Stage2／preserve 产物身份不受影响（prompt 不进其请求身份），仅
+    body_design 因 prompt 变化产生新请求身份重购（该节点无已采用产物）。
+  - 验证（免费、`-n 0`、独立 basetemp）：`tests/test_str06_target.py` 新增
+    pov 归一/typed 拒两测＋DESIGN_RULES 值形钉；定向面
+    `test_stage4_design_contract_v3`／`test_str06_f7e_freeze`／
+    `test_str06_stage2_publish`／`hard_cases` 全绿（JUnit 50/0/0）。
+
 ## 职责解耦批次（2026-09-27 起；B0–B6）
 
 裁决 D1–D10 各行见 [DECISIONS.md](DECISIONS.md) 2026-09-27；目标架构（Stage2 五节点、

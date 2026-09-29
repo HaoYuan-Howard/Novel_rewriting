@@ -362,6 +362,58 @@ def test_assemble_design_green_and_refusals():
     assert any('正数数组' in e for e in errors)
 
 
+def test_design_pov_shape_normalization_and_refusal():
+    """B6-A 实证：pov 三种失形（描述句→数组）的机械面。
+
+    单元素数组无损折叠（再组合 canonical 前缀归一）；多元素数组不猜「主要
+    视角是谁」——逐场 typed 拒，修订轮可据此修复，不落 pydantic 报错墙。
+    """
+    wire = _design_wire()
+    wire['scenes'][0]['delivery']['pov'] = ['yun']
+    body, errors = assemble_body_design(wire, known_char_ids={'yun', 'fu_jun'})
+    assert body is not None and not errors, errors
+    assert body.scenes[0].delivery.pov == 'yun'
+
+    # 单元素数组先折叠、再走 canonical 前缀归一（F5e 面与新折叠的组合）
+    wire = _design_wire()
+    wire['scenes'][0]['delivery']['pov'] = ['云娘第三人称限知']
+    body, errors = assemble_body_design(
+        wire, known_char_ids={'yun', 'fu_jun'},
+        char_canonicals={'云娘': 'yun', '夫君': 'fu_jun'})
+    assert body is not None and not errors, errors
+    assert body.scenes[0].delivery.pov == 'yun'
+
+    # 多元素数组：选谁是语义判断，compiler 不猜（I-21）
+    wire = _design_wire()
+    wire['scenes'][0]['delivery']['pov'] = ['yun', 'fu_jun']
+    body, errors = assemble_body_design(wire, known_char_ids={'yun', 'fu_jun'})
+    assert body is None
+    assert any('delivery.pov 必须是单个字符串' in e for e in errors), errors
+
+    # 空数组／非字符串元素同面拒收
+    for bad_pov in ([], ['']):
+        wire = _design_wire()
+        wire['scenes'][0]['delivery']['pov'] = bad_pov
+        body, errors = assemble_body_design(
+            wire, known_char_ids={'yun', 'fu_jun'})
+        assert body is None
+        assert any('delivery.pov 必须是单个字符串' in e for e in errors)
+
+
+def test_design_rules_pin_pov_shape():
+    """B6-A 实证钉：DESIGN_RULES 必须写明 pov 的目标形状（单字符串闭集）。
+
+    canary 三轮失形（描述句→描述句→char_id 数组）的根因是 wire 形状节只给了
+    键名没给值形——修订轮在三种形状间振荡。此钉防形状约束再次从 prompt 里
+    静默消失（协议字面量不动，不涉语义冻结闸）。
+    """
+    from novel.stages.common import DESIGN_RULES
+    assert 'pov 是**单个字符串**' in DESIGN_RULES
+    assert '一场只有一个视角' in DESIGN_RULES
+    assert '不写数组' in DESIGN_RULES
+    assert '"narrator"' in DESIGN_RULES
+
+
 def test_design_surface_release_must_be_registered():
     """称谓闭合（A3）：放行面只能取 Characters 登记过的 surface。
 

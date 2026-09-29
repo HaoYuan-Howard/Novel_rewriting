@@ -570,6 +570,10 @@ character_voices, initial_state, initial_surfaces, scenes, chapters, scene_weigh
 - scenes 按阅读序排列：[{driver{focal_actor,immediate_want,opposition,turn},
   state_reads, realization_brief, beats, delivery{pov,voice,avoid}}]；**不写
   scene_id**——编号由 compiler 按列表序派发；
+- delivery 三键形状：pov 是**单个字符串**——本场叙述视角人物的 char_id（只取
+  输入身份投影给出的 char_id 字面）或 "narrator"；一场只有一个视角，多人在场
+  也只选其中一人：不写数组、不写描述句（「贴某某」「第三人称限知」这类按未知
+  char_id 拒收）；voice 是单个字符串；avoid 是字符串数组；
 - beats 按故事序排列：[{event, participants, dramatic_intent, delivery_hint,
   target_delta, surface_introductions, threads}]；**不写 beat_id**——编号由
   compiler 按列表序派发；
