@@ -48,7 +48,8 @@ from novel.llm.paid_requests import revision_user_prompt
 __all__ = [
     'OwnerRevisionRequired', 'OwnerRevisionStop', 'discover_owner_issues',
     'open_issue_record', 'owner_product_digest', 'owner_product_digest_at',
-    'read_owner_issue_file', 'resolve_owner_issues', 'revision_prompt_for_owner',
+    'read_owner_issue_file', 'resolve_owner_issues', 'revision_gate',
+    'revision_prompt_for_owner',
 ]
 
 
@@ -114,6 +115,31 @@ def owner_product_digest_at(root: Path, owner: str) -> str:
 def owner_product_digest(repository, owner: str) -> str:
     """`owner_product_digest_at` 的 repository 版（写口与读口共用同一把尺）。"""
     return owner_product_digest_at(repository.root, owner)
+
+
+def revision_gate(against_sha256: str, product_sha256: str | None,
+                  rounds_total: int) -> tuple[str, str]:
+    """owner_revision 门控的唯一判定（R8a）：进程内回跳与 `resume_verdict` 共用。
+
+    返回 ``(结论, 一句话)``，结论闭集：
+    · ``redo``——owner 产物未变（摘要＝against）且轮未耗尽：按 owner 修订重跑；
+    · ``wait_reverify``——产物已变（修订写回或人工 patch）：不再回头重买，
+      等下游按新鲜度复验清账（``product_sha256`` 为 None——产物不在盘上——
+      同此档，交常规存在性分支）；
+    · ``stopped``——轮额度耗尽且产物未变：按 item 停给人，不自动重买。
+    """
+    if product_sha256 == against_sha256:
+        if rounds_total < OWNER_REVISION_MAX_ROUNDS:
+            return 'redo', (
+                f'owner 产物未变（摘要＝against），跨节点回派修订轮 '
+                f'{rounds_total}/{OWNER_REVISION_MAX_ROUNDS}——按 owner 修订重跑')
+        return 'stopped', (
+            f'跨节点回派修订轮 {rounds_total}/{OWNER_REVISION_MAX_ROUNDS} 已耗尽'
+            '且 owner 产物未变——按 item 停给人（owner patch 或人工重跑），'
+            '不自动重买')
+    return 'wait_reverify', (
+        'owner 产物摘要已变（against 之后有修订写回或人工 patch）——不再回头'
+        '重买 owner，等下游按新鲜度复验（通过置 resolved，再发现按轮次规则）')
 
 
 def read_owner_issue_file(repository, owner: str) -> OwnerIssueFileV2 | None:

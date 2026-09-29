@@ -84,7 +84,8 @@ from novel.stages.stage2 import (
 )
 from novel.stages.owner_revision import (
     OwnerRevisionRequired, OwnerRevisionStop, discover_owner_issues,
-    open_issue_record, resolve_owner_issues, revision_prompt_for_owner,
+    open_issue_record, owner_product_digest, resolve_owner_issues,
+    revision_gate, revision_prompt_for_owner,
 )
 from novel.stages.stage4 import (
     assemble_binding, assemble_body_design, assemble_hook_design,
@@ -1177,7 +1178,12 @@ def run_chain(ctx: ChainContext, *, through: str = 'stage4',
     #: R3 跨节点回派：执行位置按序推进，`OwnerRevisionRequired` 把位置回跳到
     #: 修订目标（目标必须更早且在本次选中集合内）；有界性由盘上 issue 记录
     #: 保证（每 owner 最多 OWNER_REVISION_MAX_ROUNDS 轮、同问题集重复即停），
-    #: 这里只执行回跳、不另记第二本账（I-17）。
+    #: 这里只执行回跳、不另记第二本账（I-17）。R8a-7：回跳与否由
+    #: `revision_gate` 唯一判定（与编排层 resume_verdict 同一把尺）——产物
+    #: 已变（等下游复验）或轮耗尽（停给人）时不回跳，按原样上抛交驱动层。
+    #: 现役消费者：开发线多节点运行（`python -m novel.stages.chain --node …
+    #: --node …` 的 wire 采用/自愈）与自愈测试面；单节点路径恒走「目标不在
+    #: 选中集合」的上抛分支（exit 1，编排器按 landed 重规划）。
     order_index = {node: index for index, node in enumerate(NODE_ORDER)}
     index = 0
     while index < len(NODE_ORDER):
@@ -1189,10 +1195,19 @@ def run_chain(ctx: ChainContext, *, through: str = 'stage4',
             report.update(run_node(node_id, ctx))
         except OwnerRevisionRequired as exc:
             target = exc.node
-            if (target not in order_index or order_index[target] >= index
+            record = open_issue_record(ctx.repository, exc.owner)
+            product_sha = (owner_product_digest(ctx.repository, exc.owner)
+                           if record is not None else None)
+            verdict, _gate_why = (
+                revision_gate(record.against_sha256, product_sha,
+                              record.rounds_total)
+                if record is not None else ('wait_reverify', '无 open 记录'))
+            if (verdict != 'redo' or target not in order_index
+                    or order_index[target] >= index
                     or (selected is not None and target not in selected)):
-                # 回派目标不在本腿更早处（或不在选中集合）：单节点重跑路径，
-                # 交编排层按 issue 记录重规划（resume_verdict 判 owner_revision）。
+                # 门控不放行（产物已变/轮耗尽）或回派目标不在本腿更早处：
+                # 单节点重跑路径与停止面统一交编排层按 issue 记录重规划
+                # （resume_verdict 判 owner_revision）。
                 _record_failure(ctx, node_id, exc)
                 raise
             index = order_index[target]

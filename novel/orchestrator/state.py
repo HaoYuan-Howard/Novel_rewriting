@@ -772,29 +772,29 @@ def resume_verdict(
     # 它按 owner 修订重跑——**即使本节点产物存在且新鲜**（问题不是新鲜度，是
     # 下游已经报告的机械缺陷）。此判定先于一切存在性/新鲜度分支；普通队列对
     # REDO 仍关闭式停止，AgentRun 单步 operator 经登记的 owner_revision 策略执行。
-    # R8a 门控（2026-09-29）：REDO 只在 owner 当前产物摘要仍等于记录的
-    # ``against_sha256`` 时成立——摘要已变说明 owner 已修订写回（或人工 patch），
-    # 此时再 REDO 会在「重买 owner → 复验仍 open → 再重买」里打转；正确去向是
-    # 落到常规分支（产物新鲜即 skip），由下游按新鲜度 REDO 复验清账。轮额度
-    # 耗尽且产物未变则停给人（unknown），不自动重买。
+    # R8a 门控（2026-09-29）：判定唯一登记在
+    # `novel/stages/owner_revision.py::revision_gate`（进程内回跳与本分支共用）
+    # ——产物未变才 REDO；已变（owner 修订写回或人工 patch）则落常规分支等
+    # 下游按新鲜度复验（此前照旧 REDO 会在「重买 owner → 复验仍 open → 再
+    # 重买」里打转，B6-A canary 实证）；轮额度耗尽且产物未变则停给人。
     # （`getattr` 只为测试里不带该格的 SimpleNamespace 概览——正式模型恒带默认空表。）
     issue = next((i for i in getattr(ov, 'owner_issues', ()) if i.node == node), None)
     if issue is not None:
-        from contracts.invariants import OWNER_REVISION_MAX_ROUNDS
-        if getattr(issue, 'product_sha256', None) == issue.against_sha256 \
-                and issue.rounds_total < OWNER_REVISION_MAX_ROUNDS:
+        from novel.stages.owner_revision import revision_gate
+        verdict, why_gate = revision_gate(
+            issue.against_sha256,
+            getattr(issue, 'product_sha256', None),
+            issue.rounds_total)
+        if verdict == 'redo':
             return RESUME_REDO, (
                 f'owner_revision：{issue.raised_by} 报告 typed 机械问题'
-                f'（{", ".join(issue.codes)}），跨节点回派修订轮 {issue.rounds_total}/'
-                f'{OWNER_REVISION_MAX_ROUNDS}，owner 产物未变（摘要＝against）——'
-                '本节点产物即使新鲜也按 owner 修订重跑；'
+                f'（{", ".join(issue.codes)}），{why_gate}；'
                 '修订要求随 `runtime/issues/` 记录进请求身份')
-        if getattr(issue, 'product_sha256', None) == issue.against_sha256:
+        if verdict == 'stopped':
             return RESUME_UNKNOWN, (
                 f'owner_revision：{issue.raised_by} 报告 typed 机械问题'
-                f'（{", ".join(issue.codes)}），跨节点回派修订轮 {issue.rounds_total}/'
-                f'{OWNER_REVISION_MAX_ROUNDS} 已耗尽且 owner 产物未变——'
-                '按 item 停给人（owner patch 或人工重跑），不自动重买')
+                f'（{", ".join(issue.codes)}），{why_gate}')
+        # wait_reverify：产物已变——不背 owner_revision 的锅，落常规分支。
 
     # ⭐ 轮次编号产物：**它有自己的账，不看 stage 级 `done`**。
     #

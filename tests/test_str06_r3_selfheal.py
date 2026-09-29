@@ -554,3 +554,19 @@ def _put_owner_product(repo: Str06Repository, owner: str, payload: bytes) -> Non
     path = repo.path(OWNER_PRODUCT_RELS[owner])
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(payload)
+
+
+def test_revision_gate_is_the_single_owner_revision_verdict():
+    """R8a-7：门控唯一判定的三分支（进程内回跳与 resume_verdict 共用一把尺）。"""
+    from novel.stages.owner_revision import revision_gate
+
+    against = 'a' * 64
+    verdict, why = revision_gate(against, against, rounds_total=1)
+    assert verdict == 'redo' and '产物未变' in why
+    verdict, why = revision_gate(against, against, rounds_total=2)
+    assert verdict == 'stopped' and '耗尽' in why
+    verdict, why = revision_gate(against, 'b' * 64, rounds_total=1)
+    assert verdict == 'wait_reverify' and '复验' in why
+    # 产物不在盘上：交常规存在性分支，不自动重买。
+    verdict, _why = revision_gate(against, None, rounds_total=1)
+    assert verdict == 'wait_reverify'
