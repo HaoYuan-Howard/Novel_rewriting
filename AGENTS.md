@@ -126,8 +126,7 @@ UI 称「模型执行配置」。禁止把「不得依赖 legacy implementation�
 ## 开工与协作
 
 1. 先看 `git status --short`，保留已有改动；只处理本任务涉及的内容。
-2. 用户已指定的任务直接推进；未指定时先看根目录 `PLAN.md`（临时活动计划，B6／R7 完成
-   后删除）的未完成批次，再看 `docs/REQUIREMENTS.md` 的未完成项，不另造活动计划。
+2. 用户已指定的任务直接推进；未指定时从 `docs/REQUIREMENTS.md` 的未完成项选取，不另造活动计划。
 3. 现役依据依次为根不变量、`docs/BACKEND_CONTRACT.md`、`contracts/` 与 `docs/schema/`、`web/AGENTS.md`。
    实现只是证据；冲突先核实。`docs/DECISIONS.md` 解释历史缘由，不覆盖现役契约；
    `docs/LESSONS.md` 按问题或编号检索。

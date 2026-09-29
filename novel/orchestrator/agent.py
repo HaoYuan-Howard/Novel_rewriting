@@ -1,24 +1,24 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-agent.py —— 前端一键唤起供应商中立的 headless executor 代跑一本书。
+agent.py —— 整书自动代跑编排：上传后由确定性 Supervisor 逐节点推进，
+语义节点为直连 LLM 调用（agent executor 已退役，无本地 agent 进程）。
 
     Output/_service/agent_runs.jsonl        append-only 事件流（生死与改判）
-    Output/_service/logs/agent-<run_id>.log agent 进程的 stdout+stderr，按字节追加
+    Output/_service/logs/agent-<run_id>.log 代跑子进程的 stdout+stderr，按字节追加
 
 【它为什么不是 `jobs.jsonl` 的一种新作业】`JobStart` 的后置条件钉死
-`node ∈ NODES`，而 agent 代跑**不是流水线节点**——它是「拉起一个会自己去跑
+`node ∈ NODES`，而整书代跑**不是流水线节点**——它是「拉起一个会自己去跑
 节点的进程」。往 `NODES` 塞一个假节点，污染的是完成度/贵贱/写盘效应的
 全部派生源头。所以它有自己的事件文件，形状照抄 `jobs.py`（同一条
 append-only 理由：永不读-改-写，被 kill 最坏只损坏最后一行）。
 
-【角色边界】受托 Commander reviewer 已退役（2026-09-15 用户裁决）：本模块
-只保留确定性编排与事件账——Supervisor 执行 ready executor token、登记过的
-deterministic recovery 与交付终验；走到人工审批闸时 parent 以 exit 2 停止，
-等用户在 Stage 页面过闸后用原配置续跑。executor 子进程的 argv、stdin 与
-进程树取消在 ``novel/agents`` 与 ``run_step``；历史 commander 会话行、
-reviewer 席位账与成本行仍按 append-only 原字节只读解码。进程树终止由本目录的
-``process_tree`` 提供，agent driver 只消费该中性边界。
+【角色边界】受托 Commander reviewer 与全部人工审批闸均已退役（2026-09-15
+全自动裁决及其后批次）：本模块只保留确定性编排与事件账——Supervisor 执行
+ready executor token、登记过的 deterministic recovery 与交付终验。executor
+子进程的 argv、stdin 与生命周期在 `novel/orchestrator/run_step.py`；
+历史 commander 会话行、reviewer 席位账与成本行仍按 append-only 原字节只读
+解码。进程树终止由本目录的 ``process_tree`` 提供。
 
 【冻结边界】preview / 单本 start / batch 入队共用 ``plan``。profile 在那里关闭式
 校验并深拷贝；排队项携带整份 plan，出队不再读取默认或重新解释请求。当前服务没有

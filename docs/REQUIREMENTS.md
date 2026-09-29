@@ -1,8 +1,7 @@
 # STR-06 · Stage2–Stage7 终态架构迁移（Stage6 退役）
 
-本文件登记当前进度、批次交付记录、验收协议、恢复与删除条件。执行序与裁决的唯一活动
-计划是根目录 [PLAN.md](../PLAN.md)（临时文档，B6／R7 完成后删除）；目标职责、真源和
-产物接口以 [str06.md](schema/str06.md) 为准；现役行为、根不变量与局部指南仍按
+本文件是唯一活动计划，登记当前进度、下一批任务、验收、恢复与删除条件。目标职责、
+真源和产物接口以 [str06.md](schema/str06.md) 为准；现役行为、根不变量与局部指南仍按
 [AGENTS.md](../AGENTS.md) 读取，历史理由见 [DECISIONS.md](DECISIONS.md)。
 2026-09-23 活动账重置为 STR-06 唯一主线（STR-01～05 退出活动面）；重置与迁移期的
 历史原文按 Git 历史读取（`git log -- docs/REQUIREMENTS.md`），不恢复为操作说明。
@@ -73,10 +72,12 @@ R0–R6、R5、R5b 与语义冻结闸（裁决 D8）全部完成，交付记录�
 - **R7 数据驱动优化**：输入为 B6 阅读问题清单与「B6 执行与后续优化次序」的后续优化
   表；含 D10 两本短篇 Golden。
 
-## 质量重设计批次（2026-09-28 起；R0–R7，依据 PLAN.md）
+## 质量重设计批次（2026-09-28～09-29；R0–R7）
 
-批次表与裁决见 `PLAN.md`（唯一活动计划；本节只登记交付记录）。付费与正文外发只在
-B6-A／B6-B 分别授权；R 批全部 fake transport、零模型调用。
+批次执行序与交付记录在本节，裁决见 [DECISIONS.md](DECISIONS.md)——原临时计划
+PLAN.md 已完成使命删除（R0–R6、R5、R5b、语义冻结闸交付后），未竟事项见
+「当前状态与下一步」。付费与正文外发只在 B6-A／B6-B 分别授权；R 批全部
+fake transport、零模型调用。
 
 - [x] **R0 · 语义送达与送达方式守卫＋故障注入底座（免费）**（2026-09-28 完成）：
   - `contracts/schema/consumption.py` 新增字段级送达登记
@@ -280,7 +281,7 @@ B6-A／B6-B 分别授权；R 批全部 fake transport、零模型调用。
   | 契约表 | 节点表 14（付费 11、免费 compile×2＋assemble）、产物表 25 份、运行期配置——由原 `candidate_contract_identity()` 冻结基线继续钉 |
   | 边界 | 四类语义真源（Characters／Blueprint／TargetDesign／SemanticBinding）与 owner 边界；`world_constraints` 通道维持 Blueprint 观察 → grounding 机械填 `book_constraints` → Design `world_rules` 决策沿用／改写，不拆字段、不添节点 |
 
-  - 分层冻结边界（PLAN.md）：写作层（renderer v5、WriterPacket 呈现、写手协议 v5）
+  - 分层冻结边界：写作层（renderer v5、WriterPacket 呈现、写手协议 v5）
     不在本闸内，B6-A canary 收敛后再冻；本闸不代签语义未评项，B6 阅读验收协议不变。
   - 机械拦截：`tests/test_str06_f7e_freeze.py` 新增语义协议冻结钉
     （`FROZEN_SEMANTIC_PROTOCOLS` 六条字面量，与契约表身份冻结同文件）——协议
@@ -288,13 +289,14 @@ B6-A／B6-B 分别授权；R 批全部 fake transport、零模型调用。
     静默混用不同协议的已购产物，故单独钉；漂移即红，红因写「先取得用户裁决并登记
     再动」。
   - 生效范围：B6-A／B6-B 期间任何语义层升版＝已购 Stage2/4 产物作废、须重购，
-    属用户级议程；写作层问题仍按 PLAN.md B6-A 第 5 条只重跑 canary 写手。
+    属用户级议程；写作层问题只重跑 canary 写手，不动语义层。
   - 验证（免费、`-n 0`、独立 basetemp）：`tests/test_str06_f7e_freeze.py` 全绿
     （含新增语义协议冻结钉与既有身份／节点／产物／配置四查）。
 
 ### AUD 审计反例（A0 登记；已全部转绿）
 
-A0–A6 提案（2026-09-28）已吸收为 `PLAN.md` 批次（映射登记见 PLAN.md）；下表是当时
+A0–A6 提案（2026-09-28）已吸收为 R0–R7 批次并全部执行完毕（原临时计划 PLAN.md
+已删除）；下表是当时
 固化的反例基线——AUD-01/02 随 R1、AUD-03/04 随 R2、AUD-05 随 R6 转绿，反例保存在
 对应批次的正式测试中：
 
@@ -632,8 +634,8 @@ Guard 现役清单 M1–M8 见 `docs/schema/stage4.md`。
 - **质量改进批次二（2026-09-26）v13 契约**：拍三类转移（effects/cognition/loops，
   D1–D17 见 DECISIONS）；批 0–2 完成、批 3 取消，语义结论止于 ch01–ch04，生产语义
   保持 unver。
-- **A0–A6 提案（2026-09-28）**：已吸收为 `PLAN.md` R0–R7 批次（映射登记见
-  PLAN.md）；AUD-01–05 反例全部转绿（随 R1／R2／R6）。
+- **A0–A6 提案（2026-09-28）**：已吸收为临时计划 PLAN.md 的 R0–R7 批次并全部执行
+  完毕（PLAN.md 已删除，历史原文按 Git 查询）；AUD-01–05 反例全部转绿（随 R1／R2／R6）。
 
 ## 批次推进记录规则
 
