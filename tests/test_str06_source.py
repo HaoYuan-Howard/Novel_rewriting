@@ -414,3 +414,38 @@ def test_dev_source_requires_explicit_hook_copy():
                 {'chapters': chapters, 'hook_copy': '', 'extra': 1}):
         with pytest.raises(ValueError):
             load_dev_source(bad)
+
+
+def test_first_appearance_gate_flags_only_pre_anchor_chapters():
+    """R8c 首现闸：判出「参与者早于最早称谓锚」的章；锚点后合法出场不误报
+    （canary：daughter 锚 ch10 ⇒ 只判 ch09，不判 ch10/11）；无锚不判。"""
+    from types import SimpleNamespace
+
+    from novel.stages.stage2.compile import first_appearance_issues
+
+    def surface(ch):
+        return SimpleNamespace(from_chapter=ch)
+
+    def beat(participants=(), holder=None):
+        cognition = (SimpleNamespace(holder=holder),) if holder else ()
+        return SimpleNamespace(participants=tuple(participants), cognition=cognition)
+
+    def chapter(no, beats):
+        return SimpleNamespace(chapter=no, beats=beats)
+
+    characters = SimpleNamespace(characters={
+        'daughter': SimpleNamespace(surfaces=[surface(10)]),
+        'yun_niang': SimpleNamespace(surfaces=[surface(1)]),
+        'no_anchor': SimpleNamespace(surfaces=[]),
+    })
+    blueprint = SimpleNamespace(chapters=[
+        chapter(9, [beat(participants=('daughter', 'yun_niang'))]),
+        chapter(10, [beat(participants=('daughter',), holder='daughter')]),
+        chapter(11, [beat(participants=('daughter', 'no_anchor'))]),
+    ])
+    issues = first_appearance_issues(characters, blueprint)
+    assert issues == [
+        'participant_before_first_appearance[daughter@ch09]：'
+        'daughter 在第 9 章作为参与者/认知持有者出场，但其最早称谓锚点在'
+        '第 10 章——首现早于任何称谓证据（QP-01 同类：观察把既有人物误绑到'
+        '晚出场角色）；恢复走该章观察重问或 owner patch'], issues

@@ -207,6 +207,10 @@ _JSON_READ_ALLOWED = {
         '唯一审批 owner 显式检查当前 v8、SID 与 typed 决定，旧版本不迁移。'
         '章节产物及来源证据仍必须通过 ArtifactStore 读取'),
     'novel/model_slots.py': '只读 _service/model_slots 的容量配置，不读小说产物；损坏配置关闭式拒绝。',
+    'novel/orchestrator/network_settings.py': (
+        '付费外发网络偏好是 _service/network_settings.json 的服务自有状态'
+        '（c252e8b9），不是小说 artifact；CAS 读写走 appendlog 锁，不进 '
+        'ArtifactStore——小说产物与 provenance 不经此路'),
     'novel/orchestrator/reviewer_legacy.py': (
         '退役 Commander 审阅载体的历史收口：只规范化已在内存中的传输回答'
         '（拒绝重复键）与 _service 公开协议日志的完整失败信封，供存量书'
@@ -372,6 +376,9 @@ _WRITE_ALLOWED = {
         '写前校验代码与 permit、执行期还需有效 claim，既有不同字节拒绝覆盖。'
         '该导出不是小说产物、费用账或授权来源；小说修改仍由受控 CLI 经 Store 完成'),
     'novel/work_units.py': '只写 _service 运行预算、内容寻址回答和恢复证明，不写小说产物。',
+    'novel/orchestrator/network_settings.py': (
+        '只写 _service/network_settings.json 的网络偏好（c252e8b9 服务自有'
+        '状态，非小说产物）；目录 mkdir 为首建该服务文件，小说产物仍全经 Store'),
     'novel/stages/stage2/analyze/purchase.py': (
         'legacy Analyze 的已购回答 sidecar（stage2/analyze_legacy_checkpoint.json）'
         '是免费恢复的唯一耐久面，与回执同事务落盘；不写 canonical 小说产物'),
