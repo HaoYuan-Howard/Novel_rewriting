@@ -215,7 +215,7 @@ def test_wire_read_anchor_resolves_to_canonical_beat_id():
     wire['scenes'][0]['state_reads'][0]['at'] = 2
     wire['scenes'][0]['state_reads'][0]['beat_id'] = 'b02'  # 白名单外键即拒（Q-1）
     _, errors = assemble_body_design(wire, known_char_ids={'ch1'})
-    assert any('未知字段' in e for e in errors)
+    assert any('Extra inputs' in e for e in errors), errors
 
 
 # ───────────────────────── 跨章续场与作用域失效 ─────────────────────────

@@ -454,7 +454,7 @@ CASES.update({
     'chapter_receipt_binding': Case('stage5', _receipt_stale, 'writer_view_sha256'),
     'hook_receipt_binding': Case('stage5', _hook_rejected_no_formal,
                                  '[withheld_literals]'),
-    'body_design_compile': Case('stage4', _body_design_bad_wire, '构造失败'),
+    'body_design_compile': Case('stage4', _body_design_bad_wire, '必须是本书 char_id'),
     'chapter_plan_shape': Case('stage4', _chapter_count_mismatch, '章'),
     'length_budget_conserved': Case('stage4', _chapter_count_mismatch, '章'),
     'preserve_compile': Case('stage4', _preserve_bad_wire, 'obligation'),

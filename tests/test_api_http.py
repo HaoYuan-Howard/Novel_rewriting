@@ -400,6 +400,7 @@ def test_the_published_surface_is_exactly_the_current_surface(app):
         '/api/queues/{queue_id}/items/{item_index}/cancel': ['POST'],
         '/api/queues/{queue_id}/resume': ['POST'],
         '/api/settings/agent-profiles': ['GET', 'POST'],
+        '/api/settings/network': ['GET', 'POST'],
         '/api/str06/candidates': ['GET'],
         '/api/str06/candidates/{candidate}/blueprint': ['GET'],
         '/api/str06/candidates/{candidate}/book': ['GET'],

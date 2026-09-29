@@ -59,6 +59,7 @@ from novel.errors import (
 )
 from novel.orchestrator.agent import AgentBusy
 from novel.orchestrator.jobs import JobConflict
+from novel.errors import NetworkSettingsConflict
 from novel.work_units import WorkUnitBudgetExhausted, WorkUnitRefused
 
 #: CSRF 闸门没过（`R-11.2`）。**不是一个异常** —— 它在请求进到业务代码**之前**就被拦下。
@@ -117,6 +118,9 @@ STATUS: dict[type[NovelError], int] = {
     #: 行为半边由通用 `POST /api/jobs` 与专用 Stage0 端点共同测试：同书第二次启动为 409，
     #: 不同书可并行；同一本书的作业始终互斥。Stage5 v2 已无书内双臂例外。
     JobConflict: 409,
+    #: 网络偏好 CAS 冲突（c252e8b9）：expected_revision 不匹配说明另一标签页
+    #: 已保存——数据说这一步不该覆盖，同 agent-profiles 的 CAS 冲突同因。
+    NetworkSettingsConflict: 409,
     #: 删除是维护动作；目标忙、确认面变化或移动失败都不得半删后伪装成功。
     BookTrashFailed: 409,
     #: 删除进行中，这本书的审批写入不落盘。与 `JobConflict` 同码同因：

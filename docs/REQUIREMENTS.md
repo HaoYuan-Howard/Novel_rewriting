@@ -1541,7 +1541,7 @@ B6-A／B6-B 分别授权；R 批全部 fake transport、零模型调用。
   键名，从未说明 pov 的值形（单字符串闭集），模型按「本场有谁」理解。
   - 修复（用户会话内诊断并指示）：① `DESIGN_RULES` 补 delivery 三键值形——
     pov 单个字符串（char_id 闭集或 `"narrator"`，一场一视角，不写数组/描述句）；
-    ② `novel/stages/stage4/design.py::_normalize_povs` 两级无损归一——单元素
+    ② pov 两级无损归一（R8b 起已删，v3 改严格闭集：`novel/stages/stage4/design.py::_check_pov_closed_set`；历史归一行为见本条 git 历史）——单元素
     字符串数组先折叠再走 F5e canonical 前缀匹配；多元素数组/空/非字符串元素
     不猜「主要视角是谁」（I-21），逐场 typed 报错，修订轮可据此修复。
   - 冻结面核对：wire 协议字面量 `stage4-design-v2` 不动，冻结闸四查＋语义协议
@@ -1583,6 +1583,37 @@ B6-A／B6-B 分别授权；R 批全部 fake transport、零模型调用。
   - **处置**：复核补充了两项缺口——回派 issue 在 Design 修订后不关闭（改退出码会
     放出重复购买循环）、ch09 叙述者误绑为 `daughter`；执行计划见 PLAN.md
     「R8 B6-A 阻塞收口」（R8a–R8d），B6-A 在新根全新购重跑。
+  - **R8 交付记录（2026-09-29，批 tip `01da68bb`＋收尾）**：R8a–R8c 全部落地，
+    全部零付费。
+    · **R8a 回派闭环与执行身份**：单节点回派 exit 1（不再 70）；回派账升
+      `OwnerIssueFileV2` 增 `against_sha256`（v1 集中迁移）；`revision_gate`
+      唯一门控（redo/wait_reverify/stopped，含 `no_progress`）为 resume_verdict
+      与进程内回跳共用；产品链实测补三缺口——修订级联面（open 账 owner 产物
+      已变时下游 file_changed 自动 canonical 重放，级联外仍停给人）、
+      no_progress 停给人（复验刷新 against 会打转成付费循环）、owner 修订后
+      追跑 `--check-only` 跳过（修订 prompt 含上一版全文，写回即变）；
+      PurchaseRequired 译 exit 2。验收：`test_obligation_unbound_replans_
+      across_single_node_subprocesses` 全链绿（上传→supervisor→单节点子进程
+      →compile exit 1→重规划修订→级联复验→交付→二次代跑零新购；design/
+      bind/hook_design 各恰好多一笔实付）。canary 根副本（E:/_r8_canary_copy）
+      离线验证：design 单元 4/4 额度预览 available、服务账字节不变；
+      bind/preserve/associate/hook_design/names/design 六 owner 的已购 wire
+      全部从 work-unit 耐久证据绑 ledger-row（R8a-6 `_work_unit_evidence`，
+      不再补造 runtime/request_*）。
+    · **R8b Design wire v3（D8 修订，docs/DECISIONS.md 2026-09-29 行）**：
+      `DesignWireV3` 模型族一次校验合并报告（初始态/拍上分开建模、拍上
+      scope 必填、pov 严格闭集、too_short 连带不单列）；ask_json 无进展指纹
+      改位置模式；DESIGN_RULES 补依赖顺序、PRESERVE_RULES 补 requires 语义；
+      冻结钉同批 v3。验收：canary 4 份已购响应离线回放，第 1 份一次报出
+      scope/avoid/pov 93 条合并报告（v2 需四轮逐层早退）。
+    · **R8c 人物首现闸**：`first_appearance_issues`——participant/cognition
+      holder 早于最早称谓锚章即 typed 拒；canary 副本测量唯一违例
+      daughter@ch09（锚 ch10），ch10/11 不误报，保持阻断闸。
+    · 前批遗留一并收口：api.py 字面量纪律（NetworkEgressMode 单点）、
+      test_network_settings 入桶、network_settings layering 读写允许表。
+    · 限制：R8b 的「prompt 形状段由模型 JSON Schema 生成」未做（保持手写
+      文本＋pydantic 校验同批对齐，schema 生成留后续批）；B6-A 新根全新购
+      待报价授权（见收尾报告）。
 
 ## 职责解耦批次（2026-09-27 起；B0–B6）
 
