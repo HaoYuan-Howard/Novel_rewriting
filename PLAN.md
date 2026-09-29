@@ -64,6 +64,8 @@
 | R4 | 漂移收口、文档与阅读验收协议登记 | 否 | 否 |
 | R6 | 统一发布权威（seal），验过才发布 | 否 | 否 |
 | R5 | 最终零成本产品回归（首次接真实模型前的基线） | 否 | 否 |
+| R5b | 付费路径遗留项收口（选章参数、逐章留证、Guard 判据登记、HTTP→CLI→HTTP 端到端验收） | 否 | 否 |
+| 语义冻结闸 | 从合入后 main tip 列 Stage2/4 canonical 与协议版本，裁决 D8 后冻结（B6-A 之前） | 否 | — |
 | B6-A | 语义层实购＋全部章包＋Hook 与 3 章 canary；写作层收敛 | 是（单独授权） | 仅写作层 |
 | B6-B | 全书成文、交付与用户通读 | 是（单独授权） | — |
 | R7 | 按归因问题与指标优化，golden | 视项目 | 视项目 |
@@ -209,13 +211,20 @@
 - 默认非 corpus 完整回归、契约 §9.5 五文件、前端四件；
 - 含 R3 故障注入与 R6 发布的 fake 全链产品路径：HTTP 上传 → Supervisor → CLI 子进程 → 交付 → 重启读回。
 
+### R5b 付费路径遗留项（B6-A 前置，2026-09-29 已交付）
+挡在付费路径上的遗留项一次改完，再跑一次工程回归后合入 main，然后过语义冻结闸、报价：
+1. **W1 选章参数**：`ChainContext.body_chapters`（None＝全书；非空 tuple＝恰好这些章；`()`／乱序／重复／越界在付费调用前拒绝）与 CLI `--body-chapters`；只作调用元数据（`workflow_status.json` 审计字段），不进身份。选章工具 `tools/canary_chapters.py`（只读 sealed WriterBookIR，机械三章规则）。
+2. **W2 逐章失败留证**：「最近一次完成执行」语义（`requested/attempted/chapters/recorded_at`，正文与章观察同形共用），缺失＝该节点没有完成执行。
+3. **W3 契约登记漂移**：Guard 表驱动（`GUARD_CHECKS`）＋M7/M8 判据登记（R-6.14/R-6.15）＋防漂移 invariant。
+4. **W4 端到端验收**：AgentRun 停在正文前 → CLI canary → 续跑只补剩余正文 → 交付（fake transport，零付费）。
+5. **W5 登记**：裁决 D1–D7 入 `docs/DECISIONS.md`，交付记录入 `docs/REQUIREMENTS.md`。
+
 ### B6-A 语义与写作 canary（付费，单独报价授权）
 1. 冻结语义层协议后，为《夫君的报恩》实购 Stage2 与 Stage4，免费编译出全部章包与 packet 指标。
-2. 写 Hook 与 3 个按规则机械选出的章：
+2. 写 Hook 与 3 个按规则机械选出的章（R5b 已落地：选章用 `--body-chapters`，章由 `tools/canary_chapters.py` 从 sealed WriterBookIR 机械选出）：
    - 开篇章；
    - 线程操作与跨章读取最多的中段章；
    - 读者确认与线程收束最多的后段章。
-   需要新增入口级选章参数，扩展 `novel/stages/chain.py` 的 `body_chapter_limit` 与 CLI。
 3. 按冻结维度阅读：checklist 感、状态被硬解释、承接是否自然、线程复读、人物声音、场景是否真正演出来、揭示时点。维度与记录方式以「人工阅读验收协议」节为准（该协议由 R4 批正式登记进 `docs/REQUIREMENTS.md` 的 B6 节，B6-A 与 B6-B 共用；此处清单是 canary 侧重点，不另立第二份维度表）。
 4. 由 agent 先读并逐条归因，用户确认。
 5. 问题在 renderer、WriterPacket 呈现、写手协议或分区优先级 → 只重跑 canary 写手，Stage2/4 不动。
@@ -271,8 +280,8 @@
 **E-8（low）· R3 回派规则：unbound.owner 值域未闭合。**
 「按 unbound.owner 回 body_design 或 preserve」的 owner 取值面没有闭合：`UnboundEntry.owner` 是自由 str（`contracts/schema/grounding.py:171-176`），`design|grounding` 闭集只活在 BIND_RULES prompt（`novel/stages/common.py:575-576`）——wire 上 `owner='body_design'` 等变体照样过 schema。路由表须先收紧 schema，或对未映射 owner 显式停；本计划只定义了 code 轴「未知一律停」，owner 轴未定义。
 
-**E-9（low）· B6-A 步骤 2：「扩展 `body_chapter_limit` 与 CLI」二义。**
-现参数是前缀语义：`target_chapters=min(limit,N)`、`todo=range(1,target+1)`（`novel/stages/chain.py:695-699`），「中段章／后段章」前缀表达不了。是改 limit 语义为任意章集，还是新增独立选章参数——CLI 形状与恢复判定（`resume_verdict` 的 chapters_done 面）产物不同，B6-A 开工前定。
+**E-9（low）· B6-A 步骤 2：「扩展 `body_chapter_limit` 与 CLI」二义。——R5b 已消歧**
+消歧结论（D2，2026-09-29）：`body_chapter_limit`（前缀语义）退役，改为 `ChainContext.body_chapters`（None＝全书；非空 tuple＝恰好这些章，`()`／乱序／重复／越界在付费调用前拒绝）＋CLI `--body-chapters`，只作调用元数据不进身份；`_committed_set` 按目标集合迭代、`body_complete` 仍按全书判断。恢复判定因此按集合而非前缀：已完成 1、2、4、6 章时只补 3、5 的语义不变。
 
 ## 人工阅读验收协议（R4 登记，B6-A／B6-B 共用）
 - **维度**：

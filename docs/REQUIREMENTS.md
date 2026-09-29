@@ -1455,6 +1455,57 @@ B6-A／B6-B 分别授权；R 批全部 fake transport、零模型调用。
     stale 为空）。经 `tools/regen_web_enums_fixture.py` 重生成，diff 恰为该批
     三处生命周期字段；前端无代码消费旧值，seams/typecheck/test 复跑通过。
 
+- [x] **R5b · 付费路径遗留项收口（B6-A 前置批；免费；评审意见逐条处理）**
+  （2026-09-29 完成）：B6-A 报价前把挡在付费路径上的遗留项一次改完。评审
+  七条意见全部有落点：① `()` 与「空集合拒绝」冲突——`body_chapters` 生产
+  接口定为 None＝全书／非空 tuple＝恰好这些章／`()` 非法，原 `body_chapter_limit=0`
+  的四个测试文件改用 `tests/str06_facilities.py::stub_body_runner` 替身
+  （`NODE_RUNNERS` 是 dict，可 monkeypatch.setitem）；② 选章不进任何身份
+  （写死并由测试钉住）；③ 缺 HTTP→CLI→HTTP 端到端验收——已补，续跑是**新
+  run**（continuation 指向原 run）；④ 留证语义按「最近一次完成执行」；原子写
+  复用 repository 既有机制，不新造；⑤ Guard 聚合改表驱动＋集合相等断言；
+  ⑥ Stage2/4 canonical owner 冻结闸列为 B6 前置闸；⑦ B6 run manifest 报价授权
+  时写入输出根，不进仓库。
+  - W1 选章：`novel/stages/chain.py::resolve_body_chapters`（`()`／乱序／重复／
+    越界 1..N 在付费调用前拒绝，不静默截断），`_committed_set` 按目标集合迭代、
+    `body_complete` 仍按全书判断；CLI `--body-chapters` 只对 `str06.stage5.body`
+    有效、编排器 `build_argv` 永不生成（产品端仍全书自动）；选章只记
+    `workflow_status.json` 审计字段。工具 `tools/canary_chapters.py`：读**已封存**
+    WriterBookIR（未封存即拒——已用 R6 前真实根实测拒读），逐章计分＋机械三章
+    ＋下一条命令。
+  - W2 逐章留证：`runtime/body_failures.json` 与
+    `runtime/chapter_observation_failures.json` 共用「最近一次完成执行」形状
+    （`requested/attempted/chapters/recorded_at`）；正常完成写空清单、带失败
+    完成上抛前写、崩溃不写（缺失＝没有完成执行）。契约视图抽为
+    `Str06ChapterFailuresView`（I-11），`Str06RunView` 增
+    `chapter_observation_failures`；监控屏两块并排（章观察／正文），fixture 按
+    干净链忠实值更新，enums 夹具随 lifecycle 文案重生成。
+  - W3 契约登记漂移：`GUARD_CHECKS` 表驱动（M2/M3 共用 `check_entry_timing`；
+    表序即聚合序，为 guard report 留证字节逐字不变而冻结），判据注册表补
+    `guard_m7_read_projection`（R-6.14）与 `guard_m8_thread_lifecycle`
+    （R-6.15）；`tests/test_hard_counterexamples.py` 新增防漂移断言（Guard 表码
+    集合＝注册表码集合，每码有红例且红例以该码开头）；BACKEND_CONTRACT R-6 增
+    两条、stage4 判据 20→22、`chapter_prefix_replay` 旧名统一为
+    `committed_set_recovery`（R-12.4/R-12.4b/R-13.5 与三份 schema 文档）。
+  - W4 端到端验收（本批闸门）：`tests/test_str06_product_entry.py` 第七节——
+    未授权 HTTP 上传（只跑 stage0）→ HTTP 起 AgentRun（`pause_before_node`）跑完
+    Stage2/Stage4/Hook 停在正文前（ledger 10 笔语义层实付、正文零行、停止原因
+    点明边界）→ 真实 CLI 子进程 `--body-chapters 2` 只落 ch02（留证
+    requested/attempted=[2]、`state` 判正文未完成）→ HTTP continuation 新 run
+    显式解除边界，跑完正文、命名、组装交付 ready；新增 ledger 恰为
+    body_ch01＋naming 两笔，canary 章回执与正文字节不变；重启读回三面一致。
+    与计划稿的一处如实修正：`body_access` 只在 assemble 写过 assembly report
+    后可读（assemble 需要 name_map），故五态断言放在续跑交付后。
+  - W5 登记：裁决 D1–D7 入 `docs/DECISIONS.md`（D8 留到语义冻结闸），PLAN.md
+    执行序插入 R5b 与语义冻结闸、E-9 标注已消歧、B6-A 第 2 步文字同步。
+  - 验证（fake transport、零付费、`-n 0`、独立 basetemp）：R5b 新增用例
+    （body 四例、views 四例、canary 八例、product_entry 第七节）与全部受影响
+    既有文件（hook／r2_engine／r3_selfheal／semantic_delivery／orchestrator_nodes/
+    cli／body／views／fold_guard／r2_contracts）全绿；契约 §9.5 五文件＋
+    test_api_enums＋test_str06_f7e_freeze 全绿；前端四件（test 117 项／
+    typecheck／seams／build）在 web/ 实跑通过。完整非 corpus 回归在合入前按
+    最终提交集合执行一次（动了生产代码与契约，见根指南门槛）。
+
 ## 职责解耦批次（2026-09-27 起；B0–B6）
 
 裁决 D1–D10 各行见 [DECISIONS.md](DECISIONS.md) 2026-09-27；目标架构（Stage2 五节点、
