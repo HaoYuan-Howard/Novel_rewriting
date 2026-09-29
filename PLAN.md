@@ -66,6 +66,7 @@
 | R5 | 最终零成本产品回归（首次接真实模型前的基线） | 否 | 否 |
 | R5b | 付费路径遗留项收口（选章参数、逐章留证、Guard 判据登记、HTTP→CLI→HTTP 端到端验收） | 否 | 否 |
 | 语义冻结闸 | 从合入后 main tip 列 Stage2/4 canonical 与协议版本，裁决 D8 后冻结（B6-A 之前）。**2026-09-29 完成**：用户裁决 D8 按现状冻结、`world_constraints` 不拆；冻结清单与机械拦截（`tests/test_str06_f7e_freeze.py` 语义协议钉）见 REQUIREMENTS「语义冻结闸」条 | 否 | — |
+| R8 | B6-A 阻塞收口（2026-09-29 canary 实证）：回派闭环与执行身份、Design 约束与结构化反馈、Stage2 人物首现闸 | 否 | 是（Design／Preserve，待 D8 修订裁决） |
 | B6-A | 语义层实购＋全部章包＋Hook 与 3 章 canary；写作层收敛 | 是（单独授权） | 仅写作层 |
 | B6-B | 全书成文、交付与用户通读 | 是（单独授权） | — |
 | R7 | 按归因问题与指标优化，golden | 视项目 | 视项目 |
@@ -218,6 +219,50 @@
 3. **W3 契约登记漂移**：Guard 表驱动（`GUARD_CHECKS`）＋M7/M8 判据登记（R-6.14/R-6.15）＋防漂移 invariant。
 4. **W4 端到端验收**：AgentRun 停在正文前 → CLI canary → 续跑只补剩余正文 → 交付（fake transport，零付费）。
 5. **W5 登记**：裁决 D1–D7 入 `docs/DECISIONS.md`，交付记录入 `docs/REQUIREMENTS.md`。
+
+### R8 B6-A 阻塞收口（2026-09-29 canary 实证）
+canary 根 `outputs/str06_b6a_canary_20260929b` 停在 `str06.stage4.compile`。本批只修下列已查实的问题，不扩展新能力：
+- 回派在单节点路径外抛成 exit 70；且 Design 修订写回后 issue 仍 open，改退出码后编排器会反复重买 Design。
+- 追加额度的 owner 证明把成本行 `parent_run_id`（候选根 epoch 会话）当 AgentRun；采用入口只认旧 `runtime/request_*.json`。
+- Design prompt 只给键名不给值形；反馈是原始 pydantic 文本，前层失败遮住后层（四轮分别卡在 scope/avoid → pov 闭集 → pov 类型 → scope）。
+- `DESIGN_RULES` 没要求遵守 `requires_cores` 顺序（5 条必保义务 unbound）；回派给 Design 的 issue 用的是它看不到的 `obNN`。
+- ch09 观察把叙述者芸娘整章误绑为 `daughter`（QP-01 同类，概率性）。
+
+**开工前需用户裁决（只一项）**：R8b 把 Design wire 升 `stage4-design-v3` 并改 Design／Preserve 规则，属 D8 冻结面的语义层升版。本书 Stage4 已购因 ch09 本就作废，建议批准，登记为 D8 修订。
+
+**不在本批**：不改工作单元额度 4 与修订轮计数口径——超过 4 轮按现有路径停下等追加额度（R8a 修好后可用）；章观察的自动回派；Bind／Compile 职责不变。
+
+**R8a 回派闭环与执行身份（免费；不改请求身份）**
+1. `OwnerRevisionRequired` 在单节点路径返回 exit 1（已落盘负结论，编排器按 landed 重规划），不再作未捕获异常。
+2. issue 记录增 `against_sha256`（compile 判定时 owner 产物摘要）；`resume_verdict` 仅在 owner 当前产物摘要等于它时判 REDO，否则等下游复验；compile 通过置 resolved，再失败按现有轮次规则计数或停。**与第 1 条同一提交**。issue 文件仍只由下游写（I-25）。
+3. compile 按 grounding 的确定性映射把 `obNN` 换成 Design 可见的 `req_` core id（含 Bind reason 里的编号），issue `context` 带 typed 的依赖义务与承载场景；修订提示不出现 ob 序号（它近似源文顺序，Design 源盲）。
+4. 三类上限在报错与监控里分名：节点内校验重问、跨节点回派、单元内容额度。
+5. 内容轮 reserve 时记录 AgentRun `run_id`、`epoch_id` 与候选 epoch 会话；`novel/orchestrator/work_unit_evidence.py` 按记录的关系证明归属与排空，不再把 `parent_run_id` 当 AgentRun。历史轮次（`session_run_id` 为空）按「成本行 `run_id`＝`turn.run_id`＝已结束且排空的 AgentRun」闭合。
+6. 采用入口读 work-unit 耐久证据（请求 blob、响应、接受记录、按 `attempt_id` 关联的成本行），不补造 `runtime/request_*.json`。
+7. `run_chain` 的进程内回跳：核实现役消费者，无则退役，有则改用同一状态判定。
+
+验收：真实子进程下 compile 回派 → Design 修订一次 → bind／hook_design → compile 通过、issue resolved；Design 写回后下一步不再判 Design REDO；修订提示不含 `obNN`；两步间崩溃重启免费恢复；在 canary 根副本上追加额度的预览与证明通过、采用关联到原成本行、原 ledger 与 work-unit 账字节不变。
+
+**R8b Design／Preserve 约束与结构化反馈（免费开发；改请求身份；待裁决）**
+1. Design wire 定义为 pydantic 模型 `stage4-design-v3`：初始态与拍上 `target_delta` 分开建模（拍上 `scope` 必填、无默认）；人物引用与 core id 按本书闭集校验。prompt 的形状段由模型 JSON Schema 生成，不再手写键名表。
+2. 形状与闭集一次校验、合并报告，不在 pydantic 失败处提前返回。
+3. 校验反馈在 `ask_json` 统一结构化（各节点共用）：位置模式、错误码、期望、实得摘要、改法；同类合并计数；子项已报错的列表 `too_short` 视为连带不单列；原始异常仍留接受记录。无进展指纹改用「错误码＋位置模式」集合。
+4. 删除 `_normalize_povs` 的单元素折叠与 canonical 前缀匹配（按名字猜人，I-21），由闭集直接拒。
+5. `DESIGN_RULES` 补：被 `requires_cores` 依赖的义务须在依赖方之前完成（同场按拍序）。`PRESERVE_RULES` 补：`requires` 只写因果或信息前提，不写源文先后。
+6. 登记：D8 修订入 `docs/DECISIONS.md`，冻结钉更新，REQUIREMENTS 交付记录。
+
+验收：本根 4 份已购 Design 响应离线回放，第 1 份一次报出 scope、avoid、pov 三类问题且按类聚合；wire→canonical 转换测试；`tests/test_str06_f7e_freeze.py` 按新字面量绿；Stage4 contract／stage 定向面。
+
+**R8c Stage2 人物首现闸（免费）**
+1. Stage2 compile 增机械检查：某章 participant／holder 引用的人物，其最早称谓锚点章晚于本章 → typed issue `participant_before_first_appearance`。不登记回派路由（按现有路由表语义即停），恢复走该章重问或 owner patch。
+2. 先在盘上现有 Stage2 产物上量误报（先匿名出场、后揭示身份的人物是已知风险）；误报不可接受则降为只报告。
+
+验收：本根判出 ch09，ch10／ch11 的 `daughter`（女儿第 10 章出生）不误报。
+
+**R8d 收尾与 canary 准备**
+1. 移走 worktree 根的 `_tmp_*` 文件（未跟踪文件计入代码指纹，运行中写日志会让 epoch 反复滚动），提交。
+2. 按「合入 main」门槛跑默认非 corpus 完整回归与契约 §9.5 五文件；监控页有变化时补前端验证。
+3. B6-A 在新根全新购（真实产品入口，不挂采用）；报价后单独授权。本根只读保留作 R8a 证据。
 
 ### B6-A 语义与写作 canary（付费，单独报价授权）
 1. 冻结语义层协议后，为《夫君的报恩》实购 Stage2 与 Stage4，免费编译出全部章包与 packet 指标。
