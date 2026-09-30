@@ -30,12 +30,13 @@ from contracts.schema.design import PresentationGraph
 from contracts.schema.hook import (
     HookConstraints, HookContext, HookMaterialView, HookOpeningFact,
 )
-from contracts.schema.source import NameProjection
+from contracts.schema.source import NameProjection, NameStructure
+from novel.core.name_materials import withheld_name_literals, expand_surface_releases
 
 
 def _display(projection: NameProjection, char_id: str) -> str:
     entry = projection.person(char_id)
-    return entry.display if entry and entry.display else char_id
+    return entry.display if entry and entry.display else ''
 
 
 def _render_subjects(projection: NameProjection, subjects: tuple[str, ...]) -> str:
@@ -115,10 +116,15 @@ def _protected_thread_entries(graph: PresentationGraph, horizon, cast: set[str],
 
 def compile_hook_context(
     graph: PresentationGraph, projection: NameProjection, constraints: HookConstraints,
+    structure: NameStructure | None = None,
 ) -> tuple[HookContext | None, list[str]]:
     """（完整 graph, 名称投影, 长度边界）→ HookContext。纯函数，不落盘。"""
     hook = graph.hook
     errors: list[str] = []
+    display_names = expand_surface_releases({r.char_id: r.surfaces for r in hook.surface_releases}, structure)
+    display_projection = projection.model_copy(update={'by_person': tuple(
+        entry.model_copy(update={'display': (display_names.get(entry.char_id) or ('',))[0]})
+        for entry in projection.by_person)})
 
     # 起笔事实：解析 ref 处该地址的建立值。
     facts: list[HookOpeningFact] = []
@@ -136,7 +142,7 @@ def compile_hook_context(
             continue
         facts.append(HookOpeningFact(
             audience=item.audience, established_by=item.ref,
-            text=_render_fact(projection, key, established[0])))
+            text=_render_fact(display_projection, key, established[0])))
 
     # 材料投影：presentation 原样；否则 event + 未 withheld 的 set delta 渲染。
     materials: list[HookMaterialView] = []
@@ -151,7 +157,7 @@ def compile_hook_context(
             continue
         withheld = {d.address() for d in item.withheld}
         rendered = tuple(
-            _render_fact(projection, d.address(), d)
+            _render_fact(display_projection, d.address(), d)
             for d in beat.target_delta
             if d.address() not in withheld and d.op == 'set')
         materials.append(HookMaterialView(
@@ -183,15 +189,10 @@ def compile_hook_context(
 
     # 可用称谓与 withheld 专名字面。
     usable = tuple(sorted(
-        (SurfaceRelease(char_id=r.char_id, surfaces=tuple(sorted(set(r.surfaces))))
+        (SurfaceRelease(char_id=r.char_id, surfaces=display_names[r.char_id])
          for r in hook.surface_releases), key=lambda r: r.char_id))
-    released = {s for r in hook.surface_releases for s in r.surfaces}
-    withheld: set[str] = set()
-    for entry in projection.by_person:
-        withheld.update(entry.proper_literals)
-        withheld.update(entry.name_bearing_surfaces)
-    withheld -= released
-    withheld.discard('')
+    released = {s for r in usable for s in r.surfaces}
+    withheld = withheld_name_literals(projection, released, structure)
 
     # 线程收束并入禁区（R2.7）：视界＝材料引用拍的最大（场序, 拍序）；
     # 楔子人物＝focalizers∪材料拍参与者∪起笔事实主语/持有者∪释放与隐藏人物。

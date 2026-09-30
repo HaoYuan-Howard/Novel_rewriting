@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import re
 
+from novel.core.text import count_non_whitespace_chars
 from novel.stages.common import claim_spans, uncovered_occurrences
 
 #: 机械 validator 的版本：章级回执 validator_version 记这一位，规则变化必须换版。
@@ -43,7 +44,7 @@ _CHAPTER_TITLE = re.compile(
 
 def count_body_chars(text: str) -> int:
     """篇幅计数口径：非空白字符（空白、程序章号与 Hook 不在章文本内）。"""
-    return sum(1 for c in text if not c.isspace())
+    return count_non_whitespace_chars(text)
 
 
 def validate_chapter_prose(

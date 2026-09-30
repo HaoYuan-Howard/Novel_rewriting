@@ -27,6 +27,9 @@ from novel.stages.common import (
 )
 from novel.stages.stage4.book_ir import compile_writer_book_ir
 from tests.test_str06_hook import _characters as _name_source
+from tests.str06_expression_inputs import (
+    sample_canonical_expression,
+)
 
 
 def _projection():
@@ -66,7 +69,8 @@ def _scene(sid, *deltas):
 
 
 def _graph():
-    return BodyDesign(initial_state=(),
+    return BodyDesign(**sample_canonical_expression((_scene('s01', ('world', 'season', '秋'), ('character', 'mood', '冷')),
+                _scene('s02', ('character', 'mood', '回暖')))), initial_state=(),
         graph_id='g1', book_style='冷暖转换的第三人称叙事。',
         scenes=(_scene('s01', ('world', 'season', '秋'), ('character', 'mood', '冷')),
                 _scene('s02', ('character', 'mood', '回暖'))),
@@ -200,7 +204,11 @@ def _reader_delta_graph():
     """三场两确认（D4 地址维度）：
     s01 建立 world:hiding（不确认）；s02 确认 hiding 并建立 world:wardrobe；
     s03 确认 wardrobe。s01 不消费 wardrobe ⇒ 其清单不含 wardrobe 确认。"""
-    return BodyDesign(initial_state=(), graph_id='g2',
+    return BodyDesign(**sample_canonical_expression((
+            _reader_scene('s01', establish=('hiding', '床底有人')),
+            _reader_scene('s02', establish=('wardrobe', '衣柜藏身'),
+                          confirms=(('hiding', '床底有人'),)),
+            _reader_scene('s03', confirms=(('wardrobe', '衣柜藏身'),)))), initial_state=(), graph_id='g2',
         book_style='冷暖转换的第三人称叙事。',
         scenes=(
             _reader_scene('s01', establish=('hiding', '床底有人')),
@@ -286,7 +294,7 @@ def test_believes_knowledge_enters_writer_view_without_becoming_world_fact():
             beat_id='bt1', event='据误以为行动', participants=('ch1',),
             dramatic_intent='d', target_delta=()),),
         delivery=SceneDelivery(pov='ch1', voice='v'))
-    graph = BodyDesign(initial_state=(), graph_id='g3', book_style='误以为。',
+    graph = BodyDesign(**sample_canonical_expression((establish, consume)), initial_state=(), graph_id='g3', book_style='误以为。',
                        scenes=(establish, consume),
         chapters=(ChapterAssignment(chapter_ordinal=1, purpose='误以为',
                                     scene_ids=('s01', 's02'),

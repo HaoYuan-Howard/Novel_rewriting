@@ -56,6 +56,9 @@ from novel.stages.common import (
     directly_affected,
     entry_sensitive_closure,
 )
+from tests.str06_expression_inputs import (
+    sample_canonical_expression, sample_brief_expression,
+)
 H64 = 'a' * 64
 H64B = 'b' * 64
 
@@ -106,7 +109,7 @@ def _graph(scenes, chapters) -> BodyDesign:
                                   scene_ids=c.scene_ids,
                                   entry=getattr(c, 'entry', None) or _entry(
                                       c.chapter_ordinal)) for c in chapters]
-    return BodyDesign(initial_state=(), graph_id='g1',
+    return BodyDesign(**sample_canonical_expression(tuple(scenes)), initial_state=(), graph_id='g1',
                       book_style='冷峻克制的第三人称叙事。',
                       scenes=tuple(scenes), chapters=tuple(chapters))
 
@@ -385,7 +388,7 @@ def test_verification_ir_carries_continuity_fact_view():
 
 
 def test_brief_hides_source_topology_behaviorally():
-    brief = ReconstructionBrief(
+    brief = ReconstructionBrief(**sample_brief_expression(),
         brief_id='br1', preserve_checkpoint_sha256=H64,
         requirements=(
             BriefRequirement(kind='event_core', must_preserve=False, satisfaction='', core_id='c1', summary='约定成立', participants=('ch1',)),
@@ -433,7 +436,8 @@ def test_stage_engine_packages_import_discipline():
                     'dataclasses', 'collections', 'functools', 'itertools',
                     'enum', 'abc', 'datetime', 'json', 're', 'os', 'sys', 'copy',
                     'math')
-    allowed_roots = ('contracts', 'novel.errors', 'novel.stages')
+    allowed_roots = ('contracts', 'novel.errors', 'novel.stages',
+                     'novel.core.text', 'novel.core.name_materials')
     banned_novel = ('novel.llm', 'novel.orchestrator', 'novel.store',
                     'novel.views', 'novel.api', 'novel.run', 'novel.work_units',
                     'novel.consumption', 'novel.prov', 'novel.paths')

@@ -33,6 +33,9 @@ from novel.stages.common import (
     RENDERER_VERSION, WRITER_PROTOCOL, WRITER_PROTOCOL_VERSION,
     project_chapter_packet,
 )
+from tests.str06_expression_inputs import (
+    sample_narration, sample_requirements, sample_design_expression, sample_canonical_expression,
+)
 
 H64 = 'a' * 64
 
@@ -45,10 +48,10 @@ def _chars():
 
 
 def _rich_wire() -> dict:
-    """stage4-design-v3：threads（四条线覆盖开启前/推进/收束/结尾仍开放）、
+    """stage4-design-v4：threads（四条线覆盖开启前/推进/收束/结尾仍开放）、
     world_rules、entry、拍级读取与读者确认。线程文本避开第 1 章禁用字面。"""
-    return {
-        'protocol_version': 'stage4-design-v3',
+    return {**sample_design_expression(('yun_niang',)),
+        'protocol_version': 'stage4-design-v4',
         'book_style': '冷峻克制的限知叙事，重日常细节里的异样。',
         'world_rules': ['术法须以寿命为代价', '官府不涉异事'],
         'character_voices': [
@@ -180,7 +183,7 @@ def _rich_wire() -> dict:
 def _rich_design():
     from novel.stages.stage4.design import assemble_body_design
     body, errors = assemble_body_design(_rich_wire(),
-                                        known_char_ids={'yun_niang', 'fu_jun'})
+                                        known_char_ids={'yun_niang', 'fu_jun'}, expression_requirements=sample_requirements(), source_narration=sample_narration())
     assert body is not None and not errors, errors
     return body
 
@@ -335,7 +338,17 @@ def test_design_thread_mutations_flow_to_packets_by_consumer():
             delivery=SceneDelivery(pov=participants[0], voice='冷峻'))
 
     def _design():
-        return BodyDesign(
+        return BodyDesign(**sample_canonical_expression((_scene('s01', ('ch1', 'ch2'), (
+                        ThreadAction(ref='th01', op='open', kind='goal',
+                                     subject='ch1', text='夺回家产'),
+                        ThreadAction(ref='th02', op='open', kind='question',
+                                     subject='ch1', text='玉佩藏着什么'))),
+                    _scene('s02', ('ch1', 'ch2'), (
+                        ThreadAction(ref='th01', op='advance', progress='查到线索'),
+                        ThreadAction(ref='th02', op='close', ending='answered',
+                                     resolution='刻着沈字，指向旧案'))),
+                    _scene('s03', ('ch1',)),
+                    _scene('s04', ('ch3',)))),
             graph_id='tm', book_style='冷峻克制的第三人称叙事。',
             initial_state=(),
             initial_surfaces=(SurfaceIntroduction(char_id='ch1', surfaces=('阿砚',)),
@@ -649,8 +662,8 @@ def test_render_has_six_partitions_and_protocol_v5():
     for name in SECTIONS:
         assert f'【{name}】' in text
     # 协议 v5 围绕六分区；版本常量已由契约批登记
-    assert WRITER_PROTOCOL_VERSION == 'str06-body-protocol-v5'
-    assert RENDERER_VERSION == 'str06-render-v5'
+    assert WRITER_PROTOCOL_VERSION == 'str06-body-protocol-v6'
+    assert RENDERER_VERSION == 'str06-render-v6'
     for name in SECTIONS:
         assert name in WRITER_PROTOCOL
     # 同章包 ⇒ 同字节

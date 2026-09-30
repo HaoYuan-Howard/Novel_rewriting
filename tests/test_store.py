@@ -64,6 +64,9 @@ from novel.store import (
 )
 from novel.stages.stage1.partition import partition_text
 from tests import corpus, sandbox
+from tests.str06_expression_inputs import (
+    sample_book_expression,
+)
 
 # B5 换轨（双真源发布后）：Characters/Blueprint 的唯一 writer 是免费的
 # str06.stage2.compile，其投影面是四份观察——旧的「names 写 characters」采样面
@@ -709,8 +712,16 @@ def test_downstream_freshness_tracks_every_source_reference_edit(
 def _book_observation_payload() -> dict:
     """`stage2/observations/book.json` 的合成样例（B2 观察 wire；窗口坐标不在
     wire——from_chapter/until_chapter 由 compiler 派生，I-21）。"""
-    return {
-        'protocol_version': 'stage2-observation-v1',
+    return {**sample_book_expression({
+            'char_001': {
+                'canonical': '甲',
+                'surfaces': [
+                    {'surface': '甲', 'source_refs': ['e01_01']},
+                    {'surface': '掌柜', 'source_refs': ['e01_01']},
+                ],
+            },
+        }),
+        'protocol_version': 'stage2-book-v2',
         'characters': {
             'char_001': {
                 'canonical': '甲',

@@ -25,6 +25,9 @@ from novel.stages.stage2 import compile_source_truth
 from tests.str06_facilities import make_context
 from tests.test_str06_execution_ir import _graph, _binding, _cp, _ob
 from tests.test_str06_target import _assemble, _preserve_wire, _source_pair
+from tests.str06_expression_inputs import (
+    sample_narration, sample_requirements,
+)
 
 
 def contexts(graph, binding):
@@ -44,7 +47,7 @@ def test_diamond_requires_is_not_cycle_and_brief_all_kinds_are_closed():
     cp, errors = assemble_preserve(wire, policy_id='p', policy_version=1, characters=chars,
                                   blueprint=bp, provider='x', model='x', request_sha256='a'*64)
     assert not errors, errors
-    brief, _ = project_brief(cp, chars)
+    brief, _ = project_brief(cp, chars, bp)
     assert len(brief.requirements) == 3
     ids = {c.core_id for c in brief.requirements}
     assert all(set(c.requires_cores) <= ids for c in brief.requirements)
@@ -344,7 +347,7 @@ def test_target_rc1_missing_semantics_is_rejected():
     from tests.test_str06_target import _design_wire
     wire = _design_wire()
     del wire['initial_state']
-    assert assemble_body_design(wire, known_char_ids={'yun','fu_jun'})[1]
+    assert assemble_body_design(wire, known_char_ids={'yun','fu_jun'}, expression_requirements=sample_requirements(), source_narration=sample_narration())[1]
 
 
 @pytest.mark.parametrize('failure', ['transport', 'duplicate_json'])

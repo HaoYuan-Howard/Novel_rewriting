@@ -66,6 +66,10 @@ class ReleaseScheduleEntry(StrictModel):
     from_chapter: int = Field(ge=1)
 
 
+from contracts.schema.hook import HookPov
+from contracts.schema.expression import ExpressionDecision
+
+
 class BookBrief(StrictModel):
     """全书约束与导航：Writer 阅读面的书级事实，全部为确定性投影。
 
@@ -77,6 +81,8 @@ class BookBrief(StrictModel):
     book_title: str = Field(default='', min_length=0)
     #: 整书风格（canonical `BodyDesign.book_style` 原样投影）。
     book_style: str = Field(min_length=1)
+    narration: HookPov
+    expression_decisions: tuple[ExpressionDecision, ...] = Field(min_length=1)
     #: 书级世界边界（canonical `BodyDesign.world_rules` 原样投影，R2.5）。
     world_rules: tuple[str, ...] = Field(default=(), min_length=0)
     #: 稳定人物声线（canonical `BodyDesign.character_voices` 原样投影）。
@@ -120,6 +126,7 @@ class ChapterContinuity(StrictModel):
 
     entry: ChapterEntry
     previous_ending: PreviousChapterEnding | None = None
+    anchor_event: str | None = None
 
 
 class ChapterIR(StrictModel):
@@ -160,7 +167,7 @@ class WriterBookIR(StrictModel):
     rc8（D2，B4）：ChapterIR 增章级验证材料；完整 IR 只作存储与审计面，
     运行时经 `ChapterWriterPacket` 按章投影。"""
 
-    contract_version: Literal['str06-rc10'] = 'str06-rc10'
+    contract_version: Literal['str06-rc11'] = 'str06-rc11'
     book_brief: BookBrief
     chapters: tuple[ChapterIR, ...] = Field(min_length=1)
     provenance: FreeProvenance | LlmProvenance | None = Field(
@@ -205,6 +212,8 @@ class PacketBrief(StrictModel):
 
     book_title: str = Field(default='', min_length=0)
     book_style: str = Field(min_length=1)
+    narration: HookPov
+    expression_decisions: tuple[ExpressionDecision, ...] = Field(min_length=1)
     world_rules: tuple[str, ...] = Field(default=(), min_length=0)
     character_voices: tuple[CharacterVoice, ...] = Field(default=(), min_length=0)
     target_chapter_count: int = Field(ge=1)

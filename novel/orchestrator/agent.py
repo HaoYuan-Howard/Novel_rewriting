@@ -1576,6 +1576,18 @@ def _start_planned(plan: AgentRunPlan, *,
                 exit_code=rc, outcome=latest_outcome, continue_ready=False,
                 exit_origin=exit_origin, failure_detail=failure_detail)
         action_landed = exit_origin == 'novel_cli' and landed(rc)
+        if action_landed and rc == 1:
+            from novel.store import Str06Repository
+            run_root = paths.find_novel_dir(base, sid)
+            if run_root is not None:
+                try:
+                    failure = Str06Repository(run_root).read('runtime/workflow_status.json')
+                except FileNotFoundError:
+                    failure = {}
+                if failure.get('status') == 'failed' and failure.get('error_code'):
+                    coordinates = ' / '.join(str(failure.get(key) or '') for key in
+                                              ('error_code', 'error_node', 'error_item'))
+                    failure_detail = coordinates + (f'；{failure_detail}' if failure_detail else '')
         if rc == 0 or action_landed:
             latest_outcome = _assess_delivery(
                 base, sid, code_version=epoch.code_version)

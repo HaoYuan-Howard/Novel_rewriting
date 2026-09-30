@@ -55,6 +55,33 @@ def _current(*, state: str, waiting_on: str | None = None,
 
 # ── 人工审批闸：非确定性 blocked 停止 parent，不启动任何模型进程 ───────────
 
+def test_landed_red_same_snapshot_stops_without_second_dispatch():
+    """确定性负结论不能把同一盘面上的 ready token 热循环派发。"""
+    calls = []
+    current = _current(state='ready', node='str06.stage4.compile')
+
+    def execute(_epoch, _current, ticket):
+        assert not calls, '同一个动作不得再次启动'
+        ticket.commit()
+        calls.append('compile')
+        return SupervisorActionResult(
+            1, _outcome('unknown'), True, exit_origin='novel_cli',
+            failure_detail='mechanical_defect / str06.stage4.compile / book')
+
+    supervisor = RunSupervisor(
+        run_id='red-no-progress', append_event=lambda _e: None,
+        make_epoch=lambda *_a: pytest.fail('同盘面不滚 epoch'),
+        open_epoch=lambda _e: None, close_epoch=lambda _e, _t: 'drained',
+        epoch_identity_current=lambda _e: True, cancel_active=lambda: True,
+        initial_epoch=_epoch('red', 1, 'initial'),
+        read_operator_next=lambda _e: current, run_ready_action=execute,
+        finalize_run=lambda *_a: pytest.fail('负结论不交付'))
+    result = supervisor.run()
+    assert calls == ['compile']
+    assert result.turn.outcome.state == 'stopped'
+    assert 'mechanical_defect / str06.stage4.compile / book' in result.turn.outcome.reason
+
+
 def test_non_deterministic_blocked_stops_at_human_approval_gate():
     """批次 B4：HUMAN_NODES 已空；非登记 blocker 停在阻断面，指引恢复后续跑。"""
     events = []

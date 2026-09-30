@@ -23,6 +23,9 @@ v3（2026-09-26 质量改进批次二）：源真值改 v13 拍模型（三类�
 模式），prompt 规则随之补写两类必须保住的反差（说辞与行为、隐藏与揭示的时点）、
 iterative 重复行为的作用与 loop 问题／resolution 的兑现。类别集合不变，规则变化
 改变 Preserve 结果，故升版；旧 checkpoint 不重解释。
+v4（2026-09-30 R9b）：satisfaction 明写动机、主体、因果及禁止改法；阶段义务
+分别承载并声明必要条件，回看未入选拍中的关键铺垫；身份与称谓揭示时点分离。
+类别集合不变，判据集中升版；版本唯一登记为 STAGE4_PRESERVE_POLICY_VERSION。
 """
 from __future__ import annotations
 

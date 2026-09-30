@@ -36,58 +36,32 @@ from contracts.schema.book_ir import (
 from contracts.schema.design import BodyDesign, ChapterAssignment
 from contracts.schema.execution import ExecutionPlan
 from contracts.schema.grounding import SemanticBinding
-from contracts.schema.source import NameProjection, NameStructure, render_form
+from contracts.schema.source import NameProjection, NameStructure
 from novel.stages.stage4.fold import ThreadFold, fold_accepted_prefix
-from novel.stages.common import project_context
+from novel.stages.common import project_context, withheld_name_literals, expand_surface_releases
 
 
-def chapter_surface_releases(graph: BodyDesign, chapter_ordinal: int) -> set[str]:
+def chapter_surface_releases(graph: BodyDesign, chapter_ordinal: int, structure: NameStructure | None = None) -> set[str]:
     """第 k 章（含）之前已释放的称谓字面：initial + 前 k 章内引入位置（D2：compile
     时算好的章级称谓许可，机械 validator 的认领面）。"""
-    released = {s for intro in graph.initial_surfaces for s in intro.surfaces}
+    releases = {intro.char_id: set(intro.surfaces) for intro in graph.initial_surfaces}
     chapter_of = {sid: ch.chapter_ordinal for ch in graph.chapters for sid in ch.scene_ids}
     for scene in graph.scenes:
         if chapter_of[scene.scene_id] > chapter_ordinal:
             continue
         for beat in scene.beats:
             for intro in beat.surface_introductions:
-                released.update(intro.surfaces)
-    return released
-
-
-def _family_form_literals(projection: NameProjection,
-                          structure: NameStructure | None) -> set[str]:
-    """家族级构词（families[].forms）渲染出的字面（同字面家族的构词取并集）。"""
-    if structure is None:
-        return set()
-    by_literal: dict[str, set[str]] = {}
-    for family in structure.families.values():
-        for item in family.forms:
-            try:
-                by_literal.setdefault(family.literal, set()).add(
-                    render_form(item.form, family=family.literal, given=None, aliases={}))
-            except ValueError:
-                continue
-    literals: set[str] = set()
-    for entry in projection.by_person:
-        literals |= by_literal.get(entry.family_literal or '', set())
-    return literals
+                releases.setdefault(intro.char_id, set()).update(intro.surfaces)
+    return {s for faces in expand_surface_releases(releases, structure).values() for s in faces}
 
 
 def chapter_withheld_literals(
     projection: NameProjection, graph: BodyDesign, chapter_ordinal: int,
     structure: NameStructure | None = None,
 ) -> tuple[str, ...]:
-    """第 k 章不得出现的专名字面 = 全部人物专名/带名 surface（含家族级构词渲染）
-    − 第 k 章前已释放的称谓。与 Hook withheld 同一推导纪律：不写死人名（D2：
-    compile 时算好，随章 IR 携带；validator 检查面，不进 Writer 阅读面）。"""
-    all_names: set[str] = set(projection.proper_literals)
-    for entry in projection.by_person:
-        all_names.update(entry.name_bearing_surfaces)
-    all_names |= _family_form_literals(projection, structure)
-    withheld = all_names - chapter_surface_releases(graph, chapter_ordinal)
-    withheld.discard('')
-    return tuple(sorted(withheld))
+    """章级释放表与共用专名／家族构词推导的差集。"""
+    return withheld_name_literals(projection, chapter_surface_releases(graph, chapter_ordinal, structure),
+                                  structure)
 
 
 def chapter_scene_weights(graph: BodyDesign) -> dict[int, float]:
@@ -186,7 +160,9 @@ def _chapter_continuity(
             final_beat_event=last_beat.event,
             present_chars=tuple(last_beat.participants))
     return ChapterContinuity(entry=assignment.entry,
-                             previous_ending=previous_ending)
+                             previous_ending=previous_ending,
+                             anchor_event=(graph.beat(*assignment.entry.anchor.split('#')).event
+                                           if assignment.entry.anchor is not None else None))
 
 
 def compile_writer_book_ir(
@@ -226,7 +202,7 @@ def compile_writer_book_ir(
             chapter_ordinal=ordinal, purpose=assignment.purpose,
             length_budget=budgets[ordinal], scenes=tuple(contexts),
             continuity=_chapter_continuity(graph, previous_assignment, assignment),
-            released_surfaces=tuple(sorted(chapter_surface_releases(graph, ordinal))),
+            released_surfaces=tuple(sorted(chapter_surface_releases(graph, ordinal, structure))),
             withheld_literals=chapter_withheld_literals(projection, graph, ordinal,
                                                         structure)))
         nav.append(ChapterNavEntry(
@@ -236,6 +212,7 @@ def compile_writer_book_ir(
     brief = BookBrief(
         book_title=book_title,
         book_style=graph.book_style,
+        narration=graph.narration, expression_decisions=graph.expression_decisions,
         world_rules=tuple(graph.world_rules),
         character_voices=tuple(graph.character_voices),
         target_chapter_count=len(graph.chapters),

@@ -52,12 +52,15 @@ from tests.test_str06_body import (
 from tests.test_str06_f7a_wiring import _candidate, _request, _session, _source_root, _Transport
 from tests.test_str06_hook import _body_wire, _characters, _full_chain_wires
 from novel.stages.chain import run_workflow
+from tests.str06_expression_inputs import (
+    sample_narration, sample_requirements,
+)
 
 _CHARS = {'fu_jun', 'yun_niang'}
 
 
 def _assemble(wire: dict):
-    body, errors = assemble_body_design(wire, known_char_ids=_CHARS)
+    body, errors = assemble_body_design(wire, known_char_ids=_CHARS, expression_requirements=sample_requirements(), source_narration=sample_narration())
     assert body is not None and not errors, errors
     return body
 
@@ -249,7 +252,8 @@ def _unset_chain_wire(*, final_op: str) -> dict:
         'delivery': {'pov': 'yun_niang', 'voice': '冷峻', 'avoid': []}})
     wire['chapters'].append({'purpose': '寻问无果后决意亲寻', 'scenes': 1,
                              'entry': {'transition': 'immediate_continuation',
-                                       'recap': 'do_not_recap'}})
+                                       'recap': 'do_not_recap',
+                                       'anchor': {'scene': 2, 'beat': len(wire['scenes'][1]['beats'])}}})
     wire['scene_weights'] = [5, 3, 2]
     return wire
 
@@ -282,7 +286,19 @@ def test_unset_public_state_is_carried_as_explicit_removal():
 
 def test_unknown_state_blocks_consumption_while_unset_does_not():
     """unknown 阻断消费（不得当作通过）；unset 不阻断但显式携带——两态不相混。"""
-    body = _assemble(_unset_chain_wire(final_op='unknown'))
+    rejected, front_errors = assemble_body_design(
+        _unset_chain_wire(final_op='unknown'), known_char_ids=_CHARS,
+        expression_requirements=sample_requirements(), source_narration=sample_narration())
+    assert rejected is None and any('unknown' in e for e in front_errors), front_errors
+    # 已落盘产物仍可能被人工改坏；编译入口必须独立保留同一防线。
+    body = _assemble(_unset_chain_wire(final_op='unset'))
+    scenes = list(body.scenes)
+    beats = list(scenes[1].beats)
+    changes = list(beats[0].target_delta)
+    changes[0] = changes[0].model_copy(update={'op': 'unknown'})
+    beats[0] = beats[0].model_copy(update={'target_delta': changes})
+    scenes[1] = scenes[1].model_copy(update={'beats': beats})
+    body = body.model_copy(update={'scenes': scenes})
     binding = _green_binding(body)
     # unknown 消费在 compile 的章闭包证明即拦下（B3 后半：证明与投影共用
     # scene_read_views，fail fast 免费重验），不等到写手投影。

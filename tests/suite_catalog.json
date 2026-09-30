@@ -1057,6 +1057,15 @@
         "test_ask_json_stops_after_round_cap_with_changing_issue_sets": "unit_contract",
         "test_recovery_after_revision_stop_replays_free": "unit_contract"
       }
+    },
+    "tests/test_str06_r9.py": {
+      "layer": "unit_contract",
+      "stages": [
+        "stage2",
+        "stage4",
+        "stage5",
+        "stage7"
+      ]
     }
   },
   "version": 1

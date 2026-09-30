@@ -220,7 +220,7 @@ class WriterContext(StrictModel):
     消费该地址的章包。rc10（R2）：拍级读取值挂 BeatIR.reads；线程投影面
     thread_ops／open_threads 进 IR。"""
 
-    contract_version: Literal['str06-rc10'] = 'str06-rc10'
+    contract_version: Literal['str06-rc11'] = 'str06-rc11'
     scene_id: str = Field(min_length=1)
     execution_slice_sha256: str = Field(min_length=64, max_length=64)
     verification_ir: VerificationIR
@@ -249,7 +249,7 @@ class WriterPacket(StrictModel):
     默认空值冒充「已经按该身份考虑过」（I-14/I-42）。
     """
 
-    contract_version: Literal['str06-rc10'] = 'str06-rc10'
+    contract_version: Literal['str06-rc11'] = 'str06-rc11'
     chapter_ordinal: int = Field(ge=1)
     #: 必须写出：本章拍的事件与目标效应；本场义务的满足条件；本场的线程操作。
     must_realize: tuple[str, ...]

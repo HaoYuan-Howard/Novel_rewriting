@@ -35,6 +35,9 @@ from novel.stages.stage4.grounding import (
     assemble_binding, assemble_preserve, project_binding_space,
 )
 from novel.stages.stage4.hook import assemble_hook_design
+from tests.str06_expression_inputs import (
+    sample_narration, sample_requirements, sample_design_expression, sample_canonical_expression,
+)
 
 H64 = 'a' * 64
 
@@ -44,7 +47,7 @@ H64 = 'a' * 64
 def _wire() -> dict:
     """两场三拍的 design wire v2：章切片、相对权重、线程、world_rules、entry
     与 reader 确认（四个静态跨章列表已退役，AUD-04）。"""
-    return {
+    return {**sample_design_expression(('yun',)),
         'protocol_version': STAGE4_DESIGN_PROTOCOL,
         'book_style': '冷峻克制的第三人称叙事，重日常细节里的异样。',
         'character_voices': [{'char_id': 'yun', 'voice': '短句、少感叹'}],
@@ -101,7 +104,7 @@ def _wire() -> dict:
 
 
 def _green() -> BodyDesign:
-    body, errors = assemble_body_design(_wire(), known_char_ids={'yun', 'fu_jun'})
+    body, errors = assemble_body_design(_wire(), known_char_ids={'yun', 'fu_jun'}, expression_requirements=sample_requirements(), source_narration=sample_narration())
     assert body is not None and not errors, errors
     return body
 
@@ -124,19 +127,19 @@ def _checkpoint(*obligation_ids: str) -> PreserveCheckpoint:
 def test_four_protocols_are_independent_literals():
     """每个付费语义节点一个独立协议字面量：演进互不牵连（B3 前半）。"""
     assert STAGE4_PRESERVE_PROTOCOL == 'stage4-preserve-v1'
-    assert STAGE4_DESIGN_PROTOCOL == 'stage4-design-v3'
+    assert STAGE4_DESIGN_PROTOCOL == 'stage4-design-v4'
     assert STAGE4_BIND_PROTOCOL == 'stage4-bind-v1'
     assert STAGE4_HOOK_DESIGN_PROTOCOL == 'stage4-hook-design-v1'
     assert len({STAGE4_PRESERVE_PROTOCOL, STAGE4_DESIGN_PROTOCOL,
                 STAGE4_BIND_PROTOCOL, STAGE4_HOOK_DESIGN_PROTOCOL}) == 4
     # RC 版式头随 R2 语义送达升 rc10（R1 关联无损曾升 rc9）
-    assert STR06_RC_VERSION == 'str06-rc10'
+    assert STR06_RC_VERSION == 'str06-rc11'
 
 
 def test_design_wire_without_protocol_is_refused():
     bad = _wire()
     del bad['protocol_version']
-    _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'})
+    _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'}, expression_requirements=sample_requirements(), source_narration=sample_narration())
     assert any('protocol_version' in e for e in errors)
 
 
@@ -188,15 +191,15 @@ def test_thread_tags_dispatch_to_canonical_refs():
 def test_thread_wire_bad_references_are_refused():
     bad = _wire()
     bad['scenes'][1]['beats'][1]['threads'][0]['ref'] = 't_unknown'
-    _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'})
+    _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'}, expression_requirements=sample_requirements(), source_narration=sample_narration())
     assert any('未开启' in e for e in errors)
     bad = _wire()
     bad['scenes'][0]['beats'][1]['threads'][1]['tag'] = 't1'   # 重复开标签
-    _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'})
+    _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'}, expression_requirements=sample_requirements(), source_narration=sample_narration())
     assert any('重复开启' in e for e in errors)
     bad = _wire()
     bad['scenes'][1]['beats'][1]['threads'][0]['ending'] = 'fulfilled'
-    _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'})
+    _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'}, expression_requirements=sample_requirements(), source_narration=sample_narration())
     assert any('闭集' in e or '构造失败' in e for e in errors), errors
 
 
@@ -204,25 +207,25 @@ def test_retired_static_lists_are_refused_on_wire():
     """AUD-04：四个静态跨章列表退役——wire 旧键关闭式拒读（I-13 无迁移）。"""
     bad = _wire()
     bad['standing_goals'] = [{'char_id': 'yun', 'goal': '查清夫君的底细'}]
-    _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'})
+    _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'}, expression_requirements=sample_requirements(), source_narration=sample_narration())
     assert any('standing_goals' in e and 'Extra inputs' in e for e in errors)
 
 
 def test_cross_chapter_char_ids_must_be_known():
     bad = _wire()
     bad['character_voices'] = [{'char_id': 'ghost', 'voice': 'v'}]
-    _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'})
+    _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'}, expression_requirements=sample_requirements(), source_narration=sample_narration())
     assert any('CharacterVoice 引用未知 char_id' in e for e in errors)
     bad = _wire()
     bad['scenes'][0]['beats'][1]['threads'][0]['subject'] = 'ghost'
-    _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'})
+    _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'}, expression_requirements=sample_requirements(), source_narration=sample_narration())
     assert any('ThreadAction 引用未知 char_id ghost' in e for e in errors)
 
 
 def test_book_style_is_required_on_canonical():
     """整书风格是 TargetDesign 的必填字段：缺省即拒，不用空串兜底。"""
     with pytest.raises(ValidationError):
-        BodyDesign(
+        BodyDesign(**sample_canonical_expression(('ch1',)),
             graph_id='g', book_style='', initial_state=(),
             scenes=(TargetScene(
                 scene_id='s01', state_reads=(),
@@ -288,7 +291,7 @@ def test_reader_confirmation_must_reference_an_established_fact():
     bad = _wire()
     bad['scenes'][0]['beats'][2]['target_delta'][0]['confirms'] = {
         'domain': 'world', 'subjects': [], 'holder': None, 'key': 'ghost_fact'}
-    _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'})
+    _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'}, expression_requirements=sample_requirements(), source_narration=sample_narration())
     assert any('从未建立' in e for e in errors)
 
     # 确认早于建立：确认指向的地址首次建立在确认拍之后的场景
@@ -298,7 +301,7 @@ def test_reader_confirmation_must_reference_an_established_fact():
     bad['scenes'][1]['beats'][1]['target_delta'] = [
         {'domain': 'world', 'subjects': [], 'op': 'set', 'scope': 'book',
          'key': 'hiding', 'value': '床底有人'}]
-    _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'})
+    _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'}, expression_requirements=sample_requirements(), source_narration=sample_narration())
     assert any('早于事实建立' in e for e in errors)
 
 

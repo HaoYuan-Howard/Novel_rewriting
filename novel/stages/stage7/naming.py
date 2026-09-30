@@ -20,7 +20,7 @@ from typing import Any
 
 from contracts.schema.naming import NameAssignment, NameMapV5, TargetName
 from contracts.schema.source import (
-    BlueprintsArtifactV13, CharactersArtifactV4, render_form,
+    BlueprintsArtifactV14, CharactersArtifactV4, render_form,
 )
 from novel.stages.common import apply_replacements, uncovered_occurrences
 
@@ -31,7 +31,7 @@ NAMING_VALIDATOR_VERSION = 'str06-naming-v1'
 
 def naming_projection(
     characters: CharactersArtifactV4,
-    blueprint: BlueprintsArtifactV13 | None = None,
+    blueprint: BlueprintsArtifactV14 | None = None,
 ) -> dict[str, Any]:
     """Naming 的只读投影（通常不落盘）：应改名集合、名称位、回避字面、身份与风格。
 

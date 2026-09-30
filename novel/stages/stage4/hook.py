@@ -28,6 +28,7 @@ from contracts.schema.design import BodyDesign, PresentationGraph
 from contracts.schema.hook import HookDesign
 from contracts.schema.source import NameProjection
 from contracts.schema.workflow import STAGE4_HOOK_DESIGN_PROTOCOL
+from novel.core.name_materials import expand_surface_releases
 
 _WIRE_KEYS = frozenset({
     'protocol_version', 'pov', 'opening_facts', 'materials', 'concealed',
@@ -117,6 +118,7 @@ def _delta_subjects(body: BodyDesign, ref: str) -> set[str]:
 def assemble_hook_design(
     wire: dict[str, Any], *, body: BodyDesign, known_char_ids: set[str],
     name_projection: NameProjection,
+    name_structure=None,
 ) -> tuple[HookDesign | None, list[str]]:
     """Hook Design wire（stage4-hook-design-v1）→ HookDesign
     （canonical 候选，待 publish_graph 发布）。
@@ -254,7 +256,7 @@ def assemble_hook_design(
                 errors.append(f'起笔事实是材料拍 {other_ref} 的 delta：{key}')
 
     # 称谓释放：必须是 Design 已声明的面，且不属于隐藏人物。
-    declared = body.declared_surfaces()
+    declared = expand_surface_releases(body.declared_surfaces(), name_structure)
     for item in wire.get('surface_releases') or []:
         char_id = item.get('char_id')
         faces = declared.get(char_id, set())

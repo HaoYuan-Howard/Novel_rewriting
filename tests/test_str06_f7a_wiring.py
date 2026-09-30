@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import json
 
 import pytest
@@ -519,8 +520,7 @@ def _work_unit_source_root(tmp_path, *, content='{"entries": []}'):
     turn = unit.reserve(
         identity, run_id='agent-run-wu', agent_run_id='agent-run-wu',
         agent_epoch_id='epoch-wu', candidate_session_run_id='cand-sess-wu',
-        request_payload={'owner': 'bind', 'provider': 'fake',
-                         'request': request.cache_payload()})
+        request_payload=request.cache_payload())
     payload = {'attempt_id': 'att-wu', 'attempt': 1,
                'response': {'content': content, 'reasoning': None,
                             'usage': {'prompt_tokens': 11, 'completion_tokens': 22},
@@ -535,7 +535,8 @@ def _work_unit_source_root(tmp_path, *, content='{"entries": []}'):
                   request_model='fake', code='str06-rc4', attempt=1, max_attempts=1,
                   will_retry=False, cached=False, cache_policy='request-identity',
                   purpose='bind', attempt_id='att-wu', request_fingerprint=identity,
-                  outcome='ok', prompt_tokens=11, completion_tokens=22)
+                  outcome='ok', prompt_tokens=11, completion_tokens=22,
+                  response_sha256=hashlib.sha256(content.encode('utf-8')).hexdigest())
     return root, identity, request
 
 

@@ -37,6 +37,11 @@ TERMINAL_PUNCT = '。！？…”」』】]］!?.'
 _NON_CONTENT = re.compile(r'[^一-鿿A-Za-z0-9]')
 
 
+def count_non_whitespace_chars(text: str) -> int:
+    """正文、Hook 与请求视图的统一字数：标点计入，Unicode 空白不计。"""
+    return sum(not char.isspace() for char in text)
+
+
 def norm(s: str | None) -> str:
     """内容字符归一：去标点/空白/表情，只留中日韩汉字与字母数字。
 

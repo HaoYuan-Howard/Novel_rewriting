@@ -349,7 +349,7 @@ def test_chapter_observation_failures_project_the_last_completed_execution(
     assert failures.requested == (1, 2), '章观察的 requested 是全部源章'
     assert failures.attempted == (1, 2)
     assert [c.chapter_ordinal for c in failures.chapters] == [1]
-    assert failures.chapters[0].failure_kind == 'ValueError'
+    assert failures.chapters[0].failure_kind == 'ValidationStop'
     assert 'ghost' in failures.chapters[0].detail
     assert failures.recorded_at is not None
     # 两个逐章留证互不冒充：正文从未执行 ⇒ 缺席（None），不是空清单。

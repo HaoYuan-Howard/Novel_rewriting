@@ -47,6 +47,7 @@ from contracts.schema.source import (
 #: 信封；I-13 显式版本化）。升版 = 换字面量＋改模型＋登记（REQUIREMENTS／
 #: DECISIONS），不做转换层。
 STAGE2_OBSERVATION_PROTOCOL: Final = 'stage2-observation-v1'
+STAGE2_BOOK_PROTOCOL: Final = 'stage2-book-v2'
 
 #: 关联协议（associate 独立）的版本字面量（R1，2026-09-28 升 v2）：typed 作用
 #: 对象显式序列化＋状态句柄位置编码。句柄含义与输入材料已变，旧关联回答不做
@@ -120,11 +121,15 @@ class WorldRule(StrictModel):
     source_refs: tuple[str, ...] = Field(min_length=1)
 
 
+from contracts.schema.expression import ExpressionObservation
+
+
 class BookObservation(StrictModel):
     """`str06.stage2.book` 的输出：人物候选（可读 slug、称谓及证据）、初态、
     世界约束。作用域＝书；输入是全书原文（含 e00 引子句段）与证据句段清单。"""
 
-    protocol_version: Literal['stage2-observation-v1']
+    protocol_version: Literal['stage2-book-v2']
+    expression: ExpressionObservation
     characters: dict[str, CharacterCandidate] = Field(min_length=1)
     initial_state: tuple[InitialFact, ...] = Field(default=(), min_length=0)
     world_constraints: tuple[WorldRule, ...] = Field(default=(), min_length=0)

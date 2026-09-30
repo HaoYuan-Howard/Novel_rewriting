@@ -42,12 +42,16 @@ from contracts.schema.context import (
     KnowledgeEntry, OpenThreadIR, PendingConfirmation, StateEntry, SurfaceRelease,
     ThreadOpIR, VerificationIR, WriterBrief, WriterContext, WriterPacket, beats_ir,
 )
+from contracts.schema.hook import HookContext
 from contracts.schema.design import BodyDesign
 from contracts.schema.execution import (
     EffectDomain, Establishment, ExecutionPlan, ExecutionSlice,
 )
 from contracts.schema.grounding import SemanticBinding
 from contracts.schema.workflow import STR06_RC_VERSION
+from contracts.schema.source import CharactersCore, NameProjection, NameStructure, render_form
+from novel.core.name_materials import expand_surface_releases, family_form_literals, withheld_name_literals
+from novel.core.text import count_non_whitespace_chars
 
 # ═════════════════════════════════════════════════════════════════════════════
 # 一、字面扫描（原 `literal_scan.py`）
@@ -111,6 +115,103 @@ def apply_replacements(text: str, replacements: dict[str, str]) -> tuple[str, tu
         return replacements[match.group(0)]
 
     return pattern.sub(_sub, text), tuple(claims)
+
+
+def material_identities(graph: BodyDesign, binding: SemanticBinding, chars: CharactersCore) -> set[str]:
+    """实际写作材料不得泄漏的领域引用闭集；生产、预检与审阅共用。"""
+    return (set(chars.characters) | {s.scene_id for s in graph.scenes}
+            | {b.beat_id for s in graph.scenes for b in s.beats}
+            | {t.ref for s in graph.scenes for b in s.beats for t in b.threads}
+            | {o.obligation_id for o in binding.obligations}
+            | {d.ex_id for d in graph.expression_decisions})
+
+
+def validate_positive_materials(
+    parts: Mapping[str, str], *, released: Iterable[str], withheld: Iterable[str],
+    internal_ids: Iterable[str],
+) -> list[str]:
+    """只查调用方明确分出的正向材料；先认领全称再查残余专名与内部句柄。"""
+    errors: list[str] = []
+    identities = tuple(sorted(set(internal_ids) - {'', 'narrator'}))
+    identity_pattern = re.compile(r'(?<![A-Za-z0-9_])(?:'
+                                  + '|'.join(re.escape(s) for s in identities)
+                                  + r')(?![A-Za-z0-9_])') if identities else None
+    released, withheld = tuple(released), tuple(withheld)
+    for where, text in parts.items():
+        for claim in uncovered_occurrences(text, withheld, claim_spans(text, released)):
+            errors.append(f'positive_material_leak[{where}@{claim.start}]：'
+                          f'未释放专名字面 {claim.literal!r}')
+        if identity_pattern is not None:
+            for match in identity_pattern.finditer(text):
+                errors.append(f'internal_id_leak[{where}@{match.start()}]：'
+                              f'内部句柄 {match.group()!r} 不得进入写作材料')
+    return errors
+
+
+
+def render_hook_context(context: HookContext) -> str:
+    """请求 user 段（R2 分层渲染）：只从 HookContext 构建，不掺源文或盘上材料。
+
+    材料是必须写出；禁止揭示与受保护线程是禁区；起笔事实以延续/背景呈现；
+    withheld_literals 是 validator 材料，不进阅读面（与正文章包同一纪律）。
+    """
+    names = {r.char_id: r.surfaces for r in context.usable_surfaces}
+
+    def _name(char_id: str) -> str:
+        faces = names.get(char_id)
+        return '旁白叙述' if char_id == 'narrator' else (faces[0] if faces else '')
+
+    person = '第一人称' if context.pov.person == 'first' else '第三人称'
+    focalizers = '、'.join(_name(f) for f in context.pov.focalizers)
+    parts = ['【起笔已成立的事实】（开场前已成立；自然带过，不作为任务交代）']
+    parts.extend(f'- {fact.text}' for fact in context.opening_facts)
+    parts.append('【必须写出的材料】（按给定顺序组织；不得重选或换序）')
+    for index, material in enumerate(context.materials, start=1):
+        if material.presentation is not None:
+            parts.append(f'- 材料{index}：{material.presentation}')
+        else:
+            parts.append(f'- 材料{index}：{material.event}')
+            for delta in material.deltas:
+                parts.append(f'  随材料成立：{delta}')
+    parts.append('【禁止提前兑现】（禁区：不得出现、不得暗示）')
+    parts.extend(f'- {line}' for line in context.forbidden_reveals)
+    parts.append('【叙述与组织】')
+    parts.append(f'- 视角：{person}，聚焦 {focalizers}')
+    parts.append(f'- 组织方式：{context.design_brief}')
+    parts.append(f'- 文风与口吻：{context.delivery_brief}')
+    parts.append('【可用称谓】（只能使用这些字面）')
+    surfaces = '、'.join(sorted({s for r in context.usable_surfaces
+                                 for s in r.surfaces}))
+    parts.append(f'- {surfaces}' if surfaces else '- （无）')
+    parts.append('【交付要求】')
+    parts.append(f'- 篇幅目标约 {context.target_chars} 字，'
+                 f'绝对不得超过 {context.hard_max_chars} 字（标点计入，空白不计）。')
+    parts.append('请写出楔子。')
+    return '\n'.join(parts) + '\n'
+
+
+
+def validate_hook_materials(context: HookContext, *, internal_ids: Iterable[str]) -> list[str]:
+    """直接检查实际 Hook 渲染字节，明确剔除禁止提前兑现分区。"""
+    text = render_hook_context(context)
+    before, tail = text.split('【禁止提前兑现】', 1)
+    positive = before + '【叙述与组织】' + tail.split('【叙述与组织】', 1)[1]
+    return validate_positive_materials(
+        {'hook/writer_view': positive},
+        released={s for r in context.usable_surfaces for s in r.surfaces},
+        withheld=context.withheld_literals, internal_ids=internal_ids)
+
+def validate_writer_materials(packet: ChapterWriterPacket, *, internal_ids: Iterable[str]) -> list[str]:
+    """检查实际 WriterPacket 六分区；禁区及明确禁止的条目不算正向材料。"""
+    view = build_writer_packet(packet)
+    parts = {}
+    for partition in ('must_realize', 'must_respect', 'continuity', 'creative_guidance', 'background'):
+        for index, line in enumerate(getattr(view, partition), 1):
+            if '·明确禁止：' not in line:
+                parts[f'ch{view.chapter_ordinal:02d}/{partition}/{index}'] = line
+    return validate_positive_materials(
+        parts, released=packet.chapter.released_surfaces,
+        withheld=packet.chapter.withheld_literals, internal_ids=internal_ids)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -307,10 +408,16 @@ BOOK_PROMPT = """任务：通读全书，产出人物账、初始状态与世界
    人物个人判断、单次事件的教训、人物动机、已在具体情节中自然体现的背景知识都不要收。
    没有就给空数组。
 
+4. expression：narration 为 {{person:first|third, focalizers:[人物 slug 或第三人称 narrator],
+   statement, source_refs}}；第一人称恰好一个真实人物。statement 明确人称、叙述者与视角权限。
+   mechanisms 为 [{{kind:pov_permission|humor|contrast,statement,source_refs}}]：逐项记录
+   允许／不允许的视角信息、主导幽默与重要内外反差；如对外守礼而内心直白。
+   所有表达陈述带证据，只记录源书已经呈现的机制；没有某类给空数组，不补猜；不生成 ID。
+
 【证据段 id 清单】（source_refs 只能从中选）
 {evidence}
 
-输出 JSON 顶层：{{"protocol_version":"stage2-observation-v1","characters":{{...}},"initial_state":[...],"world_constraints":[...]}}
+输出 JSON 顶层：{{"protocol_version":"stage2-book-v2","characters":{{...}},"initial_state":[...],"world_constraints":[...],"expression":{{"narration":{{...}},"mechanisms":[...]}}}}
 个人自述、某家长辈要求不得推广成普遍世界规则；无法由证据确认的规则不写。"""
 
 CHAPTER_PROMPT = """任务：把第 {ch} 章正文拆成有序 beats。每一拍是一次状态转移：event 是给人读的事件表述，需要延续的变化全部由三类转移承载——effects（事实）、cognition（认知）、loops（悬念）。
@@ -422,7 +529,7 @@ PRE_CHAPTER_RULE = """
 _PRESERVE_KIND_LINES = '\n'.join(
     f'- {kind}：{definition}' for kind, definition in PRESERVE_KIND_DEFS.items())
 
-PRESERVE_RULES = f"""任务：从源真值选择改写不可丢失的最小语义义务（保存策略 v3；wire 协议 stage4-preserve-v1）。
+PRESERVE_RULES = f"""任务：从源真值选择改写不可丢失的最小语义义务（保存策略 v4；wire 协议 stage4-preserve-v1）。
 
 【源真值的形状（v13）】Blueprints 的每一拍是一次状态转移：event 是给人读的事件
 表述；effects 是叙述确立的事实（带可见性 on_page／concealed 与作用域）；cognition
@@ -455,6 +562,13 @@ temporal_mode（single＝单次行为、iterative＝重复行为）。
 任意一次的细节。loop 未收束的问题与 close 时的 resolution：悬念的铺设与兑现方式
 进 satisfaction。
 
+【v4 义务边界】
+satisfaction 写正文必须成立的条件，也写哪些表现不足以兑现、哪些改法会改变因果。
+不得把救人动机改成事后获利或感谢，把主动行为改成被动巧合，或交换行为主体。
+不同时点的决定保留条件和先后；跨场复合义务拆为能在单处兑现的阶段义务，用 requires
+表达必要的因果／信息前提；单纯先后不写因果。选择后回看未入选的铺垫、重复和兑现，
+若承担必要条件就保留。身份义务不捆绑首次出现时点不同的称谓。
+
 【切分与去重】
 - 一条义务承担一个作用，不整场转写；
 - 同一事实不跨 kind 重复，除非各自带有独有的知情或因果约束；
@@ -481,7 +595,7 @@ setup/payoff 或结局条件中的任何一项，就填 true；否则填 false�
 返回一个 JSON object，不要围栏、不要解释。"""
 
 DESIGN_RULES = """任务：仅依据 Brief/Identity/OutputConstraints 设计目标书
-（wire 协议 stage4-design-v3）。你是整书一次调用的结构设计者：只表达**选择、
+（wire 协议 stage4-design-v4）。你是整书一次调用的结构设计者：只表达**选择、
 结构与相对篇幅重点**——场景/拍编号、归章、线程编号、权重归一与整数预算全部由
 compiler 生成，你不输出任何 ID、编号或归一化数值（I-21）。
 所有类别义务及 satisfaction 都要考虑。**依赖顺序**：被其它义务 requires_cores
@@ -564,33 +678,60 @@ brief 只承载呈现方向：凡涉及关键行动、持久认知变化、秘�
 必须同时体现在 driver/event/target_delta/threads/surface_introductions 等正式字段，不得
 只写在 brief 里。
 
-【章间承接（每章必填的薄 entry；第 1 章不用写）】
-chapters 里第 2 章起每章带 entry: {transition, carryover?, recap}：
+【章间承接（第 1 章固定开篇；其它章显式 transition）】
+第 2 章起明确衔接方式；具体字段与分支以 JSON Schema 为准：
 - transition∈immediate_continuation(紧接上一章末尾)/time_skip(时间跳跃)/
-  location_cut(切到别处)/pov_shift(换视角)/new_scene(新场景开场)；
+  location_cut(切到别处)/pov_shift(换视角)/new_scene(新场景开场)/flashback(回到较早事件)；
 - carryover（可选）：延续到本章的动作或张力，一句话；
 - recap∈do_not_recap(不复述上一章结尾)/brief_orientation(一两句重新定向)。
 第 1 章固定为开篇，不写 entry（compiler 填固定值）。
 
-【wire 形状（顶层键：protocol_version, book_style, world_rules,
-character_voices, initial_state, initial_surfaces, scenes, chapters, scene_weights）】
-- scenes 按阅读序排列：[{driver{focal_actor,immediate_want,opposition,turn},
-  state_reads, realization_brief, beats, delivery{pov,voice,avoid}}]；**不写
-  scene_id**——编号由 compiler 按列表序派发；
-- delivery 三键形状：pov 是**单个字符串**——本场叙述视角人物的 char_id（只取
-  输入身份投影给出的 char_id 字面）或 "narrator"；一场只有一个视角，多人在场
-  也只选其中一人：不写数组、不写描述句（「贴某某」「第三人称限知」这类按未知
-  char_id 拒收）；voice 是单个字符串；avoid 是字符串数组；
-- beats 按故事序排列：[{event, participants, dramatic_intent, delivery_hint,
-  target_delta, surface_introductions, threads}]；**不写 beat_id**——编号由
-  compiler 按列表序派发；
-- chapters 按阅读序给章切片：[{purpose, scenes: 本章场数, entry?}]——purpose
-  只概括本章场景里已设计的变化，不单独增加事件或结果；全部场景恰好按序切成
-  连续的章，每章至少一场，章数必须等于 OutputConstraints 的 target_chapter_count；
-- scene_weights：与 scenes 等长的正数数组，表达各场的相对篇幅重点（如 [3,1,2]）；
-  **不求和为 1**——归一与整数章预算由 compiler 按全书最大余数分配完成。
-返回一个 JSON object（protocol_version 为 "stage4-design-v3"），不要围栏、不要解释。
+【R9 表达与效果】
+默认保留 Brief.expression 中每项机制；expression_decisions 对每个 ex 恰好一个
+keep／change；change 必须写理由与目标说法。narration 使用 person／focalizers，第一
+人称只有一个叙述者，所有场景 POV 服从它；第三人称场景选择 focalizers 或 narrator。
+brief 指定信息、反差和结束效果；只有关键事实或伏笔才规定微动作，不转述或改变义务因果。
+正向材料只用所在章已经释放的本人称谓和家族构词；义务与设计冲突由 Design 自己修。
+entry.anchor 用 {scene:1-based 场序,beat:1-based 拍序} 定位较早事件；引用必须真实、早于本章；
+immediate_continuation 必须指向上一章末拍；flashback 必须给明确回望锚点。
+每场／拍不生成编号。scene_weights 是与场景等长的正数数组，章切片总数恰好覆盖场景。
+返回一个 JSON object，不要围栏、不要解释。
 """
+
+from contracts.schema.design import DesignWireV4
+_DESIGN_INSTRUCTIONS = DESIGN_RULES
+
+
+def design_rules(*, known_char_ids: set[str] | None = None,
+                 registered_surfaces: Mapping[str, set[str]] | None = None) -> str:
+    """模型 Schema 是唯一形状源；动态闭集与接受函数使用同一输入。"""
+    schema = DesignWireV4.model_json_schema()
+    if known_char_ids is not None:
+        definitions = schema['$defs']
+        characters = sorted(known_char_ids)
+        for model, field in (('CharacterVoice', 'char_id'),
+                             ('SurfaceIntroduction', 'char_id')):
+            definitions[model]['properties'][field]['enum'] = characters
+        definitions['DesignWireDelivery']['properties']['pov']['enum'] = sorted(known_char_ids | {'narrator'})
+        definitions['SceneDriver']['properties']['focal_actor']['enum'] = sorted(known_char_ids | {'narrator'})
+        definitions['HookPov']['properties']['focalizers']['items']['enum'] = sorted(known_char_ids | {'narrator'})
+        definitions['DesignWireBeat']['properties']['participants']['items']['enum'] = characters
+        for definition in definitions.values():
+            props = definition.get('properties', {})
+            if 'subjects' in props:
+                props['subjects']['items']['enum'] = characters
+            if 'holder' in props:
+                props['holder']['anyOf'][0]['enum'] = characters
+        if registered_surfaces is not None:
+            definitions['SurfaceIntroduction']['allOf'] = [
+                {'if': {'properties': {'char_id': {'const': cid}}},
+                 'then': {'properties': {'surfaces': {'items': {'enum': sorted(faces)}}}}}
+                for cid, faces in sorted(registered_surfaces.items())]
+    return _DESIGN_INSTRUCTIONS + '\n【wire JSON Schema（字段与分支以此为准）】\n' + json.dumps(
+        schema, ensure_ascii=False, separators=(',', ':'))
+
+
+DESIGN_RULES = design_rules()
 
 BIND_RULES = """任务：把每条保存义务绑定到目标故事的确切承载位置
 （wire 协议 stage4-bind-v1）。你只做承载选择：义务 id 与场景/拍 id 都取输入
@@ -630,7 +771,7 @@ NAMES_RULES = """任务：登记全书源名称结构（姓氏家族、名、化
      · 模板渲染结果必须与 surface 逐字一致；纯称谓里不得含本人姓或名字面。
 输出 JSON 顶层：{"families":{...},"people":{...}}"""
 
-HOOK_DESIGN_RULES = """任务：为整本小说设计读者入口（楔子）的结构设计。只输出设计 JSON，不写 prose
+HOOK_DESIGN_RULES = """任务：为整本小说设计读者入口（楔子）的结构设计。brief 明确入口知识、跳时定位与末尾悬念；POV 可以与正文不同，事实和披露边界一致。只输出设计 JSON，不写 prose
 （wire 协议 stage4-hook-design-v1）。位置引用只给分量（scene=场景 id、beat=拍 id，
 都取输入骨架给出的闭集；复合引用由 compiler 组成，你不写）。
 
@@ -694,6 +835,9 @@ HOOK_WRITER_SYSTEM = """你是楔子写手（prose realizer）。楔子的结构
 呈现自由（你的创意只在这里发挥）：句法、对白措辞、节奏、意象、语气、局部小动作。
 局部小动作只能服务气氛与人物状态，不得带出新的情节动作或结果（谁来了、谁走了、
 什么被拿走、什么被答应，都不属于你）。
+可以补措辞、对白、即时反应与局部动作；不得新增改变动机、行为主体、关系、时序、
+知情条件或后续前提的事实。删去这句后若会改变读者对为什么发生、谁做了、前史是什么
+的理解，就属于新增事实，必须删去。
 
 直接输出楔子正文本身：不要标题，不要任何解释、前言、后缀，不要 markdown 围栏。"""
 
@@ -965,11 +1109,11 @@ def participant_background(
 
 def surface_display(releases: 'Mapping[str, tuple[str, ...]] | tuple', char_id: str) -> str:
     """char_id → 写手可读指认（R2 目标名解析）：取该场已释放称谓的**首个**
-    （排序确定）；无已释放面时以 char_id 兜底（该人物本场无可用称谓，指认
-    保持工程位，M6 面外）。`releases` 接受 SurfaceRelease 序列或映射。"""
+    （顺序确定）；无已释放面时不输出人物指认，不以内部句柄补位。
+    `releases` 接受 SurfaceRelease 序列或映射。"""
     faces = releases.get(char_id) if isinstance(releases, Mapping) else next(
         (r.surfaces for r in releases if r.char_id == char_id), None)
-    return faces[0] if faces else char_id
+    return faces[0] if faces else ''
 
 
 def project_context(*, scene_id: str, graph: BodyDesign,
@@ -1090,15 +1234,15 @@ def project_context(*, scene_id: str, graph: BodyDesign,
 #: 不再把 VerificationIR 以 JSON 倾倒进 prompt；内部 ID／字段名／char slug
 #: 从写手视图清零（R0 守卫全绿）；承接由 entry＋上一章末场合成；线程按
 #: E-4 分支分节；拍级读取值与参与者背景以自然语言送达。
-RENDERER_VERSION = 'str06-render-v5'
+RENDERER_VERSION = 'str06-render-v6'
 
 #: 整书写作约定与自由度（Writer 协议，固定文本）。v5 围绕六分区重写：每个分区
 #: 的**身份**（写手怎么用）先于内容——背景是约束不是写作任务、保护悬念不等于
 #: 提醒悬念，正是「事实全对、处处交代」的对症条款。分区名用「」引用（阅读面
 #: 的节标题用【】，二者不冲突）。
-WRITER_PROTOCOL_VERSION = 'str06-body-protocol-v5'
+WRITER_PROTOCOL_VERSION = 'str06-body-protocol-v6'
 WRITER_PROTOCOL = """\
-本章写作输入按六个分区组织，各分区的身份与用法不同：
+可补措辞、对白、即时反应和局部动作；不得新增或改变动机、行为主体、关系、历史、时序、知情条件或后文依赖的前件。\n本章写作输入按六个分区组织，各分区的身份与用法不同：
 1.「必须写出」要在正文里实际完成：拍的事件与拍末应成立的结果、义务的满足条件、线索的推进或收束。化进情节写出——不是提到关键词，也不逐条宣布。
 2.「不可违背」是硬边界：入场与拍级依赖的事实、知情边界（谁知道、谁只是怀疑／听说／以为）、可用称谓与时点、世界规则、明确禁止。不得违背，不必逐条提及；与导演说明冲突时以此为准。
 3.「承接」是自然延续：与上一章的衔接方式、仍影响人物选择的开放线索、前场已成立的事实。接续即可，不复述、不重新解释成说明。
@@ -1125,9 +1269,8 @@ def _names(releases) -> dict[str, tuple[str, ...]]:
 
 
 def _name(names: dict[str, tuple[str, ...]], char_id: str) -> str:
-    """char_id → 已释放称谓指认（首个；无面时保留工程位，见 surface_display）。"""
-    faces = names.get(char_id)
-    return faces[0] if faces else char_id
+    """只解析已释放面；narrator 是明确旁白角色，不以人物 slug 兜底。"""
+    return '旁白叙述' if char_id == 'narrator' else surface_display(names, char_id)
 
 
 def _subjects_line(names, subjects, holder=None) -> str:
@@ -1180,6 +1323,7 @@ _TRANSITION_WORDINGS = {
     'location_cut': '场景切到别处',
     'pov_shift': '转换视角',
     'new_scene': '新场景开场',
+    'flashback': '回到已定位的较早事件',
 }
 
 #: recap → 人读措辞。
@@ -1214,12 +1358,17 @@ def build_writer_packet(packet: ChapterWriterPacket) -> WriterPacket:
     for rule in brief.world_rules:
         must_respect.append(f'世界边界（不要在正文中讲解）：{rule}')
     creative.append(f'全书风格：{brief.book_style}')
+    must_respect.append('叙述人称：' + ('第一人称，全文由唯一叙述者讲述' if brief.narration.person == 'first'
+                                     else '第三人称，限于本场指定视角或旁白叙述')
+                       + '；对白中的自称不改变正文叙述人称。')
+    creative.extend(f'表达机制：{choice.statement}' for choice in brief.expression_decisions)
     chapter_names: dict[str, tuple[str, ...]] = {}
     for context in chapter.scenes:
         for char_id, faces in _names(context.verification_ir.released_surfaces).items():
             chapter_names.setdefault(char_id, faces)
     for voice in brief.character_voices:
-        creative.append(f'{_name(chapter_names, voice.char_id)}的声线：{voice.voice}')
+        if chapter_names.get(voice.char_id):
+            creative.append(f'{_name(chapter_names, voice.char_id)}的声线：{voice.voice}')
     creative.append(f'本章目的（第{chapter.chapter_ordinal}章）：{chapter.purpose}')
 
     # ── 章级承接（R2.6：entry＋上一章末场合成） ──
@@ -1230,12 +1379,21 @@ def build_writer_packet(packet: ChapterWriterPacket) -> WriterPacket:
     else:
         line = (f'上一章收在「{ending.final_beat_event}」'
                 f'（转折：{ending.driver_turn}）')
-        present = '、'.join(_name(chapter_names, c) for c in ending.present_chars)
+        present = '、'.join(_name(chapter_names, c) for c in ending.present_chars
+                           if chapter_names.get(c))
         if present:
             line += f'，收尾时在场：{present}'
         line += f'；本章以{_TRANSITION_WORDINGS[entry.transition]}开场，' \
                 f'{_RECAP_WORDINGS[entry.recap]}。'
         continuity.append(line)
+    if chapter.continuity.anchor_event is not None:
+        anchor = chapter.continuity.anchor_event
+        if entry.transition == 'immediate_continuation':
+            continuity.append(f'本章紧接上一章末拍「{anchor}」继续发展，接续该处的动作与张力。')
+        elif entry.transition == 'flashback':
+            continuity.append(f'本章以倒叙回望较早事件「{anchor}」，不把它写成当前刚发生。')
+        else:
+            continuity.append(f'本章以{_TRANSITION_WORDINGS[entry.transition]}进入，衔接所指事件「{anchor}」。')
     if entry.carryover:
         continuity.append(f'延续进本章的张力：{entry.carryover}（自然接续，不复述）')
 
@@ -1361,6 +1519,7 @@ def project_chapter_packet(book_ir: WriterBookIR, chapter_ordinal: int) -> Chapt
     return ChapterWriterPacket(
         book_brief=PacketBrief(
             book_title=brief.book_title, book_style=brief.book_style,
+            narration=brief.narration, expression_decisions=brief.expression_decisions,
             world_rules=brief.world_rules,
             character_voices=brief.character_voices,
             target_chapter_count=brief.target_chapter_count,
@@ -1503,7 +1662,7 @@ def packet_metrics(book_ir: WriterBookIR) -> dict:
             ratio = None
         chapters.append({
             'chapter_ordinal': chapter.chapter_ordinal,
-            'writer_view_chars': len(''.join(view_text.split())),
+            'writer_view_chars': count_non_whitespace_chars(view_text),
             'section_entries': {
                 'must_realize': len(wp.must_realize),
                 'must_respect': len(wp.must_respect),

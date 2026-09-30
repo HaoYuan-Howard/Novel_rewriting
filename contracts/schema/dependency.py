@@ -146,14 +146,14 @@ STR06_MIGRATION_DEPENDENCY_RULES: Final[tuple[DependencyRule, ...]] = (
     # hook_context 是纯投影（Stage4 context owner）：禁止 LLM 与 Stage2/4/5/7 语义模块。
     DependencyRule(
         module='novel.stages.stage4.hook_context',
-        allows=('contracts.schema.*',),
+        allows=('contracts.schema.*', 'novel.core.name_materials'),
         forbids=('novel.llm', 'novel.llm.*', 'novel.stages.common')
         + tuple(m for m in _STAGE457 if m != 'novel.stages.stage4.hook_context')),
     # hook（Stage4 hook_design 的确定性臂与唯一 publisher）禁止 LLM 与
     # Stage5 写手／Stage7 模块，也不依赖 Stage4 编译面。
     DependencyRule(
         module='novel.stages.stage4.hook',
-        allows=('contracts.schema.*',),
+        allows=('contracts.schema.*', 'novel.core.name_materials'),
         forbids=('novel.llm', 'novel.llm.*', 'novel.stages.common',
                  'novel.stages.stage4.compile', 'novel.stages.stage4.book_ir',
                  'novel.stages.stage4.fold', 'novel.stages.stage4.guard',
@@ -168,7 +168,7 @@ STR06_MIGRATION_DEPENDENCY_RULES: Final[tuple[DependencyRule, ...]] = (
         module='novel.stages.stage5.hook_writer',
         allows=('contracts.schema.hook', 'contracts.schema.receipt',
                 'contracts.schema.context', 'contracts.schema.state',
-                'contracts.schema.base', 'novel.stages.common'),
+                'contracts.schema.base', 'novel.stages.common', 'novel.core.text'),
         forbids=('novel.llm', 'novel.llm.*')
         + tuple(m for m in _STAGE457 if m != 'novel.stages.stage5.hook_writer')),
     # naming／assembly 禁止 import design／grounding／compile／book_ir／hook
@@ -176,7 +176,7 @@ STR06_MIGRATION_DEPENDENCY_RULES: Final[tuple[DependencyRule, ...]] = (
     # F5 起 assembly 消费 body_checks（篇幅口径）与 body（前文拼接/文本 SHA）。
     DependencyRule(
         module='novel.stages.stage7.naming',
-        allows=('contracts.schema.*', 'novel.stages.common'),
+        allows=('contracts.schema.*', 'novel.stages.common', 'novel.core.text'),
         forbids=('novel.llm', 'novel.llm.*',
                  'novel.stages.stage4.grounding', 'novel.stages.stage4.design',
                  'novel.stages.stage4.compile', 'novel.stages.stage4.book_ir',

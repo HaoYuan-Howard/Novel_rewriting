@@ -34,11 +34,17 @@ OpeningRef = str  # 'init' 或 '<scene_id>#<beat_id>'；存在性归跨引用校
 class HookPov(StrictModel):
     """叙述人称与视角人物：取自 Design，不按正文多数票猜测，不强制第一人称。"""
 
+    model_config = {'extra': 'forbid', 'json_schema_extra': {'allOf': [
+        {'if': {'properties': {'person': {'const': 'first'}}},
+         'then': {'properties': {'focalizers': {'minItems': 1, 'maxItems': 1,
+                                               'items': {'not': {'const': 'narrator'}}}}}}]}}
     person: Literal['first', 'third']
     focalizers: tuple[str, ...] = Field(min_length=1)
 
     @model_validator(mode='after')
     def _first_exactly_one(self) -> 'HookPov':
+        if len(self.focalizers) != len(set(self.focalizers)):
+            raise ValueError('视角人物不得重复')
         if self.person == 'first':
             if len(self.focalizers) != 1:
                 raise ValueError('first 人称必须恰好一个视角人物')
@@ -149,7 +155,7 @@ class HookContext(StrictModel):
     validator 检查成文泄漏，不写死任何人名。
     """
 
-    contract_version: Literal['str06-rc3'] = 'str06-rc3'
+    contract_version: Literal['str06-rc11'] = 'str06-rc11'
     pov: HookPov
     opening_facts: tuple[HookOpeningFact, ...] = ()
     materials: tuple[HookMaterialView, ...] = Field(min_length=1)

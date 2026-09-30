@@ -40,7 +40,7 @@ from contracts.schema.observation import (
 )
 from contracts.schema.source import (
     NON_CHAR_HOLDERS, REGISTERED_STATE_KEYS, RETIRED_STATE_KEYS,
-    Beat, BlueprintsArtifactV13, ChapterBlueprint, CharactersArtifactV4,
+    Beat, BlueprintsArtifactV14, ChapterBlueprint, CharactersArtifactV4,
     CharactersCore, CausalEdge, Effect, InitialStateAtom, SceneSpan,
     WorldConstraint,
 )
@@ -50,6 +50,7 @@ from novel.stages.stage2.associate import (
     project_association_space, serialize_target, target_label,
 )
 from novel.stages.stage2.book import character_core_view
+from novel.stages.stage2.expression import compile_source_expression
 
 #: 认知模式中构成「确认时点」的模态：读者/人物只有 learns／confirms 算确认。
 CONFIRMING_MODES: frozenset[str] = frozenset({'learns', 'confirms'})
@@ -122,7 +123,7 @@ class CompileOutcome:
     """compile_source_truth 的结构化结果：可发布时三份产物齐全，否则未决/错误。"""
 
     characters: CharactersArtifactV4 | None = None
-    blueprint: BlueprintsArtifactV13 | None = None
+    blueprint: BlueprintsArtifactV14 | None = None
     fold: dict[str, Any] = field(default_factory=dict)
     #: D8 未决项（按 item 定位）：存在即拒绝发布，恢复走 owner patch 或 associate
     #: 定向修订——compile 不替 semantic unit 拿主意。
@@ -314,44 +315,38 @@ class _BookCompile:
 # ───────────────────────── 主编译 ─────────────────────────
 
 
-def first_appearance_issues(characters, blueprint) -> list[str]:
-    """人物首现闸（R8c）：某章 participants／cognition holder 引用的人物，
-    其最早称谓锚点章（surfaces 的 min ``from_chapter``）晚于本章 ⇒ typed
-    issue ``participant_before_first_appearance``。
+def first_appearance_anchors(characters) -> dict[str, int | None]:
+    """从同一 character_core_view／canonical 称谓面派生最早证据锚点。"""
+    return {cid: min((s.from_chapter for s in entry.surfaces), default=None)
+            for cid, entry in characters.characters.items()}
 
-    不登记回派路由（路由表语义外即停），恢复走该章观察重问或 owner patch；
-    无 surfaces 的人物不判（锚点面缺失归 names 观察自身的闭集闸）。canary
-    20260929b 实证：ch09 观察把叙述者芸娘误绑为 daughter（女儿第 10 章才
-    出生，最早锚 ch10）——本闸在第 10/11 章合法出场不误报的前提下判出 ch09。
-    """
-    earliest_anchor = {
-        char_id: min((s.from_chapter for s in entry.surfaces), default=None)
-        for char_id, entry in characters.characters.items()}
+
+def first_appearance_issues(
+    earliest_anchor: Mapping[str, int | None], *, chapter: int, beats,
+) -> list[str]:
+    """同一道首现闸用于单章接受及最终 compile；无锚点保持未判。"""
     issues: list[str] = []
-    for chapter in blueprint.chapters:
-        for beat in chapter.beats:
-            refs = set(beat.participants)
-            for cog in beat.cognition:
-                if cog.holder:
-                    refs.add(cog.holder)
-            for char_id in sorted(refs):
-                anchor = earliest_anchor.get(char_id)
-                if anchor is not None and chapter.chapter < anchor:
-                    issues.append(
-                        f'participant_before_first_appearance'
-                        f'[{char_id}@ch{chapter.chapter:02d}]：'
-                        f'{char_id} 在第 {chapter.chapter} 章作为参与者/认知持有者'
-                        f'出场，但其最早称谓锚点在第 {anchor} 章——首现早于任何'
-                        '称谓证据（QP-01 同类：观察把既有人物误绑到晚出场角色）；'
-                        '恢复走该章观察重问或 owner patch')
+    for beat in beats:
+        refs = set(beat.participants) | {c.holder for c in beat.cognition if c.holder}
+        for char_id in sorted(refs):
+            anchor = earliest_anchor.get(char_id)
+            if anchor is not None and chapter < anchor:
+                issues.append(
+                    f'participant_before_first_appearance[{char_id}@ch{chapter:02d}]：'
+                    f'{char_id} 在第 {chapter} 章作为参与者/认知持有者'
+                    f'出场，但其最早称谓锚点在第 {anchor} 章——首现早于任何'
+                    '称谓证据（QP-01 同类：观察把既有人物误绑到晚出场角色）；'
+                    '恢复走该章观察重问或 owner patch')
     return issues
+
 
 def compile_source_truth(
     *, book: BookObservation, chapters: Mapping[int, ChapterObservation],
     names: NamesObservation, associate: AssociateObservation,
     evidence: Mapping[str, Mapping[str, Any]],
+    source_texts: tuple[str, ...] | None = None,
 ) -> CompileOutcome:
-    """四份观察 → (CharactersArtifactV4, BlueprintsArtifactV13, fold 读数)。
+    """四份观察 → (CharactersArtifactV4, BlueprintsArtifactV14, fold 读数)。
 
     未决项不发布（D8）；机械缺陷不发布（I-34）；两份真源由同一结果一次成形，
     落盘仍由 runner 经 repository 的原子写与来源账完成（I-25 唯一 writer）。
@@ -430,7 +425,8 @@ def compile_source_truth(
                         statement=rule.statement, source_refs=rule.source_refs)
         for index, rule in enumerate(book.world_constraints, 1)]
     try:
-        blueprint = BlueprintsArtifactV13(
+        blueprint = BlueprintsArtifactV14(
+            source_expression=compile_source_expression(book.expression, texts=source_texts),
             world_constraints=world_constraints, chapters=tuple(chapter_blueprints))
     except ValidationError as exc:
         errors.append(f'blueprint 构造失败：{exc}')
@@ -449,7 +445,9 @@ def compile_source_truth(
         pre_chapter_evidence=frozenset(
             ref for ref, seg in evidence.items() if seg.get('pre_chapter')),
         proposition_registry=statements)
-    errors.extend(first_appearance_issues(merged, blueprint))
+    anchors = first_appearance_anchors(merged)
+    for chapter in blueprint.chapters:
+        errors.extend(first_appearance_issues(anchors, chapter=chapter.chapter, beats=chapter.beats))
     outcome.characters = merged
     outcome.blueprint = blueprint
     outcome.fold = {
@@ -886,7 +884,7 @@ def initial_snapshot(characters: CharactersCore) -> list[str]:
 
 
 def source_fold(
-    characters: CharactersCore, blueprint: BlueprintsArtifactV13,
+    characters: CharactersCore, blueprint: BlueprintsArtifactV14,
     *, pre_chapter_evidence: frozenset[str] = frozenset(),
     proposition_registry: dict[str, str] | None = None,
 ) -> FoldResult:

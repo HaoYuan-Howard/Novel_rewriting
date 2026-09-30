@@ -194,6 +194,30 @@ _ID_PENDING = ('工程 ID／地址位；不进写手阅读面（renderer 以自�
 
 #: 字段级送达登记（R0）。键=字段路径；面与守卫见模块头【R0 字段级送达登记】。
 STR06_FIELD_DELIVERY: dict[str, FieldDeliverySpec] = {
+    'writer_book_ir.book_brief.narration.person': _spec(
+        'writer_book_ir.book_brief.narration.person', consumers=(_W,), scope=_EVERY,
+        mode=DeliveryMode.MUST_RESPECT, note='正文人称；对白自称不改变叙述人称'),
+    'writer_book_ir.book_brief.narration.focalizers': _spec(
+        'writer_book_ir.book_brief.narration.focalizers', consumers=(_A,), scope=_EVERY,
+        mode=DeliveryMode.AUDIT_ONLY, note='视角许可闭集；场景 POV 经已释放称谓送达'),
+    'writer_book_ir.book_brief.expression_decisions[].ex_id': _spec(
+        'writer_book_ir.book_brief.expression_decisions[].ex_id', consumers=(_A,), scope=_EVERY,
+        mode=DeliveryMode.AUDIT_ONLY, note='表达决定定位，不渲染内部编号'),
+    'writer_book_ir.book_brief.expression_decisions[].action': _spec(
+        'writer_book_ir.book_brief.expression_decisions[].action', consumers=(_A,), scope=_EVERY,
+        mode=DeliveryMode.AUDIT_ONLY, note='keep／change 审阅依据；渲染已决定的语义'),
+    'writer_book_ir.book_brief.expression_decisions[].reason': _spec(
+        'writer_book_ir.book_brief.expression_decisions[].reason', consumers=(_A,), scope=_EVERY,
+        mode=DeliveryMode.AUDIT_ONLY, note='改写理由供审阅，不改变已选表达内容'),
+    'writer_book_ir.book_brief.expression_decisions[].statement': _spec(
+        'writer_book_ir.book_brief.expression_decisions[].statement', consumers=(_W,), scope=_EVERY,
+        mode=DeliveryMode.CREATIVE_GUIDANCE, note='已决定的表达机制原样送达导演说明'),
+    'writer_book_ir.chapters[].continuity.entry.anchor': _spec(
+        'writer_book_ir.chapters[].continuity.entry.anchor', consumers=(_A,), scope=_CHAP,
+        mode=DeliveryMode.AUDIT_ONLY, note='较早事件的正式拍引用；阅读面渲染对应事件'),
+    'writer_book_ir.chapters[].continuity.anchor_event': _spec(
+        'writer_book_ir.chapters[].continuity.anchor_event', consumers=(_W,), scope=_CHAP,
+        mode=DeliveryMode.CONTINUITY, note='较早锚点的事件陈述，配合显式衔接方式送达'),
     # ── WriterBookIR：书级层（BookBrief）──────────────────────────────────
     'writer_book_ir.contract_version': _spec(
         'writer_book_ir.contract_version', consumers=(_A,), scope=_NONE,

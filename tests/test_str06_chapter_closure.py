@@ -38,6 +38,9 @@ def _projection():
     """最小名称投影（compile 的材料参数）：真实人物表投影，禁用面非空。"""
     return _name_source().name_projection()
 from contracts.schema.workflow import STAGE4_DESIGN_PROTOCOL
+from tests.str06_expression_inputs import (
+    sample_narration, sample_requirements, sample_design_expression, sample_canonical_expression,
+)
 
 H64 = 'a' * 64
 
@@ -69,7 +72,7 @@ def _scene(sid, beats, reads=()) -> TargetScene:
 def _graph(scenes, chapters, initial=()) -> BodyDesign:
     """canonical 图：chapters = [(章序, (sid, ...))]；权重默认均分。"""
     n = len(scenes)
-    return BodyDesign(
+    return BodyDesign(**sample_canonical_expression(tuple(scenes)),
         graph_id='g', book_style='冷峻克制的第三人称叙事。',
         initial_state=tuple(initial), scenes=tuple(scenes),
         chapters=tuple(ChapterAssignment(chapter_ordinal=o, purpose=f'第{o}章',
@@ -184,7 +187,7 @@ def test_read_after_write_resolves_new_value_and_misplacement_is_refused():
 
 def test_wire_read_anchor_resolves_to_canonical_beat_id():
     """wire 的读取定位是 1-based 拍序，compiler 解析成场内 beat_id（I-21）。"""
-    wire = {
+    wire = {**sample_design_expression(('ch1',)),
         'protocol_version': STAGE4_DESIGN_PROTOCOL,
         'book_style': '冷峻克制的第三人称叙事。',
         'initial_state': [],
@@ -205,16 +208,21 @@ def test_wire_read_anchor_resolves_to_canonical_beat_id():
         'chapters': [{'purpose': '一章', 'scenes': 1}],
         'scene_weights': [1],
     }
-    body, errors = assemble_body_design(wire, known_char_ids={'ch1'})
+    body, errors = assemble_body_design(wire, known_char_ids={'ch1'}, expression_requirements=sample_requirements(), source_narration=sample_narration())
     assert not errors, errors
     assert body.scenes[0].state_reads[0].at == 'b02'
 
+    wire['scenes'][0]['state_reads'][0]['at'] = 1
+    rejected, errors = assemble_body_design(wire, known_char_ids={'ch1'}, expression_requirements=sample_requirements(), source_narration=sample_narration())
+    assert rejected is None and any('未建立' in e for e in errors), \
+        '建立拍先读后写：接受阶段就报错，不能等购买 Binding 后才拒'
+
     wire['scenes'][0]['state_reads'][0]['at'] = 3  # 越界定位精确拒
-    _, errors = assemble_body_design(wire, known_char_ids={'ch1'})
+    _, errors = assemble_body_design(wire, known_char_ids={'ch1'}, expression_requirements=sample_requirements(), source_narration=sample_narration())
     assert any('读取定位非法' in e for e in errors)
     wire['scenes'][0]['state_reads'][0]['at'] = 2
     wire['scenes'][0]['state_reads'][0]['beat_id'] = 'b02'  # 白名单外键即拒（Q-1）
-    _, errors = assemble_body_design(wire, known_char_ids={'ch1'})
+    _, errors = assemble_body_design(wire, known_char_ids={'ch1'}, expression_requirements=sample_requirements(), source_narration=sample_narration())
     assert any('Extra inputs' in e for e in errors), errors
 
 

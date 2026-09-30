@@ -23,12 +23,15 @@ from contracts.schema import (
     NamesObservation,
 )
 from contracts.schema.observation import (
-    STAGE2_ASSOCIATE_PROTOCOL, STAGE2_OBSERVATION_PROTOCOL,
+    STAGE2_ASSOCIATE_PROTOCOL, STAGE2_OBSERVATION_PROTOCOL, STAGE2_BOOK_PROTOCOL,
 )
 from contracts.schema.source import FamilyEntry, NameStructure, PersonNameStructure
 from contracts.schema.workflow import STR06_RC_LABELS, STR06_RC_VERSION
 from novel.stages.stage2 import EvidenceResolver, ResolverIssue
 from novel.stages.stage2.resolver import chapter_of_evidence
+from tests.str06_expression_inputs import (
+    sample_book_expression,
+)
 
 STAGE2_NODES = ('str06.stage2.book', 'str06.stage2.chapters', 'str06.stage2.names',
                 'str06.stage2.associate', 'str06.stage2.compile')
@@ -87,8 +90,9 @@ def test_retired_derived_inputs_are_refused_paths():
 
 # ───────────────────────── 协议显式版本化（I-13） ─────────────────────────
 
-def test_observation_artifacts_are_registered_with_rc6():
-    for rel in ('stage2/observations/book.json', 'stage2/observations/ch{nn}.json',
+def test_observation_artifacts_are_registered_with_independent_versions():
+    assert STR06_ARTIFACT_RC_VERSIONS['stage2/observations/book.json'] == 'str06-rc11'
+    for rel in ('stage2/observations/ch{nn}.json',
                 'stage2/observations/names.json'):
         assert rel in ARTIFACT_PATHS and rel in ARTIFACT_SPECS
         assert STR06_ARTIFACT_RC_VERSIONS[rel] == 'str06-rc6'
@@ -97,8 +101,8 @@ def test_observation_artifacts_are_registered_with_rc6():
     assert ARTIFACT_SPECS['stage2/observations/associate.json']
     assert STR06_ARTIFACT_RC_VERSIONS['stage2/observations/associate.json'] == 'str06-rc9'
     # R2（语义送达）起 RC 版式头升 rc10；associate 冻结在 rc9（R1 身份）不动。
-    assert STR06_RC_VERSION == 'str06-rc10'
-    for label in ('str06-rc6', 'str06-rc9', 'str06-rc10'):
+    assert STR06_RC_VERSION == 'str06-rc11'
+    for label in ('str06-rc6', 'str06-rc9', 'str06-rc10', 'str06-rc11'):
         assert label in STR06_RC_LABELS
     assert str06_chapter_observation_rel(3) == 'stage2/observations/ch03.json'
     assert artifact_rel('stage2/observations/ch{nn}.json', nn=12) == \
@@ -107,7 +111,7 @@ def test_observation_artifacts_are_registered_with_rc6():
 
 def test_protocol_version_is_required_literal():
     book = _book_observation()
-    assert book.protocol_version == STAGE2_OBSERVATION_PROTOCOL
+    assert book.protocol_version == STAGE2_BOOK_PROTOCOL
     wrong = _book_wire()
     wrong['protocol_version'] = 'stage2-observation-v0'
     with pytest.raises(ValidationError):
@@ -117,8 +121,16 @@ def test_protocol_version_is_required_literal():
 
 
 def _book_wire() -> dict:
-    return {
-        'protocol_version': 'stage2-observation-v1',
+    return {**sample_book_expression({
+            'fu_jun': {'canonical': '夫君', 'surfaces': [
+                {'surface': '夫君', 'source_refs': ['e01_01']},
+                {'surface': '他', 'source_refs': ['e01_01']},
+            ]},
+            'yun_niang': {'canonical': '云娘', 'surfaces': [
+                {'surface': '云娘', 'source_refs': ['e01_02']},
+            ]},
+        }),
+        'protocol_version': 'stage2-book-v2',
         'characters': {
             'fu_jun': {'canonical': '夫君', 'surfaces': [
                 {'surface': '夫君', 'source_refs': ['e01_01']},

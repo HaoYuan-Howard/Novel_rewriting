@@ -56,9 +56,10 @@ from pydantic import Field, model_validator
 
 from contracts.schema.base import StrictModel
 from contracts.schema.common import FreeProvenance, LlmProvenance
-from contracts.schema.hook import HookDesign
+from contracts.schema.hook import HookDesign, HookPov
+from contracts.schema.expression import ExpressionDecision, ExpressionDecisionWire
 from contracts.schema.state import (
-    EffectDomain, StateAddress, StateChange, StateRead, SurfaceIntroduction,
+    EffectDomain, StateAddress, StateChange, StateRead, SurfaceIntroduction, change_schema,
 )
 from typing import Final, Literal
 import math
@@ -71,6 +72,15 @@ class SceneDriver(StrictModel):
     immediate_want: str = Field(min_length=1)
     opposition: str = Field(min_length=1)
     turn: str = Field(min_length=1)
+
+
+def target_delta_schema(schema: dict) -> None:
+    change_schema(schema)
+    schema['allOf'].append({
+        'if': {'properties': {'domain': {'const': 'reader'}, 'op': {'const': 'set'}}},
+        'then': {'required': ['confirms'], 'properties': {'confirms': {
+            'not': {'type': 'null'}, 'properties': {'domain': {'not': {'const': 'reader'}}}}}},
+        'else': {'properties': {'confirms': {'type': 'null'}}}})
 
 
 class TargetDelta(StateChange):
@@ -91,6 +101,7 @@ class TargetDelta(StateChange):
     #: 语义等价归上游判断；Compiler 不解释自然语言补猜事实——所以这里没有
     #: 「等价于源 XX」的备注字段，要写等价判断就升到 Design 上游的语义层。
 
+    model_config = {'extra': 'forbid', 'json_schema_extra': target_delta_schema}
     confirms: 'StateAddress | None' = None
 
     @model_validator(mode='after')
@@ -227,11 +238,18 @@ class ChapterEntry(StrictModel):
 
     #: 衔接方式闭集：紧接上一章末尾／时间跳跃／切到别处／换视角／新场景开场。
     transition: Literal['immediate_continuation', 'time_skip', 'location_cut',
-                        'pov_shift', 'new_scene']
+                        'pov_shift', 'new_scene', 'flashback']
     #: 延续到本章的动作或张力（可选；一句话，不展开成写作任务）。
     carryover: str | None = Field(default=None, min_length=1)
     #: 复述策略：不复述上一章结尾／用一两句重新定向。
     recap: Literal['do_not_recap', 'brief_orientation']
+    anchor: str | None = Field(default=None, pattern=r'^[^#]+#[^#]+$')
+
+    @model_validator(mode='after')
+    def _anchor_branch(self):
+        if self.transition in ('immediate_continuation', 'flashback') and self.anchor is None:
+            raise ValueError('immediate_continuation／flashback 必须显式定位较早事件拍 anchor')
+        return self
 
     @classmethod
     def opening(cls) -> 'ChapterEntry':
@@ -307,8 +325,10 @@ class BodyDesign(StrictModel):
     （`TargetBeat.threads`，折叠走 ThreadFold）。rc7 的四个静态锚定列表
     已删除（AUD-04：无消费者；裁决 3）。
     """
-    contract_version: Literal['str06-rc10'] = 'str06-rc10'
+    contract_version: Literal['str06-rc11'] = 'str06-rc11'
     graph_id: str = Field(min_length=1)
+    narration: HookPov
+    expression_decisions: tuple[ExpressionDecision, ...] = Field(min_length=1)
     #: 整书风格（叙述质地与表达规则的书面声明；进 BookBrief）。
     book_style: str = Field(min_length=1)
     #: 书级世界边界（目标侧，R2.5：由 Design 决定沿用或改写源侧 world_constraints；
@@ -346,6 +366,14 @@ class BodyDesign(StrictModel):
 
     @model_validator(mode='after')
     def _chapters_consistent(self) -> 'BodyDesign':
+        choices = [d.ex_id for d in self.expression_decisions]
+        if len(choices) != len(set(choices)):
+            raise ValueError('每项源表达必须恰好一个决定，不得重复 ex_id')
+        for scene in self.scenes:
+            permitted = (self.narration.focalizers if self.narration.person == 'first'
+                         else (*self.narration.focalizers, 'narrator'))
+            if scene.delivery.pov not in permitted:
+                raise ValueError(f'{scene.scene_id} 的 POV 不服从书级 narration')
         ordinals = [c.chapter_ordinal for c in self.chapters]
         expected = list(range(1, len(self.chapters) + 1))
         if sorted(ordinals) != expected:
@@ -382,6 +410,17 @@ class BodyDesign(StrictModel):
         if first.entry != ChapterEntry.opening():
             raise ValueError('第 1 章的 entry 固定为开篇'
                              '（new_scene＋do_not_recap＋无 carryover），不得另行声明')
+        chapter_of = {sid: c.chapter_ordinal for c in self.chapters for sid in c.scene_ids}
+        for chapter in self.chapters:
+            anchor = chapter.entry.anchor
+            if anchor is not None:
+                if anchor not in self.beat_refs() or chapter_of[anchor.split('#')[0]] >= chapter.chapter_ordinal:
+                    raise ValueError(f'第 {chapter.chapter_ordinal} 章的 anchor 必须存在且早于本章')
+            if chapter.entry.transition == 'immediate_continuation':
+                previous = next(c for c in self.chapters if c.chapter_ordinal == chapter.chapter_ordinal - 1)
+                last = next(s for s in self.scenes if s.scene_id == previous.scene_ids[-1])
+                if anchor != f'{last.scene_id}#{last.beats[-1].beat_id}':
+                    raise ValueError('immediate_continuation 的 anchor 必须为上一章末拍')
         return self
 
     @model_validator(mode='after')
@@ -480,7 +519,7 @@ class PresentationGraph(BodyDesign):
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# wire v3（stage4-design-v3，R8b／D8 修订 2026-09-29）
+# wire v3（stage4-design-v4，R8b／D8 修订 2026-09-29）
 #
 # 初始态与拍上 target_delta **分开建模**：拍上 `scope` 必填（无默认——漏写
 # 即一次报出，不再靠 prompt 提醒）；初始态作用域恒 book（写 scene 即拒，
@@ -499,10 +538,23 @@ class DesignWireInitial(TargetDelta):
     scope: Literal['book'] = 'book'
 
 
+def wire_thread_schema(schema: dict) -> None:
+    fields = ('tag', 'ref', 'kind', 'subject', 'text', 'progress', 'ending', 'resolution')
+    schema['allOf'] = [
+        {'if': {'properties': {'op': {'const': op}}},
+         'then': {'required': list(required), 'properties': {
+             key: ({'not': {'type': 'null'}} if key in required else {'type': 'null'})
+             for key in fields}}}
+        for op, required in (('open', ('tag', 'kind', 'subject', 'text')),
+                             ('advance', ('ref', 'progress')),
+                             ('close', ('ref', 'ending', 'resolution')))]
+
+
 class DesignWireThread(StrictModel):
     """wire v3 线程操作：open 用本地标签 tag，advance/close 用 ref 引它；
     canonical `th{nn}` 由 compiler 按 open 先后派发（I-21）。键集按 op 收紧。"""
 
+    model_config = {'extra': 'forbid', 'json_schema_extra': wire_thread_schema}
     op: Literal['open', 'advance', 'close']
     tag: str | None = Field(default=None, min_length=1)
     ref: str | None = Field(default=None, min_length=1)
@@ -582,13 +634,37 @@ class DesignWireChapter(StrictModel):
 
     purpose: str = Field(min_length=1)
     scenes: int = Field(ge=1)
-    entry: ChapterEntry | None = None
+    entry: 'DesignWireEntry | None' = None
 
 
-class DesignWireV3(StrictModel):
-    """`stage4-design-v3` wire 顶层：形状在此一次校验（extra 键即拒）。"""
+class DesignWireAnchor(StrictModel):
+    scene: int = Field(ge=1, strict=True)
+    beat: int = Field(ge=1, strict=True)
 
-    protocol_version: Literal['stage4-design-v3']
+
+class DesignWireEntry(StrictModel):
+    model_config = {'extra': 'forbid', 'json_schema_extra': {'allOf': [
+        {'if': {'properties': {'transition': {'enum': ['immediate_continuation', 'flashback']}}},
+         'then': {'required': ['anchor'], 'properties': {'anchor': {'not': {'type': 'null'}}}}}]}}
+    transition: Literal['immediate_continuation', 'time_skip', 'location_cut',
+                        'pov_shift', 'new_scene', 'flashback']
+    carryover: str | None = Field(default=None, min_length=1)
+    recap: Literal['do_not_recap', 'brief_orientation']
+    anchor: DesignWireAnchor | None = None
+
+    @model_validator(mode='after')
+    def _anchor_branch(self):
+        if self.transition in ('immediate_continuation', 'flashback') and self.anchor is None:
+            raise ValueError('immediate_continuation／flashback 必须显式定位较早事件拍 anchor')
+        return self
+
+
+class DesignWireV4(StrictModel):
+    """`stage4-design-v4` wire 顶层：形状在此一次校验（extra 键即拒）。"""
+
+    protocol_version: Literal['stage4-design-v4']
+    narration: HookPov
+    expression_decisions: tuple[ExpressionDecisionWire, ...] = Field(min_length=1)
     book_style: str = Field(min_length=1)
     world_rules: tuple[str, ...] = Field(default=(), min_length=0)
     character_voices: tuple[CharacterVoice, ...] = Field(default=(), min_length=0)

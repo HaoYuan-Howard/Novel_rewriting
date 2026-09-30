@@ -47,6 +47,9 @@ from novel.stages.stage4.guard import (
     run_mechanical_guard,
     scene_order,
 )
+from tests.str06_expression_inputs import (
+    sample_canonical_expression,
+)
 
 H64 = 'a' * 64
 
@@ -63,7 +66,7 @@ def _scene(scene_id: str, *participants: str) -> TargetScene:
 
 
 def _graph() -> BodyDesign:
-    return BodyDesign(initial_state=(),
+    return BodyDesign(**sample_canonical_expression((_scene('s01', 'ch1'), _scene('s02', 'ch1', 'ch2'), _scene('s03', 'ch1'))), initial_state=(),
         graph_id='g1', book_style='冷峻克制的第三人称叙事。',
         scenes=(_scene('s01', 'ch1'), _scene('s02', 'ch1', 'ch2'), _scene('s03', 'ch1')),
         chapters=(
@@ -71,7 +74,7 @@ def _graph() -> BodyDesign:
                               entry=ChapterEntry.opening()),
             ChapterAssignment(chapter_ordinal=2, purpose='承', scene_ids=('s02',),
                               entry=ChapterEntry(transition='immediate_continuation',
-                                                 recap='do_not_recap')),
+                                                 recap='do_not_recap', anchor='s01#bt1')),
             ChapterAssignment(chapter_ordinal=3, purpose='转', scene_ids=('s03',),
                               entry=ChapterEntry(transition='location_cut',
                                                  recap='brief_orientation')),

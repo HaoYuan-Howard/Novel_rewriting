@@ -28,6 +28,9 @@ from novel.stages.stage7.naming import (
 from novel.stages.stage7.assembly import (
     BodyAccess, assemble_delivery, chapter_access, delivery_identity,
 )
+from tests.str06_expression_inputs import (
+    sample_narration, sample_requirements, sample_design_expression,
+)
 
 SRC = ('皇甫珩执剑护院。陈砚与陈松是亲兄弟，住在陈家。赵老大与赵老二素不相识。'
        '云溪居士隐居山中。夫人安坐。柳条垂岸。')
@@ -376,8 +379,8 @@ def test_released_surfaces_close_over_the_replacement_table():
     # 生产端同一道闸：放行面取自登记面才编译得过（registered_surfaces）
     registered = {cid: {s.surface for s in entry.surfaces}
                   for cid, entry in chars.characters.items()}
-    design_wire = {
-        'protocol_version': 'stage4-design-v3',
+    design_wire = {**sample_design_expression(('huang_fu_heng',)),
+        'protocol_version': 'stage4-design-v4',
         'book_style': '平实克制的第三人称叙事。',
         'initial_state': [],
         'scenes': [{
@@ -395,7 +398,7 @@ def test_released_surfaces_close_over_the_replacement_table():
     }
     body, errors = assemble_body_design(
         design_wire, known_char_ids=set(chars.characters),
-        registered_surfaces=registered)
+        registered_surfaces=registered, expression_requirements=sample_requirements(), source_narration=sample_narration())
     assert body is not None and not errors, errors
 
     prose = '、'.join(released) + '同席。'

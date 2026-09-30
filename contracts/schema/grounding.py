@@ -12,6 +12,8 @@ from contracts.schema.base import StrictModel
 from contracts.schema.common import FreeProvenance, LlmProvenance
 from contracts.schema.policy import PreserveKind
 from typing import Literal
+from contracts.schema.expression import ExpressionRequirement, ExpressionReadings
+from contracts.schema.hook import HookPov
 
 
 class SourceLineage(StrictModel):
@@ -121,11 +123,14 @@ class ReconstructionBrief(StrictModel):
     拓扑是 Preserve→Design 的冻结边界，字段缺失就是它的类型层表达。
     """
 
-    contract_version: Literal['str06-rc3'] = 'str06-rc3'
+    contract_version: Literal['str06-rc11'] = 'str06-rc11'
     brief_id: str = Field(min_length=1)
     preserve_checkpoint_sha256: str = Field(min_length=64, max_length=64)
     requirements: tuple[BriefRequirement, ...] = Field(min_length=1)
     book_constraints: tuple[str, ...] = Field(default=(), min_length=0)
+    source_narration: HookPov
+    expression: tuple[ExpressionRequirement, ...] = Field(min_length=1)
+    expression_readings: ExpressionReadings
     provenance: FreeProvenance | LlmProvenance | None = Field(
         default=None, alias='_provenance', exclude=True)
 

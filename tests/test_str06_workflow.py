@@ -14,6 +14,9 @@ from novel.store import Str06Repository
 from novel.stages.chain import run_workflow
 from tests.str06_facilities import make_context, synthetic_ref
 from tests.test_str06_target import _preserve_wire, _design_wire
+from tests.str06_expression_inputs import (
+    sample_book_expression, sample_design_expression,
+)
 
 PV = 'stage2-observation-v1'
 
@@ -27,7 +30,11 @@ def _obs_beat(event, refs, **over):
 
 
 def test_stage2_stage4_repository_replay_and_writer_consumer(tmp_path):
-    book = {'protocol_version': PV, 'characters': {
+    book = {**sample_book_expression({
+        'fu_jun': {'canonical': '夫君', 'surfaces': [
+            {'surface': '夫君', 'source_refs': ['e01_01']}]},
+        'yun': {'canonical': '云娘', 'surfaces': [
+            {'surface': '云娘', 'source_refs': ['e01_01']}]}}), 'protocol_version': 'stage2-book-v2', 'characters': {
         'fu_jun': {'canonical': '夫君', 'surfaces': [
             {'surface': '夫君', 'source_refs': ['e01_01']}]},
         'yun': {'canonical': '云娘', 'surfaces': [
@@ -65,6 +72,8 @@ def test_stage2_stage4_repository_replay_and_writer_consumer(tmp_path):
             'delivery_brief': '第一人称限知，短句，不解释。',
         },
     }
+    wires['design']['initial_surfaces'] = [{'char_id': 'yun', 'surfaces': ['云娘']},
+                                          {'char_id': 'fu_jun', 'surfaces': ['夫君']}]
     requests = []
     def ask(owner, prompt, validate):
         data = deepcopy(wires[owner])
@@ -195,7 +204,11 @@ def test_changed_hook_copy_refuses_the_old_root_and_changes_requests(tmp_path):
     chapters = [{'chapter_ordinal': 1, 'text': '云娘提出约定，夫君知晓真相。'},
                 {'chapter_ordinal': 2, 'text': '第二夜窗外有响动。'}]
     wires = {
-        'book': {'protocol_version': 'stage2-observation-v1', 'characters': {
+        'book': {**sample_book_expression({
+            'fu_jun': {'canonical': '夫君', 'surfaces': [
+                {'surface': '夫君', 'source_refs': ['e01_01']}]},
+            'yun': {'canonical': '云娘', 'surfaces': [
+                {'surface': '云娘', 'source_refs': ['e01_01']}]}}), 'protocol_version': 'stage2-book-v2', 'characters': {
             'fu_jun': {'canonical': '夫君', 'surfaces': [
                 {'surface': '夫君', 'source_refs': ['e01_01']}]},
             'yun': {'canonical': '云娘', 'surfaces': [
@@ -270,7 +283,11 @@ def test_concealed_fact_reaches_writer_as_pending_reader_confirmation(tmp_path):
     断言：确认前各场清单列出该事实；确认场标注确认拍；fold 的未揭示报告为空
     （读者确已在该拍确认）。
     """
-    book = {'protocol_version': PV, 'characters': {
+    book = {**sample_book_expression({
+        'fu_jun': {'canonical': '夫君', 'surfaces': [
+            {'surface': '夫君', 'source_refs': ['e01_01']}]},
+        'yun': {'canonical': '云娘', 'surfaces': [
+            {'surface': '云娘', 'source_refs': ['e01_01']}]}}), 'protocol_version': 'stage2-book-v2', 'characters': {
         'fu_jun': {'canonical': '夫君', 'surfaces': [
             {'surface': '夫君', 'source_refs': ['e01_01']}]},
         'yun': {'canonical': '云娘', 'surfaces': [
@@ -289,8 +306,8 @@ def test_concealed_fact_reaches_writer_as_pending_reader_confirmation(tmp_path):
                   participants=('yun', 'fu_jun'), scene_boundary='continue',
                   cognition=[{'proposition': {'ref': 'p_hide'},
                               'holder': 'reader', 'mode': 'learns'}])]}
-    design = {
-        'protocol_version': 'stage4-design-v3',
+    design = {**sample_design_expression(('yun',)),
+        'protocol_version': 'stage4-design-v4',
         'book_style': '冷峻克制的第三人称叙事。',
         'initial_state': [],
         'scenes': [

@@ -36,6 +36,9 @@ from contracts.schema.design import (
 )
 from contracts.schema.receipt import ChapterLengthDisclosure, ChapterReceipt
 from contracts.schema.state import EffectDomain, StateRead
+from tests.str06_expression_inputs import (
+    sample_narration, sample_requirements, sample_design_expression, sample_canonical_expression,
+)
 
 H64 = 'a' * 64
 
@@ -73,6 +76,7 @@ def _assignment(ordinal: int, scene_ids, entry: ChapterEntry | None = None) -> C
 
 def _graph(scenes, chapters, **over) -> BodyDesign:
     base = dict(
+        **sample_canonical_expression(scenes),
         graph_id='g1', initial_state=(), book_style='冷峻克制的第三人称叙事。',
         scenes=tuple(scenes), chapters=tuple(chapters))
     base.update(over)
@@ -212,8 +216,9 @@ def test_world_rules_live_on_design():
 
 def test_chapter_entry_transition_is_a_closed_set():
     for good in ('immediate_continuation', 'time_skip', 'location_cut',
-                 'pov_shift', 'new_scene'):
-        ChapterEntry(transition=good, recap='do_not_recap')
+                 'pov_shift', 'new_scene', 'flashback'):
+        ChapterEntry(transition=good, recap='do_not_recap',
+                     anchor='s01#b01' if good in ('immediate_continuation', 'flashback') else None)
     with pytest.raises(ValidationError):
         ChapterEntry(transition='flash_back', recap='do_not_recap')
     with pytest.raises(ValidationError):
@@ -228,7 +233,7 @@ def test_first_chapter_entry_is_fixed_opening():
         _graph([_scene('s01', [_beat('b01', 'e')])],
                [ChapterAssignment(chapter_ordinal=1, purpose='p', scene_ids=('s01',),
                                   entry=ChapterEntry(transition='immediate_continuation',
-                                                     recap='do_not_recap'))])
+                                                     recap='do_not_recap', anchor='s01#b01'))])
 
 
 def test_entry_is_required_on_every_chapter():
@@ -584,7 +589,7 @@ def _thread_graph() -> BodyDesign:
         [_assignment(1, ('s01',)),
          _assignment(2, ('s02', 's03', 's04'),
                      ChapterEntry(transition='immediate_continuation',
-                                  recap='do_not_recap'))])
+                                  recap='do_not_recap', anchor='s01#b01'))])
 
 
 def test_m8_thread_projection_rules_and_guard():
@@ -644,15 +649,15 @@ def test_r2_version_constants():
         STAGE4_DESIGN_PROTOCOL, STR06_RC_LABELS, STR06_RC_VERSION,
     )
     from novel.stages.common import RENDERER_VERSION, WRITER_PROTOCOL_VERSION
-    assert STAGE4_DESIGN_PROTOCOL == 'stage4-design-v3'
-    assert STR06_RC_VERSION == 'str06-rc10'          # rc9 已被 R1 的 associate 占用
+    assert STAGE4_DESIGN_PROTOCOL == 'stage4-design-v4'
+    assert STR06_RC_VERSION == 'str06-rc11'          # R9 表达送达集中升版
     assert 'str06-rc10' in STR06_RC_LABELS
-    assert RENDERER_VERSION == 'str06-render-v5'
-    assert WRITER_PROTOCOL_VERSION == 'str06-body-protocol-v5'
+    assert RENDERER_VERSION == 'str06-render-v6'
+    assert WRITER_PROTOCOL_VERSION == 'str06-body-protocol-v6'
     for rel in ('stage4/design/body_design.json',
                 'stage4/design/presentation_graph.json',
                 'stage4/ir/writer_book_ir.json'):
-        assert STR06_ARTIFACT_RC_VERSIONS[rel] == 'str06-rc10', rel
+        assert STR06_ARTIFACT_RC_VERSIONS[rel] == 'str06-rc11', rel
     assert STR06_ARTIFACT_RC_VERSIONS['stage5/acceptance/body/ch{nn}.json'] \
         == 'str06-rc6'
 
@@ -661,8 +666,8 @@ def test_r2_version_constants():
 
 def _wire_v2() -> dict:
     """两章三拍的 design wire v2：threads（本地标签）＋world_rules＋entry。"""
-    return {
-        'protocol_version': 'stage4-design-v3',
+    return {**sample_design_expression(('yun',)),
+        'protocol_version': 'stage4-design-v4',
         'book_style': '冷峻克制的第三人称叙事。',
         'world_rules': ['术法须以寿命为代价'],
         'initial_state': [
@@ -713,7 +718,7 @@ def _wire_v2() -> dict:
 
 def _assemble_v2(wire):
     from novel.stages.stage4.design import assemble_body_design
-    return assemble_body_design(wire, known_char_ids={'yun', 'fu_jun'})
+    return assemble_body_design(wire, known_char_ids={'yun', 'fu_jun'}, expression_requirements=sample_requirements(), source_narration=sample_narration())
 
 
 def test_wire_v2_assembles_threads_world_rules_and_entry():

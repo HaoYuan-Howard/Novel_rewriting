@@ -34,6 +34,9 @@ from novel.stages.stage2 import (
     compile_source_truth, project_association_space,
 )
 from tests.str06_facilities import make_context, synthetic_ref
+from tests.str06_expression_inputs import (
+    sample_book_expression,
+)
 
 HOOK = '新婚夜，夫君坦白借种之约。'
 CHAPTERS = [
@@ -60,7 +63,7 @@ def _book_wire(*, extra_characters: dict | None = None) -> dict:
             {'surface': '云娘', 'source_refs': ['e01_02']}]},
     }
     characters.update(extra_characters or {})
-    return {'protocol_version': PV, 'characters': characters,
+    return {**sample_book_expression(characters), 'protocol_version': 'stage2-book-v2', 'characters': characters,
             'initial_state': [], 'world_constraints': []}
 
 
@@ -130,12 +133,13 @@ STAGE2_NODES = ['str06.stage2.book', 'str06.stage2.chapters', 'str06.stage2.name
 
 
 class _AcceptingAsk:
-    def __init__(self, wires: dict[str, dict]):
+    def __init__(self, wires: dict[str, dict], *, bypass_acceptance=()):
         self.wires = wires
+        self.bypass_acceptance = bypass_acceptance
         self.prompts: dict[str, str] = {}
 
     def __call__(self, owner: str, prompt: str, validate):
-        errors = validate(deepcopy(self.wires[owner]))
+        errors = [] if owner in self.bypass_acceptance else validate(deepcopy(self.wires[owner]))
         if errors:
             # R3 左移后，机械问题（含 associate 的 compile 干跑未决项）在 owner
             # 验收即报；测试 fake 以 ValueError 呈现，与生产 ask_json 的修订
@@ -145,10 +149,10 @@ class _AcceptingAsk:
         return deepcopy(self.wires[owner]), synthetic_ref(owner, prompt)
 
 
-def _run_stage2(tmp_path, name: str, wires: dict[str, dict]):
+def _run_stage2(tmp_path, name: str, wires: dict[str, dict], *, bypass_acceptance=()):
     repo = Str06Repository(tmp_path / name)
     repo.attach_context(make_context(tmp_path / name, ledger=CostLedger(path=None)))
-    ask = _AcceptingAsk(wires)
+    ask = _AcceptingAsk(wires, bypass_acceptance=bypass_acceptance)
     report = run_workflow(
         repository=repo, chapters=deepcopy(CHAPTERS), hook_copy=HOOK, ask=ask,
         ask_text=lambda owner, prompt: (_ for _ in ()).throw(AssertionError('no text')),
@@ -511,7 +515,8 @@ def test_first_appearance_gate_stops_as_typed_mechanical_defect(tmp_path):
     wires['ch01']['beats'][0]['participants'] = ['fu_jun', 'late_kid']
     with pytest.raises(MechanicalDefectStop,
                        match='participant_before_first_appearance\\[late_kid@ch01\\]'):
-        _run_stage2(tmp_path, 'first_appear', wires)
+        # 注入已采用但有错的回答，验证 producer 的同规则兜底保持 typed 停止。
+        _run_stage2(tmp_path, 'first_appear', wires, bypass_acceptance=('ch01',))
     assert not (tmp_path / 'first_appear/stage2/characters/characters.json').exists(), \
         '机械缺陷时不写半份 canonical'
     assert not (tmp_path / 'first_appear/stage2/blueprints/chapter_blueprints.json').exists()
@@ -873,6 +878,6 @@ def test_stage4_reads_only_canonical(tmp_path):
                  'lineage': {'blueprint_refs': ['b01_01'], 'character_ids': ['fu_jun']},
                  'must_preserve': True, 'satisfaction': '呈现藏身', 'requires': []}]},
             policy_id='p', policy_version=3, characters=core, blueprint=blueprint,
-            provider='fake', model='fake', request_sha256='r' * 64)[0], core)
+            provider='fake', model='fake', request_sha256='r' * 64)[0], core, blueprint)
     assert identities and all(i.char_id in {'fu_jun', 'yun_niang'} for i in identities)
     assert DESIGN_RULES  # 规则面常量在位（生产 prompt 由 run_body_design 组装）

@@ -20,10 +20,11 @@ import json
 import re
 
 from contracts.schema.hook import HookContext
-from novel.stages.common import claim_spans, uncovered_occurrences
+from novel.core.text import count_non_whitespace_chars
+from novel.stages.common import claim_spans, uncovered_occurrences, render_hook_context
 
 #: 机械 validator 的版本：回执 validator_version 记这一位，规则变化必须换版。
-HOOK_VALIDATOR_VERSION = 'str06-hook-mechanical-v1'
+HOOK_VALIDATOR_VERSION = 'str06-hook-mechanical-v2'
 
 #: 已通过的机械检查项名单（回执 mechanical_checks 的取值面）。
 MECHANICAL_CHECKS = (
@@ -45,44 +46,8 @@ def context_sha256(context: HookContext) -> str:
 
 
 def build_hook_user_prompt(context: HookContext) -> str:
-    """请求 user 段（R2 分层渲染）：只从 HookContext 构建，不掺源文或盘上材料。
-
-    材料是必须写出；禁止揭示与受保护线程是禁区；起笔事实以延续/背景呈现；
-    withheld_literals 是 validator 材料，不进阅读面（与正文章包同一纪律）。
-    """
-    names = {r.char_id: r.surfaces for r in context.usable_surfaces}
-
-    def _name(char_id: str) -> str:
-        faces = names.get(char_id)
-        return faces[0] if faces else char_id
-
-    person = '第一人称' if context.pov.person == 'first' else '第三人称'
-    focalizers = '、'.join(_name(f) for f in context.pov.focalizers)
-    parts = ['【起笔已成立的事实】（开场前已成立；自然带过，不作为任务交代）']
-    parts.extend(f'- {fact.text}' for fact in context.opening_facts)
-    parts.append('【必须写出的材料】（按给定顺序组织；不得重选或换序）')
-    for index, material in enumerate(context.materials, start=1):
-        if material.presentation is not None:
-            parts.append(f'- 材料{index}：{material.presentation}')
-        else:
-            parts.append(f'- 材料{index}：{material.event}')
-            for delta in material.deltas:
-                parts.append(f'  随材料成立：{delta}')
-    parts.append('【禁止提前兑现】（禁区：不得出现、不得暗示）')
-    parts.extend(f'- {line}' for line in context.forbidden_reveals)
-    parts.append('【叙述与组织】')
-    parts.append(f'- 视角：{person}，聚焦 {focalizers}')
-    parts.append(f'- 组织方式：{context.design_brief}')
-    parts.append(f'- 文风与口吻：{context.delivery_brief}')
-    parts.append('【可用称谓】（只能使用这些字面）')
-    surfaces = '、'.join(sorted({s for r in context.usable_surfaces
-                                 for s in r.surfaces}))
-    parts.append(f'- {surfaces}' if surfaces else '- （无）')
-    parts.append('【交付要求】')
-    parts.append(f'- 篇幅目标约 {context.target_chars} 字，'
-                 f'绝对不得超过 {context.hard_max_chars} 字。')
-    parts.append('请写出楔子。')
-    return '\n'.join(parts) + '\n'
+    """实际请求与 Stage4 终检共用同一 renderer。"""
+    return render_hook_context(context)
 
 
 def build_rewrite_user_prompt(context: HookContext, errors: list[str]) -> str:
@@ -98,9 +63,10 @@ def validate_hook_prose(prose: str, context: HookContext) -> list[str]:
     text = (prose or '').strip()
     if not text:
         return ['[non_empty] 楔子为空']
-    if len(text) > context.hard_max_chars:
+    count = count_non_whitespace_chars(text)
+    if count > context.hard_max_chars:
         errors.append(
-            f'[length] 长度 {len(text)} 超过 hard_max_chars={context.hard_max_chars}')
+            f'[length] 长度 {count} 超过 hard_max_chars={context.hard_max_chars}')
     if '\ufffd' in text or _CONTROL.search(text):
         errors.append('[encoding] 存在 U+FFFD 或控制字符')
     if '```' in text or text.lstrip().startswith('#') or _TITLE_LINE.match(

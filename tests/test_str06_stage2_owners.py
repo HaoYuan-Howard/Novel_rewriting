@@ -35,6 +35,9 @@ from novel.stages.stage2 import (
     character_core_view, compile_book_observation, compile_chapter_observation,
 )
 from tests.str06_facilities import make_context, synthetic_ref
+from tests.str06_expression_inputs import (
+    sample_book_expression,
+)
 
 HOOK = '新婚夜，陆家新人立下借种之约。'
 CHAPTERS = [
@@ -48,8 +51,13 @@ EVIDENCE = build_evidence(CHAPTERS, HOOK)
 
 
 def _book_wire() -> dict:
-    return {
-        'protocol_version': STAGE2_OBSERVATION_PROTOCOL,
+    return {**sample_book_expression({
+            'fu_jun': {'canonical': '夫君', 'surfaces': [
+                {'surface': '夫君', 'source_refs': ['e01_01']}]},
+            'yun_niang': {'canonical': '云娘', 'surfaces': [
+                {'surface': '云娘', 'source_refs': ['e01_02']}]},
+        }),
+        'protocol_version': 'stage2-book-v2',
         'characters': {
             'fu_jun': {'canonical': '夫君', 'surfaces': [
                 {'surface': '夫君', 'source_refs': ['e01_01']}]},
@@ -322,7 +330,8 @@ def test_stage2_observation_leg_persists_observations_and_names_remount(tmp_path
                 'stage2/observations/ch02.json', 'stage2/observations/ch03.json',
                 'stage2/observations/names.json'):
         artifact = repo.inspect(rel)
-        assert artifact['protocol_version'] == STAGE2_OBSERVATION_PROTOCOL, rel
+        assert artifact['protocol_version'] == (
+            'stage2-book-v2' if rel.endswith('/book.json') else STAGE2_OBSERVATION_PROTOCOL), rel
         assert '_provenance' in artifact, rel
     assert not (repo.root / 'stage2/characters/characters.json').exists(), \
         'names 只落观察；Characters 由 compile 发布（S2-5，D9）'

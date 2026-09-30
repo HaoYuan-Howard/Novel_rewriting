@@ -84,17 +84,17 @@ from novel import prov
 from novel.store import Str06Repository
 from novel.work_units import (
     ContentReservation, WorkUnitBudget, WorkUnitBudgetExhausted,
-    read_book_budget, reserve_book_call,
+    read_book_budget, reserve_book_call, workflow_manifest,
 )
 
 __all__ = [
-    'AdoptionRef', 'CandidateRunContext', 'DurableAnswer', 'ExecutionError',
+    'AdoptionRef', 'CandidateRunContext', 'DurableAnswer', 'ExecutionError', 'ValidationStop',
     'PaidRequestSession', 'PurchaseRequired', 'RUNTIME_PHASES', 'WORKFLOW_REL',
     'ask_json', 'ask_text_once', 'candidate_artifact', 'candidate_contract_identity',
     'candidate_node', 'check_candidate_workflow', 'digest',
     'init_or_resume_candidate_workflow', 'open_candidate_epoch',
     'open_candidate_workflow', 'revision_user_prompt', 'roll_candidate_epoch',
-    'sealed_turn_references', 'workflow_from_disk', 'workflow_to_disk',
+    'semantic_owner_unit', 'purchased_baseline', 'sealed_turn_references', 'workflow_from_disk', 'workflow_to_disk',
 ]
 
 #: 候选根 workflow 身份记录的唯一落点（runtime 家族，非版本化书产物）。
@@ -216,6 +216,14 @@ class ExecutionError(ValueError):
                 'error_phase': self.phase, 'error_context': self.context}
 
 
+class ValidationStop(ExecutionError):
+    """已完成验证的有界负结论；与未知执行错误分开，CLI 映射 exit 1。"""
+
+
+class RevisionEvidenceStop(ExecutionError):
+    """人工修订或采样的请求／回答／成本证据不闭合；按坐标停止恢复。"""
+
+
 class PurchaseRequired(ExecutionError):
     """缓存未命中且未授权新调用：停在该 owner，报告需要授权。"""
 
@@ -311,7 +319,7 @@ def _execution_error(message: str, *, code: str, node: str, item: str,
                           item=item, phase=phase, context=context)
 
 
-def _owner_unit(owner: str) -> tuple[str, str]:
+def semantic_owner_unit(owner: str) -> tuple[str, str]:
     """owner → （候选节点 id, 工作单元 scope）。模块级纯解析（ref/错误构造共用）。
 
     逐章 owner（`chNN`＝章观察、`body_chNN`＝按章成文）带章序 scope；书级
@@ -401,7 +409,7 @@ class PaidRequestSession:
         不自动重试；尝试额度（每轮 4 次）耗尽即显式停止。截断（
         ``finish_reason='length'``，D6）即停该 item，不重试、不加预算。
         """
-        node, scope = _owner_unit(owner)
+        node, scope = semantic_owner_unit(owner)
         identity = digest({'owner': owner, 'provider': self.provider,
                            'request': request.cache_payload()})
         item = scope
@@ -677,7 +685,7 @@ class PaidRequestSession:
         """
         if not answer.turn_id:
             return ''
-        node, scope = _owner_unit(answer.owner)
+        node, scope = semantic_owner_unit(answer.owner)
         record = AcceptanceRecordV1(
             node=node, scope=scope, owner=answer.owner, turn_id=answer.turn_id,
             attempt_id=answer.attempt_id, request_sha256=answer.request_sha256,
@@ -694,7 +702,7 @@ class PaidRequestSession:
         unit = self._units.get(owner)
         if unit is not None:
             return unit
-        node, scope = _owner_unit(owner)
+        node, scope = semantic_owner_unit(owner)
         unit = WorkUnitBudget(self.base, self.sid, node, 'executor', scope)
         self._units[owner] = unit
         return unit
@@ -724,7 +732,7 @@ class PaidRequestSession:
                             backoff_ms=None, response=None,
                             response_sha256=None) -> None:
         """一次 wire attempt 一行（成功、失败、unknown 都记，attempt 序号如实）。"""
-        node, _scope = _owner_unit(owner)
+        node, _scope = semantic_owner_unit(owner)
         usage = (response.usage if response is not None else None) or {}
         self.ledger.record(
             node=node, sid=self.sid, model=(response.model if response is not None
@@ -748,14 +756,14 @@ class PaidRequestSession:
         rows, partial = read_cost_snapshot(self.base)
         if partial:
             raise _execution_error('成本账有未提交尾，拒绝追加或采用',
-                                   code='ledger_tail', node=_owner_unit(owner)[0],
+                                   code='ledger_tail', node=semantic_owner_unit(owner)[0],
                                    item=owner, phase='reserve')
         original_attempt = payload.get('attempt_id')
         if original_attempt and not any(r.get('attempt_id') == original_attempt
                                         for r in rows):
             response = payload.get('response') or {}
             self.ledger.record(
-                node=_owner_unit(owner)[0], sid=self.sid,
+                node=semantic_owner_unit(owner)[0], sid=self.sid,
                 model=response.get('model') or request.model,
                 request_model=request.model, code=STR06_RC_VERSION,
                 attempt=1, max_attempts=WORK_UNIT_MAX_DELIVERY_ATTEMPTS,
@@ -767,7 +775,7 @@ class PaidRequestSession:
                 **{k: (response.get('usage') or {}).get(k)
                    for k in ('prompt_tokens', 'completion_tokens', 'reasoning_tokens',
                              'prompt_cache_hit_tokens', 'prompt_cache_miss_tokens')})
-        node, _scope = _owner_unit(owner)
+        node, _scope = semantic_owner_unit(owner)
         self.ledger.record(
             node=node, sid=self.sid, model=(payload.get('response') or {}).get('model')
             or request.model,
@@ -791,7 +799,7 @@ class PaidRequestSession:
         源根账内，不重复计费。
         """
         rel = f'runtime/request_{identity}.json'
-        node, scope = _owner_unit(owner)
+        node, scope = semantic_owner_unit(owner)
         for root in self.adopt_roots:
             source = root / rel
             if not source.is_file():
@@ -942,7 +950,7 @@ class PaidRequestSession:
         不走缓存重放分支：那一条服务本根已购响应的免费重放，会把历史 token
         抄进候选根账——同一批 token 两处各声称一次。
         """
-        node, _scope = _owner_unit(owner)
+        node, _scope = semantic_owner_unit(owner)
         self.ledger.record(
             node=node, sid=self.sid, model=row.get('model', request.model),
             request_model=request.model, code=STR06_RC_VERSION, attempt=1, max_attempts=1,
@@ -1087,7 +1095,7 @@ class PaidRequestSession:
         不走缓存重放分支：那一条服务本根已购响应的免费重放，会把历史 token
         抄进候选根账——同一批 token 两处各声称一次。
         """
-        node, _scope = _owner_unit(owner)
+        node, _scope = semantic_owner_unit(owner)
         self.ledger.record(
             node=node, sid=self.sid, model=row.get('model', request.model),
             request_model=request.model, code=STR06_RC_VERSION, attempt=1, max_attempts=1,
@@ -1192,16 +1200,24 @@ def ask_json(session: PaidRequestSession, owner: str, request: ChatRequest,
             # 不用全文——措辞微调（如实得值摘要变化）不再被误判成有进展。
             heads = sorted(str(e).split('：', 1)[0][:80] for e in errors)
             fingerprint = digest(heads)
+            node, scope = semantic_owner_unit(owner)
+            stop_context = {'owner': owner, 'rounds': revisions,
+                            'max_rounds': OWNER_REVISION_MAX_ROUNDS,
+                            'issues': list(errors), 'issue_locations': heads}
             if fingerprint == last_fingerprint:
-                raise ValueError(
+                raise ValidationStop(
                     f'{owner} 校验失败：节点内校验重问后问题集原样重现'
                     '（同一问题集重复即停，不无限付费）；原响应已按 attempt 留证，'
-                    f'剩余修复走 owner patch 或人工重跑：{errors}')
+                    f'剩余修复走 owner patch 或人工重跑：{errors}',
+                    code='validation_no_progress', stage=_stage_of(node), node=node,
+                    item=scope, phase='accept', context=stop_context)
             if revisions >= OWNER_REVISION_MAX_ROUNDS:
-                raise ValueError(
+                raise ValidationStop(
                     f'{owner} 校验失败：节点内校验重问轮（≤{OWNER_REVISION_MAX_ROUNDS}）'
                     '已耗尽仍不过闸，停止；原响应已留证，剩余修复走 owner patch 或人工'
-                    f'重跑：{errors}')
+                    f'重跑：{errors}', code='validation_rounds_exhausted',
+                    stage=_stage_of(node), node=node, item=scope, phase='accept',
+                    context=stop_context)
             revisions += 1
             last_fingerprint = fingerprint
             previous = (answer.content or '').strip() or (answer.reasoning or '').strip()
@@ -1210,7 +1226,7 @@ def ask_json(session: PaidRequestSession, owner: str, request: ChatRequest,
                 user=revision_user_prompt(base_user, previous, list(errors)),
                 reasoning_effort=request.reasoning_effort, thinking=request.thinking,
                 json_mode=request.json_mode, max_tokens=request.max_tokens,
-                temperature=request.temperature)
+                temperature=request.temperature, sampling_nonce=request.sampling_nonce)
             answer = session.send(owner, request)
             continue
         # D5：空回答救回失败——同一内容轮内付费重试（占尝试额度，如实计费）。
@@ -1244,15 +1260,13 @@ def _work_unit_evidence(root: Path, owner: str, identity: str) -> dict | None:
     没有轮**返回 None（交下一档）；账损坏（blob 摘要漂移、请求工作包缺失、
     成本账有尾）显式拒绝——不静默降档（I-34）。
     """
-    node, scope = _owner_unit(owner)
+    node, scope = semantic_owner_unit(owner)
     source_base = root.parent
     source_sid = root.name.replace('/', '_')
-    try:
-        unit = WorkUnitBudget(source_base, source_sid, node, 'executor', scope)
-        ledger = unit._read()
-    except (OSError, ValueError, TerminalState):
-        # 源 base 没有现役 workflow／登记账不可读＝该根无工作单元证据，交下一档。
+    if workflow_manifest(source_base) is None:
         return None
+    unit = WorkUnitBudget(source_base, source_sid, node, 'executor', scope, read_only=True)
+    ledger = unit._read()
     turn = next((t for t in reversed(ledger.turns)
                  if t.request_sha256 == identity), None)
     if turn is None or turn.request_payload_sha256 is None:
@@ -1267,13 +1281,14 @@ def _work_unit_evidence(root: Path, owner: str, identity: str) -> dict | None:
     if not request_blob.is_file():
         raise ValueError(
             f'{owner} 采用源 {root} 的工作单元请求工作包缺失（账损坏），拒绝采用')
+    request_payload = unit.request_payload(turn.turn_id)
     blob = WorkUnitBlobV1.model_validate(
         Str06Repository.read_external(blob_path))
     if (unit.digest_of(blob) != attempt.response_sha256
             or blob.unit_id != unit.unit_id or blob.turn_id != turn.turn_id):
         raise ValueError(
             f'{owner} 采用源 {root} 的工作单元响应证据身份漂移，拒绝采用')
-    rows, partial = read_cost_snapshot(source_base)
+    rows, partial = read_cost_snapshot(source_base, readonly=True)
     if partial:
         raise ValueError(f'采用源 {root} 的成本账有未提交尾，先恢复再采用')
     original = [r for r in rows
@@ -1284,10 +1299,50 @@ def _work_unit_evidence(root: Path, owner: str, identity: str) -> dict | None:
         raise ValueError(
             f'{owner} 采用源 {root} 缺原成本关联（attempt_id＋指纹无唯一'
             '真实付费行）；付费状态未知，拒绝采用')
+    if (blob.payload.get('request_payload') != request_payload
+            or original[0].get('request_model') != request_payload.get('model')
+            or original[0].get('response_sha256') != _content_sha256(blob.payload.get('response', {}).get('content'))):
+        raise ValueError(f'{owner} 已购请求工作包与成本身份不一致，拒绝采用')
     return {'unit': unit, 'turn': turn, 'attempt': attempt, 'payload': blob.payload,
             'cost_row': original[0], 'blob_rel': blob_path.relative_to(
                 source_base).as_posix()}
 
+
+
+def purchased_baseline(root: Path, owner: str, identity: str) -> dict:
+    """只读核验请求、响应、ledger 三方；无同身份真实购买时明确拒绝。"""
+    try:
+        return _purchased_baseline(root, owner, identity)
+    except (ValueError, OSError) as exc:
+        node, scope = semantic_owner_unit(owner)
+        raise RevisionEvidenceStop(str(exc), code='revision_evidence_invalid', stage=_stage_of(node),
+                                   node=node, item=scope, phase='accept',
+                                   context={'owner': owner, 'baseline_request_sha256': identity}) from exc
+
+
+def _purchased_baseline(root: Path, owner: str, identity: str) -> dict:
+    evidence = _work_unit_evidence(root, owner, identity)
+    if evidence is not None:
+        return {'identity': identity,
+                'content': evidence['payload']['response'].get('content') or '',
+                'response_sha256': evidence['attempt'].response_sha256,
+                'source_root': str(root), 'attempt_id': evidence['attempt'].attempt_id}
+    path = root / 'runtime' / f'request_{identity}.json'
+    if not path.is_file():
+        raise ValueError(f'{owner} 没有当前请求身份的已购基线，拒绝修订')
+    row = Str06Repository.read_external(path)
+    rows, tail = read_cost_snapshot(root.parent, readonly=True)
+    paid = [r for r in rows if r.get('attempt_id') == row.get('attempt_id')
+            and r.get('request_fingerprint') == identity and not r.get('cached')
+            and r.get('outcome') == 'ok']
+    if (tail or len(paid) != 1 or row.get('identity') != identity
+            or row.get('status') != 'answered'
+            or digest(row.get('content')) != row.get('content_sha256')
+            or paid[0].get('response_sha256') != _content_sha256(row.get('content'))):
+        raise ValueError('已购基线身份、响应或成本证据不闭合')
+    return {'identity': identity, 'content': row['content'],
+            'response_sha256': digest(row['content']),
+            'source_root': str(root), 'attempt_id': row['attempt_id']}
 
 def _same_json_payload(path: Path, content: str) -> bool:
     """wire 文件与已购响应内容是否同一份 JSON 载荷（语义相等，不管序列化）。"""
@@ -1479,7 +1534,7 @@ class CandidateRunContext:
             inputs=tuple(CommitInputRef(key=key, fingerprint=edge.file)
                          for key, edge in sorted(inputs.items())),
             adoptions=tuple(CommitAdoptionRef(
-                owner=ref.owner, node=_owner_unit(ref.owner)[0],
+                owner=ref.owner, node=semantic_owner_unit(ref.owner)[0],
                 request_sha256=ref.request_sha256, unit_id=ref.unit_id,
                 turn_id=ref.turn_id, attempt_id=ref.attempt_id,
                 response_sha256=ref.response_sha256, model=ref.model or 'unknown',

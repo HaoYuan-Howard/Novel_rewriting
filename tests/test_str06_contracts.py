@@ -56,6 +56,7 @@ from contracts.schema.receipt import (
     ChapterReceipt,
 )
 from contracts.schema.grounding import BriefRequirement
+from tests.str06_expression_inputs import sample_brief_expression, sample_canonical_expression
 from contracts.schema.design import (
     ChapterEntry,
     BodyDesign, SceneDelivery, SceneDriver, TargetBeat, TargetScene,
@@ -90,6 +91,7 @@ def _checkpoint(**over) -> dict:
 
 def _brief(**over) -> dict:
     base = dict(
+        **sample_brief_expression(),
         brief_id='br1', preserve_checkpoint_sha256=H64,
         requirements=(BriefRequirement(kind='event_core', must_preserve=False, satisfaction='', core_id='c1', summary='约定成立', participants=('ch1',)),),
     )
@@ -207,6 +209,7 @@ def _scene(scene_id: str) -> TargetScene:
 
 def _graph(**over) -> dict:
     base = dict(
+        **sample_canonical_expression(('ch1',)),
         graph_id='g1', initial_state=(), book_style='冷峻克制的第三人称叙事。',
         scenes=(_scene('s01'), _scene('s02')),
         chapters=(ChapterAssignment(chapter_ordinal=1, purpose='婚约破裂，主角立誓',
@@ -281,7 +284,7 @@ def test_presentation_graph_chapter_invariants():
                              entry=ChapterEntry.opening()),
             ChapterAssignment(chapter_ordinal=2, purpose='承', scene_ids=('s01',),
                              entry=ChapterEntry(transition='immediate_continuation',
-                                                recap='do_not_recap')))))
+                                                recap='do_not_recap', anchor='s01#b01')))))
     # 权重引用不存在的场景
     with pytest.raises(ValidationError, match='chapter_weights'):
         BodyDesign(**_graph(chapter_weights={'sX': 1.0}))

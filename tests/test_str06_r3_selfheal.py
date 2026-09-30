@@ -202,6 +202,15 @@ def test_ask_json_stops_when_issue_set_repeats(tmp_path):
                  lambda w: [] if w.get('ok') else ['闭集外句柄 e99_99'])
     assert '闭集外句柄 e99_99' in str(excinfo.value), '停止消息携带 typed 问题'
     assert len(transport.calls) == 2, '原轮＋一次修订轮后即停'
+    from novel.llm.paid_requests import ExecutionError
+    assert isinstance(excinfo.value, ExecutionError)
+    status = excinfo.value.as_status()
+    assert status['error_code'] == 'validation_no_progress'
+    assert status['error_stage'] == 'stage4'
+    assert status['error_node'] == 'str06.stage4.bind'
+    assert status['error_item'] == 'book'
+    assert status['error_context']['rounds'] == 1
+    assert status['error_context']['issues'] == ['闭集外句柄 e99_99']
 
 
 def test_ask_json_stops_after_round_cap_with_changing_issue_sets(tmp_path):
@@ -209,10 +218,12 @@ def test_ask_json_stops_after_round_cap_with_changing_issue_sets(tmp_path):
     transport = _ScriptedTransport(
         ['{"v": 1}', '{"v": 2}', '{"v": 3}'])
     base, _repo, session = _json_session(tmp_path, transport)
-    with pytest.raises(ValueError, match='节点内校验重问轮（≤2）已耗尽'):
+    with pytest.raises(ValueError, match='节点内校验重问轮（≤2）已耗尽') as excinfo:
         ask_json(session, 'bind', _request(),
                  lambda w: [f'问题第{w["v"]}类'] if w.get('v') != 4 else [])
     assert len(transport.calls) == 3, '原轮＋两轮修订即到上限'
+    assert excinfo.value.as_status()['error_code'] == 'validation_rounds_exhausted'
+    assert excinfo.value.as_status()['error_context']['rounds'] == 2
 
 
 def test_recovery_after_revision_stop_replays_free(tmp_path):

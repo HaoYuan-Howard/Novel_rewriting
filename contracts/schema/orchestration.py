@@ -2286,6 +2286,16 @@ class OwnerIssueState(StrictModel):
     no_progress: bool = False
 
 
+class OwnerRevisionState(StrictModel):
+    """当前 open 修订的调度投影；实际摘要不符仍关闭式拒绝。"""
+    owner: str
+    node: str
+    product_rel: str
+    accepted_product_sha256: Sha256
+    current_product_sha256: Sha256 | None
+    cascade_artifacts: tuple[str, ...] = ()
+
+
 class NovelOverview(StrictModel):
     """一本书跑到哪了。**由产物存在性 + 来源新鲜度判定，不靠进度文件**（`R-14.1`）。"""
 
@@ -2305,6 +2315,7 @@ class NovelOverview(StrictModel):
     #: R3：open 的 owner 修订问题（空列表 = 没有待修订回派）。只服务续跑判定
     #: 与监控投影，不改变产物完成度语义。
     owner_issues: list[OwnerIssueState] = Field(default_factory=list)
+    owner_revisions: list[OwnerRevisionState] = Field(default_factory=list)
 
     summary: OverviewSummary
 

@@ -421,7 +421,7 @@ def test_first_appearance_gate_flags_only_pre_anchor_chapters():
     （canary：daughter 锚 ch10 ⇒ 只判 ch09，不判 ch10/11）；无锚不判。"""
     from types import SimpleNamespace
 
-    from novel.stages.stage2.compile import first_appearance_issues
+    from novel.stages.stage2.compile import first_appearance_anchors, first_appearance_issues
 
     def surface(ch):
         return SimpleNamespace(from_chapter=ch)
@@ -443,7 +443,9 @@ def test_first_appearance_gate_flags_only_pre_anchor_chapters():
         chapter(10, [beat(participants=('daughter',), holder='daughter')]),
         chapter(11, [beat(participants=('daughter', 'no_anchor'))]),
     ])
-    issues = first_appearance_issues(characters, blueprint)
+    anchors = first_appearance_anchors(characters)
+    issues = [issue for ch in blueprint.chapters
+              for issue in first_appearance_issues(anchors, chapter=ch.chapter, beats=ch.beats)]
     assert issues == [
         'participant_before_first_appearance[daughter@ch09]：'
         'daughter 在第 9 章作为参与者/认知持有者出场，但其最早称谓锚点在'

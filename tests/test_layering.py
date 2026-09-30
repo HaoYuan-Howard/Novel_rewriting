@@ -199,6 +199,9 @@ def _runtime_files() -> tuple[str, ...]:
 
 #: 允许裸读 JSON 的白名单。每一条都要写得出理由。
 _JSON_READ_ALLOWED = {
+    'novel/stages/revisions.py': (
+        '只解码 purchased_baseline 已核验并返回的内存回答以计算结构差异；'
+        '不直接读盘上小说 JSON，所有修订证据与产物读取仍走 repository'),
     'novel/output_root.py': (
         '只读根外的离线归档围栏、清单和提交回执；不解析旧 artifact，'
         '新根须有同事务的 committed 证明，服务/CLI/Store 共用这一判定'),
@@ -949,6 +952,8 @@ def test_stage2_owner_shims_cannot_return():
     源 fold 唯一实现）已入列。
     ⚠ B5（2026-09-28，S-05）：旧联合抽取引擎 `source.py` 整包删除——链自 B2
     起不消费，反例已迁到五 owner 引擎；模块面随之收窄。
+    ⚠ R9b（2026-09-30）：`expression.py` 是 book 表达观察的确定性 compiler，
+    不新增语义 owner；五节点边界及退役模块禁入保持不变。
     """
     import importlib.util
     from pathlib import Path
@@ -961,9 +966,9 @@ def test_stage2_owner_shims_cannot_return():
         f'（book／chapters／names／associate／compile）应落位')
     present = sorted(p.stem for p in root.glob('*.py'))
     assert present == ['__init__', 'associate', 'book', 'chapters', 'compile',
-                       'names', 'resolver'], (
+                       'expression', 'names', 'resolver'], (
         f'novel/stages/stage2/ 的模块面变了：{present}；'
-        f'现役只许 __init__／associate／book／chapters／compile／names／resolver'
+        f'现役只许 __init__／associate／book／chapters／compile／expression／names／resolver'
         '（旧联合抽取 source.py 已随 S-05 删除）')
     banned = [
         'plot_checks', 'plot_compile', 'plot_continuity', 'plot_diagnostics',

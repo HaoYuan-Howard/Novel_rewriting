@@ -148,6 +148,9 @@ def _parser() -> argparse.ArgumentParser:
                    help='已购 wire 目录（历史采用：同请求身份免费复用，不补购）')
     r.add_argument('--adopt-root', action='append', default=[],
                    help='已购来源输出根（可重复；ledger 行身份核验后免费采用）')
+    r.add_argument('--resample', default=None,
+                   help='研发手动定向重采 owner（如 ch04/design/body_ch05）；编排器不生成')
+    r.add_argument('--reason', default=None, help='定向重采理由（与 --resample 同时提供）')
     r.add_argument('--reasoning-effort', default='high',
                    choices=('low', 'high', 'max'),
                    help='新链请求的 reasoning effort 档位（进请求身份；'
@@ -418,6 +421,8 @@ def _run_str06(a: argparse.Namespace, flags: list[str], *, paid: bool) -> int:
         run_dir=novel_dir,
         wire_dir=Path(wire_dir) if wire_dir else None,
         repair_manifest=None,
+        resample=getattr(a, 'resample', None),
+        reason=getattr(a, 'reason', None),
         through=_STR06_THROUGH[a.node],
         book_sid=a.sid,
         budget=None,
@@ -437,7 +442,8 @@ def _run_str06(a: argparse.Namespace, flags: list[str], *, paid: bool) -> int:
         # 即新链付费边界的 source-export 凭据。
         allow_source_export=bool(getattr(a, 'allow_egress', False)),
     )
-    from novel.llm.paid_requests import PurchaseRequired
+    from novel.llm.paid_requests import PurchaseRequired, ValidationStop
+    from novel.stages.revisions import RevisionEvidenceStop
     from novel.stages.owner_revision import (
         MechanicalDefectStop, OwnerRevisionRequired, OwnerRevisionStop)
     try:
@@ -450,7 +456,7 @@ def _run_str06(a: argparse.Namespace, flags: list[str], *, paid: bool) -> int:
         # 把「查出了问题」记成「压根没跑成」。
         print(f'\n✗ 回派负结论已落盘（exit 1，勿当崩溃）：{exc}', file=sys.stderr)
         return X.CHECK_FAILED
-    except MechanicalDefectStop as exc:
+    except (MechanicalDefectStop, ValidationStop, RevisionEvidenceStop) as exc:
         # 机械缺陷（无回派路由，R8c 首现闸同类）同样是 typed 负结论：exit 1
         # （landed_red 停给人，恢复走该章观察重问或 owner patch）；缺陷清单
         # 全文在 stderr＝`_service/logs/<job>.log`。canary 20260930 实证裸

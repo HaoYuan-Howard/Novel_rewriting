@@ -73,6 +73,11 @@ def _iter_book_refs(wire: Mapping[str, Any]) -> list[tuple[str, tuple[str, ...]]
             continue
         pairs.append((f'world_constraint {str(wc.get("statement"))[:20]}',
                       tuple(wc.get('source_refs') or ())))
+    expression = wire.get('expression')
+    if isinstance(expression, Mapping):
+        for index, item in enumerate([expression.get('narration'), *(expression.get('mechanisms') or [])]):
+            if isinstance(item, Mapping):
+                pairs.append((f'expression[{index}]', tuple(item.get('source_refs') or ())))
     return pairs
 
 
@@ -154,6 +159,11 @@ def compile_book_observation(
         observation = BookObservation.model_validate(wire)
     except ValidationError as exc:
         return None, errors + [f'book 观察协议校验失败：{exc}']
+    if errors:
+        return None, errors
+    for cid in observation.expression.narration.focalizers:
+        if cid != 'narrator' and cid not in observation.characters:
+            errors.append(f'expression.narration 引用未知人物 {cid}')
     if errors:
         return None, errors
     return observation, []

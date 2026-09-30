@@ -94,13 +94,17 @@ def ledger_path(base: str | Path) -> Path:
     return Path(base).joinpath(*LEDGER_REL)
 
 
-def read_cost_snapshot(base: str | Path) -> tuple[list[dict], bool]:
+def read_cost_snapshot(base: str | Path, *, readonly: bool = False) -> tuple[list[dict], bool]:
     """锁内读取成本账的已提交前缀，并单列未提交尾；坏完整行不容错。"""
     path = ledger_path(base)
     if not path.is_file():
         return [], False
-    with process_append_lock(path):
+    if readonly:
+        # 审阅不创建锁文件；append-only 账只认读取时已提交的完整行前缀。
         raw = path.read_bytes()
+    else:
+        with process_append_lock(path):
+            raw = path.read_bytes()
 
     def unique(pairs):
         result = {}

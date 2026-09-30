@@ -1253,6 +1253,70 @@ def test_obligation_unbound_replans_across_single_node_subprocesses(base,
     assert _ledger_rows(base) == rows_before, '二次代跑不得新购'
 
 
+@pytest.mark.real_code_version
+def test_registered_owner_patch_survives_file_removal_then_agent_delivers(base, tmp_path, monkeypatch):
+    """R9：真实 CLI 采用耐久补丁 → AgentRun 确定性级联 → 交付 → 二次零新购。"""
+    from pathlib import Path
+    from copy import deepcopy
+    from novel.config import load_config
+    from novel.llm.paid_requests import digest, purchased_baseline
+    from novel.stages.revisions import revision_states_at
+
+    repo_root = str(Path(__file__).resolve().parents[1])
+    fake_site = tmp_path / 'r9_fake_site'
+    fake_site.mkdir()
+    (fake_site / 'sitecustomize.py').write_text(_SITECUSTOMIZE_SOURCE, encoding='utf-8')
+    monkeypatch.setenv('NOVEL_B5_FAKE_TRANSPORT', '1')
+    monkeypatch.setenv('NOVEL_B5_FAKE_REPO', repo_root)
+    monkeypatch.setenv('PYTHONPATH', str(fake_site) + os.pathsep + os.environ.get('PYTHONPATH', ''))
+    source = base.parent / 'input_9007.txt'
+    source.write_text(SOURCE_TEXT, encoding='utf-8')
+    _run_cli_subprocess([sys.executable, '-B', '-m', 'novel.cli', 'run', 'stage0.remove',
+                        '--source', str(source), '--base', str(base)], repo_root)
+    _run_cli_subprocess([sys.executable, '-B', '-m', 'novel.cli', 'run', 'stage1.partition',
+                        '9007', '--base', str(base)], repo_root)
+    for node in NODE_ORDER:
+        _run_cli_subprocess([sys.executable, '-B', '-m', 'novel.cli', 'run', node,
+                            '9007', '--base', str(base), '--yes', '--allow-egress'], repo_root)
+        if node == 'str06.stage4.compile':
+            break
+    book = paths.resolve_novel_dir(base, '9007')
+    payload = _turn_request_payload(base, book, 'str06.stage4.body_design', ordinal=1)
+    identity = digest({'owner': 'design', 'provider': load_config().base_url, 'request': payload})
+    baseline = purchased_baseline(book, 'design', identity)
+    candidate = deepcopy(json.loads(baseline['content']))
+    candidate['book_style'] += '对白克制，句式简明。'
+    patch_dir = tmp_path / 'outside_patch'
+    patch_dir.mkdir()
+    raw = json.dumps(candidate, ensure_ascii=False, indent=2).encode('utf-8') + b'\r\n'
+    (patch_dir / 'design_wire.json').write_bytes(raw)
+    (patch_dir / 'design_patch_note.json').write_text(json.dumps({
+        'base_response_identity': identity, 'reason': '修正实际送达的全书表达要求'}, ensure_ascii=False), encoding='utf-8')
+    paid_before_patch = len([r for r in read_cost_snapshot(base)[0] if not r.get('cached')])
+    _run_cli_subprocess([sys.executable, '-B', '-m', 'novel.cli', 'run', 'str06.stage4.body_design',
+                        '9007', '--base', str(base), '--wire-dir', str(patch_dir),
+                        '--yes', '--allow-egress'], repo_root)
+    assert len([r for r in read_cost_snapshot(base)[0] if not r.get('cached')]) == paid_before_patch
+    record = _read_json(book / 'runtime/revisions/active/design.json')
+    assert record['status'] == 'open'
+    assert (book / record['evidence_rel']).read_bytes() == raw
+    assert revision_states_at(book)
+    (patch_dir / 'design_wire.json').unlink()
+    (patch_dir / 'design_patch_note.json').unlink()
+    settings = agent_settings.read(base)
+    agent_settings.update(base, profiles=_profiles(), expected_revision=settings.revision)
+    continued = agent.start(base, '9007', authorized=True, egress_authorized=True, profiles=_profiles())
+    assert agent.wait(continued.run_id, 900)
+    run = next(r for r in agent.records(base) if r.run_id == continued.run_id)
+    assert run.outcome is not None, run
+    assert (book / paths.book_txt_rel(book)).is_file(), run.outcome
+    assert _read_json(book / 'runtime/revisions/active/design.json')['status'] == 'resolved'
+    before = _ledger_rows(base)
+    second = agent.start(base, '9007', authorized=True, egress_authorized=True, profiles=_profiles())
+    assert agent.wait(second.run_id, 600)
+    assert _ledger_rows(base) == before
+
+
 def _turn_request_payload(base, book, node: str, *, ordinal: int) -> dict:
     """某节点工作单元第 N 内容轮的请求工作包 blob（reserve 时冻结的 prompt 面）。"""
     from contracts.schema.workflow import WorkUnitBlobV1

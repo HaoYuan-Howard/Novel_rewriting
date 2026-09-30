@@ -405,6 +405,7 @@ class RunSupervisor:
         # 要先记后关：若 close/open 中途崩溃，本 parent 不会在内存中
         # 热循环；新 outer parent 有自己的空集合，会再建一次新边界。
         freshened_actions: set[tuple[str, str]] = set()
+        landed_red_actions: dict[str, str] = {}
         if self._initial_epoch is not None:
             # initial epoch 已由 parent 在 worker 启动前 durable append；stop 若
             # 恰在首循环前受理，也必须由 finally 关闭，不能留下孤儿 opened。
@@ -550,6 +551,19 @@ class RunSupervisor:
                         # 不让 worker 改写成“用户刚请求停止”，也不冒充 pipeline_complete。
                         return SupervisorResult(turn=boundary_turn, stopped=False)
 
+                    action = getattr(current, 'action', None)
+                    action_sha = getattr(action, 'action_sha256', None)
+                    if action_sha in landed_red_actions:
+                        stopped = ExecutionTurnResult(
+                            exit_code=1, exit_origin='novel_cli', continue_ready=False,
+                            outcome=AgentDeliveryOutcome(
+                                state='stopped', checked_at=int(time.time()),
+                                reason=('已落盘负结论后同一动作与盘面坐标未变化，停止重派：'
+                                        + landed_red_actions[action_sha])))
+                        last = epoch_last = active_epoch_last = stopped
+                        close_epoch(epoch, stopped)
+                        return SupervisorResult(turn=stopped, stopped=False)
+
                     try:
                         if current.state == 'pipeline_complete':
                             finalized = self._launch(
@@ -577,6 +591,9 @@ class RunSupervisor:
                                 lambda ticket: self._run_ready(epoch, current, ticket))
                             assert isinstance(executed, SupervisorActionResult)
                             turn = action_turn(executed)
+                            if executed.exit_code == 1 and executed.exit_origin == 'novel_cli':
+                                landed_red_actions[current.action.action_sha256] = (
+                                    executed.failure_detail or executed.outcome.reason)
                             last = epoch_last = active_epoch_last = turn
                             action_pause_note = executed.pause_note
                         else:
@@ -639,6 +656,9 @@ class RunSupervisor:
                                     break
                                 assert isinstance(recovered, SupervisorActionResult)
                                 turn = action_turn(recovered)
+                                if recovered.exit_code == 1 and recovered.exit_origin == 'novel_cli':
+                                    landed_red_actions[current.action.action_sha256] = (
+                                        recovered.failure_detail or recovered.outcome.reason)
                                 last = epoch_last = active_epoch_last = turn
                                 action_pause_note = recovered.pause_note
                             else:

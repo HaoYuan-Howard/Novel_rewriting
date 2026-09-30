@@ -2794,6 +2794,19 @@ class Str06Repository:
         self._atomic_write(path, data)
         return path
 
+    def write_evidence_bytes(self, rel: str, data: bytes) -> Path:
+        """运行证据按原字节耐久保存；相同内容地址不可被不同字节覆盖。"""
+        if rel != f'runtime/revisions/evidence/{hashlib.sha256(data).hexdigest()}.json':
+            raise ValueError('修订字节证据只允许写 runtime/revisions/evidence/')
+        path = self.path(rel)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.exists() and path.read_bytes() != data:
+            raise ValueError('修订证据内容地址已有不同字节，拒绝覆盖')
+        self._atomic_write(path, data)
+        if path.read_bytes() != data:
+            raise ValueError('修订证据读回不一致')
+        return path
+
     def write_text(self, rel: str, text: str) -> Path:
         """正文/文本产物的原子写（UTF-8）+ 回读核对；与 write 同一套语义。"""
         path = self.path(rel)

@@ -419,6 +419,23 @@ def _body_mutations() -> list[_BodyMutation]:
 
     return [
         # ── 书级（every_chapter）──
+        _BodyMutation('writer_book_ir.book_brief.narration.person', None, None,
+                      lambda ir: _book_brief(ir, narration=ir.book_brief.narration.model_copy(update={'person': 'first'}))),
+        _BodyMutation('writer_book_ir.book_brief.narration.focalizers', None, '审计叙述者九九',
+                      lambda ir: _book_brief(ir, narration=ir.book_brief.narration.model_copy(update={'focalizers': ('审计叙述者九九',)}))),
+        *[_BodyMutation(f'writer_book_ir.book_brief.expression_decisions[].{field}', None, sentinel,
+                       lambda ir, field=field, value=value: _book_brief(ir, expression_decisions=(
+                           ir.book_brief.expression_decisions[0].model_copy(update={
+                               field: value, **({'reason': None} if field == 'action' else {})}),)))
+          for field, value, sentinel in (('ex_id', 'ex_99', 'ex_99'), ('action', 'keep', None),
+                                         ('reason', '审计理由九九', '审计理由九九'),
+                                         ('statement', '变异表达九九', '变异表达九九'))],
+        _BodyMutation('writer_book_ir.chapters[].continuity.entry.anchor', 2, 'sc99#b99',
+                      lambda ir: _patch_chapter(ir, 2, continuity=ir.chapters[1].continuity.model_copy(update={
+                          'entry': ir.chapters[1].continuity.entry.model_copy(update={'anchor': 'sc99#b99'})}))),
+        _BodyMutation('writer_book_ir.chapters[].continuity.anchor_event', 2, '变异承接事件九九',
+                      lambda ir: _patch_chapter(ir, 2, continuity=ir.chapters[1].continuity.model_copy(update={
+                          'anchor_event': '变异承接事件九九'}))),
         _BodyMutation('writer_book_ir.book_brief.book_style', None, '变异风格九九',
                       lambda ir: _book_brief(ir, book_style='变异风格九九')),
         _BodyMutation('writer_book_ir.book_brief.world_rules', None, '变异边界九九',

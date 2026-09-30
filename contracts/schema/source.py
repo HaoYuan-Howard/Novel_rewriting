@@ -593,22 +593,27 @@ class ChapterBlueprint(StrictModel):
         return self
 
 
-class BlueprintsArtifactV13(StrictModel):
-    """`stage2/blueprints/chapter_blueprints.json` 目标 v13（RC）。
+from contracts.schema.expression import SourceExpression
+
+
+class BlueprintsArtifactV14(StrictModel):
+    """`stage2/blueprints/chapter_blueprints.json` 目标 v14（RC）。
 
     v13（质量改进批次二）：拍模型从 effects/reveals 改为 effects／cognition／loops
     三类转移，拍上带场景边界与时间模式，章蓝图带 compiler 生成的场景分段。跨章
     from_beat 引用的存在性归 compile（需要全书 beat 集合）；命题与 loop 的跨章
     引用闭合归 compile（正式 ID 登记表）。
+    v14（R9）：增加带证据的 source_expression；编号与阅读统计由 compiler 派发。
     """
 
     provenance: FreeProvenance | LlmProvenance | None = Field(
         default=None, alias='_provenance', exclude=True)
+    source_expression: SourceExpression
     world_constraints: tuple[WorldConstraint, ...] = Field(default=(), min_length=0)
     chapters: tuple[ChapterBlueprint, ...] = Field(min_length=1)
 
     @model_validator(mode='after')
-    def _chapters_contiguous(self) -> 'BlueprintsArtifactV13':
+    def _chapters_contiguous(self) -> 'BlueprintsArtifactV14':
         ordinals = [c.chapter for c in self.chapters]
         if sorted(ordinals) != list(range(1, len(ordinals) + 1)):
             raise ValueError(f'章号必须从 1 连续，实得 {sorted(ordinals)}')

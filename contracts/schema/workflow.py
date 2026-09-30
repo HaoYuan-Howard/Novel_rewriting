@@ -499,6 +499,57 @@ class BookContentBudgetV1(FrozenModel):
 # （映射表见 `docs/REQUIREMENTS.md`「候选根运行记录映射与删除条件」）。
 # ─────────────────────────────────────────────────────────────────────────────
 
+class SamplingSelectionV1(FrozenModel):
+    """人工选择的采样身份；普通恢复复用此选择，不另分配序号。"""
+    schema_version: Literal[1] = 1
+    owner: str = Field(min_length=1)
+    baseline_request_sha256: Sha256
+    sequence: int = Field(ge=1)
+    reason: str = Field(min_length=1)
+    nonce: Sha256
+    created_at: int = Field(ge=0)
+
+    @model_validator(mode='after')
+    def _real_reason(self):
+        if not self.reason.strip():
+            raise ValueError('显式重采必须有真实理由')
+        return self
+
+
+class OwnerRevisionRecordV1(FrozenModel):
+    """R9 人工补丁／显式重采的耐久证据；staged 不授权任何恢复级联。"""
+
+    schema_version: Literal[1] = 1
+    kind: Literal['owner_patch', 'resample']
+    owner: str = Field(min_length=1)
+    node: str = Field(min_length=1)
+    baseline_request_sha256: Sha256
+    baseline_response_sha256: Sha256
+    baseline_source_root: str = Field(min_length=1)
+    candidate_sha256: Sha256
+    evidence_rel: str = Field(pattern=r'^runtime/revisions/evidence/[0-9a-f]{64}\.json$')
+    diff_sha256: Sha256
+    reason: str = Field(min_length=1)
+    sequence: int = Field(ge=0)
+    product_rel: str = Field(min_length=1)
+    before_product_sha256: Sha256 | None
+    product_sha256: Sha256 | None = None
+    status: Literal['staged', 'open', 'resolved']
+    created_at: int = Field(ge=0)
+
+    @model_validator(mode='after')
+    def _closed_shape(self):
+        if not self.reason.strip():
+            raise ValueError('修订必须有真实理由')
+        if self.status != 'staged' and self.product_sha256 is None:
+            raise ValueError('已采用修订必须绑定正式产物摘要')
+        if self.evidence_rel != f'runtime/revisions/evidence/{self.candidate_sha256}.json':
+            raise ValueError('原字节证据路径必须与候选摘要一致')
+        if (self.kind == 'resample') != (self.sequence > 0):
+            raise ValueError('仅显式重采使用正采样序号')
+        return self
+
+
 class AcceptanceRecordV1(FrozenModel):
     """AcceptanceRecord 层：一次已交付响应（按 attempt）的接受分项记录。
 
@@ -641,11 +692,11 @@ STR06_RUNTIME_CONFIG: Final = CandidateRuntimeConfig()
 #: WriterBookIR／WriterContext 升 `str06-rc10`（拍级读取值挂拍、线程投影面、
 #: continuity 分区、world_rules 进书级层）；章回执身份拆分（回执升 `str06-rc6`，
 #: 写手视图／验证输入／Machine 审计三把摘要）；renderer 与写手协议升 v5。
-STR06_RC_VERSION: Final = 'str06-rc10'
+STR06_RC_VERSION: Final = 'str06-rc11'
 
 #: 已知 RC 标签面（版本规则见 `contracts/artifacts.py::STR06_ARTIFACT_RC_VERSIONS`）。
 STR06_RC_LABELS: Final = ('str06-rc2', 'str06-rc3', 'str06-rc4', 'str06-rc5', 'str06-rc6',
-                          'str06-rc7', 'str06-rc8', 'str06-rc9', 'str06-rc10')
+                          'str06-rc7', 'str06-rc8', 'str06-rc9', 'str06-rc10', 'str06-rc11')
 
 #: Stage4 四个付费语义节点的独立 wire 协议（B3 前半；各节点独立演进，升版互不
 #: 牵连）。wire 顶层 `protocol_version` 与对应常量逐字对账，漏带或错带即拒
@@ -657,7 +708,8 @@ STR06_RC_LABELS: Final = ('str06-rc2', 'str06-rc3', 'str06-rc4', 'str06-rc5', 's
 #: 必填）；standing_goals／ongoing_actions／open_questions／promises 四键关闭式
 #: 拒读（AUD-04 无消费者，裁决 3 改独立线程结构）。
 STAGE4_PRESERVE_PROTOCOL: Final = 'stage4-preserve-v1'
-STAGE4_DESIGN_PROTOCOL: Final = 'stage4-design-v3'
+STAGE4_PRESERVE_POLICY_VERSION: Final = 4
+STAGE4_DESIGN_PROTOCOL: Final = 'stage4-design-v4'
 STAGE4_BIND_PROTOCOL: Final = 'stage4-bind-v1'
 STAGE4_HOOK_DESIGN_PROTOCOL: Final = 'stage4-hook-design-v1'
 

@@ -86,6 +86,7 @@ class ChatRequest:
     max_tokens: int
     temperature: float | None = None
     history: tuple[tuple[str, str], ...] = ()
+    sampling_nonce: str = ''
 
     def messages(self) -> list[dict[str, str]]:
         return [{'role': 'system', 'content': self.system},
@@ -95,12 +96,16 @@ class ChatRequest:
     def cache_payload(self) -> dict[str, Any]:
         """算缓存键用的规范化形态。**改这个函数会让整个缓存失效**——那通常是对的，
         但要知道自己在做什么（旧缓存不会被删，只是再也命中不了）。"""
-        return {
+        payload = {
             'model': self.model, 'messages': self.messages(),
             'reasoning_effort': self.reasoning_effort, 'thinking': self.thinking,
             'json_mode': self.json_mode, 'max_tokens': self.max_tokens,
             'temperature': self.temperature,
         }
+        if self.sampling_nonce:
+            # 显式定向重采只区分请求身份，不改变送给供应商的模型参数或材料。
+            payload['sampling_nonce'] = self.sampling_nonce
+        return payload
 
 
 @dataclass(frozen=True)

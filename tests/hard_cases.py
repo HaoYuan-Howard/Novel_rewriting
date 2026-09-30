@@ -16,6 +16,9 @@ HARD 判据的最小会红样本：每个 ``build`` 都调用真实判据入口�
 from __future__ import annotations
 
 from typing import Callable, NamedTuple
+from tests.str06_expression_inputs import (
+    sample_narration, sample_requirements, sample_blueprint_expression, sample_design_expression,
+)
 
 
 class Case(NamedTuple):
@@ -100,7 +103,7 @@ def _design_bad_knowledge_mode() -> list:
         {'domain': 'knowledge', 'subjects': [], 'holder': 'ch1', 'op': 'set',
          'scope': 'book', 'key': 'guess', 'value': '以为夫君已离开',
          'knowledge_mode': 'imagines'})
-    _body, errors = assemble_body_design(wire, known_char_ids={'ch1'})
+    _body, errors = assemble_body_design(wire, known_char_ids={'ch1'}, expression_requirements=sample_requirements(), source_narration=sample_narration())
     return errors
 
 
@@ -240,10 +243,10 @@ CASES: dict[str, Case] = {
 # ─── 其余 HARD 的最小会红样本（编译闭合一族） ────────────────────────────────
 
 def _body_design_bad_wire() -> list:
-    """BodyDesign 编译闭合：非法 POV（未知人物）当场拒（stage4-design-v3 形状）。"""
+    """BodyDesign 编译闭合：非法 POV（未知人物）当场拒（stage4-design-v4 形状）。"""
     from novel.stages.stage4.design import assemble_body_design
     _body, errors = assemble_body_design(
-        {'protocol_version': 'stage4-design-v3', 'book_style': '冷峻。',
+        {'protocol_version': 'stage4-design-v4', 'book_style': '冷峻。',
          'chapters': [{'purpose': 'e', 'scenes': 1}],
          'scenes': [{'beats': [{'event': 'e', 'participants': ['ch1'],
                                 'dramatic_intent': 'd'}],
@@ -251,7 +254,7 @@ def _body_design_bad_wire() -> list:
                      'driver': {'focal_actor': 'ch1', 'immediate_want': 'w',
                                 'opposition': 'o', 'turn': 't'},
                      'realization_brief': '重心在e；展开后收束。'}]},
-        known_char_ids={'ch1'})
+        known_char_ids={'ch1'}, expression_requirements=sample_requirements(), source_narration=sample_narration())
     return errors
 
 
@@ -264,7 +267,7 @@ def _chapter_count_mismatch() -> list:
     _body, errors = assemble_body_design(
         _body_wire(), known_char_ids={'fu_jun', 'yun_niang'},
         constraints=OutputConstraints(target_chapter_count=99,
-                                      total_length_budget=10000))
+                                      total_length_budget=10000), expression_requirements=sample_requirements(), source_narration=sample_narration())
     return errors
 
 
@@ -273,7 +276,7 @@ def _preserve_bad_wire() -> list:
     from novel.stages.stage4.grounding import assemble_preserve
 
     from contracts.schema.source import (
-        BlueprintsArtifactV13, ChapterBlueprint, CharacterEntry,
+        BlueprintsArtifactV14, ChapterBlueprint, CharacterEntry,
         CharactersCore, SurfaceWindow,
     )
     from tests.str06_facilities import v13_beat
@@ -287,7 +290,7 @@ def _preserve_bad_wire() -> list:
             canonical='苏姑娘',
             surfaces=(SurfaceWindow(surface='苏姑娘', from_chapter=1,
                                     source_refs=('e01_01',)),))}),
-        blueprint=BlueprintsArtifactV13(chapters=(
+        blueprint=BlueprintsArtifactV14(source_expression=sample_blueprint_expression(), chapters=(
             ChapterBlueprint(chapter=1,
                              beats=(v13_beat('b01_01', 'e'),),
                              scenes=({'scene_id': 'sc01', 'beat_ids': ('b01_01',)},),
@@ -543,7 +546,7 @@ def _design_surface_not_registered() -> list:
     """称谓闭合：Design 放行 Characters 未登记的字面。"""
     from novel.stages.stage4.design import assemble_body_design
     _body, errors = assemble_body_design(
-        {'protocol_version': 'stage4-design-v3', 'book_style': '冷峻。',
+        {**sample_design_expression(('yun',)), 'protocol_version': 'stage4-design-v4', 'book_style': '冷峻。',
          'initial_state': [], 'scenes': [{
             'state_reads': [],
             'driver': {'focal_actor': 'yun', 'immediate_want': 'w',
@@ -555,7 +558,7 @@ def _design_surface_not_registered() -> list:
                            {'char_id': 'yun', 'surfaces': ['云娘子']}]}],
             'delivery': {'pov': 'yun', 'voice': 'v', 'avoid': []}}],
          'chapters': [{'purpose': '立约', 'scenes': 1}], 'scene_weights': [1]},
-        known_char_ids={'yun'}, registered_surfaces={'yun': {'云娘', '云姑娘'}})
+        known_char_ids={'yun'}, registered_surfaces={'yun': {'云娘', '云姑娘'}}, expression_requirements=sample_requirements(), source_narration=sample_narration())
     return errors
 
 

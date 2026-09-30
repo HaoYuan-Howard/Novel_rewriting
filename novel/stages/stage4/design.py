@@ -1,7 +1,7 @@
 """Body Design wire 的确定性组装与派生面生成（B3 前半重写；R8b 升 v3）。
 
 【compiler 生成 ID／归章／权重（I-21，B3 前半）】
-Design wire（`stage4-design-v3`）只表达选择、结构与相对篇幅重点——模型不输出
+Design wire（`stage4-design-v4`）只表达选择、结构与相对篇幅重点——模型不输出
 任何 ID、复合引用或归一权重。本模块是唯一派生点：
   ① 场景/拍 ID 按列表序派发：`sc{序:02d}`／`b{序:02d}`；wire 带 scene_id／
      beat_id 键即拒（「不写可派生字段」的机械面，Q-1 白名单）。
@@ -29,7 +29,7 @@ Design wire（`stage4-design-v3`）只表达选择、结构与相对篇幅重点
      typed 报错，交由修订轮或人工修复；无匹配或多义匹配不归一，交由 char_id
      校验报错。
 【R8b／v3（D8 修订 2026-09-29）】wire 形状改由 pydantic 模型族
-（`contracts/schema/design.py::DesignWireV3`）**一次校验、合并报告**——
+（`contracts/schema/design.py::DesignWireV4`）**一次校验、合并报告**——
 初始态与拍上 target_delta 分开建模（拍上 scope 必填、无默认；初始态恒 book），
 逐字段错误按位置摊开，不再逐层早退；pov 只收字符串且闭集外直拒（单元素
 数组折叠与 canonical 前缀匹配删除，I-21）。
@@ -53,6 +53,10 @@ from pydantic import ValidationError
 from contracts.schema.design import BodyDesign, ChapterEntry
 from contracts.schema.grounding import OutputConstraints
 from contracts.schema.workflow import STAGE4_DESIGN_PROTOCOL
+from contracts.schema.source import NameProjection, NameStructure
+from novel.stages.common import expand_surface_releases
+from novel.stages.stage4.read_closure import resolve_design_reads
+from novel.stages.stage4.materials import validate_design_materials
 
 #: wire 顶层键白名单（Q-1：多余键在 compile 入口报错，不静默丢弃）。v2 起四个
 #: 静态跨章列表（standing_goals／ongoing_actions／open_questions／promises）
@@ -66,7 +70,7 @@ _THREAD_KEYS = frozenset({'op', 'tag', 'ref', 'kind', 'subject', 'text',
                           'progress', 'ending', 'resolution'})
 #: 章切片（R2 v2）：purpose＋场数＋可选 entry（第 1 章可省）。
 _CHAPTER_KEYS = frozenset({'purpose', 'scenes', 'entry'})
-_ENTRY_KEYS = frozenset({'transition', 'carryover', 'recap'})
+_ENTRY_KEYS = frozenset({'transition', 'carryover', 'recap', 'anchor'})
 
 
 def _scene_id(index: int) -> str:
@@ -223,9 +227,12 @@ def _build_canonical(data: dict[str, Any], errors: list[str]) -> dict[str, Any]:
             _reject_unknown_keys(errors, entry_raw, _ENTRY_KEYS,
                                  f'第 {chapter_ordinal} 章 entry')
         try:
+            if entry_raw and entry_raw.get('anchor') is not None:
+                anchor = entry_raw['anchor']
+                entry_raw['anchor'] = f'{_scene_id(anchor["scene"])}#{_beat_id(anchor["beat"])}'
             entry = (ChapterEntry.model_validate(entry_raw)
                      if entry_raw is not None else None)
-        except Exception as exc:      # 形状错误聚合进 errors，不在此抛
+        except ValidationError as exc:
             errors.append(f'第 {chapter_ordinal} 章 entry 形状非法：{exc}')
             return data
         if chapter_ordinal == 1:
@@ -334,29 +341,48 @@ def assemble_body_design(
     wire: dict[str, Any], *, known_char_ids: set[str],
     constraints: OutputConstraints | None = None,
     registered_surfaces: Mapping[str, set[str]] | None = None,
+    name_projection: NameProjection | None = None,
+    name_structure: NameStructure | None = None,
+    expression_requirements,
+    source_narration,
 ) -> tuple[BodyDesign | None, list[str]]:
-    """Design wire（stage4-design-v3）→ canonical BodyDesign。
+    """Design wire（stage4-design-v4）→ canonical BodyDesign。
 
     纯函数：不落盘、不调 LLM、不改输入 wire（deepcopy 后组装）。**一次校验、
-    合并报告**（R8b）：wire 形状由 pydantic 模型族（`DesignWireV3`）一次判，
+    合并报告**（R8b）：wire 形状由 pydantic 模型族（`DesignWireV4`）一次判，
     逐字段错误按位置摊开；闭集（人物／称谓）与语义闭合面在通过形状后同一份
     报告聚合，不再逐层早退遮住后层（B6-A canary 四轮修订实证）。有错不产出
     半份 canonical（I-34）。
     """
-    from contracts.schema.design import DesignWireV3
+    from contracts.schema.design import DesignWireV4
 
     errors: list[str] = []
     if wire.get('protocol_version') != STAGE4_DESIGN_PROTOCOL:
         errors.append(f'protocol_version 必须是 {STAGE4_DESIGN_PROTOCOL}，'
                       f'实得 {wire.get("protocol_version")!r}（I-13 无隐式迁移）')
     try:
-        model = DesignWireV3.model_validate(wire)
+        model = DesignWireV4.model_validate(wire)
     except ValidationError as exc:
         # 形状失败不遮闭集面（R8b：canary 第 1 份实证——pov 描述句与 scope
         # 缺失同报，修订一轮收掉全部三类，而不是逐层早退打四轮）。
         _check_pov_closed_set(wire, known_char_ids, errors)
         return None, errors + _wire_model_errors(exc)
     data = model.model_dump(mode='json')
+    expressions = {item.ex_id: item.statement for item in expression_requirements}
+    decisions = data['expression_decisions']
+    ids = [item['ex_id'] for item in decisions]
+    if len(ids) != len(set(ids)) or set(ids) != set(expressions):
+        errors.append('expression_decisions 必须对输入每个 ex 恰好决定一次，不得遗漏或新增')
+    narration_ids = {item.ex_id for item in expression_requirements if item.kind == 'narration'}
+    if (any(item['action'] == 'keep' and item['ex_id'] in narration_ids for item in decisions)
+            and model.narration != source_narration):
+        errors.append('保留源叙述表达时 narration 必须与输入一致；改变须显式 change 并说明理由')
+    if errors:
+        return None, errors
+    data['expression_decisions'] = [
+        {'ex_id': item['ex_id'], 'action': item['action'], 'reason': item['reason'],
+         'statement': expressions[item['ex_id']] if item['action'] == 'keep' else item['target_statement']}
+        for item in decisions]
     data['graph_id'] = 'pg_main'
     _normalize(data)
     _normalize_delta(data)
@@ -378,6 +404,9 @@ def assemble_body_design(
     if constraints and len(body.chapters) != constraints.target_chapter_count:
         errors.append('目标章数与 OutputConstraints 不一致')
     addressed = list(body.initial_state)
+    for cid in body.narration.focalizers:
+        if cid != 'narrator' and cid not in known_char_ids:
+            errors.append(f'narration 引用未知人物 {cid}')
     surfaces = list(body.initial_surfaces)
     for scene in body.scenes:
         for cid in (scene.driver.focal_actor, scene.delivery.pov):
@@ -409,7 +438,7 @@ def assemble_body_design(
         # 称谓面闭合：放行的每个字面都必须是 Characters 登记过的 surface。
         # 未登记字面进替换表会找不到对应新名（F7e 评估实证：Design 放行的称谓
         # 没和登记面核对）。在生产端尽早失败，不走交付端残留检查兜底。
-        allowed = registered_surfaces.get(item.char_id, set())
+        allowed = set(expand_surface_releases(registered_surfaces, name_structure).get(item.char_id, ()))
         for surface in item.surfaces:
             if surface not in allowed:
                 errors.append(
@@ -428,4 +457,9 @@ def assemble_body_design(
                         f'ThreadAction 引用未知 char_id {thread.subject}'
                         f'（{scene.scene_id}#{beat.beat_id} 的 {thread.ref}）')
     _check_confirmation_closures(body, errors)
+    errors.extend(resolve_design_reads(body).errors)
+    if name_projection is not None:
+        errors.extend(validate_design_materials(body, projection=name_projection,
+                                                known_char_ids=known_char_ids,
+                                                structure=name_structure))
     return (None, errors) if errors else (body, [])

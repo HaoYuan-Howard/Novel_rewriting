@@ -649,6 +649,7 @@ def overview_at(novel_dir: Path, code: str) -> NovelOverview:
     塞进 ``NovelOverview``（HTTP 的完成度响应仍然 verdict-free）。
     """
     legacy = legacy_stage5_paths(novel_dir)
+    from novel.stages.revisions import revision_states_at
 
     #: 每层挑**本层第一个产它的节点**当提问者，理由见 `readonly_ctx`。
     asker = {s: next((n for n, sp in NODES.items() if sp.stage == s and sp.produces), None)
@@ -672,6 +673,7 @@ def overview_at(novel_dir: Path, code: str) -> NovelOverview:
         stages=stages,
         stage5_legacy_paths=legacy,
         owner_issues=_owner_issue_states(novel_dir),
+        owner_revisions=revision_states_at(novel_dir),
         summary=overview_summary(stages),
     )
 
@@ -973,13 +975,17 @@ def _revision_cascade_surface(artifacts: list[ArtifactState], ov) -> bool:
     原样保留）。unreadable／unknown／INVALID 照旧拒绝。
     """
     issues = getattr(ov, 'owner_issues', ()) or ()
-    if not any(getattr(issue, 'product_sha256', None) is not None
+    typed_revision = any(getattr(issue, 'product_sha256', None) is not None
                and issue.product_sha256 != issue.against_sha256
-               for issue in issues):
-        return False
+               for issue in issues)
     stale = [artifact for artifact in artifacts if artifact.freshness == 'stale']
     if not stale or any(artifact.reason not in ('consumed_changed', 'file_changed')
                         for artifact in stale):
+        return False
+    allowed = {rel for r in getattr(ov, 'owner_revisions', ())
+               if r.current_product_sha256 == r.accepted_product_sha256
+               for rel in r.cascade_artifacts}
+    if not (typed_revision or all(a.rel in allowed for a in stale)):
         return False
     return not any(
         artifact.invalid

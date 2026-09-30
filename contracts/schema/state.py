@@ -17,7 +17,34 @@ class EffectDomain(str, Enum):
     READER = 'reader'
 
 
+def address_schema(schema: dict) -> None:
+    """与地址 validator 同源的局部分支；书级人物闭集由请求投影注入。"""
+    schema['properties']['subjects']['uniqueItems'] = True
+    schema.setdefault('allOf', []).extend([
+        {'if': {'properties': {'domain': {'const': domain}}},
+         'then': {'properties': {'subjects': {'minItems': size, 'maxItems': size}}}}
+        for domain, size in (('character', 1), ('relation', 2))])
+    schema['allOf'].append({
+        'if': {'properties': {'domain': {'const': 'knowledge'}}},
+        'then': {'required': ['holder'], 'properties': {'holder': {'type': 'string', 'minLength': 1}}},
+        'else': {'properties': {'holder': {'type': 'null'}}}})
+
+
+def change_schema(schema: dict) -> None:
+    address_schema(schema)
+    schema['allOf'].extend([
+        {'if': {'properties': {'op': {'const': 'set'}}},
+         'then': {'properties': {'value': {'type': 'string'}}},
+         'else': {'properties': {'value': {'type': 'null'}}}},
+        {'if': {'properties': {'op': {'const': 'set'}, 'domain': {'const': 'knowledge'}}},
+         'then': {'required': ['knowledge_mode'],
+                  'properties': {'knowledge_mode': {'not': {'type': 'null'}}}}},
+        {'if': {'properties': {'op': {'const': 'set'}, 'domain': {'not': {'const': 'knowledge'}}}},
+         'then': {'properties': {'knowledge_mode': {'type': 'null'}}}}])
+
+
 class StateAddress(StrictModel):
+    model_config = {'extra': 'forbid', 'json_schema_extra': address_schema}
     domain: EffectDomain
     key: str = Field(min_length=1)
     subjects: tuple[str, ...] = ()
@@ -59,6 +86,7 @@ class StateRead(StateAddress):
 
 
 class StateChange(StateAddress):
+    model_config = {'extra': 'forbid', 'json_schema_extra': change_schema}
     #: knowledge 域的知情模式（v13 质量改进批次二补 believes）：believes＝持有者
     #: 以为为真，不代表世界为真——错误看法以此结构形式传到写手（D14）。
     op: Literal['set', 'unset', 'unknown']

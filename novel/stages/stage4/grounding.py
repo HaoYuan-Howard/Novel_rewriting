@@ -38,7 +38,7 @@ from contracts.schema.grounding import (
     SemanticBinding, SourceLineage, SourceObligation,
 )
 from contracts.schema.source import (
-    BlueprintsArtifactV13, CharactersCore,
+    BlueprintsArtifactV14, CharactersCore,
 )
 from contracts.schema.grounding import BriefRequirement
 from contracts.schema.workflow import (
@@ -75,7 +75,7 @@ def _reject_unknown_keys(errors: list[str], obj: dict[str, Any], allowed: frozen
 def assemble_preserve(
     wire: dict[str, Any], *,
     policy_id: str, policy_version: int,
-    characters: CharactersCore, blueprint: BlueprintsArtifactV13,
+    characters: CharactersCore, blueprint: BlueprintsArtifactV14,
     provider: str, model: str, request_sha256: str,
 ) -> tuple[PreserveCheckpoint | None, list[str]]:
     """Preserve wire（stage4-preserve-v1：{'obligations': [...]}）→ checkpoint。
@@ -184,7 +184,7 @@ def obligation_core_id(obligation_id: str) -> str:
 
 def project_brief(
     checkpoint: PreserveCheckpoint, characters: CharactersCore,
-    blueprint: BlueprintsArtifactV13 | None = None,
+    blueprint: BlueprintsArtifactV14,
 ) -> tuple[ReconstructionBrief, tuple[IdentityProjection, ...]]:
     """checkpoint → (Brief, IdentityProjection)。Design 的全部语义输入。
 
@@ -192,8 +192,7 @@ def project_brief(
     `book_constraints`（R2.5 世界约束通道）：Blueprint 的 world_constraints
     的 statement 原样机械填入（AUD 反例「世界约束没有通道」——恒空即红）；
     目标侧是否沿用或改写由 Design 决定（wire v2 的 world_rules），compiler
-    不做语义推断。`blueprint` 缺省 None 仅供不触世界约束的存量调用，正式
-    链路（run_preserve／run_body_design）必须传入。
+    不做语义推断。R9 起 blueprint 为必需输入，表达语义无历史默认值。
     """
     # 不以源义务序号暴露叙述顺序；所有类型与满足条件等量投影，依赖闭合。
     core_ids = {o.obligation_id: obligation_core_id(o.obligation_id)
@@ -209,8 +208,11 @@ def project_brief(
         brief_id=f'brief_{checkpoint.checkpoint_id}',
         preserve_checkpoint_sha256=checkpoint.checkpoint_sha256,
         requirements=cores,
-        book_constraints=tuple(wc.statement for wc in blueprint.world_constraints)
-        if blueprint is not None else ())
+        source_narration=blueprint.source_expression.narration,
+        expression=tuple({'ex_id': item.ex_id, 'kind': item.kind, 'statement': item.statement}
+                         for item in blueprint.source_expression.items),
+        expression_readings=blueprint.source_expression.readings,
+        book_constraints=tuple(wc.statement for wc in blueprint.world_constraints))
     identity = tuple(
         IdentityProjection(
             char_id=slug,

@@ -16,30 +16,12 @@ from __future__ import annotations
 
 from contracts.schema.design import BodyDesign
 from contracts.schema.execution import (
-    ConstraintSpec, DependencyEdge, Establishment, ExecutionPlan, SceneExecutionPlan,
+    ConstraintSpec, DependencyEdge, ExecutionPlan, SceneExecutionPlan,
 )
 from contracts.schema.grounding import SemanticBinding
-from novel.stages.common import participant_background, scene_read_views
-from novel.stages.stage4.fold import FoldedState
+from novel.stages.stage4.read_closure import init_establishments, resolve_design_reads
 from novel.stages.stage4.guard import check_binding_beat_refs
 
-
-def _establishment(delta, established_by: str) -> Establishment:
-    """TargetDelta → Establishment：剥读者确认元数据（confirms 是 D4 的投影面，
-    不是状态建立事实——Establishment 只承载可折叠的状态语义）。"""
-    payload = {k: v for k, v in delta.model_dump().items() if k != 'confirms'}
-    return Establishment(**payload, established_by=established_by)
-
-
-def init_establishments(graph: BodyDesign) -> tuple[Establishment, ...]:
-    """T₀ = Init(initial_state)：全部初始项原样装载，不按 op 过滤（B3 后半）。
-
-    set（含合法空值 ''）、unset（显式解除）与 unknown（显式值未知）在 T₀ 是
-    三种不同的事实状态，「未建立」才是缺席（I-42 四态分开）。F5e 实证的
-    「unknown 初态垫底」不再是 compiler 静默洗掉的形状：垫底的 unknown 以其
-    本面到达消费点、被「消费 unknown」闸拦下（毒化 fold 的失败保留为回归
-    反例，见 tests/test_str06_chapter_closure.py），不由 T₀ 装载处洗白。"""
-    return tuple(_establishment(d, 'init') for d in graph.initial_state)
 
 
 def compile_execution_plan(
@@ -96,35 +78,10 @@ def compile_execution_plan(
     # · 每条声明读取在其定位点解析到的建立场（read_anchors；'init' 无边）；
     # · 参与者背景补齐的事实来源场（packet 的 background 分区消费这些值，
     #   来源变化即章包变化——依赖算完整）。解析到本场自写的值不产跨场边。
-    scene_ids = {scene.scene_id for scene in graph.scenes}
-    scene_establishments = {
-        scene.scene_id: tuple(
-            _establishment(d, f'{scene.scene_id}#{b.beat_id}')
-            for b in scene.beats for d in b.target_delta)
-        for scene in graph.scenes}
-    folded = FoldedState().apply('__init__', init_establishments(graph))
-    resolved_edges: dict[tuple[str, str], str] = {}
-    for scene in graph.scenes:
-        views = scene_read_views(
-            scene=scene, establishments=scene_establishments[scene.scene_id],
-            folded_prefix=folded)
-        errors.extend(views.errors)
-        background_state, background_knowledge = participant_background(
-            scene=scene, folded_prefix=folded)
-        read_anchors = set(views.read_anchors)
-        baseline_anchors = {e.established_by for e in background_state}
-        baseline_anchors |= {e.established_by for e in background_knowledge}
-        for anchor in read_anchors:
-            source = anchor.split('#', 1)[0]
-            if source not in ('init', scene.scene_id) and source in scene_ids:
-                resolved_edges.setdefault((source, scene.scene_id), 'resolved_read')
-        for anchor in baseline_anchors:
-            source = anchor.split('#', 1)[0]
-            if source not in ('init', scene.scene_id) and source in scene_ids:
-                resolved_edges.setdefault((source, scene.scene_id),
-                                          'supplemented_baseline')
-        folded.apply(scene.scene_id, scene_establishments[scene.scene_id])
-        folded.expire_scene_scope(scene.scene_id)
+    closure = resolve_design_reads(graph)
+    scene_establishments = closure.establishments
+    resolved_edges = closure.dependencies
+    errors.extend(closure.errors)
     edges |= set(resolved_edges)
     if errors:
         return None, errors

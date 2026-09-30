@@ -242,6 +242,11 @@ def read_surface_seal(
     observed = _active_artifact_paths(novel_dir)
     for path in observed:
         _update_entry(digest, base_path, path)
+    # R9 修订记录影响自动级联，必须与执行 token 的同一盘面坐标绑定。
+    for path in sorted((novel_dir / 'runtime/revisions/active').glob('*.json')):
+        _update_entry(digest, base_path, path)
+    for path in sorted((novel_dir / 'runtime/revisions/sampling').glob('*/*.json')):
+        _update_entry(digest, base_path, path)
 
     approval_head = approvals.approval_head_bytes(base_path, sid)
     if approval_head is not None:

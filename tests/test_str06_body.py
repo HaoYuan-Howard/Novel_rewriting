@@ -34,21 +34,31 @@ from novel.stages.common import (
     render_chapter_packet,
 )
 from novel.stages.stage7.assembly import verify_chapter_receipts
-from novel.stages.chain import run_workflow
+from novel.stages.chain import derive_total_length_budget, run_workflow
 from tests.str06_facilities import make_context
 from tests.test_str06_hook import _body_wire, _characters, _full_chain_wires
 from novel.stages.stage4.design import assemble_body_design
 from novel.stages.stage4.compile import compile_execution_plan
 from novel.stages.stage4.grounding import assemble_binding
+from tests.str06_expression_inputs import (
+    sample_narration, sample_requirements,
+)
 
 H64 = 'a' * 64
+
+
+def test_source_budget_ignores_whitespace_and_rejects_empty_body():
+    """空白不得抬高正文预算；空白源章仍是无正文，不生成付费设计预算。"""
+    assert derive_total_length_budget([{'text': '甲' * 900 + '\n' * 150}]) == 1000
+    with pytest.raises(ValueError):
+        derive_total_length_budget([{'text': ' \n\t\u3000'}])
 
 
 # ───────────────────────── fixture：小型两章设计 ─────────────────────────
 
 def _green_design():
     body, errors = assemble_body_design(_body_wire(),
-                                        known_char_ids={'fu_jun', 'yun_niang'})
+                                        known_char_ids={'fu_jun', 'yun_niang'}, expression_requirements=sample_requirements(), source_narration=sample_narration())
     assert body is not None and not errors, errors
     return body
 
@@ -124,7 +134,7 @@ def test_writer_book_ir_projects_canonically():
         # 章级验证材料 compile 时算好（D2）：称谓许可＋禁用字面
         ordinal = chapter.chapter_ordinal
         assert chapter.released_surfaces == tuple(sorted(
-            chapter_surface_releases(body, ordinal)))
+            chapter_surface_releases(body, ordinal, chars.name_structure)))
         assert chapter.withheld_literals == chapter_withheld_literals(
             chars.name_projection(), body, ordinal, chars.name_structure)
     # 称谓释放导航（审计面）：initial 即第 1 章；芸娘在 sc01#b02（第 1 章）释放
@@ -234,8 +244,8 @@ def test_withheld_literals_follow_release_schedule():
     assert '陆大哥' in withheld1 and '陆兄' in withheld1 and '陆' in withheld1
     assert '苏姑娘' in withheld1
     assert '芸娘' not in withheld1 and '夫君' not in withheld1
-    # 家族级构词（陆家）进入禁用面
-    assert '陆家' in withheld1
+    # R9：成员已合法释放，其登记家族构词随之可用；其它个人称谓继续禁用。
+    assert '陆家' not in withheld1
 
 
 def test_validate_chapter_prose_all_branches():
@@ -737,6 +747,28 @@ def test_concurrency_level_does_not_enter_semantic_identity(tmp_path):
     assert sorted(transport_a.calls) == sorted(transport_b.calls)
 
 
+def test_body_hard_rejection_is_typed_and_keeps_other_chapter(tmp_path):
+    """机械耗尽定位到章，返回已知负结论，其余章合法提交仍保留。"""
+    from novel.stages.owner_revision import MechanicalDefectStop
+    class HardRejectTransport(_RoutingTransport):
+        def send(self, request):
+            answer = super().send(request)
+            if self._owner(request) == 'body_ch01':
+                return ChatResponse(content='```正文```', finish_reason='stop',
+                                    usage=answer.usage, model='fake')
+            return answer
+    wires = _full_chain_wires()
+    repo, session, _transport = _make_session(tmp_path, wires, transport=HardRejectTransport(wires))
+    with pytest.raises(MechanicalDefectStop) as stopped:
+        _run(repo, session)
+    assert stopped.value.node == 'str06.stage5.body' and stopped.value.item == 'chapter:1'
+    status = repo.read('runtime/workflow_status.json')
+    assert status['error_code'] == 'mechanical_defect' and status['error_item'] == 'chapter:1'
+    assert any('[no_wrapper]' in e for e in status['error_context']['issues'])
+    assert not repo.path('stage5/body/ch01.txt').exists()
+    assert repo.read_text('stage5/body/ch02.txt') == GOOD_CH2
+
+
 def test_chapter_failure_keeps_other_legal_commits_and_stops_truncated(tmp_path):
     """局部失败保留其他合法结果（I-31）；截断即停（D6）不重写、不进候选。"""
     wires = _full_chain_wires()
@@ -905,10 +937,13 @@ def test_hook_failure_keeps_other_legal_commits_and_recovers_free(tmp_path):
     transport.wires = wires_hook_changed
     transport.hook_text = '超' * 400  # 超过 hard_max，[length] 每次都失败
     calls_before = len(transport.calls)
-    with pytest.raises(ValueError, match='Hook 写作'):
+    from novel.stages.owner_revision import MechanicalDefectStop
+    with pytest.raises(MechanicalDefectStop, match='Hook 写作') as stopped:
         _run(repo, session, hook_max=300)
+    assert stopped.value.node == 'str06.stage5.hook' and stopped.value.item == 'book'
     status = repo.read('runtime/workflow_status.json')
     assert status['status'] == 'failed' and status['failed_node'] == 'str06.stage5.hook'
+    assert status['error_code'] == 'mechanical_defect' and status['error_context']['issues']
     # 新 HookContext 是新请求身份：hook_design 1 次＋hook_writer 2 次外发
     # （第 3 轮重写提示与第 2 轮逐字相同 → 同请求身份命中缓存，不再外发）；
     # 正文、命名、组装不被触碰

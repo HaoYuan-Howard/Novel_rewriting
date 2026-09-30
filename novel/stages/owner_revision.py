@@ -43,7 +43,8 @@ from contracts.schema.workflow import (
     OWNER_PRODUCT_RELS, OwnerIssueFileV2, OwnerIssueV1,
     owner_issue_record_of_payload, owner_issues_rel,
 )
-from novel.llm.paid_requests import revision_user_prompt
+from novel.llm.paid_requests import ExecutionError, revision_user_prompt
+from contracts.invariants import NODES
 
 __all__ = [
     'MechanicalDefectStop', 'OwnerRevisionRequired', 'OwnerRevisionStop',
@@ -68,18 +69,25 @@ class OwnerRevisionRequired(ValueError):
         self.issues = tuple(issues)
 
 
-class OwnerRevisionStop(ValueError):
+class OwnerRevisionStop(ExecutionError):
     """修订停止：同一问题集重复（无进展）或轮额度耗尽——按 item 停给人。"""
 
     def __init__(self, message: str, *, node: str, owner: str,
-                 issues: tuple[OwnerIssueV1, ...]):
-        super().__init__(message)
-        self.node = node
+                 issues: tuple[OwnerIssueV1, ...], raised_by: str = '',
+                 rounds: int = 0, no_progress: bool = False):
+        detector = raised_by or node
+        super().__init__(message,
+                         code='owner_revision_no_progress' if no_progress else 'owner_revision_exhausted',
+                         stage=NODES[detector].stage, node=detector, item=owner,
+                         phase='accept', context={
+                             'owner': owner, 'target_node': node, 'rounds': rounds,
+                             'issues': [i.model_dump(mode='json') for i in issues]})
+        self.target_node = node
         self.owner = owner
         self.issues = tuple(issues)
 
 
-class MechanicalDefectStop(ValueError):
+class MechanicalDefectStop(ExecutionError):
     """机械缺陷停止：确定性编译查出形状/闭集/时序缺陷，且没有回派路由。
 
     与 :class:`OwnerRevisionStop` 的区别：这类缺陷（如首现闸
@@ -91,9 +99,10 @@ class MechanicalDefectStop(ValueError):
     exit 70（「结论未知」），把「查出了确定性缺陷」记成「压根没跑成」。
     """
 
-    def __init__(self, message: str, *, node: str, issues: tuple[str, ...]):
-        super().__init__(message)
-        self.node = node
+    def __init__(self, message: str, *, node: str, issues: tuple[str, ...], item: str = 'book'):
+        super().__init__(message, code='mechanical_defect', stage=NODES[node].stage,
+                         node=node, item=item, phase='accept',
+                         context={'issues': list(issues)})
         self.issues = tuple(issues)
 
 
@@ -245,7 +254,8 @@ def discover_owner_issues(repository, *, raised_by: str, owner: str, node: str,
         raise OwnerRevisionStop(
             f'跨节点回派修订轮·{raised_by} 的修订要求没有进展：{owner} 修订后'
             f'同一问题集原样重现，按 item 停（同一问题集重复即停）：{_messages(issues)}',
-            node=node, owner=owner, issues=issues)
+            node=node, owner=owner, issues=issues, raised_by=raised_by,
+            rounds=existing.rounds_total, no_progress=True)
     rounds = existing.rounds_total if existing is not None else 0
     if rounds >= OWNER_REVISION_MAX_ROUNDS:
         repository.write(owner_issues_rel(owner), OwnerIssueFileV2(
@@ -257,7 +267,7 @@ def discover_owner_issues(repository, *, raised_by: str, owner: str, node: str,
             f'{owner} 的跨节点回派修订轮额度（{OWNER_REVISION_MAX_ROUNDS}）已耗尽，'
             f'按 item 停给人（剩余修复走 owner patch 或人工重跑）：'
             f'{_messages(issues)}',
-            node=node, owner=owner, issues=issues)
+            node=node, owner=owner, issues=issues, raised_by=raised_by, rounds=rounds)
     repository.write(owner_issues_rel(owner), OwnerIssueFileV2(
         owner=owner, node=node, raised_by=raised_by, status='open',
         rounds_total=rounds + 1, fingerprint=fingerprint,

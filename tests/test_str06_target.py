@@ -11,13 +11,16 @@ from __future__ import annotations
 from contracts.schema.grounding import SemanticBinding
 from contracts.schema.policy import PreserveKind
 from contracts.schema.source import (
-    BlueprintsArtifactV13, ChapterBlueprint, CharactersCore,
+    BlueprintsArtifactV14, ChapterBlueprint, CharactersCore,
 )
 from tests.str06_facilities import v13_beat
 from novel.stages.stage4.grounding import (
     assemble_binding, assemble_preserve, project_brief,
 )
 from novel.stages.stage4.design import assemble_body_design
+from tests.str06_expression_inputs import (
+    sample_narration, sample_requirements, sample_blueprint_expression, sample_design_expression,
+)
 
 
 def _source_pair():
@@ -30,7 +33,7 @@ def _source_pair():
                     'surfaces': [{'surface': '云娘', 'from_chapter': 1,
                                   'until_chapter': None, 'source_refs': ['e01_01']}]}},
         initial_state=[])
-    bp = BlueprintsArtifactV13(
+    bp = BlueprintsArtifactV14(source_expression=sample_blueprint_expression(),
         world_constraints=[], chapters=(
             ChapterBlueprint(chapter=1,
                              beats=(v13_beat('b01_01', '开篇', participants=('fu_jun',)),),
@@ -158,7 +161,7 @@ def test_assemble_preserve_rejects_dangling_and_cycles():
 
 def test_project_brief_source_blind_projection():
     chars, bp, cp = _assemble()
-    brief, identity = project_brief(cp, chars)
+    brief, identity = project_brief(cp, chars, bp)
     # 只有 event_core 进骨架；reveal/identity 义务不进 cores
     assert len(brief.requirements) == len(cp.obligations)
     assert {c.satisfaction for c in brief.requirements} == {o.satisfaction for o in cp.obligations}
@@ -202,7 +205,7 @@ def test_identity_stable_constraints_come_only_from_the_fact_layer():
             'loops': []}]})
     assert observation.beats[0].cognition
     assert observation.beats[0].effects[0].disclosure.visibility == 'concealed'
-    _brief, identity = project_brief(cp, chars)
+    _brief, identity = project_brief(cp, chars, bp)
     dumped = ' '.join(' '.join(i.stable_constraints) for i in identity)
     assert '床底' not in dumped and '藏身' not in dumped
     assert '以为' not in dumped and '离开' not in dumped
@@ -275,9 +278,9 @@ def test_assemble_binding_full_denominator():
 # ───────────────────────── Design 组装 ─────────────────────────
 
 def _design_wire():
-    """stage4-design-v3 形状（R2）：模型不输出任何 ID／归章引用／归一权重。"""
-    return {
-        'protocol_version': 'stage4-design-v3',
+    """stage4-design-v4 形状（R2）：模型不输出任何 ID／归章引用／归一权重。"""
+    return {**sample_design_expression(('yun',)),
+        'protocol_version': 'stage4-design-v4',
         'book_style': '冷峻克制的第三人称叙事，重对话张力。',
         'initial_state': [],
         'scenes': [
@@ -299,7 +302,7 @@ def _design_wire():
 
 def test_assemble_design_green_and_refusals():
     body, errors = assemble_body_design(
-        _design_wire(), known_char_ids={'yun', 'fu_jun'})
+        _design_wire(), known_char_ids={'yun', 'fu_jun'}, expression_requirements=sample_requirements(), source_narration=sample_narration())
     assert body is not None and not errors, errors
     # compiler 派发（I-21）：场景/拍 ID、归章引用、权重归一都在 canonical 落地
     assert body.scenes[0].scene_id == 'sc01'
@@ -315,51 +318,51 @@ def test_assemble_design_green_and_refusals():
 
     bad = _design_wire()
     bad['scenes'][0]['beats'][0]['participants'].append('ghost')
-    _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'})
+    _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'}, expression_requirements=sample_requirements(), source_narration=sample_narration())
     assert any('未知 char_id' in e for e in errors)
 
     bad = _design_wire()
     bad['scenes'][0]['beats'][0]['target_delta'][0]['domain'] = 'plot'
-    _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'})
+    _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'}, expression_requirements=sample_requirements(), source_narration=sample_narration())
     assert errors
 
     # 章切片的场数与场景总数不一致（每章非空、全覆盖由 compiler 核对）
     bad = _design_wire()
     bad['chapters'][0]['scenes'] = 2
-    _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'})
+    _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'}, expression_requirements=sample_requirements(), source_narration=sample_narration())
     assert any('章切片总数' in e for e in errors)
 
     # source-blind：混入 source_ref 即拒（wire 白名单 + schema 层双保险）
     bad = _design_wire()
     bad['scenes'][0]['source_ref'] = 'b01_01'
-    _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'})
+    _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'}, expression_requirements=sample_requirements(), source_narration=sample_narration())
     assert errors
 
     # 协议版本漏带/错带即拒（I-13 无隐式迁移）
     bad = _design_wire()
     bad['protocol_version'] = 'stage4-design-v9'
-    _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'})
+    _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'}, expression_requirements=sample_requirements(), source_narration=sample_narration())
     assert any('protocol_version' in e for e in errors)
 
     # 模型写可派生字段即拒（I-21：ID 由 compiler 生成；v3 由 pydantic
     # extra=forbid 承担白名单）
     bad = _design_wire()
     bad['scenes'][0]['scene_id'] = 's01'
-    _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'})
+    _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'}, expression_requirements=sample_requirements(), source_narration=sample_narration())
     assert any('Extra inputs' in e for e in errors), errors
     bad = _design_wire()
     bad['scenes'][0]['beats'][0]['beat_id'] = 'bt1'
-    _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'})
+    _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'}, expression_requirements=sample_requirements(), source_narration=sample_narration())
     assert any('Extra inputs' in e for e in errors), errors
 
     # 权重是相对重点数组，不是归一 dict（I-21：归一由 compiler 完成）
     bad = _design_wire()
     bad['scene_weights'] = {'sc01': 1.0}
-    _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'})
+    _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'}, expression_requirements=sample_requirements(), source_narration=sample_narration())
     assert any('scene_weights' in e for e in errors)
     bad = _design_wire()
     bad['scene_weights'] = [0]
-    _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'})
+    _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'}, expression_requirements=sample_requirements(), source_narration=sample_narration())
     assert errors
 
 
@@ -368,7 +371,7 @@ def test_design_pov_shape_normalization_and_refusal():
     拒——单元素数组折叠与 canonical 前缀匹配已删（I-21：不按名字猜人）。"""
     # 字符串 char_id：绿路径不动
     wire = _design_wire()
-    body, errors = assemble_body_design(wire, known_char_ids={'yun', 'fu_jun'})
+    body, errors = assemble_body_design(wire, known_char_ids={'yun', 'fu_jun'}, expression_requirements=sample_requirements(), source_narration=sample_narration())
     assert body is not None and not errors, errors
     assert body.scenes[0].delivery.pov == 'yun'
 
@@ -376,7 +379,7 @@ def test_design_pov_shape_normalization_and_refusal():
     for bad_pov in (['yun'], ['yun', 'fu_jun'], [], [''], ['云娘第三人称限知']):
         wire = _design_wire()
         wire['scenes'][0]['delivery']['pov'] = bad_pov
-        body, errors = assemble_body_design(wire, known_char_ids={'yun', 'fu_jun'})
+        body, errors = assemble_body_design(wire, known_char_ids={'yun', 'fu_jun'}, expression_requirements=sample_requirements(), source_narration=sample_narration())
         assert body is None, bad_pov
         assert any('pov' in e for e in errors), (bad_pov, errors)
 
@@ -384,14 +387,14 @@ def test_design_pov_shape_normalization_and_refusal():
     for bad_pov in ('云娘', '云娘第三人称限知', 'narratorr'):
         wire = _design_wire()
         wire['scenes'][0]['delivery']['pov'] = bad_pov
-        body, errors = assemble_body_design(wire, known_char_ids={'yun', 'fu_jun'})
+        body, errors = assemble_body_design(wire, known_char_ids={'yun', 'fu_jun'}, expression_requirements=sample_requirements(), source_narration=sample_narration())
         assert body is None, bad_pov
         assert any('必须是本书 char_id' in e for e in errors), (bad_pov, errors)
 
     # narrator 合法
     wire = _design_wire()
     wire['scenes'][0]['delivery']['pov'] = 'narrator'
-    body, errors = assemble_body_design(wire, known_char_ids={'yun', 'fu_jun'})
+    body, errors = assemble_body_design(wire, known_char_ids={'yun', 'fu_jun'}, expression_requirements=sample_requirements(), source_narration=sample_narration())
     assert body is not None and not errors, errors
 
 
@@ -402,11 +405,14 @@ def test_design_rules_pin_pov_shape():
     键名没给值形——修订轮在三种形状间振荡。此钉防形状约束再次从 prompt 里
     静默消失（协议字面量不动，不涉语义冻结闸）。
     """
-    from novel.stages.common import DESIGN_RULES
-    assert 'pov 是**单个字符串**' in DESIGN_RULES
-    assert '一场只有一个视角' in DESIGN_RULES
-    assert '不写数组' in DESIGN_RULES
-    assert '"narrator"' in DESIGN_RULES
+    import json
+    from novel.stages.common import design_rules
+    DESIGN_RULES = design_rules(known_char_ids={'yun'}, registered_surfaces={'yun': {'云娘'}})
+    schema = json.loads(DESIGN_RULES.split('【wire JSON Schema（字段与分支以此为准）】\n')[1])
+    pov = schema['$defs']['DesignWireDelivery']['properties']['pov']
+    assert pov['type'] == 'string'
+    assert pov['enum'] == ['narrator', 'yun']
+    assert schema['$defs']['SurfaceIntroduction']['allOf']
     # 同类钉（第二轮实证）：拍上 target_delta 的 scope 必填——run2 新购 27 条
     # 全漏写键（run1 恰好 39/39 全写），值形不写明就是掷骰子。
     assert '每条必写 scope' in DESIGN_RULES
@@ -423,18 +429,18 @@ def test_design_surface_release_must_be_registered():
     wire = _design_wire()
     wire['initial_surfaces'] = [{'char_id': 'yun', 'surfaces': ['云姑娘']}]
     body, errors = assemble_body_design(
-        wire, known_char_ids={'yun', 'fu_jun'}, registered_surfaces=registered)
+        wire, known_char_ids={'yun', 'fu_jun'}, registered_surfaces=registered, expression_requirements=sample_requirements(), source_narration=sample_narration())
     assert body is not None and not errors, errors
 
     bad = _design_wire()
     bad['initial_surfaces'] = [{'char_id': 'yun', 'surfaces': ['云娘子']}]
     _, errors = assemble_body_design(
-        bad, known_char_ids={'yun', 'fu_jun'}, registered_surfaces=registered)
+        bad, known_char_ids={'yun', 'fu_jun'}, registered_surfaces=registered, expression_requirements=sample_requirements(), source_narration=sample_narration())
     assert any('未登记面' in e for e in errors)
 
     bad = _design_wire()
     bad['scenes'][0]['beats'][0]['surface_introductions'] = [
         {'char_id': 'fu_jun', 'surfaces': ['陆大哥']}]
     _, errors = assemble_body_design(
-        bad, known_char_ids={'yun', 'fu_jun'}, registered_surfaces=registered)
+        bad, known_char_ids={'yun', 'fu_jun'}, registered_surfaces=registered, expression_requirements=sample_requirements(), source_narration=sample_narration())
     assert any('未登记面' in e and '陆大哥' in e for e in errors)

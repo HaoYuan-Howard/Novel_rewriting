@@ -59,28 +59,31 @@ from contracts.schema.grounding import OutputConstraints
 from contracts.schema.hook import HookConstraints, HookReceipt
 from contracts.schema.observation import STAGE2_OBSERVATION_PROTOCOL
 from contracts.schema.workflow import (
-    OWNER_REVISION_MAX_ROUNDS, STR06_RUNTIME_CONFIG, OwnerIssueV1,
+    OWNER_REVISION_MAX_ROUNDS, STR06_RUNTIME_CONFIG, OwnerIssueV1, STAGE4_PRESERVE_POLICY_VERSION,
     route_owner_issue,
 )
 from novel.config import Config, load_config
 from novel.llm.paid_requests import (
     ExecutionError, PaidRequestSession, PurchaseRequired, AdoptionRef, digest,
-    ask_json, ask_text_once, init_or_resume_candidate_workflow,
+    ask_json, ask_text_once, init_or_resume_candidate_workflow, purchased_baseline,
 )
 from novel.llm.transport import ChatRequest, DeepSeekTransport
 from novel import paths, prov
+from novel.core.text import count_non_whitespace_chars
 from novel.model_slots import pipeline_model_slot
 from novel.stages.common import (
-    NAMES_RULES, PRESERVE_RULES, DESIGN_RULES, BIND_RULES,
+    NAMES_RULES, PRESERVE_RULES, DESIGN_RULES, BIND_RULES, design_rules, expand_surface_releases,
     HOOK_DESIGN_RULES, HOOK_WRITER_SYSTEM, NAMING_RULES, SYS,
     BODY_WRITER_SYSTEM, ChapterIdentities, chapter_identities, pack_prompt,
-    packet_metrics, project_chapter_packet,
+    packet_metrics, project_chapter_packet, render_chapter_packet,
+    validate_hook_materials, validate_writer_materials,
 )
 from novel.stages.stage2 import (
     NamesObservation, STAGE2_OBSERVATION_PROTOCOL, book_observation_prompt,
     chapter_observation_prompt, character_core_view, compile_associate_observation,
     compile_book_observation, compile_chapter_observation, compile_name_structure,
     compile_source_truth, associate_observation_prompt, project_association_space,
+    first_appearance_anchors, first_appearance_issues,
 )
 from novel.stages.owner_revision import (
     MechanicalDefectStop, OwnerRevisionRequired, OwnerRevisionStop,
@@ -97,7 +100,7 @@ from novel.stages.stage5 import (
     AnsweredText, HOOK_VALIDATOR_VERSION, MAX_REWRITES, MECHANICAL_CHECKS,
     build_hook_user_prompt,
     build_rewrite_user_prompt, context_sha256,
-    sha256_text, validate_hook_prose,
+    sha256_text, validate_hook_prose, validate_chapter_prose,
     write_chapter,
 )
 from novel.stages.stage7 import (
@@ -167,6 +170,8 @@ class ChainContext:
     hook_constraints: HookConstraints = field(
         default_factory=lambda: HookConstraints(target_chars=280, hard_max_chars=360))
     length_band: tuple[float, float] = (0.6, 1.3)
+    body_replay: Callable[[int, Any], bool] = lambda _ordinal, _packet: False
+    after_node_commit: Callable[[str], None] = lambda _node: None
     #: 正文目标章集合（W1/D2 调用层选章）：None＝全书；非空 tuple＝恰好这些章。
     #: 只作调用元数据——记入 `runtime/workflow_status.json` 的独立字段供审计；
     #: 不进 run 身份摘要、请求身份、章回执三把摘要、provenance、CommitBundle
@@ -227,7 +232,7 @@ def derive_total_length_budget(chapters: list[dict], *,
     不沿用旧根的正文请求结论。付费调用额度不参与本计算（Q-10 两层是次数闸，
     不是篇幅语义）。
     """
-    total = sum(len(c['text']) for c in chapters)
+    total = sum(count_non_whitespace_chars(c['text']) for c in chapters)
     if total <= 0:
         raise ValueError('源章数组为空，无法派生书级篇幅')
     return -(-total // rounding) * rounding
@@ -264,6 +269,15 @@ def _chapter_evidence(evidence: dict, chapter: int) -> dict:
     """第 k 章的证据句段闭集：本章句段；第 1 章另见章前文字（e00）。"""
     return {k: v for k, v in evidence.items()
             if v['chapter'] == chapter or (chapter == 1 and v.get('pre_chapter'))}
+
+
+def chapter_acceptance(wire, *, chapter: int, evidence_ids, character_slugs, anchors):
+    """生产章观察与只读预检共用接受闸；首现锚点由书级 core 派生。"""
+    observation, errors = compile_chapter_observation(
+        wire, evidence_ids=evidence_ids, chapter=chapter, character_slugs=character_slugs)
+    if observation is not None:
+        errors.extend(first_appearance_issues(anchors, chapter=chapter, beats=observation.beats))
+    return observation, errors
 
 
 def _write_chapter_failures(repository, rel: str, *, requested: tuple[int, ...],
@@ -303,6 +317,11 @@ def run_chapters(ctx: ChainContext) -> dict:
     repository = ctx.repository
     book = repository.read_model('stage2/observations/book.json')
     evidence = build_evidence(ctx.chapters, ctx.hook_copy)
+    core, core_errors = character_core_view(book, evidence=evidence)
+    if core_errors:
+        raise MechanicalDefectStop(f'书级称谓锚点无效：{core_errors}',
+                                  node='str06.stage2.chapters', issues=tuple(core_errors))
+    anchors = first_appearance_anchors(core)
     failures: dict[int, BaseException] = {}
     observed = 0
 
@@ -316,16 +335,17 @@ def run_chapters(ctx: ChainContext) -> dict:
             prompt = chapter_observation_prompt(chapter=no, book=book,
                                                 chapters=ctx.chapters,
                                                 evidence=chapter_evidence)
-            wire, ch_ref = ctx.ask(
-                f'ch{no:02d}', prompt,
-                lambda w, ev=chapter_evidence, n=no: compile_chapter_observation(
-                    w, evidence_ids=frozenset(ev), chapter=n,
-                    character_slugs=frozenset(book.characters))[1])
-            observation, errors = compile_chapter_observation(
-                wire, evidence_ids=frozenset(chapter_evidence))
+            def validate(w):
+                return chapter_acceptance(w, evidence_ids=frozenset(chapter_evidence), chapter=no,
+                                          character_slugs=frozenset(book.characters), anchors=anchors)
+
+            wire, ch_ref = ctx.ask(f'ch{no:02d}', prompt, lambda w: validate(w)[1])
+            observation, errors = validate(wire)
             if errors:
                 # 缺陷定位到章 item（I-31）：不污染其余章的合法结果。
-                raise ValueError(f'第{no}章观察校验失败：{errors}')
+                raise MechanicalDefectStop(f'第{no}章观察校验失败：{errors}',
+                                          node='str06.stage2.chapters', item=f'chapter:{no}',
+                                          issues=tuple(errors))
             repository.write(str06_chapter_observation_rel(no), observation,
                              owners=(f'ch{no:02d}',), refs=(ch_ref,))
 
@@ -416,7 +436,8 @@ def run_associate(ctx: ChainContext) -> dict:
         if errors:
             return errors
         outcome = compile_source_truth(book=book, chapters=chapters, names=names,
-                                       associate=observation, evidence=evidence)
+                                       associate=observation, evidence=evidence,
+                                       source_texts=tuple(c['text'] for c in ctx.chapters))
         return [f'关联未决（compile 干跑，未决项归本节点修复）：{message}'
                 for message in outcome.undecided]
 
@@ -459,7 +480,8 @@ def run_compile(ctx: ChainContext) -> dict:
     associate = repository.read_model('stage2/observations/associate.json')
     evidence = build_evidence(ctx.chapters, ctx.hook_copy)
     outcome = compile_source_truth(book=book, chapters=chapters, names=names,
-                                   associate=associate, evidence=evidence)
+                                   associate=associate, evidence=evidence,
+                                   source_texts=tuple(c['text'] for c in ctx.chapters))
     if outcome.undecided:
         discover_owner_issues(
             repository, raised_by='str06.stage2.compile', owner='associate',
@@ -509,7 +531,7 @@ def run_preserve(ctx: ChainContext) -> dict:
         'runtime/preserve_checkpoint.json')
 
     def preserve_compile(w):
-        return assemble_preserve(w, policy_id='preserve-default', policy_version=3,
+        return assemble_preserve(w, policy_id='preserve-default', policy_version=STAGE4_PRESERVE_POLICY_VERSION,
                                  characters=core, blueprint=blueprint,
                                  provider=ctx.provider, model=ctx.model,
                                  request_sha256=ctx.digest(preserve_prompt))
@@ -544,7 +566,11 @@ def run_body_design(ctx: ChainContext) -> dict:
                                     total_length_budget=ctx.budget)
     design_prompt = revision_prompt_for_owner(
         repository, 'design',
-        pack_prompt(DESIGN_RULES, brief=brief.model_dump(mode='json'),
+        pack_prompt(design_rules(known_char_ids=set(chars.characters),
+                                 registered_surfaces=expand_surface_releases(
+                                     {cid: {s.surface for s in c.surfaces} for cid, c in chars.characters.items()},
+                                     chars.name_structure)),
+                    brief=brief.model_dump(mode='json'),
                     identities=[i.model_dump(mode='json') for i in identities],
                     constraints=constraints.model_dump(mode='json')),
         'stage4/design/body_design.json')
@@ -552,6 +578,9 @@ def run_body_design(ctx: ChainContext) -> dict:
     def design_compile(w):
         return assemble_body_design(
             w, known_char_ids=set(chars.characters), constraints=constraints,
+            name_projection=chars.name_projection(), name_structure=chars.name_structure,
+            expression_requirements=brief.expression,
+            source_narration=brief.source_narration,
             registered_surfaces={cid: {s.surface for s in c.surfaces}
                                  for cid, c in chars.characters.items()})
 
@@ -610,8 +639,15 @@ def run_hook_design(ctx: ChainContext) -> dict:
         constraints=ctx.hook_constraints.model_dump(mode='json'))
 
     def hook_design_compile(w):
-        return assemble_hook_design(w, body=body, known_char_ids=set(chars.characters),
-                                    name_projection=projection)
+        hook, errors = assemble_hook_design(w, body=body, known_char_ids=set(chars.characters),
+                                           name_projection=projection, name_structure=chars.name_structure)
+        if hook is not None:
+            context, context_errors = compile_hook_context(
+                publish_graph(body, hook), projection, ctx.hook_constraints, chars.name_structure)
+            errors.extend(context_errors)
+            if context is not None:
+                errors.extend(validate_hook_materials(context, internal_ids=chars.characters))
+        return (None, errors) if errors else (hook, [])
 
     hw, hook_design_ref = ctx.ask('hook_design', hook_design_prompt,
                                   lambda w: hook_design_compile(w)[1])
@@ -655,7 +691,8 @@ def run_compile_stage4(ctx: ChainContext) -> dict:
             f'stage4 compile 机械缺陷：{errors}',
             node='str06.stage4.compile', issues=tuple(str(e) for e in errors))
     projection = chars.name_projection()
-    hook_context, errors = compile_hook_context(graph, projection, ctx.hook_constraints)
+    hook_context, errors = compile_hook_context(graph, projection, ctx.hook_constraints,
+                                              chars.name_structure)
     if errors:
         raise MechanicalDefectStop(
             f'stage4 hook 上下文机械缺陷：{errors}',
@@ -667,7 +704,12 @@ def run_compile_stage4(ctx: ChainContext) -> dict:
                                        projection=projection,
                                        structure=chars.name_structure)
     problems = []
+    from novel.stages.common import material_identities
+    internal_ids = material_identities(graph, binding, chars)
+    problems.extend(validate_hook_materials(hook_context, internal_ids=internal_ids))
     for chapter_ir in writer_ir.chapters:
+        problems.extend(validate_writer_materials(
+            project_chapter_packet(writer_ir, chapter_ir.chapter_ordinal), internal_ids=internal_ids))
         for context in chapter_ir.scenes:
             problems.extend(run_mechanical_guard(binding=binding, context=context,
                                                  graph=graph))
@@ -810,7 +852,7 @@ def _write_hook(hook_context, ask_text) -> tuple[str | None, list[dict], Any]:
             continue
         prose_seen = True
         errors = validate_hook_prose(prose, hook_context)
-        attempts.append({'attempt': attempt + 1, 'chars': len(prose), 'errors': errors})
+        attempts.append({'attempt': attempt + 1, 'chars': count_non_whitespace_chars(prose), 'errors': errors})
         if not errors:
             return prose, attempts, ref
     return None, attempts, ref
@@ -846,8 +888,11 @@ def run_hook(ctx: ChainContext) -> dict:
     if prose is None:
         repository.write('runtime/workflow_status.json',
                          {'status': status, 'accepted_body': False})
-        raise ValueError('Hook 写作在重写上限内未通过机械校验；先人工复核 HookContext')
-    return {'hook_chars': len(prose), 'materials': len(hook_context.materials),
+        raise MechanicalDefectStop(
+            'Hook 写作在重写上限内未通过机械校验；先人工复核 HookContext',
+            node='str06.stage5.hook', item='book',
+            issues=tuple(str(e) for attempt in attempts_log for e in attempt['errors']))
+    return {'hook_chars': count_non_whitespace_chars(prose), 'materials': len(hook_context.materials),
             'pov': hook_context.pov.model_dump(mode='json')}
 
 
@@ -940,7 +985,10 @@ def _write_and_commit_chapter(ctx: ChainContext, packet, ordinal: int):
         repository.write('runtime/workflow_status.json', {
             'status': 'body_rejected', 'accepted_body': False, 'chapter': ordinal,
             'detail': '重写额度内无合法候选（硬检查未全过）；该章无提交'})
-        raise ValueError(f'第{ordinal}章在重写额度内无合法候选；先人工复核')
+        raise MechanicalDefectStop(
+            f'第{ordinal}章在重写额度内无合法候选；先人工复核',
+            node='str06.stage5.body', item=f'chapter:{ordinal}',
+            issues=tuple(str(e) for attempt in outcome.attempts for e in attempt.errors))
     # R6 输出组发布：章正文与章回执同组一个 seal——正文先落、回执最后提交
     # （提交完成），拒绝候选留证在 attempts 记录。
     repository.publish((
@@ -975,6 +1023,10 @@ def run_body(ctx: ChainContext) -> dict:
     target = resolve_body_chapters(ctx.body_chapters, len(writer_ir.chapters))
     identities = _packet_identities(writer_ir)
     committed, committed_receipts = _committed_set(repository, identities, target)
+    for ordinal in tuple(committed):
+        if ctx.body_replay(ordinal, project_chapter_packet(writer_ir, ordinal)):
+            del committed[ordinal]
+            del committed_receipts[ordinal]
     todo = tuple(ordinal for ordinal in target if ordinal not in committed)
     packets = {ordinal: project_chapter_packet(writer_ir, ordinal) for ordinal in todo}
     failures: dict[int, BaseException] = {}
@@ -1098,7 +1150,7 @@ def run_assemble(ctx: ChainContext) -> dict:
               'body_access': {k: list(v) for k, v in access._asdict().items()},
               'scenes': len(graph.scenes), 'obligations': len(binding.obligations),
               'chain_problems': chain_problems,
-              'hook': {'chars': len(prose), 'renamed_chars': len(renamed_hook),
+              'hook': {'chars': count_non_whitespace_chars(prose), 'renamed_chars': count_non_whitespace_chars(renamed_hook),
                        'materials': len(hook_context.materials),
                        'replacements': len(replacements), 'kept': len(kept_literals)},
               'assembly': {'status': outcome.status, 'reason': outcome.reason,
@@ -1151,7 +1203,14 @@ def run_node(node_id: str, ctx: ChainContext) -> dict:
     runner = NODE_RUNNERS.get(node_id)
     if runner is None:
         raise ValueError(f'未登记的候选节点 runner：{node_id}')
-    return runner(ctx)
+    report = runner(ctx)
+    ctx.after_node_commit(node_id)
+    from novel.stages.revisions import activate_node_revisions, resolve_node_revisions
+    activate_node_revisions(ctx.repository, node_id)
+    if node_id in {'str06.stage2.compile', 'str06.stage4.compile', 'str06.stage7.assemble'}:
+        if node_id != 'str06.stage7.assemble' or report.get('assembly', {}).get('status') == 'ready':
+            resolve_node_revisions(ctx.repository, node_id)
+    return report
 
 
 def _record_failure(ctx: ChainContext, node_id: str, exc: Exception) -> None:
@@ -1473,7 +1532,9 @@ def run_workflow(*, repository, chapters, ask, ask_text, ask_body, budget=11000,
                  through='stage4', provider='manual-adoption', model='unknown',
                  book_title='', hook_constraints=None, length_band=(0.6, 1.3),
                  body_chapters=None, node_filter=None, hook_copy='',
-                 concurrency: int = PIPELINE_DEFAULT_CONCURRENCY):
+                 concurrency: int = PIPELINE_DEFAULT_CONCURRENCY,
+                 body_replay=lambda _ordinal, _packet: False,
+                 after_node_commit=lambda _node: None):
     """记录显式执行状态；失败保留旧产物供恢复，但不能仍宣称上次绿灯有效。
 
     流程编排已归 owner runner（本模块上半）：本函数只装配 ChainContext、驱动
@@ -1490,6 +1551,7 @@ def run_workflow(*, repository, chapters, ask, ask_text, ask_body, budget=11000,
         chapters=chapters, hook_copy=hook_copy, budget=budget, book_title=book_title,
         hook_constraints=hook_constraints, length_band=length_band,
         body_chapters=body_chapters, provider=provider, model=model,
+        body_replay=body_replay, after_node_commit=after_node_commit,
         digest=digest, concurrency=concurrency)
     status_rel = 'runtime/workflow_status.json'
     identity = digest({'chapters': chapters, 'hook_copy': hook_copy, 'budget': budget,
@@ -1560,6 +1622,19 @@ def execute(args) -> None:
         raise ValueError('--body-band-low/high 必须满足 0 < low < high')
     if args.check_only and (args.yes or args.allow_source_export):
         raise ValueError('--check-only 不签发新调用：去掉 --yes/--allow-source-export 再跑')
+    resample_owner = getattr(args, 'resample', None)
+    resample_reason = getattr(args, 'reason', None)
+    if bool(resample_owner) != bool(resample_reason):
+        raise ValueError('--resample 与非空 --reason 必须同时提供')
+    if resample_owner:
+        from novel.llm.paid_requests import semantic_owner_unit
+        target_node, _scope = semantic_owner_unit(resample_owner)
+        if args.check_only or args.wire_dir:
+            raise ValueError('定向重采不能与 check-only／wire 采用混用')
+        if args.node and target_node not in args.node:
+            raise ValueError('--resample owner 不属于本次执行节点')
+        if not args.node and NODE_ORDER.index(target_node) > NODE_ORDER.index(THROUGH_NODE[args.through]):
+            raise ValueError('--resample owner 超出本次 --through 范围')
     for root in args.adopt_root:
         if not root.resolve().is_dir():
             raise ValueError(f'--adopt-root 不是目录：{root}')
@@ -1585,6 +1660,12 @@ def execute(args) -> None:
         source_identity = hashlib.sha256(source_bytes).hexdigest()
         root_sha1 = prov.content_sha1(source_bytes)
         chapters, hook_copy = load_dev_source(repository.read_external(args.source_json))
+    if resample_owner and resample_owner.startswith(('ch', 'body_ch')):
+        n = int(resample_owner.removeprefix('body_')[2:])
+        if not 1 <= n <= len(chapters):
+            raise ValueError('--resample 章号超出正式输入')
+        if resample_owner.startswith('body_ch') and n not in resolve_body_chapters(args.body_chapters, len(chapters)):
+            raise ValueError('--resample 目标章不在 --body-chapters 内')
     if args.budget is None:
         args.budget = derive_total_length_budget(
             chapters, rounding=STR06_RUNTIME_CONFIG.length_budget_rounding)
@@ -1637,6 +1718,7 @@ def execute(args) -> None:
                 owner not in adopted or Path(adopted[owner]['path']).resolve() != path.resolve()
                 or repository.file_sha256(path) != adopted[owner]['sha256']):
             raise ValueError(f'{owner} wire 不在已核实修订 manifest 内')
+        original_bytes = path.read_bytes()
         raw = repository.read_external(path)
         errors = validate(raw)
         revision = {
@@ -1649,11 +1731,15 @@ def execute(args) -> None:
         if errors:
             revision['kind'] = 'wire_rejected'
             repository.write(f'runtime/revisions/{owner}.json', revision)
-            raise ValueError(f'{owner} 免费采用失败：{errors}')
+            node, scope = semantic_owner_unit(owner)
+            raise MechanicalDefectStop(f'{owner} 免费采用失败：{errors}', node=node,
+                                       item=scope, issues=tuple(str(e) for e in errors))
         # F7a-3：wire 采用登记身份／成本绑定——注册源根有同请求身份已购行时三方
         # 绑定（身份／响应／成本），否则退到采用链（批次口径）或如实标未核。
         model = 'unknown'
-        if args.adopt_root:
+        note_path = args.wire_dir / f'{owner}_patch_note.json' if args.wire_dir else None
+        patch_requested = note_path is not None and note_path.exists()
+        if args.adopt_root or patch_requested:
             request = build_request(owner, prompt, json_mode=json_mode, system=system,
                                     temperature=temperature)
             identity = digest({'owner': owner, 'provider': session.provider,
@@ -1665,9 +1751,14 @@ def execute(args) -> None:
             if note_path is not None and note_path.exists():
                 note = repository.read_external(note_path)
                 if note.get('base_response_identity') != identity:
-                    raise ValueError(
-                        f'{owner} patch note 的基线身份与当前请求不一致，拒绝采用')
+                    from novel.stages.revisions import revision_error
+                    raise revision_error(owner, f'{owner} patch note 的基线身份与当前请求不一致，拒绝采用')
                 allow_patch, patch_reason = True, note.get('reason')
+                if not isinstance(patch_reason, str) or not patch_reason.strip():
+                    from novel.stages.revisions import revision_error
+                    raise revision_error(owner, 'owner patch 必须登记非空修订理由')
+            if patch_requested and not session.adopt_roots:
+                session.adopt_roots = (repository.root,)
             bound = session.bind_wire_adoption(owner, identity, path,
                                                allow_patch=allow_patch)
             revision.update({
@@ -1680,8 +1771,31 @@ def execute(args) -> None:
             if bound.get('owner_patch'):
                 # owner patch 是无外发的修订：绑定基线请求身份与修订说明。
                 revision['patch'] = {'baseline_request_sha256': identity,
-                                     'reason': patch_reason}
+                                     'reason': patch_reason,
+                                     'candidate_sha256': hashlib.sha256(original_bytes).hexdigest()}
             model = bound.get('model') or 'unknown'
+        # 原字节在本根耐久保存；采用记录不再依赖根外临时补丁。
+        evidence_rel = f'runtime/revisions/evidence/{hashlib.sha256(original_bytes).hexdigest()}.json'
+        local_path = repository.write_evidence_bytes(evidence_rel, original_bytes)
+        revision['path'] = str(local_path)
+        if revision.get('owner_patch'):
+            from novel.stages.revisions import preview_owner_patch, stage_revision
+            from novel.stages.review import dry_run_patch, character_literals
+            source_root = Path(revision['source_root'])
+            baseline = purchased_baseline(source_root, owner, revision['request_sha256'])
+            preview = preview_owner_patch(
+                owner=owner, identity=revision['request_sha256'], candidate=raw,
+                baseline=baseline, validate=validate,
+                character_literals=character_literals(Str06Repository(repository.root)),
+                dry_run=lambda w: dry_run_patch(Str06Repository(repository.root), owner, w,
+                    evidence=build_evidence(chapters, hook_copy), budget=args.budget,
+                    hook_constraints=HookConstraints(target_chars=args.hook_target_chars,
+                                                     hard_max_chars=args.hook_hard_max),
+                    chapter_count=len(chapters), source_texts=tuple(c['text'] for c in chapters),
+                    book_title=args.book_title, length_band=(args.body_band_low, args.body_band_high)))
+            stage_revision(repository, owner=owner, identity=revision['request_sha256'],
+                           baseline=baseline, raw_bytes=original_bytes, preview=preview,
+                           reason=patch_reason)
         repository.write(f'runtime/revisions/{owner}.json', revision)
         ref = AdoptionRef(
             owner=owner, model=model, prompts={'system': system, 'user': prompt},
@@ -1689,7 +1803,7 @@ def execute(args) -> None:
             historical=({k: revision[k] for k in
                          ('mode', 'cost_link', 'source_root', 'attempt_id',
                           'historical_usage', 'new_paid_calls')
-                         if revision.get(k) is not None} if args.adopt_root else None),
+                         if revision.get(k) is not None} if args.adopt_root or patch_requested else None),
             patch=revision.get('patch'))
         return raw, ref
 
@@ -1699,6 +1813,58 @@ def execute(args) -> None:
         path = args.wire_dir / f'{owner}_wire.json'
         return path if path.exists() else None
 
+    def replay_patch(owner, request, validate, system, prompt):
+        if owner == resample_owner:
+            return None
+        from novel.stages.revisions import adopted_patch
+        identity = digest({'owner': owner, 'provider': session.provider, 'request': request.cache_payload()})
+        replay = adopted_patch(repository, owner, identity, validate)
+        if replay is None:
+            return None
+        data, record, baseline = replay
+        ref = AdoptionRef(
+            owner=owner, model=profile.model, request_sha256=identity,
+            prompts={'system': system, 'user': prompt},
+            historical={'mode': 'owner-patch-replay', 'cost_link': 'ledger-row',
+                        'source_root': baseline['source_root'], 'attempt_id': baseline['attempt_id'],
+                        'new_paid_calls': 0},
+            patch={'baseline_request_sha256': identity, 'reason': record.reason,
+                   'candidate_sha256': record.candidate_sha256})
+        return data, ref
+
+    selected_samples = {}
+
+    def sample_request(owner, request):
+        from dataclasses import replace
+        from novel.stages.revisions import sampling_request
+        if owner in selected_samples:
+            selection = selected_samples[owner]
+            return (replace(request, sampling_nonce=selection.nonce), selection) if selection else (request, None)
+        selected, selection = sampling_request(repository, session, owner, request,
+                                               explicit=owner == resample_owner, reason=resample_reason or '')
+        selected_samples[owner] = selection
+        return selected, selection
+
+    def record_sample(owner, data, selection, validate):
+        if selection is None:
+            return
+        from novel.stages.revisions import preview_owner_patch, stage_revision
+        from novel.stages.review import dry_run_patch, character_literals
+        baseline = purchased_baseline(repository.root, owner, selection.baseline_request_sha256)
+        preview = preview_owner_patch(
+            owner=owner, identity=selection.baseline_request_sha256, candidate=data,
+            baseline=baseline, validate=validate,
+            character_literals=character_literals(Str06Repository(repository.root)),
+            dry_run=lambda w: dry_run_patch(Str06Repository(repository.root), owner, w,
+                evidence=build_evidence(chapters, hook_copy), budget=args.budget,
+                hook_constraints=HookConstraints(target_chars=args.hook_target_chars,
+                                                 hard_max_chars=args.hook_hard_max), chapter_count=len(chapters),
+                source_texts=tuple(c['text'] for c in chapters), book_title=args.book_title,
+                length_band=(args.body_band_low, args.body_band_high)))
+        stage_revision(repository, owner=owner, identity=selection.baseline_request_sha256,
+                       baseline=baseline, raw_bytes=json.dumps(data, ensure_ascii=False).encode('utf-8'),
+                       preview=preview, reason=selection.reason, kind='resample', sequence=selection.sequence)
+
     def ask(owner, prompt, validate):
         path = wire_path(owner)
         if path is not None:
@@ -1706,12 +1872,29 @@ def execute(args) -> None:
                              json_mode=True, temperature=0.3)
             return raw, ref
         request = build_request(owner, prompt, json_mode=True, system=SYS, temperature=0.3)
-        return ask_json(session, owner, request, validate)
+        patch = replay_patch(owner, request, validate, SYS, prompt)
+        if patch is not None:
+            return patch
+        request, selection = sample_request(owner, request)
+        raw, answer = ask_json(session, owner, request, validate)
+        record_sample(owner, raw, selection, validate)
+        return raw, answer
+
+    def text_validation(owner, wire):
+        from novel.stages.revisions import validate_prose_wire
+        if owner == 'hook_writer':
+            context = repository.read_model('stage4/context/hook/hook.json')
+            return validate_prose_wire(wire, lambda text: validate_hook_prose(text, context))
+        packet = project_chapter_packet(repository.read_model('stage4/ir/writer_book_ir.json'), int(owner[7:]))
+        contract = packet.realization_contract
+        return validate_prose_wire(wire, lambda text: validate_chapter_prose(text, withheld_literals=packet.chapter.withheld_literals,
+            released_surfaces=packet.chapter.released_surfaces, target_chars=contract.target_chars,
+            band_low=contract.band_low, band_high=contract.band_high))
 
     def ask_text(owner, prompt):
         path = wire_path(owner)
         if path is not None:
-            raw, ref = adopt(owner, path, lambda w: [], system=HOOK_WRITER_SYSTEM,
+            raw, ref = adopt(owner, path, lambda w: text_validation(owner, w), system=HOOK_WRITER_SYSTEM,
                              prompt=prompt, json_mode=False, temperature=0.7)
             prose = (raw.get('prose') or '').strip() if isinstance(raw, dict) else ''
             if not prose:
@@ -1719,6 +1902,11 @@ def execute(args) -> None:
             return prose, [], ref
         request = build_request(owner, prompt, json_mode=False, system=HOOK_WRITER_SYSTEM,
                                 temperature=0.7)
+        patch = replay_patch(owner, request, lambda w: text_validation(owner, w), HOOK_WRITER_SYSTEM, prompt)
+        if patch is not None:
+            data, ref = patch
+            return data['prose'], [], ref
+        request, selection = sample_request(owner, request)
         text, errors, answer = ask_text_once(session, owner, request)
         return text, errors, answer.adoption_ref(
             prompts={'system': HOOK_WRITER_SYSTEM, 'user': prompt})
@@ -1726,7 +1914,7 @@ def execute(args) -> None:
     def ask_body(owner, prompt):
         path = wire_path(owner)
         if path is not None:
-            raw, ref = adopt(owner, path, lambda w: [], system=BODY_WRITER_SYSTEM,
+            raw, ref = adopt(owner, path, lambda w: text_validation(owner, w), system=BODY_WRITER_SYSTEM,
                              prompt=prompt, json_mode=False, temperature=0.7)
             prose = (raw.get('prose') or '').strip() if isinstance(raw, dict) else ''
             if not prose:
@@ -1735,11 +1923,54 @@ def execute(args) -> None:
                                 cached=True, ref=ref)
         request = build_request(owner, prompt, json_mode=False, system=BODY_WRITER_SYSTEM,
                                 temperature=0.7)
+        patch = replay_patch(owner, request, lambda w: text_validation(owner, w), BODY_WRITER_SYSTEM, prompt)
+        if patch is not None:
+            data, ref = patch
+            return AnsweredText(text=data['prose'], finish_reason=None,
+                                identity=ref.request_sha256, cached=True, ref=ref)
+        request, selection = sample_request(owner, request)
         text, errors, answer = ask_text_once(session, owner, request)
         return AnsweredText(text=text, finish_reason=answer.finish_reason,
                             identity=answer.request_sha256, cached=answer.cached,
                             ref=answer.adoption_ref(
                                 prompts={'system': BODY_WRITER_SYSTEM, 'user': prompt}))
+
+    def body_replay(ordinal, packet):
+        from contracts.schema.workflow import OwnerRevisionRecordV1
+        from novel.stages.revisions import sampling_request
+        owner = f'body_ch{ordinal:02d}'
+        if owner == resample_owner:
+            return True
+        if wire_path(owner) is not None:
+            return True
+        request = build_request(owner, render_chapter_packet(packet), json_mode=False,
+                                system=BODY_WRITER_SYSTEM, temperature=0.7)
+        _request, selection = sampling_request(repository, session, owner, request,
+                                               explicit=False, reason='')
+        if selection is None:
+            return False
+        try:
+            record = OwnerRevisionRecordV1.model_validate(
+                repository.inspect(f'runtime/revisions/active/{owner}.json'))
+        except FileNotFoundError:
+            return True
+        return (record.kind != 'resample' or record.sequence != selection.sequence
+                or record.baseline_request_sha256 != selection.baseline_request_sha256
+                or record.status == 'staged'
+                or record.product_sha256 != repository.file_sha256(repository.path(record.product_rel)))
+
+    def after_node_commit(node):
+        from novel.llm.paid_requests import semantic_owner_unit
+        for owner, selection in selected_samples.items():
+            if selection is None or semantic_owner_unit(owner)[0] != node:
+                continue
+            if owner.startswith('body_ch'):
+                text = repository.read_text(f'stage5/body/{owner.removeprefix("body_")}.txt')
+            elif owner == 'hook_writer':
+                text = repository.read_text('stage5/hook/hook.txt')
+            else:
+                continue
+            record_sample(owner, {'prose': text}, selection, lambda w: text_validation(owner, w))
 
     print(run_workflow(repository=repository, chapters=chapters, hook_copy=hook_copy,
                        ask=ask, ask_text=ask_text,
@@ -1752,4 +1983,5 @@ def execute(args) -> None:
                                                          hard_max_chars=args.hook_hard_max),
                        length_band=(args.body_band_low, args.body_band_high),
                        body_chapters=args.body_chapters,
-                       concurrency=cfg.concurrency_for('str06.stage5.body')))
+                       concurrency=cfg.concurrency_for('str06.stage5.body'),
+                       body_replay=body_replay, after_node_commit=after_node_commit))

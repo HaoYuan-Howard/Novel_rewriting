@@ -81,19 +81,20 @@ from __future__ import annotations
 from contracts.artifacts import ARTIFACT_PATHS, STR06_ARTIFACT_RC_VERSIONS
 from contracts.invariants import NODES
 from contracts.schema.observation import (
-    STAGE2_ASSOCIATE_PROTOCOL, STAGE2_OBSERVATION_PROTOCOL,
+    STAGE2_ASSOCIATE_PROTOCOL, STAGE2_OBSERVATION_PROTOCOL, STAGE2_BOOK_PROTOCOL,
 )
 from contracts.schema.workflow import (
     STAGE4_BIND_PROTOCOL, STAGE4_DESIGN_PROTOCOL, STAGE4_HOOK_DESIGN_PROTOCOL,
-    STAGE4_PRESERVE_PROTOCOL, STR06_RC_VERSION, STR06_RUNTIME_CONFIG,
+    STAGE4_PRESERVE_PROTOCOL, STR06_RC_VERSION, STR06_RUNTIME_CONFIG, STAGE4_PRESERVE_POLICY_VERSION,
 )
 from novel.llm.paid_requests import candidate_contract_identity
 
-#: R4 重新冻结（2026-09-28 stage5.body 恢复入口改名 committed_set_recovery）
+#: R9 重新冻结（2026-09-30，D8 修订二）：book 表达／Design v4／IR rc11；
+#: 节点、恢复策略与运行期配置不变，旧候选根只读拒识。
 #: 时的候选契约身份：节点表＋产物表＋RC 版式＋运行期配置的 SHA-256。表内任何
 #: 一行变化都会改变它——先改本记录并登记原因（REQUIREMENTS／DECISIONS），
 #: 再动表。
-FROZEN_CONTRACT_IDENTITY = '7f5b11fd29aa3978be8878dd00c84ca3bbd081e55adbbee65f88932abc213350'
+FROZEN_CONTRACT_IDENTITY = '08a05314a73c68d4518fc008af795078cdecf5f69888346b4f6a98d7cda497bb'
 
 #: 冻结时的节点集合（14 个：stage0/1 两座＋Stage2 五节点＋Stage4 五＋Stage5 两
 #: ＋Stage7 两）。
@@ -120,7 +121,7 @@ def _candidate_nodes() -> dict:
 
 def test_frozen_contract_identity_matches_the_live_tables():
     assert candidate_contract_identity() == FROZEN_CONTRACT_IDENTITY, (
-        '候选契约身份与 R4 冻结基线不符：先更新本文件的冻结记录，'
+        '候选契约身份与 R9 冻结基线不符：先更新本文件的冻结记录，'
         '并在 REQUIREMENTS 登记变化原因（不静默改冻结面）')
 
 
@@ -160,7 +161,7 @@ def test_frozen_artifact_table_shape():
 
 
 def test_frozen_rc_version_label():
-    assert STR06_RC_VERSION == 'str06-rc10'
+    assert STR06_RC_VERSION == 'str06-rc11'
 
 
 #: 语义冻结闸（2026-09-29，裁决 D8）钉住的语义层协议字面量。键是常量名、值是
@@ -170,10 +171,12 @@ def test_frozen_rc_version_label():
 #: 写作层版本（`RENDERER_VERSION`／`WRITER_PROTOCOL_VERSION`）不在此表——
 #: 分层冻结，canary 收敛后再冻（PLAN.md）。
 FROZEN_SEMANTIC_PROTOCOLS = {
+    'STAGE2_BOOK_PROTOCOL': 'stage2-book-v2',
     'STAGE2_OBSERVATION_PROTOCOL': 'stage2-observation-v1',
     'STAGE2_ASSOCIATE_PROTOCOL': 'stage2-associate-v2',
     'STAGE4_PRESERVE_PROTOCOL': 'stage4-preserve-v1',
-    'STAGE4_DESIGN_PROTOCOL': 'stage4-design-v3',
+    'STAGE4_PRESERVE_POLICY_VERSION': 4,
+    'STAGE4_DESIGN_PROTOCOL': 'stage4-design-v4',
     'STAGE4_BIND_PROTOCOL': 'stage4-bind-v1',
     'STAGE4_HOOK_DESIGN_PROTOCOL': 'stage4-hook-design-v1',
 }
@@ -181,9 +184,11 @@ FROZEN_SEMANTIC_PROTOCOLS = {
 
 def test_frozen_semantic_protocols_match_the_live_literals():
     live = {
+        'STAGE2_BOOK_PROTOCOL': STAGE2_BOOK_PROTOCOL,
         'STAGE2_OBSERVATION_PROTOCOL': STAGE2_OBSERVATION_PROTOCOL,
         'STAGE2_ASSOCIATE_PROTOCOL': STAGE2_ASSOCIATE_PROTOCOL,
         'STAGE4_PRESERVE_PROTOCOL': STAGE4_PRESERVE_PROTOCOL,
+        'STAGE4_PRESERVE_POLICY_VERSION': STAGE4_PRESERVE_POLICY_VERSION,
         'STAGE4_DESIGN_PROTOCOL': STAGE4_DESIGN_PROTOCOL,
         'STAGE4_BIND_PROTOCOL': STAGE4_BIND_PROTOCOL,
         'STAGE4_HOOK_DESIGN_PROTOCOL': STAGE4_HOOK_DESIGN_PROTOCOL,

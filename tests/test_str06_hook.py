@@ -40,6 +40,9 @@ from novel.errors import PathRefused
 from novel.llm.ledger import CostLedger
 from novel.paths import check_rel_family
 from tests.str06_facilities import synthetic_ref, make_context, v13_beat, v13_chapter, stub_body_runner
+from tests.str06_expression_inputs import (
+    sample_narration, sample_requirements, sample_book_expression, sample_design_expression,
+)
 
 H64 = 'a' * 64
 SRC = '苏芸娘嫁入陆家，唤夫君为陆大哥，苏姑娘陪嫁，陆兄迎娶。'
@@ -81,9 +84,9 @@ def _characters() -> CharactersArtifactV4:
 
 
 def _body_wire() -> dict:
-    """stage4-design-v3 形状（R2）：无 ID／章切片／相对权重数组；threads＋entry。"""
-    return {
-        'protocol_version': 'stage4-design-v3',
+    """stage4-design-v4 形状（R2）：无 ID／章切片／相对权重数组；threads＋entry。"""
+    return {**sample_design_expression(('yun_niang',)),
+        'protocol_version': 'stage4-design-v4',
         'book_style': '冷峻克制的限知叙事，重日常细节里的异样。',
         'initial_state': [
             {'domain': 'character', 'subjects': ['yun_niang'], 'holder': None,
@@ -182,7 +185,7 @@ def _projection():
 
 def _green_pair():
     body, errors = assemble_body_design(_body_wire(),
-                                        known_char_ids={'fu_jun', 'yun_niang'})
+                                        known_char_ids={'fu_jun', 'yun_niang'}, expression_requirements=sample_requirements(), source_narration=sample_narration())
     assert body is not None and not errors, errors
     hook, errors = assemble_hook_design(_hook_wire(), body=body,
                                         known_char_ids={'fu_jun', 'yun_niang'},
@@ -214,13 +217,14 @@ def test_context_rebuild_is_byte_identical_after_delete(tmp_path):
 def test_pov_comes_from_design_not_body_majority():
     wire = _hook_wire()
     wire['pov'] = {'person': 'first', 'focalizers': ['yun_niang']}
-    body, _ = assemble_body_design(_body_wire(), known_char_ids={'fu_jun', 'yun_niang'})
+    body, _ = assemble_body_design(_body_wire(), known_char_ids={'fu_jun', 'yun_niang'}, expression_requirements=sample_requirements(), source_narration=sample_narration())
     # 正文两场 pov 都是 yun_niang；这里反向构造：改正文 pov 为 fu_jun 众数，
     # Hook 的 POV 仍取自 HookDesign 本身。
     wire_body = _body_wire()
     for scene in wire_body['scenes']:
         scene['delivery']['pov'] = 'fu_jun'
-    body2, _ = assemble_body_design(wire_body, known_char_ids={'fu_jun', 'yun_niang'})
+    wire_body['narration']['focalizers'] = ['fu_jun']
+    body2, _ = assemble_body_design(wire_body, known_char_ids={'fu_jun', 'yun_niang'}, expression_requirements=sample_requirements(), source_narration=sample_narration())
     hook, errors = assemble_hook_design(wire, body=body2,
                                         known_char_ids={'fu_jun', 'yun_niang'},
                                         name_projection=_projection())
@@ -239,7 +243,7 @@ def test_pov_comes_from_design_not_body_majority():
 def test_third_person_multi_focalizer_passes():
     wire = _hook_wire()
     wire['pov'] = {'person': 'third', 'focalizers': ['yun_niang', 'fu_jun']}
-    body, _ = assemble_body_design(_body_wire(), known_char_ids={'fu_jun', 'yun_niang'})
+    body, _ = assemble_body_design(_body_wire(), known_char_ids={'fu_jun', 'yun_niang'}, expression_requirements=sample_requirements(), source_narration=sample_narration())
     hook, errors = assemble_hook_design(wire, body=body,
                                         known_char_ids={'fu_jun', 'yun_niang'},
                                         name_projection=_projection())
@@ -262,7 +266,7 @@ def test_partial_disclosure_single_beat():
              'key': 'debt_agreement'}], 'presentation': None},
     ]
     wire['opening_facts'] = [wire['opening_facts'][0]]
-    body, _ = assemble_body_design(_body_wire(), known_char_ids={'fu_jun', 'yun_niang'})
+    body, _ = assemble_body_design(_body_wire(), known_char_ids={'fu_jun', 'yun_niang'}, expression_requirements=sample_requirements(), source_narration=sample_narration())
     hook, errors = assemble_hook_design(wire, body=body,
                                         known_char_ids={'fu_jun', 'yun_niang'},
                                         name_projection=_projection())
@@ -283,7 +287,7 @@ def _rendered_deltas(*, knowledge_mode: str, holder: str):
     wire = _body_wire()
     wire['scenes'][0]['beats'][1]['target_delta'][0]['knowledge_mode'] = knowledge_mode
     wire['scenes'][0]['beats'][1]['target_delta'][0]['holder'] = holder
-    body, errors = assemble_body_design(wire, known_char_ids={'fu_jun', 'yun_niang'})
+    body, errors = assemble_body_design(wire, known_char_ids={'fu_jun', 'yun_niang'}, expression_requirements=sample_requirements(), source_narration=sample_narration())
     assert body is not None and not errors, errors
     hook_wire = _hook_wire()
     hook_wire['concealed'] = []
@@ -321,7 +325,7 @@ def test_fact_rendering_keeps_holder_and_knowledge_mode():
 
 def _assemble(wire, body=None):
     body = body if body is not None else assemble_body_design(
-        _body_wire(), known_char_ids={'fu_jun', 'yun_niang'})[0]
+        _body_wire(), known_char_ids={'fu_jun', 'yun_niang'}, expression_requirements=sample_requirements(), source_narration=sample_narration())[0]
     return assemble_hook_design(wire, body=body,
                                 known_char_ids={'fu_jun', 'yun_niang'},
                                 name_projection=_projection())
@@ -345,7 +349,7 @@ def test_dangling_refs_rejected():
 
 
 def test_source_and_obligation_fields_rejected():
-    body, _ = assemble_body_design(_body_wire(), known_char_ids={'fu_jun', 'yun_niang'})
+    body, _ = assemble_body_design(_body_wire(), known_char_ids={'fu_jun', 'yun_niang'}, expression_requirements=sample_requirements(), source_narration=sample_narration())
     for smuggled in (
             {'source_hook_text': '娘子的嫁妆'},
             {'source_refs': ['e01_01']},
@@ -409,7 +413,7 @@ def test_withheld_must_belong_to_beat_delta():
 # ───────────────────────── 隐藏身份的三层防线 ─────────────────────────
 
 def test_concealed_identity_three_layers():
-    body, _ = assemble_body_design(_body_wire(), known_char_ids={'fu_jun', 'yun_niang'})
+    body, _ = assemble_body_design(_body_wire(), known_char_ids={'fu_jun', 'yun_niang'}, expression_requirements=sample_requirements(), source_narration=sample_narration())
     # 第一层：材料涉及隐藏人物必须 presentation
     wire = _hook_wire()
     wire['materials'][0]['presentation'] = None
@@ -493,6 +497,13 @@ def test_non_material_beat_change_keeps_context():
 
 
 # ───────────────────────── Hook Writer 机械验 ─────────────────────────
+
+def test_hook_length_uses_non_whitespace_count():
+    _, _, context = _green_pair()
+    context = context.model_copy(update={'target_chars': 10, 'hard_max_chars': 10})
+    assert not validate_hook_prose('夜 \n\t' * 10, context)
+    assert any('[length]' in e for e in validate_hook_prose('夜' * 11, context))
+
 
 def test_hook_writer_length_rewrite_same_context():
     _, _, context = _green_pair()
@@ -668,8 +679,12 @@ def test_new_families_admitted_and_rest_refused():
 def _full_chain_wires():
     """B2 五节点观察协议下的全链 fake wires（book/chNN/associate 新形状）。"""
     chars = _characters()
-    book = {
-        'protocol_version': 'stage2-observation-v1',
+    book = {**sample_book_expression({
+            slug: {'canonical': entry.canonical,
+                   'surfaces': [{'surface': s.surface, 'source_refs': ['e01_01']}
+                                for s in entry.surfaces]}
+            for slug, entry in chars.characters.items()}),
+        'protocol_version': 'stage2-book-v2',
         'characters': {
             slug: {'canonical': entry.canonical,
                    'surfaces': [{'surface': s.surface, 'source_refs': ['e01_01']}
