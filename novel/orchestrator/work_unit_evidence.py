@@ -6,6 +6,7 @@ from contracts.schema.api import WorkUnitCostView
 from contracts.schema.orchestration import AgentRunEvent
 from contracts.schema.workflow import WorkUnitLedgerV2
 from novel import paths, work_units
+from novel.errors import PathRefused
 from novel.llm import session_audit as agent_session_audit
 from novel.llm.ledger import ledger_path, read_strict_jsonl_objects
 from novel.orchestrator import admission, beacon, jobs
@@ -18,12 +19,39 @@ def read_rows(path: Path, label: str) -> list[dict]:
 
 def load_budget(base: str | Path, sid: str, unit_id: str) -> work_units.WorkUnitBudget:
     path = paths.work_unit_dir(base, sid, unit_id) / 'ledger.json'
+    ledger_sid = sid
+    if not path.is_file():
+        # 现役 chain 的额度键是隔离根目录名，API/AgentRun 则可用短 SID。
+        # 只通过唯一书目录解析别名，不按标题或字符串后缀猜同书，也不重写旧账。
+        book = _book_directory(base, sid)
+        if book is not None:
+            ledger_sid = book.name
+            path = paths.work_unit_dir(base, ledger_sid, unit_id) / 'ledger.json'
     ledger = work_units._read(base, path, WorkUnitLedgerV2)
-    budget = work_units.WorkUnitBudget(base, sid, ledger.node, ledger.role, ledger.scope)
+    if ledger.sid != ledger_sid:
+        raise work_units.WorkUnitRefused('工作单元账所属书键与持久路径不符')
+    budget = work_units.WorkUnitBudget(base, ledger.sid, ledger.node, ledger.role, ledger.scope)
     if budget.unit_id != unit_id or unit_id not in budget._registry().unit_ids:
         raise work_units.WorkUnitRefused('工作单元未登记或身份漂移')
     budget._read()
     return budget
+
+
+def _book_directory(base: str | Path, sid: str) -> Path | None:
+    try:
+        return paths.find_novel_dir(base, sid)
+    except PathRefused as exc:
+        raise work_units.WorkUnitRefused(f'工作单元所属书目录不可唯一定位：{exc}') from exc
+
+
+def _same_book(base: str | Path, left: str, right: str) -> bool:
+    """执行身份可以有短 SID/目录名两种引用，实际书目录必须唯一且相同。"""
+    if left == right:
+        return True
+    left_book = _book_directory(base, left)
+    right_book = _book_directory(base, right)
+    return (left_book is not None and right_book is not None
+            and left_book.resolve() == right_book.resolve())
 
 
 def cost_evidence(budget: work_units.WorkUnitBudget, ledger: WorkUnitLedgerV2) -> tuple[WorkUnitCostView, list[dict], set[str]]:
@@ -80,7 +108,7 @@ def owner_stop_proof(budget: work_units.WorkUnitBudget, ledger: WorkUnitLedgerV2
                          if row.get('attempt_id') in turn_attempts]
         if turn.agent_run_id:
             matches = [run for run in runs if run.run_id == turn.agent_run_id
-                       and run.start.sid == ledger.sid]
+                       and _same_book(budget.base, run.start.sid, ledger.sid)]
             if len(matches) != 1:
                 raise work_units.WorkUnitRefused(
                     f'内容轮记录的 AgentRun {turn.agent_run_id} 不在账上或 sid 不符'
@@ -105,11 +133,12 @@ def owner_stop_proof(budget: work_units.WorkUnitBudget, ledger: WorkUnitLedgerV2
             # R8a-5 历史轮次：agent 流在 R8a 之前写下的轮没有三格，但它的
             # producer run（成本行 run_id）就是 AgentRun run id——同 sid 唯一
             # 命中即按「已结束且排空」闭合（同样由 relevant_runs 段证明）。
-            legacy_runs = [run for run in runs if run.run_id == turn.run_id
-                           and run.start.sid == ledger.sid]
+            legacy_runs = [run for run in runs if run.run_id == turn.run_id]
             if len(legacy_runs) > 1:
                 raise work_units.WorkUnitRefused('同一 producer run 命中多条 AgentRun（账损坏）')
             if legacy_runs:
+                if not _same_book(budget.base, legacy_runs[0].start.sid, ledger.sid):
+                    raise work_units.WorkUnitRefused('历史轮记录的 AgentRun 属于另一书，执行身份不闭合')
                 continue
             # 手敲直连轮（无 AgentRun 外层）：内容轮已终态失败时仍须允许人工
             # 追加，否则 CLI 耗尽 4 次后会被永久卡住。在途/未知仍 fail-closed。
@@ -146,7 +175,8 @@ def owner_stop_proof(budget: work_units.WorkUnitBudget, ledger: WorkUnitLedgerV2
             if len(closed) != 1 or closed[0].get('drain_state') != 'drained':
                 raise work_units.WorkUnitRefused('原 execution epoch 没有可靠排空证明')
     # 其他工作单元的当前 owner 也可能持有同书产物，预览不能承诺可与它并行写入。
-    if any(run.start.sid == ledger.sid and run.state in ('running', 'pending', 'paused') for run in runs):
+    if any((run.ended is None or run.state in ('running', 'pending', 'paused', 'unknown'))
+           and _same_book(budget.base, run.start.sid, ledger.sid) for run in runs):
         raise work_units.WorkUnitRefused('本书仍有活动运行，须先等待安全结束')
     job_rows = jobs.records(budget.base)
     if any(row.job_id in owners and (row.ended is None or row.state == 'unknown') for row in job_rows):

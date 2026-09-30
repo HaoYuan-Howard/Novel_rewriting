@@ -275,7 +275,8 @@ def _append_ended_agent_run(base, *, run_id: str, epoch_id: str, sid: str) -> No
 
 
 def _exhaust_under_agent(base, *, run_id: str, epoch_id: str,
-                         candidate_session: str):
+                         candidate_session: str, budget_sid: str | None = None,
+                         recorded_identity: bool = True):
     """agent 流耗尽四轮：成本行 run_id=AgentRun id、parent_run_id=候选根会话。"""
     from novel.orchestrator import agent as agent_mod
 
@@ -285,18 +286,19 @@ def _exhaust_under_agent(base, *, run_id: str, epoch_id: str,
     ledger = CostLedger(path=ledger_path(base), run_id=run_id,
                         parent_run_id=candidate_session)
     ctx.ledger = ledger
-    budget = WorkUnitBudget(base, ctx.sid, ctx.node)
+    ledger_sid = budget_sid or ctx.sid
+    budget = WorkUnitBudget(base, ledger_sid, ctx.node)
     for index in range(4):
         fingerprint = _sha(f'agent-req-{index}')
         turn = budget.reserve(
-            fingerprint, run_id=run_id, agent_run_id=run_id,
-            agent_epoch_id=epoch_id,
-            candidate_session_run_id=candidate_session)
+            fingerprint, run_id=run_id, **({
+                'agent_run_id': run_id, 'agent_epoch_id': epoch_id,
+                'candidate_session_run_id': candidate_session} if recorded_identity else {}))
         budget.record_attempt(
             turn.turn_id, attempt_id=f'a-att-{index}', outcome='error',
             request_fingerprint=fingerprint)
         ledger.record(
-            sid=ctx.sid, node=ctx.node, model=_profile().model,
+            sid=ledger_sid, node=ctx.node, model=_profile().model,
             code=ctx.code, cached=False, cache_policy=ctx.cache.name,
             outcome='error', prompt_tokens=10, completion_tokens=3,
             reasoning_tokens=2, purpose=ctx.node, attempt_id=f'a-att-{index}',
@@ -304,6 +306,85 @@ def _exhaust_under_agent(base, *, run_id: str, epoch_id: str,
         budget.finish(turn.turn_id, outcome='failed')
     assert budget.used == 4
     return ctx, budget
+
+
+@pytest.mark.parametrize('recorded_identity', [True, False])
+def test_agent_grant_resolves_paid_book_directory_from_public_sid(tmp_path, recorded_identity):
+    """现役 chain 用目录名记额度，AgentRun/API 用短 SID；读写须闭合同一本书。"""
+    ctx, budget = _exhaust_under_agent(
+        tmp_path, run_id='agent-directory-budget', epoch_id='epoch-directory-budget',
+        candidate_session='candidate-directory-budget', budget_sid='额度链路_42',
+        recorded_identity=recorded_identity)
+    before = budget._read()
+    costs = ctx.ledger.path.read_bytes()
+    original_files = {str(p): p.read_bytes() for p in tmp_path.rglob('*') if p.is_file()}
+    endpoint = f'/api/novels/{ctx.sid}/work-units/{budget.unit_id}/grant'
+    with TestClient(create_app(tmp_path)) as api:
+        preview = api.get(endpoint)
+        assert preview.status_code == 200, preview.text
+        view = preview.json()
+        assert view['available'], view['reason']
+        assert view['costs']['calls'] == 4
+        assert {str(p): p.read_bytes() for p in tmp_path.rglob('*') if p.is_file()} == original_files
+        request = dict(preview_token=view['preview_token'], intent_id=uuid4().hex,
+                       additional=1, reason='对当前目录名工作单元追加一次')
+        result = api.post(endpoint, json=request, headers={'x-novel-ui':'1'})
+        assert result.status_code == 200, result.text
+        assert result.json()['current']['unit']['content_limit'] == 5
+    with TestClient(create_app(tmp_path)) as restarted:
+        repeated = restarted.post(endpoint, json=request, headers={'x-novel-ui':'1'})
+        assert repeated.status_code == 200, repeated.text
+        assert repeated.json()['grant'] == result.json()['grant']
+    assert budget._read().turns == before.turns
+    assert len(budget._read().grants) == 1 and budget.remaining == 1
+    assert ctx.ledger.path.read_bytes() == costs
+    assert not (tmp_path / '_service/runs/42/work_units' / budget.unit_id).exists()
+
+
+def test_agent_grant_directory_key_matches_stopped_public_sid(tmp_path):
+    ctx, budget = _exhaust_under_agent(
+        tmp_path, run_id='agent-directory-owner', epoch_id='epoch-directory-owner',
+        candidate_session='candidate-directory-owner', budget_sid='额度链路_42')
+    view = work_unit_grants.inspect(tmp_path, ctx.novel_dir.name, budget.unit_id)
+    assert view.available, view.reason
+    assert view.unit.content_used == 4 and view.unit.content_remaining == 0
+
+
+@pytest.mark.parametrize('damage', ['different_book', 'ambiguous_sid', 'active_same_book'])
+@pytest.mark.parametrize('recorded_identity', [True, False])
+def test_agent_grant_book_alias_cannot_bypass_identity_or_live_owner(tmp_path, damage, recorded_identity):
+    from contracts.schema.orchestration import AgentRunEvent, AgentRunStart, RunContractV2
+    from novel.orchestrator import agent as agent_mod
+
+    ctx, budget = _exhaust_under_agent(
+        tmp_path, run_id='agent-directory-guard', epoch_id='epoch-directory-guard',
+        candidate_session='candidate-directory-guard', budget_sid='额度链路_42',
+        recorded_identity=recorded_identity)
+    if damage == 'different_book':
+        # 同名不同 SID 仍是另一书，不能仅截标题或后缀猜匹配。
+        (tmp_path / '额度链路_43').mkdir()
+        path = agent_mod.runs_path(tmp_path)
+        import json
+        rows = [json.loads(line) for line in path.read_text(encoding='utf-8').splitlines()]
+        for row in rows:
+            if row['kind'] == 'started':
+                row['start']['sid'] = '43'
+                row['contract']['sid'] = '43'
+        path.write_text(''.join(json.dumps(row, ensure_ascii=False) + '\n' for row in rows), encoding='utf-8')
+    elif damage == 'ambiguous_sid':
+        (tmp_path / '另一本_42').mkdir()
+    else:
+        start = AgentRunStart(sid=ctx.sid, base=str(tmp_path), argv=None, prompt=None,
+                              authorized=True, egress_authorized=True)
+        profiles = {'schema_version':4, 'executor_default':{'kind':'legacy','profile':_profile().model_dump()},
+                    'executor_overrides':{}}
+        agent_mod.append(tmp_path, AgentRunEvent(wire_version=2, run_id='active-alias-owner', kind='started', ts=30,
+            start=start, contract=RunContractV2.model_validate({
+                'sid':ctx.sid,'base':str(tmp_path),'authorized':True,'egress_authorized':True,'profiles':profiles})))
+    view = work_unit_grants.inspect(tmp_path, ctx.novel_dir.name, budget.unit_id)
+    assert not view.available, view
+    assert view.preview_token is None
+    assert budget.remaining == 0 and not budget._read().grants
 
 
 def test_agent_flow_grant_closes_on_recorded_execution_identity(tmp_path):
