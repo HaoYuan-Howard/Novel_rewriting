@@ -158,7 +158,10 @@ R10-0 基线/真实消费/反例集/关键案例（免费）
 6. **独立关键案例**：agent 依 `Test_data/Workbench/Golden_Set_v2.1_Template_STR06.md` 起草
    `Golden_Set_v2.1_夫君的报恩.md`（P/T/SIG/LIM/GS，稀疏锚点）；种子＝REQUIREMENTS「B6
    沿用的保真与交付反例」＋R9c `reading_review.json` 问题＋C1–C11＋b6a 六维验收发现；
-   评价依据不能只取自待评估的 Preserve 条目。**用户确认后冻结**，摘要登记 REQUIREMENTS。
+   评价依据不能只取自待评估的 Preserve 条目。**冻结时序（2026-10-01 用户裁决）**：起草
+   不阻塞任何批次（与 R10-0.3/R10a 并行）；用户不预先确认——c1 段它仅作 agent 免费核读
+   的工作判据，用户只看核读结论决定是否进 c2；与全书通读一并确认，确认即冻结为本版
+   验收判据（R10d 与 STR-06 关闭以该确认为准）。
 7. **基线读数**：R9c ledger 逐节点 token（Preserve/Design/associate 轮次；
    b6a 账面只剩 REQUIREMENTS 历史记录，无盘面可重算）、R9c 草案
    章包分区条目与重复率，作为 R10c 对照与 R10b 免费形状对照的 v6 基准。
@@ -285,13 +288,15 @@ R10-0 基线/真实消费/反例集/关键案例（免费）
 - **禁止 owner 内容 patch**。允许的干预只有：确定性缺陷修代码后免费重放、显式带理由重采、
   追加额度——每次记入自主完成度，不冒充自动通过。
 - c1 语义层段：Stage2→Stage4 compile，暂停在 `str06.stage5.hook` 前；免费核读
-  （`tools/str06_review.py views|obligations`）对照冻结关键案例；出现重复、高损失错误模式
-  则回 R10a/b 修并开新根，不在本根打补丁。
+  （`tools/str06_review.py views|obligations`，判据＝关键案例工作清单，未冻结）；
+  核读结论交用户决定是否进 c2；出现重复、高损失错误模式则回 R10a/b 修并开新根，
+  不在本根打补丁。
 - c2 成文段（另行授权）：Hook＋全部 11 章＋Naming＋Assemble。
 - 工程核验：章连续非空不增删并拆重排、回执与 seal、改名零残留、manifest/hash 与下载字节、
   `--check-only` 零新购重放、服务重启读回、ledger。
-- 阅读验收：agent 按九维协议＋冻结关键案例逐条归因（owner/位置/期望/实际/证据）→ 用户通读，
-  结论绑定交付 hash；有效后执行「STR-06 关闭与退役尾项」。
+- 阅读验收：agent 按九维协议＋关键案例逐条归因（owner/位置/期望/实际/证据）→ 用户通读，
+  通读时一并确认案例清单（确认即冻结为本版验收判据），结论绑定交付 hash；有效后执行
+  「STR-06 关闭与退役尾项」。
 
 ### R10d · 普适性（与 B6c 合并，另行授权）
 
