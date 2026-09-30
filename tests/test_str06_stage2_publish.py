@@ -28,6 +28,7 @@ from contracts.schema.observation import (
 from novel.llm.ledger import CostLedger
 from novel.store import Str06Repository
 from novel.stages.chain import build_evidence, run_workflow
+from novel.stages.owner_revision import MechanicalDefectStop
 from novel.stages.stage2 import (
     associate_observation_prompt, compile_associate_observation,
     compile_source_truth, project_association_space,
@@ -490,6 +491,30 @@ def test_time_inverted_pairing_is_undecided(tmp_path):
         {'left': 'ch01.p_fwd', 'right': 'ch03.p_late'}]
     with pytest.raises(ValueError, match='时序倒转'):
         _run_stage2(tmp_path, 'inverted', wires)
+
+
+def test_first_appearance_gate_stops_as_typed_mechanical_defect(tmp_path):
+    """首现闸（R8c）判出即 typed 停止：MechanicalDefectStop 而非裸 ValueError。
+
+    canary 20260930 实证：裸 ValueError 在单节点子进程穿透成 exit 70（「结论
+    未知」），把「查出确定性缺陷」记成「压根没跑成」；typed 后 CLI 翻译
+    exit 1（landed_red），恢复走该章观察重问或 owner patch。"""
+    wires = _full_stage2_wires()
+    # late_kid 最早称谓锚在 ch03（e03_02「陆家宅子恢复安静」）；ch01 引用它
+    # 即首现早于任何称谓证据。
+    wires['book'] = _book_wire(extra_characters={
+        'late_kid': {'canonical': '陆家', 'surfaces': [
+            {'surface': '陆家', 'source_refs': ['e03_02']}]}})
+    wires['names']['people']['late_kid'] = {
+        'family_id': 'f_lu', 'given': None, 'aliases': [],
+        'surface_forms': {'陆家': '{family}家'}}
+    wires['ch01']['beats'][0]['participants'] = ['fu_jun', 'late_kid']
+    with pytest.raises(MechanicalDefectStop,
+                       match='participant_before_first_appearance\\[late_kid@ch01\\]'):
+        _run_stage2(tmp_path, 'first_appear', wires)
+    assert not (tmp_path / 'first_appear/stage2/characters/characters.json').exists(), \
+        '机械缺陷时不写半份 canonical'
+    assert not (tmp_path / 'first_appear/stage2/blueprints/chapter_blueprints.json').exists()
 
 
 def test_state_pairing_with_different_targets_is_undecided(tmp_path):

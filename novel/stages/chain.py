@@ -83,9 +83,9 @@ from novel.stages.stage2 import (
     compile_source_truth, associate_observation_prompt, project_association_space,
 )
 from novel.stages.owner_revision import (
-    OwnerRevisionRequired, OwnerRevisionStop, discover_owner_issues,
-    open_issue_record, owner_product_digest, resolve_owner_issues,
-    revision_gate, revision_prompt_for_owner,
+    MechanicalDefectStop, OwnerRevisionRequired, OwnerRevisionStop,
+    discover_owner_issues, open_issue_record, owner_product_digest,
+    resolve_owner_issues, revision_gate, revision_prompt_for_owner,
 )
 from novel.stages.stage4 import (
     assemble_binding, assemble_body_design, assemble_hook_design,
@@ -468,7 +468,13 @@ def run_compile(ctx: ChainContext) -> dict:
                                  message=message)
                     for message in outcome.undecided])
     if outcome.errors:
-        raise ValueError(f'compile 机械缺陷：{outcome.errors}')
+        # 机械缺陷（形状/闭集/时序，含首现闸 R8c）没有回派路由：typed 停止给
+        # 人，恢复走该章观察重问或 owner patch。裸 ValueError 会穿透成 exit 70
+        # （「结论未知」），把「查出确定性缺陷」记成「压根没跑成」（canary
+        # 20260930 实证）；MechanicalDefectStop 由 CLI 翻译成 exit 1。
+        raise MechanicalDefectStop(
+            f'compile 机械缺陷：{outcome.errors}',
+            node='str06.stage2.compile', issues=tuple(outcome.errors))
     assert outcome.characters is not None and outcome.blueprint is not None
     # R6 输出组发布：双真源＋fold 读数同一组、一个 seal（免费产物同样封存）。
     repository.publish((

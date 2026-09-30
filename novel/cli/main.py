@@ -438,7 +438,8 @@ def _run_str06(a: argparse.Namespace, flags: list[str], *, paid: bool) -> int:
         allow_source_export=bool(getattr(a, 'allow_egress', False)),
     )
     from novel.llm.paid_requests import PurchaseRequired
-    from novel.stages.owner_revision import OwnerRevisionRequired, OwnerRevisionStop
+    from novel.stages.owner_revision import (
+        MechanicalDefectStop, OwnerRevisionRequired, OwnerRevisionStop)
     try:
         execute(args)
     except (OwnerRevisionRequired, OwnerRevisionStop) as exc:
@@ -448,6 +449,13 @@ def _run_str06(a: argparse.Namespace, flags: list[str], *, paid: bool) -> int:
         # 作未捕获异常出去是 exit 70（「结论未知」），既掩盖盘面事实，又让队列
         # 把「查出了问题」记成「压根没跑成」。
         print(f'\n✗ 回派负结论已落盘（exit 1，勿当崩溃）：{exc}', file=sys.stderr)
+        return X.CHECK_FAILED
+    except MechanicalDefectStop as exc:
+        # 机械缺陷（无回派路由，R8c 首现闸同类）同样是 typed 负结论：exit 1
+        # （landed_red 停给人，恢复走该章观察重问或 owner patch）；缺陷清单
+        # 全文在 stderr＝`_service/logs/<job>.log`。canary 20260930 实证裸
+        # ValueError 穿透成 exit 70 会被读成「结论未知」。
+        print(f'\n✗ 机械缺陷负结论（exit 1，勿当崩溃）：{exc}', file=sys.stderr)
         return X.CHECK_FAILED
     except PurchaseRequired as exc:
         # R8a 验收实测：授权停止是**设计内终态**（「停在该 owner，报告需要

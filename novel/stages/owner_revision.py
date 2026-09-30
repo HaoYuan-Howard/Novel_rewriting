@@ -46,10 +46,10 @@ from contracts.schema.workflow import (
 from novel.llm.paid_requests import revision_user_prompt
 
 __all__ = [
-    'OwnerRevisionRequired', 'OwnerRevisionStop', 'discover_owner_issues',
-    'open_issue_record', 'open_issue_targets_node', 'owner_product_digest',
-    'owner_product_digest_at', 'read_owner_issue_file', 'resolve_owner_issues',
-    'revision_gate', 'revision_prompt_for_owner',
+    'MechanicalDefectStop', 'OwnerRevisionRequired', 'OwnerRevisionStop',
+    'discover_owner_issues', 'open_issue_record', 'open_issue_targets_node',
+    'owner_product_digest', 'owner_product_digest_at', 'read_owner_issue_file',
+    'resolve_owner_issues', 'revision_gate', 'revision_prompt_for_owner',
 ]
 
 
@@ -76,6 +76,24 @@ class OwnerRevisionStop(ValueError):
         super().__init__(message)
         self.node = node
         self.owner = owner
+        self.issues = tuple(issues)
+
+
+class MechanicalDefectStop(ValueError):
+    """机械缺陷停止：确定性编译查出形状/闭集/时序缺陷，且没有回派路由。
+
+    与 :class:`OwnerRevisionStop` 的区别：这类缺陷（如首现闸
+    ``participant_before_first_appearance``，R8c）不登记回派 owner——
+    恢复走该章观察重问或 owner patch（人工修订 wire），不自动重跑。
+    CLI 把它翻译成 exit 1（typed negative：查出确定性缺陷＝跑完且结论
+    落盘不通过），stderr 全文随 `_service/logs/<job>.log` 留证，编排器按
+    landed_red 停给人。B6-A canary 20260930 实证：裸 ``ValueError`` 穿透成
+    exit 70（「结论未知」），把「查出了确定性缺陷」记成「压根没跑成」。
+    """
+
+    def __init__(self, message: str, *, node: str, issues: tuple[str, ...]):
+        super().__init__(message)
+        self.node = node
         self.issues = tuple(issues)
 
 

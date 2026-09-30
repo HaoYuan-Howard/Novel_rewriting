@@ -550,6 +550,33 @@ def test_an_uncaught_exception_exits_seventy_with_a_stack(monkeypatch, capsys):
     assert '70' in err and 'Traceback' in err, '崩溃要报数字本身，栈要留全'
 
 
+def test_a_mechanical_defect_stop_exits_one_without_a_stack(monkeypatch, capsys,
+                                                            tmp_path):
+    """⭐ 机械缺陷 typed 停止是 `1` 不是 `70`（R8c 停止面，canary 20260930 实证）。
+
+    首现闸判出确定性缺陷（如 participant_before_first_appearance）时按设计
+    即停、恢复走该章观察重问或 owner patch——它是「跑完了且结论落盘不通过」，
+    不是崩溃；裸 ValueError 穿透成 exit 70 会被编排层读成「结论未知」。
+    """
+    import novel.stages.chain as chain_mod
+    from novel.stages.owner_revision import MechanicalDefectStop
+
+    def defect(_a):
+        raise MechanicalDefectStop(
+            'compile 机械缺陷：[participant_before_first_appearance[daughter@ch01]]',
+            node='str06.stage2.compile',
+            issues=('participant_before_first_appearance[daughter@ch01]',))
+
+    monkeypatch.setattr(chain_mod, 'execute', defect)
+    book_dir = tmp_path / 'whatever'
+    book_dir.mkdir()
+    rc = _run('run', 'str06.stage2.compile', 'whatever', '--base', str(tmp_path))
+    assert rc == X.CHECK_FAILED
+    err = capsys.readouterr().err
+    assert '机械缺陷负结论（exit 1' in err
+    assert 'Traceback' not in err
+
+
 def test_a_terminal_state_prints_its_next_command_on_its_own_line(monkeypatch, capsys):
     """⭐ 「一句人话」与「下一条命令」分成两格之后，**终端这一侧必须把第二格打出来**。
 
