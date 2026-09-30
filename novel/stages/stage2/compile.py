@@ -47,7 +47,7 @@ from contracts.schema.source import (
 from novel.stages.common import OverlayChange, StateOverlay
 from novel.stages.stage2.associate import (
     AssociationSpace, book_state_handle, chapter_state_handle,
-    project_association_space, serialize_target, target_label,
+    loop_pairing_issues, project_association_space, serialize_target, target_label,
 )
 from novel.stages.stage2.book import character_core_view
 from novel.stages.stage2.expression import compile_source_expression
@@ -226,8 +226,6 @@ class _BookCompile:
         self.loop_state: dict[str, str] = {}
         self.loop_pairing: dict[str, str] = {}
         for pair in associate.loop_pairing:
-            if pair.close in self.loop_pairing:
-                continue  # 重复 close 配对在应用期按 item 报告
             self.loop_pairing[pair.close] = pair.open
         #: 续场配对（右 → 左）与占用核对；跨章因果原样暂存。
         #: 右端重复不静默丢弃：留到应用期按 item 报未决（一个场景不能续两个前场景）。
@@ -367,6 +365,9 @@ def compile_source_truth(
     # 唯一关联登记表（R1 v2）：与 run_associate 的 prompt／闭集核对同一投影——
     # 状态句柄定位与确定性序都查表，不在 compile 重写编码。
     space = project_association_space(book, chapters)
+    undecided.extend(loop_pairing_issues(associate, space))
+    if undecided:
+        return outcome
     state = _BookCompile(slugs=set(core.characters), associate=associate, space=space)
 
     # ② 初态：生成 s0_* 编号；同维配对可把初态键归一到类内 canonical key。

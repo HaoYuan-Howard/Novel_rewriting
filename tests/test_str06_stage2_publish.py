@@ -546,6 +546,102 @@ def test_duplicate_loop_close_is_undecided(tmp_path):
         _run_stage2(tmp_path, 'double_close', wires)
 
 
+def _loop_pairing_conflict(kind: str) -> tuple[dict, dict, str]:
+    """两个独立问题须各自闭合；章内 close 不得被跨章配对占用。"""
+    wires = _full_stage2_wires()
+    if kind == 'shared_close':
+        wires['ch02']['beats'][0]['loops'] = [
+            {'ref': 'q_other', 'op': 'open', 'question': '另一件事会如何？'}]
+        wires['associate']['loop_pairing'].append(
+            {'open': 'ch02.q_other', 'close': 'ch03.q_id'})
+        message = '重复占用 close'
+    else:
+        wires['ch03']['beats'][0]['loops'] = [
+            {'ref': 'q_id', 'op': 'open', 'question': '本场还有什么动静？'}]
+        message = '章内自开自闭'
+    corrected = deepcopy(wires)
+    corrected['ch03']['beats'][1]['loops'].append(
+        {'ref': 'q_extra', 'op': 'close', 'resolution': '另一件事也已收束'})
+    corrected['associate']['loop_pairing'][-1]['close'] = 'ch03.q_extra'
+    return wires, corrected, message
+
+
+@pytest.mark.parametrize('kind', ['shared_close', 'local_close'])
+def test_loop_pairing_conflict_is_rejected_before_acceptance_and_publication(kind):
+    """真实 owner 判据与已购 typed 观察的 compiler 兜底拒绝同一种歧义。"""
+    from contracts.schema.observation import (
+        AssociateObservation, BookObservation, ChapterObservation, NamesObservation,
+    )
+    from contracts.schema.source import NameStructure
+    bad, corrected, message = _loop_pairing_conflict(kind)
+    book = BookObservation.model_validate(bad['book'])
+    chapters = {n: ChapterObservation.model_validate(bad[f'ch{n:02d}'])
+                for n in (1, 2, 3)}
+    names = NamesObservation(protocol_version=PV,
+                             structure=NameStructure.model_validate(bad['names']))
+    space = project_association_space(book, chapters)
+    before = deepcopy(bad)
+    observation, errors = compile_associate_observation(bad['associate'], space)
+    assert observation is None and any(message in e for e in errors), errors
+    result = compile_source_truth(
+        book=book, chapters=chapters, names=names,
+        associate=AssociateObservation.model_validate(bad['associate']),
+        evidence=EVIDENCE)
+    assert any(message in e for e in result.undecided), result.undecided
+    assert result.characters is None and result.blueprint is None
+    assert bad == before, 'validator 与 compiler 不得修改已购输入'
+    good_chapters = {n: ChapterObservation.model_validate(corrected[f'ch{n:02d}'])
+                     for n in (1, 2, 3)}
+    observation, errors = compile_associate_observation(
+        corrected['associate'], project_association_space(book, good_chapters))
+    assert errors == []
+    good = compile_source_truth(book=book, chapters=good_chapters, names=names,
+                               associate=observation, evidence=EVIDENCE)
+    assert good.errors == [] and good.undecided == []
+    assert not any(line.startswith('loop ') for line in good.fold['snapshots'][3])
+
+
+@pytest.mark.parametrize('kind', ['shared_close', 'local_close'])
+def test_loop_pairing_conflict_preserves_truth_and_recovers_without_purchase(tmp_path, kind):
+    """从正式观察到 compile：拒发双真源，修正 owner 观察后免费复验闭合。"""
+    from contracts.schema.observation import AssociateObservation, ChapterObservation
+    from novel.stages.owner_revision import OwnerRevisionRequired
+    bad, corrected, message = _loop_pairing_conflict(kind)
+    repo, _ask, _report = _run_stage2(tmp_path, kind, _full_stage2_wires())
+    truth_rels = ('stage2/characters/characters.json',
+                  'stage2/blueprints/chapter_blueprints.json',
+                  'stage2/acceptance/fold.json')
+    before = {rel: (repo.root / rel).read_bytes() for rel in truth_rels}
+    for owner in ('ch02', 'ch03', 'associate'):
+        model = AssociateObservation if owner == 'associate' else ChapterObservation
+        repo.attach_context(make_context(repo.root, ledger=CostLedger(path=None)))
+        repo.write(f'stage2/observations/{owner}.json', model.model_validate(bad[owner]),
+                   owners=(owner,), refs=(synthetic_ref(owner, '已购输入反例'),))
+
+    def compile_only():
+        repo.attach_context(make_context(repo.root, ledger=CostLedger(path=None),
+                                         node='str06.stage2.compile'))
+        def no_purchase(*_args):
+            raise AssertionError('免费 compile 不得请求模型')
+        return run_workflow(repository=repo, chapters=deepcopy(CHAPTERS), hook_copy=HOOK,
+                            ask=no_purchase, ask_text=no_purchase, ask_body=no_purchase,
+                            budget=800, through='stage2',
+                            node_filter=['str06.stage2.compile'])
+
+    with pytest.raises(OwnerRevisionRequired, match=message):
+        compile_only()
+    assert {rel: (repo.root / rel).read_bytes() for rel in truth_rels} == before
+    for owner in ('ch02', 'ch03', 'associate'):
+        model = AssociateObservation if owner == 'associate' else ChapterObservation
+        repo.attach_context(make_context(repo.root, ledger=CostLedger(path=None)))
+        repo.write(f'stage2/observations/{owner}.json', model.model_validate(corrected[owner]),
+                   owners=(owner,), refs=(synthetic_ref(owner, '已购输入免费修正'),))
+    compile_only()
+    fold = repo.inspect('stage2/acceptance/fold.json')
+    assert not any(line.startswith('loop ') for line in fold['snapshots']['3'])
+    assert repo.inspect('runtime/issues/associate.json')['status'] == 'resolved'
+
+
 def test_loop_pairing_to_later_open_is_undecided(tmp_path):
     """时序倒转：close 配到的 open 在更晚的章才建立——保持未决。"""
     wires = _full_stage2_wires()

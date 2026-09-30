@@ -929,6 +929,7 @@
       ],
       "cases": {
         "test_dangling_cross_chapter_reference_stays_undecided_and_blocks": "stage",
+        "test_loop_pairing_conflict_preserves_truth_and_recovers_without_purchase": "stage",
         "test_publish_full_stage2_leg_writes_both_truths_under_one_outcome": "stage",
         "test_stage4_reads_only_canonical": "stage"
       }

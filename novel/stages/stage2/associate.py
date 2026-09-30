@@ -338,6 +338,36 @@ ASSOCIATE_PROMPT = """任务：跨章关联——把不同章观察里指向**�
 
 # ───────────────────────── wire 机械验收（只读，错误聚合） ─────────────────────────
 
+def loop_pairing_issues(
+    observation: AssociateObservation, space: AssociationSpace,
+) -> list[str]:
+    """开合必须一一对应；章内 close 已有归属，跨章配对不得静默失效。
+
+    owner 接受与最终 compiler 共用；这里只核对句柄占用，不判断悬念语义。
+    """
+    issues: list[str] = []
+    closes: dict[str, str] = {}
+    opens: dict[str, str] = {}
+    for pair in observation.loop_pairing:
+        if pair.close in closes:
+            issues.append(
+                f'悬念配对重复占用 close {pair.close!r}：'
+                f'{closes[pair.close]!r} 与 {pair.open!r}（保持未决，不默认忽略）')
+        else:
+            closes[pair.close] = pair.open
+        if pair.open in opens:
+            issues.append(
+                f'悬念 {pair.open!r} 不得重复 close：'
+                f'{opens[pair.open]!r} 与 {pair.close!r}')
+        else:
+            opens[pair.open] = pair.close
+        if pair.close in space.loop_opens:
+            issues.append(
+                f'悬念 close {pair.close!r} 已在章内自开自闭，'
+                f'不得再配到跨章 open {pair.open!r}（保持未决）')
+    return issues
+
+
 def compile_associate_observation(
     wire: Any, space: AssociationSpace,
 ) -> tuple[AssociateObservation | None, list[str]]:
@@ -420,6 +450,7 @@ def compile_associate_observation(
         observation = AssociateObservation.model_validate(wire)
     except ValidationError as exc:
         return None, errors + [f'关联观察协议校验失败：{exc}']
+    errors.extend(loop_pairing_issues(observation, space))
     if errors:
         return None, errors
     return observation, []
