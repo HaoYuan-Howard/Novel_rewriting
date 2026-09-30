@@ -12,6 +12,9 @@
   4. 写手视图不出现 audit_only 内容——R0 锁定当前面已成立的部分（禁用字面、
      lineage、provenance、导航、称谓总表）；`sc01#b02` 式 ID／`established_by`／
      字段名清扫由 R2 WriterPacket 收口（`r2_face_pending` 登记待收口集合）。
+  5. （R10-0.4）凡登记写手/Hook 消费者的字段必须有变异用例——防「登记写手
+     可见但 renderer 从不渲染」的漂移（缘起 dramatic_intent；七项实证不渲染
+     已改登记 audit_only）；豁免闭集见 `_WRITER_CASE_WAIVERS`。
 
 【送达面（本文件的 canonical 面）】字段登记只覆盖送达链的正式产物：
 `WriterBookIR`（`stage4/ir/writer_book_ir.json`）＋派生章包的
@@ -48,7 +51,7 @@ from contracts.schema.consumption import (
     DeliveryScope, FieldDeliverySpec,
 )
 from contracts.schema.context import KnowledgeEntry, PendingConfirmation, StateEntry
-from contracts.schema.hook import HookContext, HookOpeningFact
+from contracts.schema.hook import HookContext, HookOpeningFact, HookPov
 from contracts.schema.naming import NameMapV5
 from contracts.schema.state import EffectDomain, StateAddress
 from novel.stages.common import (
@@ -151,6 +154,65 @@ def test_all_seven_delivery_modes_are_declared():
     assert background_fields and all(
         '.background_state[' in p or '.background_knowledge[' in p
         for p in background_fields), background_fields
+
+
+#: R10-0.4 自检的显式豁免闭集：登记写手/Hook 消费者但无变异用例的字段，
+#: 每条写明原因；新增豁免须同步写原因，R10b renderer v7 落地时复核清零。
+_WRITER_CASE_WAIVERS: dict[str, str] = {
+    'chapter_packet.realization_contract.band_high':
+        '派生投影：变异面经 book_brief.length_band_high 与 chapters[]'
+        '.length_budget 的源头用例覆盖，登记由检查 1 守',
+    'chapter_packet.realization_contract.band_low': '同 band_high（派生投影）',
+    'chapter_packet.realization_contract.target_chars': '同 band_high（派生投影）',
+    'writer_book_ir.chapters[].chapter_ordinal':
+        '章包定位键：变异破坏章投影，通用变异流程不适用；'
+        '渲染由 test_chapter_ordinal_renders_in_purpose 直断言钉住',
+    'writer_book_ir.chapters[].scenes[].verification_ir'
+    '.entry_knowledge[].subjects':
+        '绿基座 entry_knowledge 为空：注入式 audit 对照由独立测试'
+        ' test_audit_only_entry_knowledge_subjects_leave_face_unchanged 钉住'
+        '（两条仅 subjects 不同的注入 → 渲染逐字节相同）',
+}
+
+
+def test_writer_visible_fields_have_mutation_cases():
+    """R10-0.4 自检：凡登记写手/Hook 消费者的字段必须有变异用例。
+
+    反例缘起：dramatic_intent 登记写手可见但 renderer 从不渲染；检查 2/3 只
+    覆盖「有变异用例」的字段，抓不到清单外的登记漂移。本自检钉死清单差集：
+    新字段登记写手可见 ⇒ 同批补变异用例（渲染字节变化由检查 2/3 断言；
+    实证不渲染则改登记 audit_only，如 R10-0.4 的七项）或登记豁免原因。"""
+    body_paths = {case.path for case in _body_mutations()}
+    hook_paths = {case[0] for case in _HOOK_MUTATION_CASES}
+    for path, spec in STR06_FIELD_DELIVERY.items():
+        if 'writer_packet' in spec.consumers:
+            assert path in body_paths or path in _WRITER_CASE_WAIVERS, (
+                f'{path} 登记写手可见但没有变异用例：renderer 实际渲染则补用例，'
+                f'实证不渲染则改登记 audit_only，或登记豁免原因')
+        if 'hook_context' in spec.consumers:
+            assert path in hook_paths or path in _WRITER_CASE_WAIVERS, (
+                f'{path} 登记 Hook 消费者但没有 Hook 变异用例')
+    stale = sorted(set(_WRITER_CASE_WAIVERS) - set(STR06_FIELD_DELIVERY))
+    assert not stale, f'豁免清单引用了不存在的登记路径：{stale}'
+
+
+def test_chapter_ordinal_renders_in_chapter_purpose(green_ir):
+    """chapter_ordinal（豁免通用变异流程）的直断言：阅读序坐标随【本章目的】
+    行送达（I-40：输出章号等于源章号，不重排）。"""
+    text = render_chapter_packet(project_chapter_packet(green_ir, 2))
+    assert '本章目的（第2章）' in text
+
+
+def test_audit_only_entry_knowledge_subjects_leave_face_unchanged(green_ir):
+    """entry_knowledge[].subjects（audit_only）的注入式对照：绿基座该集合为
+    空，通用变异流程不适用；两条仅 subjects 不同的注入，渲染必须逐字节相同
+    ——subjects 差异不进阅读面（R10-0.4 实证）。"""
+    def inject(subjects):
+        entry = _INJECTED_KNOWLEDGE.model_copy(update={'subjects': subjects})
+        return _patch_scene_ir(green_ir, 2, 'sc02', entry_knowledge=(entry,))
+    renders_a = _renders(inject(('fu_jun',)))
+    renders_b = _renders(inject(('yun_niang', 'fu_jun')))
+    assert renders_a == renders_b
 
 
 # ═══════════════ 二、检查 2＋3：变异只动登记章；变异值只进对应送达面 ═══════════════
@@ -417,6 +479,181 @@ def _body_mutations() -> list[_BodyMutation]:
             ref='th02', kind='goal', subject='fu_jun', text='变异开放线九九',
             opened_at='sc01#b01'),))
 
+    # ── R10-0.4：送达守卫自检补齐的变异构造 ──────────────────────────────
+
+    def character_voice(ir):
+        from contracts.schema.book_ir import CharacterVoice
+        return _book_brief(ir, character_voices=(
+            CharacterVoice(char_id='yun_niang', voice='变异声线九九'),))
+
+    def carryover(ir):
+        chapter = next(c for c in ir.chapters if c.chapter_ordinal == 2)
+        entry = chapter.continuity.entry.model_copy(
+            update={'carryover': '变异张力九九'})
+        return _patch_chapter(ir, 2, continuity=chapter.continuity.model_copy(
+            update={'entry': entry}))
+
+    def recap(ir):
+        chapter = next(c for c in ir.chapters if c.chapter_ordinal == 2)
+        entry = chapter.continuity.entry.model_copy(
+            update={'recap': 'brief_orientation'})
+        return _patch_chapter(ir, 2, continuity=chapter.continuity.model_copy(
+            update={'entry': entry}))
+
+    def driver_turn(ir):
+        chapter = next(c for c in ir.chapters if c.chapter_ordinal == 2)
+        ending = chapter.continuity.previous_ending.model_copy(
+            update={'driver_turn': '变异转折九九'})
+        return _patch_chapter(ir, 2, continuity=chapter.continuity.model_copy(
+            update={'previous_ending': ending}))
+
+    def final_beat_event(ir):
+        chapter = next(c for c in ir.chapters if c.chapter_ordinal == 2)
+        ending = chapter.continuity.previous_ending.model_copy(
+            update={'final_beat_event': '变异末拍九九'})
+        return _patch_chapter(ir, 2, continuity=chapter.continuity.model_copy(
+            update={'previous_ending': ending}))
+
+    def present_chars(ir):
+        chapter = next(c for c in ir.chapters if c.chapter_ordinal == 2)
+        ending = chapter.continuity.previous_ending.model_copy(
+            update={'present_chars': ('fu_jun',)})
+        return _patch_chapter(ir, 2, continuity=chapter.continuity.model_copy(
+            update={'previous_ending': ending}))
+
+    def delta_domain(ir):
+        # READER 域走「读者自此知晓」分支：换措辞行，不依赖 KNOWLEDGE 的 holder
+        return _patch_first_delta(ir, 1, 'sc01', 'sc01#b01',
+                                  domain=EffectDomain.READER)
+
+    def delta_holder(ir):
+        return _patch_first_delta(ir, 1, 'sc01', 'sc01#b01', holder='yun_niang')
+
+    def delta_mode(ir):
+        # knowledge_mode 只在 KNOWLEDGE 域渲染：定位变异含域与持有者（用例归
+        # knowledge_mode；断言只看渲染变化与章范围）
+        return _patch_first_delta(ir, 1, 'sc01', 'sc01#b01',
+                                  domain=EffectDomain.KNOWLEDGE,
+                                  holder='yun_niang', knowledge_mode='suspected')
+
+    def delta_subjects(ir):
+        return _patch_first_delta(ir, 1, 'sc01', 'sc01#b01',
+                                  subjects=('yun_niang',))
+
+    def dramatic(ir):
+        return _patch_beat(ir, 1, 'sc01', 'sc01#b01',
+                           dramatic_intent='变异导演九九')
+
+    def beat_reads(ir):
+        return _patch_beat(ir, 1, 'sc01', 'sc01#b01', reads=(_INJECTED_ENTRY,))
+
+    def surface_intro(ir):
+        return _patch_beat(ir, 1, 'sc01', 'sc01#b01',
+                           surface_introductions=('变异新称谓九九',))
+
+    def satisfaction(ir):
+        return _patch_obligation(ir, 1, 'sc01', 'ob01', satisfaction='变异满足九九')
+
+    def entry_subjects(ir):
+        scene = _scene(ir, 1, 'sc01')
+        entries = list(scene.verification_ir.entry_state)
+        entries[0] = entries[0].model_copy(update={'subjects': ('fu_jun',)})
+        return _patch_scene_ir(ir, 1, 'sc01', entry_state=tuple(entries))
+
+    def entry_domain(ir):
+        scene = _scene(ir, 1, 'sc01')
+        entries = list(scene.verification_ir.entry_state)
+        entries[0] = entries[0].model_copy(update={'domain': EffectDomain.KNOWLEDGE})
+        return _patch_scene_ir(ir, 1, 'sc01', entry_state=tuple(entries))
+
+    def entry_holder(ir):
+        scene = _scene(ir, 1, 'sc01')
+        entries = list(scene.verification_ir.entry_state)
+        entries[0] = entries[0].model_copy(update={'holder': 'fu_jun'})
+        return _patch_scene_ir(ir, 1, 'sc01', entry_state=tuple(entries))
+
+    def knowledge_subjects(ir):
+        mutated = _INJECTED_KNOWLEDGE.model_copy(update={'subjects': ('fu_jun',)})
+        return _patch_scene_ir(ir, 2, 'sc02', entry_knowledge=(mutated,))
+
+    def knowledge_holder(ir):
+        mutated = _INJECTED_KNOWLEDGE.model_copy(update={'holder': 'fu_jun'})
+        return _patch_scene_ir(ir, 2, 'sc02', entry_knowledge=(mutated,))
+
+    def pending_position(ir):
+        pending = _INJECTED_PENDING.model_copy(
+            update={'position': 'sc01#b02', 'in_scene': True})
+        return _patch_scene_ir(ir, 1, 'sc01', pending_reader_confirmations=(pending,))
+
+    def thread_text(ir):
+        from contracts.schema.context import ThreadOpIR
+        return _patch_scene_ir(ir, 2, 'sc02', thread_ops=(ThreadOpIR(
+            ref='th03', op='advance', kind='goal', subject='yun_niang',
+            text='变异线索九九', progress='推进中'),))
+
+    def thread_subject(ir):
+        from contracts.schema.context import ThreadOpIR
+        return _patch_scene_ir(ir, 2, 'sc02', thread_ops=(ThreadOpIR(
+            ref='th03', op='advance', kind='goal', subject='fu_jun',
+            text='玉佩藏着什么', progress='推进中'),))
+
+    def thread_resolution(ir):
+        from contracts.schema.context import ThreadOpIR
+        return _patch_scene_ir(ir, 2, 'sc02', thread_ops=(ThreadOpIR(
+            ref='th04', op='close', kind='question', subject='yun_niang',
+            text='玉佩藏着什么', resolution='变异收束九九'),))
+
+    def open_subject(ir):
+        from contracts.schema.context import OpenThreadIR
+        return _patch_scene_ir(ir, 2, 'sc02', open_threads=(OpenThreadIR(
+            ref='th05', kind='goal', subject='yun_niang', text='变异开放线九九',
+            opened_at='sc01#b01'),))
+
+    def scene_pov(ir):
+        return _patch_scene_brief(ir, 1, 'sc01', pov='narrator')
+
+    def driver_summary(ir):
+        return _patch_scene_brief(ir, 1, 'sc01', scene_driver_summary='变异驱动九九')
+
+    def scene_voice(ir):
+        return _patch_scene_brief(ir, 1, 'sc01', voice='变异口吻九九')
+
+    def bgk(ir, **updates):
+        scene = _scene(ir, 2, 'sc02')
+        entries = list(scene.verification_ir.background_knowledge)
+        entries[0] = entries[0].model_copy(update=updates)
+        return _patch_scene_ir(ir, 2, 'sc02', background_knowledge=tuple(entries))
+
+    def bgk_holder(ir):
+        return bgk(ir, holder='fu_jun')
+
+    def bgk_mode(ir):
+        return bgk(ir, mode='suspected')
+
+    def bgk_proposition(ir):
+        return bgk(ir, proposition='debt_agreement=变异命题九九')
+
+    def bgk_subjects(ir):
+        return bgk(ir, subjects=('yun_niang',))
+
+    def bgs(ir, **updates):
+        scene = _scene(ir, 2, 'sc02')
+        entries = list(scene.verification_ir.background_state)
+        entries[0] = entries[0].model_copy(update=updates)
+        return _patch_scene_ir(ir, 2, 'sc02', background_state=tuple(entries))
+
+    def bgs_domain(ir):
+        return bgs(ir, domain=EffectDomain.KNOWLEDGE)
+
+    def bgs_holder(ir):
+        return bgs(ir, holder='fu_jun')
+
+    def bgs_subjects(ir):
+        return bgs(ir, subjects=('fu_jun',))
+
+    def bgs_value(ir):
+        return bgs(ir, value='变异背景九九')
+
     return [
         # ── 书级（every_chapter）──
         _BodyMutation('writer_book_ir.book_brief.narration.person', None, None,
@@ -518,6 +755,84 @@ def _body_mutations() -> list[_BodyMutation]:
                       lambda ir: _patch_scene_ir(
                           ir, 2, 'sc02',
                           continuity_fact_view=('sc01#b01：变异承接九九',))),
+        # ── R10-0.4：送达守卫自检补齐（登记写手可见 ⇒ 必须有渲染字节变异用例）──
+        # 书级/章级
+        _BodyMutation('writer_book_ir.book_brief.character_voices[].voice', None,
+                      '变异声线九九', character_voice),
+        _BodyMutation('writer_book_ir.book_brief.length_band_high', None, None,
+                      lambda ir: _book_brief(
+                          ir, length_band_high=ir.book_brief.length_band_high + 0.05)),
+        _BodyMutation('writer_book_ir.chapters[].continuity.entry.carryover', 2,
+                      '变异张力九九', carryover),
+        _BodyMutation('writer_book_ir.chapters[].continuity.entry.recap', 2, None,
+                      recap),
+        _BodyMutation('writer_book_ir.chapters[].continuity.previous_ending'
+                      '.driver_turn', 2, '变异转折九九', driver_turn),
+        _BodyMutation('writer_book_ir.chapters[].continuity.previous_ending'
+                      '.final_beat_event', 2, '变异末拍九九', final_beat_event),
+        _BodyMutation('writer_book_ir.chapters[].continuity.previous_ending'
+                      '.present_chars', 2, None, present_chars),
+        # sc01：拍/效应/义务/入场（基座 entry_state 非空、beats 非空）
+        _BodyMutation('writer_book_ir.chapters[].scenes[].verification_ir'
+                      '.beats[].deltas[].domain', 1, None, delta_domain),
+        _BodyMutation('writer_book_ir.chapters[].scenes[].verification_ir'
+                      '.beats[].deltas[].holder', 1, None, delta_holder),
+        _BodyMutation('writer_book_ir.chapters[].scenes[].verification_ir'
+                      '.beats[].deltas[].knowledge_mode', 1, None, delta_mode),
+        _BodyMutation('writer_book_ir.chapters[].scenes[].verification_ir'
+                      '.beats[].deltas[].subjects', 1, None, delta_subjects),
+        _BodyMutation('writer_book_ir.chapters[].scenes[].verification_ir'
+                      '.beats[].dramatic_intent', 1, '变异导演九九', dramatic),
+        _BodyMutation('writer_book_ir.chapters[].scenes[].verification_ir'
+                      '.beats[].reads', 1, '变异入场九九', beat_reads),
+        _BodyMutation('writer_book_ir.chapters[].scenes[].verification_ir'
+                      '.beats[].surface_introductions', 1, '变异新称谓九九',
+                      surface_intro),
+        _BodyMutation('writer_book_ir.chapters[].scenes[].verification_ir'
+                      '.obligations[].satisfaction', 1, '变异满足九九', satisfaction),
+        _BodyMutation('writer_book_ir.chapters[].scenes[].verification_ir'
+                      '.entry_state[].subjects', 1, None, entry_subjects),
+        _BodyMutation('writer_book_ir.chapters[].scenes[].verification_ir'
+                      '.entry_state[].domain', 1, None, entry_domain),
+        _BodyMutation('writer_book_ir.chapters[].scenes[].verification_ir'
+                      '.entry_state[].holder', 1, None, entry_holder),
+        _BodyMutation('writer_book_ir.chapters[].scenes[].verification_ir'
+                      '.entry_knowledge[].holder', 2, None, knowledge_holder),
+        _BodyMutation('writer_book_ir.chapters[].scenes[].verification_ir'
+                      '.pending_reader_confirmations[].position', 1, '变异悬念九九',
+                      pending_position),
+        _BodyMutation('writer_book_ir.chapters[].scenes[].verification_ir'
+                      '.thread_ops[].text', 2, '变异线索九九', thread_text),
+        _BodyMutation('writer_book_ir.chapters[].scenes[].verification_ir'
+                      '.thread_ops[].subject', 2, None, thread_subject),
+        _BodyMutation('writer_book_ir.chapters[].scenes[].verification_ir'
+                      '.thread_ops[].resolution', 2, '变异收束九九', thread_resolution),
+        _BodyMutation('writer_book_ir.chapters[].scenes[].verification_ir'
+                      '.open_threads[].subject', 2, None, open_subject),
+        _BodyMutation('writer_book_ir.chapters[].scenes[].writer_brief.pov', 1,
+                      None, scene_pov),
+        _BodyMutation('writer_book_ir.chapters[].scenes[].writer_brief'
+                      '.scene_driver_summary', 1, '变异驱动九九', driver_summary),
+        _BodyMutation('writer_book_ir.chapters[].scenes[].writer_brief.voice', 1,
+                      '变异口吻九九', scene_voice),
+        # sc02：背景基线（编译器补齐面，基座非空）
+        _BodyMutation('writer_book_ir.chapters[].scenes[].verification_ir'
+                      '.background_knowledge[].holder', 2, None, bgk_holder),
+        _BodyMutation('writer_book_ir.chapters[].scenes[].verification_ir'
+                      '.background_knowledge[].mode', 2, None, bgk_mode),
+        _BodyMutation('writer_book_ir.chapters[].scenes[].verification_ir'
+                      '.background_knowledge[].proposition', 2, '变异命题九九',
+                      bgk_proposition),
+        _BodyMutation('writer_book_ir.chapters[].scenes[].verification_ir'
+                      '.background_knowledge[].subjects', 2, None, bgk_subjects),
+        _BodyMutation('writer_book_ir.chapters[].scenes[].verification_ir'
+                      '.background_state[].domain', 2, None, bgs_domain),
+        _BodyMutation('writer_book_ir.chapters[].scenes[].verification_ir'
+                      '.background_state[].holder', 2, None, bgs_holder),
+        _BodyMutation('writer_book_ir.chapters[].scenes[].verification_ir'
+                      '.background_state[].subjects', 2, None, bgs_subjects),
+        _BodyMutation('writer_book_ir.chapters[].scenes[].verification_ir'
+                      '.background_state[].value', 2, '变异背景九九', bgs_value),
     ]
 
 
@@ -616,7 +931,9 @@ def _hook_prompt(context: HookContext) -> str:
     return build_hook_user_prompt(context)
 
 
-@pytest.mark.parametrize('path,update,sentinel,expect_prompt_change', [
+#: Hook 面变异用例（R10-0.4 起覆盖全部登记 hook_context 消费者字段；与
+#: `test_writer_visible_fields_have_mutation_cases` 的自检共用）。
+_HOOK_MUTATION_CASES = [
     ('hook_context.design_brief', {'design_brief': '变异钩子导演九九'},
      '变异钩子导演九九', True),
     ('hook_context.delivery_brief', {'delivery_brief': '变异钩子口吻九九'},
@@ -624,9 +941,21 @@ def _hook_prompt(context: HookContext) -> str:
     ('hook_context.target_chars', {'target_chars': 320}, None, True),
     ('hook_context.forbidden_reveals',
      {'forbidden_reveals': ('变异禁揭九九',)}, '变异禁揭九九', True),
+    ('hook_context.hard_max_chars', {'hard_max_chars': 400}, None, True),
+    ('hook_context.pov.person',
+     {'pov': HookPov(person='third', focalizers=('yun_niang',))}, None, True),
+    ('hook_context.pov.focalizers',
+     {'pov': HookPov(person='first', focalizers=('fu_jun',))}, None, True),
     ('hook_context.materials[].presentation', {}, '变异材料九九', True),
+    ('hook_context.materials[].event', {}, '变异事件九九', True),
+    ('hook_context.materials[].deltas', {}, '变异钩子效应九九', True),
     ('hook_context.opening_facts[].text', {}, '变异起笔九九', True),
-])
+    ('hook_context.usable_surfaces[].surfaces', {}, '变异面九九', True),
+]
+
+
+@pytest.mark.parametrize('path,update,sentinel,expect_prompt_change',
+                         _HOOK_MUTATION_CASES)
 def test_hook_mutations_reach_only_hook_face(green_hook, green_ir, path, update,
                                              sentinel, expect_prompt_change):
     """hook_only 面：Hook 材料变异只动 Hook 阅读面，正文章包摘要一律不动。"""
@@ -636,6 +965,24 @@ def test_hook_mutations_reach_only_hook_face(green_hook, green_ir, path, update,
         materials[0] = materials[0].model_copy(
             update={'presentation': '变异材料九九'})
         context = context.model_copy(update={'materials': tuple(materials)})
+    elif path == 'hook_context.materials[].event':
+        # event／deltas 是 presentation 为 None 时的回退渲染面
+        # （render_hook_context：先 presentation、无则 event＋随材料成立的 deltas）
+        materials = list(context.materials)
+        materials[0] = materials[0].model_copy(
+            update={'presentation': None, 'event': '变异事件九九'})
+        context = context.model_copy(update={'materials': tuple(materials)})
+    elif path == 'hook_context.materials[].deltas':
+        materials = list(context.materials)
+        materials[0] = materials[0].model_copy(
+            update={'presentation': None, 'event': '深夜翻墙的身影',
+                    'deltas': ('变异钩子效应九九',)})
+        context = context.model_copy(update={'materials': tuple(materials)})
+    elif path == 'hook_context.usable_surfaces[].surfaces':
+        surfaces = list(context.usable_surfaces)
+        surfaces[0] = surfaces[0].model_copy(
+            update={'surfaces': surfaces[0].surfaces + ('变异面九九',)})
+        context = context.model_copy(update={'usable_surfaces': tuple(surfaces)})
     elif path == 'hook_context.opening_facts[].text':
         context = context.model_copy(update={'opening_facts': (
             HookOpeningFact(audience='reader', established_by='init',

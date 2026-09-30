@@ -390,8 +390,10 @@ STR06_FIELD_DELIVERY: dict[str, FieldDeliverySpec] = {
         note='本章拍的事件'),
     'writer_book_ir.chapters[].scenes[].verification_ir.beats[].dramatic_intent': (
         _spec('writer_book_ir.chapters[].scenes[].verification_ir.beats[]'
-              '.dramatic_intent', consumers=(_W,), scope=_SCENE,
-              mode=DeliveryMode.CREATIVE_GUIDANCE, note='拍级导演意图')),
+              '.dramatic_intent', consumers=(_A,), scope=_SCENE,
+              mode=DeliveryMode.AUDIT_ONLY,
+              note='R10-0.4 实证 renderer 从不渲染（原登记写手可见属漂移）；'
+                   'R10b 删除该字段')),
     'writer_book_ir.chapters[].scenes[].verification_ir.beats[].deltas[].domain': (
         _spec('writer_book_ir.chapters[].scenes[].verification_ir.beats[]'
               '.deltas[].domain', consumers=(_W,), scope=_SCENE,
@@ -513,16 +515,16 @@ STR06_FIELD_DELIVERY: dict[str, FieldDeliverySpec] = {
     # VerificationIR：入场视图
     'writer_book_ir.chapters[].scenes[].verification_ir.entry_state[].domain': _spec(
         'writer_book_ir.chapters[].scenes[].verification_ir.entry_state[].domain',
-        consumers=(_W,), scope=_SCENE, mode=DeliveryMode.MUST_RESPECT,
-        note='本场依赖的事实（入场读取解析值）'),
+        consumers=(_A,), scope=_SCENE, mode=DeliveryMode.AUDIT_ONLY,
+        note='R10-0.4 实证：事实行只渲染主体与值，domain 不进阅读面'),
     'writer_book_ir.chapters[].scenes[].verification_ir.entry_state[].subjects': (
         _spec('writer_book_ir.chapters[].scenes[].verification_ir.entry_state[]'
               '.subjects', consumers=(_W,), scope=_SCENE,
               mode=DeliveryMode.MUST_RESPECT, note='事实作用对象（R2 解析为姓名）')),
     'writer_book_ir.chapters[].scenes[].verification_ir.entry_state[].holder': _spec(
         'writer_book_ir.chapters[].scenes[].verification_ir.entry_state[].holder',
-        consumers=(_W,), scope=_SCENE, mode=DeliveryMode.MUST_RESPECT,
-        note='事实持有者（R2 解析为姓名）'),
+        consumers=(_A,), scope=_SCENE, mode=DeliveryMode.AUDIT_ONLY,
+        note='R10-0.4 实证：StateEntry 事实行不渲染 holder'),
     'writer_book_ir.chapters[].scenes[].verification_ir.entry_state[].key': _spec(
         'writer_book_ir.chapters[].scenes[].verification_ir.entry_state[].key',
         consumers=(_A,), scope=_SCENE, mode=DeliveryMode.AUDIT_ONLY,
@@ -557,8 +559,9 @@ STR06_FIELD_DELIVERY: dict[str, FieldDeliverySpec] = {
         mode=DeliveryMode.AUDIT_ONLY, note='来源锚；' + _ID_PENDING),
     'writer_book_ir.chapters[].scenes[].verification_ir.entry_knowledge[].subjects': (
         _spec('writer_book_ir.chapters[].scenes[].verification_ir.entry_knowledge[]'
-              '.subjects', consumers=(_W,), scope=_SCENE,
-              mode=DeliveryMode.MUST_RESPECT, note='命题主语（R2 解析为姓名）')),
+              '.subjects', consumers=(_A,), scope=_SCENE,
+              mode=DeliveryMode.AUDIT_ONLY,
+              note='R10-0.4 实证：知情行只渲染持有者/模式/命题，subjects 不进阅读面')),
     'writer_book_ir.chapters[].scenes[].verification_ir.entry_knowledge[].key': _spec(
         'writer_book_ir.chapters[].scenes[].verification_ir.entry_knowledge[].key',
         consumers=(_A,), scope=_SCENE, mode=DeliveryMode.AUDIT_ONLY,
@@ -574,16 +577,18 @@ STR06_FIELD_DELIVERY: dict[str, FieldDeliverySpec] = {
     # VerificationIR：编译器按参与者补齐的入场基线（R2 引擎批，background 档）
     'writer_book_ir.chapters[].scenes[].verification_ir.background_state[].domain': (
         _spec('writer_book_ir.chapters[].scenes[].verification_ir.background_state[]'
-              '.domain', consumers=(_W,), scope=_SCENE,
-              mode=DeliveryMode.BACKGROUND, note='补齐基线的作用域维度')),
+              '.domain', consumers=(_A,), scope=_SCENE,
+              mode=DeliveryMode.AUDIT_ONLY,
+              note='R10-0.4 实证：背景事实行只渲染主体与值，domain 不进阅读面')),
     'writer_book_ir.chapters[].scenes[].verification_ir.background_state[].subjects': (
         _spec('writer_book_ir.chapters[].scenes[].verification_ir.background_state[]'
               '.subjects', consumers=(_W,), scope=_SCENE,
               mode=DeliveryMode.BACKGROUND, note='补齐基线的作用对象（已释放称谓指认）')),
     'writer_book_ir.chapters[].scenes[].verification_ir.background_state[].holder': (
         _spec('writer_book_ir.chapters[].scenes[].verification_ir.background_state[]'
-              '.holder', consumers=(_W,), scope=_SCENE,
-              mode=DeliveryMode.BACKGROUND, note='补齐基线的持有者（已释放称谓指认）')),
+              '.holder', consumers=(_A,), scope=_SCENE,
+              mode=DeliveryMode.AUDIT_ONLY,
+              note='R10-0.4 实证：StateEntry 事实行不渲染 holder')),
     'writer_book_ir.chapters[].scenes[].verification_ir.background_state[].key': _spec(
         'writer_book_ir.chapters[].scenes[].verification_ir.background_state[].key',
         consumers=(_A,), scope=_SCENE, mode=DeliveryMode.AUDIT_ONLY,
@@ -620,8 +625,9 @@ STR06_FIELD_DELIVERY: dict[str, FieldDeliverySpec] = {
     'writer_book_ir.chapters[].scenes[].verification_ir.background_knowledge[]'
     '.subjects': _spec(
         'writer_book_ir.chapters[].scenes[].verification_ir'
-        '.background_knowledge[].subjects', consumers=(_W,), scope=_SCENE,
-        mode=DeliveryMode.BACKGROUND, note='补齐命题的主语（已释放称谓指认）'),
+        '.background_knowledge[].subjects', consumers=(_A,), scope=_SCENE,
+        mode=DeliveryMode.AUDIT_ONLY,
+        note='R10-0.4 实证：知情行只渲染持有者/模式/命题，subjects 不进阅读面'),
     'writer_book_ir.chapters[].scenes[].verification_ir.background_knowledge[].key': (
         _spec('writer_book_ir.chapters[].scenes[].verification_ir'
               '.background_knowledge[].key', consumers=(_A,), scope=_SCENE,
@@ -910,24 +916,20 @@ STR06_FIELD_DELIVERY: dict[str, FieldDeliverySpec] = {
 #: 七档身份的闭环自检：R2 引擎批起七档全部有登记实例——background 落在
 #: `background_state`／`background_knowledge`（编译器按参与者补齐的入场基线）。
 #: 守卫测试钉住「七档齐全＋background 档恰是补齐基线字段」的对应关系。
+#: R10-0.4：background 档收敛为 renderer 实际渲染的五个字段（domain／holder／
+#: subjects 实证不进阅读面，改登记 audit_only）。
 assert {spec.delivery_mode for spec in STR06_FIELD_DELIVERY.values()} == \
     set(DeliveryMode)
 assert [path for path, spec in STR06_FIELD_DELIVERY.items()
         if spec.delivery_mode is DeliveryMode.BACKGROUND] == [
     'writer_book_ir.chapters[].scenes[].verification_ir'
-    '.background_state[].domain',
-    'writer_book_ir.chapters[].scenes[].verification_ir'
     '.background_state[].subjects',
-    'writer_book_ir.chapters[].scenes[].verification_ir'
-    '.background_state[].holder',
     'writer_book_ir.chapters[].scenes[].verification_ir'
     '.background_state[].value',
     'writer_book_ir.chapters[].scenes[].verification_ir'
     '.background_knowledge[].holder',
     'writer_book_ir.chapters[].scenes[].verification_ir'
     '.background_knowledge[].proposition',
-    'writer_book_ir.chapters[].scenes[].verification_ir'
-    '.background_knowledge[].subjects',
     'writer_book_ir.chapters[].scenes[].verification_ir'
     '.background_knowledge[].mode',
 ]

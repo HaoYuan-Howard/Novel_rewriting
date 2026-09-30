@@ -35,12 +35,12 @@ fake transport、零付费；只有 R10c/R10d 付费，付费与正文外发分�
 
 ### 1. 证据表示（SourceTruth 内，不加新事实权威）
 
-- Stage2 wire 新增 `EvidenceQuote{segment, quote}`：quote 是逐字精确引用，resolver 判定
+- Stage2 wire 新增 EvidenceQuote{segment, quote}（R10a a1 落地）：quote 是逐字精确引用，resolver 判定
   「quote 逐字存在于所引句段内」且句段属于该拍 `source_refs`；不归一化、不模糊匹配。
 - compiler 在 Blueprint **v15** 派生证据视图：被引用句段全文为证据窗口正文；**扩展上下文**
   ＝同章前后各一句；重叠窗口机械合并。精确支持引用与扩展上下文分别保留——**邻句被送达
   不代表邻句自动成为该命题的证据**；跨窗口限定由 Stage2 显式补引。
-- Preserve 消费紧凑的 SourceTruth 投影及其证据（a2 的 `project_preserve_view`），不另读
+- Preserve 消费紧凑的 SourceTruth 投影及其证据（a2 新增的 project_preserve_view 纯函数），不另读
   Stage1 全文、不新增摘要调用。
 - 沿用已有命题、持有者、认知模式与状态地址，只补关键区别：人物判断与事实、计划／预计／
   条件行为与已发生（`modality ∈ {actual, planned, expected, conditional}`）、源文未说明与
@@ -160,7 +160,7 @@ R10-0 基线/真实消费/反例集/关键案例（免费）
 ### R10a · 关键语义交接（免费开发）
 
 **a1 Stage2：引文证据、事件时态、命题纯度**
-- `contracts/schema/source.py`：`EvidenceQuote{segment, quote}`；`Effect`/`Cognition`/
+- `contracts/schema/source.py`：新增 EvidenceQuote{segment, quote}；`Effect`/`Cognition`/
   `InitialStateAtom`/`WorldConstraint` 必填 `basis`（观察与 canonical 共用同一模型，I-11）；
   `Effect` 必填 `modality` 闭集。Blueprint v15 派生证据窗口（§二.1）。
 - Resolver（`novel/stages/stage2/resolver.py`）：复用 `check_closed_set`/逐字查找，新增引文
@@ -172,7 +172,7 @@ R10-0 基线/真实消费/反例集/关键案例（免费）
   命题含限定词比例、modality 计数。
 
 **a2 Preserve：证据视图、原子锚定、阶段身份（preserve-v2，policy v5）**
-- 新纯函数 `novel/stages/stage4/grounding.py::project_preserve_view`：按章/拍确定性渲染
+- 新纯函数 project_preserve_view（R10a a2 落地于 `novel/stages/stage4/grounding.py`）：按章/拍确定性渲染
   event、证据窗口（精确引用＋扩展上下文）、带句柄的原子（`b06_21.e1`/`.c1`/`.l1`、`s0_*`、
   `wc_*`）及类型与引文，取代 JSON 倾倒；不摘要、不改写；实测 token。
 - wire：义务 `{kind, statement, must_preserve, satisfaction, anchors:[句柄], requires:[序号]}`；
