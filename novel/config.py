@@ -147,7 +147,7 @@ class Config:
     model: str = DEFAULT_MODEL
     thinking_mode: str = DEFAULT_THINKING_MODE
     base_url: str = DEFAULT_BASE_URL
-    #: 显式代理只属于 DeepSeek 传输，不灌进进程环境，也不影响本地 API / headless agent。
+    #: 显式代理只属于 DeepSeek 传输，不灌进进程环境，也不影响本地 API 服务与整书代跑子进程。
     #: `repr=False` 与 `api_key` 同理：代理 URL 可能含账号口令。
     proxy_url: str | None = field(default=None, repr=False)
     cache_dir: Path = _REPO_ROOT / DEFAULT_CACHE_DIRNAME

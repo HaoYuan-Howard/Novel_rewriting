@@ -1,7 +1,7 @@
 # 项目开发指南
 
 本仓将中文小说经 stage0、stage1、stage2、stage4～stage7 重写成新书，保留情节骨架并替换人名，
-最终交付 `stage7/<书名>_rewriting.txt`。开发首先防止错误事实、证据缺失或提前披露被静默接受。
+最终交付 `stage7/final/{书名}_rewriting.txt`。开发首先防止错误事实、证据缺失或提前披露被静默接受。
 仓内文档、注释、commit 与工程回复使用中文。用户负责提出想法与需求、验收结果和兜底；
 agent 负责维护工程上下文、实现与验证，关键取舍和结果直接在会话中说明，不要求用户先读文档。
 
@@ -157,7 +157,8 @@ semantic unit 使用独立 prompt/schema，不加载工程 AGENTS、运维手册
 | 回归测试 | 改动有没有破坏以前正常的行为？ | 复用单元、contract、stage 及跨模块集成用例，保留历史 bug 反例；按影响范围做定向回归，达到整批门槛再做完整回归 |
 | golden set | 最终生成的新小说到底好不好？ | 使用冻结的代表性源书，经真实工作流生成最终成书，对照源书、质量标准及已验收基线评价结果质量 |
 
-stage 测试覆盖现役 stage0、stage1、stage2、stage4～stage7；stage3 已退役，不补造占位流程。
+stage 测试覆盖现役 stage0、stage1、stage2、stage4、stage5、stage7；stage3 与 stage6 已退役，
+不补造占位流程。
 stage 测试验证过程正确性，golden set 验证最终结果正确性与阅读质量，两者不能相互替代。
 实际入口：pytest 的 `--test-layer` / `--test-stage` / `--affected` / `--changed`；
 `python -m tests.golden` 独立执行 golden set。细则见 `tests/README.md`。

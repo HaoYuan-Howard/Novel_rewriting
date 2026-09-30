@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-agent.py —— `/api/agent/runs`：前端一键唤起 headless agent 代跑一本书。
+agent.py —— `/api/agent/runs`：整书自动代跑编排入口（确定性 Supervisor 逐节点
+推进，语义节点为直连 LLM 调用；agent executor 已退役，无本地 agent 进程）。
 
 【这一层只组装与转发】冻结 profiles 与范围上界的唯一 planner 在
 `novel/orchestrator/agent.py::plan`——preview、单本启动与 batch 入队

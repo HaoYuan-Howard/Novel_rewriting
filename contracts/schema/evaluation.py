@@ -5,8 +5,8 @@
 ⚠⚠ **本仓没有自动放行门。** 这里曾有 `GroundTruthCase` / `GroundTruthManifest` /
 `CapabilityMetrics` / `EvaluatorProfile` 与八类能力 `EVALUATOR_ABILITIES`，服务的是
 「双人独立标注 + 第三方仲裁 + 三轮 A/B 校准 ⇒ 允许 judge 自动 PASS/FAIL」那条路。
-它从未被标定过，那条分支一次都没走通过，现已整批下线（人读版见
-`docs/schema/evaluation.md` 顶部那段「删了什么 · 怎么恢复」）。
+它从未被标定过，那条分支一次都没走通过，现已整批下线（人读版说明随
+docs/schema/evaluation.md 的删除进 Git 历史，按历史路径查询）。
 
 A/B 双盲判官（`EvaluatorFingerprint` / `JudgeDecision` / `SemanticDecision` /
 `Ability` / `SemanticVerdict`）已随 stage6.semantic 节点整批退役（2026-09-15）：

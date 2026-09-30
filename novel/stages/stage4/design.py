@@ -1,7 +1,7 @@
-"""Body Design wire 的确定性组装与派生面生成（B3 前半重写；R2 升 v2）。
+"""Body Design wire 的确定性组装与派生面生成（B3 前半重写；R8b 升 v3）。
 
 【compiler 生成 ID／归章／权重（I-21，B3 前半）】
-Design wire（`stage4-design-v2`）只表达选择、结构与相对篇幅重点——模型不输出
+Design wire（`stage4-design-v3`）只表达选择、结构与相对篇幅重点——模型不输出
 任何 ID、复合引用或归一权重。本模块是唯一派生点：
   ① 场景/拍 ID 按列表序派发：`sc{序:02d}`／`b{序:02d}`；wire 带 scene_id／
      beat_id 键即拒（「不写可派生字段」的机械面，Q-1 白名单）。
