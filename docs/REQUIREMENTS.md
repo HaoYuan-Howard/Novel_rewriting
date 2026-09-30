@@ -132,7 +132,47 @@ Golden 验证，不重新加回迁移关闭条件。
   证据：`.test_cache/r9-grant-book-red.xml`、`r9-grant-book-targeted.xml`、
   `r9-grant-book-consumers.xml`。
 
+### R10-0 执行记录（2026-10-01）
+
+- **0.1 登记**：[PLAN.md](../PLAN.md)（合并两份计划并裁决冲突）、DECISIONS
+  D8 修订三、本文件批次表重置（`7cfb73e5`）。
+- **0.4 送达守卫修补**（`b1da1edb`）：`tests/test_str06_semantic_delivery.py`
+  新增自检——凡登记写手/Hook 消费者的字段必须有变异用例（豁免闭集 4 项带
+  原因）；绿基座探针实证 7 项登记漂移（dramatic_intent、entry_state／
+  background_state 的 domain 与 holder、entry_knowledge／background_knowledge
+  的 subjects 变异不改变渲染字节），登记如实改 audit_only；补 37 个正文面＋
+  6 个 Hook 面变异用例。该文件 107 项与契约 §9.5 五文件、
+  `tests/test_str06_r2_engine.py` 全绿。
+- **0.5 反例回归集**（`b1da1edb`）：`tests/str06_semantic_cases.py` 登记
+  C1–C11 反例＋P1–P6 正例（合成最小样例，不引付费回答或正文），每例标明
+  期望 typed 结果与转红/绿子批；机械不可查项（C8 部分、C11）显式归冻结
+  关键案例，不删登记。
+- **0.2 冻结证据**：R9c 根共 473 文件／12.3MB——`_service`（ledger 83 行＋
+  运行记录）、书目录 `stage0/1`（4 文件）、`stage2`（observations 14＋
+  blueprints／characters／acceptance 各 1）、`stage4`（design 2＋grounding 2
+  ＋acceptance 1，**无 ir／无正式 compile 通过**）、`runtime`（commit 83、
+  review 103、revisions 67）。checkpoint 归属：正式 Design/Bind 属首轮，
+  checkpoint/brief 属补丁后，`runtime/review/semantic_repair_draft/` 是
+  未采用人工草案。**b6a 两根（20260929b／20260930）经核验已从盘面清除**
+  （2026-10-01 全盘搜索无果），其三章＋Hook 成文、41 笔付费账与两次 owner
+  patch 事实只余本文件历史记录；对照复用性判定＝**不可复用**（无完整无
+  patch 成书、现无盘面），版本结论只报绝对达标。
+- **0.7 基线读数**（R10c 对照基准）：R9c ledger 83 行＝37 笔付费＋46 缓存。
+  逐节点付费 ptok／ctok：preserve 4 笔 157.8k／102.0k（≈3.9 万 prompt/轮）、
+  body_design 4 笔 108.4k／208.3k（≈2.7 万 prompt、5.2 万 completion/轮）、
+  chapters 19 笔 121.0k／356.5k、book 2 笔 33.2k／82.6k、associate 4 笔
+  58.3k／108.4k、names 2 笔 18.0k／8.5k、bind 1 笔 9.7k／16.0k、
+  hook_design 1 笔 22.7k／16.6k。草案章包（`writer_material_preview.json`）
+  六分区全书条目：必须写出 197／不可违背 287／承接 44／导演说明 266／
+  **背景 979**／禁区 100；背景逐章膨胀 13→245 条（ch10），相邻章背景重复率
+  0.48–0.88（承接 0–0.6）——「材料重复且打架」的量化基准，R10b 背景投影
+  收窄的对象读数。
+- **剩余**：0.3 真实消费核对（`tools/str06_review.py::request_preview` 逐
+  owner 规则／材料／JSON 冗余占比，计数与结构登记回本节）、0.6 关键案例
+  草案（Golden_Set_v2.1_夫君的报恩.md，用户确认后冻结）。
+
 ### 节省时间的执行约定
+
 
 1. **按共用路径合批**：计数／校验／错误形状先做；称谓推导与实际视图检查只维护
    一套；patch、resample 与审阅工具共用差异／验证／修订级联，不各造一条恢复路径。

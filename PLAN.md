@@ -107,14 +107,18 @@ Preserve 显式区分正常结果／源证据冲突分支；冲突结果不发�
 
 ### 5. 对照与矩阵（裁决）
 
-- 用户已裁决不做新旧 renderer 付费对照。经核验（R10-0），现盘面**不存在可复用的完整无
-  patch 现版本成书**：b6a 仅第 1/5/10 章 canary 且含两次 owner patch；R9c 未成文。故实验
-  对照取：b6a 三章＋Hook 只读成文基线、R9c 语义层基线读数、同一合成绿基座上 v6/v7 renderer
-  的免费无损投影对照（共同支持的离线夹具，不新增生产迁移层、不拿不同 Design 产物比 renderer）。
-- 版本结论只报**绝对达标**（Golden 六维＋冻结关键案例＋九维），不宣称相对旧版的付费对照
-  改善；对照缺失如实登记。普适性由 R10d 第二本书＋重复生成披露，不外推。
-- 每书目标矩阵：一份对照（上述免费基线）＋两份独立新稿（R10c 首稿＋R10d 重复生成）；
-  不扩大样本、不择优替换失败轮。
+- 用户已裁决不做新旧 renderer 付费对照。R10-0 核验（2026-10-01）：现盘面
+  **不存在任何可复用的现版本成书**——b6a 运行根（20260929b／20260930）已被
+  清理、无盘面可读，仅余 REQUIREMENTS 历史记录（三章＋Hook 成文读数、41 笔
+  付费账、两次 owner patch 事实）；R9c 未成文。故实验对照取：R9c 语义层基线
+  读数（冻结证据清单）、b6a 历史记录（只作背景参照，不能宣称完成逐段对读）、
+  同一合成绿基座上 v6/v7 renderer 的免费无损投影对照（共同支持的离线夹具，
+  不新增生产迁移层、不拿不同 Design 产物比 renderer）。
+- 版本结论只报**绝对达标**（Golden 六维＋冻结关键案例＋九维），不宣称相对旧
+  版的付费对照改善；对照缺失如实登记。普适性由 R10d 第二本书＋重复生成披露，
+  不外推。
+- 每书目标矩阵：一份对照（上述免费基线）＋两份独立新稿（R10c 首稿＋R10d
+  重复生成）；不扩大样本、不择优替换失败轮。
 
 ## 三、批次与顺序
 
@@ -131,10 +135,11 @@ R10-0 基线/真实消费/反例集/关键案例（免费）
 
 1. **登记**：REQUIREMENTS 重置当前状态（R9c 停止、批次表改 R10、B6-B 并入 R10c、B6c 并入
    R10d、R7 余项由 R10c 阅读问题驱动）；DECISIONS 增 D8 修订三；不写旧运行根。
-2. **冻结证据**：R9c 根（`outputs/str06_r9_canary_20260930/`）与 b6a 根
-   （`outputs/str06_b6a_canary_20260930/`，唯一成文基线）全文件摘要清单，逐项标注产物所属
-   checkpoint（R9c 正式 Design/Bind 属首轮、checkpoint/brief 属补丁后、`runtime/review/` 是
-   未采用人工草案）；给出对照可复用性判定（§二.5）。
+2. **冻结证据**：R9c 根（`outputs/str06_r9_canary_20260930/`）全文件摘要清单，
+   逐项标注产物所属 checkpoint（正式 Design/Bind 属首轮、checkpoint/brief 属
+   补丁后、`runtime/review/` 是未采用人工草案）；b6a 根经核验已从盘面清除
+   （2026-10-01），其三章＋Hook 成文与 41 笔付费账只余 REQUIREMENTS 历史记录，
+   作背景参照、不能宣称完成逐段对读；给出对照可复用性判定（§二.5）。
 3. **真实消费核对**：`tools/str06_review.py::request_preview`/`views` ＋
    `novel/llm/budget.py::count_input_tokens`，逐 owner 捕获实际请求，分解规则／材料／JSON
    冗余占比；区分「落盘重复」与「付费重新生成」。计数与结构登记 REQUIREMENTS；含正文的
@@ -154,7 +159,8 @@ R10-0 基线/真实消费/反例集/关键案例（免费）
    `Golden_Set_v2.1_夫君的报恩.md`（P/T/SIG/LIM/GS，稀疏锚点）；种子＝REQUIREMENTS「B6
    沿用的保真与交付反例」＋R9c `reading_review.json` 问题＋C1–C11＋b6a 六维验收发现；
    评价依据不能只取自待评估的 Preserve 条目。**用户确认后冻结**，摘要登记 REQUIREMENTS。
-7. **基线读数**：R9c/b6a ledger 逐节点 token（Preserve/Design/associate 轮次）、R9c 草案
+7. **基线读数**：R9c ledger 逐节点 token（Preserve/Design/associate 轮次；
+   b6a 账面只剩 REQUIREMENTS 历史记录，无盘面可重算）、R9c 草案
    章包分区条目与重复率，作为 R10c 对照与 R10b 免费形状对照的 v6 基准。
 
 ### R10a · 关键语义交接（免费开发）
