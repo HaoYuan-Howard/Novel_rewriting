@@ -649,11 +649,17 @@ def run_compile_stage4(ctx: ChainContext) -> dict:
     repository.write('stage4/acceptance/guard/compile.json', {'errors': errors})
     _backfill_must_keep_unbound(repository, binding)
     if errors:
-        raise ValueError(errors)
+        # 无回派路由的机械缺陷：typed 停止给人（诊断面已落盘，exit 1 而非
+        # exit 70——与 run_compile 同批修复，canary 20260930 实证）。
+        raise MechanicalDefectStop(
+            f'stage4 compile 机械缺陷：{errors}',
+            node='str06.stage4.compile', issues=tuple(str(e) for e in errors))
     projection = chars.name_projection()
     hook_context, errors = compile_hook_context(graph, projection, ctx.hook_constraints)
     if errors:
-        raise ValueError(errors)
+        raise MechanicalDefectStop(
+            f'stage4 hook 上下文机械缺陷：{errors}',
+            node='str06.stage4.compile', issues=tuple(str(e) for e in errors))
     writer_ir = compile_writer_book_ir(graph=graph, plan=plan, binding=binding,
                                        total_budget=ctx.budget,
                                        length_band=ctx.length_band,
@@ -673,7 +679,12 @@ def run_compile_stage4(ctx: ChainContext) -> dict:
     # 失败结果只进诊断：guard report 先落（问题清单与预算读数留证），正式位不写。
     repository.write('stage4/acceptance/guard/report.json', guard_report)
     if problems:
-        raise ValueError(problems)
+        # Guard 问题（如「消费了未建立状态：返回 Design 修复」）不在回派路由
+        # 闭集（E-8）：typed 停止给人，恢复走 design 重跑（RED 通道/手动 CLI）
+        # 或 owner patch；诊断面 report.json 已留证全清单。
+        raise MechanicalDefectStop(
+            f'stage4 Guard 机械缺陷：{problems}',
+            node='str06.stage4.compile', issues=tuple(str(p) for p in problems))
     # R6 输出组发布：Guard 全绿后四个正式派生产物同一组、一个 seal。
     repository.publish((
         PublishItem(rel='stage4/compiled/execution_plan.json', value=plan),
