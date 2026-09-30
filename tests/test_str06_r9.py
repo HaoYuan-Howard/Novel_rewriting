@@ -141,6 +141,66 @@ def test_staged_patch_does_not_overwrite_unregistered_intervening_edit(tmp_path)
     assert json.loads(product.read_text(encoding='utf-8')) == {'value': 3}
 
 
+def _publish_patch(repo, answer, baseline, value):
+    from tests.str06_facilities import synthetic_ref
+    candidate = {'value': value}
+    preview = preview_owner_patch(owner='bind', identity=answer.request_sha256,
+        candidate=candidate, baseline=baseline, validate=lambda w: [], dry_run=lambda w: {})
+    raw = json.dumps(candidate).encode('utf-8')
+    record = stage_revision(repo, owner='bind', identity=answer.request_sha256,
+                            baseline=baseline, raw_bytes=raw, preview=preview,
+                            reason=f'第 {value} 次核读修订')
+    repo.context.enter_node(record.node)
+    ref = synthetic_ref('bind')._replace(request_sha256=answer.request_sha256,
+                                         patch={'candidate_sha256': record.candidate_sha256})
+    repo.write(record.product_rel, candidate, owners=('bind',), refs=(ref,))
+    activate_node_revisions(repo, record.node)
+    return record, raw
+
+
+@pytest.mark.parametrize('resolved', [False, True])
+def test_successive_explicit_patches_keep_history_and_cost_without_new_purchase(tmp_path, resolved):
+    repo, session, transport, answer, baseline = _baseline(tmp_path)
+    first, first_raw = _publish_patch(repo, answer, baseline, 2)
+    if resolved:
+        resolve_node_revisions(repo, 'str06.stage4.compile')
+    repo.write('runtime/revisions/bind.json', {'sha256': first.candidate_sha256})
+    candidate_path = tmp_path / 'second_wire.json'
+    candidate_path.write_text('{"value":3}', encoding='utf-8')
+    session.adopt_roots = (repo.root,)
+    with pytest.raises(ValueError, match='不一致'):
+        session.bind_wire_adoption('bind', answer.request_sha256, candidate_path)
+    from novel.stages.revisions import verified_previous_revision
+    previous = verified_previous_revision(repo, 'bind')
+    bound = session.bind_wire_adoption('bind', answer.request_sha256,
+                                       candidate_path, allow_patch=True,
+                                       previous_patch_sha256=previous.candidate_sha256)
+    assert bound['owner_patch'] and bound['attempt_id'] == answer.attempt_id
+    second, _raw = _publish_patch(repo, answer, baseline, 3)
+    assert adopted_patch(repo, 'bind', answer.request_sha256, lambda w: [])[0] == {'value': 3}
+    history = list((repo.root / 'runtime/revisions/history/bind').glob('*.json'))
+    assert len(history) == 1
+    assert repo.read_external(history[0])['candidate_sha256'] == first.candidate_sha256
+    assert repo.path(first.evidence_rel).read_bytes() == first_raw
+    assert second.baseline_request_sha256 == first.baseline_request_sha256
+    assert len(transport.calls) == 1, '连续免费修订不购买也不重置额度'
+
+
+@pytest.mark.parametrize('resolved', [False, True])
+def test_new_patch_refuses_unregistered_product_change_before_replacing_history(tmp_path, resolved):
+    repo, _session, transport, answer, baseline = _baseline(tmp_path)
+    first, _raw = _publish_patch(repo, answer, baseline, 2)
+    if resolved:
+        resolve_node_revisions(repo, 'str06.stage4.compile')
+    active = repo.path('runtime/revisions/active/bind.json').read_bytes()
+    repo.path(first.product_rel).write_text('{"value":99}', encoding='utf-8')
+    with pytest.raises(ValueError, match='再次变化'):
+        _publish_patch(repo, answer, baseline, 3)
+    assert repo.path('runtime/revisions/active/bind.json').read_bytes() == active
+    assert json.loads(repo.path(first.product_rel).read_bytes()) == {'value': 99}
+    assert len(transport.calls) == 1
+
+
 def test_resample_does_not_reset_work_unit_or_book_budget(tmp_path):
     from novel.llm.paid_requests import ExecutionError
     from novel.work_units import WorkUnitBudget, read_book_budget

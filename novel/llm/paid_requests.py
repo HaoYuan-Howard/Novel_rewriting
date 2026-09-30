@@ -962,7 +962,8 @@ class PaidRequestSession:
             prompt_tokens=0, completion_tokens=0, reasoning_tokens=0)
 
     def bind_wire_adoption(self, owner: str, identity: str, wire_path: Path, *,
-                           allow_patch: bool = False) -> dict:
+                           allow_patch: bool = False,
+                           previous_patch_sha256: str | None = None) -> dict:
         """wire 采用的身份／成本绑定（F7a-3）：返回并入采用记录的字段。
 
         证据分三轮扫描，逐档下降但都如实登记：
@@ -977,9 +978,10 @@ class PaidRequestSession:
           成本只到批次口径；
         · 都没有（`unverified`）：仅形状校验，采用记录如实标注。
         `allow_patch` 接受 owner patch 链：wire 与已购内容不一致，但调用方已核验
-        patch note 的 base 身份与当前请求相等（修订来源保留），且采纳记录缺失或
-        与之相符。采纳记录缺失即同根首次补丁引导——本次通过的补丁即建档记录；
-        已存在的采纳记录须字节相符，不符即为不同的补丁版本，仍拒。
+        patch note 的 base 身份与当前请求相等（修订来源保留）。不同版本接续须
+        由调用方先核验上一份耐久修订及当前正式产物，传入 previous_patch_sha256
+        精确匹配源根的旧采用记录；历史归档由 stage_revision 再次复验后执行。
+        无上述证明时，已有采用记录仍须与本 wire 字节相符。
         """
         wire_sha = Str06Repository.file_sha256(wire_path)
         for root in self.adopt_roots:
@@ -1015,8 +1017,9 @@ class PaidRequestSession:
                             'completion_tokens': original[0].get('completion_tokens'),
                             'reasoning_tokens': original[0].get('reasoning_tokens')}}
             recorded = self._adopt_record(root, owner)
-            if allow_patch and (recorded is None
-                                or recorded.get('sha256') == wire_sha):
+            if allow_patch and (recorded is None or recorded.get('sha256') == wire_sha
+                                or previous_patch_sha256 is not None
+                                and recorded.get('sha256') == previous_patch_sha256):
                 return {'mode': 'historical-adoption', 'cost_link': 'ledger-row',
                         'owner_patch': True,
                         'source_root': str(root.resolve()),
@@ -1054,8 +1057,9 @@ class PaidRequestSession:
                         'model': response.get('model'),
                         'historical_usage': usage}
             recorded = self._adopt_record(root, owner)
-            if allow_patch and (recorded is None
-                                or recorded.get('sha256') == wire_sha):
+            if allow_patch and (recorded is None or recorded.get('sha256') == wire_sha
+                                or previous_patch_sha256 is not None
+                                and recorded.get('sha256') == previous_patch_sha256):
                 return {'mode': 'historical-adoption', 'cost_link': 'ledger-row',
                         'owner_patch': True,
                         'source_root': str(root.resolve()),

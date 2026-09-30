@@ -1759,8 +1759,15 @@ def execute(args) -> None:
                     raise revision_error(owner, 'owner patch 必须登记非空修订理由')
             if patch_requested and not session.adopt_roots:
                 session.adopt_roots = (repository.root,)
+            previous_patch_sha = None
+            if allow_patch:
+                from novel.stages.revisions import verified_previous_revision
+                previous = verified_previous_revision(repository, owner)
+                if previous is not None:
+                    previous_patch_sha = previous.candidate_sha256
             bound = session.bind_wire_adoption(owner, identity, path,
-                                               allow_patch=allow_patch)
+                                               allow_patch=allow_patch,
+                                               previous_patch_sha256=previous_patch_sha)
             revision.update({
                 'mode': bound.get('mode'), 'cost_link': bound.get('cost_link'),
                 'source_root': bound.get('source_root'),

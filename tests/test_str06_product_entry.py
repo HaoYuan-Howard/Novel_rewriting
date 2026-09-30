@@ -1325,6 +1325,20 @@ def test_registered_owner_patch_survives_file_removal_then_agent_delivers(base, 
     assert record['status'] == 'open'
     assert (book / record['evidence_rel']).read_bytes() == raw
     assert revision_states_at(book)
+    # 同一已购身份的第二份显式补丁须接续首份，而非因为旧采用摘要不同就拒绝。
+    first_record = record
+    first_raw = raw
+    candidate['book_style'] += '保留叙述者的内外反差。'
+    raw = json.dumps(candidate, ensure_ascii=False, indent=2).encode('utf-8') + b'\r\n'
+    (patch_dir / 'design_wire.json').write_bytes(raw)
+    _run_cli_subprocess([sys.executable, '-B', '-m', 'novel.cli', 'run', 'str06.stage4.body_design',
+                        '9007', '--base', str(base), '--wire-dir', str(patch_dir),
+                        '--yes'], repo_root)
+    assert len([r for r in read_cost_snapshot(base)[0] if not r.get('cached')]) == paid_before_patch
+    record = _read_json(book / 'runtime/revisions/active/design.json')
+    assert record['status'] == 'open' and (book / record['evidence_rel']).read_bytes() == raw
+    assert (book / first_record['evidence_rel']).read_bytes() == first_raw
+    assert len(list((book / 'runtime/revisions/history/design').glob('*.json'))) == 1
     (patch_dir / 'design_wire.json').unlink()
     (patch_dir / 'design_patch_note.json').unlink()
     settings = agent_settings.read(base)

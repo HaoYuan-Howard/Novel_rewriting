@@ -143,6 +143,24 @@ def preview_owner_patch(*, owner: str, identity: str, candidate: Any,
             'downstream': dry_run(candidate)}
 
 
+def verified_previous_revision(repository, owner: str) -> OwnerRevisionRecordV1 | None:
+    """只读核验上一修订，显式接续与正式采用前共用；无登记不伪造证明。"""
+    try:
+        record = OwnerRevisionRecordV1.model_validate(
+            repository.inspect(f'runtime/revisions/active/{owner}.json'))
+    except FileNotFoundError:
+        return None
+    except ValidationError as exc:
+        raise revision_error(owner, f'上一修订记录损坏：{exc}') from exc
+    if (record.owner != owner or record.node != semantic_owner_unit(owner)[0]
+            or record.product_rel != owner_product_rel(owner)):
+        raise revision_error(owner, '上一修订所属节点或产物登记损坏')
+    _verify_current_product(repository, record)
+    if repository.file_sha256(repository.path(record.evidence_rel)) != record.candidate_sha256:
+        raise revision_error(owner, '上一修订原字节证据损坏')
+    return record
+
+
 def stage_revision(repository, *, owner: str, identity: str, baseline: dict,
                    raw_bytes: bytes, preview: dict, reason: str,
                    kind: str = 'owner_patch', sequence: int = 0) -> OwnerRevisionRecordV1:
@@ -165,15 +183,11 @@ def stage_revision(repository, *, owner: str, identity: str, baseline: dict,
         product_rel=product_rel, before_product_sha256=before_product_sha,
         status='staged', created_at=int(time.time()))
     rel = f'runtime/revisions/active/{owner}.json'
-    try:
-        previous = OwnerRevisionRecordV1.model_validate(repository.inspect(rel))
-    except FileNotFoundError:
-        previous = None
+    previous = verified_previous_revision(repository, owner)
     if previous is not None:
         if (previous.kind == kind and previous.baseline_request_sha256 == identity
                 and previous.sequence == sequence and previous.candidate_sha256 == candidate_sha
                 and previous.diff_sha256 == record.diff_sha256):
-            _verify_current_product(repository, previous)
             replay = previous.model_copy(update={'status': 'staged',
                                                  'before_product_sha256': before_product_sha})
             repository.write(rel, replay)
