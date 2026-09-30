@@ -3,7 +3,7 @@
 """test_str06_product_entry —— F8d：真实产品入口全链集成（fake transport，零真实 LLM）。
 
 【验什么】把「HTTP 上传 → autostart → `agent.start` → Supervisor 按 operator next
-逐动作驱动 → 11 个 `str06.` 节点 → stage7 交付」用 fake transport 真跑一遍，并核对
+逐动作驱动 → 14 个 `str06.` 节点 → stage7 交付」用 fake transport 真跑一遍，并核对
 零调用恢复、`--check-only`、旧书拒读与最终交付。规划面（`operator.next`／
 `queue.plan`）**不打桩**：节点顺序、贵贱、写盘与恢复判定全部由现役 `NODES` 派生。
 fake transport 复用 `tests/test_str06_body.py` 的路由表（同一份 wires），正文按章
@@ -14,8 +14,15 @@ fake transport 复用 `tests/test_str06_body.py` 的路由表（同一份 wires�
 
 【基座形状】最小合法 base = `initialize_workflow` + stage0/stage1 产物（经真实
 `novel.cli run` 落盘）；上传触发 autostart 后 Supervisor 的第一个 ready 动作就是
-`str06.stage2.source`——stage1 章数组是新链的正式输入，预置它正是任务口径的
+`str06.stage2.book`——stage1 章数组是新链的正式输入，预置它正是任务口径的
 「最小合法 base」。上传自身仍会真跑一次 stage0 作业（同一份源字节，确定性重放）。
+
+【耗时与覆盖】完整子进程链只保留第四节一条，继续验证真实代码身份。
+其余五例将关键 owner 的 run_step/CLI 留在真实子进程；非关键节点在进程内
+执行同一生产 CLI，全部业务、账务、产物、免费恢复及重启读回断言保留。
+跨节点回派的 design/bind/compile 均为真实子进程；封存丢失后的全部节点恢复
+也为真实子进程。普通场景父子使用确定性测试身份，不缓存生产 code_version。
+每例以 _assert_process_window 核对真实窗口，串行登记不变。
 
 【与生产 Popen 的差异（必读）】
 生产路径上 Supervisor 每个动作经 `agent._run_step_argv` 起
@@ -94,13 +101,14 @@ from novel.api.app import UI_HEADER, create_app  # noqa: E402
 from novel.cli import main as cli  # noqa: E402
 from novel.errors import TerminalState  # noqa: E402
 from novel.llm.ledger import read_cost_snapshot  # noqa: E402
-from novel.llm.transport import ChatResponse  # noqa: E402
 from novel.orchestrator import (  # noqa: E402
     agent, agent_settings, operator, queue, state,
 )
 from novel.stages.chain import NODE_ORDER  # noqa: E402
 from novel.stages.stage5.body import sha256_text  # noqa: E402
-from tests.test_str06_body import _RoutingTransport  # noqa: E402
+from tests.str06_product_transport import (  # noqa: E402
+    GOOD_CH01, GOOD_CH02, _EntryTransport, _make_entry_transport,
+)
 from tests.test_str06_hook import _full_chain_wires  # noqa: E402
 
 FILENAME = 'FQ_联调样本_9001.txt'
@@ -113,44 +121,6 @@ SOURCE_TEXT = (
     '夫君夜半翻墙而出，苏芸娘发现玉佩刻着沈字。\n'
 )
 
-#: 假正文：只用在第 1／2 章已释放的称谓（夫君／芸娘／苏芸娘），不碰未释放专名
-#: （陆／陆家／苏姑娘／沈…），不带场景标记；字数落在章篇幅带内——书级目标由源章
-#: 总字数派生（本书 1000），两章各 500、带 [300, 650]，故两稿都取 300–650 非空白字符。
-GOOD_CH01 = (
-    '拜堂之夜，红烛高烧，苏芸娘望着夫君，把心头那句旧约问了个明白。夫君沉吟许久，才说这桩婚事不是寻常姻缘，'
-    '而是多年前许下的承诺，今日不过是要兑现它。她想起陪嫁那夜，母亲拉着她的手说，做人妻子的本分是守住这个家，'
-    '也要守住自己的心，莫叫一时的委屈改了性子。烛火摇了三摇，窗外风声渐紧，芸娘把旧约的每一条都记在心里，'
-    '知道往后的日子都要照着这句话走下去，一步也错不得。天快亮时，夫君起身告辞，说此去是为了查明一桩旧案的真相，'
-    '叫她不必等候，也不必牵挂，门要关好，灯要留一盏。她送他到门前，没有回头，只怕一回头就失了底气，'
-    '叫他也跟着为难。回到房中，芸娘把旧约压在枕下，暗暗告诉自己，无论将来发生什么，这个家的门要一直开着，'
-    '灯也要一直亮着。晨光透进窗纸，照见一地烛泪，她忽然觉得，从前怕的黑夜，也不过如此，'
-    '只要心里有了着落，再长的夜也能坐到天亮。'
-)
-GOOD_CH02 = (
-    '夫君夜半翻墙而出，芸娘在他枕下发现一方玉佩，刻着的字面陌生，不像家中旧物。她把玉佩藏回原处，只怕惊动了谁，'
-    '索性坐到天明，把昨夜至今的每一件事都翻来覆去地想。起初她疑心夫君有了别的心思，可想起他临行前的眼神，'
-    '又觉得不像，反倒像是怕牵连了谁。天将明时，她在灯下把那方玉佩的穗子拆开又系上，忽然想起母亲说过，'
-    '旧家曾有一位亲人早年出走在远方，此去经年，杳无音信。她把这点疑惑按在心底，决定等夫君回来再问个明白，'
-    '问的时候还要装作无意，免得他为难。鸡叫三遍，门外有了动静，芸娘起身梳洗，把鬓发理得平平的，'
-    '像是什么也没有发生过，只是那方玉佩的凉意，一整日都留在她的指尖上，连写字的时候也跟着颤。'
-    '她想起旧约里那句无论将来发生什么，忽然觉得这句话原是说给自己听的。'
-)
-
-
-class _EntryTransport(_RoutingTransport):
-    """产品入口用的假 transport：沿用链级路由表，只把两章正文换成带内长度的稿。"""
-
-    def send(self, request):
-        owner = self._owner(request)
-        if owner.startswith('body_ch'):
-            self.calls.append(owner)
-            text = GOOD_CH01 if owner.endswith('ch01') else GOOD_CH02
-            return ChatResponse(content=text, finish_reason='stop',
-                                usage={'prompt_tokens': 100, 'completion_tokens': 40},
-                                model='fake')
-        return super().send(request)
-
-
 class _InProcessPopen:
     """测试替身：把 canonical 子进程 argv 改为进程内执行真实 `main()`。
 
@@ -160,23 +130,29 @@ class _InProcessPopen:
     stdout（管道或文件）原样落盘。
     """
 
-    def __init__(self, argv, *, stdout=None, **_kwargs):
+    def __init__(self, argv, *, stdout=None, stderr=None, **_kwargs):
         self.argv = [str(token) for token in argv]
+        self.args = self.argv
         self.pid = -1
         out, err = io.StringIO(), io.StringIO()
         try:
             with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
                 returncode = self._dispatch()
         except BaseException:                       # noqa: BLE001 —— 栈要留全
-            traceback.print_exc()
+            traceback.print_exc(file=err)
             returncode = 70
-        payload = (out.getvalue() + err.getvalue()).encode('utf-8')
+        payload = (out.getvalue() + (err.getvalue() if stderr is subprocess.STDOUT
+                                    else '')).encode('utf-8')
         if stdout is subprocess.PIPE:
             self.stdout = io.BytesIO(payload)
         else:
             if stdout is not None:
                 stdout.write(payload)
             self.stdout = None
+        self.stderr = (io.BytesIO(err.getvalue().encode('utf-8'))
+                       if stderr is subprocess.PIPE else None)
+        if stderr is not None and stderr not in (subprocess.PIPE, subprocess.STDOUT):
+            stderr.write(err.getvalue().encode('utf-8'))
         self.returncode = int(returncode)
 
     def _dispatch(self) -> int:
@@ -194,6 +170,17 @@ class _InProcessPopen:
 
     def wait(self, timeout: float | None = None) -> int:
         return self.returncode
+
+    def communicate(self, input=None, timeout: float | None = None):
+        assert input is None, 'CLI 测试缝不接受 stdin 材料'
+        return (self.stdout.getvalue() if self.stdout is not None else None,
+                self.stderr.getvalue() if self.stderr is not None else None)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return None
 
 
 def _profiles() -> PipelineAgentProfiles:
@@ -299,7 +286,7 @@ def test_full_chain_from_http_upload_to_stage7_delivery(base, monkeypatch):
     assert uploaded['job']['state'] == 'ok'
     assert uploaded['run']['run_id']
 
-    # ③ Supervisor 真实规划 + 逐动作驱动：stage1 已就绪 ⇒ 首动作起正是 11 个节点。
+    # ③ Supervisor 真实规划 + 逐动作驱动：stage1 已就绪 ⇒ 按 NODE_ORDER 推进。
     run_id = uploaded['run']['run_id']
     assert agent.wait(run_id, 600), 'agent 代跑未在时限内收口'
     assert _dispatched_nodes(box) == list(NODE_ORDER)
@@ -530,32 +517,138 @@ _SITECUSTOMIZE_SOURCE = """
 import os, sys
 
 if os.environ.get('NOVEL_B5_FAKE_TRANSPORT') == '1':
-    repo = os.environ['NOVEL_B5_FAKE_REPO']
-    if repo not in sys.path:
-        sys.path.insert(0, repo)
-    import novel.stages.chain as _chain
-    from novel.llm.transport import ChatResponse
-    from tests.test_str06_body import _RoutingTransport
-    from tests.test_str06_hook import _full_chain_wires
+    import novel.prov as _prov
+    _test_code = os.environ.get('NOVEL_STR06_TEST_CODE_VERSION')
+    if _test_code is not None:
+        _prov.code_version = lambda: _test_code
 
-    _BODY_TEXTS = {'ch01': '拜堂之夜，红烛高烧，苏芸娘望着夫君，把心头那句旧约问了个明白。夫君沉吟许久，才说这桩婚事不是寻常姻缘，而是多年前许下的承诺，今日不过是要兑现它。她想起陪嫁那夜，母亲拉着她的手说，做人妻子的本分是守住这个家，也要守住自己的心，莫叫一时的委屈改了性子。烛火摇了三摇，窗外风声渐紧，芸娘把旧约的每一条都记在心里，知道往后的日子都要照着这句话走下去，一步也错不得。天快亮时，夫君起身告辞，说此去是为了查明一桩旧案的真相，叫她不必等候，也不必牵挂，门要关好，灯要留一盏。她送他到门前，没有回头，只怕一回头就失了底气，叫他也跟着为难。回到房中，芸娘把旧约压在枕下，暗暗告诉自己，无论将来发生什么，这个家的门要一直开着，灯也要一直亮着。晨光透进窗纸，照见一地烛泪，她忽然觉得，从前怕的黑夜，也不过如此，只要心里有了着落，再长的夜也能坐到天亮。', 'ch02': '夫君夜半翻墙而出，芸娘在他枕下发现一方玉佩，刻着的字面陌生，不像家中旧物。她把玉佩藏回原处，只怕惊动了谁，索性坐到天明，把昨夜至今的每一件事都翻来覆去地想。起初她疑心夫君有了别的心思，可想起他临行前的眼神，又觉得不像，反倒像是怕牵连了谁。天将明时，她在灯下把那方玉佩的穗子拆开又系上，忽然想起母亲说过，旧家曾有一位亲人早年出走在远方，此去经年，杳无音信。她把这点疑惑按在心底，决定等夫君回来再问个明白，问的时候还要装作无意，免得他为难。鸡叫三遍，门外有了动静，芸娘起身梳洗，把鬓发理得平平的，像是什么也没有发生过，只是那方玉佩的凉意，一整日都留在她的指尖上，连写字的时候也跟着颤。她想起旧约里那句无论将来发生什么，忽然觉得这句话原是说给自己听的。'}
+    _argv = sys.orig_argv
+    _cli = _argv.index('novel.cli') if 'novel.cli' in _argv else None
+    _args = _argv[_cli + 1:] if _cli is not None else []
+    if len(_args) >= 2 and _args[0] == 'run' and _args[1].startswith('str06.'):
+        # 这里只安装工厂；mark/run_step 不导入 chain，免费采用不加载测试 wires。
+        import novel.stages.chain as _chain
 
-    class _EntryTransport(_RoutingTransport):
-        # 正文两章换成带内长度的稿（与本文件进程内 _EntryTransport 同一形状）。
+        def _entry_transport(cfg):
+            from tests.str06_product_transport import _make_entry_transport
+            return _make_entry_transport(os.environ.get('NOVEL_STR06_FAULT'))
 
-        def send(self, request):
-            owner = self._owner(request)
-            if owner.startswith('body_ch'):
-                self.calls.append(owner)
-                key = 'ch01' if owner.endswith('ch01') else 'ch02'
-                return ChatResponse(
-                    content=_BODY_TEXTS[key], finish_reason='stop',
-                    usage={'prompt_tokens': 100, 'completion_tokens': 40},
-                    model='fake')
-            return super().send(request)
-
-    _chain.DeepSeekTransport = lambda cfg: _EntryTransport(_full_chain_wires())
+        _chain.DeepSeekTransport = _entry_transport
 """
+
+
+def _install_transport_site(monkeypatch, tmp_path, *, code: str | None = None,
+                            fault: str | None = None) -> None:
+    from pathlib import Path
+
+    fake_site = tmp_path / 'entry_transport_site'
+    fake_site.mkdir()
+    (fake_site / 'sitecustomize.py').write_text(_SITECUSTOMIZE_SOURCE, encoding='utf-8')
+    repo_root = str(Path(__file__).resolve().parents[1])
+    monkeypatch.setenv('NOVEL_B5_FAKE_TRANSPORT', '1')
+    existing = os.environ.get('PYTHONPATH')
+    monkeypatch.setenv('PYTHONPATH', os.pathsep.join(
+        part for part in (str(fake_site), repo_root, existing) if part))
+    if code is None:
+        monkeypatch.delenv('NOVEL_STR06_TEST_CODE_VERSION', raising=False)
+    else:
+        # 仅非身份测试使用与 tests/conftest.py 相同的确定性身份，父子一致。
+        # 完整链的 real_code_version 仍读取真实 Git，生产函数不缓存或改写。
+        monkeypatch.setenv('NOVEL_STR06_TEST_CODE_VERSION', code)
+    if fault is None:
+        monkeypatch.delenv('NOVEL_STR06_FAULT', raising=False)
+    else:
+        monkeypatch.setenv('NOVEL_STR06_FAULT', fault)
+
+
+def _process_node(argv) -> tuple[str | None, str | None]:
+    """只识别现役 Python module argv；不把 Git 等工具送进 CLI 替身。"""
+    if '-m' not in argv:
+        return None, None
+    at = argv.index('-m')
+    module, rest = argv[at + 1], argv[at + 2:]
+    if module == 'novel.orchestrator.run_step':
+        return module, rest[rest.index('--execute') + 1]
+    if module == 'novel.cli' and rest and rest[0] == 'run':
+        return module, rest[1]
+    return module, None
+
+
+def _install_process_window(monkeypatch, tmp_path, *, real_nodes: set[str],
+                            fault: str | None = None):
+    """关键节点保留真实 run_step/CLI；其余通过现有缝执行真实 CLI 和交付判定。
+
+    operator、permit、付费边界、validator、repository 与 HTTP 均不返回假成功。
+    每例独立目录和 transport；进程事实逐例断言，不能悄悄把关键窗口降为进程内。
+    """
+    from novel import prov
+    from novel.orchestrator import nodes as node_planner
+
+    _install_transport_site(monkeypatch, tmp_path, code=prov.code_version(), fault=fault)
+    monkeypatch.setattr('novel.stages.chain.DeepSeekTransport',
+                        lambda cfg: _make_entry_transport(fault))
+    native_popen, native_step = subprocess.Popen, agent._run_step_argv
+    window = SimpleNamespace(real_nodes=set(real_nodes), real=[], inprocess=[])
+
+    def step_argv(base, sid, epoch, permit, *, stem):
+        if permit.node in window.real_nodes:
+            return native_step(base, sid, epoch, permit, stem=stem)
+        return node_planner.build_argv(permit.node, sid, list(permit.flags),
+                                       base=base, egress_authorized=True)
+
+    def popen(argv, *args, **kwargs):
+        module, node = _process_node(argv)
+        if module == 'novel.orchestrator.run_step' or node in window.real_nodes:
+            window.real.append((module, node))
+            return native_popen(argv, *args, **kwargs)
+        if module in ('novel.cli', 'novel.orchestrator.delivery'):
+            assert not args, '进程内 CLI 只接受具名 Popen 参数'
+            window.inprocess.append((module, node))
+            return _InProcessPopen(argv, **kwargs)
+        return native_popen(argv, *args, **kwargs)
+
+    monkeypatch.setattr(agent, '_run_step_argv', step_argv)
+    monkeypatch.setattr(subprocess, 'Popen', popen)
+    return window
+
+
+def _assert_process_window(window, expected: set[str]) -> None:
+    actual = {node for _, node in window.real}
+    assert actual == expected, f'关键窗口必须真实派发：{actual} != {expected}'
+    assert window.inprocess, '非关键前置仍在重复执行完整子进程链'
+
+
+def _run_cli_subprocess(argv, cwd: str):
+    """执行 canonical CLI argv；由当前用例的窗口选择真实进程或进程内入口。"""
+    proc = subprocess.run(argv, cwd=cwd, capture_output=True)
+    assert proc.returncode == 0, (argv, proc.stdout, proc.stderr)
+    return proc
+
+
+@pytest.mark.parametrize('load_transport', (False, True), ids=('auxiliary', 'model_transport'))
+def test_auxiliary_process_does_not_load_model_test_modules(tmp_path, monkeypatch,
+                                                           load_transport):
+    """辅助进程不加载模型脚手架；模型工厂不加载 HTTP，父子测试身份一致。"""
+    from novel import prov
+
+    _install_transport_site(monkeypatch, tmp_path, code=prov.code_version())
+    forbidden = ('tests.test_str06_product_entry', 'fastapi')
+    setup = ''
+    if load_transport:
+        setup = ('from tests.str06_product_transport import _make_entry_transport; '
+                 '_make_entry_transport(); ')
+    else:
+        forbidden += ('novel.stages.chain', 'tests.str06_product_transport',
+                      'tests.test_str06_body', 'pytest')
+    result = subprocess.run([
+        sys.executable, '-B', '-c',
+        "import json,sys; from novel import prov; "
+        + setup +
+        "print(json.dumps({'code':prov.code_version(), 'heavy':any("
+        f"name in sys.modules for name in {forbidden!r})}}))",
+    ], capture_output=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {'code': prov.code_version(), 'heavy': False}
 
 
 @pytest.mark.real_code_version
@@ -567,17 +660,7 @@ def test_service_full_chain_real_subprocess_and_restart_readback(base, tmp_path,
 
     repo_root = str(Path(__file__).resolve().parents[1])
 
-    # ① fake transport 经 sitecustomize 注入子进程（PYTHONPATH + 环境门）。
-    fake_site = tmp_path / 'fake_transport_site'
-    fake_site.mkdir()
-    (fake_site / 'sitecustomize.py').write_text(_SITECUSTOMIZE_SOURCE,
-                                                encoding='utf-8')
-    monkeypatch.setenv('NOVEL_B5_FAKE_TRANSPORT', '1')
-    monkeypatch.setenv('NOVEL_B5_FAKE_REPO', repo_root)
-    existing = os.environ.get('PYTHONPATH')
-    monkeypatch.setenv(
-        'PYTHONPATH',
-        str(fake_site) + (os.pathsep + existing if existing else ''))
+    _install_transport_site(monkeypatch, tmp_path)
 
     # ② 最小合法基座：stage0/stage1 经真实 CLI 子进程落盘（零模型调用）。
     source = base.parent / 'input_9003.txt'
@@ -678,8 +761,8 @@ def test_service_full_chain_real_subprocess_and_restart_readback(base, tmp_path,
 # ───────────────────── 五、R3 故障注入：产品链靠修订跑完（真实子进程） ─────────────
 #
 # 【R5 补齐】PLAN.md R5：fake 全链**产品路径**必须含 R3 故障注入与 R6 发布两节。
-# 与第四节（干净 wires 的 B5 全链）同一形状——HTTP 上传 → Supervisor → 真实
-# run_step/CLI 子进程 → 交付 → 重启读回——本节把 fake 模型换成 R0 的故障注入
+# 与第四节共用产品入口；associate 留在真实 run_step/CLI，其余节点进程内
+# 跑到交付与重启读回。故障注入
 # 底座（`tests/str06_faults.py`）：`missing_pairing`＋`fault_once=True`，受影响
 # owner（associate）的**首响应**删掉悬念配对，验收即拦（左移：compile 干跑的
 # 未决项归它自己），修订轮（`ask_json` 有界内容轮，同节点子进程内）拿到干净
@@ -687,65 +770,18 @@ def test_service_full_chain_real_subprocess_and_restart_readback(base, tmp_path,
 # 故障只施加 JSON 面）。语义断言：修订轮真实多一笔实付、全链照常交付、
 # 重启读回一致、二次代跑零新购。
 
-_FAULT_SITECUSTOMIZE_SOURCE = """
-import os, sys
 
-_fault = os.environ.get('NOVEL_STR06_FAULT')
-if _fault:
-    _repo = os.environ['NOVEL_STR06_FAULT_REPO']
-    if _repo not in sys.path:
-        sys.path.insert(0, _repo)
-    import json as _json
-    with open(os.environ['NOVEL_STR06_FAULT_BODY'], encoding='utf-8') as _fh:
-        _body = _json.load(_fh)
-    from tests.str06_faults import install_fault_transport
-    install_fault_transport(_fault, fault_once=True, body_texts=_body)
-"""
-
-
-def _install_fault_site(monkeypatch, tmp_path, fault: str) -> None:
-    """故障注入 sitecustomize：PYTHONPATH＋环境门（与 B5 的 fake transport 同纪律）。
-
-    带内章稿经独立 JSON 文件传入——子进程只 import `tests.str06_faults`，
-    不把整个测试模块拖进每个 CLI 子进程。
-    """
-    from pathlib import Path
-
-    repo_root = str(Path(__file__).resolve().parents[1])
-    fake_site = tmp_path / 'fault_site'
-    fake_site.mkdir()
-    (fake_site / 'sitecustomize.py').write_text(
-        _FAULT_SITECUSTOMIZE_SOURCE, encoding='utf-8')
-    (fake_site / 'body_texts.json').write_text(
-        json.dumps({'ch01': GOOD_CH01, 'ch02': GOOD_CH02}, ensure_ascii=False),
-        encoding='utf-8')
-    monkeypatch.setenv('NOVEL_STR06_FAULT', fault)
-    monkeypatch.setenv('NOVEL_STR06_FAULT_REPO', repo_root)
-    monkeypatch.setenv('NOVEL_STR06_FAULT_BODY',
-                       str(fake_site / 'body_texts.json'))
-    existing = os.environ.get('PYTHONPATH')
-    monkeypatch.setenv(
-        'PYTHONPATH',
-        str(fake_site) + (os.pathsep + existing if existing else ''))
-
-
-def _run_cli_subprocess(argv, cwd: str):
-    """真实 CLI 子进程（产品节点执行的 canonical 形状）；失败即带全输出报红。"""
-    proc = subprocess.run(argv, cwd=cwd, capture_output=True)
-    assert proc.returncode == 0, (argv, proc.stdout, proc.stderr)
-    return proc
-
-
-@pytest.mark.real_code_version
 def test_faulted_product_entry_heals_via_revision_and_delivers(base, tmp_path,
                                                                monkeypatch):
     """R3×产品入口：脚本化模型错误经有界修订自愈，全链照常交付并可重启读回。"""
     from pathlib import Path
 
     repo_root = str(Path(__file__).resolve().parents[1])
-    _install_fault_site(monkeypatch, tmp_path, 'missing_pairing')
 
-    # ① 最小合法基座：stage0/stage1 真实 CLI 子进程（免费确定性节点）。
+    window = _install_process_window(
+        monkeypatch, tmp_path, real_nodes={'str06.stage2.associate'}, fault='missing_pairing')
+
+    # ① 非关键基座经进程内真实 CLI 落盘；被测 associate 留在真实进程。
     source = base.parent / 'input_9004.txt'
     source.write_text(SOURCE_TEXT, encoding='utf-8')
     for argv in (
@@ -773,7 +809,7 @@ def test_faulted_product_entry_heals_via_revision_and_delivers(base, tmp_path,
     assert uploaded['sid'] == '9004' and uploaded['autostart'] == 'started'
     run_id = uploaded['run']['run_id']
 
-    # ③ Supervisor 驱动真实子进程：故障轮被拦下、修订轮改对、全链到交付。
+    # ③ associate 的真实 run_step/CLI 完成修订；其余节点用真实 CLI 到交付。
     assert agent.wait(run_id, 1800), '故障注入链未在时限内靠修订收口'
     book = paths.resolve_novel_dir(base, '9004')
     final_path = book / paths.book_txt_rel(book)
@@ -820,6 +856,7 @@ def test_faulted_product_entry_heals_via_revision_and_delivers(base, tmp_path,
     assert agent.wait(second.run_id, 600)
     assert final_path.read_bytes() == final_bytes
     assert _ledger_rows(base) == rows_before, '二次代跑不得新购'
+    _assert_process_window(window, {'str06.stage2.associate'})
 
 
 # ───────────────────── 六、R6 发布权威：封存丢失拒绝正式消费，免费恢复重封存 ───────
@@ -831,26 +868,16 @@ def test_faulted_product_entry_heals_via_revision_and_delivers(base, tmp_path,
 # 请求身份缓存重放、免费段确定性重编译，零新购、交付字节不变、重新封存；恢复
 # 后单跑组装重新放行，服务重启读回与丢失前一致。
 
-@pytest.mark.real_code_version
 def test_seal_loss_refuses_formal_consume_then_free_recovery_reseals(
         base, tmp_path, monkeypatch):
     from pathlib import Path
 
     repo_root = str(Path(__file__).resolve().parents[1])
 
-    # ① fake transport 经 sitecustomize 注入子进程（与 B5 同一形状）。
-    fake_site = tmp_path / 'fake_transport_site'
-    fake_site.mkdir()
-    (fake_site / 'sitecustomize.py').write_text(_SITECUSTOMIZE_SOURCE,
-                                                encoding='utf-8')
-    monkeypatch.setenv('NOVEL_B5_FAKE_TRANSPORT', '1')
-    monkeypatch.setenv('NOVEL_B5_FAKE_REPO', repo_root)
-    existing = os.environ.get('PYTHONPATH')
-    monkeypatch.setenv(
-        'PYTHONPATH',
-        str(fake_site) + (os.pathsep + existing if existing else ''))
+    window = _install_process_window(
+        monkeypatch, tmp_path, real_nodes={'str06.stage7.assemble'})
 
-    # ② 干净全链：基座 + HTTP 上传 + Supervisor 真实子进程到交付。
+    # ② 进程内真实 CLI 准备完整交付；正式组装仍由真实子进程执行。
     source = base.parent / 'input_9005.txt'
     source.write_text(SOURCE_TEXT, encoding='utf-8')
     for argv in (
@@ -905,6 +932,7 @@ def test_seal_loss_refuses_formal_consume_then_free_recovery_reseals(
     # ⑤ 免费恢复：按执行序重跑全部节点（同一 canonical argv 构造点）——
     #    付费段缓存重放、免费段确定性重编译，零新购、交付字节不变、重新封存。
     rows_before = _ledger_rows(base)
+    window.real_nodes.update(NODE_ORDER)
     for node in NODE_ORDER:
         argv = node_planner.build_argv(
             node, '9005', [], base=base, egress_authorized=True)
@@ -937,13 +965,14 @@ def test_seal_loss_refuses_formal_consume_then_free_recovery_reseals(
                          egress_authorized=True, profiles=_profiles())
     assert agent.wait(second.run_id, 600)
     assert final_path.read_bytes() == final_bytes
+    _assert_process_window(window, set(NODE_ORDER))
 
 
 # ───────────────────── 七、R5b：HTTP 起跑 → CLI canary → HTTP 续跑（B6-A 前置链） ─────
 #
 # 【R5b 完成条件】PLAN.md R5b W4：AgentRun 跑语义层 → 停在正文前 → CLI 写 canary
 # 章 → AgentRun 续跑 → 有效提交集合恢复 → 只购买剩余正文。fake transport 经
-# sitecustomize 注入真实子进程（与第四、六节同一形状）；HTTP 面（上传／起跑／
+# sitecustomize 注入正文关键窗口的真实子进程；HTTP 面（上传／起跑／
 # 续跑）与 CLI 节点执行（canary）都走产品代码同一行（I-51：零真实模型调用）。
 #
 # ⚠ 与计划稿的一处如实修正：`body_access`（章就绪五态）只在
@@ -956,7 +985,6 @@ def test_seal_loss_refuses_formal_consume_then_free_recovery_reseals(
 # ⚠ 「续跑」在产品里是**新 run**（continuation 指向原 run），不是恢复同一个
 # run 记录——本节据此断言两个 run_id 不同。
 
-@pytest.mark.real_code_version
 def test_agent_run_pauses_before_body_cli_canary_then_continuation_delivers(
         base, tmp_path, monkeypatch):
     """B6-A 前置链：语义层自动跑 → CLI 选章 canary → 续跑只补剩余正文 → 交付。"""
@@ -964,20 +992,11 @@ def test_agent_run_pauses_before_body_cli_canary_then_continuation_delivers(
 
     repo_root = str(Path(__file__).resolve().parents[1])
 
-    # ① fake transport 经 sitecustomize 注入子进程（与 B5 同一形状）。
-    fake_site = tmp_path / 'canary_site'
-    fake_site.mkdir()
-    (fake_site / 'sitecustomize.py').write_text(_SITECUSTOMIZE_SOURCE,
-                                                encoding='utf-8')
-    monkeypatch.setenv('NOVEL_B5_FAKE_TRANSPORT', '1')
-    monkeypatch.setenv('NOVEL_B5_FAKE_REPO', repo_root)
-    existing = os.environ.get('PYTHONPATH')
-    monkeypatch.setenv(
-        'PYTHONPATH',
-        str(fake_site) + (os.pathsep + existing if existing else ''))
+    window = _install_process_window(
+        monkeypatch, tmp_path, real_nodes={'str06.stage5.body'})
 
     # ② 未经授权的 HTTP 上传：只跑免费 stage0（不起付费 run、不留 autostart）；
-    #    stage1 经真实 CLI 子进程补齐（免费确定性节点），备好语义层的正式输入。
+    #    stage1 经进程内真实 CLI 补齐（免费确定性节点），备好语义层的正式输入。
     with TestClient(create_app(base)) as client:
         response = client.post(
             '/api/upload', params={'filename': 'input_9006.txt'},
@@ -1146,6 +1165,7 @@ def test_agent_run_pauses_before_body_cli_canary_then_continuation_delivers(
     assert agent.wait(second.run_id, 600)
     assert _ledger_rows(base) == rows_final, '二次代跑不得新购'
     assert final_path.read_bytes() == final_bytes
+    _assert_process_window(window, {'str06.stage5.body'})
 
 
 # ───────────────────── 七、R8a 验收：跨节点回派经单节点子进程重规划闭环 ────────
@@ -1158,7 +1178,6 @@ def test_agent_run_pauses_before_body_cli_canary_then_continuation_delivers(
 # 复验、compile 通过清账。这条链同时压过 against_sha256 门控（design 写回后
 # 不得再判 REDO）与 req_ 定位（修订提示不含 obNN）。
 
-@pytest.mark.real_code_version
 def test_obligation_unbound_replans_across_single_node_subprocesses(base,
                                                                     tmp_path,
                                                                     monkeypatch):
@@ -1170,7 +1189,13 @@ def test_obligation_unbound_replans_across_single_node_subprocesses(base,
     from novel.orchestrator import agent_settings
 
     repo_root = str(Path(__file__).resolve().parents[1])
-    _install_fault_site(monkeypatch, tmp_path, 'obligation_unbound')
+
+    window = _install_process_window(
+        monkeypatch, tmp_path,
+        real_nodes={'str06.stage4.body_design', 'str06.stage4.bind', 'str06.stage4.compile'},
+        fault='obligation_unbound')
+
+
     # R8a：supervisor 每节点一个子进程——fault_once 需跨子进程粘滞（状态文件），
     # 否则 bind 的每个新子进程首答都重新吃到故障 wire，一轮修订永远治不好。
     monkeypatch.setenv('NOVEL_STR06_FAULT_ONCE_STICKY',
@@ -1251,9 +1276,10 @@ def test_obligation_unbound_replans_across_single_node_subprocesses(base,
                          egress_authorized=True, profiles=_profiles())
     assert agent.wait(second.run_id, 600)
     assert _ledger_rows(base) == rows_before, '二次代跑不得新购'
+    _assert_process_window(window, {
+        'str06.stage4.body_design', 'str06.stage4.bind', 'str06.stage4.compile'})
 
 
-@pytest.mark.real_code_version
 def test_registered_owner_patch_survives_file_removal_then_agent_delivers(base, tmp_path, monkeypatch):
     """R9：真实 CLI 采用耐久补丁 → AgentRun 确定性级联 → 交付 → 二次零新购。"""
     from pathlib import Path
@@ -1263,12 +1289,10 @@ def test_registered_owner_patch_survives_file_removal_then_agent_delivers(base, 
     from novel.stages.revisions import revision_states_at
 
     repo_root = str(Path(__file__).resolve().parents[1])
-    fake_site = tmp_path / 'r9_fake_site'
-    fake_site.mkdir()
-    (fake_site / 'sitecustomize.py').write_text(_SITECUSTOMIZE_SOURCE, encoding='utf-8')
-    monkeypatch.setenv('NOVEL_B5_FAKE_TRANSPORT', '1')
-    monkeypatch.setenv('NOVEL_B5_FAKE_REPO', repo_root)
-    monkeypatch.setenv('PYTHONPATH', str(fake_site) + os.pathsep + os.environ.get('PYTHONPATH', ''))
+
+    window = _install_process_window(
+        monkeypatch, tmp_path, real_nodes={'str06.stage4.body_design', 'str06.stage4.compile'})
+
     source = base.parent / 'input_9007.txt'
     source.write_text(SOURCE_TEXT, encoding='utf-8')
     _run_cli_subprocess([sys.executable, '-B', '-m', 'novel.cli', 'run', 'stage0.remove',
@@ -1315,6 +1339,7 @@ def test_registered_owner_patch_survives_file_removal_then_agent_delivers(base, 
     second = agent.start(base, '9007', authorized=True, egress_authorized=True, profiles=_profiles())
     assert agent.wait(second.run_id, 600)
     assert _ledger_rows(base) == before
+    _assert_process_window(window, {'str06.stage4.body_design', 'str06.stage4.compile'})
 
 
 def _turn_request_payload(base, book, node: str, *, ordinal: int) -> dict:

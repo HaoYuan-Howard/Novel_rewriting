@@ -153,6 +153,15 @@ conda run -n novel_refactor python -m pytest -n 0 --lf --lfnf=none -x
 结论。Stage4 B 测试复用 A/旧 B 前置盘面，Stage5～Stage7 职责测试复用逐层冻结的合成上游；故障注入、真实生产、HTTP/审批、
 并发与最终字节断言仍逐例运行。并发生命周期的 serial 登记和真实代码身份校验保持原约束。
 
+`tests/test_str06_product_entry.py` 保留一条上传到交付的完整真实子进程链，覆盖
+真实代码身份、run_step、信标、`--check-only` 追跑与服务重启读回。其余场景的
+非关键节点经进程内真实 CLI 执行；associate 修订、正文 canary/续跑、
+design/bind/compile 跨进程回派、design 补丁采用及 compile 级联仍使用真实子进程。
+封存丢失用例的准备改走进程内，丢失后的全部节点免费恢复仍逐节点使用真实 CLI 子进程。
+每例断言实际派发的进程窗口，原有故障、账务、交付字节和二次零新购断言保留；
+父子确定性测试身份仅注入普通场景，完整链继续标记 `real_code_version`。
+测试 transport 按实际调用延迟加载，辅助进程不加载模型测试模块。
+
 （原双模式全链场景已随旧链退役；真实入口全链验收由 F8d fake transport 承接，
 见 `docs/REQUIREMENTS.md`。）从空输出执行
 服务重启均用真实入口。模型回答由合成 transport/driver 提供；自动收尾只准免费组装，任何额外
