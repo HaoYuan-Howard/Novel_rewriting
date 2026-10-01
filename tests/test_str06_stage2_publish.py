@@ -987,10 +987,10 @@ def test_stage4_reads_only_canonical(tmp_path):
     brief, identities = project_brief(
         __import__('novel.stages.stage4.grounding', fromlist=['assemble_preserve'])
         .assemble_preserve(
-            {'protocol_version': 'stage4-preserve-v1', 'obligations': [
+            {'protocol_version': 'stage4-preserve-v2', 'obligations': [
                 {'kind': 'event_core',
                  'statement': '夫君藏身床底',
-                 'lineage': {'blueprint_refs': ['b01_01'], 'character_ids': ['fu_jun']},
+                 'anchors': ['b01_01.e1'],
                  'must_preserve': True, 'satisfaction': '呈现藏身', 'requires': []}]},
             policy_id='p', policy_version=3, characters=core, blueprint=blueprint,
             provider='fake', model='fake', request_sha256='r' * 64)[0], core, blueprint)

@@ -19,6 +19,7 @@ from typing import Callable, NamedTuple
 from tests.str06_expression_inputs import (
     sample_narration, sample_requirements, sample_blueprint_expression, sample_design_expression,
 )
+from tests.str06_facilities import anchor_stub
 
 
 class Case(NamedTuple):
@@ -279,12 +280,12 @@ def _preserve_bad_wire() -> list:
         BlueprintsArtifactV15, ChapterBlueprint, CharacterEntry,
         CharactersCore, SurfaceWindow,
     )
-    from tests.str06_facilities import v13_beat
+    from tests.str06_facilities import anchor_stub, v13_beat, v13_effect
     entry = {'obligation_id': 'o1', 'kind': 'event_core', 'statement': 's',
              'must_preserve': True, 'satisfaction': '明确呈现',
-             'lineage': {'blueprint_refs': ['b01_01'], 'character_ids': []}}
+             'anchors': ['b01_01.e1']}
     _checkpoint, errors = assemble_preserve(
-        {'protocol_version': 'stage4-preserve-v1', 'obligations': [entry]},
+        {'protocol_version': 'stage4-preserve-v2', 'obligations': [entry]},
         policy_id='preserve-default', policy_version=1,
         characters=CharactersCore(characters={'ch1': CharacterEntry(
             canonical='苏姑娘',
@@ -292,7 +293,8 @@ def _preserve_bad_wire() -> list:
                                     source_refs=('e01_01',)),))}),
         blueprint=BlueprintsArtifactV15(source_expression=sample_blueprint_expression(), chapters=(
             ChapterBlueprint(chapter=1,
-                             beats=(v13_beat('b01_01', 'e'),),
+                             beats=(v13_beat('b01_01', 'e', effects=(
+                                 v13_effect({'kind': 'world'}, 'fate', '多舛'),)),),
                              scenes=({'scene_id': 'sc01', 'beat_ids': ('b01_01',)},),
                              causal_edges=()),),
             evidence={'e01_01': '苏姑娘初到陆家。'}),
@@ -311,6 +313,7 @@ def _checkpoint_with(*obligation_ids: str):
         checkpoint_sha256='d' * 64,
         obligations=tuple(SourceObligation(
             obligation_id=oid, kind='event_core', statement=oid,
+            anchors=anchor_stub(),
             lineage=SourceLineage(blueprint_refs=('b01_01',), character_ids=()),
             must_preserve=True, satisfaction='明确呈现')
             for oid in obligation_ids))
@@ -353,6 +356,7 @@ def _plan_unclosed() -> list:
         binding_id='bd1', preserve_checkpoint_sha256='a' * 64,
         obligations=(SourceObligation(
             obligation_id='o1', kind='event_core', statement='s',
+            anchors=anchor_stub(),
             lineage=SourceLineage(blueprint_refs=('b01_01',), character_ids=()),
             must_preserve=True, satisfaction='明确呈现'),),
         entries=(BindingEntry(obligation_id='ghost', scene_id='s01',

@@ -41,6 +41,7 @@ from contracts.schema.workflow import STAGE4_DESIGN_PROTOCOL
 from tests.str06_expression_inputs import (
     sample_narration, sample_requirements, sample_design_expression, sample_canonical_expression,
 )
+from tests.str06_facilities import anchor_stub
 
 H64 = 'a' * 64
 
@@ -89,6 +90,7 @@ def _binding(graph) -> SemanticBinding:
     first = graph.scenes[0]
     ob = SourceObligation(
         obligation_id='ob1', kind=PreserveKind.EVENT_CORE, statement='义务ob1',
+        anchors=anchor_stub(),
         lineage=SourceLineage(blueprint_refs=('b01_01',), character_ids=('ch1',)),
         must_preserve=True, satisfaction='正文呈现')
     return SemanticBinding(

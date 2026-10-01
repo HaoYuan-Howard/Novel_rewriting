@@ -250,6 +250,51 @@ Golden 验证，不重新加回迁移关闭条件。
   契约 §9.5 五文件 389 项＋新 a1 面 6 项全绿（basetemp E:/_tr/r10a1）。
   全量默认非 corpus 回归留收口批（子批不触发）。零付费。
 
+### R10a a2 执行记录（2026-10-01，免费，fake transport）
+
+- **schema**（`contracts/schema/grounding.py`）：新 `ObligationAnchor`（投影
+  句柄 → compiler **类型化拷贝**：holder/mode/proposition_ref/
+  proposition_statement/address/value/modality/visibility/question/quotes，
+  I-15/I-21——模型只给句柄，内容不由模型复述；a4 知情/时态锁直接消费
+  holder/mode/proposition_ref/modality）；`SourceObligation.anchors` 必填
+  ≥1（义务必须锚定其依赖的源原子）；新 `ObligationSeries`（members≥2、
+  mechanism 取源表达 ex_id 或 null）；`PreserveCheckpoint.series` 带
+  成员闭集与互斥的构造期闸；`SourceLineage` 保留为 compiler 派生结果。
+  协议 `stage4-preserve-v1→v2`、policy `4→5`。
+- **投影**（`novel/stages/stage4/grounding.py::project_preserve_view`）：
+  按书级初态→世界约束→源表达机制（ex_id 闭集）→逐章逐拍确定性渲染，
+  每原子一行带句柄＋类型化内容＋逐字引文，文末证据窗口（被引句段全文，
+  Blueprint V15 的窗口派生）。取代整份 Blueprint JSON 倾倒（R10-0.3 实证
+  29.9k token/轮）；prompt 材料改 `PRESERVE_RULES＋视图文本＋人物表 JSON`
+  （`novel/stages/chain.py::run_preserve`）。
+- **assemble v2**：义务键白名单 `anchors`（闭集判定＋缺 anchors 拒）、
+  `lineage` 退出 wire（compiler 从锚点派生 blueprint_refs/character_ids）；
+  series 成员 1-based 序号→正式 ID、越界/少于 2/mechanism 不在 ex_id 闭集
+  精确拒；evidence_conflicts 只验形状（锚点/句段闭集、句段属锚点拍证据、
+  note 非空）——**冲突非空不发布、回派 Stage2 是 a3 的编排决定**，不混入
+  validator（I-36）。checkpoint hash 覆盖 anchors 与 series。
+- **PRESERVE_RULES v5**：输入面描述改投影视图；阶段与揭示规则（同一机制
+  多次发生各独立登记＋series；揭示义务只在源有读者确认时要求确认；原文
+  未说明保持未知）；冲突报告规则（不私建事实版本）。
+- **送达登记**（`contracts/schema/consumption.py`）：anchors 12 个子字段
+  全部 audit_only（renderer 剥离的源坐标面；a4 起部分子字段成为锁输入，
+  届时按实际渲染改 mode）。
+- **冻结钉**：`FROZEN_SEMANTIC_PROTOCOLS` 更新 preserve v2＋policy 5
+  （契约身份哈希不变——ArtifactSpec 模型名未换）。
+- **fixture 面**：`str06_facilities.v13_effect` 升级（modality＋basis 参数）
+  ＋新 `anchor_stub`（手工 checkpoint 构造统一引用）；12 个文件的 typed
+  `SourceObligation` 构造补 anchors；wire 面换 v2（target/hook/
+  workflow/publish/hard_cases/faults 底座）。
+- **a2 判据测试**（新 `tests/test_str06_a2_preserve.py`，消费
+  `CASES_BY_BATCH['R10a-a2']`：C1/C3/C5/P1）：视图确定性渲染（句柄/引文/
+  窗口/ex_id、I-24 纯函数）；绿路径（lineage 派生＋typed anchors＋C1 的
+  mode 拷贝）；红例（缺 anchors/未知句柄/lineage 键拒收/series 三种红/
+  schema 互斥与闭集兜底/冲突形状四面）；hash 绑定 anchors 与 series。
+- **验证**：定向面（-k "str06 or store or hard_cases or 契约 §9.5 五文件
+  ＋test_selection"）1386 项，除 test_selection 的 1 项暂态（选择器按
+  工作区 dirty 集选受影响面，a2 改动未提交时把 test_store.py 算入；提交后
+  复验恢复）外全绿。零付费。
+
 ### 节省时间的执行约定
 
 

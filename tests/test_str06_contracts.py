@@ -69,8 +69,10 @@ H64 = 'a' * 64
 
 
 def _obligation(**over) -> dict:
+    from tests.str06_facilities import anchor_stub
     base = dict(
         obligation_id='ob1', kind=PreserveKind.EVENT_CORE, statement='借种之约成立',
+        anchors=anchor_stub(),
         lineage=SourceLineage(blueprint_refs=('b01_01',), character_ids=()),
         must_preserve=True, satisfaction='正文呈现该约定被提出且被接受',
     )

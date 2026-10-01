@@ -94,7 +94,7 @@ from novel.stages.stage4 import (
     assemble_binding, assemble_body_design, assemble_hook_design,
     assemble_preserve, compile_execution_plan, compile_hook_context,
     compile_writer_book_ir, obligation_core_id, project_binding_space,
-    project_brief, publish_graph, run_mechanical_guard,
+    project_brief, project_preserve_view, publish_graph, run_mechanical_guard,
 )
 from novel.stages.stage5 import (
     AnsweredText, HOOK_VALIDATOR_VERSION, MAX_REWRITES, MECHANICAL_CHECKS,
@@ -525,10 +525,16 @@ def run_preserve(ctx: ChainContext) -> dict:
     chars = repository.read_model('stage2/characters/characters.json')
     core = chars.core_view()
     blueprint = repository.read_model('stage2/blueprints/chapter_blueprints.json')
+    # R10a a2：源证据投影视图（确定性渲染＋逐字引文＋证据窗口）取代整份
+    # Blueprint JSON 倾倒（R10-0.3 实证 29.9k token/轮）；视图是文本块，
+    # 人物表保持 JSON——pack_prompt 只装 JSON，视图直拼。
     preserve_prompt = revision_prompt_for_owner(
         repository, 'preserve',
-        pack_prompt(PRESERVE_RULES, characters=core.model_dump(mode='json'),
-                    blueprints=blueprint.model_dump(mode='json')),
+        PRESERVE_RULES + '\n输入（源证据投影视图，句柄即 anchors 闭集）：\n'
+        + project_preserve_view(core, blueprint)
+        + '\n人物表：' + json.dumps(core.model_dump(mode='json'),
+                                    ensure_ascii=False, sort_keys=True,
+                                    separators=(',', ':')),
         'runtime/preserve_checkpoint.json')
 
     def preserve_compile(w):

@@ -174,14 +174,18 @@ def test_frozen_rc_version_label():
 #: 分层冻结，canary 收敛后再冻（PLAN.md）。
 #: R10a a1（2026-10-01，D8 修订三裁决）：book 升 v3（初态/约束带 basis 引文）、
 #: chapters 拆独立字面 v2（转移带 basis／Effect.modality）；names 输入投影未变
-#: 保持 observation-v1。旧盘面按版本关闭式拒识（协议不兼容），不计语义检出。
+#: 保持 observation-v1。
+#: R10a a2（2026-10-01）：preserve 升 v2＋policy 5（义务 anchors 锚定投影句柄、
+#: lineage 退出 wire、顶层 series／evidence_conflicts；输入投影改
+#: project_preserve_view 确定性渲染）。
+#: 旧盘面按版本关闭式拒识（协议不兼容），不计语义检出。
 FROZEN_SEMANTIC_PROTOCOLS = {
     'STAGE2_BOOK_PROTOCOL': 'stage2-book-v3',
     'STAGE2_CHAPTERS_PROTOCOL': 'stage2-chapters-v2',
     'STAGE2_OBSERVATION_PROTOCOL': 'stage2-observation-v1',
     'STAGE2_ASSOCIATE_PROTOCOL': 'stage2-associate-v2',
-    'STAGE4_PRESERVE_PROTOCOL': 'stage4-preserve-v1',
-    'STAGE4_PRESERVE_POLICY_VERSION': 4,
+    'STAGE4_PRESERVE_PROTOCOL': 'stage4-preserve-v2',
+    'STAGE4_PRESERVE_POLICY_VERSION': 5,
     'STAGE4_DESIGN_PROTOCOL': 'stage4-design-v4',
     'STAGE4_BIND_PROTOCOL': 'stage4-bind-v1',
     'STAGE4_HOOK_DESIGN_PROTOCOL': 'stage4-hook-design-v1',

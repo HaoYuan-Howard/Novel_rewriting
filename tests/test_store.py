@@ -67,6 +67,7 @@ from tests import corpus, sandbox
 from tests.str06_expression_inputs import (
     sample_book_expression,
 )
+from tests.str06_facilities import anchor_stub
 
 # B5 换轨（双真源发布后）：Characters/Blueprint 的唯一 writer 是免费的
 # str06.stage2.compile，其投影面是四份观察——旧的「names 写 characters」采样面
@@ -299,6 +300,7 @@ def _binding(ctx: RunContext, *, checkpoint_sha: str, marker: str = '义务原�
         preserve_checkpoint_sha256=checkpoint_sha,
         obligations=(SourceObligation(
             obligation_id='ob_01', kind=PreserveKind.EVENT_CORE, statement=marker,
+            anchors=anchor_stub(),
             lineage=SourceLineage(blueprint_refs=('b01_01',), character_ids=()),
             must_preserve=True, satisfaction='明确呈现'),),
         entries=(),
@@ -322,6 +324,7 @@ def _seed_preserve_checkpoint(base: Path) -> str:
         provider='fixture-provider', model='fixture-model', request_sha256='c' * 64,
         obligations=(SourceObligation(
             obligation_id='ob_01', kind=PreserveKind.EVENT_CORE, statement='义务',
+            anchors=anchor_stub(),
             lineage=SourceLineage(blueprint_refs=('b01_01',), character_ids=()),
             must_preserve=True, satisfaction='明确呈现'),),
         checkpoint_sha256='d' * 64,

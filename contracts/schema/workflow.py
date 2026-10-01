@@ -707,8 +707,14 @@ STR06_RC_LABELS: Final = ('str06-rc2', 'str06-rc3', 'str06-rc4', 'str06-rc5', 's
 #: `world_rules`、chapters 增 `entry`（第 1 章可省——compiler 填固定开篇，其余章
 #: 必填）；standing_goals／ongoing_actions／open_questions／promises 四键关闭式
 #: 拒读（AUD-04 无消费者，裁决 3 改独立线程结构）。
-STAGE4_PRESERVE_PROTOCOL: Final = 'stage4-preserve-v1'
-STAGE4_PRESERVE_POLICY_VERSION: Final = 4
+#: preserve v2（R10a a2，2026-10-01）：义务以 anchors 引用投影句柄（b拍.e/c/l、
+#: s0_*、wc_*），lineage 退出 wire 由 compiler 派生（I-15/I-21）；顶层增
+#: series（同一机制的多次发生，members≥2、mechanism 取源表达 ex_id）与
+#: evidence_conflicts（源证据冲突报告，不发布——回派归 a3）。输入投影从
+#: Blueprint JSON 倾倒改为 project_preserve_view 确定性渲染（证据窗口＋逐字
+#: 引文）。policy v5 同批（义务锚定、series、冲突报告规则）。
+STAGE4_PRESERVE_PROTOCOL: Final = 'stage4-preserve-v2'
+STAGE4_PRESERVE_POLICY_VERSION: Final = 5
 STAGE4_DESIGN_PROTOCOL: Final = 'stage4-design-v4'
 STAGE4_BIND_PROTOCOL: Final = 'stage4-bind-v1'
 STAGE4_HOOK_DESIGN_PROTOCOL: Final = 'stage4-hook-design-v1'

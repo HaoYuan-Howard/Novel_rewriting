@@ -33,10 +33,16 @@ def make_context(root: Path, *, ledger: CostLedger, node: str = 'str06.stage2.bo
 
 def v13_effect(target: dict, key: str, value, *, op: str = 'set', scope: str = 'book',
                visibility: str = 'on_page', known_by: tuple[str, ...] = (),
-               proposition: dict | None = None) -> dict:
-    """v13 effect：必填 scope 与 disclosure；concealed 必声明已知者并带命题。"""
-    eff: dict = {'target': target, 'key': key, 'op': op, 'value': value, 'scope': scope,
-                 'disclosure': {'visibility': visibility}}
+               modality: str = 'actual', proposition: dict | None = None,
+               basis: tuple[dict, ...] | None = None) -> dict:
+    """v13 effect（R10a a1 起带 modality 与逐字 basis）：必填 scope 与
+    disclosure；concealed 必声明已知者并带命题。basis 缺省给 e01_01 一条
+    （引用方保证段文本含该引文）。"""
+    eff: dict = {'target': target, 'key': key, 'op': op, 'value': value,
+                 'scope': scope, 'modality': modality,
+                 'disclosure': {'visibility': visibility},
+                 'basis': list(basis) if basis is not None
+                 else [{'segment': 'e01_01', 'quote': '夫君藏进床底'}]}
     if visibility == 'concealed':
         eff['disclosure']['known_by'] = list(known_by)
         eff['proposition'] = proposition or {
@@ -60,6 +66,15 @@ def v13_beat(beat_id: str, event: str, *, participants: tuple[str, ...] = (),
 def v13_chapter(*beats: dict, causal_edges: tuple = ()) -> dict:
     """v13 章 wire：拍列表＋因果边。"""
     return {'beats': list(beats), 'causal_edges': list(causal_edges)}
+
+
+def anchor_stub(handle: str = 's0_01') -> tuple:
+    """R10a a2 fixture：手工构造 checkpoint 的最小 anchors（不经 assemble_preserve
+    的下游测试统一引用；正式 anchors 由 assemble 从投影句柄类型化拷贝）。"""
+    from contracts.schema.grounding import ObligationAnchor
+    return (ObligationAnchor(handle=handle, source_kind='initial_state',
+                             address='char:stub.stub', value='stub',
+                             quotes=('依据',)),)
 
 
 # ─── B1 付费边界测试接线（与 `novel/stages/chain.py::execute` 的真实闭包同形） ───

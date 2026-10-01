@@ -38,6 +38,7 @@ from novel.stages.stage4.hook import assemble_hook_design
 from tests.str06_expression_inputs import (
     sample_narration, sample_requirements, sample_design_expression, sample_canonical_expression,
 )
+from tests.str06_facilities import anchor_stub
 
 H64 = 'a' * 64
 
@@ -116,6 +117,7 @@ def _checkpoint(*obligation_ids: str) -> PreserveCheckpoint:
         request_sha256='r' * 64,
         obligations=tuple(SourceObligation(
             obligation_id=oid, kind=PreserveKind.EVENT_CORE, statement=f'义务{oid}',
+            anchors=anchor_stub(),
             lineage=SourceLineage(blueprint_refs=('b01_01',), character_ids=('yun',)),
             must_preserve=True, satisfaction='正文呈现')
             for oid in obligation_ids),
@@ -126,7 +128,7 @@ def _checkpoint(*obligation_ids: str) -> PreserveCheckpoint:
 
 def test_four_protocols_are_independent_literals():
     """每个付费语义节点一个独立协议字面量：演进互不牵连（B3 前半）。"""
-    assert STAGE4_PRESERVE_PROTOCOL == 'stage4-preserve-v1'
+    assert STAGE4_PRESERVE_PROTOCOL == 'stage4-preserve-v2'
     assert STAGE4_DESIGN_PROTOCOL == 'stage4-design-v4'
     assert STAGE4_BIND_PROTOCOL == 'stage4-bind-v1'
     assert STAGE4_HOOK_DESIGN_PROTOCOL == 'stage4-hook-design-v1'

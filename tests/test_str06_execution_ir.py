@@ -30,6 +30,7 @@ from tests.test_str06_hook import _characters as _name_source
 from tests.str06_expression_inputs import (
     sample_canonical_expression,
 )
+from tests.str06_facilities import anchor_stub
 
 
 def _projection():
@@ -43,6 +44,7 @@ def _ob(oid, kind=PreserveKind.EVENT_CORE, must=True, requires=(), chars=('ch1',
     from contracts.schema.grounding import SourceObligation
     return SourceObligation(
         obligation_id=oid, kind=kind, statement=f'义务{oid}',
+        anchors=anchor_stub(),
         lineage=SourceLineage(blueprint_refs=('b01_01',), character_ids=chars),
         must_preserve=must, satisfaction='正文呈现' if must else '',
         requires=tuple(requires))

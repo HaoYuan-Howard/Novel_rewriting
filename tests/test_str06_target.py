@@ -32,11 +32,29 @@ def _source_pair():
             'yun': {'canonical': '云娘',
                     'surfaces': [{'surface': '云娘', 'from_chapter': 1,
                                   'until_chapter': None, 'source_refs': ['e01_01']}]}},
-        initial_state=[])
+        initial_state=[{'state_id': 's0_01',
+                        'target': {'kind': 'character', 'char_id': 'fu_jun'},
+                        'key': 'birthright', 'value': '养子', 'persistence': 'stable',
+                        'knowledge': None, 'source_refs': ['e01_01'],
+                        'basis': [{'segment': 'e01_01', 'quote': '夫君藏进床底'}]}])
     bp = BlueprintsArtifactV15(source_expression=sample_blueprint_expression(),
         world_constraints=[], chapters=(
             ChapterBlueprint(chapter=1,
-                             beats=(v13_beat('b01_01', '开篇', participants=('fu_jun',)),),
+                             beats=(v13_beat(
+                                 'b01_01', '开篇', participants=('fu_jun', 'yun'),
+                                 effects=({'target': {'kind': 'relation',
+                                                      'subject': 'fu_jun', 'object': 'yun'},
+                                           'key': 'covenant', 'op': 'set',
+                                           'value': '成立', 'scope': 'book',
+                                           'modality': 'actual',
+                                           'disclosure': {'visibility': 'on_page'},
+                                           'basis': ({'segment': 'e01_01',
+                                                      'quote': '夫君藏进床底'},)},),
+                                 cognition=({'proposition': {'ref': 'p_known',
+                                                             'statement': '借种之约是共同秘密'},
+                                             'holder': 'yun', 'mode': 'learns',
+                                             'basis': ({'segment': 'e01_01',
+                                                        'quote': '夫君藏进床底'},)},)),),
                              scenes=({'scene_id': 'sc01', 'beat_ids': ('b01_01',)},),
                              causal_edges=()),),
         evidence={'e01_01': '夫君藏进床底。'})
@@ -44,19 +62,19 @@ def _source_pair():
 
 
 def _preserve_wire():
-    """stage4-preserve-v1 形状（B3 前半）：模型不输出义务编号，requires 用
-    1-based 列表序号表达。"""
-    return {'protocol_version': 'stage4-preserve-v1', 'obligations': [
+    """stage4-preserve-v2 形状（R10a a2）：义务以 anchors 引用投影句柄
+    （b拍.e序/.c序/.l序、s0_*、wc_*），lineage 不再由模型输出。"""
+    return {'protocol_version': 'stage4-preserve-v2', 'obligations': [
         {'kind': 'event_core', 'statement': '借种之约成立',
-         'lineage': {'blueprint_refs': ['b01_01'], 'character_ids': ['fu_jun', 'yun']},
+         'anchors': ['b01_01.e1'],
          'must_preserve': True, 'satisfaction': '正文呈现约定被提出且被接受',
          'requires': []},
         {'kind': 'reveal', 'statement': '云娘知晓真相',
-         'lineage': {'blueprint_refs': ['b01_01'], 'character_ids': ['yun']},
+         'anchors': ['b01_01.c1'],
          'must_preserve': True, 'satisfaction': '正文呈现知晓时刻与反应',
          'requires': [1]},
         {'kind': 'identity', 'statement': '夫君身份约束',
-         'lineage': {'blueprint_refs': [], 'character_ids': ['fu_jun']},
+         'anchors': ['s0_01'],
          'must_preserve': False, 'satisfaction': '', 'requires': []},
     ]}
 
@@ -109,18 +127,18 @@ def test_assemble_preserve_green_and_hash_stable():
 def test_assemble_preserve_rejects_dangling_and_cycles():
     chars, bp = _source_pair()
     bad = _preserve_wire()
-    bad['obligations'][0]['lineage']['blueprint_refs'] = ['b99_99']
+    bad['obligations'][0]['anchors'] = ['b99_99.e1']
     _, errors = assemble_preserve(
         bad, policy_id='p', policy_version=1, characters=chars, blueprint=bp,
         provider='x', model='y', request_sha256='r' * 64)
-    assert any('未知 beat' in e for e in errors)
+    assert any('未知句柄' in e for e in errors)
 
-    cyclic = {'protocol_version': 'stage4-preserve-v1', 'obligations': [
+    cyclic = {'protocol_version': 'stage4-preserve-v2', 'obligations': [
         {'kind': 'event_core', 'statement': 'a',
-         'lineage': {'blueprint_refs': ['b01_01'], 'character_ids': []},
+         'anchors': ['b01_01.e1'],
          'must_preserve': False, 'satisfaction': '', 'requires': [2]},
         {'kind': 'event_core', 'statement': 'b',
-         'lineage': {'blueprint_refs': ['b01_01'], 'character_ids': []},
+         'anchors': ['b01_01.e1'],
          'must_preserve': False, 'satisfaction': '', 'requires': [1]}]}
     _, errors = assemble_preserve(
         cyclic, policy_id='p', policy_version=1, characters=chars, blueprint=bp,
@@ -213,8 +231,10 @@ def test_identity_stable_constraints_come_only_from_the_fact_layer():
     dumped = ' '.join(' '.join(i.stable_constraints) for i in identity)
     assert '床底' not in dumped and '藏身' not in dumped
     assert '以为' not in dumped and '离开' not in dumped
-    # 事实层的 stable 初始事实照常进入（这里 initial_state 为空 ⇒ 约束为空）
-    assert all(i.stable_constraints == () for i in identity)
+    # 事实层的 stable 初始事实照常进入（R10a a2 起 _source_pair 带一条初态）
+    by_char = {i.char_id: i.stable_constraints for i in identity}
+    assert by_char['fu_jun'] == ('birthright=养子',)
+    assert by_char['yun'] == ()
 
 
 # ───────────────────────── Bind ─────────────────────────

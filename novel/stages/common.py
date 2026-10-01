@@ -541,13 +541,17 @@ PRE_CHAPTER_RULE = """
 _PRESERVE_KIND_LINES = '\n'.join(
     f'- {kind}：{definition}' for kind, definition in PRESERVE_KIND_DEFS.items())
 
-PRESERVE_RULES = f"""任务：从源真值选择改写不可丢失的最小语义义务（保存策略 v4；wire 协议 stage4-preserve-v1）。
+PRESERVE_RULES = f"""任务：从源证据投影视图选择改写不可丢失的最小语义义务
+（保存策略 v5；wire 协议 stage4-preserve-v2）。
 
-【源真值的形状（v13）】Blueprints 的每一拍是一次状态转移：event 是给人读的事件
-表述；effects 是叙述确立的事实（带可见性 on_page／concealed 与作用域）；cognition
-是认知记录（命题＋持有者＋模式：learns/suspects/confirms/hears_claim/believes/
-asserts）；loops 是悬念（open 带问题、close 带 resolution）。拍上另有场景边界与
-temporal_mode（single＝单次行为、iterative＝重复行为）。
+【输入的形状（源证据投影视图，R10a a2）】视图按「书级初态 → 世界约束 →
+逐章逐拍」给出源真值的原子，每原子一行：方括号内是**投影句柄**（书级初态
+s0_*、世界约束 wc_*、拍内转移 b拍号.e序/.c序/.l序——e＝事实、c＝认知、
+l＝悬念），随后是类型化内容（认知带持有者与模式 learns/suspects/confirms/
+hears_claim/believes/asserts；事实带 modality：actual＝已发生／planned＝已定
+计划／expected＝预计／conditional＝条件性执行，与可见性 on_page/concealed）
+和**逐字引文**（依据 e段号：「原句」）。文末证据窗口给被引句段全文（含同章
+前后各一句——邻句是上下文，不是该命题的证据）。锚定以引文为准，不以邻句为准。
 
 【七类 kind（与 PreservationPolicy 的 PreserveKind 同源，只能取这些值）】
 {_PRESERVE_KIND_LINES}
@@ -559,51 +563,64 @@ temporal_mode（single＝单次行为、iterative＝重复行为）。
 - statement 与 satisfaction 同时保留主客体、必要动机、公开说辞和真实想法的差别：
   公开说辞与真实动机不一致时，两者都写。
 
-【v13 必须保住的两类反差（质量改进批次二的实证缺口）】
+【必须保住的两类反差】
 - 说辞与行为的反差：人物自称／对外表态（cognition 的 asserts／hears_claim／
-  believes，或 event 里的自述）与实际行为（effects 与 event 的行动）矛盾时，
+  believes，或 event 里的自述）与实际行为（事实与 event 的行动）矛盾时，
   保的是这层反差本身——不得把自述升格为已成立的内在准则，也不得只留一面；
-- 隐藏与揭示的时点：disclosure=concealed 的事实（带 known_by）与后续 cognition
-  对同一命题的揭示（持有者＋模式）是两件事：reveal 类义务必须写清**谁在何时
-  确认**（含读者），不能只保事实成立。
+- 隐藏与揭示的时点：concealed 的事实（视图标注已知者）与后续认知对同一命题的
+  揭示（持有者＋模式）是两件事：reveal 类义务必须写清**谁在何时确认**（含读者），
+  不能只保事实成立。
 
 【satisfaction 写"改写后必须成立什么，才能保住同样的作用"】
 触发与后果的连接点、误会如何形成、何时由谁确认（含读者）、成立的喜剧或反讽效果。
-可替换的细节（具体物件、措辞、场面陈设）不列。temporal_mode=iterative 的重复
-行为：satisfaction 写"重复本身的作用"（日复一日的侵蚀／习惯的养成），不是其中
-任意一次的细节。loop 未收束的问题与 close 时的 resolution：悬念的铺设与兑现方式
-进 satisfaction。
+可替换的细节（具体物件、措辞、场面陈设）不列。重复行为：satisfaction 写
+"重复本身的作用"（日复一日的侵蚀／习惯的养成），不是其中任意一次的细节。
+loop 未收束的问题与 close 时的 resolution：悬念的铺设与兑现方式进 satisfaction。
 
-【v4 义务边界】
+【义务边界（v5）】
 satisfaction 写正文必须成立的条件，也写哪些表现不足以兑现、哪些改法会改变因果。
 不得把救人动机改成事后获利或感谢，把主动行为改成被动巧合，或交换行为主体。
 不同时点的决定保留条件和先后；跨场复合义务拆为能在单处兑现的阶段义务，用 requires
-表达必要的因果／信息前提；单纯先后不写因果。选择后回看未入选的铺垫、重复和兑现，
-若承担必要条件就保留。身份义务不捆绑首次出现时点不同的称谓。
+表达必要的因果／信息前提；单纯先后不写因果。身份义务不捆绑首次出现时点不同的称谓。
+
+【阶段与揭示（v5）】
+- 同一机制的**多次发生**（如反复现身、两次求医）各自独立登记为义务，并在顶层
+  series 里用成员序号登记为同一机制（members≥2；mechanism 取视图内源表达的
+  ex_id，没有合用的填 null）——不得合并成一次「反复出现」；
+- 揭示义务只在源文确有**读者确认**（视图里 reader 的 learns/confirms）时要求
+  读者确认；线索、怀疑、传闻阶段合法，不为满足阶段规则新增确认或故事事件；
+- 源文未说明的（unknown、未收束的悬念）保持未知——不得在义务里替源文补答案。
 
 【切分与去重】
 - 一条义务承担一个作用，不整场转写；
 - 同一事实不跨 kind 重复，除非各自带有独有的知情或因果约束；
-- causal 只收源文明示或 Blueprint causal_edges 支持的因果；先后发生不等于因果；
+- causal 只收视图明示支持的因果；先后发生不等于因果；
 - 同一时点、同一证据，不得被无依据地解释成相反的事实；人物自相矛盾、成长、互相误解
-  都照常保留——自我标榜与行为矛盾时，要保的是这层反差；
-- 作用必须能由 lineage 指向的 beats 指认。
+  都照常保留——自我标榜与行为矛盾时，要保的是这层反差。
 
 【must_preserve 用反事实判据】
 删除或合并该项后，只要会改变关键状态转移、因果连接、揭示时点、身份关系、
 setup/payoff 或结局条件中的任何一项，就填 true；否则填 false（可综合）。
-不得泛化世界规则，不把肉体亲密误解成爱情。
+不得泛化世界规则，不把肉体亲密误解成爱情。必保与展开重点是两回事，不以压条数为目标。
+
+【源证据冲突（evidence_conflicts）】
+视图内引文与原子内容矛盾、或两条原子对同一事实各执一词而你无法判断哪个是
+源文本意时，**不私建事实版本、不猜测折中**：在顶层 evidence_conflicts 报告
+{{"anchor":"冲突句柄","segment":"e段号","note":"分歧是什么"}}——义务照常选择，
+冲突由工程回派源文 owner 处理。没有冲突就不写该键。
 
 【wire 形状（编号由 compiler 生成，你不输出任何 ID）】
 - 义务按列表序书写；**不输出义务编号**——编号由 compiler 按列表序派发；
-- 每项 kind,statement,lineage{{blueprint_refs,character_ids}},
-  must_preserve(布尔 true/false),satisfaction,requires；
-- lineage 的 blueprint_refs／character_ids 只能取源真值给出的 id（闭集选择）；
+- 每项 kind,statement,anchors,must_preserve(布尔 true/false),satisfaction,
+  requires；
+- anchors 是**投影句柄数组**（闭集选择，至少 1 个）——该义务依赖的源原子；
+  不输出 lineage，来源由工程从 anchors 解析；
 - requires 用 **1-based 列表序号**引用其它义务（如第 2 项依赖第 1 项写 [1]），
   不得自指，只收必要先决条件——**只写因果或信息前提**（不承载它就立不起来），
   源文先后顺序本身不是依赖：两件事只是先后发生、没有谁依赖谁时不得写
   requires（写出来会把改写顺序错误地锁死）；
-- wire 顶层：{{"protocol_version":"stage4-preserve-v1","obligations":[...]}}。
+- wire 顶层：{{"protocol_version":"stage4-preserve-v2","obligations":[...],
+  "series":[...],"evidence_conflicts":[...]}}（后两项可省略）。
 返回一个 JSON object，不要围栏、不要解释。"""
 
 DESIGN_RULES = """任务：仅依据 Brief/Identity/OutputConstraints 设计目标书

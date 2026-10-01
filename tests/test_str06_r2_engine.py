@@ -33,6 +33,7 @@ from novel.stages.common import (
     RENDERER_VERSION, WRITER_PROTOCOL, WRITER_PROTOCOL_VERSION,
     project_chapter_packet,
 )
+from tests.str06_facilities import anchor_stub
 from tests.str06_expression_inputs import (
     sample_narration, sample_requirements, sample_design_expression, sample_canonical_expression,
 )
@@ -197,6 +198,7 @@ def _rich_binding(body):
     ob = SourceObligation(
         obligation_id='ob01', kind=PreserveKind.EVENT_CORE,
         statement='夫君立下报恩之约且芸娘起疑',
+        anchors=anchor_stub(),
         lineage=SourceLineage(blueprint_refs=('b01_01',),
                               character_ids=('yun_niang', 'fu_jun')),
         must_preserve=True, satisfaction='正文呈现旧约成立与芸娘起疑')
@@ -490,6 +492,7 @@ def _no_obligation_binding():
         binding_id='b', preserve_checkpoint_sha256=H64,
         obligations=(SourceObligation(
             obligation_id='ob00', kind=PreserveKind.EVENT_CORE, statement='占位',
+            anchors=anchor_stub(),
             lineage=SourceLineage(blueprint_refs=('b01_01',), character_ids=()),
             must_preserve=False, satisfaction=''),),
         entries=(),
@@ -897,7 +900,7 @@ def test_packet_metrics_file_is_registered_and_written(tmp_path, monkeypatch):
     from contracts.schema.hook import HookConstraints
     from novel.stages.chain import run_workflow
     from tests.str06_faults import looped_full_chain_wires
-    from tests.str06_facilities import json_ask, text_ask, stub_body_runner
+    from tests.str06_facilities import anchor_stub, json_ask, stub_body_runner, text_ask
     from tests.test_str06_body import _chapters, _make_session
     wires = looped_full_chain_wires()
     repo, session, _transport = _make_session(tmp_path, wires, name='metrics')

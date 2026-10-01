@@ -1075,6 +1075,12 @@
       "stages": [
         "stage2"
       ]
+    },
+    "tests/test_str06_a2_preserve.py": {
+      "layer": "unit_contract",
+      "stages": [
+        "stage4"
+      ]
     }
   },
   "version": 1

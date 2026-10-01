@@ -35,7 +35,7 @@ from novel.stages.common import (
 )
 from novel.stages.stage7.assembly import verify_chapter_receipts
 from novel.stages.chain import derive_total_length_budget, run_workflow
-from tests.str06_facilities import make_context
+from tests.str06_facilities import anchor_stub, make_context
 from tests.test_str06_hook import _body_wire, _characters, _full_chain_wires
 from novel.stages.stage4.design import assemble_body_design
 from novel.stages.stage4.compile import compile_execution_plan
@@ -71,6 +71,7 @@ def _green_binding(body):
     ob = SourceObligation(
         obligation_id='ob01', kind=PreserveKind.EVENT_CORE,
         statement='苏芸娘嫁入陆家且夫君立下旧约',
+        anchors=anchor_stub(),
         lineage=SourceLineage(blueprint_refs=('b01_01',), character_ids=('yun_niang', 'fu_jun')),
         must_preserve=True, satisfaction='正文呈现婚约成立且夫君立下旧约')
     cp = PreserveCheckpoint(

@@ -39,7 +39,8 @@ from novel.store import Str06Repository
 from novel.errors import PathRefused
 from novel.llm.ledger import CostLedger
 from novel.paths import check_rel_family
-from tests.str06_facilities import synthetic_ref, make_context, v13_beat, v13_chapter, stub_body_runner
+from tests.str06_facilities import (anchor_stub, make_context, stub_body_runner,
+                                    synthetic_ref, v13_beat, v13_chapter)
 from tests.str06_expression_inputs import (
     sample_narration, sample_requirements, sample_book_expression, sample_design_expression,
 )
@@ -466,6 +467,7 @@ def _binding_for(body):
     from contracts.schema.policy import PreserveKind
     obligation = SourceObligation(
         obligation_id='ob1', kind=PreserveKind.EVENT_CORE, statement='成亲',
+        anchors=anchor_stub(),
         lineage=SourceLineage(blueprint_refs=('b01_01',), character_ids=('yun_niang',)),
         must_preserve=False, satisfaction='', requires=())
     checkpoint = PreserveCheckpoint(
@@ -709,7 +711,14 @@ def _full_chain_wires():
         'book': book,
         'ch01': {'protocol_version': 'stage2-chapters-v2', 'beats': [
             beat('苏芸娘嫁入陆家，夫君立下旧约。', ('e01_01',),
-                 participants=('yun_niang', 'fu_jun'))]},
+                 participants=('yun_niang', 'fu_jun'),
+                 effects=({'target': {'kind': 'relation', 'subject': 'yun_niang',
+                                      'object': 'fu_jun'},
+                           'key': 'marital_status', 'op': 'set', 'value': '夫妻',
+                           'scope': 'book', 'modality': 'actual',
+                           'disclosure': {'visibility': 'on_page'},
+                           'basis': ({'segment': 'e01_01',
+                                      'quote': '苏芸娘嫁入陆家'},)},))]},
         'ch02': {'protocol_version': 'stage2-chapters-v2', 'beats': [
             beat('夫君夜半离家，芸娘发现玉佩之秘。', ('e02_01',),
                  participants=('yun_niang', 'fu_jun'))]},
@@ -718,11 +727,10 @@ def _full_chain_wires():
                       'same_proposition': [], 'same_state_dimension': [],
                       'loop_pairing': [], 'cross_chapter_cause': [],
                       'scene_continuation': []},
-        'preserve': {'protocol_version': 'stage4-preserve-v1', 'obligations': [
+        'preserve': {'protocol_version': 'stage4-preserve-v2', 'obligations': [
             {'kind': 'event_core',
              'statement': '苏芸娘嫁入陆家且夫君立下旧约',
-             'lineage': {'blueprint_refs': ['b01_01'],
-                         'character_ids': ['yun_niang', 'fu_jun']},
+             'anchors': ['b01_01.e1'],
              'must_preserve': True,
              'satisfaction': '正文呈现婚约成立且夫君立下旧约', 'requires': []}]},
         'design': _body_wire(),

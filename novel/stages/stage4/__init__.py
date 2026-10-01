@@ -41,7 +41,7 @@ from novel.stages.stage4.fold import (
 )
 from novel.stages.stage4.grounding import (
     assemble_binding, assemble_preserve, obligation_core_id,
-    project_binding_space, project_brief,
+    project_binding_space, project_brief, project_preserve_view,
 )
 from novel.stages.stage4.guard import (
     appeared_chars, check_binding_beat_refs, check_cast_legality,
@@ -63,6 +63,6 @@ __all__ = [
     'compile_execution_plan', 'compile_hook_context', 'compile_writer_book_ir',
     'expected_thread_faces', 'fold_accepted_prefix', 'fold_thread_faces',
     'init_establishments', 'obligation_core_id', 'project_binding_space',
-    'project_brief',
+    'project_brief', 'project_preserve_view',
     'publish_graph', 'run_mechanical_guard', 'scene_order',
 ]

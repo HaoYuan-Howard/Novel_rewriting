@@ -59,6 +59,7 @@ from novel.stages.common import (
 from tests.str06_expression_inputs import (
     sample_canonical_expression, sample_brief_expression,
 )
+from tests.str06_facilities import anchor_stub
 H64 = 'a' * 64
 H64B = 'b' * 64
 
@@ -75,6 +76,7 @@ def _entry(ordinal: int):
 def _obligation(oid: str, must: bool = True) -> SourceObligation:
     return SourceObligation(
         obligation_id=oid, kind=PreserveKind.EVENT_CORE, statement=f'义务{oid}',
+        anchors=anchor_stub(),
         lineage=SourceLineage(blueprint_refs=(f'b_{oid}',), character_ids=()),
         must_preserve=must, satisfaction=f'正文呈现{oid}' if must else '')
 

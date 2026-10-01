@@ -50,6 +50,7 @@ from novel.stages.stage4.guard import (
 from tests.str06_expression_inputs import (
     sample_canonical_expression,
 )
+from tests.str06_facilities import anchor_stub
 
 H64 = 'a' * 64
 
@@ -90,6 +91,7 @@ def _binding(*entries: BindingEntry) -> SemanticBinding:
 
 def _ob(oid):
     return SourceObligation(obligation_id=oid, kind='event_core', statement=oid,
+                            anchors=anchor_stub(),
                             lineage=SourceLineage(blueprint_refs=('b01_01',), character_ids=()),
                             must_preserve=True, satisfaction='明确呈现')
 

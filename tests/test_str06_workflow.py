@@ -39,12 +39,29 @@ def test_stage2_stage4_repository_replay_and_writer_consumer(tmp_path):
             {'surface': '夫君', 'source_refs': ['e01_01']}]},
         'yun': {'canonical': '云娘', 'surfaces': [
             {'surface': '云娘', 'source_refs': ['e01_01']}]}},
-        'initial_state': [], 'world_constraints': []}
+        'initial_state': [
+            {'target': {'kind': 'character', 'char_id': 'fu_jun'},
+             'key': 'birthright', 'value': '养子', 'persistence': 'stable',
+             'knowledge': None, 'source_refs': ['e01_01'],
+             'basis': [{'segment': 'e01_01', 'quote': '云娘提出约定'}]}],
+        'world_constraints': []}
     wires = {
         'book': book,
         'ch01': {'protocol_version': PV, 'beats': [
             _obs_beat('云娘提出约定，夫君知晓真相。', ('e01_01',),
-                      participants=('yun', 'fu_jun'))]},
+                      participants=('yun', 'fu_jun'),
+                      effects=[{'target': {'kind': 'relation', 'subject': 'fu_jun',
+                                           'object': 'yun'},
+                                'key': 'covenant', 'op': 'set', 'value': '成立',
+                                'scope': 'book', 'modality': 'actual',
+                                'disclosure': {'visibility': 'on_page'},
+                                'basis': [{'segment': 'e01_01',
+                                           'quote': '云娘提出约定'}]}],
+                      cognition=[{'proposition': {'ref': 'p_known',
+                                                  'statement': '借种之约是共同秘密'},
+                                  'holder': 'yun', 'mode': 'learns',
+                                  'basis': [{'segment': 'e01_01',
+                                             'quote': '云娘提出约定'}]}])]},
         'names': {
             'families': {'fam_yun': {'literal': '云', 'forms': []}},
             'people': {
@@ -343,15 +360,15 @@ def test_concealed_fact_reaches_writer_as_pending_reader_confirmation(tmp_path):
              'delivery': {'pov': 'yun', 'voice': '冷峻', 'avoid': []}}],
         'chapters': [{'purpose': '夜半响动到床底确认', 'scenes': 2}],
         'scene_weights': [1, 1]}
-    preserve = {'protocol_version': 'stage4-preserve-v1', 'obligations': [
+    preserve = {'protocol_version': 'stage4-preserve-v2', 'obligations': [
         {'kind': 'event_core',
          'statement': '夫君佯称离开实则藏身床底',
-         'lineage': {'blueprint_refs': ['b01_01'], 'character_ids': ['fu_jun']},
+         'anchors': ['b01_01.e1'],
          'must_preserve': True,
          'satisfaction': '正文呈现佯离与藏身的关系', 'requires': []},
         {'kind': 'reveal',
          'statement': '读者在床板响动后确认床底有人',
-         'lineage': {'blueprint_refs': ['b01_02'], 'character_ids': ['yun', 'fu_jun']},
+         'anchors': ['b01_02.c1'],
          'must_preserve': True,
          'satisfaction': '正文呈现确认时点与反应', 'requires': [1]}]}
     wires = {

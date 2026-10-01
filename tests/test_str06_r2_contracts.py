@@ -39,6 +39,7 @@ from contracts.schema.state import EffectDomain, StateRead
 from tests.str06_expression_inputs import (
     sample_narration, sample_requirements, sample_design_expression, sample_canonical_expression,
 )
+from tests.str06_facilities import anchor_stub
 
 H64 = 'a' * 64
 
@@ -268,6 +269,7 @@ def _binding():
         binding_id='bd1', preserve_checkpoint_sha256=H64,
         obligations=(SourceObligation(
             obligation_id='ob01', kind=PreserveKind.EVENT_CORE, statement='义务',
+            anchors=anchor_stub(),
             lineage=SourceLineage(blueprint_refs=('b01_01',), character_ids=('ch1',)),
             must_preserve=True, satisfaction='正文呈现'),),
         entries=(BindingEntry(obligation_id='ob01', scene_id='s01',

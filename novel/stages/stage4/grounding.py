@@ -34,8 +34,8 @@ from typing import Any
 
 from contracts.schema.design import BodyDesign
 from contracts.schema.grounding import (
-    IdentityProjection, PreserveCheckpoint, ReconstructionBrief,
-    SemanticBinding, SourceLineage, SourceObligation,
+    IdentityProjection, ObligationAnchor, ObligationSeries, PreserveCheckpoint,
+    ReconstructionBrief, SemanticBinding, SourceLineage, SourceObligation,
 )
 from contracts.schema.source import (
     BlueprintsArtifactV15, CharactersCore,
@@ -57,9 +57,12 @@ def _sha256_payload(obj: Any) -> str:
 #: wire 键白名单（Q-1：多余键在 compile 入口报错，不静默丢弃）。
 #: B3 前半：Preserve 不收 obligation_id（compiler 派发），requires 是 1-based
 #: 序号数组；Bind 的承载位置是 {scene, beat} 单 ID 分量（复合引用 compiler 组）。
-_OBLIGATION_KEYS = frozenset({'kind', 'statement', 'lineage',
+#: R10a a2：义务以 anchors 引用投影句柄，lineage 退出 wire（compiler 派生）；
+#: 顶层增 series／evidence_conflicts。
+_OBLIGATION_KEYS = frozenset({'kind', 'statement', 'anchors',
                               'must_preserve', 'satisfaction', 'requires'})
-_LINEAGE_KEYS = frozenset({'blueprint_refs', 'character_ids'})
+_SERIES_KEYS = frozenset({'members', 'mechanism'})
+_CONFLICT_KEYS = frozenset({'anchor', 'segment', 'note'})
 _ENTRY_KEYS = frozenset({'obligation_id', 'scene', 'beat', 'supporting'})
 _SUPPORTING_KEYS = frozenset({'scene', 'beat'})
 _UNBOUND_KEYS = frozenset({'obligation_id', 'owner', 'reason'})
@@ -72,39 +75,251 @@ def _reject_unknown_keys(errors: list[str], obj: dict[str, Any], allowed: frozen
         errors.append(f'{where} 携带未知字段 {sorted(extra)}（wire 键白名单外）')
 
 
+# ── R10a a2：Preserve 输入投影（project_preserve_view）与句柄解析 ──────────
+
+
+def _render_target(target: Any) -> str:
+    """typed 作用对象 → `char:x`／`rel:a×b`／`world`（本模块自带渲染；I-04
+    禁止反向消费 Stage2 内部函数）。"""
+    if target.kind == 'character':
+        return f'char:{target.char_id}'
+    if target.kind == 'relation':
+        return f'rel:{target.subject}×{target.object}'
+    return 'world'
+
+
+def _anchor_index(
+    characters: CharactersCore, blueprint: BlueprintsArtifactV15,
+) -> dict[str, ObligationAnchor]:
+    """投影句柄 → 类型化拷贝（compiler 拷贝，模型不复述；I-15/I-21）。
+
+    句柄闭集＝`s0_*`（初态）、`wc_*`（世界约束）、`b拍.eN/.cN/.lN`（拍内
+    效应/认知/悬念）。命题带正式 ID（k\*，无本地句柄）；初态/约束的地址
+    含 state_id／constraint_id 本体。
+    """
+    index: dict[str, ObligationAnchor] = {}
+    for atom in characters.initial_state:
+        index[atom.state_id] = ObligationAnchor(
+            handle=atom.state_id, source_kind='initial_state',
+            address=f'{_render_target(atom.target)}.{atom.key}', value=atom.value,
+            quotes=tuple(b.quote for b in atom.basis))
+    for rule in blueprint.world_constraints:
+        index[rule.constraint_id] = ObligationAnchor(
+            handle=rule.constraint_id, source_kind='world_constraint',
+            address=f'{rule.kind}:{rule.constraint_id}', value=rule.statement,
+            quotes=tuple(b.quote for b in rule.basis))
+    for chapter_bp in sorted(blueprint.chapters, key=lambda c: c.chapter):
+        for beat in chapter_bp.beats:
+            for n, effect in enumerate(beat.effects, 1):
+                handle = f'{beat.beat_id}.e{n}'
+                prop = effect.proposition
+                index[handle] = ObligationAnchor(
+                    handle=handle, source_kind='effect',
+                    address=f'{_render_target(effect.target)}.{effect.key}',
+                    value=effect.value, modality=effect.modality,
+                    visibility=effect.disclosure.visibility,
+                    proposition_ref=prop.ref if prop else None,
+                    proposition_statement=prop.statement if prop else None,
+                    quotes=tuple(b.quote for b in effect.basis))
+            for n, cognition in enumerate(beat.cognition, 1):
+                handle = f'{beat.beat_id}.c{n}'
+                index[handle] = ObligationAnchor(
+                    handle=handle, source_kind='cognition',
+                    holder=cognition.holder, mode=cognition.mode,
+                    proposition_ref=cognition.proposition.ref,
+                    proposition_statement=cognition.proposition.statement,
+                    quotes=tuple(b.quote for b in cognition.basis))
+            for n, loop in enumerate(beat.loops, 1):
+                handle = f'{beat.beat_id}.l{n}'
+                index[handle] = ObligationAnchor(
+                    handle=handle, source_kind='loop',
+                    question=loop.question or loop.resolution or '')
+    return index
+
+
+def _derive_lineage(
+    handles: tuple[str, ...], index: dict[str, ObligationAnchor],
+    characters: CharactersCore, blueprint: BlueprintsArtifactV15,
+) -> SourceLineage:
+    """义务 anchors → SourceLineage（I-15/I-21：compiler 派生，wire 不再输出）。
+
+    blueprint_refs＝锚点主体（拍内转移归其 beat_id；初态/约束归自身 id）；
+    character_ids＝初态 target 人物＋效应作用对象人物＋认知 holder——同一
+    既有语义（可综合多个源主体），只是来源从模型声明改为锚点解析。
+    """
+    blueprint_refs: list[str] = []
+    character_ids: list[str] = []
+    initial_by_handle = {atom.state_id: atom for atom in characters.initial_state}
+    transfers: dict[str, Any] = {}
+    for chapter_bp in blueprint.chapters:
+        for beat in chapter_bp.beats:
+            for n, effect in enumerate(beat.effects, 1):
+                transfers[f'{beat.beat_id}.e{n}'] = effect
+            for n, cognition in enumerate(beat.cognition, 1):
+                transfers[f'{beat.beat_id}.c{n}'] = cognition
+            for n, loop in enumerate(beat.loops, 1):
+                transfers[f'{beat.beat_id}.l{n}'] = loop
+    for handle in handles:
+        anchor = index[handle]
+        if '.' in handle:
+            blueprint_refs.append(handle.split('.', 1)[0])
+            transfer = transfers.get(handle)
+        else:
+            blueprint_refs.append(handle)
+            transfer = initial_by_handle.get(handle)
+        if transfer is None:
+            continue
+        if anchor.source_kind == 'cognition':
+            character_ids.append(transfer.holder)
+        elif anchor.source_kind == 'initial_state':
+            target = transfer.target
+            if target.kind == 'character':
+                character_ids.append(target.char_id)
+            elif target.kind == 'relation':
+                character_ids.extend((target.subject, target.object))
+        elif anchor.source_kind == 'effect':
+            target = transfer.target
+            if target.kind == 'character':
+                character_ids.append(target.char_id)
+            elif target.kind == 'relation':
+                character_ids.extend((target.subject, target.object))
+    deduped = []
+    for ref in blueprint_refs:
+        if ref not in deduped:
+            deduped.append(ref)
+    people = []
+    for person in character_ids:
+        if person not in people:
+            people.append(person)
+    return SourceLineage(blueprint_refs=tuple(deduped), character_ids=tuple(people))
+
+
+def project_preserve_view(
+    characters: CharactersCore, blueprint: BlueprintsArtifactV15,
+) -> str:
+    """R10a a2：Preserve 的源证据投影（确定性渲染，取代 Blueprint JSON 倾倒）。
+
+    按书级初态 → 世界约束 → 逐章逐拍渲染：每原子一行带投影句柄＋类型化内容
+    ＋逐字引文；拍头带 event 与拍 source_refs 的证据窗口（Blueprint.evidence
+    的窗口文本＝被引段全文＋同章前后各一段）。不摘要、不改写（I-24 不改输入；
+    I-20/I-21 机械渲染归 compiler）。R10-0.3 实证旧形态整份 Blueprint JSON
+    倾倒 29.9k token/轮——本投影只给语义判断实际需要的原子与证据。
+    """
+    lines: list[str] = []
+    index = _anchor_index(characters, blueprint)
+    if characters.initial_state:
+        lines.append('【书级初始事实（故事开始前成立）】')
+        for atom in characters.initial_state:
+            knowledge = ''
+            if atom.knowledge is not None:
+                known = list(atom.knowledge.known_by)
+                if atom.knowledge.reader_knows:
+                    known.append('reader')
+                if known:
+                    knowledge = f'；初始已知: {",".join(known)}'
+            lines.append(f'[{atom.state_id}] {_render_target(atom.target)}.'
+                         f'{atom.key} = {atom.value!r}（{atom.persistence}{knowledge}）')
+            for basis in atom.basis:
+                lines.append(f'  依据 {basis.segment}：「{basis.quote}」')
+    if blueprint.world_constraints:
+        lines.append('【世界约束】')
+        for rule in blueprint.world_constraints:
+            lines.append(f'[{rule.constraint_id}] {rule.kind}：{rule.statement}')
+            for basis in rule.basis:
+                lines.append(f'  依据 {basis.segment}：「{basis.quote}」')
+    if blueprint.source_expression.items:
+        lines.append('【源表达机制（series 的 mechanism 闭集）】')
+        for item in blueprint.source_expression.items:
+            lines.append(f'{item.ex_id}（{item.kind}）：{item.statement}')
+    cited: set[str] = set()
+    for chapter_bp in sorted(blueprint.chapters, key=lambda c: c.chapter):
+        lines.append(f'【第 {chapter_bp.chapter} 章】')
+        scene_of = {bid: span.scene_id
+                    for span in chapter_bp.scenes for bid in span.beat_ids}
+        for beat in chapter_bp.beats:
+            scene_note = scene_of.get(beat.beat_id, '?')
+            lines.append(f'拍 {beat.beat_id}（场景 {scene_note}；'
+                         f'{"；".join(beat.participants) or "无人物"}）：{beat.event}')
+            for letter, transfers in (('e', beat.effects), ('c', beat.cognition),
+                                      ('l', beat.loops)):
+                for n in range(1, len(transfers) + 1):
+                    handle = f'{beat.beat_id}.{letter}{n}'
+                    lines.append(f'  [{handle}] {_anchor_line(index[handle])}')
+            for ref in beat.source_refs:
+                cited.add(ref)
+    lines.append('【证据窗口（被引句段全文，含同章前后各一句）】')
+    for ref in sorted(cited):
+        window = blueprint.evidence.get(ref)
+        if window:
+            lines.append(f'{ref}：{window}')
+    return '\n'.join(lines)
+
+
+def _anchor_line(anchor: ObligationAnchor) -> str:
+    """单原子的人读渲染（与 _anchor_index 同一事实源，不二次解释）。"""
+    parts: list[str] = []
+    if anchor.source_kind == 'effect':
+        parts.append(f'事实 {anchor.address} = {anchor.value!r}（{anchor.modality}'
+                     f'；{anchor.visibility}')
+        if anchor.proposition_ref:
+            parts.append(f'；命题 {anchor.proposition_ref}「{anchor.proposition_statement}」')
+        parts.append('）')
+    elif anchor.source_kind == 'cognition':
+        parts.append(f'认知 {anchor.holder} {anchor.mode}「{anchor.proposition_statement}」')
+    elif anchor.source_kind == 'loop':
+        parts.append(f'悬念 {anchor.question}')
+    elif anchor.source_kind == 'initial_state':
+        parts.append(f'初态 {anchor.address} = {anchor.value!r}')
+    else:
+        parts.append(f'约束 {anchor.address}：{anchor.value}')
+    line = ''.join(parts)
+    quotes = '／'.join(f'「{q}」' for q in anchor.quotes)
+    return f'{line}　依据：{quotes}' if quotes else line
+
+
 def assemble_preserve(
     wire: dict[str, Any], *,
     policy_id: str, policy_version: int,
     characters: CharactersCore, blueprint: BlueprintsArtifactV15,
     provider: str, model: str, request_sha256: str,
 ) -> tuple[PreserveCheckpoint | None, list[str]]:
-    """Preserve wire（stage4-preserve-v1：{'obligations': [...]}）→ checkpoint。
+    """Preserve wire（stage4-preserve-v2）→ checkpoint。
 
-    确定性校验：协议版本、requires 序号闭合无环、lineage 的 beat/char 引用
-    真实；义务编号由 compiler 按列表序派发（I-21），模型不输出 ID。
-    `characters_sha256` 绑定 core view（characters + initial_state）——名称结构
-    修订不使已购 checkpoint 失效（F6 裁决）。"""
+    确定性校验：协议版本、义务 anchors 在投影句柄闭集内（每条义务至少锚定
+    一个原子）、requires 序号闭合无环、series 成员闭集互斥且 mechanism 属源
+    表达、evidence_conflicts 的锚点与句段在闭集且句段属该拍证据。义务编号
+    由 compiler 按列表序派发（I-21）；lineage 由 anchors 派生（I-15）。
+    `characters_sha256` 绑定 core view（F6 裁决）。冲突非空时本函数照常返回
+    校验结果——「冲突不发布 checkpoint、回派 Stage2」是 a3 `run_preserve` 的
+    编排决定，不混入 validator（I-36）。"""
     errors: list[str] = []
     if wire.get('protocol_version') != STAGE4_PRESERVE_PROTOCOL:
         errors.append(f'protocol_version 必须是 {STAGE4_PRESERVE_PROTOCOL}，'
                       f'实得 {wire.get("protocol_version")!r}（I-13 无隐式迁移）')
-    _reject_unknown_keys(errors, wire, frozenset({'protocol_version', 'obligations'}),
+    _reject_unknown_keys(errors, wire,
+                         frozenset({'protocol_version', 'obligations', 'series',
+                                    'evidence_conflicts'}),
                          'Preserve')
     raw = wire.get('obligations') or []
     if not raw:
         return None, ['obligations 缺失或为空'] + errors
-    beat_ids = {b.beat_id for c in blueprint.chapters for b in c.beats}
-    char_ids = set(characters.characters)
+    index = _anchor_index(characters, blueprint)
+    beat_refs: dict[str, tuple[str, ...]] = {}
+    for chapter_bp in blueprint.chapters:
+        for beat in chapter_bp.beats:
+            beat_refs[beat.beat_id] = tuple(beat.source_refs)
+    all_segments: set[str] = set(blueprint.evidence)
     for ordinal, item in enumerate(raw, start=1):
         _reject_unknown_keys(errors, item, _OBLIGATION_KEYS, f'义务 {ordinal}')
-        _reject_unknown_keys(errors, item.get('lineage') or {}, _LINEAGE_KEYS,
-                             f'义务 {ordinal}.lineage')
-        for ref in (item.get('lineage') or {}).get('blueprint_refs') or []:
-            if ref not in beat_ids:
-                errors.append(f'义务 {ordinal} lineage 引用未知 beat：{ref}')
-        for ref in (item.get('lineage') or {}).get('character_ids') or []:
-            if ref not in char_ids:
-                errors.append(f'义务 {ordinal} lineage 引用未知人物：{ref}')
+        anchors = item.get('anchors')
+        if not anchors:
+            errors.append(f'义务 {ordinal} 缺 anchors——每条义务必须锚定其依赖的'
+                          '源原子（至少 1 个投影句柄）')
+            continue
+        for handle in anchors:
+            if handle not in index:
+                errors.append(f'义务 {ordinal} anchors 引用未知句柄：{handle!r}'
+                              '（只能取投影视图给出的 s0_*/wc_*/b拍.e|c|l 句柄）')
     if errors:
         return None, errors
     # ID 派发（I-21）：obligation_id 按列表序生成；requires 是 1-based 列表
@@ -146,28 +361,73 @@ def assemble_preserve(
             SourceObligation(
                 obligation_id=oid, kind=o['kind'],
                 statement=o['statement'],
-                lineage=SourceLineage(
-                    blueprint_refs=tuple((o.get('lineage') or {}).get('blueprint_refs') or []),
-                    character_ids=tuple((o.get('lineage') or {}).get('character_ids') or [])),
+                lineage=_derive_lineage(tuple(o.get('anchors') or ()), index,
+                                        characters, blueprint),
+                anchors=tuple(index[h] for h in o.get('anchors') or ()),
                 must_preserve=o['must_preserve'],
                 satisfaction=o.get('satisfaction') or '',
                 requires=tuple(graph[oid]))
             for oid, o in zip(dispatched, raw))
     except (ValidationError, KeyError) as exc:
         return None, [f'义务构造失败：{exc}']
+    # series：成员序号（1-based）→ 正式 ID；闭集、互斥；mechanism 属源表达。
+    ex_ids = {item.ex_id for item in blueprint.source_expression.items}
+    series_list: list[ObligationSeries] = []
+    for n, group in enumerate(wire.get('series') or (), 1):
+        _reject_unknown_keys(errors, group, _SERIES_KEYS, f'series {n}')
+        members_raw = group.get('members') or []
+        resolved_members: list[str] = []
+        for ref in members_raw:
+            if not isinstance(ref, int) or not 1 <= ref <= len(raw):
+                errors.append(f'series {n} 成员序号越界：{ref!r}（1-{len(raw)}）')
+                continue
+            resolved_members.append(dispatched[ref - 1])
+        if len(resolved_members) < 2:
+            errors.append(f'series {n} 至少 2 个成员（离散兑现时点分别登记，'
+                          '不为满足阶段规则合并）')
+        mechanism = group.get('mechanism')
+        if mechanism is not None and mechanism not in ex_ids:
+            errors.append(f'series {n} mechanism 不在源表达 ex_id 闭集：'
+                          f'{mechanism!r}')
+        if not errors:
+            series_list.append(ObligationSeries(
+                members=tuple(resolved_members), mechanism=mechanism))
+    if errors:
+        return None, errors
+    # evidence_conflicts：只验形状与闭集（a3 消费——冲突不发布、回派 Stage2）。
+    for n, conflict in enumerate(wire.get('evidence_conflicts') or (), 1):
+        _reject_unknown_keys(errors, conflict, _CONFLICT_KEYS, f'evidence_conflicts {n}')
+        anchor = conflict.get('anchor')
+        if anchor not in index:
+            errors.append(f'evidence_conflicts {n} 引用未知锚点：{anchor!r}')
+            continue
+        segment = conflict.get('segment')
+        if segment not in all_segments:
+            errors.append(f'evidence_conflicts {n} 引用未知句段：{segment!r}')
+            continue
+        beat_id = anchor.split('.', 1)[0] if '.' in anchor else None
+        refs = beat_refs.get(beat_id) if beat_id else None
+        if refs is not None and segment not in refs:
+            errors.append(f'evidence_conflicts {n} 的句段 {segment!r} 不属于锚点'
+                          f' {anchor!r} 所在拍的证据 {list(refs)}')
+        if not str(conflict.get('note') or '').strip():
+            errors.append(f'evidence_conflicts {n} 缺 note（分歧描述）')
+    if errors:
+        return None, errors
     checkpoint = PreserveCheckpoint(
         checkpoint_id=f'cp_{policy_id}_v{policy_version}',
         policy_id=policy_id, policy_version=policy_version,
         characters_sha256=_sha256_payload(characters.model_dump()),
         blueprints_sha256=_sha256_payload(blueprint.model_dump()),
         provider=provider, model=model, request_sha256=request_sha256,
-        obligations=obligations,
+        obligations=obligations, series=tuple(series_list),
         checkpoint_sha256='0' * 64)  # 占位：先构造再回填内容 hash
     content_hash = _sha256_payload({
         'checkpoint_id': checkpoint.checkpoint_id,
         'policy': [policy_id, policy_version],
         'truth': [checkpoint.characters_sha256, checkpoint.blueprints_sha256],
-        'obligations': [o.model_dump() for o in obligations]})
+        'obligations': [o.model_dump() for o in obligations],
+        'series': [s.model_dump() for s in series_list]})
     return checkpoint.model_copy(update={'checkpoint_sha256': content_hash}), []
 
 

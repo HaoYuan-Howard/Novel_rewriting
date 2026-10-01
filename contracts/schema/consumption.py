@@ -376,6 +376,68 @@ STR06_FIELD_DELIVERY: dict[str, FieldDeliverySpec] = {
         _spec('writer_book_ir.chapters[].scenes[].verification_ir.obligations[]'
               '.requires', consumers=(_A,), scope=_SCENE,
               mode=DeliveryMode.AUDIT_ONLY,               note='依赖边（审计位）；R2 以 M 守卫材料呈现，不进阅读面')),
+    # R10a a2：义务锚点（compiler 类型化拷贝）——源坐标面，renderer 剥离，
+    # 全部审计位；a4 起 holder/mode/proposition_ref/modality 是知情/时态锁输入。
+    'writer_book_ir.chapters[].scenes[].verification_ir.obligations[]'
+    '.anchors[].handle': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.obligations[]'
+        '.anchors[].handle', consumers=(_A,), scope=_SCENE,
+        mode=DeliveryMode.AUDIT_ONLY, note='源原子句柄（审计位）'),
+    'writer_book_ir.chapters[].scenes[].verification_ir.obligations[]'
+    '.anchors[].source_kind': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.obligations[]'
+        '.anchors[].source_kind', consumers=(_A,), scope=_SCENE,
+        mode=DeliveryMode.AUDIT_ONLY, note='原子类别（审计位）'),
+    'writer_book_ir.chapters[].scenes[].verification_ir.obligations[]'
+    '.anchors[].holder': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.obligations[]'
+        '.anchors[].holder', consumers=(_A,), scope=_SCENE,
+        mode=DeliveryMode.AUDIT_ONLY, note='认知持有者（a4 知情锁输入，审计位）'),
+    'writer_book_ir.chapters[].scenes[].verification_ir.obligations[]'
+    '.anchors[].mode': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.obligations[]'
+        '.anchors[].mode', consumers=(_A,), scope=_SCENE,
+        mode=DeliveryMode.AUDIT_ONLY, note='认知模式（a4 知情锁输入，审计位）'),
+    'writer_book_ir.chapters[].scenes[].verification_ir.obligations[]'
+    '.anchors[].proposition_ref': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.obligations[]'
+        '.anchors[].proposition_ref', consumers=(_A,), scope=_SCENE,
+        mode=DeliveryMode.AUDIT_ONLY, note='命题正式 ID（a4 kp 锚，审计位）'),
+    'writer_book_ir.chapters[].scenes[].verification_ir.obligations[]'
+    '.anchors[].proposition_statement': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.obligations[]'
+        '.anchors[].proposition_statement', consumers=(_A,), scope=_SCENE,
+        mode=DeliveryMode.AUDIT_ONLY, note='命题文本（审计位）'),
+    'writer_book_ir.chapters[].scenes[].verification_ir.obligations[]'
+    '.anchors[].address': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.obligations[]'
+        '.anchors[].address', consumers=(_A,), scope=_SCENE,
+        mode=DeliveryMode.AUDIT_ONLY, note='事实地址（审计位）'),
+    'writer_book_ir.chapters[].scenes[].verification_ir.obligations[]'
+    '.anchors[].value': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.obligations[]'
+        '.anchors[].value', consumers=(_A,), scope=_SCENE,
+        mode=DeliveryMode.AUDIT_ONLY, note='事实值（审计位）'),
+    'writer_book_ir.chapters[].scenes[].verification_ir.obligations[]'
+    '.anchors[].modality': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.obligations[]'
+        '.anchors[].modality', consumers=(_A,), scope=_SCENE,
+        mode=DeliveryMode.AUDIT_ONLY, note='效应时态（a4 kf 锁输入，审计位）'),
+    'writer_book_ir.chapters[].scenes[].verification_ir.obligations[]'
+    '.anchors[].visibility': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.obligations[]'
+        '.anchors[].visibility', consumers=(_A,), scope=_SCENE,
+        mode=DeliveryMode.AUDIT_ONLY, note='效应可见性（审计位）'),
+    'writer_book_ir.chapters[].scenes[].verification_ir.obligations[]'
+    '.anchors[].question': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.obligations[]'
+        '.anchors[].question', consumers=(_A,), scope=_SCENE,
+        mode=DeliveryMode.AUDIT_ONLY, note='悬念问题/收束（审计位）'),
+    'writer_book_ir.chapters[].scenes[].verification_ir.obligations[]'
+    '.anchors[].quotes': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.obligations[]'
+        '.anchors[].quotes', consumers=(_A,), scope=_SCENE,
+        mode=DeliveryMode.AUDIT_ONLY, note='逐字引文（审计位；不进阅读面）'),
     # VerificationIR：拍
     'writer_book_ir.chapters[].scenes[].verification_ir.scene_id': _spec(
         'writer_book_ir.chapters[].scenes[].verification_ir.scene_id',
