@@ -301,10 +301,16 @@ def test_assemble_binding_full_denominator():
 
 # ───────────────────────── Design 组装 ─────────────────────────
 
-def _design_wire():
-    """stage4-design-v4 形状（R2）：模型不输出任何 ID／归章引用／归一权重。"""
+def _design_wire(kp_known: str = '__KP_KNOWN__'):
+    """stage4-design-v5 形状（R2）：模型不输出任何 ID／归章引用／归一权重。
+
+    a4：被必保义务锚定的知情（ob02 的 realize 分母）用 kp 键承载。命题正式
+    ref 由 stage2 compile 按序派发，离线单测不持 Brief 时给占位键（锁面只在
+    brief 传入时校验）；真链测试（workflow 等）从 design prompt 的 Brief 注入
+    真实句柄。
+    """
     return {**sample_design_expression(('yun',)),
-        'protocol_version': 'stage4-design-v4',
+        'protocol_version': 'stage4-design-v5',
         'book_style': '冷峻克制的第三人称叙事，重对话张力。',
         'initial_state': [],
         'scenes': [
@@ -315,8 +321,9 @@ def _design_wire():
                                   '展开两人独处的对峙，在立约处收住，衔接下一场的兑现。',
              'beats': [
                  {'event': '约定成立', 'participants': ['yun', 'fu_jun'],
-                  'dramatic_intent': '立誓', 'target_delta': [
-                      {'domain': 'relation', 'subjects': ['yun', 'fu_jun'], 'op': 'set', 'scope': 'book', 'key': 'marital_status', 'value': '夫妻'}],
+                  'delivery_hint': '', 'target_delta': [
+                      {'domain': 'relation', 'subjects': ['yun', 'fu_jun'], 'op': 'set', 'modality': 'actual', 'scope': 'book', 'key': 'marital_status', 'value': '夫妻'},
+                      {'domain': 'knowledge', 'subjects': [], 'holder': 'yun', 'op': 'set', 'value': '知晓借种之约是共同秘密', 'scope': 'book', 'key': kp_known, 'knowledge_mode': 'known'}],
                   'delivery_hint': ''}],
              'delivery': {'pov': 'yun', 'voice': '冷峻', 'avoid': []}}],
         'chapters': [{'purpose': '婚姻从名分走向盟约', 'scenes': 1}],

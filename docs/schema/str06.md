@@ -51,7 +51,8 @@ compiler 产生 Blueprint v14 的 `source_expression`、`ex_nn` 和非空白段�
 对白比例读数。未测量读数明确为 unavailable／null，不作为质量闸。
 源盲 ReconstructionBrief 只送表达陈述、人称许可及读数，不送证据原文和源章拓扑。
 
-Design 的唯一形状源为 `contracts/schema/design.py::DesignWireV4`，请求 Schema
+Design 的唯一形状源为 `contracts/schema/design.py::DesignWireV5`（R10a a4 起
+v5：删 dramatic_intent；非知情/非读者 set 必填 modality；拍增 expression_refs），请求 Schema
 由该模型生成并注入本书人物／称谓闭集。`narration` 复用 HookPov；first 的场景 POV
 必须是唯一叙述者，third 的 POV 为许可 focalizers 或 narrator。每个表达项恰好一个
 keep／change，change 必须有理由与目标表达。BookBrief 的人称进不可违背分区，

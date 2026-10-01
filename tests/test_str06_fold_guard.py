@@ -62,7 +62,7 @@ def _scene(scene_id: str, *participants: str) -> TargetScene:
                            immediate_want='w', opposition='o', turn='t'),
         realization_brief=f'重心在{scene_id}的对峙；展开转折后收束。',
         beats=(TargetBeat(beat_id='bt1', event='e', participants=participants or ('ch1',),
-                          dramatic_intent='d', target_delta=()),),
+                          delivery_hint='', target_delta=()),),
         delivery=SceneDelivery(pov='ch1', voice='v'))
 
 
@@ -109,7 +109,7 @@ def _context(
         scene_id=scene_id, execution_slice_sha256=H64,
         verification_ir=VerificationIR(
             scene_id=scene_id, obligations=tuple(_ob(o) for o in obligations),
-            beats=(BeatIR(beat_ref=f'{scene_id}#bt1', event='e', dramatic_intent='d'),),
+            beats=(BeatIR(beat_ref=f'{scene_id}#bt1', event='e'),),
             entry_state=tuple(entry_state),
             entry_knowledge=tuple(entry_knowledge),
             released_surfaces=tuple(released)),

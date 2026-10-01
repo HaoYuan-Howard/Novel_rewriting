@@ -14,6 +14,20 @@ from novel.store import Str06Repository
 from novel.stages.chain import run_workflow
 from tests.str06_facilities import make_context, synthetic_ref
 from tests.test_str06_target import _preserve_wire, _design_wire
+
+
+def _kp_from_design_prompt(prompt: str, statement: str) -> str:
+    """从 design prompt 内嵌的 Brief 里取命题的 kp 句柄（模型按 prompt 作答）。
+
+    命题正式 ref 由 stage2 compile 按序派发（k{nn}），fixture 无法静态预计算
+    kp——ask 回调按「模型读到什么就用什么」从 prompt 的 brief JSON 解出。
+    """
+    import json as _json
+    payload = _json.loads(prompt.split('输入：\n', 1)[1])
+    return next(p['kp_id'] for p in payload['brief']['propositions']
+                if p['statement'] == statement)
+
+
 from tests.str06_expression_inputs import (
     sample_book_expression, sample_design_expression,
 )
@@ -94,6 +108,8 @@ def test_stage2_stage4_repository_replay_and_writer_consumer(tmp_path):
     requests = []
     def ask(owner, prompt, validate):
         data = deepcopy(wires[owner])
+        if owner == 'design':
+            data['scenes'][0]['beats'][0]['target_delta'][1]['key'] =                 _kp_from_design_prompt(prompt, '借种之约是共同秘密')
         assert not validate(data), (owner, validate(data))
         requests.append((owner, prompt))
         return data, synthetic_ref(owner, prompt)
@@ -328,7 +344,7 @@ def test_concealed_fact_reaches_writer_as_pending_reader_confirmation(tmp_path):
                               'basis': [{'segment': 'e01_01',
                                          'quote': '夫君与云娘一处住着'}]}])]}
     design = {**sample_design_expression(('yun',)),
-        'protocol_version': 'stage4-design-v4',
+        'protocol_version': 'stage4-design-v5',
         'book_style': '冷峻克制的第三人称叙事。',
         'initial_state': [],
         'scenes': [
@@ -338,9 +354,9 @@ def test_concealed_fact_reaches_writer_as_pending_reader_confirmation(tmp_path):
              'realization_brief': '重心在夜半响动后的试探；压缩寻问无果，'
                                   '在决意亲自去到处收束，衔接下一场的揭示。',
              'beats': [{'event': '夜半响动', 'participants': ['yun'],
-                        'dramatic_intent': '加压',
+                        'delivery_hint': '',
                         'target_delta': [
-                            {'domain': 'world', 'subjects': [], 'op': 'set',
+                            {'domain': 'world', 'subjects': [], 'op': 'set', 'modality': 'actual',
                              'scope': 'book', 'key': 'hiding', 'value': '床底有人'}],
                         'delivery_hint': ''}],
              'delivery': {'pov': 'yun', 'voice': '冷峻', 'avoid': []}},
@@ -350,10 +366,10 @@ def test_concealed_fact_reaches_writer_as_pending_reader_confirmation(tmp_path):
              'realization_brief': '重心在床底确认瞬间；从俯身写到确认，'
                                   '在反应处收住。',
              'beats': [{'event': '确认床底有人',
-                        'participants': ['yun', 'fu_jun'], 'dramatic_intent': '揭示',
+                        'participants': ['yun', 'fu_jun'], 'delivery_hint': '',
                         'target_delta': [
                             {'domain': 'reader', 'subjects': [], 'op': 'set',
-                             'scope': 'scene', 'key': 'hiding', 'value': '床底有人',
+                             'scope': 'scene', 'key': '__KP_HIDE__', 'value': '床底有人',
                              'confirms': {'domain': 'world', 'subjects': [],
                                           'holder': None, 'key': 'hiding'}}],
                         'delivery_hint': ''}],
@@ -403,6 +419,8 @@ def test_concealed_fact_reaches_writer_as_pending_reader_confirmation(tmp_path):
 
     def ask(owner, prompt, validate):
         data = deepcopy(wires[owner])
+        if owner == 'design':
+            data['scenes'][1]['beats'][0]['target_delta'][0]['key'] =                 _kp_from_design_prompt(prompt, '夫君藏身床底')
         assert not validate(data), (owner, validate(data))
         requests.append((owner, prompt))
         return data, synthetic_ref(owner, prompt)

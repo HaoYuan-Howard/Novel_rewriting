@@ -713,9 +713,18 @@ STR06_RC_LABELS: Final = ('str06-rc2', 'str06-rc3', 'str06-rc4', 'str06-rc5', 's
 #: evidence_conflicts（源证据冲突报告，不发布——回派归 a3）。输入投影从
 #: Blueprint JSON 倾倒改为 project_preserve_view 确定性渲染（证据窗口＋逐字
 #: 引文）。policy v5 同批（义务锚定、series、冲突报告规则）。
+#: design v5（R10a a4，2026-10-01）：删 `dramatic_intent`（R10-0.4 实证
+#: renderer 从不渲染、登记漂移）；非知情/非读者的 set 必填 `modality`
+#: （actual/planned/expected/conditional，C2 时态面）；拍增
+#: `expression_refs`（正向表达任务落具体拍，ex_id 闭集、narration 不上拍）。
+#: Brief（rc 面同批）新增锁定项：kp 命题登记＋知情锁 {持有者|reader,kp,mode}
+#: （模式映射 learns/confirms→known、suspects→suspected、hears_claim→heard、
+#: believes→believes；asserts 转公开声称标记）＋kf 事实锁（时态/值未知/
+#: 原文未回答）；requirement 带 series 盲标记与 mechanism。kp/kf 键规则与
+#: 必保锁兑现归 assemble_body_design（revise_self）。
 STAGE4_PRESERVE_PROTOCOL: Final = 'stage4-preserve-v2'
 STAGE4_PRESERVE_POLICY_VERSION: Final = 5
-STAGE4_DESIGN_PROTOCOL: Final = 'stage4-design-v4'
+STAGE4_DESIGN_PROTOCOL: Final = 'stage4-design-v5'
 STAGE4_BIND_PROTOCOL: Final = 'stage4-bind-v1'
 STAGE4_HOOK_DESIGN_PROTOCOL: Final = 'stage4-hook-design-v1'
 

@@ -380,7 +380,7 @@ def test_released_surfaces_close_over_the_replacement_table():
     registered = {cid: {s.surface for s in entry.surfaces}
                   for cid, entry in chars.characters.items()}
     design_wire = {**sample_design_expression(('huang_fu_heng',)),
-        'protocol_version': 'stage4-design-v4',
+        'protocol_version': 'stage4-design-v5',
         'book_style': '平实克制的第三人称叙事。',
         'initial_state': [],
         'scenes': [{
@@ -389,7 +389,7 @@ def test_released_surfaces_close_over_the_replacement_table():
                        'opposition': '门第', 'turn': '通名'},
             'realization_brief': '重心在称谓初现；从登门展开，在互通姓名处收束。',
             'beats': [{'event': '诸人相见', 'participants': ['huang_fu_heng'],
-                       'dramatic_intent': '登场', 'target_delta': [], 'delivery_hint': '',
+                       'delivery_hint': '', 'target_delta': [],
                        'surface_introductions': [
                            {'char_id': surface_owner[s], 'surfaces': [s]} for s in released]}],
             'delivery': {'pov': 'huang_fu_heng', 'voice': '平实', 'avoid': []}}],

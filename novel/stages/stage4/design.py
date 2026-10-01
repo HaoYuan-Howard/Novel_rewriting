@@ -1,7 +1,7 @@
-"""Body Design wire 的确定性组装与派生面生成（B3 前半重写；R8b 升 v3）。
+"""Body Design wire 的确定性组装与派生面生成（B3 前半重写；R8b 升 v3；a4 升 v5）。
 
 【compiler 生成 ID／归章／权重（I-21，B3 前半）】
-Design wire（`stage4-design-v4`）只表达选择、结构与相对篇幅重点——模型不输出
+Design wire（`stage4-design-v5`）只表达选择、结构与相对篇幅重点——模型不输出
 任何 ID、复合引用或归一权重。本模块是唯一派生点：
   ① 场景/拍 ID 按列表序派发：`sc{序:02d}`／`b{序:02d}`；wire 带 scene_id／
      beat_id 键即拒（「不写可派生字段」的机械面，Q-1 白名单）。
@@ -29,7 +29,7 @@ Design wire（`stage4-design-v4`）只表达选择、结构与相对篇幅重点
      typed 报错，交由修订轮或人工修复；无匹配或多义匹配不归一，交由 char_id
      校验报错。
 【R8b／v3（D8 修订 2026-09-29）】wire 形状改由 pydantic 模型族
-（`contracts/schema/design.py::DesignWireV4`）**一次校验、合并报告**——
+（`contracts/schema/design.py::DesignWireV5`）**一次校验、合并报告**——
 初始态与拍上 target_delta 分开建模（拍上 scope 必填、无默认；初始态恒 book），
 逐字段错误按位置摊开，不再逐层早退；pov 只收字符串且闭集外直拒（单元素
 数组折叠与 canonical 前缀匹配删除，I-21）。
@@ -51,7 +51,8 @@ from typing import Any, Mapping
 from pydantic import ValidationError
 
 from contracts.schema.design import BodyDesign, ChapterEntry
-from contracts.schema.grounding import OutputConstraints
+from contracts.schema.grounding import OutputConstraints, ReconstructionBrief
+from contracts.schema.state import EffectDomain
 from contracts.schema.workflow import STAGE4_DESIGN_PROTOCOL
 from contracts.schema.source import NameProjection, NameStructure
 from novel.stages.common import expand_surface_releases
@@ -314,7 +315,7 @@ def _wire_model_errors(exc: Exception) -> list[str]:
     # 子项已报错的容器级 too_short 是连带噪声，不单列（R8b.3）。
     if any(kind != 'too_short' for _loc, kind, _msg in entries):
         entries = [item for item in entries if item[1] != 'too_short']
-    return [f'{loc}：{msg}（按 wire v3 形状逐处修正）'
+    return [f'{loc}：{msg}（按 wire v5 形状逐处修正）'
             for loc, _kind, msg in entries] or [str(exc)]
 
 
@@ -337,6 +338,119 @@ def _check_pov_closed_set(data: dict[str, Any], known_char_ids: set[str],
                 '不写称呼或描述句；可用值只取输入身份投影给出的 char_id 字面')
 
 
+def _check_expression_refs(body: BodyDesign, expression_requirements,
+                           errors: list[str]) -> None:
+    """a4：拍的 expression_refs 闭集——只能引用 Brief.expression 的 ex_id，
+    narration 是书级机制不上拍（正向表达任务落具体拍；书级表达只写机制）。"""
+    kinds = {item.ex_id: item.kind for item in expression_requirements}
+    for scene in body.scenes:
+        for beat in scene.beats:
+            for ex_id in beat.expression_refs:
+                if ex_id not in kinds:
+                    errors.append(
+                        f'{scene.scene_id}#{beat.beat_id} 的 expression_refs 引用'
+                        f'闭集外 ex_id：{ex_id!r}（只能取 Brief.expression 给出的项）')
+                elif kinds[ex_id] == 'narration':
+                    errors.append(
+                        f'{scene.scene_id}#{beat.beat_id} 的 expression_refs 引用'
+                        f'narration（{ex_id}）——书级表达只写机制，不上具体拍')
+
+
+def _check_lock_acceptance(body: BodyDesign, brief: ReconstructionBrief,
+                           errors: list[str]) -> None:
+    """a4 接受校验：kp/kf 键规则与必保锁兑现（锁注册表来自 Brief，revise_self）。
+
+    · kp 键（knowledge 域）：持有者须有锁且模式被授权——授权集＝该 (holder,
+      kp) 的全部锁模式（known 只能来自 known 锁，C1）；
+    · kp 键（reader 域 set＝读者确认）：须有 reader 的 known 锁（线索/怀疑
+      不是确认，C6）；
+    · kf 键：时态锁只能按锁 modality set（预计不得写成已发生，C2）；值未知
+      锁不得补值（C9）；原文未回答锁不得作答；
+    · 必保义务的知情/时态锁须被对应键兑现（realize_holders/realize_locks）。
+    位置顺序（知情升级/确认不早于授权承载位）归 a5 的 compile Guard，不在此。
+    """
+    propositions = {p.kp_id: p for p in brief.propositions}
+    fact_locks = {f.kf_id: f for f in brief.fact_locks}
+    authorized: dict[tuple[str, str], set[str]] = {}
+    for lock in brief.knowledge_locks:
+        authorized.setdefault((lock.holder, lock.kp), set()).add(lock.mode)
+
+    realized_kp: set[tuple[str, str]] = set()
+    realized_kf: set[str] = set()
+    delta_sites: list[tuple[str, Any]] = [
+        ('initial_state', delta) for delta in body.initial_state]
+    for scene in body.scenes:
+        for beat in scene.beats:
+            delta_sites.extend(
+                (f'{scene.scene_id}#{beat.beat_id}', delta)
+                for delta in beat.target_delta)
+    for where, delta in delta_sites:
+        key = delta.key
+        if key.startswith('kp_'):
+            if key not in propositions:
+                errors.append(f'{where} 的 kp 键未在 Brief 登记：{key}'
+                              '（kp 句柄只能取 Brief.propositions 给出的项）')
+                continue
+            if delta.domain is EffectDomain.KNOWLEDGE:
+                if delta.op == 'set':
+                    allowed = authorized.get((delta.holder, key), set())
+                    if delta.knowledge_mode not in allowed:
+                        errors.append(
+                            f'{where} 的 kp 键 {key} 持有者 {delta.holder} 无锁'
+                            f'或模式越权：{delta.knowledge_mode}（授权：'
+                            f'{sorted(allowed) or "无"}；known 只能来自 known 锁）')
+                realized_kp.add((delta.holder, key))
+            elif delta.domain is EffectDomain.READER and delta.op == 'set':
+                if 'known' not in authorized.get(('reader', key), set()):
+                    errors.append(
+                        f'{where} 的读者确认用 kp 键 {key}，但 reader 对该命题'
+                        '没有 known 锁（线索、误导与怀疑不是读者确认，C6）')
+                realized_kp.add(('reader', key))
+        elif key.startswith('kf_'):
+            lock = fact_locks.get(key)
+            if lock is None:
+                errors.append(f'{where} 的 kf 键未在 Brief 登记：{key}'
+                              '（kf 句柄只能取 Brief.fact_locks 给出的项）')
+                continue
+            if lock.kind in ('planned', 'expected', 'conditional'):
+                if delta.op != 'set' or delta.modality != lock.modality:
+                    errors.append(
+                        f'{where} 的 kf 键 {key} modality 与锁不一致：锁＝'
+                        f'{lock.modality}（尚未发生），实得 op={delta.op}/'
+                        f'modality={delta.modality}（计划不得写成已发生，C2）')
+                else:
+                    realized_kf.add(key)
+            elif lock.kind == 'unknown_value':
+                if delta.op == 'set':
+                    errors.append(
+                        f'{where} 的 kf 键 {key} 是值未知锁（源文未给值），'
+                        '不得补值（C9）')
+                else:
+                    realized_kf.add(key)
+            elif delta.op == 'set':
+                errors.append(
+                    f'{where} 的 kf 键 {key} 是原文未回答锁'
+                    f'（{lock.statement!r}），不得作答（源文留白不得补答案）')
+    for req in brief.requirements:
+        for pair in req.realize_holders:
+            holder, _, kp = pair.partition('|')
+            if (holder, kp) not in realized_kp:
+                errors.append(
+                    f'必保义务 {req.core_id} 的知情锁未兑现：{kp} 需由持有者 '
+                    f'{holder} 以该键承载（knowledge 域、key={kp}）')
+        for kf in req.realize_locks:
+            if kf not in realized_kf:
+                kind = fact_locks[kf].kind if kf in fact_locks else '?'
+                expected = (f'op=set 且 modality={fact_locks[kf].modality}'
+                            if kf in fact_locks
+                            and fact_locks[kf].kind in ('planned', 'expected',
+                                                        'conditional')
+                            else 'op=unknown（不得补值）' if kind == 'unknown_value'
+                            else 'op≠set')
+                errors.append(
+                    f'必保义务 {req.core_id} 的事实锁未兑现：{kf}（{expected}）')
+
+
 def assemble_body_design(
     wire: dict[str, Any], *, known_char_ids: set[str],
     constraints: OutputConstraints | None = None,
@@ -345,23 +459,28 @@ def assemble_body_design(
     name_structure: NameStructure | None = None,
     expression_requirements,
     source_narration,
+    brief: ReconstructionBrief | None = None,
 ) -> tuple[BodyDesign | None, list[str]]:
-    """Design wire（stage4-design-v4）→ canonical BodyDesign。
+    """Design wire（stage4-design-v5）→ canonical BodyDesign。
 
     纯函数：不落盘、不调 LLM、不改输入 wire（deepcopy 后组装）。**一次校验、
-    合并报告**（R8b）：wire 形状由 pydantic 模型族（`DesignWireV4`）一次判，
+    合并报告**（R8b）：wire 形状由 pydantic 模型族（`DesignWireV5`）一次判，
     逐字段错误按位置摊开；闭集（人物／称谓）与语义闭合面在通过形状后同一份
     报告聚合，不再逐层早退遮住后层（B6-A canary 四轮修订实证）。有错不产出
     半份 canonical（I-34）。
+    a4：`brief` 传入时追加锁定项接受校验（kp/kf 键规则＋必保锁兑现＋
+    expression_refs 闭集，`_check_lock_acceptance`）；生产链
+    （`chain.run_body_design`）恒传入——缺省 None 仅供不持 Brief 的离线
+    工具，跳过的是锁面，不是全书校验。
     """
-    from contracts.schema.design import DesignWireV4
+    from contracts.schema.design import DesignWireV5
 
     errors: list[str] = []
     if wire.get('protocol_version') != STAGE4_DESIGN_PROTOCOL:
         errors.append(f'protocol_version 必须是 {STAGE4_DESIGN_PROTOCOL}，'
                       f'实得 {wire.get("protocol_version")!r}（I-13 无隐式迁移）')
     try:
-        model = DesignWireV4.model_validate(wire)
+        model = DesignWireV5.model_validate(wire)
     except ValidationError as exc:
         # 形状失败不遮闭集面（R8b：canary 第 1 份实证——pov 描述句与 scope
         # 缺失同报，修订一轮收掉全部三类，而不是逐层早退打四轮）。
@@ -457,6 +576,9 @@ def assemble_body_design(
                         f'ThreadAction 引用未知 char_id {thread.subject}'
                         f'（{scene.scene_id}#{beat.beat_id} 的 {thread.ref}）')
     _check_confirmation_closures(body, errors)
+    _check_expression_refs(body, expression_requirements, errors)
+    if brief is not None:
+        _check_lock_acceptance(body, brief, errors)
     errors.extend(resolve_design_reads(body).errors)
     if name_projection is not None:
         errors.extend(validate_design_materials(body, projection=name_projection,

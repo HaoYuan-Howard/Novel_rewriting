@@ -101,7 +101,7 @@ def _scene(scene_id: str) -> TargetScene:
         driver=SceneDriver(focal_actor='ch1', immediate_want='w', opposition='o', turn='t'),
         realization_brief=f'重心在{scene_id}的对峙；展开转折后收束。',
         beats=(TargetBeat(beat_id='bt1', event='e', participants=('ch1',),
-                          dramatic_intent='d', target_delta=()),),
+                          delivery_hint='', target_delta=()),),
         delivery=SceneDelivery(pov='ch1', voice='v'))
 
 
@@ -146,7 +146,7 @@ def _context(scene_id: str) -> WriterContext:
         scene_id=scene_id, execution_slice_sha256=H64,
         verification_ir=VerificationIR(
             scene_id=scene_id, obligations=(),
-            beats=(BeatIR(beat_ref=f'{scene_id}#bt1', event='e', dramatic_intent='d'),)),
+            beats=(BeatIR(beat_ref=f'{scene_id}#bt1', event='e'),)),
         writer_brief=WriterBrief(pov='ch1', scene_id=scene_id, realization_brief='重心在对峙。',
                                  scene_driver_summary='d', voice='v'))
 
@@ -384,7 +384,7 @@ def test_verification_ir_carries_continuity_fact_view():
     from contracts.schema.context import BeatIR
     ir = VerificationIR(
         scene_id='s02', obligations=(_obligation('ob2'),),
-        beats=(BeatIR(beat_ref='s02#bt1', event='e', dramatic_intent='d'),),
+        beats=(BeatIR(beat_ref='s02#bt1', event='e'),),
         continuity_fact_view=('s01 已接受：约定成立且为夫妻共同秘密',))
     assert ir.continuity_fact_view[0].startswith('s01')
 

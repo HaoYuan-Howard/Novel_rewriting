@@ -1088,6 +1088,12 @@
         "stage2",
         "stage4"
       ]
+    },
+    "tests/test_str06_a4_design_locks.py": {
+      "layer": "unit_contract",
+      "stages": [
+        "stage4"
+      ]
     }
   },
   "version": 1

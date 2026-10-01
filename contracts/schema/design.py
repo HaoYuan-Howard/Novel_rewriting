@@ -81,6 +81,14 @@ def target_delta_schema(schema: dict) -> None:
         'then': {'required': ['confirms'], 'properties': {'confirms': {
             'not': {'type': 'null'}, 'properties': {'domain': {'not': {'const': 'reader'}}}}}},
         'else': {'properties': {'confirms': {'type': 'null'}}}})
+    # a4：非知情/非读者的 set 必填 modality（计划/预计/条件不得默写为已发生）。
+    schema['allOf'].append({
+        'if': {'properties': {
+            'op': {'const': 'set'},
+            'domain': {'not': {'enum': ['knowledge', 'reader']}}}},
+        'then': {'required': ['modality'], 'properties': {'modality': {
+            'enum': ['actual', 'planned', 'expected', 'conditional']}}},
+        'else': {'properties': {'modality': {'type': 'null'}}}})
 
 
 class TargetDelta(StateChange):
@@ -96,6 +104,12 @@ class TargetDelta(StateChange):
     建立且不早于建立位置（机械闭合归 assemble_body_design）。compiler 只把
     未确认项投影到消费该地址的章包并标注确认拍（按地址的精确投影，取代逐场
     全量清单）；确认前该事实不作为已确认信息。
+
+    【事实时态（a4/R10a，C2 的机械面）】非知情/非读者的 set 必填 `modality`
+    （actual＝已发生；planned/expected/conditional＝计划/预计/条件，尚未发生）。
+    Brief 事实锁（kf_*）键的 set 只能按锁的 modality 承载——把预计写成
+    actual 即拒；kf 锁的其余规则（值未知不得补值、原文未回答不得作答）与
+    kp 键知情规则归 assemble_body_design（锁注册表来自 Brief）。
     """
 
     #: 语义等价归上游判断；Compiler 不解释自然语言补猜事实——所以这里没有
@@ -103,6 +117,7 @@ class TargetDelta(StateChange):
 
     model_config = {'extra': 'forbid', 'json_schema_extra': target_delta_schema}
     confirms: 'StateAddress | None' = None
+    modality: "Literal['actual', 'planned', 'expected', 'conditional'] | None" = None
 
     @model_validator(mode='after')
     def _reader_confirmation_address(self) -> 'TargetDelta':
@@ -114,6 +129,17 @@ class TargetDelta(StateChange):
             raise ValueError('confirms 只有 reader 域的 set（读者确认）可以携带')
         if self.confirms is not None and self.confirms.domain is EffectDomain.READER:
             raise ValueError('confirms 必须指向事实地址，不得指向读者确认本身')
+        is_fact_set = (self.op == 'set'
+                       and self.domain not in (EffectDomain.KNOWLEDGE,
+                                               EffectDomain.READER))
+        if is_fact_set and self.modality is None:
+            raise ValueError(
+                f'非知情/非读者的 set 必须声明事实时态 modality（{self.key!r}；'
+                '计划/预计/条件与已发生的区分，C2 漏填即拒）')
+        if not is_fact_set and self.modality is not None:
+            raise ValueError(
+                'modality 只在非知情/非读者的 set 上携带（解除/未知/知情/读者'
+                '确认无时态可言）')
         return self
 
 
@@ -192,13 +218,16 @@ class TargetBeat(StrictModel):
     beat_id: str = Field(min_length=1)
     event: str = Field(min_length=1, description='事件内核（target 语言）')
     participants: tuple[str, ...] = Field(default=(), min_length=0)
-    dramatic_intent: str = Field(min_length=1)
     target_delta: tuple[TargetDelta, ...] = Field(default=(), min_length=0)
     delivery_hint: str = Field(default='', min_length=0)
+    #: 正向表达任务落具体拍（a4）：本拍承载的源表达 ex_id（闭集归
+    # assemble——只能引用 Brief.expression 给出的 ex_id；narration 书级
+    # 机制不上拍）。R10b renderer v7 把它展开成拍级表达任务。
+    expression_refs: tuple[str, ...] = Field(default=(), min_length=0)
     surface_introductions: tuple[SurfaceIntroduction, ...] = ()
     #: 拍上的跨章线程操作（R2.4）：open/advance/close；生命周期闭合由
-    #: BodyDesign 构造期校验（open 一次、操作不早于 open、close 后无操作、
-    #: ending 落在所属 kind 的闭集）。
+    # BodyDesign 构造期校验（open 一次、操作不早于 open、close 后无操作、
+    # ending 落在所属 kind 的闭集）。
     threads: tuple[ThreadAction, ...] = ()
 
 
@@ -608,13 +637,17 @@ class DesignWireDelivery(StrictModel):
 
 
 class DesignWireBeat(StrictModel):
-    """wire v3 拍：不写 beat_id（compiler 按列表序派发）。"""
+    """wire v5 拍：不写 beat_id（compiler 按列表序派发）。
+
+    v5（R10a a4）：删 `dramatic_intent`（R10-0.4 实证 renderer 从不渲染、
+    登记漂移）；增 `expression_refs`（正向表达任务落具体拍，ex_id 闭集）。
+    """
 
     event: str = Field(min_length=1)
     participants: tuple[str, ...] = Field(default=(), min_length=0)
-    dramatic_intent: str = Field(min_length=1)
     delivery_hint: str = Field(default='', min_length=0)
     target_delta: tuple[TargetDelta, ...] = Field(default=(), min_length=0)
+    expression_refs: tuple[str, ...] = Field(default=(), min_length=0)
     surface_introductions: tuple[SurfaceIntroduction, ...] = ()
     threads: tuple[DesignWireThread, ...] = ()
 
@@ -659,10 +692,15 @@ class DesignWireEntry(StrictModel):
         return self
 
 
-class DesignWireV4(StrictModel):
-    """`stage4-design-v4` wire 顶层：形状在此一次校验（extra 键即拒）。"""
+class DesignWireV5(StrictModel):
+    """`stage4-design-v5` wire 顶层：形状在此一次校验（extra 键即拒）。
 
-    protocol_version: Literal['stage4-design-v4']
+    v5（R10a a4，2026-10-01）：删 `dramatic_intent`；非知情/非读者的 set
+    必填 `modality`（TargetDelta 构造期）；拍增 `expression_refs`（ex_id
+    闭集＋narration 不上拍，归 assemble）。
+    """
+
+    protocol_version: Literal['stage4-design-v5']
     narration: HookPov
     expression_decisions: tuple[ExpressionDecisionWire, ...] = Field(min_length=1)
     book_style: str = Field(min_length=1)

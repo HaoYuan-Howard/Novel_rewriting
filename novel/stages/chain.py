@@ -687,7 +687,8 @@ def run_body_design(ctx: ChainContext) -> dict:
             expression_requirements=brief.expression,
             source_narration=brief.source_narration,
             registered_surfaces={cid: {s.surface for s in c.surfaces}
-                                 for cid, c in chars.characters.items()})
+                                 for cid, c in chars.characters.items()},
+            brief=brief)
 
     dw, design_ref = ctx.ask('design', design_prompt, lambda w: design_compile(w)[1])
     body, errors = design_compile(dw)

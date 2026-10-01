@@ -49,17 +49,17 @@ def _chars():
 
 
 def _rich_wire() -> dict:
-    """stage4-design-v4：threads（四条线覆盖开启前/推进/收束/结尾仍开放）、
+    """stage4-design-v5：threads（四条线覆盖开启前/推进/收束/结尾仍开放）、
     world_rules、entry、拍级读取与读者确认。线程文本避开第 1 章禁用字面。"""
     return {**sample_design_expression(('yun_niang',)),
-        'protocol_version': 'stage4-design-v4',
+        'protocol_version': 'stage4-design-v5',
         'book_style': '冷峻克制的限知叙事，重日常细节里的异样。',
         'world_rules': ['术法须以寿命为代价', '官府不涉异事'],
         'character_voices': [
             {'char_id': 'yun_niang', 'voice': '短句、少感叹，怀疑压在动作里'}],
         'initial_state': [
             {'domain': 'character', 'subjects': ['yun_niang'], 'holder': None,
-             'key': 'appearance', 'op': 'set', 'value': '眉间一点朱砂'}],
+             'key': 'appearance', 'op': 'set', 'modality': 'actual', 'value': '眉间一点朱砂'}],
         'initial_surfaces': [
             {'char_id': 'yun_niang', 'surfaces': ['苏芸娘']},
             {'char_id': 'fu_jun', 'surfaces': ['夫君']}],
@@ -71,15 +71,14 @@ def _rich_wire() -> dict:
              'realization_brief': '重心在拜堂到立约的落差；在旧约出口处收住。',
              'beats': [
                  {'event': '拜堂成亲', 'participants': ['yun_niang', 'fu_jun'],
-                  'dramatic_intent': '成礼', 'target_delta': [
+                  'delivery_hint': '', 'target_delta': [
                       {'domain': 'relation', 'subjects': ['yun_niang', 'fu_jun'],
-                       'holder': None, 'key': 'marital_status', 'op': 'set',
+                       'holder': None, 'key': 'marital_status', 'op': 'set', 'modality': 'actual',
                        'value': '结为夫妻', 'scope': 'book'}],
                   'delivery_hint': '喧闹与冷清对照', 'surface_introductions': []},
                  {'event': '洞房夜夫君立约',
                   'participants': ['yun_niang', 'fu_jun'],
-                  'dramatic_intent': '埋线', 'target_delta': [],
-                  'delivery_hint': '',
+                  'delivery_hint': '', 'target_delta': [],
                   'surface_introductions': [{'char_id': 'yun_niang',
                                              'surfaces': ['芸娘']}],
                   'threads': [
@@ -88,7 +87,7 @@ def _rich_wire() -> dict:
                       {'op': 'open', 'tag': 'g1', 'kind': 'goal',
                        'subject': 'fu_jun', 'text': '夺回家产'}]},
                  {'event': '芸娘暗自起疑', 'participants': ['yun_niang'],
-                  'dramatic_intent': '立意', 'target_delta': [
+                  'delivery_hint': '', 'target_delta': [
                       {'domain': 'knowledge', 'subjects': ['yun_niang'],
                        'holder': 'yun_niang', 'key': 'vow', 'op': 'set',
                        'value': '她决意查清真相', 'scope': 'book',
@@ -110,19 +109,19 @@ def _rich_wire() -> dict:
              'realization_brief': '重心在玉佩的发现；在字面露出的瞬间收束。',
              'beats': [
                  {'event': '夫君夜半离家', 'participants': ['fu_jun'],
-                  'dramatic_intent': '悬念', 'target_delta': [
+                  'delivery_hint': '', 'target_delta': [
                       {'domain': 'character', 'subjects': ['fu_jun'], 'holder': None,
-                       'key': 'whereabouts', 'op': 'set', 'value': '去向不明',
+                       'key': 'whereabouts', 'op': 'set', 'modality': 'actual', 'value': '去向不明',
                        'scope': 'book'},
                       {'domain': 'world', 'subjects': [], 'holder': None,
-                       'key': 'light', 'op': 'set', 'value': '烛火亮起',
+                       'key': 'light', 'op': 'set', 'modality': 'actual', 'value': '烛火亮起',
                        'scope': 'scene'}],
                   'delivery_hint': '',
                   'surface_introductions': [],
                   'threads': [
                       {'op': 'advance', 'ref': 'q1', 'progress': '查到玉佩来历'}]},
                  {'event': '芸娘发现玉佩秘密', 'participants': ['yun_niang'],
-                  'dramatic_intent': '揭示', 'target_delta': [
+                  'delivery_hint': '', 'target_delta': [
                       {'domain': 'knowledge', 'subjects': ['fu_jun'],
                        'holder': 'yun_niang', 'key': 'jade_secret', 'op': 'set',
                        'value': '玉佩刻着沈字', 'scope': 'book',
@@ -138,8 +137,7 @@ def _rich_wire() -> dict:
                       {'op': 'close', 'ref': 'q1', 'ending': 'answered',
                        'resolution': '刻着沈字，指向旧案'}]},
                  {'event': '夫君许诺坦白', 'participants': ['fu_jun'],
-                  'dramatic_intent': '转圜', 'target_delta': [],
-                  'delivery_hint': '',
+                  'delivery_hint': '', 'target_delta': [],
                   'surface_introductions': [],
                   'threads': [
                       {'op': 'open', 'tag': 'p1', 'kind': 'promise',
@@ -152,7 +150,7 @@ def _rich_wire() -> dict:
              'realization_brief': '重心在同处一室的沉默张力；不点破玉佩。',
              'beats': [
                  {'event': '同处一室无言', 'participants': ['yun_niang', 'fu_jun'],
-                  'dramatic_intent': '压抑', 'target_delta': [], 'delivery_hint': '',
+                  'delivery_hint': '', 'target_delta': [],
                   'surface_introductions': []}],
              'delivery': {'pov': 'yun_niang', 'voice': '冷峻', 'avoid': []}},
             {  # sc04（第 3 章：收线）
@@ -162,7 +160,7 @@ def _rich_wire() -> dict:
              'realization_brief': '重心在收束的干脆；留一条线不收。',
              'beats': [
                  {'event': '家产之争落幕', 'participants': ['yun_niang', 'fu_jun'],
-                  'dramatic_intent': '了结', 'target_delta': [], 'delivery_hint': '',
+                  'delivery_hint': '', 'target_delta': [],
                   'surface_introductions': [],
                   'threads': [
                       {'op': 'close', 'ref': 'g1', 'ending': 'abandoned',
@@ -335,7 +333,7 @@ def test_design_thread_mutations_flow_to_packets_by_consumer():
                                opposition='o', turn='t'),
             realization_brief=f'重心在{sid}；展开后收束。',
             beats=(TargetBeat(beat_id='b01', event=f'{sid}的当拍事件',
-                              participants=participants, dramatic_intent='d',
+                              participants=participants, delivery_hint='',
                               target_delta=(), threads=threads),),
             delivery=SceneDelivery(pov=participants[0], voice='冷峻'))
 
@@ -473,12 +471,12 @@ def test_design_thread_mutations_flow_to_packets_by_consumer():
 # ═════════════════ 二、依赖边改由实际解析来源生成（第 2 项） ═════════════════
 
 def _character_delta(key: str, value: str) -> TargetDelta:
-    return TargetDelta(domain=EffectDomain.CHARACTER, subjects=('ch1',),
+    return TargetDelta(modality='actual',domain=EffectDomain.CHARACTER, subjects=('ch1',),
                        holder=None, key=key, op='set', value=value, scope='book')
 
 
 def _world_delta(key: str, value: str, scope: str = 'book') -> TargetDelta:
-    return TargetDelta(domain=EffectDomain.WORLD, subjects=(), holder=None,
+    return TargetDelta(modality='actual',domain=EffectDomain.WORLD, subjects=(), holder=None,
                        key=key, op='set', value=value, scope=scope)
 
 

@@ -87,8 +87,10 @@ class BeatIR(StrictModel):
 
     beat_ref: str = Field(min_length=1, description='场景#场内拍 的完整引用')
     event: str = Field(min_length=1)
-    dramatic_intent: str = Field(min_length=1)
     deltas: tuple[TargetDelta, ...] = Field(default=(), min_length=0)
+    #: 本拍承载的源表达任务（a4：ex_id 原样保留；renderer v7（R10b）把它
+    #: 展开成拍级表达任务——v6 阶段仅随 IR 存档，不进阅读面）。
+    expression_refs: tuple[str, ...] = Field(default=(), min_length=0)
     surface_introductions: tuple[str, ...] = Field(
         default=(), min_length=0,
         description='该拍首次释放的称谓字面（释放位置的可追溯投影）')
@@ -304,7 +306,8 @@ def beats_ir(scene_id: str, beats: tuple[TargetBeat, ...],
     reads_by_beat = dict(reads_by_beat or {})
     return tuple(
         BeatIR(beat_ref=f'{scene_id}#{b.beat_id}', event=b.event,
-               dramatic_intent=b.dramatic_intent, deltas=b.target_delta,
+               deltas=b.target_delta,
+               expression_refs=b.expression_refs,
                surface_introductions=tuple(
                    s for intro in b.surface_introductions for s in intro.surfaces),
                reads=tuple(reads_by_beat.get(b.beat_id, ())))

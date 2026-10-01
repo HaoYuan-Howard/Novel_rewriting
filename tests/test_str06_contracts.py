@@ -203,7 +203,7 @@ def _scene(scene_id: str) -> TargetScene:
         scene_id=scene_id,
         driver=SceneDriver(focal_actor='ch1', immediate_want='退婚', opposition='家族', turn='翻盘'),
         beats=(TargetBeat(beat_id='bt1', event='提亲', participants=('ch1',),
-                          dramatic_intent='立誓', target_delta=()),),
+                          delivery_hint='', target_delta=()),),
         delivery=SceneDelivery(pov='ch1', voice='冷峻'),
         realization_brief='重心在提亲被拒的瞬间；从门槛外的雨写起，压缩路途，'
                           '在退婚言辞落地处收束，衔接下一场的家族反击。')
@@ -322,8 +322,7 @@ def _ir(scene_id: str) -> VerificationIR:
     from contracts.schema.context import BeatIR
     return VerificationIR(scene_id=scene_id,
                           obligations=(SourceObligation(**_obligation()),),
-                          beats=(BeatIR(beat_ref=f'{scene_id}#bt1', event='提亲',
-                                        dramatic_intent='立誓'),))
+                          beats=(BeatIR(beat_ref=f'{scene_id}#bt1', event='提亲'),))
 
 
 def test_writer_context_views_must_agree():
@@ -351,9 +350,9 @@ def test_verification_ir_requires_beat_positioning():
     from contracts.schema.context import BeatIR
     with pytest.raises(ValidationError, match='别的场景'):
         VerificationIR(scene_id='s01', obligations=(), beats=(
-            BeatIR(beat_ref='s02#bt1', event='x', dramatic_intent='y'),))
+            BeatIR(beat_ref='s02#bt1', event='x'),))
     with pytest.raises(ValidationError):
-        BeatIR(beat_ref='bt1', event='x', dramatic_intent='y')
+        BeatIR(beat_ref='bt1', event='x')
 
 
 def test_execution_slice_fields():

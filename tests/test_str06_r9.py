@@ -357,9 +357,9 @@ def test_generated_design_schema_rejects_the_same_local_branch_errors():
     import jsonschema
     from copy import deepcopy
     from tests.test_str06_target import _design_wire
-    from contracts.schema.design import DesignWireV4
+    from contracts.schema.design import DesignWireV5
     from pydantic import ValidationError
-    validator = jsonschema.Draft202012Validator(DesignWireV4.model_json_schema())
+    validator = jsonschema.Draft202012Validator(DesignWireV5.model_json_schema())
     wire = _design_wire()
     assert not list(validator.iter_errors(wire))
     bads = []
@@ -377,7 +377,7 @@ def test_generated_design_schema_rejects_the_same_local_branch_errors():
     for bad in bads:
         assert list(validator.iter_errors(bad))
         with pytest.raises(ValidationError):
-            DesignWireV4.model_validate(bad)
+            DesignWireV5.model_validate(bad)
 
 
 def test_family_release_is_shared_and_stage7_replaces_actual_forms():

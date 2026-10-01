@@ -36,6 +36,9 @@ class Establishment(StateChange):
     #: 状态无衰减」缺陷的对策）。unknown/解除/未运行不在本类型上，它们是
     #: runtime 状态语义（F4 的 Init/Apply 表达）。
     established_by: str = Field(min_length=1)
+    #: 事实时态（a4，TargetDelta 同形透传）：折叠面只按地址/操作/值折叠，
+    #: modality 不参与折叠判等；renderer v7（R10b）经拍级 delta 直接送达。
+    modality: "Literal['actual', 'planned', 'expected', 'conditional'] | None" = None
 
 
 class ConstraintSpec(StrictModel):

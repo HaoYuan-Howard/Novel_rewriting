@@ -624,14 +624,14 @@ setup/payoff 或结局条件中的任何一项，就填 true；否则填 false�
 返回一个 JSON object，不要围栏、不要解释。"""
 
 DESIGN_RULES = """任务：仅依据 Brief/Identity/OutputConstraints 设计目标书
-（wire 协议 stage4-design-v4）。你是整书一次调用的结构设计者：只表达**选择、
+（wire 协议 stage4-design-v5）。你是整书一次调用的结构设计者：只表达**选择、
 结构与相对篇幅重点**——场景/拍编号、归章、线程编号、权重归一与整数预算全部由
 compiler 生成，你不输出任何 ID、编号或归一化数值（I-21）。
 所有类别义务及 satisfaction 都要考虑。**依赖顺序**：被其它义务 requires_cores
 依赖的义务必须**在依赖方之前完成**——承载位置（拍序）先于依赖方的承载位
 （同场按拍序）；顺序颠倒会让依赖义务永远绑不到位。人物动机与阅读效果以
-义务为准：brief、voice、dramatic_intent 只做呈现表达，不得改写义务给出
-的事实、动机与满足条件。
+义务为准：brief 与 voice 只做呈现表达，不得改写义务给出的事实、动机与
+满足条件。
 不增加无证据的人物偏好、价值判断或社会规则。
 自由设计场景，但不为每条义务机械拆场。
 目标状态只存会限制后续的持续事实；即时动作留在事件。初始态由你显式选择，不复制源书末态。
@@ -672,6 +672,40 @@ op=unknown 表示「值未知」：该维度已确立但此刻值未定／未交
 不知道」；「人物不知道」用 knowledge 域表达：知情缺席（不建该人物的知识条目）
 或 believes（持有者以为为真）。初始态里 unset 表示「故事开始前已显式解除」，
 没有该维度就是未建立，不要造占位项。
+
+【事实时态（modality，必填）】
+非 knowledge/reader 域的 set 每条必写 modality：actual＝已发生；planned＝已定
+计划；expected＝预计/约定；conditional＝条件执行（尚未发生）。把计划或预计写
+成 actual 即拒（机械校验）。knowledge 与 reader 域不写 modality。unset/unknown
+不写 modality。
+
+【Brief 锁定项：kp 命题与 kf 事实锁（源盲句柄，只能取 Brief 给出的字面）】
+Brief 的 propositions 登记命题（kp_*，含「被谁公开声称」——公开声称不等于
+任何人的确知）；knowledge_locks 是知情锁 {holder, kp, mode}；fact_locks 是
+事实锁 kf_*（时态 planned/expected/conditional、值未知 unknown_value、原文
+未回答 unanswered）。
+- 知情/读者确认涉及登记命题时，key 直接用该 kp_* 句柄（同一命题不另起自由键
+  重复表达）；knowledge 域用 kp 键时：持有者必须有该 (holder,kp) 的锁，且
+  knowledge_mode 只能取被授权的模式（known 只能来自 known 锁——源文只有
+  suspects 时不得写 known；同一持有者后续新证据支持确认时，Brief 会同时给
+  suspected 与 known 两把锁，你按位置先后选择）；
+- reader 域 set（读者确认）用 kp 键时：reader 必须有该命题的 known 锁——
+  线索、误导、怀疑不是读者确认，没有锁就不安排确认拍；
+- kf 时态锁：只能以 op=set 且 modality＝锁的类别承载（planned 锁就写 planned，
+  不得升格为 actual）；后续真的兑现为已发生时另用自由键记录新事实，不改写
+  kf 键的时态；
+- kf unknown_value（源文未给值）：只能 op=unknown，不得补值；kf unanswered
+  （原文未回答的悬念）：不得 set 作答——留白保留为留白；
+- 必保义务的 realize_holders/realize_locks 列出的锁必须被对应键实际兑现
+  （漏写即拒；机械校验）；
+- 槽位身份：确实跨拍/跨章消费的当前状态沿**同一 key** 更新值（候选对象、
+  当前计划内容进 value），不用换 key 表示状态变化；历史记录用事件表达。
+
+【正向表达任务（expression_refs）】
+beats 的 expression_refs 声明本拍承载的源表达 ex_id（只能取 Brief.expression
+给出的项；narration 是书级机制不上拍）。幽默、反差等正向表达任务落到具体拍；
+书级风格、声线与叙述机制只在 book_style/character_voices/narration 声明，
+不举后段具体情节。
 
 【状态读取：先读旧值、后写新值】
 每场 state_reads 只列实际需要的状态地址，并定位到入场或具体拍：
@@ -727,14 +761,14 @@ immediate_continuation 必须指向上一章末拍；flashback 必须给明确�
 返回一个 JSON object，不要围栏、不要解释。
 """
 
-from contracts.schema.design import DesignWireV4
+from contracts.schema.design import DesignWireV5
 _DESIGN_INSTRUCTIONS = DESIGN_RULES
 
 
 def design_rules(*, known_char_ids: set[str] | None = None,
                  registered_surfaces: Mapping[str, set[str]] | None = None) -> str:
     """模型 Schema 是唯一形状源；动态闭集与接受函数使用同一输入。"""
-    schema = DesignWireV4.model_json_schema()
+    schema = DesignWireV5.model_json_schema()
     if known_char_ids is not None:
         definitions = schema['$defs']
         characters = sorted(known_char_ids)

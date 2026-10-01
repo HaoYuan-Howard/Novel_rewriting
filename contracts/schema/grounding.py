@@ -55,6 +55,9 @@ class ObligationAnchor(StrictModel):
     holder: str | None = None
     #: 认知模式（cognition.mode；其余 None）
     mode: str | None = None
+    #: 效应操作（effect.op；其余 None）。a4 的 unknown 值锁输入（op=unknown
+    #: ＝维度已确立但源文未给值——目标不得补值，与 modality 锁同一消费面）。
+    op: str | None = None
     #: 命题正式 ID（effect.proposition.ref／cognition.proposition.ref；无则 None）
     proposition_ref: str | None = None
     proposition_statement: str | None = None
@@ -182,6 +185,95 @@ class BriefRequirement(StrictModel):
     participants: tuple[str, ...] = Field(default=(), min_length=0)
     # 必要因果的显式边（RC：起止都是 core_id；DAG 校验归 F4 Guard）
     requires_cores: tuple[str, ...] = Field(default=(), min_length=0)
+    #: 本义务 anchors 派生的锁句柄（kp_*/kf_*，a4；信息面——哪些命题/事实
+    #: 进了本义务的锁视野）。
+    locks: tuple[str, ...] = Field(default=(), min_length=0)
+    #: 必保义务须兑现的知情锁（`持有者|kp`，a4 兑现校验的机械分母）：Design
+    #: 的 knowledge 域必须以该 kp 键＋该持有者实际承载；非必保义务为空。
+    realize_holders: tuple[str, ...] = Field(default=(), min_length=0)
+    #: 必保义务须兑现的事实锁（kf_*）：时态锁按同 modality set、值未知锁按
+    #: op=unknown 承载；非必保义务为空。
+    realize_locks: tuple[str, ...] = Field(default=(), min_length=0)
+    #: series 盲标记（a4）：同一机制的离散兑现义务共享同一盲组 token；
+    #: None＝不属任何 series。source-blind——token 由 compiler 铸，不泄源序号。
+    series_group: str | None = None
+    #: series 的机制（源表达 ex_id 或 None；与 PreserveCheckpoint.series 的
+    #: mechanism 同值，供 Design/Bind 理解「同一机制的多次发生」）。
+    series_mechanism: str | None = None
+
+
+#: 知情锁的目标侧模式闭集（a4）：源认知模式的唯一映射——learns/confirms→known、
+#: suspects→suspected、hears_claim→heard、believes→believes；asserts 不铸知情锁
+#: （公开声称是关于世界的事实，不是持有者的知识——转命题登记的公开声称标记）。
+KNOWLEDGE_LOCK_MODES: tuple[str, ...] = (
+    'known', 'suspected', 'heard', 'believes')
+
+#: 事实锁的类别闭集（a4）：planned/expected/conditional＝时态锁（modality≠actual
+#: 的效应——目标只能按同 modality 承载，不得升格为 actual）；unknown_value＝
+#: 值未知锁（op=unknown 的效应——目标不得补值）；unanswered＝原文未回答锁
+#: （canonical 里 open 而从未 close 的悬念——目标不得作答）。
+FACT_LOCK_KINDS: tuple[str, ...] = (
+    'planned', 'expected', 'conditional', 'unknown_value', 'unanswered')
+
+
+def _lock_id(prefix: str, seed: str) -> str:
+    """锁/命题盲句柄：prefix + sha256(seed)[:16]（同一 seed 恒同一句柄）。
+
+    与 `obligation_core_id` 同一铸造纪律（R8a-3）：源盲——Design 看得到稳定
+    句柄，看不到源命题/效应/悬念的原始编号与顺序。
+    """
+    import hashlib
+    return prefix + hashlib.sha256(seed.encode('utf-8')).hexdigest()[:16]
+
+
+class BriefProposition(StrictModel):
+    """kp 命题登记（a4）：Brief 里可被知情/读者确认引用的命题，盲句柄 kp_<hash>。
+
+    `publicly_claimed_by` 是 asserts 认知的转登记（「某人公开声称」事实锁）：
+    命题以「被谁公开声称」的面目出现，**不产生任何持有者的知情锁**——Design
+    不能据此写 known/suspected（说辞与确信是两回事，D5）。
+    """
+
+    kp_id: str = Field(pattern=r'^kp_[0-9a-f]{16}$')
+    statement: str = Field(min_length=1)
+    publicly_claimed_by: tuple[str, ...] = Field(default=(), min_length=0)
+
+
+class BriefKnowledgeLock(StrictModel):
+    """知情锁（a4）：{持有者|reader, kp, mode}——谁对该命题持什么模式。
+
+    Design 的 knowledge 域（及 reader 域确认）用 kp 键承载该命题时，持有者
+    必须有锁且模式被授权（known 只能来自 known 锁——C1 的机械面）。
+    """
+
+    holder: str = Field(min_length=1)
+    kp: str = Field(pattern=r'^kp_[0-9a-f]{16}$')
+    mode: str = Field(pattern=r'^(' + '|'.join(KNOWLEDGE_LOCK_MODES) + r')$')
+
+
+class BriefFactLock(StrictModel):
+    """事实锁（a4）：kf_<hash>——时态/未知/未回答的源事实约束。
+
+    时态锁（planned/expected/conditional）：Design 只能按同 modality 承载
+    （写成 actual 即「预计被写成已发生」，C2 的机械面）；unknown_value：源文
+    值未知，目标不得补值（C9）；unanswered：原文未回答的悬念，目标不得作答。
+    """
+
+    kf_id: str = Field(pattern=r'^kf_[0-9a-f]{16}$')
+    statement: str = Field(min_length=1)
+    kind: str = Field(pattern=r'^(' + '|'.join(FACT_LOCK_KINDS) + r')$')
+    #: 时态锁的源 modality（planned/expected/conditional）；其余类别 None。
+    modality: str | None = None
+
+    @model_validator(mode='after')
+    def _kind_matches_modality(self) -> 'BriefFactLock':
+        expected = self.kind if self.kind in ('planned', 'expected',
+                                              'conditional') else None
+        if self.modality != expected:
+            raise ValueError(
+                f'事实锁 {self.kf_id} 的 modality {self.modality!r} 与类别'
+                f' {self.kind!r} 不一致')
+        return self
 
 
 class ReconstructionBrief(StrictModel):
@@ -191,12 +283,26 @@ class ReconstructionBrief(StrictModel):
     ⚠ 本模型刻意**没有**以下字段，且 `extra='forbid'` 会拒绝任何试图混入的同义
     键：源章号、源拍 id、源叙述顺序、evidence 定位、binding refs。屏蔽源叙述
     拓扑是 Preserve→Design 的冻结边界，字段缺失就是它的类型层表达。
+
+    【a4 锁定项】`propositions`／`knowledge_locks`／`fact_locks` 由 compiler 从
+    义务 anchors 与 canonical loops 确定性派生（`project_brief`）：命题、知情
+    与时态以**盲句柄**（kp_*/kf_*）进 Design——锁的内容是语义（命题文本、
+    模式、modality），坐标（拍号/句段/引文）仍然屏蔽。锁定的知情/时态/未知
+    不得经状态或说明改写；兑现与越权校验归 assemble_body_design。
     """
 
     contract_version: Literal['str06-rc11'] = 'str06-rc11'
     brief_id: str = Field(min_length=1)
     preserve_checkpoint_sha256: str = Field(min_length=64, max_length=64)
     requirements: tuple[BriefRequirement, ...] = Field(min_length=1)
+    #: kp 命题登记（a4）：义务 anchors 引用到的全部命题，盲句柄。
+    propositions: tuple[BriefProposition, ...] = Field(default=(), min_length=0)
+    #: 知情锁（a4）：{持有者|reader, kp, mode}；known 只能来自 known 锁。
+    knowledge_locks: tuple[BriefKnowledgeLock, ...] = Field(
+        default=(), min_length=0)
+    #: 事实锁（a4）：时态（modality≠actual）／值未知（op=unknown）／
+    #: 原文未回答（canonical 悬念 open 未 close）。
+    fact_locks: tuple[BriefFactLock, ...] = Field(default=(), min_length=0)
     book_constraints: tuple[str, ...] = Field(default=(), min_length=0)
     source_narration: HookPov
     expression: tuple[ExpressionRequirement, ...] = Field(min_length=1)
@@ -211,6 +317,26 @@ class ReconstructionBrief(StrictModel):
             raise ValueError('core_id 在 Brief 内必须唯一')
         if any(set(c.requires_cores) - set(ids) for c in self.requirements):
             raise ValueError('Brief 依赖必须闭合，非事件义务也必须投影')
+        # 锁引用闭合（a4）：知情锁引用已登记命题；义务的 locks 引用已登记锁；
+        # 兑现分母引用真实锁行（realize_holders 的 (holder, kp) 必须有锁）。
+        kp_ids = {p.kp_id for p in self.propositions}
+        kf_ids = {f.kf_id for f in self.fact_locks}
+        lock_pairs = {(lock.holder, lock.kp) for lock in self.knowledge_locks}
+        for lock in self.knowledge_locks:
+            if lock.kp not in kp_ids:
+                raise ValueError(f'知情锁引用未登记命题：{lock.kp}')
+        for req in self.requirements:
+            unknown = [x for x in req.locks if x not in kp_ids | kf_ids]
+            if unknown:
+                raise ValueError(f'义务 {req.core_id} 的 locks 引用未登记锁：{unknown}')
+            outside = [x for x in req.realize_locks if x not in kf_ids]
+            if outside:
+                raise ValueError(f'义务 {req.core_id} 的 realize_locks 引用未登记事实锁：{outside}')
+            for pair in req.realize_holders:
+                holder, _, kp = pair.partition('|')
+                if (holder, kp) not in lock_pairs:
+                    raise ValueError(
+                        f'义务 {req.core_id} 的 realize_holders 引用无锁行：{pair!r}')
         return self
 
 

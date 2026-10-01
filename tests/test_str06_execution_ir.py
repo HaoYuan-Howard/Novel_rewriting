@@ -65,8 +65,8 @@ def _scene(sid, *deltas):
         realization_brief=f'重心在{sid}的核心对峙；展开转折，收在结果落地。',
         beats=(TargetBeat(
             beat_id='bt1', event=f'事件{sid}', participants=('ch1',),
-            dramatic_intent='d', target_delta=tuple(
-                TargetDelta(domain=dm, key=k, value=v, subjects=('ch1',) if dm == 'character' else (), op='set', scope='book') for dm, k, v in deltas)),),
+            delivery_hint='', target_delta=tuple(
+                TargetDelta(domain=dm, key=k, value=v, subjects=('ch1',) if dm == 'character' else (), op='set', scope='book', modality='actual') for dm, k, v in deltas)),),
         delivery=SceneDelivery(pov='ch1', voice='v'))
 
 
@@ -130,9 +130,9 @@ def test_init_establishments_from_target_not_source_truth():
     graph = _graph()
     assert init_establishments(graph) == ()
     graph = graph.model_copy(update={'initial_state': (
-        TargetDelta(domain='character', subjects=('ch1',), key='appearance',
+        TargetDelta(modality='actual',domain='character', subjects=('ch1',), key='appearance',
                     value='甲的容貌', op='set', scope='book'),
-        TargetDelta(domain='character', subjects=('ch2',), key='appearance',
+        TargetDelta(modality='actual',domain='character', subjects=('ch2',), key='appearance',
                     value='乙的容貌', op='set', scope='book'))})
     inits = init_establishments(graph)
     state = fold_accepted_prefix((), initial=inits)
@@ -187,7 +187,7 @@ def _reader_scene(sid, *, establish=None, confirms=None, reads=()):
     deltas = []
     if establish is not None:
         key, value = establish
-        deltas.append(TargetDelta(domain='world', key=key, value=value,
+        deltas.append(TargetDelta(modality='actual',domain='world', key=key, value=value,
                                   subjects=(), op='set', scope='book'))
     for key, value in (confirms or ()):
         deltas.append(TargetDelta(
@@ -198,7 +198,7 @@ def _reader_scene(sid, *, establish=None, confirms=None, reads=()):
         driver=SceneDriver(focal_actor='ch1', immediate_want='w', opposition='o', turn='t'),
         realization_brief=f'重心在{sid}的核心对峙；展开转折，收在结果落地。',
         beats=(TargetBeat(beat_id='bt1', event=f'事件{sid}', participants=('ch1',),
-                          dramatic_intent='d', target_delta=tuple(deltas)),),
+                          delivery_hint='', target_delta=tuple(deltas)),),
         delivery=SceneDelivery(pov='ch1', voice='v'))
 
 
@@ -281,7 +281,7 @@ def test_believes_knowledge_enters_writer_view_without_becoming_world_fact():
         realization_brief='重心在误以为夫君已离开；展开试探，收在决心留守。',
         beats=(TargetBeat(
             beat_id='bt1', event='误以为', participants=('ch1',),
-            dramatic_intent='d',
+            delivery_hint='',
             target_delta=(TargetDelta(
                 domain='knowledge', key='left_home', value='以为夫君已离开',
                 holder='ch1', op='set', scope='book', knowledge_mode='believes'),)),),
@@ -294,7 +294,7 @@ def test_believes_knowledge_enters_writer_view_without_becoming_world_fact():
         realization_brief='重心在据误以为行动；展开试探，收在结果落地。',
         beats=(TargetBeat(
             beat_id='bt1', event='据误以为行动', participants=('ch1',),
-            dramatic_intent='d', target_delta=()),),
+            delivery_hint='', target_delta=()),),
         delivery=SceneDelivery(pov='ch1', voice='v'))
     graph = BodyDesign(**sample_canonical_expression((establish, consume)), initial_state=(), graph_id='g3', book_style='误以为。',
                        scenes=(establish, consume),

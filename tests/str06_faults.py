@@ -221,7 +221,6 @@ def _revised_design_wires(wires: dict) -> dict:
     scene = revised['design']['scenes'][0]
     carrier = deepcopy(scene['beats'][0])
     carrier['event'] = '修订补拍：为必保义务补一个承载位'
-    carrier['dramatic_intent'] = '补承载'
     scene['beats'].append(carrier)
     return revised
 

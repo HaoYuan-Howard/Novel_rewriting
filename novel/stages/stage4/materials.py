@@ -44,7 +44,7 @@ def validate_design_materials(
                 parts[f'{sid}/driver/{field}'] = getattr(scene.driver, field)
             for beat in scene.beats:
                 ref = f'{sid}/{beat.beat_id}'
-                for field in ('event', 'dramatic_intent', 'delivery_hint'):
+                for field in ('event', 'delivery_hint'):
                     parts[f'{ref}/{field}'] = getattr(beat, field)
                 for i, delta in enumerate(beat.target_delta):
                     if isinstance(delta.value, str):

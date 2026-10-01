@@ -55,7 +55,7 @@ def _wire() -> dict:
         'world_rules': ['术法须以寿命为代价'],
         'initial_state': [
             {'domain': 'character', 'subjects': ['yun'], 'holder': None,
-             'key': 'marital_status', 'op': 'set', 'value': '新婚'}],
+             'key': 'marital_status', 'op': 'set', 'modality': 'actual', 'value': '新婚'}],
         'initial_surfaces': [{'char_id': 'yun', 'surfaces': ['云娘']}],
         'scenes': [
             {'state_reads': [],
@@ -64,18 +64,18 @@ def _wire() -> dict:
              'realization_brief': '重心在婚礼到立约的落差；展开洞房对坐，在旧约处收住。',
              'beats': [
                  {'event': '拜堂', 'participants': ['yun', 'fu_jun'],
-                  'dramatic_intent': '成礼', 'target_delta': [
+                  'delivery_hint': '', 'target_delta': [
                       {'domain': 'relation', 'subjects': ['yun', 'fu_jun'],
-                       'op': 'set', 'scope': 'book', 'key': 'marital_status',
+                       'op': 'set', 'modality': 'actual', 'scope': 'book', 'key': 'marital_status',
                        'value': '夫妻'}], 'delivery_hint': ''},
                  {'event': '夫君立约', 'participants': ['yun', 'fu_jun'],
-                  'dramatic_intent': '埋线', 'target_delta': [], 'delivery_hint': '',
+                  'delivery_hint': '', 'target_delta': [],
                   'threads': [{'op': 'open', 'tag': 't1', 'kind': 'question',
                                'subject': 'yun', 'text': '玉佩上的字是谁刻的'},
                               {'op': 'open', 'tag': 't2', 'kind': 'promise',
                                'subject': 'fu_jun', 'text': '再不隐瞒'}]},
                  {'event': '云娘起疑', 'participants': ['yun'],
-                  'dramatic_intent': '转向', 'target_delta': [
+                  'delivery_hint': '', 'target_delta': [
                       {'domain': 'reader', 'subjects': [], 'op': 'set',
                        'scope': 'scene', 'key': 'debt', 'value': '夫君身负旧约',
                        'confirms': {'domain': 'relation', 'subjects': ['yun', 'fu_jun'],
@@ -89,9 +89,9 @@ def _wire() -> dict:
              'realization_brief': '重心在玉佩的发现；压缩等待，在字面露出时收束。',
              'beats': [
                  {'event': '翻检妆匣', 'participants': ['yun'],
-                  'dramatic_intent': '推进', 'target_delta': [], 'delivery_hint': ''},
+                  'delivery_hint': '', 'target_delta': []},
                  {'event': '发现玉佩刻字', 'participants': ['yun'],
-                  'dramatic_intent': '揭示', 'target_delta': [], 'delivery_hint': '',
+                  'delivery_hint': '', 'target_delta': [],
                   'threads': [{'op': 'close', 'ref': 't1', 'ending': 'answered',
                                'resolution': '刻着沈字，指向旧案'}]}],
              'delivery': {'pov': 'yun', 'voice': '冷峻', 'avoid': []}}],
@@ -129,7 +129,7 @@ def _checkpoint(*obligation_ids: str) -> PreserveCheckpoint:
 def test_four_protocols_are_independent_literals():
     """每个付费语义节点一个独立协议字面量：演进互不牵连（B3 前半）。"""
     assert STAGE4_PRESERVE_PROTOCOL == 'stage4-preserve-v2'
-    assert STAGE4_DESIGN_PROTOCOL == 'stage4-design-v4'
+    assert STAGE4_DESIGN_PROTOCOL == 'stage4-design-v5'
     assert STAGE4_BIND_PROTOCOL == 'stage4-bind-v1'
     assert STAGE4_HOOK_DESIGN_PROTOCOL == 'stage4-hook-design-v1'
     assert len({STAGE4_PRESERVE_PROTOCOL, STAGE4_DESIGN_PROTOCOL,
@@ -235,7 +235,7 @@ def test_book_style_is_required_on_canonical():
                                    opposition='o', turn='t'),
                 realization_brief='重心；收束。',
                 beats=(TargetBeat(beat_id='b01', event='e', participants=('ch1',),
-                                  dramatic_intent='d'),),
+                                  delivery_hint=''),),
                 delivery=SceneDelivery(pov='ch1', voice='v')),),
             chapters=(ChapterAssignment(chapter_ordinal=1, purpose='p',
                                         scene_ids=('s01',)),))
@@ -278,7 +278,7 @@ def test_reader_confirmation_without_address_is_refused():
                     scope='scene', value='床底有人')
     # 非 reader 域不得携带 confirms
     with pytest.raises(ValidationError, match='confirms'):
-        TargetDelta(domain='world', subjects=(), key='hiding', op='set',
+        TargetDelta(modality='actual',domain='world', subjects=(), key='hiding', op='set',
                     scope='book', value='床底有人',
                     confirms=StateAddress(domain='world', key='hiding'))
     # confirms 不得指向读者确认本身
@@ -301,7 +301,7 @@ def test_reader_confirmation_must_reference_an_established_fact():
     bad['scenes'][0]['beats'][2]['target_delta'][0]['confirms'] = {
         'domain': 'world', 'subjects': [], 'holder': None, 'key': 'hiding'}
     bad['scenes'][1]['beats'][1]['target_delta'] = [
-        {'domain': 'world', 'subjects': [], 'op': 'set', 'scope': 'book',
+        {'domain': 'world', 'subjects': [], 'op': 'set', 'modality': 'actual', 'scope': 'book',
          'key': 'hiding', 'value': '床底有人'}]
     _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'}, expression_requirements=sample_requirements(), source_narration=sample_narration())
     assert any('早于事实建立' in e for e in errors)

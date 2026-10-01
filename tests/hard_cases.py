@@ -140,8 +140,8 @@ def _guard_m7() -> list:
     scene = _read_graph().scenes[1]                       # s02：声明了两条读取
     ir = VerificationIR(
         scene_id='s02', obligations=(),
-        beats=(BeatIR(beat_ref='s02#b01', event='点灯', dramatic_intent='d'),
-               BeatIR(beat_ref='s02#b02', event='灯下翻检', dramatic_intent='d')))
+        beats=(BeatIR(beat_ref='s02#b01', event='点灯'),
+               BeatIR(beat_ref='s02#b02', event='灯下翻检')))
     context = WriterContext(
         scene_id='s02', execution_slice_sha256='a' * 64, verification_ir=ir,
         writer_brief=WriterBrief(scene_id='s02', realization_brief='重心；收束。',
@@ -244,13 +244,13 @@ CASES: dict[str, Case] = {
 # ─── 其余 HARD 的最小会红样本（编译闭合一族） ────────────────────────────────
 
 def _body_design_bad_wire() -> list:
-    """BodyDesign 编译闭合：非法 POV（未知人物）当场拒（stage4-design-v4 形状）。"""
+    """BodyDesign 编译闭合：非法 POV（未知人物）当场拒（stage4-design-v5 形状）。"""
     from novel.stages.stage4.design import assemble_body_design
     _body, errors = assemble_body_design(
-        {'protocol_version': 'stage4-design-v4', 'book_style': '冷峻。',
+        {'protocol_version': 'stage4-design-v5', 'book_style': '冷峻。',
          'chapters': [{'purpose': 'e', 'scenes': 1}],
          'scenes': [{'beats': [{'event': 'e', 'participants': ['ch1'],
-                                'dramatic_intent': 'd'}],
+                                'delivery_hint': ''}],
                      'delivery': {'pov': 'ghost', 'voice': 'v'},
                      'driver': {'focal_actor': 'ch1', 'immediate_want': 'w',
                                 'opposition': 'o', 'turn': 't'},
@@ -551,14 +551,14 @@ def _design_surface_not_registered() -> list:
     """称谓闭合：Design 放行 Characters 未登记的字面。"""
     from novel.stages.stage4.design import assemble_body_design
     _body, errors = assemble_body_design(
-        {**sample_design_expression(('yun',)), 'protocol_version': 'stage4-design-v4', 'book_style': '冷峻。',
+        {**sample_design_expression(('yun',)), 'protocol_version': 'stage4-design-v5', 'book_style': '冷峻。',
          'initial_state': [], 'scenes': [{
             'state_reads': [],
             'driver': {'focal_actor': 'yun', 'immediate_want': 'w',
                        'opposition': 'o', 'turn': 't'},
             'realization_brief': '重心在约定成立；展开对峙，在立约处收束。',
             'beats': [{'event': '约定成立', 'participants': ['yun'],
-                       'dramatic_intent': 'd', 'target_delta': [], 'delivery_hint': '',
+                       'delivery_hint': '', 'target_delta': [],
                        'surface_introductions': [
                            {'char_id': 'yun', 'surfaces': ['云娘子']}]}],
             'delivery': {'pov': 'yun', 'voice': 'v', 'avoid': []}}],

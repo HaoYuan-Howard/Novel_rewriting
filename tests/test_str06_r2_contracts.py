@@ -47,7 +47,7 @@ H64 = 'a' * 64
 # ───────────────────────── 构造器 ─────────────────────────
 
 def _delta(key: str, value: str) -> TargetDelta:
-    return TargetDelta(domain=EffectDomain.WORLD, subjects=(), key=key,
+    return TargetDelta(modality='actual',domain=EffectDomain.WORLD, subjects=(), key=key,
                        op='set', value=value, scope='book')
 
 
@@ -55,7 +55,7 @@ def _beat(beat_id: str, event: str, participants=('ch1',),
           threads=(), deltas=()) -> TargetBeat:
     return TargetBeat(beat_id=beat_id, event=event,
                       participants=tuple(participants),
-                      dramatic_intent='d', target_delta=tuple(deltas),
+                      delivery_hint='', target_delta=tuple(deltas),
                       threads=tuple(threads))
 
 
@@ -322,10 +322,8 @@ def test_m7_flags_declared_read_missing_from_ir():
     graph = _read_graph()
     scene = graph.scenes[1]
     ir = VerificationIR(scene_id='s02', obligations=(),
-                        beats=(BeatIR(beat_ref='s02#b01', event='点灯',
-                                     dramatic_intent='d'),
-                               BeatIR(beat_ref='s02#b02', event='灯下翻检',
-                                     dramatic_intent='d')))
+                        beats=(BeatIR(beat_ref='s02#b01', event='点灯'),
+                               BeatIR(beat_ref='s02#b02', event='灯下翻检')))
     brief = WriterBrief(scene_id='s02', realization_brief='重心；收束。',
                         scene_driver_summary='ch1 想查', pov='ch1', voice='冷峻')
     context = WriterContext(scene_id='s02', execution_slice_sha256=H64,
@@ -339,7 +337,8 @@ def test_m7_flags_declared_read_missing_from_ir():
                                    subjects=(), holder=None, value='烛火未点',
                                    established_by='init'),),
         'beats': (ir.beats[0],
-                  BeatIR(beat_ref='s02#b02', event='灯下翻检', dramatic_intent='d',
+                  BeatIR(beat_ref='s02#b02', event='灯下翻检',
+
                          reads=(StateEntry(domain=EffectDomain.WORLD, key='light',
                                            subjects=(), holder=None,
                                            value='烛火亮起',
@@ -651,7 +650,7 @@ def test_r2_version_constants():
         STAGE4_DESIGN_PROTOCOL, STR06_RC_LABELS, STR06_RC_VERSION,
     )
     from novel.stages.common import RENDERER_VERSION, WRITER_PROTOCOL_VERSION
-    assert STAGE4_DESIGN_PROTOCOL == 'stage4-design-v4'
+    assert STAGE4_DESIGN_PROTOCOL == 'stage4-design-v5'
     assert STR06_RC_VERSION == 'str06-rc11'          # R9 表达送达集中升版
     assert 'str06-rc10' in STR06_RC_LABELS
     assert RENDERER_VERSION == 'str06-render-v6'
@@ -669,12 +668,12 @@ def test_r2_version_constants():
 def _wire_v2() -> dict:
     """两章三拍的 design wire v2：threads（本地标签）＋world_rules＋entry。"""
     return {**sample_design_expression(('yun',)),
-        'protocol_version': 'stage4-design-v4',
+        'protocol_version': 'stage4-design-v5',
         'book_style': '冷峻克制的第三人称叙事。',
         'world_rules': ['术法须以寿命为代价'],
         'initial_state': [
             {'domain': 'world', 'subjects': [], 'holder': None,
-             'key': 'light', 'op': 'set', 'value': '烛火未点'}],
+             'key': 'light', 'op': 'set', 'modality': 'actual', 'value': '烛火未点'}],
         'scenes': [
             {'state_reads': [],
              'driver': {'focal_actor': 'yun', 'immediate_want': '安度新婚',
@@ -682,11 +681,11 @@ def _wire_v2() -> dict:
              'realization_brief': '重心在立约的落差；在旧约出口处收住。',
              'beats': [
                  {'event': '拜堂', 'participants': ['yun', 'fu_jun'],
-                  'dramatic_intent': '成礼', 'target_delta': [], 'delivery_hint': '',
+                  'delivery_hint': '', 'target_delta': [],
                   'threads': [{'op': 'open', 'tag': 't1', 'kind': 'question',
                                'subject': 'yun', 'text': '玉佩上的字是谁刻的'}]},
                  {'event': '云娘起疑', 'participants': ['yun'],
-                  'dramatic_intent': '转向', 'target_delta': [], 'delivery_hint': '',
+                  'delivery_hint': '', 'target_delta': [],
                   'threads': [{'op': 'open', 'tag': 't2', 'kind': 'promise',
                                'subject': 'fu_jun', 'text': '再不隐瞒'}]}],
              'delivery': {'pov': 'yun', 'voice': '冷峻', 'avoid': []}},
@@ -697,13 +696,13 @@ def _wire_v2() -> dict:
              'realization_brief': '重心在玉佩的发现；在字面露出时收束。',
              'beats': [
                  {'event': '灯下翻检', 'participants': ['yun'],
-                  'dramatic_intent': '推进', 'target_delta': [
-                      {'domain': 'world', 'subjects': [], 'op': 'set', 'scope': 'book',
+                  'delivery_hint': '', 'target_delta': [
+                      {'domain': 'world', 'subjects': [], 'op': 'set', 'modality': 'actual', 'scope': 'book',
                        'key': 'light', 'value': '烛火亮起'}],
                   'delivery_hint': '',
                   'threads': [{'op': 'advance', 'ref': 't1', 'progress': '查到玉佩来历'}]},
                  {'event': '玉佩收线', 'participants': ['yun', 'fu_jun'],
-                  'dramatic_intent': '收束', 'target_delta': [], 'delivery_hint': '',
+                  'delivery_hint': '', 'target_delta': [],
                   'threads': [{'op': 'close', 'ref': 't1', 'ending': 'answered',
                                'resolution': '刻着沈字，指向旧案'},
                               {'op': 'close', 'ref': 't2', 'ending': 'broken',

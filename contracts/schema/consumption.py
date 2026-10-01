@@ -424,6 +424,11 @@ STR06_FIELD_DELIVERY: dict[str, FieldDeliverySpec] = {
         '.anchors[].modality', consumers=(_A,), scope=_SCENE,
         mode=DeliveryMode.AUDIT_ONLY, note='效应时态（a4 kf 锁输入，审计位）'),
     'writer_book_ir.chapters[].scenes[].verification_ir.obligations[]'
+    '.anchors[].op': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.obligations[]'
+        '.anchors[].op', consumers=(_A,), scope=_SCENE,
+        mode=DeliveryMode.AUDIT_ONLY, note='效应操作（a4 值未知锁输入，审计位）'),
+    'writer_book_ir.chapters[].scenes[].verification_ir.obligations[]'
     '.anchors[].visibility': _spec(
         'writer_book_ir.chapters[].scenes[].verification_ir.obligations[]'
         '.anchors[].visibility', consumers=(_A,), scope=_SCENE,
@@ -450,12 +455,19 @@ STR06_FIELD_DELIVERY: dict[str, FieldDeliverySpec] = {
         'writer_book_ir.chapters[].scenes[].verification_ir.beats[].event',
         consumers=(_W,), scope=_SCENE, mode=DeliveryMode.MUST_REALIZE,
         note='本章拍的事件'),
-    'writer_book_ir.chapters[].scenes[].verification_ir.beats[].dramatic_intent': (
+    'writer_book_ir.chapters[].scenes[].verification_ir.beats[].expression_refs': (
         _spec('writer_book_ir.chapters[].scenes[].verification_ir.beats[]'
-              '.dramatic_intent', consumers=(_A,), scope=_SCENE,
+              '.expression_refs', consumers=(_A,), scope=_SCENE,
               mode=DeliveryMode.AUDIT_ONLY,
-              note='R10-0.4 实证 renderer 从不渲染（原登记写手可见属漂移）；'
-                   'R10b 删除该字段')),
+              note='拍承载的源表达 ex_id（R10a a4）；renderer v7（R10b）展开成'
+                   '拍级表达任务并改 MUST_REALIZE，v6 阶段不进阅读面。'
+                   'dramatic_intent 已删（R10-0.4 实证 renderer 从不渲染）')),
+    'writer_book_ir.chapters[].scenes[].verification_ir.beats[].deltas[].modality': (
+        _spec('writer_book_ir.chapters[].scenes[].verification_ir.beats[]'
+              '.deltas[].modality', consumers=(_A,), scope=_SCENE,
+              mode=DeliveryMode.AUDIT_ONLY,
+              note='事实时态（a4；R10b renderer v7 以「计划/预计，尚未发生」'
+                   '措辞送达写手后改 MUST_REALIZE）')),
     'writer_book_ir.chapters[].scenes[].verification_ir.beats[].deltas[].domain': (
         _spec('writer_book_ir.chapters[].scenes[].verification_ir.beats[]'
               '.deltas[].domain', consumers=(_W,), scope=_SCENE,
@@ -735,6 +747,12 @@ STR06_FIELD_DELIVERY: dict[str, FieldDeliverySpec] = {
         'writer_book_ir.chapters[].scenes[].verification_ir.planned_delta[].op',
         consumers=(_A,), scope=_SCENE, mode=DeliveryMode.AUDIT_ONLY,
         note=_ID_PENDING),
+    'writer_book_ir.chapters[].scenes[].verification_ir.planned_delta[].modality': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.planned_delta[]'
+        '.modality', consumers=(_A,), scope=_SCENE,
+        mode=DeliveryMode.AUDIT_ONLY,
+        note='扁平效应副本的事实时态（a4；R10b renderer v7 以「计划/预计，'
+             '尚未发生」措辞送达写手后改 MUST_REALIZE）'),
     'writer_book_ir.chapters[].scenes[].verification_ir.planned_delta[].value': _spec(
         'writer_book_ir.chapters[].scenes[].verification_ir.planned_delta[].value',
         consumers=(_A,), scope=_SCENE, mode=DeliveryMode.AUDIT_ONLY,

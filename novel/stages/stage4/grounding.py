@@ -30,17 +30,18 @@
 from __future__ import annotations
 
 import hashlib
-from typing import Any
+from typing import Any, Final
 
 from contracts.schema.design import BodyDesign
 from contracts.schema.grounding import (
+    BriefFactLock, BriefKnowledgeLock, BriefProposition, BriefRequirement,
     IdentityProjection, ObligationAnchor, ObligationSeries, PreserveCheckpoint,
     ReconstructionBrief, SemanticBinding, SourceLineage, SourceObligation,
+    _lock_id,
 )
 from contracts.schema.source import (
     BlueprintsArtifactV15, CharactersCore,
 )
-from contracts.schema.grounding import BriefRequirement
 from contracts.schema.workflow import (
     STAGE4_BIND_PROTOCOL, STAGE4_PRESERVE_PROTOCOL,
 )
@@ -117,6 +118,7 @@ def _anchor_index(
                     handle=handle, source_kind='effect',
                     address=f'{_render_target(effect.target)}.{effect.key}',
                     value=effect.value, modality=effect.modality,
+                    op=effect.op,
                     visibility=effect.disclosure.visibility,
                     proposition_ref=prop.ref if prop else None,
                     proposition_statement=prop.statement if prop else None,
@@ -442,6 +444,146 @@ def obligation_core_id(obligation_id: str) -> str:
         obligation_id.encode('utf-8')).hexdigest()[:16]
 
 
+#: 源认知模式 → 知情锁目标模式的唯一映射（a4，PLAN §二.1）：learns/confirms→
+#: known、suspects→suspected、hears_claim→heard、believes→believes。asserts
+#: 不在表内——公开声称是「某人声称」的世界事实（命题登记带
+#: publicly_claimed_by），不铸任何持有者的知情锁；public 持有者（公众知情）
+#: 同理不铸锁（目标侧经世界事实表达）。
+_KNOWLEDGE_LOCK_MODE: Final[dict[str, str]] = {
+    'learns': 'known', 'confirms': 'known',
+    'suspects': 'suspected', 'hears_claim': 'heard', 'believes': 'believes',
+}
+
+
+def _fact_lock_statement(anchor: ObligationAnchor) -> str:
+    """事实锁的自然语言面（确定性渲染；不摘要、不改写命题）。"""
+    if anchor.proposition_statement:
+        return anchor.proposition_statement
+    if anchor.value is not None:
+        return f'{anchor.address} = {anchor.value!r}'
+    return anchor.address or anchor.handle
+
+
+def _unanswered_loops(
+    blueprint: BlueprintsArtifactV15,
+) -> list[tuple[str, str]]:
+    """canonical 里 open 而从未 close 的悬念（原文未回答锁的输入，§二.1）。
+
+    按 loop 正式 ref 扫全书：open 记问题、close 记收束；ref 是 compiler 归一
+    后的身份（跨章配对同一 ref），所以「全书范围」只是对 canonical 的机械
+    扫描，不做语义合并。留线（书末仍开放）与未回答同形——都不许目标作答。
+    """
+    questions: dict[str, str] = {}
+    closed: set[str] = set()
+    order: list[str] = []
+    for chapter_bp in sorted(blueprint.chapters, key=lambda c: c.chapter):
+        for beat in chapter_bp.beats:
+            for loop in beat.loops:
+                if loop.op == 'open' and loop.ref not in questions:
+                    questions[loop.ref] = loop.question or loop.ref
+                    order.append(loop.ref)
+                elif loop.op == 'close':
+                    closed.add(loop.ref)
+    return [(ref, questions[ref]) for ref in order if ref not in closed]
+
+
+def _derive_brief_locks(
+    checkpoint: PreserveCheckpoint, blueprint: BlueprintsArtifactV15,
+) -> tuple[tuple[BriefProposition, ...], tuple[BriefKnowledgeLock, ...],
+           tuple[BriefFactLock, ...], dict[str, dict[str, tuple[str, ...]]]]:
+    """义务 anchors＋canonical loops → Brief 锁定项（a4 唯一派生点）。
+
+    · kp 命题登记：anchors 引用到的全部命题（effect 的 concealed 命题与
+      cognition 命题同注册——揭示链经同一命题 ref 闭合，D3/D5）；
+      asserts 认知转 `publicly_claimed_by`，不铸知情锁。
+    · 知情锁：cognition anchors 按唯一映射铸 {holder, kp, mode}；
+      holder=public 跳过。
+    · 事实锁：effect anchors——op=unknown → unknown_value（值未知，目标
+      不得补值）；op≠unset 且 modality≠actual → 时态锁（目标只能按同
+      modality 承载）。canonical 悬念 open 未 close → unanswered。
+    · 兑现分母：必保义务派生的 (holder|kp) 与 kf 句柄（`realize_holders`/
+      `realize_locks`；非必保义务为空——可综合义务不强制兑现）。
+    """
+    propositions: dict[str, BriefProposition] = {}
+    knowledge: dict[tuple[str, str, str], BriefKnowledgeLock] = {}
+    facts: dict[str, BriefFactLock] = {}
+    per_obligation: dict[str, dict[str, tuple[str, ...]]] = {}
+
+    def _register_proposition(anchor: ObligationAnchor) -> str | None:
+        if not anchor.proposition_ref:
+            return None
+        kp = _lock_id('kp_', anchor.proposition_ref)
+        if kp not in propositions:
+            propositions[kp] = BriefProposition(
+                kp_id=kp,
+                statement=anchor.proposition_statement or anchor.proposition_ref)
+        return kp
+
+    for obligation in checkpoint.obligations:
+        derived: list[str] = []
+        realize_holders: list[str] = []
+        realize_locks: list[str] = []
+        for anchor in obligation.anchors:
+            if anchor.source_kind == 'cognition':
+                kp = _register_proposition(anchor)
+                if kp is None:
+                    continue
+                derived.append(kp)
+                mode = _KNOWLEDGE_LOCK_MODE.get(anchor.mode or '')
+                if mode is not None and anchor.holder not in (None, 'public'):
+                    knowledge[(anchor.holder, kp, mode)] = \
+                        BriefKnowledgeLock(holder=anchor.holder, kp=kp, mode=mode)
+                    if obligation.must_preserve:
+                        pair = f'{anchor.holder}|{kp}'
+                        if pair not in realize_holders:
+                            realize_holders.append(pair)
+                elif anchor.mode == 'asserts' and anchor.holder \
+                        and anchor.holder != 'public':
+                    entry = propositions[kp]
+                    if anchor.holder not in entry.publicly_claimed_by:
+                        propositions[kp] = entry.model_copy(update={
+                            'publicly_claimed_by': (*entry.publicly_claimed_by,
+                                                    anchor.holder)})
+            elif anchor.source_kind == 'effect':
+                kp = _register_proposition(anchor)
+                if anchor.op == 'unknown':
+                    kf = _lock_id('kf_', anchor.handle)
+                    facts[kf] = BriefFactLock(
+                        kf_id=kf, kind='unknown_value',
+                        statement=_fact_lock_statement(anchor))
+                    derived.append(kf)
+                    if obligation.must_preserve:
+                        realize_locks.append(kf)
+                elif anchor.op != 'unset' and anchor.modality not in (
+                        None, 'actual'):
+                    kf = _lock_id('kf_', anchor.handle)
+                    facts[kf] = BriefFactLock(
+                        kf_id=kf, kind=anchor.modality, modality=anchor.modality,
+                        statement=_fact_lock_statement(anchor))
+                    derived.append(kf)
+                    if obligation.must_preserve:
+                        realize_locks.append(kf)
+                if kp is not None:
+                    derived.append(kp)
+        deduped = []
+        for item in derived:
+            if item not in deduped:
+                deduped.append(item)
+        per_obligation[obligation.obligation_id] = {
+            'locks': tuple(deduped),
+            'realize_holders': tuple(realize_holders),
+            'realize_locks': tuple(realize_locks)}
+    for ref, question in _unanswered_loops(blueprint):
+        kf = _lock_id('kf_', ref)
+        facts[kf] = BriefFactLock(kf_id=kf, kind='unanswered', statement=question)
+    return (
+        tuple(propositions[k] for k in sorted(propositions)),
+        tuple(knowledge[key] for key in sorted(knowledge)),
+        tuple(facts[k] for k in sorted(facts)),
+        per_obligation,
+    )
+
+
 def project_brief(
     checkpoint: PreserveCheckpoint, characters: CharactersCore,
     blueprint: BlueprintsArtifactV15,
@@ -451,23 +593,43 @@ def project_brief(
     所有义务类型、must 与 satisfaction 无损进入 source-blind Brief；因果闭合。
     `book_constraints`（R2.5 世界约束通道）：Blueprint 的 world_constraints
     的 statement 原样机械填入（AUD 反例「世界约束没有通道」——恒空即红）；
-    目标侧是否沿用或改写由 Design 决定（wire v2 的 world_rules），compiler
-    不做语义推断。R9 起 blueprint 为必需输入，表达语义无历史默认值。
+    目标侧是否沿用或改写成 world_rules 由 Design 决定（wire v2 的 world_rules），
+    compiler 不做语义推断。R9 起 blueprint 为必需输入，表达语义无历史默认值。
+    a4：锁定项（kp 命题/知情锁/kf 事实锁）由义务 anchors 与 canonical loops
+    确定性派生（`_derive_brief_locks`）；series 以盲组 token 标记到成员义务
+    （不泄源序号；mechanism＝源表达 ex_id）。
     """
     # 不以源义务序号暴露叙述顺序；所有类型与满足条件等量投影，依赖闭合。
     core_ids = {o.obligation_id: obligation_core_id(o.obligation_id)
                 for o in checkpoint.obligations}
+    propositions, knowledge_locks, fact_locks, derived_locks = \
+        _derive_brief_locks(checkpoint, blueprint)
+    series_group: dict[str, str] = {}
+    series_mechanism: dict[str, str | None] = {}
+    for group in checkpoint.series:
+        token = _lock_id('sr_', '|'.join(sorted(group.members)))
+        for member in group.members:
+            series_group[member] = token
+            series_mechanism[member] = group.mechanism
     cores = tuple(sorted((
         BriefRequirement(
             core_id=core_ids[o.obligation_id], summary=o.statement,
             kind=o.kind, must_preserve=o.must_preserve, satisfaction=o.satisfaction,
             participants=tuple(sorted(o.lineage.character_ids)),
-            requires_cores=tuple(sorted(core_ids[r] for r in o.requires)))
+            requires_cores=tuple(sorted(core_ids[r] for r in o.requires)),
+            locks=derived_locks[o.obligation_id]['locks'],
+            realize_holders=derived_locks[o.obligation_id]['realize_holders'],
+            realize_locks=derived_locks[o.obligation_id]['realize_locks'],
+            series_group=series_group.get(o.obligation_id),
+            series_mechanism=series_mechanism.get(o.obligation_id))
         for o in checkpoint.obligations), key=lambda c: c.core_id))
     brief = ReconstructionBrief(
         brief_id=f'brief_{checkpoint.checkpoint_id}',
         preserve_checkpoint_sha256=checkpoint.checkpoint_sha256,
         requirements=cores,
+        propositions=propositions,
+        knowledge_locks=knowledge_locks,
+        fact_locks=fact_locks,
         source_narration=blueprint.source_expression.narration,
         expression=tuple({'ex_id': item.ex_id, 'kind': item.kind, 'statement': item.statement}
                          for item in blueprint.source_expression.items),

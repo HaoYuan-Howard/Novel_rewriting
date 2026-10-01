@@ -75,7 +75,7 @@ Golden 验证，不重新加回迁移关闭条件。
 |---|---|---|
 | 1 | [x] R9a／R9b／B6a（历史） | 交付记录见历史索引；R9c 首段执行记录见下节 |
 | 2 | [x] R10-0 基线、真实消费与反例集（免费） | 登记、两根冻结证据清单、逐 owner 请求占比、送达守卫自检、C1–C11 反例集、用户提供的 Golden Set v3.0 关键案例（已冻结）、基线读数——全部闭合（见 R10-0 执行记录） |
-| 3 | [ ] R10a 关键语义交接（免费开发） | a1 Stage2 引文/时态（**已完成**）→ a2 Preserve 证据视图/锚定 → a3 冲突回派三分支 → a4 Brief 锁定＋Design v5 → a5 Bind/compile 位置校验；一次校验合并报告，fake transport |
+| 3 | [ ] R10a 关键语义交接（免费开发） | a1 Stage2 引文/时态（**已完成**）→ a2 Preserve 证据视图/锚定（**已完成**）→ a3 冲突回派三分支（**已完成**）→ a4 Brief 锁定＋Design v5（**已完成**）→ a5 Bind/compile 位置校验；一次校验合并报告，fake transport |
 | 4 | [ ] R10b WriterIR 投影与写手协议 v7（免费） | 完整章包夹具先行；背景投影收窄；同基座 v6/v7 免费形状读数对照，不做付费对照 |
 | 5 | [ ] 收口 工程验收与付费基线冻结（免费） | §9.5 五文件、受影响 stage、fake 产品链、旧根关闭式拒识核验、默认非 corpus 回归、前端四件 |
 | 6 | [ ] R10c＝B6-B 付费无人工 patch 全书（分段授权） | c1 语义层段＋免费核读 → c2 成文段；工程核验＋用户通读 → STR-06 关闭；禁止 owner 内容 patch |
@@ -329,6 +329,67 @@ Golden 验证，不重新加回迁移关闭条件。
   preserve 各恰两轮、清账 resolved）；粘性冲突无进展停（不二次回派、
   rounds 留 1）。`test_str06_r3_selfheal` 路由表测试补 conflict_anchor 轴。
 - **验证**：定向面 1348 项＋selfheal/a3 26 项全绿。零付费。
+
+### R10a a4 执行记录（2026-10-01，免费，fake transport）
+
+- **Brief 锁定项**（`contracts/schema/grounding.py`＋
+  `novel/stages/stage4/grounding.py::project_brief`）：新增
+  BriefProposition（kp_<hash> 命题登记，asserts 认知转
+  `publicly_claimed_by` 标记——公开声称不产生任何持有者知情锁）、
+  BriefKnowledgeLock（{holder|reader, kp, mode}；唯一映射
+  learns/confirms→known、suspects→suspected、hears_claim→heard、
+  believes→believes；public 持有者不铸锁）、BriefFactLock（kf_<hash>：
+  planned/expected/conditional 时态锁、unknown_value 值未知锁、
+  unanswered 原文未回答锁——canonical loops open 未 close）。
+  BriefRequirement 增 locks（信息面）＋realize_holders/realize_locks
+  （必保义务兑现分母，非必保为空）＋series_group/series_mechanism
+  （盲组 token sr_<hash>，不泄源序号）。ObligationAnchor 增 op
+  （值未知锁输入）。锁句柄经 grounding._lock_id 铸（与
+  obligation_core_id 同纪律；命题 ref 是 compile 派发的 k{nn}，故
+  kp 句柄随 canonical 而定——fixture 不能静态预计算）。
+- **Design wire v5**（`contracts/schema/design.py::DesignWireV5`，协议
+  `stage4-design-v5`）：删 `dramatic_intent`（TargetBeat/DesignWireBeat/
+  BeatIR 三面同删；materials 终检字段表同步）；TargetDelta 增
+  `modality`（actual/planned/expected/conditional，非知情/非读者 set
+  必填、其余禁带；Establishment 透传同形）；拍增
+  `expression_refs:[ex_id]`（正向表达任务落具体拍；narration 书级
+  机制不上拍）。
+- **接受校验**（`novel/stages/stage4/design.py::assemble_body_design`，
+  `brief` 传入时经 `_check_lock_acceptance`＋`_check_expression_refs`，
+  生产链 chain.run_body_design 恒传）：kp 键未登记拒；knowledge kp 键
+  持有者无锁或模式越权拒（授权集＝该 (holder,kp) 全部锁模式——known
+  只能来自 known 锁，C1）；reader set 用 kp 键须有 reader known 锁
+  （线索/怀疑不是确认，C6）；kf 时态锁只能按锁 modality set（C2）、
+  unknown_value 不得补值（C9）、unanswered 不得 set 作答；必保义务
+  realize 分母缺承载即拒；expression_refs 闭集外/narration 上拍拒。
+  位置顺序（知情升级/确认不早于授权位）归 a5 Guard，不在本批。
+- **送达登记**（`contracts/schema/consumption.py`）：dramatic_intent
+  条目删除（R10-0.4 收口）；新增 anchors[].op、beats[].deltas[].
+  modality、planned_delta[].modality（均 AUDIT_ONLY；R10b renderer v7
+  措辞送达后改 MUST_REALIZE）与 beats[].expression_refs（audit）。
+- **DESIGN_RULES v5**（`novel/stages/common.py`）：事实时态段（必填
+  modality 语义）、Brief 锁定项段（kp/kf 键规则、槽位身份、reader
+  确认纪律）、正向表达任务段（expression_refs）；dramatic_intent
+  表述移除。冻结面：FROZEN_SEMANTIC_PROTOCOLS design 升 v5；
+  FROZEN_CONTRACT_IDENTITY 不变（7031356e——模型名与 RC 表未动，
+  rc12 全表升版仍留收口批）。
+- **fixture 清扫**：全仓 dramatic_intent→删除（dict 键与构造 kw 两形）；
+  事实 set 增补 modality='actual'（AST 双轮：dict 字面量＋
+  TargetDelta 构造点；`_delta` 类 helper 参数化）；
+  'stage4-design-v4'→v5；test_str06_target._design_wire 的 kp 键
+  参数化（kp_known 占位；真链测试从 design prompt 内嵌 Brief 解出
+  真实 kp 注入——命题正式 ref 由 compile 派发，静态不可算）；
+  test_str06_workflow 两个真链 fixture 按 a4 纪律改 kp 承载（concealed
+  案 reader 确认改 kp 键）。semantic_delivery 的 dramatic_intent
+  变异用例随字段删除。
+- **a4 判据测试**（新 `tests/test_str06_a4_design_locks.py` 16 项，
+  消费 CASES_BY_BATCH['R10a-a4']，C1/C2/C6/C9 红例＋绿对照）：
+  Brief 派生（kp/kf/asserts/series/兑现分母/确定性）、v5 拒读
+  dramatic_intent、kp 越权与未登记、kf 时态不一致与缺 modality 形状、
+  reader 无锁确认、值未知/未回答 set、必保锁兑现缺失、expression_refs
+  闭集与 narration 上拍、锁模型悬空引用拒。
+- **验证**：定向面（-k "str06 or store or hard_cases or
+  test_docs_references or test_test_selection"）全绿。零付费。
 
 ### 节省时间的执行约定
 

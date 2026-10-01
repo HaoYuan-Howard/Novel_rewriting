@@ -85,13 +85,13 @@ def _characters() -> CharactersArtifactV4:
 
 
 def _body_wire() -> dict:
-    """stage4-design-v4 形状（R2）：无 ID／章切片／相对权重数组；threads＋entry。"""
+    """stage4-design-v5 形状（R2）：无 ID／章切片／相对权重数组；threads＋entry。"""
     return {**sample_design_expression(('yun_niang',)),
-        'protocol_version': 'stage4-design-v4',
+        'protocol_version': 'stage4-design-v5',
         'book_style': '冷峻克制的限知叙事，重日常细节里的异样。',
         'initial_state': [
             {'domain': 'character', 'subjects': ['yun_niang'], 'holder': None,
-             'key': 'marital_status', 'op': 'set', 'value': '待字闺中'}],
+             'key': 'marital_status', 'op': 'set', 'modality': 'actual', 'value': '待字闺中'}],
         'initial_surfaces': [
             {'char_id': 'yun_niang', 'surfaces': ['苏芸娘']},
             {'char_id': 'fu_jun', 'surfaces': ['夫君']}],
@@ -105,19 +105,19 @@ def _body_wire() -> dict:
                                   '在旧约出口处收住，衔接下一场夜半异动。',
              'beats': [
                  {'event': '拜堂成亲', 'participants': ['yun_niang', 'fu_jun'],
-                  'dramatic_intent': '成礼', 'target_delta': [
+                  'delivery_hint': '', 'target_delta': [
                       {'domain': 'relation', 'subjects': ['yun_niang', 'fu_jun'], 'holder': None,
-                       'key': 'marital_status', 'op': 'set', 'value': '夫妻', 'scope': 'book'}],
+                       'key': 'marital_status', 'op': 'set', 'modality': 'actual', 'value': '夫妻', 'scope': 'book'}],
                   'delivery_hint': '', 'surface_introductions': []},
                  {'event': '洞房夜夫君立约', 'participants': ['yun_niang', 'fu_jun'],
-                  'dramatic_intent': '埋线', 'target_delta': [
+                  'delivery_hint': '', 'target_delta': [
                       {'domain': 'knowledge', 'subjects': ['fu_jun'], 'holder': 'yun_niang',
                        'key': 'debt_agreement', 'op': 'set', 'value': '夫君身负报恩之约',
                        'scope': 'book', 'knowledge_mode': 'known'}],
                   'delivery_hint': '',
                   'surface_introductions': [{'char_id': 'yun_niang', 'surfaces': ['芸娘']}]},
                  {'event': '芸娘立誓查清', 'participants': ['yun_niang'],
-                  'dramatic_intent': '立意', 'target_delta': [
+                  'delivery_hint': '', 'target_delta': [
                       {'domain': 'knowledge', 'subjects': ['yun_niang'], 'holder': 'yun_niang',
                        'key': 'vow', 'op': 'set', 'value': '她决意查清真相',
                        'scope': 'book', 'knowledge_mode': 'known'}],
@@ -129,12 +129,12 @@ def _body_wire() -> dict:
              'realization_brief': '重心在玉佩的发现；从空房冷起，压缩等待，在字面露出的瞬间收束。',
              'beats': [
                  {'event': '夫君夜半离家', 'participants': ['fu_jun'],
-                  'dramatic_intent': '悬念', 'target_delta': [
+                  'delivery_hint': '', 'target_delta': [
                       {'domain': 'character', 'subjects': ['fu_jun'], 'holder': None,
-                       'key': 'whereabouts', 'op': 'set', 'value': '去向不明', 'scope': 'book'}],
+                       'key': 'whereabouts', 'op': 'set', 'modality': 'actual', 'value': '去向不明', 'scope': 'book'}],
                   'delivery_hint': '', 'surface_introductions': []},
                  {'event': '芸娘发现玉佩秘密', 'participants': ['yun_niang'],
-                  'dramatic_intent': '揭示', 'target_delta': [
+                  'delivery_hint': '', 'target_delta': [
                       {'domain': 'knowledge', 'subjects': ['fu_jun'], 'holder': 'yun_niang',
                        'key': 'jade_secret', 'op': 'set', 'value': '玉佩刻着沈字',
                        'scope': 'book', 'knowledge_mode': 'known'}],

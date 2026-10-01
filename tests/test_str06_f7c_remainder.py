@@ -235,7 +235,7 @@ def _unset_chain_wire(*, final_op: str) -> dict:
     wire = _body_wire()
     wire['scenes'][0]['beats'][0]['target_delta'] = [
         {'domain': 'character', 'subjects': ['fu_jun'], 'holder': None,
-         'key': 'whereabouts', 'op': 'set', 'value': '在府中', 'scope': 'book'}]
+         'key': 'whereabouts', 'op': 'set', 'modality': 'actual', 'value': '在府中', 'scope': 'book'}]
     wire['scenes'][1]['beats'][0]['target_delta'] = [
         {'domain': 'character', 'subjects': ['fu_jun'], 'holder': None,
          'key': 'whereabouts', 'op': final_op, 'value': None, 'scope': 'book'}]
@@ -247,7 +247,7 @@ def _unset_chain_wire(*, final_op: str) -> dict:
         'realization_brief': '重心在空堂回响；压缩寻问无果，在决意亲自去寻处收束。',
         'beats': [
             {'event': '芸娘寻问无果', 'participants': ['yun_niang'],
-             'dramatic_intent': '加压', 'target_delta': [], 'delivery_hint': '',
+             'delivery_hint': '', 'target_delta': [],
              'surface_introductions': []}],
         'delivery': {'pov': 'yun_niang', 'voice': '冷峻', 'avoid': []}})
     wire['chapters'].append({'purpose': '寻问无果后决意亲寻', 'scenes': 1,

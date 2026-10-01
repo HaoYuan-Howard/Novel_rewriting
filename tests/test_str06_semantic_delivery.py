@@ -540,10 +540,6 @@ def _body_mutations() -> list[_BodyMutation]:
         return _patch_first_delta(ir, 1, 'sc01', 'sc01#b01',
                                   subjects=('yun_niang',))
 
-    def dramatic(ir):
-        return _patch_beat(ir, 1, 'sc01', 'sc01#b01',
-                           dramatic_intent='变异导演九九')
-
     def beat_reads(ir):
         return _patch_beat(ir, 1, 'sc01', 'sc01#b01', reads=(_INJECTED_ENTRY,))
 
@@ -781,8 +777,6 @@ def _body_mutations() -> list[_BodyMutation]:
                       '.beats[].deltas[].knowledge_mode', 1, None, delta_mode),
         _BodyMutation('writer_book_ir.chapters[].scenes[].verification_ir'
                       '.beats[].deltas[].subjects', 1, None, delta_subjects),
-        _BodyMutation('writer_book_ir.chapters[].scenes[].verification_ir'
-                      '.beats[].dramatic_intent', 1, '变异导演九九', dramatic),
         _BodyMutation('writer_book_ir.chapters[].scenes[].verification_ir'
                       '.beats[].reads', 1, '变异入场九九', beat_reads),
         _BodyMutation('writer_book_ir.chapters[].scenes[].verification_ir'

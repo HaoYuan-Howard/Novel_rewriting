@@ -49,16 +49,18 @@ H64 = 'a' * 64
 # ───────────────────────── 构造器 ─────────────────────────
 
 def _delta(domain, key, *, value=None, op='set', scope='book',
-           subjects=(), holder=None, confirms=None) -> TargetDelta:
+           subjects=(), holder=None, confirms=None,
+           modality='actual') -> TargetDelta:
     return TargetDelta(domain=domain, key=key, subjects=subjects, holder=holder,
-                       op=op, value=value, scope=scope, confirms=confirms)
+                       op=op, value=value, scope=scope, confirms=confirms,
+                       modality=modality if op == 'set' else None)
 
 
 def _beat(ordinal, event, deltas=()) -> TargetBeat:
     if isinstance(deltas, TargetDelta):
         deltas = (deltas,)
     return TargetBeat(beat_id=f'b{ordinal:02d}', event=event, participants=('ch1',),
-                      dramatic_intent='d', target_delta=tuple(deltas))
+                      delivery_hint='', target_delta=tuple(deltas))
 
 
 def _scene(sid, beats, reads=()) -> TargetScene:
@@ -199,12 +201,12 @@ def test_wire_read_anchor_resolves_to_canonical_beat_id():
                         'opposition': 'o', 'turn': 't'},
              'realization_brief': '重心在核心对峙；展开转折，收在结果落地。',
              'beats': [
-                 {'event': '建立', 'participants': ['ch1'], 'dramatic_intent': 'd',
-                  'target_delta': [{'domain': 'world', 'subjects': [], 'op': 'set',
+                 {'event': '建立', 'participants': ['ch1'], 'delivery_hint': '',
+                  'target_delta': [{'domain': 'world', 'subjects': [], 'op': 'set', 'modality': 'actual',
                                     'scope': 'book', 'key': 'x', 'value': 'v'}],
                   'delivery_hint': ''},
-                 {'event': '读取', 'participants': ['ch1'], 'dramatic_intent': 'd',
-                  'target_delta': [], 'delivery_hint': ''}],
+                 {'event': '读取', 'participants': ['ch1'], 'delivery_hint': '',
+                  'target_delta': []}],
              'delivery': {'pov': 'ch1', 'voice': 'v', 'avoid': []}},
         ],
         'chapters': [{'purpose': '一章', 'scenes': 1}],

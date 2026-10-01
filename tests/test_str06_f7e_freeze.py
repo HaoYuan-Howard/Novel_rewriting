@@ -186,7 +186,7 @@ FROZEN_SEMANTIC_PROTOCOLS = {
     'STAGE2_ASSOCIATE_PROTOCOL': 'stage2-associate-v2',
     'STAGE4_PRESERVE_PROTOCOL': 'stage4-preserve-v2',
     'STAGE4_PRESERVE_POLICY_VERSION': 5,
-    'STAGE4_DESIGN_PROTOCOL': 'stage4-design-v4',
+    'STAGE4_DESIGN_PROTOCOL': 'stage4-design-v5',
     'STAGE4_BIND_PROTOCOL': 'stage4-bind-v1',
     'STAGE4_HOOK_DESIGN_PROTOCOL': 'stage4-hook-design-v1',
 }
