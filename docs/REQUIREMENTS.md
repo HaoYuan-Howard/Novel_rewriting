@@ -191,10 +191,15 @@ Golden 验证，不重新加回迁移关闭条件。
   重生成，只占 prompt）；④body_design 规则 7.2k 为最大协议面，R10b 删
   dramatic_intent 与规则收敛时复核；⑤修订轮 prompt 比首轮大约 14k
   （附加上一版回答与指令），多轮修订的 token 成本随轮数线性叠加。
-- **剩余**：0.6 关键案例起草（Golden_Set_v2.1_夫君的报恩.md；**2026-10-01
-  用户裁决冻结时序**：起草不阻塞推进、与 R10a 并行，c1 段仅作 agent 核读
-  工作判据，用户与全书通读一并确认后冻结为验收判据——不要求预先确认，
-  也不等到成书后才建清单）。R10-0 至此除 0.6（并行项）外闭合。
+- **0.6 关键案例**（已闭合，2026-10-01 用户提供并冻结）：两本书
+  `Test_data/Workbench/Golden_Set_v3.0_{夫君的报恩,三人成行}`（md＋yaml 双格式，
+  模板 `Golden_Set_v3.0_Template_STR06.md`）。机械核验全绿：源文件 sha256
+  逐字节匹配、216＋139 个锚点全部逐字命中源文且行号精确对齐；夫君侧
+  8P/3T/4E/5SIG/9LIM/10 案例/32 源理解检查，三人成行 6P/3T/3E/5SIG/6LIM/
+  10 案例/17 检查。v3.0 口径采纳：源理解与目标重构分离、四值判定
+  （pass/fail/unver/not_applicable）、污染规则（夫君＝开发可见；三人成行
+  保持隔离评测资格，R10d 依赖）。早于原时序（用户 2026-10-01 裁决「与
+  通读一并确认」）由用户直接提供冻结件。**R10-0 至此全部闭合。**
 
 ### 节省时间的执行约定
 
@@ -615,7 +620,8 @@ Character Continuity、Natural Progression、Local Prose Coherence，人工阅�
 冻结源版本、输入 manifest、baseline 成书、rubric/version、评价方式、辅助评审
 prompt／provider／model／参数、输出根与成本；不缩减冻结分母。只变评价时重评双方现有
 成书，不自动重生成。《夫君的报恩》F5e 对照仅使用历史读数（原始根已清理）；
-《三人成行》对照 Workbench Golden Set v2.1 oracle，具体可用证据开工核验。
+《三人成行》对照 Workbench Golden Set oracle（现役 v3.0，2026-10-01 用户提供
+并冻结，见 R10-0 执行记录 0.6；旧 v2.1 只读留证），具体可用证据开工核验。
 源／新书／baseline 证据位置分别记；Structural Originality 按书／场景与语义承载比较，
 不要求同号章对应。阅读时序判据随目标语义版本化，保留事实、因果、披露与改名覆盖。
 
