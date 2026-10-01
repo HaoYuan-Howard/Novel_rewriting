@@ -1069,6 +1069,12 @@
         "stage5",
         "stage7"
       ]
+    },
+    "tests/test_str06_a1_semantics.py": {
+      "layer": "unit_contract",
+      "stages": [
+        "stage2"
+      ]
     }
   },
   "version": 1

@@ -143,6 +143,8 @@ class InitialStateAtom(StrictModel):
     persistence: str = Field(pattern=r'^(stable|mutable)$')
     knowledge: KnowledgeSpec | None = None
     source_refs: tuple[str, ...] = Field(min_length=1)
+    #: R10a a1：逐字证据（必填 ≥1，段属自身 source_refs）。
+    basis: tuple[EvidenceQuote, ...] = Field(min_length=1)
 
 
 class WorldConstraint(StrictModel):
@@ -152,6 +154,8 @@ class WorldConstraint(StrictModel):
     kind: str = Field(pattern=r'^(hard_rule|social_norm|institutional_fact|setting_constant)$')
     statement: str = Field(min_length=1)
     source_refs: tuple[str, ...] = Field(min_length=1)
+    #: R10a a1：逐字证据（必填 ≥1，段属自身 source_refs）。
+    basis: tuple[EvidenceQuote, ...] = Field(min_length=1)
 
 
 class CharactersCore(StrictModel):
@@ -458,6 +462,19 @@ class PropositionRef(StrictModel):
     statement: str | None = None
 
 
+class EvidenceQuote(StrictModel):
+    """R10a a1：关键判断的逐字证据引文（wire 与 canonical 同形，I-11）。
+
+    `segment` 是证据句段 id；`quote` 是**逐字**引用——resolver 判定 quote
+    逐字存在于所引句段内、且段属于该条目自身的 source_refs（不归一化、
+    不模糊匹配）。引文须含决定判断的限定（以为／觉得／像是／预计／约／
+    几天后）——该要求属 prompt 面；机械面只管逐字命中与段归属。
+    """
+
+    segment: str = Field(pattern=r'^e\d+_\d+$')
+    quote: str = Field(min_length=1)
+
+
 class Effect(StrictModel):
     """事实转移（D1/D2）：叙述确立的事实变化。只记叙述确立的事实（含 unknown）；
     「谁认为、谁声称什么」只进 cognition，不在这里设 fact/belief/claim 之分。"""
@@ -465,11 +482,17 @@ class Effect(StrictModel):
     target: EffectTarget
     key: str = Field(min_length=1)
     op: str = Field(pattern=r'^(set|unset|add|remove|unknown)$')
+    #: R10a a1（C2）：事实的时态身份——计划／预计／条件执行不是已发生；
+    #: 「约半个月便回」是 expected，不是 actual 的既成时长。
+    modality: str = Field(pattern=r'^(actual|planned|expected|conditional)$')
     value: Any = None
     scope: str = Field(pattern=r'^(book|scene)$')
     disclosure: Disclosure
     #: 命题锚：concealed 必带（揭示链的锚，D3）；说辞被证实时引用同一命题（D5）。
     proposition: PropositionRef | None = None
+    #: R10a a1：逐字证据（必填 ≥1）——条目声称的判断必须能在所引句段内
+    #: 逐字定位；缺引文的判断不被接受。
+    basis: tuple[EvidenceQuote, ...] = Field(min_length=1)
 
     @model_validator(mode='after')
     def _op_shape(self) -> 'Effect':
@@ -494,6 +517,9 @@ class Cognition(StrictModel):
     proposition: PropositionRef
     holder: str = Field(min_length=1)
     mode: str = Field(pattern=r'^(' + '|'.join(COGNITION_MODES) + r')$')
+    #: R10a a1（C1）：逐字证据（必填 ≥1）——「觉得像是看穿了」的怀疑必须
+    #: 引到含限定的原句，防把猜测升格为确知后无法回溯。
+    basis: tuple[EvidenceQuote, ...] = Field(min_length=1)
 
 
 class LoopAction(StrictModel):
@@ -596,14 +622,17 @@ class ChapterBlueprint(StrictModel):
 from contracts.schema.expression import SourceExpression
 
 
-class BlueprintsArtifactV14(StrictModel):
-    """`stage2/blueprints/chapter_blueprints.json` 目标 v14（RC）。
+class BlueprintsArtifactV15(StrictModel):
+    """`stage2/blueprints/chapter_blueprints.json` 目标 v15（RC）。
 
     v13（质量改进批次二）：拍模型从 effects/reveals 改为 effects／cognition／loops
     三类转移，拍上带场景边界与时间模式，章蓝图带 compiler 生成的场景分段。跨章
     from_beat 引用的存在性归 compile（需要全书 beat 集合）；命题与 loop 的跨章
     引用闭合归 compile（正式 ID 登记表）。
     v14（R9）：增加带证据的 source_expression；编号与阅读统计由 compiler 派发。
+    v15（R10a a1）：转移带逐字 basis（Effect 另有 modality 闭集）；compiler 派生
+    `evidence` 证据窗口（被引句段全文＋同章前后各一句，机械合并；精确支持引用
+    在条目 basis 里，邻句送达≠邻句为证据）。
     """
 
     provenance: FreeProvenance | LlmProvenance | None = Field(
@@ -611,9 +640,12 @@ class BlueprintsArtifactV14(StrictModel):
     source_expression: SourceExpression
     world_constraints: tuple[WorldConstraint, ...] = Field(default=(), min_length=0)
     chapters: tuple[ChapterBlueprint, ...] = Field(min_length=1)
+    #: R10a a1：compiler 派生的证据窗口（段 id → 该段全文＋同章前后各一句，
+    #: 重叠机械合并）。只收被任一 basis／source_refs 引用的段（I-16 派生物）。
+    evidence: dict[str, str] = Field(min_length=1)
 
     @model_validator(mode='after')
-    def _chapters_contiguous(self) -> 'BlueprintsArtifactV14':
+    def _chapters_contiguous(self) -> 'BlueprintsArtifactV15':
         ordinals = [c.chapter for c in self.chapters]
         if sorted(ordinals) != list(range(1, len(ordinals) + 1)):
             raise ValueError(f'章号必须从 1 连续，实得 {sorted(ordinals)}')

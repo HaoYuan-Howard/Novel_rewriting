@@ -684,7 +684,7 @@ def _full_chain_wires():
                    'surfaces': [{'surface': s.surface, 'source_refs': ['e01_01']}
                                 for s in entry.surfaces]}
             for slug, entry in chars.characters.items()}),
-        'protocol_version': 'stage2-book-v2',
+        'protocol_version': 'stage2-book-v3',
         'characters': {
             slug: {'canonical': entry.canonical,
                    'surfaces': [{'surface': s.surface, 'source_refs': ['e01_01']}
@@ -707,10 +707,10 @@ def _full_chain_wires():
          'keep_reason': None}]}
     return {
         'book': book,
-        'ch01': {'protocol_version': 'stage2-observation-v1', 'beats': [
+        'ch01': {'protocol_version': 'stage2-chapters-v2', 'beats': [
             beat('苏芸娘嫁入陆家，夫君立下旧约。', ('e01_01',),
                  participants=('yun_niang', 'fu_jun'))]},
-        'ch02': {'protocol_version': 'stage2-observation-v1', 'beats': [
+        'ch02': {'protocol_version': 'stage2-chapters-v2', 'beats': [
             beat('夫君夜半离家，芸娘发现玉佩之秘。', ('e02_01',),
                  participants=('yun_niang', 'fu_jun'))]},
         'names': chars.name_structure.model_dump(mode='json'),

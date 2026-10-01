@@ -13,7 +13,9 @@ from pydantic import ValidationError
 
 from contracts.schema.design import TargetDelta
 from contracts.schema.grounding import BindingEntry, SemanticBinding
-from contracts.schema.observation import STAGE2_OBSERVATION_PROTOCOL as PV
+from contracts.schema.observation import (
+    STAGE2_CHAPTERS_PROTOCOL as CPV, STAGE2_OBSERVATION_PROTOCOL as PV,
+)
 from contracts.schema.state import StateRead, SurfaceIntroduction
 from novel.stages.stage4.compile import compile_execution_plan
 from novel.stages.common import project_context
@@ -210,16 +212,20 @@ def test_source_reference_closure_and_no_silent_edge_drop(fault):
     """章观察的引用闭合（D3 章内证据；人物闭集归 compile）。旧链因果边形状随
     D3「章观察无因果边」退役——跨章因果改经 associate 配对（见
     tests/test_str06_stage2_publish.py::test_cross_chapter_cause_lands_in_the_to_chapter）。"""
-    ch02 = {'protocol_version': PV, 'beats': [{
+    ch02 = {'protocol_version': CPV, 'beats': [{
         'event': '云娘向夫君试探', 'participants': ['yun_niang', 'fu_jun'],
         'source_refs': ['e02_01'], 'scene_boundary': 'new',
         'temporal_mode': 'single',
         'effects': [{'target': {'kind': 'character', 'char_id': 'yun_niang'},
                      'key': 'wariness', 'op': 'set', 'value': '高',
-                     'scope': 'book', 'disclosure': {'visibility': 'on_page'}}],
+                     'scope': 'book', 'modality': 'actual',
+                     'disclosure': {'visibility': 'on_page'},
+                     'basis': [{'segment': 'e02_01', 'quote': '云娘质问床底的人'}]}],
         'cognition': [{'proposition': {'ref': 'p_secret',
                                        'statement': '借种之约是夫妻共同秘密'},
-                       'holder': 'yun_niang', 'mode': 'learns'}],
+                       'holder': 'yun_niang', 'mode': 'learns',
+                       'basis': [{'segment': 'e02_01',
+                                  'quote': '云娘质问床底的人'}]}],
         'loops': []}]}
     beat = ch02['beats'][0]
     if fault == 'effect_subject':

@@ -35,7 +35,7 @@ from pydantic import ValidationError
 from contracts.schema.observation import ChapterObservation
 from contracts.schema.source import REGISTERED_STATE_KEYS, RETIRED_STATE_KEYS
 from novel.stages.common import CHAPTER_PROMPT, PRE_CHAPTER_RULE
-from novel.stages.stage2.resolver import EvidenceResolver
+from novel.stages.stage2.resolver import EvidenceResolver, verify_bases
 
 
 def chapter_prior_text(chapters: list[dict], before_chapter: int) -> str:
@@ -164,14 +164,31 @@ def compile_chapter_observation(
     errors: list[str] = []
     if not isinstance(wire, dict):
         return None, ['chapter wire 必须是 JSON object']
-    resolver = EvidenceResolver(list(evidence_ids))
+    # R10a a1：传 Mapping（段 id→{chapter,text}）时 basis 引文可逐字判定；
+    # 只传 id 的合成闭集保持旧形态（闭集核对可用，逐字判定报 unknown_segment）。
+    resolver = EvidenceResolver(evidence_ids if isinstance(evidence_ids, Mapping)
+                                else list(evidence_ids))
     slugs = frozenset(character_slugs) if character_slugs is not None else None
     for ordinal, raw in enumerate(wire.get('beats') or [], 1):
         if not isinstance(raw, dict):
             continue
         where = f'第{chapter if chapter is not None else "?"}章拍{ordinal}'
-        for issue in resolver.check_closed_set(tuple(raw.get('source_refs') or ())):
+        refs = tuple(raw.get('source_refs') or ())
+        for issue in resolver.check_closed_set(refs):
             errors.append(f'beat {raw.get("event", "")[:20]}：{issue.message}')
+        # R10a a1（C4/C1/C2）：转移级 basis 引文判定——逐字命中＋段属本拍 source_refs
+        basis_entries: list[tuple[str, str, str, tuple[str, ...]]] = []
+        for kind in ('effects', 'cognition'):
+            for index, transfer in enumerate(raw.get(kind) or (), 1):
+                if not isinstance(transfer, dict):
+                    continue
+                for basis in transfer.get('basis') or ():
+                    if isinstance(basis, dict):
+                        basis_entries.append((
+                            f'{where} {kind}[{index}]', str(basis.get('segment') or ''),
+                            str(basis.get('quote') or ''), refs))
+        for basis_where, issue in verify_bases(resolver, basis_entries):
+            errors.append(f'{basis_where}：{issue.message}')
         if slugs is not None:
             for person in raw.get('participants') or []:
                 if person not in slugs:

@@ -617,9 +617,11 @@ def test_project_brief_fills_book_constraints_from_blueprint():
     bp = bp.model_copy(update={'world_constraints': (
         WorldConstraint(constraint_id='wc_1', kind='hard_rule',
                         statement='术法须以寿命为代价',
-                        source_refs=('b01_01',)),
+                        source_refs=('b01_01',),
+                        basis=({'segment': 'e01_01', 'quote': '术法须以寿命为代价'},)),
         WorldConstraint(constraint_id='wc_2', kind='social_norm',
-                        statement='官府不涉异事', source_refs=('b01_01',)))})
+                        statement='官府不涉异事', source_refs=('b01_01',),
+                        basis=({'segment': 'e01_01', 'quote': '官府不涉异事'},)))})
     brief, _ = project_brief(cp, chars, bp)
     assert brief.book_constraints == ('术法须以寿命为代价', '官府不涉异事')
 

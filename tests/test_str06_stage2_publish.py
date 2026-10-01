@@ -23,7 +23,8 @@ import json
 import pytest
 
 from contracts.schema.observation import (
-    STAGE2_ASSOCIATE_PROTOCOL as APV, STAGE2_OBSERVATION_PROTOCOL as PV,
+    STAGE2_ASSOCIATE_PROTOCOL as APV, STAGE2_CHAPTERS_PROTOCOL as CPV,
+    STAGE2_OBSERVATION_PROTOCOL as PV,
 )
 from novel.llm.ledger import CostLedger
 from novel.store import Str06Repository
@@ -47,6 +48,11 @@ CHAPTERS = [
 EVIDENCE = build_evidence(CHAPTERS, HOOK)
 
 
+def _basis(ref: str) -> list[dict]:
+    """R10a a1 fixture：逐字 basis（段文本前 6 字做 quote，保证逐字命中）。"""
+    return [{'segment': ref, 'quote': EVIDENCE[ref]['text'][:6]}]
+
+
 def _beat(event, refs, **over):
     beat = {'event': event, 'participants': [], 'source_refs': list(refs),
             'scene_boundary': 'new', 'temporal_mode': 'single',
@@ -63,41 +69,46 @@ def _book_wire(*, extra_characters: dict | None = None) -> dict:
             {'surface': '云娘', 'source_refs': ['e01_02']}]},
     }
     characters.update(extra_characters or {})
-    return {**sample_book_expression(characters), 'protocol_version': 'stage2-book-v2', 'characters': characters,
+    return {**sample_book_expression(characters), 'protocol_version': 'stage2-book-v3', 'characters': characters,
             'initial_state': [], 'world_constraints': []}
 
 
-def _hide_effect(*, known_by=('fu_jun',)) -> dict:
+def _hide_effect(*, known_by=('fu_jun',), ref: str = 'e01_01') -> dict:
     return {'target': {'kind': 'character', 'char_id': 'fu_jun'},
             'key': 'scene_location', 'op': 'set', 'value': '床底', 'scope': 'scene',
+            'modality': 'actual',
             'disclosure': {'visibility': 'concealed', 'known_by': list(known_by)},
-            'proposition': {'ref': 'p_hide', 'statement': '夫君藏身床底'}}
+            'proposition': {'ref': 'p_hide', 'statement': '夫君藏身床底'},
+            'basis': _basis(ref)}
 
 
 def _chapter_wires() -> dict[str, dict]:
     """三章观察：ch1 建立 concealed p_hide＋悬念 q_id；ch3 跨章 close＋读者揭示。"""
-    ch01 = {'protocol_version': PV, 'beats': [
+    ch01 = {'protocol_version': CPV, 'beats': [
         _beat('夫君藏进床底', ('e01_01',), participants=('fu_jun',),
               effects=[_hide_effect()]),
         _beat('床底是谁的悬念开场', ('e01_02',), scene_boundary='continue',
               loops=[{'ref': 'q_id', 'op': 'open', 'question': '床底的人是谁？'}]),
     ]}
-    ch02 = {'protocol_version': PV, 'beats': [
+    ch02 = {'protocol_version': CPV, 'beats': [
         _beat('同义命题：床底有人这件事再次被确认', ('e02_01',),
               participants=('yun_niang',),
               cognition=[{'proposition': {'ref': 'p_known', 'statement': '床底藏着人'},
-                          'holder': 'yun_niang', 'mode': 'learns'}]),
+                          'holder': 'yun_niang', 'mode': 'learns',
+                          'basis': _basis('e02_01')}]),
     ]}
-    ch03 = {'protocol_version': PV, 'beats': [
+    ch03 = {'protocol_version': CPV, 'beats': [
         _beat('床底的人现身', ('e03_01',), participants=('fu_jun',),
               effects=[{'target': {'kind': 'character', 'char_id': 'fu_jun'},
                         'key': 'scene_location', 'op': 'set', 'value': '床沿',
-                        'scope': 'scene',
-                        'disclosure': {'visibility': 'on_page'}}]),
+                        'scope': 'scene', 'modality': 'actual',
+                        'disclosure': {'visibility': 'on_page'},
+                        'basis': _basis('e03_01')}]),
         _beat('读者与云娘确认床底的人是夫君', ('e03_01',), scene_boundary='continue',
               participants=('yun_niang', 'fu_jun'),
               cognition=[{'proposition': {'ref': 'p_hide'},
-                          'holder': 'reader', 'mode': 'learns'}],
+                          'holder': 'reader', 'mode': 'learns',
+                          'basis': _basis('e03_01')}],
               loops=[{'ref': 'q_id', 'op': 'close', 'resolution': '床底的人是夫君'}]),
     ]}
     return {'ch01': ch01, 'ch02': ch02, 'ch03': ch03}
@@ -176,12 +187,17 @@ def _compile_book():
     return compile_book_observation(_book_wire(), evidence=EVIDENCE)
 
 
+def _chapter_evidence(no: int) -> dict:
+    """第 no 章可见的证据面（Mapping 形态：R10a a1 basis 引文逐字判定需要文本）。"""
+    return {k: v for k, v in EVIDENCE.items()
+            if v['chapter'] == no or (no == 1 and v.get('pre_chapter'))}
+
+
 def _compile_chapter(no: int):
     from novel.stages.stage2 import compile_chapter_observation
     wire = _chapter_wires()[f'ch{no:02d}']
-    ids = frozenset(k for k, v in EVIDENCE.items()
-                    if v['chapter'] == no or (no == 1 and v.get('pre_chapter')))
-    observation, errors = compile_chapter_observation(wire, evidence_ids=ids)
+    observation, errors = compile_chapter_observation(
+        wire, evidence_ids=_chapter_evidence(no))
     assert errors == [], errors
     return observation
 
@@ -314,9 +330,9 @@ def test_synonymous_propositions_merge_into_one_formal_id(tmp_path):
 def test_without_pairing_same_text_props_stay_separate(tmp_path):
     """不默认合并：associate 没配对的同文命题保持两个正式 ID（语义判断归模型）。"""
     wires = _full_stage2_wires()
-    wires['ch02'] = {'protocol_version': PV, 'beats': [
+    wires['ch02'] = {'protocol_version': CPV, 'beats': [
         _beat('床底有人这件事再次被独立建立', ('e02_01',), participants=('yun_niang',),
-              effects=[_hide_effect()])]}  # 同 statement 文本、新本地句柄
+              effects=[_hide_effect(ref='e02_01')])]}  # 同 statement 文本、新本地句柄
     repo, _ask, report = _run_stage2(tmp_path, 'no_pair', wires)
     assert report['undecided'] == 0
     bp = repo.inspect('stage2/blueprints/chapter_blueprints.json')
@@ -331,11 +347,12 @@ def test_state_key_near_synonyms_unify_to_canonical_key(tmp_path):
     wires['book']['initial_state'] = [
         {'target': {'kind': 'relation', 'subject': 'fu_jun', 'object': 'yun_niang'},
          'key': 'trust', 'value': '低', 'persistence': 'mutable',
-         'knowledge': None, 'source_refs': ['e00_01']}]
+         'knowledge': None, 'source_refs': ['e00_01'], 'basis': _basis('e00_01')}]
     wires['ch02']['beats'][0]['effects'] = [{
         'target': {'kind': 'relation', 'subject': 'fu_jun', 'object': 'yun_niang'},
         'key': 'trust_level', 'op': 'set', 'value': '回升', 'scope': 'book',
-        'disclosure': {'visibility': 'on_page'}}]
+        'modality': 'actual',
+        'disclosure': {'visibility': 'on_page'}, 'basis': _basis('e02_01')}]
     wires['associate']['same_state_dimension'] = [
         {'left': 'book.e1.trust', 'right': 'ch02.b1.e1.trust_level'}]
     repo, _ask, report = _run_stage2(tmp_path, 'near_key', wires)
@@ -415,7 +432,7 @@ def test_later_confirmation_does_not_rewrite_earlier_facts(tmp_path):
     wires['book']['initial_state'] = [
         {'target': {'kind': 'relation', 'subject': 'fu_jun', 'object': 'yun_niang'},
          'key': 'marital_status', 'value': '夫妻', 'persistence': 'stable',
-         'knowledge': None, 'source_refs': ['e00_01']}]
+         'knowledge': None, 'source_refs': ['e00_01'], 'basis': _basis('e00_01')}]
     repo, _ask, _report = _run_stage2(tmp_path, 'no_rewrite', wires)
     chars = repo.inspect('stage2/characters/characters.json')
     bp = repo.inspect('stage2/blueprints/chapter_blueprints.json')
@@ -475,7 +492,8 @@ def test_pairing_class_without_any_statement_is_undecided(tmp_path):
     """冲突保持未决：配对类里没有任何 statement（两处都是引用）→ 不猜文本。"""
     wires = _full_stage2_wires()
     wires['ch02']['beats'][0]['cognition'] = [
-        {'proposition': {'ref': 'p_ghost'}, 'holder': 'yun_niang', 'mode': 'suspects'}]
+        {'proposition': {'ref': 'p_ghost'}, 'holder': 'yun_niang', 'mode': 'suspects',
+         'basis': _basis('e02_01')}]
     wires['associate']['same_proposition'] = [
         {'left': 'ch02.p_ghost', 'right': 'ch03.p_hide'}]
     with pytest.raises(ValueError, match='statement'):
@@ -487,7 +505,8 @@ def test_time_inverted_pairing_is_undecided(tmp_path):
     wires = _full_stage2_wires()
     # ch1 悬空引用 p_fwd；ch3 独立确立 p_late；配对把它们声明为同一命题。
     wires['ch01']['beats'][1]['cognition'] = [
-        {'proposition': {'ref': 'p_fwd'}, 'holder': 'yun_niang', 'mode': 'suspects'}]
+        {'proposition': {'ref': 'p_fwd'}, 'holder': 'yun_niang', 'mode': 'suspects',
+         'basis': _basis('e01_02')}]
     wires['ch03']['beats'][0]['effects'][0]['proposition'] = {
         'ref': 'p_late', 'statement': '夫君现身床沿'}
     wires['associate']['same_proposition'] = [
@@ -677,9 +696,7 @@ def test_wrong_nesting_and_missing_evidence_rejected_at_owners():
     wire = _chapter_wires()['ch01']
     wire['beats'][0]['effects'][0]['disclosure']['proposition'] = {
         'ref': 'p_hide', 'statement': '夫君藏身床底'}
-    ids = frozenset(k for k, v in EVIDENCE.items()
-                    if v['chapter'] == 1 or v.get('pre_chapter'))
-    _obs, errors = compile_chapter_observation(wire, evidence_ids=ids)
+    _obs, errors = compile_chapter_observation(wire, evidence_ids=_chapter_evidence(1))
     assert any('协议校验失败' in e for e in errors), errors
     from novel.stages.stage2 import compile_book_observation
     book = _book_wire()
@@ -718,14 +735,17 @@ REL_YF = {'kind': 'relation', 'subject': 'yun_niang', 'object': 'fu_jun'}
 WORLD = {'kind': 'world'}
 
 
-def _plain_effect(target: dict, key: str, value, scope: str = 'book') -> dict:
+def _plain_effect(target: dict, key: str, value, scope: str = 'book',
+                  ref: str = 'e01_01') -> dict:
     return {'target': dict(target), 'key': key, 'op': 'set', 'value': value,
-            'scope': scope, 'disclosure': {'visibility': 'on_page'}}
+            'scope': scope, 'modality': 'actual',
+            'disclosure': {'visibility': 'on_page'}, 'basis': _basis(ref)}
 
 
 def _initial_atom(target: dict, key: str, value) -> dict:
     return {'target': dict(target), 'key': key, 'value': value,
-            'persistence': 'mutable', 'knowledge': None, 'source_refs': ['e00_01']}
+            'persistence': 'mutable', 'knowledge': None, 'source_refs': ['e00_01'],
+            'basis': _basis('e00_01')}
 
 
 def _observations(book_wire: dict, chapter_wires: dict[int, dict]):
@@ -737,9 +757,8 @@ def _observations(book_wire: dict, chapter_wires: dict[int, dict]):
     assert errors == [], errors
     chapters = {}
     for no, wire in chapter_wires.items():
-        ids = frozenset(k for k, v in EVIDENCE.items()
-                        if v['chapter'] == no or (no == 1 and v.get('pre_chapter')))
-        obs, errors = compile_chapter_observation(wire, evidence_ids=ids)
+        obs, errors = compile_chapter_observation(
+            wire, evidence_ids=_chapter_evidence(no))
         assert errors == [], (no, errors)
         chapters[no] = obs
     return book, chapters
@@ -757,7 +776,7 @@ def test_aud01_typed_targets_reach_association_prompt_intact():
     book_wire['initial_state'] = [
         _initial_atom(CHAR_FJ, 'mood', '平静'),
         _initial_atom(REL_FY, 'trust', '低')]
-    ch01 = {'protocol_version': PV, 'beats': [
+    ch01 = {'protocol_version': CPV, 'beats': [
         _beat('夜雨与试探', ('e01_01',), participants=('fu_jun', 'yun_niang'),
               effects=[_plain_effect(WORLD, 'weather', '夜雨'),
                        _plain_effect(REL_YF, 'wariness', '高')])]}
@@ -797,17 +816,17 @@ def _aud02_wires() -> dict:
     trust_level；关联只选择 fu_jun（bob 位）。"""
     book = _book_wire()
     book['initial_state'] = [_initial_atom(CHAR_FJ, 'trust', '低')]
-    ch01 = {'protocol_version': PV, 'beats': [
+    ch01 = {'protocol_version': CPV, 'beats': [
         _beat('云娘起疑', ('e01_02',), participants=('yun_niang',),
-              effects=[_plain_effect(CHAR_YN, 'trust_level', '低')]),
+              effects=[_plain_effect(CHAR_YN, 'trust_level', '低', ref='e01_02')]),
         _beat('夫君坦白', ('e01_01',), participants=('fu_jun',),
               scene_boundary='continue',
               effects=[_plain_effect(CHAR_FJ, 'trust_level', '回升')])]}
     return {
         'book': book,
         'ch01': ch01,
-        'ch02': {'protocol_version': PV, 'beats': [_quiet_beat('平淡一夜', 'e02_01')]},
-        'ch03': {'protocol_version': PV, 'beats': [_quiet_beat('各自安睡', 'e03_01')]},
+        'ch02': {'protocol_version': CPV, 'beats': [_quiet_beat('平淡一夜', 'e02_01')]},
+        'ch03': {'protocol_version': CPV, 'beats': [_quiet_beat('各自安睡', 'e03_01')]},
         'names': _names_wire(),
         'associate': _associate_wire(
             same_proposition=[], loop_pairing=[], same_state_dimension=[
@@ -831,12 +850,12 @@ def test_state_handle_count_is_conserved():
     """句柄数量守恒：登记表状态句柄数＝初态条数＋全部章内效应数（覆盖即缺陷）。"""
     book_wire = _book_wire()
     book_wire['initial_state'] = [_initial_atom(CHAR_FJ, 'mood', '平静')]
-    ch01 = {'protocol_version': PV, 'beats': [
+    ch01 = {'protocol_version': CPV, 'beats': [
         _beat('第一拍', ('e01_01',), participants=('fu_jun',),
               effects=[_plain_effect(CHAR_FJ, 'trust_level', '低')]),
         _beat('第二拍', ('e01_02',), participants=('yun_niang',),
               scene_boundary='continue',
-              effects=[_plain_effect(CHAR_YN, 'trust_level', '高')]),
+              effects=[_plain_effect(CHAR_YN, 'trust_level', '高', ref='e01_02')]),
         _beat('第三拍两效应', ('e01_01',), participants=('fu_jun', 'yun_niang'),
               scene_boundary='continue',
               effects=[_plain_effect(CHAR_FJ, 'trust_level', '回升'),
@@ -858,7 +877,7 @@ def test_registry_rejects_duplicate_state_handles_at_construction():
     """构建时重复句柄即拒：登记表不允许 dict 静默覆盖（AUD-02 的根因类）。"""
     from novel.stages.stage2.associate import StateHandle
     space = project_association_space(*_observations(_book_wire(), {
-        1: {'protocol_version': PV, 'beats': [
+        1: {'protocol_version': CPV, 'beats': [
             _beat('一拍', ('e01_01',), participants=('fu_jun',),
                   effects=[_plain_effect(CHAR_FJ, 'trust', '低')])]}}))
     entry = StateHandle(chapter=1, beat_ordinal=1, effect_ordinal=1,
@@ -870,14 +889,14 @@ def test_registry_rejects_duplicate_state_handles_at_construction():
 def _cross_beat_wires(left_target: dict, right_target: dict) -> dict:
     """ch01.b1 与 ch02.b1 各写一条状态（跨章同维配对的通用底座）。"""
     book = _book_wire()
-    ch01 = {'protocol_version': PV, 'beats': [
+    ch01 = {'protocol_version': CPV, 'beats': [
         _beat('第一章写状态', ('e01_01',), participants=('fu_jun', 'yun_niang'),
               effects=[_plain_effect(left_target, 'trust', '低')])]}
-    ch02 = {'protocol_version': PV, 'beats': [
+    ch02 = {'protocol_version': CPV, 'beats': [
         _beat('第二章写状态', ('e02_01',), participants=('fu_jun', 'yun_niang'),
-              effects=[_plain_effect(right_target, 'trust_level', '回升')])]}
+              effects=[_plain_effect(right_target, 'trust_level', '回升', ref='e02_01')])]}
     return {'book': book, 'ch01': ch01, 'ch02': ch02,
-            'ch03': {'protocol_version': PV,
+            'ch03': {'protocol_version': CPV,
                      'beats': [_quiet_beat('平淡一夜', 'e03_01')]},
             'names': _names_wire()}
 
@@ -922,12 +941,12 @@ def test_reverse_relation_pairing_stays_undecided(tmp_path):
 def test_same_chapter_cross_beat_state_pairing_is_refused():
     """同章两拍的句柄互配不是跨章关联：闭集核对按「同在第 N 章」精确拒。"""
     book_wire = _book_wire()
-    ch01 = {'protocol_version': PV, 'beats': [
+    ch01 = {'protocol_version': CPV, 'beats': [
         _beat('第一拍', ('e01_01',), participants=('fu_jun',),
               effects=[_plain_effect(CHAR_FJ, 'trust', '低')]),
         _beat('第二拍', ('e01_02',), participants=('yun_niang',),
               scene_boundary='continue',
-              effects=[_plain_effect(CHAR_FJ, 'trust_level', '回升')])]}
+              effects=[_plain_effect(CHAR_FJ, 'trust_level', '回升', ref='e01_02')])]}
     book, chapters = _observations(book_wire, {1: ch01})
     space = project_association_space(book, chapters)
     wire = _associate_wire(
@@ -940,7 +959,7 @@ def test_same_chapter_cross_beat_state_pairing_is_refused():
 def test_associate_prompt_declares_v2_protocol_and_handle_positions():
     """协议升版：prompt 自带 stage2-associate-v2 输出面；句柄是位置编码。"""
     book, chapters = _observations(_book_wire(), {
-        1: {'protocol_version': PV, 'beats': [
+        1: {'protocol_version': CPV, 'beats': [
             _beat('一拍', ('e01_01',), participants=('fu_jun',),
                   effects=[_plain_effect(CHAR_FJ, 'trust', '低')])]}})
     space = project_association_space(book, chapters)

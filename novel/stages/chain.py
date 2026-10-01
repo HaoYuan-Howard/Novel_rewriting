@@ -336,7 +336,8 @@ def run_chapters(ctx: ChainContext) -> dict:
                                                 chapters=ctx.chapters,
                                                 evidence=chapter_evidence)
             def validate(w):
-                return chapter_acceptance(w, evidence_ids=frozenset(chapter_evidence), chapter=no,
+                # R10a a1：传完整段映射（含 text），basis 引文可逐字判定
+                return chapter_acceptance(w, evidence_ids=chapter_evidence, chapter=no,
                                           character_slugs=frozenset(book.characters), anchors=anchors)
 
             wire, ch_ref = ctx.ask(f'ch{no:02d}', prompt, lambda w: validate(w)[1])

@@ -721,7 +721,7 @@ def _book_observation_payload() -> dict:
                 ],
             },
         }),
-        'protocol_version': 'stage2-book-v2',
+        'protocol_version': 'stage2-book-v3',
         'characters': {
             'char_001': {
                 'canonical': '甲',
@@ -734,7 +734,8 @@ def _book_observation_payload() -> dict:
         'initial_state': [
             {'target': {'kind': 'character', 'char_id': 'char_001'},
              'key': 'debt', 'value': '身负重债', 'persistence': 'stable',
-             'knowledge': None, 'source_refs': ['e01_01']},
+             'knowledge': None, 'source_refs': ['e01_01'],
+             'basis': [{'segment': 'e01_01', 'quote': '身负重债'}]},
         ],
         'world_constraints': [],
         '_provenance': {

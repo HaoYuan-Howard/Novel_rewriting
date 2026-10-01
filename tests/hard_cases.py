@@ -276,7 +276,7 @@ def _preserve_bad_wire() -> list:
     from novel.stages.stage4.grounding import assemble_preserve
 
     from contracts.schema.source import (
-        BlueprintsArtifactV14, ChapterBlueprint, CharacterEntry,
+        BlueprintsArtifactV15, ChapterBlueprint, CharacterEntry,
         CharactersCore, SurfaceWindow,
     )
     from tests.str06_facilities import v13_beat
@@ -290,11 +290,12 @@ def _preserve_bad_wire() -> list:
             canonical='苏姑娘',
             surfaces=(SurfaceWindow(surface='苏姑娘', from_chapter=1,
                                     source_refs=('e01_01',)),))}),
-        blueprint=BlueprintsArtifactV14(source_expression=sample_blueprint_expression(), chapters=(
+        blueprint=BlueprintsArtifactV15(source_expression=sample_blueprint_expression(), chapters=(
             ChapterBlueprint(chapter=1,
                              beats=(v13_beat('b01_01', 'e'),),
                              scenes=({'scene_id': 'sc01', 'beat_ids': ('b01_01',)},),
-                             causal_edges=()),)),
+                             causal_edges=()),),
+            evidence={'e01_01': '苏姑娘初到陆家。'}),
         provider='p', model='m', request_sha256='a' * 64)
     return errors
 
@@ -651,7 +652,7 @@ def _chapter_blueprint_bad_wire() -> list:
     """章观察编译闭合：participants 引用书级人物账之外的人物（闭集归 compile，R-2.3）。"""
     from tests.test_str06_stage2_publish import _chapter_wires
     outcome = _stage2_outcome(chapters={**_chapter_wires(), 'ch01': {
-        'protocol_version': 'stage2-observation-v1', 'beats': [
+        'protocol_version': 'stage2-chapters-v2', 'beats': [
             {'event': '开篇', 'participants': ['ghost'],
              'source_refs': ['e01_01'], 'scene_boundary': 'new',
              'temporal_mode': 'single', 'effects': [], 'cognition': [],
@@ -671,7 +672,7 @@ def _loop_reopened() -> list:
     """R-2.11：同一悬念句柄本章内重复 open（章观察 owner 的自含纪律）。"""
     from tests.test_str06_stage2_publish import EVIDENCE
     from novel.stages.stage2 import compile_chapter_observation
-    wire = {'protocol_version': 'stage2-observation-v1', 'beats': [
+    wire = {'protocol_version': 'stage2-chapters-v2', 'beats': [
         {'event': '开悬念', 'participants': [], 'source_refs': ['e01_01'],
          'scene_boundary': 'new', 'temporal_mode': 'single', 'effects': [],
          'cognition': [],
@@ -698,17 +699,18 @@ def _concealed_without_known_by() -> list:
     """R-2.13：concealed 效应不声明已知者（揭示链无从闭合）。"""
     from tests.test_str06_stage2_publish import EVIDENCE
     from novel.stages.stage2 import compile_chapter_observation
-    wire = {'protocol_version': 'stage2-observation-v1', 'beats': [
+    wire = {'protocol_version': 'stage2-chapters-v2', 'beats': [
         {'event': '藏身不声明已知者', 'participants': [], 'source_refs': ['e01_01'],
          'scene_boundary': 'new', 'temporal_mode': 'single',
          'effects': [{'target': {'kind': 'character', 'char_id': 'fu_jun'},
                       'key': 'scene_location', 'op': 'set', 'value': '床底',
-                      'scope': 'scene',
-                      'disclosure': {'visibility': 'concealed'}}],
+                      'scope': 'scene', 'modality': 'actual',
+                      'disclosure': {'visibility': 'concealed'},
+                      'basis': [{'segment': 'e01_01', 'quote': '夫君藏进床底'}]}],
          'cognition': [], 'loops': []},
     ]}
     _observation, errors = compile_chapter_observation(
-        wire, evidence_ids=frozenset(EVIDENCE))
+        wire, evidence_ids=EVIDENCE)
     return errors
 
 
@@ -720,17 +722,19 @@ def _registered_key_wrong_scope() -> list:
     """
     from tests.test_str06_stage2_publish import EVIDENCE
     from novel.stages.stage2 import compile_chapter_observation
-    wire = {'protocol_version': 'stage2-observation-v1', 'beats': [
+    wire = {'protocol_version': 'stage2-chapters-v2', 'beats': [
         {'event': '旧位置键借道', 'participants': [], 'source_refs': ['e01_01'],
          'scene_boundary': 'new', 'temporal_mode': 'single',
          'effects': [{'target': {'kind': 'character', 'char_id': 'fu_jun'},
                       'key': 'whereabouts', 'op': 'set',
                       'value': '陆家卧房内，藏于床底', 'scope': 'book',
-                      'disclosure': {'visibility': 'on_page'}}],
+                      'modality': 'actual',
+                      'disclosure': {'visibility': 'on_page'},
+                      'basis': [{'segment': 'e01_01', 'quote': '夫君藏进床底'}]}],
          'cognition': [], 'loops': []},
     ]}
     _observation, errors = compile_chapter_observation(
-        wire, evidence_ids=frozenset(EVIDENCE))
+        wire, evidence_ids=EVIDENCE)
     return errors
 
 

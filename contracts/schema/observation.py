@@ -40,14 +40,18 @@ from pydantic import Field, model_validator
 
 from contracts.schema.base import StrictModel
 from contracts.schema.source import (
-    Cognition, Effect, KnowledgeSpec, LoopAction, NameStructure, StateTarget,
+    Cognition, Effect, EvidenceQuote, KnowledgeSpec, LoopAction, NameStructure,
+    StateTarget,
 )
 
-#: 观察协议（book／chapters／names 三类共用）的版本字面量（进请求身份与盘面
-#: 信封；I-13 显式版本化）。升版 = 换字面量＋改模型＋登记（REQUIREMENTS／
-#: DECISIONS），不做转换层。
+#: 观察协议的版本字面量（进请求身份与盘面信封；I-13 显式版本化）。升版 =
+#: 换字面量＋改模型＋登记（REQUIREMENTS／DECISIONS），不做转换层。
+#: R10a a1（2026-10-01）拆分：book 升 v3（输出带 basis 引文与初态/约束证据）、
+#: chapters 升独立字面 v2（转移带 basis／Effect.modality）；names 输入投影
+#: 未变、保持 observation-v1；associate 仍 v2。
 STAGE2_OBSERVATION_PROTOCOL: Final = 'stage2-observation-v1'
-STAGE2_BOOK_PROTOCOL: Final = 'stage2-book-v2'
+STAGE2_BOOK_PROTOCOL: Final = 'stage2-book-v3'
+STAGE2_CHAPTERS_PROTOCOL: Final = 'stage2-chapters-v2'
 
 #: 关联协议（associate 独立）的版本字面量（R1，2026-09-28 升 v2）：typed 作用
 #: 对象显式序列化＋状态句柄位置编码。句柄含义与输入材料已变，旧关联回答不做
@@ -108,6 +112,8 @@ class InitialFact(StrictModel):
     persistence: str = Field(pattern=r'^(stable|mutable)$')
     knowledge: KnowledgeSpec | None = None
     source_refs: tuple[str, ...] = Field(min_length=1)
+    #: R10a a1：逐字证据（必填 ≥1，段属自身 source_refs；wire 与 canonical 同形）。
+    basis: tuple[EvidenceQuote, ...] = Field(min_length=1)
 
 
 class WorldRule(StrictModel):
@@ -119,6 +125,8 @@ class WorldRule(StrictModel):
     kind: str = Field(pattern=r'^(' + '|'.join(WORLD_RULE_KINDS) + r')$')
     statement: str = Field(min_length=1)
     source_refs: tuple[str, ...] = Field(min_length=1)
+    #: R10a a1：逐字证据（必填 ≥1，段属自身 source_refs）。
+    basis: tuple[EvidenceQuote, ...] = Field(min_length=1)
 
 
 from contracts.schema.expression import ExpressionObservation
@@ -128,7 +136,7 @@ class BookObservation(StrictModel):
     """`str06.stage2.book` 的输出：人物候选（可读 slug、称谓及证据）、初态、
     世界约束。作用域＝书；输入是全书原文（含 e00 引子句段）与证据句段清单。"""
 
-    protocol_version: Literal['stage2-book-v2']
+    protocol_version: Literal['stage2-book-v3']
     expression: ExpressionObservation
     characters: dict[str, CharacterCandidate] = Field(min_length=1)
     initial_state: tuple[InitialFact, ...] = Field(default=(), min_length=0)
@@ -170,7 +178,7 @@ class ChapterObservation(StrictModel):
     配不上即未决——不默认合并）。participants／holder 闭集与证据闭合归 compile。
     """
 
-    protocol_version: Literal['stage2-observation-v1']
+    protocol_version: Literal['stage2-chapters-v2']
     beats: tuple[ObsBeat, ...] = Field(min_length=1)
 
 

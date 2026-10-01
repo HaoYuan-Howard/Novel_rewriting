@@ -40,10 +40,11 @@ from contracts.schema.observation import (
 )
 from contracts.schema.source import (
     NON_CHAR_HOLDERS, REGISTERED_STATE_KEYS, RETIRED_STATE_KEYS,
-    Beat, BlueprintsArtifactV14, ChapterBlueprint, CharactersArtifactV4,
+    Beat, BlueprintsArtifactV15, ChapterBlueprint, CharactersArtifactV4,
     CharactersCore, CausalEdge, Effect, InitialStateAtom, SceneSpan,
     WorldConstraint,
 )
+from novel.stages.stage2.resolver import EvidenceResolver, verify_bases
 from novel.stages.common import OverlayChange, StateOverlay
 from novel.stages.stage2.associate import (
     AssociationSpace, book_state_handle, chapter_state_handle,
@@ -123,7 +124,7 @@ class CompileOutcome:
     """compile_source_truth 的结构化结果：可发布时三份产物齐全，否则未决/错误。"""
 
     characters: CharactersArtifactV4 | None = None
-    blueprint: BlueprintsArtifactV14 | None = None
+    blueprint: BlueprintsArtifactV15 | None = None
     fold: dict[str, Any] = field(default_factory=dict)
     #: D8 未决项（按 item 定位）：存在即拒绝发布，恢复走 owner patch 或 associate
     #: 定向修订——compile 不替 semantic unit 拿主意。
@@ -338,13 +339,52 @@ def first_appearance_issues(
     return issues
 
 
+
+def _evidence_windows(
+    evidence: Mapping[str, Mapping[str, Any]], cited: Iterable[str],
+) -> dict[str, str]:
+    """R10a a1：被引段 → 证据窗口（段全文＋同章前后各一段全文，机械拼接）。
+
+    窗口只收被任一 basis／source_refs 引用的段（I-16 派生物；精确支持引用
+    在条目 basis 里，邻句送达≠邻句为证据）。同章邻段按段号排序取前后各一；
+    段不在证据面（书级引用已由 owner 闸与防御复核拦截）跳过——防御在前，
+    此处不重复报错。
+    """
+    import re as _re
+    by_chapter: dict[int, list[tuple[int, str]]] = {}
+    for ref, seg in evidence.items():
+        m = _re.fullmatch(r'e(\d+)_(\d+)', ref)
+        if m is None:
+            continue
+        by_chapter.setdefault(int(m.group(1)), []).append((int(m.group(2)), ref))
+    for refs in by_chapter.values():
+        refs.sort()
+    windows: dict[str, str] = {}
+    for ref in sorted(cited):
+        seg = evidence.get(ref)
+        if seg is None:
+            continue
+        m = _re.fullmatch(r'e(\d+)_(\d+)', ref)
+        same = by_chapter.get(int(m.group(1)), []) if m else []
+        idx = next((i for i, (_no, r) in enumerate(same) if r == ref), None)
+        parts: list[str] = []
+        if idx is None:
+            parts.append(seg.get('text') or '')
+        else:
+            for j in (idx - 1, idx, idx + 1):
+                if 0 <= j < len(same):
+                    parts.append(evidence[same[j][1]].get('text') or '')
+        windows[ref] = '\n'.join(part for part in parts if part)
+    return windows
+
+
 def compile_source_truth(
     *, book: BookObservation, chapters: Mapping[int, ChapterObservation],
     names: NamesObservation, associate: AssociateObservation,
     evidence: Mapping[str, Mapping[str, Any]],
     source_texts: tuple[str, ...] | None = None,
 ) -> CompileOutcome:
-    """四份观察 → (CharactersArtifactV4, BlueprintsArtifactV14, fold 读数)。
+    """四份观察 → (CharactersArtifactV4, BlueprintsArtifactV15, fold 读数)。
 
     未决项不发布（D8）；机械缺陷不发布（I-34）；两份真源由同一结果一次成形，
     落盘仍由 runner 经 repository 的原子写与来源账完成（I-25 唯一 writer）。
@@ -355,6 +395,41 @@ def compile_source_truth(
     ordinals = sorted(chapters)
     if ordinals != list(range(1, len(ordinals) + 1)):
         errors.append(f'章观察必须从 1 连续，实得 {ordinals}')
+        return outcome
+
+    # ⓪ R10a a1 防御复核：全书 basis 引文（owner 验收已拦；发布前 fail fast
+    # 再核一遍，I-34）。同时收集被引段集合，供 ⑥ 的证据窗口派生。
+    defense: list[tuple[str, str, str, tuple[str, ...]]] = []
+    cited: set[str] = set()
+
+    def _cite(refs: Iterable[str]) -> None:
+        cited.update(refs)
+
+    for atom in book.initial_state:
+        _cite(atom.source_refs)
+        for basis in atom.basis:
+            defense.append((f'initial_state {atom.key}', basis.segment,
+                            basis.quote, atom.source_refs))
+            cited.add(basis.segment)
+    for rule in book.world_constraints:
+        _cite(rule.source_refs)
+        for basis in rule.basis:
+            defense.append((f'world_constraint {rule.statement[:16]}',
+                            basis.segment, basis.quote, rule.source_refs))
+            cited.add(basis.segment)
+    for n, obs in chapters.items():
+        for ordinal, beat in enumerate(obs.beats, 1):
+            _cite(beat.source_refs)
+            for kind in ('effects', 'cognition'):
+                for index, transfer in enumerate(getattr(beat, kind), 1):
+                    for basis in transfer.basis:
+                        defense.append((f'第{n}章拍{ordinal} {kind}[{index}]',
+                                        basis.segment, basis.quote,
+                                        beat.source_refs))
+                        cited.add(basis.segment)
+    for where, issue in verify_bases(EvidenceResolver(evidence), defense):
+        errors.append(f'{where}（compile 防御复核）：{issue.message}')
+    if errors:
         return outcome
 
     # ① Characters core（称谓窗口走 Resolver 唯一实现；书级闸已在 book owner 聚合）。
@@ -385,7 +460,7 @@ def compile_source_truth(
         initial_atoms.append(InitialStateAtom(
             state_id=f's0_{index:02d}', target=atom.target, key=key, value=atom.value,
             persistence=atom.persistence, knowledge=atom.knowledge,
-            source_refs=atom.source_refs))
+            source_refs=atom.source_refs, basis=atom.basis))
 
     # ③ 逐章编译：拍号派发、命题/悬念解析、同维合并、场景分段、人物闭集。
     compiled: list[tuple[int, list[dict[str, Any]], dict[str, list[str]], list[str]]] = []
@@ -423,12 +498,14 @@ def compile_source_truth(
     # ⑥ 世界约束编号 + 双真源成形。
     world_constraints = [
         WorldConstraint(constraint_id=f'wc_{index:02d}', kind=rule.kind,
-                        statement=rule.statement, source_refs=rule.source_refs)
+                        statement=rule.statement, source_refs=rule.source_refs,
+                        basis=rule.basis)
         for index, rule in enumerate(book.world_constraints, 1)]
     try:
-        blueprint = BlueprintsArtifactV14(
+        blueprint = BlueprintsArtifactV15(
             source_expression=compile_source_expression(book.expression, texts=source_texts),
-            world_constraints=world_constraints, chapters=tuple(chapter_blueprints))
+            world_constraints=world_constraints, chapters=tuple(chapter_blueprints),
+            evidence=_evidence_windows(evidence, cited))
     except ValidationError as exc:
         errors.append(f'blueprint 构造失败：{exc}')
         return outcome
@@ -457,6 +534,7 @@ def compile_source_truth(
         'chapters': {str(chapter): stats
                      for chapter, stats in fold.chapter_stats.items()},
         'concealed_unrevealed': fold.concealed_unrevealed,
+        'evidence': evidence_metrics(blueprint, merged.core_view()),
     }
     return outcome
 
@@ -884,8 +962,77 @@ def initial_snapshot(characters: CharactersCore) -> list[str]:
     return [_render_initial(atom) for atom in characters.initial_state]
 
 
+#: 判断限定词（与 CHAPTER_PROMPT 的引文要求同一集合；只进 fold 读数，不进门——
+#: P3「原以为／后来证实」正例要求判据不得按关键词拦）。
+JUDGEMENT_HEDGES: tuple[str, ...] = ('以为', '觉得', '像是', '预计', '约', '几天后')
+
+
+def evidence_metrics(
+    blueprint: BlueprintsArtifactV15, characters: CharactersCore,
+) -> dict[str, Any]:
+    """R10a a1 证据读数（度量不是门，§四诊断表）：引文长度分布、引文等于
+    称谓字面（只摘人名凑数的信号）、命题含判断限定词比例、modality 计数。
+
+    只读 canonical（I-24 不改输入）；供 fold 落盘与离线核读，不参与任何
+    接受判定。
+    """
+    surfaces = {window.surface
+                for entry in characters.characters.values()
+                for window in entry.surfaces}
+    quote_lengths: list[int] = []
+    quotes_equal_surface = 0
+    quote_total = 0
+    modality_counts: dict[str, int] = {}
+    cognition_total = 0
+    cognition_hedged = 0
+    for atom in characters.initial_state:
+        for basis in atom.basis:
+            quote_total += 1
+            quote_lengths.append(len(basis.quote))
+            quotes_equal_surface += basis.quote in surfaces
+    for rule in blueprint.world_constraints:
+        for basis in rule.basis:
+            quote_total += 1
+            quote_lengths.append(len(basis.quote))
+            quotes_equal_surface += basis.quote in surfaces
+    for chapter_bp in blueprint.chapters:
+        for beat in chapter_bp.beats:
+            for effect in beat.effects:
+                modality_counts[effect.modality] = \
+                    modality_counts.get(effect.modality, 0) + 1
+                for basis in effect.basis:
+                    quote_total += 1
+                    quote_lengths.append(len(basis.quote))
+                    quotes_equal_surface += basis.quote in surfaces
+            for cognition in beat.cognition:
+                cognition_total += 1
+                statement = cognition.proposition.statement or ''
+                cognition_hedged += any(h in statement
+                                        for h in JUDGEMENT_HEDGES)
+                for basis in cognition.basis:
+                    quote_total += 1
+                    quote_lengths.append(len(basis.quote))
+                    quotes_equal_surface += basis.quote in surfaces
+    ordered = sorted(quote_lengths)
+    return {
+        'quote_total': quote_total,
+        'quote_length_min': ordered[0] if ordered else 0,
+        'quote_length_median': (
+            ordered[len(ordered) // 2] if len(ordered) % 2
+            else (ordered[len(ordered) // 2 - 1] + ordered[len(ordered) // 2]) / 2
+        ) if ordered else 0,
+        'quote_length_max': ordered[-1] if ordered else 0,
+        'quotes_equal_surface': quotes_equal_surface,
+        'cognition_total': cognition_total,
+        'cognition_hedged': cognition_hedged,
+        'cognition_hedged_ratio': (
+            round(cognition_hedged / cognition_total, 3) if cognition_total else 0.0),
+        'effect_modality_counts': dict(sorted(modality_counts.items())),
+    }
+
+
 def source_fold(
-    characters: CharactersCore, blueprint: BlueprintsArtifactV14,
+    characters: CharactersCore, blueprint: BlueprintsArtifactV15,
     *, pre_chapter_evidence: frozenset[str] = frozenset(),
     proposition_registry: dict[str, str] | None = None,
 ) -> FoldResult:

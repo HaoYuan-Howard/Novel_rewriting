@@ -11,7 +11,7 @@ from __future__ import annotations
 from contracts.schema.grounding import SemanticBinding
 from contracts.schema.policy import PreserveKind
 from contracts.schema.source import (
-    BlueprintsArtifactV14, ChapterBlueprint, CharactersCore,
+    BlueprintsArtifactV15, ChapterBlueprint, CharactersCore,
 )
 from tests.str06_facilities import v13_beat
 from novel.stages.stage4.grounding import (
@@ -33,12 +33,13 @@ def _source_pair():
                     'surfaces': [{'surface': '云娘', 'from_chapter': 1,
                                   'until_chapter': None, 'source_refs': ['e01_01']}]}},
         initial_state=[])
-    bp = BlueprintsArtifactV14(source_expression=sample_blueprint_expression(),
+    bp = BlueprintsArtifactV15(source_expression=sample_blueprint_expression(),
         world_constraints=[], chapters=(
             ChapterBlueprint(chapter=1,
                              beats=(v13_beat('b01_01', '开篇', participants=('fu_jun',)),),
                              scenes=({'scene_id': 'sc01', 'beat_ids': ('b01_01',)},),
-                             causal_edges=()),))
+                             causal_edges=()),),
+        evidence={'e01_01': '夫君藏进床底。'})
     return chars, bp
 
 
@@ -188,20 +189,23 @@ def test_identity_stable_constraints_come_only_from_the_fact_layer():
     # 已删，改按观察协议直接构造同一形状）；其文本若泄漏进身份约束，下面两条
     # 断言会红。
     observation = ChapterObservation.model_validate({
-        'protocol_version': 'stage2-observation-v1', 'beats': [{
+        'protocol_version': 'stage2-chapters-v2', 'beats': [{
             'event': '试探', 'participants': ['fu_jun', 'yun'],
             'source_refs': ['e01_01'], 'scene_boundary': 'new',
             'temporal_mode': 'single',
             'effects': [{'target': {'kind': 'character', 'char_id': 'fu_jun'},
                          'key': 'scene_location', 'op': 'set', 'value': '床底',
-                         'scope': 'scene',
+                         'scope': 'scene', 'modality': 'actual',
                          'disclosure': {'visibility': 'concealed',
                                         'known_by': ['fu_jun']},
                          'proposition': {'ref': 'p_hide',
-                                         'statement': '夫君藏身床底'}}],
+                                         'statement': '夫君藏身床底'},
+                         'basis': [{'segment': 'e01_01', 'quote': '夫君藏进床底'}]}],
             'cognition': [{'proposition': {'ref': 'p_believe',
                                            'statement': '芸娘以为夫君已离开'},
-                           'holder': 'yun', 'mode': 'believes'}],
+                           'holder': 'yun', 'mode': 'believes',
+                           'basis': [{'segment': 'e01_01',
+                                      'quote': '夫君藏进床底'}]}],
             'loops': []}]})
     assert observation.beats[0].cognition
     assert observation.beats[0].effects[0].disclosure.visibility == 'concealed'

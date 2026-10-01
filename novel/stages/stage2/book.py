@@ -29,7 +29,7 @@ from contracts.schema.source import (
     REGISTERED_STATE_KEYS, CharactersCore, CharacterEntry,
 )
 from novel.stages.common import BOOK_PROMPT
-from novel.stages.stage2.resolver import EvidenceResolver
+from novel.stages.stage2.resolver import EvidenceResolver, verify_bases
 
 
 def book_observation_prompt(*, chapters: list[dict], hook_copy: str,
@@ -152,6 +152,31 @@ def compile_book_observation(
                 f'initial_state {atom.get("key")} 的键 {atom.get("key")} 是场景'
                 '作用域：开场所在交给第 1 章第一个 new 拍；故事开始前成立的长期'
                 '居所登记 residence')
+
+    # ④b R10a a1：初态/约束的 basis 引文判定（C4——逐字命中＋段属自身 source_refs）
+    basis_entries: list[tuple[str, str, str, Iterable[str]]] = []
+    for atom in wire.get('initial_state') or []:
+        if not isinstance(atom, Mapping):
+            continue
+        for basis in atom.get('basis') or ():
+            if isinstance(basis, Mapping):
+                basis_entries.append((
+                    f'initial_state {atom.get("key")}',
+                    str(basis.get('segment') or ''),
+                    str(basis.get('quote') or ''),
+                    tuple(atom.get('source_refs') or ())))
+    for rule in wire.get('world_constraints') or []:
+        if not isinstance(rule, Mapping):
+            continue
+        for basis in rule.get('basis') or ():
+            if isinstance(basis, Mapping):
+                basis_entries.append((
+                    f'world_constraint {str(rule.get("statement"))[:16]}',
+                    str(basis.get('segment') or ''),
+                    str(basis.get('quote') or ''),
+                    tuple(rule.get('source_refs') or ())))
+    for where, issue in verify_bases(resolver, basis_entries):
+        errors.append(f'{where}：{issue.message}')
 
     # ⑤ 协议形状（版本字面量、slug 形状、target 形状、转移原子闭集）
     from pydantic import ValidationError

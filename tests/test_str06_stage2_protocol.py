@@ -23,7 +23,8 @@ from contracts.schema import (
     NamesObservation,
 )
 from contracts.schema.observation import (
-    STAGE2_ASSOCIATE_PROTOCOL, STAGE2_OBSERVATION_PROTOCOL, STAGE2_BOOK_PROTOCOL,
+    STAGE2_ASSOCIATE_PROTOCOL, STAGE2_BOOK_PROTOCOL, STAGE2_CHAPTERS_PROTOCOL,
+    STAGE2_OBSERVATION_PROTOCOL,
 )
 from contracts.schema.source import FamilyEntry, NameStructure, PersonNameStructure
 from contracts.schema.workflow import STR06_RC_LABELS, STR06_RC_VERSION
@@ -42,6 +43,11 @@ SEGMENTS = {
     'e01_02': {'chapter': 1, 'text': '云娘坐在窗边。'},
     'e02_01': {'chapter': 2, 'text': '第二夜窗外有响动。'},
 }
+
+
+def _basis(ref: str) -> list[dict]:
+    """R10a a1 fixture：逐字 basis（段文本前 6 字做 quote）。"""
+    return [{'segment': ref, 'quote': SEGMENTS[ref]['text'][:6]}]
 
 
 # ───────────────────────── 节点注册（D9 一次性改齐） ─────────────────────────
@@ -130,7 +136,7 @@ def _book_wire() -> dict:
                 {'surface': '云娘', 'source_refs': ['e01_02']},
             ]},
         }),
-        'protocol_version': 'stage2-book-v2',
+        'protocol_version': 'stage2-book-v3',
         'characters': {
             'fu_jun': {'canonical': '夫君', 'surfaces': [
                 {'surface': '夫君', 'source_refs': ['e01_01']},
@@ -143,11 +149,11 @@ def _book_wire() -> dict:
         'initial_state': [
             {'target': {'kind': 'relation', 'subject': 'fu_jun', 'object': 'yun_niang'},
              'key': 'marital_status', 'value': '夫妻', 'persistence': 'stable',
-             'knowledge': None, 'source_refs': ['e00_01']},
+             'knowledge': None, 'source_refs': ['e00_01'], 'basis': _basis('e00_01')},
         ],
         'world_constraints': [
             {'kind': 'setting_constant', 'statement': '故事发生在古代江南',
-             'source_refs': ['e01_01']},
+             'source_refs': ['e01_01'], 'basis': _basis('e01_01')},
         ],
     }
 
@@ -165,10 +171,13 @@ def _beat_wire(**over) -> dict:
         'temporal_mode': 'single',
         'effects': [{'target': {'kind': 'character', 'char_id': 'yun_niang'},
                      'key': 'wariness', 'op': 'set', 'value': '高', 'scope': 'book',
-                     'disclosure': {'visibility': 'on_page'}}],
+                     'modality': 'actual',
+                     'disclosure': {'visibility': 'on_page'},
+                     'basis': _basis('e01_01')}],
         'cognition': [{'proposition': {'ref': 'p_secret',
                                        'statement': '借种之约是夫妻共同秘密'},
-                       'holder': 'yun_niang', 'mode': 'learns'}],
+                       'holder': 'yun_niang', 'mode': 'learns',
+                       'basis': _basis('e01_01')}],
         'loops': [{'ref': 'q_night', 'op': 'open', 'question': '夜半响动是谁？'}],
     }
     beat.update(over)
@@ -189,7 +198,7 @@ def test_wire_carries_no_mechanical_coordinates():
         .surfaces[0]
     assert not hasattr(surface_model, 'from_chapter'), '称谓窗口坐标由 compiler 派生（R-2.10）'
     beat = ChapterObservation.model_validate(
-        {'protocol_version': STAGE2_OBSERVATION_PROTOCOL,
+        {'protocol_version': STAGE2_CHAPTERS_PROTOCOL,
          'beats': [_beat_wire()]}).beats[0]
     assert not hasattr(beat, 'beat_id'), '拍号由 compiler 按列表序派发'
 
@@ -206,7 +215,7 @@ def test_character_slug_is_the_model_given_semantic_handle():
 # ───────────────────────── 章观察只含章内本地句柄（D3） ─────────────────────────
 
 def test_chapter_observation_rejects_unknown_fields():
-    wire = {'protocol_version': STAGE2_OBSERVATION_PROTOCOL,
+    wire = {'protocol_version': STAGE2_CHAPTERS_PROTOCOL,
             'beats': [_beat_wire()], 'causal_edges': [
                 {'from_beat': 'c01b01', 'to_beat': 'c01b02', 'kind': 'causes'}]}
     with pytest.raises(ValidationError):
@@ -217,40 +226,41 @@ def test_transfer_semantics_carry_over_from_v13():
     """三类转移的形状闸逐字复用 v13 模型：可见性、悬念开闭、登记键作用域兜底。"""
     # concealed 必须声明已知者并带命题锚（R-2.13）
     with pytest.raises(ValidationError):
-        ChapterObservation.model_validate({'protocol_version': STAGE2_OBSERVATION_PROTOCOL,
+        ChapterObservation.model_validate({'protocol_version': STAGE2_CHAPTERS_PROTOCOL,
                                            'beats': [_beat_wire(effects=[
                                                _concealed_effect(known_by=[])])]})
     with pytest.raises(ValidationError):
-        ChapterObservation.model_validate({'protocol_version': STAGE2_OBSERVATION_PROTOCOL,
+        ChapterObservation.model_validate({'protocol_version': STAGE2_CHAPTERS_PROTOCOL,
                                            'beats': [_beat_wire(effects=[
                                                _concealed_effect(proposition=None)])]})
     # open 必带 question、close 必带 resolution 且不改写问题（R-2.11）
     with pytest.raises(ValidationError):
-        ChapterObservation.model_validate({'protocol_version': STAGE2_OBSERVATION_PROTOCOL,
+        ChapterObservation.model_validate({'protocol_version': STAGE2_CHAPTERS_PROTOCOL,
                                            'beats': [_beat_wire(loops=[
                                                {'ref': 'q1', 'op': 'open'}])]})
     with pytest.raises(ValidationError):
-        ChapterObservation.model_validate({'protocol_version': STAGE2_OBSERVATION_PROTOCOL,
+        ChapterObservation.model_validate({'protocol_version': STAGE2_CHAPTERS_PROTOCOL,
                                            'beats': [_beat_wire(loops=[
                                                {'ref': 'q1', 'op': 'close',
                                                 'question': '改写问题', 'resolution': '是夫君'}])]})
     # 登记键作用域：表内键声明不符在 schema 层兜底拒（R-2.14）
     with pytest.raises(ValidationError):
-        ChapterObservation.model_validate({'protocol_version': STAGE2_OBSERVATION_PROTOCOL,
+        ChapterObservation.model_validate({'protocol_version': STAGE2_CHAPTERS_PROTOCOL,
                                            'beats': [_beat_wire(effects=[
                                                _effect('residence', scope='scene')])]})
 
 
 def _effect(key: str, *, scope: str) -> dict:
     return {'target': {'kind': 'character', 'char_id': 'fu_jun'}, 'key': key,
-            'op': 'set', 'value': '城南', 'scope': scope,
-            'disclosure': {'visibility': 'on_page'}}
+            'op': 'set', 'value': '城南', 'scope': scope, 'modality': 'actual',
+            'disclosure': {'visibility': 'on_page'}, 'basis': _basis('e01_01')}
 
 
 def _concealed_effect(*, known_by=(), proposition='p_hidden') -> dict:
     eff = {'target': {'kind': 'character', 'char_id': 'fu_jun'}, 'key': 'birthright',
-           'op': 'set', 'value': '养子', 'scope': 'book',
-           'disclosure': {'visibility': 'concealed', 'known_by': list(known_by)}}
+           'op': 'set', 'value': '养子', 'scope': 'book', 'modality': 'actual',
+           'disclosure': {'visibility': 'concealed', 'known_by': list(known_by)},
+           'basis': _basis('e01_01')}
     if proposition is not None:
         eff['proposition'] = {'ref': proposition, 'statement': '夫君是养子'}
     return eff
@@ -258,7 +268,7 @@ def _concealed_effect(*, known_by=(), proposition='p_hidden') -> dict:
 
 def test_chapter_observation_green_with_local_handles():
     obs = ChapterObservation.model_validate(
-        {'protocol_version': STAGE2_OBSERVATION_PROTOCOL, 'beats': [_beat_wire()]})
+        {'protocol_version': STAGE2_CHAPTERS_PROTOCOL, 'beats': [_beat_wire()]})
     assert obs.beats[0].cognition[0].proposition.ref == 'p_secret'
     assert obs.beats[0].loops[0].question == '夜半响动是谁？'
 

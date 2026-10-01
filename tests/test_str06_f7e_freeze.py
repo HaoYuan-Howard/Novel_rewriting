@@ -81,7 +81,8 @@ from __future__ import annotations
 from contracts.artifacts import ARTIFACT_PATHS, STR06_ARTIFACT_RC_VERSIONS
 from contracts.invariants import NODES
 from contracts.schema.observation import (
-    STAGE2_ASSOCIATE_PROTOCOL, STAGE2_OBSERVATION_PROTOCOL, STAGE2_BOOK_PROTOCOL,
+    STAGE2_ASSOCIATE_PROTOCOL, STAGE2_BOOK_PROTOCOL, STAGE2_CHAPTERS_PROTOCOL,
+    STAGE2_OBSERVATION_PROTOCOL,
 )
 from contracts.schema.workflow import (
     STAGE4_BIND_PROTOCOL, STAGE4_DESIGN_PROTOCOL, STAGE4_HOOK_DESIGN_PROTOCOL,
@@ -89,12 +90,13 @@ from contracts.schema.workflow import (
 )
 from novel.llm.paid_requests import candidate_contract_identity
 
-#: R9 重新冻结（2026-09-30，D8 修订二）：book 表达／Design v4／IR rc11；
-#: 节点、恢复策略与运行期配置不变，旧候选根只读拒识。
-#: 时的候选契约身份：节点表＋产物表＋RC 版式＋运行期配置的 SHA-256。表内任何
+#: R10a a1 重新冻结（2026-10-01，D8 修订三）：Blueprint V14→V15（basis 引文＋
+#: Effect.modality＋compiler 派生证据窗口），观察协议 book v3／chapters 独立 v2；
+#: 节点、恢复策略与运行期配置不变，旧候选根只读拒识（协议不兼容，不计语义检出）。
+#: 候选契约身份：节点表＋产物表＋RC 版式＋运行期配置的 SHA-256。表内任何
 #: 一行变化都会改变它——先改本记录并登记原因（REQUIREMENTS／DECISIONS），
 #: 再动表。
-FROZEN_CONTRACT_IDENTITY = '08a05314a73c68d4518fc008af795078cdecf5f69888346b4f6a98d7cda497bb'
+FROZEN_CONTRACT_IDENTITY = '7031356e55f2d885f52c1f1a526076f9d2742adf340dee739706969547704eae'
 
 #: 冻结时的节点集合（14 个：stage0/1 两座＋Stage2 五节点＋Stage4 五＋Stage5 两
 #: ＋Stage7 两）。
@@ -170,8 +172,12 @@ def test_frozen_rc_version_label():
 #: 否则一次「顺手升版」不会改变身份哈希、静默混用不同协议的已购产物。
 #: 写作层版本（`RENDERER_VERSION`／`WRITER_PROTOCOL_VERSION`）不在此表——
 #: 分层冻结，canary 收敛后再冻（PLAN.md）。
+#: R10a a1（2026-10-01，D8 修订三裁决）：book 升 v3（初态/约束带 basis 引文）、
+#: chapters 拆独立字面 v2（转移带 basis／Effect.modality）；names 输入投影未变
+#: 保持 observation-v1。旧盘面按版本关闭式拒识（协议不兼容），不计语义检出。
 FROZEN_SEMANTIC_PROTOCOLS = {
-    'STAGE2_BOOK_PROTOCOL': 'stage2-book-v2',
+    'STAGE2_BOOK_PROTOCOL': 'stage2-book-v3',
+    'STAGE2_CHAPTERS_PROTOCOL': 'stage2-chapters-v2',
     'STAGE2_OBSERVATION_PROTOCOL': 'stage2-observation-v1',
     'STAGE2_ASSOCIATE_PROTOCOL': 'stage2-associate-v2',
     'STAGE4_PRESERVE_PROTOCOL': 'stage4-preserve-v1',
@@ -185,6 +191,7 @@ FROZEN_SEMANTIC_PROTOCOLS = {
 def test_frozen_semantic_protocols_match_the_live_literals():
     live = {
         'STAGE2_BOOK_PROTOCOL': STAGE2_BOOK_PROTOCOL,
+        'STAGE2_CHAPTERS_PROTOCOL': STAGE2_CHAPTERS_PROTOCOL,
         'STAGE2_OBSERVATION_PROTOCOL': STAGE2_OBSERVATION_PROTOCOL,
         'STAGE2_ASSOCIATE_PROTOCOL': STAGE2_ASSOCIATE_PROTOCOL,
         'STAGE4_PRESERVE_PROTOCOL': STAGE4_PRESERVE_PROTOCOL,

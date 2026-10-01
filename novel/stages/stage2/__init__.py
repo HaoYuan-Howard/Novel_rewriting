@@ -37,7 +37,8 @@ from novel.stages.stage2.chapters import (
 )
 from novel.stages.stage2.compile import (
     CompileOutcome, CONFIRMING_MODES, FoldResult, compile_source_truth,
-    first_appearance_anchors, first_appearance_issues, initial_snapshot, source_fold,
+    evidence_metrics, first_appearance_anchors, first_appearance_issues,
+    initial_snapshot, source_fold,
 )
 from novel.stages.stage2.names import (
     ProbeFinding, compile_name_structure, merge_name_structure,
@@ -59,7 +60,8 @@ __all__ = [
     'chapter_state_handle', 'character_core_view',
     'compile_associate_observation',
     'compile_book_observation', 'compile_chapter_observation',
-    'compile_name_structure', 'compile_source_truth', 'initial_snapshot',
+    'compile_name_structure', 'compile_source_truth', 'evidence_metrics',
+    'initial_snapshot',
     'merge_name_structure', 'project_association_space', 'serialize_target',
     'source_fold', 'surname_construction_probe', 'target_label',
 ]

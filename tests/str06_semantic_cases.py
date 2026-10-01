@@ -77,8 +77,9 @@ CASES: tuple[SemanticCase, ...] = (
                     '时长（如同期已过去半月）。',
         expected='effect.modality=expected（计划／预计≠确知≠已发生）；时态锁 '
                  'kf 在 Brief 派生，写手措辞为「计划／预计，尚未发生」。',
-        red_in='R10a-a1', green_in='R10a-a4',
-        mechanical_face='a1：modality 闭集判据（命题含预计限定而 actual → 拒）；'
+        red_in='R10a-a4', green_in='R10a-a4',
+        mechanical_face='a1：modality 闭集给 expected 独立槽位（限定词只进 fold '
+                        '读数不进门，P3 正例要求不得按关键词拦）；'
                         'a4：kf 键 modality 与锁一致',
         note='R9c 实例：预计约半个月 → 已发生时长'),
     SemanticCase(

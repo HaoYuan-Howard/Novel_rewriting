@@ -38,7 +38,7 @@ from contracts.schema.grounding import (
     SemanticBinding, SourceLineage, SourceObligation,
 )
 from contracts.schema.source import (
-    BlueprintsArtifactV14, CharactersCore,
+    BlueprintsArtifactV15, CharactersCore,
 )
 from contracts.schema.grounding import BriefRequirement
 from contracts.schema.workflow import (
@@ -75,7 +75,7 @@ def _reject_unknown_keys(errors: list[str], obj: dict[str, Any], allowed: frozen
 def assemble_preserve(
     wire: dict[str, Any], *,
     policy_id: str, policy_version: int,
-    characters: CharactersCore, blueprint: BlueprintsArtifactV14,
+    characters: CharactersCore, blueprint: BlueprintsArtifactV15,
     provider: str, model: str, request_sha256: str,
 ) -> tuple[PreserveCheckpoint | None, list[str]]:
     """Preserve wire（stage4-preserve-v1：{'obligations': [...]}）→ checkpoint。
@@ -184,7 +184,7 @@ def obligation_core_id(obligation_id: str) -> str:
 
 def project_brief(
     checkpoint: PreserveCheckpoint, characters: CharactersCore,
-    blueprint: BlueprintsArtifactV14,
+    blueprint: BlueprintsArtifactV15,
 ) -> tuple[ReconstructionBrief, tuple[IdentityProjection, ...]]:
     """checkpoint → (Brief, IdentityProjection)。Design 的全部语义输入。
 

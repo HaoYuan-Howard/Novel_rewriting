@@ -42,6 +42,8 @@ ISSUE_CODES: tuple[str, ...] = (
     'missing_literal',    # 逐字锚在所引句段内一处都没有
     'ambiguous_literal',  # 逐字锚在所引句段内出现多次（重复引文/无法唯一定位）
     'anchor_conflict',    # 逐字锚命中分散在所引的多个句段（定位冲突）
+    'basis_segment_outside_refs',  # R10a a1：basis 引的段不在条目自身 source_refs 内
+    'quote_not_in_segment',        # R10a a1：basis 引文在所引句段内不逐字存在
 )
 
 
@@ -147,6 +149,36 @@ class EvidenceResolver:
                                    'offset': h.offset} for h in hits]})]
         return hits[0], []
 
+    # ── R10a a1：basis 引文判定（C4 引文错位） ─────────────────────────────
+
+    def verify_quote(self, segment: str, quote: str,
+                     refs: Iterable[str]) -> list[ResolverIssue]:
+        """一条 basis 的机械判定：段在闭集、段属条目自身 source_refs、
+        引文逐字存在于段文本。refs 是该条目自身的 source_refs（Effect／
+        Cognition 在所属拍；书级条目在自身）。逐字子串判定，不归一化、
+        不模糊匹配；不要求唯一出现（basis 是证据存在性，不是定位）。
+        """
+        refs = list(refs)
+        problems: list[ResolverIssue] = []
+        if segment not in self._segments:
+            return [ResolverIssue(
+                code='unknown_segment',
+                message=f'basis 引用的句段 id 不在闭集内：{segment!r}',
+                context={'segment_id': segment})]
+        if segment not in refs:
+            problems.append(ResolverIssue(
+                code='basis_segment_outside_refs',
+                message=(f'basis 引文段 {segment!r} 不在条目自身 source_refs '
+                         f'{refs} 内——引你所引，不得引用未声明的段'),
+                context={'segment_id': segment, 'source_refs': refs}))
+        if quote not in self._text(segment):
+            problems.append(ResolverIssue(
+                code='quote_not_in_segment',
+                message=(f'basis 引文在句段 {segment!r} 内不逐字存在（引文须'
+                         f'逐字摘自原句，不转写、不缩写）：{quote[:30]!r}…'),
+                context={'segment_id': segment, 'quote': quote[:60]}))
+        return problems
+
     # ── 称谓窗口锚点（R-2.10） ───────────────────────────────────────────────
 
     def surface_chapter(self, surface: str,
@@ -176,3 +208,18 @@ class EvidenceResolver:
         else:
             chapter = min((chapter_of_evidence(ref) for ref in refs), default=0)
         return max(chapter, 1), None
+
+
+def verify_bases(
+    resolver: EvidenceResolver,
+    entries: Iterable[tuple[str, str, str, Iterable[str]]],
+) -> list[tuple[str, ResolverIssue]]:
+    """R10a a1：批量 basis 判定。`entries` 每项＝(where, segment, quote, refs)，
+    where 是调用方的人读定位（如「第3章拍2 effects[1]」）；返回 (where, issue)
+    对，由调用方聚合成自己的错误清单。纯定位查找，不做语义判断。
+    """
+    results: list[tuple[str, ResolverIssue]] = []
+    for where, segment, quote, refs in entries:
+        for issue in resolver.verify_quote(segment, quote, refs):
+            results.append((where, issue))
+    return results

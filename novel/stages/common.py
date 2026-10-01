@@ -417,8 +417,13 @@ BOOK_PROMPT = """任务：通读全书，产出人物账、初始状态与世界
 【证据段 id 清单】（source_refs 只能从中选）
 {evidence}
 
-输出 JSON 顶层：{{"protocol_version":"stage2-book-v2","characters":{{...}},"initial_state":[...],"world_constraints":[...],"expression":{{"narration":{{...}},"mechanisms":[...]}}}}
-个人自述、某家长辈要求不得推广成普遍世界规则；无法由证据确认的规则不写。"""
+输出 JSON 顶层：{{"protocol_version":"stage2-book-v3","characters":{{...}},"initial_state":[...],"world_constraints":[...],"expression":{{"narration":{{...}},"mechanisms":[...]}}}}
+个人自述、某家长辈要求不得推广成普遍世界规则；无法由证据确认的规则不写。
+
+【逐字证据】（R10a a1）initial_state 与 world_constraints 的每个条目必须带 basis：
+[{{"segment":"证据段id","quote":"原句逐字引文"}}]（至少 1 条）。segment 必须取自该条目
+自己的 source_refs；quote 逐字摘自该句段原文，不转写、不缩写、不摘人名或动作词凑数；
+判断依据含限定（以为／觉得／像是／预计／约／几天后）时，引文必须包含该限定原文。"""
 
 CHAPTER_PROMPT = """任务：把第 {ch} 章正文拆成有序 beats。每一拍是一次状态转移：event 是给人读的事件表述，需要延续的变化全部由三类转移承载——effects（事实）、cognition（认知）、loops（悬念）。
 
@@ -498,8 +503,15 @@ CHAPTER_PROMPT = """任务：把第 {ch} 章正文拆成有序 beats。每一拍
    合法，但请节制；这类拍的比例会被按章报出，供离线核读。
 7. 前文与正文的关系：上方前文原文是只读参考——本拍事实以本章正文原文为准，不得为迁就
    前文改写施事、受事或动作主体；前文与正文不一致时，按正文记录。
+8. 逐字证据与时态（R10a a1）：effects 与 cognition 的每条转移必须带 basis：
+   [{{"segment":"证据段id","quote":"原句逐字引文"}}]（至少 1 条）。segment 必须取自本拍
+   source_refs；quote 逐字摘自该句段原文，不转写、不缩写。认识限定（觉得像是／以为／
+   听说）只进 cognition 的 mode（suspects／believes／hears_claim），命题 statement 写
+   命题本身；引文保留原限定。effects 另有必填 modality：actual＝已发生；planned＝已定
+   计划；expected＝预计／约；conditional＝条件性执行——「约半个月便回」是 expected，
+   不是 actual。
 
-输出 JSON 顶层：{{"protocol_version":"stage2-observation-v1","beats":[...]}}
+输出 JSON 顶层：{{"protocol_version":"stage2-chapters-v2","beats":[...]}}
 不要把财富、位置等不同维度塞入同一个 key。"""
 
 #: 七类保存类别与 `contracts/schema/policy.py::PreserveKind` 同源（B2）：定义只在

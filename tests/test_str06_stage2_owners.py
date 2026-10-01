@@ -23,7 +23,9 @@ import pytest
 from contracts.invariants import (
     PIPELINE_BOOK_CONCURRENCY, PIPELINE_PROVIDER_CONCURRENCY,
 )
-from contracts.schema.observation import STAGE2_OBSERVATION_PROTOCOL
+from contracts.schema.observation import (
+    STAGE2_CHAPTERS_PROTOCOL, STAGE2_OBSERVATION_PROTOCOL,
+)
 from novel.llm.ledger import CostLedger, ledger_path
 from novel.llm.paid_requests import PaidRequestSession
 from novel.llm.transport import ChatRequest, ChatResponse
@@ -47,6 +49,12 @@ CHAPTERS = [
 ]
 EVIDENCE = build_evidence(CHAPTERS, HOOK)
 
+
+def _basis(ref: str) -> list[dict]:
+    """R10a a1 fixture：逐字 basis（段文本前 6 字做 quote，保证逐字命中）。"""
+    return [{'segment': ref, 'quote': EVIDENCE[ref]['text'][:6]}]
+
+
 # ───────────────────────── 协议 wire 助手（新协议形状） ─────────────────────────
 
 
@@ -57,7 +65,7 @@ def _book_wire() -> dict:
             'yun_niang': {'canonical': '云娘', 'surfaces': [
                 {'surface': '云娘', 'source_refs': ['e01_02']}]},
         }),
-        'protocol_version': 'stage2-book-v2',
+        'protocol_version': 'stage2-book-v3',
         'characters': {
             'fu_jun': {'canonical': '夫君', 'surfaces': [
                 {'surface': '夫君', 'source_refs': ['e01_01']}]},
@@ -67,11 +75,11 @@ def _book_wire() -> dict:
         'initial_state': [
             {'target': {'kind': 'relation', 'subject': 'fu_jun', 'object': 'yun_niang'},
              'key': 'marital_status', 'value': '夫妻', 'persistence': 'stable',
-             'knowledge': None, 'source_refs': ['e00_01']},
+             'knowledge': None, 'source_refs': ['e00_01'], 'basis': _basis('e00_01')},
         ],
         'world_constraints': [
             {'kind': 'setting_constant', 'statement': '故事发生在古代江南',
-             'source_refs': ['e01_01']}],
+             'source_refs': ['e01_01'], 'basis': _basis('e01_01')}],
     }
 
 
@@ -85,7 +93,7 @@ def _beat(event: str, refs: tuple[str, ...], *, participants: tuple[str, ...] = 
 
 
 def _chapter_wire(*beats: dict) -> dict:
-    return {'protocol_version': STAGE2_OBSERVATION_PROTOCOL, 'beats': list(beats)}
+    return {'protocol_version': STAGE2_CHAPTERS_PROTOCOL, 'beats': list(beats)}
 
 
 def _names_wire() -> dict:
@@ -139,7 +147,7 @@ def test_book_observation_refuses_scene_scope_initial_key_and_unknown_known_by()
         {'target': {'kind': 'character', 'char_id': 'yun_niang'}, 'key': 'doubt',
          'value': '暗中提防', 'persistence': 'mutable',
          'knowledge': {'known_by': ['reader'], 'reader_knows': False},
-         'source_refs': ['e00_01']})
+         'source_refs': ['e00_01'], 'basis': _basis('e00_01')})
     _obs, errors = compile_book_observation(wire, evidence=EVIDENCE)
     assert any('场景作用域' in e and 'residence' in e for e in errors), errors
     assert any('known_by 引用未知人物 reader' in e for e in errors), errors
@@ -182,16 +190,17 @@ def test_chapter_observation_green_wire_compiles_with_local_handles():
     wire = _chapter_wire(_beat('窗外有响动', ('e02_01',), participants=('yun_niang',),
                                cognition=({'proposition': {'ref': 'p_noise',
                                                            'statement': '夜半有响动'},
-                                          'holder': 'yun_niang', 'mode': 'suspects'},),
+                                          'holder': 'yun_niang', 'mode': 'suspects',
+                                          'basis': _basis('e02_01')},),
                                loops=({'ref': 'q_noise', 'op': 'open',
                                        'question': '响动是谁？'},)))
-    obs, errors = compile_chapter_observation(wire, evidence_ids=frozenset(_ch2_evidence()))
+    obs, errors = compile_chapter_observation(wire, evidence_ids=_ch2_evidence())
     assert errors == [] and obs is not None and len(obs.beats) == 1
 
 
 def test_chapter_observation_refuses_evidence_outside_this_chapter():
     wire = _chapter_wire(_beat('窗外有响动', ('e02_01', 'e01_01')))
-    _obs, errors = compile_chapter_observation(wire, evidence_ids=frozenset(_ch2_evidence()))
+    _obs, errors = compile_chapter_observation(wire, evidence_ids=_ch2_evidence())
     assert any('e01_01' in e and '闭集之外' in e for e in errors), errors
 
 
@@ -200,18 +209,18 @@ def test_chapter_observation_binds_registered_key_scope_and_refuses_retired():
     assert 'whereabouts' in RETIRED_STATE_KEYS
     wire = _chapter_wire(_beat('云娘握紧剪刀', ('e02_02',), effects=(
         {'target': {'kind': 'character', 'char_id': 'yun_niang'}, 'key': 'residence',
-         'op': 'set', 'value': '陆家', 'scope': 'scene',
-         'disclosure': {'visibility': 'on_page'}},)))
+         'op': 'set', 'value': '陆家', 'scope': 'scene', 'modality': 'actual',
+         'disclosure': {'visibility': 'on_page'}, 'basis': _basis('e02_02')},)))
     raw = json.dumps(wire, ensure_ascii=False)
-    obs, errors = compile_chapter_observation(wire, evidence_ids=frozenset(_ch2_evidence()))
+    obs, errors = compile_chapter_observation(wire, evidence_ids=_ch2_evidence())
     assert errors == [] and obs.beats[0].effects[0].scope == 'book', \
         'R-2.14：表内键作用域由 compiler 按表绑定（归一化，不整章拒）'
     assert json.dumps(wire, ensure_ascii=False) == raw, '归一在副本上，原 wire 不改（I-24）'
     wire = _chapter_wire(_beat('云娘握紧剪刀', ('e02_02',), effects=(
         {'target': {'kind': 'character', 'char_id': 'yun_niang'}, 'key': 'whereabouts',
-         'op': 'set', 'value': '床底', 'scope': 'scene',
-         'disclosure': {'visibility': 'on_page'}},)))
-    _obs, errors = compile_chapter_observation(wire, evidence_ids=frozenset(_ch2_evidence()))
+         'op': 'set', 'value': '床底', 'scope': 'scene', 'modality': 'actual',
+         'disclosure': {'visibility': 'on_page'}, 'basis': _basis('e02_02')},)))
+    _obs, errors = compile_chapter_observation(wire, evidence_ids=_ch2_evidence())
     assert any('whereabouts' in e and '退役' in e for e in errors), errors
 
 
@@ -221,12 +230,14 @@ def test_chapter_observation_refuses_conflicting_statement_and_double_open():
     wire = _chapter_wire(
         _beat('窗外有响动', ('e02_01',),
               cognition=({'proposition': {'ref': 'p_noise', 'statement': '夜半有响动'},
-                          'holder': 'yun_niang', 'mode': 'suspects'},)),
+                          'holder': 'yun_niang', 'mode': 'suspects',
+                          'basis': _basis('e02_01')},)),
         _beat('云娘警觉', ('e02_02',), boundary='continue',
               cognition=({'proposition': {'ref': 'p_noise', 'statement': '来了贼人'},
-                          'holder': 'yun_niang', 'mode': 'confirms'},),
+                          'holder': 'yun_niang', 'mode': 'confirms',
+                          'basis': _basis('e02_02')},),
               loops=(second_loop_a, second_loop_b)))
-    _obs, errors = compile_chapter_observation(wire, evidence_ids=frozenset(_ch2_evidence()))
+    _obs, errors = compile_chapter_observation(wire, evidence_ids=_ch2_evidence())
     assert any('p_noise' in e and '文本只建立一次' in e for e in errors), errors
     assert any('重复 open' in e for e in errors), errors
 
@@ -237,14 +248,14 @@ def test_chapter_observation_keeps_cross_chapter_handles_unresolved():
                                loops=({'ref': 'q_night', 'op': 'close',
                                        'resolution': '是夫君自己'},)))
     obs, errors = compile_chapter_observation(
-        wire, evidence_ids=frozenset(k for k, v in EVIDENCE.items() if v['chapter'] == 3))
+        wire, evidence_ids={k: v for k, v in EVIDENCE.items() if v['chapter'] == 3})
     assert errors == [] and obs.beats[0].loops[0].ref == 'q_night'
 
 
 def test_chapter_observation_enforces_protocol_version_literal():
     wire = _chapter_wire(_beat('窗外有响动', ('e02_01',)))
     wire['protocol_version'] = 'stage2-observation-v0'
-    _obs, errors = compile_chapter_observation(wire, evidence_ids=frozenset(_ch2_evidence()))
+    _obs, errors = compile_chapter_observation(wire, evidence_ids=_ch2_evidence())
     assert any('协议校验失败' in e for e in errors), errors
 
 
@@ -331,7 +342,9 @@ def test_stage2_observation_leg_persists_observations_and_names_remount(tmp_path
                 'stage2/observations/names.json'):
         artifact = repo.inspect(rel)
         assert artifact['protocol_version'] == (
-            'stage2-book-v2' if rel.endswith('/book.json') else STAGE2_OBSERVATION_PROTOCOL), rel
+            'stage2-book-v3' if rel.endswith('/book.json')
+            else STAGE2_OBSERVATION_PROTOCOL if rel.endswith('/names.json')
+            else STAGE2_CHAPTERS_PROTOCOL), rel
         assert '_provenance' in artifact, rel
     assert not (repo.root / 'stage2/characters/characters.json').exists(), \
         'names 只落观察；Characters 由 compile 发布（S2-5，D9）'

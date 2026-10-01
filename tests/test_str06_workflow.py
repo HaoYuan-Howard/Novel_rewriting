@@ -18,7 +18,7 @@ from tests.str06_expression_inputs import (
     sample_book_expression, sample_design_expression,
 )
 
-PV = 'stage2-observation-v1'
+PV = 'stage2-chapters-v2'   # R10a a1：章观察独立协议字面量（names 无字面量面）
 
 
 def _obs_beat(event, refs, **over):
@@ -34,7 +34,7 @@ def test_stage2_stage4_repository_replay_and_writer_consumer(tmp_path):
         'fu_jun': {'canonical': '夫君', 'surfaces': [
             {'surface': '夫君', 'source_refs': ['e01_01']}]},
         'yun': {'canonical': '云娘', 'surfaces': [
-            {'surface': '云娘', 'source_refs': ['e01_01']}]}}), 'protocol_version': 'stage2-book-v2', 'characters': {
+            {'surface': '云娘', 'source_refs': ['e01_01']}]}}), 'protocol_version': 'stage2-book-v3', 'characters': {
         'fu_jun': {'canonical': '夫君', 'surfaces': [
             {'surface': '夫君', 'source_refs': ['e01_01']}]},
         'yun': {'canonical': '云娘', 'surfaces': [
@@ -208,18 +208,18 @@ def test_changed_hook_copy_refuses_the_old_root_and_changes_requests(tmp_path):
             'fu_jun': {'canonical': '夫君', 'surfaces': [
                 {'surface': '夫君', 'source_refs': ['e01_01']}]},
             'yun': {'canonical': '云娘', 'surfaces': [
-                {'surface': '云娘', 'source_refs': ['e01_01']}]}}), 'protocol_version': 'stage2-book-v2', 'characters': {
+                {'surface': '云娘', 'source_refs': ['e01_01']}]}}), 'protocol_version': 'stage2-book-v3', 'characters': {
             'fu_jun': {'canonical': '夫君', 'surfaces': [
                 {'surface': '夫君', 'source_refs': ['e01_01']}]},
             'yun': {'canonical': '云娘', 'surfaces': [
                 {'surface': '云娘', 'source_refs': ['e01_01']}]}},
             'initial_state': [], 'world_constraints': []},
-        'ch01': {'protocol_version': 'stage2-observation-v1', 'beats': [
+        'ch01': {'protocol_version': PV, 'beats': [
             {'event': '约定成立', 'participants': ['yun', 'fu_jun'],
              'source_refs': ['e01_01'], 'scene_boundary': 'new',
              'temporal_mode': 'single', 'effects': [], 'cognition': [],
              'loops': []}]},
-        'ch02': {'protocol_version': 'stage2-observation-v1', 'beats': [
+        'ch02': {'protocol_version': PV, 'beats': [
             {'event': '夜半响动', 'participants': ['yun'],
              'source_refs': ['e02_01'], 'scene_boundary': 'new',
              'temporal_mode': 'single', 'effects': [], 'cognition': [],
@@ -287,7 +287,7 @@ def test_concealed_fact_reaches_writer_as_pending_reader_confirmation(tmp_path):
         'fu_jun': {'canonical': '夫君', 'surfaces': [
             {'surface': '夫君', 'source_refs': ['e01_01']}]},
         'yun': {'canonical': '云娘', 'surfaces': [
-            {'surface': '云娘', 'source_refs': ['e01_01']}]}}), 'protocol_version': 'stage2-book-v2', 'characters': {
+            {'surface': '云娘', 'source_refs': ['e01_01']}]}}), 'protocol_version': 'stage2-book-v3', 'characters': {
         'fu_jun': {'canonical': '夫君', 'surfaces': [
             {'surface': '夫君', 'source_refs': ['e01_01']}]},
         'yun': {'canonical': '云娘', 'surfaces': [
@@ -297,15 +297,19 @@ def test_concealed_fact_reaches_writer_as_pending_reader_confirmation(tmp_path):
         _obs_beat('夫君佯称离开，实则藏身床底', ('e01_01',), participants=('fu_jun',),
                   effects=[{'target': {'kind': 'character', 'char_id': 'fu_jun'},
                             'key': 'scene_location', 'op': 'set', 'value': '床底',
-                            'scope': 'scene',
+                            'scope': 'scene', 'modality': 'actual',
                             'disclosure': {'visibility': 'concealed',
                                            'known_by': ['fu_jun']},
                             'proposition': {'ref': 'p_hide',
-                                            'statement': '夫君藏身床底'}}]),
+                                            'statement': '夫君藏身床底'},
+                            'basis': [{'segment': 'e01_01',
+                                       'quote': '夫君与云娘一处住着'}]}]),
         _obs_beat('床板响动，读者与云娘确认床底有人', ('e01_01',),
                   participants=('yun', 'fu_jun'), scene_boundary='continue',
                   cognition=[{'proposition': {'ref': 'p_hide'},
-                              'holder': 'reader', 'mode': 'learns'}])]}
+                              'holder': 'reader', 'mode': 'learns',
+                              'basis': [{'segment': 'e01_01',
+                                         'quote': '夫君与云娘一处住着'}]}])]}
     design = {**sample_design_expression(('yun',)),
         'protocol_version': 'stage4-design-v4',
         'book_style': '冷峻克制的第三人称叙事。',

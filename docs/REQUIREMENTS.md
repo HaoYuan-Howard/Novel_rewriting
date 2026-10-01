@@ -74,8 +74,8 @@ Golden 验证，不重新加回迁移关闭条件。
 | 顺序 | 批次与状态 | 依赖、交付与放行条件 |
 |---|---|---|
 | 1 | [x] R9a／R9b／B6a（历史） | 交付记录见历史索引；R9c 首段执行记录见下节 |
-| 2 | [ ] R10-0 基线、真实消费与反例集（免费） | 登记（本批）、两根冻结证据清单、逐 owner 请求占比、送达守卫自检＋dramatic_intent 如实登记、C1–C11 反例集、关键案例草案（用户确认后冻结）、基线读数 |
-| 3 | [ ] R10a 关键语义交接（免费开发） | a1 Stage2 引文/时态 → a2 Preserve 证据视图/锚定 → a3 冲突回派三分支 → a4 Brief 锁定＋Design v5 → a5 Bind/compile 位置校验；一次校验合并报告，fake transport |
+| 2 | [x] R10-0 基线、真实消费与反例集（免费） | 登记、两根冻结证据清单、逐 owner 请求占比、送达守卫自检、C1–C11 反例集、用户提供的 Golden Set v3.0 关键案例（已冻结）、基线读数——全部闭合（见 R10-0 执行记录） |
+| 3 | [ ] R10a 关键语义交接（免费开发） | a1 Stage2 引文/时态（**已完成**）→ a2 Preserve 证据视图/锚定 → a3 冲突回派三分支 → a4 Brief 锁定＋Design v5 → a5 Bind/compile 位置校验；一次校验合并报告，fake transport |
 | 4 | [ ] R10b WriterIR 投影与写手协议 v7（免费） | 完整章包夹具先行；背景投影收窄；同基座 v6/v7 免费形状读数对照，不做付费对照 |
 | 5 | [ ] 收口 工程验收与付费基线冻结（免费） | §9.5 五文件、受影响 stage、fake 产品链、旧根关闭式拒识核验、默认非 corpus 回归、前端四件 |
 | 6 | [ ] R10c＝B6-B 付费无人工 patch 全书（分段授权） | c1 语义层段＋免费核读 → c2 成文段；工程核验＋用户通读 → STR-06 关闭；禁止 owner 内容 patch |
@@ -200,6 +200,55 @@ Golden 验证，不重新加回迁移关闭条件。
   （pass/fail/unver/not_applicable）、污染规则（夫君＝开发可见；三人成行
   保持隔离评测资格，R10d 依赖）。早于原时序（用户 2026-10-01 裁决「与
   通读一并确认」）由用户直接提供冻结件。**R10-0 至此全部闭合。**
+
+### R10a a1 执行记录（2026-10-01，免费，fake transport）
+
+- **schema**（`contracts/schema/source.py`／`observation.py`）：新增
+  `EvidenceQuote{segment, quote}`（quote 逐字精确引用，不归一化不模糊匹配）；
+  `Effect`／`Cognition`／`InitialStateAtom`／`WorldConstraint`／观察面
+  `InitialFact`／`WorldRule` 必填 `basis`（≥1，段属条目自身 source_refs）；
+  `Effect` 必填 `modality` 闭集（actual/planned/expected/conditional）。
+  `BlueprintsArtifactV14→V15`：compiler 派生 `evidence` 证据窗口（被引句段
+  全文＋同章前后各一段机械合并；只收被引用段，邻句送达≠邻句为证据）。
+  协议字面量：book `stage2-book-v2→v3`、chapters 拆独立字面
+  `stage2-chapters-v2`（names 输入投影未变保持 observation-v1，associate
+  仍 v2）。RC 版式头 rc11 与全链 rc12 升版留在收口批同批登记（§二.4）。
+- **resolver**（`stage2/resolver.py`）：`verify_quote`＋`verify_bases` 批量
+  判定；新 issue 码 `basis_segment_outside_refs`（引文段不在条目自身
+  source_refs 内——引你所引）与 `quote_not_in_segment`（引文不逐字存在于
+  段内）。不要求唯一出现（basis 是证据存在性，不是定位）。
+- **owner 验收**（`stage2/book.py`／`chapters.py`）：初态/约束/逐拍转移的
+  basis 在 owner 闸即判（一次校验、合并报告）；chapters 验收改传完整段映射
+  （含 text）使逐字判定可行（`novel/stages/chain.py::run_chapters` 同步）。
+- **compile 防御复核**（`stage2/compile.py`）：发布前对全书 basis 再核一遍
+  （I-34 fail fast），同时收集被引段派生证据窗口；fold 新增
+  `evidence_metrics` 读数（§四诊断表，度量不是门）：引文长度分布
+  （min/median/max）、引文等于称谓字面数、命题含判断限定词比例
+  （以为/觉得/像是/预计/约/几天后，与 prompt 同集——P3 正例钉住限定词
+  只进读数不进门）、modality 计数。
+- **prompt**（`stages/common.py`）：BOOK/CHAPTER 两 prompt 增【逐字证据】
+  段（引文须含决定判断的限定原文、不得只摘人名或动作词凑数；modality
+  四值语义；认识限定只进 cognition 的 mode、命题写命题本身）。
+- **冻结钉重钉**（`tests/test_str06_f7e_freeze.py`，守卫指引动作）：
+  `FROZEN_SEMANTIC_PROTOCOLS` 更新（book v3＋新增 chapters v2 行）；
+  `FROZEN_CONTRACT_IDENTITY` 重算
+  `7031356e…04eae`（漂移原因＝Blueprint 模型名 V14→V15 进身份哈希）。
+  旧候选根对 RC 面仍为 rc11 身份，新链盘面按新身份开跑。
+- **fixture 面**：`test_str06_stage2_publish`（_basis helper／工厂补
+  modality+basis／_chapter_evidence Mapping 形态）、`_owners`／`_protocol`／
+  `_source`／`_workflow`／`_hook`（复用 faults 底座）／`_repairs`／
+  `test_store`／`test_str06_target`／`hard_cases`（V15 evidence 必填）／
+  `test_str06_r2_engine`（typed WorldConstraint 补 basis）。
+- **a1 判据测试**（新 `tests/test_str06_a1_semantics.py`，消费
+  `CASES_BY_BATCH['R10a-a1']`）：C4 红两面（引文转写→quote_not_in_segment；
+  段越界→basis_segment_outside_refs）＋逐字命中绿；P3 绿（「原以为／后来
+  证实」不被关键词拦）；C2 的 a1 面（expected 槽位可表达）；读数四件套
+  计数。C2 案例登记修正：其 mechanical_face 原描述「命题含预计限定而
+  actual → 拒」与 PLAN §四（限定词列诊断读数不阻断）冲突，按 PLAN 对齐为
+  「a1 只给槽位与读数，转绿在 a4 kf 一致性」。
+- **验证**：str06 全选测（-k "str06 or store or hard_cases"）934 项＋
+  契约 §9.5 五文件 389 项＋新 a1 面 6 项全绿（basetemp E:/_tr/r10a1）。
+  全量默认非 corpus 回归留收口批（子批不触发）。零付费。
 
 ### 节省时间的执行约定
 
