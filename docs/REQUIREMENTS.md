@@ -295,6 +295,41 @@ Golden 验证，不重新加回迁移关闭条件。
   工作区 dirty 集选受影响面，a2 改动未提交时把 test_store.py 算入；提交后
   复验恢复）外全绿。零付费。
 
+### R10a a3 执行记录（2026-10-01，免费，fake transport）
+
+- **路由面**（`contracts/schema/workflow.py`）：新 issue 码
+  `source_evidence_conflict`；路由占位 `revise_upstream:conflict_anchor`——
+  `route_owner_issue` 按锚点句柄解析（拍句柄 `bNN_MM.e|c|lN` →
+  `str06.stage2.chapters`，书级 `s0_NN`/`wc_NN` → `str06.stage2.book`；
+  不可解析即停，机械路由不猜）。`OWNER_PRODUCT_RELS` 增 book；逐章 owner
+  （`chNN`）经 `chapter_owner_product_rel` 唯一拼装（owner 名即章目录名，
+  不逐章登记静态表）。`contracts/invariants.py::NODES` 为 book/chapters 登记
+  `operator_redo='owner_revision'`（resume_verdict 与 operator_redo_flags
+  按 node 匹配 issue，机制通用无需逐 owner 特判；契约身份哈希不含该格，
+  7031356e… 不变）。
+- **回派入口**（`novel/stages/chain.py::run_preserve`＋
+  `_backfill_source_evidence_conflicts`）：冲突非空——回答由 ask 路径照常
+  耐久、checkpoint 不发布；按锚点分组回派（拍句柄→owner `chNN`／item
+  `chapter:N`，书级→owner `book`）。`run_book`/`run_chapters` 的 prompt 接
+  `revision_prompt_for_owner`（无 open 记录时逐字节不变，请求身份不漂移）。
+- **冲突处理结果注入**（`_conflict_resolution_notes`，§二.2）：盘上有未闭合
+  冲突记录时，Preserve 重跑 prompt 附确定性对比块——owner 正式产物当前
+  digest vs 记录 against digest（已修订／维持原解释，纯机械不判语义）。材料
+  变化 ⇒ 新请求身份：防同身份缓存命中重放上一轮带冲突的回答（e2e 记忆中
+  「直连强制重采」同根问题在此面的工程解）。复验通过（本轮无冲突＋
+  checkpoint 发布）按 owner 清账（`_resolve_handled_conflicts`；轮数与指纹
+  留账不复位）。
+- **误报闭合**：同指纹重现走 `discover_owner_issues` 无进展闸
+  （OwnerRevisionStop）——「Stage2 维持原解释后 Preserve 再报同一冲突」不
+  二次回派；额度耗尽停给人（owner patch／人工重跑）。
+- **a3 判据测试**（新 `tests/test_str06_a3_conflicts.py` 5 项）：
+  归因（拍→ch01/item、书级→book、不可解析停、issue 记录形状、checkpoint
+  不发布）；fake transport 闭环（preserve 首答带冲突 → 回派 ch01 → 章观察
+  修订轮 → 重编译 → preserve 复验干净 → checkpoint/brief 发布、ch01 与
+  preserve 各恰两轮、清账 resolved）；粘性冲突无进展停（不二次回派、
+  rounds 留 1）。`test_str06_r3_selfheal` 路由表测试补 conflict_anchor 轴。
+- **验证**：定向面 1348 项＋selfheal/a3 26 项全绿。零付费。
+
 ### 节省时间的执行约定
 
 

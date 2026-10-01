@@ -1081,6 +1081,13 @@
       "stages": [
         "stage4"
       ]
+    },
+    "tests/test_str06_a3_conflicts.py": {
+      "layer": "unit_contract",
+      "stages": [
+        "stage2",
+        "stage4"
+      ]
     }
   },
   "version": 1

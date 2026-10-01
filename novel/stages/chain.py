@@ -250,8 +250,11 @@ def run_book(ctx: ChainContext) -> dict:
     """
     repository = ctx.repository
     evidence = build_evidence(ctx.chapters, ctx.hook_copy)
-    prompt = book_observation_prompt(chapters=ctx.chapters, hook_copy=ctx.hook_copy,
-                                     evidence=evidence)
+    prompt = revision_prompt_for_owner(
+        repository, 'book',
+        book_observation_prompt(chapters=ctx.chapters, hook_copy=ctx.hook_copy,
+                                evidence=evidence),
+        'stage2/observations/book.json')
     wire, book_ref = ctx.ask(
         'book', prompt,
         lambda w: compile_book_observation(w, evidence=evidence)[1])
@@ -332,9 +335,12 @@ def run_chapters(ctx: ChainContext) -> dict:
                                  per_book=PIPELINE_BOOK_CONCURRENCY,
                                  per_provider=PIPELINE_PROVIDER_CONCURRENCY):
             chapter_evidence = _chapter_evidence(evidence, no)
-            prompt = chapter_observation_prompt(chapter=no, book=book,
-                                                chapters=ctx.chapters,
-                                                evidence=chapter_evidence)
+            prompt = revision_prompt_for_owner(
+                repository, f'ch{no:02d}',
+                chapter_observation_prompt(chapter=no, book=book,
+                                           chapters=ctx.chapters,
+                                           evidence=chapter_evidence),
+                str06_chapter_observation_rel(no))
             def validate(w):
                 # R10a a1：传完整段映射（含 text），basis 引文可逐字判定
                 return chapter_acceptance(w, evidence_ids=chapter_evidence, chapter=no,
@@ -518,6 +524,84 @@ def run_compile(ctx: ChainContext) -> dict:
 
 # ─── stage4 preserve ─────────────────────────────────────────────────────────
 
+def _conflict_resolution_notes(repository, chapters) -> str:
+    """Preserve 重跑时的确定性「冲突处理结果」块（R10a a3，§二.2）。
+
+    对每个持有 open `source_evidence_conflict` 记录的 Stage2 owner：对比
+    记录的 against 摘要与该 owner 正式产物的**当前**摘要——变了＝「已修订
+    （重编译后的材料已变）」，没变＝「维持原解释」。纯机械对比（digest），
+    不判语义；块进 Preserve prompt（材料变化 ⇒ 新请求身份，不会缓存命中
+    上一轮带冲突的回答——同身份缓存重放会让重问拿回同一份冲突 wire）。
+    """
+    from novel.stages.owner_revision import open_issue_record
+    lines: list[str] = []
+    owners = ['book'] + [f'ch{c["chapter_ordinal"]:02d}' for c in chapters]
+    for owner in owners:
+        record = open_issue_record(repository, owner)
+        if record is None or not any(
+                i.code == 'source_evidence_conflict' for i in record.issues):
+            continue
+        current = owner_product_digest(repository, owner)
+        verdict = ('已修订（该 owner 的观察在回派后变化，重编译后的投影视图'
+                   '随之更新）' if current != record.against_sha256
+                   else '维持原解释（该 owner 重看后未改观察；若你仍认为证据'
+                        '矛盾，再次如实报告）')
+        items = [i.item for i in record.issues
+                 if i.code == 'source_evidence_conflict']
+        lines.append(f'- {owner}（涉及 {items}）：{verdict}')
+    if not lines:
+        return ''
+    return ('\n【冲突处理结果（上一轮 evidence_conflicts 的机械对比；本轮'
+            '投影视图已是处理后的版本）】\n' + '\n'.join(lines) + '\n')
+
+
+def _resolve_handled_conflicts(repository, chapters) -> None:
+    """本轮 Preserve 未再报冲突且 checkpoint 发布：按 owner 清账（§二.2——
+    处理完成不重置额度，轮数与指纹留账不复位）。"""
+    from novel.stages.owner_revision import open_issue_record, resolve_owner_issues
+    for owner in ['book'] + [f'ch{c["chapter_ordinal"]:02d}' for c in chapters]:
+        record = open_issue_record(repository, owner)
+        if record is not None and any(
+                i.code == 'source_evidence_conflict' for i in record.issues):
+            resolve_owner_issues(repository, owner=owner,
+                                 raised_by='str06.stage4.preserve')
+
+
+def _backfill_source_evidence_conflicts(repository, conflicts) -> None:
+    """Preserve 报告的源证据冲突 → 按锚点句柄回派 Stage2 语义 owner（R10a a3）。
+
+    §二.2 三分支的工程入口：拍内句柄（bNN_MM.*）回逐章观察（owner=chNN、
+    item=chapter:N），书级句柄（s0_*/wc_*）回书级观察；句柄不可解析即停
+    （机械路由不猜）。冲突条目已过 assemble 的形状与闭集校验；回答由 ask
+    路径照常耐久——checkpoint 不发布。同指纹重现走 discover_owner_issues
+    的无进展停（「已维持」原子再报同一冲突不二次回派，耗尽即停）。
+    """
+    grouped: dict[tuple[str, str, str], list[OwnerIssueV1]] = {}
+    for conflict in conflicts:
+        anchor = str(conflict.get('anchor') or '')
+        action, target = route_owner_issue('source_evidence_conflict',
+                                           conflict_anchor=anchor)
+        if action != 'revise_upstream':
+            raise ValueError(f'证据冲突锚点 {anchor!r} 无法路由（{target}）')
+        if target == _CONFLICT_CHAPTER:
+            chapter_no = int(anchor[1:3])
+            owner, item = f'ch{chapter_no:02d}', f'chapter:{chapter_no}'
+        else:
+            owner, item = _REVISION_TARGET_OWNERS[target], anchor
+        grouped.setdefault((owner, target, item), []).append(OwnerIssueV1(
+            code='source_evidence_conflict', item=item,
+            message=(f'Preserve 报告源证据冲突：锚点 {anchor}（句段 '
+                     f'{conflict.get("segment")}）与原子内容矛盾——'
+                     f'{conflict.get("note")}。请对照原句修订该观察，或维持原'
+                     '解释并在观察中补足依据；源解释归 Stage2 owner，Preserve '
+                     '不私建事实版本'),
+            context={'anchor': anchor, 'segment': conflict.get('segment'),
+                     'note': conflict.get('note')}))
+    for (owner, target, item), issues in sorted(grouped.items()):
+        discover_owner_issues(repository, raised_by='str06.stage4.preserve',
+                              owner=owner, node=target, issues=issues)
+
+
 def run_preserve(ctx: ChainContext) -> dict:
     repository = ctx.repository
     # Stage4 只读 canonical（S2-5/D9）：人物 core 由 Characters 投影，不读
@@ -528,9 +612,12 @@ def run_preserve(ctx: ChainContext) -> dict:
     # R10a a2：源证据投影视图（确定性渲染＋逐字引文＋证据窗口）取代整份
     # Blueprint JSON 倾倒（R10-0.3 实证 29.9k token/轮）；视图是文本块，
     # 人物表保持 JSON——pack_prompt 只装 JSON，视图直拼。
+    # R10a a3：盘上有未闭合的源证据冲突时附确定性「冲突处理结果」（§二.2）——
+    # 材料变化换请求身份，防止同身份缓存命中重放上一轮带冲突的回答。
     preserve_prompt = revision_prompt_for_owner(
         repository, 'preserve',
-        PRESERVE_RULES + '\n输入（源证据投影视图，句柄即 anchors 闭集）：\n'
+        PRESERVE_RULES + _conflict_resolution_notes(repository, ctx.chapters)
+        + '\n输入（源证据投影视图，句柄即 anchors 闭集）：\n'
         + project_preserve_view(core, blueprint)
         + '\n人物表：' + json.dumps(core.model_dump(mode='json'),
                                     ensure_ascii=False, sort_keys=True,
@@ -548,6 +635,14 @@ def run_preserve(ctx: ChainContext) -> dict:
     checkpoint, errors = preserve_compile(pw)
     if errors:
         raise ValueError(errors)
+    conflicts = pw.get('evidence_conflicts') or []
+    if conflicts:
+        # R10a a3（§二.2 三分支）：冲突非空——回答已由 ask 路径耐久保存，
+        # checkpoint 不发布；按锚点句柄回派 Stage2 语义 owner。同指纹重现
+        # （Stage2 维持原解释后 Preserve 再报同一冲突）由 discover_owner_issues
+        # 的无进展闸停，不二次回派。
+        _backfill_source_evidence_conflicts(repository, conflicts)
+        raise AssertionError('discover_owner_issues 必然抛错，不可达')
     brief, identities = project_brief(checkpoint, core, blueprint)
     # R6 输出组发布：checkpoint 与它的投影 brief 同组一个 seal——同一份付费
     # 产出的第二个 key（生成事实继承，用量不重复认领）。
@@ -557,6 +652,9 @@ def run_preserve(ctx: ChainContext) -> dict:
         PublishItem(rel='stage4/grounding/reconstruction_brief.json', value=brief,
                     refs=(preserve_ref,), claim_usage=False),
     ))
+    # R10a a3：本轮未再报冲突且 checkpoint 已发布＝复验通过——按 owner 清账
+    # （§二.2：处理完成不重置额度，轮数与指纹留账不复位）。
+    _resolve_handled_conflicts(repository, ctx.chapters)
     return {'obligations': len(checkpoint.obligations)}
 
 
@@ -754,9 +852,14 @@ def run_compile_stage4(ctx: ChainContext) -> dict:
 #: 回派目标节点 → runner 词汇 owner（issue 记录文件名与修订 prompt 的键）。
 _REVISION_TARGET_OWNERS: Final[dict[str, str]] = {
     'str06.stage2.associate': 'associate',
+    'str06.stage2.book': 'book',
     'str06.stage4.body_design': 'design',
     'str06.stage4.preserve': 'preserve',
 }
+#: `str06.stage2.chapters` 的 owner 逐章解析（R10a a3）：拍句柄 bNN_MM.* →
+#: owner `chNN`（issue item=chapter:N）。表值放不了函数，回派组装处经
+#: `_conflict_owner_of` 解析。
+_CONFLICT_CHAPTER = 'str06.stage2.chapters'
 
 
 class _NullObligation:

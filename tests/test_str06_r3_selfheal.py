@@ -43,8 +43,12 @@ from tests.str06_faults import FAULTS, FaultTransport, looped_full_chain_wires
 def test_route_table_closes_code_and_owner_axes():
     """code 轴未知一律停；必保义务按 unbound.owner 闭集回派，未映射即停（E-8）。"""
     for code in OWNER_ISSUE_CODES:
-        action, _target = (route_owner_issue(code) if code != 'must_keep_unbound'
-                           else route_owner_issue(code, unbound_owner='design'))
+        if code == 'must_keep_unbound':
+            action, _target = route_owner_issue(code, unbound_owner='design')
+        elif code == 'source_evidence_conflict':
+            action, _target = route_owner_issue(code, conflict_anchor='b06_21.e1')
+        else:
+            action, _target = route_owner_issue(code)
         assert action in ('revise_self', 'revise_upstream'), code
     action, why = route_owner_issue('literary_quality')
     assert action == 'stop' and '未知问题码' in why
@@ -56,6 +60,15 @@ def test_route_table_closes_code_and_owner_axes():
     action, why = route_owner_issue('must_keep_unbound', unbound_owner='body_design')
     assert action == 'stop' and '未映射' in why
     assert set(UNBOUND_OWNER_ROUTES) == {'design', 'grounding'}
+    # R10a a3：源证据冲突按锚点句柄闭集回派（拍→逐章、书级→book；不可解析即停）
+    assert route_owner_issue('source_evidence_conflict',
+                             conflict_anchor='b06_21.e1') == (
+        'revise_upstream', 'str06.stage2.chapters')
+    assert route_owner_issue('source_evidence_conflict',
+                             conflict_anchor='wc_02') == (
+        'revise_upstream', 'str06.stage2.book')
+    action, why = route_owner_issue('source_evidence_conflict', conflict_anchor='zzz')
+    assert action == 'stop' and '不可解析' in why
 
 
 def test_issue_record_write_bounds_and_resolve(tmp_path):

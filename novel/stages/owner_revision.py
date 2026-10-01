@@ -123,15 +123,18 @@ def _fingerprint(issues: tuple[OwnerIssueV1, ...] | list[OwnerIssueV1]) -> str:
 
 
 def owner_product_digest_at(root: Path, owner: str) -> str:
-    """owner 正式产物（`OWNER_PRODUCT_RELS`）当前字节的 SHA-256（R8a 门控的尺子）。
+    """owner 正式产物（`OWNER_PRODUCT_RELS`；逐章 owner 走
+    `chapter_owner_product_rel`）当前字节的 SHA-256（R8a 门控的尺子）。
 
     未登记 owner、产物不在盘上都是编排缺陷（issue 只能由读过该产物的下游写
     下）——显式拒绝，不猜摘要。
     """
-    rel = OWNER_PRODUCT_RELS.get(owner)
+    from contracts.schema.workflow import chapter_owner_product_rel
+    rel = OWNER_PRODUCT_RELS.get(owner) or chapter_owner_product_rel(owner)
     if rel is None:
         raise ValueError(
-            f'owner {owner!r} 未登记正式产物（闭集={sorted(OWNER_PRODUCT_RELS)}）')
+            f'owner {owner!r} 未登记正式产物（闭集={sorted(OWNER_PRODUCT_RELS)}'
+            '＋逐章 chNN）')
     path = Path(root) / rel
     if not path.is_file():
         raise ValueError(

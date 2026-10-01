@@ -1855,6 +1855,7 @@ NODES: Final[dict[str, NodeSpec]] = {
     'str06.stage2.book': NodeSpec(
         'stage2', 'R-2', True, 'Stage2 书级观察（人物候选、称谓及证据、初态、世界约束）',
         flags=('--check-only',),
+        operator_redo='owner_revision',
         produces=('stage2/observations/book.json',),
         lifecycle=NodeLifecycleSpec(
             'book',
@@ -1865,6 +1866,7 @@ NODES: Final[dict[str, NodeSpec]] = {
     'str06.stage2.chapters': NodeSpec(
         'stage2', 'R-2', True, 'Stage2 逐章观察（事件与三类转移；互不依赖，D3）',
         flags=('--check-only',),
+        operator_redo='owner_revision',
         produces=('stage2/observations/ch{nn}.json',),
         lifecycle=NodeLifecycleSpec(
             'chapter',

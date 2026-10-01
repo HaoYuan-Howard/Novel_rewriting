@@ -871,9 +871,18 @@ def owner_issues_rel(owner: str) -> str:
 #: 显式拒绝——闭集责任在本表，不放给调用方各自猜。
 OWNER_PRODUCT_RELS: Final[dict[str, str]] = {
     'associate': 'stage2/observations/associate.json',
+    'book': 'stage2/observations/book.json',
     'design': 'stage4/design/body_design.json',
     'preserve': 'runtime/preserve_checkpoint.json',
 }
+
+#: 逐章观察 owner（`chNN`）→ 正式产物 rel（R10a a3：证据冲突按拍句柄回派
+#: 逐章 owner；owner 名即章目录名，rel 由本函数唯一拼装，不逐章登记静态表）。
+def chapter_owner_product_rel(owner: str) -> str | None:
+    import re as _re
+    if _re.fullmatch(r'ch\d{2}', owner):
+        return f'stage2/observations/{owner}.json'
+    return None
 
 
 def owner_issue_record_of_payload(
@@ -904,7 +913,7 @@ def owner_issue_record_of_payload(
         '未知形状不得静默当作任何一种语义继续）')
 
 
-#: issue code 闭集：前四码逐字复用 Resolver 的精确码（R3 起点），后三码是
+#: issue code 闭集：前四码逐字复用 Resolver 的精确码（R3 起点），后四码是
 #: 自愈面新增的归并码。扩码必须同批更新路由表与守卫测试（未知 code 一律停）。
 OWNER_ISSUE_CODES: Final = (
     'unknown_segment',     # 引用了闭集之外的句段 id（Resolver）
@@ -914,11 +923,15 @@ OWNER_ISSUE_CODES: Final = (
     'schema_violation',    # wire 形状／协议字面量／重复键（同节点）
     'association_undecided',   # 关联未决（D8）：回派 associate
     'must_keep_unbound',   # 必保义务未承载：按 unbound.owner 回 body_design/preserve
+    'source_evidence_conflict',  # 源证据冲突（R10a a3）：按锚点句柄回派 Stage2 owner
 )
 
 #: code → `revise_self`｜`revise_upstream:<节点>`｜（未登记即 stop）。
 #: `revise_upstream:unbound_owner` 是占位：目标节点按 issue 携带的
 #: `unbound.owner` 经 `UNBOUND_OWNER_ROUTES` 解析，未映射即停（owner 轴闭合）。
+#: `revise_upstream:conflict_anchor` 同型（R10a a3）：目标按冲突锚点句柄解析
+#: ——拍内句柄（bNN_MM.*）回逐章观察（item=chapter:N），书级句柄（s0_*/wc_*）
+#: 回书级观察；句柄不可解析即停（机械路由不猜）。
 OWNER_ISSUE_ROUTES: Final[dict[str, str]] = {
     'unknown_segment': 'revise_self',
     'missing_literal': 'revise_self',
@@ -927,6 +940,7 @@ OWNER_ISSUE_ROUTES: Final[dict[str, str]] = {
     'schema_violation': 'revise_self',
     'association_undecided': 'revise_upstream:str06.stage2.associate',
     'must_keep_unbound': 'revise_upstream:unbound_owner',
+    'source_evidence_conflict': 'revise_upstream:conflict_anchor',
 }
 
 #: `UnboundEntry.owner` → 回派目标节点（取值面与 BIND_RULES 的 design|grounding
@@ -937,12 +951,14 @@ UNBOUND_OWNER_ROUTES: Final[dict[str, str]] = {
 }
 
 
-def route_owner_issue(code: str, *, unbound_owner: str = '') -> tuple[str, str]:
+def route_owner_issue(code: str, *, unbound_owner: str = '',
+                      conflict_anchor: str = '') -> tuple[str, str]:
     """一条 issue 的修订路由：``(action, target)``。
 
     ``action`` ∈ ``{'revise_self', 'revise_upstream', 'stop'}``；``target`` 是
     目标节点 id（revise_self 时为空串）或停止原因（stop 时）。未知 code、
-    未映射的 ``unbound_owner`` 一律 stop——机械问题路由本身不猜（E-8）。
+    未映射的 ``unbound_owner``、不可解析的 ``conflict_anchor`` 一律 stop——
+    机械问题路由本身不猜（E-8）。
     """
     route = OWNER_ISSUE_ROUTES.get(code)
     if route is None:
@@ -957,4 +973,13 @@ def route_owner_issue(code: str, *, unbound_owner: str = '') -> tuple[str, str]:
                     f'unbound.owner {unbound_owner!r} 未映射（闭集='
                     f'{tuple(UNBOUND_OWNER_ROUTES)}；一律停）')
         return 'revise_upstream', node
+    if target == 'conflict_anchor':
+        import re as _re
+        if _re.fullmatch(r'b\d{2}_\d{2}\.[ecl]\d+', conflict_anchor):
+            return 'revise_upstream', 'str06.stage2.chapters'
+        if _re.fullmatch(r'(s0_|wc_)\d{2}', conflict_anchor):
+            return 'revise_upstream', 'str06.stage2.book'
+        return ('stop',
+                f'证据冲突锚点 {conflict_anchor!r} 不可解析（应为拍句柄 '
+                'bNN_MM.e|c|lN 或书级 s0_NN/wc_NN；一律停）')
     return 'revise_upstream', target
