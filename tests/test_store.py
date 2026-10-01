@@ -67,7 +67,6 @@ from tests import corpus, sandbox
 from tests.str06_expression_inputs import (
     sample_book_expression,
 )
-from tests.str06_facilities import anchor_stub
 
 # B5 换轨（双真源发布后）：Characters/Blueprint 的唯一 writer 是免费的
 # str06.stage2.compile，其投影面是四份观察——旧的「names 写 characters」采样面
@@ -284,6 +283,17 @@ def _plan(ctx: RunContext, *, marker: str = '计划一',
         provenance=provenance)
 
 
+
+def _anchor_stub():
+    """最小义务锚点（R10a a2）：本地构造，不 import 测试工厂——本文件是
+    与 str06 无关的存储层测试面（选择器按 import 闭包排除，见
+    tests/test_test_selection.py 的选测文档断言）。"""
+    from contracts.schema.grounding import ObligationAnchor
+    return (ObligationAnchor(handle='s0_01', source_kind='initial_state',
+                             address='char:stub.stub', value='stub',
+                             quotes=('依据',)),)
+
+
 def _binding(ctx: RunContext, *, checkpoint_sha: str, marker: str = '义务原稿',
              inputs: dict | None = None) -> SemanticBinding:
     """一份最小合法 SemanticBinding（str06.stage4.bind 的现役产地）。
@@ -300,7 +310,7 @@ def _binding(ctx: RunContext, *, checkpoint_sha: str, marker: str = '义务原�
         preserve_checkpoint_sha256=checkpoint_sha,
         obligations=(SourceObligation(
             obligation_id='ob_01', kind=PreserveKind.EVENT_CORE, statement=marker,
-            anchors=anchor_stub(),
+            anchors=_anchor_stub(),
             lineage=SourceLineage(blueprint_refs=('b01_01',), character_ids=()),
             must_preserve=True, satisfaction='明确呈现'),),
         entries=(),
@@ -324,7 +334,7 @@ def _seed_preserve_checkpoint(base: Path) -> str:
         provider='fixture-provider', model='fixture-model', request_sha256='c' * 64,
         obligations=(SourceObligation(
             obligation_id='ob_01', kind=PreserveKind.EVENT_CORE, statement='义务',
-            anchors=anchor_stub(),
+            anchors=_anchor_stub(),
             lineage=SourceLineage(blueprint_refs=('b01_01',), character_ids=()),
             must_preserve=True, satisfaction='明确呈现'),),
         checkpoint_sha256='d' * 64,
