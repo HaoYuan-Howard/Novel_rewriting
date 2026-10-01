@@ -66,6 +66,7 @@ from novel.config import Config, load_config
 from novel.llm.paid_requests import (
     ExecutionError, PaidRequestSession, PurchaseRequired, AdoptionRef, digest,
     ask_json, ask_text_once, init_or_resume_candidate_workflow, purchased_baseline,
+    ValidationStop,
 )
 from novel.llm.transport import ChatRequest, DeepSeekTransport
 from novel import paths, prov
@@ -93,7 +94,8 @@ from novel.stages.owner_revision import (
 from novel.stages.stage4 import (
     assemble_binding, assemble_body_design, assemble_hook_design,
     assemble_preserve, compile_execution_plan, compile_hook_context,
-    compile_writer_book_ir, obligation_core_id, project_binding_space,
+    compile_writer_book_ir, lock_order_violations, obligation_core_id,
+    project_binding_space,
     project_brief, project_preserve_view, publish_graph, run_mechanical_guard,
 )
 from novel.stages.stage5 import (
@@ -706,24 +708,43 @@ def run_bind(ctx: ChainContext) -> dict:
     repository = ctx.repository
     body = repository.read_model('stage4/design/body_design.json')
     checkpoint = repository.read_model('runtime/preserve_checkpoint.json')
+    brief = repository.read_model('stage4/grounding/reconstruction_brief.json')
     # Bind 的输入投影（B3 前半）：义务清单＋场景/拍闭集的最小承载选择面，
     # 不回显整个 Design；wire 只给闭集内分量，复合引用由 assemble 组成。
-    space = project_binding_space(checkpoint, body)
+    # R10a a5：带出 series 与锁摘要（Brief 的锁面渲染，承载选择的依据）。
+    space = project_binding_space(checkpoint, body, brief)
     bind_prompt = pack_prompt(BIND_RULES, **space)
-    # 校验闸在节点自身（不在 ask 回调）：机械闸拦下的稿要落到本产物的
-    # .INVALID 孪生上（typed witness），ask 只负责取回并耐久原响应。
-    bw, bind_ref = ctx.ask('bind', bind_prompt, lambda w: [])
     positions = {s.scene_id: {b.beat_id for b in s.beats} for s in body.scenes}
-    binding, errors = assemble_binding(bw, checkpoint, positions)
-    if errors:
-        # Binding INVALID＋typed witness：机械闸拦下的稿进 .INVALID 孪生
-        # （gates_skipped＝问题清单，wire 原样留证），正式位不写；再 fail-fast
-        # 停在该 owner——不静默放行、不自动重购（I-34／Q-13）。
+    # R10a a5（R-5.5 同批改写）：接受闸接进 ask 的同节点修订轮（≤2，同一
+    # 问题集重复即停）——机械闸拦下的稿先重问，修订轮耗尽/无进展才写
+    # `.INVALID` 孪生（wire 原样留证）并停在该 owner。闭包截获最后一版 wire
+    # 与问题清单：ValidationStop 不携带 wire，孪生留证从这里取。
+    last_wire: dict[str, Any] = {}
+    last_errors: list[str] = []
+
+    def bind_validate(w):
+        nonlocal last_wire, last_errors
+        _, errs = assemble_binding(w, checkpoint, positions)
+        last_wire, last_errors = dict(w), list(errs)
+        return errs
+
+    try:
+        bw, bind_ref = ctx.ask('bind', bind_prompt, bind_validate)
+    except ValidationStop as exc:
+        # 修订轮已耗尽：拦下的稿不丢——INVALID 孪生留证（typed 停止携带被拦
+        # 最后一稿的显式采用引用，铸「这份稿是谁产的」的来源账；原响应另按
+        # attempt 留证，重放走缓存，同指纹不重购），正式位不写；停止直接上抛
+        # （exit 1，恢复走 promote_invalid 或人工重跑）。
         repository.write_invalid(
             'stage4/grounding/semantic_binding.json',
-            {'wire': bw, 'errors': list(errors)}, problems=tuple(errors),
-            refs=(bind_ref,))
-        raise ValueError(f'bind 机械校验失败；INVALID 孪生已留证：{errors}')
+            {'wire': last_wire, 'errors': list(last_errors)},
+            problems=tuple(last_errors), refs=(exc.adoption,))
+        raise
+    binding, errors = assemble_binding(bw, checkpoint, positions)
+    if errors:
+        # 不可达：ask 修订轮只放行过闸的回答；保守保留 fail-fast，不静默
+        # 放行半份正式产物（I-34）。
+        raise ValueError(f'bind 通过修订轮后仍不过闸（不可达）：{errors}')
     repository.write('stage4/grounding/semantic_binding.json', binding,
                      owners=('bind',), refs=(bind_ref,))
     return {'entries': len(binding.entries), 'unbound': len(binding.unbound)}
@@ -775,7 +796,8 @@ def run_compile_stage4(ctx: ChainContext) -> dict:
     `must_keep_unbound` 回派——`unbound.owner` 经路由表闭集解析回
     body_design（design）或 preserve（grounding），写 `runtime/issues/<owner>.json`
     并抛 `OwnerRevisionRequired`；未映射 owner 显式停（E-8）。复验通过时回写
-    resolved。
+    resolved。R10a a5：锁位置违例（知情升级/读者确认早于授权承载位）按
+    `epistemic_lock_order` 回派 body_design（`_backfill_epistemic_lock_order`）。
 
     R6 验过才发布：四个正式派生产物（execution_plan／hook 上下文／写手 IR／
     packet 指标）在全部机械判定通过后按**输出组**一次发布（免费产物同样
@@ -796,6 +818,10 @@ def run_compile_stage4(ctx: ChainContext) -> dict:
         raise MechanicalDefectStop(
             f'stage4 compile 机械缺陷：{errors}',
             node='str06.stage4.compile', issues=tuple(str(e) for e in errors))
+    # R10a a5：锁位置 Guard（披露顺序）——机械面干净、必保义务全部承载之后
+    # 才有位置分母；违例按 epistemic_lock_order 回派 body_design（披露顺序是
+    # Design 的决定，Bind 只选承载位）。
+    _backfill_epistemic_lock_order(repository, graph, binding)
     projection = chars.name_projection()
     hook_context, errors = compile_hook_context(graph, projection, ctx.hook_constraints,
                                               chars.name_structure)
@@ -937,6 +963,32 @@ def _backfill_must_keep_unbound(repository, binding) -> None:
             grouped.items(), key=lambda item: NODE_ORDER.index(item[0][1])):
         discover_owner_issues(repository, raised_by='str06.stage4.compile',
                               owner=owner, node=target, issues=issues)
+
+
+def _backfill_epistemic_lock_order(repository, graph, binding) -> None:
+    """锁位置违例 → 回派 body_design（R10a a5，§二.3 顺序三分的披露面）。
+
+    kp 键知情升级/读者确认早于授权该模式的义务承载位置＝信息披露顺序前移
+    （C1/C6 的位置面）。修复是 Design 的决定（移知情承载或 Design 侧让位）；
+    Bind 只选承载位、不改披露顺序，故不回 bind。item 用 kp 句柄（Design 经
+    Brief 可见，非源坐标）；context 带升级位置、授权位置与授权义务的源盲
+    core_id。判据唯一实现在 `guard.lock_order_violations`（纯函数），本函数
+    只做回派编排。无违例直接返回（复验通过后的清账归
+    `resolve_owner_issues(owner='design')`，已有调用）。
+    """
+    violations = lock_order_violations(graph, binding)
+    if not violations:
+        return
+    issues = [OwnerIssueV1(
+        code='epistemic_lock_order', item=v.kp, message=v.message(),
+        context={'holder': v.holder, 'kp': v.kp, 'mode': v.mode,
+                 'upgrade_position': v.upgrade_ref,
+                 'authorized_position': v.auth_ref,
+                 'authorized_core_id': v.core_id})
+        for v in violations]
+    discover_owner_issues(repository, raised_by='str06.stage4.compile',
+                          owner='design', node='str06.stage4.body_design',
+                          issues=issues)
 
 
 # ─── stage5 hook ─────────────────────────────────────────────────────────────

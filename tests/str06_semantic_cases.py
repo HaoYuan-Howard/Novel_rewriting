@@ -117,7 +117,7 @@ CASES: tuple[SemanticCase, ...] = (
         observation='Design 在仅有怀疑（线索 open）的拍写了 reader confirms。',
         expected='线索／怀疑拍合法地没有状态变化（空 target_delta 允许）；'
                  '读者确认只用于已授权的揭示（known 锁位置）。',
-        red_in='R10a-a4', green_in='R10a-a4',
+        red_in='R10a-a4', green_in='R10a-a5',
         mechanical_face='a4：kp 键无 known 锁不得 confirms；'
                         'a5：确认早于授权位置 → epistemic_lock_order'),
     SemanticCase(

@@ -217,7 +217,16 @@ class ExecutionError(ValueError):
 
 
 class ValidationStop(ExecutionError):
-    """已完成验证的有界负结论；与未知执行错误分开，CLI 映射 exit 1。"""
+    """已完成验证的有界负结论；与未知执行错误分开，CLI 映射 exit 1。
+
+    R10a a5：``adoption`` 携带被拦最后一稿的耐久回答（``DurableAnswer``）——
+    付费节点的 ``.INVALID`` 孪生留证用它铸来源账（回答本身已按 attempt 留证，
+    这里只是把「这份稿是谁产的」的显式引用随 typed 停止带出，无进程内采用
+    窗口）。ask_json 的两个停止路径恒有回答；其它来源未设置时为 None，由
+    调用方显式处理（不得现造账）。
+    """
+
+    adoption = None
 
 
 class RevisionEvidenceStop(ExecutionError):
@@ -1209,19 +1218,23 @@ def ask_json(session: PaidRequestSession, owner: str, request: ChatRequest,
                             'max_rounds': OWNER_REVISION_MAX_ROUNDS,
                             'issues': list(errors), 'issue_locations': heads}
             if fingerprint == last_fingerprint:
-                raise ValidationStop(
+                stop = ValidationStop(
                     f'{owner} 校验失败：节点内校验重问后问题集原样重现'
                     '（同一问题集重复即停，不无限付费）；原响应已按 attempt 留证，'
                     f'剩余修复走 owner patch 或人工重跑：{errors}',
                     code='validation_no_progress', stage=_stage_of(node), node=node,
                     item=scope, phase='accept', context=stop_context)
+                stop.adoption = answer
+                raise stop
             if revisions >= OWNER_REVISION_MAX_ROUNDS:
-                raise ValidationStop(
+                stop = ValidationStop(
                     f'{owner} 校验失败：节点内校验重问轮（≤{OWNER_REVISION_MAX_ROUNDS}）'
                     '已耗尽仍不过闸，停止；原响应已留证，剩余修复走 owner patch 或人工'
                     f'重跑：{errors}', code='validation_rounds_exhausted',
                     stage=_stage_of(node), node=node, item=scope, phase='accept',
                     context=stop_context)
+                stop.adoption = answer
+                raise stop
             revisions += 1
             last_fingerprint = fingerprint
             previous = (answer.content or '').strip() or (answer.reasoning or '').strip()

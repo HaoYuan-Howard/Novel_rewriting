@@ -13,7 +13,9 @@
                    B3 后半自 stage5 包归位）。
   · `compile.py`   ExecutionPlan 确定性编译＋章闭包证明（`str06.stage4.compile`）。
   · `guard.py`     写前 M1–M8 机械闸（M7 声明读取已解析进 IR、M8 线程投影；
-                   只读验证、只写报告出口）。
+                   只读验证、只写报告出口）；a5 全书级锁位置 Guard
+                   （`lock_order_violations`，知情升级/读者确认不早于授权
+                   承载位——`epistemic_lock_order` 回派面）。
   · `fold.py`      单一目标 Fold：accepted prefix 的 planned_delta 重放；
                    ThreadFold（R2.4）独立折叠拍上的线程操作（状态走叠加折叠，
                    线程走线程折叠，共用 guard.scene_order 的阅读序）。
@@ -45,9 +47,10 @@ from novel.stages.stage4.grounding import (
 )
 from novel.stages.stage4.guard import (
     appeared_chars, check_binding_beat_refs, check_cast_legality,
-    check_entry_timing, check_obligation_coverage, check_read_projection,
-    check_thread_lifecycle, check_thread_projection, expected_thread_faces,
-    run_mechanical_guard, scene_order,
+    check_entry_timing, check_epistemic_lock_order, check_obligation_coverage,
+    check_read_projection, check_thread_lifecycle, check_thread_projection,
+    expected_thread_faces, lock_order_violations, run_mechanical_guard,
+    scene_order,
 )
 from novel.stages.stage4.hook import assemble_hook_design, publish_graph
 from novel.stages.stage4.hook_context import compile_hook_context
@@ -58,11 +61,13 @@ __all__ = [
     'assemble_preserve', 'chapter_scene_weights', 'chapter_surface_releases',
     'chapter_withheld_literals', 'chapters_with_budget_change',
     'check_binding_beat_refs',
-    'check_cast_legality', 'check_entry_timing', 'check_obligation_coverage',
+    'check_cast_legality', 'check_entry_timing', 'check_epistemic_lock_order',
+    'check_obligation_coverage',
     'check_read_projection', 'check_thread_lifecycle', 'check_thread_projection',
     'compile_execution_plan', 'compile_hook_context', 'compile_writer_book_ir',
     'expected_thread_faces', 'fold_accepted_prefix', 'fold_thread_faces',
-    'init_establishments', 'obligation_core_id', 'project_binding_space',
+    'init_establishments', 'lock_order_violations', 'obligation_core_id',
+    'project_binding_space',
     'project_brief', 'project_preserve_view',
     'publish_graph', 'run_mechanical_guard', 'scene_order',
 ]

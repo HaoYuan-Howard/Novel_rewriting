@@ -922,7 +922,7 @@ def owner_issue_record_of_payload(
         '未知形状不得静默当作任何一种语义继续）')
 
 
-#: issue code 闭集：前四码逐字复用 Resolver 的精确码（R3 起点），后四码是
+#: issue code 闭集：前四码逐字复用 Resolver 的精确码（R3 起点），后五码是
 #: 自愈面新增的归并码。扩码必须同批更新路由表与守卫测试（未知 code 一律停）。
 OWNER_ISSUE_CODES: Final = (
     'unknown_segment',     # 引用了闭集之外的句段 id（Resolver）
@@ -933,6 +933,7 @@ OWNER_ISSUE_CODES: Final = (
     'association_undecided',   # 关联未决（D8）：回派 associate
     'must_keep_unbound',   # 必保义务未承载：按 unbound.owner 回 body_design/preserve
     'source_evidence_conflict',  # 源证据冲突（R10a a3）：按锚点句柄回派 Stage2 owner
+    'epistemic_lock_order',  # 知情升级/读者确认早于授权承载位（R10a a5）：回 body_design
 )
 
 #: code → `revise_self`｜`revise_upstream:<节点>`｜（未登记即 stop）。
@@ -950,6 +951,9 @@ OWNER_ISSUE_ROUTES: Final[dict[str, str]] = {
     'association_undecided': 'revise_upstream:str06.stage2.associate',
     'must_keep_unbound': 'revise_upstream:unbound_owner',
     'source_evidence_conflict': 'revise_upstream:conflict_anchor',
+    # R10a a5：锁位置是 Design 的披露顺序决定（Bind 只选承载位）；单一目标
+    # 直接路由，不经占位解析。
+    'epistemic_lock_order': 'revise_upstream:str06.stage4.body_design',
 }
 
 #: `UnboundEntry.owner` → 回派目标节点（取值面与 BIND_RULES 的 design|grounding

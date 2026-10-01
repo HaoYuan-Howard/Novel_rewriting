@@ -3,6 +3,13 @@
 """机械 Guard：M1 完整义务内容、M2/M3 已建立输入时序、M4 真实承载拍、
 M5 显式称谓释放、M6 合法人物、M7 声明读取已解析进 IR（R2，AUD-03）、
 M8 线程生命周期与投影（R2）。未知锚拒绝；只报告，不修复或修改输入。
+
+R10a a5 新增**全书级**锁位置 Guard（`lock_order_violations`／
+`check_epistemic_lock_order`）：kp 键知情升级/读者确认不得早于授权该模式的
+义务承载位置（信息披露顺序）。它不进 `GUARD_CHECKS` 逐场表——该表冻结在
+写前 Guard 的历史表序且 scope 是单场；锁位置判据跨全书（Design 全书 vs
+Bind 承载位），由 `run_compile_stage4` 在逐场 Guard 之前单独调用，违例按
+`epistemic_lock_order` 回派 body_design。
 """
 from __future__ import annotations
 
@@ -15,8 +22,11 @@ from contracts.schema.context import (
 from contracts.schema.design import (
     THREAD_ENDINGS, BodyDesign, TargetScene,
 )
-from contracts.schema.grounding import SemanticBinding
+from contracts.schema.grounding import SemanticBinding, _lock_id
 from contracts.schema.state import EffectDomain
+from novel.stages.stage4.grounding import (
+    KNOWLEDGE_LOCK_MODE, obligation_core_id,
+)
 
 
 
@@ -268,6 +278,108 @@ def check_thread_projection(graph: BodyDesign, context: WriterContext) -> list[s
             f'{[(t.ref, t.kind) for t in ir.open_threads]}（continuity/guard_only '
             '身份漏包或过度提醒）')
     return problems
+
+
+# ───────────────────────── a5：知情锁位置（信息披露顺序） ─────────────────────
+
+@dataclass(frozen=True)
+class LockOrderViolation:
+    """一次「知情升级/读者确认早于授权承载位」的机械定位（a5）。
+
+    · `upgrade_ref`／`auth_ref`：`场景#拍` 复合引用（人读与回派上下文共用）；
+    · `core_id`：授权该模式的必保义务（源盲句柄——Design 可见，R8a-3）。
+    """
+
+    holder: str
+    kp: str
+    mode: str
+    upgrade_ref: str
+    auth_ref: str
+    core_id: str
+
+    def message(self) -> str:
+        who = '读者确认' if self.holder == 'reader' else f'{self.holder} 的知情升级'
+        return (f'epistemic_lock_order：{self.upgrade_ref} 的{who}（{self.kp} 升到 '
+                f'{self.mode}）早于授权该模式的义务承载位置 {self.auth_ref}'
+                f'（{self.core_id}）——信息披露顺序不得前移：把该知情承载移到'
+                '授权位置之后，或把义务承载位置前移到该拍')
+
+
+def lock_order_violations(
+    graph: BodyDesign, binding: SemanticBinding,
+) -> tuple[LockOrderViolation, ...]:
+    """kp 键知情升级/读者确认的位置 vs 授权承载位（a5 判据的唯一实现）。
+
+    · 授权位置：必保义务 anchors 里 (holder, kp, mode)（`KNOWLEDGE_LOCK_MODE`
+      唯一映射）→ 该义务**全部承载点的最早位置**（最终验收拍与 supporting
+      的 min——复合义务的支撑拍就是承载的一部分，怀疑渐进到证实合法，P2）；
+      unbound 义务无承载位不参与（必保未承载另有 `must_keep_unbound`）。
+    · 升级位置：拍上 knowledge 域 set kp 键（holder, knowledge_mode）与
+      reader 域 set kp 键（读者确认＝reader 升到 known）。initial_state 不进
+      位置判据——初态是「开篇前成立」，无披露时点可言（其锁面归 a4 接受
+      校验）；同一三元组的多次 set 任一早于授权位即违例。
+    · 无必保义务授权的模式无位置分母，不查（模式合法性归 a4；自由键的
+      重复表达归阅读发现——诊断读数）。
+    · 故事发生顺序不做机械 Guard（§二.3 顺序三分）：合法倒叙（先叙述确诊
+      再回顾监测）不在此拦（P5）——本判据只查披露顺序，不查 requires 因果
+      的阅读序映射。纯函数；只报告，不修复（I-24）。
+    """
+    positions = {f'{scene.scene_id}#{beat.beat_id}': (si, bi)
+                 for si, scene in enumerate(graph.scenes)
+                 for bi, beat in enumerate(scene.beats)}
+    entry_of = {e.obligation_id: e for e in binding.entries}
+    # (holder, kp, mode) -> (最早承载位置, 源盲 core_id, 授权承载引用)
+    authorized: dict[tuple[str, str, str], tuple[tuple[int, int], str, str]] = {}
+    for obligation in binding.obligations:
+        if not obligation.must_preserve:
+            continue
+        entry = entry_of.get(obligation.obligation_id)
+        if entry is None:
+            continue
+        carried = [(positions[ref], ref)
+                   for ref in (entry.beat_ref, *entry.supporting_beat_refs)
+                   if ref in positions]
+        if not carried:
+            continue    # 承载位置不落在图内归 M4/compile 面，本判据不重复拦
+        pos, auth_ref = min(carried)
+        core_id = obligation_core_id(obligation.obligation_id)
+        for anchor in obligation.anchors:
+            if anchor.source_kind != 'cognition' or not anchor.proposition_ref:
+                continue
+            mode = KNOWLEDGE_LOCK_MODE.get(anchor.mode or '')
+            if mode is None or not anchor.holder or anchor.holder == 'public':
+                continue
+            triple = (anchor.holder, _lock_id('kp_', anchor.proposition_ref), mode)
+            known = authorized.get(triple)
+            if known is None or pos < known[0]:
+                authorized[triple] = (pos, core_id, auth_ref)
+    violations: list[LockOrderViolation] = []
+    for si, scene in enumerate(graph.scenes):
+        for bi, beat in enumerate(scene.beats):
+            for delta in beat.target_delta:
+                if not (delta.key.startswith('kp_') and delta.op == 'set'):
+                    continue
+                if delta.domain is EffectDomain.KNOWLEDGE:
+                    triple = (delta.holder or '', delta.key,
+                              delta.knowledge_mode or '')
+                elif delta.domain is EffectDomain.READER:
+                    triple = ('reader', delta.key, 'known')
+                else:
+                    continue
+                auth = authorized.get(triple)
+                if auth is not None and (si, bi) < auth[0]:
+                    violations.append(LockOrderViolation(
+                        holder=triple[0], kp=triple[1], mode=triple[2],
+                        upgrade_ref=f'{scene.scene_id}#{beat.beat_id}',
+                        auth_ref=auth[2], core_id=auth[1]))
+    return tuple(violations)
+
+
+def check_epistemic_lock_order(
+    graph: BodyDesign, binding: SemanticBinding,
+) -> list[str]:
+    """a5 判据的字符串面（诊断报告与测试用；结构化定位用 `lock_order_violations`）。"""
+    return [v.message() for v in lock_order_violations(graph, binding)]
 
 
 @dataclass(frozen=True)

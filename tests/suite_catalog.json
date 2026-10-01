@@ -1094,6 +1094,13 @@
       "stages": [
         "stage4"
       ]
+    },
+    "tests/test_str06_a5_positions.py": {
+      "layer": "unit_contract",
+      "stages": [
+        "stage2",
+        "stage4"
+      ]
     }
   },
   "version": 1

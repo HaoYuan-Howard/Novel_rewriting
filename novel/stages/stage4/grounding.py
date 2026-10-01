@@ -18,12 +18,15 @@
     Design 拿到的是这两份 + OutputConstraints，**读不到 checkpoint 内部**。
   • `project_binding_space`：Bind 的输入投影（B3 前半）——义务清单（正式
     obligation_id 闭集）与场景/拍闭集（scene_id、每拍 beat_id＋event＋
-    participants），不再向模型回显整个 Design。
+    participants），不再向模型回显整个 Design。R10a a5 起带出 series 与
+    锁摘要（`brief` 输入；锁的自然语言面来自 Brief，本投影只渲染）。
   • `assemble_binding`：Bind wire → SemanticBinding。B3 前半起 wire 不写
     复合引用（I-21）：承载位置给 {obligation_id, scene, beat} 与支撑拍
     [{scene, beat}]——三个分量都只能取投影给出的闭集内单 ID，`场景#拍`
     复合引用由 compiler 组成。跨产物校验复用 F1 的
-    check_binding_covers_checkpoint；完整发布，unbound 保留义务。
+    check_binding_covers_checkpoint；R10a a5 起 series 成员绑定同一拍即
+    `series_collapsed` 拒（离散兑现时点分别承载）；完整发布，unbound 保留
+    义务。
 
 不修改输入；不落盘（落盘归 harness／repository）。
 """
@@ -95,7 +98,7 @@ def _anchor_index(
     """投影句柄 → 类型化拷贝（compiler 拷贝，模型不复述；I-15/I-21）。
 
     句柄闭集＝`s0_*`（初态）、`wc_*`（世界约束）、`b拍.eN/.cN/.lN`（拍内
-    效应/认知/悬念）。命题带正式 ID（k\*，无本地句柄）；初态/约束的地址
+    效应/认知/悬念）。命题带正式 ID（k*，无本地句柄）；初态/约束的地址
     含 state_id／constraint_id 本体。
     """
     index: dict[str, ObligationAnchor] = {}
@@ -448,8 +451,9 @@ def obligation_core_id(obligation_id: str) -> str:
 #: known、suspects→suspected、hears_claim→heard、believes→believes。asserts
 #: 不在表内——公开声称是「某人声称」的世界事实（命题登记带
 #: publicly_claimed_by），不铸任何持有者的知情锁；public 持有者（公众知情）
-#: 同理不铸锁（目标侧经世界事实表达）。
-_KNOWLEDGE_LOCK_MODE: Final[dict[str, str]] = {
+#: 同理不铸锁（目标侧经世界事实表达）。a5 起锁位置 Guard（guard.py）复用
+#: 本表解析义务 anchors 的授权三元组——同一映射，不复制第二份。
+KNOWLEDGE_LOCK_MODE: Final[dict[str, str]] = {
     'learns': 'known', 'confirms': 'known',
     'suspects': 'suspected', 'hears_claim': 'heard', 'believes': 'believes',
 }
@@ -529,7 +533,7 @@ def _derive_brief_locks(
                 if kp is None:
                     continue
                 derived.append(kp)
-                mode = _KNOWLEDGE_LOCK_MODE.get(anchor.mode or '')
+                mode = KNOWLEDGE_LOCK_MODE.get(anchor.mode or '')
                 if mode is not None and anchor.holder not in (None, 'public'):
                     knowledge[(anchor.holder, kp, mode)] = \
                         BriefKnowledgeLock(holder=anchor.holder, kp=kp, mode=mode)
@@ -651,20 +655,70 @@ def project_brief(
 
 def project_binding_space(
     checkpoint: PreserveCheckpoint, body: BodyDesign,
+    brief: ReconstructionBrief | None = None,
 ) -> dict[str, Any]:
     """Bind 的输入投影（B3 前半）：承载选择的最小闭集，不回显整个 Design。
 
     模型需要的是「每条义务要保什么」与「每个拍发生了什么」——driver、导演
     说明、delta 全量与称谓释放都不进承载选择的输入。义务 id 与场景/拍 id 是
-    compiler 派发的正式 ID（闭集选择，不是模型生成）。纯函数。"""
+    compiler 派发的正式 ID（闭集选择，不是模型生成）。纯函数。
+
+    R10a a5：带出 series（同一机制的离散兑现成员——各成员必须绑不同拍）与
+    锁摘要（`brief` 给出时按义务渲染 kp/kf 锁的自然语言面：命题、持有者、
+    模式、modality——承载位置必须能完成这些锁的兑现；锁注册表的唯一权威是
+    a4 的 Brief，本投影只渲染不派生）。
+    """
+    obligations = []
+    if brief is not None:
+        req_by_core = {r.core_id: r for r in brief.requirements}
+        prop_by_kp = {p.kp_id: p for p in brief.propositions}
+        fact_by_kf = {f.kf_id: f for f in brief.fact_locks}
+        lock_modes: dict[tuple[str, str], set[str]] = {}
+        for lock in brief.knowledge_locks:
+            lock_modes.setdefault((lock.holder, lock.kp), set()).add(lock.mode)
+
+        def _holder_line(pair: str) -> str:
+            holder, _, kp = pair.partition('|')
+            modes = sorted(lock_modes.get((holder, kp), ()))
+            statement = prop_by_kp[kp].statement if kp in prop_by_kp else ''
+            return (f'{holder} 对「{statement}」({kp}) 授权模式：'
+                    + ('/'.join(modes) if modes else '无'))
+
+        def _fact_line(kf: str) -> str:
+            lock = fact_by_kf.get(kf)
+            if lock is None:
+                return kf
+            note = (f'{lock.statement}（{kf}，只能按 {lock.modality} 承载，'
+                    '不得写成已发生）' if lock.modality
+                    else f'{lock.statement}（{kf}，{lock.kind}）')
+            return note
+    for o in checkpoint.obligations:
+        item = {'obligation_id': o.obligation_id,
+                'kind': o.kind.value if hasattr(o.kind, 'value') else str(o.kind),
+                'statement': o.statement, 'must_preserve': o.must_preserve,
+                'satisfaction': o.satisfaction, 'requires': list(o.requires)}
+        if brief is not None:
+            req = req_by_core.get(obligation_core_id(o.obligation_id))
+            if req is not None:
+                if req.series_group:
+                    item['series_group'] = req.series_group
+                if req.series_mechanism:
+                    item['series_mechanism'] = req.series_mechanism
+                if req.realize_holders:
+                    item['knowledge_locks'] = [_holder_line(p)
+                                               for p in req.realize_holders]
+                if req.realize_locks:
+                    item['fact_locks'] = [_fact_line(k) for k in req.realize_locks]
+        obligations.append(item)
     return {
         'protocol_version': STAGE4_BIND_PROTOCOL,
-        'obligations': [
-            {'obligation_id': o.obligation_id, 'kind': o.kind.value
-             if hasattr(o.kind, 'value') else str(o.kind),
-             'statement': o.statement, 'must_preserve': o.must_preserve,
-             'satisfaction': o.satisfaction, 'requires': list(o.requires)}
-            for o in checkpoint.obligations],
+        'obligations': obligations,
+        'series': [
+            {'members': list(group.members),
+             'mechanism': group.mechanism,
+             'note': '同一机制的离散兑现时点——各成员必须绑定不同拍，'
+                     '不得合并承载'}
+            for group in checkpoint.series],
         'scenes': [
             {'scene_id': scene.scene_id,
              'beats': [{'beat_id': beat.beat_id, 'event': beat.event,
@@ -743,6 +797,26 @@ def assemble_binding(
     problems = check_binding_covers_checkpoint(checkpoint, binding)
     if problems:
         return None, problems
+    # R10a a5：series 成员同拍 → series_collapsed（同节点修订）。同一机制的
+    # 离散兑现时点各自承载——两成员落在同一拍＝「多次发生」被压成一次（C3/C5
+    # 的承载面）；unbound 成员无承载位，不参与比较（必保未承载另有
+    # must_keep_unbound 回派）。
+    entry_of = {e.obligation_id: e for e in binding.entries}
+    for group in checkpoint.series:
+        carried = [(member, entry_of[member].beat_ref)
+                   for member in group.members if member in entry_of]
+        by_ref: dict[str, list[str]] = {}
+        for member, ref in carried:
+            by_ref.setdefault(ref, []).append(member)
+        for ref, members in sorted(by_ref.items()):
+            if len(members) > 1:
+                errors.append(
+                    f'series_collapsed：series（mechanism='
+                    f'{group.mechanism or "无"}）的成员 {sorted(members)} 绑定到'
+                    f'同一拍 {ref}——离散兑现时点必须分别承载（不同拍），'
+                    '复合义务用 supporting 表达前半，不合并成员')
+    if errors:
+        return None, errors
     return binding, []
 
 

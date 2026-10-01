@@ -807,8 +807,13 @@ entries:[{obligation_id, scene, beat, supporting}]
   的较早支撑拍；
 - 若 A requires B，B 的完成位置必须不晚于 A；同场也检查拍序；支撑拍必须早于
   最终验收拍。
+- 义务携带 knowledge_locks/fact_locks 摘要时，承载位置必须能完成这些锁的
+  兑现（授权模式内的知情承载、按锁 modality 的事实承载）；
+- series 的成员是同一机制的离散兑现时点：必须绑定**不同拍**，不得把多次
+  发生合并到同一拍承载。
 无法兑现的必保义务也必须放入 unbound:[{obligation_id,owner:design|grounding,
-reason}]，不能删或改义务。
+reason}]，不能删或改义务。缺口默认归 design（目标结构无法承载）；grounding
+只用于义务本身与源解释冲突的情形。
 wire 顶层：{"protocol_version":"stage4-bind-v1","entries":[...],"unbound":[...]}。
 返回一个 JSON object，不要围栏、不要解释。
 """
