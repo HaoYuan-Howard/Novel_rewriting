@@ -230,60 +230,68 @@ def str06_book_rel(title: str) -> str:
 # `tests/test_str06_f7e_freeze.py`。改一条路径就必须同批改这里，否则契约身份
 # 与版本面当场分家。
 STR06_ARTIFACT_RC_VERSIONS: Final[dict[str, str]] = {
+    # rc12（2026-10-01 R10a 收口，PLAN §二.4 全表）：关键语义交接批把源理解到
+    # 正文的全链形状定格——Stage2 引文证据与事件时态（book v3／chapters v2／
+    # Blueprint v15）、Preserve 锚定与 series（preserve-v2/policy 5）、Brief
+    # 锁定项与 Design v5、Bind series 同拍判据与 epistemic_lock_order 位置
+    # Guard。源理解变化波及全书链（Characters→Blueprint→Preserve→Design→
+    # Bind→IR→回执→交付），故**全表统一 rc12**：旧候选根按版本关闭式拒读
+    # （协议不兼容，不计语义检出），只读保留；names／bind／hook-design 协议
+    # 字面量不变，只因输入投影变而换身份。
     # rc6（2026-09-27 B2 五节点重建，D3/D8/D9）：观察与关联协议落地
     # （`contracts/schema/observation.py`，协议版本 stage2-observation-v1）；
     # 联合抽取的派生输入（book_extraction／input_snapshots）退役，Characters
     # 与 Blueprint 改由 str06.stage2.compile 作为唯一 writer 发布。
-    'stage2/observations/book.json': 'str06-rc11',
-    'stage2/observations/ch{nn}.json': 'str06-rc6',
-    'stage2/observations/names.json': 'str06-rc6',
+    'stage2/observations/book.json': 'str06-rc12',
+    'stage2/observations/ch{nn}.json': 'str06-rc12',
+    'stage2/observations/names.json': 'str06-rc12',
     # rc9（2026-09-28 R1 关联无损）：associate 协议独立升版 stage2-associate-v2
     # ——typed 作用对象显式序列化＋状态句柄位置编码（ch{nn}.b{拍}.e{效应序}.{key}
     # ／book.e{条目序}.{key}）。三类观察协议字面量与请求逐字不变；canonical
     # 无形状变化，不虚构升版（A1.5）。
-    'stage2/observations/associate.json': 'str06-rc9',
+    'stage2/observations/associate.json': 'str06-rc12',
     # v13（2026-09-26 质量改进批次二）：拍模型三类转移＋场景分段；v12 存量拒读。
-    'stage2/blueprints/chapter_blueprints.json': 'str06-rc11',
+    'stage2/blueprints/chapter_blueprints.json': 'str06-rc12',
     # v13 同批：fold 读数结构化（每章空转移拍比例＋书末未揭示 concealed）。
-    'stage2/acceptance/fold.json': 'str06-rc5',
-    'stage2/characters/characters.json': 'str06-rc3',
-    'runtime/preserve_checkpoint.json': 'str06-rc11',
-    'stage4/grounding/reconstruction_brief.json': 'str06-rc11',
-    'stage4/grounding/semantic_binding.json': 'str06-rc3',
-    'stage4/compiled/execution_plan.json': 'str06-rc3',
-    'stage4/acceptance/guard/compile.json': 'str06-rc3',
-    'stage4/acceptance/guard/report.json': 'str06-rc4',
+    'stage2/acceptance/fold.json': 'str06-rc12',
+    'stage2/characters/characters.json': 'str06-rc12',
+    'runtime/preserve_checkpoint.json': 'str06-rc12',
+    'stage4/grounding/reconstruction_brief.json': 'str06-rc12',
+    'stage4/grounding/semantic_binding.json': 'str06-rc12',
+    'stage4/compiled/execution_plan.json': 'str06-rc12',
+    'stage4/acceptance/guard/compile.json': 'str06-rc12',
+    'stage4/acceptance/guard/report.json': 'str06-rc12',
     # rc10 同批新增（R2.8 引擎批）：compile 落盘的 WriterPacket 指标（audit_only）。
-    'stage4/acceptance/packet_metrics.json': 'str06-rc11',
+    'stage4/acceptance/packet_metrics.json': 'str06-rc12',
     # rc7（2026-09-27 B3 前半）：Stage4 四协议独立版化（stage4-{preserve,design,
     # bind,hook-design}-v1），Design wire 瘦身——场景/拍 ID、复合引用、权重归一
     # 与整数预算由 compiler 生成（I-21）；TargetDesign 增结构化跨章字段；读者
     # 确认必填事实地址（D4）。形状/判据变化，旧 Design／graph／WriterIR 拒读。
     # rc10（2026-09-28 R2 语义送达）：Design wire 升 stage4-design-v2——拍上线程
     # （threads）、书级 world_rules、章级 entry；四个静态跨章列表删除（AUD-04）。
-    'stage4/design/body_design.json': 'str06-rc11',
-    'stage4/design/presentation_graph.json': 'str06-rc11',
-    'stage4/context/hook/hook.json': 'str06-rc11',
+    'stage4/design/body_design.json': 'str06-rc12',
+    'stage4/design/presentation_graph.json': 'str06-rc12',
+    'stage4/context/hook/hook.json': 'str06-rc12',
     # rc7 同批：BookBrief 带整书风格与稳定人物声线；PendingConfirmation 带事实
     # 地址（D4），投影按地址精确到消费该地址的章包。
     # rc8（2026-09-27 B4，D2）：ChapterIR 增章级验证材料（称谓许可、禁用字面
     # compile 时算好）；完整 IR 只作存储与审计，运行时按章投影章包、不落盘。
     # rc10（R2）：拍级读取值挂拍（AUD-03）、线程投影面、continuity 分区与
     # 书级 world_rules 进 BookBrief——IR 形状升 rc10。
-    'stage4/ir/writer_book_ir.json': 'str06-rc11',
-    'stage5/hook/hook.txt': 'str06-rc3',
-    'stage5/hook/receipt.json': 'str06-rc3',
-    'stage5/body/ch{nn}.txt': 'str06-rc4',
+    'stage4/ir/writer_book_ir.json': 'str06-rc12',
+    'stage5/hook/hook.txt': 'str06-rc12',
+    'stage5/hook/receipt.json': 'str06-rc12',
+    'stage5/body/ch{nn}.txt': 'str06-rc12',
     # rc5（rc8 同批）：回执改绑章包摘要＋请求身份＋验证版本＋改名前正文摘要，
     # 不再绑定全书 IR 与前文链（D2）；各章独立有效，支持集合恢复。
     # rc6（rc10 同批，R2 身份拆分）：packet_sha256 单摘要拆成写手视图摘要
     # （writer_view_sha256，材料含 renderer 与写手协议版本）＋验证输入摘要
     # （validation_sha256：禁用字面、称谓许可、篇幅带）＋Machine 审计摘要
     # （machine_view_sha256，仅审计不触发重购）。
-    'stage5/acceptance/body/ch{nn}.json': 'str06-rc6',
-    'stage7/naming/name_map.json': 'str06-rc3',
-    'stage7/final/{title}_rewriting.txt': 'str06-rc4',
-    'stage7/final/delivery_manifest.json': 'str06-rc4',
+    'stage5/acceptance/body/ch{nn}.json': 'str06-rc12',
+    'stage7/naming/name_map.json': 'str06-rc12',
+    'stage7/final/{title}_rewriting.txt': 'str06-rc12',
+    'stage7/final/delivery_manifest.json': 'str06-rc12',
 }
 
 

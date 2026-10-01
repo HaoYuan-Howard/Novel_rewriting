@@ -361,7 +361,7 @@ class CharactersArtifactV4(CharactersCore):
 
     `name_structure` 是 RC 字段，经反例定版；core view（characters +
     initial_state）形状与 RC2 相同。"""
-    contract_version: str = Field(default='str06-rc3', pattern=r'^str06-rc[0-9]+$')
+    contract_version: str = Field(default='str06-rc12', pattern=r'^str06-rc[0-9]+$')
     name_structure: NameStructure | None = None
     #: 来源账（F7a）：盘上键 `_provenance`。`exclude=True` 让内存态 dump 不带
     #: 它——prompt／请求字节与 F5e 已购身份逐字不变；落盘由 repository 注入。

@@ -62,7 +62,7 @@ class ChapterLengthDisclosure(StrictModel):
 class ChapterReceipt(StrictModel):
     """章级接受回执（`stage5/acceptance/body/ch{nn}.json`）。"""
 
-    contract_version: Literal['str06-rc6'] = 'str06-rc6'
+    contract_version: Literal['str06-rc12'] = 'str06-rc12'
     chapter_ordinal: int = Field(ge=1)
     writer_view_sha256: str = Field(
         min_length=64, max_length=64,

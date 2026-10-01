@@ -155,7 +155,7 @@ class HookContext(StrictModel):
     validator 检查成文泄漏，不写死任何人名。
     """
 
-    contract_version: Literal['str06-rc11'] = 'str06-rc11'
+    contract_version: Literal['str06-rc12'] = 'str06-rc12'
     pov: HookPov
     opening_facts: tuple[HookOpeningFact, ...] = ()
     materials: tuple[HookMaterialView, ...] = Field(min_length=1)

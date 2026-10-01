@@ -354,7 +354,7 @@ class BodyDesign(StrictModel):
     （`TargetBeat.threads`，折叠走 ThreadFold）。rc7 的四个静态锚定列表
     已删除（AUD-04：无消费者；裁决 3）。
     """
-    contract_version: Literal['str06-rc11'] = 'str06-rc11'
+    contract_version: Literal['str06-rc12'] = 'str06-rc12'
     graph_id: str = Field(min_length=1)
     narration: HookPov
     expression_decisions: tuple[ExpressionDecision, ...] = Field(min_length=1)

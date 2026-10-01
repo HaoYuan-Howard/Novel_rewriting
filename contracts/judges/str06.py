@@ -89,6 +89,13 @@ _metric('source_fold_empty_transition_ratio', 'stage2',
         '每章空转移拍比例（三类转移全空的拍所占比例；D7 连续性读数）', 'R-2.16')
 _metric('source_fold_knowledge', 'stage2',
         '知情 fold 读数（按命题＋持有者＋模式；读者确认时点）', 'R-2.17')
+# R10a a1（收口批登记）：引文证据与事件时态的源侧硬闸（C2/C4）。
+_hard('source_basis_quote_literal', 'stage2',
+      'basis 引文定位：quote 逐字存在于所引句段且句段属条目自身 source_refs'
+      '（不归一化、不模糊匹配；Blueprint v15 证据窗口由 compiler 派生）', 'R-2.18')
+_hard('source_effect_modality', 'stage2',
+      'Effect.modality 闭集 actual/planned/expected/conditional 必填——'
+      '计划/预计/条件与已发生分开，认识限定不混入命题文本', 'R-2.19')
 
 # ── Stage4 目标故事与确定性编译 ──────────────────────────────────────────────
 _hard('body_design_compile', 'stage4',
@@ -104,7 +111,8 @@ _hard('length_budget_conserved', 'stage4',
 _hard('preserve_compile', 'stage4',
       'Preserve checkpoint 编译闭合（策略义务完整、来源可溯）', 'R-5.4')
 _hard('binding_mechanical', 'stage4',
-      'Bind 机械校验通过；拦下的稿进 .INVALID 孪生（typed witness）后 fail-fast', 'R-5.5')
+      'Bind 接受闸接进 ask 同节点修订轮（≤OWNER_REVISION_MAX_ROUNDS）；耗尽/'
+      '无进展才进 .INVALID 孪生（typed witness）后 fail-fast，停在 owner', 'R-5.5')
 _hard('hook_design_mechanical', 'stage4',
       'Hook 设计机械校验通过；PresentationGraph 唯一 publisher', 'R-5.6')
 _hard('execution_plan_compile', 'stage4',
@@ -145,6 +153,31 @@ _unver('design_semantics_unver', 'stage4',
        '目标故事与导演说明的语义质量未经语义审阅，保持未评披露', 'R-5.7')
 _metric('scene_budget_distribution', 'stage4',
         '章预算相对场景权重的分布读数', 'R-5.8')
+# R10a a2–a5（收口批登记）：关键语义交接的确定性硬闸。
+_hard('preserve_anchor_closure', 'stage4',
+      'Preserve v2 锚定闭合：义务 anchors 在投影句柄闭集（≥1）、lineage 由 '
+      'compiler 派生、series 成员闭集互斥、evidence_conflicts 引用闭合', 'R-5.15')
+_hard('source_evidence_conflict_routing', 'stage4',
+      '源证据冲突按锚点句柄回派 Stage2 owner（拍句柄→逐章、书级→book、'
+      '不可解析即停）；三分支恢复＝修订/保留解释（revise_self 恢复输入）/'
+      '未决停止；同指纹不二次回派', 'R-5.16')
+_hard('design_lock_acceptance', 'stage4',
+      'Brief 锁定项与 Design v5 锁规则：kp 命题登记＋知情锁唯一映射＋kf 事实锁；'
+      'kp 键持有者须有锁且模式被授权（known 只能来自 known 锁）、读者确认须有 '
+      'reader known 锁、kf 时态锁按锁 modality 承载、值未知/原文未回答不得 '
+      'set、必保锁兑现', 'R-5.17')
+_hard('binding_series_collapse', 'stage4',
+      'Bind series 分别承载：同一 series 成员绑定不同拍（同拍即 '
+      'series_collapsed）；投影带出 series 与锁摘要；必保缺口默认归 design',
+      'R-5.18')
+_hard('epistemic_lock_order_guard', 'stage4',
+      '锁位置 Guard：kp 知情升级/读者确认不得早于授权该模式的义务承载位置'
+      '（授权位＝必保义务全部承载点最早者；initial_state 与自由键不查；故事'
+      '发生顺序不查）；违例按 epistemic_lock_order 回派 body_design', 'R-5.19')
+_hard('answer_reuse_four_conditions', 'stage4',
+      '已购回答复用四条件：模型输入未变→复用；验收条件变化→免费机械复验；'
+      '实际写作材料变化→按请求身份判断新回答（材料变化＝新身份）；仅审计/'
+      '展示变化→不触发付费重写', 'R-5.20')
 
 # ── Stage5 按章成文与 Hook ───────────────────────────────────────────────────
 _hard('body_chapter_complete', 'stage5',

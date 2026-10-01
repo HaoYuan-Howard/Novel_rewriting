@@ -127,11 +127,13 @@ book 观察与全文（字面校验含章前文字）；`str06.stage2.associate`
 | `source_fold_concealed_unrevealed` | metric | 书末仍未向读者确认的 concealed 命题（只读报告） |
 | `source_fold_empty_transition_ratio` | metric | 每章空转移拍比例（三类转移全空的拍所占比例） |
 | `source_fold_knowledge` | metric | 知情 fold 读数（按命题＋持有者＋模式；读者确认时点） |
+| `source_basis_quote_literal` | hard | R10a a1：basis 引文逐字存在于所引句段且句段属条目自身 source_refs（不归一化、不模糊匹配；C4）；Blueprint v15 证据窗口（被引段全文＋同章前后各句、重叠机械合并）由 compiler 派生——邻句被送达≠邻句成为证据 |
+| `source_effect_modality` | hard | R10a a1：Effect.modality 闭集 actual/planned/expected/conditional 必填（C2 源侧）——计划/预计/条件与已发生分开；认识限定不混入命题文本；源文未说明不得自动填 actual |
 | `names_structure_compile` | hard | Characters v4 名称结构编译闭合 |
 | `names_coverage` | hard | 应改名集合覆盖源名称结构（名称位一致） |
 | `source_semantics_unver` | unver | 源语义与关联决定未经语义审阅，保持未评披露 |
 
-当前注册表共 **18 条**：**13 hard、4 metric、1 unver**。唯一注册表为
+当前注册表共 **20 条**：**15 hard、4 metric、1 unver**（R10a a1 收口新增 2 hard）。唯一注册表为
 `contracts/judges/str06.py`（F8c 起分流至本层判据模块）；修复路由见各判据的 `fix`
 字段——确定性节点默认重跑即 0 成本修复，付费节点重跑是新购，`fix` 留空。
 

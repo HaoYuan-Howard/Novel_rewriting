@@ -75,9 +75,9 @@ Golden 验证，不重新加回迁移关闭条件。
 |---|---|---|
 | 1 | [x] R9a／R9b／B6a（历史） | 交付记录见历史索引；R9c 首段执行记录见下节 |
 | 2 | [x] R10-0 基线、真实消费与反例集（免费） | 登记、两根冻结证据清单、逐 owner 请求占比、送达守卫自检、C1–C11 反例集、用户提供的 Golden Set v3.0 关键案例（已冻结）、基线读数——全部闭合（见 R10-0 执行记录） |
-| 3 | [ ] R10a 关键语义交接（免费开发） | a1 Stage2 引文/时态（**已完成**）→ a2 Preserve 证据视图/锚定（**已完成**）→ a3 冲突回派三分支（**已完成**）→ a4 Brief 锁定＋Design v5（**已完成**）→ a5 Bind/compile 位置校验；一次校验合并报告，fake transport |
+| 3 | [x] R10a 关键语义交接（免费开发） | a1 Stage2 引文/时态（**已完成**）→ a2 Preserve 证据视图/锚定（**已完成**）→ a3 冲突回派三分支（**已完成**）→ a4 Brief 锁定＋Design v5（**已完成**）→ a5 Bind/compile 位置校验（**已完成**）；一次校验合并报告，fake transport |
 | 4 | [ ] R10b WriterIR 投影与写手协议 v7（免费） | 完整章包夹具先行；背景投影收窄；同基座 v6/v7 免费形状读数对照，不做付费对照 |
-| 5 | [ ] 收口 工程验收与付费基线冻结（免费） | §9.5 五文件、受影响 stage、fake 产品链、旧根关闭式拒识核验、默认非 corpus 回归、前端四件 |
+| 5 | [x] 收口 工程验收与付费基线冻结（免费） | §9.5 五文件、受影响 stage、fake 产品链（product_entry 真实子进程）、旧根关闭式拒识核验、默认非 corpus 回归全绿；前端无 API 形状变化不触发四件；rc12 全表＋F7E 重钉＋判据登记（执行记录见 R10a 节） |
 | 6 | [ ] R10c＝B6-B 付费无人工 patch 全书（分段授权） | c1 语义层段＋免费核读 → c2 成文段；工程核验＋用户通读 → STR-06 关闭；禁止 owner 内容 patch |
 | 7 | [ ] R10d 第二本＋重复生成（另行授权） | golden CRITERIA 六维更新与 manifest 冻结；《三人成行》全链＋至少一次重复生成，披露普适性 |
 
@@ -390,6 +390,73 @@ Golden 验证，不重新加回迁移关闭条件。
   闭集与 narration 上拍、锁模型悬空引用拒。
 - **验证**：定向面（-k "str06 or store or hard_cases or
   test_docs_references or test_test_selection"）全绿。零付费。
+
+### R10a a5 执行记录（2026-10-01，免费，fake transport）
+
+- **Bind 承载面**：`project_binding_space` 带出 series（正式 ID＋mechanism＋提示）
+  与按义务渲染的锁摘要（Brief 锁面：命题文本、持有者授权模式、kf modality/
+  类别——锁注册表唯一权威仍是 a4 的 Brief，投影只渲染）；`BIND_RULES` 登记
+  「series 成员绑定不同拍」「必保缺口默认归 design」。`assemble_binding` 对
+  同一 series 成员落在同一承载拍报 `series_collapsed`（同节点修订面；
+  unbound 成员不参与比较，必保未承载另有 must_keep_unbound）。
+- **run_bind 修订轮（R-5.5 同批改写）**：接受闸从「节点自身校验、失败即
+  INVALID＋ValueError」改为接进 `ask` 的同节点修订轮（≤
+  OWNER_REVISION_MAX_ROUNDS、同问题集重复即停）——坏稿先重问；耗尽/无进展
+  才写 `.INVALID` 孪生并停。`ValidationStop` 增设 `adoption`（被拦最后一稿
+  的显式采用引用，DurableAnswer）供 INVALID 铸来源账；f7a/f7c 两个既有
+  bind INVALID 测试同批改写到新行为（bind 恰两次＝原轮＋一轮修订即同指纹
+  停；重跑命中缓存零新购、旧孪生归档再覆写语义保留）。
+- **锁位置 Guard（epistemic_lock_order）**：`guard.py` 新增全书级
+  `lock_order_violations`/`check_epistemic_lock_order`——kp 知情升级/读者
+  确认的位置不得早于授权该模式的义务承载位置。授权位＝必保义务 anchors
+  授权 (holder,kp,mode) 的全部承载点（最终验收拍＋supporting）最早者
+  （支撑拍是承载的一部分——怀疑渐进到证实合法，P2）；initial_state 无披露
+  时点不进判据；自由键不查；故事发生顺序不查（顺序三分，P5 合法倒叙不拦）。
+  不进 GUARD_CHECKS 逐场表（表序冻结且 scope 单场）；`run_compile_stage4`
+  在机械面干净、必保全承载之后调用，违例经 `_backfill_epistemic_lock_order`
+  按 `epistemic_lock_order` 回派 `str06.stage4.body_design`（owner=design、
+  item=kp 句柄、context 带升级/授权位置与源盲 core_id）。workflow 登记
+  新码与单一目标路由。
+- **a5 判据测试**（新 `tests/test_str06_a5_positions.py` 14 项，消费
+  CASES_BY_BATCH['R10a-a5']，C3/C5/C6/P5 红例＋绿对照）：投影 series/锁
+  摘要、series 同拍拒与 unbound 不参与、known 升级早于授权位、reader 确认
+  早于授权位、支撑拍承载合法（P2）、合法倒叙不拦（P5）、自由键与
+  initial_state 不查、回派编排（owner/item/context/回派账 open）、run_bind
+  修订轮好转与粘性耗尽（INVALID 孪生 wire 原样＋gates_skipped＋正式位不写）。
+  C6 的 green_in 落 a5（位置正例面；red 面仍在 a4）。
+- **验证**：a5 14 例＋受影响 142 例（body/hook/r2/r3/repairs/stage4/target/
+  views/a1–a4）＋防漂移/分层 76 例全绿。零付费。
+
+### R10a 收口执行记录（2026-10-01，免费，冻结付费基线门槛）
+
+- **rc12 全表升版**：`STR06_ARTIFACT_RC_VERSIONS` 25 条统一 `str06-rc12`
+  （源理解变化波及全书链；names/associate/bind/hook-design 协议字面量不变、
+  经 RC 表换身份）；`STR06_RC_VERSION`/`STR06_RC_LABELS` 同批；8 个 schema
+  模型的 `contract_version` 字面量升 rc12（book_ir/context×2/design/
+  grounding×2/execution/hook/naming/source 默认值/receipt）。写作层
+  renderer/写手协议 v6 不在本批（R10b 升 v7）。
+- **F7E 重钉**：候选契约身份重算 `7d24e572…`；冻结记录补 R10a 收口段；
+  `FROZEN_SEMANTIC_PROTOCOLS` 不变（book v3/chapters v2/preserve v2+policy5/
+  design v5/bind v1/hook-design v1/names v1/associate v2——a1–a4 已钉）。
+- **判据登记**：BACKEND_CONTRACT 新增 R-2.18（basis 引文定位）/R-2.19
+  （Effect.modality 闭集）与 R-5.15（Preserve 锚定与 series）/R-5.16（证据
+  冲突回派三分支）/R-5.17（Brief 锁定项与 Design v5 锁规则）/R-5.18（Bind
+  series 分别承载）/R-5.19（epistemic_lock_order 位置 Guard）/R-5.20
+  （回答复用四条件）；R-5.5 原位改写（接受闸进修订轮）。§五计数 stage2
+  18→20、stage4 22→28；`contracts/judges/str06.py` 注册 8 条新 HARD＋
+  binding_mechanical 文本改写；`tests/hard_cases.py` 补 8 个最小会红样本
+  （绿对照在 a1–a5 套件）；`tests/test_coverage.py` 节计数 R-2 20/R-5 21。
+- **文档**：`docs/schema/str06.md` 增 R10 节（rc12 版式与六面契约摘要）；
+  `stage2.md`/`stage4.md` 判据表补行并更新计数。
+- **验证**：§9.5 五文件（docs_references/coverage/rules_registry/
+  hard_counterexamples/ingest_fixtures）全绿；全部 str06 套件全绿（含
+  f7a/f7c bind 新行为）；`test_str06_product_entry.py` 11 项全绿（真实子
+  进程 fake 全链到交付与重启读回、旧书 legacy_incompatible 关闭式拒识）；
+  默认非 corpus 回归按收口门槛执行（含生产代码与可执行契约变化的最终
+  集合）。前端无 API 形状变化（issue code 为开放 string 面，
+  backend.generated.ts 不含版本/issue 枚举），不触发前端四件。零付费。
+- **限制**：背景投影收窄、WriterIR 锁承载、写手协议 v7 归 R10b；判据
+  「背景投影规则」（PLAN 收口清单内）随 R10b 落地时再登记。
 
 ### 节省时间的执行约定
 

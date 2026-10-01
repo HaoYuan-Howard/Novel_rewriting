@@ -428,7 +428,7 @@ def _green_ir():
 def test_chapter_receipt_version_and_split_fields():
     """回执升 rc6：packet_sha256 单摘要拆成写手视图／验证输入／Machine 审计。"""
     receipt = ChapterReceipt(
-        contract_version='str06-rc6', chapter_ordinal=1,
+        contract_version='str06-rc12', chapter_ordinal=1,
         writer_view_sha256=H64, validation_sha256='b' * 64,
         machine_view_sha256='c' * 64,
         prose_sha256='d' * 64, request_identity='r1',
@@ -437,10 +437,10 @@ def test_chapter_receipt_version_and_split_fields():
         length=ChapterLengthDisclosure(char_count=900, target_chars=1000,
                                        band_low=600, band_high=1300,
                                        within_band=True, deviation_ratio=-0.1))
-    assert receipt.contract_version == 'str06-rc6'
+    assert receipt.contract_version == 'str06-rc12'
     with pytest.raises(ValidationError):
         ChapterReceipt(
-            contract_version='str06-rc6', chapter_ordinal=1,
+            contract_version='str06-rc12', chapter_ordinal=1,
             writer_view_sha256=H64, validation_sha256='b' * 64,
             machine_view_sha256='c' * 64,
             packet_sha256=H64,                        # 旧单摘要形状关闭式拒读
@@ -452,7 +452,7 @@ def test_chapter_receipt_version_and_split_fields():
                                            within_band=True, deviation_ratio=-0.1))
     with pytest.raises(ValidationError):
         ChapterReceipt(                               # 缺验证输入摘要即拒
-            contract_version='str06-rc6', chapter_ordinal=1,
+            contract_version='str06-rc12', chapter_ordinal=1,
             writer_view_sha256=H64, machine_view_sha256='c' * 64,
             prose_sha256='d' * 64, request_identity='r1',
             protocol_version='p1', renderer_version='r1', validator_version='v1',
@@ -485,7 +485,7 @@ def test_receipt_binds_writer_view_and_validation_separately():
                 identities.machine_view_sha256}) == 3
 
     def receipt(**over):
-        base = dict(contract_version='str06-rc6', chapter_ordinal=1,
+        base = dict(contract_version='str06-rc12', chapter_ordinal=1,
                     writer_view_sha256=identities.writer_view_sha256,
                     validation_sha256=identities.validation_sha256,
                     machine_view_sha256=identities.machine_view_sha256,
@@ -538,7 +538,7 @@ def test_machine_only_change_does_not_invalidate_receipt():
     assert mutated.writer_view_sha256 == identities.writer_view_sha256
     assert mutated.validation_sha256 == identities.validation_sha256
     receipt = ChapterReceipt(
-        contract_version='str06-rc6', chapter_ordinal=1,
+        contract_version='str06-rc12', chapter_ordinal=1,
         writer_view_sha256=identities.writer_view_sha256,
         validation_sha256=identities.validation_sha256,
         machine_view_sha256=identities.machine_view_sha256,
@@ -651,16 +651,16 @@ def test_r2_version_constants():
     )
     from novel.stages.common import RENDERER_VERSION, WRITER_PROTOCOL_VERSION
     assert STAGE4_DESIGN_PROTOCOL == 'stage4-design-v5'
-    assert STR06_RC_VERSION == 'str06-rc11'          # R9 表达送达集中升版
+    assert STR06_RC_VERSION == 'str06-rc12'          # R9 表达送达集中升版
     assert 'str06-rc10' in STR06_RC_LABELS
     assert RENDERER_VERSION == 'str06-render-v6'
     assert WRITER_PROTOCOL_VERSION == 'str06-body-protocol-v6'
     for rel in ('stage4/design/body_design.json',
                 'stage4/design/presentation_graph.json',
                 'stage4/ir/writer_book_ir.json'):
-        assert STR06_ARTIFACT_RC_VERSIONS[rel] == 'str06-rc11', rel
+        assert STR06_ARTIFACT_RC_VERSIONS[rel] == 'str06-rc12', rel
     assert STR06_ARTIFACT_RC_VERSIONS['stage5/acceptance/body/ch{nn}.json'] \
-        == 'str06-rc6'
+        == 'str06-rc12'
 
 
 # ═════════════════ 九、Design wire v2（生产侧同步） ═════════════════

@@ -416,7 +416,7 @@ def _receipt_stale() -> list:
 
     from contracts.schema.receipt import ChapterLengthDisclosure
     receipt = ChapterReceipt(
-        contract_version='str06-rc6', chapter_ordinal=1, status='accepted',
+        contract_version='str06-rc12', chapter_ordinal=1, status='accepted',
         writer_view_sha256='a' * 64, validation_sha256='b' * 64,
         machine_view_sha256='e' * 64,
         prose_sha256='c' * 64, request_identity='r1',
@@ -803,4 +803,166 @@ CASES.update({
     'names_structure_compile': Case(
         'stage2', _names_structure_uncovered, '未恰好覆盖'),
     'names_coverage': Case('stage2', _names_coverage_missing_entry, '漏项'),
+})
+
+
+# ── R10a 关键语义交接（收口批登记）：每条 HARD 的最小会红样本 ─────────────────
+# 绿对照在反例套件：`tests/test_str06_a1_semantics.py`（引文/时态正例）、
+# `test_str06_a2_preserve.py`（锚定/series 正例）、`test_str06_a3_conflicts.py`
+# （三分支恢复）、`test_str06_a4_design_locks.py`（锁规则绿基座）、
+# `test_str06_a5_positions.py`（series 分别承载、P2/P5 位置正例）。
+
+def _source_quote_off_literal() -> list:
+    """R-2.18：basis 引文与句段原文不符（C4 引文错位；逐字判定，不归一化）。"""
+    from novel.stages.stage2.resolver import EvidenceResolver
+
+    resolver = EvidenceResolver(
+        {'e01_01': {'chapter': 1, 'text': '她攥紧了帕子，指节发白。'}})
+    issues = resolver.verify_quote('e01_01', '他攥紧了帕子', ('e01_01',))
+    return [issue.message for issue in issues]
+
+
+def _source_effect_modality_off() -> list:
+    """R-2.19：Effect.modality 闭集外（'大概'）在观察构造期即拒。"""
+    from contracts.schema.source import ChapterBlueprint
+    from tests.str06_facilities import v13_beat, v13_effect
+
+    try:
+        ChapterBlueprint(chapter=1, beats=(
+            v13_beat('b01_01', 'e', effects=(
+                v13_effect({'kind': 'world'}, 'fate', '多舛',
+                           modality='大概'),)),),
+            scenes=({'scene_id': 'sc01', 'beat_ids': ('b01_01',)},),
+            causal_edges=())
+    except Exception as exc:
+        return [f'effect modality 闭集外被拒：{exc}']
+    return []
+
+
+def _preserve_unknown_anchor() -> list:
+    """R-5.15：义务 anchors 引用投影句柄闭集之外（每义务须锚定源原子）。"""
+    from novel.stages.stage4.grounding import assemble_preserve
+
+    from contracts.schema.source import (
+        BlueprintsArtifactV15, ChapterBlueprint, CharacterEntry,
+        CharactersCore, SurfaceWindow,
+    )
+    from tests.str06_facilities import v13_beat, v13_effect
+    _checkpoint, errors = assemble_preserve(
+        {'protocol_version': 'stage4-preserve-v2', 'obligations': [
+            {'kind': 'event_core', 'statement': 's', 'anchors': ['b09_99.e1'],
+             'must_preserve': True, 'satisfaction': '明确呈现', 'requires': []}]},
+        policy_id='preserve-default', policy_version=1,
+        characters=CharactersCore(characters={'ch1': CharacterEntry(
+            canonical='苏姑娘',
+            surfaces=(SurfaceWindow(surface='苏姑娘', from_chapter=1,
+                                    source_refs=('e01_01',)),))}),
+        blueprint=BlueprintsArtifactV15(source_expression=sample_blueprint_expression(), chapters=(
+            ChapterBlueprint(chapter=1,
+                             beats=(v13_beat('b01_01', 'e', effects=(
+                                 v13_effect({'kind': 'world'}, 'fate', '多舛'),)),),
+                             scenes=({'scene_id': 'sc01', 'beat_ids': ('b01_01',)},),
+                             causal_edges=()),),
+            evidence={'e01_01': '苏姑娘初到陆家。'}),
+        provider='p', model='m', request_sha256='a' * 64)
+    return errors
+
+
+def _conflict_anchor_unroutable() -> list:
+    """R-5.16：证据冲突锚点不可解析 → 机械路由显式停（不猜回派目标）。"""
+    from contracts.schema.workflow import route_owner_issue
+
+    action, why = route_owner_issue('source_evidence_conflict',
+                                    conflict_anchor='zzz')
+    if action != 'stop':
+        return []
+    return [f'{action}：{why}']
+
+
+def _design_lock_mode_escalation() -> list:
+    """R-5.17：仅 suspects 锁的命题被写成 known（C1 模式越权，known 只能
+    来自 known 锁）。"""
+    from tests.test_str06_a4_design_locks import _assemble, _brief, _design_wire
+
+    brief = _brief()
+    kp_y = next(p.kp_id for p in brief.propositions
+                if p.statement == '婆母似乎知情')
+    wire = _design_wire(brief)
+    wire['scenes'][0]['beats'][2]['target_delta'].append(
+        {'domain': 'knowledge', 'subjects': [], 'holder': 'yun_niang',
+         'key': kp_y, 'op': 'set', 'value': '她确知婆母知情',
+         'scope': 'book', 'knowledge_mode': 'known'})
+    _body, errors = _assemble(wire, brief)
+    return errors
+
+
+def _binding_series_same_beat() -> list:
+    """R-5.18：series 成员绑定同一拍（C3/C5 的承载面，离散兑现被压成一次）。"""
+    from copy import deepcopy as _dc
+
+    from tests.test_str06_a5_positions import (
+        _bind_wire, _checkpoint, _green_graph_and_binding,
+    )
+    from novel.stages.stage4.grounding import assemble_binding
+
+    body, _binding, _brief = _green_graph_and_binding()
+    wire = _dc(_bind_wire())
+    for entry in wire['entries']:
+        if entry['obligation_id'] in ('ob03', 'ob04'):
+            entry['beat'] = 'b05'
+    _model, errors = assemble_binding(
+        wire, _checkpoint(),
+        {s.scene_id: {b.beat_id for b in s.beats} for s in body.scenes})
+    return errors
+
+
+def _epistemic_lock_early_upgrade() -> list:
+    """R-5.19：读者确认早于授权锁承载位（C6 位置面，披露顺序前移）。"""
+    from copy import deepcopy as _dc
+
+    from tests.test_str06_a5_positions import (
+        _bind_wire, _checkpoint, _green_graph_and_binding, _positions,
+    )
+    from novel.stages.stage4.grounding import assemble_binding
+    from novel.stages.stage4.guard import check_epistemic_lock_order
+
+    body, _binding, _brief = _green_graph_and_binding()
+    wire = _dc(_bind_wire())
+    for entry in wire['entries']:
+        if entry['obligation_id'] == 'ob02':
+            entry['beat'] = 'b05'
+    binding, errors = assemble_binding(wire, _checkpoint(), _positions(body))
+    assert binding is not None and not errors, errors
+    return check_epistemic_lock_order(body, binding)
+
+
+def _answer_reuse_identity_follows_material() -> list:
+    """R-5.20 的机械面：请求身份随实际消费材料变化——材料不同身份必不同
+    （否则同身份缓存会命中重放上一轮带冲突处理的旧回答）；纯审计字段
+    （时间戳等）不进 prompt、不换身份。"""
+    from novel.llm.paid_requests import digest
+
+    first, second = digest('材料 A（含冲突处理结果）'), digest('材料 B')
+    if first == second:
+        return ['材料不同而请求身份相同：会错误复用旧回答']
+    return ['请求身份随实际消费材料变化：材料 A/B 身份不同']
+
+
+CASES.update({
+    'source_basis_quote_literal': Case(
+        'stage2', _source_quote_off_literal, '不逐字存在'),
+    'source_effect_modality': Case(
+        'stage2', _source_effect_modality_off, 'modality 闭集外被拒'),
+    'preserve_anchor_closure': Case(
+        'stage4', _preserve_unknown_anchor, '未知句柄'),
+    'source_evidence_conflict_routing': Case(
+        'stage4', _conflict_anchor_unroutable, '不可解析'),
+    'design_lock_acceptance': Case(
+        'stage4', _design_lock_mode_escalation, '无锁或模式越权'),
+    'binding_series_collapse': Case(
+        'stage4', _binding_series_same_beat, 'series_collapsed'),
+    'epistemic_lock_order_guard': Case(
+        'stage4', _epistemic_lock_early_upgrade, 'epistemic_lock_order'),
+    'answer_reuse_four_conditions': Case(
+        'stage4', _answer_reuse_identity_follows_material, '身份不同'),
 })

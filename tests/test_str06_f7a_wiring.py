@@ -431,13 +431,15 @@ def _full_chain(tmp_path, wires, *, ceiling=None):
 
 def test_binding_invalid_witness_and_owner_stop(tmp_path):
     from tests.test_str06_body import _full_chain_wires
+    from novel.llm.paid_requests import ValidationStop
     from novel.stages.chain import run_workflow
     wires = _full_chain_wires()
-    # 悬空 beat_ref：bind 机械闸必须拦下并留 typed witness。
+    # 悬空承载分量：bind 接受闸先在修订轮内重问（R10a a5，R-5.5 改写）；
+    # 同一坏 wire 原样重现 → 同指纹停（ValidationStop），INVALID 孪生留证。
     wires['bind'] = {'entries': [{'obligation_id': 'ob01', 'scene_id': 's01',
                                   'beat_ref': 's01#bt99'}], 'unbound': []}
     repo, session, transport, (ask, ask_text, ask_body, chapters) = _full_chain(tmp_path, wires)
-    with pytest.raises(ValueError, match='INVALID 孪生已留证'):
+    with pytest.raises(ValidationStop, match='同一问题集重复即停'):
         run_workflow(repository=repo, chapters=chapters, ask=ask(session),
                      ask_text=ask_text(session), ask_body=ask_body(session),
                      budget=2000, through='stage7', book_title='报恩',
@@ -449,10 +451,12 @@ def test_binding_invalid_witness_and_owner_stop(tmp_path):
     status = repo.inspect('runtime/workflow_status.json')
     assert status['status'] == 'failed'
     assert status['failed_node'] == 'str06.stage4.bind', status
-    # owner 停止：bind 之后没有任何后续 owner 的调用（失败即停，不继续问模型）。
+    # owner 停止：bind 之后没有任何后续 owner 的调用（失败即停，不继续问模型）；
+    # bind 自身恰两次（原轮＋一轮修订即同指纹停，不无限重问）。
     asked = set(transport.calls)
     assert 'hook_design' not in asked and not any(
         o.startswith('body_') for o in asked), asked
+    assert transport.calls.count('bind') == 2
 
 
 def test_same_fingerprint_failure_never_rebuys(tmp_path):

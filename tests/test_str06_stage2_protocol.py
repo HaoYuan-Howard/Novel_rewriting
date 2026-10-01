@@ -97,17 +97,17 @@ def test_retired_derived_inputs_are_refused_paths():
 # ───────────────────────── 协议显式版本化（I-13） ─────────────────────────
 
 def test_observation_artifacts_are_registered_with_independent_versions():
-    assert STR06_ARTIFACT_RC_VERSIONS['stage2/observations/book.json'] == 'str06-rc11'
+    assert STR06_ARTIFACT_RC_VERSIONS['stage2/observations/book.json'] == 'str06-rc12'
     for rel in ('stage2/observations/ch{nn}.json',
                 'stage2/observations/names.json'):
         assert rel in ARTIFACT_PATHS and rel in ARTIFACT_SPECS
-        assert STR06_ARTIFACT_RC_VERSIONS[rel] == 'str06-rc6'
+        assert STR06_ARTIFACT_RC_VERSIONS[rel] == 'str06-rc12'
     # R1：associate 观察独立升版（stage2-associate-v2），形状升 rc9；三类观察
     # 冻结在 rc6（B2 身份）不动。RC 版式头随 R1 升 rc9。
     assert ARTIFACT_SPECS['stage2/observations/associate.json']
-    assert STR06_ARTIFACT_RC_VERSIONS['stage2/observations/associate.json'] == 'str06-rc9'
+    assert STR06_ARTIFACT_RC_VERSIONS['stage2/observations/associate.json'] == 'str06-rc12'
     # R2（语义送达）起 RC 版式头升 rc10；associate 冻结在 rc9（R1 身份）不动。
-    assert STR06_RC_VERSION == 'str06-rc11'
+    assert STR06_RC_VERSION == 'str06-rc12'
     for label in ('str06-rc6', 'str06-rc9', 'str06-rc10', 'str06-rc11'):
         assert label in STR06_RC_LABELS
     assert str06_chapter_observation_rel(3) == 'stage2/observations/ch03.json'

@@ -692,11 +692,22 @@ STR06_RUNTIME_CONFIG: Final = CandidateRuntimeConfig()
 #: WriterBookIR／WriterContext 升 `str06-rc10`（拍级读取值挂拍、线程投影面、
 #: continuity 分区、world_rules 进书级层）；章回执身份拆分（回执升 `str06-rc6`，
 #: 写手视图／验证输入／Machine 审计三把摘要）；renderer 与写手协议升 v5。
-STR06_RC_VERSION: Final = 'str06-rc11'
+#: rc11（2026-09-30 R9）：……（R9 批次说明，基线见 Git 历史）。
+#: rc12（2026-10-01 R10a 收口，D8 修订三）：关键语义交接批定格全链形状——
+#: book v3／chapters v2／Blueprint v15（basis 逐字引文＋Effect.modality＋
+#: compiler 派生证据窗口）、preserve v2＋policy 5（anchors 锚定／series／
+#: evidence_conflicts 回派）、design v5（kp/kf 锁定项、modality 必填、
+#: expression_refs、删 dramatic_intent）；Bind wire 字面不变但输入投影带出
+#: series 与锁摘要、series 成员同拍 series_collapsed、compile 增
+#: epistemic_lock_order 位置 Guard（回派 body_design）。names／associate／
+#: bind／hook_design 协议字面量不变，输入投影或判据变化经全表 rc12 换身份；
+#: 写作层（renderer／写手协议 v6）不在本批——R10b 再升 v7。
+STR06_RC_VERSION: Final = 'str06-rc12'
 
 #: 已知 RC 标签面（版本规则见 `contracts/artifacts.py::STR06_ARTIFACT_RC_VERSIONS`）。
 STR06_RC_LABELS: Final = ('str06-rc2', 'str06-rc3', 'str06-rc4', 'str06-rc5', 'str06-rc6',
-                          'str06-rc7', 'str06-rc8', 'str06-rc9', 'str06-rc10', 'str06-rc11')
+                          'str06-rc7', 'str06-rc8', 'str06-rc9', 'str06-rc10', 'str06-rc11',
+                          'str06-rc12')
 
 #: Stage4 四个付费语义节点的独立 wire 协议（B3 前半；各节点独立演进，升版互不
 #: 牵连）。wire 顶层 `protocol_version` 与对应常量逐字对账，漏带或错带即拒

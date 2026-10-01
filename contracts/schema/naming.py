@@ -62,7 +62,7 @@ class NameMapV5(StrictModel):
 
     entries 覆盖应改名集合的每一个人（漏项/多余项归 compile 核对）；char_ref
     唯一。空 entries 非法——至少要显式处理一个人物。"""
-    contract_version: Literal['str06-rc3'] = 'str06-rc3'
+    contract_version: Literal['str06-rc12'] = 'str06-rc12'
     entries: tuple[NameAssignment, ...] = Field(min_length=1)
     provenance: FreeProvenance | LlmProvenance | None = Field(
         default=None, alias='_provenance', exclude=True)

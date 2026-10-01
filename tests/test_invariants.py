@@ -178,6 +178,10 @@ def test_operator_redo_strategies_are_closed_and_explicit_per_node():
         'str06.stage2.associate': 'owner_revision',
         'str06.stage4.preserve': 'owner_revision',
         'str06.stage4.body_design': 'owner_revision',
+        # R10a a3（2026-10-01）：源证据冲突按锚点句柄回派两个 Stage2 语义
+        # owner——书级与逐章观察进入 owner_revision 面（表与登记同批闭环）。
+        'str06.stage2.book': 'owner_revision',
+        'str06.stage2.chapters': 'owner_revision',
     }
     assert set(registered.values()) <= set(inv.OPERATOR_REDO_STRATEGIES)
     assert all(

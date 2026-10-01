@@ -93,10 +93,17 @@ from novel.llm.paid_requests import candidate_contract_identity
 #: R10a a1 重新冻结（2026-10-01，D8 修订三）：Blueprint V14→V15（basis 引文＋
 #: Effect.modality＋compiler 派生证据窗口），观察协议 book v3／chapters 独立 v2；
 #: 节点、恢复策略与运行期配置不变，旧候选根只读拒识（协议不兼容，不计语义检出）。
+#: R10a 收口重新冻结（2026-10-01，rc12 全表）：a2–a5 落地后全链形状定格——
+#: preserve v2／policy 5（anchors 锚定、series、evidence_conflicts）、design v5
+#: （kp/kf 锁定项、modality 必填、expression_refs、删 dramatic_intent）、Bind
+#: series 同拍判据与 epistemic_lock_order 位置 Guard；产物表**全部 25 条统一
+#: str06-rc12**（源理解变化波及全书链；names／bind／hook_design 协议字面量
+#: 不变、经 RC 表换身份）。旧候选根按版本关闭式拒识，只读保留；写作层
+#: renderer／写手协议 v6 不在本批（R10b 再升 v7）。
 #: 候选契约身份：节点表＋产物表＋RC 版式＋运行期配置的 SHA-256。表内任何
 #: 一行变化都会改变它——先改本记录并登记原因（REQUIREMENTS／DECISIONS），
 #: 再动表。
-FROZEN_CONTRACT_IDENTITY = '7031356e55f2d885f52c1f1a526076f9d2742adf340dee739706969547704eae'
+FROZEN_CONTRACT_IDENTITY = '7d24e57236a90e2b4889125e5e9254ae9090222a4abdafbc7948f1f9d91859cb'
 
 #: 冻结时的节点集合（14 个：stage0/1 两座＋Stage2 五节点＋Stage4 五＋Stage5 两
 #: ＋Stage7 两）。
@@ -163,7 +170,7 @@ def test_frozen_artifact_table_shape():
 
 
 def test_frozen_rc_version_label():
-    assert STR06_RC_VERSION == 'str06-rc11'
+    assert STR06_RC_VERSION == 'str06-rc12'
 
 
 #: 语义冻结闸（2026-09-29，裁决 D8）钉住的语义层协议字面量。键是常量名、值是

@@ -95,7 +95,7 @@ class SceneExecutionPlan(StrictModel):
 class ExecutionPlan(StrictModel):
     """全书执行计划（Derived；内容身份由 repository 记，模型不自持 hash）。"""
 
-    contract_version: Literal['str06-rc3'] = 'str06-rc3'
+    contract_version: Literal['str06-rc12'] = 'str06-rc12'
     initial_establishments: tuple[Establishment, ...] = ()
     scenes: tuple[SceneExecutionPlan, ...] = Field(min_length=1)
     provenance: FreeProvenance | LlmProvenance | None = Field(

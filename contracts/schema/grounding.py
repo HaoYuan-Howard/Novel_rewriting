@@ -291,7 +291,7 @@ class ReconstructionBrief(StrictModel):
     不得经状态或说明改写；兑现与越权校验归 assemble_body_design。
     """
 
-    contract_version: Literal['str06-rc11'] = 'str06-rc11'
+    contract_version: Literal['str06-rc12'] = 'str06-rc12'
     brief_id: str = Field(min_length=1)
     preserve_checkpoint_sha256: str = Field(min_length=64, max_length=64)
     requirements: tuple[BriefRequirement, ...] = Field(min_length=1)
@@ -384,7 +384,7 @@ class SemanticBinding(StrictModel):
     一次）；跨产物「全分母 = 采用的 checkpoint obligations」归 F4 机械 Guard。
     """
 
-    contract_version: Literal['str06-rc3'] = 'str06-rc3'
+    contract_version: Literal['str06-rc12'] = 'str06-rc12'
     binding_id: str = Field(min_length=1)
     preserve_checkpoint_sha256: str = Field(min_length=64, max_length=64)
     obligations: tuple[SourceObligation, ...] = Field(min_length=1)

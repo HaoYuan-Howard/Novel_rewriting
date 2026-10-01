@@ -101,6 +101,56 @@ compile／Stage4 compile／Stage7 assemble 才 resolve。无登记或后续手�
 下文「目标」各节是 B1–B5 的实施依据；「现役实装」各节描述切换期仍然有效的契约
 与落点，B2 起逐批由目标形态取代。
 
+### R10 关键语义交接（2026-10-01，D8 修订三；a1–a5＋收口已落地）
+
+现役版式为 `str06-rc12`（全表统一；R10a 收口冻结身份
+`7d24e572…`，`tests/test_str06_f7e_freeze.py`）。节点仍为 14 个，运行配置未变。
+book 观察 `stage2-book-v3`、chapters 独立 `stage2-chapters-v2`（names 保持
+`stage2-observation-v1`、associate 保持 v2，输入投影变经 RC 表换身份）；
+Preserve `stage4-preserve-v2`＋policy 5、Design `stage4-design-v5`；bind／
+hook-design 字面不变。写作层 renderer／写手协议 v6 不在本批（R10b 升 v7）。
+
+关键语义交接的契约面（判据见 BACKEND_CONTRACT R-2.18/19、R-5.15～R-5.20）：
+
+- **证据（a1）**：Stage2 basis 是 `EvidenceQuote{segment, quote}`——quote 逐字
+  存在于所引句段且句段属条目自身 source_refs（Resolver `verify_quote`，不归一
+  化不模糊匹配）；`Effect.modality` 闭集必填。Blueprint v15 派生证据窗口
+  （被引段全文＋同章前后各一句、重叠机械合并）；Preserve 输入从整份 JSON 倾倒
+  改为 `project_preserve_view` 确定性渲染（R10-0.3 实证 29.9k token/轮）。
+- **锚定与 series（a2）**：义务以 `anchors` 引用投影句柄（`b拍.e|c|l`／`s0_*`／
+  `wc_*`，≥1），lineage 由 compiler 派生；锚点类型化拷贝源原子（持有者、mode、
+  命题、modality、可见性、逐字引文）。顶层 `series` 登记同一机制的离散兑现
+  时点（members≥2 闭集互斥、mechanism 属源表达）——不为满足阶段规则合并。
+- **证据冲突回派（a3）**：Preserve 报 `evidence_conflicts` 时 checkpoint 不
+  发布，按锚点句柄回派 Stage2 语义 owner（拍句柄→逐章 chNN／书级→book；
+  不可解析即停）。三分支：修订（发布新 SourceTruth、按材料变化恢复）／保留
+  解释（处理结果作为同一 Preserve 任务 revise_self 的恢复输入，仍分歧即停止
+  不二次回派）／未决（保持阻塞，不自动标源文未知）。同指纹重现无进展停。
+- **锁定项与 Design v5（a4）**：Brief 由 anchors 与 canonical loops 确定性
+  派生 kp 命题登记、知情锁（唯一映射 learns/confirms→known、suspects→
+  suspected、hears_claim→heard、believes→believes；asserts 转公开声称标记）、
+  kf 事实锁（时态／值未知／原文未回答）；锁内容是语义、坐标仍源盲。Design
+  v5 删 `dramatic_intent`；非知情/非读者 set 必填 modality；拍增
+  `expression_refs`（正向表达任务落具体拍）。kp/kf 键规则与必保锁兑现归
+  `assemble_body_design`（revise_self ≤2）。
+- **Bind 与位置（a5）**：Bind 投影带出 series 与锁摘要；同一 series 成员绑定
+  不同拍（同拍 `series_collapsed`，同节点修订）；必保缺口默认归 design。
+  `run_bind` 接受闸接进 ask 修订轮（R-5.5 改写），耗尽/无进展才 `.INVALID`
+  孪生（typed 停止携带被拦稿的显式采用引用）。compile 增全书级锁位置 Guard
+  （`novel/stages/stage4/guard.py::lock_order_violations`）：kp 知情升级/读者确认不得早于授权该
+  模式的义务承载位置（授权位＝必保义务全部承载点最早者，支撑拍算承载；
+  initial_state 与自由键不查；故事发生顺序不查——顺序三分）；违例按
+  `epistemic_lock_order` 回派 `str06.stage4.body_design`。
+- **回答复用（§二.4）**：模型输入未变→复用；验收条件变化→免费机械复验；
+  实际写作材料变化→按请求身份判断（材料变化＝新身份，含冲突处理结果附注）；
+  仅审计/展示变化→不触发付费重写。
+
+旧候选根按版本关闭式拒识（协议不兼容，不计语义检出）；R10b（WriterIR
+投影与写手协议 v7）、R10c（付费无人工 patch 全书）、R10d（普适性）见
+PLAN.md。
+
+
+
 ## 目标总览：职责与数据流
 
 保留现有心智模型（Stage2 源语义 → Stage4 目标设计与确定性编译 → Stage5 语言实现 →

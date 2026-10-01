@@ -437,12 +437,19 @@ def test_invalid_twin_rerun_archives_rounds_without_rebuy(tmp_path):
     wires['bind'] = {'protocol_version': 'stage4-bind-v1', 'entries': [
         {'obligation_id': 'ob01', 'scene': 'sc01', 'beat': 'b99'}], 'unbound': []}
     base, repo, session, transport = _routing_session(tmp_path, wires, yes=True)
-    with pytest.raises(ValueError, match='INVALID 孪生已留证'):
+    # R10a a5（R-5.5 改写）：接受闸先在修订轮内重问，同一坏 wire 原样重现 →
+    # 同指纹 ValidationStop；INVALID 孪生照写。修订轮是新请求身份的付费调用，
+    # 如实计费（第一次 _run 内 bind 恰两次）。
+    from novel.llm.paid_requests import ValidationStop
+    with pytest.raises(ValidationStop, match='同一问题集重复即停'):
         _run(repo, session)
+    assert transport.calls.count('bind') == 2
     calls_before = len(transport.calls)
     invalid_rel = repo.invalid_rel('stage4/grounding/semantic_binding.json')
     assert repo.inspect(invalid_rel)['_provenance']['gates_skipped']
-    with pytest.raises(ValueError, match='INVALID 孪生已留证'):
+    # 重跑：首轮与修订轮回答全部命中缓存（请求身份未变）→ 同指纹再停，
+    # 零新购；旧孪生先进归档再覆写。
+    with pytest.raises(ValidationStop, match='同一问题集重复即停'):
         _run(repo, session)
     assert len(transport.calls) == calls_before, '同指纹失败不得重复计费'
     assert repo.archived_rounds(invalid_rel) == {1}, '旧孪生须先归档再覆写'
