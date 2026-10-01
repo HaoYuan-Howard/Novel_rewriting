@@ -35,10 +35,13 @@ from contracts.schema.book_ir import (
 )
 from contracts.schema.design import BodyDesign, ChapterAssignment
 from contracts.schema.execution import ExecutionPlan
-from contracts.schema.grounding import SemanticBinding
+from contracts.schema.grounding import BriefFactLock, SemanticBinding
 from contracts.schema.source import NameProjection, NameStructure
 from novel.stages.stage4.fold import ThreadFold, fold_accepted_prefix
-from novel.stages.common import project_context, withheld_name_literals, expand_surface_releases
+from novel.stages.common import (
+    consumption_closure, project_context, unanswered_guards,
+    withheld_name_literals, expand_surface_releases,
+)
 
 
 def chapter_surface_releases(graph: BodyDesign, chapter_ordinal: int, structure: NameStructure | None = None) -> set[str]:
@@ -169,14 +172,20 @@ def compile_writer_book_ir(
     *, graph: BodyDesign, plan: ExecutionPlan, binding: SemanticBinding,
     total_budget: int, length_band: tuple[float, float], book_title: str = '',
     projection: NameProjection, structure: NameStructure | None = None,
+    fact_locks: tuple[BriefFactLock, ...] = (),
 ) -> WriterBookIR:
     """全书静态写作 IR 的唯一产地。纯函数：不落盘、不调 LLM、不修改输入。
 
     `projection`／`structure`（Characters 的名称投影与名称结构）只用于在
     compile 时算好章级验证材料（D2）；材料写进 ChapterIR 后，Stage5 不再
-    接触 Characters 或 Design。
+    接触 Characters 或 Design。R10b 起 `fact_locks`（Brief 的事实锁）用于
+    派生原文未回答禁区（`unanswered_guards`，从承载位置起进章包）；
+    背景投影经 `consumption_closure` 收窄（书级初态立足点＋后文仍被消费
+    的当前状态，C7）。
     """
     budgets = allocate_chapter_budgets(graph, total_budget)
+    guards = unanswered_guards(graph, binding, fact_locks)
+    consumers = consumption_closure(graph)
     chapters: list[ChapterIR] = []
     nav: list[ChapterNavEntry] = []
     scenes_before = 0
@@ -193,7 +202,8 @@ def compile_writer_book_ir(
                 scene_id=scene_id, graph=graph, plan=plan, binding=binding,
                 folded_prefix=fold_accepted_prefix(
                     plan.scenes[:scenes_before], initial=plan.initial_establishments),
-                thread_ops=thread_ops, open_threads=open_threads)
+                thread_ops=thread_ops, open_threads=open_threads,
+                consumers=consumers, unanswered_guards=guards)
             contexts.append(context)
             lines.append(_scene_line(graph, scene_id))
             scenes_before += 1

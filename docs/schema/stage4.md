@@ -76,6 +76,7 @@ M2/M3 共用 `check_entry_timing`），码集合与判据注册表的 `guard_m{n
 | `binding_series_collapse` | hard | R10a a5：同一 series 成员绑定不同拍（同拍即 series_collapsed）；Bind 投影带出 series 与锁摘要；必保缺口默认归 design |
 | `epistemic_lock_order_guard` | hard | R10a a5：kp 知情升级/读者确认不得早于授权该模式的义务承载位置（授权位＝必保义务全部承载点最早者；initial_state 与自由键不查；故事发生顺序不查，P5）；违例按 epistemic_lock_order 回派 body_design |
 | `answer_reuse_four_conditions` | hard | R10a §二.4：已购回答复用四条件——模型输入未变→复用；验收条件变化→免费机械复验；实际写作材料变化→按请求身份判断新回答；仅审计/展示变化→不触发付费重写 |
+| `writer_packet_background_narrowing` | hard | R10b §R10b.3：背景投影规则——写手面背景只投书级初态立足点＋建立之后仍被消费的当前状态（消费者＝声明读取/读者确认目标/Hook 地址/锁键）；unset/unknown 不作背景；补齐面（依赖边生成）保持全量 |
 
-当前注册表共 **28 条**：**26 hard、1 metric、1 unver**（R10a 收口新增 6 hard）。唯一注册表为
+当前注册表共 **29 条**：**27 hard、1 metric、1 unver**（R10a 收口新增 6 hard；R10b 新增 1 hard：背景投影规则）。唯一注册表为
 `contracts/judges/str06.py`（F8c 起分流至本层判据模块）。

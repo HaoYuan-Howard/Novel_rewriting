@@ -294,7 +294,7 @@ ChapterWriterPacket
 按 `delivery_mode` 分节、全部自然语言条目、不带内部 ID 与字段名（`sc01#b02` 式
 引用、`th{nn}`、工程字段名出现在任何分区即构造期拒），六个分区全部必填、空分区
 合法（I-14/I-42）；从不落盘（派生视图，I-16），其渲染字节进章回执的写手视图摘要。
-由确定性 renderer v6（`novel/stages/common.py::build_writer_packet`）从 Machine IR
+由确定性 renderer v7（`novel/stages/common.py::build_writer_packet`）从 Machine IR
 加送达登记生成；`render_chapter_packet` 渲染六分区——必须写出／不可违背／承接／
 导演说明／背景／禁区——不再把 VerificationIR 以 JSON 倾倒进 prompt。Hook 渲染
 （`novel/stages/stage4/hook_context.py` 与 Hook 写手协议）同规则分层：材料是
@@ -307,9 +307,13 @@ ChapterWriterPacket
 其余→`continuity`；按参与者相关性过滤，不相关不投影
 （`novel/stages/stage4/guard.py::expected_thread_faces` 是 M8 对账的机械执行面）。
 
+**背景投影收窄（R10b）**：写手面背景只投书级初态立足点＋建立之后仍被
+消费的当前状态（消费者＝声明读取/读者确认目标/Hook 地址/锁键；R-6.16）；
+unset/unknown 与无消费者拍状态不投影（留在 Machine IR 与拍级「必须写出」）；
+依赖边生成仍消费全量参与者基线（`participant_background`）。
 **编译器补齐的背景**：`project_context` 按参与者机械补入入场状态（人物域、参与者
 之间的关系域、持有者为参与者的知情域）进 background 分区；声明读取解析过的地址
-不重复补。写手协议 v6 明写「背景事实是约束，不是写作任务；除非场景自然需要，
+不重复补。写手协议 v7 明写「背景事实是约束，不是写作任务；除非场景自然需要，
 不复述」。拍级读取解析值挂到对应拍（`BeatIR.reads`，AUD-03）以 `must_respect`
 呈现「本场依赖的事实」；Guard M7 钉住每条声明读取已解析并进入 IR。
 
@@ -625,7 +629,7 @@ Writer 禁 Body prose、源 Hook 和源小说。Stage7 只消费正式契约与�
 
 旧形态（完整 WriterBookIR＋全部有效前文进请求，章级 prompt 53.9k–60.9k 线性增长）
 已由 D2 章包三件套取代（2026-09-27，rc8）。现役：每章运行时从完整 `WriterBookIR`
-确定性投影章包（`project_chapter_packet`），renderer v6＝`build_writer_packet` 六分区
+确定性投影章包（`project_chapter_packet`），renderer v7＝`build_writer_packet` 六分区
 阅读面（必须写出／不可违背／承接／导演说明／背景／禁区，R2 落地；见「两层 IR 与
 送达方式」节），请求只含当前章包；回执按 rc6 身份拆分绑定写手视图摘要与验证输入
 摘要（Machine 摘要仅审计）。

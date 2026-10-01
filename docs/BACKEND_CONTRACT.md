@@ -280,6 +280,7 @@ M1–M8 在本节点聚合执行（判据码 → 检查函数的登记表
 | R-6.13 | **章闭包：按拍读取与 T₀ 语义（B3 后半）**——状态读取定位到入场或具体拍（`StateRead.at`，wire 给 1-based 拍序由 compiler 解析），按「先读旧值、后写新值」解析：入场读取解析本场写入前的旧值（本场会写该地址不再是删除入场读取的理由），拍读取在该拍之前的建立上解析（先写后读）；T₀ 保留 unknown（显式值未知）、unset（显式解除）、set（含合法空值）与未建立的区别，不以 op 过滤初始项。compiler 按阅读序折叠逐场证明**已声明依赖的引用闭合**——读取在定位点未建立、作用域已失效或解析到 unknown 即 fail fast（`str06.stage4.compile` 免费重验）；语义依赖是否遗漏归质量验收，机械检查不冒充证明。「值未知」（unknown）与「人物不知道」（知情缺席或 believes）在 Design 词汇分开。 | `HARD`（`novel/stages/common.py::scene_read_views`＋`novel/stages/stage4/compile.py::init_establishments`＋`contracts/schema/state.py::StateRead`；反例 `tests/test_str06_chapter_closure.py`） |
 | R-6.14 | **M7 声明读取已解析进 IR（R2，AUD-03）**：Scene 的每条 `StateRead` 都必须到达 IR——入场读取（`at is None`）的解析值进 `entry_state`／`entry_knowledge`，拍级读取（`at`＝场内拍）的解析值挂到对应拍的 `BeatIR.reads`（先写后读）。解析本身（未建立／unknown／定位闭合）由章闭包在 compile 期 fail fast（R-6.13）；M7 钉的是「解析结果确实到达了写手输入」——值漏包即红。 | `HARD`（`novel/stages/stage4/guard.py::check_read_projection`；反例 `tests/test_str06_r2_contracts.py`、`tests/hard_cases.py`） |
 | R-6.15 | **M8 线程生命周期与投影（R2.4）**：线程 open 一次、操作不早于 open、close 后无操作、结局落在 kind 闭集内（canonical schema 构造期与 Guard 对读回的图复核同一判据，两处同源）；本场线程操作（`thread_ops`，must_realize 数据面）与入场时开放且与参与者相关的线程（`open_threads`，continuity／guard_only 数据面）必须按 Design 投影进 IR——身份漏包或过度提醒都红。 | `HARD`（`novel/stages/stage4/guard.py::check_thread_lifecycle`＋`check_thread_projection`；反例 `tests/test_str06_r2_contracts.py`、`tests/hard_cases.py`） |
+| R-6.16 | **背景投影规则（R10b，C7/C10）**：写手面背景（WriterPacket 的 background 分区）只投**书级初态立足点＋建立之后仍被消费的当前状态**——消费者闭集＝后文声明读取、读者确认目标（reader set 的 confirms 地址）、Hook 起笔/隐藏/禁揭地址（书末消费）、锁键（拍上写 kp_*/kf_* 键的知情/时态承载）；unset/unknown 不作背景（局部条件停止向后投影≠宣布故事中已解除——它们留在 Machine IR 与拍级「必须写出」）；建立拍自身不构成后文消费（消费者位置必须晚于建立场）。只写不读的事实状态无消费者，留在其拍「必须写出」与 Machine IR，不再向后投影（背景历史回声的机械面）。**补齐面不受收窄影响**：`participant_background` 的全量参与者基线仍是依赖边生成（read_closure）的输入——收窄只作用于写手面投影，两个消费者、两种身份。渲染侧背景章内同一**条目**（不带场标的条目内容）只列一次。 | `HARD`（`novel/stages/common.py::narrow_background`（投影）＋`background_narrowing_violations`（判据对账面，与 `consumption_closure` 同源）＋`novel/stages/stage4/book_ir.py::compile_writer_book_ir`；红例 `tests/hard_cases.py`、绿对照 `tests/test_str06_r10b_writer_packet.py`） |
 
 ### R-7 · 按章正文（stage5 · str06.stage5.body；B4 章包写手）
 
@@ -668,7 +669,7 @@ reasoning 已含在 completion 中时不再累加。
 | 非正文剔除（`stage0`，**13 条现役**） | R-0 |
 | 分章（`stage1`，**9 条现役**） | R-1 |
 | 源语义与名称结构（`stage2`，**20 条现役**） | R-2、R-3 |
-| 目标故事与确定性编译（`stage4`，**28 条现役**） | R-5、R-6（含 Guard M1–M8） |
+| 目标故事与确定性编译（`stage4`，**29 条现役**） | R-5、R-6（含 Guard M1–M8） |
 | 按章正文与 Hook（`stage5`，**8 条现役**） | R-7、R-8 |
 | 命名与交付（`stage7`，**8 条现役**） | R-10 |
 

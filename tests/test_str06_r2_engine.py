@@ -564,26 +564,43 @@ def _kaddr(entry) -> tuple:
 
 
 def test_project_context_supplements_participant_background():
-    """按参与者机械补齐入场状态：人物域、参与者之间的关系域、持有者为参与者
-    的知情域进 background 视图；已声明读取的地址不重复进背景（must_respect
-    已送达）；世界域不是补齐面。"""
+    """按参与者机械补齐入场状态，R10b 起写手面再收窄（C7/C10）：
+
+    · 补齐面（`participant_background` 全量，依赖边生成同消费）不受收窄
+      影响——这里同时断言全量面与投影后的写手面；
+    · 写手面只留书级初态立足点；只写一次无消费者的拍状态（vow／
+      whereabouts／jade_secret）不向后投影；
+    · 已声明读取的地址不重复进背景（must_respect 已送达）；
+    · 世界域不是补齐面。"""
+    from novel.stages.common import participant_background
+    from novel.stages.stage4.fold import fold_accepted_prefix
     _body, _binding, _plan, ir = _rich_ir()
     sc02 = ir.chapter(2).scenes[0]
     vir = sc02.verification_ir
     # 声明读取（关系 marital_status 入场）解析进 entry 视图
     assert [e.key for e in vir.entry_state] == ['marital_status']
     assert vir.entry_state[0].value == '结为夫妻'
-    # 背景补齐：人物域（appearance）＋知情域（vow，持有者参与）；
-    # 关系域已被声明读取送达，不重复进背景
+    # 补齐面（无收窄）：人物域（appearance）＋知情域（vow，持有者参与）；
+    # 关系域已被声明读取送达，不重复进背景。
+    scene_ids = [s.scene_id for s in _body.scenes]
+    folded = fold_accepted_prefix(
+        _plan.scenes[:scene_ids.index('sc02')],
+        initial=_plan.initial_establishments)
+    full_state, full_knowledge = participant_background(
+        scene=next(s for s in _body.scenes if s.scene_id == 'sc02'),
+        folded_prefix=folded)
+    assert [e.key for e in full_state] == ['appearance']
+    assert [e.key for e in full_knowledge] == ['vow']
+    # 写手面收窄：appearance（init 立足点）保留；vow（sc01 拍建立、后文
+    # 无消费者）不向后投影（C7）。
     assert [e.key for e in vir.background_state] == ['appearance']
-    assert [e.key for e in vir.background_knowledge] == ['vow']
-    # sc03（无声明读取）：人物＋关系＋知情三域全部补齐（含跨场携入的
-    # whereabouts 与 jade_secret——起笔已成立且持有者/主体参与）
+    assert [e.key for e in vir.background_knowledge] == []
+    # sc03（无声明读取）：whereabouts／jade_secret／vow 同为无消费者拍
+    # 状态，均不进背景；只剩 init 立足点。
     sc03 = ir.chapter(2).scenes[1]
     assert [e.key for e in sc03.verification_ir.background_state] == [
-        'whereabouts', 'appearance', 'marital_status']
-    assert [e.key for e in sc03.verification_ir.background_knowledge] == [
-        'jade_secret', 'vow']
+        'appearance']
+    assert sc03.verification_ir.background_knowledge == ()
 
 
 def test_background_excludes_declared_read_addresses_and_world():
@@ -664,9 +681,9 @@ def test_render_has_six_partitions_and_protocol_v5():
     text = _render(ir, 2)
     for name in SECTIONS:
         assert f'【{name}】' in text
-    # 协议 v5 围绕六分区；版本常量已由契约批登记
-    assert WRITER_PROTOCOL_VERSION == 'str06-body-protocol-v6'
-    assert RENDERER_VERSION == 'str06-render-v6'
+    # 协议 v7 按三类身份组织（六分区仍在）；版本常量由契约批登记
+    assert WRITER_PROTOCOL_VERSION == 'str06-body-protocol-v7'
+    assert RENDERER_VERSION == 'str06-render-v7'
     for name in SECTIONS:
         assert name in WRITER_PROTOCOL
     # 同章包 ⇒ 同字节
@@ -875,9 +892,13 @@ def test_packet_metrics_reports_per_chapter_readouts():
     for ordinal in (2, 3):
         ratio = chapters[ordinal]['continuity_background_repeat_ratio']
         assert ratio is None or 0.0 <= ratio <= 1.0
-    # 基线事实数：sc02（appearance＋vow）＋sc03（whereabouts＋appearance＋
-    # marital_status＋jade_secret＋vow）
-    assert chapters[2]['baseline_facts'] == 7
+    # 基线事实数（R10b 收窄后）：sc02/sc03 各剩 init 立足点 appearance
+    #（vow／whereabouts／jade_secret 为无消费者拍状态，不再投影，C7）；
+    # 第 2 章跨场重复剔除 1 条（echoes_dropped）。
+    assert chapters[2]['baseline_facts'] == 2
+    assert chapters[2]['echoes_dropped'] == 1
+    assert chapters[2]['carried_locks'] == 0
+    assert chapters[2]['duplicate_line_ratio'] == 0.0
 
 
 def test_packet_metrics_file_is_registered_and_written(tmp_path, monkeypatch):

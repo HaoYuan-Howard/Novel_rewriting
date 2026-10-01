@@ -186,6 +186,16 @@ def count_input_tokens(req: ChatRequest) -> int:
     return len(_tokenizer().encode(_render_prompt(req), add_special_tokens=False).ids)
 
 
+def count_text_tokens(text: str) -> int:
+    """裸文本的离线 token 计数（同一 tokenizer、无消息 framing）。
+
+    消费方是**离线读数**（如 `packet_metrics` 的章包 token）——不含请求身份
+    的 framing 字节，只编码文本本身；与 `count_input_tokens` 的口径差异
+    （framing）由消费方在读数里注明。不触发模型预算校验（没有模型参与）。
+    """
+    return len(_tokenizer().encode(text, add_special_tokens=False).ids)
+
+
 def validate_budget(estimate: BudgetEstimate, *, node: str, purpose: str) -> BudgetEstimate:
     """验证已经计算出的预算；独立函数让等界语义不依赖巨型测试字符串。"""
     if estimate.max_tokens > estimate.max_output_tokens:

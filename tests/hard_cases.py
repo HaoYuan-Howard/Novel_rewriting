@@ -936,6 +936,26 @@ def _epistemic_lock_early_upgrade() -> list:
     return check_epistemic_lock_order(body, binding)
 
 
+def _writer_packet_background_narrowed() -> list:
+    """R-6.16：手工 IR 的背景含无消费者拍状态与 unset → 判据报出（C7/C10）；
+    init 立足点与仍被消费的状态保留（绿对照在 r10b 套件）。"""
+    from contracts.schema.state import EffectDomain
+    from contracts.schema.context import StateEntry
+    from novel.stages.common import background_narrowing_violations
+
+    def _entry(key: str, status: str = 'set', anchor: str = 'sc01#b03') -> StateEntry:
+        return StateEntry(domain=EffectDomain.CHARACTER, key=key,
+                          subjects=('yun_niang',), value='值', status=status,
+                          established_by=anchor)
+
+    return background_narrowing_violations(
+        (_entry('night_sewing'), _entry('chill', status='unset'),
+         _entry('whereabouts'), _entry('residence', anchor='init')),
+        (), scene_id='sc03', scene_index=2,
+        consumers={('character', ('yun_niang',), '', 'whereabouts'): (3,)},
+        scene_of={'sc01': 0, 'sc02': 1, 'sc03': 2})
+
+
 def _answer_reuse_identity_follows_material() -> list:
     """R-5.20 的机械面：请求身份随实际消费材料变化——材料不同身份必不同
     （否则同身份缓存会命中重放上一轮带冲突处理的旧回答）；纯审计字段
@@ -965,4 +985,6 @@ CASES.update({
         'stage4', _epistemic_lock_early_upgrade, 'epistemic_lock_order'),
     'answer_reuse_four_conditions': Case(
         'stage4', _answer_reuse_identity_follows_material, '身份不同'),
+    'writer_packet_background_narrowing': Case(
+        'stage4', _writer_packet_background_narrowed, '违反收窄规则'),
 })

@@ -52,9 +52,9 @@ from contracts.schema.state import StateAddress, SurfaceRelease
 from contracts.schema.grounding import SourceObligation
 from typing import Literal, Mapping, Sequence
 
-__all__ = ['BeatIR', 'KnowledgeEntry', 'OpenThreadIR', 'StateEntry',
-           'SurfaceRelease', 'ThreadOpIR', 'VerificationIR', 'WriterBrief',
-           'WriterContext', 'WriterPacket']
+__all__ = ['BeatIR', 'KnowledgeEntry', 'ObligationCarrier', 'OpenThreadIR',
+           'StateEntry', 'SurfaceRelease', 'ThreadOpIR', 'UnansweredGuard',
+           'VerificationIR', 'WriterBrief', 'WriterContext', 'WriterPacket']
 
 
 class StateEntry(StateAddress):
@@ -162,6 +162,36 @@ class OpenThreadIR(StrictModel):
     opened_at: str = Field(min_length=1, description='开启位置（场景#拍）')
 
 
+class ObligationCarrier(StrictModel):
+    """义务在本场的承载位置（R10b：义务带承载拍与支撑拍）。
+
+    compiler 从 `SemanticBinding.entries` 拷贝（I-15）：`accept_beat` 是最终
+    验收拍的**场内拍序**（1-based）；`supporting_beats` 是同场支撑拍的拍序
+    （先于验收拍；跨场支撑由 continuity_fact_view 承载，不在此重复）。用
+    拍序而非 beat_id 是有意的：它是**位置数据**——拍 id 是 audit 身份，渲染
+    的组织不依赖身份字符串（变异 beat_id 不改变阅读面）。renderer v7 把
+    义务的满足条件组织到验收拍下——义务不再作为场级孤立清单（材料打架面
+    之一）。`obligation_id` 仅审计；义务内容经 `VerificationIR.obligations`
+    同序对齐（project_context 按 obligation_id 排序生成两者）。
+    """
+
+    obligation_id: str = Field(min_length=1, description='审计位；不进阅读面')
+    accept_beat: int = Field(ge=1)
+    supporting_beats: tuple[int, ...] = Field(default=(), min_length=0)
+
+
+class UnansweredGuard(StrictModel):
+    """原文未回答的悬念（R10b：从承载位置起进章包禁区，C9）。
+
+    `question` 是源悬念的问题文本（BriefFactLock.statement 的投影）；
+    `carrier_ref` 是承载该悬念的义务位置（`场景#拍`，审计位）。投影只进
+    承载位置**所在场及之后**的 IR——之前的场景与此锁无关，不送。
+    """
+
+    question: str = Field(min_length=1)
+    carrier_ref: str = Field(min_length=1, description='承载位置（审计位）')
+
+
 class VerificationIR(StrictModel):
     """事实约束视图：写前机械 Guard 的验证输入与写手的硬边界清单。"""
 
@@ -191,6 +221,10 @@ class VerificationIR(StrictModel):
     background_state: tuple[StateEntry, ...] = Field(default=(), min_length=0)
     #: 同上（知情域）：持有者为参与者、未声明读取的入场已知命题。
     background_knowledge: tuple[KnowledgeEntry, ...] = Field(default=(), min_length=0)
+    #: 义务在本场的承载位置（R10b）：验收拍＋同场支撑拍；renderer 按拍组织。
+    carried_obligations: tuple[ObligationCarrier, ...] = Field(default=(), min_length=0)
+    #: 原文未回答的悬念（R10b，C9）：从承载位置起进章包禁区，目标不得作答。
+    unanswered_guards: tuple[UnansweredGuard, ...] = Field(default=(), min_length=0)
 
     @model_validator(mode='after')
     def _beats_belong_to_scene(self) -> 'VerificationIR':
@@ -274,6 +308,7 @@ class WriterPacket(StrictModel):
         """无内部 ID 与字段名（R0 检查 4 的 schema 面）。
 
         条目是给写手读的自然语言：`sc01#b02` 式复合引用、`th{nn}` 线程 id、
+        `kp_*`／`kf_*` 锁句柄（R10b：锁以内容送达，句柄绝不进阅读面）、
         `established_by`／`execution_slice_sha256` 等工程字段名出现在任何
         分区里都说明 renderer 把 Machine 材料漏给了写手——构造期即拒。
         """
@@ -281,6 +316,7 @@ class WriterPacket(StrictModel):
         forbidden = (
             re.compile(r'sc\d{2,}#b\d{2,}'),
             re.compile(r'th\d{2,}'),
+            re.compile(r'k[pf]_[0-9a-f]{16}'),
             re.compile(r'established_by'),
             re.compile(r'execution_slice_sha256'),
         )

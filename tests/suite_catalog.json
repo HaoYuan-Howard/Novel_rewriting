@@ -1101,6 +1101,13 @@
         "stage2",
         "stage4"
       ]
+    },
+    "tests/test_str06_r10b_writer_packet.py": {
+      "layer": "unit_contract",
+      "stages": [
+        "stage4",
+        "stage5"
+      ]
     }
   },
   "version": 1

@@ -172,6 +172,11 @@ _WRITER_CASE_WAIVERS: dict[str, str] = {
         '绿基座 entry_knowledge 为空：注入式 audit 对照由独立测试'
         ' test_audit_only_entry_knowledge_subjects_leave_face_unchanged 钉住'
         '（两条仅 subjects 不同的注入 → 渲染逐字节相同）',
+    'writer_book_ir.chapters[].scenes[].verification_ir'
+    '.background_knowledge[].subjects':
+        'R10b 收窄后绿基座背景为空（无消费者拍状态不投影）：注入式 audit'
+        ' 对照由独立测试 test_audit_only_background_knowledge_subjects_leave_'
+        'face_unchanged 钉住（两条仅 subjects 不同的注入 → 渲染逐字节相同）',
 }
 
 
@@ -210,6 +215,18 @@ def test_audit_only_entry_knowledge_subjects_leave_face_unchanged(green_ir):
     def inject(subjects):
         entry = _INJECTED_KNOWLEDGE.model_copy(update={'subjects': subjects})
         return _patch_scene_ir(green_ir, 2, 'sc02', entry_knowledge=(entry,))
+    renders_a = _renders(inject(('fu_jun',)))
+    renders_b = _renders(inject(('yun_niang', 'fu_jun')))
+    assert renders_a == renders_b
+
+
+def test_audit_only_background_knowledge_subjects_leave_face_unchanged(green_ir):
+    """background_knowledge[].subjects（audit_only）的注入式对照：R10b 收窄
+    后绿基座背景为空；两条仅 subjects 不同的注入，渲染必须逐字节相同——
+    subjects 差异不进阅读面。"""
+    def inject(subjects):
+        entry = _INJECTED_KNOWLEDGE.model_copy(update={'subjects': subjects})
+        return _patch_scene_ir(green_ir, 2, 'sc02', background_knowledge=(entry,))
     renders_a = _renders(inject(('fu_jun',)))
     renders_b = _renders(inject(('yun_niang', 'fu_jun')))
     assert renders_a == renders_b
@@ -403,6 +420,18 @@ def _body_mutations() -> list[_BodyMutation]:
 
     def beats(ir):
         return _patch_beat(ir, 1, 'sc01', 'sc01#b01', event='变异事件九九')
+
+    def beat_expression_refs(ir):
+        return _patch_beat(ir, 1, 'sc01', 'sc01#b01',
+                           expression_refs=('ex_01',))
+
+    def delta_modality(ir):
+        return _patch_first_delta(ir, 1, 'sc01', 'sc01#b01', modality='planned')
+
+    def unanswered_guard(ir):
+        from contracts.schema.context import UnansweredGuard
+        return _patch_scene_ir(ir, 1, 'sc01', unanswered_guards=(UnansweredGuard(
+            question='变异未答悬念九九', carrier_ref='sc01#b02'),))
 
     def beat_ref(ir):
         return _patch_beat(ir, 1, 'sc01', 'sc01#b01', beat_ref='sc01#b09')
@@ -615,10 +644,10 @@ def _body_mutations() -> list[_BodyMutation]:
         return _patch_scene_brief(ir, 1, 'sc01', voice='变异口吻九九')
 
     def bgk(ir, **updates):
-        scene = _scene(ir, 2, 'sc02')
-        entries = list(scene.verification_ir.background_knowledge)
-        entries[0] = entries[0].model_copy(update=updates)
-        return _patch_scene_ir(ir, 2, 'sc02', background_knowledge=tuple(entries))
+        # R10b 收窄后绿基座 background_knowledge 为空（无消费者的拍状态
+        # 不再投影）；变异面以注入条目为基准。
+        entry = _INJECTED_KNOWLEDGE.model_copy(update=updates)
+        return _patch_scene_ir(ir, 2, 'sc02', background_knowledge=(entry,))
 
     def bgk_holder(ir):
         return bgk(ir, holder='fu_jun')
@@ -628,9 +657,6 @@ def _body_mutations() -> list[_BodyMutation]:
 
     def bgk_proposition(ir):
         return bgk(ir, proposition='debt_agreement=变异命题九九')
-
-    def bgk_subjects(ir):
-        return bgk(ir, subjects=('yun_niang',))
 
     def bgs(ir, **updates):
         scene = _scene(ir, 2, 'sc02')
@@ -818,7 +844,13 @@ def _body_mutations() -> list[_BodyMutation]:
                       '.background_knowledge[].proposition', 2, '变异命题九九',
                       bgk_proposition),
         _BodyMutation('writer_book_ir.chapters[].scenes[].verification_ir'
-                      '.background_knowledge[].subjects', 2, None, bgk_subjects),
+                      '.beats[].expression_refs', 1, None, beat_expression_refs),
+        _BodyMutation('writer_book_ir.chapters[].scenes[].verification_ir'
+                      '.beats[].deltas[].modality', 1, '计划，尚未发生',
+                      delta_modality),
+        _BodyMutation('writer_book_ir.chapters[].scenes[].verification_ir'
+                      '.unanswered_guards[].question', 1, '变异未答悬念九九',
+                      unanswered_guard),
         _BodyMutation('writer_book_ir.chapters[].scenes[].verification_ir'
                       '.background_state[].domain', 2, None, bgs_domain),
         _BodyMutation('writer_book_ir.chapters[].scenes[].verification_ir'

@@ -33,21 +33,22 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from typing import Any, Iterable, Mapping, NamedTuple, Protocol
+from typing import Any, Callable, Iterable, Mapping, NamedTuple, Protocol
 
 from pydantic import BaseModel
 
 from contracts.schema.book_ir import ChapterIR, ChapterWriterPacket, PacketBrief, RealizationContract, WriterBookIR
 from contracts.schema.context import (
-    KnowledgeEntry, OpenThreadIR, PendingConfirmation, StateEntry, SurfaceRelease,
-    ThreadOpIR, VerificationIR, WriterBrief, WriterContext, WriterPacket, beats_ir,
+    KnowledgeEntry, ObligationCarrier, OpenThreadIR, PendingConfirmation,
+    StateEntry, SurfaceRelease, ThreadOpIR, UnansweredGuard, VerificationIR,
+    WriterBrief, WriterContext, WriterPacket, beats_ir,
 )
 from contracts.schema.hook import HookContext
 from contracts.schema.design import BodyDesign
 from contracts.schema.execution import (
     EffectDomain, Establishment, ExecutionPlan, ExecutionSlice,
 )
-from contracts.schema.grounding import SemanticBinding
+from contracts.schema.grounding import BriefFactLock, SemanticBinding
 from contracts.schema.workflow import STR06_RC_VERSION
 from contracts.schema.source import CharactersCore, NameProjection, NameStructure, render_form
 from novel.core.name_materials import expand_surface_releases, family_form_literals, withheld_name_literals
@@ -118,12 +119,22 @@ def apply_replacements(text: str, replacements: dict[str, str]) -> tuple[str, tu
 
 
 def material_identities(graph: BodyDesign, binding: SemanticBinding, chars: CharactersCore) -> set[str]:
-    """实际写作材料不得泄漏的领域引用闭集；生产、预检与审阅共用。"""
+    """实际写作材料不得泄漏的领域引用闭集；生产、预检与审阅共用。
+
+    R10b 起锁键（`kp_*`／`kf_*`，Design 状态 delta 的 key）同入闭集：锁的
+    内容（命题文本、时态措辞）可以送达，盲句柄本身是 Brief↔Design 的内部
+    引用，进阅读面即泄漏（P4：对白「我」不在此列——它不是 delta key）。
+    """
+    lock_keys = {d.key for s in graph.scenes for b in s.beats for d in b.target_delta
+                 if d.key.startswith(('kp_', 'kf_'))}
+    lock_keys |= {d.key for d in graph.initial_state
+                  if d.key.startswith(('kp_', 'kf_'))}
     return (set(chars.characters) | {s.scene_id for s in graph.scenes}
             | {b.beat_id for s in graph.scenes for b in s.beats}
             | {t.ref for s in graph.scenes for b in s.beats for t in b.threads}
             | {o.obligation_id for o in binding.obligations}
-            | {d.ex_id for d in graph.expression_decisions})
+            | {d.ex_id for d in graph.expression_decisions}
+            | lock_keys)
 
 
 def validate_positive_materials(
@@ -914,10 +925,12 @@ BODY_WRITER_SYSTEM = """你是小说正文写手（prose realizer）。整本书
 
 规则（违反任何一条即报废）：
 1. 你是 prose realizer，不是故事设计师：事实、事件、知情、义务与释放位置以输入为准，不新增、删除、替换；输入没写的背景、人物前史与后续伏笔一律不补造。
-2. 输入按六个分区组织：「必须写出」要实际完成；「不可违背」是硬边界；「承接」自然延续、不复述；「导演说明」是呈现方向；「背景」需要时才用、是约束不是任务；「禁区」绝不触碰。事实约束与导演说明冲突时以事实约束为准。
-3. 只使用已释放的称谓面与已获准知道的信息；未释放的专名字面与提前知情一律不得出现。
-4. 逐拍结果是本章结束后需要成立的结果，要实际写出来，不是提一嘴关键词。
-5. 遵守交付要求：一次给出本章完整正文，篇幅在给定区间内。
+2. 输入的用法分三类：「必须写出」在正文里实际完成（条目可拆开融入叙述，不逐条宣布、不要求逐条对应句子或段落）；「不可违背」「承接」「背景」遵守即可、不必复述成说明；「导演说明」之内是你的呈现自由。事实约束与导演说明冲突时以事实约束为准。
+3. 场景是控制单元：每场完成自己的拍序与结果即可，不要求每场独立铺背景、独立收束或总结。
+4. 只使用已释放的称谓面与已获准知道的信息；未释放的专名字面与提前知情一律不得出现。
+5. 知情与时态按输入措辞：怀疑不写成确知、听说不写成相信、计划与预计不写成已发生、原文未交代的（含禁区所列未回答的悬念）不补答案；反差与幽默通过话语、动作与内心反应的落差呈现，不写成解释性总结句。
+6. 逐拍结果是本章结束后需要成立的结果，要实际写出来，不是提一嘴关键词。
+7. 遵守交付要求：一次给出本章完整正文，篇幅在给定区间内。
 
 呈现自由（你的创意只在这里发挥）：在导演说明边界内组织场景节奏、展开与压缩，写具体的对白、动作、停顿与即时反应。
 
@@ -1151,6 +1164,10 @@ def participant_background(
     读者域不是补齐面（无参与者口径）。已声明读取的地址不重复补（那些以
     must_respect 进 entry 视图——同值双区正是「处处交代」的来源）。纯函数；
     与依赖边生成（compile）共用本实现（I-16）。
+
+    R10b 起写手面的背景在此基线上再经 `narrow_background` 收窄（本函数保持
+    全量：依赖边生成（read_closure）消费的是「谁可能依赖谁」的机械判定面，
+    收窄它会让依赖信息静默丢失——两个消费者、两种身份，分开投影）。
     """
     participants = scene_participants(scene)
     declared = {r.address() for r in scene.state_reads}
@@ -1175,6 +1192,186 @@ def participant_background(
     return ordered(state), ordered(knowledge)
 
 
+#: 书级初始态的建立锚（`fold.INIT_ANCHOR` 同值；D16 原语在 common，两侧共用）。
+INIT_ANCHOR = 'init'
+
+
+def knowledge_probe(entry: KnowledgeEntry) -> tuple:
+    """知情条目的规范地址（与 `StateAddress.address()` 同形）。"""
+    return 'knowledge', entry.subjects, entry.holder, entry.key
+
+
+def consumption_closure(graph: BodyDesign) -> dict[tuple, tuple[int, ...]]:
+    """全书消费闭包（R10b.3）：地址 → 消费者场序集合（升序）。
+
+    消费者闭集四类（背景投影的「后文仍被消费」判定面）：
+
+    · 后文场景的**声明读取**（`state_reads`——写手按 must_respect 消费）；
+    · **读者确认目标**（reader set 的 `confirms` 地址——确认前该事实仍受
+      「何时确认」约束，章包需要它的入场值）；
+    · **Hook 起笔/隐藏/禁揭地址**（书末消费，位置记全书场数）；
+    · **锁键**（拍上写 `kp_*`／`kf_*` 键＝该地址的知情/时态承载——升级与
+      兑现都消费旧值边界）。
+
+    位置是**集合**不是最早值：`narrow_background` 要按「建立之后的位置」
+    判定后文消费——同一地址先建立（sc01 起疑）后升级（sc02 确认）时，
+    建立场序不是「后文」。纯函数、只报告位置：只写不被读的事实状态无
+    消费者，留在其拍「必须写出」与 Machine IR，不再向后投影（C7）。
+    """
+    positions: dict[tuple, list[int]] = {}
+    total_scenes = len(graph.scenes)
+
+    def _consume(address: tuple, at: int) -> None:
+        bucket = positions.setdefault(address, [])
+        if at not in bucket:
+            bucket.append(at)
+
+    for index, scene in enumerate(graph.scenes):
+        for read in scene.state_reads:
+            _consume(read.address(), index)
+        for beat in scene.beats:
+            for delta in beat.target_delta:
+                if delta.key.startswith(('kp_', 'kf_')):
+                    _consume(delta.address(), index)
+                if (delta.domain is EffectDomain.READER and delta.op == 'set'
+                        and delta.confirms is not None):
+                    _consume(delta.confirms.address(), index)
+    hook = getattr(graph, 'hook', None)
+    if hook is not None:
+        for fact in hook.opening_facts:
+            _consume(fact.address.address(), total_scenes)
+        for material in hook.materials:
+            for address in material.withheld:
+                _consume(address.address(), total_scenes)
+        for item in hook.forbidden_reveals:
+            if item.address is not None:
+                _consume(item.address.address(), total_scenes)
+    return {address: tuple(sorted(buckets))
+            for address, buckets in positions.items()}
+
+
+def _background_kept(entry, address: tuple, *, scene_index: int,
+                     consumers: Mapping[tuple, tuple[int, ...]],
+                     scene_of: Mapping[str, int]) -> bool:
+    """背景收窄谓词（R-6.16 判据的唯一实现；narrow 与 violations 共用）。"""
+    if entry.status != 'set':
+        return False
+    if entry.established_by == INIT_ANCHOR:
+        return True
+    origin = scene_of.get(entry.established_by.split('#', 1)[0])
+    return any(position >= scene_index
+               for position in consumers.get(address, ())
+               if origin is None or position > origin)
+
+
+def narrow_background(
+    state: tuple[StateEntry, ...], knowledge: tuple[KnowledgeEntry, ...],
+    *, scene_index: int, consumers: Mapping[tuple, tuple[int, ...]],
+    scene_of: Mapping[str, int],
+) -> tuple[tuple[StateEntry, ...], tuple[KnowledgeEntry, ...]]:
+    """背景收窄（R10b.3）：书级初态立足点＋后文仍被消费的当前状态。
+
+    在 `participant_background` 的参与者基线上过滤（C7/C10 的判据面）：
+
+    · unset／unknown 不作背景（显式解除与显式未知都不是「可用的既成事实」；
+      它们留在 Machine IR 与拍级「必须写出」，局部条件停止向后投影≠宣布
+      故事中已解除）；
+    · 书级初态（`established_by == 'init'`）保留——人物立足点；
+    · 拍建立的状态仅在**建立之后仍有消费者**（声明读取、读者确认目标、
+      Hook 地址、锁键；`consumers` 给出消费者场序集合）时保留——消费者
+      位置必须晚于建立场（`scene_of` 解析 `established_by`）：建立拍自身
+      已经在「必须写出」里，不构成后文消费。
+
+    纯函数；不修改输入（I-24）。
+    """
+    kept_state = tuple(
+        entry for entry in state
+        if _background_kept(entry, entry.address(), scene_index=scene_index,
+                            consumers=consumers, scene_of=scene_of))
+    kept_knowledge = tuple(
+        entry for entry in knowledge
+        if _background_kept(entry, knowledge_probe(entry),
+                            scene_index=scene_index, consumers=consumers,
+                            scene_of=scene_of))
+    return kept_state, kept_knowledge
+
+
+def background_narrowing_violations(
+    background_state: tuple[StateEntry, ...],
+    background_knowledge: tuple[KnowledgeEntry, ...],
+    *, scene_id: str, scene_index: int,
+    consumers: Mapping[tuple, tuple[int, ...]],
+    scene_of: Mapping[str, int],
+) -> list[str]:
+    """R-6.16 的报告面（validator：只验证并报告，不修改输入，I-24）。
+
+    IR 背景条目必须满足收窄规则：unset/unknown 不作背景、无消费者的拍
+    状态不向后投影、init 立足点与仍被消费的状态保留。生产路径由
+    `narrow_background` 在投影期生成（天然满足）；本函数是判据对账面
+    （`tests/hard_cases.py` 的红例入口）——手工 IR 违反即报出。
+    """
+    problems: list[str] = []
+    for entry in background_state:
+        if not _background_kept(entry, entry.address(), scene_index=scene_index,
+                                consumers=consumers, scene_of=scene_of):
+            problems.append(
+                f'{scene_id}：背景状态 {entry.key!r} 违反收窄规则'
+                '（unset/unknown 或无消费者的拍状态进背景，C7/C10）')
+    for entry in background_knowledge:
+        if not _background_kept(entry, knowledge_probe(entry),
+                                scene_index=scene_index, consumers=consumers,
+                                scene_of=scene_of):
+            problems.append(
+                f'{scene_id}：背景知情 {entry.key!r} 违反收窄规则'
+                '（unset/unknown 或无消费者的拍状态进背景，C7/C10）')
+    return problems
+
+
+def unanswered_guards(
+    graph: BodyDesign, binding: SemanticBinding,
+    fact_locks: tuple[BriefFactLock, ...],
+) -> tuple[UnansweredGuard, ...]:
+    """原文未回答锁 → 从承载位置起的禁区数据面（R10b，C9）。
+
+    承载位置：义务 anchors 里 `source_kind='loop'` 且 `question` 与锁的
+    statement **逐字相同**的义务（同一段 canonical loop 文本的两个确定性
+    投影——机械同一性，不是语义猜测），取其全部承载位（验收拍＋支撑拍）
+    的最早者。无义务承载的悬念不进章包：链上没有承载它的义务，也就没有
+    「作答」的入口；保真约束由协议 v7 的「原文未交代不补答案」总条款托底。
+    纯函数；只报告，不修复（I-24）。
+    """
+    questions = {lock.statement for lock in fact_locks
+                 if lock.kind == 'unanswered'}
+    if not questions:
+        return ()
+    positions = {f'{s.scene_id}#{b.beat_id}': (i, j)
+                 for i, s in enumerate(graph.scenes)
+                 for j, b in enumerate(s.beats)}
+    entries = {e.obligation_id: e for e in binding.entries}
+    earliest: dict[str, tuple[tuple[int, int], str]] = {}
+    for obligation in binding.obligations:
+        carried_questions = [anchor.question for anchor in obligation.anchors
+                             if anchor.source_kind == 'loop'
+                             and anchor.question in questions]
+        if not carried_questions:
+            continue
+        entry = entries.get(obligation.obligation_id)
+        if entry is None:
+            continue
+        carried = [(positions[ref], ref)
+                   for ref in (entry.beat_ref, *entry.supporting_beat_refs)
+                   if ref in positions]
+        if not carried:
+            continue
+        pos, ref = min(carried)
+        for question in carried_questions:
+            known = earliest.get(question)
+            if known is None or pos < known[0]:
+                earliest[question] = (pos, ref)
+    return tuple(UnansweredGuard(question=question, carrier_ref=earliest[question][1])
+                 for question in sorted(earliest))
+
+
 def surface_display(releases: 'Mapping[str, tuple[str, ...]] | tuple', char_id: str) -> str:
     """char_id → 写手可读指认（R2 目标名解析）：取该场已释放称谓的**首个**
     （顺序确定）；无已释放面时不输出人物指认，不以内部句柄补位。
@@ -1189,6 +1386,8 @@ def project_context(*, scene_id: str, graph: BodyDesign,
                     folded_prefix: FoldedPrefix,
                     thread_ops: tuple['ThreadOpIR', ...] = (),
                     open_threads: tuple['OpenThreadIR', ...] = (),
+                    consumers: Mapping[tuple, tuple[int, ...]] | None = None,
+                    unanswered_guards: tuple['UnansweredGuard', ...] = (),
                     ) -> tuple[WriterContext, ExecutionSlice]:
     """场景双视图与消费身份的确定性投影（纯函数，不落盘、不调 LLM）。
 
@@ -1197,6 +1396,12 @@ def project_context(*, scene_id: str, graph: BodyDesign,
     缺省空元组＝调用方未接线，M8 对账当场红（fail-closed，不静默漏包）。
     入场基线按参与者机械补齐进 `background_state`／`background_knowledge`
     （background 呈现）；声明读取的解析值照旧进 entry 视图（must_respect）。
+
+    R10b 起新增三个投影面：义务的**承载拍**（`ObligationCarrier`，从
+    binding.entries 拷贝——renderer v7 按「场→拍」组织义务满足条件）；背景
+    收窄（`consumers` 给全书消费闭包，缺省现算 `consumption_closure`——同一
+    graph 恒同一闭包，无第二行为）；**原文未回答锁**（`unanswered_guards`
+    从承载位置起进本场 IR 的禁区数据面，C9）。
     """
     scene = next(s for s in graph.scenes if s.scene_id == scene_id)
     scene_plan = next(s for s in plan.scenes if s.scene_id == scene_id)
@@ -1206,6 +1411,25 @@ def project_context(*, scene_id: str, graph: BodyDesign,
     ids = tuple(e.obligation_id for e in entries)
     obmap = {o.obligation_id: o for o in binding.obligations}
     owned = tuple(obmap[oid] for oid in ids)
+    # 义务承载位置（R10b）：验收拍＋同场支撑拍的**场内拍序**（位置数据，
+    # 不依赖 beat_id 身份；跨场支撑走 continuity）。与 owned 同长同序
+    # （entries 按 obligation_id 排序）——渲染侧 zip 对齐；拍 id 不在
+    # 本场闭集属非法 binding（assemble 已校验），这里 fail fast 不兜底。
+    beat_order = {b.beat_id: i for i, b in enumerate(scene.beats, start=1)}
+    carried = tuple(
+        ObligationCarrier(
+            obligation_id=e.obligation_id,
+            accept_beat=beat_order[e.beat_ref.split('#', 1)[1]],
+            supporting_beats=tuple(
+                beat_order[ref.split('#', 1)[1]] for ref in e.supporting_beat_refs
+                if ref.split('#', 1)[0] == scene_id))
+        for e in entries)
+    # 原文未回答锁只投承载位置所在场及之后的 IR（之前的场景与此锁无关）。
+    scene_of = {s.scene_id: i for i, s in enumerate(graph.scenes)}
+    guards = tuple(
+        guard for guard in unanswered_guards
+        if scene_of.get(guard.carrier_ref.split('#', 1)[0], len(graph.scenes))
+        <= scene_index)
     # 状态读取按「先读旧值、后写新值」解析（B3 后半，与 compile 共用同一实现）；
     # 未建立／unknown 消费在这里同样 fail fast（幻觉护栏不变）。R2 起**两类读取
     # 的解析值都进 IR**：入场值进 entry 视图，拍级值挂到对应拍（AUD-03）。
@@ -1216,9 +1440,15 @@ def project_context(*, scene_id: str, graph: BodyDesign,
         views.entry_state, views.entry_knowledge, views.beat_reads)
     if views.errors:
         raise ValueError('；'.join(views.errors))
-    # 编译器补齐的入场基线（R2.3）：按参与者机械补入，background 呈现。
+    # 编译器补齐的入场基线（R2.3）：按参与者机械补入；R10b 起写手面经
+    # `narrow_background` 收窄（书级初态立足点＋后文仍被消费的当前状态）。
     background_state, background_knowledge = participant_background(
         scene=scene, folded_prefix=folded_prefix)
+    background_state, background_knowledge = narrow_background(
+        background_state, background_knowledge,
+        scene_index=scene_index,
+        consumers=consumers if consumers is not None else consumption_closure(graph),
+        scene_of={s.scene_id: i for i, s in enumerate(graph.scenes)})
     # 跨场义务只携带明确的已完成支撑拍；绝不把整条复合义务当作先前真值。
     positions = {f'{s.scene_id}#{b.beat_id}': (i, j, b)
                  for i, s in enumerate(graph.scenes) for j, b in enumerate(s.beats)}
@@ -1240,7 +1470,9 @@ def project_context(*, scene_id: str, graph: BodyDesign,
                         continuity_fact_view=continuity,
                         thread_ops=thread_ops, open_threads=open_threads,
                         background_state=background_state,
-                        background_knowledge=background_knowledge)
+                        background_knowledge=background_knowledge,
+                        carried_obligations=carried,
+                        unanswered_guards=guards)
     actor = surface_display(releases, scene.driver.focal_actor)
     brief = WriterBrief(
         scene_id=scene_id,
@@ -1302,21 +1534,28 @@ def project_context(*, scene_id: str, graph: BodyDesign,
 #: 不再把 VerificationIR 以 JSON 倾倒进 prompt；内部 ID／字段名／char slug
 #: 从写手视图清零（R0 守卫全绿）；承接由 entry＋上一章末场合成；线程按
 #: E-4 分支分节；拍级读取值与参与者背景以自然语言送达。
-RENDERER_VERSION = 'str06-render-v6'
+#: v7（2026-10-02 R10b）：材料组织不打架——「必须写出」按场→拍组织（事件＋
+#: 承载于此的义务满足条件＋表达任务＋拍末结果；义务不再场级孤立清单）；
+#: 时态锁措辞（计划/预计，尚未发生）与原文未回答禁区（C9）送达；称谓许可
+#: 只在变化处列、明确禁止／开放线索／背景按章去重（C7 历史回声）；背景投影
+#: 收窄（书级初态立足点＋后文仍被消费的当前状态）；kp/kf 句柄绝不进阅读面
+#: （构造期守卫）；义务 statement 与本拍事件逐字相同时按同一条目去重。
+RENDERER_VERSION = 'str06-render-v7'
 
-#: 整书写作约定与自由度（Writer 协议，固定文本）。v5 围绕六分区重写：每个分区
-#: 的**身份**（写手怎么用）先于内容——背景是约束不是写作任务、保护悬念不等于
-#: 提醒悬念，正是「事实全对、处处交代」的对症条款。分区名用「」引用（阅读面
-#: 的节标题用【】，二者不冲突）。
-WRITER_PROTOCOL_VERSION = 'str06-body-protocol-v6'
+#: 整书写作约定与自由度（Writer 协议，固定文本）。v7 按三类身份重写（必须写出／
+#: 必须遵守不必复述／写手自由）：场景是控制单元、反差不写成总结句、知情与
+#: 时态按输入措辞——「事实全对、处处交代」的对症条款。分区名用「」引用
+#: （阅读面的节标题用【】，二者不冲突）。
+WRITER_PROTOCOL_VERSION = 'str06-body-protocol-v7'
 WRITER_PROTOCOL = """\
-可补措辞、对白、即时反应和局部动作；不得新增或改变动机、行为主体、关系、历史、时序、知情条件或后文依赖的前件。\n本章写作输入按六个分区组织，各分区的身份与用法不同：
-1.「必须写出」要在正文里实际完成：拍的事件与拍末应成立的结果、义务的满足条件、线索的推进或收束。化进情节写出——不是提到关键词，也不逐条宣布。
-2.「不可违背」是硬边界：入场与拍级依赖的事实、知情边界（谁知道、谁只是怀疑／听说／以为）、可用称谓与时点、世界规则、明确禁止。不得违背，不必逐条提及；与导演说明冲突时以此为准。
-3.「承接」是自然延续：与上一章的衔接方式、仍影响人物选择的开放线索、前场已成立的事实。接续即可，不复述、不重新解释成说明。
-4.「导演说明」是呈现方向：场景重心与驱动、全书风格与人物声线、表达提示、本章目的。全书质地一致，场级口吻按场执行。
-5.「背景」是按需取用的既成事实：背景是约束，不是写作任务；除非场景自然需要，不复述、不交代。
-6.「禁区」绝不触碰：未到时点的读者确认——既不提前兑现，也不主动向读者提起或提醒；受保护的未决问题不回答、不点破。
+可补措辞、对白、即时反应和局部动作；不得新增或改变动机、行为主体、关系、历史、时序、知情条件或后文依赖的前件。\n本章写作输入按六个分区给出，归三类用法：
+【必须写出】在正文里实际完成：拍的事件、承载的义务满足条件、表达任务、线索的推进或收束。化进情节写出——不是提到关键词，也不逐条宣布；条目可拆开融入叙述，不要求逐条对应句子、段落或独立场景。
+【必须遵守、不必复述】「不可违背」（入场与拍级依赖的事实、知情边界、可用称谓与时点、世界规则、明确禁止）、「承接」（自然延续，不复述、不重新解释成说明）、「背景」（需要时才用的既成事实——是约束，不是写作任务）。遵守即可，不逐条提及；与导演说明冲突时以「不可违背」为准。
+【写手自由】「导演说明」之内的呈现选择：场景节奏、展开与压缩、具体的对白、动作、停顿与即时反应。
+场景是控制单元：每场完成自己的拍序与结果即可，不要求每场独立铺背景、独立收束或总结；全书质地一致，场级口吻按场执行。
+知情与时态按输入措辞：怀疑不写成确知、听说不写成相信、计划与预计不写成已发生、原文未交代的（含禁区所列未回答的悬念）不补答案。
+反差与幽默通过话语、动作与内心反应的落差呈现，不写成解释性总结句。
+「禁区」绝不触碰：未到时点的读者确认——既不提前兑现，也不主动向读者提起或提醒；受保护的未决问题不回答、不点破。
 会改变时间线、身份、前史或后续因果的设定：输入没给的不新增、不写具体；已给的保持原精度，不把两条独立事实合成新的前史。
 只使用已释放的称谓面；标明「第 N 拍起可用」的称谓不得提前使用。"""
 
@@ -1326,6 +1565,10 @@ WRITER_PROTOCOL = """\
 #: knowledge 模式 → 人读措辞（怀疑不得洗成知道，D14）。
 _KNOWLEDGE_WORDINGS = {'known': '确知', 'suspected': '起疑',
                        'heard': '听说', 'believes': '以为为真（不代表世界为真）'}
+
+#: 事实时态 → 「尚未发生」措辞（R10b，C2 的写手面；kf 锁是机械面）。
+_MODALITY_WORDINGS = {'planned': '计划，尚未发生', 'expected': '预计，尚未发生',
+                      'conditional': '条件执行，尚未发生'}
 
 #: 线程 kind → 人读措辞。
 _THREAD_KIND_WORDINGS = {'goal': '在途目标', 'action': '进行中行动',
@@ -1367,7 +1610,11 @@ def _knowledge_entry_line(names, entry: KnowledgeEntry) -> str:
 
 
 def _delta_line(names, delta) -> str:
-    """拍末效应条目（must_realize）：按域措辞；op 折进自然语言。"""
+    """拍末效应条目（must_realize）：按域措辞；op 折进自然语言。
+
+    R10b 起 `modality ≠ actual` 的事实 set 显式带「尚未发生」措辞（C2 的
+    写手面：计划／预计被写成已发生，机械面在 kf 锁，措辞面在这里）。
+    """
     if delta.domain is EffectDomain.KNOWLEDGE:
         mode = _KNOWLEDGE_WORDINGS.get(delta.knowledge_mode or 'known', '确知')
         return f'{_name(names, delta.holder or "")}{mode}「{delta.value}」'
@@ -1376,11 +1623,12 @@ def _delta_line(names, delta) -> str:
     who = _subjects_line(names, delta.subjects, delta.holder)
     head = f'{who}：' if who else ''
     if delta.op == 'set':
-        return f'{head}{delta.value}'
+        tense = _MODALITY_WORDINGS.get(delta.modality or '')
+        return f'{head}{delta.value}（{tense}）' if tense else f'{head}{delta.value}'
     if delta.op == 'unset':
         return f'{head}（既定事实解除）'
     if delta.op == 'unknown':
-        return f'{head}（转为未知）'
+        return f'{head}（值未知，不得补值）'
     return f'{head}{delta.value}（{delta.op}）'
 
 
@@ -1413,6 +1661,31 @@ def build_writer_packet(packet: ChapterWriterPacket) -> WriterPacket:
     构造期校验是最后一道闸）。audit_only 材料（禁用字面、消费身份摘要、
     依赖边、来源锚）一律不进。
     """
+def _ordered_dedup(lines: Iterable[str]) -> tuple[str, ...]:
+    """保序去重：同一条目（逐字）只保留首次出现——不按相似度删。"""
+    seen: set[str] = set()
+    out: list[str] = []
+    for line in lines:
+        if line not in seen:
+            seen.add(line)
+            out.append(line)
+    return tuple(out)
+
+
+def build_writer_packet(packet: ChapterWriterPacket) -> WriterPacket:
+    """章包 → WriterPacket（R2 两层 IR 的写手层；确定性、纯函数）。
+
+    按 `contracts/schema/consumption.py::STR06_FIELD_DELIVERY` 的送达身份把
+    Machine 章包分拣进六分区：全部自然语言条目、无内部 ID 与字段名（模型的
+    构造期校验是最后一道闸）。audit_only 材料（禁用字面、消费身份摘要、
+    依赖边、来源锚）一律不进。
+
+    v7（R10b）：「必须写出」按场→拍组织——每拍一行（事件＋拍末结果），承载
+    于该拍的义务满足条件、表达任务与锁措辞挂到对应拍（义务不再场级孤立
+    清单）；称谓许可只在变化处列（章内第一场给基线、之后只列新增面）；明确
+    禁止、开放线索、背景按章去重；原文未回答锁从承载位置起进禁区；义务
+    statement 与本拍事件逐字相同时按同一条目去重（不按相似度删）。
+    """
     chapter = packet.chapter
     brief = packet.book_brief
     must_realize: list[str] = []
@@ -1422,7 +1695,7 @@ def build_writer_packet(packet: ChapterWriterPacket) -> WriterPacket:
     background: list[str] = []
     guard_only: list[str] = []
 
-    # ── 书级层 ──
+    # ── 书级层（每章一次：世界边界、人称、风格、声线、表达机制、章目的） ──
     for rule in brief.world_rules:
         must_respect.append(f'世界边界（不要在正文中讲解）：{rule}')
     creative.append(f'全书风格：{brief.book_style}')
@@ -1466,6 +1739,11 @@ def build_writer_packet(packet: ChapterWriterPacket) -> WriterPacket:
         continuity.append(f'延续进本章的张力：{entry.carryover}（自然接续，不复述）')
 
     # ── 场景层 ──
+    expressions = {choice.ex_id: choice.statement
+                   for choice in brief.expression_decisions}
+    listed_surfaces: set[str] = set()      # 章内已列过的称谓面（只在变化处列）
+    seen_open_threads: set[str] = set()    # 章内已列的开放线程（按 ref 去重）
+    seen_background: set[str] = set()      # 章内已列的背景行（章首一次）
     for index, context in enumerate(chapter.scenes):
         label = _scene_label(index)
         ir = context.verification_ir
@@ -1473,15 +1751,26 @@ def build_writer_packet(packet: ChapterWriterPacket) -> WriterPacket:
         names = _names(ir.released_surfaces)
         beat_no = {b.beat_ref.rsplit('#', 1)[-1]: i
                    for i, b in enumerate(ir.beats, start=1)}
+        beat_event = {b.beat_ref.rsplit('#', 1)[-1]: b.event for b in ir.beats}
         pov = '旁白叙述' if brief_view.pov == 'narrator' else _name(names, brief_view.pov)
         creative.append(f'{label}（视角：{pov}；口吻：{brief_view.voice}）导演说明：'
                         f'{brief_view.realization_brief}')
         creative.append(f'{label}驱动：{brief_view.scene_driver_summary}')
         for hint in brief_view.delivery_hints:
             creative.append(f'{label}表达提示：{hint}')
-        # 必须写出：拍的事件与拍末效应、义务满足条件、线程操作
+        # 义务按承载拍分组（R10b：验收拍序＋同场支撑拍序）。义务内容与
+        # 位置经 zip 对齐（project_context 同序生成；id 不做连接键——
+        # audit 位变异不得改变阅读面）。
+        carried_by_beat: dict[int, list] = {}
+        support_of: dict[int, list[int]] = {}
+        for obligation, carrier in zip(ir.obligations, ir.carried_obligations):
+            carried_by_beat.setdefault(carrier.accept_beat, []).append(obligation)
+            support_of.setdefault(carrier.accept_beat, []).extend(
+                carrier.supporting_beats)
+        # 必须写出：按场→拍组织（事件＋承载义务＋表达任务＋拍末结果）
         for beat in ir.beats:
-            no = beat_no[beat.beat_ref.rsplit('#', 1)[-1]]
+            beat_id = beat.beat_ref.rsplit('#', 1)[-1]
+            no = beat_no[beat_id]
             line = f'{label}·第{no}拍：{beat.event}'
             effects = [_delta_line(names, d) for d in beat.deltas]
             if effects:
@@ -1491,9 +1780,23 @@ def build_writer_packet(packet: ChapterWriterPacket) -> WriterPacket:
                      else _knowledge_entry_line(names, r) for r in beat.reads]
             for read in reads:
                 must_respect.append(f'{label}·第{no}拍依赖的事实：{read}')
-        for obligation in ir.obligations:
-            must_realize.append(f'{label}·义务：{obligation.statement}'
-                                f'（本章结束后须成立：{obligation.satisfaction}）')
+            for obligation in carried_by_beat.get(no, ()):
+                support = sorted(set(support_of.get(no, ())))
+                lead = (f'（第{"、".join(str(m) for m in support)}拍起铺垫）'
+                        if support else '')
+                if obligation.statement == beat_event[beat_id]:
+                    must_realize.append(f'{label}·第{no}拍·义务{lead}（即本拍事件）'
+                                        f'——本章结束后须成立：{obligation.satisfaction}')
+                else:
+                    must_realize.append(f'{label}·第{no}拍·义务{lead}：'
+                                        f'{obligation.statement}'
+                                        f'（本章结束后须成立：{obligation.satisfaction}）')
+            for ex_id in beat.expression_refs:
+                statement = expressions.get(ex_id)
+                if statement:
+                    must_realize.append(f'{label}·第{no}拍·表达任务：{statement}'
+                                        '（呈现目标——通过话语与内心反应的落差实现，'
+                                        '不写成解释性总结句）')
         for op in ir.thread_ops:
             kind = _THREAD_KIND_WORDINGS[op.kind]
             if op.op == 'open':
@@ -1505,15 +1808,20 @@ def build_writer_packet(packet: ChapterWriterPacket) -> WriterPacket:
             else:
                 must_realize.append(f'{label}·收束线索：{_name(names, op.subject)}'
                                     f'的{kind}「{op.text}」——{op.resolution}')
-        # 不可违背：入场事实、知情边界、称谓许可与时点、场景 avoid
+        # 不可违背：入场事实、知情边界、称谓许可（只在变化处）、场景 avoid
         for entry_state in ir.entry_state:
             must_respect.append(f'{label}·入场已成立：{_state_entry_line(names, entry_state)}')
         for knowledge in ir.entry_knowledge:
             must_respect.append(f'{label}·知情边界：{_knowledge_entry_line(names, knowledge)}')
-        if ir.released_surfaces:
-            permits = '；'.join(f'{_name(names, r.char_id)}（{"、".join(r.surfaces)}）'
-                               for r in ir.released_surfaces)
-            must_respect.append(f'{label}·本场可用称谓：{permits}')
+        fresh: list[str] = []
+        for release in ir.released_surfaces:
+            faces = tuple(s for s in release.surfaces if s not in listed_surfaces)
+            if faces:
+                fresh.append(f'{_name(names, release.char_id)}（{"、".join(faces)}）')
+                listed_surfaces.update(faces)
+        if fresh:
+            prefix = '本场可用称谓' if index == 0 else '本场新增可用称谓'
+            must_respect.append(f'{label}·{prefix}：' + '；'.join(fresh))
         for introduction in ir.beats:
             if not introduction.surface_introductions:
                 continue
@@ -1522,20 +1830,28 @@ def build_writer_packet(packet: ChapterWriterPacket) -> WriterPacket:
             must_respect.append(f'{label}·第{no}拍起才可用称谓：{faces}')
         for prohibition in ir.prohibitions:
             must_respect.append(f'{label}·明确禁止：{prohibition}')
-        # 承接：无操作的相关开放线程（非 question）＋前场已接受义务的事实视图
+        # 承接：无操作的相关开放线程（非 question，章内按线程去重）＋前场事实视图
         for thread in ir.open_threads:
-            if thread.kind == 'question':
+            if thread.kind == 'question' or thread.ref in seen_open_threads:
                 continue
+            seen_open_threads.add(thread.ref)
             continuity.append(f'仍影响人物选择的开放线索（不必点明）：'
                               f'{_name(names, thread.subject)}的'
                               f'{_THREAD_KIND_WORDINGS[thread.kind]}「{thread.text}」')
         for fact in ir.continuity_fact_view:
             continuity.append(f'前场已成立：{fact.split("：", 1)[-1]}')
-        # 背景：编译器按参与者补齐的入场状态
+        # 背景：收窄后的入场基线；章内同一**条目**只列一次（章首一次、场内
+        # 只补新条目——去重键是不带场标的条目内容，跨场重复的场标不算差异）
         for state_entry in ir.background_state:
-            background.append(f'{label}·{_state_entry_line(names, state_entry)}')
+            key = _state_entry_line(names, state_entry)
+            if key not in seen_background:
+                seen_background.add(key)
+                background.append(f'{label}·{key}')
         for knowledge in ir.background_knowledge:
-            background.append(f'{label}·{_knowledge_entry_line(names, knowledge)}')
+            key = _knowledge_entry_line(names, knowledge)
+            if key not in seen_background:
+                seen_background.add(key)
+                background.append(f'{label}·{key}')
         # 禁区：未到时点的读者确认＋受保护的问题线程
         for pending in ir.pending_reader_confirmations:
             if pending.in_scene:
@@ -1550,11 +1866,20 @@ def build_writer_packet(packet: ChapterWriterPacket) -> WriterPacket:
                 continue
             guard_only.append(f'未决问题「{thread.text}」不得在本场回答，'
                               '也不得主动向读者提起')
+    # 禁区：原文未回答的悬念（C9）——从承载位置所在章起每章一条，按章去重。
+    for guard in _ordered_dedup(
+            g.question for scene in chapter.scenes
+            for g in scene.verification_ir.unanswered_guards):
+        guard_only.append(f'原文未回答的悬念「{guard}」：正文不得给出答案，'
+                          '也不得借人物之口补出答案（原文保持留白）')
     return WriterPacket(
         chapter_ordinal=chapter.chapter_ordinal,
-        must_realize=tuple(must_realize), must_respect=tuple(must_respect),
-        continuity=tuple(continuity), creative_guidance=tuple(creative),
-        background=tuple(background), guard_only=tuple(guard_only))
+        must_realize=tuple(must_realize),
+        must_respect=_ordered_dedup(must_respect),
+        continuity=_ordered_dedup(continuity),
+        creative_guidance=tuple(creative),
+        background=tuple(background),
+        guard_only=_ordered_dedup(guard_only))
 
 
 def project_chapter_materials(book_ir: WriterBookIR, chapter_ordinal: int) -> ChapterIR:
@@ -1688,13 +2013,23 @@ def render_chapter_packet(packet: ChapterWriterPacket) -> str:
     return '\n\n'.join(parts) + '\n'
 
 
-def packet_metrics(book_ir: WriterBookIR) -> dict:
-    """WriterPacket 指标（R2.8：派生读数，不是门；audit_only，I-38 不进领域
-    schema）。逐章记录：
+def packet_metrics(book_ir: WriterBookIR, *,
+                   token_counter: 'Callable[[str], int] | None' = None,
+                   ) -> dict:
+    """WriterPacket 指标（R2.8＋R10b.7：派生读数，不是门；audit_only，I-38
+    不进领域 schema）。逐章记录：
 
     · `writer_view_chars`：写手视图字数（非空白字符，与正文计数同口径）；
+    · `writer_view_tokens`：离线 token（`token_counter` 注入的本地 tokenizer
+      口径，与 `count_input_tokens` 同 tokenizer；未注入时省略该键）；
     · `section_entries`：六分区各自身份的条目数；
-    · `baseline_facts`：编译器按参与者补齐的入场基线事实数（background）；
+    · `duplicate_line_ratio`：章内重复行比例（同一行文本跨分区重复出现——
+      「材料重复且打架」的章内读数）；
+    · `echoes_dropped`：被剔除的历史回声数（跨场重复的背景行——渲染按章
+      去重剔除的条数，C7/C10 读数）；
+    · `carried_locks`：锁数（拍上承载的 kp 知情/kf 事实锁 delta 数＋原文
+      未回答禁区条数）；
+    · `baseline_facts`：收窄后仍进背景分区的入场基线事实数；
     · `active_threads`／`protected_threads`：本场有操作的线程数／开放中的
       问题线程数（按 ref 去重）；
     · `world_rules`：书级世界规则数；
@@ -1720,6 +2055,15 @@ def packet_metrics(book_ir: WriterBookIR) -> dict:
         protected = {thread.ref for scene in chapter.scenes
                      for thread in scene.verification_ir.open_threads
                      if thread.kind == 'question'}
+        all_lines = (wp.must_realize + wp.must_respect + wp.continuity
+                     + wp.creative_guidance + wp.background + wp.guard_only)
+        duplicate_ratio = (round(1 - len(set(all_lines)) / len(all_lines), 4)
+                           if all_lines else None)
+        guards = len({guard.question for scene in chapter.scenes
+                      for guard in scene.verification_ir.unanswered_guards})
+        carried_locks = sum(
+            1 for scene in chapter.scenes for beat in scene.verification_ir.beats
+            for delta in beat.deltas if delta.key.startswith(('kp_', 'kf_'))) + guards
         current_relevant = frozenset(wp.continuity + wp.background)
         if previous_relevant is None:
             ratio = None
@@ -1728,7 +2072,7 @@ def packet_metrics(book_ir: WriterBookIR) -> dict:
                           / len(current_relevant), 4)
         else:
             ratio = None
-        chapters.append({
+        entry = {
             'chapter_ordinal': chapter.chapter_ordinal,
             'writer_view_chars': count_non_whitespace_chars(view_text),
             'section_entries': {
@@ -1739,6 +2083,9 @@ def packet_metrics(book_ir: WriterBookIR) -> dict:
                 'background': len(wp.background),
                 'guard_only': len(wp.guard_only),
             },
+            'duplicate_line_ratio': duplicate_ratio,
+            'echoes_dropped': baseline - len(wp.background),
+            'carried_locks': carried_locks,
             'baseline_facts': baseline,
             'active_threads': len(active),
             'protected_threads': len(protected),
@@ -1747,7 +2094,10 @@ def packet_metrics(book_ir: WriterBookIR) -> dict:
             'target_chars': chapter.length_budget,
             'must_realize_density': round(
                 len(wp.must_realize) / chapter.length_budget, 4),
-        })
+        }
+        if token_counter is not None:
+            entry['writer_view_tokens'] = token_counter(view_text)
+        chapters.append(entry)
         previous_relevant = current_relevant
     return {
         'renderer_version': RENDERER_VERSION,

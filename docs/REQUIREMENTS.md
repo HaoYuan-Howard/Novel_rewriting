@@ -76,7 +76,7 @@ Golden 验证，不重新加回迁移关闭条件。
 | 1 | [x] R9a／R9b／B6a（历史） | 交付记录见历史索引；R9c 首段执行记录见下节 |
 | 2 | [x] R10-0 基线、真实消费与反例集（免费） | 登记、两根冻结证据清单、逐 owner 请求占比、送达守卫自检、C1–C11 反例集、用户提供的 Golden Set v3.0 关键案例（已冻结）、基线读数——全部闭合（见 R10-0 执行记录） |
 | 3 | [x] R10a 关键语义交接（免费开发） | a1 Stage2 引文/时态（**已完成**）→ a2 Preserve 证据视图/锚定（**已完成**）→ a3 冲突回派三分支（**已完成**）→ a4 Brief 锁定＋Design v5（**已完成**）→ a5 Bind/compile 位置校验（**已完成**）；一次校验合并报告，fake transport |
-| 4 | [ ] R10b WriterIR 投影与写手协议 v7（免费） | 完整章包夹具先行；背景投影收窄；同基座 v6/v7 免费形状读数对照，不做付费对照 |
+| 4 | [x] R10b WriterIR 投影与写手协议 v7（免费） | 完整章包夹具先行；背景投影收窄；义务挂承载拍；未回答锁进禁区；协议 v7 三类身份；同基座 v6/v7 免费形状读数对照（执行记录见 R10b 节），不做付费对照 |
 | 5 | [x] 收口 工程验收与付费基线冻结（免费） | §9.5 五文件、受影响 stage、fake 产品链（product_entry 真实子进程）、旧根关闭式拒识核验、默认非 corpus 回归全绿；前端无 API 形状变化不触发四件；rc12 全表＋F7E 重钉＋判据登记（执行记录见 R10a 节） |
 | 6 | [ ] R10c＝B6-B 付费无人工 patch 全书（分段授权） | c1 语义层段＋免费核读 → c2 成文段；工程核验＋用户通读 → STR-06 关闭；禁止 owner 内容 patch |
 | 7 | [ ] R10d 第二本＋重复生成（另行授权） | golden CRITERIA 六维更新与 manifest 冻结；《三人成行》全链＋至少一次重复生成，披露普适性 |
@@ -457,6 +457,86 @@ Golden 验证，不重新加回迁移关闭条件。
   backend.generated.ts 不含版本/issue 枚举），不触发前端四件。零付费。
 - **限制**：背景投影收窄、WriterIR 锁承载、写手协议 v7 归 R10b；判据
   「背景投影规则」（PLAN 收口清单内）随 R10b 落地时再登记。
+
+### R10b 执行记录（2026-10-02，免费，fake transport）
+
+- **夹具先行**（`tests/test_str06_r10b_writer_packet.py`，13 项）：合成绿基座
+  （两章三场，kp 知情锁（suspected→known 升级链＋reader known）、kf 时态锁
+  （expected）、unanswered 悬念锁、expression_refs（contrast）、义务四条
+  （statement 与事件逐字相同×2 的去重面＋跨场 supporting）、C7 材料
+  （night_sewing 无消费者拍状态）与 C10 材料（chill 初态 set→拍上 unset）；
+  Brief 传 `assemble_body_design` 锁面全过）。冻结完整章包渲染的四类性质
+  （公开说辞/真实判断并存、既成事实作约束不重复成任务、反差为呈现目标、
+  入口/知情/承接/退出/统一表达齐全）＋C7/C9/C10/P4 判据。
+- **IR**（`contracts/schema/context.py`）：`ObligationCarrier{obligation_id,
+  accept_beat, supporting_beats}`（义务承载拍与支撑拍；拍序为**位置数据**，
+  不依赖 beat_id 身份——audit 位变异不得改变阅读面，semantic_delivery 守卫
+  钉住）与 `UnansweredGuard{question, carrier_ref}`（原文未回答锁从承载位置
+  起进 IR）；`VerificationIR` 增 `carried_obligations`／`unanswered_guards`；
+  `WriterPacket` 构造期守卫增 `k[pf]_[0-9a-f]{16}` 模式（kp/kf 句柄绝不进
+  阅读面）。Machine IR 完整保留供审计；dramatic_intent 已于 a4 删除。
+- **投影**（`novel/stages/common.py`）：`consumption_closure`（消费者闭集
+  四类：声明读取／读者确认目标／Hook 起笔·隐藏·禁揭地址（书末位置）／锁键；
+  值为**位置集合**——建立拍自身不构成后文消费，同地址先建立后升级时按
+  「建立之后」判定）；`narrow_background`（unset/unknown 不作背景；init
+  立足点保留；建立后无消费者不投影）与判据对账面 `background_
+  narrowing_violations`（谓词同源）；`unanswered_guards` 派生（义务 anchors
+  的 loop question 与锁 statement 逐字关联→全部承载位最早者；无义务承载
+  的悬念不进章包——链上无作答入口，协议 v7 总条款托底）。`project_context`
+  增必达参数（consumers 缺省现算同闭包——无第二行为）；`participant_
+  background` 保持全量（依赖边生成 read_closure 的输入不受收窄影响——
+  两个消费者、两种身份）。
+- **Renderer v7**（`build_writer_packet`/`render_chapter_packet`，`str06-
+  render-v7`）：必须写出按场→拍组织（事件＋承载于此的义务满足条件＋表达
+  任务展开＋拍末结果；义务行与 `ir.obligations` 经 zip 对齐、id 不做连接
+  键）；义务 statement 与本拍事件逐字相同→「即本拍事件」按同一条目去重
+  （不按相似度删）；支撑拍渲染「第M拍起铺垫」；时态措辞「计划/预计/条件
+  执行，尚未发生」＋unknown「不得补值」；称谓许可只在变化处列（首场基线
+  ＋后续只列新增面）；明确禁止／开放线索／禁区按章去重；背景按**条目内容**
+  （不带场标）章内去重——章首一次、场内只补新条目；原文未回答悬念从承载
+  位置起每章一条进禁区。
+- **写手协议 v7**（`str06-body-protocol-v7`＋`BODY_WRITER_SYSTEM`）：三类
+  身份（必须写出／必须遵守不必复述／写手自由）；场景是控制单元（不要求
+  每场独立铺背景、收束、总结）；反差通过话语与内心反应呈现、不写成解释性
+  总结句；怀疑不写成确知、计划不写成已发生、原文未交代不补答案（P4 人称
+  条款：对白自称不改变叙述人称）。回执绑定随 `writer_view_sha256` 自动换版。
+- **Hook 面**：地址引用随 Design 键闭集（kp/kf 键 delta 存在即可引用，
+  assemble 既有闭集校验）；HookContext 按 value 送达（_render_fact 不渲染
+  key，锁键不进阅读面）；`material_identities` 增锁键闭集（graph delta 的
+  kp_*/kf_* key）——validate_writer_materials/validate_hook_materials 自动
+  获得锁句柄泄漏拦截。
+- **登记与指标**：`STR06_FIELD_DELIVERY` 同批更新（expression_refs→
+  MUST_REALIZE（v7 展开）；deltas[].modality→MUST_REALIZE（时态措辞）；
+  新增 carried_obligations×3（audit）与 unanswered_guards×2（question=
+  guard_only、carrier_ref=audit）；background value 条目 note 补收窄说明）；
+  `packet_metrics` 增 `writer_view_tokens`（`count_text_tokens` 同 tokenizer
+  无 framing，compile 注入）、`duplicate_line_ratio`（章内跨分区重复行）、
+  `echoes_dropped`（跨场背景回声剔除数）、`carried_locks`（kp/kf delta＋
+  未回答禁区数）。判据 R-6.16（背景投影规则）三件套：BACKEND_CONTRACT 行、
+  `contracts/judges/str06.py` 注册、`tests/hard_cases.py` 红例（构造违反 IR
+  →`background_narrowing_violations` 报出）；stage4 注册表 28→29；
+  `docs/schema/stage4.md` 判据表同步；coverage R-6 16→17。
+- **免费形状读数**（R10b.8，合成绿基座＝r2_engine rich 基座三章四场，
+  对照 R10-0.7 的 R9c 草案 v6 读数）：v6 背景口径（全量参与者基线）13 条
+  →v7 收窄 3 条（-77%；R9c v6 实测全书背景 979 条、逐章 13→245、相邻章
+  背景重复率 0.48–0.88 → v7 基座相邻章 0.2/0.5、章内重复行比例 0.0、
+  跨场回声剔除 0/1/0）；v7 分区条目（全书）必须写出 17／不可违背 16／
+  承接 6／导演说明 22／背景 3／禁区 3；离线 token 逐章 1129/1299/996
+  （`count_text_tokens` 口径）。材料组织不打架的形状证据＝义务挂拍后
+  must_realize 无场级孤立义务行、称谓/禁止/线索去重后章内重复行 0。
+- **验证**：新 r10b 套件 13 项全绿；受影响面修复后全绿（r2_engine 版本/
+  背景两层断言/读数、r2_contracts 版本、semantic_delivery 注入式 bgk＋
+  新增 expression_refs/modality/unanswered 变异用例＋background_knowledge
+  subjects 豁免与注入对照、body/execution_ir/chapter_closure/stage4_
+  protocol/f7e_freeze）；契约 §9.5 五文件全绿；str06 全选测（-k "str06
+  or store or hard_cases"）全绿（junitxml 留档 E:/_tr/r10b5_junit.xml）。
+  零付费。生产链接线：`run_compile_stage4` 读 Brief 传 fact_locks、注入
+  `count_text_tokens`。
+- **限制**：RENDERER/协议 v7 使全部旧章回执失效（writer_view 材料变化⇒
+  重购）——R10c 本就开新根，无存量损失；v6 renderer 已删除（无付费对照，
+  PLAN §二.5 裁决）；product_entry 全链与默认非 corpus 回归按收口门槛
+  （R10a 收口已执行过全量；本批改动集中在 stage4/5 投影与渲染，链形状
+  未变）待 R10c 开跑前如需再收口一次按门槛执行。
 
 ### 节省时间的执行约定
 

@@ -653,8 +653,8 @@ def test_r2_version_constants():
     assert STAGE4_DESIGN_PROTOCOL == 'stage4-design-v5'
     assert STR06_RC_VERSION == 'str06-rc12'          # R9 表达送达集中升版
     assert 'str06-rc10' in STR06_RC_LABELS
-    assert RENDERER_VERSION == 'str06-render-v6'
-    assert WRITER_PROTOCOL_VERSION == 'str06-body-protocol-v6'
+    assert RENDERER_VERSION == 'str06-render-v7'     # R10b 材料组织
+    assert WRITER_PROTOCOL_VERSION == 'str06-body-protocol-v7'
     for rel in ('stage4/design/body_design.json',
                 'stage4/design/presentation_graph.json',
                 'stage4/ir/writer_book_ir.json'):

@@ -457,17 +457,48 @@ STR06_FIELD_DELIVERY: dict[str, FieldDeliverySpec] = {
         note='本章拍的事件'),
     'writer_book_ir.chapters[].scenes[].verification_ir.beats[].expression_refs': (
         _spec('writer_book_ir.chapters[].scenes[].verification_ir.beats[]'
-              '.expression_refs', consumers=(_A,), scope=_SCENE,
-              mode=DeliveryMode.AUDIT_ONLY,
-              note='拍承载的源表达 ex_id（R10a a4）；renderer v7（R10b）展开成'
-                   '拍级表达任务并改 MUST_REALIZE，v6 阶段不进阅读面。'
+              '.expression_refs', consumers=(_W,), scope=_SCENE,
+              mode=DeliveryMode.MUST_REALIZE,
+              note='拍承载的源表达任务（R10a a4 落拍，R10b v7 展开：「第N拍·'
+                   '表达任务：{statement}（呈现目标——不写成解释性总结句）」）。'
                    'dramatic_intent 已删（R10-0.4 实证 renderer 从不渲染）')),
     'writer_book_ir.chapters[].scenes[].verification_ir.beats[].deltas[].modality': (
         _spec('writer_book_ir.chapters[].scenes[].verification_ir.beats[]'
-              '.deltas[].modality', consumers=(_A,), scope=_SCENE,
-              mode=DeliveryMode.AUDIT_ONLY,
-              note='事实时态（a4；R10b renderer v7 以「计划/预计，尚未发生」'
-                   '措辞送达写手后改 MUST_REALIZE）')),
+              '.deltas[].modality', consumers=(_W,), scope=_SCENE,
+              mode=DeliveryMode.MUST_REALIZE,
+              note='事实时态（a4 锁＋R10b v7 措辞：「计划/预计/条件执行，'
+                   '尚未发生」——时态锁的写手面）')),
+    # ── R10b：义务承载位置与原文未回答锁（v7 新增投影面） ───────────────────
+    'writer_book_ir.chapters[].scenes[].verification_ir.carried_obligations[]'
+    '.obligation_id': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.carried_obligations[]'
+        '.obligation_id', consumers=(_A,), scope=_SCENE,
+        mode=DeliveryMode.AUDIT_ONLY, note='义务 id（审计位）；renderer 剥离'),
+    'writer_book_ir.chapters[].scenes[].verification_ir.carried_obligations[]'
+    '.accept_beat': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.carried_obligations[]'
+        '.accept_beat', consumers=(_A,), scope=_SCENE,
+        mode=DeliveryMode.AUDIT_ONLY, note='验收拍 id（审计位）；义务满足条件'
+        '由 renderer v7 挂到对应拍的「必须写出」行（位置组织面）'),
+    'writer_book_ir.chapters[].scenes[].verification_ir.carried_obligations[]'
+    '.supporting_beats': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.carried_obligations[]'
+        '.supporting_beats', consumers=(_A,), scope=_SCENE,
+        mode=DeliveryMode.AUDIT_ONLY,
+        note='同场支撑拍 id（审计位）；渲染成「第M拍起铺垫」，跨场支撑走'
+             'continuity_fact_view'),
+    'writer_book_ir.chapters[].scenes[].verification_ir.unanswered_guards[]'
+    '.question': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.unanswered_guards[]'
+        '.question', consumers=(_W,), scope=_SCENE,
+        mode=DeliveryMode.GUARD_ONLY,
+        note='原文未回答的悬念（C9，R10b）：从承载位置起进章包禁区——'
+             '「正文不得给出答案，也不得借人物之口补出答案」'),
+    'writer_book_ir.chapters[].scenes[].verification_ir.unanswered_guards[]'
+    '.carrier_ref': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.unanswered_guards[]'
+        '.carrier_ref', consumers=(_A,), scope=_SCENE,
+        mode=DeliveryMode.AUDIT_ONLY, note='承载位置（场景#拍，审计位）'),
     'writer_book_ir.chapters[].scenes[].verification_ir.beats[].deltas[].domain': (
         _spec('writer_book_ir.chapters[].scenes[].verification_ir.beats[]'
               '.deltas[].domain', consumers=(_W,), scope=_SCENE,
@@ -668,10 +699,12 @@ STR06_FIELD_DELIVERY: dict[str, FieldDeliverySpec] = {
         consumers=(_A,), scope=_SCENE, mode=DeliveryMode.AUDIT_ONLY,
         note=_ID_PENDING),
     'writer_book_ir.chapters[].scenes[].verification_ir.background_state[].value': _spec(
-        'writer_book_ir.chapters[].scenes[].verification_ir.background_state[].value',
-        consumers=(_W,), scope=_SCENE, mode=DeliveryMode.BACKGROUND,
+        'writer_book_ir.chapters[].scenes[].verification_ir.background_state[]'
+        '.value', consumers=(_W,), scope=_SCENE, mode=DeliveryMode.BACKGROUND,
         note='按参与者补齐的入场状态：背景是约束，不是写作任务；'
-             '除非场景自然需要，不复述'),
+             '除非场景自然需要，不复述。R10b 起投影收窄——只投书级初态立足点'
+             '＋后文仍被消费的当前状态（消费者＝声明读取／读者确认目标／Hook '
+             '地址／锁键，C7）；章内同一行只列一次'),
     'writer_book_ir.chapters[].scenes[].verification_ir.background_state[].status': _spec(
         'writer_book_ir.chapters[].scenes[].verification_ir.background_state[].status',
         consumers=(_A,), scope=_SCENE, mode=DeliveryMode.AUDIT_ONLY,
@@ -987,10 +1020,12 @@ STR06_FIELD_DELIVERY: dict[str, FieldDeliverySpec] = {
     'stage4/acceptance/packet_metrics.json': _spec(
         'stage4/acceptance/packet_metrics.json', consumers=(_A,), scope=_NONE,
         mode=DeliveryMode.AUDIT_ONLY,
-        note='WriterPacket 指标（逐章：写手视图字数、各 delivery_mode 条目数、'
-             '基线事实数、活跃与受保护线程数、世界规则数、相邻章延续与背景重复'
-             '比例、目标篇幅与必须写出密度）：先采数、不设阈值的派生读数，'
-             '任何写手都看不到；由 compile 确定性重算（I-16）'),
+        note='WriterPacket 指标（逐章：写手视图字数与离线 token（count_text_tokens '
+             '同 tokenizer、无请求 framing）、各 delivery_mode 条目数、章内重复行'
+             '比例、被剔除历史回声数、锁数、基线事实数、活跃与受保护线程数、'
+             '世界规则数、相邻章延续与背景重复比例、目标篇幅与必须写出密度）：'
+             '先采数、不设阈值的派生读数，任何写手都看不到；由 compile 确定性'
+             '重算（I-16）'),
 }
 
 #: 七档身份的闭环自检：R2 引擎批起七档全部有登记实例——background 落在

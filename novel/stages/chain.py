@@ -69,6 +69,7 @@ from novel.llm.paid_requests import (
     ValidationStop,
 )
 from novel.llm.transport import ChatRequest, DeepSeekTransport
+from novel.llm.budget import count_text_tokens
 from novel import paths, prov
 from novel.core.text import count_non_whitespace_chars
 from novel.model_slots import pipeline_model_slot
@@ -834,7 +835,10 @@ def run_compile_stage4(ctx: ChainContext) -> dict:
                                        length_band=ctx.length_band,
                                        book_title=ctx.book_title,
                                        projection=projection,
-                                       structure=chars.name_structure)
+                                       structure=chars.name_structure,
+                                       fact_locks=repository.read_model(
+                                           'stage4/grounding/reconstruction_brief.json'
+                                       ).fact_locks)
     problems = []
     from novel.stages.common import material_identities
     internal_ids = material_identities(graph, binding, chars)
@@ -864,10 +868,12 @@ def run_compile_stage4(ctx: ChainContext) -> dict:
         PublishItem(rel='stage4/compiled/execution_plan.json', value=plan),
         PublishItem(rel='stage4/context/hook/hook.json', value=hook_context),
         PublishItem(rel='stage4/ir/writer_book_ir.json', value=writer_ir),
-        # WriterPacket 指标（R2.8）：派生读数、audit_only、重算免费；逐章记录
-        # 分区条目数、基线事实数、活跃/受保护线程数、重复比例与必须写出密度。
+        # WriterPacket 指标（R2.8＋R10b.7）：派生读数、audit_only、重算免费；
+        # 逐章记录分区条目数、章内重复行比例、被剔除历史回声数、锁数、离线
+        # token（`count_text_tokens` 同 tokenizer、无请求 framing）与密度。
         PublishItem(rel='stage4/acceptance/packet_metrics.json',
-                    value=packet_metrics(writer_ir)),
+                    value=packet_metrics(writer_ir,
+                                         token_counter=count_text_tokens)),
     ))
     resolve_owner_issues(repository, owner='design',
                          raised_by='str06.stage4.compile')
