@@ -65,6 +65,40 @@ def test_c4_quote_not_in_segment_is_rejected_precisely():
     assert any('quote_not_in_segment' in e or '不逐字存在' in e for e in errors), errors
 
 
+def test_c4_misattributed_quote_feedback_names_verbatim_home():
+    """R10c（2026-10-02）：引文逐字正确但挂错段号 → 反馈指认真实命中段。
+
+    模型常引对原文却写错 segment id（对话分句的收尾「」孤儿段使 id↔句子
+    对齐反直觉，R10c c1 ch09 实证）。命中段扫描仍纯逐字、判定仍拒绝——
+    只改反馈形状，不放宽匹配；修订轮据此直接改段号。
+    """
+    assert '他说此去约莫半个月便回' in EVIDENCE['e01_03']['text']
+    _obs, errors = _compile([
+        _beat('归期', ('e01_01', 'e01_03'),
+              effects=[{'target': {'kind': 'character', 'char_id': 'zhang_fu'},
+                        'key': 'promise', 'op': 'set', 'value': '半月归',
+                        'scope': 'book', 'modality': 'actual',
+                        'disclosure': {'visibility': 'on_page'},
+                        'basis': [{'segment': 'e01_01',
+                                   'quote': '他说此去约莫半个月便回'}]}]),
+    ])
+    hit = [e for e in errors if '不逐字存在' in e]
+    assert hit and '逐字命中于句段' in hit[0], errors
+    assert "'e01_03'" in hit[0], errors
+    # 转写引文（闭集内任何段都不逐字命中）→ 反馈如实说未命中，不猜段。
+    _obs2, errors2 = _compile([
+        _beat('归期', ('e01_01',),
+              effects=[{'target': {'kind': 'character', 'char_id': 'zhang_fu'},
+                        'key': 'promise', 'op': 'set', 'value': '半月归',
+                        'scope': 'book', 'modality': 'actual',
+                        'disclosure': {'visibility': 'on_page'},
+                        'basis': [{'segment': 'e01_01',
+                                   'quote': '他说大约过半个月就会回来'}]}]),
+    ])
+    hit2 = [e for e in errors2 if '不逐字存在' in e]
+    assert hit2 and '未在闭集任何句段逐字命中' in hit2[0], errors2
+
+
 def test_c4_segment_outside_beat_refs_is_rejected():
     """红：basis 引的段不在本拍 source_refs 内 → basis_segment_outside_refs
     （引你所引——不得引用未声明的段；段本身存在且引文逐字命中也不行）。"""

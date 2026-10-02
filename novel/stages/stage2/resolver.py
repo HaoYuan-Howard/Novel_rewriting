@@ -172,11 +172,22 @@ class EvidenceResolver:
                          f'{refs} 内——引你所引，不得引用未声明的段'),
                 context={'segment_id': segment, 'source_refs': refs}))
         if quote not in self._text(segment):
+            # 反馈指认（R10c 2026-10-02）：模型常引对原文却挂错句段号（对话
+            # 分句的收尾「」孤儿段使 id↔句子对齐反直觉）。命中段扫描仍是纯
+            # 逐字判定——只改反馈、不放宽匹配；修订轮据此直接改段号。
+            homes = [ref for ref, seg in self._segments.items()
+                     if quote in (seg.get('text') or '')]
+            hint = (f'该引文逐字命中于句段 {homes[:6]}——请改引这些句段号'
+                    '并将其列入该条目 source_refs'
+                    if homes else
+                    '该引文未在闭集任何句段逐字命中——请逐字摘抄原句，'
+                    '不转写、不缩写')
             problems.append(ResolverIssue(
                 code='quote_not_in_segment',
                 message=(f'basis 引文在句段 {segment!r} 内不逐字存在（引文须'
-                         f'逐字摘自原句，不转写、不缩写）：{quote[:30]!r}…'),
-                context={'segment_id': segment, 'quote': quote[:60]}))
+                         f'逐字摘自原句，不转写、不缩写；{hint}）：{quote[:30]!r}…'),
+                context={'segment_id': segment, 'quote': quote[:60],
+                         'verbatim_home_segments': homes[:12]}))
         return problems
 
     # ── 称谓窗口锚点（R-2.10） ───────────────────────────────────────────────
