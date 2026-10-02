@@ -64,7 +64,12 @@ effort/thinking）。本地 Agent CLI（`kind=agent` / driver / execution_mode�
 `--apply-request <JSON路径>`。该入口逐项核成本、session、原请求、日志和 owner 排空证据，
 只把已确认失败的 unknown 改为 failed，不生成语义决定、不退还额度、不清除未知用量。
 存在已购回答或证据缺失时继续阻断，先恢复原结果；同一请求重放幂等。该入口不是产品跑书步骤；
-admission 账沿用历史命名（`commander_admissions.jsonl`），现役 executor 同一入口收口。
+admission 账沿用历史命名（`commander_admissions.jsonl`）。两个分支：存量书 Commander 连接失败
+走原 Commander 证明；现役直连 executor 的**确定性 wire 拒收**（不可重试 `TransportError`，
+如 4xx 拒付——拒收种类闭集 `contracts/schema/work_unit_recovery.py::EXECUTOR_WIRE_REFUSAL_KINDS`）
+走 executor 分支（2026-10-02 R10c，DeepSeek 402 实证）。read_timeout 与未知异常的结果真未知，
+不在闭集内，保持 unknown。新 wire 已把确定性拒收直接记 failed（`novel/llm/paid_requests.py`），
+executor 分支服务存量轮与极端残差。
 现役关闭式验收走定向 pytest / 交付终验，不维护 agent-only 验收报告。
 
 ### 小说流水线成本与耗时配对观测

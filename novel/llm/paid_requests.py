@@ -18,7 +18,11 @@ STR-06 候选链的运行上下文、workflow／epoch 身份与候选契约身�
 【尝试与额度（每轮至多 WORK_UNIT_MAX_DELIVERY_ATTEMPTS 次）】
 未送达（连接/DNS/TLS 失败、连接超时、429、5xx）在同一内容轮内有界退避重试
 （`TransportRetryPolicy` 2/4/8 秒）；已送达后结果未知（读超时）记 unknown、
-不自动重试（`transport._classify` 不再对超时一刀切）。正常结束但正文为空记一次
+不自动重试（`transport._classify` 不再对超时一刀切）。确定性拒收（不可重试的
+`TransportError`，如 4xx 余额/鉴权拒绝）服务端明确未处理请求、无回答无用量，
+直接记 failed 终态（2026-10-02 R10c：此前记 unknown 会把运行永久卡在没有收口面
+的轮上，DeepSeek 402 实证）；unknown 只留给结果真未知的情形，交恢复入口对账
+（Q-13）。正常结束但正文为空记一次
 失败 attempt（留证、如实计费），由调用方在同轮内重发。截断
 （``finish_reason='length'``，上限 `contracts.invariants.LLM_MAX_OUTPUT_TOKENS`
 ＝131072）是节点设计缺陷：即停该 item，不重试、不加预算（D6）。每次外发前
@@ -569,13 +573,22 @@ class PaidRequestSession:
                                                'attempt_id': attempt_id,
                                                'error_kind': exc.kind}) from exc
                 if not exc.retryable:
-                    self._fail_unknown(owner, request, identity, unit, node, scope,
-                                       turn_id, attempt_id, attempt_no, exc.kind,
-                                       latency_ms)
+                    # 确定性拒收（4xx 余额/鉴权等）：服务端已明确拒绝、未处理请求，
+                    # 无回答也无用量——记 failed 终态而非 unknown；unknown 只留给
+                    # 「已送达后结果真未知」（read_timeout／未知异常），那类才需要
+                    # 恢复对账。记 failed 后同身份重试走新内容轮，不再被
+                    # unknown_turn 闸卡死（R10c 2026-10-02，DeepSeek 402 实证）。
+                    unit.record_attempt(turn_id, attempt_id=attempt_id, outcome='failed')
+                    unit.finish(turn_id, outcome='failed', reason_code=exc.kind)
+                    self._record_attempt_row(owner, request, identity, attempt_id,
+                                             attempt_no, outcome='error',
+                                             error_kind=exc.kind, latency_ms=latency_ms,
+                                             will_retry=False)
                     raise _execution_error(
                         f'{owner} 第 {attempt_no} 次外发失败且不可重试（{exc.kind}）：{exc}',
                         code='delivery_refused', node=node, item=scope, phase='wire',
-                        context={'attempt': attempt_no, 'error_kind': exc.kind}) from exc
+                        context={'attempt': attempt_no, 'attempt_id': attempt_id,
+                                 'error_kind': exc.kind}) from exc
                 # 未送达：同一内容轮内有界退避重试（占尝试额度，如实计费）。
                 unit.record_attempt(turn_id, attempt_id=attempt_id, outcome='failed')
                 delay = self.retry_policy.delay(attempt=attempt_no, retryable=True)

@@ -538,6 +538,43 @@ Golden 验证，不重新加回迁移关闭条件。
   （R10a 收口已执行过全量；本批改动集中在 stage4/5 投影与渲染，链形状
   未变）待 R10c 开跑前如需再收口一次按门槛执行。
 
+### R10c 执行记录（2026-10-02 起，分段授权，进行中）
+
+- **开跑前免费收口**（按 R10b 限制项的门槛）：`tests/test_str06_product_entry.py`
+  11 项＋默认非 corpus 回归 **3588 项全绿**（JUnit 与 sha 存新根
+  `runtime/review/engineering/`）。
+- **新根与报价**：`outputs/str06_r10_20261002/夫君的报恩_2059579376044396719`，
+  经真实产品入口（HTTP 上传 authorized=false → 免费 stage0/stage1；stage0 输出
+  与 R9c 根逐字节一致）。报价单 `runtime/review/r10c_c1_quote_manifest.json`：
+  code `8581f0f6`／rc12（`7d24e572…`）／flash-high-并发4；c1=18、全书 31
+  （2N+9）；book 请求身份 `81ebe494…`＝ledger 首笔指纹（15,928 token，
+  R9c 同口径 15811）。
+- **授权与启动**：用户 2026-10-02 分别授权付费（c1，预估 ¥3–12 非上限）与
+  正文外发（api.deepseek.com）；授权原话落 `r10c_c1_authorization.json`。
+  Run `1790902462-f77d0572`（暂停边界 str06.stage5.hook）。
+- **中断①（外部）**：ch09 修订第 3 轮被 DeepSeek 402 拒付（账户余额不足），
+  编排器正确 fail-fast（unknown 不吞）；book 已发布（3 实付：首轮＋2 修订）、
+  逐章 10/11 发布（ch01–08、10、11）。中断时 23 笔实付 ≈¥5.35（峰时口径，
+  completion 644k）。中断落 `r10c_c1_interruption.json`。R10a 收紧的实际读数：
+  book 3 笔／chapters 20 笔（R9c 为 2＋19），修订轮温和上升、额度内。
+- **确定性缺陷修复（允许干预第 1 类，记自主完成度）**：用户充值后续跑
+  （`1790904516-c16b2c6a`）被「unknown 轮不自动重购、且无收口面」卡死——旧
+  wire 把不可重试 TransportError（402 确定性拒收、无用量无回答）记成 unknown，
+  而 `work_unit_recovery` 只收 Commander 轮。修复：①wire 层确定性拒收记
+  **failed** 终态（unknown 只留 read_timeout/未知异常，`paid_requests.py`）；
+  ②收口面新增 executor 分支（拒收种类闭集
+  `contracts/schema/work_unit_recovery.py::EXECUTOR_WIRE_REFUSAL_KINDS`；
+  receipt 增 `ExecutorWireRefusalReceipt`；`_no_saved_answer` 豁免 executor 单元
+  正常的 `accept_*.json` 接受记录）。红例＝生产实证（ch09 卡死＋预览拒绝），
+  绿例＝新增 `tests/test_executor_wire_refusal_recovery.py`（5 项：收口解除
+  楔子＋幂等重放、read_timeout 不进闭集、成本缺证拒绝、token 漂移拒绝、CLI
+  预览）＋`test_str06_f7a_wiring.py` wire 用例；受影响面 70 项＋§9.5 五文件
+  398 项＋layering/cli 130 项全绿。F7E 冻结身份不含该 schema，未重钉。
+  ch09 轮经 preview→apply 免费收口（token `d15b593f…`，actor/reason 入账）。
+  OPERATIONS 恢复段同步改写。
+- **后续**：续跑至 str06.stage5.hook 暂停 → 免费核读（views/obligations）→
+  结论交用户决定 c2。
+
 ### 节省时间的执行约定
 
 

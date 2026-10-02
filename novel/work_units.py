@@ -29,7 +29,10 @@ from contracts.schema.workflow import (
     WorkUnitContentTurn, WorkUnitGroupBlobV1, WorkUnitLedgerV2,
     WorkUnitRegistryV1, WorkUnitProcessing, CommitBundleV1, commit_bundle_seal,
 )
-from contracts.schema.work_unit_recovery import CommanderFailureRecoveryReceipt
+from contracts.schema.work_unit_recovery import (
+    CommanderFailureRecoveryReceipt, ExecutorWireRefusalReceipt,
+    WorkUnitFailureReceipt,
+)
 from novel import paths
 from novel.appendlog import path_transaction_lock
 from novel.errors import TerminalState
@@ -542,12 +545,16 @@ class WorkUnitBudget:
 
     def failure_recovery_receipt(
             self, ledger: WorkUnitLedgerV2,
-            turn: WorkUnitContentTurn) -> CommanderFailureRecoveryReceipt:
-        """历史失败一旦已收口，其原失败和工程裁决证明仍必须可验证。"""
+            turn: WorkUnitContentTurn) -> WorkUnitFailureReceipt:
+        """历史失败一旦已收口，其原失败和工程裁决证明仍必须可验证。
+
+        Commander 收口证明只配 commander 账、executor wire 拒收收口证明
+        （R10c 2026-10-02）只配 executor 账；role 与证明种类错配即拒绝。
+        """
         found = [row for row in ledger.processing if row.kind == 'mechanical'
                  and row.input_sha256 == failure_recovery_input(turn.turn_id)]
         if len(found) != 1 or found[0].run_id != turn.run_id:
-            raise WorkUnitRefused('Commander 失败收口缺唯一工程证明')
+            raise WorkUnitRefused('失败收口缺唯一工程证明')
         row = found[0]
         try:
             target = _safe(self.base, self.directory / f'{row.evidence_sha256}.json')
@@ -556,23 +563,29 @@ class WorkUnitBudget:
             if hashlib.sha256(raw).hexdigest() != row.evidence_sha256:
                 raise ValueError('失败收口证明字节身份漂移')
             blob = WorkUnitBlobV1.model_validate_json(raw)
-            receipt = CommanderFailureRecoveryReceipt.model_validate(blob.payload)
+            if blob.payload.get('kind') == 'executor-wire-refusal-reconciliation-v1':
+                receipt: WorkUnitFailureReceipt = (
+                    ExecutorWireRefusalReceipt.model_validate(blob.payload))
+                expected_role = 'executor'
+            else:
+                receipt = CommanderFailureRecoveryReceipt.model_validate(blob.payload)
+                expected_role = 'commander'
             expected = receipt.before.model_copy(update={
                 'state': 'failed', 'reason_code': COMMANDER_FAILURE_RECONCILED})
             original = WorkUnitLedgerV2.model_validate(receipt.evidence['ledger'])
             if (_digest(blob.model_dump(mode='json')) != row.evidence_sha256
                     or blob.unit_id != self.unit_id or blob.turn_id != turn.turn_id
                     or receipt.unit_id != ledger.unit_id or receipt.sid != ledger.sid
-                    or ledger.role != 'commander' or expected != turn
+                    or ledger.role != expected_role or expected != turn
                     or original.unit_id != ledger.unit_id
                     or self._turn(original, turn.turn_id) != receipt.before
                     or _digest(receipt.evidence) != receipt.request.preview_token):
                 raise ValueError('失败收口证明主体不一致')
         except (OSError, ValueError, KeyError) as exc:
-            raise WorkUnitRefused('Commander 失败收口证明损坏，禁止新调用') from exc
+            raise WorkUnitRefused('失败收口证明损坏，禁止新调用') from exc
         return receipt
 
-    def reconcile_failure_under_lock(self, receipt: CommanderFailureRecoveryReceipt) -> None:
+    def reconcile_failure_under_lock(self, receipt: WorkUnitFailureReceipt) -> None:
         """调用方已持有本账事务锁及 owner lease；不重入不支持重入的文件锁。"""
         ledger = self._read()
         turn = self._turn(ledger, receipt.before.turn_id)

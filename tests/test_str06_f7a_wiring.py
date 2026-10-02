@@ -245,6 +245,42 @@ def test_unknown_turn_blocks_repurchase_until_reconciled(tmp_path):
     assert turn.state == 'unknown' and turn.reason_code == 'TimeoutError'
 
 
+def test_http_refusal_fails_turn_without_unknown_wedge(tmp_path):
+    """确定性拒收（4xx 拒付）记 failed 终态；同身份重试不被 unknown 闸卡死。
+
+    R10c（2026-10-02）：旧 wire 把不可重试 TransportError 记 unknown，而该形状
+    没有收口面，DeepSeek 402 实证会把运行永久卡住——unknown 只留给结果真未知
+    （read_timeout／未知异常，见上一用例）。
+    """
+    from novel.llm.transport import TransportError
+
+    class Refusing(_Transport):
+        def send(self, request):
+            self.calls += 1
+            raise TransportError(
+                'Error code: 402 - Insufficient Balance', retryable=False, status=402)
+
+    refusing = Refusing()
+    base, repo, ledger, session = _session(tmp_path, refusing)
+    with pytest.raises(ExecutionError, match='不可重试'):
+        ask_json(session, 'bind', _request(), lambda _: [])
+    unit = WorkUnitBudget(base, 'book', 'str06.stage4.bind', 'executor', 'book')
+    turn = unit._read().turns[0]
+    assert turn.state == 'failed' and turn.reason_code == 'http_error'
+    assert turn.attempts[0].outcome == 'failed' and not turn.response_sha256
+    rows, partial = read_cost_snapshot(base)
+    assert not partial and rows[-1]['outcome'] == 'error'
+    assert rows[-1]['error_kind'] == 'http_error' and rows[-1]['cached'] is False
+    # 服务端明确拒收（充值/修复后）同身份重试：走新内容轮，正常送达。
+    working = _Transport()
+    resumed = PaidRequestSession(repo, ledger, working, yes=True,
+                                 allow_source_export=True, provider='fake', sid='book')
+    data, _answer = ask_json(resumed, 'bind', _request(), lambda _: [])
+    assert data == {'entries': []} and working.calls == 1
+    turns = unit._read().turns
+    assert len(turns) == 2 and turns[1].state == 'delivered'
+
+
 def test_book_budget_gate_persists_across_sessions(tmp_path):
     transport = _Transport()
     base, repo, ledger, session = _session(tmp_path, transport)

@@ -1108,6 +1108,10 @@
         "stage4",
         "stage5"
       ]
+    },
+    "tests/test_executor_wire_refusal_recovery.py": {
+      "layer": "unit_contract",
+      "stages": []
     }
   },
   "version": 1
