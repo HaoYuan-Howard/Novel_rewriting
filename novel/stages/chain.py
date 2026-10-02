@@ -1038,31 +1038,38 @@ def _backfill_material_leak(repository, leaks: list[str], chars, chapters) -> No
         if matched is None:
             continue
         chapter_no, where, literal = int(matched.group(1)), matched.group(2), matched.group(3)
-        owner_chars = sorted(cid for cid, surf in surfaces_of.items() if literal in surf)
-        if not owner_chars:
-            continue
-        cid = owner_chars[0]
+        # 归因按**泄漏字面自身**在该章源文是否逐字出现二分（R10c1b 修正：
+        # 此前按人物任一 surface 出现归 book——「苏」这类姓氏族字面不属任何
+        # surface 时被静默跳过，且 book 已修对后仍会误归 book）。字面在源文
+        # 该章出现 ⇒ withholding 记账晚（book）；未出现 ⇒ 材料文本自行引入
+        # ⇒ statement 混名（preserve）。
         source = chapter_text.get(chapter_no, '')
-        present = sorted(s for s in surfaces_of[cid] if s in source)
+        literal_in_source = literal in source
+        owner_chars = sorted(cid for cid, surf in surfaces_of.items() if literal in surf)
+        if literal_in_source and not owner_chars:
+            continue  # 源文有该字面但不属任何人物面：不归因，保持 typed 停止
+        cid = owner_chars[0] if owner_chars else ''
+        present = [literal] if literal_in_source else []
         item = f'chapter:{chapter_no}'
         if present:
             owner, target = 'book', 'str06.stage2.book'
             message = (
                 f'positive_material_leak 归因（源保真）：字面 {literal!r} 在第 '
-                f'{chapter_no} 章写作材料泄漏，但人物 {cid} 的表面 {present} 逐字'
-                f'出现于该章源文——surface from_chapter 记晚了。请把相应 surface '
-                '的 from_chapter 与 source_refs 修到源文最早出现章（引文逐字）。')
+                f'{chapter_no} 章写作材料泄漏，但该字面逐字出现于该章源文'
+                '——withholding（surface/姓氏族）记账晚了。请把相应 surface 或'
+                '名称族的 from_chapter 与 source_refs 修到源文最早出现章（引文'
+                '逐字）。')
             context = {'literal': literal, 'char_id': cid,
                        'chapter': chapter_no, 'where': where,
-                       'surfaces_in_source_chapter': present}
+                       'literal_in_source_chapter': True}
         else:
             owner, target = 'preserve', 'str06.stage4.preserve'
             message = (
                 f'positive_material_leak 归因（statement 混名）：字面 {literal!r} '
-                f'在第 {chapter_no} 章写作材料泄漏，且人物 {cid} 的全部表面在该章'
-                '源文均未出现——义务 statement 混入了后文才有的名。请把 statement '
-                '改用该章可用的指称（或去掉人名），不得混入后文名；语义命题本身'
-                '不得改。')
+                f'在第 {chapter_no} 章写作材料泄漏，且该字面在该章源文未出现'
+                '——义务 statement/材料文本混入了后文才有的名（含姓氏族字面）。'
+                '请把 statement 改用该章可用的指称（或去掉人名与姓氏），不得混入'
+                '后文名；语义命题本身不得改。')
             context = {'literal': literal, 'char_id': cid,
                        'chapter': chapter_no, 'where': where}
         grouped.setdefault((owner, target), []).append(OwnerIssueV1(

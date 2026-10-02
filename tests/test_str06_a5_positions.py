@@ -694,19 +694,24 @@ def test_material_leak_attributes_book_first_and_preserve_same_pass(tmp_path):
         'shen_zhiyan': {'canonical': '沈知言', 'surfaces': [
             {'surface': '沈知言', 'from_chapter': 6, 'source_refs': ['e01_06']}]},
     }, 'initial_state': []})
-    chapters = [{'chapter_ordinal': 1, 'text': '夫君谋划向他表弟借种。'}]
+    chapters = [{'chapter_ordinal': 1, 'text': '夫君谋划向他表弟借种。'},
+                {'chapter_ordinal': 2, 'text': '表弟很快到来。裴书远来了。'}]
     leaks = [
+        # ch01 源文无「裴书远」（只有表弟）⇒ statement 混名 → preserve。
         "positive_material_leak[ch01/must_realize/15@34]：未释放专名字面 '裴书远'",
         "positive_material_leak[ch01/must_realize/7@52]：未释放专名字面 '沈知言'",
+        # ch02 源文逐字有「裴书远」⇒ withholding 记账晚 → book（姓氏族/表面）。
         "positive_material_leak[ch02/must_realize/2@9]：未释放专名字面 '裴书远'",
+        # 姓氏族字面：不属任何 surface、源文该章未出现 ⇒ preserve（不静默跳过）。
+        "positive_material_leak[ch01/book_style@3]：未释放专名字面 '苏'",
     ]
     with pytest.raises(OwnerRevisionRequired) as excinfo:
         _backfill_material_leak(repo, leaks, chars, chapters)
-    # 最早执行序一组抛出：book（表弟逐字在 ch01 源文 → from_chapter 记晚）。
+    # 最早执行序一组抛出：book（裴书远逐字在 ch02 源文 → withholding 记晚）。
     assert excinfo.value.owner == 'book'
     assert excinfo.value.node == 'str06.stage2.book'
     assert all(i.code == 'material_name_leak' for i in excinfo.value.issues)
-    assert any('源保真' in i.message and '表弟' in i.message
+    assert any('源保真' in i.message and '裴书远' in i.message
                for i in excinfo.value.issues)
     book_record = read_owner_issue_file(repo, 'book')
     assert book_record.status == 'open'
@@ -714,12 +719,13 @@ def test_material_leak_attributes_book_first_and_preserve_same_pass(tmp_path):
     # 同 owner 多 item 合并为一次 discover（issue 文件按 owner 单记录整写；
     # 分开 discover 会把一轮逻辑发现记成多轮、顶满修订额度——R10c c1 实证）。
     assert book_record.rounds_total == 1
-    assert {i.item for i in book_record.issues} == {'chapter:1'}
-    # 同批落账：preserve 的 statement 混名记录已在案（正向重放时随本轮修复）。
+    assert {i.item for i in book_record.issues} == {'chapter:2'}
+    # 同批落账：preserve 的 statement 混名记录已在案（含姓氏族字面「苏」）。
     preserve_record = read_owner_issue_file(repo, 'preserve')
     assert preserve_record.status == 'open'
     assert preserve_record.rounds_total == 1
     assert any('混名' in i.message for i in preserve_record.issues)
+    assert any('苏' in i.message for i in preserve_record.issues)
     # 非人物面字面不归因：不落账、不抛（由调用方保持 typed 停止）。
     repo2 = Str06Repository(tmp_path / 'run2')
     repo2.attach_context(make_context(tmp_path / 'run2', ledger=CostLedger(path=None)))
