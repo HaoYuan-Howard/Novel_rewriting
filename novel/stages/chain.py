@@ -1021,16 +1021,18 @@ def _backfill_material_leak(repository, leaks: list[str], chars, chapters) -> No
     source_refs 到源文最早出现章）；全部表面在该章源文均未出现 ⇒ Preserve
     的 statement 混入后文才有的名，回派 `str06.stage4.preserve`（statement
     改用当章可用指称）。字面不属任何人物面时不动（保持原 typed 停止）。
-    多组按 owner 字典序逐组 discover，全部落账后抛**最早执行序**一组的回派
-    （book 先于 preserve）：执行回跳到 Stage2 后正向重放时，preserve 的
-    open 记录已在案，其修订 prompt 随本轮携带 statement 修复指令——一次
-    级联闭合两组，不为每组各付一遍下游重购。字面不属任何人物面时不动
-    （保持原 typed 停止）。
+    多组按 (owner, node) **合并为一次 discover**（issue 文件按 owner 单记录、
+    每次 discover 整体重写并 +1 轮——同 owner 多 item 分开 discover 会把一轮
+    逻辑发现记成多轮，直接顶满修订额度，R10c c1 实证）；落账后抛最早执行序
+    一组的回派（book 先于 preserve）：执行回跳到 Stage2 后正向重放时，
+    preserve 的 open 记录已在案，其修订 prompt 随本轮携带 statement 修复
+    指令——一次级联闭合两组，不为每组各付一遍下游重购。字面不属任何人物
+    面时不动（保持原 typed 停止）。
     """
     surfaces_of = {cid: {s.surface for s in c.surfaces}
                    for cid, c in chars.characters.items()}
     chapter_text = {c['chapter_ordinal']: c['text'] for c in chapters}
-    grouped: dict[tuple[str, str, str], list[OwnerIssueV1]] = {}
+    grouped: dict[tuple[str, str], list[OwnerIssueV1]] = {}
     for leak in leaks:
         matched = _MATERIAL_LEAK_RE.search(leak)
         if matched is None:
@@ -1063,15 +1065,16 @@ def _backfill_material_leak(repository, leaks: list[str], chars, chapters) -> No
                 '不得改。')
             context = {'literal': literal, 'char_id': cid,
                        'chapter': chapter_no, 'where': where}
-        grouped.setdefault((owner, target, item), []).append(OwnerIssueV1(
+        grouped.setdefault((owner, target), []).append(OwnerIssueV1(
             code='material_name_leak', item=item, message=message, context=context))
     first: OwnerRevisionRequired | None = None
-    for (owner, target, item), issues in sorted(grouped.items()):
+    for (owner, target), issues in sorted(grouped.items()):
         try:
             discover_owner_issues(repository, raised_by='str06.stage4.compile',
                                   owner=owner, node=target, issues=issues)
         except OwnerRevisionRequired as required:
-            if first is None:
+            if first is None or NODE_ORDER.index(target) < NODE_ORDER.index(
+                    first.node):
                 first = required
             # 非首组：记录已按完整额度/指纹账落盘，随首组回派的正向重放修复。
     if first is not None:

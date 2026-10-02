@@ -652,6 +652,7 @@ def test_material_leak_attributes_book_first_and_preserve_same_pass(tmp_path):
     leaks = [
         "positive_material_leak[ch01/must_realize/15@34]：未释放专名字面 '裴书远'",
         "positive_material_leak[ch01/must_realize/7@52]：未释放专名字面 '沈知言'",
+        "positive_material_leak[ch02/must_realize/2@9]：未释放专名字面 '裴书远'",
     ]
     with pytest.raises(OwnerRevisionRequired) as excinfo:
         _backfill_material_leak(repo, leaks, chars, chapters)
@@ -664,9 +665,14 @@ def test_material_leak_attributes_book_first_and_preserve_same_pass(tmp_path):
     book_record = read_owner_issue_file(repo, 'book')
     assert book_record.status == 'open'
     assert book_record.raised_by == 'str06.stage4.compile'
+    # 同 owner 多 item 合并为一次 discover（issue 文件按 owner 单记录整写；
+    # 分开 discover 会把一轮逻辑发现记成多轮、顶满修订额度——R10c c1 实证）。
+    assert book_record.rounds_total == 1
+    assert {i.item for i in book_record.issues} == {'chapter:1'}
     # 同批落账：preserve 的 statement 混名记录已在案（正向重放时随本轮修复）。
     preserve_record = read_owner_issue_file(repo, 'preserve')
     assert preserve_record.status == 'open'
+    assert preserve_record.rounds_total == 1
     assert any('混名' in i.message for i in preserve_record.issues)
     # 非人物面字面不归因：不落账、不抛（由调用方保持 typed 停止）。
     repo2 = Str06Repository(tmp_path / 'run2')
