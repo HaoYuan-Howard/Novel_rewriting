@@ -620,6 +620,52 @@ def test_bind_exhaustion_writes_invalid_twin_and_stops(tmp_path, monkeypatch):
     assert not repo.path('stage4/grounding/semantic_binding.json').exists()
 
 
+# ───────── R10c1b：preserve 构造期模型校验归入修订反馈 ─────────
+
+def test_preserve_model_validation_error_feeds_revision_not_crash():
+    """R10c1b 实证（2026-10-02）：series 互斥等 PreserveCheckpoint 构造期校验
+    此前裸穿成 exit 70「结论未知」，修订环拿不到反馈。assemble_preserve 必须
+    把 ValidationError 归入 errors（同节点修订轮带精确问题重问）。"""
+    from novel.stages.stage4.grounding import assemble_preserve
+    from contracts.schema.source import (
+        BlueprintsArtifactV15, ChapterBlueprint, CharacterEntry,
+        CharactersCore, SurfaceWindow,
+    )
+    from tests.str06_expression_inputs import sample_blueprint_expression
+    from tests.str06_facilities import v13_beat, v13_effect
+    entry = {'kind': 'event_core', 'statement': '婚约成立',
+             'must_preserve': True, 'satisfaction': '明确呈现',
+             'anchors': ['b01_01.e1']}
+    entry2 = {'kind': 'event_core', 'statement': '婚约的第二次回响',
+              'must_preserve': False, 'satisfaction': '',
+              'anchors': ['b01_01.e1']}
+    try:
+        checkpoint, errors = assemble_preserve(
+            {'protocol_version': 'stage4-preserve-v2',
+             'obligations': [entry, entry2],
+             'series': [{'members': [1, 2], 'mechanism': None},
+                        {'members': [1, 2], 'mechanism': None}]},  # 全员双 series
+            policy_id='preserve-default', policy_version=1,
+            characters=CharactersCore(characters={'ch1': CharacterEntry(
+                canonical='苏姑娘',
+                surfaces=(SurfaceWindow(surface='苏姑娘', from_chapter=1,
+                                        source_refs=('e01_01',)),))}),
+            blueprint=BlueprintsArtifactV15(
+                source_expression=sample_blueprint_expression(),
+                chapters=(ChapterBlueprint(
+                    chapter=1,
+                    beats=(v13_beat('b01_01', 'e', effects=(
+                        v13_effect({'kind': 'world'}, 'fate', '多舛'),)),),
+                    scenes=({'scene_id': 'sc01', 'beat_ids': ('b01_01',)},),
+                    causal_edges=()),),
+                evidence={'e01_01': '苏姑娘初到陆家。'}),
+            provider='fake', model='fake', request_sha256='f' * 64)
+    except Exception as exc:  # 修复前：ValidationError 裸穿
+        raise AssertionError(f'构造期校验不得裸穿：{type(exc).__name__}: {exc}')
+    assert checkpoint is None
+    assert any('模型校验失败' in e and 'series' in e for e in errors), errors
+
+
 # ───────────────── R10c：positive_material_leak 机械归因回派 ─────────────────
 
 def test_material_leak_attributes_book_first_and_preserve_same_pass(tmp_path):

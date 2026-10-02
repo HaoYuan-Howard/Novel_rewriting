@@ -419,14 +419,20 @@ def assemble_preserve(
             errors.append(f'evidence_conflicts {n} 缺 note（分歧描述）')
     if errors:
         return None, errors
-    checkpoint = PreserveCheckpoint(
-        checkpoint_id=f'cp_{policy_id}_v{policy_version}',
-        policy_id=policy_id, policy_version=policy_version,
-        characters_sha256=_sha256_payload(characters.model_dump()),
-        blueprints_sha256=_sha256_payload(blueprint.model_dump()),
-        provider=provider, model=model, request_sha256=request_sha256,
-        obligations=obligations, series=tuple(series_list),
-        checkpoint_sha256='0' * 64)  # 占位：先构造再回填内容 hash
+    try:
+        checkpoint = PreserveCheckpoint(
+            checkpoint_id=f'cp_{policy_id}_v{policy_version}',
+            policy_id=policy_id, policy_version=policy_version,
+            characters_sha256=_sha256_payload(characters.model_dump()),
+            blueprints_sha256=_sha256_payload(blueprint.model_dump()),
+            provider=provider, model=model, request_sha256=request_sha256,
+            obligations=obligations, series=tuple(series_list),
+            checkpoint_sha256='0' * 64)  # 占位：先构造再回填内容 hash
+    except ValidationError as exc:
+        # R10c 硬化（2026-10-02）：构造期模型校验（如 series 互斥）此前裸穿成
+        # exit 70「结论未知」，修订环拿不到反馈只能崩。归入 errors 让 preserve
+        # 的同节点修订轮带精确问题重问（R10c1b 实证：ob44 进了两个 series）。
+        return None, [f'preserve wire 模型校验失败：{exc}']
     content_hash = _sha256_payload({
         'checkpoint_id': checkpoint.checkpoint_id,
         'policy': [policy_id, policy_version],
