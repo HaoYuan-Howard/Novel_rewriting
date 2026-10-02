@@ -70,8 +70,14 @@ def compile_execution_plan(
                 errors.append(f'{oid} 的前置义务 {req} 未承载')
                 continue
             before = positions.get(predecessor.beat_ref)
-            if before is not None and before > own:
-                errors.append(f'义务依赖逆序/成环：{req} 必须不晚于 {oid}')
+            # 顺序三分（PLAN §二.3）：requires 是故事因果前提语义，不机械映射
+            # 到场内阅读序——复合尝试义务的单一验收拍在场末，其揭示确认可合法
+            # 发生在尝试过程内部（R10c c1 实证：床底/衣柜/房梁三对揭示先于
+            # 尝试义务末拍）。跨场逆序仍是结构剧透硬闸；场内拍序交错放行
+            # （信息披露顺序由 kp/kf 锁位置 Guard 单独保证）。
+            if (before is not None and before > own
+                    and predecessor.scene_id != entry.scene_id):
+                errors.append(f'义务依赖逆序/成环：{req} 必须不晚于 {oid}（跨场）')
             if predecessor.scene_id != entry.scene_id:
                 edges.add((predecessor.scene_id, entry.scene_id))
     # 依赖边＝义务/支撑拍边＋**实际解析来源**边（R2）：

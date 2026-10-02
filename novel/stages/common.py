@@ -816,7 +816,9 @@ entries:[{obligation_id, scene, beat, supporting}]
 - scene/beat 只能取场景闭集里的 scene_id 与该场的 beat_id：单一最终验收拍必须
   能单独完成 satisfaction；复合义务前半部分用 supporting:[{scene, beat}] 给明确
   的较早支撑拍；
-- 若 A requires B，B 的完成位置必须不晚于 A；同场也检查拍序；支撑拍必须早于
+- 若 A requires B，B 的承载场景不得晚于 A 的承载场景（跨场逆序是硬闸）；
+  同场内的拍序交错合法——复合尝试的揭示确认可以发生在尝试过程内部
+  （顺序三分：因果前提语义不机械映射场内阅读序）；支撑拍必须早于
   最终验收拍。
 - 义务携带 knowledge_locks/fact_locks 摘要时，承载位置必须能完成这些锁的
   兑现（授权模式内的知情承载、按锁 modality 的事实承载）；

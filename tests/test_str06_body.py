@@ -101,6 +101,69 @@ def _green_book_ir(band=(0.6, 1.3), total=2000):
     return body, binding, plan, writer_ir
 
 
+def _two_obligation_binding(body, ob1_beat, ob2_beat):
+    """ob01 尝试（验收拍可晚）＋ob02 揭示确认 requires ob01 的绑定夹具。"""
+    from contracts.schema.grounding import (
+        PreserveCheckpoint, SourceLineage, SourceObligation,
+    )
+    from contracts.schema.policy import PreserveKind
+    anchor = anchor_stub()
+    ob1 = SourceObligation(
+        obligation_id='ob01', kind=PreserveKind.EVENT_CORE,
+        statement='夫君假意走开实则藏身床底；尝试以头套始、以推门出终',
+        anchors=anchor, lineage=SourceLineage(blueprint_refs=('b01_01',),
+                                              character_ids=('fu_jun',)),
+        must_preserve=True, satisfaction='正文完整呈现该次尝试')
+    ob2 = SourceObligation(
+        obligation_id='ob02', kind=PreserveKind.EVENT_CORE,
+        statement='芸娘（与读者）确认：夫君并未走开，一直藏在床底',
+        anchors=anchor, lineage=SourceLineage(blueprint_refs=('b01_01',),
+                                              character_ids=('yun_niang',)),
+        must_preserve=True, satisfaction='正文在该揭示点呈现确认', requires=('ob01',))
+    cp = PreserveCheckpoint(
+        checkpoint_id='cp', policy_id='p', policy_version=1, characters_sha256=H64,
+        blueprints_sha256=H64, provider='x', model='y', request_sha256='r' * 64,
+        obligations=(ob1, ob2), checkpoint_sha256=H64)
+    positions = {s.scene_id: {b.beat_id for b in s.beats} for s in body.scenes}
+    wire = {'protocol_version': 'stage4-bind-v1',
+            'entries': [
+                {'obligation_id': 'ob01', 'scene': ob1_beat[0], 'beat': ob1_beat[1],
+                 'supporting': []},
+                {'obligation_id': 'ob02', 'scene': ob2_beat[0], 'beat': ob2_beat[1],
+                 'supporting': []}],
+            'unbound': []}
+    binding, errors = assemble_binding(wire, cp, positions)
+    assert binding is not None and not errors, errors
+    return binding
+
+
+def test_same_scene_requires_interleave_is_legal_cross_scene_inversion_is_not():
+    """顺序三分（PLAN §二.3，R10c c1 实证）：requires 是因果前提语义，不机械
+    映射到场内阅读序——揭示确认拍可早于复合尝试义务的场末验收拍（床底/衣柜/
+    房梁三对揭示曾因此被误拦）；跨场逆序（确认场先于尝试场）仍是结构剧透硬闸。
+    """
+    body = _green_design()
+    beats = {s.scene_id: [b.beat_id for b in s.beats] for s in body.scenes}
+    sc1_first, sc1_last = beats['sc01'][0], beats['sc01'][-1]
+    sc2_first = beats['sc02'][0]
+    # 场内交错：ob01 验收在场末拍、ob02 揭示在早拍 → 合法（修复前此处误报）。
+    binding = _two_obligation_binding(body, ('sc01', sc1_last), ('sc01', sc1_first))
+    plan, errors = compile_execution_plan(body, binding)
+    assert not errors, errors
+    assert plan is not None
+    # 跨场顺承：尝试场早、确认场晚 → 合法。
+    binding_ok = _two_obligation_binding(body, ('sc01', sc1_last), ('sc02', sc2_first))
+    plan_ok, errors_ok = compile_execution_plan(body, binding_ok)
+    assert not errors_ok, errors_ok
+    assert plan_ok is not None
+    # 跨场逆序：确认场早于尝试场 → 硬闸拒绝。
+    binding_bad = _two_obligation_binding(body, ('sc02', beats['sc02'][-1]),
+                                          ('sc01', sc1_first))
+    plan_bad, errors_bad = compile_execution_plan(body, binding_bad)
+    assert plan_bad is None
+    assert any('必须不晚于' in e and '跨场' in e for e in errors_bad), errors_bad
+
+
 # ───────────────────────── 章预算确定性分配 ─────────────────────────
 
 def test_chapter_budgets_sum_to_total_and_are_deterministic():
