@@ -75,6 +75,12 @@ def test_refused_unknown_turn_closes_to_failed_and_unblocks_new_round(tmp_path):
     closed = budget._read().turns[-1]
     assert closed.state == 'failed'
     assert closed.reason_code == COMMANDER_FAILURE_RECONCILED
+    # 历史 unknown attempt 原样保留（收口不改写 attempt 史），但消费面按
+    # 轮级 marker＋receipt 复验容忍——追加额度的成本对账不再被阻塞（R10c）。
+    assert any(a.outcome == 'unknown' for a in closed.attempts)
+    from novel.orchestrator.work_unit_evidence import cost_evidence
+    _view, rows, _owners = cost_evidence(budget, budget._read())
+    assert any(row.get('attempt_id') == 'att-refused-1' for row in rows)
     # 收口后同一请求身份可再取新内容轮——unknown 楔子解除。
     again = budget.reserve(hashlib.sha256(b'req-refused-1').hexdigest(),
                            run_id='run-next')

@@ -586,7 +586,13 @@ class WorkUnitBudget:
         return receipt
 
     def reconcile_failure_under_lock(self, receipt: WorkUnitFailureReceipt) -> None:
-        """调用方已持有本账事务锁及 owner lease；不重入不支持重入的文件锁。"""
+        """调用方已持有本账事务锁及 owner lease；不重入不支持重入的文件锁。
+
+        只翻轮级终态，不改写 attempt 历史：executor 确定性拒收在旧 wire 下
+        attempt 记 ``unknown``（R10c 2026-10-02），作为历史记录原样保留；
+        消费面（如 `work_unit_evidence.cost_evidence`）按轮级收口标记＋
+        receipt 复验容忍该形态。
+        """
         ledger = self._read()
         turn = self._turn(ledger, receipt.before.turn_id)
         if receipt.unit_id != self.unit_id or receipt.sid != ledger.sid or turn != receipt.before:

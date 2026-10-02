@@ -61,7 +61,12 @@ def cost_evidence(budget: work_units.WorkUnitBudget, ledger: WorkUnitLedgerV2) -
     for turn in ledger.turns:
         turn_owners: set[str] = set()
         for attempt in turn.attempts:
-            if attempt.outcome in ('started', 'unknown', 'interrupted'):
+            # 已收口轮（轮级 marker；receipt 在每次 `_read` 复验）容忍其历史
+            # `unknown` attempt——executor 确定性拒收在旧 wire 下如此记录
+            # （R10c 2026-10-02），收口后不再阻塞对账/追加。
+            if attempt.outcome in ('started', 'interrupted') or (
+                    attempt.outcome == 'unknown'
+                    and turn.reason_code != work_units.COMMANDER_FAILURE_RECONCILED):
                 raise work_units.WorkUnitRefused('内容轮仍有未知或未结束的网络尝试，须先对账')
             row = match_attempt(ledger, turn, attempt, rows)
             if row is None:
@@ -141,9 +146,12 @@ def owner_stop_proof(budget: work_units.WorkUnitBudget, ledger: WorkUnitLedgerV2
                     raise work_units.WorkUnitRefused('历史轮记录的 AgentRun 属于另一书，执行身份不闭合')
                 continue
             # 手敲直连轮（无 AgentRun 外层）：内容轮已终态失败时仍须允许人工
-            # 追加，否则 CLI 耗尽 4 次后会被永久卡住。在途/未知仍 fail-closed。
+            # 追加，否则 CLI 耗尽 4 次后会被永久卡住。在途/未知仍 fail-closed；
+            # 已收口轮的历史 unknown attempt 例外（同 cost_evidence，R10c）。
             if turn.state in ('failed', 'rejected'):
-                if any(item.outcome in ('started', 'unknown', 'interrupted')
+                if any(item.outcome in ('started', 'interrupted') or (
+                        item.outcome == 'unknown'
+                        and turn.reason_code != work_units.COMMANDER_FAILURE_RECONCILED)
                        for item in turn.attempts):
                     raise work_units.WorkUnitRefused(
                         '内容轮仍有未知或未结束的网络尝试，须先对账')
