@@ -172,9 +172,20 @@ def owner_stop_proof(budget: work_units.WorkUnitBudget, ledger: WorkUnitLedgerV2
             raise work_units.WorkUnitRefused('原工作单元尝试未完整进入相应 session')
         selected_sessions.append(found[0].end.to_dict())
     relevant_runs = [run for run in runs if run.run_id in owners]
-    if any(run.ended is None or run.state in ('running', 'pending', 'paused', 'unknown') for run in relevant_runs):
+    #: 已被人工 reconcile 封印的 run（lifecycle 末事件 reconciled）：按设计不
+    #: 补造 ended/epoch_closed（fold 保持 unknown），但 admission seal 已闭、
+    #: 不可能再写盘——「活动运行」闸不得把它们永久算活，否则崩溃+收口后的
+    #: 根再也无法追加额度（R10c c1 实证：两次服务重启产生两条 reconciled
+    #: 僵尸，grant 面死锁）。
+    reconciled_runs = {
+        row.get('run_id') for row in run_rows
+        if row.get('kind') == 'reconciled'}
+    if any(run.ended is None or run.state in ('running', 'pending', 'paused', 'unknown')
+           for run in relevant_runs if run.run_id not in reconciled_runs):
         raise work_units.WorkUnitRefused('原 owner 尚未安全结束，不能修改工作单元')
     for run in relevant_runs:
+        if run.run_id in reconciled_runs:
+            continue  # 封印 run 无 ended/epoch_closed 可验；写入不可能性由 seal 保证。
         own = [row for row in run_rows if row.get('run_id') == run.run_id]
         if sum(row['kind'] == 'started' for row in own) != 1 or sum(row['kind'] == 'ended' for row in own) != 1:
             raise work_units.WorkUnitRefused('原 owner 的开始或结束记录不唯一')
@@ -184,6 +195,7 @@ def owner_stop_proof(budget: work_units.WorkUnitBudget, ledger: WorkUnitLedgerV2
                 raise work_units.WorkUnitRefused('原 execution epoch 没有可靠排空证明')
     # 其他工作单元的当前 owner 也可能持有同书产物，预览不能承诺可与它并行写入。
     if any((run.ended is None or run.state in ('running', 'pending', 'paused', 'unknown'))
+           and run.run_id not in reconciled_runs
            and _same_book(budget.base, run.start.sid, ledger.sid) for run in runs):
         raise work_units.WorkUnitRefused('本书仍有活动运行，须先等待安全结束')
     job_rows = jobs.records(budget.base)
