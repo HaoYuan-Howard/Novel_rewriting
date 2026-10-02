@@ -204,7 +204,12 @@ def owner_stop_proof(budget: work_units.WorkUnitBudget, ledger: WorkUnitLedgerV2
     admission_proof = []
     for owner in sorted(owners):
         snapshot = admission.readonly_snapshot(budget.base, owner)
-        if snapshot.active_claims or (snapshot.opened and not snapshot.closed) or beacon.open_executions(budget.base, owner):
+        # 封印（reconciled）owner 的孤儿信标按 seal 语义视为已闭合：reconcile
+        # 不补造 end 事件，孤儿信标没有收口面，仍算活会把该 owner 名下的
+        # 工作单元永久锁死（与上面的活动运行闸同一缺陷面，R10c）。
+        sealed = owner in reconciled_runs
+        if (snapshot.active_claims or (snapshot.opened and not snapshot.closed)
+                or (not sealed and beacon.open_executions(budget.base, owner))):
             raise work_units.WorkUnitRefused('原 owner 的 claim 或子执行尚未闭合')
         admission_proof.append((owner, snapshot.opened, snapshot.closed, snapshot.terminal_subject_sha256))
     return {'owners': sorted(owners), 'sessions': selected_sessions,
