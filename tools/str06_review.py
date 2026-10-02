@@ -108,6 +108,9 @@ def obligation_review(repository):
     blueprint = repository.read_model('stage2/blueprints/chapter_blueprints.json')
     entries = {e.obligation_id: e for e in binding.entries}
     source_beats = {b.beat_id: (c.chapter, b) for c in blueprint.chapters for b in c.beats}
+    # 初态/世界约束原子（s0_*／wc_*）不在拍表里——映射为「章前」（0），不推断拍位。
+    non_beat_refs = {ref for o in binding.obligations
+                     for ref in o.lineage.blueprint_refs if ref not in source_beats}
     scene_chapters = {s: c.chapter_ordinal for c in graph.chapters for s in c.scene_ids}
     selected = {ref for o in binding.obligations for ref in o.lineage.blueprint_refs}
     result = []
@@ -117,8 +120,13 @@ def obligation_review(repository):
         carriers = (entry.beat_ref, *entry.supporting_beat_refs) if entry else ()
         target_chapters = sorted({scene_chapters[ref.split('#')[0]] for ref in carriers})
         result.append({'obligation': obligation.model_dump(mode='json'),
-                       'source_chapters': sorted({source_beats[ref][0] for ref in obligation.lineage.blueprint_refs}),
-                       'source_beats': [source_beats[ref][1].model_dump(mode='json') for ref in obligation.lineage.blueprint_refs],
+                       'source_chapters': sorted({source_beats[ref][0] if ref in source_beats else 0
+                                                  for ref in obligation.lineage.blueprint_refs}),
+                       'source_beats': [source_beats[ref][1].model_dump(mode='json')
+                                        for ref in obligation.lineage.blueprint_refs
+                                        if ref in source_beats],
+                       'non_beat_refs': sorted(ref for ref in obligation.lineage.blueprint_refs
+                                               if ref in non_beat_refs),
                        'target_chapters': target_chapters, 'cross_chapter': len(target_chapters) > 1,
                        'carrier': entry.model_dump(mode='json') if entry else None,
                        'beat': graph.beat(*entry.beat_ref.split('#')).model_dump(mode='json') if entry else None,
