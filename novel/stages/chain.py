@@ -857,9 +857,16 @@ def run_compile_stage4(ctx: ChainContext) -> dict:
     # 失败结果只进诊断：guard report 先落（问题清单与预算读数留证），正式位不写。
     repository.write('stage4/acceptance/guard/report.json', guard_report)
     if problems:
-        # Guard 问题（如「消费了未建立状态：返回 Design 修复」）不在回派路由
-        # 闭集（E-8）：typed 停止给人，恢复走 design 重跑（RED 通道/手动 CLI）
-        # 或 owner patch；诊断面 report.json 已留证全清单。
+        # R10c（2026-10-02，用户裁决 A）：positive_material_leak 机械归因回派——
+        # 泄漏字面所属人物的表面若逐字出现于该章源文，是 Stage2 book 的
+        # surface from_chapter 源保真错误；否则是 Preserve 的 statement 混入
+        # 后文才有的名。归因只做逐字扫描（I-20）；混合问题仍走 typed 停止。
+        leaks = [p for p in problems if p.startswith('positive_material_leak')]
+        if leaks and len(leaks) == len(problems):
+            _backfill_material_leak(repository, leaks, chars, ctx.chapters)
+        # 其余 Guard 问题不在回派路由闭集（E-8）：typed 停止给人，恢复走
+        # design 重跑（RED 通道/手动 CLI）或 owner patch；诊断面 report.json
+        # 已留证全清单。
         raise MechanicalDefectStop(
             f'stage4 Guard 机械缺陷：{problems}',
             node='str06.stage4.compile', issues=tuple(str(p) for p in problems))
@@ -878,6 +885,8 @@ def run_compile_stage4(ctx: ChainContext) -> dict:
     resolve_owner_issues(repository, owner='design',
                          raised_by='str06.stage4.compile')
     resolve_owner_issues(repository, owner='preserve',
+                         raised_by='str06.stage4.compile')
+    resolve_owner_issues(repository, owner='book',
                          raised_by='str06.stage4.compile')
     return guard_report
 
@@ -995,6 +1004,78 @@ def _backfill_epistemic_lock_order(repository, graph, binding) -> None:
     discover_owner_issues(repository, raised_by='str06.stage4.compile',
                           owner='design', node='str06.stage4.body_design',
                           issues=issues)
+
+
+#: positive_material_leak 报告行的机械解析（validate_positive_materials 的
+#: 输出形状：`positive_material_leak[ch01/must_realize/15@34]：未释放专名字面 '裴书远'`）。
+_MATERIAL_LEAK_RE = re.compile(
+    r"positive_material_leak\[ch(\d+)/([^]]+)@\d+\]：未释放专名字面 '([^']+)'")
+
+
+def _backfill_material_leak(repository, leaks: list[str], chars, chapters) -> None:
+    """positive_material_leak → 机械归因回派（R10c 2026-10-02，用户裁决 A）。
+
+    泄漏字面属某人物的未释放面时二分归因（只做逐字扫描，I-20，不猜语义）：
+    该人物的任一表面逐字出现于泄漏章源文 ⇒ Stage2 book 的 surface
+    from_chapter 源保真错误，回派 `str06.stage2.book`（修 from_chapter 与
+    source_refs 到源文最早出现章）；全部表面在该章源文均未出现 ⇒ Preserve
+    的 statement 混入后文才有的名，回派 `str06.stage4.preserve`（statement
+    改用当章可用指称）。字面不属任何人物面时不动（保持原 typed 停止）。
+    多组按 owner 字典序逐组 discover，全部落账后抛**最早执行序**一组的回派
+    （book 先于 preserve）：执行回跳到 Stage2 后正向重放时，preserve 的
+    open 记录已在案，其修订 prompt 随本轮携带 statement 修复指令——一次
+    级联闭合两组，不为每组各付一遍下游重购。字面不属任何人物面时不动
+    （保持原 typed 停止）。
+    """
+    surfaces_of = {cid: {s.surface for s in c.surfaces}
+                   for cid, c in chars.characters.items()}
+    chapter_text = {c['chapter_ordinal']: c['text'] for c in chapters}
+    grouped: dict[tuple[str, str, str], list[OwnerIssueV1]] = {}
+    for leak in leaks:
+        matched = _MATERIAL_LEAK_RE.search(leak)
+        if matched is None:
+            continue
+        chapter_no, where, literal = int(matched.group(1)), matched.group(2), matched.group(3)
+        owner_chars = sorted(cid for cid, surf in surfaces_of.items() if literal in surf)
+        if not owner_chars:
+            continue
+        cid = owner_chars[0]
+        source = chapter_text.get(chapter_no, '')
+        present = sorted(s for s in surfaces_of[cid] if s in source)
+        item = f'chapter:{chapter_no}'
+        if present:
+            owner, target = 'book', 'str06.stage2.book'
+            message = (
+                f'positive_material_leak 归因（源保真）：字面 {literal!r} 在第 '
+                f'{chapter_no} 章写作材料泄漏，但人物 {cid} 的表面 {present} 逐字'
+                f'出现于该章源文——surface from_chapter 记晚了。请把相应 surface '
+                '的 from_chapter 与 source_refs 修到源文最早出现章（引文逐字）。')
+            context = {'literal': literal, 'char_id': cid,
+                       'chapter': chapter_no, 'where': where,
+                       'surfaces_in_source_chapter': present}
+        else:
+            owner, target = 'preserve', 'str06.stage4.preserve'
+            message = (
+                f'positive_material_leak 归因（statement 混名）：字面 {literal!r} '
+                f'在第 {chapter_no} 章写作材料泄漏，且人物 {cid} 的全部表面在该章'
+                '源文均未出现——义务 statement 混入了后文才有的名。请把 statement '
+                '改用该章可用的指称（或去掉人名），不得混入后文名；语义命题本身'
+                '不得改。')
+            context = {'literal': literal, 'char_id': cid,
+                       'chapter': chapter_no, 'where': where}
+        grouped.setdefault((owner, target, item), []).append(OwnerIssueV1(
+            code='material_name_leak', item=item, message=message, context=context))
+    first: OwnerRevisionRequired | None = None
+    for (owner, target, item), issues in sorted(grouped.items()):
+        try:
+            discover_owner_issues(repository, raised_by='str06.stage4.compile',
+                                  owner=owner, node=target, issues=issues)
+        except OwnerRevisionRequired as required:
+            if first is None:
+                first = required
+            # 非首组：记录已按完整额度/指纹账落盘，随首组回派的正向重放修复。
+    if first is not None:
+        raise first
 
 
 # ─── stage5 hook ─────────────────────────────────────────────────────────────

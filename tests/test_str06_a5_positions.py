@@ -618,3 +618,64 @@ def test_bind_exhaustion_writes_invalid_twin_and_stops(tmp_path, monkeypatch):
     assert any('series_collapsed' in e for e in payload['errors'])
     assert payload['_provenance']['gates_skipped'], '闸门问题清单留痕'
     assert not repo.path('stage4/grounding/semantic_binding.json').exists()
+
+
+# ───────────────── R10c：positive_material_leak 机械归因回派 ─────────────────
+
+def test_material_leak_attributes_book_first_and_preserve_same_pass(tmp_path):
+    """R10c（2026-10-02，用户裁决 A）：泄漏字面所属人物的表面逐字出现于该章
+    源文 → book（surface from_chapter 源保真错误）；全部表面缺席 → preserve
+    （statement 混入后文名）。两组同批落账，抛最早执行序一组（book）。"""
+    from novel.stages.chain import _backfill_material_leak
+    from novel.stages.owner_revision import (
+        OwnerRevisionRequired, read_owner_issue_file,
+    )
+    from novel.llm.ledger import CostLedger
+    from novel.store import Str06Repository
+    from tests.str06_facilities import make_context
+
+    repo = Str06Repository(tmp_path / 'run')
+    repo.attach_context(make_context(tmp_path / 'run', ledger=CostLedger(path=None)))
+    from tests.str06_facilities import synthetic_ref
+    repo.write('stage2/observations/book.json', {'characters': {}, 'product': 'book'},
+               owners=('book',), refs=(synthetic_ref('book', '归因夹具'),))
+    repo.write('runtime/preserve_checkpoint.json', {'obligations': []},
+               owners=('preserve',), refs=(synthetic_ref('preserve', '归因夹具'),))
+    chars = CharactersCore.model_validate({'characters': {
+        'pei_shuyuan': {'canonical': '裴书远', 'surfaces': [
+            {'surface': '裴书远', 'from_chapter': 2, 'source_refs': ['e01_02']},
+            {'surface': '表弟', 'from_chapter': 4, 'source_refs': ['e01_04']}]},
+        'shen_zhiyan': {'canonical': '沈知言', 'surfaces': [
+            {'surface': '沈知言', 'from_chapter': 6, 'source_refs': ['e01_06']}]},
+    }, 'initial_state': []})
+    chapters = [{'chapter_ordinal': 1, 'text': '夫君谋划向他表弟借种。'}]
+    leaks = [
+        "positive_material_leak[ch01/must_realize/15@34]：未释放专名字面 '裴书远'",
+        "positive_material_leak[ch01/must_realize/7@52]：未释放专名字面 '沈知言'",
+    ]
+    with pytest.raises(OwnerRevisionRequired) as excinfo:
+        _backfill_material_leak(repo, leaks, chars, chapters)
+    # 最早执行序一组抛出：book（表弟逐字在 ch01 源文 → from_chapter 记晚）。
+    assert excinfo.value.owner == 'book'
+    assert excinfo.value.node == 'str06.stage2.book'
+    assert all(i.code == 'material_name_leak' for i in excinfo.value.issues)
+    assert any('源保真' in i.message and '表弟' in i.message
+               for i in excinfo.value.issues)
+    book_record = read_owner_issue_file(repo, 'book')
+    assert book_record.status == 'open'
+    assert book_record.raised_by == 'str06.stage4.compile'
+    # 同批落账：preserve 的 statement 混名记录已在案（正向重放时随本轮修复）。
+    preserve_record = read_owner_issue_file(repo, 'preserve')
+    assert preserve_record.status == 'open'
+    assert any('混名' in i.message for i in preserve_record.issues)
+    # 非人物面字面不归因：不落账、不抛（由调用方保持 typed 停止）。
+    repo2 = Str06Repository(tmp_path / 'run2')
+    repo2.attach_context(make_context(tmp_path / 'run2', ledger=CostLedger(path=None)))
+    from tests.str06_facilities import synthetic_ref
+    repo2.write('stage2/observations/book.json', {'characters': {}, 'product': 'book'},
+                owners=('book',), refs=(synthetic_ref('book', '归因夹具'),))
+    _backfill_material_leak(repo2, [
+        "positive_material_leak[ch01/must_realize/1@2]：未释放专名字面 '无名之辈'"],
+        chars, chapters)
+    assert read_owner_issue_file(repo2, 'book') is None
+    assert read_owner_issue_file(repo2, 'preserve') is None
