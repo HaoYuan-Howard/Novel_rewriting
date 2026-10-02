@@ -156,6 +156,11 @@ def owner_stop_proof(budget: work_units.WorkUnitBudget, ledger: WorkUnitLedgerV2
                     raise work_units.WorkUnitRefused(
                         '内容轮仍有未知或未结束的网络尝试，须先对账')
                 continue
+            if turn.state == 'adopted':
+                # 采用＝CommitBundle 封存引用（终态且证据闭合），手敲轮同样
+                # 安全（R10c c1：手工 CLI 重放的轮无 agent 身份三格，但答案
+                # 已被正式产物采用，不可能再写）。
+                continue
             if any(item.outcome != 'not_started' for item in turn.attempts):
                 raise work_units.WorkUnitRefused('真实调用缺原会话身份，不能证明已安全结束')
             continue
