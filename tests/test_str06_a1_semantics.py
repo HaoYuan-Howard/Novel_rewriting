@@ -217,3 +217,40 @@ def test_fold_evidence_metrics_count_quotes_hedges_and_modality():
     assert metrics['cognition_total'] == 2 and metrics['cognition_hedged'] == 1
     assert metrics['cognition_hedged_ratio'] == 0.5
     assert metrics['effect_modality_counts'] == {'actual': 1, 'expected': 1}
+
+
+def test_book_surface_from_chapter_must_match_earliest_source_chapter():
+    """R10c 硬化（2026-10-02）：surface 的 from_chapter 必须等于证据闭集中
+    最早逐字包含该字面的章。「表弟@4」三次实证：②只查所引段含字面，防不住
+    引了第 4 章的段而源文第 1 章早就出现——错到 compile4 才被 leak 闸拦下，
+    整条级联重购。"""
+    from novel.stages.stage2 import compile_book_observation
+    chapters = [{'chapter_ordinal': 1,
+                 'text': '夫君谋划向他表弟借种。'}]
+    ev = build_evidence(chapters)
+    assert '表弟' in ev['e01_01']['text']
+    wire = {
+        'protocol_version': 'stage2-book-v3',
+        'characters': {'pei_shuyuan': {
+            'canonical': '表弟', 'surfaces': [
+                {'surface': '表弟', 'from_chapter': 4,
+                 'source_refs': ['e01_01']},   # ②可过（段含字面），②b 拦
+            ]}},
+        'initial_state': [], 'world_constraints': [],
+        'expression': {'narration': {}, 'mechanisms': []},
+    }
+    _obs, errors = compile_book_observation(wire, evidence=ev)
+    hit = [e for e in errors if '记晚了' in e and '第 1 章' in e]
+    assert hit and 'from_chapter=4' in hit[0], errors
+    # 绿：from_chapter 与最早命中章一致 → 无 ②b 错误。
+    wire_ok = {
+        'protocol_version': 'stage2-book-v3',
+        'characters': {'pei_shuyuan': {
+            'canonical': '表弟', 'surfaces': [
+                {'surface': '表弟', 'from_chapter': 1, 'source_refs': ['e01_01']},
+            ]}},
+        'initial_state': [], 'world_constraints': [],
+        'expression': {'narration': {}, 'mechanisms': []},
+    }
+    obs2, errors2 = compile_book_observation(wire_ok, evidence=ev)
+    assert not any('记晚了' in e for e in errors2), errors2

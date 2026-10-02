@@ -116,6 +116,38 @@ def compile_book_observation(
             if issue is not None:
                 errors.append(f'{slug}：{issue.message}')
 
+    # ②b from_chapter 源保真（R10c 硬化，2026-10-02）：surface 的首现章必须
+    # 等于证据闭集中**最早逐字包含该字面**的章。②只查所引段含字面，防不住
+    # 「引了第 4 章的段而源文第 1 章早就出现」（表弟@4 三次实证——错到
+    # compile4 才被 positive_material_leak 拦下，整条级联重购）。机械判定与
+    # leak 归因同一尺（逐字扫描，I-20）；错误直接给出真实首现章与命中段。
+    for slug, c in char_items:
+        if not isinstance(c, Mapping):
+            continue
+        for s in (c.get('surfaces') or []):
+            if not isinstance(s, Mapping):
+                continue
+            literal = s.get('surface')
+            declared = s.get('from_chapter')
+            if not isinstance(literal, str) or not literal.strip() \
+                    or not isinstance(declared, int):
+                continue
+            hits = sorted(
+                ((int(seg.get('chapter', 0)), ref)
+                 for ref, seg in segments.items()
+                 if isinstance(seg, Mapping) and literal in (seg.get('text') or '')),
+                key=lambda item: (item[0], item[1]))
+            if not hits:
+                continue  # 全闭集无命中：锚点闸（②）与 leak 归因另行报告
+            first_chapter, first_ref = hits[0]
+            expected = max(1, first_chapter)  # 章前（e00，chapter=0）映射第 1 章
+            if declared != expected:
+                errors.append(
+                    f'{slug} surface {literal!r} 的 from_chapter={declared} 记晚了'
+                    f'——源文最早逐字出现于第 {expected} 章（证据段 {first_ref}），'
+                    f'请把 from_chapter 改为 {expected} 并将 source_refs 指向'
+                    '该章逐字命中的段')
+
     # ③ R-2.8 canonical 闭合 + surface 重复（canonical 未登记字面进不了替换表）
     slugs = set(raw_chars) if isinstance(raw_chars, Mapping) else set()
     for slug, c in char_items:
