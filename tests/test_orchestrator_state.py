@@ -920,3 +920,32 @@ def test_numbered_produces_is_empty_on_the_new_chain():
         assert not (set(S.numbered_produces(stage))
                     & set(S.required_artifacts(stage, novel_dir=novel_dir)))
     assert S.numbered_produces('stage7') == {}
+
+
+def test_chapters_ignores_downstream_compile_staleness_in_its_verdict():
+    """R10c c1（2026-10-02）：stage2.compile 产物（characters/blueprints/fold）
+    是 chapters 的同 stage 下游——book 修订级联期间它们持续 stale 直到
+    compile 重跑。把它们算进 chapters 的「上游变过」会让 planner 永远选秩更早
+    的 chapters、轮不到 compile（45 次零进展重派实证），修订级联被饿死。
+    真上游（book 观察）stale 时仍须 REDO。"""
+    from contracts.invariants import NODES
+    compile_products = list(NODES['str06.stage2.compile'].produces)
+    # 下游 compile 产物全 stale ＋ 全部章观察在盘 ⇒ SKIP（修复前此处 REDO）。
+    stage = StageState(
+        stage='stage2',
+        artifacts=[_stage2_artifact(rel, freshness='stale')
+                   for rel in compile_products],
+        done=False, reviewable=True, chapters_done=[1, 2],
+    )
+    ov = _overview(stage)
+    ov = ov.model_copy(update={'chapters': 2})
+    assert S.resume_verdict(ov, 'str06.stage2.chapters')[0] == S.RESUME_SKIP
+    # 真上游（book 观察）stale ⇒ 仍 REDO（不把级联排除做成上游盲区）。
+    stage2 = stage.model_copy(update={'artifacts': [
+        _stage2_artifact('stage2/observations/book.json', freshness='stale'),
+        *(_stage2_artifact(rel, freshness='stale') for rel in compile_products),
+    ]})
+    ov2 = _overview(stage2).model_copy(update={'chapters': 2})
+    verdict, why = S.resume_verdict(ov2, 'str06.stage2.chapters')
+    assert verdict == S.RESUME_REDO and 'stage2/observations/book.json' in why
+    assert 'characters.json' not in why, '下游 compile 产物不得进上游陈旧理由'
