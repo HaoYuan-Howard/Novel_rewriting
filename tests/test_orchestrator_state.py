@@ -922,30 +922,34 @@ def test_numbered_produces_is_empty_on_the_new_chain():
     assert S.numbered_produces('stage7') == {}
 
 
-def test_chapters_ignores_downstream_compile_staleness_in_its_verdict():
-    """R10c c1（2026-10-02）：stage2.compile 产物（characters/blueprints/fold）
-    是 chapters 的同 stage 下游——book 修订级联期间它们持续 stale 直到
-    compile 重跑。把它们算进 chapters 的「上游变过」会让 planner 永远选秩更早
-    的 chapters、轮不到 compile（45 次零进展重派实证），修订级联被饿死。
-    真上游（book 观察）stale 时仍须 REDO。"""
+def test_chapters_staleness_whitelists_only_its_true_upstreams():
+    """R10c c1（2026-10-02）：chapters 的「上游变过」只认真上游＝stage0/1 产物
+    ＋book 观察（run_chapters 的实际读面）。同 stage 的 names/associate 观察
+    是平行兄弟、compile 产物是下游——book 修订级联期间它们 file_changed/
+    stale 直到各自重跑，算进 chapters 上游会让 planner 永远选秩更早的
+    chapters、兄弟节点饿死（两轮共 89 次零进展重派实证）。白名单而非黑名单。
+    真上游 stale 时仍须 REDO。"""
     from contracts.invariants import NODES
-    compile_products = list(NODES['str06.stage2.compile'].produces)
-    # 下游 compile 产物全 stale ＋ 全部章观察在盘 ⇒ SKIP（修复前此处 REDO）。
+    siblings_and_downstream = [
+        *NODES['str06.stage2.compile'].produces,
+        'stage2/observations/names.json', 'stage2/observations/associate.json',
+    ]
+    # 兄弟/下游产物全 stale ＋ 全部章观察在盘 ⇒ SKIP（修复前此处 REDO）。
     stage = StageState(
         stage='stage2',
         artifacts=[_stage2_artifact(rel, freshness='stale')
-                   for rel in compile_products],
+                   for rel in siblings_and_downstream],
         done=False, reviewable=True, chapters_done=[1, 2],
     )
-    ov = _overview(stage)
-    ov = ov.model_copy(update={'chapters': 2})
+    ov = _overview(stage).model_copy(update={'chapters': 2})
     assert S.resume_verdict(ov, 'str06.stage2.chapters')[0] == S.RESUME_SKIP
-    # 真上游（book 观察）stale ⇒ 仍 REDO（不把级联排除做成上游盲区）。
-    stage2 = stage.model_copy(update={'artifacts': [
-        _stage2_artifact('stage2/observations/book.json', freshness='stale'),
-        *(_stage2_artifact(rel, freshness='stale') for rel in compile_products),
-    ]})
-    ov2 = _overview(stage2).model_copy(update={'chapters': 2})
-    verdict, why = S.resume_verdict(ov2, 'str06.stage2.chapters')
-    assert verdict == S.RESUME_REDO and 'stage2/observations/book.json' in why
-    assert 'characters.json' not in why, '下游 compile 产物不得进上游陈旧理由'
+    # 真上游（book 观察 / stage1 分区）stale ⇒ 仍 REDO（白名单不是上游盲区）。
+    for upstream_rel in ('stage2/observations/book.json', 'stage1/main_text.json'):
+        stage2 = stage.model_copy(update={'artifacts': [
+            _stage2_artifact(upstream_rel, freshness='stale'),
+            *(_stage2_artifact(rel, freshness='stale') for rel in siblings_and_downstream),
+        ]})
+        ov2 = _overview(stage2).model_copy(update={'chapters': 2})
+        verdict, why = S.resume_verdict(ov2, 'str06.stage2.chapters')
+        assert verdict == S.RESUME_REDO and upstream_rel in why, (upstream_rel, why)
+        assert 'names.json' not in why and 'characters.json' not in why

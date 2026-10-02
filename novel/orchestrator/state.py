@@ -834,14 +834,18 @@ def resume_verdict(
     # 观察过了」上。`ch{nn}` 模板在通用完成度里没有行——若不单开一条账，
     # 这个已成功的节点会被 Supervisor 反复派发（F8d 同形死循环，实测复现）。
     if node == 'str06.stage2.chapters':
-        # R10c（2026-10-02）：本 stage 的 stale 检查只看 chapters 的**上游**
-        # （stage0/1、book 观察）；`str06.stage2.compile` 的产物是同 stage 的
-        # **下游**，book 修订级联期间它们持续 stale 直到 compile 重跑——把它们
-        # 算进「上游变过」会让 planner 永远选秩更早的 chapters、轮不到
-        # compile（45 次零进展重派实证），修订级联被饿死。
-        downstream = set(NODES['str06.stage2.compile'].produces)
+        # R10c（2026-10-02）：chapters 的 stale 检查只认**真上游**＝stage0/1
+        # 产物＋book 观察（`run_chapters` 的实际读面）。同 stage 的
+        # names/associate 观察是平行兄弟节点、compile 产物是下游——book 修订
+        # 级联期间它们 file_changed/stale 直到各自重跑，把它们算进「上游变过」
+        # 会让 planner 永远选秩更早的 chapters、兄弟节点饿死（两轮共 89 次零
+        # 进展重派实证）。白名单而非黑名单：新 stage2 产物默认不算 chapters
+        # 上游。
+        upstream = ({'stage2/observations/book.json'}
+                    | set(NODES['stage0.remove'].produces)
+                    | set(NODES['stage1.partition'].produces))
         stale_upstream = [a for a in st.artifacts
-                          if a.freshness == 'stale' and a.rel not in downstream]
+                          if a.freshness == 'stale' and a.rel in upstream]
         if stale_upstream:
             return RESUME_REDO, (
                 f'上游变过：{", ".join(a.rel for a in stale_upstream)} 已陈旧 '
