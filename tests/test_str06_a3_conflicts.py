@@ -178,3 +178,27 @@ def test_sticky_conflict_stops_after_revision_without_progress(tmp_path,
     assert transport.calls.count('ch01') == 2
     assert transport.calls.count('preserve') == 2
     assert not repo.path('runtime/preserve_checkpoint.json').exists()
+
+
+def test_revision_prompt_embeds_previous_without_storage_envelope(tmp_path):
+    """R10c c1（2026-10-02）：修订 prompt 嵌入的上一版必须剥存储信封——
+    `_provenance` 是工程元数据，喂给模型会被原样回声，wire 校验
+    extra_forbidden 拒收烧轮（ch05 第 4 轮实证）。"""
+    from novel.stages.owner_revision import (
+        OwnerIssueV1, discover_owner_issues, revision_prompt_for_owner,
+    )
+    repo, _wires = _repo_with_observations(tmp_path, name='envelope')
+    try:
+        discover_owner_issues(repo, raised_by='str06.stage4.compile',
+                              owner='ch01', node='str06.stage2.chapters',
+                              issues=[OwnerIssueV1(
+                                  code='material_name_leak', item='chapter:1',
+                                  message='测试归因：请修订 ch01 观察',
+                                  context={})])
+    except Exception:
+        pass  # discover 必然抛回派；open 记录已落账。
+    prompt = revision_prompt_for_owner(
+        repo, 'ch01', 'BASE', 'stage2/observations/ch01.json')
+    assert 'BASE' in prompt
+    assert '_provenance' not in prompt, '存储信封不得进修订 prompt'
+    assert '_schema_version' not in prompt

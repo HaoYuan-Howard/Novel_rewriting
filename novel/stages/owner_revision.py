@@ -303,12 +303,31 @@ def revision_prompt_for_owner(repository, owner: str, base_prompt: str,
 
     ``previous_rel`` 是该 owner 自己的正式产物（修订对象上一版）；无 open 记录
     时原样返回 base_prompt（普通首跑/重放路径逐字节不变，请求身份不漂移）。
+    嵌入的上一版**剥掉存储信封**（`_provenance`／`_schema_version`）：信封是
+    工程元数据，喂给模型会被原样回声，wire 校验 extra_forbidden 拒收烧轮
+    （R10c c1 ch05 实证：第 4 轮因此耗尽）。
     """
     record = open_issue_record(repository, owner)
     if record is None:
         return base_prompt
-    previous = repository.path(previous_rel).read_text(encoding='utf-8')
+    previous = _stored_payload_text(repository, previous_rel)
     return revision_user_prompt(base_prompt, previous, _messages(record.issues))
+
+
+def _stored_payload_text(repository, rel: str) -> str:
+    """读存储产物并剥信封，返回模型应当看到的上一版正文（损坏即原样拒绝）。"""
+    import json as _json
+    raw = repository.path(rel).read_text(encoding='utf-8')
+    try:
+        envelope = _json.loads(raw)
+    except ValueError:
+        raise RuntimeError(f'修订上一版不是 JSON：{rel}')
+    if isinstance(envelope, dict) and 'payload' in envelope:
+        payload = {k: v for k, v in envelope['payload'].items()
+                   if not k.startswith('_')}
+        return _json.dumps(payload, ensure_ascii=False, indent=2)
+    stripped = {k: v for k, v in envelope.items() if not k.startswith('_')}
+    return _json.dumps(stripped, ensure_ascii=False, indent=2)
 
 
 def _now() -> int:
