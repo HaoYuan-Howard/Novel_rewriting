@@ -726,14 +726,16 @@ def test_material_leak_attributes_book_first_and_preserve_same_pass(tmp_path):
     assert preserve_record.rounds_total == 1
     assert any('混名' in i.message for i in preserve_record.issues)
     assert any('苏' in i.message for i in preserve_record.issues)
-    # 非人物面字面不归因：不落账、不抛（由调用方保持 typed 停止）。
+    # 源文有字面但不属任何人物面：不归因（不猜 owner），不落账、不抛。
     repo2 = Str06Repository(tmp_path / 'run2')
     repo2.attach_context(make_context(tmp_path / 'run2', ledger=CostLedger(path=None)))
     from tests.str06_facilities import synthetic_ref
     repo2.write('stage2/observations/book.json', {'characters': {}, 'product': 'book'},
                 owners=('book',), refs=(synthetic_ref('book', '归因夹具'),))
+    assert '夫君' in chapters[0]['text'] and '夫君' not in {
+        s.surface for c in chars.characters.values() for s in c.surfaces}
     _backfill_material_leak(repo2, [
-        "positive_material_leak[ch01/must_realize/1@2]：未释放专名字面 '无名之辈'"],
+        "positive_material_leak[ch01/must_realize/1@2]：未释放专名字面 '夫君'"],
         chars, chapters)
     assert read_owner_issue_file(repo2, 'book') is None
     assert read_owner_issue_file(repo2, 'preserve') is None
