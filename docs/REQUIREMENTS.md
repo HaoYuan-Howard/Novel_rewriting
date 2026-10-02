@@ -603,6 +603,34 @@ Golden 验证，不重新加回迁移关闭条件。
   REDO 级联重派（ch08/ch09 重入修订环，R-14.4 登记余项）与三次代码
   修复后的表面重验；如实登记，不以删除重派轮次美化。
 
+**c1 级联螺旋续记（同日；裁决 A 后的执行与止步）**
+
+- **裁决 A 执行**（`0f5eaa4a`）：positive_material_leak 机械归因回派
+  （表面逐字在该章源文→book 源保真；全表面缺席→preserve 混名），两组
+  同批落账抛最早执行序。book 修订（表弟@1）过闸；chapters 全部 11/11
+  重验过闸（缓存复用为主）；preserve 经一次**源证据冲突回派 ch05**
+  （「退出房间 vs 藏衣柜」——a3 三分支首次产线触发并按轮闭合）后 4 轮
+  过闸落盘。
+- **本会话缺陷修复累计 12 项（全部红例＝产线实证＋绿例＋定向套件）**：
+  除上记 4 项外，`d6a4990b` 回派同 owner 多 item 合并（轮额误耗顶满）、
+  `c4c81077/706ab096` chapters 上游陈旧白名单化（兄弟/下游产物把
+  planner 饿死在 chapters，两轮共 89 次零进展重派）、`697b76a5` 修订
+  prompt 嵌入上一版剥 `_provenance` 信封（模型回声被 extra_forbidden
+  烧轮）、`d7e0fa17/b553aa55` reconcile 封印 run 及孤儿信标不再永久卡
+  grant、`b596d603` 手敲轮 adopted 终态进停止证明豁免。
+- **止步（PLAN「重复、高损失错误模式」条款）**：级联身份churn——任一
+  owner 修订改变下游请求身份→重购→额度耗尽→grant→另一 owner 再修→
+  再churn。associate 5→10 笔仍在悬念配对收敛环（最后差 2 项），
+  design/bind/hook 重购链未开始；继续打地鼠迭代数不可估。未硬化项：
+  REDO 派发付费许可只登记 --check-only（REDO 需手动 CLI 兜底）、级联
+  churn 无收敛上界、手敲轮无 agent 身份三格。
+- **c1 合计**：66 笔实付＋3149 缓存，completion 1.66M token，
+  **≈¥14.03（峰时）**；grant×9 批（ch09×2/ch08×2/ch05×3/associate×2）
+  全登记面落档；诊断与选项落
+  `runtime/review/r10c_c1_cascade_spiral_report.json`。**交用户裁决**：
+  甲＝停本根做收敛硬化批后换新根重跑 c1（≈¥8–12）；乙＝继续本根
+  grant 打地鼠（每迭代 ≈¥0.3–0.8，不可估）。
+
 ### 节省时间的执行约定
 
 
