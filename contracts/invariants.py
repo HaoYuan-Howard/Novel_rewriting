@@ -1677,6 +1677,13 @@ WORK_UNIT_GRANT_ADDITIONS: Final = (1, 2, 3, 4)
 #: 跨节点回派（`runtime/issues/<owner>.json` 的 `rounds_total`）共用本上限；
 #: 耗尽即停给人（owner patch／人工重跑），不隐式扩大授权。
 OWNER_REVISION_MAX_ROUNDS: Final = 2
+#: 跨节点回派的**每根累计上界**（R10c 硬化，2026-10-02）：单 owner 轮上限
+#: （上面那行）防不住「多 owner 互相打断对方收敛」的级联身份 churn——任一
+#: owner 修订改变下游请求身份→重购→额度尽→grant→另一 owner 再修→再 churn
+#: （R10c c1 旧根实证螺旋）。本闸对**一本书一个输出根**的跨节点回派总量
+#: 计数（`runtime/cascade_rewinds.json` 持久，重启不重置）；超界按 item 停给
+#: 人，不隐式继续付费。量级依据：健康链全程回派个位数；12 拦在灾难之前。
+CASCADE_REWIND_LIMIT: Final = 12
 #: 整书级付费内容调用总闸（2026-09-15 全自动裁决）。
 #: 工作单元额度按 `(node, scope)` 各自记账，防不住跨单元的总量失控；本闸在
 #: `reserve` 时对整本书的**全部**内容调用合账设绝对上限。量级依据：正常完成

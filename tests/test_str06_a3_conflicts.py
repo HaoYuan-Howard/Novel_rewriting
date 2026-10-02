@@ -202,3 +202,45 @@ def test_revision_prompt_embeds_previous_without_storage_envelope(tmp_path):
     assert 'BASE' in prompt
     assert '_provenance' not in prompt, '存储信封不得进修订 prompt'
     assert '_schema_version' not in prompt
+
+
+def test_cascade_rewind_limit_stops_before_spiraling(tmp_path):
+    """R10c 硬化：跨节点回派每根累计上界——多 owner 互相打断对方收敛的
+    级联身份 churn 在超界时停给人（不起轮、不付费）；上界内正常回派，
+    计数持久在 runtime/cascade_rewinds.json、重启不重置。"""
+    from contracts.invariants import CASCADE_REWIND_LIMIT
+    from novel.stages.owner_revision import (
+        OwnerIssueV1, OwnerRevisionRequired, OwnerRevisionStop,
+        discover_owner_issues, _bump_cascade_rewinds,
+    )
+    repo, _wires = _repo_with_observations(tmp_path, name='rewindcap')
+    # 预置到上界前一刻（等价于历史上已发生过 LIMIT-1 次回派）。
+    for _ in range(CASCADE_REWIND_LIMIT - 1):
+        _bump_cascade_rewinds(repo)
+    # 上界内最后一次：正常起轮。
+    try:
+        discover_owner_issues(
+            repo, raised_by='str06.stage4.compile', owner='book',
+            node='str06.stage2.book',
+            issues=[OwnerIssueV1(code='material_name_leak', item='chapter:1',
+                                 message='上界内问题', context={})])
+        raise AssertionError('discover 必然抛错')
+    except OwnerRevisionRequired as exc:
+        assert f'{CASCADE_REWIND_LIMIT}/{CASCADE_REWIND_LIMIT}' in str(exc)
+    # 超界：typed 停止（不起轮、不写 open 记录）。
+    try:
+        discover_owner_issues(
+            repo, raised_by='str06.stage4.compile', owner='ch01',
+            node='str06.stage2.chapters',
+            issues=[OwnerIssueV1(code='material_name_leak', item='chapter:2',
+                                 message='超界问题', context={})])
+        raise AssertionError('超界后必须停止')
+    except OwnerRevisionStop as exc:
+        assert '每根上界' in str(exc)
+    record = json.loads(repo.path('runtime/issues/ch01.json').read_text(
+        encoding='utf-8')) if repo.path('runtime/issues/ch01.json').exists() else None
+    assert record is None, '超界停止不得写 open 记录（未起轮）'
+    # 计数持久且含上界读数；重放读同一账（幂等对账）。
+    counter = repo.read('runtime/cascade_rewinds.json')
+    assert counter['count'] == CASCADE_REWIND_LIMIT + 1
+    assert counter['limit'] == CASCADE_REWIND_LIMIT

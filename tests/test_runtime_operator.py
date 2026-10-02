@@ -899,3 +899,21 @@ def test_runner_process_distinguishes_own_exception_from_explicit_exit(
     if exit_code == 70:
         assert 'RuntimeError: runner failed' in result.stderr
         assert 'exit 70' in result.stderr
+
+
+def test_follow_check_purchase_required_discriminator():
+    """R10c 硬化：追跑 check-only 的 purchase_required 判别（修订收敛节点
+    基础身份无可用答案→免费复检恒报未授权；权威归下游复验，降级为警告）。
+    其余显式终态（上游过期等）不误伤。"""
+    from novel.orchestrator.run_step import _follow_check_purchase_required
+    from novel import exit_codes as X
+    hit = '✗ 显式终态（缺少付费/外发授权）：preserve 无同请求身份结果…'
+    assert _follow_check_purchase_required(X.TERMINAL_STATE, hit)
+    assert not _follow_check_purchase_required(X.OK, hit)
+    assert not _follow_check_purchase_required(X.TERMINAL_STATE, None)
+    assert not _follow_check_purchase_required(X.TERMINAL_STATE, '')
+    # 其他显式终态（如上游过期）不降级。
+    assert not _follow_check_purchase_required(
+        X.TERMINAL_STATE, '✗ 显式终态（勿静默）：候选产物的上游已过期…')
+    assert not _follow_check_purchase_required(
+        X.CHECK_FAILED, hit)

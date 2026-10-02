@@ -38,7 +38,7 @@ import hashlib
 from pathlib import Path
 from typing import NoReturn
 
-from contracts.invariants import OWNER_REVISION_MAX_ROUNDS
+from contracts.invariants import CASCADE_REWIND_LIMIT, OWNER_REVISION_MAX_ROUNDS
 from contracts.schema.workflow import (
     OWNER_PRODUCT_RELS, OwnerIssueFileV2, OwnerIssueV1,
     owner_issue_record_of_payload, owner_issues_rel,
@@ -271,6 +271,17 @@ def discover_owner_issues(repository, *, raised_by: str, owner: str, node: str,
             f'按 item 停给人（剩余修复走 owner patch 或人工重跑）：'
             f'{_messages(issues)}',
             node=node, owner=owner, issues=issues, raised_by=raised_by, rounds=rounds)
+    # R10c 硬化（2026-10-02）：跨节点回派每根累计上界——单 owner 轮上限防不住
+    # 多 owner 互相打断对方收敛的级联身份 churn（任一修订改变下游请求身份→
+    # 重购→额度尽→grant→另一 owner 再修→再 churn）。超界停给人，不隐式付费。
+    rewinds = _bump_cascade_rewinds(repository)
+    if rewinds > CASCADE_REWIND_LIMIT:
+        raise OwnerRevisionStop(
+            f'跨节点回派累计 {rewinds - 1} 次已超每根上界 '
+            f'（{CASCADE_REWIND_LIMIT}）——多 owner 修订在互相打断对方收敛'
+            '（级联身份 churn），按 item 停给人裁决；本记录未起轮、未付费',
+            node=node, owner=owner, issues=issues, raised_by=raised_by,
+            rounds=rounds)
     repository.write(owner_issues_rel(owner), OwnerIssueFileV2(
         owner=owner, node=node, raised_by=raised_by, status='open',
         rounds_total=rounds + 1, fingerprint=fingerprint,
@@ -278,9 +289,26 @@ def discover_owner_issues(repository, *, raised_by: str, owner: str, node: str,
         updated_at=updated_at))
     raise OwnerRevisionRequired(
         f'{raised_by} 发现 {len(issues)} 项 typed 机械问题，回派 {node} 按 owner '
-        f'修订重跑（跨节点回派修订轮 {rounds + 1}/{OWNER_REVISION_MAX_ROUNDS}）：'
+        f'修订重跑（跨节点回派修订轮 {rounds + 1}/{OWNER_REVISION_MAX_ROUNDS}；'
+        f'本根累计回派 {rewinds}/{CASCADE_REWIND_LIMIT}）：'
         f'{_messages(issues)}',
         node=node, owner=owner, issues=issues)
+
+
+def _bump_cascade_rewinds(repository) -> int:
+    """每根跨节点回派计数的持久 +1（`runtime/cascade_rewinds.json`）。
+
+    只在实际要起一轮新回派前调用；同指纹重现／轮额耗尽的停止路径不计数。
+    """
+    rel = 'runtime/cascade_rewinds.json'
+    try:
+        current = int((repository.read(rel) or {}).get('count', 0))
+    except FileNotFoundError:
+        current = 0
+    current += 1
+    repository.write(rel, {'count': current,
+                           'limit': CASCADE_REWIND_LIMIT})
+    return current
 
 
 def resolve_owner_issues(repository, *, owner: str, raised_by: str) -> None:

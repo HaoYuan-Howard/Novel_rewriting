@@ -471,8 +471,34 @@ def _main(argv: list[str] | None = None) -> int:
                     file=sys.stderr)
                 return mark_rc
             try:
-                rc = subprocess.run(
-                    step.argv, cwd=step.cwd, check=False, env=step_env).returncode
+                is_follow_check = (
+                    step_index > 0 and '--check-only' in step.argv)
+                if is_follow_check:
+                    # R10c 硬化（2026-10-02）：经修订轮收敛的节点，基础身份永远
+                    # 没有可用答案——追跑 check-only 从基础身份重推导会恒报
+                    # purchase_required（preserve 实证：付费步成功落 57 义务后
+                    # 被追跑终止整个 run）。按 R8a 同一权威判定：修订循环的验证
+                    # 权威是提出问题的下游复验，不是 owner 自己的免费复检；此处
+                    # 捕获 stderr 判别该形态并降级为警告，其余终态照常停。
+                    proc = subprocess.run(
+                        step.argv, cwd=step.cwd, check=False, env=step_env,
+                        capture_output=True, text=True, encoding='utf-8',
+                        errors='replace')
+                    if proc.stdout:
+                        sys.stdout.write(proc.stdout)
+                    if proc.stderr:
+                        sys.stderr.write(proc.stderr)
+                    if _follow_check_purchase_required(proc.returncode, proc.stderr):
+                        print(
+                            '    ⏭ 追跑 check-only 报 purchase_required'
+                            '（修订收敛节点的基础身份无可用答案）——验证权威'
+                            '归下游复验，降级为警告继续', file=sys.stderr)
+                        rc = 0
+                    else:
+                        rc = proc.returncode
+                else:
+                    rc = subprocess.run(
+                        step.argv, cwd=step.cwd, check=False, env=step_env).returncode
             except BaseException:
                 end_rc = _mark(
                     args.base, sid, node, 'end', X.CRASH, note=evidence_note,
@@ -516,6 +542,17 @@ def _main(argv: list[str] | None = None) -> int:
                 file=sys.stderr)
             return X.CRASH
     return result
+
+
+def _follow_check_purchase_required(rc: int, stderr: str | None) -> bool:
+    """追跑 check-only 的 purchase_required 判别（R10c 硬化）。
+
+    匹配 `novel.cli` 对 PurchaseRequired 的渲染短语（`显式终态（缺少付费/
+    外发授权）`）——该短语由 CLI 侧测试钉住，两侧一起变。其余 exit 2 的
+    显式终态（如上游过期）不在此列，照常终止作业。
+    """
+    return (rc == X.TERMINAL_STATE and bool(stderr)
+            and '缺少付费/外发授权' in stderr)
 
 
 def main(argv: list[str] | None = None) -> int:
