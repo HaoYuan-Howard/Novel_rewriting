@@ -575,6 +575,34 @@ Golden 验证，不重新加回迁移关闭条件。
 - **后续**：续跑至 str06.stage5.hook 暂停 → 免费核读（views/obligations）→
   结论交用户决定 c2。
 
+**c1 续记（同日，付费·受限续跑与语义阻塞）**
+
+- **中断②与修复②**：充值后续跑被「unknown 轮无收口面」卡死（402 拒付被
+  旧 wire 记 unknown）。修复链（均为允许干预第 1 类，逐项落档
+  `runtime/review/`）：②`b8cce23c` 引文错位反馈指认真实命中段（系统性：
+  模型引文逐字正确但句段号错位，全书 52+55 笔同型；ch09 错误 5→1 后
+  过闸）＋`75988c79` 已收口轮容忍历史 unknown attempt 的成本对账＋
+  `a511cf7f` 义务依赖逆序按 PLAN §二.3 顺序三分收窄为跨场硬闸（床底/
+  衣柜/房梁三对场内揭示曾被误拦；该内联检查无判据登记无测试）。
+  额度追加×3（ch09×2、ch08×1，登记面 grant）。
+- **进度**：Stage2 全部过闸（book 3 笔／chapters 29 笔含重派与修订／
+  names 1／associate 3）；Stage4 preserve 仅 1 笔（a2 视图替换 Blueprint
+  倾倒的实测收益）／body_design 4／bind 4／hook_design 3 均过闸落盘。
+- **当前阻塞（语义链，非代码缺陷）**：stage4.compile Guard
+  `positive_material_leak` 拦下 ch01 材料中的「裴书远」（ob07 借种计划
+  义务，承载 sc03#b03）。根因链：①stage2.book 把 pei_shuyuan「表弟」面
+  记为 from_chapter=4——源保真错误（源 ch01「表弟」×3、名 ch02 才首现）；
+  ②ob07 statement 用「表弟裴书远」混入后文名；③ch01 该人物无任何已释放
+  面而 ob07 必须承载于 ch01——结构必撞。闸正确；positive_material_leak
+  无 owner 回派路由（epistemic_lock_order 有）。选项 A 语义正源修法
+  （owner 修订＋补回派路由＋下游重购 ≈¥1.5–3）／B 材料掩蔽（仍需①）／
+  C statement 豁免裁决——已交用户裁决（诊断落
+  `r10c_c1_blocker_semantic_chain.json`）。
+- **c1 花费至阻塞**：48 笔实付＋119 缓存，completion 1.35M token，
+  **≈¥11.34（峰时口径）**——已超报价预估上界（¥3–12）边缘，超因＝
+  REDO 级联重派（ch08/ch09 重入修订环，R-14.4 登记余项）与三次代码
+  修复后的表面重验；如实登记，不以删除重派轮次美化。
+
 ### 节省时间的执行约定
 
 
