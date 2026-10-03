@@ -85,7 +85,7 @@ from contracts.schema.observation import (
     STAGE2_OBSERVATION_PROTOCOL,
 )
 from contracts.schema.workflow import (
-    STAGE4_BIND_PROTOCOL, STAGE4_DESIGN_PROTOCOL, STAGE4_HOOK_DESIGN_PROTOCOL,
+    STAGE4_DESIGN_PROTOCOL, STAGE4_HOOK_DESIGN_PROTOCOL,
     STAGE4_PRESERVE_PROTOCOL, STR06_RC_VERSION, STR06_RUNTIME_CONFIG, STAGE4_PRESERVE_POLICY_VERSION,
 )
 from novel.llm.paid_requests import candidate_contract_identity
@@ -100,17 +100,19 @@ from novel.llm.paid_requests import candidate_contract_identity
 #: str06-rc12**（源理解变化波及全书链；names／bind／hook_design 协议字面量
 #: 不变、经 RC 表换身份）。旧候选根按版本关闭式拒识，只读保留；写作层
 #: renderer／写手协议 v6 不在本批（R10b 再升 v7）。
+#: CS-3（2026-10-03，bind LLM 退役）重钉：str06.stage4.bind 退出节点表，
+#: semantic_binding 的 writer 改 body_design（双产物）；冻结 13 节点／10 付费。
 #: 候选契约身份：节点表＋产物表＋RC 版式＋运行期配置的 SHA-256。表内任何
 #: 一行变化都会改变它——先改本记录并登记原因（REQUIREMENTS／DECISIONS），
 #: 再动表。
-FROZEN_CONTRACT_IDENTITY = '7d24e57236a90e2b4889125e5e9254ae9090222a4abdafbc7948f1f9d91859cb'
+FROZEN_CONTRACT_IDENTITY = 'ec7bfb059e0ea690e2b1d8877346ff9b5e328855cbf68709a611b179e0e191ca'
 
-#: 冻结时的节点集合（14 个：stage0/1 两座＋Stage2 五节点＋Stage4 五＋Stage5 两
-#: ＋Stage7 两）。
+#: 冻结时的节点集合（CS-3 bind 退役后 13 个：stage0/1 两座＋Stage2 五节点＋
+#: Stage4 四＋Stage5 两＋Stage7 两；bind 的承载位决定并入 body_design）。
 FROZEN_NODES = (
     'str06.stage2.associate', 'str06.stage2.book', 'str06.stage2.chapters',
     'str06.stage2.compile', 'str06.stage2.names',
-    'str06.stage4.bind', 'str06.stage4.body_design', 'str06.stage4.compile',
+    'str06.stage4.body_design', 'str06.stage4.compile',
     'str06.stage4.hook_design', 'str06.stage4.preserve',
     'str06.stage5.body', 'str06.stage5.hook',
     'str06.stage7.assemble', 'str06.stage7.naming',
@@ -137,10 +139,10 @@ def test_frozen_contract_identity_matches_the_live_tables():
 def test_frozen_node_set_matches_the_live_table():
     nodes = _candidate_nodes()
     assert tuple(sorted(nodes)) == FROZEN_NODES
-    assert len(nodes) == 14
+    assert len(nodes) == 13
     paid = sorted(n for n, spec in nodes.items() if spec.paid)
     free = sorted(n for n, spec in nodes.items() if not spec.paid)
-    assert len(paid) == 11
+    assert len(paid) == 10
     assert free == ['str06.stage2.compile', 'str06.stage4.compile',
                     'str06.stage7.assemble'], (
         '付费／免费节点面变化：compile 与 assemble 必须保持 executor_content_limit=0 '
@@ -194,8 +196,9 @@ FROZEN_SEMANTIC_PROTOCOLS = {
     'STAGE4_PRESERVE_PROTOCOL': 'stage4-preserve-v2',
     'STAGE4_PRESERVE_POLICY_VERSION': 5,
     'STAGE4_DESIGN_PROTOCOL': 'stage4-design-v5',
-    'STAGE4_BIND_PROTOCOL': 'stage4-bind-v1',
     'STAGE4_HOOK_DESIGN_PROTOCOL': 'stage4-hook-design-v1',
+    # CS-3（2026-10-03）：bind 协议随节点退役——wire 面由 design v6 的 real
+    # 承载标注取代，stage4-bind-v1 不再是现役协议字面量（常量删除）。
 }
 
 
@@ -208,7 +211,6 @@ def test_frozen_semantic_protocols_match_the_live_literals():
         'STAGE4_PRESERVE_PROTOCOL': STAGE4_PRESERVE_PROTOCOL,
         'STAGE4_PRESERVE_POLICY_VERSION': STAGE4_PRESERVE_POLICY_VERSION,
         'STAGE4_DESIGN_PROTOCOL': STAGE4_DESIGN_PROTOCOL,
-        'STAGE4_BIND_PROTOCOL': STAGE4_BIND_PROTOCOL,
         'STAGE4_HOOK_DESIGN_PROTOCOL': STAGE4_HOOK_DESIGN_PROTOCOL,
     }
     assert live == FROZEN_SEMANTIC_PROTOCOLS, (

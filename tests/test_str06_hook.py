@@ -34,7 +34,7 @@ from novel.stages.stage5.hook_writer import (
     validate_hook_prose,
 )
 from novel.stages.stage4.compile import compile_execution_plan
-from novel.stages.stage4.grounding import assemble_binding
+from novel.stages.stage4.grounding import derive_semantic_binding
 from novel.store import Str06Repository
 from novel.errors import PathRefused
 from novel.llm.ledger import CostLedger
@@ -176,6 +176,69 @@ def _hook_wire(**over) -> dict:
         'design_brief': '从深夜冷开倒叙入新婚夜旧约，信息逐层升级后在新婚夜收束，玉佩之谜不露。',
         'delivery_brief': '第一人称冷面叙述，短句，不解释。',
     }
+    wire.update(over)
+    return wire
+
+
+def _design_wire_v6() -> dict:
+    """stage4-design-v6 形状（CS-3）：real 承载标注替 bind 的落点判断；v5 的
+    自由键 knowledge 增量在 v6 无面（知情一律经 real＋Brief 锁派生），fake 链
+    以 character 域事实断言承载同一信息。义务 ob01 的接受拍＝末次标注拍
+    （sc01#b02），sc01#b01 是支撑位——与旧 bind wire 的 entries/supporting 等价。"""
+    return {
+        'protocol_version': 'stage4-design-v6',
+        'book_style': '冷峻克制的限知叙事，重日常细节里的异样。',
+        'character_voices': [{'char_id': 'yun_niang', 'voice': '冷峻'}],
+        'initial_state': [
+            {'domain': 'character', 'subjects': ['yun_niang'], 'holder': None,
+             'key': 'marital_status', 'value': '待字闺中'}],
+        'initial_surfaces': [
+            {'char_id': 'yun_niang', 'surfaces': ['苏芸娘']},
+            {'char_id': 'fu_jun', 'surfaces': ['夫君']}],
+        'scenes': [
+            {'driver': {'focal_actor': 'yun_niang', 'immediate_want': '安度新婚',
+                        'opposition': '夫君的怪异', 'turn': '立约'},
+             'brief': '重心在拜堂到立约的落差；从婚礼喧闹写起，展开洞房对坐，'
+                      '在旧约出口处收住，衔接下一场夜半异动。',
+             'reads': [{'domain': 'character', 'subjects': ['yun_niang'],
+                        'holder': None, 'key': 'marital_status'}],
+             'beats': [
+                 {'ev': '拜堂成亲', 'who': ['yun_niang', 'fu_jun'], 'real': ['ob01'],
+                  'state': [{'at': 'yun_niang+fu_jun', 'key': 'marital_status',
+                             'val': '夫妻'}]},
+                 {'ev': '洞房夜夫君立约', 'who': ['yun_niang', 'fu_jun'], 'real': ['ob01'],
+                  'release': [{'char_id': 'yun_niang', 'surfaces': ['芸娘']}]},
+                 {'ev': '芸娘立誓查清', 'who': ['yun_niang'],
+                  'state': [{'at': 'yun_niang', 'key': 'vow', 'val': '她决意查清真相'}]}]},
+            {'driver': {'focal_actor': 'yun_niang', 'immediate_want': '查明真相',
+                        'opposition': '无凭据', 'turn': '发现玉佩'},
+             'brief': '重心在玉佩的发现；从空房冷起，压缩等待，在字面露出的瞬间收束。',
+             'reads': [],
+             'beats': [
+                 {'ev': '夫君夜半离家', 'who': ['fu_jun'],
+                  'state': [{'at': 'fu_jun', 'key': 'whereabouts', 'val': '去向不明'}]},
+                 {'ev': '芸娘发现玉佩秘密', 'who': ['yun_niang'],
+                  'state': [{'at': 'yun_niang', 'key': 'jade_secret', 'val': '玉佩刻着沈字'}]}]},
+        ],
+        'chapters': [{'purpose': '新婚之夜埋下旧约之疑', 'scenes': 1},
+                     {'purpose': '玉佩之谜浮出水面', 'scenes': 1,
+                      'entry': {'transition': 'time_skip'}}],
+    }
+
+
+def _hook_wire_v6(**over) -> dict:
+    """全链配套的 hook wire：三处地址引用按 v6 canonical 的行域改写
+    （knowledge 自由键行不存在——见 `_design_wire_v6` 注释）。"""
+    wire = _hook_wire()
+    wire['opening_facts'][1] = {
+        'ref': {'scene': 'sc01', 'beat': 'b03'},
+        'address': {'domain': 'character', 'subjects': ['yun_niang'], 'holder': None,
+                    'key': 'vow'},
+        'audience': 'reader'}
+    wire['forbidden_reveals'] = [{
+        'ref': {'scene': 'sc02', 'beat': 'b02'},
+        'address': {'domain': 'character', 'subjects': ['yun_niang'], 'holder': None,
+                    'key': 'jade_secret'}}]
     wire.update(over)
     return wire
 
@@ -474,12 +537,10 @@ def _binding_for(body):
         checkpoint_id='cp1', policy_id='p', policy_version=1,
         characters_sha256=H64, blueprints_sha256=H64, provider='x', model='y',
         request_sha256=H64, obligations=(obligation,), checkpoint_sha256=H64)
-    binding, errors = assemble_binding(
-        {'protocol_version': 'stage4-bind-v1', 'entries': [],
-         'unbound': [{'obligation_id': 'ob1', 'owner': 'design',
-                      'reason': '随人物携带'}]}, checkpoint,
-        {s.scene_id: {b.beat_id for b in s.beats} for s in body.scenes})
+    # 无 real 标注 ⇒ 非必保义务进 unbound（owner=design），义务不删。
+    binding, errors = derive_semantic_binding({}, body, checkpoint)
     assert errors == [], errors
+    assert [u.obligation_id for u in binding.unbound] == ['ob1']
     return binding
 
 
@@ -701,7 +762,7 @@ def _full_chain_wires():
         wire.update(over)
         return wire
 
-    hook_wire = _hook_wire()
+    hook_wire = _hook_wire_v6()
     naming_wire = {'entries': [
         {'char_ref': 'fu_jun', 'name': {'family': '顾', 'given': None}, 'aliases': {},
          'keep_reason': None},
@@ -733,10 +794,7 @@ def _full_chain_wires():
              'anchors': ['b01_01.e1'],
              'must_preserve': True,
              'satisfaction': '正文呈现婚约成立且夫君立下旧约', 'requires': []}]},
-        'design': _body_wire(),
-        'bind': {'protocol_version': 'stage4-bind-v1', 'entries': [
-            {'obligation_id': 'ob01', 'scene': 'sc01', 'beat': 'b02',
-             'supporting': [{'scene': 'sc01', 'beat': 'b01'}]}], 'unbound': []},
+        'design': _design_wire_v6(),
         'hook_design': hook_wire,
         'naming': naming_wire,
     }

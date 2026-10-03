@@ -125,7 +125,7 @@ def test_current_corpus_tracks_both_paid_stage4_phases_and_their_outputs():
     """冻结语料清单是两本书硬验收的身份集，刻意不自动跟随新增付费节点。
 
     STR-06 B2 五节点重建后现役付费面是 11 个 `str06.` 节点（Stage2 四个观察
-    owner），冻结清单同步翻新链坐标；冻结书盘在新链下按 `legacy_incompatible`
+    owner）；CS-3 bind 退役后 10 个。冻结清单同步翻新链坐标；冻结书盘在新链下按 `legacy_incompatible`
     拒读，current-schema corpus 验收等语料重生成批次（REQUIREMENTS「本轮范围
     外」），本测试锁的是**坐标不漂移**。
     """
@@ -134,9 +134,9 @@ def test_current_corpus_tracks_both_paid_stage4_phases_and_their_outputs():
     assert tuple(
         node for node in CURRENT_CORPUS_PAID_NODES if NODES[node].stage == 'stage4'
     ) == ('str06.stage4.preserve', 'str06.stage4.body_design',
-          'str06.stage4.bind', 'str06.stage4.hook_design')
-    # 2 书 × 11 付费节点 = 22 条 production dispatch。
-    assert len(CURRENT_CORPUS_BOOKS) * len(CURRENT_CORPUS_PAID_NODES) == 22
+          'str06.stage4.hook_design')
+    # 2 书 × 10 付费节点 = 20 条 production dispatch。
+    assert len(CURRENT_CORPUS_BOOKS) * len(CURRENT_CORPUS_PAID_NODES) == 20
     required = required_current_corpus_artifacts(17)
     assert 'stage2/characters/characters.json' in required
     assert 'stage1/hook_copy.json' not in required, 'hook_copy 随旧链退役，不再是必备面'
@@ -150,7 +150,7 @@ def test_current_corpus_tracks_both_paid_stage4_phases_and_their_outputs():
     stage4_paid_outputs = {
         rel
         for node in ('str06.stage4.preserve', 'str06.stage4.body_design',
-                     'str06.stage4.bind', 'str06.stage4.hook_design')
+                     'str06.stage4.hook_design')
         for rel in NODES[node].produces
     }
     assert stage4_paid_outputs == {
@@ -184,10 +184,11 @@ def test_manifest_rejects_a_missing_stage4_intermediate(rel):
         CorpusManifest.model_validate(raw)
 
 
-def test_manifest_does_not_let_stage4_bind_ledger_rows_replace_body_design():
+def test_manifest_does_not_let_hook_ledger_rows_replace_body_design():
+    """CS-3 bind 退役：ledger.nodes 键闭集仍按现役节点校验——串账键当场拒。"""
     raw = _manifest_raw()
     nodes = raw['books'][0]['ledger']['nodes']
-    nodes['str06.stage4.bind'] += nodes.pop('str06.stage4.body_design')
+    nodes['str06.stage4.hook_design'] += nodes.pop('str06.stage4.body_design')
     with pytest.raises(ValidationError, match='ledger.nodes'):
         CorpusManifest.model_validate(raw)
 

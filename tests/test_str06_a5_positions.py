@@ -1,20 +1,21 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""test_str06_a5_positions —— R10a a5 判据面的定向红绿例（Bind series 同拍
-校验＋epistemic_lock_order 锁位置 Guard＋run_bind 接受闸进修订轮）。
+"""test_str06_a5_positions —— R10a a5 判据面的定向红绿例（承载位派生的
+series 同拍校验＋epistemic_lock_order 锁位置 Guard＋design 修订轮）。
 
-【验证边界】
-· `project_binding_space` 带出 series 与锁摘要（Brief 锁面的渲染，承载选择
-  依据）；
-· `assemble_binding`：series 成员绑定同一拍 → `series_collapsed`（C3/C5 的
-  承载面，同节点修订）；
+【验证边界】（CS-3 bind 退役后承载位＝design wire 的 real 标注）
+· `derive_semantic_binding`：series 成员接受拍相同 → `series_collapsed`
+  （C3/C5 的承载面，并入 design 同节点修订轮）；无标注的非必保义务进
+  unbound（义务不删）；闭集与越界精确拒；
+· design prompt 的义务清单渲染锁摘要（原 `project_binding_space` 的锁面
+  送达职责迁入 `_design_obligation_table`）；
 · `lock_order_violations`：kp 键知情升级/读者确认早于授权该模式的义务承载
   位置 → `epistemic_lock_order`（C1/C6 的位置面）；授权位置取义务全部承载
   点的最早者（支撑拍是承载的一部分——怀疑渐进到证实合法，P2）；故事发生
   顺序不查（合法倒叙不拦，P5）；自由键不查；
 · 回派路由与 `run_compile_stage4` 的回派编排（owner=design）；
-· `run_bind`：接受闸接进 ask 同节点修订轮——坏稿先重问（R-5.5 改写），
-  修订好转正式位；粘性坏稿 ValidationStop 后写 `.INVALID` 孪生并停。
+· `run_body_design`：binding 派生错误并入 ask 同节点修订轮——坏稿先重问，
+  修订好转正式位；粘性坏稿 ValidationStop 停（attempt 留证）。
 「源理解是否正确」归 Stage2/golden，不在此。
 """
 from __future__ import annotations
@@ -28,7 +29,7 @@ from contracts.schema.source import BlueprintsArtifactV15, CharactersCore
 from contracts.schema.workflow import route_owner_issue
 from novel.stages.stage4.design import assemble_body_design
 from novel.stages.stage4.grounding import (
-    assemble_binding, assemble_preserve, project_binding_space, project_brief,
+    assemble_preserve, derive_semantic_binding, project_brief,
 )
 from novel.stages.stage4.guard import check_epistemic_lock_order
 from tests.str06_expression_inputs import sample_narration, sample_readings
@@ -260,28 +261,26 @@ def _positions(body):
     return {s.scene_id: {b.beat_id for b in s.beats} for s in body.scenes}
 
 
-#: 绿 bind wire：ob01 复合承载（supp b02→验收 b03）、ob02→b04、series 分别
-#: b05/b06、kf→b07。
-def _bind_wire() -> dict:
-    return {'protocol_version': 'stage4-bind-v1', 'entries': [
-        {'obligation_id': 'ob01', 'scene': 'sc01', 'beat': 'b03',
-         'supporting': [{'scene': 'sc01', 'beat': 'b02'}]},
-        {'obligation_id': 'ob02', 'scene': 'sc01', 'beat': 'b04',
-         'supporting': []},
-        {'obligation_id': 'ob03', 'scene': 'sc01', 'beat': 'b05',
-         'supporting': []},
-        {'obligation_id': 'ob04', 'scene': 'sc01', 'beat': 'b06',
-         'supporting': []},
-        {'obligation_id': 'ob05', 'scene': 'sc01', 'beat': 'b07',
-         'supporting': []},
-    ], 'unbound': []}
+#: 绿 real 标注投影（ob 编号 → 标注拍 (scene 序, beat 序) 阅读序）：ob01 复合
+#: 承载（支撑 b02→接受 b03）、ob02→b04、series 分别 b05/b06、kf→b07。
+def _placements(**over) -> dict[str, list[tuple[int, int]]]:
+    placements = {
+        'ob01': [(0, 1), (0, 2)],
+        'ob02': [(0, 3)],
+        'ob03': [(0, 4)],
+        'ob04': [(0, 5)],
+        'ob05': [(0, 6)],
+    }
+    placements.update(over)
+    return {k: list(v) for k, v in placements.items() if v}
 
 
-def _green_graph_and_binding():
+def _green_graph_and_binding(placements=None):
     brief = _brief()
     body, errors = _assemble_design(brief)
     assert body is not None and not errors, errors
-    binding, errors = assemble_binding(_bind_wire(), _checkpoint(), _positions(body))
+    binding, errors = derive_semantic_binding(
+        _placements() if placements is None else placements, body, _checkpoint())
     assert binding is not None and not errors, errors
     return body, binding, brief
 
@@ -299,60 +298,56 @@ def test_epistemic_lock_order_routes_to_body_design():
     assert (action, target) == ('revise_upstream', 'str06.stage4.body_design')
 
 
-# ───────────────────────── project_binding_space ─────────────────────────
+# ───────────────────────── 锁摘要送达（design 义务清单） ─────────────────────
 
-def test_binding_space_carries_series_and_lock_digest():
-    """series（正式 ID＋mechanism）与按义务渲染的锁摘要进承载选择面；
-    不带 brief 保持旧最小形状。"""
+def test_design_obligation_table_carries_series_and_lock_digest():
+    """锁摘要与 series 面经 `_design_obligation_table` 进 design prompt（原
+    `project_binding_space` 锁面的迁移落点——承载选择依据随 bind 退役并入
+    design 的义务清单）。"""
+    from novel.stages.chain import _design_obligation_table
+    from novel.stages.stage4.grounding import design_obligation_index
+
     body, binding, brief = _green_graph_and_binding()
     checkpoint = _checkpoint()
-    space = project_binding_space(checkpoint, body, brief)
-    assert len(space['series']) == 1
-    assert space['series'][0]['members'] == ['ob03', 'ob04']
-    assert space['series'][0]['mechanism'] == 'ex_02'
-    assert space['series'][0]['note']
-    by_id = {o['obligation_id']: o for o in space['obligations']}
-    assert by_id['ob03']['series_group'] == by_id['ob04']['series_group']
-    assert by_id['ob03']['series_mechanism'] == 'ex_02'
-    assert len(by_id['ob01']['knowledge_locks']) == 1
-    assert 'suspected' in by_id['ob01']['knowledge_locks'][0]
-    assert 'known' in by_id['ob01']['knowledge_locks'][0]
-    assert '夫君像是看穿了什么' in by_id['ob01']['knowledge_locks'][0]
-    assert 'expected' in by_id['ob05']['fact_locks'][0]
-    minimal = project_binding_space(checkpoint, body)
-    assert all('knowledge_locks' not in o and 'fact_locks' not in o
-               and 'series_group' not in o for o in minimal['obligations'])
+    index = design_obligation_index(checkpoint, brief)
+    table = _design_obligation_table(index)
+    lines = {line.split('｜')[0]: line for line in table.splitlines()[1:]}
+    # ob01：锁列带 holder|kp（a4 授权面）与 kf；realize 分母渲染进清单
+    assert 'yun_niang|kp_' in lines['ob01']
+    # ob05：事实锁（expected）进锁列
+    assert any(line.startswith('ob05') and ('kf_' in line or 'expected' in line)
+               for line in table.splitlines())
+    # series 面在 Brief.requirements（series_group/series_mechanism），
+    # 义务清单行带必保与 satisfaction
+    assert '｜True｜' in lines['ob01'] and '怀疑渐进到证实' in lines['ob01']
+    # 派生 binding 的 series 成员接受拍互斥（绿基座证不同拍）
+    assert len(binding.entries) == 5 and not binding.unbound
 
 
 # ───────────────────────── series 同拍（C3/C5） ─────────────────────────
 
 def test_series_members_same_beat_rejected_and_split_passes():
-    """C3/C5 红例：series 两成员绑同一拍 → series_collapsed；绿：分别承载。"""
+    """C3/C5 红例：series 两成员接受拍相同 → series_collapsed；绿：分别承载。"""
     body, _binding, _brief = _green_graph_and_binding()
     checkpoint = _checkpoint()
-    collapsed = deepcopy(_bind_wire())
-    for entry in collapsed['entries']:
-        if entry['obligation_id'] in ('ob03', 'ob04'):
-            entry['beat'] = 'b05'
-    binding, errors = assemble_binding(collapsed, checkpoint, _positions(body))
+    collapsed = _placements(ob04=[(0, 4)])
+    binding, errors = derive_semantic_binding(collapsed, body, checkpoint)
     assert binding is None
     assert any('series_collapsed' in e and 'ob03' in e and 'ob04' in e
                for e in errors), errors
-    split, errors = assemble_binding(_bind_wire(), checkpoint, _positions(body))
+    split, errors = derive_semantic_binding(_placements(), body, checkpoint)
     assert split is not None and not errors, errors
 
 
 def test_unbound_series_member_does_not_collapse():
-    """unbound 成员无承载位，不参与同拍比较（必保未承载另有回派）。"""
+    """无标注成员进 unbound（义务不删、owner=design），不参与同拍比较。"""
     body, _binding, _brief = _green_graph_and_binding()
     checkpoint = _checkpoint()
-    wire = deepcopy(_bind_wire())
-    wire['entries'] = [e for e in wire['entries']
-                       if e['obligation_id'] != 'ob04']
-    wire['unbound'] = [{'obligation_id': 'ob04', 'owner': 'design',
-                        'reason': '变异：第二次现身暂无承载'}]
-    binding, errors = assemble_binding(wire, checkpoint, _positions(body))
+    placements = _placements(ob04=[])
+    binding, errors = derive_semantic_binding(placements, body, checkpoint)
     assert binding is not None and not errors, errors
+    assert [u.obligation_id for u in binding.unbound] == ['ob04']
+    assert binding.unbound[0].owner == 'design'
 
 
 # ───────────────────────── epistemic_lock_order（C1/C6 位置面） ─────────────
@@ -360,16 +355,9 @@ def test_unbound_series_member_does_not_collapse():
 def test_knowledge_upgrade_before_authorized_position_rejected():
     """C1 位置红例：known 升级（b03）早于授权义务承载位（ob01→b04 无支撑）
     → epistemic_lock_order，消息带升级/授权位置与源盲义务。"""
-    body, _binding, brief = _green_graph_and_binding()
-    checkpoint = _checkpoint()
-    wire = deepcopy(_bind_wire())
-    for entry in wire['entries']:
-        if entry['obligation_id'] == 'ob01':
-            entry['beat'] = 'b04'
-            entry['supporting'] = []
-    binding, errors = assemble_binding(wire, checkpoint, _positions(body))
-    assert binding is not None and not errors, errors
-    problems = check_epistemic_lock_order(body, binding)
+    body, _binding, brief = _green_graph_and_binding(
+        placements=_placements(ob01=[(0, 3)]))
+    problems = check_epistemic_lock_order(body, _binding)
     assert problems, '升级早于授权承载位必须红'
     assert any('epistemic_lock_order' in p and _kp_x(brief) in p
                and 'sc01#b03' in p and 'sc01#b04' in p for p in problems), problems
@@ -377,15 +365,9 @@ def test_knowledge_upgrade_before_authorized_position_rejected():
 
 def test_reader_confirmation_before_authorized_position_rejected():
     """C6 位置红例：读者确认（b04）早于授权锁承载位（ob02→b05）。"""
-    body, _binding, brief = _green_graph_and_binding()
-    checkpoint = _checkpoint()
-    wire = deepcopy(_bind_wire())
-    for entry in wire['entries']:
-        if entry['obligation_id'] == 'ob02':
-            entry['beat'] = 'b05'
-    binding, errors = assemble_binding(wire, checkpoint, _positions(body))
-    assert binding is not None and not errors, errors
-    problems = check_epistemic_lock_order(body, binding)
+    body, _binding, brief = _green_graph_and_binding(
+        placements=_placements(ob02=[(0, 4)]))
+    problems = check_epistemic_lock_order(body, _binding)
     assert any('读者确认' in p and 'sc01#b04' in p and 'sc01#b05' in p
                for p in problems), problems
 
@@ -403,7 +385,7 @@ def test_legal_flashback_not_blocked():
     brief = _brief()
     body, errors = _assemble_design(brief, flashback=True)
     assert body is not None and not errors, errors
-    binding, errors = assemble_binding(_bind_wire(), _checkpoint(), _positions(body))
+    binding, errors = derive_semantic_binding(_placements(), body, _checkpoint())
     assert binding is not None and not errors, errors
     assert check_epistemic_lock_order(body, binding) == []
 
@@ -412,11 +394,9 @@ def test_free_key_and_unauthorized_mode_not_checked():
     """自由键（非 kp_*）的 knowledge set 不进位置判据；无必保授权的模式
     无位置分母（模式合法性归 a4）。"""
     body, _binding, brief = _green_graph_and_binding()
-    wire = deepcopy(_bind_wire())
     # ob03/ob04 非必保：它们的承载拍（b05/b06）晚于 b04 的 reader 确认无关——
     # reader 的授权义务是 ob02（b04），绿基座已证。这里改一条自由键 set：
     body_wire_free = body.model_dump(mode='json')
-    kp_x = _kp_x(brief)
     beat = body_wire_free['scenes'][0]['beats'][1]
     beat['target_delta'].append(
         {'domain': 'knowledge', 'subjects': [], 'holder': 'yun_niang',
@@ -425,7 +405,7 @@ def test_free_key_and_unauthorized_mode_not_checked():
     del beat
     from contracts.schema.design import BodyDesign
     mutated = BodyDesign.model_validate(body_wire_free)
-    binding, errors = assemble_binding(wire, _checkpoint(), _positions(mutated))
+    binding, errors = derive_semantic_binding(_placements(), mutated, _checkpoint())
     assert binding is not None, errors
     assert check_epistemic_lock_order(mutated, binding) == [], \
         '自由键不是锁句柄，位置判据不查'
@@ -445,7 +425,7 @@ def test_initial_state_knowledge_not_in_position_judgement():
         expression_requirements=brief.expression,
         source_narration=brief.source_narration, brief=brief)
     assert body is not None and not errors, errors
-    binding, errors = assemble_binding(_bind_wire(), _checkpoint(), _positions(body))
+    binding, errors = derive_semantic_binding(_placements(), body, _checkpoint())
     assert binding is not None, errors
     assert check_epistemic_lock_order(body, binding) == []
 
@@ -477,15 +457,11 @@ def test_compile_backfills_epistemic_lock_order_to_design(tmp_path):
     from tests.str06_facilities import synthetic_ref
     repo.write('stage4/design/body_design.json', body, owners=('design',),
                refs=(synthetic_ref('design', '已购输入'),))
-    wire = deepcopy(_bind_wire())
-    for entry in wire['entries']:
-        if entry['obligation_id'] == 'ob01':
-            entry['beat'] = 'b04'
-            entry['supporting'] = []
-    bad_binding, errors = assemble_binding(wire, _checkpoint(), _positions(body))
-    assert bad_binding is not None and not errors, errors
+    bad_body, bad_binding, brief = _green_graph_and_binding(
+        placements=_placements(ob01=[(0, 3)]))
+    assert bad_binding is not None
     with pytest.raises(OwnerRevisionRequired) as excinfo:
-        _backfill_epistemic_lock_order(repo, body, bad_binding)
+        _backfill_epistemic_lock_order(repo, bad_body, bad_binding)
     assert excinfo.value.owner == 'design'
     assert excinfo.value.node == 'str06.stage4.body_design'
     issues = excinfo.value.issues
@@ -501,10 +477,10 @@ def test_compile_backfills_epistemic_lock_order_to_design(tmp_path):
     assert record.status == 'open' and record.raised_by == 'str06.stage4.compile'
 
 
-# ───────────────────────── run_bind 修订轮（stage，fake transport） ──────────
+# ───────────── binding 派生错误并入 design 修订轮（stage，fake transport） ─────
 
-#: series 两成员同拍的坏 bind wire（looped 基座：ob01/ob02 都锚 b01_01.e1，
-#: preserve wire 带 series [1,2]）。
+#: series 两成员接受拍同拍的坏 design wire（looped 基座：preserve wire 带
+#: series [1,2]；坏稿把 ob02 的 real 也标到 b02——与 ob01 接受拍同拍）。
 def _a5_wires():
     from tests.str06_faults import looped_full_chain_wires
 
@@ -519,28 +495,27 @@ def _a5_wires():
              'anchors': ['b01_01.e1'], 'must_preserve': False, 'satisfaction': '',
              'requires': []}],
         'series': [{'members': [1, 2], 'mechanism': None}]}
-    wires['bind'] = {'protocol_version': 'stage4-bind-v1', 'entries': [
-        {'obligation_id': 'ob01', 'scene': 'sc01', 'beat': 'b02',
-         'supporting': [{'scene': 'sc01', 'beat': 'b01'}]},
-        {'obligation_id': 'ob02', 'scene': 'sc01', 'beat': 'b01',
-         'supporting': []}], 'unbound': []}
+    # design wire（v6）：ob01 支撑 b01＋接受 b02；ob02 接受 b01（绿基座）。
+    wires['design']['scenes'][0]['beats'][0]['real'] = ['ob01']
+    wires['design']['scenes'][0]['beats'][1]['real'] = ['ob01']
     return wires
 
 
-_BAD_BIND = {'protocol_version': 'stage4-bind-v1', 'entries': [
-    {'obligation_id': 'ob01', 'scene': 'sc01', 'beat': 'b02',
-     'supporting': [{'scene': 'sc01', 'beat': 'b01'}]},
-    {'obligation_id': 'ob02', 'scene': 'sc01', 'beat': 'b02',
-     'supporting': []}], 'unbound': []}
+def _bad_design(wires):
+    """series 同拍坏稿：ob02 的 real 标到 b02（与 ob01 接受拍相同）。"""
+    bad = deepcopy(wires['design'])
+    bad['scenes'][0]['beats'][1]['real'] = ['ob01', 'ob02']
+    return bad
 
 
-class _BindFaultTransport:
-    """bind 原始请求回同拍坏 wire；修订轮（prompt 带〔上一版〕）粘性时
+class _DesignFaultTransport:
+    """design 原始请求回 series 同拍坏 wire；修订轮（prompt 带上一版）粘性时
     仍回坏 wire（同指纹 → 无进展停），非粘性交给内层干净 wire。"""
 
     def __init__(self, wires, sticky=False):
         from tests.test_str06_body import _RoutingTransport
         self._inner = _RoutingTransport(wires)
+        self._bad = _bad_design(wires)
         self._sticky = sticky
 
     @property
@@ -550,19 +525,18 @@ class _BindFaultTransport:
     def send(self, request):
         import json as _json
         from novel.llm.transport import ChatResponse
-        if self._inner._owner(request) == 'bind' and (
+        if self._inner._owner(request) == 'design' and (
                 self._sticky or '上一版' not in request.user):
-            self._inner.calls.append('bind')
+            self._inner.calls.append('design')
             return ChatResponse(
-                content=_json.dumps(_BAD_BIND, ensure_ascii=False),
+                content=_json.dumps(self._bad, ensure_ascii=False),
                 finish_reason='stop',
                 usage={'prompt_tokens': 100, 'completion_tokens': 40},
                 model='fake')
         return self._inner.send(request)
 
 
-def _run_to_bind(tmp_path, transport_factory, monkeypatch):
-    from contracts.schema.hook import HookConstraints
+def _run_to_design(tmp_path, transport_factory, monkeypatch):
     from novel.stages.chain import run_workflow
     from tests.str06_facilities import json_ask, stub_body_runner, text_ask
     from tests.test_str06_body import _chapters, _make_session
@@ -581,42 +555,35 @@ def _run_to_bind(tmp_path, transport_factory, monkeypatch):
             node_filter=['str06.stage2.book', 'str06.stage2.chapters',
                          'str06.stage2.names', 'str06.stage2.associate',
                          'str06.stage2.compile', 'str06.stage4.preserve',
-                         'str06.stage4.body_design', 'str06.stage4.bind'])
+                         'str06.stage4.body_design'])
     return runner, repo, transport
 
 
-def test_bind_acceptance_gate_runs_inside_revision_loop(tmp_path, monkeypatch):
-    """R-5.5 改写：坏 wire（series 同拍）在修订轮内被重问——bind 恰两次调用，
-    修订好转正、不写 INVALID。"""
-    runner, repo, transport = _run_to_bind(
-        tmp_path, lambda wires: _BindFaultTransport(wires), monkeypatch)
+def test_binding_derivation_gate_runs_inside_design_revision_loop(
+        tmp_path, monkeypatch):
+    """series 同拍坏稿在 design 修订轮内被重问——design 恰两次调用，修订后
+    双产物（body_design＋semantic_binding）转正。"""
+    runner, repo, transport = _run_to_design(
+        tmp_path, lambda wires: _DesignFaultTransport(wires), monkeypatch)
     runner()
-    assert transport.calls.count('bind') == 2
+    assert transport.calls.count('design') == 2
+    assert repo.path('stage4/design/body_design.json').is_file()
     assert repo.path('stage4/grounding/semantic_binding.json').is_file()
-    assert not repo.path('stage4/grounding/semantic_binding.INVALID.json').exists()
 
 
-def test_bind_exhaustion_writes_invalid_twin_and_stops(tmp_path, monkeypatch):
-    """粘性坏 wire：修订轮无进展 ValidationStop → `.INVALID` 孪生（wire 原样
-    ＋问题清单）留证、正式位不写；bind 恰两次（原轮＋一轮修订即同指纹停）。"""
+def test_sticky_bad_design_stops_with_no_progress(tmp_path, monkeypatch):
+    """粘性坏稿：修订轮无进展 ValidationStop 停——正式位不写半份产物
+    （attempt 由 ask 层留证；INVALID 孪生面随 bind 节点退役）。"""
     from novel.llm.paid_requests import ValidationStop
 
-    runner, repo, transport = _run_to_bind(
-        tmp_path, lambda wires: _BindFaultTransport(wires, sticky=True),
+    runner, repo, transport = _run_to_design(
+        tmp_path, lambda wires: _DesignFaultTransport(wires, sticky=True),
         monkeypatch)
     with pytest.raises(ValidationStop) as excinfo:
         runner()
     assert excinfo.value.code == 'validation_no_progress'
-    assert excinfo.value.adoption is not None, \
-        'typed 停止须携带被拦稿的显式采用引用（INVALID 铸来源账）'
-    assert transport.calls.count('bind') == 2
-    invalid = repo.path('stage4/grounding/semantic_binding.INVALID.json')
-    assert invalid.is_file(), '耗尽必须留 INVALID 孪生'
-    import json as _json
-    payload = _json.loads(invalid.read_text(encoding='utf-8'))
-    assert payload['wire'] == _BAD_BIND
-    assert any('series_collapsed' in e for e in payload['errors'])
-    assert payload['_provenance']['gates_skipped'], '闸门问题清单留痕'
+    assert transport.calls.count('design') == 2
+    assert not repo.path('stage4/design/body_design.json').exists()
     assert not repo.path('stage4/grounding/semantic_binding.json').exists()
 
 

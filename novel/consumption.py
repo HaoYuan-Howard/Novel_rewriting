@@ -132,10 +132,6 @@ CONSUMED_PROJECTIONS: Final[dict[str, dict[str, Projection]]] = {
         STR06_PRESERVE_CHECKPOINT: artifact_payload,
         STR06_STAGE2_CHARACTERS: artifact_payload,
     },
-    'str06.stage4.bind': {
-        STR06_BODY_DESIGN: artifact_payload,
-        STR06_PRESERVE_CHECKPOINT: artifact_payload,
-    },
     'str06.stage4.hook_design': {
         STR06_BODY_DESIGN: artifact_payload,
         STR06_STAGE2_CHARACTERS: artifact_payload,

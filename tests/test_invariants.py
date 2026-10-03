@@ -168,7 +168,6 @@ def test_operator_redo_strategies_are_closed_and_explicit_per_node():
     assert registered == {
         'stage1.partition': 'canonical',
         'str06.stage2.compile': 'canonical',
-        'str06.stage4.bind': 'canonical',
         'str06.stage4.hook_design': 'canonical',
         'str06.stage4.compile': 'canonical',
         'str06.stage5.hook': 'canonical',
@@ -393,8 +392,9 @@ def test_node_lifecycle_covers_real_nodes_and_preserves_boundaries():
     from contracts.invariants import NODES
 
     # F8a（STR-06 切换）：旧链 16 个节点整体退役；B2（2026-09-27）五节点
-    # 重建后为 14 个 str06. 节点 + stage0.remove / stage1.partition = 16。
-    assert len(NODES) == 16
+    # 重建后为 14 个 str06. 节点；CS-3（2026-10-03）bind 退役后 13 个
+    # ＋ stage0.remove / stage1.partition = 15。
+    assert len(NODES) == 15
     assert all(spec.lifecycle is not None for spec in NODES.values())
     for node, spec in NODES.items():
         life = spec.lifecycle

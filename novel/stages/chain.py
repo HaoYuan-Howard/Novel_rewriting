@@ -74,7 +74,7 @@ from novel import paths, prov
 from novel.core.text import count_non_whitespace_chars
 from novel.model_slots import pipeline_model_slot
 from novel.stages.common import (
-    NAMES_RULES, PRESERVE_RULES, DESIGN_RULES, BIND_RULES, design_rules, expand_surface_releases,
+    NAMES_RULES, PRESERVE_RULES, DESIGN_RULES, design_rules, expand_surface_releases,
     HOOK_DESIGN_RULES, HOOK_WRITER_SYSTEM, NAMING_RULES, SYS,
     BODY_WRITER_SYSTEM, ChapterIdentities, chapter_identities, pack_prompt,
     packet_metrics, project_chapter_packet, render_chapter_packet,
@@ -94,12 +94,13 @@ from novel.stages.owner_revision import (
     resolve_owner_issues, revision_gate, revision_prompt_for_owner,
 )
 from novel.stages.stage4 import (
-    assemble_binding, assemble_body_design, assemble_hook_design,
+    assemble_body_design, assemble_hook_design,
     assemble_preserve, compile_execution_plan, compile_hook_context,
-    compile_writer_book_ir, lock_order_violations, obligation_core_id,
-    project_binding_space,
+    compile_writer_book_ir, derive_semantic_binding, design_obligation_index,
+    design_placements, lock_order_violations, obligation_core_id,
     project_brief, project_preserve_view, publish_graph, run_mechanical_guard,
 )
+from contracts.schema.design import DesignWireV6, STAGE4_DESIGN_WIRE_PROTOCOL
 from novel.stages.stage5 import (
     AnsweredText, HOOK_VALIDATOR_VERSION, MAX_REWRITES, MECHANICAL_CHECKS,
     build_hook_user_prompt,
@@ -130,7 +131,7 @@ __all__ = [
 NODE_ORDER: tuple[str, ...] = (
     'str06.stage2.book', 'str06.stage2.chapters', 'str06.stage2.names',
     'str06.stage2.associate', 'str06.stage2.compile',
-    'str06.stage4.preserve', 'str06.stage4.body_design', 'str06.stage4.bind',
+    'str06.stage4.preserve', 'str06.stage4.body_design',
     'str06.stage4.hook_design', 'str06.stage4.compile',
     'str06.stage5.hook', 'str06.stage5.body',
     'str06.stage7.naming', 'str06.stage7.assemble',
@@ -673,17 +674,6 @@ def run_preserve(ctx: ChainContext) -> dict:
 
 # ─── stage4 body_design ──────────────────────────────────────────────────────
 
-def _design_obligation_index(checkpoint, brief) -> dict:
-    """ob 编号 → Brief 需求（CS-3 v6 瘦 wire 的 real 标注闭集与知情行展开面）。
-
-    ob 编号是 checkpoint 义务的稳定短名（`ob{nn}`，assemble_preserve 派发）；
-    需求经 summary 与义务 statement 连接（同一文本，Preserve 投影的恒等式）。
-    """
-    by_summary = {r.summary: r for r in brief.requirements}
-    return {o.obligation_id: by_summary[o.statement]
-            for o in checkpoint.obligations if o.statement in by_summary}
-
-
 def _design_obligation_table(obligation_index: dict) -> str:
     """义务清单的紧凑渲染（design prompt 面；D6 短别名——模型抄写哈希是失败点）。"""
     lines = ['ob 编号｜类别｜必保｜锁（holder|kp 或 kf）｜satisfaction']
@@ -703,7 +693,7 @@ def run_body_design(ctx: ChainContext) -> dict:
     checkpoint = repository.read_model('runtime/preserve_checkpoint.json')
     blueprint = repository.read_model('stage2/blueprints/chapter_blueprints.json')
     brief, identities = project_brief(checkpoint, core, blueprint)
-    obligation_index = _design_obligation_index(checkpoint, brief)
+    obligation_index = design_obligation_index(checkpoint, brief)
     constraints = OutputConstraints(target_chapter_count=len(ctx.chapters),
                                     total_length_budget=ctx.budget)
     design_prompt = revision_prompt_for_owner(
@@ -719,7 +709,7 @@ def run_body_design(ctx: ChainContext) -> dict:
         'stage4/design/body_design.json')
 
     def design_compile(w):
-        return assemble_body_design(
+        body, errors = assemble_body_design(
             w, known_char_ids=set(chars.characters), constraints=constraints,
             name_projection=chars.name_projection(), name_structure=chars.name_structure,
             expression_requirements=brief.expression,
@@ -727,63 +717,52 @@ def run_body_design(ctx: ChainContext) -> dict:
             registered_surfaces={cid: {s.surface for s in c.surfaces}
                                  for cid, c in chars.characters.items()},
             brief=brief, obligations=obligation_index)
+        if errors:
+            return None, None, errors
+        # CS-3（bind 退役）：real 承载标注是义务落点的唯一声明处——canonical
+        # BodyDesign 与 SemanticBinding 同源派生、同一修订轮校验（错误并报）。
+        placements, placement_errors = _design_placements_of(w)
+        if placement_errors:
+            return None, None, placement_errors
+        binding, errors = derive_semantic_binding(placements, body, checkpoint)
+        if errors:
+            return None, None, errors
+        return body, binding, []
 
-    dw, design_ref = ctx.ask('design', design_prompt, lambda w: design_compile(w)[1])
-    body, errors = design_compile(dw)
+    dw, design_ref = ctx.ask('design', design_prompt, lambda w: design_compile(w)[2])
+    body, binding, errors = design_compile(dw)
     if errors:
         raise ValueError(errors)
-    # BodyDesign 落为正式派生产物：bind／hook_design 的单节点输入从盘面闭合。
-    repository.write('stage4/design/body_design.json', body, owners=('design',),
-                     refs=(design_ref,))
-    return {'scenes': len(body.scenes)}
+    # 双产物按输出组一次发布（R6 权威；I-25：semantic_binding 的唯一 writer
+    # 是 body_design——bind LLM 退役后承载位不再有第二个声明处，两份产物同
+    # bundle 同 seal）。bind／hook_design 的单节点输入从盘面闭合。
+    repository.publish((
+        PublishItem(rel='stage4/design/body_design.json', value=body,
+                    owners=('design',), refs=(design_ref,)),
+        PublishItem(rel='stage4/grounding/semantic_binding.json', value=binding,
+                    owners=('design',), refs=(design_ref,)),
+    ))
+    return {'scenes': len(body.scenes), 'entries': len(binding.entries),
+            'unbound': len(binding.unbound)}
 
 
-# ─── stage4 bind ─────────────────────────────────────────────────────────────
+def _design_placements_of(wire: Any) \
+        -> tuple[dict[str, list[tuple[int, int]]] | None, list[str]]:
+    """design wire → real 承载标注投影（ob → 标注拍阅读序）。
 
-def run_bind(ctx: ChainContext) -> dict:
-    repository = ctx.repository
-    body = repository.read_model('stage4/design/body_design.json')
-    checkpoint = repository.read_model('runtime/preserve_checkpoint.json')
-    brief = repository.read_model('stage4/grounding/reconstruction_brief.json')
-    # Bind 的输入投影（B3 前半）：义务清单＋场景/拍闭集的最小承载选择面，
-    # 不回显整个 Design；wire 只给闭集内分量，复合引用由 assemble 组成。
-    # R10a a5：带出 series 与锁摘要（Brief 的锁面渲染，承载选择的依据）。
-    space = project_binding_space(checkpoint, body, brief)
-    bind_prompt = pack_prompt(BIND_RULES, **space)
-    positions = {s.scene_id: {b.beat_id for b in s.beats} for s in body.scenes}
-    # R10a a5（R-5.5 同批改写）：接受闸接进 ask 的同节点修订轮（≤2，同一
-    # 问题集重复即停）——机械闸拦下的稿先重问，修订轮耗尽/无进展才写
-    # `.INVALID` 孪生（wire 原样留证）并停在该 owner。闭包截获最后一版 wire
-    # 与问题清单：ValidationStop 不携带 wire，孪生留证从这里取。
-    last_wire: dict[str, Any] = {}
-    last_errors: list[str] = []
-
-    def bind_validate(w):
-        nonlocal last_wire, last_errors
-        _, errs = assemble_binding(w, checkpoint, positions)
-        last_wire, last_errors = dict(w), list(errs)
-        return errs
-
+    只有 v6 wire 有 real 面——bind 退役后 v5 直通不再能产出承载位（I-13：
+    旧协议不补默认值取得新资格）。闭集越界由 derive_semantic_binding 精确报。
+    """
+    if wire.get('protocol_version') != STAGE4_DESIGN_WIRE_PROTOCOL:
+        return None, [
+            f'design wire 必须是 {STAGE4_DESIGN_WIRE_PROTOCOL}'
+            f'（实得 {wire.get("protocol_version")!r}）——bind 退役后 real 承载'
+            '标注是义务落点的唯一声明处，v5 直通面不再驱动生产链']
     try:
-        bw, bind_ref = ctx.ask('bind', bind_prompt, bind_validate)
-    except ValidationStop as exc:
-        # 修订轮已耗尽：拦下的稿不丢——INVALID 孪生留证（typed 停止携带被拦
-        # 最后一稿的显式采用引用，铸「这份稿是谁产的」的来源账；原响应另按
-        # attempt 留证，重放走缓存，同指纹不重购），正式位不写；停止直接上抛
-        # （exit 1，恢复走 promote_invalid 或人工重跑）。
-        repository.write_invalid(
-            'stage4/grounding/semantic_binding.json',
-            {'wire': last_wire, 'errors': list(last_errors)},
-            problems=tuple(last_errors), refs=(exc.adoption,))
-        raise
-    binding, errors = assemble_binding(bw, checkpoint, positions)
-    if errors:
-        # 不可达：ask 修订轮只放行过闸的回答；保守保留 fail-fast，不静默
-        # 放行半份正式产物（I-34）。
-        raise ValueError(f'bind 通过修订轮后仍不过闸（不可达）：{errors}')
-    repository.write('stage4/grounding/semantic_binding.json', binding,
-                     owners=('bind',), refs=(bind_ref,))
-    return {'entries': len(binding.entries), 'unbound': len(binding.unbound)}
+        model = DesignWireV6.model_validate(wire)
+    except ValidationError as exc:
+        return None, [f'design 瘦 wire 协议校验失败：{exc}']
+    return design_placements(model), []
 
 
 # ─── stage4 hook_design ──────────────────────────────────────────────────────
@@ -831,8 +810,8 @@ def run_hook_design(ctx: ChainContext) -> dict:
 def run_compile_stage4(ctx: ChainContext) -> dict:
     """`str06.stage4.compile`：确定性编译（ExecutionPlan／Guard／IR／HookContext）。
 
-    R3：必保义务未承载（bind 的合法 unbound 返回在此被义务覆盖 Guard 拦下）按
-    `must_keep_unbound` 回派——`unbound.owner` 经路由表闭集解析回
+    R3：必保义务未承载（binding.unbound 的合法非必保返回之外，漏承载的必保
+    义务在此被义务覆盖 Guard 拦下）按 `must_keep_unbound` 回派——`unbound.owner` 经路由表闭集解析回
     body_design（design）或 preserve（grounding），写 `runtime/issues/<owner>.json`
     并抛 `OwnerRevisionRequired`；未映射 owner 显式停（E-8）。复验通过时回写
     resolved。R10a a5：锁位置违例（知情升级/读者确认早于授权承载位）按
@@ -1487,7 +1466,6 @@ NODE_RUNNERS: dict[str, Callable[[ChainContext], dict]] = {
     'str06.stage2.compile': run_compile,
     'str06.stage4.preserve': run_preserve,
     'str06.stage4.body_design': run_body_design,
-    'str06.stage4.bind': run_bind,
     'str06.stage4.hook_design': run_hook_design,
     'str06.stage4.compile': run_compile_stage4,
     'str06.stage5.hook': run_hook,

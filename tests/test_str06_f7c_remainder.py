@@ -313,15 +313,15 @@ def test_same_request_identity_is_purchased_once_across_consumers(tmp_path):
     transport = _Transport()
     base, repo, ledger, session = _session(tmp_path, transport)
     request = _request()
-    assert ask_json(session, 'bind', request, lambda _: [])[0] == {'entries': []}
-    assert ask_json(session, 'bind', request, lambda _: [])[0] == {'entries': []}
+    assert ask_json(session, 'preserve', request, lambda _: [])[0] == {'entries': []}
+    assert ask_json(session, 'preserve', request, lambda _: [])[0] == {'entries': []}
     assert transport.calls == 1, '同请求身份不得二次付费'
     rows, partial = read_cost_snapshot(base)
     assert not partial and len(rows) == 2
     assert len([r for r in rows if not r['cached']]) == 1
     assert rows[1]['cached'] is True
     assert rows[1]['prompt_tokens'] == 0 and rows[1]['completion_tokens'] == 0
-    unit = WorkUnitBudget(base, 'book', 'str06.stage4.bind', 'executor', 'book')
+    unit = WorkUnitBudget(base, 'book', 'str06.stage4.preserve', 'executor', 'book')
     assert [t.state for t in unit._read().turns] == ['delivered'], '重复 ask 不造重复轮次'
 
 
@@ -329,11 +329,11 @@ def test_adopted_request_replay_is_idempotent_without_double_count(tmp_path):
     """采用重放幂等：记录字节不变、零新购、候选根不出现任何实付行。"""
     root, identity, request = _source_root(tmp_path)
     base, repo, ledger, session = _candidate(tmp_path, root)
-    ask_json(session, 'bind', request, lambda _: [])
-    record_first = repo.inspect('runtime/revisions/bind.json')
+    ask_json(session, 'preserve', request, lambda _: [])
+    record_first = repo.inspect('runtime/revisions/preserve.json')
     rows_first, _ = read_cost_snapshot(base)
-    ask_json(session, 'bind', request, lambda _: [])
-    assert repo.inspect('runtime/revisions/bind.json') == record_first, '采用记录不得造重复实体'
+    ask_json(session, 'preserve', request, lambda _: [])
+    assert repo.inspect('runtime/revisions/preserve.json') == record_first, '采用记录不得造重复实体'
     rows_second, _ = read_cost_snapshot(base)
     assert len(rows_second) == len(rows_first) + 1
     assert all(r['cached'] and r['prompt_tokens'] == 0 and r['completion_tokens'] == 0
@@ -346,23 +346,40 @@ def test_tampered_local_request_row_blocks_replay_and_repurchase(tmp_path):
     transport = _Transport()
     base, repo, ledger, session = _session(tmp_path, transport)
     request = _request()
-    answer = ask_json(session, 'bind', request, lambda _: [])[1]
+    answer = ask_json(session, 'preserve', request, lambda _: [])[1]
     # 新存储：耐久响应是工作单元账里的 attempt blob——篡改它（I-16 反例迁移）。
-    unit = WorkUnitBudget(base, 'book', 'str06.stage4.bind', 'executor', 'book')
+    unit = WorkUnitBudget(base, 'book', 'str06.stage4.preserve', 'executor', 'book')
     turn = unit._read().turns[0]
     blob_rel = unit.directory / f'{turn.response_sha256}.json'
     payload = json.loads(blob_rel.read_text(encoding='utf-8'))
     payload['payload']['response']['content'] = '{"entries": [{"被改": true}]}'
     blob_rel.write_text(json.dumps(payload, ensure_ascii=False), encoding='utf-8')
     with pytest.raises(Exception, match='漂移'):
-        ask_json(session, 'bind', request, lambda _: [])
+        ask_json(session, 'preserve', request, lambda _: [])
     assert transport.calls == 1, '响应损坏不得触发第二次付费'
 
 
 # ───────────── analyze receipt／draft repair 审计 · 不漏补提交 ───────────────
 
-def _routing_session(tmp_path, wires, *, yes: bool):
+def _routing_session(tmp_path, wires, *, yes: bool, sticky_bad_design: bool = False):
     transport = _RoutingTransport(wires)
+    if sticky_bad_design:
+        # design 面（含修订轮）始终回坏稿：real 引用闭集外义务 → 同指纹停。
+        from novel.llm.transport import ChatResponse
+        import json as _json
+        bad = wires['design']
+        original_send = transport.send
+
+        def sticky_send(request):
+            if transport._owner(request) == 'design':
+                transport.calls.append('design')
+                return ChatResponse(
+                    content=_json.dumps(bad, ensure_ascii=False),
+                    finish_reason='stop',
+                    usage={'prompt_tokens': 100, 'completion_tokens': 40},
+                    model='fake')
+            return original_send(request)
+        transport.send = sticky_send
     base = tmp_path / 'out'
     base.mkdir(exist_ok=True)
     repo = Str06Repository(base / 'run')
@@ -395,15 +412,15 @@ def test_unauthorized_stop_then_authorized_rerun_pays_exactly_once(tmp_path):
     assert not transport.calls, '未授权不得发出任何请求'
     rows, _ = read_cost_snapshot(base)
     assert rows == [] and read_book_budget(base, 'run') is None, '未授权不得建账'
-    # 授权后同根重跑：13 次新购与全新运行逐项一致（未授权尝试不留下任何计费实体）。
-    # （B2 五节点：新增 associate 关联调用，见 REQUIREMENTS D8/D9 报价口径）
+    # 授权后同根重跑：12 次新购与全新运行逐项一致（未授权尝试不留下任何计费实体）。
+    # （B2 五节点：新增 associate；CS-3 bind 退役——见 REQUIREMENTS D8/D9 报价口径）
     authorized = PaidRequestSession(repo, CostLedger(path=ledger_path(base)), transport,
                                     yes=True, allow_source_export=True,
                                     provider='fake', sid='run')
     _run(repo, authorized)
-    assert len(transport.calls) == 13
+    assert len(transport.calls) == 12
     paid = [r for r in read_cost_snapshot(base)[0] if not r['cached']]
-    assert len(paid) == 13
+    assert len(paid) == 12
     assert repo.read('runtime/workflow_status.json')['status'] == 'delivered'
 
 
@@ -431,27 +448,26 @@ def test_paid_artifact_replay_after_lost_commit_is_free(tmp_path):
     assert len(paid) == calls_before, '候选根实付行数不得因重放增加'
 
 
-def test_invalid_twin_rerun_archives_rounds_without_rebuy(tmp_path):
-    """同指纹再次拦下：旧孪生先进归档再覆写，正式位不写、wire 不重购。"""
+def test_sticky_bad_design_stops_without_rebuy_on_rerun(tmp_path):
+    """同指纹再次拦下：正式位不写、wire 不重购（CS-3 bind 退役后承载闸在
+    design 的同节点修订轮；INVALID 孪生面随 bind 节点退役）。"""
     wires = _full_chain_wires()
-    wires['bind'] = {'protocol_version': 'stage4-bind-v1', 'entries': [
-        {'obligation_id': 'ob01', 'scene': 'sc01', 'beat': 'b99'}], 'unbound': []}
-    base, repo, session, transport = _routing_session(tmp_path, wires, yes=True)
-    # R10a a5（R-5.5 改写）：接受闸先在修订轮内重问，同一坏 wire 原样重现 →
-    # 同指纹 ValidationStop；INVALID 孪生照写。修订轮是新请求身份的付费调用，
-    # 如实计费（第一次 _run 内 bind 恰两次）。
+    # design 粘性坏稿：real 标注引用闭集外义务编号（ob99）——修订轮原样重现
+    # → 同指纹 ValidationStop。
+    wires['design']['scenes'][0]['beats'][0]['real'] = ['ob01', 'ob99']
+    wires['design']['scenes'][0]['beats'][1]['real'] = ['ob01', 'ob99']
+    base, repo, session, transport = _routing_session(
+        tmp_path, wires, yes=True, sticky_bad_design=True)
     from novel.llm.paid_requests import ValidationStop
     with pytest.raises(ValidationStop, match='重问后无进展'):
         _run(repo, session)
-    assert transport.calls.count('bind') == 2
+    assert transport.calls.count('design') == 2
     calls_before = len(transport.calls)
-    invalid_rel = repo.invalid_rel('stage4/grounding/semantic_binding.json')
-    assert repo.inspect(invalid_rel)['_provenance']['gates_skipped']
     # 重跑：首轮与修订轮回答全部命中缓存（请求身份未变）→ 同指纹再停，
-    # 零新购；旧孪生先进归档再覆写。
+    # 零新购。
     with pytest.raises(ValidationStop, match='重问后无进展'):
         _run(repo, session)
     assert len(transport.calls) == calls_before, '同指纹失败不得重复计费'
-    assert repo.archived_rounds(invalid_rel) == {1}, '旧孪生须先归档再覆写'
-    assert not repo.path('stage4/grounding/semantic_binding.json').exists(), '正式位不得落污染稿'
-    assert repo.inspect('runtime/workflow_status.json')['failed_node'] == 'str06.stage4.bind'
+    assert not repo.path('stage4/design/body_design.json').exists(), '正式位不得落污染稿'
+    assert not repo.path('stage4/grounding/semantic_binding.json').exists()
+    assert repo.inspect('runtime/workflow_status.json')['failed_node'] == 'str06.stage4.body_design'

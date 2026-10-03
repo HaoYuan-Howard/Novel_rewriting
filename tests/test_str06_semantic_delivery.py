@@ -1095,16 +1095,14 @@ def test_fault_base_green_baseline_completes_the_chain(tmp_path, monkeypatch):
      lambda repo: (repo.path('stage2/observations/ch02.json').is_file()
                    and not repo.path('stage2/observations/associate.json')
                    .is_file())),
-    # R8a-3：定位与消息用 Design 可见的源盲 core id（ob01→req_…），修订提示
-    # 不出现源序号；签名断言 req_ 前缀与「必保义务 … 尚未承载」分开匹配。
-    ('obligation_unbound', ('必保义务 ', '尚未承载', 'req_', '同一问题集原样重现'),
-     # bind 对「必保义务进 unbound」的稿是合法返回（owner 路由在案），拦下它的
-     # 是 stage4 compile 的义务覆盖 Guard——R3 的回派规则把这类问题按
-     # unbound.owner 回 body_design／preserve；粘性故障下回派修订后原样复现，
-     # 按item停（issues 记录在案）。
-     lambda repo: (repo.path('stage4/grounding/semantic_binding.json').is_file()
-                   and repo.path('stage4/acceptance/guard/compile.json').is_file()
-                   and repo.path('runtime/issues/design.json').is_file()
+    # CS-3 bind 退役：拦下漏标 real 稿的是 body_design 的覆盖闸（同节点修订
+    # 轮内重问）；粘性故障下修订轮原样复现，同问题集停——停止消息带覆盖闸
+    # 的 typed 问题，ob 短名是 v6 义务清单的正式闭集词汇（D6）。
+    ('obligation_unbound', ('必保义务未被任何拍标注承载', 'real', '重问后无进展'),
+     # 正式位不落半份产物（双产物同组发布，闸内未过＝两份都不写）。
+     lambda repo: (not repo.path('stage4/design/body_design.json').exists()
+                   and not repo.path('stage4/grounding/semantic_binding.json')
+                   .is_file()
                    and not repo.path('stage4/compiled/execution_plan.json')
                    .is_file())),
     ('duplicate_json_key', ('book 校验失败', '重复键', '重问后无进展'),

@@ -320,14 +320,12 @@ def _checkpoint_with(*obligation_ids: str):
 
 
 def _binding_unclosed() -> list:
-    """Bind 机械校验：entry 的 obligation 不在 checkpoint 分母内。"""
-    from novel.stages.stage4.grounding import assemble_binding
+    """Binding 派生（CS-3）：real 标注引用 checkpoint 分母外义务。"""
+    from tests.test_str06_execution_ir import _graph
+    from novel.stages.stage4.grounding import derive_semantic_binding
 
-    _model, errors = assemble_binding(
-        {'protocol_version': 'stage4-bind-v1',
-         'entries': [{'obligation_id': 'ghost', 'scene': 's01', 'beat': 'bt1'}],
-         'unbound': []},
-        _checkpoint_with('o1'), known_scene_beats={'s01': {'bt1'}})
+    _model, errors = derive_semantic_binding(
+        {'ghost': [(0, 0)]}, _graph(), _checkpoint_with('o1'))
     return errors
 
 
@@ -897,42 +895,29 @@ def _design_lock_mode_escalation() -> list:
 
 
 def _binding_series_same_beat() -> list:
-    """R-5.18：series 成员绑定同一拍（C3/C5 的承载面，离散兑现被压成一次）。"""
-    from copy import deepcopy as _dc
-
+    """R-5.18：series 成员接受拍相同（C3/C5 的承载面，离散兑现被压成一次）。"""
     from tests.test_str06_a5_positions import (
-        _bind_wire, _checkpoint, _green_graph_and_binding,
+        _placements, _checkpoint, _green_graph_and_binding,
     )
-    from novel.stages.stage4.grounding import assemble_binding
+    from novel.stages.stage4.grounding import derive_semantic_binding
 
     body, _binding, _brief = _green_graph_and_binding()
-    wire = _dc(_bind_wire())
-    for entry in wire['entries']:
-        if entry['obligation_id'] in ('ob03', 'ob04'):
-            entry['beat'] = 'b05'
-    _model, errors = assemble_binding(
-        wire, _checkpoint(),
-        {s.scene_id: {b.beat_id for b in s.beats} for s in body.scenes})
+    _model, errors = derive_semantic_binding(
+        _placements(ob04=[(0, 4)]), body, _checkpoint())
     return errors
 
 
 def _epistemic_lock_early_upgrade() -> list:
     """R-5.19：读者确认早于授权锁承载位（C6 位置面，披露顺序前移）。"""
-    from copy import deepcopy as _dc
-
     from tests.test_str06_a5_positions import (
-        _bind_wire, _checkpoint, _green_graph_and_binding, _positions,
+        _placements, _checkpoint, _green_graph_and_binding,
     )
-    from novel.stages.stage4.grounding import assemble_binding
+    from novel.stages.stage4.grounding import derive_semantic_binding
     from novel.stages.stage4.guard import check_epistemic_lock_order
 
-    body, _binding, _brief = _green_graph_and_binding()
-    wire = _dc(_bind_wire())
-    for entry in wire['entries']:
-        if entry['obligation_id'] == 'ob02':
-            entry['beat'] = 'b05'
-    binding, errors = assemble_binding(wire, _checkpoint(), _positions(body))
-    assert binding is not None and not errors, errors
+    body, binding, _brief = _green_graph_and_binding(
+        placements=_placements(ob02=[(0, 4)]))
+    assert binding is not None
     return check_epistemic_lock_order(body, binding)
 
 

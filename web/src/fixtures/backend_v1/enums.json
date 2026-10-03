@@ -742,7 +742,6 @@
   "str06.stage2.associate",
   "str06.stage4.preserve",
   "str06.stage4.body_design",
-  "str06.stage4.bind",
   "str06.stage4.hook_design",
   "str06.stage5.body",
   "str06.stage5.hook",
@@ -793,7 +792,6 @@
   "str06.stage2.compile",
   "str06.stage4.preserve",
   "str06.stage4.body_design",
-  "str06.stage4.bind",
   "str06.stage4.hook_design",
   "str06.stage4.compile",
   "str06.stage5.hook",
@@ -1134,7 +1132,7 @@
    }
   },
   "str06.stage4.body_design": {
-   "label": "Stage4 目标故事与导演说明设计（BodyDesign）",
+   "label": "Stage4 目标故事与导演说明设计（BodyDesign＋real 承载标注派生 SemanticBinding）",
    "paid": true,
    "stage": "stage4",
    "section": "R-5",
@@ -1142,53 +1140,20 @@
     "--check-only"
    ],
    "produces": [
-    "stage4/design/body_design.json"
+    "stage4/design/body_design.json",
+    "stage4/grounding/semantic_binding.json"
    ],
    "lifecycle": {
     "unit_kind": "book",
     "input_workpack": "Preserve checkpoint、身份投影与 Characters v4",
     "generation_mode": "executor",
     "review_mode": "none",
-    "review_scope": "机械校验通过即自动执行",
+    "review_scope": "机械校验通过即自动执行；CS-3 bind 退役——承载位由 wire 的 real 标注派生，双产物同组发布（semantic_binding 唯一 writer）",
     "repair_actions": [
      "stop"
     ],
     "repair_owners": [
      "str06.stage4.body_design"
-    ],
-    "session_scope": "executor:book",
-    "recovery_entries": [
-     "saved_response",
-     "historical_adoption",
-     "owner_patch"
-    ],
-    "executor_content_limit": 4,
-    "approval_bindings": [],
-    "approval_projection": []
-   }
-  },
-  "str06.stage4.bind": {
-   "label": "Stage4 Bind（义务到目标位置绑定，完整 canonical snapshot）",
-   "paid": true,
-   "stage": "stage4",
-   "section": "R-5",
-   "flags": [
-    "--check-only"
-   ],
-   "produces": [
-    "stage4/grounding/semantic_binding.json"
-   ],
-   "lifecycle": {
-    "unit_kind": "book",
-    "input_workpack": "BodyDesign 与 Preserve obligations",
-    "generation_mode": "executor",
-    "review_mode": "none",
-    "review_scope": "机械校验拦下的稿进 .INVALID 孪生（typed witness）后 fail-fast；同指纹熔断不重购",
-    "repair_actions": [
-     "stop"
-    ],
-    "repair_owners": [
-     "str06.stage4.bind"
     ],
     "session_scope": "executor:book",
     "recovery_entries": [
@@ -1631,42 +1596,18 @@
   },
   {
    "kind": "str06.stage4.body_design",
-   "label": "Stage4 目标故事与导演说明设计（BodyDesign）",
+   "label": "Stage4 目标故事与导演说明设计（BodyDesign＋real 承载标注派生 SemanticBinding）",
    "extra": null,
    "paid": true,
    "free_flag": null,
-   "writes": "stage4/design/body_design.json",
+   "writes": "stage4/design/body_design.json · stage4/grounding/semantic_binding.json",
    "writes_disk": true,
    "needs_value": null,
    "required_inputs": []
   },
   {
    "kind": "str06.stage4.body_design",
-   "label": "Stage4 目标故事与导演说明设计（BodyDesign） --check-only",
-   "extra": [
-    "--check-only"
-   ],
-   "paid": false,
-   "free_flag": "--check-only",
-   "writes": "",
-   "writes_disk": false,
-   "needs_value": null,
-   "required_inputs": []
-  },
-  {
-   "kind": "str06.stage4.bind",
-   "label": "Stage4 Bind（义务到目标位置绑定，完整 canonical snapshot）",
-   "extra": null,
-   "paid": true,
-   "free_flag": null,
-   "writes": "stage4/grounding/semantic_binding.json",
-   "writes_disk": true,
-   "needs_value": null,
-   "required_inputs": []
-  },
-  {
-   "kind": "str06.stage4.bind",
-   "label": "Stage4 Bind（义务到目标位置绑定，完整 canonical snapshot） --check-only",
+   "label": "Stage4 目标故事与导演说明设计（BodyDesign＋real 承载标注派生 SemanticBinding） --check-only",
    "extra": [
     "--check-only"
    ],

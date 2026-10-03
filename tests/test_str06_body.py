@@ -39,7 +39,7 @@ from tests.str06_facilities import anchor_stub, make_context
 from tests.test_str06_hook import _body_wire, _characters, _full_chain_wires
 from novel.stages.stage4.design import assemble_body_design
 from novel.stages.stage4.compile import compile_execution_plan
-from novel.stages.stage4.grounding import assemble_binding
+from novel.stages.stage4.grounding import derive_semantic_binding
 from tests.str06_expression_inputs import (
     sample_narration, sample_requirements,
 )
@@ -63,6 +63,12 @@ def _green_design():
     return body
 
 
+def _site_index(body):
+    """`场景#拍` → (scene 序, beat 序)——binding 派生夹具的序号投影。"""
+    return {f'{s.scene_id}#{b.beat_id}': (i, j)
+            for i, s in enumerate(body.scenes) for j, b in enumerate(s.beats)}
+
+
 def _green_binding(body):
     from contracts.schema.grounding import (
         PreserveCheckpoint, SourceLineage, SourceObligation,
@@ -78,11 +84,9 @@ def _green_binding(body):
         checkpoint_id='cp', policy_id='p', policy_version=1, characters_sha256=H64,
         blueprints_sha256=H64, provider='x', model='y', request_sha256='r' * 64,
         obligations=(ob,), checkpoint_sha256=H64)
-    positions = {s.scene_id: {b.beat_id for b in s.beats} for s in body.scenes}
-    wire = {'protocol_version': 'stage4-bind-v1',
-            'entries': [{'obligation_id': 'ob01', 'scene': 'sc01', 'beat': 'b02',
-                         'supporting': [{'scene': 'sc01', 'beat': 'b01'}]}], 'unbound': []}
-    binding, errors = assemble_binding(wire, cp, positions)
+    sites = _site_index(body)
+    placements = {'ob01': [sites['sc01#b01'], sites['sc01#b02']]}
+    binding, errors = derive_semantic_binding(placements, body, cp)
     assert binding is not None and not errors, errors
     return binding
 
@@ -124,15 +128,10 @@ def _two_obligation_binding(body, ob1_beat, ob2_beat):
         checkpoint_id='cp', policy_id='p', policy_version=1, characters_sha256=H64,
         blueprints_sha256=H64, provider='x', model='y', request_sha256='r' * 64,
         obligations=(ob1, ob2), checkpoint_sha256=H64)
-    positions = {s.scene_id: {b.beat_id for b in s.beats} for s in body.scenes}
-    wire = {'protocol_version': 'stage4-bind-v1',
-            'entries': [
-                {'obligation_id': 'ob01', 'scene': ob1_beat[0], 'beat': ob1_beat[1],
-                 'supporting': []},
-                {'obligation_id': 'ob02', 'scene': ob2_beat[0], 'beat': ob2_beat[1],
-                 'supporting': []}],
-            'unbound': []}
-    binding, errors = assemble_binding(wire, cp, positions)
+    sites = _site_index(body)
+    placements = {'ob01': [sites[f'{ob1_beat[0]}#{ob1_beat[1]}']],
+                  'ob02': [sites[f'{ob2_beat[0]}#{ob2_beat[1]}']]}
+    binding, errors = derive_semantic_binding(placements, body, cp)
     assert binding is not None and not errors, errors
     return binding
 
@@ -526,7 +525,7 @@ class _RoutingTransport:
             return f'ch{int(marks[-1]):02d}' if marks else 'ch01'
         for owner, marker in (
                 ('names', '登记全书源名称结构'), ('preserve', '最小语义义务'),
-                ('design', '设计目标书'), ('bind', '承载位置'),
+                ('design', '设计目标书'),
                 ('hook_design', '读者入口'), ('naming', '表层姓名')):
             if marker in user:
                 return owner
@@ -655,10 +654,10 @@ def test_full_pipeline_to_delivery_and_free_recovery(tmp_path):
     # 章包摘要互不相同（各章章包独立），正文摘要绑定改名前文本
     assert receipt1['writer_view_sha256'] != receipt2['writer_view_sha256']
     assert receipt1['prose_sha256'] == sha256_text(GOOD_CH1)
-    # 新购账：B2 五节点 10 个 JSON owner + hook_writer + 2 章 body = 13 次外发
-    assert len(transport.calls) == 13
+    # 新购账：五节点 9 个 JSON owner（bind 退役，CS-3）+ hook_writer + 2 章 body = 12 次外发
+    assert len(transport.calls) == 12
     from novel.work_units import read_book_budget
-    assert read_book_budget(_candidates_base(repo), 'run').used == 13, 'admission 平行计数已删，整书总闸是唯一准入账'
+    assert read_book_budget(_candidates_base(repo), 'run').used == 12, 'admission 平行计数已删，整书总闸是唯一准入账'
 
     # ── 同根恢复：零新调用、交付字节一致 ──
     calls_before = len(transport.calls)
@@ -689,18 +688,15 @@ def test_full_pipeline_to_delivery_and_free_recovery(tmp_path):
     assert report4['body_complete'] is True
 
     # ── IR 变化（导演说明变化经重新设计）→ 章包变化的章重新核验（重购）：
-    # 提高预算改变 design/bind 请求与全书 IR；Hook Context 未变 → hook_writer 缓存命中免费。
+    # 提高预算改变 design 请求与全书 IR（CS-3 起 binding 随 design 派生）；
+    # Hook Context 未变 → hook_writer 缓存命中免费。
     wires_changed = deepcopy(wires)
-    wires_changed['design']['scenes'][1]['realization_brief'] = '重心改为追踪与藏匿。'
+    wires_changed['design']['scenes'][1]['brief'] = '重心改为追踪与藏匿。'
     transport.wires = wires_changed
     calls_before = len(transport.calls)
     _run(repo, session, budget=2100)
     new_calls = len(transport.calls) - calls_before
-    # B3 前半起 bind 的输入只含承载选择面（义务＋场景/拍闭集）：导演说明变化
-    # 不改变承载选择，bind 请求身份不变、缓存命中。
-    assert new_calls == 4  # design + hook_design（内嵌 design）+ 两章 body
-    # bind 输入不含导演说明：确认 bind wire 未被重新请求
-    assert transport.calls[-new_calls:].count('bind') == 0
+    assert new_calls == 4  # design（双产物）+ hook_design（内嵌 design）+ 两章 body；hook_writer 缓存命中
     assert repo.read('runtime/workflow_status.json')['status'] == 'delivered'
 
 

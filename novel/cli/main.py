@@ -345,7 +345,7 @@ _STR06_THROUGH = {
     'str06.stage2.names': 'stage2', 'str06.stage2.associate': 'stage2',
     'str06.stage2.compile': 'stage2',
     'str06.stage4.preserve': 'stage4', 'str06.stage4.body_design': 'stage4',
-    'str06.stage4.hook_design': 'stage4', 'str06.stage4.bind': 'stage4',
+    'str06.stage4.hook_design': 'stage4',
     'str06.stage4.compile': 'stage4',
     'str06.stage5.hook': 'stage5', 'str06.stage5.body': 'stage5',
     'str06.stage7.naming': 'stage7', 'str06.stage7.assemble': 'stage7',

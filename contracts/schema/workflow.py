@@ -584,7 +584,8 @@ STR06_RC_LABELS: Final = ('str06-rc2', 'str06-rc3', 'str06-rc4', 'str06-rc5', 's
 STAGE4_PRESERVE_PROTOCOL: Final = 'stage4-preserve-v2'
 STAGE4_PRESERVE_POLICY_VERSION: Final = 5
 STAGE4_DESIGN_PROTOCOL: Final = 'stage4-design-v5'
-STAGE4_BIND_PROTOCOL: Final = 'stage4-bind-v1'
+# CS-3（2026-10-03）：`str06.stage4.bind` 退役——承载位由 design wire 的 real
+# 标注派生（stage4-design-v6 的面），stage4-bind-v1 wire 协议随之退役。
 STAGE4_HOOK_DESIGN_PROTOCOL: Final = 'stage4-hook-design-v1'
 
 #: epoch 滚动理由面。`initial` 只允许首开；漂移类要求身份确实变化；`repair`

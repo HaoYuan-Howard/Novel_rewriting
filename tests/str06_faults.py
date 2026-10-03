@@ -15,9 +15,9 @@
     人物（``ghost``），闭集归 `str06.stage2.compile`（R-2.3）；
   • ``missing_pairing``——漏配对：跨章悬念有 open 有 close，但 associate 的
     loop_pairing 缺席，compile 按 item 报未决（D8，拒绝发布）；
-  • ``obligation_unbound``——必保义务未承载：bind 把唯一的必保义务放进 unbound
-    （带 owner 的合法返回，正式 binding 照发），stage4 compile 的义务覆盖
-    Guard 拦下并停在该 owner（R3 按 unbound.owner 回派）；
+  • ``obligation_unbound``——必保义务漏标注承载：design wire 的 real 标注被
+    清空（CS-3 bind 退役后承载位唯一声明处是 design wire），assemble_body_design
+    的 real 覆盖闸在 body_design 同节点修订轮拦下；
   • ``duplicate_json_key``——wire 多键：响应 JSON 带重复键，
     `novel/llm/paid_requests.py::_decode_json` 拒绝（契约：拒绝重复 JSON 键）。
 
@@ -76,10 +76,11 @@ def apply_fault(wires: dict, fault: str | None) -> dict:
     elif fault == 'missing_pairing':
         mutated['associate']['loop_pairing'] = []
     elif fault == 'obligation_unbound':
-        mutated['bind'] = {
-            'protocol_version': 'stage4-bind-v1', 'entries': [],
-            'unbound': [{'obligation_id': 'ob01', 'owner': 'design',
-                         'reason': '变异：漏承载必保义务'}]}
+        # CS-3 bind 退役：承载位＝design wire 的 real 标注。清空全部标注 ⇒
+        # 必保义务覆盖闸在 body_design 同节点修订轮拦下（不再有跨节点回派面）。
+        for scene in mutated['design']['scenes']:
+            for beat in scene['beats']:
+                beat.pop('real', None)
     elif fault == 'duplicate_json_key':
         pass            # 该故障在 transport 层返回原始文本，见 FaultTransport
     else:
@@ -187,17 +188,6 @@ class FaultTransport:
                                 usage={'prompt_tokens': 100,
                                        'completion_tokens': 40},
                                 model='fake')
-        if (self.fault_once and self.fault == 'obligation_unbound'
-                and owner == 'design' and '【修订要求】' in request.user):
-            # 回派修订轮的脚本化「改对了」：design 补一个承载拍，bind 的输入
-            # 随之变化（新请求身份）→ 重问拿到干净承载 wire——跨节点回派因此
-            # 能靠修订走完全链（R3 完成标准）。
-            saved = self._inner.wires
-            self._inner.wires = _revised_design_wires(self._wires)
-            try:
-                return self._inner.send(request)
-            finally:
-                self._inner.wires = saved
         if self.fault == 'duplicate_json_key' and owner == 'book':
             if self.fault_once and self._fault_already_served('book'):
                 return self._send_clean(request)
@@ -231,23 +221,9 @@ _FAULT_TARGET_OWNERS = {
     'evidence_out_of_range': ('book',),
     'unknown_slug': ('ch01',),
     'missing_pairing': ('associate',),
-    'obligation_unbound': ('bind',),
+    'obligation_unbound': ('design',),
     'duplicate_json_key': ('book',),
 }
-
-
-def _revised_design_wires(wires: dict) -> dict:
-    """`obligation_unbound` 回派修订轮的 design wire：补一个必保义务承载拍。
-
-    复制 sc01 首拍为承载拍（改事件与意图文本）：设计语义真的变了——bind 的
-    投影闭集随之变化（新请求身份），干净 bind wire（ob01→sc01#b02）照常合法。
-    """
-    revised = deepcopy(apply_fault(wires, None))
-    scene = revised['design']['scenes'][0]
-    carrier = deepcopy(scene['beats'][0])
-    carrier['event'] = '修订补拍：为必保义务补一个承载位'
-    scene['beats'].append(carrier)
-    return revised
 
 
 def install_fault_transport(fault: str, fault_once: bool = False,

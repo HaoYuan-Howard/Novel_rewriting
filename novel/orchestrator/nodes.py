@@ -78,7 +78,6 @@ PROFILED_LLM_RUNS: dict[str, tuple[frozenset[str], ...]] = {
     'str06.stage2.associate': (frozenset(),),
     'str06.stage4.preserve': (frozenset(),),
     'str06.stage4.body_design': (frozenset(),),
-    'str06.stage4.bind': (frozenset(),),
     'str06.stage4.hook_design': (frozenset(),),
     'str06.stage5.hook': (frozenset(),),
     'str06.stage5.body': (frozenset(),),

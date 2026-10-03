@@ -134,10 +134,13 @@ UI 称「模型执行配置」。禁止把「不得依赖 legacy implementation�
    最终盘面，不能只凭函数存在、编译或单测通过。
 
 自动跑书由确定性 orchestrator 推进；Stage 页只读监控。现役链是 STR-06 新链：
-stage0/1 之后由 14 个 `str06.<stage>.<owner>` 节点串成（**B2 五节点重建（2026-09-27，
+stage0/1 之后由 13 个 `str06.<stage>.<owner>` 节点串成（**B2 五节点重建（2026-09-27，
 D9）**：Stage2 book／chapters／names／associate／compile 五 owner，联合抽取节点
-`str06.stage2.source` 退役；Stage4 目标故事与确定性编译、Stage5 按章正文与 Hook、
-Stage7 命名与交付），节点表唯一登记在 `contracts/invariants.py::NODES`。观察与
+`str06.stage2.source` 退役；**CS-3（2026-10-03）bind 退役**：义务承载位由 design
+wire 的 real 标注派生，`str06.stage4.bind` 节点随 stage4-bind-v1 协议退役，
+SemanticBinding 由 body_design 双产物发布；Stage4 目标故事与确定性编译、
+Stage5 按章正文与 Hook、Stage7 命名与交付），节点表唯一登记在
+`contracts/invariants.py::NODES`。观察与
 关联协议见 `contracts/schema/observation.py`，目标架构见 `docs/schema/str06.md`，
 批次见 `docs/REQUIREMENTS.md`。
 Stage6 整层与旧 Stage2/4/5/7 链已退役（退役台账与存量解码面已随 STR-06

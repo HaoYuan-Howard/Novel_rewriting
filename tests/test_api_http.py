@@ -488,15 +488,14 @@ def test_preview_refuses_a_flag_that_node_does_not_have(client):
 
 
 _EXECUTOR_PROFILE_HTTP_CASES = (
-    # F8a/F8b；B2（2026-09-27）五节点重建后付费面 11 个，节点旗标面只有
-    # --check-only（付费 token 组合即空 flags）。
+    # F8a/F8b；B2（2026-09-27）五节点重建、CS-3（2026-10-03）bind 退役后
+    # 付费面 10 个，节点旗标面只有 --check-only（付费 token 组合即空 flags）。
     ('str06.stage2.book', (), 2),
     ('str06.stage2.chapters', (), 2),
     ('str06.stage2.names', (), 2),
     ('str06.stage2.associate', (), 2),
     ('str06.stage4.preserve', (), 2),
     ('str06.stage4.body_design', (), 2),
-    ('str06.stage4.bind', (), 2),
     ('str06.stage4.hook_design', (), 2),
     ('str06.stage5.hook', (), 2),
     ('str06.stage5.body', (), 2),
@@ -868,7 +867,7 @@ def test_paid_blueprint_job_starts_without_a_semantic_review_gate(
     assert response.json()['start']['paid'] is True
 
 
-@pytest.mark.parametrize('node', ['str06.stage4.body_design', 'str06.stage4.bind'])
+@pytest.mark.parametrize('node', ['str06.stage4.body_design', 'str06.stage4.hook_design'])
 def test_stage4_jobs_need_no_approval_prepare_any_more(client, monkeypatch, node):
     """人工闸退役后 stage4 作业不再铸任何审批授权 prepare。"""
     prepares: list[str] = []

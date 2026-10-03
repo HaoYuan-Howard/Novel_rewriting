@@ -190,7 +190,7 @@ def test_ask_json_revises_nonconforming_answer_within_budget(tmp_path):
     """非空但不过闸 ⇒ 修订内容轮（原请求＋上一版＋typed 问题）；一次修订过闸。"""
     transport = _ScriptedTransport(['{"ok": false}', '{"ok": true}'])
     base, _repo, session = _json_session(tmp_path, transport)
-    data, answer = ask_json(session, 'bind', _request(),
+    data, answer = ask_json(session, 'preserve', _request(),
                             lambda w: [] if w.get('ok') else ['闭集外句柄 e99_99'])
     assert data == {'ok': True} and not answer.cached
     assert len(transport.calls) == 2, '一原轮＋一修订轮'
@@ -201,7 +201,7 @@ def test_ask_json_revises_nonconforming_answer_within_budget(tmp_path):
     # 修订轮是新请求身份的付费调用：ledger 两行实付、整书总闸计 2（I-17/I-43）。
     rows, _partial = read_cost_snapshot(base)
     paid = [r for r in rows if not r['cached']]
-    assert len(paid) == 2 and all(r['purpose'] == 'bind' for r in paid)
+    assert len(paid) == 2 and all(r['purpose'] == 'preserve' for r in paid)
     from novel.work_units import read_book_budget
     assert read_book_budget(base, 'run').used == 2
 
@@ -211,7 +211,7 @@ def test_ask_json_stops_when_issue_set_repeats(tmp_path):
     transport = _ScriptedTransport(['{"ok": false}', '{"ok": false}'])
     base, _repo, session = _json_session(tmp_path, transport)
     with pytest.raises(ValueError, match='重问后无进展') as excinfo:
-        ask_json(session, 'bind', _request(),
+        ask_json(session, 'preserve', _request(),
                  lambda w: [] if w.get('ok') else ['闭集外句柄 e99_99'])
     assert '闭集外句柄 e99_99' in str(excinfo.value), '停止消息携带 typed 问题'
     assert len(transport.calls) == 2, '原轮＋一次修订轮后即停'
@@ -220,7 +220,7 @@ def test_ask_json_stops_when_issue_set_repeats(tmp_path):
     status = excinfo.value.as_status()
     assert status['error_code'] == 'validation_no_progress'
     assert status['error_stage'] == 'stage4'
-    assert status['error_node'] == 'str06.stage4.bind'
+    assert status['error_node'] == 'str06.stage4.preserve'
     assert status['error_item'] == 'book'
     assert status['error_context']['rounds'] == 1
     assert status['error_context']['issues'] == ['闭集外句柄 e99_99']
@@ -232,7 +232,7 @@ def test_ask_json_stops_after_round_cap_with_changing_issue_sets(tmp_path):
         ['{"v": 1}', '{"v": 2}', '{"v": 3}'])
     base, _repo, session = _json_session(tmp_path, transport)
     with pytest.raises(ValueError, match='节点内校验重问轮（≤2）已耗尽') as excinfo:
-        ask_json(session, 'bind', _request(),
+        ask_json(session, 'preserve', _request(),
                  lambda w: [f'问题第{w["v"]}类'] if w.get('v') != 4 else [])
     assert len(transport.calls) == 3, '原轮＋两轮修订即到上限'
     assert excinfo.value.as_status()['error_code'] == 'validation_rounds_exhausted'
@@ -244,7 +244,7 @@ def test_recovery_after_revision_stop_replays_free(tmp_path):
     transport = _ScriptedTransport(['{"ok": false}', '{"ok": false}'])
     base, repo, session = _json_session(tmp_path, transport)
     with pytest.raises(ValueError):
-        ask_json(session, 'bind', _request(),
+        ask_json(session, 'preserve', _request(),
                  lambda w: [] if w.get('ok') else ['闭集外句柄 e99_99'])
     first_paid = len([r for r in read_cost_snapshot(base)[0] if not r['cached']])
 
@@ -253,7 +253,7 @@ def test_recovery_after_revision_stop_replays_free(tmp_path):
         repo, CostLedger(path=ledger_path(base)), replay_transport, yes=True,
         allow_source_export=True, provider='fake', sid='run')
     with pytest.raises(ValueError, match='重问后无进展'):
-        ask_json(_session2, 'bind', _request(),
+        ask_json(_session2, 'preserve', _request(),
                  lambda w: [] if w.get('ok') else ['闭集外句柄 e99_99'])
     assert replay_transport.calls == [], '恢复重放零外发'
     rows, _partial = read_cost_snapshot(base)
@@ -331,27 +331,28 @@ def test_faulted_full_chain_completes_via_revision(tmp_path, monkeypatch, fault)
     rows, _partial = read_cost_snapshot(base)
     paid = [r for r in rows if not r['cached']]
     faulty_owner = {'evidence_out_of_range': 'book', 'unknown_slug': 'ch01',
-                    'missing_pairing': 'associate', 'obligation_unbound': 'bind',
+                    'missing_pairing': 'associate', 'obligation_unbound': 'design',
                     'duplicate_json_key': 'book'}[fault]
     assert sum(1 for r in paid if r['purpose'] == faulty_owner) == 2, \
         '原轮＋修订轮各一行实付'
     from novel.work_units import read_book_budget
     assert read_book_budget(base, 'run').used == len(paid), '总闸按 attempt 合账'
     if fault == 'obligation_unbound':
-        record = read_owner_issue_file(repo, 'design')
-        assert record.status == 'resolved' and record.rounds_total == 1
-        assert record.raised_by == 'str06.stage4.compile'
-        assert transport.calls.count('design') == 2, '回派后 body_design 修订重跑'
+        # CS-3：real 覆盖闸在 body_design 同节点修订轮内自愈（bind 退役后无
+        # 跨节点回派面——issue 记录不产生）。
+        assert transport.calls.count('design') == 2
+        assert read_owner_issue_file(repo, 'design') is None
 
 
 # ═══════════════ 五、跨节点回派（stage） ═══════════════
 
-def test_no_progress_backfill_stops_per_item_without_repaying_bind(tmp_path,
-                                                                   monkeypatch):
-    """粘性故障：design 修订后 bind 原样复现 ⇒ 同问题集按 item 停；上游语义
-    未变的 bind 不重新购买（缓存重放），额度只记一轮。"""
+def test_no_progress_design_gate_stops_per_item_without_rebuy(tmp_path,
+                                                               monkeypatch):
+    """粘性故障（CS-3 bind 退役）：design 漏标 real ⇒ 覆盖闸在同节点修订轮
+    重问，坏稿原样重现 ⇒ 同问题集 ValidationStop；正式位不写半份产物。"""
     from tests.test_str06_body import _chapters, _make_session
     from tests.str06_facilities import json_ask, text_ask, stub_body_runner
+    from novel.llm.paid_requests import ValidationStop
     from novel.stages.chain import run_workflow
     from contracts.schema.hook import HookConstraints
 
@@ -364,29 +365,19 @@ def test_no_progress_backfill_stops_per_item_without_repaying_bind(tmp_path,
         raise AssertionError('本用例正文 runner 已 stub')
 
     stub_body_runner(monkeypatch)
-    with pytest.raises(OwnerRevisionStop, match='没有进展') as excinfo:
+    with pytest.raises(ValidationStop, match='重问后无进展'):
         run_workflow(repository=repo, chapters=_chapters(), ask=json_ask(session),
                      ask_text=text_ask(session), ask_body=ask_body, budget=2000,
                      through='stage7', book_title='报恩',
                      hook_constraints=HookConstraints(target_chars=10,
                                                       hard_max_chars=360))
-    assert f'必保义务 {obligation_core_id("ob01")}' in str(excinfo.value)
-    record = read_owner_issue_file(repo, 'design')
-    assert record.status == 'open' and record.rounds_total == 1
-    assert record.node == 'str06.stage4.body_design'
-    # R8a-3：定位与消息都是 Design 可见的源盲 core id，revision prompt 里
-    # 不出现 ob 序号；context 带 typed 的依赖与承载事实。
-    assert record.issues[0].item == obligation_core_id('ob01')
-    assert 'ob01' not in record.issues[0].message
-    assert record.issues[0].context['core_id'] == obligation_core_id('ob01')
-    assert record.issues[0].context['unbound_owner'] == 'design'
-    assert 'summary' in record.issues[0].context
-    assert repo.path('stage4/grounding/semantic_binding.json').is_file()
-    assert not repo.path('stage4/compiled/execution_plan.json').exists()
-    # 回派真实发生（design 原轮＋修订轮），但 bind 只有一次外发——design 语义
-    # 未变，bind 的请求身份没变，缓存重放旧答案，不重复付费。
+    # 承载闸在 body_design 同节点修订轮：原轮＋一轮修订即同指纹停；无跨节点
+    # 回派面（issue 记录不产生）。
     assert transport.calls.count('design') == 2
-    assert transport.calls.count('bind') == 1
+    assert read_owner_issue_file(repo, 'design') is None
+    assert not repo.path('stage4/design/body_design.json').exists()
+    assert not repo.path('stage4/grounding/semantic_binding.json').exists()
+    assert not repo.path('stage4/compiled/execution_plan.json').exists()
 
 
 def test_compile_backfills_associate_and_revision_heals(tmp_path):
@@ -451,14 +442,45 @@ def test_compile_backfills_associate_and_revision_heals(tmp_path):
 # ═══════════════ 六、调度面：resume_verdict／operator／队列（stage） ═══════════════
 
 def _stuck_overview(tmp_path, monkeypatch):
-    """跑一条粘性 obligation_unbound 链到停止，返回 (repo, overview)。"""
+    """跑一条「associate 漏配对被 compile 拦下回派」的链到 OwnerRevisionStop。
+
+    CS-3 bind 退役后 must_keep_unbound 的跨节点回派面消失，verdict 面的
+    open issue 形态由 associate 回派（compile 拦未决、写 issues 停止）承载。
+    """
     from novel import prov as _prov
     from novel.orchestrator import state as S
+    from novel.stages.chain import ChainContext, run_node, run_workflow
+    from novel.stages.stage2 import (
+        compile_associate_observation, project_association_space,
+    )
+    from tests.str06_faults import apply_fault
+    from tests.test_str06_body import _chapters, _make_session
+    from tests.str06_facilities import json_ask, text_ask
 
-    _runner, repo, _transport = _chain_runner(
-        tmp_path, monkeypatch, 'obligation_unbound', 'verdict')
-    with pytest.raises(OwnerRevisionStop):
-        _runner()
+    wires = looped_full_chain_wires()
+    repo, session, _transport = _make_session(tmp_path, wires, name='verdict')
+    run_workflow(repository=repo, chapters=_chapters(), ask=json_ask(session),
+                 ask_text=text_ask(session),
+                 ask_body=lambda owner, prompt: None, budget=2000,
+                 through='stage2', node_filter=(
+                     'str06.stage2.book', 'str06.stage2.chapters',
+                     'str06.stage2.names'))
+    book = repo.read_model('stage2/observations/book.json')
+    chapters = {c['chapter_ordinal']: repo.read_model(
+        f'stage2/observations/ch{c["chapter_ordinal"]:02d}.json') for c in _chapters()}
+    space = project_association_space(book, chapters)
+    faulty_wire = apply_fault(wires, 'missing_pairing')['associate']
+    observation, errors = compile_associate_observation(faulty_wire, space)
+    assert not errors, errors
+    repo.write('stage2/observations/associate.json', observation,
+               owners=('associate',), refs=(synthetic_ref('associate'),))
+    ctx = ChainContext(repository=repo, ask=json_ask(session),
+                       ask_text=text_ask(session),
+                       ask_body=lambda o, p: None,
+                       chapters=_chapters(), budget=2000, provider='fake',
+                       model='fake')
+    with pytest.raises(OwnerRevisionRequired):
+        run_node('str06.stage2.compile', ctx)
     ov = S.overview_at(repo.root, _prov.code_version())
     return repo, ov
 
@@ -470,32 +492,31 @@ def test_resume_verdict_marks_owner_revision_redo_before_freshness(tmp_path,
     from novel.orchestrator import state as S
 
     _repo, ov = _stuck_overview(tmp_path, monkeypatch)
-    entry = next(i for i in ov.owner_issues if i.node == 'str06.stage4.body_design')
-    assert entry.owner == 'design' and entry.rounds_total == 1
-    assert 'must_keep_unbound' in entry.codes
-    # 粘性故障链停止时 against 已刷新到「最后一次判定的产物摘要」；同指纹
-    # 无进展（no_progress）⇒ 修订被证明无效，停给人，不再自动重买（R8a）。
+    entry = next(i for i in ov.owner_issues if i.node == 'str06.stage2.associate')
+    assert entry.owner == 'associate' and entry.rounds_total == 1
+    assert 'association_undecided' in entry.codes
+    # 单轮回派（未证明修订无效）：产物未变 ⇒ REDO（带修订要求重跑上游）。
     assert entry.product_sha256 == entry.against_sha256
-    assert entry.no_progress is True
-    verdict, why = S.resume_verdict(ov, 'str06.stage4.body_design')
-    assert verdict == S.RESUME_UNKNOWN and 'no_progress' in why
-    # 无 open issue 指向的节点不受 owner_revision 影响：bind 走常规新鲜度判定
-    # （测试仓库的候选桥新鲜度面是 unknown——那不是本批语义，只钉「不背
+    assert entry.no_progress is False
+    verdict, why = S.resume_verdict(ov, 'str06.stage2.associate')
+    assert verdict == S.RESUME_REDO and 'typed 机械问题' in why, why
+    # 无 open issue 指向的节点不受 owner_revision 影响：compile 走常规新鲜度
+    # 判定（测试仓库的候选桥新鲜度面是 unknown——那不是本批语义，只钉「不背
     # owner_revision 的锅」）。
-    verdict_bind, why_bind = S.resume_verdict(ov, 'str06.stage4.bind')
-    assert 'owner_revision' not in why_bind, why_bind
+    verdict_free, why_free = S.resume_verdict(ov, 'str06.stage4.compile')
+    assert 'owner_revision' not in why_free, why_free
 
     # resolved 后：投影不再携带该条，判定回到常规面。
-    record = read_owner_issue_file(_repo, 'design')
+    record = read_owner_issue_file(_repo, 'associate')
     from contracts.schema.workflow import OwnerIssueFileV2
-    _repo.write(owner_issues_rel('design'), OwnerIssueFileV2(
+    _repo.write(owner_issues_rel('associate'), OwnerIssueFileV2(
         owner=record.owner, node=record.node, raised_by=record.raised_by,
         status='resolved', rounds_total=record.rounds_total,
         fingerprint=record.fingerprint, against_sha256=record.against_sha256,
         no_progress=record.no_progress, issues=record.issues,
         updated_at=record.updated_at))
     ov2 = S.overview_at(_repo.root, _prov_code())
-    assert all(i.node != 'str06.stage4.body_design' for i in ov2.owner_issues)
+    assert all(i.node != 'str06.stage2.associate' for i in ov2.owner_issues)
 
 
 def test_resume_verdict_owner_revision_digest_gate(tmp_path, monkeypatch):
@@ -504,35 +525,35 @@ def test_resume_verdict_owner_revision_digest_gate(tmp_path, monkeypatch):
     from novel.orchestrator import state as S
 
     repo, ov = _stuck_overview(tmp_path, monkeypatch)
-    assert 'str06.stage4.body_design' in {
+    assert 'str06.stage2.associate' in {
         i.node for i in ov.owner_issues}
 
     # ① owner 修订写回（产物字节变化）：门控不再判 owner_revision——不回头
     # 重买 owner，等下游按新鲜度复验清账。
-    design_path = repo.path('stage4/design/body_design.json')
-    design_path.write_bytes(design_path.read_bytes() + b'\n')
+    observe_path = repo.path('stage2/observations/associate.json')
+    observe_path.write_bytes(observe_path.read_bytes() + b'\n')
     ov_revised = S.overview_at(repo.root, _prov_code())
     entry = next(i for i in ov_revised.owner_issues
-                 if i.node == 'str06.stage4.body_design')
+                 if i.node == 'str06.stage2.associate')
     assert entry.product_sha256 != entry.against_sha256
-    verdict, why = S.resume_verdict(ov_revised, 'str06.stage4.body_design')
+    verdict, why = S.resume_verdict(ov_revised, 'str06.stage2.associate')
     assert 'owner_revision' not in why, why
 
     # ② 轮额度耗尽且产物未变：unknown 停给人，不自动重买。
-    record = read_owner_issue_file(repo, 'design')
+    record = read_owner_issue_file(repo, 'associate')
     from contracts.invariants import OWNER_REVISION_MAX_ROUNDS
     from contracts.schema.workflow import OwnerIssueFileV2
-    repo.write(owner_issues_rel('design'), OwnerIssueFileV2(
+    repo.write(owner_issues_rel('associate'), OwnerIssueFileV2(
         owner=record.owner, node=record.node, raised_by=record.raised_by,
         status='open', rounds_total=OWNER_REVISION_MAX_ROUNDS,
         fingerprint=record.fingerprint,
-        against_sha256=owner_product_digest(repo, 'design'),
+        against_sha256=owner_product_digest(repo, 'associate'),
         issues=record.issues, updated_at=record.updated_at))
     ov_spent = S.overview_at(repo.root, _prov_code())
-    verdict, why = S.resume_verdict(ov_spent, 'str06.stage4.body_design')
+    verdict, why = S.resume_verdict(ov_spent, 'str06.stage2.associate')
     assert verdict == S.RESUME_UNKNOWN and '耗尽' in why
     # operator 的 owner_revision 自动重放通道随之关闭（unknown 不发 flags）。
-    assert S.operator_redo_flags(ov_spent, 'str06.stage4.body_design') is None
+    assert S.operator_redo_flags(ov_spent, 'str06.stage2.associate') is None
 
 
 def test_operator_gets_empty_flags_and_durable_queue_stays_closed(tmp_path,
@@ -543,14 +564,14 @@ def test_operator_gets_empty_flags_and_durable_queue_stays_closed(tmp_path,
     from novel.orchestrator import state as S
 
     _repo, ov = _stuck_overview(tmp_path, monkeypatch)
-    # no_progress（R8a）：修订被证明无效——owner 的自动重放通道关闭，停给人。
-    assert S.operator_redo_flags(ov, 'str06.stage4.body_design') is None
+    # 单轮回派（REDO）：owner 的自动重放通道发放空 flags（不带付费旗标）。
+    assert S.operator_redo_flags(ov, 'str06.stage2.associate') == ()
     # 未登记 owner_revision 的节点即使 REDO 也拿不到自动重放（不猜 flags）。
-    assert S.operator_redo_flags(ov, 'str06.stage4.bind') is None
+    assert S.operator_redo_flags(ov, 'str06.stage4.compile') is None
     todo, blocked = Q.plan_book_from_overview(
         _repo.root.parent, _repo.root.name, ov, until_stage='stage4',
         follow_check=False)
-    item = next(i for i in blocked if i.node == 'str06.stage4.body_design')
+    item = next(i for i in blocked if i.node == 'str06.stage2.compile')
     assert item.waiting_on == Q.WAITING_ON_RESUME_DECISION and item.steps == []
 
 

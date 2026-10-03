@@ -303,7 +303,15 @@ def _trusted_cascade_artifacts(repository, record) -> tuple[str, ...]:
                 if repository.path(out.key).is_file()
                 and repository.file_sha256(repository.path(out.key)) == out.sha256]
 
+    # CS-3 双产物：owner 引擎同批发布的伴生产物（body_design 的
+    # semantic_binding）与权威产物同一采后 bundle——权威产物仍在盘且字节与
+    # 采记录一致时，同批 sealed 输出一并进 trusted 面（旧 bundle 的权威产物
+    # 字节已随采变化，不会触发）。
     trusted = {record.product_rel}
+    for bundle in bundles:
+        keys = [out.key for out in bundle.outputs]
+        if record.product_rel in keys and record.product_rel in sealed_outputs(bundle):
+            trusted.update(sealed_outputs(bundle))
     changed = True
     while changed:
         changed = False
@@ -316,11 +324,23 @@ def _trusted_cascade_artifacts(repository, record) -> tuple[str, ...]:
             if derived:
                 trusted.update(derived)
                 changed = True
+    # 受信消费面：trusted 的变化逐层链式放行（design→hook_design→compile 的
+    # sealed 输出可作为下一层 bundle 的受信输入——每层都有封存证明，未封存
+    # 或字节不符不传播）。
     allowed = set()
-    for bundle in bundles:
-        changed_inputs = [i.key for i in bundle.inputs if fingerprint(i.key) != i.fingerprint]
-        if changed_inputs and all(key in trusted for key in changed_inputs):
-            allowed.update(sealed_outputs(bundle))
+    changed = True
+    while changed:
+        changed = False
+        for bundle in bundles:
+            outputs = set(sealed_outputs(bundle))
+            if not outputs or outputs <= allowed | trusted:
+                continue
+            changed_inputs = [i.key for i in bundle.inputs
+                              if fingerprint(i.key) != i.fingerprint]
+            if changed_inputs and all(key in trusted for key in changed_inputs):
+                allowed.update(outputs)
+                trusted.update(outputs)
+                changed = True
     return tuple(sorted(allowed))
 
 

@@ -1931,25 +1931,17 @@ NODES: Final[dict[str, NodeSpec]] = {
             ('stop',), ('str06.stage4.preserve',), 'executor:book',
             ('saved_response', 'historical_adoption', 'owner_patch'), 4)),
     'str06.stage4.body_design': NodeSpec(
-        'stage4', 'R-5', True, 'Stage4 目标故事与导演说明设计（BodyDesign）',
+        'stage4', 'R-5', True,
+        'Stage4 目标故事与导演说明设计（BodyDesign＋real 承载标注派生 SemanticBinding）',
         flags=('--check-only',),
         operator_redo='owner_revision',
-        produces=('stage4/design/body_design.json',),
+        produces=('stage4/design/body_design.json',
+                  'stage4/grounding/semantic_binding.json'),
         lifecycle=NodeLifecycleSpec(
             'book', 'Preserve checkpoint、身份投影与 Characters v4', 'executor', 'none',
-            '机械校验通过即自动执行',
+            '机械校验通过即自动执行；CS-3 bind 退役——承载位由 wire 的 real '
+            '标注派生，双产物同组发布（semantic_binding 唯一 writer）',
             ('stop',), ('str06.stage4.body_design',), 'executor:book',
-            ('saved_response', 'historical_adoption', 'owner_patch'), 4)),
-    'str06.stage4.bind': NodeSpec(
-        'stage4', 'R-5', True, 'Stage4 Bind（义务到目标位置绑定，完整 canonical snapshot）',
-        flags=('--check-only',),
-        operator_redo='canonical',
-        produces=('stage4/grounding/semantic_binding.json',),
-        lifecycle=NodeLifecycleSpec(
-            'book', 'BodyDesign 与 Preserve obligations', 'executor', 'none',
-            '机械校验拦下的稿进 .INVALID 孪生（typed witness）后 fail-fast；'
-            '同指纹熔断不重购',
-            ('stop',), ('str06.stage4.bind',), 'executor:book',
             ('saved_response', 'historical_adoption', 'owner_patch'), 4)),
     'str06.stage4.hook_design': NodeSpec(
         'stage4', 'R-5', True, 'Stage4 Hook 设计并经 publish_graph 唯一发布 PresentationGraph',
@@ -2066,7 +2058,7 @@ def approval_scope_allowed(node: str, scope: str) -> bool:
 LLM_EXECUTOR_NODES: Final = (
     'str06.stage2.book', 'str06.stage2.chapters', 'str06.stage2.names',
     'str06.stage2.associate',
-    'str06.stage4.preserve', 'str06.stage4.body_design', 'str06.stage4.bind',
+    'str06.stage4.preserve', 'str06.stage4.body_design',
     'str06.stage4.hook_design',
     'str06.stage5.body', 'str06.stage5.hook',
     'str06.stage7.naming',

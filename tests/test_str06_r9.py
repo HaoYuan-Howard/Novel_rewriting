@@ -42,7 +42,7 @@ def test_renderer_omits_unreleased_voice_and_unresolved_present_person():
     assert '收尾时在场' not in ' '.join(view.continuity)
 
 
-def _baseline(tmp_path, owner='bind'):
+def _baseline(tmp_path, owner='preserve'):
     transport = _ScriptedTransport(['{"value": 1}'])
     _base, repo, session = _json_session(tmp_path, transport)
     _raw, answer = ask_json(session, owner, _request(), lambda w: [])
@@ -58,9 +58,9 @@ def test_purchased_baseline_rejects_response_cost_hash_drift_with_coordinates(tm
     altered = [{**r, 'response_sha256': '0' * 64} if not r.get('cached') else r for r in rows]
     monkeypatch.setattr(paid_requests, 'read_cost_snapshot', lambda *_a, **_kw: (altered, tail))
     with pytest.raises(RevisionEvidenceStop) as stopped:
-        purchased_baseline(repo.root, 'bind', answer.request_sha256)
+        purchased_baseline(repo.root, 'preserve', answer.request_sha256)
     assert stopped.value.code == 'revision_evidence_invalid'
-    assert stopped.value.node == 'str06.stage4.bind' and stopped.value.item == 'book'
+    assert stopped.value.node == 'str06.stage4.preserve' and stopped.value.item == 'book'
     assert stopped.value.context['baseline_request_sha256'] == answer.request_sha256
 
 
@@ -85,7 +85,7 @@ def test_patch_preview_is_readonly_and_separates_ids_text_and_residuals(tmp_path
     baseline = {**baseline, 'content': '{"participants": ["old"], "event": "old 出场"}'}
     before = {str(p): hashlib.sha256(p.read_bytes()).hexdigest()
               for p in tmp_path.rglob('*') if p.is_file()}
-    preview = preview_owner_patch(owner='bind', identity=answer.request_sha256,
+    preview = preview_owner_patch(owner='preserve', identity=answer.request_sha256,
         candidate={'participants': ['new'], 'event': 'old 出场'}, baseline=baseline,
         validate=lambda w: [], dry_run=lambda w: {'status': 'ran', 'errors': []})
     assert preview['id_changes'] and not preview['text_changes']
@@ -93,67 +93,67 @@ def test_patch_preview_is_readonly_and_separates_ids_text_and_residuals(tmp_path
     assert before == {str(p): hashlib.sha256(p.read_bytes()).hexdigest()
                       for p in tmp_path.rglob('*') if p.is_file()}
     with pytest.raises(ValueError, match='基线身份漂移'):
-        preview_owner_patch(owner='bind', identity='f' * 64, candidate={}, baseline=baseline,
+        preview_owner_patch(owner='preserve', identity='f' * 64, candidate={}, baseline=baseline,
                             validate=lambda w: [], dry_run=lambda w: {})
 
 
 def test_patch_evidence_survives_external_file_and_binds_current_product(tmp_path):
     from tests.str06_facilities import synthetic_ref
     repo, _session, _transport, answer, baseline = _baseline(tmp_path)
-    preview = preview_owner_patch(owner='bind', identity=answer.request_sha256,
+    preview = preview_owner_patch(owner='preserve', identity=answer.request_sha256,
         candidate={'value': 2}, baseline=baseline, validate=lambda w: [],
         dry_run=lambda w: {'status': 'ran', 'errors': []})
     original = b'{ "value": 2 }\r\n'
-    record = stage_revision(repo, owner='bind', identity=answer.request_sha256, baseline=baseline,
+    record = stage_revision(repo, owner='preserve', identity=answer.request_sha256, baseline=baseline,
                             raw_bytes=original, preview=preview, reason='修复承载')
     assert repo.path(record.evidence_rel).read_bytes() == original
     assert revision_states_at(repo.root) == [], '未写正式产物的 staged 不开启级联'
-    repo.context.enter_node('str06.stage4.bind')
-    ref = synthetic_ref('bind')._replace(request_sha256=answer.request_sha256,
+    repo.context.enter_node('str06.stage4.preserve')
+    ref = synthetic_ref('preserve')._replace(request_sha256=answer.request_sha256,
                                          patch={'candidate_sha256': record.candidate_sha256})
-    repo.write(record.product_rel, {'value': 2}, owners=('bind',), refs=(ref,))
+    repo.write(record.product_rel, {'value': 2}, owners=('preserve',), refs=(ref,))
     # 输出已封存但激活尚未来得及落盘：重启可核验同一补丁并免费恢复。
-    assert adopted_patch(repo, 'bind', answer.request_sha256, lambda w: [])[0] == {'value': 2}
+    assert adopted_patch(repo, 'preserve', answer.request_sha256, lambda w: [])[0] == {'value': 2}
     activate_node_revisions(repo, record.node)
     states = revision_states_at(repo.root)
     assert states[0].accepted_product_sha256 == states[0].current_product_sha256
-    assert adopted_patch(repo, 'bind', answer.request_sha256, lambda w: [])[0] == {'value': 2}
+    assert adopted_patch(repo, 'preserve', answer.request_sha256, lambda w: [])[0] == {'value': 2}
     activate_node_revisions(repo, record.node)
     resolve_node_revisions(repo, 'str06.stage4.compile')
     assert revision_states_at(repo.root) == []
     # 修订后再次手改不得被补丁重放自动覆盖。
     repo.path(record.product_rel).write_text('{"value": 3}', encoding='utf-8')
     with pytest.raises(ValueError, match='再次变化'):
-        adopted_patch(repo, 'bind', answer.request_sha256, lambda w: [])
+        adopted_patch(repo, 'preserve', answer.request_sha256, lambda w: [])
 
 
 def test_staged_patch_does_not_overwrite_unregistered_intervening_edit(tmp_path):
     repo, _session, _transport, answer, baseline = _baseline(tmp_path)
-    preview = preview_owner_patch(owner='bind', identity=answer.request_sha256,
+    preview = preview_owner_patch(owner='preserve', identity=answer.request_sha256,
         candidate={'value': 2}, baseline=baseline, validate=lambda w: [], dry_run=lambda w: {})
-    record = stage_revision(repo, owner='bind', identity=answer.request_sha256, baseline=baseline,
+    record = stage_revision(repo, owner='preserve', identity=answer.request_sha256, baseline=baseline,
                             raw_bytes=b'{"value":2}', preview=preview, reason='修复承载')
     product = repo.path(record.product_rel)
     product.parent.mkdir(parents=True, exist_ok=True)
     product.write_text('{"value":3}', encoding='utf-8')
     with pytest.raises(ValueError, match='再次变化'):
-        adopted_patch(repo, 'bind', answer.request_sha256, lambda w: [])
+        adopted_patch(repo, 'preserve', answer.request_sha256, lambda w: [])
     assert json.loads(product.read_text(encoding='utf-8')) == {'value': 3}
 
 
 def _publish_patch(repo, answer, baseline, value):
     from tests.str06_facilities import synthetic_ref
     candidate = {'value': value}
-    preview = preview_owner_patch(owner='bind', identity=answer.request_sha256,
+    preview = preview_owner_patch(owner='preserve', identity=answer.request_sha256,
         candidate=candidate, baseline=baseline, validate=lambda w: [], dry_run=lambda w: {})
     raw = json.dumps(candidate).encode('utf-8')
-    record = stage_revision(repo, owner='bind', identity=answer.request_sha256,
+    record = stage_revision(repo, owner='preserve', identity=answer.request_sha256,
                             baseline=baseline, raw_bytes=raw, preview=preview,
                             reason=f'第 {value} 次核读修订')
     repo.context.enter_node(record.node)
-    ref = synthetic_ref('bind')._replace(request_sha256=answer.request_sha256,
+    ref = synthetic_ref('preserve')._replace(request_sha256=answer.request_sha256,
                                          patch={'candidate_sha256': record.candidate_sha256})
-    repo.write(record.product_rel, candidate, owners=('bind',), refs=(ref,))
+    repo.write(record.product_rel, candidate, owners=('preserve',), refs=(ref,))
     activate_node_revisions(repo, record.node)
     return record, raw
 
@@ -164,21 +164,21 @@ def test_successive_explicit_patches_keep_history_and_cost_without_new_purchase(
     first, first_raw = _publish_patch(repo, answer, baseline, 2)
     if resolved:
         resolve_node_revisions(repo, 'str06.stage4.compile')
-    repo.write('runtime/revisions/bind.json', {'sha256': first.candidate_sha256})
+    repo.write('runtime/revisions/preserve.json', {'sha256': first.candidate_sha256})
     candidate_path = tmp_path / 'second_wire.json'
     candidate_path.write_text('{"value":3}', encoding='utf-8')
     session.adopt_roots = (repo.root,)
     with pytest.raises(ValueError, match='不一致'):
-        session.bind_wire_adoption('bind', answer.request_sha256, candidate_path)
+        session.bind_wire_adoption('preserve', answer.request_sha256, candidate_path)
     from novel.stages.revisions import verified_previous_revision
-    previous = verified_previous_revision(repo, 'bind')
-    bound = session.bind_wire_adoption('bind', answer.request_sha256,
+    previous = verified_previous_revision(repo, 'preserve')
+    bound = session.bind_wire_adoption('preserve', answer.request_sha256,
                                        candidate_path, allow_patch=True,
                                        previous_patch_sha256=previous.candidate_sha256)
     assert bound['owner_patch'] and bound['attempt_id'] == answer.attempt_id
     second, _raw = _publish_patch(repo, answer, baseline, 3)
-    assert adopted_patch(repo, 'bind', answer.request_sha256, lambda w: [])[0] == {'value': 3}
-    history = list((repo.root / 'runtime/revisions/history/bind').glob('*.json'))
+    assert adopted_patch(repo, 'preserve', answer.request_sha256, lambda w: [])[0] == {'value': 3}
+    history = list((repo.root / 'runtime/revisions/history/preserve').glob('*.json'))
     assert len(history) == 1
     assert repo.read_external(history[0])['candidate_sha256'] == first.candidate_sha256
     assert repo.path(first.evidence_rel).read_bytes() == first_raw
@@ -192,11 +192,11 @@ def test_new_patch_refuses_unregistered_product_change_before_replacing_history(
     first, _raw = _publish_patch(repo, answer, baseline, 2)
     if resolved:
         resolve_node_revisions(repo, 'str06.stage4.compile')
-    active = repo.path('runtime/revisions/active/bind.json').read_bytes()
+    active = repo.path('runtime/revisions/active/preserve.json').read_bytes()
     repo.path(first.product_rel).write_text('{"value":99}', encoding='utf-8')
     with pytest.raises(ValueError, match='再次变化'):
         _publish_patch(repo, answer, baseline, 3)
-    assert repo.path('runtime/revisions/active/bind.json').read_bytes() == active
+    assert repo.path('runtime/revisions/active/preserve.json').read_bytes() == active
     assert json.loads(repo.path(first.product_rel).read_bytes()) == {'value': 99}
     assert len(transport.calls) == 1
 
@@ -206,16 +206,16 @@ def test_resample_does_not_reset_work_unit_or_book_budget(tmp_path):
     from novel.work_units import WorkUnitBudget, read_book_budget
     repo, session, transport, _answer, _baseline_row = _baseline(tmp_path)
     session.book_call_ceiling = 2
-    request, _selection = sampling_request(repo, session, 'bind', _request(), explicit=True, reason='第一次重采')
+    request, _selection = sampling_request(repo, session, 'preserve', _request(), explicit=True, reason='第一次重采')
     transport.contents.append('{"value":2}')
-    ask_json(session, 'bind', request, lambda w: [])
-    next_request, selection = sampling_request(repo, session, 'bind', _request(), explicit=True, reason='第二次重采')
+    ask_json(session, 'preserve', request, lambda w: [])
+    next_request, selection = sampling_request(repo, session, 'preserve', _request(), explicit=True, reason='第二次重采')
     assert selection.sequence == 2
     with pytest.raises(ExecutionError) as stopped:
-        ask_json(session, 'bind', next_request, lambda w: [])
+        ask_json(session, 'preserve', next_request, lambda w: [])
     assert stopped.value.code == 'book_call_ceiling'
     assert len(transport.calls) == read_book_budget(repo.root.parent, repo.root.name).used == 2
-    unit = WorkUnitBudget(repo.root.parent, repo.root.name, 'str06.stage4.bind', 'executor', 'book', read_only=True)
+    unit = WorkUnitBudget(repo.root.parent, repo.root.name, 'str06.stage4.preserve', 'executor', 'book', read_only=True)
     assert len(unit._read().turns) == 2
 
 
@@ -243,21 +243,21 @@ def test_obligation_review_keeps_unselected_material_and_cross_chapter_carriers(
 
 def test_resample_has_new_identity_and_restart_reuses_selected_sample(tmp_path):
     repo, session, transport, _answer, _baseline_row = _baseline(tmp_path)
-    request, selection = sampling_request(repo, session, 'bind', _request(), explicit=True, reason='换一个承载')
+    request, selection = sampling_request(repo, session, 'preserve', _request(), explicit=True, reason='换一个承载')
     assert selection.sequence == 1
     transport.contents.append('{"value": 2}')
-    assert ask_json(session, 'bind', request, lambda w: [])[0] == {'value': 2}
-    restored, same = sampling_request(repo, session, 'bind', _request(), explicit=False, reason='')
+    assert ask_json(session, 'preserve', request, lambda w: [])[0] == {'value': 2}
+    restored, same = sampling_request(repo, session, 'preserve', _request(), explicit=False, reason='')
     assert same == selection
-    assert ask_json(session, 'bind', restored, lambda w: [])[0] == {'value': 2}
+    assert ask_json(session, 'preserve', restored, lambda w: [])[0] == {'value': 2}
     assert len(transport.calls) == 2
     # 原回答仍可按原请求读取；新采样不抹掉原已购证据。
-    assert ask_json(session, 'bind', _request(), lambda w: [])[0] == {'value': 1}
-    changed, selected = sampling_request(repo, session, 'bind', _request('新基线'), explicit=False, reason='')
+    assert ask_json(session, 'preserve', _request(), lambda w: [])[0] == {'value': 1}
+    changed, selected = sampling_request(repo, session, 'preserve', _request('新基线'), explicit=False, reason='')
     assert not changed.sampling_nonce and selected is None
     session.yes = False
     with pytest.raises(ValueError, match='许可'):
-        sampling_request(repo, session, 'bind', _request(), explicit=True, reason='再采样')
+        sampling_request(repo, session, 'preserve', _request(), explicit=True, reason='再采样')
 
 
 def test_counting_excludes_all_unicode_whitespace_but_includes_punctuation():
@@ -278,12 +278,12 @@ def test_missing_and_null_are_distinct_in_patch_diff():
 
 def test_selected_sampling_nonce_is_closed_to_baseline_and_sequence(tmp_path):
     repo, session, _transport, _answer, _baseline_row = _baseline(tmp_path)
-    _request_row, selected = sampling_request(repo, session, 'bind', _request(), explicit=True, reason='显式重采')
-    rel = f'runtime/revisions/sampling/bind/{selected.baseline_request_sha256}.json'
+    _request_row, selected = sampling_request(repo, session, 'preserve', _request(), explicit=True, reason='显式重采')
+    rel = f'runtime/revisions/sampling/preserve/{selected.baseline_request_sha256}.json'
     repo.write(rel, selected.model_copy(update={'nonce': 'f' * 64}))
     from novel.llm.paid_requests import ExecutionError
     with pytest.raises(ExecutionError, match='序号损坏'):
-        sampling_request(repo, session, 'bind', _request(), explicit=False, reason='')
+        sampling_request(repo, session, 'preserve', _request(), explicit=False, reason='')
 
 
 def test_source_expression_refs_are_checked_and_brief_is_source_blind():

@@ -36,7 +36,6 @@ CURRENT_CORPUS_PAID_NODES: tuple[str, ...] = (
     'str06.stage2.associate',
     'str06.stage4.preserve',
     'str06.stage4.body_design',
-    'str06.stage4.bind',
     'str06.stage4.hook_design',
     'str06.stage5.hook',
     'str06.stage5.body',

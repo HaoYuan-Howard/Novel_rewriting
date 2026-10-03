@@ -204,14 +204,12 @@ def _rich_binding(body):
         checkpoint_id='cp', policy_id='p', policy_version=1, characters_sha256=H64,
         blueprints_sha256=H64, provider='x', model='y', request_sha256='r' * 64,
         obligations=(ob,), checkpoint_sha256=H64)
-    positions = {s.scene_id: {b.beat_id for b in s.beats} for s in body.scenes}
-    wire = {'protocol_version': 'stage4-bind-v1',
-            'entries': [{'obligation_id': 'ob01', 'scene': 'sc01', 'beat': 'b02',
-                         'supporting': [{'scene': 'sc01', 'beat': 'b01'}]}],
-            'unbound': []}
-    binding, errors = __import__(
-        'novel.stages.stage4.grounding', fromlist=['assemble_binding']
-    ).assemble_binding(wire, cp, positions)
+    # CS-3 bind 退役：real 标注投影派生（支撑 sc01#b01→接受 sc01#b02）。
+    sites = {f'{s.scene_id}#{b.beat_id}': (i, j)
+             for i, s in enumerate(body.scenes) for j, b in enumerate(s.beats)}
+    from novel.stages.stage4.grounding import derive_semantic_binding
+    binding, errors = derive_semantic_binding(
+        {'ob01': [sites['sc01#b01'], sites['sc01#b02']]}, body, cp)
     assert binding is not None and not errors, errors
     return binding
 

@@ -165,10 +165,11 @@ def test_views_cover_the_whole_delivered_chain(base):
     run = views.run_view(base, name)
     assert run.present and run.status == 'delivered' and run.accepted_body is True
     assert run.epoch is not None and run.epoch.reason == 'initial'
-    # B2 五节点（D9）：现役注册面 14 个 str06 节点，全链后每个节点都有产物。
-    assert len(run.nodes) == 14 and all(n.produced for n in run.nodes), '全链后每个节点都有产物'
+    # B2 五节点（D9）＋CS-3 bind 退役：现役注册面 13 个 str06 节点，全链后
+    # 每个节点都有产物（semantic_binding 归 body_design 双产物）。
+    assert len(run.nodes) == 13 and all(n.produced for n in run.nodes), '全链后每个节点都有产物'
     cost = run.cost
-    assert cost.present and cost.new_paid_rows == 13 and cost.cached_rows == 0
+    assert cost.present and cost.new_paid_rows == 12 and cost.cached_rows == 0
     assert cost.prompt_tokens is not None and cost.unknown_cost_rows == 0
     assert cost.per_node, '成本按候选节点归属'
     # 收尾批：成功形状的失败面是 None（不是空对象冒充「查过没事」）；
@@ -482,28 +483,14 @@ def _faulted_candidate_root(tmp_path, monkeypatch, *, fault_once: bool,
 
 
 def test_run_view_projects_revision_rounds_of_a_healed_chain(tmp_path, monkeypatch):
-    """修订轮投影（R3）：经修订自愈的链，回派账 resolved 留轮数与 typed 问题。"""
+    """修订轮投影（R3＋CS-3）：承载闸在 body_design 同节点修订轮自愈——
+    无跨节点回派账，投影缺席如实呈现（不虚构 resolved 记录）。"""
     base = _faulted_candidate_root(tmp_path, monkeypatch, fault_once=True,
                                    name='healed')
     run = views.run_view(base, 'healed')
     assert run.present
     issues = run.owner_issues
-    assert issues is not None and issues.present, '回派账在盘上，投影不得缺席'
-    assert issues.rounds_cap == 2, '修订轮上限是契约常量的投影，前端不抄'
-    assert [r.owner for r in issues.records] == ['design']
-    record = issues.records[0]
-    assert record.node == 'str06.stage4.body_design'
-    assert record.raised_by == 'str06.stage4.compile'
-    assert record.status == 'resolved' and record.rounds_total == 1
-    assert record.fingerprint and record.updated_at >= 0
-    assert record.issues[0].code == 'must_keep_unbound'
-    # R8a-3：定位用 Design 可见的源盲 core id（obNN 不出现在修订提示里）。
-    from novel.stages.stage4 import obligation_core_id
-    assert record.issues[0].item == obligation_core_id('ob01')
-    assert '必保义务' in record.issues[0].message
-    assert 'ob01' not in record.issues[0].message
-    assert record.issues[0].context['core_id'] == obligation_core_id('ob01')
-    assert record.issues[0].context['unbound_owner'] == 'design'
+    assert issues is None or not issues.present, '同节点修订自愈不产生回派账'
     # 自愈链没有失败形状：停止原因缺席是 None，不是空串。
     assert run.failure_kind is None and run.detail is None
     # HTTP 面与视图同形（同一 response_model，字段不丢）。
@@ -513,27 +500,65 @@ def test_run_view_projects_revision_rounds_of_a_healed_chain(tmp_path, monkeypat
         assert response.json() == json.loads(run.model_dump_json())
 
 
+def test_run_view_projects_owner_issue_records_from_disk(tmp_path, monkeypatch):
+    """回派账投影（R3）：盘上 runtime/issues/*.json 忠实投影——轮数上限、
+    typed 问题与源盲 core id 定位（回派账的现役产生面：associate 未决回派、
+    epistemic_lock_order 与 material_leak，链上构造见 test_str06_r3_selfheal）。"""
+    from contracts.schema.workflow import OwnerIssueFileV2
+    from novel.stages.stage4 import obligation_core_id
+    from novel.stages.owner_revision import owner_issues_rel
+
+    base = _faulted_candidate_root(tmp_path, monkeypatch, fault_once=True,
+                                   name='issues')
+    repo = Str06Repository(base / 'issues' / 'run')
+    repo.attach_context(make_context(base / 'issues' / 'run',
+                                     ledger=CostLedger(path=None)))
+    core = obligation_core_id('ob01')
+    kp = f'kp_{"0" * 16}'
+    record = OwnerIssueFileV2.model_validate({
+        'owner': 'design', 'node': 'str06.stage4.body_design',
+        'raised_by': 'str06.stage4.compile', 'status': 'resolved',
+        'rounds_total': 1, 'fingerprint': 'f' * 16,
+        'against_sha256': 'a' * 64, 'no_progress': False, 'updated_at': 1759000000,
+        'issues': [{'code': 'epistemic_lock_order', 'item': kp,
+                    'message': f'必保义务 {core} 的知情锁升级早于授权承载位',
+                    'context': {'core_id': core,
+                                'upgrade_position': 'sc01#b03',
+                                'authorized_position': 'sc01#b04',
+                                'mode': 'known'}}]})
+    repo.write(owner_issues_rel('design'), record)
+    run = views.run_view(base, 'issues')
+    issues = run.owner_issues
+    assert issues is not None and issues.present, '回派账在盘上，投影不得缺席'
+    assert issues.rounds_cap == 2, '修订轮上限是契约常量的投影，前端不抄'
+    assert [r.owner for r in issues.records] == ['design']
+    first = issues.records[0]
+    assert first.node == 'str06.stage4.body_design'
+    assert first.raised_by == 'str06.stage4.compile'
+    assert first.status == 'resolved' and first.rounds_total == 1
+    assert first.fingerprint and first.updated_at >= 0
+    assert first.issues[0].code == 'epistemic_lock_order'
+    assert first.issues[0].item == kp
+    assert 'ob01' not in first.issues[0].message
+    assert first.issues[0].context['core_id'] == core
+
+
 def test_run_view_shows_stop_reason_with_open_issue_rounds(tmp_path, monkeypatch):
-    """停止原因（R3）：粘性故障按 item 停 ⇒ failure_kind/detail 直投影带
-    typed 问题清单；回派账 open、轮数留证。"""
+    """停止原因（R3＋CS-3）：粘性 design 坏稿在同节点修订轮按同指纹停 ⇒
+    failure_kind/detail 直投影 typed 停止；正式位不落半份产物。"""
     base = _faulted_candidate_root(tmp_path, monkeypatch, fault_once=False,
                                    name='stuck')
     run = views.run_view(base, 'stuck')
     assert run.present and run.status == 'failed'
-    assert run.failure_kind == 'OwnerRevisionStop'
-    assert '同一问题集重复即停' in (run.detail or '')
-    from novel.stages.stage4 import obligation_core_id
-    assert f'必保义务 {obligation_core_id("ob01")}' in (run.detail or ''), \
-        '停止消息按 item 定位（源盲 core id）'
-    assert run.failed_node == 'str06.stage4.compile'
+    assert run.failure_kind == 'ValidationStop'
+    assert '重问后无进展' in (run.detail or '')
+    assert run.failed_node == 'str06.stage4.body_design'
     issues = run.owner_issues
-    assert issues is not None and issues.records[0].status == 'open'
-    assert issues.records[0].rounds_total == 1
-    assert issues.records[0].owner == 'design'
+    assert issues is None or not issues.present, '同节点停止不产生回派账'
     with TestClient(create_app(base)) as client:
         response = client.get('/api/str06/candidates/stuck/run')
         assert response.status_code == 200
-        assert response.json()['failure_kind'] == 'OwnerRevisionStop'
+        assert response.json()['failure_kind'] == 'ValidationStop'
 
 
 def test_corrupt_issue_record_fails_fast_instead_of_reading_as_none(tmp_path):

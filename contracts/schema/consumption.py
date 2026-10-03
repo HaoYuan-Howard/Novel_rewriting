@@ -68,14 +68,14 @@ STR06_CONSUMPTION_PROJECTIONS: dict[str, ProjectionFamilySpec] = {
         name='world_view',
         shape_note='era／setting／world rules／relations／secrets 的目标有效视图'
                    '（按目标位置生效/失效折叠后的视图）',
-        source_owners=('str06.stage2.compile', 'str06.stage4.bind',
+        source_owners=('str06.stage2.compile',
                        'str06.stage4.body_design'),
         coordinate=ProjectionCoordinate.TARGET),
     'character_exposure': ProjectionFamilySpec(
         name='character_exposure',
         shape_note='Characters 身份与称谓 + 目标实际建立／揭示／使用位置'
                    '（源时点=源事实；目标时点=Design/Binding/ExecutionPlan 派生）',
-        source_owners=('str06.stage2.compile', 'str06.stage4.bind',
+        source_owners=('str06.stage2.compile', 'str06.stage4.body_design',
                        'str06.stage4.compile'),
         coordinate=ProjectionCoordinate.DUAL),
     'chapter_map': ProjectionFamilySpec(

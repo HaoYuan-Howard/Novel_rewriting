@@ -351,20 +351,21 @@ def test_full_chain_from_http_upload_to_stage7_delivery(base, monkeypatch):
     for entry in manifest['chapters']:
         assert entry['prose_sha256'] == receipts[entry['chapter_ordinal']]['prose_sha256']
 
-    # ⑥ fake transport 也走真实 reserve／记账：12 次新购、真实 token、节点归属正确。
-    assert len(transport.calls) == 13
+    # ⑥ fake transport 也走真实 reserve／记账：12 次新购（CS-3 bind 退役）、
+    # 真实 token、节点归属正确。
+    assert len(transport.calls) == 12
     # B1：admission 平行计数退役，整书总闸（按 attempt 计数）是唯一准入账。
     from novel.work_units import read_book_budget
-    assert read_book_budget(base, '联调样本_9001').used == 13
+    assert read_book_budget(base, '联调样本_9001').used == 12
     rows = _ledger_rows(base)
     paid = [row for row in rows if not row['cached']]
-    assert len(paid) == 13
+    assert len(paid) == 12
     assert all(row['prompt_tokens'] > 0 and row['completion_tokens'] > 0
                for row in paid)
     assert {row['node'] for row in paid} == {
         'str06.stage2.book', 'str06.stage2.chapters', 'str06.stage2.names',
         'str06.stage2.associate', 'str06.stage4.preserve',
-        'str06.stage4.body_design', 'str06.stage4.bind', 'str06.stage4.hook_design',
+        'str06.stage4.body_design', 'str06.stage4.hook_design',
         'str06.stage5.hook', 'str06.stage5.body', 'str06.stage7.naming'}
     assert all(row['sid'] == '联调样本_9001' for row in paid)
     # Supervisor 走到 pipeline_complete 才终验：STR-06 关闭批改接后终验读
@@ -712,15 +713,15 @@ def test_service_full_chain_real_subprocess_and_restart_readback(base, tmp_path,
     assert '柳婉' in final_bytes.decode('utf-8')
 
     # ⑤ 付费账：fake transport 的每一跳都经真实 PaidRequestSession 入账
-    #    （13 次新购、11 个付费节点、unknown 不冒充零）。
+    #    （12 次新购、10 个付费节点——CS-3 bind 退役；unknown 不冒充零）。
     rows = _ledger_rows(base)
     paid = [row for row in rows
             if row['sid'] == book.name and not row['cached']]
-    assert len(paid) == 13
+    assert len(paid) == 12
     assert {row['node'] for row in paid} == {
         'str06.stage2.book', 'str06.stage2.chapters', 'str06.stage2.names',
         'str06.stage2.associate', 'str06.stage4.preserve',
-        'str06.stage4.body_design', 'str06.stage4.bind',
+        'str06.stage4.body_design',
         'str06.stage4.hook_design', 'str06.stage5.hook', 'str06.stage5.body',
         'str06.stage7.naming'}
 
@@ -825,17 +826,17 @@ def test_faulted_product_entry_heals_via_revision_and_delivers(base, tmp_path,
     final_text = final_bytes.decode('utf-8')
     assert '柳婉' in final_text and '苏芸娘' not in final_text
 
-    # ④ 修订轮真实发生并如实计费：13 笔干净外发＋1 笔 associate 修订轮实付；
-    #    整书总闸按 attempt 合账（I-17/I-43）。
+    # ④ 修订轮真实发生并如实计费：12 笔干净外发＋1 笔 associate 修订轮实付
+    #    （CS-3 bind 退役）；整书总闸按 attempt 合账（I-17/I-43）。
     rows = _ledger_rows(base)
     paid = [row for row in rows
             if row['sid'] == book.name and not row['cached']]
-    assert len(paid) == 14, '受影响 owner 应恰好多一笔修订轮实付'
+    assert len(paid) == 13, '受影响 owner 应恰好多一笔修订轮实付'
     associate_rows = [row for row in paid
                       if row['node'] == 'str06.stage2.associate']
     assert len(associate_rows) == 2, 'associate 一原轮＋一修订轮'
     from novel.work_units import read_book_budget
-    assert read_book_budget(base, book.name).used == 14
+    assert read_book_budget(base, book.name).used == 13
 
     # ⑤ 重启读回：全新服务实例三面读回一致，成书与交付摘要互相咬合。
     candidate = book.name
@@ -1045,7 +1046,7 @@ def test_agent_run_pauses_before_body_cli_canary_then_continuation_delivers(
     assert {row['node'] for row in paid} == {
         node for node in before_body if NODES[node].paid}, (
         '应恰好是正文之前跑过的付费节点（两个 compile 免费、不入账）')
-    assert len(paid) == 10, '语义层含 ch01/ch02 两次章观察共 10 次外发'
+    assert len(paid) == 9, '语义层含 ch01/ch02 两次章观察共 9 次外发（bind 退役）'
     assert not any(row['purpose'].startswith('body_') for row in rows), \
         '正文一行都没有'
     record = next(row for row in agent.records(base) if row.run_id == run_id)
@@ -1170,21 +1171,20 @@ def test_agent_run_pauses_before_body_cli_canary_then_continuation_delivers(
     _assert_process_window(window, {'str06.stage5.body'})
 
 
-# ───────────────────── 七、R8a 验收：跨节点回派经单节点子进程重规划闭环 ────────
+# ─────────────────── 七、CS-3 验收：承载闸在单节点子进程内修订自愈 ───────────
 #
-# 【为什么单独一条】obligation_unbound 的修订目标（body_design）在 compile
-# 之前的执行序上；supervisor 每步只派一个 `novel.cli run <node>` 子进程——
-# 进程内回跳到不了它，唯一出路是 compile 子进程以**已落盘负结论**退出
-# （R8a-1：exit 1，此前是未捕获异常 exit 70），编排器按 issue 记录重规划
-# （resume_verdict 判 owner_revision REDO），design 修订重跑后下游按新鲜度
-# 复验、compile 通过清账。这条链同时压过 against_sha256 门控（design 写回后
-# 不得再判 REDO）与 req_ 定位（修订提示不含 obNN）。
+# 【为什么单独一条】obligation_unbound 的拦截点随 bind 退役前移——real 覆盖闸
+# 在 body_design 的 ask 同节点修订轮内（不再跨到 compile 的 must_keep_unbound
+# 回派）。supervisor 每节点一个子进程：fault_once 需跨子进程粘滞（状态文件），
+# 首答吃到坏 wire（real 清空）、修订轮拿到干净稿，一轮治好；下游（hook_design
+# 等）按产物新鲜度照常推进交付。req_ 源盲定位与修订轮计费面保持验收。
 
 def test_obligation_unbound_replans_across_single_node_subprocesses(base,
                                                                     tmp_path,
                                                                     monkeypatch):
-    """R8a×产品入口：compile exit 1 → 编排重规划 design 修订 → 下游复验 →
-    交付；全程无 exit 70、无重复购买。"""
+    """CS-3×产品入口：design 首答漏标 real → 覆盖闸同节点修订轮自愈 →
+    双产物（body_design＋semantic_binding）发布 → 下游照常交付；无跨节点
+    回派、无重复购买。"""
     from pathlib import Path
 
     from novel.orchestrator import agent
@@ -1194,12 +1194,12 @@ def test_obligation_unbound_replans_across_single_node_subprocesses(base,
 
     window = _install_process_window(
         monkeypatch, tmp_path,
-        real_nodes={'str06.stage4.body_design', 'str06.stage4.bind', 'str06.stage4.compile'},
+        real_nodes={'str06.stage4.body_design', 'str06.stage4.hook_design',
+                    'str06.stage4.compile'},
         fault='obligation_unbound')
 
-
-    # R8a：supervisor 每节点一个子进程——fault_once 需跨子进程粘滞（状态文件），
-    # 否则 bind 的每个新子进程首答都重新吃到故障 wire，一轮修订永远治不好。
+    # supervisor 每节点一个子进程——fault_once 需跨子进程粘滞（状态文件），
+    # 否则 body_design 子进程重跑时首答又吃到故障 wire，一轮修订永远治不好。
     monkeypatch.setenv('NOVEL_STR06_FAULT_ONCE_STICKY',
                        str(tmp_path / 'fault_once_served.json'))
 
@@ -1232,27 +1232,23 @@ def test_obligation_unbound_replans_across_single_node_subprocesses(base,
     book = paths.resolve_novel_dir(base, '9005')
     assert (book / paths.book_txt_rel(book)).is_file(), '回派重规划后没有交付成书'
 
-    # ① 回派负结论以 exit 1 落盘（不是 exit 70 的未捕获异常）：子进程日志里
-    #    有落盘标记、没有崩溃标记。
+    # ① 同节点修订轮自愈：无回派负结论、无 exit 70 崩溃；子进程日志干净。
     from novel.orchestrator.agent import run_log_path
     log_bytes = run_log_path(base, run_id).read_bytes().decode('utf-8', 'replace')
-    assert '回派负结论已落盘（exit 1' in log_bytes
     assert '未捕获异常（exit 70' not in log_bytes
 
-    # ② 回派账：resolved、一轮、against 摘要在案；定位是源盲 core id。
+    # ② 承载闸在 body_design 内自愈：无跨节点回派账（issue 记录不产生）；
+    #    双产物发布（semantic_binding 的唯一 writer 是 body_design）。
     from novel.stages.owner_revision import read_owner_issue_file
-    from novel.stages.stage4 import obligation_core_id
     from novel.store import Str06Repository
-    record = read_owner_issue_file(Str06Repository(book), 'design')
-    assert record is not None and record.status == 'resolved'
-    assert record.rounds_total == 1
-    assert len(record.against_sha256) == 64
-    assert record.issues[0].item == obligation_core_id('ob01')
-    assert 'ob01' not in record.issues[0].message
+    assert read_owner_issue_file(Str06Repository(book), 'design') is None
+    assert (book / 'stage4/grounding/semantic_binding.json').is_file()
+    assert (book / 'stage4/compiled/execution_plan.json').is_file()
 
-    # ③ 修订提示：修订**要求段**以 req_ core id 定位（Design 源盲纪律不变）。
-    #    CS-3（2026-10-03）：v6 的静态义务清单（ob 短名，D6）随原始请求嵌入
-    #    修订轮——ob 合法出现在请求前缀，但【修订要求】段本身不得以 ob 定位。
+    # ③ 修订提示真实发生：design 的第二轮请求带【修订要求】段（承载闸拦下的
+    #    real 缺失问题集），定位不以 ob 源序号（Design 源盲纪律不变——v6 的
+    #    静态义务清单 ob 短名只出现在请求前缀）。
+    from novel.stages.stage4 import obligation_core_id
     revision_payload = _turn_request_payload(base, book, 'str06.stage4.body_design',
                                              ordinal=2)
     messages = revision_payload['messages']
@@ -1260,17 +1256,19 @@ def test_obligation_unbound_replans_across_single_node_subprocesses(base,
     assert '【修订要求】' in revision_user
     assert obligation_core_id('ob01') in revision_user
     requirement_section = revision_user.split('【修订要求】', 1)[1]
-    assert 'ob01' not in requirement_section, '修订要求不得以 ob 源序号定位（Design 源盲）'
+    requirement_only = requirement_section.split('上一版全文', 1)[0]
+    # CS-3：obNN 是 v6 义务清单的正式短名（real 标注的闭集词汇，D6），覆盖闸
+    # 消息以 ob 定位合法；这里钉问题面确为 real 承载缺失。
+    assert 'real' in requirement_only and '必保义务' in requirement_only
 
-    # ④ 付费账：受影响 owner 各恰好多一笔修订/重问实付；总闸按 attempt 合账。
+    # ④ 付费账：design 一原轮＋一修订轮；bind 不存在（退役）；下游照常。
     rows = _ledger_rows(base)
     paid = [row for row in rows
             if row['sid'] == book.name and not row['cached']]
     from collections import Counter
     by_purpose = Counter(row['purpose'] for row in paid)
     assert by_purpose['design'] == 2, 'design 一原轮＋一修订轮'
-    assert by_purpose['bind'] == 2, 'bind 首答（合法 unbound）＋重规划后重问'
-    assert by_purpose['hook_design'] == 2, 'hook_design 随 design 修订重编译'
+    assert 'bind' not in by_purpose, 'bind 已退役，不得出现 bind 实付行'
     from novel.work_units import read_book_budget
     assert read_book_budget(base, book.name).used == len(paid)
 
@@ -1281,7 +1279,8 @@ def test_obligation_unbound_replans_across_single_node_subprocesses(base,
     assert agent.wait(second.run_id, 600)
     assert _ledger_rows(base) == rows_before, '二次代跑不得新购'
     _assert_process_window(window, {
-        'str06.stage4.body_design', 'str06.stage4.bind', 'str06.stage4.compile'})
+        'str06.stage4.body_design', 'str06.stage4.hook_design',
+        'str06.stage4.compile'})
 
 
 def test_registered_owner_patch_survives_file_removal_then_agent_delivers(base, tmp_path, monkeypatch):
@@ -1295,7 +1294,9 @@ def test_registered_owner_patch_survives_file_removal_then_agent_delivers(base, 
     repo_root = str(Path(__file__).resolve().parents[1])
 
     window = _install_process_window(
-        monkeypatch, tmp_path, real_nodes={'str06.stage4.body_design', 'str06.stage4.compile'})
+        monkeypatch, tmp_path,
+        real_nodes={'str06.stage4.body_design', 'str06.stage4.hook_design',
+                    'str06.stage4.compile'})
 
     source = base.parent / 'input_9007.txt'
     source.write_text(SOURCE_TEXT, encoding='utf-8')
@@ -1357,7 +1358,9 @@ def test_registered_owner_patch_survives_file_removal_then_agent_delivers(base, 
     second = agent.start(base, '9007', authorized=True, egress_authorized=True, profiles=_profiles())
     assert agent.wait(second.run_id, 600)
     assert _ledger_rows(base) == before
-    _assert_process_window(window, {'str06.stage4.body_design', 'str06.stage4.compile'})
+    _assert_process_window(window, {'str06.stage4.body_design',
+                                     'str06.stage4.hook_design',
+                                     'str06.stage4.compile'})
 
 
 def _turn_request_payload(base, book, node: str, *, ordinal: int) -> dict:

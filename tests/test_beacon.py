@@ -49,9 +49,9 @@ def test_pipeline_steps_match_the_skill_table():
 def test_progress_event_payload_matches_phase():
     """一种相位恰好带一种载荷：start 不带退出码，end 必带。"""
     with pytest.raises(Exception):
-        _ev(1, 'str06.stage4.bind', 'start', exit_code=0)
+        _ev(1, 'str06.stage4.preserve', 'start', exit_code=0)
     with pytest.raises(Exception):
-        _ev(1, 'str06.stage4.bind', 'end')
+        _ev(1, 'str06.stage4.preserve', 'end')
 
 
 def test_append_then_read_roundtrip(base):
@@ -172,8 +172,8 @@ def test_fold_six_states():
     assert by_node['str06.stage2.names'].last_exit == 1
     assert by_node['stage1.partition'].beacon == 'stopped'
     assert by_node['stage1.partition'].last_exit == 2
-    assert by_node['str06.stage4.bind'].beacon == 'pending'
-    assert by_node['str06.stage4.bind'].label == NODES['str06.stage4.bind'].label
+    assert by_node['str06.stage4.preserve'].beacon == 'pending'
+    assert by_node['str06.stage4.preserve'].label == NODES['str06.stage4.preserve'].label
     assert all(s.beacon in BEACON_STATES for s in steps)
 
 
@@ -295,9 +295,9 @@ def test_mark_drained_and_reconcile_refuse_non_lf_beacon_under_joint_lock(base):
 
 
 def test_mark_command_roundtrip(base):
-    assert main(['mark', '42', '--node', 'str06.stage4.bind', '--phase', 'start',
+    assert main(['mark', '42', '--node', 'str06.stage4.preserve', '--phase', 'start',
                  '--execution-id', 'attempt-1', '--base', base]) == X.OK
-    assert main(['mark', '42', '--node', 'str06.stage4.bind', '--phase', 'end',
+    assert main(['mark', '42', '--node', 'str06.stage4.preserve', '--phase', 'end',
                  '--execution-id', 'attempt-1', '--exit', '0',
                  '--note', '计划过闸', '--base', base]) == X.OK
     events = beacon.read_events(base)
@@ -308,9 +308,9 @@ def test_mark_command_roundtrip(base):
 
 def test_mark_end_requires_exit(base):
     """被拒绝的打点不许落盘。"""
-    assert main(['mark', '42', '--node', 'str06.stage4.bind', '--phase', 'end',
+    assert main(['mark', '42', '--node', 'str06.stage4.preserve', '--phase', 'end',
                  '--base', base]) == X.TERMINAL_STATE
-    assert main(['mark', '42', '--node', 'str06.stage4.bind', '--phase', 'start',
+    assert main(['mark', '42', '--node', 'str06.stage4.preserve', '--phase', 'start',
                  '--exit', '0', '--base', base]) == X.TERMINAL_STATE
     assert beacon.read_events(base) == []
 
@@ -321,7 +321,7 @@ def test_reconcile_cli_exposes_zero_cost_typed_beacon_tail_repair(
     path.parent.mkdir(parents=True, exist_ok=True)
     committed = (
         json.dumps(_ev(
-            1, 'str06.stage4.bind', 'start', run_id='parent-1',
+            1, 'str06.stage4.preserve', 'start', run_id='parent-1',
             execution_id='attempt-1').model_dump(mode='json'),
             ensure_ascii=False) + '\n').encode('utf-8')
     tail = b'{"truncated":'
@@ -354,7 +354,7 @@ def test_reconcile_cli_exposes_zero_cost_typed_beacon_tail_repair(
     assert beacon.tail_repair_dir(base).joinpath(
         f"{shown['subject_sha256']}.tail.bin").read_bytes() == tail
     beacon.append(base, _ev(
-        2, 'str06.stage4.bind', 'end', exit_code=0, run_id='parent-1',
+        2, 'str06.stage4.preserve', 'end', exit_code=0, run_id='parent-1',
         execution_id='attempt-1'))
     assert beacon.open_executions(base, 'parent-1') == ()
 

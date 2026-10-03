@@ -5,8 +5,9 @@
 【本地块】
   · `design.py`    BodyDesign 组装与派生面生成（`str06.stage4.body_design`；
                    B3 前半：场景/拍 ID、归章、权重归一与锚定引用由 compiler 生成）。
-  · `grounding.py` Preserve／ReconstructionBrief 投影／Bind 输入投影／Bind
-                   （`str06.stage4.preserve`、`str06.stage4.bind`）。
+  · `grounding.py` Preserve／ReconstructionBrief 投影／SemanticBinding 派生
+                   （`str06.stage4.preserve`；CS-3 bind 退役后承载位由 design
+                   wire 的 real 标注派生，`derive_semantic_binding`）。
   · `hook.py`      Hook Design 的确定性校验臂与唯一 graph publisher
                    （`str06.stage4.hook_design`；B3 后半自 stage5 包归位）。
   · `hook_context.py` HookContext 确定性投影（`str06.stage4.compile` 的一段；
@@ -42,8 +43,8 @@ from novel.stages.stage4.fold import (
     FoldedState, ThreadFold, fold_accepted_prefix, fold_thread_faces,
 )
 from novel.stages.stage4.grounding import (
-    assemble_binding, assemble_preserve, obligation_core_id,
-    project_binding_space, project_brief, project_preserve_view,
+    assemble_preserve, design_obligation_index, derive_semantic_binding,
+    obligation_core_id, project_brief, project_preserve_view,
 )
 from novel.stages.stage4.guard import (
     appeared_chars, check_binding_beat_refs, check_cast_legality,
@@ -54,10 +55,11 @@ from novel.stages.stage4.guard import (
 )
 from novel.stages.stage4.hook import assemble_hook_design, publish_graph
 from novel.stages.stage4.hook_context import compile_hook_context
+from novel.stages.stage4.slim import design_placements
 
 __all__ = [
     'FoldedState', 'ThreadFold', 'allocate_chapter_budgets', 'appeared_chars',
-    'assemble_binding', 'assemble_body_design', 'assemble_hook_design',
+    'assemble_body_design', 'assemble_hook_design',
     'assemble_preserve', 'chapter_scene_weights', 'chapter_surface_releases',
     'chapter_withheld_literals', 'chapters_with_budget_change',
     'check_binding_beat_refs',
@@ -65,9 +67,9 @@ __all__ = [
     'check_obligation_coverage',
     'check_read_projection', 'check_thread_lifecycle', 'check_thread_projection',
     'compile_execution_plan', 'compile_hook_context', 'compile_writer_book_ir',
+    'design_obligation_index', 'design_placements', 'derive_semantic_binding',
     'expected_thread_faces', 'fold_accepted_prefix', 'fold_thread_faces',
     'init_establishments', 'lock_order_violations', 'obligation_core_id',
-    'project_binding_space',
     'project_brief', 'project_preserve_view',
     'publish_graph', 'run_mechanical_guard', 'scene_order',
 ]

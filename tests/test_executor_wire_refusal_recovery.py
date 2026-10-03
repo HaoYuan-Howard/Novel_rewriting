@@ -25,7 +25,7 @@ from novel.work_units import (
 )
 from tests.test_work_unit_grants import _append_ended_agent_run
 
-NODE = 'str06.stage4.bind'
+NODE = 'str06.stage4.preserve'
 SID = '42'
 
 

@@ -164,7 +164,7 @@ def test_executor_egress_snapshots_distinguish_old_unknown_from_new_bool():
     # Phase2/3 的 append-only 记录没有新格：字段缺席只能读成 unknown，不能倒推。
     old_step = Step(**step_fields, executor_backend=LegacyExecutorBackend(profile=profile))
     old_job = JobStart(
-        sid='old', node='stage2.global', steps=[old_step], python='3.11', code='old',
+        sid='old', node='str06.stage4.preserve', steps=[old_step], python='3.11', code='old',
         paid=True, writes=True, executor_backend=LegacyExecutorBackend(profile=profile))
     assert old_step.executor_backend is not None
     assert old_step.executor_backend.kind == 'legacy'
@@ -203,12 +203,12 @@ def test_executor_egress_snapshots_distinguish_old_unknown_from_new_bool():
     current_step = Step(
         **step_fields, executor_backend=LegacyExecutorBackend(profile=profile), egress_authorized=False)
     current_job = JobStart(
-        sid='new', node='stage2.global', steps=[current_step], python='3.11', code='new',
+        sid='new', node='str06.stage4.preserve', steps=[current_step], python='3.11', code='new',
         paid=True, writes=True, executor_backend=LegacyExecutorBackend(profile=profile), egress_authorized=False)
     assert current_job.egress_authorized is False
     with pytest.raises(ValidationError, match='外发授权不一致'):
         JobStart(
-            sid='new', node='stage2.global', steps=[current_step],
+            sid='new', node='str06.stage4.preserve', steps=[current_step],
             python='3.11', code='new', paid=True, writes=True,
             executor_backend=LegacyExecutorBackend(profile=profile), egress_authorized=True)
 

@@ -606,7 +606,6 @@ const PIPELINE_STEPS: { node: string; label: string; paid: boolean }[] = [
   { node: 'str06.stage2.compile', label: 'Stage2 确定性编译：解析证据、生成 ID、执行关联，发布 Characters＋Blueprint（D9）', paid: false },
   { node: 'str06.stage4.preserve', label: 'Stage4 Preserve（保存策略义务）与 ReconstructionBrief 投影', paid: true },
   { node: 'str06.stage4.body_design', label: 'Stage4 目标故事与导演说明设计（BodyDesign）', paid: true },
-  { node: 'str06.stage4.bind', label: 'Stage4 Bind（义务到目标位置绑定，完整 canonical snapshot）', paid: true },
   { node: 'str06.stage4.hook_design', label: 'Stage4 Hook 设计并经 publish_graph 唯一发布 PresentationGraph', paid: true },
   { node: 'str06.stage4.compile', label: 'Stage4 确定性编译：ExecutionPlan／Guard／WriterBookIR／HookContext', paid: false },
   { node: 'str06.stage5.hook', label: 'Stage5 Hook 成文（同 Context 有限重写＋机械验）', paid: true },

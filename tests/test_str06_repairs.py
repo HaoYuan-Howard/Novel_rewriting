@@ -22,7 +22,7 @@ from novel.stages.common import project_context
 from novel.stages.stage4.fold import fold_accepted_prefix, FoldedState
 from novel.stages.common import canonical_sha256
 from novel.stages.stage4.guard import run_mechanical_guard
-from novel.stages.stage4.grounding import assemble_preserve, project_brief, assemble_binding
+from novel.stages.stage4.grounding import assemble_preserve, derive_semantic_binding, project_brief
 from novel.stages.stage2 import compile_source_truth
 from tests.str06_facilities import make_context
 from tests.test_str06_execution_ir import _graph, _binding, _cp, _ob
@@ -57,17 +57,25 @@ def test_diamond_requires_is_not_cycle_and_brief_all_kinds_are_closed():
     assert {c.satisfaction for c in brief.requirements} == {o.satisfaction for o in cp.obligations}
 
 
-def test_binding_accepts_full_wire_beat_id_and_rejects_omission():
+def test_binding_derivation_closes_denominator_and_rejects_out_of_range():
+    """CS-3 bind 退役：binding 由 real 标注投影派生——全分母闭合、无标注
+    义务进 unbound；标注拍越界（Design 拍闭集外）精确拒。"""
     _, _, cp = _assemble()
-    wire = {'protocol_version': 'stage4-bind-v1', 'entries': [
-        {'obligation_id': o.obligation_id, 'scene': 's01', 'beat': 'bt1'}
-                        for o in cp.obligations], 'unbound': []}
-    binding, errors = assemble_binding(wire, cp, {'s01': {'bt1'}})
+    graph = _graph()
+    placements = {o.obligation_id: [(0, 0)] for o in cp.obligations}
+    binding, errors = derive_semantic_binding(placements, graph, cp)
     assert not errors and binding.obligations == cp.obligations
     assert binding.entries[0].beat_ref == 's01#bt1'
-    # 承载拍缺项（闭集外）即拒：分量必须取投影给出的真实拍
-    del wire['entries'][0]['beat']
-    assert assemble_binding(wire, cp, {'s01': {'bt1'}})[1]
+    assert not binding.unbound
+    # 无标注义务不删：进 unbound（owner=design）
+    partial = {o.obligation_id: [(0, 0)] for o in cp.obligations[:-1]}
+    binding2, errors2 = derive_semantic_binding(partial, graph, cp)
+    assert not errors2
+    assert [u.obligation_id for u in binding2.unbound] == [
+        cp.obligations[-1].obligation_id]
+    # 标注拍越界（闭集外）即拒
+    bad = {o.obligation_id: [(9, 9)] for o in cp.obligations}
+    assert derive_semantic_binding(bad, graph, cp)[1]
 
 
 def test_reversed_acyclic_dependency_is_rejected():
@@ -281,12 +289,12 @@ def test_paid_response_durable_before_validation_and_reused(tmp_path):
     request = ChatRequest(model='fake', system='s', user='u', reasoning_effort='high',
                           thinking=True, json_mode=True, max_tokens=50)
     with pytest.raises(ValueError, match='重问后无进展'):
-        ask_json(session, 'bind', request, lambda _: ['缺必保义务'])
+        ask_json(session, 'preserve', request, lambda _: ['缺必保义务'])
     # R3：原轮＋一次修订轮后同问题集停（有界，不无限付费）；跨 session、同
     # 请求，免费重新校验已购原响应——恢复零外发。
     session2 = PaidRequestSession(repo, CostLedger(path=ledger_path(tmp_path)), transport,
                                   provider='fake', sid='book')
-    assert ask_json(session2, 'bind', request, lambda _: [])[0] == {'entries': []}
+    assert ask_json(session2, 'preserve', request, lambda _: [])[0] == {'entries': []}
     assert transport.calls == 2
     rows, _ = read_cost_snapshot(tmp_path)
     assert len([r for r in rows if not r['cached']]) == 2
@@ -295,7 +303,7 @@ def test_paid_response_durable_before_validation_and_reused(tmp_path):
     assert rows[2]['prompt_tokens'] == rows[2]['completion_tokens'] == 0
     assert sum(row['completion_tokens'] for row in rows) == 40
     with pytest.raises(ValueError, match='--yes'):
-        ask_json(session2, 'bind', replace(request, user='changed'), lambda _: [])
+        ask_json(session2, 'preserve', replace(request, user='changed'), lambda _: [])
 
 
 def test_same_root_owner_patch_bootstraps_and_version_mismatch_refuses(tmp_path):

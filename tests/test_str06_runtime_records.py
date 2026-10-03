@@ -105,13 +105,13 @@ def test_empty_answer_does_not_occupy_request_identity(tmp_path):
     transport = _EmptyThenGoodTransport()
     base, repo, ledger, session = _make_session(tmp_path, transport)
     # 第一次：空回答计一次失败 attempt，同轮内付费重试后成功。
-    data, ref = ask_json(session, 'bind', _request(), lambda _: [])
+    data, ref = ask_json(session, 'preserve', _request(), lambda _: [])
     assert data == {'entries': []}
     assert transport.calls == 2, '空回答必须在同一内容轮内重试，不得把空壳当已购结果'
     # 重跑（新 session、同一请求身份）：免费采用成功的回答，不得读回空壳。
     replay = PaidRequestSession(repo, CostLedger(path=ledger_path(base)), transport,
                                 provider='fake', sid='book')
-    data2, ref2 = ask_json(replay, 'bind', _request(), lambda _: [])
+    data2, ref2 = ask_json(replay, 'preserve', _request(), lambda _: [])
     assert data2 == {'entries': []}
     assert transport.calls == 2, '重跑免费采用，不得因空回答历史而重复购买'
     assert ref2.attempt_id == ref.attempt_id, '引用必须指向成功的那次 attempt'
@@ -120,9 +120,9 @@ def test_empty_answer_does_not_occupy_request_identity(tmp_path):
 def test_empty_answer_retries_within_one_content_turn_and_counts_attempts(tmp_path):
     transport = _EmptyThenGoodTransport()
     base, repo, ledger, session = _make_session(tmp_path, transport)
-    ask_json(session, 'bind', _request(), lambda _: [])
+    ask_json(session, 'preserve', _request(), lambda _: [])
     from novel.work_units import WorkUnitBudget
-    unit = WorkUnitBudget(base, 'book', 'str06.stage4.bind', 'executor', 'book')
+    unit = WorkUnitBudget(base, 'book', 'str06.stage4.preserve', 'executor', 'book')
     turns = unit._read().turns
     assert len(turns) == 1, '空回答重试属于同一内容轮（ContentRevision），不得另取轮'
     attempts = turns[0].attempts
@@ -157,7 +157,7 @@ def test_json_empty_answer_is_salvaged_from_reasoning_free(tmp_path):
 
     transport = ReasoningOnly()
     base, repo, ledger, session = _make_session(tmp_path, transport)
-    data, ref = ask_json(session, 'bind', _request(), lambda _: [])
+    data, ref = ask_json(session, 'preserve', _request(), lambda _: [])
     assert data == {'entries': []}
     assert transport.calls == 1, '救回成功不得付费重试'
     # 救回也要过同一套校验：救回内容不满足契约时必须继续重试，不得放行。
@@ -171,7 +171,7 @@ def test_json_empty_answer_is_salvaged_from_reasoning_free(tmp_path):
     (tmp_path / 'b').mkdir()
     base2, repo2, _, session2 = _make_session(tmp_path / 'b', transport2)
     with pytest.raises(Exception) as excinfo:
-        ask_json(session2, 'bind', _request(), lambda _: ['形状不合约定'])
+        ask_json(session2, 'preserve', _request(), lambda _: ['形状不合约定'])
     assert transport2.calls >= 2, '救回未过闸必须重试，不得采纳'
 
 
@@ -190,10 +190,10 @@ def test_unknown_delivery_stops_without_automatic_retry(tmp_path):
     transport = Unconfirmed()
     base, repo, ledger, session = _make_session(tmp_path, transport)
     with pytest.raises((ExecutionError, TimeoutError)):
-        ask_json(session, 'bind', _request(), lambda _: [])
+        ask_json(session, 'preserve', _request(), lambda _: [])
     assert transport.calls == 1, 'unknown 不得自动重试'
     from novel.work_units import WorkUnitBudget, read_book_budget
-    unit = WorkUnitBudget(base, 'book', 'str06.stage4.bind', 'executor', 'book')
+    unit = WorkUnitBudget(base, 'book', 'str06.stage4.preserve', 'executor', 'book')
     turn = unit._read().turns[0]
     assert turn.state == 'unknown'
     assert read_book_budget(base, 'book').used == 1, 'unknown 也占额'
@@ -205,7 +205,7 @@ def test_errors_carry_stage_node_item_phase_code_context(tmp_path):
     transport = _EmptyThenGoodTransport()
     base, repo, ledger, session = _make_session(tmp_path, transport, yes=False)
     with pytest.raises(PurchaseRequired):
-        ask_json(session, 'bind', _request(), lambda _: [])
+        ask_json(session, 'preserve', _request(), lambda _: [])
     # 未知付费 owner 的错误带完整定位字段。
     class Broken:
         def send(self, request):
@@ -229,13 +229,13 @@ def test_errors_carry_stage_node_item_phase_code_context(tmp_path):
 def test_acceptance_record_replaces_validation_file_and_adopts_by_seal(tmp_path):
     transport = _EmptyThenGoodTransport()
     base, repo, ledger, session = _make_session(tmp_path, transport)
-    data, ref = ask_json(session, 'bind', _request(), lambda _: [])
+    data, ref = ask_json(session, 'design', _request(), lambda _: [])
     # 逐请求 validation 文件退役；接受分项记录按 attempt 留证（语义恒 unver）。
     assert not list((base / 'run' / 'runtime').glob('validation_*.json'))
     assert not list((base / 'run' / 'runtime').glob('request_*.json'))
     assert not list((base / 'run' / 'runtime').glob('admission.json'))
     from novel.work_units import WorkUnitBudget
-    unit = WorkUnitBudget(base, 'book', 'str06.stage4.bind', 'executor', 'book')
+    unit = WorkUnitBudget(base, 'book', 'str06.stage4.body_design', 'executor', 'book')
     acceptance = unit.acceptance_records()
     assert {attempt_id for attempt_id, _ in acceptance} == {
         a.attempt_id for a in unit._read().turns[0].attempts}
@@ -255,11 +255,11 @@ def test_acceptance_record_replaces_validation_file_and_adopts_by_seal(tmp_path)
     session2 = PaidRequestSession(repo, CostLedger(path=ledger_path(base)), transport,
                                   yes=True, allow_source_export=True,
                                   provider='fake', sid='book')
-    ask_json(session2, 'bind', _request(user='第二个请求'), lambda _: [])
+    ask_json(session2, 'design', _request(user='第二个请求'), lambda _: [])
     states = [t.state for t in unit._read().turns]
     assert states[0] == 'adopted', '已封存的轮对账为 adopted（采用状态从 seal 派生）'
     assert states[1] == 'delivered'
-    ask_json(session2, 'bind', _request(user='第三个请求'), lambda _: [])
+    ask_json(session2, 'design', _request(user='第三个请求'), lambda _: [])
     states = [t.state for t in unit._read().turns]
     assert states[1] == 'failed', '未封存的已交付轮在下一次 reserve 前关闭'
     assert states[2] == 'delivered'
@@ -425,9 +425,9 @@ def test_restarted_run_reuses_purchased_answers_across_sessions(tmp_path):
     calls_first = len(transport.calls)
     _run_chain(repo, base, transport, tmp_path)
     purchased = len(transport.calls) - calls_first
-    # B2 五节点：book＋ch01–ch02＋names＋associate＋preserve＋design＋bind＋
-    # hook_design＋naming＝10 个 JSON owner，加 hook_writer 与两章 body＝13。
-    assert purchased == 13
+    # B2 五节点＋CS-3 bind 退役：book＋ch01–ch02＋names＋associate＋preserve＋
+    # design＋hook_design＋naming＝9 个 JSON owner，加 hook_writer 与两章 body＝12。
+    assert purchased == 12
     from novel.work_units import read_book_budget
     used_after_first = read_book_budget(base, 'run').used
     assert used_after_first == purchased, '每次外发各计一次（含空回答等失败 attempt）'
@@ -489,11 +489,11 @@ def test_not_delivered_transport_failure_retries_within_same_turn(tmp_path):
     transport = RateLimitedThenOk()
     base, repo, ledger, session = _make_session(tmp_path, transport)
     session.retry_policy = TransportRetryPolicy(max_retries=3, backoff_base=0)
-    data, answer = ask_json(session, 'bind', _request(), lambda _: [])
+    data, answer = ask_json(session, 'preserve', _request(), lambda _: [])
     assert data == {'entries': []}
     assert transport.calls == 2, '未送达在同轮内重试一次后成功'
     from novel.work_units import WorkUnitBudget, read_book_budget
-    unit = WorkUnitBudget(base, 'book', 'str06.stage4.bind', 'executor', 'book')
+    unit = WorkUnitBudget(base, 'book', 'str06.stage4.preserve', 'executor', 'book')
     turn = unit._read().turns[0]
     assert len(turn.attempts) == 2 and [a.outcome for a in turn.attempts] == ['failed', 'ok']
     assert turn.state == 'delivered'
@@ -525,14 +525,14 @@ def test_truncated_answer_stops_item_without_retry_or_extra_budget(tmp_path):
     transport = Truncated()
     base, repo, ledger, session = _make_session(tmp_path, transport)
     with pytest.raises(ExecutionError) as excinfo:
-        ask_json(session, 'bind', _request(), lambda _: [])
+        ask_json(session, 'preserve', _request(), lambda _: [])
     err = excinfo.value
     assert err.code == 'truncated' and err.phase == 'accept'
     assert err.context['completion_tokens'] == 131072
     assert err.context['reasoning_tokens'] == 90000, '截断必须如实记录 reasoning 与正文 token'
     assert transport.calls == 1, '截断不自动重试'
     from novel.work_units import WorkUnitBudget, read_book_budget
-    unit = WorkUnitBudget(base, 'book', 'str06.stage4.bind', 'executor', 'book')
+    unit = WorkUnitBudget(base, 'book', 'str06.stage4.preserve', 'executor', 'book')
     turn = unit._read().turns[0]
     assert turn.state == 'delivered', '截断响应已完整交付并耐久留证'
     assert [a.outcome for a in turn.attempts] == ['ok'], 'ok 留证保证重跑免费命中，不自动重购'
@@ -561,11 +561,11 @@ def test_truncated_cached_replay_stops_again_without_rebuying(tmp_path):
     transport = Truncated()
     base, repo, ledger, session = _make_session(tmp_path, transport)
     with pytest.raises(ExecutionError, match='截断'):
-        ask_json(session, 'bind', _request(), lambda _: [])
+        ask_json(session, 'preserve', _request(), lambda _: [])
     replay = PaidRequestSession(repo, CostLedger(path=ledger_path(base)), transport,
                                 provider='fake', sid='book')
     with pytest.raises(ExecutionError) as excinfo:
-        ask_json(replay, 'bind', _request(), lambda _: [])
+        ask_json(replay, 'preserve', _request(), lambda _: [])
     assert excinfo.value.code == 'truncated'
     assert transport.calls == 1, '免费命中同一截断响应，不得再付费重购'
     assert excinfo.value.context['cached'] is True

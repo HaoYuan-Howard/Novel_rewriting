@@ -40,7 +40,8 @@ renderer v5、写手协议 v5、拍上线程与 ThreadFold、章缝合 `entry`�
 回执身份拆分 rc6、Guard M7/M8）；R3 typed 自愈（`OwnerIssueV1` 路由表、有界修订轮、
 跨节点回派 `owner_revision`、监控面 `owner_issues`）。R6 统一发布权威已落地
 （2026-09-29；输出组 seal、免费同封存与正式读取校验，见「发布权威与读取校验」节）。
-14 节点是默认执行拓扑、不是不变量（裁决 4）。
+执行拓扑是默认拓扑、不是不变量（裁决 4）；CS-3（2026-10-03）bind 退役后现役
+13 节点。
 
 ### R9 集中升版（2026-09-30，D8 修订二）
 
@@ -107,7 +108,7 @@ compile／Stage4 compile／Stage7 assemble 才 resolve。无登记或后续手�
 `7d24e572…`，`tests/test_str06_f7e_freeze.py`）。节点仍为 14 个，运行配置未变。
 book 观察 `stage2-book-v3`、chapters 独立 `stage2-chapters-v2`（names 保持
 `stage2-observation-v1`、associate 保持 v2，输入投影变经 RC 表换身份）；
-Preserve `stage4-preserve-v2`＋policy 5、Design `stage4-design-v5`；bind／
+Preserve `stage4-preserve-v2`＋policy 5、Design `stage4-design-v5`；
 hook-design 字面不变。写作层 renderer／写手协议 v6 不在本批（R10b 升 v7）。
 
 **章观察瘦 wire（CS-2 第一步，2026-10-03）**：`str06.stage2.chapters` 的
@@ -154,10 +155,15 @@ pov/voice/entry）派生；kp 值未知/解除例外走拍上 state 面。r10b �
   v5 删 `dramatic_intent`；非知情/非读者 set 必填 modality；拍增
   `expression_refs`（正向表达任务落具体拍）。kp/kf 键规则与必保锁兑现归
   `assemble_body_design`（revise_self ≤2）。
-- **Bind 与位置（a5）**：Bind 投影带出 series 与锁摘要；同一 series 成员绑定
-  不同拍（同拍 `series_collapsed`，同节点修订）；必保缺口默认归 design。
-  `run_bind` 接受闸接进 ask 修订轮（R-5.5 改写），耗尽/无进展才 `.INVALID`
-  孪生（typed 停止携带被拦稿的显式采用引用）。compile 增全书级锁位置 Guard
+- **承载位（a5＋CS-3 bind 退役）**：`str06.stage4.bind` 节点与
+  stage4-bind-v1 wire 协议退役——义务落在哪一拍由 design wire（v6）的
+  `real:["obNN"]` 标注唯一声明：末次标注拍＝接受拍、其余标注拍＝支撑位，
+  `derive_semantic_binding` 派生 SemanticBinding（series 成员接受拍互斥，
+  同拍 `series_collapsed` 并入 design 同节点修订轮；无标注的非必保义务进
+  unbound，义务不删）。body_design 同节点接受校验：必保义务 real 覆盖闸
+  （漏标即拦）、派生错误并报同一修订轮。`semantic_binding.json` 的唯一
+  writer 是 `str06.stage4.body_design`（双产物同 bundle 同 seal 发布）。
+  compile 保留全书级锁位置 Guard
   （`novel/stages/stage4/guard.py::lock_order_violations`）：kp 知情升级/读者确认不得早于授权该
   模式的义务承载位置（授权位＝必保义务全部承载点最早者，支撑拍算承载；
   initial_state 与自由键不查；故事发生顺序不查——顺序三分）；违例按
@@ -629,15 +635,16 @@ ReconstructionBrief／SemanticBinding；checkpoint 不携带任何 Design/Bind �
 `novel/stages/stage2/associate.py`（跨章关联 owner，B2 第三步）、
 `novel/stages/stage2/compile.py`（双真源唯一发布 owner＋源 fold 唯一实现，
 B2 第三步；旧联合抽取 `source.py` 已随 B5/S-05 整包删除，反例已迁五 owner 引擎）、
-`novel/stages/stage4/grounding.py`（preserve/bind）、
+`novel/stages/stage4/grounding.py`（preserve＋Brief 投影＋binding 派生）、
 `novel/stages/stage4/design.py`、`novel/stages/stage4/hook.py`（hook design 与唯一
 graph publisher，B3 后半归位）、`novel/stages/stage4/compile.py`、`novel/stages/stage4/book_ir.py`、
 `novel/stages/stage4/hook_context.py`（B3 后半归位）、`novel/stages/stage4/guard.py`、
 `novel/stages/stage5/body.py`（按章 writer）、`novel/stages/stage5/body_checks.py`、
 `novel/stages/stage5/hook_writer.py`、`novel/stages/stage7/naming.py`、
 `novel/stages/stage7/assembly.py`；跨 stage 共用原语与 renderer 住
-`novel/stages/common.py`；薄编排与设施装配住 `novel/stages/chain.py`（14 节点执行序；
-全部 14 个 runner 在位——含 `run_associate`／`run_compile`（B2 第三步），
+`novel/stages/common.py`；薄编排与设施装配住 `novel/stages/chain.py`（CS-3 bind 退役后 13 节点执行序；
+全部 runner 在位——含 `run_associate`／`run_compile`（B2 第三步）、
+`derive_semantic_binding`（binding 随 body_design 双产物发布），
 生产入口 `novel.cli run <node> <sid>`）。
 
 依赖单向：Design 禁 Grounding 实现/Blueprint internals/checkpoint 裸读；Grounding 禁

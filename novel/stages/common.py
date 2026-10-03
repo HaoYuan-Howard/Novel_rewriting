@@ -774,30 +774,6 @@ def design_rules(*, known_char_ids: set[str] | None = None,
 
 DESIGN_RULES = design_rules()
 
-BIND_RULES = """任务：把每条保存义务绑定到目标故事的确切承载位置
-（wire 协议 stage4-bind-v1）。你只做承载选择：义务 id 与场景/拍 id 都取输入
-投影给出的闭集（选择，不是生成）；"场景#拍" 复合引用由 compiler 组成，你不写。
-每条义务恰好一次进入 entries 或 unbound；不得为凑覆盖率虚绑。
-entries:[{obligation_id, scene, beat, supporting}]
-- obligation_id 只能取义务清单给出的 id；
-- scene/beat 只能取场景闭集里的 scene_id 与该场的 beat_id：单一最终验收拍必须
-  能单独完成 satisfaction；复合义务前半部分用 supporting:[{scene, beat}] 给明确
-  的较早支撑拍；
-- 若 A requires B，B 的承载场景不得晚于 A 的承载场景（跨场逆序是硬闸）；
-  同场内的拍序交错合法——复合尝试的揭示确认可以发生在尝试过程内部
-  （顺序三分：因果前提语义不机械映射场内阅读序）；支撑拍必须早于
-  最终验收拍。
-- 义务携带 knowledge_locks/fact_locks 摘要时，承载位置必须能完成这些锁的
-  兑现（授权模式内的知情承载、按锁 modality 的事实承载）；
-- series 的成员是同一机制的离散兑现时点：必须绑定**不同拍**，不得把多次
-  发生合并到同一拍承载。
-无法兑现的必保义务也必须放入 unbound:[{obligation_id,owner:design|grounding,
-reason}]，不能删或改义务。缺口默认归 design（目标结构无法承载）；grounding
-只用于义务本身与源解释冲突的情形。
-wire 顶层：{"protocol_version":"stage4-bind-v1","entries":[...],"unbound":[...]}。
-返回一个 JSON object，不要围栏、不要解释。
-"""
-
 NAMES_RULES = """任务：登记全书源名称结构（姓氏家族、名、化名与每个表层称谓的构词）。
 只依据正文与人物账，不猜、不补造。
 1. families：每个姓氏家族一条 {family_id, literal, forms}：

@@ -2,14 +2,14 @@
 
 Stage4 在新链（STR-06，F8a 激活）有五个节点：四个付费节点
 `str06.stage4.preserve`（保存策略义务）→ `str06.stage4.body_design`（目标故事与
-导演说明）→ `str06.stage4.bind`（义务到目标位置绑定）→ `str06.stage4.hook_design`
+导演说明，同节点双产物发布 SemanticBinding——CS-3 起 bind 节点退役）→ `str06.stage4.hook_design`
 （Hook 必要选择，并经 `publish_graph` 唯一发布 PresentationGraph），加一个确定性
 节点 `str06.stage4.compile`（ExecutionPlan／Guard／WriterBookIR／HookContext，
 `executor_content_limit=0` 结构性禁付）。
 
 Design 是 source-blind 的：实际输入只有 Preserve 投影（`project_brief`）、身份投影
 与 Characters v4，源叙述拓扑不进 prompt。章数恒等于源章数；跨章重构合法——场景可跨
-源章重组，输出章仍与源章一一同号（`R-5.2`）。Bind 机械校验拦下的稿进 `.INVALID`
+源章重组，输出章仍与源章一一同号（`R-5.2`）。
 孪生（typed witness）后 fail-fast，同指纹不重购。
 
 ## 现役 JSON 产物
@@ -23,8 +23,8 @@ Design 是 source-blind 的：实际输入只有 Preserve 投影（`project_brie
 |---|---|---|---|
 | `runtime/preserve_checkpoint.json` | `PreserveCheckpoint` | `str06.stage4.preserve` | 保存策略义务（已购证据；checkpoint 存储不是下游读取接口） |
 | `stage4/grounding/reconstruction_brief.json` | `ReconstructionBrief` | `str06.stage4.preserve` | ReconstructionBrief 确定性投影 |
-| `stage4/design/body_design.json` | `BodyDesign` | `str06.stage4.body_design` | 目标故事与导演说明（正式派生产物；bind／hook_design 的单节点输入） |
-| `stage4/grounding/semantic_binding.json` | `SemanticBinding` | `str06.stage4.bind` | 义务到目标位置的完整 canonical snapshot |
+| `stage4/design/body_design.json` | `BodyDesign` | `str06.stage4.body_design` | 目标故事与导演说明（正式派生产物；hook_design 的单节点输入） |
+| `stage4/grounding/semantic_binding.json` | `SemanticBinding` | `str06.stage4.body_design` | 义务到目标位置的完整 canonical snapshot（CS-3：由 design wire 的 real 承载标注派生，双产物同 bundle 发布） |
 | `stage4/design/presentation_graph.json` | `PresentationGraph` | `str06.stage4.hook_design` | BodyDesign＋Hook 合并发布（唯一 publisher） |
 | `stage4/compiled/execution_plan.json` | `ExecutionPlan` | `str06.stage4.compile` | 四类执行语义与依赖边 |
 | `stage4/acceptance/guard/compile.json` | 自由形态派生记录 | `str06.stage4.compile` | Guard 编译错误清单 |
@@ -54,7 +54,7 @@ M2/M3 共用 `check_entry_timing`），码集合与判据注册表的 `guard_m{n
 | `chapter_plan_shape` | hard | 目标章数等于源章数、章序 1..N 连续非空；允许跨章重构 |
 | `length_budget_conserved` | hard | 章预算 largest-remainder 分配、总和守恒 |
 | `preserve_compile` | hard | Preserve checkpoint 编译闭合 |
-| `binding_mechanical` | hard | R10a a5：Bind 接受闸接进 ask 同节点修订轮（≤2）；耗尽/无进展才 INVALID 孪生留证＋fail-fast |
+| `binding_mechanical` | hard | CS-3：binding 派生错误并入 body_design 的 ask 同节点修订轮（≤2）；real 覆盖闸漏标即拦；耗尽/无进展 fail-fast |
 | `hook_design_mechanical` | hard | Hook 设计机械校验＋graph 唯一发布 |
 | `design_semantics_unver` | unver | 目标故事与导演说明的语义质量未评 |
 | `scene_budget_distribution` | metric | 章预算相对场景权重的分布读数 |
@@ -73,7 +73,7 @@ M2/M3 共用 `check_entry_timing`），码集合与判据注册表的 `guard_m{n
 | `preserve_anchor_closure` | hard | R10a a2：义务 anchors 在投影句柄闭集（≥1）、lineage 由 compiler 派生、series 成员闭集互斥、evidence_conflicts 引用闭合 |
 | `source_evidence_conflict_routing` | hard | R10a a3：源证据冲突按锚点句柄回派 Stage2 owner（拍句柄→逐章、书级→book、不可解析即停）；三分支恢复＝修订／保留解释（revise_self 恢复输入）／未决停止；同指纹不二次回派 |
 | `design_lock_acceptance` | hard | R10a a4：Brief 锁定项（kp 命题登记＋知情锁唯一映射＋kf 事实锁）与 Design v5 锁规则——kp 键持有者须有锁且模式被授权（known 只能来自 known 锁）、读者确认须有 reader known 锁、kf 时态锁按锁 modality 承载、值未知/原文未回答不得 set、必保锁兑现 |
-| `binding_series_collapse` | hard | R10a a5：同一 series 成员绑定不同拍（同拍即 series_collapsed）；Bind 投影带出 series 与锁摘要；必保缺口默认归 design |
+| `binding_series_collapse` | hard | 同一 series 成员接受拍不同（同拍即 series_collapsed，design 修订轮）；锁摘要经 design 义务清单送达；必保漏标由 real 覆盖闸拦 |
 | `epistemic_lock_order_guard` | hard | R10a a5：kp 知情升级/读者确认不得早于授权该模式的义务承载位置（授权位＝必保义务全部承载点最早者；initial_state 与自由键不查；故事发生顺序不查，P5）；违例按 epistemic_lock_order 回派 body_design |
 | `answer_reuse_four_conditions` | hard | R10a §二.4：已购回答复用四条件——模型输入未变→复用；验收条件变化→免费机械复验；实际写作材料变化→按请求身份判断新回答；仅审计/展示变化→不触发付费重写 |
 | `writer_packet_background_narrowing` | hard | R10b §R10b.3：背景投影规则——写手面背景只投书级初态立足点＋建立之后仍被消费的当前状态（消费者＝声明读取/读者确认目标/Hook 地址/锁键）；unset/unknown 不作背景；补齐面（依赖边生成）保持全量 |

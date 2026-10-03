@@ -15,7 +15,7 @@ from contracts.schema.source import (
 )
 from tests.str06_facilities import v13_beat
 from novel.stages.stage4.grounding import (
-    assemble_binding, assemble_preserve, project_brief,
+    assemble_preserve, derive_semantic_binding, project_brief,
 )
 from novel.stages.stage4.design import assemble_body_design
 from tests.str06_expression_inputs import (
@@ -237,66 +237,33 @@ def test_identity_stable_constraints_come_only_from_the_fact_layer():
     assert by_char['yun'] == ()
 
 
-# ───────────────────────── Bind ─────────────────────────
+# ───────────────────────── Binding 派生（CS-3：bind 退役） ─────────────────
 
-BPV = 'stage4-bind-v1'
+def _small_body():
+    from tests.test_str06_execution_ir import _graph
+    return _graph()
 
 
-def test_assemble_binding_full_denominator():
+def test_binding_derivation_full_denominator():
     chars, bp, cp = _assemble()
-    scenes = {'sc01': {'b01'}}
-    wire = {'protocol_version': BPV, 'entries': [
-        {'obligation_id': 'ob01', 'scene': 'sc01', 'beat': 'b01'},
-        {'obligation_id': 'ob02', 'scene': 'sc01', 'beat': 'b01'},
-    ], 'unbound': [
-        {'obligation_id': 'ob03', 'owner': 'design', 'reason': '身份约束随人物携带'}]}
-    binding, errors = assemble_binding(wire, cp, scenes)
+    body = _small_body()
+    # ob01/ob02 标注 s01#bt1（(0,0)），ob03 无标注 → unbound（义务不删）
+    placements = {'ob01': [(0, 0)], 'ob02': [(0, 0)]}
+    binding, errors = derive_semantic_binding(placements, body, cp)
     assert binding is not None and not errors, errors
     assert isinstance(binding, SemanticBinding)
-    # 复合引用由 compiler 组成（I-21）：wire 只给 {scene, beat} 分量
-    assert binding.entries[0].beat_ref == 'sc01#b01'
-    assert binding.entries[0].scene_id == 'sc01'
+    # 复合引用由 compiler 组成（I-21）：标注只给序号投影，引用由派生组成
+    assert binding.entries[0].beat_ref == 's01#bt1'
+    assert binding.entries[0].scene_id == 's01'
+    assert [u.obligation_id for u in binding.unbound] == ['ob03']
 
-    # 红：义务消失（半份 Binding）
-    dropped = {'protocol_version': BPV, 'entries': wire['entries'][:1],
-               'unbound': wire['unbound']}
-    _, errors = assemble_binding(dropped, cp, scenes)
-    assert any('消失' in e for e in errors)
-
-    # 红：拍分量指向不存在的拍（M4 面；闭集外精确拒，不猜笔误）
-    ghost = {'protocol_version': BPV, 'entries': [
-        {'obligation_id': 'ob01', 'scene': 'sc01', 'beat': 'b99'},
-        {'obligation_id': 'ob02', 'scene': 'sc01', 'beat': 'b01'}],
-        'unbound': wire['unbound']}
-    _, errors = assemble_binding(ghost, cp, scenes)
-    assert any('真实拍' in e for e in errors)
-
-    # 红：未知场景
-    stray = {'protocol_version': BPV, 'entries': [
-        {'obligation_id': 'ob01', 'scene': 'sc99', 'beat': 'b01'}],
-        'unbound': [{'obligation_id': 'ob02', 'owner': 'design', 'reason': 'x'},
-                    {'obligation_id': 'ob03', 'owner': 'design', 'reason': 'y'}]}
-    _, errors = assemble_binding(stray, cp, scenes)
-    assert any('未知场景' in e for e in errors)
-
-    # 红：unbound 混入 checkpoint 外义务
-    invented = {'protocol_version': BPV, 'entries': wire['entries'],
-                'unbound': wire['unbound'] + [
-                    {'obligation_id': 'obX', 'owner': 'design', 'reason': 'x'}]}
-    _, errors = assemble_binding(invented, cp, scenes)
+    # 红：标注引用 checkpoint 外义务
+    _, errors = derive_semantic_binding({'obX': [(0, 0)]}, body, cp)
     assert any('checkpoint 外' in e for e in errors)
 
-    # 红：模型写复合引用（旧形状）即拒——引用由 compiler 组成
-    stale = {'protocol_version': BPV, 'entries': [
-        {'obligation_id': 'ob01', 'scene_id': 'sc01', 'beat_ref': 'sc01#b01'}],
-        'unbound': wire['unbound']}
-    _, errors = assemble_binding(stale, cp, scenes)
-    assert any('未知字段' in e for e in errors)
-
-    # 红：协议版本错带
-    wrong = dict(wire, protocol_version='stage4-bind-v9')
-    _, errors = assemble_binding(wrong, cp, scenes)
-    assert any('protocol_version' in e for e in errors)
+    # 红：标注拍越界（闭集外精确拒，不猜笔误）
+    _, errors = derive_semantic_binding({'ob01': [(0, 9)]}, body, cp)
+    assert any('越界' in e for e in errors)
 
 
 # ───────────────────────── Design 组装 ─────────────────────────

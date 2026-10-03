@@ -298,17 +298,16 @@ def _binding(body):
         checkpoint_id='cp', policy_id='p', policy_version=5, characters_sha256=H64,
         blueprints_sha256=H64, provider='x', model='y', request_sha256='r' * 64,
         obligations=obligations, checkpoint_sha256=H64)
-    positions = {s.scene_id: {b.beat_id for b in s.beats} for s in body.scenes}
-    wire = {'protocol_version': 'stage4-bind-v1',
-            'entries': [
-                {'obligation_id': 'ob01', 'scene': 'sc01', 'beat': 'b02'},
-                {'obligation_id': 'ob02', 'scene': 'sc02', 'beat': 'b02',
-                 'supporting': [{'scene': 'sc02', 'beat': 'b01'}]},
-                {'obligation_id': 'ob03', 'scene': 'sc01', 'beat': 'b01'},
-                {'obligation_id': 'ob04', 'scene': 'sc01', 'beat': 'b02'}],
-            'unbound': []}
-    from novel.stages.stage4.grounding import assemble_binding
-    binding, errors = assemble_binding(wire, cp, positions)
+    # CS-3 bind 退役：承载位＝design wire 的 real 标注投影（ob → 标注拍序号）。
+    # ob02 复合承载：sc02#b01（支撑）→ sc02#b02（接受）。
+    placements = {
+        'ob01': [(0, 1)],
+        'ob02': [(1, 0), (1, 1)],
+        'ob03': [(0, 0)],
+        'ob04': [(0, 1)],
+    }
+    from novel.stages.stage4.grounding import derive_semantic_binding
+    binding, errors = derive_semantic_binding(placements, body, cp)
     assert binding is not None and not errors, errors
     return binding
 

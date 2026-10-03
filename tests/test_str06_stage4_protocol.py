@@ -22,7 +22,7 @@ from contracts.schema.grounding import PreserveCheckpoint, SourceLineage, Source
 from contracts.schema.policy import PreserveKind
 from contracts.schema.state import StateAddress
 from contracts.schema.workflow import (
-    STAGE4_BIND_PROTOCOL, STAGE4_DESIGN_PROTOCOL, STAGE4_HOOK_DESIGN_PROTOCOL,
+    STAGE4_DESIGN_PROTOCOL, STAGE4_HOOK_DESIGN_PROTOCOL,
     STAGE4_PRESERVE_PROTOCOL, STR06_RC_VERSION,
 )
 from tests.test_str06_hook import _characters
@@ -32,7 +32,7 @@ from novel.stages.stage4.book_ir import (
 from novel.stages.stage4.compile import compile_execution_plan
 from novel.stages.stage4.design import assemble_body_design
 from novel.stages.stage4.grounding import (
-    assemble_binding, assemble_preserve, project_binding_space,
+    assemble_preserve, derive_semantic_binding,
 )
 from novel.stages.stage4.hook import assemble_hook_design
 from tests.str06_expression_inputs import (
@@ -126,14 +126,14 @@ def _checkpoint(*obligation_ids: str) -> PreserveCheckpoint:
 
 # ───────────────────────── 四协议独立版化 ─────────────────────────
 
-def test_four_protocols_are_independent_literals():
-    """每个付费语义节点一个独立协议字面量：演进互不牵连（B3 前半）。"""
+def test_protocols_are_independent_literals():
+    """每个付费语义节点一个独立协议字面量：演进互不牵连（B3 前半；
+    CS-3 bind 退役——承载位并入 design wire v6 的 real 标注）。"""
     assert STAGE4_PRESERVE_PROTOCOL == 'stage4-preserve-v2'
     assert STAGE4_DESIGN_PROTOCOL == 'stage4-design-v5'
-    assert STAGE4_BIND_PROTOCOL == 'stage4-bind-v1'
     assert STAGE4_HOOK_DESIGN_PROTOCOL == 'stage4-hook-design-v1'
     assert len({STAGE4_PRESERVE_PROTOCOL, STAGE4_DESIGN_PROTOCOL,
-                STAGE4_BIND_PROTOCOL, STAGE4_HOOK_DESIGN_PROTOCOL}) == 4
+                STAGE4_HOOK_DESIGN_PROTOCOL}) == 3
     # RC 版式头随 R2 语义送达升 rc10（R1 关联无损曾升 rc9）
     assert STR06_RC_VERSION == 'str06-rc12'
 
@@ -355,37 +355,17 @@ def test_budget_change_propagates_by_integer_allocation():
 
 # ───────────────────────── Bind 输入投影（最小承载选择面） ────────────────
 
-def test_binding_space_projects_obligations_and_scene_beats_only():
-    """Bind 输入投影：义务清单＋场景/拍闭集；不回显导演说明／delta／称谓面。"""
-    import json
-    checkpoint = _checkpoint('ob01', 'ob02')
-    space = project_binding_space(checkpoint, _green())
-    assert space['protocol_version'] == STAGE4_BIND_PROTOCOL
-    assert [o['obligation_id'] for o in space['obligations']] == ['ob01', 'ob02']
-    assert space['obligations'][0]['statement'] == '义务ob01'
-    assert [(s['scene_id'], [b['beat_id'] for b in s['beats']])
-            for s in space['scenes']] == [('sc01', ['b01', 'b02', 'b03']),
-                                          ('sc02', ['b01', 'b02'])]
-    dumped = json.dumps(space, ensure_ascii=False)
-    for smuggled in ('realization_brief', 'target_delta', 'surface_introductions',
-                     'delivery_hint', 'knowledge_mode'):
-        assert smuggled not in dumped, smuggled
-
-
 def test_binding_supporting_refs_compose_and_stay_in_the_denominator():
-    """支撑拍分量 → 复合引用；义务闭集外的承载精确拒。"""
+    """支撑拍（非末次标注拍）→ 复合引用进 entries；标注拍越界精确拒。"""
+    from tests.test_str06_execution_ir import _graph
     checkpoint = _checkpoint('ob01')
-    wire = {'protocol_version': STAGE4_BIND_PROTOCOL, 'entries': [
-        {'obligation_id': 'ob01', 'scene': 'sc01', 'beat': 'b03',
-         'supporting': [{'scene': 'sc01', 'beat': 'b01'},
-                        {'scene': 'sc02', 'beat': 'b01'}]}], 'unbound': []}
-    positions = {'sc01': {'b01', 'b02', 'b03'}, 'sc02': {'b01', 'b02'}}
-    binding, errors = assemble_binding(wire, checkpoint, positions)
+    body = _graph()          # s01#bt1、s02#bt1 两拍
+    placements = {'ob01': [(1, 0), (0, 0)]}   # 支撑 s02#bt1＋接受 s01#bt1
+    binding, errors = derive_semantic_binding(placements, body, checkpoint)
     assert not errors, errors
     entry = binding.entries[0]
-    assert entry.beat_ref == 'sc01#b03'
-    assert entry.supporting_beat_refs == ('sc01#b01', 'sc02#b01')
+    assert entry.beat_ref == 's01#bt1'
+    assert entry.supporting_beat_refs == ('s02#bt1',)
 
-    wire['entries'][0]['supporting'].append({'scene': 'sc02', 'beat': 'b99'})
-    _, errors = assemble_binding(wire, checkpoint, positions)
-    assert any('真实拍' in e for e in errors)
+    _, errors = derive_semantic_binding({'ob01': [(0, 9)]}, body, checkpoint)
+    assert any('越界' in e for e in errors)

@@ -173,7 +173,7 @@ def test_retired_blocker_has_no_execution_token(
         monkeypatch, tmp_path):
     snapshot = _snapshot(tmp_path)
     blocker = _blocked(
-        'str06.stage4.bind', 'legacy_frozen_v6_design_authority_unavailable')
+        'str06.stage5.body', 'legacy_frozen_v6_design_authority_unavailable')
     _wire(monkeypatch, snapshot, todo=[], blocked=[blocker])
 
     got = O.next_action(tmp_path, 'book-1')

@@ -159,7 +159,7 @@ def test_ask_json_non_localizable_error_falls_back_to_full_revision(tmp_path):
     """定位协议返回 None（存在不可定位错误）→ R3 整份修订原路径不变。"""
     transport = _ScriptedTransport(['{"ok": false}', '{"ok": true}'])
     base, _repo, session = _json_session(tmp_path, transport)
-    data, answer = ask_json(session, 'bind', _request(),
+    data, answer = ask_json(session, 'preserve', _request(),
                             lambda w: [] if w.get('ok') else ['形状不合约定'],
                             patch=lambda w, e: None)
     assert data == {'ok': True} and not isinstance(answer, PatchedAnswer)

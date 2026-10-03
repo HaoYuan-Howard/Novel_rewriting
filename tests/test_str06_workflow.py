@@ -35,6 +35,30 @@ from tests.str06_expression_inputs import (
 PV = 'stage2-chapters-v2'   # R10a a1：章观察独立协议字面量（names 无字面量面）
 
 
+def _design_wire_v6():
+    """stage4-design-v6（CS-3）：real 承载标注替 bind；义务 ob01–ob03 的接受拍
+    都是首拍（与原 bind wire 等价）；kp 知情行经 ob02 的锁派生，不写在 wire。"""
+    return {
+        'protocol_version': 'stage4-design-v6',
+        'book_style': '冷峻克制的第三人称叙事，重对话张力。',
+        'character_voices': [{'char_id': 'yun', 'voice': '冷峻'}],
+        'initial_state': [],
+        'scenes': [
+            {'driver': {'focal_actor': 'yun', 'immediate_want': '保全婚姻',
+                        'opposition': '家族压力', 'turn': '约定'},
+             'brief': '重心在约定成立的承诺瞬间；从家族施压的晚宴写起，'
+                      '展开两人独处的对峙，在立约处收住，衔接下一场的兑现。',
+             'reads': [],   # v6：narration 派生自源叙述（focalizers=narrator），pov 缺省 narrator
+             'beats': [
+                 {'ev': '约定成立', 'who': ['yun', 'fu_jun'],
+                  'real': ['ob01', 'ob02', 'ob03'],
+                  'state': [{'at': 'yun+fu_jun', 'key': 'marital_status',
+                             'val': '夫妻'}]}],
+             }],
+        'chapters': [{'purpose': '婚姻从名分走向盟约', 'scenes': 1}],
+    }
+
+
 def _obs_beat(event, refs, **over):
     beat = {'event': event, 'participants': [], 'source_refs': list(refs),
             'scene_boundary': 'new', 'temporal_mode': 'single',
@@ -88,10 +112,7 @@ def test_stage2_stage4_repository_replay_and_writer_consumer(tmp_path):
                       'same_proposition': [], 'same_state_dimension': [],
                       'loop_pairing': [], 'cross_chapter_cause': [],
                       'scene_continuation': []},
-        'preserve': _preserve_wire(), 'design': _design_wire(),
-        'bind': {'protocol_version': 'stage4-bind-v1',
-                 'entries': [{'obligation_id': f'ob{i:02}', 'scene': 'sc01', 'beat': 'b01'}
-                             for i in range(1, 4)], 'unbound': []},
+        'preserve': _preserve_wire(), 'design': _design_wire_v6(),
         # F5 起 Hook Design 属 Stage4 腿：完整 graph 与 WriterIR 一起发布
         'hook_design': {
             'protocol_version': 'stage4-hook-design-v1',
@@ -108,8 +129,6 @@ def test_stage2_stage4_repository_replay_and_writer_consumer(tmp_path):
     requests = []
     def ask(owner, prompt, validate, patch=None):
         data = deepcopy(wires[owner])
-        if owner == 'design':
-            data['scenes'][0]['beats'][0]['target_delta'][1]['key'] =                 _kp_from_design_prompt(prompt, '借种之约是共同秘密')
         assert not validate(data), (owner, validate(data))
         requests.append((owner, prompt))
         return data, synthetic_ref(owner, prompt)
@@ -140,18 +159,14 @@ def test_stage2_stage4_repository_replay_and_writer_consumer(tmp_path):
     assert context['verification_ir']['beats'][0]['beat_ref'] == 'sc01#b01'
     assert any('约定被提出且被接受' in o['satisfaction']
                for o in context['verification_ir']['obligations'])
-    assert context['writer_brief']['pov'] == 'yun'
+    assert context['writer_brief']['pov'] == 'narrator'   # v6：narration←源叙述
     assert len(repo.inspect('stage4/grounding/reconstruction_brief.json')['requirements']) == 3
     design_prompt = next(prompt for owner, prompt in requests if owner == 'design')
     assert '知晓时刻与反应' in design_prompt and '夫君身份约束' in design_prompt
     assert 'b01_01' not in design_prompt
     assert 'realization_brief' in design_prompt and 'purpose' in design_prompt
-    # B3 前半：bind 的输入是承载选择的最小投影——事件内核可追溯，delta 全量、
-    # 导演说明与称谓面不再回显。
-    binding_prompt = next(prompt for owner, prompt in requests if owner == 'bind')
-    assert 'dramatic_intent' not in binding_prompt
-    assert 'target_delta' not in binding_prompt
-    assert '约定成立' in binding_prompt and 'obligation_id' in binding_prompt
+    # CS-3 bind 退役：承载位由 design wire 的 real 标注派生，无 bind 请求。
+    assert all(owner != 'bind' for owner, _prompt in requests)
     before = repo.path('stage4/ir/writer_book_ir.json').read_bytes()
     run_workflow(repository=repo, chapters=chapters, ask=ask,
                  ask_text=ask_text,
@@ -343,39 +358,30 @@ def test_concealed_fact_reaches_writer_as_pending_reader_confirmation(tmp_path):
                               'holder': 'reader', 'mode': 'learns',
                               'basis': [{'segment': 'e01_01',
                                          'quote': '夫君与云娘一处住着'}]}])]}
-    design = {**sample_design_expression(('yun',)),
-        'protocol_version': 'stage4-design-v5',
+    design = {
+        'protocol_version': 'stage4-design-v6',
         'book_style': '冷峻克制的第三人称叙事。',
+        'character_voices': [{'char_id': 'yun', 'voice': '冷峻'}],
         'initial_state': [],
         'scenes': [
-            {'state_reads': [],
-             'driver': {'focal_actor': 'yun', 'immediate_want': '确认声响来源',
+            {'driver': {'focal_actor': 'yun', 'immediate_want': '确认声响来源',
                         'opposition': '无人可问', 'turn': '决意亲自去看'},
-             'realization_brief': '重心在夜半响动后的试探；压缩寻问无果，'
-                                  '在决意亲自去到处收束，衔接下一场的揭示。',
-             'beats': [{'event': '夜半响动', 'participants': ['yun'],
-                        'delivery_hint': '',
-                        'target_delta': [
-                            {'domain': 'world', 'subjects': [], 'op': 'set', 'modality': 'actual',
-                             'scope': 'book', 'key': 'hiding', 'value': '床底有人'}],
-                        'delivery_hint': ''}],
-             'delivery': {'pov': 'yun', 'voice': '冷峻', 'avoid': []}},
-            {'state_reads': [{'domain': 'world', 'subjects': [], 'key': 'hiding'}],
-             'driver': {'focal_actor': 'yun', 'immediate_want': '看清床底',
+             'brief': '重心在夜半响动后的试探；压缩寻问无果，'
+                      '在决意亲自去到处收束，衔接下一场的揭示。',
+             'reads': [],
+             'beats': [{'ev': '夜半响动', 'who': ['yun'],
+                        'real': ['ob01'],
+                        'state': [{'at': 'world', 'key': 'hiding',
+                                   'val': '床底有人'}]}]},
+            {'driver': {'focal_actor': 'yun', 'immediate_want': '看清床底',
                         'opposition': '恐惧', 'turn': '确认'},
-             'realization_brief': '重心在床底确认瞬间；从俯身写到确认，'
-                                  '在反应处收住。',
-             'beats': [{'event': '确认床底有人',
-                        'participants': ['yun', 'fu_jun'], 'delivery_hint': '',
-                        'target_delta': [
-                            {'domain': 'reader', 'subjects': [], 'op': 'set',
-                             'scope': 'scene', 'key': '__KP_HIDE__', 'value': '床底有人',
-                             'confirms': {'domain': 'world', 'subjects': [],
-                                          'holder': None, 'key': 'hiding'}}],
-                        'delivery_hint': ''}],
-             'delivery': {'pov': 'yun', 'voice': '冷峻', 'avoid': []}}],
-        'chapters': [{'purpose': '夜半响动到床底确认', 'scenes': 2}],
-        'scene_weights': [1, 1]}
+             'brief': '重心在床底确认瞬间；从俯身写到确认，在反应处收住。',
+             'reads': [{'domain': 'world', 'subjects': [], 'holder': None,
+                        'key': 'hiding'}],
+             'beats': [{'ev': '确认床底有人', 'who': ['yun', 'fu_jun'],
+                        'real': ['ob02'],
+                        'conf': {'at': 'world', 'key': 'hiding'}}]}],
+        'chapters': [{'purpose': '夜半响动到床底确认', 'scenes': 2}]}
     preserve = {'protocol_version': 'stage4-preserve-v2', 'obligations': [
         {'kind': 'event_core',
          'statement': '夫君佯称离开实则藏身床底',
@@ -401,10 +407,6 @@ def test_concealed_fact_reaches_writer_as_pending_reader_confirmation(tmp_path):
                       'loop_pairing': [], 'cross_chapter_cause': [],
                       'scene_continuation': []},
         'preserve': preserve, 'design': design,
-        'bind': {'protocol_version': 'stage4-bind-v1', 'entries': [
-            {'obligation_id': 'ob01', 'scene': 'sc01', 'beat': 'b01'},
-            {'obligation_id': 'ob02', 'scene': 'sc02', 'beat': 'b01'}],
-            'unbound': []},
         'hook_design': {
             'protocol_version': 'stage4-hook-design-v1',
             'pov': {'person': 'first', 'focalizers': ['yun']},
@@ -419,8 +421,6 @@ def test_concealed_fact_reaches_writer_as_pending_reader_confirmation(tmp_path):
 
     def ask(owner, prompt, validate, patch=None):
         data = deepcopy(wires[owner])
-        if owner == 'design':
-            data['scenes'][1]['beats'][0]['target_delta'][0]['key'] =                 _kp_from_design_prompt(prompt, '夫君藏身床底')
         assert not validate(data), (owner, validate(data))
         requests.append((owner, prompt))
         return data, synthetic_ref(owner, prompt)

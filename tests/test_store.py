@@ -2312,7 +2312,7 @@ def test_promotion_keeps_the_original_phase_bindings_and_archives_the_invalid():
     #（新链唯一等价于旧链 compiled 计划 A/B 完整字节绑定的身份字段）。
     checkpoint_sha = _seed_preserve_checkpoint(base)
     checkpoint_rel = STR06_PRESERVE_CHECKPOINT
-    ctx = _ctx(base, node='str06.stage4.bind')
+    ctx = _ctx(base, node='str06.stage4.preserve')
     st = ArtifactStore(ctx)
     raw = (base / '书名_123' / checkpoint_rel).read_bytes()
     binding = _binding(ctx, checkpoint_sha=checkpoint_sha, inputs={
@@ -2331,7 +2331,7 @@ def test_promotion_keeps_the_original_phase_bindings_and_archives_the_invalid():
         f'*.{locator}.snapshot'))
 
     # 提升走的是一次 **0 成本**的跑（`--revalidate` 在 `FREE_ENTRIES` 里）
-    ctx2 = _ctx(base, node='str06.stage4.bind', paid=False)
+    ctx2 = _ctx(base, node='str06.stage4.preserve', paid=False)
     out = ArtifactStore(ctx2).promote_invalid(
         'stage4/grounding/semantic_binding.json', SemanticBinding, **REVALIDATION)
     now = _prov_on_disk(out)

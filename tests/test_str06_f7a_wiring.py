@@ -167,21 +167,21 @@ def _session(tmp_path, transport, *, yes=True, sid='book'):
 def test_new_call_takes_work_unit_turn_and_ledger_attribution(tmp_path):
     transport = _Transport()
     base, repo, ledger, session = _session(tmp_path, transport)
-    data, _answer = ask_json(session, 'bind', _request(), lambda _: [])
+    data, _answer = ask_json(session, 'preserve', _request(), lambda _: [])
     assert data == {'entries': []}
     assert transport.calls == 1
-    unit = WorkUnitBudget(base, 'book', 'str06.stage4.bind', 'executor', 'book')
+    unit = WorkUnitBudget(base, 'book', 'str06.stage4.preserve', 'executor', 'book')
     turns = unit._read().turns
     assert len(turns) == 1 and turns[0].state == 'delivered'
     assert turns[0].response_sha256, 'delivered 轮必须有响应证据'
     rows, partial = read_cost_snapshot(base)
     assert not partial and len(rows) == 1
     row = rows[0]
-    assert row['node'] == 'str06.stage4.bind' and row['sid'] == 'book'
-    assert row['cached'] is False and row['purpose'] == 'bind'
+    assert row['node'] == 'str06.stage4.preserve' and row['sid'] == 'book'
+    assert row['cached'] is False and row['purpose'] == 'preserve'
     assert row['prompt_tokens'] == 7 and row['completion_tokens'] == 20
     # 产物采纳后单元可继续取轮；采用状态由下一次取轮时从封存证据对账。
-    ask_json(session, 'bind', _request(user='第二个请求'), lambda _: [])
+    ask_json(session, 'preserve', _request(user='第二个请求'), lambda _: [])
     assert unit._read().turns[0].state == 'failed', '未封存轮在下一次 reserve 前关闭'
     assert unit._read().turns[1].state == 'delivered'
 
@@ -189,21 +189,21 @@ def test_new_call_takes_work_unit_turn_and_ledger_attribution(tmp_path):
 def test_cached_replay_costs_nothing_and_keeps_ledger_row(tmp_path):
     transport = _Transport()
     base, repo, ledger, session = _session(tmp_path, transport)
-    ask_json(session, 'bind', _request(), lambda _: [])
+    ask_json(session, 'preserve', _request(), lambda _: [])
     session2 = PaidRequestSession(repo, CostLedger(path=ledger_path(base)), transport,
                                   provider='fake', sid='book')
-    assert ask_json(session2, 'bind', _request(), lambda _: [])[0] == {'entries': []}
+    assert ask_json(session2, 'preserve', _request(), lambda _: [])[0] == {'entries': []}
     assert transport.calls == 1, '同请求身份必须免费采用'
     rows, _ = read_cost_snapshot(base)
     assert len(rows) == 2 and rows[1]['cached'] is True
-    assert rows[1]['node'] == 'str06.stage4.bind'
+    assert rows[1]['node'] == 'str06.stage4.preserve'
 
 
 def test_unauthorized_new_call_stops_at_owner_without_touching_budget(tmp_path):
     transport = _Transport()
     base, repo, ledger, session = _session(tmp_path, transport, yes=False)
     with pytest.raises(PurchaseRequired, match='--yes'):
-        ask_json(session, 'bind', _request(), lambda _: [])
+        ask_json(session, 'preserve', _request(), lambda _: [])
     assert transport.calls == 0
     assert read_book_budget(base, 'book') is None, '未授权不得建账'
 
@@ -211,17 +211,17 @@ def test_unauthorized_new_call_stops_at_owner_without_touching_budget(tmp_path):
 def test_unit_content_limit_and_unadopted_turn_close(tmp_path):
     transport = _Transport()
     base, repo, ledger, session = _session(tmp_path, transport)
-    answers = [ask_json(session, 'bind', _request(user=f'第{index}次'), lambda _: [])[1]
+    answers = [ask_json(session, 'design', _request(user=f'第{index}次'), lambda _: [])[1]
                for index in range(4)]
-    unit = WorkUnitBudget(base, 'book', 'str06.stage4.bind', 'executor', 'book')
+    unit = WorkUnitBudget(base, 'book', 'str06.stage4.body_design', 'executor', 'book')
     # 前三次新购都没有产物采纳：每次 reserve 前未采纳轮被 mark_rejected 关闭
     # （保留原回答、不返还轮次，对齐正式 continued_content_work 语义）。
     assert [t.state for t in unit._read().turns] == ['failed', 'failed', 'failed', 'delivered']
     with pytest.raises(WorkUnitBudgetExhausted, match='内容轮额度已耗尽'):
-        ask_json(session, 'bind', _request(user='第5次'), lambda _: [])
+        ask_json(session, 'design', _request(user='第5次'), lambda _: [])
     # 第 5 次未取到轮：reserve 前未采纳轮已被关闭，四轮终态全 closed；
     # 生成事实不丢——产物的 provenance 完整记录窗口内四次采用的模型与 prompt。
-    repo.write('stage4/grounding/semantic_binding.json', {'x': 1}, owners=('bind',),
+    repo.write('stage4/grounding/semantic_binding.json', {'x': 1}, owners=('design',),
                refs=(answers[-1].ref,))
     assert [t.state for t in unit._read().turns] == ['failed'] * 4
     provenance = repo.inspect('stage4/grounding/semantic_binding.json')['_provenance']
@@ -237,10 +237,10 @@ def test_unknown_turn_blocks_repurchase_until_reconciled(tmp_path):
     transport = Failing()
     base, repo, ledger, session = _session(tmp_path, transport)
     with pytest.raises(ExecutionError, match='结果未知'):
-        ask_json(session, 'bind', _request(), lambda _: [])
+        ask_json(session, 'preserve', _request(), lambda _: [])
     with pytest.raises(ExecutionError, match='先恢复'):
-        ask_json(session, 'bind', _request(), lambda _: [])
-    unit = WorkUnitBudget(base, 'book', 'str06.stage4.bind', 'executor', 'book')
+        ask_json(session, 'preserve', _request(), lambda _: [])
+    unit = WorkUnitBudget(base, 'book', 'str06.stage4.preserve', 'executor', 'book')
     turn = unit._read().turns[0]
     assert turn.state == 'unknown' and turn.reason_code == 'TimeoutError'
 
@@ -263,8 +263,8 @@ def test_http_refusal_fails_turn_without_unknown_wedge(tmp_path):
     refusing = Refusing()
     base, repo, ledger, session = _session(tmp_path, refusing)
     with pytest.raises(ExecutionError, match='不可重试'):
-        ask_json(session, 'bind', _request(), lambda _: [])
-    unit = WorkUnitBudget(base, 'book', 'str06.stage4.bind', 'executor', 'book')
+        ask_json(session, 'preserve', _request(), lambda _: [])
+    unit = WorkUnitBudget(base, 'book', 'str06.stage4.preserve', 'executor', 'book')
     turn = unit._read().turns[0]
     assert turn.state == 'failed' and turn.reason_code == 'http_error'
     assert turn.attempts[0].outcome == 'failed' and not turn.response_sha256
@@ -275,7 +275,7 @@ def test_http_refusal_fails_turn_without_unknown_wedge(tmp_path):
     working = _Transport()
     resumed = PaidRequestSession(repo, ledger, working, yes=True,
                                  allow_source_export=True, provider='fake', sid='book')
-    data, _answer = ask_json(resumed, 'bind', _request(), lambda _: [])
+    data, _answer = ask_json(resumed, 'preserve', _request(), lambda _: [])
     assert data == {'entries': []} and working.calls == 1
     turns = unit._read().turns
     assert len(turns) == 2 and turns[1].state == 'delivered'
@@ -284,16 +284,16 @@ def test_http_refusal_fails_turn_without_unknown_wedge(tmp_path):
 def test_book_budget_gate_persists_across_sessions(tmp_path):
     transport = _Transport()
     base, repo, ledger, session = _session(tmp_path, transport)
-    ask_json(session, 'bind', _request(), lambda _: [])
+    ask_json(session, 'preserve', _request(), lambda _: [])
     budget = read_book_budget(base, 'book')
     assert budget is not None and budget.used == 1
-    ask_json(session, 'bind', _request(user='再来'), lambda _: [])
+    ask_json(session, 'preserve', _request(user='再来'), lambda _: [])
     assert read_book_budget(base, 'book').used == 2
     # 新 session 读同一份持久账：重启不重置已消耗额度（Q-10）。
     session2 = PaidRequestSession(repo, CostLedger(path=ledger_path(base)), transport,
                                   yes=True, allow_source_export=True, provider='fake',
                                   sid='book')
-    ask_json(session2, 'bind', _request(user='第三次'), lambda _: [])
+    ask_json(session2, 'preserve', _request(user='第三次'), lambda _: [])
     assert read_book_budget(base, 'book').used == 3
 
 
@@ -364,7 +364,7 @@ def _source_root(tmp_path, *, content='{"entries": []}', attempt='orig-attempt',
     root = tmp_path / 'source' / 'run'
     (root / 'runtime').mkdir(parents=True)
     request = _request()
-    identity = digest({'owner': 'bind', 'provider': 'fake',
+    identity = digest({'owner': 'preserve', 'provider': 'fake',
                        'request': request.cache_payload()})
     row = {'identity': identity, 'status': 'answered', 'attempt_id': attempt,
            'provider': 'fake', 'request': request.cache_payload(),
@@ -378,10 +378,10 @@ def _source_root(tmp_path, *, content='{"entries": []}', attempt='orig-attempt',
     (root / 'runtime' / f'request_{identity}.json').write_text(
         json.dumps(row, ensure_ascii=False), encoding='utf-8')
     ledger = CostLedger(path=ledger_path(tmp_path / 'source'))
-    ledger.record(node='str06.stage4.bind', sid='book', model='deepseek-flash',
+    ledger.record(node='str06.stage4.preserve', sid='book', model='deepseek-flash',
                   request_model='fake', code='str06-rc4', attempt=1, max_attempts=1,
                   will_retry=False, cached=False, cache_policy='request-identity',
-                  purpose='bind', attempt_id=attempt, request_fingerprint=identity,
+                  purpose='preserve', attempt_id=attempt, request_fingerprint=identity,
                   outcome='ok', prompt_tokens=11, completion_tokens=22)
     return root, identity, request
 
@@ -401,9 +401,9 @@ def _candidate(tmp_path, adopt_root):
 def test_historical_adoption_zero_new_purchase_and_no_double_count(tmp_path):
     root, identity, request = _source_root(tmp_path)
     base, repo, ledger, session = _candidate(tmp_path, root)
-    data, _answer = ask_json(session, 'bind', request, lambda _: [])
+    data, _answer = ask_json(session, 'preserve', request, lambda _: [])
     assert data == {'entries': []}
-    record = repo.inspect('runtime/revisions/bind.json')
+    record = repo.inspect('runtime/revisions/preserve.json')
     assert record['mode'] == 'historical-adoption' and record['new_paid_calls'] == 0
     assert record['cost_link'] == 'ledger-row'
     assert record['historical_usage'] == {'prompt_tokens': 11, 'completion_tokens': 22,
@@ -416,8 +416,8 @@ def test_historical_adoption_zero_new_purchase_and_no_double_count(tmp_path):
     assert rows[0]['completion_tokens'] == 0, '历史实付不得在候选根重复计费'
     assert rows[0]['cache_policy'] == 'historical-adoption'
     # provenance 的生成事实来自源行真实模型（显式引用）。
-    repo.write('stage4/grounding/semantic_binding.json', {'x': 1}, owners=('bind',),
-               refs=(AdoptionRef(owner='bind', model='deepseek-flash',
+    repo.write('stage4/grounding/semantic_binding.json', {'x': 1}, owners=('design',),
+               refs=(AdoptionRef(owner='preserve', model='deepseek-flash',
                                  prompts={'system': '系统', 'user': '用户'},
                                  request_sha256=identity,
                                  historical={'cost_link': 'ledger-row'}),))
@@ -429,14 +429,14 @@ def test_historical_adoption_blocks_corrupted_evidence(tmp_path):
     root, identity, request = _source_root(tmp_path, tamper='content')
     base, repo, ledger, session = _candidate(tmp_path, root)
     with pytest.raises(ExecutionError, match='内容损坏'):
-        ask_json(session, 'bind', request, lambda _: [])
+        ask_json(session, 'preserve', request, lambda _: [])
 
 
 def test_historical_adoption_blocks_identity_mismatch(tmp_path):
     root, identity, request = _source_root(tmp_path, tamper='identity')
     base, repo, ledger, session = _candidate(tmp_path, root)
     with pytest.raises(ExecutionError, match='身份损坏'):
-        ask_json(session, 'bind', request, lambda _: [])
+        ask_json(session, 'preserve', request, lambda _: [])
 
 
 def test_historical_adoption_blocks_unknown_paid_status(tmp_path):
@@ -445,7 +445,7 @@ def test_historical_adoption_blocks_unknown_paid_status(tmp_path):
     (tmp_path / 'source' / '_service' / 'ledger.jsonl').write_text('', encoding='utf-8')
     base, repo, ledger, session = _candidate(tmp_path, root)
     with pytest.raises(ExecutionError, match='原成本关联'):
-        ask_json(session, 'bind', request, lambda _: [])
+        ask_json(session, 'preserve', request, lambda _: [])
 
 
 def test_unregistered_owner_falls_through_to_authorization(tmp_path):
@@ -465,34 +465,54 @@ def _full_chain(tmp_path, wires, *, ceiling=None):
     return repo, session, transport, (_fake_ask, _fake_text, _fake_body, _chapters())
 
 
-def test_binding_invalid_witness_and_owner_stop(tmp_path):
+def test_design_gate_stops_owner_chain_without_downstream_calls(tmp_path):
+    from copy import deepcopy as _deepcopy
     from tests.test_str06_body import _full_chain_wires
     from novel.llm.paid_requests import ValidationStop
     from novel.stages.chain import run_workflow
     wires = _full_chain_wires()
-    # 悬空承载分量：bind 接受闸先在修订轮内重问（R10a a5，R-5.5 改写）；
-    # 同一坏 wire 原样重现 → 同指纹停（ValidationStop），INVALID 孪生留证。
-    wires['bind'] = {'entries': [{'obligation_id': 'ob01', 'scene_id': 's01',
-                                  'beat_ref': 's01#bt99'}], 'unbound': []}
-    repo, session, transport, (ask, ask_text, ask_body, chapters) = _full_chain(tmp_path, wires)
+    # CS-3 bind 退役：承载闸在 design 的同节点修订轮（real 引用闭集外义务）。
+    # 粘性坏稿原样重现 → 同指纹停（ValidationStop）；正式位不写、失败即停。
+    bad_design = _deepcopy(wires['design'])
+    for scene in bad_design['scenes']:
+        for beat in scene['beats']:
+            if beat.get('real'):
+                beat['real'] = ['ob99']
+
+    from tests.test_str06_body import _RoutingTransport
+
+    class _StickyDesign(_RoutingTransport):
+        def send(self, request):
+            if self._owner(request) == 'design':
+                import json as _json
+                from novel.llm.transport import ChatResponse
+                self.calls.append('design')
+                return ChatResponse(content=_json.dumps(
+                    bad_design, ensure_ascii=False), finish_reason='stop',
+                    usage={'prompt_tokens': 100, 'completion_tokens': 40},
+                    model='fake')
+            return super().send(request)
+
+    wires['design'] = bad_design
+    repo, session, transport, (ask, ask_text, ask_body, chapters) = _full_chain(
+        tmp_path, wires)
+    transport.__class__ = _StickyDesign
     with pytest.raises(ValidationStop, match='重问后无进展'):
         run_workflow(repository=repo, chapters=chapters, ask=ask(session),
                      ask_text=ask_text(session), ask_body=ask_body(session),
                      budget=2000, through='stage7', book_title='报恩',
                      hook_constraints=HookConstraints(target_chars=10, hard_max_chars=360),
                      length_band=(0.01, 0.05))
-    invalid = repo.inspect('stage4/grounding/semantic_binding.INVALID.json')
-    assert invalid['_provenance']['gates_skipped'], 'INVALID 必须带 typed witness'
-    assert invalid['wire']['entries'][0]['beat_ref'] == 's01#bt1'.replace('bt1', 'bt99')
+    assert not repo.path('stage4/design/body_design.json').exists()
     status = repo.inspect('runtime/workflow_status.json')
     assert status['status'] == 'failed'
-    assert status['failed_node'] == 'str06.stage4.bind', status
-    # owner 停止：bind 之后没有任何后续 owner 的调用（失败即停，不继续问模型）；
-    # bind 自身恰两次（原轮＋一轮修订即同指纹停，不无限重问）。
+    assert status['failed_node'] == 'str06.stage4.body_design', status
+    # owner 停止：design 失败后没有任何后续 owner 的调用（不继续问模型）；
+    # design 自身恰两次（原轮＋一轮修订即同指纹停，不无限重问）。
     asked = set(transport.calls)
     assert 'hook_design' not in asked and not any(
         o.startswith('body_') for o in asked), asked
-    assert transport.calls.count('bind') == 2
+    assert transport.calls.count('design') == 2
 
 
 def test_same_fingerprint_failure_never_rebuys(tmp_path):
@@ -507,7 +527,7 @@ def test_same_fingerprint_failure_never_rebuys(tmp_path):
     request = _request()
     for _ in range(3):
         with pytest.raises(ValueError, match='重问后无进展'):
-            ask_json(session, 'bind', request, lambda _: ['形状不合约定'])
+            ask_json(session, 'preserve', request, lambda _: ['形状不合约定'])
     # R3（2026-09-28 裁决 1）：非空但不过闸先经**一次**有界修订轮（原轮＋修订轮
     # ＝2 次外发），修订后问题集原样重现即停；此后每次重问都按请求身份免费
     # 重放——不再重复计费。修订轮本身如实入账（I-43）。
@@ -552,10 +572,10 @@ def _work_unit_source_root(tmp_path, *, content='{"entries": []}'):
     initialize_workflow(source_base)
     root = source_base / 'run'
     request = _request()
-    identity = digest({'owner': 'bind', 'provider': 'fake',
+    identity = digest({'owner': 'preserve', 'provider': 'fake',
                        'request': request.cache_payload()})
     ledger = CostLedger(path=ledger_path(source_base))
-    unit = WorkUnitBudget(source_base, 'run', 'str06.stage4.bind',
+    unit = WorkUnitBudget(source_base, 'run', 'str06.stage4.preserve',
                           'executor', 'book')
     turn = unit.reserve(
         identity, run_id='agent-run-wu', agent_run_id='agent-run-wu',
@@ -571,10 +591,10 @@ def _work_unit_source_root(tmp_path, *, content='{"entries": []}'):
     unit.record_attempt_response(turn.turn_id, 'att-wu', payload)
     unit.save_response(turn.turn_id, payload)
     unit.finish(turn.turn_id, outcome='delivered')
-    ledger.record(node='str06.stage4.bind', sid='run', model='deepseek-flash',
+    ledger.record(node='str06.stage4.preserve', sid='run', model='deepseek-flash',
                   request_model='fake', code='str06-rc4', attempt=1, max_attempts=1,
                   will_retry=False, cached=False, cache_policy='request-identity',
-                  purpose='bind', attempt_id='att-wu', request_fingerprint=identity,
+                  purpose='preserve', attempt_id='att-wu', request_fingerprint=identity,
                   outcome='ok', prompt_tokens=11, completion_tokens=22,
                   response_sha256=hashlib.sha256(content.encode('utf-8')).hexdigest())
     return root, identity, request
@@ -585,9 +605,9 @@ def test_historical_adoption_from_work_unit_evidence(tmp_path):
     等价 ledger-row 档；零新购、历史实付不重复计费。"""
     root, identity, request = _work_unit_source_root(tmp_path)
     base, repo, ledger, session = _candidate(tmp_path, root)
-    data, _answer = ask_json(session, 'bind', request, lambda _: [])
+    data, _answer = ask_json(session, 'preserve', request, lambda _: [])
     assert data == {'entries': []}
-    record = repo.inspect('runtime/revisions/bind.json')
+    record = repo.inspect('runtime/revisions/preserve.json')
     assert record['mode'] == 'historical-adoption'
     assert record['cost_link'] == 'ledger-row'
     assert record['attempt_id'] == 'att-wu'
@@ -607,7 +627,7 @@ def test_historical_adoption_blocks_work_unit_without_cost_row(tmp_path):
         '', encoding='utf-8')
     base, repo, ledger, session = _candidate(tmp_path, root)
     with pytest.raises(ValueError, match='原成本关联'):
-        ask_json(session, 'bind', request, lambda _: [])
+        ask_json(session, 'preserve', request, lambda _: [])
 
 
 def test_wire_adoption_binds_work_unit_evidence(tmp_path):
@@ -617,7 +637,7 @@ def test_wire_adoption_binds_work_unit_evidence(tmp_path):
     base, repo, ledger, session = _candidate(tmp_path, root)
     wire = tmp_path / 'bind_wire.json'
     wire.write_text('{"entries":[]}', encoding='utf-8')
-    bound = session.bind_wire_adoption('bind', identity, wire)
+    bound = session.bind_wire_adoption('preserve', identity, wire)
     assert bound['cost_link'] == 'ledger-row'
     assert bound['mode'] == 'historical-adoption'
     assert bound['attempt_id'] == 'att-wu'
@@ -626,4 +646,4 @@ def test_wire_adoption_binds_work_unit_evidence(tmp_path):
     other = tmp_path / 'bind_wire_other.json'
     other.write_text('{"entries": [{"x": 1}]}', encoding='utf-8')
     with pytest.raises(ValueError, match='不一致'):
-        session.bind_wire_adoption('bind', identity, other)
+        session.bind_wire_adoption('preserve', identity, other)

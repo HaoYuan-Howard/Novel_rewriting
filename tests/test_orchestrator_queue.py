@@ -316,7 +316,7 @@ def test_retired_closure_gate_leaves_new_chain_planning_untouched(
 @pytest.mark.parametrize(
     ('node', 'artifact_rel_path'),
     [
-        ('str06.stage4.bind', 'stage4/grounding/semantic_binding.json'),
+        ('str06.stage4.hook_design', 'stage4/design/presentation_graph.json'),
         ('str06.stage7.naming', 'stage7/naming/name_map.json'),
     ],
 )
@@ -361,7 +361,7 @@ def test_new_chain_nodes_do_not_route_through_the_retired_admission_roster(
     `str06.stage2.book`。"""
     nodes = [
         'str06.stage2.book', 'str06.stage4.body_design',
-        'str06.stage4.bind', 'str06.stage4.compile',
+        'str06.stage4.hook_design', 'str06.stage4.compile',
     ]
     monkeypatch.setattr(Q, 'nodes_up_to', lambda _until: nodes)
     monkeypatch.setattr(
@@ -761,14 +761,14 @@ def test_confirm_never_precharges_a_blocked_downstream_node(
     绝不为尚未可执行的 B 预先收费（旧准入语义退役后的确认面纪律）。"""
     monkeypatch.setattr(
         Q, 'nodes_up_to',
-        lambda _until: ['str06.stage4.body_design', 'str06.stage4.bind'])
+        lambda _until: ['str06.stage4.body_design', 'str06.stage4.hook_design'])
     monkeypatch.setattr(
         Q.st, 'overview', lambda _base, _sid: SimpleNamespace(stages=[]))
 
     def verdict(_overview, node):
         if node == 'str06.stage4.body_design':
             return Q.st.RESUME_RUN, 'body design 缺失'
-        return Q.st.RESUME_REDO, 'bind 的输入已变'
+        return Q.st.RESUME_REDO, 'hook_design 的输入已变'
 
     monkeypatch.setattr(Q.st, 'resume_verdict', verdict)
 
@@ -776,7 +776,7 @@ def test_confirm_never_precharges_a_blocked_downstream_node(
         queue_base, 'book-a', until_stage='stage4', follow_check=False)
 
     assert [item.node for item in todo] == ['str06.stage4.body_design']
-    assert [item.node for item in blocked] == ['str06.stage4.bind']
+    assert [item.node for item in blocked] == ['str06.stage4.hook_design']
     assert blocked[0].waiting_on == Q.WAITING_ON_RESUME_DECISION
     assert blocked[0].steps == []
     plan = QueuePlan(
@@ -788,30 +788,30 @@ def test_confirm_never_precharges_a_blocked_downstream_node(
         Q.confirm(plan, yes=False)
     message = str(exc.value)
     assert 'str06.stage4.body_design' in message
-    assert 'str06.stage4.bind' not in message, '尚未可执行的 B 不得预先授权'
+    assert 'str06.stage4.hook_design' not in message, '尚未可执行的 B 不得预先授权'
 
 
-def test_bind_auto_todo_after_body_design_lands(
+def test_hook_design_auto_todo_after_body_design_lands(
         queue_base, monkeypatch):
-    """断言①：body_design 落盘且 current → bind 直接成为可执行付费 todo，
-    不再有任何审阅/审批旗标。"""
+    """断言①（CS-3 bind 退役）：body_design 落盘且 current → hook_design
+    直接成为可执行付费 todo，不再有任何审阅/审批旗标。"""
     monkeypatch.setattr(
         Q, 'nodes_up_to',
-        lambda _until: ['str06.stage4.body_design', 'str06.stage4.bind'])
+        lambda _until: ['str06.stage4.body_design', 'str06.stage4.hook_design'])
     monkeypatch.setattr(
         Q.st, 'overview', lambda _base, _sid: SimpleNamespace(stages=[]))
 
     def verdict(_overview, node):
         if node == 'str06.stage4.body_design':
             return Q.st.RESUME_SKIP, 'body design 当前有效'
-        return Q.st.RESUME_RUN, 'semantic binding 缺失'
+        return Q.st.RESUME_RUN, 'presentation graph 缺失'
 
     monkeypatch.setattr(Q.st, 'resume_verdict', verdict)
 
     todo, blocked = Q.plan_book(
         queue_base, 'book-a', until_stage='stage4', follow_check=False)
 
-    assert blocked == [] and [item.node for item in todo] == ['str06.stage4.bind']
+    assert blocked == [] and [item.node for item in todo] == ['str06.stage4.hook_design']
     assert todo[0].steps and all(step.paid for step in todo[0].steps)
     assert not any(
         flag in ('--close-review', '--review-token', '--rebind-review')
@@ -820,7 +820,7 @@ def test_bind_auto_todo_after_body_design_lands(
     with pytest.raises(ApprovalRequired) as exc:
         Q.confirm(plan, yes=False)
     message = str(exc.value)
-    assert 'str06.stage4.bind' in message
+    assert 'str06.stage4.hook_design' in message
     assert 'str06.stage4.body_design' not in message
 
 
@@ -845,19 +845,19 @@ def test_retired_infeasible_replan_lane_is_not_consulted_on_the_new_chain(
     assert all(item.flags != ['--replan'] for item in todo + blocked)
 
 
-def test_compile_auto_todo_after_bind_lands(
+def test_compile_auto_todo_after_hook_design_lands(
         queue_base, monkeypatch):
-    """断言②：bind 落盘且 current → `str06.stage4.compile` 直接成为
-    0 成本确定性 todo（旧 stage4.context 的人工闸面随旧链退役）。"""
+    """断言②（CS-3）：hook_design 落盘且 current → `str06.stage4.compile`
+    直接成为 0 成本确定性 todo（旧 stage4.context 的人工闸面随旧链退役）。"""
     monkeypatch.setattr(
         Q, 'nodes_up_to',
-        lambda _until: ['str06.stage4.bind', 'str06.stage4.compile'])
+        lambda _until: ['str06.stage4.hook_design', 'str06.stage4.compile'])
     monkeypatch.setattr(
         Q.st, 'overview', lambda _base, _sid: SimpleNamespace(stages=[]))
 
     def verdict(_overview, node):
-        if node == 'str06.stage4.bind':
-            return Q.st.RESUME_SKIP, 'semantic binding 当前有效'
+        if node == 'str06.stage4.hook_design':
+            return Q.st.RESUME_SKIP, 'presentation graph 当前有效'
         return Q.st.RESUME_RUN, f'{node} 缺失'
 
     monkeypatch.setattr(Q.st, 'resume_verdict', verdict)
@@ -876,13 +876,13 @@ def test_compile_blocked_with_verdict_detail_not_retired_approval(
     不再出现任何已退役的审批等待。"""
     monkeypatch.setattr(
         Q, 'nodes_up_to',
-        lambda _until: ['str06.stage4.bind', 'str06.stage4.compile'])
+        lambda _until: ['str06.stage4.hook_design', 'str06.stage4.compile'])
     monkeypatch.setattr(
         Q.st, 'overview', lambda _base, _sid: SimpleNamespace(stages=[]))
 
     def verdict(_overview, node):
-        if node == 'str06.stage4.bind':
-            return Q.st.RESUME_SKIP, 'semantic binding 当前有效'
+        if node == 'str06.stage4.hook_design':
+            return Q.st.RESUME_SKIP, 'presentation graph 当前有效'
         return Q.st.RESUME_UNKNOWN, 'writer IR 新鲜度判不了'
 
     monkeypatch.setattr(Q.st, 'resume_verdict', verdict)
@@ -1713,10 +1713,10 @@ def test_changed_command_surface_blocks_instead_of_substituting_a_new_command(
 def test_frozen_stage4_b_never_starts_after_current_infeasible_appears(
         queue_base, monkeypatch):
     """旧队列虽冻结过 B argv，启动前重判仍须把它关成无命令恢复面。"""
-    frozen = _item('book-a', 'str06.stage4.bind', 'must-not-repeat-b', paid=True)
+    frozen = _item('book-a', 'str06.stage4.hook_design', 'must-not-repeat-b', paid=True)
     _seed(queue_base, 'q-stage4-infeasible', [frozen])
     recovery = QueueItem(
-        sid='book-a', node='str06.stage4.bind', flags=[], steps=[],
+        sid='book-a', node='str06.stage4.hook_design', flags=[], steps=[],
         why='当前绑定面已判 infeasible；按新链重新预览规划',
         waiting_on=Q.WAITING_ON_STAGE4_REPLAN,
     )
@@ -1800,7 +1800,7 @@ def test_stage4_queue_lane_runs_all_three_phases_without_approval_prepare(
             f'{name} 是旧链审批授权面，应随人工闸退役删除')
     items = [
         _item('book-a', 'str06.stage4.body_design', 'design-command', paid=True),
-        _item('book-a', 'str06.stage4.bind', 'bind-command', paid=True),
+        _item('book-a', 'str06.stage4.hook_design', 'hook-command', paid=True),
         _item('book-a', 'str06.stage4.compile', 'compile-command', paid=False),
     ]
     _seed(queue_base, 'q-auto-stage4', items)

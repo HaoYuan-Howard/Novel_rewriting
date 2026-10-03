@@ -132,7 +132,7 @@ def test_the_matrix_actually_has_rows():
     # F8a 翻转：现役节点表 = stage0/stage1 两座 + str06. 节点（Stage6 整层
     # 与旧 Stage2/4/5/7 链已入 RETIRED_NODES）。B2 五节点重建（2026-09-27）：
     # Stage2 拆五 owner，11→14。加节点就来改这个数。
-    assert len(NODES) == 16, f'节点数变成 {len(NODES)} 了——是有意加的就来改这个数'
+    assert len(NODES) == 15, f'节点数变成 {len(NODES)} 了——是有意加的就来改这个数'
 
 
 # ───────────────────────── 贵贱（R-11.7 · Q-10） ─────────────────────────
@@ -460,8 +460,8 @@ def test_executor_runtime_registries_close_over_the_same_nodes():
     # F8b：PROFILED_LLM_RUNS 翻为 11 个 str06. 付费节点（B2 五节点重建后）
     # 的默认（空 flags）跑法；`--check-only` 是免费复检，不在此表。
     expected = set(LLM_EXECUTOR_NODES)
-    assert len(expected) == len(N.PROFILED_LLM_RUNS) == 11
-    assert sum(len(rows) for rows in N.PROFILED_LLM_RUNS.values()) == 11
+    assert len(expected) == len(N.PROFILED_LLM_RUNS) == 10
+    assert sum(len(rows) for rows in N.PROFILED_LLM_RUNS.values()) == 10
     assert set(N.PROFILED_LLM_RUNS) == expected
 
 
@@ -758,7 +758,7 @@ def test_every_stage_has_a_check_bridge_and_check_node_picks_the_first():
         'stage2': ('str06.stage2.book', 'str06.stage2.chapters',
                    'str06.stage2.names', 'str06.stage2.associate'),
         'stage4': ('str06.stage4.preserve', 'str06.stage4.body_design',
-                   'str06.stage4.bind', 'str06.stage4.hook_design'),
+                   'str06.stage4.hook_design'),
         'stage5': ('str06.stage5.hook', 'str06.stage5.body'),
         'stage7': ('str06.stage7.naming',),
     }
