@@ -310,9 +310,15 @@ def test_same_name_two_persons_stay_separate(tmp_path):
     assert from_chapters == {'fu_jun': [1], 'fu_jun_jr': [3]}
 
 
-def test_synonymous_propositions_merge_into_one_formal_id(tmp_path):
-    """同义命题：两章独立建立的同义命题经配对合并——同一正式 ID、最早文本为准。"""
+def test_paired_normalized_identical_statements_merge_into_one_formal_id(tmp_path):
+    """配对合并只认归一化后**完全相同**的 statement（D1，2026-10-03 CS-1）。
+
+    标点宽度差异（源文半角/模型全角）不影响同一性；换了说法的命题不配对就
+    不合并——模糊合并是 D1 的成因（r10b 实证 k36 三章三义），已废止；同义
+    改写的收口归 CS-2 的候选清单。最早确立的文本为 canonical。"""
     wires = _full_stage2_wires()
+    # 归一全等：仅标点不同（「，」的内容字与无标点相同）
+    wires['ch02']['beats'][0]['cognition'][0]['proposition']['statement'] = '夫君藏身，床底。'
     wires['associate']['same_proposition'] = [
         {'left': 'ch01.p_hide', 'right': 'ch02.p_known'},
         {'left': 'ch01.p_hide', 'right': 'ch03.p_hide'}]
@@ -321,10 +327,35 @@ def test_synonymous_propositions_merge_into_one_formal_id(tmp_path):
     ch1, ch2, ch3 = bp['chapters']
     assert ch1['beats'][0]['effects'][0]['proposition']['ref'] == 'k01'
     assert ch2['beats'][0]['cognition'][0]['proposition']['ref'] == 'k01', \
-        '同义命题合并后引用同一正式 ID'
+        '归一全等配对后引用同一正式 ID'
     assert ch3['beats'][1]['cognition'][0]['proposition']['ref'] == 'k01'
     assert ch2['beats'][0]['cognition'][0]['proposition']['ref'] != 'p_known', \
         '本地句柄不进 canonical（I-21）'
+
+
+def test_paired_different_statements_stay_undecided(tmp_path):
+    """D1 反例：配对两侧 statement 归一后不一致（换了说法）→ 按 item 未决拦下，
+    不模糊合并、不替模型选边；canonical 不落半份，回派 associate 定向修订。"""
+    wires = _full_stage2_wires()
+    # 「床底藏着人」vs「夫君藏身床底」：换了说法——配对断言不成立
+    wires['associate']['same_proposition'] = [
+        {'left': 'ch01.p_hide', 'right': 'ch02.p_known'},
+        {'left': 'ch01.p_hide', 'right': 'ch03.p_hide'}]
+    with pytest.raises(ValueError, match='归一后不一致'):
+        _run_stage2(tmp_path, 'fuzzy_pair', wires)
+    assert not (tmp_path / 'fuzzy_pair/stage2/blueprints/chapter_blueprints.json').exists(), \
+        '误合并要么拦在发布前，要么不发生，不静默进 canonical'
+
+
+def test_published_restatement_carries_canonical_statement(tmp_path):
+    """D1（CS-1）：wire 重引用的 statement=None 合法，但蓝图发布面回填类
+    canonical 文本——下游不再读到「learns「None」」（r10b 实证 k41）。"""
+    wires = _full_stage2_wires()
+    repo, _ask, _report = _run_stage2(tmp_path, 'restate', wires)
+    bp = repo.inspect('stage2/blueprints/chapter_blueprints.json')
+    prop = bp['chapters'][2]['beats'][1]['cognition'][0]['proposition']
+    assert prop['ref'] == 'k01'
+    assert prop['statement'] == '夫君藏身床底', '重引用回填 canonical，不发布 None'
 
 
 def test_without_pairing_same_text_props_stay_separate(tmp_path):

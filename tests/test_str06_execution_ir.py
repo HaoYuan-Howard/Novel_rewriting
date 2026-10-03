@@ -316,3 +316,58 @@ def test_believes_knowledge_enters_writer_view_without_becoming_world_fact():
                              folded_prefix=fold_accepted_prefix(plan.scenes[:1]))
     assert [e.mode for e in ctx.verification_ir.entry_knowledge] == ['believes']
     assert ctx.verification_ir.entry_state == ()
+
+
+# ───────────── D3（2026-10-03 CS-1）：锚点最大源拍位置 × 承载序单调 ─────────────
+
+def _beat_anchor_binding(ob_early, ob_late, *, late_first: bool):
+    """两个 event/reveal 义务 + 显式承载位（早/晚锚点可换序承载）。"""
+    from contracts.schema.grounding import BindingEntry, SemanticBinding
+    cp = _cp(ob_early, ob_late)
+    early_entry = BindingEntry(beat_ref='s02#bt1', obligation_id=ob_early.obligation_id,
+                               scene_id='s02')
+    late_entry = BindingEntry(beat_ref='s01#bt1', obligation_id=ob_late.obligation_id,
+                              scene_id='s01')
+    entries = (late_entry, early_entry) if late_first else (
+        BindingEntry(beat_ref='s01#bt1', obligation_id=ob_early.obligation_id,
+                     scene_id='s01'),
+        BindingEntry(beat_ref='s02#bt1', obligation_id=ob_late.obligation_id,
+                     scene_id='s02'))
+    return SemanticBinding(binding_id='b1', preserve_checkpoint_sha256=H64,
+                           obligations=cp.obligations, entries=entries, unbound=())
+
+
+def test_anchor_max_position_order_rejects_inversion():
+    """D3：锚点晚的义务（b02_01）承载在前场、锚点早的（b01_01）承载在后场
+    → 锚点序与承载序倒置，按结构剧视拦下；允许并列、正序放行见下一例。"""
+    from tests.str06_facilities import anchor_stub
+    ob_early = _ob('obE').model_copy(update={'anchors': anchor_stub('b01_01')})
+    ob_late = _ob('obL', PreserveKind.REVEAL).model_copy(
+        update={'anchors': anchor_stub('b02_01')})
+    binding = _beat_anchor_binding(ob_early, ob_late, late_first=True)
+    _, errors = compile_execution_plan(_graph(), binding)
+    assert any('锚点序与承载序倒置' in e for e in errors), errors
+    assert any('obE' in e and 'obL' in e for e in errors), errors
+
+
+def test_anchor_max_position_order_allows_forward_and_ties():
+    """正序放行；同锚点最大位置（并列）承载序任意——跨度事件的揭示可合法
+    发生在过程内部，不按最小位置排（r10b 实证 ob17/ob16 误报源）。"""
+    from tests.str06_facilities import anchor_stub
+    ob_early = _ob('obA').model_copy(update={'anchors': anchor_stub('b01_01')})
+    ob_late = _ob('obB').model_copy(update={'anchors': anchor_stub('b02_01')})
+    plan, errors = compile_execution_plan(
+        _graph(), _beat_anchor_binding(ob_early, ob_late, late_first=False))
+    assert plan is not None and not errors, errors
+    # 并列：两个义务锚点同拍（b02_01），承载任意序
+    ob_tie = _ob('obT').model_copy(update={'anchors': anchor_stub('b02_01')})
+    from contracts.schema.grounding import BindingEntry, SemanticBinding
+    cp = _cp(ob_late, ob_tie)
+    binding = SemanticBinding(
+        binding_id='b1', preserve_checkpoint_sha256=H64, obligations=cp.obligations,
+        entries=(BindingEntry(beat_ref='s02#bt1', obligation_id=ob_tie.obligation_id,
+                              scene_id='s02'),
+                 BindingEntry(beat_ref='s01#bt1', obligation_id=ob_late.obligation_id,
+                              scene_id='s01')), unbound=())
+    plan, errors = compile_execution_plan(_graph(), binding)
+    assert plan is not None and not errors, errors

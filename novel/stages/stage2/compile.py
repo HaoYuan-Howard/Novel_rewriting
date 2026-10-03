@@ -44,6 +44,7 @@ from contracts.schema.source import (
     CharactersCore, CausalEdge, Effect, InitialStateAtom, SceneSpan,
     WorldConstraint,
 )
+from novel.core.text import norm
 from novel.stages.stage2.resolver import EvidenceResolver, verify_bases
 from novel.stages.common import OverlayChange, StateOverlay
 from novel.stages.stage2.associate import (
@@ -214,6 +215,12 @@ class _BookCompile:
         self.open_scene: str | None = None
         #: 命题：限定句柄（ch{k}.{ref}）→ {'id', 'chapter', 'statement'}
         self.propositions: dict[str, dict[str, Any]] = {}
+        #: 各句柄**首次建立时**的 wire 原文（D1 配对一致性校验的材料；登记表
+        #: 本身记录类 canonical，两侧同值无法比对）。
+        self.handle_statements: dict[str, str] = {}
+        #: same_proposition 配对原表（D1：配对只认归一化后完全相同的 statement）。
+        self.prop_pairs: tuple[tuple[str, str], ...] = tuple(
+            (pair.left, pair.right) for pair in associate.same_proposition)
         #: 等价类代表 → 正式 ID／canonical statement／确立章。
         self.class_formal: dict[str, str] = {}
         self.class_statement: dict[str, str] = {}
@@ -252,6 +259,7 @@ class _BookCompile:
         合并不改写文本：canonical statement＝最早确立者；后来者的转述文本随
         配对被吸收（模型的同一性断言在先，compiler 只做确定性选择，I-15/I-21）。
         """
+        self.handle_statements.setdefault(handle, statement)
         root = self.prop_union.find(handle)
         formal = self.class_formal.get(root)
         if formal is None:
@@ -309,6 +317,31 @@ class _BookCompile:
                 'id': formal, 'chapter': reference_chapter,
                 'statement': self.class_statement[root]}
             prop['ref'] = formal
+            # D1（2026-10-03 CS-1）：重引用的 statement 回填类 canonical——
+            # 蓝图不再发布 statement=None（r10b 实证 k41 让 Preserve 侧读到
+            # 「learns「None」」；wire 的 None 是合法重引用形状，canonical 文本
+            # 由 compiler 派生回填，I-15）。
+            prop['statement'] = self.class_statement[root]
+
+    def validate_pair_statements(self, undecided: list[str]) -> None:
+        """D1（2026-10-03 CS-1）：配对合并只认归一化后**完全相同**的 statement。
+
+        associate 的同一性断言是合并的必要条件而非充分条件——两侧 wire 文本
+        内容不同即误合并（r10b 实证：k36 三章三义，brief 锁与锚点原文对不上）。
+        不一致按 item 未决拦下（未决不发布，回派 associate 定向修订）；不做
+        模糊匹配、不替模型选边（I-20/I-34）。换了说法的同一命题不配对就不
+        合并——偏安全方向（漏并进 CS-2 的候选清单选择再收）。
+        """
+        for left, right in self.prop_pairs:
+            a = self.handle_statements.get(left)
+            b = self.handle_statements.get(right)
+            if a is None or b is None:
+                continue    # 任一侧未带 statement 建立：悬空引用族未决另行报告
+            if norm(a) != norm(b):
+                undecided.append(
+                    f'配对句柄 {left}（{a}）与 {right}（{b}）的 statement 归一后'
+                    '不一致——跨章同一性只认内容相同的命题，不模糊合并；'
+                    '请修订 associate 配对或对应章的命题文本')
 
 
 # ───────────────────────── 主编译 ─────────────────────────
@@ -473,6 +506,9 @@ def compile_source_truth(
         return outcome
     # 悬空引用的全书解析必须先于 Beat 模型构造（placeholder 落模型就锁死了）。
     state.resolve_pending(undecided)
+    # D1：配对一致性在全部章建立后校验（两侧 statement 都到齐才可比对）；
+    # 未决不发布——误合并要么拦在发布前，要么不发生，不静默进 canonical。
+    state.validate_pair_statements(undecided)
     chapter_blueprints: list[ChapterBlueprint] = []
     for chapter, beat_dicts, scenes, scene_order in compiled:
         try:
@@ -640,6 +676,10 @@ def _compile_chapter(
             entry = state.propositions.get(handle)
             if entry is not None:  # 章内（含同拍先建）已登记 → 同 ID
                 prop['ref'] = entry['id']
+                # D1（2026-10-03 CS-1）：重引用回填 canonical statement，
+                # 蓝图不发布 statement=None（wire 的 None 合法，文本由 compiler
+                # 派生，I-15；与 resolve_pending 同一规则）。
+                prop['statement'] = entry['statement']
                 continue
             state.defer(prop, handle, where_prop)
         # —— 悬念（R-2.11：open 一次、close 带收束；跨章 close 走配对）——
