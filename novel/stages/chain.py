@@ -759,8 +759,10 @@ def run_hook_design(ctx: ChainContext) -> dict:
     chars = repository.read_model('stage2/characters/characters.json')
     checkpoint = repository.read_model('runtime/preserve_checkpoint.json')
     blueprint = repository.read_model('stage2/blueprints/chapter_blueprints.json')
+    brief = repository.read_model('stage4/grounding/reconstruction_brief.json')
     _, identities = project_brief(checkpoint, chars.core_view(), blueprint)
     projection = chars.name_projection()
+    kp_statements = {p.kp_id: p.statement for p in brief.propositions}
     hook_design_prompt = pack_prompt(
         HOOK_DESIGN_RULES, book_title=ctx.book_title, design=body.model_dump(mode='json'),
         identities=[i.model_dump(mode='json') for i in identities],
@@ -771,7 +773,8 @@ def run_hook_design(ctx: ChainContext) -> dict:
                                            name_projection=projection, name_structure=chars.name_structure)
         if hook is not None:
             context, context_errors = compile_hook_context(
-                publish_graph(body, hook), projection, ctx.hook_constraints, chars.name_structure)
+                publish_graph(body, hook), projection, ctx.hook_constraints,
+                chars.name_structure, kp_statements)
             errors.extend(context_errors)
             if context is not None:
                 errors.extend(validate_hook_materials(context, internal_ids=chars.characters))
@@ -824,8 +827,10 @@ def run_compile_stage4(ctx: ChainContext) -> dict:
     # Design 的决定，Bind 只选承载位）。
     _backfill_epistemic_lock_order(repository, graph, binding)
     projection = chars.name_projection()
+    brief = repository.read_model('stage4/grounding/reconstruction_brief.json')
+    kp_statements = {p.kp_id: p.statement for p in brief.propositions}
     hook_context, errors = compile_hook_context(graph, projection, ctx.hook_constraints,
-                                              chars.name_structure)
+                                                chars.name_structure, kp_statements)
     if errors:
         raise MechanicalDefectStop(
             f'stage4 hook 上下文机械缺陷：{errors}',
@@ -836,9 +841,8 @@ def run_compile_stage4(ctx: ChainContext) -> dict:
                                        book_title=ctx.book_title,
                                        projection=projection,
                                        structure=chars.name_structure,
-                                       fact_locks=repository.read_model(
-                                           'stage4/grounding/reconstruction_brief.json'
-                                       ).fact_locks)
+                                       fact_locks=brief.fact_locks,
+                                       kp_statements=kp_statements)
     problems = []
     from novel.stages.common import material_identities
     internal_ids = material_identities(graph, binding, chars)

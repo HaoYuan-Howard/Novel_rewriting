@@ -210,7 +210,7 @@ def test_ask_json_stops_when_issue_set_repeats(tmp_path):
     """同一问题集重复即停：一次修订后再原样失败 ⇒ 停（不无限付费）。"""
     transport = _ScriptedTransport(['{"ok": false}', '{"ok": false}'])
     base, _repo, session = _json_session(tmp_path, transport)
-    with pytest.raises(ValueError, match='同一问题集重复即停') as excinfo:
+    with pytest.raises(ValueError, match='重问后无进展') as excinfo:
         ask_json(session, 'bind', _request(),
                  lambda w: [] if w.get('ok') else ['闭集外句柄 e99_99'])
     assert '闭集外句柄 e99_99' in str(excinfo.value), '停止消息携带 typed 问题'
@@ -252,7 +252,7 @@ def test_recovery_after_revision_stop_replays_free(tmp_path):
     _session2 = PaidRequestSession(
         repo, CostLedger(path=ledger_path(base)), replay_transport, yes=True,
         allow_source_export=True, provider='fake', sid='run')
-    with pytest.raises(ValueError, match='同一问题集重复即停'):
+    with pytest.raises(ValueError, match='重问后无进展'):
         ask_json(_session2, 'bind', _request(),
                  lambda w: [] if w.get('ok') else ['闭集外句柄 e99_99'])
     assert replay_transport.calls == [], '恢复重放零外发'

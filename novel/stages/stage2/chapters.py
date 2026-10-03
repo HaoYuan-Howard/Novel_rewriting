@@ -22,7 +22,9 @@
 compile 侧的闭集核对保留（发布前防御）。认知 holder／effect target 闭集、
 命题与 loop 引用闭合（本章登记表两遍解析）、场景分段生成与拍号／正式 ID
 派发仍归 `str06.stage2.compile`；跨章同一性归 `str06.stage2.associate`（D8）。
-本模块只验收观察的自含形状并原样落盘（I-24/I-36：只读验证，错误聚合）。
+本模块只验收观察的自含形状并落盘（I-24/I-36：只读验证，错误聚合；唯一
+compiler 归一是 basis 引文按 `norm()` 尺回取段原文切片——D2 标点宽度，
+2026-10-03，落盘永远是原文字节）。
 """
 from __future__ import annotations
 
@@ -148,6 +150,29 @@ def _conflict(statements: dict[str, str], prop: dict, where: str,
     statements.setdefault(ref, text)
 
 
+def _canonicalize_basis_quotes(wire: Any, resolver: EvidenceResolver) -> None:
+    """basis 引文回取原文切片（D2 标点宽度，2026-10-03）：源文标点以半角
+    为主，模型逐字摘抄常写成全角——逐字判定会把真摘抄误报成 quote_not_in_segment。
+    比对用 `norm()` 尺（内容字相同即同一内容），落盘存**原文切片**，下游任何
+    逐字比对不再挂同一处。回取不唯一（0 处/多处/段不在闭集）不改写，判定
+    不放宽，交 verify_bases 按现状报告。就地改写 compiler 副本，原 wire
+    不动（I-24：validator 不改输入，归一发生在 compiler 层）。
+    """
+    for raw in wire.get('beats') or []:
+        if not isinstance(raw, dict):
+            continue
+        for kind in ('effects', 'cognition'):
+            for transfer in raw.get(kind) or ():
+                if not isinstance(transfer, dict):
+                    continue
+                for basis in transfer.get('basis') or ():
+                    if isinstance(basis, dict):
+                        segment = str(basis.get('segment') or '')
+                        quote = str(basis.get('quote') or '')
+                        if segment and quote:
+                            basis['quote'] = resolver.canonical_quote(segment, quote)
+
+
 def compile_chapter_observation(
     wire: Any, *, evidence_ids: Iterable[str], chapter: int | None = None,
     character_slugs: Iterable[str] | None = None,
@@ -169,7 +194,12 @@ def compile_chapter_observation(
     resolver = EvidenceResolver(evidence_ids if isinstance(evidence_ids, Mapping)
                                 else list(evidence_ids))
     slugs = frozenset(character_slugs) if character_slugs is not None else None
-    for ordinal, raw in enumerate(wire.get('beats') or [], 1):
+    # D2 引文回取先于全部判定：后续闭集核对、逐字判定、句柄纪律与协议校验
+    # 都在回取后的副本上施行——validate 回调与正式 compile 走同一函数，两路
+    # 结果逐字节一致（I-30 幂等）。
+    canonical = deepcopy(wire)
+    _canonicalize_basis_quotes(canonical, resolver)
+    for ordinal, raw in enumerate(canonical.get('beats') or [], 1):
         if not isinstance(raw, dict):
             continue
         where = f'第{chapter if chapter is not None else "?"}章拍{ordinal}'
@@ -194,8 +224,8 @@ def compile_chapter_observation(
                 if person not in slugs:
                     errors.append(f'{where} participants 引用未知人物 {person}'
                                   '（人物闭集在章观察验收即查，R3 左移）')
-    _chapter_handle_discipline(wire.get('beats') or [], errors)
-    normalized = _normalize_registered_scopes(wire, errors)
+    _chapter_handle_discipline(canonical.get('beats') or [], errors)
+    normalized = _normalize_registered_scopes(canonical, errors)
     try:
         observation = ChapterObservation.model_validate(normalized)
     except ValidationError as exc:

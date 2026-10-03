@@ -475,7 +475,7 @@ def test_binding_invalid_witness_and_owner_stop(tmp_path):
     wires['bind'] = {'entries': [{'obligation_id': 'ob01', 'scene_id': 's01',
                                   'beat_ref': 's01#bt99'}], 'unbound': []}
     repo, session, transport, (ask, ask_text, ask_body, chapters) = _full_chain(tmp_path, wires)
-    with pytest.raises(ValidationStop, match='同一问题集重复即停'):
+    with pytest.raises(ValidationStop, match='重问后无进展'):
         run_workflow(repository=repo, chapters=chapters, ask=ask(session),
                      ask_text=ask_text(session), ask_body=ask_body(session),
                      budget=2000, through='stage7', book_title='报恩',
@@ -506,7 +506,7 @@ def test_same_fingerprint_failure_never_rebuys(tmp_path):
                                  allow_source_export=True, provider='fake', sid='book')
     request = _request()
     for _ in range(3):
-        with pytest.raises(ValueError, match='同一问题集重复即停'):
+        with pytest.raises(ValueError, match='重问后无进展'):
             ask_json(session, 'bind', request, lambda _: ['形状不合约定'])
     # R3（2026-09-28 裁决 1）：非空但不过闸先经**一次**有界修订轮（原轮＋修订轮
     # ＝2 次外发），修订后问题集原样重现即停；此后每次重问都按请求身份免费

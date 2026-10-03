@@ -441,7 +441,7 @@ def test_invalid_twin_rerun_archives_rounds_without_rebuy(tmp_path):
     # 同指纹 ValidationStop；INVALID 孪生照写。修订轮是新请求身份的付费调用，
     # 如实计费（第一次 _run 内 bind 恰两次）。
     from novel.llm.paid_requests import ValidationStop
-    with pytest.raises(ValidationStop, match='同一问题集重复即停'):
+    with pytest.raises(ValidationStop, match='重问后无进展'):
         _run(repo, session)
     assert transport.calls.count('bind') == 2
     calls_before = len(transport.calls)
@@ -449,7 +449,7 @@ def test_invalid_twin_rerun_archives_rounds_without_rebuy(tmp_path):
     assert repo.inspect(invalid_rel)['_provenance']['gates_skipped']
     # 重跑：首轮与修订轮回答全部命中缓存（请求身份未变）→ 同指纹再停，
     # 零新购；旧孪生先进归档再覆写。
-    with pytest.raises(ValidationStop, match='同一问题集重复即停'):
+    with pytest.raises(ValidationStop, match='重问后无进展'):
         _run(repo, session)
     assert len(transport.calls) == calls_before, '同指纹失败不得重复计费'
     assert repo.archived_rounds(invalid_rel) == {1}, '旧孪生须先归档再覆写'

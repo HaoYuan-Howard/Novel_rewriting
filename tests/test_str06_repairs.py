@@ -280,7 +280,7 @@ def test_paid_response_durable_before_validation_and_reused(tmp_path):
                                  provider='fake', sid='book')
     request = ChatRequest(model='fake', system='s', user='u', reasoning_effort='high',
                           thinking=True, json_mode=True, max_tokens=50)
-    with pytest.raises(ValueError, match='同一问题集重复即停'):
+    with pytest.raises(ValueError, match='重问后无进展'):
         ask_json(session, 'bind', request, lambda _: ['缺必保义务'])
     # R3：原轮＋一次修订轮后同问题集停（有界，不无限付费）；跨 session、同
     # 请求，免费重新校验已购原响应——恢复零外发。

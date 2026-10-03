@@ -85,8 +85,8 @@ def dry_run_patch(repository, owner, candidate, *, evidence, budget,
         graph = repository.read_model('stage4/design/presentation_graph.json')
         binding = repository.read_model('stage4/grounding/semantic_binding.json')
         errors = []
+        brief = repository.read_model('stage4/grounding/reconstruction_brief.json')
         if owner == 'design':
-            brief = repository.read_model('stage4/grounding/reconstruction_brief.json')
             body, errors = assemble_body_design(
                 candidate, known_char_ids=set(chars.characters), expression_requirements=brief.expression,
                 source_narration=brief.source_narration,
@@ -115,12 +115,14 @@ def dry_run_patch(repository, owner, candidate, *, evidence, budget,
         if errors:
             return {'node': 'str06.stage4.compile', 'status': 'ran', 'errors': errors}
         plan, errors = compile_execution_plan(graph, binding)
-        hook_context, hook_errors = compile_hook_context(graph, projection, hook_constraints, chars.name_structure)
+        kp_statements = {p.kp_id: p.statement for p in brief.propositions}
+        hook_context, hook_errors = compile_hook_context(graph, projection, hook_constraints,
+                                                        chars.name_structure, kp_statements)
         errors.extend(hook_errors)
         if plan is not None and hook_context is not None:
             ir = compile_writer_book_ir(graph=graph, plan=plan, binding=binding, total_budget=budget,
                                         length_band=length_band, book_title=book_title, projection=projection,
-                                        structure=chars.name_structure)
+                                        structure=chars.name_structure, kp_statements=kp_statements)
             identities = material_identities(graph, binding, chars)
             errors.extend(validate_hook_materials(hook_context, internal_ids=identities))
             for chapter in ir.chapters:

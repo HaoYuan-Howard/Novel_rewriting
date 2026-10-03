@@ -1200,7 +1200,9 @@ def ask_json(session: PaidRequestSession, owner: str, request: ChatRequest,
 
     耐久响应 → 解析 → D5 救回 → 校验；**非空但不过闸**时发修订内容轮
     （原请求＋上一版＋typed 问题；R3 裁决 1），最多
-    `OWNER_REVISION_MAX_ROUNDS` 轮，同一问题集重复即停（不无限付费）——修订
+    `OWNER_REVISION_MAX_ROUNDS` 轮；无进展即停（2026-10-03 升级：本轮问题集
+    是此前任一轮的**子集**即停——覆盖原样重现、问题集只缩不消与 A→B→A
+    交替；持续重现的失败是契约性缺陷，整份重写修不动，不无限付费）——修订
     轮是新请求身份的付费调用，如实计入 ledger 与整书总闸。空回答仍走 D5
     同轮付费重试（占尝试额度）。崩溃/重跑按请求身份免费重放：首轮与各修订轮
     的已购回答都会命中，停止结论不重复计费。
@@ -1209,7 +1211,7 @@ def ask_json(session: PaidRequestSession, owner: str, request: ChatRequest,
     base_user = request.user
     answer = session.send(owner, request)
     revisions = 0
-    last_fingerprint: str | None = None
+    seen_heads: list[frozenset[str]] = []
     while True:
         data, errors, fields = accept_json_answer(answer, validate)
         session.record_acceptance(answer, fields['mode'], parse=fields['parse'],
@@ -1219,22 +1221,25 @@ def ask_json(session: PaidRequestSession, owner: str, request: ChatRequest,
         if data is not None:
             return data, answer
         if answer.cached or fields['parse'] != 'empty':
-            # 非空但解析/校验失败：R3 有上限修订。同一问题集重复（修订后原样
-            # 重现）即停；额度耗尽即停——两停都按 item 留 typed 问题，剩余修复
-            # 走 owner patch 或人工重跑，不隐式扩大授权。
-            # R8b.3：无进展指纹用「位置模式」集合（消息首个冒号前的定位段），
+            # 非空但解析/校验失败：R3 有上限修订。无进展＝本轮问题集是此前某轮
+            # 的子集（原样重现／只缩不消／交替回归）即停；额度耗尽即停——两停都
+            # 按 item 留 typed 问题，剩余修复走 owner patch 或人工重跑，不隐式
+            # 扩大授权。
+            # R8b.3：无进展判定用「位置模式」集合（消息首个冒号前的定位段），
             # 不用全文——措辞微调（如实得值摘要变化）不再被误判成有进展。
             heads = sorted(str(e).split('：', 1)[0][:80] for e in errors)
-            fingerprint = digest(heads)
+            current = frozenset(heads)
             node, scope = semantic_owner_unit(owner)
             stop_context = {'owner': owner, 'rounds': revisions,
                             'max_rounds': OWNER_REVISION_MAX_ROUNDS,
                             'issues': list(errors), 'issue_locations': heads}
-            if fingerprint == last_fingerprint:
+            if current and any(current <= previous for previous in seen_heads):
                 stop = ValidationStop(
-                    f'{owner} 校验失败：节点内校验重问后问题集原样重现'
-                    '（同一问题集重复即停，不无限付费）；原响应已按 attempt 留证，'
-                    f'剩余修复走 owner patch 或人工重跑：{errors}',
+                    f'{owner} 校验失败：节点内校验重问后无进展'
+                    '（本轮问题集是此前某轮的子集——持续重现的失败多为契约或'
+                    '校验器缺陷，整份重写修不动，即停不无限付费）；原响应已按 '
+                    'attempt 留证，剩余修复走 owner patch、契约修订或人工重跑：'
+                    f'{errors}',
                     code='validation_no_progress', stage=_stage_of(node), node=node,
                     item=scope, phase='accept', context=stop_context)
                 stop.adoption = answer
@@ -1249,7 +1254,7 @@ def ask_json(session: PaidRequestSession, owner: str, request: ChatRequest,
                 stop.adoption = answer
                 raise stop
             revisions += 1
-            last_fingerprint = fingerprint
+            seen_heads.append(current)
             previous = (answer.content or '').strip() or (answer.reasoning or '').strip()
             request = ChatRequest(
                 model=request.model, system=request.system,

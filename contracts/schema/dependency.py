@@ -144,9 +144,12 @@ STR06_MIGRATION_DEPENDENCY_RULES: Final[tuple[DependencyRule, ...]] = (
                 'novel.stages.common'),
         forbids=_STAGE457 + ('novel.llm', 'novel.llm.*')),
     # hook_context 是纯投影（Stage4 context owner）：禁止 LLM 与 Stage2/4/5/7 语义模块。
+    # novel.core.text：kp 句柄→命题 statement 的回填尺（R10b 锁以内容送达；
+    # 2026-10-03 D6 渲染修复，与正文 IR project_context 同一把尺，判据 25）。
     DependencyRule(
         module='novel.stages.stage4.hook_context',
-        allows=('contracts.schema.*', 'novel.core.name_materials'),
+        allows=('contracts.schema.*', 'novel.core.name_materials',
+                'novel.core.text'),
         forbids=('novel.llm', 'novel.llm.*', 'novel.stages.common')
         + tuple(m for m in _STAGE457 if m != 'novel.stages.stage4.hook_context')),
     # hook（Stage4 hook_design 的确定性臂与唯一 publisher）禁止 LLM 与

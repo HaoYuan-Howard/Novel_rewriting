@@ -25,6 +25,8 @@ Design wire；主体须与楔子人物相关——全场景保护不等于全列
 """
 from __future__ import annotations
 
+from typing import Mapping
+
 from contracts.schema.context import SurfaceRelease
 from contracts.schema.design import PresentationGraph
 from contracts.schema.hook import (
@@ -32,6 +34,7 @@ from contracts.schema.hook import (
 )
 from contracts.schema.source import NameProjection, NameStructure
 from novel.core.name_materials import withheld_name_literals, expand_surface_releases
+from novel.core.text import kp_statement
 
 
 def _display(projection: NameProjection, char_id: str) -> str:
@@ -52,22 +55,32 @@ _DOMAIN_LABELS = {'character': '人物', 'relation': '关系', 'knowledge': '知
                   'world': '世界', 'reader': '读者'}
 
 
-def _render_fact(projection: NameProjection, key: tuple, delta) -> str:
+def _render_fact(projection: NameProjection, key: tuple, delta,
+                 kp_statements: Mapping[str, str]) -> str:
     """地址元组 + 建立该项的 delta → 人读事实文本。
 
     认知维度必须保留：domain（这条事实归谁）、holder（谁知道）与 knowledge_mode
     （知道／怀疑／听说）是 Hook 写手判断「能否呈现、呈现到什么程度」的唯一依据；
     只渲染「主体：key=value」会把「夫君怀疑」压成「夫君知道」（F7e 评估实证：
     渲染丢掉 holder 与 knowledge_mode 后，presentation 与引用拍脱钩）。
+
+    knowledge／reader 增量的 `value` 恒为 "true"（命题成立性），命题内容在
+    kp 句柄——经 `kp_statements`（Brief.propositions）回填为命题文本；kp
+    句柄缺表即悬空引用，fail fast（不渲染「确知：true」这类零信息禁区，
+    2026-10-03 D6 渲染修复；与正文侧 `project_context` 同一张表、同一规则）。
     """
     domain, subjects, holder, name = key
     head = f'{_render_subjects(projection, subjects)}的' if subjects else ''
     if domain == 'knowledge':
         mode = _KNOWLEDGE_MODES.get(delta.knowledge_mode, delta.knowledge_mode or '未知模式')
         who = _display(projection, holder) if holder else '未登记持有人'
-        return f'{who}{mode}：{delta.value}'
+        statement = kp_statement(kp_statements, name)
+        content = statement if statement is not None else delta.value
+        return f'{who}{mode}：{content}'
     if domain == 'reader':
-        return f'读者视角成立：{delta.value}（人物未必知晓）'
+        statement = kp_statement(kp_statements, name)
+        content = statement if statement is not None else delta.value
+        return f'读者视角成立：{content}（人物未必知晓）'
     return f'{head}{_DOMAIN_LABELS.get(domain, domain)}层面：{delta.value}'
 
 
@@ -117,6 +130,7 @@ def _protected_thread_entries(graph: PresentationGraph, horizon, cast: set[str],
 def compile_hook_context(
     graph: PresentationGraph, projection: NameProjection, constraints: HookConstraints,
     structure: NameStructure | None = None,
+    kp_statements: Mapping[str, str] = (),
 ) -> tuple[HookContext | None, list[str]]:
     """（完整 graph, 名称投影, 长度边界）→ HookContext。纯函数，不落盘。"""
     hook = graph.hook
@@ -125,6 +139,15 @@ def compile_hook_context(
     display_projection = projection.model_copy(update={'by_person': tuple(
         entry.model_copy(update={'display': (display_names.get(entry.char_id) or ('',))[0]})
         for entry in projection.by_person)})
+
+    def _render_or_error(projection_, key, delta, where) -> str | None:
+        """渲染一条事实；kp 悬空引用（缺 statement）按机械缺陷报错跳过——
+        不上抛裸 ValueError（I-36：错误保留定位，走 (None, errors) 出口）。"""
+        try:
+            return _render_fact(projection_, key, delta, kp_statements)
+        except ValueError as exc:
+            errors.append(f'{where}：{exc}')
+            return None
 
     # 起笔事实：解析 ref 处该地址的建立值。
     facts: list[HookOpeningFact] = []
@@ -140,9 +163,11 @@ def compile_hook_context(
         if not established:
             errors.append(f'起笔事实在 {item.ref} 未建立：{key}')
             continue
-        facts.append(HookOpeningFact(
-            audience=item.audience, established_by=item.ref,
-            text=_render_fact(display_projection, key, established[0])))
+        text = _render_or_error(display_projection, key, established[0],
+                                f'起笔事实 {item.ref}')
+        if text is not None:
+            facts.append(HookOpeningFact(
+                audience=item.audience, established_by=item.ref, text=text))
 
     # 材料投影：presentation 原样；否则 event + 未 withheld 的 set delta 渲染。
     materials: list[HookMaterialView] = []
@@ -156,12 +181,16 @@ def compile_hook_context(
             errors.append(f'材料引用不存在的拍：{item.beat_ref}')
             continue
         withheld = {d.address() for d in item.withheld}
-        rendered = tuple(
-            _render_fact(display_projection, d.address(), d)
-            for d in beat.target_delta
-            if d.address() not in withheld and d.op == 'set')
+        rendered = []
+        for d in beat.target_delta:
+            if d.address() in withheld or d.op != 'set':
+                continue
+            text = _render_or_error(display_projection, d.address(), d,
+                                    f'材料 {item.beat_ref}')
+            if text is not None:
+                rendered.append(text)
         materials.append(HookMaterialView(
-            beat_ref=item.beat_ref, event=beat.event, deltas=rendered))
+            beat_ref=item.beat_ref, event=beat.event, deltas=tuple(rendered)))
 
     # 禁止揭示渲染：address 给定则渲染该事实，否则渲染该拍事件内核；
     # 随后把未到时点的线程收束机械并入禁区（E-3 读法 b，见模块头）。
@@ -177,7 +206,10 @@ def compile_hook_context(
                 established = [d for d in (beat.target_delta if beat else ())
                                if d.address() == key and d.op == 'set']
             if established:
-                forbidden.append(_render_fact(projection, key, established[0]))
+                line = _render_or_error(projection, key, established[0],
+                                        f'禁止揭示 {item.ref}')
+                if line is not None:
+                    forbidden.append(line)
             else:
                 errors.append(f'禁止揭示的 address 在 {item.ref} 未建立：{key}')
         else:

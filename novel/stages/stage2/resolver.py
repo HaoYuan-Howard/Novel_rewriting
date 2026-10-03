@@ -23,6 +23,8 @@ from typing import Any, Iterable, Mapping
 
 import re
 
+from novel.core.text import content_equivalent_slice
+
 #: 证据段 id 的章序：`e00_*`＝章前文字（0），`eNN_*`＝第 NN 章（形状非法即抛，
 #: 与 `build_evidence` 的切分约定同一张表）。
 _EVIDENCE_REF = re.compile(r'e(\d+)_\d+')
@@ -189,6 +191,18 @@ class EvidenceResolver:
                 context={'segment_id': segment, 'quote': quote[:60],
                          'verbatim_home_segments': homes[:12]}))
         return problems
+
+    def canonical_quote(self, segment: str, quote: str) -> str:
+        """basis 引文的规范化回取（D2 标点宽度）：逐字已在段内 → 原样返回；
+        仅标点／空白不同且**唯一**命中 → 段原文切片；其余（0 处、多处、段
+        不在闭集）原样返回——判定不放宽，交 `verify_quote` 按现状报告。
+        纯查找，不改任何输入（I-24）；调用方在 compiler 副本上采用返回值。
+        """
+        text = self._text(segment)
+        if not text or quote in text:
+            return quote
+        slice_ = content_equivalent_slice(quote, text)
+        return slice_ if slice_ is not None else quote
 
     # ── 称谓窗口锚点（R-2.10） ───────────────────────────────────────────────
 

@@ -32,6 +32,7 @@
 |---|---|---|
 | R10d＝B6c 普适性 | [ ] 未开始，另行授权 | 《三人成行》全链＋《夫君的报恩》重复生成；前置与冻结判据见下节 |
 | R7 质量与输入优化 | [ ] 未实施 | 由 R10c 通读问题与后续阅读证据驱动，见「后续优化次序」 |
+| 契约瘦身与返修收敛（CS） | [x] 批 0 完成（2026-10-03），批 1–4 见「契约瘦身批次」 | 样本与证据：str06_r10b 全产物审计＋ledger 复核（用户裁决采纳的落地顺序）；每批验收同时看成本指标（每节点整份生成次数／completion／首过率） |
 | 风格画像 | 开放项 | R10c 成书若复现 b6a 四条风格批评（一句一段／环境密度／幽默通道／POV 漂移）即以该批评为动因立项，须用户裁决落点 |
 | 工程余项 | 维持登记 | 直连强制重采（同身份缓存命中致重问无效）、REDO 级联自动重放（R-14.4／E-1 产品裁决项）不在主线扩散 |
 
@@ -104,6 +105,31 @@ R9c 核读在同一记录里补 owner、期望、实际和证据，不另立第�
 | R7 输入精度 | 无关声线、重复约束／状态、冗长协议 | 统计实际 renderer 字节与真实 token，依显式依赖裁剪；不截断或概括必要事实，收窄正式书级材料同批改契约 |
 | R7 付费效率 | 局部失败、复用、重试、并发与过度失效 | 先核请求身份、采用命中、429／unknown、活跃时间与成本分母，再调槽；并发不进语义身份，保留 D6 上限与截断即停 |
 | B6c 质量回归 | 两本短篇六维 Golden | 先更新退役 rubric 引用并冻结 manifest／baseline／成本；人工为主，模型辅助另授权；只改评价过程时重评现有成书，不自动重生成 |
+
+
+## 契约瘦身与返修收敛批次（CS；2026-10-03 起）
+
+证据基线：`str06_r10b_20261002/夫君的报恩` 全产物审计（D1–D6 契约缺陷在产物上
+机械复现）＋ `_service/ledger.jsonl` 逐调用复核。关键读数：主运行
+（`1790925174`）规划链 completion ≈1.0M，其中 `str06.stage2.chapters` 占 65%
+（650K，11 章 20 次全新生成）；design 当天 11 次整份重生成（多为跨 owner 回派
+与授权重跑，节点内修订轮 ≤2 由 R3/R8b 闸住）；规划:写作 ≈ 30:1。机制现状已核实：
+无进展检测（`validation_no_progress`）、sev/repair 分级、重试 prompt 可变内容
+后置均已存在，缺口只在节点内无进展的「子集/交替」判定与逐轮失败记账。
+
+| 批 | 范围 | 状态与验证 |
+|---|---|---|
+| CS-0 收敛止血 | ① D2 引文标点归一：比对用 `norm()` 尺、唯一命中回取段原文切片落盘（`novel/core/text.py::content_equivalent_slice`＋`resolver.canonical_quote`＋book/chapters compile 副本归一，validator 仍只读）。② D6 渲染修复：kp 句柄以 `Brief.propositions` 命题 statement 送达（`novel/core/text.py::kp_statement`；`project_context` 回填 IR 拍增量/知情边界/拍级读取/背景知情/未确认事实，`hook_context` 同尺渲染禁区与起笔事实；悬空 kp fail fast；renderer 升 `str06-render-v8`）。③ `ask_json` 无进展升级：本轮问题集是此前任一轮子集（含原样重现/只缩不消/A→B→A）即停 | [x] 完成（2026-10-03）。新测试 `tests/test_str06_quote_canon.py`（12 例）、`tests/test_str06_kp_statement.py`；受影响面 str06/llm/layering 全绿；非 corpus 全量回归见批尾记录。**不做**：重试 prompt 拼接顺序（已核实可变内容本就后置，未命中主因是跨小时/跨 run 缓存过期与上一版全文追加）；hard/soft 分级（sev/repair/degradable 机制已存在，str06 判据 repair 全 NONE，不再另造） |
+| CS-1 可收敛缺陷 | D1 ref 章节命名空间＋跨章只认归一化后完全相同的 statement（不做模糊合并）；D3 requires 换「按锚点最大原文位置排序后接受拍非递减（允许并列），hook 除外」；D5 compile 归一；只动代码与校验器不动 LLM 契约 | [ ] 前置：在 3–5 本书复跑 `contract_audit.py` 确认规律非本书独有 |
+| CS-patch 条目级返修 | 按 JSON 路径定位失败条目、只返修失败条目（executor 面，无 schema 变更）；置于 CS-2 之前——每次契约切换的过渡期都更便宜 | [ ] |
+| CS-2 观测/保产瘦身 | characters/observation/preserve 死字段删除＋派生回填＋短别名（D6）；LLM 面先变，落盘经 `expand()` 保持 rc12 形状（adapter 集中登记，删除条件＝下游消费迁移完成）；先瘦 `str06.stage2.chapters`（65% 大头）再 preserve | [ ] |
+| CS-3 design 一次改齐 | design 字段删除＋`real:[…]` 标注＋bind 退役（semantic_binding 改 compile 生成）合成一次契约变更；world 布尔键引入稳定规则 id（`women_cannot_stand_alone` 类 value="true" 无机械 statement 映射，同批解决）；design prompt 只改一次、golden 只跑一次 | [ ] |
+| CS-4 其余执行面 | 思考模式按节点开关（naming 关；hook/observation 先 A/B）；缓存前缀稳定化 | [ ] |
+
+验收纪律：CS-2/CS-3 后跑 golden set 与六维阅读验收；每批同时报告每节点整份生成
+次数、completion 与首过率（ledger 为权威账）。已知记账缺口（登记待办）：节点内
+修订轮的逐轮失败集只在 prompt 里、不落盘——CS-patch 实施时把逐轮问题集（位置
+模式 heads）随 acceptance 记录持久化，失败码×轮次统计才可机读。
 
 
 ## 恢复、替代与删除条件

@@ -1083,7 +1083,7 @@ def test_fault_base_green_baseline_completes_the_chain(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize('fault,signature,disk_gate', [
-    ('evidence_out_of_range', ('book 校验失败', 'e99_99', '同一问题集重复即停'),
+    ('evidence_out_of_range', ('book 校验失败', 'e99_99', '重问后无进展'),
      lambda repo: not repo.path('stage2/observations/book.json').exists()),
     # R3 左移：participants 人物闭集在章观察验收即查（不再攒到 compile）。
     ('unknown_slug', ('ch01 校验失败', 'participants 引用未知人物 ghost'),
@@ -1107,7 +1107,7 @@ def test_fault_base_green_baseline_completes_the_chain(tmp_path, monkeypatch):
                    and repo.path('runtime/issues/design.json').is_file()
                    and not repo.path('stage4/compiled/execution_plan.json')
                    .is_file())),
-    ('duplicate_json_key', ('book 校验失败', '重复键', '同一问题集重复即停'),
+    ('duplicate_json_key', ('book 校验失败', '重复键', '重问后无进展'),
      lambda repo: not repo.path('stage2/observations/book.json').exists()),
 ])
 def test_each_injected_fault_fails_fast_at_its_mechanical_gate(

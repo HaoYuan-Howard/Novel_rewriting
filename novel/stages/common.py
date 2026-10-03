@@ -52,7 +52,7 @@ from contracts.schema.grounding import BriefFactLock, SemanticBinding
 from contracts.schema.workflow import STR06_RC_VERSION
 from contracts.schema.source import CharactersCore, NameProjection, NameStructure, render_form
 from novel.core.name_materials import expand_surface_releases, family_form_literals, withheld_name_literals
-from novel.core.text import count_non_whitespace_chars
+from novel.core.text import count_non_whitespace_chars, kp_statement
 
 # ═════════════════════════════════════════════════════════════════════════════
 # 一、字面扫描（原 `literal_scan.py`）
@@ -1383,6 +1383,10 @@ def surface_display(releases: 'Mapping[str, tuple[str, ...]] | tuple', char_id: 
     return faces[0] if faces else ''
 
 
+#: kp 句柄 → 命题 statement 的回填尺住在 `novel/core/text.py`
+#:（`kp_statement`；正文 IR 与楔子投影共用，判据 25）。
+
+
 def project_context(*, scene_id: str, graph: BodyDesign,
                     plan: ExecutionPlan, binding: SemanticBinding,
                     folded_prefix: FoldedPrefix,
@@ -1390,6 +1394,7 @@ def project_context(*, scene_id: str, graph: BodyDesign,
                     open_threads: tuple['OpenThreadIR', ...] = (),
                     consumers: Mapping[tuple, tuple[int, ...]] | None = None,
                     unanswered_guards: tuple['UnansweredGuard', ...] = (),
+                    kp_statements: Mapping[str, str] = (),
                     ) -> tuple[WriterContext, ExecutionSlice]:
     """场景双视图与消费身份的确定性投影（纯函数，不落盘、不调 LLM）。
 
@@ -1451,6 +1456,27 @@ def project_context(*, scene_id: str, graph: BodyDesign,
         scene_index=scene_index,
         consumers=consumers if consumers is not None else consumption_closure(graph),
         scene_of={s.scene_id: i for i, s in enumerate(graph.scenes)})
+
+    def _resolve_knowledge(entry: KnowledgeEntry) -> KnowledgeEntry:
+        statement = kp_statement(kp_statements, entry.key)
+        return entry if statement is None else entry.model_copy(
+            update={'proposition': statement})
+
+    knowledge = tuple(_resolve_knowledge(e) for e in knowledge)
+    background_knowledge = tuple(_resolve_knowledge(e) for e in background_knowledge)
+    beat_reads = {beat: tuple(_resolve_knowledge(e) if isinstance(e, KnowledgeEntry) else e
+                             for e in entries)
+                  for beat, entries in beat_reads.items()}
+
+    def _resolve_delta(d):
+        # knowledge/reader 增量的 value 恒为 "true"；命题内容回填进 value，
+        # 渲染（_delta_line／pending 确认）因此拿到的是命题文本而非 "true"
+        #（fold/plan 的 Establishment 不动——机械折叠仍按句柄，I-16 单真相源）。
+        statement = kp_statement(kp_statements, d.key) \
+            if d.domain in (EffectDomain.KNOWLEDGE, EffectDomain.READER) else None
+        if statement is None:
+            return type(d)(**d.model_dump())  # 保持既有拷贝语义：IR 不与 graph 共享实例
+        return d.model_copy(update={'value': statement})
     # 跨场义务只携带明确的已完成支撑拍；绝不把整条复合义务当作先前真值。
     positions = {f'{s.scene_id}#{b.beat_id}': (i, j, b)
                  for i, s in enumerate(graph.scenes) for j, b in enumerate(s.beats)}
@@ -1460,10 +1486,17 @@ def project_context(*, scene_id: str, graph: BodyDesign,
     prior_refs = [r for r in refs if positions[r][0] < current]
     continuity = tuple(f'{r}：{positions[r][2].event}' for r in prior_refs)
     releases = surface_engine_release(graph, scene_id)
-    delta = tuple(type(d)(**d.model_dump()) for b in scene.beats for d in b.target_delta)
-    pending = pending_reader_confirmations(graph, scene_index)
+    delta = tuple(_resolve_delta(d) for b in scene.beats for d in b.target_delta)
+    pending = tuple(
+        p.model_copy(update={'fact': statement}) if (
+            statement := kp_statement(kp_statements, p.key)) is not None else p
+        for p in pending_reader_confirmations(graph, scene_index))
+    beats = tuple(
+        b.model_copy(update={'target_delta': tuple(
+            _resolve_delta(d) for d in b.target_delta)})
+        for b in scene.beats)
     ir = VerificationIR(scene_id=scene_id, obligations=owned,
-                        beats=beats_ir(scene_id, scene.beats,
+                        beats=beats_ir(scene_id, beats,
                                        reads_by_beat=beat_reads),
                         entry_state=state, entry_knowledge=knowledge,
                         released_surfaces=releases, planned_delta=delta,
@@ -1542,7 +1575,12 @@ def project_context(*, scene_id: str, graph: BodyDesign,
 #: 只在变化处列、明确禁止／开放线索／背景按章去重（C7 历史回声）；背景投影
 #: 收窄（书级初态立足点＋后文仍被消费的当前状态）；kp/kf 句柄绝不进阅读面
 #: （构造期守卫）；义务 statement 与本拍事件逐字相同时按同一条目去重。
-RENDERER_VERSION = 'str06-render-v7'
+#: v8（2026-10-03 批 0，D6 渲染修复）：R10b「锁以内容送达」补上机械面——
+#: knowledge/reader 增量的 value 由 "true" 回填为 Brief.propositions 的命题
+#: statement（project_context 统一回填 IR：拍增量／知情边界／拍级读取／背景
+#: 知情／未确认事实），知情与读者确认的条目从「确知「true」」变为命题文本；
+#: 悬空 kp 引用 fail fast。
+RENDERER_VERSION = 'str06-render-v8'
 
 #: 整书写作约定与自由度（Writer 协议，固定文本）。v7 按三类身份重写（必须写出／
 #: 必须遵守不必复述／写手自由）：场景是控制单元、反差不写成总结句、知情与
@@ -1605,10 +1643,11 @@ def _state_entry_line(names, entry: StateEntry) -> str:
 
 
 def _knowledge_entry_line(names, entry: KnowledgeEntry) -> str:
-    """知情条目：持有者＋模式＋命题（proposition 的 key= 前缀是机器拼接，取值）。"""
-    proposition = entry.proposition.split('=', 1)[-1]
+    """知情条目：持有者＋模式＋命题。proposition 由 `project_context` 以
+    `Brief.propositions` 回填为命题文本（kp=值 的机器拼接只活在 fold/闭包
+    证明的机械面，不进阅读面——R10b「锁以内容送达」，D6 渲染修复）。"""
     mode = _KNOWLEDGE_WORDINGS.get(entry.mode, entry.mode)
-    return f'{_name(names, entry.holder)}{mode}「{proposition}」'
+    return f'{_name(names, entry.holder)}{mode}「{entry.proposition}」'
 
 
 def _delta_line(names, delta) -> str:

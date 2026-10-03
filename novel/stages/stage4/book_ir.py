@@ -28,6 +28,7 @@ Stage5 的 Writer／Validator 只收章包，不再现场推导（不读 Design�
 from __future__ import annotations
 
 import math
+from typing import Mapping
 
 from contracts.schema.book_ir import (
     BookBrief, ChapterContinuity, ChapterIR, ChapterNavEntry,
@@ -173,6 +174,7 @@ def compile_writer_book_ir(
     total_budget: int, length_band: tuple[float, float], book_title: str = '',
     projection: NameProjection, structure: NameStructure | None = None,
     fact_locks: tuple[BriefFactLock, ...] = (),
+    kp_statements: Mapping[str, str] = (),
 ) -> WriterBookIR:
     """全书静态写作 IR 的唯一产地。纯函数：不落盘、不调 LLM、不修改输入。
 
@@ -181,7 +183,9 @@ def compile_writer_book_ir(
     接触 Characters 或 Design。R10b 起 `fact_locks`（Brief 的事实锁）用于
     派生原文未回答禁区（`unanswered_guards`，从承载位置起进章包）；
     背景投影经 `consumption_closure` 收窄（书级初态立足点＋后文仍被消费
-    的当前状态，C7）。
+    的当前状态，C7）。`kp_statements`（Brief.propositions 的 kp→statement
+    表）回填知情/读者增量的命题文本——value 恒为 "true"，不回填则写手面
+    全是「确知「true」」（R10b 锁以内容送达；2026-10-03 D6 渲染修复）。
     """
     budgets = allocate_chapter_budgets(graph, total_budget)
     guards = unanswered_guards(graph, binding, fact_locks)
@@ -203,7 +207,8 @@ def compile_writer_book_ir(
                 folded_prefix=fold_accepted_prefix(
                     plan.scenes[:scenes_before], initial=plan.initial_establishments),
                 thread_ops=thread_ops, open_threads=open_threads,
-                consumers=consumers, unanswered_guards=guards)
+                consumers=consumers, unanswered_guards=guards,
+                kp_statements=kp_statements)
             contexts.append(context)
             lines.append(_scene_line(graph, scene_id))
             scenes_before += 1

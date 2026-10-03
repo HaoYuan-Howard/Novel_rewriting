@@ -110,6 +110,55 @@ def whitespace_equivalent_slice(needle: str, body: str) -> str | None:
     return recovered
 
 
+def content_equivalent_slice(needle: str, body: str) -> str | None:
+    """唯一匹配时，把仅标点／空白不同的引文回取成正文原字节。
+
+    与 `whitespace_equivalent_slice` 同一形状的回取（判据 25：不另抄一份），
+    差别只在归一的维度——那把只压空白，这把用 `norm()` 尺把标点宽度
+    （半角/全角逗号、问号、引号体）一并归一：源文半角、模型抄成全角时
+    仍是同一内容。相同内容在正文出现两次时拒绝猜位置；返回值仍是 `body`
+    的真实连续子串（经 `norm_index` 回映，不重排一个字节），后续引用不
+    需要「近似证据」语义。
+    """
+    hay, index = norm_index(body)
+    k = norm(needle)
+    if not k:
+        return None
+    start = hay.find(k)
+    if start < 0 or hay.find(k, start + 1) >= 0:
+        return None
+    end = start + len(k) - 1
+    if end >= len(index):
+        return None
+    recovered = body[index[start]:index[end] + 1]
+    return recovered if norm(recovered) == k else None
+
+
+#: kp 句柄形状（Brief.propositions 登记的 16 位哈希；R10b「锁以内容送达」）。
+_KP_HANDLE = re.compile(r'kp_[0-9a-f]{16}')
+
+
+def kp_statement(statements, key: str) -> str | None:
+    """kp 句柄 → 命题 statement（R10b「锁以内容送达」的机械面；D6 渲染修复
+    2026-10-03）。
+
+    knowledge/reader 增量的 `value` 恒为 "true"（命题成立性），命题内容只在
+    句柄；`Brief.propositions` 是唯一登记表（design 验收已按它闭集核对句柄）。
+    kp 形状的句柄缺表＝悬空引用，fail fast——渲染面不得以句柄或 "true"
+    顶替命题内容（I-34）。非 kp 形状的键返回 None：调用方保持既有行为
+    （合成测试面的自述键，value 本就是内容）。放在 text 层供
+    `project_context`（正文 IR）与 `hook_context`（楔子）共用同一把尺
+    （判据 25：两处各抄一份就会漂）。
+    """
+    if not _KP_HANDLE.fullmatch(key):
+        return None
+    statement = dict(statements or {}).get(key)
+    if not statement:
+        raise ValueError(f'悬空 kp 引用：{key} 不在 Brief.propositions——'
+                         '命题内容不可用句柄或 "true" 顶替（渲染/IR 回填 fail fast）')
+    return statement
+
+
 def window_overlap(text: str | None, source: str | None, window: int = 20,
                    exclude: str = '') -> float | None:
     """两段文本的【N 字窗口重合率】，扣除 `exclude` 里允许原样出现的那部分。

@@ -15,13 +15,16 @@
 
 【职责边界】语义判断（谁是人物、初态收什么、世界约束收什么）归付费
 semantic unit；本模块只验证并报告（S2-3／I-20），不补猜、不模糊匹配。
-观察 wire 原样落盘 `stage2/observations/book.json`（协议版本由模型自带；
-窗口坐标／编号不在 wire——`from_chapter` 只活在 core view 投影与 compile
-发布的 canonical 里，`R-2.10`）。validator 不修改输入：全部检查只读，
-问题聚合成列表返回（I-24／I-36）。
+观察 wire 落盘 `stage2/observations/book.json`，仅一处 compiler 归一：
+basis 引文按 `norm()` 尺回取段原文切片（D2 标点宽度，2026-10-03——
+源文半角、模型全角的真摘抄不再误报，落盘永远是原文字节）；其余字段
+原样（协议版本由模型自带；窗口坐标／编号不在 wire——`from_chapter` 只活在
+core view 投影与 compile 发布的 canonical 里，`R-2.10`）。validator 不修改
+输入：全部检查只读，问题聚合成列表返回（I-24／I-36）。
 """
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any, Iterable, Mapping
 
 from contracts.schema.observation import BookObservation
@@ -81,6 +84,26 @@ def _iter_book_refs(wire: Mapping[str, Any]) -> list[tuple[str, tuple[str, ...]]
     return pairs
 
 
+def _canonicalize_basis_quotes(wire: Any, resolver: EvidenceResolver) -> None:
+    """basis 引文回取原文切片（D2 标点宽度，2026-10-03；形状与 chapters 侧
+    同一规则、各自的 wire 形状）：逐字已在段内不动；仅标点／空白不同且唯一
+    命中 → 段原文切片；其余不改写、不放宽判定。就地改写 compiler 副本，
+    原 wire 不动（I-24）。
+    """
+    groups: list[tuple[Any, Any]] = [(wire.get('initial_state') or ()),
+                                     (wire.get('world_constraints') or ())]
+    for atoms in groups:
+        for atom in atoms:
+            if not isinstance(atom, Mapping):
+                continue
+            for basis in atom.get('basis') or ():
+                if isinstance(basis, Mapping):
+                    segment = str(basis.get('segment') or '')
+                    quote = str(basis.get('quote') or '')
+                    if segment and quote:
+                        basis['quote'] = resolver.canonical_quote(segment, quote)
+
+
 def compile_book_observation(
     wire: Any, *, evidence: Mapping[str, Mapping[str, Any]] | Iterable[str],
 ) -> tuple[BookObservation | None, list[str]]:
@@ -96,6 +119,11 @@ def compile_book_observation(
         return None, ['book wire 必须是 JSON object']
     segments = dict(evidence) if isinstance(evidence, Mapping) else {}
     resolver = EvidenceResolver(segments)
+    # D2 引文回取先于全部判定（与 chapters 侧同一规则）：后续闭集核对、
+    # 锚点闸与协议校验都在回取后的副本上施行；调用方 wire 对象不被修改。
+    canonical = deepcopy(wire)
+    _canonicalize_basis_quotes(canonical, resolver)
+    wire = canonical
 
     # ① 证据句段闭集（逐条精确 issue，不模糊差）
     for where, refs in _iter_book_refs(wire):

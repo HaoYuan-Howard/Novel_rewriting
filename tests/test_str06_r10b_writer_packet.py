@@ -322,11 +322,13 @@ def _ir():
     plan, errors = compile_execution_plan(body, binding)
     assert not errors, errors
     chars = _characters()
+    brief = _requirements()
     ir = compile_writer_book_ir(
         graph=body, plan=plan, binding=binding, total_budget=4000,
         length_band=(0.6, 1.3), book_title='合成样例',
         projection=chars.name_projection(), structure=chars.name_structure,
-        fact_locks=_requirements().fact_locks)
+        fact_locks=brief.fact_locks,
+        kp_statements={p.kp_id: p.statement for p in brief.propositions})
     return body, binding, plan, ir
 
 
