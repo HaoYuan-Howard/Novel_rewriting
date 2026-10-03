@@ -3,9 +3,9 @@
 """test_str06_design_slim —— 设计瘦 wire（CS-3 第一步，2026-10-03）。
 
 覆盖 `contracts/schema/design.py::DesignWireV7`、
-`novel/stages/stage4/slim.py::expand_design_wire` 的确定性派生（real 标注→
+`novel/stages/stage4/slim.py::expand_design_wire` 的确定性派生（know 标注→
 知情/读者行、默认值回填、entry 派生、world_rules/expression/narration 顶层
-派生）与 `assemble_body_design` 的字面量路由（v6→expand→既有管道＋必保义务
+派生）与 `assemble_body_design` 的字面量路由（v7→expand→既有管道＋必保义务
 覆盖闸）。语义判据不放宽：C1/C2/C6/C9 锁校验、D4 确认闭合、称谓闭集全部
 照旧（经既有管道）。r10b 全产物实证见 REQUIREMENTS CS-3 行。
 """
@@ -19,6 +19,32 @@ from novel.stages.stage4.slim import expand_design_wire
 
 PV7 = 'stage4-design-v7'
 PV5 = 'stage4-design-v5'
+
+
+def test_model_design_schema_keeps_dynamic_knowledge_branches_valid():
+    import json
+    from jsonschema import Draft202012Validator
+    from novel.stages.common import design_rules
+    for refs in ({}, {'ob01.k01': False, 'ob01.k02': True}):
+        schema = json.loads(design_rules(known_char_ids={'lead'},
+                                        knowledge_refs=refs).rsplit('\n', 1)[1])
+        Draft202012Validator.check_schema(schema)
+        validator = Draft202012Validator({
+            '$ref': '#/$defs/SlimKnowledgePlacement', '$defs': schema['$defs']})
+        samples = [({'ref': 'ob01.k99'}, False)]
+        if refs:
+            fact = {'domain': 'world', 'key': 'evidence'}
+            samples.extend([
+                ({'ref': 'ob01.k01'}, True),
+                ({'ref': 'ob01.k02'}, False),
+                ({'ref': 'ob01.k02', 'confirms': None}, False),
+                ({'ref': 'ob01.k02', 'confirms': fact}, True),
+                ({'ref': 'ob01.k01', 'confirms': fact}, False),
+                ({'ref': 'ob01.k02', 'confirms': {
+                    'domain': 'knowledge', 'key': 'p', 'holder': 'reader'}}, False),
+            ])
+        assert all((not list(validator.iter_errors(row))) == passes
+                   for row, passes in samples)
 
 
 def _brief() -> ReconstructionBrief:
@@ -127,7 +153,7 @@ def test_expand_derives_defaults_and_top_level():
     assert expanded['chapters'][1]['entry']['anchor'] is None
 
 
-def test_expand_real_derives_knowledge_at_accept_beat():
+def test_expand_know_derives_knowledge_at_selected_beat():
     brief = _brief()
     expanded, issues = expand_design_wire(_v7_wire(), brief=brief,
                                           obligations=_obligations(brief))
@@ -143,7 +169,7 @@ def test_expand_real_derives_knowledge_at_accept_beat():
          'scope': 'book', 'knowledge_mode': 'known',
          'modality': None, 'confirms': None},
     ]
-    # 多拍标注：增量只落末次标注拍（接受拍），前拍是支撑位。
+    # 仅 real 承载标注不补造知情；这条义务没有认知变化。
     wire = _v7_wire()
     wire['scenes'][1]['beats'][0]['real'] = ['ob02']
     wire['scenes'][0]['beats'].append(
@@ -159,7 +185,7 @@ def test_expand_real_derives_knowledge_at_accept_beat():
 def test_expand_kp_state_exception_and_bad_inputs():
     brief = _brief()
     wire = _v7_wire()
-    # kp 值未知／解除例外可走 state 面；set 增量不得走（必须经 real）。
+    # kp 值未知／解除例外可走 state 面；set 增量不得走（必须经 know）。
     wire['scenes'][1]['beats'][0]['state'] = [
         {'at': 'yun_niang', 'key': 'kp_1111111111111111', 'op': 'unset'}]
     expanded, issues = expand_design_wire(wire, brief=brief,

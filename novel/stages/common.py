@@ -750,13 +750,15 @@ def design_rules(*, known_char_ids: set[str] | None = None,
     placement = schema['$defs']['SlimKnowledgePlacement']
     if knowledge_refs is not None:
         placement['properties']['ref']['enum'] = sorted(knowledge_refs)
-        placement['allOf'] = [
+        branches = [
             {'if': {'properties': {'ref': {'const': ref}}},
              'then': {'required': ['confirms'], 'properties': {'confirms': {
                  'allOf': [{'$ref': '#/$defs/StateAddress'},
                            {'properties': {'domain': {'enum': ['character', 'relation', 'world']}}}]}}}
              if confirms else {'properties': {'confirms': {'type': 'null'}}}}
             for ref, confirms in sorted(knowledge_refs.items())]
+        if branches:
+            placement['allOf'] = branches
     if known_char_ids is not None:
         definitions = schema['$defs']
         characters = sorted(known_char_ids)

@@ -362,9 +362,12 @@ def test_real_pytest_document_and_str06_selection_excludes_unrelated_tests(tmp_p
     assert {'tests/test_str06_hook.py', 'tests/test_str06_naming.py', 'tests/test_layering.py'} <= paths
     assert S.CONTRACT_GUARDS <= paths
     # 引擎源码经 CLI 分流成为 stage0/1 面的真实传递消费者，不得被截掉；
-    # 与 str06 无关的存储层测试仍然排除。
+    # Store 的免费 Design 恢复已成为 Stage4 消费者，必须纳入；
+    # 独立的路径与 appendlog 测试仍然排除。
     assert 'tests/test_stage01.py' in paths
-    assert 'tests/test_store.py' not in paths
+    assert 'tests/test_store.py' in paths
+    assert 'tests/test_paths.py' not in paths
+    assert 'tests/test_appendlog.py' not in paths
     assert any(row['layer'] == 'stage' for row in data['items'])
 
 
