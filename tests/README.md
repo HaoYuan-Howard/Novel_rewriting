@@ -68,20 +68,20 @@ Stage3 文风迁移、Stage6 旧定性包 A/B 与 Stage2 旧五轮实验退出�
 单元 / contract 使用 `unit_contract`，阶段职责使用 `stage`；`regression` 复用二者，并包含独立的
 跨阶段整书场景。`corpus` 保留原有数据依赖含义，普通选择默认排除；这些 marker 不代表模型质量。
 新增测试模块必须登记目录表，未登记会拒绝收集；混合模块用 `cases` 指定例外层级。
-模块涉及多个 stage 而单例范围更窄时，用 `pytest.mark.stage_scope('stage6')` 等显式收窄，
+模块涉及多个 stage 而单例范围更窄时，用 `pytest.mark.stage_scope('stage2')` 等显式收窄，
 参数化用例也可在 `pytest.param` 上登记；声明不得超出模块的 stage 集合。
 
 ```powershell
 # 小改：已知精确用例，或根据修改文件选择单元 / contract 消费链
-conda run -n novel_refactor python -m pytest -n 0 --test-layer unit_contract tests/test_stage7_subs.py
-conda run -n novel_refactor python -m pytest -n 0 --test-layer unit_contract --changed novel/stages/stage7/rename.py
+conda run -n novel_refactor python -m pytest -n 0 --test-layer unit_contract tests/test_str06_naming.py
+conda run -n novel_refactor python -m pytest -n 0 --test-layer unit_contract --changed novel/stages/stage7/naming.py
 
 # Stage4 重构：本层及传递下游的单元/contract，然后阶段职责测试
 conda run -n novel_refactor python -m pytest -n 0 --test-layer unit_contract --test-stage stage4 --affected
 conda run -n novel_refactor python -m pytest -n 0 --test-layer stage --test-stage stage4 --affected
 
 # 先查看实际选择，保留精确 nodeid；不加 --affected 时只选指定 stage 的职责
-conda run -n novel_refactor python -m pytest -n 0 --test-layer stage --test-stage stage6 --collect-only --selection-report .test_cache/stage6-selection.json
+conda run -n novel_refactor python -m pytest -n 0 --test-layer stage --test-stage stage4 --collect-only --selection-report .test_cache/stage4-selection.json
 
 # 定向回归复用原用例，不另建回归副本
 conda run -n novel_refactor python -m pytest -n 0 --test-layer regression --changed novel/stages/stage7/rename.py
@@ -278,3 +278,24 @@ Windows 上的 `--basetemp` 有两条出路，选一条即可：
 时自动清理；新增测试直接使用 `tmp_path` / `tmp_path_factory`，不要继续新增 `tempfile.mkdtemp()`，也
 不要在 `%TEMP%` 或按时间戳另造根。正常退出只恢复本次 worker 实际触碰根与 controller cache 的 ACL，
 不会递归扫描未参与本轮的陈旧 basetemp。
+
+## 默认回归耗时画像（2026-10-03 实测，供提速立项）
+
+默认非 corpus 回归 wall ≈ 17 分钟（`-n 4`，16 核），**~92% 由 serial 链的真实工作构成**——
+提高 xdist 并行度几乎不改变 wall（瓶颈是单 worker 的串行链），这是覆盖质量的代价而非浪费：
+
+| 文件 | wall | 构成 |
+|---|---|---|
+| `test_str06_product_entry.py` | ~592s | 唯一「真实双层子进程全链＋重启读回」用例 ~375s：19 个真实子进程的业务执行 ~264s（每节点 ~14s 的装配/渲染/校验/写盘），git 身份查询仅 ~23s；其余 5 例已完成进程内化（`_InProcessPopen`） |
+| `test_test_selection.py` | ~217s | 9 个用例嵌套真实 pytest（每次 ~7s 的解释器＋插件＋收集固定成本） |
+| `test_output_root_archive.py` | ~104s | 29 例崩溃/整根迁移模拟（锁与 inode 语义，serial 有因） |
+
+已排查的**非**问题：子进程 `-B` 不拖慢（pyc 缓存命中，读不受禁写影响）；fake transport 无人工
+延迟；supervisor 轮询已是 0.25s。提速候选（均需单独立项，不改则维持现状）：
+
+1. selection 嵌套合并：`--collect-only` 断言可共享更少的真实进程或降级到 `S.plan` 层（预计
+   -100~150s，略减「真实进程」哨兵数，须界定同等效果）。
+2. archive 并行化：复核 serial 必要性（锁/inode 语义对框架并发敏感，当初登记有因，预计 wall
+   -104s，有假红风险）。
+3. 分层默认：把真实全链用例挪到显式入口（如 `-m fullchain`），日常默认回归 ~11 分钟、
+   合入/冻结前跑完整集合——**改变默认回归分母语义，须用户裁决**。
