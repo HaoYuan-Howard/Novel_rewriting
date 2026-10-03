@@ -14,43 +14,21 @@ R2（引擎批）：依赖边改由**实际解析来源**生成——声明读�
 """
 from __future__ import annotations
 
-import re
-
 from contracts.schema.design import BodyDesign
 from contracts.schema.execution import (
     ConstraintSpec, DependencyEdge, ExecutionPlan, SceneExecutionPlan,
 )
-from contracts.schema.grounding import PreserveKind, SemanticBinding
-from novel.stages.stage4.read_closure import init_establishments, resolve_design_reads
+from contracts.schema.grounding import SemanticBinding
+from novel.stages.stage4.read_closure import (
+    confirmation_closure_errors, init_establishments, resolve_design_reads,
+)
 from novel.stages.stage4.guard import check_binding_beat_refs
-
-#: 锚点句柄的源拍位置：``b{章}_{拍}``（s0_*／wc_* 是故事开始前锚点，无拍位置）。
-_BEAT_ANCHOR = re.compile(r'^b(\d+)_(\d+)')
-
-
-def _anchor_max_position(obligation) -> tuple[int, int] | None:
-    """义务锚点的**最大**源拍位置（(章, 拍)；无可解析锚点返回 None）。
-
-    D3（2026-10-03 CS-1）：按最大位置排——跨度事件的接受拍是最后一拍，
-    揭示可合法发生在尝试过程内部（衣柜揭晓在借种当夜中间）；按最小位置排
-    会把这类合法结构误报成倒置（r10b 实证 ob17/ob16）。
-    """
-    best: tuple[int, int] | None = None
-    for anchor in obligation.anchors:
-        m = _BEAT_ANCHOR.match(anchor.handle or '')
-        if m is None:
-            continue
-        position = (int(m.group(1)), int(m.group(2)))
-        if best is None or position > best:
-            best = position
-    return best
-
-
 
 def compile_execution_plan(
     graph: BodyDesign, binding: SemanticBinding,
 ) -> tuple[ExecutionPlan | None, list[str]]:
     errors = check_binding_beat_refs(binding, graph)
+    errors.extend(confirmation_closure_errors(graph))
     obligations = {o.obligation_id: o for o in binding.obligations}
     entries = {e.obligation_id: e for e in binding.entries}
     returned = {e.obligation_id for e in binding.unbound}
@@ -103,28 +81,8 @@ def compile_execution_plan(
                 errors.append(f'义务依赖逆序/成环：{req} 必须不晚于 {oid}（跨场）')
             if predecessor.scene_id != entry.scene_id:
                 edges.add((predecessor.scene_id, entry.scene_id))
-    # D3（2026-10-03 CS-1）：event/reveal 义务的承载序与锚点最大源拍位置不得
-    # 倒置——按锚点最大位置排序后接受拍非递减（允许并列）。跨度复合义务的
-    # 揭示可发生在过程内部（R10c c1），故不按 requires 前置拍的拍序硬卡，
-    # 改按源文位置单调性判结构剧透；hook 不经 binding，天然不在本判定内。
-    ordered = []
-    for oid, entry in sorted(entries.items()):
-        obligation = obligations.get(oid)
-        if obligation is None or obligation.kind not in (
-                PreserveKind.EVENT_CORE, PreserveKind.REVEAL):
-            continue
-        own = positions.get(entry.beat_ref)
-        anchor_max = _anchor_max_position(obligation)
-        if own is None or anchor_max is None:
-            continue
-        ordered.append((anchor_max, own, oid))
-    ordered.sort()
-    for (anchor_a, pos_a, oid_a), (anchor_b, pos_b, oid_b) in zip(ordered, ordered[1:]):
-        if anchor_a < anchor_b and pos_a > pos_b:
-            errors.append(
-                f'锚点序与承载序倒置：{oid_a}（锚点最大源拍 {anchor_a[0]}_{anchor_a[1]}）'
-                f'的接受拍晚于 {oid_b}（锚点最大源拍 {anchor_b[0]}_{anchor_b[1]}）'
-                '——event/reveal 义务按源文顺序承载，允许并列、不得倒置（结构剧透）')
+    # R-5.19：目标故事允许重排、倒叙；源锚点顺序不充当目标阅读序硬闸。
+    # 因果、状态读取与认知授权仍分别由依赖闭合和 Guard 验证。
     # 依赖边＝义务/支撑拍边＋**实际解析来源**边（R2）：
     # · 每条声明读取在其定位点解析到的建立场（read_anchors；'init' 无边）；
     # · 参与者背景补齐的事实来源场（packet 的 background 分区消费这些值，

@@ -40,10 +40,9 @@ Design wire（`stage4-design-v5`）只表达选择、结构与相对篇幅重点
 open_questions／promises 四键在白名单外——四个静态跨章列表已退役（AUD-04），
 跨章语义走拍上的 threads。
 
-【读者认知（D5 统一，rc13）】读者揭示不再有独立 reader 域与 `confirms`
-事实地址——统一为 knowledge(holder='reader')，授权判据与人物知情同一把尺
-（`_check_lock_acceptance`：known 只能来自 known 锁，C6）；确认时序管控由
-pending 投影（读者知情地址）与锁位置 Guard 承担。
+【rc14 读者认知】knowledge(holder=reader) 保留统一域；known 的 set 必填
+confirms。事实地址与时序闭合由 read_closure 共用判据验证，pending 投影进入
+事实建立/读取场和确认场。v7 know 为逐次认知变化标拍，real 保留最终验收位。
 """
 from __future__ import annotations
 
@@ -57,7 +56,7 @@ from contracts.schema.state import EffectDomain
 from contracts.schema.workflow import STAGE4_DESIGN_PROTOCOL
 from contracts.schema.source import NameProjection, NameStructure
 from novel.stages.common import expand_surface_releases
-from novel.stages.stage4.read_closure import resolve_design_reads
+from novel.stages.stage4.read_closure import confirmation_closure_errors, resolve_design_reads
 from novel.stages.stage4.materials import validate_design_materials
 from novel.stages.stage4.slim import expand_design_wire
 
@@ -349,7 +348,7 @@ def _check_lock_acceptance(body: BodyDesign, brief: ReconstructionBrief,
       不是确认，C6）；
     · kf 键：时态锁只能按锁 modality set（预计不得写成已发生，C2）；值未知
       锁不得补值（C9）；原文未回答锁不得作答；
-    · 必保义务的知情/时态锁须被对应键兑现（realize_holders/realize_locks）。
+    · 必保义务的知情/时态锁须被对应键兑现（knowledge_changes/realize_locks）。
     位置顺序（知情升级/确认不早于授权承载位）归 a5 的 compile Guard，不在此。
     """
     propositions = {p.kp_id: p for p in brief.propositions}
@@ -358,7 +357,7 @@ def _check_lock_acceptance(body: BodyDesign, brief: ReconstructionBrief,
     for lock in brief.knowledge_locks:
         authorized.setdefault((lock.holder, lock.kp), set()).add(lock.mode)
 
-    realized_kp: set[tuple[str, str]] = set()
+    realized_kp: set[tuple[str, str, str]] = set()
     realized_kf: set[str] = set()
     delta_sites: list[tuple[str, Any]] = [
         ('initial_state', delta) for delta in body.initial_state]
@@ -385,7 +384,7 @@ def _check_lock_acceptance(body: BodyDesign, brief: ReconstructionBrief,
                             f'{where} 的 kp 键 {key} 持有者 {delta.holder} 无锁'
                             f'或模式越权：{delta.knowledge_mode}（授权：'
                             f'{sorted(allowed) or "无"}；known 只能来自 known 锁）')
-                realized_kp.add((delta.holder, key))
+                    realized_kp.add((delta.holder, key, delta.knowledge_mode))
         elif key.startswith('kf_'):
             lock = fact_locks.get(key)
             if lock is None:
@@ -412,12 +411,11 @@ def _check_lock_acceptance(body: BodyDesign, brief: ReconstructionBrief,
                     f'{where} 的 kf 键 {key} 是原文未回答锁'
                     f'（{lock.statement!r}），不得作答（源文留白不得补答案）')
     for req in brief.requirements:
-        for pair in req.realize_holders:
-            holder, _, kp = pair.partition('|')
-            if (holder, kp) not in realized_kp:
+        for change in req.knowledge_changes if req.must_preserve else ():
+            if (change.holder, change.kp, change.mode) not in realized_kp:
                 errors.append(
-                    f'必保义务 {req.core_id} 的知情锁未兑现：{kp} 需由持有者 '
-                    f'{holder} 以该键承载（knowledge 域、key={kp}）')
+                    f'必保义务 {req.core_id} 的知情锁未兑现：{change.kp} 需由持有者 '
+                    f'{change.holder} 以模式 {change.mode} 承载')
         for kf in req.realize_locks:
             if kf not in realized_kf:
                 kind = fact_locks[kf].kind if kf in fact_locks else '?'
@@ -442,7 +440,7 @@ def assemble_body_design(
     brief: ReconstructionBrief | None = None,
     obligations: Mapping[str, Any] | None = None,
 ) -> tuple[BodyDesign | None, list[str]]:
-    """Design wire（stage4-design-v5／v6）→ canonical BodyDesign。
+    """Design wire（stage4-design-v5／v7）→ canonical BodyDesign。
 
     纯函数：不落盘、不调 LLM、不改输入 wire（deepcopy 后组装）。**一次校验、
     合并报告**（R8b）：wire 形状由 pydantic 模型族一次判，逐字段错误按位置
@@ -453,7 +451,7 @@ def assemble_body_design(
     expression_refs 闭集，`_check_lock_acceptance`）；生产链
     （`chain.run_body_design`）恒传入——缺省 None 仅供不持 Brief 的离线
     工具，跳过的是锁面，不是全书校验。
-    CS-3（2026-10-03）：wire 按协议字面量路由——瘦面（stage4-design-v6）
+    CS-3（2026-10-03）：wire 按协议字面量路由——瘦面（stage4-design-v7）
     先经 `expand_design_wire` 派生成 v5 形状再进同一管道（obligations＝
     ob 编号→需求映射，v6 必传：real 标注闭集与知情行展开依赖它）；另加
     必保义务的 real 标注覆盖闸（未标注的 must 需求当场拦下——承载位是
@@ -586,6 +584,7 @@ def assemble_body_design(
                         f'ThreadAction 引用未知 char_id {thread.subject}'
                         f'（{scene.scene_id}#{beat.beat_id} 的 {thread.ref}）')
     _check_expression_refs(body, expression_requirements, errors)
+    errors.extend(confirmation_closure_errors(body))
     if brief is not None:
         _check_lock_acceptance(body, brief, errors)
     errors.extend(resolve_design_reads(body).errors)

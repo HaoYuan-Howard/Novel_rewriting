@@ -715,11 +715,14 @@ def test_old_job_mode_is_not_serialized_by_public_http(client, base):
         json.dumps(raw, ensure_ascii=False) + '\n', encoding='utf-8')
     response = client.get('/api/jobs')
     assert response.status_code == 200
-    start = response.json()['jobs'][0]['start']
-    assert 'mode' not in start
-    assert start['flags'] == []
-    assert start['steps'][0]['argv'] == ['legacy_incompatible']
-    assert 'shallow' not in json.dumps(start, ensure_ascii=False)
+    # 关闭批删除旧作业的公共重投影，历史末行不进入现役作业列表。
+    assert response.json()['jobs'] == []
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError):
+        J.JobEvent.model_validate(raw)
+    # 只读请求不得改写或清理历史账。
+    assert J.jobs_path(base).read_text(encoding='utf-8') == (
+        json.dumps(raw, ensure_ascii=False) + '\n')
 
 
 def _started_record(

@@ -14,8 +14,34 @@ from novel.stages.stage4.fold import FoldedState
 
 
 def _establishment(delta, established_by: str) -> Establishment:
-    # confirms 已随 D5 统一删除（rc13）：Establishment 与 TargetDelta 字段同构。
-    return Establishment(**delta.model_dump(), established_by=established_by)
+    # confirms 是揭示关联，不是折叠状态；事实关联保留在 TargetDelta/IR。
+    return Establishment(**delta.model_dump(exclude={'confirms'}), established_by=established_by)
+
+
+def confirmation_closure_errors(graph: BodyDesign) -> list[str]:
+    """读者确认只能引用此刻已建立的实际事实；不解释文本、不改输入。"""
+    book = {d.address(): d for d in graph.initial_state}
+    errors: list[str] = []
+    for delta in graph.initial_state:
+        if delta.confirms is not None:
+            fact = book.get(delta.confirms.address())
+            if fact is None or fact.op != 'set' or fact.modality != 'actual':
+                errors.append(f'初始态的读者确认地址尚未实际建立：{delta.confirms.address()}')
+    for scene in graph.scenes:
+        local: dict = {}
+        for beat in scene.beats:
+            for delta in beat.target_delta:
+                target = local if delta.scope == 'scene' else book
+                target[delta.address()] = delta
+            for delta in beat.target_delta:
+                if delta.confirms is None:
+                    continue
+                address = delta.confirms.address()
+                fact = local.get(address, book.get(address))
+                if fact is None or fact.op != 'set' or fact.modality != 'actual':
+                    errors.append(f'{scene.scene_id}#{beat.beat_id} 的读者确认地址尚未实际建立：'
+                                  f'{address}（confirms 不得早于建立，未知/已解除/计划不能确认）')
+    return errors
 
 
 def init_establishments(graph: BodyDesign) -> tuple[Establishment, ...]:

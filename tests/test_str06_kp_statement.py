@@ -107,14 +107,16 @@ def _graph_with_kp_deltas():
     reader = TargetDelta(
         domain=EffectDomain.KNOWLEDGE, key=KP_READER, value='true', subjects=(),
         holder='reader', op='set', scope='book', knowledge_mode='known',
-        modality=None)
+        confirms={'domain': 'world', 'key': 'hiding'}, modality=None)
     knowledge = TargetDelta(
         domain=EffectDomain.KNOWLEDGE, key=KP, value='true', subjects=(),
         holder='ch1', op='set', scope='book', knowledge_mode='known',
         modality=None)
     beats = list(graph.scenes[0].beats)
     beats[0] = beats[0].model_copy(update={
-        'target_delta': beats[0].target_delta + (knowledge, reader)})
+        'target_delta': beats[0].target_delta + (TargetDelta(
+            domain='world', key='hiding', op='set', scope='book',
+            value=READER_STATEMENT, modality='actual'), knowledge, reader)})
     scenes = list(graph.scenes)
     scenes[0] = scenes[0].model_copy(update={'beats': tuple(beats)})
     return graph.model_copy(update={'scenes': tuple(scenes)})
@@ -148,3 +150,23 @@ def test_project_context_dangling_kp_fails_fast():
     with pytest.raises(ValueError, match='悬空 kp 引用'):
         project_context(scene_id='s01', graph=graph, plan=plan,
                         binding=binding, folded_prefix=fold_accepted_prefix(()))
+
+
+@pytest.mark.parametrize('op', ['unknown', 'unset'])
+def test_non_set_knowledge_does_not_acquire_statement_value(op):
+    graph = _graph()
+    change = TargetDelta(domain='knowledge', holder='ch1', key=KP, op=op,
+                         value=None, scope='book')
+    first = graph.scenes[0]
+    beat = first.beats[0].model_copy(update={'target_delta': (change,)})
+    graph = graph.model_copy(update={'scenes': (first.model_copy(update={'beats': (beat,)}),)
+                                     + graph.scenes[1:]})
+    binding = _binding(_cp(_ob('ob1')))
+    plan, errors = compile_execution_plan(graph, binding)
+    assert not errors
+    context, _ = project_context(scene_id='s01', graph=graph, plan=plan, binding=binding,
+                                  folded_prefix=fold_accepted_prefix(()),
+                                  kp_statements={KP: STATEMENT})
+    # 真实 BeatIR/VerificationIR 构造与往返，不只检查 expand 的中间 dict。
+    restored = type(context).model_validate(context.model_dump())
+    assert restored.verification_ir.beats[0].deltas[0].value is None

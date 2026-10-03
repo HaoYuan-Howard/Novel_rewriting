@@ -84,6 +84,17 @@ def target_delta_schema(schema: dict) -> None:
         'then': {'required': ['modality'], 'properties': {'modality': {
             'enum': ['actual', 'planned', 'expected', 'conditional']}}},
         'else': {'properties': {'modality': {'type': 'null'}}}})
+    reader_known = {'op': {'const': 'set'}, 'domain': {'const': 'knowledge'},
+                    'holder': {'const': 'reader'}, 'knowledge_mode': {'const': 'known'}}
+    schema['allOf'].append({
+        'if': {'required': list(reader_known), 'properties': reader_known},
+        'then': {'required': ['confirms'],
+                 # 原字段 schema 已约束 StateAddress；这里只收紧非空与事实域。
+                 # 手写 $defs 路径会绕过 Pydantic 的嵌套 schema 引用重命名。
+                 'properties': {'confirms': {
+                     'not': {'type': 'null'},
+                     'properties': {'domain': {'enum': ['character', 'relation', 'world']}}}}},
+        'else': {'properties': {'confirms': {'type': 'null'}}}})
 
 
 class TargetDelta(StateChange):
@@ -93,13 +104,9 @@ class TargetDelta(StateChange):
     不迁旧 PlotState ontology。value 必须 mechanically applicable——表达成键值
     （enum/受控词表），不是自由散文；具体取值面 F1 反例标定后收紧。
 
-    【读者认知统一走 knowledge（D5，rc13）】读者揭示不再有独立 reader 域与
-    `confirms` 地址——统一为 `knowledge(holder='reader')`（模式取知情锁，
-    揭示为 known）：Brief 知情锁本就是 knowledge(holder=reader) 写法，两址一义
-    是 r10b 审计的 D5 契约缺陷（design 写 domain=reader＋confirms、brief 写
-    knowledge 锁，映射散在装配判据）。读者确认时序的管控改由 pending 投影
-    按读者知情地址承担（`pending_reader_confirmations`）；「确认不早于建立」
-    的机械证明由锁位置 Guard（a5）与 D3 锚点单调检查承担。
+    【rc14 读者确认】统一为 knowledge(holder='reader')；known 的 set 必填
+    confirms，明确对应的目标事实地址。命题和事实键可以不同，compiler 查
+    已实际建立且未解除/未知、确认不早于建立；pending 投影进入建立/消费场。
 
     【事实时态（a4/R10a，C2 的机械面）】非知情的 set 必填 `modality`
     （actual＝已发生；planned/expected/conditional＝计划/预计/条件，尚未发生）。
@@ -113,9 +120,17 @@ class TargetDelta(StateChange):
 
     model_config = {'extra': 'forbid', 'json_schema_extra': target_delta_schema}
     modality: "Literal['actual', 'planned', 'expected', 'conditional'] | None" = None
+    #: 读者确认与目标事实的显式关联。命题句柄和事实键可不同，代码不猜同义。
+    confirms: StateAddress | None = None
 
     @model_validator(mode='after')
     def _reader_confirmation_address(self) -> 'TargetDelta':
+        reader_known = (self.domain is EffectDomain.KNOWLEDGE and self.holder == 'reader'
+                        and self.op == 'set' and self.knowledge_mode == 'known')
+        if reader_known != (self.confirms is not None):
+            raise ValueError('读者 known 的 set 必须声明 confirms；其它变化不得带 confirms')
+        if self.confirms is not None and self.confirms.domain is EffectDomain.KNOWLEDGE:
+            raise ValueError('confirms 必须指向目标事实地址，不得循环指向知情地址')
         is_fact_set = (self.op == 'set'
                        and self.domain is not EffectDomain.KNOWLEDGE)
         if is_fact_set and self.modality is None:
@@ -340,7 +355,7 @@ class BodyDesign(StrictModel):
     （`TargetBeat.threads`，折叠走 ThreadFold）。rc7 的四个静态锚定列表
     已删除（AUD-04：无消费者；裁决 3）。
     """
-    contract_version: Literal['str06-rc13'] = 'str06-rc13'
+    contract_version: Literal['str06-rc14'] = 'str06-rc14'
     graph_id: str = Field(min_length=1)
     narration: HookPov
     expression_decisions: tuple[ExpressionDecision, ...] = Field(min_length=1)
@@ -699,7 +714,7 @@ class DesignWireV5(StrictModel):
     scene_weights: tuple[float, ...] = Field(min_length=1)
 
 
-# ═══════════════ v6 瘦 wire（CS-3 第一步，2026-10-03；expand 后即 v5 形，不落盘） ═══════════════
+# ═══════════════ v7 瘦 wire（CS-3 第一步，2026-10-03；expand 后即 v5 形，不落盘） ═══════════════
 
 #: 设计瘦 wire 的版本字面量：LLM 输出面一次改齐（CS-3），可机械推导字段
 #: （默认值、world_rules、expression keep-all、target_delta 的知情/读者行、
@@ -707,7 +722,7 @@ class DesignWireV5(StrictModel):
 #: `novel/stages/stage4/slim.py::expand_design_wire` 派生成 v5 wire 后进
 #: `assemble_body_design` 既有管道——canonical BodyDesign（rc12）与全部下游
 #: 消费者不变（S-03：适配集中在 slim 模块）。r10b 实证支撑见模块注释。
-STAGE4_DESIGN_WIRE_PROTOCOL: Final = 'stage4-design-v6'
+STAGE4_DESIGN_WIRE_PROTOCOL: Final = 'stage4-design-v7'
 
 
 class SlimDesignState(StrictModel):
@@ -732,17 +747,23 @@ class SlimDesignState(StrictModel):
     modality: "Literal['actual', 'planned', 'expected', 'conditional'] | None" = None
 
 
+class SlimKnowledgePlacement(StrictModel):
+    """认知短引用的拍位；读者确认还须标明对应的目标事实地址。"""
+
+    ref: str = Field(pattern=r'^ob\d{2,}\.k\d{2,}$')
+    confirms: StateAddress | None = None
+
+
 class SlimDesignBeat(StrictModel):
-    """v6 拍：`real` 义务承载标注是核心新增——替代 bind 侧的落点判断与
-    target_delta 的知情/读者行（CS-3：知情增量＝标注义务的 realize_holders
-    在**末次标注拍**展开，锁模式取 Brief.knowledge_locks；同一决定不再由
-    bind 重复编码）。ev/who/ex（expression_refs）/release（称谓释放）/
-    threads 语义与 v5 同名面一致。
+    """v7 拍：real 是义务验收/支撑位；know 是各次认知变化的独立拍位。
+
+    短引用由代码派发，持有者/命题/模式从 Brief 回填；读者确认显式关联事实。
     """
 
     ev: str = Field(min_length=1)
     who: tuple[str, ...] = Field(default=(), min_length=0)
     real: tuple[str, ...] = Field(default=(), min_length=0)
+    know: tuple[SlimKnowledgePlacement, ...] = Field(default=(), min_length=0)
     ex: tuple[str, ...] = Field(default=(), min_length=0)
     state: tuple[SlimDesignState, ...] = Field(default=(), min_length=0)
     release: tuple[SurfaceIntroduction, ...] = Field(default=(), min_length=0)
@@ -750,11 +771,11 @@ class SlimDesignBeat(StrictModel):
 
 
 class SlimDesignRead(StateAddress):
-    """v6 状态读取：只写地址内容；定位缺省入场（r10b 6/6 at=null）。"""
+    """v7 状态读取：只写地址内容；定位缺省入场（r10b 6/6 at=null）。"""
 
 
 class SlimDesignScene(StrictModel):
-    """v6 场景：pov 缺省＝narration.focalizers 唯一时取之（多焦点必写）；
+    """v7 场景：pov 缺省＝narration.focalizers 唯一时取之（多焦点必写）；
     voice 由 character_voices[pov] 派生（narrator 用 book_style）；reads/
     avoid/brief（realization_brief）语义与 v5 同名面一致。
     """
@@ -768,7 +789,7 @@ class SlimDesignScene(StrictModel):
 
 
 class SlimDesignEntry(StrictModel):
-    """v6 章间承接：recap 由 transition 派生（time_skip→brief_orientation，
+    """v7 章间承接：recap 由 transition 派生（time_skip→brief_orientation，
     其余 do_not_recap；r10b 11/11）；anchor 只在非缺省时写——
     immediate_continuation 缺省＝上一章末拍，flashback 必须显式给。
     """
@@ -779,7 +800,7 @@ class SlimDesignEntry(StrictModel):
 
 
 class SlimDesignChapter(StrictModel):
-    """v6 章切片：purpose＋场数＋可选承接（第 1 章可省，compiler 填开篇）。"""
+    """v7 章切片：purpose＋场数＋可选承接（第 1 章可省，compiler 填开篇）。"""
 
     purpose: str = Field(min_length=1)
     scenes: int = Field(ge=1)
@@ -787,7 +808,7 @@ class SlimDesignChapter(StrictModel):
 
 
 class SlimDesignInitial(StrictModel):
-    """v6 初始态行：剥常量列（op=set／scope=book／modality=actual 由 expand
+    """v7 初始态行：剥常量列（op=set／scope=book／modality=actual 由 expand
     回填）；键名是目标书命名（r10b 实证 marriage/can_sire_child 等为语义
     改名，不可由源 Characters 机械派生）。
     """
@@ -800,6 +821,7 @@ class SlimDesignInitial(StrictModel):
     #: 成立性，命题文本经 Brief 世界约束映射送达渲染面）；其余行必填。
     value: str | None = None
     knowledge_mode: "Literal['known', 'suspected', 'heard', 'believes'] | None" = None
+    confirms: StateAddress | None = None
 
 
 class SlimExpressionOverride(StrictModel):
@@ -810,17 +832,17 @@ class SlimExpressionOverride(StrictModel):
     target_statement: str = Field(min_length=1)
 
 
-class DesignWireV6(StrictModel):
-    """`stage4-design-v6` 瘦顶层（传输面，不落盘）。
+class DesignWireV7(StrictModel):
+    """`stage4-design-v7` 瘦顶层（传输面，不落盘）。
 
     派生面（expand）：narration←Brief.source_narration、expression_decisions
     ←keep-all＋overrides、world_rules←Brief.book_constraints、scene_weights
-    缺省均匀、delivery／entry／target_delta 知情行如上。语义面（模型判断）：
+    缺省均匀、delivery／entry／target_delta 知情行由 know 展开。语义面（模型判断）：
     声线、风格、初始态（含释放表 initial_surfaces）、场景驱动/简报/读取、
     拍事件/参与人/事实断言/线程/称谓释放/**义务承载标注 real**。
     """
 
-    protocol_version: Literal['stage4-design-v6']
+    protocol_version: Literal['stage4-design-v7']
     book_style: str = Field(min_length=1)
     character_voices: tuple[CharacterVoice, ...] = Field(default=(), min_length=0)
     expression_overrides: tuple[SlimExpressionOverride, ...] = Field(default=(), min_length=0)

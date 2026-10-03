@@ -120,17 +120,26 @@ LLM 输出面升 `stage2-chapters-v3`（`contracts/schema/observation.py` 瘦模
 r10b 实证：wire 体积降至 56%，`expand(slim(现产物)) == 现产物` 11/11 章
 （模本地句柄重命名）；basis 逐字证据、闭集闸、D2 引文归一判据不放宽。
 
-**设计瘦 wire（CS-3 第一步，2026-10-03）**：`str06.stage4.body_design` 的
-LLM 输出面升 `stage4-design-v6`（`contracts/schema/design.py::DesignWireV6`），
-经 `novel/stages/stage4/slim.py::expand_design_wire` 派生成 v5 wire 后进
-`assemble_body_design` 既有管道（canonical BodyDesign 与下游零改动）。核心
-新增是拍上 **real 义务承载标注**（ob 短名，义务清单随 prompt 送达）：末次
-标注拍＝接受拍，知情/读者增量在该拍按 Brief 锁展开——bind 侧的落点判断与
-target_delta 的知情行从此是同一决定的两个投影（bind 退役的地基，余项见
-REQUIREMENTS CS-3）。机械常量与顶层（narration/world_rules/expression/
-pov/voice/entry）派生；kp 值未知/解除例外走拍上 state 面。r10b 实证：
-25/25 知情/读者行与 13 条事实断言行集合一致（模有意重落位），v6 wire 体积
-为 canonical 51%。
+**设计瘦 wire（CS-3 审阅修复，2026-10-03）**：LLM 输出为
+`stage4-design-v7`（`contracts/schema/design.py::DesignWireV7`）。`real` 保留
+义务接受拍/支撑拍；Brief 每条 requirement 的 `knowledge_changes` 从正式
+anchor 派生，完整保留每次变化的盲身份、holder、kp、mode。代码按盲身份排序
+派发 `obNN.kNN` 短引用，模型在对应义务 real 拍的 `know:[{ref}]` 声明实际
+认知时点。每个必保变化恰好一次；已经承载的非必保义务也须标全其认知变化。
+同一拍同一命题不能同时给多个模式；先怀疑、后证实分别落拍。
+
+读者 known 的 know 标注须另带 `confirms` 目标事实地址，代码派生
+knowledge(holder=reader) 增量并保留该关联。确认只能引用此刻已实际建立且未
+解除/未知的事实，计划不能充当已发生。pending 禁区进入事实建立/读取场和
+确认场；按完整地址匹配，kp 句柄与自由事实键可以不同。世界规则成立断言
+默认 actual；immediate_continuation 锚点按每章场数取上一章末场末拍。
+机械默认值和书级派生继续由 compiler 完成，v5 只是内部展开形状。
+
+Brief、BodyDesign、PresentationGraph、ExecutionPlan、WriterBookIR 升 rc14；
+其它产物版本不变。旧 rc12/rc13 仅做登记的无损读取迁移，地址、读取、Hook
+引用与 IR 状态容器一起闭合。已经丢失逐义务模式的 Brief 免费重放 preserve
+重建；丢失 confirms 的 rc13 Design 须免费 owner patch 补 v7 know/confirms，
+复编译后恢复下游。旧 seal 字节不改写；迁移删除条件见 REQUIREMENTS。
 
 关键语义交接的契约面（判据见 BACKEND_CONTRACT R-2.18/19、R-5.15～R-5.20）：
 

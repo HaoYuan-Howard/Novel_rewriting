@@ -180,13 +180,13 @@ def _hook_wire(**over) -> dict:
     return wire
 
 
-def _design_wire_v6() -> dict:
-    """stage4-design-v6 形状（CS-3）：real 承载标注替 bind 的落点判断；v5 的
+def _design_wire_v7() -> dict:
+    """stage4-design-v7 形状（CS-3）：real 承载标注替 bind 的落点判断；v5 的
     自由键 knowledge 增量在 v6 无面（知情一律经 real＋Brief 锁派生），fake 链
     以 character 域事实断言承载同一信息。义务 ob01 的接受拍＝末次标注拍
     （sc01#b02），sc01#b01 是支撑位——与旧 bind wire 的 entries/supporting 等价。"""
     return {
-        'protocol_version': 'stage4-design-v6',
+        'protocol_version': 'stage4-design-v7',
         'book_style': '冷峻克制的限知叙事，重日常细节里的异样。',
         'character_voices': [{'char_id': 'yun_niang', 'voice': '冷峻'}],
         'initial_state': [
@@ -226,9 +226,9 @@ def _design_wire_v6() -> dict:
     }
 
 
-def _hook_wire_v6(**over) -> dict:
+def _hook_wire_v7(**over) -> dict:
     """全链配套的 hook wire：三处地址引用按 v6 canonical 的行域改写
-    （knowledge 自由键行不存在——见 `_design_wire_v6` 注释）。"""
+    （knowledge 自由键行不存在——见 `_design_wire_v7` 注释）。"""
     wire = _hook_wire()
     wire['opening_facts'][1] = {
         'ref': {'scene': 'sc01', 'beat': 'b03'},
@@ -762,7 +762,7 @@ def _full_chain_wires():
         wire.update(over)
         return wire
 
-    hook_wire = _hook_wire_v6()
+    hook_wire = _hook_wire_v7()
     naming_wire = {'entries': [
         {'char_ref': 'fu_jun', 'name': {'family': '顾', 'given': None}, 'aliases': {},
          'keep_reason': None},
@@ -794,7 +794,7 @@ def _full_chain_wires():
              'anchors': ['b01_01.e1'],
              'must_preserve': True,
              'satisfaction': '正文呈现婚约成立且夫君立下旧约', 'requires': []}]},
-        'design': _design_wire_v6(),
+        'design': _design_wire_v7(),
         'hook_design': hook_wire,
         'naming': naming_wire,
     }

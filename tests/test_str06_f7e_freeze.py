@@ -109,7 +109,9 @@ from novel.llm.paid_requests import candidate_contract_identity
 #: 其余保持 rc12（形状未变）。候选契约身份：节点表＋产物表＋RC 版式＋运行期
 #: 配置的 SHA-256。表内任何一行变化都会改变它——先改本记录并登记原因
 #: （REQUIREMENTS／DECISIONS），再动表。
-FROZEN_CONTRACT_IDENTITY = 'adc2bb330cbec1b7b04983abf018c4a978304b6fc06f210161f9cf12c4edaca9'
+# 审阅修复（2026-10-03）：Design v7 know/confirms 与逐次 Brief，五产物 rc14。
+# 节点数、付费 owner 与预算不变；批准方案及迁移删除条件登记在 REQUIREMENTS。
+FROZEN_CONTRACT_IDENTITY = 'c80f4480af25eaaaba0f6f61d0e419af6f6c81d30ee31db2c62ea210e501c78d'
 
 #: 冻结时的节点集合（CS-3 bind 退役后 13 个：stage0/1 两座＋Stage2 五节点＋
 #: Stage4 四＋Stage5 两＋Stage7 两；bind 的承载位决定并入 body_design）。
@@ -178,7 +180,7 @@ def test_frozen_artifact_table_shape():
 def test_frozen_rc_version_label():
     # rc13（CS-3 余项：D5 统一＋world 规则 id）——五产物形状变化升版，其余
     # 产物表条目保持 rc12（形状未变）。
-    assert STR06_RC_VERSION == 'str06-rc13'
+    assert STR06_RC_VERSION == 'str06-rc14'
 
 
 #: 语义冻结闸（2026-09-29，裁决 D8）钉住的语义层协议字面量。键是常量名、值是

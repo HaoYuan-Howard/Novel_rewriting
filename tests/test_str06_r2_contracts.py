@@ -651,14 +651,14 @@ def test_r2_version_constants():
     )
     from novel.stages.common import RENDERER_VERSION, WRITER_PROTOCOL_VERSION
     assert STAGE4_DESIGN_PROTOCOL == 'stage4-design-v5'
-    assert STR06_RC_VERSION == 'str06-rc13'          # R9 表达送达集中升版
+    assert STR06_RC_VERSION == 'str06-rc14'          # R9 表达送达集中升版
     assert 'str06-rc10' in STR06_RC_LABELS
     assert RENDERER_VERSION == 'str06-render-v8'     # 批0 D6：命题内容送达
     assert WRITER_PROTOCOL_VERSION == 'str06-body-protocol-v7'
     for rel in ('stage4/design/body_design.json',
                 'stage4/design/presentation_graph.json',
                 'stage4/ir/writer_book_ir.json'):
-        assert STR06_ARTIFACT_RC_VERSIONS[rel] == 'str06-rc13', rel  # rc13 D5 统一
+        assert STR06_ARTIFACT_RC_VERSIONS[rel] == 'str06-rc14', rel  # rc13 D5 统一
     assert STR06_ARTIFACT_RC_VERSIONS['stage5/acceptance/body/ch{nn}.json'] \
         == 'str06-rc12'
 

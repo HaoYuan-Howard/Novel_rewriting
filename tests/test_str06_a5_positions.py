@@ -228,7 +228,7 @@ def _design_wire(brief: ReconstructionBrief, *, flashback: bool = False) -> dict
                   'delivery_hint': '', 'target_delta': [
                       {'domain': 'knowledge', 'subjects': [], 'holder': 'reader',
                        'key': kp_x, 'op': 'set', 'value': '床底藏物属实',
-                       'scope': 'book', 'knowledge_mode': 'known'}],
+                       'scope': 'book', 'knowledge_mode': 'known', 'confirms': {'domain': 'world', 'key': 'evidence_fact'}}],
                   'expression_refs': [], 'surface_introductions': []},
                  {'event': '第一次现身', 'participants': [],
                   'delivery_hint': '', 'target_delta': [],
@@ -283,6 +283,81 @@ def _green_graph_and_binding(placements=None):
     return body, binding, brief
 
 
+def test_initial_reader_confirmation_requires_an_actual_initial_fact():
+    from contracts.schema.design import BodyDesign, TargetDelta
+    from novel.stages.stage4 import compile_execution_plan
+    body, binding, brief = _green_graph_and_binding()
+    confirmation = TargetDelta(domain='knowledge', key=_kp_x(brief), holder='reader',
+                               op='set', scope='book', value='开篇前已确认', knowledge_mode='known',
+                               confirms={'domain': 'world', 'key': 'initial_evidence'})
+    fact = TargetDelta(domain='world', key='initial_evidence', op='set', scope='book',
+                       value='证据已存在', modality='actual')
+    for changes, passes in (((fact, confirmation), True), ((confirmation,), False),
+                            ((fact.model_copy(update={'modality': 'planned'}),
+                              confirmation), False)):
+        graph = BodyDesign.model_validate(body.model_copy(update={
+            'initial_state': changes}).model_dump())
+        plan, errors = compile_execution_plan(graph, binding)
+        if passes:
+            assert plan is not None and not errors, errors
+        else:
+            assert plan is None and any('初始态的读者确认地址' in e for e in errors), errors
+
+
+def test_v7_composite_obligation_preserves_cognitive_change_positions():
+    from novel.stages.stage4.grounding import design_obligation_index
+    from novel.stages.stage4.slim import knowledge_change_index
+    checkpoint, brief = _checkpoint(), _brief()
+    obligations = design_obligation_index(checkpoint, brief)
+    source = _design_wire(brief)
+    beats = []
+    carriers = {1: ['ob01'], 2: ['ob01'], 3: ['ob02'],
+                4: ['ob03'], 5: ['ob04'], 6: ['ob05']}
+    for i, beat in enumerate(source['scenes'][0]['beats']):
+        state = []
+        for d in beat['target_delta']:
+            if d['domain'] == 'knowledge':
+                continue
+            state.append({'at': 'world', 'key': d['key'], 'val': d['value'],
+                          'modality': d.get('modality')})
+        beats.append({'ev': beat['event'], 'who': beat['participants'],
+                      'real': carriers.get(i, []), 'state': state})
+    for ref, (ob, change) in knowledge_change_index(obligations).items():
+        position = 3 if change.holder == 'reader' else 1 if change.mode == 'suspected' else 2
+        placement = {'ref': ref}
+        if change.holder == 'reader':
+            placement['confirms'] = {'domain': 'world', 'key': 'evidence_fact'}
+        beats[position].setdefault('know', []).append(placement)
+    wire = {'protocol_version': 'stage4-design-v7', 'book_style': source['book_style'],
+            'scenes': [{'driver': source['scenes'][0]['driver'], 'brief': '由起疑推进到证实',
+                        'beats': beats}], 'chapters': source['chapters']}
+    body, errors = assemble_body_design(
+        wire, known_char_ids={'yun_niang', 'fu_jun'}, expression_requirements=brief.expression,
+        source_narration=brief.source_narration, brief=brief, obligations=obligations)
+    assert not errors, errors
+    assert body.scenes[0].beats[1].target_delta[0].knowledge_mode == 'suspected'
+    assert body.scenes[0].beats[2].target_delta[0].knowledge_mode == 'known'
+    assert body.scenes[0].beats[3].target_delta[0].confirms.key == 'evidence_fact'
+    binding, errors = derive_semantic_binding(
+        {ob: [(0, i) for i, beat in enumerate(beats) if ob in beat['real']]
+         for ob in obligations}, body, checkpoint)
+    assert not errors, errors
+    assert check_epistemic_lock_order(body, binding) == []
+
+
+def test_same_summary_does_not_merge_obligation_knowledge_modes():
+    from novel.stages.stage4.grounding import design_obligation_index
+    checkpoint = _checkpoint()
+    rows = list(checkpoint.obligations)
+    rows[1] = rows[1].model_copy(update={'statement': rows[0].statement})
+    checkpoint = checkpoint.model_copy(update={'obligations': tuple(rows)})
+    brief, _ = project_brief(checkpoint, _characters(), _blueprint())
+    index = design_obligation_index(checkpoint, brief)
+    assert index['ob01'].core_id != index['ob02'].core_id
+    assert {c.holder for c in index['ob01'].knowledge_changes} == {'yun_niang'}
+    assert {c.holder for c in index['ob02'].knowledge_changes} == {'reader'}
+
+
 # ───────────────────────── 案例登记与路由 ─────────────────────────
 
 def test_case_registry_pins_a5_faces():
@@ -311,7 +386,10 @@ def test_design_obligation_table_carries_series_and_lock_digest():
     table = _design_obligation_table(index)
     lines = {line.split('｜')[0]: line for line in table.splitlines()[1:]}
     # ob01：锁列带 holder|kp（a4 授权面）与 kf；realize 分母渲染进清单
-    assert 'yun_niang|kp_' in lines['ob01']
+    cognitive = [line for line in table.splitlines() if line.startswith('ob01.k')]
+    assert len(cognitive) == 2
+    assert all('｜yun_niang｜kp_' in line for line in cognitive)
+    assert {line.split('｜')[-1] for line in cognitive} == {'known', 'suspected'}
     # ob05：事实锁（expected）进锁列
     assert any(line.startswith('ob05') and ('kf_' in line or 'expected' in line)
                for line in table.splitlines())

@@ -1100,7 +1100,7 @@
         "stage4"
       ],
       "cases": {
-        "test_assemble_routes_v6_and_enforces_coverage": "stage"
+        "test_assemble_routes_v7_and_enforces_coverage": "stage"
       }
     }
   },

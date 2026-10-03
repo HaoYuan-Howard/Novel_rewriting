@@ -633,7 +633,7 @@ setup/payoff 或结局条件中的任何一项，就填 true；否则填 false�
 返回一个 JSON object，不要围栏、不要解释。"""
 
 DESIGN_RULES = """任务：仅依据 Brief/义务清单/Identity/OutputConstraints 设计目标书
-（wire 协议 stage4-design-v6）。你是整书一次调用的结构设计者：只表达**选择、
+（wire 协议 stage4-design-v7）。你是整书一次调用的结构设计者：只表达**选择、
 结构与相对篇幅重点**——场景/拍编号、归章、线程编号、权重归一、默认值、
 知情增量的键与模式全部由 compiler 派生，你不输出任何 ID、编号或归一化数值
 （I-21）。机械字段（world_rules、expression 保留决定、narration、pov/voice、
@@ -649,13 +649,17 @@ entry 的 recap/锚点缺省）也由代码派生——你只写判断与例外�
 【义务承载标注（real，核心新增）】
 义务清单给每条义务一个编号 obNN（含 kind、是否必保、锁摘要与 satisfaction）。
 在**承载该义务的拍**上写 real:["obNN",…]：一条义务可标多拍——**末次标注拍**
-是它的接受拍（单一最终验收位），其余标注拍是支撑位；知情/读者增量由
-compiler 在接受拍按锁自动展开，你不写 knowledge/reader 行。
+是它的接受拍（单一最终验收位），其余标注拍是支撑位。
+认知变化清单由代码给出短引用 obNN.kNN（持有者、命题与模式已固定）。在对应
+义务 real 承载拍写 know:[{ref:"obNN.kNN"}] 标出每次变化的实际发生拍：先怀疑、
+后证实必须分别落拍；每个引用恰好一次。你不重写持有者、命题、模式或机械 ID。
+读者 known 的变化必须另写 confirms:{domain,key,subjects,holder}，明确确认的
+目标事实地址；必须是该拍及之前已建立的实际事实。其它认知变化不写 confirms。
 - 每条**必保**（must=true）义务至少标注一拍，漏标即拒（机械校验）；
 - 承载位必须能单独完成该义务的 satisfaction（复合义务前半用支撑拍）；
 - 若 A requires B：B 的承载场景不得晚于 A 的承载场景；同场拍序交错合法；
 - series 成员是同一机制的离散兑现时点：接受拍必须**不同拍**，不得合并；
-- 锁摘要列出的 (holder,kp)／kf 由 compiler／你的 state 面按锁规则兑现
+- 认知变化清单／kf 由 compiler／你的 state 面按锁规则兑现
   （漏兑现即拒）。
 
 【书级声明】
@@ -691,9 +695,9 @@ compiler 在接受拍按锁自动展开，你不写 knowledge/reader 行。
 - kf_* 事实锁键：只能按锁类别承载（planned 锁写 planned，不得升格 actual；
   unknown_value 只能 op=unknown 不得补值；unanswered 不得 set 作答）；
 - kf 值用一句话短述（如「即将上京参加科举」）；
-- kp_* 键的知情增量一律经 real 标注派生；state 面只承载例外——
+- kp_* 键的知情增量一律经 know 标注派生；state 面只承载例外——
   op=unknown（值未知）或 op=unset（显式解除该知情），at＝持有者。
-  读者揭示同经 real 派生（锁的 holder=reader），不另写行、不写 conf。
+  知情 set 经 know 派生；读者 known 须在 know 标注 confirms 事实地址。
 
 【状态读取：先读旧值、后写新值】
 每场 reads 只列实际需要的状态地址 {domain,key,subjects,holder}；定位缺省
@@ -730,18 +734,29 @@ scene_weights（可选）：与场景等长的正数数组（相对篇幅重点�
 返回一个 JSON object，不要围栏、不要解释。
 """
 
-from contracts.schema.design import DesignWireV5, DesignWireV6
+from contracts.schema.design import DesignWireV5, DesignWireV7
 _DESIGN_INSTRUCTIONS = DESIGN_RULES
 
 
 def design_rules(*, known_char_ids: set[str] | None = None,
-                 registered_surfaces: Mapping[str, set[str]] | None = None) -> str:
+                 registered_surfaces: Mapping[str, set[str]] | None = None,
+                 knowledge_refs: Mapping[str, bool] | None = None) -> str:
     """模型 Schema 是唯一形状源；动态闭集与接受函数使用同一输入。
 
-    CS-3（2026-10-03）：形状源换 v6 瘦模型（DesignWireV6）；闭集注入面随
+    CS-3（2026-10-03）：形状源换 v7 瘦模型（DesignWireV7）；闭集注入面随
     之换名（who／可选 pov 的 anyOf 分支），语义与 v5 面一致。
     """
-    schema = DesignWireV6.model_json_schema()
+    schema = DesignWireV7.model_json_schema()
+    placement = schema['$defs']['SlimKnowledgePlacement']
+    if knowledge_refs is not None:
+        placement['properties']['ref']['enum'] = sorted(knowledge_refs)
+        placement['allOf'] = [
+            {'if': {'properties': {'ref': {'const': ref}}},
+             'then': {'required': ['confirms'], 'properties': {'confirms': {
+                 'allOf': [{'$ref': '#/$defs/StateAddress'},
+                           {'properties': {'domain': {'enum': ['character', 'relation', 'world']}}}]}}}
+             if confirms else {'properties': {'confirms': {'type': 'null'}}}}
+            for ref, confirms in sorted(knowledge_refs.items())]
     if known_char_ids is not None:
         definitions = schema['$defs']
         characters = sorted(known_char_ids)
@@ -761,7 +776,7 @@ def design_rules(*, known_char_ids: set[str] | None = None,
             if 'subjects' in props:
                 props['subjects']['items']['enum'] = characters
             if 'holder' in props and 'anyOf' in props['holder']:
-                props['holder']['anyOf'][0]['enum'] = characters
+                props['holder']['anyOf'][0]['enum'] = sorted(known_char_ids | {'reader'})
         if registered_surfaces is not None:
             definitions['SurfaceIntroduction']['allOf'] = [
                 {'if': {'properties': {'char_id': {'const': cid}}},
@@ -957,47 +972,33 @@ def surface_engine_release(graph: BodyDesign, at_scene: str) -> tuple[SurfaceRel
 def pending_reader_confirmations(
     graph: BodyDesign, scene_index: int,
 ) -> tuple[PendingConfirmation, ...]:
-    """本场开头读者尚未确认的命题（D15 派生；rc13 起按读者知情地址投影，D5）。
+    """本场起点及以后才确认的命题；按完整事实/知情地址匹配（rc14）。
 
-    纯函数：同一 graph＋场序 ⇒ 同一清单。两个维度：
-    · **时序**：只列本场起点及以后才发生的读者确认（确认拍在本场内的标注
-      in_scene，渲染成「自第 X 拍起可确认」；后场的写手在此之前不得让读者
-      确认）；
-    · **命题（D5）**：读者揭示统一走 knowledge(holder=reader, key=kp)——
-      清单只投影**本场实际动该键**的项（state_reads 读取或拍写入同 key，
-      含确认行本身——确认拍所在场天然在列）。确认前不作为已确认信息——
-      受保护的是「何时确认」，不是「能否暗示」（线索、误导与猜测照常演出）。
-      **登记的收窄**：rc12 经 `confirms` 显式关联「事实建立场」的通道已随
-      D5 删除——揭示行的 key 是 kp 句柄，事实建立行的 key 是自由键，不同
-      名时建立场不再自动获得清单（r10b 实证该清单全书仅 1 条，投影稀疏；
-      提前暴露防护的其余承载是义务满足面与 hook 禁区）。
+    confirms 显式关联目标事实；建立/读取该事实的场景和确认场获得提示。
+    确认前允许线索、误导与猜测；本场确认标明拍位，后场确认列为本章禁区。
     """
     scene = graph.scenes[scene_index]
-    #: 本场动的命题集合（按 key 匹配、不分域）：读取该 key（任意域——事实
-    #: 建立场与知情读取场都是「动该命题」）、或拍写入该 key（含读者确认行
-    #: 本身——确认拍所在场写入的正是读者知情地址）。按命题维度匹配保留
-    #: D4 的覆盖面：建立该事实的场景（world/character 域写）与消费该命题
-    #: 的场景都拿到「确认前不作为已确认信息」的提醒。
-    touched: set[str] = set()
+    # 只用完整地址匹配，不用自由键/kp 句柄的同名假设。
+    touched: set[tuple] = set()
     for read in scene.state_reads:
-        touched.add(read.key)
+        touched.add(read.address())
     for beat in scene.beats:
         for delta in beat.target_delta:
-            touched.add(delta.key)
+            touched.add(delta.address())
     items: list[PendingConfirmation] = []
     for later in range(scene_index, len(graph.scenes)):
         for beat in graph.scenes[later].beats:
             for delta in beat.target_delta:
                 if delta.domain is not EffectDomain.KNOWLEDGE \
-                        or delta.holder != 'reader' or delta.op != 'set':
+                        or delta.holder != 'reader' or delta.op != 'set' \
+                        or delta.knowledge_mode != 'known' or delta.confirms is None:
                     continue
-                if delta.key not in touched:
+                if delta.address() not in touched and delta.confirms.address() not in touched:
                     continue
                 items.append(PendingConfirmation(
                     fact=delta.value or '', key=delta.key,
-                    subjects=tuple(delta.subjects),
-                    address=StateAddress(domain=delta.domain, key=delta.key,
-                                         subjects=(), holder=delta.holder),
+                    subjects=tuple(delta.confirms.subjects),
+                    address=delta.confirms,
                     position=f'{graph.scenes[later].scene_id}#{beat.beat_id}',
                     in_scene=(later == scene_index)))
     return tuple(items)
@@ -1186,6 +1187,8 @@ def consumption_closure(graph: BodyDesign) -> dict[tuple, tuple[int, ...]]:
             _consume(read.address(), index)
         for beat in scene.beats:
             for delta in beat.target_delta:
+                if delta.confirms is not None:
+                    _consume(delta.confirms.address(), index)
                 if delta.key.startswith(('kp_', 'kf_')):
                     _consume(delta.address(), index)
     hook = getattr(graph, 'hook', None)
@@ -1437,6 +1440,8 @@ def project_context(*, scene_id: str, graph: BodyDesign,
         # 命题内容回填进 value，渲染（_delta_line／pending 确认）因此拿到的
         # 是命题文本而非 "true"（fold/plan 的 Establishment 不动——机械折叠
         # 仍按句柄，I-16 单真相源）。world 规则键（wc_{nn}）同尺回填（CS-3）。
+        if d.op != 'set':
+            return type(d)(**d.model_dump())
         statement = kp_statement(kp_statements, d.key) \
             if d.domain is EffectDomain.KNOWLEDGE else (
                 world_statements.get(d.key)
@@ -1630,6 +1635,9 @@ def _delta_line(names, delta) -> str:
     模式措辞与人物知情一致。
     """
     if delta.domain is EffectDomain.KNOWLEDGE:
+        if delta.op != 'set':
+            action = '此项信息仍未知' if delta.op == 'unknown' else '解除此项知情状态'
+            return f'{_name(names, delta.holder or "")}：{action}'
         mode = _KNOWLEDGE_WORDINGS.get(delta.knowledge_mode or 'known', '确知')
         return f'{_name(names, delta.holder or "")}{mode}「{delta.value}」'
     who = _subjects_line(names, delta.subjects, delta.holder)

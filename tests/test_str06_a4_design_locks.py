@@ -16,7 +16,7 @@ from __future__ import annotations
 from copy import deepcopy
 
 from contracts.schema.grounding import (
-    BriefFactLock, BriefKnowledgeLock, BriefProposition, PreserveCheckpoint,
+    BriefFactLock, BriefKnowledgeChange, BriefKnowledgeLock, BriefProposition, PreserveCheckpoint,
     ReconstructionBrief,
 )
 from contracts.schema.source import (
@@ -217,15 +217,15 @@ def test_brief_series_blind_marker_and_realize_denominators():
     by_summary = {r.summary: r for r in brief.requirements}
     must_ob = by_summary['芸娘从起疑到证实同一件事']
     assert must_ob.must_preserve
-    assert len(must_ob.realize_holders) == 1  # yun|kp_x（同一 kp 两模式并一行）
+    assert len(must_ob.knowledge_changes) == 2  # yun|kp_x（同一 kp 两模式并一行）
     assert not must_ob.realize_locks
     return_ob = by_summary['夫君约定归期']
-    assert return_ob.realize_locks and not return_ob.realize_holders
+    assert return_ob.realize_locks and not return_ob.knowledge_changes
     whereabouts = by_summary['夫君的去向成谜']
-    assert whereabouts.realize_locks and not whereabouts.realize_holders
+    assert whereabouts.realize_locks and not whereabouts.knowledge_changes
     claim_ob = by_summary['夫君公开声称出行的说法']
     assert not claim_ob.must_preserve
-    assert claim_ob.realize_holders == () and claim_ob.realize_locks == ()
+    assert claim_ob.knowledge_changes == () and claim_ob.realize_locks == ()
     assert claim_ob.locks, '信息面仍列出其 kp（asserts 命题已注册）'
 
 
@@ -283,7 +283,7 @@ def _design_wire(brief: ReconstructionBrief) -> dict:
                   'delivery_hint': '', 'target_delta': [
                       {'domain': 'knowledge', 'subjects': [], 'holder': 'reader',
                        'key': kp_reader, 'op': 'set', 'value': '床底藏物属实',
-                       'scope': 'book', 'knowledge_mode': 'known'}],
+                       'scope': 'book', 'knowledge_mode': 'known', 'confirms': {'domain': 'world', 'key': 'evidence_fact'}}],
                   'expression_refs': [], 'surface_introductions': []},
                  {'event': '约定归期', 'participants': ['fu_jun'],
                   'delivery_hint': '', 'target_delta': [
@@ -465,15 +465,17 @@ def test_brief_validators_reject_dangling_lock_references():
         raise AssertionError('应拒绝悬空知情锁')
     except ValueError as exc:
         assert '知情锁引用未登记命题' in str(exc)
-    # realize_holders 引用无锁行。
+    # knowledge_changes 引用无锁行。
     reqs = list(good.requirements)
-    reqs[0] = reqs[0].model_copy(update={'realize_holders': ('fu_jun|kp_0000000000000000',)})
+    reqs[0] = reqs[0].model_copy(update={'knowledge_changes': (
+        BriefKnowledgeChange(change_id='kc_0000000000000000', holder='fu_jun',
+                             kp='kp_0000000000000000', mode='known'),)})
     bad2 = good.model_copy(update={'requirements': tuple(reqs)})
     try:
         bad2.model_validate(bad2.model_dump())
         raise AssertionError('应拒绝无锁行的兑现分母')
     except ValueError as exc:
-        assert 'realize_holders 引用无锁行' in str(exc)
+        assert 'knowledge_changes 引用无锁行' in str(exc)
 
 
 def test_lock_models_shape_constants():

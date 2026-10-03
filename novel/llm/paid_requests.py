@@ -1352,9 +1352,9 @@ def ask_json(session: PaidRequestSession, owner: str, request: ChatRequest,
     整份修订兜底（CS-patch，2026-10-03）：owner 提供 `patch` 定位且全部错误
     可定位时，只把失败条目发回（原请求作固定前缀，输出仅替换条目），合并版
     过同一套校验即采纳——返修成本从「整份×轮数」降到「失败条目×轮数」；
-    定位不了、patch 形状不过或合并仍失败 → 整份修订轮（原请求＋上一版＋
-    typed 问题；R3 裁决 1），最多 `OWNER_REVISION_MAX_ROUNDS` 轮。无进展即停
-    （本轮问题集是此前任一轮的子集即停——原样重现/只缩不消/A→B→A 交替）。
+    定位不了或 patch 形状不过 → 整份修订；合并仍失败但问题严格减少则继续
+    返修。patch 与整份请求各占一次 `OWNER_REVISION_MAX_ROUNDS` 额度。
+    问题位置集合重复或回到此前集合即停；严格子集是进展。
     采纳返回 ``(data, answer)``：整份路径 `answer` 是 `DurableAnswer`；patch
     路径是 `PatchedAnswer`（基底＋patch 轮多引用，经 `_as_adoption_refs`
     展开进 provenance／CommitBundle）。空回答仍走 D5 同轮付费重试。崩溃/
@@ -1364,20 +1364,25 @@ def ask_json(session: PaidRequestSession, owner: str, request: ChatRequest,
     answer = session.send(owner, request)
     revisions = 0
     seen_heads: list[frozenset[str]] = []
+    targets: list[PatchTarget] | None = None
+    wire_dict: dict | None = None
+    base_answer = answer
+    patches: list[DurableAnswer] = []
+    force_full = False
 
     def _no_progress_stop(errs: list[str], adopted_answer):
         """无进展即停（R8b.3 位置模式集合；CS-patch 起对 patch 合并结果同样
-        判定——问题集是此前某轮的子集就不再买下一轮）。"""
+        判定；问题严格缩小允许继续，重复/回归集合才停止）。"""
         # R8b.3：无进展判定用「位置模式」集合（消息首个冒号前的定位段），
         # 不用全文——措辞微调（如实得值摘要变化）不再被误判成有进展。
         heads = sorted(str(e).split('：', 1)[0][:80] for e in errs)
         current = frozenset(heads)
-        if not (current and any(current <= previous for previous in seen_heads)):
+        if not (current and current in seen_heads):
             return current
         node, scope = semantic_owner_unit(owner)
         stop = ValidationStop(
             f'{owner} 校验失败：节点内校验重问后无进展'
-            '（本轮问题集是此前某轮的子集——持续重现的失败多为契约或'
+            '（本轮问题位置集合重复——持续重现的失败多为契约或'
             '校验器缺陷，整份重写修不动，即停不无限付费）；原响应已按 '
             'attempt 留证，剩余修复走 owner patch、契约修订或人工重跑：'
             f'{errs}',
@@ -1390,19 +1395,33 @@ def ask_json(session: PaidRequestSession, owner: str, request: ChatRequest,
         raise stop
 
     while True:
-        data, errors, fields = accept_json_answer(answer, validate)
+        if targets is not None:
+            merged, passed, fields = accept_patch_answer(
+                answer, targets, wire_dict, validate)
+            data = merged if passed else None
+            errors = list(fields['errors'])
+            if merged is not None:
+                wire_dict = merged
+                patches.append(answer)
+            else:
+                force_full = True
+        else:
+            data, errors, fields = accept_json_answer(answer, validate)
+            base_answer, patches = answer, []
+            previous = (answer.content or '').strip() or (answer.reasoning or '').strip()
+            decoded, _decode_err = _decode_json(previous)
+            wire_dict = decoded if isinstance(decoded, dict) else None
         session.record_acceptance(answer, fields['mode'], parse=fields['parse'],
                                   errors=fields['errors'],
                                   salvage=fields['salvage'],
                                   accepted=data is not None)
         if data is not None:
-            return data, answer
+            return data, (PatchedAnswer(base=base_answer, patches=tuple(patches))
+                          if patches else answer)
         if answer.cached or fields['parse'] != 'empty':
-            # 非空但解析/校验失败：R3 有上限修订。无进展＝本轮问题集是此前某轮
-            # 的子集（原样重现／只缩不消／交替回归）即停；额度耗尽即停——两停都
-            # 按 item 留 typed 问题，剩余修复走 owner patch 或人工重跑，不隐式
-            # 扩大授权。
-            current = _no_progress_stop(list(errors), answer)
+            adoption = (PatchedAnswer(base=base_answer, patches=tuple(patches))
+                        if patches else base_answer)
+            current = _no_progress_stop(list(errors), adoption)
             node, scope = semantic_owner_unit(owner)
             heads = sorted(str(e).split('：', 1)[0][:80] for e in errors)
             stop_context = {'owner': owner, 'rounds': revisions,
@@ -1415,49 +1434,30 @@ def ask_json(session: PaidRequestSession, owner: str, request: ChatRequest,
                     f'重跑：{errors}', code='validation_rounds_exhausted',
                     stage=_stage_of(node), node=node, item=scope, phase='accept',
                     context=stop_context)
-                stop.adoption = answer
+                stop.adoption = adoption
                 raise stop
             revisions += 1
             seen_heads.append(current)
-            # 条目级返修优先（CS-patch）：wire 重解码取回失败版全貌（校验失败时
-            # accept_json_answer 不回传 dict；重解码纯函数、与判定同源）。
-            previous = (answer.content or '').strip() or (answer.reasoning or '').strip()
-            targets: list[PatchTarget] | None = None
-            if patch is not None:
-                wire_dict, _decode_err = _decode_json(previous)
-                if isinstance(wire_dict, dict):
-                    located = patch(wire_dict, list(errors))
+            if patches:
+                previous = json.dumps(wire_dict, ensure_ascii=False, indent=1)
+            targets = None
+            if patch is not None and wire_dict is not None and not force_full:
+                located = patch(wire_dict, list(errors))
+                # 定位器须覆盖全部问题，不能通过局部修复静默丢掉其它失败。
+                if located and {e for _, es in located for e in es} == set(errors):
                     targets = [PatchTarget(path=tuple(path), issues=tuple(issues))
-                               for path, issues in located] if located else None
+                               for path, issues in located]
+            force_full = False
             if targets:
-                patch_request = ChatRequest(
+                next_user = patch_user_prompt(base_user, targets, wire_dict)
+            else:
+                next_user = revision_user_prompt(base_user, previous, list(errors))
+            request = ChatRequest(
                     model=request.model, system=request.system,
-                    user=patch_user_prompt(base_user, targets, wire_dict),
+                    user=next_user,
                     reasoning_effort=request.reasoning_effort, thinking=request.thinking,
                     json_mode=request.json_mode, max_tokens=request.max_tokens,
                     temperature=request.temperature, sampling_nonce=request.sampling_nonce)
-                patch_answer = session.send(owner, patch_request)
-                merged, patch_passed, patch_fields = accept_patch_answer(
-                    patch_answer, targets, wire_dict, validate)
-                session.record_acceptance(
-                    patch_answer, patch_fields['mode'], parse=patch_fields['parse'],
-                    errors=patch_fields['errors'], salvage=patch_fields['salvage'],
-                    accepted=patch_passed)
-                if patch_passed:
-                    return merged, PatchedAnswer(base=answer, patches=(patch_answer,))
-                if merged is not None:
-                    # 合并版产出但校验不过：它是当前最好的全文——下一轮整份修订
-                    # 以它为「上一版」。问题集与此前某轮相同（patch 修不动）即停，
-                    # 不再买整份轮。
-                    _no_progress_stop(list(patch_fields['errors']), patch_answer)
-                    errors = list(patch_fields['errors'])
-                    previous = json.dumps(merged, ensure_ascii=False, indent=1)
-            request = ChatRequest(
-                model=request.model, system=request.system,
-                user=revision_user_prompt(base_user, previous, list(errors)),
-                reasoning_effort=request.reasoning_effort, thinking=request.thinking,
-                json_mode=request.json_mode, max_tokens=request.max_tokens,
-                temperature=request.temperature, sampling_nonce=request.sampling_nonce)
             answer = session.send(owner, request)
             continue
         # D5：空回答救回失败——同一内容轮内付费重试（占尝试额度，如实计费）。

@@ -188,9 +188,9 @@ class BriefRequirement(StrictModel):
     #: 本义务 anchors 派生的锁句柄（kp_*/kf_*，a4；信息面——哪些命题/事实
     #: 进了本义务的锁视野）。
     locks: tuple[str, ...] = Field(default=(), min_length=0)
-    #: 必保义务须兑现的知情锁（`持有者|kp`，a4 兑现校验的机械分母）：Design
-    #: 的 knowledge 域必须以该 kp 键＋该持有者实际承载；非必保义务为空。
-    realize_holders: tuple[str, ...] = Field(default=(), min_length=0)
+    #: 本义务的每次认知变化，保留持有者、命题与模式的对应关系。compiler
+    #: 从正式 anchor 铸盲身份；Design 只标注短引用的拍位，不重写这三个值。
+    knowledge_changes: tuple[BriefKnowledgeChange, ...] = Field(default=(), min_length=0)
     #: 必保义务须兑现的事实锁（kf_*）：时态锁按同 modality set、值未知锁按
     #: op=unknown 承载；非必保义务为空。
     realize_locks: tuple[str, ...] = Field(default=(), min_length=0)
@@ -251,6 +251,12 @@ class BriefKnowledgeLock(StrictModel):
     mode: str = Field(pattern=r'^(' + '|'.join(KNOWLEDGE_LOCK_MODES) + r')$')
 
 
+class BriefKnowledgeChange(BriefKnowledgeLock):
+    """单次认知变化的源盲身份；同一命题反复变化不按 (holder,kp) 合并。"""
+
+    change_id: str = Field(pattern=r'^kc_[0-9a-f]{16}$')
+
+
 class BriefFactLock(StrictModel):
     """事实锁（a4）：kf_<hash>——时态/未知/未回答的源事实约束。
 
@@ -304,7 +310,7 @@ class ReconstructionBrief(StrictModel):
     不得经状态或说明改写；兑现与越权校验归 assemble_body_design。
     """
 
-    contract_version: Literal['str06-rc13'] = 'str06-rc13'
+    contract_version: Literal['str06-rc14'] = 'str06-rc14'
     brief_id: str = Field(min_length=1)
     preserve_checkpoint_sha256: str = Field(min_length=64, max_length=64)
     requirements: tuple[BriefRequirement, ...] = Field(min_length=1)
@@ -332,10 +338,10 @@ class ReconstructionBrief(StrictModel):
         if any(set(c.requires_cores) - set(ids) for c in self.requirements):
             raise ValueError('Brief 依赖必须闭合，非事件义务也必须投影')
         # 锁引用闭合（a4）：知情锁引用已登记命题；义务的 locks 引用已登记锁；
-        # 兑现分母引用真实锁行（realize_holders 的 (holder, kp) 必须有锁）。
+        # 每个认知变化的 holder/kp/mode 必须引用已登记的授权锁行。
         kp_ids = {p.kp_id for p in self.propositions}
         kf_ids = {f.kf_id for f in self.fact_locks}
-        lock_pairs = {(lock.holder, lock.kp) for lock in self.knowledge_locks}
+        lock_triples = {(lock.holder, lock.kp, lock.mode) for lock in self.knowledge_locks}
         for lock in self.knowledge_locks:
             if lock.kp not in kp_ids:
                 raise ValueError(f'知情锁引用未登记命题：{lock.kp}')
@@ -346,11 +352,13 @@ class ReconstructionBrief(StrictModel):
             outside = [x for x in req.realize_locks if x not in kf_ids]
             if outside:
                 raise ValueError(f'义务 {req.core_id} 的 realize_locks 引用未登记事实锁：{outside}')
-            for pair in req.realize_holders:
-                holder, _, kp = pair.partition('|')
-                if (holder, kp) not in lock_pairs:
+            change_ids = [c.change_id for c in req.knowledge_changes]
+            if len(change_ids) != len(set(change_ids)):
+                raise ValueError(f'义务 {req.core_id} 的认知变化身份重复')
+            for change in req.knowledge_changes:
+                if (change.holder, change.kp, change.mode) not in lock_triples:
                     raise ValueError(
-                        f'义务 {req.core_id} 的 realize_holders 引用无锁行：{pair!r}')
+                        f'义务 {req.core_id} 的 knowledge_changes 引用无锁行：{change!r}')
         return self
 
 

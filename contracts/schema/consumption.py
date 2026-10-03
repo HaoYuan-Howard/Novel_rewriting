@@ -536,6 +536,30 @@ STR06_FIELD_DELIVERY: dict[str, FieldDeliverySpec] = {
         '.knowledge_mode', consumers=(_W,), scope=_SCENE,
         mode=DeliveryMode.MUST_RESPECT, note='知情边界（known/suspected/…）；'
              '读者揭示统一走 knowledge(holder=reader)（D5，rc13）'),
+    'writer_book_ir.chapters[].scenes[].verification_ir.beats[].deltas[].confirms.domain': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.beats[].deltas[].confirms.domain', consumers=(_A,), scope=_SCENE,
+        mode=DeliveryMode.AUDIT_ONLY, note='读者确认的事实地址，进入 pending 禁区投影'),
+    'writer_book_ir.chapters[].scenes[].verification_ir.beats[].deltas[].confirms.key': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.beats[].deltas[].confirms.key', consumers=(_A,), scope=_SCENE,
+        mode=DeliveryMode.AUDIT_ONLY, note='读者确认的事实地址，进入 pending 禁区投影'),
+    'writer_book_ir.chapters[].scenes[].verification_ir.beats[].deltas[].confirms.subjects': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.beats[].deltas[].confirms.subjects', consumers=(_A,), scope=_SCENE,
+        mode=DeliveryMode.AUDIT_ONLY, note='读者确认的事实地址，进入 pending 禁区投影'),
+    'writer_book_ir.chapters[].scenes[].verification_ir.beats[].deltas[].confirms.holder': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.beats[].deltas[].confirms.holder', consumers=(_A,), scope=_SCENE,
+        mode=DeliveryMode.AUDIT_ONLY, note='读者确认的事实地址，进入 pending 禁区投影'),
+    'writer_book_ir.chapters[].scenes[].verification_ir.planned_delta[].confirms.domain': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.planned_delta[].confirms.domain', consumers=(_A,), scope=_SCENE,
+        mode=DeliveryMode.AUDIT_ONLY, note='读者确认的事实地址，进入 pending 禁区投影'),
+    'writer_book_ir.chapters[].scenes[].verification_ir.planned_delta[].confirms.key': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.planned_delta[].confirms.key', consumers=(_A,), scope=_SCENE,
+        mode=DeliveryMode.AUDIT_ONLY, note='读者确认的事实地址，进入 pending 禁区投影'),
+    'writer_book_ir.chapters[].scenes[].verification_ir.planned_delta[].confirms.subjects': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.planned_delta[].confirms.subjects', consumers=(_A,), scope=_SCENE,
+        mode=DeliveryMode.AUDIT_ONLY, note='读者确认的事实地址，进入 pending 禁区投影'),
+    'writer_book_ir.chapters[].scenes[].verification_ir.planned_delta[].confirms.holder': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.planned_delta[].confirms.holder', consumers=(_A,), scope=_SCENE,
+        mode=DeliveryMode.AUDIT_ONLY, note='读者确认的事实地址，进入 pending 禁区投影'),
     'writer_book_ir.chapters[].scenes[].verification_ir.beats[]'
     '.surface_introductions': _spec(
         'writer_book_ir.chapters[].scenes[].verification_ir.beats[]'

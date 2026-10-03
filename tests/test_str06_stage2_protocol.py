@@ -107,7 +107,7 @@ def test_observation_artifacts_are_registered_with_independent_versions():
     assert ARTIFACT_SPECS['stage2/observations/associate.json']
     assert STR06_ARTIFACT_RC_VERSIONS['stage2/observations/associate.json'] == 'str06-rc12'
     # R2（语义送达）起 RC 版式头升 rc10；associate 冻结在 rc9（R1 身份）不动。
-    assert STR06_RC_VERSION == 'str06-rc13'
+    assert STR06_RC_VERSION == 'str06-rc14'
     for label in ('str06-rc6', 'str06-rc9', 'str06-rc10', 'str06-rc11'):
         assert label in STR06_RC_LABELS
     assert str06_chapter_observation_rel(3) == 'stage2/observations/ch03.json'

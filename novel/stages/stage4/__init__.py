@@ -39,6 +39,7 @@ from novel.stages.stage4.book_ir import (
 )
 from novel.stages.stage4.compile import compile_execution_plan, init_establishments
 from novel.stages.stage4.design import assemble_body_design
+from novel.stages.stage4.slim import knowledge_change_index
 from novel.stages.stage4.fold import (
     FoldedState, ThreadFold, fold_accepted_prefix, fold_thread_faces,
 )

@@ -191,9 +191,9 @@ def _reader_scene(sid, *, establish=None, confirms=None, reads=()):
                                   subjects=(), op='set', scope='book'))
     for key, value in (confirms or ()):
         deltas.append(TargetDelta(
-            domain='knowledge', key=key, value=value, subjects=(),
+            domain='knowledge', key='kp_' + ('1' if key == 'hiding' else '2') * 16, value=value, subjects=(),
             holder='reader', op='set', scope='scene',
-            knowledge_mode='known'))
+            knowledge_mode='known', confirms={'domain': 'world', 'key': key}))
     return TargetScene(state_reads=reads, scene_id=sid,
         driver=SceneDriver(focal_actor='ch1', immediate_want='w', opposition='o', turn='t'),
         realization_brief=f'重心在{sid}的核心对峙；展开转折，收在结果落地。',
@@ -246,8 +246,8 @@ def test_pending_reader_confirmations_are_projected_by_address():
     # 每条清单带读者知情地址（D5 机械面：knowledge/holder=reader）
     items = pending_reader_confirmations(graph, 1)
     assert [(p.address.domain.value, p.address.key) for p in items] == [
-        ('knowledge', 'hiding'), ('knowledge', 'wardrobe')]
-    assert all(p.address.holder == 'reader' for p in items)
+        ('world', 'hiding'), ('world', 'wardrobe')]
+    assert all(p.address.holder is None for p in items)
 
 
 def test_pending_confirmations_render_into_the_writer_packet():
@@ -260,7 +260,9 @@ def test_pending_confirmations_render_into_the_writer_packet():
     book_ir = compile_writer_book_ir(
         graph=graph, plan=plan, binding=binding, total_budget=1000,
         length_band=(0.6, 1.3), book_title='t',
-        projection=_projection(), structure=None)
+        projection=_projection(), structure=None,
+        kp_statements={'kp_1111111111111111': '床底有人',
+                       'kp_2222222222222222': '衣柜藏身'})
     packet = render_chapter_packet(project_chapter_packet(book_ir, 1))
     assert '【禁区】' in packet
     # 确认拍在本场内：自然拍序表述；不再带 world:key／拍 id 机械位
@@ -338,7 +340,7 @@ def _beat_anchor_binding(ob_early, ob_late, *, late_first: bool):
                            obligations=cp.obligations, entries=entries, unbound=())
 
 
-def test_anchor_max_position_order_rejects_inversion():
+def test_source_anchor_order_allows_legal_target_reordering():
     """D3：锚点晚的义务（b02_01）承载在前场、锚点早的（b01_01）承载在后场
     → 锚点序与承载序倒置，按结构剧视拦下；允许并列、正序放行见下一例。"""
     from tests.str06_facilities import anchor_stub
@@ -347,8 +349,13 @@ def test_anchor_max_position_order_rejects_inversion():
         update={'anchors': anchor_stub('b02_01')})
     binding = _beat_anchor_binding(ob_early, ob_late, late_first=True)
     _, errors = compile_execution_plan(_graph(), binding)
-    assert any('锚点序与承载序倒置' in e for e in errors), errors
-    assert any('obE' in e and 'obL' in e for e in errors), errors
+    assert errors == [], errors
+    # 加上正式因果依赖后相同重排必须拒绝；故事源序本身不等于依赖。
+    dependent = ob_late.model_copy(update={'requires': (ob_early.obligation_id,)})
+    _, causal_errors = compile_execution_plan(
+        _graph(), _beat_anchor_binding(ob_early, dependent, late_first=True))
+    assert any('义务依赖逆序' in e for e in causal_errors), causal_errors
+    assert any('obE' in e and 'obL' in e for e in causal_errors), causal_errors
 
 
 def test_anchor_max_position_order_allows_forward_and_ties():

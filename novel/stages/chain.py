@@ -97,10 +97,10 @@ from novel.stages.stage4 import (
     assemble_body_design, assemble_hook_design,
     assemble_preserve, compile_execution_plan, compile_hook_context,
     compile_writer_book_ir, derive_semantic_binding, design_obligation_index,
-    design_placements, lock_order_violations, obligation_core_id,
+    design_placements, knowledge_change_index, lock_order_violations, obligation_core_id,
     project_brief, project_preserve_view, publish_graph, run_mechanical_guard,
 )
-from contracts.schema.design import DesignWireV6, STAGE4_DESIGN_WIRE_PROTOCOL
+from contracts.schema.design import DesignWireV7, STAGE4_DESIGN_WIRE_PROTOCOL
 from novel.stages.stage5 import (
     AnsweredText, HOOK_VALIDATOR_VERSION, MAX_REWRITES, MECHANICAL_CHECKS,
     build_hook_user_prompt,
@@ -678,11 +678,14 @@ def _design_obligation_table(obligation_index: dict) -> str:
     """义务清单的紧凑渲染（design prompt 面；D6 短别名——模型抄写哈希是失败点）。"""
     lines = ['ob 编号｜类别｜必保｜锁（holder|kp 或 kf）｜satisfaction']
     for ob, requirement in sorted(obligation_index.items()):
-        locks = list(requirement.realize_holders or ()) + list(requirement.realize_locks or ())
+        locks = list(requirement.realize_locks or ())
         satisfaction = (requirement.satisfaction or '')[:80]
         kind = getattr(requirement.kind, 'value', requirement.kind)
         lines.append(f'{ob}｜{kind}｜{requirement.must_preserve}｜'
                      f'{"；".join(locks) or "无"}｜{satisfaction}')
+    lines.append('认知短引用｜所属义务｜持有者｜命题句柄｜模式（代码派生，know 只标拍位）')
+    for ref, (ob, change) in knowledge_change_index(obligation_index).items():
+        lines.append(f'{ref}｜{ob}｜{change.holder}｜{change.kp}｜{change.mode}')
     return '\n'.join(lines)
 
 
@@ -699,6 +702,8 @@ def run_body_design(ctx: ChainContext) -> dict:
     design_prompt = revision_prompt_for_owner(
         repository, 'design',
         pack_prompt(design_rules(known_char_ids=set(chars.characters),
+                                 knowledge_refs={ref: change.holder == 'reader' and change.mode == 'known'
+                                                 for ref, (_, change) in knowledge_change_index(obligation_index).items()},
                                  registered_surfaces=expand_surface_releases(
                                      {cid: {s.surface for s in c.surfaces} for cid, c in chars.characters.items()},
                                      chars.name_structure)),
@@ -759,7 +764,7 @@ def _design_placements_of(wire: Any) \
             f'（实得 {wire.get("protocol_version")!r}）——bind 退役后 real 承载'
             '标注是义务落点的唯一声明处，v5 直通面不再驱动生产链']
     try:
-        model = DesignWireV6.model_validate(wire)
+        model = DesignWireV7.model_validate(wire)
     except ValidationError as exc:
         return None, [f'design 瘦 wire 协议校验失败：{exc}']
     return design_placements(model), []
@@ -777,6 +782,7 @@ def run_hook_design(ctx: ChainContext) -> dict:
     _, identities = project_brief(checkpoint, chars.core_view(), blueprint)
     projection = chars.name_projection()
     kp_statements = {p.kp_id: p.statement for p in brief.propositions}
+    world_statements = {wc.constraint_id: wc.statement for wc in brief.book_constraints}
     hook_design_prompt = pack_prompt(
         HOOK_DESIGN_RULES, book_title=ctx.book_title, design=body.model_dump(mode='json'),
         identities=[i.model_dump(mode='json') for i in identities],
@@ -788,7 +794,7 @@ def run_hook_design(ctx: ChainContext) -> dict:
         if hook is not None:
             context, context_errors = compile_hook_context(
                 publish_graph(body, hook), projection, ctx.hook_constraints,
-                chars.name_structure, kp_statements)
+                chars.name_structure, kp_statements, world_statements)
             errors.extend(context_errors)
             if context is not None:
                 errors.extend(validate_hook_materials(context, internal_ids=chars.characters))

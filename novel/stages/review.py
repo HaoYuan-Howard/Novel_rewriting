@@ -6,7 +6,7 @@ from pydantic import ValidationError
 from contracts.schema.grounding import OutputConstraints
 from contracts.schema.hook import HookConstraints
 from contracts.schema.observation import BookObservation, NamesObservation, STAGE2_OBSERVATION_PROTOCOL
-from contracts.schema.design import DesignWireV6
+from contracts.schema.design import DesignWireV7
 from contracts.schema.workflow import STR06_RUNTIME_CONFIG, STAGE4_PRESERVE_POLICY_VERSION
 from novel.stages.stage2 import (
     character_core_view, compile_associate_observation, compile_chapter_observation,
@@ -14,7 +14,7 @@ from novel.stages.stage2 import (
 )
 from novel.stages.stage4 import (
     assemble_body_design, assemble_preserve, assemble_hook_design,
-    design_obligation_index, design_placements, derive_semantic_binding,
+    design_obligation_index, design_placements, derive_semantic_binding, project_brief,
     publish_graph, compile_execution_plan, compile_hook_context, compile_writer_book_ir,
     run_mechanical_guard,
 )
@@ -82,12 +82,16 @@ def dry_run_patch(repository, owner, candidate, *, evidence, budget,
         if owner == 'naming' or owner == 'hook_writer' or owner.startswith('body_ch'):
             return _delivery_preview(repository, owner, candidate, chars)
         projection = chars.name_projection()
-        body = repository.read_model('stage4/design/body_design.json')
         checkpoint = repository.read_model('runtime/preserve_checkpoint.json')
-        graph = repository.read_model('stage4/design/presentation_graph.json')
         binding = repository.read_model('stage4/grounding/semantic_binding.json')
         errors = []
-        brief = repository.read_model('stage4/grounding/reconstruction_brief.json')
+        # Brief 是确定性派生；免费预览从正式 checkpoint 重建，旧 Brief 缺认知
+        # 分母时不猜值。Design 补丁先验证候选，不能被待修复的旧正文阻断。
+        brief, _ = project_brief(checkpoint, chars.core_view(),
+                                  repository.read_model('stage2/blueprints/chapter_blueprints.json'))
+        if owner != 'design':
+            body = repository.read_model('stage4/design/body_design.json')
+            graph = repository.read_model('stage4/design/presentation_graph.json')
         if owner == 'design':
             obligations = design_obligation_index(checkpoint, brief)
             body, errors = assemble_body_design(
@@ -101,9 +105,9 @@ def dry_run_patch(repository, owner, candidate, *, evidence, budget,
                 # bind 退役（CS-3）：design 候选直接决定 binding——real 承载标注
                 # 派生 SemanticBinding，错误并入同一份预览报告。
                 try:
-                    wire_model = DesignWireV6.model_validate(candidate)
+                    wire_model = DesignWireV7.model_validate(candidate)
                 except ValidationError as exc:
-                    body, errors = None, [f'design 候选必须是 stage4-design-v6 '
+                    body, errors = None, [f'design 候选必须是 stage4-design-v7 '
                                           f'（real 承载标注派生 binding）：{exc}']
                 else:
                     binding, binding_errors = derive_semantic_binding(
@@ -111,13 +115,15 @@ def dry_run_patch(repository, owner, candidate, *, evidence, budget,
                     if binding_errors:
                         body, errors = None, errors + binding_errors
                 if body is not None:
-                    graph = publish_graph(body, graph.hook)
+                    graph = publish_graph(body, repository.read_graph_hook())
         elif owner == 'preserve':
             checkpoint, errors = assemble_preserve(
                 candidate, policy_id='preserve-default', policy_version=STAGE4_PRESERVE_POLICY_VERSION,
                 characters=chars.core_view(), blueprint=repository.read_model('stage2/blueprints/chapter_blueprints.json'),
                 provider='preview', model='preview', request_sha256='0' * 64)
             if checkpoint is not None:
+                brief, _ = project_brief(checkpoint, chars.core_view(),
+                                          repository.read_model('stage2/blueprints/chapter_blueprints.json'))
                 binding = binding.model_copy(update={'obligations': checkpoint.obligations})
         elif owner == 'hook_design':
             hook, errors = assemble_hook_design(candidate, body=body, known_char_ids=set(chars.characters),
@@ -130,13 +136,15 @@ def dry_run_patch(repository, owner, candidate, *, evidence, budget,
             return {'node': 'str06.stage4.compile', 'status': 'ran', 'errors': errors}
         plan, errors = compile_execution_plan(graph, binding)
         kp_statements = {p.kp_id: p.statement for p in brief.propositions}
+        world_statements = {wc.constraint_id: wc.statement for wc in brief.book_constraints}
         hook_context, hook_errors = compile_hook_context(graph, projection, hook_constraints,
-                                                        chars.name_structure, kp_statements)
+                                                        chars.name_structure, kp_statements, world_statements)
         errors.extend(hook_errors)
         if plan is not None and hook_context is not None:
             ir = compile_writer_book_ir(graph=graph, plan=plan, binding=binding, total_budget=budget,
                                         length_band=length_band, book_title=book_title, projection=projection,
-                                        structure=chars.name_structure, kp_statements=kp_statements)
+                                        structure=chars.name_structure, kp_statements=kp_statements,
+                                        world_statements=world_statements, fact_locks=brief.fact_locks)
             identities = material_identities(graph, binding, chars)
             errors.extend(validate_hook_materials(hook_context, internal_ids=identities))
             for chapter in ir.chapters:

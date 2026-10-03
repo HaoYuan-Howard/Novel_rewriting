@@ -187,6 +187,50 @@ def test_ask_json_bad_patch_shape_uses_full_revision_next(tmp_path):
 
 # ───────────────────────── 章观察定位协议（unit） ─────────────────────────
 
+def test_revisions_allow_strictly_decreasing_errors(tmp_path):
+    transport = _ScriptedTransport(['{"a": false, "b": false}',
+                                    '{"a": true, "b": false}',
+                                    '{"a": true, "b": true}'])
+    _, _, session = _json_session(tmp_path, transport)
+    data, _ = ask_json(session, 'ch01', _request(),
+                       lambda w: [f'{k}：缺失' for k in ('a', 'b') if not w[k]])
+    assert data == {'a': True, 'b': True}
+    assert len(transport.calls) == 3
+
+
+def test_patch_and_full_requests_share_revision_ceiling(tmp_path):
+    transport = _ScriptedTransport([
+        json.dumps(_faulty_wire()), '{"patches": "坏形状"}',
+        json.dumps(_faulty_wire()), '{"patches": []}', '{"ok": true}'])
+    _, _, session = _json_session(tmp_path, transport)
+    from novel.llm.paid_requests import ValidationStop
+    with pytest.raises(ValidationStop) as caught:
+        ask_json(session, 'ch01', _request(),
+                 lambda w: ['拍1：ghost 仍未修复'],
+                 patch=lambda w, e: [(('beats', 0), e)])
+    assert len(transport.calls) == 3
+    assert caught.value.context['rounds'] == 2
+
+
+def test_two_partial_patches_keep_complete_adoption_refs(tmp_path):
+    transport = _ScriptedTransport([
+        '{"items": [false, false]}',
+        '{"patches": [{"path": "items[0]", "value": true},'
+        ' {"path": "items[1]", "value": false}]}',
+        '{"patches": [{"path": "items[1]", "value": true}]}'])
+    _, _, session = _json_session(tmp_path, transport)
+    validate = lambda w: [f'条目{i}：未完成' for i, v in enumerate(w['items']) if not v]
+    locate = lambda w, e: [(('items', i), [f'条目{i}：未完成'])
+                           for i, v in enumerate(w['items']) if not v]
+    data, answer = ask_json(session, 'ch01', _request(), validate, patch=locate)
+    assert data == {'items': [True, True]}
+    assert len(_as_adoption_refs(answer)) == 3
+    assert len(transport.calls) == 3
+    # 同身份重放不得再次购买；合并仍引用原轮及两次 patch。
+    data2, answer2 = ask_json(session, 'ch01', _request(), validate, patch=locate)
+    assert data2 == data and len(_as_adoption_refs(answer2)) == 3
+    assert len(transport.calls) == 3
+
 SEGMENTS = {'e01_01': {'chapter': 1, 'text': '夫君走进门来。云娘没有回头。'}}
 
 

@@ -51,7 +51,9 @@ def test_approval_subcommand_is_not_registered_anywhere():
     choices = {name for action in registered for name in action.choices}
     assert 'approval' not in choices, '审批子命令重新注册进了 CLI'
     # 现役子命令面本身不能被这次退役顺手删掉。
-    assert {'run', 'state', 'operator', 'queue', 'workflow'} <= choices
+    assert {'run', 'state', 'operator', 'queue', 'reconcile'} <= choices
+    # 关闭批已删除旧 workflow CLI 解码面；不得为满足历史断言重新注册。
+    assert 'workflow' not in choices
 
 
 @pytest.mark.parametrize('argv', _RETIRED_APPROVAL_ARGVS)

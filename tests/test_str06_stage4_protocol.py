@@ -78,7 +78,8 @@ def _wire() -> dict:
                   'delivery_hint': '', 'target_delta': [
                       {'domain': 'knowledge', 'subjects': [], 'holder': 'reader',
                        'op': 'set', 'scope': 'scene', 'key': 'debt',
-                       'value': 'true', 'knowledge_mode': 'known'}],
+                       'value': 'true', 'knowledge_mode': 'known',
+                       'confirms': {'domain': 'relation', 'subjects': ['yun', 'fu_jun'], 'key': 'marital_status'}}],
                   'delivery_hint': ''}],
              'delivery': {'pov': 'yun', 'voice': '冷峻', 'avoid': []}},
             {'state_reads': [{'domain': 'relation', 'subjects': ['yun', 'fu_jun'],
@@ -134,7 +135,7 @@ def test_protocols_are_independent_literals():
     assert len({STAGE4_PRESERVE_PROTOCOL, STAGE4_DESIGN_PROTOCOL,
                 STAGE4_HOOK_DESIGN_PROTOCOL}) == 3
     # RC 版式头随 R2 语义送达升 rc10（R1 关联无损曾升 rc9）
-    assert STR06_RC_VERSION == 'str06-rc13'
+    assert STR06_RC_VERSION == 'str06-rc14'
 
 
 def test_design_wire_without_protocol_is_refused():
@@ -301,7 +302,7 @@ def test_reader_confirmation_is_projected_by_touched_proposition():
     first = pending_reader_confirmations(body, 0)
     assert [(p.key, p.position, p.in_scene) for p in first] == [
         ('debt', 'sc01#b03', True)]
-    assert first[0].address.address() == ('knowledge', (), 'reader', 'debt')
+    assert first[0].address.address() == ('relation', ('yun', 'fu_jun'), '', 'marital_status')
     # 确认已发生在过去（sc01） ⇒ sc02 起不再列入（时序维度，D15）
     assert pending_reader_confirmations(body, 1) == ()
     # 不动该命题的场景 ⇒ 清单为空（按命题的精确投影）

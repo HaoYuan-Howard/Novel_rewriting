@@ -1,35 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""slim —— 设计瘦 wire（stage4-design-v6）的确定性适配层（CS-3 第一步，
-2026-10-03）。
+"""Design v7 的确定性编译层：real 声明验收/支撑拍，know 声明每次认知变化。
 
-【职责】`expand_design_wire` 把 v6 瘦 wire 派生成 v5 wire 形状的 dict，交给
-`assemble_body_design` 既有管道——canonical BodyDesign（rc12）与全部下游消费
-者不变（S-03：适配集中在本模块；v5 wire 直通＝兼容读面）。纯函数、不改输入
-（I-24）、不落盘。
+Brief.knowledge_changes 从 Preserve 正式 anchor 派生盲身份与完整三元组；
+代码派发 obNN.kNN 短引用，模型只标拍位。读者 known 另标 confirms 事实地址。
+不按最终验收拍猜中间模式，不按自由事实键和 kp 句柄猜同义。v7→v5 中间形状
+只服务同一次编译；正式输出是 rc14 BodyDesign，Binding 同源双产物发布。
 
-【瘦在哪（r10b 全产物实证）】
-  • target_delta 的知情/读者行（24+1/37）由 `real` 义务承载标注派生：标注
-    义务的 realize_holders 在**末次标注拍**展开成 knowledge 行（含
-    holder=reader 的读者揭示——D5 统一后无独立 reader 域），锁模式取
-    Brief.knowledge_locks——「落在哪一拍」与 bind 的落点判断从此是
-    同一个决定（CS-3：bind 退役的地基）；r10b 实证 24/24 知情行与锁逐字段
-    相同（LLM 实际只决定位置）；
-  • 机械常量回填：op=set 83/85、modality=actual 78/85（拍上事实面）；
-    delivery.pov 单焦点缺省、delivery.voice←声线表；entry.recap 由
-    transition 决定（11/11）、immediate_continuation 的 anchor＝上一章末拍
-    （11/11）；delivery_hint 41/41 空串；scene_weights 缺省均匀；
-  • 顶层派生：narration←Brief.source_narration、world_rules←
-    Brief.book_constraints 的 statement（r10b 4/4 为同义改写）、
-    expression_decisions←keep-all＋overrides（r10b 3 keep 原样照抄）。
-
-【不瘦什么（语义面，模型继续判断）】拍上 character/relation/world 事实断言
-（13/37——键名是目标书命名，r10b 实证不可由锁机械派生）、初始态行（键名
-语义改名）、初始/逐拍称谓释放表（r10b 实证 from_chapter 派生不成立）、
-reads（依赖声明）、线程、声线与风格。kf 事实锁行仍在拍上 state 面按锁规则
-承载（值是语义缩写）。world 域书级规则成立断言用 `wc_{nn}` 编号引用
-Brief 世界约束（val 省略回填 'true'，渲染面经映射送命题文本）；剧情世界
-事实写有语义的 val（'true' 是零信息值，结构性拒绝）。
+机械默认值、世界规则成立、场景/章承接与表达保留由 compiler 派生；事实值、
+读取、线程、声线与认知时点由语义单元选择。纯函数、不改输入、不落盘（I-24）。
 """
 from __future__ import annotations
 
@@ -38,7 +17,7 @@ from typing import Any, Mapping
 from pydantic import ValidationError
 
 from contracts.schema.design import (
-    STAGE4_DESIGN_WIRE_PROTOCOL, DesignWireV6,
+    STAGE4_DESIGN_WIRE_PROTOCOL, DesignWireV7,
 )
 
 
@@ -57,7 +36,7 @@ def _address_row(at: str, key: str) -> dict[str, Any] | None:
 def _fact_row(state) -> tuple[dict[str, Any] | None, str | None]:
     """瘦事实断言 → v5 TargetDelta 行（op/modality 默认回填）。
 
-    kp_* 键是唯一例外通道：知情 set 增量一律经 real 标注派生，state 面只
+    kp_* 键是唯一例外通道：知情 set 增量一律经 know 标注派生，state 面只
     承载 op=unknown 的「值未知」知识行（r10b 实证 25 条知情行中 1 条）。
     world 域：`wc_{nn}` 键是 Brief 世界约束的规则成立断言（val 省略回填
     'true'）；其余 world 键是剧情事实，val 必填且不得为 'true'（零信息值
@@ -66,7 +45,7 @@ def _fact_row(state) -> tuple[dict[str, Any] | None, str | None]:
     """
     if state.key.startswith('kp_'):
         if state.op not in ('unknown', 'unset'):
-            return None, (f'kp 键 {state.key} 的知情增量经 real 标注派生；'
+            return None, (f'kp 键 {state.key} 的知情增量经 know 标注派生；'
                           'state 面只承载 op=unknown（值未知）／op=unset'
                           '（显式解除）的例外')
         return ({'domain': 'knowledge', 'subjects': (), 'holder': state.at,
@@ -84,7 +63,7 @@ def _fact_row(state) -> tuple[dict[str, Any] | None, str | None]:
                               '不写 val（回填 true）／不写解除')
             return ({**base, 'key': state.key, 'op': 'set', 'holder': None,
                      'value': 'true', 'scope': state.scope or 'book',
-                     'knowledge_mode': None, 'modality': None}, None)
+                     'knowledge_mode': None, 'modality': 'actual'}, None)
         if state.val == 'true':
             return None, (f'world 键 {state.key} 的 val 不得为 "true"（零信息）；'
                           '书级规则成立用 Brief 世界约束编号 wc_{nn}，剧情事实'
@@ -111,40 +90,40 @@ def _prev_chapter_anchor(scene_counts: list[int], chapter_index: int) -> dict | 
     return {'scene': scene_no, 'beat': -1}                # beat 由调用方按拍数回填
 
 
+def knowledge_change_index(obligations: Mapping[str, Any]) -> dict[str, tuple[str, Any]]:
+    """代码派发短引用；顺序取盲身份，不暴露源拍序，不丢重复变化。"""
+    return {f'{ob}.k{i:02d}': (ob, change)
+            for ob, requirement in sorted(obligations.items())
+            for i, change in enumerate(sorted(requirement.knowledge_changes,
+                                              key=lambda c: c.change_id), start=1)}
+
+
 def expand_design_wire(
     wire: Any, *, brief, obligations: Mapping[str, Any] | None = None,
     source_narration=None,
 ) -> tuple[dict | None, list[tuple[tuple | None, str]]]:
-    """v6 瘦 wire → (v5 wire dict, 条目级 issues)。
+    """v7 瘦 wire → (v5 wire dict, 条目级 issues)。
 
     `brief` 是 ReconstructionBrief（世界约束／知情锁／表达项的派生源）；
-    `obligations` 是 ob 编号 → 需求（realize_holders）映射——v6 wire 必须
+    `obligations` 是 ob 编号 → 需求（knowledge_changes）映射——v7 wire 必须
     提供（real 标注的闭集校验与知情行展开都依赖它；生产链恒传入）。返回的
     placements 供义务承载派生（CS-3 bind 退役的地基）经
     `design_placements(wire)` 单独取用。
     """
-    model = DesignWireV6.model_validate(wire)
+    model = DesignWireV7.model_validate(wire)
     issues: list[tuple[tuple | None, str]] = []
     if obligations is None:
-        return None, [(None, 'v6 瘦 wire 需要 obligations（ob 编号→需求）映射——'
+        return None, [(None, 'v7 瘦 wire 需要 obligations（ob 编号→需求）映射——'
                              'real 标注的闭集与知情行展开依赖它')]
     narration = source_narration if source_narration is not None \
         else brief.source_narration
-    lock_modes: dict[tuple[str, str], str] = {}
-    for lock in brief.knowledge_locks:
-        lock_modes.setdefault((lock.holder, lock.kp), lock.mode)
+    changes = knowledge_change_index(obligations)
+    placed_changes: set[str] = set()
     #: world 规则键的闭集（CS-3：Brief 世界约束的稳定编号 wc_{nn}）。
     world_rule_ids = {wc.constraint_id for wc in brief.book_constraints}
 
     def _delta_rows(beat, scene_i: int, beat_i: int) -> list[dict]:
-        """real 标注 → 知情行（仅末次标注拍展开）＋拍上事实断言。
-
-        承载规则（CS-3）：ob 的知情行只落在它的**末次标注拍**（接受拍）；
-        其余标注拍是支撑位——不重复出增量（r10b 实证 24/24 知情行各一条）。
-        读者揭示（realize_holders 里 holder=reader）同样展开成
-        knowledge(holder=reader) 行——D5 统一后没有独立 reader 域，模式取
-        Brief 知情锁（揭示锁为 known；线索/怀疑锁经人物行承载）。
-        """
+        """事实断言＋知情短引用展开；模式取所属变化，拍位由 know 明示。"""
         rows: list[dict] = []
         for state in beat.state:
             row, error = _fact_row(state)
@@ -165,37 +144,46 @@ def expand_design_wire(
                 continue
             rows.append(row)
         for ob in beat.real:
-            requirement = obligations.get(ob)
-            if requirement is None:
+            if ob not in obligations:
                 issues.append((('scenes', scene_i, 'beats', beat_i),
                                f'real 引用闭集外义务编号：{ob!r}'
                                f'（只能取义务清单给出的 {sorted(obligations)[:8]}…）'))
+        pair_modes: dict[tuple[str, str], str] = {}
+        for placement in beat.know:
+            where = ('scenes', scene_i, 'beats', beat_i, 'know')
+            selected = changes.get(placement.ref)
+            if selected is None:
+                issues.append((where, f'know 引用闭集外认知变化：{placement.ref}'))
                 continue
-            if (scene_i, beat_i) != last_site.get(ob):
-                continue    # 支撑拍：承载位不重复出增量
-            holders = getattr(requirement, 'realize_holders', None) or ()
-            for pair in holders:
-                holder, _, kp = str(pair).partition('|')
-                mode = lock_modes.get((holder, kp))
-                if mode is None:
-                    issues.append((('scenes', scene_i, 'beats', beat_i),
-                                   f'义务 {ob} 的知情锁缺失：({holder}, {kp})'
-                                   ' 不在 Brief.knowledge_locks——增量模式无法派生'))
-                    continue
-                rows.append({'domain': 'knowledge', 'key': kp,
-                             'subjects': (), 'holder': holder, 'op': 'set',
-                             'value': 'true', 'scope': 'book',
-                             'knowledge_mode': mode, 'modality': None})
+            ob, change = selected
+            if placement.ref in placed_changes:
+                issues.append((where, f'know 认知变化重复标注：{placement.ref}'))
+            placed_changes.add(placement.ref)
+            if ob not in beat.real:
+                issues.append((where, f'{placement.ref} 必须落在对应义务 {ob} 的 real 承载拍'))
+            is_confirmation = change.holder == 'reader' and change.mode == 'known'
+            if is_confirmation != (placement.confirms is not None):
+                issues.append((where, f'{placement.ref} 读者确认必须写 confirms，其它变化不得写'))
+            pair = (change.holder, change.kp)
+            if pair in pair_modes and pair_modes[pair] != change.mode:
+                issues.append((where, f'同拍不能表达同一命题的多个认知模式：{pair}；请分拍'))
+            pair_modes[pair] = change.mode
+            row = {'domain': 'knowledge', 'key': change.kp,
+                   'subjects': (), 'holder': change.holder, 'op': 'set',
+                   'value': 'true', 'scope': 'book',
+                   'knowledge_mode': change.mode, 'modality': None,
+                   'confirms': placement.confirms.model_dump(mode='json')
+                   if placement.confirms is not None else None}
+            if row not in rows:
+                rows.append(row)
         return rows
 
-    # 义务 → 标注拍（全书阅读序）；末次标注拍是知情行的落点（CS-3 承载规则）。
+    # 义务 → 承载拍（全书阅读序）；知情变化的具体拍位另由 know 声明。
     placements: dict[str, list[tuple[int, int]]] = {}
     for scene_i, scene in enumerate(model.scenes):
         for beat_i, beat in enumerate(scene.beats):
             for ob in beat.real:
                 placements.setdefault(ob, []).append((scene_i, beat_i))
-    last_site: dict[str, tuple[int, int]] = {
-        ob: sites[-1] for ob, sites in placements.items()}
 
     scenes_out = []
     for scene_i, scene in enumerate(model.scenes):
@@ -240,7 +228,7 @@ def expand_design_wire(
                          'avoid': list(scene.avoid)},
             'beats': beats_out,
         })
-    scene_counts = [len(s.beats) for s in model.scenes]
+    chapter_scene_counts = [chapter.scenes for chapter in model.chapters]
     chapters_out = []
     for chapter_i, chapter in enumerate(model.chapters):
         entry_raw = chapter.entry
@@ -251,9 +239,13 @@ def expand_design_wire(
             anchor = entry_raw.anchor.model_dump(mode='json') \
                 if entry_raw.anchor is not None else None
             if anchor is None and entry_raw.transition == 'immediate_continuation':
-                anchor = _prev_chapter_anchor(scene_counts, chapter_i)
+                anchor = _prev_chapter_anchor(chapter_scene_counts, chapter_i)
                 if anchor is not None:
-                    anchor['beat'] = scene_counts[anchor['scene'] - 1]
+                    if not 1 <= anchor['scene'] <= len(model.scenes):
+                        issues.append((('chapters', chapter_i, 'entry'),
+                                       '续接锚点超出场景闭集：请修正各章 scenes 数'))
+                    else:
+                        anchor['beat'] = len(model.scenes[anchor['scene'] - 1].beats)
             entry_out = {'transition': entry_raw.transition,
                          'carryover': entry_raw.carryover, 'recap': recap,
                          'anchor': anchor}
@@ -261,6 +253,11 @@ def expand_design_wire(
                              'entry': entry_out})
     if issues:
         return None, issues
+    missing = sorted(ref for ref, (ob, _) in changes.items()
+                     if (obligations[ob].must_preserve or ob in placements)
+                     and ref not in placed_changes)
+    if missing:
+        return None, [(None, f'义务认知变化未标注拍位（know）：{missing}')]
     weights = list(model.scene_weights) if model.scene_weights is not None \
         else [1.0] * len(model.scenes)
     overrides = {o.ex_id: o for o in model.expression_overrides}
@@ -322,7 +319,7 @@ def expand_design_wire(
     }, []
 
 
-def design_placements(model: DesignWireV6) -> dict[str, list[tuple[int, int]]]:
+def design_placements(model: DesignWireV7) -> dict[str, list[tuple[int, int]]]:
     """义务承载标注的机械投影：ob → 标注拍（scene 序, beat 序）阅读序。
 
     bind 退役（CS-3 后续子批）的落点地基：接受拍＝末次标注拍、支撑拍＝

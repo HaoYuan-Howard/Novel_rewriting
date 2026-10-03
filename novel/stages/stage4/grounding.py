@@ -33,7 +33,7 @@ from typing import Any, Final
 
 from contracts.schema.design import BodyDesign
 from contracts.schema.grounding import (
-    BriefFactLock, BriefKnowledgeLock, BriefProposition, BriefRequirement,
+    BriefFactLock, BriefKnowledgeChange, BriefKnowledgeLock, BriefProposition, BriefRequirement,
     IdentityProjection, ObligationAnchor, ObligationSeries, PreserveCheckpoint,
     ReconstructionBrief, SemanticBinding, SourceLineage, SourceObligation,
     BookConstraint, _lock_id,
@@ -490,7 +490,7 @@ def _unanswered_loops(
 def _derive_brief_locks(
     checkpoint: PreserveCheckpoint, blueprint: BlueprintsArtifactV15,
 ) -> tuple[tuple[BriefProposition, ...], tuple[BriefKnowledgeLock, ...],
-           tuple[BriefFactLock, ...], dict[str, dict[str, tuple[str, ...]]]]:
+           tuple[BriefFactLock, ...], dict[str, dict[str, tuple]]]:
     """义务 anchors＋canonical loops → Brief 锁定项（a4 唯一派生点）。
 
     · kp 命题登记：anchors 引用到的全部命题（effect 的 concealed 命题与
@@ -501,13 +501,14 @@ def _derive_brief_locks(
     · 事实锁：effect anchors——op=unknown → unknown_value（值未知，目标
       不得补值）；op≠unset 且 modality≠actual → 时态锁（目标只能按同
       modality 承载）。canonical 悬念 open 未 close → unanswered。
-    · 兑现分母：必保义务派生的 (holder|kp) 与 kf 句柄（`realize_holders`/
-      `realize_locks`；非必保义务为空——可综合义务不强制兑现）。
+    · 认知变化：每个义务独立保留各 anchor 的 holder/kp/mode 与盲句柄；
+      必保义务及已实现的可综合义务都按 knowledge_changes 检查完整承载。
+      事实兑现分母由必保义务的 kf 句柄 realize_locks 派生。
     """
     propositions: dict[str, BriefProposition] = {}
     knowledge: dict[tuple[str, str, str], BriefKnowledgeLock] = {}
     facts: dict[str, BriefFactLock] = {}
-    per_obligation: dict[str, dict[str, tuple[str, ...]]] = {}
+    per_obligation: dict[str, dict[str, tuple]] = {}
 
     def _register_proposition(anchor: ObligationAnchor) -> str | None:
         if not anchor.proposition_ref:
@@ -521,7 +522,7 @@ def _derive_brief_locks(
 
     for obligation in checkpoint.obligations:
         derived: list[str] = []
-        realize_holders: list[str] = []
+        knowledge_changes: dict[str, BriefKnowledgeChange] = {}
         realize_locks: list[str] = []
         for anchor in obligation.anchors:
             if anchor.source_kind == 'cognition':
@@ -533,10 +534,9 @@ def _derive_brief_locks(
                 if mode is not None and anchor.holder not in (None, 'public'):
                     knowledge[(anchor.holder, kp, mode)] = \
                         BriefKnowledgeLock(holder=anchor.holder, kp=kp, mode=mode)
-                    if obligation.must_preserve:
-                        pair = f'{anchor.holder}|{kp}'
-                        if pair not in realize_holders:
-                            realize_holders.append(pair)
+                    change_id = _lock_id('kc_', anchor.handle)
+                    knowledge_changes[change_id] = BriefKnowledgeChange(
+                        change_id=change_id, holder=anchor.holder, kp=kp, mode=mode)
                 elif anchor.mode == 'asserts' and anchor.holder \
                         and anchor.holder != 'public':
                     entry = propositions[kp]
@@ -571,7 +571,7 @@ def _derive_brief_locks(
                 deduped.append(item)
         per_obligation[obligation.obligation_id] = {
             'locks': tuple(deduped),
-            'realize_holders': tuple(realize_holders),
+            'knowledge_changes': tuple(knowledge_changes[k] for k in sorted(knowledge_changes)),
             'realize_locks': tuple(realize_locks)}
     for ref, question in _unanswered_loops(blueprint):
         kf = _lock_id('kf_', ref)
@@ -618,7 +618,7 @@ def project_brief(
             participants=tuple(sorted(o.lineage.character_ids)),
             requires_cores=tuple(sorted(core_ids[r] for r in o.requires)),
             locks=derived_locks[o.obligation_id]['locks'],
-            realize_holders=derived_locks[o.obligation_id]['realize_holders'],
+            knowledge_changes=derived_locks[o.obligation_id]['knowledge_changes'],
             realize_locks=derived_locks[o.obligation_id]['realize_locks'],
             series_group=series_group.get(o.obligation_id),
             series_mechanism=series_mechanism.get(o.obligation_id))
@@ -660,9 +660,9 @@ def design_obligation_index(
     和 review 的免费预览共用同一映射：需求经 summary 与义务 statement 连接
     （同一文本，Preserve 投影的恒等式）。
     """
-    by_summary = {r.summary: r for r in brief.requirements}
-    return {o.obligation_id: by_summary[o.statement]
-            for o in checkpoint.obligations if o.statement in by_summary}
+    by_core = {r.core_id: r for r in brief.requirements}
+    return {o.obligation_id: by_core[obligation_core_id(o.obligation_id)]
+            for o in checkpoint.obligations}
 
 
 def derive_semantic_binding(

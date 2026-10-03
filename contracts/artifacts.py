@@ -229,6 +229,9 @@ def str06_book_rel(title: str) -> str:
 # ⚠ 表键与 `ARTIFACT_PATHS` 的新链条目**逐字相等**（22 条）；对账在
 # `tests/test_str06_f7e_freeze.py`。改一条路径就必须同批改这里，否则契约身份
 # 与版本面当场分家。
+# rc14（2026-10-03 审阅修复）：Brief 保留逐次 knowledge_changes；Design v7
+# know 短引用与 confirms 明确拍位和事实关联；五份受影响产物显式换身份。
+# rc12/rc13 的无损字段经 store 集中迁移，缺失模式/事实关联走免费恢复。
 STR06_ARTIFACT_RC_VERSIONS: Final[dict[str, str]] = {
     # rc12（2026-10-01 R10a 收口，PLAN §二.4 全表）：关键语义交接批把源理解到
     # 正文的全链形状定格——Stage2 引文证据与事件时态（book v3／chapters v2／
@@ -261,9 +264,9 @@ STR06_ARTIFACT_RC_VERSIONS: Final[dict[str, str]] = {
     # 情锁同写法）；Brief.book_constraints 升 WorldConstraint（wc_{nn} 稳定
     # 规则 id）；ConstraintSpec.domain 改类别标签。旧 rc12 盘面经 store
     # read_model 的登记迁移归一后读入（r10b 起的现役产物不拒读）。
-    'stage4/grounding/reconstruction_brief.json': 'str06-rc13',
+    'stage4/grounding/reconstruction_brief.json': 'str06-rc14',
     'stage4/grounding/semantic_binding.json': 'str06-rc12',
-    'stage4/compiled/execution_plan.json': 'str06-rc13',
+    'stage4/compiled/execution_plan.json': 'str06-rc14',
     'stage4/acceptance/guard/compile.json': 'str06-rc12',
     'stage4/acceptance/guard/report.json': 'str06-rc12',
     # rc10 同批新增（R2.8 引擎批）：compile 落盘的 WriterPacket 指标（audit_only）。
@@ -274,8 +277,8 @@ STR06_ARTIFACT_RC_VERSIONS: Final[dict[str, str]] = {
     # 确认必填事实地址（D4）。形状/判据变化，旧 Design／graph／WriterIR 拒读。
     # rc10（2026-09-28 R2 语义送达）：Design wire 升 stage4-design-v2——拍上线程
     # （threads）、书级 world_rules、章级 entry；四个静态跨章列表删除（AUD-04）。
-    'stage4/design/body_design.json': 'str06-rc13',
-    'stage4/design/presentation_graph.json': 'str06-rc13',
+    'stage4/design/body_design.json': 'str06-rc14',
+    'stage4/design/presentation_graph.json': 'str06-rc14',
     'stage4/context/hook/hook.json': 'str06-rc12',
     # rc7 同批：BookBrief 带整书风格与稳定人物声线；PendingConfirmation 带事实
     # 地址（D4），投影按地址精确到消费该地址的章包。
@@ -283,7 +286,7 @@ STR06_ARTIFACT_RC_VERSIONS: Final[dict[str, str]] = {
     # compile 时算好）；完整 IR 只作存储与审计，运行时按章投影章包、不落盘。
     # rc10（R2）：拍级读取值挂拍（AUD-03）、线程投影面、continuity 分区与
     # 书级 world_rules 进 BookBrief——IR 形状升 rc10。
-    'stage4/ir/writer_book_ir.json': 'str06-rc13',
+    'stage4/ir/writer_book_ir.json': 'str06-rc14',
     'stage5/hook/hook.txt': 'str06-rc12',
     'stage5/hook/receipt.json': 'str06-rc12',
     'stage5/body/ch{nn}.txt': 'str06-rc12',

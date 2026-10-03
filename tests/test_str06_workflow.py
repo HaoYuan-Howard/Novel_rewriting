@@ -35,11 +35,11 @@ from tests.str06_expression_inputs import (
 PV = 'stage2-chapters-v2'   # R10a a1：章观察独立协议字面量（names 无字面量面）
 
 
-def _design_wire_v6():
-    """stage4-design-v6（CS-3）：real 承载标注替 bind；义务 ob01–ob03 的接受拍
+def _design_wire_v7():
+    """stage4-design-v7（CS-3）：real 承载标注替 bind；义务 ob01–ob03 的接受拍
     都是首拍（与原 bind wire 等价）；kp 知情行经 ob02 的锁派生，不写在 wire。"""
     return {
-        'protocol_version': 'stage4-design-v6',
+        'protocol_version': 'stage4-design-v7',
         'book_style': '冷峻克制的第三人称叙事，重对话张力。',
         'character_voices': [{'char_id': 'yun', 'voice': '冷峻'}],
         'initial_state': [],
@@ -112,7 +112,7 @@ def test_stage2_stage4_repository_replay_and_writer_consumer(tmp_path):
                       'same_proposition': [], 'same_state_dimension': [],
                       'loop_pairing': [], 'cross_chapter_cause': [],
                       'scene_continuation': []},
-        'preserve': _preserve_wire(), 'design': _design_wire_v6(),
+        'preserve': _preserve_wire(), 'design': _design_wire_v7(),
         # F5 起 Hook Design 属 Stage4 腿：完整 graph 与 WriterIR 一起发布
         'hook_design': {
             'protocol_version': 'stage4-hook-design-v1',
@@ -126,6 +126,7 @@ def test_stage2_stage4_repository_replay_and_writer_consumer(tmp_path):
     }
     wires['design']['initial_surfaces'] = [{'char_id': 'yun', 'surfaces': ['云娘']},
                                           {'char_id': 'fu_jun', 'surfaces': ['夫君']}]
+    wires['design']['scenes'][0]['beats'][0]['know'] = [{'ref': 'ob02.k01'}]
     requests = []
     def ask(owner, prompt, validate, patch=None):
         data = deepcopy(wires[owner])
@@ -359,7 +360,7 @@ def test_concealed_fact_reaches_writer_as_pending_reader_confirmation(tmp_path):
                               'basis': [{'segment': 'e01_01',
                                          'quote': '夫君与云娘一处住着'}]}])]}
     design = {
-        'protocol_version': 'stage4-design-v6',
+        'protocol_version': 'stage4-design-v7',
         'book_style': '冷峻克制的第三人称叙事。',
         'character_voices': [{'char_id': 'yun', 'voice': '冷峻'}],
         'initial_state': [],
@@ -379,7 +380,7 @@ def test_concealed_fact_reaches_writer_as_pending_reader_confirmation(tmp_path):
              'reads': [{'domain': 'world', 'subjects': [], 'holder': None,
                         'key': 'hiding'}],
              'beats': [{'ev': '确认床底有人', 'who': ['yun', 'fu_jun'],
-                        'real': ['ob02']}]}],
+                        'real': ['ob02'], 'know': [{'ref': 'ob02.k01', 'confirms': {'domain': 'world', 'key': 'hiding'}}]}]}],
         'chapters': [{'purpose': '夜半响动到床底确认', 'scenes': 2}]}
     preserve = {'protocol_version': 'stage4-preserve-v2', 'obligations': [
         {'kind': 'event_core',
@@ -443,13 +444,13 @@ def test_concealed_fact_reaches_writer_as_pending_reader_confirmation(tmp_path):
     # 事实行 key（hiding）与揭示行 key（kp 句柄）不同名 ⇒ s01 不再拿清单
     #（D4 经 confirms 显式关联的通道已删；提前暴露防护的其余承载是义务
     # 满足面与 hook 禁区）；确认场（s02）标注确认拍。
-    assert s01['verification_ir']['pending_reader_confirmations'] == []
+    assert [(p['fact'], p['in_scene']) for p in s01['verification_ir']['pending_reader_confirmations']] == [('夫君藏身床底', False)]
     pending = s02['verification_ir']['pending_reader_confirmations']
     assert [(p['fact'], p['position'], p['in_scene']) for p in pending] == [
         ('夫君藏身床底', 'sc02#b01', True)]  # 批0 D6：fact 回填为 Brief 登记的命题 statement
     assert pending[0]['address'] == {
-        'domain': 'knowledge', 'key': pending[0]['key'],
-        'subjects': [], 'holder': 'reader'}
+        'domain': 'world', 'key': 'hiding',
+        'subjects': [], 'holder': None}
     # 渲染进写手阅读面（地址可追溯）
     from novel.stages.common import project_chapter_packet, render_chapter_packet
     book_ir = repo.read_model('stage4/ir/writer_book_ir.json')

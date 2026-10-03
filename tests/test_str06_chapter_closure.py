@@ -455,7 +455,8 @@ def _confirmation_graph() -> BodyDesign:
     """ch1 s01 写 world:hiding；ch2 s02 读取并在 b02 让读者确认；ch3 s03 独立。"""
     confirm = TargetDelta(
         domain='knowledge', key='hiding', subjects=(), holder='reader',
-        op='set', scope='scene', value='床底有人', knowledge_mode='known')
+        op='set', scope='scene', value='床底有人', knowledge_mode='known',
+        confirms={'domain': 'world', 'key': 'hiding'})
     return _graph(
         scenes=[
             _scene('s01', (_beat(1, '建立', (_delta('world', 'hiding', value='床底有人'),)),)),

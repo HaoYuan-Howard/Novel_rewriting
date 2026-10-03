@@ -73,14 +73,14 @@ def _requirements():
             must_preserve=True,
             satisfaction='对外说辞与真实意图都呈现；不得把说辞当成真实动机',
             participants=('fu_jun',),
-            locks=(KP_INQUIRY,), realize_holders=(f'fu_jun|{KP_INQUIRY}',)),
+            locks=(KP_INQUIRY,), knowledge_changes=({'change_id': 'kc_1111111111111111', 'holder': 'fu_jun', 'kp': KP_INQUIRY, 'mode': 'known'},)),
         # 先怀疑、后新证据确认（P2 的授权升级链）。
         BriefRequirement(
             core_id='req_suspect_confirm', kind=PreserveKind.CHARACTER_ARC,
             summary='芸娘由起疑到确认', must_preserve=True,
             satisfaction='怀疑与确认分两个时点呈现，确认由新证据支持',
             participants=('yun_niang',),
-            locks=(KP_INQUIRY,), realize_holders=(f'yun_niang|{KP_INQUIRY}',)),
+            locks=(KP_INQUIRY,), knowledge_changes=tuple({'change_id': 'kc_' + digit * 16, 'holder': 'yun_niang', 'kp': KP_INQUIRY, 'mode': mode} for digit, mode in [('2', 'suspected'), ('3', 'known')])),
         # 预计时长不得写成已发生（C2：kf 时态锁）。
         BriefRequirement(
             core_id='req_promise', kind=PreserveKind.EVENT_CORE,
@@ -164,6 +164,9 @@ def _wire() -> dict:
                  {'event': '夫君假称赴文会，实为暗中查访旧案',
                   'participants': ['yun_niang', 'fu_jun'],
                   'delivery_hint': '说辞与内心两个声部', 'target_delta': [
+                      {'domain': 'character', 'subjects': ['fu_jun'], 'holder': None,
+                       'key': 'actual_intent', 'op': 'set', 'value': INQUIRY,
+                       'scope': 'book', 'modality': 'actual'},
                       {'domain': 'knowledge', 'subjects': ['fu_jun'],
                        'holder': 'fu_jun', 'key': KP_INQUIRY, 'op': 'set',
                        'value': INQUIRY, 'scope': 'book',
@@ -207,7 +210,9 @@ def _wire() -> dict:
                       {'domain': 'knowledge', 'subjects': [], 'holder': 'reader',
                        'key': KP_INQUIRY, 'op': 'set',
                        'value': INQUIRY, 'scope': 'book',
-                       'knowledge_mode': 'known'}],
+                       'knowledge_mode': 'known', 'confirms': {
+                           'domain': 'character', 'subjects': ['fu_jun'],
+                           'key': 'actual_intent'}}],
                   'expression_refs': [], 'surface_introductions': []}],
              'delivery': {'pov': 'yun_niang', 'voice': '冷峻', 'avoid': []}},
             {  # sc03（第 2 章）：无线程操作——开放线程快照章内去重的材料。

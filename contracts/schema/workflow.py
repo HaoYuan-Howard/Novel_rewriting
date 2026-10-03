@@ -556,12 +556,15 @@ STR06_RUNTIME_CONFIG: Final = CandidateRuntimeConfig()
 #: reader 行、world 规则键闭集；Stage2／Stage5／Bind 等协议面不变，但 brief／
 #: design／graph／execution_plan／writer_book_ir 五产物形状变化经 rc13 换身份
 #: （产物表见 `contracts/artifacts.py`；旧 rc12 盘面经 store 登记迁移归一读入）。
-STR06_RC_VERSION: Final = 'str06-rc13'
+# rc14（2026-10-03 审阅修复）：Brief 保留逐次 knowledge_changes；Design v7
+# know 短引用与 confirms 明确拍位和事实关联；五份受影响产物显式换身份。
+# rc12/rc13 的无损字段经 store 集中迁移，缺失模式/事实关联走免费恢复。
+STR06_RC_VERSION: Final = 'str06-rc14'
 
 #: 已知 RC 标签面（版本规则见 `contracts/artifacts.py::STR06_ARTIFACT_RC_VERSIONS`）。
 STR06_RC_LABELS: Final = ('str06-rc2', 'str06-rc3', 'str06-rc4', 'str06-rc5', 'str06-rc6',
                           'str06-rc7', 'str06-rc8', 'str06-rc9', 'str06-rc10', 'str06-rc11',
-                          'str06-rc12', 'str06-rc13')
+                          'str06-rc12', 'str06-rc13', 'str06-rc14')
 
 #: Stage4 四个付费语义节点的独立 wire 协议（B3 前半；各节点独立演进，升版互不
 #: 牵连）。wire 顶层 `protocol_version` 与对应常量逐字对账，漏带或错带即拒

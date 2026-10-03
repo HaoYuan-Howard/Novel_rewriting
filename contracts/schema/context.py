@@ -69,7 +69,7 @@ class KnowledgeEntry(StrictModel):
     """IR 的 entry_knowledge 原子：holder + 命题 + 溯源。"""
 
     holder: str = Field(min_length=1)
-    proposition: str = Field(min_length=1)
+    proposition: str
     established_by: str = Field(min_length=1)
     subjects: tuple[str, ...] = ()
     key: str = Field(min_length=1)
@@ -111,15 +111,10 @@ class BeatIR(StrictModel):
 
 
 class PendingConfirmation(StrictModel):
-    """尚未向读者确认的事实（D15 派生；rc13 起按读者知情地址投影，D5）。
+    """未确认命题的禁区投影（rc14）。
 
-    `fact` 是命题文本（kp statement，投影时回填）；`address` 是它对应的
-    **读者知情地址**（knowledge 域、holder=reader、key=kp——读者揭示统一走
-    knowledge(holder=reader) 后的投影键）；`position` 是确认位置（`场景#拍`）；
-    `in_scene`＝确认拍是否就在本场（本场内的标注「自第 X 拍起可确认」，后场
-    的写手在此之前不得让读者确认）。投影只进入实际动该命题的场景（读取或
-    写入该 kp 知情地址）；确认前不作为已确认信息——受保护的是「何时确认」，
-    不是「能否暗示」（线索、误导与猜测照常演出）。
+    fact/key 是确认命题及其句柄；address 是 confirms 指向的目标事实。
+    position 是确认拍，in_scene 区分本场延后确认与本章内不得确认。
     """
 
     fact: str = Field(min_length=1)
@@ -258,7 +253,7 @@ class WriterContext(StrictModel):
     消费该地址的章包。rc10（R2）：拍级读取值挂 BeatIR.reads；线程投影面
     thread_ops／open_threads 进 IR。"""
 
-    contract_version: Literal['str06-rc13'] = 'str06-rc13'
+    contract_version: Literal['str06-rc14'] = 'str06-rc14'
     scene_id: str = Field(min_length=1)
     execution_slice_sha256: str = Field(min_length=64, max_length=64)
     verification_ir: VerificationIR

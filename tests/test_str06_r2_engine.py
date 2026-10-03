@@ -122,6 +122,8 @@ def _rich_wire() -> dict:
                       {'op': 'advance', 'ref': 'q1', 'progress': '查到玉佩来历'}]},
                  {'event': '芸娘发现玉佩秘密', 'participants': ['yun_niang'],
                   'delivery_hint': '', 'target_delta': [
+                      {'domain': 'world', 'key': 'jade_evidence', 'op': 'set',
+                       'value': '玉佩刻着沈字', 'scope': 'book', 'modality': 'actual'},
                       {'domain': 'knowledge', 'subjects': ['fu_jun'],
                        'holder': 'yun_niang', 'key': 'jade_secret', 'op': 'set',
                        'value': '玉佩刻着沈字', 'scope': 'book',
@@ -129,7 +131,8 @@ def _rich_wire() -> dict:
                       {'domain': 'knowledge', 'subjects': [], 'holder': 'reader',
                        'key': 'reveal_jade', 'op': 'set',
                        'value': '玉佩刻着沈字，指向旧案', 'scope': 'book',
-                       'knowledge_mode': 'known'}],
+                       'knowledge_mode': 'known', 'confirms': {
+                           'domain': 'world', 'key': 'jade_evidence'}}],
                   'delivery_hint': '',
                   'surface_introductions': [],
                   'threads': [

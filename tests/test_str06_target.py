@@ -417,7 +417,7 @@ def test_design_rules_pin_pov_shape():
     # 缺省值与 kp 例外通道）。
     assert 'op 缺省 set' in DESIGN_RULES
     assert 'scope 缺省 book' in DESIGN_RULES
-    assert 'kp_* 键的知情增量一律经 real 标注派生' in DESIGN_RULES
+    assert 'kp_* 键的知情增量一律经 know 标注派生' in DESIGN_RULES
 
 
 def test_design_surface_release_must_be_registered():

@@ -374,6 +374,21 @@ def test_generated_design_schema_rejects_the_same_local_branch_errors():
     bad['scenes'][0]['beats'][0]['target_delta'] = [{'domain': 'knowledge', 'subjects': [],
         'key': 'q', 'holder': None, 'op': 'set', 'value': '答案', 'scope': 'book', 'knowledge_mode': 'known'}]
     bads.append(bad)
+    # reader known 的 confirms 分支在嵌套 schema 中也必须与模型验证一致。
+    confirmation = {'domain': 'knowledge', 'subjects': [], 'key': 'q',
+                    'holder': 'reader', 'op': 'set', 'value': '答案',
+                    'scope': 'book', 'knowledge_mode': 'known',
+                    'confirms': {'domain': 'world', 'key': 'answer',
+                                 'subjects': [], 'holder': None}}
+    good = deepcopy(wire)
+    good['scenes'][0]['beats'][0]['target_delta'] = [confirmation]
+    assert not list(validator.iter_errors(good))
+    DesignWireV5.model_validate(good)
+    for address in (None, {'domain': 'knowledge', 'key': 'q',
+                           'subjects': [], 'holder': 'reader'}):
+        bad = deepcopy(good)
+        bad['scenes'][0]['beats'][0]['target_delta'][0]['confirms'] = address
+        bads.append(bad)
     for bad in bads:
         assert list(validator.iter_errors(bad))
         with pytest.raises(ValidationError):
