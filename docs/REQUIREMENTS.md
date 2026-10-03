@@ -148,8 +148,13 @@ R9c 核读在同一记录里补 owner、期望、实际和证据，不另立第�
   回归 3579 例中 4 失败：嵌套 schema 引用已修复，两个历史退役断言按关闭批
   契约修正；第二轮 3580 例仅选测断言失败，Store 的新增免费 Design 恢复是
   Stage4 真实消费者，已修正选测预期并保留独立路径/appendlog 的排除反例。
-  模型动态 schema 增补空认知清单元 schema 验证，禁止输出空 allOf 分支。
-  整批终轮及 Workbench 真实验收结果待填写；未评保持 unver。
+  模型动态 schema 增补空认知清单的元 schema 验证，禁止输出空 allOf 分支。
+- **终轮验证（2026-10-04）**：生产候选提交 `8221ef2f`，默认非 corpus 回归
+  **3581 例通过，零失败、零 skip**（JUnit：`rc14_regression_verified.xml`）；
+  前端 120 例通过，typecheck／seams／build 通过，`git diff --check` 通过。
+  Workbench 全部三书（17／22／11 章）免费源身份与分章预检通过，正式入口
+  无返修基础调用由节点表计算为 124 次。独立空输出根、模型 profile、六维
+  判据与停止规则已准备，真实生成仍待本轮付费及正文外发授权；成书质量 unver。
 
 验收纪律：CS-2/CS-3 后跑 golden set 与六维阅读验收；每批同时报告每节点整份生成
 次数、completion 与首过率（ledger 为权威账；`tools/repair_rounds.py` 是只读聚合面）。
