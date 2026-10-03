@@ -29,6 +29,7 @@ from typing import Mapping
 
 from contracts.schema.context import SurfaceRelease
 from contracts.schema.design import PresentationGraph
+from contracts.schema.state import EffectDomain
 from contracts.schema.hook import (
     HookConstraints, HookContext, HookMaterialView, HookOpeningFact,
 )
@@ -64,23 +65,24 @@ def _render_fact(projection: NameProjection, key: tuple, delta,
     只渲染「主体：key=value」会把「夫君怀疑」压成「夫君知道」（F7e 评估实证：
     渲染丢掉 holder 与 knowledge_mode 后，presentation 与引用拍脱钩）。
 
-    knowledge／reader 增量的 `value` 恒为 "true"（命题成立性），命题内容在
-    kp 句柄——经 `kp_statements`（Brief.propositions）回填为命题文本；kp
-    句柄缺表即悬空引用，fail fast（不渲染「确知：true」这类零信息禁区，
-    2026-10-03 D6 渲染修复；与正文侧 `project_context` 同一张表、同一规则）。
+    knowledge 增量（含读者揭示 holder=reader，D5 统一）的 `value` 恒为
+    "true"（命题成立性），命题内容在 kp 句柄——经 `kp_statements`
+    （Brief.propositions）回填为命题文本；kp 句柄缺表即悬空引用，fail fast
+    （不渲染「确知：true」这类零信息禁区，2026-10-03 D6 渲染修复；与正文侧
+    `project_context` 同一张表、同一规则）。
     """
     domain, subjects, holder, name = key
     head = f'{_render_subjects(projection, subjects)}的' if subjects else ''
     if domain == 'knowledge':
         mode = _KNOWLEDGE_MODES.get(delta.knowledge_mode, delta.knowledge_mode or '未知模式')
-        who = _display(projection, holder) if holder else '未登记持有人'
+        if holder == 'reader':
+            who = '读者'
+        else:
+            who = _display(projection, holder) if holder else '未登记持有人'
         statement = kp_statement(kp_statements, name)
         content = statement if statement is not None else delta.value
-        return f'{who}{mode}：{content}'
-    if domain == 'reader':
-        statement = kp_statement(kp_statements, name)
-        content = statement if statement is not None else delta.value
-        return f'读者视角成立：{content}（人物未必知晓）'
+        return f'{who}{mode}：{content}（人物未必知晓）' if holder == 'reader' \
+            else f'{who}{mode}：{content}'
     return f'{head}{_DOMAIN_LABELS.get(domain, domain)}层面：{delta.value}'
 
 
@@ -131,6 +133,7 @@ def compile_hook_context(
     graph: PresentationGraph, projection: NameProjection, constraints: HookConstraints,
     structure: NameStructure | None = None,
     kp_statements: Mapping[str, str] = (),
+    world_statements: Mapping[str, str] = (),
 ) -> tuple[HookContext | None, list[str]]:
     """（完整 graph, 名称投影, 长度边界）→ HookContext。纯函数，不落盘。"""
     hook = graph.hook
@@ -142,7 +145,14 @@ def compile_hook_context(
 
     def _render_or_error(projection_, key, delta, where) -> str | None:
         """渲染一条事实；kp 悬空引用（缺 statement）按机械缺陷报错跳过——
-        不上抛裸 ValueError（I-36：错误保留定位，走 (None, errors) 出口）。"""
+        不上抛裸 ValueError（I-36：错误保留定位，走 (None, errors) 出口）。
+
+        world 规则键（wc_{nn}）的 value 恒为 "true"——经 world_statements
+        回填命题文本（CS-3；与正文侧 project_context 同一张表、同一规则）。
+        """
+        if delta.domain is EffectDomain.WORLD and delta.key in world_statements:
+            delta = delta.model_copy(
+                update={'value': world_statements[delta.key]})
         try:
             return _render_fact(projection_, key, delta, kp_statements)
         except ValueError as exc:

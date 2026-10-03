@@ -3203,3 +3203,78 @@ def test_the_waiver_switches_off_nothing_but_the_unknown_half(
             ArtifactStore(moved).write(a.formal_rel, obj)
     finally:
         box.close()
+
+
+# ───────────────── rc12→rc13 盘面归一（CS-3 余项：D5 统一＋world 规则 id） ─────────────────
+
+def _rc12_body_payload() -> dict:
+    """rc12 形状的 body_design 盘面（reader 域＋confirms；最小骨架，
+    容器用 list——盘面 JSON 读入后的真实形态）。"""
+    return {
+        'contract_version': 'str06-rc12', 'graph_id': 'pg_main',
+        'narration': {'person': 'first', 'focalizers': ['yun']},
+        'book_style': 's', 'world_rules': ['术法须以寿命为代价'],
+        'character_voices': [], 'initial_state': [],
+        'expression_decisions': [
+            {'ex_id': 'ex_01', 'action': 'keep', 'reason': None,
+             'statement': '一本正经的荒诞'}],
+        'chapters': [
+            {'chapter_ordinal': 1, 'purpose': 'p', 'scene_ids': ['sc01'],
+             'entry': {'transition': 'new_scene', 'recap': 'do_not_recap'}}],
+        'scenes': [
+            {'scene_id': 'sc01',
+             'driver': {'focal_actor': 'yun', 'immediate_want': 'w',
+                        'opposition': 'o', 'turn': 't'},
+             'state_reads': [],
+             'realization_brief': 'b', 'delivery': {'pov': 'yun', 'voice': 'v',
+                                                    'avoid': []},
+             'beats': [
+                 {'beat_id': 'b01', 'event': 'e', 'participants': ['yun'],
+                  'target_delta': [
+                      {'domain': 'reader', 'subjects': [], 'holder': None,
+                       'key': 'kp_1111111111111111', 'op': 'set',
+                       'value': 'true', 'scope': 'book',
+                       'knowledge_mode': None, 'modality': None,
+                       'confirms': {'domain': 'world', 'key': 'hiding',
+                                    'subjects': [], 'holder': None}}]}],
+             }],
+        'chapter_weights': {},
+    }
+
+
+def test_upgrade_rc12_body_design_normalizes_reader_rows():
+    """集中迁移（S-03）：reader 行→knowledge(holder=reader)、confirms 删除、
+    版本升 rc13；rc13 盘面原样通过；白名单外产物不动版本。"""
+    from novel.store import _upgrade_rc12_payload
+
+    data = _upgrade_rc12_payload('stage4/design/body_design.json',
+                                 _rc12_body_payload())
+    assert data['contract_version'] == 'str06-rc13'
+    row = data['scenes'][0]['beats'][0]['target_delta'][0]
+    assert (row['domain'], row['holder'], row['knowledge_mode']) == (
+        'knowledge', 'reader', 'known')
+    assert 'confirms' not in row
+    # 迁移后可过 rc13 契约模型（整链兼容的机械证明）。
+    from contracts.schema.design import BodyDesign
+    BodyDesign.model_validate(data)
+    # rc13 盘面（版本已对）原样通过；形状未变的产物（semantic_binding）
+    # 不在白名单——版本不升。
+    assert _upgrade_rc12_payload('stage4/design/body_design.json', data) is data
+    untouched = {'contract_version': 'str06-rc12'}
+    assert _upgrade_rc12_payload('stage4/grounding/semantic_binding.json',
+                                 untouched) == {'contract_version': 'str06-rc12'}
+
+
+def test_upgrade_rc12_brief_structurizes_book_constraints():
+    """Brief 的 book_constraints：字符串列表→BookConstraint（序号派发
+    wc_{nn} 的登记近似——旧盘面 id 信息已丢，形状合法化用）。"""
+    from novel.store import _upgrade_rc12_payload
+
+    data = _upgrade_rc12_payload(
+        'stage4/grounding/reconstruction_brief.json',
+        {'contract_version': 'str06-rc12',
+         'book_constraints': ['术法须以寿命为代价', '官府不涉异事']})
+    assert data['contract_version'] == 'str06-rc13'
+    assert data['book_constraints'] == [
+        {'constraint_id': 'wc_01', 'statement': '术法须以寿命为代价'},
+        {'constraint_id': 'wc_02', 'statement': '官府不涉异事'}]

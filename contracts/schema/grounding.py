@@ -276,6 +276,19 @@ class BriefFactLock(StrictModel):
         return self
 
 
+class BookConstraint(StrictModel):
+    """世界约束的稳定登记（rc13，CS-3）：源 blueprint 世界约束的 id＋命题。
+
+    `constraint_id` 沿用源 `wc_{nn}` 句柄（蓝图既有稳定编号，不新造序列，
+    I-21）——design wire 的 world 域规则断言（value 恒真的布尔键）以该编号
+    引用，渲染面经本表把 key 映射回 statement 文本（r10b 审计：`women_cannot_
+    stand_alone=true` 这类布尔键无机械 statement 映射，渲染零信息）。
+    """
+
+    constraint_id: str = Field(pattern=r'^wc_[A-Za-z0-9_-]+$')
+    statement: str = Field(min_length=1)
+
+
 class ReconstructionBrief(StrictModel):
     """确定性发布的 Derived Brief——Design 的唯一语义输入（与 IdentityProjection、
     OutputConstraints 并列）。
@@ -291,7 +304,7 @@ class ReconstructionBrief(StrictModel):
     不得经状态或说明改写；兑现与越权校验归 assemble_body_design。
     """
 
-    contract_version: Literal['str06-rc12'] = 'str06-rc12'
+    contract_version: Literal['str06-rc13'] = 'str06-rc13'
     brief_id: str = Field(min_length=1)
     preserve_checkpoint_sha256: str = Field(min_length=64, max_length=64)
     requirements: tuple[BriefRequirement, ...] = Field(min_length=1)
@@ -303,7 +316,8 @@ class ReconstructionBrief(StrictModel):
     #: 事实锁（a4）：时态（modality≠actual）／值未知（op=unknown）／
     #: 原文未回答（canonical 悬念 open 未 close）。
     fact_locks: tuple[BriefFactLock, ...] = Field(default=(), min_length=0)
-    book_constraints: tuple[str, ...] = Field(default=(), min_length=0)
+    book_constraints: tuple[BookConstraint, ...] = Field(
+        default=(), min_length=0)
     source_narration: HookPov
     expression: tuple[ExpressionRequirement, ...] = Field(min_length=1)
     expression_readings: ExpressionReadings

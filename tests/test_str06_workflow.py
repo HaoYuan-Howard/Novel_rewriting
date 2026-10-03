@@ -379,8 +379,7 @@ def test_concealed_fact_reaches_writer_as_pending_reader_confirmation(tmp_path):
              'reads': [{'domain': 'world', 'subjects': [], 'holder': None,
                         'key': 'hiding'}],
              'beats': [{'ev': '确认床底有人', 'who': ['yun', 'fu_jun'],
-                        'real': ['ob02'],
-                        'conf': {'at': 'world', 'key': 'hiding'}}]}],
+                        'real': ['ob02']}]}],
         'chapters': [{'purpose': '夜半响动到床底确认', 'scenes': 2}]}
     preserve = {'protocol_version': 'stage4-preserve-v2', 'obligations': [
         {'kind': 'event_core',
@@ -440,18 +439,22 @@ def test_concealed_fact_reaches_writer_as_pending_reader_confirmation(tmp_path):
     # 写手 IR：确认前（s01）列出该事实；确认场（s02）标注确认拍
     writer_ir = repo.inspect('stage4/ir/writer_book_ir.json')
     s01, s02 = writer_ir['chapters'][0]['scenes']
-    # D4：确认清单带事实地址；s01 读取该地址所以拿到清单，确认场（s02）标注确认拍
-    for scene_ir, in_scene in ((s01, False), (s02, True)):
-        pending = scene_ir['verification_ir']['pending_reader_confirmations']
-        assert [(p['fact'], p['position'], p['in_scene']) for p in pending] == [
-            ('夫君藏身床底', 'sc02#b01', in_scene)]  # 批0 D6：fact 回填为 Brief 登记的命题 statement
-        assert pending[0]['address'] == {'domain': 'world', 'key': 'hiding',
-                                         'subjects': [], 'holder': None}
+    # D5：确认清单带读者知情地址，投影进确认拍所在场与同 key 的场。s01 的
+    # 事实行 key（hiding）与揭示行 key（kp 句柄）不同名 ⇒ s01 不再拿清单
+    #（D4 经 confirms 显式关联的通道已删；提前暴露防护的其余承载是义务
+    # 满足面与 hook 禁区）；确认场（s02）标注确认拍。
+    assert s01['verification_ir']['pending_reader_confirmations'] == []
+    pending = s02['verification_ir']['pending_reader_confirmations']
+    assert [(p['fact'], p['position'], p['in_scene']) for p in pending] == [
+        ('夫君藏身床底', 'sc02#b01', True)]  # 批0 D6：fact 回填为 Brief 登记的命题 statement
+    assert pending[0]['address'] == {
+        'domain': 'knowledge', 'key': pending[0]['key'],
+        'subjects': [], 'holder': 'reader'}
     # 渲染进写手阅读面（地址可追溯）
     from novel.stages.common import project_chapter_packet, render_chapter_packet
     book_ir = repo.read_model('stage4/ir/writer_book_ir.json')
     packet = render_chapter_packet(project_chapter_packet(book_ir, 1))
-    assert '「夫君藏身床底」本章之内不得让读者确认' in packet
+    assert '「夫君藏身床底」须到本场第1拍起才可向读者确认' in packet
     assert 'sc02#b01' not in packet and 'world:hiding' not in packet
     # Preserve 提示词带着揭示时点要求（v3 规则）
     preserve_prompt = next(p for o, p in requests if o == 'preserve')

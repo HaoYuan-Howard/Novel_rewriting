@@ -102,10 +102,14 @@ from novel.llm.paid_requests import candidate_contract_identity
 #: renderer／写手协议 v6 不在本批（R10b 再升 v7）。
 #: CS-3（2026-10-03，bind LLM 退役）重钉：str06.stage4.bind 退出节点表，
 #: semantic_binding 的 writer 改 body_design（双产物）；冻结 13 节点／10 付费。
-#: 候选契约身份：节点表＋产物表＋RC 版式＋运行期配置的 SHA-256。表内任何
-#: 一行变化都会改变它——先改本记录并登记原因（REQUIREMENTS／DECISIONS），
-#: 再动表。
-FROZEN_CONTRACT_IDENTITY = 'ec7bfb059e0ea690e2b1d8877346ff9b5e328855cbf68709a611b179e0e191ca'
+#: CS-3 余项（同日，D5 统一＋world 规则 id）再重钉：TargetDelta 删 reader 域
+#: 与 confirms（读者揭示统一 knowledge(holder=reader)）、Brief book_constraints
+#: 升 BookConstraint（wc 稳定规则 id）、design v6 wire 删 conf 例外面；产物表
+#: 五条升 str06-rc13（brief／body_design／graph／execution_plan／writer_book_ir），
+#: 其余保持 rc12（形状未变）。候选契约身份：节点表＋产物表＋RC 版式＋运行期
+#: 配置的 SHA-256。表内任何一行变化都会改变它——先改本记录并登记原因
+#: （REQUIREMENTS／DECISIONS），再动表。
+FROZEN_CONTRACT_IDENTITY = 'adc2bb330cbec1b7b04983abf018c4a978304b6fc06f210161f9cf12c4edaca9'
 
 #: 冻结时的节点集合（CS-3 bind 退役后 13 个：stage0/1 两座＋Stage2 五节点＋
 #: Stage4 四＋Stage5 两＋Stage7 两；bind 的承载位决定并入 body_design）。
@@ -172,7 +176,9 @@ def test_frozen_artifact_table_shape():
 
 
 def test_frozen_rc_version_label():
-    assert STR06_RC_VERSION == 'str06-rc12'
+    # rc13（CS-3 余项：D5 统一＋world 规则 id）——五产物形状变化升版，其余
+    # 产物表条目保持 rc12（形状未变）。
+    assert STR06_RC_VERSION == 'str06-rc13'
 
 
 #: 语义冻结闸（2026-09-29，裁决 D8）钉住的语义层协议字面量。键是常量名、值是

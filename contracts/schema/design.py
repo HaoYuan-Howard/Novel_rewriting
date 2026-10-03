@@ -76,16 +76,11 @@ class SceneDriver(StrictModel):
 
 def target_delta_schema(schema: dict) -> None:
     change_schema(schema)
-    schema['allOf'].append({
-        'if': {'properties': {'domain': {'const': 'reader'}, 'op': {'const': 'set'}}},
-        'then': {'required': ['confirms'], 'properties': {'confirms': {
-            'not': {'type': 'null'}, 'properties': {'domain': {'not': {'const': 'reader'}}}}}},
-        'else': {'properties': {'confirms': {'type': 'null'}}}})
-    # a4：非知情/非读者的 set 必填 modality（计划/预计/条件不得默写为已发生）。
+    # a4：非知情的 set 必填 modality（计划/预计/条件不得默写为已发生）。
     schema['allOf'].append({
         'if': {'properties': {
             'op': {'const': 'set'},
-            'domain': {'not': {'enum': ['knowledge', 'reader']}}}},
+            'domain': {'not': {'const': 'knowledge'}}}},
         'then': {'required': ['modality'], 'properties': {'modality': {
             'enum': ['actual', 'planned', 'expected', 'conditional']}}},
         'else': {'properties': {'modality': {'type': 'null'}}}})
@@ -94,18 +89,19 @@ def target_delta_schema(schema: dict) -> None:
 class TargetDelta(StateChange):
     """typed effect：目标拍的语义效果声明。
 
-    domain 闭集保留「人物／关系、人物知情、世界事实、读者揭示」的必要区别，
+    domain 闭集保留「人物／关系、人物知情、世界事实」的必要区别，
     不迁旧 PlotState ontology。value 必须 mechanically applicable——表达成键值
     （enum/受控词表），不是自由散文；具体取值面 F1 反例标定后收紧。
 
-    【读者确认的事实地址（D4/R-6.11，B3 前半起必填）】
-    reader 域的 set（一次读者确认）必须经 `confirms` 声明它确认的事实地址
-    （StateAddress，domain 不得是 reader 本身）——漏填即拒；确认地址必须真实
-    建立且不早于建立位置（机械闭合归 assemble_body_design）。compiler 只把
-    未确认项投影到消费该地址的章包并标注确认拍（按地址的精确投影，取代逐场
-    全量清单）；确认前该事实不作为已确认信息。
+    【读者认知统一走 knowledge（D5，rc13）】读者揭示不再有独立 reader 域与
+    `confirms` 地址——统一为 `knowledge(holder='reader')`（模式取知情锁，
+    揭示为 known）：Brief 知情锁本就是 knowledge(holder=reader) 写法，两址一义
+    是 r10b 审计的 D5 契约缺陷（design 写 domain=reader＋confirms、brief 写
+    knowledge 锁，映射散在装配判据）。读者确认时序的管控改由 pending 投影
+    按读者知情地址承担（`pending_reader_confirmations`）；「确认不早于建立」
+    的机械证明由锁位置 Guard（a5）与 D3 锚点单调检查承担。
 
-    【事实时态（a4/R10a，C2 的机械面）】非知情/非读者的 set 必填 `modality`
+    【事实时态（a4/R10a，C2 的机械面）】非知情的 set 必填 `modality`
     （actual＝已发生；planned/expected/conditional＝计划/预计/条件，尚未发生）。
     Brief 事实锁（kf_*）键的 set 只能按锁的 modality 承载——把预计写成
     actual 即拒；kf 锁的其余规则（值未知不得补值、原文未回答不得作答）与
@@ -116,29 +112,19 @@ class TargetDelta(StateChange):
     #: 「等价于源 XX」的备注字段，要写等价判断就升到 Design 上游的语义层。
 
     model_config = {'extra': 'forbid', 'json_schema_extra': target_delta_schema}
-    confirms: 'StateAddress | None' = None
     modality: "Literal['actual', 'planned', 'expected', 'conditional'] | None" = None
 
     @model_validator(mode='after')
     def _reader_confirmation_address(self) -> 'TargetDelta':
-        is_reader_set = self.domain is EffectDomain.READER and self.op == 'set'
-        if is_reader_set and self.confirms is None:
-            raise ValueError(
-                f'读者确认 {self.key!r} 必须声明所确认的事实地址（confirms，D4 漏填即拒）')
-        if not is_reader_set and self.confirms is not None:
-            raise ValueError('confirms 只有 reader 域的 set（读者确认）可以携带')
-        if self.confirms is not None and self.confirms.domain is EffectDomain.READER:
-            raise ValueError('confirms 必须指向事实地址，不得指向读者确认本身')
         is_fact_set = (self.op == 'set'
-                       and self.domain not in (EffectDomain.KNOWLEDGE,
-                                               EffectDomain.READER))
+                       and self.domain is not EffectDomain.KNOWLEDGE)
         if is_fact_set and self.modality is None:
             raise ValueError(
-                f'非知情/非读者的 set 必须声明事实时态 modality（{self.key!r}；'
+                f'非知情的 set 必须声明事实时态 modality（{self.key!r}；'
                 '计划/预计/条件与已发生的区分，C2 漏填即拒）')
         if not is_fact_set and self.modality is not None:
             raise ValueError(
-                'modality 只在非知情/非读者的 set 上携带（解除/未知/知情/读者'
+                'modality 只在非知情的 set 上携带（解除/未知/知情'
                 '确认无时态可言）')
         return self
 
@@ -354,7 +340,7 @@ class BodyDesign(StrictModel):
     （`TargetBeat.threads`，折叠走 ThreadFold）。rc7 的四个静态锚定列表
     已删除（AUD-04：无消费者；裁决 3）。
     """
-    contract_version: Literal['str06-rc12'] = 'str06-rc12'
+    contract_version: Literal['str06-rc13'] = 'str06-rc13'
     graph_id: str = Field(min_length=1)
     narration: HookPov
     expression_decisions: tuple[ExpressionDecision, ...] = Field(min_length=1)
@@ -731,6 +717,10 @@ class SlimDesignState(StrictModel):
     set、modality 缺省 actual（例外才写）；kf_* 键仍按 Brief 事实锁规则承载
     （锁校验在 assemble，C2/C9）。r10b 实证：13 条非知情增量全是此类语义
     断言（键名是目标书命名，不可由锁机械派生），保留在 wire。
+    world 域：书级规则成立断言 key 用 Brief 世界约束的稳定编号 `wc_{nn}`
+    （val 省略＝命题成立，expand 回填 'true'）；其余 world 键是剧情事实，
+    val 必填且不得为 'true'（零信息值结构性拒绝——r10b 审计「women_cannot_
+    stand_alone=true 渲染无语义」的 wire 面收口）。
     """
 
     at: str = Field(pattern=r'^(world|[a-z0-9_+]+)$')
@@ -740,13 +730,6 @@ class SlimDesignState(StrictModel):
     #: 作用域缺省 book（r10b 37/37）；只在本场内成立的临时动作环境写 scene。
     scope: "Literal['book', 'scene'] | None" = None
     modality: "Literal['actual', 'planned', 'expected', 'conditional'] | None" = None
-
-
-class SlimConfirmAddress(StrictModel):
-    """读者确认的事实地址（D4 例外面；r10b 37 条增量仅 1 条携带）。"""
-
-    at: str = Field(pattern=r'^[a-z0-9_+]+$')
-    key: str = Field(min_length=1)
 
 
 class SlimDesignBeat(StrictModel):
@@ -762,7 +745,6 @@ class SlimDesignBeat(StrictModel):
     real: tuple[str, ...] = Field(default=(), min_length=0)
     ex: tuple[str, ...] = Field(default=(), min_length=0)
     state: tuple[SlimDesignState, ...] = Field(default=(), min_length=0)
-    conf: SlimConfirmAddress | None = None
     release: tuple[SurfaceIntroduction, ...] = Field(default=(), min_length=0)
     threads: tuple[DesignWireThread, ...] = Field(default=(), min_length=0)
 
@@ -814,7 +796,9 @@ class SlimDesignInitial(StrictModel):
     key: str = Field(min_length=1)
     subjects: tuple[str, ...] = ()
     holder: str | None = None
-    value: str
+    #: world 域书级规则断言（key=`wc_{nn}`）可省——expand 回填 'true'（命题
+    #: 成立性，命题文本经 Brief 世界约束映射送达渲染面）；其余行必填。
+    value: str | None = None
     knowledge_mode: "Literal['known', 'suspected', 'heard', 'believes'] | None" = None
 
 

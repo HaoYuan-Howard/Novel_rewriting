@@ -40,9 +40,10 @@ Design wire（`stage4-design-v5`）只表达选择、结构与相对篇幅重点
 open_questions／promises 四键在白名单外——四个静态跨章列表已退役（AUD-04），
 跨章语义走拍上的 threads。
 
-【读者确认的事实地址（D4/R-6.11）】reader 域 set 的 `confirms` 必填由 schema
-构造期表达；这里做引用闭合的机械证明：确认地址必须真实建立（initial_state 或
-某拍 delta 的 set），且确认位置不早于建立位置。
+【读者认知（D5 统一，rc13）】读者揭示不再有独立 reader 域与 `confirms`
+事实地址——统一为 knowledge(holder='reader')，授权判据与人物知情同一把尺
+（`_check_lock_acceptance`：known 只能来自 known 锁，C6）；确认时序管控由
+pending 投影（读者知情地址）与锁位置 Guard 承担。
 """
 from __future__ import annotations
 
@@ -283,33 +284,6 @@ def _build_canonical(data: dict[str, Any], errors: list[str]) -> dict[str, Any]:
     return data
 
 
-def _check_confirmation_closures(body: BodyDesign, errors: list[str]) -> None:
-    """D4 引用闭合的机械证明：确认地址真实建立、确认不早于建立（时序）。"""
-    initial_addresses = {d.address(): (0, 0) for d in body.initial_state if d.op == 'set'}
-    positions: dict[tuple, tuple[int, int]] = dict(initial_addresses)
-    for i, scene in enumerate(body.scenes):
-        for j, beat in enumerate(scene.beats):
-            for delta in beat.target_delta:
-                if delta.op == 'set':
-                    positions.setdefault(delta.address(), (i, j))
-    for scene_index, scene in enumerate(body.scenes):
-        for beat_index, beat in enumerate(scene.beats):
-            for delta in beat.target_delta:
-                if delta.confirms is None:
-                    continue
-                key = delta.confirms.address()
-                established = positions.get(key)
-                if established is None:
-                    errors.append(
-                        f'{scene.scene_id}#{beat.beat_id} 的读者确认地址从未建立：{key}'
-                        '（confirms 必须指向 initial_state 或某拍实际确立的 set）')
-                    continue
-                if established > (scene_index, beat_index):
-                    errors.append(
-                        f'{scene.scene_id}#{beat.beat_id} 的读者确认早于事实建立：'
-                        f'{key} 建立于 {established}（确认不得早于建立）')
-
-
 def _wire_model_errors(exc: Exception) -> list[str]:
     """pydantic ValidationError → 按位置展开的逐字段错误（一次全报，R8b）。
 
@@ -402,6 +376,9 @@ def _check_lock_acceptance(body: BodyDesign, brief: ReconstructionBrief,
                 continue
             if delta.domain is EffectDomain.KNOWLEDGE:
                 if delta.op == 'set':
+                    # D5 统一后读者揭示也是 knowledge(holder=reader)——授权
+                    # 判据同一把尺：known 只能来自 known 锁（线索、误导与
+                    # 怀疑不是确认，C6）。
                     allowed = authorized.get((delta.holder, key), set())
                     if delta.knowledge_mode not in allowed:
                         errors.append(
@@ -409,12 +386,6 @@ def _check_lock_acceptance(body: BodyDesign, brief: ReconstructionBrief,
                             f'或模式越权：{delta.knowledge_mode}（授权：'
                             f'{sorted(allowed) or "无"}；known 只能来自 known 锁）')
                 realized_kp.add((delta.holder, key))
-            elif delta.domain is EffectDomain.READER and delta.op == 'set':
-                if 'known' not in authorized.get(('reader', key), set()):
-                    errors.append(
-                        f'{where} 的读者确认用 kp 键 {key}，但 reader 对该命题'
-                        '没有 known 锁（线索、误导与怀疑不是读者确认，C6）')
-                realized_kp.add(('reader', key))
         elif key.startswith('kf_'):
             lock = fact_locks.get(key)
             if lock is None:
@@ -583,7 +554,9 @@ def assemble_body_design(
             surfaces.extend(beat.surface_introductions)
     for item in addressed:
         for cid in (*item.subjects, *((item.holder,) if item.holder else ())):
-            if cid not in known_char_ids:
+            # holder 的 'reader' 是保留字（D5 统一后读者揭示走
+            # knowledge(holder=reader)），与 'narrator' 同级放行。
+            if cid != 'reader' and cid not in known_char_ids:
                 errors.append(f'状态 {item.key} 引用未知 char_id {cid}')
     for item in surfaces:
         if item.char_id not in known_char_ids:
@@ -612,7 +585,6 @@ def assemble_body_design(
                     errors.append(
                         f'ThreadAction 引用未知 char_id {thread.subject}'
                         f'（{scene.scene_id}#{beat.beat_id} 的 {thread.ref}）')
-    _check_confirmation_closures(body, errors)
     _check_expression_refs(body, expression_requirements, errors)
     if brief is not None:
         _check_lock_acceptance(body, brief, errors)

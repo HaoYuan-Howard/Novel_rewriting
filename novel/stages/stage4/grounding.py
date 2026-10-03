@@ -36,7 +36,7 @@ from contracts.schema.grounding import (
     BriefFactLock, BriefKnowledgeLock, BriefProposition, BriefRequirement,
     IdentityProjection, ObligationAnchor, ObligationSeries, PreserveCheckpoint,
     ReconstructionBrief, SemanticBinding, SourceLineage, SourceObligation,
-    _lock_id,
+    BookConstraint, _lock_id,
 )
 from contracts.schema.source import (
     BlueprintsArtifactV15, CharactersCore,
@@ -634,7 +634,9 @@ def project_brief(
         expression=tuple({'ex_id': item.ex_id, 'kind': item.kind, 'statement': item.statement}
                          for item in blueprint.source_expression.items),
         expression_readings=blueprint.source_expression.readings,
-        book_constraints=tuple(wc.statement for wc in blueprint.world_constraints))
+        book_constraints=tuple(
+            BookConstraint(constraint_id=wc.constraint_id, statement=wc.statement)
+            for wc in blueprint.world_constraints))
     identity = tuple(
         IdentityProjection(
             char_id=slug,

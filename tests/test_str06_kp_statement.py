@@ -105,10 +105,9 @@ def test_hook_dangling_kp_is_reported_not_raised():
 def _graph_with_kp_deltas():
     graph = _graph()
     reader = TargetDelta(
-        domain=EffectDomain.READER, key=KP_READER, value='true', subjects=(),
-        op='set', scope='book', modality=None,
-        confirms=StateAddress(domain=EffectDomain.CHARACTER, key='secret',
-                              subjects=('ch1',)))
+        domain=EffectDomain.KNOWLEDGE, key=KP_READER, value='true', subjects=(),
+        holder='reader', op='set', scope='book', knowledge_mode='known',
+        modality=None)
     knowledge = TargetDelta(
         domain=EffectDomain.KNOWLEDGE, key=KP, value='true', subjects=(),
         holder='ch1', op='set', scope='book', knowledge_mode='known',

@@ -14,7 +14,9 @@ class EffectDomain(str, Enum):
     RELATION = 'relation'
     KNOWLEDGE = 'knowledge'
     WORLD = 'world'
-    READER = 'reader'
+    # READER 已随 D5 统一（rc13，CS-3）删除：读者认知统一走
+    # knowledge(holder='reader')——与 Brief 知情锁同一写法，不再两址一义。
+    # 旧 rc12 产物的 reader 行经 store 读取层的登记迁移归一后进入本枚举域。
 
 
 def address_schema(schema: dict) -> None:

@@ -14,8 +14,8 @@ from novel.stages.stage4.fold import FoldedState
 
 
 def _establishment(delta, established_by: str) -> Establishment:
-    payload = {k: v for k, v in delta.model_dump().items() if k != 'confirms'}
-    return Establishment(**payload, established_by=established_by)
+    # confirms 已随 D5 统一删除（rc13）：Establishment 与 TargetDelta 字段同构。
+    return Establishment(**delta.model_dump(), established_by=established_by)
 
 
 def init_establishments(graph: BodyDesign) -> tuple[Establishment, ...]:

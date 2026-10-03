@@ -550,12 +550,18 @@ STR06_RUNTIME_CONFIG: Final = CandidateRuntimeConfig()
 #: epistemic_lock_order 位置 Guard（回派 body_design）。names／associate／
 #: bind／hook_design 协议字面量不变，输入投影或判据变化经全表 rc12 换身份；
 #: 写作层（renderer／写手协议 v6）不在本批——R10b 再升 v7。
-STR06_RC_VERSION: Final = 'str06-rc12'
+#: rc13（2026-10-03 CS-3 余项，D5 统一＋world 规则 id）：读者揭示统一走
+#: knowledge(holder=reader)（TargetDelta 删 reader 域与 confirms）；Brief
+#: book_constraints 升 WorldConstraint（wc_{nn}）；design v6 real 标注展开
+#: reader 行、world 规则键闭集；Stage2／Stage5／Bind 等协议面不变，但 brief／
+#: design／graph／execution_plan／writer_book_ir 五产物形状变化经 rc13 换身份
+#: （产物表见 `contracts/artifacts.py`；旧 rc12 盘面经 store 登记迁移归一读入）。
+STR06_RC_VERSION: Final = 'str06-rc13'
 
 #: 已知 RC 标签面（版本规则见 `contracts/artifacts.py::STR06_ARTIFACT_RC_VERSIONS`）。
 STR06_RC_LABELS: Final = ('str06-rc2', 'str06-rc3', 'str06-rc4', 'str06-rc5', 'str06-rc6',
                           'str06-rc7', 'str06-rc8', 'str06-rc9', 'str06-rc10', 'str06-rc11',
-                          'str06-rc12')
+                          'str06-rc12', 'str06-rc13')
 
 #: Stage4 四个付费语义节点的独立 wire 协议（B3 前半；各节点独立演进，升版互不
 #: 牵连）。wire 顶层 `protocol_version` 与对应常量逐字对账，漏带或错带即拒

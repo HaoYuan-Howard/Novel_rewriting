@@ -24,7 +24,7 @@ PV5 = 'stage4-design-v5'
 def _brief() -> ReconstructionBrief:
     return ReconstructionBrief.model_validate({
         'brief_id': 'brief_test', 'preserve_checkpoint_sha256': 'a' * 64,
-        'contract_version': 'str06-rc12',
+        'contract_version': 'str06-rc13',
         'requirements': [
             {'core_id': 'req_aaaa', 'summary': '芸娘确知夫君不育',
              'kind': 'reveal', 'must_preserve': True, 'satisfaction': '开场揭示',
@@ -47,7 +47,8 @@ def _brief() -> ReconstructionBrief:
              'publicly_claimed_by': ()}],
         'knowledge_locks': [
             {'holder': 'yun_niang', 'kp': 'kp_1111111111111111', 'mode': 'known'}],
-        'fact_locks': [], 'book_constraints': ['女子极难自立门户'],
+        'fact_locks': [], 'book_constraints': [
+            {'constraint_id': 'wc_01', 'statement': '女子极难自立门户'}],
         'source_narration': {'person': 'first', 'focalizers': ['yun_niang']},
         'expression': [{'ex_id': 'ex_01', 'kind': 'humor', 'statement': '一本正经的荒诞'}],
         'expression_readings': {'status': 'measured', 'paragraph_mean_chars': 20.0,
@@ -135,11 +136,11 @@ def test_expand_real_derives_knowledge_at_accept_beat():
     assert beat1['target_delta'] == [
         {'domain': 'character', 'subjects': ('lu_fujun',), 'holder': None,
          'key': 'body_condition', 'op': 'set', 'value': '幼时落水伤了根本',
-         'scope': 'book', 'knowledge_mode': None, 'confirms': None,
+         'scope': 'book', 'knowledge_mode': None,
          'modality': 'actual'},
         {'domain': 'knowledge', 'subjects': (), 'holder': 'yun_niang',
          'key': 'kp_1111111111111111', 'op': 'set', 'value': 'true',
-         'scope': 'book', 'knowledge_mode': 'known', 'confirms': None,
+         'scope': 'book', 'knowledge_mode': 'known',
          'modality': None},
     ]
     # 多拍标注：增量只落末次标注拍（接受拍），前拍是支撑位。
@@ -167,7 +168,7 @@ def test_expand_kp_state_exception_and_bad_inputs():
     assert expanded['scenes'][1]['beats'][0]['target_delta'] == [
         {'domain': 'knowledge', 'subjects': (), 'holder': 'yun_niang',
          'key': 'kp_1111111111111111', 'op': 'unset', 'value': None,
-         'scope': 'book', 'knowledge_mode': None, 'confirms': None,
+         'scope': 'book', 'knowledge_mode': None,
          'modality': None}]
 
     wire2 = _v6_wire()
@@ -231,3 +232,75 @@ def test_design_rules_prompt_carries_v6_and_obligation_table():
     table = _design_obligation_table(_obligations(brief))
     assert 'ob01｜reveal｜True｜yun_niang|kp_1111111111111111｜开场揭示' in table
     assert 'ob03' in table      # 非必保也在清单（标注可选）
+
+
+def test_world_rule_key_reference_and_zero_info_value_refused():
+    """CS-3 world 规则 id：书级规则断言用 wc_{nn} 引用（闭集＋val 回填
+    'true'）；剧情事实 val='true'（零信息）结构性拒绝。"""
+    brief = _brief()
+    obligations = _obligations(brief)
+
+    # 合法：初始态引用清单内规则编号（val 省略回填 'true'）。
+    wire = _v6_wire()
+    wire['initial_state'].append(
+        {'domain': 'world', 'subjects': [], 'holder': None, 'key': 'wc_01',
+         'knowledge_mode': None})
+    expanded, issues = expand_design_wire(wire, brief=brief,
+                                          obligations=obligations)
+    assert issues == []
+    assert expanded['initial_state'][-1]['value'] == 'true'
+
+    # 闭集外规则编号：拒。
+    wire_bad = _v6_wire()
+    wire_bad['initial_state'].append(
+        {'domain': 'world', 'subjects': [], 'holder': None, 'key': 'wc_99',
+         'knowledge_mode': None})
+    _, issues_bad = expand_design_wire(wire_bad, brief=brief,
+                                       obligations=obligations)
+    assert any('不在世界约束清单' in m for _p, m in issues_bad)
+
+    # 剧情事实 val='true'：零信息值拒绝（wc 引用才是命题成立断言的通道）。
+    wire_true = _v6_wire()
+    wire_true['scenes'][1]['beats'][0]['state'] = [
+        {'at': 'world', 'key': 'courtyard_bought', 'val': 'true'}]
+    _, issues_true = expand_design_wire(wire_true, brief=brief,
+                                        obligations=obligations)
+    assert any('val 不得为 "true"' in m for _p, m in issues_true)
+
+    # 拍上合法的 wc 规则断言（无 val）回填 'true'。
+    wire_beat = _v6_wire()
+    wire_beat['scenes'][1]['beats'][0]['state'] = [
+        {'at': 'world', 'key': 'wc_01'}]
+    expanded_beat, issues_beat = expand_design_wire(
+        wire_beat, brief=brief, obligations=obligations)
+    assert issues_beat == []
+    row = expanded_beat['scenes'][1]['beats'][0]['target_delta'][0]
+    assert (row['domain'], row['key'], row['value']) == ('world', 'wc_01', 'true')
+
+
+def test_reader_reveal_expands_as_knowledge_holder_reader():
+    """D5 统一：reader 义务的增量展开成 knowledge(holder=reader)——无独立
+    reader 域、无 conf 例外面。"""
+    brief = _brief()
+    # ob01 加 reader 锁（brief 夹具改造：requirements[0] 的 realize_holders
+    # 追加 reader|kp），real 展开产出 reader 行。
+    requirement = brief.requirements[0]
+    holders = tuple(requirement.realize_holders) + ('reader|kp_1111111111111111',)
+    brief = brief.model_copy(update={
+        'requirements': (
+            (requirement.model_copy(update={'realize_holders': holders}),)
+            + tuple(brief.requirements[1:])),
+        'knowledge_locks': brief.knowledge_locks + (
+            type(brief.knowledge_locks[0])(holder='reader',
+                                           kp='kp_1111111111111111',
+                                           mode='known'),)})
+    obligations = _obligations(brief)
+    expanded, issues = expand_design_wire(_v6_wire(), brief=brief,
+                                          obligations=obligations)
+    assert issues == []
+    rows = expanded['scenes'][0]['beats'][0]['target_delta']
+    reader_rows = [r for r in rows if r['holder'] == 'reader']
+    assert len(reader_rows) == 1
+    assert (reader_rows[0]['domain'], reader_rows[0]['knowledge_mode'],
+            reader_rows[0]['value']) == ('knowledge', 'known', 'true')
+    assert 'confirms' not in reader_rows[0]

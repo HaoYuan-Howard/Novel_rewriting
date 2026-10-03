@@ -49,10 +49,11 @@ H64 = 'a' * 64
 # ───────────────────────── 构造器 ─────────────────────────
 
 def _delta(domain, key, *, value=None, op='set', scope='book',
-           subjects=(), holder=None, confirms=None,
+           subjects=(), holder=None, knowledge_mode=None,
            modality='actual') -> TargetDelta:
     return TargetDelta(domain=domain, key=key, subjects=subjects, holder=holder,
-                       op=op, value=value, scope=scope, confirms=confirms,
+                       op=op, value=value, scope=scope,
+                       knowledge_mode=knowledge_mode,
                        modality=modality if op == 'set' else None)
 
 
@@ -448,14 +449,13 @@ def test_weight_change_propagates_through_integer_budgets():
         '章 2 预算不变 ⇒ 不受波及；权重变化只传导到整数预算变化的章'
 
 
-# ───────────────────────── 读者确认按地址投影到章包（D4） ───────────────────
+# ────────────── 读者确认按命题投影到章包（D5 统一，rc13） ──────────────
 
 def _confirmation_graph() -> BodyDesign:
     """ch1 s01 写 world:hiding；ch2 s02 读取并在 b02 让读者确认；ch3 s03 独立。"""
     confirm = TargetDelta(
-        domain='reader', key='hiding', subjects=(), op='set', scope='scene',
-        value='床底有人',
-        confirms=StateAddress(domain='world', key='hiding', subjects=(), holder=None))
+        domain='knowledge', key='hiding', subjects=(), holder='reader',
+        op='set', scope='scene', value='床底有人', knowledge_mode='known')
     return _graph(
         scenes=[
             _scene('s01', (_beat(1, '建立', (_delta('world', 'hiding', value='床底有人'),)),)),
@@ -467,9 +467,9 @@ def _confirmation_graph() -> BodyDesign:
 
 
 def test_reader_confirmation_projects_only_into_consuming_scenes():
-    """未确认项只投影到实际消费该地址的场景（读取或写入），确认前不作为
-    已确认信息；不消费该地址的场景拿不到这条清单（D4 按地址的精确投影），
-    并在消费场景的章包请求中带确认位置标注。"""
+    """未确认项只投影到实际动该命题的场景（读取或写入同 key），确认前不
+    作为已确认信息；不动该命题的场景拿不到这条清单（D5 按命题的精确投影
+    ——建立场与确认场都算消费者），并在消费场景的章包请求中带确认位置标注。"""
     graph = _confirmation_graph()
     plan, binding = _plan(graph)
     ir = compile_writer_book_ir(graph=graph, plan=plan, binding=binding,
@@ -488,9 +488,10 @@ def test_reader_confirmation_projects_only_into_consuming_scenes():
     assert '本章之内不得让读者确认' in packets[1], '后场确认对前章的禁区标注'
 
 
-def test_reader_confirmation_without_address_is_refused_at_schema():
-    """读者确认缺地址即拒（D4，schema 构造期；与 assemble 引用闭合互补）。"""
+def test_legacy_reader_domain_is_refused_at_schema():
+    """D5 统一：旧 reader 域整域关闭（枚举闭集），读者揭示走
+    knowledge(holder=reader)。"""
     from pydantic import ValidationError
-    with pytest.raises(ValidationError, match='confirms'):
+    with pytest.raises(ValidationError, match='domain'):
         TargetDelta(domain='reader', key='hiding', subjects=(), op='set',
                     scope='scene', value='床底有人')

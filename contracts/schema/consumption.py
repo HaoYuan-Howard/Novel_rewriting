@@ -534,28 +534,8 @@ STR06_FIELD_DELIVERY: dict[str, FieldDeliverySpec] = {
     '.knowledge_mode': _spec(
         'writer_book_ir.chapters[].scenes[].verification_ir.beats[].deltas[]'
         '.knowledge_mode', consumers=(_W,), scope=_SCENE,
-        mode=DeliveryMode.MUST_RESPECT, note='知情边界（known/suspected/…）'),
-    'writer_book_ir.chapters[].scenes[].verification_ir.beats[].deltas[]'
-    '.confirms.domain': _spec(
-        'writer_book_ir.chapters[].scenes[].verification_ir.beats[].deltas[]'
-        '.confirms.domain', consumers=(_A,), scope=_SCENE,
-        mode=DeliveryMode.AUDIT_ONLY,         note='reader 确认的事实地址（派生 pending confirmations 的机械位）；'
-             + _ID_PENDING),
-    'writer_book_ir.chapters[].scenes[].verification_ir.beats[].deltas[]'
-    '.confirms.key': _spec(
-        'writer_book_ir.chapters[].scenes[].verification_ir.beats[].deltas[]'
-        '.confirms.key', consumers=(_A,), scope=_SCENE,
-        mode=DeliveryMode.AUDIT_ONLY, note=_ID_PENDING),
-    'writer_book_ir.chapters[].scenes[].verification_ir.beats[].deltas[]'
-    '.confirms.subjects': _spec(
-        'writer_book_ir.chapters[].scenes[].verification_ir.beats[].deltas[]'
-        '.confirms.subjects', consumers=(_A,), scope=_SCENE,
-        mode=DeliveryMode.AUDIT_ONLY, note=_ID_PENDING),
-    'writer_book_ir.chapters[].scenes[].verification_ir.beats[].deltas[]'
-    '.confirms.holder': _spec(
-        'writer_book_ir.chapters[].scenes[].verification_ir.beats[].deltas[]'
-        '.confirms.holder', consumers=(_A,), scope=_SCENE,
-        mode=DeliveryMode.AUDIT_ONLY, note=_ID_PENDING),
+        mode=DeliveryMode.MUST_RESPECT, note='知情边界（known/suspected/…）；'
+             '读者揭示统一走 knowledge(holder=reader)（D5，rc13）'),
     'writer_book_ir.chapters[].scenes[].verification_ir.beats[]'
     '.surface_introductions': _spec(
         'writer_book_ir.chapters[].scenes[].verification_ir.beats[]'
@@ -800,27 +780,6 @@ STR06_FIELD_DELIVERY: dict[str, FieldDeliverySpec] = {
         '.knowledge_mode', consumers=(_A,), scope=_SCENE,
         mode=DeliveryMode.AUDIT_ONLY,
         note='知情边界经 beats[].deltas[].knowledge_mode 送达（must_respect）'),
-    'writer_book_ir.chapters[].scenes[].verification_ir.planned_delta[]'
-    '.confirms.domain': _spec(
-        'writer_book_ir.chapters[].scenes[].verification_ir.planned_delta[]'
-        '.confirms.domain', consumers=(_A,), scope=_SCENE,
-        mode=DeliveryMode.AUDIT_ONLY, note='确认地址（机械位）；'
-        + _ID_PENDING),
-    'writer_book_ir.chapters[].scenes[].verification_ir.planned_delta[]'
-    '.confirms.key': _spec(
-        'writer_book_ir.chapters[].scenes[].verification_ir.planned_delta[]'
-        '.confirms.key', consumers=(_A,), scope=_SCENE,
-        mode=DeliveryMode.AUDIT_ONLY, note=_ID_PENDING),
-    'writer_book_ir.chapters[].scenes[].verification_ir.planned_delta[]'
-    '.confirms.subjects': _spec(
-        'writer_book_ir.chapters[].scenes[].verification_ir.planned_delta[]'
-        '.confirms.subjects', consumers=(_A,), scope=_SCENE,
-        mode=DeliveryMode.AUDIT_ONLY, note=_ID_PENDING),
-    'writer_book_ir.chapters[].scenes[].verification_ir.planned_delta[]'
-    '.confirms.holder': _spec(
-        'writer_book_ir.chapters[].scenes[].verification_ir.planned_delta[]'
-        '.confirms.holder', consumers=(_A,), scope=_SCENE,
-        mode=DeliveryMode.AUDIT_ONLY, note=_ID_PENDING),
     # VerificationIR：读者确认与禁区
     'writer_book_ir.chapters[].scenes[].verification_ir'
     '.pending_reader_confirmations[].fact': _spec(

@@ -312,8 +312,9 @@ def test_establishment_scope_and_domain_closed():
     with pytest.raises(ValidationError):
         Establishment(op='set', established_by='init', subjects=('ch1',), domain='character', key='k', value='v', scope='act')
     from contracts.schema.execution import EffectDomain
+    # D5 统一（rc13）：reader 域删除——读者认知走 knowledge(holder=reader)。
     assert {d.value for d in EffectDomain} == {
-        'character', 'relation', 'knowledge', 'world', 'reader'}
+        'character', 'relation', 'knowledge', 'world'}
 
 
 # ───────────────────────── WriterContext 双视图 ─────────────────────────

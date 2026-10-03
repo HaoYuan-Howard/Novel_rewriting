@@ -843,8 +843,11 @@ def run_compile_stage4(ctx: ChainContext) -> dict:
     projection = chars.name_projection()
     brief = repository.read_model('stage4/grounding/reconstruction_brief.json')
     kp_statements = {p.kp_id: p.statement for p in brief.propositions}
+    world_statements = {wc.constraint_id: wc.statement
+                        for wc in brief.book_constraints}
     hook_context, errors = compile_hook_context(graph, projection, ctx.hook_constraints,
-                                                chars.name_structure, kp_statements)
+                                                chars.name_structure, kp_statements,
+                                                world_statements)
     if errors:
         raise MechanicalDefectStop(
             f'stage4 hook 上下文机械缺陷：{errors}',
@@ -856,7 +859,8 @@ def run_compile_stage4(ctx: ChainContext) -> dict:
                                        projection=projection,
                                        structure=chars.name_structure,
                                        fact_locks=brief.fact_locks,
-                                       kp_statements=kp_statements)
+                                       kp_statements=kp_statements,
+                                       world_statements=world_statements)
     problems = []
     from novel.stages.common import material_identities
     internal_ids = material_identities(graph, binding, chars)

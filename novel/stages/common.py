@@ -48,6 +48,7 @@ from contracts.schema.design import BodyDesign
 from contracts.schema.execution import (
     EffectDomain, Establishment, ExecutionPlan, ExecutionSlice,
 )
+from contracts.schema.state import StateAddress
 from contracts.schema.grounding import BriefFactLock, SemanticBinding
 from contracts.schema.workflow import STR06_RC_VERSION
 from contracts.schema.source import CharactersCore, NameProjection, NameStructure, render_form
@@ -655,7 +656,7 @@ compiler 在接受拍按锁自动展开，你不写 knowledge/reader 行。
 - 若 A requires B：B 的承载场景不得晚于 A 的承载场景；同场拍序交错合法；
 - series 成员是同一机制的离散兑现时点：接受拍必须**不同拍**，不得合并；
 - 锁摘要列出的 (holder,kp)／kf 由 compiler／你的 state 面按锁规则兑现
-  （漏兑现即拒）；reader 确认类义务在接受拍需要 conf（见 D4 节）。
+  （漏兑现即拒）。
 
 【书级声明】
 - book_style（必填）：整书叙述风格与表达规则的书面声明（进每章请求）；
@@ -683,18 +684,16 @@ compiler 在接受拍按锁自动展开，你不写 knowledge/reader 行。
 - scope 缺省 book；只在本场内成立的临时动作环境才写 scene；
 - modality 缺省 actual；planned＝已定计划／expected＝预计约定／conditional＝
   条件执行——把计划写成 actual 即拒；
+- world 域两种写法：书级规则成立断言 key 用 Brief 世界约束的编号 wc_NN
+  （清单见输入 book_constraints；val 不写——命题成立由 compiler 回填）；
+  剧情世界事实自命名 key、val 必须是有语义的短述（val="true" 即拒）；
 - 槽位身份：跨拍/跨章消费的当前状态沿**同一 key** 更新值，不换键表状态变化；
 - kf_* 事实锁键：只能按锁类别承载（planned 锁写 planned，不得升格 actual；
   unknown_value 只能 op=unknown 不得补值；unanswered 不得 set 作答）；
 - kf 值用一句话短述（如「即将上京参加科举」）；
 - kp_* 键的知情增量一律经 real 标注派生；state 面只承载例外——
   op=unknown（值未知）或 op=unset（显式解除该知情），at＝持有者。
-
-【读者确认必须声明事实地址（D4，例外面）】
-读者延后确认的义务（real 标注里有 reader 锁的）在接受拍写
-conf:{at, key}——它确认的**事实地址**（人物/关系键，指向 initial_state 或
-此前某拍已确立的 set）；确认不得早于事实建立。此前任何位置都不得让读者
-确认；线索、误导与猜测照常安排。其余拍不写 conf。
+  读者揭示同经 real 派生（锁的 holder=reader），不另写行、不写 conf。
 
 【状态读取：先读旧值、后写新值】
 每场 reads 只列实际需要的状态地址 {domain,key,subjects,holder}；定位缺省
@@ -958,38 +957,47 @@ def surface_engine_release(graph: BodyDesign, at_scene: str) -> tuple[SurfaceRel
 def pending_reader_confirmations(
     graph: BodyDesign, scene_index: int,
 ) -> tuple[PendingConfirmation, ...]:
-    """本场开头读者尚未确认的事实（D15 派生；B3 前半起按地址投影，D4）。
+    """本场开头读者尚未确认的命题（D15 派生；rc13 起按读者知情地址投影，D5）。
 
     纯函数：同一 graph＋场序 ⇒ 同一清单。两个维度：
     · **时序**：只列本场起点及以后才发生的读者确认（确认拍在本场内的标注
       in_scene，渲染成「自第 X 拍起可确认」；后场的写手在此之前不得让读者
       确认）；
-    · **地址（D4）**：每条读者确认必须声明它确认的事实地址（reader delta 的
-      `confirms`）；清单只投影**本场实际消费该地址**的项——本场 state_reads
-      读取、或本场拍写入（确认拍所在场写入的正是 confirms 地址）。不消费该
-      地址的场景不拿这条清单；由此「后章读者确认变化」只影响章包内引用该
-      地址的章。确认前不作为已确认信息——受保护的是「何时确认」，不是
-      「能否暗示」（线索、误导与猜测照常演出）。
+    · **命题（D5）**：读者揭示统一走 knowledge(holder=reader, key=kp)——
+      清单只投影**本场实际动该键**的项（state_reads 读取或拍写入同 key，
+      含确认行本身——确认拍所在场天然在列）。确认前不作为已确认信息——
+      受保护的是「何时确认」，不是「能否暗示」（线索、误导与猜测照常演出）。
+      **登记的收窄**：rc12 经 `confirms` 显式关联「事实建立场」的通道已随
+      D5 删除——揭示行的 key 是 kp 句柄，事实建立行的 key 是自由键，不同
+      名时建立场不再自动获得清单（r10b 实证该清单全书仅 1 条，投影稀疏；
+      提前暴露防护的其余承载是义务满足面与 hook 禁区）。
     """
     scene = graph.scenes[scene_index]
-    addressed = {r.address() for r in scene.state_reads}
+    #: 本场动的命题集合（按 key 匹配、不分域）：读取该 key（任意域——事实
+    #: 建立场与知情读取场都是「动该命题」）、或拍写入该 key（含读者确认行
+    #: 本身——确认拍所在场写入的正是读者知情地址）。按命题维度匹配保留
+    #: D4 的覆盖面：建立该事实的场景（world/character 域写）与消费该命题
+    #: 的场景都拿到「确认前不作为已确认信息」的提醒。
+    touched: set[str] = set()
+    for read in scene.state_reads:
+        touched.add(read.key)
     for beat in scene.beats:
         for delta in beat.target_delta:
-            if delta.confirms is not None:
-                addressed.add(delta.confirms.address())
-            addressed.add(delta.address())
+            touched.add(delta.key)
     items: list[PendingConfirmation] = []
     for later in range(scene_index, len(graph.scenes)):
         for beat in graph.scenes[later].beats:
             for delta in beat.target_delta:
-                if delta.domain is not EffectDomain.READER or delta.op != 'set':
+                if delta.domain is not EffectDomain.KNOWLEDGE \
+                        or delta.holder != 'reader' or delta.op != 'set':
                     continue
-                if delta.confirms.address() not in addressed:
+                if delta.key not in touched:
                     continue
                 items.append(PendingConfirmation(
                     fact=delta.value or '', key=delta.key,
                     subjects=tuple(delta.subjects),
-                    address=delta.confirms,
+                    address=StateAddress(domain=delta.domain, key=delta.key,
+                                         subjects=(), holder=delta.holder),
                     position=f'{graph.scenes[later].scene_id}#{beat.beat_id}',
                     in_scene=(later == scene_index)))
     return tuple(items)
@@ -1125,7 +1133,9 @@ def participant_background(
         elif entry.domain is EffectDomain.RELATION:
             related = any(s in participants for s in entry.subjects)
         else:
-            continue          # world／reader 不按参与者补齐
+            continue          # world 不按参与者补齐；读者揭示（knowledge/
+            # holder=reader）经 entry_knowledge_view 且 holder 非参与者，
+            # 天然不进补齐面。
         if related and entry.address() not in declared:
             state[entry.address()] = entry
     knowledge: dict[tuple, KnowledgeEntry] = {}
@@ -1178,9 +1188,6 @@ def consumption_closure(graph: BodyDesign) -> dict[tuple, tuple[int, ...]]:
             for delta in beat.target_delta:
                 if delta.key.startswith(('kp_', 'kf_')):
                     _consume(delta.address(), index)
-                if (delta.domain is EffectDomain.READER and delta.op == 'set'
-                        and delta.confirms is not None):
-                    _consume(delta.confirms.address(), index)
     hook = getattr(graph, 'hook', None)
     if hook is not None:
         for fact in hook.opening_facts:
@@ -1337,7 +1344,8 @@ def project_context(*, scene_id: str, graph: BodyDesign,
                     open_threads: tuple['OpenThreadIR', ...] = (),
                     consumers: Mapping[tuple, tuple[int, ...]] | None = None,
                     unanswered_guards: tuple['UnansweredGuard', ...] = (),
-                    kp_statements: Mapping[str, str] = (),
+                    kp_statements: Mapping[str, str] = {},
+                    world_statements: Mapping[str, str] = {},
                     ) -> tuple[WriterContext, ExecutionSlice]:
     """场景双视图与消费身份的确定性投影（纯函数，不落盘、不调 LLM）。
 
@@ -1405,18 +1413,34 @@ def project_context(*, scene_id: str, graph: BodyDesign,
         return entry if statement is None else entry.model_copy(
             update={'proposition': statement})
 
+    def _resolve_world_state(entry):
+        # world 规则键（wc_{nn}）的 value 恒为 "true"（命题成立性）——经
+        # world_statements（Brief 世界约束）回填命题文本，写手不再收到零信息
+        # 的「true」（CS-3 世界规则 id；机械折叠面不动，I-16）。
+        statement = world_statements.get(entry.key) \
+            if entry.domain is EffectDomain.WORLD else None
+        return entry if statement is None else entry.model_copy(
+            update={'value': statement})
+
     knowledge = tuple(_resolve_knowledge(e) for e in knowledge)
     background_knowledge = tuple(_resolve_knowledge(e) for e in background_knowledge)
-    beat_reads = {beat: tuple(_resolve_knowledge(e) if isinstance(e, KnowledgeEntry) else e
-                             for e in entries)
-                  for beat, entries in beat_reads.items()}
+    state = tuple(_resolve_world_state(e) for e in state)
+    background_state = tuple(_resolve_world_state(e) for e in background_state)
+    beat_reads = {beat: tuple(
+        _resolve_knowledge(e) if isinstance(e, KnowledgeEntry)
+        else _resolve_world_state(e)
+        for e in entries)
+        for beat, entries in beat_reads.items()}
 
     def _resolve_delta(d):
-        # knowledge/reader 增量的 value 恒为 "true"；命题内容回填进 value，
-        # 渲染（_delta_line／pending 确认）因此拿到的是命题文本而非 "true"
-        #（fold/plan 的 Establishment 不动——机械折叠仍按句柄，I-16 单真相源）。
+        # knowledge 增量（含读者揭示 holder=reader）的 value 恒为 "true"；
+        # 命题内容回填进 value，渲染（_delta_line／pending 确认）因此拿到的
+        # 是命题文本而非 "true"（fold/plan 的 Establishment 不动——机械折叠
+        # 仍按句柄，I-16 单真相源）。world 规则键（wc_{nn}）同尺回填（CS-3）。
         statement = kp_statement(kp_statements, d.key) \
-            if d.domain in (EffectDomain.KNOWLEDGE, EffectDomain.READER) else None
+            if d.domain is EffectDomain.KNOWLEDGE else (
+                world_statements.get(d.key)
+                if d.domain is EffectDomain.WORLD else None)
         if statement is None:
             return type(d)(**d.model_dump())  # 保持既有拷贝语义：IR 不与 graph 共享实例
         return d.model_copy(update={'value': statement})
@@ -1563,8 +1587,12 @@ def _names(releases) -> dict[str, tuple[str, ...]]:
 
 
 def _name(names: dict[str, tuple[str, ...]], char_id: str) -> str:
-    """只解析已释放面；narrator 是明确旁白角色，不以人物 slug 兜底。"""
-    return '旁白叙述' if char_id == 'narrator' else surface_display(names, char_id)
+    """只解析已释放面；narrator／reader 是保留字，不以人物 slug 兜底。"""
+    if char_id == 'narrator':
+        return '旁白叙述'
+    if char_id == 'reader':
+        return '读者'
+    return surface_display(names, char_id)
 
 
 def _subjects_line(names, subjects, holder=None) -> str:
@@ -1598,12 +1626,12 @@ def _delta_line(names, delta) -> str:
 
     R10b 起 `modality ≠ actual` 的事实 set 显式带「尚未发生」措辞（C2 的
     写手面：计划／预计被写成已发生，机械面在 kf 锁，措辞面在这里）。
+    读者揭示是 knowledge(holder=reader)（D5 统一）——holder 渲染为「读者」，
+    模式措辞与人物知情一致。
     """
     if delta.domain is EffectDomain.KNOWLEDGE:
         mode = _KNOWLEDGE_WORDINGS.get(delta.knowledge_mode or 'known', '确知')
         return f'{_name(names, delta.holder or "")}{mode}「{delta.value}」'
-    if delta.domain is EffectDomain.READER:
-        return f'读者自此知晓：{delta.value}'
     who = _subjects_line(names, delta.subjects, delta.holder)
     head = f'{who}：' if who else ''
     if delta.op == 'set':

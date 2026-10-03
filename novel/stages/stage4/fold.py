@@ -64,7 +64,9 @@ class FoldedState:
 
     def entry_state_view(self, scene_start_anchor: str, domains=(
             EffectDomain.CHARACTER, EffectDomain.RELATION,
-            EffectDomain.WORLD, EffectDomain.READER)) -> tuple[StateEntry, ...]:
+            EffectDomain.WORLD)) -> tuple[StateEntry, ...]:
+        # 读者揭示是 knowledge(holder=reader)（D5 统一，rc13）——经
+        # entry_knowledge_view 投影，state 视图不再有 reader 域。
         return tuple(StateEntry(
             domain=e.domain, key=e.key, subjects=e.subjects, value=e.value,
             status=e.op, established_by=e.established_by)

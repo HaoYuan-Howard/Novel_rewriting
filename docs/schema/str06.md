@@ -396,9 +396,10 @@ new_scene}、可选 `carryover`、`recap` ∈ {do_not_recap, brief_orientation}�
 
 **世界规则**：`novel/stages/stage4/grounding.py::project_brief` 把 Blueprint 的
 world_constraints 机械填入 `ReconstructionBrief.book_constraints`（世界约束通道
-恒空即红，AUD 反例已转绿）；Design 侧决定沿用或改写成目标 `world_rules`
-（BodyDesign 书级字段），随 BookBrief 进每章，以 `must_respect` 呈现
-「作为世界边界，不要讲解」。
+恒空即红，AUD 反例已转绿；rc13 起带源稳定编号 `wc_{nn}`——`BookConstraint`
+结构，design wire 的 world 规则断言以该编号引用，渲染面经映射送命题文本）；
+Design 侧决定沿用或改写成目标 `world_rules`（BodyDesign 书级字段），随
+BookBrief 进每章，以 `must_respect` 呈现「作为世界边界，不要讲解」。
 
 ### 自愈：typed issue 路由与有界修订（R3）
 

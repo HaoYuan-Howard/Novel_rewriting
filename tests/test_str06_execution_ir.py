@@ -191,9 +191,9 @@ def _reader_scene(sid, *, establish=None, confirms=None, reads=()):
                                   subjects=(), op='set', scope='book'))
     for key, value in (confirms or ()):
         deltas.append(TargetDelta(
-            domain='reader', key=key, value=value, subjects=(), op='set',
-            scope='scene', confirms=StateAddress(domain='world', key=key,
-                                                 subjects=(), holder=None)))
+            domain='knowledge', key=key, value=value, subjects=(),
+            holder='reader', op='set', scope='scene',
+            knowledge_mode='known'))
     return TargetScene(state_reads=reads, scene_id=sid,
         driver=SceneDriver(focal_actor='ch1', immediate_want='w', opposition='o', turn='t'),
         realization_brief=f'重心在{sid}的核心对峙；展开转折，收在结果落地。',
@@ -224,11 +224,11 @@ def _reader_delta_graph():
 
 
 def test_pending_reader_confirmations_are_projected_by_address():
-    """D15＋D4：确认前按地址投影——只进实际消费该地址的场景清单。
+    """D15＋D5：确认前按命题投影——只进实际动该命题（同 key 读写）的场景清单。
 
     时序：本场起点之后的确认才列（确认场标注确认拍，确认后不再列入）；
-    地址：本场不读不写的事实，其后续确认不进本场清单（后章读者确认变化只
-    影响章包引用该地址的章）。"""
+    命题：本场不读不写该 key，其后续确认不进本场清单（后章读者确认变化只
+    影响章包引用该命题的章）。"""
     from novel.stages.common import pending_reader_confirmations
     graph = _reader_delta_graph()
     # s01 只写 world:hiding：清单含 hiding@s02，不含 wardrobe@s03（地址不相干）
@@ -243,10 +243,11 @@ def test_pending_reader_confirmations_are_projected_by_address():
     assert [(p.fact, p.position, p.in_scene) for p in
             pending_reader_confirmations(graph, 2)] == [
         ('衣柜藏身', 's03#bt1', True)]
-    # 每条清单带确认的事实地址（D4 机械面）
+    # 每条清单带读者知情地址（D5 机械面：knowledge/holder=reader）
     items = pending_reader_confirmations(graph, 1)
     assert [(p.address.domain.value, p.address.key) for p in items] == [
-        ('world', 'hiding'), ('world', 'wardrobe')]
+        ('knowledge', 'hiding'), ('knowledge', 'wardrobe')]
+    assert all(p.address.holder == 'reader' for p in items)
 
 
 def test_pending_confirmations_render_into_the_writer_packet():

@@ -357,15 +357,13 @@ def lock_order_violations(
     for si, scene in enumerate(graph.scenes):
         for bi, beat in enumerate(scene.beats):
             for delta in beat.target_delta:
-                if not (delta.key.startswith('kp_') and delta.op == 'set'):
+                if not (delta.key.startswith('kp_') and delta.op == 'set'
+                        and delta.domain is EffectDomain.KNOWLEDGE):
                     continue
-                if delta.domain is EffectDomain.KNOWLEDGE:
-                    triple = (delta.holder or '', delta.key,
-                              delta.knowledge_mode or '')
-                elif delta.domain is EffectDomain.READER:
-                    triple = ('reader', delta.key, 'known')
-                else:
-                    continue
+                # 读者揭示（holder=reader，D5 统一）与人物知情同一把尺——
+                # triple 天然带 holder/mode，无需特判。
+                triple = (delta.holder or '', delta.key,
+                          delta.knowledge_mode or '')
                 auth = authorized.get(triple)
                 if auth is not None and (si, bi) < auth[0]:
                     violations.append(LockOrderViolation(

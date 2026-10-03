@@ -126,11 +126,10 @@ def _rich_wire() -> dict:
                        'holder': 'yun_niang', 'key': 'jade_secret', 'op': 'set',
                        'value': '玉佩刻着沈字', 'scope': 'book',
                        'knowledge_mode': 'known'},
-                      {'domain': 'reader', 'subjects': [], 'holder': None,
+                      {'domain': 'knowledge', 'subjects': [], 'holder': 'reader',
                        'key': 'reveal_jade', 'op': 'set',
                        'value': '玉佩刻着沈字，指向旧案', 'scope': 'book',
-                       'confirms': {'domain': 'knowledge', 'subjects': ['fu_jun'],
-                                    'holder': 'yun_niang', 'key': 'jade_secret'}}],
+                       'knowledge_mode': 'known'}],
                   'delivery_hint': '',
                   'surface_introductions': [],
                   'threads': [
@@ -639,7 +638,7 @@ def test_project_brief_fills_book_constraints_from_blueprint():
                         statement='官府不涉异事', source_refs=('b01_01',),
                         basis=({'segment': 'e01_01', 'quote': '官府不涉异事'},)))})
     brief, _ = project_brief(cp, chars, bp)
-    assert brief.book_constraints == ('术法须以寿命为代价', '官府不涉异事')
+    assert [(w.constraint_id, w.statement) for w in brief.book_constraints] ==         [('wc_1', '术法须以寿命为代价'), ('wc_2', '官府不涉异事')]
 
 
 def test_world_rules_reach_every_chapter_as_must_respect():

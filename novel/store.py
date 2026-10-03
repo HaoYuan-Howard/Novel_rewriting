@@ -120,6 +120,108 @@ def _artifact_model(rel: str | None):
     return ARTIFACT_SPECS[rel].model if rel in ARTIFACT_SPECS else None
 
 
+# ── rc12→rc13 盘面归一（CS-3 余项：D5 统一＋world 规则 id）──────────────────
+# 集中兼容层（S-03）：只服务 read_model 的正式输入口，inspect 诊断面读原始
+# 字节不受影响。删除条件：rc12 形状的现役产物（r10b 及更早运行根）全部退役
+# 或重跑后，本函数连同本注释删除。
+
+def _reader_row_to_knowledge(row: dict) -> dict:
+    """rc12 reader 域行 → rc13 knowledge(holder=reader) 行（机械等价迁移）。
+
+    `confirms` 地址随 D5 统一删除——其「确认前不作为已确认信息」的管控由
+    pending 投影（读者知情地址）承担，机械面不再需要该地址。
+    """
+    out = {k: v for k, v in row.items() if k != 'confirms'}
+    out['domain'] = 'knowledge'
+    out['holder'] = 'reader'
+    out['subjects'] = ()
+    out['knowledge_mode'] = 'known'
+    return out
+
+
+def _upgrade_delta_list(rows) -> list:
+    if not isinstance(rows, list):
+        return rows
+    return [_reader_row_to_knowledge(r) if isinstance(r, dict)
+            and r.get('domain') == 'reader'
+            else ({k: v for k, v in r.items() if k != 'confirms'}
+                  if isinstance(r, dict) else r)
+            for r in rows]
+
+
+_RC12_DELTA_SITES = {
+    'stage4/design/body_design.json',
+    'stage4/design/presentation_graph.json',
+}
+_RC12_ESTABLISHMENT_SITES = {
+    'stage4/compiled/execution_plan.json',
+}
+#: rc13 形状变化的全部产物（白名单；semantic_binding 等形状未变者原样读入）。
+_RC13_SITES = (_RC12_DELTA_SITES | _RC12_ESTABLISHMENT_SITES
+               | {'stage4/grounding/reconstruction_brief.json',
+                  'stage4/ir/writer_book_ir.json'})
+
+
+def _upgrade_rc12_payload(spec: str | None, data: dict) -> dict:
+    """rc12 盘面 → rc13 形状（I-13 登记迁移；rc13 盘面原样通过）。
+
+    · Brief：`book_constraints` 从 statement 字符串列表升 WorldConstraint
+      结构——id 按**列表序**派发 `wc_{nn}`（登记过的近似：旧盘面的规则 id
+      信息在 rc12 编译时已丢弃；旧 body_design 的 world 键是 snake_case、
+      不引用 wc 编号，序号 id 只作形状合法化，不承诺与源 blueprint 对账）；
+    · BodyDesign／PresentationGraph：initial_state 与拍上 target_delta 的
+      reader 行归一成 knowledge(holder=reader)，confirms 删除；
+    · ExecutionPlan：initial_establishments 与 planned_delta 的 reader 建立
+      同尺归一；
+    · WriterBookIR：拍 deltas／planned_delta 归一；pending_reader_
+      confirmations 的地址升为读者知情地址（knowledge/holder=reader）。
+    """
+    if spec is None or spec not in _RC13_SITES \
+            or data.get('contract_version') != 'str06-rc12':
+        return data
+    data = dict(data)
+    data['contract_version'] = 'str06-rc13'
+    if spec == 'stage4/grounding/reconstruction_brief.json':
+        constraints = data.get('book_constraints')
+        if isinstance(constraints, list) and any(isinstance(c, str) for c in constraints):
+            data['book_constraints'] = [
+                {'constraint_id': f'wc_{i:02d}', 'statement': c} if isinstance(c, str) else c
+                for i, c in enumerate(constraints, start=1)]
+        return data
+    if spec in _RC12_DELTA_SITES:
+        data['initial_state'] = _upgrade_delta_list(data.get('initial_state'))
+        for scene in data.get('scenes') or []:
+            for beat in scene.get('beats') or []:
+                beat['target_delta'] = _upgrade_delta_list(beat.get('target_delta'))
+        return data
+    if spec in _RC12_ESTABLISHMENT_SITES:
+        data['initial_establishments'] = _upgrade_delta_list(
+            data.get('initial_establishments'))
+        for scene in data.get('scenes') or []:
+            scene['establishments'] = _upgrade_delta_list(scene.get('establishments'))
+            scene['planned_delta'] = _upgrade_delta_list(scene.get('planned_delta'))
+        return data
+    if spec == 'stage4/ir/writer_book_ir.json':
+        for chapter in data.get('chapters') or []:
+            for scene in chapter.get('scenes') or []:
+                if isinstance(scene.get('contract_version'), str):
+                    scene['contract_version'] = 'str06-rc13'
+                ir = scene.get('verification_ir') or {}
+                for beat in ir.get('beats') or []:
+                    beat['deltas'] = _upgrade_delta_list(beat.get('deltas'))
+                ir['planned_delta'] = _upgrade_delta_list(ir.get('planned_delta'))
+                for pending in ir.get('pending_reader_confirmations') or []:
+                    address = pending.get('address')
+                    if isinstance(address, dict) and address.get('domain') == 'reader':
+                        address = dict(address)
+                        address['domain'] = 'knowledge'
+                        address['holder'] = 'reader'
+                        address['subjects'] = []
+                        pending['address'] = address
+        return data
+    return data
+
+
 
 #: 产物里那个来源账字段的**盘上键名**。模型侧字段叫 `provenance`（`_` 开头在 Pydantic 里
 #: 是私有属性），靠 `Field(alias='_provenance')` 对上；这里按 alias 找，不按字段名猜。
@@ -2850,6 +2952,7 @@ class Str06Repository:
         data = self.read(rel)
         if isinstance(data, dict):
             data = {k: v for k, v in data.items() if k != '_provenance'}
+            data = _upgrade_rc12_payload(spec, data)
         return model.model_validate(data)
 
     def _require_sealed(self, rel: str) -> None:

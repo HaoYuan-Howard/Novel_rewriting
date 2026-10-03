@@ -145,7 +145,7 @@ def compile_execution_plan(
             net[(*est.address(), est.scope)] = est
         owned = sorted(oid for oid, e in entries.items() if e.scene_id == scene.scene_id)
         constraints = tuple(ConstraintSpec(
-            domain='reader', key=oid,
+            domain='obligation', key=oid,
             expected=obligations[oid].satisfaction, scope='scene')
             for oid in owned if obligations[oid].must_preserve)
         scenes.append(SceneExecutionPlan(

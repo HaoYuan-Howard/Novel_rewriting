@@ -281,11 +281,9 @@ def _design_wire(brief: ReconstructionBrief) -> dict:
                   'expression_refs': ['ex_02'], 'surface_introductions': []},
                  {'event': '读者获知实证', 'participants': ['yun_niang'],
                   'delivery_hint': '', 'target_delta': [
-                      {'domain': 'reader', 'subjects': [], 'holder': None,
+                      {'domain': 'knowledge', 'subjects': [], 'holder': 'reader',
                        'key': kp_reader, 'op': 'set', 'value': '床底藏物属实',
-                       'scope': 'book',
-                       'confirms': {'domain': 'world', 'key': 'evidence_fact',
-                                    'subjects': [], 'holder': None}}],
+                       'scope': 'book', 'knowledge_mode': 'known'}],
                   'expression_refs': [], 'surface_introductions': []},
                  {'event': '约定归期', 'participants': ['fu_jun'],
                   'delivery_hint': '', 'target_delta': [
@@ -390,13 +388,14 @@ def test_fact_set_without_modality_rejected_by_shape():
 # ───────────────────────── C6：读者确认须有 known 锁 ─────────────────────────
 
 def test_c6_reader_confirmation_without_known_lock_rejected():
-    """C6 红例：无 reader known 锁的命题（p_y）被安排读者确认 → 拒。"""
+    """C6 红例（D5 统一后同一把尺）：无 reader known 锁的命题（p_y）被安排
+    读者揭示（knowledge(holder=reader)）→ 拒。"""
     brief = _brief()
     kp_y = _kp(brief, '婆母似乎知情')
     wire = _design_wire(brief)
     wire['scenes'][0]['beats'][4]['target_delta'][0]['key'] = kp_y
     _, errors = _assemble(wire, brief)
-    assert any('没有 known 锁' in e and kp_y in e for e in errors), errors
+    assert any('无锁或模式越权' in e and kp_y in e for e in errors), errors
 
 
 # ───────────────────────── C9：值未知与原文未回答 ─────────────────────────

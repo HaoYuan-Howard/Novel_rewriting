@@ -551,9 +551,10 @@ def _body_mutations() -> list[_BodyMutation]:
             update={'previous_ending': ending}))
 
     def delta_domain(ir):
-        # READER 域走「读者自此知晓」分支：换措辞行，不依赖 KNOWLEDGE 的 holder
+        # WORLD 域走「世界层面」分支：换措辞行（D5 统一后无独立 reader 域，
+        # 读者揭示是 knowledge(holder=reader)，归 delta_holder 的变异面）
         return _patch_first_delta(ir, 1, 'sc01', 'sc01#b01',
-                                  domain=EffectDomain.READER)
+                                  domain=EffectDomain.WORLD, subjects=())
 
     def delta_holder(ir):
         return _patch_first_delta(ir, 1, 'sc01', 'sc01#b01', holder='yun_niang')

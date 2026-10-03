@@ -174,7 +174,8 @@ def compile_writer_book_ir(
     total_budget: int, length_band: tuple[float, float], book_title: str = '',
     projection: NameProjection, structure: NameStructure | None = None,
     fact_locks: tuple[BriefFactLock, ...] = (),
-    kp_statements: Mapping[str, str] = (),
+    kp_statements: Mapping[str, str] = {},
+    world_statements: Mapping[str, str] = {},
 ) -> WriterBookIR:
     """全书静态写作 IR 的唯一产地。纯函数：不落盘、不调 LLM、不修改输入。
 
@@ -186,6 +187,8 @@ def compile_writer_book_ir(
     的当前状态，C7）。`kp_statements`（Brief.propositions 的 kp→statement
     表）回填知情/读者增量的命题文本——value 恒为 "true"，不回填则写手面
     全是「确知「true」」（R10b 锁以内容送达；2026-10-03 D6 渲染修复）。
+    `world_statements`（Brief 世界约束的 wc_{nn}→statement 表）同尺回填
+    world 规则键的 value（CS-3：布尔规则键渲染零信息的收口）。
     """
     budgets = allocate_chapter_budgets(graph, total_budget)
     guards = unanswered_guards(graph, binding, fact_locks)
@@ -208,7 +211,7 @@ def compile_writer_book_ir(
                     plan.scenes[:scenes_before], initial=plan.initial_establishments),
                 thread_ops=thread_ops, open_threads=open_threads,
                 consumers=consumers, unanswered_guards=guards,
-                kp_statements=kp_statements)
+                kp_statements=kp_statements, world_statements=world_statements)
             contexts.append(context)
             lines.append(_scene_line(graph, scene_id))
             scenes_before += 1

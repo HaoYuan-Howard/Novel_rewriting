@@ -226,11 +226,9 @@ def _design_wire(brief: ReconstructionBrief, *, flashback: bool = False) -> dict
                   'expression_refs': [], 'surface_introductions': []},
                  {'event': '读者获知', 'participants': ['yun_niang'],
                   'delivery_hint': '', 'target_delta': [
-                      {'domain': 'reader', 'subjects': [], 'holder': None,
+                      {'domain': 'knowledge', 'subjects': [], 'holder': 'reader',
                        'key': kp_x, 'op': 'set', 'value': '床底藏物属实',
-                       'scope': 'book',
-                       'confirms': {'domain': 'world', 'key': 'evidence_fact',
-                                    'subjects': [], 'holder': None}}],
+                       'scope': 'book', 'knowledge_mode': 'known'}],
                   'expression_refs': [], 'surface_introductions': []},
                  {'event': '第一次现身', 'participants': [],
                   'delivery_hint': '', 'target_delta': [],

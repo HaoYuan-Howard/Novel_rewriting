@@ -76,10 +76,9 @@ def _wire() -> dict:
                                'subject': 'fu_jun', 'text': '再不隐瞒'}]},
                  {'event': '云娘起疑', 'participants': ['yun'],
                   'delivery_hint': '', 'target_delta': [
-                      {'domain': 'reader', 'subjects': [], 'op': 'set',
-                       'scope': 'scene', 'key': 'debt', 'value': '夫君身负旧约',
-                       'confirms': {'domain': 'relation', 'subjects': ['yun', 'fu_jun'],
-                                    'holder': None, 'key': 'marital_status'}}],
+                      {'domain': 'knowledge', 'subjects': [], 'holder': 'reader',
+                       'op': 'set', 'scope': 'scene', 'key': 'debt',
+                       'value': 'true', 'knowledge_mode': 'known'}],
                   'delivery_hint': ''}],
              'delivery': {'pov': 'yun', 'voice': '冷峻', 'avoid': []}},
             {'state_reads': [{'domain': 'relation', 'subjects': ['yun', 'fu_jun'],
@@ -135,7 +134,7 @@ def test_protocols_are_independent_literals():
     assert len({STAGE4_PRESERVE_PROTOCOL, STAGE4_DESIGN_PROTOCOL,
                 STAGE4_HOOK_DESIGN_PROTOCOL}) == 3
     # RC 版式头随 R2 语义送达升 rc10（R1 关联无损曾升 rc9）
-    assert STR06_RC_VERSION == 'str06-rc12'
+    assert STR06_RC_VERSION == 'str06-rc13'
 
 
 def test_design_wire_without_protocol_is_refused():
@@ -269,56 +268,43 @@ def test_book_style_and_voices_project_into_book_brief_and_packet():
     assert '声线：短句、少感叹' in packet
 
 
-# ───────────────────────── 读者确认的事实地址（D4） ─────────────────────────
+# ──────────────── 读者认知统一 knowledge(holder=reader)（D5，rc13） ────────────────
 
-def test_reader_confirmation_without_address_is_refused():
-    """D4：reader set 漏填 confirms 即拒（schema 构造期）。"""
-    with pytest.raises(ValidationError, match='confirms'):
+def test_legacy_reader_domain_and_confirms_are_refused():
+    """D5 统一：旧 reader 域整域关闭（枚举闭集）、`confirms` 键 extra 即拒。
+
+    读者揭示统一为 knowledge(holder=reader)（模式取知情锁）；确认时序管控
+    归 pending 投影（读者知情地址）与锁位置 Guard——confirms 地址面不再存在。
+    """
+    with pytest.raises(ValidationError, match='domain'):
         TargetDelta(domain='reader', subjects=(), key='hiding', op='set',
                     scope='scene', value='床底有人')
-    # 非 reader 域不得携带 confirms
     with pytest.raises(ValidationError, match='confirms'):
-        TargetDelta(modality='actual',domain='world', subjects=(), key='hiding', op='set',
-                    scope='book', value='床底有人',
+        TargetDelta(modality='actual', domain='world', subjects=(), key='hiding',
+                    op='set', scope='book', value='床底有人',
                     confirms=StateAddress(domain='world', key='hiding'))
-    # confirms 不得指向读者确认本身
-    with pytest.raises(ValidationError, match='事实地址'):
-        TargetDelta(domain='reader', subjects=(), key='hiding', op='set',
-                    scope='scene', value='床底有人',
-                    confirms=StateAddress(domain='reader', key='other'))
 
 
-def test_reader_confirmation_must_reference_an_established_fact():
-    """D4 引用闭合：确认地址必须真实建立，且确认不早于建立。"""
-    bad = _wire()
-    bad['scenes'][0]['beats'][2]['target_delta'][0]['confirms'] = {
-        'domain': 'world', 'subjects': [], 'holder': None, 'key': 'ghost_fact'}
-    _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'}, expression_requirements=sample_requirements(), source_narration=sample_narration())
-    assert any('从未建立' in e for e in errors)
-
-    # 确认早于建立：确认指向的地址首次建立在确认拍之后的场景
-    bad = _wire()
-    bad['scenes'][0]['beats'][2]['target_delta'][0]['confirms'] = {
-        'domain': 'world', 'subjects': [], 'holder': None, 'key': 'hiding'}
-    bad['scenes'][1]['beats'][1]['target_delta'] = [
-        {'domain': 'world', 'subjects': [], 'op': 'set', 'modality': 'actual', 'scope': 'book',
-         'key': 'hiding', 'value': '床底有人'}]
-    _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'}, expression_requirements=sample_requirements(), source_narration=sample_narration())
-    assert any('早于事实建立' in e for e in errors)
+def test_reader_reveal_is_knowledge_with_reader_holder():
+    """统一后的读者揭示形状：knowledge 域、holder=reader、模式取锁（known）。"""
+    body = _green()
+    row = body.scenes[0].beats[2].target_delta[0]
+    assert (row.domain.value, row.holder, row.knowledge_mode, row.key) == (
+        'knowledge', 'reader', 'known', 'debt')
 
 
-def test_reader_confirmation_is_projected_by_address_only():
-    """D4 地址维度：确认只投影进实际消费该地址的场景（读取或写入）。"""
+def test_reader_confirmation_is_projected_by_touched_proposition():
+    """D5 投影维度：确认只投影进实际动该命题（kp）的场景（读取或写入）。"""
     from novel.stages.common import pending_reader_confirmations
     body = _green()
-    # sc01 写 relation:marital_status 且 reader 确认指向它 ⇒ 在清单
+    # sc01 写下 reader 确认行（kp=debt）⇒ 本场在清单（确认拍在本场，in_scene）
     first = pending_reader_confirmations(body, 0)
-    assert [(p.fact, p.position, p.in_scene) for p in first] == [
-        ('夫君身负旧约', 'sc01#b03', True)]
-    assert first[0].address.address() == ('relation', ('yun', 'fu_jun'), '', 'marital_status')
+    assert [(p.key, p.position, p.in_scene) for p in first] == [
+        ('debt', 'sc01#b03', True)]
+    assert first[0].address.address() == ('knowledge', (), 'reader', 'debt')
     # 确认已发生在过去（sc01） ⇒ sc02 起不再列入（时序维度，D15）
     assert pending_reader_confirmations(body, 1) == ()
-    # 不消费该地址的场景 ⇒ 清单为空（按地址的精确投影）
+    # 不动该命题的场景 ⇒ 清单为空（按命题的精确投影）
     sliced = body.model_copy(update={'scenes': (body.scenes[1],),
                                      'chapters': (ChapterAssignment(
                                          chapter_ordinal=1, purpose='p',

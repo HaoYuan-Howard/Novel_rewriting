@@ -42,9 +42,14 @@ class Establishment(StateChange):
 
 
 class ConstraintSpec(StrictModel):
-    """执行期谓词约束：Predicate + Scope。"""
+    """执行期谓词约束：Predicate + Scope。
 
-    domain: EffectDomain
+    `domain` 是约束**类别标签**（如 obligation＝必保义务满足条件），不是
+    状态域——rc13 起不再借用 EffectDomain（D5 删 READER 域后该字段不再有
+    状态域语义可指）；旧盘面的 reader 标签按 str 兼容读取。
+    """
+
+    domain: str = Field(min_length=1)
     key: str = Field(min_length=1)
     expected: str = Field(min_length=1)
     scope: str = Field(pattern=r'^(book|scene)$')
@@ -95,7 +100,7 @@ class SceneExecutionPlan(StrictModel):
 class ExecutionPlan(StrictModel):
     """全书执行计划（Derived；内容身份由 repository 记，模型不自持 hash）。"""
 
-    contract_version: Literal['str06-rc12'] = 'str06-rc12'
+    contract_version: Literal['str06-rc13'] = 'str06-rc13'
     initial_establishments: tuple[Establishment, ...] = ()
     scenes: tuple[SceneExecutionPlan, ...] = Field(min_length=1)
     provenance: FreeProvenance | LlmProvenance | None = Field(
