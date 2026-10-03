@@ -37,7 +37,7 @@ from pydantic import ValidationError
 from contracts.schema.observation import ChapterObservation
 from contracts.schema.source import REGISTERED_STATE_KEYS, RETIRED_STATE_KEYS
 from novel.stages.common import CHAPTER_PROMPT, PRE_CHAPTER_RULE
-from novel.stages.stage2.resolver import EvidenceResolver, verify_bases
+from novel.stages.stage2.resolver import EvidenceResolver
 
 
 def chapter_prior_text(chapters: list[dict], before_chapter: int) -> str:
@@ -107,45 +107,48 @@ def _normalize_registered_scopes(wire: Any, errors: list[str]) -> Any:
     return normalized
 
 
-def _chapter_handle_discipline(beats: list[Any], errors: list[str]) -> None:
+def _chapter_handle_discipline(
+        beats: list[Any],
+        issues: list[tuple[tuple[str | int, ...] | None, str]]) -> None:
     """章内句柄纪律的自含部分（`R-2.11`/`R-2.12`；引用闭合归 compile）。
 
     只查不需要登记表就能确证的冲突：同一命题句柄带两种 statement 文本、
     同一悬念句柄在本章内 open 两次。跨章句柄与章内前向引用保持未决/
     放行——配对与闭合归 associate／compile（D8：不默认合并或默认不同）。
+    CS-patch（2026-10-03）：逐条附 wire 路径（`compile 的 errors` 是本视图
+    去掉路径的投影，判定与定位同一把尺）。
     """
     statements: dict[str, str] = {}
     opened_loops: set[str] = set()
-    for raw in beats:
+    for beat_index, raw in enumerate(beats):
         if not isinstance(raw, dict):
             continue
-        for eff in raw.get('effects') or []:
-            prop = (eff or {}).get('proposition') if isinstance(eff, dict) else None
-            if isinstance(prop, dict) and prop.get('statement') is not None:
-                _conflict(statements, prop, 'effect', errors)
-        for cog in raw.get('cognition') or []:
-            prop = (cog or {}).get('proposition') if isinstance(cog, dict) else None
-            if isinstance(prop, dict) and prop.get('statement') is not None:
-                _conflict(statements, prop, 'cognition', errors)
+        for kind in ('effects', 'cognition'):
+            for transfer_index, transfer in enumerate(raw.get(kind) or (), 1):
+                prop = (transfer or {}).get('proposition') if isinstance(transfer, dict) else None
+                if isinstance(prop, dict) and prop.get('statement') is not None:
+                    _conflict(statements, prop, kind,
+                              ('beats', beat_index, kind, transfer_index - 1), issues)
         for loop in raw.get('loops') or []:
             if not isinstance(loop, dict):
                 continue
             ref, op = loop.get('ref'), loop.get('op')
             if op == 'open' and ref in opened_loops:
-                errors.append(
-                    f'loop {ref!r} 本章内重复 open（悬念只能 open 一次；'
-                    '不同次的约定是不同的悬念线，换新句柄）')
+                issues.append((('beats', beat_index),
+                               f'loop {ref!r} 本章内重复 open（悬念只能 open 一次；'
+                               '不同次的约定是不同的悬念线，换新句柄）'))
             if op == 'open':
                 opened_loops.add(ref)
 
 
 def _conflict(statements: dict[str, str], prop: dict, where: str,
-              errors: list[str]) -> None:
+              path: tuple[str | int, ...],
+              issues: list[tuple[tuple[str | int, ...] | None, str]]) -> None:
     ref, text = prop.get('ref'), prop.get('statement')
     if ref in statements and statements[ref] != text:
-        errors.append(
-            f'{where} 的命题句柄 {ref!r} 重抄文本与首次登记不一致'
-            f'（登记「{statements[ref]}」，此处「{text}」）——同一命题的文本只建立一次')
+        issues.append((path,
+                       f'{where} 的命题句柄 {ref!r} 重抄文本与首次登记不一致'
+                       f'（登记「{statements[ref]}」，此处「{text}」）——同一命题的文本只建立一次'))
         return
     statements.setdefault(ref, text)
 
@@ -171,6 +174,79 @@ def _canonicalize_basis_quotes(wire: Any, resolver: EvidenceResolver) -> None:
                         quote = str(basis.get('quote') or '')
                         if segment and quote:
                             basis['quote'] = resolver.canonical_quote(segment, quote)
+
+
+def _chapter_issues(canonical: Any, resolver: EvidenceResolver,
+                    slugs: frozenset[str] | None, chapter: int | None,
+                    ) -> list[tuple[tuple[str | int, ...] | None, str]]:
+    """章观察机械闸的**结构化视图**（CS-patch，2026-10-03）：与
+    `compile_chapter_observation` 同源同序，逐条附 wire 的 JSON 路径
+    （路径＝失败条目的最小可替换单元；None＝不可定位）。定位与判定同一把
+    尺（判据 25）：compile 的 errors 就是本视图去掉路径的投影。
+    """
+    issues: list[tuple[tuple[str | int, ...] | None, str]] = []
+    for ordinal, raw in enumerate(canonical.get('beats') or [], 1):
+        if not isinstance(raw, dict):
+            continue
+        where = f'第{chapter if chapter is not None else "?"}章拍{ordinal}'
+        beat_path = ('beats', ordinal - 1)
+        refs = tuple(raw.get('source_refs') or ())
+        for issue in resolver.check_closed_set(refs):
+            issues.append((beat_path,
+                           f'beat {raw.get("event", "")[:20]}：{issue.message}'))
+        # R10a a1（C4/C1/C2）：转移级 basis 引文判定——逐字命中＋段属本拍
+        # source_refs（`verify_bases` 的逐条版：路径随条目走）。
+        for kind in ('effects', 'cognition'):
+            for index, transfer in enumerate(raw.get(kind) or (), 1):
+                if not isinstance(transfer, dict):
+                    continue
+                for basis in transfer.get('basis') or ():
+                    if not isinstance(basis, dict):
+                        continue
+                    for issue in resolver.verify_quote(
+                            str(basis.get('segment') or ''),
+                            str(basis.get('quote') or ''), refs):
+                        issues.append((beat_path + (kind, index - 1),
+                                       f'{where} {kind}[{index}]：{issue.message}'))
+        if slugs is not None:
+            for person in raw.get('participants') or []:
+                if person not in slugs:
+                    issues.append((beat_path,
+                                   f'{where} participants 引用未知人物 {person}'
+                                   '（人物闭集在章观察验收即查，R3 左移）'))
+    _chapter_handle_discipline(canonical.get('beats') or [], issues)
+    return issues
+
+
+def chapter_patch_locate(wire: Any, errors: list[str], *,
+                         evidence_ids, chapter: int | None = None,
+                         character_slugs: Iterable[str] | None = None,
+                         ) -> list[tuple[tuple[str | int, ...], list[str]]] | None:
+    """CS-patch 的章观察条目定位（owner 声明给 `ask_json` 的 `patch` 协议）。
+
+    重放与 compile 同源的机械闸（同一把尺，判据 25），把每条错误映射到 wire
+    的 JSON 路径；存在不可定位错误，或 `errors` 与可定位集不完全一致（协议
+    校验／键归一／首现锚点等其它闸在拦）时返回 None——本轮退整份返修，不
+    静默漏项。返回按路径聚合的 ``(path, issues)``（裸元组，不 import
+    novel.llm；分层规则禁 stage2 依赖 LLM 面）。
+    """
+    if not isinstance(wire, dict):
+        return None
+    resolver = EvidenceResolver(evidence_ids if isinstance(evidence_ids, Mapping)
+                                else list(evidence_ids))
+    slugs = frozenset(character_slugs) if character_slugs is not None else None
+    canonical = deepcopy(wire)
+    _canonicalize_basis_quotes(canonical, resolver)
+    issues = _chapter_issues(canonical, resolver, slugs, chapter)
+    if any(path is None for path, _message in issues):
+        return None
+    if len(errors) != len(issues) or sorted(errors) != sorted(
+            message for _path, message in issues):
+        return None
+    grouped: dict[tuple[str | int, ...], list[str]] = {}
+    for path, message in issues:
+        grouped.setdefault(path, []).append(message)
+    return list(grouped.items())
 
 
 def compile_chapter_observation(
@@ -199,32 +275,10 @@ def compile_chapter_observation(
     # 结果逐字节一致（I-30 幂等）。
     canonical = deepcopy(wire)
     _canonicalize_basis_quotes(canonical, resolver)
-    for ordinal, raw in enumerate(canonical.get('beats') or [], 1):
-        if not isinstance(raw, dict):
-            continue
-        where = f'第{chapter if chapter is not None else "?"}章拍{ordinal}'
-        refs = tuple(raw.get('source_refs') or ())
-        for issue in resolver.check_closed_set(refs):
-            errors.append(f'beat {raw.get("event", "")[:20]}：{issue.message}')
-        # R10a a1（C4/C1/C2）：转移级 basis 引文判定——逐字命中＋段属本拍 source_refs
-        basis_entries: list[tuple[str, str, str, tuple[str, ...]]] = []
-        for kind in ('effects', 'cognition'):
-            for index, transfer in enumerate(raw.get(kind) or (), 1):
-                if not isinstance(transfer, dict):
-                    continue
-                for basis in transfer.get('basis') or ():
-                    if isinstance(basis, dict):
-                        basis_entries.append((
-                            f'{where} {kind}[{index}]', str(basis.get('segment') or ''),
-                            str(basis.get('quote') or ''), refs))
-        for basis_where, issue in verify_bases(resolver, basis_entries):
-            errors.append(f'{basis_where}：{issue.message}')
-        if slugs is not None:
-            for person in raw.get('participants') or []:
-                if person not in slugs:
-                    errors.append(f'{where} participants 引用未知人物 {person}'
-                                  '（人物闭集在章观察验收即查，R3 左移）')
-    _chapter_handle_discipline(canonical.get('beats') or [], errors)
+    # CS-patch（2026-10-03）：判定走结构化视图（闭集／basis／人物闭集／句柄
+    # 纪律，同源同序），errors 是它的无路径投影——条目定位与验收判定不会漂。
+    issues = _chapter_issues(canonical, resolver, slugs, chapter)
+    errors.extend(message for _path, message in issues)
     normalized = _normalize_registered_scopes(canonical, errors)
     try:
         observation = ChapterObservation.model_validate(normalized)

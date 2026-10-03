@@ -106,7 +106,7 @@ def test_stage2_stage4_repository_replay_and_writer_consumer(tmp_path):
     wires['design']['initial_surfaces'] = [{'char_id': 'yun', 'surfaces': ['云娘']},
                                           {'char_id': 'fu_jun', 'surfaces': ['夫君']}]
     requests = []
-    def ask(owner, prompt, validate):
+    def ask(owner, prompt, validate, patch=None):
         data = deepcopy(wires[owner])
         if owner == 'design':
             data['scenes'][0]['beats'][0]['target_delta'][1]['key'] =                 _kp_from_design_prompt(prompt, '借种之约是共同秘密')
@@ -267,7 +267,7 @@ def test_changed_hook_copy_refuses_the_old_root_and_changes_requests(tmp_path):
         repo.attach_context(make_context(base / 'run', ledger=CostLedger(path=None)))
         prompts: dict[str, str] = {}
 
-        def ask(owner, prompt, validate):
+        def ask(owner, prompt, validate, patch=None):
             data = deepcopy(wires[owner])
             errors = validate(data)
             assert not errors, (owner, errors)
@@ -417,7 +417,7 @@ def test_concealed_fact_reaches_writer_as_pending_reader_confirmation(tmp_path):
     repo.attach_context(make_context(tmp_path / 'book', ledger=CostLedger(path=None)))
     requests = []
 
-    def ask(owner, prompt, validate):
+    def ask(owner, prompt, validate, patch=None):
         data = deepcopy(wires[owner])
         if owner == 'design':
             data['scenes'][1]['beats'][0]['target_delta'][0]['key'] =                 _kp_from_design_prompt(prompt, '夫君藏身床底')

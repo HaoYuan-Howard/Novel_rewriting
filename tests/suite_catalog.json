@@ -1071,6 +1071,17 @@
         "stage4",
         "stage5"
       ]
+    },
+    "tests/test_str06_item_patch.py": {
+      "layer": "unit_contract",
+      "stages": [
+        "stage2",
+        "stage4"
+      ]
+    },
+    "tests/test_repair_rounds.py": {
+      "layer": "unit_contract",
+      "stages": []
     }
   },
   "version": 1

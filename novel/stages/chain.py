@@ -82,7 +82,8 @@ from novel.stages.common import (
 )
 from novel.stages.stage2 import (
     NamesObservation, STAGE2_OBSERVATION_PROTOCOL, book_observation_prompt,
-    chapter_observation_prompt, character_core_view, compile_associate_observation,
+    chapter_observation_prompt, chapter_patch_locate, character_core_view,
+    compile_associate_observation,
     compile_book_observation, compile_chapter_observation, compile_name_structure,
     compile_source_truth, associate_observation_prompt, project_association_space,
     first_appearance_anchors, first_appearance_issues,
@@ -349,7 +350,16 @@ def run_chapters(ctx: ChainContext) -> dict:
                 return chapter_acceptance(w, evidence_ids=chapter_evidence, chapter=no,
                                           character_slugs=frozenset(book.characters), anchors=anchors)
 
-            wire, ch_ref = ctx.ask(f'ch{no:02d}', prompt, lambda w: validate(w)[1])
+            def locate(w, errs, *, _ev=chapter_evidence, _no=no,
+                       _slugs=frozenset(book.characters)):
+                # CS-patch（2026-10-03）：条目级返修的定位协议——与章观察验收
+                # 同源（闭集／basis／人物闭集／句柄纪律），其它闸在拦时自动退
+                # 整份返修（返回 None）。
+                return chapter_patch_locate(w, errs, evidence_ids=_ev, chapter=_no,
+                                            character_slugs=_slugs)
+
+            wire, ch_ref = ctx.ask(f'ch{no:02d}', prompt, lambda w: validate(w)[1],
+                                   patch=locate)
             observation, errors = validate(wire)
             if errors:
                 # 缺陷定位到章 item（I-31）：不污染其余章的合法结果。
@@ -2136,18 +2146,18 @@ def execute(args) -> None:
                        baseline=baseline, raw_bytes=json.dumps(data, ensure_ascii=False).encode('utf-8'),
                        preview=preview, reason=selection.reason, kind='resample', sequence=selection.sequence)
 
-    def ask(owner, prompt, validate):
+    def ask(owner, prompt, validate, patch=None):
         path = wire_path(owner)
         if path is not None:
             raw, ref = adopt(owner, path, validate, system=SYS, prompt=prompt,
                              json_mode=True, temperature=0.3)
             return raw, ref
         request = build_request(owner, prompt, json_mode=True, system=SYS, temperature=0.3)
-        patch = replay_patch(owner, request, validate, SYS, prompt)
-        if patch is not None:
-            return patch
+        patch_replay = replay_patch(owner, request, validate, SYS, prompt)
+        if patch_replay is not None:
+            return patch_replay
         request, selection = sample_request(owner, request)
-        raw, answer = ask_json(session, owner, request, validate)
+        raw, answer = ask_json(session, owner, request, validate, patch=patch)
         record_sample(owner, raw, selection, validate)
         return raw, answer
 

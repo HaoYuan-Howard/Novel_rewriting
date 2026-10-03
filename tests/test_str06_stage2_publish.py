@@ -149,7 +149,7 @@ class _AcceptingAsk:
         self.bypass_acceptance = bypass_acceptance
         self.prompts: dict[str, str] = {}
 
-    def __call__(self, owner: str, prompt: str, validate):
+    def __call__(self, owner: str, prompt: str, validate, patch=None):
         errors = [] if owner in self.bypass_acceptance else validate(deepcopy(self.wires[owner]))
         if errors:
             # R3 左移后，机械问题（含 associate 的 compile 干跑未决项）在 owner

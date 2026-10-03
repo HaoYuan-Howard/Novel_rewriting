@@ -121,15 +121,15 @@ R9c 核读在同一记录里补 owner、期望、实际和证据，不另立第�
 |---|---|---|
 | CS-0 收敛止血 | ① D2 引文标点归一：比对用 `norm()` 尺、唯一命中回取段原文切片落盘（`novel/core/text.py::content_equivalent_slice`＋`resolver.canonical_quote`＋book/chapters compile 副本归一，validator 仍只读）。② D6 渲染修复：kp 句柄以 `Brief.propositions` 命题 statement 送达（`novel/core/text.py::kp_statement`；`project_context` 回填 IR 拍增量/知情边界/拍级读取/背景知情/未确认事实，`hook_context` 同尺渲染禁区与起笔事实；悬空 kp fail fast；renderer 升 `str06-render-v8`）。③ `ask_json` 无进展升级：本轮问题集是此前任一轮子集（含原样重现/只缩不消/A→B→A）即停 | [x] 完成（2026-10-03）。新测试 `tests/test_str06_quote_canon.py`（12 例）、`tests/test_str06_kp_statement.py`；受影响面 str06/llm/layering 全绿；非 corpus 全量回归见批尾记录。**不做**：重试 prompt 拼接顺序（已核实可变内容本就后置，未命中主因是跨小时/跨 run 缓存过期与上一版全文追加）；hard/soft 分级（sev/repair/degradable 机制已存在，str06 判据 repair 全 NONE，不再另造） |
 | CS-1 可收敛缺陷 | ① D1 配对合并只认归一化后完全相同的 statement（`_BookCompile::validate_pair_statements`：不一致按 item 未决拦下回派 associate，不模糊合并、不替模型选边）；wire 重引用的 `statement=None` 回填类 canonical（r10b k41「learns「None」」不再进蓝图）。句柄章节命名空间（`ch{k}.{ref}`）与全局正式 ID 在 r10b 后的现行代码已存在，补齐回归测试。② D3 新增锚点**最大**源拍位置单调检查（event/reveal 义务允许并列，hook 不经 binding 天然豁免；`compile_execution_plan` 内，与既有跨场逆序闸并存）。只动代码与校验器，不动 LLM 契约 | [x] 完成（2026-10-03）。实测：r10b 全产物过新检查零倒置（n=19），按最小位置排则误报 ob17/ob16 一处（用户裁决取 max 的依据，本仓复算证实）；r10 运行复现 D1（2 处 ref 冲突含 null statement）与 D3（4 处违序）。str06 全量 852 例绿。**前置缺口如实登记**：跨书复跑不可行——仓内仅本书三次运行（r9_canary 无正式产物），新跑书需付费授权，《三人成行》受 R10d 污染规则隔离；跨运行复现已做，跨书验证顺延至自然多书产出。**D5 裁决归 CS-3**：两种写法的映射已单点在 `assemble_body_design`（C6 判据＋`test_c6_reader_confirmation_without_known_lock_rejected` 反例），「去 confirms」动 TargetDelta schema 且 D15 pending 投影依赖 confirms——纯 compile 归一化＝重写 pending/guard 机器而 wire 成本不变，与 design 一次改齐（CS-3）才有效 |
-| CS-patch 条目级返修 | 按 JSON 路径定位失败条目、只返修失败条目（executor 面，无 schema 变更）；置于 CS-2 之前——每次契约切换的过渡期都更便宜 | [ ] |
+| CS-patch 条目级返修 | 机制：`ask_json` 增 `patch` 定位协议（owner 声明，返回裸元组不引入 stage→llm 依赖）；patch 轮＝**原请求逐字前缀**＋失败条目清单（缓存友好、模型保有源文上下文），输出仅 `{"patches":[{path,value}]}`，合并版过同一套 owner 校验；接受闸严格（全覆盖/无多余/无重复/坏路径整体拒绝）；采纳返回 `PatchedAnswer`（基底＋patch 多引用经 `_as_adoption_refs` 展开进 provenance/CommitBundle，B1 精确 attempt 聚合不变）；patch 修不动→无进展判定**提前到合并结果**（同题集不再买整份轮）；不可定位/形状失败→R3 整份修订原路径不变。接入：`str06.stage2.chapters`（65% 大头）——章观察闸重构为结构化视图 `_chapter_issues`（errors 是其无路径投影，判定与定位同一把尺）＋`chapter_patch_locate` 协议；book/design/preserve 后续按需接入（各自定位视图同批）。聚合面：`tools/repair_rounds.py`（只读）——每节点 fresh/completion、按语义单元首过率、失败码×轮次矩阵 | [x] 完成（2026-10-03）。新增 `tests/test_str06_item_patch.py`（12 例）；FaultTransport 补条目返修剧本（fault_once＝干净条目替换即自愈；持续故障＝原样重抄→无进展即停）；str06 全量 862 例绿。**记账更正**：逐轮失败集**已经**在 `AcceptanceRecordV1` 按 attempt 落盘（CS-0 所记缺口不成立于记录层，缺的是聚合面，本批补上）；r10b 实测读数——全书 31 个语义单元首过率 80.6%，associate 的「悬念 close 已章内自开自闭」码第 1/3 轮重现（契约缺陷信号，归 CS-2 收口），design 全天 10 次接受分项含跨 run 重放 |
 | CS-2 观测/保产瘦身 | characters/observation/preserve 死字段删除＋派生回填＋短别名（D6）；LLM 面先变，落盘经 `expand()` 保持 rc12 形状（adapter 集中登记，删除条件＝下游消费迁移完成）；先瘦 `str06.stage2.chapters`（65% 大头）再 preserve | [ ] |
 | CS-3 design 一次改齐 | design 字段删除＋`real:[…]` 标注＋bind 退役（semantic_binding 改 compile 生成）合成一次契约变更；world 布尔键引入稳定规则 id（`women_cannot_stand_alone` 类 value="true" 无机械 statement 映射，同批解决）；design prompt 只改一次、golden 只跑一次 | [ ] |
 | CS-4 其余执行面 | 思考模式按节点开关（naming 关；hook/observation 先 A/B）；缓存前缀稳定化 | [ ] |
 
 验收纪律：CS-2/CS-3 后跑 golden set 与六维阅读验收；每批同时报告每节点整份生成
-次数、completion 与首过率（ledger 为权威账）。已知记账缺口（登记待办）：节点内
-修订轮的逐轮失败集只在 prompt 里、不落盘——CS-patch 实施时把逐轮问题集（位置
-模式 heads）随 acceptance 记录持久化，失败码×轮次统计才可机读。
+次数、completion 与首过率（ledger 为权威账；`tools/repair_rounds.py` 是只读聚合面）。
+记账更正（CS-patch 批核实）：逐轮失败集已随 `AcceptanceRecordV1` 按 attempt 落盘，
+无需另建持久化。
 
 
 ## 恢复、替代与删除条件

@@ -300,7 +300,7 @@ class _AcceptingAsk:
         self.prompts: dict[str, str] = []
         self.owners: list[str] = []
 
-    def __call__(self, owner: str, prompt: str, validate):
+    def __call__(self, owner: str, prompt: str, validate, patch=None):
         errors = validate(deepcopy(self.wires[owner]))
         if errors:
             raise ValueError(f'{owner} 校验失败；原响应已保存，免费修复：{errors}')
@@ -397,7 +397,7 @@ def test_chapter_observations_share_body_slot_and_pool_concurrency(
     class _GatedAsk(_AcceptingAsk):
         """章观察 ask 在屏障处会齐：只有三章真正并发时才一起放行。"""
 
-        def __call__(self, owner: str, prompt: str, validate):
+        def __call__(self, owner: str, prompt: str, validate, patch=None):
             if owner.startswith('ch'):
                 try:
                     barrier.wait()

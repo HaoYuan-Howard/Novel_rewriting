@@ -154,6 +154,31 @@ class FaultTransport:
         from novel.llm.transport import ChatResponse
 
         owner = self._owner_of(request)
+        if '【条目返修】' in request.user and owner in self._clean_wires:
+            # CS-patch（2026-10-03）：条目返修的脚本化模型——fault_once 且故障
+            # 已施过＝「改对了」（替换值取**干净** wire 的对应条目）；持续故障
+            # ＝patch 原样重抄故障条目（merged 仍不过 → 无进展即停）。只有接了
+            # patch 协议的 owner 会收到条目返修 prompt。
+            import json as _json
+            import re as _re
+
+            source = (self._clean_wires if self.fault_once
+                      and self._fault_already_served(owner) else self._inner.wires)
+
+            def _walk(doc, path):
+                node = doc
+                for m in _re.finditer(r'([^.\[]+)|\[(\d+)\]', path):
+                    node = node[m.group(1) if m.group(1) is not None
+                                else int(m.group(2))]
+                return node
+
+            patches = [{'path': path, 'value': _walk(source[owner], path)}
+                       for path in _re.findall(r'- 路径 ([^\s：]+)：', request.user)]
+            self._inner.calls.append(owner)
+            return ChatResponse(
+                content=_json.dumps({'patches': patches}, ensure_ascii=False),
+                finish_reason='stop',
+                usage={'prompt_tokens': 20, 'completion_tokens': 20}, model='fake')
         if self.body_texts is not None and owner.startswith('body_ch'):
             key = owner[len('body_'):]          # 'body_ch01' → 'ch01'
             text = self.body_texts[key]        # 缺章即 KeyError：关闭式，不兜底

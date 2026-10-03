@@ -85,11 +85,11 @@ def json_ask(session, *, model='fake', max_tokens=1000):
     from novel.llm.transport import ChatRequest
     from novel.stages.common import SYS
 
-    def ask(owner, prompt, validate):
+    def ask(owner, prompt, validate, patch=None):
         request = ChatRequest(model=model, system=SYS, user=prompt,
                               reasoning_effort='high', thinking=True,
                               json_mode=True, max_tokens=max_tokens)
-        return ask_json(session, owner, request, validate)
+        return ask_json(session, owner, request, validate, patch=patch)
     return ask
 
 
