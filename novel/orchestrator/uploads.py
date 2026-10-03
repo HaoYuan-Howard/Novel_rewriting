@@ -20,9 +20,6 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from contracts.schema.orchestration import (
-    ReviewerActionRecord,
-)
 from contracts.schema import encode_artifact
 from contracts.artifacts import (
     STAGE2_CHARACTERS_EDIT,
@@ -272,45 +269,6 @@ def save_stage5_trim_batch(
     raise NotImplementedError(
         'stage5 trim 批量销账人工提交面已退役（2026-09-15 全自动裁决）：'
         '超限章由 stage5.review producer 机械处置')
-
-
-def load_reviewer_actions(
-    base: str | os.PathLike[str], sid: str,
-) -> list[tuple[Path, ReviewerActionRecord]]:
-    """关闭式列出同 SID 的可重放 Commander 决定，按文件名稳定排序。
-
-    记录是一次已付费席位的唯一恢复凭据；坏文件、符号链接、sid 串书或内容地址
-    不匹配都不能装成“没有记录”后再买一席。业务是否过期仍由拿着 current
-    workpack 的调用方判，这里只验证持久载体完整性。
-    """
-    try:
-        paths.check_sid(sid)
-    except PathRefused as exc:
-        raise SourcePathRejected(f'reviewer 决定记录的书 id 不合法：{exc}') from exc
-    root = service_dir(base) / EDITS_DIRNAME / sid
-    if not root.is_dir():
-        return []
-    out: list[tuple[Path, ReviewerActionRecord]] = []
-    for path in sorted(root.glob('reviewer-action-*.json')):
-        if path.is_symlink() or not path.is_file():
-            raise ArtifactUnreadable(
-                f'reviewer 决定记录不是普通文件：{path.name}')
-        try:
-            raw = path.read_bytes()
-            record = ReviewerActionRecord.model_validate_json(raw)
-        except (OSError, ValueError, ValidationError) as exc:
-            raise ArtifactUnreadable(
-                f'reviewer 决定记录无法解析：{path.name}：'
-                f'{type(exc).__name__}') from exc
-        expected_name = f'reviewer-action-{hashlib.sha256(raw).hexdigest()}.json'
-        if path.name != expected_name:
-            raise ArtifactUnreadable(
-                f'reviewer 决定记录内容地址不匹配：{path.name}')
-        if record.sid != sid:
-            raise ArtifactUnreadable(
-                f'reviewer 决定记录 {path.name} 的 sid 不匹配')
-        out.append((path.resolve(), record))
-    return out
 
 
 def discard_edit_plan(base: str | os.PathLike[str], plan_path: str | os.PathLike[str]) -> None:

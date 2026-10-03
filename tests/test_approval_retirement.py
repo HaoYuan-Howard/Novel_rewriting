@@ -103,10 +103,12 @@ def test_cli_has_no_approval_subcommand(tmp_path, capsys):
     capsys.readouterr()
 
 
+# STR-06 关闭批：旧节点 readonly ctx 放行已删（freshness 是产物的属性，
+# 提问者只影响错误前缀）——提问者换现役付费节点，行为断言不变。
 @pytest.mark.parametrize('node, rel', [
-    ('stage5.write', 'stage5/ch01.json'),
-    ('stage5.review', 'stage5/review.json'),
-    ('stage6.hook', 'stage6/hook.json'),
+    ('str06.stage5.body', 'stage5/ch01.json'),
+    ('str06.stage5.hook', 'stage5/review.json'),
+    ('str06.stage7.naming', 'stage6/hook.json'),
 ])
 @pytest.mark.parametrize('payload', [
     {'_schema_version': 2, 'measurable': {'body': {}, 'hook': {}}},

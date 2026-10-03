@@ -98,23 +98,14 @@ def test_joint_owner_and_repair_owner_cannot_evade_range_order():
 
 
 def test_range_uses_registered_owner_not_blocked_consumer():
-    from contracts.invariants import (
-        NODES, RETIRED_APPROVAL_BINDINGS, approval_work_unit,
-    )
+    from contracts.invariants import NODES
     from novel.orchestrator.queue import WAITING_ON_STAGE4_DESIGN_REVIEW
-    # Stage4 审阅席位已随 2026-09-15 全自动裁决退役：保留的 blocker→owner
-    # 只读登记全部指向已退役 owner ⇒ 运行范围关闭式拒排（物化归属未知），
-    # 不让 blocked 消费者借历史席位在现役链上继续物化。
-    seated = _current('str06.stage2.book', state='blocked',
-                      waiting_on=WAITING_ON_STAGE4_DESIGN_REVIEW)
-    assert range_boundary_reason(seated, 'str06.stage4.compile') is not None
-    for _owner, bindings in RETIRED_APPROVAL_BINDINGS.items():
-        for waiting_on, _scope in bindings:
-            owner_node, _owner_scope = approval_work_unit(waiting_on)
-            assert owner_node not in NODES
-            blocked = _current('str06.stage2.book', state='blocked',
-                               waiting_on=waiting_on)
-            assert range_boundary_reason(blocked, 'str06.stage4.compile') is not None
+    # Stage4 审阅席位已随 2026-09-15 全自动裁决退役；STR-06 关闭批删除
+    # 历史 blocker→owner 只读表后，历史审批 blocker 与未登记 blocker 统一
+    # 按通则处理：不做席位重映射，blocked 消费者按自身编排位参与范围判定。
+    # STR-06 关闭批：历史席位只读表（RETIRED_APPROVAL_BINDINGS）已删；
+    # 历史审批 blocker 一律无归属 ⇒ 未登记 blocker 的关闭式拒排语义
+    # 由下方未登记反例等价覆盖。
     # 未登记 blocker 不做历史席位重映射：blocked 消费者按自身编排位参与范围判定。
     consumer = _current('str06.stage2.book', state='blocked',
                         waiting_on='unregistered-blocker')

@@ -14,8 +14,10 @@ def sha(text):
     return hashlib.sha256(text.encode()).hexdigest()
 
 
-def test_rejected_responses_keep_two_original_answers_and_stop_at_subject_change(tmp_path):
-    # Commander 受托审阅退役后，同一套账本机制由 executor 工作单元承载。
+def test_saved_rejections_are_readable_until_adopted(tmp_path):
+    # Commander 受托审阅退役后，同一套账本机制由 executor 工作单元承载；
+    # rejected_responses 回溯读面随 STR-06 关闭批的 reviewer legacy 解码删除，
+    # 现役读面是 latest_feedback（最近拒因，adopted 即清零）。
     unit = WorkUnitBudget(tmp_path, '42', 'str06.stage4.body_design', 'executor', 'book')
     for index, business in enumerate(('old', 'current', 'current', 'current')):
         turn = unit.reserve(sha(str(index)), run_id=f'parent-{index}')
@@ -26,35 +28,26 @@ def test_rejected_responses_keep_two_original_answers_and_stop_at_subject_change
             **identity, 'response_sha256': sha(response), 'reason': f'拒因 {index}',
         })
     before = unit.path.read_bytes()
-    rows = unit.rejected_responses(
-        business_sha256=sha('current'), waiting_on='approval:stage4-design-review')
-    assert [row['ordinal'] for row in rows] == [3, 4]
-    assert [json.loads(row['final_response'])['attempt'] for row in rows] == [2, 3]
+    latest = unit.latest_feedback()
+    assert latest['reason'] == '拒因 3'
+    assert latest['business_sha256'] == sha('current')
     assert unit.path.read_bytes() == before and unit.used == 4
-    all_current = unit.rejected_responses(
-        business_sha256=sha('current'), waiting_on='approval:stage4-design-review', limit=4)
-    assert [row['ordinal'] for row in all_current] == [2, 3, 4]
-    assert unit.rejected_responses(business_sha256=sha('another'), waiting_on='approval:stage4-design-review') == ()
     unit.mark_adopted(turn.turn_id)
-    assert unit.rejected_responses(business_sha256=sha('current'), waiting_on='approval:stage4-design-review') == ()
+    assert unit.latest_feedback() is None
 
 
-@pytest.mark.parametrize('damage', ['response', 'feedback', 'business'])
-def test_rejected_response_context_refuses_missing_or_mismatched_evidence(tmp_path, damage):
+def test_saved_rejection_evidence_refuses_tampered_blobs(tmp_path):
+    # 拒因 blob 损坏关闭式拒绝（拒绝装成「没有拒因」）；原 rejected_responses
+    # 的回溯校验随读面退役，等价的损坏反例落在现役 latest_feedback 读面上。
     unit = WorkUnitBudget(tmp_path, '42', 'str06.stage4.body_design', 'executor', 'book')
     turn = unit.reserve(sha('request'), run_id='original-parent')
     identity = {'business_sha256': sha('current'), 'waiting_on': 'approval:stage4-design-review'}
-    unit.save_response(turn.turn_id, {
-        **identity, 'final_response': '{}',
-        **({'business_sha256': sha('other')} if damage == 'business' else {}),
-    })
+    unit.save_response(turn.turn_id, {**identity, 'final_response': '{}'})
     unit.save_feedback(turn.turn_id, {**identity, 'response_sha256': sha('{}'), 'reason': '格式拒因'})
     current = unit.latest_turn()
-    if damage != 'business':
-        digest = current.response_sha256 if damage == 'response' else current.feedback_sha256
-        (unit.directory / f'{digest}.json').unlink()
+    (unit.directory / f'{current.feedback_sha256}.json').unlink()
     with pytest.raises(WorkUnitRefused):
-        unit.rejected_responses(**identity)
+        unit.latest_feedback()
 
 
 @pytest.mark.parametrize('kind', ['mechanical', 'history_adopted', 'cached'])
@@ -301,12 +294,9 @@ def test_unregistered_role_and_scope_cannot_create_new_budget(tmp_path):
     # Commander 受托审阅退役（2026-09-15）：新工作单元一律拒绝 commander 角色。
     with pytest.raises(WorkUnitRefused, match='已退役'):
         WorkUnitBudget(tmp_path, '42', 'stage4.design', 'commander', 'design')
-    # 退役后只保留存量书历史账的只读解码；read_only 也不再发放新预算。
-    unit = WorkUnitBudget(tmp_path, '42', 'stage4.design', 'commander', 'design',
-                          read_only=True)
-    assert unit.used == 0
-    with pytest.raises(WorkUnitRefused, match='登记'):
-        WorkUnitBudget(tmp_path, '42', 'stage4.design', 'commander', 'strategy',
+    # STR-06 关闭批：commander 历史账只读解码面删除——read_only 也一并拒绝。
+    with pytest.raises(WorkUnitRefused, match='已退役'):
+        WorkUnitBudget(tmp_path, '42', 'stage4.design', 'commander', 'design',
                        read_only=True)
 
 
@@ -384,3 +374,46 @@ def test_open_readers_do_not_block_parallel_chapter_registration_or_ledger_updat
     assert {(row['scope'], row['content_used'], row['content_remaining']) for row in rows} == {
         ('chapter:1', 1, 3), ('chapter:2', 1, 3),
     }
+
+
+def _old_stage2_review_ledger(base):
+    """手写一份旧 Stage2 席位账（stage2_review_ledger 解码面随 STR-06 关闭批
+    删除后，路径与内容自持；_require_clean_base 与现役额度仍要认它的在场）。"""
+    from novel import paths
+    identity = hashlib.sha256(f"{'a' * 64}:{'b' * 64}".encode('ascii')).hexdigest()
+    path = (paths.service_runs_dir(base) / '42' / 'stage2'
+            / 'global_review_ledgers' / f'{identity}.json')
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({
+        'schema_version': 2, 'sid': '42',
+        'source_sha256': 'a' * 64, 'main_text_sha256': 'b' * 64,
+        'max_calls': 4, 'state': 'exhausted', 'turns': [],
+    }), encoding='utf-8')
+    return path
+
+
+def test_initialize_workflow_refuses_base_with_old_run_records(tmp_path):
+    """旧席位账在场 ⇒ 干净 base 闸拒绝初始化（迁移自 test_stage2_review_ledger）。"""
+    _old_stage2_review_ledger(tmp_path)
+    with pytest.raises(WorkUnitRefused, match='旧运行记录'):
+        initialize_workflow(tmp_path)
+
+
+def test_old_stage2_ledger_rewrite_cannot_reset_current_work_unit(tmp_path):
+    """重写旧席位账（伪造 active/空 turns）不能重置现役工作单元额度
+    （迁移自 test_stage2_review_ledger；原解码器已删，反例自持）。"""
+    unit = WorkUnitBudget(tmp_path, '42', 'str06.stage2.book', role='executor', scope='book')
+    for index in range(4):
+        turn = unit.reserve(sha(str(index)), run_id=f'parent-{index}')
+        unit.finish(turn.turn_id, outcome='failed', reason_code='typed_invalid')
+    ledger_before = unit.path.read_bytes()
+    path = _old_stage2_review_ledger(tmp_path)
+    for version in (1, 2):
+        payload = json.loads(path.read_text(encoding='utf-8'))
+        payload.update(schema_version=version, turns=[], state='active')
+        path.write_text(json.dumps(payload), encoding='utf-8')
+        with pytest.raises(WorkUnitBudgetExhausted):
+            WorkUnitBudget(tmp_path, '42', 'str06.stage2.book', role='executor', scope='book').reserve(
+                'f' * 64, run_id='attempted-budget-reset')
+        assert unit.path.read_bytes() == ledger_before
+        assert unit.used == 4

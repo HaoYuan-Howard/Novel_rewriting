@@ -19,7 +19,6 @@
         "contracts/schema/families.py",
         "contracts/schema/dependency.py",
         "contracts/schema/consumption.py",
-        "contracts/schema/retirement.py",
         "contracts/schema/workflow.py",
         "contracts/artifacts.py",
         "novel/stages/stage2/*",
@@ -519,28 +518,6 @@
       "layer": "unit_contract",
       "stages": []
     },
-    "tests/test_reviewer_node_landed.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage0",
-        "stage1",
-        "stage2",
-        "stage4",
-        "stage5",
-        "stage7"
-      ]
-    },
-    "tests/test_reviewer_work_unit_evidence.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage0",
-        "stage1",
-        "stage2",
-        "stage4",
-        "stage5",
-        "stage7"
-      ]
-    },
     "tests/test_root_clean_provenance.py": {
       "layer": "unit_contract",
       "stages": []
@@ -629,12 +606,6 @@
       ]
     },
     "tests/test_stage2_recovery_runs.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage2"
-      ]
-    },
-    "tests/test_stage2_review_ledger.py": {
       "layer": "unit_contract",
       "stages": [
         "stage2"
@@ -768,20 +739,6 @@
         "test_frozen_contract_identity_matches_the_live_tables": "stage"
       }
     },
-    "tests/test_str06_f7e_retirement.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage2",
-        "stage4",
-        "stage5",
-        "stage7"
-      ],
-      "cases": {
-        "test_registered_items_all_exist": "stage",
-        "test_every_test_file_is_bucketed": "stage",
-        "test_grandfather_edges_all_registered": "stage"
-      }
-    },
     "tests/test_str06_fold_guard.py": {
       "layer": "unit_contract",
       "stages": [
@@ -859,10 +816,6 @@
         "stage2",
         "stage4"
       ]
-    },
-    "tests/test_str06_retirement.py": {
-      "layer": "unit_contract",
-      "stages": []
     },
     "tests/test_str06_runtime_records.py": {
       "layer": "unit_contract",
@@ -1017,14 +970,6 @@
     "tests/test_work_units.py": {
       "layer": "unit_contract",
       "stages": []
-    },
-    "tests/test_workflow_transition.py": {
-      "layer": "stage",
-      "stages": [
-        "stage2",
-        "stage4",
-        "stage5"
-      ]
     },
     "tests/test_workflow_write_boundary.py": {
       "layer": "unit_contract",

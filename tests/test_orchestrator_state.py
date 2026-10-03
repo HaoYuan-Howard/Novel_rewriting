@@ -19,7 +19,7 @@ from contracts.artifacts import (
     STR06_STAGE2_CHARACTERS, STR06_STAGE2_OBS_NAMES, STR06_STAGE5_BODY,
     STR06_STAGE5_BODY_RECEIPT, artifact_rel,
 )
-from contracts.invariants import NODES, RETIRED_NODES, STAGES
+from contracts.invariants import NODES, STAGES
 from contracts.schema import ARTIFACTS
 from contracts.schema.corpus import ENVELOPE_LESS_JSON_RELS
 from contracts.schema.orchestration import (
@@ -519,7 +519,7 @@ def _assert_retired_projection_predicates() -> None:
     """F8c：旧链 stage2 投影恢复谓词随旧链整层退役，不得以任何形式复活。
 
     它们只能由旧链节点（`stage2.characters`／`stage2.blueprint`／
-    `stage2.global`）写出，生产入口已按 `RETIRED_NODES` 拒识 ⇒ 新链盘面
+    `stage2.global`）写出，生产入口按「非现役节点」通则拒识 ⇒ 新链盘面
     不可能再产生那些状态；复活其中任何一个都是第二套恢复判据（I-16）。
     """
     for retired in (
@@ -825,7 +825,7 @@ def test_chapter_completion_is_not_mistaken_for_a_book_level_gate():
     """
     ov = _overview(_stage5(chapters=[1, 2, 3], rounds={}))
     assert S.numbered_produces('stage5') == {}
-    assert 'stage5.review' in RETIRED_NODES
+    assert 'stage5.review' not in NODES
     verdict, why = S.resume_verdict(ov, 'str06.stage5.body')
     assert verdict == S.RESUME_SKIP, f'章全却没按章数判定：{why}'
     # 跳过理由必须是 body 自己的逐章措辞；退役的全书级 review 句式
@@ -840,7 +840,7 @@ def test_retired_review_rounds_do_not_drive_new_chain_skip():
     body 按「计划章都有 canonical 成稿」判：这里 `done=False` 且没有问题章、
     缺章可归类 ⇒ UNKNOWN（判不了），**不是**被 review 轮次抬成的 SKIP；
     hook 按自己的具名产物判 ⇒ SKIP。`rounds_done`／`review_state` 两格在
-    新链的续跑判定里一次都不出现（`stage5.review` 已在 `RETIRED_NODES`）。
+    新链的续跑判定里一次都不出现（`stage5.review` 非现役节点，关闭批起按通则拒识）。
     """
     stage = _stage5(
         chapters=[1], rounds={'stage5.review': [1, 2]}, review_state='fresh')
@@ -910,7 +910,7 @@ def test_numbered_produces_is_empty_on_the_new_chain():
     逐章类（目录段也带占位符）不进这张表，它归 `chapters_done`；
     书级那条归 `artifacts[]`（解析后是具名的）。
     """
-    assert 'stage5.review' in RETIRED_NODES
+    assert 'stage5.review' not in NODES
     for stage in STAGES:
         assert S.numbered_produces(stage) == {}, \
             f'{stage} 不该再有轮次编号产物'

@@ -22,7 +22,7 @@ from types import MethodType, SimpleNamespace
 import pytest
 
 from contracts.invariants import (
-    FREE_ENTRIES, NODES, PAID_FLAGS, RETIRED_NODES, STAGES, VALUED_FLAGS,
+    FREE_ENTRIES, NODES, PAID_FLAGS, STAGES, VALUED_FLAGS,
 )
 from contracts.schema.orchestration import (
     LegacyExecutorBackend, LegacyLlmProfile,
@@ -83,8 +83,9 @@ def _run(*argv: str) -> int:
 # ───────────────────── 旧链退役（STR-06 / F8b-3） ─────────────────────
 
 #: 旧链 Stage2/4/5/7 的节点名：argparse 的 `node` choices 已不含它们，
-#: 程序化 `_cmd_run`（run_step 重放／作业记录回放）则按 `RETIRED_NODES`
-#: 落 legacy_incompatible 显式终态。两条路都不许把旧节点静默跑起来。
+#: 程序化 `_cmd_run`（run_step 重放／作业记录回放）则按「非现役节点」通则
+#: 落 legacy_incompatible 显式终态（STR-06 关闭批：RETIRED_NODES 名册已删）。两条路都不许把旧节点静默跑起来。
+#: 关闭批固定旧节点全集作参数化面（名册删除后反例自持）。
 RETIRED_CHAIN_NODES = (
     'stage2.analyze', 'stage2.blueprint', 'stage2.characters', 'stage2.global',
     'stage4.context', 'stage4.design', 'stage4.plan',
@@ -93,9 +94,13 @@ RETIRED_CHAIN_NODES = (
 )
 
 
-@pytest.mark.parametrize('node', sorted(RETIRED_NODES))
+@pytest.mark.parametrize('node', sorted(set(RETIRED_CHAIN_NODES) | {
+    'stage2.global', 'stage5.write', 'stage5.review', 'stage6.approve',
+    'stage6.prepare', 'stage6.hook', 'stage3.style', 'stage6.semantic',
+    'stage0.approve', 'stage0.edit', 'stage2.analyze', 'stage4.design',
+    'stage7.assemble', 'stage6.approve'}))
 def test_retired_chain_nodes_are_legacy_incompatible_in_cmd_run(node):
-    """程序化 `_cmd_run` 按 `RETIRED_NODES` 拒读旧节点（F8b-3）。
+    """程序化 `_cmd_run` 按「非现役节点」通则拒读旧节点（关闭批改写）。
 
     ⚠ 话术是 `legacy_incompatible` 显式终态：旧书的盘上产物只读保留，
     不继承旧批准、不接受旧记录，也不显示成「加 --yes 就能跑」。
@@ -126,12 +131,36 @@ def test_retired_chain_node_argv_is_an_invalid_choice_not_a_runner_error(
     assert 'Traceback' not in err
 
 
+@pytest.mark.parametrize('flag', [
+    '--stage2-review-no-wire-session-run-id', '--stage2-review-reopen', '--stage2-review-sid',
+])
+def test_cli_rejects_retired_stage2_recovery_flags_without_touching_history(tmp_path, flag):
+    """已退役 Stage2 审阅恢复 flag 在解析层即拒；旧席位账字节不动。
+
+    STR-06 关闭批迁移自随解码面删除的 tests/test_stage2_review_ledger.py；
+    旧账路径自持（原 ledger_path 助手已删）。"""
+    import hashlib
+    from novel.cli.main import _parser
+    from novel import paths
+
+    identity = hashlib.sha256(f"{'a' * 64}:{'b' * 64}".encode('ascii')).hexdigest()
+    path = (paths.service_runs_dir(tmp_path) / '42' / 'stage2'
+            / 'global_review_ledgers' / f'{identity}.json')
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text('{"schema_version": 2}', encoding='utf-8')
+    original = path.read_bytes()
+    with pytest.raises(SystemExit) as result:
+        _parser().parse_args(['reconcile', '--base', str(tmp_path), flag])
+    assert result.value.code == 2
+    assert path.read_bytes() == original
+
+
 def test_stage7_approve_cli_is_retired(tmp_path, capsys):
     """批次 B4 → F8b-3：stage7.approve 的人工终审闸随旧链整层退役。
 
     新链没有「人逐项核验后 approve」这一步：交付由 `str06.stage7.naming` /
     `str06.stage7.assemble` 自动完成，机械判定归 check 报告。CLI 面上该
-    节点名已不在 choices，程序化面按 `RETIRED_NODES` 落 legacy_incompatible。
+    节点名已不在 choices，程序化面按「非现役节点」通则落 legacy_incompatible。
     """
     from novel.cli import main as M
 

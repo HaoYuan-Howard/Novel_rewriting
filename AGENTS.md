@@ -140,10 +140,12 @@ D9）**：Stage2 book／chapters／names／associate／compile 五 owner，联�
 Stage7 命名与交付），节点表唯一登记在 `contracts/invariants.py::NODES`。观察与
 关联协议见 `contracts/schema/observation.py`，目标架构见 `docs/schema/str06.md`，
 批次见 `docs/REQUIREMENTS.md`。
-Stage6 整层与旧 Stage2/4/5/7 链已退役
-（退役登记见 `contracts/schema/retirement.py`），旧书只读拒识为
-`legacy_incompatible`。历史受托 Commander/Reviewer（含 `<immutable-workpack>`）与
-人工逐 Stage 过闸模式已退役，材料只供存量解码。
+Stage6 整层与旧 Stage2/4/5/7 链已退役（退役台账与存量解码面已随 STR-06
+关闭批删除，旧面不得回来由 `tests/test_retired_surface_scan.py` 守卫），
+旧书只读拒识为 `legacy_incompatible`——产物层 `RETIRED_ARTIFACT_PATHS` 与
+盘面 stage5/deep|shallow 探测独立闭合，节点层按「非现役节点」通则拒识。
+历史受托 Commander/Reviewer（含 `<immutable-workpack>`）与人工逐 Stage
+过闸模式已退役；历史账只读冻结，不再提供解码面。
 semantic unit 使用独立 prompt/schema，不加载工程 AGENTS、运维手册或额外盘上小说来补充材料。
 
 ## 测试选择与批次验收

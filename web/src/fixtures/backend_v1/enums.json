@@ -756,27 +756,6 @@
   "stage5",
   "stage7"
  ],
- "retired_nodes": [
-  "stage3.style",
-  "stage6.semantic",
-  "stage0.approve",
-  "stage0.edit",
-  "stage7.approve",
-  "stage2.analyze",
-  "stage2.characters",
-  "stage2.global",
-  "stage2.blueprint",
-  "stage4.design",
-  "stage4.plan",
-  "stage4.context",
-  "stage5.write",
-  "stage5.review",
-  "stage6.prepare",
-  "stage6.hook",
-  "stage6.approve",
-  "stage7.rename",
-  "stage7.assemble"
- ],
  "retired_stages": [
   "stage3",
   "stage6"

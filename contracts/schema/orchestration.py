@@ -42,7 +42,7 @@ from contracts.invariants import (
     OPERATOR_DURATION_SOURCES, OPERATOR_PHASE_EVENT_KINDS, OPERATOR_PHASES,
     OPERATOR_TELEMETRY_SOURCES, OPERATOR_TERMINAL_STATES,
     OVERVIEW_VERDICT, PROGRESS_PHASES, RESUME_VERDICTS,
-    RETIRED_NODES, RETIRED_STAGES, REVIEWER_APPROVAL_SURFACES,
+    RETIRED_STAGES, REVIEWER_APPROVAL_SURFACES,
     RUN_NEXT_HANDLERS,
     RUN_RESUME_FRONTIER_STATES, STAGES,
     EXECUTION_EPOCH_DRAIN_STATES, EXECUTION_EPOCH_REASONS,
@@ -383,9 +383,11 @@ class JobStart(StrictModel):
         if self.recovered_from_job_id is not None and self.run_id is None:
             raise ValueError(
                 'recovered_from_job_id 要求 run_id：恢复续跑必须携带原 run 身份')
-        if self.node not in NODES and self.node not in RETIRED_NODES:
+        if self.node not in NODES:
             raise ValueError(
-                f'未知节点 {self.node!r}。当前取值面在 NODES，历史只读面在 RETIRED_NODES')
+                f'未知节点 {self.node!r}。当前取值面在 NODES；退役节点名册'
+                '（RETIRED_NODES）已随 STR-06 关闭批删除，历史账行关闭式拒读'
+                '（legacy_incompatible）')
         # 整份的贵贱 / 写不写，是逐步折叠出来的：第二处算就必然分家（`R-11.7`）。
         if self.paid != any(s.paid for s in self.steps):
             raise ValueError(f'paid={self.paid} 与逐步折叠出来的对不上')

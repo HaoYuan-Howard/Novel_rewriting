@@ -367,12 +367,14 @@ def test_full_chain_from_http_upload_to_stage7_delivery(base, monkeypatch):
         'str06.stage4.body_design', 'str06.stage4.bind', 'str06.stage4.hook_design',
         'str06.stage5.hook', 'str06.stage5.body', 'str06.stage7.naming'}
     assert all(row['sid'] == '联调样本_9001' for row in paid)
-    # Supervisor 走到 pipeline_complete 才终验：现役终验按 F8c 登记的话术回答
-    # unknown（新链就绪记录是 manifest），不把未知洗成 ready。
+    # Supervisor 走到 pipeline_complete 才终验：STR-06 关闭批改接后终验读
+    # 候选根 delivery manifest 并核对成书字节——交付完成时回答
+    # ready_with_disclosures（机械披露如实保留），不把未知洗成裸 ready。
     record = next(row for row in agent.records(base) if row.run_id == run_id)
     assert record.ended is not None and record.outcome is not None
-    assert record.outcome.state == 'unknown'
-    assert 'delivery_manifest.json' in record.outcome.reason
+    assert record.outcome.state == 'ready_with_disclosures'
+    assert 'delivery_identity' in record.outcome.reason
+    assert 'unverified' in record.outcome.reason
 
     # ⑦ 零调用恢复：同 base 同 flags 再开一次 agent ⇒ 零派发、零新购、交付字节一致。
     calls_before = len(transport.calls)

@@ -44,7 +44,7 @@ from typing import Callable, get_args, get_origin, Union
 import pytest
 from pydantic import BaseModel
 
-from contracts.invariants import NODES, RETIRED_NODES
+from contracts.invariants import NODES
 from contracts.schema.book_ir import RealizationContract, WriterBookIR
 from contracts.schema.consumption import (
     STR06_CONSUMPTION_PROJECTIONS, STR06_FIELD_DELIVERY, DeliveryMode,
@@ -937,12 +937,12 @@ def test_writer_view_contains_no_audit_only_material(green_ir):
 # ═══════════════ 四、族登记节点名必须是现役节点 ═══════════════
 
 def test_projection_families_name_live_nodes_only():
-    live, retired = set(NODES), set(RETIRED_NODES)
+    live = set(NODES)
     for family, spec in STR06_CONSUMPTION_PROJECTIONS.items():
         for owner in spec.source_owners:
             assert owner in live, (
-                f'投影族 {family} 引用了未登记节点 {owner}（对照 NODES 现役名）')
-            assert owner not in retired, f'投影族 {family} 引用了退役节点 {owner}'
+                f'投影族 {family} 引用了未登记节点 {owner}（对照 NODES 现役名；'
+                '关闭批起退役名册已删，未登记即非现役）')
 
 
 # ═══════════════ 五、Hook 送达面（HookContext 的变异守卫） ═══════════════

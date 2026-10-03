@@ -32,7 +32,7 @@ from collections.abc import Iterable, Sequence
 from pathlib import Path
 
 from contracts.invariants import (
-    LEGACY_STAGE5_MODES, NODES, RETIRED_NODES, RETIRED_STAGES, STAGES,
+    LEGACY_STAGE5_MODES, NODES, RETIRED_STAGES, STAGES,
 )
 from contracts.schema.orchestration import (
     NovelOverview, QueueCounts, QueueEntry, QueueEvent, QueueItem,
@@ -476,7 +476,7 @@ def _decode_event(payload: object) -> QueueEvent:
                             'queues.jsonl 的 mode 只允许旧 stage5.write deep/shallow')
             else:
                 legacy_mode = None
-            if jobs._has_retired_stage5_selector(item, legacy_mode):
+            if _has_retired_stage5_selector(item, legacy_mode):
                 has_legacy_arm = True
             projected_items.append(item)
         buckets[bucket] = projected_items
@@ -506,23 +506,35 @@ def _decode_event(payload: object) -> QueueEvent:
     return QueueEvent.model_validate(data)
 
 
+def _has_retired_stage5_selector(item: dict, legacy_mode: object) -> bool:
+    """旧 Stage5 双臂条目判据（原 ``jobs._has_retired_stage5_selector``；随
+    STR-06 关闭批的 jobs 历史投影删除而内联到唯一剩余消费者）。"""
+    if item.get('node') != 'stage5.write':
+        return False
+    tokens = list(item.get('flags') or [])
+    for step in item.get('steps') or []:
+        if isinstance(step, dict):
+            tokens.extend(step.get('argv') or [])
+    return legacy_mode in LEGACY_STAGE5_MODES or bool(
+        {'--mode', '--deep', '--shallow-rest'} & set(tokens))
+
+
 def new_queue_id(now: float | None = None) -> str:
     return f'q-{int(now if now is not None else time.time())}-{uuid.uuid4().hex[:8]}'
 
 
 def _ordered_items(start: QueueStart) -> list[QueueItem]:
     """Restore book order and node order after QueuePlan's runnable/blocked split."""
-    # ⚠ F8b-3：历史 queues.jsonl 可含退役节点条目（旧账只读可解码）；排序
-    # 名册只覆盖现役 NODES，退役节点按注册顺序排在现役面之后，不参与新调度。
+    # ⚠ STR-06 关闭批：退役节点名册已删除；历史 queues.jsonl 里的非现役
+    # 节点条目统一按「现役面之后」排序，不参与新调度、不点名名册。
     rank = {node: index for index, node in enumerate(NODES)}
-    retired_rank = {node: len(rank) + index
-                    for index, node in enumerate(RETIRED_NODES)}
-    rank.update(retired_rank)
+    retired_rank = len(rank)
     all_items = start.plan.items + start.plan.blocked
     out: list[QueueItem] = []
     for sid in start.sids:
         lane = [item for item in all_items if item.sid == sid]
-        out.extend(sorted(lane, key=lambda item: rank[item.node]))
+        out.extend(sorted(
+            lane, key=lambda item: rank.get(item.node, retired_rank)))
     return out
 
 
@@ -703,14 +715,15 @@ def _current_plan_items_for_sids(
         if sid not in selected:
             continue
         todo, blocked = plan_book(base, sid, until_stage=start.until_stage)
-        out.extend(sorted(todo + blocked, key=lambda item: rank[item.node]))
+        out.extend(sorted(
+            todo + blocked, key=lambda item: rank.get(item.node, retired_rank)))
     return out
 
 
 def _live_disposition(base: str | os.PathLike[str], run: QueueRun,
                       entry: QueueEntry) -> tuple[str, str | None, str]:
     """Recheck disk state before launch; return state/waiting_on/reason."""
-    if run.start.until_stage in RETIRED_STAGES or entry.item.node in RETIRED_NODES:
+    if run.start.until_stage in RETIRED_STAGES or entry.item.node not in NODES:
         return (
             'blocked', WAITING_ON_REPLAN,
             '该队列快照包含已经退役的 Stage3 节点；历史仍可读，但不会重新调度，'

@@ -138,3 +138,149 @@ def test_retired_formats_is_sole_kind_agent_discriminator() -> None:
     allowed = (NOVEL / 'orchestrator' / 'retired_formats.py').read_text(
         encoding='utf-8')
     assert rx.search(allowed), 'retired_formats 自身必须保留 kind==agent 判别'
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# STR-06 关闭批（2026-10-03）：退役面不得回来（迁移自随台账删除的
+# tests/test_str06_retirement.py 与 tests/test_str06_f7e_retirement.py 的
+# 方向②守卫；常量自持，不依赖 contracts/schema/retirement.py 台账——
+# 台账随关闭批删除，守卫的职责从「对账」变为「单向不得回来」）。
+# ═══════════════════════════════════════════════════════════════════════════
+
+#: 旧链（F8c 删除）的 stage 引擎模块名：目录被新链 per-stage 包原地重建，
+#: 模块名才说了算——旧链引擎回来任何一个都当场红。
+OLD_STAGE_MODULES = (
+    'novel/stages/stage2/analyze', 'novel/stages/stage2/blueprint',
+    'novel/stages/stage2/characters', 'novel/stages/stage2/knowledge',
+    'novel/stages/stage2/shared', 'novel/stages/stage2/extract.py',
+    'novel/stages/stage2/checks.py',
+    'novel/stages/stage4/plot_design.py', 'novel/stages/stage4/plan.py',
+    'novel/stages/stage4/beats.py', 'novel/stages/stage4/measure.py',
+    'novel/stages/stage4/reading.py', 'novel/stages/stage4/actors.py',
+    'novel/stages/stage4/plot_binding.py', 'novel/stages/stage4/plot_checks.py',
+    'novel/stages/stage4/plot_context.py', 'novel/stages/stage4/plot_materials.py',
+    'novel/stages/stage4/plot_measure.py', 'novel/stages/stage4/plot_placements.py',
+    'novel/stages/stage4/plot_refs.py', 'novel/stages/stage4/compile_ir.py',
+    'novel/stages/stage4/design_rebuild.py', 'novel/stages/stage4/design_recovery.py',
+    'novel/stages/stage4/design_evolution.py', 'novel/stages/stage4/plan_recovery.py',
+    'novel/stages/stage4/phase_binding.py', 'novel/stages/stage4/phase_state.py',
+    'novel/stages/stage4/design_response_recovery.py',
+    'novel/stages/stage4/binding_input_contract.py',
+    'novel/stages/stage4/source_view.py', 'novel/stages/stage4/prompts.py',
+    'novel/stages/stage5/write.py', 'novel/stages/stage5/review.py',
+    'novel/stages/stage5/measure.py', 'novel/stages/stage5/checks.py',
+    'novel/stages/stage5/closure.py', 'novel/stages/stage5/plot_checks.py',
+    'novel/stages/stage5/plot_prompts.py', 'novel/stages/stage5/prompts.py',
+    'novel/stages/stage5/reviewer_rewrite.py',
+    'novel/stages/stage5/trim_resolution.py',
+    'novel/stages/stage7/rename.py', 'novel/stages/stage7/assemble.py',
+    'novel/stages/stage7/checks.py', 'novel/stages/stage7/measure.py',
+    'novel/stages/stage7/prompts.py', 'novel/stages/stage7/subs.py',
+)
+
+#: 新链 per-stage 引擎模块（F8c 分流后的落位；缺任何一个也红——
+#: 「删除被静默扩大」与「旧面回来」是同一道闸的两半）。
+NEW_STAGE_MODULES = (
+    'novel/stages/stage2/__init__.py',
+    'novel/stages/stage2/names.py',
+    'novel/stages/stage4/__init__.py', 'novel/stages/stage4/design.py',
+    'novel/stages/stage4/grounding.py', 'novel/stages/stage4/compile.py',
+    'novel/stages/stage4/guard.py', 'novel/stages/stage4/fold.py',
+    'novel/stages/stage4/book_ir.py', 'novel/stages/stage4/hook.py',
+    'novel/stages/stage4/hook_context.py',
+    'novel/stages/stage5/__init__.py', 'novel/stages/stage5/body.py',
+    'novel/stages/stage5/body_checks.py', 'novel/stages/stage5/hook_writer.py',
+    'novel/stages/stage7/__init__.py', 'novel/stages/stage7/naming.py',
+    'novel/stages/stage7/assembly.py',
+    'novel/stages/common.py', 'novel/stages/chain.py',
+)
+
+#: STR-06 关闭批删除的存量解码面（模块级；回来即红）。
+CLOSED_DECODE_MODULES = (
+    'novel/orchestrator/reviewer_legacy.py',
+    'novel/orchestrator/reviewer_action_evidence.py',
+    'novel/orchestrator/reviewer_node_landed.py',
+    'novel/orchestrator/review_inheritance.py',
+    'novel/orchestrator/stage2_review_ledger.py',
+    'novel/orchestrator/workflow_transition.py',
+    'contracts/schema/retirement.py',
+    'contracts/schema/stage6.py',
+    'contracts/schema/stage6_prepare.py',
+    'novel/quality/__init__.py',
+)
+
+
+def test_old_stage_engine_modules_stay_deleted_and_new_chain_stays_complete():
+    """旧链引擎一个都不许回来；新链 per-stage 模块一个都不能缺。"""
+    problems = [f'旧链引擎模块回来了：{m}' for m in OLD_STAGE_MODULES
+                if (ROOT / m).exists()]
+    problems += [f'新链模块未落位：{m}' for m in NEW_STAGE_MODULES
+                 if not (ROOT / m).is_file()]
+    # 包回来了但装的是旧代码：新链包里混进旧链模块名同样红。
+    legacy_names = ('extract.py', 'checks.py', 'plot_design.py', 'plan.py',
+                    'write.py', 'review.py', 'rename.py', 'assemble.py',
+                    'prompts.py', 'measure.py', 'beats.py', 'actors.py',
+                    'reading.py', 'closure.py', 'subs.py')
+    for directory in ('novel/stages/stage2', 'novel/stages/stage4',
+                      'novel/stages/stage5', 'novel/stages/stage7'):
+        present = {p.name for p in (ROOT / directory).glob('*.py')}
+        problems += [f'{directory}/ 混进旧链模块名：{n}'
+                     for n in legacy_names if n in present]
+    assert not problems, '\n'.join(problems)
+
+
+def test_stage6_layer_stays_deleted():
+    """Stage6 整层（F6d/F8b/F8c 删）不得以任何形状回来。"""
+    problems = []
+    for rel in ('novel/stages/stage6', 'contracts/schema/stage6.py',
+                'contracts/schema/stage6_prepare.py',
+                'novel/api/routes/stage6_prepare.py', 'novel/views/stage6.py',
+                'novel/views/stage6_prepare.py', 'web/src/screens/stage6'):
+        if (ROOT / rel).exists():
+            problems.append(f'stage6 面回来了：{rel}')
+    for node_key in ('stage6.prepare', 'stage6.hook', 'stage6.approve',
+                     'stage6.semantic'):
+        from contracts.invariants import NODES
+        if node_key in NODES:
+            problems.append(f'stage6 节点键回到现役 NODES：{node_key}')
+    assert not problems, '\n'.join(problems)
+
+
+def test_old_chain_views_and_frontend_screens_stay_deleted():
+    """旧链 views 与前端旧屏目录（F7d/F8c 删）不得回来。"""
+    problems = []
+    for rel in ('novel/views/stage2.py', 'novel/views/stage4.py',
+                'novel/views/stage5.py', 'novel/views/stage7.py',
+                'novel/views/blueprint_progress.py',
+                'web/src/screens/read', 'web/src/screens/global',
+                'web/src/screens/stage4', 'web/src/screens/stage5',
+                'web/src/screens/inbox', 'web/src/screens/stage7',
+                'web/src/types/plot.ts', 'web/src/types/approvals.ts',
+                'web/src/types/prepare.ts', 'web/src/fixtures/plot_v1'):
+        if (ROOT / rel).exists():
+            problems.append(f'旧链读屏面回来了：{rel}')
+    assert not problems, '\n'.join(problems)
+
+
+def test_closed_decode_surface_stays_deleted():
+    """STR-06 关闭批删除的存量解码面不得回来；退役名册常量不得复活。
+
+    拒识闭合不依赖这些模块：产物层 `RETIRED_ARTIFACT_PATHS` 与盘面
+    stage5/deep|shallow 探测独立承担 legacy_incompatible；节点层按
+    「非现役节点」通则拒识。
+    """
+    problems = [f'已删解码面回来了：{m}' for m in CLOSED_DECODE_MODULES
+                if (ROOT / m).exists()]
+    from contracts import invariants as C
+    for symbol in ('RETIRED_NODES', 'RETIRED_APPROVAL_BINDINGS'):
+        if hasattr(C, symbol):
+            problems.append(f'退役名册常量复活：contracts.invariants.{symbol}')
+    from novel.cli import main as cli_main
+    from novel import work_units
+    for symbol in ('validate_reviewer_record', 'commander_budget_for_record',
+                   'reconcile_commander_response', 'rejected_responses'):
+        if hasattr(work_units, symbol):
+            problems.append(f'work_units 历史解码函数复活：{symbol}')
+    if hasattr(cli_main, '_cmd_workflow'):
+        problems.append('CLI workflow transition 子命令复活：_cmd_workflow')
+    assert not problems, '\n'.join(problems)

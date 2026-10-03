@@ -214,10 +214,6 @@ _JSON_READ_ALLOWED = {
         '付费外发网络偏好是 _service/network_settings.json 的服务自有状态'
         '（c252e8b9），不是小说 artifact；CAS 读写走 appendlog 锁，不进 '
         'ArtifactStore——小说产物与 provenance 不经此路'),
-    'novel/orchestrator/reviewer_legacy.py': (
-        '退役 Commander 审阅载体的历史收口：只规范化已在内存中的传输回答'
-        '（拒绝重复键）与 _service 公开协议日志的完整失败信封，供存量书'
-        '只读解码与 owner 停止证明；不读取盘上小说产物，不形成 provenance 输入'),
     'novel/work_units.py': '只读 _service 工作单元账和已保存响应，不读小说产物。',
     'novel/stages/chain.py': (
         '候选链装配体的 Stage1 输入采集：读的是**源书**目录的 '
@@ -293,10 +289,6 @@ _JSON_READ_ALLOWED = {
         '用户常用 Agent profiles 是当前 output base 的 `_service/` 设置，不是小说产物；'
         '读取保留 unset/configured/unreadable 三态并以原始字节 SHA-256 做 CAS，'
         '不进入 provenance，也不经 ArtifactStore 倒充 artifact'),
-    'novel/orchestrator/workflow_transition.py': (
-        '离线迁移只解码 `_service/` 的 workflow manifest、prepared/completed 与运行账，'
-        '用于显式版本、全字段、原字节 CAS 和下游未启动证明；这些是服务控制账而非小说产物。'
-        '人物/正文投影仍经 ArtifactStore 读取，迁移不能补造旧审批或小说知识'),
     'novel/stages/stage2/blueprint/run_state.py': (
         '只读解码 _service/runs 下的 Stage2 运行记录与验证后检查点；'
         '它们不是正式产物，当前版本、自哈希和输入身份不闭合即 unver，'
@@ -388,9 +380,6 @@ _WRITE_ALLOWED = {
     'novel/stages/stage6/prepare.py': (
         '直连 producer 的已购回答 sidecar（stage6/prepare_legacy_checkpoint.json）'
         '先于 WAL 提交落盘，是「已购回答先耐久」的免费半边；不写 canonical 产物'),
-    'novel/orchestrator/reviewer_action_evidence.py': (
-        '只在 _service/runs 下写内容寻址的不可变 Reviewer authority receipt；'
-        '以跨进程锁、原字节 CAS 和正式证据复核封口，不写 canonical 小说产物'),
     'novel/store.py': '它就是那条唯一的写路，两道闸在这里',
     'novel/appendlog.py': (
         'append-only 事件流的**唯一追加口**：五份 `_service/*.jsonl`（账本、作业、队列、'
@@ -442,25 +431,6 @@ _WRITE_ALLOWED = {
         '显式 preview/apply：允许回收已 ended 日志、已闭合 telemetry、完整 v3 trash，'
         '以及 delivery+commit+当前正式字节可逐项对证的 checkpoint 正文。回执、manifest、'
         'ledger、admission/beacon/agent/job/session 小账永久保留；四项 TTL 默认关闭'),
-    'novel/orchestrator/workflow_transition.py': (
-        '显式离线迁移仅在 `_service/workflow_transitions/` 物化不可变 prepared/completed，'
-        '清理自己的临时文件，并在全部原字节和旧 owner 证明闭合后交接 pending 指针。'
-        '工作流 manifest 仍由 work_units 的 CAS 写入；唯一人物派生投影仍经 ArtifactStore，'
-        '不允许直接覆盖小说产物或删除历史来源记录'),
-    'novel/orchestrator/reviewer_legacy.py': (
-        '退役 Commander 审阅载体的历史收口（原 reviewer_seat_ledger）：'
-        '只对存量书 `_service/runs/<sid>/reviewer_seats/<blocker>/` 席位账做'
-        '原子替换与孤儿临时文件清理；有效面只有 blocker/business SHA、'
-        '轮次 purpose、session 身份、退出状态与同轮 attempts，不含正文，'
-        '也不是正式 artifact；新工作单元不再开席位。'),
-    'novel/orchestrator/stage2_review_ledger.py': (
-        'Stage2 Global Commander 的跨进程调用预算与单调进展账，只原子写 '
-        '`_service/runs/<sid>/stage2/global_review_ledgers/`；有效面只有主体/workpack/progress '
-        'SHA、未闭合项数量、session 身份与退出状态；旧 0-wire 假预留的人工隔离面另存 '
-        'actor/reason 及 ledger/log/双 wire 账 hash，仍不含正文，也不是正式 artifact。'
-        '预留必须在 Popen 成功后、stdin 前落盘，故不能经 ArtifactStore；存量隔离只走 '
-        'hash-bound typed reconcile；候选订正仍回 producer 的'
-        '完整 schema/HARD/写盘口后才可能成为正式产物'),
     'novel/orchestrator/agent_settings.py': (
         '用户常用 Agent profiles 只原子写 `_service/agent_profile_settings.json`；'
         '它不是小说产物、不进入 ARTIFACTS/provenance，写前由 capability registry '

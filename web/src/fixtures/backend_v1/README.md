@@ -13,7 +13,7 @@ STR-06 切换（F8c）后旧链读屏抓包全部退役：`reading_ch3.json`、`
 
 - `enums.json`：由 `tools/regen_web_enums_fixture.py` 调用当前
   `novel/api/enums.py::payload()` 生成；`tests/test_api_enums.py` 核对完整对象。
-  含 `retired_nodes`／`retired_stages`，不因旧节点入册就恢复任何旧链端点。
+  含 `retired_stages`（`retired_nodes` 名册已随 STR-06 关闭批的存量解码面删除）。
 - `stage1.json`：`GET /api/novels/:sid/stage1` 的 `Stage1View` 响应
   （连续分区、原文章号诊断与 `anomaly_count`）。
 - `agent_capabilities.json`：离线驱动能力示例，不证明真实账户或模型可用。

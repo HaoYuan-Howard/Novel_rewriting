@@ -9,7 +9,7 @@ test_orchestrator_nodes.py —— 四个纯函数：贵贱 · 写不写 · 那�
   · **「0 成本」不等于「不写盘」**——原型 8 条注释都在说这句，而代码里没有落点
 
 ⚠ F8b 载荷：现役 `NODES` 是 stage0.remove／stage1.partition ＋ 11 个 `str06.` 节点；
-旧链 14 键进 `RETIRED_NODES`。旧链节点的旗标面（--revalidate/--apply-edit/--mode 族）
+旧链 14 键随存量解码面删除（关闭式拒识）。旧链节点的旗标面（--revalidate/--apply-edit/--mode 族）
 随节点整体退役——本文件对它们的现役断言一律是「任何现役节点都拒收」。
 """
 from __future__ import annotations
@@ -798,11 +798,10 @@ def test_the_runner_table_covers_exactly_the_current_stages():
 
     ⚠ F8c：`_runners()` 只剩 stage0／stage1 两腿；11 个 `str06.` 节点在
     `_cmd_run` 入口分流到 `_run_str06`（链装配归 `novel/stages/chain.py`），
-    旧链节点按 `RETIRED_NODES` 拒读（legacy_incompatible）。三条路合起来
+    旧链节点按「非现役节点」通则拒读（legacy_incompatible）。三条路合起来
     才覆盖 `NODES` 全集——少一条就是一个现役节点在 CLI 上跑不起来。
     """
     from novel.cli.main import _runners, runnable_stages
-    from contracts.invariants import RETIRED_NODES
     assert runnable_stages() == frozenset({'stage0', 'stage1'}), (
         f'`novel/cli/main.py::_runners` 覆盖 {sorted(runnable_stages())}，'
         f'而带层级 runner 的层是 [stage0, stage1]')
@@ -815,8 +814,9 @@ def test_the_runner_table_covers_exactly_the_current_stages():
             assert node.startswith('str06.'), (
                 f'{node} 既不在 stage0/1 runner 表，也不是新链 str06 节点；'
                 f'CLI 入口没有它的派发腿')
-    assert RETIRED_NODES and not (set(RETIRED_NODES) & set(NODES)), (
-        '退役节点不得仍留在现役 NODES')
+    for gone in ('stage2.analyze', 'stage4.design', 'stage5.write',
+                  'stage5.review', 'stage6.hook', 'stage7.rename'):
+        assert gone not in NODES, f'退役节点 {gone} 不得仍留在现役 NODES'
 
 
 def test_the_flag_surface_covers_all_three_tables():

@@ -22,7 +22,7 @@ from contracts.artifacts import (
     STR06_STAGE2_BLUEPRINTS, STR06_STAGE2_CHARACTERS, STR06_STAGE2_OBS_ASSOCIATE,
     STR06_STAGE2_OBS_NAMES, STR06_STAGE5_BODY, artifact_rel,
 )
-from contracts.invariants import NODES, RETIRED_NODES, STAGES
+from contracts.invariants import NODES, STAGES
 from contracts.schema.orchestration import (
     ArtifactState, JobEvent, QueueCounts, QueueEntry, QueueEvent, QueueItem,
     QueuePlan, QueueStart, StageState, Step,
@@ -111,9 +111,8 @@ def test_an_unknown_stage_is_refused_not_silently_empty():
 
 def test_human_nodes_are_exactly_the_ones_a_person_does():
     """批次 B4：全部人工审批闸退役；HUMAN_NODES 为空。"""
-    from contracts.invariants import RETIRED_NODES
     assert Q.HUMAN_NODES == frozenset()
-    assert 'stage7.approve' in RETIRED_NODES
+    assert 'stage7.approve' not in NODES
 
 
 def test_human_gate_satisfied_is_always_false_after_b4(queue_base):
@@ -127,7 +126,7 @@ def test_stage6_approval_surface_is_retired_from_the_queue():
     探测不再是队列符号，`stage6.*` 也不在现役节点面里。"""
     assert not hasattr(Q, '_stage6_approval_current')
     assert 'stage6' not in STAGES
-    assert 'stage6.approve' in RETIRED_NODES and 'stage6.hook' in RETIRED_NODES
+    assert 'stage6.approve' not in NODES and 'stage6.hook' not in NODES
     assert all(not node.startswith('stage6.') for node in Q.nodes_up_to('stage7'))
 
 
@@ -1051,7 +1050,7 @@ def test_runnable_body_write_is_planned_without_a_follow_up_review_item(
     assert blocked == []
     assert [item.node for item in todo] == ['str06.stage5.body']
     assert todo[0].steps and any(step.paid for step in todo[0].steps)
-    assert 'stage5.review' in RETIRED_NODES
+    assert 'stage5.review' not in NODES
 
 
 def test_blocked_body_keeps_hook_behind_the_same_stuck_gate(

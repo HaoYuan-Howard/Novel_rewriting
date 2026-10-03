@@ -25,7 +25,7 @@ from contracts.artifacts import (
     ARTIFACT_PATHS, STR06_ARTIFACT_RC_VERSIONS,
 )
 from contracts.invariants import (
-    NODES, RETIRED_NODES, RETIRED_STAGES, STAGES,
+    NODES, RETIRED_STAGES, STAGES,
     WORK_UNIT_EXECUTOR_MAX_CONTENT_CALLS,
 )
 from contracts.schema import ARTIFACT_SPECS
@@ -192,14 +192,14 @@ def test_candidate_table_is_now_the_production_registry():
     production_rels = set(ARTIFACT_PATHS.values())
     for rel in CANDIDATE_ARTIFACTS:
         assert rel in production_rels, f'候选产物未激活：{rel}'
-    # 旧链 14 个节点键必须已经不在现役表（移入 RETIRED_NODES 只读解码）。
+    # 旧链 14 个节点键必须已经不在现役表（STR-06 关闭批：RETIRED_NODES
+    # 名册已删，关闭式拒识按「非现役节点」通则，不再有只读解码登记面）。
     for retired in ('stage2.analyze', 'stage2.characters', 'stage2.global',
                     'stage2.blueprint', 'stage4.design', 'stage4.plan',
                     'stage4.context', 'stage5.write', 'stage5.review',
                     'stage6.prepare', 'stage6.hook', 'stage6.approve',
                     'stage7.rename'):
         assert retired not in NODES, f'旧链节点键仍在现役表：{retired}'
-        assert retired in RETIRED_NODES, f'旧链节点键未登记只读解码：{retired}'
     # Stage6 整层不在现役 stage 面。
     assert 'stage6' not in STAGES and 'stage6' in RETIRED_STAGES
 

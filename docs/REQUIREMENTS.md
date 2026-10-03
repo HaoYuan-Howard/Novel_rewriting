@@ -78,7 +78,7 @@ Golden 验证，不重新加回迁移关闭条件。
 | 3 | [x] R10a 关键语义交接（免费开发） | a1 Stage2 引文/时态（**已完成**）→ a2 Preserve 证据视图/锚定（**已完成**）→ a3 冲突回派三分支（**已完成**）→ a4 Brief 锁定＋Design v5（**已完成**）→ a5 Bind/compile 位置校验（**已完成**）；一次校验合并报告，fake transport |
 | 4 | [x] R10b WriterIR 投影与写手协议 v7（免费） | 完整章包夹具先行；背景投影收窄；义务挂承载拍；未回答锁进禁区；协议 v7 三类身份；同基座 v6/v7 免费形状读数对照（执行记录见 R10b 节），不做付费对照 |
 | 5 | [x] 收口 工程验收与付费基线冻结（免费） | §9.5 五文件、受影响 stage、fake 产品链（product_entry 真实子进程）、旧根关闭式拒识核验、默认非 corpus 回归全绿；前端无 API 形状变化不触发四件；rc12 全表＋F7E 重钉＋判据登记（执行记录见 R10a 节） |
-| 6 | [~] R10c＝B6-B 付费无人工 patch 全书（分段授权） | c1＋c2 均完成，成书已交付（r10b，零 owner patch）；余用户通读→STR-06 关闭 |
+| 6 | [x] R10c＝B6-B 付费无人工 patch 全书（分段授权） | c1＋c2 完成，成书交付（r10b，零 owner patch，hash `09d80fb1…`）；agent 侧六维/十案例验收全 pass 后用户指示继续执行关闭（2026-10-03）——「STR-06 关闭与退役尾项」见下节执行记录 |
 | 7 | [ ] R10d 第二本＋重复生成（另行授权） | golden CRITERIA 六维更新与 manifest 冻结；《三人成行》全链＋至少一次重复生成，披露普适性 |
 
 ### R9c 首段执行记录（2026-09-30）
@@ -697,6 +697,69 @@ Golden 验证，不重新加回迁移关闭条件。
 - 待用户：全文通读主观裁定＋案例清单确认（确认即冻结为本版验收判据）。
   结论绑定交付 hash `09d80fb1…`。
 
+### STR-06 关闭与退役尾项执行记录（2026-10-03）
+
+用户指示继续执行「STR-06 关闭与退役尾项」（agent 侧阅读验收全 pass 之后）。
+三件尾项＋台账遗留一次闭合，全部免费、零付费调用：
+
+- **Agent 终验改接**：novel/orchestrator/delivery.py 的 assess 从恒 unknown 的
+  过渡桩改接新链交付证明——base+sid 经 find_novel_dir 定位候选根（workflow
+  身份标记核验），读 stage7/final/delivery_manifest.json 并核对
+  final_text_sha256 与当前成书字节；代码指纹同一性段与 main 退出码契约
+  不变。通过终态只有 ready_with_disclosures（manifest 恒带机械披露，
+  semantic=unverified 如实保留），证明不了的一律 unknown。旧坐标过渡桩
+  read_deliverable_book 删除（下载唯一走 str06 book 路由直读）。
+  反例迁移：test_agent 新增通过例＋无候选根／无 manifest／篡改（改字节、
+  缺成书、缺 SHA）四类 unknown 与「过渡桩不得回来」断言；unknown==unknown
+  指纹反例原样保留。r10b 根终态 assess 由 unknown 变为就绪读数属预期变化。
+- **存量解码面删除**：①contracts/invariants.py 的 RETIRED_NODES 与
+  RETIRED_APPROVAL_BINDINGS 名册删除，approval_work_unit 只投影现役
+  bindings、approval_scope_allowed 未登记恒 False；②reviewer legacy 五模块
+  整删（reviewer_legacy／reviewer_action_evidence／reviewer_node_landed／
+  review_inheritance／stage2_review_ledger），work_units 的
+  validate_reviewer_record／commander_budget_for_record／
+  reconcile_commander_response／rejected_responses／_reviewer_business_matches
+  历史解码函数与 uploads.load_reviewer_actions 死入口同批删除，
+  latest_feedback 保留为无参现役读面，Commander 角色工作单元（含 read_only）
+  一律关闭式拒绝；③workflow_transition 模块、CLI workflow transition
+  子命令、schema 的 V4/V5/V6 manifest 与全部 Transition 记录模型删除，
+  `_require_clean_base` 增补迁移围栏痕迹检查保持旧 base 拒识闭合。
+  jobs 的 stage5.write mode 剥离与 queue 的历史臂投影中，queue 侧判据内联
+  保留（历史快照只读投影是拒识的一部分），jobs 侧随 JobStart 白名单删除
+  改为关闭式拒读。
+- **拒识通则化（不破坏现役恢复与历史拒识）**：CLI `_cmd_run` 与队列
+  `_live_disposition` 改「非现役节点 ⇒ legacy_incompatible」通则（话术不变，
+  不再点名名册）；队列历史条目排序按「现役面之后」通排；JobStart 解码
+  只认现役 NODES；RunContext 旧节点 readonly 放行删除（现役探测全部用
+  现役节点 id）。产物层 RETIRED_ARTIFACT_PATHS 与盘面 stage5/deep|shallow
+  探测不动——legacy_incompatible 的两道独立闭合闸保持原样。
+- **台账删除与遗留执行**：contracts/schema/retirement.py 与
+  tests/test_str06_retirement.py／test_str06_f7e_retirement.py 两个对账测试
+  删除；表内「尚未执行」的死文件同批删除（contracts/schema/stage6.py、
+  stage6_prepare.py、novel/quality 整包，pyproject packages 同步）；
+  `docs/schema/stage4|5|7.md` 已被新链内容重写接管、按现状保留。
+  「不得回来」守卫（旧链引擎模块／stage6 整层／旧 views 与前端旧屏／本批
+  解码面与名册常量）迁入 tests/test_retired_surface_scan.py 自持。
+- **登记与文档**：suite_catalog 删除 7 个测试条目并从 change_scopes.str06
+  移除 retirement.py；BACKEND_CONTRACT R-4.3/R-4.14/R-11.20/R-11.22/R-11.25/
+  R-12.1 判据坐标改写；AGENTS（根/novel）／OPERATIONS／DECISIONS／
+  schema 文档同步；api/errors 撤 WorkflowTransitionRefused 与
+  Stage2ReviewBudgetRefused 两条 UNREACHABLE 登记。
+- **验证**：定向套件（test_agent／work_units／cli／queue／state／nodes／
+  invariants／inbox／candidates／runtime_records／semantic_delivery／
+  agent_run_range／layering／retired_surface_scan／test_selection／
+  docs_references 等）逐轮全绿后跑契约 §9.5 五文件（398 项绿）；按根指南
+  门槛（含生产代码与可执行契约删除的最终集合）执行默认非 corpus 完整回归
+  三轮迭代：第一轮暴露 enums 三桶漏登记（R10c 的 CASCADE_REWIND_LIMIT 为
+  HEAD 既有欠账，本批补登记并再生成前端 enums 夹具）与 product_entry 终验
+  读数（按改接语义更新断言）；第二轮暴露 test_orchestrator_jobs 借旧节点
+  构造的用例（换现役节点、旧臂 mode 行改关闭式拒读断言）与 a2_preserve
+  series 互斥断言（6d0e6231 改修订反馈后测试未跟，HEAD 既有失败，本批按
+  现役语义更新）；第三轮 3523 项仅余 test_approval_retirement 旧节点提问者
+  3 例（换现役提问者，行为断言不变，22 项定向全绿）。最终轮完整重跑按用户
+  裁决免跑，以第三轮全量＋修复后定向全绿收口；证据 `.test_cache/str06close-*.xml`。
+  前端无 API 形状变化，不触发四件。
+
 ### 节省时间的执行约定
 
 
@@ -1019,9 +1082,9 @@ F9 的 H1–H4 仍有效：Preserve 保留作用而非整场转写；Design 章�
 | 章集合恢复 | 从有效 committed set 与当前章包身份只补缺章；输入未变购买继续采用，扫描全书不等于付费重跑全书；换 NameMap 只影响交付，Hook 窄改不使无关正文失效 |
 | Stage1 hook_copy | e00 章前证据仍分流至 Stage2 book 与第 1 章观察，与 main_text 构成组合源身份；只改引子拒复用旧购买，不恢复废弃中间产物 |
 | 篇幅与预算 | 正式 MainText 派生总预算、源章数固定目标章数；篇幅带／Hook 目标有正式配置来源；R9a 统一计数，配置变化进入实际消费身份 |
-| 存量解码面 | RETIRED_NODES／reviewer legacy／workflow_transition 在 STR-06 关闭时删除；先迁有效独有反例，再删解码面，不能破坏现役恢复或历史拒识 |
-| Agent 终验过渡桩 | `novel/orchestrator/delivery.py::assess` 当前只证明代码身份并返回 unknown；正式新链交付由 Stage7 manifest／候选 API 读取。STR-06 关闭前改接正式交付证明并迁移独有反例，删除旧坐标过渡桩；本轮产品链证据不宣称 Agent outcome 已 ready |
-| 退役台账 | `contracts/schema/retirement.py` 保留至关闭，现役拒识与独有反例先接管；按家族与 `tests/test_str06_f7e_retirement.py` 双向对账 |
+| 存量解码面 | **已兑现（2026-10-03 关闭批）**：RETIRED_NODES／RETIRED_APPROVAL_BINDINGS 名册、reviewer legacy 五模块、workflow_transition 及 jobs/queue 历史投影删除；CLI/队列/工作单元拒识改「非现役节点」通则，产物层 `RETIRED_ARTIFACT_PATHS` 与盘面探测保持 legacy_incompatible 闭合；有效独有反例已迁（test_cli／test_work_units／test_agent_run_range 等），「不得回来」守卫迁 `tests/test_retired_surface_scan.py` |
+| Agent 终验过渡桩 | **已兑现（2026-10-03 关闭批）**：novel/orchestrator/delivery.py::assess 改接候选根 delivery manifest（定位＋manifest＋成书 sha256 三重核对，通过仅 ready_with_disclosures）；旧坐标过渡桩 read_deliverable_book 删除；独有反例迁 tests/test_agent.py（无候选根/无 manifest/篡改/缺 SHA 四类 unknown＋通过例） |
+| 退役台账 | **已兑现（2026-10-03 关闭批）**：retirement.py 台账与两个对账测试删除；表内遗留未执行的死文件（schema 层 stage6 两文件、novel/quality）同批删除，三个 stage 文档已由新链内容接管故保留；「旧面不得回来」单向守卫由 tests/test_retired_surface_scan.py 承接 |
 
 历史响应先耐久再校验；pending／unknown 不自动重购。旧根的原始回答、checkpoint、
 接受正文与 ledger 不因 derived 重算而删。修订基线与稳定 ID、无关 canonical 内容
@@ -1060,6 +1123,10 @@ B6a 工程通过、canary 开发性阅读与用户验收三者不互相代替。
 
 关闭时完成存量解码与退役尾项及适用回归。若关闭前新增生产代码、契约或测试基础设施
 变化，B6a 按新最终集合复验；main 提前合入仅改变合入时点（D11）。
+**STR-06 于 2026-10-03 关闭**：B6-B 交付（r10b，hash `09d80fb1…`）经 agent 侧
+六维/十案例验收全 pass、用户指示执行关闭；存量解码面、终验过渡桩与退役台账
+三件尾项已按上节记录闭合。关闭后的活面：现役 str06 14 节点链、R10d 普适性
+（另行授权）与 R7 余项（阅读问题驱动）。
 第二本表达力、NameMap v5 跨书赋值与质量普适性在 B6c 单独报告，长篇无待验项。
 
 ## 成本与授权

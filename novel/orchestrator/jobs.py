@@ -35,7 +35,6 @@ from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
 from typing import BinaryIO
 
-from contracts.invariants import LEGACY_STAGE5_MODES
 from contracts.schema.orchestration import (
     LegacyExecutorBackend, LegacyLlmProfile, ExecutorBackend,
     JobEvent, JobRecord, JobStart, ProgressEvent, Step,
@@ -352,64 +351,13 @@ def read_events(base: str | os.PathLike[str]) -> list[JobEvent]:
 
 
 def _decode_event(payload: object) -> JobEvent:
-    """把 append-only v1 记录投影成现役公共模型。
+    """把 append-only v1 记录解码为现役公共模型。
 
-    ``mode`` 不是 ``JobStart`` 的字段；只有磁盘上旧
-    ``stage5.write`` 的 deep/shallow 值可在这一个私有入口被剥离。
-    新值、其他节点或其他层级出现该键仍关闭式拒读。
-    投影后 API/OpenAPI 无 mode，作业记录本身也没有重放入口。
+    STR-06 关闭批：旧 `stage5.write` deep/shallow 行的 mode 剥离与命令重投影
+    （`_redact_retired_stage5_start`）随存量解码面删除——历史账行带退役节点名
+    或 mode 键时由 `JobStart` 校验关闭式拒读（legacy_incompatible），不再投影。
     """
-    if not isinstance(payload, dict):
-        return JobEvent.model_validate(payload)
-    data = dict(payload)
-    start = data.get('start')
-    if isinstance(start, dict) and 'mode' in start:
-        projected = dict(start)
-        legacy_mode = projected.pop('mode')
-        if legacy_mode is not None and not (
-            projected.get('node') == 'stage5.write'
-            and legacy_mode in LEGACY_STAGE5_MODES
-        ):
-            raise ValueError(
-                'jobs.jsonl 的 mode 只允许旧 stage5.write deep/shallow')
-        if _has_retired_stage5_selector(projected, legacy_mode):
-            projected = _redact_retired_stage5_start(projected)
-        data['start'] = projected
-    elif isinstance(start, dict) and _has_retired_stage5_selector(start, None):
-        data['start'] = _redact_retired_stage5_start(start)
-    return JobEvent.model_validate(data)
-
-
-def _has_retired_stage5_selector(start: dict, legacy_mode: object) -> bool:
-    if start.get('node') != 'stage5.write':
-        return False
-    tokens = list(start.get('flags') or [])
-    for step in start.get('steps') or []:
-        if isinstance(step, dict):
-            tokens.extend(step.get('argv') or [])
-    return legacy_mode in LEGACY_STAGE5_MODES or bool(
-        {'--mode', '--deep', '--shallow-rest'} & set(tokens))
-
-
-def _redact_retired_stage5_start(start: dict) -> dict:
-    """精确命令留在 append-only 原记录；公共投影不发布已退役入口。"""
-    projected = dict(start)
-    projected['flags'] = []
-    steps: list[object] = []
-    for raw_step in projected.get('steps') or []:
-        if not isinstance(raw_step, dict):
-            steps.append(raw_step)
-            continue
-        step = dict(raw_step)
-        step['argv'] = ['legacy_incompatible']
-        step['label'] = '旧 Stage5 作业（命令已退役）'
-        step['writes'] = (
-            '旧 Stage5 产物（只读历史证据）'
-            if step.get('writes') else '')
-        step['note'] = '原命令仅保留在 append-only 原记录，公共面不可重放'
-        steps.append(step)
-    projected['steps'] = steps
-    return projected
+    return JobEvent.model_validate(payload)
 
 
 def fold(events: Iterable[JobEvent], *, live: set[str] | None = None) -> list[JobRecord]:

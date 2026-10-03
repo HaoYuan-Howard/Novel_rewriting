@@ -54,7 +54,7 @@ def test_retired_human_gate_inbox_producers_stay_deleted():
     stage6 候选核验/定稿、stage7 人名表定稿闸、stage2 称名投影免费物化、
     stage5 章级 INVALID/rejected revisions、trim 审计待核验、stage5 Review
     收敛账这些生产者都只能由旧链节点写出，而生产入口已拒识旧节点
-    （`RETIRED_NODES` ⇒ legacy_incompatible）⇒ 待办清单只剩盘上 `.INVALID`
+    （非现役节点 ⇒ legacy_incompatible）⇒ 待办清单只剩盘上 `.INVALID`
     （`_invalid_items`）与 0 成本复检报告（`_report_items`）两类现役数据源。
     任何审批待办生产者回来都意味着第二套人工闸（I-16：每类信息一个权威源）。
     """

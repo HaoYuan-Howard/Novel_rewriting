@@ -1336,7 +1336,9 @@ def test_agent_and_job_entrypoints_race_at_one_writer_admission_barrier(
             launch = getattr(jobs, job_entry)
             rec = launch(
                 base,
-                'stage0.remove' if job_sid is None else 'stage3.style',
+                # 关闭批：'stage3.style' 名册已删，JobStart 只认现役节点；
+                # 本用例只需要一个可合法登记的节点，两分支同用现役节点。
+                'stage0.remove',
                 job_sid, steps=steps, spawn=job_spawn)
             returned.append(('job', rec))
         except JobConflict:
@@ -1628,28 +1630,104 @@ def test_partial_gate_open_cleanup_failure_preserves_original_and_releases_write
         actual_mark_drained(base, gate_id)
 
 
-def test_delivery_assessment_is_retired_and_never_claims_ready(base, monkeypatch):
-    """旧链交付合格判定随旧链退役：语义未审面只剩退役理由，绝不倒成 ready。
+def _seed_candidate(base, sid='77', *, manifest=None, final_text=None):
+    """手搓候选根：workflow 身份标记 +（可选）delivery manifest 与成书字节。
 
-    原用例验证 Stage2 语义未审以 `ready_with_disclosures` 如实披露；F8c 后
-    `delivery.assess` 不再读 Stage4 机械准入、成书或待办面，代码指纹同一性
-    之外一律回答 `unknown` 并指名新链就绪记录的落点
-    （`str06.stage7.assemble` 的 delivery manifest，I-42）。
+    manifest=None 表示不写 manifest；final_text=None 表示不落成书文件；
+    manifest 里的 final_text_sha256 由调用方给定（要故意给错值的反例）。
+    """
+    run = Path(base) / f'测试书_{sid}'
+    (run / 'runtime').mkdir(parents=True, exist_ok=True)
+    (run / 'runtime' / 'candidate_workflow.json').write_text('{}', encoding='utf-8')
+    if manifest is not None:
+        final_dir = run / 'stage7' / 'final'
+        final_dir.mkdir(parents=True, exist_ok=True)
+        (final_dir / 'delivery_manifest.json').write_text(
+            json.dumps(manifest, ensure_ascii=False), encoding='utf-8')
+        if final_text is not None:
+            (final_dir / '测试书_rewriting.txt').write_text(
+                final_text, encoding='utf-8')
+
+
+def test_delivery_assessment_reads_candidate_manifest_and_matches_bytes(
+        base, monkeypatch):
+    """STR-06 关闭批改接：终验读候选根 delivery manifest 并核对成书字节。
+
+    通过终态只有 `ready_with_disclosures`——manifest 恒带机械披露
+    （semantic=unverified 如实保留），从不裸 `ready`（I-42）。旧坐标
+    过渡桩 `read_deliverable_book`（base+sid 直读旧链成书）随改接删除，
+    下载面唯一走 `novel/api/routes/str06.py::get_book` 按盘上路径直读。
+    """
+    from novel import prov
+    from novel.orchestrator import delivery
+
+    import hashlib
+    monkeypatch.setattr(prov, 'code_version', lambda: 'same-code')
+    text = '正文字节'
+    digest = hashlib.sha256(text.encode('utf-8')).hexdigest()
+    manifest = {
+        'delivery_identity': 'id-1', 'final_text_sha256': digest,
+        'chapters': [{'chapter_ordinal': n} for n in (1, 2)],
+        'disclosure': '回执只覆盖章级机械检查',
+    }
+    _seed_candidate(base, manifest=manifest, final_text=text)
+
+    outcome = delivery.assess(base, '77', start_code_version='same-code')
+    assert outcome.state == 'ready_with_disclosures', outcome
+    assert 'id-1' in outcome.reason and '2 章' in outcome.reason
+    assert '回执只覆盖章级机械检查' in outcome.reason
+    assert not hasattr(delivery, 'read_deliverable_book')
+
+
+def test_delivery_assessment_stays_unknown_without_a_candidate_root(
+        base, monkeypatch):
+    """定位不到候选根 ⇒ unknown，不把「没跑过」洗成通过。"""
+    from novel import prov
+    from novel.orchestrator import delivery
+
+    monkeypatch.setattr(prov, 'code_version', lambda: 'same-code')
+    outcome = delivery.assess(base, '404', start_code_version='same-code')
+    assert outcome.state == 'unknown', outcome
+    assert '定位不到' in outcome.reason
+
+
+def test_delivery_assessment_stays_unknown_when_delivery_has_not_landed(
+        base, monkeypatch):
+    """候选根在但没有 delivery manifest（本次跑未到 assemble）⇒ unknown。"""
+    from novel import prov
+    from novel.orchestrator import delivery
+
+    monkeypatch.setattr(prov, 'code_version', lambda: 'same-code')
+    _seed_candidate(base)
+    outcome = delivery.assess(base, '77', start_code_version='same-code')
+    assert outcome.state == 'unknown', outcome
+    assert 'delivery manifest' in outcome.reason
+
+
+@pytest.mark.parametrize('tamper', ['bytes_changed', 'final_absent', 'sha_missing'])
+def test_delivery_assessment_refuses_tampered_delivery(base, monkeypatch, tamper):
+    """manifest 与成书字节不一致 / 成书缺席 / 形状不完整 ⇒ unknown。
+
+    与 golden 基线同一把尺子：不把「盘上有 txt」冒充可交付。
     """
     from novel import prov
     from novel.orchestrator import delivery
 
     monkeypatch.setattr(prov, 'code_version', lambda: 'same-code')
+    manifest = {
+        'delivery_identity': 'id-2',
+        'final_text_sha256': '0' * 64,
+        'chapters': [{'chapter_ordinal': 1}],
+    }
+    if tamper == 'bytes_changed':
+        _seed_candidate(base, manifest=manifest, final_text='被改过的字节')
+    elif tamper == 'final_absent':
+        _seed_candidate(base, manifest=manifest)
+    else:
+        _seed_candidate(base, manifest={'chapters': []}, final_text='x')
     outcome = delivery.assess(base, '77', start_code_version='same-code')
     assert outcome.state == 'unknown', outcome
-    assert '旧链交付合格判定随旧链退役' in outcome.reason
-    assert 'delivery_manifest.json' in outcome.reason
-
-    # 旧链坐标（base+sid 的书目录）定位不到候选根，下载面同批显式拒绝。
-    from novel.errors import BlockingFindingsUnresolved
-
-    with pytest.raises(BlockingFindingsUnresolved, match='旧链交付合格判定'):
-        delivery.read_deliverable_book(base, '77')
+    assert '不一致' in outcome.reason or '不完整' in outcome.reason
 
 
 def test_an_unknown_code_fingerprint_is_never_read_as_the_same_code(base, monkeypatch):

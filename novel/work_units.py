@@ -12,7 +12,7 @@ import os
 import re
 import tempfile
 import time
-from dataclasses import asdict, dataclass, replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, BinaryIO, TYPE_CHECKING
 from uuid import uuid4
@@ -20,11 +20,10 @@ from uuid import uuid4
 from pydantic import BaseModel
 
 from contracts.invariants import (
-    BOOK_CONTENT_CALL_CEILING_DEFAULT, NODES, RETIRED_APPROVAL_BINDINGS,
-    RETIRED_NODES, approval_work_unit, approval_scope_allowed,
+    BOOK_CONTENT_CALL_CEILING_DEFAULT, NODES,
 )
 from contracts.schema.workflow import (
-    BookBudgetGrantV1, BookContentBudgetV1, WorkflowManifestV6,
+    BookBudgetGrantV1, BookContentBudgetV1,
     WorkflowManifestV7, WorkflowManifestV8, WorkflowManifestV9, WorkUnitAttempt, WorkUnitBlobV1,
     WorkUnitContentTurn, WorkUnitGroupBlobV1, WorkUnitLedgerV2,
     WorkUnitRegistryV1, WorkUnitProcessing, CommitBundleV1, commit_bundle_seal,
@@ -256,8 +255,6 @@ def workflow_manifest(base: str | os.PathLike[str]) -> (
         WorkflowManifestV7 | WorkflowManifestV8 | WorkflowManifestV9 | None):
     path = _safe(base, paths.workflow_manifest_path(base))
     if not path.exists():
-        if paths.workflow_transition_pending_path(base).exists():
-            raise WorkUnitRefused('已有迁移 prepared 但 manifest 缺失；禁止初始化新任务')
         return None
     with _open_snapshot(path) as stream:
         raw = stream.read()
@@ -273,10 +270,8 @@ def workflow_manifest(base: str | os.PathLike[str]) -> (
     if model is None:
         raise WorkUnitRefused(f'不支持的工作流 manifest schema_version={version!r}')
     manifest = _read(base, path, model)
-    from novel.orchestrator.workflow_transition import require_transition_completed
     if model.model_validate_json(raw) != manifest:
         raise WorkUnitRefused('读取工作流 manifest 时身份变化')
-    require_transition_completed(Path(base), manifest, raw)
     return manifest
 
 
@@ -299,6 +294,11 @@ def _require_clean_base(base: str | os.PathLike[str]) -> None:
         runs = service / 'runs'
         if runs.exists() and any(runs.iterdir()):
             raise WorkUnitRefused('此 base 已有旧运行记录，禁止初始化新工作流')
+        # STR-06 关闭批：离线迁移工具（workflow transition）已删；其 pending
+        # 围栏与记录目录是旧 base 痕迹，存在即拒绝初始化，不当作干净 base。
+        if ((service / 'workflow_transition.json').exists()
+                or (service / 'workflow_transitions').exists()):
+            raise WorkUnitRefused('此 base 含已退役工作流迁移痕迹，禁止初始化新工作流')
 
 
 def check_workflow_write(base: str | os.PathLike[str]) -> None:
@@ -355,33 +355,18 @@ def node_lifecycle_spec(node: str):
     F8c 删除条件（STR-06-F8c）一并删除：候选表已不存在，未登记节点一律
     `WorkUnitRefused`。
 
-    返回 `NodeLifecycleSpec`（现役）或 `_RetiredNodeLifecycle`（退役只读解码）；
-    两者都带 `unit_kind` 与 `executor_content_limit`，调用方只消费这两个字段。
+    只返回现役 `NodeLifecycleSpec`（带 `unit_kind` 与 `executor_content_limit`，
+    调用方只消费这两个字段）。
+
+    ⚠ STR-06 关闭批：退役节点只读解码桩（`_RetiredNodeLifecycle`）与
+    `RETIRED_NODES` 名册已随存量解码面删除——未登记节点一律关闭式拒绝。
     """
     if node in NODES:
         spec = NODES[node].lifecycle
         if spec is None:
             raise WorkUnitRefused(f'现役节点未登记执行生命周期：{node}')
         return spec
-    if node in RETIRED_NODES:
-        # ⚠ F8b-3：退役节点只服务存量书历史账的只读解码（Commander
-        # read_only 路径）；`executor_content_limit=0` 让一切新建模
-        # （executor/commander 写面）被角色闸拒绝，scope 准入由
-        # RETIRED_APPROVAL_BINDINGS 历史只读表承接。
-        return _RetiredNodeLifecycle(node)
     raise WorkUnitRefused(f'未登记的工作单元节点：{node}')
-
-
-class _RetiredNodeLifecycle:
-    """退役节点的只读解码桩：只带字段形状，不发任何新预算。"""
-
-    __slots__ = ('node', 'unit_kind', 'executor_content_limit', 'approval_bindings')
-
-    def __init__(self, node: str) -> None:
-        self.node = node
-        self.unit_kind = 'retired'
-        self.executor_content_limit = 0
-        self.approval_bindings: tuple = ()
 
 
 def read_book_budget(
@@ -463,38 +448,23 @@ class ContentReservation:
 class WorkUnitBudget:
     def __init__(self, base: str | os.PathLike[str], sid: str, node: str,
                  role: str = 'executor', scope: str = 'book', *, read_only: bool = False) -> None:
-        if role not in ('executor', 'commander'):
-            raise WorkUnitRefused('未登记的工作单元角色')
-        if role == 'commander' and not read_only:
-            # Commander 受托审阅已退役（2026-09-15）：新工作单元不再接受
-            # commander 角色；``read_only=True`` 仅服务存量书历史账的解码与
-            # owner 停止证明，不参与任何新预算。
-            raise WorkUnitRefused('Commander 工作单元已退役；历史账只读解码仍可用')
+        if role != 'executor':
+            # Commander 受托审阅已退役（2026-09-15）。STR-06 关闭批删除其
+            # 历史账只读解码面：commander 角色一律关闭式拒绝（含 read_only）。
+            raise WorkUnitRefused('Commander 工作单元已退役；历史账随关闭批冻结')
         try:
             # 现役 NODES 与 STR-06 候选表（F7a）同一道解析；候选节点复用本类
             # 全部正式语义，不为隔离链建第二套预算账（删除条件见函数 docstring）。
             spec = node_lifecycle_spec(node)
         except WorkUnitRefused:
             raise WorkUnitRefused('未登记的工作单元节点或角色')
-        if role == 'commander':
-            if node not in NODES and node not in RETIRED_NODES:
-                # ⚠ F8b-3：退役节点（RETIRED_NODES）的 Commander 账同样是
-                # 存量书历史解码面；除此之外不再服务任何现役节点。
-                raise WorkUnitRefused('Commander 工作单元只服务现役历史账解码')
-            # 原 ``spec.commander_content_limit == 4`` 的准入面随字段退役；
-            # 历史解码以现存的审批登记（approval_bindings）与已退役闸的
-            # 历史只读表（RETIRED_APPROVAL_BINDINGS）为等价准入证据。
-            allowed_scope = approval_scope_allowed(node, scope)
-            allowed_role = (
-                bool(spec.approval_bindings) or node in RETIRED_APPROVAL_BINDINGS)
-        else:
-            allowed_role = spec.executor_content_limit == 4
-            chapter_scope = bool(re.fullmatch(r'chapter:[1-9][0-9]*', scope))
-            allowed_scope = (
-                spec.unit_kind in ('book', 'candidate_batch') and scope == 'book'
-                or spec.unit_kind in ('chapter', 'ambiguous_chapter') and chapter_scope
-                or spec.unit_kind == 'strategy_and_chapter' and (scope == 'strategy' or chapter_scope)
-                )
+        allowed_role = spec.executor_content_limit == 4
+        chapter_scope = bool(re.fullmatch(r'chapter:[1-9][0-9]*', scope))
+        allowed_scope = (
+            spec.unit_kind in ('book', 'candidate_batch') and scope == 'book'
+            or spec.unit_kind in ('chapter', 'ambiguous_chapter') and chapter_scope
+            or spec.unit_kind == 'strategy_and_chapter' and (scope == 'strategy' or chapter_scope)
+            )
         if not allowed_role or not allowed_scope:
             raise WorkUnitRefused('模型角色或工作单元范围未在节点生命周期登记')
         if not scope or len(scope) > 160 or any(ord(c) < 32 for c in scope):
@@ -1209,26 +1179,13 @@ class WorkUnitBudget:
             self._replace(ledger, turn.model_copy(update={
                 'feedback_sha256': digest, 'state': 'failed', 'reason_code': 'typed_rejected'}))
 
-    def _reviewer_business_matches(
-            self, turn_id: str, recorded: Any, current: str, waiting_on: str) -> bool:
-        """旧审阅指纹只经原冻结包投影为当前业务身份；不改写账或拒因。"""
-        if recorded == current:
-            return True
-        from novel.orchestrator import reviewer_legacy
+    def latest_feedback(self) -> dict[str, Any] | None:
+        """只读最近一次模型拒因（typed 纠错的恢复输入之一）；adopted 即清零。
 
-        if (waiting_on not in reviewer_legacy.REVALIDATION_WAITING_ON
-                or self.turn(turn_id).request_payload_sha256 is None):
-            return False
-        request = self.request_payload(turn_id)
-        if (request.get('business_sha256') != recorded
-                or request.get('waiting_on') != waiting_on):
-            return False
-        try:
-            return reviewer_legacy.request_business_sha256(request) == current
-        except reviewer_legacy.RevalidationRefused as exc:
-            raise WorkUnitRefused(str(exc)) from exc
-
-    def latest_feedback(self, *, business_sha256: str | None = None) -> dict[str, Any] | None:
+        旧审阅指纹（business_sha256）重绑与 rejected_responses 恢复上下文
+        随 STR-06 关闭批的 reviewer legacy 解码面删除；本读面只回答当前账内
+        最近的拒因 payload，不做历史业务身份投影。
+        """
         ledger = self._read()
         for turn in reversed(ledger.turns):
             if turn.state == 'adopted':
@@ -1239,52 +1196,8 @@ class WorkUnitBudget:
             if (_digest(blob.model_dump(mode='json')) != turn.feedback_sha256
                     or blob.unit_id != self.unit_id or blob.turn_id != turn.turn_id):
                 raise WorkUnitRefused('模型拒因字节身份漂移')
-            payload = blob.payload
-            if business_sha256 is not None and self._reviewer_business_matches(
-                    turn.turn_id, payload.get('business_sha256'), business_sha256,
-                    payload.get('waiting_on', '')):
-                return {**payload, 'business_sha256': business_sha256}
-            return payload
+            return blob.payload
         return None
-
-    def rejected_responses(
-            self, *, business_sha256: str, waiting_on: str,
-            limit: int = 2) -> tuple[dict[str, Any], ...]:
-        """恢复纠错上下文，只读最近同主体的拒因与原回答，不把它们提升为决定。
-
-        每份回答和拒因继续核验原 blob；遇到接受或主体变更就停止回溯，损坏
-        则关闭式拒绝。调用方还须按其运输协议核对 feedback 的原回答摘要。
-        """
-        rows = []
-        for turn in reversed(self._read().turns):
-            if turn.state == 'adopted' or len(rows) >= limit:
-                break
-            if not turn.feedback_sha256:
-                continue
-            blob = _read(self.base, self.directory / f'{turn.feedback_sha256}.json', WorkUnitBlobV1)
-            if (_digest(blob.model_dump(mode='json')) != turn.feedback_sha256
-                    or blob.unit_id != self.unit_id or blob.turn_id != turn.turn_id):
-                raise WorkUnitRefused('纠错拒因的原始身份漂移')
-            feedback = blob.payload
-            if (feedback.get('waiting_on') != waiting_on
-                    or not self._reviewer_business_matches(
-                        turn.turn_id, feedback.get('business_sha256'), business_sha256, waiting_on)):
-                break
-            response = self.response_payload(turn.turn_id)
-            if (response.get('waiting_on') != waiting_on
-                    or not self._reviewer_business_matches(
-                        turn.turn_id, response.get('business_sha256'), business_sha256, waiting_on)
-                    or not isinstance(response.get('final_response'), str)
-                    or not isinstance(feedback.get('reason'), str)
-                    or not isinstance(feedback.get('response_sha256'), str)):
-                raise WorkUnitRefused('纠错回答与原拒因的业务身份不一致')
-            rows.append({
-                'ordinal': turn.ordinal,
-                'response_sha256': feedback['response_sha256'],
-                'final_response': response['final_response'],
-                'reason': feedback['reason'],
-            })
-        return tuple(reversed(rows))
 
     def response_for_logical_request(self, seed: str, *, include_completed: bool = False
                                      ) -> tuple[ContentReservation, dict[str, Any]] | None:
@@ -1319,138 +1232,6 @@ def readonly_budget(base: str | os.PathLike[str], sid: str, unit_id: str) -> Wor
             or unit_id not in registry.unit_ids or budget.unit_id != unit_id):
         raise WorkUnitRefused('只读工作单元登记身份不一致')
     budget._read()
-    return budget
-
-
-def reconcile_commander_response(
-        budget: WorkUnitBudget, turn_id: str, *, read_only: bool = False) -> None:
-    """原始回答的成本/会话尾账必须闭合后才能消费 typed 决定。"""
-    from novel.llm import session_audit as agent_session_audit
-    from novel.llm.ledger import reconcile_commander_call
-
-    row = budget.turn(turn_id)
-    saved = budget.response_payload(turn_id)
-    request = budget.request_payload(turn_id)
-    receipt = saved.get('prepared_receipt')
-    if not isinstance(receipt, dict) or receipt.get('kind') != 'commander-result-receipt-v1':
-        raise WorkUnitRefused('Commander 原回答缺持久成本与会话提交证明')
-    kwargs = receipt.get('cost_kwargs')
-    if not isinstance(kwargs, dict):
-        raise WorkUnitRefused('Commander 成本恢复证明缺参数')
-    attempt = agent_session_audit.AgentSessionEvent.from_dict(receipt['attempt_event'])
-    turn = agent_session_audit.AgentSessionEvent.from_dict(receipt['turn_event'])
-    response = saved.get('final_response')
-    if not isinstance(response, str):
-        raise WorkUnitRefused('Commander 原回答缺文本')
-    # 沿用 Commander 唯一严格 JSON 摘要口；格式错误也有有界纠错身份。
-    from novel.orchestrator.reviewer_legacy import reviewer_response_sha256
-    response_sha = reviewer_response_sha256(response)
-    expected = dict(run_id=row.run_id, session_run_id=row.session_run_id, sid=budget.identity['sid'],
-                    attempt_id=attempt.attempt_id, response_sha256=response_sha,
-                    outcome='ok', exit_code=0, error_kind=None,
-                    code=attempt.start_code_version, protocol_version=attempt.protocol_version,
-                    cli_version=attempt.cli_version)
-    raw_usage = kwargs.get('usage')
-    cost_usage = (None if raw_usage is None or (isinstance(raw_usage, dict)
-                  and all(value is None for value in raw_usage.values())) else raw_usage)
-    if (any(kwargs.get(k) != v for k, v in expected.items())
-            or saved.get('session_run_id') != row.session_run_id
-            or attempt.kind != 'attempt' or turn.kind != 'turn'
-            or turn != replace(attempt, kind='turn', delivery_attempts=None, turn_index=turn.turn_index)
-            or cost_usage != (None if attempt.usage is None else attempt.usage.to_dict())
-            or not attempt.attempt_id or attempt.attempt_id != turn.attempt_id
-            or not any(item.attempt_id == attempt.attempt_id for item in row.attempts)
-            or attempt.role != 'commander' or turn.role != 'commander'
-            or attempt.session_run_id != row.session_run_id
-            or turn.session_run_id != row.session_run_id
-            or attempt.parent_run_id != row.run_id or turn.parent_run_id != row.run_id
-            or attempt.error_kind is not None or turn.error_kind is not None
-            or attempt.profile is None or attempt.profile != turn.profile
-            or attempt.profile.model != kwargs.get('request_model')
-            or attempt.profile.reasoning_effort != kwargs.get('requested_effort')
-            or (attempt.actual_model is not None
-                and attempt.profile is not None
-                and attempt.actual_model != attempt.profile.model)
-            or attempt.actual_effort not in (None, attempt.profile.reasoning_effort)
-            or not attempt.provider_session_id
-            or attempt.provider_session_id != turn.provider_session_id
-            or attempt.provider_session_id != kwargs.get('provider_session_id')
-            or attempt.actual_model != kwargs.get('actual_model')
-            or attempt.actual_effort != kwargs.get('actual_effort')
-            or attempt.schema_sha256 != request.get('schema_sha256')
-            or receipt.get('logical_prompt_sha256') != hashlib.sha256(request['prompt'].encode('utf-8')).hexdigest()
-            or attempt.prompt_sha256 != hashlib.sha256(receipt['request_prompt'].encode('utf-8')).hexdigest()):
-        raise WorkUnitRefused('Commander 原回答、请求、成本与会话身份不一致')
-    agent_session_audit.reconcile_commander_event(budget.base, attempt, read_only=read_only)
-    reconcile_commander_call(budget.base, read_only=read_only, **kwargs)
-    agent_session_audit.reconcile_commander_event(budget.base, turn, read_only=read_only)
-    if not read_only:
-        budget.record_attempt(turn_id, attempt_id=attempt.attempt_id, outcome='ok',
-                              provider_session_id=attempt.provider_session_id)
-
-
-def commander_budget_for_record(base: str | os.PathLike[str], sid: str, record: Any) -> WorkUnitBudget:
-    """从原不可变账恢复章级/整书属主，不按当前下一批次重造预算账户。"""
-    if not record.work_unit_id or record.sid != sid:
-        raise WorkUnitRefused('审阅记录缺当前书的原工作单元身份')
-    ledger = _read(base, paths.work_unit_dir(base, sid, record.work_unit_id) / 'ledger.json', WorkUnitLedgerV2)
-    identity = approval_work_unit(record.waiting_on)
-    budget = WorkUnitBudget(base, sid, ledger.node, 'commander', ledger.scope, read_only=True)
-    if (identity is None or identity[0] != ledger.node or ledger.role != 'commander'
-            or budget.unit_id != record.work_unit_id or not approval_scope_allowed(ledger.node, ledger.scope)):
-        raise WorkUnitRefused('审阅记录与原 Commander 属主或范围不一致')
-    return budget
-
-
-def validate_reviewer_record(base: str | os.PathLike[str], sid: str, record: Any) -> WorkUnitBudget:
-    """所有决定消费者共用原回答、工作单元及 typed 动作的精确证明。"""
-    from novel.orchestrator import reviewer_legacy
-
-    unit_id = record.work_unit_id
-    turn_id = record.work_unit_turn_id
-    if not unit_id or not turn_id or record.sid != sid:
-        raise WorkUnitRefused('审阅决定缺工作单元身份')
-    ledger = _read(base, paths.work_unit_dir(base, sid, unit_id) / 'ledger.json', WorkUnitLedgerV2)
-    budget = commander_budget_for_record(base, sid, record)
-    if budget.unit_id != unit_id or ledger.role != 'commander':
-        raise WorkUnitRefused('审阅决定串用了其他角色或工作单元')
-    turn = budget._turn(ledger, turn_id)
-    if turn.state not in ('delivered', 'adopted'):
-        raise WorkUnitRefused('审阅决定不属于登记 owner 或回答已经拒绝')
-    if ledger.scope != approval_work_unit(record.waiting_on)[1]:
-        if budget.request_payload(turn_id).get('work_unit_scope') != ledger.scope:
-            raise WorkUnitRefused('分章审阅原请求缺精确批次绑定')
-    reconcile_commander_response(budget, turn_id, read_only=True)
-    from novel.orchestrator.reviewer_legacy import validate_work_unit_recovery
-    validate_work_unit_recovery(str(base), sid, budget=budget, turn_id=turn_id)
-    proof = budget.recovery_proof(turn_id)
-    if record.node is not None:
-        action = reviewer_legacy.ReviewerNodeAction(
-            kind='node', node=record.node, flags=tuple(record.flags), input_payload=record.input_payload)
-    else:
-        action = reviewer_legacy.ReviewerApprovalAction(kind='approval', surface=record.surface, payload=record.payload)
-    expected = dict(business_sha256=record.business_sha256, waiting_on=record.waiting_on,
-                    action_sha256=reviewer_legacy.action_business_sha256(action),
-                    provider_response_sha256=record.provider_response_sha256)
-    if any(proof.get(key) != value for key, value in expected.items()):
-        from novel.orchestrator import reviewer_legacy
-        try:
-            rebound = reviewer_legacy.proof_matches(
-                budget.request_payload(turn_id), proof,
-                business_sha256=record.business_sha256, waiting_on=record.waiting_on,
-                action=asdict(action), provider_response_sha256=record.provider_response_sha256)
-        except reviewer_legacy.RevalidationRefused as exc:
-            raise WorkUnitRefused(str(exc)) from exc
-        if not rebound:
-            raise WorkUnitRefused('typed 动作与原工作单元回答不一致')
-    if turn.session_run_id != record.reviewer_session_run_id:
-        raise WorkUnitRefused('typed 决定与原物理会话不一致')
-    raw = _read(base, budget.directory / f'{turn.response_sha256}.json', WorkUnitBlobV1)
-    if (_digest(raw.model_dump(mode='json')) != turn.response_sha256
-            or raw.unit_id != unit_id or raw.turn_id != turn_id
-            or not isinstance(raw.payload.get('final_response'), str)
-            or _digest(json.loads(raw.payload['final_response'])) != record.provider_response_sha256):
-        raise WorkUnitRefused('原始 Commander 回答字节不闭合')
     return budget
 
 

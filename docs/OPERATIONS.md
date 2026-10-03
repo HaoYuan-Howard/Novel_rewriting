@@ -259,5 +259,5 @@ STR-06 新链的 Stage4 免费聚合由结构性禁付节点 `str06.stage4.compi
 
 旧书按 `legacy_incompatible` 只读拒识，重跑须在独立输出根按新链重新上传
 （裁决见 `docs/DECISIONS.md` 2026-09-09～10「一次整根切换」行）；旧链恢复动作
-（reaggregate／recover-prepared 一类）已随旧链整层退役，历史解码按 Git 与
-`contracts/schema/retirement.py` 台账读取。
+（reaggregate／recover-prepared 一类）已随旧链整层退役；存量解码面与退役台账
+已随 STR-06 关闭批删除，旧根的恢复材料只按 Git 历史与冻结的盘上记录读取。

@@ -53,18 +53,6 @@ def workflow_manifest_path(base: str | os.PathLike[str]) -> Path:
     return service_dir(base) / 'workflow.json'
 
 
-def workflow_transition_dir(base: str | os.PathLike[str], transition_id: str) -> Path:
-    """分 Gate 工作流切换的不可变记录；不迁移或修改小说产物。"""
-    if not re.fullmatch(r'[0-9a-f]{64}', transition_id):
-        raise PathRefused('workflow transition id 必须为 SHA-256')
-    return service_dir(base) / 'workflow_transitions' / transition_id
-
-
-def workflow_transition_pending_path(base: str | os.PathLike[str]) -> Path:
-    """已准备但尚未完成的切换围栏；正式完成证明位于独立不可变回执。"""
-    return service_dir(base) / 'workflow_transition.json'
-
-
 def output_root_fence_path(base: str | os.PathLike[str]) -> Path:
     """整根离线切换的外部围栏；旧根移动后原路径仍不得重新接纳任务。"""
     root = Path(os.path.abspath(base))

@@ -211,15 +211,16 @@ def test_series_red_shapes_are_rejected():
     _cp, errors = _assemble(bad_mech)
     assert any('ex_id 闭集' in e for e in errors), errors
 
-    # schema 互斥：同一义务进两个 series——wire 两个组都含义务 1，checkpoint
-    # 构造期（PreserveCheckpoint 闸）抛 ValidationError。
+    # schema 互斥：同一义务进两个 series——wire 两个组都含义务 1。R10c 硬化
+    # （6d0e6231）：构造期 ValidationError 归入修订反馈（不再裸穿 exit 70），
+    # 故 assemble 拒签 errors（话术含互斥），供同节点修订轮重问。
     import pytest
     from pydantic import ValidationError
     overlap = _wire()
     overlap['series'] = [{'members': [1, 2], 'mechanism': None},
                          {'members': [1, 3], 'mechanism': None}]
-    with pytest.raises(ValidationError, match='互斥'):
-        _assemble(overlap)
+    _cp, errors = _assemble(overlap)
+    assert any('互斥' in e for e in errors), errors
 
     # schema 闭集：成员不在义务闭集内（直接构造 checkpoint 才可能越界——
     # wire 序号路径由 assemble 先拦；这里钉 schema 兜底）

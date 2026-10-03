@@ -175,13 +175,9 @@ STATUS: dict[type[NovelError], int] = {
 #: ⚠ 那条边界哪天松了（比如有人把付费路直接接进 HTTP 层），这张表要跟着改——
 #: 而上面那条测试会逼他先来读这段话。
 UNREACHABLE_OVER_HTTP: dict[str, str] = {
-    'WorkflowTransitionRefused': (
-        '显式工作流切换只在离线 CLI 子进程内推进（`workflow transition apply/recover`，'
-        '含 store 的人物投影提交）；异常在同一进程内折叠成 typed 终态退出码，'
-        'HTTP 父进程拿不到异常对象'),
-    'Stage2ReviewBudgetRefused': (
-        '已退役 Stage2 独立账的只读审计解码异常；当前 API、CLI 和 Supervisor '
-        '只消费 work_units，不调用旧账读取器'),
+    # ⚠ STR-06 关闭批：`WorkflowTransitionRefused`／`Stage2ReviewBudgetRefused`
+    # 两条随 workflow_transition 与 stage2_review_ledger 解码面删除（定义模块
+    # 已删）——登记一并撤销，同 F8b-3 撤 GlobalEditCandidateRejected 的先例。
     # R6 统一发布权威：`read_model` 的 seal 校验只在链执行的 CLI 子进程内冒泡
     # （HTTP 父进程只看到终态退出码）；编排侧唯一调用点
     # `state.py::_candidate_body_design` 把它捕获成未知章集（fail-closed），

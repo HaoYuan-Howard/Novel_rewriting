@@ -262,8 +262,8 @@ Supervisor 复活；其已验章只能由后续新 run 的 producer 按下述只
 但 outer state 仍尽力落账。child executor 通过 parent contract SHA 与 current epoch identity 复验相同
 base/sid/profiles/授权/code/provider context；无法复验时不得启动付费节点。
 
-以下两段是历史 Commander reviewer 调用面的运输纪律，已随角色退役，只约束账上历史行的解码；
-解码符号收在 `novel/orchestrator/reviewer_legacy.py`。历史 Reviewer 某轮若携 provider-native output
+以下两段是历史 Commander reviewer 调用面的运输纪律，已随角色退役，只作为历史记录保留；
+其解码符号（reviewer_legacy）已随 STR-06 关闭批删除，历史行关闭式拒读。历史 Reviewer 某轮若携 provider-native output
 schema，invocation 先用 Executor 共用的严格公共子集校验，冻结为排序键、无空白的
 canonical JSON 字节与 SHA-256；带 schema 的 exact resume 必须显式回带上一轮 SHA 且与本轮规范字节
 完全一致。该真实 schema SHA 进入本 logical session 的 `started / attempt / turn / ended` 四类
@@ -366,8 +366,8 @@ lock 内截回 committed prefix、fsync，并分别追加 `authorized / applied`
 不从诊断、理由或旧 note 推断来源，也不为未知来源补“已经落盘”说明。旧 note 原样保留。
 `run_step.py` 透传正式 CLI 的退出码，但自身未捕异常统一为 70；显式控制异常保持原语义。
 确定性交付终验的退出码归 `supervisor` 来源；终验失败不承诺有新产物落盘。
-已发行恢复 policy 的 parent 摘要经 `reviewer_legacy.parent_proof_projection_v1`
-复现发行时的完整投影，只隔离新增字段和已变更的派生 state/note；源事件、授权、epoch、outcome
+已发行恢复 policy 的 parent 摘要曾以 parent_proof_projection_v1
+复现发行时的完整投影（该解码符号已随 STR-06 关闭批删除；下述校验语义作为历史记录保留），只隔离新增字段和已变更的派生 state/note；源事件、授权、epoch、outcome
 等事实仍逐字进入原摘要，session/attempt/cost/log 仍按原策略交叉校验。该投影不回写旧账，
 不用于 UI 或执行授权，也不因旧投影含 `landed_red` 而放宽恢复条件。
 仅 `2 + outcome.stopped` 为 `stopped`，其余非零为 `failed`；旧事件缺 outcome 时折叠成 `unknown`。运行页信标的
@@ -429,7 +429,7 @@ edit 时才启用 merge/drop：此时空数组保留 failed baseline，撤销只
 `purpose=correction` 本身不能启用该语义。旧 v1 row list 不兼容。Supervisor 从
 这份 immutable exact request 注入 wrapper/action/flags、actor/source/workpack/chapter/default/
 review_scope、collection identity/SHA 与 decision subject SHA，只为模型显式提交的业务行组装完整
-request 交历史 action loader（解码符号在 `novel/orchestrator/reviewer_legacy.py`），不得把未变 no-op 行带回 sparse edit；assembler 不判断哪些旧 review item 在修后仍存活，
+request 交历史 action loader（解码符号已随 STR-06 关闭批删除），不得把未变 no-op 行带回 sparse edit；assembler 不判断哪些旧 review item 在修后仍存活，
 该结论仍只来自 producer 的 apply/normalize/HARD/reenumerate 链。compact 原始 JSON 的规范 digest 只用于
 拒因、重复请求和 no-progress；物化后的 full candidate/residue 使用其自身内容 digest，不能拿前者命名
 后者。
@@ -865,8 +865,8 @@ approval 形状携带 `surface / payload / review_token`，node 形状携带
 恢复先验证 immutable request/raw 与 `prepared_receipt` 中冻结的原 cost kwargs、attempt/turn 事件。
 `reconcile_commander_call` 与 `reconcile_commander_event` 严格比较已有行，缺尾才幂等补原行；
 任何字段漂移、重复矛盾或不能闭合的会话顺序均拒绝。跨 parent 补尾先取得原 owner-stopped lease。
-`validate_reviewer_record` 对账原 request、response、typed action、等待面的登记属主与完整成本/会话证据；
-schema 配置拒绝恢复还必须复验原日志、schema 和代码证明，仍消耗原内容轮次。
+validate_reviewer_record 对账链已随 STR-06 关闭批删除（历史决定按关闭式拒读）；
+上表字段仍是历史决定字节的有效形状（ReviewerActionRecord）。
 
 raw 成功后先保存 typed 决定，再由当前 loader、producer 与 live permit 消费。一次重建与 loader 回调
 复用唯一活动记录；已提交决定标为 adopted，planner 前严格验证原 adopted 记录并退休中断残留，

@@ -591,7 +591,6 @@ seal → 标记采用（可由 seal 重建）。任一窗口中断优先免费�
 | `contracts/schema/consumption.py` | 六个消费投影族＋字段级送达登记（R0） | body_access 按章级有效回执判定；rename_materials 写明 Naming 只读投影与 Apply 唯一应用者；字段级登记见下节 |
 | `contracts/schema/families.py` | 三级路径家族登记（16 个家族） | 来源账键=完整相对路径 |
 | `contracts/schema/dependency.py` | 新链依赖方向登记＋per-stage 模块 owner 规则 | 由 AST 对真实文件执行（`tests/test_str06_hook.py`） |
-| `contracts/schema/retirement.py` | F6d/F7e 退役登记（历史台账） | 双向对账；保留至 STR-06 关闭 |
 
 **PreserveCheckpoint 接口声明（R4 批如实登记）**：`runtime/preserve_checkpoint.json`
 的正式面就是 `contracts/schema/grounding.py::PreserveCheckpoint` 的全部字段，别无

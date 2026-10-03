@@ -53,7 +53,9 @@ def _load_unreachable_families() -> None:
 
     （F8b-3：旧链 `novel.stages.stage2.extract` 随 Stage2 整层删除，它定义的
     `GlobalEditCandidateRejected`／`_PostEditReviewRejected` 两条 UNREACHABLE 登记
-    已从 `novel/api/errors.py` 撤销；本装载表不再包含已删模块。）
+    已从 `novel/api/errors.py` 撤销；本装载表不再包含已删模块。
+    （STR-06 关闭批：`stage2_review_ledger`／`workflow_transition` 两模块随存量
+    解码面删除，装载行与 UNREACHABLE 登记同批撤销。）
     """
     import importlib
     for m in (
@@ -61,8 +63,6 @@ def _load_unreachable_families() -> None:
         'novel.llm.transport',
         'novel.orchestrator.agent',
         'novel.orchestrator.agent_supervisor',
-        'novel.orchestrator.stage2_review_ledger',
-        'novel.orchestrator.workflow_transition',
     ):
         importlib.import_module(m)
 

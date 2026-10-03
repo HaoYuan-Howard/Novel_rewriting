@@ -11,30 +11,6 @@ from contracts.schema.base import FrozenModel
 from contracts.schema.common import Sha256
 
 
-class PipelineArtifactVersionsV4(FrozenModel):
-    """初始化时的版本快照；各 Gate 的新产物仍由现役 ArtifactSpec 严格验证。"""
-    characters: Literal[2] = 2
-    global_grounding: Literal[7] = 7
-    analyze_receipt: Literal[1] = 1
-    chapter_blueprints: Literal[9] = 9
-    knowledge_links: Literal[2] = 2
-    blind_candidate: Literal[4] = 4
-    blind_chapter_edit: Literal[2] = 2
-    evidence_binding: Literal[5] = 5
-    plan_chapters: Literal[5] = 5
-    plan_edit: Literal[5] = 5
-    writer_context: Literal[8] = 8
-
-
-class WorkflowManifestV4(FrozenModel):
-    schema_version: Literal[4] = 4
-    contract_version: Literal['stage2-core-v2'] = 'stage2-core-v2'
-    pipeline_contract_epoch: Literal['joint-analysis-independent-artifacts-v1'] = 'joint-analysis-independent-artifacts-v1'
-    artifact_versions: PipelineArtifactVersionsV4 = Field(default_factory=PipelineArtifactVersionsV4)
-    task_id: Sha256
-    created_at: int
-
-
 class PipelineArtifactVersionsV5(FrozenModel):
     """Gate B 冻结快照；不能随新 producer 漂移。"""
     characters: Literal[2] = 2
@@ -53,37 +29,6 @@ class PipelineArtifactVersionsV5(FrozenModel):
 class WorkflowTransitionRefV1(FrozenModel):
     transition_id: Sha256
     source_manifest_sha256: Sha256
-
-
-class WorkflowManifestV5(FrozenModel):
-    schema_version: Literal[5] = 5
-    contract_version: Literal['stage2-actor-v1'] = 'stage2-actor-v1'
-    pipeline_contract_epoch: Literal['joint-analysis-actor-presentations-v1'] = 'joint-analysis-actor-presentations-v1'
-    artifact_versions: PipelineArtifactVersionsV5 = Field(default_factory=PipelineArtifactVersionsV5)
-    task_id: Sha256
-    created_at: int
-    transition_ref: WorkflowTransitionRefV1 | None = None
-
-
-class PipelineArtifactVersions(PipelineArtifactVersionsV5):
-    """Gate C 当前快照；准备、文案和改名分别保有自己的来源身份。"""
-    stage6_prepare: Literal[1] = 1
-    stage6_prepare_edit: Literal[1] = 1
-    stage6_prepare_review: Literal[1] = 1
-    stage6_prepare_decision: Literal[1] = 1
-    hook: Literal[4] = 4
-    hook_semantic_review: Literal[3] = 3
-    name_map: Literal[3] = 3
-
-
-class WorkflowManifestV6(FrozenModel):
-    schema_version: Literal[6] = 6
-    contract_version: Literal['stage6-prepare-v1'] = 'stage6-prepare-v1'
-    pipeline_contract_epoch: Literal['independent-hook-preparation-v1'] = 'independent-hook-preparation-v1'
-    artifact_versions: PipelineArtifactVersions = Field(default_factory=PipelineArtifactVersions)
-    task_id: Sha256
-    created_at: int
-    transition_ref: WorkflowTransitionRefV1 | None = None
 
 
 class PipelineArtifactVersionsV7(FrozenModel):
@@ -183,103 +128,6 @@ class WorkflowManifestV9(FrozenModel):
     task_id: Sha256
     created_at: int
     transition_ref: WorkflowTransitionRefV1 | None = None
-
-
-class WorkflowTransitionBookProofV1(FrozenModel):
-    characters_sha256: Sha256
-    global_sha256: Sha256
-    review_sha256: Sha256
-
-
-class WorkflowTransitionProofV1(FrozenModel):
-    """来源代码的只读核验结果；不把旧 gate bool 当作审批采用权。"""
-    logs: dict[str, Sha256 | None]
-    owner_ids: tuple[str, ...]
-    counts: dict[str, int]
-    accepted_books: dict[str, WorkflowTransitionBookProofV1]
-
-
-class WorkflowTransitionBookProofV2(WorkflowTransitionBookProofV1):
-    closure_sha256: Sha256
-
-
-class WorkflowTransitionProofV2(WorkflowTransitionProofV1):
-    """V5 来源额外证明 Stage5 闭合；旧 Core proof 不获得此资格。"""
-    accepted_books: dict[str, WorkflowTransitionBookProofV2]
-
-
-class WorkflowTransitionProjectionV1(FrozenModel):
-    """唯一允许免费重编译的派生投影；Core、来源和批准记录不迁移。"""
-    relative_path: str
-    source_json: str | None
-    source_sha256: Sha256 | None
-    target_json: str
-    target_sha256: Sha256
-    characters_sha256: Sha256
-    main_text_sha256: Sha256
-
-    @model_validator(mode='after')
-    def _source_presence(self) -> WorkflowTransitionProjectionV1:
-        if (self.source_json is None) != (self.source_sha256 is None):
-            raise ValueError('投影原文件的存在性与原字节摘要必须一致')
-        return self
-
-
-class WorkflowTransitionPreparedV1(FrozenModel):
-    schema_version: Literal[1] = 1
-    transition_id: Sha256
-    source_manifest_json: str
-    source_manifest_sha256: Sha256
-    target_manifest_json: str
-    target_manifest_sha256: Sha256
-    source_code_directory: str
-    source_code_version: str = Field(pattern=r'^[0-9a-f]{40}$')
-    target_code_version: str = Field(pattern=r'^[0-9a-f]{40}$')
-    preserved_files: dict[str, Sha256]
-    projections: dict[str, WorkflowTransitionProjectionV1]
-    source_proof: WorkflowTransitionProofV1
-    service_ports: tuple[int, ...] = Field(min_length=1)
-    stopped_pids: tuple[int, ...]
-    actor: str = Field(min_length=1)
-    reason: str = Field(min_length=1)
-    prepared_at: int = Field(ge=0)
-
-    @model_validator(mode='after')
-    def _offline_controls(self) -> WorkflowTransitionPreparedV1:
-        if (not self.actor.strip() or not self.reason.strip()
-                or len(set(self.service_ports)) != len(self.service_ports)
-                or any(not 1 <= port <= 65535 for port in self.service_ports)
-                or len(set(self.stopped_pids)) != len(self.stopped_pids)
-                or any(pid <= 0 for pid in self.stopped_pids)):
-            raise ValueError('迁移须提供合法唯一端口/PID，以及明确 actor/reason')
-        return self
-
-
-class WorkflowTransitionPreparedV2(WorkflowTransitionPreparedV1):
-    """V5→V6 不重编译任何已验收产物，保留 V1 的独立历史恢复。"""
-    schema_version: Literal[2] = 2
-    source_proof: WorkflowTransitionProofV2
-
-    @model_validator(mode='after')
-    def _no_projection_rewrite(self) -> WorkflowTransitionPreparedV2:
-        if self.projections:
-            raise ValueError('V5→V6 不允许改写原人物投影或其他产物')
-        return self
-
-
-class WorkflowTransitionPendingV1(FrozenModel):
-    schema_version: Literal[1] = 1
-    transition_id: Sha256
-    prepared_sha256: Sha256
-
-
-class WorkflowTransitionCompletedV1(FrozenModel):
-    schema_version: Literal[1] = 1
-    transition_id: Sha256
-    prepared_sha256: Sha256
-    source_manifest_sha256: Sha256
-    target_manifest_sha256: Sha256
-    completed_at: int = Field(ge=0)
 
 
 class WorkUnitAttempt(FrozenModel):

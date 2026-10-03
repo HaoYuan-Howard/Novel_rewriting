@@ -102,55 +102,47 @@ def test_the_mutex_key_is_computed_in_exactly_one_place():
     """
     assert J.active_key(None, 'stage1.partition') == '_global'
     assert J.active_key('', 'stage1.partition') == '_global'
-    assert J.active_key(SID, 'stage3.style') == SID
+    assert J.active_key(SID, 'stage0.remove') == SID
 
 
 def test_every_job_for_one_book_uses_the_same_key():
-    """Stage5 单臂后没有按写作臂并发的例外。"""
-    want = J.active_key(SID, 'stage3.style')
-    assert J.active_key(SID, 'stage5.write') == want
+    """Stage5 单臂后没有按写作臂并发的例外（关闭批：旧臂节点名已删，
+    用现役付费节点对照同一把书锁）。"""
+    want = J.active_key(SID, 'stage0.remove')
+    assert J.active_key(SID, 'str06.stage5.hook') == want
 
 
-def test_old_stage5_job_record_is_privately_decoded_without_public_mode(base):
-    raw = {
-        'job_id': 'legacy-deep', 'kind': 'started', 'ts': 1,
-        'start': {
-            'sid': SID, 'node': 'stage5.write', 'mode': 'deep', 'flags': [],
-            'steps': [s.model_dump(mode='json') for s in _steps()],
-            'python': '3.11', 'code': 'old', 'paid': False, 'writes': False,
-        },
-        'step_index': None, 'exit_code': None, 'note': None,
-    }
-    J.jobs_path(base).parent.mkdir(parents=True)
-    J.jobs_path(base).write_text(json.dumps(raw, ensure_ascii=False) + '\n', encoding='utf-8')
-
-    event = J.read_events(base)[0]
-    assert 'mode' not in JobStart.model_fields
-    assert 'mode' not in event.model_dump(mode='json')['start']
-    assert event.start is not None and event.start.node == 'stage5.write'
-    assert event.start.flags == []
-    assert event.start.steps[0].argv == ['legacy_incompatible']
-
-
-def test_old_job_decoder_rejects_any_non_registered_mode():
-    raw = {
-        'job_id': 'bad-mode', 'kind': 'started', 'ts': 1,
-        'start': {
-            'sid': SID, 'node': 'stage5.write', 'mode': 'fast', 'flags': [],
-            'steps': [s.model_dump(mode='json') for s in _steps()],
-            'python': '3.11', 'code': 'old', 'paid': False, 'writes': False,
-        },
-        'step_index': None, 'exit_code': None, 'note': None,
-    }
-    with pytest.raises(ValueError, match='deep/shallow'):
-        J._decode_event(raw)
+def test_old_stage5_job_record_with_mode_is_refused_read(base):
+    """STR-06 关闭批：旧臂 mode 剥离/重投影随存量解码面删除——带 mode 的
+    历史 jobs 行（无论 deep/shallow 还是别的值）一律关闭式拒读，不再投影。"""
+    import pytest as _pytest
+    for mode in ('deep', 'fast'):
+        raw = {
+            'job_id': f'legacy-{mode}', 'kind': 'started', 'ts': 1,
+            'start': {
+                'sid': SID, 'node': 'stage5.write', 'mode': mode, 'flags': [],
+                'steps': [s.model_dump(mode='json') for s in _steps()],
+                'python': '3.11', 'code': 'old', 'paid': False, 'writes': False,
+            },
+            'step_index': None, 'exit_code': None, 'note': None,
+        }
+        J.jobs_path(base).parent.mkdir(parents=True, exist_ok=True)
+        newline = chr(10)
+        J.jobs_path(base).write_text(
+            json.dumps(raw, ensure_ascii=False) + newline, encoding='utf-8')
+        # 单行账：read_events 只容忍「最后一行截断」，解码失败即读回空——
+        # 历史行不再进入公共投影（关闭式，不冒充可整流）。
+        assert J.read_events(base) == []
+        with _pytest.raises(ValueError):
+            J._decode_event(raw)
+        J.jobs_path(base).unlink()
 
 
 def test_a_second_job_on_the_same_book_is_refused():
     reg = J.JobRegistry()
-    reg.acquire(J.active_key(SID, 'stage3.style'), 'job-1')
+    reg.acquire(J.active_key(SID, 'stage0.remove'), 'job-1')
     with pytest.raises(J.JobConflict, match='已有作业在跑'):
-        reg.acquire(J.active_key(SID, 'stage3.style'), 'job-2')
+        reg.acquire(J.active_key(SID, 'stage0.remove'), 'job-2')
 
 
 def test_a_finished_job_releases_the_lock_even_without_a_sid(base):
@@ -173,22 +165,22 @@ def test_the_lock_comes_back_when_the_job_blows_up_mid_launch(base):
         raise RuntimeError('起不来')
 
     with pytest.raises(RuntimeError):
-        J.run(base, 'stage3.style', SID, steps=_steps(), spawn=boom, registry=reg)
-    assert reg.holder(J.active_key(SID, 'stage3.style')) is None
+        J.run(base, 'stage0.remove', SID, steps=_steps(), spawn=boom, registry=reg)
+    assert reg.holder(J.active_key(SID, 'stage0.remove')) is None
     failed = J.records(base, registry=reg)[0]
     assert failed.state == 'failed' and failed.exit_code == J.CRASH
     progress = beacon.read_events(base)
     assert [(event.phase, event.exit_code) for event in progress] == [
         ('start', None), ('end', J.CRASH)]
-    J.run(base, 'stage3.style', SID, steps=_steps(), spawn=_fake(), registry=reg)
+    J.run(base, 'stage0.remove', SID, steps=_steps(), spawn=_fake(), registry=reg)
 
 
 def test_sync_run_projects_start_and_end_into_the_progress_beacon(base):
-    J.run(base, 'stage3.style', SID, steps=_steps(), spawn=_fake())
+    J.run(base, 'stage0.remove', SID, steps=_steps(), spawn=_fake())
     events = beacon.read_events(base)
     assert [(event.node, event.phase, event.exit_code) for event in events] == [
-        ('stage3.style', 'start', None),
-        ('stage3.style', 'end', 0),
+        ('stage0.remove', 'start', None),
+        ('stage0.remove', 'end', 0),
     ]
 
 
@@ -206,7 +198,7 @@ def test_job_id_reaches_every_child_env_and_both_progress_events(base):
         return 0
 
     rec = J.run(
-        base, 'stage3.style', SID, steps=_steps(2), spawn=capture_env,
+        base, 'stage0.remove', SID, steps=_steps(2), spawn=capture_env,
         registry=J.JobRegistry(), job_id=job_id)
     events = beacon.read_events(base)
 
@@ -269,7 +261,7 @@ def test_job_and_agent_writer_admission_is_one_cross_table_transaction(
             barrier.wait(timeout=2)
             key = J.acquire_job_writer(
                 base, job_sid, 'stage0.remove' if job_sid is None else
-                'stage3.style', 'job-writer', registry=job_registry,
+                'stage0.remove', 'job-writer', registry=job_registry,
                 agent_registry=agent_registry)
         except J.JobConflict:
             conflicts.append('job')
@@ -335,12 +327,12 @@ def test_async_start_returns_running_and_refuses_the_same_book(base):
         assert release.wait(2)
         return 0
 
-    rec = J.start(base, 'stage3.style', SID, steps=_steps(), spawn=blocking, registry=reg)
+    rec = J.start(base, 'stage0.remove', SID, steps=_steps(), spawn=blocking, registry=reg)
     assert rec.state == 'running' and entered.wait(1)
     assert [(event.node, event.phase) for event in beacon.read_events(base)] == [
-        ('stage3.style', 'start')]
+        ('stage0.remove', 'start')]
     with pytest.raises(J.JobConflict):
-        J.start(base, 'stage3.style', SID, steps=_steps(), spawn=_fake(), registry=reg)
+        J.start(base, 'stage0.remove', SID, steps=_steps(), spawn=_fake(), registry=reg)
     release.set()
     assert J.wait(rec.job_id, 2)
     assert J.records(base, registry=reg)[0].state == 'ok'
@@ -350,14 +342,14 @@ def test_async_start_returns_running_and_refuses_the_same_book(base):
 
 def test_async_prepare_runs_under_the_book_lock_and_releases_on_failure(base):
     reg = J.JobRegistry()
-    key = J.active_key(SID, 'stage3.style')
+    key = J.active_key(SID, 'stage0.remove')
 
     def reject():
         assert reg.holder(key) is not None
         raise RuntimeError('approval changed')
 
     with pytest.raises(RuntimeError, match='approval changed'):
-        J.start(base, 'stage3.style', SID, steps=_steps(), registry=reg, prepare=reject)
+        J.start(base, 'stage0.remove', SID, steps=_steps(), registry=reg, prepare=reject)
     assert reg.holder(key) is None
     assert J.read_events(base) == []
 
@@ -378,8 +370,8 @@ def test_two_novels_run_in_parallel_and_keep_separate_locks(base):
         assert release.wait(2)
         return 0
 
-    first = J.start(base, 'stage3.style', 'book-a', steps=_steps(), spawn=blocking, registry=reg)
-    second = J.start(base, 'stage3.style', 'book-b', steps=_steps(), spawn=blocking, registry=reg)
+    first = J.start(base, 'stage0.remove', 'book-a', steps=_steps(), spawn=blocking, registry=reg)
+    second = J.start(base, 'stage0.remove', 'book-b', steps=_steps(), spawn=blocking, registry=reg)
     assert both_entered.wait(1), 'different novels were serialized'
     release.set()
     assert J.wait(first.job_id, 2) and J.wait(second.job_id, 2)
@@ -389,7 +381,7 @@ def test_two_novels_run_in_parallel_and_keep_separate_locks(base):
 # ───────────────────── 事件流：append-only ─────────────────────
 
 def test_a_job_leaves_started_step_and_ended(base):
-    rec = J.run(base, 'stage3.style', SID, steps=_steps(2), spawn=_fake(), registry=J.JobRegistry())
+    rec = J.run(base, 'stage0.remove', SID, steps=_steps(2), spawn=_fake(), registry=J.JobRegistry())
     kinds = [e.kind for e in J.read_events(base)]
     assert kinds == ['started', 'step', 'step', 'ended']
     assert (rec.state, rec.exit_code, rec.steps_started) == ('ok', 0, 2)
@@ -415,7 +407,7 @@ def test_an_upload_job_preserves_the_required_null_sid(base):
 def test_a_failing_step_stops_the_rest(base):
     """任一步非零即停（`R-13.4` 在单个作业内的样子）。"""
     spawn = _fake(rc=3)
-    rec = J.run(base, 'stage3.style', SID, steps=_steps(3), spawn=spawn,
+    rec = J.run(base, 'stage0.remove', SID, steps=_steps(3), spawn=spawn,
                 registry=J.JobRegistry())
     assert (rec.state, rec.exit_code) == ('failed', 3)
     assert len(spawn.calls) == 1, '第一步失败之后不该再起第二步'
@@ -428,7 +420,7 @@ def test_a_truncated_last_line_is_tolerated_but_a_broken_middle_line_is_not(base
     ⚠ 但只容忍最后一行：中间有坏行说明这份文件被别的东西写过，
     把它一起吞掉会让「记录不全」变成静默。
     """
-    J.run(base, 'stage3.style', SID, steps=_steps(), spawn=_fake(), registry=J.JobRegistry())
+    J.run(base, 'stage0.remove', SID, steps=_steps(), spawn=_fake(), registry=J.JobRegistry())
     p = J.jobs_path(base)
     with open(p, 'ab') as f:
         f.write(b'{"job_id": "half-writ')          # 被 kill 截在半路
@@ -447,7 +439,7 @@ def test_reconcile_turns_running_into_unknown_by_appending(base):
     回去改就毁掉了 append-only 的全部意义，而那正是「被 kill 不损坏」的来源。
     """
     ev = JobEvent(job_id='j1', kind='started', ts=1,
-                  start=JobStart(sid=SID, node='stage3.style', flags=[], steps=_steps(),
+                  start=JobStart(sid=SID, node='stage0.remove', flags=[], steps=_steps(),
                                  python='3.11', code='abc', paid=False, writes=False))
     J.append_event(base, ev)
     raw_before = J.jobs_path(base).read_bytes()
@@ -470,7 +462,7 @@ def test_unknown_must_say_why(base):
     with pytest.raises(ValidationError, match='必须说出原因'):
         from contracts.schema.orchestration import JobRecord
         JobRecord(job_id='x', start=JobStart(
-            sid=None, node='stage3.style', flags=[], steps=_steps(),
+            sid=None, node='stage0.remove', flags=[], steps=_steps(),
             python='3', code='c', paid=False, writes=False),
             started=1, ended=None, exit_code=None, state='unknown', steps_started=0)
 
@@ -481,14 +473,14 @@ def test_landed_but_red_is_not_the_same_failure_as_did_not_run(base):
     exit 1 = 正式产物**已经落盘**、结论不通过 ⇒ 去看负结论并裁决。
     它通常是报告硬红，也可以是 Stage4B typed `infeasible`。
     exit 2/3/70 = 压根没跑成 ⇒ 修完重跑。
-    实测：一次 8 分钟的付费批量在 `stage6.hook` exit 1 上整条停下，而
-    `hook.json` 好好地在盘上（三条候选只有一条命中 HARD），
-    账面上与一次真崩一模一样。
+    实测（历史案例，节点名随旧链退役）：一次 8 分钟的付费批量在 Hook 定稿
+    exit 1 上整条停下，而 `hook.json` 好好地在盘上（三条候选只有一条命中
+    HARD），账面上与一次真崩一模一样。
     """
     reg = J.JobRegistry()
-    red = J.run(base, 'stage6.hook', SID, steps=_steps(),
+    red = J.run(base, 'stage0.remove', SID, steps=_steps(),
                 spawn=_fake(rc=1), registry=reg)
-    dead = J.run(base, 'stage7.rename', SID, steps=_steps(),
+    dead = J.run(base, 'stage1.partition', SID, steps=_steps(),
                  spawn=_fake(rc=2), registry=reg)
 
     assert red.state == 'landed_red'
@@ -531,7 +523,7 @@ def test_a_chinese_character_is_never_split_across_two_reads(base):
     ⚠ **不能靠「切到最后一个换行」代替**：日志里可能整段没有换行（实测就挂在这上面）。
     """
     text = '判据全绿✓无换行的一整段中文'
-    J.run(base, 'stage3.style', SID, steps=_steps(),
+    J.run(base, 'stage0.remove', SID, steps=_steps(),
           spawn=_fake(note=text.encode('utf-8')), registry=J.JobRegistry())
     job_id = J.records(base)[0].job_id
 
@@ -553,7 +545,7 @@ def test_reading_a_log_that_is_not_there_is_not_an_error(base):
 
 def test_the_service_only_writes_under_service_dir(base):
     """`R-11.3` 收窄成「绝不落**产物**盘」——它写的两处都在 `_service/` 下。"""
-    J.run(base, 'stage3.style', SID, steps=_steps(), spawn=_fake(), registry=J.JobRegistry())
+    J.run(base, 'stage0.remove', SID, steps=_steps(), spawn=_fake(), registry=J.JobRegistry())
     touched = {p.relative_to(base).parts[0] for p in base.rglob('*') if p.is_file()}
     assert touched == {J.SERVICE_DIRNAME}, \
         f'服务进程碰了 `_service/` 以外的东西：{touched}'

@@ -2033,66 +2033,28 @@ def approval_work_unit(waiting_on: str) -> tuple[str, str] | None:
     """审批 blocker 到 (属主节点, scope) 的唯一投影；未知 blocker 不归属任何节点。
 
     历史上这是 Commander 审阅工作单元的预算属主投影；Commander 退役
-    （2026-09-15）后它继续回答「这道闸属于谁的工作面」，供存量书 reviewer
-    工作单元的只读解码使用。Stage4 四道闸与 Stage5 写作/闭合两道闸同日
-    整体退役，现役 ``approval_bindings`` 已不含它们；归属只保留在下方
-    历史只读表里。
+    （2026-09-15）后它继续回答「这道闸属于谁的工作面」。STR-06 关闭批删除
+    存量 reviewer 账解码面（RETIRED_APPROVAL_BINDINGS 历史只读表随批删除）；
+    投影只看现役 ``NODES`` 的 approval_bindings，历史 blocker 一律无归属。
     """
     found = [(node, scope) for node, spec in NODES.items()
              for blocker, scope in spec.lifecycle.approval_bindings
              if blocker == waiting_on]
-    found.extend(
-        (node, scope)
-        for node, bindings in RETIRED_APPROVAL_BINDINGS.items()
-        for blocker, scope in bindings
-        if blocker == waiting_on)
     if len(found) > 1:
         raise ValueError(f'审批 blocker 重复登记：{waiting_on}')
     return found[0] if found else None
 
 
 def approval_scope_allowed(node: str, scope: str) -> bool:
-    """审批 scope 只由节点登记派生；未登记的 scope 不属于该节点的审批面。
+    """审批 scope 只由现役节点登记派生；未登记的 scope 不属于任何审批面。
 
-    已退役闸的 scope 仍按历史只读表放行，仅供存量书历史解码，不构成
-    任何现役写面。
-    ⚠ F8b-3：旧链节点键整体在 RETIRED_NODES（不在现役 NODES），scope 准入
-    直接走 RETIRED_APPROVAL_BINDINGS 历史只读表。
+    ⚠ STR-06 关闭批：退役节点键与历史 scope 放行表（RETIRED_APPROVAL_BINDINGS）
+    已随存量解码面删除——未知节点与未知 scope 一律 False（关闭式，fail closed）。
     """
-    if node in RETIRED_NODES:
-        return scope in {value for _, value in RETIRED_APPROVAL_BINDINGS.get(node, ())}
-    return scope in (
-        {value for _, value in NODES[node].lifecycle.approval_bindings}
-        | {value for _, value in RETIRED_APPROVAL_BINDINGS.get(node, ())})
-
-
-#: Stage4 四道人工闸、Stage5 写作授权/闭合回执与 stage7.approve 人名表定稿退役
-#: （2026-09-15 全自动裁决，批次 B2/B3/B4）后的历史只读归属。现役 ``NODES`` 不再
-#: 登记这些 binding；这里唯一消费者是存量书 reviewer 工作单元与 Commander 账的
-#: 只读解码（``novel/work_units.py``）。stage5-closure 的现役后继是 Review 机械判定
-#: 自动闭合（`system:stage5-auto`）；prepare / rename 的现役后继分别是 producer
-#: 机械 auto-accept / auto seal。
-#: ⚠ F8a：`stage6.prepare` 键随 Stage6 整层退役删除（F6d 登记）；旧链节点键整体
-#: 进 `RETIRED_NODES`，本表只留仍被存量 reviewer 账解码引用的历史归属。
-RETIRED_APPROVAL_BINDINGS: Final[Mapping[str, tuple[tuple[str, str], ...]]] = {
-    'stage4.design': (
-        ('approval:stage4-design-review', 'design'),
-        ('approval:stage4-binding-resolution', 'design'),
-        ('approval:stage4-structure-replan', 'design'),
-    ),
-    'stage4.plan': (
-        ('approval:stage4-structure-review', 'structure'),
-    ),
-    'stage5.write': (
-        ('approval:stage5-writing', 'writing'),
-    ),
-    'stage5.review': (
-        ('approval:stage5-closure', 'closure'),
-    ),
-    'stage7.rename': (
-        ('stage7.approve', 'rename'),
-    ),
-}
+    spec = NODES.get(node)
+    if spec is None:
+        return False
+    return scope in {value for _, value in spec.lifecycle.approval_bindings}
 
 #: 允许配置直接 LLM executor 的现役节点。这里只列**真正调用生成/审判模型**的
 #: 付费节点；``str06.stage4.compile``／``str06.stage7.assemble`` 由代码执行
@@ -2145,21 +2107,11 @@ CONDITIONAL_REQUIRED_FLAGS: Final[dict[tuple[str, str], tuple[str, ...]]] = {}
 #: 移入 `RETIRED_STAGES`；旧书 `stage6/` 目录只读拒识为 `legacy_incompatible`。
 STAGES: Final = ('stage0', 'stage1', 'stage2', 'stage4', 'stage5', 'stage7')
 
-# 只供 append-only 作业/队列历史解码。它们不进 NODES/STAGES，因此不能 preview、
-# 调度或创建新队列；删除这些名字会让既有 jobs.jsonl / queues.jsonl 整流不可读。
-# ⚠ F8a：旧 Stage2/4/5/6/7 链 14 个节点键整体入册（STR-06 切换，F7e 退役登记），
-# 与既有退役键（stage3.style／stage6.semantic／stage0.approve／stage0.edit／
-# stage7.approve）合并。新链节点不复用这些 id。
-RETIRED_NODES: Final = (
-    'stage3.style', 'stage6.semantic', 'stage0.approve', 'stage0.edit',
-    'stage7.approve',
-    # STR-06 切换（2026-09-25）：旧 Stage2/4/5/6/7 链
-    'stage2.analyze', 'stage2.characters', 'stage2.global', 'stage2.blueprint',
-    'stage4.design', 'stage4.plan', 'stage4.context',
-    'stage5.write', 'stage5.review',
-    'stage6.prepare', 'stage6.hook', 'stage6.approve',
-    'stage7.rename', 'stage7.assemble',
-)
+#: ⚠ STR-06 关闭批（2026-10-03）：`RETIRED_NODES` 历史节点名册已随存量解码面
+#: 删除——jobs/queues 历史账的旧节点行不再可整流解码（关闭式拒读，话术
+#: `legacy_incompatible`）；旧根的正式状态判定不依赖节点名册（产物层
+#: `RETIRED_ARTIFACT_PATHS` 与盘面 `legacy_stage5_paths` 探测独立闭合）。
+#: 未知节点一律不进 NODES/STAGES：不能 preview、调度或创建队列。
 RETIRED_STAGES: Final = ('stage3', 'stage6')
 
 #: `stage` → 它的需求节。**从 `NODES` 派生，不许手抄。**

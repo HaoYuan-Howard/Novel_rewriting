@@ -48,7 +48,9 @@ def test_stage4_closure_includes_downstream_but_not_upstream_or_retired_stage():
     # F8a：Stage6 退役后下游闭包是 stage4 → stage5 → stage7。
     assert selected.stages == {'stage4', 'stage5', 'stage7'}
     assert 'tests/test_str06_body.py' in selected.modules
-    assert 'tests/test_workflow_transition.py' in selected.modules
+    # STR-06 关闭批：workflow transition 随存量解码面删除；stage 层同坐标
+    # 的现役载体是回派自愈测试（stage2/4/5）。
+    assert 'tests/test_str06_r3_selfheal.py' in selected.modules
     assert 'tests/test_stage01.py' not in selected.modules
     # F8c：旧链功能测试已整批删除——目录表里不再有它们，选测面也不该有。
     assert not ({'tests/test_stage4_v3_integration.py', 'tests/test_plot_pipeline.py',
@@ -145,7 +147,9 @@ def test_real_changed_stage_path_includes_direct_unit_tests_and_downstream_consu
 
 
 def test_changed_schema_keeps_contract_guards_without_direct_import_edges():
-    result = S.plan(S.load_catalog(), changed=('contracts/schema/stage6.py',))
+    # STR-06 关闭批：contracts/schema/stage6.py 已随死文件删除；换现役 stage5.py
+    # 保持同一语义——schema 变化没有直接 import 边也要选契约守卫。
+    result = S.plan(S.load_catalog(), changed=('contracts/schema/stage5.py',))
     assert S.CONTRACT_GUARDS <= result.modules
 
 
@@ -392,7 +396,7 @@ def test_stage_scope_never_leaks_into_another_stages_layer(tmp_path):
 
     F8c：原载体 `tests/test_stage_responsibilities.py`（逐 stage 参数化的
     `stage_scope` 反例）随旧链删除；现役 stage 层模块是
-    `tests/test_api_stage01.py`（stage0/1）与 `tests/test_workflow_transition.py`
+    `tests/test_api_stage01.py`（stage0/1）与 `tests/test_str06_r3_selfheal.py`
     （stage2/4/5）——本条改钉模块级 stage 切选与范围外拒绝。
     """
     report = tmp_path / 'scope.json'
@@ -433,4 +437,4 @@ def test_every_active_stage_has_default_suite_responsibility_evidence():
         assert selected.modules, stage
     # 未逐例登记的用例默认跟随模块层（unit_contract），不猜成 stage。
     assert S.case_layer('tests/test_paths.py::test_title_comes_from_the_directory_not_the_argument', catalog)[0] == 'unit_contract'
-    assert catalog['modules']['tests/test_workflow_transition.py']['layer'] == 'stage'
+    assert catalog['modules']['tests/test_str06_r3_selfheal.py']['layer'] == 'stage'

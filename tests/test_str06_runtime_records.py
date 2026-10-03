@@ -657,13 +657,13 @@ def test_execution_profile_ceiling_derives_from_admission_ledger(tmp_path):
 
 def test_parallel_registry_registers_new_chain_chapter_node_only():
     """并发登记改新链逐章节点：退役旧链键删除，键必须在 NODES 且逐章 scope。"""
-    from contracts.invariants import NODES, PIPELINE_PARALLEL_NODES, RETIRED_NODES
+    from contracts.invariants import NODES, PIPELINE_PARALLEL_NODES
 
     # B2（2026-09-27）：章观察 owner `str06.stage2.chapters` 登记进并发覆盖表。
     assert PIPELINE_PARALLEL_NODES == ('str06.stage2.chapters', 'str06.stage5.body')
     for node in PIPELINE_PARALLEL_NODES:
         assert node in NODES, f'并发覆盖节点必须在现役注册表：{node}'
-        assert node not in RETIRED_NODES
+        # 关闭批：退役名册已删，并发面只认现役注册表。
         spec = NODES[node].lifecycle
         assert spec is not None and spec.unit_kind == 'chapter', \
             f'{node} 必须是逐章节点（scope=chapter:N）'

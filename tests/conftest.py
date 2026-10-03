@@ -34,7 +34,6 @@ _WINDOWS_MAX_PATH = 260
 # test_*.py）随清理一并删除——登记不是历史台账，那个归
 # `contracts/schema/retirement.py`；这里留死条目只会让人以为那些文件还在。
 _SERIAL_TEST_MODULES = frozenset({
-    'tests/test_workflow_transition.py',
     'tests/test_agent_run_range.py',
     'tests/test_test_selection.py',
     'tests/test_golden_set.py',

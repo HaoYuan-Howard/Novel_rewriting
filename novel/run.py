@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator, TypeVar
 
-from contracts.invariants import NODES, RETIRED_NODES
+from contracts.invariants import NODES
 from contracts.schema import InputEdge, Provenance, Usage
 from contracts.schema.common import FreeProvenance, LlmProvenance
 from contracts.schema.orchestration import (
@@ -148,8 +148,7 @@ class RunContext:
             self.parent_run_id or self.ledger.parent_run_id or self.run_id)
         self.ledger.bind_run_id(self.run_id)
         self.ledger.bind_parent_run_id(self.parent_run_id)
-        if self.node not in NODES and not (
-                self.readonly and self.node in RETIRED_NODES):
+        if self.node not in NODES:
             raise ValueError(
                 f'未知节点 {self.node!r}。取值面的唯一落点是 contracts.invariants.NODES：'
                 f'{sorted(NODES)}。⚠ `n1..n9` 那一套已整套退役——作业 id 是 `<stage>.<动词>`；'

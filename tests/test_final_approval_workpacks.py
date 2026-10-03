@@ -6,7 +6,7 @@
 证据与精确幂等（`_approval_workpack_snapshot`／`approval_proof_sha256`／
 `run_rebind_review`／`run_approve`／`stage7_runs.commit_ownership`）。旧
 Stage2/4/5/6/7 链随 STR-06 切换整层删除，`stage7.rename` 节点移入
-`contracts/invariants.py::RETIRED_NODES`（只供 append-only 作业历史解码）。
+关闭式拒识（STR-06 关闭批：RETIRED_NODES 名册已随存量解码面删除）。
 
 **接管者**：新链命名职责是 `str06.stage7.naming`
 （`novel/stages/stage7/naming.py::compile_name_map`／`diff_proof`），其反例
@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import pytest
 
-from contracts.invariants import NODES, RETIRED_NODES
+from contracts.invariants import NODES
 
 #: 随旧 Stage7 producer 删除的模块与符号。
 #: ⚠ F8c：`novel.stages.stage7` **被新链 per-stage 包原地重建**（只住
@@ -85,8 +85,8 @@ def test_retired_workpack_entries_are_unreachable():
 def test_stage7_rename_node_is_retired_and_not_schedulable():
     """旧节点只供存量账解码：不进 NODES、不 preview、不建新队列。"""
     assert 'stage7.rename' not in NODES
-    assert 'stage7.rename' in RETIRED_NODES
-    assert 'stage7.approve' in RETIRED_NODES
+    assert 'stage7.rename' not in NODES
+    assert 'stage7.approve' not in NODES
     assert all(key.startswith(('stage0.', 'stage1.', 'str06.')) for key in NODES), (
         '现役节点表只允许 Stage0/1 与 11 个 str06. 节点')
 

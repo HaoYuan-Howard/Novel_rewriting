@@ -18,7 +18,6 @@ main.py —— `python -X utf8 -u -m novel.cli <子命令> …`
     reconcile                       jobs/编排账/Stage2 假预算的 0 成本 typed 恢复
     doctor --llm-transport          0 成本探测 DeepSeek DNS/TCP/TLS/HTTP；不发正文/密钥
     response-repair <sid>           0 成本：提交/放弃一份隔离的结构化响应修复稿
-    workflow transition <preview|apply|recover>  离线免费推进工作流 manifest，保留原任务与预算
 
 ⚠ **这张表就是 `--help` 打印出来的那一份**（argparse 的 `description` 直接取本 docstring），
 而操作规程让执行者第一步就跑 `--help`。少列一条 = 那条路对读它的人不存在。
@@ -48,7 +47,7 @@ from pathlib import Path
 
 from contracts.invariants import (
     FREE_ENTRIES, NODES,
-    PAID_FLAGS, PROGRESS_PHASES, RETIRED_NODES,
+    PAID_FLAGS, PROGRESS_PHASES,
     STAGES, VALUED_FLAGS,
 )
 from contracts.schema.orchestration import (
@@ -256,25 +255,6 @@ def _parser() -> argparse.ArgumentParser:
     rr.add_argument('--decline', action='store_true',
                     help='明确放弃本次修复额度；重跑原节点后进入下一采')
 
-    workflow = sub.add_parser('workflow', help='工作流契约的显式离线维护（0 成本）')
-    workflow_sub = workflow.add_subparsers(dest='workflow_cmd', required=True)
-    transition = workflow_sub.add_parser('transition', help='只推进已登记的相邻 manifest')
-    transition_sub = transition.add_subparsers(dest='transition_cmd', required=True)
-    transition_preview = transition_sub.add_parser('preview', help='核验离线来源并冻结不可变 prepared')
-    transition_preview.add_argument('--base', required=True)
-    transition_preview.add_argument('--source-code', required=True, help='干净的来源版本 checkout')
-    transition_preview.add_argument('--port', type=int, action='append', required=True, dest='service_ports')
-    transition_preview.add_argument('--stopped-pid', type=int, action='append', default=[], dest='stopped_pids')
-    transition_preview.add_argument('--offline-ack', action='store_true')
-    transition_preview.add_argument('--actor', required=True)
-    transition_preview.add_argument('--reason', required=True)
-    for command in ('apply', 'recover'):
-        transition_apply = transition_sub.add_parser(command, help='按精确 prepared SHA 免费提交或补尾')
-        transition_apply.add_argument('--base', required=True)
-        transition_apply.add_argument('--transition-id', required=True)
-        transition_apply.add_argument('--prepared-sha256', required=True)
-        transition_apply.add_argument('--yes', action='store_true')
-
     mk = sub.add_parser('mark', help='进度信标打点（0 成本，恒 exit 0）')
     mk.add_argument('sid')
     mk.add_argument('--node', required=True, choices=sorted(NODES))
@@ -347,7 +327,7 @@ def _runners() -> dict[str, Callable[[RunContext, list[str]], int]]:
     """`stage` → 跑法派发。`_dispatch` 与 `runnable_stages` 共用这一张当前表。
 
     ⚠⚠ F8c：**只剩 stage0／stage1 两条腿**。旧链 stage2／4／5／7 的 runner 随
-    旧链整层退役删除——`_cmd_run` 入口按 `RETIRED_NODES` 拒读旧节点
+    旧链整层退役删除——`_cmd_run` 入口按「非现役节点」通则拒读旧节点
     （legacy_incompatible），14 个 `str06.` 节点在入口分流到 `_run_str06`，
     两者都到不了这张表。Stage6 腿更早（F8b）已删。
     """
@@ -776,12 +756,12 @@ def _cmd_run(a: argparse.Namespace) -> int:
     # 手敲 CLI 不能绕过编排器的节点契约。此前 `stage2.global --check-only`
     # （该节点不接受这条跑法）先被 `is_paid` 倒向“会花钱”，显示成“加 --yes”；
     # 真加了又会落到默认付费分支。入口先走与 preview 共用的节点校验。
-    if a.node in RETIRED_NODES:
-        # 旧链节点随 STR-06 切换整体退役（F8b）：现役 NODES 只有 stage0/1 与
-        # 14 个 str06. 节点。旧书只读识别为 legacy_incompatible，不继承旧批准
-        # 或接受记录；要重跑必须在独立根经新链重建。
+    if a.node not in NODES:
+        # STR-06 关闭批：退役节点名册（RETIRED_NODES）已删除，拒识改为
+        # 「非现役节点一律 legacy_incompatible」通则——旧链节点与未知名同判，
+        # 不继承旧批准或接受记录；要重跑必须在独立根经新链重建。
         raise TerminalState(
-            f'节点 {a.node!r} 已随旧链退役（legacy_incompatible）：现役链是 '
+            f'节点 {a.node!r} 不是现役节点（legacy_incompatible）：现役链是 '
             f'{sorted(NODES)}。旧书的盘上产物只读保留，不能据此触发重跑；'
             '在独立输出根重新上传并按新链自动开跑')
     N.validate_run(a.node, flags)
@@ -1381,19 +1361,6 @@ def _cmd_mark(a: argparse.Namespace) -> int:
     return X.OK
 
 
-def _cmd_workflow(a: argparse.Namespace) -> int:
-    from novel.orchestrator import workflow_transition
-    if a.transition_cmd == 'preview':
-        result = workflow_transition.preview(base=Path(a.base), source_code=Path(a.source_code),
-            service_ports=tuple(a.service_ports), stopped_pids=tuple(a.stopped_pids),
-            actor=a.actor, reason=a.reason, offline_ack=a.offline_ack)
-    else:
-        result = getattr(workflow_transition, a.transition_cmd)(base=Path(a.base),
-            transition_id=a.transition_id, expected_prepared_sha256=a.prepared_sha256, yes=a.yes)
-    print(json.dumps(result, ensure_ascii=False, indent=2))
-    return X.OK
-
-
 _CMDS = {'run': _cmd_run, 'preview': _cmd_preview,
          'state': _cmd_state, 'inbox': _cmd_inbox, 'operator': _cmd_operator,
          'queue': _cmd_queue,
@@ -1401,7 +1368,6 @@ _CMDS = {'run': _cmd_run, 'preview': _cmd_preview,
          'queue-resume': _cmd_queue_resume,
          'jobs': _cmd_jobs, 'reconcile': _cmd_reconcile, 'doctor': _cmd_doctor,
          'response-repair': _cmd_response_repair,
-         'workflow': _cmd_workflow,
          'mark': _cmd_mark}
 
 
@@ -1457,8 +1423,6 @@ def _execution_context_control_mutation(a: argparse.Namespace) -> bool:
     历史名 ``_commander_control_mutation``：Commander 退役后 executor 子进程
     仍经同一组环境变量取得执行上下文，递归防护随之保留。
     """
-    if a.cmd == 'workflow':
-        return True
     if a.cmd == 'queue':
         return not bool(a.plan_only)
     if a.cmd in ('queue-cancel', 'queue-resume'):
