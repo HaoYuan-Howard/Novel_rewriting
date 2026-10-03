@@ -1093,6 +1093,15 @@
     "test_compile_v3_gates_use_slim_vocabulary": "stage",
     "test_patch_locate_positions_slim_transfer_items": "stage"
    }
+  },
+  "tests/test_str06_design_slim.py": {
+   "layer": "unit_contract",
+   "stages": [
+    "stage4"
+   ],
+   "cases": {
+    "test_assemble_routes_v6_and_enforces_coverage": "stage"
+   }
   }
  },
  "version": 1

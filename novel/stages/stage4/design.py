@@ -58,6 +58,7 @@ from contracts.schema.source import NameProjection, NameStructure
 from novel.stages.common import expand_surface_releases
 from novel.stages.stage4.read_closure import resolve_design_reads
 from novel.stages.stage4.materials import validate_design_materials
+from novel.stages.stage4.slim import expand_design_wire
 
 #: wire 顶层键白名单（Q-1：多余键在 compile 入口报错，不静默丢弃）。v2 起四个
 #: 静态跨章列表（standing_goals／ongoing_actions／open_questions／promises）
@@ -72,6 +73,14 @@ _THREAD_KEYS = frozenset({'op', 'tag', 'ref', 'kind', 'subject', 'text',
 #: 章切片（R2 v2）：purpose＋场数＋可选 entry（第 1 章可省）。
 _CHAPTER_KEYS = frozenset({'purpose', 'scenes', 'entry'})
 _ENTRY_KEYS = frozenset({'transition', 'carryover', 'recap', 'anchor'})
+
+
+def _wire_real_ids(wire: dict[str, Any]) -> set[str]:
+    """v6 wire 里出现过的义务标注号（覆盖闸用；纯读）。"""
+    return {str(ob) for scene in wire.get('scenes') or ()
+            if isinstance(scene, dict)
+            for beat in scene.get('beats') or () if isinstance(beat, dict)
+            for ob in beat.get('real') or ()}
 
 
 def _scene_id(index: int) -> str:
@@ -460,22 +469,50 @@ def assemble_body_design(
     expression_requirements,
     source_narration,
     brief: ReconstructionBrief | None = None,
+    obligations: Mapping[str, Any] | None = None,
 ) -> tuple[BodyDesign | None, list[str]]:
-    """Design wire（stage4-design-v5）→ canonical BodyDesign。
+    """Design wire（stage4-design-v5／v6）→ canonical BodyDesign。
 
     纯函数：不落盘、不调 LLM、不改输入 wire（deepcopy 后组装）。**一次校验、
-    合并报告**（R8b）：wire 形状由 pydantic 模型族（`DesignWireV5`）一次判，
-    逐字段错误按位置摊开；闭集（人物／称谓）与语义闭合面在通过形状后同一份
-    报告聚合，不再逐层早退遮住后层（B6-A canary 四轮修订实证）。有错不产出
-    半份 canonical（I-34）。
+    合并报告**（R8b）：wire 形状由 pydantic 模型族一次判，逐字段错误按位置
+    摊开；闭集（人物／称谓）与语义闭合面在通过形状后同一份报告聚合，不再
+    逐层早退遮住后层（B6-A canary 四轮修订实证）。有错不产出半份 canonical
+    （I-34）。
     a4：`brief` 传入时追加锁定项接受校验（kp/kf 键规则＋必保锁兑现＋
     expression_refs 闭集，`_check_lock_acceptance`）；生产链
     （`chain.run_body_design`）恒传入——缺省 None 仅供不持 Brief 的离线
     工具，跳过的是锁面，不是全书校验。
+    CS-3（2026-10-03）：wire 按协议字面量路由——瘦面（stage4-design-v6）
+    先经 `expand_design_wire` 派生成 v5 形状再进同一管道（obligations＝
+    ob 编号→需求映射，v6 必传：real 标注闭集与知情行展开依赖它）；另加
+    必保义务的 real 标注覆盖闸（未标注的 must 需求当场拦下——承载位是
+    v6 的新语义面，漏标即缺承载）。
     """
-    from contracts.schema.design import DesignWireV5
+    from contracts.schema.design import DesignWireV5, STAGE4_DESIGN_WIRE_PROTOCOL
 
     errors: list[str] = []
+    if wire.get('protocol_version') == STAGE4_DESIGN_WIRE_PROTOCOL:
+        try:
+            expanded, expand_issues = expand_design_wire(
+                wire, brief=brief, obligations=obligations)
+        except ValidationError as exc:
+            return None, [f'设计瘦 wire 协议校验失败：{entry}'
+                          for entry in _wire_model_errors(exc)]
+        if expand_issues:
+            return None, [message for _path, message in expand_issues]
+        assert expanded is not None
+        if obligations is not None:
+            # 覆盖闸按 wire 判（real 标注不进 v5 dict——canonical 无此面）。
+            annotated = _wire_real_ids(wire)
+            missing = sorted(
+                ob for ob, requirement in obligations.items()
+                if getattr(requirement, 'must_preserve', True) and ob not in annotated)
+            if missing:
+                errors.append(f'必保义务未被任何拍标注承载（real）：{missing}'
+                              '——每条 must_preserve 需求至少标注一拍')
+        if errors:
+            return None, errors
+        wire = expanded
     if wire.get('protocol_version') != STAGE4_DESIGN_PROTOCOL:
         errors.append(f'protocol_version 必须是 {STAGE4_DESIGN_PROTOCOL}，'
                       f'实得 {wire.get("protocol_version")!r}（I-13 无隐式迁移）')

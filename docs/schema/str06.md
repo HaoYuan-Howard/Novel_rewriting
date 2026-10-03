@@ -119,6 +119,18 @@ LLM 输出面升 `stage2-chapters-v3`（`contracts/schema/observation.py` 瘦模
 r10b 实证：wire 体积降至 56%，`expand(slim(现产物)) == 现产物` 11/11 章
 （模本地句柄重命名）；basis 逐字证据、闭集闸、D2 引文归一判据不放宽。
 
+**设计瘦 wire（CS-3 第一步，2026-10-03）**：`str06.stage4.body_design` 的
+LLM 输出面升 `stage4-design-v6`（`contracts/schema/design.py::DesignWireV6`），
+经 `novel/stages/stage4/slim.py::expand_design_wire` 派生成 v5 wire 后进
+`assemble_body_design` 既有管道（canonical BodyDesign 与下游零改动）。核心
+新增是拍上 **real 义务承载标注**（ob 短名，义务清单随 prompt 送达）：末次
+标注拍＝接受拍，知情/读者增量在该拍按 Brief 锁展开——bind 侧的落点判断与
+target_delta 的知情行从此是同一决定的两个投影（bind 退役的地基，余项见
+REQUIREMENTS CS-3）。机械常量与顶层（narration/world_rules/expression/
+pov/voice/entry）派生；kp 值未知/解除例外走拍上 state 面。r10b 实证：
+25/25 知情/读者行与 13 条事实断言行集合一致（模有意重落位），v6 wire 体积
+为 canonical 51%。
+
 关键语义交接的契约面（判据见 BACKEND_CONTRACT R-2.18/19、R-5.15～R-5.20）：
 
 - **证据（a1）**：Stage2 basis 是 `EvidenceQuote{segment, quote}`——quote 逐字

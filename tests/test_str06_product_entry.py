@@ -1250,15 +1250,17 @@ def test_obligation_unbound_replans_across_single_node_subprocesses(base,
     assert record.issues[0].item == obligation_core_id('ob01')
     assert 'ob01' not in record.issues[0].message
 
-    # ③ 修订提示不含 obNN：design 修订轮的请求工作包（blob）里，修订要求以
-    #    req_ core id 定位。
+    # ③ 修订提示：修订**要求段**以 req_ core id 定位（Design 源盲纪律不变）。
+    #    CS-3（2026-10-03）：v6 的静态义务清单（ob 短名，D6）随原始请求嵌入
+    #    修订轮——ob 合法出现在请求前缀，但【修订要求】段本身不得以 ob 定位。
     revision_payload = _turn_request_payload(base, book, 'str06.stage4.body_design',
                                              ordinal=2)
     messages = revision_payload['messages']
     revision_user = messages[-1]['content']
     assert '【修订要求】' in revision_user
     assert obligation_core_id('ob01') in revision_user
-    assert 'ob01' not in revision_user, '修订提示不得出现源序号（Design 源盲）'
+    requirement_section = revision_user.split('【修订要求】', 1)[1]
+    assert 'ob01' not in requirement_section, '修订要求不得以 ob 源序号定位（Design 源盲）'
 
     # ④ 付费账：受影响 owner 各恰好多一笔修订/重问实付；总闸按 attempt 合账。
     rows = _ledger_rows(base)

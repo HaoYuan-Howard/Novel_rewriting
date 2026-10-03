@@ -631,167 +631,137 @@ setup/payoff 或结局条件中的任何一项，就填 true；否则填 false�
   "series":[...],"evidence_conflicts":[...]}}（后两项可省略）。
 返回一个 JSON object，不要围栏、不要解释。"""
 
-DESIGN_RULES = """任务：仅依据 Brief/Identity/OutputConstraints 设计目标书
-（wire 协议 stage4-design-v5）。你是整书一次调用的结构设计者：只表达**选择、
-结构与相对篇幅重点**——场景/拍编号、归章、线程编号、权重归一与整数预算全部由
-compiler 生成，你不输出任何 ID、编号或归一化数值（I-21）。
+DESIGN_RULES = """任务：仅依据 Brief/义务清单/Identity/OutputConstraints 设计目标书
+（wire 协议 stage4-design-v6）。你是整书一次调用的结构设计者：只表达**选择、
+结构与相对篇幅重点**——场景/拍编号、归章、线程编号、权重归一、默认值、
+知情增量的键与模式全部由 compiler 派生，你不输出任何 ID、编号或归一化数值
+（I-21）。机械字段（world_rules、expression 保留决定、narration、pov/voice、
+entry 的 recap/锚点缺省）也由代码派生——你只写判断与例外。
 所有类别义务及 satisfaction 都要考虑。**依赖顺序**：被其它义务 requires_cores
 依赖的义务必须**在依赖方之前完成**——承载位置（拍序）先于依赖方的承载位
-（同场按拍序）；顺序颠倒会让依赖义务永远绑不到位。人物动机与阅读效果以
-义务为准：brief 与 voice 只做呈现表达，不得改写义务给出的事实、动机与
-满足条件。
+（同场按拍序）。人物动机与阅读效果以义务为准：brief 与 voice 只做呈现表达，
+不得改写义务给出的事实、动机与满足条件。
 不增加无证据的人物偏好、价值判断或社会规则。
 自由设计场景，但不为每条义务机械拆场。
 目标状态只存会限制后续的持续事实；即时动作留在事件。初始态由你显式选择，不复制源书末态。
 
-【书级声明（后文要记住的书级事实进字段，不得只写在导演说明里）】
+【义务承载标注（real，核心新增）】
+义务清单给每条义务一个编号 obNN（含 kind、是否必保、锁摘要与 satisfaction）。
+在**承载该义务的拍**上写 real:["obNN",…]：一条义务可标多拍——**末次标注拍**
+是它的接受拍（单一最终验收位），其余标注拍是支撑位；知情/读者增量由
+compiler 在接受拍按锁自动展开，你不写 knowledge/reader 行。
+- 每条**必保**（must=true）义务至少标注一拍，漏标即拒（机械校验）；
+- 承载位必须能单独完成该义务的 satisfaction（复合义务前半用支撑拍）；
+- 若 A requires B：B 的承载场景不得晚于 A 的承载场景；同场拍序交错合法；
+- series 成员是同一机制的离散兑现时点：接受拍必须**不同拍**，不得合并；
+- 锁摘要列出的 (holder,kp)／kf 由 compiler／你的 state 面按锁规则兑现
+  （漏兑现即拒）；reader 确认类义务在接受拍需要 conf（见 D4 节）。
+
+【书级声明】
 - book_style（必填）：整书叙述风格与表达规则的书面声明（进每章请求）；
-- world_rules: [字符串]：目标书的世界边界（可沿用或改写输入身份里的世界约束）；
-  每条一句话、可机械遵守的规则（如「术法须以寿命为代价」），不写成设定散文；
-- character_voices: [{char_id, voice}]：需要全书保持一致声线的人物及其口吻约定。
+- character_voices: [{char_id, voice}]：需要全书保持一致声线的人物及其口吻
+  ——每场 voice 按 pov 从这里派生（narrator 用 book_style），漏登记即拒；
+- world_rules 不写（compiler 用 Brief 的世界约束原样派生）；
+- expression_overrides（可选）：只列**要改**的机制
+  [{ex_id, reason, target_statement}]；缺省＝全部保留源表达。
 
-【跨章线程（拍上的操作；后文要接续的跨章语义全在这里，不写静态清单）】
-beats 里的 threads 是拍上的线程操作，分三种：
-- open：{op, tag, kind, subject, text}——开一条新线。kind∈goal(在途目标)/
-  action(进行中行动)/question(未决问题)/promise(待兑现承诺)；subject 是主体
-  char_id；text 是一句声明（**question 只写问题本身，不写答案**；文本只在此
-  写一次，之后不可改写）；tag 是你自选的本地标签（全书唯一，只用字母数字）。
-- advance：{op, ref, progress}——推进一条已开的线（ref＝开线时的 tag），
-  progress 一句话说明本拍进展到哪。
-- close：{op, ref, ending, resolution}——收线（ref＝tag）。结局按 kind 取值：
-  goal→achieved/abandoned/superseded；action→completed/aborted/failed；
+【跨章线程（拍上的操作）】
+- open：{op, tag, kind, subject, text}——kind∈goal/action/question/promise；
+  subject 是主体 char_id；text 一句声明（question 只写问题本身，不写答案）；
+  tag 自选本地标签（全书唯一，只用字母数字）；
+- advance：{op, ref, progress}；close：{op, ref, ending, resolution}——结局按
+  kind：goal→achieved/abandoned/superseded；action→completed/aborted/failed；
   question→answered/dismissed；promise→fulfilled/broken/released。
-  resolution 一句话简短收束（question 的答案要点写在这里）。
 每条线只能 open 一次；advance/close 不得早于 open；close 之后不得再操作。
-结尾仍开放的线是合法的（留线是设计自由）。
+结尾仍开放的线合法。
 
-【状态词表】
-每个状态有 domain(character/relation/knowledge/world/reader), key, subjects(人物1个、
-关系有序2个), holder(knowledge 必填真实 char_id，其它 null), op(set/unset/unknown),
-value(string 或 null), scope(book/scene), knowledge_mode(knowledge 为
-known/suspected/heard/believes，其它不写该键；believes＝持有者以为为真、不代表世界
-为真，用于传递错误看法)。初始态一律 book 作用域，不写 scope 键（compiler 填）。
-拍上的 target_delta **每条必写 scope**：持续到后续场景的事实用 book；只在
-本场内成立的临时动作环境用 scene——缺 scope 键即拒（机械校验，无默认值）。
-knowledge 的 knowledge_mode：known＝确知、suspected＝怀疑、heard＝听说、believes＝
-持有者以为为真（不代表世界为真）——错误看法（如"芸娘以为夫君已离开"）必须用
-believes 以结构形式传到写手，不得写成 known 让写手当作世界事实演出。
-op=unknown 表示「值未知」：该维度已确立但此刻值未定／未交代——它不是「人物
-不知道」；「人物不知道」用 knowledge 域表达：知情缺席（不建该人物的知识条目）
-或 believes（持有者以为为真）。初始态里 unset 表示「故事开始前已显式解除」，
-没有该维度就是未建立，不要造占位项。
+【拍上事实断言（state）】
+持续到后续的事实变化写在拍的 state：[{at, key, val, op?, modality?}]：
+- at：人物 slug｜关系 "subject+object"（有序）｜"world"；
+- key 是目标书命名（英文蛇形）；val 表达成键值（受控词表/短串），不是散文；
+- op 缺省 set；unset（显式解除，不带 val）／unknown（值未知）才写；
+- scope 缺省 book；只在本场内成立的临时动作环境才写 scene；
+- modality 缺省 actual；planned＝已定计划／expected＝预计约定／conditional＝
+  条件执行——把计划写成 actual 即拒；
+- 槽位身份：跨拍/跨章消费的当前状态沿**同一 key** 更新值，不换键表状态变化；
+- kf_* 事实锁键：只能按锁类别承载（planned 锁写 planned，不得升格 actual；
+  unknown_value 只能 op=unknown 不得补值；unanswered 不得 set 作答）；
+- kf 值用一句话短述（如「即将上京参加科举」）；
+- kp_* 键的知情增量一律经 real 标注派生；state 面只承载例外——
+  op=unknown（值未知）或 op=unset（显式解除该知情），at＝持有者。
 
-【事实时态（modality，必填）】
-非 knowledge/reader 域的 set 每条必写 modality：actual＝已发生；planned＝已定
-计划；expected＝预计/约定；conditional＝条件执行（尚未发生）。把计划或预计写
-成 actual 即拒（机械校验）。knowledge 与 reader 域不写 modality。unset/unknown
-不写 modality。
-
-【Brief 锁定项：kp 命题与 kf 事实锁（源盲句柄，只能取 Brief 给出的字面）】
-Brief 的 propositions 登记命题（kp_*，含「被谁公开声称」——公开声称不等于
-任何人的确知）；knowledge_locks 是知情锁 {holder, kp, mode}；fact_locks 是
-事实锁 kf_*（时态 planned/expected/conditional、值未知 unknown_value、原文
-未回答 unanswered）。
-- 知情/读者确认涉及登记命题时，key 直接用该 kp_* 句柄（同一命题不另起自由键
-  重复表达）；knowledge 域用 kp 键时：持有者必须有该 (holder,kp) 的锁，且
-  knowledge_mode 只能取被授权的模式（known 只能来自 known 锁——源文只有
-  suspects 时不得写 known；同一持有者后续新证据支持确认时，Brief 会同时给
-  suspected 与 known 两把锁，你按位置先后选择）；
-- reader 域 set（读者确认）用 kp 键时：reader 必须有该命题的 known 锁——
-  线索、误导、怀疑不是读者确认，没有锁就不安排确认拍；
-- kf 时态锁：只能以 op=set 且 modality＝锁的类别承载（planned 锁就写 planned，
-  不得升格为 actual）；后续真的兑现为已发生时另用自由键记录新事实，不改写
-  kf 键的时态；
-- kf unknown_value（源文未给值）：只能 op=unknown，不得补值；kf unanswered
-  （原文未回答的悬念）：不得 set 作答——留白保留为留白；
-- 必保义务的 realize_holders/realize_locks 列出的锁必须被对应键实际兑现
-  （漏写即拒；机械校验）；
-- 槽位身份：确实跨拍/跨章消费的当前状态沿**同一 key** 更新值（候选对象、
-  当前计划内容进 value），不用换 key 表示状态变化；历史记录用事件表达。
-
-【正向表达任务（expression_refs）】
-beats 的 expression_refs 声明本拍承载的源表达 ex_id（只能取 Brief.expression
-给出的项；narration 是书级机制不上拍）。幽默、反差等正向表达任务落到具体拍；
-书级风格、声线与叙述机制只在 book_style/character_voices/narration 声明，
-不举后段具体情节。
+【读者确认必须声明事实地址（D4，例外面）】
+读者延后确认的义务（real 标注里有 reader 锁的）在接受拍写
+conf:{at, key}——它确认的**事实地址**（人物/关系键，指向 initial_state 或
+此前某拍已确立的 set）；确认不得早于事实建立。此前任何位置都不得让读者
+确认；线索、误导与猜测照常安排。其余拍不写 conf。
 
 【状态读取：先读旧值、后写新值】
-每场 state_reads 只列实际需要的状态地址，并定位到入场或具体拍：
-- 缺省定位到入场＝读取本场写入**前**的旧值（本场会写该地址不影响入场读取）；
-- 要读本场自己写入**后**的新值，写 {"at": 拍序}（1-based，指向本场 beats 列表
-  中的位置）定位到该拍——定位在写入之前的读取拿旧值，定位在写入之后的读取
-  拿新值；
-- 任何读取在其定位点没有已建立的事实会整书拒编译（未建立或作用域已失效）。
-不要为凑读取用 unknown 初始项「垫底」——那会阻断消费，"值未知"不是这么用的。
+每场 reads 只列实际需要的状态地址 {domain,key,subjects,holder}；定位缺省
+入场（读取本场写入前的旧值；要读本场写入后的新值不存在——需要时把读取
+挪到后一场）。任何读取没有已建立的事实会整书拒编译；不要用 unknown 垫底。
 
-【读者确认必须声明事实地址（D4，漏填即拒）】
-读者延后确认的内容：在其确认拍放 domain=reader 的 target_delta，且必填
-confirms——它确认的**事实地址** {domain,key,subjects,holder}，指向 initial_state
-或此前某拍已确立的 set（domain 不得是 reader）；确认不得早于事实建立。此前任何
-位置都不得让读者确认；线索、误导与猜测照常安排（受保护的是"何时确认"，
-不是"能否暗示"）。
-临时动作环境用 scene；结束的长期状态用 unset；倒叙讲述只能改变当下读者/人物知情，
-不能倒改当前状态。
+【正向表达任务（ex）】
+拍上 ex:[ex_id] 声明本拍承载的源表达（只能取 Brief.expression 给出的项；
+narration 是书级机制不上拍）。书级风格、声线与叙述机制只在 book_style/
+character_voices 声明，不举后段具体情节。
 
-【场景与拍（只写结构与语义，不写编号）】
-每拍 surface_introductions 只声明该位置首次允许的称谓 [{char_id,surfaces}]，
-不得一次放开该人物所有称谓；initial_surfaces 与 surface_introductions 里的每个
-称谓字面都只能取输入身份投影给出的可用称呼（该人物已登记的称谓面），未登记的
-字面一律不得释放。
-driver.focal_actor 写本场推动变化的人物，immediate_want 写其此刻想要什么，opposition
-写具体的阻力（谁／什么在挡、怎么挡，不写"命运""现实"这类空转词），turn 写局势
-在哪里转向。
-每场 realization_brief 必填非空：本场怎样演出来——重心在哪里、人物如何理解局面、
-哪些内容展开或略写、转折怎样显现、在哪里收住、如何衔接邻场；一段自然语言，不规定
-逐句正文，不拆成情绪/镜头/五感等字段，也不逐拍复述事件（拍的事实在 beats 里）。
-voice 只写可操作的叙述口吻要求（人称距离、句式节奏、对白密度），不贴情绪标签。
-brief 只承载呈现方向：凡涉及关键行动、持久认知变化、秘密、承诺或因果条件的表述，
-必须同时体现在 driver/event/target_delta/threads/surface_introductions 等正式字段，不得
-只写在 brief 里。
+【场景与拍】
+每拍 release 只声明该位置首次允许的称谓 [{char_id,surfaces}]，不得一次放开
+该人物所有称谓；每个称谓字面只能取输入身份投影给出的可用称呼。
+initial_surfaces 是开场已放行的称谓面（同样的闭集约束）。
+driver.focal_actor/immediate_want/opposition/turn 语义同前（写具体阻力，
+不写空转词）。每场 brief 必填非空：本场怎样演出来——重心、详略、转折、
+收束与衔接；不规定逐句正文，不逐拍复述事件。凡涉及关键行动、持久认知
+变化、秘密、承诺或因果条件的表述，必须同时进 driver/ev/state/real/
+threads/release 等正式字段，不得只写在 brief 里。
+pov 缺省＝叙述唯一焦点（compiler 派生）；多焦点书才逐场写 pov。
 
-【章间承接（第 1 章固定开篇；其它章显式 transition）】
-第 2 章起明确衔接方式；具体字段与分支以 JSON Schema 为准：
-- transition∈immediate_continuation(紧接上一章末尾)/time_skip(时间跳跃)/
-  location_cut(切到别处)/pov_shift(换视角)/new_scene(新场景开场)/flashback(回到较早事件)；
-- carryover（可选）：延续到本章的动作或张力，一句话；
-- recap∈do_not_recap(不复述上一章结尾)/brief_orientation(一两句重新定向)。
-第 1 章固定为开篇，不写 entry（compiler 填固定值）。
+【章间承接（第 1 章固定开篇）】
+第 2 章起 entry:{transition, carryover?, anchor?}：
+- transition∈immediate_continuation/time_skip/location_cut/pov_shift/
+  new_scene/flashback；recap 由 transition 派生（time_skip→一两句重新定向，
+  其余不复述），你不写；
+- anchor 只在非缺省时写 {scene:1-based 场序, beat:1-based 拍序}：
+  immediate_continuation 缺省＝上一章末拍；flashback 必须显式给回望锚点，
+  引用必须真实、早于本章。
 
-【R9 表达与效果】
-默认保留 Brief.expression 中每项机制；expression_decisions 对每个 ex 恰好一个
-keep／change；change 必须写理由与目标说法。narration 使用 person／focalizers，第一
-人称只有一个叙述者，所有场景 POV 服从它；第三人称场景选择 focalizers 或 narrator。
-brief 指定信息、反差和结束效果；只有关键事实或伏笔才规定微动作，不转述或改变义务因果。
-正向材料只用所在章已经释放的本人称谓和家族构词；义务与设计冲突由 Design 自己修。
-entry.anchor 用 {scene:1-based 场序,beat:1-based 拍序} 定位较早事件；引用必须真实、早于本章；
-immediate_continuation 必须指向上一章末拍；flashback 必须给明确回望锚点。
-每场／拍不生成编号。scene_weights 是与场景等长的正数数组，章切片总数恰好覆盖场景。
+scene_weights（可选）：与场景等长的正数数组（相对篇幅重点）；缺省均匀。
+章切片总数恰好覆盖场景。每场／拍不生成编号。
 返回一个 JSON object，不要围栏、不要解释。
 """
 
-from contracts.schema.design import DesignWireV5
+from contracts.schema.design import DesignWireV5, DesignWireV6
 _DESIGN_INSTRUCTIONS = DESIGN_RULES
 
 
 def design_rules(*, known_char_ids: set[str] | None = None,
                  registered_surfaces: Mapping[str, set[str]] | None = None) -> str:
-    """模型 Schema 是唯一形状源；动态闭集与接受函数使用同一输入。"""
-    schema = DesignWireV5.model_json_schema()
+    """模型 Schema 是唯一形状源；动态闭集与接受函数使用同一输入。
+
+    CS-3（2026-10-03）：形状源换 v6 瘦模型（DesignWireV6）；闭集注入面随
+    之换名（who／可选 pov 的 anyOf 分支），语义与 v5 面一致。
+    """
+    schema = DesignWireV6.model_json_schema()
     if known_char_ids is not None:
         definitions = schema['$defs']
         characters = sorted(known_char_ids)
         for model, field in (('CharacterVoice', 'char_id'),
                              ('SurfaceIntroduction', 'char_id')):
             definitions[model]['properties'][field]['enum'] = characters
-        definitions['DesignWireDelivery']['properties']['pov']['enum'] = sorted(known_char_ids | {'narrator'})
+        pov_prop = definitions['SlimDesignScene']['properties']['pov']
+        pov_enum = sorted(known_char_ids | {'narrator'})
+        if 'anyOf' in pov_prop:
+            pov_prop['anyOf'][0]['enum'] = pov_enum
+        else:
+            pov_prop['enum'] = pov_enum
         definitions['SceneDriver']['properties']['focal_actor']['enum'] = sorted(known_char_ids | {'narrator'})
-        definitions['HookPov']['properties']['focalizers']['items']['enum'] = sorted(known_char_ids | {'narrator'})
-        definitions['DesignWireBeat']['properties']['participants']['items']['enum'] = characters
+        definitions['SlimDesignBeat']['properties']['who']['items']['enum'] = characters
         for definition in definitions.values():
             props = definition.get('properties', {})
             if 'subjects' in props:
                 props['subjects']['items']['enum'] = characters
-            if 'holder' in props:
+            if 'holder' in props and 'anyOf' in props['holder']:
                 props['holder']['anyOf'][0]['enum'] = characters
         if registered_surfaces is not None:
             definitions['SurfaceIntroduction']['allOf'] = [

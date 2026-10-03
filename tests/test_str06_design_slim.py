@@ -1,0 +1,233 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""test_str06_design_slim —— 设计瘦 wire（CS-3 第一步，2026-10-03）。
+
+覆盖 `contracts/schema/design.py::DesignWireV6`、
+`novel/stages/stage4/slim.py::expand_design_wire` 的确定性派生（real 标注→
+知情/读者行、默认值回填、entry 派生、world_rules/expression/narration 顶层
+派生）与 `assemble_body_design` 的字面量路由（v6→expand→既有管道＋必保义务
+覆盖闸）。语义判据不放宽：C1/C2/C6/C9 锁校验、D4 确认闭合、称谓闭集全部
+照旧（经既有管道）。r10b 全产物实证见 REQUIREMENTS CS-3 行。
+"""
+from __future__ import annotations
+
+from types import SimpleNamespace
+
+from contracts.schema.grounding import ReconstructionBrief
+from novel.stages.stage4.design import assemble_body_design
+from novel.stages.stage4.slim import expand_design_wire
+
+PV6 = 'stage4-design-v6'
+PV5 = 'stage4-design-v5'
+
+
+def _brief() -> ReconstructionBrief:
+    return ReconstructionBrief.model_validate({
+        'brief_id': 'brief_test', 'preserve_checkpoint_sha256': 'a' * 64,
+        'contract_version': 'str06-rc12',
+        'requirements': [
+            {'core_id': 'req_aaaa', 'summary': '芸娘确知夫君不育',
+             'kind': 'reveal', 'must_preserve': True, 'satisfaction': '开场揭示',
+             'participants': ['lu_fujun', 'yun_niang'], 'requires_cores': [],
+             'locks': [], 'realize_holders': ['yun_niang|kp_1111111111111111'],
+             'realize_locks': [], 'series_group': None, 'series_mechanism': None},
+            {'core_id': 'req_bbbb', 'summary': '借种之计成事',
+             'kind': 'event_core', 'must_preserve': True, 'satisfaction': '孕事坐实',
+             'participants': [], 'requires_cores': [], 'locks': [],
+             'realize_holders': [], 'realize_locks': [], 'series_group': None,
+             'series_mechanism': None},
+            {'core_id': 'req_cccc', 'summary': '可综合的场面设定',
+             'kind': 'world_fact', 'must_preserve': False, 'satisfaction': '',
+             'participants': [], 'requires_cores': [], 'locks': [],
+             'realize_holders': [], 'realize_locks': [], 'series_group': None,
+             'series_mechanism': None},
+        ],
+        'propositions': [
+            {'kp_id': 'kp_1111111111111111', 'statement': '夫君不能生育',
+             'publicly_claimed_by': ()}],
+        'knowledge_locks': [
+            {'holder': 'yun_niang', 'kp': 'kp_1111111111111111', 'mode': 'known'}],
+        'fact_locks': [], 'book_constraints': ['女子极难自立门户'],
+        'source_narration': {'person': 'first', 'focalizers': ['yun_niang']},
+        'expression': [{'ex_id': 'ex_01', 'kind': 'humor', 'statement': '一本正经的荒诞'}],
+        'expression_readings': {'status': 'measured', 'paragraph_mean_chars': 20.0,
+                                'sentence_mean_chars': 21.0, 'dialogue_ratio': 0.3},
+    })
+
+
+def _obligations(brief: ReconstructionBrief) -> dict:
+    by_summary = {r.summary: r for r in brief.requirements}
+    return {'ob01': by_summary['芸娘确知夫君不育'],
+            'ob02': by_summary['借种之计成事'],
+            'ob03': by_summary['可综合的场面设定']}
+
+
+def _v6_wire() -> dict:
+    return {
+        'protocol_version': PV6,
+        'book_style': '第一人称克制叙述，短句为主。',
+        'character_voices': [
+            {'char_id': 'yun_niang', 'voice': '对外端方，内心直白。'}],
+        'initial_state': [
+            {'domain': 'relation', 'key': 'marriage',
+             'subjects': ['lu_fujun', 'yun_niang'], 'value': 'married'}],
+        'initial_surfaces': [{'char_id': 'yun_niang', 'surfaces': ['芸娘']}],
+        'scenes': [
+            {'driver': {'focal_actor': 'lu_fujun', 'immediate_want': '坦白',
+                        'opposition': '难以启齿', 'turn': '抛出借种计划'},
+             'brief': '新婚夜坦白，重心在荒诞与错愕的对照。',
+             'reads': [{'domain': 'relation', 'key': 'marriage',
+                        'subjects': ['lu_fujun', 'yun_niang']}],
+             'beats': [
+                 {'ev': '夫君坦白不能生育。', 'who': ['lu_fujun', 'yun_niang'],
+                  'real': ['ob01'],
+                  'state': [{'at': 'lu_fujun', 'key': 'body_condition',
+                             'val': '幼时落水伤了根本'}],
+                  'ex': ['ex_01']},
+                 {'ev': '夫君提出借种计划。', 'who': ['lu_fujun'],
+                  'state': [{'at': 'lu_fujun+pei_shuyuan', 'key': 'kinship',
+                             'val': 'cousins'},
+                            {'at': 'lu_fujun', 'key': 'plan',
+                             'val': '借种计划仍在推进', 'modality': 'planned'}]},
+             ]},
+            {'driver': {'focal_actor': 'yun_niang', 'immediate_want': '安身',
+                        'opposition': '世道', 'turn': '认清无路可退'},
+             'brief': '夜深算账，处境逼迫。',
+             'beats': [
+                 {'ev': '芸娘认清无路可退，决意留下。',
+                  'who': ['yun_niang'], 'real': ['ob02']}]},
+        ],
+        'chapters': [
+            {'purpose': '开篇坦白与计划', 'scenes': 1},
+            {'purpose': '权衡与顺从', 'scenes': 1,
+             'entry': {'transition': 'time_skip', 'carryover': '借种之计待行'}},
+        ],
+    }
+
+
+def test_expand_derives_defaults_and_top_level():
+    brief = _brief()
+    expanded, issues = expand_design_wire(_v6_wire(), brief=brief,
+                                          obligations=_obligations(brief))
+    assert issues == []
+    # 顶层派生：narration／world_rules／expression keep-all／均匀权重。
+    assert expanded['narration'] == {'person': 'first', 'focalizers': ['yun_niang']}
+    assert expanded['world_rules'] == ['女子极难自立门户']
+    assert expanded['expression_decisions'] == [
+        {'ex_id': 'ex_01', 'action': 'keep', 'reason': None, 'target_statement': None}]
+    assert expanded['scene_weights'] == [1.0, 1.0]
+    scene = expanded['scenes'][0]
+    # pov 缺省＝唯一焦点；voice＝该人物声线。
+    assert scene['delivery']['pov'] == 'yun_niang'
+    assert scene['delivery']['voice'] == '对外端方，内心直白。'
+    assert scene['beats'][0]['delivery_hint'] == ''
+    # entry：recap 由 transition 派生。
+    assert expanded['chapters'][1]['entry']['recap'] == 'brief_orientation'
+    assert expanded['chapters'][1]['entry']['anchor'] is None
+
+
+def test_expand_real_derives_knowledge_at_accept_beat():
+    brief = _brief()
+    expanded, issues = expand_design_wire(_v6_wire(), brief=brief,
+                                          obligations=_obligations(brief))
+    assert issues == []
+    beat1 = expanded['scenes'][0]['beats'][0]
+    assert beat1['target_delta'] == [
+        {'domain': 'character', 'subjects': ('lu_fujun',), 'holder': None,
+         'key': 'body_condition', 'op': 'set', 'value': '幼时落水伤了根本',
+         'scope': 'book', 'knowledge_mode': None, 'confirms': None,
+         'modality': 'actual'},
+        {'domain': 'knowledge', 'subjects': (), 'holder': 'yun_niang',
+         'key': 'kp_1111111111111111', 'op': 'set', 'value': 'true',
+         'scope': 'book', 'knowledge_mode': 'known', 'confirms': None,
+         'modality': None},
+    ]
+    # 多拍标注：增量只落末次标注拍（接受拍），前拍是支撑位。
+    wire = _v6_wire()
+    wire['scenes'][1]['beats'][0]['real'] = ['ob02']
+    wire['scenes'][0]['beats'].append(
+        {'ev': '计划初次受挫（支撑拍）。', 'real': ['ob02']})
+    expanded2, issues2 = expand_design_wire(wire, brief=brief,
+                                            obligations=_obligations(brief))
+    assert issues2 == []
+    supporting = expanded2['scenes'][0]['beats'][2]['target_delta']
+    accept = expanded2['scenes'][1]['beats'][0]['target_delta']
+    assert supporting == [] and accept == []      # ob02 无锁：两侧都无增量
+
+
+def test_expand_kp_state_exception_and_bad_inputs():
+    brief = _brief()
+    wire = _v6_wire()
+    # kp 值未知／解除例外可走 state 面；set 增量不得走（必须经 real）。
+    wire['scenes'][1]['beats'][0]['state'] = [
+        {'at': 'yun_niang', 'key': 'kp_1111111111111111', 'op': 'unset'}]
+    expanded, issues = expand_design_wire(wire, brief=brief,
+                                          obligations=_obligations(brief))
+    assert issues == []
+    assert expanded['scenes'][1]['beats'][0]['target_delta'] == [
+        {'domain': 'knowledge', 'subjects': (), 'holder': 'yun_niang',
+         'key': 'kp_1111111111111111', 'op': 'unset', 'value': None,
+         'scope': 'book', 'knowledge_mode': None, 'confirms': None,
+         'modality': None}]
+
+    wire2 = _v6_wire()
+    wire2['scenes'][0]['beats'][0]['state'].append(
+        {'at': 'yun_niang', 'key': 'kp_1111111111111111', 'val': 'true'})
+    _, issues2 = expand_design_wire(wire2, brief=brief,
+                                    obligations=_obligations(brief))
+    assert any('经 real 标注派生' in m for _p, m in issues2)
+
+    wire3 = _v6_wire()
+    wire3['scenes'][0]['beats'][0]['real'] = ['ob99']
+    _, issues3 = expand_design_wire(wire3, brief=brief,
+                                    obligations=_obligations(brief))
+    assert any('闭集外义务编号' in m for _p, m in issues3)
+
+    # 缺 obligations 映射：v6 无从展开，fail fast。
+    _, issues4 = expand_design_wire(_v6_wire(), brief=brief)
+    assert any('obligations' in m for _p, m in issues4)
+
+
+def test_assemble_routes_v6_and_enforces_coverage():
+    brief = _brief()
+    obligations = _obligations(brief)
+    wire = _v6_wire()
+    body, errors = assemble_body_design(
+        wire, known_char_ids={'lu_fujun', 'yun_niang', 'pei_shuyuan'},
+        expression_requirements=brief.expression,
+        source_narration=brief.source_narration, brief=brief,
+        obligations=obligations)
+    assert errors == [], errors
+    assert body.scenes[0].beats[0].target_delta[1].domain.value == 'knowledge'
+    assert body.world_rules == ('女子极难自立门户',)
+
+    # 必保义务漏标注 → 覆盖闸拦下（同节点修订轮修复）。
+    wire_missing = _v6_wire()
+    wire_missing['scenes'][1]['beats'][0].pop('real')
+    _, errors_missing = assemble_body_design(
+        wire_missing, known_char_ids={'lu_fujun', 'yun_niang', 'pei_shuyuan'},
+        expression_requirements=brief.expression,
+        source_narration=brief.source_narration, brief=brief,
+        obligations=obligations)
+    assert any('未被任何拍标注承载' in e and 'ob02' in e for e in errors_missing)
+
+    # v5 wire 直通（兼容读面）：协议字面量仍是 v5 判定。
+    expanded, _ = expand_design_wire(wire, brief=brief, obligations=obligations)
+    body5, errors5 = assemble_body_design(
+        expanded, known_char_ids={'lu_fujun', 'yun_niang', 'pei_shuyuan'},
+        expression_requirements=brief.expression,
+        source_narration=brief.source_narration, brief=brief)
+    assert errors5 == [], errors5
+    assert body5.scenes[0].beats[0].target_delta[1].domain.value == 'knowledge'
+
+
+def test_design_rules_prompt_carries_v6_and_obligation_table():
+    from novel.stages.common import design_rules
+    from novel.stages.chain import _design_obligation_table
+    rules = design_rules(known_char_ids={'yun_niang'})
+    assert 'stage4-design-v6' in rules and 'SlimDesignBeat' in rules
+    assert 'real' in rules and 'obNN' in rules
+    brief = _brief()
+    table = _design_obligation_table(_obligations(brief))
+    assert 'ob01｜reveal｜True｜yun_niang|kp_1111111111111111｜开场揭示' in table
+    assert 'ob03' in table      # 非必保也在清单（标注可选）

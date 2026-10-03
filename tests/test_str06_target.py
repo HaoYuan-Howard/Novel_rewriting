@@ -440,14 +440,17 @@ def test_design_rules_pin_pov_shape():
     from novel.stages.common import design_rules
     DESIGN_RULES = design_rules(known_char_ids={'yun'}, registered_surfaces={'yun': {'云娘'}})
     schema = json.loads(DESIGN_RULES.split('【wire JSON Schema（字段与分支以此为准）】\n')[1])
-    pov = schema['$defs']['DesignWireDelivery']['properties']['pov']
-    assert pov['type'] == 'string'
-    assert pov['enum'] == ['narrator', 'yun']
+    # CS-3（2026-10-03）：pov 移到 SlimDesignScene（v6 瘦面，缺省＝唯一焦点），
+    # 形状仍是单字符串闭集（anyOf 的非 null 分支带 enum，I-52 按新面重钉）。
+    pov = schema['$defs']['SlimDesignScene']['properties']['pov']
+    assert pov['anyOf'][0]['enum'] == ['narrator', 'yun']
     assert schema['$defs']['SurfaceIntroduction']['allOf']
-    # 同类钉（第二轮实证）：拍上 target_delta 的 scope 必填——run2 新购 27 条
-    # 全漏写键（run1 恰好 39/39 全写），值形不写明就是掷骰子。
-    assert '每条必写 scope' in DESIGN_RULES
-    assert '无默认值' in DESIGN_RULES
+    # 同类钉（第二轮实证→CS-3 v6 重钉）：拍上事实断言的默认值必须写明——
+    # 值形不写明就是掷骰子（v5 时代是 scope 每条必写；v6 是 op/modality/scope
+    # 缺省值与 kp 例外通道）。
+    assert 'op 缺省 set' in DESIGN_RULES
+    assert 'scope 缺省 book' in DESIGN_RULES
+    assert 'kp_* 键的知情增量一律经 real 标注派生' in DESIGN_RULES
 
 
 def test_design_surface_release_must_be_registered():

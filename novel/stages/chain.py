@@ -673,6 +673,29 @@ def run_preserve(ctx: ChainContext) -> dict:
 
 # ─── stage4 body_design ──────────────────────────────────────────────────────
 
+def _design_obligation_index(checkpoint, brief) -> dict:
+    """ob 编号 → Brief 需求（CS-3 v6 瘦 wire 的 real 标注闭集与知情行展开面）。
+
+    ob 编号是 checkpoint 义务的稳定短名（`ob{nn}`，assemble_preserve 派发）；
+    需求经 summary 与义务 statement 连接（同一文本，Preserve 投影的恒等式）。
+    """
+    by_summary = {r.summary: r for r in brief.requirements}
+    return {o.obligation_id: by_summary[o.statement]
+            for o in checkpoint.obligations if o.statement in by_summary}
+
+
+def _design_obligation_table(obligation_index: dict) -> str:
+    """义务清单的紧凑渲染（design prompt 面；D6 短别名——模型抄写哈希是失败点）。"""
+    lines = ['ob 编号｜类别｜必保｜锁（holder|kp 或 kf）｜satisfaction']
+    for ob, requirement in sorted(obligation_index.items()):
+        locks = list(requirement.realize_holders or ()) + list(requirement.realize_locks or ())
+        satisfaction = (requirement.satisfaction or '')[:80]
+        kind = getattr(requirement.kind, 'value', requirement.kind)
+        lines.append(f'{ob}｜{kind}｜{requirement.must_preserve}｜'
+                     f'{"；".join(locks) or "无"}｜{satisfaction}')
+    return '\n'.join(lines)
+
+
 def run_body_design(ctx: ChainContext) -> dict:
     repository = ctx.repository
     chars = repository.read_model('stage2/characters/characters.json')
@@ -680,6 +703,7 @@ def run_body_design(ctx: ChainContext) -> dict:
     checkpoint = repository.read_model('runtime/preserve_checkpoint.json')
     blueprint = repository.read_model('stage2/blueprints/chapter_blueprints.json')
     brief, identities = project_brief(checkpoint, core, blueprint)
+    obligation_index = _design_obligation_index(checkpoint, brief)
     constraints = OutputConstraints(target_chapter_count=len(ctx.chapters),
                                     total_length_budget=ctx.budget)
     design_prompt = revision_prompt_for_owner(
@@ -689,6 +713,7 @@ def run_body_design(ctx: ChainContext) -> dict:
                                      {cid: {s.surface for s in c.surfaces} for cid, c in chars.characters.items()},
                                      chars.name_structure)),
                     brief=brief.model_dump(mode='json'),
+                    obligation_table=_design_obligation_table(obligation_index),
                     identities=[i.model_dump(mode='json') for i in identities],
                     constraints=constraints.model_dump(mode='json')),
         'stage4/design/body_design.json')
@@ -701,7 +726,7 @@ def run_body_design(ctx: ChainContext) -> dict:
             source_narration=brief.source_narration,
             registered_surfaces={cid: {s.surface for s in c.surfaces}
                                  for cid, c in chars.characters.items()},
-            brief=brief)
+            brief=brief, obligations=obligation_index)
 
     dw, design_ref = ctx.ask('design', design_prompt, lambda w: design_compile(w)[1])
     body, errors = design_compile(dw)

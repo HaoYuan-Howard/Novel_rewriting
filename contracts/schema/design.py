@@ -711,3 +711,137 @@ class DesignWireV5(StrictModel):
     scenes: tuple[DesignWireScene, ...] = Field(min_length=1)
     chapters: tuple[DesignWireChapter, ...] = Field(min_length=1)
     scene_weights: tuple[float, ...] = Field(min_length=1)
+
+
+# ═══════════════ v6 瘦 wire（CS-3 第一步，2026-10-03；expand 后即 v5 形，不落盘） ═══════════════
+
+#: 设计瘦 wire 的版本字面量：LLM 输出面一次改齐（CS-3），可机械推导字段
+#: （默认值、world_rules、expression keep-all、target_delta 的知情/读者行、
+#: entry.anchor/recap、delivery.pov/voice）由
+#: `novel/stages/stage4/slim.py::expand_design_wire` 派生成 v5 wire 后进
+#: `assemble_body_design` 既有管道——canonical BodyDesign（rc12）与全部下游
+#: 消费者不变（S-03：适配集中在 slim 模块）。r10b 实证支撑见模块注释。
+STAGE4_DESIGN_WIRE_PROTOCOL: Final = 'stage4-design-v6'
+
+
+class SlimDesignState(StrictModel):
+    """拍上事实断言的瘦面（character／relation／world 域的语义内容）。
+
+    `at` 地址串：人物 slug｜关系 "subject+object"（有序）｜"world"。op 缺省
+    set、modality 缺省 actual（例外才写）；kf_* 键仍按 Brief 事实锁规则承载
+    （锁校验在 assemble，C2/C9）。r10b 实证：13 条非知情增量全是此类语义
+    断言（键名是目标书命名，不可由锁机械派生），保留在 wire。
+    """
+
+    at: str = Field(pattern=r'^(world|[a-z0-9_+]+)$')
+    key: str = Field(min_length=1)
+    val: str | None = None
+    op: "Literal['set', 'unset', 'unknown'] | None" = None
+    #: 作用域缺省 book（r10b 37/37）；只在本场内成立的临时动作环境写 scene。
+    scope: "Literal['book', 'scene'] | None" = None
+    modality: "Literal['actual', 'planned', 'expected', 'conditional'] | None" = None
+
+
+class SlimConfirmAddress(StrictModel):
+    """读者确认的事实地址（D4 例外面；r10b 37 条增量仅 1 条携带）。"""
+
+    at: str = Field(pattern=r'^[a-z0-9_+]+$')
+    key: str = Field(min_length=1)
+
+
+class SlimDesignBeat(StrictModel):
+    """v6 拍：`real` 义务承载标注是核心新增——替代 bind 侧的落点判断与
+    target_delta 的知情/读者行（CS-3：知情增量＝标注义务的 realize_holders
+    在**末次标注拍**展开，锁模式取 Brief.knowledge_locks；同一决定不再由
+    bind 重复编码）。ev/who/ex（expression_refs）/release（称谓释放）/
+    threads 语义与 v5 同名面一致。
+    """
+
+    ev: str = Field(min_length=1)
+    who: tuple[str, ...] = Field(default=(), min_length=0)
+    real: tuple[str, ...] = Field(default=(), min_length=0)
+    ex: tuple[str, ...] = Field(default=(), min_length=0)
+    state: tuple[SlimDesignState, ...] = Field(default=(), min_length=0)
+    conf: SlimConfirmAddress | None = None
+    release: tuple[SurfaceIntroduction, ...] = Field(default=(), min_length=0)
+    threads: tuple[DesignWireThread, ...] = Field(default=(), min_length=0)
+
+
+class SlimDesignRead(StateAddress):
+    """v6 状态读取：只写地址内容；定位缺省入场（r10b 6/6 at=null）。"""
+
+
+class SlimDesignScene(StrictModel):
+    """v6 场景：pov 缺省＝narration.focalizers 唯一时取之（多焦点必写）；
+    voice 由 character_voices[pov] 派生（narrator 用 book_style）；reads/
+    avoid/brief（realization_brief）语义与 v5 同名面一致。
+    """
+
+    driver: SceneDriver
+    brief: str = Field(min_length=1)
+    reads: tuple[SlimDesignRead, ...] = Field(default=(), min_length=0)
+    pov: str | None = Field(default=None, min_length=1)
+    avoid: tuple[str, ...] = Field(default=(), min_length=0)
+    beats: tuple[SlimDesignBeat, ...] = Field(min_length=1)
+
+
+class SlimDesignEntry(StrictModel):
+    """v6 章间承接：recap 由 transition 派生（time_skip→brief_orientation，
+    其余 do_not_recap；r10b 11/11）；anchor 只在非缺省时写——
+    immediate_continuation 缺省＝上一章末拍，flashback 必须显式给。
+    """
+
+    transition: "Literal['immediate_continuation', 'time_skip', 'location_cut', 'pov_shift', 'new_scene', 'flashback']"
+    carryover: str | None = Field(default=None, min_length=1)
+    anchor: DesignWireAnchor | None = None
+
+
+class SlimDesignChapter(StrictModel):
+    """v6 章切片：purpose＋场数＋可选承接（第 1 章可省，compiler 填开篇）。"""
+
+    purpose: str = Field(min_length=1)
+    scenes: int = Field(ge=1)
+    entry: SlimDesignEntry | None = None
+
+
+class SlimDesignInitial(StrictModel):
+    """v6 初始态行：剥常量列（op=set／scope=book／modality=actual 由 expand
+    回填）；键名是目标书命名（r10b 实证 marriage/can_sire_child 等为语义
+    改名，不可由源 Characters 机械派生）。
+    """
+
+    domain: EffectDomain
+    key: str = Field(min_length=1)
+    subjects: tuple[str, ...] = ()
+    holder: str | None = None
+    value: str
+    knowledge_mode: "Literal['known', 'suspected', 'heard', 'believes'] | None" = None
+
+
+class SlimExpressionOverride(StrictModel):
+    """表达机制例外：只写 change（缺省全部 keep，statement 由代码回填）。"""
+
+    ex_id: str = Field(pattern=r'^ex_\d{2,}$')
+    reason: str = Field(min_length=1)
+    target_statement: str = Field(min_length=1)
+
+
+class DesignWireV6(StrictModel):
+    """`stage4-design-v6` 瘦顶层（传输面，不落盘）。
+
+    派生面（expand）：narration←Brief.source_narration、expression_decisions
+    ←keep-all＋overrides、world_rules←Brief.book_constraints、scene_weights
+    缺省均匀、delivery／entry／target_delta 知情行如上。语义面（模型判断）：
+    声线、风格、初始态（含释放表 initial_surfaces）、场景驱动/简报/读取、
+    拍事件/参与人/事实断言/线程/称谓释放/**义务承载标注 real**。
+    """
+
+    protocol_version: Literal['stage4-design-v6']
+    book_style: str = Field(min_length=1)
+    character_voices: tuple[CharacterVoice, ...] = Field(default=(), min_length=0)
+    expression_overrides: tuple[SlimExpressionOverride, ...] = Field(default=(), min_length=0)
+    initial_state: tuple[SlimDesignInitial, ...] = Field(default=(), min_length=0)
+    initial_surfaces: tuple[SurfaceIntroduction, ...] = Field(default=(), min_length=0)
+    scenes: tuple[SlimDesignScene, ...] = Field(min_length=1)
+    chapters: tuple[SlimDesignChapter, ...] = Field(min_length=1)
+    scene_weights: tuple[float, ...] | None = None
