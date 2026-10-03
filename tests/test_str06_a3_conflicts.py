@@ -202,6 +202,7 @@ def test_revision_prompt_embeds_previous_without_storage_envelope(tmp_path):
     assert 'BASE' in prompt
     assert '_provenance' not in prompt, '存储信封不得进修订 prompt'
     assert '_schema_version' not in prompt
+    assert '只读语义对照' in prompt and '不是回答模板' in prompt
 
 
 def test_cascade_rewind_limit_stops_before_spiraling(tmp_path):
@@ -244,3 +245,61 @@ def test_cascade_rewind_limit_stops_before_spiraling(tmp_path):
     counter = repo.read('runtime/cascade_rewinds.json')
     assert counter['count'] == CASCADE_REWIND_LIMIT + 1
     assert counter['limit'] == CASCADE_REWIND_LIMIT
+
+
+class _RevisionTemplateTransport:
+    """通过真实 producer 捕获返修请求；canonical 误答只在首轮注入。"""
+    def __init__(self, wires, canonical_first=False):
+        from tests.test_str06_body import _RoutingTransport
+        self.inner = _RoutingTransport(wires)
+        self.calls = []
+        self.requests = []
+        self.canonical_first = canonical_first
+
+    def send(self, request):
+        import json
+        from novel.llm.transport import ChatResponse
+        owner = self.inner._owner(request)
+        self.calls.append(owner)
+        if owner == 'preserve':
+            self.requests.append(request.user)
+            if self.canonical_first and len(self.requests) == 1:
+                return ChatResponse(content=json.dumps({
+                    'checkpoint_id': 'cp_wrong', 'obligations': [{
+                        'anchors': [{'handle': 'b01_01.e1'}]}]}),
+                    finish_reason='stop', model='fake',
+                    usage={'prompt_tokens': 100, 'completion_tokens': 40})
+        return self.inner.send(request)
+
+
+def test_preserve_malformed_canonical_answer_enters_bounded_revision(tmp_path, monkeypatch):
+    runner, repo, transport = _run_to_preserve(
+        tmp_path, lambda wires: _RevisionTemplateTransport(wires, canonical_first=True),
+        monkeypatch)
+    report = runner()
+    assert report['obligations'] > 0
+    assert transport.calls.count('preserve') == 2
+    assert '不是锚点对象' in transport.requests[1]
+    assert repo.path('runtime/preserve_checkpoint.json').is_file()
+
+
+def test_preserve_cross_node_revision_uses_wire_not_checkpoint_template(tmp_path, monkeypatch):
+    import json
+    from novel.stages.owner_revision import OwnerIssueV1, discover_owner_issues
+
+    runner, repo, transport = _run_to_preserve(
+        tmp_path, _RevisionTemplateTransport, monkeypatch)
+    runner()
+    with pytest.raises(OwnerRevisionRequired):
+        discover_owner_issues(repo, raised_by='str06.stage4.compile',
+            owner='preserve', node='str06.stage4.preserve', issues=[OwnerIssueV1(
+                code='positive_material_leak', item='chapter:1',
+                message='修订义务中的提前披露称谓', context={})])
+    runner()
+    previous = transport.requests[-1].split('〔上一版〕\n', 1)[1].rsplit('\n请输出', 1)[0]
+    wire = json.loads(previous)
+    assert wire['protocol_version'] == 'stage4-preserve-v2'
+    assert set(wire) == {'protocol_version', 'obligations', 'series', 'evidence_conflicts'}
+    assert all(isinstance(a, str) for o in wire['obligations'] for a in o['anchors'])
+    assert all('obligation_id' not in o and 'lineage' not in o for o in wire['obligations'])
+    assert all(isinstance(ref, int) for o in wire['obligations'] for ref in o['requires'])

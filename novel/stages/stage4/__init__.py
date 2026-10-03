@@ -45,7 +45,7 @@ from novel.stages.stage4.fold import (
 )
 from novel.stages.stage4.grounding import (
     assemble_preserve, design_obligation_index, derive_semantic_binding,
-    obligation_core_id, project_brief, project_preserve_view,
+    obligation_core_id, project_brief, project_preserve_view, preserve_revision_wire,
 )
 from novel.stages.stage4.guard import (
     appeared_chars, check_binding_beat_refs, check_cast_legality,
@@ -71,6 +71,6 @@ __all__ = [
     'design_obligation_index', 'design_placements', 'derive_semantic_binding',
     'expected_thread_faces', 'fold_accepted_prefix', 'fold_thread_faces',
     'init_establishments', 'lock_order_violations', 'obligation_core_id',
-    'project_brief', 'project_preserve_view',
+    'project_brief', 'project_preserve_view', 'preserve_revision_wire',
     'publish_graph', 'run_mechanical_guard', 'scene_order',
 ]

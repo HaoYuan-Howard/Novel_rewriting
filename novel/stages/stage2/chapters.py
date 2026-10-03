@@ -225,8 +225,16 @@ def _chapter_issues(canonical: Any, resolver: EvidenceResolver,
                     for issue in resolver.verify_quote(
                             str(basis.get('segment') or ''),
                             str(basis.get('quote') or ''), refs):
-                        issues.append((beat_path + (label, index - 1),
-                                       f'{where} {label}[{index}]：{issue.message}'))
+                        # 证据段属于拍级 src；若修正依据还需要修改 src，
+                        # 仅替换转移会把模型锁在“地址错/不在清单”之间来回。
+                        # 定位扩到整拍，不替模型选证据，验收消息和判据保持原样。
+                        path = beat_path + (label, index - 1)
+                        homes = issue.context.get('verbatim_home_segments', ())
+                        if (issue.code == 'basis_segment_outside_refs'
+                                or issue.code == 'quote_not_in_segment'
+                                and any(home not in refs for home in homes)):
+                            path = beat_path
+                        issues.append((path, f'{where} {label}[{index}]：{issue.message}'))
         if slugs is not None:
             for person in raw.get('participants') or []:
                 if person not in slugs:
@@ -289,9 +297,14 @@ def chapter_patch_locate(wire: Any, errors: list[str], *,
     if len(errors) != len(issues) or sorted(errors) != sorted(
             message for _path, message in issues):
         return None
+    # 一拍已整体返修时，其子条目的错误一并附到拍上：请求路径不重叠，
+    # 防止父替换改变结构后子路径失效，也避免模型为同一内容提交两份值。
+    paths = {path for path, _message in issues}
     grouped: dict[tuple[str | int, ...], list[str]] = {}
     for path, message in issues:
-        grouped.setdefault(path, []).append(message)
+        ancestor = next((path[:length] for length in range(1, len(path))
+                         if path[:length] in paths), path)
+        grouped.setdefault(ancestor, []).append(message)
     return list(grouped.items())
 
 

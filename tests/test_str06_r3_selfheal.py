@@ -632,3 +632,30 @@ def test_revision_gate_no_progress_stops_for_human():
     # 无进展标记缺省时维持原判（轮未耗尽 ⇒ redo）。
     verdict, _ = revision_gate(against, against, rounds_total=1)
     assert verdict == 'redo'
+
+
+@pytest.mark.parametrize('reason', ['consumed_changed', 'file_changed'])
+def test_names_accepts_proven_book_revision_cascade_only(tmp_path, monkeypatch, reason):
+    """书级回派已经写回时 names 可自动重建；未证明的改字节/坏稿仍拒绝。"""
+    from novel.orchestrator import state as S
+    _repo, ov = _stuck_overview(tmp_path, monkeypatch)
+    stage = next(s for s in ov.stages if s.stage == 'stage2')
+    artifacts = [a.model_copy(update={'freshness': 'stale', 'reason': reason,
+                 'readable': True, 'invalid': False})
+                 if a.rel == 'stage2/observations/names.json' else a
+                 for a in stage.artifacts]
+    issue = ov.owner_issues[0].model_copy(update={
+        'owner': 'book', 'node': 'str06.stage2.book',
+        'against_sha256': 'a' * 64, 'product_sha256': 'b' * 64})
+    stages = [stage.model_copy(update={'artifacts': artifacts}) if s.stage == 'stage2' else s for s in ov.stages]
+    revised = ov.model_copy(update={'stages': stages, 'owner_issues': [issue]})
+    assert S.resume_verdict(revised, 'str06.stage2.names')[0] == S.RESUME_REDO
+    assert S.operator_redo_flags(revised, 'str06.stage2.names') == ()
+    if reason == 'file_changed':
+        unproven = revised.model_copy(update={'owner_issues': [], 'owner_revisions': []})
+        assert S.operator_redo_flags(unproven, 'str06.stage2.names') is None
+    bad_artifacts = [a.model_copy(update={'invalid': True})
+                     if a.rel == 'stage2/observations/names.json' else a for a in artifacts]
+    bad = revised.model_copy(update={'stages': [stage.model_copy(
+        update={'artifacts': bad_artifacts}) if s.stage == 'stage2' else s for s in stages]})
+    assert S.operator_redo_flags(bad, 'str06.stage2.names') is None

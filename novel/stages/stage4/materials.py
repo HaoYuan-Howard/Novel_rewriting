@@ -54,8 +54,19 @@ def validate_design_materials(
                         if getattr(thread, field):
                             parts[f'{ref}/threads/{i}/{field}'] = getattr(thread, field)
         # 初始态只按实际投影终检；未送达本章的隐藏事实不能冒充正向阅读材料。
-        errors.extend(validate_positive_materials(
+        chapter_errors = validate_positive_materials(
             {f'ch{chapter.chapter_ordinal:02d}/{key}': text for key, text in parts.items()},
             released=released, withheld=withheld_name_literals(projection, released, structure),
-            internal_ids=internal))
+            internal_ids=internal)
+        # keep 的文本由 Brief 回填，直接重写场景不会改变它；诊断指出 wire
+        # 中显式改写表达的入口，不替模型改语义，不扩大/缩小原判据。
+        inherited = {item.ex_id for item in body.expression_decisions if item.action == 'keep'}
+        for error in chapter_errors:
+            for ex_id in inherited:
+                if error.startswith(f'positive_material_leak[ch{chapter.chapter_ordinal:02d}/expression/{ex_id}@'):
+                    error += (f'（{ex_id} 由默认 keep 从 Brief 回填；须用 expression_overrides'
+                              ' 显式改写这项表达并说明理由，保留表达机制与披露时点，'
+                              '不得提前使用未释放名称）')
+                    break
+            errors.append(error)
     return errors

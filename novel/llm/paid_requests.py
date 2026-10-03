@@ -77,7 +77,7 @@ from contracts.schema.workflow import (
     STR06_NODE_IDENTITY_EXTRAS, STR06_RUNTIME_CONFIG,
     AcceptanceRecordV1, CandidateEpoch, CandidateWorkflow, candidate_node_owner,
     commit_bundle_seal, CommitAdoptionRef, CommitBundleV1, CommitInputRef,
-    CommitOutputRef, WorkUnitBlobV1,
+    CommitOutputRef,
 )
 from novel.errors import ProvenanceRefused, TerminalState
 from novel.llm.json_text import normalize_json_text
@@ -87,7 +87,7 @@ from novel.llm.transport import ChatRequest, Transport, TransportError
 from novel import prov
 from novel.store import Str06Repository
 from novel.work_units import (
-    ContentReservation, WorkUnitBudget, WorkUnitBudgetExhausted,
+    ContentReservation, WorkUnitBudget, WorkUnitBudgetExhausted, WorkUnitRefused,
     read_book_budget, reserve_book_call, workflow_manifest,
 )
 
@@ -1329,7 +1329,8 @@ def accept_patch_answer(answer: DurableAnswer, targets: list[PatchTarget],
 
 
 def revision_user_prompt(base_user: str, previous_answer: str,
-                         issues: list[str]) -> str:
+                         issues: list[str], *,
+                         previous_is_canonical: bool = False) -> str:
     """修订内容轮的 user 面：原请求＋上一版＋typed 问题（R3 裁决 1）。
 
     形状照 `novel/stages/stage5/body.py::write_chapter` 的重写循环：同一份原始
@@ -1337,10 +1338,14 @@ def revision_user_prompt(base_user: str, previous_answer: str,
     ——修订轮是一次新的付费调用（计入整书总闸与 ledger），不是同轮重试。
     """
     bullets = '\n'.join(f'- {message}' for message in issues)
+    previous_label = ('上一版全文如下，仅供只读语义对照。它是编译后的正式产物，'
+                      '不是回答模板；派生 ID、ordinal、hash、锚点对象等不得抄入回答。'
+                      '请严格按原请求声明的 wire 字段与协议输出：'
+                      if previous_is_canonical else '上一版全文如下，供对照修正：')
     return (base_user
             + '\n\n【修订要求】\n上一版未通过机械校验，问题如下（逐条修复，'
               '不得改变其余内容、不得新增或改换事实）：\n' + bullets
-            + '\n上一版全文如下，供对照修正：\n〔上一版〕\n' + previous_answer
+            + '\n' + previous_label + '\n〔上一版〕\n' + previous_answer
             + '\n请输出修正后的完整回答（同一协议与输出格式）。')
 
 
@@ -1508,17 +1513,19 @@ def _work_unit_evidence(root: Path, owner: str, identity: str) -> dict | None:
     if attempt is None:
         return None
     blob_path = unit.directory / f'{attempt.response_sha256}.json'
-    request_blob = unit.directory / f'{turn.request_payload_sha256}.json'
-    if not request_blob.is_file():
+    # 复用工作单元的快照读面：它核摘要、unit/turn 身份并支持 Windows
+    # 扩展长度路径。普通 Path.is_file/read_text 会把 >MAX_PATH 的真实 blob
+    # 误判成缺失；不能因此要求重购或绕过证据核验。
+    try:
+        request_payload = unit.request_payload(turn.turn_id)
+    except WorkUnitRefused as exc:
         raise ValueError(
-            f'{owner} 采用源 {root} 的工作单元请求工作包缺失（账损坏），拒绝采用')
-    request_payload = unit.request_payload(turn.turn_id)
-    blob = WorkUnitBlobV1.model_validate(
-        Str06Repository.read_external(blob_path))
-    if (unit.digest_of(blob) != attempt.response_sha256
-            or blob.unit_id != unit.unit_id or blob.turn_id != turn.turn_id):
+            f'{owner} 采用源 {root} 的工作单元请求工作包缺失或损坏（账损坏），拒绝采用') from exc
+    try:
+        payload = unit.attempt_request_payload(turn.turn_id, attempt.attempt_id)
+    except WorkUnitRefused as exc:
         raise ValueError(
-            f'{owner} 采用源 {root} 的工作单元响应证据身份漂移，拒绝采用')
+            f'{owner} 采用源 {root} 的工作单元响应证据身份漂移或缺失，拒绝采用') from exc
     rows, partial = read_cost_snapshot(source_base, readonly=True)
     if partial:
         raise ValueError(f'采用源 {root} 的成本账有未提交尾，先恢复再采用')
@@ -1530,11 +1537,11 @@ def _work_unit_evidence(root: Path, owner: str, identity: str) -> dict | None:
         raise ValueError(
             f'{owner} 采用源 {root} 缺原成本关联（attempt_id＋指纹无唯一'
             '真实付费行）；付费状态未知，拒绝采用')
-    if (blob.payload.get('request_payload') != request_payload
+    if (payload.get('request_payload') != request_payload
             or original[0].get('request_model') != request_payload.get('model')
-            or original[0].get('response_sha256') != _content_sha256(blob.payload.get('response', {}).get('content'))):
+            or original[0].get('response_sha256') != _content_sha256(payload.get('response', {}).get('content'))):
         raise ValueError(f'{owner} 已购请求工作包与成本身份不一致，拒绝采用')
-    return {'unit': unit, 'turn': turn, 'attempt': attempt, 'payload': blob.payload,
+    return {'unit': unit, 'turn': turn, 'attempt': attempt, 'payload': payload,
             'cost_row': original[0], 'blob_rel': blob_path.relative_to(
                 source_base).as_posix()}
 

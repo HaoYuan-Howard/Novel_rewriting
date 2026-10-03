@@ -511,8 +511,25 @@ def stage_state(store: ArtifactStore, stage: str) -> StageState:
     # B2（D3）：stage2 的章观察是逐章模板产物，通用 `arts` 看不见它们；
     # 逐章的账记进 `chapters_done`，供 `resume_verdict` 的 chapters 节点分支
     # 判「源章全都观察过了没有」（同 stage5 的章账纪律，互不顶替）。
-    written = (stage2_observations_done(store.ctx.novel_dir)
-               if stage == 'stage2' else [])
+    written: list[int] = []
+    if stage == 'stage2':
+        observation_issues: list[ArtifactState] = []
+        for ordinal in stage2_observations_done(store.ctx.novel_dir):
+            observation = artifact_state(
+                store, artifact_rel(STR06_STAGE2_OBS_CHAPTER, nn=ordinal))
+            if (observation.exists and observation.readable
+                    and observation.freshness == 'fresh' and not observation.invalid):
+                written.append(ordinal)
+            else:
+                observation_issues.append(observation)
+        # 模板文件存在只作库存；只有当前、可读的正式观察才计为完成。
+        # 把问题章物化给 node 投影，避免 stage2 的兄弟产物冒充本节点上游。
+        arts.extend(observation_issues)
+        if any(not a.readable or a.freshness == 'unknown' for a in observation_issues):
+            done = None
+        elif observation_issues:
+            done = False
+        reviewable = reviewable or any(a.readable for a in observation_issues) or bool(written)
     return StageState(stage=stage, artifacts=arts, done=done,
                       chapters_done=written,
                       rounds_done=rounds, reviewable=reviewable,
@@ -697,6 +714,16 @@ def artifacts_for_node(ov: NovelOverview, node: str) -> list[ArtifactState]:
     stage = next((item for item in ov.stages if item.stage == spec.stage), None)
     if stage is None:
         return []
+    if node == 'str06.stage2.chapters':
+        prefix = 'stage2/observations/ch'
+        selected = []
+        for item in stage.artifacts:
+            if item.rel.startswith(prefix) and item.rel.endswith('.json'):
+                digits = item.rel[len(prefix):-5]
+                if digits.isascii() and digits.isdigit() and item.rel == artifact_rel(
+                        STR06_STAGE2_OBS_CHAPTER, nn=int(digits)):
+                    selected.append(item)
+        return selected
     if node == 'str06.stage5.body':
         # 逐章路径是模板，Stage5 完成度只把问题章物化进 artifacts。
         return list(stage.artifacts)
@@ -851,6 +878,19 @@ def resume_verdict(
                 f'上游变过：{", ".join(a.rel for a in stale_upstream)} 已陈旧 '
                 f'（{", ".join(sorted({a.reason for a in stale_upstream}))}）。'
                 '⚠ 这不是「续」，是「重来」——续下去会把新旧两版上游拼进同一本书')
+        observations = artifacts_for_node(ov, node)
+        uncertain = [a for a in observations if not a.readable or a.freshness == 'unknown']
+        if uncertain:
+            return RESUME_UNKNOWN, (
+                f'章观察不可读或新鲜度未知：{", ".join(a.rel for a in uncertain)}；'
+                '不能从文件存在判已完成，也不能猜成缺失后重新购买')
+        stale_observations = [a for a in observations if a.freshness == 'stale']
+        if stale_observations:
+            return RESUME_REDO, (
+                f'章观察消费的上游已变化：{", ".join(a.rel for a in stale_observations)}；'
+                '从本节点正式入口重放/重建，不能把旧观察交给下游')
+        if any(a.invalid for a in observations):
+            return RESUME_RUN, '章观察被拒收；先使用 --check-only 免费复验，再决定是否新购买'
         want = ov.chapters
         got = st.chapters_done
         if want is None:

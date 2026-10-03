@@ -953,3 +953,39 @@ def test_chapters_staleness_whitelists_only_its_true_upstreams():
         verdict, why = S.resume_verdict(ov2, 'str06.stage2.chapters')
         assert verdict == S.RESUME_REDO and upstream_rel in why, (upstream_rel, why)
         assert 'names.json' not in why and 'characters.json' not in why
+
+
+@pytest.mark.parametrize('freshness,readable,verdict', [
+    ('stale', True, S.RESUME_REDO), ('unknown', True, S.RESUME_UNKNOWN),
+    ('fresh', False, S.RESUME_UNKNOWN), ('fresh', True, S.RESUME_SKIP)])
+def test_chapter_observation_completion_uses_current_artifacts(freshness, readable, verdict):
+    issue = _stage2_artifact('stage2/observations/ch01.json', freshness=freshness).model_copy(
+        update={'readable': readable, 'condition': 'ready' if readable else 'unreadable'})
+    stage = StageState(stage='stage2', artifacts=[issue], chapters_done=[1],
+                       done=None if not readable or freshness == 'unknown' else freshness == 'fresh',
+                       reviewable=True)
+    ov = _overview(stage).model_copy(update={'chapters': 1})
+    assert S.resume_verdict(ov, 'str06.stage2.chapters')[0] == verdict
+    assert S.artifacts_for_node(ov, 'str06.stage2.chapters') == [issue]
+
+
+@pytest.mark.parametrize('freshness,readable,want_done', [
+    ('stale', True, False), ('unknown', True, None),
+    ('fresh', False, None), ('fresh', True, None)])
+def test_stage2_projects_unusable_observations_instead_of_counting_files(
+        tmp_path, monkeypatch, freshness, readable, want_done):
+    root = tmp_path / '观察_1'
+    path = root / 'stage2/observations/ch01.json'
+    path.parent.mkdir(parents=True)
+    path.write_text('{}', encoding='utf-8')
+    store = SimpleNamespace(ctx=SimpleNamespace(novel_dir=root))
+    monkeypatch.setattr(S, 'required_artifacts', lambda *_args, **_kwargs: ())
+    issue = _stage2_artifact('stage2/observations/ch01.json', freshness=freshness).model_copy(
+        update={'readable': readable, 'condition': 'ready' if readable else 'unreadable'})
+    monkeypatch.setattr(S, 'artifact_state', lambda _store, _rel: issue)
+    stage = S.stage_state(store, 'stage2')
+    assert stage.done is want_done
+    if freshness == 'fresh' and readable:
+        assert stage.chapters_done == [1] and stage.artifacts == []
+    else:
+        assert stage.chapters_done == [] and stage.artifacts == [issue]

@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
-from typing import NoReturn
+from typing import Callable, NoReturn
 
 from contracts.invariants import CASCADE_REWIND_LIMIT, OWNER_REVISION_MAX_ROUNDS
 from contracts.schema.workflow import (
@@ -326,11 +326,14 @@ def resolve_owner_issues(repository, *, owner: str, raised_by: str) -> None:
 
 
 def revision_prompt_for_owner(repository, owner: str, base_prompt: str,
-                              previous_rel: str) -> str:
+                              previous_rel: str, *,
+                              previous_wire: Callable[[dict], dict] | None = None) -> str:
     """上游 owner 的修订 prompt：open 记录在案时并入上一版与 typed 问题。
 
     ``previous_rel`` 是该 owner 自己的正式产物（修订对象上一版）；无 open 记录
     时原样返回 base_prompt（普通首跑/重放路径逐字节不变，请求身份不漂移）。
+    owner 可传纯函数 ``previous_wire`` 撤销派生项，保持原 wire 作为修订模板；
+    未提供投影时正式产物仅供只读语义对照，明确禁止仿照 canonical 输出。
     嵌入的上一版**剥掉存储信封**（`_provenance`／`_schema_version`）：信封是
     工程元数据，喂给模型会被原样回声，wire 校验 extra_forbidden 拒收烧轮
     （R10c c1 ch05 实证：第 4 轮因此耗尽）。
@@ -338,11 +341,13 @@ def revision_prompt_for_owner(repository, owner: str, base_prompt: str,
     record = open_issue_record(repository, owner)
     if record is None:
         return base_prompt
-    previous = _stored_payload_text(repository, previous_rel)
-    return revision_user_prompt(base_prompt, previous, _messages(record.issues))
+    previous = _stored_payload_text(repository, previous_rel, project=previous_wire)
+    return revision_user_prompt(base_prompt, previous, _messages(record.issues),
+                                previous_is_canonical=previous_wire is None)
 
 
-def _stored_payload_text(repository, rel: str) -> str:
+def _stored_payload_text(repository, rel: str, *,
+                         project: Callable[[dict], dict] | None = None) -> str:
     """读存储产物并剥信封，返回模型应当看到的上一版正文（损坏即原样拒绝）。"""
     import json as _json
     raw = repository.path(rel).read_text(encoding='utf-8')
@@ -350,11 +355,14 @@ def _stored_payload_text(repository, rel: str) -> str:
         envelope = _json.loads(raw)
     except ValueError:
         raise RuntimeError(f'修订上一版不是 JSON：{rel}')
-    if isinstance(envelope, dict) and 'payload' in envelope:
-        payload = {k: v for k, v in envelope['payload'].items()
-                   if not k.startswith('_')}
-        return _json.dumps(payload, ensure_ascii=False, indent=2)
-    stripped = {k: v for k, v in envelope.items() if not k.startswith('_')}
+    if not isinstance(envelope, dict):
+        raise RuntimeError(f'修订上一版不是 JSON 对象：{rel}')
+    payload = envelope.get('payload', envelope)
+    if not isinstance(payload, dict):
+        raise RuntimeError(f'修订上一版 payload 不是 JSON 对象：{rel}')
+    stripped = {k: v for k, v in payload.items() if not k.startswith('_')}
+    if project is not None:
+        stripped = project(stripped)
     return _json.dumps(stripped, ensure_ascii=False, indent=2)
 
 

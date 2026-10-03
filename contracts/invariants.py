@@ -1887,6 +1887,7 @@ NODES: Final[dict[str, NodeSpec]] = {
     'str06.stage2.names': NodeSpec(
         'stage2', 'R-3', True, 'Stage2 源名称结构观察（家族、名、化名、称谓构词）',
         flags=('--check-only',),
+        operator_redo='canonical',
         produces=('stage2/observations/names.json',),
         lifecycle=NodeLifecycleSpec(
             'book', '书级人物表（book 观察）、完整 MainText 与 hook_copy 章前文字',

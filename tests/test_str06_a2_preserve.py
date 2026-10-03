@@ -282,3 +282,51 @@ def test_checkpoint_hash_binds_series_and_anchors():
     other, _ = _assemble(_wire(series=[{'members': [1, 2], 'mechanism': None}]))
     assert base_cp.checkpoint_sha256 != other.checkpoint_sha256
     assert isinstance(base_cp, PreserveCheckpoint)
+
+
+# 真实返修曾误回 canonical anchors 对象；所有 JSON 容器先验形状再查闭集。
+def test_malformed_preserve_containers_report_errors_without_mutation():
+    from copy import deepcopy
+
+    malformed = [None, [], 'checkpoint', _wire(obligations={}),
+                 _wire(obligations=[None]), _wire(obligations=['ob01'])]
+    for field, value in [('anchors', [{'handle': 'b01_01.e1'}]),
+                         ('anchors', 'b01_01.e1'), ('requires', 1)]:
+        wire = _wire()
+        wire['obligations'][0][field] = value
+        malformed.append(wire)
+    malformed.extend([
+        _wire(series={}), _wire(series=[[]]),
+        _wire(series=[{'members': 1, 'mechanism': None}]),
+        _wire(series=[{'members': [1, 2], 'mechanism': {}}]),
+        _wire(series=[{'members': [1, 1], 'mechanism': None}]),
+        _wire(series=[{'members': [True, 2], 'mechanism': None}]),
+        _wire(evidence_conflicts={}), _wire(evidence_conflicts=[[]]),
+        _wire(evidence_conflicts=[{'anchor': {}, 'segment': 'e01_01', 'note': 'x'}]),
+        _wire(evidence_conflicts=[{'anchor': 'b01_01.e1', 'segment': [], 'note': 'x'}]),
+        _wire(evidence_conflicts=[{'anchor': 'b01_01.e1', 'segment': 'e01_01', 'note': {}}]),
+    ])
+    for wire in malformed:
+        before = deepcopy(wire)
+        checkpoint, errors = _assemble(wire)
+        assert checkpoint is None and errors, wire
+        assert wire == before, 'validator 不得偷偷修复输入'
+
+
+def test_preserve_revision_wire_roundtrips_semantics_without_derived_fields():
+    from novel.stages.stage4.grounding import preserve_revision_wire
+    from copy import deepcopy
+
+    checkpoint, errors = _assemble(_wire(series=[{'members': [1, 2], 'mechanism': None}]))
+    assert not errors
+    before = deepcopy(checkpoint.model_dump())
+    wire = preserve_revision_wire(checkpoint)
+    assert wire['protocol_version'] == 'stage4-preserve-v2'
+    assert wire['obligations'][0]['anchors'] == ['b01_01.e1']
+    assert wire['series'][0]['members'] == [1, 2]
+    assert not any(k in wire for k in ('checkpoint_id', 'checkpoint_sha256', 'provider'))
+    assert all(set(o) == {'kind', 'statement', 'anchors', 'must_preserve',
+                          'satisfaction', 'requires'} for o in wire['obligations'])
+    again, errors = _assemble(wire)
+    assert not errors and again == checkpoint
+    assert checkpoint.model_dump() == before

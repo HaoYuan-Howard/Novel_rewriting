@@ -272,8 +272,77 @@ def _anchor_line(anchor: ObligationAnchor) -> str:
     return f'{line}　依据：{quotes}' if quotes else line
 
 
+
+def preserve_revision_wire(checkpoint: PreserveCheckpoint) -> dict[str, Any]:
+    """正式 checkpoint → 同协议的修订对照；只撤销 ID/锚点/lineage 派生。
+
+    保留所有语义字段与列表顺序，不信任模型回写的派生元数据；本投影不是
+    输入迁移或 validator repair。调用方在显式 owner 返修步骤使用（I-15/I-35）。
+    """
+    ordinals = {o.obligation_id: n for n, o in enumerate(checkpoint.obligations, 1)}
+    if len(ordinals) != len(checkpoint.obligations):
+        raise ValueError('Preserve 修订投影拒绝重复 obligation_id')
+    refs = [ref for o in checkpoint.obligations for ref in o.requires]
+    refs.extend(ref for group in checkpoint.series for ref in group.members)
+    if any(ref not in ordinals for ref in refs):
+        raise ValueError('Preserve 修订投影拒绝闭集外义务引用')
+    return {
+        'protocol_version': STAGE4_PRESERVE_PROTOCOL,
+        'obligations': [
+            {'kind': o.kind.value, 'statement': o.statement,
+             'anchors': [a.handle for a in o.anchors],
+             'must_preserve': o.must_preserve, 'satisfaction': o.satisfaction,
+             'requires': [ordinals[ref] for ref in o.requires]}
+            for o in checkpoint.obligations],
+        'series': [{'members': [ordinals[ref] for ref in group.members],
+                    'mechanism': group.mechanism} for group in checkpoint.series],
+        'evidence_conflicts': [],
+    }
+
+
+def _preserve_shape_errors(wire: Any) -> list[str]:
+    """在 get/迭代/hash 前验证不可信 JSON 容器；不改输入，不吞校验错误。"""
+    if not isinstance(wire, dict):
+        return ['Preserve 必须是 JSON 对象']
+    errors: list[str] = []
+    for key in ('obligations', 'series', 'evidence_conflicts'):
+        items = wire.get(key)
+        if items is None:
+            continue
+        if not isinstance(items, list):
+            errors.append(f'{key} 必须是数组')
+            continue
+        for n, item in enumerate(items, 1):
+            path = f'{key}[{n}]'
+            if not isinstance(item, dict):
+                errors.append(f'{path} 必须是对象')
+                continue
+            if key == 'obligations':
+                anchors = item.get('anchors')
+                if anchors is not None and (
+                    not isinstance(anchors, list)
+                    or any(not isinstance(a, str) for a in anchors)
+                ):
+                    errors.append(f'{path}.anchors 必须是句柄字符串数组（不是锚点对象）')
+                requires = item.get('requires')
+                if requires is not None and not isinstance(requires, list):
+                    errors.append(f'{path}.requires 必须是序号数组')
+            elif key == 'series':
+                members = item.get('members')
+                if members is not None and not isinstance(members, list):
+                    errors.append(f'{path}.members 必须是序号数组')
+                mechanism = item.get('mechanism')
+                if mechanism is not None and not isinstance(mechanism, str):
+                    errors.append(f'{path}.mechanism 必须是 ex_id 字符串或 null')
+            else:
+                for field in ('anchor', 'segment', 'note'):
+                    if field in item and not isinstance(item[field], str):
+                        errors.append(f'{path}.{field} 必须是字符串')
+    return errors
+
+
 def assemble_preserve(
-    wire: dict[str, Any], *,
+    wire: Any, *,
     policy_id: str, policy_version: int,
     characters: CharactersCore, blueprint: BlueprintsArtifactV15,
     provider: str, model: str, request_sha256: str,
@@ -287,7 +356,9 @@ def assemble_preserve(
     `characters_sha256` 绑定 core view（F6 裁决）。冲突非空时本函数照常返回
     校验结果——「冲突不发布 checkpoint、回派 Stage2」是 a3 `run_preserve` 的
     编排决定，不混入 validator（I-36）。"""
-    errors: list[str] = []
+    errors = _preserve_shape_errors(wire)
+    if errors:
+        return None, errors
     if wire.get('protocol_version') != STAGE4_PRESERVE_PROTOCOL:
         errors.append(f'protocol_version 必须是 {STAGE4_PRESERVE_PROTOCOL}，'
                       f'实得 {wire.get("protocol_version")!r}（I-13 无隐式迁移）')
@@ -373,7 +444,7 @@ def assemble_preserve(
         members_raw = group.get('members') or []
         resolved_members: list[str] = []
         for ref in members_raw:
-            if not isinstance(ref, int) or not 1 <= ref <= len(raw):
+            if not isinstance(ref, int) or isinstance(ref, bool) or not 1 <= ref <= len(raw):
                 errors.append(f'series {n} 成员序号越界：{ref!r}（1-{len(raw)}）')
                 continue
             resolved_members.append(dispatched[ref - 1])
@@ -385,8 +456,11 @@ def assemble_preserve(
             errors.append(f'series {n} mechanism 不在源表达 ex_id 闭集：'
                           f'{mechanism!r}')
         if not errors:
-            series_list.append(ObligationSeries(
-                members=tuple(resolved_members), mechanism=mechanism))
+            try:
+                series_list.append(ObligationSeries(
+                    members=tuple(resolved_members), mechanism=mechanism))
+            except ValidationError as exc:
+                errors.append(f'series {n} 模型校验失败：{exc}')
     if errors:
         return None, errors
     # evidence_conflicts：只验形状与闭集（a3 消费——冲突不发布、回派 Stage2）。

@@ -55,7 +55,7 @@ from contracts.invariants import (
     LLM_MAX_OUTPUT_TOKENS, PIPELINE_BOOK_CONCURRENCY,
     PIPELINE_DEFAULT_CONCURRENCY, PIPELINE_PROVIDER_CONCURRENCY,
 )
-from contracts.schema.grounding import OutputConstraints
+from contracts.schema.grounding import OutputConstraints, PreserveCheckpoint
 from contracts.schema.hook import HookConstraints, HookReceipt
 from contracts.schema.observation import STAGE2_OBSERVATION_PROTOCOL
 from contracts.schema.workflow import (
@@ -98,7 +98,7 @@ from novel.stages.stage4 import (
     assemble_preserve, compile_execution_plan, compile_hook_context,
     compile_writer_book_ir, derive_semantic_binding, design_obligation_index,
     design_placements, knowledge_change_index, lock_order_violations, obligation_core_id,
-    project_brief, project_preserve_view, publish_graph, run_mechanical_guard,
+    project_brief, project_preserve_view, preserve_revision_wire, publish_graph, run_mechanical_guard,
 )
 from contracts.schema.design import DesignWireV7, STAGE4_DESIGN_WIRE_PROTOCOL
 from novel.stages.stage5 import (
@@ -636,7 +636,9 @@ def run_preserve(ctx: ChainContext) -> dict:
         + '\n人物表：' + json.dumps(core.model_dump(mode='json'),
                                     ensure_ascii=False, sort_keys=True,
                                     separators=(',', ':')),
-        'runtime/preserve_checkpoint.json')
+        'runtime/preserve_checkpoint.json',
+        previous_wire=lambda payload: preserve_revision_wire(
+            PreserveCheckpoint.model_validate(payload)))
 
     def preserve_compile(w):
         return assemble_preserve(w, policy_id='preserve-default', policy_version=STAGE4_PRESERVE_POLICY_VERSION,

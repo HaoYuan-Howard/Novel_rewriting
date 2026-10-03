@@ -436,3 +436,25 @@ def test_narration_reaches_writer_and_rejects_scene_pov_drift():
     from novel.stages.stage5 import validate_chapter_prose
     assert not validate_chapter_prose('她说：“我去。”', target_chars=8, band_low=5, band_high=10,
                                       withheld_literals=(), released_surfaces=())
+
+
+def test_inherited_expression_leak_points_to_explicit_wire_override():
+    from contracts.schema.expression import ExpressionDecision
+    from contracts.schema.source import NameProjection
+    from novel.stages.stage4.materials import validate_design_materials
+    from copy import deepcopy
+
+    body, _binding, _plan, _ir = _green_book_ir()
+    leaking = ExpressionDecision(ex_id='ex_04', action='keep', reason=None,
+                                  statement='沈鹤汀表面黏人，内心克制，形成反差。')
+    body = body.model_copy(update={'expression_decisions': (leaking,)})
+    before = deepcopy(body.model_dump())
+    projection = NameProjection(proper_literals=('沈鹤汀',), family_literals=(), by_person=())
+    errors = validate_design_materials(body, projection=projection, known_char_ids={'fu_jun', 'yun_niang'})
+    assert errors and all('expression_overrides' in e for e in errors)
+    assert all(e.startswith('positive_material_leak[') for e in errors)
+    assert body.model_dump() == before
+    repaired = body.model_copy(update={'expression_decisions': (
+        ExpressionDecision(ex_id='ex_04', action='change', reason='按当前释放范围表达反差。',
+                           statement='表面黏人，内心克制，形成反差。'),)})
+    assert not validate_design_materials(repaired, projection=projection, known_char_ids={'fu_jun', 'yun_niang'})

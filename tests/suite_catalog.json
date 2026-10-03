@@ -1003,7 +1003,8 @@
         "test_ask_json_revises_nonconforming_answer_within_budget": "unit_contract",
         "test_ask_json_stops_when_issue_set_repeats": "unit_contract",
         "test_ask_json_stops_after_round_cap_with_changing_issue_sets": "unit_contract",
-        "test_recovery_after_revision_stop_replays_free": "unit_contract"
+        "test_recovery_after_revision_stop_replays_free": "unit_contract",
+        "test_names_accepts_proven_book_revision_cascade_only": "unit_contract"
       }
     },
     "tests/test_str06_r9.py": {
@@ -1032,7 +1033,11 @@
       "stages": [
         "stage2",
         "stage4"
-      ]
+      ],
+      "cases": {
+        "test_preserve_malformed_canonical_answer_enters_bounded_revision": "stage",
+        "test_preserve_cross_node_revision_uses_wire_not_checkpoint_template": "stage"
+      }
     },
     "tests/test_str06_a4_design_locks.py": {
       "layer": "unit_contract",

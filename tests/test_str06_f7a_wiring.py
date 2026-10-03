@@ -630,10 +630,18 @@ def test_historical_adoption_blocks_work_unit_without_cost_row(tmp_path):
         ask_json(session, 'preserve', request, lambda _: [])
 
 
-def test_wire_adoption_binds_work_unit_evidence(tmp_path):
+@pytest.mark.parametrize('long_source', [False, True])
+def test_wire_adoption_binds_work_unit_evidence(tmp_path, long_source):
     """wire 采用：agent 流源根的工作单元证据闭合 ledger-row 档（canary
     20260929b 的 owner patch 因此不再被迫 unverified）。"""
-    root, identity, request = _work_unit_source_root(tmp_path)
+    source_parent = tmp_path
+    if long_source:
+        source_parent = tmp_path / ('source_' + 'x' * max(1, 125 - len(str(tmp_path)) - 8))
+    root, identity, request = _work_unit_source_root(source_parent)
+    if long_source:
+        from novel.work_units import WorkUnitBudget
+        unit = WorkUnitBudget(root.parent, root.name, 'str06.stage4.preserve', 'executor', 'book', read_only=True)
+        assert len(str(unit.directory / ('x' * 64 + '.json'))) > 260
     base, repo, ledger, session = _candidate(tmp_path, root)
     wire = tmp_path / 'bind_wire.json'
     wire.write_text('{"entries":[]}', encoding='utf-8')
