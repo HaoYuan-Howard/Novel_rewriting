@@ -25,6 +25,13 @@ compile 侧的闭集核对保留（发布前防御）。认知 holder／effect t
 本模块只验收观察的自含形状并落盘（I-24/I-36：只读验证，错误聚合；唯一
 compiler 归一是 basis 引文按 `norm()` 尺回取段原文切片——D2 标点宽度，
 2026-10-03，落盘永远是原文字节）。
+
+【瘦 wire 路由（CS-2 第一步，2026-10-03）】LLM 输出面升
+`stage2-chapters-v3`（`contracts/schema/observation.py` 的瘦模型）：可机械
+推导字段（默认值／target 四元组／命题句柄／src 区间）由
+`novel/stages/stage2/slim.py::expand_chapter_wire` 派生成 rc12 dict 后过
+**同一管道**——落盘仍是 `ChapterObservation`（v2 形状），下游消费者不变
+（S-03：适配集中在 slim 模块）。v2 wire 直通（盘面 canonical 与领养读面）。
 """
 from __future__ import annotations
 
@@ -34,10 +41,13 @@ from typing import Any, Iterable, Mapping
 
 from pydantic import ValidationError
 
-from contracts.schema.observation import ChapterObservation
+from contracts.schema.observation import (
+    STAGE2_CHAPTERS_WIRE_PROTOCOL, ChapterObservation,
+)
 from contracts.schema.source import REGISTERED_STATE_KEYS, RETIRED_STATE_KEYS
 from novel.stages.common import CHAPTER_PROMPT, PRE_CHAPTER_RULE
 from novel.stages.stage2.resolver import EvidenceResolver
+from novel.stages.stage2.slim import expand_chapter_wire
 
 
 def chapter_prior_text(chapters: list[dict], before_chapter: int) -> str:
@@ -109,26 +119,30 @@ def _normalize_registered_scopes(wire: Any, errors: list[str]) -> Any:
 
 def _chapter_handle_discipline(
         beats: list[Any],
-        issues: list[tuple[tuple[str | int, ...] | None, str]]) -> None:
+        issues: list[tuple[tuple[str | int, ...] | None, str]],
+        labels: tuple[str, str] = ('effects', 'cognition'),
+        ) -> None:
     """章内句柄纪律的自含部分（`R-2.11`/`R-2.12`；引用闭合归 compile）。
 
     只查不需要登记表就能确证的冲突：同一命题句柄带两种 statement 文本、
-    同一悬念句柄在本章内 open 两次。跨章句柄与章内前向引用保持未决/
+    同一悬念句柄本章内只 open 一次。跨章句柄与章内前向引用保持未决/
     放行——配对与闭合归 associate／compile（D8：不默认合并或默认不同）。
     CS-patch（2026-10-03）：逐条附 wire 路径（`compile 的 errors` 是本视图
-    去掉路径的投影，判定与定位同一把尺）。
+    去掉路径的投影，判定与定位同一把尺）；`labels` 是瘦 wire 的路径词汇
+    （CS-2），检查不变。
     """
+    eff_label, cog_label = labels
     statements: dict[str, str] = {}
     opened_loops: set[str] = set()
     for beat_index, raw in enumerate(beats):
         if not isinstance(raw, dict):
             continue
-        for kind in ('effects', 'cognition'):
+        for kind, label in (('effects', eff_label), ('cognition', cog_label)):
             for transfer_index, transfer in enumerate(raw.get(kind) or (), 1):
                 prop = (transfer or {}).get('proposition') if isinstance(transfer, dict) else None
                 if isinstance(prop, dict) and prop.get('statement') is not None:
                     _conflict(statements, prop, kind,
-                              ('beats', beat_index, kind, transfer_index - 1), issues)
+                              ('beats', beat_index, label, transfer_index - 1), issues)
         for loop in raw.get('loops') or []:
             if not isinstance(loop, dict):
                 continue
@@ -178,12 +192,17 @@ def _canonicalize_basis_quotes(wire: Any, resolver: EvidenceResolver) -> None:
 
 def _chapter_issues(canonical: Any, resolver: EvidenceResolver,
                     slugs: frozenset[str] | None, chapter: int | None,
+                    labels: tuple[str, str] = ('effects', 'cognition'),
                     ) -> list[tuple[tuple[str | int, ...] | None, str]]:
     """章观察机械闸的**结构化视图**（CS-patch，2026-10-03）：与
     `compile_chapter_observation` 同源同序，逐条附 wire 的 JSON 路径
     （路径＝失败条目的最小可替换单元；None＝不可定位）。定位与判定同一把
     尺（判据 25）：compile 的 errors 就是本视图去掉路径的投影。
+
+    `labels` 只是**词汇**不是判据：瘦 wire（CS-2）的路径与消息用 state／
+    know 命名（模型看得到、patch 找得到），检查项与顺序逐字不变。
     """
+    eff_label, cog_label = labels
     issues: list[tuple[tuple[str | int, ...] | None, str]] = []
     for ordinal, raw in enumerate(canonical.get('beats') or [], 1):
         if not isinstance(raw, dict):
@@ -196,7 +215,7 @@ def _chapter_issues(canonical: Any, resolver: EvidenceResolver,
                            f'beat {raw.get("event", "")[:20]}：{issue.message}'))
         # R10a a1（C4/C1/C2）：转移级 basis 引文判定——逐字命中＋段属本拍
         # source_refs（`verify_bases` 的逐条版：路径随条目走）。
-        for kind in ('effects', 'cognition'):
+        for kind, label in (('effects', eff_label), ('cognition', cog_label)):
             for index, transfer in enumerate(raw.get(kind) or (), 1):
                 if not isinstance(transfer, dict):
                     continue
@@ -206,16 +225,38 @@ def _chapter_issues(canonical: Any, resolver: EvidenceResolver,
                     for issue in resolver.verify_quote(
                             str(basis.get('segment') or ''),
                             str(basis.get('quote') or ''), refs):
-                        issues.append((beat_path + (kind, index - 1),
-                                       f'{where} {kind}[{index}]：{issue.message}'))
+                        issues.append((beat_path + (label, index - 1),
+                                       f'{where} {label}[{index}]：{issue.message}'))
         if slugs is not None:
             for person in raw.get('participants') or []:
                 if person not in slugs:
                     issues.append((beat_path,
                                    f'{where} participants 引用未知人物 {person}'
                                    '（人物闭集在章观察验收即查，R3 左移）'))
-    _chapter_handle_discipline(canonical.get('beats') or [], issues)
+    _chapter_handle_discipline(canonical.get('beats') or [], issues, labels)
     return issues
+
+
+def _route_wire(wire: Any, *, chapter: int | None
+                ) -> tuple[Any, tuple[str, str], list[tuple[tuple[str | int, ...] | None, str]]]:
+    """按协议字面量路由章观察 wire（CS-2 第一步，2026-10-03）。
+
+    瘦 wire（stage2-chapters-v3）经 `expand_chapter_wire` 派生成 rc12 dict
+    再进既有管道；rc12（v2）直通——它是盘面 canonical 形状，也是
+    wire_dir 领养／既有测试的读面（S-01 登记过的兼容层，删除条件＝
+    canonical 自身瘦身升版）。返回 (wire, 路径词汇, 条目级 issues)；issues
+    非空即本轮 wire 不可判（路径 None＝形状失败走 R3 整份修订，否则可条目
+    返修——判定与定位同一份材料）。
+    """
+    if isinstance(wire, dict) and wire.get('protocol_version') == STAGE2_CHAPTERS_WIRE_PROTOCOL:
+        try:
+            rc12, issues = expand_chapter_wire(wire, chapter=chapter)
+        except ValidationError as exc:
+            return None, ('state', 'know'), [(None, f'章观察瘦 wire 协议校验失败：{exc}')]
+        if rc12 is None:
+            return None, ('state', 'know'), issues
+        return rc12, ('state', 'know'), []
+    return wire, ('effects', 'cognition'), []
 
 
 def chapter_patch_locate(wire: Any, errors: list[str], *,
@@ -228,16 +269,21 @@ def chapter_patch_locate(wire: Any, errors: list[str], *,
     的 JSON 路径；存在不可定位错误，或 `errors` 与可定位集不完全一致（协议
     校验／键归一／首现锚点等其它闸在拦）时返回 None——本轮退整份返修，不
     静默漏项。返回按路径聚合的 ``(path, issues)``（裸元组，不 import
-    novel.llm；分层规则禁 stage2 依赖 LLM 面）。
+    novel.llm；分层规则禁 stage2 依赖 LLM 面）。CS-2：瘦 wire 同样路由
+    （expand 的派生错误也带条目路径，路径词汇＝state／know）。
     """
     if not isinstance(wire, dict):
         return None
     resolver = EvidenceResolver(evidence_ids if isinstance(evidence_ids, Mapping)
                                 else list(evidence_ids))
     slugs = frozenset(character_slugs) if character_slugs is not None else None
-    canonical = deepcopy(wire)
+    routed, labels, route_issues = _route_wire(wire, chapter=chapter)
+    if routed is None or any(path is None for path, _message in route_issues):
+        return None
+    canonical = deepcopy(routed)
     _canonicalize_basis_quotes(canonical, resolver)
-    issues = _chapter_issues(canonical, resolver, slugs, chapter)
+    issues = list(route_issues) + _chapter_issues(canonical, resolver, slugs, chapter,
+                                                  labels)
     if any(path is None for path, _message in issues):
         return None
     if len(errors) != len(issues) or sorted(errors) != sorted(
@@ -260,11 +306,16 @@ def compile_chapter_observation(
     `character_slugs` 是书级人物表 slug 闭集（R3 左移）：beats 的 participants
     引用表外人物当场报 issue（措辞与 compile 的 `R-2.3` 核对一致，compile 侧
     保留为发布前防御）。wire 不被修改（I-24）；错误逐条聚合，含 Resolver 的
-    精确 issue 消息。
+    精确 issue 消息。CS-2（2026-10-03）：wire 按协议字面量路由——瘦面
+    （stage2-chapters-v3）先经 expand 派生成 rc12 dict 再过同一管道，落盘
+    形状与全部下游消费者不变。
     """
     errors: list[str] = []
     if not isinstance(wire, dict):
         return None, ['chapter wire 必须是 JSON object']
+    routed, labels, route_issues = _route_wire(wire, chapter=chapter)
+    if route_issues:
+        return None, [message for _path, message in route_issues]
     # R10a a1：传 Mapping（段 id→{chapter,text}）时 basis 引文可逐字判定；
     # 只传 id 的合成闭集保持旧形态（闭集核对可用，逐字判定报 unknown_segment）。
     resolver = EvidenceResolver(evidence_ids if isinstance(evidence_ids, Mapping)
@@ -273,11 +324,11 @@ def compile_chapter_observation(
     # D2 引文回取先于全部判定：后续闭集核对、逐字判定、句柄纪律与协议校验
     # 都在回取后的副本上施行——validate 回调与正式 compile 走同一函数，两路
     # 结果逐字节一致（I-30 幂等）。
-    canonical = deepcopy(wire)
+    canonical = deepcopy(routed)
     _canonicalize_basis_quotes(canonical, resolver)
     # CS-patch（2026-10-03）：判定走结构化视图（闭集／basis／人物闭集／句柄
     # 纪律，同源同序），errors 是它的无路径投影——条目定位与验收判定不会漂。
-    issues = _chapter_issues(canonical, resolver, slugs, chapter)
+    issues = _chapter_issues(canonical, resolver, slugs, chapter, labels)
     errors.extend(message for _path, message in issues)
     normalized = _normalize_registered_scopes(canonical, errors)
     try:

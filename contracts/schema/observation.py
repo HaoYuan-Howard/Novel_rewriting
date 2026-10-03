@@ -53,6 +53,15 @@ STAGE2_OBSERVATION_PROTOCOL: Final = 'stage2-observation-v1'
 STAGE2_BOOK_PROTOCOL: Final = 'stage2-book-v3'
 STAGE2_CHAPTERS_PROTOCOL: Final = 'stage2-chapters-v2'
 
+#: 章观察的**瘦 wire 面**（CS-2 第一步，2026-10-03）：`str06.stage2.chapters`
+#: 的 LLM 输出协议升 v3——可机械推导的字段不再让模型抄写（I-15/I-21：拍号、
+#: 场景边界默认、时态默认、op／modality／scope／disclosure 默认、target 四元组
+#: 压成地址串、命题句柄按文本归并），落盘经 `novel/stages/stage2/slim.py::
+#: expand_chapter_wire` 派生回 `stage2-chapters-v2`（rc12）形状——canonical 与
+#: 全部下游消费者不变（S-03：适配集中在 slim 模块，删除条件＝下游消费迁移
+#: 完成、canonical 自身瘦身时）。
+STAGE2_CHAPTERS_WIRE_PROTOCOL: Final = 'stage2-chapters-v3'
+
 #: 关联协议（associate 独立）的版本字面量（R1，2026-09-28 升 v2）：typed 作用
 #: 对象显式序列化＋状态句柄位置编码。句柄含义与输入材料已变，旧关联回答不做
 #: 句柄替换后继续采用（A1.5：恢复边界）。
@@ -180,6 +189,83 @@ class ChapterObservation(StrictModel):
 
     protocol_version: Literal['stage2-chapters-v2']
     beats: tuple[ObsBeat, ...] = Field(min_length=1)
+
+
+# ──────────── chapters 瘦 wire（CS-2 第一步；expand 后即上形，不落盘） ────────────
+
+class SlimConcealment(StrictModel):
+    """concealed 例外面：叙述确立但读者此刻不可见时才写（缺省＝on_page）。
+
+    `by` 是已知者（known_by，非空）；`what` 是命题文本——expand 按「文本
+    归并句柄」解析成 PropositionRef（首现建立、重现实引），揭示链的锚。
+    """
+
+    by: tuple[str, ...] = Field(min_length=1)
+    what: str = Field(min_length=1)
+
+
+class SlimEffect(StrictModel):
+    """事实转移的瘦面：`at` 地址串＋例外字段。
+
+    机械默认（expand 派生，模型只写例外）：op＝set、modality＝actual、
+    scope＝book（登记键由表固定，声明不写）、disclosure＝on_page。
+    `val` 只在 op 需要值时给（set／add／remove；unset／unknown 不带）。
+    `prop`：说辞被叙述证实时引用的命题文本（须与此前 know 的 what 归一后
+    相同）。basis 逐字证据必填（R10a a1 语义不变）。at 只锁字符集，结构
+    （单个 +、两端非空、不自环）由 expand 逐条校验——可条目级返修，不退
+    整份。
+    """
+
+    at: str = Field(pattern=r'^(world|[a-z0-9_+]+)$')
+    key: str = Field(min_length=1)
+    val: Any = None
+    op: str | None = Field(default=None, pattern=r'^(set|unset|add|remove|unknown)$')
+    modality: str | None = Field(default=None,
+                                 pattern=r'^(actual|planned|expected|conditional)$')
+    scope: str | None = Field(default=None, pattern=r'^(book|scene)$')
+    basis: tuple[EvidenceQuote, ...] = Field(min_length=1)
+    hidden: SlimConcealment | None = None
+    prop: str | None = Field(default=None, min_length=1)
+
+
+class SlimCognition(StrictModel):
+    """认知转移的瘦面：`what` 命题文本直接承载语义，句柄由代码按文本归并。
+
+    同一命题再次出现时逐字重写同一句；norm() 后不同即另一条命题（不模糊
+    合并——与 CS-1 的 D1 配对判定同一把尺）。
+    """
+
+    who: str = Field(min_length=1)
+    how: str = Field(pattern=r'^(learns|suspects|confirms|hears_claim|believes|asserts)$')
+    what: str = Field(min_length=1)
+    basis: tuple[EvidenceQuote, ...] = Field(min_length=1)
+
+
+class SlimBeat(StrictModel):
+    """一拍的瘦面：`src` 支持单 id／同前缀连续区间／数组三种写法。
+
+    `new_scene`／`iterative` 只写例外（缺省 continue／single）；loops 保持
+    原形状（悬念句柄仍由模型给——跨章开合配对靠它，D8）。
+    """
+
+    ev: str = Field(min_length=1)
+    who: tuple[str, ...] = Field(default=(), min_length=0)
+    src: str | tuple[str, ...] = Field(
+        min_length=1,
+        description='单 id（e01_03）、同前缀连续区间（e01_02..e01_05）或 id 数组')
+    new_scene: bool = False
+    iterative: bool = False
+    state: tuple[SlimEffect, ...] = Field(default=(), min_length=0)
+    know: tuple[SlimCognition, ...] = Field(default=(), min_length=0)
+    loops: tuple[LoopAction, ...] = Field(default=(), min_length=0)
+
+
+class ChapterObservationWire(StrictModel):
+    """`str06.stage2.chapters` 的 v3 瘦输出面（传输面，不落盘；expand 成
+    `ChapterObservation`（v2／rc12 形状）后进既有管道与盘面）。"""
+
+    protocol_version: Literal['stage2-chapters-v3']
+    beats: tuple[SlimBeat, ...] = Field(min_length=1)
 
 
 # ───────────────────────── associate 观察（str06.stage2.associate） ─────────────────────────

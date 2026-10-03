@@ -436,67 +436,70 @@ BOOK_PROMPT = """任务：通读全书，产出人物账、初始状态与世界
 自己的 source_refs；quote 逐字摘自该句段原文，不转写、不缩写、不摘人名或动作词凑数；
 判断依据含限定（以为／觉得／像是／预计／约／几天后）时，引文必须包含该限定原文。"""
 
-CHAPTER_PROMPT = """任务：把第 {ch} 章正文拆成有序 beats。每一拍是一次状态转移：event 是给人读的事件表述，需要延续的变化全部由三类转移承载——effects（事实）、cognition（认知）、loops（悬念）。
+CHAPTER_PROMPT = """任务：把第 {ch} 章正文拆成有序 beats。每一拍是一次状态转移：ev 是给人读的事件表述，需要延续的变化全部由三类转移承载——state（事实）、know（认知）、loops（悬念）。机械字段（拍号、默认值、命题句柄等）由 compiler 派生，你只写判断与例外。
 
-【人物表】（participants / effect target / cognition holder 只能用这些 slug）
+【人物表】（who / state 的 at / know 的 who 只能用这些 slug）
 {glossary}
 {prior}
 【第 {ch} 章正文】（每段前的 [eXX_YY] 是证据 id）
 {evidence}
 {pre_chapter}
 【要求】
-1. beats：按故事顺序拆拍，每拍 {{"event","participants","source_refs","scene_boundary","temporal_mode","effects","cognition","loops"}}。
-   **不输出拍号**：拍号由 compiler 按列表序派发，列表序即事件序：
-   - event：写"发生了什么"，并保住足以正确演出这一事件的语义——必要前因、关键指代
+1. beats：按故事顺序拆拍，每拍 {{"ev","who","src","new_scene","iterative","state","know","loops"}}。
+   **不输出拍号**：列表序即事件序：
+   - ev：写"发生了什么"，并保住足以正确演出这一事件的语义——必要前因、关键指代
      （如"他那里"须写明指什么）、已成立的站位（谁在床上/床边/门外）、公开行为与内心
      反应的差别；不要混入动机分析或世界规则。
      转述对话/问句必须保真主客体：谁向谁借、谁问谁、借出方是谁，代词消解后写明对象，
      不得翻转施事与受事；身份关系必须写明归属（谁的同窗/表亲/好友），不得悬空成"同窗"；
    - 动作的范围与去向以原文为准：走了多远、去了哪里、交给了谁，原文写到哪就记到哪，
      不外推、不补全（没写"送出住处"就不得记成送离住处）；
-   - participants：本拍中实际行动、说话、感知或被直接作用的人物 slug（可空数组）；
-     仅被提及者只留在 event，不进 participants；
-   - scene_boundary：new＝本拍开新场景（旧场景的 scene 作用域状态就此失效）；
-     continue＝延续当前场景。全书第一个拍必须 new；第 1 章之后的章若开场直接延续
-     上一章末尾的同一场景，第一拍用 continue，否则 new；
-   - temporal_mode：single＝单次行为；iterative＝重复行为（如"连续三夜"）；
-   - source_refs：支撑该拍的**本章**证据段 id，1-4 个。
-2. effects：事实的 postcondition——本拍结束后仍成立、且后续涉及该维度时必须以它为准的
-   **叙述确立的**事实。每项 {{"target","key","op","value","scope","disclosure"[,"proposition"]}}：
-   - target：{{"kind":"character","char_id":...}} | {{"kind":"relation","subject":...,"object":...}} |
-     {{"kind":"world"}}；
-   - 只记叙述确立的事实（含 unknown）："谁认为、谁声称什么"只进 cognition；
-     自述与行为、内心矛盾时，事实层只记行为与叙述确立的事实，自述记进 event；
-   - 不因"以后可能重要"而存：即时动作、表情、一次冷哼、一次脸红留在 event；
+   - who：本拍中实际行动、说话、感知或被直接作用的人物 slug（可空数组）；
+     仅被提及者只留在 ev，不进 who；
+   - src：支撑该拍的**本章**证据段 id，1-4 个。连续多段写成区间（如 "e01_02..e01_05"），
+     单段写 id 本身（如 "e01_03"），不连续给数组；
+   - new_scene：本拍开新场景（旧场景的 scene 作用域状态就此失效）才写 true，缺省＝
+     延续当前场景。全书第一个拍必须 new；第 1 章之后的章若开场直接延续上一章末尾的
+     同一场景，第一拍不写 new_scene，否则写；
+   - iterative：重复行为（如"连续三夜"）才写 true；缺省＝单次行为。
+2. state：事实的 postcondition——本拍结束后仍成立、且后续涉及该维度时必须以它为准的
+   **叙述确立的**事实。每项 {{"at","key","val"[,"op","modality","scope","basis","hidden","prop"]}}：
+   - at：作用地址——人物 slug｜关系 "subject+object"（顺序＝作用方向）｜"world"；
+   - 只记叙述确立的事实（含 unknown）："谁认为、谁声称什么"只进 know；
+     自述与行为、内心矛盾时，事实层只记行为与叙述确立的事实，自述记进 ev；
+   - 不因"以后可能重要"而存：即时动作、表情、一次冷哼、一次脸红留在 ev；
      持续的恐惧/戒备/意图/关系变化才是状态；
-   - 同一语义变化只选一个最自然的 owner：人物自己的意图/心态归 character；双方已形成的
-     关系事实归 relation；客观环境归 world；未决问题归 loops。不为"完整"把同一变化
-     在 character 和 relation 各写一遍；
-   - 位置分轴（登记键，作用域固定）：当前位置 scene_location（scene 作用域，换场即失效）、
-     长期居所 residence（book 作用域，换场不清除）；身体状态各自一键
-     （body_consciousness／body_restraint／body_head_covering 或新的英文蛇形键），
-     不塞进位置值；whereabouts／hiding_place／location 已退役，用了即拒；
-   - op：set(赋新值)/unset(清除)/add(集合加入)/remove(集合移除)/unknown(显式未知)；
-     set 需要显式值（空字符串是合法空值），unset/unknown 不得带值；
-   - scope：book＝跨场景延续；scene＝本场有效、换场失效；
-   - disclosure（必填）：{{"visibility":...}}。on_page＝叙述对读者明示；
-     concealed＝叙述确立但读者此刻不可见——必须声明 known_by（非空，只填人物表 slug），
-     并带 proposition（本地句柄 ref＋statement），由后续 cognition 经同一命题记录揭示；
-   - proposition（可选）：说辞被叙述证实时，在证实拍建立事实效应并引用同一命题
-     （ref 用本章已建立的本地句柄），不得改写其文本；
-   - 改变哪个维度就替换哪个键；场景性临时状态（借宿、暂住、暂离）在结束或转移时必须 set
-     对应维度的新值——去向未知就写"去向未交代"或 unknown，不得留旧值让下游补造；不另开新键；
-   - 无 postcondition 的拍 effects 给空数组。
-3. cognition：认知的 postcondition——谁对哪条命题持什么模式。每项 {{"proposition","holder","mode"}}：
-   - proposition：{{"ref","statement"}}。新建（本 wire 首次出现）必须带 statement；
-     引用本章已建立的命题只带 ref，重抄文本必须与首次登记逐字一致——同一命题的
-     文本只建立一次；
-   - holder：人物 slug 或 reader／public；
-   - mode：learns(确凿得知)/suspects(起疑)/confirms(证实怀疑)/hears_claim(听到说法未知真假)/
-     believes(以为为真，不代表世界为真)/asserts(公开主张)；
+   - 同一语义变化只选一个最自然的 owner：人物自己的意图/心态归其 slug；双方已形成的
+     关系事实归 "a+b"；客观环境归 "world"；未决问题归 loops。不为"完整"把同一变化
+     在人物和关系各写一遍；
+   - 位置分轴（登记键，作用域由 compiler 按表固定）：当前位置 scene_location（场景
+     作用域，换场即失效）、长期居所 residence（book 作用域，换场不清除）；身体状态
+     各自一键（body_consciousness／body_restraint／body_head_covering 或新的英文蛇形
+     键），不塞进位置值；whereabouts／hiding_place／location 已退役，用了即拒；
+   - op 缺省＝set（赋新值）；另可选 unset(清除，不带 val)／add(集合加入)／remove
+     (集合移除)／unknown(显式未知，不带 val)。set/add/remove 需要显式 val
+     （空字符串是合法空值）；
+   - modality 缺省＝actual（已发生）；已定计划＝planned；预计／约＝expected；
+     条件性执行＝conditional——「约半个月便回」是 expected，不是 actual；
+   - scope 只在**表外键**且为 scene 作用域时写（缺省 book）；登记键的作用域由表固定；
+   - hidden（叙述确立但读者此刻不可见时必写）：{{"by":[已知者 slug…],"what":"命题文本"}}，
+     由后续 know 经同一命题（what 归一后相同）记录揭示；
+   - prop（说辞被叙述证实时才写）：所引命题的文本，须与此前 know 建立的 what 归一后
+     相同；
+   - 改变哪个维度就替换哪个键；场景性临时状态（借宿、暂住、暂离）在结束或转移时必须
+     替换对应维度的新值——去向未知就写"去向未交代"或 unknown（op），不得留旧值让
+     下游补造；不另开新键；
+   - 无 postcondition 的拍 state 给空数组。
+3. know：认知的 postcondition——谁对哪条命题持什么模式。每项 {{"who","how","what","basis"}}：
+   - who：人物 slug 或 reader／public；
+   - how：learns(确凿得知)/suspects(起疑)/confirms(证实怀疑)/hears_claim(听到说法
+     未知真假)/believes(以为为真，不代表世界为真)/asserts(公开主张)；
+   - what：命题本身（主谓宾完整的陈述句）。同一命题再次出现时**逐字重写同一句**——
+     compiler 按文本归并句柄，改写一字即另一条命题。与前面章节相关的命题，不要猜
+     它们在别章的措辞——按本章视角写清本章可证的内容，跨章同一性由关联节点建立；
    - 只收会约束后续行为、误解、隐瞒或揭示的信息不对称；普通在场见闻、例行告知、
-     event 已说清的事实不建；
-   - 公开的表态、改口、说辞属于 event，不得据此推导当事人内心偏好或决定已变，
+     ev 已说清的事实不建；
+   - 公开的表态、改口、说辞属于 ev，不得据此推导当事人内心偏好或决定已变，
      除非文本明确写出内心变化。
 4. loops：悬念的 postcondition——独立数组，每项 {{"ref","op","question"/"resolution"}}：
    - open：新建悬念线，必填 question（问题文本只出现在 open 处，之后不可改写）；
@@ -505,24 +508,18 @@ CHAPTER_PROMPT = """任务：把第 {ch} 章正文拆成有序 beats。每一拍
      问题文本不必知道）——跨章开合配对由后续关联节点建立，你不输出任何正式编号；
    - 同一句柄只能 open 一次；不同次的藏身、不同的约定是不同的悬念线，不得并成一条；
    - 无 postcondition 的拍 loops 给空数组。
-5. 命题与悬念的句柄纪律：句柄（ref）是本章内的可读本地标签；同一句柄的 statement／
-   question 文本只建立一次，冲突即拒。与前面章节相关的命题、悬念，不要猜它们在别章
-   的编号或原文措辞——按本章视角新建本地句柄并写清本章可证的内容；跨章同一性
-   （同一命题、悬念开合配对）由关联节点只选已给句柄建立。
-6. 连续性契约：会改变后续人物选择、关系、位置、目标、知情或未决问题的内容，必须同时
-   进入 effects／cognition／loops——只留在 event 里，该拍就不完整。三类转移全空的拍
+5. 连续性契约：会改变后续人物选择、关系、位置、目标、知情或未决问题的内容，必须同时
+   进入 state／know／loops——只留在 ev 里，该拍就不完整。三类转移全空的拍
    合法，但请节制；这类拍的比例会被按章报出，供离线核读。
-7. 前文与正文的关系：上方前文原文是只读参考——本拍事实以本章正文原文为准，不得为迁就
+6. 前文与正文的关系：上方前文原文是只读参考——本拍事实以本章正文原文为准，不得为迁就
    前文改写施事、受事或动作主体；前文与正文不一致时，按正文记录。
-8. 逐字证据与时态（R10a a1）：effects 与 cognition 的每条转移必须带 basis：
+7. 逐字证据与时态（R10a a1）：state 与 know 的每条转移必须带 basis：
    [{{"segment":"证据段id","quote":"原句逐字引文"}}]（至少 1 条）。segment 必须取自本拍
-   source_refs；quote 逐字摘自该句段原文，不转写、不缩写。认识限定（觉得像是／以为／
-   听说）只进 cognition 的 mode（suspects／believes／hears_claim），命题 statement 写
-   命题本身；引文保留原限定。effects 另有必填 modality：actual＝已发生；planned＝已定
-   计划；expected＝预计／约；conditional＝条件性执行——「约半个月便回」是 expected，
-   不是 actual。
+   src；quote 逐字摘自该句段原文，不转写、不缩写。认识限定（觉得像是／以为／
+   听说）只进 know 的 how（suspects／believes／hears_claim），what 写
+   命题本身；引文保留原限定。
 
-输出 JSON 顶层：{{"protocol_version":"stage2-chapters-v2","beats":[...]}}
+输出 JSON 顶层：{{"protocol_version":"stage2-chapters-v3","beats":[...]}}
 不要把财富、位置等不同维度塞入同一个 key。"""
 
 #: 七类保存类别与 `contracts/schema/policy.py::PreserveKind` 同源（B2）：定义只在

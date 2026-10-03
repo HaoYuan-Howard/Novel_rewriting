@@ -924,6 +924,8 @@ def test_stage2_owner_shims_cannot_return():
     起不消费，反例已迁到五 owner 引擎；模块面随之收窄。
     ⚠ R9b（2026-09-30）：`expression.py` 是 book 表达观察的确定性 compiler，
     不新增语义 owner；五节点边界及退役模块禁入保持不变。
+    ⚠ CS-2（2026-10-03）：`slim.py` 是章观察瘦 wire（stage2-chapters-v3）的
+    确定性适配层（expand/slim，S-03 集中登记），不新增语义 owner。
     """
     import importlib.util
     from pathlib import Path
@@ -936,9 +938,10 @@ def test_stage2_owner_shims_cannot_return():
         f'（book／chapters／names／associate／compile）应落位')
     present = sorted(p.stem for p in root.glob('*.py'))
     assert present == ['__init__', 'associate', 'book', 'chapters', 'compile',
-                       'expression', 'names', 'resolver'], (
+                       'expression', 'names', 'resolver', 'slim'], (
         f'novel/stages/stage2/ 的模块面变了：{present}；'
-        f'现役只许 __init__／associate／book／chapters／compile／expression／names／resolver'
+        f'现役只许 __init__／associate／book／chapters／compile／expression／'
+        f'names／resolver／slim'
         '（旧联合抽取 source.py 已随 S-05 删除）')
     banned = [
         'plot_checks', 'plot_compile', 'plot_continuity', 'plot_diagnostics',

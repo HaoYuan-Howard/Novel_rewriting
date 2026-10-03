@@ -110,6 +110,15 @@ book 观察 `stage2-book-v3`、chapters 独立 `stage2-chapters-v2`（names 保�
 Preserve `stage4-preserve-v2`＋policy 5、Design `stage4-design-v5`；bind／
 hook-design 字面不变。写作层 renderer／写手协议 v6 不在本批（R10b 升 v7）。
 
+**章观察瘦 wire（CS-2 第一步，2026-10-03）**：`str06.stage2.chapters` 的
+LLM 输出面升 `stage2-chapters-v3`（`contracts/schema/observation.py` 瘦模型：
+`at` 地址串、默认值只写例外、src 连续区间、命题句柄按文本归并由代码派发），
+经 `novel/stages/stage2/slim.py::expand_chapter_wire` 确定性派生回
+`stage2-chapters-v2`（rc12）形状后进既有管道——canonical、盘面与全部下游
+消费者不变（S-03 适配集中在 slim 模块；v2 wire 直通＝盘面与领养读面）。
+r10b 实证：wire 体积降至 56%，`expand(slim(现产物)) == 现产物` 11/11 章
+（模本地句柄重命名）；basis 逐字证据、闭集闸、D2 引文归一判据不放宽。
+
 关键语义交接的契约面（判据见 BACKEND_CONTRACT R-2.18/19、R-5.15～R-5.20）：
 
 - **证据（a1）**：Stage2 basis 是 `EvidenceQuote{segment, quote}`——quote 逐字

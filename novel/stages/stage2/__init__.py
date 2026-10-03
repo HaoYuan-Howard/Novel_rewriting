@@ -20,7 +20,8 @@
 from __future__ import annotations
 
 from contracts.schema.observation import (
-    STAGE2_ASSOCIATE_PROTOCOL, STAGE2_OBSERVATION_PROTOCOL, AssociateObservation,
+    STAGE2_ASSOCIATE_PROTOCOL, STAGE2_CHAPTERS_WIRE_PROTOCOL,
+    STAGE2_OBSERVATION_PROTOCOL, AssociateObservation,
     BookObservation, ChapterObservation, NamesObservation,
 )
 from novel.stages.stage2.associate import (
@@ -48,14 +49,17 @@ from novel.stages.stage2.names import (
 from novel.stages.stage2.resolver import (
     AnchorHit, EvidenceResolver, ResolverIssue,
 )
+from novel.stages.stage2.slim import expand_chapter_wire, slim_chapter_wire
 
 __all__ = [
     'AnchorHit', 'AssociationSpace', 'AssociateObservation', 'BeatHandle',
     'BookObservation', 'ChapterObservation', 'CompileOutcome',
     'CONFIRMING_MODES', 'EvidenceResolver', 'FoldResult', 'LoopHandle',
     'NamesObservation', 'ProbeFinding', 'PropositionHandle', 'ResolverIssue',
-    'STAGE2_ASSOCIATE_PROTOCOL', 'STAGE2_OBSERVATION_PROTOCOL', 'SceneHandle',
-    'StateHandle', 'first_appearance_anchors', 'first_appearance_issues',
+    'STAGE2_ASSOCIATE_PROTOCOL', 'STAGE2_CHAPTERS_WIRE_PROTOCOL',
+    'STAGE2_OBSERVATION_PROTOCOL', 'SceneHandle',
+    'StateHandle', 'expand_chapter_wire', 'first_appearance_anchors',
+    'first_appearance_issues', 'slim_chapter_wire',
     'associate_observation_prompt', 'book_state_handle',
     'chapter_observation_prompt', 'chapter_prior_text',
     'chapter_state_handle', 'character_core_view',
