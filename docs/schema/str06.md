@@ -831,7 +831,7 @@ Preserve 同时收到正式归一文本、原句及名称同一性依据，不�
 
 ### 语义输入投影（CS-I）
 
-- 名称观察输入`stage2-names-input-v1`只发送一次完整evidence与书级观察，不再重复拼全文。
+- 名称观察输入`stage2-names-input-v2`只发送一次完整evidence与书级观察，不再重复拼全文；evidence 是按阅读序排列的 `{segment,chapter,text}` 数组（v1 以段号为键，请求 JSON 键排序会把一章第 100 段排到第 11 段之前，RC-26 追加）。
   原文引用、Hook和所有章证据完整保留。
 - Preserve输入`stage4-preserve-input-v2`补齐转移op／scope／known_by、认知命题引用、
   悬念操作／问题／解决、时序模式、场景边界和因果边。相同拍内相同证据段与逐字quote合并展示，

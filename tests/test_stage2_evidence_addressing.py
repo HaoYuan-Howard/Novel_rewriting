@@ -87,6 +87,34 @@ def test_rc26_requests_render_one_segment_per_line():
         assert len(labelled) == len(segments)
 
 
+def test_rc26_names_input_keeps_reading_order_past_99_paragraphs(tmp_path):
+    """names 的结构化输入按阅读序列证据：段号只补齐两位，一章超过 99 段时
+    `e03_100` 在键排序下会排到 `e03_11` 前面——经真实 run_names 入口验证顺序。"""
+    from novel.store import Str06Repository
+    from tests.str06_facilities import make_context
+    from tests.test_str06_stage2_publish import (
+        CHAPTERS, HOOK, _AcceptingAsk, _full_stage2_wires,
+    )
+    from novel.llm.ledger import CostLedger
+    chapters = deepcopy(CHAPTERS)
+    chapters[2]['text'] += '\n' + '\n'.join(f'第{i}段。' for i in range(3, 102))
+    evidence = build_evidence(chapters, HOOK)
+    assert 'e03_101' in evidence
+    repo = Str06Repository(tmp_path / 'run')
+    repo.attach_context(make_context(tmp_path / 'run', ledger=CostLedger(path=None)))
+    ask = _AcceptingAsk(_full_stage2_wires())
+    run_workflow(repository=repo, chapters=chapters, hook_copy=HOOK, ask=ask,
+                 ask_text=lambda *a: pytest.fail('不买正文'),
+                 ask_body=lambda *a: pytest.fail('不买正文'), budget=800,
+                 through='stage2', node_filter=('str06.stage2.book', 'str06.stage2.chapters',
+                                                'str06.stage2.names'))
+    names_input = json.loads(ask.prompts['names'].split('输入：\n', 1)[1])
+    listed = [item['segment'] for item in names_input['evidence']]
+    assert listed == list(evidence)
+    assert [item['text'] for item in names_input['evidence']] == [
+        v['text'] for v in evidence.values()]
+
+
 def test_rc26_multiline_segment_stops_before_request():
     from novel.stages.stage2.resolver import render_evidence_block
     assert render_evidence_block({'e01_01': {'chapter': 1, 'text': '甲。'}}) == '[e01_01] 甲。'

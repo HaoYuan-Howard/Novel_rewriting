@@ -49,9 +49,10 @@ def test_proved_variant_reaches_canonical_and_preserve_without_changing_quotes(t
     repo = _run(tmp_path, chapters, wires, ask)
     import json
     names_input = json.loads(ask.prompts['names'].split('输入：\n', 1)[1])
-    assert names_input['input_version'] == 'stage2-names-input-v1'
+    from novel.stages.stage2 import NAMES_INPUT_VERSION, names_evidence_view
+    assert names_input['input_version'] == NAMES_INPUT_VERSION == 'stage2-names-input-v2'
     assert 'text' not in names_input
-    assert names_input['evidence'] == build_evidence(chapters, HOOK)
+    assert names_input['evidence'] == names_evidence_view(build_evidence(chapters, HOOK))
     observation = repo.read_model('stage2/observations/ch02.json')
     blueprint = repo.read_model('stage2/blueprints/chapter_blueprints.json')
     chars = repo.read_model('stage2/characters/characters.json')

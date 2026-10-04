@@ -88,8 +88,8 @@ from novel.stages.stage2 import (
     compile_associate_observation,
     compile_book_observation, compile_chapter_observation, compile_name_structure,
     compile_source_truth, associate_observation_prompt, project_association_space,
-    first_appearance_anchors, first_appearance_issues,
-    normalize_name_observations, validate_name_resolutions,
+    first_appearance_anchors, first_appearance_issues, NAMES_INPUT_VERSION,
+    names_evidence_view, normalize_name_observations, validate_name_resolutions,
 )
 from novel.stages.owner_revision import (
     MechanicalDefectStop, OwnerRevisionRequired, OwnerRevisionStop,
@@ -434,8 +434,8 @@ def run_names(ctx: ChainContext) -> dict:
     if ctx.hook_copy.strip():
         full = f'〔章前文字〕\n{ctx.hook_copy}\n\n' + full
     names_prompt = pack_prompt(
-        NAMES_RULES, input_version='stage2-names-input-v1',
-        characters=core.model_dump(mode='json'), evidence=evidence)
+        NAMES_RULES, input_version=NAMES_INPUT_VERSION,
+        characters=core.model_dump(mode='json'), evidence=names_evidence_view(evidence))
     names_wire, names_ref = ctx.ask(
         'names', names_prompt, lambda w: compile_name_structure(w, core, full, evidence=evidence)[1])
     structure, errors = compile_name_structure(names_wire, core, full, evidence=evidence)

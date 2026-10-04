@@ -27,6 +27,28 @@ _FAMILY_KEYS = frozenset({'literal', 'forms'})
 _FAMILY_OPTIONAL = frozenset({'family_id'})
 
 
+#: names 请求的输入版本（进请求身份）。v2（2026-10-04，RC-26 追加）：证据从以段号
+#: 为键的对象改为按阅读序排列的数组——请求 JSON 按键排序，段号只补齐两位，一章
+#: 超过 99 段时 `e03_100` 会排到 `e03_11` 之前，模型看到的原文顺序被打乱。
+NAMES_INPUT_VERSION = 'stage2-names-input-v2'
+
+
+def names_evidence_view(evidence) -> list[dict[str, Any]]:
+    """证据闭集 → names 输入的阅读序数组（纯投影，S2-4；不改输入）。
+
+    每项 ``{segment, chapter, text[, pre_chapter]}``：数组保序不受键排序影响；
+    项内键名与 basis 的 ``segment`` 同名，模型照抄所选段号即可。
+    """
+    view: list[dict[str, Any]] = []
+    for ref, segment in evidence.items():
+        item: dict[str, Any] = {'segment': ref, 'chapter': segment['chapter'],
+                                'text': segment['text']}
+        if segment.get('pre_chapter'):
+            item['pre_chapter'] = True
+        view.append(item)
+    return view
+
+
 class ProbeFinding(NamedTuple):
     """一条未登记构词探针发现：只报告。"""
 
