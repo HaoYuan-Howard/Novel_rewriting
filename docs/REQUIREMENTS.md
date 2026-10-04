@@ -30,7 +30,9 @@
 整份／patch接受循环及跨owner指纹识别问题2→1→0。源观察、正式schema和API形状不变，
 章观察prompt同步顺序要求，旧重复close误派更正仍保持专用证明边界。
 新增8项反例先红；修复后含新增反例、Stage2发布/接受、修订恢复及§9.5五文件的
-601项定向通过（见下方留证）。这是局部工程修复，不重新宣称默认全仓回归或成书验收。
+601项定向通过（见下方留证）。用户随后授权提交、合入main并push，按根指南合入门槛
+补跑最终代码集合的默认非corpus回归：3709通过，前端120项测试及typecheck/seams/build通过。
+这是工程合入验证，未运行golden set或真实付费成书验收。
 
 | 顺序／批次 | 状态 | 完成条件与下一动作 |
 |---|---|---|
@@ -208,3 +210,12 @@ body／hook attempts由ContentRevision＋ProviderAttempt取代。旧admission平
   同拍／跨拍倒序、合法跨章close、整份／patch的部分修复与免费重放、两个发现入口的
   章owner修订和无关章采用、正式回派账的指纹与累计轮数、compile发布和重启读回均已覆盖。
   全程fake transport、零真实付费；本轮未运行golden set或默认全仓回归。
+- 合入main前最终验证（修复提交`f538a480`）：
+  `.test_cache/role-boundaries-main-regression.xml`，默认非corpus回归
+  `-n 4 --dist loadgroup -m "not corpus" --basetemp=E:/_tr -o cache_dir=.test_cache`，
+  3709通过、0失败、0跳过，820.24秒。相对本地main的待合入范围含此前分支提交，
+  因此按最终代码集合验收，不把局部601项定向通过代替合入闸门。
+  前端`npm run test`为25文件／120用例通过；`npm run typecheck`、`npm run seams`、
+  `npm run build`均通过。seams核对100文件、7份冻结mock，构建147模块。
+  前端共享node_modules的Vite临时目录在沙箱内曾报EPERM，已在沙箱外按正式命令通过。
+  全程fake transport、零真实LLM调用；这些工程证据不代签golden set成书质量。
