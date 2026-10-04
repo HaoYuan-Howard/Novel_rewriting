@@ -31,8 +31,8 @@ from typing import Mapping
 from urllib.parse import urlsplit
 
 from contracts.invariants import (
-    BLUEPRINT_ARCHITECTURE, BLUEPRINT_ARCHITECTURES, PIPELINE_PARALLEL_NODES,
-    PIPELINE_DEFAULT_CONCURRENCY, PIPELINE_CONCURRENCY_TRIALS,
+    BLUEPRINT_ARCHITECTURE, BLUEPRINT_ARCHITECTURES,
+    PIPELINE_DEFAULT_CONCURRENCY,
 )
 from contracts.schema.orchestration import PipelineConcurrency
 
@@ -108,8 +108,9 @@ DEFAULT_MAX_RETRIES = 3
 #: 退避基数（秒），指数退避 `base * 2**n`。⚠ 同上，拍的。
 DEFAULT_BACKOFF_BASE = 2.0
 
-#: 逐章 LLM 并发闸。2026-08-13 用户裁决：初始抽取与写作都按章并发，硬上限 32。
-#: 默认四并发；上限只保留给显式 legacy 配置，Agent 逐节点对照另受 8 的上限。
+#: 环境变量 ``NOVEL_CONCURRENCY`` 的硬上限（2026-08-13 用户裁决）。
+#: 可并发节点、整书总槽和供应商总槽的用户配置走 ``PipelineConcurrency``，
+#: 上限是 ``PIPELINE_TOTAL_CONCURRENCY_MAX``，不经过这个环境变量。
 MAX_CONCURRENCY = 32
 DEFAULT_CONCURRENCY = PIPELINE_DEFAULT_CONCURRENCY
 
@@ -159,11 +160,10 @@ class Config:
     stage2_blueprint_contract: str = DEFAULT_STAGE2_BLUEPRINT_CONTRACT
 
     def concurrency_for(self, node: str) -> int:
-        """只覆盖目标节点；对照实验不能顺带提升其他阶段。"""
+        """可并发节点用本次冻结的覆盖；没覆盖的节点保持运行默认，不跟着别的节点抬高。"""
         if node in self.concurrency_policy.node_overrides:
             return self.concurrency_policy.node_overrides[node]
-        return (min(self.concurrency, max(PIPELINE_CONCURRENCY_TRIALS))
-                if node in PIPELINE_PARALLEL_NODES else self.concurrency)
+        return self.concurrency
 
     def __post_init__(self) -> None:
         """取值面的闸。**放这里不放 `load_config`**，于是手搭一个 `Config` 也拦得住。

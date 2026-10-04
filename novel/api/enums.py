@@ -256,7 +256,7 @@ _WITHHELD: dict[str, str] = {
     'PIPELINE_PROVIDER_CONCURRENCY': '供应商总槽默认由 Agent capability 发布',
     'PIPELINE_TOTAL_CONCURRENCY_MIN': '总槽配置范围由 Agent capability 发布',
     'PIPELINE_TOTAL_CONCURRENCY_MAX': '总槽配置范围由 Agent capability 发布',
-    'PIPELINE_CONCURRENCY_TRIALS': '并发实验档位由 Agent capability 发布',
+    'PIPELINE_CONCURRENCY_TRIALS': '历史档位元组；现役节点与总槽并发取 capability 发布的整数区间',
     'PIPELINE_PARALLEL_NODES': '并发覆盖节点由 Agent capability 发布',
     'LLM_MAX_OUTPUT_TOKENS': '全部付费节点的统一输出上限（D6）；截断即停由后端执行，'
                              '前端不据此改判或重试',

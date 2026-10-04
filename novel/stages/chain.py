@@ -45,7 +45,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
-from typing import Any, Callable, Final, NamedTuple
+from typing import Any, Callable, Final, Mapping, NamedTuple
 
 from contracts.artifacts import (
     STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT, str06_chapter_observation_rel,
@@ -53,7 +53,8 @@ from contracts.artifacts import (
 from contracts.invariants import (
     BOOK_CONTENT_CALL_CEILING_DEFAULT,
     LLM_MAX_OUTPUT_TOKENS, PIPELINE_BOOK_CONCURRENCY,
-    PIPELINE_DEFAULT_CONCURRENCY, PIPELINE_PROVIDER_CONCURRENCY,
+    PIPELINE_DEFAULT_CONCURRENCY, PIPELINE_PARALLEL_NODES,
+    PIPELINE_PROVIDER_CONCURRENCY,
 )
 from contracts.schema.grounding import OutputConstraints, PreserveCheckpoint
 from contracts.schema.hook import HookConstraints, HookReceipt
@@ -195,10 +196,20 @@ class ChainContext:
     #: llm 设施（`novel/stages/common.py` 与各 stageN 包的纪律对本模块放宽：
     #: 它是装配体，但引擎段仍不得反向依赖这里）。
     digest: Callable[[object], str] | None = None
-    #: 逐章并发度（R4 起 stage2 章观察与 stage5 正文共用同一冻结值；run 启动时
-    #: 经 `novel/config.py::concurrency_for` 读出，默认 `PIPELINE_DEFAULT_CONCURRENCY`）。
-    #: 并发度不进语义身份（`R-12.1c`）。
+    #: 没单独配置的可并发节点使用这个回落值。正式执行里它是运行默认，
+    #: 各节点自己的数在 ``node_concurrency``。并发度不进语义身份（`R-12.1c`）。
     concurrency: int = PIPELINE_DEFAULT_CONCURRENCY
+    #: 书级与供应商总槽容量。默认是产品常量；正式执行传入本次冻结的
+    #: ``PipelineConcurrency``，与付费客户端占同一组槽，避免内外层容量不一致。
+    slot_per_book: int = PIPELINE_BOOK_CONCURRENCY
+    slot_per_provider: int = PIPELINE_PROVIDER_CONCURRENCY
+    #: 可并发节点各自的冻结并发。缺键时回落到 ``concurrency``。
+    node_concurrency: dict[str, int] = field(default_factory=dict)
+
+    def pool_workers(self, node: str, item_count: int) -> int:
+        """该节点本次最多同时处理多少项；不超过待处理项数。"""
+        configured = self.node_concurrency.get(node, self.concurrency)
+        return max(1, min(configured, item_count))
 
 
 def _segment_sentences(text: str) -> list[str]:
@@ -343,8 +354,8 @@ def run_chapters(ctx: ChainContext) -> dict:
         # 书级与供应商总槽（`novel/model_slots.py`）：等待期取消或配置拒绝
         # 都表示尚未开始供应商调用；槽位等待不进请求身份（`R-12.1c`）。
         with pipeline_model_slot(repository.root, ctx.provider,
-                                 per_book=PIPELINE_BOOK_CONCURRENCY,
-                                 per_provider=PIPELINE_PROVIDER_CONCURRENCY):
+                                 per_book=ctx.slot_per_book,
+                                 per_provider=ctx.slot_per_provider):
             chapter_evidence = _chapter_evidence(evidence, no)
             prompt = revision_prompt_for_owner(
                 repository, f'ch{no:02d}',
@@ -377,7 +388,7 @@ def run_chapters(ctx: ChainContext) -> dict:
                              owners=(f'ch{no:02d}',), refs=(ch_ref,))
 
     ordinals = [chapter['chapter_ordinal'] for chapter in ctx.chapters]
-    workers = max(1, min(ctx.concurrency, len(ordinals)))
+    workers = ctx.pool_workers('str06.stage2.chapters', len(ordinals))
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {pool.submit(_one, no): no for no in ordinals}
         for future in as_completed(futures):
@@ -1307,8 +1318,8 @@ def run_body(ctx: ChainContext) -> dict:
     Design、Characters 或其他章 IR。目标章集合由 `resolve_body_chapters`
     机械确定（W1/D2：`None`＝全书；非空 tuple＝恰好这些章，`()`／乱序／
     重复／越界在任何付费调用之前拒绝）。待补集合按有效提交集合在目标集合
-    内计算（只补缺章）；待补章经 `novel/model_slots.py` 的书级＋供应商总槽
-    并发执行（默认 `PIPELINE_DEFAULT_CONCURRENCY`，并发度不进语义身份）。
+    内计算（只补缺章）；    待补章经 `novel/model_slots.py` 的书级＋供应商总槽
+    并发执行（线程数取本节点冻结并发，并发度不进语义身份）。
     单章失败不污染其他章的合法结果（I-31）：全部待补章收敛后按第一章序的
     原始失败上抛，失败清单留证 `runtime/body_failures.json`（「最近一次
     完成执行」语义，D3/W2：正常完成写空清单，缺失＝本节点没有完成执行）；
@@ -1328,14 +1339,14 @@ def run_body(ctx: ChainContext) -> dict:
     packets = {ordinal: project_chapter_packet(writer_ir, ordinal) for ordinal in todo}
     failures: dict[int, BaseException] = {}
     if todo:
-        workers = max(1, min(ctx.concurrency, len(todo)))
+        workers = ctx.pool_workers('str06.stage5.body', len(todo))
 
         def _one(ordinal: int):
             # 书级与供应商总槽（`novel/model_slots.py`）：等待期取消或配置拒绝
             # 都表示尚未开始供应商调用；槽位等待不进请求身份（`R-12.1c`）。
             with pipeline_model_slot(repository.root, ctx.provider,
-                                     per_book=PIPELINE_BOOK_CONCURRENCY,
-                                     per_provider=PIPELINE_PROVIDER_CONCURRENCY):
+                                     per_book=ctx.slot_per_book,
+                                     per_provider=ctx.slot_per_provider):
                 return _write_and_commit_chapter(ctx, packets[ordinal], ordinal)
 
         with ThreadPoolExecutor(max_workers=workers) as pool:
@@ -1838,13 +1849,17 @@ def run_workflow(*, repository, chapters, ask, ask_text, ask_body, budget=11000,
                  book_title='', hook_constraints=None, length_band=(0.6, 1.3),
                  body_chapters=None, node_filter=None, hook_copy='',
                  concurrency: int = PIPELINE_DEFAULT_CONCURRENCY,
+                 node_concurrency: Mapping[str, int] | None = None,
+                 slot_per_book: int = PIPELINE_BOOK_CONCURRENCY,
+                 slot_per_provider: int = PIPELINE_PROVIDER_CONCURRENCY,
                  body_replay=lambda _ordinal, _packet: False,
                  after_node_commit=lambda _node: None):
     """记录显式执行状态；失败保留旧产物供恢复，但不能仍宣称上次绿灯有效。
 
     流程编排已归 owner runner（本模块上半）：本函数只装配 ChainContext、驱动
-    节点计划并落 run 级状态（F7b 薄驱动）。`concurrency` 是正文逐章并发度
-    （run 启动时冻结；并发度不进语义身份，`R-12.1c`）。`body_chapters` 是
+    节点计划并落 run 级状态（F7b 薄驱动）。`node_concurrency` 按可并发节点
+    分别冻结线程数；缺键时用 `concurrency`。并发度不进语义身份（`R-12.1c`）。
+    `body_chapters` 是
     调用层选章（W1/D2）：只作调用元数据记入 `runtime/workflow_status.json`
     的独立字段供审计，**不进** `input_sha256` 身份摘要、请求身份、回执或
     provenance——从 canary 续跑到全书不改变任何已提交章的采用与恢复身份。
@@ -1857,7 +1872,9 @@ def run_workflow(*, repository, chapters, ask, ask_text, ask_body, budget=11000,
         hook_constraints=hook_constraints, length_band=length_band,
         body_chapters=body_chapters, provider=provider, model=model,
         body_replay=body_replay, after_node_commit=after_node_commit,
-        digest=digest, concurrency=concurrency)
+        digest=digest, concurrency=concurrency,
+        node_concurrency=dict(node_concurrency or {}),
+        slot_per_book=slot_per_book, slot_per_provider=slot_per_provider)
     status_rel = 'runtime/workflow_status.json'
     identity = digest({'chapters': chapters, 'hook_copy': hook_copy, 'budget': budget,
                        'through': through, 'band': length_band})
@@ -1911,6 +1928,21 @@ def load_dev_source(payload: object) -> tuple[list[dict], str]:
     if not isinstance(chapters, list) or not chapters:
         raise ValueError('源 JSON 的 chapters 必须是非空章数组')
     return chapters, payload['hook_copy'] or ''
+
+
+def frozen_concurrency(cfg: Config) -> dict[str, Any]:
+    """把本次冻结的节点并发和两级总槽交给 ``run_workflow``。
+
+    可并发节点各自取值。没写覆盖的节点保持 ``Config.concurrency``，
+    不跟随另一个节点的覆盖。
+    """
+    return {
+        'concurrency': cfg.concurrency,
+        'node_concurrency': {
+            node: cfg.concurrency_for(node) for node in PIPELINE_PARALLEL_NODES},
+        'slot_per_book': cfg.concurrency_policy.per_book,
+        'slot_per_provider': cfg.concurrency_policy.per_provider,
+    }
 
 
 def execute(args) -> None:
@@ -2304,5 +2336,5 @@ def execute(args) -> None:
                                                          hard_max_chars=args.hook_hard_max),
                        length_band=(args.body_band_low, args.body_band_high),
                        body_chapters=args.body_chapters,
-                       concurrency=cfg.concurrency_for('str06.stage5.body'),
+                       **frozen_concurrency(cfg),
                        body_replay=body_replay, after_node_commit=after_node_commit))

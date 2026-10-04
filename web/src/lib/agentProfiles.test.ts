@@ -35,6 +35,8 @@ describe('agent profile draft/materialize', () => {
     expect(materializePipelineAgentProfiles(agentCapabilities(), draft).profiles).toBeNull()
     draft.concurrency!.per_book = 6
     draft.concurrency!.node_overrides['node.dynamic-a'] = 7
+    expect(materializePipelineAgentProfiles(agentCapabilities(), draft).profiles?.concurrency?.node_overrides['node.dynamic-a']).toBe(7)
+    draft.concurrency!.node_overrides['node.dynamic-a'] = 33
     expect(materializePipelineAgentProfiles(agentCapabilities(), draft).profiles).toBeNull()
   })
 

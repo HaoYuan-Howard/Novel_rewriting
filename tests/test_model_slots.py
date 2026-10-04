@@ -9,6 +9,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
+from contracts.invariants import PIPELINE_TOTAL_CONCURRENCY_MAX
+from contracts.schema.orchestration import PipelineConcurrency
 from novel.model_slots import (
     MODEL_SLOT_CAPACITY_ENV, MODEL_SLOT_DIR_ENV,
     model_slot_from_environment, prepare_model_slot_gate,
@@ -26,8 +28,17 @@ def test_partial_or_invalid_slot_environment_closes_instead_of_falling_back(
     with pytest.raises(RuntimeError, match='同时给出'):
         with model_slot_from_environment({MODEL_SLOT_DIR_ENV: str(tmp_path)}):
             pass
-    with pytest.raises(ValueError, match=r'1\.\.32'):
+    with pytest.raises(ValueError, match=rf'1\.\.{PIPELINE_TOTAL_CONCURRENCY_MAX}'):
         prepare_model_slot_gate(tmp_path / 'bad', capacity=0)
+
+
+def test_slot_ceiling_accepts_book_32_and_provider_200(tmp_path) -> None:
+    PipelineConcurrency(per_book=32, per_provider=200)
+    prepare_model_slot_gate(tmp_path / 'wide', capacity=PIPELINE_TOTAL_CONCURRENCY_MAX)
+    with pytest.raises(ValueError):
+        PipelineConcurrency(per_book=32, per_provider=PIPELINE_TOTAL_CONCURRENCY_MAX + 1)
+    with pytest.raises(ValueError, match=rf'1\.\.{PIPELINE_TOTAL_CONCURRENCY_MAX}'):
+        prepare_model_slot_gate(tmp_path / 'over', capacity=PIPELINE_TOTAL_CONCURRENCY_MAX + 1)
 
 
 def test_one_shared_slot_serializes_two_callers_and_returns_after_release(

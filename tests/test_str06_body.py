@@ -610,8 +610,8 @@ def _ledger_rows(repo, purpose: str) -> list[dict]:
             if line.strip() and _json.loads(line).get('purpose') == purpose]
 
 
-def _run(repo, session, *, budget=2000, concurrency=4, node_filter=None, hook_max=360,
-         body_chapters=None, through='stage7'):
+def _run(repo, session, *, budget=2000, concurrency=4, node_concurrency=None,
+         node_filter=None, hook_max=360, body_chapters=None, through='stage7'):
     return run_workflow(repository=repo, chapters=_chapters(),
                         ask=_fake_ask(session), ask_text=_fake_text(session),
                         ask_body=_fake_body(session),
@@ -619,6 +619,7 @@ def _run(repo, session, *, budget=2000, concurrency=4, node_filter=None, hook_ma
                         hook_constraints=HookConstraints(target_chars=10,
                                                          hard_max_chars=hook_max),
                         length_band=(0.01, 0.05), concurrency=concurrency,
+                        node_concurrency=node_concurrency,
                         node_filter=node_filter, body_chapters=body_chapters)
 
 
@@ -784,6 +785,25 @@ def test_body_chapters_does_not_enter_request_or_receipt_identity(tmp_path):
     whole_status = whole_repo.read('runtime/workflow_status.json')
     assert whole_status['body_chapters'] is None
     assert canary_status['input_sha256'] == whole_status['input_sha256']
+
+
+def test_body_pool_uses_its_own_concurrency(tmp_path, monkeypatch):
+    """正文线程数跟 body 覆盖走；章观察仍用回落值。"""
+    from concurrent.futures import ThreadPoolExecutor
+
+    sizes: list[int | None] = []
+
+    class Recording(ThreadPoolExecutor):
+        def __init__(self, max_workers=None, *args, **kwargs):
+            sizes.append(max_workers)
+            super().__init__(max_workers=max_workers, *args, **kwargs)
+
+    monkeypatch.setattr('novel.stages.chain.ThreadPoolExecutor', Recording)
+    wires = _full_chain_wires()
+    repo, session, _transport = _make_session(tmp_path, wires)
+    _run(repo, session, concurrency=1,
+         node_concurrency={'str06.stage5.body': 2})
+    assert sizes == [1, 2]
 
 
 def test_concurrency_level_does_not_enter_semantic_identity(tmp_path):

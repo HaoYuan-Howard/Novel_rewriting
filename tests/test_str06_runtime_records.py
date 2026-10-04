@@ -676,7 +676,34 @@ def test_parallel_registry_registers_new_chain_chapter_node_only():
     for legacy in ('stage2.blueprint', 'stage4.design', 'stage4.plan', 'stage5.write'):
         assert legacy not in PIPELINE_PARALLEL_NODES, '退役旧链键已删除'
     from contracts.schema.orchestration import PipelineConcurrency
-    overrides = PipelineConcurrency(node_overrides={'str06.stage5.body': 4})
-    assert overrides.node_overrides == {'str06.stage5.body': 4}
+    overrides = PipelineConcurrency(node_overrides={'str06.stage5.body': 32})
+    assert overrides.node_overrides == {'str06.stage5.body': 32}
     with pytest.raises(ValueError, match='逐章节点'):
         PipelineConcurrency(node_overrides={'stage4.design': 4})
+    with pytest.raises(ValueError, match='节点并发必须是'):
+        PipelineConcurrency(node_overrides={'str06.stage5.body': 201})
+    with pytest.raises(ValueError, match='节点并发必须是'):
+        PipelineConcurrency(node_overrides={'str06.stage2.chapters': 0})
+
+
+def test_frozen_concurrency_keeps_each_parallel_node():
+    """章观察和正文各取自己的整数；没写覆盖的节点保持运行默认。"""
+    from contracts.schema.orchestration import PipelineConcurrency
+    from novel.config import Config
+    from novel.stages.chain import frozen_concurrency
+
+    cfg = Config(concurrency=4, concurrency_policy=PipelineConcurrency(
+        node_overrides={'str06.stage2.chapters': 11},
+        per_book=32, per_provider=200))
+    assert cfg.concurrency_for('str06.stage2.chapters') == 11
+    assert cfg.concurrency_for('str06.stage5.body') == 4
+    frozen = frozen_concurrency(cfg)
+    assert frozen == {
+        'concurrency': 4,
+        'node_concurrency': {
+            'str06.stage2.chapters': 11,
+            'str06.stage5.body': 4,
+        },
+        'slot_per_book': 32,
+        'slot_per_provider': 200,
+    }

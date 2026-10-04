@@ -320,7 +320,7 @@ def _make_repo(tmp_path, name: str) -> Str06Repository:
     return repo
 
 
-def _run_stage2(tmp_path, name: str, wires: dict[str, dict], node_filter):
+def _run_stage2(tmp_path, name: str, wires: dict[str, dict], node_filter, **workflow):
     repo = _make_repo(tmp_path, name)
     ask = _AcceptingAsk(wires)
     report = run_workflow(
@@ -329,7 +329,7 @@ def _run_stage2(tmp_path, name: str, wires: dict[str, dict], node_filter):
             AssertionError('stage2 观察腿不调用文本 owner')),
         ask_body=lambda owner, prompt: (_ for _ in ()).throw(
             AssertionError('stage2 观察腿不调用正文 owner')),
-        budget=800, through='stage2', node_filter=list(node_filter))
+        budget=800, through='stage2', node_filter=list(node_filter), **workflow)
     return repo, ask, report
 
 
@@ -422,6 +422,42 @@ def test_chapter_observations_share_body_slot_and_pool_concurrency(
     assert {c['per_book'] for c in slot_calls} == {PIPELINE_BOOK_CONCURRENCY}
     assert {c['per_provider'] for c in slot_calls} == {PIPELINE_PROVIDER_CONCURRENCY}
     assert {c['provider'] for c in slot_calls} == {'manual-adoption'}
+
+
+def test_frozen_book_and_provider_slots_reach_chapter_calls(tmp_path, monkeypatch):
+    """冻结的整书／供应商总槽必须进章观察占槽，不能仍用产品默认 4／8。"""
+    recorded: list[tuple[int, int]] = []
+
+    @contextlib.contextmanager
+    def recording_slot(novel_dir, provider, *, per_book, per_provider, **kwargs):
+        recorded.append((per_book, per_provider))
+        yield
+
+    monkeypatch.setattr(chain_module, 'pipeline_model_slot', recording_slot)
+    wires = {'book': _book_wire(), 'ch01': CH01_WIRE, 'ch02': CH02_VARIANT_A,
+             'ch03': CH03_WIRE, 'names': _names_wire()}
+    _run_stage2(tmp_path, 'wide', wires, _stage2_filter(),
+                slot_per_book=32, slot_per_provider=200)
+    assert recorded and set(recorded) == {(32, 200)}
+
+
+def test_chapter_pool_uses_its_own_concurrency(tmp_path, monkeypatch):
+    """章观察线程数跟 chapters 覆盖走，不跟随回落值。"""
+    from concurrent.futures import ThreadPoolExecutor
+
+    sizes: list[int | None] = []
+
+    class Recording(ThreadPoolExecutor):
+        def __init__(self, max_workers=None, *args, **kwargs):
+            sizes.append(max_workers)
+            super().__init__(max_workers=max_workers, *args, **kwargs)
+
+    monkeypatch.setattr(chain_module, 'ThreadPoolExecutor', Recording)
+    wires = {'book': _book_wire(), 'ch01': CH01_WIRE, 'ch02': CH02_VARIANT_A,
+             'ch03': CH03_WIRE, 'names': _names_wire()}
+    _run_stage2(tmp_path, 'chapter-pool', wires, _stage2_filter(),
+                concurrency=8, node_concurrency={'str06.stage2.chapters': 1})
+    assert sizes == [1]
 
 
 def test_prior_chapter_failure_does_not_change_later_chapter_request(tmp_path):

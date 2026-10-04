@@ -443,9 +443,10 @@ BookBrief 进每章，以 `must_respect` 呈现「作为世界边界，不要讲
   不读前文正文、Design、Characters 或其他章 IR（D2）。Stage5 只做语言实现；新增跨章
   事实没有机械检测手段，按 `R-7.6` 扩充未评披露（转场、跨章无名细节、声线归 B6 阅读）。
 - **已落地**：各章独立执行、验证、提交；`str06.stage5.body` 待补章经
-  `novel/model_slots.py::pipeline_model_slot` 共享书级（4）与供应商（8）总槽并发执行，
-  并发度默认 4（`contracts/invariants.py::PIPELINE_DEFAULT_CONCURRENCY`，由
-  `novel/config.py::concurrency_for` 读出）、不进语义身份。Hook 仍是独立节点
+  `novel/model_slots.py::pipeline_model_slot` 共享书级与供应商总槽并发执行。
+  默认是书级 4、供应商 8、节点 4；本次冻结的 `PipelineConcurrency` 可以把
+  可并发节点和两个总槽改成同一整数区间内的值。节点并发由
+  `novel/config.py::concurrency_for` 按节点读出，不进语义身份。Hook 仍是独立节点
   （`str06.stage5.hook`）。
 - **已落地**：恢复按有效提交集合（`novel/stages/chain.py::_committed_set`）：已完成
   1、2、4、6 章时只补 3、5；局部失败保留其他合法结果，授权、账务或取消故障以
@@ -550,10 +551,11 @@ CLI 的 medium 移除；整书上限从持久准入账派生传入付费边界�
   `load_config()` 的通道已删除（唯一执行期调用点是 `execute`）；effort 取值面与
   NodeSpec 一致（low/high/max，CLI 的 medium 已移除）；`max_tokens` 统一
   `LLM_MAX_OUTPUT_TOKENS`＝131072；产品路径把 run 冻结的整书上限传到付费边界。
-- 并发登记已是新链逐章节点：`PIPELINE_PARALLEL_NODES＝('str06.stage5.body',)`，
-  退役节点名与旧链上限常量已删除；`str06.stage2.chapters` 已随 B2 建节点同步
-  登记。并发 4 在新链未实测，靠 429 重试兜底；此前实测（旧 agent 驱动）32 并发
-  大半章被秒退、3 并发正常；B6 报出 429 与重试计数。
+- 并发登记是新链两个逐章节点：`PIPELINE_PARALLEL_NODES＝('str06.stage2.chapters',
+  'str06.stage5.body')`。节点并发、整书总槽、供应商总槽都取
+  `PIPELINE_TOTAL_CONCURRENCY_MIN`～`MAX` 的整数；没写覆盖的节点保持默认。
+  此前实测（旧 agent 驱动）32 并发大半章被秒退、3 并发正常；B6 报出 429 与重试计数。
+  把槽开大仍受供应商限流约束，429 由既有重试处理。
 - 每个付费节点的 reasoning 与正文 token 逐次报出；预期量级表登记在
   `docs/REQUIREMENTS.md`（B0），超出即回查节点设计（D6）。
 

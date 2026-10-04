@@ -116,7 +116,7 @@ describe('AgentRunDialog', () => {
     const start = vi.spyOn(api, 'startAgentRun').mockImplementation(async (req) => runningRecord(req))
     renderRoute(<AgentRunDialog sid="book-1" onClose={vi.fn()} onStarted={vi.fn()} />)
     fireEvent.click(await screen.findByRole('checkbox', { name: '自定义并发' }))
-    fireEvent.change(screen.getByRole('combobox', { name: 'node.dynamic-a 并发' }), { target: { value: '6' } })
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'node.dynamic-a 并发' }), { target: { value: '6' } })
     fireEvent.change(screen.getByRole('spinbutton', { name: '整书总并发' }), { target: { value: '6' } })
     fireEvent.click(screen.getByRole('checkbox', { name: /允许本会话产生外部模型调用费用/ }))
     const launch = screen.getByRole('button', { name: '授权并开始跑书' })

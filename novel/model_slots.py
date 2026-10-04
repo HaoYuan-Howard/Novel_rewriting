@@ -18,13 +18,14 @@ from pathlib import Path
 from math import isfinite
 from typing import BinaryIO
 
+from contracts.invariants import PIPELINE_TOTAL_CONCURRENCY_MAX
 from novel import paths
 from novel.appendlog import path_transaction_lock
 
 
 MODEL_SLOT_DIR_ENV = 'NOVEL_MODEL_SLOT_DIR'
 MODEL_SLOT_CAPACITY_ENV = 'NOVEL_MODEL_SLOT_CAPACITY'
-_MAX_CAPACITY = 32
+_MAX_CAPACITY = PIPELINE_TOTAL_CONCURRENCY_MAX
 MODEL_BOOK_DIR_ENV = 'NOVEL_MODEL_BOOK_DIR'
 
 
@@ -60,7 +61,7 @@ def _release(handles: list[BinaryIO]) -> None:
 def _prepare_group(root: Path, capacity: int) -> None:
     """更改容量前占住全部旧槽，活跃调用期间不得放大或缩小供应商限制。"""
     if type(capacity) is not int or not 1 <= capacity <= _MAX_CAPACITY:
-        raise ValueError('模型总槽容量必须在 1..32')
+        raise ValueError(f'模型总槽容量必须在 1..{_MAX_CAPACITY}')
     prepare_model_slot_gate(root, capacity=capacity)
     target = root / 'capacity.json'
     with path_transaction_lock(target):
@@ -142,7 +143,7 @@ def pipeline_model_slot(novel_dir: Path, provider: str, *, per_book: int = 4,
             raise ValueError('模型总槽轮询间隔必须是有限正数')
         if any(type(value) is not int or not 1 <= value <= _MAX_CAPACITY
                for value in (per_book, per_provider)):
-            raise ValueError('模型总槽容量必须在 1..32')
+            raise ValueError(f'模型总槽容量必须在 1..{_MAX_CAPACITY}')
         directory = Path(novel_dir).resolve()
         groups = [(paths.model_slot_group(directory.parent, 'provider', provider), per_provider),
                   (paths.model_slot_group(directory.parent, 'book', directory.name), per_book)]
