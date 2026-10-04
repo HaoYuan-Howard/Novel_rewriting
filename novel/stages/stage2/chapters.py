@@ -9,7 +9,7 @@
     协议版本字面量（I-13）、**本章证据句段闭集**（Resolver）、退役位置键拒识
     与登记键作用域按表归一（`R-2.14`，I-15：canonical 恒带表内作用域）、章内
     句柄纪律的自含部分（同一命题句柄的 statement 文本只建立一次；同一悬念
-    句柄本章内只 open／close 各一次，`R-2.11`/`R-2.12`）。
+    句柄本章内只 open／close 各一次；本地 close 不早于 open，`R-2.11`/`R-2.12`）。
 
 【章观察互不依赖（D3）】请求只由（本章句段，前文原文，书级人物表，协议）
 决定——**不依赖任何前章产物**：没有前章快照、命题/loop 登记表与 beat 表，
@@ -53,8 +53,8 @@ from novel.core.validation import ValidationIssue
 
 def chapter_loop_issues(beats: list[Any], *, chapter: int | None = None) -> list[ValidationIssue]:
     """本地悬念生命周期；接受、关联输入预检和最终编译共用，只读且不猜跨章配对。"""
-    seen: dict[tuple[str, str], tuple[int, int]] = {}
-    issues = []
+    actions: list[tuple[int, int, str, str]] = []
+    first_opens: dict[str, tuple[int, int]] = {}
     for bi, beat in enumerate(beats):
         if not isinstance(beat, dict):
             continue
@@ -64,19 +64,45 @@ def chapter_loop_issues(beats: list[Any], *, chapter: int | None = None) -> list
             ref, op = loop.get('ref'), loop.get('op')
             if not isinstance(ref, str) or op not in ('open', 'close'):
                 continue  # 协议形状由schema报告
-            key = (ref, op)
-            previous = seen.get(key)
-            if previous is not None:
-                issues.append(ValidationIssue(
-                    f'第{chapter}章拍{bi + 1} loop {ref!r} 本章内重复 {op}；'
-                    f'首次位于拍{previous[0] + 1}的loops[{previous[1]}]',
-                    code='chapter_loop_conflict', location=('loops', ref, op),
-                    owner=f'ch{chapter:02d}' if chapter is not None else 'chapter',
-                    scope=f'chapter:{chapter}',
-                    context={'path': ('beats', bi), 'first_path': ('beats', previous[0]),
-                             'loop_ref': ref, 'operation': op}))
-            else:
-                seen[key] = (bi, li)
+            actions.append((bi, li, ref, op))
+            if op == 'open':
+                first_opens.setdefault(ref, (bi, li))
+
+    first_actions: dict[tuple[str, str], tuple[int, int]] = {}
+    counts: dict[tuple[str, str], int] = {}
+    issues: list[ValidationIssue] = []
+    for bi, li, ref, op in actions:
+        key = (ref, op)
+        first = first_actions.setdefault(key, (bi, li))
+        occurrence = counts[key] = counts.get(key, 0) + 1
+        context = {'path': ('beats', bi), 'loop_path': ('beats', bi, 'loops', li),
+                   'loop_ref': ref, 'operation': op, 'occurrence': occurrence}
+        # 同类操作出现序号区分重复实例；物理拍位和无关条目不参与身份。
+        # 删除任意一个重复操作后，身份集严格缩小，接受循环与回派账共用。
+        if occurrence > 1:
+            issues.append(ValidationIssue(
+                f'第{chapter}章拍{bi + 1} loops[{li}] loop {ref!r} 本章内重复 {op}；'
+                f'首次位于拍{first[0] + 1}的loops[{first[1]}]',
+                code='chapter_loop_conflict',
+                location=('loops', ref, op, 'duplicate_operation', occurrence),
+                owner=f'ch{chapter:02d}' if chapter is not None else 'chapter',
+                scope=f'chapter:{chapter}',
+                context={**context, 'violation': 'duplicate_operation',
+                         'first_path': ('beats', first[0]),
+                         'first_loop_path': ('beats', first[0], 'loops', first[1])}))
+        # 两遍解析只判本地声明；没有本地open的close保留给跨章关联。
+        opened = first_opens.get(ref)
+        if op == 'close' and opened is not None and (bi, li) < opened:
+            issues.append(ValidationIssue(
+                f'第{chapter}章拍{bi + 1} loops[{li}] loop {ref!r} 本章 close 早于本地 open；'
+                f'open位于拍{opened[0] + 1}的loops[{opened[1]}]（R-2.11）',
+                code='chapter_loop_conflict',
+                location=('loops', ref, op, 'close_before_open', occurrence),
+                owner=f'ch{chapter:02d}' if chapter is not None else 'chapter',
+                scope=f'chapter:{chapter}',
+                context={**context, 'violation': 'close_before_open',
+                         'first_path': ('beats', opened[0]),
+                         'first_loop_path': ('beats', opened[0], 'loops', opened[1])}))
     return issues
 
 

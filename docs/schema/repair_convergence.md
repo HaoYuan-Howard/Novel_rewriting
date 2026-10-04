@@ -42,11 +42,16 @@ Gherkin 使用 [Cucumber 官方语法](https://cucumber.io/docs/gherkin/referenc
 取得上游字段的修改权：章内句柄纪律由章观察接受前验证，已存错误从正式章位置
 回派；associate只修配对选择。无法证明责任或确定性代码缺陷停止，不购买语义修复。
 同一规则在接受前与最终compile复用；validator只报告，薄编排持久登记和执行回派。
+章内生命周期按拍序及同拍loops条目序判定：本章有同句柄open时，close不得先于
+该open；只有close的观察仍是合法跨章候选，不猜它的配对，也不强制补本地open。
 
 关联诊断使用规则码与句柄/正式位置组成身份，文案、列表展示顺序和当前实得值
 不参与。兼容字符串只留在尚未迁移的判据，不能重新包裹已结构化诊断而丢失身份。
 收敛沿用现役有界政策：A+B→B可以继续；A→A、A→B→A停止；此前未出现的
 A+B→B+C可在原轮数上限内继续，但不报告为问题减少，也不新增额度。
+章内重复操作按句柄、操作、同类操作的出现序号区分实例；精确拍位与条目位置
+保留在诊断context，不纳入重复实例的身份。因此三次close减为两次时身份集严格
+缩小；插入无关条目或只改展示文字不能冒充进展。接受循环与跨owner指纹共用该身份。
 
 每个语义owner明确权威输入与可改输出；观察可纠正自身错误结论，设计可在义务
 约束内调整选择，关联只选句柄，写手按材料展开。整份、条目及跨owner修订共用
@@ -68,6 +73,8 @@ A+B→B+C可在原轮数上限内继续，但不报告为问题减少，也不�
 | R-2.11、I-24／RC-18 | 同一本地句柄重复close；`novel/stages/stage2/chapters.py::chapter_loop_issues`复用于整份接受与条目定位 | `tests/test_workflow_role_boundaries.py::test_rc18_duplicate_close_rejected_by_chapter_acceptance`，合法单次close绿对照；不修改输入 |
 | I-31、I-35／RC-19 | 历史章观察重复close不能派associate；`novel/stages/chain.py::_check_chapter_loops`按正式chapter scope回派 | `test_rc19_saved_duplicate_routes_to_chapter_without_associate_purchase`经两个真实发现入口、章owner修订、原入口复验及重启读回；`test_rc19_legacy_wrong_owner_correction_keeps_history_and_cost`经显式恢复保留耗尽轮与费用 |
 | I-36／RC-20 | 两个同前缀关联问题修掉一个曾误停；`ValidationIssue`及associate／compile判据产生稳定身份，接受循环和跨owner指纹直接消费 | `test_rc20_real_associate_issues_shrink_and_replay_free`真实associate请求、3轮接受、免费重放、compile发布；`test_rc20_identity_does_not_depend_on_wording_or_order`验证文案与顺序无关 |
+| R-2.11、I-31／RC-18、19追加 | 章内先close后open仍曾误派associate；同一`chapter_loop_issues`判据两遍解析本地open | `test_rc18_close_before_local_open_rejected_and_located`覆盖v3同拍／跨拍、条目定位、不改输入和合法跨章close；`test_rc19_saved_close_before_open_routes_and_recovers`覆盖两个发现入口、章owner修订、无关章采用、最终发布与重启读回 |
+| I-36／RC-20追加 | 多个重复操作曾共用身份；诊断按同类操作出现序号区分重复实例 | `test_rc20_repeated_loop_instances_have_stable_distinct_identities`保护位置移动无关性；`test_rc20_repeated_close_shrinks_through_acceptance_and_replays_free`覆盖整份／patch的2→1→0及免费重放；`test_rc20_repeated_close_shrinks_in_saved_owner_fingerprint`验证正式回派账进展、轮数不复位及compile发布 |
 | I-02、I-20／RC-21 | 纠正观察与“不得改换事实”矛盾；`novel/stages/common.py::semantic_revision_rules`统一声明，paid_requests与跨owner修订共用 | `test_rc21_actual_revision_request_allows_correcting_observation`截获整份／patch请求；`test_rc21_owner_permissions_reach_full_and_patch_requests`覆盖各权限面；RC-19实际章修订复用同一声明 |
 | I-12、I-34／RC-22 | 缺语义仍发Hook请求；`novel/stages/stage4/slim.py::project_hook_semantics`投影已引用命题／世界约束，悬空在请求前停 | `test_rc22_hook_request_contains_referenced_proposition_or_stops`截获真实Hook入口，覆盖两类语义存在与缺失；`test_str06_hook.py`验证编译与消费 |
 | I-15、I-21／RC-23 | 原短表已退役；`project_design_input`及`design_obligation_index`统一完整映射；缺条目拒绝，不再截断 | `tests/test_str06_design_slim.py::test_design_projection_preserves_complete_semantics_and_references`及真实Design链测试保护既有正确行为 |

@@ -46,6 +46,166 @@ def test_rc18_duplicate_close_rejected_by_chapter_acceptance():
     assert observation is not None and not errors
 
 
+def _chapter_v3(wire, chapter):
+    from novel.stages.chain import build_evidence
+    from novel.stages.stage2.slim import slim_chapter_wire
+    observation, errors = compile_chapter_observation(
+        wire, evidence_ids=build_evidence(_chapters()), chapter=chapter)
+    assert observation is not None and not errors
+    return slim_chapter_wire(observation.model_dump(mode='json'))
+
+
+@pytest.mark.parametrize('same_beat', [False, True])
+def test_rc18_close_before_local_open_rejected_and_located(same_beat):
+    from novel.stages.chain import build_evidence
+    from novel.stages.stage2.chapters import chapter_patch_locate
+    wires = looped_full_chain_wires()
+    wire = _chapter_v3(wires['ch01'], 1)
+    opened = deepcopy(wire['beats'][0]['loops'][0])
+    closed = deepcopy(wires['ch02']['beats'][0]['loops'][0])
+    if same_beat:
+        wire['beats'][0]['loops'] = [closed, opened]
+    else:
+        later = deepcopy(wire['beats'][0])
+        later.pop('new_scene', None)
+        later.pop('state', None)
+        later.pop('know', None)
+        wire['beats'][0]['loops'] = [closed]
+        wire['beats'].append(later)
+    original = deepcopy(wire)
+    evidence = build_evidence(_chapters())
+    observation, errors = compile_chapter_observation(wire, evidence_ids=evidence, chapter=1)
+    assert observation is None and errors
+    issue, = errors
+    assert issue.owner == 'ch01' and issue.scope == 'chapter:1'
+    assert issue.context['violation'] == 'close_before_open'
+    assert issue.context['loop_path'] == ('beats', 0, 'loops', 0)
+    assert chapter_patch_locate(wire, errors, evidence_ids=evidence, chapter=1) == [
+        (('beats', 0), errors)]
+    assert wire == original
+    # 同拍顺序也明确；无本地open的close仍是合法跨章观察。
+    if same_beat:
+        wire['beats'][0]['loops'] = [opened, closed]
+    else:
+        wire['beats'][0]['loops'] = [opened]
+        wire['beats'][1]['loops'] = [closed]
+    assert compile_chapter_observation(wire, evidence_ids=evidence, chapter=1)[0] is not None
+    cross = _chapter_v3(wires['ch02'], 2)
+    assert compile_chapter_observation(cross, evidence_ids=evidence, chapter=2)[0] is not None
+
+
+@pytest.mark.parametrize('detector', ['str06.stage2.associate', 'str06.stage2.compile'])
+def test_rc19_saved_close_before_open_routes_and_recovers(tmp_path, detector):
+    _, repo, session, transport, ctx = _prepared(tmp_path)
+    rel = 'stage2/observations/ch01.json'
+    original = repo.read_model(rel)
+    bad = original.model_dump(mode='json')
+    later = deepcopy(bad['beats'][0])
+    later.update(effects=[], cognition=[], scene_boundary='continue')
+    bad['beats'][0]['loops'] = [{'ref': 'q_yu', 'op': 'close', 'resolution': '旧案已解。'}]
+    bad['beats'].append(later)
+    repo.write(rel, type(original).model_validate(bad), owners=('ch01',),
+               refs=(synthetic_ref('ch01'),))
+    before = len(transport.calls)
+    with pytest.raises(OwnerRevisionRequired) as exc:
+        run_node(detector, ctx)
+    assert exc.value.node == 'str06.stage2.chapters'
+    record = read_owner_issue_file(repo, 'ch01')
+    assert record.issues[0].context['violation'] == 'close_before_open'
+    assert record.issues[0].item == 'chapter:1'
+    assert len(transport.calls) == before and read_owner_issue_file(repo, 'associate') is None
+    run_workflow(repository=repo, chapters=_chapters(), ask=json_ask(session),
+                 ask_text=text_ask(session), ask_body=lambda o, p: None, budget=2000,
+                 through='stage2', node_filter=('str06.stage2.chapters',))
+    assert transport.calls[before:] == ['ch01']
+    run_workflow(repository=repo, chapters=_chapters(), ask=json_ask(session),
+                 ask_text=text_ask(session), ask_body=lambda o, p: None, budget=2000,
+                 through='stage2', node_filter=('str06.stage2.names',
+                     'str06.stage2.associate', 'str06.stage2.compile'))
+    from novel.store import Str06Repository
+    restarted = Str06Repository(repo.root)
+    assert read_owner_issue_file(restarted, 'ch01').status == 'resolved'
+    assert restarted.read_model('stage2/blueprints/chapter_blueprints.json').chapters
+
+
+def test_rc20_repeated_loop_instances_have_stable_distinct_identities():
+    from novel.stages.stage2 import chapter_loop_issues
+    from novel.core.validation import validation_identity
+    closed = {'ref': 'q', 'op': 'close', 'resolution': '已解。'}
+    beats = [{'loops': [deepcopy(closed) for _ in range(3)]}]
+    issues = chapter_loop_issues(beats, chapter=2)
+    identities = {validation_identity(i) for i in issues}
+    assert len(issues) == len(identities) == 2
+    # 无关条目和拍位移动不改变同一重复实例的身份。
+    shifted = deepcopy(beats)
+    shifted[0]['loops'].insert(0, {'ref': 'other', 'op': 'close', 'resolution': '已解。'})
+    shifted.insert(0, {'loops': []})
+    assert {validation_identity(i) for i in chapter_loop_issues(shifted, chapter=2)} == identities
+    beats[0]['loops'].pop()
+    remaining = chapter_loop_issues(beats, chapter=2)
+    assert {validation_identity(i) for i in remaining} < identities
+    beats[0]['loops'][0]['resolution'] = '改写收束展示。'
+    assert [validation_identity(i) for i in chapter_loop_issues(beats, chapter=2)] == [
+        validation_identity(i) for i in remaining]
+
+
+@pytest.mark.parametrize('patch', [False, True])
+def test_rc20_repeated_close_shrinks_through_acceptance_and_replays_free(tmp_path, patch):
+    from novel.llm.paid_requests import ask_json
+    from novel.stages.stage2.chapters import chapter_patch_locate
+    candidates = []
+    base = _chapter_v3(looped_full_chain_wires()['ch02'], 2)
+    for count in (3, 2, 1):
+        wire = deepcopy(base)
+        wire['beats'][0]['loops'] *= count
+        candidates.append(wire)
+    contents = [json.dumps(candidates[0])]
+    contents.extend(json.dumps({'patches': [{'path': 'beats[0]', 'value': wire['beats'][0]}]})
+                    if patch else json.dumps(wire) for wire in candidates[1:])
+    transport = _ScriptedTransport(contents)
+    _, _, session = _json_session(tmp_path, transport)
+    def ask():
+        return ask_json(session, 'ch02', _request('章观察原始请求'),
+            lambda w: compile_chapter_observation(w, evidence_ids=['e02_01'], chapter=2)[1],
+            patch=(lambda w, e: chapter_patch_locate(
+                w, e, evidence_ids=['e02_01'], chapter=2)) if patch else None)
+    data, _ = ask()
+    assert data == candidates[-1] and len(transport.calls) == 3
+    replay, _ = ask()
+    assert replay == data and len(transport.calls) == 3
+
+
+def test_rc20_repeated_close_shrinks_in_saved_owner_fingerprint(tmp_path):
+    _, repo, session, transport, ctx = _prepared(tmp_path)
+    rel = 'stage2/observations/ch02.json'
+    original = repo.read_model(rel)
+    before = len(transport.calls)
+    fingerprints = []
+    for count in (3, 2):
+        raw = original.model_dump(mode='json')
+        raw['beats'][0]['loops'] *= count
+        repo.write(rel, type(original).model_validate(raw), owners=('ch02',),
+                   refs=(synthetic_ref('ch02'),))
+        with pytest.raises(OwnerRevisionRequired):
+            run_node('str06.stage2.compile', ctx)
+        record = read_owner_issue_file(repo, 'ch02')
+        assert record.rounds_total == 4 - count and not record.no_progress
+        fingerprints.append(record.fingerprint)
+        # 相同盘面重放不得重复起轮。
+        with pytest.raises(OwnerRevisionRequired):
+            run_node('str06.stage2.compile', ctx)
+        assert read_owner_issue_file(repo, 'ch02').rounds_total == record.rounds_total
+    assert len(set(fingerprints)) == 2 and len(transport.calls) == before
+    repo.write(rel, original, owners=('ch02',), refs=(synthetic_ref('ch02'),))
+    run_workflow(repository=repo, chapters=_chapters(), ask=json_ask(session),
+                 ask_text=text_ask(session), ask_body=lambda o, p: None, budget=2000,
+                 through='stage2', node_filter=('str06.stage2.names',
+                     'str06.stage2.associate', 'str06.stage2.compile'))
+    assert read_owner_issue_file(repo, 'ch02').status == 'resolved'
+    assert read_owner_issue_file(repo, 'ch02').rounds_total == 2
+    assert repo.read_model('stage2/blueprints/chapter_blueprints.json').chapters
+
+
 @pytest.mark.parametrize('detector', ['str06.stage2.associate', 'str06.stage2.compile'])
 def test_rc19_saved_duplicate_routes_to_chapter_without_associate_purchase(tmp_path, detector):
     wires, repo, session, transport, ctx = _prepared(tmp_path)

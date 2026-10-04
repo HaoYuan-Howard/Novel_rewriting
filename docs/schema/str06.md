@@ -829,9 +829,12 @@ Preserve 同时收到正式归一文本、原句及名称同一性依据，不�
 
 ### 职责边界补充（RC-18～25，2026-10-04）
 
-- 章内悬念open／close各至多一次；同源只读判据在chapters接受、associate输入
+- 章内悬念open／close各至多一次，本地close不得早于open（按拍序及同拍条目序）；
+  没有本地open的close仍允许跨章配对。同源只读判据在chapters接受、associate输入
   预检和compile防御复验执行。章观察错误按node＋chapter scope回派，关联只修配对。
 - 关联判据返回带规则码、位置、owner和scope的派生诊断；展示文字不是控制接口。
+  章内重复操作的身份按句柄、操作及同类操作出现序号区分实例，精确物理位置在
+  context留证；部分删除能被接受循环及回派指纹识别，无关位置移动不冒充进展。
   旧误派账的免费更正使用现役issue-correction预览/CAS入口，不清费用和轮数。
 - Hook设计输入新增stage4-hook-semantics-v1派生投影，所引用kp和世界约束的完整
   文本来自Brief；悬空引用在外发前拒绝。正式领域artifact形状不变，请求摘要随材料变化。

@@ -43,7 +43,9 @@ def _legacy_loop_correction(repository, record, chapter_ordinals: tuple[int, ...
         issues = chapter_loop_issues(beats, chapter=chapter)
         repairs.extend(OwnerIssueV1(code=i.code, item=i.scope, message=str(i),
             context={**i.context, 'owner': i.owner, 'validation_identity': i.identity}) for i in issues)
-        local_conflicts = {i.context['loop_ref'] for i in issues if i.context['operation'] == 'close'}
+        local_conflicts = {i.context['loop_ref'] for i in issues
+                           if i.context['operation'] == 'close'
+                           and i.context['violation'] == 'duplicate_operation'}
         for bi, beat in enumerate(beats, 1):
             for loop in beat['loops']:
                 handle = f'ch{chapter:02d}.{loop["ref"]}'

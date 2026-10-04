@@ -1142,7 +1142,9 @@
       ],
       "cases": {
         "test_rc18_duplicate_close_rejected_by_chapter_acceptance": "unit_contract",
+        "test_rc18_close_before_local_open_rejected_and_located": "unit_contract",
         "test_rc20_identity_does_not_depend_on_wording_or_order": "unit_contract",
+        "test_rc20_repeated_loop_instances_have_stable_distinct_identities": "unit_contract",
         "test_rc19_three_digit_chapter_can_persist_and_resume_its_revision": "unit_contract",
         "test_rc24_design_and_writer_instructions_match_time_contract": "unit_contract",
         "test_rc21_owner_permissions_reach_full_and_patch_requests": "unit_contract",

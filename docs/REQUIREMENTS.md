@@ -25,6 +25,13 @@
 本批横跨共享接受循环、摄入原语、Repository及恢复消费者，在定向闭合后执行一次默认非corpus
 回归，按共享基础设施影响与本批工程收口门槛执行；不是重跑上一CS检查点的验收。
 
+2026-10-04审阅追加修复（基线`3e7215d7`）：章内先close后open左移至同源章观察
+判据，已存错误按chapter scope回派；重复操作按同类出现序号区分诊断身份，
+整份／patch接受循环及跨owner指纹识别问题2→1→0。源观察、正式schema和API形状不变，
+章观察prompt同步顺序要求，旧重复close误派更正仍保持专用证明边界。
+新增8项反例先红；修复后含新增反例、Stage2发布/接受、修订恢复及§9.5五文件的
+601项定向通过（见下方留证）。这是局部工程修复，不重新宣称默认全仓回归或成书验收。
+
 | 顺序／批次 | 状态 | 完成条件与下一动作 |
 |---|---|---|
 | CS-S 规格定稿 | [x] 中文Gherkin与职责规格定稿；RC-17按用户裁决增补 | RC／CU／BA场景成为本轮验收输入；实现映射随代码补齐 |
@@ -191,3 +198,13 @@ body／hook attempts由ContentRevision＋ProviderAttempt取代。旧admission平
   55.08秒；覆盖RC-18～25模块、回派自愈、条目patch及契约§9.5五文件，`git diff --check`通过。
   章内重复close的两处发现入口均验证真实章owner修订、无关章免费采用、最终compile发布与重启读取；
   旧associate误派更正经真实CLI预览／提交，保留原账及耗尽轮数。真实成书质量保持未验收。
+- RC-18～20审阅追加（`3e7215d7`＋工作树修复）：
+  `.test_cache/role-boundaries-followup-red.xml`新增8项失败；首次修复验证为7通过／1失败，
+  后者为测试末尾未重建过期的associate，已改为沿正式names→associate→compile恢复路径。
+  `.test_cache/role-boundaries-followup-directed.xml`601通过、0失败、0跳过、82.51秒，
+  命令为`-n 0 -x`＋`test_workflow_role_boundaries`、`test_str06_r3_selfheal`、
+  `test_str06_item_patch`、`test_str06_chapter_slim`、Stage2 owners/protocol/publish/source、
+  `test_str06_invariants`及契约§9.5五文件，统一`--basetemp=E:/_tr -o cache_dir=.test_cache`。
+  同拍／跨拍倒序、合法跨章close、整份／patch的部分修复与免费重放、两个发现入口的
+  章owner修订和无关章采用、正式回派账的指纹与累计轮数、compile发布和重启读回均已覆盖。
+  全程fake transport、零真实付费；本轮未运行golden set或默认全仓回归。
