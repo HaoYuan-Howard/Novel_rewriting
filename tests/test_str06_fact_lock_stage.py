@@ -24,24 +24,28 @@ from tests.test_str06_hook import _full_chain_wires
 KF_PLAN = _lock_id('kf_', 'b01_01.e2')
 
 
-def _wires(*, marked: bool = True) -> dict:
-    """在全链基座上加一条「预计」效应、锚定它的必保义务，以及标注（或漏标）该锁的状态。"""
+def _wires(*, marked: bool = True, unknown: bool = False) -> dict:
+    """全链基座加一条预计／值未知效应、必保义务及其标注（或漏标）状态。"""
     wires = deepcopy(_full_chain_wires())
     wires['ch01']['beats'][0]['effects'] = (
         *wires['ch01']['beats'][0]['effects'],
-        {'target': {'kind': 'world'}, 'key': 'return_time', 'op': 'set', 'value': '约半月',
-         'scope': 'book', 'modality': 'expected',
+        {'target': {'kind': 'world'}, 'key': 'return_time',
+         'op': 'unknown' if unknown else 'set', 'value': None if unknown else '约半月',
+         'scope': 'book', 'modality': 'actual' if unknown else 'expected',
          'proposition': {'ref': 'p_return', 'statement': '夫君约半月后归家'},
          'disclosure': {'visibility': 'on_page'},
          'basis': ({'segment': 'e01_01', 'quote': '苏芸娘嫁入陆家'},)})
     wires['preserve']['obligations'].append({
-        'kind': 'event_core', 'statement': '夫君约定归期（预计，尚未发生）',
+        'kind': 'event_core', 'statement': '夫君归期未知' if unknown else '夫君约定归期（预计，尚未发生）',
         'anchors': ['b01_01.e2'], 'must_preserve': True,
-        'satisfaction': '归期作为预计呈现，不得写成已经归来', 'requires': []})
+        'satisfaction': '不得补出归期' if unknown else '归期作为预计呈现，不得写成已经归来',
+        'requires': []})
     beat = wires['design']['scenes'][0]['beats'][2]         # sc01#b03 '芸娘立誓查清'
     beat['real'] = ['ob02']
-    beat['state'].append({'at': 'world', 'key': 'return_time', 'val': '约半月后归家',
-                          'modality': 'expected', **({'lock': KF_PLAN} if marked else {})})
+    beat['state'].append({'at': 'world', 'key': 'return_time',
+                          **({'op': 'unknown'} if unknown else
+                             {'val': '约半月后归家', 'modality': 'expected'}),
+                          **({'lock': KF_PLAN} if marked else {})})
     return wires
 
 
@@ -119,5 +123,51 @@ def test_missing_lock_mark_is_fed_back_with_rule_code_and_path_and_stops_without
     assert 'req_' not in ' '.join(issues), '用 Design 看得见的 obNN'
     assert transport.calls.count('design') == 2, '首答＋一次同节点修订轮后无进展即停'
     repo = ctx.repository
+    assert not repo.path('stage4/design/body_design.json').exists()
+    assert not repo.path('stage4/grounding/semantic_binding.json').exists()
+
+
+@pytest.mark.parametrize('unknown', [False, True], ids=['expected', 'unknown_value'])
+def test_ambiguous_fact_lock_is_rejected_by_full_candidate_paid_entry_and_free_preview(
+        tmp_path, unknown):
+    """实际候选入口拒绝未标锁的同地址覆盖；免费预览同报告且不发布半份产物。"""
+    from novel.stages.review import dry_run_patch
+    from novel.stages.stage4 import design_obligation_index, inspect_design_candidate, project_brief
+    wires = _wires(unknown=unknown)
+    wires['design']['scenes'][0]['beats'][2]['state'].append(
+        {'at': 'world', 'key': 'return_time', 'val': '已经归家', 'modality': 'actual'})
+    before = deepcopy(wires['design'])
+    ctx, transport = _prepare(tmp_path, wires)
+    repo = ctx.repository
+    chars = repo.read_model('stage2/characters/characters.json')
+    checkpoint = repo.read_model('runtime/preserve_checkpoint.json')
+    brief, _ = project_brief(checkpoint, chars.core_view(),
+                             repo.read_model('stage2/blueprints/chapter_blueprints.json'))
+    view = inspect_design_candidate(
+        wires['design'], checkpoint=checkpoint, brief=brief,
+        obligations=design_obligation_index(checkpoint, brief), chars=chars,
+        constraints=OutputConstraints(target_chapter_count=2, total_length_budget=2000),
+        length_band=ctx.length_band)
+    assert not view.passed
+    issue = next(e for e in view.errors if getattr(e, 'code', '') == 'fact_lock_ambiguous')
+    assert issue.context['wire_paths'] == [
+        ['scenes', 0, 'beats', 2, 'state', 1],
+        ['scenes', 0, 'beats', 2, 'state', 2]]
+    assert {c.name: c.status for c in view.checks} == {
+        'design': 'failed', 'placements': 'passed', 'binding': 'failed',
+        'execution_plan': 'not_run', 'writer_inputs': 'not_run',
+        'writer_materials': 'not_run', 'mechanical_guard': 'not_run',
+        'hook_materials': 'not_run'}
+    preview = dry_run_patch(
+        repo, 'design', wires['design'], evidence={}, budget=2000, chapter_count=2,
+        length_band=ctx.length_band, hook_constraints=ctx.hook_constraints)
+    assert preview['status'] == 'ran' and preview['candidate_preflight'] == view.report()
+    with pytest.raises(ValidationStop) as stopped:
+        run_body_design(ctx)
+    assert any(getattr(e, 'code', '') == 'fact_lock_ambiguous'
+               for e in stopped.value.context['issues'])
+    assert transport.calls.count('design') == 2, '结构坏稿无进展即停，无新下游购买'
+    assert 'hook_design' not in transport.calls
+    assert wires['design'] == before
     assert not repo.path('stage4/design/body_design.json').exists()
     assert not repo.path('stage4/grounding/semantic_binding.json').exists()

@@ -163,6 +163,102 @@ def test_free_preview_rechecks_existing_hook_against_changed_candidate(tmp_path)
     assert ctx.repository.path('stage4/design/presentation_graph.json').read_bytes() == before
 
 
+def test_owner_patch_preview_rechecks_existing_hook_surface_release_rules(tmp_path):
+    """Design修订移除称谓声明后，旧Hook必须与正式接受入口同样拒绝。"""
+    import json
+
+    from novel.stages.chain import run_hook_design
+    from novel.stages.review import dry_run_patch
+    from novel.stages.revisions import preview_owner_patch
+    from novel.stages.stage4 import assemble_hook_design
+
+    ctx, wires, transport, candidate_args = _prepare(tmp_path)
+    run_body_design(ctx)
+    run_hook_design(ctx)
+    baseline = deepcopy(wires['design'])
+    candidate = deepcopy(baseline)
+    candidate['initial_surfaces'] = [item for item in candidate['initial_surfaces']
+                                     if item['char_id'] != 'yun_niang']
+    inspection = inspect_design_candidate(candidate, **candidate_args)
+    assert inspection.passed, '该变化只破坏旧Hook的称谓释放授权，正文候选仍合法'
+    chars = ctx.repository.read_model('stage2/characters/characters.json')
+    hook, expected_errors = assemble_hook_design(
+        wires['hook_design'], body=inspection.body, known_char_ids=set(chars.characters),
+        name_projection=chars.name_projection(), name_structure=chars.name_structure)
+    assert hook is None and any('不是 yun_niang 已声明的面' in e for e in expected_errors)
+    before = {p.relative_to(ctx.repository.root): p.read_bytes()
+              for p in ctx.repository.root.rglob('*') if p.is_file()}
+    calls = len(transport.calls)
+    baseline_json = json.dumps(baseline, ensure_ascii=False)
+    identity = digest({'preview': 'design'})
+    preview = preview_owner_patch(
+        owner='design', identity=identity, candidate=candidate,
+        baseline={'identity': identity, 'content': baseline_json,
+                  'response_sha256': digest(baseline_json)},
+        validate=lambda w: list(inspect_design_candidate(w, **candidate_args).errors),
+        dry_run=lambda w: dry_run_patch(
+            ctx.repository, 'design', w, evidence={}, budget=ctx.budget,
+            chapter_count=len(ctx.chapters), length_band=ctx.length_band,
+            hook_constraints=ctx.hook_constraints))
+    assert not preview['owner_errors'], '错误来自候选与旧Hook组合，不是Design自身'
+    downstream = preview['downstream']
+    report = downstream['candidate_preflight']
+    assert downstream['status'] == 'ran' and not report['passed']
+    assert report['checks'][-1]['name'] == 'hook_materials'
+    assert report['checks'][-1]['status'] == 'failed'
+    assert all(error in downstream['errors'] for error in expected_errors)
+    assert all(error in report['errors'] for error in expected_errors)
+    assert candidate['initial_surfaces'] == [item for item in baseline['initial_surfaces']
+                                              if item['char_id'] != 'yun_niang']
+    assert before == {p.relative_to(ctx.repository.root): p.read_bytes()
+                      for p in ctx.repository.root.rglob('*') if p.is_file()}
+    assert len(transport.calls) == calls, '恢复预览不购买或重写旧Hook'
+
+
+def test_restarted_compile_rechecks_canonical_hook_before_republishing_outputs(tmp_path):
+    """读回正式图的免费编译不能绕过Hook接受判据或覆盖已验输出组。"""
+    from dataclasses import replace
+
+    from novel.llm.ledger import CostLedger, ledger_path
+    from novel.stages.chain import run_compile_stage4, run_hook_design
+    from novel.stages.owner_revision import MechanicalDefectStop
+    from novel.stages.stage4 import publish_graph
+    from novel.store import Str06Repository
+    from tests.str06_facilities import make_context, synthetic_ref
+
+    ctx, wires, transport, candidate_args = _prepare(tmp_path)
+    run_body_design(ctx)
+    run_hook_design(ctx)
+    run_compile_stage4(ctx)
+    outputs = ('stage4/compiled/execution_plan.json', 'stage4/context/hook/hook.json',
+               'stage4/ir/writer_book_ir.json', 'stage4/acceptance/packet_metrics.json')
+    before_outputs = {rel: ctx.repository.path(rel).read_bytes() for rel in outputs}
+    candidate = deepcopy(wires['design'])
+    candidate['initial_surfaces'] = [item for item in candidate['initial_surfaces']
+                                     if item['char_id'] != 'yun_niang']
+    inspection = inspect_design_candidate(candidate, **candidate_args)
+    assert inspection.passed and inspection.body is not None
+    graph = publish_graph(inspection.body, ctx.repository.read_graph_hook())
+    # schema能证明拍与人物存在，不能证明旧Hook获准释放候选已删除的称谓。
+    ctx.repository.write('stage4/design/body_design.json', inspection.body,
+                         refs=(synthetic_ref('design', '恢复输入'),))
+    ctx.repository.write('stage4/design/presentation_graph.json', graph,
+                         refs=(synthetic_ref('hook_design', '恢复输入'),))
+    source_bytes = ctx.repository.path('stage4/design/presentation_graph.json').read_bytes()
+    costs = ledger_path(ctx.repository.root.parent).read_bytes()
+    calls = len(transport.calls)
+    reopened = Str06Repository(ctx.repository.root)
+    reopened.attach_context(make_context(
+        reopened.root, ledger=CostLedger(path=ledger_path(reopened.root.parent))))
+    with pytest.raises(MechanicalDefectStop, match='不是 yun_niang 已声明的面') as stopped:
+        run_compile_stage4(replace(ctx, repository=reopened))
+    assert stopped.value.node == 'str06.stage4.compile'
+    assert before_outputs == {rel: reopened.path(rel).read_bytes() for rel in outputs}
+    assert reopened.path('stage4/design/presentation_graph.json').read_bytes() == source_bytes
+    assert ledger_path(reopened.root.parent).read_bytes() == costs
+    assert len(transport.calls) == calls, 'canonical复验只走免费确定性消费者'
+
+
 def test_execution_plan_failure_does_not_claim_writer_checks_passed():
     from novel.stages.stage4 import inspect_body_materials
     from tests.test_str06_material_repair import _conflict

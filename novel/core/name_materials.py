@@ -59,9 +59,9 @@ def withheld_name_bindings(
         return ()
     owners: dict[str, set[str]] = {}
     for char_id, person in structure.people.items():
-        for surface, form in person.surface_forms.items():
-            if form is not None:
-                owners.setdefault(surface, set()).add(char_id)
+        # 同一字面也可能是另一人物的纯称谓；归属证明必须包含全部登记。
+        for surface in person.surface_forms:
+            owners.setdefault(surface, set()).add(char_id)
     families = {f.literal for f in structure.families.values()}
     families |= family_form_literals(structure)
     pool = set(withheld) | set(known)
@@ -69,6 +69,9 @@ def withheld_name_bindings(
     for literal in set(withheld):
         who = owners.get(literal, set())
         if len(literal) >= 2 and literal not in families and len(who) == 1:
+            char_id = next(iter(who))
+            if structure.people[char_id].surface_forms[literal] is None:
+                continue
             enclosing = tuple(sorted(k for k in pool if k != literal and literal in k))
-            bound.append((literal, next(iter(who)), enclosing))
+            bound.append((literal, char_id, enclosing))
     return tuple(sorted(bound))

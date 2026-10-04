@@ -146,22 +146,30 @@ STR06_MIGRATION_DEPENDENCY_RULES: Final[tuple[DependencyRule, ...]] = (
     # hook_context 是纯投影（Stage4 context owner）：禁止 LLM 与 Stage2/4/5/7 语义模块。
     # novel.core.text：kp 句柄→命题 statement 的回填尺（R10b 锁以内容送达；
     # 2026-10-03 D6 渲染修复，与正文 IR project_context 同一把尺，判据 25）。
+    # hook_validation只提供纯结构判据，compiler不得反向依赖hook producer。
     DependencyRule(
         module='novel.stages.stage4.hook_context',
         allows=('contracts.schema.*', 'novel.core.name_materials',
-                'novel.core.text'),
+                'novel.core.text', 'novel.stages.stage4.hook_validation'),
         forbids=('novel.llm', 'novel.llm.*', 'novel.stages.common')
         + tuple(m for m in _STAGE457 if m != 'novel.stages.stage4.hook_context')),
     # hook（Stage4 hook_design 的确定性臂与唯一 publisher）禁止 LLM 与
     # Stage5 写手／Stage7 模块，也不依赖 Stage4 编译面。
     DependencyRule(
         module='novel.stages.stage4.hook',
-        allows=('contracts.schema.*', 'novel.core.name_materials'),
+        allows=('contracts.schema.*', 'novel.core.name_materials',
+                'novel.stages.stage4.hook_validation'),
         forbids=('novel.llm', 'novel.llm.*', 'novel.stages.common',
                  'novel.stages.stage4.compile', 'novel.stages.stage4.book_ir',
                  'novel.stages.stage4.fold', 'novel.stages.stage4.guard',
                  'novel.stages.stage5.hook_writer', 'novel.stages.stage7.naming',
                  'novel.stages.stage7.assembly')),
+    # Hook validator只读规范payload/canonical输入；禁止依赖任何生产或编译模块。
+    DependencyRule(
+        module='novel.stages.stage4.hook_validation',
+        allows=('contracts.schema.*', 'novel.core.name_materials'),
+        forbids=('novel.llm', 'novel.llm.*', 'novel.stages.common',
+                 'novel.stages.stage4.fold', 'novel.stages.stage4.guard') + _STAGE457),
     # hook_writer 只能消费 hook／receipt 契约：禁止 LLM 与 Stage2/4/7 模块。
     # ⚠ F8c 起 literal_scan 与 prompts 同住 `novel/stages/common.py`，模块粒度
     # 无法再把「禁 prompt 组装」与「准用 literal_scan」分开——那条禁项改由本行的

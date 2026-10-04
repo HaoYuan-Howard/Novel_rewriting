@@ -36,6 +36,7 @@ from contracts.schema.hook import (
 from contracts.schema.source import NameProjection, NameStructure
 from novel.core.name_materials import withheld_name_literals, expand_surface_releases
 from novel.core.text import kp_statement
+from novel.stages.stage4.hook_validation import validate_hook_design
 
 
 def _display(projection: NameProjection, char_id: str) -> str:
@@ -137,7 +138,12 @@ def compile_hook_context(
 ) -> tuple[HookContext | None, list[str]]:
     """（完整 graph, 名称投影, 长度边界）→ HookContext。纯函数，不落盘。"""
     hook = graph.hook
-    errors: list[str] = []
+    # schema只保引用存在；恢复/重编同样先复验时序、隐藏与称谓释放授权。
+    errors = validate_hook_design(
+        hook, body=graph, known_char_ids={entry.char_id for entry in projection.by_person},
+        name_projection=projection, name_structure=structure)
+    if errors:
+        return None, errors
     display_names = expand_surface_releases({r.char_id: r.surfaces for r in hook.surface_releases}, structure)
     display_projection = projection.model_copy(update={'by_person': tuple(
         entry.model_copy(update={'display': (display_names.get(entry.char_id) or ('',))[0]})

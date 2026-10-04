@@ -51,12 +51,13 @@ from typing import Any, Mapping
 from pydantic import ValidationError
 
 from contracts.schema.design import BodyDesign, ChapterEntry
-from contracts.schema.grounding import OutputConstraints, ReconstructionBrief
+from contracts.schema.grounding import FactLockBinding, OutputConstraints, ReconstructionBrief
 from contracts.schema.state import EffectDomain
 from contracts.schema.workflow import STAGE4_DESIGN_PROTOCOL
 from contracts.schema.source import NameProjection, NameStructure
 from novel.core.validation import ValidationIssue
 from novel.stages.stage4.design_paths import design_issue
+from novel.stages.stage4.fact_bindings import fact_binding_errors
 from novel.stages.common import expand_surface_releases
 from novel.stages.stage4.read_closure import confirmation_closure_errors, resolve_design_reads
 from novel.stages.stage4.materials import validate_design_materials
@@ -487,6 +488,12 @@ def _check_lock_acceptance(body: BodyDesign, brief: ReconstructionBrief,
                 f'{where} 的状态键 {key} 是事实锁句柄：kf 句柄不是状态键，'
                 '事实锁在已选状态上用 lock 标注（stage4-design-v8）')
     realized_kf = _check_fact_marks(marks, fact_locks, errors)
+    errors.extend(fact_binding_errors(body, (
+        FactLockBinding(kf_id=mark.kf_id,
+                        beat_ref=f'{body.scenes[mark.scene].scene_id}#'
+                                 f'{body.scenes[mark.scene].beats[mark.beat].beat_id}',
+                        address=mark.address)
+        for mark in marks), wire_paths=True))
     ob_of = {req.core_id: ob for ob, req in (obligations or {}).items()}
     for req in brief.requirements:
         label = ob_of.get(req.core_id, req.core_id)

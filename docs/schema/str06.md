@@ -154,7 +154,9 @@ v8 改为在**已选状态**上写 `state[].lock`（kf 句柄，闭集由请求�
 lock 标在 kp 知情行上、initial_state 带 kf 键一律拒。标注经 `novel/stages/stage4/slim.py::design_fact_marks` 投影为
 `FactLockMark`（拍位＋状态下标＋由 `at`/`key` 派生的地址），`derive_semantic_binding` 据此在 body_design
 同次发布的 SemanticBinding 里写 `fact_bindings`（`FactLockBinding`：锁句柄＋承载拍＋状态地址，
-**不复制目标 value**，悬空即拒）；BodyDesign 与中间 v5 都不携带锁引用，仍是目标事实的唯一持有者。
+**不复制目标 value**，承载拍内该地址须恰好对应一条状态，悬空或歧义即拒）；BodyDesign 与中间 v5 都不携带锁引用，仍是目标事实的唯一持有者。
+Design 接受判据携带所有同址条目的 wire 路径，Binding 派生与正式产物免费重编译复验同一唯一性；
+后续拍对同地址的合法更新不受该引用限制。
 映射只证结构；承载状态的语义是否满足锁（如把暂缓和离绑到赏花）需要标定的语义核验，未运行保持 unver。
 `SemanticBinding` 与 `WriterBookIR` 因此升 rc16（旧 rc12／rc14 产物按版本字面量拒读，不迁移）；全局 RC 版式头
 升 rc16，旧 rc15 候选根按契约表漂移关闭式拒收（`init_or_resume_candidate_workflow`），原根留作冻结失败证据，
@@ -325,6 +327,8 @@ publisher（`novel/stages/stage4/hook.py`）与 HookContext 编译
 - Hook 设计与唯一 graph publisher（`novel/stages/stage4/hook.py::publish_graph`）、
   HookContext 编译（`novel/stages/stage4/hook_context.py::compile_hook_context`）
   的代码已迁回 Stage4 包（B3 后半）；Hook 语义边界不变（见现役实装一节）。
+  wire 接受与正式产物重编译共用 `novel/stages/stage4/hook_validation.py` 的纯判据；
+  上下文编译器依赖 validator，不反向依赖 Hook 装配与发布模块。
 - 章预算保持全书最大余数分配（现役
   `novel/stages/stage4/book_ir.py::allocate_chapter_budgets`），总和恰等于书级目标；
   代价是权重变化会波及多章预算（见精确失效表；机械规则
@@ -356,10 +360,10 @@ ChapterWriterPacket
 
 **称谓投影（CS-F2，RC-40～43，IR rc16／renderer v10）**：`ChapterIR.withheld_bindings`（`WithheldNameBinding`：
 字面＋人物＋包含它的更长称谓）是禁用字面中已证明唯一绑定人物的**完整登记称谓**子集——登记 surface、含姓名部件
-（构词非 null）、全书只属一个人物、长度≥2、非姓／家族构词（`novel/core/name_materials.py::withheld_name_bindings`）。
+（构词非 null）、全书只属一个人物（归属统计包含纯称谓登记）、长度≥2、非姓／家族构词（`novel/core/name_materials.py::withheld_name_bindings`）。
 renderer 在正向材料行（含禁区行）把这类字面换成本场已释放称谓（`novel/stages/common.py::project_withheld_names`：绑定字面与其
 更长称谓一起长名优先认领，只替换绑定字面）；投影只依赖绑定表与本场称谓，不依赖禁用／许可字面，故二者仍是纯验证材料。
-原字段与来源文本不变（归因仍按原字段），替换留痕于 `name_projections`（候选预检报告、guard report、packet_metrics），
+原字段与来源文本不变（归因仍按原字段），六分区（含 `guard_only`）的替换留痕于 `name_projections`（候选预检报告、guard report、packet_metrics），
 不含行文本；人物本场没有已释放称谓时不投影，泄漏如实保留并按原归因回派。短姓、关系称呼、多义字面、未登记表达
 （如源文没有的「陆郎」）与源引文永不投影；Design 自有文本的名称冲突仍由 Design 接受判据拦下，compiler 不自动提前释放全名。
 写手视图摘要含投影后的渲染字节，验证输入摘要含绑定表。Hook 材料暂不投影（Hook 自选释放，已有正式回派）。

@@ -43,6 +43,7 @@ from contracts.schema.source import (
 )
 from contracts.schema.workflow import STAGE4_PRESERVE_PROTOCOL
 from novel.stages.common import check_binding_covers_checkpoint
+from novel.stages.stage4.fact_bindings import fact_binding_errors
 from pydantic import ValidationError
 
 
@@ -814,6 +815,7 @@ def derive_semantic_binding(
             continue
         fact_bindings.append(FactLockBinding(
             kf_id=mark.kf_id, beat_ref=ref[2], address=mark.address))
+    errors.extend(fact_binding_errors(body, fact_bindings, wire_paths=True))
     if errors:
         return None, errors
     try:

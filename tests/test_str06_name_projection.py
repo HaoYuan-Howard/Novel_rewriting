@@ -55,6 +55,28 @@ def test_pure_appellations_and_ambiguous_literals_are_never_bound():
     assert withheld_name_bindings(['陆大哥'], None) == (), '没有名称结构就没有可证明的绑定'
 
 
+def _ambiguous_appellation_characters():
+    """同一字面既是甲的化名，也是乙的纯职称；两条登记都通过正式 schema。"""
+    from contracts.schema.source import CharactersArtifactV4
+    data = _characters().model_dump(mode='json')
+    for char_id in ('fu_jun', 'yun_niang'):
+        data['characters'][char_id]['surfaces'].append({
+            'surface': '方丈', 'from_chapter': 1, 'until_chapter': None,
+            'source_refs': ['e01_01']})
+    person = data['name_structure']['people']['fu_jun']
+    person['aliases'].append({'alias_id': 'al_abbot', 'literal': '方丈'})
+    person['surface_forms']['方丈'] = '{alias:al_abbot}'
+    data['name_structure']['people']['yun_niang']['surface_forms']['方丈'] = None
+    return CharactersArtifactV4.model_validate(data)
+
+
+def test_name_bearing_surface_shared_with_a_pure_appellation_is_not_bound():
+    chars = _ambiguous_appellation_characters()
+    bindings = withheld_name_bindings(['方丈', '陆大哥'], chars.name_structure)
+    assert {literal: char_id for literal, char_id, _ in bindings} == {
+        '陆大哥': 'fu_jun'}, '唯一归属必须统计全部登记称谓，不能漏掉纯称谓的同字面'
+
+
 def test_chapter_ir_rejects_duplicate_binding_literals():
     with pytest.raises(ValueError, match='重复'):
         _chapter(withheld=('陆大哥',), bindings=(WithheldNameBinding(literal='陆大哥', char_id='fu_jun'),) * 2)
@@ -130,6 +152,81 @@ def test_projection_is_pure_deterministic_and_idempotent():
 
 
 # ───────────────────────── 真实章包：书级行与场景行都按本场称谓呈现 ─────────────────────────
+
+def test_compiler_keeps_ambiguous_appellations_for_material_validation():
+    """RC-41：真实编译与材料判据不能把多义源命题静默改为另一人物的事实。"""
+    from novel.stages.common import (
+        build_writer_packet, project_chapter_packet, writer_name_projections,
+    )
+    from novel.stages.stage4 import inspect_body_materials
+    from tests.test_str06_r10b_writer_packet import _binding, _design, _requirements
+    body, chars, brief = _design(), _ambiguous_appellation_characters(), _requirements()
+    binding = _binding(body)
+    brief = brief.model_copy(update={'propositions': (
+        brief.propositions[0].model_copy(update={'statement': '方丈在佛堂念经'}),)})
+    before = [item.model_dump_json() for item in (body, binding, brief, chars)]
+    view = inspect_body_materials(body, binding, brief, chars,
+                                 budget=4000, length_band=(0.6, 1.3))
+    assert not view.errors and view.ir is not None
+    packet = project_chapter_packet(view.ir, 1)
+    assert '方丈' in packet.chapter.withheld_literals
+    assert all(b.literal != '方丈' for b in packet.chapter.withheld_bindings)
+    assert any('方丈在佛堂念经' in line for line in build_writer_packet(packet).must_realize)
+    assert not any(p['literal'] == '方丈' for p in writer_name_projections(packet))
+    assert any(m.literal == '方丈' and any(s.kind == 'knowledge' for s in m.sources)
+               for m in view.materials), '多义材料保持原样，由原字段的字面判据如实报告'
+    assert [item.model_dump_json() for item in (body, binding, brief, chars)] == before
+
+
+def test_guard_only_projection_reaches_compile_report_and_survives_restart(tmp_path):
+    """RC-40/41：禁区投影经真实 compiler 发布、落报告并在重启读取；禁区仍不验词。"""
+    from contracts.schema.hook import HookConstraints
+    from novel.stages.chain import run_workflow
+    from novel.stages.common import (
+        build_writer_packet, project_chapter_packet, writer_material_issues,
+        writer_name_projections,
+    )
+    from novel.store import Str06Repository
+    from tests.str06_facilities import json_ask, text_ask
+    from tests.test_str06_body import _chapters, _make_session
+    from tests.test_str06_hook import _full_chain_wires
+
+    wires = _full_chain_wires()
+    question = '陆大哥当年去了哪里'
+    wires['ch01']['beats'][0]['loops'] = [
+        {'ref': 'q_where', 'op': 'open', 'question': question}]
+    wires['preserve']['obligations'].append({
+        'kind': 'reveal', 'statement': '夫君当年去向之谜保留为悬念',
+        'anchors': ['b01_01.l1'], 'must_preserve': True,
+        'satisfaction': '原文未回答的悬念不得在正文作答', 'requires': []})
+    wires['design']['scenes'][0]['beats'][2]['real'] = ['ob02']
+    repo, session, _transport = _make_session(tmp_path, wires)
+
+    def no_paid_call(*args, **kwargs):
+        raise AssertionError('Stage4 验证不调用正文写手')
+
+    run_workflow(repository=repo, chapters=_chapters(), ask=json_ask(session),
+                 ask_text=text_ask(session), ask_body=no_paid_call, budget=2000,
+                 through='stage4',
+                 hook_constraints=HookConstraints(target_chars=10, hard_max_chars=360))
+    report = repo.inspect('stage4/acceptance/guard/report.json')
+    assert not report['guard_errors']
+    reopened = Str06Repository(repo.root)
+    ir = reopened.read_model('stage4/ir/writer_book_ir.json')
+    packet = project_chapter_packet(ir, 1)
+    assert any('夫君当年去了哪里' in line for line in build_writer_packet(packet).guard_only)
+    expected = {'partition': 'guard_only', 'literal': '陆大哥',
+                'char_id': 'fu_jun', 'replacement': '夫君'}
+    assert expected in writer_name_projections(packet), '禁区实际投影同样必须留痕'
+    persisted = reopened.inspect('stage4/acceptance/guard/report.json')
+    assert persisted == report
+    assert {'chapter_ordinal': 1, **expected} in persisted['name_projections']
+    # 禁区投影缺失与禁区验词是两个边界：即使保留完整未释放称谓，也不扩大扫描面。
+    no_binding = packet.model_copy(update={'chapter': packet.chapter.model_copy(
+        update={'withheld_bindings': ()})})
+    assert any(question in line for line in build_writer_packet(no_binding).guard_only)
+    assert writer_material_issues(no_binding, internal_ids=set()) == ()
+
 
 def test_writer_packet_projects_scene_and_book_level_lines_and_keeps_sources_original():
     from novel.stages.common import (

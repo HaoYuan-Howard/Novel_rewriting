@@ -135,7 +135,8 @@ _hard('guard_m3_early_effect', 'stage4',
       'M3 entry_state 的 established_by 早于本场起点（不提前效应）', 'R-6.6',
       fix=_FIX_COMPILE)
 _hard('guard_m4_carrier_ref', 'stage4',
-      'M4 承载位置指向真实场景/拍（跨产物存在性）', 'R-6.7', fix=_FIX_COMPILE)
+      'M4 承载位置指向真实场景/拍；事实锁地址在承载拍内恰好对应一条状态',
+      'R-6.7', fix=_FIX_COMPILE)
 _hard('guard_m5_surface_release', 'stage4',
       'M5 称谓释放集与 Design 显式释放集一致', 'R-6.8', fix=_FIX_COMPILE)
 _hard('guard_m6_cast_legality', 'stage4',
@@ -167,7 +168,7 @@ _hard('design_lock_acceptance', 'stage4',
       'kp 键持有者须有锁且模式被授权（known 只能来自 known 锁）、读者确认须有 '
       'reader known 锁；kf 事实锁在已选状态上用 lock 标注（stage4-design-v8）：'
       '时态锁标在同 modality 的 set、值未知锁标在 op=unknown、原文未回答锁是禁区不承载状态、'
-      '一锁一承载、映射随 Binding 发布不复制 value；必保锁兑现', 'R-5.17')
+      '一锁一承载且承载拍内地址唯一、映射随 Binding 发布不复制 value；必保锁兑现', 'R-5.17')
 _hard('binding_series_collapse', 'stage4',
       'Bind series 分别承载：同一 series 成员绑定不同拍（同拍即 '
       'series_collapsed）；投影带出 series 与锁摘要；必保缺口默认归 design',

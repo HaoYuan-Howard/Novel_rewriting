@@ -20,6 +20,8 @@ from __future__ import annotations
 
 from copy import deepcopy
 
+import pytest
+
 from contracts.schema.grounding import (
     BriefFactLock, BriefKnowledgeChange, BriefKnowledgeLock, BriefProposition, PreserveCheckpoint,
     ReconstructionBrief,
@@ -679,3 +681,89 @@ def test_binding_refuses_a_mapping_that_points_at_no_state_in_the_body():
         design_placements(model), body, _checkpoint(), moved)
     assert binding is None
     assert any('承载状态在 BodyDesign 中不存在' in e for e in errors), errors
+
+
+@pytest.mark.parametrize(('kind', 'beat_i'), [('expected', 5), ('unknown_value', 6)])
+def test_fact_lock_address_is_unique_in_its_carrier_beat_and_locatable(kind, beat_i):
+    """锁的拍＋地址必须唯一定址；同拍追加未标锁的 actual 不能旁路时态／未知限制。"""
+    from novel.stages.stage4 import locate_design_patches
+    brief = _brief()
+    wire = _design_wire_v8(brief)
+    carrier = wire['scenes'][0]['beats'][beat_i]
+    state = carrier['state'][0]
+    carrier['state'].append({'at': state['at'], 'key': state['key'],
+                             'val': '已给出确定结果', 'modality': 'actual'})
+    before = deepcopy(wire)
+    body, errors = _inspect_v8(wire, brief)
+    assert body is not None, '安全可构造的候选保留给独立检查，不授予发布资格'
+    issue = next(e for e in errors if getattr(e, 'code', '') == 'fact_lock_ambiguous')
+    assert _kf(brief, kind) in issue
+    assert issue.owner == 'design'
+    assert issue.context['wire_paths'] == [
+        ['scenes', 0, 'beats', beat_i, 'state', 0],
+        ['scenes', 0, 'beats', beat_i, 'state', 1]]
+    located = locate_design_patches(wire, [issue])
+    assert located == [(('scenes', 0, 'beats', beat_i), [issue])], '耦合状态整拍修订'
+    # 重写候选文案不改变引用歧义的身份，也不改输入。
+    changed = deepcopy(wire)
+    changed['scenes'][0]['beats'][beat_i]['state'][1]['val'] = '另一个确定结果'
+    _, next_errors = _inspect_v8(changed, brief)
+    next_issue = next(e for e in next_errors if getattr(e, 'code', '') == 'fact_lock_ambiguous')
+    assert next_issue.identity == issue.identity
+    assert wire == before
+    binding, errors = _derive_binding_v8(wire, body)
+    assert binding is None, 'Binding 派生也必须防御，不能只依赖上层接受校验'
+    assert any(getattr(e, 'code', '') == 'fact_lock_ambiguous' for e in errors), errors
+
+
+def test_fact_lock_does_not_ban_same_address_updates_in_other_beats_or_unlocked_addresses():
+    """唯一性只约束被锁的承载拍地址；后拍兑现与未被锁地址保持现役行为。"""
+    brief = _brief()
+    wire = _design_wire_v8(brief)
+    wire['scenes'][0]['beats'].append({
+        'ev': '夫君归来并说明去向', 'who': ['fu_jun'], 'state': [
+            {'at': 'world', 'key': 'return_time', 'val': '已归家'},
+            {'at': 'world', 'key': 'departure_whereabouts', 'val': '南边'},
+            {'at': 'world', 'key': 'unlocked_progress', 'val': '尝试'},
+            {'at': 'world', 'key': 'unlocked_progress', 'val': '完成'}]})
+    body, errors = _inspect_v8(wire, brief)
+    assert body is not None and not errors, errors
+    binding, errors = _derive_binding_v8(wire, body)
+    assert binding is not None and not errors, errors
+    assert len(binding.fact_bindings) == 2
+
+
+@pytest.mark.parametrize('fault', ['expected', 'unknown_value', 'missing_state', 'missing_beat'])
+def test_canonical_fact_binding_is_rechecked_by_execution_plan(fault):
+    """正式 BodyDesign＋Binding 免费重编译同样拒绝歧义／悬空，不信任历史接受结论。"""
+    from novel.stages.stage4.compile import compile_execution_plan
+    brief = _brief()
+    wire = _design_wire_v8(brief)
+    body, errors = _inspect_v8(wire, brief)
+    assert body is not None and not errors, errors
+    binding, errors = _derive_binding_v8(wire, body)
+    assert binding is not None and not errors, errors
+    kind = 'unknown_value' if fault == 'unknown_value' else 'expected'
+    mapping = next(f for f in binding.fact_bindings if f.kf_id == _kf(brief, kind))
+    scenes = list(body.scenes)
+    beats = list(scenes[0].beats)
+    beat_i = 6 if kind == 'unknown_value' else 5
+    if fault == 'missing_beat':
+        binding = binding.model_copy(update={'fact_bindings': tuple(
+            f.model_copy(update={'beat_ref': 'sc99#b99'}) if f == mapping else f
+            for f in binding.fact_bindings)})
+    else:
+        state = beats[beat_i].target_delta[0]
+        delta = () if fault == 'missing_state' else (
+            state, state.model_copy(update={'op': 'set', 'value': '已给出确定结果',
+                                           'modality': 'actual'}))
+        beats[beat_i] = beats[beat_i].model_copy(update={'target_delta': delta})
+        scenes[0] = scenes[0].model_copy(update={'beats': tuple(beats)})
+        body = body.model_copy(update={'scenes': tuple(scenes)})
+    body_before, binding_before = body.model_dump(), binding.model_dump()
+    plan, errors = compile_execution_plan(body, binding)
+    assert plan is None
+    expected_code = 'fact_lock_missing' if fault.startswith('missing') else 'fact_lock_ambiguous'
+    issue = next(e for e in errors if getattr(e, 'code', '') == expected_code)
+    assert mapping.kf_id in issue and 'M4' in issue
+    assert body.model_dump() == body_before and binding.model_dump() == binding_before

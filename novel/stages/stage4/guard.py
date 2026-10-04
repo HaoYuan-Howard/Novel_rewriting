@@ -27,6 +27,7 @@ from contracts.schema.state import EffectDomain
 from novel.stages.stage4.grounding import (
     KNOWLEDGE_LOCK_MODE, obligation_core_id,
 )
+from novel.stages.stage4.fact_bindings import fact_binding_errors
 
 
 
@@ -84,13 +85,14 @@ def check_entry_timing(
 def check_binding_beat_refs(
     binding: SemanticBinding, graph: BodyDesign,
 ) -> list[str]:
-    """M4：承载位置必须指向真实场景/拍（跨产物存在性，schema 只能保前缀）。"""
+    """M4：义务指向真实拍；事实锁的拍＋地址须唯一定址，正式消费不信任旧接受结论。"""
     refs = {f'{s.scene_id}#{b.beat_id}' for s in graph.scenes for b in s.beats}
     problems = []
     for entry in binding.entries:
         for ref in (entry.beat_ref, *entry.supporting_beat_refs):
             if ref not in refs:
                 problems.append(f'M4 承载位置：{entry.obligation_id} 的 {ref!r} 不是真实拍')
+    problems.extend(fact_binding_errors(graph, binding.fact_bindings))
     return problems
 
 

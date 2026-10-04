@@ -78,7 +78,10 @@
     },
     "tests/test_str06_name_projection.py": {
       "layer": "unit_contract",
-      "stages": ["stage4", "stage5"]
+      "stages": ["stage4", "stage5"],
+      "cases": {
+        "test_guard_only_projection_reaches_compile_report_and_survives_restart": "stage"
+      }
     },
     "tests/test_str06_design_patch.py": {
       "layer": "stage",

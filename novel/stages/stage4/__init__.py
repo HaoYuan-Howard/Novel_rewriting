@@ -10,6 +10,8 @@
                    wire 的 real 标注派生，`derive_semantic_binding`）。
   · `hook.py`      Hook Design 的确定性校验臂与唯一 graph publisher
                    （`str06.stage4.hook_design`；B3 后半自 stage5 包归位）。
+  · `hook_validation.py` Hook选择的纯结构判据；wire接受与canonical复验共用，
+                   validator不依赖producer、compiler或LLM。
   · `hook_context.py` HookContext 确定性投影（`str06.stage4.compile` 的一段；
                    B3 后半自 stage5 包归位）。
   · `compile.py`   ExecutionPlan 确定性编译＋章闭包证明（`str06.stage4.compile`）。
@@ -59,6 +61,7 @@ from novel.stages.stage4.guard import (
     scene_order,
 )
 from novel.stages.stage4.hook import assemble_hook_design, publish_graph
+from novel.stages.stage4.hook_validation import validate_hook_design
 from novel.stages.stage4.hook_context import compile_hook_context
 from novel.stages.stage4.slim import design_fact_marks, design_placements
 from novel.stages.stage4.design_paths import locate_design_patches
@@ -79,5 +82,5 @@ __all__ = [
     'expected_thread_faces', 'fold_accepted_prefix', 'fold_thread_faces',
     'init_establishments', 'lock_order_violations', 'obligation_core_id',
     'project_brief', 'project_design_input', 'project_hook_semantics', 'project_preserve_view', 'preserve_revision_wire',
-    'publish_graph', 'run_mechanical_guard', 'scene_order',
+    'publish_graph', 'run_mechanical_guard', 'scene_order', 'validate_hook_design',
 ]

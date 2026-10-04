@@ -2111,6 +2111,8 @@ def _build_writer_packet(packet: ChapterWriterPacket) -> tuple[WriterPacket, dic
         'continuity': continuity.parts(deduplicate=True),
         'creative_guidance': creative.parts(),
         'background': background.parts(),
+        # 禁区投影也须留痕；writer_material_issues 仍只取上述五个正向分区。
+        'guard_only': guard_only.parts(deduplicate=True),
     }
     return view, materials
 

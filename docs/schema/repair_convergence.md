@@ -23,7 +23,7 @@ Gherkin 使用 [Cucumber 官方语法](https://cucumber.io/docs/gherkin/referenc
 | 同上 | RC-36／38 | 已实现（2026-10-04，rc16，`stage4-design-v8`）：事实锁在已选状态上标注`lock`，映射随SemanticBinding发布且不复制value；`tests/test_str06_a4_design_locks.py`（CS-F2一节：真实v8入口的正反例与RC-38四行）、`tests/test_str06_fact_lock_stage.py`（真实Stage2→Preserve→body_design→compile链）、`tests/test_str06_design_slim.py`、`tests/test_str06_contracts.py` |
 | 同上 | RC-37／39 | **仅结构层已实现**：结构检查只报引用与模式的实际结果，语义对应未运行即保持unver；局部语义核验及其源盲请求组装属CS-F3（先标定、后启用），**尚未实现** |
 | 同上 | RC-40～43 | 已实现Writer路径（2026-10-04，IR rc16／renderer v10）：只投影已证明唯一绑定人物的完整登记称谓，短姓／未登记表达不猜人物，留痕可观测，Design自有文本冲突不由compiler代选；`tests/test_str06_name_projection.py`、`tests/test_str06_material_repair.py`（归因仍按原字段）、`tests/test_str06_r10b_writer_packet.py`。**Hook材料尚未投影**，Stage7无需改动（新称谓创作不在本批，RC-42只证拒绝未登记别名） |
-| 同上 | RC-44～45 | `tests/test_str06_candidate_preflight.py`：同一候选聚合自身及继承材料问题，真实接受入口上游优先且失败不发布，免费恢复与已有Hook复验，依赖缺失明确未运行；验证状态见REQUIREMENTS |
+| 同上 | RC-44～45 | `tests/test_str06_candidate_preflight.py`：同一候选聚合自身及继承材料问题，真实接受入口上游优先且失败不发布，免费恢复与已有Hook复验，依赖缺失明确未运行；验证记录见提交`edf965d7`说明及重置前（`eb5f0d5a`）的REQUIREMENTS |
 | 同上 | RC-47 | 已实现（2026-10-04）：Design错误在判定处带wire路径，最小完整父项／耦合字段合并／替换不重叠，合并后重跑完整预检，无法定位退整份；`tests/test_str06_design_patch.py`（定位策略纯函数＋真实`patches`回答的stage用例）、`tests/test_str06_product_entry.py`（真实子进程）。未转换路径的错误类（读取／确认闭合、全局覆盖闸等）仍整份修订 |
 | 同上 | RC-46／48／49 | 责任归因的语义面、版本恢复和分项成本验收；目标行为，未绑定绿证据前不得宣称实现 |
 | [计量与对照](../specs/cost_accounting.feature) | CU-01～06 | provider usage解析、新购和缺账恢复、缓存去重、只读历史补证 |
@@ -92,7 +92,7 @@ A+B→B+C可在原轮数上限内继续，但不报告为问题减少，也不�
 红例记录见`.test_cache/role-boundaries-red.xml`中的RC-18、RC-19 associate与RC-21，
 `role-boundaries-red-associate.xml`中的RC-20，以及`role-boundaries-red-materials.xml`
 中的RC-22缺失语义与RC-24。首轮记录中另有fixture来源过期、导入与路径错误，
-不计入缺陷证据；修正fixture后的绿证据与分母统一记在REQUIREMENTS。
+不计入缺陷证据；修正fixture后的绿证据与分母记在提交说明及重置前（`eb5f0d5a`）的REQUIREMENTS，现行REQUIREMENTS只登记未完成项。
 RC-19收口追加`test_rc19_three_digit_chapter_can_persist_and_resume_its_revision`：
 `chapter_owner_product_rel`原先把两位最小格式宽度误当章号上限；修正后通过正式
 问题账、重启摘要与修订门控验证。红例见`.test_cache/role-boundaries-scope-red.xml`。
@@ -205,7 +205,9 @@ owner，Preserve不私建新事实版本。
 不得要求模型生成正式ID、hash，或将源状态的自由key直接猜成目标状态key。
 
 正式映射由body_design同次发布的SemanticBinding承载，每条只保留锁引用、
-目标拍及需要时的状态地址，不复制目标value。BodyDesign继续唯一持有目标事实。
+目标拍及需要时的状态地址，不复制目标value。承载拍内该地址必须恰好对应一条
+状态，不存在或歧义均拒绝；Design接受、Binding派生及正式产物免费重编译共用
+这一引用要求。其他拍对同地址的合法更新不受限制。BodyDesign继续唯一持有目标事实。
 多个义务共用同一锁／同一承载时可共享映射；修改目标内容后对应接受证明必须
 失效，不能仅凭目标ID未变化沿用核验。现有`real`仍决定义务接受／支撑拍，
 `know`仍决定认知变化拍；事实绑定不再另造一套义务承载位。
@@ -236,7 +238,8 @@ Design的局部语义核验只消费正式Brief和对应候选片段，不引入
 字段套用正文禁词表。源引文保持原字节并标明证据用途，不能作为未经投影的正文材料。
 
 只扩展已有名称投影，不把全部自由文本模板化。对正式登记、能唯一绑定人物的
-完整称谓，投影可在明确的正向材料字段内选用该位置已经允许的表述；保留原字段
+完整称谓，归属统计包含所有人物的登记surface（含纯称谓）；只有唯一人物的
+对应构词非空时才可投影。投影可在明确的正向材料字段内选用该位置已经允许的表述；保留原字段
 及人物来源，衍生文本不反写事实。短姓、关系称呼、多义字面、未登记表达不能据
 字符串相似性推断人物；不能用全局替换“陆→夫君”或“裴→表弟”。无法证明指向
 时返回具体源字段给其owner登记／改写，不买Design去修确定性投影。
@@ -254,7 +257,8 @@ Design的局部语义核验只消费正式Brief和对应候选片段，不引入
 
 复用`novel/stages/stage4/preflight.py`及现有编译器。候选处理分为wire解析／
 结构构造、Design局部检查、Binding派生、执行计划／Writer材料预检；Hook尚未
-生成时明确未运行，生成后仍走真实Hook检查。安全可构造的候选同时执行所有
+生成时明确未运行；恢复预览对已有Hook先重跑正式接受判据，再做上下文与材料
+检查。安全可构造的候选同时执行所有
 独立检查，不能因为一处名称错误就遮住已有输入足以检测的14处继承材料问题。
 
 内部诊断统一包含规则身份、责任依据、正式来源、目标位置、可编辑wire路径与
