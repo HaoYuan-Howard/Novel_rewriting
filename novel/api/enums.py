@@ -66,7 +66,6 @@ _CONSUMED: dict[str, str] = {
 #: ⚠ 这张表**必须逐个列名**，不许写成「所有标量一律不发」那种规则：
 #: 那样新加一个标量会被**静默**挡住，而静默正是本模块要防的方向。
 _WITHHELD: dict[str, str] = {
-    'SOURCE_BLURB_EVIDENCE_POLICY': '源文案审阅的后端身份规则；前端只展示证据来源和 typed 结论，不选择或重算策略',
     'WORKFLOW_ROLE_CONTRACT': '工作流执行身份；界面只显示后端工作单元读模型',
     'WORK_UNIT_EXECUTOR_MAX_CONTENT_CALLS': '预算已由持久工作单元账折叠，前端不自行重算',
     'BOOK_CONTENT_CALL_CEILING_DEFAULT': '整书付费总闸默认值只由后端 reserve 时强制；前端显示工作单元预算投影，不自行判断余量',
@@ -116,21 +115,6 @@ _WITHHELD: dict[str, str] = {
     'OPERATOR_TELEMETRY_SOURCES': '同上，遥测来源由本地入口固定',
     'OPERATOR_TERMINAL_STATES': '同上，终态由本地 fold 契约解释',
     'OPERATOR_DURATION_SOURCES': '同上，时长来源由本地计时边界决定',
-    'GLOBAL_REVIEW_DISCLOSURE_KINDS': (
-        '它是**分类表**，不是取值面。Stage2 语义审阅退役后只剩旧盘 reviewed-edit '
-        '恢复路径在消费；现役 API 不再有 GlobalReviewRow，发出去只会诱导前端自判'),
-    'GLOBAL_REVIEW_KINDS': (
-        '退役 Global 审阅的 kind 关闭式取值域；只由旧盘 reviewed-edit 恢复路径与'
-        '冻结历史账解码消费，不是现役前端选项'),
-    'GLOBAL_REVIEW_EFFECTS': (
-        '退役审阅对交付效果的分类词；现役只按交付披露输出，不再有审阅效果面'),
-    'GLOBAL_REVIEW_GENERATION_DISPOSITIONS': (
-        '退役审阅的生成处置取值域；只由旧盘 reviewed-edit 恢复路径消费，不是前端选项'),
-    'GLOBAL_REVIEW_GENERATION_IMPACTS': (
-        '生成影响是退役审阅复核路由的关闭式取值域，只余旧盘恢复路径消费，不是前端选项'),
-    'GLOBAL_REVIEW_GENERATION_IMPACT_BY_KIND': (
-        '它是 kind → 生成处置的历史分类表；Stage2 语义审阅退役后只由旧盘 reviewed-edit '
-        '恢复路径消费，不再进入现役工作包或闸门'),
     'LEGACY_STAGE5_MODES': '只用来识别并拒绝旧 deep/shallow 盘面，不是现役选项',
     # ── 分章（stage0 / stage1）的判据阈值与剥壳正则 ──
     'NONBODY_LEAD_STRIP': '正则。发过去等于请前端自己剥壳，而剥出来的 core 是所有长度阈值的输入',
@@ -142,11 +126,6 @@ _WITHHELD: dict[str, str] = {
     'NONBODY_HEAD_MAX_CP': '判据阈值（篇首非正文标记的最大码点数）',
     'NONBODY_MID_MAX_CP': '判据阈值（篇中同上）',
     'NONBODY_MARKER_WARN_CP': '判据阈值（长标记报警线）',
-    # ── stage2（role 泄漏探针）──
-    'FATE_WORDS': (
-        'role 泄漏的生成/判据共享词表；它只是低召回率字面探针，'
-        '发布给前端会诱导浏览器把未命中重算成“没有剧透”'),
-    # ── 事件拍 ──
     'BLUEPRINT_ARCHITECTURE': '`stage2.blueprint` 那次调用的**模型可见边界身份**，'
                               '是产地写进 `_provenance.context.architecture` 的一笔账。'
                               '⚠ 前端要显示的是**这份产物是哪个架构产的**，'
@@ -154,6 +133,7 @@ _WITHHELD: dict[str, str] = {
                               '**无条件报出**。enums 再发一份「当前是哪一版」，'
                               '前端就能拿它自己判「这份产物过期没有」——'
                               '而那正是判据在做的事（`R-11.4` 的第二个判官）',
+    # ── stage2（role 泄漏探针）──
     'SPEECH_TAG_MAX': '判据阈值（说话标签最大长度）',
     # ── stage4 / stage5 ──
     'SOURCE_OVERLAP_MAX': '判据阈值（canonical 成稿与原文的重合度上限）',
@@ -161,18 +141,6 @@ _WITHHELD: dict[str, str] = {
     'REVALIDATE_ONLY_NEW_ERRORS': '一个 bool 开关，说的是重算路怎么判。前端不参与那次判定',
     'STYLE_MEASUREMENT_CONTRACT': '即时机械测量算法的当前版本；Stage5/6 已把它并入 Stage1 '
                                   '消费投影。发给前端会诱导第二个过期判官',
-    'STRUCTURE_METRIC_CONTRACT': 'Stage4 结构指标算法版本；实例值已随计划来源账与结构审批主体落盘，'
-                                 '前端只展示当前计划的决定与审批态，不自行判断算法新旧',
-    'DESIGN_REVIEW_CONTRACT': 'Stage4A 正式审阅 subject 的算法版本；后端已把它折进完整 hash，'
-                              '前端只提交模板给出的 subject，不自行判断审阅是否过期',
-    'LEGACY_V3_DESIGN_REVIEW_CONTRACT': (
-        'Stage4A v3 split-capability 历史解码版本；只供后端无损读旧决定，'
-        '不发布给前端、不取得 current 审阅或执行权'),
-    'LEGACY_V4_DESIGN_REVIEW_CONTRACT': '仅供后端识别旧审阅，当前界面消费后端有效性判定，不自行比版本',
-    'FROZEN_V6_DESIGN_REVIEW_CONTRACT': (
-        '仅供后端无损解码不可变历史决定；现役不开放旧 Blueprint 兼容消费或恢复'),
-    'BLIND_ALIAS_ALGORITHM': 'Stage4A 审计用的 opaque alias 算法身份；前端既不生成 alias，'
-                             '也不据此判断候选是否可用',
     'PIPELINE_DEFAULT_CONCURRENCY': '并发默认由 Agent capability 发布，enums 不另复制',
     'PIPELINE_BOOK_CONCURRENCY': '整书总槽默认由 Agent capability 发布',
     'PIPELINE_PROVIDER_CONCURRENCY': '供应商总槽默认由 Agent capability 发布',

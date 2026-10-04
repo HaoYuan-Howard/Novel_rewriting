@@ -25,12 +25,12 @@ from pydantic import ValidationError
 #   反向覆盖账就会看到新旧两组判据而误红。本文件的 fixture 对账只做
 #   model_validate，不查 REGISTRY；新链判据注册见 `contracts/judges/str06.py`。
 from contracts.invariants import (
-    LLM_EXECUTOR_NODES, APPROVAL_GATES, RETENTION_CANDIDATE_KINDS,
+    LLM_EXECUTOR_NODES, RETENTION_CANDIDATE_KINDS,
 )
 from contracts.rules import REGISTRY
 from contracts.schema.api import (
     AgentCapabilitiesResponse,
-    AgentRunRequest, AgentRunList, ApprovalDoc, ErrorBody, NovelOverview,
+    AgentRunRequest, AgentRunList, ErrorBody, NovelOverview,
     JobList, LogChunk, LogStreamEvent, NovelList, PreviewRequest,
     LegacyModelCapability, LegacyProviderCapability, LegacyThinkingCapability,
     RetentionApplyRequest, RetentionPlanView, RetentionPolicyRequest,
@@ -38,7 +38,6 @@ from contracts.schema.api import (
     Stage1Segment, Stage1View,
     TrashRestoreApplyRequest, TrashRestorePlanView, UploadResult,
 )
-from contracts.schema.plot import SourceContext
 from contracts.schema.orchestration import (
     LegacyExecutorBackend, LegacyLlmProfile,
     AgentRunStart, ArtifactState, JobStart, RunProgressView, Step,
@@ -268,22 +267,9 @@ def test_stage1_continuous_view_and_chapter_index_reject_gaps():
         Stage1View(segments=[first, contiguous])
 
 
-def test_reading_source_presence_distinguishes_unknown_from_explicit_empty():
-    # 现役契约（contracts/schema/plot.py）：省略 present = 已确定与 participants
-    # 一致（合法默认），None = 未知，[] = 明确空——三态必须分开。
-    base = dict(evidence_refs=['e01_01'], time_layer='present', place=None)
-    assert SourceContext(**base, present=[]).present == []
-    assert SourceContext(**base, present=None).present is None
-    assert SourceContext(**base).present is None, '省略 = 合法默认，不是错误'
-    actor = {'char_id': 'char_001', 'presentation_ref': 'ap01_01'}
-    with pytest.raises(ValidationError):
-        SourceContext(**base, present=[actor, actor])
-    distinct = SourceContext(**base, present=[actor,
-        {'char_id': 'char_001', 'presentation_ref': 'ap01_02'}])
-    assert [row.presentation_ref for row in distinct.present] == ['ap01_01', 'ap01_02']
-    # 旧字段保留拒绝反例；不能用它证明当前完整 ActorRef 的重复检查。
-    with pytest.raises(ValidationError):
-        SourceContext(**base, present_char_ids=['char_001', 'char_001'])
+# （历史）旧链 ReadingView 的 SourceContext 三态用例已随 contracts/schema/plot.py
+# 删除（2026-10-04 清理批）；「unknown/合法空/省略」三态纪律由现役
+# Str06 视图族与 contracts/schema/common.py 的同型字段继续承担。
 
 
 def test_the_api_models_never_spell_out_a_value_domain():
@@ -345,37 +331,6 @@ def test_the_contract_layer_never_imports_the_web_stack():
     assert not (mods & {'fastapi', 'starlette', 'uvicorn', 'novel'}), \
         f'contracts/schema/api.py 长出了不该有的依赖：{sorted(mods)}'
     assert 'pydantic' in mods, 'pydantic 都没 import 到——AST 多半解析错了'
-
-
-def test_approval_doc_v9_has_the_current_six_gates_and_no_seen_ledger():
-    """Stage2 语义审阅退役后：gate 不再有 s2，整本已读/接受账面（``seen``）退场。"""
-    payload = {
-        'v': 9,
-        'sid': '123',
-        'gate': {gate: False for gate in APPROVAL_GATES},
-        'writing': False,
-        # F8b-3：ApprovalDoc.prepare 字段随 Stage6 prepare 链退役删除。
-        'structure': {
-            'state': 'unavailable', 'current_subject_sha256': None,
-            'current_decision': None, 'history': [],
-        },
-        'spawns': {},
-    }
-    doc = ApprovalDoc.model_validate(payload)
-    assert set(doc.gate) == set(APPROVAL_GATES) == \
-        {'s0', 's1', 's4', 's5', 's6', 's7'}
-    assert 'seen' not in ApprovalDoc.model_fields
-    assert 'prepare' not in ApprovalDoc.model_fields
-    with pytest.raises(ValidationError):
-        ApprovalDoc.model_validate({**payload, 'v': 8})
-    with pytest.raises(ValidationError):
-        ApprovalDoc.model_validate({
-            **payload,
-            'gate': {**payload['gate'], 's2': False},
-        })
-    # 旧 v8 的已读凭证不再有落点：extra 关闭式拒绝，不能被静默丢掉。
-    with pytest.raises(ValidationError):
-        ApprovalDoc.model_validate({**payload, 'seen': {'read': False}})
 
 
 def test_log_chunk_counts_bytes_not_characters():

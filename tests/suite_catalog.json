@@ -269,17 +269,6 @@
         "stage7"
       ]
     },
-    "tests/test_approvals.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage0",
-        "stage1",
-        "stage2",
-        "stage4",
-        "stage5",
-        "stage7"
-      ]
-    },
     "tests/test_archive_stage3_v1_books.py": {
       "layer": "unit_contract",
       "stages": []
@@ -615,18 +604,6 @@
       "layer": "unit_contract",
       "stages": [
         "stage2"
-      ]
-    },
-    "tests/test_stage4_approval_landed.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage4"
-      ]
-    },
-    "tests/test_stage4_design_contract_v3.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage4"
       ]
     },
     "tests/test_start_script.py": {

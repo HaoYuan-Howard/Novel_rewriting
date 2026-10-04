@@ -24,6 +24,13 @@ contracts.schema —— 产物 schema 的机器形态。
 而它必须同批写下重建的成本与授权。
 ⇒ 要破坏某个产物的形状，做法是把该路径的 `current_version` +1，**并在同一批里回答
 「存量产物由谁重建」**，不是加一条迁移把旧字节读成新形状。
+
+⚠ 2026-10-04 清理批（用户裁决：不需要旧产物读兼容；旧根整体 `legacy_incompatible`
+  拒识，历史→新契约的转换最多走仓外临时脚本）：旧链 schema 模块
+  （stage2/stage4/stage5/plot*/characters*/analyze*/knowledge/evaluation/
+  core_evidence/stage4_source/agent_wire）与存量审批账解码面
+  （approvals.py 的 `_ApprovalRecordV9` 族、api.py 的 Approval/Design/Structure/
+  Writing/Closure 决定族）整批删除。现役契约 = 本文件 import 的这一面。
 """
 from __future__ import annotations
 
@@ -36,25 +43,9 @@ from pydantic import BaseModel
 from contracts.artifacts import (
     RETIRED_ARTIFACT_PATHS,
     STAGE0_REVISIONS, STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT,
-    STAGE2_ANALYZE_RECEIPT, STAGE2_CHARACTERS, STAGE2_CHARACTERS_EDIT,
-    STAGE2_BLUEPRINT_CHARACTER_PROJECTION, STAGE2_BLUEPRINT_EDIT,
-    STAGE2_CHAPTER_BLUEPRINTS, STAGE2_KNOWLEDGE_LINKS, STAGE2_GLOBAL_EDIT, STAGE2_GLOBAL_EDIT_COMMIT,
-    STAGE2_GLOBAL_EDIT_INPUT_COMMIT,
-    STAGE2_GLOBAL_EDIT_FAILURE,
-    STAGE2_GLOBAL_GROUNDING, STAGE2_GLOBAL_REVIEW, STAGE2_GLOBAL_REVIEW_DECISIONS,
-    STAGE4_BLIND_CANDIDATE, STAGE4_BLIND_CHAPTER_EDIT, STAGE4_EVIDENCE_BINDING,
-    STAGE4_PLAN_CHAPTERS, STAGE4_PLAN_EDIT, STAGE4_WRITER_CONTEXT,
-    STAGE5_CHAPTER, STAGE5_REJECTED_REVISION,
-    STAGE5_REVIEWER_REWRITE_REQUEST,
-    STAGE5_REVIEW, STAGE5_TRIM_AUDIT, STAGE5_TRIM_RESOLUTION,
-    STAGE5_WONTFIX, STAGE6_HOOK,
-    STAGE6_HOOK_EDIT, STAGE6_WONTFIX, STAGE7_NAME_MAP,
-    STAGE7_NAME_MAP_EDIT,
 )
 
 from contracts.schema.api import (
-    ApprovalAction,
-    ApprovalDoc,
     ErrorBody,
     InboxItem,
     InboxView,
@@ -69,21 +60,9 @@ from contracts.schema.api import (
     Stage0Segments,
     Stage1Segment,
     Stage1View,
-    Stage5ChapterSubject, Stage5TrimSubject, Stage5TrimWorkItem,
     UploadResult,
 )
 from contracts.schema.base import Fp10, FrozenModel, Sha1, StrictModel
-from contracts.schema.characters import CharacterRegistry, CharactersEdit
-from contracts.schema.analyze import AnalyzeReceipt
-from contracts.schema.analyze_recovery import AnalyzeRecoveryJournal
-from contracts.schema.analyze_draft import AnalyzeOwnerDraftEdit, AnalyzeDraftRepairJournal
-from contracts.artifacts import (
-    STAGE2_ANALYZE_OWNER_DRAFT_EDIT, STAGE2_ANALYZE_CHARACTERS_DRAFT_REPAIR,
-    STAGE2_ANALYZE_GLOBAL_DRAFT_REPAIR,
-)
-from contracts.artifacts import STAGE2_ANALYZE_RECOVERY
-from contracts.schema.knowledge import KnowledgeGrounding
-from contracts.schema.plot_edit import PlotEdit
 from contracts.schema.common import (
     Finding,
     FreeProvenance,
@@ -105,10 +84,6 @@ from contracts.schema.common import (
 from contracts.schema.corpus import (
     CorpusArtifactEntry, CorpusBookEntry, CorpusLedgerSummary, CorpusManifest,
     CorpusSkipExpectation, LedgerTokenSummary,
-)
-from contracts.schema.evaluation import (
-    EvidenceRef,
-    TrimAudit, TrimResolution,
 )
 from contracts.schema.report import (
     AccountingLine,
@@ -132,54 +107,6 @@ from contracts.schema.stage0 import (
     Stage0Source, Stage0Transform, Stage0Warning,
 )
 from contracts.schema.stage1 import HookCopy, MainText, MainTextSection
-from contracts.schema.stage2 import (
-    Address, Canon,
-    BlueprintCharacterProjection, BlueprintCharacterProjectionChapter,
-    ChapterBlueprints, Character,
-    CharacterRef, CharacterResponse,
-    Entities, EvidenceLocator,
-    FactEvidence, GlobalEdit,
-    CharacterCollectionItem, GlobalCollectionAdd, GlobalCollectionDelete,
-    GlobalCollectionEdit, GlobalCollectionSplit,
-    GlobalEditCommit, GlobalEditCommitBaseline, GlobalEditCommitTarget,
-    GlobalEditInputCommit,
-    GlobalEditFailure, GlobalEditQuarantineGroup, GlobalEditReviewAttestation,
-    GlobalEditReviewTarget,
-    GlobalGrounding,
-    GroupRef, KnowledgeEvent, KnowledgeEventResponse,
-    Relation, RelationPatch, RelationVisibility,
-    Secret, SecretPatch, Setting, SettingPatch, SourceSpan, WorldRule,
-    WorldRulePatch, WorldRuleVersion,
-)
-from contracts.schema.stage4 import (
-    BlindCandidate, BlindChapterEditRequest, CtxChapter, CtxGoal, CtxScene,
-    EvidenceBinding, PlanChapter, PlanChapters, PlanEdit, PlanGoal,
-    PlanScene, WriterContext,
-)
-from contracts.schema.stage5 import (
-    Chapter, ChapterResponse, ChapterSegment, DraftConsumed,
-    JudgedDraft, PreparedRecoveryAction, PreparedRecoveryChapter,
-    PreparedRecoveryJournal, PreparedRecoveryManifest, PreparedRecoveryWorkpack,
-    RejectedAttempt, RejectedRevision, Review, ReviewChapter,
-    ReviewerRewriteDirective, ReviewerRewriteDisposition,
-    ReviewerRewriteExecutionJournal, ReviewerRewriteRecoveryJournal,
-    ReviewerRewriteSuccessorJournal,
-    ReviewerRewriteExecutionState, ReviewerRewriteProbe,
-    ReviewerRewriteRequest, ReviewerRewriteSubject,
-    ReviewerRewriteBatchRequest, ReviewerRewriteBatchTrustedInput, ReviewerRewriteTarget,
-    ReviewerRewriteTrustedInput, reviewer_rewrite_execution_journal_sha256,
-    reviewer_rewrite_disposition_sha256,
-    reviewer_rewrite_recovery_journal_sha256,
-    reviewer_rewrite_successor_journal_sha256,
-    reviewer_rewrite_request_sha256,
-)
-# ⚠ F8a：`contracts.schema.stage6` / `stage6_prepare` 两个模块的 import 与
-#   ARTIFACT_SPECS 挂载（八项）随 Stage6 整层退役删除（F6d 登记，F8c 删文件）。
-#   Hook 的契约形状由 `contracts/schema/hook.py`（HookContext/HookReceipt）承接。
-# ⚠ 2026-10-04 清理批：`contracts.schema.stage7`（旧链 NameMap/成书族）与
-#   `agent_wire` 一并删除——其产物 `stage7/name_map.json` 已在
-#   RETIRED_ARTIFACT_PATHS 关闭式拒识，api 视图与终审包载体删除后零消费者。
-#   现役命名与成书契约在 `contracts/schema/naming.py`（NameMap v5）。
 
 # ── STR-06 新链契约模型（F8a 激活；F8c 分流至正式 stageN 模块后改 import）──
 from contracts.schema.source import (
@@ -449,8 +376,6 @@ __all__ = [
     'Finding', 'WontFixNote', 'WontFix', 'WontFixEntry', 'Severity', 'Owner',
     'CorpusArtifactEntry', 'CorpusBookEntry', 'CorpusLedgerSummary',
     'CorpusManifest', 'CorpusSkipExpectation', 'LedgerTokenSummary',
-    'EvidenceRef',
-    'TrimAudit', 'TrimResolution',
     # 校验报告（`_report.md`）——**不是产物**，所以不在 `ARTIFACTS` 里
     'CheckReport', 'RuleLine', 'ProvenanceSection', 'EdgeLine',
     'CheckKind', 'Remediation', 'FixRoute',
@@ -459,55 +384,13 @@ __all__ = [
     'Stage0Segment', 'Stage0Segments',
     'Stage1Segment', 'Stage1View', 'UploadResult',
     'NovelList', 'JobList', 'LogChunk', 'LogStreamEvent', 'PreviewRequest', 'ErrorBody',
-    'ApprovalAction', 'ApprovalDoc',
     'InboxItem', 'InboxView',
-    'Stage5ChapterSubject', 'Stage5TrimSubject', 'Stage5TrimWorkItem',
-    # 七个现役层（Stage3 已退役）
+    # 现役层
     'Stage0Snapshot', 'Stage0Source', 'Stage0Transform', 'Stage0Admission',
     'RemovedSegment', 'RequestedRemoval', 'Stage0Warning',
     'EarlyCutWarning', 'DropRatioWarning', 'LongMarkerWarning',
     'SourceRef', 'ExternalFileRef', 'ManagedUploadRef',
     'MainText', 'MainTextSection', 'HookCopy',
-    'CharacterRegistry', 'CharactersEdit', 'KnowledgeGrounding',
-    'GlobalGrounding', 'Entities', 'Character', 'Address', 'Relation', 'Canon',
-    'BlueprintCharacterProjection', 'BlueprintCharacterProjectionChapter',
-    'Setting', 'WorldRule', 'WorldRuleVersion', 'Secret',
-    'EvidenceLocator', 'FactEvidence', 'CharacterRef', 'GroupRef', 'KnowledgeEvent',
-    'KnowledgeEventResponse', 'RelationVisibility',
-    'GlobalEdit', 'GlobalEditCommit', 'GlobalEditCommitBaseline',
-    'GlobalEditCommitTarget', 'GlobalEditFailure', 'GlobalEditInputCommit',
-    'GlobalEditQuarantineGroup',
-    'GlobalEditReviewAttestation',
-    'GlobalEditReviewTarget', 'GlobalCollectionEdit', 'GlobalCollectionAdd',
-    'GlobalCollectionDelete', 'GlobalCollectionSplit', 'CharacterCollectionItem',
-    'SecretPatch', 'WorldRulePatch', 'RelationPatch', 'SettingPatch',
-    'CharacterResponse',
-    'ChapterBlueprints',
-    'SourceSpan',
-    'BlindCandidate', 'BlindChapterEditRequest', 'EvidenceBinding',
-    'PlanChapters', 'PlanChapter', 'PlanScene', 'PlanGoal', 'PlanEdit',
-    'WriterContext',
-    'CtxChapter', 'CtxScene', 'CtxGoal',
-    'Chapter', 'ChapterSegment', 'ChapterResponse',
-    'PreparedRecoveryAction', 'PreparedRecoveryChapter',
-    'PreparedRecoveryJournal', 'PreparedRecoveryManifest',
-    'PreparedRecoveryWorkpack',
-    'RejectedAttempt', 'RejectedRevision',
-    'ReviewerRewriteDirective', 'ReviewerRewriteSubject',
-    'ReviewerRewriteTrustedInput', 'ReviewerRewriteRequest',
-    'ReviewerRewriteBatchRequest', 'ReviewerRewriteBatchTrustedInput', 'ReviewerRewriteTarget',
-    'ReviewerRewriteExecutionJournal', 'ReviewerRewriteRecoveryJournal',
-    'ReviewerRewriteSuccessorJournal',
-    'ReviewerRewriteDisposition',
-    'ReviewerRewriteExecutionState',
-    'ReviewerRewriteProbe', 'reviewer_rewrite_request_sha256',
-    'reviewer_rewrite_execution_journal_sha256',
-    'reviewer_rewrite_disposition_sha256',
-    'reviewer_rewrite_recovery_journal_sha256',
-    'reviewer_rewrite_successor_journal_sha256',
-    'Review', 'ReviewChapter', 'JudgedDraft', 'DraftConsumed',
-    'Hook', 'Candidate', 'ApprovedHook', 'HookApprovalResolution', 'Mech',
-    'HookEdit',
     # 路由表
     'ArtifactSpec', 'ArtifactVersionError', 'DecodedArtifact',
     'ARTIFACT_SPECS', 'ARTIFACTS', 'ARTIFACT_ROUTES',

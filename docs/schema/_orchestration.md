@@ -624,7 +624,7 @@ stale。producer 输出汇总为 `file_changed`、策略未登记或参数不唯
 ### 4.2 运行页的权威续跑前沿
 
 `GET /api/novels/:sid/run` 除信标时间线外必须返回 `resume_frontier`。它与 `operator next`
-复用同一次 `NovelOverview + ApprovalDoc + queue planner` 快照；信标只回答历史命令有没有打点，
+复用同一次 `NovelOverview + queue planner` 快照；信标只回答历史命令有没有打点，
 不能用来猜“现在从哪续”。书目录尚未形成时唯一允许的状态是 `unknown`。
 
 | 字段 | 内容 |
@@ -906,9 +906,10 @@ trim/report/committed，不造新轮。公开读视图只认 committed，同一 
 正文身份由 SHA 联结，账本不能反向充当产物或 Review。）该改稿面与 closure/approval
 写回临界区已随 F8b 全自动模式退役；现存历史账只读。
 
-（存量只读）`approvals/<sid>.json` 的盘上服务记录最后一版为 **v9**（`_ApprovalRecordV9`），
-由 `approvals.py` 只读解码供 inbox 投影与回收站锁使用；新链不再写任何审批账，
-`ApprovalDoc` 是同形状的只读投影而非 HTTP 响应。每个已盖 gate、已阅状态、typed Stage4A 设计审阅、最终结构裁决和 writing 授权
+（已删除）`approvals/<sid>.json` 的存量审批账**不再解码**（2026-10-04 用户裁决：
+不保留旧产物读兼容）：`approvals.py` 与 `ApprovalDoc` 决定族整批删除，旧根一律
+`legacy_incompatible` 拒识；文件仅作为历史字节参与 surface seal（原始字节快照）与
+回收站归档清单。互斥锁迁至 `novel/orchestrator/trash.py::approval_exclusion_lock`。每个已盖 gate、已阅状态、typed Stage4A 设计审阅、最终结构裁决和 writing 授权
 都必须带一份 current-subject proof：当前 `stage0/clean_text.txt` 的完整 SHA-1、所裁决正式
 产物的完整 SHA-256，以及决定本身的规范 JSON SHA-256。读取时必须重新走当前 schema、typed
 人工决定与 freshness 校验并逐字节比对；根变化、上游变化、正式产物被换字、损坏、出现

@@ -15,7 +15,7 @@ from contracts.schema.orchestration import (
 from novel.errors import (
     BookTrashFailed, SourceConflict, UpstreamMissing,
 )
-from novel.orchestrator import admission, agent, approvals, jobs, trash
+from novel.orchestrator import admission, agent, jobs, trash
 from novel.orchestrator.jobs import JobConflict
 
 
@@ -320,7 +320,7 @@ def test_execute_holds_the_same_approval_file_lock_for_both_moves(
         yield
         events.append(('exit', base, sid, approval.exists(), book.exists()))
 
-    monkeypatch.setattr(approvals, 'approval_exclusion_lock', observed_lock)
+    monkeypatch.setattr(trash, 'approval_exclusion_lock', observed_lock)
     trash.execute(tmp_path, '1001', '测试书', '1700000000-c001d00d')
 
     assert events == [
@@ -500,16 +500,15 @@ def test_no_approval_write_surface_can_resurrect_a_trashed_book(tmp_path):
     已消失。本用例把该事实钉成结构断言，并真跑一次删除证明盘面上不复发。
     """
     _book(tmp_path)
-    for name in ('reset', 'approve_gate', 'backfill_from_disk', 'authorize_writing',
-                 'authorize_prepared_recovery', 'record_stage5_auto_closure',
-                 'stage5_closure_view', 'cast_infeasible_replan_scope'):
-        assert not hasattr(approvals, name), f'审批写入口 {name} 不得复活（S-05）'
+    # 2026-10-04 清理批：approvals 模块本体已删除；写入口的「不在」由模块缺席闭合。
+    import importlib.util
+    assert importlib.util.find_spec('novel.orchestrator.approvals') is None
     seen: list[BaseException] = []
 
     def someone_tries_to_write():
         try:                                   # 旧竞选的写方动作；现在无路可走
-            approvals.reset(tmp_path, '1001')
-        except AttributeError as exc:
+            from novel.orchestrator import approvals  # noqa: F401 —— 必须 ImportError
+        except ImportError as exc:
             seen.append(exc)
 
     trash.run(tmp_path, '1001', '测试书',
@@ -531,13 +530,13 @@ def test_approval_exclusion_lock_is_per_book_and_released_after_the_block(tmp_pa
     inside: list[str] = []
 
     def another_book_takes_its_own_lock():
-        with approvals.approval_exclusion_lock(tmp_path, '1002'):
+        with trash.approval_exclusion_lock(tmp_path, '1002'):
             inside.append('ok')
 
     trash.run(tmp_path, '1001', '测试书',
               spawn=_spawn_that_really_moves(tmp_path, before=another_book_takes_its_own_lock))
     assert inside == ['ok'], '锁一本书把别的书的审批锁也挡住了'
-    with approvals.approval_exclusion_lock(tmp_path, '1002'):
+    with trash.approval_exclusion_lock(tmp_path, '1002'):
         pass                                            # 退出即释放，可再拿
 
 

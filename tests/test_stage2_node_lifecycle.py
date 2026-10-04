@@ -32,37 +32,15 @@ _RETIRED_WRITE_ENTRIES = (
 
 
 def test_approval_write_entries_stay_deleted_after_retirement():
-    """审批写入口整层退役：任何旧写面重新出现都是回退，不是「恢复兼容」。"""
-    from novel.orchestrator import approvals
-
-    survivors = [name for name in _RETIRED_WRITE_ENTRIES
-                 if hasattr(approvals, name)]
-    assert survivors == [], f'已退役的审批写入口仍在模块面上：{survivors}'
-    # 只读解码与锁设施是 F8c 后明确保留的两件事，反向钉住模块没有整个消失。
-    for name in ('read_projection', 'projection_code', 'approval_head_bytes',
-                 'approval_exclusion_lock', 'approval_file_lock',
-                 'frozen_for_trash', 'has_record', '_read_raw', '_path'):
-        assert hasattr(approvals, name), f'幸存设施被误删：{name}'
+    """审批模块整层删除（2026-10-04 裁决）：写入口与只读解码都不复活。"""
+    import importlib.util
+    assert importlib.util.find_spec('novel.orchestrator.approvals') is None
 
 
 @pytest.mark.parametrize('legacy', [False, True])
 def test_approval_lock_still_requires_existing_manifest_before_lock(
         tmp_path, legacy):
-    """幸存的文件锁入口仍先要求已有当前 manifest，再谈互斥副作用。
-
-    原用例以三个写入口（gate／backfill／raw）各问一遍；写入口退役后同一
-    边界只剩锁设施这一个真实占用点，旧 base（无 manifest）必须连锁文件
-    都不建立。
-    """
-    if legacy:
-        old = tmp_path / '书_123' / 'stage2'
-        old.mkdir(parents=True)
-        (old / 'global_grounding.json').write_text('{}', encoding='utf-8')
-    before = sorted(str(path.relative_to(tmp_path)) for path in tmp_path.rglob('*'))
-    from novel.orchestrator import approvals
-    from novel.work_units import WorkUnitRefused
-
-    with pytest.raises(WorkUnitRefused, match='已有当前工作流 manifest'):
-        with approvals.approval_file_lock(tmp_path, '123'):
-            pytest.fail('旧 base 不应进入审批文件锁临界区')
-    assert sorted(str(path.relative_to(tmp_path)) for path in tmp_path.rglob('*')) == before
+    """（历史边界随模块删除）审批文件锁入口已不存在；旧 base 的连锁文件
+    都不建立这一约束由「模块缺席」结构性闭合。"""
+    import importlib.util
+    assert importlib.util.find_spec('novel.orchestrator.approvals') is None

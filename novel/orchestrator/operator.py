@@ -26,7 +26,7 @@ from contracts.schema.orchestration import (
 )
 from novel import paths
 from novel.errors import ArtifactUnreadable
-from novel.orchestrator import approvals, queue, state
+from novel.orchestrator import queue, state
 from novel.orchestrator.inspection import (
     OperatorReadSnapshot,
     capture_operator_snapshot,
@@ -139,14 +139,11 @@ def _next_from_snapshot(snapshot: OperatorReadSnapshot) -> OperatorNext:
     # inbox、queue 与审批 currentness 必须共享这一个 invocation 坐标。
     # 之前这里只复用了 overview，却让每个 gate 单独重跑整仓 code_version；
     # 一本后期书会在一次 next 内 fork 出二十多个代码时点与 git 子进程。
-    with approvals.read_projection(
-            overview=snapshot.overview, code=snapshot.code):
-        # F8c：审批投影随人工闸整层退役——新链无 gate、无 closure、无 spawns，
-        # operator 只保留这份 invocation-scoped 代码坐标（queue 的
-        # `projection_code()` 仍在这里取指纹），不再构造 ApprovalDoc。
-        inbox = inbox_from_snapshot(
-            snapshot, _final_cas_owner=_OPERATOR_FINAL_CAS)
-        lane = _lane_from_snapshot(snapshot)
+    # F8c：审批投影随人工闸整层退役——新链无 gate、无 closure、无 spawns，
+    # operator 不再构造 ApprovalDoc（2026-10-04 裁决：旧审批账解码链整体删除）。
+    inbox = inbox_from_snapshot(
+        snapshot, _final_cas_owner=_OPERATOR_FINAL_CAS)
+    lane = _lane_from_snapshot(snapshot)
 
     decision = OperatorNextDecision(
         base=os.fspath(snapshot.base), sid=sid,
@@ -235,12 +232,11 @@ def progress_read_snapshot(
     novel_dir = paths.resolve_novel_dir(base, sid).resolve()
     with readonly_snapshot_memo(novel_dir):
         snapshot = capture_operator_snapshot(base, sid)
-        with approvals.read_projection(overview=snapshot.overview, code=snapshot.code):
-            # ⚠ F8b-3（S-05）：旧链 prepared 提交尾窗 lane 已随 operator 拆除，
-            # 进度前沿与 next_action 消费同一条 lane 推导。
-            lane = _lane_from_snapshot(snapshot)
-            yield snapshot.overview, _frontier_view(lane)
-            _require_snapshot_current(snapshot)
+        # ⚠ F8b-3（S-05）：旧链 prepared 提交尾窗 lane 已随 operator 拆除，
+        # 进度前沿与 next_action 消费同一条 lane 推导。
+        lane = _lane_from_snapshot(snapshot)
+        yield snapshot.overview, _frontier_view(lane)
+        _require_snapshot_current(snapshot)
 
 
 def next_action_at_code(

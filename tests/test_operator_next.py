@@ -21,7 +21,6 @@ from contracts.schema.orchestration import (
 from novel import exit_codes as X
 from novel.cli.main import main
 from novel.errors import ArtifactUnreadable
-from novel.orchestrator import approvals as A
 from novel.orchestrator import execution_permit as P
 from novel.orchestrator import operator as O
 from novel.orchestrator import queue as Q
@@ -69,23 +68,8 @@ def _blocked(node: str, waiting_on: str) -> QueueItem:
         why=f'在等 {waiting_on}', waiting_on=waiting_on)
 
 
-def test_precomputed_approval_projection_rejects_cross_book_reuse(tmp_path):
-    """跨书投影仍被关闭式拒绝；审批 doc 预计算面已随人工闸退役。
-
-    F8c：`plan_book_from_overview` 不再收 `approval_doc`（人工闸整层退役）——
-    旧签名调用必须明确失败，不能静默忽略一个它不再理解的投影坐标；跨书拒绝的
-    现存落点是 `approvals.read_projection`（见 `tests/test_operator_inspection.py`）
-    与 `inbox_from_snapshot` 的同名校验。
-    """
-    snapshot = _snapshot(tmp_path)
-    wrong = SimpleNamespace(sid='other-book')
-
-    with pytest.raises(ValueError, match='other-book'):
-        O.inbox_from_snapshot(snapshot, approval_doc=wrong)
-    with pytest.raises(TypeError):
-        Q.plan_book_from_overview(
-            tmp_path, snapshot.sid, snapshot.overview,
-            until_stage='stage0', approval_doc=wrong)
+# （历史）approval_doc 预计算/跨书投影用例已随 approvals 解码链删除
+# （2026-10-04 清理批）；inbox_from_snapshot 不再有该参数。
 
 
 def _wire(
@@ -95,10 +79,9 @@ def _wire(
 ) -> list[object]:
     """把 next 的四个外部依赖换成可观测替身；审批投影只留 invocation 坐标。
 
-    F8c：`approvals.get`（构造 ApprovalDoc 的人工闸投影）随人工闸整层退役。
-    `_next_from_snapshot` 仍先开 `approvals.read_projection` 冻结本次调用的
-    overview/code 坐标，再投影 inbox 与 queue lane——下面两个替身据此断言
-    「同一次 next 里所有下游只用一个代码时点」。
+    F8c／2026-10-04 清理批：审批投影上下文已随 approvals 模块删除；
+    `_next_from_snapshot` 直接消费 snapshot 的 overview/code 坐标投影
+    inbox 与 queue lane——替身据此断言「同一次 next 只有一个代码时点」。
     """
     calls: list[object] = []
     monkeypatch.setattr(
@@ -111,11 +94,7 @@ def _wire(
         P.prov, 'code_version',
         lambda: pytest.fail('ready next 不得重算第二次仓库 code fingerprint'))
 
-    def inbox(got, *, approval_doc: object = None,
-              _final_cas_owner: object = None):
-        assert A.projection_code() == snapshot.code
-        assert A._READ_OVERVIEW.get() is snapshot.overview
-        assert approval_doc is None
+    def inbox(got, *, _final_cas_owner: object = None):
         assert _final_cas_owner is O._OPERATOR_FINAL_CAS
         calls.append(('inbox', got))
         return _inbox()
@@ -126,8 +105,6 @@ def _wire(
             base, sid, overview, *, until_stage, follow_check,
             allow_deterministic_redo: bool,
     ):
-        assert A.projection_code() == snapshot.code
-        assert A._READ_OVERVIEW.get() is snapshot.overview
         assert allow_deterministic_redo is True
         calls.append((
             'plan', base, sid, overview, until_stage, follow_check,
@@ -165,8 +142,6 @@ def test_next_uses_one_snapshot_and_the_shared_queue_lane(monkeypatch, tmp_path)
     assert plan_call[4:] == ('stage7', True, True)
     assert [call for call in calls if call[0] == 'seal'] == [
         ('seal', snapshot.base, 'book-1', 'code-v1')]
-    assert A._READ_CODE.get() is None
-    assert A._READ_OVERVIEW.get() is None
 
 
 def test_retired_blocker_has_no_execution_token(

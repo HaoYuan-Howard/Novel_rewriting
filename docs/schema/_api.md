@@ -1,9 +1,9 @@
 # HTTP 响应（`/api/**`）
 
 历史受托审阅（Stage2 语义审阅、Commander/Reviewer 工作包、人工逐 Stage 过闸）已随
-全自动单模式退役；本文件只描述现役只读监控与运维端点的响应形状。存量书的审批账
-只读解码形状（ApprovalDoc v9 及其决定族）仍在 `contracts/schema/api.py`，由
-`inbox_projection` 消费，不再有对应 HTTP 路由。
+全自动单模式退役；2026-10-04 用户裁决进一步删除存量审批账的只读解码面
+（ApprovalDoc 决定族与旧链 schema 模块整批移除）——旧根一律 `legacy_incompatible`
+拒识，历史→新契约的转换走仓外临时脚本。本文件只描述现役只读监控与运维端点。
 
 **载体已定：Pydantic v2**——但本文只定**内容**，模型照它写，**方向别搞反**。
 所以下面的表里不出现任何 Python 类型标注。
@@ -324,11 +324,6 @@ parent/epoch 与 session 只用于关联，不从日志文字或时间接近补�
 | `TrashNovelResult` | `sid` · `title` · `trash_id` · `trash_rel` | `novel/orchestrator/trash.py` 的 CLI 子进程完成同盘移动后返回；`trash_rel` 是可恢复位置，不把“从语料库消失”偷换成“字节已永久销毁” |
 | `RetentionPlanView` | `wire_version` · `generated_at` · `policy` · `examined` · `candidates[]` · `plan_token` | preview 完整冻结策略、扫描分母与每项路径/mtime/size/SHA；apply 不接受前端重拼的候选 |
 | `TrashRestorePlanView` | `wire_version` · `generated_at` · `trash_id` · `sid` · `title` · `original_dirname` · metadata/manifest 三枚 SHA · `plan_token` | book/approval/service run 三面由 manifest 闭合；持锁后再次核 token/CAS，拒绝覆盖 live 位置 |
-| `ApprovalDoc`（存量账只读解码，无 HTTP 路由） | `v=9` · `sid` · `gate` · `stage2_reviews` 已删 · `writing` · `design_review` · `structure` · `writing_approval` · `closure` · `prepare` · `spawns` | HTTP v9 随 Stage2 语义审阅退役删除 `seen`/`stage2_reviews`/gate `s2`：`gate` 恰为 `s0/s1/s4/s5/s6/s7`，`spawns` 同键（stage2.global/blueprint 在 `s1`，design/plan 在 `s4`），语义未审不产生审批待办。`design_review` 是 A 的独立相位，不是 gate：给出当前 candidate/aggregate hash、typed 当前决定、历史与 `unavailable / missing / repair_requested / strategy_replan_requested / accepted / suspended / expired`；只有 current `accepted` 才能授权 B，`suspended` 保留当前 raw 决定但不携 action token。`structure` 是 B 编译 Plan 后的另一张票，另给当前 subject、B `binding_concerns`、typed 当前裁决、历史与 `unavailable / missing / accepted / replan_requested / expired`；`gate.s4=true` 只可能来自这张当前 `accepted`。`writing_approval` 同样给出 available、current subject、typed current decision/history；新 typed writing 决定绑定 Stage1 正文、Stage4 Plan、fresh WriterContext 与测量契约。`closure` 是 Stage5 当前整书工作包、typed 决定与不可擦除历史，`gate.s5=true` 只可能来自 current `closed`。当前写入要求已有新 clean 工作流 manifest，backfill 只接受当前盘上 v9；旧版本、未来版本和损坏均返回明确错误，不迁移或重签。历史恢复使用配对的冻结旧代码与旧根 |
-| `Stage5ClosureView / Workpack` | `state` · `workpack?` · `next_step?` · `current_decision?` · `history[]`；工作包含 Review 身份、`planned/missing`、`chapter_subjects[]`、`.INVALID` / HARD、`unresolved_trim_items[]`、逐项 must-appear、fact/unver 组、披露/已处置计数与 `workpack_sha256` | `state ∈ missing｜review_required｜blocked｜ready｜closed｜expired`，只由服务端重算，页面不得按计数重判。`review_required` 表示没有可接受的 current 最终 Review，不能携 current workpack/decision，且 `next_step` 必须指出重跑；`chapter_subjects[]` 精确覆盖全部当前 canonical 计划章；`unresolved_trim_items[]` 是章号、audit SHA 与正文 SHA 的精确批量提交面，章号投影必须等于 `unresolved_trim_chapters`。决定或正文漂移后旧决定只留 history，不能继续充当 current |
-| `Stage5ClosureTemplate / Request / Decision` | Template 是服务端完整 materialized workpack + `review_token`；Request 只有 `actor/reason/review_token/must_appear[]/group_acks[]`；Decision 在 Request 上加 `decision_sha256/decided_at` | must-appear 与 group 的 finding/chapter/review/workpack SHA 只在模板和盘上完整决定中物化；调用方只提交 token 与 typed ruling。服务端展开 current workpack 后要求 ruling 精确覆盖；模板 placeholder/token 不进入 Request，确认不会把 UNVER 改写成 PASS |
-| `DesignReviewTemplate / Request` | Template 是服务端完整 materialized subject + `review_token` + 全章 `constraint_catalog`；Request 只有 `actor/reviewer_kind/review_run_id/general_reason/review_token/strategy/chapters[]` | 一次提交必须覆盖当前完整策略与升序全章集。策略决定为 `accept / request_replan`；逐章决定为 `accept / request_repair`，关系 repair 使用 typed relation effect。历史目录逐章给当前集合摘要，以及每条约束的 SHA、typed payload 和来源决定列表；新裁决用可选 `constraint_operations` 绑定 expected_constraint_set_sha256，并对全部 active SHA 明确 keep/withdraw/supersede，替代项携 typed replacements。旧回执缺省省略该新字段；新候选有 active 时不得省略处置。candidate/aggregate/chapter subject、binding infeasibility、repair capability、placeholder 与历史 reuse 只在 Template 展示并由服务端重建，不让 caller 回传。subject 只公开 opaque alias 的盲真相与现场结构证据；自然语言 reason 只作审计，不进入修订 prompt |
-| `DesignReviewDecision / View` | Decision 是服务端 materialized 的完整 candidate/aggregate/chapter subject、review contract、typed rulings、actor/reviewer/run/reason + `decision_sha256/decided_at`；View 另含 state/current hashes/`binding_infeasibility?`/current/history | POST 的 opaque token 只用于找到并复验本次 exact materialized subject，不能删减盘上审计。历史 accept 只有在全局 basis、strategy epoch、本章主体及可见 B 证据仍相同时才可显式复用；拒绝不会自动变 accept |
 | `JobList` | `jobs[]`（`JobRecord`） | 抓包 `jobs.json` 就是 `{"jobs":[]}`——**一个样本都没有**，所以元素形状只能从 `_orchestration.md` 来 |
 | `LogChunk` | `text` · `next_byte` | 按**字节**续读。⚠ 中文一字跨 3 字节，**只在读的一侧解码**（写的一侧按字节追加，见 `_orchestration.md`）。`next_byte` 原样回传给下一次 `?offset=` |
 | `LogStreamEvent` | `text` · `next_byte` · `done` · `state` | SSE 的 `id` 与 `next_byte` 相同；普通 `log` 事件为 `done=false,state=null`，唯一的 `end` 事件为 `done=true,state=ok|landed_red|failed|unknown` 并随即释放连接。断线时浏览器用 `Last-Event-ID` 续读；显式 query offset 与它取较大者，避免刷新倒退 |

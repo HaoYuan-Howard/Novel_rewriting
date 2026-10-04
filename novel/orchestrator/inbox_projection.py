@@ -51,7 +51,7 @@ import os
 from contracts.invariants import (
     INBOX_KIND, NODES, STAGES,)
 from contracts.schema.api import (
-    ApprovalDoc, InboxItem, InboxView,
+    InboxItem, InboxView,
 )
 from contracts.schema.report import CheckReport
 from novel import paths, wontfix
@@ -171,7 +171,7 @@ _OPERATOR_FINAL_CAS = object()
 
 
 def inbox_from_snapshot(
-    snapshot: OperatorReadSnapshot, *, approval_doc: ApprovalDoc | None = None,
+    snapshot: OperatorReadSnapshot, *,
     _final_cas_owner: object | None = None,
 ) -> InboxView:
     """从同一次 code/overview/check 快照投影待办清单，不重跑判据。
@@ -182,9 +182,6 @@ def inbox_from_snapshot(
     """
     base = snapshot.base
     sid = snapshot.sid
-    if approval_doc is not None and approval_doc.sid != sid:
-        raise ValueError(
-            f'审批投影属于 {approval_doc.sid!r}，不是当前书 {sid!r}')
     novel_dir = snapshot.novel_dir
     code = snapshot.code
     items: list[InboxItem] = []

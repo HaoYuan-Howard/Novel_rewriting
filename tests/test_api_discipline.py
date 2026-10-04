@@ -273,13 +273,18 @@ def test_frontend_does_not_rejudge_anchor_coverage():
 
 
 def test_retired_depth_screen_and_public_fields_do_not_survive():
-    """双臂退役是形状破坏：页面与公开审批字段都必须消失。"""
-    from contracts.schema.api import ApprovalDoc, PreviewRequest
+    """双臂退役是形状破坏：页面与公开审批字段都必须消失。
+
+    2026-10-04 清理批：ApprovalDoc 载体本身已随存量审批账解码链删除
+    （用户裁决不保留旧产物读兼容），「deep 字段不在」由载体缺席闭合。
+    """
+    from contracts.schema.api import PreviewRequest
     from contracts.schema.orchestration import JobStart, QueueItem
 
     assert not os.path.exists(os.path.join(
         ROOT, 'web', 'src', 'screens', 'depth', 'DepthScreen.tsx'))
-    assert 'deep' not in ApprovalDoc.model_fields
+    assert not hasattr(__import__('contracts.schema.api', fromlist=['']),
+                       'ApprovalDoc'), 'ApprovalDoc 载体不得复活'
     assert 'mode' not in PreviewRequest.model_fields
     assert 'mode' not in JobStart.model_fields
     assert 'mode' not in QueueItem.model_fields

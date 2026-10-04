@@ -11,6 +11,7 @@ novel/llm/stage4_runs.py、contracts/judges/stage5.py）：STR-06 切换（F8a�
 逐条核对存在性；历史裁决保留当时的落点文字，但以纯文本书写，读者按 Git 历史查询，不把已删
 路径伪装成现役落点。
 
+| 2026-10-04 | 用户裁决：**不保留旧产物读兼容**——新产物一律使用新契约在新输出根生成；旧根整体 `legacy_incompatible` 只读拒识，历史→新契约的转换最多用仓外临时脚本完成。据此删除存量审批账解码链（`approvals.py` 的 `_ApprovalRecordV9` 族、schema/api 的 Approval/Design/Structure/Writing/Closure 决定族）与 18 个旧链 schema 模块（stage2/4/5、plot*、characters*、analyze*、knowledge、evaluation、core_evidence、stage4_source）；`_service/approvals/<sid>.json` 仅以原始字节参与 surface seal 与回收站归档，互斥锁迁入 `trash.py` | 本批清理（109830b7 之后的第二批）；`docs/REQUIREMENTS.md`「已退役链」行同步 |
 | 裁决时间 | 保留的决定与缘由 | 证据边界 / 当前落点 |
 |---|---|---|
 | 2026-10-04 | **源姓名异写由 Stage2 留证判定**：用户明确采用“Stage2 根据上下文判断名称同一性并保留原句证据；证据不足时停止，禁止下游擅改命题”。直接证据是同一源书正文含“沈鹤汀／江鹤汀”，不能当作 Design 释放选择问题处理 | names v2 声明局部 same／unresolved；compiler 只应用与证据句段相交的显式映射，观察、原文、basis.quote 保留；`docs/specs/repair_convergence.feature` RC-17。语义判断仍需真书验证 |

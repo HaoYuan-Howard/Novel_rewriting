@@ -427,175 +427,6 @@ STAGE0_WARNINGS: Final = ('early_cut', 'drop_ratio', 'long_marker')
 #: 本元组仍是 `status` 那一格的取值面；两者的对账在 `tests/test_invariants.py`。
 APPROVAL_STATE: Final = ('pending', 'approved')
 
-# Human workflow checkpoints kept under Output/_service. These are service
-# state, not Stage0 current approval fields.
-# ⚠ 2026-09-13 起 Stage2 语义审阅整体退役：``gate.s2``、Stage2 已读凭证与节点
-# 接受不再是审批契约成员。旧链统一机械准入名册（mechanical_admission.py）已随
-# 旧链退役删除；新链准入由 queue/state 的完成度与续跑判定承担，语义未审以报告
-# 中的 ``unver`` 披露，不产生审批待办。
-# ⚠ F8a：``s6`` 与 ``s4``／``s5`` 同格处理——Stage6 整层退役后它**没有可写面**
-#   （F6d 登记删光 approvals.py 的 s6 代码），但键位保留：存量书的审批账仍带
-#   这一格（恒 False），删键会让旧记录当场校验失败。新链无任何审批面。
-APPROVAL_GATES: Final = ('s0', 's1', 's4', 's5', 's6', 's7')
-
-#: Stage4 v4 的章级结构决定。`retain` 是一次显式设计决定，不是“模型忘了改”；
-#: `reconstruct` 只声明要改变哪些可复算结构维度，实际变化仍由代码从最终计划重算。
-STRUCTURE_MODES: Final = ('retain', 'reconstruct')
-STRUCTURE_CHANGE_KINDS: Final = (
-    'entry_anchor', 'ending_anchor', 'presentation_grouping',
-    'disclosure_order', 'noncontiguous_regroup',
-)
-STRUCTURE_METRIC_CONTRACT: Final = 'plot-presentation-structure-v1'
-BLIND_ALIAS_ALGORITHM: Final = 'hmac-sha256-v1'
-#: 默认仍为四并发；6/8 只在显式配置中启用，并继续受整书及供应商总槽限制。
-PIPELINE_DEFAULT_CONCURRENCY: Final = 4
-PIPELINE_BOOK_CONCURRENCY: Final = 4
-PIPELINE_PROVIDER_CONCURRENCY: Final = 8
-PIPELINE_TOTAL_CONCURRENCY_MIN: Final = 1
-PIPELINE_TOTAL_CONCURRENCY_MAX: Final = 32
-PIPELINE_CONCURRENCY_TRIALS: Final = (4, 6, 8)
-#: 并发覆盖只支持**新链逐章节点**（B1）：键必须已在 `NODES` 登记。现役注册表
-#: 两个逐章 owner：`str06.stage2.chapters`（章观察，B2 五节点重建时登记）与
-#: `str06.stage5.body`（正文逐章 owner，scope=chapter:N）。旧链键
-#: `stage2.blueprint`／`stage4.design`／`stage4.plan`／`stage5.write`
-#: 已随旧链退役删除（str06.md「额度、并发与配置」）。并发度不进语义身份。
-PIPELINE_PARALLEL_NODES: Final = (
-    'str06.stage2.chapters', 'str06.stage5.body')
-#: 新链逐章节点的单供应商稳定性护栏：并发档位上限由
-#: `PIPELINE_CONCURRENCY_TRIALS` 发布（不再为退役旧链节点保留 8 的特例）。
-STRUCTURE_APPROVAL_DECISIONS: Final = ('accept', 'request_replan')
-STRUCTURE_APPROVAL_STATES: Final = (
-    'unavailable', 'missing', 'accepted', 'replan_requested', 'expired',
-)
-
-#: Stage4A 的正式设计审阅与 B 后最终计划审批是两张不同的票。前者只决定
-#: 当前盲候选能否进入付费 B，绝不打开 ``gate.s4``。决定与修复码都必须是
-#: 闭合集：自由文本理由只留审计，不能未经代码解释直接塞回模型 prompt。
-DESIGN_STRATEGY_DECISIONS: Final = ('accept', 'request_replan')
-DESIGN_CHAPTER_DECISIONS: Final = ('accept', 'request_repair')
-DESIGN_REVIEWER_KINDS: Final = ('human', 'delegated_operator', 'inherited')
-#: v3：策略与章 subject 改绑稳定 strategy epoch /
-#: chapter strategy；逐章 repair 显式区分本轮与累计 typed 约束，并把
-#: agent repair 与零模型完整章替换分成两个 capability。v1/v2 只作历史证据
-#: 保持可解码，不能铸造新的 v3 执行 scope。v4 再把同主体重复裁决关闭为
-#: exact replay；旧 v3 仍须按 split-capability/strategy-epoch 形状解码，但不再
-#: 是 current review contract。
-LEGACY_V3_DESIGN_REVIEW_CONTRACT: Final = 'stage4-design-review-v3'
-LEGACY_V4_DESIGN_REVIEW_CONTRACT: Final = 'stage4-design-review-v4'
-# v5：策略绑定同一宏观输入投影；局部事实变化只重开实际受影响的章义务。
-DESIGN_REVIEW_CONTRACT: Final = 'stage4-design-review-v6'
-#: 仅供不可变历史决定解码；现役不提供 v6 读取、审批、恢复或交付权。
-FROZEN_V6_DESIGN_REVIEW_CONTRACT: Final = \
-    'stage4-design-review-v3-legacy-frozen-v6'
-#: 策略驳回只能改它真实拥有的两个消费面：全书重构策略或
-#: 指定章权重。自由文本 reason 只入审计，不得冒充可执行反馈进 prompt。
-DESIGN_STRATEGY_REPLAN_CONSTRAINTS: Final = (
-    'replace_reconstruction_strategy', 'change_chapter_weights',
-)
-#: `R-5.22` 预检结论的两态。pass = 构造性绑定过整书联合 HARD；
-#: blocked = 存在 stop-owner 失败或代码铸造的不可行 witness。
-DESIGN_PREFLIGHT_STATUSES: Final = ('pass', 'blocked')
-#: Reviewer 对同策略章级历史约束的逐项处置；API 与模型载体共用取值面。
-DESIGN_CONSTRAINT_OPERATION_KINDS: Final = ('keep', 'withdraw', 'supersede')
-DESIGN_REPAIR_CODES: Final = (
-    'entry_anchor',
-    'ending_anchor',
-    'presentation_grouping',
-    'disclosure_order',
-    'noncontiguous_regroup',
-    'scene_goal',
-    'scene_goal_exclude',
-    'binding_constraint_unsat',
-    'semantic_constraint',
-)
-#: 退役但仍可**解码**的修复码。`structure_delta` 是泛化重排指令：arity (0,0)
-#: 意味着它可以不带任何 scene/alias 证据提交，等于允许人用一句「重排一下」
-#: 制造不可执行的返修。历史决定保留可读（Literal 与 arity 表都仍收它），
-#: 新决定在 approve 闸关闭式拒绝，具体语义修复码都带 scene/alias 下限。
-DESIGN_REPAIR_CODES_RETIRED: Final = ('structure_delta',)
-#: ``code -> (最少 scene_refs, 最少 opaque_aliases)``。审批 schema 与返修 prompt
-#: 必须共用这一张表；否则一边接受的“具体反馈”会在另一边变成空指令。
-DESIGN_REPAIR_CONSTRAINT_ARITY: Final = {
-    'structure_delta': (0, 0),
-    'entry_anchor': (0, 1),
-    'ending_anchor': (0, 1),
-    'presentation_grouping': (0, 2),
-    'disclosure_order': (0, 2),
-    'noncontiguous_regroup': (0, 2),
-    'scene_goal': (1, 1),
-    'scene_goal_exclude': (1, 1),
-    'binding_constraint_unsat': (1, 0),
-    # 只引用已登记约束或端点，不复制第二份关系正文。
-    'semantic_constraint': (0, 1),
-}
-#: Stage4B 模型可以报告的语义担忧。它们只作非阻断证据，不得被解释成
-#: 编译器不可满足证明；schema、prompt 与 HTTP 枚举共用这一份取值面。
-BINDING_CONCERN_CODES: Final = (
-    'causal_conflict',
-    'stage_conflict',
-    'material_conflict',
-    'future_leak',
-    'insufficient_evidence',
-)
-#: Stage4B 关闭约束编译器目前能够机械铸造的不可行证明码。顺序与
-#: ``novel.stages.stage4.plot_binding::prove_binding_infeasible`` 的证据目录 witness 对齐；
-#: 模型无权直接返回这些正式证明。
-BINDING_INFEASIBILITY_CODES: Final = (
-    'missing_chapter_catalog',
-)
-DESIGN_REVIEW_STATES: Final = (
-    'unavailable', 'missing', 'repair_requested',
-    'strategy_replan_requested', 'accepted', 'expired',
-)
-
-
-#: 原始 txt 的编码候选，**按尝试顺序**。取值面只能从代码来：
-#: 全语料 163 本**只出现过 `utf-8`，另四个零样本**——样本再多也补不出没发生过的分支。
-SOURCE_ENCODINGS: Final = ('utf-8-sig', 'utf-32', 'utf-16', 'utf-8', 'gb18030')
-
-#: 一条剔除记录是谁圈的。**不许省**（`R-0.8`）：重跑 stage0 时 `machine` 可以重算覆盖，
-#: `human` **不许静默覆盖**——没有这个字段，重跑一次就把人的工作悄悄抹掉了。
-REMOVED_ORIGIN: Final = ('machine', 'human')
-
-#: stage0 / stage1 连续原文视图里的分区类型。它们是 HTTP 契约的一部分，仍然只在
-#: 这里落一次取值面；前端按 `kind` 选渲染，不从 label 文案里猜。
-STAGE0_SEGMENT_KINDS: Final = ('keep', 'remove', 'end_marker')
-STAGE1_SEGMENT_KINDS: Final = ('hook', 'chapter', 'end_marker', 'hole')
-
-#: Stage1 对照页里，逐章**原始章号**相对上一章的异常分类。
-#: 【为什么要有它】纯数字番外与正常数字章节在机器结构上没有区别——零 removed、
-#: 零 warning、`clean == source`——只看「原文 + 删除高亮 + warnings」的 Stage0 审批页
-#: 对它是盲的。现役流程在 Stage0 批准后免费落 Stage1，再由独立的 s1 人工闸门检查
-#: 章号序列与逐章正文；异常必须在这个正式对照页显式呈现。
-#: 三类互斥，判定优先级即本元组顺序：`reset` > `gap` > `repeat`。
-#: ⚠ 这是**诊断不是判据**：命中不拦任何东西，也不进任何产物，只在审批页上标出来给人看。
-#: 番外若接着正文往下编号（50 → 51），三类一条都不命中——那种形态机器看不出来，
-#: 只能靠同屏的逐章首行预览让人读出来。**别把它宣传成番外检测器。**
-#:
-#: 原文章号不落盘，由 ``scan_text`` 当前复扫；``ChapterMarker.chapter_no`` 恒由
-#: ``CHAPTER_RE`` 匹配出的数字行解析得到，因此没有 ``non_numeric`` 分支。
-CHAPTER_LABEL_ANOMALY: Final = ('reset', 'gap', 'repeat')
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 三、事件拍与保真材料（stage2 → stage4 → stage5）
-# ─────────────────────────────────────────────────────────────────────────────
-
-#: 一拍的叙述层。**一拍内恒定**（分组函数的 HARD 后置条件）——
-#: 跨层并拍会把只在回忆里出场的人放进现世街头。
-TIME_LAYERS: Final = ('present', 'recall', 'hearsay')
-
-#: 三个叙述层给人看的那一面：**短名**（下发面逐拍渲染用）与**释义**（system prompt 展开用）。
-#: ⚠ **两处都要，而且必须来自同一张表**：写作节点的 user 消息里逐拍打的是短名
-#: （`现场·某地·在场：…`），system prompt 里展开的是「〔现场〕= 当下正在发生」。
-#: 从前 system 那一份是**手抄**的，改措辞时它不会跟着改、也不会报错（判据 25）。
-#: ⚠ 键必须与 `TIME_LAYERS` 逐值相同——下面那条 `assert` 是它的落点。
-LAYER_CN: Final = {'present': '现场', 'recall': '回忆', 'hearsay': '转述'}
-LAYER_GLOSS: Final = {'present': '当下正在发生',
-                      'recall': '视角人自己想起的往事',
-                      'hearsay': '别人讲给她听的事'}
-assert tuple(LAYER_CN) == tuple(LAYER_GLOSS) == TIME_LAYERS, \
-    '叙述层的短名/释义与 `TIME_LAYERS` 分家了——渲染顺序会跟着漂，而没有东西会出声'
 
 #: `stage2.blueprint` 那一次调用的**模型可见边界身份**，落在
 #: `_provenance.context.architecture`（`contracts/schema/stage2.py::BlueprintContext`）。
@@ -696,22 +527,34 @@ BLUEPRINT_ARCHITECTURE: Final = 'plot-blueprint-v1'
 assert BLUEPRINT_ARCHITECTURE in BLUEPRINT_ARCHITECTURES
 
 
-#: `extraction-ir-v1` 响应侧的叙述层枚举 → 产物侧取值。**前缀化只在响应侧**：
-#: 产物侧 `TIME_LAYERS` 一个不动（下游 + 盘上数据的硬约束），compiler 是唯一映射落点。
-#: 【为什么前缀化】闭合枚举之间的串字段（交接实测 `delivery.summary` 串进
-#: `narrative_role`）本质是取值面互相混淆；互不为子串的带前缀值让串字段在
-#: schema 闸就死掉。⚠ 刻意没有 `T_UNRESOLVED`：产物侧 `time_layer` 是必填三值、
-#: 无落点，允许它等于每个 UNRESOLVED 必然逼出一轮修复调用，直接顶高
-#: `paid_calls / accepted_calls`。
-RESPONSE_TIME_LAYERS: Final = {
-    'T_PRESENT': 'present',
-    'T_RECALL': 'recall',
-    'T_HEARSAY': 'hearsay',
-}
-assert tuple(RESPONSE_TIME_LAYERS.values()) == TIME_LAYERS, \
-    '响应侧叙述层映射与 `TIME_LAYERS` 分家了——compiler 会把新值映到不存在的产物值'
-assert len(set(RESPONSE_TIME_LAYERS)) == len(set(RESPONSE_TIME_LAYERS.values())), \
-    '响应侧叙述层映射不是双射'
+
+#: 原始 txt 的编码候选，**按尝试顺序**。取值面只能从代码来：
+#: 全语料 163 本**只出现过 `utf-8`，另四个零样本**——样本再多也补不出没发生过的分支。
+SOURCE_ENCODINGS: Final = ('utf-8-sig', 'utf-32', 'utf-16', 'utf-8', 'gb18030')
+
+#: 一条剔除记录是谁圈的。**不许省**（`R-0.8`）：重跑 stage0 时 `machine` 可以重算覆盖，
+#: `human` **不许静默覆盖**——没有这个字段，重跑一次就把人的工作悄悄抹掉了。
+REMOVED_ORIGIN: Final = ('machine', 'human')
+
+#: stage0 / stage1 连续原文视图里的分区类型。它们是 HTTP 契约的一部分，仍然只在
+#: 这里落一次取值面；前端按 `kind` 选渲染，不从 label 文案里猜。
+STAGE0_SEGMENT_KINDS: Final = ('keep', 'remove', 'end_marker')
+STAGE1_SEGMENT_KINDS: Final = ('hook', 'chapter', 'end_marker', 'hole')
+
+#: Stage1 对照页里，逐章**原始章号**相对上一章的异常分类。
+#: 【为什么要有它】纯数字番外与正常数字章节在机器结构上没有区别——零 removed、
+#: 零 warning、`clean == source`——只看「原文 + 删除高亮 + warnings」的 Stage0 审批页
+#: 对它是盲的。现役流程在 Stage0 批准后免费落 Stage1，再由独立的 s1 人工闸门检查
+#: 章号序列与逐章正文；异常必须在这个正式对照页显式呈现。
+#: 三类互斥，判定优先级即本元组顺序：`reset` > `gap` > `repeat`。
+#: ⚠ 这是**诊断不是判据**：命中不拦任何东西，也不进任何产物，只在审批页上标出来给人看。
+#: 番外若接着正文往下编号（50 → 51），三类一条都不命中——那种形态机器看不出来，
+#: 只能靠同屏的逐章首行预览让人读出来。**别把它宣传成番外检测器。**
+#:
+#: 原文章号不落盘，由 ``scan_text`` 当前复扫；``ChapterMarker.chapter_no`` 恒由
+#: ``CHAPTER_RE`` 匹配出的数字行解析得到，因此没有 ``non_numeric`` 分支。
+CHAPTER_LABEL_ANOMALY: Final = ('reset', 'gap', 'repeat')
+
 
 #: 逐字原话允许被一处提示语切开时，插入部分的内容字数上限。
 #: 形态必须在原文字节上长成「收引号 + ≤N 内容字 + 开引号」；
@@ -719,356 +562,25 @@ assert len(set(RESPONSE_TIME_LAYERS)) == len(set(RESPONSE_TIME_LAYERS.values()))
 SPEECH_TAG_MAX: Final = 12
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 四、人物与称谓（stage2）
-# ─────────────────────────────────────────────────────────────────────────────
+#: 默认仍为四并发；6/8 只在显式配置中启用，并继续受整书及供应商总槽限制。
+PIPELINE_DEFAULT_CONCURRENCY: Final = 4
+PIPELINE_BOOK_CONCURRENCY: Final = 4
+PIPELINE_PROVIDER_CONCURRENCY: Final = 8
+PIPELINE_TOTAL_CONCURRENCY_MIN: Final = 1
+PIPELINE_TOTAL_CONCURRENCY_MAX: Final = 32
+PIPELINE_CONCURRENCY_TRIALS: Final = (4, 6, 8)
+#: 并发覆盖只支持**新链逐章节点**（B1）：键必须已在 `NODES` 登记。现役注册表
+#: 两个逐章 owner：`str06.stage2.chapters`（章观察，B2 五节点重建时登记）与
+#: `str06.stage5.body`（正文逐章 owner，scope=chapter:N）。旧链键
+#: `stage2.blueprint`／`stage4.design`／`stage4.plan`／`stage5.write`
+#: 已随旧链退役删除（str06.md「额度、并发与配置」）。并发度不进语义身份。
+PIPELINE_PARALLEL_NODES: Final = (
+    'str06.stage2.chapters', 'str06.stage5.body')
 
-#: 「谁在这么叫」。**指称群体一律记 `public`**——「苏府下人」这类群体名解析不出人，
-#: 而这个字段的用途是**派发键**（谁在称呼谁），一个解析不出人的串对派发毫无用处。
-#: 已知代价：丢掉「哪个群体」（四本实测 2/194 条）。
-ADDRESS_BY: Final = ('char_id', 'narration', 'public')
-
-#: 称谓的场合。
-ADDRESS_CONTEXT: Final = ('address', 'reference')
-
-#: `Secret.setup` 判别联合的两臂。**`cold` 是一个正当答案，不是缺省值**——
-#: v1 时代这一格是 `list[int]`，空数组同时表示「声明没有埋点」与「模型没想过」，
-#: 而它是关系闸门隐瞒窗口与 secret 闸门第②臂**两道下发闸门的前件**。
-SECRET_SETUP_KINDS: Final = ('cold', 'foreshadowed')
-
-#: relation 的**读者可见**时点与世内成立时点正交：公开事实直接给起章，
-#: 秘密关系引用一条 secret 的首次揭示章。两臂是闭合判别联合。
-RELATION_VISIBILITY_KINDS: Final = ('public', 'via_secret')
-
-#: secret 知情主体的两臂。具名人物用 registry 外键；无名群体本身就是答案，
-#: 以自由文本 label 保留，不能为了闭合引用而逼模型编一个 char_id。
-KNOWLEDGE_SUBJECT_KINDS: Final = ('character', 'group')
-
-#: 人名区分度。**不下发给写作节点**——它只给确定性代码用（成稿人名检查 / 文风专名过滤）。
-#: 写作 prompt 里从没定义过这个枚举，整份发过去只是噪声。
-NAME_DISTINCTIVENESS: Final = ('high', 'medium', 'common')
-
-#: 叙述人称。**只管人称这一个轴**（2026-08-10 裁决，`stage2.md` §2.5）。
-#:
-#: 【为什么取值面必须改】原型写的是 `first｜third_limited｜omniscient`——把**人称**与**视角限制**
-#: 塞进了一个字段（判据 9），而且**表达不了第二人称**（语料里有一本真的第二人称小说）。
-#: 「上帝视角 = 全知」是**第三人称的一个子类**，不是它的兄弟类：
-#: 「第三人称限知」（文字写「她」，但只进她一个人的内心）是现代小说的主流写法。
-#:
-#: ⚠⚠ **另一个轴（限知/全知）刻意【不在 stage2 立字段】** —— 那不是遗漏，是裁决：
-#:   Stage3 v2 已删除没有稳定下游收益的定性文风字段；不能为了替已退役字段找新住处，
-#:   就在 stage2 再立一个没有验证过消费价值的 `focalization`。新字段会增加抽取成本和
-#:   事实漂移面，在下游用途被证明前不恢复。
-#:   **已知代价**：第三人称全知的源章可能被改写成第三人称限知（丢掉全知声音）。
-#:   这是文风保真的缺口，归 `B-09`，**不假装它被覆盖了**。
-#:
-#: 【三个值各有全语料样本】163 本，剥掉引号内对白只数叙述文（每千字 我/你/他她）：
-#:   · `second` —— `功名利禄` 4.2 / **29.2** / 14.7。开头逐字「你是山野村姑…你五岁那年就想好了」。
-#:                 **全语料唯一一本**，但它是真的。
-#:   · `third`  —— `FQ_皇帝亲自替我宫斗`：ch1 我 28.8（第一人称）→ **ch2~ch19 我恒 0.0**（第三人称）。
-#:                 **人称在章之间会变**，这就是本字段必须【逐章存】而不是全书存一个的实测辩护。
-#:   · `first`  —— 其余 160 本。
-#: ⚠ **别拿代词密度当判据**：`FQ_群臣逼朕送镇国大将军去青楼` 的「我」只有 **0.1/千字**，
-#:   看着像第三人称，实际是第一人称、自称是「朕」——**那正是 `pronoun_surfaces` 存在的理由**。
-NARRATIVE_PERSON: Final = ('first', 'second', 'third')
-
-#: 世界规则的类别（`canon.world_rules[].kind`）。**七个，闭合。**
-#: ⚠ 盘上只见 **4** 个（`social_norm`×4 · `supernatural_rule`×3 · `legal_rule`×3 ·
-#: `ability_system`×1），**另三个零样本**——取值面从代码来，不是从盘上量出来的。
-WORLD_RULE_KINDS: Final = (
-    'social_norm', 'institution', 'legal_rule', 'ability_system',
-    'supernatural_rule', 'technology_rule', 'physical_constraint',
-)
-
-#: 裸代词。**`address[].surface` 里一个都不许出现，连在别的字上也不行**（`R-2.3`）。
-#:
-#: 【为什么它必须在契约层而不是 prompt 里】三个消费方：
-#:   · `novel/stages/stage2/characters.py::SYSTEM`（`$PRONOUNS`，下发给模型的禁令）；
-#:   · 判据 `address_bare_pronoun`（**HARD**，盘上 1/3 本命中：三岁 `char_034='她'`）
-#:     与 `address_has_pronoun`（INFO）；
-#:   · 判据 `present_names_pronoun`（度量，盘上 15/176）。
-#: 一份表三个消费方 ⇒ 唯一落点（判据 25）。写在 prompt 里就等于让判据另抄一份，
-#: 而两份分家之后「下发的禁令」与「查的那条」会在某个字上对不上，**且不会报错**。
-#:
-#: 【为什么理由是「相对说话人」不是「不好看」】代词的所指随说话人变，
-#: 而 `address` 记的要是一个**换谁来说都成立的固定叫法**。
-#: 「我妈」只在叙述者自己嘴里成立；下游拿它当这个人的名字用，就会写出「我妈对我妈说」。
-#: ⚠ 第一人称主角的自称由 `narration.pronoun_surfaces` 承载，**不进 `address`**——
-#: 所以那一族判据**不能**拿本表去查（`present_names_pronoun` 是度量不是违约，
-#: 正因为「代词按设计永远不在 registry 里」）。
-#:
-#: ⚠ **它是容器 ⇒ `/api/enums` 自动发布成 `bare_pronouns`，那是有意的**。
-#: 容器自动发是**静默**的，所以这个选择要写下来：前端拿它渲染一句图例
-#: （「这几个字不能当称呼」），而**违规条目本身已经逐条在报告里**——渲染不产生判定。
-#: ⚠ 从「容器却仍然不发」的对照原则看：若某张表的全部输入能派生出一个前端
-#: 可自算的分数/结论，那张表就该登记不发（旧 RESIDUAL 探针表即此例，已删）。
-#: 本表没有那个形状（没有从它派生的分数），所以不必登记为不发。
-BARE_PRONOUNS: Final = ('我', '你', '他', '她', '它', '咱')
-
-#: ``role`` 中禁止出现的转抄式结局词。它同时被 Stage2 生成 prompt 的提交前
-#: 自检与 ``role_leaks_fate`` 判据消费，因此必须落在契约层唯一一份；否则模型
-#: 按一张表自检、落盘闸门按另一张表判定时，两边会静默分家。
-#:
-#: ⚠ 这张表只覆盖字面泄漏，不宣称能识别改写式剧透；后者仍由
-#: ``role_fate_unverifiable`` 与 hash-bound 人工复核诚实暴露。
-FATE_WORDS: Final = (
-    '最终', '后被', '而死', '下狱', '被处死', '走向', '结局', '沦为',
-)
-
-#: ── Stage2 全局复核项：取值面与**交付效果**分级 ────────────────────────────
-#:
-#: 【为什么要分级】旧口径是「145 项全部 PASS 才开 Stage4」。它把两件事压成一件：
-#: 「这条事实错了会让下游造出一本假书」与「这条读起来不够好」。实测那一本 145 项里
-#: **50 项属于后者**——名字够不够独特、称谓场合、结局措辞——它们既不下发写手，
-#: 也另有 naming / Stage7 改名审批 / 恒等检查在守。让它们阻断，等于用一道无法自动
-#: 判定的闸把整条链锁死，而真正的高影响事实混在同一堆里得不到应有的注意力。
-#:
-#: ⚠ **分级不是删审计。** `disclosure` 的项一条不少地留在 `global_review.json`、
-#: 留在 inbox、留在终审包；它们只是不再拦 Stage4。**不许自动 PASS**。
-#: ⚠ **加一个 kind 必须同时选一边**：`review_effect_of` 对未登记 kind 关闭式失败，
-#: 而不是给一个「默认 disclosure」——默认放行是这张表唯一不能有的方向。
-GLOBAL_REVIEW_KINDS: Final = (
-    'world_rule_version', 'secret', 'reveal',
-    'name_distinctiveness', 'character_identity', 'alias_identity', 'world_rule_kind',
-    'character_set_complete', 'relation_set_complete',
-    'world_rule_set_complete', 'secret_set_complete',
-    'role', 'relation', 'setting_fact', 'secret_setup',
-)
-
-# 钩子可独立提供文案事实；审阅行动权变化要进入业务身份，不能复用旧策略的停机结论。
-SOURCE_BLURB_EVIDENCE_POLICY: Final = 'source-hook-independent-evidence-v1'
-
-#: 每类复核项对生成消费面的精确影响。这里不是优先级标签，而是恢复路由：
-#:
-#: · ``must_fix``：不能从下游视图安全删除，FAIL/UNVER 必须修正或人工裁决；
-#: · ``quarantine_or_fix``：整组可确定性删除，UNVER 可显式隔离，FAIL 仍须修正；
-#: · ``disclose``：不进入写作事实面，只保留审计与最终披露。
-#:
-#: ⚠ 必须逐项列全，不能靠“其余默认 HARD”推断。这样新增 kind 时会在 import 阶段
-#: 失败，迫使调用方同时回答它会怎样影响生成，而不是先放进 blocking 再由路径前缀
-#: 猜能否隔离。
-GLOBAL_REVIEW_GENERATION_IMPACTS: Final = (
-    'must_fix', 'quarantine_or_fix', 'disclose',
-)
-GLOBAL_REVIEW_GENERATION_IMPACT_BY_KIND: Final = {
-    'world_rule_version': 'must_fix',
-    'secret': 'quarantine_or_fix',
-    'reveal': 'quarantine_or_fix',
-    'name_distinctiveness': 'must_fix',
-    'character_identity': 'must_fix',
-    'alias_identity': 'must_fix',
-    'world_rule_kind': 'must_fix',
-    'character_set_complete': 'must_fix',
-    'relation_set_complete': 'must_fix',
-    'world_rule_set_complete': 'must_fix',
-    'secret_set_complete': 'must_fix',
-    'role': 'must_fix',
-    'relation': 'must_fix',
-    'setting_fact': 'must_fix',
-    'secret_setup': 'quarantine_or_fix',
-}
-
-#: 由权威分类派生；当前 Core 审阅全部阻断，因此本集合为空。
-#: 保留 API 的分类读数，不能将旧 address/fate 项迁入当前审阅或自动接受。
-GLOBAL_REVIEW_DISCLOSURE_KINDS: Final = tuple(
-    kind for kind in GLOBAL_REVIEW_KINDS
-    if GLOBAL_REVIEW_GENERATION_IMPACT_BY_KIND[kind] == 'disclose'
-)
-
-#: 复核项对**交付**的效果。两个取值与 `InboxDeliveryEffect` 同名同义，不另造第三套词。
-GLOBAL_REVIEW_EFFECTS: Final = ('blocking', 'disclosure')
-
-#: UNVER 对写作消费面的显式处置。取值面集中在这里，schema / API 只引用。
-GLOBAL_REVIEW_GENERATION_DISPOSITIONS: Final = ('quarantine_group',)
-
-
-def review_effect_of(kind: str) -> str:
-    """一个复核项该不该拦下游。**全仓唯一的分类落点。**
-
-    ⚠ **未登记的 kind 当场炸，不给默认值。** 这张表的失败方向是「新加一类高影响
-    事实被静默放行」，所以它必须是白名单 + 关闭式：加 kind 的人被强制选一边。
-    旧版本 kind 不属于当前载体；历史统计将它标为未登记，不迁入当前审阅。
-    """
-    impact = review_generation_impact_of(kind)
-    return 'disclosure' if impact == 'disclose' else 'blocking'
-
-
-def review_generation_impact_of(kind: str) -> str:
-    """返回复核项对生成面的闭集影响；未知 kind 没有默认放行方向。"""
-    if kind not in GLOBAL_REVIEW_KINDS:
-        raise ValueError(
-            f'未登记的 stage2 复核项 kind：{kind!r}。'
-            '加一类必须同时在 GLOBAL_REVIEW_KINDS 与 '
-            'GLOBAL_REVIEW_GENERATION_IMPACT_BY_KIND 里登记，没有默认值')
-    try:
-        return GLOBAL_REVIEW_GENERATION_IMPACT_BY_KIND[kind]
-    except KeyError as exc:  # pragma: no cover —— 下面的 import-time assert 已先守
-        raise ValueError(f'复核项 {kind!r} 缺 generation impact') from exc
-
-
-assert set(GLOBAL_REVIEW_DISCLOSURE_KINDS) <= set(GLOBAL_REVIEW_KINDS)
-assert len(set(GLOBAL_REVIEW_KINDS)) == len(GLOBAL_REVIEW_KINDS)
-assert set(GLOBAL_REVIEW_GENERATION_IMPACT_BY_KIND) == set(GLOBAL_REVIEW_KINDS)
-assert set(GLOBAL_REVIEW_GENERATION_IMPACT_BY_KIND.values()) <= set(
-    GLOBAL_REVIEW_GENERATION_IMPACTS)
-
-#: TODO-25 的唯一机器契约。它描述的是显示投影，不是访问控制：服务端响应仍含完整数据。
-#: 后端发布器、前端 adapter、Screen 与 mock 都消费这一个结构；隐藏路径和承诺不再散落成文案。
-SPOILER_DISCLOSURE: Final = {
-    'mode': 'display_only',
-    'security_boundary': False,
-    'server_sends_full_data': True,
-    'hidden_paths': (
-        'arc_secrets',
-    ),
-    'known_leakage_surfaces': (
-        'characters[].canonical', 'characters[].aliases', 'relations[].effective_from',
-        'world_rules[].versions[].desc', 'network_response_and_devtools',
-    ),
-    'consumers': (
-        'web/src/api/spoilers.ts', 'web/src/screens/global/GlobalScreen.tsx',
-        'web/src/api/mock.ts',
-    ),
-    'notice': (
-        '这是显示辅助，不是安全边界；服务端仍下发完整数据。关闭时只隐藏长线秘密，'
-        '人物登记、身份映射、关系时点、规则正文与网络响应仍可能剧透。'
-    ),
-}
-
-#: ⚠ 这里曾有 `PARTIAL_MASK_NOTE = SPOILER_DISCLOSURE['notice']`，自陈是「旧名字的源码
-#: 兼容别名」。全仓**没有任何代码消费它**（四处提及全在注释里），它唯一的存在理由是
-#: `novel/api/enums.py` 要求本模块每个公开大写名都被三张桶表之一归类 ⇒ 一个只为了通过
-#: 归类检查而活着的别名。⇒ 与 `enums.py` 那行 `_CONSUMED` 登记同批删除。
-#: 要那句话，读 `SPOILER_DISCLOSURE['notice']`。
-
-#: 一次调用当时的缓存口径，记进付费产物 `_provenance`（如 stage2 的 `repairs[]`）。
-#: ⚠ **定向重生成必须配 `refresh-write`**（`R-3.11`）：它的 prompt 与整跑时那一批**逐字相同**，
-#: 缓存必然命中，于是一个字都没重新生成而它照样打印「已重生成」。
-#: ⚠⚠ **`disabled` 没有 CLI 入口，这是有意的，别当死取值删掉。** 它与那批「装置删了只剩
-#: 取值」的枚举**不同型**：装置还在（`ResponseCache` 的逐读写开关），缺的只是一个 flag，
-#: 而它是冻结需求 `R-12.4`「关缓存是同时关读写」的**唯一表达**——删了那条需求就没有守卫。
-#: 也不要顺手补一个 `--no-cache`：`--refresh` 严格更优（重采样且仍留账），
-#: 多一个入口只会让人误跑一次「花了钱什么都没留下」的重跑。
-CACHE_POLICY: Final = ('default', 'refresh-write', 'disabled')
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 五、计划与篇幅（stage4）
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-#: Stage4 结构规划的三个闭合轴。它们描述的是叙事架构，不是文风：同一组事实可以被
-#: 放在冷开场、升级或兑现位置，可以作为完整场景或压缩交代，并且必须说清与上一单元
-#: 的时间关系。Stage5 只执行这些决定，不再自行猜测重排后的衔接。
-STRUCTURAL_ROLES: Final = (
-    'cold_open', 'setup', 'escalation', 'turn', 'payoff', 'bridge',
-)
-DELIVERY_MODES: Final = ('scene', 'summary')
-TEMPORAL_LINKS: Final = ('start', 'continue', 'earlier', 'later', 'parallel', 'return')
-
-#: 逐章三个 typed goal 的意图取值面。
-#: ⚠ **它 2026-08-22 才从三处手抄收拢到这里**：`contracts/schema/stage4.py` 的
-#: `PlanGoal` 与 `CtxGoal` 各写着一份行内 `Literal[...]`，`stage4/prompts.py` 里还有
-#: 第三份手抄的 `establish|advance|open|close|withhold|resolve`——`$RECONSTRUCT_MIN`
-#: 那条注释记过同型的下场（prompt 与判据各拿一个数）。
-GOAL_INTENTS: Final = (
-    'establish', 'advance', 'open', 'close', 'withhold', 'resolve',
-)
-
-#: ── `stage4.plan` 响应侧的四张前缀枚举 → 产物侧取值 ─────────────────────────
-#:
-#: **前缀化只在响应侧**：产物侧那四张表一个字不动（下游 + 盘上数据的硬约束），
-#: `novel/stages/stage4/measure.py::decode_plan_response` 是唯一映射落点
-#: ——与 `RESPONSE_TIME_LAYERS` / `PLACE_MODES` 那次（`extraction-ir-v1`）同一套手法。
-#:
-#: 【为什么前缀化】这四张表在响应 JSON 里**串行相邻**，而它们语义两两邻近
-#: （`cold_open`↔`start`、`bridge`↔`continue`、`payoff`↔`close`、
-#: `narrative_role`↔`delivery` 都有 `summary` 味、`intent` 的每一个值都像一种
-#: `narrative_role`）⇒ 模型串表，而串出来的值**在另一张表里是合法的**，
-#: 于是 schema 闸只能在整份响应收完之后才发现。
-#:
-#: ⚠⚠ **代价实测过，两次**：
-#:   · 交接时 `delivery` 的 `summary` 串进 `narrative_role`；
-#:   · 2026-08-22 批 2 的第二次全书实付——`intent='turn'`（那是 `narrative_role` 的值）
-#:     ×6 章、`narrative_role='recall'`（那是 `time_layer` 的值，从**下发面**抄来的）。
-#:     整条 `LADDER` 走到底、6 次 wire 全被内容闸拒、completion 86 150 **全白花、0 产物**。
-#: ir1 那次的读数是**非法 enum 归零**，所以这里照抄的是一个已验证的修法，不是一次猜测。
-#:
-#: ⚠ 四个前缀字母互不相同，且**与 stage2 的 `T_` / `P_` 也不撞**：同一个模型在两个节点上
-#: 见到的前缀空间不该重叠。⚠ `transition` 用 `X_` 不用 `T_` 正是为此
-#: （`T_` 已经是叙述层的，而叙述层的值恰好就是这次串进 `narrative_role` 的那个）。
-RESPONSE_STRUCTURAL_ROLES: Final = {
-    'R_COLD_OPEN': 'cold_open', 'R_SETUP': 'setup', 'R_ESCALATION': 'escalation',
-    'R_TURN': 'turn', 'R_PAYOFF': 'payoff', 'R_BRIDGE': 'bridge',
-}
-RESPONSE_DELIVERY_MODES: Final = {'D_SCENE': 'scene', 'D_SUMMARY': 'summary'}
-RESPONSE_TEMPORAL_LINKS: Final = {
-    'X_START': 'start', 'X_CONTINUE': 'continue', 'X_EARLIER': 'earlier',
-    'X_LATER': 'later', 'X_PARALLEL': 'parallel', 'X_RETURN': 'return',
-}
-RESPONSE_GOAL_INTENTS: Final = {
-    'G_ESTABLISH': 'establish', 'G_ADVANCE': 'advance', 'G_OPEN': 'open',
-    'G_CLOSE': 'close', 'G_WITHHOLD': 'withhold', 'G_RESOLVE': 'resolve',
-}
-
-#: ── 篇幅的**两级档位**（2026-08-22 批 4）─────────────────────────────────────
-#:
-#: ⚠⚠ **模型不再给 `budget_chars` 这个整数，它给两个档位，整数由代码算。**
-#: 从前模型要同时满足三件算术：逐单元正整数（`budget_int`）、每章之和落在
-#: `PLAN_BUDGET_BAND`（`budget_band`）、全书之和落在 `BOOK_BAND`（`plan_book_band`）——
-#: 而后两条要把五六十个整数先按章分组求和、再把二十多个章级合计再加一遍。
-#: 实测代价：批 2 run1 一次全书实付倒在 `budget_band`（ch18 压到 0.442×），**整份退回**。
-#: ⇒ 这三条从「模型的责任」变成预算分配器的**后置条件**（旧链落点
-#: `stage4/measure.py::allocate_budgets`，已随旧链删除），而模型只表达它真正
-#: 该表达的那件事：**哪一章重、章里哪一场重**。本段为历史标定记录。
-#:
-#: 【为什么是两级而不是一级】它们是**两层不同的问题**：
-#: 「哪一章重要」只有章级倍率能表达，「本章里哪里重要」只有场景级分配能表达。
-#: 压成一级就等于宣布其中一层不存在。
-#:
-#: 【两张表的取值面刻意零重词】前缀 `CH_` / `W_` 不重叠，**十个词干也两两不同**
-#: （`MAJOR/ABOVE/EVEN/BELOW/MINOR` vs `PEAK/STRONG/MID/QUICK/BRUSH`）——
-#: 它们在响应 JSON 里一个在章级、一个在单元级，正是 `RESPONSE_STRUCTURAL_ROLES`
-#: 那条注释说的「串行相邻且语义邻近」的形状。共用一个 `HEAVY`/`LIGHT` 词对
-#: 就会让串表串出来的值在另一张表里合法，而那要等整份响应收完才发现。
-RESPONSE_CHAPTER_WEIGHTS: Final = {
-    'CH_MAJOR': 'major', 'CH_ABOVE': 'above', 'CH_EVEN': 'even',
-    'CH_BELOW': 'below', 'CH_MINOR': 'minor',
-}
-CHAPTER_WEIGHTS: Final = ('major', 'above', 'even', 'below', 'minor')
-
-RESPONSE_UNIT_WEIGHTS: Final = {
-    'W_PEAK': 'peak', 'W_STRONG': 'strong', 'W_MID': 'mid',
-    'W_QUICK': 'quick', 'W_BRUSH': 'brush',
-}
-UNIT_WEIGHTS: Final = ('peak', 'strong', 'mid', 'quick', 'brush')
-
-
-#: 六张响应表与它们的产物表**逐格对齐**（顺序也对齐——渲染进 prompt 的就是这个顺序）。
-_PLAN_RESPONSE_ENUMS: Final = (
-    (RESPONSE_STRUCTURAL_ROLES, STRUCTURAL_ROLES, 'narrative_role'),
-    (RESPONSE_DELIVERY_MODES, DELIVERY_MODES, 'delivery'),
-    (RESPONSE_TEMPORAL_LINKS, TEMPORAL_LINKS, 'transition'),
-    (RESPONSE_GOAL_INTENTS, GOAL_INTENTS, 'intent'),
-    (RESPONSE_CHAPTER_WEIGHTS, CHAPTER_WEIGHTS, 'chapter.weight'),
-    (RESPONSE_UNIT_WEIGHTS, UNIT_WEIGHTS, 'segment.weight'),
-)
-for _resp, _art, _field in _PLAN_RESPONSE_ENUMS:
-    assert tuple(_resp.values()) == tuple(_art), \
-        f'{_field} 的响应侧映射与产物侧取值面分家了——decode 会映到一个不存在的产物值'
-    assert len(set(_resp)) == len(set(_resp.values())), f'{_field} 的响应侧映射不是双射'
-
-#: ⚠⚠ **这条断言才是前缀化买的那件东西**：任意两个响应侧取值互不相等、
-#: **且互不为子串**——串表串出来的值必须在 schema 闸当场死掉，而不是在另一张表里合法。
-#: 一起比进来的还有 `TIME_LAYERS`（它的值出现在**下发面**上，`narrative_role='recall'`
-#: 就是从那里抄过来的）。
-_PLAN_RESPONSE_KEYS: Final = tuple(
-    k for _resp, _a, _f in _PLAN_RESPONSE_ENUMS for k in _resp)
-for _a in _PLAN_RESPONSE_KEYS:
-    for _b in (*_PLAN_RESPONSE_KEYS, *TIME_LAYERS):
-        assert _a == _b or _a not in _b, \
-            f'响应侧取值 {_a!r} 是 {_b!r} 的子串——串表就不会在 schema 闸上死掉了'
-
+# ⚠ 2026-10-04 清理批：本节（旧链 Stage4 计划与篇幅的六张响应前缀表、
+#   两级档位与对齐断言）已随旧链 stage4/plot schema 删除；档位标定史见
+#   Git 历史与本文件此前版本。现役篇幅带见 `DRAFT_BAND` / `BOOK_BAND`
+#   与 stage4/acceptance 的 guard 报告。
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 六、写作（stage5）
@@ -1752,4 +1264,36 @@ SYSTEM_INVALID_REVALIDATE_REASON: Final = (
     'live INVALID passes current canonical HARD rules; auto 0-wire revalidate')
 #: Commander 顶层子进程的首事件/空闲超时、同席尝试上限与重试退避已随角色
 #: 退役（2026-09-15）删除：这些是驱动层重试参数，executor 会话各自持有
-#: 独立的超时与尝试策略（见 ``novel/agents``），不再有全局 Commander 席位。
+#: 独立的超时与尝试策略（见 ``novel/agents``），不再有全局 Commander 席位。#: TODO-25 的唯一机器契约。它描述的是显示投影，不是访问控制：服务端响应仍含完整数据。
+#: 后端发布器、前端 adapter、Screen 与 mock 都消费这一个结构；隐藏路径和承诺不再散落成文案。
+SPOILER_DISCLOSURE: Final = {
+    'mode': 'display_only',
+    'security_boundary': False,
+    'server_sends_full_data': True,
+    'hidden_paths': (
+        'arc_secrets',
+    ),
+    'known_leakage_surfaces': (
+        'characters[].canonical', 'characters[].aliases', 'relations[].effective_from',
+        'world_rules[].versions[].desc', 'network_response_and_devtools',
+    ),
+    'consumers': (
+        'web/src/api/spoilers.ts', 'web/src/screens/global/GlobalScreen.tsx',
+        'web/src/api/mock.ts',
+    ),
+    'notice': (
+        '这是显示辅助，不是安全边界；服务端仍下发完整数据。关闭时只隐藏长线秘密，'
+        '人物登记、身份映射、关系时点、规则正文与网络响应仍可能剧透。'
+    ),
+}
+
+
+#: 一次调用当时的缓存口径，记进付费产物 `_provenance`（如 stage2 的 `repairs[]`）。
+#: ⚠ **定向重生成必须配 `refresh-write`**（`R-3.11`）：它的 prompt 与整跑时那一批**逐字相同**，
+#: 缓存必然命中，于是一个字都没重新生成而它照样打印「已重生成」。
+#: ⚠⚠ **`disabled` 没有 CLI 入口，这是有意的，别当死取值删掉。** 它与那批「装置删了只剩
+#: 取值」的枚举**不同型**：装置还在（`ResponseCache` 的逐读写开关），缺的只是一个 flag，
+#: 而它是冻结需求 `R-12.4`「关缓存是同时关读写」的**唯一表达**——删了那条需求就没有守卫。
+#: 也不要顺手补一个 `--no-cache`：`--refresh` 严格更优（重采样且仍留账），
+#: 多一个入口只会让人误跑一次「花了钱什么都没留下」的重跑。
+CACHE_POLICY: Final = ('default', 'refresh-write', 'disabled')

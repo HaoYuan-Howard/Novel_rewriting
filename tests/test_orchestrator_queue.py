@@ -236,10 +236,9 @@ def test_retired_stage5_closure_gate_is_never_consulted_by_new_chain_planning(
     **结构上**不可能被读取；`str06.stage5.body` 按自己的完成度判定照常排程，
     也不发出 `WAITING_ON_STAGE5_CLOSURE`。四种历史闭合状态逐一钉住同一结论。
     """
-    from novel.orchestrator import approvals as _approvals
-    assert not hasattr(Q, 'approvals'), 'queue 不再 import 审批模块'
-    assert not hasattr(_approvals, 'stage5_closure_view'), (
-        '机械闭合视图应随人工闸退役删除')
+    import importlib.util
+    assert importlib.util.find_spec('novel.orchestrator.approvals') is None
+    assert not hasattr(Q, 'approvals')
     monkeypatch.setattr(Q, 'nodes_up_to', lambda _until: ['str06.stage5.body'])
     monkeypatch.setattr(
         Q.st, 'overview', lambda _base, _sid: SimpleNamespace(stages=[
@@ -263,8 +262,8 @@ def test_stage5_body_and_hook_plan_without_the_retired_closure_gate(
     """批次 B3 的闭合闸与闭合补算随 `stage5.review`／`stage6` 退役：
     四种历史闭合状态下，新链 stage5 两节点都按自己的 verdict 照常规划，
     闭合视图不被读取（符号已删），也不再有免费 review 补算项插队。"""
-    from novel.orchestrator import approvals as _approvals
-    assert not hasattr(_approvals, 'stage5_closure_view')
+    import importlib.util
+    assert importlib.util.find_spec('novel.orchestrator.approvals') is None
     monkeypatch.setattr(
         Q, 'nodes_up_to',
         lambda _until: ['str06.stage5.body', 'str06.stage5.hook'])
@@ -288,8 +287,8 @@ def test_retired_closure_gate_leaves_new_chain_planning_untouched(
         queue_base, monkeypatch):
     """盘上留着 closed 闭合回执也不放行/不阻断任何新链节点：
     hook SKIP 由自己的产物面回答，下游 naming 照常排程。"""
-    from novel.orchestrator import approvals as _approvals
-    assert not hasattr(_approvals, 'stage5_closure_view')
+    import importlib.util
+    assert importlib.util.find_spec('novel.orchestrator.approvals') is None
     monkeypatch.setattr(
         Q, 'nodes_up_to',
         lambda _until: ['str06.stage5.hook', 'str06.stage7.naming'])
@@ -324,9 +323,9 @@ def test_live_invalid_blocks_the_node_without_freezing_a_default_paid_argv(
     """批次 C 的自动提升面随新链旗标退役：现役节点旗标面只有 `--check-only`，
     没有 `--revalidate` ⇒ live `.INVALID` 走收件箱关闭式阻断，不冻结默认付费
     argv；理由里仍保留 0 LLM 提升路的建议（由续跑判定给出）。"""
-    from novel.orchestrator import approvals as _approvals
+    import importlib.util
+    assert importlib.util.find_spec('novel.orchestrator.approvals') is None
     assert not hasattr(Q, 'approvals')
-    assert not hasattr(_approvals, 'stage5_closure_view')
     monkeypatch.setattr(Q, 'nodes_up_to', lambda _until: [node])
     artifact = ArtifactState(
         rel=artifact_rel_path, exists=True, bytes=10, mtime=1,
@@ -1786,12 +1785,9 @@ def test_stage4_queue_lane_runs_all_three_phases_without_approval_prepare(
     F8c：`authorize_design_initial`／`authorize_plan`／`authorize_context`
     随人工闸整层退役删除（符号已不在 approvals），结构上不可能被调用。
     """
-    from novel.orchestrator import approvals as _approvals
+    import importlib.util
+    assert importlib.util.find_spec('novel.orchestrator.approvals') is None
     assert not hasattr(Q, 'approvals')
-    for name in ('authorize_design_initial', 'authorize_plan',
-                 'authorize_context', 'authorize_writing'):
-        assert not hasattr(_approvals, name), (
-            f'{name} 是旧链审批授权面，应随人工闸退役删除')
     items = [
         _item('book-a', 'str06.stage4.body_design', 'design-command', paid=True),
         _item('book-a', 'str06.stage4.hook_design', 'hook-command', paid=True),

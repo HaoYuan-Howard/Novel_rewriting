@@ -19,7 +19,7 @@ from contracts.schema.workflow import BudgetGrant, WorkUnitLedgerV2
 from novel import paths, prov, work_units
 from novel.appendlog import path_transaction_lock
 from novel.errors import TerminalState
-from novel.orchestrator import admission, approvals, jobs
+from novel.orchestrator import admission, jobs
 from novel.orchestrator.inspection import read_surface_seal
 
 
@@ -85,7 +85,7 @@ def apply(base: str | Path, sid: str, unit_id: str, request: WorkUnitGrantReques
     writer_id = 'budget-grant-' + uuid4().hex
     key = jobs.acquire_job_writer(base, sid, budget.identity['node'], writer_id)
     try:
-        with approvals.approval_file_lock(base, sid), path_transaction_lock(budget.path):
+        with path_transaction_lock(budget.path):
             ledger = budget._read()
             existing = next((row for row in ledger.grants if row.intent_id == request.intent_id), None)
             if existing is not None:

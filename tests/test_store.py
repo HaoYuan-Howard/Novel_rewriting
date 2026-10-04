@@ -257,7 +257,6 @@ def _plan(ctx: RunContext, *, marker: str = '计划一',
         provenance=provenance)
 
 
-
 def _anchor_stub():
     """最小义务锚点（R10a a2）：本地构造，不 import 测试工厂——本文件是
     与 str06 无关的存储层测试面（选择器按 import 闭包排除，见
@@ -1062,22 +1061,9 @@ def test_consumer_freshness_never_calls_damaged_upstream_fresh():
         '上游坏字节先落在文件指纹上；两种结果都不是 fresh，读侧照样被闸'
 
 
-def test_blueprint_projection_does_not_invent_a_character_id_format_gate():
-    """Global 人物表键只作成员闭集；投影不能偷偷加一条不存在的格式判据。"""
-    from contracts.schema.stage2 import BlueprintCharacterProjection
-
-    artifact = BlueprintCharacterProjection.model_validate({
-        'chapters': [{
-            'chapter_ordinal': 1,
-            'past_attested_surfaces': ['甲'],
-            'visible_character_refs': {'protagonist': ['甲']},
-            'character_bindings': {'protagonist': [
-                {'surface': '甲', 'identity_revealed_from': 1},
-            ]},
-        }],
-    })
-    assert artifact.chapters[0].visible_character_refs == {
-        'protagonist': ['甲']}
+# （历史）BlueprintCharacterProjection 格式闸用例已随 contracts/schema/stage2.py
+# 删除（2026-10-04 清理批）；现役称谓成员闭集由 observation/source 契约与
+# str06 章包渲染守卫承担。
 
 
 @pytest.mark.parametrize('malformed', (

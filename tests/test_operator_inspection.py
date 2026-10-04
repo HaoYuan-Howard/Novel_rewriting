@@ -9,7 +9,6 @@ from types import SimpleNamespace
 import pytest
 
 from novel.errors import ArtifactUnreadable, UpstreamMissing
-from novel.orchestrator import approvals as A
 from novel.orchestrator import inspection as I
 from novel.stages import checkable_stages
 
@@ -35,9 +34,6 @@ def test_operator_snapshot_freezes_one_code_and_runs_each_check_once(
 
     def check_only(stage):
         def run(ctx):
-            # 真实 Stage0/1 复检会间接消费审批坐标。
-            # 它们也必须复用外层身份，不能按内部闸门数量再调用 Git。
-            assert A.projection_code() == 'code-v1'
             check_calls.append((stage, ctx))
             return SimpleNamespace(node=f'{stage}.canonical-check')
         return run
@@ -54,7 +50,6 @@ def test_operator_snapshot_freezes_one_code_and_runs_each_check_once(
     assert sorted(stage for stage, _ctx in check_calls) == sorted(checkable_stages())
     assert all(ctx[2] == 'code-v1' for _stage, ctx in check_calls)
     assert snapshot.overview is overview
-    assert A._READ_CODE.get() is None
     assert set(snapshot.checks) == set(checkable_stages())
     assert all(snapshot.check(stage).report is not None
                for stage in checkable_stages())
@@ -116,28 +111,6 @@ def test_operator_snapshot_rejects_a_write_crossing_its_checks(
         I.capture_operator_snapshot(tmp_path, 'book-1')
 
 
-def test_approval_read_snapshot_releases_identity_between_requests(monkeypatch, tmp_path):
-    book = tmp_path / 'book'
-    book.mkdir()
-    codes = iter(('code-v1', 'code-v2'))
-    monkeypatch.setattr(I.paths, 'resolve_novel_dir', lambda *_a: book)
-    monkeypatch.setattr(I.prov, 'code_version', lambda: next(codes))
-    monkeypatch.setattr(I, 'overview_at', lambda _book, code: SimpleNamespace(sid='book-1', code=code))
-    monkeypatch.setattr(I, 'read_surface_seal', lambda *_a, code: 'seal:' + code)
-    for expected in ('code-v1', 'code-v2'):
-        with I.approval_read_snapshot(tmp_path, 'book-1') as (overview, code):
-            assert code == overview.code == expected
-            assert A.projection_code() == expected
-        assert A._READ_CODE.get() is None
-    seals = iter(('before', 'after'))
-    monkeypatch.setattr(I.prov, 'code_version', lambda: 'code-v3')
-    monkeypatch.setattr(I, 'read_surface_seal', lambda *_a, **_kw: next(seals))
-    with pytest.raises(ArtifactUnreadable, match='盘面发生变化'):
-        with I.approval_read_snapshot(tmp_path, 'book-1'):
-            pass
-    assert A._READ_CODE.get() is None
-
-
 def test_check_observation_only_downgrades_expected_unavailable_errors():
     assert I.CheckObservation(
         error=UpstreamMissing('这一层还没跑到')).for_view() is None
@@ -145,49 +118,6 @@ def test_check_observation_only_downgrades_expected_unavailable_errors():
     bug = RuntimeError('判据实现坏了')
     with pytest.raises(RuntimeError, match='判据实现坏了'):
         I.CheckObservation(error=bug).for_view()
-
-
-def test_approval_projection_reuses_snapshot_overview_and_code_without_fallback(
-        monkeypatch, tmp_path):
-    """F8c：人工闸整层退役后，投影只剩「同一次只读调用复用冻结坐标」这一职责。
-
-    operator/inspection 已在动作前后各做一次 surface seal CAS；投影内的所有
-    嵌套只读（queue、inbox、workflow_transition 的离线迁移）必须沿用这一份
-    overview/code，不能按内部闸门数量再跑 overview 或再取整仓 Git 指纹。
-    """
-    overview = SimpleNamespace(sid='book-1')
-
-    monkeypatch.setattr(
-        A.paths, 'resolve_novel_dir', lambda base, sid: tmp_path / 'book_1')
-    monkeypatch.setattr(
-        A.prov, 'code_version',
-        lambda: pytest.fail('快照审批投影不得再取 code_version'))
-
-    with A.read_projection(overview=overview, code='code-v1'):
-        assert A.projection_code() == 'code-v1'
-        assert A._READ_OVERVIEW.get() is overview
-        # 嵌套只读调用不给坐标时继承外层快照，不另取指纹。
-        with A._read_projection(overview=None, code=None):
-            assert A.projection_code() == 'code-v1'
-            assert A._READ_OVERVIEW.get() is overview
-    assert A._READ_CODE.get() is None
-    assert A._READ_OVERVIEW.get() is None
-
-
-def test_approval_projection_requires_a_complete_matching_snapshot_coordinate():
-    """只读投影坐标必须成对提供且属于本书；半份或跨书坐标一律明确拒绝。"""
-    overview = SimpleNamespace(sid='book-1')
-    with pytest.raises(ValueError, match='必须成对提供'):
-        A._validate_read_projection('book-1', overview=overview, code=None)
-    with pytest.raises(ValueError, match='必须成对提供'):
-        A._validate_read_projection('book-1', overview=None, code='code-v1')
-    with pytest.raises(ValueError, match='不是'):
-        A._validate_read_projection('other-book', overview=overview, code='code-v1')
-    with A.read_projection(overview=overview, code='code-v1'):
-        with pytest.raises(ValueError, match='另一书'):
-            A._validate_read_projection('other-book', overview=None, code=None)
-    # 成对且属于本书时放行，不抛。
-    A._validate_read_projection('book-1', overview=overview, code='code-v1')
 
 
 def test_read_surface_seal_ignores_unregistered_documents(
@@ -241,8 +171,14 @@ def test_surface_seal_ignores_legacy_report_files_but_keeps_active_artifact(
         tmp_path, 'book-1') != before
 
 
-def test_surface_seal_ignores_rounds_scratch_and_approval_history(
+def test_surface_seal_ignores_rounds_scratch_and_untracked_approval(
         monkeypatch, tmp_path):
+    """seal 忽略 rounds/scratch/一次性请求；历史审批文件按**原始字节**参与。
+
+    2026-10-04 裁决后审批账不再解码：seal 对 `_service/approvals/<sid>.json`
+    只以 `_legacy_approval_bytes` 的原始字节快照进入摘要——文件任何字节变化
+    都会改变 seal，不再有「改了历史不改 seal」的第二解释面。
+    """
     novel_dir = tmp_path / 'FQ_测试书_book-1'
     active = novel_dir / 'stage4' / 'design' / 'body_design.json'
     active.parent.mkdir(parents=True)
@@ -259,29 +195,8 @@ def test_surface_seal_ignores_rounds_scratch_and_approval_history(
     chapter_edit_request.write_text('{"request":1}', encoding='utf-8')
     approval = tmp_path / '_service' / 'approvals' / 'book-1.json'
     approval.parent.mkdir(parents=True)
-    proof = A._ApprovalProof(
-        root_clean_sha1='0' * 40,
-        artifacts={'stage4/plan_chapters.json': '1' * 64},
-        decision_sha256='2' * 64,
-    )
-    current_decision = A._StoredStructureDecision(
-        actor='reviewer', reason='当前结构结论', subject_sha256='3' * 64,
-        chapters=[{
-            'output_ordinal': 1,
-            'decision': 'accept',
-            'reason': '当前章可接受',
-        }],
-        decided_at='2026-09-01T00:00:00+00:00', proof=proof,
-    )
-    old_decision = current_decision.model_copy(update={
-        'reason': '历史结构结论',
-        'subject_sha256': '4' * 64,
-    })
-    record = A._fresh_record('book-1').model_copy(update={
-        'structure_history': [current_decision],
-        'structure_decision': current_decision,
-    })
-    approval.write_text(record.model_dump_json(), encoding='utf-8')
+    approval.write_bytes(b'{"v":9,"history":"old"}')
+
     monkeypatch.setattr(
         I.paths, 'resolve_novel_dir', lambda _base, _sid: novel_dir)
     monkeypatch.setattr(I.prov, 'code_version', lambda: 'code-v1')
@@ -291,15 +206,7 @@ def test_surface_seal_ignores_rounds_scratch_and_approval_history(
     scratch.write_text('{"attempt":2}', encoding='utf-8')
     external_request.write_text('{"request":2}', encoding='utf-8')
     chapter_edit_request.write_text('{"request":2}', encoding='utf-8')
-    changed_history = record.model_copy(update={
-        'structure_history': [old_decision, current_decision],
-    })
-    approval.write_text(changed_history.model_dump_json(), encoding='utf-8')
     assert I.read_surface_seal(tmp_path, 'book-1') == before
 
-    changed_current = record.model_copy(update={
-        'structure_history': [current_decision, old_decision],
-        'structure_decision': old_decision,
-    })
-    approval.write_text(changed_current.model_dump_json(), encoding='utf-8')
+    approval.write_bytes(b'{"v":9,"history":"old","appended":1}')
     assert I.read_surface_seal(tmp_path, 'book-1') != before

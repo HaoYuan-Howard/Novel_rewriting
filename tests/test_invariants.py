@@ -17,17 +17,6 @@ def test_state_domains_include_unknown_or_amber():
     assert 'unver' in inv.SEVERITY
 
 
-def test_stage4_binding_codes_have_one_closed_contract_surface():
-    assert inv.BINDING_CONCERN_CODES == (
-        'causal_conflict', 'stage_conflict', 'material_conflict',
-        'future_leak', 'insufficient_evidence',
-    )
-    assert inv.BINDING_INFEASIBILITY_CODES == (
-        'missing_chapter_catalog',
-    )
-    assert set(inv.BINDING_CONCERN_CODES).isdisjoint(
-        inv.BINDING_INFEASIBILITY_CODES)
-
 
 def test_wontfix_surface_is_fully_retired():
     """F8A：`--wontfix` 豁免记账面随旧链人工闸整体退役。

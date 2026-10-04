@@ -1,17 +1,18 @@
 # -*- coding: utf-8 -*-
-"""旧审批与 Stage3 证明不能通过当前 HTTP、CLI、只读状态或来源尺恢复权威。
+"""旧审批不能通过当前 HTTP、CLI 或来源尺恢复权威（2026-10-04 清理批改写）。
 
-F8c（人工闸整层退役）后本文件的入口面改写为**退役守卫**：
-  * **版本拒读仍在**：存量审批账的只读解码（`approvals._read_raw` 与
-    `approval_head_bytes`）继续把非 v9／损坏／版本不符的旧字节显式拒绝，
-    「旧版本与未来版本均不迁移」这句话是现役读者的原话。
+用户裁决不保留旧产物读兼容后，存量审批账的只读解码面
+（`approvals._read_raw`／`approval_head_bytes`）已随 `approvals` 模块整体删除：
+旧根一律 `legacy_incompatible` 拒识，历史→新契约的转换走仓外临时脚本。
+本文件保留的退役守卫：
+  * **模块不在了**：`novel.orchestrator.approvals` 不得复活（S-05）；
   * **写入口与路由不在了**：HTTP 没有 `/approvals` 任何路由、CLI 没有
-    `approval` 子命令——两者都必须在请求／解析层显式失败，而不是落成
-    静默的非零退出码或某个兼容别名。
+    `approval` 子命令——两者都必须在请求／解析层显式失败；
   * **拒绝不产生副作用**：旧字节一个字节不改，也不留下 ledger 行。
 """
 from __future__ import annotations
 
+import importlib.util
 import json
 
 import pytest
@@ -21,50 +22,28 @@ from contracts.artifacts import RETIRED_STAGE3_STYLE_GROUNDING
 from novel import prov
 from novel.api.app import UI_HEADER, create_app
 from novel.cli import main as cli
-from novel.errors import ArtifactUnreadable, HumanEditProtected
-from novel.orchestrator import approvals, state
+from novel.orchestrator import state
 from novel.store import ArtifactStore
 from novel.work_units import initialize_workflow
 
-#: 人工闸时代写过的全部 manifest 版本形状（含缺失、None、浮点伪整数与未来版本）。
-_RETIRED_VERSIONS = (1, 2, 3, 4, 5, 6, 7, 8, 10, None, 'missing', 7.0, 8.0, 9.0)
 
-
-def _old_book(tmp_path, version):
+def _old_book(tmp_path, version: int = 6):
     initialize_workflow(tmp_path)
     sid = '4242'
     book = tmp_path / f'审批退役_{sid}'
     (book / 'stage0').mkdir(parents=True)
     (book / 'stage0' / 'clean_text.txt').write_text('来源正文\n', encoding='utf-8')
-    payload = approvals._fresh_record(sid).model_dump(mode='json')
-    if version == 'missing':
-        payload.pop('v')
-    else:
-        payload['v'] = version
-    target = approvals._path(tmp_path, sid)
+    # 写一份历史形状的审批账（内容不再被任何现役读者解释）。
+    payload = {'v': version, 'sid': sid, 'gate': {}, 'writing': False}
+    target = tmp_path / '_service' / 'approvals' / f'{sid}.json'
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(payload, ensure_ascii=False), encoding='utf-8')
     return book, sid, target
 
 
-@pytest.mark.parametrize('version', _RETIRED_VERSIONS)
-def test_retired_approval_versions_stay_refused_by_the_surviving_reader(
-        tmp_path, version):
-    """存量账只读解码继续拒绝一切非 v9 版本，且不迁移、不补写。"""
-    book, sid, target = _old_book(tmp_path, version)
-    before = target.read_bytes()
-    source_before = (book / 'stage0' / 'clean_text.txt').read_bytes()
-    with pytest.raises(HumanEditProtected, match='均不迁移'):
-        approvals._read_raw(tmp_path, sid)
-    with pytest.raises(ArtifactUnreadable):
-        approvals.approval_head_bytes(tmp_path, sid)
-    # 拒绝是幂等的事实：再读一次还是同一句拒绝，不会「补录」成当前票。
-    with pytest.raises(HumanEditProtected, match='均不迁移'):
-        approvals._read_raw(tmp_path, sid)
-    assert target.read_bytes() == before
-    assert (book / 'stage0' / 'clean_text.txt').read_bytes() == source_before
-    assert not (tmp_path / '_service' / 'ledger.jsonl').exists()
-    assert approvals.has_record(tmp_path, sid), '历史账仍在盘上这一事实不变'
+def test_approvals_decode_module_stays_deleted():
+    """存量审批账解码面不得复活：旧根拒识由产物层闭合（legacy_incompatible）。"""
+    assert importlib.util.find_spec('novel.orchestrator.approvals') is None
 
 
 def test_http_has_no_approval_route_at_all(tmp_path):

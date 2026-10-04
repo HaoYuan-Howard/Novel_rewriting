@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import hashlib
 import os
-from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
@@ -23,7 +22,6 @@ from contracts.schema.orchestration import NovelOverview
 from contracts.schema.report import CheckReport
 from novel import paths, prov
 from novel.errors import ArtifactUnreadable, TerminalState, UpstreamMissing
-from novel.orchestrator import approvals
 from novel.orchestrator.nodes import check_node
 from novel.orchestrator.state import overview_at, readonly_ctx
 from novel.stages import check_only, checkable_stages
@@ -32,25 +30,6 @@ from novel.store import readonly_snapshot_memo
 
 _EXPECTED_UNAVAILABLE = (UpstreamMissing, ArtifactUnreadable, TerminalState)
 
-
-@contextmanager
-def approval_read_snapshot(
-    base: str | os.PathLike[str], sid: str,
-) -> Iterator[tuple[NovelOverview, str]]:
-    """审批 GET 在一个盘面内复用代码与消费投影，不构建 operator 动作。
-
-    审批页与进度页会同时读取本书。若每个内部闸门重算代码和依赖，
-    审批读锁会长期占用并拖住进度；此处只在本次请求内共享，结束复验。
-    """
-    novel_dir = paths.resolve_novel_dir(base, sid).resolve()
-    with readonly_snapshot_memo(novel_dir):
-        code = prov.code_version()
-        before = read_surface_seal(base, sid, code=code)
-        overview = overview_at(novel_dir, code)
-        with approvals.read_projection(overview=overview, code=code):
-            yield overview, code
-        if read_surface_seal(base, sid, code=code) != before:
-            raise ArtifactUnreadable('审批读取期间盘面发生变化；请重新读取当前状态')
 
 # 这些 schema-valid JSON 是一次性 typed request，不是 planner 的当前业务面。
 # 只有 exact node/flag 消费它时，execution permit 才按原始字节显式绑定；若在这里
@@ -126,18 +105,17 @@ def capture_operator_snapshot(
     checks: dict[str, CheckObservation] = {}
     # 复检中的下游审批检查也属于本次读域；否则每个下游消费者
     # 会再次读取 Git，给同一进度响应混入多个代码时点。
-    with approvals.read_projection(overview=overview, code=code):
-        # F8c：只采集有层级复检器的层（stage0/1）。Stage2/4/5/7 的复检是
-        # 节点级 `--check-only`，不在这个快照里——`check(stage)` 对它们返回
-        # 未采集，`for_view()` 给 None，界面显示「校验未知」而不是绿灯。
-        for stage in checkable_stages():
-            try:
-                report = check_only(stage)(
-                    readonly_ctx(novel_dir, check_node(stage), code))
-            except Exception as exc:  # noqa: BLE001 —— 由消费者按原有策略解释
-                checks[stage] = CheckObservation(error=exc)
-            else:
-                checks[stage] = CheckObservation(report=report)
+    # F8c：只采集有层级复检器的层（stage0/1）。Stage2/4/5/7 的复检是
+    # 节点级 `--check-only`，不在这个快照里——`check(stage)` 对它们返回
+    # 未采集，`for_view()` 给 None，界面显示「校验未知」而不是绿灯。
+    for stage in checkable_stages():
+        try:
+            report = check_only(stage)(
+                readonly_ctx(novel_dir, check_node(stage), code))
+        except Exception as exc:  # noqa: BLE001 —— 由消费者按原有策略解释
+            checks[stage] = CheckObservation(error=exc)
+        else:
+            checks[stage] = CheckObservation(report=report)
     after = read_surface_seal(base_path, sid, code=code)
     if after != before:
         raise ArtifactUnreadable(
@@ -152,8 +130,6 @@ def capture_operator_snapshot(
         overview=overview,
         checks=MappingProxyType(checks),
     )
-
-
 
 
 def _active_artifact_paths(novel_dir: Path) -> tuple[Path, ...]:
@@ -224,6 +200,28 @@ def _update_entry(digest: Any, base: Path, path: Path) -> None:
     digest.update(b'\n')
 
 
+def _legacy_approval_bytes(base_path: Path, sid: str) -> bytes | None:
+    """旧 `_service/approvals/<sid>.json` 的原始字节稳定快照（只读、不解释）。
+
+    历史账不再做 schema 解码；seal 只需要「读取前后同一份字节」这一事实。
+    文件不存在是常态（新链不写审批账），返回 None。
+    """
+    p = (base_path / '_service' / 'approvals' / f'{sid}.json')
+    try:
+        before = p.stat()
+        raw = p.read_bytes()
+        after = p.stat()
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise ArtifactUnreadable(f'历史审批账不可读：{p}: {exc!r}') from exc
+    coordinate = lambda stat: (
+        stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns)
+    if coordinate(before) != coordinate(after) or len(raw) != after.st_size:
+        raise ArtifactUnreadable(f'历史审批账读取期间发生变化：{p}')
+    return raw
+
+
 def read_surface_seal(
     base: str | os.PathLike[str], sid: str, *,
     code: str | None = None,
@@ -248,12 +246,14 @@ def read_surface_seal(
     for path in sorted((novel_dir / 'runtime/revisions/sampling').glob('*/*.json')):
         _update_entry(digest, base_path, path)
 
-    approval_head = approvals.approval_head_bytes(base_path, sid)
+    # 2026-10-04 裁决：旧审批账不再解码（旧根整体 legacy_incompatible 拒识）。
+    # seal 只需对「这份历史文件动没动」过敏：按原始字节稳定快照，不解释形状。
+    approval_head = _legacy_approval_bytes(base_path, sid)
     if approval_head is not None:
-        digest.update(b'approval-head\0')
+        digest.update(b'approval-head-raw\0')
         digest.update(approval_head)
     else:
-        digest.update(b'approval-head\0missing')
+        digest.update(b'approval-head-raw\0missing')
     # ⚠ F8c：旧链 `stage2.analyze` 首跑恢复面（draft_recovery source_paths 与
     #   pending initial run 树）随 Stage2 旧链整层退役——其节点与恢复旗标不在现役
     #   `NODES`，新链 `str06.stage2.*` 的输入面由正式 Stage1 产物与已购凭证承载，

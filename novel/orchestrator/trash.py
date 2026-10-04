@@ -19,13 +19,14 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from pathlib import Path
 
 from contracts.schema.api import TrashNovelResult
 from novel import paths
 from novel.errors import BookTrashFailed, PathRefused, SourceConflict
-from novel.orchestrator import agent, approvals, jobs, service_lifecycle
+from novel.orchestrator import agent, jobs, service_lifecycle
 from novel.orchestrator.nodes import child_env
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -74,8 +75,54 @@ def _default_spawn(argv: Sequence[str], cwd: str,
     return proc.returncode, proc.stdout
 
 
+APPROVALS_DIRNAME = 'approvals'
+
+
+_APPROVAL_LOCK = threading.RLock()
+
+
+@contextmanager
+def approval_exclusion_lock(
+    base: str | os.PathLike[str], sid: str,
+) -> Iterator[None]:
+    """串行化历史审批文件的移动与回收站操作（跨进程 OS 文件锁）。
+
+    ⚠ 2026-10-04 裁决：审批账写入与解码已整体删除，这把锁只剩「同一本书的
+    回收站移动互斥」这一个职责；锁文件不是审批事实，长期保留无害。
+    """
+    lock_path = (
+        Path(os.fspath(base)).resolve()
+        / '_service' / APPROVALS_DIRNAME / '.locks' / f'{paths.check_sid(sid)}.lock'
+    )
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with _APPROVAL_LOCK:
+        with lock_path.open('a+b') as handle:
+            handle.seek(0, os.SEEK_END)
+            if handle.tell() == 0:
+                handle.write(b'\0')
+                handle.flush()
+            handle.seek(0)
+            if os.name == 'nt':
+                import msvcrt
+
+                msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+                try:
+                    yield
+                finally:
+                    handle.seek(0)
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+                try:
+                    yield
+                finally:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
 def _approval_path(base: str | os.PathLike[str], sid: str) -> Path:
-    return paths.service_dir(base) / approvals.APPROVALS_DIRNAME / f'{sid}.json'
+    return paths.service_dir(base) / APPROVALS_DIRNAME / f'{sid}.json'
 
 
 def _exact_item(base: str | os.PathLike[str], trash_id: str) -> Path:
@@ -836,7 +883,7 @@ def reconcile_restore(
     key = jobs.acquire_job_writer(
         base, sid, 'book.restore-reconcile', writer_id, registry=registry)
     try:
-        with approvals.approval_exclusion_lock(base, sid):
+        with approval_exclusion_lock(base, sid):
             current = _load_restore_receipt(base, trash_id)
             if current != receipt:
                 raise BookTrashFailed('restore receipt 在 reconcile 占锁前发生变化')
@@ -945,7 +992,7 @@ def restore(
     key = jobs.acquire_job_writer(
         base, sid, 'book.restore', writer_id, registry=registry)
     try:
-        with approvals.approval_exclusion_lock(base, sid):
+        with approval_exclusion_lock(base, sid):
             # 拿到跨 writer/file 两把锁后重读；preview 前的对象不能继续当依据。
             current_meta = _read_object(metadata_path)
             current_manifest = _read_object(manifest_path)
@@ -1273,7 +1320,7 @@ def sweep_incomplete(
                 # 与 HTTP/CLI apply 共用审批文件锁。live 是否存在、选择恢复还是
                 # supersede、以及移动本身必须是同一段临界区，不能只锁 os.replace。
                 # 外层书级 writer 已经挡住 agent/job；这把只解决审批文件本身。
-                with approvals.approval_exclusion_lock(base, sid):
+                with approval_exclusion_lock(base, sid):
                     if not archived_approval.is_file():
                         # 另一 sweep 已在我们等待锁时收完；后面的幂等清壳继续即可。
                         continue
@@ -1312,7 +1359,7 @@ def execute(base: str | os.PathLike[str], sid: str, expected_title: str,
     """CLI 子进程里的原子边界；整段占用与 approval apply 相同的文件锁。"""
     if not _TRASH_ID.fullmatch(trash_id):
         raise BookTrashFailed(f'非法 trash_id={trash_id!r}')
-    with approvals.approval_exclusion_lock(base, sid):
+    with approval_exclusion_lock(base, sid):
         return _execute_locked(base, sid, expected_title, trash_id)
 
 
@@ -1425,21 +1472,19 @@ def run(base: str | os.PathLike[str], sid: str, expected_title: str, *,
                 f'删除确认绑定的是《{expected_title}》，当前项目是《{title}》，请重新确认')
         argv = build_argv(base, sid, expected_title, trash_id)
         # ⚠⚠ **删除的原子边界是这个 `with`，不是子进程那一次 `os.replace`。**
-        #   两条缝各由一半守着，缺一条都能复现实测过的坏状态：
-        #     · 审批写入住在**父进程**，子进程移走 `<sid>.json` 之后它还能把同名文件
-        #       重新写出来 ⇒「书已删除、审批复活」。`frozen_for_trash` 堵这条。
-        #     · agent 待跑队列也住在父进程，上面那次 `queue_view` 只是开跑前的一张
-        #       快照；spawn 期间新入队的这本书会在锁一还回去就被 `_drain` 启动
-        #       ⇒「书删完了 agent 才起来」。`drop_pending` **在锁内**堵这条
-        #       （`agent.start` 那道 `conflicting_holder` 覆盖这中间的每一刻）。
-        with approvals.frozen_for_trash(sid):
-            rc, output = spawn(argv, str(REPO_ROOT), child_env())
-            if rc != 0:
-                detail = output.decode('utf-8', errors='replace').strip()
-                raise BookTrashFailed(
-                    f'项目没有安全移入回收站（exit {rc}）'
-                    + (f'：{detail[-1200:]}' if detail else ''))
-            agent.drop_pending(base, sid)
+        #   （历史）旧「父进程审批写入」那一半随审批写面退役消失
+        #   （frozen_for_trash 已删）；现存的一半是 agent 待跑队列：上面那次
+        #   `queue_view` 只是开跑前的一张快照，spawn 期间新入队的这本书会在
+        #   锁一还回去就被 `_drain` 启动 ⇒「书删完了 agent 才起来」。
+        #   `drop_pending` **在锁内**堵这条（`agent.start` 那道
+        #   `conflicting_holder` 覆盖这中间的每一刻）。
+        rc, output = spawn(argv, str(REPO_ROOT), child_env())
+        if rc != 0:
+            detail = output.decode('utf-8', errors='replace').strip()
+            raise BookTrashFailed(
+                f'项目没有安全移入回收站（exit {rc}）'
+                + (f'：{detail[-1200:]}' if detail else ''))
+        agent.drop_pending(base, sid)
         rel = (paths.trash_dir(base) / trash_id / 'book').relative_to(
             Path(os.fspath(base))).as_posix()
         return TrashNovelResult(

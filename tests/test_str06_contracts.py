@@ -521,4 +521,5 @@ def test_str06_contracts_never_import_novel():
             for name in names:
                 assert not name.startswith('novel'), (
                     f'{py.name} import 了 {name}：contracts 层禁止依赖 novel（I-03）')
-    assert scanned >= 40, f'只扫到 {scanned} 个契约层模块——扫描面可能失效'
+    # 2026-10-04 清理批：旧链 schema 模块删除后现役 38 个。
+    assert scanned >= 38, f'只扫到 {scanned} 个契约层模块——扫描面可能失效'

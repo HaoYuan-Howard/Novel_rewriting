@@ -18,7 +18,6 @@ from __future__ import annotations
 import pytest
 
 from novel.cli import main as cli
-from novel.orchestrator import approvals
 
 SID = '123'
 
@@ -72,6 +71,6 @@ def test_retired_approval_argv_never_reaches_a_command_handler(argv):
 
 def test_approval_service_write_entries_stay_deleted():
     """服务侧审批写入口（`get`／`approve_gate`）随路由同批退役，不复活。"""
-    for name in ('get', 'approve_gate', 'backfill_from_disk', 'reset',
-                 'authorize_writing', 'begin_writing'):
-        assert not hasattr(approvals, name), f'审批写入口仍在：{name}'
+    # 2026-10-04 清理批：approvals 模块本体已删除，写入口的「不在」由模块缺席闭合。
+    import importlib.util
+    assert importlib.util.find_spec('novel.orchestrator.approvals') is None

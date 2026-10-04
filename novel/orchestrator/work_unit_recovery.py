@@ -38,7 +38,7 @@ from novel.appendlog import path_transaction_lock
 from novel.llm.json_text import decode_wire_json
 from novel.llm.ledger import ledger_path
 from novel.errors import NovelError
-from novel.orchestrator import admission, approvals, jobs
+from novel.orchestrator import admission, jobs
 from novel.orchestrator.work_unit_evidence import (
     cost_evidence, load_budget, owner_stop_proof, read_rows,
 )
@@ -289,7 +289,7 @@ def apply(base: str | Path, sid: str, unit_id: str, turn_id: str,
     writer_id = 'failure-reconcile-' + uuid4().hex
     key = jobs.acquire_job_writer(base, sid, budget.identity['node'], writer_id)
     try:
-        with approvals.approval_file_lock(base, sid), path_transaction_lock(budget.path):
+        with path_transaction_lock(budget.path):
             ledger = budget._read()
             turn = budget._turn(ledger, turn_id)
             if turn.reason_code == work_units.COMMANDER_FAILURE_RECONCILED:

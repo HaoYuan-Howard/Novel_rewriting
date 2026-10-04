@@ -636,9 +636,8 @@ def test_missing_transform_and_admitted_states_are_not_conflated(work):
 def test_execution_eligibility_has_exactly_one_home():
     """纪律：消费方必须 import 同一个谓词，不许各自复述条件。
 
-    （F8b-3：`novel/orchestrator/approvals.py` 随人工闸退役只剩存量账只读解码，
-    不再是 stage0 执行资格的消费方——它从 consumers 表移除正是退役的证据；
-    写入口若复活，`tests/test_approvals.py` 的不复活守卫先红。）
+    （F8b-3／2026-10-04 清理批：`novel/orchestrator/approvals.py` 已整文件删除，
+    存量审批账不再解码——旧根一律 legacy_incompatible 拒识。）
     """
     from pathlib import Path as _Path
 
@@ -654,10 +653,8 @@ def test_execution_eligibility_has_exactly_one_home():
             f'novel/core/eligibility.py::is_stage0_executable')
         assert 'eligibility' in text, f'{rel} 应经 eligibility 落点判执行资格'
 
-    approvals_text = (_Path('novel/orchestrator/approvals.py')).read_text(encoding='utf-8')
-    assert 'eligibility' not in approvals_text, (
-        'approvals 已只剩存量账只读解码，不该再判 stage0 执行资格；'
-        '重新引入就是把已退役的人工闸接回只读模块')
+    assert not _Path('novel/orchestrator/approvals.py').exists(), (
+        'approvals 模块回来了——存量审批账解码已按 2026-10-04 裁决删除')
 
     queue_text = (_Path('novel/orchestrator/queue.py')).read_text(encoding='utf-8')
     assert 'eligibility' not in queue_text, (

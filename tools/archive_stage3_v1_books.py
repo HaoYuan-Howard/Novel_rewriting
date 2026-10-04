@@ -28,7 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from novel import paths, prov  # noqa: E402
 from novel.errors import NovelError  # noqa: E402
-from novel.orchestrator import approvals, trash  # noqa: E402
+from novel.orchestrator import trash  # noqa: E402
 
 
 BOOK_COUNT = 2
@@ -260,7 +260,7 @@ def _decision_evidence(path: Path, expected_sha256: str) -> dict[str, Any]:
 
 
 def _approval_path(base: Path, sid: str) -> Path:
-    return paths.service_dir(base) / approvals.APPROVALS_DIRNAME / f'{sid}.json'
+    return paths.service_dir(base) / trash.APPROVALS_DIRNAME / f'{sid}.json'
 
 
 def _book_snapshot(
