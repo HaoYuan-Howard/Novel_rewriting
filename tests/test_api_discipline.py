@@ -421,12 +421,13 @@ def test_job_conflict_maps_and_returns_409(monkeypatch):
         '/api/novels/{sid}/stage1/partition',
         '/api/upload',
         # 人工写回路由族（review／stage2 三族／stage7 残留采纳）已随 F8b-2
-        # 全自动单模式整族退役：edits.py 只剩空 router，POST 面不再有它们。
+        # 全自动单模式整族退役：edits.py 已整文件删除，POST 面不再有它们。
         # （stage5 trim retain-pretrim 两端点已随批次 B3 trim 三选一退役。）
         # Prepare 独立写面（edit/review）与 stage7.approve 已随批次 B4 退役。
         # analyze-draft 人工提交面已随批次 C 退役（POST 405；内部 CLI 保留）。
         # F8b-3：approvals 写面（gate/backfill/reset）随人工闸整层退役，
-        # HTTP 上一条 approvals 端点都不剩（存量账只读解码在 orchestrator 层）。
+        # HTTP 上一条 approvals 端点都不剩（存量账已按 2026-10-04 裁决不再解码，
+        # 旧根一律 legacy_incompatible 拒识）。
         # agent 代跑（行为在 `tests/test_api_agent.py`；preview 是 0 成本但仍是 POST）
         '/api/agent/runs',
         '/api/agent/runs/preview',

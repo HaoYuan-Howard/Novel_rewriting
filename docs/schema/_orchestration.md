@@ -891,7 +891,7 @@ ledger 与 `llm_audit.jsonl` 的 `run_id` 是 checkpoint/adoption 共用的 prod
 结构面仍是当前盘面快照，不携 `run_id`，不得反向加入目标 run 的代码
 身份。不带 run 过滤的跨历史汇总与单次 run 口径不得混称。
 
-`human_actions.jsonl` 当前只写 `HumanEditAction` wire v1 的 `prepared → committed`
+`human_actions.jsonl` 曾只写 `HumanEditAction` wire v1 的 `prepared → committed`
 两相行：`request_id` 绑 preview 意图，`action_id` 再绑预期结果 SHA；其余字段是
 （历史）旧链 Stage5 人工改稿两相账（`action=stage5_edit`，含 `formal｜working_draft`、
 current canonical 完整文件 SHA、preview subject SHA、写回后 canonical 完整文件 SHA、新增 HARD

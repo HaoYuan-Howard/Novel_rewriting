@@ -28,7 +28,7 @@ def partition_text(clean_text: str) -> PartitionResult:
     hook_text = clean_text[:partition.first_marker]
     if not hook_text.strip():
         raise HookCopyMissing(
-            '第一个正文章标记之前没有非空开篇文案；stage6、stage7 都依赖它')
+            '第一个正文章标记之前没有非空开篇文案；开篇文案段是必填输入（R-1.12）')
     if len(partition.markers) < MIN_CHAPTERS:
         raise TooFewChapters(
             f'只识别到 {len(partition.markers)} 个正文章节，少于最低要求 {MIN_CHAPTERS}')

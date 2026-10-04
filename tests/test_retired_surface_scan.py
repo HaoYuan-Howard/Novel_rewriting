@@ -284,3 +284,42 @@ def test_closed_decode_surface_stays_deleted():
     if hasattr(cli_main, '_cmd_workflow'):
         problems.append('CLI workflow transition 子命令复活：_cmd_workflow')
     assert not problems, '\n'.join(problems)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 2026-10-04 清理两批（109830b7 + f1f4f623；用户裁决：不保留旧产物读兼容）：
+# 删除的旧链 schema 与 novel 模块不得回来。approvals／mechanical_admission／
+# edits 路由另有 find_spec 与 HTTP 层守卫，此处统一登记整批名册，
+# 防单点守卫被单独放宽。
+# ═══════════════════════════════════════════════════════════════════════════
+
+#: 2026-10-04 两批清理删除的模块（回来即红）。
+CLEANUP_2026_10_04_MODULES = (
+    # f1f4f623：18 个旧链 schema 模块与存量审批账解码链
+    'contracts/schema/analyze.py', 'contracts/schema/analyze_draft.py',
+    'contracts/schema/analyze_recovery.py', 'contracts/schema/characters.py',
+    'contracts/schema/characters_v3.py', 'contracts/schema/core_evidence.py',
+    'contracts/schema/evaluation.py', 'contracts/schema/knowledge.py',
+    'contracts/schema/plot.py', 'contracts/schema/plot_context.py',
+    'contracts/schema/plot_edit.py', 'contracts/schema/plot_materials.py',
+    'contracts/schema/plot_planning.py', 'contracts/schema/plot_review.py',
+    'contracts/schema/stage2.py', 'contracts/schema/stage4.py',
+    'contracts/schema/stage4_source.py', 'contracts/schema/stage5.py',
+    'novel/orchestrator/approvals.py',
+    # 109830b7：零引用死代码与孤儿契约载体
+    'contracts/schema/agent_wire.py', 'contracts/schema/stage4_ir.py',
+    'contracts/schema/stage7.py', 'novel/api/routes/edits.py',
+    'novel/core/bands.py', 'novel/core/facts.py', 'novel/core/spans.py',
+    'novel/human_actions.py', 'novel/llm/aggregate_runs.py',
+    'novel/llm/privacy.py', 'novel/llm/typed_failures.py',
+    'novel/orchestrator/cli_probe.py',
+    'novel/orchestrator/mechanical_admission.py',
+    'novel/report/workpack.py', 'novel/snapshot_clone.py',
+)
+
+
+def test_2026_cleanup_batch_modules_stay_deleted():
+    """2026-10-04 两批清理删除的模块不得回来（单向名册，不依赖其他守卫）。"""
+    problems = [f'已删模块回来了：{m}' for m in CLEANUP_2026_10_04_MODULES
+                if (ROOT / m).exists()]
+    assert not problems, '\n'.join(problems)

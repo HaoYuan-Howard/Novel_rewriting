@@ -25,6 +25,8 @@ class DependencyRule(NamedTuple):
 
 #: 新链依赖方向表。`contracts.*` 与底层设施（errors/config 等纯工具）对所有行
 #: 隐式允许，不逐行抄写；表里只写**区分度所在**的允许与全部禁止。
+#: （2026-10-04 清理批：stage6 层与 stage5.judge 目标随整层退役移除；grounding
+#: 的 allows 随旧链 characters/plot schema 删除修剪。）
 STR06_DEPENDENCY_RULES: Final[tuple[DependencyRule, ...]] = (
     DependencyRule(
         module='novel.stages.stage2',
@@ -40,8 +42,7 @@ STR06_DEPENDENCY_RULES: Final[tuple[DependencyRule, ...]] = (
                  'novel.stages.stage2.characters', 'novel.stages.stage2.characters.*')),
     DependencyRule(
         module='novel.stages.stage4.grounding',
-        allows=('contracts.schema.characters', 'contracts.schema.plot',
-                'contracts.schema.grounding', 'contracts.schema.design'),
+        allows=('contracts.schema.grounding', 'contracts.schema.design'),
         forbids=('novel.stages.stage4.design', 'novel.stages.stage4.design.*')),
     DependencyRule(
         module='novel.stages.stage4.compile',
@@ -62,13 +63,6 @@ STR06_DEPENDENCY_RULES: Final[tuple[DependencyRule, ...]] = (
                  'novel.stages.stage4.design', 'novel.stages.stage4.design.*',
                  'novel.stages.stage4.grounding', 'novel.stages.stage4.grounding.*')),
     DependencyRule(
-        module='novel.stages.stage6',
-        allows=('contracts.schema.consumption', 'contracts.schema.receipt',
-                'contracts.api.*'),
-        forbids=('novel.stages.stage2', 'novel.stages.stage2.*',
-                 'novel.stages.stage4', 'novel.stages.stage4.*',
-                 'novel.stages.stage5', 'novel.stages.stage5.*')),
-    DependencyRule(
         module='novel.stages.stage7',
         allows=('contracts.schema.consumption', 'contracts.schema.receipt',
                 'contracts.api.*'),
@@ -81,11 +75,6 @@ STR06_DEPENDENCY_RULES: Final[tuple[DependencyRule, ...]] = (
         forbids=('novel.stages.stage4.design', 'novel.stages.stage4.design.*',
                  'novel.stages.stage4.grounding', 'novel.stages.stage4.grounding.*',
                  'novel.stages.stage5', 'novel.stages.stage5.*')),
-    DependencyRule(
-        module='novel.stages.stage5.judge',
-        allows=('contracts.schema.context', 'contracts.schema.receipt'),
-        forbids=('novel.stages.stage2', 'novel.stages.stage2.*',
-                 'novel.stages.stage4', 'novel.stages.stage4.*')),
     DependencyRule(
         module='novel.stages.shared',
         allows=(),

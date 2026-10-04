@@ -807,7 +807,7 @@ STAGE4_RUNS_DIRNAME = '_stage4_runs'
 #: Stage5 legacy 根名；新逐章链位于 service stage5 根。
 STAGE5_RUNS_DIRNAME = '_stage5_runs'
 
-#: Stage6 legacy 根名；新 hook/semantic 链位于 service stage6 根。
+#: Stage6 legacy 根名；stage6 层已整层退役，仅旧布局拒识仍登记该名。
 STAGE6_RUNS_DIRNAME = '_stage6_runs'
 
 #: Stage7 legacy 根名；新 rename 链位于 service stage7 根。
