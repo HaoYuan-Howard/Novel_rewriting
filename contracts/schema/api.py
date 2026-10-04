@@ -4091,7 +4091,7 @@ class Str06OwnerIssueRecordView(StrictModel):
     """一个 owner 的跨节点回派账投影（`runtime/issues/<owner>.json`）。
 
     ``rounds_total`` 是该 owner 终身已发起的修订轮数（resolve 不复位）；
-    ``status`` 取值面归 `OwnerIssueFileV2`，视图层不抄第二份字面量。
+    ``status`` 取值面归 `OwnerIssueFileV3`，视图层不抄第二份字面量。
     ``against_sha256``（R8a）是发现节点判定时的 owner 产物摘要——监控面据此
     对照「open 记录 + owner 已改稿（盘面摘要已变）＝等下游复验」的中间态。
     """

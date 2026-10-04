@@ -39,7 +39,7 @@ from novel.stages.stage4.book_ir import (
 )
 from novel.stages.stage4.compile import compile_execution_plan, init_establishments
 from novel.stages.stage4.design import assemble_body_design
-from novel.stages.stage4.slim import knowledge_change_index
+from novel.stages.stage4.slim import knowledge_change_index, project_design_input
 from novel.stages.stage4.fold import (
     FoldedState, ThreadFold, fold_accepted_prefix, fold_thread_faces,
 )
@@ -47,6 +47,8 @@ from novel.stages.stage4.grounding import (
     assemble_preserve, design_obligation_index, derive_semantic_binding,
     obligation_core_id, project_brief, project_preserve_view, preserve_revision_wire,
 )
+from novel.stages.stage4.preflight import inspect_body_materials
+from novel.stages.stage4.repair import plan_material_repairs
 from novel.stages.stage4.guard import (
     appeared_chars, check_binding_beat_refs, check_cast_legality,
     check_entry_timing, check_epistemic_lock_order, check_obligation_coverage,
@@ -59,6 +61,7 @@ from novel.stages.stage4.hook_context import compile_hook_context
 from novel.stages.stage4.slim import design_placements
 
 __all__ = [
+    'inspect_body_materials', 'plan_material_repairs',
     'FoldedState', 'ThreadFold', 'allocate_chapter_budgets', 'appeared_chars',
     'assemble_body_design', 'assemble_hook_design',
     'assemble_preserve', 'chapter_scene_weights', 'chapter_surface_releases',
@@ -71,6 +74,6 @@ __all__ = [
     'design_obligation_index', 'design_placements', 'derive_semantic_binding',
     'expected_thread_faces', 'fold_accepted_prefix', 'fold_thread_faces',
     'init_establishments', 'lock_order_violations', 'obligation_core_id',
-    'project_brief', 'project_preserve_view', 'preserve_revision_wire',
+    'project_brief', 'project_design_input', 'project_preserve_view', 'preserve_revision_wire',
     'publish_graph', 'run_mechanical_guard', 'scene_order',
 ]

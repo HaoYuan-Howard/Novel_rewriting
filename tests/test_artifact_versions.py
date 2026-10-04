@@ -65,6 +65,14 @@ def test_schema_model_map_is_derived_from_the_current_registry():
 #: 「盘上的旧字节从此读不进来」，而本仓**没有迁移机制** ⇒ 每一次都必须同批回答
 #: 「存量产物由谁重建」。答不出来的破坏不许落。
 _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
+    'stage2/observations/names.json': (
+        2, 'CS-R：names v2显式声明局部名称同一性及原句证据，旧回答不能推断为空声明',
+        'str06.stage2.names按新协议重建；冻结根保持只读，新epoch与付费授权核对后执行',
+    ),
+    'stage2/characters/characters.json': (
+        2, 'CS-R：名称结构保留resolutions，canonical语义可按已证明对应归一',
+        'names v2观察就绪后由str06.stage2.compile免费重建双真源，不手补字段',
+    ),
     'stage1/main_text.json': (
         3,
         '两次破坏。v2（2026-08-22）：`section_id` 删除，`source_chapter_label: str` '
@@ -88,7 +96,7 @@ _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
         '同 `stage1/main_text.json`：`stage1.partition` 免费重跑',
     ),
     # ── STR-06 新链（F8a）────────────────────────────────────────────
-    # 新链 14 份 schema 化产物全部 current_version=1，**没有升版账**：三级路径是
+    # 新链建立时 schema 化产物全部 current_version=1；CS-R两项例外已登记在上方。三级路径是
     # 切换时新建的命名空间，盘上没有旧信封字节（旧路径整体退役，见
     # `contracts/artifacts.py::RETIRED_ARTIFACT_PATHS`）。形状破坏史由另外两条线
     # 承载，不在本表重复登记：

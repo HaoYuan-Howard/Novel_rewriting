@@ -739,6 +739,34 @@ class OwnerIssueFileV2(FrozenModel):
     updated_at: int = Field(ge=0)
 
 
+class OwnerIssueCorrection(FrozenModel):
+    """显式免费归因更正；旧记录完整保存，证明绑定当前正式输入和旧账。"""
+    original: OwnerIssueFileV2
+    evidence_sha256: Sha256
+    reason: str = Field(min_length=1)
+    target_owners: tuple[str, ...] = Field(min_length=1)
+    created_at: int = Field(ge=0)
+
+
+class OwnerIssueFileV3(OwnerIssueFileV2):
+    """CS-R：稳定指纹历史防循环；superseded不等于已解决，也不退还额度。"""
+    schema_version: Literal[3] = 3
+    status: Literal['open', 'resolved', 'superseded']
+    dispatch_pending: bool
+    fingerprint_history: tuple[str, ...] = ()
+    corrections: tuple[OwnerIssueCorrection, ...] = ()
+
+    @model_validator(mode='after')
+    def correction_required(self):
+        if self.status == 'superseded' and not self.corrections:
+            raise ValueError('superseded必须具有身份绑定的显式归因更正证据')
+        if any(c.original.owner != self.owner for c in self.corrections):
+            raise ValueError('更正证据必须属于同一owner')
+        if self.dispatch_pending and (self.status != 'open' or self.no_progress):
+            raise ValueError('只有未停止的open回派允许待执行')
+        return self
+
+
 def owner_issues_rel(owner: str) -> str:
     """跨节点回派账的唯一落点（runtime 家族，非版本化书产物）。"""
     return f'runtime/issues/{owner}.json'
@@ -751,6 +779,7 @@ OWNER_PRODUCT_RELS: Final[dict[str, str]] = {
     'associate': 'stage2/observations/associate.json',
     'book': 'stage2/observations/book.json',
     'design': 'stage4/design/body_design.json',
+    'hook_design': 'stage4/design/presentation_graph.json',
     'preserve': 'runtime/preserve_checkpoint.json',
 }
 
@@ -766,8 +795,8 @@ def chapter_owner_product_rel(owner: str) -> str | None:
 def owner_issue_record_of_payload(
         payload: Mapping[str, Any],
         product_sha256_of: Callable[[str], str],
-) -> OwnerIssueFileV2:
-    """回派账的统一读口：v2 原样、v1 集中迁移（S-03），一律升到 v2 形状。
+) -> OwnerIssueFileV3:
+    """回派账的统一读口：v3原样，v1／v2集中解码（S-03），旧耗尽记录不补待执行许可。
 
     v1 的 ``against_sha256`` 由 ``product_sha256_of(owner)`` 给出 owner 正式
     产物的**当前**摘要——v1 语义下回派以未捕获异常（exit 70）告终、owner 从
@@ -776,18 +805,24 @@ def owner_issue_record_of_payload(
     归档即满足）。未知版本号显式拒绝（I-34）。
     """
     version = payload.get('schema_version')
+    if version == 3:
+        return OwnerIssueFileV3.model_validate(dict(payload))
     if version == 2:
-        return OwnerIssueFileV2.model_validate(dict(payload))
+        legacy = OwnerIssueFileV2.model_validate(dict(payload))
+        return OwnerIssueFileV3(**{**legacy.model_dump(), 'schema_version': 3},
+                                fingerprint_history=(legacy.fingerprint,),
+                                dispatch_pending=legacy.status == 'open' and not legacy.no_progress and legacy.rounds_total < OWNER_REVISION_MAX_ROUNDS)
     if version == 1:
         legacy = OwnerIssueFileV1.model_validate(dict(payload))
-        return OwnerIssueFileV2(
+        return OwnerIssueFileV3(
             owner=legacy.owner, node=legacy.node, raised_by=legacy.raised_by,
             status=legacy.status, rounds_total=legacy.rounds_total,
             fingerprint=legacy.fingerprint,
             against_sha256=product_sha256_of(legacy.owner),
-            issues=legacy.issues, updated_at=legacy.updated_at)
+            issues=legacy.issues, updated_at=legacy.updated_at,
+            fingerprint_history=(legacy.fingerprint,), dispatch_pending=legacy.status == 'open' and legacy.rounds_total < OWNER_REVISION_MAX_ROUNDS)
     raise ValueError(
-        f'回派账 schema_version 未知：{version!r}（取值面 1|2；'
+        f'回派账 schema_version 未知：{version!r}（取值面 1|2|3；'
         '未知形状不得静默当作任何一种语义继续）')
 
 
@@ -803,6 +838,7 @@ OWNER_ISSUE_CODES: Final = (
     'must_keep_unbound',   # 必保义务未承载：按 unbound.owner 回 body_design/preserve
     'source_evidence_conflict',  # 源证据冲突（R10a a3）：按锚点句柄回派 Stage2 owner
     'epistemic_lock_order',  # 知情升级/读者确认早于授权承载位（R10a a5）：回 body_design
+    'material_name_leak',  # 材料正向字面冲突：按正式来源证明解析owner
 )
 
 #: code → `revise_self`｜`revise_upstream:<节点>`｜（未登记即 stop）。
@@ -823,6 +859,7 @@ OWNER_ISSUE_ROUTES: Final[dict[str, str]] = {
     # R10a a5：锁位置是 Design 的披露顺序决定（Bind 只选承载位）；单一目标
     # 直接路由，不经占位解析。
     'epistemic_lock_order': 'revise_upstream:str06.stage4.body_design',
+    'material_name_leak': 'revise_upstream:material_owner',
 }
 
 #: `UnboundEntry.owner` → 回派目标节点（取值面与 BIND_RULES 的 design|grounding
@@ -834,7 +871,7 @@ UNBOUND_OWNER_ROUTES: Final[dict[str, str]] = {
 
 
 def route_owner_issue(code: str, *, unbound_owner: str = '',
-                      conflict_anchor: str = '') -> tuple[str, str]:
+                      conflict_anchor: str = '', material_owner: str = '') -> tuple[str, str]:
     """一条 issue 的修订路由：``(action, target)``。
 
     ``action`` ∈ ``{'revise_self', 'revise_upstream', 'stop'}``；``target`` 是
@@ -848,6 +885,11 @@ def route_owner_issue(code: str, *, unbound_owner: str = '',
     if route == 'revise_self':
         return 'revise_self', ''
     target = route.partition(':')[2]
+    if target == 'material_owner':
+        node = {'book': 'str06.stage2.book', 'preserve': 'str06.stage4.preserve',
+                'design': 'str06.stage4.body_design',
+                'hook_design': 'str06.stage4.hook_design'}.get(material_owner)
+        return ('revise_upstream', node) if node else ('stop', '材料责任来源未决，禁止猜测owner')
     if target == 'unbound_owner':
         node = UNBOUND_OWNER_ROUTES.get(unbound_owner)
         if node is None:

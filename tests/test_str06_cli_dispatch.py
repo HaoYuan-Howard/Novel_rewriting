@@ -16,9 +16,96 @@ from __future__ import annotations
 import argparse
 
 import pytest
+from contracts.schema.orchestration import LegacyLlmProfile, LegacyExecutorBackend, Step
 
 from contracts.invariants import NODES
 from novel.orchestrator import nodes as node_planner
+
+
+def test_frozen_request_profile_survives_free_follow_check_and_cannot_grant_purchase():
+    profile = LegacyLlmProfile(provider='deepseek', model='deepseek-flash',
+                               reasoning_effort='low', thinking_mode='on')
+    steps = node_planner.build_steps('str06.stage2.book', 's1', base='E:/out',
+        executor_backend=LegacyExecutorBackend(profile=profile), egress_authorized=True)
+    assert len(steps) == 2
+    paid, free = steps
+    assert paid.request_profile == free.request_profile == profile
+    assert paid.paid and not free.paid
+    assert free.executor_backend is None and free.egress_authorized is None
+    assert '--yes' not in free.argv and '--allow-egress' not in free.argv
+    assert free.argv[free.argv.index('--request-profile') + 1] == profile.model_dump_json()
+    bad = free.model_dump(mode='json')
+    bad['request_profile']['reasoning_effort'] = 'high'
+    with pytest.raises(ValueError, match='argv 不一致'):
+        Step.model_validate(bad)
+
+
+def test_effort_tool_previews_and_executes_one_explicit_profile_without_mutating_nodes(monkeypatch, capsys):
+    import json
+    from tools import effort_ab
+    before = dict(NODES)
+    calls = []
+    monkeypatch.setattr(effort_ab.cli, 'main', lambda argv: calls.append(argv) or 0)
+    args = ['--set', 'str06.stage2.names=low', '--model', 'deepseek-flash',
+            '--thinking', 'on', '--', 'run', 'str06.stage2.names', 's1', '--base', 'E:/out',
+            '--yes', '--allow-egress']
+    assert effort_ab.main(args) == 0
+    assert not calls and NODES == before
+    assert '--request-profile' in capsys.readouterr().out
+    assert effort_ab.main(['--execute', *args]) == 0
+    assert len(calls) == 1 and NODES == before
+    profile = json.loads(calls[0][-1])
+    assert profile['reasoning_effort'] == 'low' and profile['model'] == 'deepseek-flash'
+    with pytest.raises(SystemExit):
+        effort_ab.main([*args, '--reasoning-effort', 'high'])
+
+
+def test_readonly_review_uses_explicit_request_configuration_not_local_defaults(monkeypatch, tmp_path):
+    from tools import str06_review as review
+    from novel.config import Config
+    from novel.errors import UnsupportedRunMode
+    cfg = Config(model='deepseek-v4-pro', thinking_mode='off')
+    expected = LegacyLlmProfile(provider='deepseek', model='deepseek-flash',
+                                reasoning_effort='low', thinking_mode='on')
+    monkeypatch.setattr(review, 'load_config', lambda: cfg)
+    monkeypatch.setattr(review.paths, 'resolve_novel_dir', lambda *_: tmp_path / 'book_42')
+    monkeypatch.setattr(review, '_ReadOnlyRepository', lambda *_: object())
+    monkeypatch.setattr(review, 'load_stage1_chapters', lambda *_: object())
+    class Captured(Exception):
+        pass
+    def capture(_repo, owner, _source, profile):
+        assert owner == 'design'
+        assert (profile.model, profile.reasoning_effort, profile.thinking) == ('deepseek-flash', 'low', True)
+        assert cfg.model == 'deepseek-v4-pro' and cfg.thinking_mode == 'off'
+        assert profile.cfg.base_url == cfg.base_url
+        raise Captured
+    monkeypatch.setattr(review, 'request_preview', capture)
+    argv = ['--base', str(tmp_path), '--sid', '42', 'patch-preview', '--owner', 'design',
+            '--candidate', str(tmp_path / 'patch.json'), '--request-profile', expected.model_dump_json()]
+    with pytest.raises(Captured):
+        review.main(argv)
+    with pytest.raises(UnsupportedRunMode, match='冲突'):
+        review.main([*argv, '--reasoning-effort', 'high'])
+
+
+def test_cli_profile_conflict_and_frozen_parent_mismatch_stop_before_execute(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from novel.cli import main as cli
+    from novel.errors import TerminalState, UnsupportedRunMode
+    profile = LegacyLlmProfile(provider='deepseek', model='deepseek-flash',
+                               reasoning_effort='low', thinking_mode='on')
+    ns = argparse.Namespace(node='str06.stage2.book', sid='s1', base=str(tmp_path),
+        yes=False, allow_egress=False, request_profile=profile.model_dump_json(),
+        reasoning_effort='high')
+    monkeypatch.setattr('novel.stages.chain.execute', lambda *_: pytest.fail('不应进入执行'))
+    with pytest.raises(UnsupportedRunMode, match='冲突'):
+        cli._run_str06(ns, ['--check-only'], paid=False)
+    ns.reasoning_effort = None
+    monkeypatch.setattr(cli.execution_context, 'load_from_environment', lambda *_:
+        SimpleNamespace(executor_backend=lambda _: LegacyExecutorBackend(
+            profile=profile.model_copy(update={'reasoning_effort': 'high'}))))
+    with pytest.raises(TerminalState, match='冻结运行不一致'):
+        cli._run_str06(ns, ['--check-only'], paid=False)
 
 
 def test_build_argv_keeps_the_run_shape_for_str06_nodes():

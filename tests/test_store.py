@@ -897,6 +897,24 @@ def test_names_consumes_whole_observation_and_narrow_main_text(edited: str):
     assert (report.state, report.reason) == expected, edited
 
 
+def test_name_identity_proof_change_invalidates_association():
+    """名称判断参与关联句柄投影；证据、结论变化均须使关联陈旧。"""
+    base = _book()
+    upstream = 'stage2/observations/names.json'
+    rel = 'stage2/observations/associate.json'
+    view = {'protocol_version': 'stage2-names-v2',
+            'structure': {'families': {}, 'people': {}, 'resolutions': []}}
+    store = _write_consumed_subject(base, node='str06.stage2.associate', rel=rel,
+                                    upstream=upstream, upstream_payload=view)
+    assert store.freshness(rel).state == 'fresh'
+    view['structure']['resolutions'] = [{'literal': '云孃', 'status': 'unresolved',
+        'char_id': None, 'surface': None, 'reason': '证据不足',
+        'basis': [{'segment': 'e01_01', 'quote': '云孃'}]}]
+    _write_payload(base / '书名_123', upstream, view)
+    result = store.freshness(rel)
+    assert (result.state, result.reason) == ('stale', 'consumed_changed')
+
+
 def test_characters_timing_edit_stales_whole_payload_consumer():
     """同一个人挂多个称呼时，窗口时点属于消费身份：改了就 stale。"""
     base = _book()

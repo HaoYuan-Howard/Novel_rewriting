@@ -101,6 +101,7 @@ def test_stage2_stage4_repository_replay_and_writer_consumer(tmp_path):
                                   'basis': [{'segment': 'e01_01',
                                              'quote': '云娘提出约定'}]}])]},
         'names': {
+            'protocol_version': 'stage2-names-v2', 'resolutions': [],
             'families': {'fam_yun': {'literal': '云', 'forms': []}},
             'people': {
                 'fu_jun': {'family_id': None, 'given': None, 'aliases': [],
@@ -165,6 +166,11 @@ def test_stage2_stage4_repository_replay_and_writer_consumer(tmp_path):
     design_prompt = next(prompt for owner, prompt in requests if owner == 'design')
     assert '知晓时刻与反应' in design_prompt and '夫君身份约束' in design_prompt
     assert 'b01_01' not in design_prompt
+    import json
+    design_input = json.loads(design_prompt.split('输入：\n', 1)[1])
+    assert design_input['brief']['input_version'] == 'stage4-design-input-v1'
+    assert 'obligation_table' not in design_input
+    assert set(design_input['brief']['requirements']) == {'ob01', 'ob02', 'ob03'}
     assert 'realization_brief' in design_prompt and 'purpose' in design_prompt
     # CS-3 bind 退役：承载位由 design wire 的 real 标注派生，无 bind 请求。
     assert all(owner != 'bind' for owner, _prompt in requests)
@@ -396,6 +402,7 @@ def test_concealed_fact_reaches_writer_as_pending_reader_confirmation(tmp_path):
     wires = {
         'book': book, 'ch01': ch01,
         'names': {
+            'protocol_version': 'stage2-names-v2', 'resolutions': [],
             'families': {'fam_yun': {'literal': '云', 'forms': []}},
             'people': {
                 'fu_jun': {'family_id': None, 'given': None, 'aliases': [],

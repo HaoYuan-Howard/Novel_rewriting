@@ -394,13 +394,19 @@ def test_compile_stage4_keeps_formal_positions_unpublished_on_guard_failure(
     失败结果冒充可交付。修复后：问题清单只进 guard report（诊断），四个正式
     派生产物（execution_plan／hook 上下文／写手 IR／packet 指标）一概不落盘。
     """
-    from novel.stages import chain as chain_module
+    from novel.stages.stage4 import preflight
+    from novel.stages.chain import NODE_ORDER
     repo, base, transport = _wired_repo(tmp_path)
+    # 先经真实接受入口发布合法 Design，再在最终编译判据注入失败；
+    # 同一判据已前移至 Design，不能仍在编排模块的旧别名上打桩。
+    _run_chain(repo, base, transport, tmp_path,
+               node_filter=NODE_ORDER[:NODE_ORDER.index('str06.stage4.compile')])
     monkeypatch.setattr(
-        chain_module, 'run_mechanical_guard',
+        preflight, 'run_mechanical_guard',
         lambda **kwargs: ['M-TEST 注入的机械问题：必保义务未承载'])
     with pytest.raises(ValueError, match='M-TEST'):
-        _run_chain(repo, base, transport, tmp_path)
+        _run_chain(repo, base, transport, tmp_path,
+                   node_filter=('str06.stage4.compile',))
     # 失败结果只进诊断：guard report 留证问题清单（逐场景各报一次）。
     report = repo.inspect('stage4/acceptance/guard/report.json')
     assert report['guard_errors'], 'Guard 问题必须留证在诊断面'

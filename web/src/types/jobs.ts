@@ -2,6 +2,7 @@ import type { JobState } from '@/constants/vocabulary'
 import type {
   AgentRunRecord,
   ExecutorBackend,
+  LegacyLlmProfile,
   PipelineAgentProfiles,
 } from '@/types/agent'
 
@@ -44,6 +45,8 @@ export interface BackendJobStep {
   note: string | null
   /** 本步已解析的 executor；旧记录、未指定或未迁移路径为 null，不按当前默认回填。 */
   executor_backend: ExecutorBackend | null
+  /** 冻结请求配置；免费复检也携带，历史缺失保持未知。 */
+  request_profile?: LegacyLlmProfile | null
   /** 独立正文外发授权；旧/无 backend Step 为 null，新 executor Step 冻结 true/false 并与 argv 闭合。 */
   egress_authorized: boolean | null
 }
@@ -148,6 +151,7 @@ export interface JobPreview {
     writes: string
     argv: string
     executor_backend?: ExecutorBackend | null
+    request_profile?: LegacyLlmProfile | null
     egress_authorized?: boolean | null
   }>
 }

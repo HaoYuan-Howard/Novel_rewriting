@@ -199,6 +199,95 @@ def test_cached_replay_costs_nothing_and_keeps_ledger_row(tmp_path):
     assert rows[1]['node'] == 'str06.stage4.preserve'
 
 
+def test_nested_reasoning_usage_survives_purchase_and_free_replay(tmp_path):
+    """CU-01/03/04：当前生产入口须记录嵌套思考，原响应与免费采用均不重计。"""
+    raw = {'prompt_tokens': 7, 'completion_tokens': 20,
+           'completion_tokens_details': {'reasoning_tokens': 18}}
+    transport = _Transport(usage=raw)
+    base, repo, ledger, session = _session(tmp_path, transport)
+    _, answer = ask_json(session, 'preserve', _request(), lambda _: [])
+    row = read_cost_snapshot(base)[0][0]
+    assert row['reasoning_tokens'] == 18
+    assert row['completion_tokens'] == 20
+    assert answer.usage == raw, '原响应用量证据不能被归一结果覆盖'
+    replay = PaidRequestSession(repo, CostLedger(path=ledger_path(base)), transport,
+                                provider='fake', sid='book')
+    ask_json(replay, 'preserve', _request(), lambda _: [])
+    rows, partial = read_cost_snapshot(base)
+    assert not partial and transport.calls == 1
+    assert len(rows) == 2 and rows[0] == row
+    assert rows[1]['cached'] and rows[1]['reasoning_tokens'] == 0
+    assert ledger.usage().reasoning_tokens == 18
+
+
+def test_historical_usage_audit_binds_raw_evidence_without_mutation(tmp_path, monkeypatch):
+    from novel.llm.usage_audit import audit_usage
+    transport = _Transport(usage={'prompt_tokens': 7, 'completion_tokens': 20,
+                                  'completion_tokens_details': {'reasoning_tokens': 18}})
+    base, repo, ledger, session = _session(tmp_path, transport)
+    ask_json(session, 'preserve', _request(), lambda _: [])
+    # 合成历史漏记账；生产audit绝不回写这行。
+    path = ledger_path(base)
+    row = json.loads(path.read_text(encoding='utf-8'))
+    row['reasoning_tokens'] = None
+    path.write_text(json.dumps(row)+'\n', encoding='utf-8')
+    before = {p.relative_to(base): p.read_bytes() for p in base.rglob('*') if p.is_file()}
+    report = audit_usage(base, 'book')
+    assert report['paid_attempts'] == 1
+    assert report['ledger_totals']['reasoning_tokens']['total'] is None
+    assert report['supplemented_totals']['reasoning_tokens']['total'] == 18
+    assert report['attempts'][0]['response_blob_sha256']
+    assert before == {p.relative_to(base): p.read_bytes() for p in base.rglob('*') if p.is_file()}
+    assert transport.calls == 1
+    import novel.llm.usage_audit as audit
+    original_views = audit.list_unit_views
+    with monkeypatch.context() as patch:
+        patch.setattr(audit, 'list_unit_views', lambda *a: original_views(*a) * 2)
+        ambiguous = audit_usage(base, 'book')
+    assert ambiguous['evidence_errors']
+    assert ambiguous['supplemented_totals']['reasoning_tokens']['total'] is None
+    row['response_sha256'] = 'f'*64
+    path.write_text(json.dumps(row)+'\n', encoding='utf-8')
+    report = audit_usage(base, 'book')
+    assert report['supplemented_totals']['reasoning_tokens']['total'] is None
+    assert 'response_identity_mismatch' in report['attempts'][0]['diagnostics']
+
+
+def test_usage_audit_refuses_missing_ledger_or_unmatched_book_as_zero(tmp_path):
+    from novel.llm.usage_audit import audit_usage
+    with pytest.raises(ValueError, match='未找到成本账'):
+        audit_usage(tmp_path, 'book')
+    base, _repo, _ledger, session = _session(tmp_path, _Transport())
+    ask_json(session, 'preserve', _request(), lambda _: [])
+    with pytest.raises(ValueError, match='未找到书键'):
+        audit_usage(base, 'unmatched')
+
+
+def test_nested_usage_missing_ledger_recovery_is_free_and_idempotent(tmp_path, monkeypatch):
+    """CU-01/04：原响应已耐久、写成本行前中断，恢复按同尺补尾且不重新购买。"""
+    transport = _Transport(usage={
+        'prompt_tokens': 7, 'completion_tokens': 20,
+        'completion_tokens_details': {'reasoning_tokens': 18}})
+    base, repo, ledger, session = _session(tmp_path, transport)
+
+    def interrupted(*args, **kwargs):
+        raise RuntimeError('模拟原响应耐久后成本账中断')
+
+    with monkeypatch.context() as patch:
+        patch.setattr(session, '_record_attempt_row', interrupted)
+        with pytest.raises(RuntimeError, match='成本账中断'):
+            ask_json(session, 'preserve', _request(), lambda _: [])
+    for _ in range(2):
+        replay = PaidRequestSession(repo, CostLedger(path=ledger_path(base)), transport,
+                                    provider='fake', sid='book')
+        ask_json(replay, 'preserve', _request(), lambda _: [])
+    rows, partial = read_cost_snapshot(base)
+    assert not partial and transport.calls == 1
+    paid = [row for row in rows if not row['cached']]
+    assert len(paid) == 1 and paid[0]['reasoning_tokens'] == 18
+    assert len([row for row in rows if row['cached']]) == 2
+
+
 def test_unauthorized_new_call_stops_at_owner_without_touching_budget(tmp_path):
     transport = _Transport()
     base, repo, ledger, session = _session(tmp_path, transport, yes=False)

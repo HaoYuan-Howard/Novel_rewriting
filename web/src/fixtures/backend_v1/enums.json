@@ -1011,7 +1011,7 @@
     "input_workpack": "书级人物表（book 观察）、完整 MainText 与 hook_copy 章前文字",
     "generation_mode": "executor",
     "review_mode": "none",
-    "review_scope": "机械校验自证；姓氏构词探针只报告",
+    "review_scope": "机械校验自证；名称同一性留证，歧义停止；姓氏构词探针只报告",
     "repair_actions": [
      "stop"
     ],
@@ -1042,7 +1042,7 @@
    ],
    "lifecycle": {
     "unit_kind": "book",
-    "input_workpack": "book 与 chapters 观察的句柄及最小文本（compiler 投影）",
+    "input_workpack": "book 与 chapters 观察经 names 已证明同一性归一后的句柄及最小文本（compiler 投影）",
     "generation_mode": "executor",
     "review_mode": "none",
     "review_scope": "机械校验自证；只选已给句柄，未决项保持未决、不默认合并或默认不同（D8）",

@@ -43,6 +43,7 @@ from novel.stages.stage2.compile import (
     initial_snapshot, source_fold,
 )
 from novel.stages.stage2.names import (
+    normalize_name_observations, validate_name_resolutions,
     ProbeFinding, compile_name_structure, merge_name_structure,
     surname_construction_probe,
 )
@@ -66,6 +67,7 @@ __all__ = [
     'compile_associate_observation',
     'chapter_patch_locate', 'compile_book_observation', 'compile_chapter_observation',
     'compile_name_structure', 'compile_source_truth', 'evidence_metrics',
+    'normalize_name_observations', 'validate_name_resolutions',
     'initial_snapshot',
     'merge_name_structure', 'project_association_space', 'serialize_target',
     'source_fold', 'surname_construction_probe', 'target_label',

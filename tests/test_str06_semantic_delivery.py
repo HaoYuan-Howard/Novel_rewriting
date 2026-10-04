@@ -1151,9 +1151,9 @@ def test_sitecustomize_injection_is_env_gated(tmp_path):
     assert 'tests.str06_faults' in injected.stdout      # 有环境门：注入 FaultTransport
 
 
-def test_fault_kinds_are_the_documented_five():
+def test_fault_kinds_are_the_documented_six():
     assert FAULTS == ('evidence_out_of_range', 'unknown_slug', 'missing_pairing',
-                      'obligation_unbound', 'duplicate_json_key')
+                      'obligation_unbound', 'duplicate_json_key', 'knowledge_release')
     source = fault_sitecustomize_source()
     assert FAULT_ENV in source and REPO_ENV in source
     assert 'install_fault_transport' in source

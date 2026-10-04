@@ -170,7 +170,7 @@ def test_operator_redo_strategies_are_closed_and_explicit_per_node():
         # 真实验收：book 姓名首现回派写回后，names 的消费面随之陈旧。
         'str06.stage2.names': 'canonical',
         'str06.stage2.compile': 'canonical',
-        'str06.stage4.hook_design': 'canonical',
+        'str06.stage4.hook_design': 'owner_revision',
         'str06.stage4.compile': 'canonical',
         'str06.stage5.hook': 'canonical',
         'str06.stage5.body': 'canonical',

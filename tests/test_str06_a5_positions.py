@@ -8,7 +8,7 @@ series 同拍校验＋epistemic_lock_order 锁位置 Guard＋design 修订轮）
   （C3/C5 的承载面，并入 design 同节点修订轮）；无标注的非必保义务进
   unbound（义务不删）；闭集与越界精确拒；
 · design prompt 的义务清单渲染锁摘要（原 `project_binding_space` 的锁面
-  送达职责迁入 `_design_obligation_table`）；
+  送达职责迁入 `project_design_input`）；
 · `lock_order_violations`：kp 键知情升级/读者确认早于授权该模式的义务承载
   位置 → `epistemic_lock_order`（C1/C6 的位置面）；授权位置取义务全部承载
   点的最早者（支撑拍是承载的一部分——怀疑渐进到证实合法，P2）；故事发生
@@ -374,28 +374,27 @@ def test_epistemic_lock_order_routes_to_body_design():
 # ───────────────────────── 锁摘要送达（design 义务清单） ─────────────────────
 
 def test_design_obligation_table_carries_series_and_lock_digest():
-    """锁摘要与 series 面经 `_design_obligation_table` 进 design prompt（原
+    """锁摘要与 series 面经 `project_design_input` 进 design prompt（原
     `project_binding_space` 锁面的迁移落点——承载选择依据随 bind 退役并入
     design 的义务清单）。"""
-    from novel.stages.chain import _design_obligation_table
+    from novel.stages.stage4.slim import project_design_input
     from novel.stages.stage4.grounding import design_obligation_index
 
     body, binding, brief = _green_graph_and_binding()
     checkpoint = _checkpoint()
     index = design_obligation_index(checkpoint, brief)
-    table = _design_obligation_table(index)
-    lines = {line.split('｜')[0]: line for line in table.splitlines()[1:]}
+    table = project_design_input(brief, index)['requirements']
     # ob01：锁列带 holder|kp（a4 授权面）与 kf；realize 分母渲染进清单
-    cognitive = [line for line in table.splitlines() if line.startswith('ob01.k')]
+    cognitive = list(table['ob01']['knowledge_changes'].values())
     assert len(cognitive) == 2
-    assert all('｜yun_niang｜kp_' in line for line in cognitive)
-    assert {line.split('｜')[-1] for line in cognitive} == {'known', 'suspected'}
+    assert all(row['holder'] == 'yun_niang' and row['kp'].startswith('kp_') for row in cognitive)
+    assert {row['mode'] for row in cognitive} == {'known', 'suspected'}
     # ob05：事实锁（expected）进锁列
-    assert any(line.startswith('ob05') and ('kf_' in line or 'expected' in line)
-               for line in table.splitlines())
+    assert any(lock.startswith('kf_') for lock in table['ob05']['realize_locks'])
     # series 面在 Brief.requirements（series_group/series_mechanism），
     # 义务清单行带必保与 satisfaction
-    assert '｜True｜' in lines['ob01'] and '怀疑渐进到证实' in lines['ob01']
+    assert table['ob01']['must_preserve'] is True
+    assert '怀疑渐进到证实' in table['ob01']['satisfaction']
     # 派生 binding 的 series 成员接受拍互斥（绿基座证不同拍）
     assert len(binding.entries) == 5 and not binding.unbound
 
@@ -707,78 +706,3 @@ def test_preserve_model_validation_error_feeds_revision_not_crash():
         raise AssertionError(f'构造期校验不得裸穿：{type(exc).__name__}: {exc}')
     assert checkpoint is None
     assert any('模型校验失败' in e and 'series' in e for e in errors), errors
-
-
-# ───────────────── R10c：positive_material_leak 机械归因回派 ─────────────────
-
-def test_material_leak_attributes_book_first_and_preserve_same_pass(tmp_path):
-    """R10c（2026-10-02，用户裁决 A）：泄漏字面所属人物的表面逐字出现于该章
-    源文 → book（surface from_chapter 源保真错误）；全部表面缺席 → preserve
-    （statement 混入后文名）。两组同批落账，抛最早执行序一组（book）。"""
-    from novel.stages.chain import _backfill_material_leak
-    from novel.stages.owner_revision import (
-        OwnerRevisionRequired, read_owner_issue_file,
-    )
-    from novel.llm.ledger import CostLedger
-    from novel.store import Str06Repository
-    from tests.str06_facilities import make_context
-
-    repo = Str06Repository(tmp_path / 'run')
-    repo.attach_context(make_context(tmp_path / 'run', ledger=CostLedger(path=None)))
-    from tests.str06_facilities import synthetic_ref
-    repo.write('stage2/observations/book.json', {'characters': {}, 'product': 'book'},
-               owners=('book',), refs=(synthetic_ref('book', '归因夹具'),))
-    repo.write('runtime/preserve_checkpoint.json', {'obligations': []},
-               owners=('preserve',), refs=(synthetic_ref('preserve', '归因夹具'),))
-    chars = CharactersCore.model_validate({'characters': {
-        'pei_shuyuan': {'canonical': '裴书远', 'surfaces': [
-            {'surface': '裴书远', 'from_chapter': 2, 'source_refs': ['e01_02']},
-            {'surface': '表弟', 'from_chapter': 4, 'source_refs': ['e01_04']}]},
-        'shen_zhiyan': {'canonical': '沈知言', 'surfaces': [
-            {'surface': '沈知言', 'from_chapter': 6, 'source_refs': ['e01_06']}]},
-    }, 'initial_state': []})
-    chapters = [{'chapter_ordinal': 1, 'text': '夫君谋划向他表弟借种。'},
-                {'chapter_ordinal': 2, 'text': '表弟很快到来。裴书远来了。'}]
-    leaks = [
-        # ch01 源文无「裴书远」（只有表弟）⇒ statement 混名 → preserve。
-        "positive_material_leak[ch01/must_realize/15@34]：未释放专名字面 '裴书远'",
-        "positive_material_leak[ch01/must_realize/7@52]：未释放专名字面 '沈知言'",
-        # ch02 源文逐字有「裴书远」⇒ withholding 记账晚 → book（姓氏族/表面）。
-        "positive_material_leak[ch02/must_realize/2@9]：未释放专名字面 '裴书远'",
-        # 姓氏族字面：不属任何 surface、源文该章未出现 ⇒ preserve（不静默跳过）。
-        "positive_material_leak[ch01/book_style@3]：未释放专名字面 '苏'",
-    ]
-    with pytest.raises(OwnerRevisionRequired) as excinfo:
-        _backfill_material_leak(repo, leaks, chars, chapters)
-    # 最早执行序一组抛出：book（裴书远逐字在 ch02 源文 → withholding 记晚）。
-    assert excinfo.value.owner == 'book'
-    assert excinfo.value.node == 'str06.stage2.book'
-    assert all(i.code == 'material_name_leak' for i in excinfo.value.issues)
-    assert any('源保真' in i.message and '裴书远' in i.message
-               for i in excinfo.value.issues)
-    book_record = read_owner_issue_file(repo, 'book')
-    assert book_record.status == 'open'
-    assert book_record.raised_by == 'str06.stage4.compile'
-    # 同 owner 多 item 合并为一次 discover（issue 文件按 owner 单记录整写；
-    # 分开 discover 会把一轮逻辑发现记成多轮、顶满修订额度——R10c c1 实证）。
-    assert book_record.rounds_total == 1
-    assert {i.item for i in book_record.issues} == {'chapter:2'}
-    # 同批落账：preserve 的 statement 混名记录已在案（含姓氏族字面「苏」）。
-    preserve_record = read_owner_issue_file(repo, 'preserve')
-    assert preserve_record.status == 'open'
-    assert preserve_record.rounds_total == 1
-    assert any('混名' in i.message for i in preserve_record.issues)
-    assert any('苏' in i.message for i in preserve_record.issues)
-    # 源文有字面但不属任何人物面：不归因（不猜 owner），不落账、不抛。
-    repo2 = Str06Repository(tmp_path / 'run2')
-    repo2.attach_context(make_context(tmp_path / 'run2', ledger=CostLedger(path=None)))
-    from tests.str06_facilities import synthetic_ref
-    repo2.write('stage2/observations/book.json', {'characters': {}, 'product': 'book'},
-                owners=('book',), refs=(synthetic_ref('book', '归因夹具'),))
-    assert '夫君' in chapters[0]['text'] and '夫君' not in {
-        s.surface for c in chars.characters.values() for s in c.surfaces}
-    _backfill_material_leak(repo2, [
-        "positive_material_leak[ch01/must_realize/1@2]：未释放专名字面 '夫君'"],
-        chars, chapters)
-    assert read_owner_issue_file(repo2, 'book') is None
-    assert read_owner_issue_file(repo2, 'preserve') is None

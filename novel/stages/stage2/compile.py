@@ -425,6 +425,21 @@ def compile_source_truth(
     outcome = CompileOutcome()
     errors = outcome.errors
     undecided = outcome.undecided
+    from novel.stages.stage2.names import normalize_name_observations, validate_name_resolutions
+    core, core_errors = character_core_view(book, evidence=evidence)
+    if core_errors:
+        outcome.errors.extend(core_errors)
+        return outcome
+    errors.extend(validate_name_resolutions(names.structure, core, evidence=evidence))
+    errors.extend(f'名称同一性未决：{r.literal}；{r.reason}' for r in names.structure.resolutions
+                  if r.status == 'unresolved')
+    if errors:
+        return outcome
+    try:
+        book, chapters = normalize_name_observations(book, chapters, names.structure)
+    except ValueError as exc:
+        errors.append(f'名称局部归一未闭合：{exc}')
+        return outcome
     ordinals = sorted(chapters)
     if ordinals != list(range(1, len(ordinals) + 1)):
         errors.append(f'章观察必须从 1 连续，实得 {ordinals}')

@@ -226,6 +226,7 @@ def test_contract_identity_covers_both_tables():
         'config': STR06_RUNTIME_CONFIG._asdict(),
         'nodes': {node: {'stage': s.stage, 'owner': candidate_node_owner(node),
                          'paid': s.paid,
+                         'operator_redo': s.operator_redo,
                          'produces': list(s.produces),
                          'free_recheck': ('--check-only' if s.paid
                                           else 'deterministic-rerun'),
@@ -240,6 +241,8 @@ def test_contract_identity_covers_both_tables():
                             'form': 'text' if rel.endswith('.txt') else 'json',
                             'writer': _writer_of(rel),
                             'schema_version': version,
+                            'envelope_version': (ARTIFACT_SPECS[rel].current_version
+                                                 if rel in ARTIFACT_SPECS else None),
                             'model': (getattr(ARTIFACT_SPECS[rel].model, '__name__', None)
                                       if rel in ARTIFACT_SPECS else None)}
                       for rel, version in sorted(CANDIDATE_ARTIFACTS.items())},
@@ -248,6 +251,21 @@ def test_contract_identity_covers_both_tables():
     identity = candidate_contract_identity()
     assert identity == expected
     assert identity == candidate_contract_identity(), '身份必须确定可复算'
+
+
+def test_contract_identity_changes_with_envelope_version_and_repair_policy(monkeypatch):
+    """同名模型的盘上协议或执行权限改变，不能继续采用旧契约身份。"""
+    from dataclasses import replace
+    from contracts.invariants import NODES
+    baseline = candidate_contract_identity()
+    rel = 'stage2/observations/names.json'
+    spec = ARTIFACT_SPECS[rel]
+    monkeypatch.setitem(ARTIFACT_SPECS, rel, replace(spec, current_version=spec.current_version + 1))
+    assert candidate_contract_identity() != baseline
+    monkeypatch.setitem(ARTIFACT_SPECS, rel, spec)
+    node = 'str06.stage4.hook_design'
+    monkeypatch.setitem(NODES, node, NODES[node]._replace(operator_redo='canonical'))
+    assert candidate_contract_identity() != baseline
 
 
 def test_epoch_open_is_deterministic_and_distinct():

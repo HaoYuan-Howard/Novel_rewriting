@@ -51,6 +51,43 @@ from novel.run import RunContext
 LADDER = DEFAULT_RUNGS
 
 
+@pytest.mark.parametrize('raw,reasoning,answer,issue', [
+    ({'completion_tokens': 1000, 'completion_tokens_details': {'reasoning_tokens': 900}}, 900, 100, None),
+    ({'reasoning_tokens': None, 'completion_tokens_details': {'reasoning_tokens': 0}}, 0, None, None),
+    ({'completion_tokens': 0, 'reasoning_tokens': 0}, 0, 0, None),
+    ({'reasoning_tokens': 8, 'completion_tokens_details': {'reasoning_tokens': 8}}, 8, None, None),
+    ({'reasoning_tokens': 0, 'completion_tokens_details': {'reasoning_tokens': 8}}, None, None, 'conflicting_values'),
+    ({'reasoning_tokens': -1}, None, None, 'invalid_count'),
+    ({'reasoning_tokens': True}, None, None, 'invalid_count'),
+    ({'completion_tokens_details': {'reasoning_tokens': '8'}}, None, None, 'invalid_count'),
+    ({'completion_tokens_details': []}, None, None, 'not_object'),
+    ({'completion_tokens': 7, 'reasoning_tokens': 8}, None, None, 'exceeds_completion'),
+    ({'prompt_tokens': 7, 'completion_tokens': 20}, None, None, None),
+    (None, None, None, None),
+    ([], None, None, 'usage_not_object'),
+])
+def test_usage_preserves_zero_unknown_and_reasoning_subtotal(raw, reasoning, answer, issue):
+    """CU-01/02/03：不同供应商形状共用一把尺，坏读数不污染原证据。"""
+    from copy import deepcopy
+    from novel.llm.usage import parse_usage
+    before = deepcopy(raw)
+    parsed = parse_usage(raw)
+    assert parsed.values['reasoning_tokens'] == reasoning
+    assert parsed.answer_tokens == answer
+    assert any(issue in value for value in parsed.issues) if issue else not parsed.issues
+    assert raw == before
+
+
+def test_usage_diagnostics_preserve_known_totals(caplog):
+    from novel.llm.usage import ledger_usage
+    values = ledger_usage({'prompt_tokens': 7, 'completion_tokens': 20,
+                           'reasoning_tokens': 0,
+                           'completion_tokens_details': {'reasoning_tokens': 18}})
+    assert values['reasoning_tokens'] is None
+    assert values['prompt_tokens'] == 7 and values['completion_tokens'] == 20
+    assert 'conflicting_values' in caplog.text
+
+
 class Resp(BaseModel):
     """一个**响应**模型（不是产物模型）：`ask_json` 吃的是这种。"""
     voice: dict = Field(...)

@@ -66,6 +66,7 @@ from typing import Any, Callable, Final, NamedTuple
 
 from contracts.artifacts import ARTIFACT_PATHS, STR06_ARTIFACT_RC_VERSIONS
 from novel import run_identity
+from novel.core.validation import validation_identity
 from contracts.invariants import (
     NODES, OWNER_REVISION_MAX_ROUNDS, WORK_UNIT_MAX_DELIVERY_ATTEMPTS,
 )
@@ -84,6 +85,7 @@ from novel.llm.json_text import normalize_json_text
 from novel.llm.ledger import CostLedger, ledger_path, read_cost_snapshot
 from novel.llm.retry import TransportRetryPolicy
 from novel.llm.transport import ChatRequest, Transport, TransportError
+from novel.llm.usage import ledger_usage, parse_usage
 from novel import prov
 from novel.store import Str06Repository
 from novel.work_units import (
@@ -465,7 +467,7 @@ class PaidRequestSession:
         """
         if answer.finish_reason != 'length':
             return answer
-        usage = answer.usage or {}
+        usage = parse_usage(answer.usage).values
         raise _execution_error(
             f'{answer.owner} 响应被截断（finish_reason=length，'
             f'max_tokens={request.max_tokens}）；节点设计缺陷：停在该 item，'
@@ -758,7 +760,7 @@ class PaidRequestSession:
                             response_sha256=None) -> None:
         """一次 wire attempt 一行（成功、失败、unknown 都记，attempt 序号如实）。"""
         node, _scope = semantic_owner_unit(owner)
-        usage = (response.usage if response is not None else None) or {}
+        usage = ledger_usage(response.usage if response is not None else None)
         self.ledger.record(
             node=node, sid=self.sid, model=(response.model if response is not None
                                             else None) or request.model,
@@ -772,9 +774,7 @@ class PaidRequestSession:
             json_mode=request.json_mode, max_tokens=request.max_tokens,
             finish_reason=(response.finish_reason if response is not None else None),
             latency_ms=latency_ms, response_sha256=response_sha256,
-            **{k: usage.get(k) for k in ('prompt_tokens', 'completion_tokens',
-                                         'reasoning_tokens', 'prompt_cache_hit_tokens',
-                                         'prompt_cache_miss_tokens')})
+            **usage)
 
     def _record_cached_replay(self, owner, request, identity, payload) -> None:
         """免费重放：先补原始账（如 raw→ledger 中断），再记零 token 缓存行。"""
@@ -797,9 +797,7 @@ class PaidRequestSession:
                 request_fingerprint=identity, outcome='ok',
                 finish_reason=response.get('finish_reason'),
                 response_sha256=_content_sha256(response.get('content')),
-                **{k: (response.get('usage') or {}).get(k)
-                   for k in ('prompt_tokens', 'completion_tokens', 'reasoning_tokens',
-                             'prompt_cache_hit_tokens', 'prompt_cache_miss_tokens')})
+                **ledger_usage(response.get('usage')))
         node, _scope = semantic_owner_unit(owner)
         self.ledger.record(
             node=node, sid=self.sid, model=(payload.get('response') or {}).get('model')
@@ -1380,7 +1378,7 @@ def ask_json(session: PaidRequestSession, owner: str, request: ChatRequest,
         判定；问题严格缩小允许继续，重复/回归集合才停止）。"""
         # R8b.3：无进展判定用「位置模式」集合（消息首个冒号前的定位段），
         # 不用全文——措辞微调（如实得值摘要变化）不再被误判成有进展。
-        heads = sorted(str(e).split('：', 1)[0][:80] for e in errs)
+        heads = sorted(validation_identity(e) for e in errs)
         current = frozenset(heads)
         if not (current and current in seen_heads):
             return current
@@ -1428,7 +1426,7 @@ def ask_json(session: PaidRequestSession, owner: str, request: ChatRequest,
                         if patches else base_answer)
             current = _no_progress_stop(list(errors), adoption)
             node, scope = semantic_owner_unit(owner)
-            heads = sorted(str(e).split('：', 1)[0][:80] for e in errors)
+            heads = sorted(validation_identity(e) for e in errors)
             stop_context = {'owner': owner, 'rounds': revisions,
                             'max_rounds': OWNER_REVISION_MAX_ROUNDS,
                             'issues': list(errors), 'issue_locations': heads}
@@ -1927,6 +1925,7 @@ def _node_identity(node_id: str, node) -> dict:
     return {
         'stage': node.stage, 'owner': candidate_node_owner(node_id),
         'paid': node.paid,
+        'operator_redo': node.operator_redo,
         'produces': list(node.produces),
         'free_recheck': '--check-only' if node.paid else 'deterministic-rerun',
         'flags': list(node.flags), 'paid_flags': list(node.paid_flags),
@@ -1944,6 +1943,8 @@ def _artifact_identity(rel: str) -> dict:
         'form': 'text' if rel.endswith('.txt') else 'json',
         'writer': _writer_of(rel),
         'schema_version': STR06_ARTIFACT_RC_VERSIONS[rel],
+        'envelope_version': (ARTIFACT_SPECS[rel].current_version
+                             if rel in ARTIFACT_SPECS else None),
         'model': (getattr(ARTIFACT_SPECS[rel].model, '__name__', None)
                   if rel in ARTIFACT_SPECS else None),
     }

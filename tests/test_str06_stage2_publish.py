@@ -24,7 +24,7 @@ import pytest
 
 from contracts.schema.observation import (
     STAGE2_ASSOCIATE_PROTOCOL as APV, STAGE2_CHAPTERS_PROTOCOL as CPV,
-    STAGE2_OBSERVATION_PROTOCOL as PV,
+    STAGE2_NAMES_PROTOCOL as PV,
 )
 from novel.llm.ledger import CostLedger
 from novel.store import Str06Repository
@@ -125,13 +125,17 @@ def _associate_wire(**over) -> dict:
     return wire
 
 
-def _names_wire() -> dict:
-    return {'families': {'f_lu': {'literal': '陆', 'forms': []}},
+def _names_structure() -> dict:
+    return {'resolutions': [], 'families': {'f_lu': {'literal': '陆', 'forms': []}},
             'people': {
                 'fu_jun': {'family_id': 'f_lu', 'given': None, 'aliases': [],
                            'surface_forms': {'夫君': None}},
                 'yun_niang': {'family_id': None, 'given': None, 'aliases': [],
                               'surface_forms': {'云娘': None}}}}
+
+
+def _names_wire() -> dict:
+    return {'protocol_version': PV, **_names_structure()}
 
 
 def _full_stage2_wires() -> dict:
@@ -628,7 +632,7 @@ def test_loop_pairing_conflict_is_rejected_before_acceptance_and_publication(kin
     chapters = {n: ChapterObservation.model_validate(bad[f'ch{n:02d}'])
                 for n in (1, 2, 3)}
     names = NamesObservation(protocol_version=PV,
-                             structure=NameStructure.model_validate(bad['names']))
+                             structure=NameStructure.model_validate({k: v for k, v in bad['names'].items() if k != 'protocol_version'}))
     space = project_association_space(book, chapters)
     before = deepcopy(bad)
     observation, errors = compile_associate_observation(bad['associate'], space)

@@ -261,3 +261,38 @@ STR-06 新链的 Stage4 免费聚合由结构性禁付节点 `str06.stage4.compi
 （裁决见 `docs/DECISIONS.md` 2026-09-09～10「一次整根切换」行）；旧链恢复动作
 （reaggregate／recover-prepared 一类）已随旧链整层退役；存量解码面与退役台账
 已随 STR-06 关闭批删除，旧根的恢复材料只按 Git 历史与冻结的盘上记录读取。
+
+## 旧材料归因更正与历史用量补证
+
+`python -m novel.cli issue-correction <sid> --base <输出根> --owner preserve`
+只读重建当前正式材料并给出 subject_sha256；只有已证明旧二分归因错误且全部当前
+问题可归因时才给出更正清单。以同一命令追加 `--apply --subject-sha256 <预览摘要>
+--reason <更正理由>` 显式退出旧回派。输入在预览后变化即拒绝；原issue、rounds_total
+和费用保留，重复应用幂等。不可用它清除合法失败或给新owner退款／追加额度。
+names／Characters旧信封须先按新协议重建；冻结实验根不能靠改版本号伪装续跑。
+
+`python tools/repair_rounds.py <输出根> --sid <sid> --usage-json`
+只读核对 ledger 与已购请求／响应证据，区分账内 reasoning 和嵌套usage补证。
+这里的sid是成本账与工作单元账里的书键，新链通常是含书名的目录名，不能只填数字后缀。
+成本账不存在或书键未匹配时明确拒绝，不能把“没有找到证据”记成零费用。
+缺失、冲突、坏账尾段明确报告；unknown不改零，缓存采用不重复计费。该入口不改
+原账、不补造供应商扣款，也不触发模型请求。
+
+非`--usage-json`报告按工作单元正式内容轮序统计；“首内容轮当前复验接受率”不等于历史首过率。
+免费复检更新接受记录时不增加内容轮；实验必须在每臂结束时冻结首过与返修证据。
+
+## 请求配置与逐节点对照
+
+现役语义节点的`run`／`preview`接受`--request-profile <LegacyLlmProfile JSON>`，字段为
+provider、model、reasoning_effort和thinking_mode。编排器从冻结profiles生成该值，免费复检
+沿用同一值；它不授予付费或外发许可。历史Step没有该字段时显示未知，不猜high。
+与父运行配置或显式effort冲突时拒绝；缺少对应已购回答的免费复检不能新购。
+
+`python tools/effort_ab.py --set str06.stage2.names=low --model deepseek-flash --thinking on
+-- run str06.stage2.names <sid> --base <独立输出根>` 默认只展示免费预览。
+执行需显式`--execute`，透传付费命令仍分别提供`--yes --allow-egress`；工具不会代填权限。
+该入口只接配置，不能替代实验manifest、相同输入冻结、独立请求身份、完整失败与费用统计。
+正式A/B前须核对代码、输入、协议、模型、停止规则及授权范围，不能靠改NODES模拟配置生效。
+
+`tools/str06_review.py ... patch-preview`同样接受`--request-profile`，须与被审阅请求一致；
+显式effort冲突即拒绝，工具通过同一冻结函数构造实际请求身份，始终不授予付费权限。

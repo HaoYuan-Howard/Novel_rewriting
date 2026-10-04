@@ -25,12 +25,14 @@ def test_model_design_schema_keeps_dynamic_knowledge_branches_valid():
     import json
     from jsonschema import Draft202012Validator
     from novel.stages.common import design_rules
-    for refs in ({}, {'ob01.k01': False, 'ob01.k02': True}):
+    for refs in ({}, {'ob01.k01': False, 'ob01.k02': True,
+                     'ob02.k01': False, 'ob02.k02': True}):
         schema = json.loads(design_rules(known_char_ids={'lead'},
                                         knowledge_refs=refs).rsplit('\n', 1)[1])
         Draft202012Validator.check_schema(schema)
         validator = Draft202012Validator({
             '$ref': '#/$defs/SlimKnowledgePlacement', '$defs': schema['$defs']})
+        assert len(schema['$defs']['SlimKnowledgePlacement'].get('allOf', [])) <= 2
         samples = [({'ref': 'ob01.k99'}, False)]
         if refs:
             fact = {'domain': 'world', 'key': 'evidence'}
@@ -39,6 +41,10 @@ def test_model_design_schema_keeps_dynamic_knowledge_branches_valid():
                 ({'ref': 'ob01.k02'}, False),
                 ({'ref': 'ob01.k02', 'confirms': None}, False),
                 ({'ref': 'ob01.k02', 'confirms': fact}, True),
+                ({'ref': 'ob02.k02', 'confirms': fact}, True),
+                ({'ref': 'ob02.k02'}, False),
+                ({'ref': 'ob02.k01', 'confirms': fact}, False),
+                ({'ref': 'ob02.k01'}, True),
                 ({'ref': 'ob01.k01', 'confirms': fact}, False),
                 ({'ref': 'ob01.k02', 'confirms': {
                     'domain': 'knowledge', 'key': 'p', 'holder': 'reader'}}, False),
@@ -250,14 +256,44 @@ def test_assemble_routes_v7_and_enforces_coverage():
 
 def test_design_rules_prompt_carries_v7_and_obligation_table():
     from novel.stages.common import design_rules
-    from novel.stages.chain import _design_obligation_table
+    from novel.stages.stage4.slim import project_design_input
     rules = design_rules(known_char_ids={'yun_niang'})
     assert 'stage4-design-v7' in rules and 'SlimDesignBeat' in rules
     assert 'real' in rules and 'obNN' in rules
     brief = _brief()
-    table = _design_obligation_table(_obligations(brief))
-    assert 'ob01.k01｜ob01｜yun_niang｜kp_1111111111111111｜known' in table
+    table = project_design_input(brief, _obligations(brief))['requirements']
+    assert table['ob01']['knowledge_changes']['ob01.k01'] == {
+        'holder': 'yun_niang', 'kp': 'kp_1111111111111111', 'mode': 'known'}
     assert 'ob03' in table      # 非必保也在清单（标注可选）
+
+
+def test_design_projection_preserves_complete_semantics_and_references():
+    from copy import deepcopy
+    import pytest
+    from novel.stages.stage4.slim import project_design_input, knowledge_change_index
+    raw = _brief().model_dump(mode='json')
+    raw['requirements'][1]['requires_cores'] = ['req_aaaa']
+    raw['requirements'][1]['satisfaction'] = '完整条件不截断。' * 30
+    brief = ReconstructionBrief.model_validate(raw)
+    obligations = _obligations(brief)
+    before = deepcopy(brief.model_dump())
+    view = project_design_input(brief, obligations)
+    assert view['requirements']['ob02']['requires'] == ['ob01']
+    assert set(view['requirements']) == set(obligations)
+    # 除明确改为短引用的机械身份外，每个语义字段逐值保留。
+    for key, value in brief.model_dump(mode='json').items():
+        if key not in {'brief_id', 'preserve_checkpoint_sha256', 'requirements'}:
+            assert view[key] == value
+    for ob, requirement in obligations.items():
+        for key, value in requirement.model_dump(mode='json').items():
+            if key not in {'core_id', 'requires_cores', 'knowledge_changes'}:
+                assert view['requirements'][ob][key] == value
+    for ref, (ob, change) in knowledge_change_index(obligations).items():
+        assert view['requirements'][ob]['knowledge_changes'][ref] == change.model_dump(
+            mode='json', exclude={'change_id'})
+    assert brief.model_dump() == before
+    with pytest.raises(ValueError, match='完整且唯一'):
+        project_design_input(brief, {'ob01': obligations['ob01']})
 
 
 def test_world_rule_key_reference_and_zero_info_value_refused():

@@ -40,7 +40,7 @@ from typing import Callable, NoReturn
 
 from contracts.invariants import CASCADE_REWIND_LIMIT, OWNER_REVISION_MAX_ROUNDS
 from contracts.schema.workflow import (
-    OWNER_PRODUCT_RELS, OwnerIssueFileV2, OwnerIssueV1,
+    OWNER_PRODUCT_RELS, OwnerIssueFileV3, OwnerIssueV1,
     owner_issue_record_of_payload, owner_issues_rel,
 )
 from novel.llm.paid_requests import ExecutionError, revision_user_prompt
@@ -50,7 +50,7 @@ __all__ = [
     'MechanicalDefectStop', 'OwnerRevisionRequired', 'OwnerRevisionStop',
     'discover_owner_issues', 'open_issue_record', 'open_issue_targets_node',
     'owner_product_digest', 'owner_product_digest_at', 'read_owner_issue_file',
-    'resolve_owner_issues', 'revision_gate', 'revision_prompt_for_owner',
+    'resolve_owner_issues', 'complete_owner_dispatch', 'revision_gate', 'revision_prompt_for_owner',
 ]
 
 
@@ -112,11 +112,13 @@ def _messages(issues: tuple[OwnerIssueV1, ...] | list[OwnerIssueV1]) -> list[str
 
 
 def _fingerprint(issues: tuple[OwnerIssueV1, ...] | list[OwnerIssueV1]) -> str:
-    """问题集摘要：sorted (code, item, message) 的规范化 SHA-256（纯函数）。"""
+    """问题集摘要：稳定材料身份或存量消息去重排序后的 SHA-256（纯函数）。"""
     import hashlib
     import json
 
-    material = sorted((i.code, i.item, i.message) for i in issues)
+    material = sorted({(i.code, i.item, json.dumps(i.context['material_identity'],
+                                                ensure_ascii=False, sort_keys=True)
+                       if 'material_identity' in i.context else i.message) for i in issues})
     return hashlib.sha256(json.dumps(material, ensure_ascii=False,
                                      separators=(',', ':')).encode('utf-8')
                           ).hexdigest()
@@ -148,7 +150,7 @@ def owner_product_digest(repository, owner: str) -> str:
 
 
 def revision_gate(against_sha256: str, product_sha256: str | None,
-                  rounds_total: int, no_progress: bool = False) -> tuple[str, str]:
+                  rounds_total: int, no_progress: bool = False, *, dispatch_pending: bool = False) -> tuple[str, str]:
     """owner_revision 门控的唯一判定（R8a）：进程内回跳与 `resume_verdict` 共用。
 
     返回 ``(结论, 一句话)``，结论闭集：
@@ -160,7 +162,7 @@ def revision_gate(against_sha256: str, product_sha256: str | None,
       无效）且产物未变：按 item 停给人，不自动重买。
     """
     if product_sha256 == against_sha256:
-        if rounds_total < OWNER_REVISION_MAX_ROUNDS and not no_progress:
+        if (rounds_total < OWNER_REVISION_MAX_ROUNDS or dispatch_pending) and not no_progress:
             return 'redo', (
                 f'owner 产物未变（摘要＝against），跨节点回派修订轮 '
                 f'{rounds_total}/{OWNER_REVISION_MAX_ROUNDS}——按 owner 修订重跑')
@@ -193,8 +195,8 @@ def open_issue_targets_node(repository, node: str) -> bool:
     return False
 
 
-def read_owner_issue_file(repository, owner: str) -> OwnerIssueFileV2 | None:
-    """读该 owner 的回派账（统一升 v2 形状）；无记录返回 None，损坏即显式拒绝。
+def read_owner_issue_file(repository, owner: str) -> OwnerIssueFileV3 | None:
+    """读该 owner 的回派账（集中解码为 v3 形状）；无记录返回 None，损坏即显式拒绝。
 
     v1 盘上记录按登记迁移补 ``against_sha256``（迁移语义与删除条件见
     `contracts/schema/workflow.py::owner_issue_record_of_payload`）。
@@ -215,7 +217,7 @@ def read_owner_issue_file(repository, owner: str) -> OwnerIssueFileV2 | None:
             '它是修订路由的输入，拒绝当作「没有问题」继续') from exc
 
 
-def open_issue_record(repository, owner: str) -> OwnerIssueFileV2 | None:
+def open_issue_record(repository, owner: str) -> OwnerIssueFileV3 | None:
     """当前仍 open 的回派账（上游 owner 重跑的修订上下文；resolved 不算）。"""
     record = read_owner_issue_file(repository, owner)
     if record is None or record.status != 'open':
@@ -247,13 +249,20 @@ def discover_owner_issues(repository, *, raised_by: str, owner: str, node: str,
     fingerprint = _fingerprint(issues)
     against_sha256 = owner_product_digest(repository, owner)
     updated_at = _now()
+    history = tuple(dict.fromkeys((*existing.fingerprint_history, existing.fingerprint))) if existing else ()
+    retained = {'fingerprint_history': tuple(dict.fromkeys((*history, fingerprint))),
+                'corrections': existing.corrections if existing else ()}
+    if existing is not None and existing.status == 'open' and existing.dispatch_pending \
+            and existing.fingerprint == fingerprint and existing.against_sha256 == against_sha256:
+        raise OwnerRevisionRequired('重放已登记但尚未完成的回派；不重复起轮',
+                                    node=node, owner=owner, issues=issues)
     if existing is not None and existing.status == 'open' \
-            and existing.fingerprint == fingerprint:
-        repository.write(owner_issues_rel(owner), OwnerIssueFileV2(
+            and fingerprint in history:
+        repository.write(owner_issues_rel(owner), OwnerIssueFileV3(
             owner=owner, node=node, raised_by=raised_by, status='open',
             rounds_total=existing.rounds_total, fingerprint=fingerprint,
             against_sha256=against_sha256, no_progress=True, issues=issues,
-            updated_at=updated_at))
+            updated_at=updated_at, dispatch_pending=False, **retained))
         raise OwnerRevisionStop(
             f'跨节点回派修订轮·{raised_by} 的修订要求没有进展：{owner} 修订后'
             f'同一问题集原样重现，按 item 停（同一问题集重复即停）：{_messages(issues)}',
@@ -261,11 +270,11 @@ def discover_owner_issues(repository, *, raised_by: str, owner: str, node: str,
             rounds=existing.rounds_total, no_progress=True)
     rounds = existing.rounds_total if existing is not None else 0
     if rounds >= OWNER_REVISION_MAX_ROUNDS:
-        repository.write(owner_issues_rel(owner), OwnerIssueFileV2(
+        repository.write(owner_issues_rel(owner), OwnerIssueFileV3(
             owner=owner, node=node, raised_by=raised_by, status='open',
             rounds_total=rounds, fingerprint=fingerprint,
             against_sha256=against_sha256, no_progress=False, issues=issues,
-            updated_at=updated_at))
+            updated_at=updated_at, dispatch_pending=False, **retained))
         raise OwnerRevisionStop(
             f'{owner} 的跨节点回派修订轮额度（{OWNER_REVISION_MAX_ROUNDS}）已耗尽，'
             f'按 item 停给人（剩余修复走 owner patch 或人工重跑）：'
@@ -282,11 +291,11 @@ def discover_owner_issues(repository, *, raised_by: str, owner: str, node: str,
             '（级联身份 churn），按 item 停给人裁决；本记录未起轮、未付费',
             node=node, owner=owner, issues=issues, raised_by=raised_by,
             rounds=rounds)
-    repository.write(owner_issues_rel(owner), OwnerIssueFileV2(
+    repository.write(owner_issues_rel(owner), OwnerIssueFileV3(
         owner=owner, node=node, raised_by=raised_by, status='open',
         rounds_total=rounds + 1, fingerprint=fingerprint,
         against_sha256=against_sha256, issues=issues,
-        updated_at=updated_at))
+        updated_at=updated_at, dispatch_pending=True, **retained))
     raise OwnerRevisionRequired(
         f'{raised_by} 发现 {len(issues)} 项 typed 机械问题，回派 {node} 按 owner '
         f'修订重跑（跨节点回派修订轮 {rounds + 1}/{OWNER_REVISION_MAX_ROUNDS}；'
@@ -306,8 +315,9 @@ def _bump_cascade_rewinds(repository) -> int:
     except FileNotFoundError:
         current = 0
     current += 1
-    repository.write(rel, {'count': current,
-                           'limit': CASCADE_REWIND_LIMIT})
+    if current <= CASCADE_REWIND_LIMIT:
+        repository.write(rel, {'count': current,
+                               'limit': CASCADE_REWIND_LIMIT})
     return current
 
 
@@ -316,13 +326,19 @@ def resolve_owner_issues(repository, *, owner: str, raised_by: str) -> None:
     record = read_owner_issue_file(repository, owner)
     if record is None or record.status != 'open':
         return
-    repository.write(owner_issues_rel(owner), OwnerIssueFileV2(
-        owner=record.owner, node=record.node, raised_by=raised_by,
-        status='resolved', rounds_total=record.rounds_total,
-        fingerprint=record.fingerprint,
-        against_sha256=record.against_sha256,
-        no_progress=record.no_progress, issues=record.issues,
-        updated_at=_now()))
+    repository.write(owner_issues_rel(owner), record.model_copy(update={
+        'status': 'resolved', 'dispatch_pending': False, 'raised_by': raised_by, 'updated_at': _now()}))
+
+
+def complete_owner_dispatch(repository, node: str, *, chapter_owners=()) -> None:
+    """正式提交后关闭本轮待执行标志；同字节空转也不能在重启时冒充尚未执行。"""
+    for owner in (*OWNER_PRODUCT_RELS, *chapter_owners):
+        record = open_issue_record(repository, owner)
+        if record is None or record.node != node or not record.dispatch_pending:
+            continue
+        unchanged = owner_product_digest(repository, owner) == record.against_sha256
+        repository.write(owner_issues_rel(owner), record.model_copy(update={
+            'dispatch_pending': False, 'no_progress': unchanged, 'updated_at': _now()}))
 
 
 def revision_prompt_for_owner(repository, owner: str, base_prompt: str,

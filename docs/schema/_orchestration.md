@@ -90,7 +90,8 @@ LLM API”；provider 的模型、thinking、effort、节点适用面与 client 
 | `writes` | `str` | **是** | ⭐ 这一步会往盘上写什么。**空串 = 不写盘。** 见 §1.2 | **设计** |
 | `note` | `str \| 键不在` | 否 | 这一步的特别提醒（例：追跑的那条 `--check-only` 为什么在） | **契·码** |
 | `executor_backend` | `ExecutorBackend \| null` | 否；旧盘可缺 | 本步真正解析后的 executor 快照。付费 producer Step 可非空；自动追跑的 0 成本 `--check-only` Step 必须为 `null`。现役唯一 wire 是 `kind=legacy` + `LegacyLlmProfile`；旧盘若仍带 `kind=agent` 由 `retired_formats` 拒绝续跑，列表只读不崩溃。新序列化不再发旧 `executor_profile` / `--executor-driver` 字段 | **契·码** |
-| `egress_authorized` | `bool \| null` | 否；旧盘可缺 | 独立正文外发授权快照。新付费 executor Step 必须为 bool，并与 argv 是否含 `--allow-egress` 逐字一致；backend 为空的兼容/代码/追跑 Step 必须为 `null`。旧盘 `null` 只表示未记录，不倒推 | **契·码** |
+| `request_profile` | `LegacyLlmProfile \| null` | CS-T加法契约；历史可缺 | 无密钥请求配置，与CLI JSON全等。新运行从冻结profiles派生，免费followcheck沿用同一配置而无新购权限；历史缺失为未知，不补high。与backend同时存在时必须全等 | **契·码** |
+| `egress_authorized` | `bool \| null` | 否；旧盘可缺 | 独立正文外发授权快照，与 argv 是否含 `--allow-egress` 一致；免费Step必须为`null`，付费Step与backend有无解耦。旧盘`null`只表示未记录，不倒推 | **契·码** |
 
 ### 1.1 ⚠ `--base` 用绝对路径，但 `-m novel.cli` 仍然吃 cwd
 
@@ -98,15 +99,18 @@ argv 的形态是：
 
 ```
 <sys.executable> -X utf8 -u -m novel.cli run <node> <sid> [flags…]
-  [--executor-backend legacy
-   --legacy-provider <id> --legacy-model <id> --legacy-effort <id> --legacy-thinking <id>]
+  [--request-profile <LegacyLlmProfile JSON>]
   [--allow-egress] --base <绝对路径> [--yes]
 ```
 
-现役只生成 legacy 参数组；旧复制命令若仍带 `--executor-backend agent` 或
+现役生成无密钥request-profile JSON，付费与免费复检共用同一配置；手工CLI仍接受稳定legacy参数组。
+旧复制命令若仍带 `--executor-backend agent` 或
 `--executor-driver/--executor-mode`，在 CLI/API/jobs 入口统一 `retired_executor_backend`
-拒绝。`--allow-egress` 只可跟在非空 backend 后，且只在独立授权为 true 时出现；它与
+拒绝。`--allow-egress`只在独立授权为true时出现，与backend解耦；它与
 `--yes` 分别回答正文能否外发、能否付费。
+
+run_step旁路证据写`novel-operator-step-evidence-v5`，付费与免费步骤均投影request_profile，
+与实际Step和argv绑定。旧v2／v4仅保留原字节审计，不自动补字段或覆盖为v5；该旁路证据不是调度真源。
 
 `--base` 用绝对路径是原型定下来的，理由是「**好让 argv 与 cwd 无关**」。
 但 `-m novel.cli` 这一段**本身**要求 cwd 在仓根（`pythonpath=["."]` 只对 pytest 生效）。

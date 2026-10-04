@@ -90,24 +90,9 @@ _DECLARED_ABSENT: dict[str, str] = {
         '只消费已删除的 workflow_metrics 冻结报告，随同退役（见 docs/DECISIONS.md）'),
     'docs/schema/stage2_review.md': (
         '随 Stage2 语义审阅退役删除；docs 引用它的段落说明该退役'),
-    'tools/str06_workflow.py': (
-        'F8c（2026-09-25）分流后删除：execute／run_workflow／load_stage1_chapters '
-        '搬进 `novel/stages/chain.py`，生产入口是 `novel.cli run <node> <sid>`。'
-        'DECISIONS.md 引用它的段落正是记录当时的落点，历史实现按 Git 历史读取'),
-    'contracts/schema/str06/': (
-        'F8c（2026-09-25）分流后删除：模型搬进 contracts/schema/ 顶层模块'
-        '（source/design/grounding/context/book_ir/hook/naming/receipt/execution/'
-        'policy/state/families/dependency/consumption/api/workflow），退役登记留在 '
-        '`contracts/schema/retirement.py`。REQUIREMENTS 引用它的段落正是记录这次分流'),
-    'novel/stages/str06/': (
-        'F8c（2026-09-25）分流后删除：实现搬进 novel/stages/stage2|stage4|stage5|'
-        'stage7/＋novel/stages/common.py＋novel/stages/chain.py。'
-        'REQUIREMENTS 引用它的段落正是记录这次分流'),
     'novel/stages/stage2/source.py': (
-        'B5（2026-09-28）S-05 删除：旧联合抽取引擎自 B2 五节点重建起链上不消费，'
-        '反例已迁五 owner 引擎（book/chapters/associate/compile），源 fold 唯一'
-        '实现住 `novel/stages/stage2/compile.py`。DECISIONS/REQUIREMENTS 引用'
-        '它的段落正是记录历史落点与这次删除'),
+        'B5（2026-09-28）删除旧联合抽取；DECISIONS与str06架构历史仍引用该退役路径，'
+        '现役生产与测试已迁Stage2五owner，不能恢复旧文件'),
 }
 
 _ID = re.compile(r'`(R-\d+\.\d+[a-z]?|Q-\d+|B-\d+)`')

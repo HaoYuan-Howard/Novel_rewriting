@@ -606,7 +606,7 @@ CASES.update({
 def _stage2_outcome(*, book=None, chapters=None, names=None, associate=None):
     """四份观察 → `compile_source_truth`（未决项在 `outcome.undecided`）。"""
     from tests.test_str06_stage2_publish import (
-        EVIDENCE, _associate_wire, _book_wire, _chapter_wires, _names_wire,
+        EVIDENCE, _associate_wire, _book_wire, _chapter_wires, _names_structure,
     )
     from novel.stages.stage2 import (
         AssociateObservation, BookObservation, ChapterObservation,
@@ -619,8 +619,8 @@ def _stage2_outcome(*, book=None, chapters=None, names=None, associate=None):
         chapters={no: ChapterObservation.model_validate(ch_wires[f'ch{no:02d}'])
                   for no in range(1, len(ch_wires) + 1)},
         names=NamesObservation.model_validate({
-            'protocol_version': 'stage2-observation-v1',
-            'structure': names if names is not None else _names_wire()}),
+            'protocol_version': 'stage2-names-v2',
+            'structure': names if names is not None else _names_structure()}),
         associate=AssociateObservation.model_validate(
             associate if associate is not None else _associate_wire()),
         evidence=EVIDENCE)
@@ -765,7 +765,8 @@ def _names_structure_uncovered() -> list:
                   SurfaceWindow(surface='陆大哥', from_chapter=1,
                                 source_refs=('e01_01',))))})
     _structure, errors = compile_name_structure(
-        {'families': {'fam_lu': {'literal': '陆', 'forms': []}},
+        {'protocol_version': 'stage2-names-v2', 'resolutions': [],
+         'families': {'fam_lu': {'literal': '陆', 'forms': []}},
          'people': {'ch1': {'family_id': 'fam_lu', 'given': None, 'aliases': [],
                             'surface_forms': {'夫君': None}}}},
         core, '夫君与陆大哥夜话。')

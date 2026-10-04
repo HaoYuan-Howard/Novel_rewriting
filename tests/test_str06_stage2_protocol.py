@@ -326,7 +326,7 @@ def test_associate_observation_shape_and_closed_handle_charset():
 
 def test_names_observation_wraps_name_structure():
     obs = NamesObservation.model_validate({
-        'protocol_version': STAGE2_OBSERVATION_PROTOCOL,
+        'protocol_version': 'stage2-names-v2',
         'structure': {
             'families': {'f_lu': {'literal': '陆', 'forms': []}},
             'people': {'fu_jun': {'family_id': 'f_lu', 'given': '夫君',

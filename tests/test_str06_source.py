@@ -16,14 +16,14 @@ import pytest
 
 from novel.stages.chain import build_evidence, load_dev_source
 from tests.test_str06_stage2_publish import (
-    EVIDENCE, _associate_wire, _basis, _book_wire, _chapter_wires, _names_wire,
+    EVIDENCE, _associate_wire, _basis, _book_wire, _chapter_wires, _names_structure,
 )
 from novel.stages.stage2 import (
     AssociateObservation, BookObservation, ChapterObservation, NamesObservation,
     character_core_view, compile_source_truth,
 )
 
-PV = 'stage2-observation-v1'   # names 观察（输入投影未变，R10a a1 保持 v1）
+PV = 'stage2-names-v2'   # 名称同一性留证协议
 CPV = 'stage2-chapters-v2'     # 章观察（R10a a1：转移带 basis／Effect.modality）
 
 
@@ -37,7 +37,7 @@ def _outcome(*, book=None, chapters=None, names=None, associate=None):
                   for no in range(1, len(ch_wires) + 1)},
         names=NamesObservation.model_validate({
             'protocol_version': PV,
-            'structure': names if names is not None else _names_wire()}),
+            'structure': names if names is not None else _names_structure()}),
         associate=AssociateObservation.model_validate(
             associate if associate is not None else _associate_wire()),
         evidence=EVIDENCE)

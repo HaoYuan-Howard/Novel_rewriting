@@ -141,7 +141,7 @@ STR06_MIGRATION_DEPENDENCY_RULES: Final[tuple[DependencyRule, ...]] = (
     DependencyRule(
         module='novel.stages.stage2.names',
         allows=('contracts.schema.source', 'contracts.schema.base',
-                'novel.stages.common'),
+                'novel.stages.common', 'novel.stages.stage2.resolver'),
         forbids=_STAGE457 + ('novel.llm', 'novel.llm.*')),
     # hook_context 是纯投影（Stage4 context owner）：禁止 LLM 与 Stage2/4/5/7 语义模块。
     # novel.core.text：kp 句柄→命题 statement 的回填尺（R10b 锁以内容送达；

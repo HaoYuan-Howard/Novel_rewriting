@@ -21,7 +21,7 @@ from novel.store import Str06Repository
 from novel.stages.chain import (
     ChainContext, ExecutionProfile, NODE_RUNNERS, SYS, BODY_WRITER_SYSTEM, HOOK_WRITER_SYSTEM,
     _chapter_evidence, build_evidence, chapter_acceptance, derive_total_length_budget,
-    load_stage1_chapters, str06_chat_request,
+    load_stage1_chapters, str06_chat_request, freeze_execution_profile,
 )
 from novel.stages.stage2 import (
     character_core_view, first_appearance_anchors, chapter_observation_prompt,
@@ -153,7 +153,8 @@ def main(argv=None):
     patch.add_argument('--owner', required=True)
     patch.add_argument('--candidate', type=Path, required=True)
     patch.add_argument('--baseline-root', type=Path)
-    patch.add_argument('--reasoning-effort', choices=('low', 'high', 'max'), default='high')
+    patch.add_argument('--reasoning-effort', choices=('low', 'high', 'max'), default=None)
+    patch.add_argument('--request-profile', help='与被审阅请求相同的无密钥配置JSON；不授予新购权限')
     args = parser.parse_args(argv)
     if not args.base:
         parser.error('NOVEL_OUTPUT／--base 未提供：没查')
@@ -176,7 +177,11 @@ def main(argv=None):
         result = obligation_review(repo)
     else:
         source = load_stage1_chapters(args.base, args.sid)
-        profile = ExecutionProfile(load_config(), args.reasoning_effort)
+        from novel.cli.main import _request_profile_of
+        args.node = semantic_owner_unit(args.owner)[0]
+        request_profile = _request_profile_of(args, None)
+        profile = freeze_execution_profile(cfg=load_config(), reasoning_effort=args.reasoning_effort or 'high',
+            base=args.base, sid=root.name, request_profile=request_profile)
         request, validate = request_preview(repo, args.owner, source, profile)
         identity = digest({'owner': args.owner, 'provider': profile.provider, 'request': request.cache_payload()})
         baseline = purchased_baseline((args.baseline_root or root).resolve(), args.owner, identity)

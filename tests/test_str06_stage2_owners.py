@@ -98,6 +98,7 @@ def _chapter_wire(*beats: dict) -> dict:
 
 def _names_wire() -> dict:
     return {
+        'protocol_version': 'stage2-names-v2', 'resolutions': [],
         'families': {'f_lu': {'literal': '陆', 'forms': []}},
         'people': {
             'fu_jun': {'family_id': None, 'given': None, 'aliases': [],
@@ -343,7 +344,7 @@ def test_stage2_observation_leg_persists_observations_and_names_remount(tmp_path
         artifact = repo.inspect(rel)
         assert artifact['protocol_version'] == (
             'stage2-book-v3' if rel.endswith('/book.json')
-            else STAGE2_OBSERVATION_PROTOCOL if rel.endswith('/names.json')
+            else 'stage2-names-v2' if rel.endswith('/names.json')
             else STAGE2_CHAPTERS_PROTOCOL), rel
         assert '_provenance' in artifact, rel
     assert not (repo.root / 'stage2/characters/characters.json').exists(), \

@@ -223,7 +223,14 @@ conda run -n novel_refactor python -m tests.golden evaluate --manifest E:/golden
 `run` 只接受空输出根：经正式 Stage0 CLI 摄入后交给 RunSupervisor，不自建阶段循环或自动填写审批。
 运行阻塞时保留原账；遇暂停或 Ctrl+C，向本次 owner 请求停止并等待 drain。已产生输出的运行不能重用
 `run` 再起一轮；按产品的人工 / 恢复入口处理，保持冻结代码与配置，再免费 `collect`。
-收集检查原文身份、七层完成度、正式交付、稳定盘面，以及已结束运行的代码和 profiles；未观察到运行身份不会补绿。
+收集检查原文身份、现役阶段完成度、正式交付、稳定盘面，以及已结束运行的代码和 profiles；
+逐笔请求配置须与冻结节点配置一致，未观察到运行身份不会补绿。
+
+质量manifest、snapshot、review和result使用v2，维度精确为情节保全、结构原创、因果连续、
+人物连续、自然推进和局部文笔连贯。旧v1评价须对现有成书重新评阅，不需要重生成。
+`automatic_state`与工程、质量分别报告：未交付为incomplete，人工patch／历史采用／回派更正／
+追加额度／冻结Agent之外的请求为assisted，缺少请求或采用身份为unver。只有完整对应的
+Agent、provider attempts、成本账和封存采用证据才能记pass；人工恢复后成书可另行通过质量评价。
 
 先完成 `collect`，再由人工填写 `review.json` 的 reviewer、带时区的 reviewed_at，以及逐书六个维度的
 state、chapter_ordinals 和 evidence。证据写定位与判断说明，不复制小说正文；每个通过/失败都需要具体章号。

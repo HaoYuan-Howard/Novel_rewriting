@@ -1,106 +1,59 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""FC-13 逐节点 effort 换臂 runner：**0 成本预览 → 显式 `--execute`**。
+"""逐节点思考配置：默认免费预览，--execute 才调用正式 CLI。
 
-`reasoning_effort` 的唯一旋钮是 `contracts/invariants.py::NodeSpec.effort`
-（`novel/cli/main.py::_llm_client` 从那里取，没有环境变量也没有 CLI flag）。
-做 A/B 有两条路，本文件选了后一条：
+本工具只选择配置，不宣称已完成 A/B：实验须另冻结相同正式输入、代码、协议、
+停止规则和独立输出根，保留全部失败与缓存采用。配置进入真实请求身份，不能通过
+修改 NODES 或缓存目录伪造实验。无自动降档、换模型或追加额度。
 
-  ① 直接改 `contracts/invariants.py` 那一格，跑完再改回来。
-     不选的理由是**忘了改回来不会有任何声音**——此后每一次真跑都静默换档，
-     而账本要事后逐行看 `reasoning_effort` 才看得出来。
-  ② 进程内就地覆盖那一格，只活在这一个进程里。⇒ 仓里那份恒是 `None`（即 high），
-     实验臂与交付跑物理上不可能混。
-
-⚠⚠ **换臂之前先换 `NOVEL_CACHE_DIR`，否则这一臂可能一次都不发。**
-  现役 client 不再自动降低 effort；缓存仍按完整请求配置分键，并会在上线前横扫
-  同配置的 Flash→Pro 模型链。若目录里已有这一臂的响应，实验会直接命中缓存，
-  **一次新样本都不发**。2026-08-21 实测踩过一次：27 次调用全是缓存命中。
-  ⇒ 每条实验臂配一个独立缓存目录（`NOVEL_CACHE_DIR=<主仓>/.llm_cache_ab_<臂名>`），
-  跑完看账本 `reasoning_effort` 那一列**全是你要的那一档**才算数。
-
-⚠ 本工具**不构造 argv**。`--` 之后原样透传给 `novel.cli.main::main`，
-  那一串必须逐字取自 `python -m novel.cli preview`（skill 工作流契约：
-  「不要凭文档手拼真实 argv」）。付费确认仍由 CLI 自己的 `--yes` 把关，本工具不代批。
-
-⚠ 覆盖值的取值面不在这里判——转交 `novel/llm/client.py::rungs_from_effort`
-  （`medium`/`xhigh` 被服务端静默映射回 `high`，故关闭式拒绝；`max` 是合法的
-  单一显式实验配置）。若主模型是 Flash，模型兜底仍可能发生；验收须同时核 ledger 的
-  `model` 与产物 `adopted_models`，不能把 Pro 兜底样本归进 Flash 臂。
-
-用法：
-  # 0 成本预览：只摊开覆盖后的显式配置与将要透传的 argv，不跑
-  python -X utf8 tools/effort_ab.py --set str06.stage5.body=low -- \
-      run str06.stage5.body --sid <sid> --base <臂 base> --yes
-
-  # 真跑（`--execute` 是本工具这一层的显式闸；付费闸仍是被透传的 `--yes`）
-  python -X utf8 tools/effort_ab.py --set str06.stage5.body=low --execute -- \
-      run str06.stage5.body --sid <sid> --base <臂 base> --yes
+示例：python tools/effort_ab.py --set str06.stage2.names=low
+  --model deepseek-flash --thinking on -- run str06.stage2.names SID --base ROOT --yes --allow-egress
 """
 from __future__ import annotations
 
 import argparse
-import sys
 from pathlib import Path
+import sys
 
-sys.stdout.reconfigure(encoding='utf-8')
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from contracts.invariants import NODES                 # noqa: E402
-from novel.llm.client import rungs_from_effort         # noqa: E402
-
-
-def _parse_set(spec: str) -> tuple[str, str]:
-    node, sep, effort = spec.partition('=')
-    if not sep:
-        raise SystemExit(f'--set 的形状是 <node>=<effort>，实得 {spec!r}')
-    if node not in NODES:
-        raise SystemExit(f'未知节点 {node!r}；取值面是 contracts/invariants.py::NODES')
-    if not NODES[node].paid:
-        raise SystemExit(
-            f'{node} 的默认路径不调 LLM（NodeSpec.paid=False），覆盖 effort 无处生效')
-    # 取值面由生产那一处判，本工具不复制一份判据。
-    rungs_from_effort(effort)
-    return node, effort
+from contracts.schema.orchestration import LegacyLlmProfile
+from novel.cli import main as cli
+from novel.orchestrator import nodes
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('--set', action='append', dest='sets', default=[], required=True,
-                    metavar='NODE=EFFORT', help='逐节点覆盖，可多次；FC-13 是 OFAT，正常只给一条')
-    ap.add_argument('--execute', action='store_true',
-                    help='真跑。不给时只摊开覆盖与 argv，一个请求都不发')
-    ap.add_argument('cli_argv', nargs=argparse.REMAINDER,
-                    help='`--` 之后原样透传给 novel.cli；逐字取自 preview')
-    a = ap.parse_args(argv)
-
-    overrides = [_parse_set(s) for s in a.sets]
-    passthrough = a.cli_argv[1:] if a.cli_argv[:1] == ['--'] else a.cli_argv
-    if not passthrough:
-        raise SystemExit('`--` 之后要给一条 novel.cli 的 argv（逐字取自 preview）')
-
-    print('# FC-13 effort 换臂')
-    for node, effort in overrides:
-        was = NODES[node].effort
-        print(f'  {node}: effort {was!r} → {effort!r}')
-        print(f'    显式配置 {list(rungs_from_effort(was))} → '
-              f'{list(rungs_from_effort(effort))}')
-    print(f'  透传 argv: {" ".join(passthrough)}')
-    from novel.config import load_config
-    print(f'  缓存目录: {load_config().cache_dir}')
-    print('  ⚠ 上面这个目录里若已有本臂同请求的 Flash/Pro 响应，本臂可能一次都不发；'
-          '换臂请一并换 NOVEL_CACHE_DIR，并核 ledger.model 与 adopted_models。')
-    print(f'  真跑: {"是（--execute）" if a.execute else "否（0 成本预览）"}')
-    if not a.execute:
-        print('  ⚠ 未加 --execute，到此为止；仓内 NodeSpec.effort 一个字没动。')
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--set', required=True, metavar='NODE=EFFORT')
+    parser.add_argument('--model', required=True)
+    parser.add_argument('--thinking', required=True, choices=('on', 'off'))
+    parser.add_argument('--execute', action='store_true')
+    parser.add_argument('cli_argv', nargs=argparse.REMAINDER)
+    args = parser.parse_args(argv)
+    node, sep, effort = args.set.partition('=')
+    if not sep:
+        parser.error('--set 必须是 NODE=EFFORT')
+    passthrough = args.cli_argv[1:] if args.cli_argv[:1] == ['--'] else args.cli_argv
+    invocation = cli._parser().parse_args(passthrough)
+    if invocation.cmd != 'run' or invocation.node != node:
+        parser.error('一次只比较一个节点；透传必须是同一节点的 run 命令')
+    if any(getattr(invocation, key, None) is not None for key in (
+            'request_profile', 'executor_backend', 'legacy_provider', 'legacy_model',
+            'legacy_effort', 'legacy_thinking', 'reasoning_effort')):
+        parser.error('请求配置由本工具显式提供，透传命令不能再声明第二份')
+    if any(getattr(invocation, key, None) for key in (
+            'wire_dir', 'adopt_root', 'resample', 'reason', 'body_chapters', 'run_id')):
+        parser.error('本工具不混入历史采用、重采、选章或运行身份覆盖')
+    profile = nodes.resolve_request_profile(node, LegacyLlmProfile(
+        provider='deepseek', model=args.model, reasoning_effort=effort, thinking_mode=args.thinking))
+    invocation.request_profile = profile.model_dump_json()
+    print('请求配置：' + profile.model_dump_json())
+    cli._cmd_preview(invocation)
+    if not args.execute:
+        print('免费预览结束；没有请求模型。')
         return 0
-
-    for node, effort in overrides:
-        NODES[node] = NODES[node]._replace(effort=effort)      # 只活在本进程
-
-    from novel.cli.main import main as cli_main
-    return cli_main(passthrough)
+    # 不代填 --yes / --allow-egress，正式CLI仍独立检查两项授权。
+    return cli.main([*passthrough, '--request-profile', profile.model_dump_json()])
 
 
 if __name__ == '__main__':

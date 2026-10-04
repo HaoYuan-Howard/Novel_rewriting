@@ -54,6 +54,8 @@ from contracts.schema.workflow import STR06_RC_VERSION
 from contracts.schema.source import CharactersCore, NameProjection, NameStructure, render_form
 from novel.core.name_materials import expand_surface_releases, family_form_literals, withheld_name_literals
 from novel.core.text import count_non_whitespace_chars, kp_statement
+from novel.core.material_trace import MaterialIssue, MaterialLines, MaterialPart, MaterialSource
+from novel.core.validation import ValidationMessage
 
 # ═════════════════════════════════════════════════════════════════════════════
 # 一、字面扫描（原 `literal_scan.py`）
@@ -143,21 +145,33 @@ def validate_positive_materials(
     internal_ids: Iterable[str],
 ) -> list[str]:
     """只查调用方明确分出的正向材料；先认领全称再查残余专名与内部句柄。"""
-    errors: list[str] = []
+    return [issue.message for issue in positive_material_issues(
+        {where: MaterialPart(text) for where, text in parts.items()},
+        released=released, withheld=withheld, internal_ids=internal_ids)]
+
+
+def positive_material_issues(
+    parts: Mapping[str, MaterialPart], *, released: Iterable[str], withheld: Iterable[str],
+    internal_ids: Iterable[str], chapter_ordinal: int = 0,
+) -> tuple[MaterialIssue, ...]:
+    """字面判据的唯一结构化结果；来源只来自显式投影，不解析报错文字。"""
+    issues: list[MaterialIssue] = []
     identities = tuple(sorted(set(internal_ids) - {'', 'narrator'}))
     identity_pattern = re.compile(r'(?<![A-Za-z0-9_])(?:'
                                   + '|'.join(re.escape(s) for s in identities)
                                   + r')(?![A-Za-z0-9_])') if identities else None
     released, withheld = tuple(released), tuple(withheld)
-    for where, text in parts.items():
+    for where, part in parts.items():
+        text = part.text
         for claim in uncovered_occurrences(text, withheld, claim_spans(text, released)):
-            errors.append(f'positive_material_leak[{where}@{claim.start}]：'
-                          f'未释放专名字面 {claim.literal!r}')
+            sources = tuple(source for source in part.sources if claim.literal in source.text)
+            issues.append(MaterialIssue('positive_material_leak', where, claim.start,
+                                        claim.literal, sources, chapter_ordinal))
         if identity_pattern is not None:
             for match in identity_pattern.finditer(text):
-                errors.append(f'internal_id_leak[{where}@{match.start()}]：'
-                              f'内部句柄 {match.group()!r} 不得进入写作材料')
-    return errors
+                issues.append(MaterialIssue('internal_id_leak', where, match.start(),
+                                            match.group()))
+    return tuple(issues)
 
 
 
@@ -205,25 +219,49 @@ def render_hook_context(context: HookContext) -> str:
 
 def validate_hook_materials(context: HookContext, *, internal_ids: Iterable[str]) -> list[str]:
     """直接检查实际 Hook 渲染字节，明确剔除禁止提前兑现分区。"""
+    return [ValidationMessage(issue.message, issue.identity)
+            for issue in hook_material_issues(context, internal_ids=internal_ids)]
+
+
+def hook_material_issues(context: HookContext, *,
+                         internal_ids: Iterable[str]) -> tuple[MaterialIssue, ...]:
     text = render_hook_context(context)
     before, tail = text.split('【禁止提前兑现】', 1)
     positive = before + '【叙述与组织】' + tail.split('【叙述与组织】', 1)[1]
-    return validate_positive_materials(
-        {'hook/writer_view': positive},
+    sources = [MaterialSource('hook', 'hook', field, getattr(context, field))
+               for field in ('design_brief', 'delivery_brief')]
+    sources.extend(MaterialSource('hook', fact.established_by, f'opening_facts/{i}', fact.text)
+                   for i, fact in enumerate(context.opening_facts))
+    for i, item in enumerate(context.materials):
+        if item.presentation is not None:
+            sources.append(MaterialSource('hook', item.beat_ref, f'materials/{i}/presentation', item.presentation))
+        else:
+            sources.append(MaterialSource('hook', item.beat_ref, f'materials/{i}/event', item.event or ''))
+            sources.extend(MaterialSource('hook', item.beat_ref, f'materials/{i}/deltas/{j}', value)
+                           for j, value in enumerate(item.deltas))
+    return positive_material_issues(
+        {'hook/writer_view': MaterialPart(positive, tuple(sources))},
         released={s for r in context.usable_surfaces for s in r.surfaces},
         withheld=context.withheld_literals, internal_ids=internal_ids)
 
 def validate_writer_materials(packet: ChapterWriterPacket, *, internal_ids: Iterable[str]) -> list[str]:
     """检查实际 WriterPacket 六分区；禁区及明确禁止的条目不算正向材料。"""
-    view = build_writer_packet(packet)
+    return [ValidationMessage(issue.message, issue.identity)
+            for issue in writer_material_issues(packet, internal_ids=internal_ids)]
+
+
+def writer_material_issues(packet: ChapterWriterPacket, *,
+                          internal_ids: Iterable[str]) -> tuple[MaterialIssue, ...]:
+    view, material_parts = _build_writer_packet(packet)
     parts = {}
     for partition in ('must_realize', 'must_respect', 'continuity', 'creative_guidance', 'background'):
-        for index, line in enumerate(getattr(view, partition), 1):
-            if '·明确禁止：' not in line:
-                parts[f'ch{view.chapter_ordinal:02d}/{partition}/{index}'] = line
-    return validate_positive_materials(
+        for index, part in enumerate(material_parts[partition], 1):
+            if part.positive:
+                parts[f'ch{view.chapter_ordinal:02d}/{partition}/{index}'] = part
+    return positive_material_issues(
         parts, released=packet.chapter.released_surfaces,
-        withheld=packet.chapter.withheld_literals, internal_ids=internal_ids)
+        withheld=packet.chapter.withheld_literals, internal_ids=internal_ids,
+        chapter_ordinal=packet.chapter.chapter_ordinal)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -638,7 +676,7 @@ DESIGN_RULES = """任务：仅依据 Brief/义务清单/Identity/OutputConstrain
 知情增量的键与模式全部由 compiler 派生，你不输出任何 ID、编号或归一化数值
 （I-21）。机械字段（world_rules、expression 保留决定、narration、pov/voice、
 entry 的 recap/锚点缺省）也由代码派生——你只写判断与例外。
-所有类别义务及 satisfaction 都要考虑。**依赖顺序**：被其它义务 requires_cores
+所有类别义务及 satisfaction 都要考虑。**依赖顺序**：被其它义务 requires
 依赖的义务必须**在依赖方之前完成**——承载位置（拍序）先于依赖方的承载位
 （同场按拍序）。人物动机与阅读效果以义务为准：brief 与 voice 只做呈现表达，
 不得改写义务给出的事实、动机与满足条件。
@@ -647,7 +685,7 @@ entry 的 recap/锚点缺省）也由代码派生——你只写判断与例外�
 目标状态只存会限制后续的持续事实；即时动作留在事件。初始态由你显式选择，不复制源书末态。
 
 【义务承载标注（real，核心新增）】
-义务清单给每条义务一个编号 obNN（含 kind、是否必保、锁摘要与 satisfaction）。
+Brief.requirements 以 obNN 为键，包含完整语义、依赖 requires、锁与 satisfaction。
 在**承载该义务的拍**上写 real:["obNN",…]：一条义务可标多拍——**末次标注拍**
 是它的接受拍（单一最终验收位），其余标注拍是支撑位。
 认知变化清单由代码给出短引用 obNN.kNN（持有者、命题与模式已固定）。在对应
@@ -655,9 +693,9 @@ entry 的 recap/锚点缺省）也由代码派生——你只写判断与例外�
 后证实必须分别落拍；每个引用恰好一次。你不重写持有者、命题、模式或机械 ID。
 读者 known 的变化必须另写 confirms:{domain,key,subjects,holder}，明确确认的
 目标事实地址；必须是该拍及之前已建立的实际事实。其它认知变化不写 confirms。
-- 每条**必保**（must=true）义务至少标注一拍，漏标即拒（机械校验）；
+- 每条**必保**（must_preserve=true）义务至少标注一拍，漏标即拒（机械校验）；
 - 承载位必须能单独完成该义务的 satisfaction（复合义务前半用支撑拍）；
-- 若 A requires B：B 的承载场景不得晚于 A 的承载场景；同场拍序交错合法；
+- 若 A requires B：B 的接受拍必须早于 A 的接受拍；支撑拍可以交错；
 - series 成员是同一机制的离散兑现时点：接受拍必须**不同拍**，不得合并；
 - 认知变化清单／kf 由 compiler／你的 state 面按锁规则兑现
   （漏兑现即拒）。
@@ -751,12 +789,14 @@ def design_rules(*, known_char_ids: set[str] | None = None,
     if knowledge_refs is not None:
         placement['properties']['ref']['enum'] = sorted(knowledge_refs)
         branches = [
-            {'if': {'properties': {'ref': {'const': ref}}},
+            {'if': {'properties': {'ref': {'enum': refs}}},
              'then': {'required': ['confirms'], 'properties': {'confirms': {
                  'allOf': [{'$ref': '#/$defs/StateAddress'},
                            {'properties': {'domain': {'enum': ['character', 'relation', 'world']}}}]}}}
              if confirms else {'properties': {'confirms': {'type': 'null'}}}}
-            for ref, confirms in sorted(knowledge_refs.items())]
+            for confirms in (False, True)
+            if (refs := sorted(ref for ref, required in knowledge_refs.items()
+                               if required == confirms))]
         if branches:
             placement['allOf'] = branches
     if known_char_ids is not None:
@@ -809,7 +849,13 @@ NAMES_RULES = """任务：登记全书源名称结构（姓氏家族、名、化
      · 单名写 {given}；化名写 {alias:al_x}；
      · 纯称谓（夫君、表弟、嫂嫂等不含姓名部件的）写 null；
      · 模板渲染结果必须与 surface 逐字一致；纯称谓里不得含本人姓或名字面。
-输出 JSON 顶层：{"families":{...},"people":{...}}"""
+3. resolutions：核验原文的疑似姓名异写／笔误，逐条给 {literal,status,char_id,surface,basis,reason}。
+   literal原样抄原字面；basis给证据清单中的{segment,quote}，引文逐字保留并覆盖异常字面及判断上下文。
+   上下文足以证明同一人物时status="same"，char_id与surface指向人物账已有称谓，reason说明依据；
+   只在异常字面出现的证据局部授权归一，不授权全书替换。证据不足／有不同解释时status="unresolved"，
+   char_id与surface均null并说明歧义；不得凭读音、字形或常见姓名猜测，也不得把真实化名误当笔误。
+   没有发现给空数组；同一局部字面不可有相互冲突的指向。原文、引文与逐章观察不由本节点改写。
+输出 JSON 顶层：{"protocol_version":"stage2-names-v2","families":{...},"people":{...},"resolutions":[]}"""
 
 HOOK_DESIGN_RULES = """任务：为整本小说设计读者入口（楔子）的结构设计。brief 明确入口知识、跳时定位与末尾悬念；POV 可以与正文不同，事实和披露边界一致。只输出设计 JSON，不写 prose
 （wire 协议 stage4-hook-design-v1）。位置引用只给分量（scene=场景 id、beat=拍 id，
@@ -1676,13 +1722,10 @@ def _scene_label(index: int) -> str:
 
 
 def build_writer_packet(packet: ChapterWriterPacket) -> WriterPacket:
-    """章包 → WriterPacket（R2 两层 IR 的写手层；确定性、纯函数）。
+    """正式阅读面；来源投影仅供同源机械验证，不进入模型请求。"""
+    return _build_writer_packet(packet)[0]
 
-    按 `contracts/schema/consumption.py::STR06_FIELD_DELIVERY` 的送达身份把
-    Machine 章包分拣进六分区：全部自然语言条目、无内部 ID 与字段名（模型的
-    构造期校验是最后一道闸）。audit_only 材料（禁用字面、消费身份摘要、
-    依赖边、来源锚）一律不进。
-    """
+
 def _ordered_dedup(lines: Iterable[str]) -> tuple[str, ...]:
     """保序去重：同一条目（逐字）只保留首次出现——不按相似度删。"""
     seen: set[str] = set()
@@ -1694,8 +1737,8 @@ def _ordered_dedup(lines: Iterable[str]) -> tuple[str, ...]:
     return tuple(out)
 
 
-def build_writer_packet(packet: ChapterWriterPacket) -> WriterPacket:
-    """章包 → WriterPacket（R2 两层 IR 的写手层；确定性、纯函数）。
+def _build_writer_packet(packet: ChapterWriterPacket) -> tuple[WriterPacket, dict[str, tuple[MaterialPart, ...]]]:
+    """章包 → WriterPacket与来源（R2 两层 IR 的写手层；确定性、纯函数）。
 
     按 `contracts/schema/consumption.py::STR06_FIELD_DELIVERY` 的送达身份把
     Machine 章包分拣进六分区：全部自然语言条目、无内部 ID 与字段名（模型的
@@ -1710,29 +1753,46 @@ def build_writer_packet(packet: ChapterWriterPacket) -> WriterPacket:
     """
     chapter = packet.chapter
     brief = packet.book_brief
-    must_realize: list[str] = []
-    must_respect: list[str] = []
-    continuity: list[str] = []
-    creative: list[str] = []
-    background: list[str] = []
-    guard_only: list[str] = []
+    must_realize = MaterialLines()
+    must_respect = MaterialLines()
+    continuity = MaterialLines()
+    creative = MaterialLines()
+    background = MaterialLines()
+    guard_only = MaterialLines()
+
+    def source(kind, ref, field, text, position=''):
+        return MaterialSource(kind, ref or '', field, text or '', position)
+
+    def fact_source(value, field, position):
+        knowledge = isinstance(value, KnowledgeEntry) or (
+            getattr(value, 'domain', None) is EffectDomain.KNOWLEDGE)
+        text = value.proposition if isinstance(value, KnowledgeEntry) else value.value
+        kind = 'knowledge' if knowledge and value.key.startswith('kp_') else (
+            'world' if value.key.startswith('wc_') else 'design')
+        return source(kind, value.key if kind != 'design' else getattr(value, 'established_by', position),
+                      field, text, position)
 
     # ── 书级层（每章一次：世界边界、人称、风格、声线、表达机制、章目的） ──
-    for rule in brief.world_rules:
-        must_respect.append(f'世界边界（不要在正文中讲解）：{rule}')
-    creative.append(f'全书风格：{brief.book_style}')
+    for rule_index, rule in enumerate(brief.world_rules):
+        must_respect.append(f'世界边界（不要在正文中讲解）：{rule}',
+                            source('design', 'book', f'world_rules/{rule_index}', rule))
+    creative.append(f'全书风格：{brief.book_style}', source('design', 'book', 'book_style', brief.book_style))
     must_respect.append('叙述人称：' + ('第一人称，全文由唯一叙述者讲述' if brief.narration.person == 'first'
                                      else '第三人称，限于本场指定视角或旁白叙述')
                        + '；对白中的自称不改变正文叙述人称。')
-    creative.extend(f'表达机制：{choice.statement}' for choice in brief.expression_decisions)
+    for choice in brief.expression_decisions:
+        creative.append(f'表达机制：{choice.statement}',
+                        source('expression', choice.ex_id, 'statement', choice.statement))
     chapter_names: dict[str, tuple[str, ...]] = {}
     for context in chapter.scenes:
         for char_id, faces in _names(context.verification_ir.released_surfaces).items():
             chapter_names.setdefault(char_id, faces)
     for voice in brief.character_voices:
         if chapter_names.get(voice.char_id):
-            creative.append(f'{_name(chapter_names, voice.char_id)}的声线：{voice.voice}')
-    creative.append(f'本章目的（第{chapter.chapter_ordinal}章）：{chapter.purpose}')
+            creative.append(f'{_name(chapter_names, voice.char_id)}的声线：{voice.voice}',
+                            source('design', voice.char_id, 'voice', voice.voice))
+    creative.append(f'本章目的（第{chapter.chapter_ordinal}章）：{chapter.purpose}',
+                    source('design', f'chapter:{chapter.chapter_ordinal}', 'purpose', chapter.purpose))
 
     # ── 章级承接（R2.6：entry＋上一章末场合成） ──
     entry = chapter.continuity.entry
@@ -1748,17 +1808,22 @@ def build_writer_packet(packet: ChapterWriterPacket) -> WriterPacket:
             line += f'，收尾时在场：{present}'
         line += f'；本章以{_TRANSITION_WORDINGS[entry.transition]}开场，' \
                 f'{_RECAP_WORDINGS[entry.recap]}。'
-        continuity.append(line)
+        continuity.append(line, source('design', ending.ending_scene_id, 'final_beat_event', ending.final_beat_event),
+                          source('design', ending.ending_scene_id, 'driver.turn', ending.driver_turn))
     if chapter.continuity.anchor_event is not None:
         anchor = chapter.continuity.anchor_event
         if entry.transition == 'immediate_continuation':
-            continuity.append(f'本章紧接上一章末拍「{anchor}」继续发展，接续该处的动作与张力。')
+            continuity.append(f'本章紧接上一章末拍「{anchor}」继续发展，接续该处的动作与张力。',
+                              source('design', entry.anchor, 'entry.anchor', anchor))
         elif entry.transition == 'flashback':
-            continuity.append(f'本章以倒叙回望较早事件「{anchor}」，不把它写成当前刚发生。')
+            continuity.append(f'本章以倒叙回望较早事件「{anchor}」，不把它写成当前刚发生。',
+                              source('design', entry.anchor, 'entry.anchor', anchor))
         else:
-            continuity.append(f'本章以{_TRANSITION_WORDINGS[entry.transition]}进入，衔接所指事件「{anchor}」。')
+            continuity.append(f'本章以{_TRANSITION_WORDINGS[entry.transition]}进入，衔接所指事件「{anchor}」。',
+                              source('design', entry.anchor, 'entry.anchor', anchor))
     if entry.carryover:
-        continuity.append(f'延续进本章的张力：{entry.carryover}（自然接续，不复述）')
+        continuity.append(f'延续进本章的张力：{entry.carryover}（自然接续，不复述）',
+                          source('design', f'chapter:{chapter.chapter_ordinal}', 'entry.carryover', entry.carryover))
 
     # ── 场景层 ──
     expressions = {choice.ex_id: choice.statement
@@ -1776,10 +1841,14 @@ def build_writer_packet(packet: ChapterWriterPacket) -> WriterPacket:
         beat_event = {b.beat_ref.rsplit('#', 1)[-1]: b.event for b in ir.beats}
         pov = '旁白叙述' if brief_view.pov == 'narrator' else _name(names, brief_view.pov)
         creative.append(f'{label}（视角：{pov}；口吻：{brief_view.voice}）导演说明：'
-                        f'{brief_view.realization_brief}')
-        creative.append(f'{label}驱动：{brief_view.scene_driver_summary}')
-        for hint in brief_view.delivery_hints:
-            creative.append(f'{label}表达提示：{hint}')
+                        f'{brief_view.realization_brief}',
+                        source('design', context.scene_id, 'delivery.voice', brief_view.voice),
+                        source('design', context.scene_id, 'realization_brief', brief_view.realization_brief))
+        creative.append(f'{label}驱动：{brief_view.scene_driver_summary}',
+                        source('design', context.scene_id, 'driver', brief_view.scene_driver_summary))
+        for hint_index, hint in enumerate(brief_view.delivery_hints):
+            creative.append(f'{label}表达提示：{hint}',
+                            source('design', context.scene_id, f'delivery_hints/{hint_index}', hint))
         # 义务按承载拍分组（R10b：验收拍序＋同场支撑拍序）。义务内容与
         # 位置经 zip 对齐（project_context 同序生成；id 不做连接键——
         # audit 位变异不得改变阅读面）。
@@ -1797,44 +1866,58 @@ def build_writer_packet(packet: ChapterWriterPacket) -> WriterPacket:
             effects = [_delta_line(names, d) for d in beat.deltas]
             if effects:
                 line += '——拍末应成立：' + '；'.join(effects)
-            must_realize.append(line)
+            must_realize.append(line, source('design', beat.beat_ref, 'event', beat.event, beat.beat_ref),
+                                *(fact_source(d, f'target_delta/{i}', beat.beat_ref)
+                                  for i, d in enumerate(beat.deltas)))
             reads = [_state_entry_line(names, r) if hasattr(r, 'value')
                      else _knowledge_entry_line(names, r) for r in beat.reads]
-            for read in reads:
-                must_respect.append(f'{label}·第{no}拍依赖的事实：{read}')
+            for read_index, (read, value) in enumerate(zip(reads, beat.reads)):
+                must_respect.append(f'{label}·第{no}拍依赖的事实：{read}',
+                                    fact_source(value, f'reads/{read_index}', beat.beat_ref))
             for obligation in carried_by_beat.get(no, ()):
                 support = sorted(set(support_of.get(no, ())))
                 lead = (f'（第{"、".join(str(m) for m in support)}拍起铺垫）'
                         if support else '')
                 if obligation.statement == beat_event[beat_id]:
                     must_realize.append(f'{label}·第{no}拍·义务{lead}（即本拍事件）'
-                                        f'——本章结束后须成立：{obligation.satisfaction}')
+                                        f'——本章结束后须成立：{obligation.satisfaction}',
+                                        source('obligation', obligation.obligation_id, 'satisfaction',
+                                               obligation.satisfaction, beat.beat_ref))
                 else:
                     must_realize.append(f'{label}·第{no}拍·义务{lead}：'
                                         f'{obligation.statement}'
-                                        f'（本章结束后须成立：{obligation.satisfaction}）')
+                                        f'（本章结束后须成立：{obligation.satisfaction}）',
+                                        source('obligation', obligation.obligation_id, 'statement',
+                                               obligation.statement, beat.beat_ref),
+                                        source('obligation', obligation.obligation_id, 'satisfaction',
+                                               obligation.satisfaction, beat.beat_ref))
             for ex_id in beat.expression_refs:
                 statement = expressions.get(ex_id)
                 if statement:
                     must_realize.append(f'{label}·第{no}拍·表达任务：{statement}'
                                         '（呈现目标——通过话语与内心反应的落差实现，'
-                                        '不写成解释性总结句）')
+                                        '不写成解释性总结句）',
+                                        source('expression', ex_id, 'statement', statement, beat.beat_ref))
         for op in ir.thread_ops:
             kind = _THREAD_KIND_WORDINGS[op.kind]
+            thread_sources = tuple(source('design', op.ref, field, getattr(op, field), context.scene_id)
+                                   for field in ('text', 'progress', 'resolution'))
             if op.op == 'open':
                 must_realize.append(f'{label}·开启线索：{_name(names, op.subject)}'
-                                    f'的{kind}「{op.text}」')
+                                    f'的{kind}「{op.text}」', *thread_sources)
             elif op.op == 'advance':
                 must_realize.append(f'{label}·推进线索：{_name(names, op.subject)}'
-                                    f'的{kind}「{op.text}」——{op.progress}')
+                                    f'的{kind}「{op.text}」——{op.progress}', *thread_sources)
             else:
                 must_realize.append(f'{label}·收束线索：{_name(names, op.subject)}'
-                                    f'的{kind}「{op.text}」——{op.resolution}')
+                                    f'的{kind}「{op.text}」——{op.resolution}', *thread_sources)
         # 不可违背：入场事实、知情边界、称谓许可（只在变化处）、场景 avoid
-        for entry_state in ir.entry_state:
-            must_respect.append(f'{label}·入场已成立：{_state_entry_line(names, entry_state)}')
-        for knowledge in ir.entry_knowledge:
-            must_respect.append(f'{label}·知情边界：{_knowledge_entry_line(names, knowledge)}')
+        for entry_index, entry_state in enumerate(ir.entry_state):
+            must_respect.append(f'{label}·入场已成立：{_state_entry_line(names, entry_state)}',
+                                fact_source(entry_state, f'entry_state/{entry_index}', context.scene_id))
+        for entry_index, knowledge in enumerate(ir.entry_knowledge):
+            must_respect.append(f'{label}·知情边界：{_knowledge_entry_line(names, knowledge)}',
+                                fact_source(knowledge, f'entry_knowledge/{entry_index}', context.scene_id))
         fresh: list[str] = []
         for release in ir.released_surfaces:
             faces = tuple(s for s in release.surfaces if s not in listed_surfaces)
@@ -1851,7 +1934,7 @@ def build_writer_packet(packet: ChapterWriterPacket) -> WriterPacket:
             faces = '、'.join(introduction.surface_introductions)
             must_respect.append(f'{label}·第{no}拍起才可用称谓：{faces}')
         for prohibition in ir.prohibitions:
-            must_respect.append(f'{label}·明确禁止：{prohibition}')
+            must_respect.append(f'{label}·明确禁止：{prohibition}', positive=False)
         # 承接：无操作的相关开放线程（非 question，章内按线程去重）＋前场事实视图
         for thread in ir.open_threads:
             if thread.kind == 'question' or thread.ref in seen_open_threads:
@@ -1859,21 +1942,25 @@ def build_writer_packet(packet: ChapterWriterPacket) -> WriterPacket:
             seen_open_threads.add(thread.ref)
             continuity.append(f'仍影响人物选择的开放线索（不必点明）：'
                               f'{_name(names, thread.subject)}的'
-                              f'{_THREAD_KIND_WORDINGS[thread.kind]}「{thread.text}」')
-        for fact in ir.continuity_fact_view:
-            continuity.append(f'前场已成立：{fact.split("：", 1)[-1]}')
+                              f'{_THREAD_KIND_WORDINGS[thread.kind]}「{thread.text}」',
+                              source('design', thread.ref, 'text', thread.text, context.scene_id))
+        for fact_index, fact in enumerate(ir.continuity_fact_view):
+            continuity.append(f'前场已成立：{fact.split("：", 1)[-1]}',
+                              source('projection', context.scene_id, f'continuity_fact_view/{fact_index}', fact))
         # 背景：收窄后的入场基线；章内同一**条目**只列一次（章首一次、场内
         # 只补新条目——去重键是不带场标的条目内容，跨场重复的场标不算差异）
-        for state_entry in ir.background_state:
+        for entry_index, state_entry in enumerate(ir.background_state):
             key = _state_entry_line(names, state_entry)
             if key not in seen_background:
                 seen_background.add(key)
-                background.append(f'{label}·{key}')
-        for knowledge in ir.background_knowledge:
+                background.append(f'{label}·{key}',
+                                  fact_source(state_entry, f'background_state/{entry_index}', context.scene_id))
+        for entry_index, knowledge in enumerate(ir.background_knowledge):
             key = _knowledge_entry_line(names, knowledge)
             if key not in seen_background:
                 seen_background.add(key)
-                background.append(f'{label}·{key}')
+                background.append(f'{label}·{key}',
+                                  fact_source(knowledge, f'background_knowledge/{entry_index}', context.scene_id))
         # 禁区：未到时点的读者确认＋受保护的问题线程
         for pending in ir.pending_reader_confirmations:
             if pending.in_scene:
@@ -1894,7 +1981,7 @@ def build_writer_packet(packet: ChapterWriterPacket) -> WriterPacket:
             for g in scene.verification_ir.unanswered_guards):
         guard_only.append(f'原文未回答的悬念「{guard}」：正文不得给出答案，'
                           '也不得借人物之口补出答案（原文保持留白）')
-    return WriterPacket(
+    view = WriterPacket(
         chapter_ordinal=chapter.chapter_ordinal,
         must_realize=tuple(must_realize),
         must_respect=_ordered_dedup(must_respect),
@@ -1902,6 +1989,14 @@ def build_writer_packet(packet: ChapterWriterPacket) -> WriterPacket:
         creative_guidance=tuple(creative),
         background=tuple(background),
         guard_only=_ordered_dedup(guard_only))
+    materials = {
+        'must_realize': must_realize.parts(),
+        'must_respect': must_respect.parts(deduplicate=True),
+        'continuity': continuity.parts(deduplicate=True),
+        'creative_guidance': creative.parts(),
+        'background': background.parts(),
+    }
+    return view, materials
 
 
 def project_chapter_materials(book_ir: WriterBookIR, chapter_ordinal: int) -> ChapterIR:

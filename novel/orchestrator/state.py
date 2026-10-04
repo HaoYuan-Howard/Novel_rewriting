@@ -617,7 +617,7 @@ def _owner_issue_states(novel_dir: Path) -> list['OwnerIssueState']:
 
     resolved 不进投影（留账不是待修订）；文件损坏即显式拒绝——它是续跑判定
     的输入，静默当「没有问题」会把修订循环变成静默跳过（I-34）。v1 记录经
-    统一读口迁移升 v2（R8a）；``product_sha256`` 采本快照时的当前摘要（None＝
+    统一读口解码为 v3；``product_sha256`` 采本快照时的当前摘要（None＝
     owner 产物不在盘上，门控见 `resume_verdict` 的 owner_revision 分支）。
     """
     import json as _json
@@ -645,7 +645,7 @@ def _owner_issue_states(novel_dir: Path) -> list['OwnerIssueState']:
         except ValueError as exc:
             raise ValueError(
                 f'回派账 {path.name} 形状损坏：{exc}；拒绝当作「没有问题」继续，'
-                '先修复或删除该记录再续跑') from exc
+                '先保留原记录并核验其损坏原因，显式恢复后再续跑') from exc
         if record.status != 'open':
             continue
         states.append(OwnerIssueState(
@@ -654,7 +654,7 @@ def _owner_issue_states(novel_dir: Path) -> list['OwnerIssueState']:
             codes=sorted({issue.code for issue in record.issues}),
             against_sha256=record.against_sha256,
             product_sha256=_digest_or_none(record.owner),
-            no_progress=record.no_progress))
+            no_progress=record.no_progress, dispatch_pending=record.dispatch_pending))
     return states
 
 
@@ -815,7 +815,8 @@ def resume_verdict(
             issue.against_sha256,
             getattr(issue, 'product_sha256', None),
             issue.rounds_total,
-            no_progress=getattr(issue, 'no_progress', False))
+            no_progress=getattr(issue, 'no_progress', False),
+            dispatch_pending=issue.dispatch_pending)
         if verdict == 'redo':
             return RESUME_REDO, (
                 f'owner_revision：{issue.raised_by} 报告 typed 机械问题'

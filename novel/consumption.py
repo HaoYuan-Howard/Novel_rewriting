@@ -117,6 +117,7 @@ CONSUMED_PROJECTIONS: Final[dict[str, dict[str, Projection]]] = {
     'str06.stage2.associate': {
         STR06_STAGE2_OBS_BOOK: artifact_payload,
         STR06_STAGE2_OBS_CHAPTER: artifact_payload,
+        STR06_STAGE2_OBS_NAMES: artifact_payload,
     },
     'str06.stage2.compile': {
         STR06_STAGE2_OBS_BOOK: artifact_payload,

@@ -25,6 +25,12 @@ from novel.orchestrator.nodes import is_paid, write_effect
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
+def _step_stub(**values):
+    # runner副作用测试的Step替身仍遵循现役配置字段形状。
+    backend = values.get('executor_backend')
+    values.setdefault('request_profile', backend.profile if backend is not None else None)
+    return SimpleNamespace(**values)
+
 
 def _operator_script(name: str):
     import importlib
@@ -39,7 +45,7 @@ def _operator_script(name: str):
 def test_run_step_closes_execution_with_crash_when_node_spawn_raises(
         monkeypatch, tmp_path):
     runner = _operator_script('run_step')
-    step = SimpleNamespace(
+    step = _step_stub(
         label='stage2 全局事实',
         argv=['python', '-m', 'novel.cli', 'run', 'str06.stage2.book', '42'],
         cwd=str(REPO_ROOT), paid=True, writes='stage2/observations/book.json',
@@ -151,7 +157,7 @@ def test_run_step_permit_file_preview_never_remints_or_revalidates(
     runner = _operator_script('run_step')
     permit = _execution_permit(base=str(tmp_path.resolve()))
     token = _write_ready_next(tmp_path / 'operator-next.json', permit)
-    step = SimpleNamespace(
+    step = _step_stub(
         label='stage2 全局事实',
         argv=['python', '-m', 'novel.cli', 'run', 'str06.stage2.book', '42'],
         cwd=str(REPO_ROOT), paid=True,
@@ -179,6 +185,7 @@ def test_run_step_permit_file_preview_never_remints_or_revalidates(
     assert built == [(('str06.stage2.book', '42', []), {
         'base': str(tmp_path.resolve()),
         'executor_backend': None,
+        'request_profile': None,
         'egress_authorized': None,
         'placeholders': True,
     })]
@@ -250,7 +257,7 @@ def test_run_step_projects_frozen_executor_and_egress_into_production_steps(
     )
     built: list[tuple] = []
     profile = profiles.executor_default
-    step = SimpleNamespace(
+    step = _step_stub(
         label='stage2 全局事实',
         argv=['python', '-m', 'novel.cli', 'run', 'str06.stage2.book', '42'],
         cwd=str(REPO_ROOT), paid=True,
@@ -280,12 +287,14 @@ def test_run_step_projects_frozen_executor_and_egress_into_production_steps(
 
     assert rc == 0
     assert built[0][1]['executor_backend'] == profile
+    assert built[0][1]['request_profile'] == profile.profile
     assert built[0][1]['egress_authorized'] is True
     payload = json.loads(evidence.read_bytes())
-    assert payload['schema'] == 'novel-operator-step-evidence-v4'
+    assert payload['schema'] == 'novel-operator-step-evidence-v5'
     assert payload['commander']['run_id'] == 'outer-1'
     assert payload['execution_permit'] == permit.model_dump(mode='json')
     assert payload['steps'][0]['executor_backend'] == profile.model_dump(mode='json')
+    assert payload['steps'][0]['request_profile'] == profile.profile.model_dump(mode='json')
     assert payload['steps'][0]['egress_authorized'] is True
 
 
@@ -302,7 +311,7 @@ def test_run_step_with_frozen_profile_refuses_execute_without_both_authorization
         profiles=profiles,
         executor_backend=lambda _node: profiles.executor_default,
     )
-    step = SimpleNamespace(
+    step = _step_stub(
         label='stage2 全局事实', argv=['python'], cwd=str(REPO_ROOT),
         paid=True, writes='stage2/observations/book.json', note=None,
         executor_backend=profiles.executor_default, egress_authorized=False)
@@ -345,7 +354,7 @@ def test_headless_execute_claims_before_evidence_and_releases_after_steps(
     )
     permit = _execution_permit(base=str(tmp_path.resolve()))
     token = _write_execution_token(tmp_path / 'execution-token.json', permit)
-    step = SimpleNamespace(
+    step = _step_stub(
         label='stage2 全局事实',
         argv=['python', '-m', 'novel.cli', 'run', 'str06.stage2.book', '42'],
         cwd=str(REPO_ROOT), paid=True,
@@ -436,7 +445,7 @@ def test_headless_execute_releases_claim_when_node_spawn_raises(
         executor_backend=lambda _node: profiles.executor_default,
     )
     permit = _execution_permit(base=str(tmp_path.resolve()))
-    step = SimpleNamespace(
+    step = _step_stub(
         label='stage2 全局事实',
         argv=['python', '-m', 'novel.cli', 'run', 'str06.stage2.book', '42'],
         cwd=str(REPO_ROOT), paid=True,
@@ -500,7 +509,7 @@ def test_delayed_headless_run_step_after_parent_close_never_writes_or_spawns(
         runner.operator_planner, 'permit', lambda *_args, **_kwargs: permit)
     monkeypatch.setattr(
         runner, 'build_steps',
-        lambda *_args, **_kwargs: [SimpleNamespace(
+        lambda *_args, **_kwargs: [_step_stub(
             label='stage2 全局事实', argv=['python'], cwd=str(REPO_ROOT),
             paid=True, writes='stage2/observations/book.json', note=None,
             executor_backend=profiles.executor_default,
@@ -647,7 +656,7 @@ def test_run_step_evidence_serializes_the_same_steps_for_preview_and_execute(
         'python', '-B', '-m', 'novel.cli', 'run', 'str06.stage5.body', '42',
         '--base', 'E:/outputs', '--yes',
     ]
-    step = SimpleNamespace(
+    step = _step_stub(
         label='stage5 全书闭卷写作', argv=step_argv, cwd=str(REPO_ROOT),
         paid=True, writes='stage5/ch{nn}.json',
         note='随后免费复检')
@@ -675,7 +684,7 @@ def test_run_step_evidence_serializes_the_same_steps_for_preview_and_execute(
     assert runner.main(common) == 0
     preview_bytes = evidence.read_bytes()
     assert json.loads(preview_bytes) == {
-        'schema': 'novel-operator-step-evidence-v2',
+        'schema': 'novel-operator-step-evidence-v5',
         'execution_permit': permit.model_dump(mode='json'),
         'steps': [{
             'argv': step_argv,
@@ -683,6 +692,7 @@ def test_run_step_evidence_serializes_the_same_steps_for_preview_and_execute(
             'writes': 'stage5/ch{nn}.json',
             'label': 'stage5 全书闭卷写作',
             'note': '随后免费复检',
+            'request_profile': None,
         }],
     }
     assert built[0][0] == ('str06.stage5.body', '42', [])
@@ -710,7 +720,7 @@ def test_run_step_execute_partial_cannot_reuse_full_book_preview_evidence(
     def step(flags):
         argv = ['python', '-m', 'novel.cli', 'run', 'str06.stage5.body', '42', *flags,
                 '--base', 'E:/outputs', '--yes']
-        return SimpleNamespace(
+        return _step_stub(
             label='stage5 写作', argv=argv, cwd=str(REPO_ROOT), paid=True,
             writes='stage5/ch{nn}.json', note=None)
 
@@ -752,7 +762,7 @@ def test_run_step_evidence_refuses_different_existing_content_before_execution(
     evidence = tmp_path / 'preview.json'
     original = b'{"different":true}\n'
     evidence.write_bytes(original)
-    step = SimpleNamespace(
+    step = _step_stub(
         label='stage5 写作',
         argv=['python', '-m', 'novel.cli', 'run', 'str06.stage5.body', '42', '--yes'],
         cwd=str(REPO_ROOT), paid=True, writes='stage5/ch{nn}.json', note=None)
@@ -780,7 +790,7 @@ def test_run_step_evidence_refuses_a_suspected_key_without_writing_or_execution(
         tmp_path, monkeypatch):
     runner = _operator_script('run_step')
     evidence = tmp_path / 'preview.json'
-    step = SimpleNamespace(
+    step = _step_stub(
         label='synthetic',
         argv=['python', '-m', 'novel.cli', '--api-key=must-not-land'],
         cwd=str(REPO_ROOT), paid=False, writes='', note=None)

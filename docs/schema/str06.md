@@ -776,7 +776,7 @@ audit_only 材料。R2（renderer v5／写手协议 v5）落地后 `r2_face_pend
 
 裁决 5 把 B6 拆成两步，付费与正文外发分别授权；裁决 8 冻结人工阅读维度与归因记录，
 生产不设 LLM 评审、也不设文学评分闸。**人工阅读验收协议**（九维度、记录方式、归因与
-处理取值、存放约定）全文登记在 `docs/REQUIREMENTS.md`「B6 执行与后续优化次序」节
+处理取值、存放约定）全文登记在 `docs/REQUIREMENTS.md`「人工阅读验收协议」节
 （R4 批登记），B6-A 与 B6-B 共用，不另立第二份维度表。
 
 - **B6-A 语义与写作 canary**：冻结语义层协议后实购 Stage2 与 Stage4，免费编译出全部
@@ -797,3 +797,32 @@ audit_only 材料。R2（renderer v5／写手协议 v5）落地后 `r2_face_pend
 F-1/F-2/F-3），再做 D10 两本 golden（先修 `tests/golden.py` 的退役 rubric 引用）。
 批次表、各批验收细节与删除条件唯一见 `docs/REQUIREMENTS.md`；Golden 的样本、六维
 与冻结要求见 REQUIREMENTS「本轮之后」。
+
+### 名称同一性与材料返修（CS-R）
+
+names wire 使用 `stage2-names-v2`，显式提供 `resolutions`。每条包含 literal、
+status（same／unresolved）、char_id、surface、basis 和 reason。same 指向已登记
+人物称谓；unresolved 的两个指向字段必须为 null。basis 保留源句字面。
+名称观察与 Characters 的信封为 v2：旧版本不能补空 resolutions，须由 names
+按新协议重建后通过 compile 重建双真源。原观察不改；关联投影和 canonical
+语义文本按有证明的局部句段归一，重复编译幂等。未决时不购买关联、不发布双真源。
+Preserve 同时收到正式归一文本、原句及名称同一性依据，不能私改命题消除字面差异。
+
+材料来源和错误是运行时派生值，见 `docs/schema/repair_convergence.md`。回派记录
+使用 OwnerIssue v3，dispatch_pending 区分已登记待执行与已提交待复验；轮数、
+问题指纹历史及显式更正证据耐久保存，superseded 仅表示旧归因退出调度，不表示
+问题已解决。最终状态仍由原发现节点对当前正式输入复验决定。
+
+### 语义输入投影（CS-I）
+
+- 名称观察输入`stage2-names-input-v1`只发送一次完整evidence与书级观察，不再重复拼全文。
+  原文引用、Hook和所有章证据完整保留。
+- Preserve输入`stage4-preserve-input-v2`补齐转移op／scope／known_by、认知命题引用、
+  悬念操作／问题／解决、时序模式、场景边界和因果边。相同拍内相同证据段与逐字quote合并展示，
+  保留全部锚点；初始状态只发一次。必要语义不能为降低字符数删除。
+- Design输入`stage4-design-input-v1`由`project_design_input`确定性投影：Brief义务以ob键编址，
+  requires与knowledge ref复用同一映射；去除可推导ID和审计摘要，保留完整satisfaction、locks、
+  propositions、facts、world约束与表达选择。动态schema将等价know分支按mode分组，仍验证每个ref。
+  producer和compiler使用相同映射，旧canonical Brief不能作为新wire模板。
+
+这些版本只描述语义输入，不能当正式artifact版本；输入变化自然进入请求身份。

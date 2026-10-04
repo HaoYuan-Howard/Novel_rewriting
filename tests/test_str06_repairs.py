@@ -14,7 +14,7 @@ from pydantic import ValidationError
 from contracts.schema.design import TargetDelta
 from contracts.schema.grounding import BindingEntry, SemanticBinding
 from contracts.schema.observation import (
-    STAGE2_CHAPTERS_PROTOCOL as CPV, STAGE2_OBSERVATION_PROTOCOL as PV,
+    STAGE2_CHAPTERS_PROTOCOL as CPV, STAGE2_NAMES_PROTOCOL as PV,
 )
 from contracts.schema.state import StateRead, SurfaceIntroduction
 from novel.stages.stage4.compile import compile_execution_plan
@@ -198,7 +198,7 @@ def test_named_absent_character_and_introduction_beat_reach_writer():
 def _stage2_outcome_with_ch02(ch02: dict):
     """ch02 观察替换成红例、其余走绿底座 → compile_source_truth。"""
     from tests.test_str06_stage2_publish import (
-        EVIDENCE, _associate_wire, _book_wire, _chapter_wires, _names_wire,
+        EVIDENCE, _associate_wire, _book_wire, _chapter_wires, _names_structure,
     )
     from novel.stages.stage2 import (
         AssociateObservation, BookObservation, ChapterObservation, NamesObservation,
@@ -210,7 +210,7 @@ def _stage2_outcome_with_ch02(ch02: dict):
         chapters={no: ChapterObservation.model_validate(chapters[f'ch{no:02d}'])
                   for no in range(1, len(chapters) + 1)},
         names=NamesObservation.model_validate(
-            {'protocol_version': PV, 'structure': _names_wire()}),
+            {'protocol_version': PV, 'structure': _names_structure()}),
         associate=AssociateObservation.model_validate(_associate_wire()),
         evidence=EVIDENCE)
 

@@ -40,7 +40,7 @@ RC2 只有 canonical + surfaces，现役判据靠「首字猜姓」——复姓�
 from __future__ import annotations
 
 import re
-from typing import Any, Final
+from typing import Any, Final, Literal
 
 from pydantic import Field, model_validator
 
@@ -302,10 +302,42 @@ class PersonNameStructure(StrictModel):
         return tuple(x for x in (family, self.given, *(a.literal for a in self.aliases)) if x)
 
 
+class EvidenceQuote(StrictModel):
+    """R10a a1：关键判断的逐字证据引文（wire 与 canonical 同形，I-11）。
+
+    `segment` 是证据句段 id；`quote` 是**逐字**引用——resolver 判定 quote
+    逐字存在于所引句段内、且段属于该条目自身的 source_refs（不归一化、
+    不模糊匹配）。引文须含决定判断的限定（以为／觉得／像是／预计／约／
+    几天后）——该要求属 prompt 面；机械面只管逐字命中与段归属。
+    """
+
+    segment: str = Field(pattern=r'^e\d+_\d+$')
+    quote: str = Field(min_length=1)
+
+
+class SourceNameResolution(StrictModel):
+    """Stage2语义判断的局部姓名同一性；证据原字面不改，未决不得归一。"""
+    literal: str = Field(min_length=1)
+    status: Literal['same', 'unresolved']
+    char_id: str | None
+    surface: str | None
+    basis: tuple[EvidenceQuote, ...] = Field(min_length=1)
+    reason: str = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def resolution_shape(self):
+        if self.status == 'same' and (not self.char_id or not self.surface):
+            raise ValueError('same必须指向人物与已登记称谓')
+        if self.status == 'unresolved' and (self.char_id is not None or self.surface is not None):
+            raise ValueError('unresolved不得暗含已接受的名称映射')
+        return self
+
+
 class NameStructure(StrictModel):
     """整书源名称结构（Characters 的独立 RC 段；owner=Stage2 names 窄调用）。"""
     families: dict[str, FamilyEntry] = Field(min_length=1)
     people: dict[Slug, PersonNameStructure]
+    resolutions: tuple[SourceNameResolution, ...] = ()
 
     def name_projection(self) -> 'NameProjection':
         """专名字面集与家族字面集（接管旧 `name_distinctiveness` 的有效职责：
@@ -460,19 +492,6 @@ class PropositionRef(StrictModel):
 
     ref: str = Field(min_length=1)
     statement: str | None = None
-
-
-class EvidenceQuote(StrictModel):
-    """R10a a1：关键判断的逐字证据引文（wire 与 canonical 同形，I-11）。
-
-    `segment` 是证据句段 id；`quote` 是**逐字**引用——resolver 判定 quote
-    逐字存在于所引句段内、且段属于该条目自身的 source_refs（不归一化、
-    不模糊匹配）。引文须含决定判断的限定（以为／觉得／像是／预计／约／
-    几天后）——该要求属 prompt 面；机械面只管逐字命中与段归属。
-    """
-
-    segment: str = Field(pattern=r'^e\d+_\d+$')
-    quote: str = Field(min_length=1)
 
 
 class Effect(StrictModel):

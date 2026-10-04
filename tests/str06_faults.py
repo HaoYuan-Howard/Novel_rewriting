@@ -41,7 +41,7 @@ REPO_ENV = 'NOVEL_STR06_FAULT_REPO'
 
 #: 五类脚本化模型式错误（闭集；扩类必须同批更新本模块与守卫测试）。
 FAULTS = ('evidence_out_of_range', 'unknown_slug', 'missing_pairing',
-          'obligation_unbound', 'duplicate_json_key')
+          'obligation_unbound', 'duplicate_json_key', 'knowledge_release')
 
 
 def looped_full_chain_wires() -> dict:
@@ -81,6 +81,9 @@ def apply_fault(wires: dict, fault: str | None) -> dict:
         for scene in mutated['design']['scenes']:
             for beat in scene['beats']:
                 beat.pop('real', None)
+    elif fault == 'knowledge_release':
+        for release in mutated['design']['initial_surfaces']:
+            release['surfaces'] = [s for s in release['surfaces'] if s != '陆大哥']
     elif fault == 'duplicate_json_key':
         pass            # 该故障在 transport 层返回原始文本，见 FaultTransport
     else:
@@ -104,6 +107,15 @@ class FaultTransport:
     def __init__(self, wires, fault=None, fault_once=False, body_texts=None):
         from tests.test_str06_body import _RoutingTransport
 
+        if fault == 'knowledge_release':
+            wires = deepcopy(wires)
+            wires['ch01']['beats'][0]['cognition'] = [{
+                'proposition': {'ref': 'p_name', 'statement': '陆大哥已经娶亲'},
+                'holder': 'yun_niang', 'mode': 'learns',
+                'basis': [{'segment': 'e01_01', 'quote': '苏芸娘嫁入陆家'}]}]
+            wires['preserve']['obligations'][0]['anchors'].append('b01_01.c1')
+            wires['design']['scenes'][0]['beats'][0]['know'] = [{'ref': 'ob01.k01'}]
+            wires['design']['initial_surfaces'][1]['surfaces'].append('陆大哥')
         self._wires = wires
         self._clean_wires = apply_fault(wires, None)
         self._inner = _RoutingTransport(apply_fault(wires, fault))
@@ -222,6 +234,7 @@ _FAULT_TARGET_OWNERS = {
     'unknown_slug': ('ch01',),
     'missing_pairing': ('associate',),
     'obligation_unbound': ('design',),
+    'knowledge_release': ('design',),
     'duplicate_json_key': ('book',),
 }
 

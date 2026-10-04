@@ -312,10 +312,12 @@ ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
     # 抽取派生输入 `stage2/compiled/book_extraction.json` 已退役（D9）。
     'stage2/observations/book.json': ArtifactSpec(BookObservation, 1),
     'stage2/observations/ch{nn}.json': ArtifactSpec(ChapterObservation, 1),
-    'stage2/observations/names.json': ArtifactSpec(NamesObservation, 1),
+    # CS-R：名称同一性必须由 names 留证声明；旧观察不能补空声明冒充已核验。
+    # names 按新协议重建后，compile 免费重建 Characters，旧根保留证据不原地猜迁。
+    'stage2/observations/names.json': ArtifactSpec(NamesObservation, 2),
     'stage2/observations/associate.json': ArtifactSpec(AssociateObservation, 1),
     'stage2/blueprints/chapter_blueprints.json': ArtifactSpec(BlueprintsArtifactV15, 1),
-    'stage2/characters/characters.json': ArtifactSpec(CharactersArtifactV4, 1),
+    'stage2/characters/characters.json': ArtifactSpec(CharactersArtifactV4, 2),
     # Stage4：目标故事与确定性编译（preserve／body_design／hook_design／bind／compile）
     'runtime/preserve_checkpoint.json': ArtifactSpec(PreserveCheckpoint, 1),
     'stage4/grounding/reconstruction_brief.json': ArtifactSpec(ReconstructionBrief, 1),

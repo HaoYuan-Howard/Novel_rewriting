@@ -3025,7 +3025,8 @@ class LlmClient:
                      progress: RequestProgress | None,
                      cache_policy: CachePolicy | None = None) -> None:
         """一次**真上线**记一行。失败那次 token 三项全 `None`——它没拿回任何读数。"""
-        u = (resp.usage if resp else None) or {}
+        from novel.llm.usage import ledger_usage
+        u = ledger_usage(resp.usage if resp else None)
         policy = cache_policy or self.ctx.cache
         arguments = dict(
             attempt_id=attempt_id,
@@ -3039,8 +3040,7 @@ class LlmClient:
             prompt_cache_hit_tokens=u.get('prompt_cache_hit_tokens'),
             prompt_cache_miss_tokens=u.get('prompt_cache_miss_tokens'),
             completion_tokens=u.get('completion_tokens'),
-            reasoning_tokens=(u.get('reasoning_tokens')
-                              or (u.get('completion_tokens_details') or {}).get('reasoning_tokens')),
+            reasoning_tokens=u['reasoning_tokens'],
             purpose=purpose,
             outcome='ok' if error is None else 'error',
             error=None if error is None else str(error),
@@ -3090,7 +3090,8 @@ class LlmClient:
         同样可能被采纳，审计账的联结键不因来源而缺席。
         """
         attempt_id = _attempt_id()
-        u = resp.usage or {}
+        from novel.llm.usage import ledger_usage
+        u = ledger_usage(resp.usage)
         policy = cache_policy or self.ctx.cache
         self.ctx.ledger.record(
             attempt_id=attempt_id,
@@ -3101,8 +3102,7 @@ class LlmClient:
             code=self.ctx.code, cached=True, cache_policy=policy.name,
             prompt_tokens=u.get('prompt_tokens'),
             completion_tokens=u.get('completion_tokens'),
-            reasoning_tokens=(u.get('reasoning_tokens')
-                              or (u.get('completion_tokens_details') or {}).get('reasoning_tokens')),
+            reasoning_tokens=u['reasoning_tokens'],
             purpose=purpose,
             reasoning_effort=req.reasoning_effort,
             thinking=req.thinking,

@@ -18,6 +18,7 @@ main.py —— `python -X utf8 -u -m novel.cli <子命令> …`
     reconcile                       jobs/编排账/Stage2 假预算的 0 成本 typed 恢复
     doctor --llm-transport          0 成本探测 DeepSeek DNS/TCP/TLS/HTTP；不发正文/密钥
     response-repair <sid>           0 成本：提交/放弃一份隔离的结构化响应修复稿
+    issue-correction <sid>          0 成本：预览或显式更正有正式证据的旧错误回派
 
 ⚠ **这张表就是 `--help` 打印出来的那一份**（argparse 的 `description` 直接取本 docstring），
 而操作规程让执行者第一步就跑 `--help`。少列一条 = 那条路对读它的人不存在。
@@ -127,6 +128,8 @@ def _parser() -> argparse.ArgumentParser:
                        help='legacy provider 发布的 reasoning effort')
         p.add_argument('--legacy-thinking', default=None,
                        help='legacy provider 发布的 thinking mode')
+        p.add_argument('--request-profile', default=None,
+                       help='无密钥请求配置JSON（provider/model/reasoning_effort/thinking_mode）；复检同样使用，不授权新购')
         p.add_argument(
             '--allow-egress', action='store_true',
             help='独立确认允许 executor 向所选 provider 外发小说正文')
@@ -150,7 +153,7 @@ def _parser() -> argparse.ArgumentParser:
     r.add_argument('--resample', default=None,
                    help='研发手动定向重采 owner（如 ch04/design/body_ch05）；编排器不生成')
     r.add_argument('--reason', default=None, help='定向重采理由（与 --resample 同时提供）')
-    r.add_argument('--reasoning-effort', default='high',
+    r.add_argument('--reasoning-effort', default=None,
                    choices=('low', 'high', 'max'),
                    help='新链请求的 reasoning effort 档位（进请求身份；'
                         '与 NodeSpec 取值面一致，medium 已移除——B1/D6）')
@@ -255,6 +258,14 @@ def _parser() -> argparse.ArgumentParser:
     rr.add_argument('--decline', action='store_true',
                     help='明确放弃本次修复额度；重跑原节点后进入下一采')
 
+    correction = sub.add_parser('issue-correction', help='免费预览／显式更正旧材料回派（不重置额度）')
+    correction.add_argument('sid')
+    correction.add_argument('--base', required=True)
+    correction.add_argument('--owner', required=True, choices=('book', 'preserve'))
+    correction.add_argument('--apply', action='store_true')
+    correction.add_argument('--subject-sha256')
+    correction.add_argument('--reason')
+
     mk = sub.add_parser('mark', help='进度信标打点（0 成本，恒 exit 0）')
     mk.add_argument('sid')
     mk.add_argument('--node', required=True, choices=sorted(NODES))
@@ -319,6 +330,21 @@ def _executor_backend_of(a: argparse.Namespace) -> ExecutorBackend | None:
         raise UnsupportedRunMode(f'legacy profile 形状无效：{exc}') from exc
 
 
+def _request_profile_of(
+    a: argparse.Namespace, backend: ExecutorBackend | None,
+) -> LegacyLlmProfile | None:
+    raw = getattr(a, 'request_profile', None)
+    try:
+        profile = LegacyLlmProfile.model_validate_json(raw) if raw is not None else None
+    except ValueError as exc:
+        raise UnsupportedRunMode(f'--request-profile 形状无效：{exc}') from exc
+    profile = N.resolve_request_profile(a.node, profile, backend)
+    effort = getattr(a, 'reasoning_effort', None)
+    if profile is not None and effort is not None and profile.reasoning_effort != effort:
+        raise UnsupportedRunMode('--reasoning-effort 与 --request-profile 冲突')
+    return profile
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 节点派发 —— 取值面要全，能不能跑是另一件事
 # ─────────────────────────────────────────────────────────────────────────────
@@ -381,16 +407,15 @@ def _run_str06(a: argparse.Namespace, flags: list[str], *, paid: bool) -> int:
     # 分流点之后读取，旧链节点到不了这里。
     wire_dir = getattr(a, 'wire_dir', None)
     adopt_root = [Path(root) for root in (getattr(a, 'adopt_root', None) or [])]
-    reasoning_effort = getattr(a, 'reasoning_effort', None) or 'high'
-    # str06 节点走直连 LLM 唯一通道，不接受任何 executor backend 旗标；
-    # 先于书目录解析拒绝，别让 retired 参数被书缺失的报错掩盖。
-    if getattr(a, 'executor_backend', None) is not None or any(
-            getattr(a, name, None) is not None for name in (
-                'legacy_provider', 'legacy_model', 'legacy_effort',
-                'legacy_thinking')):
-        raise TerminalState(
-            f'{a.node} 是直连 LLM 节点，不接受 --executor-backend/--legacy-* '
-            '（该执行面已退役）')
+    backend = N.resolve_executor_backend(a.node, flags, _executor_backend_of(a))
+    request_profile = _request_profile_of(a, backend)
+    reasoning_effort = (request_profile.reasoning_effort if request_profile is not None
+                        else getattr(a, 'reasoning_effort', None) or 'high')
+    parent_context = execution_context.load_from_environment(a.base, a.sid)
+    if parent_context is not None and a.node in N.PROFILED_LLM_NODES:
+        expected = parent_context.executor_backend(a.node).profile
+        if request_profile != expected:
+            raise TerminalState('子 CLI 请求配置与冻结运行不一致；禁止本地默认或静默换档')
     if paid and not tokens and not a.yes:
         raise ApprovalRequired(
             f'{a.node} 默认路径会花钱；加 `--yes` 或用 `--check-only` 免费复检')
@@ -414,6 +439,7 @@ def _run_str06(a: argparse.Namespace, flags: list[str], *, paid: bool) -> int:
         book_call_ceiling=None,
         book_title=paths.title_of(novel_dir),
         reasoning_effort=reasoning_effort,
+        request_profile=request_profile,
         check_only='--check-only' in tokens,
         adopt_root=adopt_root,
         node=[a.node],
@@ -633,12 +659,14 @@ def _cmd_preview(a: argparse.Namespace) -> int:
     flags = _flags_of(a)
     executor_backend = N.resolve_executor_backend(
         a.node, flags, _executor_backend_of(a))
+    request_profile = _request_profile_of(a, executor_backend)
     # ⚠ `placeholders=True` **只在这一趟**：preview 要摊开的是一条形状完整的命令。
     # 缺必填项时渲染占位符并标注，而不是摊开一条真跑必然 exit 2 的半截命令
     # （2026-08-16 复盘 §六.1）。占位符本身在真跑那一趟仍会被 `validate_run` 拒。
     for i, step in enumerate(N.build_steps(a.node, a.sid, flags,
                                            base=a.base,
                                            executor_backend=executor_backend,
+                                           request_profile=request_profile,
                                            egress_authorized=bool(a.allow_egress),
                                            placeholders=True)):
         print(f'[{i + 1}] {step.label}')
@@ -734,6 +762,8 @@ def _require_execution_permit(
     steps = N.build_steps(
         permit.node, permit.sid, permit.flags, base=permit.base,
         executor_backend=root_backend, egress_authorized=root_egress,
+        request_profile=(parent_context.executor_backend(permit.node).profile
+                         if permit.node in N.PROFILED_LLM_NODES else None),
         placeholders=False)
     if step_index >= len(steps):
         raise TerminalState(
@@ -778,6 +808,8 @@ def _cmd_run(a: argparse.Namespace) -> int:
         # 唯一 ledger）与恢复入口都在 PaidRequestSession／CandidateRunContext
         # 内闭合，不经旧链的 RunContext／approval／closure 前置。
         return _run_str06(a, flags, paid=paid)
+    if getattr(a, 'request_profile', None) is not None:
+        raise TerminalState(f'{a.node} 没有模型请求，不接受 --request-profile')
     if N.would_write(a.node, flags):
         from novel.work_units import check_workflow_write
         check_workflow_write(a.base)
@@ -1235,6 +1267,37 @@ def _cmd_doctor(a: argparse.Namespace) -> int:
     return X.OK if result.reached_http else X.TERMINAL_STATE
 
 
+def _cmd_issue_correction(a: argparse.Namespace) -> int:
+    from novel.store import Str06Repository
+    from novel.stages.chain import derive_total_length_budget, load_stage1_chapters
+    from novel.stages.issue_recovery import preview_issue_correction, apply_issue_correction
+    from novel.orchestrator.write_admission import operation_scope
+
+    def perform():
+        repo = Str06Repository(paths.resolve_novel_dir(Path(a.base), a.sid))
+        budget = derive_total_length_budget(load_stage1_chapters(a.base, a.sid).chapters)
+        try:
+            if a.apply:
+                return apply_issue_correction(repo, a.owner, budget=budget,
+                    expected_sha256=a.subject_sha256, reason=a.reason)
+            return preview_issue_correction(repo, a.owner, budget=budget)
+        except ValueError as exc:
+            raise TerminalState(str(exc)) from exc
+
+    if a.apply:
+        if not a.subject_sha256 or not a.reason:
+            raise TerminalState('--apply必须同时提供免费预览的--subject-sha256和--reason')
+        with operation_scope(a.base, a.sid, operation='issue-correction',
+                             details={'owner': a.owner, 'subject_sha256': a.subject_sha256}):
+            result = perform()
+    else:
+        if a.subject_sha256 or a.reason:
+            raise TerminalState('只读预览不接受apply参数')
+        result = perform()
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0
+
+
 def _cmd_response_repair(a: argparse.Namespace) -> int:
     """给非节点 response-repair 写动作持有完整 generic admission。"""
     from novel.orchestrator.write_admission import operation_scope
@@ -1367,7 +1430,7 @@ _CMDS = {'run': _cmd_run, 'preview': _cmd_preview,
          'queue-list': _cmd_queue_list, 'queue-cancel': _cmd_queue_cancel,
          'queue-resume': _cmd_queue_resume,
          'jobs': _cmd_jobs, 'reconcile': _cmd_reconcile, 'doctor': _cmd_doctor,
-         'response-repair': _cmd_response_repair,
+         'response-repair': _cmd_response_repair, 'issue-correction': _cmd_issue_correction,
          'mark': _cmd_mark}
 
 
@@ -1427,6 +1490,8 @@ def _execution_context_control_mutation(a: argparse.Namespace) -> bool:
         return not bool(a.plan_only)
     if a.cmd in ('queue-cancel', 'queue-resume'):
         return True
+    if a.cmd == 'issue-correction':
+        return bool(a.apply)
     if a.cmd != 'reconcile':
         return False
     admission_inspect = bool(

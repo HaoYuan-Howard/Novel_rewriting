@@ -128,6 +128,24 @@ def test_project_preserve_view_is_deterministic_and_pure():
     assert chars.model_dump() == chars_before and bp.model_dump() == bp_before
 
 
+def test_preserve_input_keeps_operations_scope_known_holders_loops_and_causality():
+    raw = _blueprint().model_dump(mode='json')
+    first, second = raw['chapters'][0]['beats']
+    first['loops'] = [{'ref': 'loop_noise', 'op': 'open', 'question': '谁在床底？'}]
+    second['loops'] = [{'ref': 'loop_noise', 'op': 'close', 'resolution': '夫君藏身床底。'}]
+    second['effects'] = [{**first['effects'][0], 'op': 'unset', 'value': None}]
+    raw['chapters'][0]['causal_edges'] = [
+        {'from_beat': 'b01_01', 'to_beat': 'b01_02', 'kind': 'causes'}]
+    view = project_preserve_view(_characters(), BlueprintsArtifactV15.model_validate(raw))
+    assert 'stage4-preserve-input-v2' in view
+    assert 'scene；concealed；已知 fu_jun' in view
+    assert 'scene_location unset None' in view
+    assert 'loop_noise open：谁在床底？' in view
+    assert 'loop_noise close：夫君藏身床底。' in view
+    assert '因果 b01_01 —causes→ b01_02' in view
+    assert '依据 [b01_01.e1,b01_01.c1] e01_01：「夫君藏进床底」' in view
+
+
 # ───────────────────────── assemble v2：锚定与派生 ─────────────────────────
 
 def test_green_wire_publishes_with_derived_lineage_and_typed_anchors():

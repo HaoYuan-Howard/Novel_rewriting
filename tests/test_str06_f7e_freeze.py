@@ -82,7 +82,7 @@ from contracts.artifacts import ARTIFACT_PATHS, STR06_ARTIFACT_RC_VERSIONS
 from contracts.invariants import NODES
 from contracts.schema.observation import (
     STAGE2_ASSOCIATE_PROTOCOL, STAGE2_BOOK_PROTOCOL, STAGE2_CHAPTERS_PROTOCOL,
-    STAGE2_OBSERVATION_PROTOCOL,
+    STAGE2_NAMES_PROTOCOL,
 )
 from contracts.schema.workflow import (
     STAGE4_DESIGN_PROTOCOL, STAGE4_HOOK_DESIGN_PROTOCOL,
@@ -111,7 +111,9 @@ from novel.llm.paid_requests import candidate_contract_identity
 #: （REQUIREMENTS／DECISIONS），再动表。
 # 审阅修复（2026-10-03）：Design v7 know/confirms 与逐次 Brief，五产物 rc14。
 # 节点数、付费 owner 与预算不变；批准方案及迁移删除条件登记在 REQUIREMENTS。
-FROZEN_CONTRACT_IDENTITY = 'c80f4480af25eaaaba0f6f61d0e419af6f6c81d30ee31db2c62ea210e501c78d'
+# CS-R（2026-10-04）：用户裁决名称异写留证，names/Characters信封v2；
+# 身份补齐信封版本与operator_redo，Hook按正式归因进入有限owner修订。
+FROZEN_CONTRACT_IDENTITY = '56e365fb69f6f326af75204b06a40ca0d7cca18f26114f2a4fbfd66714a5f6a8'
 
 #: 冻结时的节点集合（CS-3 bind 退役后 13 个：stage0/1 两座＋Stage2 五节点＋
 #: Stage4 四＋Stage5 两＋Stage7 两；bind 的承载位决定并入 body_design）。
@@ -199,7 +201,7 @@ def test_frozen_rc_version_label():
 FROZEN_SEMANTIC_PROTOCOLS = {
     'STAGE2_BOOK_PROTOCOL': 'stage2-book-v3',
     'STAGE2_CHAPTERS_PROTOCOL': 'stage2-chapters-v2',
-    'STAGE2_OBSERVATION_PROTOCOL': 'stage2-observation-v1',
+    'STAGE2_NAMES_PROTOCOL': 'stage2-names-v2',
     'STAGE2_ASSOCIATE_PROTOCOL': 'stage2-associate-v2',
     'STAGE4_PRESERVE_PROTOCOL': 'stage4-preserve-v2',
     'STAGE4_PRESERVE_POLICY_VERSION': 5,
@@ -214,7 +216,7 @@ def test_frozen_semantic_protocols_match_the_live_literals():
     live = {
         'STAGE2_BOOK_PROTOCOL': STAGE2_BOOK_PROTOCOL,
         'STAGE2_CHAPTERS_PROTOCOL': STAGE2_CHAPTERS_PROTOCOL,
-        'STAGE2_OBSERVATION_PROTOCOL': STAGE2_OBSERVATION_PROTOCOL,
+        'STAGE2_NAMES_PROTOCOL': STAGE2_NAMES_PROTOCOL,
         'STAGE2_ASSOCIATE_PROTOCOL': STAGE2_ASSOCIATE_PROTOCOL,
         'STAGE4_PRESERVE_PROTOCOL': STAGE4_PRESERVE_PROTOCOL,
         'STAGE4_PRESERVE_POLICY_VERSION': STAGE4_PRESERVE_POLICY_VERSION,

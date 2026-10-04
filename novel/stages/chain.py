@@ -43,7 +43,7 @@ import os
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Final, NamedTuple
 
@@ -79,6 +79,7 @@ from novel.stages.common import (
     BODY_WRITER_SYSTEM, ChapterIdentities, chapter_identities, pack_prompt,
     packet_metrics, project_chapter_packet, render_chapter_packet,
     validate_hook_materials, validate_writer_materials,
+    hook_material_issues, writer_material_issues,
 )
 from novel.stages.stage2 import (
     NamesObservation, STAGE2_OBSERVATION_PROTOCOL, book_observation_prompt,
@@ -87,20 +88,25 @@ from novel.stages.stage2 import (
     compile_book_observation, compile_chapter_observation, compile_name_structure,
     compile_source_truth, associate_observation_prompt, project_association_space,
     first_appearance_anchors, first_appearance_issues,
+    normalize_name_observations, validate_name_resolutions,
 )
 from novel.stages.owner_revision import (
     MechanicalDefectStop, OwnerRevisionRequired, OwnerRevisionStop,
     discover_owner_issues, open_issue_record, owner_product_digest,
-    resolve_owner_issues, revision_gate, revision_prompt_for_owner,
+    resolve_owner_issues, complete_owner_dispatch, revision_gate, revision_prompt_for_owner,
 )
 from novel.stages.stage4 import (
     assemble_body_design, assemble_hook_design,
     assemble_preserve, compile_execution_plan, compile_hook_context,
     compile_writer_book_ir, derive_semantic_binding, design_obligation_index,
     design_placements, knowledge_change_index, lock_order_violations, obligation_core_id,
-    project_brief, project_preserve_view, preserve_revision_wire, publish_graph, run_mechanical_guard,
+    project_brief, project_design_input, project_preserve_view, preserve_revision_wire, publish_graph,
 )
 from contracts.schema.design import DesignWireV7, STAGE4_DESIGN_WIRE_PROTOCOL
+from contracts.schema.observation import STAGE2_NAMES_PROTOCOL
+from contracts.schema.orchestration import LegacyLlmProfile
+from novel.stages.stage4 import inspect_body_materials, plan_material_repairs
+from novel.core.validation import ValidationMessage
 from novel.stages.stage5 import (
     AnsweredText, HOOK_VALIDATOR_VERSION, MAX_REWRITES, MECHANICAL_CHECKS,
     build_hook_user_prompt,
@@ -399,7 +405,8 @@ def run_names(ctx: ChainContext) -> dict:
     """`str06.stage2.names`：源名称结构观察（引擎不变，D9 只重挂输入）。
 
     输入改挂书级观察（`stage2/observations/book.json` 的人物表投影）＋完整
-    MainText 与 hook_copy；名称结构 wire 落 `stage2/observations/names.json`。
+    MainText 与 hook_copy 的逐段证据；不再把同一正文另发一遍。名称结构 wire
+    落 `stage2/observations/names.json`。
     Characters 的合并发布归 compile（S2-5 唯一 writer），本节点不再写
     characters.json。
     """
@@ -412,14 +419,15 @@ def run_names(ctx: ChainContext) -> dict:
     full = '\n'.join(f'〔第{c["chapter_ordinal"]}章〕\n{c["text"]}' for c in ctx.chapters)
     if ctx.hook_copy.strip():
         full = f'〔章前文字〕\n{ctx.hook_copy}\n\n' + full
-    names_prompt = pack_prompt(NAMES_RULES, characters=core.model_dump(mode='json'),
-                               text=full)
+    names_prompt = pack_prompt(
+        NAMES_RULES, input_version='stage2-names-input-v1',
+        characters=core.model_dump(mode='json'), evidence=evidence)
     names_wire, names_ref = ctx.ask(
-        'names', names_prompt, lambda w: compile_name_structure(w, core, full)[1])
-    structure, errors = compile_name_structure(names_wire, core, full)
+        'names', names_prompt, lambda w: compile_name_structure(w, core, full, evidence=evidence)[1])
+    structure, errors = compile_name_structure(names_wire, core, full, evidence=evidence)
     if errors:
         raise ValueError(errors)
-    observation = NamesObservation(protocol_version=STAGE2_OBSERVATION_PROTOCOL,
+    observation = NamesObservation(protocol_version=STAGE2_NAMES_PROTOCOL,
                                    structure=structure)
     repository.write('stage2/observations/names.json', observation,
                      owners=('names',), refs=(names_ref,))
@@ -441,12 +449,22 @@ def run_associate(ctx: ChainContext) -> dict:
     repository = ctx.repository
     book = repository.read_model('stage2/observations/book.json')
     chapters = _read_chapter_observations(repository, ctx.chapters)
-    # 干跑是校验面（不是生产输入）：names 经 inspect 读（剥掉盘上 `_provenance`），
-    # 不记来源边——校验读不成 associate 的生产依赖。
-    _names_payload = repository.inspect('stage2/observations/names.json')
-    names = NamesObservation.model_validate(
-        {k: v for k, v in _names_payload.items() if k != '_provenance'})
+    # 名称同一性是关联的正式输入；实际语义文本归一改变请求身份。
+    names = repository.read_model('stage2/observations/names.json')
     evidence = build_evidence(ctx.chapters, ctx.hook_copy)
+    core, errors = character_core_view(book, evidence=evidence)
+    if not errors:
+        errors.extend(validate_name_resolutions(names.structure, core, evidence=evidence))
+    errors.extend(f'名称同一性未决：{r.literal}；{r.reason}' for r in names.structure.resolutions
+                  if r.status == 'unresolved')
+    if errors:
+        raise MechanicalDefectStop('名称同一性未闭合，不购买下游判断',
+                                   node='str06.stage2.associate', issues=tuple(errors))
+    try:
+        book, chapters = normalize_name_observations(book, chapters, names.structure)
+    except ValueError as exc:
+        raise MechanicalDefectStop('名称局部归一未闭合，不购买下游判断',
+                                   node='str06.stage2.associate', issues=(str(exc),)) from exc
     space = project_association_space(book, chapters)
     prompt = revision_prompt_for_owner(
         repository, 'associate', associate_observation_prompt(space),
@@ -633,7 +651,12 @@ def run_preserve(ctx: ChainContext) -> dict:
         PRESERVE_RULES + _conflict_resolution_notes(repository, ctx.chapters)
         + '\n输入（源证据投影视图，句柄即 anchors 闭集）：\n'
         + project_preserve_view(core, blueprint)
-        + '\n人物表：' + json.dumps(core.model_dump(mode='json'),
+        + ('\nStage2已留证的局部名称同一性（语义文本已归一，原句保持原字面；'
+           '不得因该字面差异改写命题或重复报源观察冲突）：'
+           + json.dumps([r.model_dump(mode='json') for r in chars.name_structure.resolutions],
+                        ensure_ascii=False, sort_keys=True)
+           if chars.name_structure and chars.name_structure.resolutions else '')
+        + '\n人物表：' + json.dumps(core.model_dump(mode='json', include={'characters'}),
                                     ensure_ascii=False, sort_keys=True,
                                     separators=(',', ':')),
         'runtime/preserve_checkpoint.json',
@@ -676,21 +699,6 @@ def run_preserve(ctx: ChainContext) -> dict:
 
 # ─── stage4 body_design ──────────────────────────────────────────────────────
 
-def _design_obligation_table(obligation_index: dict) -> str:
-    """义务清单的紧凑渲染（design prompt 面；D6 短别名——模型抄写哈希是失败点）。"""
-    lines = ['ob 编号｜类别｜必保｜锁（holder|kp 或 kf）｜satisfaction']
-    for ob, requirement in sorted(obligation_index.items()):
-        locks = list(requirement.realize_locks or ())
-        satisfaction = (requirement.satisfaction or '')[:80]
-        kind = getattr(requirement.kind, 'value', requirement.kind)
-        lines.append(f'{ob}｜{kind}｜{requirement.must_preserve}｜'
-                     f'{"；".join(locks) or "无"}｜{satisfaction}')
-    lines.append('认知短引用｜所属义务｜持有者｜命题句柄｜模式（代码派生，know 只标拍位）')
-    for ref, (ob, change) in knowledge_change_index(obligation_index).items():
-        lines.append(f'{ref}｜{ob}｜{change.holder}｜{change.kp}｜{change.mode}')
-    return '\n'.join(lines)
-
-
 def run_body_design(ctx: ChainContext) -> dict:
     repository = ctx.repository
     chars = repository.read_model('stage2/characters/characters.json')
@@ -709,8 +717,7 @@ def run_body_design(ctx: ChainContext) -> dict:
                                  registered_surfaces=expand_surface_releases(
                                      {cid: {s.surface for s in c.surfaces} for cid, c in chars.characters.items()},
                                      chars.name_structure)),
-                    brief=brief.model_dump(mode='json'),
-                    obligation_table=_design_obligation_table(obligation_index),
+                    brief=project_design_input(brief, obligation_index),
                     identities=[i.model_dump(mode='json') for i in identities],
                     constraints=constraints.model_dump(mode='json')),
         'stage4/design/body_design.json')
@@ -734,12 +741,32 @@ def run_body_design(ctx: ChainContext) -> dict:
         binding, errors = derive_semantic_binding(placements, body, checkpoint)
         if errors:
             return None, None, errors
-        return body, binding, []
+        inspection = inspect_body_materials(
+            body, binding, brief, chars, budget=ctx.budget,
+            length_band=ctx.length_band, book_title=ctx.book_title)
+        repairs = plan_material_repairs(inspection.materials, body=body, binding=binding,
+                                        brief=brief, structure=chars.name_structure)
+        # 非Design责任的候选留给薄编排处理；validator不落issue、不偷改输入。
+        # 已购回答已耐久，仍禁止发布；不能拿外部／代码缺陷购买Design自修。
+        if repairs and any(r.owner != 'design' or r.action == 'stop' for r in repairs):
+            return body, binding, []
+        return body, binding, list(inspection.errors) + [
+            ValidationMessage(r.issue.message, r.issue.context['material_identity']) for r in repairs]
 
     dw, design_ref = ctx.ask('design', design_prompt, lambda w: design_compile(w)[2])
     body, binding, errors = design_compile(dw)
     if errors:
         raise ValueError(errors)
+    inspection = inspect_body_materials(
+        body, binding, brief, chars, budget=ctx.budget,
+        length_band=ctx.length_band, book_title=ctx.book_title)
+    if inspection.errors:
+        raise MechanicalDefectStop('Design材料预检失败', node='str06.stage4.body_design',
+                                   issues=inspection.errors)
+    if inspection.materials:
+        _backfill_material_repairs(repository, plan_material_repairs(
+            inspection.materials, body=body, binding=binding, brief=brief,
+            structure=chars.name_structure), raised_by='str06.stage4.body_design')
     # 双产物按输出组一次发布（R6 权威；I-25：semantic_binding 的唯一 writer
     # 是 body_design——bind LLM 退役后承载位不再有第二个声明处，两份产物同
     # bundle 同 seal）。bind／hook_design 的单节点输入从盘面闭合。
@@ -789,6 +816,8 @@ def run_hook_design(ctx: ChainContext) -> dict:
         HOOK_DESIGN_RULES, book_title=ctx.book_title, design=body.model_dump(mode='json'),
         identities=[i.model_dump(mode='json') for i in identities],
         constraints=ctx.hook_constraints.model_dump(mode='json'))
+    hook_design_prompt = revision_prompt_for_owner(
+        repository, 'hook_design', hook_design_prompt, 'stage4/design/presentation_graph.json')
 
     def hook_design_compile(w):
         hook, errors = assemble_hook_design(w, body=body, known_char_ids=set(chars.characters),
@@ -860,40 +889,30 @@ def run_compile_stage4(ctx: ChainContext) -> dict:
         raise MechanicalDefectStop(
             f'stage4 hook 上下文机械缺陷：{errors}',
             node='str06.stage4.compile', issues=tuple(str(e) for e in errors))
-    writer_ir = compile_writer_book_ir(graph=graph, plan=plan, binding=binding,
-                                       total_budget=ctx.budget,
-                                       length_band=ctx.length_band,
-                                       book_title=ctx.book_title,
-                                       projection=projection,
-                                       structure=chars.name_structure,
-                                       fact_locks=brief.fact_locks,
-                                       kp_statements=kp_statements,
-                                       world_statements=world_statements)
-    problems = []
+    inspection = inspect_body_materials(
+        graph, binding, brief, chars, budget=ctx.budget,
+        length_band=ctx.length_band, book_title=ctx.book_title)
+    writer_ir = inspection.ir
+    assert writer_ir is not None  # 同输入的plan已在上方验证
+    problems = list(inspection.errors)
     from novel.stages.common import material_identities
     internal_ids = material_identities(graph, binding, chars)
-    problems.extend(validate_hook_materials(hook_context, internal_ids=internal_ids))
-    for chapter_ir in writer_ir.chapters:
-        problems.extend(validate_writer_materials(
-            project_chapter_packet(writer_ir, chapter_ir.chapter_ordinal), internal_ids=internal_ids))
-        for context in chapter_ir.scenes:
-            problems.extend(run_mechanical_guard(binding=binding, context=context,
-                                                 graph=graph))
+    material_issues = list(hook_material_issues(hook_context, internal_ids=internal_ids))
+    material_issues.extend(inspection.materials)
+    problems.extend(issue.message for issue in material_issues)
     guard_report = {'mode': 'planned-only', 'accepted_body': False,
                     'chapters': len(writer_ir.chapters), 'scenes': len(graph.scenes),
                     'obligations': len(binding.obligations), 'guard_errors': problems,
+                    'material_issues': [asdict(issue) for issue in material_issues],
                     'chapter_budgets': {c.chapter_ordinal: c.length_budget
                                         for c in writer_ir.chapters}}
     # 失败结果只进诊断：guard report 先落（问题清单与预算读数留证），正式位不写。
     repository.write('stage4/acceptance/guard/report.json', guard_report)
     if problems:
-        # R10c（2026-10-02，用户裁决 A）：positive_material_leak 机械归因回派——
-        # 泄漏字面所属人物的表面若逐字出现于该章源文，是 Stage2 book 的
-        # surface from_chapter 源保真错误；否则是 Preserve 的 statement 混入
-        # 后文才有的名。归因只做逐字扫描（I-20）；混合问题仍走 typed 停止。
-        leaks = [p for p in problems if p.startswith('positive_material_leak')]
-        if leaks and len(leaks) == len(problems):
-            _backfill_material_leak(repository, leaks, chars, ctx.chapters)
+        if material_issues and len(material_issues) == len(problems):
+            _backfill_material_repairs(repository, plan_material_repairs(
+                material_issues, body=graph, binding=binding, brief=brief,
+                structure=chars.name_structure))
         # 其余 Guard 问题不在回派路由闭集（E-8）：typed 停止给人，恢复走
         # design 重跑（RED 通道/手动 CLI）或 owner patch；诊断面 report.json
         # 已留证全清单。
@@ -918,6 +937,8 @@ def run_compile_stage4(ctx: ChainContext) -> dict:
                          raised_by='str06.stage4.compile')
     resolve_owner_issues(repository, owner='book',
                          raised_by='str06.stage4.compile')
+    resolve_owner_issues(repository, owner='hook_design',
+                         raised_by='str06.stage4.compile')
     return guard_report
 
 
@@ -927,6 +948,7 @@ _REVISION_TARGET_OWNERS: Final[dict[str, str]] = {
     'str06.stage2.book': 'book',
     'str06.stage4.body_design': 'design',
     'str06.stage4.preserve': 'preserve',
+    'str06.stage4.hook_design': 'hook_design',
 }
 #: `str06.stage2.chapters` 的 owner 逐章解析（R10a a3）：拍句柄 bNN_MM.* →
 #: owner `chNN`（issue item=chapter:N）。表值放不了函数，回派组装处经
@@ -1036,84 +1058,24 @@ def _backfill_epistemic_lock_order(repository, graph, binding) -> None:
                           issues=issues)
 
 
-#: positive_material_leak 报告行的机械解析（validate_positive_materials 的
-#: 输出形状：`positive_material_leak[ch01/must_realize/15@34]：未释放专名字面 '裴书远'`）。
-_MATERIAL_LEAK_RE = re.compile(
-    r"positive_material_leak\[ch(\d+)/([^]]+)@\d+\]：未释放专名字面 '([^']+)'")
-
-
-def _backfill_material_leak(repository, leaks: list[str], chars, chapters) -> None:
-    """positive_material_leak → 机械归因回派（R10c 2026-10-02，用户裁决 A）。
-
-    泄漏字面属某人物的未释放面时二分归因（只做逐字扫描，I-20，不猜语义）：
-    该人物的任一表面逐字出现于泄漏章源文 ⇒ Stage2 book 的 surface
-    from_chapter 源保真错误，回派 `str06.stage2.book`（修 from_chapter 与
-    source_refs 到源文最早出现章）；全部表面在该章源文均未出现 ⇒ Preserve
-    的 statement 混入后文才有的名，回派 `str06.stage4.preserve`（statement
-    改用当章可用指称）。字面不属任何人物面时不动（保持原 typed 停止）。
-    多组按 (owner, node) **合并为一次 discover**（issue 文件按 owner 单记录、
-    每次 discover 整体重写并 +1 轮——同 owner 多 item 分开 discover 会把一轮
-    逻辑发现记成多轮，直接顶满修订额度，R10c c1 实证）；落账后抛最早执行序
-    一组的回派（book 先于 preserve）：执行回跳到 Stage2 后正向重放时，
-    preserve 的 open 记录已在案，其修订 prompt 随本轮携带 statement 修复
-    指令——一次级联闭合两组，不为每组各付一遍下游重购。字面不属任何人物
-    面时不动（保持原 typed 停止）。
-    """
-    surfaces_of = {cid: {s.surface for s in c.surfaces}
-                   for cid, c in chars.characters.items()}
-    chapter_text = {c['chapter_ordinal']: c['text'] for c in chapters}
+def _backfill_material_repairs(repository, repairs, *, raised_by='str06.stage4.compile') -> None:
+    """消费纯归因的结果；任一未决先停止，同owner合并一轮，绝不重新解析消息。"""
+    unresolved = [repair.issue for repair in repairs if repair.action == 'stop']
+    if unresolved:
+        raise MechanicalDefectStop(
+            '材料归因未决：' + '；'.join(issue.message for issue in unresolved),
+            node=raised_by, issues=tuple(issue.message for issue in unresolved))
     grouped: dict[tuple[str, str], list[OwnerIssueV1]] = {}
-    for leak in leaks:
-        matched = _MATERIAL_LEAK_RE.search(leak)
-        if matched is None:
-            continue
-        chapter_no, where, literal = int(matched.group(1)), matched.group(2), matched.group(3)
-        # 归因按**泄漏字面自身**在该章源文是否逐字出现二分（R10c1b 修正：
-        # 此前按人物任一 surface 出现归 book——「苏」这类姓氏族字面不属任何
-        # surface 时被静默跳过，且 book 已修对后仍会误归 book）。字面在源文
-        # 该章出现 ⇒ withholding 记账晚（book）；未出现 ⇒ 材料文本自行引入
-        # ⇒ statement 混名（preserve）。
-        source = chapter_text.get(chapter_no, '')
-        literal_in_source = literal in source
-        owner_chars = sorted(cid for cid, surf in surfaces_of.items() if literal in surf)
-        if literal_in_source and not owner_chars:
-            continue  # 源文有该字面但不属任何人物面：不归因，保持 typed 停止
-        cid = owner_chars[0] if owner_chars else ''
-        present = [literal] if literal_in_source else []
-        item = f'chapter:{chapter_no}'
-        if present:
-            owner, target = 'book', 'str06.stage2.book'
-            message = (
-                f'positive_material_leak 归因（源保真）：字面 {literal!r} 在第 '
-                f'{chapter_no} 章写作材料泄漏，但该字面逐字出现于该章源文'
-                '——withholding（surface/姓氏族）记账晚了。请把相应 surface 或'
-                '名称族的 from_chapter 与 source_refs 修到源文最早出现章（引文'
-                '逐字）。')
-            context = {'literal': literal, 'char_id': cid,
-                       'chapter': chapter_no, 'where': where,
-                       'literal_in_source_chapter': True}
-        else:
-            owner, target = 'preserve', 'str06.stage4.preserve'
-            message = (
-                f'positive_material_leak 归因（statement 混名）：字面 {literal!r} '
-                f'在第 {chapter_no} 章写作材料泄漏，且该字面在该章源文未出现'
-                '——义务 statement/材料文本混入了后文才有的名（含姓氏族字面）。'
-                '请把 statement 改用该章可用的指称（或去掉人名与姓氏），不得混入'
-                '后文名；语义命题本身不得改。')
-            context = {'literal': literal, 'char_id': cid,
-                       'chapter': chapter_no, 'where': where}
-        grouped.setdefault((owner, target), []).append(OwnerIssueV1(
-            code='material_name_leak', item=item, message=message, context=context))
+    for repair in repairs:
+        grouped.setdefault((repair.owner, repair.node), []).append(repair.issue)
     first: OwnerRevisionRequired | None = None
     for (owner, target), issues in sorted(grouped.items()):
         try:
-            discover_owner_issues(repository, raised_by='str06.stage4.compile',
+            discover_owner_issues(repository, raised_by=raised_by,
                                   owner=owner, node=target, issues=issues)
         except OwnerRevisionRequired as required:
-            if first is None or NODE_ORDER.index(target) < NODE_ORDER.index(
-                    first.node):
+            if first is None or NODE_ORDER.index(target) < NODE_ORDER.index(first.node):
                 first = required
-            # 非首组：记录已按完整额度/指纹账落盘，随首组回派的正向重放修复。
     if first is not None:
         raise first
 
@@ -1494,6 +1456,9 @@ def run_node(node_id: str, ctx: ChainContext) -> dict:
         raise ValueError(f'未登记的候选节点 runner：{node_id}')
     report = runner(ctx)
     ctx.after_node_commit(node_id)
+    complete_owner_dispatch(ctx.repository, node_id,
+        chapter_owners=tuple(f'ch{c["chapter_ordinal"]:02d}' for c in ctx.chapters)
+        if node_id == 'str06.stage2.chapters' else ())
     from novel.stages.revisions import activate_node_revisions, resolve_node_revisions
     activate_node_revisions(ctx.repository, node_id)
     if node_id in {'str06.stage2.compile', 'str06.stage4.compile', 'str06.stage7.assemble'}:
@@ -1565,7 +1530,7 @@ def run_chain(ctx: ChainContext, *, through: str = 'stage4',
             verdict, _gate_why = (
                 revision_gate(record.against_sha256, product_sha,
                               record.rounds_total,
-                              no_progress=record.no_progress)
+                              no_progress=record.no_progress, dispatch_pending=record.dispatch_pending)
                 if record is not None else ('wait_reverify', '无 open 记录'))
             if (verdict != 'redo' or target not in order_index
                     or order_index[target] >= index
@@ -1685,13 +1650,19 @@ class ExecutionProfile:
 
 def freeze_execution_profile(
         *, cfg: Config, reasoning_effort: str, base, sid: str,
-        book_call_ceiling: int | None = None) -> ExecutionProfile:
+        book_call_ceiling: int | None = None,
+        request_profile: LegacyLlmProfile | None = None) -> ExecutionProfile:
     """冻结一次 run 的执行配置：effort 校验 + 整书上限从持久准入账派生。
 
     上限判定顺序：显式值（工具路径 `--book-call-ceiling`）→ 持久总闸
     ceiling＋grants（`read_book_budget`；坏账关闭式上抛，不把坏账当零）
     → `BOOK_CONTENT_CALL_CEILING_DEFAULT`（首跑账尚未建立）。
     """
+    if request_profile is not None:
+        from novel.llm.providers import validate_legacy_profile
+        validate_legacy_profile(request_profile)
+        cfg = replace(cfg, model=request_profile.model, thinking_mode=request_profile.thinking_mode)
+        reasoning_effort = request_profile.reasoning_effort
     if book_call_ceiling is None:
         budget = read_book_budget(base, sid)
         if budget is None:
@@ -1980,11 +1951,18 @@ def execute(args) -> None:
     # 在这里，此后同一份 ExecutionProfile 贯通 Runtime、transport、请求身份与
     # ledger——执行中重读配置的通道不存在。
     cfg = load_config()
+    request_profile = getattr(args, 'request_profile', None)
+    if request_profile is not None:
+        from novel.llm.providers import validate_legacy_profile
+        for node in args.node or ():
+            validate_legacy_profile(request_profile, node=node)
     sid = run_dir.relative_to(base_path).as_posix().replace('/', '_')
     profile = freeze_execution_profile(
         cfg=cfg,
-        reasoning_effort=getattr(args, 'reasoning_effort', None) or 'high',
+        reasoning_effort=(request_profile.reasoning_effort if request_profile is not None
+                          else getattr(args, 'reasoning_effort', None) or 'high'),
         base=base_path, sid=sid,
+        request_profile=request_profile,
         book_call_ceiling=getattr(args, 'book_call_ceiling', None))
     boundary = assemble_paid_boundary(
         base=base, run_dir=run_dir, source_identity=source_identity,

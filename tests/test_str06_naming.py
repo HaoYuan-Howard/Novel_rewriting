@@ -96,27 +96,27 @@ def _naming_wire(entries) -> dict:
 def test_name_structure_compile_green_and_refusals():
     core = _chars().core_view()
     structure = _chars().name_structure
-    wire = structure.model_dump(mode='json')
+    wire = {'protocol_version': 'stage2-names-v2', **structure.model_dump(mode='json')}
     compiled, errors = compile_name_structure(wire, core, SRC)
     assert compiled is not None and not errors, errors
 
-    bad = {'families': wire['families'], 'people': wire['people'],
+    bad = {**wire, 'families': wire['families'], 'people': wire['people'],
            'extra': 1}
     _, errors = compile_name_structure(bad, core, SRC)
     assert any('未知字段' in e for e in errors)
 
-    bad = {'families': wire['families'],
+    bad = {**wire, 'families': wire['families'],
            'people': {**wire['people'], 'ghost': wire['people']['fu_ren']}}
     _, errors = compile_name_structure(bad, core, SRC)
     assert any('Characters 之外' in e for e in errors)
 
-    bad = {'families': wire['families'],
+    bad = {**wire, 'families': wire['families'],
            'people': {k: v for k, v in wire['people'].items() if k != 'fu_ren'}}
     _, errors = compile_name_structure(bad, core, SRC)
     assert any('缺少人物条目' in e for e in errors)
 
     # 模板渲染等式：构词与 surface 对不上即拒
-    bad = {'families': wire['families'], 'people': {
+    bad = {**wire, 'families': wire['families'], 'people': {
         **wire['people'],
         'chen_yan': {**wire['people']['chen_yan'],
                      'surface_forms': {'陈砚': '{given}', '砚哥': '{given}哥'}}}}
@@ -124,7 +124,7 @@ def test_name_structure_compile_green_and_refusals():
     assert any('渲染不一致' in e for e in errors)
 
     # 纯称谓含本人姓名字面 → 防漏标拒绝
-    bad = {'families': wire['families'], 'people': {
+    bad = {**wire, 'families': wire['families'], 'people': {
         **wire['people'],
         'fu_ren': {**wire['people']['fu_ren'],
                    'family_id': 'fam_chen',
@@ -133,7 +133,7 @@ def test_name_structure_compile_green_and_refusals():
     assert any('防漏标' in e for e in errors)
 
     # 字面必须在源文中出现
-    bad = {'families': {**wire['families'],
+    bad = {**wire, 'families': {**wire['families'],
                         'fam_hpf': {'literal': '慕容', 'forms': []}},
            'people': wire['people']}
     _, errors = compile_name_structure(bad, core, SRC)
@@ -145,7 +145,7 @@ def test_family_redundant_id_normalized_or_mismatch_rejected():
     不一致时报错（wire 白名单不静默）。"""
     core = _chars().core_view()
     structure = _chars().name_structure
-    wire = structure.model_dump(mode='json')
+    wire = {'protocol_version': 'stage2-names-v2', **structure.model_dump(mode='json')}
     wire['families']['fam_chen']['family_id'] = 'fam_chen'  # 冗余但一致
     compiled, errors = compile_name_structure(wire, core, SRC)
     assert compiled is not None and not errors, errors
@@ -164,7 +164,7 @@ def test_surname_probe_reports_and_never_blocks():
     assert multi and all(f.strict for f in multi)                  # 复姓：逐处严格
     # 探针不阻断：同一 structure 照常编译
     compiled, errors = compile_name_structure(
-        structure.model_dump(mode='json'), core, SRC)
+        {'protocol_version': 'stage2-names-v2', **structure.model_dump(mode='json')}, core, SRC)
     assert compiled is not None and not errors
 
 

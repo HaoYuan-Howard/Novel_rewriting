@@ -1892,7 +1892,7 @@ NODES: Final[dict[str, NodeSpec]] = {
         lifecycle=NodeLifecycleSpec(
             'book', '书级人物表（book 观察）、完整 MainText 与 hook_copy 章前文字',
             'executor', 'none',
-            '机械校验自证；姓氏构词探针只报告',
+            '机械校验自证；名称同一性留证，歧义停止；姓氏构词探针只报告',
             ('stop',), ('str06.stage2.names',), 'executor:book',
             ('saved_response', 'historical_adoption', 'owner_patch'), 4)),
     'str06.stage2.associate': NodeSpec(
@@ -1902,7 +1902,7 @@ NODES: Final[dict[str, NodeSpec]] = {
         operator_redo='owner_revision',
         produces=('stage2/observations/associate.json',),
         lifecycle=NodeLifecycleSpec(
-            'book', 'book 与 chapters 观察的句柄及最小文本（compiler 投影）',
+            'book', 'book 与 chapters 观察经 names 已证明同一性归一后的句柄及最小文本（compiler 投影）',
             'executor', 'none',
             '机械校验自证；只选已给句柄，未决项保持未决、不默认合并或默认不同（D8）',
             ('stop',), ('str06.stage2.associate',), 'executor:book',
@@ -1947,7 +1947,7 @@ NODES: Final[dict[str, NodeSpec]] = {
     'str06.stage4.hook_design': NodeSpec(
         'stage4', 'R-5', True, 'Stage4 Hook 设计并经 publish_graph 唯一发布 PresentationGraph',
         flags=('--check-only',),
-        operator_redo='canonical',
+        operator_redo='owner_revision',
         produces=('stage4/design/presentation_graph.json',),
         lifecycle=NodeLifecycleSpec(
             'book', 'BodyDesign、Characters v4 与身份投影', 'executor', 'none',

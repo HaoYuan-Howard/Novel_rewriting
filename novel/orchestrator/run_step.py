@@ -37,8 +37,7 @@ _VALUE_OPTIONS = (
     '--base', '--sid', '--expect-code-version', '--evidence-json', '--run-id',
     '--operator-permit-file', '--operator-permit-sha256',
 )
-_EVIDENCE_SCHEMA = 'novel-operator-step-evidence-v2'
-_COMMANDER_EVIDENCE_SCHEMA = 'novel-operator-step-evidence-v4'
+_EVIDENCE_SCHEMA = 'novel-operator-step-evidence-v5'
 _SECRET_MARKER = re.compile(r'api[_-]?key|deepseek_api_key', re.IGNORECASE)
 
 
@@ -153,8 +152,7 @@ def _evidence_bytes(
 ) -> bytes:
     """直接投影本次 ``build_steps`` 的对象；不重造 argv 或运行判定。"""
     payload = {
-        'schema': (
-            _COMMANDER_EVIDENCE_SCHEMA if context is not None else _EVIDENCE_SCHEMA),
+        'schema': _EVIDENCE_SCHEMA,
         'steps': [
             {
                 'argv': list(step.argv),
@@ -162,6 +160,8 @@ def _evidence_bytes(
                 'writes': step.writes,
                 'label': step.label,
                 'note': step.note,
+                'request_profile': (step.request_profile.model_dump(mode='json')
+                                    if step.request_profile is not None else None),
                 **({
                     'executor_backend': (
                         step.executor_backend.model_dump(mode='json')
@@ -300,8 +300,11 @@ def _main(argv: list[str] | None = None) -> int:
                     f'run_step --run-id={args.run_id!r} 与 Commander run '
                     f'{context.run_id!r} 不一致')
         executor_backend = None
+        request_profile = None
         egress_authorized = None
         if context is not None:
+            if args.node in node_planner.PROFILED_LLM_NODES:
+                request_profile = context.executor_backend(args.node).profile
             tokens = frozenset(node_planner.flag_tokens(flags))
             if node_planner.is_paid(args.node, flags):
                 backend_of = getattr(context, 'executor_backend', None)
@@ -379,6 +382,7 @@ def _main(argv: list[str] | None = None) -> int:
             args.node, args.sid, flags,
             base=(current_permit.base if current_permit is not None else args.base),
             executor_backend=executor_backend,
+            request_profile=request_profile,
             egress_authorized=egress_authorized,
             placeholders=not args.execute)
         evidence_data = _evidence_bytes(

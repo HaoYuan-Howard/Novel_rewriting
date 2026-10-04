@@ -19,6 +19,7 @@ from pydantic import ValidationError
 from contracts.schema.design import (
     STAGE4_DESIGN_WIRE_PROTOCOL, DesignWireV7,
 )
+from contracts.schema.grounding import ReconstructionBrief
 
 
 def _address_row(at: str, key: str) -> dict[str, Any] | None:
@@ -96,6 +97,36 @@ def knowledge_change_index(obligations: Mapping[str, Any]) -> dict[str, tuple[st
             for ob, requirement in sorted(obligations.items())
             for i, change in enumerate(sorted(requirement.knowledge_changes,
                                               key=lambda c: c.change_id), start=1)}
+
+
+def project_design_input(
+    brief: ReconstructionBrief, obligations: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Brief → 源盲输入 v1；同一语义只发一次，短引用与 wire 编译共用。
+
+    仅撤去审计 hash／机械 core、change 身份；完整满足条件、锁、认知变化、
+    依赖、表达和世界约束不截断。正式 Brief 不变，输入版本及内容参与请求摘要。
+    """
+    by_core = {r.core_id: r for r in brief.requirements}
+    cores = {r.core_id: ob for ob, r in obligations.items()}
+    if len(cores) != len(obligations) or set(cores) != set(by_core):
+        raise ValueError('Design 输入义务映射必须完整且唯一')
+    if any(r != by_core[r.core_id] for r in obligations.values()):
+        raise ValueError('Design 输入义务映射与正式 Brief 不一致')
+    projection = brief.model_dump(mode='json', exclude={
+        'brief_id', 'preserve_checkpoint_sha256', 'requirements'})
+    projection['input_version'] = 'stage4-design-input-v1'
+    changes = knowledge_change_index(obligations)
+    projection['requirements'] = {
+        ob: {
+            **r.model_dump(mode='json', exclude={'core_id', 'requires_cores', 'knowledge_changes'}),
+            'requires': [cores[ref] for ref in r.requires_cores],
+            'knowledge_changes': {
+                ref: change.model_dump(mode='json', exclude={'change_id'})
+                for ref, (owner, change) in changes.items() if owner == ob},
+        } for ob, r in sorted(obligations.items())
+    }
+    return projection
 
 
 def expand_design_wire(

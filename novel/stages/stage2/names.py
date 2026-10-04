@@ -19,6 +19,7 @@ from typing import Any, NamedTuple
 from contracts.schema.source import (
     CharactersCore, NameStructure, render_form,
 )
+from contracts.schema.observation import STAGE2_NAMES_PROTOCOL
 
 _PEOPLE_KEYS = frozenset({'family_id', 'given', 'aliases', 'surface_forms'})
 _FAMILY_KEYS = frozenset({'literal', 'forms'})
@@ -36,13 +37,18 @@ class ProbeFinding(NamedTuple):
 
 def compile_name_structure(
     wire: dict[str, Any], characters: CharactersCore, source_text: str,
+    *, evidence=None,
 ) -> tuple[NameStructure | None, list[str]]:
     """names wire（{'families': ..., 'people': ...}）→ NameStructure。
 
     全部错误聚合返回；wire 原样进、不修改（I-24）。
     """
     errors: list[str] = []
-    if set(wire) - {'families', 'people'}:
+    if not isinstance(wire, dict):
+        return None, ['names wire必须是对象']
+    if wire.get('protocol_version') != STAGE2_NAMES_PROTOCOL or 'resolutions' not in wire:
+        return None, [f'names必须使用{STAGE2_NAMES_PROTOCOL}并显式提供resolutions；旧回答不能推断已核验名称异写']
+    if set(wire) - {'protocol_version', 'families', 'people', 'resolutions'}:
         errors.append('names wire 携带未知字段')
     raw_families = wire.get('families') or {}
     raw_people = wire.get('people') or {}
@@ -155,12 +161,90 @@ def compile_name_structure(
         'families': {fid: {k: v for k, v in raw.items() if k != 'family_id'}
                      for fid, raw in raw_families.items()},
         'people': raw_people,
+        'resolutions': wire['resolutions'],
     }
     from pydantic import ValidationError
     try:
-        return NameStructure.model_validate(normalized), []
+        structure = NameStructure.model_validate(normalized)
+        errors = validate_name_resolutions(structure, characters, evidence=evidence)
+        return (None, errors) if errors else (structure, [])
     except ValidationError as exc:
         return None, [f'name_structure 构造失败：{exc}']
+
+
+def validate_name_resolutions(
+    structure: NameStructure, characters: CharactersCore, *, evidence,
+) -> list[str]:
+    """只验证语义声明的引用与原句证明，不判断两个姓名是否同一人物。"""
+    from novel.stages.stage2.resolver import EvidenceResolver, verify_bases
+    errors = []
+    occupied = {}
+    known_surfaces = {s.surface for c in characters.characters.values() for s in c.surfaces}
+    resolver = EvidenceResolver(evidence or {})
+    for index, item in enumerate(structure.resolutions):
+        label = f'名称同一性[{index}]'
+        if not evidence:
+            errors.append(f'{label}缺少逐句证据，不能接受')
+            continue
+        errors.extend(f'{where}：{issue.code} {issue.message}' for where, issue in verify_bases(
+            resolver, [(label, b.segment, b.quote, tuple(q.segment for q in item.basis)) for b in item.basis]))
+        if not any(item.literal in b.quote for b in item.basis):
+            errors.append(f'{label}原字面未出现在所引原句中')
+        if item.status == 'same':
+            if item.literal in known_surfaces:
+                errors.append(f'{label}原字面已在人物表登记，不能作为异写覆盖已有身份')
+            char = characters.characters.get(item.char_id)
+            if char is None or item.surface not in {s.surface for s in char.surfaces}:
+                errors.append(f'{label}指向未登记人物或称谓')
+            for b in item.basis:
+                if item.literal not in b.quote:
+                    continue
+                key = (b.segment, item.literal)
+                decision = (item.char_id, item.surface)
+                if key in occupied and occupied[key] != decision:
+                    errors.append(f'{label}同一局部字面存在冲突指向')
+                occupied[key] = decision
+        else:
+            for b in item.basis:
+                if item.literal in b.quote:
+                    key = (b.segment, item.literal)
+                    if key in occupied:
+                        errors.append(f'{label}同一局部字面既已判定又未决')
+                    occupied[key] = (None, None)
+    return errors
+
+
+def normalize_name_observations(book, chapters, structure):
+    """按显式same声明及其证据局部归一语义文本；观察、原文、引文全部保留。"""
+    from novel.stages.common import apply_replacements
+    from contracts.schema.observation import BookObservation, ChapterObservation
+    semantic_fields = {'event', 'statement', 'value', 'question', 'resolution'}
+
+    def walk(value, refs=()):
+        if isinstance(value, list):
+            return [walk(item, refs) for item in value]
+        if not isinstance(value, dict):
+            return value
+        local = tuple(b['segment'] for b in value.get('basis', ())) or tuple(value.get('source_refs', refs))
+        mappings = {}
+        for item in structure.resolutions:
+            if item.status == 'same' and set(local) & {b.segment for b in item.basis if item.literal in b.quote}:
+                if item.literal in mappings and mappings[item.literal] != item.surface:
+                    raise ValueError('语义字段横跨相互冲突的名称对应，不能归一')
+                mappings[item.literal] = item.surface
+        result = {}
+        for key, item in value.items():
+            if key in {'basis', 'characters', 'source_refs'}:
+                result[key] = item  # 不触碰原句证据与人物候选的字面登记
+            elif key in semantic_fields and isinstance(item, str):
+                result[key] = apply_replacements(item, mappings)[0] if mappings else item
+            else:
+                result[key] = walk(item, local)
+        return result
+
+    return (BookObservation.model_validate(walk(book.model_dump(mode='json'))),
+            {n: ChapterObservation.model_validate(walk(ch.model_dump(mode='json')))
+             for n, ch in chapters.items()})
 
 
 def merge_name_structure(

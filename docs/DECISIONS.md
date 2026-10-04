@@ -13,6 +13,8 @@ novel/llm/stage4_runs.py、contracts/judges/stage5.py）：STR-06 切换（F8a�
 
 | 裁决时间 | 保留的决定与缘由 | 证据边界 / 当前落点 |
 |---|---|---|
+| 2026-10-04 | **源姓名异写由 Stage2 留证判定**：用户明确采用“Stage2 根据上下文判断名称同一性并保留原句证据；证据不足时停止，禁止下游擅改命题”。直接证据是同一源书正文含“沈鹤汀／江鹤汀”，不能当作 Design 释放选择问题处理 | names v2 声明局部 same／unresolved；compiler 只应用与证据句段相交的显式映射，观察、原文、basis.quote 保留；`docs/specs/repair_convergence.feature` RC-17。语义判断仍需真书验证 |
+| 2026-10-04 | **返修归因与成本批按规格推进**：用户确认先规格定稿，再归因与返修闭环＋计量、工程验收、输入瘦身与分节点思考对照、整书自动运行及质量验收。行为采用中文Gherkin，架构与迁移说明独立；来源、目标拍位和称谓释放共同决定owner，禁止源目标同号章字面二分归因。REQUIREMENTS压缩已完成历史，保留未完义务、失败、adapter删除条件与冻结实验分母 | 目标规格 `docs/schema/repair_convergence.md` 与 `docs/specs/`；活动账 `docs/REQUIREMENTS.md`。这是推进与设计决定，不表示场景已实现；既有付费／外发授权按原范围核对，重置不追加额度 |
 | 2026-10-03 | **STR-06 关闭**——agent 侧阅读验收（六维／十案例全 pass，结论绑定交付 hash 09d80fb1…）完成后用户指示执行「STR-06 关闭与退役尾项」，绞杀式重构在本仓收束：①Agent 终验改接新链交付证明（候选根定位＋delivery manifest＋成书 sha256 三重核对，通过仅 ready_with_disclosures，其余一律 unknown）；②存量解码面（RETIRED_NODES／RETIRED_APPROVAL_BINDINGS 名册、reviewer legacy 五模块、workflow_transition 及其 schema 模型）删除，CLI／队列／工作单元拒识改「非现役节点 ⇒ legacy_incompatible」通则，产物层 RETIRED_ARTIFACT_PATHS 与盘面探测保留为拒识的独立闭合；③retirement.py 台账、两个对账测试与表内遗留死文件同批删除，「不得回来」守卫迁 tests/test_retired_surface_scan.py。历史账只读冻结、不再提供解码面；活面＝str06 14 节点现役链（R10d 普适性另行授权） | 执行记录 docs/REQUIREMENTS.md「STR-06 关闭与退役尾项执行记录」；删除条件表三行标记已兑现；守卫 tests/test_retired_surface_scan.py；验证 junit .test_cache/str06close-*.xml |
 | 2026-10-01 | **D8 修订三（R10）· 关键语义保真与 WriterIR 精简集中升版**：用户提供两份计划（R10 执行草案＋接口与恢复规则计划），agent 合并裁决冲突后形成 [PLAN.md](../PLAN.md) 作为 R10 唯一执行指南；进度与批次账仍在 `docs/REQUIREMENTS.md`，PLAN.md 不承载动态进度（接续本表 2026-09-29「PLAN.md 完成使命删除」行，本批按用户指示恢复为批次指南而非第二活动账）。R9c 停止、不申请 Design 追加轮，R9c/b6a 两根只读留证；B6-B 并入 R10c、B6c 并入 R10d、R7 余项由 R10c 阅读问题驱动。升版面＝book `stage2-book-v3`、chapters `stage2-chapters-v2`（names／associate 不动）、`stage4-preserve-v2`／policy v5、`stage4-design-v5`、Blueprint v15、canonical rc12、renderer／写手 v7（bind／hook-design 字面不变）；升版后旧根已购产物按版本关闭式拒识（协议不兼容，不计语义检出），新根全量重购。合并裁决要点：①证据＝EvidenceQuote 逐字精确引用＋compiler 派生窗口（被引句段全文＋同章前后各一句，重叠机械合并；邻句送达≠邻句为证据，跨窗口限定显式补引）；②Preserve 证据冲突三分支回派（修订／保留解释→同任务 revise_self、复现同一实质分歧即停止不二次回派／未决按停止规则），回执身份与处理状态耐久保存、重启不重派不重购、回执内容进输入参与请求身份；③状态槽位身份（值更新不换 key）、离散阶段 series、顺序三分（信息披露顺序进 Guard；故事发生顺序是 requires 语义不机械映射阅读序；讲述顺序不作保留要求）；④Brief 由锚点派生 kp/kf 盲句柄锁定项，Design wire 删 dramatic_intent（无写手消费者）；⑤不做新旧 renderer 付费对照（用户 2026-09-30 裁决优先于矩阵计划的「补生成对照」；现盘面无可复用完整无 patch 现版本成书，版本结论只报绝对达标，不宣称相对改善）；⑥风格画像（b6a 四条已证实风格批评）为 R10c 通读后按需立项的开放项，不进 R10 主线。R10-0～R10b 与收口全部 fake transport 零付费；R10c／R10d 付费与正文外发分别授权 | 指南 `PLAN.md`（含批次序、硬闸／诊断分界、验收口径与风险）；活动账 `docs/REQUIREMENTS.md`「当前状态与下一步」；冻结钉 `tests/test_str06_f7e_freeze.py` 待 R10a/b 收口同批重钉；本表 D8 修订二行及 D8 行继续有效。开发指令不构成付费／正文外发授权 |
 | 2026-09-30 | **D8 修订二（R9）· 集中升版与分段验收**：用户提供计划并明确要求按 R9a→R9b→工程收口→R9c→B6-B→STR-06 关闭→R7→两本 Golden 推进。扩展现有 book 调用抽取带证据的源表达；book 独立升 `stage2-book-v2`，chapters／names／associate 保持原协议。Blueprint v14 与 Brief／Design／IR 升 rc11，Design wire v4 声明 narration、逐项表达 keep／change（改变带理由）及较早事件承接锚；Preserve policy v4 保留动机、行为主体与因果边界，renderer／写手协议 v6 同批。节点与运行配置不变；旧根只读保留，缺新字段明确拒识，不补历史语义默认值。人工 patch 原字节与已购请求／响应／成本绑定；只对精确匹配的产物开放最近确定性复验，源 book／chapters／names 不新增 operator_redo。显式重采必须有理由、独立付费及外发许可，普通恢复复用同一采样序号 | 裁决来源：用户附件计划 e-practice-group-novel-rewriting-outputs-glistening-clarke.md 及本会话推进指令；活动账 `docs/REQUIREMENTS.md`，冻结钉 `tests/test_str06_f7e_freeze.py`；契约身份 `08a05314a73c68d4518fc008af795078cdecf5f69888346b4f6a98d7cda497bb`。开发指令不构成付费／正文外发授权，R9c 另按具体请求报价与授权；成文语义仍须核读 |
@@ -72,3 +74,10 @@ novel/llm/stage4_runs.py、contracts/judges/stage5.py）：STR-06 切换（F8a�
 新增条目只记录会影响未来选择的产品/架构裁决：决定、原因、证据限制、当前落点各一句。
 普通 bug、提交次数、逐轮 pytest 输出留 Git 与本地验证记录。被新裁决替代时合并摘要，
 历史详情留原提交；不累积两套都像现役的说明，也不删除仍承重的质量反例。
+# 2026-10-04：请求配置与付费权限分离（CS-T）
+
+用户裁决采用：无密钥请求配置贯穿冻结运行、Step、CLI、实际请求、请求身份与账本。
+免费复检沿用同一配置，但不获得新购或正文外发权限。现有 `kind:"legacy"` 仍是稳定
+传输名；本地配置只提供连接与密钥及显式未指定运行的默认值，不能覆盖冻结选择。
+Step增加请求配置数据面，付费执行面与授权继续独立；旧Step缺该字段只作历史披露，
+不能把缺失解释成已证明的high。CU-11／CU-12验证完整消费者。

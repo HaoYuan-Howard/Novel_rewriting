@@ -243,7 +243,15 @@ def test_cascade_rewind_limit_stops_before_spiraling(tmp_path):
     assert record is None, '超界停止不得写 open 记录（未起轮）'
     # 计数持久且含上界读数；重放读同一账（幂等对账）。
     counter = repo.read('runtime/cascade_rewinds.json')
-    assert counter['count'] == CASCADE_REWIND_LIMIT + 1
+    assert counter['count'] == CASCADE_REWIND_LIMIT
+    # 拒绝不占已执行次数；重启再次拒绝也不得持续增加计数。
+    with pytest.raises(OwnerRevisionStop):
+        discover_owner_issues(
+            repo, raised_by='str06.stage4.compile', owner='ch01',
+            node='str06.stage2.chapters',
+            issues=[OwnerIssueV1(code='material_name_leak', item='chapter:2',
+                                 message='超界问题', context={})])
+    assert repo.read('runtime/cascade_rewinds.json')['count'] == CASCADE_REWIND_LIMIT
     assert counter['limit'] == CASCADE_REWIND_LIMIT
 
 

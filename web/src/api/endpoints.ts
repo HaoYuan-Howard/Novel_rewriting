@@ -208,6 +208,7 @@ function adaptPreview(start: BackendJobStart): JobPreview {
       writes: step.writes,
       argv: step.argv.map(quoteArg).join(' '),
       executor_backend: step.executor_backend,
+      request_profile: step.request_profile ?? null,
       egress_authorized: step.egress_authorized,
     })),
   }

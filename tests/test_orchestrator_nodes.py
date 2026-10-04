@@ -374,9 +374,7 @@ def test_every_profiled_executor_run_has_one_resolved_argv_and_step_snapshot(
         executor_backend=EXECUTOR_BACKEND,
         egress_authorized=True,
     )
-    # F9 实证修复（F8d 遗留③）：直连 LLM 节点的 canonical argv 不挂 executor
-    # backend 旗标（`_run_str06` 对 `--executor-backend/--legacy-*` 关闭式拒收，
-    # 执行配置来自 load_config）；冻结 profile 只落在 Step／run 契约记录面。
+    # 请求配置经独立数据旗标送达，免费追检继承同一配置但不继承授权。
     assert not any(token.startswith('--executor-') for token in producer.argv)
     assert not any(token.startswith('--legacy-') for token in producer.argv)
     assert producer.executor_backend == EXECUTOR_BACKEND
@@ -385,11 +383,12 @@ def test_every_profiled_executor_run_has_one_resolved_argv_and_step_snapshot(
     assert '--allow-egress' in producer.argv
 
     follow = steps[1]
+    assert follow.request_profile == producer.request_profile == EXECUTOR_BACKEND.profile
     assert follow.executor_backend is None
     assert follow.egress_authorized is None
     assert follow.paid is False
     assert follow.argv == N.build_argv(
-        node, SID, ['--check-only'], base=BASE)
+        node, SID, ['--check-only'], base=BASE, request_profile=EXECUTOR_BACKEND.profile)
     assert '--check-only' in follow.argv
     assert '--allow-egress' not in follow.argv
     assert '--yes' not in follow.argv

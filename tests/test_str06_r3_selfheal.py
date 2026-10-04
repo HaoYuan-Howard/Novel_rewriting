@@ -47,6 +47,8 @@ def test_route_table_closes_code_and_owner_axes():
             action, _target = route_owner_issue(code, unbound_owner='design')
         elif code == 'source_evidence_conflict':
             action, _target = route_owner_issue(code, conflict_anchor='b06_21.e1')
+        elif code == 'material_name_leak':
+            action, _target = route_owner_issue(code, material_owner='design')
         else:
             action, _target = route_owner_issue(code)
         assert action in ('revise_self', 'revise_upstream'), code
@@ -86,7 +88,13 @@ def test_issue_record_write_bounds_and_resolve(tmp_path):
     assert record.status == 'open' and record.rounds_total == 1
     assert record.against_sha256 == _digest(b'{"pairing": "v1"}')
 
-    # 同问题集原样重现：无进展，按 item 停（轮数不涨）。
+    # 写issue后、owner修改前重启：沿用已登记轮，不误判修订无效。
+    with pytest.raises(OwnerRevisionRequired):
+        discover_owner_issues(repo, raised_by='str06.stage2.compile',
+                              owner='associate', node='str06.stage2.associate', issues=issues)
+    assert read_owner_issue_file(repo, 'associate').rounds_total == 1
+    _put_owner_product(repo, 'associate', b'{"pairing": "v2"}')
+    # owner已修改但同问题集原样重现：无进展，按 item 停（轮数不涨）。
     with pytest.raises(OwnerRevisionStop, match='没有进展'):
         discover_owner_issues(repo, raised_by='str06.stage2.compile',
                               owner='associate', node='str06.stage2.associate',
@@ -112,7 +120,7 @@ def test_issue_record_write_bounds_and_resolve(tmp_path):
     resolve_owner_issues(repo, owner='associate', raised_by='str06.stage2.compile')
     resolved = read_owner_issue_file(repo, 'associate')
     assert resolved.status == 'resolved' and resolved.rounds_total == 2
-    assert resolved.against_sha256 == _digest(b'{"pairing": "v1"}')
+    assert resolved.against_sha256 == _digest(b'{"pairing": "v2"}')
     with pytest.raises(OwnerRevisionStop, match='额度'):
         discover_owner_issues(repo, raised_by='str06.stage2.compile',
                               owner='associate', node='str06.stage2.associate',
@@ -332,7 +340,7 @@ def test_faulted_full_chain_completes_via_revision(tmp_path, monkeypatch, fault)
     paid = [r for r in rows if not r['cached']]
     faulty_owner = {'evidence_out_of_range': 'book', 'unknown_slug': 'ch01',
                     'missing_pairing': 'associate', 'obligation_unbound': 'design',
-                    'duplicate_json_key': 'book'}[fault]
+                    'duplicate_json_key': 'book', 'knowledge_release': 'design'}[fault]
     assert sum(1 for r in paid if r['purpose'] == faulty_owner) == 2, \
         '原轮＋修订轮各一行实付'
     from novel.work_units import read_book_budget
@@ -659,3 +667,20 @@ def test_names_accepts_proven_book_revision_cascade_only(tmp_path, monkeypatch, 
     bad = revised.model_copy(update={'stages': [stage.model_copy(
         update={'artifacts': bad_artifacts}) if s.stage == 'stage2' else s for s in stages]})
     assert S.operator_redo_flags(bad, 'str06.stage2.names') is None
+
+
+def test_committed_noop_dispatch_cannot_reopen_as_pending(tmp_path):
+    from novel.stages.owner_revision import complete_owner_dispatch
+    repo = _bare_repo(tmp_path)
+    _put_owner_product(repo, 'associate', b'{"pairing": "v1"}')
+    issues = [OwnerIssueV1(code='association_undecided', item='', message='同一缺口')]
+    with pytest.raises(OwnerRevisionRequired):
+        discover_owner_issues(repo, raised_by='str06.stage2.compile', owner='associate',
+                              node='str06.stage2.associate', issues=issues)
+    complete_owner_dispatch(repo, 'str06.stage2.associate')
+    record = read_owner_issue_file(repo, 'associate')
+    assert not record.dispatch_pending and record.no_progress
+    with pytest.raises(OwnerRevisionStop, match='没有进展'):
+        discover_owner_issues(repo, raised_by='str06.stage2.compile', owner='associate',
+                              node='str06.stage2.associate', issues=issues)
+    assert read_owner_issue_file(repo, 'associate').rounds_total == 1

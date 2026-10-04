@@ -191,7 +191,7 @@ associate 独立版本 `stage2-associate-v2`（R1，2026-09-28——typed 作用
 
 | # | 要求 | 谁在查 |
 |---|---|---|
-| R-3.1 | Characters v4 名称结构编译闭合：人物闭集、家族与称谓面合法；编译错误 fail-fast。 | `HARD`（`novel/stages/stage2/names.py::compile_name_structure`） |
+| R-3.1 | Characters v4 名称结构编译闭合：人物闭集、家族与称谓面合法；names v2 对源姓名异写提供原字面、same／unresolved、人物与已登记称谓、原句证据和理由。compiler 仅在声明的证据局部归一语义文本，保留原文及引文；未决或冲突在关联购买与双产物发布前停止，下游不得私改命题；编译错误 fail-fast。 | `HARD`（`novel/stages/stage2/names.py::compile_name_structure`） |
 | R-3.2 | 应改名集合覆盖源名称结构：名称位一致、无漏标、纯称谓不进应改名集；`merge_name_structure` 保持稳定 ID。 | `HARD`（`novel/stages/stage2/names.py::merge_name_structure`） |
 | R-3.3 | 源语义（归因、因果、揭示）未经语义审阅，保持未评披露；不产生审批待办。 | `INFO`（`source_semantics_unver` 明示 `UNVER`）；逐章与全书抽取的语义盲区见 `B-07`／`B-08`，设定块剧透见 `B-16` |
 | R-3.4 | 姓氏构词探针只读报告（同姓亲属、复姓、独立化名的构词读数），不自动替换、不首字猜姓。 | `结构`（`novel/stages/stage2/names.py::surname_construction_probe`） |
@@ -254,6 +254,15 @@ Stage4 的四个付费节点按固定序推进：`preserve`（保存策略义务
 | R-5.18 | **series 分别承载（R10a a5；CS-3 随 bind 迁移）**：design 义务清单带出 series（正式 ID＋mechanism）与按义务渲染的锁摘要（Brief 锁面）；同一 series 的成员接受拍不同——两成员接受拍相同即 `series_collapsed`（body_design 同节点修订，C3/C5 的承载面）；复合义务前半用支撑拍（非末次标注拍）表达，不合并成员；必保漏标由 real 覆盖闸拦、无标注的非必保义务进 unbound（义务不删）。 | `HARD`（`novel/stages/stage4/grounding.py::derive_semantic_binding`＋`design_obligation_index`；反例 `tests/test_str06_a5_positions.py`、`tests/hard_cases.py`） |
 | R-5.19 | **锁位置 Guard：信息披露顺序（R10a a5）**：kp 键知情升到某模式的位置、读者确认的位置不得早于**授权该模式的义务承载位置**（授权位＝必保义务 anchors 授权该 (holder, kp, mode) 的全部承载点最早者——支撑拍是承载的一部分，怀疑渐进到证实合法，P2）；initial_state 无披露时点不进判据；自由键不查（模式合法性归 R-5.17）；故事发生顺序不做机械 Guard（顺序三分，P5 合法倒叙不拦）。违例按 `epistemic_lock_order` 回派 `str06.stage4.body_design`（位置上下文＋源盲 core_id；披露顺序是 Design 的决定，Bind 只选承载位）。 | `HARD`（`novel/stages/stage4/guard.py::lock_order_violations`＋`novel/stages/chain.py::_backfill_epistemic_lock_order`；反例 `tests/test_str06_a5_positions.py`、`tests/hard_cases.py`） |
 | R-5.20 | **已购回答复用四条件（R10a §二.4）**：实际模型输入未变且已购回答仍适用→复用（重启不重复购买）；验收条件变化、模型输入未变→免费机械复验，失败按既有恢复规则；实际写作材料变化→按请求身份与修订规则判断是否新回答（材料变化＝新请求身份，含冲突处理结果附注）；仅审计或展示信息变化→不触发付费重写（时间戳等纯审计字段不进模型输入）。未受材料或验收条件影响的章节不重购；上游修订影响的章重新汇集正文与回执。 | `HARD`（`novel/llm/paid_requests.py` 请求身份与接受循环＋`novel/stages/chain.py::revision_prompt_for_owner`；反例 `tests/test_str06_a3_conflicts.py`、`tests/hard_cases.py`） |
+
+材料名称冲突的归因须使用正式字段来源、目标消费拍位和释放依据（RC-01～08）；
+不按源目标同号章二分路由。正确源命题的 know 拍位归 Design，Preserve 只修改自身
+statement／satisfaction，默认 keep 由 Design expression_overrides 处理；来源未证明、
+投影不一致或多 owner 歧义停止。Design 接受前与最终 compile 共用实际材料判据。
+问题身份不依赖展示位置或措辞；相同集合、循环和累计额度使返修停止，崩溃后尚未派出的
+已登记轮可恢复，不能因此多占一轮。运行记录用 OwnerIssue v3，旧版本集中解码；错误
+旧归因仅经 `issue-correction` 身份绑定的免费预览／显式更正变为 superseded，保存原
+记录、已耗轮数与更正理由，不删除历史、不重置额度（RC-09～16）。
 
 ### R-6 · 确定性编译（stage4 · str06.stage4.compile · 0 成本）
 
@@ -375,7 +384,7 @@ Hook 的必要选择进入 Stage4 正式 Design（`R-5.6`），经 HookContext �
 | R-11.13 | 剧透开关只关四个字段，**已知旁路仍在**，界面上常驻这句标注 | `结构`（`contracts/invariants.py::SPOILER_DISCLOSURE`，随 `/api/enums` 整份下发；由 `tests/test_api_discipline.py::test_the_spoiler_disclosure_boundary_is_published` 查） |
 | R-11.14 | executor 选择只有一个公开事实源：`GET /api/agent/capabilities`（路径保留）。C3 硬切后现役唯一 wire 是 `ExecutorBackend = {kind:'legacy', profile:LegacyLlmProfile}`；本地 Agent CLI（`kind=agent` / `AgentProfile`）已从契约与执行面删除，历史账经 `HistoricalAgentBackend` + `retired_formats` 只读拒绝。Legacy 由 `novel.llm.providers` 关闭 provider/model/thinking/effort/node。`PipelineAgentProfiles.schema_version=4`；加载 v1–v3 丢弃 commander 与 agent 条目。前端不得硬编码选项；`default_profiles=null` 只表示尚无产品预置。用户常用配置经 settings CAS，三态 unset/configured/unreadable | `结构`（`contracts/schema/orchestration.py::ExecutorBackend` + `novel/llm/providers.py` + `novel/orchestrator/executor_capabilities.py` + `novel/orchestrator/agent_settings.py`；`tests/test_agent_capabilities.py`、`tests/test_retired_formats.py`、`tests/test_cli.py` 查） |
 | R-11.15 | 显式 Executor profile 必须从 preview/start 的同一计划冻结到 Step、JobStart、argv 与 RunContext，并到达该节点 DirectLlmExecutor。可执行 node/flags 组合以 `novel/orchestrator/nodes.py::PROFILED_LLM_RUNS` 为准，未登记组合在 wire/dispatch 前拒绝 | `结构`（`novel/orchestrator/nodes.py::resolve_executor_backend` + `novel/orchestrator/jobs.py::plan_start` + `novel/cli/main.py`；`tests/test_orchestrator_nodes.py`、`tests/test_cli.py` 查） |
-| R-11.16 | 直接 job 的 legacy executor backend 与并发策略只按现役 capability 闭集选择并冻结到 JobStart / Step / argv / RunContext；免费 check Step 不携模型 profile。checkpoint 与历史采用必须闭合 profile/请求/输入/回答/session/attempt/ledger | `结构`（`novel/orchestrator/nodes.py::PROFILED_LLM_NODES` + `novel/llm/run_journal.py`；jobs/API/CLI 回归查） |
+| R-11.16 | 直接 job 的 legacy executor backend 与并发策略只按现役 capability 闭集选择并冻结到 JobStart / Step / argv / RunContext；请求配置独立于权限，以 Step.request_profile 与 CLI --request-profile 贯穿实际请求、请求身份及免费复检。免费 check 沿用配置，但没有 executor backend、付费或外发许可；缺已购回答即停，禁止退回默认 high。checkpoint 与历史采用必须闭合 profile/请求/输入/回答/session/attempt/ledger | `结构`（`novel/orchestrator/nodes.py::resolve_request_profile` + `novel/cli/main.py::_request_profile_of` + `novel/stages/chain.py::execute`；`tests/test_str06_cli_dispatch.py`、`tests/test_str06_product_entry.py` 查） |
 | R-11.17 | 正文外发与付费分别授权。`PreviewRequest.egress_authorized` 默认 false；resolved legacy profile 与 bool 必须同源冻结到 JobStart/Step/argv，只有 true 才加入 `--allow-egress`。C3 起不再有 Agent CLI dual-session 路径 | `结构`（`novel/orchestrator/nodes.py::resolve_executor_egress` + `novel/cli/main.py::_dispatch`；jobs/API/CLI 回归查） |
 | R-11.18 | 直接 Executor 组合统一登记在 `PROFILED_LLM_RUNS`；producer 使用固定 typed response，由 DirectLlmExecutor 提交，schema/HARD 由代码判断。Stage4/5 prepared 与 historical adoption 纪律不变（旧链 `stage4_runs` 的 repair aggregate/prepared 面随旧链退役；新链同族边界是 `PaidRequestSession` 的 wire 采用与跨根历史采用，身份逐字相等才零新购复用） | `结构`（`novel/orchestrator/nodes.py::PROFILED_LLM_RUNS` + `novel/llm/run_journal.py` + `novel/llm/paid_requests.py::PaidRequestSession`；stage 恢复与 jobs/API/CLI 回归查） |
 | R-11.19 | `/api/agent/capabilities` 是 legacy provider/model/effort/thinking 的唯一选项源（C3 不再发布 Agent CLI drivers）。新运行表单按 configured→产品默认→空草稿初始化；unreadable 关闭预览/启动。`RunContractV2` 冻结授权与 profiles；code/protocol 归 ExecutionEpoch。自动跑书由确定性 RunSupervisor 推进 | `结构`（`novel/orchestrator/agent.py` + `novel/orchestrator/executor_capabilities.py`；RunContractV2/epoch/授权回归查） |
@@ -567,7 +576,7 @@ typed `--apply-edit` 是新人工轮次，旧主体决定按依赖失效，不�
 付费和正文外发分别取得授权，继续在已授权范围内执行；可离线验证的先离线验证。
 费用分类共用 node/flags 的唯一判定，免费用白名单，未知不声称免费，也不编造预计费用。
 终审成本只认 `<base>/_service/ledger.jsonl`；实付与缓存命中分列，局部 provenance、日志与报告不能重复加总，
-reasoning 已含在 completion 中时不再累加。
+reasoning 是 completion 的子口径，不再累加。统一解析顶层与 completion_tokens_details.reasoning_tokens，保留合法零，缺失／null／冲突／非法值保持未知并诊断；reasoning 大于 completion 也拒绝该子口径，不触发模型重购。当前购买、缺账恢复与 client 共用 `novel/llm/usage.py`；历史只读补证由 `novel/llm/usage_audit.py` 绑定原请求、attempt 与响应摘要，分别报告账内和补证值，不覆盖原账。失败和重试计入成本，缓存采用单列。
 
 **额度与重试层级**（2026-09-15 全自动裁决补全）：付费内容调用有两层持久额度——每工作单元
 `WORK_UNIT_EXECUTOR_MAX_CONTENT_CALLS`（含首次生成），以及**整书级总闸**

@@ -16,23 +16,35 @@ from tools.repair_rounds import main
 def _make_base(tmp_path):
     base = tmp_path / 'out'
     (base / '_service').mkdir(parents=True)
-    (base / '_service' / 'ledger.jsonl').write_text('\n'.join(json.dumps(r) for r in (
+    from novel.work_units import initialize_workflow
+    initialize_workflow(base)
+    (base / '_service' / 'ledger.jsonl').write_text('\n'.join(json.dumps(dict(r, sid='sid1')) for r in (
         {'node': 'str06.stage2.chapters', 'cached': False, 'completion_tokens': 100},
         {'node': 'str06.stage2.chapters', 'cached': False, 'completion_tokens': 50},
         {'node': 'str06.stage2.chapters', 'cached': True, 'completion_tokens': 0},
-    )), encoding='utf-8')
-    unit = base / '_service' / 'runs' / 'sid1' / 'work_units' / 'unit1'
-    unit.mkdir(parents=True)
+    )) + '\n', encoding='utf-8')
+    import hashlib
+    from novel.work_units import WorkUnitBudget
+    unit = WorkUnitBudget(base, 'sid1', 'str06.stage2.chapters', scope='chapter:1')
     for name, accepted, errors, at in (
-            ('accept_aaaa', False,
-             ['第1章拍1 participants 引用未知人物 ghost'], 1),
-            ('accept_bbbb', True, [], 2)):
-        (unit / f'{name}.json').write_text(json.dumps({
-            'payload': {'node': 'str06.stage2.chapters', 'scope': 'chapter:1',
-                        'owner': 'ch01', 'turn_id': 't1', 'attempt_id': name,
+            ('zzzz', False,
+             ['第1章拍1 participants 引用未知人物 ghost'], 2),
+            ('aaaa', True, [], 1)):
+        request = hashlib.sha256(name.encode()).hexdigest()
+        turn = unit.reserve(request, run_id='metrics-fixture')
+        unit.record_attempt(turn.turn_id, attempt_id=name, outcome='ok')
+        unit.save_response(turn.turn_id, {'response': name})
+        unit.save_acceptance(turn.turn_id, name, {
+                        'node': 'str06.stage2.chapters', 'scope': 'chapter:1',
+                        'request_sha256': request,
+                        'owner': 'ch01', 'turn_id': turn.turn_id, 'attempt_id': name,
                         'mode': 'json', 'parse': 'ok' if accepted else 'failed',
                         'salvage': 'none', 'errors': errors, 'accepted': accepted,
-                        'created_at': at}}, ensure_ascii=False), encoding='utf-8')
+                        'created_at': at})
+        if accepted:
+            unit.mark_adopted(turn.turn_id)
+        else:
+            unit.mark_rejected(turn.turn_id)
     return base
 
 
@@ -42,8 +54,8 @@ def test_repair_rounds_tables(tmp_path, capsys):
     out = capsys.readouterr().out
     assert 'str06.stage2.chapters      fresh=   2  completion=     150' in out, \
         '缓存重放不计 fresh（ledger 为权威账）'
-    assert '首过率：0/1' in out, '第 1 轮失败即非首过'
-    assert '返修×1' in out
+    assert '当前首内容轮接受：0/1' in out, '按正式轮次排序，不按反序时间戳或随机ID'
+    assert '修订内容轮×1' in out and '非历史首过率' in out
     assert '第1轮×1' in out and '第1章拍1 participants' in out, '失败码矩阵携带定位段'
 
 
@@ -52,3 +64,35 @@ def test_repair_rounds_missing_layout_is_quiet(tmp_path, capsys):
     base.mkdir()
     assert main([str(base)]) == 0
     assert '无接受记录' in capsys.readouterr().out
+
+
+def test_usage_unknown_failed_calls_and_sid_filter(tmp_path, capsys):
+    base = _make_base(tmp_path)
+    with (base / '_service/ledger.jsonl').open('a', encoding='utf-8') as stream:
+        for row in ({'sid':'sid1','node':'str06.stage2.chapters','outcome':'failed','completion_tokens':None},
+                    {'sid':'other','node':'other','completion_tokens':999999}):
+            stream.write(json.dumps(row)+'\n')
+    assert main([str(base), '--sid', 'sid1']) == 0
+    output = capsys.readouterr().out
+    assert '未知（已知小计150，缺失1次）' in output
+    assert '999999' not in output and 'fresh=   3' in output
+
+
+def test_malformed_complete_ledger_is_not_silently_skipped(tmp_path):
+    import pytest
+    base = _make_base(tmp_path)
+    with (base / '_service/ledger.jsonl').open('a', encoding='utf-8') as stream:
+        stream.write('not-json\n')
+    with pytest.raises(ValueError):
+        main([str(base), '--sid', 'sid1'])
+
+
+def test_revalidation_is_not_a_new_content_round(tmp_path, capsys):
+    from novel.work_units import WorkUnitBudget
+    base = _make_base(tmp_path)
+    unit = WorkUnitBudget(base, 'sid1', 'str06.stage2.chapters', scope='chapter:1')
+    attempt, record = unit.acceptance_records()[0]
+    unit.save_acceptance(record['turn_id'], attempt, {**record, 'created_at': 100})
+    assert main([str(base), '--sid', 'sid1']) == 0
+    out = capsys.readouterr().out
+    assert '内容轮 2  attempt 2' in out and '修订内容轮×1' in out

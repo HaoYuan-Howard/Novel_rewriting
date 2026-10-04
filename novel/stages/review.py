@@ -5,18 +5,19 @@ from pydantic import ValidationError
 
 from contracts.schema.grounding import OutputConstraints
 from contracts.schema.hook import HookConstraints
-from contracts.schema.observation import BookObservation, NamesObservation, STAGE2_OBSERVATION_PROTOCOL
+from contracts.schema.observation import BookObservation, NamesObservation, STAGE2_NAMES_PROTOCOL
 from contracts.schema.design import DesignWireV7
 from contracts.schema.workflow import STR06_RUNTIME_CONFIG, STAGE4_PRESERVE_POLICY_VERSION
 from novel.stages.stage2 import (
     character_core_view, compile_associate_observation, compile_chapter_observation,
     compile_name_structure, compile_source_truth, project_association_space,
+    normalize_name_observations, validate_name_resolutions,
 )
 from novel.stages.stage4 import (
     assemble_body_design, assemble_preserve, assemble_hook_design,
     design_obligation_index, design_placements, derive_semantic_binding, project_brief,
     publish_graph, compile_execution_plan, compile_hook_context, compile_writer_book_ir,
-    run_mechanical_guard,
+    run_mechanical_guard, inspect_body_materials, plan_material_repairs,
 )
 from novel.stages.stage5 import context_sha256, validate_chapter_prose, validate_hook_prose, sha256_text
 from novel.stages.stage7 import (
@@ -62,13 +63,19 @@ def dry_run_patch(repository, owner, candidate, *, evidence, budget,
                 else:
                     chapters[n] = repository.read_model(f'stage2/observations/ch{n:02d}.json')
             if owner == 'names':
-                structure, errors = compile_name_structure(candidate, core, '\n'.join(v['text'] for v in evidence.values()))
+                structure, errors = compile_name_structure(candidate, core, '\n'.join(v['text'] for v in evidence.values()), evidence=evidence)
                 if errors:
                     return {'node': 'str06.stage2.compile', 'status': 'ran', 'errors': errors}
-                names = NamesObservation(protocol_version=STAGE2_OBSERVATION_PROTOCOL, structure=structure)
+                names = NamesObservation(protocol_version=STAGE2_NAMES_PROTOCOL, structure=structure)
             else:
                 names = repository.read_model('stage2/observations/names.json')
             if owner == 'associate':
+                errors = validate_name_resolutions(names.structure, core, evidence=evidence)
+                errors.extend(f'名称同一性未决：{r.literal}' for r in names.structure.resolutions
+                              if r.status == 'unresolved')
+                if errors:
+                    return {'node': 'str06.stage2.compile', 'status': 'ran', 'errors': errors}
+                book, chapters = normalize_name_observations(book, chapters, names.structure)
                 associate, errors = compile_associate_observation(candidate, project_association_space(book, chapters))
                 if errors:
                     return {'node': 'str06.stage2.compile', 'status': 'ran', 'errors': errors}
@@ -141,16 +148,14 @@ def dry_run_patch(repository, owner, candidate, *, evidence, budget,
                                                         chars.name_structure, kp_statements, world_statements)
         errors.extend(hook_errors)
         if plan is not None and hook_context is not None:
-            ir = compile_writer_book_ir(graph=graph, plan=plan, binding=binding, total_budget=budget,
-                                        length_band=length_band, book_title=book_title, projection=projection,
-                                        structure=chars.name_structure, kp_statements=kp_statements,
-                                        world_statements=world_statements, fact_locks=brief.fact_locks)
+            inspection = inspect_body_materials(graph, binding, brief, chars, budget=budget,
+                                               length_band=length_band, book_title=book_title)
             identities = material_identities(graph, binding, chars)
             errors.extend(validate_hook_materials(hook_context, internal_ids=identities))
-            for chapter in ir.chapters:
-                errors.extend(validate_writer_materials(project_chapter_packet(ir, chapter.chapter_ordinal), internal_ids=identities))
-                for context in chapter.scenes:
-                    errors.extend(run_mechanical_guard(binding=binding, context=context, graph=graph))
+            errors.extend(inspection.errors)
+            errors.extend(r.issue.message for r in plan_material_repairs(
+                inspection.materials, body=graph, binding=binding, brief=brief,
+                structure=chars.name_structure))
         return {'node': 'str06.stage4.compile', 'status': 'ran', 'errors': errors}
     except FileNotFoundError as exc:
         return {'status': 'not_run', 'reason': f'下游正式输入缺失：{exc.filename}'}

@@ -50,9 +50,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 CLI_MODULE = 'novel.cli'
 
 #: 直连 LLM 节点族前缀。**与 `novel/cli/main.py` 的 `str06.` 入口分流是同一路由**：
-#: 这些节点的执行配置来自 `novel.config.load_config()`，命令行拒绝 executor
-#: backend 旗标（`_run_str06`）；`build_argv` 为它们构造 canonical argv 时不挂
-#: `--executor-backend/--legacy-*`，冻结 profiles 只在 run 契约与 UI 面记录。
+#: 请求配置经 Step/CLI 显式传入，付费与免费复检共用；连接配置仍由运行边界读取。
 DIRECT_LLM_NODE_PREFIX = 'str06.'
 
 #: 追跑那条 `--check-only` 的理由。
@@ -65,7 +63,7 @@ FOLLOW_CHECK_NOTE = '自动追跑：退出码 0 也可能是残缺产物'
 #: 已完成真实「profile → DirectLlmExecutor → 代码提交」纵切的付费跑法。
 #:
 #: 节点名不够表达执行边界；反过来，``--check-only`` 等 0 成本复检路径绝不能
-#: 因为节点在名单里就拿到 executor profile。因此唯一判据是
+#: 因为节点在名单里就拿到付费 executor backend；免费复检仅继承 request_profile。因此唯一判据是
 #: ``(node, flag token set)``，值只列**已经完整迁移**的组合。
 #: ⚠⚠ F8b 翻转：旧链 10 键随 ``RETIRED_NODES`` 退役；新链付费纵切经 F5e 真实
 #: 成书与 F7a PaidRequestSession 边界验证，付费节点的完整迁移跑法都是默认 argv
@@ -355,6 +353,7 @@ def child_env(env: Mapping[str, str] | None = None) -> dict[str, str]:
 def build_argv(node: str, sid: str | None, flags: Sequence[str] = (), *,
                base: str | os.PathLike[str],
                executor_backend: ExecutorBackend | None = None,
+               request_profile: LegacyLlmProfile | None = None,
                egress_authorized: bool | None = None,
                placeholders: bool = False) -> list[str]:
     """那条命令。**preview 与真跑共用这一个函数**（`R-11.8`）。
@@ -379,6 +378,7 @@ def build_argv(node: str, sid: str | None, flags: Sequence[str] = (), *,
         flags = filled
     tokens = validate_run(node, flags, allow_placeholders=placeholders)
     executor_backend = resolve_executor_backend(node, flags, executor_backend)
+    request_profile = resolve_request_profile(node, request_profile, executor_backend)
     egress_authorized = resolve_executor_egress(
         executor_backend, egress_authorized)
     if sid is None:
@@ -392,23 +392,9 @@ def build_argv(node: str, sid: str | None, flags: Sequence[str] = (), *,
     if sid is not None:
         argv.append(sid)
     argv += list(flags)
-    # ⚠ F8c 解钩外发授权后遗留的同一处（F8d 遗留③，F9 真实产品跑书时实证）：
-    # 直连 LLM 节点（`str06.*`，与 `novel/cli/main.py` 的入口分流同一路由）的
-    # 执行配置来自 `novel.config.load_config()`，命令行**不接受** executor
-    # backend 旗标——`_run_str06` 对 `--executor-backend/--legacy-*` 关闭式
-    # 拒收。编排器从冻结 profiles 解析出的 backend 只是 run 契约／UI 面的
-    # 「模型执行配置」（启动时经 `validate_pipeline_profiles` 校验），不翻译进
-    # argv；否则 agent／queue／jobs 驱动每一个付费新链节点都会 exit 2。
-    if (isinstance(executor_backend, LegacyExecutorBackend)
-            and not node.startswith(DIRECT_LLM_NODE_PREFIX)):
-        profile = executor_backend.profile
-        argv += [
-            '--executor-backend', 'legacy',
-            '--legacy-provider', profile.provider,
-            '--legacy-model', profile.model,
-            '--legacy-effort', profile.reasoning_effort,
-            '--legacy-thinking', profile.thinking_mode,
-        ]
+    # 配置是请求身份数据，不能只留在 UI，也不随付费权限的移除而丢失。
+    if request_profile is not None:
+        argv += ['--request-profile', request_profile.model_dump_json()]
     # ⚠ F8c：正文外发授权与 executor backend 解钩——直连 LLM 节点
     # （`str06.*`，无 backend 旗标）同样要把它带上命令行，否则编排器驱动
     # 付费新链节点时永远缺这枚独立授权（I-43：付费与外发是两份授权）。
@@ -508,6 +494,25 @@ def resolve_executor_backend(
         raise UnsupportedRunMode(f'executor_backend 不可执行：{exc}') from exc
 
 
+def resolve_request_profile(
+    node: str, profile: LegacyLlmProfile | None,
+    backend: ExecutorBackend | None = None,
+) -> LegacyLlmProfile | None:
+    """同一冻结配置的请求投影；复检可携带，不决定 paid/egress。"""
+    if backend is not None:
+        if profile is not None and profile != backend.profile:
+            raise UnsupportedRunMode('请求配置与执行配置不一致')
+        profile = backend.profile
+    if profile is None:
+        return None
+    if node not in PROFILED_LLM_NODES:
+        raise UnsupportedRunMode(f'{node} 没有模型请求，不接受 request_profile')
+    try:
+        return validate_executor_backend(LegacyExecutorBackend(profile=profile), node=node).profile
+    except AgentProfileRefused as exc:
+        raise UnsupportedRunMode(f'请求配置不可执行：{exc}') from exc
+
+
 def resolve_executor_egress(
     backend: ExecutorBackend | None,
     egress_authorized: bool | None,
@@ -536,6 +541,7 @@ def resolve_executor_egress(
 def _step(node: str, sid: str | None, flags: Sequence[str], *, base: str | os.PathLike[str],
           note: str | None = None,
           executor_backend: ExecutorBackend | None = None,
+          request_profile: LegacyLlmProfile | None = None,
           egress_authorized: bool | None = None,
           placeholders: bool = False) -> Step:
     # ⚠ **一个 Step 的四格必须出自同一份 flags。** argv 补了占位符而 `paid`/`writes`/
@@ -553,12 +559,14 @@ def _step(node: str, sid: str | None, flags: Sequence[str], *, base: str | os.Pa
     from novel.orchestrator import retired_formats
     retired_formats.refuse_agent_backend('build_steps', executor_backend)
     resolved_backend = resolve_executor_backend(node, filled, executor_backend)
+    resolved_profile = resolve_request_profile(node, request_profile, resolved_backend)
     resolved_egress = resolve_executor_egress(
         resolved_backend, egress_authorized)
     return Step(
         argv=build_argv(
             node, sid, filled, base=base,
             executor_backend=resolved_backend,
+            request_profile=resolved_profile,
             egress_authorized=resolved_egress,
             placeholders=placeholders),
         cwd=str(REPO_ROOT),
@@ -567,6 +575,7 @@ def _step(node: str, sid: str | None, flags: Sequence[str], *, base: str | os.Pa
         writes=write_effect(node, filled),
         note=note,
         executor_backend=resolved_backend,
+        request_profile=resolved_profile,
         egress_authorized=resolved_egress,
     )
 
@@ -574,6 +583,7 @@ def _step(node: str, sid: str | None, flags: Sequence[str], *, base: str | os.Pa
 def build_steps(node: str, sid: str | None, flags: Sequence[str] = (), *,
                 base: str | os.PathLike[str],
                 executor_backend: ExecutorBackend | None = None,
+                request_profile: LegacyLlmProfile | None = None,
                 egress_authorized: bool | None = None,
                 follow_check: bool = True,
                 placeholders: bool = False) -> list[Step]:
@@ -591,6 +601,7 @@ def build_steps(node: str, sid: str | None, flags: Sequence[str] = (), *,
     first = _step(
         node, sid, flags, base=base,
         executor_backend=executor_backend,
+        request_profile=request_profile,
         egress_authorized=egress_authorized,
         placeholders=placeholders)
     steps = [first]
@@ -602,5 +613,6 @@ def build_steps(node: str, sid: str | None, flags: Sequence[str] = (), *,
             source = flags[list(flags).index('--source') + 1]
             check_sid = novel_paths.derive_source_meta(source)[0]
         steps.append(_step(node, check_sid, ['--check-only'], base=base,
+                           request_profile=first.request_profile,
                            note=FOLLOW_CHECK_NOTE))
     return steps

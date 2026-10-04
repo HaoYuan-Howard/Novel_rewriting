@@ -312,12 +312,29 @@ class Step(FrozenModel):
     #: 本模型不再做 agent 迁移。
     executor_backend: ExecutorBackend | None = None
 
+    #: CS-T 加法版本：无密钥请求身份，免费复检也携带；不授予调用许可。
+    #: 历史 Step 缺失仍为 None（未知），不能由读面补造默认配置。
+    request_profile: LegacyLlmProfile | None = None
+
     #: 本步是否拿到独立的正文外发授权。旧记录没有这一格时为 ``None``；新 executor
     #: 步必须显式冻结 bool，未接 executor 的代码/兼容步则不得伪造授权快照。
     egress_authorized: bool | None = None
 
     @model_validator(mode='after')
     def _executor_egress_shape(self) -> Step:
+        if self.argv.count('--request-profile') > 1:
+            raise ValueError('Step argv 重复请求配置')
+        if '--request-profile' in self.argv:
+            index = self.argv.index('--request-profile') + 1
+            if index >= len(self.argv):
+                raise ValueError('Step argv 缺请求配置值')
+            if LegacyLlmProfile.model_validate_json(self.argv[index]) != self.request_profile:
+                raise ValueError('Step 请求配置与 argv 不一致')
+        elif self.request_profile is not None:
+            raise ValueError('Step argv 缺请求配置')
+        if (self.request_profile is not None and self.executor_backend is not None
+                and self.request_profile != self.executor_backend.profile):
+            raise ValueError('Step 请求配置与执行配置不一致')
         argv_authorized = '--allow-egress' in self.argv
         # ⚠ F8c：正文外发授权与 executor backend 解钩。直连 LLM 节点
         # （`str06.*`，无 backend 旗标）同样携带这枚独立授权（I-43）——
@@ -408,6 +425,11 @@ class JobStart(StrictModel):
         if any(step.executor_backend is not None and not step.paid
                for step in self.steps):
             raise ValueError('0 成本 step 不能携带 executor_backend')
+        request_profiles = [step.request_profile for step in self.steps
+                            if step.request_profile is not None]
+        if request_profiles and any(step.request_profile != request_profiles[0]
+                                    for step in self.steps):
+            raise ValueError('同一作业的执行与复检请求配置不一致')
         egress_steps = [
             step for step in self.steps if step.egress_authorized is not None
         ]
@@ -2286,6 +2308,7 @@ class OwnerIssueState(StrictModel):
     product_sha256: str | None = None
     #: 同指纹重现（修订无进展）——门控据此停给人，不自动重买（R8a）。
     no_progress: bool = False
+    dispatch_pending: bool = False
 
 
 class OwnerRevisionState(StrictModel):

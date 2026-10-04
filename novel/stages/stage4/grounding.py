@@ -200,11 +200,12 @@ def project_preserve_view(
     I-20/I-21 机械渲染归 compiler）。R10-0.3 实证旧形态整份 Blueprint JSON
     倾倒 29.9k token/轮——本投影只给语义判断实际需要的原子与证据。
     """
-    lines: list[str] = []
-    index = _anchor_index(characters, blueprint)
+    lines: list[str] = ['输入版本：stage4-preserve-input-v2']
+    cited: set[str] = set()
     if characters.initial_state:
         lines.append('【书级初始事实（故事开始前成立）】')
         for atom in characters.initial_state:
+            cited.update(atom.source_refs)
             knowledge = ''
             if atom.knowledge is not None:
                 known = list(atom.knowledge.known_by)
@@ -219,6 +220,7 @@ def project_preserve_view(
     if blueprint.world_constraints:
         lines.append('【世界约束】')
         for rule in blueprint.world_constraints:
+            cited.update(rule.source_refs)
             lines.append(f'[{rule.constraint_id}] {rule.kind}：{rule.statement}')
             for basis in rule.basis:
                 lines.append(f'  依据 {basis.segment}：「{basis.quote}」')
@@ -226,7 +228,6 @@ def project_preserve_view(
         lines.append('【源表达机制（series 的 mechanism 闭集）】')
         for item in blueprint.source_expression.items:
             lines.append(f'{item.ex_id}（{item.kind}）：{item.statement}')
-    cited: set[str] = set()
     for chapter_bp in sorted(blueprint.chapters, key=lambda c: c.chapter):
         lines.append(f'【第 {chapter_bp.chapter} 章】')
         scene_of = {bid: span.scene_id
@@ -234,14 +235,24 @@ def project_preserve_view(
         for beat in chapter_bp.beats:
             scene_note = scene_of.get(beat.beat_id, '?')
             lines.append(f'拍 {beat.beat_id}（场景 {scene_note}；'
-                         f'{"；".join(beat.participants) or "无人物"}）：{beat.event}')
+                         f'{beat.scene_boundary}；{beat.temporal_mode}；'
+                         f'{"；".join(beat.participants) or "无人物"}；'
+                         f'来源 {",".join(beat.source_refs)}）：{beat.event}')
+            bases: dict[tuple[str, str], list[str]] = {}
             for letter, transfers in (('e', beat.effects), ('c', beat.cognition),
                                       ('l', beat.loops)):
-                for n in range(1, len(transfers) + 1):
+                for n, transfer in enumerate(transfers, 1):
                     handle = f'{beat.beat_id}.{letter}{n}'
-                    lines.append(f'  [{handle}] {_anchor_line(index[handle])}')
+                    lines.append(f'  [{handle}] {_transfer_line(letter, transfer)}')
+                    for basis in getattr(transfer, 'basis', ()):
+                        bases.setdefault((basis.segment, basis.quote), []).append(handle)
+            for (segment, quote), handles in bases.items():
+                cited.add(segment)
+                lines.append(f'  依据 [{",".join(handles)}] {segment}：「{quote}」')
             for ref in beat.source_refs:
                 cited.add(ref)
+        for edge in chapter_bp.causal_edges:
+            lines.append(f'因果 {edge.from_beat} —{edge.kind}→ {edge.to_beat}')
     lines.append('【证据窗口（被引句段全文，含同章前后各一句）】')
     for ref in sorted(cited):
         window = blueprint.evidence.get(ref)
@@ -250,26 +261,23 @@ def project_preserve_view(
     return '\n'.join(lines)
 
 
-def _anchor_line(anchor: ObligationAnchor) -> str:
-    """单原子的人读渲染（与 _anchor_index 同一事实源，不二次解释）。"""
-    parts: list[str] = []
-    if anchor.source_kind == 'effect':
-        parts.append(f'事实 {anchor.address} = {anchor.value!r}（{anchor.modality}'
-                     f'；{anchor.visibility}')
-        if anchor.proposition_ref:
-            parts.append(f'；命题 {anchor.proposition_ref}「{anchor.proposition_statement}」')
-        parts.append('）')
-    elif anchor.source_kind == 'cognition':
-        parts.append(f'认知 {anchor.holder} {anchor.mode}「{anchor.proposition_statement}」')
-    elif anchor.source_kind == 'loop':
-        parts.append(f'悬念 {anchor.question}')
-    elif anchor.source_kind == 'initial_state':
-        parts.append(f'初态 {anchor.address} = {anchor.value!r}')
-    else:
-        parts.append(f'约束 {anchor.address}：{anchor.value}')
-    line = ''.join(parts)
-    quotes = '／'.join(f'「{q}」' for q in anchor.quotes)
-    return f'{line}　依据：{quotes}' if quotes else line
+def _transfer_line(kind: str, transfer: Any) -> str:
+    """直接投影正式转移；锚点摘要不含完整作用域，不能充当输入真相。"""
+    if kind == 'e':
+        line = (f'事实 {_render_target(transfer.target)}.{transfer.key}'
+                f' {transfer.op} {transfer.value!r}（{transfer.modality}；'
+                f'{transfer.scope}；{transfer.disclosure.visibility}；'
+                f'已知 {",".join(transfer.disclosure.known_by) or "未声明"}')
+        if transfer.proposition:
+            p = transfer.proposition
+            line += f'；命题 {p.ref}' + (f'「{p.statement}」' if p.statement is not None else '（引用）')
+        return line + '）'
+    if kind == 'c':
+        p = transfer.proposition
+        return (f'认知 {transfer.holder} {transfer.mode} 命题 {p.ref}'
+                + (f'「{p.statement}」' if p.statement is not None else '（引用）'))
+    return (f'悬念 {transfer.ref} {transfer.op}：'
+            f'{transfer.question if transfer.op == "open" else transfer.resolution}')
 
 
 

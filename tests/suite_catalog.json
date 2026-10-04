@@ -64,6 +64,16 @@
     "stage7": []
   },
   "modules": {
+    "tests/test_str06_material_repair.py": {
+      "layer": "unit_contract",
+      "stages": [
+        "stage4",
+        "stage5"
+      ],
+      "cases": {
+        "test_correction_preserves_history_and_refuses_stale_preview": "stage"
+      }
+    },
     "tests/test_ab_compare.py": {
       "layer": "unit_contract",
       "stages": []
@@ -709,6 +719,9 @@
       ],
       "cases": {
         "test_new_call_takes_work_unit_turn_and_ledger_attribution": "stage",
+        "test_nested_reasoning_usage_survives_purchase_and_free_replay": "stage",
+        "test_historical_usage_audit_binds_raw_evidence_without_mutation": "stage",
+        "test_nested_usage_missing_ledger_recovery_is_free_and_idempotent": "stage",
         "test_book_budget_gate_persists_across_sessions": "stage",
         "test_workflow_record_init_resume_and_code_drift_roll": "stage"
       }
@@ -782,6 +795,7 @@
         "stage7"
       ],
       "cases": {
+        "test_explicit_profile_reaches_transport_ledger_and_free_replay": "stage",
         "test_full_chain_from_http_upload_to_stage7_delivery": "stage",
         "test_legacy_book_is_refused_at_every_product_entry_face": "stage",
         "test_upload_without_authorization_starts_no_paid_run": "stage",
@@ -1106,6 +1120,17 @@
       ],
       "cases": {
         "test_assemble_routes_v7_and_enforces_coverage": "stage"
+      }
+    },
+    "tests/test_str06_name_resolution.py": {
+      "layer": "unit_contract",
+      "stages": [
+        "stage2",
+        "stage4"
+      ],
+      "cases": {
+        "test_proved_variant_reaches_canonical_and_preserve_without_changing_quotes": "stage",
+        "test_unresolved_identity_stops_before_associate_purchase_and_publish": "stage"
       }
     }
   },

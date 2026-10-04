@@ -52,6 +52,72 @@ def test_freeze_reads_all_txt_and_binds_bytes_profiles_and_output(manifest):
     assert not Path(manifest.output_root).exists()
 
 
+def test_v2_requires_current_six_dimensions_and_rejects_old_evaluation(manifest, snapshot):
+    assert set(G.CRITERIA) == {'core_preservation', 'structural_originality',
+        'causal_continuity', 'character_continuity', 'natural_progression', 'local_prose_coherence'}
+    with pytest.raises(ValidationError):
+        G.Manifest.model_validate({**manifest.model_dump(), 'schema_version': 1})
+    with pytest.raises(ValueError, match='v2'):
+        G.evaluate(manifest, {**snapshot, 'schema_version': 1}, _review(manifest, snapshot))
+
+
+@pytest.mark.parametrize('automation', ['assisted', 'unver', 'pass'])
+def test_quality_result_does_not_override_automatic_run_evidence(manifest, snapshot, monkeypatch, automation):
+    row = {**snapshot['books']['123'], 'automation': automation}
+    monkeypatch.setattr(G, 'capture_book', lambda *_: row)
+    current = G.collect(manifest)
+    result = G.evaluate(manifest, current, _review(manifest, current))
+    assert result['state'] == result['quality_state'] == 'pass'
+    assert result['automatic_state'] == automation
+
+
+@pytest.mark.parametrize('damage,expected', [
+    ('none', 'pass'), ('profile', 'pass'), ('manual_patch', 'assisted'),
+    ('historical', 'assisted'), ('outside_agent', 'assisted'), ('grant', 'assisted'),
+    ('book_grant', 'assisted'), ('missing_attempt', 'unver'), ('missing_bundle', 'unver'),
+    ('duplicate_cost', 'unver'), ('tail', 'unver'), ('correction', 'assisted')])
+def test_execution_evidence_requires_complete_identity_and_discloses_intervention(
+        manifest, monkeypatch, damage, expected):
+    from novel.llm import ledger, paid_requests, usage_audit
+    from novel import work_units
+    book = Path(manifest.output_root) / '合成书_123'
+    profile = manifest.profiles.executor_default.profile
+    row = dict(sid=book.name, cached=False, node='str06.stage2.book',
+               request_model=profile.model, reasoning_effort=profile.reasoning_effort,
+               thinking=profile.thinking_mode == 'on', attempt_id='attempt', request_fingerprint='request')
+    if damage == 'profile':
+        row['reasoning_effort'] = 'low' if profile.reasoning_effort != 'low' else 'high'
+    monkeypatch.setattr(ledger, 'read_cost_snapshot', lambda *_a, **_k:
+                        ([row, row] if damage == 'duplicate_cost' else [row], damage == 'tail'))
+    attempt = SimpleNamespace(attempt_id='attempt', request_fingerprint='request')
+    turn = SimpleNamespace(turn_id='turn', agent_run_id='outside' if damage == 'outside_agent' else 'agent',
+                           attempts=[] if damage == 'missing_attempt' else [attempt])
+    unit = SimpleNamespace(unit_id='unit', grants=['grant'] if damage == 'grant' else [], turns=[turn])
+    monkeypatch.setattr(work_units, 'list_unit_views', lambda *_: [{'unit_id': 'unit'}])
+    monkeypatch.setattr(work_units, 'readonly_budget', lambda *_: SimpleNamespace(_read=lambda: unit))
+    monkeypatch.setattr(work_units, 'read_book_budget', lambda *_:
+                        SimpleNamespace(grants=['grant'] if damage == 'book_grant' else []))
+    adoption = SimpleNamespace(owner='book', patch={'reason': 'manual'} if damage == 'manual_patch' else None,
+        historical={'source': 'old'} if damage == 'historical' else None,
+        turn_id='turn', attempt_id='attempt', request_sha256='request')
+    monkeypatch.setattr(paid_requests, 'commit_bundles', lambda *_:
+                        [] if damage == 'missing_bundle' else [SimpleNamespace(adoptions=[adoption])])
+    monkeypatch.setattr(usage_audit, 'audit_usage', lambda *_: {'evidence_errors': [], 'paid_attempts': 1})
+    if damage == 'correction':
+        original = dict(schema_version=2, owner='preserve', node='str06.stage4.preserve',
+            raised_by='str06.stage4.compile', status='open', rounds_total=2, fingerprint='old',
+            against_sha256='a' * 64, issues=[dict(code='material_name_leak', message='错误归因')], updated_at=1)
+        issue = {**original, 'schema_version': 3, 'status': 'superseded', 'dispatch_pending': False,
+                 'corrections': [dict(original=original, evidence_sha256='b' * 64,
+                     reason='已证明属于Design', target_owners=['design'], created_at=2)]}
+        path = book / 'runtime/issues/preserve.json'
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps(issue), encoding='utf-8')
+    result = G.capture_execution(manifest, book, ['agent'])
+    assert result['automation'] == expected
+    assert result['request_profiles_current'] is (damage != 'profile')
+
+
 @pytest.mark.parametrize('damage', ['changed', 'missing', 'extra'])
 def test_changed_removed_or_added_book_refuses_old_frozen_denominator(manifest, damage):
     root = Path(manifest.source_root)
@@ -113,7 +179,7 @@ def test_complete_bound_manual_evidence_can_pass_and_retains_every_book(manifest
 
 def test_a_quality_failure_remains_failed_when_all_engineering_checks_pass(manifest, snapshot):
     review = _review(manifest, snapshot)
-    review.books['123'].findings['facts'].state = 'fail'
+    review.books['123'].findings['causal_continuity'].state = 'fail'
     result = G.evaluate(manifest, snapshot, review)
     assert result['state'] == 'fail' and result['engineering_state'] == 'pass'
 
@@ -133,11 +199,11 @@ def test_incomplete_or_stale_quality_evidence_is_refused(manifest, snapshot, dam
     if damage == 'missing_book':
         raw['books'].clear()
     elif damage == 'missing_dimension':
-        raw['books']['123']['findings'].pop('facts')
+        raw['books']['123']['findings'].pop('causal_continuity')
     elif damage == 'empty_evidence':
-        raw['books']['123']['findings']['facts']['evidence'] = ' '
+        raw['books']['123']['findings']['causal_continuity']['evidence'] = ' '
     elif damage == 'unknown_chapter':
-        raw['books']['123']['findings']['facts']['chapter_ordinals'] = [999]
+        raw['books']['123']['findings']['causal_continuity']['chapter_ordinals'] = [999]
     elif damage == 'old_hash':
         raw['books']['123']['output_sha256'] = 'c' * 64
     else:
@@ -209,7 +275,7 @@ def test_baseline_bytes_and_manual_comparison_are_required(manifest, snapshot, t
     old_snapshot = {**snapshot, 'output_root': str(old_root), 'books': {
         '123': {**snapshot['books']['123'], 'output_sha256': G._sha('基线成书'.encode())}}}
     old_review = _review(manifest, old_snapshot)
-    prior = dict(schema_version=1, state='pass', snapshot=old_snapshot,
+    prior = dict(schema_version=2, state='pass', snapshot=old_snapshot,
                  review=old_review.model_dump(mode='json'))
     candidate = manifest.model_copy(update={'baseline': prior})
     G.validate_baseline(candidate)

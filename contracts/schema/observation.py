@@ -50,6 +50,7 @@ from contracts.schema.source import (
 #: chapters 升独立字面 v2（转移带 basis／Effect.modality）；names 输入投影
 #: 未变、保持 observation-v1；associate 仍 v2。
 STAGE2_OBSERVATION_PROTOCOL: Final = 'stage2-observation-v1'
+STAGE2_NAMES_PROTOCOL: Final = 'stage2-names-v2'
 STAGE2_BOOK_PROTOCOL: Final = 'stage2-book-v3'
 STAGE2_CHAPTERS_PROTOCOL: Final = 'stage2-chapters-v2'
 
@@ -341,10 +342,9 @@ class AssociateObservation(StrictModel):
 class NamesObservation(StrictModel):
     """`str06.stage2.names` 的落盘观察：源名称结构（家族、名、化名、称谓构词）。
 
-    名称结构形状与 v4 `NameStructure` 同源（I-11）；compile 是 Characters 的
-    唯一 writer（D9），names 观察是它的输入之一。语义协议（NAMES_RULES）不变
-    （D9「names 不变」）。
+    名称结构形状与 `NameStructure` 同源（I-11）；compile 是 Characters 的
+    唯一 writer。v2 增加有证据的名称同一性判断，未决时禁止下游归一。
     """
 
-    protocol_version: Literal['stage2-observation-v1']
+    protocol_version: Literal['stage2-names-v2']
     structure: NameStructure

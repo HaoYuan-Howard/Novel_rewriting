@@ -439,7 +439,8 @@ def test_stage_engine_packages_import_discipline():
                     'enum', 'abc', 'datetime', 'json', 're', 'os', 'sys', 'copy',
                     'math')
     allowed_roots = ('contracts', 'novel.errors', 'novel.stages',
-                     'novel.core.text', 'novel.core.name_materials')
+                     'novel.core.text', 'novel.core.name_materials',
+                     'novel.core.material_trace', 'novel.core.validation')
     banned_novel = ('novel.llm', 'novel.orchestrator', 'novel.store',
                     'novel.views', 'novel.api', 'novel.run', 'novel.work_units',
                     'novel.consumption', 'novel.prov', 'novel.paths')

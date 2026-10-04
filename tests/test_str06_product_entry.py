@@ -34,11 +34,10 @@ fake transport 复用 `tests/test_str06_body.py` 的路由表（同一份 wires�
 claim／信标／evidence 三层不在进程内复刻。理由：这三层是 admission/beacon 设施，
 进程内复刻只会把测试变成基础设施的自证；**argv 形状不在豁免之列**——F8b 时
 run_step 会把 executor backend 旗标（`--executor-backend legacy …`）冻进 argv
-而 `_run_str06` 拒收（真实接缝，F9 产品跑书时实证），F9 已在生产
-`nodes.build_argv` 修复：直连 LLM 节点（`str06.`）的 canonical argv 不挂
-`--executor-backend/--legacy-*`（`DIRECT_LLM_NODE_PREFIX`），冻结 profile 只落
-Step／run 契约记录面；本文件的派发断言据此钉住「无 executor 旗标」。两处替身的
-影响面：
+而 `_run_str06` 拒收（真实接缝，F9 产品跑书时实证）。CS-T进一步修正配置断链：
+canonical argv经`--request-profile`传递冻结配置，付费和免费复检使用同一身份。
+本文件的进程内替身只覆盖业务推进，不复刻父运行配置环境；配置传递由真实子进程
+全链及显式配置CLI用例核对到provider与ledger。两处替身的影响面：
 
   · `agent._run_step_argv`：**原样使用生产 `nodes.build_argv`**（含 `--yes` 与
     `--allow-egress`；F8c 已把外发授权与 executor backend 解钩，直连 LLM
@@ -242,6 +241,51 @@ def _ledger_rows(base) -> list[dict]:
     rows, partial = read_cost_snapshot(base)
     assert not partial, '成本账有未提交尾；先恢复再断言'
     return rows
+
+
+def test_explicit_profile_reaches_transport_ledger_and_free_replay(base, monkeypatch):
+    """CS-T：真实CLI/请求账/免费重放；本地默认不同也不能改变冻结选择。"""
+    from novel.config import Config
+    from novel.orchestrator.nodes import build_steps
+    source = base.parent / FILENAME
+    source.write_text(SOURCE_TEXT, encoding='utf-8')
+    assert cli.main(['run', 'stage0.remove', '--source', str(source), '--base', str(base)]) == 0
+    assert cli.main(['run', 'stage1.partition', '9001', '--base', str(base)]) == 0
+    monkeypatch.setattr('novel.stages.chain.load_config', lambda: Config(
+        model='deepseek-v4-pro', thinking_mode='off'))
+    requests = []
+    transport = _EntryTransport(_full_chain_wires())
+
+    class RecordingTransport:
+        def send(self, request):
+            requests.append(request)
+            return transport.send(request)
+
+    configs = []
+    def factory(cfg):
+        configs.append(cfg)
+        return RecordingTransport()
+    monkeypatch.setattr('novel.stages.chain.DeepSeekTransport', factory)
+    profile = LegacyLlmProfile(provider='deepseek', model='deepseek-flash',
+                               reasoning_effort='low', thinking_mode='on')
+    steps = build_steps('str06.stage2.book', '9001', base=base,
+                       executor_backend=LegacyExecutorBackend(profile=profile),
+                       egress_authorized=True)
+    for step in steps:
+        assert cli.main(step.argv[step.argv.index('run'):]) == 0
+    assert len(requests) == 1, '免费复检必须重放已购回答，不再调用 transport'
+    assert requests[0].model == 'deepseek-flash'
+    assert requests[0].reasoning_effort == 'low' and requests[0].thinking is True
+    assert all(c.model == 'deepseek-flash' and c.thinking_mode == 'on' for c in configs)
+    paid = [r for r in _ledger_rows(base) if not r.get('cached')]
+    assert len(paid) == 1
+    assert paid[0]['reasoning_effort'] == 'low' and paid[0]['thinking'] is True
+    assert paid[0]['request_model'] == 'deepseek-flash'
+    # 同一材料改档是独立请求身份；免费路径不能为它补购。
+    other = build_steps('str06.stage2.book', '9001', ['--check-only'], base=base,
+                       request_profile=profile.model_copy(update={'reasoning_effort': 'high'}))
+    assert cli.main(other[0].argv[other[0].argv.index('run'):]) == 2
+    assert len(requests) == 1
 
 
 def _dispatched_nodes(box: dict) -> list[str]:
@@ -676,8 +720,12 @@ def test_service_full_chain_real_subprocess_and_restart_readback(base, tmp_path,
         proc = subprocess.run(argv, cwd=repo_root, capture_output=True)
         assert proc.returncode == 0, proc.stdout + proc.stderr
 
+    profiles = _profiles().model_copy(update={'executor_overrides': {
+        'str06.stage2.names': LegacyExecutorBackend(profile=LegacyLlmProfile(
+            provider='deepseek', model='deepseek-flash', reasoning_effort='low',
+            thinking_mode='on'))}})
     settings = agent_settings.read(base)
-    agent_settings.update(base, profiles=_profiles(),
+    agent_settings.update(base, profiles=profiles,
                           expected_revision=settings.revision)
 
     # ③ 真实 HTTP 上传（两项授权）⇒ 上传作业子进程跑 stage0 + autostart。
@@ -718,12 +766,25 @@ def test_service_full_chain_real_subprocess_and_restart_readback(base, tmp_path,
     paid = [row for row in rows
             if row['sid'] == book.name and not row['cached']]
     assert len(paid) == 12
+    for row in paid:
+        expected = profiles.executor_overrides.get(row['node'], profiles.executor_default).profile
+        assert row['request_model'] == expected.model
+        assert row['reasoning_effort'] == expected.reasoning_effort
+        assert row['thinking'] == (expected.thinking_mode == 'on')
     assert {row['node'] for row in paid} == {
         'str06.stage2.book', 'str06.stage2.chapters', 'str06.stage2.names',
         'str06.stage2.associate', 'str06.stage4.preserve',
         'str06.stage4.body_design',
         'str06.stage4.hook_design', 'str06.stage5.hook', 'str06.stage5.body',
         'str06.stage7.naming'}
+
+    # Golden 收集消费同一套正式请求账和采用证据，不把文件存在当自动完成。
+    from tests.golden import capture_execution
+    execution = capture_execution(SimpleNamespace(output_root=str(base), profiles=profiles), book, [run_id])
+    assert execution['automation'] == 'pass', execution
+    assert execution['request_profiles_current'] is True
+    assert execution['interventions'] == []
+    assert execution['usage']['paid_attempts'] == 12
 
     # ⑥ 只读监控面：run/delivery/book 三面读回，页面刷新与重启前后一致。
     candidate = book.name                     # 候选根＝书目录名（title_sid）
@@ -755,7 +816,7 @@ def test_service_full_chain_real_subprocess_and_restart_readback(base, tmp_path,
 
     # ⑦ 零调用恢复：全部就绪后再次 agent.start ⇒ 零派发、零新购、交付原样。
     second = agent.start(base, '9003', authorized=True, egress_authorized=True,
-                         profiles=_profiles())
+                         profiles=profiles)
     assert agent.wait(second.run_id, 600)
     assert final_path.read_bytes() == final_bytes
     assert manifest_path.read_bytes() == manifest_before,         '零派发的代跑不得改写交付 manifest'
@@ -1179,9 +1240,10 @@ def test_agent_run_pauses_before_body_cli_canary_then_continuation_delivers(
 # 首答吃到坏 wire（real 清空）、修订轮拿到干净稿，一轮治好；下游（hook_design
 # 等）按产物新鲜度照常推进交付。req_ 源盲定位与修订轮计费面保持验收。
 
+@pytest.mark.parametrize('design_fault', ['obligation_unbound', 'knowledge_release'])
 def test_obligation_unbound_replans_across_single_node_subprocesses(base,
                                                                     tmp_path,
-                                                                    monkeypatch):
+                                                                    monkeypatch, design_fault):
     """CS-3×产品入口：design 首答漏标 real → 覆盖闸同节点修订轮自愈 →
     双产物（body_design＋semantic_binding）发布 → 下游照常交付；无跨节点
     回派、无重复购买。"""
@@ -1196,7 +1258,7 @@ def test_obligation_unbound_replans_across_single_node_subprocesses(base,
         monkeypatch, tmp_path,
         real_nodes={'str06.stage4.body_design', 'str06.stage4.hook_design',
                     'str06.stage4.compile'},
-        fault='obligation_unbound')
+        fault=design_fault)
 
     # supervisor 每节点一个子进程——fault_once 需跨子进程粘滞（状态文件），
     # 否则 body_design 子进程重跑时首答又吃到故障 wire，一轮修订永远治不好。
@@ -1246,20 +1308,26 @@ def test_obligation_unbound_replans_across_single_node_subprocesses(base,
     assert (book / 'stage4/compiled/execution_plan.json').is_file()
 
     # ③ 修订提示真实发生：design 的第二轮请求带【修订要求】段（承载闸拦下的
-    #    real 缺失问题集），定位不以 ob 源序号（Design 源盲纪律不变——v6 的
-    #    静态义务清单 ob 短名只出现在请求前缀）。
+    #    real 缺失问题集）。CS-I输入按ob短名寻址，不再发送派生req ID；
+    #    接受闸的问题定位和源盲边界仍须成立。
     from novel.stages.stage4 import obligation_core_id
     revision_payload = _turn_request_payload(base, book, 'str06.stage4.body_design',
                                              ordinal=2)
     messages = revision_payload['messages']
     revision_user = messages[-1]['content']
     assert '【修订要求】' in revision_user
-    assert obligation_core_id('ob01') in revision_user
+    assert obligation_core_id('ob01') not in revision_user
+    assert 'stage4-design-input-v1' in revision_user and 'ob01' in revision_user
     requirement_section = revision_user.split('【修订要求】', 1)[1]
     requirement_only = requirement_section.split('上一版全文', 1)[0]
     # CS-3：obNN 是 v6 义务清单的正式短名（real 标注的闭集词汇，D6），覆盖闸
     # 消息以 ob 定位合法；这里钉问题面确为 real 承载缺失。
-    assert 'real' in requirement_only and '必保义务' in requirement_only
+    if design_fault == 'obligation_unbound':
+        assert 'real' in requirement_only and '必保义务' in requirement_only
+    else:
+        assert '认知know拍位' in requirement_only and '陆大哥' in requirement_only
+        assert 'b01_01.c1' not in requirement_only, 'Design反馈保持源盲'
+        assert read_owner_issue_file(Str06Repository(book), 'preserve') is None
 
     # ④ 付费账：design 一原轮＋一修订轮；bind 不存在（退役）；下游照常。
     rows = _ledger_rows(base)
