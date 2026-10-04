@@ -333,22 +333,16 @@ def test_new_book_plan_has_null_sid_then_a_derived_sid_check(work):
 def test_prompts_only_expose_the_reading_ordinal():
     """原文章号是 Stage1 人工诊断，不进入任何模型输入。
 
-    （F8b-3：旧链 Stage2 Global 请求构造器随旧链退役；不变量改钉在两处仍
-    现役的落点上：① `MainText` schema 只有 `chapter_ordinal`——原文章号结构上
-    进不了模型材料；② 逐字进 prompt 的 `render_book` 两个串只写阅读序。）
+    （F8b-3：旧链 Stage2 Global 请求构造器随旧链退役；2026-10-04 清理批删去
+    旧链渲染器 `render_book` 后，不变量钉在仍现役的结构落点上：
+    `MainText` schema 只有 `chapter_ordinal`——原文章号结构上进不了模型材料。）
     """
-    from novel.core.text import render_book
-
-    main = MainText.model_validate([
+    MainText.model_validate([
         {'chapter_ordinal': i + 1, 'text': f'第{i + 1}段正文。'}
         for i in range(3)
     ])
     assert set(MainTextSection.model_fields) == {'chapter_ordinal', 'text'}, (
         'MainText 出现了阅读序之外的章节字段——原文章号没有结构位置进模型材料')
-    body, index = render_book(main)
-    rendered = '\n'.join((body, index))
-    assert '原文标号' not in rendered and '原文标记' not in rendered
-    assert all(f'阅读序第{i}章' in rendered for i in range(1, 4))
 
 
 def test_a_tampered_main_text_is_a_finding_not_a_checker_crash():

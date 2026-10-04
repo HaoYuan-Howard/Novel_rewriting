@@ -36,7 +36,7 @@ def test_content_equivalent_slice_recovers_original_bytes():
 
 def test_content_equivalent_slice_refuses_ambiguous_and_absent():
     assert content_equivalent_slice('他说，不行', SEGMENTS['e01_03']['text']) is None, \
-        '相同内容出现两次：拒绝猜位置（与 whitespace_equivalent_slice 同纪律）'
+        '相同内容出现两次：拒绝猜位置（唯一命中才回取）'
     assert content_equivalent_slice('这句原文没有', SEGMENTS['e01_01']['text']) is None
     assert content_equivalent_slice('', SEGMENTS['e01_01']['text']) is None
 

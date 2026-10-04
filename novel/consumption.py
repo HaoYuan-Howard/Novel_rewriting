@@ -31,7 +31,6 @@ from contracts.artifacts import (
     STR06_HOOK_RECEIPT, STR06_NAME_MAP,
 )
 from contracts.invariants import NODES
-from novel.core.evidence import without_global_evidence
 
 Projection = Callable[[object], object]
 

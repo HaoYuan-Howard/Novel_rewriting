@@ -133,14 +133,10 @@ _WITHHELD: dict[str, str] = {
                               '**无条件报出**。enums 再发一份「当前是哪一版」，'
                               '前端就能拿它自己判「这份产物过期没有」——'
                               '而那正是判据在做的事（`R-11.4` 的第二个判官）',
-    # ── stage2（role 泄漏探针）──
-    'SPEECH_TAG_MAX': '判据阈值（说话标签最大长度）',
     # ── stage4 / stage5 ──
     'SOURCE_OVERLAP_MAX': '判据阈值（canonical 成稿与原文的重合度上限）',
     'STOP_REWRITE_AFTER': '返工护栏的轮次上限。它是**编排**参数，不是给人看的取值面',
     'REVALIDATE_ONLY_NEW_ERRORS': '一个 bool 开关，说的是重算路怎么判。前端不参与那次判定',
-    'STYLE_MEASUREMENT_CONTRACT': '即时机械测量算法的当前版本；Stage5/6 已把它并入 Stage1 '
-                                  '消费投影。发给前端会诱导第二个过期判官',
     'PIPELINE_DEFAULT_CONCURRENCY': '并发默认由 Agent capability 发布，enums 不另复制',
     'PIPELINE_BOOK_CONCURRENCY': '整书总槽默认由 Agent capability 发布',
     'PIPELINE_PROVIDER_CONCURRENCY': '供应商总槽默认由 Agent capability 发布',

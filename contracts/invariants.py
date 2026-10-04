@@ -556,12 +556,6 @@ STAGE1_SEGMENT_KINDS: Final = ('hook', 'chapter', 'end_marker', 'hole')
 CHAPTER_LABEL_ANOMALY: Final = ('reset', 'gap', 'repeat')
 
 
-#: 逐字原话允许被一处提示语切开时，插入部分的内容字数上限。
-#: 形态必须在原文字节上长成「收引号 + ≤N 内容字 + 开引号」；
-#: 改词、插动作描写、只写半句照旧判缺失。
-SPEECH_TAG_MAX: Final = 12
-
-
 #: 默认仍为四并发；6/8 只在显式配置中启用，并继续受整书及供应商总槽限制。
 PIPELINE_DEFAULT_CONCURRENCY: Final = 4
 PIPELINE_BOOK_CONCURRENCY: Final = 4
@@ -628,19 +622,8 @@ STOP_REWRITE_AFTER: Final = 2
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 七、即时机械测量（不是 stage / node / 产物）
-# ─────────────────────────────────────────────────────────────────────────────
-
-#: Stage5/6 共用的确定性测量算法显式契约版本。
-#:
-#: 它不对应 JSON 信封，只回答「这些数字按哪一版算法计算」。测量算法或口径变化
-#: 时先升本值；Stage5/6 的 Stage1 consumed 投影把它并入指纹，因此既有下游会
-#: 诚实地判 stale，而不是继续拿旧算法的数字冒充当前测量。
-STYLE_MEASUREMENT_CONTRACT: Final = 'stage3-measurable-v1'
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 七之二、成书形态与人名残留（stage6 三候选面已随 STR-06 切换退役）
+# 七、成书形态与人名残留（stage6 三候选面已随 STR-06 切换退役；旧「即时机械
+# 测量」节的 STYLE_MEASUREMENT_CONTRACT 已随投影构建族删除，2026-10-04 清理批）
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ⚠⚠ F8a：本节原有的 HOOK_APPROACHES / HOOK_RETIRED_APPROACHES / HOOK_RECIPE /

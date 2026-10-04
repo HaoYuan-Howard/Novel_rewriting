@@ -1,23 +1,20 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-measure.py —— 机械层：一段文本的可测风格数字。**确定性，0 成本。**
+measure.py —— 一段文本的基础风格读数。**确定性，0 成本。**
 
-【`R-4.1`：形态数字由代码算，不是 LLM 产】Stage5/6 从各自已经读取的 Stage1
-文本即时计算精确机械投影；`bands()` 仅提供纯派生的人读/提示档位。
+【现役落点】正文机械检查由 `novel/stages/stage5/body_checks.py` 在真实消费点
+即时计算（口径版本轴由 `BODY_VALIDATOR_VERSION` 承载）；本模块只保留
+`measure()` 这把基础读数尺，供 `tools/calibrate_style_corpus.py` 做语料
+标定复算。旧链 Stage5/6 投影构建族（`measure_body` / `body_style_metrics` /
+`hook_style_metrics`）已随 2026-10-04 清理批删除。
 
-⚠ 本模块的每一个 `round()` 都是契约的一部分。改一处小数位就是一次测量契约
-改版；`STYLE_MEASUREMENT_CONTRACT` 必须同步变化，让 Stage5/6 的 Stage1 消费边
-诚实地判 stale。
+⚠ 本模块的每一个 `round()` 都是契约的一部分。改一处小数位就是一次测量口径改版。
 """
 from __future__ import annotations
 
-from contracts.schema.stage1 import MainText
-from contracts.schema.measurement import (
-    ChapterCharStats, MeasurableBlock, MeasurableBody, PerChapterSentence,
-)
+from contracts.schema.measurement import MeasurableBlock
 from novel.core.text import QUOTE_STYLES, SENT_END
-from novel.errors import ArtifactUnreadable
 
 
 def measure(text: str | None) -> MeasurableBlock | None:
@@ -52,64 +49,3 @@ def measure(text: str | None) -> MeasurableBlock | None:
         dialogue_ratio=(round(dialogue_chars / n_chars, 3) if styles else None),
         quote_styles=styles,
     )
-
-
-def measure_body(main_text: MainText) -> MeasurableBody:
-    """全书正文聚合 + 章长分布 + 逐章句长跨度（`mode_variation` 的证据）。
-
-    **逐章明细不落盘**（无消费方）——只有 min/max/avg 三个汇总进产物。
-    """
-    sections = list(main_text.root)
-    agg = measure('\n'.join(s.text for s in sections))
-    if agg is None:
-        # ⚠ **不用 `sys.exit`**：`SystemExit` 是 `BaseException`，穿透 `except Exception`
-        # （原型正因如此才不得不把每个节点跑成子进程）。
-        # ⚠ 归到 `ArtifactUnreadable` 而不是 `UpstreamMissing`：那份上游**在盘上、也合 schema**
-        # （`MainText` 只要求 ≥2 章，没要求每章正文非空），只是它说不出这本书写了什么
-        # ——「产物坏了，去看它」才是对的动作。盘上零样本，它纯属防御。
-        raise ArtifactUnreadable(
-            'stage1/main_text.json 的正文合起来是空的，无法实测风格数字。'
-            '⇒ 这不是「stage1 还没跑」（那份产物在，而且合 schema），是那份产物本身坏了')
-    per = [m for m in (measure(s.text) for s in sections) if m is not None]
-    chars = [p.chars for p in per]
-    sents = [p.avg_sentence_chars for p in per]
-    return MeasurableBody(
-        **agg.model_dump(),
-        chapter_chars=ChapterCharStats(min=min(chars), max=max(chars),
-                                       avg=round(sum(chars) / len(chars), 1)),
-        per_chapter_avg_sentence=PerChapterSentence(min=min(sents), max=max(sents)),
-    )
-
-
-def body_style_metrics(body: MeasurableBody) -> dict[str, object]:
-    """Stage5 真正消费的正文机械面。
-
-    ``dialogue_ratio_applicable`` 不再是可独立持久化的事实：它严格由
-    ``dialogue_ratio is not None`` 派生。保留这个运行时键只为不改变现有 prompt 与
-    判据接口；它不再可能与比例字段形成互相矛盾的合法状态。
-    """
-    return {
-        'avg_sentence_chars': body.avg_sentence_chars,
-        'avg_paragraph_chars': body.avg_paragraph_chars,
-        'paragraph_sep_chars': body.paragraph_sep_chars,
-        'dialogue_ratio_applicable': body.dialogue_ratio is not None,
-        'dialogue_ratio': body.dialogue_ratio,
-        'quote_styles': list(body.quote_styles),
-        'chapter_chars': {'avg': body.chapter_chars.avg},
-        'per_chapter_avg_sentence': {
-            'min': body.per_chapter_avg_sentence.min,
-            'max': body.per_chapter_avg_sentence.max,
-        },
-    }
-
-def hook_style_metrics(hook: MeasurableBlock | None) -> dict[str, object]:
-    """Stage6 真正消费的文案五叶机械面。空文案返回空映射，由调用方显式终止。"""
-    if hook is None:
-        return {}
-    return {
-        'chars': hook.chars,
-        'avg_sentence_chars': hook.avg_sentence_chars,
-        'avg_paragraph_chars': hook.avg_paragraph_chars,
-        'quote_styles': list(hook.quote_styles),
-        'dialogue_ratio': hook.dialogue_ratio,
-    }

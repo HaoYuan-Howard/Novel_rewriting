@@ -1,22 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""即时机械测量的 typed 值；它不是盘上 artifact schema。"""
+"""即时机械测量的 typed 值；它不是盘上 artifact schema。
+
+旧链聚合形状（`MeasurableBody`／`ChapterCharStats`／`PerChapterSentence`）
+已随投影构建族删除（2026-10-04 清理批）；现役正文机械检查在
+`novel/stages/stage5/body_checks.py` 消费点即时计算，不经本 schema 中转。
+"""
 from __future__ import annotations
 
 from pydantic import Field
 
 from contracts.schema.base import StrictModel
-
-
-class ChapterCharStats(StrictModel):
-    min: int = Field(ge=0)
-    max: int = Field(ge=0)
-    avg: float = Field(ge=0)
-
-
-class PerChapterSentence(StrictModel):
-    min: float = Field(ge=0)
-    max: float = Field(ge=0)
 
 
 class MeasurableBlock(StrictModel):
@@ -30,11 +24,4 @@ class MeasurableBlock(StrictModel):
     quote_styles: list[str]
 
 
-class MeasurableBody(MeasurableBlock):
-    chapter_chars: ChapterCharStats
-    per_chapter_avg_sentence: PerChapterSentence
-
-
-__all__ = [
-    'ChapterCharStats', 'MeasurableBlock', 'MeasurableBody', 'PerChapterSentence',
-]
+__all__ = ['MeasurableBlock']
