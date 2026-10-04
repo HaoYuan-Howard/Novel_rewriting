@@ -42,10 +42,11 @@ from tests.str06_expression_inputs import (
 )
 
 HOOK = '新婚夜，陆家新人立下借种之约。'
+#: 证据段＝自然段（RC-26）：每章两段，段号 eNN_01／eNN_02。
 CHAPTERS = [
-    {'chapter_ordinal': 1, 'text': '夫君走进门来。云娘坐在窗边没有回头。'},
-    {'chapter_ordinal': 2, 'text': '第二夜陆家宅子里窗外有响动。云娘握紧了剪刀。'},
-    {'chapter_ordinal': 3, 'text': '第三日夫君说出实情。云娘沉默良久。'},
+    {'chapter_ordinal': 1, 'text': '夫君走进门来。\n云娘坐在窗边没有回头。'},
+    {'chapter_ordinal': 2, 'text': '第二夜陆家宅子里窗外有响动。\n云娘握紧了剪刀。'},
+    {'chapter_ordinal': 3, 'text': '第三日夫君说出实情。\n云娘沉默良久。'},
 ]
 EVIDENCE = build_evidence(CHAPTERS, HOOK)
 
@@ -65,7 +66,7 @@ def _book_wire() -> dict:
             'yun_niang': {'canonical': '云娘', 'surfaces': [
                 {'surface': '云娘', 'source_refs': ['e01_02']}]},
         }),
-        'protocol_version': 'stage2-book-v3',
+        'protocol_version': 'stage2-book-v4',
         'characters': {
             'fu_jun': {'canonical': '夫君', 'surfaces': [
                 {'surface': '夫君', 'source_refs': ['e01_01']}]},
@@ -98,7 +99,7 @@ def _chapter_wire(*beats: dict) -> dict:
 
 def _names_wire() -> dict:
     return {
-        'protocol_version': 'stage2-names-v2', 'resolutions': [],
+        'protocol_version': 'stage2-names-v3', 'resolutions': [],
         'families': {'f_lu': {'literal': '陆', 'forms': []}},
         'people': {
             'fu_jun': {'family_id': None, 'given': None, 'aliases': [],
@@ -320,7 +321,7 @@ def _make_repo(tmp_path, name: str) -> Str06Repository:
     return repo
 
 
-def _run_stage2(tmp_path, name: str, wires: dict[str, dict], node_filter):
+def _run_stage2(tmp_path, name: str, wires: dict[str, dict], node_filter, **workflow):
     repo = _make_repo(tmp_path, name)
     ask = _AcceptingAsk(wires)
     report = run_workflow(
@@ -329,7 +330,7 @@ def _run_stage2(tmp_path, name: str, wires: dict[str, dict], node_filter):
             AssertionError('stage2 观察腿不调用文本 owner')),
         ask_body=lambda owner, prompt: (_ for _ in ()).throw(
             AssertionError('stage2 观察腿不调用正文 owner')),
-        budget=800, through='stage2', node_filter=list(node_filter))
+        budget=800, through='stage2', node_filter=list(node_filter), **workflow)
     return repo, ask, report
 
 
@@ -343,8 +344,8 @@ def test_stage2_observation_leg_persists_observations_and_names_remount(tmp_path
                 'stage2/observations/names.json'):
         artifact = repo.inspect(rel)
         assert artifact['protocol_version'] == (
-            'stage2-book-v3' if rel.endswith('/book.json')
-            else 'stage2-names-v2' if rel.endswith('/names.json')
+            'stage2-book-v4' if rel.endswith('/book.json')
+            else 'stage2-names-v3' if rel.endswith('/names.json')
             else STAGE2_CHAPTERS_PROTOCOL), rel
         assert '_provenance' in artifact, rel
     assert not (repo.root / 'stage2/characters/characters.json').exists(), \
@@ -422,6 +423,42 @@ def test_chapter_observations_share_body_slot_and_pool_concurrency(
     assert {c['per_book'] for c in slot_calls} == {PIPELINE_BOOK_CONCURRENCY}
     assert {c['per_provider'] for c in slot_calls} == {PIPELINE_PROVIDER_CONCURRENCY}
     assert {c['provider'] for c in slot_calls} == {'manual-adoption'}
+
+
+def test_frozen_book_and_provider_slots_reach_chapter_calls(tmp_path, monkeypatch):
+    """冻结的整书／供应商总槽必须进章观察占槽，不能仍用产品默认 4／8。"""
+    recorded: list[tuple[int, int]] = []
+
+    @contextlib.contextmanager
+    def recording_slot(novel_dir, provider, *, per_book, per_provider, **kwargs):
+        recorded.append((per_book, per_provider))
+        yield
+
+    monkeypatch.setattr(chain_module, 'pipeline_model_slot', recording_slot)
+    wires = {'book': _book_wire(), 'ch01': CH01_WIRE, 'ch02': CH02_VARIANT_A,
+             'ch03': CH03_WIRE, 'names': _names_wire()}
+    _run_stage2(tmp_path, 'wide', wires, _stage2_filter(),
+                slot_per_book=32, slot_per_provider=200)
+    assert recorded and set(recorded) == {(32, 200)}
+
+
+def test_chapter_pool_uses_its_own_concurrency(tmp_path, monkeypatch):
+    """章观察线程数跟 chapters 覆盖走，不跟随回落值。"""
+    from concurrent.futures import ThreadPoolExecutor
+
+    sizes: list[int | None] = []
+
+    class Recording(ThreadPoolExecutor):
+        def __init__(self, max_workers=None, *args, **kwargs):
+            sizes.append(max_workers)
+            super().__init__(max_workers=max_workers, *args, **kwargs)
+
+    monkeypatch.setattr(chain_module, 'ThreadPoolExecutor', Recording)
+    wires = {'book': _book_wire(), 'ch01': CH01_WIRE, 'ch02': CH02_VARIANT_A,
+             'ch03': CH03_WIRE, 'names': _names_wire()}
+    _run_stage2(tmp_path, 'chapter-pool', wires, _stage2_filter(),
+                concurrency=8, node_concurrency={'str06.stage2.chapters': 1})
+    assert sizes == [1]
 
 
 def test_prior_chapter_failure_does_not_change_later_chapter_request(tmp_path):

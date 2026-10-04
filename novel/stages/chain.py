@@ -45,7 +45,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
-from typing import Any, Callable, Final, NamedTuple
+from typing import Any, Callable, Final, Mapping, NamedTuple
 
 from contracts.artifacts import (
     STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT, str06_chapter_observation_rel,
@@ -53,7 +53,8 @@ from contracts.artifacts import (
 from contracts.invariants import (
     BOOK_CONTENT_CALL_CEILING_DEFAULT,
     LLM_MAX_OUTPUT_TOKENS, PIPELINE_BOOK_CONCURRENCY,
-    PIPELINE_DEFAULT_CONCURRENCY, PIPELINE_PROVIDER_CONCURRENCY,
+    PIPELINE_DEFAULT_CONCURRENCY, PIPELINE_PARALLEL_NODES,
+    PIPELINE_PROVIDER_CONCURRENCY,
 )
 from contracts.schema.grounding import OutputConstraints, PreserveCheckpoint
 from contracts.schema.hook import HookConstraints, HookReceipt
@@ -87,8 +88,8 @@ from novel.stages.stage2 import (
     compile_associate_observation,
     compile_book_observation, compile_chapter_observation, compile_name_structure,
     compile_source_truth, associate_observation_prompt, project_association_space,
-    first_appearance_anchors, first_appearance_issues,
-    normalize_name_observations, validate_name_resolutions,
+    first_appearance_anchors, first_appearance_issues, NAMES_INPUT_VERSION,
+    names_evidence_view, normalize_name_observations, validate_name_resolutions,
 )
 from novel.stages.owner_revision import (
     MechanicalDefectStop, OwnerRevisionRequired, OwnerRevisionStop,
@@ -96,16 +97,18 @@ from novel.stages.owner_revision import (
     resolve_owner_issues, complete_owner_dispatch, revision_gate, revision_prompt_for_owner,
 )
 from novel.stages.stage4 import (
-    assemble_body_design, assemble_hook_design,
+    assemble_hook_design,
     assemble_preserve, compile_execution_plan, compile_hook_context,
-    compile_writer_book_ir, derive_semantic_binding, design_obligation_index,
-    design_placements, knowledge_change_index, lock_order_violations, obligation_core_id,
+    compile_writer_book_ir, design_obligation_index,
+    knowledge_change_index, lock_order_violations, obligation_core_id,
     project_brief, project_design_input, project_preserve_view, preserve_revision_wire, publish_graph,
 )
-from contracts.schema.design import DesignWireV7, STAGE4_DESIGN_WIRE_PROTOCOL
 from contracts.schema.observation import STAGE2_NAMES_PROTOCOL
 from contracts.schema.orchestration import LegacyLlmProfile
-from novel.stages.stage4 import inspect_body_materials, plan_material_repairs
+from novel.stages.stage4 import (
+    inspect_body_materials, inspect_design_candidate, locate_design_patches,
+    plan_material_repairs,
+)
 from novel.core.validation import ValidationMessage
 from novel.stages.stage5 import (
     AnsweredText, HOOK_VALIDATOR_VERSION, MAX_REWRITES, MECHANICAL_CHECKS,
@@ -195,19 +198,32 @@ class ChainContext:
     #: llm 设施（`novel/stages/common.py` 与各 stageN 包的纪律对本模块放宽：
     #: 它是装配体，但引擎段仍不得反向依赖这里）。
     digest: Callable[[object], str] | None = None
-    #: 逐章并发度（R4 起 stage2 章观察与 stage5 正文共用同一冻结值；run 启动时
-    #: 经 `novel/config.py::concurrency_for` 读出，默认 `PIPELINE_DEFAULT_CONCURRENCY`）。
-    #: 并发度不进语义身份（`R-12.1c`）。
+    #: 没单独配置的可并发节点使用这个回落值。正式执行里它是运行默认，
+    #: 各节点自己的数在 ``node_concurrency``。并发度不进语义身份（`R-12.1c`）。
     concurrency: int = PIPELINE_DEFAULT_CONCURRENCY
+    #: 书级与供应商总槽容量。默认是产品常量；正式执行传入本次冻结的
+    #: ``PipelineConcurrency``，与付费客户端占同一组槽，避免内外层容量不一致。
+    slot_per_book: int = PIPELINE_BOOK_CONCURRENCY
+    slot_per_provider: int = PIPELINE_PROVIDER_CONCURRENCY
+    #: 可并发节点各自的冻结并发。缺键时回落到 ``concurrency``。
+    node_concurrency: dict[str, int] = field(default_factory=dict)
+
+    def pool_workers(self, node: str, item_count: int) -> int:
+        """该节点本次最多同时处理多少项；不超过待处理项数。"""
+        configured = self.node_concurrency.get(node, self.concurrency)
+        return max(1, min(configured, item_count))
 
 
-def _segment_sentences(text: str) -> list[str]:
-    """按句号切句（证据切分的唯一实现；v13 细化到句，不再按 300 字合并）。
+def _segment_paragraphs(text: str) -> list[str]:
+    """一个非空自然段一段（证据切分的唯一实现；RC-26，2026-10-04）。
 
-    只在句号边界切：不并段（并段会把整章短章塌成一段，source_refs 失去分辨力），
-    也不在句中硬切（句子完整性即上下文）。空段丢弃。
+    段文本＝原文一行去掉首尾空白（含全角缩进）后的连续片段。旧实现只在
+    「。」后切：对白收尾「」」落到下一段开头、问号／叹号收尾的连续自然段
+    并成一段，渲染时段号悬在上一段文字下方——模型系统性地把引文挂到偏大
+    的段号上（三书停书根因）。自然段是模型肉眼可见的单位，段号与文字
+    一一对应；收尾引号天然留在本句所在段。
     """
-    return [s for s in re.split(r'(?<=。)', text) if s.strip()]
+    return [line.strip() for line in text.splitlines() if line.strip()]
 
 
 def build_evidence(chapters, hook_copy: str | None = None) -> dict:
@@ -221,11 +237,11 @@ def build_evidence(chapters, hook_copy: str | None = None) -> dict:
     """
     evidence: dict[str, dict] = {}
     if hook_copy and hook_copy.strip():
-        for i, segment in enumerate(_segment_sentences(hook_copy), 1):
+        for i, segment in enumerate(_segment_paragraphs(hook_copy), 1):
             evidence[f'e00_{i:02d}'] = {'chapter': 0, 'text': segment, 'pre_chapter': True}
     for chapter in chapters:
         no, text = chapter['chapter_ordinal'], chapter['text']
-        for i, segment in enumerate(_segment_sentences(text), 1):
+        for i, segment in enumerate(_segment_paragraphs(text), 1):
             evidence[f'e{no:02d}_{i:02d}'] = {'chapter': no, 'text': segment}
     return evidence
 
@@ -343,8 +359,8 @@ def run_chapters(ctx: ChainContext) -> dict:
         # 书级与供应商总槽（`novel/model_slots.py`）：等待期取消或配置拒绝
         # 都表示尚未开始供应商调用；槽位等待不进请求身份（`R-12.1c`）。
         with pipeline_model_slot(repository.root, ctx.provider,
-                                 per_book=PIPELINE_BOOK_CONCURRENCY,
-                                 per_provider=PIPELINE_PROVIDER_CONCURRENCY):
+                                 per_book=ctx.slot_per_book,
+                                 per_provider=ctx.slot_per_provider):
             chapter_evidence = _chapter_evidence(evidence, no)
             prompt = revision_prompt_for_owner(
                 repository, f'ch{no:02d}',
@@ -377,7 +393,7 @@ def run_chapters(ctx: ChainContext) -> dict:
                              owners=(f'ch{no:02d}',), refs=(ch_ref,))
 
     ordinals = [chapter['chapter_ordinal'] for chapter in ctx.chapters]
-    workers = max(1, min(ctx.concurrency, len(ordinals)))
+    workers = ctx.pool_workers('str06.stage2.chapters', len(ordinals))
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {pool.submit(_one, no): no for no in ordinals}
         for future in as_completed(futures):
@@ -420,8 +436,8 @@ def run_names(ctx: ChainContext) -> dict:
     if ctx.hook_copy.strip():
         full = f'〔章前文字〕\n{ctx.hook_copy}\n\n' + full
     names_prompt = pack_prompt(
-        NAMES_RULES, input_version='stage2-names-input-v1',
-        characters=core.model_dump(mode='json'), evidence=evidence)
+        NAMES_RULES, input_version=NAMES_INPUT_VERSION,
+        characters=core.model_dump(mode='json'), evidence=names_evidence_view(evidence))
     names_wire, names_ref = ctx.ask(
         'names', names_prompt, lambda w: compile_name_structure(w, core, full, evidence=evidence)[1])
     structure, errors = compile_name_structure(names_wire, core, full, evidence=evidence)
@@ -751,6 +767,9 @@ def run_body_design(ctx: ChainContext) -> dict:
         pack_prompt(design_rules(known_char_ids=set(chars.characters),
                                  knowledge_refs={ref: change.holder == 'reader' and change.mode == 'known'
                                                  for ref, (_, change) in knowledge_change_index(obligation_index).items()},
+                                 # 禁区（unanswered）不承载状态，不进 lock 闭集。
+                                 fact_lock_ids=[f.kf_id for f in brief.fact_locks
+                                                if f.kind != 'unanswered'],
                                  registered_surfaces=expand_surface_releases(
                                      {cid: {s.surface for s in c.surfaces} for cid, c in chars.characters.items()},
                                      chars.name_structure)),
@@ -759,51 +778,63 @@ def run_body_design(ctx: ChainContext) -> dict:
                     constraints=constraints.model_dump(mode='json')),
         'stage4/design/body_design.json')
 
-    def design_compile(w):
-        body, errors = assemble_body_design(
-            w, known_char_ids=set(chars.characters), constraints=constraints,
-            name_projection=chars.name_projection(), name_structure=chars.name_structure,
-            expression_requirements=brief.expression,
-            source_narration=brief.source_narration,
-            registered_surfaces={cid: {s.surface for s in c.surfaces}
-                                 for cid, c in chars.characters.items()},
-            brief=brief, obligations=obligation_index)
-        if errors:
-            return None, None, errors
-        # CS-3（bind 退役）：real 承载标注是义务落点的唯一声明处——canonical
-        # BodyDesign 与 SemanticBinding 同源派生、同一修订轮校验（错误并报）。
-        placements, placement_errors = _design_placements_of(w)
-        if placement_errors:
-            return None, None, placement_errors
-        binding, errors = derive_semantic_binding(placements, body, checkpoint)
-        if errors:
-            return None, None, errors
-        inspection = inspect_body_materials(
-            body, binding, brief, chars, budget=ctx.budget,
+    def inspect(w):
+        return inspect_design_candidate(
+            w, checkpoint=checkpoint, brief=brief, obligations=obligation_index,
+            chars=chars, constraints=constraints,
             length_band=ctx.length_band, book_title=ctx.book_title)
-        repairs = plan_material_repairs(inspection.materials, body=body, binding=binding,
-                                        brief=brief, structure=chars.name_structure)
-        # 非Design责任的候选留给薄编排处理；validator不落issue、不偷改输入。
-        # 已购回答已耐久，仍禁止发布；不能拿外部／代码缺陷购买Design自修。
-        if repairs and any(r.owner != 'design' or r.action == 'stop' for r in repairs):
-            return body, binding, []
-        return body, binding, list(inspection.errors) + [
-            ValidationMessage(r.issue.message, r.issue.context['material_identity']) for r in repairs]
 
-    dw, design_ref = ctx.ask('design', design_prompt, lambda w: design_compile(w)[2])
-    body, binding, errors = design_compile(dw)
-    if errors:
-        raise ValueError(errors)
-    inspection = inspect_body_materials(
-        body, binding, brief, chars, budget=ctx.budget,
-        length_band=ctx.length_band, book_title=ctx.book_title)
-    if inspection.errors:
-        raise MechanicalDefectStop('Design材料预检失败', node='str06.stage4.body_design',
-                                   issues=inspection.errors)
-    if inspection.materials:
-        _backfill_material_repairs(repository, plan_material_repairs(
-            inspection.materials, body=body, binding=binding, brief=brief,
-            structure=chars.name_structure), raised_by='str06.stage4.body_design')
+    def repairs_for(inspection):
+        if not inspection.materials:
+            return []
+        # 单项只保留自己的来源与可修位置；完整报告在停止上下文中存一次，
+        # 不复制进每条issue及其后继prompt，避免聚合诊断反而放大返修输入。
+        return plan_material_repairs(inspection.materials,
+                                      body=inspection.body, binding=inspection.binding,
+                                      brief=brief, structure=chars.name_structure)
+
+    last_inspection = None
+
+    def validate(w):
+        nonlocal last_inspection
+        last_inspection = inspection = inspect(w)
+        repairs = repairs_for(inspection)
+        # 非Design责任的候选留给薄编排处理；validator不落issue、不偷改输入。
+        # 此处只接受响应用于回派，并非接受正式Design。全部预检结果随回派留证；
+        # 上游优先，禁止在已知上游错误下继续购买Design自修。
+        if repairs and any(r.owner != 'design' or r.action == 'stop' for r in repairs):
+            return []
+        return inspection.feedback(list(inspection.errors) + [
+            ValidationMessage(r.issue.message, r.issue.context['material_identity']) for r in repairs])
+
+    try:
+        # CS-F1 局部修订（RC-47）：判据已在判定处给每条问题带 wire 路径；可全部定位时
+        # 只把最小完整父项发回返修，合并后重跑**完整**候选预检；有任一问题无法定位
+        # （全局覆盖闸、上游派生材料等）自动退整份返修，不静默漏项。
+        dw, design_ref = ctx.ask('design', design_prompt, validate,
+                                 patch=locate_design_patches)
+    except ValidationStop as exc:
+        if last_inspection is not None:
+            exc.context['candidate_preflight'] = last_inspection.report()
+        raise
+    inspection = inspect(dw)
+    repairs = repairs_for(inspection)
+    if repairs:
+        # 上游输入将变化时，不为即将过期的Design诊断提前消耗回派轮数。
+        # 全部问题仍在同一报告中；上游修订后重新计算Design自己的问题。
+        upstream = [r for r in repairs if r.owner != 'design' or r.action == 'stop']
+        try:
+            _backfill_material_repairs(repository, upstream or repairs,
+                                       raised_by='str06.stage4.body_design')
+        except (OwnerRevisionRequired, OwnerRevisionStop, MechanicalDefectStop) as exc:
+            exc.context['candidate_preflight'] = inspection.report()
+            raise
+    if not inspection.passed:
+        stop = MechanicalDefectStop('Design候选完整预检失败', node='str06.stage4.body_design',
+                                   issues=tuple(inspection.feedback(list(inspection.errors))))
+        stop.context['candidate_preflight'] = inspection.report()
+        raise stop
+    body, binding = inspection.body, inspection.binding
     # 双产物按输出组一次发布（R6 权威；I-25：semantic_binding 的唯一 writer
     # 是 body_design——bind LLM 退役后承载位不再有第二个声明处，两份产物同
     # bundle 同 seal）。bind／hook_design 的单节点输入从盘面闭合。
@@ -814,26 +845,7 @@ def run_body_design(ctx: ChainContext) -> dict:
                     owners=('design',), refs=(design_ref,)),
     ))
     return {'scenes': len(body.scenes), 'entries': len(binding.entries),
-            'unbound': len(binding.unbound)}
-
-
-def _design_placements_of(wire: Any) \
-        -> tuple[dict[str, list[tuple[int, int]]] | None, list[str]]:
-    """design wire → real 承载标注投影（ob → 标注拍阅读序）。
-
-    只有 v6 wire 有 real 面——bind 退役后 v5 直通不再能产出承载位（I-13：
-    旧协议不补默认值取得新资格）。闭集越界由 derive_semantic_binding 精确报。
-    """
-    if wire.get('protocol_version') != STAGE4_DESIGN_WIRE_PROTOCOL:
-        return None, [
-            f'design wire 必须是 {STAGE4_DESIGN_WIRE_PROTOCOL}'
-            f'（实得 {wire.get("protocol_version")!r}）——bind 退役后 real 承载'
-            '标注是义务落点的唯一声明处，v5 直通面不再驱动生产链']
-    try:
-        model = DesignWireV7.model_validate(wire)
-    except ValidationError as exc:
-        return None, [f'design 瘦 wire 协议校验失败：{exc}']
-    return design_placements(model), []
+            'unbound': len(binding.unbound), 'candidate_preflight': inspection.report()}
 
 
 # ─── stage4 hook_design ──────────────────────────────────────────────────────
@@ -949,6 +961,8 @@ def run_compile_stage4(ctx: ChainContext) -> dict:
                     'chapters': len(writer_ir.chapters), 'scenes': len(graph.scenes),
                     'obligations': len(binding.obligations), 'guard_errors': problems,
                     'material_issues': [asdict(issue) for issue in material_issues],
+                    # 称谓投影留痕（CS-F2）：显式、可观测，不含行文本。
+                    'name_projections': list(inspection.name_projections),
                     'chapter_budgets': {c.chapter_ordinal: c.length_budget
                                         for c in writer_ir.chapters}}
     # 失败结果只进诊断：guard report 先落（问题清单与预算读数留证），正式位不写。
@@ -974,7 +988,8 @@ def run_compile_stage4(ctx: ChainContext) -> dict:
         # token（`count_text_tokens` 同 tokenizer、无请求 framing）与密度。
         PublishItem(rel='stage4/acceptance/packet_metrics.json',
                     value=packet_metrics(writer_ir,
-                                         token_counter=count_text_tokens)),
+                                         token_counter=count_text_tokens,
+                                         fact_bindings=binding.fact_bindings)),
     ))
     resolve_owner_issues(repository, owner='design',
                          raised_by='str06.stage4.compile')
@@ -1307,8 +1322,8 @@ def run_body(ctx: ChainContext) -> dict:
     Design、Characters 或其他章 IR。目标章集合由 `resolve_body_chapters`
     机械确定（W1/D2：`None`＝全书；非空 tuple＝恰好这些章，`()`／乱序／
     重复／越界在任何付费调用之前拒绝）。待补集合按有效提交集合在目标集合
-    内计算（只补缺章）；待补章经 `novel/model_slots.py` 的书级＋供应商总槽
-    并发执行（默认 `PIPELINE_DEFAULT_CONCURRENCY`，并发度不进语义身份）。
+    内计算（只补缺章）；    待补章经 `novel/model_slots.py` 的书级＋供应商总槽
+    并发执行（线程数取本节点冻结并发，并发度不进语义身份）。
     单章失败不污染其他章的合法结果（I-31）：全部待补章收敛后按第一章序的
     原始失败上抛，失败清单留证 `runtime/body_failures.json`（「最近一次
     完成执行」语义，D3/W2：正常完成写空清单，缺失＝本节点没有完成执行）；
@@ -1328,14 +1343,14 @@ def run_body(ctx: ChainContext) -> dict:
     packets = {ordinal: project_chapter_packet(writer_ir, ordinal) for ordinal in todo}
     failures: dict[int, BaseException] = {}
     if todo:
-        workers = max(1, min(ctx.concurrency, len(todo)))
+        workers = ctx.pool_workers('str06.stage5.body', len(todo))
 
         def _one(ordinal: int):
             # 书级与供应商总槽（`novel/model_slots.py`）：等待期取消或配置拒绝
             # 都表示尚未开始供应商调用；槽位等待不进请求身份（`R-12.1c`）。
             with pipeline_model_slot(repository.root, ctx.provider,
-                                     per_book=PIPELINE_BOOK_CONCURRENCY,
-                                     per_provider=PIPELINE_PROVIDER_CONCURRENCY):
+                                     per_book=ctx.slot_per_book,
+                                     per_provider=ctx.slot_per_provider):
                 return _write_and_commit_chapter(ctx, packets[ordinal], ordinal)
 
         with ThreadPoolExecutor(max_workers=workers) as pool:
@@ -1526,6 +1541,8 @@ def _record_failure(ctx: ChainContext, node_id: str, exc: Exception) -> None:
         # 执行设施统一错误形状：stage/node/item/phase/code/context（I-36）。
         status.update(exc.as_status())
         status['failed_node'] = exc.node or node_id
+    elif isinstance(exc, OwnerRevisionRequired):
+        status['error_context'] = exc.context
     repository.write('runtime/workflow_status.json', status)
 
 
@@ -1838,13 +1855,17 @@ def run_workflow(*, repository, chapters, ask, ask_text, ask_body, budget=11000,
                  book_title='', hook_constraints=None, length_band=(0.6, 1.3),
                  body_chapters=None, node_filter=None, hook_copy='',
                  concurrency: int = PIPELINE_DEFAULT_CONCURRENCY,
+                 node_concurrency: Mapping[str, int] | None = None,
+                 slot_per_book: int = PIPELINE_BOOK_CONCURRENCY,
+                 slot_per_provider: int = PIPELINE_PROVIDER_CONCURRENCY,
                  body_replay=lambda _ordinal, _packet: False,
                  after_node_commit=lambda _node: None):
     """记录显式执行状态；失败保留旧产物供恢复，但不能仍宣称上次绿灯有效。
 
     流程编排已归 owner runner（本模块上半）：本函数只装配 ChainContext、驱动
-    节点计划并落 run 级状态（F7b 薄驱动）。`concurrency` 是正文逐章并发度
-    （run 启动时冻结；并发度不进语义身份，`R-12.1c`）。`body_chapters` 是
+    节点计划并落 run 级状态（F7b 薄驱动）。`node_concurrency` 按可并发节点
+    分别冻结线程数；缺键时用 `concurrency`。并发度不进语义身份（`R-12.1c`）。
+    `body_chapters` 是
     调用层选章（W1/D2）：只作调用元数据记入 `runtime/workflow_status.json`
     的独立字段供审计，**不进** `input_sha256` 身份摘要、请求身份、回执或
     provenance——从 canary 续跑到全书不改变任何已提交章的采用与恢复身份。
@@ -1857,7 +1878,9 @@ def run_workflow(*, repository, chapters, ask, ask_text, ask_body, budget=11000,
         hook_constraints=hook_constraints, length_band=length_band,
         body_chapters=body_chapters, provider=provider, model=model,
         body_replay=body_replay, after_node_commit=after_node_commit,
-        digest=digest, concurrency=concurrency)
+        digest=digest, concurrency=concurrency,
+        node_concurrency=dict(node_concurrency or {}),
+        slot_per_book=slot_per_book, slot_per_provider=slot_per_provider)
     status_rel = 'runtime/workflow_status.json'
     identity = digest({'chapters': chapters, 'hook_copy': hook_copy, 'budget': budget,
                        'through': through, 'band': length_band})
@@ -1911,6 +1934,21 @@ def load_dev_source(payload: object) -> tuple[list[dict], str]:
     if not isinstance(chapters, list) or not chapters:
         raise ValueError('源 JSON 的 chapters 必须是非空章数组')
     return chapters, payload['hook_copy'] or ''
+
+
+def frozen_concurrency(cfg: Config) -> dict[str, Any]:
+    """把本次冻结的节点并发和两级总槽交给 ``run_workflow``。
+
+    可并发节点各自取值。没写覆盖的节点保持 ``Config.concurrency``，
+    不跟随另一个节点的覆盖。
+    """
+    return {
+        'concurrency': cfg.concurrency,
+        'node_concurrency': {
+            node: cfg.concurrency_for(node) for node in PIPELINE_PARALLEL_NODES},
+        'slot_per_book': cfg.concurrency_policy.per_book,
+        'slot_per_provider': cfg.concurrency_policy.per_provider,
+    }
 
 
 def execute(args) -> None:
@@ -2304,5 +2342,5 @@ def execute(args) -> None:
                                                          hard_max_chars=args.hook_hard_max),
                        length_band=(args.body_band_low, args.body_band_high),
                        body_chapters=args.body_chapters,
-                       concurrency=cfg.concurrency_for('str06.stage5.body'),
+                       **frozen_concurrency(cfg),
                        body_replay=body_replay, after_node_commit=after_node_commit))

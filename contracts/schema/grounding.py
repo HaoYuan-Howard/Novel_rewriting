@@ -14,6 +14,7 @@ from contracts.schema.policy import PreserveKind
 from typing import Literal
 from contracts.schema.expression import ExpressionRequirement, ExpressionReadings
 from contracts.schema.hook import HookPov
+from contracts.schema.state import StateAddress
 
 
 class SourceLineage(StrictModel):
@@ -191,8 +192,9 @@ class BriefRequirement(StrictModel):
     #: 本义务的每次认知变化，保留持有者、命题与模式的对应关系。compiler
     #: 从正式 anchor 铸盲身份；Design 只标注短引用的拍位，不重写这三个值。
     knowledge_changes: tuple[BriefKnowledgeChange, ...] = Field(default=(), min_length=0)
-    #: 必保义务须兑现的事实锁（kf_*）：时态锁按同 modality set、值未知锁按
-    #: op=unknown 承载；非必保义务为空。
+    #: 必保义务须兑现的事实锁（kf_*）：Design 在**已选的目标状态**上以 `lock`
+    #: 标注承载（时态锁须同 modality 的 set、值未知锁须 op=unknown；CS-F2，
+    #: 不再另写以 kf 为键的重复状态）；非必保义务为空。
     realize_locks: tuple[str, ...] = Field(default=(), min_length=0)
     #: series 盲标记（a4）：同一机制的离散兑现义务共享同一盲组 token；
     #: None＝不属任何 series。source-blind——token 由 compiler 铸，不泄源序号。
@@ -263,6 +265,10 @@ class BriefFactLock(StrictModel):
     时态锁（planned/expected/conditional）：Design 只能按同 modality 承载
     （写成 actual 即「预计被写成已发生」，C2 的机械面）；unknown_value：源文
     值未知，目标不得补值（C9）；unanswered：原文未回答的悬念，目标不得作答。
+    CS-F2（rc16）：承载方式是在 Design 已选的状态上标注 `lock` 引用（锁句柄只
+    是引用，不再作状态键，也不要求复述 statement）；unanswered 是禁区，不承载
+    状态、也不进 wire 的 `lock` 闭集。`statement` 是源侧语义，只供 Design 理解
+    约束，不是写手阅读材料。
     """
 
     kf_id: str = Field(pattern=r'^kf_[0-9a-f]{16}$')
@@ -399,24 +405,47 @@ class UnboundEntry(StrictModel):
     reason: str = Field(min_length=1)
 
 
+class FactLockBinding(StrictModel):
+    """事实锁的目标承载映射（CS-F2，rc16）：锁句柄 → 承载它的**已有**目标状态。
+
+    只存引用——锁句柄、承载拍与状态地址，**不复制目标 value**：BodyDesign 是
+    目标事实的唯一持有者（I-16）。映射由 body_design 与 BodyDesign 同次发布，
+    compiler 从 wire 在已选状态上的 `lock` 标注派生——模型只选已有状态，不生成
+    拍引用或地址（I-21）。一个锁至多一个承载状态，承载拍内该地址必须恰好对应
+    一条状态；不存在或有多条同址状态均拒绝。锁的内容是否被该状态语义满足
+    不由本映射证明（结构检查与语义核验分开，未标定的语义保持 unver，I-42）。
+    """
+
+    kf_id: str = Field(pattern=r'^kf_[0-9a-f]{16}$')
+    beat_ref: str = Field(pattern=r'^[^#]+#[^#]+$', description='承载拍 `场景#拍`')
+    address: StateAddress
+
+
 class SemanticBinding(StrictModel):
     """完整 Canonical snapshot（一次发布，无半份）。
 
     自洽校验：entries 与 unbound 的 obligation_id 并集内无重复（每条义务至多出现
     一次）；跨产物「全分母 = 采用的 checkpoint obligations」归 F4 机械 Guard。
+    rc16（CS-F2）：`fact_bindings` 承载事实锁到已有目标状态的映射；空表是合法值
+    （＝没有锁被兑现，由 body_design 的接受校验保证必保锁必有映射）。旧 rc12
+    产物没有该映射，由 `contract_version` 字面量拒读——缺省空表不会冒充旧产物。
     """
 
-    contract_version: Literal['str06-rc12'] = 'str06-rc12'
+    contract_version: Literal['str06-rc16'] = 'str06-rc16'
     binding_id: str = Field(min_length=1)
     preserve_checkpoint_sha256: str = Field(min_length=64, max_length=64)
     obligations: tuple[SourceObligation, ...] = Field(min_length=1)
     entries: tuple[BindingEntry, ...] = Field(min_length=0)
     unbound: tuple[UnboundEntry, ...] = Field(min_length=0)
+    fact_bindings: tuple[FactLockBinding, ...] = Field(default=(), min_length=0)
     provenance: FreeProvenance | LlmProvenance | None = Field(
         default=None, alias='_provenance', exclude=True)
 
     @model_validator(mode='after')
     def _no_double_bookkeeping(self) -> 'SemanticBinding':
+        locked = [f.kf_id for f in self.fact_bindings]
+        if len(locked) != len(set(locked)):
+            raise ValueError(f'同一事实锁在 fact_bindings 内重复承载：{sorted(locked)}')
         ids = [o.obligation_id for o in self.obligations]
         if len(ids) != len(set(ids)):
             raise ValueError('Binding 完整义务内 ID 不得重复')

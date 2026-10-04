@@ -707,7 +707,7 @@ def _book_observation_payload() -> dict:
                 ],
             },
         }),
-        'protocol_version': 'stage2-book-v3',
+        'protocol_version': 'stage2-book-v4',
         'characters': {
             'char_001': {
                 'canonical': '甲',
@@ -875,7 +875,7 @@ def test_name_identity_proof_change_invalidates_association():
     base = _book()
     upstream = 'stage2/observations/names.json'
     rel = 'stage2/observations/associate.json'
-    view = {'protocol_version': 'stage2-names-v2',
+    view = {'protocol_version': 'stage2-names-v3',
             'structure': {'families': {}, 'people': {}, 'resolutions': []}}
     store = _write_consumed_subject(base, node='str06.stage2.associate', rel=rel,
                                     upstream=upstream, upstream_payload=view)

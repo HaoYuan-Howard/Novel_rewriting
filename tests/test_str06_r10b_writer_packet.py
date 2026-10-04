@@ -119,7 +119,7 @@ def _readings():
 
 
 def _wire() -> dict:
-    """stage4-design-v5：两章三场，携带 kp/kf 锁承载与 C7/C10 材料。"""
+    """stage4-design-v5 中间形状：两章三场，携带 kp 锁承载、被事实锁承载的预计状态与 C7/C10 材料。"""
     return {
         'protocol_version': 'stage4-design-v5',
         'narration': {'person': 'third', 'focalizers': ['narrator', 'yun_niang']},
@@ -154,7 +154,7 @@ def _wire() -> dict:
                  {'event': PROMISE, 'participants': ['yun_niang', 'fu_jun'],
                   'delivery_hint': '', 'target_delta': [
                       {'domain': 'character', 'subjects': ['fu_jun'],
-                       'holder': None, 'key': KF_PROMISE, 'op': 'set',
+                       'holder': None, 'key': 'return_promise', 'op': 'set',
                        'modality': 'expected', 'value': PROMISE, 'scope': 'book'},
                       # C10：显式解除初态的受寒。
                       {'domain': 'character', 'subjects': ['yun_niang'],
@@ -189,10 +189,10 @@ def _wire() -> dict:
                        'scope': 'book'}],
                   'expression_refs': [], 'surface_introductions': []}],
              'delivery': {'pov': 'yun_niang', 'voice': '冷峻', 'avoid': ['倒叙']}},
-            {  # sc02（第 2 章）：读取 kf 旧值（仍被消费→背景保留）＋确认升级。
+            {  # sc02（第 2 章）：读取被锁承载的预计状态（仍被消费→背景保留）＋确认升级。
              'state_reads': [
                  {'domain': 'character', 'subjects': ['fu_jun'], 'holder': None,
-                  'key': KF_PROMISE}],
+                  'key': 'return_promise'}],
              'driver': {'focal_actor': 'yun_niang', 'immediate_want': '证实疑心',
                         'opposition': '无凭据', 'turn': '亲见查访文书'},
              'realization_brief': '重心在疑心落地的瞬间；不点破。',
@@ -238,10 +238,14 @@ def _wire() -> dict:
 def _design():
     from novel.stages.stage4.design import assemble_body_design
     brief = _requirements()
+    # v5 中间形状没有事实锁标注通道；事实锁的接受与映射由 v8 真实入口验证
+    # （test_str06_a4_design_locks.py 的 CS-F2 一节），这里只验写手面。
+    no_realize = brief.model_copy(update={'requirements': tuple(
+        r.model_copy(update={'realize_locks': ()}) for r in brief.requirements)})
     body, errors = assemble_body_design(
         _wire(), known_char_ids={'yun_niang', 'fu_jun'},
         expression_requirements=brief.expression,
-        source_narration=brief.source_narration, brief=brief)
+        source_narration=brief.source_narration, brief=no_realize)
     assert body is not None and not errors, errors
     return body
 
@@ -309,8 +313,15 @@ def _binding(body):
         'ob03': [(0, 0)],
         'ob04': [(0, 1)],
     }
+    from contracts.schema.state import EffectDomain, StateAddress
     from novel.stages.stage4.grounding import derive_semantic_binding
-    binding, errors = derive_semantic_binding(placements, body, cp)
+    from novel.stages.stage4.slim import FactLockMark
+    # CS-F2：预计状态由事实锁在已选状态上标注承载；映射随 Binding 发布。
+    promise = FactLockMark(
+        kf_id=KF_PROMISE, scene=0, beat=0, state=0, op='set', modality='expected',
+        address=StateAddress(domain=EffectDomain.CHARACTER, key='return_promise',
+                             subjects=('fu_jun',)))
+    binding, errors = derive_semantic_binding(placements, body, cp, (promise,))
     assert binding is not None and not errors, errors
     return binding
 
@@ -468,6 +479,21 @@ def test_narrow_background_keeps_lock_key_consumers():
     # sc01（场序 0）建立 suspected＋sc02（场序 1）升级 known → 集合两位置；
     # 收窄按「建立之后」判定 → sc02 的入场旧值仍进背景。
     assert closure.get(knowledge_addr) == (0, 1)
+
+
+def test_fact_lock_carrier_is_a_consumer_via_binding_not_via_a_kf_key():
+    """CS-F2：事实锁承载状态由 Binding 的 fact_bindings 登记为消费者（原先靠
+    kf 状态键）；承载拍所在场计入消费位置，句柄本身不进任何阅读材料。"""
+    from novel.stages.common import consumption_closure
+    body, binding, _plan, ir = _ir()
+    address = ('character', ('fu_jun',), '', 'return_promise')
+    assert consumption_closure(body).get(address) == (1,), '只有 sc02 的声明读取'
+    assert consumption_closure(body, binding.fact_bindings).get(address) == (0, 1)
+    assert [f.kf_id for f in binding.fact_bindings] == [KF_PROMISE]
+    from novel.stages.common import render_chapter_packet, project_chapter_packet
+    for chapter in (1, 2):
+        text = render_chapter_packet(project_chapter_packet(ir, chapter))
+        assert KF_PROMISE not in text and 'kf_' not in text
 
 
 def test_consumption_closure_includes_hook_addresses():

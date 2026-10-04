@@ -10,6 +10,8 @@
                    wire 的 real 标注派生，`derive_semantic_binding`）。
   · `hook.py`      Hook Design 的确定性校验臂与唯一 graph publisher
                    （`str06.stage4.hook_design`；B3 后半自 stage5 包归位）。
+  · `hook_validation.py` Hook选择的纯结构判据；wire接受与canonical复验共用，
+                   validator不依赖producer、compiler或LLM。
   · `hook_context.py` HookContext 确定性投影（`str06.stage4.compile` 的一段；
                    B3 后半自 stage5 包归位）。
   · `compile.py`   ExecutionPlan 确定性编译＋章闭包证明（`str06.stage4.compile`）。
@@ -20,6 +22,8 @@
   · `fold.py`      单一目标 Fold：accepted prefix 的 planned_delta 重放；
                    ThreadFold（R2.4）独立折叠拍上的线程操作（状态走叠加折叠，
                    线程走线程折叠，共用 guard.scene_order 的阅读序）。
+  · `design_paths.py` Design wire 的局部修订定位（CS-F1 RC-47）：错误在判定处带 wire
+                   路径，按最小完整父项／耦合字段合并／替换不重叠发起条目返修。
   · `book_ir.py`   WriterBookIR 确定性编译（章预算 largest-remainder 分配；权重
                    变化的整数预算传导规则 `chapters_with_budget_change`；章级
                    验证材料——称谓许可／禁用字面——compile 时算好，D2）。
@@ -47,7 +51,7 @@ from novel.stages.stage4.grounding import (
     assemble_preserve, design_obligation_index, derive_semantic_binding,
     obligation_core_id, project_brief, project_preserve_view, preserve_revision_wire,
 )
-from novel.stages.stage4.preflight import inspect_body_materials
+from novel.stages.stage4.preflight import inspect_body_materials, inspect_design_candidate
 from novel.stages.stage4.repair import plan_material_repairs
 from novel.stages.stage4.guard import (
     appeared_chars, check_binding_beat_refs, check_cast_legality,
@@ -57,11 +61,13 @@ from novel.stages.stage4.guard import (
     scene_order,
 )
 from novel.stages.stage4.hook import assemble_hook_design, publish_graph
+from novel.stages.stage4.hook_validation import validate_hook_design
 from novel.stages.stage4.hook_context import compile_hook_context
-from novel.stages.stage4.slim import design_placements
+from novel.stages.stage4.slim import design_fact_marks, design_placements
+from novel.stages.stage4.design_paths import locate_design_patches
 
 __all__ = [
-    'inspect_body_materials', 'plan_material_repairs',
+    'inspect_body_materials', 'inspect_design_candidate', 'plan_material_repairs',
     'FoldedState', 'ThreadFold', 'allocate_chapter_budgets', 'appeared_chars',
     'assemble_body_design', 'assemble_hook_design',
     'assemble_preserve', 'chapter_scene_weights', 'chapter_surface_releases',
@@ -71,9 +77,10 @@ __all__ = [
     'check_obligation_coverage',
     'check_read_projection', 'check_thread_lifecycle', 'check_thread_projection',
     'compile_execution_plan', 'compile_hook_context', 'compile_writer_book_ir',
-    'design_obligation_index', 'design_placements', 'derive_semantic_binding',
+    'design_fact_marks', 'design_obligation_index', 'design_placements',
+    'derive_semantic_binding', 'locate_design_patches',
     'expected_thread_faces', 'fold_accepted_prefix', 'fold_thread_faces',
     'init_establishments', 'lock_order_violations', 'obligation_core_id',
     'project_brief', 'project_design_input', 'project_hook_semantics', 'project_preserve_view', 'preserve_revision_wire',
-    'publish_graph', 'run_mechanical_guard', 'scene_order',
+    'publish_graph', 'run_mechanical_guard', 'scene_order', 'validate_hook_design',
 ]

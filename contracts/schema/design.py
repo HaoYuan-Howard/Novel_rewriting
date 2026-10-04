@@ -110,9 +110,11 @@ class TargetDelta(StateChange):
 
     【事实时态（a4/R10a，C2 的机械面）】非知情的 set 必填 `modality`
     （actual＝已发生；planned/expected/conditional＝计划/预计/条件，尚未发生）。
-    Brief 事实锁（kf_*）键的 set 只能按锁的 modality 承载——把预计写成
-    actual 即拒；kf 锁的其余规则（值未知不得补值、原文未回答不得作答）与
-    kp 键知情规则归 assemble_body_design（锁注册表来自 Brief）。
+    Brief 事实锁（kf_*）由 Design wire 在**已选状态**上的 `lock` 标注承载
+    （CS-F2，rc16）：标注的状态必须同 modality 的 set（计划不得写成已发生）
+    或 op=unknown（不得补值）；锁到状态的映射随 SemanticBinding 发布，**不进
+    本 canonical**——BodyDesign 只持有目标事实，kf 句柄不再是状态键。kp 键知情
+    规则归 assemble_body_design（锁注册表来自 Brief）。
     """
 
     #: 语义等价归上游判断；Compiler 不解释自然语言补猜事实——所以这里没有
@@ -714,28 +716,32 @@ class DesignWireV5(StrictModel):
     scene_weights: tuple[float, ...] = Field(min_length=1)
 
 
-# ═══════════════ v7 瘦 wire（CS-3 第一步，2026-10-03；expand 后即 v5 形，不落盘） ═══════════════
+# ═══════════════ v8 瘦 wire（CS-3 起；CS-F2 升 v8；expand 后即 v5 形，不落盘） ═══════════════
 
 #: 设计瘦 wire 的版本字面量：LLM 输出面一次改齐（CS-3），可机械推导字段
 #: （默认值、world_rules、expression keep-all、target_delta 的知情/读者行、
 #: entry.anchor/recap、delivery.pov/voice）由
 #: `novel/stages/stage4/slim.py::expand_design_wire` 派生成 v5 wire 后进
-#: `assemble_body_design` 既有管道——canonical BodyDesign（rc12）与全部下游
+#: `assemble_body_design` 既有管道——canonical BodyDesign（rc14）与全部下游
 #: 消费者不变（S-03：适配集中在 slim 模块）。r10b 实证支撑见模块注释。
-STAGE4_DESIGN_WIRE_PROTOCOL: Final = 'stage4-design-v7'
+#: v8（CS-F2，2026-10-04）：事实锁改为在已选状态上标注 `lock` 引用，不再把 kf 句柄
+#: 当状态键另写一条复述事实的状态（《夫君的报恩》Design 因此把锁原文连同未释放
+#: 全名抄进自己的 val）；v7 旧 wire 关闭式拒读（I-13，无隐式迁移）。
+STAGE4_DESIGN_WIRE_PROTOCOL: Final = 'stage4-design-v8'
 
 
 class SlimDesignState(StrictModel):
     """拍上事实断言的瘦面（character／relation／world 域的语义内容）。
 
     `at` 地址串：人物 slug｜关系 "subject+object"（有序）｜"world"。op 缺省
-    set、modality 缺省 actual（例外才写）；kf_* 键仍按 Brief 事实锁规则承载
-    （锁校验在 assemble，C2/C9）。r10b 实证：13 条非知情增量全是此类语义
-    断言（键名是目标书命名，不可由锁机械派生），保留在 wire。
+    set、modality 缺省 actual（例外才写）。r10b 实证：13 条非知情增量全是此类
+    语义断言（键名是目标书命名，不可由锁机械派生），保留在 wire。
     world 域：书级规则成立断言 key 用 Brief 世界约束的稳定编号 `wc_{nn}`
     （val 省略＝命题成立，expand 回填 'true'）；其余 world 键是剧情事实，
     val 必填且不得为 'true'（零信息值结构性拒绝——r10b 审计「women_cannot_
     stand_alone=true 渲染无语义」的 wire 面收口）。
+    事实锁（CS-F2）：`lock` 在**这条已选状态**上标注它承载 Brief 的哪个事实锁；
+    锁句柄只是引用，不是状态键（kf_* 作 key 即拒），也不要求复述锁的原文。
     """
 
     at: str = Field(pattern=r'^(world|[a-z0-9_+]+)$')
@@ -745,6 +751,19 @@ class SlimDesignState(StrictModel):
     #: 作用域缺省 book（r10b 37/37）；只在本场内成立的临时动作环境写 scene。
     scope: "Literal['book', 'scene'] | None" = None
     modality: "Literal['actual', 'planned', 'expected', 'conditional'] | None" = None
+    #: 事实锁引用（kf 句柄，闭集由请求按 Brief 注入）；不写＝普通状态。时态锁须标在
+    #: 同 modality 的 set 上，值未知锁须标在 op=unknown 上（接受校验归 assemble）；
+    #: 同一个事实只写一条状态并让它带 lock，不为锁另写第二条。
+    lock: str | None = Field(default=None, pattern=r'^kf_[0-9a-f]{16}$')
+
+    @model_validator(mode='after')
+    def _lock_is_a_reference(self) -> 'SlimDesignState':
+        if self.key.startswith('kf_'):
+            raise ValueError('kf 句柄不是状态键：在已选状态上用 lock 标注事实锁，'
+                             '状态键写目标书自己的命名')
+        if self.lock is not None and self.key.startswith('kp_'):
+            raise ValueError('lock 只能标在目标事实状态上，不能标在 kp 知情行')
+        return self
 
 
 class SlimKnowledgePlacement(StrictModel):
@@ -823,6 +842,14 @@ class SlimDesignInitial(StrictModel):
     knowledge_mode: "Literal['known', 'suspected', 'heard', 'believes'] | None" = None
     confirms: StateAddress | None = None
 
+    @model_validator(mode='after')
+    def _no_lock_handle_key(self) -> 'SlimDesignInitial':
+        # 事实锁只由拍上已选状态的 lock 标注承载（建立拍是锁的时点）；初始态
+        # 行不是锁载体，kf 句柄更不是键（CS-F2）。
+        if self.key.startswith('kf_'):
+            raise ValueError('kf 句柄不是状态键；事实锁只在拍上已选状态用 lock 标注')
+        return self
+
 
 class SlimExpressionOverride(StrictModel):
     """表达机制例外：只写 change（缺省全部 keep，statement 由代码回填）。"""
@@ -832,17 +859,18 @@ class SlimExpressionOverride(StrictModel):
     target_statement: str = Field(min_length=1)
 
 
-class DesignWireV7(StrictModel):
-    """`stage4-design-v7` 瘦顶层（传输面，不落盘）。
+class DesignWireV8(StrictModel):
+    """`stage4-design-v8` 瘦顶层（传输面，不落盘）。
 
     派生面（expand）：narration←Brief.source_narration、expression_decisions
     ←keep-all＋overrides、world_rules←Brief.book_constraints、scene_weights
     缺省均匀、delivery／entry／target_delta 知情行由 know 展开。语义面（模型判断）：
     声线、风格、初始态（含释放表 initial_surfaces）、场景驱动/简报/读取、
-    拍事件/参与人/事实断言/线程/称谓释放/**义务承载标注 real**。
+    拍事件/参与人/事实断言（含**事实锁引用 lock**）/线程/称谓释放/**义务承载
+    标注 real**。
     """
 
-    protocol_version: Literal['stage4-design-v7']
+    protocol_version: Literal['stage4-design-v8']
     book_style: str = Field(min_length=1)
     character_voices: tuple[CharacterVoice, ...] = Field(default=(), min_length=0)
     expression_overrides: tuple[SlimExpressionOverride, ...] = Field(default=(), min_length=0)

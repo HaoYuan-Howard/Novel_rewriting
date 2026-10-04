@@ -181,12 +181,12 @@ def _hook_wire(**over) -> dict:
 
 
 def _design_wire_v7() -> dict:
-    """stage4-design-v7 形状（CS-3）：real 承载标注替 bind 的落点判断；v5 的
+    """stage4-design-v8 形状（CS-3）：real 承载标注替 bind 的落点判断；v5 的
     自由键 knowledge 增量在 v6 无面（知情一律经 real＋Brief 锁派生），fake 链
     以 character 域事实断言承载同一信息。义务 ob01 的接受拍＝末次标注拍
     （sc01#b02），sc01#b01 是支撑位——与旧 bind wire 的 entries/supporting 等价。"""
     return {
-        'protocol_version': 'stage4-design-v7',
+        'protocol_version': 'stage4-design-v8',
         'book_style': '冷峻克制的限知叙事，重日常细节里的异样。',
         'character_voices': [{'char_id': 'yun_niang', 'voice': '冷峻'}],
         'initial_state': [
@@ -747,7 +747,7 @@ def _full_chain_wires():
                    'surfaces': [{'surface': s.surface, 'source_refs': ['e01_01']}
                                 for s in entry.surfaces]}
             for slug, entry in chars.characters.items()}),
-        'protocol_version': 'stage2-book-v3',
+        'protocol_version': 'stage2-book-v4',
         'characters': {
             slug: {'canonical': entry.canonical,
                    'surfaces': [{'surface': s.surface, 'source_refs': ['e01_01']}
@@ -770,7 +770,7 @@ def _full_chain_wires():
          'keep_reason': None}]}
     return {
         'book': book,
-        'ch01': {'protocol_version': 'stage2-chapters-v2', 'beats': [
+        'ch01': {'protocol_version': 'stage2-chapters-v4', 'beats': [
             beat('苏芸娘嫁入陆家，夫君立下旧约。', ('e01_01',),
                  participants=('yun_niang', 'fu_jun'),
                  effects=({'target': {'kind': 'relation', 'subject': 'yun_niang',
@@ -780,10 +780,10 @@ def _full_chain_wires():
                            'disclosure': {'visibility': 'on_page'},
                            'basis': ({'segment': 'e01_01',
                                       'quote': '苏芸娘嫁入陆家'},)},))]},
-        'ch02': {'protocol_version': 'stage2-chapters-v2', 'beats': [
+        'ch02': {'protocol_version': 'stage2-chapters-v4', 'beats': [
             beat('夫君夜半离家，芸娘发现玉佩之秘。', ('e02_01',),
                  participants=('yun_niang', 'fu_jun'))]},
-        'names': {'protocol_version': 'stage2-names-v2', **chars.name_structure.model_dump(mode='json')},
+        'names': {'protocol_version': 'stage2-names-v3', **chars.name_structure.model_dump(mode='json')},
         'associate': {'protocol_version': 'stage2-associate-v2',
                       'same_proposition': [], 'same_state_dimension': [],
                       'loop_pairing': [], 'cross_chapter_cause': [],

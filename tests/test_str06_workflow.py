@@ -32,14 +32,14 @@ from tests.str06_expression_inputs import (
     sample_book_expression, sample_design_expression,
 )
 
-PV = 'stage2-chapters-v2'   # R10a a1：章观察独立协议字面量（names 无字面量面）
+PV = 'stage2-chapters-v4'   # R10a a1：章观察独立协议字面量（names 无字面量面）
 
 
 def _design_wire_v7():
-    """stage4-design-v7（CS-3）：real 承载标注替 bind；义务 ob01–ob03 的接受拍
+    """stage4-design-v8（CS-3）：real 承载标注替 bind；义务 ob01–ob03 的接受拍
     都是首拍（与原 bind wire 等价）；kp 知情行经 ob02 的锁派生，不写在 wire。"""
     return {
-        'protocol_version': 'stage4-design-v7',
+        'protocol_version': 'stage4-design-v8',
         'book_style': '冷峻克制的第三人称叙事，重对话张力。',
         'character_voices': [{'char_id': 'yun', 'voice': '冷峻'}],
         'initial_state': [],
@@ -72,7 +72,7 @@ def test_stage2_stage4_repository_replay_and_writer_consumer(tmp_path):
         'fu_jun': {'canonical': '夫君', 'surfaces': [
             {'surface': '夫君', 'source_refs': ['e01_01']}]},
         'yun': {'canonical': '云娘', 'surfaces': [
-            {'surface': '云娘', 'source_refs': ['e01_01']}]}}), 'protocol_version': 'stage2-book-v3', 'characters': {
+            {'surface': '云娘', 'source_refs': ['e01_01']}]}}), 'protocol_version': 'stage2-book-v4', 'characters': {
         'fu_jun': {'canonical': '夫君', 'surfaces': [
             {'surface': '夫君', 'source_refs': ['e01_01']}]},
         'yun': {'canonical': '云娘', 'surfaces': [
@@ -101,7 +101,7 @@ def test_stage2_stage4_repository_replay_and_writer_consumer(tmp_path):
                                   'basis': [{'segment': 'e01_01',
                                              'quote': '云娘提出约定'}]}])]},
         'names': {
-            'protocol_version': 'stage2-names-v2', 'resolutions': [],
+            'protocol_version': 'stage2-names-v3', 'resolutions': [],
             'families': {'fam_yun': {'literal': '云', 'forms': []}},
             'people': {
                 'fu_jun': {'family_id': None, 'given': None, 'aliases': [],
@@ -263,7 +263,7 @@ def test_changed_hook_copy_refuses_the_old_root_and_changes_requests(tmp_path):
             'fu_jun': {'canonical': '夫君', 'surfaces': [
                 {'surface': '夫君', 'source_refs': ['e01_01']}]},
             'yun': {'canonical': '云娘', 'surfaces': [
-                {'surface': '云娘', 'source_refs': ['e01_01']}]}}), 'protocol_version': 'stage2-book-v3', 'characters': {
+                {'surface': '云娘', 'source_refs': ['e01_01']}]}}), 'protocol_version': 'stage2-book-v4', 'characters': {
             'fu_jun': {'canonical': '夫君', 'surfaces': [
                 {'surface': '夫君', 'source_refs': ['e01_01']}]},
             'yun': {'canonical': '云娘', 'surfaces': [
@@ -342,7 +342,7 @@ def test_concealed_fact_reaches_writer_as_pending_reader_confirmation(tmp_path):
         'fu_jun': {'canonical': '夫君', 'surfaces': [
             {'surface': '夫君', 'source_refs': ['e01_01']}]},
         'yun': {'canonical': '云娘', 'surfaces': [
-            {'surface': '云娘', 'source_refs': ['e01_01']}]}}), 'protocol_version': 'stage2-book-v3', 'characters': {
+            {'surface': '云娘', 'source_refs': ['e01_01']}]}}), 'protocol_version': 'stage2-book-v4', 'characters': {
         'fu_jun': {'canonical': '夫君', 'surfaces': [
             {'surface': '夫君', 'source_refs': ['e01_01']}]},
         'yun': {'canonical': '云娘', 'surfaces': [
@@ -366,7 +366,7 @@ def test_concealed_fact_reaches_writer_as_pending_reader_confirmation(tmp_path):
                               'basis': [{'segment': 'e01_01',
                                          'quote': '夫君与云娘一处住着'}]}])]}
     design = {
-        'protocol_version': 'stage4-design-v7',
+        'protocol_version': 'stage4-design-v8',
         'book_style': '冷峻克制的第三人称叙事。',
         'character_voices': [{'char_id': 'yun', 'voice': '冷峻'}],
         'initial_state': [],
@@ -402,7 +402,7 @@ def test_concealed_fact_reaches_writer_as_pending_reader_confirmation(tmp_path):
     wires = {
         'book': book, 'ch01': ch01,
         'names': {
-            'protocol_version': 'stage2-names-v2', 'resolutions': [],
+            'protocol_version': 'stage2-names-v3', 'resolutions': [],
             'families': {'fam_yun': {'literal': '云', 'forms': []}},
             'people': {
                 'fu_jun': {'family_id': None, 'given': None, 'aliases': [],

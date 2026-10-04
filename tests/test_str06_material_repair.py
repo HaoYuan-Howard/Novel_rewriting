@@ -9,20 +9,50 @@ from tests.test_str06_hook import _characters
 from tests.test_str06_r10b_writer_packet import _design, _binding, _requirements
 
 
-def _conflict():
+def _conflict(*, ch1_has_allowed_surface: bool = False):
+    """源第1章已合法出现的称谓，目标第二章才释放陆大哥。
+
+    默认（CS-F2 之后）夫君在第1章没有任何已释放称谓：知情命题里的完整登记称谓
+    『陆大哥』没有可用的本场称谓可替换，**无法投影**，泄漏如实保留并按原归因回派。
+    `ch1_has_allowed_surface=True` 时夫君初态已释放，同一字面被确定性投影成『夫君』
+    （RC-40/41），不再是泄漏——见 `test_registered_full_surface_is_projected_not_leaked`。
+    """
     body, chars, brief = _design(), _characters(), _requirements()
-    binding = _binding(body)
-    # 源第1章已合法出现的称谓，目标初态只释放夫君，第二章才释放陆大哥。
     scenes = list(body.scenes)
     beats = list(scenes[1].beats)
     from contracts.schema.context import SurfaceRelease
     beats[0] = beats[0].model_copy(update={'surface_introductions': (
         SurfaceRelease(char_id='fu_jun', surfaces=('陆大哥',)),)})
     scenes[1] = scenes[1].model_copy(update={'beats': tuple(beats)})
-    body = body.model_copy(update={'scenes': tuple(scenes)})
+    updates = {'scenes': tuple(scenes)}
+    if not ch1_has_allowed_surface:
+        updates['initial_surfaces'] = tuple(
+            s for s in body.initial_surfaces if s.char_id != 'fu_jun')
+    body = body.model_copy(update=updates)
+    binding = _binding(body)
     brief = brief.model_copy(update={'propositions': (
         brief.propositions[0].model_copy(update={'statement': '陆大哥在暗中查访旧案'}),)})
     return body, binding, brief, chars
+
+
+def test_registered_full_surface_is_projected_not_leaked():
+    """RC-40/41：已证明唯一绑定人物的完整登记称谓，按本场已释放称谓确定性投影；
+    留痕可观测，原字段（Brief 命题）与正式产物保持原样，不反写。"""
+    body, binding, brief, chars = _conflict(ch1_has_allowed_surface=True)
+    before = [x.model_dump_json() for x in (body, binding, brief, chars)]
+    view = inspect_body_materials(body, binding, brief, chars, budget=4000,
+                                  length_band=(0.6, 1.3))
+    assert not view.errors and not view.materials, '可证明的完整称谓不再是泄漏'
+    assert view.name_projections and {
+        (p['literal'], p['char_id'], p['replacement'], p['chapter_ordinal'])
+        for p in view.name_projections} == {('陆大哥', 'fu_jun', '夫君', 1)}
+    from novel.stages.common import (
+        build_writer_packet, project_chapter_packet, render_chapter_packet)
+    packet = project_chapter_packet(view.ir, 1)
+    assert '陆大哥' not in render_chapter_packet(packet)
+    assert any('夫君在暗中查访旧案' in line for line in build_writer_packet(packet).must_realize)
+    assert [x.model_dump_json() for x in (body, binding, brief, chars)] == before
+    assert brief.propositions[0].statement == '陆大哥在暗中查访旧案', '原字段不被改写'
 
 
 def test_knowledge_placement_routes_design_from_actual_writer_material():

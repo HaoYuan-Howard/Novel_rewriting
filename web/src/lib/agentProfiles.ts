@@ -328,8 +328,13 @@ export function materializePipelineAgentProfiles(
     const policy = draft.concurrency
     const allowed = capabilities.concurrency
     for (const [node, count] of Object.entries(policy.node_overrides)) {
-      if (!allowed.nodes.includes(node) || !allowed.node_choices.includes(count)) {
-        errors.push(`并发覆盖 ${node}=${count} 不在当前 capability 中`)
+      if (!allowed.nodes.includes(node)
+          || !Number.isInteger(count)
+          || count < allowed.total_min
+          || count > allowed.total_max) {
+        errors.push(
+          `节点并发 ${node}=${count} 必须是 ${allowed.total_min}～${allowed.total_max} 的整数，且节点在当前 capability 中`,
+        )
       }
     }
     for (const count of [policy.per_book, policy.per_provider]) {

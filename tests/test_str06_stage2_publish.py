@@ -40,10 +40,11 @@ from tests.str06_expression_inputs import (
 )
 
 HOOK = '新婚夜，夫君坦白借种之约。'
+#: 证据段＝自然段（RC-26）：每章两段，段号 eNN_01／eNN_02。
 CHAPTERS = [
-    {'chapter_ordinal': 1, 'text': '夫君藏进床底。云娘听见床板响动。'},
-    {'chapter_ordinal': 2, 'text': '云娘质问床底的人。夫君说出实情。'},
-    {'chapter_ordinal': 3, 'text': '天亮后夫君把话说开。陆家宅子恢复安静。'},
+    {'chapter_ordinal': 1, 'text': '夫君藏进床底。\n云娘听见床板响动。'},
+    {'chapter_ordinal': 2, 'text': '云娘质问床底的人。\n夫君说出实情。'},
+    {'chapter_ordinal': 3, 'text': '天亮后夫君把话说开。\n陆家宅子恢复安静。'},
 ]
 EVIDENCE = build_evidence(CHAPTERS, HOOK)
 
@@ -69,7 +70,7 @@ def _book_wire(*, extra_characters: dict | None = None) -> dict:
             {'surface': '云娘', 'source_refs': ['e01_02']}]},
     }
     characters.update(extra_characters or {})
-    return {**sample_book_expression(characters), 'protocol_version': 'stage2-book-v3', 'characters': characters,
+    return {**sample_book_expression(characters), 'protocol_version': 'stage2-book-v4', 'characters': characters,
             'initial_state': [], 'world_constraints': []}
 
 
@@ -315,11 +316,7 @@ def test_same_name_two_persons_stay_separate(tmp_path):
 
 
 def test_paired_normalized_identical_statements_merge_into_one_formal_id(tmp_path):
-    """配对合并只认归一化后**完全相同**的 statement（D1，2026-10-03 CS-1）。
-
-    标点宽度差异（源文半角/模型全角）不影响同一性；换了说法的命题不配对就
-    不合并——模糊合并是 D1 的成因（r10b 实证 k36 三章三义），已废止；同义
-    改写的收口归 CS-2 的候选清单。最早确立的文本为 canonical。"""
+    """标点差异的配对仍合法，最早确立的文本为 canonical。"""
     wires = _full_stage2_wires()
     # 归一全等：仅标点不同（「，」的内容字与无标点相同）
     wires['ch02']['beats'][0]['cognition'][0]['proposition']['statement'] = '夫君藏身，床底。'
@@ -335,20 +332,127 @@ def test_paired_normalized_identical_statements_merge_into_one_formal_id(tmp_pat
     assert ch3['beats'][1]['cognition'][0]['proposition']['ref'] == 'k01'
     assert ch2['beats'][0]['cognition'][0]['proposition']['ref'] != 'p_known', \
         '本地句柄不进 canonical（I-21）'
+    assert ch2['beats'][0]['cognition'][0]['proposition']['statement'] == '夫君藏身床底'
 
 
-def test_paired_different_statements_stay_undecided(tmp_path):
-    """D1 反例：配对两侧 statement 归一后不一致（换了说法）→ 按 item 未决拦下，
-    不模糊合并、不替模型选边；canonical 不落半份，回派 associate 定向修订。"""
+def test_paired_synonymous_statements_merge_without_moving_disclosure(tmp_path):
+    """同义判断归 associate；compile 干跑、发布与 fold 不因措辞差异拒收。"""
     wires = _full_stage2_wires()
-    # 「床底藏着人」vs「夫君藏身床底」：换了说法——配对断言不成立
+    wires['ch02']['beats'][0]['cognition'][0]['proposition']['statement'] = '夫君躲在床板下面'
     wires['associate']['same_proposition'] = [
         {'left': 'ch01.p_hide', 'right': 'ch02.p_known'},
         {'left': 'ch01.p_hide', 'right': 'ch03.p_hide'}]
-    with pytest.raises(ValueError, match='归一后不一致'):
-        _run_stage2(tmp_path, 'fuzzy_pair', wires)
-    assert not (tmp_path / 'fuzzy_pair/stage2/blueprints/chapter_blueprints.json').exists(), \
-        '误合并要么拦在发布前，要么不发生，不静默进 canonical'
+    original = deepcopy(wires)
+    repo, ask, report = _run_stage2(tmp_path, 'synonym_words', wires)
+    assert report['undecided'] == 0 and 'associate' in ask.prompts
+    assert '措辞不同的同义表述也算同一' in ask.prompts['associate']
+    assert wires == original, 'compiler 不改写输入观察'
+    bp = repo.inspect('stage2/blueprints/chapter_blueprints.json')
+    ch1, ch2, ch3 = bp['chapters']
+    props = (ch1['beats'][0]['effects'][0]['proposition'],
+             ch2['beats'][0]['cognition'][0]['proposition'],
+             ch3['beats'][1]['cognition'][0]['proposition'])
+    assert props == ({'ref': 'k01', 'statement': '夫君藏身床底'},) * 3
+    assert ch1['beats'][0]['effects'][0]['disclosure'] == {
+        'visibility': 'concealed', 'known_by': ['fu_jun']}
+    assert ch2['beats'][0]['cognition'][0]['holder'] == 'yun_niang'
+    assert ch2['beats'][0]['cognition'][0]['mode'] == 'learns'
+    assert ch2['beats'][0]['cognition'][0]['basis'] == _basis('e02_01')
+    assert not any(c['holder'] == 'reader' for ch in (ch1, ch2)
+                   for beat in ch['beats'] for c in beat['cognition'])
+    assert ch3['beats'][1]['cognition'][0]['basis'] == _basis('e03_01')
+    observation = repo.inspect('stage2/observations/ch02.json')
+    assert observation['beats'][0]['cognition'][0]['proposition']['statement'] == '夫君躲在床板下面'
+
+
+def test_synonymous_class_keeps_local_restatement_validation(tmp_path):
+    """同章重抄核对本章登记原文；对外三处引用统一代表文本，不串用判据。"""
+    wires = _full_stage2_wires()
+    cognition = wires['ch02']['beats'][0]['cognition'][0]
+    cognition['proposition']['statement'] = '夫君躲在床板下面'
+    wires['ch02']['beats'].append(_beat(
+        '云娘再次确认', ('e02_01',), scene_boundary='continue',
+        cognition=[deepcopy(cognition)]))
+    wires['associate']['same_proposition'].append(
+        {'left': 'ch02.p_known', 'right': 'ch01.p_hide'})
+    repo, _ask, _report = _run_stage2(tmp_path, 'local_restatement', wires)
+    beats = repo.inspect('stage2/blueprints/chapter_blueprints.json')['chapters'][1]['beats']
+    assert [b['cognition'][0]['proposition'] for b in beats] == [
+        {'ref': 'k01', 'statement': '夫君藏身床底'}] * 2
+    wires['ch02']['beats'][1]['cognition'][0]['proposition']['statement'] = '夫君已经离开床底'
+    with pytest.raises(ValueError, match='重抄文本与首次登记不一致'):
+        _run_stage2(tmp_path, 'local_conflict', wires)
+
+
+def test_synonymous_association_rejected_by_old_guard_recovers_free(tmp_path):
+    """旧全等闸拒收的已购回答，经真实 associate 干跑与发布免费采用。"""
+    from novel.llm.ledger import ledger_path, read_cost_snapshot
+    from novel.llm.paid_requests import PaidRequestSession, ask_json
+    from novel.llm.transport import ChatRequest, ChatResponse
+    from novel.work_units import initialize_workflow, read_book_budget
+
+    wires = _full_stage2_wires()
+    wires['ch02']['beats'][0]['cognition'][0]['proposition']['statement'] = '夫君躲在床板下面'
+    wires['associate']['same_proposition'].append(
+        {'left': 'ch01.p_hide', 'right': 'ch02.p_known'})
+    base = tmp_path / 'recovery'
+    initialize_workflow(base)
+    repo = Str06Repository(base / 'book')
+    ledger = CostLedger(path=ledger_path(base))
+    repo.attach_context(make_context(base / 'book', ledger=ledger))
+
+    class Transport:
+        calls = 0
+
+        def send(self, request):
+            self.calls += 1
+            return ChatResponse(content=json.dumps(wires['associate'], ensure_ascii=False),
+                                model='fake', usage={'prompt_tokens': 10, 'completion_tokens': 5})
+
+    transport = Transport()
+    session = PaidRequestSession(repo, ledger, transport, yes=True,
+                                 allow_source_export=True, provider='fake', sid='book')
+
+    class Ask(_AcceptingAsk):
+        old_guard = True
+
+        def __call__(self, owner, prompt, validate, patch=None):
+            if owner != 'associate':
+                return super().__call__(owner, prompt, validate, patch)
+            request = ChatRequest(model='fake', system='关联', user=prompt,
+                                  reasoning_effort='high', thinking=True,
+                                  json_mode=True, max_tokens=1000)
+            check = (lambda _: ['旧全等闸：跨章 statement 归一后不一致']) if self.old_guard else validate
+            return ask_json(session, owner, request, check)
+
+    ask = Ask(wires)
+
+    def run():
+        return run_workflow(repository=repo, chapters=deepcopy(CHAPTERS), hook_copy=HOOK,
+                            ask=ask, ask_text=None, ask_body=None, budget=800,
+                            through='stage2', node_filter=STAGE2_NODES)
+
+    with pytest.raises(ValueError, match='无进展'):
+        run()
+    assert not repo.path('stage2/observations/associate.json').exists()
+    paid_before = [r for r in read_cost_snapshot(base)[0] if not r['cached']]
+    budget_before = read_book_budget(base, 'book')
+    calls_before = transport.calls
+    # 同请求、禁新购、禁外发；缺少缓存时 PaidRequestSession 自身须拒绝。
+    session = PaidRequestSession(repo, CostLedger(path=ledger_path(base)), transport,
+                                 yes=False, allow_source_export=False,
+                                 provider='fake', sid='book')
+    ask.old_guard = False
+    report = run()
+    assert report['undecided'] == 0
+    assert transport.calls == calls_before
+    rows, partial = read_cost_snapshot(base)
+    assert not partial and [r for r in rows if not r['cached']] == paid_before
+    assert read_book_budget(base, 'book') == budget_before
+    assert repo.inspect('stage2/observations/associate.json')['_provenance']
+    bp = repo.inspect('stage2/blueprints/chapter_blueprints.json')
+    assert bp['chapters'][1]['beats'][0]['cognition'][0]['proposition'] == {
+        'ref': 'k01', 'statement': '夫君藏身床底'}
 
 
 def test_published_restatement_carries_canonical_statement(tmp_path):
@@ -1003,13 +1107,19 @@ def test_associate_prompt_declares_v2_protocol_and_handle_positions():
     assert '[ch01.b1.e1.trust]' in prompt
 
 
-def test_stage4_reads_only_canonical(tmp_path):
+@pytest.mark.parametrize('synonymous', [False, True])
+def test_stage4_reads_only_canonical(tmp_path, synonymous):
     """下游只凭 canonical 运行：Stage4 腿的请求材料来自 Characters/Blueprint 投影。"""
     from novel.stages.chain import run_workflow as _run
     from novel.stages.common import DESIGN_RULES, PRESERVE_RULES, pack_prompt
     from novel.stages.stage4 import project_brief
 
-    repo, _ask, _report = _run_stage2(tmp_path, 'downstream', _full_stage2_wires())
+    wires = _full_stage2_wires()
+    if synonymous:
+        wires['ch02']['beats'][0]['cognition'][0]['proposition']['statement'] = '夫君躲在床板下面'
+        wires['associate']['same_proposition'].append(
+            {'left': 'ch01.p_hide', 'right': 'ch02.p_known'})
+    repo, _ask, _report = _run_stage2(tmp_path, 'downstream', wires)
     chars = repo.read_model('stage2/characters/characters.json')
     core = chars.core_view()
     blueprint = repo.read_model('stage2/blueprints/chapter_blueprints.json')

@@ -22,16 +22,18 @@
 compile 侧的闭集核对保留（发布前防御）。认知 holder／effect target 闭集、
 命题与 loop 引用闭合（本章登记表两遍解析）、场景分段生成与拍号／正式 ID
 派发仍归 `str06.stage2.compile`；跨章同一性归 `str06.stage2.associate`（D8）。
-本模块只验收观察的自含形状并落盘（I-24/I-36：只读验证，错误聚合；唯一
-compiler 归一是 basis 引文按 `norm()` 尺回取段原文切片——D2 标点宽度，
-2026-10-03，落盘永远是原文字节）。
+本模块只验收观察的自含形状并落盘（I-24/I-36：只读验证，错误聚合）。compiler
+归一两处，都在副本上、先于全部判定：basis 引文所在段由 Resolver 在本拍 src
+内定位并写入（RC-27，2026-10-04：段号可由引文机械推导，不让模型抄）；引文按
+`norm()` 尺回取段原文切片（D2 标点宽度，落盘永远是原文字节）。
 
-【瘦 wire 路由（CS-2 第一步，2026-10-03）】LLM 输出面升
-`stage2-chapters-v3`（`contracts/schema/observation.py` 的瘦模型）：可机械
-推导字段（默认值／target 四元组／命题句柄／src 区间）由
-`novel/stages/stage2/slim.py::expand_chapter_wire` 派生成 rc12 dict 后过
-**同一管道**——落盘仍是 `ChapterObservation`（v2 形状），下游消费者不变
-（S-03：适配集中在 slim 模块）。v2 wire 直通（盘面 canonical 与领养读面）。
+【瘦 wire 路由（CS-2 起；RC-27/28 升 v5）】LLM 输出面是
+`STAGE2_CHAPTERS_WIRE_PROTOCOL`（`contracts/schema/observation.py` 的瘦模型）：
+可机械推导字段（默认值／target 四元组／命题句柄／src 区间）由
+`novel/stages/stage2/slim.py::expand_chapter_wire` 派生成 canonical 形状 dict 后过
+**同一管道**——落盘仍是 `ChapterObservation`，下游消费者不变（S-03：适配集中
+在 slim 模块）。canonical 形状直通（wire 领养与测试读面），basis 自带段号时
+按原规则逐字复验。
 """
 from __future__ import annotations
 
@@ -46,7 +48,7 @@ from contracts.schema.observation import (
 )
 from contracts.schema.source import REGISTERED_STATE_KEYS, RETIRED_STATE_KEYS
 from novel.stages.common import CHAPTER_PROMPT, PRE_CHAPTER_RULE
-from novel.stages.stage2.resolver import EvidenceResolver
+from novel.stages.stage2.resolver import EvidenceResolver, render_evidence_block
 from novel.stages.stage2.slim import expand_chapter_wire
 from novel.core.validation import ValidationIssue
 
@@ -137,7 +139,7 @@ def chapter_observation_prompt(*, chapter: int, book: Any, chapters: list[dict],
                 'surfaces': [m.surface for m in c.surfaces]}
          for slug, c in sorted(book.characters.items())},
         ensure_ascii=False, sort_keys=True, indent=1)
-    chapter_evidence = '\n'.join(f'[{k}] {v["text"]}' for k, v in evidence.items())
+    chapter_evidence = render_evidence_block(evidence)
     return CHAPTER_PROMPT.format(
         ch=chapter,
         glossary=glossary,
@@ -217,7 +219,8 @@ def _canonicalize_basis_quotes(wire: Any, resolver: EvidenceResolver) -> None:
     为主，模型逐字摘抄常写成全角——逐字判定会把真摘抄误报成 quote_not_in_segment。
     比对用 `norm()` 尺（内容字相同即同一内容），落盘存**原文切片**，下游任何
     逐字比对不再挂同一处。回取不唯一（0 处/多处/段不在闭集）不改写，判定
-    不放宽，交 verify_bases 按现状报告。就地改写 compiler 副本，原 wire
+    不放宽，交 verify_bases 按现状报告。只处理已带段号的 basis（canonical
+    直通，或已由 `_locate_basis_quotes` 定位）；就地改写 compiler 副本，原 wire
     不动（I-24：validator 不改输入，归一发生在 compiler 层）。
     """
     for raw in wire.get('beats') or []:
@@ -235,6 +238,43 @@ def _canonicalize_basis_quotes(wire: Any, resolver: EvidenceResolver) -> None:
                             basis['quote'] = resolver.canonical_quote(segment, quote)
 
 
+def _locate_basis_quotes(canonical: Any, resolver: EvidenceResolver, *,
+                         chapter: int | None, labels: tuple[str, str],
+                         ) -> list[tuple[tuple[str | int, ...], str]]:
+    """RC-27：wire 只给引文的 basis（``segment`` 为 None）按本拍 src 定位所在段，
+    段号与原文切片写回 compiler 副本（I-21：段号可由引文机械推导）。
+
+    定位不了的逐条报告、不改 src 也不换引文：引文只在本拍范围外出现 →
+    整拍路径（修正可能是扩 src，也可能是换引文，由语义单元在整拍内选）；
+    全章无命中 → 该转移路径。只处理 segment 为 None 的条目——带段号的
+    canonical 直通照原规则逐字复验（`_chapter_issues`）。
+    """
+    eff_label, cog_label = labels
+    issues: list[tuple[tuple[str | int, ...], str]] = []
+    for beat_index, raw in enumerate(canonical.get('beats') or []):
+        if not isinstance(raw, dict):
+            continue
+        refs = tuple(raw.get('source_refs') or ())
+        where = f'第{chapter if chapter is not None else "?"}章拍{beat_index + 1}'
+        for kind, label in (('effects', eff_label), ('cognition', cog_label)):
+            for index, transfer in enumerate(raw.get(kind) or ()):
+                if not isinstance(transfer, dict):
+                    continue
+                for basis in transfer.get('basis') or ():
+                    if not isinstance(basis, dict) or basis.get('segment') is not None:
+                        continue
+                    segment, quote, issue = resolver.locate_quote(
+                        str(basis.get('quote') or ''), refs)
+                    if issue is None:
+                        basis['segment'], basis['quote'] = segment, quote
+                        continue
+                    path: tuple[str | int, ...] = (
+                        ('beats', beat_index) if issue.code == 'quote_outside_refs'
+                        else ('beats', beat_index, label, index))
+                    issues.append((path, f'{where} {label}[{index + 1}]：{issue.message}'))
+    return issues
+
+
 def _chapter_issues(canonical: Any, resolver: EvidenceResolver,
                     slugs: frozenset[str] | None, chapter: int | None,
                     labels: tuple[str, str] = ('effects', 'cognition'),
@@ -242,7 +282,8 @@ def _chapter_issues(canonical: Any, resolver: EvidenceResolver,
     """章观察机械闸的**结构化视图**（CS-patch，2026-10-03）：与
     `compile_chapter_observation` 同源同序，逐条附 wire 的 JSON 路径
     （路径＝失败条目的最小可替换单元；None＝不可定位）。定位与判定同一把
-    尺（判据 25）：compile 的 errors 就是本视图去掉路径的投影。
+    尺（判据 25）：compile 的 errors 就是 `_compile_view` 全部 issue 去掉路径
+    的投影。
 
     `labels` 只是**词汇**不是判据：瘦 wire（CS-2）的路径与消息用 state／
     know 命名（模型看得到、patch 找得到），检查项与顺序逐字不变。
@@ -259,27 +300,20 @@ def _chapter_issues(canonical: Any, resolver: EvidenceResolver,
             issues.append((beat_path,
                            f'beat {raw.get("event", "")[:20]}：{issue.message}'))
         # R10a a1（C4/C1/C2）：转移级 basis 引文判定——逐字命中＋段属本拍
-        # source_refs（`verify_bases` 的逐条版：路径随条目走）。
+        # source_refs（`verify_bases` 的逐条版：路径随条目走）。定位失败的
+        # basis（segment 仍为 None）已由 `_locate_basis_quotes` 报告，不重复。
         for kind, label in (('effects', eff_label), ('cognition', cog_label)):
             for index, transfer in enumerate(raw.get(kind) or (), 1):
                 if not isinstance(transfer, dict):
                     continue
                 for basis in transfer.get('basis') or ():
-                    if not isinstance(basis, dict):
+                    if not isinstance(basis, dict) or basis.get('segment') is None:
                         continue
                     for issue in resolver.verify_quote(
                             str(basis.get('segment') or ''),
                             str(basis.get('quote') or ''), refs):
-                        # 证据段属于拍级 src；若修正依据还需要修改 src，
-                        # 仅替换转移会把模型锁在“地址错/不在清单”之间来回。
-                        # 定位扩到整拍，不替模型选证据，验收消息和判据保持原样。
-                        path = beat_path + (label, index - 1)
-                        homes = issue.context.get('verbatim_home_segments', ())
-                        if (issue.code == 'basis_segment_outside_refs'
-                                or issue.code == 'quote_not_in_segment'
-                                and any(home not in refs for home in homes)):
-                            path = beat_path
-                        issues.append((path, f'{where} {label}[{index}]：{issue.message}'))
+                        issues.append((beat_path + (label, index - 1),
+                                       f'{where} {label}[{index}]：{issue.message}'))
         if slugs is not None:
             for person in raw.get('participants') or []:
                 if person not in slugs:
@@ -294,24 +328,72 @@ def _chapter_issues(canonical: Any, resolver: EvidenceResolver,
 
 def _route_wire(wire: Any, *, chapter: int | None
                 ) -> tuple[Any, tuple[str, str], list[tuple[tuple[str | int, ...] | None, str]]]:
-    """按协议字面量路由章观察 wire（CS-2 第一步，2026-10-03）。
+    """按协议字面量路由章观察 wire（CS-2 起）。
 
-    瘦 wire（stage2-chapters-v3）经 `expand_chapter_wire` 派生成 rc12 dict
-    再进既有管道；rc12（v2）直通——它是盘面 canonical 形状，也是
-    wire_dir 领养／既有测试的读面（S-01 登记过的兼容层，删除条件＝
-    canonical 自身瘦身升版）。返回 (wire, 路径词汇, 条目级 issues)；issues
-    非空即本轮 wire 不可判（路径 None＝形状失败走 R3 整份修订，否则可条目
-    返修——判定与定位同一份材料）。
+    瘦 wire（`STAGE2_CHAPTERS_WIRE_PROTOCOL`）经 `expand_chapter_wire` 派生成
+    canonical 形状 dict 再进既有管道；canonical 形状直通——wire 领养与既有
+    测试的读面（S-01 登记过的兼容层，删除条件＝canonical 自身瘦身升版）。
+    返回 (wire, 路径词汇, 条目级 issues)；issues 非空即本轮 wire 不可判（路径
+    None＝形状失败走 R3 整份修订，否则可条目返修——判定与定位同一份材料）。
     """
     if isinstance(wire, dict) and wire.get('protocol_version') == STAGE2_CHAPTERS_WIRE_PROTOCOL:
         try:
-            rc12, issues = expand_chapter_wire(wire, chapter=chapter)
+            expanded, issues = expand_chapter_wire(wire, chapter=chapter)
         except ValidationError as exc:
             return None, ('state', 'know'), [(None, f'章观察瘦 wire 协议校验失败：{exc}')]
-        if rc12 is None:
+        if expanded is None:
             return None, ('state', 'know'), issues
-        return rc12, ('state', 'know'), []
+        return expanded, ('state', 'know'), []
     return wire, ('effects', 'cognition'), []
+
+
+def _compile_view(wire: dict, *, evidence_ids, chapter: int | None,
+                  character_slugs: Iterable[str] | None,
+                  ) -> tuple[Any, list[tuple[tuple[str | int, ...] | None, str]]]:
+    """验收与条目定位共用的同一条管道（判据 25）：路由 → 副本 → 引文定位
+    （RC-27）→ D2 回取 → 机械闸。返回 ``(compiler 副本, issues)``；副本为
+    None 表示路由失败（issues 即路由问题）。调用方 wire 不被修改（I-24）。
+
+    `evidence_ids` 传 Mapping（段 id→{chapter,text}）时引文可定位与逐字判定；
+    只传 id 的合成闭集只做闭集核对（无文本可查，定位与逐字判定如实报错）。
+    """
+    resolver = EvidenceResolver(evidence_ids if isinstance(evidence_ids, Mapping)
+                                else list(evidence_ids))
+    slugs = frozenset(character_slugs) if character_slugs is not None else None
+    routed, labels, route_issues = _route_wire(wire, chapter=chapter)
+    if route_issues:
+        return None, route_issues
+    canonical = deepcopy(routed)
+    issues: list[tuple[tuple[str | int, ...] | None, str]] = []
+    if routed is not wire:
+        # 只有瘦 wire 的 basis 不带段号；canonical 直通缺段号按协议拒收，不代补。
+        issues.extend(_locate_basis_quotes(canonical, resolver, chapter=chapter,
+                                           labels=labels))
+    _canonicalize_basis_quotes(canonical, resolver)
+    issues.extend(_chapter_issues(canonical, resolver, slugs, chapter, labels))
+    return canonical, issues
+
+
+#: 定位失败的 basis 在**形状复验副本**里的占位段号：只为让其余字段照常过
+#: 协议校验。仅在本轮已有 issue（必不发布）时使用，占位不进任何输出；
+#: 无 issue 时按真实副本校验，缺段号照协议拒收。
+_UNLOCATED_SEGMENT = 'e00_00'
+
+
+def _shape_view(normalized: dict) -> dict:
+    """协议形状复验用视图（仅带错时用）：未定位 basis 的段号换成占位。"""
+    view = deepcopy(normalized)
+    for beat in view.get('beats') or []:
+        if not isinstance(beat, dict):
+            continue
+        for kind in ('effects', 'cognition'):
+            for transfer in beat.get(kind) or ():
+                if not isinstance(transfer, dict):
+                    continue
+                for basis in transfer.get('basis') or ():
+                    if isinstance(basis, dict) and basis.get('segment') is None:
+                        basis['segment'] = _UNLOCATED_SEGMENT
+    return view
 
 
 def chapter_patch_locate(wire: Any, errors: list[str], *,
@@ -320,26 +402,18 @@ def chapter_patch_locate(wire: Any, errors: list[str], *,
                          ) -> list[tuple[tuple[str | int, ...], list[str]]] | None:
     """CS-patch 的章观察条目定位（owner 声明给 `ask_json` 的 `patch` 协议）。
 
-    重放与 compile 同源的机械闸（同一把尺，判据 25），把每条错误映射到 wire
-    的 JSON 路径；存在不可定位错误，或 `errors` 与可定位集不完全一致（协议
-    校验／键归一／首现锚点等其它闸在拦）时返回 None——本轮退整份返修，不
-    静默漏项。返回按路径聚合的 ``(path, issues)``（裸元组，不 import
-    novel.llm；分层规则禁 stage2 依赖 LLM 面）。CS-2：瘦 wire 同样路由
-    （expand 的派生错误也带条目路径，路径词汇＝state／know）。
+    重放与 compile 同一条管道（`_compile_view`，判据 25），把每条错误映射到
+    wire 的 JSON 路径；存在不可定位错误，或 `errors` 与可定位集不完全一致
+    （协议校验／键归一／首现锚点等其它闸在拦）时返回 None——本轮退整份返修，
+    不静默漏项。瘦 wire 派生期的条目问题（src 区间非法、at 地址非法）同样
+    按条目返修。返回按路径聚合的 ``(path, issues)``（裸元组，不 import
+    novel.llm；分层规则禁 stage2 依赖 LLM 面）。
     """
     if not isinstance(wire, dict):
         return None
-    resolver = EvidenceResolver(evidence_ids if isinstance(evidence_ids, Mapping)
-                                else list(evidence_ids))
-    slugs = frozenset(character_slugs) if character_slugs is not None else None
-    routed, labels, route_issues = _route_wire(wire, chapter=chapter)
-    if routed is None or any(path is None for path, _message in route_issues):
-        return None
-    canonical = deepcopy(routed)
-    _canonicalize_basis_quotes(canonical, resolver)
-    issues = list(route_issues) + _chapter_issues(canonical, resolver, slugs, chapter,
-                                                  labels)
-    if any(path is None for path, _message in issues):
+    _canonical, issues = _compile_view(wire, evidence_ids=evidence_ids, chapter=chapter,
+                                       character_slugs=character_slugs)
+    if not issues or any(path is None for path, _message in issues):
         return None
     if len(errors) != len(issues) or sorted(errors) != sorted(
             message for _path, message in issues):
@@ -366,33 +440,22 @@ def compile_chapter_observation(
     `character_slugs` 是书级人物表 slug 闭集（R3 左移）：beats 的 participants
     引用表外人物当场报 issue（措辞与 compile 的 `R-2.3` 核对一致，compile 侧
     保留为发布前防御）。wire 不被修改（I-24）；错误逐条聚合，含 Resolver 的
-    精确 issue 消息。CS-2（2026-10-03）：wire 按协议字面量路由——瘦面
-    （stage2-chapters-v3）先经 expand 派生成 rc12 dict 再过同一管道，落盘
-    形状与全部下游消费者不变。
+    精确 issue 消息。瘦 wire 先经 expand 派生、basis 引文由 Resolver 定位所在
+    段（RC-27），再过同一管道；落盘形状与全部下游消费者不变。
     """
-    errors: list[str] = []
     if not isinstance(wire, dict):
         return None, ['chapter wire 必须是 JSON object']
-    routed, labels, route_issues = _route_wire(wire, chapter=chapter)
-    if route_issues:
-        return None, [message for _path, message in route_issues]
-    # R10a a1：传 Mapping（段 id→{chapter,text}）时 basis 引文可逐字判定；
-    # 只传 id 的合成闭集保持旧形态（闭集核对可用，逐字判定报 unknown_segment）。
-    resolver = EvidenceResolver(evidence_ids if isinstance(evidence_ids, Mapping)
-                                else list(evidence_ids))
-    slugs = frozenset(character_slugs) if character_slugs is not None else None
-    # D2 引文回取先于全部判定：后续闭集核对、逐字判定、句柄纪律与协议校验
-    # 都在回取后的副本上施行——validate 回调与正式 compile 走同一函数，两路
-    # 结果逐字节一致（I-30 幂等）。
-    canonical = deepcopy(routed)
-    _canonicalize_basis_quotes(canonical, resolver)
-    # CS-patch（2026-10-03）：判定走结构化视图（闭集／basis／人物闭集／句柄
-    # 纪律，同源同序），errors 是它的无路径投影——条目定位与验收判定不会漂。
-    issues = _chapter_issues(canonical, resolver, slugs, chapter, labels)
-    errors.extend(message for _path, message in issues)
+    # 引文定位与 D2 回取先于全部判定：validate 回调与正式 compile 走同一函数，
+    # 两路结果逐字节一致（I-30 幂等）；条目定位（patch）复用同一视图。
+    canonical, issues = _compile_view(wire, evidence_ids=evidence_ids, chapter=chapter,
+                                      character_slugs=character_slugs)
+    errors: list = [message for _path, message in issues]
+    if canonical is None:
+        return None, errors
     normalized = _normalize_registered_scopes(canonical, errors)
     try:
-        observation = ChapterObservation.model_validate(normalized)
+        observation = ChapterObservation.model_validate(
+            _shape_view(normalized) if errors else normalized)
     except ValidationError as exc:
         return None, errors + [f'章观察协议校验失败：{exc}']
     if errors:

@@ -64,6 +64,37 @@
     "stage7": []
   },
   "modules": {
+    "tests/test_str06_candidate_preflight.py": {
+      "layer": "stage",
+      "stages": ["stage2", "stage4", "stage5"],
+      "cases": {
+        "test_execution_plan_failure_does_not_claim_writer_checks_passed": "unit_contract",
+        "test_dangling_proposition_stops_projection_without_an_uncaught_exception": "unit_contract"
+      }
+    },
+    "tests/test_str06_fact_lock_stage.py": {
+      "layer": "stage",
+      "stages": ["stage2", "stage4", "stage5"]
+    },
+    "tests/test_str06_name_projection.py": {
+      "layer": "unit_contract",
+      "stages": ["stage4", "stage5"],
+      "cases": {
+        "test_guard_only_projection_reaches_compile_report_and_survives_restart": "stage"
+      }
+    },
+    "tests/test_str06_design_patch.py": {
+      "layer": "stage",
+      "stages": ["stage2", "stage4"],
+      "cases": {
+        "test_leaf_scalars_are_promoted_to_the_complete_element_they_belong_to": "unit_contract",
+        "test_scene_level_scalars_and_top_level_scalars_stay_in_place": "unit_contract",
+        "test_coupled_fields_in_one_beat_merge_to_the_whole_beat": "unit_contract",
+        "test_nested_paths_fold_into_the_outer_replacement_without_overlap": "unit_contract",
+        "test_missing_keys_climb_to_the_nearest_existing_ancestor_and_unlocatable_means_full_revision": "unit_contract",
+        "test_every_error_object_is_returned_so_the_ask_loop_can_check_full_coverage": "unit_contract"
+      }
+    },
     "tests/test_str06_material_repair.py": {
       "layer": "unit_contract",
       "stages": [
@@ -868,6 +899,9 @@
         "stage4"
       ],
       "cases": {
+        "test_paired_synonymous_statements_merge_without_moving_disclosure": "stage",
+        "test_synonymous_association_rejected_by_old_guard_recovers_free": "stage",
+        "test_synonymous_class_keeps_local_restatement_validation": "stage",
         "test_dangling_cross_chapter_reference_stays_undecided_and_blocks": "stage",
         "test_loop_pairing_conflict_preserves_truth_and_recovers_without_purchase": "stage",
         "test_publish_full_stage2_leg_writes_both_truths_under_one_outcome": "stage",
@@ -1122,6 +1156,16 @@
         "test_rc24_design_and_writer_instructions_match_time_contract": "unit_contract",
         "test_rc21_owner_permissions_reach_full_and_patch_requests": "unit_contract",
         "test_rc24_successive_states_reach_their_own_beats": "unit_contract"
+      }
+    },
+    "tests/test_stage2_evidence_addressing.py": {
+      "layer": "unit_contract",
+      "stages": [
+        "stage2"
+      ],
+      "cases": {
+        "test_rc27_real_chain_publishes_located_basis": "stage",
+        "test_rc29_full_answer_in_patch_round_is_accepted_as_full_revision": "stage"
       }
     }
   },

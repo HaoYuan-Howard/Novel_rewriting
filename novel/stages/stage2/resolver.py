@@ -10,7 +10,11 @@
     精确报告，修复走 owner patch 或定向修订）；
   • 称谓 `from_chapter` 锚点派生——沿用 `R-2.10`：锚点段＝所引证据段中逐字
     包含该称呼的最早一段，章前文字（e00）锚点映射到第 1 章（D12/I-15：
-    可推导坐标归 compiler，模型不给窗口）。
+    可推导坐标归 compiler，模型不给窗口）；
+  • basis 引文所在段定位（RC-27，2026-10-04）——wire 只给逐字引文，段号
+    由本模块在条目自身证据范围内查出（I-21：可由引文机械推导的 id 不让
+    模型抄）；范围外命中或全无命中给精确 issue，不替模型改范围或换引文；
+  • 证据清单的唯一渲染（RC-26）——一段一行，段号与该段全文同行。
 
 理解原文、判断同一性与关联归 semantic unit（book／chapters／associate）；
 本模块只回答「这个字面在哪、这个 id 在不在」。validator 不修改输入：全部
@@ -46,7 +50,26 @@ ISSUE_CODES: tuple[str, ...] = (
     'anchor_conflict',    # 逐字锚命中分散在所引的多个句段（定位冲突）
     'basis_segment_outside_refs',  # R10a a1：basis 引的段不在条目自身 source_refs 内
     'quote_not_in_segment',        # R10a a1：basis 引文在所引句段内不逐字存在
+    'quote_outside_refs',          # RC-27：引文只出现在条目证据范围之外的段
+    'quote_not_found',             # RC-27：引文在证据闭集内无命中
 )
+
+
+def render_evidence_block(segments: Mapping[str, Mapping[str, Any]]) -> str:
+    """证据清单的唯一渲染（RC-26，book／chapters 请求共用）：一段一行，段号
+    与该段全文同行。
+
+    段文本含换行即违反切分契约——段号会悬在两段文字之间，模型无从判断它
+    属于哪一段（2026-10-04 三书停书的根因形态）。这里直接拒绝（I-34），
+    不在渲染时偷偷压平换行掩盖切分缺陷。
+    """
+    lines: list[str] = []
+    for ref, segment in segments.items():
+        text = str(segment.get('text') or '')
+        if '\n' in text or '\r' in text:
+            raise ValueError(f'证据段 {ref} 的文本含换行：证据段必须是单个自然段（RC-26）')
+        lines.append(f'[{ref}] {text}')
+    return '\n'.join(lines)
 
 
 @dataclass(frozen=True)
@@ -191,6 +214,50 @@ class EvidenceResolver:
                 context={'segment_id': segment, 'quote': quote[:60],
                          'verbatim_home_segments': homes[:12]}))
         return problems
+
+    def _holds(self, ref: str, quote: str) -> bool:
+        text = self._text(ref)
+        return bool(text) and (quote in text
+                               or content_equivalent_slice(quote, text) is not None)
+
+    def locate_quote(self, quote: str, refs: Iterable[str]
+                     ) -> tuple[str | None, str, ResolverIssue | None]:
+        """RC-27：逐字引文 → ``(所在段, 原文切片, issue)``。
+
+        只在条目自身的证据范围 `refs` 内取段（basis 必须出自本条目所述的
+        原文，防止拿后文证据给前面的拍定结论）：按 refs 顺序取第一处逐字
+        命中；没有逐字命中时取第一处「仅标点／空白宽度不同」的唯一命中，
+        回取段原文切片（D2 同一把尺）。basis 是证据存在性，同一引文出现
+        在多个所引段时取 refs 中的第一段，不要求唯一。
+
+        范围内找不到即报 issue、不改范围：闭集里别处有命中 →
+        `quote_outside_refs`（context 列出实际所在段，修正可能是扩范围也
+        可能是换引文，由语义单元选）；全无命中 → `quote_not_found`。
+        """
+        refs = list(refs)
+        for ref in refs:
+            if ref in self._segments and quote in self._text(ref):
+                return ref, quote, None
+        for ref in refs:
+            text = self._text(ref)
+            if text:
+                slice_ = content_equivalent_slice(quote, text)
+                if slice_ is not None:
+                    return ref, slice_, None
+        homes = [ref for ref in self._segments if self._holds(ref, quote)]
+        if homes:
+            return None, quote, ResolverIssue(
+                code='quote_outside_refs',
+                message=(f'basis 引文不在本条目证据范围 {refs} 的任何一段内'
+                         f'（原文位于 {homes[:6]}）：{quote[:30]!r}…——改用范围内的'
+                         '原句作引文，或把引文所在段计入证据范围'),
+                context={'quote': quote[:60], 'source_refs': refs,
+                         'verbatim_home_segments': homes[:12]})
+        return None, quote, ResolverIssue(
+            code='quote_not_found',
+            message=(f'basis 引文未在原文中命中：{quote[:30]!r}…——逐字摘抄原句，'
+                     '不转写、不缩写、不跨段拼接'),
+            context={'quote': quote[:60], 'source_refs': refs})
 
     def canonical_quote(self, segment: str, quote: str) -> str:
         """basis 引文的规范化回取（D2 标点宽度）：逐字已在段内 → 原样返回；

@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""slim —— 章观察瘦 wire（stage2-chapters-v3）的确定性适配层（CS-2 第一步，
-2026-10-03）。
+"""slim —— 章观察瘦 wire 的确定性适配层（CS-2 第一步，2026-10-03；RC-27/28
+升 stage2-chapters-v5，2026-10-04）。
 
 【职责】LLM 面与 canonical 面之间的唯一转换：`expand_chapter_wire` 把瘦 wire
-派生成 rc12（stage2-chapters-v2）形状的 dict，`slim_chapter_wire` 是它的逆
-（迁移与回归用：expand(slim(现产物)) == 现产物）。纯函数、不改输入（I-24）、
-不落盘——落盘仍是 `ChapterObservation`（rc12），全部下游消费者不变。
+派生成 canonical（`STAGE2_CHAPTERS_PROTOCOL`）形状的 dict，`slim_chapter_wire`
+是它的逆（迁移与回归用：expand(slim(现产物)) 再经引文定位 == 现产物）。纯函数、
+不改输入（I-24）、不落盘——落盘仍是 `ChapterObservation`，下游消费者不变。
+basis 在 wire 上只是逐字引文：expand 产出 ``{'segment': None, 'quote': 引文}``，
+所在段由 chapters 管道的 Resolver 定位步填入（RC-27；本模块不看原文）。
 
 【瘦在哪（r10b 全产物实证，132 拍／85 效应／60 认知）】
   • 默认值派生：scene_boundary 112/132 continue、temporal_mode 121/132 single、
@@ -16,12 +18,13 @@
   • 命题句柄（ref）由代码按文本归并派发：60 条 cognition 里 59 条首现、
     1 条重引——「同一句柄两种文本」「重抄不一致」这类失败点结构性消失
     （D1 的章内面），跨章配对仍走 associate＋CS-1 的归一全等闸；
-  • src 支持同前缀连续区间（多段引用绝大多数是连续区间）。
+  • src 支持同前缀连续区间（多段引用绝大多数是连续区间），数组元素同样
+    可以是区间（RC-28：语法对组合闭合——提示词教的两种写法自然会混用）。
 
 【不变量】basis 逐字证据（R10a a1）、loops 句柄（D8 跨章配对）、人物/认知
 闭集闸、引文归一回取（D2）全部保持——瘦的只是「模型抄写机械字段」的负担，
 语义判据一条不放宽。适配集中在本模块（S-03）；删除条件＝下游消费迁移完成、
-canonical 自身瘦身升版（届时本模块与 v2 兼容读一并退役）。
+canonical 自身瘦身升版（届时本模块与 canonical 直通读一并退役）。
 """
 from __future__ import annotations
 
@@ -29,7 +32,7 @@ import re
 from typing import Any
 
 from contracts.schema.observation import (
-    STAGE2_CHAPTERS_WIRE_PROTOCOL, ChapterObservationWire,
+    STAGE2_CHAPTERS_PROTOCOL, STAGE2_CHAPTERS_WIRE_PROTOCOL, ChapterObservationWire,
 )
 from contracts.schema.source import REGISTERED_STATE_KEYS
 from novel.core.text import norm
@@ -69,19 +72,29 @@ def _target_of(address: str, where: str) -> tuple[dict | None, str | None]:
             'subject': None, 'object': None}, None
 
 
+def _expand_src_item(item: str, where: str) -> tuple[list[str] | None, str | None]:
+    """src 的一个元素（单 id／同前缀连续区间）→ (段 id 列表, 错误)。"""
+    if '..' not in item:
+        return [item], None
+    m = _SRC_RANGE.fullmatch(item)
+    if m is None or m.group(2) != m.group(5) or int(m.group(3)) > int(m.group(6)):
+        return None, (f'{where} src 区间非法：{item!r}'
+                      '（须同章前缀且起段号 ≤ 止段号，如 e01_02..e01_05）')
+    prefix = m.group(1).rsplit('_', 1)[0] + '_'
+    start, end = int(m.group(3)), int(m.group(6))
+    return [f'{prefix}{n:02d}' for n in range(start, end + 1)], None
+
+
 def _expand_src(src: str | tuple[str, ...], where: str) -> tuple[list[str] | None, str | None]:
-    """src（单 id／同前缀连续区间／数组）→ (段 id 列表, 错误)。"""
-    if isinstance(src, str):
-        if '..' not in src:
-            return [src], None
-        m = _SRC_RANGE.fullmatch(src)
-        if m is None or m.group(2) != m.group(5) or int(m.group(3)) > int(m.group(6)):
-            return None, (f'{where} src 区间非法：{src!r}'
-                          '（须同章前缀且起段号 ≤ 止段号，如 e01_02..e01_05）')
-        prefix = m.group(1).rsplit('_', 1)[0] + '_'
-        start, end = int(m.group(3)), int(m.group(6))
-        return [f'{prefix}{n:02d}' for n in range(start, end + 1)], None
-    return list(src) or None, None
+    """src（单 id／区间，或二者混合的数组，RC-28）→ (保序去重的段 id 列表, 错误)。"""
+    items = [src] if isinstance(src, str) else list(src)
+    refs: list[str] = []
+    for item in items:
+        expanded, error = _expand_src_item(item, where)
+        if error is not None:
+            return None, error
+        refs.extend(ref for ref in expanded or () if ref not in refs)
+    return refs or None, None
 
 
 class _PropRegistry:
@@ -112,7 +125,7 @@ class _PropRegistry:
 def expand_chapter_wire(
     wire: Any, *, chapter: int | None = None,
 ) -> tuple[dict | None, list[tuple[tuple[str | int, ...], str]]]:
-    """瘦 wire（v3）→ rc12 dict（stage2-chapters-v2 形状）＋条目级 issue。
+    """瘦 wire（v5）→ canonical 形状 dict（`STAGE2_CHAPTERS_PROTOCOL`）＋条目级 issue。
 
     纯派生（I-15）：默认值回填、地址串展开、src 区间枚举、命题句柄派发；
     返回的 dict 交给 `compile_chapter_observation` 的既有管道（引文归一／
@@ -157,7 +170,7 @@ def expand_chapter_wire(
                 'scope': scope,
                 'disclosure': disclosure,
                 'proposition': proposition,
-                'basis': [b.model_dump(mode='json') for b in effect.basis],
+                'basis': [{'segment': None, 'quote': quote} for quote in effect.basis],
             })
         cognition_out: list[dict] = []
         for j, entry in enumerate(beat.know):
@@ -166,7 +179,7 @@ def expand_chapter_wire(
                 'proposition': {'ref': handle,
                                 'statement': entry.what if first else None},
                 'holder': entry.who, 'mode': entry.how,
-                'basis': [b.model_dump(mode='json') for b in entry.basis],
+                'basis': [{'segment': None, 'quote': quote} for quote in entry.basis],
             })
         beats_out.append({
             'event': beat.ev,
@@ -181,7 +194,7 @@ def expand_chapter_wire(
     if issues:
         return None, issues
     return {
-        'protocol_version': 'stage2-chapters-v2',
+        'protocol_version': STAGE2_CHAPTERS_PROTOCOL,
         'beats': beats_out,
     }, []
 
@@ -247,7 +260,7 @@ def slim_chapter_wire(observation: dict) -> dict:
             if (effect['scope'] != 'book'
                     and effect['key'] not in REGISTERED_STATE_KEYS):
                 slim_effect['scope'] = effect['scope']
-            slim_effect['basis'] = effect['basis']
+            slim_effect['basis'] = [basis['quote'] for basis in effect['basis']]
             if effect['disclosure']['visibility'] == 'concealed':
                 slim_effect['hidden'] = {
                     'by': list(effect['disclosure']['known_by']),
@@ -259,7 +272,7 @@ def slim_chapter_wire(observation: dict) -> dict:
         know_out = [{
             'who': entry['holder'], 'how': entry['mode'],
             'what': _prop_text(entry.get('proposition')) or '',
-            'basis': entry['basis'],
+            'basis': [basis['quote'] for basis in entry['basis']],
         } for entry in beat.get('cognition') or ()]
         if state_out:
             slim_beat['state'] = state_out

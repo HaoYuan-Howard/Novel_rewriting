@@ -239,7 +239,7 @@ def _design_wire(brief: ReconstructionBrief, *, flashback: bool = False) -> dict
                  {'event': '约定归期', 'participants': ['fu_jun'],
                   'delivery_hint': '', 'target_delta': [
                       {'domain': 'world', 'subjects': [], 'holder': None,
-                       'key': _kf_expected(brief), 'op': 'set', 'value': '约半月后归家',
+                       'key': 'return_time', 'op': 'set', 'value': '约半月后归家',
                        'scope': 'book', 'modality': 'expected'}],
                   'expression_refs': [], 'surface_introductions': []},
              ]}],
@@ -248,11 +248,19 @@ def _design_wire(brief: ReconstructionBrief, *, flashback: bool = False) -> dict
     }
 
 
+def _without_fact_realization(brief: ReconstructionBrief) -> ReconstructionBrief:
+    """本文件的 v5 基座只验承载位／知情锁位置，不经 v8 `lock` 标注通道；事实锁的
+    接受与映射见 `test_str06_a4_design_locks.py` 的 CS-F2 一节（真实 v8 入口）。"""
+    return brief.model_copy(update={'requirements': tuple(
+        r.model_copy(update={'realize_locks': ()}) for r in brief.requirements)})
+
+
 def _assemble_design(brief: ReconstructionBrief, **over):
     return assemble_body_design(
         _design_wire(brief, **over), known_char_ids={'yun_niang', 'fu_jun'},
         expression_requirements=brief.expression,
-        source_narration=brief.source_narration, brief=brief)
+        source_narration=brief.source_narration,
+        brief=_without_fact_realization(brief))
 
 
 def _positions(body):
@@ -318,8 +326,11 @@ def test_v7_composite_obligation_preserves_cognitive_change_positions():
         for d in beat['target_delta']:
             if d['domain'] == 'knowledge':
                 continue
-            state.append({'at': 'world', 'key': d['key'], 'val': d['value'],
-                          'modality': d.get('modality')})
+            row = {'at': 'world', 'key': d['key'], 'val': d['value'],
+                   'modality': d.get('modality')}
+            if d.get('modality') == 'expected':       # 事实锁：在已选状态上标注
+                row['lock'] = _kf_expected(brief)
+            state.append(row)
         beats.append({'ev': beat['event'], 'who': beat['participants'],
                       'real': carriers.get(i, []), 'state': state})
     for ref, (ob, change) in knowledge_change_index(obligations).items():
@@ -328,7 +339,7 @@ def test_v7_composite_obligation_preserves_cognitive_change_positions():
         if change.holder == 'reader':
             placement['confirms'] = {'domain': 'world', 'key': 'evidence_fact'}
         beats[position].setdefault('know', []).append(placement)
-    wire = {'protocol_version': 'stage4-design-v7', 'book_style': source['book_style'],
+    wire = {'protocol_version': 'stage4-design-v8', 'book_style': source['book_style'],
             'scenes': [{'driver': source['scenes'][0]['driver'], 'brief': '由起疑推进到证实',
                         'beats': beats}], 'chapters': source['chapters']}
     body, errors = assemble_body_design(
@@ -498,7 +509,8 @@ def test_initial_state_knowledge_not_in_position_judgement():
     body, errors = assemble_body_design(
         wire, known_char_ids={'yun_niang', 'fu_jun'},
         expression_requirements=brief.expression,
-        source_narration=brief.source_narration, brief=brief)
+        source_narration=brief.source_narration,
+        brief=_without_fact_realization(brief))
     assert body is not None and not errors, errors
     binding, errors = derive_semantic_binding(_placements(), body, _checkpoint())
     assert binding is not None, errors

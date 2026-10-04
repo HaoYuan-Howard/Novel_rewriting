@@ -82,8 +82,15 @@ def apply_fault(wires: dict, fault: str | None) -> dict:
             for beat in scene['beats']:
                 beat.pop('real', None)
     elif fault == 'knowledge_release':
+        # 称谓释放与目标材料冲突：『陆大哥』不在初始释放里，Design 自己的第1章事件文本
+        # 却直接用了它——Design 自有文本的名称问题仍由 Design 接受判据拦下并走同节点修订
+        # （重选释放位置或改写材料）。CS-F2 后来自 Preserve／Brief 的**源侧**文本里的完整
+        # 登记称谓由写手材料确定性投影，不再触发修订；旧夹具（只去掉初始释放、靠知情命题里
+        # 的『陆大哥』制造泄漏）因此换成会真实触发 Design 修订的自有文本冲突。
         for release in mutated['design']['initial_surfaces']:
             release['surfaces'] = [s for s in release['surfaces'] if s != '陆大哥']
+        first = mutated['design']['scenes'][0]['beats'][0]
+        first['ev'] = '陆大哥' + first['ev']
     elif fault == 'duplicate_json_key':
         pass            # 该故障在 transport 层返回原始文本，见 FaultTransport
     else:

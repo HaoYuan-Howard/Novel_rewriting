@@ -37,7 +37,10 @@ from typing import Any, Callable, Iterable, Mapping, NamedTuple, Protocol
 
 from pydantic import BaseModel
 
-from contracts.schema.book_ir import ChapterIR, ChapterWriterPacket, PacketBrief, RealizationContract, WriterBookIR
+from contracts.schema.book_ir import (
+    ChapterIR, ChapterWriterPacket, PacketBrief, RealizationContract, WithheldNameBinding,
+    WriterBookIR,
+)
 from contracts.schema.context import (
     KnowledgeEntry, ObligationCarrier, OpenThreadIR, PendingConfirmation,
     StateEntry, SurfaceRelease, ThreadOpIR, UnansweredGuard, VerificationIR,
@@ -54,7 +57,9 @@ from contracts.schema.workflow import STR06_RC_VERSION
 from contracts.schema.source import CharactersCore, NameProjection, NameStructure, render_form
 from novel.core.name_materials import expand_surface_releases, family_form_literals, withheld_name_literals
 from novel.core.text import count_non_whitespace_chars, kp_statement
-from novel.core.material_trace import MaterialIssue, MaterialLines, MaterialPart, MaterialSource
+from novel.core.material_trace import (
+    MaterialIssue, MaterialLines, MaterialPart, MaterialSource, NameProjectionHit,
+)
 from novel.core.validation import ValidationMessage
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -124,14 +129,15 @@ def apply_replacements(text: str, replacements: dict[str, str]) -> tuple[str, tu
 def material_identities(graph: BodyDesign, binding: SemanticBinding, chars: CharactersCore) -> set[str]:
     """实际写作材料不得泄漏的领域引用闭集；生产、预检与审阅共用。
 
-    R10b 起锁键（`kp_*`／`kf_*`，Design 状态 delta 的 key）同入闭集：锁的
-    内容（命题文本、时态措辞）可以送达，盲句柄本身是 Brief↔Design 的内部
-    引用，进阅读面即泄漏（P4：对白「我」不在此列——它不是 delta key）。
+    R10b 起锁键（`kp_*`，Design 状态 delta 的 key）同入闭集：锁的内容（命题
+    文本、时态措辞）可以送达，盲句柄本身是 Brief↔Design 的内部引用，进阅读面
+    即泄漏（P4：对白「我」不在此列——它不是 delta key）。CS-F2 起 kf 句柄不再
+    是状态键，改由 Binding 的 `fact_bindings` 登记（它们同样是内部引用）。
     """
     lock_keys = {d.key for s in graph.scenes for b in s.beats for d in b.target_delta
-                 if d.key.startswith(('kp_', 'kf_'))}
-    lock_keys |= {d.key for d in graph.initial_state
-                  if d.key.startswith(('kp_', 'kf_'))}
+                 if d.key.startswith('kp_')}
+    lock_keys |= {d.key for d in graph.initial_state if d.key.startswith('kp_')}
+    lock_keys |= {f.kf_id for f in binding.fact_bindings}
     return (set(chars.characters) | {s.scene_id for s in graph.scenes}
             | {b.beat_id for s in graph.scenes for b in s.beats}
             | {t.ref for s in graph.scenes for b in s.beats for t in b.threads}
@@ -172,6 +178,40 @@ def positive_material_issues(
                 issues.append(MaterialIssue('internal_id_leak', where, match.start(),
                                             match.group()))
     return tuple(issues)
+
+
+def project_withheld_names(
+    text: str, *, bindings: Iterable['WithheldNameBinding'], display: Mapping[str, str],
+) -> tuple[str, tuple[NameProjectionHit, ...]]:
+    """正向材料行里的**完整登记称谓**按本场已释放称谓确定性投影（CS-F2，RC-40/41）。
+
+    只处理 `bindings`（章 IR 里 compile 时已证明唯一绑定人物的完整登记称谓）。扫描沿用
+    字面扫描的同一语义：绑定字面与包含它们的更长称谓（`enclosing`，已登记的禁用或已释放
+    称谓）一起长名优先认领，只替换认领到的绑定字面——更长称谓内部的子串因此不会被拆开
+    替换。人物在本场没有已释放称谓（`display` 无值）时保持原样，由后续字面检查如实
+    报告缺口。短姓、关系称呼、未登记表达、源引文均不在绑定表内，绝不替换。纯函数：
+    相同输入恒同输出，不改调用方；只依赖绑定表与本场称谓，不依赖验证材料字段。
+    """
+    table = {b.literal: b for b in bindings}
+    if not table or not text:
+        return text, ()
+    literals = set(table)
+    for binding in table.values():
+        literals.update(binding.enclosing)
+    out: list[str] = []
+    hits: list[NameProjectionHit] = []
+    cursor = 0
+    for claim in claim_spans(text, literals):
+        binding = table.get(claim.literal)
+        replacement = display.get(binding.char_id, '') if binding else ''
+        if not replacement:
+            continue
+        out.append(text[cursor:claim.start])
+        out.append(replacement)
+        cursor = claim.end
+        hits.append(NameProjectionHit(claim.literal, binding.char_id, replacement))
+    out.append(text[cursor:])
+    return ''.join(out), tuple(hits)
 
 
 
@@ -262,6 +302,19 @@ def writer_material_issues(packet: ChapterWriterPacket, *,
         parts, released=packet.chapter.released_surfaces,
         withheld=packet.chapter.withheld_literals, internal_ids=internal_ids,
         chapter_ordinal=packet.chapter.chapter_ordinal)
+
+
+def writer_name_projections(packet: ChapterWriterPacket) -> tuple[dict, ...]:
+    """本章写手材料实际发生的称谓投影留痕（审计读数；不含行文本，I-38）。
+
+    投影是显式、可观测的确定性步骤而非静默改写：每条记录分区、被替换的完整登记
+    称谓、人物与替换结果。同分区内行文本相同的重复投影按去重后的行计一次。
+    """
+    _view, parts = _build_writer_packet(packet)
+    return tuple({'partition': partition, 'literal': hit.literal,
+                  'char_id': hit.char_id, 'replacement': hit.replacement}
+                 for partition, items in parts.items()
+                 for part in items for hit in part.projected)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -483,23 +536,24 @@ BOOK_PROMPT = """任务：通读全书，产出人物账、初始状态与世界
    允许／不允许的视角信息、主导幽默与重要内外反差；如对外守礼而内心直白。
    所有表达陈述带证据，只记录源书已经呈现的机制；没有某类给空数组，不补猜；不生成 ID。
 
-【证据段 id 清单】（source_refs 只能从中选）
+【证据段 id 清单】（每行一个自然段，行首方括号内是该段的 id；source_refs 只能从中选）
 {evidence}
 
-输出 JSON 顶层：{{"protocol_version":"stage2-book-v3","characters":{{...}},"initial_state":[...],"world_constraints":[...],"expression":{{"narration":{{...}},"mechanisms":[...]}}}}
+输出 JSON 顶层：{{"protocol_version":"stage2-book-v5","characters":{{...}},"initial_state":[...],"world_constraints":[...],"expression":{{"narration":{{...}},"mechanisms":[...]}}}}
 个人自述、某家长辈要求不得推广成普遍世界规则；无法由证据确认的规则不写。
 
 【逐字证据】（R10a a1）initial_state 与 world_constraints 的每个条目必须带 basis：
-[{{"segment":"证据段id","quote":"原句逐字引文"}}]（至少 1 条）。segment 必须取自该条目
-自己的 source_refs；quote 逐字摘自该句段原文，不转写、不缩写、不摘人名或动作词凑数；
-判断依据含限定（以为／觉得／像是／预计／约／几天后）时，引文必须包含该限定原文。"""
+["原句逐字引文", ...]（至少 1 条，只写引文、不写段号——所在段由程序按引文查出）。
+引文必须出自该条目 source_refs 所列的某一段，逐字摘抄，不转写、不缩写、不跨段拼接，
+不摘人名或动作词凑数；判断依据含限定（以为／觉得／像是／预计／约／几天后）时，
+引文必须包含该限定原文。"""
 
 CHAPTER_PROMPT = """任务：把第 {ch} 章正文拆成有序 beats。每一拍是一次状态转移：ev 是给人读的事件表述，需要延续的变化全部由三类转移承载——state（事实）、know（认知）、loops（悬念）。机械字段（拍号、默认值、命题句柄等）由 compiler 派生，你只写判断与例外。
 
 【人物表】（who / state 的 at / know 的 who 只能用这些 slug）
 {glossary}
 {prior}
-【第 {ch} 章正文】（每段前的 [eXX_YY] 是证据 id）
+【第 {ch} 章正文】（每行一个自然段，行首方括号内的 eXX_YY 是该段的证据 id）
 {evidence}
 {pre_chapter}
 【要求】
@@ -514,8 +568,9 @@ CHAPTER_PROMPT = """任务：把第 {ch} 章正文拆成有序 beats。每一拍
      不外推、不补全（没写"送出住处"就不得记成送离住处）；
    - who：本拍中实际行动、说话、感知或被直接作用的人物 slug（可空数组）；
      仅被提及者只留在 ev，不进 who；
-   - src：支撑该拍的**本章**证据段 id，1-4 个。连续多段写成区间（如 "e01_02..e01_05"），
-     单段写 id 本身（如 "e01_03"），不连续给数组；
+   - src：该拍所在的**本章**证据段 id，覆盖这一拍发生的段。连续多段写成区间（如
+     "e01_02..e01_05"），单段写 id 本身（如 "e01_03"），不连续时给数组，数组元素
+     也可以是区间（如 ["e01_02","e01_05..e01_07"]）；
    - new_scene：本拍开新场景（旧场景的 scene 作用域状态就此失效）才写 true，缺省＝
      延续当前场景。全书第一个拍必须 new；第 1 章之后的章若开场直接延续上一章末尾的
      同一场景，第一拍不写 new_scene，否则写；
@@ -575,12 +630,12 @@ CHAPTER_PROMPT = """任务：把第 {ch} 章正文拆成有序 beats。每一拍
 6. 前文与正文的关系：上方前文原文是只读参考——本拍事实以本章正文原文为准，不得为迁就
    前文改写施事、受事或动作主体；前文与正文不一致时，按正文记录。
 7. 逐字证据与时态（R10a a1）：state 与 know 的每条转移必须带 basis：
-   [{{"segment":"证据段id","quote":"原句逐字引文"}}]（至少 1 条）。segment 必须取自本拍
-   src；quote 逐字摘自该句段原文，不转写、不缩写。认识限定（觉得像是／以为／
-   听说）只进 know 的 how（suspects／believes／hears_claim），what 写
-   命题本身；引文保留原限定。
+   ["原句逐字引文", ...]（至少 1 条，只写引文、不写段号——所在段由程序按引文查出）。
+   引文必须出自本拍 src 覆盖的某一段，逐字摘抄，不转写、不缩写、不跨段拼接。
+   认识限定（觉得像是／以为／听说）只进 know 的 how（suspects／believes／
+   hears_claim），what 写命题本身；引文保留原限定。
 
-输出 JSON 顶层：{{"protocol_version":"stage2-chapters-v3","beats":[...]}}
+输出 JSON 顶层：{{"protocol_version":"stage2-chapters-v5","beats":[...]}}
 不要把财富、位置等不同维度塞入同一个 key。"""
 
 #: 七类保存类别与 `contracts/schema/policy.py::PreserveKind` 同源（B2）：定义只在
@@ -693,7 +748,7 @@ setup/payoff 或结局条件中的任何一项，就填 true；否则填 false�
 返回一个 JSON object，不要围栏、不要解释。"""
 
 DESIGN_RULES = """任务：仅依据 Brief/义务清单/Identity/OutputConstraints 设计目标书
-（wire 协议 stage4-design-v7）。你是整书一次调用的结构设计者：只表达**选择、
+（wire 协议 stage4-design-v8）。你是整书一次调用的结构设计者：只表达**选择、
 结构与相对篇幅重点**——场景/拍编号、归章、线程编号、权重归一、默认值、
 知情增量的键与模式全部由 compiler 派生，你不输出任何 ID、编号或归一化数值
 （I-21）。机械字段（world_rules、expression 保留决定、narration、pov/voice、
@@ -720,8 +775,10 @@ Brief.requirements 以 obNN 为键，包含完整语义、依赖 requires、锁�
 - 若 A requires B：跨场时B不得晚于A；同场接受拍和支撑拍允许交错；
   已声明事实读取和认知披露仍须满足各自建立时点与授权边界；
 - series 成员是同一机制的离散兑现时点：接受拍必须**不同拍**，不得合并；
-- 认知变化清单／kf 由 compiler／你的 state 面按锁规则兑现
-  （漏兑现即拒）。
+- 认知变化清单由 compiler 按 know 标注派生；必保义务的**事实锁**（requirements 里
+  realize_locks 列出的 kf_*）由你在承载该义务的拍上，让**表达该事实的那条 state** 带上
+  lock 兑现（漏兑现即拒）：该拍已有这样的 state 就直接标注，没有就写这一条并标注——
+  同一个事实只写一条状态，不要为锁另写第二条。
 
 【书级声明】
 - book_style（必填）：整书叙述风格与表达规则的书面声明（进每章请求）；
@@ -742,7 +799,7 @@ Brief.requirements 以 obNN 为键，包含完整语义、依赖 requires、锁�
 结尾仍开放的线合法。
 
 【拍上事实断言（state）】
-持续到后续的事实变化写在拍的 state：[{at, key, val, op?, modality?}]：
+持续到后续的事实变化写在拍的 state：[{at, key, val, op?, modality?, lock?}]：
 - at：人物 slug｜关系 "subject+object"（有序）｜"world"；
 - key 是目标书命名（英文蛇形）；val 表达成键值（受控词表/短串），不是散文；
 - op 缺省 set；unset（显式解除，不带 val）／unknown（值未知）才写；
@@ -753,9 +810,12 @@ Brief.requirements 以 obNN 为键，包含完整语义、依赖 requires、锁�
   （清单见输入 book_constraints；val 不写——命题成立由 compiler 回填）；
   剧情世界事实自命名 key、val 必须是有语义的短述（val="true" 即拒）；
 - 槽位身份：跨拍/跨章消费的当前状态沿**同一 key** 更新值，不换键表状态变化；
-- kf_* 事实锁键：只能按锁类别承载（planned 锁写 planned，不得升格 actual；
-  unknown_value 只能 op=unknown 不得补值；unanswered 不得 set 作答）；
-- kf 值用一句话短述（如「即将上京参加科举」）；
+- 事实锁引用 lock：state 可带 lock:"kf_…"（取值闭集见 wire Schema），表示**这条**
+  状态承载该事实锁。kf 句柄不是状态键，val 也不要复述锁的原文——锁的 statement 只是
+  约束说明；state 的 key/val 写目标书自己的命名与短述，人物只用当前已释放的称谓。
+  时态锁（planned/expected/conditional）须标在同 modality 的 set 上（计划不得升格
+  actual）；unknown_value 锁须标在 op=unknown 的状态上（不得补值）；unanswered 是
+  禁区，不承载状态、不写 lock；同一个锁只标在一条状态上；
 - kp_* 键的知情增量一律经 know 标注派生；state 面只承载例外——
   op=unknown（值未知）或 op=unset（显式解除该知情），at＝持有者。
   知情 set 经 know 派生；读者 known 须在 know 标注 confirms 事实地址。
@@ -795,19 +855,29 @@ scene_weights（可选）：与场景等长的正数数组（相对篇幅重点�
 返回一个 JSON object，不要围栏、不要解释。
 """
 
-from contracts.schema.design import DesignWireV5, DesignWireV7
+from contracts.schema.design import DesignWireV5, DesignWireV8
 _DESIGN_INSTRUCTIONS = DESIGN_RULES
 
 
 def design_rules(*, known_char_ids: set[str] | None = None,
                  registered_surfaces: Mapping[str, set[str]] | None = None,
-                 knowledge_refs: Mapping[str, bool] | None = None) -> str:
+                 knowledge_refs: Mapping[str, bool] | None = None,
+                 fact_lock_ids: Iterable[str] | None = None) -> str:
     """模型 Schema 是唯一形状源；动态闭集与接受函数使用同一输入。
 
-    CS-3（2026-10-03）：形状源换 v7 瘦模型（DesignWireV7）；闭集注入面随
-    之换名（who／可选 pov 的 anyOf 分支），语义与 v5 面一致。
+    CS-3（2026-10-03）：形状源换瘦模型（现为 DesignWireV8）；闭集注入面随
+    之换名（who／可选 pov 的 anyOf 分支），语义与 v5 面一致。CS-F2：
+    `fact_lock_ids` 是可被 `lock` 引用的事实锁句柄闭集（Brief.fact_locks 去掉
+    unanswered 禁区）；空集合时 `lock` 只允许 null。
     """
-    schema = DesignWireV7.model_json_schema()
+    schema = DesignWireV8.model_json_schema()
+    if fact_lock_ids is not None:
+        lock_ids = sorted(fact_lock_ids)
+        state_props = schema['$defs']['SlimDesignState']['properties']
+        if lock_ids:
+            state_props['lock']['anyOf'][0]['enum'] = lock_ids
+        else:
+            state_props['lock'] = {'type': 'null', 'default': None, 'title': 'Lock'}
     placement = schema['$defs']['SlimKnowledgePlacement']
     if knowledge_refs is not None:
         placement['properties']['ref']['enum'] = sorted(knowledge_refs)
@@ -878,7 +948,7 @@ NAMES_RULES = """任务：登记全书源名称结构（姓氏家族、名、化
    只在异常字面出现的证据局部授权归一，不授权全书替换。证据不足／有不同解释时status="unresolved"，
    char_id与surface均null并说明歧义；不得凭读音、字形或常见姓名猜测，也不得把真实化名误当笔误。
    没有发现给空数组；同一局部字面不可有相互冲突的指向。原文、引文与逐章观察不由本节点改写。
-输出 JSON 顶层：{"protocol_version":"stage2-names-v2","families":{...},"people":{...},"resolutions":[]}"""
+输出 JSON 顶层：{"protocol_version":"stage2-names-v3","families":{...},"people":{...},"resolutions":[]}"""
 
 HOOK_DESIGN_RULES = """任务：为整本小说设计读者入口（楔子）的结构设计。brief 明确入口知识、跳时定位与末尾悬念；POV 可以与正文不同，事实和披露边界一致。只输出设计 JSON，不写 prose
 （wire 协议 stage4-hook-design-v1）。位置引用只给分量（scene=场景 id、beat=拍 id，
@@ -1228,7 +1298,8 @@ def knowledge_probe(entry: KnowledgeEntry) -> tuple:
     return 'knowledge', entry.subjects, entry.holder, entry.key
 
 
-def consumption_closure(graph: BodyDesign) -> dict[tuple, tuple[int, ...]]:
+def consumption_closure(graph: BodyDesign,
+                        fact_bindings: Iterable = ()) -> dict[tuple, tuple[int, ...]]:
     """全书消费闭包（R10b.3）：地址 → 消费者场序集合（升序）。
 
     消费者闭集四类（背景投影的「后文仍被消费」判定面）：
@@ -1237,8 +1308,8 @@ def consumption_closure(graph: BodyDesign) -> dict[tuple, tuple[int, ...]]:
     · **读者确认目标**（reader set 的 `confirms` 地址——确认前该事实仍受
       「何时确认」约束，章包需要它的入场值）；
     · **Hook 起笔/隐藏/禁揭地址**（书末消费，位置记全书场数）；
-    · **锁键**（拍上写 `kp_*`／`kf_*` 键＝该地址的知情/时态承载——升级与
-      兑现都消费旧值边界）。
+    · **锁承载**（拍上 `kp_*` 键＝该地址的知情承载；CS-F2 起事实锁的承载状态由
+      Binding 的 `fact_bindings` 给出——升级与兑现都消费旧值边界）。
 
     位置是**集合**不是最早值：`narrow_background` 要按「建立之后的位置」
     判定后文消费——同一地址先建立（sc01 起疑）后升级（sc02 确认）时，
@@ -1253,6 +1324,7 @@ def consumption_closure(graph: BodyDesign) -> dict[tuple, tuple[int, ...]]:
         if at not in bucket:
             bucket.append(at)
 
+    scene_index = {s.scene_id: i for i, s in enumerate(graph.scenes)}
     for index, scene in enumerate(graph.scenes):
         for read in scene.state_reads:
             _consume(read.address(), index)
@@ -1260,8 +1332,12 @@ def consumption_closure(graph: BodyDesign) -> dict[tuple, tuple[int, ...]]:
             for delta in beat.target_delta:
                 if delta.confirms is not None:
                     _consume(delta.confirms.address(), index)
-                if delta.key.startswith(('kp_', 'kf_')):
+                if delta.key.startswith('kp_'):
                     _consume(delta.address(), index)
+    for bound in fact_bindings:
+        at = scene_index.get(bound.beat_ref.split('#', 1)[0])
+        if at is not None:
+            _consume(bound.address.address(), at)
     hook = getattr(graph, 'hook', None)
     if hook is not None:
         for fact in hook.opening_facts:
@@ -1479,7 +1555,8 @@ def project_context(*, scene_id: str, graph: BodyDesign,
     background_state, background_knowledge = narrow_background(
         background_state, background_knowledge,
         scene_index=scene_index,
-        consumers=consumers if consumers is not None else consumption_closure(graph),
+        consumers=consumers if consumers is not None
+        else consumption_closure(graph, binding.fact_bindings),
         scene_of={s.scene_id: i for i, s in enumerate(graph.scenes)})
 
     def _resolve_knowledge(entry: KnowledgeEntry) -> KnowledgeEntry:
@@ -1623,7 +1700,10 @@ def project_context(*, scene_id: str, graph: BodyDesign,
 #: statement（project_context 统一回填 IR：拍增量／知情边界／拍级读取／背景
 #: 知情／未确认事实），知情与读者确认的条目从「确知「true」」变为命题文本；
 #: 悬空 kp 引用 fail fast。v9将义务兑现时点校正为其接受拍，不能延长为章末。
-RENDERER_VERSION = 'str06-render-v9'
+#: v10（2026-10-04 CS-F2，称谓投影）：正向材料行里已证明唯一绑定人物的完整登记称谓
+#: 按本场已释放称谓确定性投影（`project_withheld_names`）；短姓、关系称呼与未登记表达
+#: 不投影，仍按字面检查回派 owner。
+RENDERER_VERSION = 'str06-render-v10'
 
 #: 整书写作约定与自由度（Writer 协议，固定文本）。v7 按三类身份重写（必须写出／
 #: 必须遵守不必复述／写手自由）：场景是控制单元、反差不写成总结句、知情与
@@ -1776,12 +1856,28 @@ def _build_writer_packet(packet: ChapterWriterPacket) -> tuple[WriterPacket, dic
     """
     chapter = packet.chapter
     brief = packet.book_brief
-    must_realize = MaterialLines()
-    must_respect = MaterialLines()
-    continuity = MaterialLines()
-    creative = MaterialLines()
-    background = MaterialLines()
-    guard_only = MaterialLines()
+    # 称谓投影（CS-F2）：书级行用章内首个已释放称谓，场景行用本场已释放称谓；
+    # 只投影章 IR 已证明唯一绑定人物的完整登记称谓，来源文本保持原字段原样。
+    chapter_names: dict[str, tuple[str, ...]] = {}
+    for context in chapter.scenes:
+        for char_id, faces in _names(context.verification_ir.released_surfaces).items():
+            chapter_names.setdefault(char_id, faces)
+    scope_names = chapter_names
+
+    def project(text: str):
+        return project_withheld_names(
+            text, bindings=chapter.withheld_bindings,
+            display={b.char_id: surface_display(scope_names, b.char_id)
+                     for b in chapter.withheld_bindings})
+
+    must_realize = MaterialLines(project)
+    must_respect = MaterialLines(project)
+    continuity = MaterialLines(project)
+    creative = MaterialLines(project)
+    background = MaterialLines(project)
+    # 禁区行同样按本场已释放称谓呈现：写手不需要看见尚未释放的完整称谓才知道该回避什么
+    # （禁区不进字面检查，故这里的投影只是减少暴露，不改变验证面）。
+    guard_only = MaterialLines(project)
 
     def source(kind, ref, field, text, position=''):
         return MaterialSource(kind, ref or '', field, text or '', position)
@@ -1806,10 +1902,6 @@ def _build_writer_packet(packet: ChapterWriterPacket) -> tuple[WriterPacket, dic
     for choice in brief.expression_decisions:
         creative.append(f'表达机制：{choice.statement}',
                         source('expression', choice.ex_id, 'statement', choice.statement))
-    chapter_names: dict[str, tuple[str, ...]] = {}
-    for context in chapter.scenes:
-        for char_id, faces in _names(context.verification_ir.released_surfaces).items():
-            chapter_names.setdefault(char_id, faces)
     for voice in brief.character_voices:
         if chapter_names.get(voice.char_id):
             creative.append(f'{_name(chapter_names, voice.char_id)}的声线：{voice.voice}',
@@ -1859,6 +1951,7 @@ def _build_writer_packet(packet: ChapterWriterPacket) -> tuple[WriterPacket, dic
         ir = context.verification_ir
         brief_view = context.writer_brief
         names = _names(ir.released_surfaces)
+        scope_names = names          # 本场行按本场已释放称谓投影
         beat_no = {b.beat_ref.rsplit('#', 1)[-1]: i
                    for i, b in enumerate(ir.beats, start=1)}
         beat_event = {b.beat_ref.rsplit('#', 1)[-1]: b.event for b in ir.beats}
@@ -2018,6 +2111,8 @@ def _build_writer_packet(packet: ChapterWriterPacket) -> tuple[WriterPacket, dic
         'continuity': continuity.parts(deduplicate=True),
         'creative_guidance': creative.parts(),
         'background': background.parts(),
+        # 禁区投影也须留痕；writer_material_issues 仍只取上述五个正向分区。
+        'guard_only': guard_only.parts(deduplicate=True),
     }
     return view, materials
 
@@ -2109,6 +2204,8 @@ def chapter_identities(packet: ChapterWriterPacket) -> ChapterIdentities:
     validation_material = {
         'released_surfaces': list(packet.chapter.released_surfaces),
         'withheld_literals': list(packet.chapter.withheld_literals),
+        'withheld_bindings': [[b.literal, b.char_id, list(b.enclosing)]
+                              for b in packet.chapter.withheld_bindings],
         'band_low': packet.realization_contract.band_low,
         'band_high': packet.realization_contract.band_high,
     }
@@ -2155,6 +2252,7 @@ def render_chapter_packet(packet: ChapterWriterPacket) -> str:
 
 def packet_metrics(book_ir: WriterBookIR, *,
                    token_counter: 'Callable[[str], int] | None' = None,
+                   fact_bindings: Iterable = (),
                    ) -> dict:
     """WriterPacket 指标（R2.8＋R10b.7：派生读数，不是门；audit_only，I-38
     不进领域 schema）。逐章记录：
@@ -2167,8 +2265,11 @@ def packet_metrics(book_ir: WriterBookIR, *,
       「材料重复且打架」的章内读数）；
     · `echoes_dropped`：被剔除的历史回声数（跨场重复的背景行——渲染按章
       去重剔除的条数，C7/C10 读数）；
-    · `carried_locks`：锁数（拍上承载的 kp 知情/kf 事实锁 delta 数＋原文
-      未回答禁区条数）；
+    · `carried_locks`：锁数（拍上承载的 kp 知情 delta 数＋本章内被 Binding 登记
+      承载的事实锁数＋原文未回答禁区条数；CS-F2 起事实锁不再是 delta 键，
+      `fact_bindings` 由调用方传入，缺省空＝只数知情锁与禁区）；
+    · `name_projections`：本章写手材料里实际发生的称谓投影数（已证明唯一绑定人物的
+      完整登记称谓换成本场已释放称谓；CS-F2，留痕明细见 `writer_name_projections`）；
     · `baseline_facts`：收窄后仍进背景分区的入场基线事实数；
     · `active_threads`／`protected_threads`：本场有操作的线程数／开放中的
       问题线程数（按 ref 去重）；
@@ -2182,6 +2283,7 @@ def packet_metrics(book_ir: WriterBookIR, *,
     """
     chapters: list[dict] = []
     previous_relevant: frozenset[str] | None = None
+    bindings = tuple(fact_bindings)
     for chapter in book_ir.chapters:
         packet = project_chapter_packet(book_ir, chapter.chapter_ordinal)
         wp = build_writer_packet(packet)
@@ -2201,9 +2303,12 @@ def packet_metrics(book_ir: WriterBookIR, *,
                            if all_lines else None)
         guards = len({guard.question for scene in chapter.scenes
                       for guard in scene.verification_ir.unanswered_guards})
+        chapter_beats = {beat.beat_ref for scene in chapter.scenes
+                         for beat in scene.verification_ir.beats}
         carried_locks = sum(
             1 for scene in chapter.scenes for beat in scene.verification_ir.beats
-            for delta in beat.deltas if delta.key.startswith(('kp_', 'kf_'))) + guards
+            for delta in beat.deltas if delta.key.startswith('kp_')) + sum(
+            1 for bound in bindings if bound.beat_ref in chapter_beats) + guards
         current_relevant = frozenset(wp.continuity + wp.background)
         if previous_relevant is None:
             ratio = None
@@ -2214,6 +2319,7 @@ def packet_metrics(book_ir: WriterBookIR, *,
             ratio = None
         entry = {
             'chapter_ordinal': chapter.chapter_ordinal,
+            'name_projections': len(writer_name_projections(packet)),
             'writer_view_chars': count_non_whitespace_chars(view_text),
             'section_entries': {
                 'must_realize': len(wp.must_realize),

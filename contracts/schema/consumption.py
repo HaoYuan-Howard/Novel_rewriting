@@ -300,6 +300,22 @@ STR06_FIELD_DELIVERY: dict[str, FieldDeliverySpec] = {
         'writer_book_ir.chapters[].withheld_literals', consumers=(_V,),
         scope=_CHAP, mode=DeliveryMode.AUDIT_ONLY,
         note='本章禁用字面：validator 检查面，不进写手阅读面'),
+    # rc16（CS-F2 称谓投影）：禁用字面中已证明唯一绑定人物的完整登记称谓。表本身不进
+    # 阅读面；renderer 凭它把正向材料行里的该字面换成本场已释放称谓（写手视图摘要含
+    # 投影后的渲染字节，验证输入摘要含本表）。
+    'writer_book_ir.chapters[].withheld_bindings[].literal': _spec(
+        'writer_book_ir.chapters[].withheld_bindings[].literal', consumers=(_V,),
+        scope=_CHAP, mode=DeliveryMode.AUDIT_ONLY,
+        note='完整登记称谓字面：绑定表本身不进阅读面；仅当正向材料行含该字面时，renderer\n'
+             '凭它换成本场已释放称谓（写手视图摘要覆盖投影后的渲染字节）'),
+    'writer_book_ir.chapters[].withheld_bindings[].char_id': _spec(
+        'writer_book_ir.chapters[].withheld_bindings[].char_id', consumers=(_V,),
+        scope=_CHAP, mode=DeliveryMode.AUDIT_ONLY,
+        note='绑定人物内部身份：只用于解析本场已释放称谓，内部句柄不进阅读面'),
+    'writer_book_ir.chapters[].withheld_bindings[].enclosing': _spec(
+        'writer_book_ir.chapters[].withheld_bindings[].enclosing', consumers=(_V,),
+        scope=_CHAP, mode=DeliveryMode.AUDIT_ONLY,
+        note='包含绑定字面的更长称谓（含已释放）：渲染期先认领保护，避免拆开替换'),
     # ── WriterBookIR：章级承接数据面（R2.6 continuity 分区）────────────────
     'writer_book_ir.chapters[].continuity.entry.transition': _spec(
         'writer_book_ir.chapters[].continuity.entry.transition', consumers=(_W,),

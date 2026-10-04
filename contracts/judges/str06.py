@@ -69,7 +69,8 @@ _hard('source_chapter_blueprint', 'stage2',
 _hard('source_loop_lifecycle', 'stage2',
       'loops 只许 open/close：loop 一次性 open、close 必带 resolution、问题文本不可改写', 'R-2.11')
 _hard('source_proposition_closure', 'stage2',
-      '命题引用闭合：本地标签/正式 ID 可解析，重抄文本与登记逐字一致', 'R-2.12')
+      '命题引用闭合：同章重抄与本章登记一致；跨章同义由 associate 声明，'
+      '正式 ID 可解析且统一采用最早建立的代表文本', 'R-2.12')
 _hard('source_effect_disclosure', 'stage2',
       'effect 可见性形状：必填 on_page/concealed；concealed 必声明已知者并带命题锚', 'R-2.13')
 _hard('source_registered_key_scope', 'stage2',
@@ -81,7 +82,7 @@ _hard('names_structure_compile', 'stage2',
 _hard('names_coverage', 'stage2',
       '应改名集合覆盖源名称结构（名称位一致、无漏标）', 'R-3.2')
 _unver('source_semantics_unver', 'stage2',
-       '源语义（归因、因果、揭示）未经语义审阅，保持未评披露', 'R-3.3')
+       '源语义（命题同一性、归因、因果、揭示）未经语义审阅，保持未评披露', 'R-3.3')
 _metric('source_fold_events', 'stage2', 'fold 事件计数与章分布读数', 'R-2.7')
 _metric('source_fold_concealed_unrevealed', 'stage2',
         '书末仍未向读者确认的 concealed 命题（只读报告，不阻断）', 'R-2.15')
@@ -134,7 +135,8 @@ _hard('guard_m3_early_effect', 'stage4',
       'M3 entry_state 的 established_by 早于本场起点（不提前效应）', 'R-6.6',
       fix=_FIX_COMPILE)
 _hard('guard_m4_carrier_ref', 'stage4',
-      'M4 承载位置指向真实场景/拍（跨产物存在性）', 'R-6.7', fix=_FIX_COMPILE)
+      'M4 承载位置指向真实场景/拍；事实锁地址在承载拍内恰好对应一条状态',
+      'R-6.7', fix=_FIX_COMPILE)
 _hard('guard_m5_surface_release', 'stage4',
       'M5 称谓释放集与 Design 显式释放集一致', 'R-6.8', fix=_FIX_COMPILE)
 _hard('guard_m6_cast_legality', 'stage4',
@@ -162,10 +164,11 @@ _hard('source_evidence_conflict_routing', 'stage4',
       '不可解析即停）；三分支恢复＝修订/保留解释（revise_self 恢复输入）/'
       '未决停止；同指纹不二次回派', 'R-5.16')
 _hard('design_lock_acceptance', 'stage4',
-      'Brief 锁定项与 Design v5 锁规则：kp 命题登记＋知情锁唯一映射＋kf 事实锁；'
+      'Brief 锁定项与 Design 锁规则：kp 命题登记＋知情锁唯一映射＋kf 事实锁；'
       'kp 键持有者须有锁且模式被授权（known 只能来自 known 锁）、读者确认须有 '
-      'reader known 锁、kf 时态锁按锁 modality 承载、值未知/原文未回答不得 '
-      'set、必保锁兑现', 'R-5.17')
+      'reader known 锁；kf 事实锁在已选状态上用 lock 标注（stage4-design-v8）：'
+      '时态锁标在同 modality 的 set、值未知锁标在 op=unknown、原文未回答锁是禁区不承载状态、'
+      '一锁一承载且承载拍内地址唯一、映射随 Binding 发布不复制 value；必保锁兑现', 'R-5.17')
 _hard('binding_series_collapse', 'stage4',
       'Bind series 分别承载：同一 series 成员绑定不同拍（同拍即 '
       'series_collapsed）；投影带出 series 与锁摘要；必保缺口默认归 design',

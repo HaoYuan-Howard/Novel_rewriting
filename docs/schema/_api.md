@@ -222,8 +222,8 @@ preview/start 都携相同 `RunContinuationSource` 并由后端复验。运行�
 | `LegacyLlmProfile` | `provider` · `model` · `reasoning_effort` · `thinking_mode` | 只保存改变模型行为的稳定选择，不保存 API key、base URL、代理、超时或缓存目录 |
 | `ExecutorBackend` | `{kind:'legacy',profile:LegacyLlmProfile}` | C3 起唯一现役 backend；`kind=agent` 由 retired_formats 关闭式拒绝 |
 | `PipelineAgentProfiles` | `schema_version=4` · `executor_default` · `executor_overrides{node: backend}` · `concurrency` | 仅 legacy。override 键∈`LLM_EXECUTOR_NODES`。加载 v1–v3 丢弃 commander 与 agent 条目 |
-| `PipelineConcurrency` | `node_overrides{node: int}` · `per_book` · `per_provider` | `PipelineAgentProfiles.concurrency` 的可选精确配置；随常用配置、preview/start、batch 与原配置续跑保留。缺失时省略序列化，不改写旧身份 |
-| `PipelineConcurrencyCapability` | `nodes[]` · `node_choices[]` · `default_node` · `defaults` · `total_min` · `total_max` · `scope` | `AgentCapabilitiesResponse.concurrency` 发布的唯一选择面；当前总槽作用域为同一输出根。界面不复制节点、档位和数值边界 |
+| `PipelineConcurrency` | `node_overrides{node: int}` · `per_book` · `per_provider` | `PipelineAgentProfiles.concurrency` 的可选精确配置；随常用配置、preview/start、batch 与原配置续跑保留。三项都是 `total_min`～`total_max` 的整数。覆盖键只接受可并发节点。缺失时省略序列化，不改写旧身份 |
+| `PipelineConcurrencyCapability` | `nodes[]` · `node_choices[]` · `default_node` · `defaults` · `total_min` · `total_max` · `scope` | `AgentCapabilitiesResponse.concurrency` 发布的唯一选择面；当前总槽作用域为同一输出根。界面按 `total_min`～`total_max` 接受整数，不复制节点表。`node_choices` 不再是允许档位 |
 
 Agent 探针只在本机解析 CLI 并读取版本，**不发模型请求、不产生费用**；因此 `ready` 只证明可执行文件与
 版本探针成功，不证明账号认证、模型 entitlement 或真实调用可用。当前 registry 只发布实际受测的

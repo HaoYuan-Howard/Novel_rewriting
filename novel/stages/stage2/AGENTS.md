@@ -32,7 +32,7 @@ Canonical = truth → Projection = expose → Validator = enforce。
 |---|---|
 | S2-1 | Stage2 的外部业务真相只有已登记的正式 artifact（`contracts/artifacts.py::ARTIFACT_PATHS` 的 `stage2/**` 键）。中间 wire／recovery 状态都不是下游 API。 |
 | S2-2 | LLM 只负责语义购买；不得直接写正式 artifact。付费响应的 parse／shape 问题走免费修复，不得重新购买掩盖契约或编译器缺陷。 |
-| S2-3 | Compiler／Resolver 只做确定性转换与定位：ID、ref、anchor、closed-set binding、normalization、projection。禁止补猜语义、不模糊匹配、不猜笔误（I-20／I-21；重复、不存在、冲突定位产生精确 issue）。 |
+| S2-3 | Compiler／Resolver 只做确定性转换与定位：ID、ref、anchor、closed-set binding、normalization、projection。禁止补猜语义、不模糊匹配、不猜笔误（I-20／I-21；重复、不存在、冲突定位产生精确 issue）。证据段＝源文一个非空自然段、请求一段一行；可由引文推导的 basis 段号由 Resolver 定位，不让模型抄（RC-26/27）。 |
 | S2-4 | Projection 是 canonical artifact 的只读派生视图，不得反写 truth，也不得形成第二真相源（I-16）。 |
 | S2-5 | `str06.stage2.compile` 是 Characters（`stage2/characters/characters.json`）与 Blueprint（`stage2/blueprints/chapter_blueprints.json`）两份真源的**唯一 writer**（D9）：解析证据、生成 ID、执行关联后以同一提交记录发布；存在未决项时拒绝发布并按 item 报告（D8），恢复走 owner patch 或 associate 定向修订。派生输入 `stage2/compiled/book_extraction.json` 与逐章输入快照已退役（D3/D9），Stage4 一律改读 canonical（人物 core 由 Characters 投影）。下游 owner 的单节点输入从盘面闭合，不靠内存传递。 |
 | S2-6 | Stage2 只产出 artifact、projection 与机械证明。是否进入下一节点由 orchestrator 决定；producer／compile 不得顺手启动下游节点。 |
@@ -52,7 +52,7 @@ stage2/
   associate.py # str06.stage2.associate owner：跨章关联引擎（句柄投影/闭集核对/五类配对，D8，B2）
   compile.py   # str06.stage2.compile owner：双真源唯一发布引擎（ID 生成/关联执行/未决拒发＋源 fold 唯一实现，D9，B2）
   names.py     # stage2.names owner：源名称结构窄调用（语义协议不变，D9；输入已重挂 book 观察）
-  resolver.py  # Stage2 证据 Resolver：句段闭集选择与逐字锚唯一定位（B2）
+  resolver.py  # Stage2 证据 Resolver：句段闭集选择、逐字锚唯一定位、basis 引文所在段定位与证据清单渲染（B2；RC-26/27）
 ```
 
 - 正式 schema 只在 `contracts/schema/`（及 `docs/schema/`）；stage2 不复制 schema truth。

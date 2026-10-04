@@ -23,8 +23,8 @@ from novel.stages.stage2 import (
     character_core_view, compile_source_truth,
 )
 
-PV = 'stage2-names-v2'   # 名称同一性留证协议
-CPV = 'stage2-chapters-v2'     # 章观察（R10a a1：转移带 basis／Effect.modality）
+PV = 'stage2-names-v3'   # 名称同一性留证协议
+CPV = 'stage2-chapters-v4'     # 章观察（R10a a1：转移带 basis／Effect.modality）
 
 
 def _outcome(*, book=None, chapters=None, names=None, associate=None):

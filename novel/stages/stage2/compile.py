@@ -216,12 +216,9 @@ class _BookCompile:
         self.open_scene: str | None = None
         #: 命题：限定句柄（ch{k}.{ref}）→ {'id', 'chapter', 'statement'}
         self.propositions: dict[str, dict[str, Any]] = {}
-        #: 各句柄**首次建立时**的 wire 原文（D1 配对一致性校验的材料；登记表
-        #: 本身记录类 canonical，两侧同值无法比对）。
+        #: 各句柄首次建立时的本章原文：同章重抄只能与本章登记核对，
+        #: 不能拿跨章同义类的 canonical 文本反向约束本章措辞。
         self.handle_statements: dict[str, str] = {}
-        #: same_proposition 配对原表（D1：配对只认归一化后完全相同的 statement）。
-        self.prop_pairs: tuple[tuple[str, str], ...] = tuple(
-            (pair.left, pair.right) for pair in associate.same_proposition)
         #: 等价类代表 → 正式 ID／canonical statement／确立章。
         self.class_formal: dict[str, str] = {}
         self.class_statement: dict[str, str] = {}
@@ -279,10 +276,11 @@ class _BookCompile:
         entry = self.propositions.get(handle)
         if entry is None:
             return None
-        if statement != entry['statement']:
+        original = self.handle_statements[handle]
+        if statement != original:
             errors.append(
                 f'{where} 重抄命题 {handle!r} 的文本与登记不一致'
-                f'（登记「{entry["statement"]}」）——同一命题的文本只建立一次')
+                f'（登记「{original}」）——同一命题的文本只建立一次')
         return entry['id']
 
     def defer(self, prop: dict, handle: str, where: str) -> None:
@@ -323,27 +321,6 @@ class _BookCompile:
             # 「learns「None」」；wire 的 None 是合法重引用形状，canonical 文本
             # 由 compiler 派生回填，I-15）。
             prop['statement'] = self.class_statement[root]
-
-    def validate_pair_statements(self, undecided: list[str]) -> None:
-        """D1（2026-10-03 CS-1）：配对合并只认归一化后**完全相同**的 statement。
-
-        associate 的同一性断言是合并的必要条件而非充分条件——两侧 wire 文本
-        内容不同即误合并（r10b 实证：k36 三章三义，brief 锁与锚点原文对不上）。
-        不一致按 item 未决拦下（未决不发布，回派 associate 定向修订）；不做
-        模糊匹配、不替模型选边（I-20/I-34）。换了说法的同一命题不配对就不
-        合并——偏安全方向（漏并进 CS-2 的候选清单选择再收）。
-        """
-        for left, right in self.prop_pairs:
-            a = self.handle_statements.get(left)
-            b = self.handle_statements.get(right)
-            if a is None or b is None:
-                continue    # 任一侧未带 statement 建立：悬空引用族未决另行报告
-            if norm(a) != norm(b):
-                undecided.append(
-                    association_issue('proposition_mismatch', tuple(sorted((left, right))), f'配对句柄 {left}（{a}）与 {right}（{b}）的 statement 归一后'
-                    '不一致——跨章同一性只认内容相同的命题，不模糊合并；'
-                    '请修订 associate 配对或对应章的命题文本'))
-
 
 # ───────────────────────── 主编译 ─────────────────────────
 
@@ -527,9 +504,6 @@ def compile_source_truth(
         return outcome
     # 悬空引用的全书解析必须先于 Beat 模型构造（placeholder 落模型就锁死了）。
     state.resolve_pending(undecided)
-    # D1：配对一致性在全部章建立后校验（两侧 statement 都到齐才可比对）；
-    # 未决不发布——误合并要么拦在发布前，要么不发生，不静默进 canonical。
-    state.validate_pair_statements(undecided)
     chapter_blueprints: list[ChapterBlueprint] = []
     for chapter, beat_dicts, scenes, scene_order in compiled:
         try:
@@ -685,10 +659,14 @@ def _compile_chapter(
                 formal = state.restatement(handle, statement, where_prop, errors)
                 if formal is not None:
                     prop['ref'] = formal
+                    prop['statement'] = state.propositions[handle]['statement']
                     resolved.add(id(prop))
                     continue
                 formal = state.establish(handle, statement, chapter)
                 prop['ref'] = formal
+                # 同义类的语义同一性由 associate 声明；compiler 按阅读序选
+                # 最早文本，所有正式引用一致，本章原文仍在观察中保留。
+                prop['statement'] = state.propositions[handle]['statement']
                 resolved.add(id(prop))
         for prop, where_prop in propositions:
             if id(prop) in resolved:

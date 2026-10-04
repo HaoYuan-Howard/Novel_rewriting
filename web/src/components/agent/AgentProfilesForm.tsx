@@ -253,8 +253,9 @@ export function PipelineAgentProfilesForm({
       <fieldset disabled={disabled} className="m-0 rounded-block border border-line bg-sunken-2 px-13 py-11">
         <legend className="px-4 text-body font-semibold text-ink-2">并发配置</legend>
         <p className="m-0 mb-8 text-tag text-ink-4">
-          默认逐节点并发 {capabilities.concurrency.default_node}，整书总上限 {capabilities.concurrency.defaults.per_book}，
-          同一输出根的单供应商总上限 {capabilities.concurrency.defaults.per_provider}。实际调用同时受三个上限约束。
+          可并发节点、整书总并发、供应商总并发都可设为 {capabilities.concurrency.total_min}～{capabilities.concurrency.total_max} 的整数。
+          留空的节点使用默认 {capabilities.concurrency.default_node}。同时进行的调用取这三项和待处理章数里最小的那个。
+          默认整书 {capabilities.concurrency.defaults.per_book}，同一输出根的单供应商 {capabilities.concurrency.defaults.per_provider}。
         </p>
         <label className="flex items-center gap-8">
           <input type="checkbox" checked={!!value.concurrency} onChange={(event) => {
@@ -270,16 +271,16 @@ export function PipelineAgentProfilesForm({
         {value.concurrency ? <div className="mt-9 grid grid-cols-2 gap-9">
           {capabilities.concurrency.nodes.map((node) => <label key={node} className="grid gap-4 text-tag">
             {node} 并发
-            <select aria-label={`${node} 并发`} value={value.concurrency!.node_overrides[node] ?? ''}
+            <input type="number" aria-label={`${node} 并发`}
+              min={capabilities.concurrency.total_min} max={capabilities.concurrency.total_max}
+              placeholder={`默认（${capabilities.concurrency.default_node}）`}
+              value={value.concurrency!.node_overrides[node] ?? ''}
               onChange={(event) => {
                 const nodeOverrides = { ...value.concurrency!.node_overrides }
-                if (event.target.value) nodeOverrides[node] = Number(event.target.value)
-                else delete nodeOverrides[node]
+                if (event.target.value === '') delete nodeOverrides[node]
+                else nodeOverrides[node] = Number(event.target.value)
                 onChange({ ...value, concurrency: { ...value.concurrency!, node_overrides: nodeOverrides } })
-              }}>
-              <option value="">默认（{capabilities.concurrency.default_node}）</option>
-              {capabilities.concurrency.node_choices.map((count) => <option key={count} value={count}>{count}</option>)}
-            </select>
+              }} />
           </label>)}
           {(['per_book', 'per_provider'] as const).map((field) => <label key={field} className="grid gap-4 text-tag">
             {field === 'per_book' ? '整书总并发' : '供应商总并发'}

@@ -236,7 +236,7 @@ SEGMENTS = {'e01_01': {'chapter': 1, 'text': '夫君走进门来。云娘没有�
 
 def test_chapter_patch_locate_maps_and_guards():
     from novel.stages.stage2 import chapter_patch_locate, compile_chapter_observation
-    wire = {'protocol_version': 'stage2-chapters-v2', 'beats': [
+    wire = {'protocol_version': 'stage2-chapters-v4', 'beats': [
         {'event': 'a', 'participants': ['ghost'], 'source_refs': ['e01_01'],
          'scene_boundary': 'new', 'temporal_mode': 'single',
          'effects': [], 'cognition': [], 'loops': []}]}
@@ -254,39 +254,36 @@ def test_chapter_patch_locate_maps_and_guards():
                                 character_slugs=('fu_jun', 'yun_niang')) is None
 
 
-@pytest.mark.parametrize('wire_version', ['stage2-chapters-v2', 'stage2-chapters-v3'])
-@pytest.mark.parametrize('wrong_segment', ['e01_01', 'e01_02'])
-def test_quote_repair_can_update_parent_refs_in_one_round(tmp_path, wrong_segment, wire_version):
-    """引用错位与拍级清单耦合，不能只让模型修改 know 而禁止修 src。"""
+def test_quote_repair_can_update_parent_refs_in_one_round(tmp_path):
+    """引文在本拍 src 之外（RC-27 quote_outside_refs）：修正可能要扩 src，
+    返修定位到整拍，模型一轮内同时改 src／引文，不被锁在转移条目上。"""
     from copy import deepcopy
+    from contracts.schema.observation import STAGE2_CHAPTERS_WIRE_PROTOCOL
     from novel.stages.stage2 import chapter_patch_locate, compile_chapter_observation
     evidence = {
         'e01_01': {'chapter': 1, 'text': '芸娘走进房内。'},
         'e01_02': {'chapter': 1, 'text': '夫君坦白自己不能生育。'},
     }
-    wire = {'protocol_version': 'stage2-chapters-v3', 'beats': [{
+    wire = {'protocol_version': STAGE2_CHAPTERS_WIRE_PROTOCOL, 'beats': [{
         'ev': '夫君向芸娘坦白不能生育。', 'who': ['fu_jun', 'yun_niang'],
         'src': 'e01_01', 'new_scene': True,
         'know': [{'who': 'yun_niang', 'how': 'learns', 'what': '夫君不能生育',
-                  'basis': [{'segment': wrong_segment, 'quote': '夫君坦白自己不能生育。'}]}],
+                  'basis': ['夫君坦白自己不能生育。']}],
     }, {'ev': '芸娘进房。', 'who': ['yun_niang'], 'src': 'e01_01'}]}
-    if wire_version == 'stage2-chapters-v2':
-        from novel.stages.stage2.slim import expand_chapter_wire
-        wire, expansion_errors = expand_chapter_wire(wire, chapter=1)
-        assert not expansion_errors
-    refs_key = 'src' if wire_version.endswith('v3') else 'source_refs'
-    cognition_key = 'know' if wire_version.endswith('v3') else 'cognition'
+
     def validate(value):
         return compile_chapter_observation(value, evidence_ids=evidence,
             chapter=1, character_slugs=('fu_jun', 'yun_niang'))[1]
+
     def locate(value, errors):
         return chapter_patch_locate(value, errors, evidence_ids=evidence,
             chapter=1, character_slugs=('fu_jun', 'yun_niang'))
+
     errors = validate(wire)
-    assert errors and locate(wire, errors) == [(('beats', 0), errors)]
+    assert errors and 'e01_02' in errors[0]
+    assert locate(wire, errors) == [(('beats', 0), errors)]
     fixed = deepcopy(wire['beats'][0])
-    fixed[refs_key] = 'e01_01..e01_02' if wire_version.endswith('v3') else ['e01_01', 'e01_02']
-    fixed[cognition_key][0]['basis'][0]['segment'] = 'e01_02'
+    fixed['src'] = 'e01_01..e01_02'
     transport = _ScriptedTransport([json.dumps(wire, ensure_ascii=False),
         json.dumps({'patches': [{'path': 'beats[0]', 'value': fixed}]}, ensure_ascii=False)])
     _base, _repo, session = _json_session(tmp_path, transport)
@@ -294,7 +291,7 @@ def test_quote_repair_can_update_parent_refs_in_one_round(tmp_path, wrong_segmen
     assert result['beats'][0] == fixed and result['beats'][1] == wire['beats'][1]
     assert len(transport.calls) == 2 and len(_as_adoption_refs(answer)) == 2
     assert not validate(result)
-    assert wire['beats'][0][refs_key] == ('e01_01' if wire_version.endswith('v3') else ['e01_01'])
+    assert wire['beats'][0]['src'] == 'e01_01'
 
 
 def test_parent_patch_absorbs_child_errors_without_overlapping_paths():
@@ -303,7 +300,7 @@ def test_parent_patch_absorbs_child_errors_without_overlapping_paths():
     from tests.test_str06_chapter_slim import _slim_wire, EVIDENCE, SLUGS
     wire = _slim_wire()
     wire['beats'][0]['who'].append('ghost')
-    wire['beats'][0]['know'][0]['basis'][0]['quote'] = '正文没有这句话'
+    wire['beats'][0]['know'][0]['basis'] = ['正文没有这句话']
     _, errors = compile_chapter_observation(wire, evidence_ids=EVIDENCE,
         chapter=1, character_slugs=SLUGS)
     assert len(errors) == 2
@@ -313,13 +310,17 @@ def test_parent_patch_absorbs_child_errors_without_overlapping_paths():
 
 
 
-def test_quote_repair_stays_on_transfer_when_home_already_in_refs():
-    """正确引文段已在该拍清单中时，只需改转移，继续保留窄返修。"""
+def test_quote_inside_beat_refs_needs_no_segment_choice():
+    """引文落在本拍 src 的任一段即由 Resolver 定位（RC-27）：模型不指认段号，
+    「挂错段号」这一类返修不再存在；全章无命中才回派该转移（窄返修）。"""
     from novel.stages.stage2 import chapter_patch_locate, compile_chapter_observation
     from tests.test_str06_chapter_slim import _slim_wire, EVIDENCE, SLUGS
     wire = _slim_wire()
-    wire['beats'][0]['know'][0]['basis'] = [
-        {'segment': 'e01_01', 'quote': '夫君说求娶是为报恩。'}]
+    wire['beats'][0]['know'][0]['basis'] = ['夫君说求娶是为报恩。']
+    observation, errors = compile_chapter_observation(wire, evidence_ids=EVIDENCE,
+        chapter=1, character_slugs=SLUGS)
+    assert errors == [] and observation.beats[0].cognition[0].basis[0].segment == 'e01_02'
+    wire['beats'][0]['know'][0]['basis'] = ['求娶是为了还债。']
     _, errors = compile_chapter_observation(wire, evidence_ids=EVIDENCE,
         chapter=1, character_slugs=SLUGS)
     assert len(errors) == 1

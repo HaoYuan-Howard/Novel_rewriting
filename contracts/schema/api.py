@@ -39,7 +39,7 @@ from pydantic import Field, field_validator, model_serializer, model_validator
 
 from contracts.invariants import (
     LLM_EXECUTOR_NODES,
-    PIPELINE_PARALLEL_NODES, PIPELINE_CONCURRENCY_TRIALS, PIPELINE_DEFAULT_CONCURRENCY,
+    PIPELINE_PARALLEL_NODES, PIPELINE_DEFAULT_CONCURRENCY,
     PIPELINE_TOTAL_CONCURRENCY_MIN, PIPELINE_TOTAL_CONCURRENCY_MAX,
     AgentProfileSettingsState,
     NetworkEgressMode,
@@ -646,10 +646,14 @@ class LegacyProviderCapability(FrozenModel):
 
 
 class PipelineConcurrencyCapability(FrozenModel):
-    """运行配置的并发选择面；前端不复制节点、档位或总槽范围。"""
+    """运行配置的并发选择面；前端不复制节点或总槽范围。
+
+    可并发节点、整书总槽和供应商总槽都取 ``total_min``～``total_max`` 的整数。
+    ``node_choices`` 只保留给旧客户端，不再是允许档位。
+    """
 
     nodes: list[str] = Field(default_factory=lambda: list(PIPELINE_PARALLEL_NODES))
-    node_choices: list[int] = Field(default_factory=lambda: list(PIPELINE_CONCURRENCY_TRIALS))
+    node_choices: list[int] = Field(default_factory=list)
     default_node: int = PIPELINE_DEFAULT_CONCURRENCY
     defaults: PipelineConcurrency = Field(default_factory=PipelineConcurrency)
     total_min: int = PIPELINE_TOTAL_CONCURRENCY_MIN

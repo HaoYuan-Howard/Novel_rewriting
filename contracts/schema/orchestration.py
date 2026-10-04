@@ -30,7 +30,7 @@ from pydantic import Field, StrictInt, ValidationInfo, model_serializer, model_v
 from contracts.invariants import (
     AGENT_DELIVERY_OUTCOME,
     LLM_EXECUTOR_NODES, AGENT_RUN_CONTROLS, AGENT_RUN_EVENT_KINDS,
-    PIPELINE_CONCURRENCY_TRIALS, PIPELINE_PARALLEL_NODES,
+    PIPELINE_PARALLEL_NODES,
     PIPELINE_BOOK_CONCURRENCY, PIPELINE_PROVIDER_CONCURRENCY,
     PIPELINE_TOTAL_CONCURRENCY_MIN, PIPELINE_TOTAL_CONCURRENCY_MAX,
     AGENT_RUN_EVENT_V2_KINDS, AGENT_RUN_EXIT_ORIGINS, AGENT_RUN_STATE,
@@ -156,9 +156,13 @@ def _is_history_replay(info: ValidationInfo) -> bool:
 
 
 class PipelineConcurrency(FrozenModel):
-    """一次运行冻结的并发策略；节点对照与两个总上限分别记录。"""
+    """一次运行冻结的并发策略；可并发节点与两个总上限分别记录。
 
-    node_overrides: dict[str, Literal[PIPELINE_CONCURRENCY_TRIALS]] = Field(default_factory=dict)
+    三者都是 ``1``～总槽上限的整数。只有会按章并行的节点可以写
+    ``node_overrides``；没写的节点保持默认，不跟随其他节点的覆盖。
+    """
+
+    node_overrides: dict[str, StrictInt] = Field(default_factory=dict)
     per_book: StrictInt = Field(default=PIPELINE_BOOK_CONCURRENCY,
         ge=PIPELINE_TOTAL_CONCURRENCY_MIN, le=PIPELINE_TOTAL_CONCURRENCY_MAX)
     per_provider: StrictInt = Field(default=PIPELINE_PROVIDER_CONCURRENCY,
@@ -169,6 +173,13 @@ class PipelineConcurrency(FrozenModel):
         unknown = set(self.node_overrides) - set(PIPELINE_PARALLEL_NODES)
         if unknown:
             raise ValueError(f'并发覆盖只支持逐章节点：{sorted(unknown)}')
+        out_of_range = {
+            node: count for node, count in self.node_overrides.items()
+            if not PIPELINE_TOTAL_CONCURRENCY_MIN <= count <= PIPELINE_TOTAL_CONCURRENCY_MAX}
+        if out_of_range:
+            raise ValueError(
+                f'节点并发必须是 {PIPELINE_TOTAL_CONCURRENCY_MIN}～'
+                f'{PIPELINE_TOTAL_CONCURRENCY_MAX} 的整数：{out_of_range}')
         return self
 
 

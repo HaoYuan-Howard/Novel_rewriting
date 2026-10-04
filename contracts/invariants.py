@@ -554,12 +554,14 @@ STAGE1_SEGMENT_KINDS: Final = ('hook', 'chapter', 'end_marker', 'hole')
 CHAPTER_LABEL_ANOMALY: Final = ('reset', 'gap', 'repeat')
 
 
-#: 默认仍为四并发；6/8 只在显式配置中启用，并继续受整书及供应商总槽限制。
+#: 未单独配置时的默认并发。可并发节点、整书总槽、供应商总槽都可显式改成
+#: ``PIPELINE_TOTAL_CONCURRENCY_MIN``～``MAX`` 的整数，不再使用离散档位。
 PIPELINE_DEFAULT_CONCURRENCY: Final = 4
 PIPELINE_BOOK_CONCURRENCY: Final = 4
 PIPELINE_PROVIDER_CONCURRENCY: Final = 8
 PIPELINE_TOTAL_CONCURRENCY_MIN: Final = 1
-PIPELINE_TOTAL_CONCURRENCY_MAX: Final = 32
+PIPELINE_TOTAL_CONCURRENCY_MAX: Final = 200
+#: 历史档位。现役允许值是上面的整数区间，本元组不再充当允许集。
 PIPELINE_CONCURRENCY_TRIALS: Final = (4, 6, 8)
 #: 并发覆盖只支持**新链逐章节点**（B1）：键必须已在 `NODES` 登记。现役注册表
 #: 两个逐章 owner：`str06.stage2.chapters`（章观察，B2 五节点重建时登记）与
@@ -568,6 +570,8 @@ PIPELINE_CONCURRENCY_TRIALS: Final = (4, 6, 8)
 #: 已随旧链退役删除（str06.md「额度、并发与配置」）。并发度不进语义身份。
 PIPELINE_PARALLEL_NODES: Final = (
     'str06.stage2.chapters', 'str06.stage5.body')
+#: 这两个节点的并发数与两个总槽使用同一整数区间。未配置的节点保持默认，
+#: 不因给一个节点设了并发就抬高其他节点。
 
 # ⚠ 2026-10-04 清理批：本节（旧链 Stage4 计划与篇幅的六张响应前缀表、
 #   两级档位与对齐断言）已随旧链 stage4/plot schema 删除；档位标定史见

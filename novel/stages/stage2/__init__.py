@@ -43,8 +43,8 @@ from novel.stages.stage2.compile import (
     initial_snapshot, source_fold,
 )
 from novel.stages.stage2.names import (
-    normalize_name_observations, validate_name_resolutions,
-    ProbeFinding, compile_name_structure, merge_name_structure,
+    NAMES_INPUT_VERSION, normalize_name_observations, validate_name_resolutions,
+    ProbeFinding, compile_name_structure, merge_name_structure, names_evidence_view,
     surname_construction_probe,
 )
 from novel.stages.stage2.resolver import (
@@ -56,7 +56,7 @@ __all__ = [
     'AnchorHit', 'AssociationSpace', 'AssociateObservation', 'BeatHandle',
     'BookObservation', 'ChapterObservation', 'CompileOutcome',
     'CONFIRMING_MODES', 'EvidenceResolver', 'FoldResult', 'LoopHandle',
-    'NamesObservation', 'ProbeFinding', 'PropositionHandle', 'ResolverIssue',
+    'NAMES_INPUT_VERSION', 'NamesObservation', 'ProbeFinding', 'PropositionHandle', 'ResolverIssue',
     'STAGE2_ASSOCIATE_PROTOCOL', 'STAGE2_CHAPTERS_WIRE_PROTOCOL',
     'STAGE2_OBSERVATION_PROTOCOL', 'SceneHandle',
     'StateHandle', 'expand_chapter_wire', 'first_appearance_anchors',
@@ -69,6 +69,7 @@ __all__ = [
     'compile_name_structure', 'compile_source_truth', 'evidence_metrics',
     'normalize_name_observations', 'validate_name_resolutions',
     'initial_snapshot',
-    'merge_name_structure', 'project_association_space', 'serialize_target',
+    'merge_name_structure', 'names_evidence_view', 'project_association_space',
+    'serialize_target',
     'source_fold', 'surname_construction_probe', 'target_label',
 ]
