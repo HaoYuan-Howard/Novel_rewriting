@@ -279,23 +279,27 @@ export function AgentRunDialog({
                 ? '…'
                 : preview.isError && !preview.data
                   ? '取不到这条命令。没拿到服务端 preview，就不会发起。'
-                  : previewResponse?.argv.join(' ')}
+                  : previewResponse?.argv
+                    ? previewResponse.argv.join(' ')
+                    : '服务端不再摊开顶层命令行（Commander 退役后恒为空）；执行配置以下方快照为准。'}
           </div>
 
           {previewResponse ? (
             <AgentProfilesSnapshot profiles={previewResponse.profiles} />
           ) : null}
 
-          <div className="flex items-center gap-10">
-            <span className="text-sm2 text-ink-4">给执行 Agent 的 prompt（授权原文在里面）</span>
-            <LinkButton onClick={() => setPromptOpen((value) => !value)} disabled={!previewResponse}>
-              {promptOpen
-                ? '收起 prompt'
-                : '展开 prompt 全文' +
-                  (previewResponse ? '（' + previewResponse.prompt.length + ' 字）' : '')}
-            </LinkButton>
-          </div>
-          {promptOpen && previewResponse ? (
+          {previewResponse && previewResponse.prompt === null ? null : (
+            <div className="flex items-center gap-10">
+              <span className="text-sm2 text-ink-4">给执行 Agent 的 prompt（授权原文在里面）</span>
+              <LinkButton onClick={() => setPromptOpen((value) => !value)} disabled={!previewResponse}>
+                {promptOpen
+                  ? '收起 prompt'
+                  : '展开 prompt 全文' +
+                    (previewResponse?.prompt ? '（' + previewResponse.prompt.length + ' 字）' : '')}
+              </LinkButton>
+            </div>
+          )}
+          {promptOpen && previewResponse?.prompt ? (
             <pre className="m-0 max-h-[220px] overflow-y-auto rounded-btn-lg border border-line bg-inset px-14 py-12 font-mono text-mini leading-[1.9] whitespace-pre-wrap text-ink-2 select-all">
               {previewResponse.prompt}
             </pre>

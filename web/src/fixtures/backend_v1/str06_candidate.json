@@ -112,13 +112,6 @@
     "produced": true
    },
    {
-    "node": "str06.stage4.bind",
-    "stage": "stage4",
-    "owner": "stage4.bind",
-    "paid": true,
-    "produced": true
-   },
-   {
     "node": "str06.stage4.hook_design",
     "stage": "stage4",
     "owner": "stage4.hook_design",
@@ -163,11 +156,11 @@
   ],
   "cost": {
    "present": true,
-   "rows": 13,
-   "new_paid_rows": 13,
+   "rows": 12,
+   "new_paid_rows": 12,
    "cached_rows": 0,
-   "prompt_tokens": 510,
-   "completion_tokens": 265,
+   "prompt_tokens": 500,
+   "completion_tokens": 255,
    "reasoning_tokens": null,
    "unknown_cost_rows": 0,
    "per_node": [
@@ -200,15 +193,6 @@
     },
     {
      "node": "str06.stage2.names",
-     "rows": 1,
-     "new_paid_rows": 1,
-     "cached_rows": 0,
-     "prompt_tokens": 10,
-     "completion_tokens": 10,
-     "reasoning_tokens": null
-    },
-    {
-     "node": "str06.stage4.bind",
      "rows": 1,
      "new_paid_rows": 1,
      "cached_rows": 0,

@@ -429,7 +429,8 @@ APPROVAL_STATE: Final = ('pending', 'approved')
 
 
 #: `stage2.blueprint` 那一次调用的**模型可见边界身份**，落在
-#: `_provenance.context.architecture`（`contracts/schema/stage2.py::BlueprintContext`）。
+#: `_provenance.context.architecture`（历史载体 `contracts/schema/stage2.py::
+#: BlueprintContext`，模块已随旧链 schema 删除）。
 #:
 #: 【为什么它是取值域而不是一句注释】它同时被三处消费：产地写它、`BlueprintContext` 的
 #: `Literal` 拿它当取值面、判据 `context_scope` 拿它比对。此前产地与判据**各写一份
@@ -451,12 +452,12 @@ APPROVAL_STATE: Final = ('pending', 'approved')
 #:   （env `NOVEL_STAGE2_BLUEPRINT_CONTRACT`）。
 #: · `extraction-ir-v1` → 并入 `extraction-ir-v1.1`（2026-08-21）：**再放宽一格，
 #:   同样不升版**。ir1.1 与 ir1 的差别**只有 blueprint system 里 place 那一段措辞**
-#:   （响应模型 / 编译器 / 投影函数逐个共用，见 `novel/stages/stage2/blueprint/contract.py`）
+#:   （响应模型 / 编译器 / 投影函数逐个共用，见 `novel/stages/stage2/blueprint/contract.py`，已删）
 #:   ⇒ 产物形状与语义都不变，两臂可并存于 A/B 的不同 base 之间。
 #:   起因是 ir1 的地点填充率相对 v3 掉了一半以上，而 `docs/stage2_contract_experiment.md`（已删，见 Git 历史）
 #:   §十一 实测**两个模型上都掉**（Pro −60% / Flash −28%）⇒ 那是契约的独立责任，
 #:   不是模型效应。为什么改、以及「加压会不会反被规避」那条风险，写在
-#:   `novel/stages/stage2/prompts.py::_BLUEPRINT_TPL_V1_1` 上方。
+#:   `novel/stages/stage2/prompts.py::_BLUEPRINT_TPL_V1_1` 上方（该文件已删）。
 #:   ⚠ 该实验臂未翻过默认；随后由 v2 的付费验收统一接替，见下一项。
 #: · `extraction-ir-v2`（2026-08-23）：同样只放宽取值面、不升 artifact schema。
 #:   它把模型响应拆成「止段边界预传 → 冻结边界上的事实细节」两相，并把
@@ -482,7 +483,8 @@ APPROVAL_STATE: Final = ('pending', 'approved')
 #:   schema v3 → v4；存量 v3 由 `stage2.blueprint` 付费整跑重建，不迁移。
 #: · 2026-09-04 增加 v3.2：正式 ChapterBlueprints 字段语义不变，只压缩模型响应
 #:   wire——召回 cue 改为止段数组，事实 evidence 改选当前章段落候选；代码在任何
-#:   checkpoint/业务写盘前核成员与所属拍，再回取既有 SourceSpan。它是兼容扩张，
+#:   checkpoint/业务写盘前核成员与所属拍，再回取既有 SourceSpan（该类型已随
+#:   旧链 schema 删除）。它是兼容扩张，
 #:   旧 v2/v3.1 正式字节仍成立，不升 artifact 版本。
 BLUEPRINT_ARCHITECTURES: Final = (
     'plot-blueprint-v1',)
@@ -527,10 +529,6 @@ BLUEPRINT_ARCHITECTURE: Final = 'plot-blueprint-v1'
 assert BLUEPRINT_ARCHITECTURE in BLUEPRINT_ARCHITECTURES
 
 
-
-#: 原始 txt 的编码候选，**按尝试顺序**。取值面只能从代码来：
-#: 全语料 163 本**只出现过 `utf-8`，另四个零样本**——样本再多也补不出没发生过的分支。
-SOURCE_ENCODINGS: Final = ('utf-8-sig', 'utf-32', 'utf-16', 'utf-8', 'gb18030')
 
 #: 一条剔除记录是谁圈的。**不许省**（`R-0.8`）：重跑 stage0 时 `machine` 可以重算覆盖，
 #: `human` **不许静默覆盖**——没有这个字段，重跑一次就把人的工作悄悄抹掉了。
@@ -592,7 +590,8 @@ LEGACY_STAGE5_MODES: Final = ('deep', 'shallow')
 #:   · `BOOK_BAND` 答「全书总量允许偏离源书多少」——那是产品承诺，必须紧。
 #: 逐章放宽而全书收紧是**自洽**的：逐章的正负偏差在书级相互抵消，全书带兜住总量。
 #: ⚠ 定在 0.80~1.20 的依据是实测分布而不是拍脑袋：盘上 31 章的两端极值为
-#: **0.814 / 1.206**（见 `contracts/schema/stage5.py` 文件级注释④），本带把它们
+#: **0.814 / 1.206**（当时见 `contracts/schema/stage5.py` 文件级注释④；该模块
+#: 已删，极值数字以此处登记为准），本带把它们
 #: 恰好包进去 ⇒ 正常写作波动不再触发收缩臂与 `length_over` / `length_under`。
 #: ⚠ 收窄回 ±10% 之前先看那两个极值：那不是"写坏了"，是这一层的自然方差。
 DRAFT_BAND: Final = (0.80, 1.20)
@@ -888,7 +887,8 @@ class NodeSpec(NamedTuple):
 #:
 #: 【F8a 翻转：候选链成为唯一现役链】本表由 `contracts/schema/workflow.py`
 #: 的候选节点表**原样激活**（F7e 冻结基线，`tests/test_str06_f7e_freeze.py` 钉住）：
-#: `str06.` 前缀节点取代旧 Stage2/4/5/6/7 全部节点键；B2 起现役面为 14 个节点。 旧键整体移入
+#: `str06.` 前缀节点取代旧 Stage2/4/5/6/7 全部节点键；B2 起现役面为 14 个节点
+#: （CS-3 bind 退役后 13 个）。旧键整体移入
 #: `RETIRED_NODES` 只供 append-only 作业历史解码，不 preview、不调度、不建新队列。
 #: Stage6 整层退役（`STAGES` 不再含 `stage6`，`RETIRED_STAGES` 登记）。
 #: 【B2 五节点重建（2026-09-27，D9）】`str06.stage2.source` 退役，Stage2 扩为

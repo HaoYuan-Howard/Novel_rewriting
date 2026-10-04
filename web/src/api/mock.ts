@@ -594,8 +594,9 @@ function mockStage1View(): Stage1View {
 
 /* ---------------------------------------------------------- 跑书进度样例 */
 
-/** mock 的静态镜像（B2 五节点重建后 14 个 `str06.` 节点，B5 对齐）；
- *  真实响应由后端直接从 NODES 派生。label/paid 与 `contracts/invariants.py::NODES` 逐字对账。 */
+/** mock 的静态镜像（CS-3 bind 退役后 13 个 `str06.` 节点，B5 对齐）；
+ *  真实响应由后端直接从 NODES 派生。label/paid 与 `contracts/invariants.py::NODES` 逐字对账，
+ *  夹具与 mock 的 node id 由 `tests/test_retired_surface_scan.py` 钉到 NODES。 */
 const PIPELINE_STEPS: { node: string; label: string; paid: boolean }[] = [
   { node: 'stage0.remove', label: 'stage0 非正文剔除', paid: false },
   { node: 'stage1.partition', label: 'stage1 分章', paid: false },
@@ -657,20 +658,13 @@ function mockRunProgress(sid: string): RunProgress {
 
 /* ---------------------------------------------------------- agent 代跑样例 */
 
-/** 真 argv / prompt 由后端同一构造函数产出；这里是形状样例（拼装只许住在数据层）。 */
+/** 后端 preview 与真跑同一构造函数；Commander 退役后 argv / prompt 恒为 null
+ *  （schema 兼容保留），mock 忠实镜像，不得替真实形状伪造非空值。 */
 function mockAgentRunPreview(req: AgentRunRequest): AgentRunPreview {
   return {
     pause_before_node: req.pause_before_node ?? null,
-    argv: ['agent-cli', '--sid', req.sid, '--base', '/mock/base'],
-    prompt:
-      '由自动流水线完成本书并校验交付条件（sid ' + req.sid + '）。\n' +
-      (req.authorized
-        ? '付费授权已授予：付费命令不再逐条停。'
-        : '付费授权未授予：到第一条付费命令前停下。') +
-      '\n' +
-      (req.egress_authorized
-        ? '正文外发授权已授予：允许发送正文及派生上下文。'
-        : '正文外发授权未授予：不得发送正文及派生上下文。'),
+    argv: null,
+    prompt: null,
     authorized: req.authorized,
     egress_authorized: req.egress_authorized,
     profiles: req.profiles ?? null,

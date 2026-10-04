@@ -47,6 +47,28 @@
 | `test_agent_session_audit` 改写 | 原 `AgentProfile`(driver) 会话账 | 现役 `LegacyLlmProfile` | 同文件职责保留：append-only / fold / provider session 互斥；profile 字段改为 provider/model/effort/thinking |
 | 零付费恢复 | prepare / `--recover-analyze` 等 0 wire | C1 反例 + C5 invariant | `tests/test_zero_paid_call_invariants.py` 登记闸；禁止裸删表内用例 |
 
+### 分母变化登记（退役代码清理批 · 2026-10-04）
+
+四提交（109830b7 → f1f4f623 → 7183add0 → f6c250b1）按「用户裁决：不保留旧产物读兼容」
+删除旧链 schema、存量审批账解码链与 novel/core 旧链算子；分母变化逐提交登记，
+未放宽判据。
+
+| 变更 | 原职责 | 现役依据 | 等价替代 / 分母影响 |
+|---|---|---|---|
+| 删除 `test_human_actions.py`（109830b7） | 旧链人工动作 typed 载体行为 | 其载体模块（human_actions）已同批删除 | 负例由 `test_retired_surface_scan.py` 名册守卫承担 |
+| 删除 `test_approvals.py` / `test_stage4_approval_landed.py` / `test_stage4_design_contract_v3.py`（f1f4f623） | 存量审批账只读解码与 Stage4A 审阅落盘 | 2026-10-04 裁决：解码面整批删除，旧根一律 `legacy_incompatible` | 「不复活」由 `test_retired_surface_scan.py` 名册与 `test_approval_retirement.py` 等 find_spec 守卫承担 |
+| 修剪 `test_core` / `test_prompts` / `test_schema_api` / `test_invariants` / `test_stage2_node_lifecycle` / `test_layering` 等 20+ 文件 | 随删除模块走的旧链行为用例 | 同上 | 用例数 3709→3650→3591→3570（四提交各自登记的回归分母），不是全绿缩分母 |
+
+### 分母变化登记（清理收尾批 · 2026-10-04）
+
+复审报告 37 条发现的闭环：修复 `AgentRunDialog` null 崩溃（前端，另计）、补退役名册与
+夹具节点守卫、删 `DeliveryIncomplete` / `SOURCE_ENCODINGS` / stage2 孤儿路径 helper、
+清 dependency 表与 layering 白名单死键。
+
+| 变更 | 原职责 | 现役依据 | 等价替代 / 分母影响 |
+|---|---|---|---|
+| `test_stage2_node_lifecycle.py` 三用例并一 | 后两条是同一 find_spec 断言的参数化重复；`_RETIRED_WRITE_ENTRIES` 死常量 | 模块缺席即结构性闭合 | 该文件 3→1；新增 `test_retired_surface_scan.py` 夹具节点守卫 +1。收尾批默认非 corpus 回归 3569 通过/0 失败（3570−2+1，`--basetemp=E:/_tr`，exit 0） |
+
 Stage3 文风迁移、Stage6 旧定性包 A/B 与 Stage2 旧五轮实验退出当前测试维护范围。
 历史由 Git 和既存实验记录保存，不新增测试归档目录；旧解释器不能接受当前报告的守卫仍保留。
 从旧实验中抽出的现役 Hook/Retry 夹具归 `tests/factories.py`，不再让当前测试依赖退役实验模块。

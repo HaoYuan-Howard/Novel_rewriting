@@ -826,7 +826,7 @@ Output/_service/edits/<sid>/reviewer-action-<sha>.json （历史）旧 Commander
 Output/_service/runs/<sid>/reviewer_action_authorities/reviewer-action-<sha>.json （历史）旧 reviewer rewrite authority 归档；解码面已删除
 Output/_service/runs/<sid>/reviewer_action_authorities/reviewer-action-<sha>.receipt.json （历史）上述归档的 authority commit point
 Output/_service/runs/<sid>/sessions/<session_run_id>.json （历史）Commander 会话指针；schema 载体已删除，关闭式拒读（R-11.26 历史条）
-Output/_service/approvals/<sid>.json 人工闸门、已阅状态与 canonical 写作授权（原子替换）
+Output/_service/approvals/<sid>.json （历史）人工闸门、已阅状态与 canonical 写作授权；解码面已随 2026-10-04 裁决删除，文件仅作历史字节（原子替换）
 ```
 
 #### 历史工作单元决定恢复（只读）
@@ -909,7 +909,8 @@ trim/report/committed，不造新轮。公开读视图只认 committed，同一 
 （已删除）`approvals/<sid>.json` 的存量审批账**不再解码**（2026-10-04 用户裁决：
 不保留旧产物读兼容）：`approvals.py` 与 `ApprovalDoc` 决定族整批删除，旧根一律
 `legacy_incompatible` 拒识；文件仅作为历史字节参与 surface seal（原始字节快照）与
-回收站归档清单。互斥锁迁至 `novel/orchestrator/trash.py::approval_exclusion_lock`。每个已盖 gate、已阅状态、typed Stage4A 设计审阅、最终结构裁决和 writing 授权
+回收站归档清单。互斥锁迁至 `novel/orchestrator/trash.py::approval_exclusion_lock`。
+（历史）以下为该解码面退役前的规则形状，仅供追溯，运行时不再走其中任何一条：每个已盖 gate、已阅状态、typed Stage4A 设计审阅、最终结构裁决和 writing 授权
 都必须带一份 current-subject proof：当前 `stage0/clean_text.txt` 的完整 SHA-1、所裁决正式
 产物的完整 SHA-256，以及决定本身的规范 JSON SHA-256。读取时必须重新走当前 schema、typed
 人工决定与 freshness 校验并逐字节比对；根变化、上游变化、正式产物被换字、损坏、出现
@@ -920,7 +921,7 @@ trim/report/committed，不造新轮。公开读视图只认 committed，同一 
 或 subject hash 变化仍会失效；读取还必须先证明 approval 存在且 subject 与当前决策面一致。
 旧 v1～v8 审批解码与迁移分支已随各自批次删除；缺版本、未来版本和损坏均拒绝且保留原字节，
 旧版本、旧 token、旧 Binding 不手工补字段冒充现役来源；reset/backfill 公开入口已退役。
-普通 GET、事件观测与历史读取保持只读，损坏或证据不够保持 unknown。当前 Stage4 必须先有真实 A 审阅，
+普通 GET、事件观测与历史读取保持只读，损坏或证据不够保持 unknown。（历史）旧链 Stage4A/B 必须先有真实 A 审阅，
 由 B producer 产出当前 Binding/Plan，再经独立 B 结构审阅；不得从既有产物或付费记录倒造审阅。
 队列在一把锁内读取 current 结构裁决、
 writing 授权与盘面；不得先查文件、再另读授权，从而留下两次读取之间主体变化仍生成付费命令的窗口。

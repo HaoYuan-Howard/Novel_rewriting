@@ -147,10 +147,13 @@ def test_real_changed_stage_path_includes_direct_unit_tests_and_downstream_consu
 
 
 def test_changed_schema_keeps_contract_guards_without_direct_import_edges():
-    # STR-06 关闭批：contracts/schema/stage6.py 已随死文件删除；换现役 stage5.py
-    # 保持同一语义——schema 变化没有直接 import 边也要选契约守卫。
-    result = S.plan(S.load_catalog(), changed=('contracts/schema/stage5.py',))
-    assert S.CONTRACT_GUARDS <= result.modules
+    # STR-06 关闭批曾以 contracts/schema/stage5.py 为标的，该模块已随
+    # 2026-10-04 清理批删除；换现役 observation.py 保持同一语义——schema
+    # 变化没有直接 import 边也要选契约守卫，且不得退到「基线不可证明 ⇒
+    # 完整工程集合」的兜底分支（那会让本条恒真）。
+    catalog = S.load_catalog()
+    result = S.plan(catalog, changed=('contracts/schema/observation.py',))
+    assert S.CONTRACT_GUARDS <= result.modules < set(catalog['modules'])
 
 
 @pytest.mark.parametrize('path', ['AGENTS.md', 'tests/README.md', 'docs/REQUIREMENTS.md'])

@@ -1537,7 +1537,8 @@ class CostLedger:
             match_mode: str) -> None:
         """记录一次已随正式/INVALID 字节落地的跨章唯一回取。
 
-        locator 与 SourceSpan 都属于小说正文，不进入 ``_service``；事件只保留
+        locator 与正文 span（历史类型 SourceSpan，已随旧链 schema 删除）都属于
+        小说正文，不进入 ``_service``；事件只保留
         claim 路径、前后章号、匹配模式及最终文件 SHA，足以复核确定性改写。
         """
         digest = _require_sha256(artifact_sha256, field='artifact_sha256')

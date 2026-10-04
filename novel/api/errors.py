@@ -29,7 +29,6 @@ from novel.errors import (
     ArtifactUnreadable,
     BookTrashFailed,
     ByteFormRefused,
-    DeliveryIncomplete,
     HookCopyMissing,
     HumanEditProtected,
     NovelError,
@@ -85,9 +84,6 @@ STATUS: dict[type[NovelError], int] = {
     #: 前者指得出重建哪一条边，后者只能整份从 producer 重建。
     UpstreamUnproven: 409,
     ApprovalRequired: 409,
-    #: 上游都在，但内容还没齐（缺章 / 文案未定稿）⇒ 是**冲突**不是 404：
-    #: 那本书在，只是这一刻不可交付。`R-10.14` 明写 txt 里没有地方写风险抬头横幅。
-    DeliveryIncomplete: 409,
     #: 原始内容与当前状态冲突：覆盖会抹掉另一份书或人工编辑，或批准后输入已变化。
     SourceConflict: 409,
     HumanEditProtected: 409,

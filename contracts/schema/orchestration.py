@@ -1579,7 +1579,8 @@ class StageState(StrictModel):
     #: ⇒ 逐章有逐章的账，轮次有轮次的账。
     rounds_done: dict[str, list[int]] = Field(default_factory=dict)
 
-    #: 只读导航能否进入。它不是运行闸门；运行/定稿仍看 approvals。
+    #: 只读导航能否进入。它不是运行闸门；人工审批闸已退役，历史 approvals
+    #: 账只读冻结、不再解码（2026-10-04 裁决）。
     reviewable: bool
 
     @model_validator(mode='after')

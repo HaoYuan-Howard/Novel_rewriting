@@ -287,13 +287,13 @@ def test_closed_decode_surface_stays_deleted():
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 2026-10-04 清理两批（109830b7 + f1f4f623；用户裁决：不保留旧产物读兼容）：
-# 删除的旧链 schema 与 novel 模块不得回来。approvals／mechanical_admission／
-# edits 路由另有 find_spec 与 HTTP 层守卫，此处统一登记整批名册，
-# 防单点守卫被单独放宽。
+# 2026-10-04 清理三批（109830b7 + f1f4f623 + f6c250b1；用户裁决：不保留旧产物
+# 读兼容）：删除的旧链 schema 与 novel 模块不得回来。approvals／mechanical_
+# admission 另有 find_spec 守卫；edits 等路由重新挂载会撞 test_api_http 的
+# 公开接口面钉扎。此处统一登记整批名册，防单点守卫被单独放宽。
 # ═══════════════════════════════════════════════════════════════════════════
 
-#: 2026-10-04 两批清理删除的模块（回来即红）。
+#: 2026-10-04 三批清理删除的模块（回来即红）。
 CLEANUP_2026_10_04_MODULES = (
     # f1f4f623：18 个旧链 schema 模块与存量审批账解码链
     'contracts/schema/analyze.py', 'contracts/schema/analyze_draft.py',
@@ -315,11 +315,38 @@ CLEANUP_2026_10_04_MODULES = (
     'novel/orchestrator/cli_probe.py',
     'novel/orchestrator/mechanical_admission.py',
     'novel/report/workpack.py', 'novel/snapshot_clone.py',
+    # f6c250b1：novel/core 旧链算子残留
+    'novel/core/evidence.py', 'novel/core/naming.py',
+    'novel/core/normalize.py',
 )
 
 
 def test_2026_cleanup_batch_modules_stay_deleted():
-    """2026-10-04 两批清理删除的模块不得回来（单向名册，不依赖其他守卫）。"""
+    """2026-10-04 三批清理删除的模块不得回来（单向名册，不依赖其他守卫）。"""
     problems = [f'已删模块回来了：{m}' for m in CLEANUP_2026_10_04_MODULES
                 if (ROOT / m).exists()]
+    assert not problems, '\n'.join(problems)
+
+
+def test_web_fixture_node_ids_stay_within_live_nodes():
+    """web 演示夹具与 mock 的 node id 必须都在 `NODES` 现役登记内。
+
+    夹具没有再生成链（enums.json 除外，那是 payload 镜像），节点退役后唯一能拦
+    「后端已退役、夹具还在演示」漂移的就是这道闸——2026-10-04 复审正是这样抓到
+    `str06_candidate.json`／`agent_capabilities.json` 里残留的 `str06.stage4.bind`
+    （CS-3 已退役，夹具仍当有产物节点与计费行）。
+    """
+    node_re = re.compile(r'str06\.[a-z0-9_]+\.[a-z0-9_]+')
+    from contracts.invariants import NODES
+    live = {str(node) for node in NODES}
+    problems = []
+    for path in sorted((ROOT / 'web' / 'src' / 'fixtures' / 'backend_v1').glob('*.json')):
+        found = set(node_re.findall(path.read_text(encoding='utf-8')))
+        stale = sorted(found - live)
+        if stale:
+            problems.append(f'{path.name}：退役节点 {stale}')
+    mock = ROOT / 'web' / 'src' / 'api' / 'mock.ts'
+    stale = sorted(set(node_re.findall(mock.read_text(encoding='utf-8'))) - live)
+    if stale:
+        problems.append(f'mock.ts：退役节点 {stale}')
     assert not problems, '\n'.join(problems)

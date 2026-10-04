@@ -50,10 +50,10 @@ CHAIN_ROOT = 'stage0/clean_text.txt'
 #: 人工决策集（`--apply-edit` 的输入）。**它们是「必要的可选项」**：
 #: 一本走过 apply-edit 的书，被编辑的那份产物把决策集记成了一条**真实上游边**
 #: （`novel/consumption.py::CONSUMED_PROJECTIONS` 给它们各登记了一格投影）。
-#: 沙箱不带 ⇒ 幽灵边 ⇒ 那份产物判 `unknown/ghost`；而「明确当前」是审批凭据
-#: （`novel/orchestrator/approvals.py::_proof_for_seen`）与 stage7 交付闸的**硬前提**
-#: ⇒ 缺一份 `stage2/global_edit.json` 会让 `s2` 填不出，再由 `_GATE_REQUIREMENTS`
-#: 级联堵死 `s4`→`s5`→`s6`→`s7`，表现成一批与它毫无字面关系的审批用例红。
+#: 沙箱不带 ⇒ 幽灵边 ⇒ `novel/orchestrator/state.py` 把该产物判 `unknown`
+#: （历史形态还要经 `approvals.py::_proof_for_seen` 抛 `ApprovalRequired` 并级联
+#: 堵死 `s2`→`s7`，该审批解码面已随 2026-10-04 裁决删除）
+#: ⇒ 缺一份 `stage2/global_edit.json` 会让下游一批与它毫无字面关系的用例红。
 #:
 #: ⚠ **必须条件搬**：没走过 apply-edit 的书没有这一份，无条件写进 `rels` 会撞
 #: `Sandbox.__init__` 的 assert。用 `edits_of(book)`。
@@ -76,20 +76,23 @@ def source_resolves_in_a_sandbox(book: str) -> bool:
     `source_ref` 去比 `normalized_source_sha1`（`novel/store.py::_stage0_revisions_freshness`）。
     那条路径失效时才由 `novel/core/source.py::resolve_recorded_source` 按
     `<base>/_service/uploads/<sha256>/<name>` 回落重锚——**而沙箱的 base 里没有那一层**
-    ⇒ 该产物判 `unknown/ghost`，`novel/orchestrator/approvals.py::_proof_for_seen`
-    当场抛 `ApprovalRequired`，`s2` 填不出，再由 `_GATE_REQUIREMENTS` 级联堵死
-    `s4`→`s5`→`s6`→`s7`。报出来的是「预置审批链失败」，与「源文件」三个字毫无字面关系。
+    ⇒ 该产物判 `unknown`（`novel/orchestrator/state.py` 按 ghost/no_provenance 收口）。
+    历史形态是 `novel/orchestrator/approvals.py::_proof_for_seen` 当场抛
+    `ApprovalRequired` 再级联堵死 `s2`→`s7`、报成「预置审批链失败」——该审批
+    解码面已随 2026-10-04 裁决删除，但「选一本答得出的书」这个结论不变。
 
-    ⚠⚠ **不要改成「把源 txt 拷进沙箱的 `_service/uploads/`」。** 试过，它会当场撞两条守卫：
-    `tests/test_api_http.py::test_the_service_writes_nothing_at_all` 与
-    `tests/test_approvals.py` 的「GET 不许落服务状态」都断言沙箱里**根本没有 `_service/`**。
-    那两条守的是 `R-11.3`，比这里的方便重要得多 ⇒ 改成**选一本答得出的书**。
+    ⚠⚠ **不要改成「把源 txt 拷进沙箱的 `_service/uploads/`」。** 试过，它会当场撞守卫：
+    `tests/test_api_http.py::test_the_service_writes_nothing_at_all` 断言沙箱里
+    **根本没有 `_service/`**（历史还有 `tests/test_approvals.py` 的「GET 不许落
+    服务状态」，该文件已随审批面退役删除）。那条守的是 `R-11.3`，比这里的方便
+    重要得多 ⇒ 改成**选一本答得出的书**。
 
     ⚠⚠ **这个 helper 自己漂过一次，代价是整片语料面静默变暗**（2026-08-23 查实）。
     2026-08-22 阶段 B 把 `original_path: str` 换成了 typed `source_ref: SourceRef`
     （`contracts/schema/stage0.py`），而这里仍在 `.get('original_path')`
-    ⇒ 恒得 `None` ⇒ 恒 `False` ⇒ **`tests/test_approvals.py` 的 6 条语料用例
-    从那天起全部 skip**，一条红都不发。被它盖住的东西是实打实的：
+    ⇒ 恒得 `None` ⇒ 恒 `False` ⇒ **当时 `tests/test_approvals.py` 的 6 条语料用例
+    从那天起全部 skip**（该文件已随审批面退役删除），一条红都不发。
+    被它盖住的东西是实打实的：
     同一天改的「默认全书闭卷」既没被验证，`test_default_depth_is_...one_two_three`
     里 `[1, 2, 3]` 那个陈旧断言也没被推翻。
     ⇒ 教训是 `docs/LESSONS.md` 第 21 条的第三形状：**守卫漂了不一定假红，

@@ -21,10 +21,6 @@ QUOTE_STYLES = (('「」', re.compile(r'「[^」]*」')),
                 ('『』', re.compile(r'『[^』]*』')),
                 ('""', re.compile(r'"[^"]*"')))
 
-#: 取引号内片段（举例用的原文微引用）。上界 40 字是为了不把整段吞进来。
-QUOTED = re.compile(r'「([^」]{1,40})」|“([^”]{1,40})”|‘([^’]{1,40})’|'
-                    r'『([^』]{1,40})』|"([^"]{1,40})"')
-
 _NON_CONTENT = re.compile(r'[^一-鿿A-Za-z0-9]')
 
 
@@ -119,11 +115,6 @@ def window_overlap(text: str | None, source: str | None, window: int = 20,
     return round(hits / n, 3)
 
 
-def quotes(s: str | None) -> list[str]:
-    """取出字符串里被引号包住的片段（举例用的原文微引用）。"""
-    return [g for m in QUOTED.finditer(s or '') for g in m.groups() if g]
-
-
 def quote_count(s: str | None) -> int:
     """直接引语的**条数**（四种引号体的成对跨度合计）。
 
@@ -134,4 +125,3 @@ def quote_count(s: str | None) -> int:
     模型刚吐出来那一份不是）⇒ 四种体全表都数。
     """
     return sum(len(rx.findall(s or '')) for _, rx in QUOTE_STYLES)
-

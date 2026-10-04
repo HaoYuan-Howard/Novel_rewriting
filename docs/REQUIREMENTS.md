@@ -77,6 +77,8 @@
 | CS-3已完成部分 | Design v7、real＋know分离、bind退役、body_design双产物、world规则id、rc14认知与confirms闭合；剩余Brief输入投影与真实费用／质量证据 |
 | `8221ef2f`／`14312181` | rc14工程冻结：3581例默认非corpus通过；前端120例及typecheck／seams／build通过。三书免费源身份／分章预检通过，124次无修订基础调用；不证明成书质量 |
 | `e84a169b` | 证据patch耦合范围、Windows长路径已购恢复、Preserve wire投影与先验型、names已证明级联准入、逐章freshness、keep表达诊断。定向集合见该提交原活动账；尚未做本隔离批最终全量回归 |
+| 退役代码清理三批，`109830b7`／`f1f4f623`／`7183add0`／`f6c250b1` | 37个生产模块删除（旧链schema、存量审批账解码链、孤儿契约载体、`novel/core`旧链算子）；默认非corpus回归3709→3570全绿、前端四件套通过；名册补登记三批统一入`CLEANUP_2026_10_04_MODULES`。限制：golden与真实付费未跑 |
+| 清理收尾批（2026-10-04，复审37条发现闭环） | 修复`AgentRunDialog`真实模式null崩溃；退役名册补3个core模块；`tests/README.md`分母与`REQUIREMENTS.md`删除条件补登记；审批解码面现役口吻清理；`DeliveryIncomplete`/`SOURCE_ENCODINGS`/stage2孤儿路径helper/dependency死登记/layering白名单死键清退；web夹具退役节点`str06.stage4.bind`清除并新增夹具节点守卫。限制：golden与真实付费未跑 |
 
 ## 未完成项与决策边界
 
@@ -109,7 +111,7 @@
 | 可信owner修订 | 耐久修订证明＋基线／当前摘要闭合才准入级联；发现节点复验成功才resolved。names登记的准入只认已证明消费变化；unknown、不可读、INVALID不放行 |
 | 已购证据与旧根 | 原始响应、checkpoint、正文、ledger不可当派生缓存删除。请求身份与接受条件相符才采用；`--check-only`零新购但可执行恢复写入，不称纯只读 |
 | 章集合与交付恢复 | committed set及当前章包证明只补缺章；NameMap改动只重交付，Hook窄改不使无关正文失效；Stage1 e00仍参与源身份 |
-| 已退役链 | 拒识legacy_incompatible，RETIRED_ARTIFACT_PATHS和盘面探测维持闭合；守卫`tests/test_retired_surface_scan.py`，不复活历史解码面。2026-10-04裁决不保留旧产物读兼容：存量审批账解码链（approvals.py/ApprovalDoc决定族）与18个旧链schema模块已删，旧根拒识不再有任何解码面，历史转换走仓外临时脚本 |
+| 已退役链 | 拒识legacy_incompatible，RETIRED_ARTIFACT_PATHS和盘面探测维持闭合；守卫`tests/test_retired_surface_scan.py`，不复活历史解码面。2026-10-04裁决不保留旧产物读兼容：存量审批账解码链（approvals.py/ApprovalDoc决定族）与18个旧链schema模块已删（f1f4f623），旧根拒识不再有任何解码面，历史转换走仓外临时脚本；同日109830b7清退零引用死代码与孤儿契约载体（agent_wire/stage4_ir/stage7/edits/bands/facts/spans/human_actions/aggregate_runs/privacy/typed_failures/cli_probe/mechanical_admission/workpack/snapshot_clone），f6c250b1清退`novel/core`旧链算子残留（naming/evidence/normalize）——三批名册统一登记在`tests/test_retired_surface_scan.py::CLEANUP_2026_10_04_MODULES`，回来即红 |
 
 ### 候选根运行记录映射与删除条件
 

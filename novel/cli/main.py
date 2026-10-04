@@ -354,7 +354,7 @@ def _runners() -> dict[str, Callable[[RunContext, list[str]], int]]:
 
     ⚠⚠ F8c：**只剩 stage0／stage1 两条腿**。旧链 stage2／4／5／7 的 runner 随
     旧链整层退役删除——`_cmd_run` 入口按「非现役节点」通则拒读旧节点
-    （legacy_incompatible），14 个 `str06.` 节点在入口分流到 `_run_str06`，
+    （legacy_incompatible），13 个 `str06.` 节点在入口分流到 `_run_str06`，
     两者都到不了这张表。Stage6 腿更早（F8b）已删。
     """
     return {'stage0': _run_stage0, 'stage1': _run_stage1}

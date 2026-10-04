@@ -141,9 +141,10 @@ def _empty_book(base, sid: str = '422'):
 
 #: F8b-3：人工审批闸（reset／backfill／gate／writing／stage5 closure 等）随
 #: 「上传即授权开跑」的全自动单模式退役，`novel/api/routes/approvals.py` 与
-#: `novel/api/approval_stamp.py` 已删除。存量 v9 审批账只由
-#: `novel/orchestrator/approvals.py` 做只读解码（CLI/operator 面），HTTP 上
-#: 不再发布任何 approvals 端点。
+#: `novel/api/approval_stamp.py` 已删除。存量 v9 审批账的只读解码面
+#: （`novel/orchestrator/approvals.py`）也已随 2026-10-04 裁决删除：历史账
+#: 只读冻结、不再解码，旧根一律拒识 `legacy_incompatible`；HTTP 上不再发布
+#: 任何 approvals 端点。
 RETIRED_APPROVAL_PATHS = (
     '/api/novels/422/approvals',
     '/api/novels/422/approvals/reset',

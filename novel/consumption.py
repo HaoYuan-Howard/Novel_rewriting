@@ -80,7 +80,8 @@ def stage1_stage0_source(data: object) -> object:
 
 
 # 每一格的键都是本节点**真正消费**的上游产物相对路径；值是那份上游的投影。
-# ⚠ B2 起：键翻为新链 14 个节点（`str06.` 前缀，见 `contracts/invariants.py::NODES`），
+# ⚠ B2 起：键翻为新链 `str06.` 节点（B2 时 14 个，CS-3 bind 退役后 13；见
+#   `contracts/invariants.py::NODES`），
 # 上游路径翻为三级家族路径（见 `contracts/artifacts.py`）。Stage0/1 两行不变
 # （范围外保留）。旧链 12 个节点键随旧链退役删除（F7e 登记）。
 #

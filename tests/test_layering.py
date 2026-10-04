@@ -206,10 +206,6 @@ _JSON_READ_ALLOWED = {
     'novel/output_root.py': (
         '只读根外的离线归档围栏、清单和提交回执；不解析旧 artifact，'
         '新根须有同事务的 committed 证明，服务/CLI/Store 共用这一判定'),
-    'novel/orchestrator/approvals.py': (
-        '审批记录是 _service/approvals 下的服务自有状态，不是小说 artifact；'
-        '唯一审批 owner 显式检查当前 v8、SID 与 typed 决定，旧版本不迁移。'
-        '章节产物及来源证据仍必须通过 ArtifactStore 读取'),
     'novel/model_slots.py': '只读 _service/model_slots 的容量配置，不读小说产物；损坏配置关闭式拒绝。',
     'novel/orchestrator/network_settings.py': (
         '付费外发网络偏好是 _service/network_settings.json 的服务自有状态'
@@ -223,19 +219,9 @@ _JSON_READ_ALLOWED = {
         '（SHA-1）都按这份字节算。解码走正式 `decode_artifact`＋`artifact_spec`'
         '信封路径，与 Store 同一条；候选根本身的产物读写仍全部经 '
         'Str06Repository。'),
-    'novel/stages/stage2/analyze/recovery.py': (
-        'legacy Analyze 的免费恢复只解码自己的 sidecar（stage2/analyze_legacy_checkpoint.json）、'
-        '书级 ledger 行与 work_units recovery 证明；不读 canonical 小说产物，'
-        '人物/Global 产物仍经 ArtifactStore 读取'),
-    'novel/stages/stage6/prepare.py': (
-        '直连 producer 的已购回答 sidecar（stage6/prepare_legacy_checkpoint.json）'
-        '与免费恢复账只由本 owner 解码；canonical 产物仍全部经 Store 读写'),
     'novel/orchestrator/work_unit_recovery.py': (
         'JSON 解码只将内存中的失败恢复证据规范化为落盘重放的嵌套形状；'
         '原账、成本、session 与 owner 证明走各自权威读路，不读取小说产物'),
-    'novel/stages/stage5/reviewer_rewrite.py': (
-        '只解码 Commander 决定的临时 trusted transport，并拒绝重复键/NaN；'
-        '该输入不是产物，canonical request 与章稿仍全部经 ArtifactStore 读取'),
     'novel/store.py': '它就是那条唯一的读路，记账在这里发生',
     'novel/orchestrator/jobs.py': (
         '作业记录**不是产物**：不进来源账、不进 `_provenance`、`ARTIFACTS` 里没有它。'
@@ -244,10 +230,6 @@ _JSON_READ_ALLOWED = {
     'novel/orchestrator/queue.py': (
         '持久队列记录不是产物：`_service/queues.jsonl` 是 append-only 编排事件，'
         '不进来源账/ARTIFACTS；与 jobs.jsonl 一样只容忍被 kill 截断的最后一行'),
-    'novel/orchestrator/rebuild.py': (
-        '改选重建意图不是产物：`_service` 下的 rebuild intents 账是 append-only '
-        '编排事件（先耐久再执行），不进来源账/ARTIFACTS；与 jobs.jsonl 一样'
-        '只容忍被打断的最后一行'),
     'novel/orchestrator/beacon.py': (
         '进度信标**不是产物**：与 jobs.jsonl 同理，append-only 事件流'
         '（`_service/agent_progress.jsonl`），不进来源账、不进 `_provenance`；'
@@ -285,36 +267,6 @@ _JSON_READ_ALLOWED = {
         '用户常用 Agent profiles 是当前 output base 的 `_service/` 设置，不是小说产物；'
         '读取保留 unset/configured/unreadable 三态并以原始字节 SHA-256 做 CAS，'
         '不进入 provenance，也不经 ArtifactStore 倒充 artifact'),
-    'novel/stages/stage2/blueprint/run_state.py': (
-        '只读解码 _service/runs 下的 Stage2 运行记录与验证后检查点；'
-        '它们不是正式产物，当前版本、自哈希和输入身份不闭合即 unver，'
-        '与 producer 共用载体协议，不含模型执行或 paid-response 恢复权威'),
-    'novel/stages/stage2/blueprint/sequence.py': (
-        '只解码调用方已构造在内存的章节请求 metadata 并冻结本轮 compiler '
-        '允许引用的主体；首次抽取并发提交各章（空 entry_states），跨章 Continuity '
-        '在 compile 期缝合；原文/Global 来自已记账 producer 输入，不裸读产物'),
-    'novel/stages/stage2/blueprint/repair.py': (
-        '只解码内存章节请求 metadata 来附 baseline_identities；'
-        '修前蓝图、原文和修订模板均已通过 ArtifactStore/typed 路径读取，不打开盘上 JSON'),
-    'novel/stages/stage2/analyze/purchase.py': (
-        '只把 SessionAgentClient 已验证来源的内存 normalized_text 解码为原回答修复候选；'
-        '这是已购模型 stdout 的格式诊断，不裸读正式产物；编译、证据、来源与正式写盘仍走 Store'),
-    'novel/stages/stage2/knowledge/producer.py': (
-        '只读 `_service/runs` 下当前 global/knowledge run 的 request_policy 与 custody 判别，'
-        '用于拒绝直连 producer 接管已退役 agent 状态；不是正式产物读路，'
-        '正式 Global 仍经 ArtifactStore'),
-    'novel/stages/stage2/blueprint/producer.py': (
-        '只读 `_service/runs` 下当前 blueprint run.json 的 request_policy 判别格，'
-        '用于拒绝直连 producer 接管已退役 agent 状态；不是正式产物读路，'
-        '正式蓝图仍经 ArtifactStore'),
-    'novel/stages/stage6/prepare_recovery.py': (
-        '只解码已购回答验收记录中的内存 normalized_text，保留格式错误的原模型候选；'
-        '来源 custody 由 SessionAgentClient 验证，正式 Prepare 仍由 producer 经 ArtifactStore 写入'),
-    'novel/llm/stage2_runs.py': (
-        'Stage2 验证后章节检查点与一次性 repair workpack 不是正式产物或普通缓存；'
-        '它们在 `_service/runs/<sid>/stage2/` 按书、run_id 关闭式恢复，读取后仍须重跑'
-        '当前 schema/validator/scope/HARD；旧书内运行目录关闭式拒绝。'
-        '单独成模块正是为了不给 extract.py/client.py 开裸 IO 豁免'),
     'novel/llm/run_journal.py': (
         '逐节点 executor 的通用 run/checkpoint/commit journal 不是正式产物；'
         '它只向 `_service/runs/<sid>/stageN/<run_id>/` 追加；关闭式拒绝旧书内'
@@ -370,12 +322,6 @@ _WRITE_ALLOWED = {
     'novel/orchestrator/network_settings.py': (
         '只写 _service/network_settings.json 的网络偏好（c252e8b9 服务自有'
         '状态，非小说产物）；目录 mkdir 为首建该服务文件，小说产物仍全经 Store'),
-    'novel/stages/stage2/analyze/purchase.py': (
-        'legacy Analyze 的已购回答 sidecar（stage2/analyze_legacy_checkpoint.json）'
-        '是免费恢复的唯一耐久面，与回执同事务落盘；不写 canonical 小说产物'),
-    'novel/stages/stage6/prepare.py': (
-        '直连 producer 的已购回答 sidecar（stage6/prepare_legacy_checkpoint.json）'
-        '先于 WAL 提交落盘，是「已购回答先耐久」的免费半边；不写 canonical 产物'),
     'novel/store.py': '它就是那条唯一的写路，两道闸在这里',
     'novel/appendlog.py': (
         'append-only 事件流的**唯一追加口**：五份 `_service/*.jsonl`（账本、作业、队列、'
@@ -401,11 +347,6 @@ _WRITE_ALLOWED = {
         '结构化拒绝响应的书内隔离区与不可变受托修复决定。它不是缓存或正式产物；'
         '只允许写 `_llm_rejected/`，真正采纳仍回 LlmClient 的同一套内容闸。'
         '单独成模块是为了不把 `client.py` 整体加入写盘白名单'),
-    'novel/llm/stage2_runs.py': (
-        'Stage2 验证后章节检查点与一次性 batch resolution。它不是正式 artifact 或普通缓存，'
-        '只写 `_service/runs/<sid>/stage2/<run_id>/blueprint/`，旧书内路径只读；'
-        '正式采纳仍回 producer 的完整编译/HARD/写盘口。'
-        '单独成模块是为了不把 extract.py/client.py 整体加入写盘白名单'),
     'novel/llm/run_journal.py': (
         '逐节点 executor 的 provider-neutral 恢复核心只原子写 '
         '`_service/runs/<sid>/stageN/<run_id>/run.json`、append-only checkpoint revision 与 '
@@ -456,9 +397,6 @@ _WRITE_ALLOWED = {
         '子进程，作业结束即删；Commander approval 决定的内容寻址重放记录同样只落 '
         'Output/_service/edits，landed 或被拒即删。两者都不进 ARTIFACTS / 来源账，'
         '不是小说产物'),
-    'novel/orchestrator/approvals.py': (
-        '人工闸门与深度选章只写 Output/_service/approvals/。它们控制作业是否可启动，'
-        '不是小说产物，不进 ARTIFACTS / provenance；原子替换防止并发读到半份状态'),
     'novel/orchestrator/trash.py': (
         '项目删除的 CLI 子进程把整本书目录、审批状态与该 sid 的 service run '
         '同界移入 `Output/_service/trash/`，并先写无正文 manifest。显式 restore 持同书'
@@ -653,13 +591,12 @@ def _service_mutator_hits(path: str) -> list[tuple[str, str]]:
         if isinstance(node, ast.ImportFrom) and node.module == 'novel.orchestrator':
             for alias in node.names:
                 if alias.name in (
-                        'jobs', 'uploads', 'approvals', 'trash',
+                        'jobs', 'uploads', 'trash',
                         'service_lifecycle'):
                     module_aliases[alias.asname or alias.name] = alias.name
         elif isinstance(node, ast.ImportFrom) and node.module in (
             'novel.orchestrator.jobs',
             'novel.orchestrator.uploads',
-            'novel.orchestrator.approvals',
             'novel.orchestrator.trash',
             'novel.orchestrator.service_lifecycle',
         ):

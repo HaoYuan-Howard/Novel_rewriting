@@ -21,7 +21,8 @@ def test_approval_subcommand_is_retired_at_the_cli_entry(monkeypatch, tmp_path):
     （原用例钉「审批读只读／写持 generic claim」；该写面（`_cmd_approval` 与
     `_cmd_approval_admitted`）已删。同族不变量改钉两半：argparse 面上没有这个
     子命令（exit 2 invalid choice），模块里也没有这两个函数（S-05 不复活）；
-    存量 v9 账只读解码在 `novel/orchestrator/approvals.py`，HTTP/CLI 都不再写。）
+    存量 v9 账的只读解码面也已删除（2026-10-04 裁决），历史账只读冻结，
+    HTTP/CLI 都不再读写。）
     """
     with pytest.raises(SystemExit) as stopped:
         C.main(['approval', 'gate', '--gate', 's2', '--base', str(tmp_path)])

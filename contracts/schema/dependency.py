@@ -26,7 +26,10 @@ class DependencyRule(NamedTuple):
 #: 新链依赖方向表。`contracts.*` 与底层设施（errors/config 等纯工具）对所有行
 #: 隐式允许，不逐行抄写；表里只写**区分度所在**的允许与全部禁止。
 #: （2026-10-04 清理批：stage6 层与 stage5.judge 目标随整层退役移除；grounding
-#: 的 allows 随旧链 characters/plot schema 删除修剪。）
+#: 的 allows 随旧链 characters/plot schema 删除修剪。同日收尾批再剪掉盘上不存在
+#: 的模块行与目标名：stage4.context／stages.shared 行、stage2.blueprint／
+#: stage2.characters／novel.runtime.* 目标，`contracts.api.*` 对齐为
+#: `contracts.schema.api`。）
 STR06_DEPENDENCY_RULES: Final[tuple[DependencyRule, ...]] = (
     DependencyRule(
         module='novel.stages.stage2',
@@ -37,24 +40,17 @@ STR06_DEPENDENCY_RULES: Final[tuple[DependencyRule, ...]] = (
         module='novel.stages.stage4.design',
         allows=('contracts.schema.grounding', 'contracts.schema.design',
                 'contracts.schema.consumption'),
-        forbids=('novel.stages.stage4.grounding', 'novel.stages.stage4.grounding.*',
-                 'novel.stages.stage2.blueprint', 'novel.stages.stage2.blueprint.*',
-                 'novel.stages.stage2.characters', 'novel.stages.stage2.characters.*')),
+        forbids=('novel.stages.stage4.grounding', 'novel.stages.stage4.grounding.*')),
     DependencyRule(
         module='novel.stages.stage4.grounding',
         allows=('contracts.schema.grounding', 'contracts.schema.design'),
         forbids=('novel.stages.stage4.design', 'novel.stages.stage4.design.*')),
     DependencyRule(
         module='novel.stages.stage4.compile',
-        allows=('contracts.schema.*', 'novel.runtime.*'),
+        allows=('contracts.schema.*',),
         forbids=('novel.llm', 'novel.llm.*', 'novel.stages.stage4.design',
                  'novel.stages.stage4.design.*', 'novel.stages.stage4.grounding',
                  'novel.stages.stage4.grounding.*')),
-    DependencyRule(
-        module='novel.stages.stage4.context',
-        allows=('contracts.schema.*', 'novel.runtime.*'),
-        forbids=('novel.llm', 'novel.llm.*', 'novel.stages.stage4.design',
-                 'novel.stages.stage4.design.*')),
     DependencyRule(
         module='novel.stages.stage5',
         allows=('contracts.schema.context', 'contracts.schema.receipt',
@@ -65,7 +61,7 @@ STR06_DEPENDENCY_RULES: Final[tuple[DependencyRule, ...]] = (
     DependencyRule(
         module='novel.stages.stage7',
         allows=('contracts.schema.consumption', 'contracts.schema.receipt',
-                'contracts.api.*'),
+                'contracts.schema.api'),
         forbids=('novel.stages.stage2', 'novel.stages.stage2.*',
                  'novel.stages.stage4', 'novel.stages.stage4.*',
                  'novel.stages.stage5', 'novel.stages.stage5.*')),
@@ -75,14 +71,6 @@ STR06_DEPENDENCY_RULES: Final[tuple[DependencyRule, ...]] = (
         forbids=('novel.stages.stage4.design', 'novel.stages.stage4.design.*',
                  'novel.stages.stage4.grounding', 'novel.stages.stage4.grounding.*',
                  'novel.stages.stage5', 'novel.stages.stage5.*')),
-    DependencyRule(
-        module='novel.stages.shared',
-        allows=(),
-        forbids=('novel.stages.stage2', 'novel.stages.stage2.*',
-                 'novel.stages.stage4', 'novel.stages.stage4.*',
-                 'novel.stages.stage5', 'novel.stages.stage5.*',
-                 'novel.stages.stage6', 'novel.stages.stage6.*',
-                 'novel.stages.stage7', 'novel.stages.stage7.*')),
 )
 
 #: 横向规则（作用于所有行）：guard/judge 不写 canonical；shared/repository 不反依赖
@@ -172,7 +160,7 @@ STR06_MIGRATION_DEPENDENCY_RULES: Final[tuple[DependencyRule, ...]] = (
         forbids=('novel.llm', 'novel.llm.*',
                  'novel.stages.stage4.grounding', 'novel.stages.stage4.design',
                  'novel.stages.stage4.compile', 'novel.stages.stage4.book_ir',
-                 'novel.stages.stage5.hook')),
+                 'novel.stages.stage4.hook')),
     DependencyRule(
         module='novel.stages.stage7.assembly',
         allows=('contracts.schema.*', 'novel.stages.common',
@@ -182,5 +170,5 @@ STR06_MIGRATION_DEPENDENCY_RULES: Final[tuple[DependencyRule, ...]] = (
                  'novel.stages.stage2.names',
                  'novel.stages.stage4.grounding', 'novel.stages.stage4.design',
                  'novel.stages.stage4.compile', 'novel.stages.stage4.book_ir',
-                 'novel.stages.stage5.hook')),
+                 'novel.stages.stage4.hook')),
 )

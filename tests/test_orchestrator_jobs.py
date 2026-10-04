@@ -494,9 +494,9 @@ def test_landed_but_red_is_not_the_same_failure_as_did_not_run(base):
 def test_the_landed_predicate_has_exactly_one_home():
     """`0/1 = 落了、2/3/70 = 没落` 只许有一处算。
 
-    ⚠ 它此前只活在 `api/routes/edits.py::_completed` 这个私有函数里，
-    编排层根本没有 ⇒ `jobs.fold` 自己写了一遍 `code == 0`，
-    于是 `1` 与 `2`/`70` 在队列那一侧同名。
+    ⚠ 它此前只活在 `api/routes/edits.py::_completed` 这个私有函数里
+    （该路由已随人工写回面退役删除），编排层根本没有 ⇒ `jobs.fold`
+    自己写了一遍 `code == 0`，于是 `1` 与 `2`/`70` 在队列那一侧同名。
     """
     from novel import exit_codes as X
     assert [X.landed(c) for c in (X.OK, X.CHECK_FAILED)] == [True, True]

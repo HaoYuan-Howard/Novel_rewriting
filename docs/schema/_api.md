@@ -46,7 +46,7 @@
 
 （历史）旧链 Stage4A 已发行外部回执及审批历史曾承担内容寻址身份，其
 `constraint_operations` 兼容例外与 `constraint_catalog` 目录面已随人工闸退役；
-存量决定仍按当时的形状只读解码。
+存量决定不再解码（2026-10-04 裁决：历史账只读冻结，旧根一律拒识）。
 
 **② `by_alias=True` 不许关。**
 `_provenance` 是 alias 字段（模型里叫 `provenance`）。FastAPI 的

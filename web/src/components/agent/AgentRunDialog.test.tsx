@@ -398,6 +398,35 @@ describe('AgentRunDialog', () => {
     expect(screen.getByTestId('agent-run-cost-note')).toHaveTextContent(/只可预览，不会启动/)
   })
 
+  it('preview 按后端现实返回 null argv/prompt 时不崩溃，命令框给占位且不渲染 prompt 面', async () => {
+    // 后端唯一构造点恒传 None（Commander 退役）；历史 bug 正是夹具从不走 null 路径。
+    vi.spyOn(api, 'getAgentCapabilities').mockResolvedValue(agentCapabilities())
+    vi.spyOn(api, 'previewAgentRun').mockImplementation(async (req) => ({
+      ...previewOf(req.profiles, req.authorized, req.egress_authorized),
+      argv: null,
+      prompt: null,
+    }))
+    const start = vi.spyOn(api, 'startAgentRun').mockImplementation(async (req) => runningRecord(req))
+
+    renderRoute(
+      <AgentRunDialog sid="book-1" onClose={vi.fn()} onStarted={vi.fn()} />,
+      '/n/book-1/stage0',
+    )
+    expect(await screen.findByText(/不再摊开顶层命令行/)).toBeInTheDocument()
+    expect(screen.getByTestId('agent-command-preview')).toHaveTextContent(
+      /不再摊开顶层命令行/,
+    )
+    expect(screen.queryByRole('button', { name: /展开 prompt/ })).not.toBeInTheDocument()
+    fireEvent.click(
+      await screen.findByRole('checkbox', { name: /允许本会话产生外部模型调用费用/ }),
+    )
+    // 非续跑模式正文外发默认已授权，不再多点把它关掉。
+    const launch = await screen.findByRole('button', { name: '授权并开始跑书' })
+    await waitFor(() => expect(launch).toBeEnabled())
+    fireEvent.click(launch)
+    await waitFor(() => expect(start).toHaveBeenCalledTimes(1))
+  })
+
   it('同书冲突不再误报成全局只能跑一本', async () => {
     vi.spyOn(api, 'getAgentCapabilities').mockResolvedValue(agentCapabilities())
     vi.spyOn(api, 'previewAgentRun').mockImplementation(async (req) =>

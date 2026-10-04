@@ -45,7 +45,7 @@ renderer v5、写手协议 v5、拍上线程与 ThreadFold、章缝合 `entry`�
 
 ### R9 集中升版（2026-09-30，D8 修订二）
 
-现役版式为 `str06-rc11`；节点仍为 14 个，运行配置未变。book 观察独立使用
+现役版式为 `str06-rc11`；节点仍为 14 个（CS-3 bind 退役后 13），运行配置未变。book 观察独立使用
 `stage2-book-v2`，chapters／names 保持 `stage2-observation-v1`，associate 保持 v2。
 书级 `expression` 逐项记录叙述人称／叙述者、视角权限、幽默及内外反差并带证据；
 compiler 产生 Blueprint v14 的 `source_expression`、`ex_nn` 和非空白段长／句长／
@@ -105,7 +105,8 @@ compile／Stage4 compile／Stage7 assemble 才 resolve。无登记或后续手�
 ### R10 关键语义交接（2026-10-01，D8 修订三；a1–a5＋收口已落地）
 
 现役版式为 `str06-rc12`（全表统一；R10a 收口冻结身份
-`7d24e572…`，`tests/test_str06_f7e_freeze.py`）。节点仍为 14 个，运行配置未变。
+`7d24e572…`，`tests/test_str06_f7e_freeze.py`）。节点仍为 14 个（CS-3 bind
+退役后 13），运行配置未变。
 book 观察 `stage2-book-v3`、chapters 独立 `stage2-chapters-v2`（names 保持
 `stage2-observation-v1`、associate 保持 v2，输入投影变经 RC 表换身份）；
 Preserve `stage4-preserve-v2`＋policy 5、Design `stage4-design-v5`；

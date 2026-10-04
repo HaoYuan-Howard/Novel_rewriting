@@ -221,7 +221,8 @@ REVALIDATION_REFERENCE_VERSION = 1
 #: 提升时可从 ``artifact_override`` 带入的**确定性归一账**。
 #: 生成来源（prompts/model/inputs/usage/round）仍强制取不可变创建基线；
 #: 这张按 artifact 关闭的白名单只允许同一 normalizer 重算的派生账，
-#: 否则 Stage2 ``--revalidate`` 虽然提升了新 SourceSpan，正式 provenance
+#: 否则 Stage2 ``--revalidate`` 虽然提升了新的 span 账（历史类型 SourceSpan，
+#: 已随旧链 schema 删除），正式 provenance
 #: 却会被旧 ``evidence_locator_failures`` 再次判红。
 _REVALIDATION_DERIVED_PROVENANCE_FIELDS = {
     STAGE2_CHARACTERS: frozenset(),

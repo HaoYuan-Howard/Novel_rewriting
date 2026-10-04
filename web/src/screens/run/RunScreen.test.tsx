@@ -198,7 +198,7 @@ describe('RunScreen 交付终验', () => {
       why: '同进程租约停点；可在进度屏继续或熄火',
       waiting_on: stopStep.node,
       paid: false,
-      writes: 'approval',
+      writes: 'stage0/revisions.json · stage0/clean_text.txt',
       next_handler: 'human',
       review_states: null,
       verified_skipped_nodes: [],

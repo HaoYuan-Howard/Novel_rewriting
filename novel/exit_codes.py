@@ -4,9 +4,10 @@
 exit_codes.py —— 退出码的**唯一落点**。
 
 【为什么在顶层】退出码是**子进程通信协议**（`argv[0] ≡ sys.executable` 的那套），
-不是 CLI 的私有物：cli（翻译异常）、orchestrator（jobs/queue/run_step 判成败）、
-api（edits 路由判落盘）三方平级消费。放在 `novel/cli/` 之下会迫使后两者
-反向 import CLI 层；它是进程间的事实，与哪一层碰巧最先用它无关。
+不是 CLI 的私有物：cli（翻译异常）与 orchestrator（jobs/queue/agent 判成败与
+落盘）两方平级消费；api 侧唯一的消费面（edits 路由）已随人工写回面退役
+（2026-10-04）。放在 `novel/cli/` 之下会迫使后者反向 import CLI 层；
+它是进程间的事实，与哪一层碰巧最先用它无关。
 
 【为什么它要单独一份】退出码是编排层判成败的依据（`R-12.3`），
 而「哪个数字表示什么」一旦在两处各写一遍，两处就会在某个分支上给出不同的数
@@ -56,8 +57,9 @@ MEANING: dict[int, str] = {
 
 #: 「这一次**落没落盘**」——`0` 与 `1` 都落了，`2` / `3` / `70` 都没有。
 #:
-#: ⚠⚠ **它必须在这里，不许在消费方各写一遍。** 这个谓词此前只活在
-#: `novel/api/routes/edits.py::_completed`（一个私有函数）里，于是同一句话在
+#: ⚠⚠ **它必须在这里，不许在消费方各写一遍。** 这个谓词的历史形态只活在
+#: `novel/api/routes/edits.py::_completed`（一个私有函数，该路由已随人工写回面
+#: 退役删除）里，于是同一句话在
 #: 编排层根本没有：`orchestrator/jobs.py::fold` 写的是
 #: `state = 'ok' if code == 0 else 'failed'` ⇒ **`1` 与 `2` / `70` 同名**。
 #: 实测代价：一次 8 分钟的付费批量在 `stage6.hook` exit 1 上整条停下，
@@ -77,7 +79,7 @@ def landed_but_red(code: int | None) -> bool:
     """落了盘、但结论不通过。**它不是「没跑成」，也不是「没问题」。**
 
     多数节点是校验报告有阻断级红行；Stage4B 还可能是已落盘的
-    typed `infeasible`。定稿类动作在这个码上照样盖审批章（`edits.py`），
-    因为人定稿的语义正是「看过负结论之后拍板」。
+    typed `infeasible`。历史上定稿类动作在这个码上还盖过人工审批章
+    （人定稿的语义正是「看过负结论之后拍板」；该写面已随人工闸退役）。
     """
     return code == CHECK_FAILED

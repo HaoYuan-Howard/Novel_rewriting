@@ -202,7 +202,7 @@ def plan_book_from_overview(
     ``allow_deterministic_redo`` 只供每步后都会重新采快照的 AgentRun operator。
     普通多步队列保持默认 ``False``，不能把一份冻结计划扩张成后续重采授权。
 
-    ⚠⚠ B2 起：规划器只按 `NODES`（现役 14 个 `str06.` 节点＋stage0/1）**通用派生**。
+    ⚠⚠ B2 起：规划器只按 `NODES`（现役 13 个 `str06.` 节点＋stage0/1）**通用派生**。
     旧链的节点专属分支全部随旧链退役删除：stage2 analyze/characters/global/
     blueprint 的恢复面、stage4 design/plan 的人工闸与统一机械准入名册、
     stage5 write/review 的闭合回执与 reviewer-rewrite、stage6 prepare 接受闸、

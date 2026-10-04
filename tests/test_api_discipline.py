@@ -76,8 +76,9 @@ def test_every_approval_post_holds_write_admission_and_gets_stay_read_only():
     """审批写面已整体退役；本条改钉「不复活」+ 现役写准入的落点。
 
     F8b-3：`novel/api/routes/approvals.py` 随人工闸整层删除——审批 currentness+write
-    那个窗口不复存在，存量 v9 账只由 `novel/orchestrator/approvals.py` 做只读解码
-    （CLI/operator 面，HTTP 上一条 approvals 端点都不剩）。
+    那个窗口不复存在；2026-10-04 裁决再删掉 `novel/orchestrator/approvals.py`
+    的存量 v9 账只读解码面（历史账只读冻结、不再解码，旧根一律拒识
+    `legacy_incompatible`），HTTP 上一条 approvals 端点都不剩。
     · 原左半（POST 持写准入）：现役 API 层写准入 = CSRF 中间件 + 书级作业锁，
       逐条 POST 的闸门由 `tests/test_api_http.py::test_every_post_route_is_behind_the_gate`
       与 `test_job_conflict_maps_and_returns_409` 盯着；
@@ -87,7 +88,7 @@ def test_every_approval_post_holds_write_admission_and_gets_stay_read_only():
     path = os.path.join(API_DIR, 'routes', 'approvals.py')
     assert not os.path.exists(path), (
         '审批写面复活了（S-05）：人工闸退役后 HTTP 不再发布任何 approvals 端点；'
-        '存量账只读解码在 novel/orchestrator/approvals.py')
+        '存量账只读解码面也已删除（2026-10-04 裁决）')
 
 
 # ───────────────────────── `R-11.1` 只绑回环 ─────────────────────────

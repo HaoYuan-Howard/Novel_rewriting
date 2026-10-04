@@ -158,8 +158,9 @@ export interface AgentRunRequest {
 export interface AgentRunPreview {
   pause_before_node?: string | null
   continuation?: RunContinuationSource | null
-  argv: string[]
-  prompt: string
+  /** Commander 退役（2026-09-15）后不再摊开顶层进程命令行；服务端恒为 null，必须按可空消费。 */
+  argv: string[] | null
+  prompt: string | null
   authorized: boolean
   egress_authorized: boolean
   /** 服务端解析后的执行者配置；旧路由尚未接线或旧记录为 null。 */
