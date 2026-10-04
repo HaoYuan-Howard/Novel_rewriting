@@ -1,8 +1,9 @@
 # Stage 4 当前契约
 
-Stage4 在新链（STR-06，F8a 激活）有五个节点：四个付费节点
+Stage4 在新链（STR-06，F8a 激活）有四个节点：三个付费节点
 `str06.stage4.preserve`（保存策略义务）→ `str06.stage4.body_design`（目标故事与
-导演说明，同节点双产物发布 SemanticBinding——CS-3 起 bind 节点退役）→ `str06.stage4.hook_design`
+导演说明，同节点双产物发布 SemanticBinding——CS-3 起 bind 节点退役，义务承载位由
+design wire 的 real 标注派生）→ `str06.stage4.hook_design`
 （Hook 必要选择，并经 `publish_graph` 唯一发布 PresentationGraph），加一个确定性
 节点 `str06.stage4.compile`（ExecutionPlan／Guard／WriterBookIR／HookContext，
 `executor_content_limit=0` 结构性禁付）。

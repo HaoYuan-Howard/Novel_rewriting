@@ -118,7 +118,7 @@ F8c 起旧链读屏（`read/:o`、`global`、`stage4/:o`、`stage5/:o`、`stage7
   （屏、路由、端点、query key、mock 与 fixture）已随 F8b 一并删除；F8c 起旧链读屏与人工闸
   整族（approvals / workpack / reset）连同端点、query key、类型与 mock 全部退役，新链没有
   待办面也没有第二套编辑面。
-  现役判据（Guard M1–M6、章级机械验、命名残留、交付回执链）的结论由后端公开，
+  现役判据（Guard M1–M8、章级机械验、命名残留、交付回执链）的结论由后端公开，
   不因来自 CLI/Agent 就要求再补 HTTP 盖章。
 - 成书下载入口消费 `/api/str06/candidates/{candidate}/book`；文件存在不等于可交付。
   运行统计区分运行历时、模型活跃区间并集和尝试累计耗时；只有部分已知时展示小计与缺失分母。

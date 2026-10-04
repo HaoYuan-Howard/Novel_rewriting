@@ -178,7 +178,7 @@ conda run -n novel_refactor python -m pytest -n 0 --lf --lfnf=none -x
 `tests/test_str06_product_entry.py` 保留一条上传到交付的完整真实子进程链，覆盖
 真实代码身份、run_step、信标、`--check-only` 追跑与服务重启读回。其余场景的
 非关键节点经进程内真实 CLI 执行；associate 修订、正文 canary/续跑、
-design/bind/compile 跨进程回派、design 补丁采用及 compile 级联仍使用真实子进程。
+design 跨进程回派（含局部修订）、compile 级联、design 补丁采用仍使用真实子进程。
 封存丢失用例的准备改走进程内，丢失后的全部节点免费恢复仍逐节点使用真实 CLI 子进程。
 每例断言实际派发的进程窗口，原有故障、账务、交付字节和二次零新购断言保留；
 父子确定性测试身份仅注入普通场景，完整链继续标记 `real_code_version`。
@@ -220,7 +220,8 @@ golden set 的源目录见 `AGENTS.md::测试选择与批次验收`，按所用�
 问题及结论，未评项保持未验证。付费、正文外发与追加额度沿用根指南的授权边界。
 
 工具执行顺序如下。验收文件放在源根与生成根之外；工具拒绝覆盖已有冻结文件，修订时使用明确的新文件名。
-`profiles.json` 使用现役 `PipelineAgentProfiles` 形状，由本轮授权的 Commander / Executor 配置提供，
+`profiles.json` 使用现役 `PipelineAgentProfiles` 形状，由本轮授权的模型执行配置
+（legacy Executor profiles，Commander 条目已随角色退役不再产生）提供，
 不含密钥；示例的路径需要替换为实际独立目录。
 
 ```powershell

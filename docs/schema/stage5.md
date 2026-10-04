@@ -9,7 +9,7 @@ Stage5 在新链（STR-06，F8a 激活）有两个付费节点：`str06.stage5.b
 全过才算合法候选；确定性候选选择（硬检查全过优先，耗尽后按相对目标偏差最小、平局
 取较晚）。提交顺序＝原响应耐久 → 检查 → 候选 → 原子写正文 → 原子写章回执。恢复按
 已提交目标章集合装载（`committed_set_recovery`，选章见 `--body-chapters`），回执绑定
-当前 IR／前文／正文字节三方核对。Hook 只消费
+当前章包摘要（写手视图＋验证输入）与正文字节，不绑定全书 IR 与前文链。Hook 只消费
 HookContext（正式输入确定性重建），不读源 hook 文案。
 
 ## 现役产物
@@ -21,7 +21,7 @@ HookContext（正式输入确定性重建），不读源 hook 文案。
 | 路径 | 模型 | 生产节点 | 内容 |
 |---|---|---|---|
 | `stage5/body/ch{nn}.txt` | 正文（text） | `str06.stage5.body` | 逐章改名前正文（prose） |
-| `stage5/acceptance/body/ch{nn}.json` | `ChapterReceipt` | `str06.stage5.body` | 章级接受回执（绑定章序、全书 IR、实际前文、正文 hash 与请求身份） |
+| `stage5/acceptance/body/ch{nn}.json` | `ChapterReceipt` | `str06.stage5.body` | 章级接受回执（绑定章序、章包写手视图与验证输入摘要、正文 hash 与请求身份；Machine 层摘要仅审计，各章独立有效） |
 | `stage5/hook/hook.txt` | 正文（text） | `str06.stage5.hook` | Hook 成文（prose） |
 | `stage5/hook/receipt.json` | `HookReceipt` | `str06.stage5.hook` | Hook 回执（绑定 HookContext 身份、正文 hash 与请求身份） |
 
