@@ -47,7 +47,7 @@ blocked recovery 和诊断兼容，blocked action hash 本身不是恢复许可�
 `python -m novel.cli --help` 和目标子命令 `--help`。内部执行入口为
 `novel/orchestrator/run_step.py`；命名 scratch
 诊断在 `novel/orchestrator/preflight.py`。这些模块均可用 `python -m <模块名> --help` 查看参数。
-运行代码和 workpack 身份覆盖必要资源；当前 start/epoch 使用 `identity_version=3`（引擎
+运行代码和请求身份覆盖必要资源；当前 start/epoch 使用 `identity_version=3`（引擎
 `direct_llm` / `llm-executor/v1`），历史 ≤v2 epoch 只读原语义。
 旧身份只作历史证据读取，不能补新摘要重签；旧 owner 排空后才可开当前 epoch，不续旧供应商会话。
 

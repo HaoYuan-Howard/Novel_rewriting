@@ -54,41 +54,22 @@ from contracts.artifacts import (
 
 from contracts.schema.api import (
     ApprovalAction,
-    ApprovalBackfillResult,
     ApprovalDoc,
-    BatchTrimResolutionItem,
-    BatchTrimResolutionRequest,
-    Stage5ReviewerRewriteDirectiveInput,
-    Stage5ReviewerRewriteTarget,
-    Stage5ReviewerRewriteRequest,
-    DraftEditPreview,
-    DraftEditPreviewRequest,
-    DraftEditRequest,
     ErrorBody,
     InboxItem,
     InboxView,
     JobList,
     LogChunk,
     LogStreamEvent,
-    NameMapApproveRequest,
     NovelList,
     PreviewRequest,
-    Stage0EditRequest,
-    Stage0EditResult,
-    Stage0ApprovalRequest,
     Stage0Report,
     Stage0WarningView,
-    Stage0CandidateDecisionRequest,
-    Stage0CandidateRevisionView,
-    Stage0CandidateView,
     Stage0Segment,
     Stage0Segments,
     Stage1Segment,
     Stage1View,
-    Stage5ChapterSubject,
-    Stage5TrimWorkItem,
-    ResidualAdoptionRequest,
-    TrimResolutionRequest,
+    Stage5ChapterSubject, Stage5TrimSubject, Stage5TrimWorkItem,
     UploadResult,
 )
 from contracts.schema.base import Fp10, FrozenModel, Sha1, StrictModel
@@ -195,10 +176,10 @@ from contracts.schema.stage5 import (
 # ⚠ F8a：`contracts.schema.stage6` / `stage6_prepare` 两个模块的 import 与
 #   ARTIFACT_SPECS 挂载（八项）随 Stage6 整层退役删除（F6d 登记，F8c 删文件）。
 #   Hook 的契约形状由 `contracts/schema/hook.py`（HookContext/HookReceipt）承接。
-from contracts.schema.stage7 import (
-    BookTxt, CharacterPatch, ExtraSub, IdentityBaseline, NameDecision, NameMap,
-    NameMapEdit, NameMapResponse, Residual, StemBaseline,
-)
+# ⚠ 2026-10-04 清理批：`contracts.schema.stage7`（旧链 NameMap/成书族）与
+#   `agent_wire` 一并删除——其产物 `stage7/name_map.json` 已在
+#   RETIRED_ARTIFACT_PATHS 关闭式拒识，api 视图与终审包载体删除后零消费者。
+#   现役命名与成书契约在 `contracts/schema/naming.py`（NameMap v5）。
 
 # ── STR-06 新链契约模型（F8a 激活；F8c 分流至正式 stageN 模块后改 import）──
 from contracts.schema.source import (
@@ -475,18 +456,12 @@ __all__ = [
     'CheckKind', 'Remediation', 'FixRoute',
     'AccountingLine', 'StatusCounts', 'Status', 'Badge', 'finding', 'badge_of',
     # HTTP 响应（`_api.md`）——同样**不是产物**。它是前三份的视图，不产生新事实
-    'Stage0Segment', 'Stage0Segments', 'Stage0EditRequest', 'Stage0EditResult',
-    'Stage0ApprovalRequest', 'Stage0CandidateDecisionRequest', 'Stage0CandidateView',
-    'Stage0CandidateRevisionView',
+    'Stage0Segment', 'Stage0Segments',
     'Stage1Segment', 'Stage1View', 'UploadResult',
     'NovelList', 'JobList', 'LogChunk', 'LogStreamEvent', 'PreviewRequest', 'ErrorBody',
-    'ApprovalAction', 'ApprovalBackfillResult', 'ApprovalDoc',
-    'InboxItem', 'InboxView', 'TrimResolutionRequest', 'NameMapApproveRequest',
-    'BatchTrimResolutionItem', 'BatchTrimResolutionRequest',
-    'Stage5ReviewerRewriteDirectiveInput', 'Stage5ReviewerRewriteTarget', 'Stage5ReviewerRewriteRequest',
-    'DraftEditRequest', 'DraftEditPreviewRequest', 'DraftEditPreview',
-    'Stage5ChapterSubject', 'Stage5TrimWorkItem',
-    'ResidualAdoptionRequest',
+    'ApprovalAction', 'ApprovalDoc',
+    'InboxItem', 'InboxView',
+    'Stage5ChapterSubject', 'Stage5TrimSubject', 'Stage5TrimWorkItem',
     # 七个现役层（Stage3 已退役）
     'Stage0Snapshot', 'Stage0Source', 'Stage0Transform', 'Stage0Admission',
     'RemovedSegment', 'RequestedRemoval', 'Stage0Warning',
@@ -533,8 +508,6 @@ __all__ = [
     'Review', 'ReviewChapter', 'JudgedDraft', 'DraftConsumed',
     'Hook', 'Candidate', 'ApprovedHook', 'HookApprovalResolution', 'Mech',
     'HookEdit',
-    'NameMap', 'NameDecision', 'ExtraSub', 'Residual', 'StemBaseline', 'BookTxt',
-    'IdentityBaseline', 'NameMapEdit', 'CharacterPatch', 'NameMapResponse',
     # 路由表
     'ArtifactSpec', 'ArtifactVersionError', 'DecodedArtifact',
     'ARTIFACT_SPECS', 'ARTIFACTS', 'ARTIFACT_ROUTES',

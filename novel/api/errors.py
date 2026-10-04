@@ -24,21 +24,16 @@ from __future__ import annotations
 from novel.errors import (
     AgentModelIdentityRefused,
     AgentProfileSettingsConflict,
-    ApprovalFrozen,
     AccountingKeyUnregistered,
     ApprovalRequired,
     ArtifactUnreadable,
-    ArtifactSubmittedReviewPending,
-    BlockingFindingsUnresolved,
     BookTrashFailed,
     ByteFormRefused,
     DeliveryIncomplete,
-    GateBlocked,
     HookCopyMissing,
     HumanEditProtected,
     NovelError,
     OutputRootUnavailable,
-    ParagraphPlanInfeasible,
     PathRefused,
     PartitionChapterMismatch,
     PartitionInputMismatch,
@@ -82,7 +77,6 @@ STATUS: dict[type[NovelError], int] = {
     # 运行预算或提交恢复需要用户处理当前状态，不能变成服务器错误或新付费调用。
     WorkUnitRefused: 409,
     WorkUnitBudgetExhausted: 409,
-    ArtifactSubmittedReviewPending: 409,
     #: ⚠ **不是 404**：那一份在盘上，只是不再是当前根上那一版 ⇒ 与「还没跑」是两条恢复路。
     #: 409 与 `ArtifactUnreadable` 同码同因：产物是**数据**，不是我们的代码写错了。
     UpstreamStale: 409,
@@ -90,14 +84,6 @@ STATUS: dict[type[NovelError], int] = {
     #: 「证明不了它是当前那一份」。同为 409（产物是**数据**），但界面上给的下一步不同：
     #: 前者指得出重建哪一条边，后者只能整份从 producer 重建。
     UpstreamUnproven: 409,
-    GateBlocked: 409,
-    #: 段落 slot 计划在任何 wire 前已不可能完成（场景数超过合法段数上限）：
-    #: 它是「计划与参数冲突」，属流程走不下去（409），恢复路在 Stage4 计划侧。
-    ParagraphPlanInfeasible: 409,
-    #: 正式稿在 live 路径上、但带着没消的 hard ⇒ 下一步被拦住。**与 `GateBlocked` 同码
-    #: 不同因**：那条指得出被拦下的稿在哪（`invalid_path`），这条盘上没有 `.INVALID`，
-    #: 给的是 `rules`——逐条修判据命中，不是提升一份废稿。
-    BlockingFindingsUnresolved: 409,
     ApprovalRequired: 409,
     #: 上游都在，但内容还没齐（缺章 / 文案未定稿）⇒ 是**冲突**不是 404：
     #: 那本书在，只是这一刻不可交付。`R-10.14` 明写 txt 里没有地方写风险抬头横幅。
@@ -123,9 +109,6 @@ STATUS: dict[type[NovelError], int] = {
     NetworkSettingsConflict: 409,
     #: 删除是维护动作；目标忙、确认面变化或移动失败都不得半删后伪装成功。
     BookTrashFailed: 409,
-    #: 删除进行中，这本书的审批写入不落盘。与 `JobConflict` 同码同因：
-    #: 两个人同时点了「删除」与「批准」，是**流程**说这一步现在不该发生。
-    ApprovalFrozen: 409,
     #: agent 并发闸满了（`agent.MAX_CONCURRENT`）。**与 `JobConflict` 同码不同因**：
     #: 那条是「这本书现在不该开始」，这条是「同时烧的钱到上限了，换个时间来」。
     #: ⚠ 单本入口才会看到它；批量入口 `POST /api/agent/runs/batch` 把它接住改成排队。
@@ -198,10 +181,6 @@ UNREACHABLE_OVER_HTTP: dict[str, str] = {
     'ResponseRepairRequired': '结构化响应在下一采之前暂停，等待受托 agent 修复或放弃。'
                               '它只由付费节点的 LLM 子进程抛出；父进程只看到终态退出码，'
                               '零成本 response-repair sidecar 只封存决定、不抛这类暂停',
-    'ResponseRepairBatchRequired': 'Stage2 并发波次在下一采前汇成一份人工 workpack。'
-                                   '它只在付费 CLI 子进程内抛出，HTTP 父进程只看到终态退出码',
-    'AgentDeliveryUnavailable': 'Agent CLI 没有形成可采纳回答；它只由付费节点子进程抛出。'
-                                '父进程只看到退出码，并另验 Stage2 的同 run 恢复凭据',
     'AgentConfigurationError': (
         '结构化 schema / stdin 配置在发起模型调用前就不成立（现役仍由 '
         '`json_schema_util` / `structured_stdin` 使用）。它只在付费 LLM 子进程内抛出，'

@@ -30,15 +30,12 @@ from contracts.invariants import (
 from contracts.rules import REGISTRY
 from contracts.schema.api import (
     AgentCapabilitiesResponse,
-    AgentRunRequest, AgentRunList, ApprovalDoc, BlueprintReadingWorkpack,
-    CharacterRegistryView, DraftAlignView, DraftView, ErrorBody, GlobalView, NovelOverview,
-    JobList, LogChunk, LogStreamEvent, NovelList, PreviewRequest, ReadingView,
+    AgentRunRequest, AgentRunList, ApprovalDoc, ErrorBody, NovelOverview,
+    JobList, LogChunk, LogStreamEvent, NovelList, PreviewRequest,
     LegacyModelCapability, LegacyProviderCapability, LegacyThinkingCapability,
     RetentionApplyRequest, RetentionPlanView, RetentionPolicyRequest,
-    ReviewChapterView, ReviewView,
-    Stage0EditRequest, Stage0EditResult, Stage0Segment, Stage0Segments,
+    Stage0Segment, Stage0Segments,
     Stage1Segment, Stage1View,
-    Stage4View, Stage5View, Stage7View,
     TrashRestoreApplyRequest, TrashRestorePlanView, UploadResult,
 )
 from contracts.schema.plot import SourceContext
@@ -48,7 +45,6 @@ from contracts.schema.orchestration import (
 )
 from contracts.schema.report import CheckReport
 from contracts.schema.run_metrics import RunMetricsView
-from contracts.schema.stage5 import ChapterSegment
 
 
 ROOT = Path(__file__).parents[1]
@@ -290,49 +286,6 @@ def test_reading_source_presence_distinguishes_unknown_from_explicit_empty():
         SourceContext(**base, present_char_ids=['char_001', 'char_001'])
 
 
-def test_anchor_coverage_warning_is_a_server_decision():
-    low = DraftAlignView(
-        beats=5, anchors=2, rows=2, inversions=0, coverage=0.4,
-        coverage_threshold=0.6, coverage_state='low', note='对应关系，不是判定')
-    assert low.coverage_state == 'low'
-    with pytest.raises(ValidationError, match='coverage_state'):
-        DraftAlignView(
-            beats=5, anchors=2, rows=2, inversions=0, coverage=0.4,
-            coverage_threshold=0.6, coverage_state='adequate', note='错误地说安全')
-
-
-def test_stage5_views_keep_draft_segments_as_the_only_text_carrier():
-    segments = [
-        ChapterSegment(slot='s01', text='前段。'),
-        ChapterSegment(slot='s02', text='后段。'),
-    ]
-    provenance = {
-        'code': 'test', 'root_clean_sha1': '0' * 40, 'inputs': {},
-        'origin': 'human', 'round': 1, 'revision_of': None,
-        'review': None, 'fixes': None,
-    }
-    draft = dict(
-        chars=8, budget_chars=8,
-        overlap_excl_verbatim=0.0, segments=segments,
-        align=None, align_rows=[], freshness='fresh', reason='match',
-        _provenance=provenance,
-    )
-    view = DraftView.model_validate(draft)
-    assert view.segments == segments
-    assert set(view.model_dump(by_alias=True)) == {
-        'chars', 'budget_chars', 'overlap_excl_verbatim', 'segments',
-        'align', 'align_rows', 'freshness', 'reason', '_provenance',
-    }
-    with pytest.raises(ValidationError, match='Extra inputs'):
-        DraftView.model_validate({**draft, 'text': '重复的整章正文。'})
-
-    review = ReviewChapterView(output_ordinal=1, findings=[])
-    assert set(review.model_dump()) == {'output_ordinal', 'findings'}
-    with pytest.raises(ValidationError, match='Extra inputs'):
-        ReviewChapterView.model_validate({
-            'output_ordinal': 1, 'findings': [], 'segments': segments})
-
-
 def test_the_api_models_never_spell_out_a_value_domain():
     """⭐ `contracts/schema/api.py` 里不许出现 `Literal['a', 'b']` 这种**字面量**取值面。
 
@@ -371,8 +324,6 @@ def test_the_api_models_never_carry_a_verdict():
         NovelList, JobList, LogChunk, LogStreamEvent, PreviewRequest, ErrorBody,
         AgentCapabilitiesResponse,
         Stage0Segment, Stage0Segments, Stage1Segment, Stage1View, UploadResult,
-        GlobalView, Stage7View,
-        ReadingView, Stage4View, Stage5View, ReviewView,
     ):
         leaked = verdicts & set(model.model_fields)
         assert not leaked, f'{model.__name__} 带着判定字段 {leaked}——那是第二个判官'
@@ -468,74 +419,8 @@ def test_every_response_model_forbids_extra_fields():
     for model in (
         NovelList, JobList, LogChunk, LogStreamEvent, PreviewRequest, ErrorBody,
         AgentCapabilitiesResponse,
-        Stage0Segment, Stage0Segments, Stage0EditRequest, Stage0EditResult,
+        Stage0Segment, Stage0Segments,
         Stage1Segment, Stage1View,
-        UploadResult, GlobalView, Stage7View,
-        ReadingView, Stage4View, Stage5View, ReviewView,
+        UploadResult,
     ):
         assert model.model_config['extra'] == 'forbid', model.__name__
-
-
-def test_a_name_ref_that_failed_to_resolve_keeps_the_raw_id():
-    """view 不编名字：解析不动时 `display == raw`，且 `resolved=False` 看得见。"""
-    from contracts.schema.api import NameRef
-    ref = NameRef(raw='char_099', display='char_099', resolved=False)
-    assert ref.display == ref.raw
-    with pytest.raises(ValidationError):
-        NameRef(raw='', display='x', resolved=True)
-
-
-def test_stage4_review_subject_distinguishes_ready_unavailable_and_reference():
-    """参考基线不许绑；正式计划依赖不足时说明原因，不能伪造审阅身份。
-
-    用 ``model_construct`` 只运行待测后置条件，不为这条守卫复制整份读屏夹具。
-    """
-    common = {
-        'ordinal': 1,
-        'chapters': [1],
-        'plan_provenance': None,
-        'writer_target': None,
-        'ctx_chapter': None,
-    }
-    for identity, subject, reason in (
-        (True, None, '仅参考基线'), (False, 'a' * 64, None),
-        (False, None, '已保存计划但所需知识关联过期'),
-    ):
-        view = Stage4View.model_construct(
-            **common,
-            identity_plan=identity,
-            structure_subject_sha256=subject,
-            structure_subject_unavailable_reason=reason,
-        )
-        Stage4View._postconditions(view)
-
-    for identity, subject, reason in (
-        (True, 'a' * 64, None), (False, None, None),
-        (False, 'a' * 64, '不能与可用身份并存'),
-    ):
-        view = Stage4View.model_construct(
-            **common,
-            identity_plan=identity,
-            structure_subject_sha256=subject,
-            structure_subject_unavailable_reason=reason,
-        )
-        with pytest.raises(ValueError, match='审阅身份|审阅主体'):
-            Stage4View._postconditions(view)
-
-
-def test_stage7_chapter_block_is_all_or_nothing():
-    """`ordinal` 与 `rows` 同进同出——「问了 :o」与「书级」不许混出一个半吊子。
-
-    ⚠ 用 `model_construct` 骗过必填字段、只让待测的那条后置条件跑——
-    这里测的是校验器本身，不是造一份全须全尾的产物。
-    """
-    base = Stage7View.model_construct()
-    ok = dict(base.__dict__, chapters=[1, 2], ordinal=None, rows=None)
-    Stage7View._chapter_block_is_all_or_nothing(Stage7View.model_construct(**ok))
-    bad = dict(base.__dict__, chapters=[1, 2], ordinal=1, rows=None)
-    with pytest.raises(ValueError):
-        Stage7View._chapter_block_is_all_or_nothing(Stage7View.model_construct(**bad))
-    out_of_range = dict(base.__dict__, chapters=[1, 2], ordinal=9, rows=[])
-    with pytest.raises(ValueError):
-        Stage7View._chapter_block_is_all_or_nothing(
-            Stage7View.model_construct(**out_of_range))

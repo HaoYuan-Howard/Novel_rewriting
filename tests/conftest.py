@@ -51,7 +51,6 @@ _SERIAL_TEST_MODULES = frozenset({
     'tests/test_appendlog.py',
     'tests/test_commander_admission.py',
     'tests/test_final_approval_workpacks.py',
-    'tests/test_human_actions.py',
     'tests/test_llm.py',
     'tests/test_model_slots.py',
     'tests/test_orchestrator_jobs.py',

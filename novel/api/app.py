@@ -33,7 +33,7 @@ from fastapi.staticfiles import StaticFiles
 from contracts.schema.api import ErrorBody
 from novel.api.errors import CSRF_REFUSED, status_of
 from novel.api.routes import (
-    agent, agent_capabilities, checks, edits, enums, ingest, jobs,
+    agent, agent_capabilities, checks, enums, ingest, jobs,
     maintenance, novels, queues, run, settings, str06,
 )
 from novel.errors import NovelError
@@ -239,7 +239,7 @@ def create_app(base: str | os.PathLike[str],
 
     for router in (
         enums.router, novels.router, checks.router, jobs.router, queues.router,
-        ingest.router, edits.router,
+        ingest.router,
         run.router, agent_capabilities.router, agent.router, settings.router,
         maintenance.router, str06.router,
     ):

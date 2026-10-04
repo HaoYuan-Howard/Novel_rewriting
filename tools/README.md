@@ -24,6 +24,9 @@
 | `derive_schema.py` | 从盘上产物反推观察 schema（新链坐标；观察 ≠ 契约） | `docs/schema/_README.md` |
 | `probe_nonbody_word.py` | NONBODY_KINDS 增词前的门槛探针 | `docs/BACKEND_CONTRACT.md` |
 | `canary_chapters.py` | B6-A canary 选章（只读 sealed WriterBookIR；逐章计分＋三章＋下一条命令） | `tests/test_canary_chapters.py`、`docs/schema/str06.md` |
+| `ab_compare.py` | A/B 两位匿名评审对照评分 runner | `tests/test_ab_compare.py` |
+| `repair_rounds.py` | 修订轮回派账/收敛读数 | `tests/test_repair_rounds.py`、`docs/OPERATIONS.md` |
+| `str06_review.py` | 新链候选根免费审阅（request_preview/views/obligations） | `docs/OPERATIONS.md`、`docs/schema/str06.md`、`PLAN.md` |
 
 ### 已退役的剧情链导出工具（2026-09-26 清理删除）
 
@@ -50,4 +53,5 @@ v3 生产链已退役）。另删 `verify_agent_e2e.py` 登记行——该工具
 stage2_context_probe.py（批 0 Stage2 上下文/架构探针）随质量改进批次二 ·
 批 3 取消而删除：原登记的删除条件是「批 3 的 ch03–ch05 单臂重复采样完成」，批 3
 取消后该采样不再发生，工具及其契约测试同批删除；探针产物与证据留在
-outputs/str06_stage2_probe_20260926/ 只读保留，裁决见 `docs/DECISIONS.md` 批 0 一行。
+outputs/str06_stage2_probe_20260926/（该只读根后经运维清理已不在当前盘面；裁决见
+`docs/DECISIONS.md` 批 0 一行，证据缺失按「未查/不可用」报告，不补猜）。

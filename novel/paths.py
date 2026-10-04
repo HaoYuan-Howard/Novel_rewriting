@@ -432,10 +432,11 @@ def edit_rel(novel_dir: str | os.PathLike[str], edit_path: str | None,
     在管它的形状，也记不进来源账。`..` 穿越同理——`resolve()` 先把它算平，
     算平之后不在书目录里就一样被拦。
 
-    ⚠⚠ **`stage5.write` 与 `stage0.edit` 刻意不走这里。** 它们的路径语义是「任意路径」，
-    而 `novel/api/routes/edits.py` **依赖**这一点：服务进程把书目录**之外**的
-    `<base>/_service/edits/` 绝对路径喂给 `stage5.write --apply-edit`
-    （`R-11.3` 要求服务进程不写产物盘）。把它们并进来会打断那条现役 HTTP 改稿路。
+    ⚠⚠ **`stage5.write` 与 `stage0.edit` 刻意不走这里。** 它们的路径语义是「任意路径」：
+    历史上服务进程把书目录**之外**的 `<base>/_service/edits/` 绝对路径喂给
+    `stage5.write --apply-edit`（`R-11.3` 要求服务进程不写产物盘）。该 HTTP 改稿
+    路已随旧链人工写回面退役（F8b），但「这一族刻意不收口」的历史边界写在这里，
+    防止后人把 `--apply-edit` 的任意路径语义误收进本函数再当 bug 修。
     """
     if not edit_path:
         return default_rel
@@ -451,36 +452,6 @@ def edit_rel(novel_dir: str | os.PathLike[str], edit_path: str | None,
             f'编辑文件的**形状是契约**（`ARTIFACTS` 里登记着 {default_rel}）——'
             f'放在别处就没有任何东西在管它，也记不进来源账。'
             f'⚠ 相对路径按**书目录**解释，不按当前工作目录') from None
-
-
-def characters_edit_input(novel_dir: str | os.PathLike[str], supplied: str | None) -> Path:
-    """人物订正只接受本书或本 SID 服务输入目录；解析后的路径仍须留在授权根。"""
-    from contracts.artifacts import STAGE2_CHARACTERS_EDIT
-    book = Path(novel_dir).resolve()
-    candidate = Path(supplied) if supplied else Path(STAGE2_CHARACTERS_EDIT)
-    target = (candidate if candidate.is_absolute() else book / candidate).resolve()
-    sid = derive_source_meta(book.name)[0]
-    roots = (book, (service_dir(book.parent) / 'edits' / sid).resolve())
-    if not any(target.is_relative_to(root) for root in roots):
-        raise PathRefused('人物编辑输入必须在当前书目录或当前 SID 的服务编辑目录内')
-    return target
-
-
-def analyze_draft_edit_input(novel_dir: str | os.PathLike[str], supplied: str | None) -> Path:
-    """免费 owner 草稿输入与人物 typed 编辑保持相同的本书/SID 路径边界。"""
-    from contracts.artifacts import STAGE2_ANALYZE_OWNER_DRAFT_EDIT
-    return characters_edit_input(novel_dir, supplied or STAGE2_ANALYZE_OWNER_DRAFT_EDIT)
-
-
-def analyze_draft_repair_rel(owner: str) -> str:
-    from contracts.artifacts import (
-        STAGE2_ANALYZE_CHARACTERS_DRAFT_REPAIR, STAGE2_ANALYZE_GLOBAL_DRAFT_REPAIR,
-    )
-    if owner == 'stage2.characters':
-        return STAGE2_ANALYZE_CHARACTERS_DRAFT_REPAIR
-    if owner == 'stage2.global':
-        return STAGE2_ANALYZE_GLOBAL_DRAFT_REPAIR
-    raise ValueError('只有 Characters/Global 拥有独立 Analyze 草稿修复')
 
 
 def invalid_of(rel: str) -> str:
@@ -515,8 +486,8 @@ def stem_of(rel: str) -> str:
 def rounds_dir_of(rel: str) -> str:
     """`stage5/ch01.json` → `stage5/_rounds`（**与产物同目录下的 `_rounds/`**）。
 
-    现役形态是：`stage5/_rounds/ch01.r1.json` · `stage6/_rounds/hook.r1.json` ·
-    `stage5/_rounds/review_4.*.json`。
+    现役形态是：`stage5/_rounds/ch01.r1.json` ·
+    `stage5/_rounds/review_4.*.json`（review_4 为旧链历史例）。
     """
     return os.path.dirname(check_rel_deep(rel)).replace('\\', '/') + '/' + ROUNDS_DIRNAME
 
@@ -760,20 +731,6 @@ def scratch_session_dir(
     """`<base>/_service/scratch/<sid>/<session>/`；不摸盘。"""
     return (scratch_dir(base) / check_sid(sid)
             / _service_segment(session_id, label='scratch session id'))
-
-
-def commander_session_pointer_path(
-        base: str | os.PathLike[str], sid: str, session_run_id: str,
-) -> Path:
-    """`<base>/_service/runs/<sid>/sessions/<session_run_id>.json`；不摸盘。
-
-    历史 Commander 首个协议事件到达时写入的 provider session 指针；一席一份，
-    同席 resume 原地覆盖。Commander 退役（2026-09-15）后不再有新写入；本
-    路径只读保留，供存量书历史会话指针解码。它不是产物，不进来源账。
-    """
-    return (service_runs_dir(base) / check_sid(sid) / 'sessions'
-            / (_service_segment(session_run_id, label='commander session id')
-               + '.json'))
 
 
 def service_book_runs_dir(novel_dir: str | os.PathLike[str]) -> Path:
@@ -1263,106 +1220,6 @@ def stage5_book_commit_lock_path(
     """Stage5 CLI writer 与 API closure 共用的 ``_service`` 书锁。"""
     root = Path(os.fspath(novel_dir)).resolve()
     return service_dir(root.parent) / 'stage5_writer_locks' / root.name / 'book'
-
-
-def stage6_semantic_run_path(
-        novel_dir: str | os.PathLike[str], run_id: str,
-) -> Path:
-    """Stage6 semantic 的新 service run 空间。"""
-    from novel.run_identity import check_run_id
-
-    return (_service_stage_runs_dir(novel_dir, 'stage6')
-            / check_run_id(run_id) / 'semantic')
-
-
-def legacy_stage6_semantic_run_path(
-        novel_dir: str | os.PathLike[str], run_id: str,
-) -> Path:
-    from novel.run_identity import check_run_id
-
-    return (_legacy_stage_runs_dir(novel_dir, STAGE6_RUNS_DIRNAME)
-            / check_run_id(run_id) / 'semantic')
-
-
-def stage6_prepare_run_path(novel_dir: str | os.PathLike[str], run_id: str) -> Path:
-    """Prepare 独占的 durable run；不复用 Hook 或 semantic 会话。"""
-    from novel.run_identity import check_run_id
-    return _service_stage_runs_dir(novel_dir, 'stage6') / check_run_id(run_id) / 'prepare'
-
-
-def stage6_prepare_commit_lock_path(novel_dir: str | os.PathLike[str]) -> Path:
-    return stage6_commit_lock_path(novel_dir).with_name('prepare.commit.lock')
-
-
-def stage6_hook_run_path(
-        novel_dir: str | os.PathLike[str], run_id: str,
-) -> Path:
-    """Stage6 hook 的新 service run 空间；不与 semantic 共 session。"""
-    from novel.run_identity import check_run_id
-
-    return (_service_stage_runs_dir(novel_dir, 'stage6')
-            / check_run_id(run_id) / 'hook')
-
-
-def legacy_stage6_hook_run_path(
-        novel_dir: str | os.PathLike[str], run_id: str,
-) -> Path:
-    from novel.run_identity import check_run_id
-
-    return (_legacy_stage_runs_dir(novel_dir, STAGE6_RUNS_DIRNAME)
-            / check_run_id(run_id) / 'hook')
-
-
-def stage6_hook_checkpoint_dir(
-        novel_dir: str | os.PathLike[str], run_id: str,
-) -> Path:
-    """Stage6 hook 完整 replacement 的 append-only checkpoint 目录。"""
-    return stage6_hook_run_path(novel_dir, run_id) / 'checkpoints'
-
-
-def legacy_stage6_hook_checkpoint_dir(
-        novel_dir: str | os.PathLike[str], run_id: str,
-) -> Path:
-    return legacy_stage6_hook_run_path(novel_dir, run_id) / 'checkpoints'
-
-
-def stage6_semantic_checkpoint_path(
-        novel_dir: str | os.PathLike[str], run_id: str, role: str,
-) -> Path:
-    """A/B 判官各一份不可变 checkpoint；角色不是自由路径片段。"""
-    if role not in ('A', 'B'):
-        raise PathRefused(f'Stage6 semantic judge role 必须是 A/B，实得 {role!r}')
-    return (stage6_semantic_run_path(novel_dir, run_id) / 'checkpoints'
-            / f'judge-{role}.json')
-
-
-def legacy_stage6_semantic_checkpoint_path(
-        novel_dir: str | os.PathLike[str], run_id: str, role: str,
-) -> Path:
-    current = stage6_semantic_checkpoint_path(novel_dir, run_id, role)
-    return (legacy_stage6_semantic_run_path(novel_dir, run_id)
-            / current.relative_to(stage6_semantic_run_path(novel_dir, run_id)))
-
-
-def stage6_commit_lock_path(
-        novel_dir: str | os.PathLike[str],
-) -> Path:
-    """同一本书 Stage6 hook 写盘与 semantic 选 seq 共用的所有权锁目标。"""
-    return _service_stage_runs_dir(novel_dir, 'stage6') / '.commit-ownership'
-
-
-def stage6_semantic_commit_lock_path(
-        novel_dir: str | os.PathLike[str],
-) -> Path:
-    """兼容既有 semantic 调用名；权威路径由 ``stage6_commit_lock_path`` 构造。"""
-    return stage6_commit_lock_path(novel_dir)
-
-
-def stage6_hook_commit_lock_path(
-        novel_dir: str | os.PathLike[str],
-) -> Path:
-    """Stage6 hook 提交使用与 semantic 相同的全书所有权锁。"""
-    return stage6_commit_lock_path(novel_dir)
 
 
 def stage7_rename_run_path(

@@ -90,27 +90,9 @@ def test_marker_strip_rules_are_valid_and_idempotent():
     assert core('19.后记') == '后记'
 
 
-def test_plan_budget_band_is_a_single_ordered_interval():
-    assert len(inv.PLAN_BUDGET_BAND) == 2
-    assert 0 < inv.PLAN_BUDGET_BAND[0] <= inv.PLAN_BUDGET_BAND[1]
-
-
 def test_retired_hinge_domains_are_not_current_contracts():
     assert not any(hasattr(inv, name) for name in (
         'HINGE_GROUPS', 'HINGE_KINDS', 'HINGE_LABEL', 'HINGE_LABEL_PARTS'))
-
-
-def test_invent_guarded_covers_every_forbidden_item():
-    assert set(inv.INVENT_GUARDED) == set(inv.INVENT_FORBID)
-    assert set(inv.INVENT_GUARDED.values()) <= {'full', 'partial', 'none'}
-
-
-def test_invent_guard_coverage_is_explicit():
-    gap = [key for key, coverage in inv.INVENT_GUARDED.items() if coverage != 'full']
-    assert len(gap) == 6, f'当前无完整探针的是 {gap}'
-    assert [key for key, coverage in inv.INVENT_GUARDED.items() if coverage == 'none'] == [
-        '新道具', '新因果', '新地点', '新时间跳跃',
-    ]
 
 
 def test_retired_fact_domains_cannot_reenter_the_current_contract():

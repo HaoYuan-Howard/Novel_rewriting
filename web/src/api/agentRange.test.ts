@@ -12,13 +12,13 @@ describe('受管运行范围的 HTTP 契约', () => {
       sid: '42', authorized: true, egress_authorized: true, profiles: READY_PROFILES,
       continuation: { run_id: 'old-run', source_sha256: '1'.repeat(64) },
     }
-    const response = { argv: ['commander'], prompt: '范围预览', authorized: true,
+    const response = { argv: ['run'], prompt: '范围预览', authorized: true,
       egress_authorized: true, profiles: READY_PROFILES, continuation: request.continuation,
-      pause_before_node: 'stage2.blueprint' }
+      pause_before_node: 'str06.stage5.hook' }
     const send = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(
       JSON.stringify(response), { status: 200, headers: { 'Content-Type': 'application/json' } }))
     const inherited = await realApi.previewAgentRun(request)
-    expect(inherited.pause_before_node).toBe('stage2.blueprint')
+    expect(inherited.pause_before_node).toBe('str06.stage5.hook')
     expect(JSON.parse(send.mock.calls[0]![1]!.body as string)).not.toHaveProperty('pause_before_node')
     const expanded = { ...request, pause_before_node: null }
     await realApi.previewAgentRun(expanded)

@@ -32,7 +32,6 @@ from novel.errors import (
     QueueConflict, UpstreamMissing,
 )
 from novel import run_identity
-from novel.orchestrator import mechanical_admission as mechanical_admission
 from novel.orchestrator import admission
 from novel.orchestrator import queue as Q
 from novel.orchestrator import jobs as J
@@ -370,21 +369,16 @@ def test_new_chain_nodes_do_not_route_through_the_retired_admission_roster(
         Q.st, 'resume_verdict',
         lambda _overview, node: (Q.st.RESUME_RUN, f'{node} 产物缺失'))
 
-    checked: list[str] = []
-
-    def _make(name):
-        def _not_ready(*_args):
-            checked.append(name)
-            return mechanical_admission.AdmissionCheck(name, ok=False)
-        return _not_ready
-
-    for name in ('blueprint_generation_ready', 'stage4_ready', 'stage4_plan_ready'):
-        monkeypatch.setattr(mechanical_admission, name, _make(name))
+    # 2026-10-04 清理批：退役准入名册模块（mechanical_admission.py）已物理删除。
+    # 守卫方向从「不被查询」升级为「不得复活」；复活即 import 失败/属性回来。
+    import importlib.util
+    assert importlib.util.find_spec(
+        'novel.orchestrator.mechanical_admission') is None, (
+        '退役准入名册模块回来了——新链准入由 queue/state 承担，不得再有第二个名册')
 
     todo, blocked = Q.plan_book(
         queue_base, 'book-a', until_stage='stage4', follow_check=False)
 
-    assert checked == [], '新链节点不得查询退役准入名册'
     assert blocked == []
     assert [item.node for item in todo] == nodes
     assert all(item.waiting_on is None for item in todo)

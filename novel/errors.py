@@ -76,25 +76,11 @@ class RetiredExecutorBackend(TerminalState):
     """
 
 
-class ArtifactSubmittedReviewPending(NovelError):
-    """正式候选已落盘，接受尚未提交；应重放耐久决定，不重新调用模型。"""
-
-
-
-class ParagraphPlanInfeasible(TerminalState):
-    """逐 slot 段落计划在任何 wire 之前已不可能完成。
-
-    Stage5 的段落计划按「每个场景至少一段」分配章节目标段数；当场景
-    （slot）数本身就超过合法段数上限时，把任务发出去只会买到必然的
-    `paragraph_budget_missed` 拒稿。⇒ 在构造下发面时显式终态，而不是
-    花一轮钱确认一个代码早就知道的死局。
-    """
-
 class ResponseRepairRequired(TerminalState):
     """一份已付费结构化响应可受托修复；原节点停在下一采之前。
 
-    它不是 `LlmFailed`：采样链尚未耗尽，也不是 `GateBlocked`：没有正式产物或
-    `.INVALID`。固定候选面提交/放弃后，重跑**同一原节点**才能继续状态机。
+    它不是 `LlmFailed`：采样链尚未耗尽；也没有正式产物或 `.INVALID` 落盘。
+    固定候选面提交/放弃后，重跑**同一原节点**才能继续状态机。
     """
 
     def __init__(self, message: str, *, attempt_id: str, candidate_path: str,
@@ -105,28 +91,8 @@ class ResponseRepairRequired(TerminalState):
         self.original_path = original_path
 
 
-class ResponseRepairBatchRequired(TerminalState):
-    """同一 Stage2 并发波次已收齐为一份不可变 workpack，等待一次人工决定。"""
-
-    def __init__(self, message: str, *, run_id: str, manifest_path: str,
-                 attempts: tuple[str, ...], hint: str) -> None:
-        super().__init__(message, hint=hint)
-        self.run_id = run_id
-        self.manifest_path = manifest_path
-        self.attempts = attempts
-
-
 class BookTrashFailed(TerminalState):
     """项目无法安全移入回收站；正式书目录保持原位或仍可从回收站恢复。"""
-
-
-class ApprovalFrozen(TerminalState):
-    """这本书正在被移入回收站，审批写入不许再落盘。
-
-    ⚠ 与 `JobConflict` 同一族「流程说这一步现在不该发生」：删除与审批是两个人
-    （或两个标签页）同时点的按钮，不是 bug。落点在
-    `novel/orchestrator/approvals.py::frozen_for_trash`，那里写着它防的是哪条竞态。
-    """
 
 
 class ContextBudgetRefused(TerminalState):
@@ -218,56 +184,6 @@ class ArtifactUnreadable(TerminalState):
     ⚠ **不许兜底成「当它不存在」**。半截 JSON 被读成「上游还没产出」而继续等，
     会把一次**成功的付费跑**说成失败——原型并发落盘时踩过，修法是原子写（`store.write`）。
     """
-
-
-class GateBlocked(TerminalState):
-    """落盘闸门拦下了那一份：**没有覆盖已有产物**，问题稿已存 `.INVALID`。
-
-    ⚠ 它携带 `invalid_path` 是**刻意的**：这条终态的全部价值在于
-    「稿子没有丢，也没有再花钱」——报告必须说得出那份稿在哪，
-    否则人会以为要重跑（那是一次真金白银）。0 成本提升路见 `store.promote_invalid`。
-
-    ⚠ **它是一个「状态」而不只是一个「事件」**：抛它的既可以是刚拦下的那个产地，
-    也可以是**下游**——盘上还躺着一份没裁决的 `.INVALID`，于是定稿 / 组装 / 批准
-    都不该开工。两种情形的恢复路逐字相同（`--revalidate` 提升或 `--apply-edit` 改），
-    ⇒ **不给它分子类**：没有任何消费方会在两者之间分叉，而为了区分「谁抛的」分子类，
-    正是 `PathRefused` 那一格论证过的错解法。
-
-    ⚠ `invalid_path` 指的是**那份被拦下的稿在哪**：一份时是文件，
-    一批时（stage5 逐章）是装着它们的那个目录。它不保证是单个文件路径。
-
-    ⚠ 「有 `.INVALID` 挡着」与「正式稿本身带着没消的 hard」是两回事，
-    后者盘上没有 `.INVALID` 可指 ⇒ 走 `BlockingFindingsUnresolved`。
-    """
-
-    def __init__(self, message: str, *, invalid_path: str,
-                 hint: str | None = None) -> None:
-        super().__init__(message, hint=hint)
-        self.invalid_path = invalid_path
-
-
-class BlockingFindingsUnresolved(TerminalState):
-    """盘上那份是**正式稿**，但它带着还没消的阻断级（`hard`）判定。
-
-    ⚠⚠ **与 `GateBlocked` 分开，因为盘上没有 `.INVALID` 可指。** `GateBlocked` 的全部
-    价值在那个 `invalid_path`（「稿子没丢，也没有再花钱」）；这一条的正式稿好好地在
-    live 路径上，被拦住的是**下一步**（定稿 / 组装 / 交付）。硬拿 `GateBlocked` 抛它，
-    要么编一个不存在的路径，要么漏掉那个必填参数——后者的实测下场是 `TypeError`，
-    退出码 **70**「崩了，结论未知」，而它本来是一条退出码 2 的预期内终态。
-
-    ⚠ `rules` **必填且 typed**：那份 rule key 列表就是 `novel/report/builder.py::
-    remediation_of` 的路由输入与待办清单的条目。写成 `f'还有 {hard} 条'` 等于让消费方
-    去 parse 一个 list 的 repr——`Q-6`：措辞是会改的，措辞不是契约。
-
-    ⚠ 恢复路是**逐条修判据命中**（`--apply-edit` 改一行 / `--recheck` 按当前判据重判），
-    不是提升（那是 `GateBlocked`）、不是盖章（那是 `ApprovalRequired`）、
-    也不是重建上游（那是 `UpstreamStale` / `UpstreamUnproven`）。
-    """
-
-    def __init__(self, message: str, *, rules: Sequence[str],
-                 hint: str | None = None) -> None:
-        super().__init__(message, hint=hint)
-        self.rules = tuple(rules)
 
 
 class ApprovalRequired(TerminalState):
@@ -434,20 +350,6 @@ class ProvenanceRefused(RefusedByStructure):
     **比没有这个记录更坏**——下游会拿它当证据。
     ⇒ 改成拒绝。两道闸的定义见 `novel/store.py::ArtifactStore._refuse_bad_provenance`。
     """
-
-
-class AgentDeliveryUnavailable(TerminalState):
-    """Agent 交付未形成；调用方可据 typed 字段决定是否保留同 run。"""
-
-    def __init__(
-        self, message: str, *, error_kind: str, attempts: int,
-        status: int | None, same_run_resumable: bool,
-    ) -> None:
-        super().__init__(message)
-        self.error_kind = error_kind
-        self.attempts = attempts
-        self.status = status
-        self.same_run_resumable = same_run_resumable
 
 
 class AgentConfigurationError(NovelError):

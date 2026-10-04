@@ -12,7 +12,6 @@ from __future__ import annotations
 import pytest
 
 from contracts.invariants import FRESHNESS, FRESHNESS_REASON
-from contracts.schema.stage7 import NameMapFreeProvenance, NameMapParams
 from novel import prov
 from novel.run import RunContext
 
@@ -39,17 +38,20 @@ def test_rule_table_fingerprint_is_stage_scoped_and_covers_every_rule_field():
     assert got != prov.rules_fingerprint('stage6')
 
 
-def test_stage7_human_only_provenance_has_no_model(tmp_path):
-    """人工来源的 NameMap 账没有模型基线时，也必须能构造符合当前 NameMap 契约的来源账。"""
+def test_human_only_provenance_has_no_model(tmp_path):
+    """人工来源的账没有模型基线时，也必须能构造不带 model 字段的来源账。
+
+    （原用旧链 NameMapFreeProvenance 作载体；该 schema 随旧 Stage7 链删除后，
+    这里直接用 FreeProvenance 基类——被测的是 `RunContext.free_provenance`
+    的形状纪律，不依赖任何具体产物模型。）
+    """
     novel_dir = tmp_path / 'book_1'
     (novel_dir / 'stage0').mkdir(parents=True)
     (novel_dir / 'stage0' / 'clean_text.txt').write_text('根正文\n', encoding='utf-8')
     ctx = RunContext.open(tmp_path, '1', 'str06.stage7.assemble', paid=False,
                           write_ledger=False)
     provenance = ctx.free_provenance(
-        NameMapFreeProvenance,
         prompts={'RULES': 'rules'},
-        params=NameMapParams(max_tokens=16000),
         origin='human',
     )
     dumped = provenance.to_disk()

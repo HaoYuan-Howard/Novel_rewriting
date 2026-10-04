@@ -147,7 +147,8 @@ def test_concurrency_and_process_lifecycle_modules_are_registered_serial():
     # ⚠ 下界是实测值，随旧链测试整批删除（F8b-3/F8c）从 20 下调到 15：
     # 消失的全是旧 Stage2/4/5/6/7 功能测试里的子进程/线程用例，现役面一个没少
     # （`missing` 为空即登记完整）。掉到下界以下仍然说明扫描面失效。
-    assert scanned >= 15, f'只认出 {scanned} 个并发/进程测试模块——扫描面可能失效'
+    # 2026-10-04 清理批：test_human_actions.py 随人工改稿面删除后现役 14 个。
+    assert scanned >= 14, f'只认出 {scanned} 个并发/进程测试模块——扫描面可能失效'
     assert not missing, f'这些并发/进程生命周期模块未登记到 serial 调度组：{missing}'
 
 
@@ -268,11 +269,6 @@ _JSON_READ_ALLOWED = {
         'Commander / operator 阶段遥测**不是产物、节点或成本账**：'
         '`_service/operator_phases/*.jsonl` 是不含正文/提示词/token 的逐 session append-only 事件流，'
         '只记本地阶段身份、耗时与终态；读侧只容忍被 kill 截断的最后一行'),
-    'novel/human_actions.py': (
-        '人工改稿身份账**不是产物**：'
-        '`_service/human_actions.jsonl` 是不含正文的 prepared→committed '
-        'append-only 恢复/审计事件流，不进来源账或 ARTIFACTS；'
-        '读侧要区分完整坏行与被 kill 截断的尾行'),
     'novel/orchestrator/trash.py': (
         '回收站的 metadata/manifest/receipt **不是产物**：`ARTIFACTS` 里没有它们、'
         '不进来源账、不进 `_provenance`；它们只证明 book/approval/service run '
@@ -388,11 +384,6 @@ _WRITE_ALLOWED = {
         '`R-13.7` 允许不同小说并行，而 `mark` / CLI `queue` 都是独立进程 ⇒ '
         '只有线程锁时半截行会被顶到文件中间，而读侧对中间坏行是 `raise`。'
         '锁文件 `<目标>.lock` 也在这里创建'),
-    'novel/human_actions.py': (
-        '人工改稿两相账本身仍只经 appendlog 追加；本模块唯一的裸 IO 是把确证未换行的'
-        '截断尾先原子隔离到 `_service/human_actions_tail_recovery/`，随后在同一账锁内'
-        '截回完整前缀。隔离件不含正文、以完整 receipt 内容寻址，属于 kill 恢复审计，'
-        '不是小说产物，也不会被普通读视图当作 committed 动作'),
     'novel/llm/cache.py': (
         '响应缓存**不是产物**：不进来源账、不进 `_provenance`、`.gitignore` 盖着。'
         '它还是全仓唯一一处**会主动删文件**的地方（`evict`），而那与判据 7'
@@ -647,11 +638,6 @@ _SERVICE_MUTATORS = {
     ('jobs', 'run'),
     ('jobs', 'start'),
     ('uploads', 'save_upload'),
-    ('uploads', 'save_draft_edit'),
-    ('uploads', 'discard_edit_plan'),
-    ('approvals', 'approve_gate'),
-    ('approvals', 'reset'),
-    ('approvals', 'backfill_from_disk'),
     ('trash', 'run'),
     ('trash', 'run_restore'),
     ('trash', 'reconcile_pending_restores'),
@@ -718,8 +704,8 @@ def test_service_mutations_are_narrowly_owned_by_mutation_routes():
         # novel/api/approval_stamp.py 与 novel/api/routes/approvals.py 已随
         # 人工闸整族退役删除（F8b-3/F8c）：全自动单模式下没有审批写入面，
         # 这两个文件不再是现役 API 面，它们的服务变更入口随之消失。
-        # novel/api/routes/edits.py 已随旧链人工写回面整族退役（F8b-2）：
-        # 只剩空 router，无任何服务变更入口。
+        # novel/api/routes/edits.py 已随旧链人工写回面整族删除（F8b-2 起只留
+        # 空 router，2026-10-04 清理批连空壳一并移除）：无任何服务变更入口。
         'novel/api/routes/maintenance.py': {
             ('trash', 'run'), ('trash', 'run_restore'),
             ('service_lifecycle', 'apply_retention'),

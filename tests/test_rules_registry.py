@@ -139,9 +139,9 @@ def test_disclosure_and_degradable_sets_are_pinned():
     degradable = {r.rule for r in REGISTRY.all() if r.degradable}
     assert degradable == set(), \
         '可降级集合变化须同步契约 §七 与本钉扎'
-    # 披露集合同时是机械准入的唯一披露面（单一落点）
-    from novel.orchestrator.mechanical_admission import SEMANTIC_UNREVIEWED_RULES
-    assert SEMANTIC_UNREVIEWED_RULES == frozenset(disclosed)
+    # 披露集合的唯一落点就是注册表的 disclosable_unver 位（Q-13）；
+    # 旧机械准入名册的派生表已随名册删除（2026-10-04 清理批）。
+    assert {r.rule for r in REGISTRY.all() if r.disclosable_unver} == set(disclosed)
 
 
 @pytest.mark.parametrize('bad', ['unique', 'free', 'none', '', 'YES'])

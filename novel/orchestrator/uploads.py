@@ -1,38 +1,19 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-'''HTTP 入口使用的非产物文件：原始上传与一次性人工输入。
+'''HTTP 入口使用的非产物文件：原始上传。
 
 这些文件都住在 Output/_service，不进来源账，也不冒充小说产物。上传原文要长期
-保留，因为 stage0 审校屏必须能按 `source_ref` 重新取回被剔除的文本；普通编辑
-请求在作业结束即删。Stage0 v3 收成单次机械 transform 后，本模块不再承载
-stage0 编辑/候选计划——上传后直接由 stage0.remove 重建 transform。
+保留，因为 stage0 审校屏必须能按 `source_ref` 重新取回被剔除的文本。
+旧链的一次性人工编辑输入（draft/characters/global/blueprint 编辑与 trim 批量
+销账）随 F8b 全自动单模式退役；本模块只剩上传原文一个写入口。
 '''
 from __future__ import annotations
 
-NL = chr(10)  # 换行字面量：避免在字符串里写转义
-
 import hashlib
-import json
 import os
 import uuid
-import warnings
 from pathlib import Path
 
-from pydantic import ValidationError
-
-from contracts.schema import encode_artifact
-from contracts.artifacts import (
-    STAGE2_CHARACTERS_EDIT,
-    STAGE2_BLUEPRINT_EDIT,
-    STAGE2_GLOBAL_EDIT,
-    STAGE2_GLOBAL_REVIEW_DECISIONS,
-)
-from contracts.schema.api import BatchTrimResolutionRequest
-from contracts.schema.plot_edit import PlotEdit
-from contracts.schema.stage2 import GlobalEdit
-from contracts.schema.characters import CharactersEdit
-from contracts.schema.analyze_draft import AnalyzeOwnerDraftEdit
-from contracts.schema.stage5 import ChapterResponse
 from novel import paths
 from novel.errors import (
     ArtifactUnreadable,
@@ -40,9 +21,7 @@ from novel.errors import (
     SourceConflict,
     SourcePathRejected,
 )
-from novel.paths import service_dir
 
-EDITS_DIRNAME = 'edits'
 MAX_UPLOAD_BYTES = 16 * 1024 * 1024
 
 
@@ -112,174 +91,3 @@ def save_upload(
         except OSError:
             pass
     return target.resolve(), sid
-
-
-def save_draft_edit(
-    base: str | os.PathLike[str],
-    sid: str,
-    ordinal: int,
-    edit: ChapterResponse,
-) -> Path:
-    '''把一份人工改稿原子落进服务目录，供 `stage5.write --apply-edit` 子进程读取。
-
-    ⚠ **文件名必须带 `ch{o}`**：`write._ordinal_of_edit` 从文件名认章、认不出当场炸
-    （不从正文猜——猜错会把一章的人工修改落到另一章头上，而两边都不出声）。
-    一次性文件，作业结束即由调用方清理。
-    '''
-    try:
-        paths.check_sid(sid)
-    except PathRefused as exc:
-        raise SourcePathRejected(f'人工改稿的书 id 不合法：{exc}') from exc
-    if ordinal < 1:
-        raise SourcePathRejected(f'章号必须 ≥1，拿到 {ordinal}')
-    root = service_dir(base) / EDITS_DIRNAME / sid
-    root.mkdir(parents=True, exist_ok=True)
-    target = root / f'ch{ordinal:02d}-{uuid.uuid4().hex}.json'
-    tmp = target.with_suffix('.tmp')
-    try:
-        tmp.write_bytes(edit.model_dump_json().encode('utf-8'))
-        os.replace(tmp, target)
-    except OSError as exc:
-        raise ArtifactUnreadable(f'保存人工改稿失败：{exc!r}') from exc
-    finally:
-        try:
-            tmp.unlink(missing_ok=True)
-        except OSError:
-            pass
-    return target.resolve()
-
-
-def save_characters_edit(base: str | os.PathLike[str], sid: str, edit: CharactersEdit) -> Path:
-    """HTTP 只保存同 SID 的一次性人物输入；正式写回属于 CLI producer。"""
-    paths.check_sid(sid)
-    root = service_dir(base) / EDITS_DIRNAME / sid
-    root.mkdir(parents=True, exist_ok=True)
-    target = root / f'characters-edit-{uuid.uuid4().hex}.json'
-    tmp = target.with_suffix('.tmp')
-    payload = encode_artifact(STAGE2_CHARACTERS_EDIT, edit.model_dump(mode='json'))
-    try:
-        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + NL, encoding='utf-8')
-        os.replace(tmp, target)
-    except OSError as exc:
-        raise ArtifactUnreadable(f'保存人物编辑请求失败：{exc!r}') from exc
-    finally:
-        tmp.unlink(missing_ok=True)
-    return target.resolve()
-
-
-def save_analyze_draft_edit(base: str | os.PathLike[str], sid: str,
-                            edit: AnalyzeOwnerDraftEdit) -> Path:
-    """浏览器候选只暂存在本书服务目录，版本与正式草稿修复入口一致。"""
-    from contracts.artifacts import STAGE2_ANALYZE_OWNER_DRAFT_EDIT
-    paths.check_sid(sid)
-    root = service_dir(base) / EDITS_DIRNAME / sid
-    root.mkdir(parents=True, exist_ok=True)
-    target = root / f'analyze-draft-edit-{uuid.uuid4().hex}.json'
-    tmp = target.with_suffix('.tmp')
-    payload = encode_artifact(STAGE2_ANALYZE_OWNER_DRAFT_EDIT, edit.model_dump(mode='json'))
-    try:
-        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + NL, encoding='utf-8')
-        os.replace(tmp, target)
-    except OSError as exc:
-        raise ArtifactUnreadable(f'保存联合草稿订正请求失败：{exc!r}') from exc
-    finally:
-        tmp.unlink(missing_ok=True)
-    return target.resolve()
-
-
-def save_global_edit(
-    base: str | os.PathLike[str],
-    sid: str,
-    edit: GlobalEdit,
-) -> Path:
-    """把 Commander 的一次性 Stage2 typed 修订原子落进 SID 专属服务根。"""
-    try:
-        paths.check_sid(sid)
-    except PathRefused as exc:
-        raise SourcePathRejected(f'全局修订的书 id 不合法：{exc}') from exc
-    root = service_dir(base) / EDITS_DIRNAME / sid
-    root.mkdir(parents=True, exist_ok=True)
-    target = root / f'global-edit-{uuid.uuid4().hex}.json'
-    tmp = target.with_suffix('.tmp')
-    payload = encode_artifact(
-        STAGE2_GLOBAL_EDIT,
-        # GlobalEdit 的「字段是否出现」就是 patch 语义；补出的显式 null 会被
-        # nested patch 校验器正确拒绝，不能在运输层把 absent 改写成 null。
-        edit.model_dump(
-            mode='json', by_alias=True, exclude_unset=True),
-    )
-    try:
-        tmp.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + NL,
-            encoding='utf-8')
-        os.replace(tmp, target)
-    except OSError as exc:
-        raise ArtifactUnreadable(f'保存 Stage2 全局修订失败：{exc!r}') from exc
-    finally:
-        try:
-            tmp.unlink(missing_ok=True)
-        except OSError:
-            pass
-    return target.resolve()
-
-
-def save_blueprint_edit(
-    base: str | os.PathLike[str],
-    sid: str,
-    request: PlotEdit,
-) -> Path:
-    """把 Stage2 完整剧情编辑请求 落到 SID 专属的一次性目录。
-
-    HTTP 进程只写 ``_service/edits``；正式 Blueprint 仍只能由
-    ``stage2.blueprint --apply-edit`` 子进程经 schema/HARD/归档口写回。
-    """
-    try:
-        paths.check_sid(sid)
-    except PathRefused as exc:
-        raise SourcePathRejected(f'蓝图编辑的书 id 不合法：{exc}') from exc
-    root = service_dir(base) / EDITS_DIRNAME / sid
-    root.mkdir(parents=True, exist_ok=True)
-    target = root / f'blueprint-edit-{uuid.uuid4().hex}.json'
-    tmp = target.with_suffix('.tmp')
-    payload = encode_artifact(
-        STAGE2_BLUEPRINT_EDIT,
-        request.model_dump(mode='json', by_alias=True),
-    )
-    try:
-        tmp.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + NL,
-            encoding='utf-8')
-        os.replace(tmp, target)
-    except OSError as exc:
-        raise ArtifactUnreadable(f'保存 Stage2 蓝图编辑请求失败：{exc!r}') from exc
-    finally:
-        try:
-            tmp.unlink(missing_ok=True)
-        except OSError:
-            pass
-    return target.resolve()
-
-
-def save_stage5_trim_batch(
-    base: str | os.PathLike[str],
-    sid: str,
-    request: 'BatchTrimResolutionRequest',
-) -> Path:
-    """已随批次 B3 trim 三选一退役；保留形状仅为历史导入兼容，不得新调用。"""
-    raise NotImplementedError(
-        'stage5 trim 批量销账人工提交面已退役（2026-09-15 全自动裁决）：'
-        '超限章由 stage5.review producer 机械处置')
-
-
-def discard_edit_plan(base: str | os.PathLike[str], plan_path: str | os.PathLike[str]) -> None:
-    '''只删除 _service/edits 内的一次性文件（编辑计划 / 人工改稿）；路径逃逸会显式拒绝。'''
-    root = (service_dir(base) / EDITS_DIRNAME).resolve()
-    candidate = Path(plan_path).resolve()
-    try:
-        candidate.relative_to(root)
-    except ValueError as exc:
-        raise PathRefused(f'拒绝删除 edits 目录之外的路径：{candidate}') from exc
-    try:
-        candidate.unlink(missing_ok=True)
-    except OSError as exc:
-        raise ArtifactUnreadable(f'删除一次性编辑计划失败：{exc!r}') from exc

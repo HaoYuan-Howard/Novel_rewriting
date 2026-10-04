@@ -1530,17 +1530,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     raw = list(sys.argv[1:] if argv is None else argv)
     a = _parser().parse_args(_normalize_operator_permit_argv(raw))
 
-    from novel.errors import ArtifactSubmittedReviewPending
     try:
         from novel.output_root import require_active
         if getattr(a, 'base', None) is not None:
             require_active(a.base)
         _refuse_execution_context_control_mutation(a)
         return _CMDS[a.cmd](a)
-    except ArtifactSubmittedReviewPending as e:
-        print(f'\n✗ 产物已落盘，审阅提交尚未完成：{e}', file=sys.stderr)
-        _print_hint(e)
-        return X.CHECK_FAILED
     except TerminalState as e:
         # **不是 bug，所以不打栈**：打一段栈会让人以为程序坏了，
         # 而它说的其实是「按设计这一步走不下去」。

@@ -88,8 +88,6 @@ _DECLARED_ABSENT: dict[str, str] = {
         '历史实现按 Git 历史读取'),
     'tools/workflow_pairs.py': (
         '只消费已删除的 workflow_metrics 冻结报告，随同退役（见 docs/DECISIONS.md）'),
-    'docs/schema/stage2_review.md': (
-        '随 Stage2 语义审阅退役删除；docs 引用它的段落说明该退役'),
     'novel/stages/stage2/source.py': (
         'B5（2026-09-28）删除旧联合抽取；DECISIONS与str06架构历史仍引用该退役路径，'
         '现役生产与测试已迁Stage2五owner，不能恢复旧文件'),

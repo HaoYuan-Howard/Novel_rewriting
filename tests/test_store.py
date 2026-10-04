@@ -58,7 +58,6 @@ from novel.llm.ledger import CostLedger, ledger_path
 from novel.orchestrator.uploads import save_upload
 from novel.orchestrator import state as orchestrator_state
 from novel.run import RunContext
-from novel.snapshot_clone import readonly_snapshot_clone
 from novel.store import (
     ArtifactStore, SELF_FRESH_DETERMINISTIC, _json_pointer_diff,
 )
@@ -148,31 +147,6 @@ def test_readonly_snapshot_memo_reuses_only_scalar_consumed_fingerprint(
     # own sealed surface; no consumed result crosses the invocation boundary.
     with store_module.readonly_snapshot_memo(book, code='code-a'):
         ArtifactStore(ctx).read(Loose, MT_REL)
-    assert calls == 2
-
-
-def test_readonly_snapshot_clone_returns_independent_objects_and_stays_local(
-        tmp_path: Path) -> None:
-    base = _book(root=tmp_path)
-    book = paths.resolve_novel_dir(base, '123')
-    ctx = orchestrator_state.readonly_ctx(book, 'str06.stage4.compile', 'code-a')
-    calls = 0
-
-    def factory() -> dict[str, list[str]]:
-        nonlocal calls
-        calls += 1
-        return {'rows': ['sealed']}
-
-    with store_module.readonly_snapshot_memo(book, code='code-a'):
-        first = readonly_snapshot_clone(ctx, ('heavy-proof',), factory)
-        first['rows'].append('mutated')
-        second = readonly_snapshot_clone(ctx, ('heavy-proof',), factory)
-        assert second == {'rows': ['sealed']}
-        assert calls == 1
-
-    with store_module.readonly_snapshot_memo(book, code='code-a'):
-        assert readonly_snapshot_clone(
-            ctx, ('heavy-proof',), factory) == {'rows': ['sealed']}
     assert calls == 2
 
 

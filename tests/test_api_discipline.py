@@ -325,12 +325,9 @@ def test_frontend_does_not_rejudge_scene_budget_band():
     # （budget_band 旧判据随旧链退役；新链的章级篇幅带判据是 body_length_band
     #   （stage5 章级机械验），逐场分配与守恒仍在 stage4。）
     from contracts.rules import REGISTRY
-    from contracts.schema.api import PlanSceneLine, Stage4IndexRow
 
-    assert 'in_band' not in Stage4IndexRow.model_fields
-    assert 'in_band' not in PlanSceneLine.model_fields
-    assert 'source_chars' not in PlanSceneLine.model_fields
-    assert 'span_chars' not in PlanSceneLine.model_fields
+    # 旧链 PlanSceneLine/Stage4IndexRow 载体已删除（2026-10-04 清理批）；
+    # 「视图不带出档判定」由 schema 层的删除本身闭合，这里只钉现役判据归属。
     assert REGISTRY.get('scene_budget_distribution').stage == 'stage4'
     assert REGISTRY.get('length_budget_conserved').stage == 'stage4'
     assert REGISTRY.get('body_length_band').stage == 'stage5'

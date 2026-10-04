@@ -107,8 +107,8 @@ def normalize_paragraphs(text: str | None, sep_chars: float | None) -> tuple[str
     """段落分隔归一到本书的实测分隔。返回 `(新文本, 改动与否)`。
 
     **阈值 `1.5` 只有这一个落点**：`>=1.5` 走空行分段，否则单换行。
-    `bands.BAND_SEP` 那张「档位 → 代表值」的翻译表配了 import 期断言钉住它，
-    阈值一改当场炸，而不是静默按错的一侧归一（判据 25）。
+    （旧 bands.BAND_SEP「档位 → 代表值」翻译表已随旧链 stage6 文案档位删除；
+    调用方直接传实测分隔均值，阈值漂移由 `tests/test_core.py` 的唯一落点用例钉住。）
     """
     lines = [ln.strip() for ln in (text or '').split('\n') if ln.strip()]
     sep = '\n\n' if (sep_chars or 0) >= 1.5 else '\n'

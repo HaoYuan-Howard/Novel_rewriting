@@ -35,8 +35,8 @@ describe('HTTP 错误适配', () => {
       .mockResolvedValueOnce(new Response('{"ok":true}'))
     vi.stubGlobal('fetch', fetch)
     expect(await (await getBlob('/book')).text()).toBe('第一章\n合成小说正文')
-    expect(await post('/approval', { accept: true })).toEqual({ ok: true })
-    expect(fetch).toHaveBeenLastCalledWith('/api/approval', expect.objectContaining({
+    expect(await post('/echo', { accept: true })).toEqual({ ok: true })
+    expect(fetch).toHaveBeenLastCalledWith('/api/echo', expect.objectContaining({
       method: 'POST', headers: { 'X-Novel-UI': '1', 'Content-Type': 'application/json' },
     }))
   })

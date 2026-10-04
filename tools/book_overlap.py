@@ -54,7 +54,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from contracts.invariants import BOOK_BLOCK_SEP, BOOK_CHAPTER_SEP  # noqa: E402
+from contracts.invariants import BOOK_BLOCK_SEP  # noqa: E402
 from contracts.schema import decode_artifact  # noqa: E402
 from novel.core.text import window_overlap  # noqa: E402
 from novel.paths import artifact_path, book_txt_rel, resolve_novel_dir  # noqa: E402
@@ -63,32 +63,42 @@ from novel.stages.stage7 import compile_surface_replacements  # noqa: E402
 
 NEWLINE = '\n'
 
+#: 现役成书章标记：「第N章」单独成块（`assembly.py::_chapter_marker`）。
+#: 旧链成书用的是裸阿拉伯数字行（已随旧链退役），这里两种形态都认，
+#: 让工具对旧根与新根都能切块。
+_CHAPTER_MARKER = '第{}章'
+
+
+def _is_chapter_marker(head: str, nxt: int) -> bool:
+    if head == _CHAPTER_MARKER.format(nxt):
+        return True
+    return head.isdigit() and int(head) == nxt
+
 
 def split_book(text: str) -> dict[int, str]:
     """成书字节 -> `{输出章号: 正文}`。
 
-    切法从 `assemble_txt` 的两个常量**派生**，不另写一份正则：章分隔是一个裸阿拉伯
-    数字单独成块（`BOOK_CHAPTER_SEP`），块间是 `BOOK_BLOCK_SEP`。
+    章分隔是一个章标记单独成块（现役「第N章」；旧链为裸阿拉伯数字，两种都认），
+    块间是 `BOOK_BLOCK_SEP`。
     第一块是文案（新链 Hook 成文 `stage5/hook/hook.txt` 的装配块），它前面没有
     章号，自然不入表。
 
     两个踩过的陷阱，都写在这里免得下一个人再踩一遍：
 
-    1. **正文自己也用 `BOOK_BLOCK_SEP` 分段。** 「数字块的下一块就是正文」只会取到
+    1. **正文自己也用 `BOOK_BLOCK_SEP` 分段。** 「标记块的下一块就是正文」只会取到
        第一段——首版这么写，量出来每章只有 9~24 字、重合 1.000。
-       正确做法是收到**下一个章号为止**。
-    2. **正文里可能有单独成段的纯数字**（灵网跟帖、楼层号这类）。因此只认
-       **恰好等于「上一章号 + 1」** 的数字块，其余数字块一律当正文。
+       正确做法是收到**下一个章标记为止**。
+    2. **正文里可能有单独成段的纯数字或形似标记的行**（灵网跟帖、楼层号这类）。
+       因此只认**恰好等于「上一章号 + 1」** 的标记块，其余一律当正文。
        依据是产品定义：输出章号从 1 连续、恒等于源章号（`AGENTS.md`「架构要点」）。
     """
-    assert BOOK_CHAPTER_SEP.format(7) == '7', 'BOOK_CHAPTER_SEP 变形了，切法要跟着改'
     out: dict[int, str] = {}
     cur: int | None = None
     buf: list[str] = []
     for b in text.split(BOOK_BLOCK_SEP):
         head = b.strip()
         nxt = 1 if cur is None else cur + 1
-        if head.isdigit() and int(head) == nxt:
+        if _is_chapter_marker(head, nxt):
             if cur is not None:
                 out[cur] = BOOK_BLOCK_SEP.join(buf).strip()
             cur, buf = nxt, []

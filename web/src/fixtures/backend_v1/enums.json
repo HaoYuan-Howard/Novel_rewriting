@@ -4,13 +4,6 @@
   "stale",
   "unknown"
  ],
- "stage5_review_state": [
-  "fresh",
-  "stale",
-  "unknown",
-  "missing",
-  "legacy_incompatible"
- ],
  "artifact_display": [
   "missing",
   "fresh",
@@ -180,19 +173,6 @@
   "closed",
   "expired"
  ],
- "stage5_closed_exempt_flags": [
-  "--dry-run",
-  "--check-only",
-  "--identity",
-  "--recheck",
-  "--revalidate",
-  "--apply-edit",
-  "--wontfix",
-  "--emit-edit-template",
-  "--adopt-residual",
-  "--validate-edit",
-  "--rebind-review"
- ],
  "job_event_kinds": [
   "started",
   "step",
@@ -303,70 +283,10 @@
   "replace_reconstruction_strategy",
   "change_chapter_weights"
  ],
- "stage6_prepare_decisions": [
-  "accept",
-  "rework",
-  "uncertain"
- ],
  "design_preflight_statuses": [
   "pass",
   "blocked"
  ],
- "approval_workpack_groups": [
-  "blocking",
-  "semantic_attention",
-  "disclosure",
-  "metric_only",
-  "phase_deferred",
-  "coverage"
- ],
- "approval_workpack_kinds": [
-  "design",
-  "structure"
- ],
- "approval_workpack_dispositions": [
-  "review_required",
-  "already_current"
- ],
- "final_approval_workpack_kinds": [
-  "stage6",
-  "stage7"
- ],
- "approval_workpack_actions": [
-  "accept",
-  "request_repair",
-  "request_replan"
- ],
- "approval_workpack_effects": [
-  "block_b",
-  "block_context",
-  "attention",
-  "disclose",
-  "read_only",
-  "phase_deferred",
-  "coverage"
- ],
- "approval_workpack_group_effects": {
-  "blocking": [
-   "block_b",
-   "block_context"
-  ],
-  "semantic_attention": [
-   "attention"
-  ],
-  "disclosure": [
-   "disclose"
-  ],
-  "metric_only": [
-   "read_only"
-  ],
-  "phase_deferred": [
-   "phase_deferred"
-  ],
-  "coverage": [
-   "coverage"
-  ]
- },
  "design_constraint_operation_kinds": [
   "keep",
   "withdraw",
@@ -491,19 +411,11 @@
  "blueprint_architectures": [
   "plot-blueprint-v1"
  ],
- "blueprint_review_subject_kinds": [
-  "formal",
-  "invalid"
- ],
  "response_time_layers": {
   "T_PRESENT": "present",
   "T_RECALL": "recall",
   "T_HEARSAY": "hearsay"
  },
- "anchor_coverage_state": [
-  "low",
-  "adequate"
- ],
  "address_by": [
   "char_id",
   "narration",
@@ -641,32 +553,6 @@
   "quick",
   "brush"
  ],
- "style_words": [
-  "环境渲染",
-  "渲染氛围",
-  "氛围营造",
-  "感官",
-  "画面感",
-  "白描",
-  "意象",
-  "诗意",
-  "唯美",
-  "笔触",
-  "文笔",
-  "深沉",
-  "细腻",
-  "张力",
-  "质感"
- ],
- "invent_guarded": {
-  "新数字": "full",
-  "新人物": "partial",
-  "新事件": "partial",
-  "新道具": "none",
-  "新因果": "none",
-  "新地点": "none",
-  "新时间跳跃": "none"
- },
  "draft_band": [
   0.8,
   1.2
@@ -674,35 +560,6 @@
  "book_band": [
   0.9,
   1.1
- ],
- "ending_shapes": [
-  "引号台词",
-  "问句",
-  "省略号",
-  "陈述"
- ],
- "sep_bands": [
-  "空行分段",
-  "单换行"
- ],
- "residual_confidence": [
-  "high",
-  "low"
- ],
- "residual_adoption_confidence": [
-  "high"
- ],
- "derived_alias_suffixes": [
-  "姐姐",
-  "哥哥",
-  "妹妹",
-  "弟弟",
-  "姊姊",
-  "兄长",
-  "阿姐",
-  "阿哥",
-  "姑娘",
-  "公子"
  ],
  "inbox_attention": [
   "pending",
@@ -717,10 +574,6 @@
   "--dry-run": "只打印将要发出去的东西，不调用、不写盘"
  },
  "paid_flags": {},
- "stage5_edit_confirmations": [
-  "formal",
-  "working_draft"
- ],
  "partial_rewrite_flags": [],
  "valued_flags": {
   "--source": "stage0.remove 的原始小说路径（首次摄入；相对路径相对 cwd）"
@@ -734,18 +587,6 @@
   2,
   3,
   4
- ],
- "agent_executor_nodes": [
-  "str06.stage2.book",
-  "str06.stage2.chapters",
-  "str06.stage2.names",
-  "str06.stage2.associate",
-  "str06.stage4.preserve",
-  "str06.stage4.body_design",
-  "str06.stage4.hook_design",
-  "str06.stage5.body",
-  "str06.stage5.hook",
-  "str06.stage7.naming"
  ],
  "stages": [
   "stage0",
@@ -816,25 +657,6 @@
   "ended",
   "reconciled"
  ],
- "invent": {
-  "allow": [
-   "感官细节",
-   "环境",
-   "动作分解",
-   "内心独白",
-   "对话的语气与节奏"
-  ],
-  "forbid": [
-   "新事件",
-   "新人物",
-   "新数字",
-   "新道具",
-   "新因果",
-   "新地点",
-   "新时间跳跃"
-  ],
-  "principle": "凡能拿回原文核对真伪的，禁止发明；凡纯属行文表面的，必须发明。"
- },
  "spoiler_disclosure": {
   "mode": "display_only",
   "security_boundary": false,

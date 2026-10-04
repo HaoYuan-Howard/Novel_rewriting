@@ -247,15 +247,12 @@ agent state 闭集独立为 `pending / running / paused / ok / landed_red / stop
 `failed`，浏览器不得从裸退出码补算。公开 pause/resume/stop 路由统一返回 202，只确认 Supervisor 已受理，不同步等待生命周期
 终态：pause 先关新 admission，后台等待当前 claim/beacon 闭合后才追加 paused，且不 cancel 正常付费
 节点；resume 在后台同身份续当前 epoch 和 provider session，代码 漂移则同 parent run 开新 epoch、
-免费复检并新建 provider session。另一个有意的滚动点是 hash-bound Stage4 typed repair/replan：Supervisor
-在执行 `recovery:stage4-design-action` 前按 exact action 身份只滚一次 `reason=continue` 的 fresh epoch，
-随后重读 operator next/CAS，且不重启 Reviewer；stop 在后台 cancel 全进程树并 drain，闭合后才永久 ended，且不可
-resume。Stage2 blueprint 与 Stage4B plan 各有一条生产者举证的系统暂停：仅当 exit 2 同时留下绑定当前
-epoch/run/code、完整请求章集合和可恢复交付失败的 `delivery_recovery.json`，Supervisor 才追加带缺章
-摘要的 paused；前端继续消费同一 `allowed_controls=resume`，恢复时保持 parent/epoch 并只补 checkpoint
-缺章。普通 exit 2 或凭据缺失、损坏、漂移不得开放 resume。已经 ended 的 Stage4B 历史 run 也不得由
-Supervisor 复活；其已验章只能由后续新 run 的 producer 按下述只读 adoption 契约采用。内部阻塞 helper
-只供诊断/测试，不改变公开异步语义。重启后证明不了存活状态仍为 unknown，不自动洗成 paused。
+免费复检并新建 provider session。（历史）旧链的 hash-bound Stage4 typed repair/replan 滚动点
+（`recovery:stage4-design-action` 前 `reason=continue` 的 fresh epoch）与 Stage2 blueprint／
+Stage4B plan 的 `delivery_recovery.json` 生产者举证暂停，已随旧链 prepared 恢复面退役
+（R-12.4b）。stop 在后台 cancel 全进程树并 drain，闭合后才永久 ended，且不可
+resume；重启后证明不了存活状态仍为 unknown，不自动洗成 paused。内部阻塞 helper
+只供诊断/测试，不改变公开异步语义。
 
 历史 Commander 的 stdout/stderr 只形成供应商 observation，不作为业务完成事实；`role=commander,node=null`
 的 session/ledger 以 attempt id 联结、仅历史解码，actual model/effort/provider session id 缺失保持 unknown，
@@ -306,15 +303,9 @@ Executor；其余非 deterministic-recovery 的 blocker：`approval:*` 为编排
 `human:*` / inbox / resume:manual-decision 走精确故障或披露停机话术（批次 B4）。
 只有显式、hash-bound 的孤儿恢复才追加 `reconciled`。
 
-其中 `recovery:stage4-design-repair-aggregate-commit` 是一条 FREE/0-wire 的确定性
-producer 补尾：编排上的 `next_handler=executor` 只表示由 child execution 消费，并不构造模型
-Executor profile、client、provider session、checkpoint 或 wire。operator 必须在普通 approval、inbox
-和付费 planner 之前探测它；若 Stage2 edit commit 与 Stage4 repair aggregate 两类 prepared 同时存在，
-这是双重提交所有权，必须关闭式报 unknown，不能按探测顺序挑一份。单独命中 Stage4 时 action 固定为
-`stage4.design --recover-repair-aggregate <source_run_id> --source-journal-sha256 <raw_sha> --source-commit-sha256 <self_sha>`。
-permit 把 source run 映射到固定 journal 路径，并把原始字节 SHA 作为唯一动态 external input；签发和
-claim 后各重读一次，journal self SHA、live candidate baseline/target 与 source 生命周期仍由 producer
-再次闭合。它不把所有历史 run 纳入 active surface seal，也不为这次补尾再滚一个 paid repair epoch。
+（历史）`recovery:stage4-design-repair-aggregate-commit` 的 FREE/0-wire 确定性 producer 补尾
+（及 `stage4.design --recover-repair-aggregate` action、双重 prepared 所有权关闭式 unknown 规则）
+已随旧链 prepared 恢复面退役（R-12.4b）；现役孤儿恢复只保留显式、hash-bound 的 `reconciled` 追加。
 
 `CommanderAdmissionEvent` 同文件兼容读 v1、当前只写 v2：
 
@@ -385,11 +376,11 @@ secret 组 UNVER；关系与规则不允许隔离，前者仍是 disclosure-read
 阻断面 turn 以 exit 2 `stopped` 结束（精确恢复/披露话术，见批次 B4）后，RunSupervisor 等
 `operator next` 变化：恢复后 ready 交确定性 execution-token 主路；`approval:*` 不得再投影为
 正常人工推进态。所有模型节点按 `NODES.lifecycle` 的工作单元划分 E/C 身份；同一 Executor 单元
-连续生成/自修，局部返修的 surface 或候选变化不重置预算。Stage4 A/B 分别隔离，
-Stage6 双盲 judge 分别隔离；这些业务边界不因共用基础设施而合并。
+连续生成/自修，局部返修的 surface 或候选变化不重置预算。（历史）旧链 Stage4 A/B 与 Stage6 双盲 judge 曾按席位分别隔离；这些业务边界不因共用
+基础设施而合并。现役语义隔离由 `NODES.lifecycle` 的工作单元身份承担。
 
-Stage2 冷启动执行 Analyze E → 独立 Characters/Global 编译 → Global C 统一接受 →
-逐章并发 Blueprint E → Blueprint C 逐章及跨章接受。cold-start 判定先排除历史回答、checkpoint、
+（历史）旧链 Stage2 冷启动顺序为 Analyze E → 独立 Characters/Global 编译 → Global C
+统一接受 → 逐章并发 Blueprint E → Blueprint C 逐章及跨章接受。cold-start 判定先排除历史回答、checkpoint、
 prepared 与任一侧既有产物；已有来源优先恢复，后续问题只交对应 Characters 或 Global owner。
 Global 必须正式有效、逐项审阅 generation-safe 且节点接受 current；`.INVALID` 与称名投影不能释放
 Blueprint。联合首抽只记 Analyze 的一次真实 attempt，两份产物共享来源但独立编辑、失效与恢复，
@@ -552,10 +543,10 @@ edit / `--revalidate`（0 LLM）等待人工决定；不得把它解释成可 `-
 >
 > | 形状 | 例 | 占位符由谁决定 | 完成度落点 |
 > |---|---|---|---|
-> | 具名 | `stage7/name_map.json` | — | `artifacts[]`（一次 `is_file()`） |
-> | 轮次编号 | `stage5/review_{n}.json` · `stage6/semantic_{n}.json` | 盘上有几份 | **`rounds_done[节点]`** |
-> | 逐章 | `stage5/ch{nn}.json` | 计划里有哪些章 | `chapters_done` |
-> | **书级参数化** | `stage7/{title}_rewriting.txt` | **这本书是谁** | `artifacts[]`（**先解析再筛**） |
+> | 具名 | `stage7/naming/name_map.json` | — | `artifacts[]`（一次 `is_file()`） |
+> | 轮次编号（历史：仅旧链产物用；分类器仍在） | `stage5/review_{n}.json` · `stage6/semantic_{n}.json` | 盘上有几份 | **`rounds_done[节点]`** |
+> | 逐章 | `stage5/body/ch{nn}.txt` | 计划里有哪些章 | `chapters_done` |
+> | **书级参数化** | `stage7/final/{title}_rewriting.txt` | **这本书是谁** | `artifacts[]`（**先解析再筛**） |
 >
 > `required_artifacts()` 收第一种与第四种，于是**中间两种不作为正式清单进入 `artifacts[]`**。
 > Stage5 有一个关闭式例外：逐章校验发现 missing/INVALID/unreadable/stale/unknown 时，
@@ -648,28 +639,13 @@ stale。producer 输出汇总为 `file_changed`、策略未登记或参数不唯
 运行页默认折叠 `verified_skipped_nodes`，但允许展开审计；这只是呈现压缩，不删除步骤和信标历史。
 普通规划返回续跑点之前已验证的完整前缀；原 owner 或 prepared 提交优先恢复时，不重读可能半提交的
 审批材料，前缀可为空或短于续跑点。空前缀只表示尚未验证前置节点，不能按节点位置补造跳过证明。
-例如 Stage4B 的 `request_replan` 会先显示 `stage4.context` 上的
-`approval:stage4-structure-replan / human`。若人工交叉核证得到具体结构损害，形成新的 non-all-accept
-typed A 决定后才显示 `stage4.design / recovery:stage4-design-action / executor`；若只有 read-only
-INFO/metric/UNVER/binding concern，则同包 typed stop 以 exit 2 结束本轮，不出现 execution permit 或
-Executor。它不会把 Stage0～Stage2 的历史 pending 信标画成“必须从头执行”，也不会把既有 typed
-决定误报成再次调用模型审阅。
-
-若 Stage4 repair/replan aggregate 已 prepared 而 source producer 已结束，前沿必须先显示
-`stage4.design / recovery:stage4-design-repair-aggregate-commit / executor`。这条 0-wire 补尾
-committed 后，才允许恢复普通 approval、inbox 或后续节点；已经 stale 的 review token 不再进入前沿。
-
-Stage5 继续只使用 `stage5.review / approval:stage5-closure / human` 这一张顶部卡，`waiting_on`
-名称不代表当前一定提交 closure。current view 为纯 unresolved trim 时，同一卡只发布互斥的人工出口：full-batch
-`stage5.review --retain-pretrim-batch @reviewer-input`、其中恰好一章的 typed
-`stage5.review --request-reviewer-rewrite @reviewer-input`、或 typed stop；ready/expired 时只给 closure
-approval；缺章、活动 `.INVALID` 或 HARD 与 trim 并存时在开席前 stopped/2。retain batch 是一席人审后的
-0-LLM node，不构造 Executor profile；部分落盘重启时，同一 durable record 在 exact prefix/current suffix
-证明下零模型补尾，全部 resolution 落稳后仍使用原 fresh Review，只因
-`trim_subjects/wontfix_sha256` 变化重建 closure workpack/token。rewrite 回答先由 0-LLM node 落正式
-single-chapter request；queue 随后在 stale Review/closure/新 Reviewer 前以
-`recovery:stage5-reviewer-rewrite` 滚新 epoch，并只给唯一 paid writer 或 matching prepared 的 0-wire
-恢复。正文真正改变后才重跑免费 Review。
+（历史）以下三段描述旧链的人工审阅前沿——Stage4B `request_replan` 的
+`approval:stage4-structure-replan / human`、prepared repair/replan aggregate 的 0-wire 补尾
+`recovery:stage4-design-repair-aggregate-commit`、以及 Stage5 顶部卡
+`approval:stage5-closure / human` 与 retain batch／reviewer rewrite 出口。这些审阅闸与
+prepared 恢复面已随 2026-09-15 全自动裁决与 STR-06 关闭批退役（R-12.4b）；现役续跑前沿
+只表达完成度/续跑判定：登记缺失为普通付费 todo、live `.INVALID` 为收件箱阻断、未证明为
+`unknown` 留人，免费复检统一走节点级 `--check-only`。
 
 ---
 
@@ -712,20 +688,22 @@ not_run: M  它后面那些，一步都没跑
 
 ### 5.2 `waiting_on` —— 说出在等谁
 
-`R-13.5` 与 `R-0.3b` 用的是同一句话：「**明确说出在等谁**」。现役取值包括：
+`R-13.5` 与 `R-0.3b` 用的是同一句话：「**明确说出在等谁**」。F8a 后无审阅 blocker、
+无 `gate.*` 待办，现役取值包括：
 
 | 情形 | `waiting_on` |
 |---|---|
 | stage0 机械批准尚未成立（存量 pending；现役由 remove auto seal） | 排 `stage0.remove` 等 0 成本补算；`stage0.approve` 已退役 |
-| Stage5 Review 不是 `missing/fresh`，且本次不是已证明的上游 consumed-change 精确重写；旧结论不能驱动普通写作续跑 | `stage5:review-currentness` |
 | 发现旧 `stage5/deep|shallow/` 布局 | `legacy_incompatible` |
-| Prepare pending_commit | `recovery:stage6-prepare-edit`（`WAITING_ON_STAGE6_PREPARE` 已停发） |
-| 文案未定稿（默认 auto；人工 `--pick` 不阻塞） | 排 `stage6.approve --auto`；不进 HUMAN_NODES |
-| 人名表未定稿（rename auto seal 后仍无效） | 排 `stage7.rename --recheck` 等 0 成本恢复；`stage7.approve` 已退役 |
+| 人名表未定稿（rename auto seal 后仍无效） | 排 `str06.stage7.naming --check-only` 等 0 成本恢复；`stage7.approve` 已退役 |
 | inbox 非空（包括本层 current `.INVALID`、被驳回、连续未消） | `inbox:<kind>`（质量类可进交付披露，见批次 C） |
 | 普通队列的 `redo/unknown`，或 operator 无法证明唯一 canonical REDO 命令 | `resume:manual-decision` |
 | 服务重启后旧快照仍含付费项、等人重新确认 | `queue:restart-confirmation` |
 | 当前命令面与创建时快照不同、必须重建队列 | `queue:plan-changed` |
+
+（历史）旧链队列还产生过 `stage5:review-currentness`、`recovery:stage6-prepare-edit`、
+`stage6.approve --auto` 等值——它们只能由旧链节点写出，生产入口已拒识；存量队列事件的
+只读解码仍认这些字面量（`queue.py` 的历史 waiter 常量表）。
 
 ⚠ **队列本身不产生新的判定，也不放宽任何落盘闸门**（`R-13.6`，指回 `R-11.4`：
 造第二个判官就是造第二个落点）。
@@ -832,9 +810,9 @@ Output/_service/agent_sessions.jsonl executor CLI 会话审计（wire v2；历�
 Output/_service/agent_progress.jsonl agent/runner 的 CLI 步骤观察轨迹
 Output/_service/agent_progress_tail_repairs/ beacon non-LF 坏尾原字节与 authorized/applied 两相恢复账
 Output/_service/operator_phases/<session_id>.jsonl agent run/operator 阶段墙钟遥测（每会话一流）
-Output/_service/human_actions.jsonl 已落盘人工动作的 append-only 身份审计（不含正文）
-Output/_service/human_actions_tail_recovery/<sha>.json 被 kill 截断的 human action 尾行隔离证据
-Output/_service/stage5_writer_locks/<book>/book.lock Stage5 CLI writer / API closure 共用总锁
+Output/_service/human_actions.jsonl （历史）旧人工动作身份账；写入面已退役，存量只读
+Output/_service/human_actions_tail_recovery/<sha>.json （历史）上述旧账的尾行隔离证据
+Output/_service/stage5_writer_locks/<book>/book.lock （历史）旧链 Stage5 写手／closure 总锁
 Output/_service/logs/<job_id>.log 子进程 stdout+stderr，按字节追加
 Output/_service/ledger.jsonl      跨书逐请求成本事实
 Output/_service/*.jsonl.lock      上面九类 JSONL 各自的追加锁载体（见下）
@@ -843,52 +821,23 @@ Output/_service/workflow.json    新 clean base 的固定 task_id 与工作流�
 Output/_service/runs/<sid>/work_units.json 工作单元注册索引，固定 task/node/role/scope 身份
 Output/_service/runs/<sid>/work_units/<unit_id>/ledger.json 每角色工作单元的内容轮次、attempts、响应/决定/提交状态与最大 4 次额度
 Output/_service/runs/<sid>/work_units/<unit_id>/<sha256>.json 不可变 request、raw response/prepared receipt、typed 决定、feedback 与提交证明
-Output/_service/edits/<sid>/…     交给 CLI 的一次性 typed 编辑稿、人工决定或批处理 manifest
-Output/_service/edits/<sid>/reviewer-action-<sha>.json 已通过 typed loader 的历史 Commander/Reviewer 决定（历史解码）；绑定 work_unit_id/work_unit_turn_id、原 logical session 与 provider response SHA；它可零模型重放但不授予执行 permit（R-11.25）
-Output/_service/runs/<sid>/reviewer_action_authorities/reviewer-action-<sha>.json Stage5 canonical rewrite request 对应 ReviewerActionRecord 的 immutable 原始字节归档；内容 SHA 必须等于文件名，并以该原字节 SHA 对证 receipt/request；不得用 typed decode 后补入默认字段的重序列化摘要代替
-Output/_service/runs/<sid>/reviewer_action_authorities/reviewer-action-<sha>.receipt.json 上述归档的 authority commit point；绑定 request raw/self、stable business/current-then contract、原 session/seat/provider response 与三账 evidence SHA，自身再 self-hash
-Output/_service/runs/<sid>/sessions/<session_run_id>.json 历史 Commander 一席的在线 provider session 指针（`CommanderSessionPointer`，历史解码）：首个协议事件到达即写，同席 resume 原地覆盖；hash-bound 到本次 prompt/schema/profile，只是运维事实，不是审计账也不是预算（R-11.26）
+Output/_service/edits/<sid>/…     （历史）旧链交给 CLI 的一次性 typed 编辑稿；写入面已随 F8b 退役
+Output/_service/edits/<sid>/reviewer-action-<sha>.json （历史）旧 Commander/Reviewer 决定；typed loader 已随 STR-06 关闭批删除，关闭式拒读
+Output/_service/runs/<sid>/reviewer_action_authorities/reviewer-action-<sha>.json （历史）旧 reviewer rewrite authority 归档；解码面已删除
+Output/_service/runs/<sid>/reviewer_action_authorities/reviewer-action-<sha>.receipt.json （历史）上述归档的 authority commit point
+Output/_service/runs/<sid>/sessions/<session_run_id>.json （历史）Commander 会话指针；schema 载体已删除，关闭式拒读（R-11.26 历史条）
 Output/_service/approvals/<sid>.json 人工闸门、已阅状态与 canonical 写作授权（原子替换）
 ```
 
-#### 当前工作单元与决定恢复
+#### 历史工作单元决定恢复（只读）
 
-`ReviewerActionRecord` 不是执行授权，也不替代 Supervisor 的 live permit。通用字段为
-`kind / sid / run_id / epoch_id / waiting_on / surface_seal / business_sha256 / recorded_at`；
-approval 形状携带 `surface / payload / review_token`，node 形状携带
-`node / flags / input_payload / review_token`。历史模型决定必须关联以下原调用证据：
-
-| 字段 | 类型 | 历史模型决定 | 含义 |
-|---|---|---|---|
-| `work_unit_id` | 64 位 SHA-256 | **是** | 固定 task/node/role/scope 的身份，scope 由 NODES 登记；candidate/run/session 不参与 |
-| `work_unit_turn_id` | 非空字符串 | **是** | 同一角色单元具体内容请求；占用基础额度与已生效人工追加的累计总额，不因重启变化 |
-| `reviewer_session_run_id` | 非空字符串 | **是** | 原历史 reviewer logical session，恢复新 parent 不重签原成本 |
-| `reviewer_seat_turn_id` | 非空字符串 | **是** | 兼容字段名，现役值等于 `work_unit_turn_id`，不引用旧席位预算 |
-| `provider_response_sha256` | 64 位 SHA-256 | **是** | 原始模型回答的规范字节摘要，不以 assembler 展开的 request SHA 代替 |
-
-恢复先验证 immutable request/raw 与 `prepared_receipt` 中冻结的原 cost kwargs、attempt/turn 事件。
-`reconcile_commander_call` 与 `reconcile_commander_event` 严格比较已有行，缺尾才幂等补原行；
-任何字段漂移、重复矛盾或不能闭合的会话顺序均拒绝。跨 parent 补尾先取得原 owner-stopped lease。
-validate_reviewer_record 对账链已随 STR-06 关闭批删除（历史决定按关闭式拒读）；
-上表字段仍是历史决定字节的有效形状（ReviewerActionRecord）。
-
-raw 成功后先保存 typed 决定，再由当前 loader、producer 与 live permit 消费。一次重建与 loader 回调
-复用唯一活动记录；已提交决定标为 adopted，planner 前严格验证原 adopted 记录并退休中断残留，
-不受新候选或新 Reviewer 配置影响，也不重新制造审批。失败或 unknown 不凭文件存在洗成采用。
-
-Stage5 `node=stage5.review` 且 flags 恰为 `--retain-pretrim-batch @reviewer-input` 或
-`--request-reviewer-rewrite @reviewer-input` 时，还成组保存 `stage5_review_sha256` 与
-`stage5_reviewer_contract_sha256`，`review_token` 为 null；payload 内完整有序 audit/chapter 双 SHA
-绑定处置范围，不携随处置变化的 closure token。retain 与 rewrite 是同一工作单元的一次互斥回答。
-Review/contract 已换代、精确已落前缀 + current unresolved 后缀、身份不可读三种情况分别处理：
-已证明换代才退休，合法剩余范围只重放原 actor/reason/items，坏 inventory、错序或 foreign 决定保留
-记录并 unknown 停止。partial batch 的 exit 2 保留唯一决定，后续只能零模型重验或明确退休。
-
-reviewer rewrite 的 FREE request producer 先 typed readback，再把 record 原始字节与 authority receipt
-两相封入 `reviewer_action_authorities`，最后退休活动记录；receipt 是 commit point。
-queue 在 stale Review、closure 与新 Reviewer 前先处理 request，创建当前 execution epoch 后才授权
-`stage5.write --reviewer-rewrite`。Executor 仅按已保存 request 指定章节修订，不重新调用任何审阅模型，
-不复用旧 provider 物理 session。正式 request 不是 permit；后继仍逐写核验 Review/audit/正文及精确前后缀。
+`ReviewerActionRecord` 一族（approval/node 两形状、`reviewer_session_run_id` 等五字段证据链、
+`reconcile_commander_call/event` 对账）已随 STR-06 关闭批删除：历史决定按关闭式拒读，
+不再提供重建、loader 回调或跨 parent 补尾。旧 Stage5 retain/rewrite 工作单元、
+reviewer rewrite FREE request producer 与 `stage5.write --reviewer-rewrite` 授权链一并退役。
+历史字节的有效形状见 Git 历史；现役付费恢复入口只有候选生命周期登记的
+saved_response／historical_adoption／owner_patch／committed_set_recovery／
+same_context_rewrite／deterministic_replay。
 
 #### 冻结旧工作流记录（只读）
 
@@ -905,24 +854,12 @@ queue 在 stale Review、closure 与新 Reviewer 前先处理 request，创建�
 新代码不把它们补成当前模型来源。旧 base 的实际恢复使用 `docs/OPERATIONS.md` 登记的冻结代码，
 核对原审计 code_version；不得把旧审批、旧 token 或旧账迁入当前 clean base。
 
-#### 当前 Stage2 producer 提交收敛
+#### 历史 Stage2 producer 提交收敛（已退役）
 
-reviewed `stage2.global --apply-edit` 在 canonical 子进程内还有更晚的 producer
-事实。Supervisor 每次读 planner 前都先用 `ReviewerActionRecord` 及当前工作单元对账。
-原回答、typed 动作、成本和会话证明、已提交产物及当前节点接受完整闭合后，先标记原 turn
-已采用，再退休活动 record；删除中断仍可据已采用证明免费补尾。失败 turn 保留给当前
-Reviewer 的拒绝恢复，不把终态 sidecar 或 generic revalidate 误认成已采用动作。
-若 input journal、`canonical_pending` 或 apply-edit formal journal 仍为
-prepared，必须优先交给 `recovery:stage2-global-reviewed-edit-commit` 的确定性 Executor，且只允许
-exact `stage2.global --apply-edit stage2/global_edit.json`；首次 canonical 文件尚未出现、只有 input
-WAL 时，permit 也不伪造一份 external-input 字节身份，由 producer 从 WAL target 物化并收敛。
-若 formal journal 的 `action_kind=revalidate`，则唯一恢复动作改为逐字复用 target audit 冻结的
-`--revalidate --actor ... --reason ...`；generic INVALID 没有 canonical edit/formal 也不改变这条
-身份。所有补尾均为零模型 wire。
-
-Stage2 Global/BP 两份接受落盘后，`close_stage2_accepted` 只核验当前接受与 token，顺序补齐
-`s0 → s1 → seen.read → seen.global → s2`。中途失败保留已落 raw 证明，由
-`stage2.blueprint --close-review` 零模型补提交；不追加第四席或新的全局审阅。
+reviewed `stage2.global --apply-edit` 的 producer 收敛、`recovery:stage2-global-reviewed-edit-commit`
+确定性补尾、`close_stage2_accepted` 的 `s0 → s1 → seen.*` 顺序补齐与
+`stage2.blueprint --close-review` 零模型补提交，均已随 Stage2 语义审阅与旧链整层退役
+（R-11.22：Stage2 不设审阅席位，席位账冻结拒读）。本节仅存历史形状记录。
 
 它们**不是产物**：不进来源账、不进 `_provenance`、`ARTIFACTS` 里没有它们；
 `tests/test_layering.py` 的写口与路由所有权白名单为每一类带着明确理由。
@@ -956,7 +893,7 @@ ledger 与 `llm_audit.jsonl` 的 `run_id` 是 checkpoint/adoption 共用的 prod
 
 `human_actions.jsonl` 当前只写 `HumanEditAction` wire v1 的 `prepared → committed`
 两相行：`request_id` 绑 preview 意图，`action_id` 再绑预期结果 SHA；其余字段是
-`action=stage5_edit`、sid/章号、自报 actor/reason、`formal｜working_draft`、preview 时
+（历史）旧链 Stage5 人工改稿两相账（`action=stage5_edit`，含 `formal｜working_draft`、
 current canonical 完整文件 SHA、preview subject SHA、写回后 canonical 完整文件 SHA、新增 HARD
 规则、目标相对路径，以及写该 phase 的 run/code/时间。同书总锁→逐章锁的线程+跨进程所有权覆盖
 “重算双 SHA → prepared → canonical/trim 写入与读回 → CheckReport → committed”。普通异常
@@ -966,11 +903,12 @@ trim/report/committed，不造新轮。公开读视图只认 committed，同一 
 `human_actions_tail_recovery/`，再截去坏尾补相；中间或已换行的完整坏行仍关闭式失败。
 全部 Stage5 canonical/INVALID/recheck/revalidate/Review/wontfix/trim writer 与 closure submit 共用一把位于
 `_service/` 的书锁，closure 的二次 workpack 与 approval/gate 写回在同一临界区；逐章提交再按序取章锁。
-正文身份由 SHA 联结，
-账本不能反向充当产物或 Review。
+正文身份由 SHA 联结，账本不能反向充当产物或 Review。）该改稿面与 closure/approval
+写回临界区已随 F8b 全自动模式退役；现存历史账只读。
 
-`approvals/<sid>.json` 的盘上服务记录当前为 **v8**；HTTP 投影 `ApprovalDoc.v=8` 是另一条
-版本轴，不能据同一个数字互推。每个已盖 gate、已阅状态、typed Stage4A 设计审阅、最终结构裁决和 writing 授权
+（存量只读）`approvals/<sid>.json` 的盘上服务记录最后一版为 **v9**（`_ApprovalRecordV9`），
+由 `approvals.py` 只读解码供 inbox 投影与回收站锁使用；新链不再写任何审批账，
+`ApprovalDoc` 是同形状的只读投影而非 HTTP 响应。每个已盖 gate、已阅状态、typed Stage4A 设计审阅、最终结构裁决和 writing 授权
 都必须带一份 current-subject proof：当前 `stage0/clean_text.txt` 的完整 SHA-1、所裁决正式
 产物的完整 SHA-256，以及决定本身的规范 JSON SHA-256。读取时必须重新走当前 schema、typed
 人工决定与 freshness 校验并逐字节比对；根变化、上游变化、正式产物被换字、损坏、出现
@@ -979,9 +917,8 @@ trim/report/committed，不造新轮。公开读视图只认 committed，同一 
 `surname_map + characters + extra_subs` 决策面与完整 typed `ApprovedNameMap` 的规范摘要。
 因此 `stage7.assemble` 写回 `book_txt` 交付账不会自废 s7，而决策面、actor/reason/origin
 或 subject hash 变化仍会失效；读取还必须先证明 approval 存在且 subject 与当前决策面一致。
-当前工作流只在新 clean base 写入 v8 记录；审批变更和新写作业的公开入口先验证当前 workflow manifest，
-不能用 reset/backfill 把旧 base 收进新协议。旧 v1～v7 审批解码与迁移分支已删除；
-HTTP、CLI 及服务补录只接受当前 v8，缺版本、未来版本和损坏均拒绝且保留原字节；旧版本、旧 token、旧 Binding 不手工补字段冒充现役来源。
+旧 v1～v8 审批解码与迁移分支已随各自批次删除；缺版本、未来版本和损坏均拒绝且保留原字节，
+旧版本、旧 token、旧 Binding 不手工补字段冒充现役来源；reset/backfill 公开入口已退役。
 普通 GET、事件观测与历史读取保持只读，损坏或证据不够保持 unknown。当前 Stage4 必须先有真实 A 审阅，
 由 B producer 产出当前 Binding/Plan，再经独立 B 结构审阅；不得从既有产物或付费记录倒造审阅。
 队列在一把锁内读取 current 结构裁决、
@@ -1020,269 +957,11 @@ wire v2 在 v1 字段集之上只新增 ended 事件的提交诊断四元组，�
 `null`）。缺失事实继续为 `None` / `unknown`。新写入必须用当前 wire 版本，不得生成 wire 0/1，
 也不得借当前 profile 默认补全旧 session 身份。
 
-#### 7.0a Stage2 blueprint agent checkpoint —— 书内恢复态，不是公开 HTTP 模型
+#### 7.0a Stage2 blueprint agent checkpoint（历史，已退役）
 
-`stage2.blueprint` 的每个 phase/purpose/chapter 使用独立 executor session；run 首次进入时冻结
-`protocol_version=node-executor/v1`、resolved `profile`、`session_isolation=per-purpose-chapter`、
-`recovery_policy=stage2-blueprint-v1` 与每相的 response model/schema SHA、requested output token ceiling
-及 content 偏好。agent policy 不伪造旧 LLM 的 model chain、rungs、thinking 或 provider `max_tokens`；
-没有 discriminator 的旧 run/checkpoint 继续走 legacy v1 验证，不按新协议补字段。
-
-一份 agent checkpoint 只在当前 schema、dynamic validator 与逐章 scope 已通过后写入，保存
-`acceptance_protocol=node-executor/v1` 以及 accepted attempt/fingerprint/evidence-backed adopted model、accepted stdout、
-normalized text、resolved profile、logical subject、session/provider session/turn、prompt/schema SHA、
-exact accepted request、全部 attempt links、recovery attempts 与 `salvaged=false`。同份记录另封存当前
-parsed payload 与 typed payload 及各自 SHA。accepted request 精确绑定 node/chapter/purpose、system/user/
-schema SHA、requested model/effort、requested ceiling 与 protocol；成本 links 的 agent 请求不得伪造
-legacy thinking 或 provider max tokens。
-
-写入与恢复都必须把 accepted attempt 唯一联到 `_service/agent_sessions.jsonl` 的 current wire
-`started + turn`，逐项核 parent run、node/chapter、profile、subject、provider session、turn index、
-prompt/schema 与 requested/actual model/effort，再与 ledger 的 attempt/fingerprint/response SHA 闭合。
-模型证据统一由 `novel/llm/model_identity.py` 重算：回显 actual 必须精确等于 profile；未回显只允许
-registry 登记的 `driver-enforced`，且该 session turn 必须有 CLI 版本。后一种 checkpoint 的 `model`
-记录 adopted identity，但 session actual 仍为 `null`、ledger model 仍为 `unknown`；恢复、历史采用、
-聚合和 commit 均不得把它们倒填为已回显。未登记 driver、缺 CLI 版本或任何非空冲突一律拒绝。
-恢复会认领 prior attempts，但不 probe/start、不新增 wire，也不把旧 provider session 伪造成可 resume
-的 live client。联合 HARD 后确需修订时仍属同一工作单元：进程内优先连续 resume；旧物理会话不可恢复或
-输出 schema 确有变化时可新建物理会话，但不得重新发放内容预算。checkpoint 首次写入不可覆盖，最终整书 compile、
-联合 HARD、正式 artifact/`.INVALID`、commit journal 与 readback 终验仍只由 producer 代码决定。
-该 checkpoint 会保存被接受的 stdout；上方 session audit 仍只存 hash 与计量，两者不能混读。
-
-Agent CLI 的 delivery attempt 与语义 turn 正交——**该双轨仅存量账解码**；现役直连 LLM
-不再维护独立 delivery attempt 臂。历史材料中分别命名为
-`max_delivery_retries`（默认 3 次重试，即首发在内共 `max_attempts=4`）和
-`max_semantic_turns`（默认最多 4 轮候选/纠错）。存量说明见 Git；新代码勿再按此双轨分支。
-
-429、408/425/5xx、已识别连接/timeout，以及
-`403 Request not allowed` 且供应商 token 明确全为 0 时，首发失败后最多按 2/4/8 秒再发三次；每次
-真实发送各占 ledger 一行并写 `attempt/max_attempts/retryable/will_retry/backoff_ms/status/error_kind`。
-未形成可采纳回答的失败不进入 `agent_sessions.jsonl` 的 turn，也不进入 checkpoint `attempt_links`。
-五小时用量窗口（包括 Claude 的 `session limit`、`rateLimitType=five_hour`、`out_of_credits` 与带 reset
-时刻的信封）与登录过期不作秒级热重试，其他 403 作为永久权限错误停止。若一批所有缺章都只因登记的
-可恢复交付错误结束，producer 在逐章 future 全部 drain 后原子写 `delivery_recovery.json`；该文件只含
-run/code/phase、completed/pending/deferred 章、稳定错误类别/status/attempts、请求全集身份与 `run.json`
-SHA，不保存错误正文。下一轮同 run 启动先撤销旧等待标记，再逐份严格恢复成功 checkpoint；本轮仍失败
-才重铸标记，全部成功则保持删除。Stage4B 不一次性向 executor 提交整本 future：只维持并发窗，首个
-可恢复交付失败后停止接纳新章并 drain 已在途章，因此尚未发 wire 的 deferred 章可以在恢复后再请求。
-该 sidecar 不是正式 artifact、缓存或跨代码迁移面。
-
-Stage4A 的普通 live checkpoint 恢复同样只认当前 run。每份 typed targeted repair/replan 都先打开
-fresh producer epoch；代码 漂移也会打开新 epoch。只有 targeted repair 的目标章可以走显式
-historical response adoption：target 先创建自己的 immutable run
-identity，再逐字段对证 source/target profile、完整请求、schema、input、ceiling 与恢复协议，并用 source
-自己的 code/session/checkpoint/attempt/ledger 加当前动态 validator 复验响应。只有唯一最大来源可写
-target `design/historical-checkpoint-adoption.json`；并列或零来源直接不采用、由 target 新发 wire。旧
-provider session 不注册进 target pool，source revision 不复制，正式 lineage 和 usage 分别保留 manifest
-指针与 source/target 分账。策略 unit、普通首轮和 strategy replan 不在该桥内。
-
-repair/replan aggregate 的 prepared 提交尾窗是另一条显式跨 ended-producer 边界，不是 historical
-response adoption。source v3 journal 先封存 producer parent、repair/replan scope、完整 unit sources、
-候选 baseline/target 与 full typed provenance；新 recovery run 只能在唯一物理 prepared、source
-drained/ended、当前 truth/input/code/compiler/HARD 与 source checkpoint/session/attempt/ledger 全部闭合时，
-以 baseline→写 sealed target、target→只验证、第三态→拒绝的两态协议补尾。任何候选写之前，先对 source
-`artifact_adoption`、source-stable canonical relation 与当前 recovery run/parent attempt 做全局
-0-or-exact preclaim；JSONL 无 LF 尾、重复身份、额外字段或另一 Stage4 prepared 都关闭式拒绝。
-审计事件固定为 `kind=stage4_repair_aggregate_recovery` 与
-`kind=stage4_repair_aggregate_recovery_attempt`：共同绑定 stable recovery id、source run、source journal
-raw/self SHA、artifact/fingerprint、target file SHA 与 delivery kind；attempt 另绑定实际 recovery
-`run_id/parent_run_id`。候选验收后先幂等补 source adoption，再追加两层 recovery audit，最后才把 source
-journal 标为 committed；committed 下游每次仍逐字要求 journal 所记 adoption/canonical/attempt 三类账。
-补尾不复制 source checkpoint，不续 provider，也不放宽 strategy replan 禁止 historical response
-adoption 的边界。
-
-若 Stage4B 旧 run 已结束，新 run 在 wire 前通过生产采用入口复验历史章 checkpoint。
-允许多来源、部分或全章采用；聚合由独立 deterministic commit 身份绑定当前输入及每章来源，
-无需本轮至少一个模型 checkpoint。source run/profile/request/schema/checkpoint/session/ledger、
-当前候选与动态 validator 必须全部闭合；歧义或损坏来源不得猜测采用。来源原账保持不变，
-当前 unit lineage 引用 source 身份，历史成本保留在原 ledger，不复制冒充本轮费用。
-旧链的采用与补尾落在 stage4/plan.py 与 stage4_runs.py（随旧链整层退役，F8b-3）；新链同族
-边界由 `novel/llm/paid_requests.py::PaidRequestSession` 的 wire 采用／跨根历史采用与
-`novel/llm/paid_requests.py` 的候选生命周期（committed_set_recovery／deterministic_replay）承担。
-
-#### 7.0b Stage6 semantic A/B checkpoint 与 commit journal —— 双盲恢复态，不是公开 HTTP 模型
-
-`stage6.semantic` 的 agent run 首次进入时冻结 `protocol_version=node-executor/v1`、resolved `profile`、
-`session_isolation=per-purpose`、`recovery_policy=stage6-semantic-v1` 与 A/B 两相各自的 response
-model/schema SHA、requested output token ceiling 和 content 偏好。A/B 必须使用两个不同 driver 对象、
-两条 logical session、两个临时 cwd 与不同 provider session id；两个 driver 的元数据与复用的一份
-只读 probe 所声明的 driver/provider 仍须与同一 resolved profile 闭合。把同一对象或同一 provider session 给两名 judge 都在
-双盲边界关闭式拒绝。
-
-每名 judge 只有一份不可覆盖的验证后 checkpoint：精确绑定 role/purpose、实际 `(system,user)`、
-response schema、resolved profile、subject、requested ceiling、accepted stdout/normalized/typed payload、
-attempt links、ledger response SHA 以及 logical/provider session/turn。恢复时重新闭合 current code、输入、
-prompt/schema、typed validator、ledger 与 `_service/agent_sessions.jsonl`；**两份 checkpoint 都完成预检后
-才允许任一新 wire**。完整恢复不构造 driver、不 probe/start、不发 wire；单边恢复保留已验证一侧，
-只为缺失角色新建 driver/session 并请求，不把历史 provider session 冒充 live resume。A/B 都缺失时，
-两份 client 先预建并闭合同一只读 probe，再由 agent 并发请求；任一成功侧可以保留 checkpoint，
-另一侧失败不能让单份结果冒充双盲完成。
-
-正式 artifact 仍只由 Stage6 producer 写。代码持有跨线程/进程的 commit ownership，选择唯一 seq 后按
-`prepared journal → ArtifactStore 正式写入 → HookSemanticReview typed exact readback → 恰好两条
-artifact adoption → committed` 收口；foreign prepared 序号不能被 legacy 或另一 run 抢走，尾窗恢复
-必须复验 journal 的 artifact/finalization SHA 与两份 ledger identity。双盲响应的 schema/dynamic 校验、
-匿名标签闭合、合并、当前输入与代码漂移检查、最终交付验证都由代码承担，agent 自述或进程成功不能
-替代。checkpoint 与 journal 都是
-`<base>/_service/runs/<sid>/stage6/<run_id>/` 内部 sidecar，不是正式 artifact、缓存或
-公开 API 类型。旧书内 `_stage6_runs` 已退役；不再将其 run、checkpoint 或 journal 复制到 service 根。
-当前 Stage6 run 必须显式保存完整 `experiment_arm`；缺字段或 null 的旧记录保持未知，
-不能补成默认实验臂后继续采用。新运行默认仍使用 0 ms，两侧 checkpoint 恢复须闭合同一冻结实验配置。
-
-#### 7.0c Phase5 executor checkpoint / commit journal —— 现役 producer 共用一套 acceptance
-
-所有运行记录的读取、历史采用和免费恢复先经 `novel/runtime_layout.py::stage_run_roots`
-检查布局。当前只有 `<base>/_service/runs/<sid>/stageN/` 一条来源；旧书内
-`_stage2_runs` / `_stage4_runs` / `_stage5_runs` / `_stage6_runs` /
-`_stage7_runs` 即使为空、不可读或损坏，也明确拒绝，不能当作无历史而重新付费。
-当前 run、checkpoint、prepared、Reviewer rewrite journal 和恢复 manifest 不搬运旧字节；
-原 service 根中的有效尾窗与同工作单元累计账仍可按原身份免费续完。旧代码与整根归档配对读取。
-
-Stage2 Global、Stage4 design/plan、Stage5 write、Stage6 hook 与 Stage7 rename 不另造 acceptance
-协议；都复用
-`novel/llm/run_journal.py` 的 `node-executor/v1`、append-only revision checkpoint 与
-`prepared / committed` journal。各薄 adapter 只登记路径、purpose、recovery policy、session isolation、
-允许触碰的正式/伴生路径和同书 foreign prepared 排斥：Global 是 `stage2-knowledge-v2` 且 per-node；
-Stage4 分别是 `stage4-design-v1` / `stage4-plan-v1` 且 per-node；Stage5 是 `stage5-write-v2` 且
-per-chapter；Hook 是 `stage6-hook-v1`、Rename 是 `stage7-rename-v1`，后二者均 per-node。
-
-Analyze 的联合首次提交另以 AnalyzeReceipt/AnalyzeRecoveryJournal 冻结两侧基线、局部到正式
-ID 映射及共享已购来源。Prepare 复用 agent_runs 的原请求/回答/checkpoint 保管，recovery policy
-为 `stage6-prepare-v1`、session 为 per-node；首次发布与免费修订/决定共用 PrepareMutationJournal
-冻结 CAS 目标，费用采用与会话尾账闭合后才 completed，不把它冒充第三份创作知识产物。
-
-Global 每个 accepted turn 保存完整 Knowledge candidate、MainText 身份和候选表身份；静态人物由
-独立 `stage2.characters` 完整候选负责。旧 role/fate 窄修信封、accepted patch 计数与编译入口退役。
-两个现役 owner 分别遵守同一工作单元累计额度，恢复不能换 run 清零。dynamic-validator 拒稿先封存
-精确当轮响应与验证身份；人工 replacement 必须重放当前同一 validator。正式尾窗只在同书所有权内
-走 `prepared → 所属正式/伴生产物 → typed readback + freshness → adoption → committed`；foreign
-prepared 先拒，新 run 不得覆盖中断窗口。历史窄修审计行保留只读，不能据此产生现役候选或追加额度。
-
-所有 executor 共用 `agent_json_schema` 生成的 provider wire，不按 Claude/Codex 分叉 schema。该 wire
-限制为两端都能严格校验的子集：根是 object，每层 object 关闭动态属性且全部字段必填；Pydantic 的
-`discriminator/default` 注解被移除，`oneOf` 等价归一为 `anyOf`，单值 `const` 等价归一为单元素
-`enum`。业务上必须保留的动态键映射不伪装成
-开放 object：Stage2 的人物表/必要经历表与 Stage7 的 surname map 在线上改为显式 key/value 行数组，
-验收时拒绝重复键并确定性还原成原有 dict。这个适配只存在于 agent wire；正式 artifact、内部 typed
-对象与新 checkpoint 的 response payload 都不改形，恢复后仍重跑当前 schema/HARD。旧 checkpoint
-字节不迁移；其旧 schema SHA 与当前 wire 不同，因此 live restore 关闭式失败、由新 run 重建。
-归一后的 canonical schema 同时用于 identity、checkpoint 与具体 CLI，且在拉起任一 driver 前通过公共预检。
-
-除上述 Global 固定联合信封的窄补丁外，其余 agent schema 固定为 `BlindPlanResponse`、
-`EvidenceBindingResponse`、`ChapterResponse`、`HookResponse` 或 `NameMapResponse`；一次 feedback 后仍交
-完整 replacement，不能换成局部补丁 schema。代码先物化候选，
-再运行当前业务 HARD / scope / identity；反馈只带安全的结构化规则元数据，不把裁决权交回 agent。
-accepted checkpoint 精确绑定当前 profile、subject、prompt/schema、requested ceiling、session/turn、
-accepted stdout/typed payload、attempt links 与 ledger；跨进程恢复复核这些字段，旧 provider session 只作
-历史 adoption 身份，需要继续修订时启动新 live provider session，并继承已用 turn / attempt 预算。
-
-只有正式交付进入 journal：在同书所有权内写 `prepared`，按冻结 baseline 改写/退休 touched paths，
-typed readback 后重核 current input、code、freshness 与全部 HARD，再将正式 artifact 精确 adoption 到
-accepted attempt，最后写 `committed`。Stage4 typed infeasible 的 EvidenceBinding 是该节点登记的正式
-primary，照常 journal/adoption 但保持 landed-red；Stage5 rejected/INVALID、Hook/Rename turn 耗尽等
-没有正式 primary 的终态不得伪造 adoption 或 committed，并保留既有 blocked 与 0 成本 revalidate /
-人工恢复语义。该整套 sidecar 都是内部恢复态，不进入公开 HTTP schema。
-
-### 7.0d `operator_phases/<session_id>.jsonl` —— legacy 诊断墙钟，不是主路权威账
-
-正常主路的权威时间线来自 RunSupervisor lifecycle events、admission claims、node beacon、
-`ledger.jsonl` 与 `agent_sessions.jsonl`；这些由生产动作自动形成。Executor 不在 prompt
-或正常主路里手工埋点，历史 Commander 账只读。`operator_phases` 只保留 legacy/显式诊断兼容：缺失、未闭合或无法与权威账
-联结时，完整 phase 墙钟分解必须是 unknown，不能阻断运行或洗成 0。若显式使用，每个 session 仍独占
-append-only 流；人工审阅、批准与终审可以被量时，但不会因此成为 pipeline node、provider turn 或
-交付闸。事件 wire 的字段证据如下：
-
-| 字段 | 含义 | 证据 |
-|---|---|---|
-| `wire_version / session_id / sid / source / kind / ts_ms` | 每行公共身份、来源、事件种类与毫秒时间 | 契·码 |
-| `parent_run_id / start_code_version / end_code_version` | session 起点的可选父 run 与起止代码身份；只出现在对应 session 事件 | 契·码 |
-| `phase_execution_id / phase / action / run_id` | 一次 phase 的唯一执行身份、闭集阶段、短 ASCII 动作种类与可选业务 run 联结 | 契·码 |
-| `state / exit_code / elapsed_ms / duration_source` | phase/session 终态、真实退出码与 monotonic/wall-clock 耗时来源 | 契·码 |
-| `evidence_sha256 / error_kind` | 可选无正文证据 hash 与短 ASCII 错误类别；不得装自由理由 | 契·码 |
-
-phase 闭集为 `preflight / inspect / preview / execute / review / approve / finalize / verify`；终态闭集为
-`completed / failed / cancelled / unknown`。折叠时 start/end 必须同 phase/action/run、时间不得倒序，
-failed 必须有 `error_kind`。summary 对已结束 phase 的时间区间取并集，重叠只算一次；会话总墙钟减去
-该并集得到 unattributed。没有 session、未闭合 session 或未闭合 phase 时完整分解保持 unknown。
-读侧只容忍最后一条**无换行**坏尾并把 session 留在未闭合态；完整换行坏行一律报错。写侧发现这种
-截断尾时拒绝继续拼接，保留旧 session 证据并要求另开 session，不能把下一条 JSON 接进半行。
-
-本 wire **刻意没有** node、model、usage、token、price、prompt、正文、reason、argv、路径或密钥。
-历史 Commander 宿主内部模型 usage 没经过仓库边界时，summary 固定给
-`model_usage_state=unavailable_host_boundary`；不得按墙钟、字数或 executor 均价反推成本。
-
-### 7.0e `_service/runs`、scratch、trash 与 retention
-
-新 writer 的 run/checkpoint/history 唯一根为 `_service/runs/<sid>/stageN`。旧书内
-`_stage*_runs` 不迁移、不追加，只能由具体 producer 的 legacy reader 在逐字校验通过后兼容读取。
-operator 临时材料落 `_service/scratch/<sid>/<session>`；正常收尾只删除本 session，不能按 sid 或
-scratch 根递归猜目标。
-
-服务维护使用 `novel.cli.service_lifecycle preview|apply` 两相口。policy 的
-`log_ttl_seconds / telemetry_ttl_seconds / trash_ttl_seconds / checkpoint_ttl_seconds` 默认全是
-`null`，即关闭；`max_entries` 同时限制扫描量与候选量。preview 只读生成内容绑定的 plan token；apply
-必须显式 `--yes`，逐 sid 取 writer ownership，并对每个目标重核路径、symlink、owner、TTL 和冻结
-tree/file identity。日志只收已 ended owner，legacy telemetry 只收已 closed session；checkpoint 还须
-同时证明 parent delivered、run committed、正式文件 SHA 对得上，并在删除前永久写
-`_service/run_receipts/` 的无正文 receipt。ledger、admission、beacon、agent/job/session 事件及恢复
-manifest/receipt 永不进入候选。
-
-apply 先写 aggregate prepared，再为每项写自哈希 item prepared；删除成功后逐项 committed，最后
-aggregate committed。中途崩溃后，同一个 plan 可凭逐项证据区分“本次已删”与“外部拿走”，幂等补尾；
-缺 prepared 的目标消失仍关闭式失败。trash purge 同样先写永久 receipt，v3 trash 的 book、approval 与
-该 sid service run 是一个回收边界。retention 与 restore 都有正式 preview/apply HTTP/UI；restore apply
-仍只由受控 CLI 子进程移动产物。restore 在首个移动前写永久 v2 prepared receipt，逐面保存无正文
-manifest、archive/live 精确路径与 SHA/tree 身份；hard-kill 后，显式重放或 trash sweep 只有在每面恰好
-一侧存在且身份匹配时才幂等补尾；服务启动只作有界 receipt 扫描并拉同一受控 CLI child，不在服务
-进程内移动书。双份、缺失、漂移或陌生 trash 壳条目一律关闭式留盘，且不阻断恢复 UI 启动。
-`ArtifactStore` 仍把 numbered `_rounds` 当作原字节恢复面；未编辑 `.INVALID` 归档后，若其
-locator-bound `_revalidation` 创建基线与 numbered 轮次逐字相同，只把重复正文压成绑定 numbered 路径
-与 raw SHA-256 的小引用；恢复把该轮搬回 live 时，仅在 live SHA 精确匹配时解析为创建基线。人工编辑
-导致两份内容不同则完整保留；旧 full baseline 继续由读取口兼容，不使用 symlink/hardlink，也不递归
-扫描或删除历史目录。
-
-### 7.1 ⚠ 日志按**字节**存，只在读的时候解码
-
-原型这一段是对的，连注释一起搬：
-
-> 中文一个字跨 3 字节，而日志是按字节切块读的：切在字中间时 `errors='replace'`
-> 会把那个字变成 `�` —— 一个**不可逆**的损坏，而且下一次从 `end` 续读也补不回来。
-> 所以宁可少读几个字节，留给下一次。
-> **不能靠「切到最后一个换行」来代替**：日志里可能整段没有换行（实测就挂在这上面）。
-
-### 7.2 ⚠ 子进程的三件套是环境变量，不是 argv flag（`R-12.3`）
-
-```
-PYTHONUTF8=1  ·  PYTHONIOENCODING=utf-8  ·  PYTHONUNBUFFERED=1
-```
-
-原型注释逐字：「**这三个变量是必需项**——没有它们，任何打印 `✓` 的 node 进管道就 rc=1。
-用 `utf-8` 而不是 `utf-8:replace`：`:replace` 会把编不出来的字悄悄换掉，
-那是『静默糟蹋输出』，比崩溃更坏（也比崩溃更难发现）。」
-
-病因：父进程的 `locale.getpreferredencoding()` 是 `cp936`；子进程 stdout 接到**控制台**时是
-UTF-8，接到**管道**时退回 cp936——而报告里满篇 `✓ ✗ ↻ ⚠`。
-最要命的形态是：**先落盘（钱已经花了）、再打印 `✓`** ⇒
-**一次成功的付费跑会被报成失败**；而失败分支打印 `'✗'*20`，
-**报告失败这件事本身就是崩溃触发器**。
-
-⇒ 两道都要：`build_argv` 里带 `-X utf8 -u`（人手敲那条命令时也生效），
-`spawn` 时带这三个环境变量（子进程的完整保证）。
-⚠ CLI 入口另外还要显式把 stdout/stderr 重配成 UTF-8——那是给
-「人在 GBK 控制台里直接敲 `python -m novel.cli`」准备的第三道。
-
-### 7.3 结构化运行心跳复用作业日志，不另造进度文件
-
-长请求把一行 UTF-8 JSON 写到 stdout，固定前缀为 `@observe `。父进程已把 stdout/stderr
-按字节追加到 `logs/<job_id>.log`，所以终端直跑与 Web 作业共享同一条出口：
-
-- `llm_attempt_heartbeat`：发送开始即报；仍在途时默认每 30 秒报一次，含
-  `attempt/max_attempts`、elapsed 与可选章进度；
-- `llm_attempt_finished`：每次真实发送结束即报 `ok/error` 与错误分类；
-- `chapter_progress`：Stage 2/5 每章结算后报本批 `completed/succeeded/failed`。
-
-这些事件只回答「当前长作业有没有活着、走到哪一章」，**不参与完成度判定**。
-`R-14.1` 仍只认产物存在性与 freshness；单独进度文件会与盘上真实产物分家，因此不新增。
+旧链 `stage2.blueprint` 的 per-purpose-chapter checkpoint 冻结与
+`stage2-blueprint-v1` 恢复策略已随旧链退役；`R-14.1` 仍只认产物存在性与
+freshness 的裁决保留（单独进度文件会与盘上真实产物分家，因此不新增）。
 
 ---
 
@@ -1295,8 +974,8 @@ UTF-8，接到**管道**时退回 cp936——而报告里满篇 `✓ ✗ ↻ ⚠
 | 1 | **多文件写**：stage0 首次导入只写了 clean/report 之一；stage1 只写了 main/hook/report 的一部分 | 同一轮产物不齐 | stage0 明确拒绝不完整的首次产物对，确认它是中断留下的新产物后移走残件再重跑；stage1 用同一输入重跑会覆盖补齐三件 |
 | 2 | **`_rounds/` 归档与新稿之间**（含 stage0 的 JSON/TXT 成对轮次） | 旧轮可能只归档了一份，或新轮只换了 `clean_text.txt`、报告仍指向旧指纹 | 相同字节的归档复制可幂等重放；stage0 用 `clean_sha1` 把半轮状态明确拒出。若已进入新轮两文件提交窗口，先从同轮归档恢复当前 JSON/TXT，再重跑 |
 | 3 | **回答、成本行、checkpoint/prepared、正式产物与采纳账之间** | 已产生调用但回答或提交只完成一部分 | 先保留成本和原始回答；各 producer 按登记的 checkpoint/prepared 证明免费补尾，不重新计费或重签旧来源。只有完整回答、输入、身份及原 owner 停止均可证明时才恢复；缺证据保持 unknown。Stage5 维护恢复边界见 `docs/schema/stage5.md` |
-| 4 | **提升路三步的中间窗口** | 归档位已占、正式稿已落、`.INVALID` 还没挪走 | **再跑一次 `--revalidate` 就自愈**。⚠ 三步的顺序是挑过的：先占归档位并检查（唯一大概率的失败）→ 落正式稿 → 挪 `.INVALID`。反过来「先归档后落稿」崩掉的话，`.INVALID` 已经从它该在的位置消失而正式稿还没写 |
-| 4b | **Stage5 canonical 章与 trim audit/resolution 的多文件提交窗口** | 普通异常会由 `history_transaction` 整组回滚；若进程被强杀，可能只换了 canonical，或 sidecar 仍绑定上一份正文 | **跑 `stage5.write --recheck` 自愈**：从当前 canonical 原文与冻结预算重建 trim 状态；正文相同且仍精确绑定的人工 resolution 保留，失配决定退休 |
+| 4 | （历史）**提升路三步的中间窗口** | 归档位已占、正式稿已落、`.INVALID` 还没挪走 | 旧链 `--revalidate` 提升路已随人工修复写面退役；现役 `.INVALID` 由 owner 修订／`--check-only` 恢复（历史自愈记录：再跑一次 `--revalidate`，顺序为先占归档位→落正式稿→挪 `.INVALID`） |
+| 4b | （历史）**Stage5 canonical 章与 trim audit/resolution 的多文件提交窗口** | 普通异常会由 `history_transaction` 整组回滚；若进程被强杀，可能只换了 canonical，或 sidecar 仍绑定上一份正文 | 旧链 `stage5.write --recheck` 自愈路已退役；现役正文提交是章回执链原子窗口（str06.stage5.body），恢复走 committed_set_recovery |
 | 5 | **服务内存 registry 与跨进程 owner/admission 的生命周期不同** | 重启会丢内存 registry，但未闭 admission/claim 或仍活着的子进程不会因此消失 | 新写者检查持久 admission 与 owner lease；旧执行先关闭 admission，再排空 claim/execution/后代。不能用父进程退出、过时锁文件或重启推定安全，见 `novel/orchestrator/write_admission.py`、`novel/orchestrator/admission.py` |
 | 5b | **Agent 批量代跑待跑列表在服务内存中**（`novel/orchestrator/agent.py::_PENDING`） | 重启后尚未启动的项不自动复活；已开始的执行按持久账和 owner 证据解释，不能假称仍由原 Supervisor 推进 | 页面按当前后端列表显示，待跑项需重新提交；已开始项按停止、恢复与原配置续跑边界处理。这与持久 `queues.jsonl` 的显式恢复协议不同 |
 

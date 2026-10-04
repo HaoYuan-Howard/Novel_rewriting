@@ -105,17 +105,15 @@ def test_new_chain_naming_is_the_takeover():
     assert takeover.is_file(), '接管反例文件必须存在'
 
 
-def test_workpack_schema_carriers_have_no_live_producer():
-    """终审工作包 schema 载体仍在契约层，但没有任何现役 producer 写它。
+def test_workpack_schema_carriers_stay_deleted():
+    """终审工作包 schema 载体已删除（2026-10-04 清理批），不得复活。
 
-    载体保留只为存量盘面解码；现役工作包形状归
-    `contracts/schema/`（`NameMapV5`／`HookReceipt` 一族）。
+    旧载体只为「无 producer 的解码形状」存活，而 decode_artifact 对
+    `stage7/name_map.json` 一律关闭式拒识 ⇒ 载体结构上不可达。现役工作包
+    形状归 `contracts/schema/naming.py`（`NameMapV5`）与 `hook.py`（HookReceipt）。
     """
     import contracts.schema.api as api
 
-    assert hasattr(api, 'Stage7ApprovalWorkpack')
-    assert hasattr(api, 'CompactApprovalCheck')
-    # 现役工作包载体在新链命名 schema 里，且与旧载体不是同一个模型。
-    from contracts.schema.naming import NameMapV5
-
-    assert NameMapV5 is not api.Stage7ApprovalWorkpack
+    for gone in ('Stage7ApprovalWorkpack', 'CompactApprovalCheck',
+                 'ApprovalWorkpack', 'WorkpackReading'):
+        assert not hasattr(api, gone), f'终审/审阅工作包载体复活：{gone}'

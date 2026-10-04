@@ -19,7 +19,7 @@ prompt 那一份必须是**插值来的**。手抄一份不会报错，它只是
 """
 from __future__ import annotations
 
-from typing import Final, Literal, Mapping, NamedTuple
+from typing import Final, Literal, NamedTuple
 
 import contracts.artifacts as artifact_paths
 
@@ -32,10 +32,6 @@ import contracts.artifacts as artifact_paths
 #: 实测代价：某次 23 章成稿与任何一版上游都配不上（匹配 1/23），配对关系永久丢失，而界面全绿。
 FRESHNESS: Final = ('fresh', 'stale', 'unknown')
 
-#: Stage5 Review 相对当前 RULES、canonical 章集与正文的完整状态。
-STAGE5_REVIEW_STATE: Final = (
-    'fresh', 'stale', 'unknown', 'missing', 'legacy_incompatible',
-)
 
 #: ArtifactState 给界面直接消费的四态。`missing` 不能再由前端拿 `!exists` 推导。
 ARTIFACT_DISPLAY: Final = ('missing', 'fresh', 'stale', 'unknown')
@@ -76,9 +72,6 @@ RUN_NEXT_HANDLERS: Final = (
 #: 两者必须分开：blocked action 的 hash 只描述“为什么停”，不能冒充恢复命令授权。
 EXECUTION_PERMIT_KINDS: Final = ('ready', 'recovery')
 
-#: 只登记本次章级 B 场景 alias→事实/材料证据 join；不随任意代码或提示词变化。
-STAGE4_BINDING_INPUT_CONTRACT: Final = 'stage4-chapter-binding-input-v4'
-STAGE4_BINDING_INPUT_RECEIPT_KEY: Final = 'CHAPTER_BIND_INPUT_CONTRACT'
 
 #: 一条来源边**为什么**得到那个结论。**用 id 不用措辞**（同 `STAGE0_WARNINGS` 的理由）：
 #: 它要进校验报告的第一节（`Q-4`：来源在前判定在后），而报告不在逐字节验收范围内——
@@ -242,18 +235,6 @@ STAGE5_REVIEWER_REWRITE_DIRECTIVE_CODES: Final = (
     'smooth_transition',
 )
 
-STAGE5_CLOSED_EXEMPT_FLAGS: Final = (
-    '--dry-run', '--check-only', '--identity', '--recheck',
-    '--revalidate', '--apply-edit', '--wontfix',
-    # stage6.prepare 的 stdout 只读 edit 模板仍保留；审阅写面已退役。
-    '--emit-edit-template',
-    '--adopt-residual', '--validate-edit', '--rebind-review',
-)
-
-#: 历史 Agent CLI 测试/恢复栈仍消费的 driver 与 effort 取值面；现役写入只走 legacy。
-AgentDriver = Literal['claude-code', 'claude-code-glm', 'codex']
-AgentReasoningEffort = Literal['none', 'low', 'medium', 'high', 'xhigh', 'max']
-AgentExecutionMode = str
 
 #: 常用 executor 配置（``PipelineAgentProfiles``）在盘上的三态；与整书代跑
 #: ``AgentRun`` 无关。唯一发布口仍是 ``GET /api/agent/capabilities``（路径保留，
@@ -449,8 +430,9 @@ APPROVAL_STATE: Final = ('pending', 'approved')
 # Human workflow checkpoints kept under Output/_service. These are service
 # state, not Stage0 current approval fields.
 # ⚠ 2026-09-13 起 Stage2 语义审阅整体退役：``gate.s2``、Stage2 已读凭证与节点
-# 接受不再是审批契约成员。Stage2 与下游之间只保留统一机械准入（见
-# ``novel/orchestrator/mechanical_admission.py``），语义未审以报告中的 ``unver`` 披露，不产生审批待办。
+# 接受不再是审批契约成员。旧链统一机械准入名册（mechanical_admission.py）已随
+# 旧链退役删除；新链准入由 queue/state 的完成度与续跑判定承担，语义未审以报告
+# 中的 ``unver`` 披露，不产生审批待办。
 # ⚠ F8a：``s6`` 与 ``s4``／``s5`` 同格处理——Stage6 整层退役后它**没有可写面**
 #   （F6d 登记删光 approvals.py 的 s6 代码），但键位保留：存量书的审批账仍带
 #   这一格（恒 False），删键会让旧记录当场校验失败。新链无任何审批面。
@@ -485,10 +467,6 @@ STRUCTURE_APPROVAL_DECISIONS: Final = ('accept', 'request_replan')
 STRUCTURE_APPROVAL_STATES: Final = (
     'unavailable', 'missing', 'accepted', 'replan_requested', 'expired',
 )
-#: 最终结构审批的证据权威契约。它独立于结构度量契约：度量算法不变时，
-#: 审批能否把一项读数解释为行动依据仍可能变化。该值必须进入整书与逐章
-#: subject，使旧裁决只留历史而不能在新批准边界下继续铸造执行权。
-STRUCTURE_REVIEW_CONTRACT: Final = 'stage4-structure-review-v4'
 
 #: Stage4A 的正式设计审阅与 B 后最终计划审批是两张不同的票。前者只决定
 #: 当前盲候选能否进入付费 B，绝不打开 ``gate.s4``。决定与修复码都必须是
@@ -496,13 +474,6 @@ STRUCTURE_REVIEW_CONTRACT: Final = 'stage4-structure-review-v4'
 DESIGN_STRATEGY_DECISIONS: Final = ('accept', 'request_replan')
 DESIGN_CHAPTER_DECISIONS: Final = ('accept', 'request_repair')
 DESIGN_REVIEWER_KINDS: Final = ('human', 'delegated_operator', 'inherited')
-#: Commander/Reviewer 可提交的 approval 面闭集。reviewer typed request 的
-#: ``action.surface``、可重放决定记录与 blocker→surface 注册表共用这一张表。
-#: ⚠ Stage2 审阅面已随语义审阅退役整体移除；Stage4 起的上游疑点改走
-#: 原 producer 的编辑入口（``--apply-edit`` 系列），不再转交审阅席位。
-REVIEWER_APPROVAL_SURFACES: Final = (
-    'design', 'structure', 'writing', 'stage5',
-)
 #: v3：策略与章 subject 改绑稳定 strategy epoch /
 #: chapter strategy；逐章 repair 显式区分本轮与累计 typed 约束，并把
 #: agent repair 与零模型完整章替换分成两个 capability。v1/v2 只作历史证据
@@ -521,60 +492,9 @@ FROZEN_V6_DESIGN_REVIEW_CONTRACT: Final = \
 DESIGN_STRATEGY_REPLAN_CONSTRAINTS: Final = (
     'replace_reconstruction_strategy', 'change_chapter_weights',
 )
-STAGE6_REVIEW_CONTRACT: Final = 'stage6-final-review-v5'
-STAGE6_APPROVAL_CHECK_BASIS: Final = 'candidate_without_approval'
-STAGE6_PREPARE_DECISIONS: Final = ('accept', 'rework', 'uncertain')
-STAGE7_REVIEW_CONTRACT: Final = 'stage7-final-review-v4'
-STAGE7_APPROVAL_CHECK_BASIS: Final = 'name_map_without_approval_or_delivery'
 #: `R-5.22` 预检结论的两态。pass = 构造性绑定过整书联合 HARD；
 #: blocked = 存在 stop-owner 失败或代码铸造的不可行 witness。
 DESIGN_PREFLIGHT_STATUSES: Final = ('pass', 'blocked')
-#: Commander 审阅工作包（TODO-45 批次 5）的固定分组顺序——异常优先：
-#: blocking 永远第一，全章 compact coverage 永远最后。`phase_deferred`
-#: 只登记「Context 落盘后才可判」的规则，不进入结构 subject。
-APPROVAL_WORKPACK_GROUPS: Final = (
-    'blocking', 'semantic_attention', 'disclosure',
-    'metric_only', 'phase_deferred', 'coverage',
-)
-#: 工作包只有 A / B 两个审阅面；它们都是只读视图，不是作业入口。
-APPROVAL_WORKPACK_KINDS: Final = ('design', 'structure')
-#: 工作包 v2 reading 的三种 typed 判别值：顶层、A 面章、B 面章。它们是 schema
-#: discriminator，不是前端选项，也不进 subject/token/proof。
-WORKPACK_READING_KINDS: Final = (
-    'stage4_workpack_reading_v2', 'stage4_design_chapter_reading_v2',
-    'stage4_structure_chapter_reading_v2',
-)
-#: B concern 的 closed_ref 解析结果分类；unknown 表示当前蓝图找不到该引用。
-WORKPACK_CLOSED_REF_KINDS: Final = (
-    'beat', 'state', 'constraint', 'evidence', 'character', 'global', 'unknown',
-)
-#: 审批工作包相对当前 typed 决定的处置态。``already_current`` 只表示
-#: **同一份工作包摘要**已有当前有效批准；旧根不再开放冻结兼容处置态。
-APPROVAL_WORKPACK_DISPOSITIONS: Final = (
-    'review_required', 'already_current',
-)
-#: Stage6/7 紧凑、hash-bound 终审工作包的两种主体。
-FINAL_APPROVAL_WORKPACK_KINDS: Final = ('stage6', 'stage7')
-#: 工作包条目只能公布现役 typed 审批决定面；它不会把动作翻译成
-#: CLI argv，更不会因为读了一次工作包就启动模型。
-APPROVAL_WORKPACK_ACTIONS: Final = (
-    'accept', 'request_repair', 'request_replan',
-)
-#: 工作包条目的交付效果（服务端下发；前端只呈现，不自算）。
-APPROVAL_WORKPACK_EFFECTS: Final = (
-    'block_b', 'block_context', 'attention', 'disclose', 'read_only',
-    'phase_deferred', 'coverage',
-)
-#: 分组与 effect 的关系也是契约，不许 builder / 前端各猜一份。
-#: blocking 唯一的两个 effect 对应 A 挡 B、B 挡 Context；其余组均是单值。
-APPROVAL_WORKPACK_GROUP_EFFECTS: Final[Mapping[str, tuple[str, ...]]] = {
-    'blocking': ('block_b', 'block_context'),
-    'semantic_attention': ('attention',),
-    'disclosure': ('disclose',),
-    'metric_only': ('read_only',),
-    'phase_deferred': ('phase_deferred',),
-    'coverage': ('coverage',),
-}
 #: Reviewer 对同策略章级历史约束的逐项处置；API 与模型载体共用取值面。
 DESIGN_CONSTRAINT_OPERATION_KINDS: Final = ('keep', 'withdraw', 'supersede')
 DESIGN_REPAIR_CODES: Final = (
@@ -608,73 +528,6 @@ DESIGN_REPAIR_CONSTRAINT_ARITY: Final = {
     # 只引用已登记约束或端点，不复制第二份关系正文。
     'semantic_constraint': (0, 1),
 }
-#: 每个 active repair code 的一句话语义。Executor 的 repair prompt 与 Commander
-#: 工作包 ``submission_options.allowed_values`` 共用这一份；退役码不登记。
-#: 没有这张表时 reviewer 只能去翻源码/测试猜字段含义，那正是它每轮多花的往返。
-DESIGN_REPAIR_CODE_INSTRUCTIONS: Final[Mapping[str, str]] = {
-    'entry_anchor': '以给定 opaque_aliases 作为章首入口锚，按列表顺序优先。',
-    'ending_anchor': '以给定 opaque_aliases 作为章尾收束锚，按列表顺序优先。',
-    'presentation_grouping': '调整给定剧情节点的呈现分配与分场指令，不新增、删除或改变父节点语义。',
-    'disclosure_order': '按 opaque_aliases 列表的目标顺序重排披露。',
-    'noncontiguous_regroup': '将给定 opaque_aliases 做非相邻重组，并保持因果/状态边界。',
-    'scene_goal': '只调整 scene_refs 指向场景的目标，必须覆盖给定 opaque_aliases。',
-    'scene_goal_exclude': (
-        '只调整 scene_refs 指向场景的目标，不得把给定 opaque_aliases 对应事实'
-        '写成这些场景的当前目标或已经进入当前场景的事件；不删除事实，也不改变其落地场景。'),
-    'binding_constraint_unsat': (
-        '调整 scene_refs 指向场景的结构，使其可在后续关闭式证据绑定中实现。'),
-    'semantic_constraint': (
-        '修复 opaque_aliases 所指已有约束或必要端点的呈现；保持已审含义，明确场景绑定。'
-        '不得另造关系或知识窗口；联合保真仍交独立设计审阅。'),
-}
-#: 每个 active repair code 一份**最小合法**示例（纯 dict；本模块不得 import pydantic）。
-#: 发给 reviewer 前必须经 ``DesignRepairConstraint`` 现场校验，示例与 schema 漂移
-#: 即在 build 时失败，不把过期形状发给模型。scene_ref 占位要换成本章 workpack 的
-#: scene id；alias 只示范 ``a_<16~64 hex>`` 格式，必须换成工作包里的真 alias。
-DESIGN_REPAIR_CONSTRAINT_EXAMPLES: Final[Mapping[str, Mapping[str, object]]] = {
-    'entry_anchor': {
-        'code': 'entry_anchor', 'scene_refs': [],
-        'opaque_aliases': ['a_00000000000000a1']},
-    'ending_anchor': {
-        'code': 'ending_anchor', 'scene_refs': [],
-        'opaque_aliases': ['a_00000000000000a1']},
-    'presentation_grouping': {
-        'code': 'presentation_grouping', 'scene_refs': [],
-        'opaque_aliases': ['a_00000000000000a1', 'a_00000000000000a2']},
-    'disclosure_order': {
-        'code': 'disclosure_order', 'scene_refs': [],
-        'opaque_aliases': ['a_00000000000000a1', 'a_00000000000000a2']},
-    'noncontiguous_regroup': {
-        'code': 'noncontiguous_regroup', 'scene_refs': [],
-        'opaque_aliases': ['a_00000000000000a1', 'a_00000000000000a2']},
-    'scene_goal': {
-        'code': 'scene_goal', 'scene_refs': ['<本章 workpack scene_ref>'],
-        'opaque_aliases': ['a_00000000000000a1']},
-    'scene_goal_exclude': {
-        'code': 'scene_goal_exclude', 'scene_refs': ['<本章 workpack scene_ref>'],
-        'opaque_aliases': ['a_00000000000000a1']},
-    'binding_constraint_unsat': {
-        'code': 'binding_constraint_unsat',
-        'scene_refs': ['<本章 workpack scene_ref>'], 'opaque_aliases': []},
-    'semantic_constraint': {
-        'code': 'semantic_constraint', 'scene_refs': [],
-        'opaque_aliases': ['a_00000000000000a1']},
-}
-#: 策略驳回两种 typed 约束的语义与最小合法示例；与
-#: ``DesignStrategyReplanRuling._scope_matches_kind`` 的判据逐字对应。
-DESIGN_STRATEGY_REPLAN_CONSTRAINT_INSTRUCTIONS: Final[Mapping[str, str]] = {
-    'replace_reconstruction_strategy': (
-        '整书重构策略本身不成立，须换一份新策略；chapter_ordinals 必须为空。'),
-    'change_chapter_weights': (
-        '只修订指定章的权重；chapter_ordinals 必须升序、不重复地列出受影响章。'),
-}
-DESIGN_STRATEGY_REPLAN_CONSTRAINT_EXAMPLES: Final[
-        Mapping[str, Mapping[str, object]]] = {
-    'replace_reconstruction_strategy': {
-        'kind': 'replace_reconstruction_strategy', 'chapter_ordinals': []},
-    'change_chapter_weights': {
-        'kind': 'change_chapter_weights', 'chapter_ordinals': [1]},
-}
 #: Stage4B 模型可以报告的语义担忧。它们只作非阻断证据，不得被解释成
 #: 编译器不可满足证明；schema、prompt 与 HTTP 枚举共用这一份取值面。
 BINDING_CONCERN_CODES: Final = (
@@ -695,73 +548,6 @@ DESIGN_REVIEW_STATES: Final = (
     'strategy_replan_requested', 'accepted', 'expired',
 )
 
-# ── Stage4 运行时失败 witness 的关闭式路由（TODO-45 批次 1）────────────────
-#: typed failure 的 ``repair_owner`` 完整取值面。前两个是现役节点 id；
-#: ``stage2.blueprint`` 是上游锚点/目录问题；``human`` 只形成 nonblocking
-#: concern；``code`` 是判据/编译器自身漂移；``infra`` 走传输退避、不计内容重采。
-FAILURE_REPAIR_OWNERS: Final = (
-    'stage4.design', 'stage4.plan', 'stage2.blueprint', 'human', 'code', 'infra',
-)
-#: 这些 owner 的失败**不是 B 在自己的 session 里能修掉的**：B 首轮见到立即
-#: 停止并诚实落盘，不把四轮预算烧在注定失败的重试上。
-FAILURE_STOP_OWNERS: Final = ('stage4.design', 'stage2.blueprint', 'code')
-
-#: Stage4 失败发射点 ``code`` → 修复 owner。**闭合表**：表外的 code 一律
-#: ``code`` owner（停下来给人看），绝不默认成可重试。
-#:
-#: 分域依据（B 只绑定舞台与保真材料；场景设计、预算、目标、状态都是 A 的）：
-#: · A 的设计域（``stage4.design``）：章集、节点呈现、必要端点、目标、预算与转场。
-#: · B 的绑定域（``stage4.plan``）：父节点的证据与舞台闭集，以及摘要回显、绑定编译错误。
-#: · 上游（``stage2.blueprint``）：人名证据缺位。
-#: · 代码（``code``）：来源边与 A/B 字节绑定是 provenance 机制自身；
-#:   ctx 事实投影的两侧都是代码组装，命中即代码漂移。
-STAGE4_FAILURE_OWNERS: Final[Mapping[str, str]] = {
-    # wire / 编译层（plan.py 的 validator 发射）
-    'candidate_sha256_echo': 'stage4.plan',
-    'infeasible_unproven': 'stage4.plan',
-    'binding_compile_refused': 'stage4.plan',
-    # A 单元自身的发射点（在 A 的 session 里可原地重试）
-    'strategy_chapter_set': 'stage4.design',
-    'strategy_style_words': 'stage4.design',
-    'blind_compile_refused': 'stage4.design',
-    'blind_chapter_problem': 'stage4.design',
-    # 联合 HARD（checks.check 发射）
-    'one_to_one': 'stage4.design',
-    'ordinal_seq': 'stage4.design',
-    'empty_chapter': 'stage4.design',
-    'placement_ref': 'stage4.design',
-    'ctx_plot_exact': 'code',
-    'ctx_permission_exact': 'code',
-    'scene_transition': 'stage4.design',
-    'goal_landing': 'stage4.design',
-    'budget_int': 'stage4.design',
-    'budget_band': 'stage4.design',
-    'plan_book_band': 'stage4.design',
-    'style_words': 'stage4.design',
-    'phase_artifact_link': 'code',
-    'context_link': 'code',
-    'ctx_name_attested': 'stage2.blueprint',
-    # 目录缺章才是机械不可行；未知舞台或共享证据不构成不可行证明。
-    'missing_chapter_catalog': 'stage2.blueprint',
-}
-
-def stage4_failure_owner(code: str) -> str:
-    """失败发射点 → 修复 owner 的唯一读法；未登记的 code 关闭式归 ``code``。"""
-    owner = STAGE4_FAILURE_OWNERS.get(str(code))
-    if owner is None:
-        return 'code'
-    assert owner in FAILURE_REPAIR_OWNERS
-    return owner
-
-
-def stage4_failure_retryable(code: str, *, surfacing: str) -> bool:
-    """失败只有由能修它的那一方自己发现时才值得原地重试。
-
-    ``surfacing`` 是发现失败的节点 id。``infra`` 例外：传输层失败对任何节点
-    都走退避重试，不计内容重采。
-    """
-    owner = stage4_failure_owner(code)
-    return owner == surfacing or owner == 'infra'
 
 #: 原始 txt 的编码候选，**按尝试顺序**。取值面只能从代码来：
 #: 全语料 163 本**只出现过 `utf-8`，另四个零样本**——样本再多也补不出没发生过的分支。
@@ -836,7 +622,7 @@ assert tuple(LAYER_CN) == tuple(LAYER_GLOSS) == TIME_LAYERS, \
 #:   同样不升版**。ir1.1 与 ir1 的差别**只有 blueprint system 里 place 那一段措辞**
 #:   （响应模型 / 编译器 / 投影函数逐个共用，见 `novel/stages/stage2/blueprint/contract.py`）
 #:   ⇒ 产物形状与语义都不变，两臂可并存于 A/B 的不同 base 之间。
-#:   起因是 ir1 的地点填充率相对 v3 掉了一半以上，而 `docs/stage2_contract_experiment.md`
+#:   起因是 ir1 的地点填充率相对 v3 掉了一半以上，而 `docs/stage2_contract_experiment.md`（已删，见 Git 历史）
 #:   §十一 实测**两个模型上都掉**（Pro −60% / Flash −28%）⇒ 那是契约的独立责任，
 #:   不是模型效应。为什么改、以及「加压会不会反被规避」那条风险，写在
 #:   `novel/stages/stage2/prompts.py::_BLUEPRINT_TPL_V1_1` 上方。
@@ -847,7 +633,7 @@ assert tuple(LAYER_CN) == tuple(LAYER_GLOSS) == TIME_LAYERS, \
 #:   同一个 `ChapterBlueprints` 形状。2026-08-23 同书付费验收后翻默认：Flash 从
 #:   91→126 拍（Pro 130）、145→169 hinge（Pro 168），在场者代词 9→0、名册外
 #:   9→0；0 HARD，唯一错误由 ch17 定向重生成一次收敛。完整证据见
-#:   `docs/stage2_contract_experiment.md` §十四。
+#:   `docs/stage2_contract_experiment.md`（已删，见 Git 历史） §十四。
 #: · `extraction-ir-v2.1`（2026-08-23）：v2 的相级 effort 单变量实验臂。双书付费
 #:   配对因 hinge 召回与成本门失败，默认未翻；完整否决证据见实验手册 §十八。
 #: · `extraction-ir-v3 / v3.1`（2026-08-23 登记时）：两条**尚未翻默认的实验臂**，只
@@ -876,7 +662,7 @@ BLUEPRINT_ARCHITECTURES: Final = (
 #: 选契约的；因此取值面收窄必须升 artifact version 并整跑重建，不能只改这一格。
 #:
 #: 【2026-08-21 翻默认：v3 → extraction-ir-v1】依据是同书同上游的单变量对照
-#: （`docs/stage2_contract_experiment.md` §六~§十，无情道 23 章）：
+#: （`docs/stage2_contract_experiment.md`（已删，见 Git 历史） §六~§十，无情道 23 章）：
 #:   · **当前默认组合 Flash×v3 落不了盘**——3 条 `hinge_drift` 被闸门拦
 #:     （本书；另有 2026-08-19 三本书实测同样在 stage2 被拦，n=4）；
 #:     Flash×ir1 是 135/135 全定位、0 HARD 直接落盘。去掉段号这一维，
@@ -893,7 +679,7 @@ BLUEPRINT_ARCHITECTURES: Final = (
 #:   ⚠ n=1（7C 三本配对未跑）。回退就是把这一格改回去，不涉及任何产物迁移。
 #:
 #: 【2026-08-23 翻默认：extraction-ir-v1 → extraction-ir-v2】依据见上方 v2 登记项与
-#: `docs/stage2_contract_experiment.md` §十四。它是**质量换成本**：本书 Flash 真调用
+#: `docs/stage2_contract_experiment.md`（已删，见 Git 历史） §十四。它是**质量换成本**：本书 Flash 真调用
 #: 25→43、completion 136,431→271,462；地点 66.7% 仍没到预登记 81% 底线，n=1。
 #: 采纳的理由是生产默认模型就是 Flash，而拍/hinge 缺口分别约补回 90%/96%、在场者
 #: 四类解析失败归零。默认回退仍只改这一格，但契约取值面的增删另按上方升版纪律走。
@@ -909,14 +695,6 @@ BLUEPRINT_ARCHITECTURES: Final = (
 BLUEPRINT_ARCHITECTURE: Final = 'plot-blueprint-v1'
 assert BLUEPRINT_ARCHITECTURE in BLUEPRINT_ARCHITECTURES
 
-#: ``stage2.global`` 唯一现役模型证据 wire 身份。模型只交段落候选 ID，代码再铸成
-#: 正式 ``SourceSpan``；人工 ``GlobalEdit`` 与存量 ``.INVALID`` 的 locator 恢复不属于
-#: provider wire，也不由本常量选择。
-GLOBAL_EVIDENCE_CONTRACT: Final = 'knowledge-paragraph-candidate-v2'
-
-#: Stage2 Blueprint 只读工作包当前绑定的是正式稿还是 live 问题稿。
-#: 只有 formal 工作包能提交 ``seen.read``；invalid 包只辅助修复。
-BLUEPRINT_REVIEW_SUBJECT_KINDS: Final = ('formal', 'invalid')
 
 #: `extraction-ir-v1` 响应侧的叙述层枚举 → 产物侧取值。**前缀化只在响应侧**：
 #: 产物侧 `TIME_LAYERS` 一个不动（下游 + 盘上数据的硬约束），compiler 是唯一映射落点。
@@ -940,10 +718,6 @@ assert len(set(RESPONSE_TIME_LAYERS)) == len(set(RESPONSE_TIME_LAYERS.values()))
 #: 改词、插动作描写、只写半句照旧判缺失。
 SPEECH_TAG_MAX: Final = 12
 
-#: 原文↔成稿对齐的锚覆盖率低于此值时只提示「证据不足」，不判内容不合格。
-#: 阈值与结论都由服务端下发；前端只画 coverage 原始读数和 state。
-ANCHOR_COVERAGE_WARN: Final = 0.6
-ANCHOR_COVERAGE_STATE: Final = ('low', 'adequate')
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 四、人物与称谓（stage2）
@@ -1023,11 +797,11 @@ WORLD_RULE_KINDS: Final = (
 #: 所以那一族判据**不能**拿本表去查（`present_names_pronoun` 是度量不是违约，
 #: 正因为「代词按设计永远不在 registry 里」）。
 #:
-#: ⚠ **它是容器 ⇒ `/api/enums` 自动发布成 `bare_pronouns`，那是有意的**（同 `STYLE_WORDS`）。
+#: ⚠ **它是容器 ⇒ `/api/enums` 自动发布成 `bare_pronouns`，那是有意的**。
 #: 容器自动发是**静默**的，所以这个选择要写下来：前端拿它渲染一句图例
 #: （「这几个字不能当称呼」），而**违规条目本身已经逐条在报告里**——渲染不产生判定。
-#: ⚠ 对照 `RESIDUAL_HIGH_STEMS` 那一格：它**是容器却仍然不发**，因为
-#: `confidence` 那个**分数**的全部输入就是那张表，发过去前端能自己重算一个结论。
+#: ⚠ 从「容器却仍然不发」的对照原则看：若某张表的全部输入能派生出一个前端
+#: 可自算的分数/结论，那张表就该登记不发（旧 RESIDUAL 探针表即此例，已删）。
 #: 本表没有那个形状（没有从它派生的分数），所以不必登记为不发。
 BARE_PRONOUNS: Final = ('我', '你', '他', '她', '它', '咱')
 
@@ -1182,28 +956,6 @@ CACHE_POLICY: Final = ('default', 'refresh-write', 'disabled')
 # 五、计划与篇幅（stage4）
 # ─────────────────────────────────────────────────────────────────────────────
 
-#: Stage4 每章预算之和 / 源 span 字数的唯一现行区间。**无第二层宽限。**
-#: `output_chapters[].op` 不属于当前契约，因此这里也不保留已删除操作的取值面。
-#:
-#: 历史上该区间曾与源 beat 全覆盖、源序执行共同锁死等密度重述；现有场景编译器已退休
-#: 源 beat 写作骨架，但总章幅仍需受控，因此继续保留这一章级预算带。
-#:
-#: ⚠ **`0.80~1.20` 不是一个新发明的数**：它逐字等于 `DRAFT_BAND`，而那个数的辩护词
-#: （盘上 31 章的两端极值 **0.814 / 1.206**）辩护的正是同一件事——「一章的节奏本来就会让
-#: 某几章胖一点、某几章瘦一点」。本带此前比执行带还紧，等于**规划层不许计划出执行层
-#: 本来就允许的波动**。
-#:
-#: ⚠⚠ **放宽本带的前提是同批补上书级闸**：总量是对用户的承诺，此前它是被本带
-#: 「逐章 ±10% ⇒ 全书必然 ±10%」顺带兜住的，本带一松那条蕴含就断了。
-#: ⇒ 新增 `plan_book_band`（HARD，`R-5.3c`）：全书各章预算之和 / 全书 span 合计 ∈ `BOOK_BAND`。
-#: **逐章放宽而全书收紧**与 `DRAFT_BAND` / `BOOK_BAND` 那一对**同构**，
-#: 那次裁决（2026-08-17）的理由逐字适用：逐章的正负偏差在书级相互抵消。
-#: ⚠ 此前唯一的书级守卫是 stage5 的 `book_length`（INFO）——那是**钱花完才响**。
-#:
-#: ⚠ **带取对称是刻意的**：实测「压缩会让成稿更像原文」，所以详略应当是不对称的，
-#: 但**不对称由 prompt 与 `delivery` 引导，不由一个没标定过的常量发明**（`判据 15`）。
-#: 更宽的不对称带（如 0.65~1.35）要等读数显示计划真的在贴 0.80/1.20 的边界。
-PLAN_BUDGET_BAND: Final = (0.80, 1.20)
 
 #: Stage4 结构规划的三个闭合轴。它们描述的是叙事架构，不是文风：同一组事实可以被
 #: 放在冷开场、升级或兑现位置，可以作为完整场景或压缩交代，并且必须说清与上一单元
@@ -1266,8 +1018,9 @@ RESPONSE_GOAL_INTENTS: Final = {
 #: `PLAN_BUDGET_BAND`（`budget_band`）、全书之和落在 `BOOK_BAND`（`plan_book_band`）——
 #: 而后两条要把五六十个整数先按章分组求和、再把二十多个章级合计再加一遍。
 #: 实测代价：批 2 run1 一次全书实付倒在 `budget_band`（ch18 压到 0.442×），**整份退回**。
-#: ⇒ 这三条从「模型的责任」变成 `novel/stages/stage4/measure.py::allocate_budgets`
-#: 的**后置条件**，而模型只表达它真正该表达的那件事：**哪一章重、章里哪一场重**。
+#: ⇒ 这三条从「模型的责任」变成预算分配器的**后置条件**（旧链落点
+#: `stage4/measure.py::allocate_budgets`，已随旧链删除），而模型只表达它真正
+#: 该表达的那件事：**哪一章重、章里哪一场重**。本段为历史标定记录。
 #:
 #: 【为什么是两级而不是一级】它们是**两层不同的问题**：
 #: 「哪一章重要」只有章级倍率能表达，「本章里哪里重要」只有场景级分配能表达。
@@ -1290,30 +1043,6 @@ RESPONSE_UNIT_WEIGHTS: Final = {
 }
 UNIT_WEIGHTS: Final = ('peak', 'strong', 'mid', 'quick', 'brush')
 
-#: 章级档位 → **这一章的目标倍率**（预算 ÷ 本章源字数）。
-#:
-#: ⚠⚠ **这张表的极差（1.18/0.84 = 1.40）故意宽过一个「怎么填都不会越界」的表**，
-#: 因为它**不是**最终倍率：`allocate_budgets` 先按它排出章间轻重，再整体归一化到
-#: 全书目标（= 全书源字数 × 1.0，`BOOK_BAND` 的中心），最后把冲出 `PLAN_BUDGET_BAND`
-#: 的章钳回带内、把残差在还有余量的章之间摊掉。
-#: ⇒ 档位表达的是**相对轻重**，绝对倍率由那三步决定。
-#: 取一张极差 ≤1.20 的窄表也能免掉钳制那一步（归一化后必然落在带内），但那样
-#: **批 2 三轮实付买来的章间轻重会被表本身压掉一半**——用钳制换表宽是这里的取舍。
-CHAPTER_WEIGHT_RATIO: Final = {
-    'major': 1.18, 'above': 1.08, 'even': 1.00, 'below': 0.92, 'minor': 0.84,
-}
-
-#: 单元档位 → **本章内的相对权重**。分配式是 `预算_i ∝ 源字数_i × 权重_i`
-#: ⇒ 「预算/源」相对本章均值的倍数恰好等于 `权重_i ÷ 权重的源字数加权均值`。
-#:
-#: ⚠ 两个端点值沿用既有标定：重头场约为本章均值的 2~3 倍，
-#: 快速带过场低于均值一半；`peak=2.6` / `brush=0.38` 是它们的取值面化。
-#: ⚠ **它同时决定 `structure_reshaped`（`R-5.19`）那条读数的分辨率**：那条读数问的是
-#: 「本章有没有哪一场的相对倍率冲出 `PLAN_BUDGET_BAND`」，而 2.6 与 0.38 都在带外
-#: ⇒ 模型一旦真的标出重头场或一带而过的场，那条读数就会成立。这是有意的。
-UNIT_WEIGHT_FACTOR: Final = {
-    'peak': 2.6, 'strong': 1.7, 'mid': 1.0, 'quick': 0.6, 'brush': 0.38,
-}
 
 #: 六张响应表与它们的产物表**逐格对齐**（顺序也对齐——渲染进 prompt 的就是这个顺序）。
 _PLAN_RESPONSE_ENUMS: Final = (
@@ -1340,29 +1069,6 @@ for _a in _PLAN_RESPONSE_KEYS:
         assert _a == _b or _a not in _b, \
             f'响应侧取值 {_a!r} 是 {_b!r} 的子串——串表就不会在 schema 闸上死掉了'
 
-#: 两张倍率表的键必须与它们的取值面逐格相同——少一格，`allocate_budgets` 会在一份
-#: **已经付过钱**的响应上 `KeyError`，而那是最贵的一种崩法。
-assert tuple(CHAPTER_WEIGHT_RATIO) == CHAPTER_WEIGHTS
-assert tuple(UNIT_WEIGHT_FACTOR) == UNIT_WEIGHTS
-
-#: 「逐字挤占」的下限倍数：一场的预算至少要是它**必须逐字写入的原话**字数的这么多倍。
-#: 2.0 的含义是「原话最多占一半」——低于它，剩下的字连交代谁在说、说完什么反应都不够。
-#:
-#: ⚠ **它只由分布长尾支持，没有独立判断给它当基准**：旧计划实测某本 43 个带原话的单元里
-#: 中位占 18%、只有 1 个越过 50%，另一本 40 个里同样 1 个。阈值取在长尾上，
-#: 不会把正常场景卷进来。
-#: ⚠⚠ **所以它是提示级不是阻断级**（`R-5.13` 标 `INFO`）：用一个没校准的数去挡一次
-#: 付费重跑，是判据 15 反对的事。⚠ 与它配套的**度量**（原话占预算的分布）是
-#: **无条件报出**的（`R-5.14`）——现状读数比越阈的那几条更值钱，正因为这个阈值没校准过。
-VERBATIM_BUDGET_FACTOR: Final = 2.0
-
-#: 计划里的三个目标（章目标 / 开头钩子 / 结尾钩子）不许含的风格套话词。
-#: **这 15 个词必须整份插值进 prompt**，不许手抄一个子集——原型就是这么漂的。
-STYLE_WORDS: Final = (
-    '环境渲染', '渲染氛围', '氛围营造', '感官', '画面感', '白描', '意象', '诗意',
-    '唯美', '笔触', '文笔', '深沉', '细腻', '张力', '质感',
-)
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 六、写作（stage5）
@@ -1372,34 +1078,6 @@ STYLE_WORDS: Final = (
 #: 它们不是现役写作臂，不得重新暴露到 CLI/API。
 LEGACY_STAGE5_MODES: Final = ('deep', 'shallow')
 
-#: 发明边界。**保持元组不拍平成一句话**：将来给 forbid 逐项补探针时，探针读的就是这份。
-#: ⚠ 这份清单**是给写作节点看的，不是可查依据**。回写侧的覆盖情况见下面的 `INVENT_GUARDED`。
-INVENT_ALLOW: Final = ('感官细节', '环境', '动作分解', '内心独白', '对话的语气与节奏')
-INVENT_FORBID: Final = ('新事件', '新人物', '新数字', '新道具', '新因果', '新地点', '新时间跳跃')
-INVENT_PRINCIPLE: Final = '凡能拿回原文核对真伪的，禁止发明；凡纯属行文表面的，必须发明。'
-
-#: `INVENT_FORBID` 七项各自**回写侧有没有探针**。这张表就是需求 B-01 的机器可读形式。
-#: ⚠ **别把「探针报 0 条」读成「约束生效了」**——「没报违规」与「根本没在查」必须能区分。
-#: 「新地点」查不了是有实测原因的：地名后缀（府/家/宫/城/街/山）都是**普通名词**，
-#: 没有数字那样的硬左锚，实测 23 章报 82 条候选、几乎 100% 假阳。
-#:
-#: ⚠⚠ **B-01 已裁决（2026-08-10）：五个 `none`/`partial` 一律【不补判据】，直到有 ground truth。**
-#: 三条理由，每条都有实测：
-#:   ① 本项目已为「在抽象层做语义判定」付过一次学费——gate1 的护栏**自己成了发明源**
-#:      （它把原文 0 次的事收进结论，若照办写手会被逼着写一场原文没有的戏），因此整节退役；
-#:   ② **唯一 `full` 的那一项自己就零判别力**：`invented_number` 在 3 本里有 2 本被
-#:      书级恒等闸门判死（头牌 命中 2/8 vs 源章 2/8；三岁 1/9 vs 源章 **2/9**，源章触发得更多）；
-#:   ③ 反哺回路**实测会诱发**自造内容，而当轮判定一条都指不出它。
-#: ⇒ 这七项的正确身份是**给人核对的料**（同 `name_surface_survey`），不是关卡。
-INVENT_GUARDED: Final = {
-    '新数字': 'full',       # 数值探针。⚠ 2/3 本上被恒等闸门判死，见上
-    '新人物': 'partial',    # 只抓「本书已有的名字用字 + 称谓后缀」造出来的人，召回有缺口
-    '新事件': 'partial',    # 由 verbatim / keep_value / events 间接约束
-    '新道具': 'none',
-    '新因果': 'none',
-    '新地点': 'none',
-    '新时间跳跃': 'none',
-}
 
 #: 成稿字数 / 本章预算必须落在这个带里。它就是执行带，**没有第二层宽限**。
 #: ⚠⚠ **它与 `BOOK_BAND` 不再是同一个数**（2026-08-17 用户裁决）。两条带答的是两个问题：
@@ -1459,108 +1137,22 @@ STYLE_MEASUREMENT_CONTRACT: Final = 'stage3-measurable-v1'
 #   必要选择进 Stage4 正式 Design（PresentationGraph.hook），机械验由
 #   stage5 hook owner 的回执守护。旧盘 stage6/hook.json 只读拒识，历史上下文见
 #   `docs/DECISIONS.md` 与 Git 历史。
-#: 收尾形态的四类。**唯一落点**——分类器（`novel/core/bands.py::ending_shape`）、
-#: 判据措辞、报告共用这一份。
-#: 两边都直接从原作文案段/候选字节量形态，不经过已经退役的定性描述。
-ENDING_SHAPES: Final = ('引号台词', '问句', '省略号', '陈述')
-
-#: 段间分隔的两档。**离散性质，按字节判**（见 `novel/core/bands.py::sep_band_of_text`
-#: 里那段 off-by-one 的账）。
-SEP_BANDS: Final = ('空行分段', '单换行')
-
-#: 残留候选的置信度。**`high` ⟺ 命中处带了一个结构信号**，今天有三个来源：
-#: ① 称呼后缀（`RESIDUAL_HIGH_STEMS`）· ② 被标点拆开的完整旧名（`canonical_map` 那一支）·
-#: ③ 旧姓后紧跟成串的中断号（`RESIDUAL_INTERRUPT_MARKS`）。
-#: **三个都是「这段字节的形状不对」，不是「这个词看起来像名字」**——后者是词表，本层不用。
-#: ⚠ 只看正式产物会把取值面定成**只有 `low`**：3 份正式产物 19 条残留全是 `low`，
-#: 而 8 份 `_rounds/` 归档里有 **35 条 `high`**——`high` 的那些早被人勾选修掉了。
-#: **凡是有「人修完再落盘」这条路的层，归档必须一起反推。**
-#: ⚠ 覆盖率 `ratio` 与它打架时**以本字段为准**：`ratio` 有自我压低的反馈回路
-#: （漏掉的形就是该姓的主用法时，分母里装的主要就是分子），实测 `沈` 40% / `孙` 60%
-#: 落在「基本是普通词」那一侧而两个都是真漏网；`confidence` 实测 6/6 全真。
-RESIDUAL_CONFIDENCE: Final = ('high', 'low')
-
-#: `stage7.rename --adopt-residual` / 对应 HTTP 请求唯一允许的置信度。
-#: 这是**处置动作**的闭合输入域，不等于探针本身会产出的完整
-#: `RESIDUAL_CONFIDENCE`：low 仍须展示给人，但绝不能由批量采纳入口写回。
-RESIDUAL_ADOPTION_CONFIDENCE: Final = ('high',)
-
-#: 判成 `high` 的称呼后缀：**「旧姓 + 这些字」= 高置信的漏网候选**。
-#: 长后缀必须排在短后缀前面（例如「公子」先于单字），扫描口统一按长度倒排，
-#: 不能退回到只看紧邻一个字，否则「温公子」会被截成「温公」。
-#: ⚠ **绝不自动替换**：「不允**许家**人」里就含「许家」，自动换会写出「不允苏家人」。
-#: 它只影响候选的**排序与标记**，处置永远是人勾选。
-RESIDUAL_HIGH_STEMS: Final = (
-    '公子', '少主', '仙子', '姑娘', '道友', '前辈',
-    '兄', '姐', '妹', '弟', '家', '府', '宗', '氏', '宅', '门',
-)
-
-#: 判成 `high` 的**中断号**：旧姓后面紧跟成串的这些字符 ⇒ 一句被打断的称呼。
-#: 实测形状：某本 ch18 的「【每日一问，**迟……**等等，她什么时候元」——
-#: 那是原作真姓被叫到一半，`extra_subs` 最后是人**读正文**才补上的
-#: （`迟……→苏……`），而探针当时确实报了它，只是埋在同书 16 条 low 噪声里
-#: （迟钝／桂花糕／桃花眼／落花流水）。
-#:
-#: ⚠⚠ **只认成串的中断号，绝不认终止标点。** 同一本书 ch8 有「高岭之**花。**」——
-#: `花` 是本书的旧姓、后面跟着句号，而那是一句话说完了，不是被打断。
-#: 把终止标点也算进来，这条信号立刻从「6/6 全真」掉进噪声里，
-#: 而 `high` 是 `RESIDUAL_ADOPTION_CONFIDENCE` 的**可采纳面**——误判会被人一键换进成书。
-#: ⇒ 判据是**成串**（`{2,}`，见 `novel/stages/stage7/subs.py::residual_scan`），
-#: 单个字符一律不算。
-#:
-#: ⚠ **证据 n=1**（一本书一处）。按 `docs/LESSONS.md` 第 17 条，样本量写在这里，
-#: 别让下一个人把它读成与称呼后缀那条（6/6）同等强度的信号。
-RESIDUAL_INTERRUPT_MARKS: Final = ('…', '—')
-
-#: 中断号成串的最短长度。`……` / `——` 在中文里本就是**成对**出现的全角形，
-#: 单个 `…` 更多是排版噪声。
-RESIDUAL_INTERRUPT_RUN: Final = 2
-
-#: 残留候选报出的命中片段长度（**恒 3 字**）与上下文半径（前后各 12 字）。
-#: ⚠ 上下文**只影响可读性，不是门**——探针报的是位置，人要判「这是不是一个人名」
-#: 靠的就是这几个字。
-RESIDUAL_HIT_CHARS: Final = 3
-RESIDUAL_CONTEXT_CHARS: Final = 12
-
-#: 能进**替换面**的称呼最短几个字。**中文没有词边界，这是一条硬边界，不是保守。**
-#: 实测某本 `char_011` 唯一的称呼是**单字「姐」**，而成稿里「姐姐」有 4 处、「姐」共 18 次。
-#: 单字进了替换面，「姐姐」当场被切成「新X姐」。
-#: ⚠ 它与「保留项进 alternation 当恒等条目」是**两道独立的防线，缺一不可**：
-#: 屏蔽只挡得住 registry 收了的长称呼（「姐姐」在表里），挡不住「大姐」「姐妹」这种没人收的词。
-#: ⚠ 它管的是**替换面**，不管**屏蔽面**——`kept` 里有单字条目是对的。
-MIN_SURFACE: Final = 2
-
-#: 人物表能推导、但 registry 未必逐字收录的「名字尾字 + 关系称呼」后缀。
-#: 例如人物表只登记「谢箬→苏瑶」，正文却另写「箬姐姐」；旧姓残留探针看不到
-#: 这个形（它不含旧姓），完整 surface 替换也按构造够不着。
-#: ⚠ 这张表只喂给 **INFO 候选探针**，绝不自动替换。中文没有词边界，自动采纳会
-#: 把普通词误当昵称；短到单字的「姐/哥」也刻意不收，避免噪声压倒人工审阅面。
-DERIVED_ALIAS_SUFFIXES: Final = (
-    '姐姐', '哥哥', '妹妹', '弟弟', '姊姊', '兄长', '阿姐', '阿哥', '姑娘', '公子',
-)
+# ⚠ 2026-10-04 清理批：本节的收尾形态（ENDING/SEP）、人名残留探针
+#   （RESIDUAL_* / MIN_SURFACE / DERIVED_ALIAS_SUFFIXES）、旧链成书分隔
+#   （BOOK_CHAPTER_SEP＝裸数字行）与恒等基线（IDENTITY_*）常量随旧链
+#   consumer（core/bands.py、stage7/subs.py、旧 schema/stage7.py）删除；
+#   现役成书章标记是 `assembly.py::_chapter_marker` 的「第N章」行，残留由
+#   `naming.py::check_residual` 机械验硬闸守卫。
 
 #: 一条待办此刻是否还等人动作。`reviewed_retained` 表示 typed 决策已存在，
 #: 记录因审计/披露而保留；它与“是否阻塞交付”是正交轴。
 INBOX_ATTENTION: Final = ('pending', 'reviewed_retained')
 INBOX_DELIVERY_EFFECT: Final = ('blocking', 'disclosure')
 
-#: 成书的两个分隔常量。**章分隔＝裸阿拉伯数字单独成行**，不写「第 N 章」。
-#: ⚠ 这是**产品形态，不是可调参数**——写成开关就是又一个没有守卫的自由变量。
-BOOK_CHAPTER_SEP: Final = '{}'
+#: 成书的段间分隔（空行）；`tools/book_overlap.py` 按它切块。旧链的裸数字
+#: 章分隔（BOOK_CHAPTER_SEP）已随旧链成书格式删除，现役章标记见
+#: `novel/stages/stage7/assembly.py::_chapter_marker`（「第N章」行）。
 BOOK_BLOCK_SEP: Final = '\n\n'
-
-#: 恒等基线的占位符模板。选 `⟦⟧`（U+27E6/27E7）是因为中文小说正文不会用这对括号，
-#: 而基线跑之前会**断言它一次都没在文本里出现过**——占位符与正文撞车会让往返
-#: 静默变成恒等，**那正是这条基线要排除的假绿灯**。
-IDENTITY_PLACEHOLDER: Final = '⟦{}⟧'
-
-#: 恒等基线**验不了**的三样（`R-10.7b`）。它是常量而不是现算，**但必须跟结论存在一起**
-#: ——分开放，下一个人就会把绿灯读成「替换是安全的」。
-IDENTITY_BLIND: Final = (
-    '正向替换对【真名】安不安全——占位符天然无歧义，真名不是',
-    '漏网覆盖率——人物表够不到的角色，这一层结构上够不着',
-    '新名好不好——没有确定性判据，现役闸门是人定稿',
-)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1590,18 +1182,6 @@ PAID_FLAGS: Final = {}
 #: 否则一条不相干的旧问题会把重算这条路永久堵死。
 REVALIDATE_ONLY_NEW_ERRORS: Final = True
 
-#: Stage5 人工改稿预览后的提交语义。``formal`` 只允许没有新增 HARD 的候选；
-#: ``working_draft`` 允许把一般新增 HARD 明示落为新的 canonical 人工轮，随后由
-#: stale Review / closure / 下游闸阻断；段落预算 HARD 在两种模式下都不得正式化。
-#: 这是请求载体、CLI 与运行时共用的闭集，不能在三处各抄一份字符串。
-#: ⚠ F8a：本常量只服务旧链 Stage5 人工改稿面（`stage5.write --apply-edit` 一族，
-#: 消费者：`contracts/schema/api.py` 的 DraftEdit 请求、`novel/human_actions.py`、
-#: `novel/orchestrator/nodes.py`、`novel/stages/stage5/write.py`）。新链没有
-#: 人工改稿闸——机械验拦下的稿进 `.INVALID` 孪生留证后 fail-fast，恢复走 owner
-#: patch 与 `--check-only`。本常量随这些消费者在 F8b/F8c 改写或删除时一并退役，
-#: 现在保留是因为 contracts 层的 api 载体仍 import 它（I-03：不为删除常量
-#: 把共享载体半边半边地拆掉）。
-STAGE5_EDIT_CONFIRMATIONS: Final = ('formal', 'working_draft')
 
 #: 部分改写旗标（旧链 trim／recheck 面）随 Stage5 人工闸退役删除；新链的精确
 #: 重做范围由章回执链与 IR 身份机械推导，不靠旗标声明。
@@ -2064,8 +1644,6 @@ LLM_EXECUTOR_NODES: Final = (
     'str06.stage5.body', 'str06.stage5.hook',
     'str06.stage7.naming',
 )
-#: 历史 Agent session 栈与 ``LLM_EXECUTOR_NODES`` 同面；测试/恢复仍引用旧名。
-AGENT_EXECUTOR_NODES: Final = LLM_EXECUTOR_NODES
 AgentAvailability = Literal['ready', 'missing', 'unknown', 'unauthenticated']
 
 #: `(节点, 触发 flag)` → 这条跑法**额外**必填的 flag。`NodeSpec.required_flags` 的补集：
@@ -2166,32 +1744,12 @@ COMMANDER_ADMISSION_EVENT_KINDS: Final = (
 #: admission 纵切留下的名字，beacon 也共用这一个闭集，不能另长第三种恢复相位。
 COMMANDER_ADMISSION_TAIL_REPAIR_KINDS: Final = ('authorized', 'applied')
 
-#: Stage2 Commander 席位已随语义审阅退役；LEGACY 常量只供旧席位账的只读解码，
-#: 不参与新工作单元预算，也不得被新流程复用。
-LEGACY_STAGE2_COMMANDER_SEAT_PURPOSES: Final = (
-    'review', 'correction', 'prereview', 'final_review')
-# 冻结旧账只保留自己的原始计数含义，不参与新工作单元预算。
-LEGACY_STAGE2_COMMANDER_MAX_SEATS: Final = 4
-LEGACY_STAGE2_COMMANDER_MAX_EDIT_SEAT: Final = 3
-LEGACY_COMMANDER_REVIEWER_MAX_CORRECTIONS: Final = 2
-#: 存量 reviewed edit 的 INVALID 若按当前代码已无任何 HARD，只能由 Supervisor
-#: 用这组固定审计身份走 0-wire ``--revalidate``。固定值既避免伪装成人类决定，
-#: 也让 execution permit 能在首副作用前逐字关闭其它 actor/reason。
-#: ⚠ 它服务的是**存量 INVALID 的机械复验提升**；Stage2 语义审阅退役后不再产生
-#: 新的 reviewed edit，该恢复路只对旧盘存量生效。
-STAGE2_LEGACY_REVALIDATE_ACTOR: Final = (
-    'system:stage2-legacy-invalid-recovery')
-STAGE2_LEGACY_REVALIDATE_REASON: Final = (
-    'legacy reviewed-edit INVALID passes current canonical HARD rules')
 #: 批次 C：live `.INVALID` 的 0-wire ``--revalidate`` 由队列/Supervisor 自动排入，
 #: 不再等人填 actor/reason。固定审计身份避免伪装成人类决定；人类 Stage 页与
 #: enums.actions 不再发布该用户入口（内部 RecoveryRunPolicy / CLI 仍可复用）。
 SYSTEM_INVALID_REVALIDATE_ACTOR: Final = 'system:invalid-revalidate'
 SYSTEM_INVALID_REVALIDATE_REASON: Final = (
     'live INVALID passes current canonical HARD rules; auto 0-wire revalidate')
-#: 同一席位内的真实 CLI 进程尝试种类：``launch`` 是新进程首发，``resume`` 是
-#: 用供应商 exact session id 续接同一 provider 会话。两者都不新开席位。
-COMMANDER_ATTEMPT_KINDS: Final = ('launch', 'resume')
 #: Commander 顶层子进程的首事件/空闲超时、同席尝试上限与重试退避已随角色
 #: 退役（2026-09-15）删除：这些是驱动层重试参数，executor 会话各自持有
 #: 独立的超时与尝试策略（见 ``novel/agents``），不再有全局 Commander 席位。

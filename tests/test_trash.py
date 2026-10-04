@@ -13,7 +13,7 @@ from contracts.schema.orchestration import (
     LegacyExecutorBackend, LegacyLlmProfile, PipelineAgentProfiles,
 )
 from novel.errors import (
-    ApprovalFrozen, BookTrashFailed, SourceConflict, UpstreamMissing,
+    BookTrashFailed, SourceConflict, UpstreamMissing,
 )
 from novel.orchestrator import admission, agent, approvals, jobs, trash
 from novel.orchestrator.jobs import JobConflict

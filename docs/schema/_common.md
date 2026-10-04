@@ -90,8 +90,8 @@ Stage1 原切分确认还须存在：旧票的 MainText 与 HookCopy 两份 SHA 
 revision 的确定性切分精确重建，并与当前不变正文及切点相符。只读面保留原票，不
 重签当前根；无原确认、旧任一 SHA 损坏、未批准或切分改变都不能继承。
 
-Prepare 实际消费新钩子，不取得正文等价例外。它只通过完整 typed draft 重编当前
-MainText / HookCopy，保存专属 `source_rebuild`（见 `stage6.md`）；通用局部修订不能
+（历史）旧链 Prepare 实际消费新钩子，不取得正文等价例外。它只通过完整 typed draft 重编当前
+MainText / HookCopy，保存专属 `source_rebuild`（旧 stage6.md 已随 Stage6 退役删除）；通用局部修订不能
 借此跨源重挂。未完成提交遇源再次变化时拒绝补尾，不采用旧回答或继承旧接受。
 
 ---
@@ -210,7 +210,7 @@ freshness 映射保留，只服务存量盘面的历史解码；新链 Binding �
 ### 5.1 先校验后落盘（`Q-5`）
 
 阻断级错误**不覆盖已有产物**，问题稿单独存一份带 `.INVALID` 标记的文件。
-配 0 成本提升路（`--revalidate`）：按**当前**判据重判，合格即提升。
+配 0 成本提升路（`--revalidate`；用户写面已退役，仅内部 0-wire 复用）：按**当前**判据重判，合格即提升。
 重算时**只对本次新引入的错误入终态**（`REVALIDATE_ONLY_NEW_ERRORS`）——
 否则一条不相干的旧问题会把重算这条路永久堵死。
 
@@ -274,7 +274,7 @@ promote(旧的 _provenance, *, 代码版本, revalidation_audit) -> 新的 _prov
 ⚠ **`.INVALID` 归档进 `_rounds/`，不删**（`Q-8`）。原型「读完问题稿就把它删了」
 造出的正是 §四那条幽灵边——**删一个还被别人指着的文件，会同时制造两个问题**。
 
-### 5.3 `--apply-edit` 是新修订，`--revalidate` 是强审计提升
+### 5.3 `--apply-edit` 是新修订，`--revalidate` 是强审计提升（两条用户入口均已退役；本节保留 Provenance 解码语义）
 
 继承上一轮的 `inputs`（改的是同一份上游下的稿）· **`pop` 掉 `prompts`、`model` 与 `adopted_models`**
 （这一稿不是任何 prompt / 模型产的，记了就是假账）· 记 `origin=human` ·

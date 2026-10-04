@@ -6,12 +6,11 @@ appendlog.py —— append-only 事件流的**追加口**。互斥只有这一�
 【本仓有九份 append-only JSONL，它们共享同一条纪律】
 `_service/` 下的 `ledger.jsonl` · `jobs.jsonl` · `queues.jsonl` ·
 `agent_progress.jsonl` · `agent_runs.jsonl` · `agent_sessions.jsonl` ·
-`human_actions.jsonl` · `operator_phases/*.jsonl` ·
-`commander_admissions.jsonl`。正常事件共同点是**永不读-改-写**：
-并发安全、被 kill 不损坏、可以直接 `grep`。读的那一侧因此只容忍
-**被截断的最后一行**，中间出现坏行一律 `raise`——「记录不全」不许变成静默。
-唯一恢复例外是 human action 两相账：下一次追加会在同一目标锁内先隔离确证的
-未换行尾，再截回最后一个完整换行；完整坏行绝不修。
+`operator_phases/*.jsonl` · `commander_admissions.jsonl`（历史根上还可能有
+已退役写入面留下的 `human_actions.jsonl` 旧账，只读）。正常事件共同点是
+**永不读-改-写**：并发安全、被 kill 不损坏、可以直接 `grep`。读的那一侧因此
+只容忍**被截断的最后一行**，中间出现坏行一律 `raise`——「记录不全」不许变成
+静默。
 
 【⚠ 那条容忍以前是半真的，多书并行会把它戳破】
 写入方不止一个进程：`agent_progress.jsonl` 由 **N 个 agent 各自的

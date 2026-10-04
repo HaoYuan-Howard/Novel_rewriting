@@ -51,12 +51,10 @@ from novel.orchestrator.nodes import (
 
 #: 桶二 —— 被某个**合成键**吃掉的常量。值是「它去了哪儿」。
 #:
-#: ⚠ **吃掉 = 不再单独发。** 同时发 `invent` 和 `invent_allow`，前端就有两处可取，
-#: 而两处必然在某次改动后指向不同的东西——这与本模块要消灭的病是同一个。
+#: ⚠ **吃掉 = 不再单独发。** 同一取值面在响应里出现两次，两处必然在某次改动后
+#: 指向不同的东西——这与本模块要消灭的病是同一个。
+#: （旧 Stage5 写作发明边界 `invent` 合成键已随旧链 prompt 常量删除。）
 _CONSUMED: dict[str, str] = {
-    'INVENT_ALLOW': 'invent.allow',
-    'INVENT_FORBID': 'invent.forbid',
-    'INVENT_PRINCIPLE': 'invent.principle',
     'NODES': 'job_kinds + actions',
     'NODE_WRITE_EFFECTS': 'actions[].writes',
     'SPOILER_DISCLOSURE': 'spoiler_disclosure',
@@ -77,15 +75,6 @@ _WITHHELD: dict[str, str] = {
     'CASCADE_REWIND_LIMIT': (
         '跨节点回派每根累计上界（R10c 硬化批）是后端级联背压边界；'
         '前端只消费 typed 停止状态，不自行推导回派额度'),
-    'LEGACY_STAGE2_COMMANDER_SEAT_PURPOSES': '退役预审与终审只供历史审计解码',
-    'LEGACY_STAGE2_COMMANDER_MAX_SEATS': '冻结旧席账的历史预算，不参与新工作单元',
-    'LEGACY_STAGE2_COMMANDER_MAX_EDIT_SEAT': '冻结旧席账的历史编辑上限',
-    'LEGACY_COMMANDER_REVIEWER_MAX_CORRECTIONS': '冻结旧席账的历史纠错上限',
-    'STAGE2_LEGACY_REVALIDATE_ACTOR': (
-        '旧盘 reviewed-edit 存量 INVALID 机械复验的固定审计身份；'
-        '是后端执行许可的逐字比对值，不是前端取值面'),
-    'STAGE2_LEGACY_REVALIDATE_REASON': (
-        '同上的固定复验理由；只写进审计与执行许可，不是前端取值面'),
     'SYSTEM_INVALID_REVALIDATE_ACTOR': (
         '批次 C：live .INVALID 由队列自动排入 0-wire --revalidate 的固定审计身份；'
         '不是前端取值面或按钮文案'),
@@ -94,24 +83,6 @@ _WITHHELD: dict[str, str] = {
     'STAGE5_REVIEWER_REWRITE_DIRECTIVE_CODES': (
         '只随 Commander immutable submission option 与 Stage5 writer 固定 prompt 下发；'
         '当前浏览器没有该 delegated rewrite 表单，单独发布会制造未接线的第二消费面'),
-    'COMMANDER_ATTEMPT_KINDS': (
-        '同席内 launch/resume 只写进席位账与 session 审计；不是 HTTP/UI 取值面'),
-    'REVIEWER_APPROVAL_SURFACES': (
-        'Commander reviewer typed request 的 approval 面闭集，只由 RunSupervisor 与'
-        ' loader 消费；页面各审批面已有自己的 typed 表单，另发只会制造第二个消费面'),
-    'DESIGN_REPAIR_CODE_INSTRUCTIONS': (
-        '修复码语义随 reviewer 工作包 submission_options 与 Executor repair prompt 下发；'
-        '页面 typed 表单只提交 code，不据文案自判修复语义'),
-    'DESIGN_REPAIR_CONSTRAINT_EXAMPLES': (
-        '示例形状是服务端在 build 时经 DesignRepairConstraint 校验后随 reviewer 工作包'
-        '下发的原料（dict of dict，也不是发布器认的形状）；前端不据此拼请求'),
-    'DESIGN_STRATEGY_REPLAN_CONSTRAINT_INSTRUCTIONS': '同 DESIGN_REPAIR_CODE_INSTRUCTIONS',
-    'DESIGN_STRATEGY_REPLAN_CONSTRAINT_EXAMPLES': '同 DESIGN_REPAIR_CONSTRAINT_EXAMPLES',
-    'WORKPACK_READING_KINDS': (
-        'Stage4 工作包 v2 reading 的 schema discriminator；工作包已携具体 kind，'
-        '前端按响应分支渲染，另发枚举只会制造第二个消费面'),
-    'WORKPACK_CLOSED_REF_KINDS': (
-        'B concern closed_ref 的解析分类随 reading 逐条下发；不是前端选项'),
     'LLM_EXECUTOR_NODES': (
         '付费 LLM executor 节点属于 provider/model/effort/thinking 组合能力面，'
         '唯一公开口是动态 `GET /api/agent/capabilities`；'
@@ -145,15 +116,6 @@ _WITHHELD: dict[str, str] = {
     'OPERATOR_TELEMETRY_SOURCES': '同上，遥测来源由本地入口固定',
     'OPERATOR_TERMINAL_STATES': '同上，终态由本地 fold 契约解释',
     'OPERATOR_DURATION_SOURCES': '同上，时长来源由本地计时边界决定',
-    'FAILURE_REPAIR_OWNERS': (
-        'typed failure 的修复 owner 是流水线内部路由（TODO-45 批次 1），'
-        '唯一消费方是 B 的关闭式停止判定；等前端真有按 owner 渲染的界面'
-        '（workpack 的 `effect`/`allowed_actions`）再随行下发，'
-        '现在发就是请前端自己判路由'),
-    'FAILURE_STOP_OWNERS': '同上，stop owner 是路由表的派生读法，不是 UI 取值面',
-    'STAGE4_FAILURE_OWNERS': (
-        '发射点 → owner 的闭合表。它是判据域归类，不是前端选项；'
-        '发过去等于把路由判定复制到浏览器'),
     'GLOBAL_REVIEW_DISCLOSURE_KINDS': (
         '它是**分类表**，不是取值面。Stage2 语义审阅退役后只剩旧盘 reviewed-edit '
         '恢复路径在消费；现役 API 不再有 GlobalReviewRow，发出去只会诱导前端自判'),
@@ -180,21 +142,7 @@ _WITHHELD: dict[str, str] = {
     'NONBODY_HEAD_MAX_CP': '判据阈值（篇首非正文标记的最大码点数）',
     'NONBODY_MID_MAX_CP': '判据阈值（篇中同上）',
     'NONBODY_MARKER_WARN_CP': '判据阈值（长标记报警线）',
-    # ── stage4 篇幅的两级档位（批 4）──
-    'CHAPTER_WEIGHT_RATIO': '⚠ **容器，但仍然不发。** 它是档位 → 倍率的**分配系数**，'
-                            '而分配本身由 `measure.allocate_budgets` 做完并落盘'
-                            '（`PlanChapter.weight` 是决策、各拍 `budget_chars` 是结果，'
-                            '两样都在产物里）。发这张表，前端就能拿它自己算一遍'
-                            '「这一章该有多少字」并与产物比对——**那正是第二个判官**'
-                            '（`R-11.4`），而真正的那一个是 `budget_band` / `plan_book_band`。'
-                            '⚠ 前端要渲染的取值面是 `CHAPTER_WEIGHTS`（它照常发）',
-    'UNIT_WEIGHT_FACTOR': '同上，单元级那一张。⚠ 它还有一层：这些系数经过归一化与'
-                          '逐字下限重分配之后**不等于**最终比例，发过去会让前端算出一个'
-                          '与产物对不上的数，然后把差异当成 bug 报出来',
-    # ── stage2（全书事实底座 / 逐章骨架）──
-    'GLOBAL_EVIDENCE_CONTRACT': (
-        'stage2.global 唯一 provider-wire 身份；它不是选项，前端既不选择，'
-        '也不得拿它判断正式 GlobalGrounding 是否 current'),
+    # ── stage2（role 泄漏探针）──
     'FATE_WORDS': (
         'role 泄漏的生成/判据共享词表；它只是低召回率字面探针，'
         '发布给前端会诱导浏览器把未命中重算成“没有剧透”'),
@@ -208,14 +156,6 @@ _WITHHELD: dict[str, str] = {
                               '而那正是判据在做的事（`R-11.4` 的第二个判官）',
     'SPEECH_TAG_MAX': '判据阈值（说话标签最大长度）',
     # ── stage4 / stage5 ──
-    'VERBATIM_BUDGET_FACTOR': '判据阈值（一拍预算至少是逐字原话的几倍）。'
-                              '⚠ 它**没有独立标定过**，只由分布长尾支持——'
-                              '把一个没校准的数发给前端，等于请它拿这个数去下结论。'
-                              '前端要显示的是分布本身，而那份读数由 `verbatim_share` '
-                              '那条度量**无条件报出**（`R-5.14`），已经在报告里了',
-    'PLAN_BUDGET_BAND': 'Stage4 判据阈值。前端不自行重算预算是否出带',
-    'ANCHOR_COVERAGE_WARN': 'Stage5 对齐覆盖率的判据阈值。响应已经给出 threshold/state，'
-                            '前端只展示后端结论，不重判',
     'SOURCE_OVERLAP_MAX': '判据阈值（canonical 成稿与原文的重合度上限）',
     'STOP_REWRITE_AFTER': '返工护栏的轮次上限。它是**编排**参数，不是给人看的取值面',
     'REVALIDATE_ONLY_NEW_ERRORS': '一个 bool 开关，说的是重算路怎么判。前端不参与那次判定',
@@ -223,14 +163,6 @@ _WITHHELD: dict[str, str] = {
                                   '消费投影。发给前端会诱导第二个过期判官',
     'STRUCTURE_METRIC_CONTRACT': 'Stage4 结构指标算法版本；实例值已随计划来源账与结构审批主体落盘，'
                                  '前端只展示当前计划的决定与审批态，不自行判断算法新旧',
-    'STAGE4_BINDING_INPUT_CONTRACT': (
-        '章级 B 实际输入映射的固定契约；后端已折入 freshness 与结构审阅主体，'
-        '前端只展示后端结论，不能自行决定是否重采'),
-    'STAGE4_BINDING_INPUT_RECEIPT_KEY': (
-        '章级 B 来源 prompts 的内部回执键；不是前端可选或可写的业务字段'),
-    'STRUCTURE_REVIEW_CONTRACT': (
-        'Stage4B 人审证据权威的 subject 版本；后端已折入整书与逐章 '
-        'hash，前端不选择版本或自行判断旧票是否有效'),
     'DESIGN_REVIEW_CONTRACT': 'Stage4A 正式审阅 subject 的算法版本；后端已把它折进完整 hash，'
                               '前端只提交模板给出的 subject，不自行判断审阅是否过期',
     'LEGACY_V3_DESIGN_REVIEW_CONTRACT': (
@@ -239,16 +171,6 @@ _WITHHELD: dict[str, str] = {
     'LEGACY_V4_DESIGN_REVIEW_CONTRACT': '仅供后端识别旧审阅，当前界面消费后端有效性判定，不自行比版本',
     'FROZEN_V6_DESIGN_REVIEW_CONTRACT': (
         '仅供后端无损解码不可变历史决定；现役不开放旧 Blueprint 兼容消费或恢复'),
-    # ⚠ Stage6 常量本体仍在 invariants（旧链盘面只读解码的过渡期）；工作面
-    #   已随 STR-06 退役，前端无任何消费——继续登记不发。
-    'STAGE6_REVIEW_CONTRACT': (
-        'Stage6 已随 STR-06 退役；常量仅供后端旧盘只读解码，前端无消费面'),
-    'STAGE6_APPROVAL_CHECK_BASIS': (
-        'Stage6 已随 STR-06 退役；常量仅供后端旧盘只读解码，前端无消费面'),
-    'STAGE7_REVIEW_CONTRACT': (
-        'Stage7 workpack 已随包携带；UI 只回传 opaque token，不自行重算身份'),
-    'STAGE7_APPROVAL_CHECK_BASIS': (
-        '固定检查基准由 Stage7 workpack 的 check_basis 提供；不是可选项，当前交付仍读后端判定'),
     'BLIND_ALIAS_ALGORITHM': 'Stage4A 审计用的 opaque alias 算法身份；前端既不生成 alias，'
                              '也不据此判断候选是否可用',
     'PIPELINE_DEFAULT_CONCURRENCY': '并发默认由 Agent capability 发布，enums 不另复制',
@@ -260,35 +182,9 @@ _WITHHELD: dict[str, str] = {
     'PIPELINE_PARALLEL_NODES': '并发覆盖节点由 Agent capability 发布',
     'LLM_MAX_OUTPUT_TOKENS': '全部付费节点的统一输出上限（D6）；截断即停由后端执行，'
                              '前端不据此改判或重试',
-    # ── stage7（人名替换与成书）──
-    'MIN_SURFACE': '判据阈值（能进替换面的称呼最短几个字）。前端拿到就能自己判'
-                   '「这条映射合不合法」，而那条判据在 stage7',
-    'RESIDUAL_HIGH_STEMS': '⚠ **容器，但仍然不发。** `confidence` 就是「命中处第二个字'
-                           '在不在这五个字里」——发过去等于把那条判定的**全部**内容'
-                           '交给前端，它可以自己重算一遍 `confidence`（`R-11.4` 的第二个判官）。'
-                           '前端渲染要的是取值面本身，而 `RESIDUAL_CONFIDENCE` 已经发了',
-    'RESIDUAL_INTERRUPT_MARKS': '⚠ **容器，但仍然不发——理由与上面那格逐字相同。** '
-                                '它是 `confidence` 的第三个输入（旧姓后紧跟成串的中断号 '
-                                '⇒ 一句被打断的称呼）。发过去，前端就凑齐了自己重算 '
-                                '`confidence` 的全部材料，而那是第二个判官（`R-11.4`）',
-    'RESIDUAL_INTERRUPT_RUN': '中断号成串的最短长度。判据阈值，与上面那格是同一条判定的两半，'
-                              '**要发就得一起发**——而那条判定不该出现在前端',
-    'RESIDUAL_HIT_CHARS': '探针报出的命中片段长度。它是产地口径，不是取值面',
-    'RESIDUAL_CONTEXT_CHARS': '上下文半径。**只影响可读性**，而那份可读文本已经'
-                              '随 `residual[].context` 落在产物里了——发这个数字'
-                              '只会诱使前端自己去原文里再截一遍',
-    'BOOK_CHAPTER_SEP': '成书的章分隔形态。它是**产品形态不是可调参数**，'
-                        '而成书是后端写的字节——前端拿它只能用来自己拼一份，'
-                        '那就是交付物的第二个落点',
-    'BOOK_BLOCK_SEP': '同上',
-    'IDENTITY_PLACEHOLDER': '恒等基线的占位符模板。它只在后端跑基线的那几十毫秒里存在，'
-                            '**产物里一个字节都不留**（留了就说明基线漏掉了一处）',
-    'IDENTITY_BLIND': '⚠ **容器，但仍然不发。** `R-10.7b` 要的是这三句**与基线的结论'
-                      '印在一起**，而结论在产物的 `identity.blind` 里（那是当次跑基线时'
-                      '的措辞快照）。enums 再发一份就是第二个落点，且那一份**没有'
-                      '「与结论同在」这个约束**——前端很容易把它单独摆成一段常驻说明，'
-                      '而那正好丢掉这条需求要的东西',
-    # ── 必填 flag（2026-08-16 复盘 §六.1）──
+    # ── 成书分隔 ──
+    'BOOK_BLOCK_SEP': '成书的段间分隔（空行）。它是后端写的字节——前端拿它'
+                      '只能用来自己拼一份，那就是交付物的第二个落点',
     'REQUIRED_PLACEHOLDER_PREFIX': '**CLI `preview` 的渲染细节，不是取值面。** 它存在的'
                                    '理由是「摊开的那条命令要能整条粘走」，而前端从不粘'
                                    '命令——它按 `actions[]` 发 `POST /api/jobs`。'
@@ -367,13 +263,6 @@ def public_constants() -> dict[str, Any]:
 # ─────────────────────────────────────────────────────────────────────────────
 # 三、三个合成键
 # ─────────────────────────────────────────────────────────────────────────────
-
-def _invent() -> dict[str, Any]:
-    """三个常量合成一个键。**形状照抄抓包**（`allow` / `forbid` / `principle`）。"""
-    return {'allow': list(inv.INVENT_ALLOW),
-            'forbid': list(inv.INVENT_FORBID),
-            'principle': inv.INVENT_PRINCIPLE}
-
 
 def _spoiler_disclosure() -> dict[str, Any]:
     """TODO-25 display-only boundary, derived from its single invariant."""
@@ -491,7 +380,6 @@ def actions() -> list[dict[str, Any]]:
 
 #: 合成键 → 它的构造函数。桶二那几个常量的去处就是这里。
 _COMPOSITE: dict[str, Any] = {
-    'invent': _invent,
     'spoiler_disclosure': _spoiler_disclosure,
     'job_kinds': job_kinds,
     'actions': actions,

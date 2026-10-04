@@ -10,14 +10,7 @@ test_core.py —— `novel/core/` 里那些**确定性算子**。
 """
 from __future__ import annotations
 
-from contracts.invariants import (
-    ENDING_SHAPES,
-    SEP_BANDS,)
-from novel.core.bands import BAND_SEP, ending_shape, sep_band_of_text
 from novel.core.evidence import iter_global_evidence_slots, without_global_evidence
-from novel.core.facts import (
-    NUM_UNIT, locate_secret, num_unit_keys, num_value, secret_contains, secret_keywords,
-)
 from novel.core.naming import (
     attested_surname, family_groups, invented_names, is_generic_appellation,
     name_stems, project_character_names,
@@ -28,54 +21,10 @@ from novel.core.normalize import (
     dominant_quote_style, normalize_paragraphs, normalize_punctuation, normalize_quotes,
     quote_pair,
 )
-from novel.core.spans import (
-    content_only, exact_span, extend_terminal_punct, locate_spans, locate_unique_span,
-)
 from novel.core.text import (
     SPLIT_MIN_SIDE, TERMINAL_PUNCT, locate_norm, min_hamming, norm, quote_count,
     split_by_speech_tag, window_overlap,
 )
-
-
-# ── 段间分隔：那个 off-by-one 的触发条件 ──────────────────────────────────
-
-def test_sep_band_reads_bytes_not_an_average():
-    """⭐ **本层绕开上游 off-by-one 的那一条。**
-
-    `paragraph_sep_chars` 把分隔字符总数除以**段数**，而分隔符只有「段数 − 1」个
-    ⇒ 段数越少偏得越低。原型实测 3 段的空行分段文本算出 **1.33**，
-    掉到 `1.5` 阈值以下 ⇒ 那本自己的文案段被判成「单换行」，归一化会照着把它拆散。
-
-    这里钉住的是：**无论几段，只要有空行就是空行分段**。
-    """
-    for n in (2, 3, 4, 11):
-        text = '\n\n'.join(f'第{i}段。' for i in range(n))
-        assert sep_band_of_text(text) == '空行分段', f'{n} 段的空行分段被判反了'
-        # 同样几段、只是换成单换行 —— 必须判成另一档
-        assert sep_band_of_text(text.replace('\n\n', '\n')) == '单换行'
-
-
-def test_band_sep_keys_match_the_published_value_domain():
-    """`BAND_SEP` 的键 == `invariants.SEP_BANDS`（import 期已断言，这里让它在测试里也出声）。"""
-    assert tuple(BAND_SEP) == SEP_BANDS
-
-
-# ── 收尾形态：判定顺序是承重的 ────────────────────────────────────────────
-
-def test_ending_shape_prefers_quoted_line_over_question():
-    """⚠ **顺序有意**：既是台词又以问号收尾时算「引号台词」。
-
-    原作里就有这一形（`“不然我怎么遇到你就变坏了呢？”`）。
-    「用一句角色台词收尾」与「用叙述者的反问收尾」是两种不同的最后一击——
-    前者是原作最常用的那种，后者是新文案最常落到的那种。**判反了这条判据就白做**。
-    """
-    assert ending_shape('“不然我怎么遇到你就变坏了呢？”') == '引号台词'
-    assert ending_shape('她真的会来吗？') == '问句'
-    assert ending_shape('他没有回头……') == '省略号'
-    assert ending_shape('他没有回头。') == '陈述'
-    assert ending_shape('   \n  \n') is None, '没有内容行时是 None，不是「陈述」'
-    assert set(ENDING_SHAPES) >= {ending_shape(t) for t in
-                                  ('「走。」', '走吗？', '走……', '走。')}
 
 
 # ── 归一链 ────────────────────────────────────────────────────────────────
@@ -118,15 +67,14 @@ def test_quote_normalization_keeps_nesting_depth():
 
 
 def test_paragraph_normalization_threshold_has_exactly_one_home():
-    """`1.5` 只有 `normalize_paragraphs` 一个落点，`BAND_SEP` 只是把档位翻译成它认得的输入。"""
-    assert normalize_paragraphs('甲。\n乙。', BAND_SEP['空行分段'])[0] == '甲。\n\n乙。'
-    assert normalize_paragraphs('甲。\n\n乙。', BAND_SEP['单换行'])[0] == '甲。\n乙。'
+    """`1.5` 只有 `normalize_paragraphs` 一个落点；传入实测分隔均值（空行≈2.0／单换行≈1.0）。"""
+    one = '甲。' + chr(10) + '乙。'
+    two = '甲。' + chr(10)*2 + '乙。'
+    assert normalize_paragraphs(one, 2.0)[0] == two
+    assert normalize_paragraphs(two, 1.0)[0] == one
 
 
 def test_quote_pair_and_dominant_style_are_the_only_home():
-    assert quote_pair('「」') == ('「」', '『』')
-    assert quote_pair('“”') == ('“”', '‘’')
-    assert quote_pair(None) is None
     assert dominant_quote_style('「甲」「乙」“丙”') == '「」', '按频次，不按表序'
     assert dominant_quote_style('没有引号') is None
 
@@ -207,80 +155,6 @@ def test_quote_count_counts_lines_not_characters():
     assert quote_count('「甲。」他说。「乙。」') == 2
     assert quote_count('他说甲，然后又说乙。') == 0
     assert quote_count('“甲。”和「乙。」') == 2, '四种引号体全表都数（归一前后都要成立）'
-
-
-# ── 事实词法 ──────────────────────────────────────────────────────────────
-
-def test_num_unit_skips_the_indefinite_article_and_bare_numerals():
-    """裸数字大量是虚指，单独的「一」是不定冠词——两条都不算事实数字。"""
-    got = [m.group() for m in NUM_UNIT.finditer('等了三年，四目相对，走了一半，打了二十板')]
-    assert got == ['三', '二十']
-    assert not [m.group() for m in NUM_UNIT.finditer('一封密折')], '「一」是不定冠词'
-
-
-def test_secret_keywords_drops_numbers_and_short_fragments():
-    """去数字（换个数字说法照样泄底）→ 按全角逗号切 → 留 ≥6 字。"""
-    got = secret_keywords('他其实是三皇子，母亲当年被人换了孩子，很短')
-    assert got == ['他其实是皇子', '母亲当年被人换了孩子']
-
-
-def test_secret_matching_uses_the_same_number_ruler_on_both_sides_and_maps_back():
-    """旧错误：fact 侧把「一直 / 三」剥掉，成稿侧不剥，原样转抄也假阴。
-
-    数字取值不参与泄密判别，所以「三」换成「五」仍命中；但凭据必须
-    完全来自被查文本的原始字节。
-    """
-    fact = '她其实一直都知道他是三皇子'
-    body = '开门时，她其实一直都知道他是五皇子。'
-    keyword = secret_keywords(fact)[0]
-    assert secret_contains(keyword, body)
-    span = locate_secret(keyword, body)
-    assert span is not None
-    evidence = body[span[0]:span[1]]
-    assert evidence == '她其实一直都知道他是五皇子'
-    assert evidence in body
-    assert not secret_contains(keyword, '她对他的身世一无所知。')
-
-
-def test_num_value_reads_the_value_not_the_literal():
-    """⭐ **这一条就是那次全量误报本身。**
-
-    契约发给写手的原话是「数字必须保住，**措辞随你**」，而判据只搜阿拉伯字面
-    ⇒ 成稿写「三十岁」被判成改了 `30`，**整章拦下**。古风正文里写「30」反而出戏，
-    照那条判据去修数据必然让产物更差——那正是「判据错了」的信号。
-    """
-    assert num_value('三十') == num_value('30') == 30
-    assert num_value('半') == 0.5
-    assert num_value('两万') == 20000, '「万」要结算前面所有位'
-    assert num_value('八') == 8
-
-
-def test_num_value_returns_none_instead_of_guessing():
-    """⚠ `None`（这串不是数）与 `0`（这串是零）**必须分得开**：
-    调用方拿它当比对键，猜一个值出来就会把两个不同的事实判成同一个。"""
-    assert num_value('第三者') is None and num_value('') is None
-    assert num_value('〇') == 0, '「〇」是零，不是「解析不了」'
-
-
-def test_num_unit_keys_are_valued_but_display_the_original_wording():
-    """键按**值**取（`三十岁` 与 `30岁` 同键），展示串留正文里的原样——
-    报出来的东西要是人在正文里找得到的那个写法。"""
-    assert num_unit_keys('他三十岁') == {(30, '岁'): '三十岁'}
-    assert num_unit_keys('他30岁') == {(30, '岁'): '30岁'}
-    assert set(num_unit_keys('他三十岁')) == set(num_unit_keys('他30岁'))
-
-
-def test_num_unit_keys_survives_a_number_at_the_very_end():
-    """⚠ `m.end()` 正好落在串尾时，原型旧写法 `text[m.end()]` 直接 `IndexError`
-    ——一份以数字结尾的成稿会让整条判据崩掉，而不是报出一个结论。"""
-    assert num_unit_keys('打了二十') == {}, '没有单位就不是可核对的事实'
-    assert num_unit_keys('打了二十板') == {(20, '板'): '二十板'}
-
-
-def test_num_unit_keys_does_not_cut_success_into_a_fraction_unit():
-    """「成」只有 0~10 才可能是成数；不能把「一百成功」截成「一百成」。"""
-    assert num_unit_keys('好感度一百成功') == {}
-    assert num_unit_keys('胜算八成') == {(8, '成'): '八成'}
 
 
 # ── 发明检测 ──────────────────────────────────────────────────────────────
@@ -483,85 +357,6 @@ def test_terminal_punct_has_one_home():
     assert '，' not in TERMINAL_PUNCT
 
 
-# ── 正式 `SourceSpan` 的校验与读取 ──────────────────────────────────────────
-#
-# ⚠⚠ 这里曾经有一整节「`span` 锚点的 `recover` 臂」（6 条用例，钉着
-#    `walk_spans` / `_find_or_recover` 的双门槛与淘汰顺序）。那套装置随
-#    `bounded-fidelity-v3` 整批删除：`stage2.blueprint` 的模型**不再转写原文**，
-#    beat 的区间由 `novel/stages/stage2/shared/paragraphs.py` 的段落表查出来。
-#    ⇒ 用例跟着删，只留下面那条**反向守卫**（梯子不许悄悄回来），
-#    形态与 `tests/test_artifact_versions.py` 里那条「迁移梯子不许回来」一致。
-#    ⚠ 「原样字节优先于内容空间」这条实测教训没有丢，它搬到了 hinge 的段内定位上
-#    （`novel/stages/stage2/normalize.py::_locate_phrase`，守卫在
-#    `tests/test_stage2_generation.py`）。
-
-
-def test_the_anchor_rescue_apparatus_stays_gone():
-    """⭐⭐ 反向守卫：「在原文里搜模型抄回来的锚点」那一整套不许悄悄回来。
-
-    它一旦回来，就意味着有人为了让红灯变绿重新打开了「猜字节」这条路——
-    而那一下会同时改掉**下游写手真正收到的字节**（`locate_spans` 是 stage4 算
-    `source_chars` 与 stage2 判 `span_unlocatable` 共用的入口）。
-    ⚠ `lcs` **不在此列**：stage5 的 `must_appear_missing` 与 stage6 都在用它，
-    它比那套装置早进来，也不属于它。
-    """
-    import inspect
-
-    import novel.core.spans as spans
-
-    for gone in ('walk_spans', '_find_or_recover', '_find_exact_raw',
-                 'extend_punct', 'HINGE_LCS_MIN', '_RECOVER_MIN_CHARS'):
-        assert not hasattr(spans, gone), f'{gone} 回来了 —— 猜字节那条路被重新打开了'
-    assert 'recover' not in inspect.signature(spans.locate_spans).parameters
-    assert callable(spans.lcs), '`lcs` 被顺手删了 —— stage5/stage6 还在用它'
-
-
-def test_source_span_has_no_recovery_provenance_surface():
-    """SourceSpan 只记可校验的原文坐标，不记展示/过程字段。"""
-    raw = '甲说：“原样材料。”乙离开。'
-    start, end = raw.index('原样材料'), raw.index('”') + 1
-    source = {'text': raw[start:end], 'start': start, 'end': end}
-    assert exact_span(source, raw) == (start, end, None)
-
-
-def test_exact_source_span_checks_offsets_text_and_order():
-    raw = '甲说：“原样材料。”乙离开。'
-    start = raw.index('原样材料')
-    end = raw.index('”', start) + 1
-    source = {'text': raw[start:end], 'start': start, 'end': end}
-    assert exact_span(source, raw) == (start, end, None)
-    assert (exact_span({**source, 'text': '被改过'}, raw)[2]
-            == 'source span text does not match offsets')
-    assert 'after' in exact_span(source, raw, after=start + 1)[2]
-
-
-def test_terminal_material_suffix_keeps_ascii_period_but_stops_before_quote_boundary():
-    raw = 'material.:「next」'
-    end = extend_terminal_punct(raw, len('material'))
-    assert raw[:end] == 'material.'
-
-
-def test_unique_span_locator_rejects_ambiguous_text_and_can_recover_punctuation():
-    raw = '甲说：真相。乙又说：真相！末尾只有一次。'
-    assert locate_unique_span(raw, '真相') == 2
-    assert locate_unique_span('哈哈哈', '哈哈') == 2, '重叠的两个起点也必须判多命中'
-    assert locate_unique_span('哈，哈，哈，哈', '哈哈哈') == 2, \
-        'normalized 内容空间里的重叠起点同样不能取首处'
-
-    got = locate_unique_span(raw, '末尾，只有一次')
-    assert isinstance(got, tuple)
-    start, end, recovery = got
-    assert raw[start:end] == '末尾只有一次。'
-    assert recovery == 'normalized'
-
-
-def test_source_span_rejects_a_punctuation_only_slice():
-    raw = '甲※乙'
-    assert exact_span({
-        'text': '※', 'start': 1, 'end': 2, 'normalized': '', 'recovery': 'exact',
-    }, raw)[2] == 'source span has no content characters'
-
-
 def test_global_evidence_projection_removes_only_evidence_slots():
     data = {
         'entities': {
@@ -602,46 +397,3 @@ def test_global_evidence_projection_removes_only_evidence_slots():
     assert 'fate_evidence' not in projected['entities']['characters']['char_001']
     assert 'evidence' not in projected['canon']['secrets'][0]['knowledge_events'][0]
     assert data['entities']['characters']['char_001']['role_evidence']
-
-
-def test_locate_spans_accepts_verified_exact_sources_without_searching():
-    raw = '第一拍结束。第二拍结束。'
-    split = raw.index('第二拍')
-    spans = []
-    for bid, start, end in (('b01_01', 0, split), ('b01_02', split, len(raw))):
-        text = raw[start:end]
-        spans.append({
-            'beat_id': bid,
-            'span': {
-                'text': text, 'start': start, 'end': end,
-                'normalized': content_only(text), 'recovery': 'exact',
-            },
-        })
-    located, problems = locate_spans(
-        [{'chapter_ordinal': 1, 'beats': spans}], {1: raw})
-    assert located == {1: [('b01_01', 0, split), ('b01_02', split, len(raw))]}
-    assert problems == []
-
-
-def test_locate_spans_refuses_a_span_that_walks_backwards():
-    """⭐ **游标单调**：第 n 条的起点不得退到第 n-1 条的终点之前。
-
-    这一条同时表达「区间重叠」与「顺序倒置」两件事。段号形状下它由
-    `normalize` 在整数上先判一次，而**读侧仍要独立再判一次**——
-    产物可能是人工编辑过的，读侧不许假定它一定经过归一。
-    """
-    raw = '第一拍结束。第二拍结束。'
-    split = raw.index('第二拍')
-
-    def _beat(bid: str, start: int, end: int) -> dict:
-        text = raw[start:end]
-        return {'beat_id': bid, 'span': {
-            'text': text, 'start': start, 'end': end,
-            'normalized': content_only(text), 'recovery': 'exact'}}
-
-    # 第二拍退回到第一拍的中间 ⇒ 必须进 problems，而不是被静默接受
-    _spans, problems = locate_spans(
-        [{'chapter_ordinal': 1, 'beats': [
-            _beat('b01_01', 0, len(raw)), _beat('b01_02', split, len(raw))]}],
-        {1: raw})
-    assert len(problems) == 1 and 'after' in problems[0][1]

@@ -1,8 +1,9 @@
 # HTTP 响应（`/api/**`）
 
-Stage2 节点审阅的 `review` 范围提交、`obligation_receipt`、工作包与状态的
-`review_coverage` 统一见 `docs/schema/stage2_review.md`。完整范围由后端派生；界面只展示
-待审/继承数量、原问题及 typed 例外，不从摘要相似或主体删除推断接受。
+历史受托审阅（Stage2 语义审阅、Commander/Reviewer 工作包、人工逐 Stage 过闸）已随
+全自动单模式退役；本文件只描述现役只读监控与运维端点的响应形状。存量书的审批账
+只读解码形状（ApprovalDoc v9 及其决定族）仍在 `contracts/schema/api.py`，由
+`inbox_projection` 消费，不再有对应 HTTP 路由。
 
 **载体已定：Pydantic v2**——但本文只定**内容**，模型照它写，**方向别搞反**。
 所以下面的表里不出现任何 Python 类型标注。
@@ -43,10 +44,9 @@ Stage2 节点审阅的 `review` 范围提交、`obligation_receipt`、工作包�
 > 理由是消费方不同：产物的读者是下一层代码（键不在 ⇒ 它没发生过）；
 > 响应的读者是**界面**，而界面要区分「这个字段是 null」与「后端这版根本没有这个字段」。
 
-Stage4A 已发行外部回执及审批历史同时承担内容寻址身份。新增逐章
-`constraint_operations` 是精确兼容例外：缺省只省略这个新字段，不改变原有字段的 null；
-非空处置必须完整保留。GET template 单独发布 `constraint_catalog` 全章目录，不能把旧回执的
-字段缺席推断成当前没有历史义务。
+（历史）旧链 Stage4A 已发行外部回执及审批历史曾承担内容寻址身份，其
+`constraint_operations` 兼容例外与 `constraint_catalog` 目录面已随人工闸退役；
+存量决定仍按当时的形状只读解码。
 
 **② `by_alias=True` 不许关。**
 `_provenance` 是 alias 字段（模型里叫 `provenance`）。FastAPI 的
@@ -57,8 +57,9 @@ Stage4A 已发行外部回执及审批历史同时承担内容寻址身份。新
 **③ 措辞不是契约，id 才是（`Q-6`）。**
 凡是「为什么」类的格子一律出 **id**（异常类名 / `FRESHNESS_REASON` / 判据 id），
 不出人读的句子。人读的句子可以**另外**出一格，但前端不许拿前缀去认它——
-`check_stage5_review.json` 的 `info` 桶靠 `〔度量〕` 前缀区分度量与告警，
-一次措辞改动就会把 41 条度量全部渲染成告警色。
+历史 `check_stage5_review.json` 的 `info` 桶曾靠 `〔度量〕` 前缀区分度量与告警，
+一次措辞改动就会把 41 条度量全部渲染成告警色——前缀认结论的教训对现役
+`CheckReport`（`:kind` 只剩 stage0/stage1）同样成立。
 
 ---
 
@@ -156,51 +157,12 @@ Prompt 选型完成后，`prompt_variants`、`prompt_defaults` 与 `--prompt-var
 | `GET /api/str06/candidates/:candidate/delivery` | `Str06DeliveryView`（manifest 就绪核对记录与全书篇幅读数） | 新 |
 | `GET /api/str06/candidates/:candidate/book` | UTF-8 纯文本（`stage7/final/{title}_rewriting.txt` 原样流出）；没有成书是 404 不是空 200 | 新链下载面（成书 URL 字面与盘上文件名是两件事） |
 
-> #### `ApprovalWorkpack` v2 是只读阅读面，不是决定模板
+> #### 审批工作包 / Stage7 终审包（已退役）
 >
-> 两个端点共用现役 v2 外壳：`v=2`、`sid`、`kind=design｜structure`、当前完整
-> `subject_sha256`、封装该 subject 的 `review_token`、设计面必有而结构面必须没有的 `candidate_sha256`、完整有序
-> `chapter_ordinals[]`、`disposition`、可选 `current_decision_sha256`，以及固定六组 `groups[]`。六组顺序恒为
-> `blocking / semantic_attention / disclosure / metric_only / phase_deferred / coverage`；
-> 空组也必须带 `scanned` 分母出线，不能用裁掉空数组暗示「没扫」。
->
-> `WorkpackItem` 只投影服务端已算事实：`code`、`rule`、`sev`、`status`、
-> `chapter_ordinal`、`scene_refs`、`refs`、`repair_owner`、`detail`、`effect`、
-> `allowed_actions`、`changed`、`historical_accept_reusable`、`source_decision_sha256`、`review_token`、`reading`。
-> **Stage4 design/structure 审阅工作包已随 2026-09-15 全自动裁决整体退役**（写面、模板、
-> `--close-review` 与 Inbox 余额投影一并移除）；以下 workpack 通用形状仅描述 Stage5/7。
-> `allowed_actions` 是关闭集 `accept / request_repair / request_replan`，
-> 不是 argv；INFO、metric、UNVER、skipped 和非 blocking/coverage effect 恒为空。coverage 恰覆盖
-> `chapter_ordinals`，changed 章在前、段内按章号升序；changed 与 exact historical accept reuse
-> 互斥且穷尽。工作包没有 actor/reason/decision 字段，GET 不写审批账、不启动 job，也不替用户签字。
-> Stage4/7 工作包 disposition 均为 `review_required / already_current`；旧 frozen-v6 工作包退役，
-> 版本不匹配明确拒绝。盘上 raw typed 决定不因前置闸暂时失效而删除；重新闭合且
-> subject/contract 未变时可恢复 `already_current` 并携 `current_decision_sha256`。Design/Structure POST 只回交本 workpack
-> 的 opaque `review_token` 与 typed rulings；Stage4A 完整章 edit 使用独立 `s4er1_…` token。三者都由
-> 服务端现场重建内部 subject/contract/validation 身份，不共享也不要求调用方搬运多枚 SHA。
->
-> 当前外壳保持顶层 `reading`，包含 legend、全书策略或必要全局 concerns。
-> coverage 行按类型携完整章材料：Design reading 为 `truth / chapter`，保留 opaque alias；
-> Structure reading 为 `materials / chapter / structure_metrics / binding_concerns /
-> signature_conflict_codes`，包含父节点、全部 deliveries、端点与原文证据闭包。
-> 节点正文只保存一次，场景通过 placement 引用；共享证据不等于重复剧情。
-> `reading` 不进 subject/token/proof，纯渲染变化不使接受过期；材料本身的身份仍由
-> 当前消费投影绑定。`metric_only` 只保留摘要，完整读数由逐章 reading 承载。
-> 渲染落点 `novel/views/str06.py::design_view`（旧链 stage4/reading.py 随旧链整层退役；
-> `novel/stages/common.py::render_chapter_packet` 是模型阅读界面的确定性 renderer）。
-
-> #### Stage7 定稿 workpack 把“看到的证据”与 approve 乐观锁绑在一起
->
-> 本包携带 `v/kind/sid/review_identity_sha256/review_contract_version/validation_seal_sha256/
-> review_token/check/disposition/current_approval?`。`check` 是完整分母 + 四态计数 + provenance +
-> 全部非 ok 行 + 正常 metric 的 exception-first 投影；没有因紧凑而删除异常。review identity 排除
-> disposition/current approval 与纯机械身份，批准或组装不会自废；代码/规则变化只滚 validation seal，
-> 业务证据、可见 finding 或审阅契约变化才改变人审适用性。
->
-> Stage7 另携完整内部 decision subject、surname map、characters/aliases、extra subs、kept 明细、逐旧字面的真实
-> `replacement_hits`、residual 上下文/baseline、book findings 与 identity。approve 请求必须同时提交
-> 同一份包的 opaque `review_token`；服务端重建后任一漂移关闭式拒绝。`already_current` 必须携仍绑定本包的
-> current approval，页面不再显示可重复的默认批准动作。
+> `ApprovalWorkpack` v2、Stage5/7 紧凑终审包及配套 `review_token` 提交协议已随
+> 全自动单模式与 STR-06 关闭批删除：写面、模板、余额投影与 HTTP 路由都不存在，
+> schema 载体不再保留（历史形状见 Git 历史）。现役命名残留由 `naming_residual`
+> 机械验硬闸守卫，交付判定走 `str06` 候选只读面。
 
 > #### `Stage0Report` 是窄视图
 >
@@ -362,12 +324,9 @@ parent/epoch 与 session 只用于关联，不从日志文字或时间接近补�
 | `TrashNovelResult` | `sid` · `title` · `trash_id` · `trash_rel` | `novel/orchestrator/trash.py` 的 CLI 子进程完成同盘移动后返回；`trash_rel` 是可恢复位置，不把“从语料库消失”偷换成“字节已永久销毁” |
 | `RetentionPlanView` | `wire_version` · `generated_at` · `policy` · `examined` · `candidates[]` · `plan_token` | preview 完整冻结策略、扫描分母与每项路径/mtime/size/SHA；apply 不接受前端重拼的候选 |
 | `TrashRestorePlanView` | `wire_version` · `generated_at` · `trash_id` · `sid` · `title` · `original_dirname` · metadata/manifest 三枚 SHA · `plan_token` | book/approval/service run 三面由 manifest 闭合；持锁后再次核 token/CAS，拒绝覆盖 live 位置 |
-| `ApprovalBackfillResult` | `approvals` · `backfilled[]` | `backfilled` 是本次**按正式盘面补录**的 gate id，空数组表示无事可补；界面必须明确这些不是用户逐屏点过的验收记录。该入口不越过统一机械准入，也不恢复已退役的 Stage2 审阅记录 |
-| `GlobalEdit / GlobalEditPreview` | `GlobalEdit`：四类事实的稀疏 patch、完整 replace 或绑定集合 SHA 的 collection edit；`post_edit_review` 仅剩旧 WAL 兼容且新提交被拒。Preview：`result_subject_sha256` · `changed` · `hard_hits` | 预检与 apply 共用同一候选判据；预览不是预授权。原 Stage2 审阅请求/工作包/已读 DTO（`Stage2NodeReviewRequest`、`BlueprintReviewWorkpack`、`BlueprintSeenRequest` 等）已随语义审阅退役删除 |
-| `ApprovalDoc` | `v=9` · `sid` · `gate` · `stage2_reviews` 已删 · `writing` · `design_review` · `structure` · `writing_approval` · `closure` · `prepare` · `spawns` | HTTP v9 随 Stage2 语义审阅退役删除 `seen`/`stage2_reviews`/gate `s2`：`gate` 恰为 `s0/s1/s4/s5/s6/s7`，`spawns` 同键（stage2.global/blueprint 在 `s1`，design/plan 在 `s4`），语义未审不产生审批待办。`design_review` 是 A 的独立相位，不是 gate：给出当前 candidate/aggregate hash、typed 当前决定、历史与 `unavailable / missing / repair_requested / strategy_replan_requested / accepted / suspended / expired`；只有 current `accepted` 才能授权 B，`suspended` 保留当前 raw 决定但不携 action token。`structure` 是 B 编译 Plan 后的另一张票，另给当前 subject、B `binding_concerns`、typed 当前裁决、历史与 `unavailable / missing / accepted / replan_requested / expired`；`gate.s4=true` 只可能来自这张当前 `accepted`。`writing_approval` 同样给出 available、current subject、typed current decision/history；新 typed writing 决定绑定 Stage1 正文、Stage4 Plan、fresh WriterContext 与测量契约。`closure` 是 Stage5 当前整书工作包、typed 决定与不可擦除历史，`gate.s5=true` 只可能来自 current `closed`。当前写入要求已有新 clean 工作流 manifest，backfill 只接受当前盘上 v9；旧版本、未来版本和损坏均返回明确错误，不迁移或重签。历史恢复使用配对的冻结旧代码与旧根 |
+| `ApprovalDoc`（存量账只读解码，无 HTTP 路由） | `v=9` · `sid` · `gate` · `stage2_reviews` 已删 · `writing` · `design_review` · `structure` · `writing_approval` · `closure` · `prepare` · `spawns` | HTTP v9 随 Stage2 语义审阅退役删除 `seen`/`stage2_reviews`/gate `s2`：`gate` 恰为 `s0/s1/s4/s5/s6/s7`，`spawns` 同键（stage2.global/blueprint 在 `s1`，design/plan 在 `s4`），语义未审不产生审批待办。`design_review` 是 A 的独立相位，不是 gate：给出当前 candidate/aggregate hash、typed 当前决定、历史与 `unavailable / missing / repair_requested / strategy_replan_requested / accepted / suspended / expired`；只有 current `accepted` 才能授权 B，`suspended` 保留当前 raw 决定但不携 action token。`structure` 是 B 编译 Plan 后的另一张票，另给当前 subject、B `binding_concerns`、typed 当前裁决、历史与 `unavailable / missing / accepted / replan_requested / expired`；`gate.s4=true` 只可能来自这张当前 `accepted`。`writing_approval` 同样给出 available、current subject、typed current decision/history；新 typed writing 决定绑定 Stage1 正文、Stage4 Plan、fresh WriterContext 与测量契约。`closure` 是 Stage5 当前整书工作包、typed 决定与不可擦除历史，`gate.s5=true` 只可能来自 current `closed`。当前写入要求已有新 clean 工作流 manifest，backfill 只接受当前盘上 v9；旧版本、未来版本和损坏均返回明确错误，不迁移或重签。历史恢复使用配对的冻结旧代码与旧根 |
 | `Stage5ClosureView / Workpack` | `state` · `workpack?` · `next_step?` · `current_decision?` · `history[]`；工作包含 Review 身份、`planned/missing`、`chapter_subjects[]`、`.INVALID` / HARD、`unresolved_trim_items[]`、逐项 must-appear、fact/unver 组、披露/已处置计数与 `workpack_sha256` | `state ∈ missing｜review_required｜blocked｜ready｜closed｜expired`，只由服务端重算，页面不得按计数重判。`review_required` 表示没有可接受的 current 最终 Review，不能携 current workpack/decision，且 `next_step` 必须指出重跑；`chapter_subjects[]` 精确覆盖全部当前 canonical 计划章；`unresolved_trim_items[]` 是章号、audit SHA 与正文 SHA 的精确批量提交面，章号投影必须等于 `unresolved_trim_chapters`。决定或正文漂移后旧决定只留 history，不能继续充当 current |
 | `Stage5ClosureTemplate / Request / Decision` | Template 是服务端完整 materialized workpack + `review_token`；Request 只有 `actor/reason/review_token/must_appear[]/group_acks[]`；Decision 在 Request 上加 `decision_sha256/decided_at` | must-appear 与 group 的 finding/chapter/review/workpack SHA 只在模板和盘上完整决定中物化；调用方只提交 token 与 typed ruling。服务端展开 current workpack 后要求 ruling 精确覆盖；模板 placeholder/token 不进入 Request，确认不会把 UNVER 改写成 PASS |
-| `BatchTrimResolutionRequest` | `actor` · 共享 `reason` · `items[{output_ordinal,audit_sha256,chapter_sha256,reason}]` | actor/共享理由非空，章号升序去重；单项空理由沿用共享理由。服务端在任何写入前重读并核完整批次，按章幂等落 hash-bound resolution；浏览器只复制当前 closure workpack 的 exact item，不自行计算 SHA |
 | `DesignReviewTemplate / Request` | Template 是服务端完整 materialized subject + `review_token` + 全章 `constraint_catalog`；Request 只有 `actor/reviewer_kind/review_run_id/general_reason/review_token/strategy/chapters[]` | 一次提交必须覆盖当前完整策略与升序全章集。策略决定为 `accept / request_replan`；逐章决定为 `accept / request_repair`，关系 repair 使用 typed relation effect。历史目录逐章给当前集合摘要，以及每条约束的 SHA、typed payload 和来源决定列表；新裁决用可选 `constraint_operations` 绑定 expected_constraint_set_sha256，并对全部 active SHA 明确 keep/withdraw/supersede，替代项携 typed replacements。旧回执缺省省略该新字段；新候选有 active 时不得省略处置。candidate/aggregate/chapter subject、binding infeasibility、repair capability、placeholder 与历史 reuse 只在 Template 展示并由服务端重建，不让 caller 回传。subject 只公开 opaque alias 的盲真相与现场结构证据；自然语言 reason 只作审计，不进入修订 prompt |
 | `DesignReviewDecision / View` | Decision 是服务端 materialized 的完整 candidate/aggregate/chapter subject、review contract、typed rulings、actor/reviewer/run/reason + `decision_sha256/decided_at`；View 另含 state/current hashes/`binding_infeasibility?`/current/history | POST 的 opaque token 只用于找到并复验本次 exact materialized subject，不能删减盘上审计。历史 accept 只有在全局 basis、strategy epoch、本章主体及可见 B 证据仍相同时才可显式复用；拒绝不会自动变 accept |
 | `JobList` | `jobs[]`（`JobRecord`） | 抓包 `jobs.json` 就是 `{"jobs":[]}`——**一个样本都没有**，所以元素形状只能从 `_orchestration.md` 来 |
@@ -389,143 +348,17 @@ parent/epoch 与 session 只用于关联，不从日志文字或时间接近补�
 
 ---
 
-## 五b、`GlobalView` —— S-05 全局设定那一屏
-
-⚠ 与 S-06 不同，本屏**没有「左半边」**：stage2 没跑就没有任何东西可看
-⇒ 产物不在盘上是 **404**（`UpstreamMissing`），不是 `exists=False` 的 200。
-有降级形态的三屏在各节自注：S-04（stage2 没跑仍 200）、S-07（恒等基线）、
-S-08（ctx 不在仍 200，`materials=null`）。
-
-| 字段 | 类型 | 必填 | 说明 |
-|---|---|---|---|
-| `sid` / `title` | 串 | 是 | 由 `novel/paths.py` 从目录名派生 |
-| `setting` | 对象 | 是 | `GlobalSetting`：era/social_context 及各自 evidence_refs；源文未建立时值为 null |
-| `relations[]` | 数组 | 是 | 重要有向关系，两端解引用为审阅显示用 NameRef；保留 effective_from/effective_until/revealed_from |
-| `world_rules[]` | 数组 | 是 | 规则及其明确 versions，各版本保留成立窗口、披露时点与证据引用 |
-| `arc_secrets[]` | 数组 | 是 | 长线秘密及严格二选一 fact/fact_ref；空数组仅表示未抽到，完整性仍须审阅 |
-| `evidence_anchors` / `evidence_snippets` | 对象 | 是 | Global 自有共享锚点及服务端回取的证据片段；未能取回片段为 null |
-| `unresolved_refs` | 整数 | 是 | 全屏解引用失败的总数。**读数不是判定**——给人看「这份产物里有几个说不出名字的 id」 |
-| `invalid_exists` / `freshness` / `reason` / `ghosts` | | 是 | 同 S-06 的来源账四格 |
-| `_provenance` | 对象 | 是 | `GlobalProvenance` |
-
-人物登记由独立 `GET /api/novels/:sid/stage2/characters` 返回 `CharacterRegistryView`：
-`registry` 是 Characters v2，`artifact` 表达正式/INVALID 及当前新鲜度；`source_sha256`、
-`evidence_snippets` 与可空 `edit_template` 均绑定同一当前盘面。模板不可用时同时给出
-`template_unavailable_reason`。GlobalView 不再内嵌人物、动态结果或逐次称呼记录。
-
-三条形状裁决：
-
-**① `NameRef`：解不动就 `resolved=False` 且 `display == raw`——view 不编名字。**
-编出来的名字比一个看得出来的 id 更坏（它看不出来）。
-**② 本屏是内部全书审阅视图。** 揭示时点原样给，NameRef 的登记显示名不授予 Writer
-身份披露许可；secret 的 fact_ref 保留原分支，不在视图中复制成另一份事实。
-**③ 判据结论不在这里**（`R-11.4`），同 §四第 ⑦ 条——本屏及以下各屏的结论
-都只能来自 `/api/novels/:sid/check/:kind`。
-
-## 五c、`ReadingView` —— S-04 原文 ↔ 完整剧情
-
-text 为 Stage1 完整本章原文，blueprint 为同章 PlotBlueprint 或 null。缺蓝图返回原文及
-明确 ArtifactState，不构造假节点；源章缺失或越界返回 404。浏览器不根据坐标裁剪原文。
-
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| sid / title / chapter_ordinal | 标识与文字 | 当前书和章 |
-| text / text_chars | 原文与码点数 | 完整本章，长度一致 |
-| blueprint | PlotBlueprint 或 null | ChapterBlueprints v10 的同章完整节点、状态、约束、actor_bindings、relation_uses、共享证据与叙述 |
-| blueprint_state | ArtifactState | formal / INVALID / missing / unreadable 分开 |
-| _provenance | BlueprintProvenance 或 null | 缺蓝图时无来源账 |
-
-当前章或跨章的材料和提交 token 来自同一个范围工作包。证据共享与重叠只用于定位，
-前端不得由证据覆盖生成语义重复或完整性结论。
-人物使用位置是完整 ActorRef；同 cid 的两个不同 presentation_ref 必须在参与人、持有者、
-在场者、叙述者、观察者和关系两端保留，页面不能先按 char_id 去重或回退 canonical。
-
-## 五d、`Stage4View` —— S-07 计划 ↔ 写作上下文
-
-⚠ **没跑过 stage4 时本屏也有内容**（`web/AGENTS.md`「路由与屏幕职责」）：`identity_plan=true`，
-计划与上下文都是**本次现算的恒等基线**（不落盘）——「如果计划什么都不改，
-写手手里会有什么」。恒等基线没有可审批的正式主体 ⇒ `structure_subject_sha256`、
-`_provenance` / `_ctx_provenance` 必须为 `null`（后置条件）。计划在而 ctx 不在 ⇒ 200 且 `ctx_chapter=null`
-（右半边缺席，`ctx_state` 说明处境）。
-
-| 字段 | 类型 | 必填 | 说明 |
-|---|---|---|---|
-| `identity_plan` | 布尔 | 是 | `true` = 本屏是恒等基线。此时计划侧三个 typed goal 的 `intent` / `subject_refs[]` 指向完整节点，**不是真决策** |
-| `structure_subject_sha256` | SHA-256 或 null | 是 | 正式计划时由**本次读出的同一个 `PlanChapters` 对象**计算，并与 `index[]` / `plan_chapter` 同快照；恒等基线只能为 null。它只供显示与 currentness 对照；正式结构裁决必须从 Structure ApprovalWorkpack 取得 opaque `review_token`，不能拿本 view 的 SHA 自建提交载荷 |
-| `chapters` / `ordinal` | | 是 | `ordinal ∈ chapters`（后置条件） |
-| `index[]` | 数组 | 是 | 章索引；每行带 `chapter_goal`、完整 `structure_decision`、预算与场数，供一次提交时核对全章集合与逐章裁决，不额外发 N 次请求；它**不是**完整 canonical subject 的公开展开。⚠ **没有 `in_band` / `style_hits` / `span_chars` / `hidden`**；判据结论只来自 `/check/stage4`，派生结构向量由服务端 view 现场计算 |
-| `plan_chapter` | 对象 | 是 | 章级三个 typed goal、`retain/reconstruct` 声明、从当前 blueprint 派生的语义契约、改写 brief 与有序 `scenes[]`；`computed_change_kinds` 同样只在 API view 派生，不写回计划。每场只展示 purpose/role/delivery/transition、context/turn 节点引用与预算；beat_placements 与 anchor_bindings 为唯一分场/端点映射 |
-| `ctx_chapter` | 对象 或 null | 是 | WriterContext v9 的实际任务书。场景顺序以 scenes/slot 为准；人物名册与参与人、持有者、在场者、叙述者、观察者、受众及关系两端统一使用 opaque actor_ref；无反向 char_id/presentation_ref 映射。Beat 正文保存一次，场景 delivery 引用它；原文证据不下发 |
-| `writer_target` | 二元组 或 null | 是 | 写手被要求的篇幅区间，**与写手同一把尺子**（`prompts.target_band`）；`null` ⇔ `ctx_chapter=null`（同进同出，后置条件） |
-| `plan_state` / `ctx_state` | 对象 | 是 | 两份产物各自的 `ArtifactState` |
-| `_provenance` / `_ctx_provenance` | 对象 或 null | 是 | 两份来源账分两个键出，不合并 |
-
-内部 PlanChapters v6 的目标保留完整 ActorRef，不能直接复用为写手目标。上下文的关系/规则/
-秘密使用按实际呈现铸造的 opaque subject 引用。
-`allowed_slots` 与 `role_allowed_slots` 加章级揭示字段决定可表达场景；同一实体的
-两个表面身份保持独立名册行，同人关系按绑定候选与揭示字段判定。
-历史事实保留有效期结束值，不能把 effective_until 当作禁止以后披露的期限。
-
-## 五e、`Stage5View` —— S-08 成稿 ↔ 材料
-
-⚠ `ctx_exists=false` ⇒ `materials=null`：**不发假材料**（`web/AGENTS.md`「路由与屏幕职责」，
-后置条件焊死），给「先跑 stage4」——左半边缺席、右半边照常列已有成稿。
-某章无 canonical 稿 ⇒ 200 且 `drafts=[]`（「还没写」不是错误）。
-`planned=null` = 计划读不回来，「该有几章」判不了——与 0 是两件事。
-
-| 字段 | 类型 | 必填 | 说明 |
-|---|---|---|---|
-| `ctx_exists` / `planned` / `written` / `invalid` / `missing[]` | | 是 | canonical 全书进度读数，不折叠成判定；不再有 `duplicates`（单一正式路径结构上消除了两臂重复） |
-| `legacy_incompatible` / `legacy_paths[]` | bool / str[] | 是 | 旧 `stage5/deep|shallow/` 只读证据，以及仍占 live 位置的旧版 Review/trim schema；两格必须同时有意义，发现旧契约时不挑一臂或低版本冒充 current |
-| `chapters` / `ordinal` / `index[]` | | 是 | 章索引只取 `stage5/chNN.json`；没有成稿的章 `chars` / `overlap_excl_verbatim` / `freshness` 三格全 `null` |
-| `source_text` / `source_chars_raw` | 串/整数 或 null | 是 | 源章原文单独的落点（材料里不重复） |
-| `materials` | 对象 或 null | 是 | 写手拿到的下发面，**与 canonical 闭卷写手同一份**（`prompts.build_material(...).blocks`——`R-11.8` 在读屏上的对应物：显示的材料 = 真发出去的材料）；只消费 WriterContext v9 的公开目录与许可，私有人物/秘密检测基线不进入该材料 |
-| `drafts[]` / `invalid_drafts[]` | 数组 | 是 | 正式稿与 `.INVALID` 分两个数组，数组归属已经表达 formal/invalid。每项只发篇幅读数、`segments[]`、对齐与 freshness/provenance；`segments[]` 是盘上的唯一内容权威，正文由消费者统一拼接，不再重复发 `text`、路径、轮次、来源字数或 origin 展示格 |
-| `trim_audit` | 对象或 null | 是 | 当前章仍绑定 current 正文、且尚未人工销账的超上限事实；对象只发 `output_ordinal/reason/context`。单章 retain 在 CLI 边界从盘上重读锁；批量 retain 所需双 SHA 只来自 `ApprovalDoc.closure.workpack.unresolved_trim_items[]`，浏览器不计算也不从展示文本猜。`null` = 本章无待销账 trim |
-| `drafts[].align` | 对象 或 null | 是 | **可空**：`null` = 对齐辅助尚未由服务端提供（本章无锚可对时 `align_rows` 为空、账仍在）。对齐账是对应关系不是判定，`note` 常驻这句话；锚点覆盖率必须常驻显示 |
-| `drafts[].align.coverage_threshold` / `.coverage_state` | 浮点 / 串 | 是 | 阈值取自 `contracts/invariants.py::ANCHOR_COVERAGE_WARN`（0.6），`coverage_state ∈ low｜adequate` 由 `DraftAlignView` 的校验器按 `coverage` 与 threshold 反推 ⇒ **两格不可能各说各话**。前端只消费 `coverage_state`，一行阈值都不写（守卫 `tests/test_api_discipline.py::test_frontend_does_not_rejudge_anchor_coverage`） |
-| `ctx_state` | 对象 | 是 | `ArtifactState` |
-
-## 五f、`ReviewView` —— S-09 验收 / 修订
-
-一份验收都没有 ⇒ 404（`UpstreamMissing`，前端渲染「先跑 stage5.review」）。
-⚠ 判据表本身仍归 `/check/stage5`；本屏发的是**验收产物**（历史事实），
-与「现在复检一遍」是两件事。
-
-| 字段 | 类型 | 必填 | 说明 |
-|---|---|---|---|
-| `review_seq` / `book[]` | | 是 | 最新一份全书验收的序号与书级 findings；盘上的来源、基线与 provenance 只服务后端 currentness，不重复暴露 |
-| `review_state` / `review_reasons[]` | `Stage5ReviewState` / str[] | 是 | `fresh｜stale｜unknown｜legacy_incompatible`（`missing` 由路由 404 表达，不能伪装成视图）；只有 fresh 的 reasons 为空。结论统一取 `review.review_status`，API 不重拼第二套 freshness |
-| `finding_counts` | 对象 | 是 | 全书结论按 sev 现数，**四键恒在（0 也写）**。⚠ 不读产物的 `counts` 字段——那份是稀疏 Counter（`Review.counts` 登记过的病）；`index[]` 每行同理（后置条件逐行查） |
-| `index[]` | 数组 | 是 | 每行只发 `output_ordinal/finding_counts/unresolved`；索引只回答验收结论，不重复轮次、篇幅、预算或未渲染 stale 格。`unresolved` = 有收敛账（`unresolved_rounds > 0`）且未豁免的结论条数 |
-| `chapter` | 对象 | 是 | 只发 `output_ordinal/findings`。阅读、编辑与证据高亮使用并行 Stage5 响应中的当前 `Draft.segments`，避免 Review 携带另一份可能过期的正文 |
 
 ## 五g、Stage6 定稿面（已退役）
 
 Stage6 三候选定稿面（Stage6View/Stage6PrepareView/Stage6ApprovalWorkpack/HookApproveRequest）已随 Stage6 整层退役（F8b，2026-09-25）：新链开篇 Hook 单输出，只读监控见 `/api/str06/candidates/{candidate}/hook`。
 
-## 五h、命名替换只读投影 —— S-12 人名替换 + 成书
+## 五h、命名替换只读投影（已退役）
 
-新链命名面只读监控在 `/api/str06/candidates/:candidate/naming`（`Str06NamingView`）。
-⚠ 替换只有**一个**替换器：`novel/stages/stage7/naming.py::apply_names`（确定性替换表
-`compile_surface_replacements` 派生）——不写第二个替换器，也不落盘。旧链
-`Stage7View`/`subs.py` 随旧链整层退役。
+旧链 Stage7 改名对照屏（`Stage7View`／`NameDecisionLine`／`HookRename`）与配套
+写回请求体已随旧链人工定稿面删除；现役命名与交付只读面是
+`GET /api/str06/candidates/:candidate/naming`（`Str06NamingView`）与 `/book` 下载。
 
-| 字段 | 类型 | 必填 | 说明 |
-|---|---|---|---|
-| `surname_map` / `characters[]` / `extra_subs[]` / `subs_count` / `kept_count` | | 是 | 人名表的内容与读数。`characters[].hits` 是该角色全部字面在 `applied` 记账里的替换总次数，**按人分组求和——读数不是判定** |
-| `residual[]` | 数组 | 是 | 旧名残留。**顺序是承重的**（照产物：置信度高在前、覆盖率降序） |
-| `baselines` / `identity` / `approved` / `book[]` / `sources` | | 是 | 词干基线、恒等基线（可空）、定稿（可空）、书级结论、来源账 |
-| `book_txt` | 对象 或 null | 是 | **可空**——`null` = 成书还没组装过 |
-| `book_txt_on_disk` | 布尔 | 是 | 成书此刻真的在不在盘上。`book_txt` 记的是组装时的账，两者可分家 |
-| `delivery` | `AgentDeliveryOutcome` | 是 | 同一后端终验的 state/reason/checked_at；文件存在不能代替交付证明 |
-| `book_filename` | 字符串 | 是 | 成书的文件名（`<书名>_rewriting.txt`）。**另存名与按钮文案用它**——前端不许拿 `title` 再拼一次（`R-11.4`）：那是同一条命名规则的第二个落点，与 `novel/paths.py::book_txt_rel` 分家时盘上那份和下载那份会叫两个名字 |
-| `chapters[]` / `ordinal` / `rows[]` / `hook` | | 是 | `chapters` = 可切换「逐章对照」的输出章号（本层判过的成稿章，升序）；`rows[].changed` 是 bool 不是 kind 字符串（两态本来就该是 bool） |
-| `invalid_exists` / `freshness` / `reason` / `ghosts` / `_provenance` | | 是 | 来源账五格 |
-
-`book_txt_on_disk=true` 只表示 live 路径有字节。预览/下载入口以 `delivery` 的 ready 类结论开放，
-刷新中不沿用旧可交付状态；纯文本端点再次执行同一后端终验。不把整本正文塞进
-`Stage7View`，也不要求用户离开审校台去文件系统寻找。
 
 ## 五i、`InboxView` —— 待人工清单
 
@@ -553,27 +386,12 @@ stage5 的 `counts` 字段就是这么烂掉的（稀疏 Counter，0 键消失�
 大书上是秒级。**登记不优化**：盘上 3 本无压力，全语料嫌慢时在路由层加缓存，
 别动生产者（`novel/orchestrator/inbox_projection.py::inbox_view`）。
 
-## 五j、人工写回的请求体
+## 五j、人工写回的请求体（已退役）
 
-这些路径都是**单步 0 成本作业**：产物变更一律经 `jobs.run` 起 CLI 子进程（`R-11.3`），
-HTTP 进程只写 `_service/`（一次性人工稿）。
-⚠ **CLI 内红报告/失败 = HTTP 200 + `JobRecord.state='landed_red'|'failed'`**——作业终态不是 HTTP 错误
-（`stage0.edit` 同形），前端读 `state` 与日志，不是读状态码。
+DraftEdit／TrimResolution／NameMapApprove／ResidualAdoption 请求族已随
+F8b 全自动单模式整族删除（405/404 由 `tests/test_api_edits.py` 钉住）；
+新链没有人工写回面。
 
-| 端点 | 请求体 | 说明 |
-|---|---|---|
-| `POST /api/novels/:sid/stage0/approve` | `Stage0ApprovalRequest`（`expected_revision_id` + `actor` + `reason`） | `expected_revision_id` 必须等于人实际审阅的 current revision，读包后 edit/adopt 的旧请求以 409 拒绝；actor 是自报身份，空值拒绝。⚠ 零命中自动批已于 2026-08-21 停产、记录它的 `approval.origin` 一格已于 2026-08-22 删除 ⇒ **本端点是批准的唯一来源** |
-| `POST /api/novels/:sid/stage0/candidate/adopt` / `dismiss` | `Stage0CandidateDecisionRequest`（`candidate_revision_id` + `expected_revision_id` 乐观锁 + actor/reason） | 页面上要决定的是**整版留哪一版**，不是逐个冲突选边——聚合根是 `{原文身份, 正文, 剔除账本, 告警}` 整团（`stage0.md` §2.5），只对正文做 diff3 保证不了整个聚合一致。`adopt` 落一条 `human_adopt` revision 并把审批退回 pending；`dismiss` 当前稿一字不动、候选进 `dismissed[]`（否则同一候选每跑一次机器就复活一次）。⚠ 「采纳后再编辑」不是第三个端点，是 adopt 之后照常 `POST /stage0/edit`。决定按内容寻址保留，崩溃后同一请求幂等重放；只有 `ok/landed_red` 才清理一次性 plan |
-| `POST /api/novels/:sid/review/:o/edit/preview` | `DraftEditPreviewRequest`（完整 `segments[{slot,text}]`）→ `DraftEditPreview` | 只读同步预览；slot 在请求层先唯一，producer 再要求完整覆盖计划 slot 并按计划排序、归一、用当前 `_judge` 全量重判。响应给 `output_ordinal`、归一后的完整 segments、全部 findings、current/introduced/resolved HARD、`current_chapter_sha256`、`preview_subject_sha256` 与 `required_confirmation`。preview subject 精确绑定章号、current canonical 完整文件 SHA、Stage5 规则指纹、归一稿及上述 finding 集；不调用模型、不写上传文件、产物、Review 或人工账 |
-| `POST /api/novels/:sid/review/:o/edit` | `DraftEditRequest`（完整 `segments` + `actor/reason` + `current_chapter_sha256` + `preview_subject_sha256` + `confirmation`） | typed segments 落 `_service/edits/` 一次性 JSON 稿，CLI 以文件名认章；apply 重新走 preview 的唯一纯评估口并核两枚 SHA，同书总锁→逐章跨进程锁内再核 current 文件 SHA。`confirmation` 只能是 `formal｜working_draft` 且必须等于本次预览要求：无新增 HARD 才是 formal；新增一般 HARD 必须明示 working draft；`paragraph_budget_missed` 两态都拒绝。成功稿始终落新的 canonical human 轮、旧轮归档，**不落 `.INVALID`**；一般 HARD 由 stale Review / closure / 下游闸继续阻断。无正文的 `_service/human_actions.jsonl` 先落 prepared，写后读回/report 成功再落 committed；kill 尾窗按 request + result SHA 补账，未换行坏尾先隔离原字节后重建 committed，都不造新轮。每次 apply 不自动追跑 Review，多章连续编辑结束后只跑一次最终全书 Review |
-| `POST /api/novels/:sid/stage7/approve` | `NameMapApproveRequest`（`actor`、`reason`、opaque `review_token`） | 一本书只有一份人物表，因此不带候选序号；服务端重建决策面与可见 evidence 后核 token。成功后 s7 proof 绑定完整 typed 审批凭据，但不绑定 `book_txt` 等派生账，正常 assemble 不会自废批准 |
-
-定稿类动作**落了**（退出码 0/1——先写后判：approve 落了，只是报告可能有红行）
-才盖审批章；盖不盖章看「落没落」，红不红由 check 屏呈现，两件事不许混。
-前置审批链尚未补齐 ⇒ 定稿照样落，检查单那一格在 approvals 屏补——
-**不把检查单的顺序翻成定稿的失败**。
-
----
 
 ## 六、`ErrorBody`
 

@@ -37,6 +37,8 @@ const preview: JobPreview = {
   ],
 }
 
+// 历史样例载荷：kind/flag 借用旧链形状，仅用于测确认框机制（预览、动态参数、失败不关框）；
+// 不代表现役节点面（现役免费复检是节点级 --check-only，无 actor/reason 凭据）。
 const revalidateRequest: JobRequest = {
   kind: 'stage5.write',
   label: 'stage5 全书闭卷写作 --revalidate',

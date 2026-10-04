@@ -48,7 +48,7 @@ def _classify(rel: str) -> str:
         #   `stage2/global_review_workpack.json`）⇒ 把这两条岔路写进文案本身。
         '\n⚠ 先分清它是哪一类：'
         # F8c：`stage5.write` / `stage0.edit` 两个 `--apply-edit` 面已随旧链整层
-        # 退役（`novel/api/routes/edits.py` 只留空 router）；「任意路径、刻意不登记」
+        # 退役（`novel/api/routes/edits.py` 已删除）；「任意路径、刻意不登记」
         # 的纪律本身不变——在产物目录里再撞见这类文件，处置仍是**移走，不要登记**。
         '（a）`stage5.write` / `stage0.edit` 的**人工改稿**（已退役面）——那两层的 '
         '`--apply-edit` 路径语义曾是「任意路径」，编辑文件**刻意没有登记**'

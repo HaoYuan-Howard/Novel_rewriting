@@ -34,7 +34,6 @@ def paid_payload():
 def test_frontend_domains_are_published_from_current_invariants(paid_payload):
     published = {
         'time_layers': inv.TIME_LAYERS,
-        'style_words': inv.STYLE_WORDS,
         'nonbody_kinds': inv.NONBODY_KINDS,
         'design_constraint_operation_kinds': inv.DESIGN_CONSTRAINT_OPERATION_KINDS,
     }
