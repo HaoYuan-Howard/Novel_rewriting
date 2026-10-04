@@ -32,13 +32,14 @@ from typing import Mapping
 
 from contracts.schema.book_ir import (
     BookBrief, ChapterContinuity, ChapterIR, ChapterNavEntry,
-    PreviousChapterEnding, ReleaseScheduleEntry, WriterBookIR,
+    PreviousChapterEnding, ReleaseScheduleEntry, WithheldNameBinding, WriterBookIR,
 )
 from contracts.schema.design import BodyDesign, ChapterAssignment
 from contracts.schema.execution import ExecutionPlan
 from contracts.schema.grounding import BriefFactLock, SemanticBinding
 from contracts.schema.source import NameProjection, NameStructure
 from novel.stages.stage4.fold import ThreadFold, fold_accepted_prefix
+from novel.core.name_materials import withheld_name_bindings
 from novel.stages.common import (
     consumption_closure, project_context, unanswered_guards,
     withheld_name_literals, expand_surface_releases,
@@ -192,7 +193,7 @@ def compile_writer_book_ir(
     """
     budgets = allocate_chapter_budgets(graph, total_budget)
     guards = unanswered_guards(graph, binding, fact_locks)
-    consumers = consumption_closure(graph)
+    consumers = consumption_closure(graph, binding.fact_bindings)
     chapters: list[ChapterIR] = []
     nav: list[ChapterNavEntry] = []
     scenes_before = 0
@@ -216,13 +217,18 @@ def compile_writer_book_ir(
             lines.append(_scene_line(graph, scene_id))
             scenes_before += 1
         ordinal = assignment.chapter_ordinal
+        withheld = chapter_withheld_literals(projection, graph, ordinal, structure)
+        released_here = tuple(sorted(chapter_surface_releases(graph, ordinal, structure)))
         chapters.append(ChapterIR(
             chapter_ordinal=ordinal, purpose=assignment.purpose,
             length_budget=budgets[ordinal], scenes=tuple(contexts),
             continuity=_chapter_continuity(graph, previous_assignment, assignment),
-            released_surfaces=tuple(sorted(chapter_surface_releases(graph, ordinal, structure))),
-            withheld_literals=chapter_withheld_literals(projection, graph, ordinal,
-                                                        structure)))
+            released_surfaces=released_here,
+            withheld_literals=withheld,
+            withheld_bindings=tuple(
+                WithheldNameBinding(literal=literal, char_id=char_id, enclosing=enclosing)
+                for literal, char_id, enclosing
+                in withheld_name_bindings(withheld, structure, released_here))))
         nav.append(ChapterNavEntry(
             chapter_ordinal=ordinal, purpose=assignment.purpose,
             scene_ids=tuple(assignment.scene_ids), scene_lines=tuple(lines)))

@@ -132,8 +132,8 @@ r10b 实证：wire 体积降至 56%，`expand(slim(现产物)) == 现产物` 11/
 Characters、Blueprint 升 rc15，旧根按契约表漂移拒读。规格 `docs/specs/repair_convergence.feature`
 RC-26～29，反例 `tests/test_stage2_evidence_addressing.py`。
 
-**设计瘦 wire（CS-3 审阅修复，2026-10-03）**：LLM 输出为
-`stage4-design-v7`（`contracts/schema/design.py::DesignWireV7`）。`real` 保留
+**设计瘦 wire（CS-3 审阅修复，2026-10-03；事实锁引用升 v8，2026-10-04）**：LLM 输出为
+`stage4-design-v8`（`contracts/schema/design.py::DesignWireV8`）。`real` 保留
 义务接受拍/支撑拍；Brief 每条 requirement 的 `knowledge_changes` 从正式
 anchor 派生，完整保留每次变化的盲身份、holder、kp、mode。代码按盲身份排序
 派发 `obNN.kNN` 短引用，模型在对应义务 real 拍的 `know:[{ref}]` 声明实际
@@ -147,6 +147,19 @@ knowledge(holder=reader) 增量并保留该关联。确认只能引用此刻已�
 默认 actual；immediate_continuation 锚点按每章场数取上一章末场末拍。
 机械默认值和书级派生继续由 compiler 完成，v5 只是内部展开形状。
 
+**事实锁引用（CS-F2，rc16，RC-36～39）**：v7 把 Brief 事实锁当状态键另写一条复述事实的状态，
+《夫君的报恩》第三份回答因此把锁原文（含第 2 章尚未释放的全名）连同 8 条重复状态抄进自己的 val。
+v8 改为在**已选状态**上写 `state[].lock`（kf 句柄，闭集由请求按 Brief 注入、不含原文未回答锁）：
+时态锁标在同 modality 的 set 上、值未知锁标在 op=unknown 上、一个锁至多一条承载状态；kf 作状态键、
+lock 标在 kp 知情行上、initial_state 带 kf 键一律拒。标注经 `novel/stages/stage4/slim.py::design_fact_marks` 投影为
+`FactLockMark`（拍位＋状态下标＋由 `at`/`key` 派生的地址），`derive_semantic_binding` 据此在 body_design
+同次发布的 SemanticBinding 里写 `fact_bindings`（`FactLockBinding`：锁句柄＋承载拍＋状态地址，
+**不复制目标 value**，悬空即拒）；BodyDesign 与中间 v5 都不携带锁引用，仍是目标事实的唯一持有者。
+映射只证结构；承载状态的语义是否满足锁（如把暂缓和离绑到赏花）需要标定的语义核验，未运行保持 unver。
+`SemanticBinding` 与 `WriterBookIR` 因此升 rc16（旧 rc12／rc14 产物按版本字面量拒读，不迁移）；全局 RC 版式头
+升 rc16，旧 rc15 候选根按契约表漂移关闭式拒收（`init_or_resume_candidate_workflow`），原根留作冻结失败证据，
+续跑用新根并经历史采用按请求身份复用已购响应。
+
 Brief、BodyDesign、PresentationGraph、ExecutionPlan、WriterBookIR 升 rc14；
 其它产物版本不变。旧 rc12/rc13 仅做登记的无损读取迁移，地址、读取、Hook
 引用与 IR 状态容器一起闭合。已经丢失逐义务模式的 Brief 免费重放 preserve
@@ -155,6 +168,12 @@ Brief、BodyDesign、PresentationGraph、ExecutionPlan、WriterBookIR 升 rc14�
 
 关键语义交接的契约面（判据见 BACKEND_CONTRACT R-2.18/19、R-5.15～R-5.20）：
 
+- **跨章命题同一性（R-2.12）**：associate 负责声明同义关系，措辞不同也可为
+  同一命题；compiler 只按配对建等价类，不做文本全等或相似度语义判断。
+  正式引用统一使用阅读序最早建立的代表文本，原观察与逐条 basis 不改写，
+  事实成立、角色知情与读者揭示仍留在原拍。未配对的独立命题不自动合并；
+  缺文本、无配对的悬空引用与未来引用继续未决。观察协议与产物形状不变，
+  已购相同请求可经 `--check-only` 免费重验；机械通过不证明关联语义正确。
 - **证据（a1）**：Stage2 canonical basis 是 `EvidenceQuote{segment, quote}`——quote
   存在于该段且该段属条目自身 source_refs（Resolver `verify_quote`，不模糊匹配）；
   RC-27 起 book／chapters 的 wire 只给引文，段号由 Resolver `locate_quote` 在条目
@@ -175,8 +194,8 @@ Brief、BodyDesign、PresentationGraph、ExecutionPlan、WriterBookIR 升 rc14�
   suspected、hears_claim→heard、believes→believes；asserts 转公开声称标记）、
   kf 事实锁（时态／值未知／原文未回答）；锁内容是语义、坐标仍源盲。Design
   v5 删 `dramatic_intent`；非知情/非读者 set 必填 modality；拍增
-  `expression_refs`（正向表达任务落具体拍）。kp/kf 键规则与必保锁兑现归
-  `assemble_body_design`（revise_self ≤2）。
+  `expression_refs`（正向表达任务落具体拍）。kp 键规则、kf 锁标注（CS-F2：见上「事实锁引用」，
+  不再是状态键）与必保锁兑现归 `assemble_body_design`（revise_self ≤2）。
 - **承载位（a5＋CS-3 bind 退役）**：`str06.stage4.bind` 节点与
   stage4-bind-v1 wire 协议退役——义务落在哪一拍由 design wire（v6）的
   `real:["obNN"]` 标注唯一声明：末次标注拍＝接受拍、其余标注拍＝支撑位，
@@ -334,6 +353,16 @@ ChapterWriterPacket
 
 完整 WriterIR 保留供存储与审计；运行时确定性投影章包，不另落重复章包文件。Compiler
 证明**已声明依赖的引用闭合**；语义依赖是否遗漏归质量验收，机械检查不冒充证明。
+
+**称谓投影（CS-F2，RC-40～43，IR rc16／renderer v10）**：`ChapterIR.withheld_bindings`（`WithheldNameBinding`：
+字面＋人物＋包含它的更长称谓）是禁用字面中已证明唯一绑定人物的**完整登记称谓**子集——登记 surface、含姓名部件
+（构词非 null）、全书只属一个人物、长度≥2、非姓／家族构词（`novel/core/name_materials.py::withheld_name_bindings`）。
+renderer 在正向材料行（含禁区行）把这类字面换成本场已释放称谓（`novel/stages/common.py::project_withheld_names`：绑定字面与其
+更长称谓一起长名优先认领，只替换绑定字面）；投影只依赖绑定表与本场称谓，不依赖禁用／许可字面，故二者仍是纯验证材料。
+原字段与来源文本不变（归因仍按原字段），替换留痕于 `name_projections`（候选预检报告、guard report、packet_metrics），
+不含行文本；人物本场没有已释放称谓时不投影，泄漏如实保留并按原归因回派。短姓、关系称呼、多义字面、未登记表达
+（如源文没有的「陆郎」）与源引文永不投影；Design 自有文本的名称冲突仍由 Design 接受判据拦下，compiler 不自动提前释放全名。
+写手视图摘要含投影后的渲染字节，验证输入摘要含绑定表。Hook 材料暂不投影（Hook 自选释放，已有正式回派）。
 
 ### 两层 IR 与送达方式（R2 基础，R9 rc11）
 
@@ -854,7 +883,7 @@ Preserve 同时收到正式归一文本、原句及名称同一性依据，不�
   旧误派账的免费更正使用现役issue-correction预览/CAS入口，不清费用和轮数。
 - Hook设计输入新增stage4-hook-semantics-v1派生投影，所引用kp和世界约束的完整
   文本来自Brief；悬空引用在外发前拒绝。正式领域artifact形状不变，请求摘要随材料变化。
-- renderer升str06-render-v9，正文协议升str06-body-protocol-v8：义务在接受拍兑现，
+- renderer升str06-render-v10（CS-F2 称谓投影，见上）；此前 v9 与正文协议 str06-body-protocol-v8：义务在接受拍兑现，
   状态在对应拍末成立，持续到被后继转移替代或作用域结束。版本参与请求与章包身份；
   旧正文/回执不静默补新身份，已购响应仍按正式免费复验与恢复入口处理。
 - Design的requires沿用顺序三分：同场允许接受拍交错，跨场逆序仍拒绝；事实读取与

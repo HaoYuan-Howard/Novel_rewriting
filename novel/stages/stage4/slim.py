@@ -1,25 +1,56 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Design v7 的确定性编译层：real 声明验收/支撑拍，know 声明每次认知变化。
+"""Design v8 的确定性编译层：real 声明验收/支撑拍，know 声明每次认知变化，
+lock 在已选状态上标注事实锁。
 
 Brief.knowledge_changes 从 Preserve 正式 anchor 派生盲身份与完整三元组；
 代码派发 obNN.kNN 短引用，模型只标拍位。读者 known 另标 confirms 事实地址。
-不按最终验收拍猜中间模式，不按自由事实键和 kp 句柄猜同义。v7→v5 中间形状
+不按最终验收拍猜中间模式，不按自由事实键和 kp 句柄猜同义。v8→v5 中间形状
 只服务同一次编译；正式输出是 rc14 BodyDesign，Binding 同源双产物发布。
+
+事实锁（CS-F2）：模型在**已选状态**上写 `lock: kf_*`，只做引用选择；本模块
+把标注投影成 `FactLockMark`（拍位、状态下标与由 `at`/`key` 派生的状态地址），
+Binding 据此发布「锁→承载拍＋地址」映射，不复制目标 value。锁引用不进中间
+v5 形状，也不进 BodyDesign——BodyDesign 只持有目标事实（I-16）。
 
 机械默认值、世界规则成立、场景/章承接与表达保留由 compiler 派生；事实值、
 读取、线程、声线与认知时点由语义单元选择。纯函数、不改输入、不落盘（I-24）。
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Mapping
 
 from pydantic import ValidationError
 
 from contracts.schema.design import (
-    STAGE4_DESIGN_WIRE_PROTOCOL, DesignWireV7,
+    STAGE4_DESIGN_WIRE_PROTOCOL, DesignWireV8,
 )
 from contracts.schema.grounding import ReconstructionBrief
+from contracts.schema.state import EffectDomain, StateAddress
+
+
+@dataclass(frozen=True)
+class FactLockMark:
+    """wire 上一条事实锁标注的机械投影（拍位＋状态下标＋状态地址）。
+
+    只服务同一次编译与 Binding 派生，不进领域产物；下标均为 0-based 的 wire
+    位置，报错时由调用方换成人读的「第 N 场第 M 拍」。`op`／`modality` 是该
+    已选状态的实际取值（缺省已回填：op=set，modality=actual；非 set 无时态）。
+    """
+
+    kf_id: str
+    scene: int
+    beat: int
+    state: int
+    address: StateAddress
+    op: str
+    modality: str | None
+
+    @property
+    def path(self) -> tuple[str | int, ...]:
+        """承载状态在 wire 内的 JSON 路径（局部修订的最小可替换单元）。"""
+        return ('scenes', self.scene, 'beats', self.beat, 'state', self.state)
 
 
 def _address_row(at: str, key: str) -> dict[str, Any] | None:
@@ -163,18 +194,19 @@ def expand_design_wire(
     wire: Any, *, brief, obligations: Mapping[str, Any] | None = None,
     source_narration=None,
 ) -> tuple[dict | None, list[tuple[tuple | None, str]]]:
-    """v7 瘦 wire → (v5 wire dict, 条目级 issues)。
+    """v8 瘦 wire → (v5 wire dict, 条目级 issues)。
 
     `brief` 是 ReconstructionBrief（世界约束／知情锁／表达项的派生源）；
-    `obligations` 是 ob 编号 → 需求（knowledge_changes）映射——v7 wire 必须
+    `obligations` 是 ob 编号 → 需求（knowledge_changes）映射——v8 wire 必须
     提供（real 标注的闭集校验与知情行展开都依赖它；生产链恒传入）。返回的
     placements 供义务承载派生（CS-3 bind 退役的地基）经
-    `design_placements(wire)` 单独取用。
+    `design_placements(wire)` 单独取用；事实锁标注经 `design_fact_marks`
+    单独取用（锁引用只活在 wire 与 Binding，不进 v5 中间形状）。
     """
-    model = DesignWireV7.model_validate(wire)
+    model = DesignWireV8.model_validate(wire)
     issues: list[tuple[tuple | None, str]] = []
     if obligations is None:
-        return None, [(None, 'v7 瘦 wire 需要 obligations（ob 编号→需求）映射——'
+        return None, [(None, 'v8 瘦 wire 需要 obligations（ob 编号→需求）映射——'
                              'real 标注的闭集与知情行展开依赖它')]
     narration = source_narration if source_narration is not None \
         else brief.source_narration
@@ -380,7 +412,7 @@ def expand_design_wire(
     }, []
 
 
-def design_placements(model: DesignWireV7) -> dict[str, list[tuple[int, int]]]:
+def design_placements(model: DesignWireV8) -> dict[str, list[tuple[int, int]]]:
     """义务承载标注的机械投影：ob → 标注拍（scene 序, beat 序）阅读序。
 
     bind 退役（CS-3 后续子批）的落点地基：接受拍＝末次标注拍、支撑拍＝
@@ -392,3 +424,30 @@ def design_placements(model: DesignWireV7) -> dict[str, list[tuple[int, int]]]:
             for ob in beat.real:
                 placements.setdefault(ob, []).append((scene_i, beat_i))
     return placements
+
+
+def design_fact_marks(model: DesignWireV8) -> tuple[FactLockMark, ...]:
+    """事实锁标注的机械投影：每个带 `lock` 的已选状态一条，按阅读序。
+
+    与 `design_placements` 对称：只读、不校验闭集与语义（句柄是否登记、状态
+    是否同 modality 由 `assemble` 的接受校验判，错误随同一份报告聚合）。
+    状态地址由 `at`/`key` 确定性派生（`_address_row`）；`at` 结构非法的行无法
+    定位，跳过——expand 已为它报了精确的地址 issue，不在这里重复。
+    """
+    marks: list[FactLockMark] = []
+    for scene_i, scene in enumerate(model.scenes):
+        for beat_i, beat in enumerate(scene.beats):
+            for state_i, state in enumerate(beat.state):
+                if state.lock is None:
+                    continue
+                base = _address_row(state.at, state.key)
+                if base is None:
+                    continue
+                op = state.op or 'set'
+                marks.append(FactLockMark(
+                    kf_id=state.lock, scene=scene_i, beat=beat_i, state=state_i,
+                    address=StateAddress(
+                        domain=EffectDomain(base['domain']), key=state.key,
+                        subjects=tuple(base['subjects'])),
+                    op=op, modality=(state.modality or 'actual') if op == 'set' else None))
+    return tuple(marks)

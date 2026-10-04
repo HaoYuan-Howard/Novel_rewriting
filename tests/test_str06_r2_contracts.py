@@ -651,16 +651,25 @@ def test_r2_version_constants():
     )
     from novel.stages.common import RENDERER_VERSION, WRITER_PROTOCOL_VERSION
     assert STAGE4_DESIGN_PROTOCOL == 'stage4-design-v5'
-    assert STR06_RC_VERSION == 'str06-rc15'          # rc15 证据寻址（RC-26／27）
+    assert STR06_RC_VERSION == 'str06-rc16'          # rc16 事实锁引用（CS-F2）；rc15 证据寻址（RC-26／27）
     assert 'str06-rc10' in STR06_RC_LABELS
-    assert RENDERER_VERSION == 'str06-render-v9'     # RC-24：拍末结果作用域
+    assert RENDERER_VERSION == 'str06-render-v10'    # CS-F2：称谓投影（v9：RC-24 拍末结果作用域）
     assert WRITER_PROTOCOL_VERSION == 'str06-body-protocol-v8'
     for rel in ('stage4/design/body_design.json',
-                'stage4/design/presentation_graph.json',
-                'stage4/ir/writer_book_ir.json'):
+                'stage4/design/presentation_graph.json'):
         assert STR06_ARTIFACT_RC_VERSIONS[rel] == 'str06-rc14', rel  # rc13 D5 统一
+    # IR 因 ChapterIR.withheld_bindings（渲染期称谓投影的验证材料）升 rc16。
+    assert STR06_ARTIFACT_RC_VERSIONS['stage4/ir/writer_book_ir.json'] == 'str06-rc16'
     assert STR06_ARTIFACT_RC_VERSIONS['stage5/acceptance/body/ch{nn}.json'] \
         == 'str06-rc12'
+    # rc16（CS-F2）：Binding 增 fact_bindings 而升版；LLM 面 Design wire 升 v8
+    # （kf 句柄不再是状态键）。旧 rc12 Binding 按字面量拒读，不迁移（I-13）。
+    from contracts.schema.design import STAGE4_DESIGN_WIRE_PROTOCOL
+    from contracts.schema.grounding import SemanticBinding
+    assert STR06_ARTIFACT_RC_VERSIONS['stage4/grounding/semantic_binding.json'] \
+        == 'str06-rc16'
+    assert STAGE4_DESIGN_WIRE_PROTOCOL == 'stage4-design-v8'
+    assert SemanticBinding.model_fields['contract_version'].default == 'str06-rc16'
 
 
 # ═════════════════ 九、Design wire v2（生产侧同步） ═════════════════

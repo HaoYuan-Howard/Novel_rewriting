@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """test_str06_design_slim —— 设计瘦 wire（CS-3 第一步，2026-10-03）。
 
-覆盖 `contracts/schema/design.py::DesignWireV7`、
+覆盖 `contracts/schema/design.py::DesignWireV8`、
 `novel/stages/stage4/slim.py::expand_design_wire` 的确定性派生（know 标注→
 知情/读者行、默认值回填、entry 派生、world_rules/expression/narration 顶层
 派生）与 `assemble_body_design` 的字面量路由（v7→expand→既有管道＋必保义务
@@ -17,7 +17,7 @@ from contracts.schema.grounding import ReconstructionBrief
 from novel.stages.stage4.design import assemble_body_design
 from novel.stages.stage4.slim import expand_design_wire
 
-PV7 = 'stage4-design-v7'
+PV8 = 'stage4-design-v8'
 PV5 = 'stage4-design-v5'
 
 
@@ -95,9 +95,9 @@ def _obligations(brief: ReconstructionBrief) -> dict:
             'ob03': by_summary['可综合的场面设定']}
 
 
-def _v7_wire() -> dict:
+def _v8_wire() -> dict:
     return {
-        'protocol_version': PV7,
+        'protocol_version': PV8,
         'book_style': '第一人称克制叙述，短句为主。',
         'character_voices': [
             {'char_id': 'yun_niang', 'voice': '对外端方，内心直白。'}],
@@ -140,7 +140,7 @@ def _v7_wire() -> dict:
 
 def test_expand_derives_defaults_and_top_level():
     brief = _brief()
-    expanded, issues = expand_design_wire(_v7_wire(), brief=brief,
+    expanded, issues = expand_design_wire(_v8_wire(), brief=brief,
                                           obligations=_obligations(brief))
     assert issues == []
     # 顶层派生：narration／world_rules／expression keep-all／均匀权重。
@@ -161,7 +161,7 @@ def test_expand_derives_defaults_and_top_level():
 
 def test_expand_know_derives_knowledge_at_selected_beat():
     brief = _brief()
-    expanded, issues = expand_design_wire(_v7_wire(), brief=brief,
+    expanded, issues = expand_design_wire(_v8_wire(), brief=brief,
                                           obligations=_obligations(brief))
     assert issues == []
     beat1 = expanded['scenes'][0]['beats'][0]
@@ -176,7 +176,7 @@ def test_expand_know_derives_knowledge_at_selected_beat():
          'modality': None, 'confirms': None},
     ]
     # 仅 real 承载标注不补造知情；这条义务没有认知变化。
-    wire = _v7_wire()
+    wire = _v8_wire()
     wire['scenes'][1]['beats'][0]['real'] = ['ob02']
     wire['scenes'][0]['beats'].append(
         {'ev': '计划初次受挫（支撑拍）。', 'real': ['ob02']})
@@ -190,7 +190,7 @@ def test_expand_know_derives_knowledge_at_selected_beat():
 
 def test_expand_kp_state_exception_and_bad_inputs():
     brief = _brief()
-    wire = _v7_wire()
+    wire = _v8_wire()
     # kp 值未知／解除例外可走 state 面；set 增量不得走（必须经 know）。
     wire['scenes'][1]['beats'][0]['state'] = [
         {'at': 'yun_niang', 'key': 'kp_1111111111111111', 'op': 'unset'}]
@@ -203,28 +203,28 @@ def test_expand_kp_state_exception_and_bad_inputs():
          'scope': 'book', 'knowledge_mode': None,
          'modality': None}]
 
-    wire2 = _v7_wire()
+    wire2 = _v8_wire()
     wire2['scenes'][0]['beats'][0]['state'].append(
         {'at': 'yun_niang', 'key': 'kp_1111111111111111', 'val': 'true'})
     _, issues2 = expand_design_wire(wire2, brief=brief,
                                     obligations=_obligations(brief))
     assert any('经 know 标注派生' in m for _p, m in issues2)
 
-    wire3 = _v7_wire()
+    wire3 = _v8_wire()
     wire3['scenes'][0]['beats'][0]['real'] = ['ob99']
     _, issues3 = expand_design_wire(wire3, brief=brief,
                                     obligations=_obligations(brief))
     assert any('闭集外义务编号' in m for _p, m in issues3)
 
     # 缺 obligations 映射：v6 无从展开，fail fast。
-    _, issues4 = expand_design_wire(_v7_wire(), brief=brief)
+    _, issues4 = expand_design_wire(_v8_wire(), brief=brief)
     assert any('obligations' in m for _p, m in issues4)
 
 
 def test_assemble_routes_v7_and_enforces_coverage():
     brief = _brief()
     obligations = _obligations(brief)
-    wire = _v7_wire()
+    wire = _v8_wire()
     body, errors = assemble_body_design(
         wire, known_char_ids={'lu_fujun', 'yun_niang', 'pei_shuyuan'},
         expression_requirements=brief.expression,
@@ -235,7 +235,7 @@ def test_assemble_routes_v7_and_enforces_coverage():
     assert body.world_rules == ('女子极难自立门户',)
 
     # 必保义务漏标注 → 覆盖闸拦下（同节点修订轮修复）。
-    wire_missing = _v7_wire()
+    wire_missing = _v8_wire()
     wire_missing['scenes'][1]['beats'][0].pop('real')
     _, errors_missing = assemble_body_design(
         wire_missing, known_char_ids={'lu_fujun', 'yun_niang', 'pei_shuyuan'},
@@ -258,7 +258,7 @@ def test_design_rules_prompt_carries_v7_and_obligation_table():
     from novel.stages.common import design_rules
     from novel.stages.stage4.slim import project_design_input
     rules = design_rules(known_char_ids={'yun_niang'})
-    assert 'stage4-design-v7' in rules and 'SlimDesignBeat' in rules
+    assert 'stage4-design-v8' in rules and 'SlimDesignBeat' in rules
     assert 'real' in rules and 'obNN' in rules
     brief = _brief()
     table = project_design_input(brief, _obligations(brief))['requirements']
@@ -303,7 +303,7 @@ def test_world_rule_key_reference_and_zero_info_value_refused():
     obligations = _obligations(brief)
 
     # 合法：初始态引用清单内规则编号（val 省略回填 'true'）。
-    wire = _v7_wire()
+    wire = _v8_wire()
     wire['initial_state'].append(
         {'domain': 'world', 'subjects': [], 'holder': None, 'key': 'wc_01',
          'knowledge_mode': None})
@@ -313,7 +313,7 @@ def test_world_rule_key_reference_and_zero_info_value_refused():
     assert expanded['initial_state'][-1]['value'] == 'true'
 
     # 闭集外规则编号：拒。
-    wire_bad = _v7_wire()
+    wire_bad = _v8_wire()
     wire_bad['initial_state'].append(
         {'domain': 'world', 'subjects': [], 'holder': None, 'key': 'wc_99',
          'knowledge_mode': None})
@@ -322,7 +322,7 @@ def test_world_rule_key_reference_and_zero_info_value_refused():
     assert any('不在世界约束清单' in m for _p, m in issues_bad)
 
     # 剧情事实 val='true'：零信息值拒绝（wc 引用才是命题成立断言的通道）。
-    wire_true = _v7_wire()
+    wire_true = _v8_wire()
     wire_true['scenes'][1]['beats'][0]['state'] = [
         {'at': 'world', 'key': 'courtyard_bought', 'val': 'true'}]
     _, issues_true = expand_design_wire(wire_true, brief=brief,
@@ -330,7 +330,7 @@ def test_world_rule_key_reference_and_zero_info_value_refused():
     assert any('val 不得为 "true"' in m for _p, m in issues_true)
 
     # 拍上合法的 wc 规则断言（无 val）回填 'true'。
-    wire_beat = _v7_wire()
+    wire_beat = _v8_wire()
     wire_beat['scenes'][1]['beats'][0]['state'] = [
         {'at': 'world', 'key': 'wc_01'}]
     expanded_beat, issues_beat = expand_design_wire(
@@ -358,7 +358,7 @@ def test_reader_reveal_expands_as_knowledge_holder_reader():
                                            kp='kp_1111111111111111',
                                            mode='known'),)})
     obligations = _obligations(brief)
-    wire = _v7_wire()
+    wire = _v8_wire()
     wire['scenes'][0]['beats'][0]['know'].append({'ref': 'ob01.k02', 'confirms': {'domain': 'character', 'subjects': ['lu_fujun'], 'key': 'body_condition'}})
     expanded, issues = expand_design_wire(wire, brief=brief, obligations=obligations)
     assert issues == []
@@ -371,7 +371,7 @@ def test_reader_reveal_expands_as_knowledge_holder_reader():
 
 
 def test_world_rule_and_immediate_continuation_reach_canonical():
-    brief, wire = _brief(), _v7_wire()
+    brief, wire = _brief(), _v8_wire()
     wire['scenes'][1]['beats'][0]['state'] = [{'at': 'world', 'key': 'wc_01'}]
     wire['chapters'][1]['entry'] = {'transition': 'immediate_continuation',
                                    'carryover': '前章余波'}
@@ -386,7 +386,7 @@ def test_world_rule_and_immediate_continuation_reach_canonical():
 
 def test_knowledge_short_refs_are_closed_complete_and_unique():
     from copy import deepcopy
-    brief, wire = _brief(), _v7_wire()
+    brief, wire = _brief(), _v8_wire()
     for placements, message in [([], '未标注拍位'),
                                 ([{'ref': 'ob99.k01'}], '闭集外认知'),
                                 ([{'ref': 'ob01.k01'}] * 2, '重复标注')]:
@@ -394,3 +394,72 @@ def test_knowledge_short_refs_are_closed_complete_and_unique():
         candidate['scenes'][0]['beats'][0]['know'] = placements
         expanded, issues = expand_design_wire(candidate, brief=brief, obligations=_obligations(brief))
         assert expanded is None and any(message in m for _, m in issues)
+
+
+# ───────────── CS-F2：事实锁引用（stage4-design-v8 的 `lock`） ─────────────
+
+KF = 'kf_' + '0123456789abcdef'
+
+
+def _schema_of(rules: str) -> dict:
+    import json
+    return json.loads(rules.rsplit('\n', 1)[1])
+
+
+def test_lock_reference_is_a_closed_set_injected_from_the_brief():
+    """`lock` 是选择而非书写：可选句柄集合由 Brief 注入 schema；空集合时只允许 null；
+    未注入（离线）时仍受句柄形状约束。"""
+    from jsonschema import Draft202012Validator
+    from novel.stages.common import design_rules
+
+    def validator(**kw):
+        schema = _schema_of(design_rules(known_char_ids={'lead'}, **kw))
+        Draft202012Validator.check_schema(schema)
+        return Draft202012Validator({'$ref': '#/$defs/SlimDesignState',
+                                     '$defs': schema['$defs']})
+    row = {'at': 'world', 'key': 'plan', 'val': '暂缓', 'modality': 'planned'}
+    closed = validator(fact_lock_ids=[KF])
+    assert not list(closed.iter_errors({**row, 'lock': KF}))
+    assert list(closed.iter_errors({**row, 'lock': 'kf_' + 'f' * 16})), '闭集外句柄'
+    assert not list(closed.iter_errors(row)), 'lock 可省＝普通状态'
+    nothing = validator(fact_lock_ids=[])
+    assert list(nothing.iter_errors({**row, 'lock': KF})), '没有可引用的锁时不得写 lock'
+    assert not list(nothing.iter_errors(row))
+    shape_only = validator()
+    assert list(shape_only.iter_errors({**row, 'lock': 'kf_short'}))
+
+
+def test_expand_keeps_lock_out_of_the_intermediate_shape_and_marks_project_the_address():
+    from novel.stages.stage4.slim import design_fact_marks
+    from contracts.schema.design import DesignWireV8
+    brief = _brief()
+    wire = _v8_wire()
+    wire['scenes'][0]['beats'][1]['state'][1]['lock'] = KF
+    expanded, issues = expand_design_wire(wire, brief=brief, obligations=_obligations(brief))
+    assert issues == []
+    rows = expanded['scenes'][0]['beats'][1]['target_delta']
+    assert all('lock' not in row for row in rows), '锁引用不进中间形状，更不进 BodyDesign'
+    marks = design_fact_marks(DesignWireV8.model_validate(wire))
+    assert len(marks) == 1
+    mark = marks[0]
+    assert (mark.kf_id, mark.scene, mark.beat, mark.state) == (KF, 0, 1, 1)
+    assert mark.path == ('scenes', 0, 'beats', 1, 'state', 1)
+    assert (mark.op, mark.modality) == ('set', 'planned')
+    assert mark.address.domain.value == 'character' and mark.address.subjects == ('lu_fujun',)
+    assert mark.address.key == 'plan'
+
+
+def test_mark_defaults_follow_the_state_row_not_the_lock():
+    """标注的 op／modality 取状态行自身（缺省 set／actual；非 set 无时态），
+    不由锁推断——锁与状态是否一致由接受校验判。"""
+    from novel.stages.stage4.slim import design_fact_marks
+    from contracts.schema.design import DesignWireV8
+    wire = _v8_wire()
+    beat = wire['scenes'][0]['beats'][0]
+    beat['state'] = [
+        {'at': 'lu_fujun', 'key': 'a', 'val': 'x', 'lock': KF},
+        {'at': 'lu_fujun', 'key': 'b', 'op': 'unknown', 'lock': 'kf_' + '1' * 16},
+        {'at': 'a+b+c', 'key': 'c', 'val': 'x', 'lock': 'kf_' + '2' * 16}]
+    marks = design_fact_marks(DesignWireV8.model_validate(wire))
+    assert [(m.kf_id, m.op, m.modality) for m in marks] == [
+        (KF, 'set', 'actual'), ('kf_' + '1' * 16, 'unknown', None)]

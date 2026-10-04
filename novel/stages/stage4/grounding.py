@@ -34,7 +34,7 @@ from typing import Any, Final
 from contracts.schema.design import BodyDesign
 from contracts.schema.grounding import (
     BriefFactLock, BriefKnowledgeChange, BriefKnowledgeLock, BriefProposition, BriefRequirement,
-    IdentityProjection, ObligationAnchor, ObligationSeries, PreserveCheckpoint,
+    FactLockBinding, IdentityProjection, ObligationAnchor, ObligationSeries, PreserveCheckpoint,
     ReconstructionBrief, SemanticBinding, SourceLineage, SourceObligation,
     BookConstraint, _lock_id,
 )
@@ -750,6 +750,7 @@ def design_obligation_index(
 def derive_semantic_binding(
     placements: dict[str, list[tuple[int, int]]],
     body: BodyDesign, checkpoint: PreserveCheckpoint,
+    fact_marks: tuple = (),
 ) -> tuple[SemanticBinding | None, list[str]]:
     """CS-3（bind LLM 退役）：design 的 real 承载标注 → SemanticBinding。
 
@@ -761,6 +762,11 @@ def derive_semantic_binding(
     real 覆盖闸拦下，能到这里的 unbound 必为非必保义务）。series 成员接受拍
     互斥（`series_collapsed` 判据随 bind 迁入：离散兑现时点分别承载，C3/C5
     的承载面）。纯函数、不落盘；错误并入 body_design 的同节点修订轮报告。
+
+    CS-F2：`fact_marks`（`slim.py::design_fact_marks`）是 wire 在已选状态上的
+    事实锁标注；本函数把每条标注落成 `FactLockBinding`（锁、承载拍复合引用、
+    状态地址——不复制 value），并核对该拍的 BodyDesign 里确有同地址的状态：
+    映射必须指向 BodyDesign 实际持有的事实，悬空即拒（I-16）。
     """
     errors: list[str] = []
     # (scene 序, beat 序) → (scene_id, beat_id, 复合引用)；越界当场精确拒。
@@ -794,6 +800,20 @@ def derive_semantic_binding(
             'obligation_id': obligation.obligation_id,
             'scene_id': accept[0], 'beat_ref': accept[2],
             'supporting_beat_refs': tuple(ref[2] for ref in resolved[:-1])})
+    fact_bindings: list[FactLockBinding] = []
+    for mark in fact_marks:
+        ref = site_refs.get((mark.scene, mark.beat))
+        beat = body.beat(ref[0], ref[1]) if ref is not None else None
+        if beat is None or not any(
+                d.address() == mark.address.address() and d.op == mark.op
+                and (mark.op != 'set' or d.modality == mark.modality)
+                for d in beat.target_delta):
+            errors.append(
+                f'事实锁 {mark.kf_id} 的承载状态在 BodyDesign 中不存在：第 {mark.scene + 1} '
+                f'场第 {mark.beat + 1} 拍 state[{mark.state}]（映射不得悬空）')
+            continue
+        fact_bindings.append(FactLockBinding(
+            kf_id=mark.kf_id, beat_ref=ref[2], address=mark.address))
     if errors:
         return None, errors
     try:
@@ -802,7 +822,8 @@ def derive_semantic_binding(
             preserve_checkpoint_sha256=checkpoint.checkpoint_sha256,
             obligations=checkpoint.obligations,
             entries=tuple(_binding_entry(e) for e in entries),
-            unbound=tuple(_unbound_entry(u) for u in unbound))
+            unbound=tuple(_unbound_entry(u) for u in unbound),
+            fact_bindings=tuple(fact_bindings))
     except (ValidationError, KeyError) as exc:
         return None, [f'binding 派生构造失败：{exc}']
     problems = check_binding_covers_checkpoint(checkpoint, binding)

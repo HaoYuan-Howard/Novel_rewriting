@@ -55,10 +55,14 @@ from contracts.schema.grounding import OutputConstraints, ReconstructionBrief
 from contracts.schema.state import EffectDomain
 from contracts.schema.workflow import STAGE4_DESIGN_PROTOCOL
 from contracts.schema.source import NameProjection, NameStructure
+from novel.core.validation import ValidationIssue
+from novel.stages.stage4.design_paths import design_issue
 from novel.stages.common import expand_surface_releases
 from novel.stages.stage4.read_closure import confirmation_closure_errors, resolve_design_reads
 from novel.stages.stage4.materials import validate_design_materials
-from novel.stages.stage4.slim import expand_design_wire
+from novel.stages.stage4.slim import (
+    FactLockMark, design_fact_marks, design_placements, expand_design_wire,
+)
 
 #: wire 顶层键白名单（Q-1：多余键在 compile 入口报错，不静默丢弃）。v2 起四个
 #: 静态跨章列表（standing_goals／ongoing_actions／open_questions／promises）
@@ -297,8 +301,25 @@ def _wire_model_errors(exc: Exception) -> list[str]:
     # 子项已报错的容器级 too_short 是连带噪声，不单列（R8b.3）。
     if any(kind != 'too_short' for _loc, kind, _msg in entries):
         entries = [item for item in entries if item[1] != 'too_short']
-    return [f'{loc}：{msg}（按 wire v5 形状逐处修正）'
+    return [f'{loc}：{msg}（按 wire 形状逐处修正）'
             for loc, _kind, msg in entries] or [str(exc)]
+
+
+def _wire_shape_issues(exc: Exception, prefix: str) -> list:
+    """v8 瘦 wire 的 pydantic 错误：位置 `loc` 本身就是 wire 路径（局部修订的编辑范围）。
+
+    与 `_wire_model_errors` 同一套去噪（子项已报错的容器级 too_short 不单列），文案一致，
+    只是每条问题多带规则码与路径。仅用于直接校验 v8 wire 的那一次——中间 v5 形状的
+    错误位置不是 wire 路径，仍走 `_wire_model_errors`。
+    """
+    entries = [(tuple(err.get('loc') or ()), str(err.get('type') or ''), err.get('msg'))
+               for err in exc.errors()]    # type: ignore[union-attr]
+    if any(kind != 'too_short' for _loc, kind, _msg in entries):
+        entries = [item for item in entries if item[1] != 'too_short']
+    return [design_issue(
+        f'{prefix}：{".".join(str(p) for p in loc) or "<顶层>"}：{msg}（按 wire 形状逐处修正）',
+        code='design_wire_shape', location=loc, paths=(loc,) if loc else ())
+        for loc, _kind, msg in entries] or [str(exc)]
 
 
 def _check_pov_closed_set(data: dict[str, Any], known_char_ids: set[str],
@@ -321,35 +342,112 @@ def _check_pov_closed_set(data: dict[str, Any], known_char_ids: set[str],
 
 
 def _check_expression_refs(body: BodyDesign, expression_requirements,
-                           errors: list[str]) -> None:
+                           errors: list[str], *, locatable: bool = False) -> None:
     """a4：拍的 expression_refs 闭集——只能引用 Brief.expression 的 ex_id，
-    narration 是书级机制不上拍（正向表达任务落具体拍；书级表达只写机制）。"""
+    narration 是书级机制不上拍（正向表达任务落具体拍；书级表达只写机制）。
+    `locatable`＝输入是 v8 wire：按画面序下标给出 `ex` 的 wire 路径。"""
     kinds = {item.ex_id: item.kind for item in expression_requirements}
-    for scene in body.scenes:
-        for beat in scene.beats:
+    for scene_i, scene in enumerate(body.scenes):
+        for beat_j, beat in enumerate(scene.beats):
+            where = ('scenes', scene_i, 'beats', beat_j, 'ex')
+            paths = (where,) if locatable else ()
             for ex_id in beat.expression_refs:
                 if ex_id not in kinds:
-                    errors.append(
+                    errors.append(design_issue(
                         f'{scene.scene_id}#{beat.beat_id} 的 expression_refs 引用'
-                        f'闭集外 ex_id：{ex_id!r}（只能取 Brief.expression 给出的项）')
+                        f'闭集外 ex_id：{ex_id!r}（只能取 Brief.expression 给出的项）',
+                        code='design_expression_ref', location=(*where, ex_id), paths=paths))
                 elif kinds[ex_id] == 'narration':
-                    errors.append(
+                    errors.append(design_issue(
                         f'{scene.scene_id}#{beat.beat_id} 的 expression_refs 引用'
-                        f'narration（{ex_id}）——书级表达只写机制，不上具体拍')
+                        f'narration（{ex_id}）——书级表达只写机制，不上具体拍',
+                        code='design_expression_ref', location=(*where, ex_id), paths=paths))
+
+
+_TEMPORAL_LOCKS = ('planned', 'expected', 'conditional')
+
+
+def _lock_issue(message: str, code: str, location: tuple, *paths: tuple) -> ValidationIssue:
+    """事实锁接受问题：规则码与 wire 路径随判据生成，局部修订按路径定位而不解析文案。
+
+    `location` 是稳定位置（身份的一部分，与措辞无关）；`wire_paths` 是责任方可编辑的
+    最小完整单元（承载状态行，或未兑现时承载该义务的拍）。
+    """
+    return design_issue(message, code=code, location=location, paths=paths)
+
+
+def _mark_where(mark: FactLockMark) -> str:
+    return f'第 {mark.scene + 1} 场第 {mark.beat + 1} 拍 state[{mark.state}]'
+
+
+def _check_fact_marks(marks: tuple[FactLockMark, ...], fact_locks: Mapping[str, Any],
+                      errors: list[str]) -> set[str]:
+    """事实锁标注的结构接受（CS-F2）：句柄闭集、一锁一承载、模式与操作同锁一致。
+
+    返回已被**合法**标注兑现的锁集合。只证明结构——标注的状态内容是否在语义上
+    满足锁（例如把「暂缓和离」绑到「赏花」）不在此判，那是需要标定的语义核验，
+    未运行即保持 unver（I-42）；这里也不因状态文本含源命题字面而改写它。
+    """
+    realized: set[str] = set()
+    first: dict[str, FactLockMark] = {}
+    for mark in marks:
+        where = _mark_where(mark)
+        lock = fact_locks.get(mark.kf_id)
+        if lock is None:
+            errors.append(_lock_issue(
+                f'{where} 的 lock {mark.kf_id} 未在 Brief 登记'
+                '（lock 只能取输入事实锁清单给出的句柄）',
+                'fact_lock_unregistered', mark.path, mark.path))
+            continue
+        if mark.kf_id in first:
+            errors.append(_lock_issue(
+                f'{where} 重复承载事实锁 {mark.kf_id}（首个承载位在 '
+                f'{_mark_where(first[mark.kf_id])}）：一个锁只由一条已选状态承载，'
+                '不要为同一事实再写一条状态', 'fact_lock_duplicate', mark.path,
+                mark.path))
+            continue
+        first[mark.kf_id] = mark
+        if lock.kind == 'unanswered':
+            errors.append(_lock_issue(
+                f'{where} 标注了原文未回答锁 {mark.kf_id}：它是禁区、不承载任何状态，'
+                '正文不得给出答案（去掉该 lock，且不要写出答案）',
+                'fact_lock_unanswered', mark.path, mark.path))
+        elif lock.kind in _TEMPORAL_LOCKS:
+            if mark.op != 'set' or mark.modality != lock.modality:
+                errors.append(_lock_issue(
+                    f'{where} 承载的事实锁 {mark.kf_id} modality 与锁不一致：锁＝'
+                    f'{lock.modality}（尚未发生），实得 op={mark.op}/modality='
+                    f'{mark.modality}（计划不得写成已发生，C2）',
+                    'fact_lock_modality', mark.path, mark.path))
+            else:
+                realized.add(mark.kf_id)
+        elif mark.op != 'unknown':
+            errors.append(_lock_issue(
+                f'{where} 承载的事实锁 {mark.kf_id} 是值未知锁（源文未给值）：须标在 '
+                f'op=unknown 的状态上，不得补值（C9），实得 op={mark.op}',
+                'fact_lock_value', mark.path, mark.path))
+        else:
+            realized.add(mark.kf_id)
+    return realized
 
 
 def _check_lock_acceptance(body: BodyDesign, brief: ReconstructionBrief,
-                           errors: list[str]) -> None:
-    """a4 接受校验：kp/kf 键规则与必保锁兑现（锁注册表来自 Brief，revise_self）。
+                           errors: list[str], *, marks: tuple[FactLockMark, ...] = (),
+                           obligations: Mapping[str, Any] | None = None,
+                           real_sites: Mapping[str, list[tuple[int, int]]] | None = None) -> None:
+    """a4 接受校验：kp 键规则、kf 标注与必保锁兑现（锁注册表来自 Brief，revise_self）。
 
     · kp 键（knowledge 域）：持有者须有锁且模式被授权——授权集＝该 (holder,
       kp) 的全部锁模式（known 只能来自 known 锁，C1）；
     · kp 键（reader 域 set＝读者确认）：须有 reader 的 known 锁（线索/怀疑
       不是确认，C6）；
-    · kf 键：时态锁只能按锁 modality set（预计不得写成已发生，C2）；值未知
-      锁不得补值（C9）；原文未回答锁不得作答；
-    · 必保义务的知情/时态锁须被对应键兑现（knowledge_changes/realize_locks）。
+    · kf 标注（CS-F2）：句柄闭集、一锁一承载；时态锁须标在同 modality 的 set 上
+      （预计不得写成已发生，C2），值未知锁须标在 op=unknown 上（不得补值，C9），
+      原文未回答锁是禁区、不承载状态；kf 句柄作状态键一律拒；
+    · 必保义务的知情/时态锁须被对应键/标注兑现（knowledge_changes/realize_locks）。
     位置顺序（知情升级/确认不早于授权承载位）归 a5 的 compile Guard，不在此。
+    `marks` 来自 v8 wire（`design_fact_marks`）；无 wire 的直接 v5 输入没有标注通道，
+    必保事实锁因此恒未兑现——v5 只是内部中间形状，生产链不直接收它。
     """
     propositions = {p.kp_id: p for p in brief.propositions}
     fact_locks = {f.kf_id: f for f in brief.fact_locks}
@@ -358,7 +456,6 @@ def _check_lock_acceptance(body: BodyDesign, brief: ReconstructionBrief,
         authorized.setdefault((lock.holder, lock.kp), set()).add(lock.mode)
 
     realized_kp: set[tuple[str, str, str]] = set()
-    realized_kf: set[str] = set()
     delta_sites: list[tuple[str, Any]] = [
         ('initial_state', delta) for delta in body.initial_state]
     for scene in body.scenes:
@@ -386,47 +483,33 @@ def _check_lock_acceptance(body: BodyDesign, brief: ReconstructionBrief,
                             f'{sorted(allowed) or "无"}；known 只能来自 known 锁）')
                     realized_kp.add((delta.holder, key, delta.knowledge_mode))
         elif key.startswith('kf_'):
-            lock = fact_locks.get(key)
-            if lock is None:
-                errors.append(f'{where} 的 kf 键未在 Brief 登记：{key}'
-                              '（kf 句柄只能取 Brief.fact_locks 给出的项）')
-                continue
-            if lock.kind in ('planned', 'expected', 'conditional'):
-                if delta.op != 'set' or delta.modality != lock.modality:
-                    errors.append(
-                        f'{where} 的 kf 键 {key} modality 与锁不一致：锁＝'
-                        f'{lock.modality}（尚未发生），实得 op={delta.op}/'
-                        f'modality={delta.modality}（计划不得写成已发生，C2）')
-                else:
-                    realized_kf.add(key)
-            elif lock.kind == 'unknown_value':
-                if delta.op == 'set':
-                    errors.append(
-                        f'{where} 的 kf 键 {key} 是值未知锁（源文未给值），'
-                        '不得补值（C9）')
-                else:
-                    realized_kf.add(key)
-            elif delta.op == 'set':
-                errors.append(
-                    f'{where} 的 kf 键 {key} 是原文未回答锁'
-                    f'（{lock.statement!r}），不得作答（源文留白不得补答案）')
+            errors.append(
+                f'{where} 的状态键 {key} 是事实锁句柄：kf 句柄不是状态键，'
+                '事实锁在已选状态上用 lock 标注（stage4-design-v8）')
+    realized_kf = _check_fact_marks(marks, fact_locks, errors)
+    ob_of = {req.core_id: ob for ob, req in (obligations or {}).items()}
     for req in brief.requirements:
+        label = ob_of.get(req.core_id, req.core_id)
         for change in req.knowledge_changes if req.must_preserve else ():
             if (change.holder, change.kp, change.mode) not in realized_kp:
                 errors.append(
-                    f'必保义务 {req.core_id} 的知情锁未兑现：{change.kp} 需由持有者 '
+                    f'必保义务 {label} 的知情锁未兑现：{change.kp} 需由持有者 '
                     f'{change.holder} 以模式 {change.mode} 承载')
         for kf in req.realize_locks:
             if kf not in realized_kf:
-                kind = fact_locks[kf].kind if kf in fact_locks else '?'
-                expected = (f'op=set 且 modality={fact_locks[kf].modality}'
-                            if kf in fact_locks
-                            and fact_locks[kf].kind in ('planned', 'expected',
-                                                        'conditional')
-                            else 'op=unknown（不得补值）' if kind == 'unknown_value'
-                            else 'op≠set')
-                errors.append(
-                    f'必保义务 {req.core_id} 的事实锁未兑现：{kf}（{expected}）')
+                lock = fact_locks.get(kf)
+                expected = (f'op=set 且 modality={lock.modality}'
+                            if lock is not None and lock.kind in _TEMPORAL_LOCKS
+                            else 'op=unknown（不得补值）'
+                            if lock is not None and lock.kind == 'unknown_value'
+                            else '该锁不可承载')
+                sites = [('scenes', s, 'beats', b)
+                         for s, b in (real_sites or {}).get(label, ())]
+                errors.append(_lock_issue(
+                    f'必保义务 {label} 的事实锁未兑现：{kf}——在承载该义务的拍上，让表达'
+                    f'该事实的那条状态带上 lock（{expected}）；该拍还没有这样的状态就写这一条'
+                    '并标注，不要为同一事实写两条',
+                    'fact_lock_unrealized', ('fact_lock', kf), *sites))
 
 
 def assemble_body_design(
@@ -440,36 +523,73 @@ def assemble_body_design(
     brief: ReconstructionBrief | None = None,
     obligations: Mapping[str, Any] | None = None,
 ) -> tuple[BodyDesign | None, list[str]]:
-    """Design wire（stage4-design-v5／v7）→ canonical BodyDesign。
+    """正式组装出口保持失败关闭；候选检查另由 inspect_body_design 提供。"""
+    body, errors = inspect_body_design(
+        wire, known_char_ids=known_char_ids, constraints=constraints,
+        registered_surfaces=registered_surfaces, name_projection=name_projection,
+        name_structure=name_structure, expression_requirements=expression_requirements,
+        source_narration=source_narration, brief=brief, obligations=obligations)
+    return (None, errors) if errors else (body, [])
+
+
+def inspect_body_design(
+    wire: dict[str, Any], *, known_char_ids: set[str],
+    constraints: OutputConstraints | None = None,
+    registered_surfaces: Mapping[str, set[str]] | None = None,
+    name_projection: NameProjection | None = None,
+    name_structure: NameStructure | None = None,
+    expression_requirements,
+    source_narration,
+    brief: ReconstructionBrief | None = None,
+    obligations: Mapping[str, Any] | None = None,
+) -> tuple[BodyDesign | None, list[str]]:
+    """Design wire（stage4-design-v5／v8）→ canonical BodyDesign。
 
     纯函数：不落盘、不调 LLM、不改输入 wire（deepcopy 后组装）。**一次校验、
     合并报告**（R8b）：wire 形状由 pydantic 模型族一次判，逐字段错误按位置
     摊开；闭集（人物／称谓）与语义闭合面在通过形状后同一份报告聚合，不再
-    逐层早退遮住后层（B6-A canary 四轮修订实证）。有错不产出半份 canonical
-    （I-34）。
+    逐层早退遮住后层（B6-A canary 四轮修订实证）。可构造的候选即使有错也
+    返回，供 Binding 与实际写手材料继续预检；调用者不得据此发布。
+    正式组装出口 assemble_body_design 仍有错即不返回产物（I-34）。
     a4：`brief` 传入时追加锁定项接受校验（kp/kf 键规则＋必保锁兑现＋
     expression_refs 闭集，`_check_lock_acceptance`）；生产链
     （`chain.run_body_design`）恒传入——缺省 None 仅供不持 Brief 的离线
     工具，跳过的是锁面，不是全书校验。
-    CS-3（2026-10-03）：wire 按协议字面量路由——瘦面（stage4-design-v7）
+    CS-3（2026-10-03）：wire 按协议字面量路由——瘦面（stage4-design-v8）
     先经 `expand_design_wire` 派生成 v5 形状再进同一管道（obligations＝
     ob 编号→需求映射，v6 必传：real 标注闭集与知情行展开依赖它）；另加
     必保义务的 real 标注覆盖闸（未标注的 must 需求当场拦下——承载位是
     v6 的新语义面，漏标即缺承载）。
     """
-    from contracts.schema.design import DesignWireV5, STAGE4_DESIGN_WIRE_PROTOCOL
+    from contracts.schema.design import (
+        DesignWireV5, DesignWireV8, STAGE4_DESIGN_WIRE_PROTOCOL,
+    )
 
     errors: list[str] = []
-    if wire.get('protocol_version') == STAGE4_DESIGN_WIRE_PROTOCOL:
+    coverage_errors: list[str] = []
+    marks: tuple[FactLockMark, ...] = ()
+    real_sites: dict[str, list[tuple[int, int]]] = {}
+    # 只有直接来自 v8 wire 的候选，下标才是 wire 路径（局部修订的编辑范围）；
+    # 直接给 v5 中间形状的离线输入没有对应的可编辑 wire，问题不带路径。
+    locatable = wire.get('protocol_version') == STAGE4_DESIGN_WIRE_PROTOCOL
+    v8_wire = wire
+    if locatable:
         try:
             expanded, expand_issues = expand_design_wire(
                 wire, brief=brief, obligations=obligations)
         except ValidationError as exc:
-            return None, [f'设计瘦 wire 协议校验失败：{entry}'
-                          for entry in _wire_model_errors(exc)]
+            return None, _wire_shape_issues(exc, '设计瘦 wire 协议校验失败')
         if expand_issues:
-            return None, [message for _path, message in expand_issues]
+            return None, [design_issue(message, code='design_wire_expand',
+                                       location=tuple(path or ()),
+                                       paths=(tuple(path),) if path else ())
+                          for path, message in expand_issues]
         assert expanded is not None
+        # 标注与承载位只在 v8 wire 上存在（不进中间 v5 形状与 BodyDesign）；
+        # expand 已通过同一份模型校验。
+        wire_model = DesignWireV8.model_validate(wire)
+        marks = design_fact_marks(wire_model)
+        real_sites = design_placements(wire_model)
         if obligations is not None:
             # 覆盖闸按 wire 判（real 标注不进 v5 dict——canonical 无此面）。
             annotated = _wire_real_ids(wire)
@@ -477,10 +597,8 @@ def assemble_body_design(
                 ob for ob, requirement in obligations.items()
                 if getattr(requirement, 'must_preserve', True) and ob not in annotated)
             if missing:
-                errors.append(f'必保义务未被任何拍标注承载（real）：{missing}'
-                              '——每条 must_preserve 需求至少标注一拍')
-        if errors:
-            return None, errors
+                coverage_errors.append(f'必保义务未被任何拍标注承载（real）：{missing}'
+                                       '——每条 must_preserve 需求至少标注一拍')
         wire = expanded
     if wire.get('protocol_version') != STAGE4_DESIGN_PROTOCOL:
         errors.append(f'protocol_version 必须是 {STAGE4_DESIGN_PROTOCOL}，'
@@ -491,7 +609,7 @@ def assemble_body_design(
         # 形状失败不遮闭集面（R8b：canary 第 1 份实证——pov 描述句与 scope
         # 缺失同报，修订一轮收掉全部三类，而不是逐层早退打四轮）。
         _check_pov_closed_set(wire, known_char_ids, errors)
-        return None, errors + _wire_model_errors(exc)
+        return None, coverage_errors + errors + _wire_model_errors(exc)
     data = model.model_dump(mode='json')
     expressions = {item.ex_id: item.statement for item in expression_requirements}
     decisions = data['expression_decisions']
@@ -503,7 +621,7 @@ def assemble_body_design(
             and model.narration != source_narration):
         errors.append('保留源叙述表达时 narration 必须与输入一致；改变须显式 change 并说明理由')
     if errors:
-        return None, errors
+        return None, coverage_errors + errors
     data['expression_decisions'] = [
         {'ex_id': item['ex_id'], 'action': item['action'], 'reason': item['reason'],
          'statement': expressions[item['ex_id']] if item['action'] == 'keep' else item['target_statement']}
@@ -518,78 +636,147 @@ def assemble_body_design(
     if not errors:
         _resolve_reads(data, errors)
     if errors:
-        return None, errors
+        return None, coverage_errors + errors
     try:
         body = BodyDesign.model_validate(data)
     except (ValidationError, TypeError) as exc:
         shape_errors = (_wire_model_errors(exc)
                         if isinstance(exc, ValidationError) else [str(exc)])
-        return None, [f'book_design 构造失败：{entry}'
-                      for entry in shape_errors]
+        return None, coverage_errors + [f'book_design 构造失败：{entry}'
+                                        for entry in shape_errors]
+    errors.extend(coverage_errors)
+
+    def issue(message: str, code: str, location: tuple, *paths: tuple):
+        """带规则码与可编辑 wire 路径的问题；非 v8 候选没有可局部修订的位置。"""
+        return design_issue(message, code=code, location=location,
+                            paths=paths if locatable else ())
+
+    scene_index = {s.scene_id: i for i, s in enumerate(body.scenes)}
+    beat_index = {(s.scene_id, b.beat_id): j
+                  for s in body.scenes for j, b in enumerate(s.beats)}
+
+    def delta_path(scene_i: int, beat_j: int, delta_i: int):
+        """canonical 拍增量序 → 产生它的 wire 行：state 行在前、know 行在后（展开顺序）。"""
+        try:
+            rows = v8_wire['scenes'][scene_i]['beats'][beat_j].get('state') or []
+        except (KeyError, IndexError, TypeError):
+            return None
+        if delta_i < len(rows):
+            return ('scenes', scene_i, 'beats', beat_j, 'state', delta_i)
+        return ('scenes', scene_i, 'beats', beat_j, 'know')
+
+    def listed(key: str) -> list:
+        value = v8_wire.get(key) if isinstance(v8_wire, dict) else None
+        return value if isinstance(value, list) else []
+
+    def site_path(site: tuple):
+        """Design 文本站点 → wire 路径；上游派生的字段（世界规则、pov 派生声线……）无路径。"""
+        kind = site[0]
+        if kind == 'book_style':
+            return ('book_style',)
+        if kind in ('chapter', 'entry'):
+            return ('chapters', site[1] - 1, 'purpose' if kind == 'chapter' else 'entry')
+        if kind == 'voice':
+            hit = next((i for i, v in enumerate(listed('character_voices'))
+                        if isinstance(v, dict) and v.get('char_id') == site[1]), None)
+            return ('character_voices', hit) if hit is not None else None
+        if kind == 'expression':
+            hit = next((i for i, v in enumerate(listed('expression_overrides'))
+                        if isinstance(v, dict) and v.get('ex_id') == site[1]), None)
+            return ('expression_overrides', hit) if hit is not None else None
+        if kind == 'scene' and site[2] in ('brief', 'driver') and site[1] in scene_index:
+            return ('scenes', scene_index[site[1]], site[2])
+        if kind == 'beat' and site[3] == 'event' and (site[1], site[2]) in beat_index:
+            return ('scenes', scene_index[site[1]], 'beats', beat_index[(site[1], site[2])], 'ev')
+        if kind == 'delta' and (site[1], site[2]) in beat_index:
+            return delta_path(scene_index[site[1]], beat_index[(site[1], site[2])], site[3])
+        if kind == 'thread' and (site[1], site[2]) in beat_index:
+            return ('scenes', scene_index[site[1]], 'beats', beat_index[(site[1], site[2])],
+                    'threads', site[3])
+        return None
+
     if constraints and len(body.chapters) != constraints.target_chapter_count:
         errors.append('目标章数与 OutputConstraints 不一致')
-    addressed = list(body.initial_state)
+    addressed = [(delta, ('initial_state', k)) for k, delta in enumerate(body.initial_state)]
     for cid in body.narration.focalizers:
         if cid != 'narrator' and cid not in known_char_ids:
             errors.append(f'narration 引用未知人物 {cid}')
-    surfaces = list(body.initial_surfaces)
-    for scene in body.scenes:
-        for cid in (scene.driver.focal_actor, scene.delivery.pov):
+    surfaces = [(intro, ('initial_surfaces', k))
+                for k, intro in enumerate(body.initial_surfaces)]
+    for scene_i, scene in enumerate(body.scenes):
+        for field, cid in (('driver', scene.driver.focal_actor), ('pov', scene.delivery.pov)):
             if cid not in known_char_ids and cid != 'narrator':
-                errors.append(f'{scene.scene_id} 引用未知 char_id {cid}')
+                errors.append(issue(f'{scene.scene_id} 引用未知 char_id {cid}',
+                                    'design_unknown_char', ('scenes', scene_i, field, cid),
+                                    ('scenes', scene_i, field)))
         # 读取定位闭合（B3 后半）：拍读取的 at 必须是本场真实拍（先读旧值、
         # 后写新值的定位面；时序闭合归 compile 的章闭包证明）。
         beat_ids = {b.beat_id for b in scene.beats}
-        for read in scene.state_reads:
+        for read_k, read in enumerate(scene.state_reads):
             if read.at is not None and read.at not in beat_ids:
                 errors.append(f'{scene.scene_id} 的读取定位 {read.at!r} 不是本场真实拍')
-            addressed.extend(scene.state_reads)
-        for beat in scene.beats:
+            addressed.append((read, ('scenes', scene_i, 'reads', read_k)))
+        for beat_j, beat in enumerate(scene.beats):
             for cid in beat.participants:
                 if cid not in known_char_ids:
-                    errors.append(f'{scene.scene_id}#{beat.beat_id} participants 引用未知 char_id {cid}')
-            addressed.extend(beat.target_delta)
-            surfaces.extend(beat.surface_introductions)
-    for item in addressed:
+                    errors.append(issue(
+                        f'{scene.scene_id}#{beat.beat_id} participants 引用未知 char_id {cid}',
+                        'design_unknown_char', ('scenes', scene_i, 'beats', beat_j, 'who', cid),
+                        ('scenes', scene_i, 'beats', beat_j, 'who')))
+            for delta_i, delta in enumerate(beat.target_delta):
+                addressed.append((delta, delta_path(scene_i, beat_j, delta_i)))
+            surfaces.extend((intro, ('scenes', scene_i, 'beats', beat_j, 'release', r))
+                            for r, intro in enumerate(beat.surface_introductions))
+    for item, path in addressed:
         for cid in (*item.subjects, *((item.holder,) if item.holder else ())):
             # holder 的 'reader' 是保留字（D5 统一后读者揭示走
             # knowledge(holder=reader)），与 'narrator' 同级放行。
             if cid != 'reader' and cid not in known_char_ids:
-                errors.append(f'状态 {item.key} 引用未知 char_id {cid}')
-    for item in surfaces:
-        if item.char_id not in known_char_ids:
-            errors.append(f'称谓释放引用未知 char_id {item.char_id}')
+                errors.append(issue(f'状态 {item.key} 引用未知 char_id {cid}',
+                                    'design_unknown_char', (*(path or ('state',)), cid),
+                                    *((path,) if path else ())))
+    for intro, path in surfaces:
+        if intro.char_id not in known_char_ids:
+            errors.append(issue(f'称谓释放引用未知 char_id {intro.char_id}',
+                                'design_unknown_char', (*path, intro.char_id), path))
             continue
         if registered_surfaces is None:
             continue
         # 称谓面闭合：放行的每个字面都必须是 Characters 登记过的 surface。
         # 未登记字面进替换表会找不到对应新名（F7e 评估实证：Design 放行的称谓
         # 没和登记面核对）。在生产端尽早失败，不走交付端残留检查兜底。
-        allowed = set(expand_surface_releases(registered_surfaces, name_structure).get(item.char_id, ()))
-        for surface in item.surfaces:
+        allowed = set(expand_surface_releases(registered_surfaces, name_structure)
+                      .get(intro.char_id, ()))
+        for surface in intro.surfaces:
             if surface not in allowed:
-                errors.append(
-                    f'称谓释放引用未登记面 {surface!r}（{item.char_id} 已登记：'
-                    f'{sorted(allowed)}）')
+                errors.append(issue(
+                    f'称谓释放引用未登记面 {surface!r}（{intro.char_id} 已登记：'
+                    f'{sorted(allowed)}）', 'design_unregistered_surface',
+                    (*path, surface), path))
     # 结构化跨章条目的人物闭集（R2：书级声线与线程主体必须是本书人物；漏报
     # 会让写手拿到不存在人物的声线或线程）。
-    for item in body.character_voices:
+    for voice_k, item in enumerate(body.character_voices):
         if item.char_id not in known_char_ids:
-            errors.append(f'CharacterVoice 引用未知 char_id {item.char_id}')
-    for scene in body.scenes:
-        for beat in scene.beats:
-            for thread in beat.threads:
+            errors.append(issue(f'CharacterVoice 引用未知 char_id {item.char_id}',
+                                'design_unknown_char', ('character_voices', voice_k),
+                                ('character_voices', voice_k)))
+    for scene_i, scene in enumerate(body.scenes):
+        for beat_j, beat in enumerate(scene.beats):
+            for thread_t, thread in enumerate(beat.threads):
                 if thread.op == 'open' and thread.subject not in known_char_ids:
-                    errors.append(
+                    where = ('scenes', scene_i, 'beats', beat_j, 'threads', thread_t)
+                    errors.append(issue(
                         f'ThreadAction 引用未知 char_id {thread.subject}'
-                        f'（{scene.scene_id}#{beat.beat_id} 的 {thread.ref}）')
-    _check_expression_refs(body, expression_requirements, errors)
+                        f'（{scene.scene_id}#{beat.beat_id} 的 {thread.ref}）',
+                        'design_unknown_char', where, where))
+    _check_expression_refs(body, expression_requirements, errors, locatable=locatable)
     errors.extend(confirmation_closure_errors(body))
     if brief is not None:
-        _check_lock_acceptance(body, brief, errors)
+        _check_lock_acceptance(body, brief, errors, marks=marks,
+                               obligations=obligations, real_sites=real_sites)
     errors.extend(resolve_design_reads(body).errors)
     if name_projection is not None:
-        errors.extend(validate_design_materials(body, projection=name_projection,
-                                                known_char_ids=known_char_ids,
-                                                structure=name_structure))
-    return (None, errors) if errors else (body, [])
+        errors.extend(validate_design_materials(
+            body, projection=name_projection, known_char_ids=known_char_ids,
+            structure=name_structure, resolve=site_path if locatable else None))
+    return body, errors

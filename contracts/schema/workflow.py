@@ -562,12 +562,18 @@ STR06_RUNTIME_CONFIG: Final = CandidateRuntimeConfig()
 # rc15（2026-10-04 证据寻址，RC-26/27）：证据段改为一个自然段一段，段号含义
 # 改变——携带段号的 Stage2 观察换协议字面量，观察／Characters／Blueprint 换
 # 身份；旧根按契约表漂移关闭式拒读（不迁移：段号无法从旧根推回新含义）。
-STR06_RC_VERSION: Final = 'str06-rc15'
+# rc16（2026-10-04 CS-F2，事实锁引用）：Design wire 升 `stage4-design-v8`——事实锁
+# 在已选状态上标注 `lock` 引用，kf 句柄不再是状态键；锁到状态的映射随
+# SemanticBinding 发布（`fact_bindings`，不复制目标 value）。只有 semantic_binding
+# 换身份；旧 rc15 候选根按契约表漂移关闭式拒收（`init_or_resume_candidate_workflow`），
+# 原根作冻结失败证据，续跑用新根（已购响应经历史采用按请求身份复用）。
+STR06_RC_VERSION: Final = 'str06-rc16'
 
 #: 已知 RC 标签面（版本规则见 `contracts/artifacts.py::STR06_ARTIFACT_RC_VERSIONS`）。
 STR06_RC_LABELS: Final = ('str06-rc2', 'str06-rc3', 'str06-rc4', 'str06-rc5', 'str06-rc6',
                           'str06-rc7', 'str06-rc8', 'str06-rc9', 'str06-rc10', 'str06-rc11',
-                          'str06-rc12', 'str06-rc13', 'str06-rc14', 'str06-rc15')
+                          'str06-rc12', 'str06-rc13', 'str06-rc14', 'str06-rc15',
+                          'str06-rc16')
 
 #: Stage4 四个付费语义节点的独立 wire 协议（B3 前半；各节点独立演进，升版互不
 #: 牵连）。wire 顶层 `protocol_version` 与对应常量逐字对账，漏带或错带即拒

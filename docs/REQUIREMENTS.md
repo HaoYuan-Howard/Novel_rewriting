@@ -9,11 +9,110 @@
 不改变冻结实验身份、分母、额度或既有授权。重置前完整记录见提交 `e84a169b` 中本文件；
 更早执行史按 `git log -- docs/REQUIREMENTS.md`，裁决见 [DECISIONS.md](DECISIONS.md)。
 
+**2026-10-04 关联同义判据对齐**：用户裁决措辞不同的同义表述也算同一。
+撤除 CS-1 跨章 statement 全等闸，保留 associate 的同义提示词；正式引用统一
+采用最早建立的代表文本，同章重抄仍核对本章原文，引用时序与证据闸不变。
+协议及产物形状不变，语义未审继续披露。最小 compiler 反例先复现拒收；修复后
+契约§9.5五文件402项与受影响Stage2／Stage4消费、免费恢复及来源账324项定向通过
+（`.test_cache/associate-synonym-contract.xml`／`associate-synonym-regression.xml`；
+4项目标烟测包含在后者中，不重复计数）。《夫君的报恩》已购关联回答经正式
+`--check-only`采用并免费编译，11章、未决0，新增购买0，整书额度仍7/512；
+留证`outputs/cs_review/associate_synonym_free_recheck.json`。随后沿用户已授权的同书、
+同配置续跑（run `1791116266-e0289104`，代码身份 `414b6203…-dirty.c77e77bed629acdd`）：
+Preserve通过（62项义务）；Design首答＋两轮修订仍有两处未释放专名，正式
+`validation_rounds_exhausted`停止，未到Stage7交付。源书对照另发现ch03把夫君
+模仿表弟称谓的场景误记为芸娘与表弟已发生关系，Preserve ob18又锁为必保；
+须先修正源观察及其派生产物，不能靠修掉Design字面泄露就验收通过。
+本次追加4次实际调用，整书额度11/512，原响应与成本留证完整；两个admission
+已drained，claim／open beacon均0。结果记录`outputs/cs_review/associate_synonym_alignment_and_acceptance.json`。
+成书六维保持未验，不把Stage2机械通过算作语义通过；不扩大到另外两书，不重置任何额度。
+
 **上一CS检查点交接（2026-10-04）**：该检查点按当时指令只完成修复、定向回归并commit，不再重跑全量。
 在付费前停止；用户先处理其余流水线潜在问题，之后再进行真实整书验收和A/B。
 本提交是工程检查点，不是最终冻结发布；现有实验草案没有付费或外发授权。
 
 ## 当前状态与下一步
+
+2026-10-04 Stage4停点收敛批（CS-F）：按用户审阅收缩为现有职责内的完整修复，
+最终方案见`docs/schema/repair_convergence.md`“Stage4停点解决方案”，中文Gherkin
+见`docs/specs/repair_convergence.feature` RC-30～49。已复验三轮Design为299→8→2条
+错误；内存消除末轮两处名称冲突后，真实写手材料预检仍有14处Preserve来源问题。
+ch03主体误判及ob44无依据认知限制分别归源观察和Preserve，不用改目标稿掩盖。
+事实锁改为引用已有目标事实；人物呈现复用现有登记投影；不新建通用验收框架、
+不增加工作流节点、不顺带引入任意目标称谓创作功能、不提高重试上限。
+用户明确选择**先离线标定，再启用自动语义闸**；结构修复和完整预检先行，生产
+语义继续按现役unver披露，未完成标定／启用验收前不自动增加付费语义核验。
+本批方案不扩大真实付费／外发授权；旧响应、费用、轮数和失败根保留。
+
+| 子批 | 状态 | 完成条件 |
+|---|---|---|
+| CS-F0 最终方案与规格 | [x] RC-30～49已落文，引用及文档入口检查通过 | 规则、正反例、职责、消费者、恢复和分项验收边界完整；文档通过不算行为通过 |
+| CS-F1 完整候选预检 | [~] RC-44～45、RC-47已实现并验证（含模型真回`patches`的stage用例）；读取／确认闭合等未转路径的错误类仍整份修订，Hook设计不接局部修订 | 能构造的候选聚合独立问题，结构缺失明确未运行；真实body_design／恢复消费者及局部修订定位闭合 |
+| CS-F2 事实引用与名称呈现 | [x] 事实锁引用（`stage4-design-v8`，rc16）与Writer称谓投影（IR rc16／renderer v10）已实现并验证；**Hook材料尚未投影**；破坏协议已显式升版，旧rc15根拒收 | 删除重复kf状态，正式绑定及结构／语义结果分开；呈现层按已证明人物绑定投影，Writer／Hook／Stage7消费闭合，破坏协议显式升版 |
+| CS-F3 关键语义离线标定 | [ ] 用户已选择先标定 | 高影响主体／知情及目标事实对应含正反例；支持、矛盾、未确定及漏选／误拦分别报告；通过后才进入启用验收 |
+| CS-F4 本书正式恢复 | [ ] 工程稳定后执行 | 正式owner修订源观察及无依据限制，审计62项义务重复／过保，按实际依赖重建，历史与人工干预留证；版本及付费权限先核对 |
+| CS-F5 成书与成本对照 | [ ] 不以Stage4继续运行代替完成 | 相关目标章节与最终正文核验，六维与自动程度分别报告，核验新增成本和返修节省量同口径比较 |
+
+CS-F1首个子批（2026-10-04，基线HEAD `414b6203`＋本工作树未提交变更）：
+
+- `novel/stages/stage4/preflight.py::inspect_design_candidate`统一生产接受与免费Design
+  预览；可构造但不通过的Design继续派生Binding及实际Writer材料，正式发布仍失败关闭。
+  Design、承载标注、Binding、执行计划、命题引用、Writer材料、Guard和Hook各有检查状态；
+  依赖失败标not_run，悬空命题不再进入IR投影抛裸异常。无正式Design／Binding／Hook的
+  停书也能免费预览，已有Hook则与修订候选重新核对。
+- 上游材料错误优先回派，Design旧输入上的问题留在完整报告，不提前消耗Design回派轮。
+  全报告在停止上下文中存一次；不复制进每条issue及后继prompt。新增正反例检查实际
+  工作流状态、双产物发布、失败不发布、未改输入、免费重放与已有Hook失效。
+- 20项首轮、571项消费者与契约、1项目录登记检查全部通过，合计592项定向用例，
+  0失败／0跳过。JUnit分别为`.test_cache/cs_f_preflight/initial.xml`、
+  `.test_cache/cs_f_preflight/consumers.xml`、`.test_cache/cs_f_preflight/catalog.xml`。
+  首轮文件为`tests/test_str06_candidate_preflight.py`及`tests/test_str06_design_slim.py`；
+  消费者文件覆盖material_repair、r3_selfheal、item_patch、a4_design_locks、a5_positions、
+  hook、r10b_writer_packet、cli_dispatch、layering及BACKEND_CONTRACT §9.5五文件；目录检查
+  为`tests/test_test_selection.py::test_catalog_covers_every_module_and_every_override_is_a_real_case`。
+  公共命令为`D:/Miniconda/envs/novel_refactor/python.exe -B -m pytest <上述文件或节点> -n 0 -x
+  --basetemp=E:/_tr_preflight -o cache_dir=.test_cache/cs_f_preflight --junitxml=<对应报告>`。
+  固定根E:/_tr被另一批回归占用，本轮独立根与独立缓存经用户明确授权；初次失败的目录占用
+  与测试接线修正不计为通过。未做全仓终验，测试均使用fake transport，零真实付费。
+- 本书三份未修改的已购响应按当前纯预检回放，直接错误仍为299／8／2条，材料出现位置
+  为500／14／17处；末轮17处中14处归Preserve、3处归Design。不能把位置数当独立根因数。
+  记录在`outputs/cs_review/cs_f1_candidate_preflight_replay.json`，包含原响应／输入摘要及
+  代码摘要；原书正式产物、响应与费用未改。此证据不代表源主体、事实语义、成书质量或净
+  成本已通过。剩余事实引用与呈现投影、局部patch、离线标定及本书正式恢复按上表继续。
+
+CS-F1第二子批与CS-F2（2026-10-04，基线HEAD `414b6203`＋本工作树未提交变更；零真实付费、零外发）：
+
+- **事实引用（RC-36／38）**：Design wire升`stage4-design-v8`，在已选状态上写`state[].lock`引用事实锁，kf不再是状态键；
+  `FactLockBinding`（锁＋承载拍＋状态地址，不复制value）随body_design同组发布进`SemanticBinding.fact_bindings`。
+  时态锁须标在同modality的set、值未知锁须标在op=unknown、原文未回答锁不承载状态、一锁一承载、悬空即拒；
+  未兑现的必保锁带规则码与承载该义务的拍的wire路径，并用Design看得见的`obNN`指代义务。**只证结构**：承载状态是否在语义上满足锁
+  （如把暂缓和离绑到赏花）属CS-F3，未运行保持unver，不得宣称已核验。
+- **称谓投影（RC-40～43）**：`ChapterIR.withheld_bindings`（本章尚未释放、且已证明唯一绑定人物的完整登记称谓，附包含它的更长称谓）让写手材料
+  正向行（含禁区行）把该字面换成本场已释放称谓；短姓、关系称呼、多义字面、未登记表达（如源文没有的「陆郎」）与源引文永不投影；人物本场没有已释放称谓时
+  不投影、泄漏如实保留并按原归因回派；留痕`name_projections`（候选预检报告、guard report、packet_metrics），原字段与来源文本不改。Design自有文本的名称冲突
+  仍由Design接受判据拦下，compiler不自动提前释放全名；Stage7无需改动。**Hook材料尚未投影**：它的来源归因依赖原字段文本，需单独设计。
+- **局部修订（RC-47）**：`novel/stages/stage4/design_paths.py::locate_design_patches`按判定处携带的wire路径取最小完整父项——叶子标量升到所在对象，同拍两处以上待修合并为整拍，
+  替换不重叠，场景自身标量原地；合并后重跑**完整**候选预检，无进展／循环／累计上限沿用现役规则。已带路径的问题：wire形状、展开、事实锁、expression_refs、人物／称谓闭集、
+  Design自有文本名称泄漏；其余（全局real覆盖闸、读取／确认闭合、上游派生材料、越界路径）任一出现即整份修订。
+- **版本后果（需知）**：`STR06_RC_VERSION`升rc16，`semantic_binding`与`writer_book_ir`升rc16，冻结身份`FROZEN_CONTRACT_IDENTITY`更新为`4e643fb1…`。候选契约身份变化，
+  `cs_golden_20261004_rc15`下三本旧根按契约表漂移关闭式拒收（`init_or_resume_candidate_workflow`），保留为冻结失败证据，**不能原地续跑**；续跑须新根，
+  已购Stage2／Preserve响应能否经历史采用按请求身份免费复用，属CS-F4核对项（本批未改任何Stage2／Preserve提示词），Design因wire与提示词换版必须重购。
+- **真数据对照（零模型调用）**：`outputs/cs_review/cs_f2_fact_lock_replay.json`。《夫君的报恩》第三份已购Design回答含8条以kf为键的重复状态行（对应5个不同的锁，多个义务共用同一锁）；
+  删掉这些行并换v8字面量后，Design自有泄漏3→0、写手材料泄漏17→14，余下14处全是Preserve编造的源文没有的短姓称呼（陆×13、裴×1），按设计不可投影，须Preserve的owner修订（CS-F4）；
+  另有8条「事实锁未兑现」是预期结果。这是模拟，不证明模型会正确标注lock，也不评语义。输入摘要前后一致，原根产物、响应与费用未改。
+- **测试与迁移**：新增`test_str06_fact_lock_stage.py`、`test_str06_name_projection.py`、`test_str06_design_patch.py`，并扩充`test_str06_a4_design_locks.py`（CS-F2一节）、`test_str06_design_slim.py`、`test_str06_contracts.py`；
+  旧用例按新职责迁移而非放宽：v5中间形状用例（kp知情锁／形状）改用不含事实锁兑现分母的Brief变体，事实锁语义全部迁到真实v8入口；`str06_faults.knowledge_release`原靠「源命题里的完整登记称谓」制造泄漏，
+  该情形现被确定性投影消解，改为会真实触发Design修订的Design自有文本冲突（自愈、产品入口、语义交付三处共用，覆盖不变）；`material_repair`夹具默认改为夫君第1章无可用称谓，另有投影正例；
+  修订提示改为条目返修后，产品入口用例按`【条目返修】`断言（整份覆盖闸仍断言`【修订要求】`）。版本冻结与渲染器版本钉同步为rc16／v10。
+- **验证**（命令与根见下；全部使用fake transport，固定根`E:/_tr`当时被另一会话的全量回归占用，本轮用独立根`E:/_tr_f2`与独立缓存`.test_cache/cs_f2`）：
+  按本批改动集合选测回归**3748项**（147个模块，`--changed`选择19个改动文件，`-m "not corpus"`，`-n 4`；`regression_full.xml`、选择报告`regression_selection.json`）：
+  通过3745／失败3／跳过0。三项失败都是本批收尾记账缺口（`docs/schema/str06.md`符号引用用了短路径、`test_str06_r2_engine`仍钉渲染器v9、
+  冻结身份哈希未随`writer_book_ir`升rc16同步），已修复；**修复后没有重跑全部3748项**，而是重跑受影响的468项（Design提示词与消息、渲染器版本、冻结身份、
+  产品入口Design故障用例等22个测试目标，`post_fix.xml`）：通过468／失败0／跳过0；契约§9.5五文件402项通过／失败0／跳过0（`s95_final.xml`）。
+  回归命令：`D:/Miniconda/envs/novel_refactor/python.exe -B -m pytest -n 4 --dist loadgroup -m "not corpus" --basetemp=E:/_tr_f2 -o cache_dir=.test_cache/cs_f2 --changed <19个改动文件>`。
+  另做两个不进仓库的对抗式探针（随机wire／错误／称谓文本）：定位器4000例（683例可定位，无重叠、覆盖完整、确定、不改输入）与投影6000例（可逆、确定、不拆更长称谓），均通过。
+- **未完成与限制**：未花真实付费；v8提示词与`lock`闭集在真实模型上的表现**未验证**（CS-F3／F4用真实调用时才会知道模型是否稳定标注）；未做离线语义标定；本书未恢复；
+  Hook材料投影、读取／确认闭合的路径化、局部修订接入Hook设计均未做。
 
 2026-10-04证据寻址批（CS-A，RC-26～29，rc15，用户批准）：cs_golden三书全部停在
 `str06.stage2.chapters`，根因是证据切分只在「。」后切、段号标签悬在上一段下方，模型
@@ -111,7 +210,7 @@ configured model记为unknown（实付行的模型见账本）。
 |---|---|
 | STR-06关闭，`b3038a41` | R0～R6／R8／B0～B5及R10a～c落地；Stage6与旧链退役；终验接delivery manifest；存量解码面及退役台账删除。现役13节点，bind已退役 |
 | R10c／B6-B成书 | r10b《夫君的报恩》交付hash `09d80fb1…`、delivery `71c54085…`；六维／GS-01～10 agent侧阅读通过。无人改稿、有人辅助完成；不代签R10d或本轮 |
-| CS-0／CS-1／CS-patch | 引文确定性归一、命题渲染、关联全等闸、条目patch与失败聚合已完成；后续修正为“问题位置严格减少可继续，重复／循环停止”，源锚点单调硬闸已撤除 |
+| CS-0／CS-1／CS-patch | 引文确定性归一、命题渲染、条目patch与失败聚合已完成；后续修正为“问题位置严格减少可继续，重复／循环停止”，源锚点单调硬闸已撤除；关联全等闸由2026-10-04同义命题裁决撤除 |
 | CS-2已完成部分 | chapter瘦wire `stage2-chapters-v3`、确定性展开与条目定位；Preserve输入／wire和book面仍有余项，不把整个CS-2标完成 |
 | CS-3已完成部分 | Design v7、real＋know分离、bind退役、body_design双产物、world规则id、rc14认知与confirms闭合；剩余Brief输入投影与真实费用／质量证据 |
 | `8221ef2f`／`14312181` | rc14工程冻结：3581例默认非corpus通过；前端120例及typecheck／seams／build通过。三书免费源身份／分章预检通过，124次无修订基础调用；不证明成书质量 |

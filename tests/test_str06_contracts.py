@@ -196,6 +196,31 @@ def test_binding_beat_ref_must_stay_inside_scene():
         BindingEntry(obligation_id='ob1', scene_id='s01', beat_ref='s02#bt1')
 
 
+def test_binding_fact_bindings_reference_states_and_never_copy_values():
+    """CS-F2（rc16）：事实锁→已有目标状态的映射只存锁句柄、承载拍、状态地址；
+    一个锁至多一处承载；旧 rc12 产物没有该映射，按版本字面量拒读而不是补空表。"""
+    from contracts.schema.grounding import FactLockBinding
+    from contracts.schema.state import EffectDomain, StateAddress
+    kf = 'kf_' + '0' * 16
+    address = StateAddress(domain=EffectDomain.WORLD, key='return_time')
+    bound = FactLockBinding(kf_id=kf, beat_ref='sc01#b06', address=address)
+    assert set(bound.model_dump()) == {'kf_id', 'beat_ref', 'address'}, '不复制目标 value'
+    binding = SemanticBinding(**_binding(fact_bindings=(bound,)))
+    assert binding.contract_version == 'str06-rc16'
+    assert SemanticBinding(**_binding()).fact_bindings == (), '空表＝没有锁被兑现'
+    with pytest.raises(ValidationError):
+        SemanticBinding(**_binding(fact_bindings=(bound, bound)))   # 一锁一承载
+    for bad in ({'kf_id': 'kf_short', 'beat_ref': 'sc01#b06'},
+                {'kf_id': kf, 'beat_ref': 'sc01'},                  # 非复合拍引用
+                {'kf_id': kf, 'beat_ref': 'sc01#b06', 'value': '复制的目标值'}):
+        with pytest.raises(ValidationError):
+            FactLockBinding(address=address, **bad)
+    stored = binding.model_dump(mode='json')
+    stored['contract_version'] = 'str06-rc12'
+    with pytest.raises(ValidationError):
+        SemanticBinding.model_validate(stored)
+
+
 # ───────────────────────── Design（source-blind + 归章自洽） ─────────────────────────
 
 def _scene(scene_id: str) -> TargetScene:

@@ -7,9 +7,14 @@ dramatic_intent 删除）。
 【验证边界】`project_brief` 由义务 anchors 与 canonical loops 确定性派生锁定项
 （kp 命题登记＋知情锁＋kf 事实锁＋series 盲标记）；`assemble_body_design` 的
 接受校验——kp 键持有者须有锁且模式被授权（known 只能来自 known 锁，C1）、
-kf 时态锁 modality 一致（C2）、读者确认须有 reader known 锁（C6）、值未知不
-得补值／原文未回答不得作答（C9）、必保义务锁兑现、expression_refs 闭集与
+读者确认须有 reader known 锁（C6）、必保知情锁兑现、expression_refs 闭集与
 narration 不上拍、dramatic_intent 关闭式拒读。「设计是否好看」归通读，不在此。
+
+CS-F2（RC-36/38，stage4-design-v8）：事实锁（C2 时态、C9 值未知／未回答）不再以
+kf 为状态键承载，而是在 Design 已选状态上标注 `lock`；本文件的 v5 用例走内部
+中间形状（只验 kp 知情锁与形状，无事实锁标注通道，故用「不含事实锁兑现分母」
+的 Brief 变体），事实锁的接受、映射与反例走真实 v8 入口（`inspect_body_design`
+＋`derive_semantic_binding`），见文末 CS-F2 一节。
 """
 from __future__ import annotations
 
@@ -22,9 +27,12 @@ from contracts.schema.grounding import (
 from contracts.schema.source import (
     BlueprintsArtifactV15, CharactersCore, SourceExpression,
 )
-from novel.stages.stage4.design import assemble_body_design
+from novel.stages.stage4.design import assemble_body_design, inspect_body_design
 from novel.stages.stage4.grounding import (
-    assemble_preserve, project_brief,
+    assemble_preserve, derive_semantic_binding, design_obligation_index, project_brief,
+)
+from novel.stages.stage4.slim import (
+    design_fact_marks, design_placements, knowledge_change_index,
 )
 from tests.str06_expression_inputs import sample_narration, sample_readings
 from tests.str06_facilities import v13_beat, v13_effect
@@ -240,8 +248,6 @@ def test_brief_lock_derivation_is_deterministic():
 def _design_wire(brief: ReconstructionBrief) -> dict:
     kp_x = _kp(brief, '夫君像是看穿了什么')
     kp_reader = kp_x  # reader learns 的同一命题
-    kf_expected = _kf(brief, 'expected')
-    kf_unknown = _kf(brief, 'unknown_value')
     return {
         'protocol_version': 'stage4-design-v5',
         'narration': {'person': 'third', 'focalizers': ['narrator']},
@@ -288,13 +294,13 @@ def _design_wire(brief: ReconstructionBrief) -> dict:
                  {'event': '约定归期', 'participants': ['fu_jun'],
                   'delivery_hint': '', 'target_delta': [
                       {'domain': 'world', 'subjects': [], 'holder': None,
-                       'key': kf_expected, 'op': 'set', 'value': '约半月后归家',
+                       'key': 'return_time', 'op': 'set', 'value': '约半月后归家',
                        'scope': 'book', 'modality': 'expected'}],
                   'expression_refs': [], 'surface_introductions': []},
                  {'event': '去向成谜', 'participants': [],
                   'delivery_hint': '', 'target_delta': [
                       {'domain': 'world', 'subjects': [], 'holder': None,
-                       'key': kf_unknown, 'op': 'unknown', 'value': None,
+                       'key': 'departure_whereabouts', 'op': 'unknown', 'value': None,
                        'scope': 'book'}],
                   'expression_refs': [], 'surface_introductions': []},
              ]}],
@@ -303,17 +309,24 @@ def _design_wire(brief: ReconstructionBrief) -> dict:
     }
 
 
+def _without_fact_realization(brief: ReconstructionBrief) -> ReconstructionBrief:
+    """v5 中间形状没有事实锁标注通道：v5 用例（kp 知情锁／形状）用不含事实锁
+    兑现分母的 Brief 变体；事实锁的接受另在 v8 真实入口验证（文末 CS-F2 一节）。"""
+    return brief.model_copy(update={'requirements': tuple(
+        r.model_copy(update={'realize_locks': ()}) for r in brief.requirements)})
+
+
 def _assemble(wire: dict, brief: ReconstructionBrief):
     return assemble_body_design(
         wire, known_char_ids={'yun_niang', 'fu_jun'},
         expression_requirements=brief.expression,
         source_narration=brief.source_narration,
-        brief=brief)
+        brief=_without_fact_realization(brief))
 
 
 def test_green_wire_passes_all_lock_checks():
-    """绿基线：授权模式内知情、reader known 锁确认、kf 同 modality、
-    unknown 不补值、expression_refs 取 humor、必保锁全部兑现。"""
+    """绿基线（v5 中间形状）：授权模式内知情、reader known 锁确认、
+    expression_refs 取 humor、必保知情锁全部兑现（事实锁见 CS-F2 一节）。"""
     brief = _brief()
     body, errors = _assemble(_design_wire(brief), brief)
     assert body is not None and not errors, errors
@@ -359,17 +372,7 @@ def test_c1_unregistered_kp_key_rejected():
     assert any('kp 键未在 Brief 登记' in e for e in errors), errors
 
 
-# ───────────────────────── C2：kf 时态锁 ─────────────────────────
-
-def test_c2_expected_lock_written_as_actual_rejected():
-    """C2 红例：expected 锁被按 actual 承载 → modality 与锁不一致拒。"""
-    brief = _brief()
-    kf_expected = _kf(brief, 'expected')
-    wire = _design_wire(brief)
-    wire['scenes'][0]['beats'][5]['target_delta'][0]['modality'] = 'actual'
-    _, errors = _assemble(wire, brief)
-    assert any('modality 与锁不一致' in e and kf_expected in e for e in errors), errors
-
+# ───────────────────────── C2：时态锁（v5 形状面；锁标注见 CS-F2） ─────────────────
 
 def test_fact_set_without_modality_rejected_by_shape():
     """非知情/非读者的 set 缺 modality → wire 形状面拒（C2 的漏填面）。"""
@@ -398,39 +401,11 @@ def test_c6_reader_confirmation_without_known_lock_rejected():
     assert any('无锁或模式越权' in e and kp_y in e for e in errors), errors
 
 
-# ───────────────────────── C9：值未知与原文未回答 ─────────────────────────
-
-def test_c9_unknown_value_lock_and_unanswered_lock_reject_set():
-    brief = _brief()
-    kf_unknown = _kf(brief, 'unknown_value')
-    kf_unanswered = _kf(brief, 'unanswered')
-    wire = _design_wire(brief)
-    wire['scenes'][0]['beats'][6]['target_delta'][0]['op'] = 'set'
-    wire['scenes'][0]['beats'][6]['target_delta'][0]['value'] = '去了南边投军'
-    wire['scenes'][0]['beats'][6]['target_delta'][0]['modality'] = 'actual'
-    _, errors = _assemble(wire, brief)
-    assert any('值未知锁' in e and kf_unknown in e for e in errors), errors
-    # 原文未回答锁：set 作答即拒；op=unknown 不受拦（保持留白合法）。
-    wire2 = _design_wire(brief)
-    wire2['scenes'][0]['beats'][6]['target_delta'][0]['key'] = kf_unanswered
-    wire2['scenes'][0]['beats'][6]['target_delta'][0]['op'] = 'set'
-    wire2['scenes'][0]['beats'][6]['target_delta'][0]['value'] = '瞒着旧约'
-    wire2['scenes'][0]['beats'][6]['target_delta'][0]['modality'] = 'actual'
-    _, errors2 = _assemble(wire2, brief)
-    assert any('原文未回答锁' in e and kf_unanswered in e for e in errors2), errors2
-
-
 # ───────────────────────── 必保锁兑现 ─────────────────────────
 
-def test_must_obligation_locks_must_be_realized():
+def test_must_obligation_knowledge_locks_must_be_realized():
     brief = _brief()
-    kf_expected = _kf(brief, 'expected')
     kp_x = _kp(brief, '夫君像是看穿了什么')
-    wire = _design_wire(brief)
-    # 删掉 expected 承载拍 → 事实锁未兑现。
-    wire['scenes'][0]['beats'][5]['target_delta'] = []
-    _, errors = _assemble(wire, brief)
-    assert any('事实锁未兑现' in e and kf_expected in e for e in errors), errors
     # 删掉 yun 的知情承载 → 知情锁未兑现（保留 reader 面）。
     wire2 = _design_wire(brief)
     wire2['scenes'][0]['beats'][1]['target_delta'] = []
@@ -492,3 +467,215 @@ def test_lock_models_shape_constants():
     except ValueError:
         pass
     BriefKnowledgeLock(holder='reader', kp='kp_' + '0' * 16, mode='heard')
+
+
+# ═════════ CS-F2（RC-36／RC-38）：事实锁在已选状态上标注引用，不再复制第二份状态 ═════════
+#
+# 真实入口：v8 wire → `inspect_body_design`（接受）→ `derive_semantic_binding`
+# （映射）。本节只证结构：句柄闭集、一锁一承载、模式／操作同锁一致、映射只存
+# 引用不复制 value。「承载状态的内容在语义上是否满足锁」（例如把暂缓和离绑到
+# 赏花）需要标定的语义核验，不在此处，也不由结构通过来宣称（I-42）。
+
+from contracts.schema.design import DesignWireV8
+
+
+def _obligations_v8(brief: ReconstructionBrief) -> dict:
+    return design_obligation_index(_checkpoint(), brief)
+
+
+def _know_ref(obligations: dict, ob: str, holder: str, mode: str) -> str:
+    return next(ref for ref, (owner, change) in knowledge_change_index(obligations).items()
+                if owner == ob and change.holder == holder and change.mode == mode)
+
+
+def _design_wire_v8(brief: ReconstructionBrief) -> dict:
+    """a4 场景的真实 v8 形状：事实锁只在已选状态上用 `lock` 标注。
+
+    ob01 起疑(b1)→证实(b2)；ob06 读者获知(b4)；ob02 归期预计(b5)；ob03 去向未知(b6)。
+    """
+    obligations = _obligations_v8(brief)
+    return {
+        'protocol_version': 'stage4-design-v8',
+        'book_style': '克制的限知叙事。',
+        'scenes': [{
+            'driver': {'focal_actor': 'yun_niang', 'immediate_want': '查明床底',
+                       'opposition': '夫君的沉默', 'turn': '证实'},
+            'brief': '从异样写起，在证实处收住。',
+            'beats': [
+                {'ev': '埋下可证实的凭据', 'who': ['yun_niang'],
+                 'state': [{'at': 'world', 'key': 'evidence_fact', 'val': '床底藏物属实'}]},
+                {'ev': '芸娘起疑', 'who': ['yun_niang'], 'real': ['ob01'],
+                 'know': [{'ref': _know_ref(obligations, 'ob01', 'yun_niang', 'suspected')}]},
+                {'ev': '芸娘证实', 'who': ['yun_niang'], 'real': ['ob01'],
+                 'know': [{'ref': _know_ref(obligations, 'ob01', 'yun_niang', 'known')}]},
+                {'ev': '错解的玩笑', 'who': ['yun_niang', 'fu_jun'], 'ex': ['ex_02']},
+                {'ev': '读者获知实证', 'who': ['yun_niang'], 'real': ['ob06'],
+                 'know': [{'ref': _know_ref(obligations, 'ob06', 'reader', 'known'),
+                           'confirms': {'domain': 'world', 'key': 'evidence_fact'}}]},
+                {'ev': '约定归期', 'who': ['fu_jun'], 'real': ['ob02'],
+                 'state': [{'at': 'world', 'key': 'return_time', 'val': '约半月后归家',
+                            'modality': 'expected', 'lock': _kf(brief, 'expected')}]},
+                {'ev': '去向成谜', 'who': [], 'real': ['ob03'],
+                 'state': [{'at': 'world', 'key': 'departure_whereabouts', 'op': 'unknown',
+                            'lock': _kf(brief, 'unknown_value')}]},
+            ]}],
+        'chapters': [{'purpose': '起疑到证实', 'scenes': 1}],
+    }
+
+
+def _inspect_v8(wire: dict, brief: ReconstructionBrief):
+    return inspect_body_design(
+        wire, known_char_ids={'yun_niang', 'fu_jun'},
+        expression_requirements=brief.expression,
+        source_narration=brief.source_narration, brief=brief,
+        obligations=_obligations_v8(brief))
+
+
+def _derive_binding_v8(wire: dict, body):
+    model = DesignWireV8.model_validate(wire)
+    return derive_semantic_binding(
+        design_placements(model), body, _checkpoint(), design_fact_marks(model))
+
+
+def test_fact_lock_green_v8_marks_existing_states_and_binding_keeps_references_only():
+    """RC-36：锁映射只引用承载拍与状态地址；BodyDesign 里只有一份目标事实。"""
+    brief = _brief()
+    wire = _design_wire_v8(brief)
+    body, errors = _inspect_v8(wire, brief)
+    assert body is not None and not errors, errors
+    assert not any(d.key.startswith('kf_') for s in body.scenes for b in s.beats
+                   for d in b.target_delta), 'kf 句柄不再是状态键'
+    binding, errors = _derive_binding_v8(wire, body)
+    assert binding is not None and not errors, errors
+    by_lock = {f.kf_id: f for f in binding.fact_bindings}
+    assert set(by_lock) == {_kf(brief, 'expected'), _kf(brief, 'unknown_value')}
+    expected = by_lock[_kf(brief, 'expected')]
+    assert expected.beat_ref == 'sc01#b06' and expected.address.key == 'return_time'
+    assert expected.address.domain.value == 'world'
+    # 映射不复制目标 value：字段只有锁句柄、承载拍、状态地址。
+    assert set(expected.model_dump()) == {'kf_id', 'beat_ref', 'address'}
+    assert '约半月' not in str(expected.model_dump())
+    # 承载状态本身仍是 BodyDesign 的唯一目标事实（含 modality）。
+    carrier = body.scenes[0].beats[5].target_delta[0]
+    assert (carrier.key, carrier.value, carrier.modality) == (
+        'return_time', '约半月后归家', 'expected')
+
+
+def test_c2_expected_lock_carried_by_actual_state_rejected_with_wire_path():
+    """C2（RC-38 行 1）：计划锁被标在 actual 状态上＝升格为已发生，拒绝模式升级；
+    错误带规则码与可编辑的 wire 路径（局部修订按路径定位，不解析文案）。"""
+    brief = _brief()
+    wire = _design_wire_v8(brief)
+    wire['scenes'][0]['beats'][5]['state'][0]['modality'] = 'actual'
+    _, errors = _inspect_v8(wire, brief)
+    issue = next(e for e in errors if 'modality 与锁不一致' in e)
+    assert _kf(brief, 'expected') in issue and '计划不得写成已发生' in issue
+    assert issue.code == 'fact_lock_modality'
+    assert issue.context['wire_paths'] == [['scenes', 0, 'beats', 5, 'state', 0]]
+
+
+def test_planned_state_may_become_actual_later_without_the_old_lock_forbidding_it():
+    """RC-38 行 2：锁绑定在 planned 的建立拍；后文合法事件把同一状态转 actual 不被
+    旧计划锁永久禁止——锁不是对地址的永久禁令。"""
+    brief = _brief()
+    wire = _design_wire_v8(brief)
+    wire['scenes'][0]['beats'].append(
+        {'ev': '夫君如期归来', 'who': ['fu_jun'],
+         'state': [{'at': 'world', 'key': 'return_time', 'val': '已归家'}]})
+    body, errors = _inspect_v8(wire, brief)
+    assert body is not None and not errors, errors
+    assert body.scenes[0].beats[7].target_delta[0].modality == 'actual'
+    binding, errors = _derive_binding_v8(wire, body)
+    assert binding is not None and not errors, errors
+
+
+def test_c9_unknown_value_lock_must_be_carried_by_unknown_state_not_a_filled_value():
+    """C9（RC-38 行 3）：值未知锁标在补了具体值的状态上＝拒绝补值。"""
+    brief = _brief()
+    wire = _design_wire_v8(brief)
+    state = wire['scenes'][0]['beats'][6]['state'][0]
+    state.pop('op')
+    state['val'] = '去了南边投军'
+    _, errors = _inspect_v8(wire, brief)
+    issue = next(e for e in errors if '值未知锁' in e)
+    assert _kf(brief, 'unknown_value') in issue and '不得补值' in issue
+    assert issue.code == 'fact_lock_value'
+
+
+def test_unanswered_lock_is_a_prohibition_and_needs_no_fabricated_state():
+    """RC-38 行 4：原文未回答的问题只保留禁区；绿基线没有为它造状态也通过，
+    把它当事实锁标注则明确拒绝（不承载状态）。"""
+    brief = _brief()
+    wire = _design_wire_v8(brief)
+    body, errors = _inspect_v8(wire, brief)
+    assert body is not None and not errors, errors      # 没有 unanswered 的承载状态
+    wire['scenes'][0]['beats'][0]['state'][0]['lock'] = _kf(brief, 'unanswered')
+    _, errors = _inspect_v8(wire, brief)
+    issue = next(e for e in errors if '原文未回答锁' in e)
+    assert issue.code == 'fact_lock_unanswered'
+
+
+def test_fact_lock_dangling_duplicate_and_unrealized_are_rejected_precisely():
+    brief = _brief()
+    # 悬空句柄：Brief 未登记的 kf（RC-36「悬空目标」的引用面）。
+    wire = _design_wire_v8(brief)
+    wire['scenes'][0]['beats'][5]['state'][0]['lock'] = 'kf_' + 'f' * 16
+    _, errors = _inspect_v8(wire, brief)
+    assert any(getattr(e, 'code', '') == 'fact_lock_unregistered' and 'kf_' + 'f' * 16 in e
+               for e in errors), errors
+    # 一个锁只由一条已选状态承载：不为同一事实再写一条状态。
+    wire = _design_wire_v8(brief)
+    wire['scenes'][0]['beats'][5]['state'].append(
+        {'at': 'world', 'key': 'return_time_again', 'val': '约半月后归家',
+         'modality': 'expected', 'lock': _kf(brief, 'expected')})
+    _, errors = _inspect_v8(wire, brief)
+    duplicate = next(e for e in errors if getattr(e, 'code', '') == 'fact_lock_duplicate')
+    assert duplicate.context['wire_paths'] == [['scenes', 0, 'beats', 5, 'state', 1]]
+    # 必保义务的锁未被任何状态承载：定位到承载该义务的拍，并给出可执行的补救。
+    wire = _design_wire_v8(brief)
+    wire['scenes'][0]['beats'][5].pop('state')
+    _, errors = _inspect_v8(wire, brief)
+    unrealized = next(e for e in errors if getattr(e, 'code', '') == 'fact_lock_unrealized')
+    assert 'ob02' in unrealized and _kf(brief, 'expected') in unrealized
+    assert 'req_' not in unrealized, '用 Design 看得见的 obNN，不暴露源盲 core_id'
+    assert unrealized.context['wire_paths'] == [['scenes', 0, 'beats', 5]]
+
+
+def test_kf_handle_is_not_a_state_key_in_wire_or_initial_state():
+    """旧写法（kf 作状态键另写一条复述事实的状态）关闭式拒读，指向新写法。"""
+    brief = _brief()
+    wire = _design_wire_v8(brief)
+    wire['scenes'][0]['beats'][5]['state'] = [
+        {'at': 'world', 'key': _kf(brief, 'expected'), 'val': '约半月后归家',
+         'modality': 'expected'}]
+    _, errors = _inspect_v8(wire, brief)
+    assert any('kf 句柄不是状态键' in e and 'scenes.0.beats.5.state.0' in e
+               for e in errors), errors
+    wire = _design_wire_v8(brief)
+    wire['initial_state'] = [{'domain': 'world', 'key': _kf(brief, 'expected'),
+                              'value': '约半月后归家'}]
+    _, errors = _inspect_v8(wire, brief)
+    assert any('kf 句柄不是状态键' in e and 'initial_state.0' in e for e in errors), errors
+    # 锁标注标在 kp 知情行上同样拒（锁只标目标事实状态）。
+    wire = _design_wire_v8(brief)
+    wire['scenes'][0]['beats'][1]['state'] = [
+        {'at': 'yun_niang', 'key': _kp(brief, '夫君像是看穿了什么'), 'op': 'unset',
+         'lock': _kf(brief, 'expected')}]
+    _, errors = _inspect_v8(wire, brief)
+    assert any('lock 只能标在目标事实状态上' in e for e in errors), errors
+
+
+def test_binding_refuses_a_mapping_that_points_at_no_state_in_the_body():
+    """映射必须指向 BodyDesign 实际持有的事实：悬空即拒（I-16）。"""
+    from dataclasses import replace
+    brief = _brief()
+    wire = _design_wire_v8(brief)
+    body, errors = _inspect_v8(wire, brief)
+    assert body is not None and not errors, errors
+    model = DesignWireV8.model_validate(wire)
+    moved = tuple(replace(m, beat=0) if m.kf_id == _kf(brief, 'expected') else m
+                  for m in design_fact_marks(model))
+    binding, errors = derive_semantic_binding(
+        design_placements(model), body, _checkpoint(), moved)
+    assert binding is None
+    assert any('承载状态在 BodyDesign 中不存在' in e for e in errors), errors

@@ -323,6 +323,9 @@ class ChapterObservationWire(StrictModel):
 class PropositionPairing(StrictModel):
     """同一命题：把不同章观察里的同义命题句柄配成一对（D8）。
 
+    措辞不同的同义表述也算同一，语义判断归 associate；compiler 不以文本
+    全等推翻配对，按阅读序采用类内最早建立的文本作为正式代表。
+
     关联只建立同一性与引用：合并后由 compiler 授予唯一正式 ID，不移动事实
     成立、角色知情或读者揭示时点。配对缺项保持未决（compile 拒绝发布并按
     item 报告），不默认合并也不默认不同。

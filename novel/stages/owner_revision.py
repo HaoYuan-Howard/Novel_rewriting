@@ -67,6 +67,9 @@ class OwnerRevisionRequired(ValueError):
         self.node = node
         self.owner = owner
         self.issues = tuple(issues)
+        # 仅用于诊断留证，不参与回派控制；完整候选报告在此存一次，
+        # 不按issue重复进入后继语义请求。
+        self.context: dict = {}
 
 
 class OwnerRevisionStop(ExecutionError):

@@ -36,10 +36,10 @@ PV = 'stage2-chapters-v4'   # R10a a1：章观察独立协议字面量（names �
 
 
 def _design_wire_v7():
-    """stage4-design-v7（CS-3）：real 承载标注替 bind；义务 ob01–ob03 的接受拍
+    """stage4-design-v8（CS-3）：real 承载标注替 bind；义务 ob01–ob03 的接受拍
     都是首拍（与原 bind wire 等价）；kp 知情行经 ob02 的锁派生，不写在 wire。"""
     return {
-        'protocol_version': 'stage4-design-v7',
+        'protocol_version': 'stage4-design-v8',
         'book_style': '冷峻克制的第三人称叙事，重对话张力。',
         'character_voices': [{'char_id': 'yun', 'voice': '冷峻'}],
         'initial_state': [],
@@ -366,7 +366,7 @@ def test_concealed_fact_reaches_writer_as_pending_reader_confirmation(tmp_path):
                               'basis': [{'segment': 'e01_01',
                                          'quote': '夫君与云娘一处住着'}]}])]}
     design = {
-        'protocol_version': 'stage4-design-v7',
+        'protocol_version': 'stage4-design-v8',
         'book_style': '冷峻克制的第三人称叙事。',
         'character_voices': [{'char_id': 'yun', 'voice': '冷峻'}],
         'initial_state': [],

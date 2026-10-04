@@ -45,7 +45,8 @@ from contracts.schema.state import SurfaceRelease
 
 __all__ = ['BookBrief', 'ChapterContinuity', 'ChapterIR', 'ChapterNavEntry',
            'ChapterWriterPacket', 'PacketBrief', 'PreviousChapterEnding',
-           'RealizationContract', 'ReleaseScheduleEntry', 'WriterBookIR']
+           'RealizationContract', 'ReleaseScheduleEntry', 'WithheldNameBinding',
+           'WriterBookIR']
 
 
 class ChapterNavEntry(StrictModel):
@@ -129,6 +130,24 @@ class ChapterContinuity(StrictModel):
     anchor_event: str | None = None
 
 
+class WithheldNameBinding(StrictModel):
+    """本章尚未释放、但已证明唯一绑定某一人物的完整登记称谓（CS-F2 称谓投影的验证材料）。
+
+    只收**完整登记称谓**：来自该人物 Characters 的 surface、含姓名部件、全书只属于
+    这一人物、字面长度≥2，且不是姓／家族构词本身。短姓、关系称呼、多义字面与未登记
+    表达没有绑定——不据字符串相似性推断人物，由原 owner 登记或改写。该表只让写手
+    材料在渲染时把这类字面换成本场已释放的称谓；原字段、人物来源与内部身份保持不变，
+    衍生文本不反写事实。
+    """
+
+    literal: str = Field(min_length=2)
+    char_id: str = Field(min_length=1)
+    #: 已登记的、严格包含该字面的更长称谓（本章禁用的与已释放的都算）。渲染期这些区间
+    #: 先被认领并原样保留——例如绑定字面「陆大哥」不会在更长的「陆大哥夫人」里被单独
+    #: 替换。预先随绑定算好，渲染因此只依赖本表，不依赖验证材料（禁用／许可字面）。
+    enclosing: tuple[str, ...] = Field(default=(), min_length=0)
+
+
 class ChapterIR(StrictModel):
     """单章静态写作输入：章目的、篇幅目标、本章场景的双视图上下文与验证材料。
 
@@ -137,6 +156,8 @@ class ChapterIR(StrictModel):
     携带——Stage5 只做语言实现，不再从 Design／Characters 现场推导。
     rc10（R2）：`continuity` 必填——本章 entry＋上一章末场机械投影（章缝合
     契约的数据面；缺失即拒，不用空值冒充「已考虑承接」）。
+    rc16（CS-F2）：`withheld_bindings` 是禁用字面中「可唯一绑定人物」的子集，
+    供渲染期确定性投影；空表是合法值（没有可证明的绑定＝一律不投影）。
     """
 
     chapter_ordinal: int = Field(ge=1)
@@ -150,12 +171,17 @@ class ChapterIR(StrictModel):
     #: 本章禁用字面（全部专名／带名 surface 与家族级构词 − 已释放称谓；
     #: 机械 validator 的检查面，不渲染进 Writer 阅读面）。
     withheld_literals: tuple[str, ...] = Field(default=(), min_length=0)
+    #: 禁用字面中已证明唯一绑定人物的完整登记称谓（渲染期投影的验证材料，不进阅读面）。
+    withheld_bindings: tuple[WithheldNameBinding, ...] = Field(default=(), min_length=0)
 
     @model_validator(mode='after')
     def _scenes_unique(self) -> 'ChapterIR':
         ids = [s.scene_id for s in self.scenes]
         if len(set(ids)) != len(ids):
             raise ValueError(f'章 {self.chapter_ordinal} 内 scene_id 重复')
+        literals = [b.literal for b in self.withheld_bindings]
+        if len(set(literals)) != len(literals):
+            raise ValueError(f'章 {self.chapter_ordinal} 的称谓绑定字面重复')
         return self
 
 
@@ -167,7 +193,7 @@ class WriterBookIR(StrictModel):
     rc8（D2，B4）：ChapterIR 增章级验证材料；完整 IR 只作存储与审计面，
     运行时经 `ChapterWriterPacket` 按章投影。"""
 
-    contract_version: Literal['str06-rc14'] = 'str06-rc14'
+    contract_version: Literal['str06-rc16'] = 'str06-rc16'
     book_brief: BookBrief
     chapters: tuple[ChapterIR, ...] = Field(min_length=1)
     provenance: FreeProvenance | LlmProvenance | None = Field(

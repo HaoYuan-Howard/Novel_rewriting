@@ -97,16 +97,18 @@ from novel.stages.owner_revision import (
     resolve_owner_issues, complete_owner_dispatch, revision_gate, revision_prompt_for_owner,
 )
 from novel.stages.stage4 import (
-    assemble_body_design, assemble_hook_design,
+    assemble_hook_design,
     assemble_preserve, compile_execution_plan, compile_hook_context,
-    compile_writer_book_ir, derive_semantic_binding, design_obligation_index,
-    design_placements, knowledge_change_index, lock_order_violations, obligation_core_id,
+    compile_writer_book_ir, design_obligation_index,
+    knowledge_change_index, lock_order_violations, obligation_core_id,
     project_brief, project_design_input, project_preserve_view, preserve_revision_wire, publish_graph,
 )
-from contracts.schema.design import DesignWireV7, STAGE4_DESIGN_WIRE_PROTOCOL
 from contracts.schema.observation import STAGE2_NAMES_PROTOCOL
 from contracts.schema.orchestration import LegacyLlmProfile
-from novel.stages.stage4 import inspect_body_materials, plan_material_repairs
+from novel.stages.stage4 import (
+    inspect_body_materials, inspect_design_candidate, locate_design_patches,
+    plan_material_repairs,
+)
 from novel.core.validation import ValidationMessage
 from novel.stages.stage5 import (
     AnsweredText, HOOK_VALIDATOR_VERSION, MAX_REWRITES, MECHANICAL_CHECKS,
@@ -765,6 +767,9 @@ def run_body_design(ctx: ChainContext) -> dict:
         pack_prompt(design_rules(known_char_ids=set(chars.characters),
                                  knowledge_refs={ref: change.holder == 'reader' and change.mode == 'known'
                                                  for ref, (_, change) in knowledge_change_index(obligation_index).items()},
+                                 # 禁区（unanswered）不承载状态，不进 lock 闭集。
+                                 fact_lock_ids=[f.kf_id for f in brief.fact_locks
+                                                if f.kind != 'unanswered'],
                                  registered_surfaces=expand_surface_releases(
                                      {cid: {s.surface for s in c.surfaces} for cid, c in chars.characters.items()},
                                      chars.name_structure)),
@@ -773,51 +778,63 @@ def run_body_design(ctx: ChainContext) -> dict:
                     constraints=constraints.model_dump(mode='json')),
         'stage4/design/body_design.json')
 
-    def design_compile(w):
-        body, errors = assemble_body_design(
-            w, known_char_ids=set(chars.characters), constraints=constraints,
-            name_projection=chars.name_projection(), name_structure=chars.name_structure,
-            expression_requirements=brief.expression,
-            source_narration=brief.source_narration,
-            registered_surfaces={cid: {s.surface for s in c.surfaces}
-                                 for cid, c in chars.characters.items()},
-            brief=brief, obligations=obligation_index)
-        if errors:
-            return None, None, errors
-        # CS-3（bind 退役）：real 承载标注是义务落点的唯一声明处——canonical
-        # BodyDesign 与 SemanticBinding 同源派生、同一修订轮校验（错误并报）。
-        placements, placement_errors = _design_placements_of(w)
-        if placement_errors:
-            return None, None, placement_errors
-        binding, errors = derive_semantic_binding(placements, body, checkpoint)
-        if errors:
-            return None, None, errors
-        inspection = inspect_body_materials(
-            body, binding, brief, chars, budget=ctx.budget,
+    def inspect(w):
+        return inspect_design_candidate(
+            w, checkpoint=checkpoint, brief=brief, obligations=obligation_index,
+            chars=chars, constraints=constraints,
             length_band=ctx.length_band, book_title=ctx.book_title)
-        repairs = plan_material_repairs(inspection.materials, body=body, binding=binding,
-                                        brief=brief, structure=chars.name_structure)
-        # 非Design责任的候选留给薄编排处理；validator不落issue、不偷改输入。
-        # 已购回答已耐久，仍禁止发布；不能拿外部／代码缺陷购买Design自修。
-        if repairs and any(r.owner != 'design' or r.action == 'stop' for r in repairs):
-            return body, binding, []
-        return body, binding, list(inspection.errors) + [
-            ValidationMessage(r.issue.message, r.issue.context['material_identity']) for r in repairs]
 
-    dw, design_ref = ctx.ask('design', design_prompt, lambda w: design_compile(w)[2])
-    body, binding, errors = design_compile(dw)
-    if errors:
-        raise ValueError(errors)
-    inspection = inspect_body_materials(
-        body, binding, brief, chars, budget=ctx.budget,
-        length_band=ctx.length_band, book_title=ctx.book_title)
-    if inspection.errors:
-        raise MechanicalDefectStop('Design材料预检失败', node='str06.stage4.body_design',
-                                   issues=inspection.errors)
-    if inspection.materials:
-        _backfill_material_repairs(repository, plan_material_repairs(
-            inspection.materials, body=body, binding=binding, brief=brief,
-            structure=chars.name_structure), raised_by='str06.stage4.body_design')
+    def repairs_for(inspection):
+        if not inspection.materials:
+            return []
+        # 单项只保留自己的来源与可修位置；完整报告在停止上下文中存一次，
+        # 不复制进每条issue及其后继prompt，避免聚合诊断反而放大返修输入。
+        return plan_material_repairs(inspection.materials,
+                                      body=inspection.body, binding=inspection.binding,
+                                      brief=brief, structure=chars.name_structure)
+
+    last_inspection = None
+
+    def validate(w):
+        nonlocal last_inspection
+        last_inspection = inspection = inspect(w)
+        repairs = repairs_for(inspection)
+        # 非Design责任的候选留给薄编排处理；validator不落issue、不偷改输入。
+        # 此处只接受响应用于回派，并非接受正式Design。全部预检结果随回派留证；
+        # 上游优先，禁止在已知上游错误下继续购买Design自修。
+        if repairs and any(r.owner != 'design' or r.action == 'stop' for r in repairs):
+            return []
+        return inspection.feedback(list(inspection.errors) + [
+            ValidationMessage(r.issue.message, r.issue.context['material_identity']) for r in repairs])
+
+    try:
+        # CS-F1 局部修订（RC-47）：判据已在判定处给每条问题带 wire 路径；可全部定位时
+        # 只把最小完整父项发回返修，合并后重跑**完整**候选预检；有任一问题无法定位
+        # （全局覆盖闸、上游派生材料等）自动退整份返修，不静默漏项。
+        dw, design_ref = ctx.ask('design', design_prompt, validate,
+                                 patch=locate_design_patches)
+    except ValidationStop as exc:
+        if last_inspection is not None:
+            exc.context['candidate_preflight'] = last_inspection.report()
+        raise
+    inspection = inspect(dw)
+    repairs = repairs_for(inspection)
+    if repairs:
+        # 上游输入将变化时，不为即将过期的Design诊断提前消耗回派轮数。
+        # 全部问题仍在同一报告中；上游修订后重新计算Design自己的问题。
+        upstream = [r for r in repairs if r.owner != 'design' or r.action == 'stop']
+        try:
+            _backfill_material_repairs(repository, upstream or repairs,
+                                       raised_by='str06.stage4.body_design')
+        except (OwnerRevisionRequired, OwnerRevisionStop, MechanicalDefectStop) as exc:
+            exc.context['candidate_preflight'] = inspection.report()
+            raise
+    if not inspection.passed:
+        stop = MechanicalDefectStop('Design候选完整预检失败', node='str06.stage4.body_design',
+                                   issues=tuple(inspection.feedback(list(inspection.errors))))
+        stop.context['candidate_preflight'] = inspection.report()
+        raise stop
+    body, binding = inspection.body, inspection.binding
     # 双产物按输出组一次发布（R6 权威；I-25：semantic_binding 的唯一 writer
     # 是 body_design——bind LLM 退役后承载位不再有第二个声明处，两份产物同
     # bundle 同 seal）。bind／hook_design 的单节点输入从盘面闭合。
@@ -828,26 +845,7 @@ def run_body_design(ctx: ChainContext) -> dict:
                     owners=('design',), refs=(design_ref,)),
     ))
     return {'scenes': len(body.scenes), 'entries': len(binding.entries),
-            'unbound': len(binding.unbound)}
-
-
-def _design_placements_of(wire: Any) \
-        -> tuple[dict[str, list[tuple[int, int]]] | None, list[str]]:
-    """design wire → real 承载标注投影（ob → 标注拍阅读序）。
-
-    只有 v6 wire 有 real 面——bind 退役后 v5 直通不再能产出承载位（I-13：
-    旧协议不补默认值取得新资格）。闭集越界由 derive_semantic_binding 精确报。
-    """
-    if wire.get('protocol_version') != STAGE4_DESIGN_WIRE_PROTOCOL:
-        return None, [
-            f'design wire 必须是 {STAGE4_DESIGN_WIRE_PROTOCOL}'
-            f'（实得 {wire.get("protocol_version")!r}）——bind 退役后 real 承载'
-            '标注是义务落点的唯一声明处，v5 直通面不再驱动生产链']
-    try:
-        model = DesignWireV7.model_validate(wire)
-    except ValidationError as exc:
-        return None, [f'design 瘦 wire 协议校验失败：{exc}']
-    return design_placements(model), []
+            'unbound': len(binding.unbound), 'candidate_preflight': inspection.report()}
 
 
 # ─── stage4 hook_design ──────────────────────────────────────────────────────
@@ -963,6 +961,8 @@ def run_compile_stage4(ctx: ChainContext) -> dict:
                     'chapters': len(writer_ir.chapters), 'scenes': len(graph.scenes),
                     'obligations': len(binding.obligations), 'guard_errors': problems,
                     'material_issues': [asdict(issue) for issue in material_issues],
+                    # 称谓投影留痕（CS-F2）：显式、可观测，不含行文本。
+                    'name_projections': list(inspection.name_projections),
                     'chapter_budgets': {c.chapter_ordinal: c.length_budget
                                         for c in writer_ir.chapters}}
     # 失败结果只进诊断：guard report 先落（问题清单与预算读数留证），正式位不写。
@@ -988,7 +988,8 @@ def run_compile_stage4(ctx: ChainContext) -> dict:
         # token（`count_text_tokens` 同 tokenizer、无请求 framing）与密度。
         PublishItem(rel='stage4/acceptance/packet_metrics.json',
                     value=packet_metrics(writer_ir,
-                                         token_counter=count_text_tokens)),
+                                         token_counter=count_text_tokens,
+                                         fact_bindings=binding.fact_bindings)),
     ))
     resolve_owner_issues(repository, owner='design',
                          raised_by='str06.stage4.compile')
@@ -1540,6 +1541,8 @@ def _record_failure(ctx: ChainContext, node_id: str, exc: Exception) -> None:
         # 执行设施统一错误形状：stage/node/item/phase/code/context（I-36）。
         status.update(exc.as_status())
         status['failed_node'] = exc.node or node_id
+    elif isinstance(exc, OwnerRevisionRequired):
+        status['error_context'] = exc.context
     repository.write('runtime/workflow_status.json', status)
 
 

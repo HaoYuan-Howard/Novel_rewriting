@@ -1307,26 +1307,29 @@ def test_obligation_unbound_replans_across_single_node_subprocesses(base,
     assert (book / 'stage4/grounding/semantic_binding.json').is_file()
     assert (book / 'stage4/compiled/execution_plan.json').is_file()
 
-    # ③ 修订提示真实发生：design 的第二轮请求带【修订要求】段（承载闸拦下的
-    #    real 缺失问题集）。CS-I输入按ob短名寻址，不再发送派生req ID；
-    #    接受闸的问题定位和源盲边界仍须成立。
+    # ③ 修订提示真实发生：design 的第二轮请求。CS-I输入按ob短名寻址，不再发送派生
+    #    req ID；接受闸的问题定位和源盲边界仍须成立。
     from novel.stages.stage4 import obligation_core_id
     revision_payload = _turn_request_payload(base, book, 'str06.stage4.body_design',
                                              ordinal=2)
     messages = revision_payload['messages']
     revision_user = messages[-1]['content']
-    assert '【修订要求】' in revision_user
     assert obligation_core_id('ob01') not in revision_user
     assert 'stage4-design-input-v1' in revision_user and 'ob01' in revision_user
-    requirement_section = revision_user.split('【修订要求】', 1)[1]
-    requirement_only = requirement_section.split('上一版全文', 1)[0]
-    # CS-3：obNN 是 v6 义务清单的正式短名（real 标注的闭集词汇，D6），覆盖闸
-    # 消息以 ob 定位合法；这里钉问题面确为 real 承载缺失。
     if design_fault == 'obligation_unbound':
+        # 必保义务覆盖闸是全局判据，没有可局部定位的 wire 路径 → 整份修订【修订要求】。
+        # CS-3：obNN 是义务清单的正式短名（real 标注的闭集词汇，D6）；问题面确为
+        # real 承载缺失。
+        assert '【修订要求】' in revision_user
+        requirement_only = revision_user.split('【修订要求】', 1)[1].split('上一版全文', 1)[0]
         assert 'real' in requirement_only and '必保义务' in requirement_only
     else:
-        assert '认知know拍位' in requirement_only and '陆大哥' in requirement_only
-        assert 'b01_01.c1' not in requirement_only, 'Design反馈保持源盲'
+        # Design 自有文本的名称冲突在判定处带 wire 路径 → 只把出问题的拍发回条目返修
+        # （RC-47）；合并后仍重跑完整预检。反馈保持源盲，没有跨节点回派账。
+        assert '【条目返修】' in revision_user and '【修订要求】' not in revision_user
+        item_section = revision_user.split('【条目返修】', 1)[1]
+        assert '路径 scenes[0].beats[0]' in item_section and '陆大哥' in item_section
+        assert 'b01_01.c1' not in item_section, 'Design反馈保持源盲'
         assert read_owner_issue_file(Str06Repository(book), 'preserve') is None
 
     # ④ 付费账：design 一原轮＋一修订轮；bind 不存在（退役）；下游照常。

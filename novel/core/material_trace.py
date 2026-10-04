@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, Literal
+from typing import Callable, Iterable, Literal
 
 
 MaterialKind = Literal['design', 'obligation', 'knowledge', 'world', 'expression',
@@ -19,10 +19,24 @@ class MaterialSource:
 
 
 @dataclass(frozen=True)
+class NameProjectionHit:
+    """一次确定性称谓投影：已证明唯一绑定人物的完整登记称谓 → 本场已释放称谓。
+
+    只留痕字面、人物与替换结果（不含所在行文本）；原字段文本由 `MaterialSource.text`
+    保持不变，衍生文本不反写事实（CS-F2）。
+    """
+
+    literal: str
+    char_id: str
+    replacement: str
+
+
+@dataclass(frozen=True)
 class MaterialPart:
     text: str
     sources: tuple[MaterialSource, ...] = ()
     positive: bool = True
+    projected: tuple[NameProjectionHit, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -49,13 +63,22 @@ class MaterialIssue:
 
 
 class MaterialLines:
-    """renderer在拼接一行时显式登记原子来源，去重时保留全部来源证明。"""
+    """renderer在拼接一行时显式登记原子来源，去重时保留全部来源证明。
 
-    def __init__(self) -> None:
+    `project` 是渲染期的确定性称谓投影（仅作用于正向行）：返回 `(新文本, 命中)`。
+    来源 `MaterialSource.text` 始终是原字段文本，投影只改变送达写手的衍生行。
+    """
+
+    def __init__(self, project: Callable[[str], tuple[str, tuple[NameProjectionHit, ...]]]
+                 | None = None) -> None:
         self._parts: list[MaterialPart] = []
+        self._project = project
 
     def append(self, text: str, *sources: MaterialSource, positive: bool = True) -> None:
-        self._parts.append(MaterialPart(text, tuple(sources), positive))
+        hits: tuple[NameProjectionHit, ...] = ()
+        if positive and self._project is not None:
+            text, hits = self._project(text)
+        self._parts.append(MaterialPart(text, tuple(sources), positive, hits))
 
     def extend(self, texts: Iterable[str]) -> None:
         for text in texts:
@@ -66,10 +89,13 @@ class MaterialLines:
             return tuple(self._parts)
         by_text: dict[str, list[MaterialSource]] = {}
         positive: dict[str, bool] = {}
+        projected: dict[str, list[NameProjectionHit]] = {}
         for part in self._parts:
             by_text.setdefault(part.text, []).extend(part.sources)
             positive[part.text] = positive.get(part.text, False) or part.positive
-        return tuple(MaterialPart(text, tuple(dict.fromkeys(sources)), positive[text])
+            projected.setdefault(part.text, []).extend(part.projected)
+        return tuple(MaterialPart(text, tuple(dict.fromkeys(sources)), positive[text],
+                                  tuple(dict.fromkeys(projected[text])))
                      for text, sources in by_text.items())
 
     def __iter__(self):

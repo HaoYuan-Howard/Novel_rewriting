@@ -268,7 +268,9 @@ STR06_ARTIFACT_RC_VERSIONS: Final[dict[str, str]] = {
     # 规则 id）；ConstraintSpec.domain 改类别标签。旧 rc12 盘面经 store
     # read_model 的登记迁移归一后读入（r10b 起的现役产物不拒读）。
     'stage4/grounding/reconstruction_brief.json': 'str06-rc14',
-    'stage4/grounding/semantic_binding.json': 'str06-rc12',
+    # rc16（2026-10-04 CS-F2）：Binding 增 fact_bindings（事实锁→已有目标状态的
+    # 映射，只存引用不复制 value）；旧 rc12 Binding 缺该映射、无损推不回，拒读。
+    'stage4/grounding/semantic_binding.json': 'str06-rc16',
     'stage4/compiled/execution_plan.json': 'str06-rc14',
     'stage4/acceptance/guard/compile.json': 'str06-rc12',
     'stage4/acceptance/guard/report.json': 'str06-rc12',
@@ -289,7 +291,9 @@ STR06_ARTIFACT_RC_VERSIONS: Final[dict[str, str]] = {
     # compile 时算好）；完整 IR 只作存储与审计，运行时按章投影章包、不落盘。
     # rc10（R2）：拍级读取值挂拍（AUD-03）、线程投影面、continuity 分区与
     # 书级 world_rules 进 BookBrief——IR 形状升 rc10。
-    'stage4/ir/writer_book_ir.json': 'str06-rc14',
+    # rc16（2026-10-04 CS-F2）：ChapterIR 增 withheld_bindings（禁用字面中已证明唯一
+    # 绑定人物的完整登记称谓，供渲染期确定性投影）；旧 rc14 IR 拒读，免费重编译。
+    'stage4/ir/writer_book_ir.json': 'str06-rc16',
     'stage5/hook/hook.txt': 'str06-rc12',
     'stage5/hook/receipt.json': 'str06-rc12',
     'stage5/body/ch{nn}.txt': 'str06-rc12',
