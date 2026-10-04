@@ -514,6 +514,52 @@ def test_historical_adoption_zero_new_purchase_and_no_double_count(tmp_path):
     assert provenance['adopted_models'] == ['deepseek-flash']
 
 
+@pytest.mark.parametrize('route', ['request_file', 'work_unit'])
+def test_adopted_answer_itself_mints_provenance_in_a_different_base(tmp_path, route):
+    """采用回来的回答直接作 `refs` 写正式产物（生产写盘就是这样传的）。
+
+    历史采用没有本根工作单元 attempt（`AdoptionRef` 契约）：历史实付留在源根账内，
+    本根只有那一行零 token 的 cached 行。来源账不得拿源根的 attempt_id 去本根成本账
+    聚合用量（那是别的账本里的行，必然 `ProvenanceRefused`，整条免费恢复路径作废）；
+    生成事实如实登记，用量不认领，审计链（源 attempt）留在 `historical` 里。
+    """
+    if route == 'request_file':
+        root, identity, request = _source_root(tmp_path)
+        source_attempt = 'orig-attempt'
+    else:
+        root, identity, request = _work_unit_source_root(tmp_path)
+        source_attempt = 'att-wu'
+    base, repo, ledger, session = _candidate(tmp_path, root)
+    _data, answer = ask_json(session, 'preserve', request, lambda _: [])
+    assert answer.historical is not None
+    rel = 'stage4/grounding/semantic_binding.json'
+    repo.write(rel, {'x': 1}, owners=('design',), refs=(answer,))
+    provenance = repo.inspect(rel)['_provenance']
+    assert provenance['adopted_models'] == ['deepseek-flash']
+    assert provenance.get('usage') is None, '历史实付不得在本根来源账里再认领一次'
+    bundle = repo.context.commit_bundle(
+        node='str06.stage4.preserve', rel=rel, artifact_sha256='0' * 64, inputs={},
+        refs=(answer,), run_id='run', created_at=1)
+    adoption = bundle['adoptions'][0]
+    assert adoption['attempt_id'] == '', '本根没有这个 attempt'
+    assert adoption['historical']['attempt_id'] == source_attempt, '源 attempt 的审计链保留'
+
+
+@pytest.mark.parametrize('route', ['request_file', 'work_unit'])
+def test_adopt_root_given_as_relative_path_is_resolved(tmp_path, monkeypatch, route):
+    """`--adopt-root` 传相对路径也要能用：源根的证据路径一律按绝对路径比对，
+    不能抛裸 `ValueError`（exit 70 崩溃未知）把一次合法的免费采用打成故障。"""
+    if route == 'request_file':
+        root, identity, request = _source_root(tmp_path)
+    else:
+        root, identity, request = _work_unit_source_root(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    base, repo, ledger, session = _candidate(tmp_path, root.relative_to(tmp_path))
+    data, answer = ask_json(session, 'preserve', request, lambda _: [])
+    assert data == {'entries': []} and answer.historical is not None
+    assert session.adopt_roots[0].is_absolute()
+
+
 def test_historical_adoption_blocks_corrupted_evidence(tmp_path):
     root, identity, request = _source_root(tmp_path, tamper='content')
     base, repo, ledger, session = _candidate(tmp_path, root)

@@ -50,7 +50,7 @@ ch03主体误判及ob44无依据认知限制分别归源观察和Preserve，不�
 | CS-F1 完整候选预检 | [~] RC-44～45、RC-47已实现并验证（含模型真回`patches`的stage用例）；读取／确认闭合等未转路径的错误类仍整份修订，Hook设计不接局部修订 | 能构造的候选聚合独立问题，结构缺失明确未运行；真实body_design／恢复消费者及局部修订定位闭合 |
 | CS-F2 事实引用与名称呈现 | [x] 事实锁引用（`stage4-design-v8`，rc16）与Writer称谓投影（IR rc16／renderer v10）已实现并验证；**Hook材料尚未投影**；破坏协议已显式升版，旧rc15根拒收 | 删除重复kf状态，正式绑定及结构／语义结果分开；呈现层按已证明人物绑定投影，Writer／Hook／Stage7消费闭合，破坏协议显式升版 |
 | CS-F3 关键语义离线标定 | [ ] 用户已选择先标定 | 高影响主体／知情及目标事实对应含正反例；支持、矛盾、未确定及漏选／误拦分别报告；通过后才进入启用验收 |
-| CS-F4 本书正式恢复 | [ ] 工程稳定后执行 | 正式owner修订源观察及无依据限制，审计62项义务重复／过保，按实际依赖重建，历史与人工干预留证；版本及付费权限先核对 |
+| CS-F4 本书正式恢复 | [~] 零付费前置核对已做：Stage2全节点与Preserve可免费进rc16新根，Design必须重购；owner修订与重建未做 | 正式owner修订源观察及无依据限制，审计62项义务重复／过保，按实际依赖重建，历史与人工干预留证；版本及付费权限先核对 |
 | CS-F5 成书与成本对照 | [ ] 不以Stage4继续运行代替完成 | 相关目标章节与最终正文核验，六维与自动程度分别报告，核验新增成本和返修节省量同口径比较 |
 
 CS-F1首个子批（2026-10-04，基线HEAD `414b6203`＋本工作树未提交变更）：
@@ -113,6 +113,25 @@ CS-F1第二子批与CS-F2（2026-10-04，基线HEAD `414b6203`＋本工作树未
   另做两个不进仓库的对抗式探针（随机wire／错误／称谓文本）：定位器4000例（683例可定位，无重叠、覆盖完整、确定、不改输入）与投影6000例（可逆、确定、不拆更长称谓），均通过。
 - **未完成与限制**：未花真实付费；v8提示词与`lock`闭集在真实模型上的表现**未验证**（CS-F3／F4用真实调用时才会知道模型是否稳定标注）；未做离线语义标定；本书未恢复；
   Hook材料投影、读取／确认闭合的路径化、局部修订接入Hook设计均未做。
+
+CS-F4前置核对（2026-10-05，零付费、零外发）：只用免费入口（`--check-only`与确定性节点），不带`--yes`／`--allow-egress`。
+在干净新根`outputs/cs_f2_adopt_probe`（`stage0.remove`＋`stage1.partition`重放，与rc15根的stage0/1逐字节一致）上，按现役采用通路复核旧根《夫君的报恩》已购结果
+能否进rc16新根：book与8个换算采用的章观察经`--wire-dir`通过（wire由rc15根`runtime/revisions/evidence`按owner摆出），ch04／06／08（rc15根实付）、names、associate、
+Preserve（62项义务）按同请求身份通过，`stage2.compile`确定性重放（6人物／5初始状态／11章／0未决）。**Design无同请求身份结果**（wire v8与提示词换版），是第一个必须重购的owner。
+探针根账本11行全是零token的`historical-adoption`行、付费行0；rc15根与`cs_golden_20261004`根没有任何文件被改动。
+
+核对暴露并修复两处既有的采用路径缺陷（不是本批改动引入）：
+① `DurableAnswer.adoption_ref`把**源根**的`attempt_id`带进来源账，写正式产物时`usage_for_attempt_rows`去**本根**成本账聚合用量，必然`ProvenanceRefused`
+（「被引用的attempt不在成本账」），与`AdoptionRef`「历史采用没有本根attempt、成本聚合为空」的契约相悖。原单测手造不带attempt的引用，从未走过
+「采用回来的回答直接作refs写正式产物」这一步，所以一直没暴露；现历史采用的引用不带attempt，源attempt的审计链仍在`historical.attempt_id`。
+② `--adopt-root`传相对路径时`_work_unit_evidence`抛裸`ValueError`（exit 70，崩溃未知）；现`PaidRequestSession`构造时转绝对路径（与`work_units._safe`同口径，不解析符号链接）。
+两处共4个红转绿用例（`tests/test_str06_f7a_wiring.py`：两条采用路线×直接作refs写产物／相对路径；红跑4项全败于上述原因，`adopt_red.xml`）；
+采用相关四个模块（f7a_wiring／repairs／r9／cli_dispatch）102项通过102／失败0／跳过0（`adopt_green.xml`）。
+共享付费基础设施变化，选择器按`--changed`（REQUIREMENTS、`paid_requests.py`、f7a_wiring三文件）选出2883项默认非corpus用例（`adopt_regression_selection.json`），
+全部通过：2883通过／0失败／0跳过（`adopt_regression.xml`，`-n 4`，约854秒）；这是该修复的影响面回归，不是整项目验收，golden set未运行。
+
+限制：这是「已购响应在rc16根里能否按身份采用」的结论，**不是恢复本书**——ch03主体误判与ob44无依据限制尚未经owner修订，Design重购、Hook、Writer与Stage7均未做。
+`--check-only`会写采用产物与零token账行（只写探针根），故该根不是冻结证据；正式恢复须在授权后用独立新根重放同一通路。真实调用成本只记未测。
 
 2026-10-04证据寻址批（CS-A，RC-26～29，rc15，用户批准）：cs_golden三书全部停在
 `str06.stage2.chapters`，根因是证据切分只在「。」后切、段号标签悬在上一段下方，模型

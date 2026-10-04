@@ -319,10 +319,15 @@ class DurableAnswer(NamedTuple):
         return self.adoption_ref({'system': self.system, 'user': self.user})
 
     def adoption_ref(self, prompts: dict[str, str]) -> AdoptionRef:
+        # 历史采用没有本根 attempt（`AdoptionRef` 契约）：`self.attempt_id` 是源根账里的
+        # 行，来源账拿它去本根成本账聚合用量必然缺行（`ProvenanceRefused`），免费恢复整条
+        # 作废。历史实付留在源根账内，本根只有 `_record_adoption` 那一行零 token 的
+        # cached 行；源 attempt 的审计链仍在 `historical['attempt_id']`。
+        attempt_id = '' if self.historical is not None else self.attempt_id
         return AdoptionRef(
             owner=self.owner, model=self.model, prompts=dict(prompts),
             sid=self.sid, request_sha256=self.request_sha256, unit_id=self.unit_id,
-            turn_id=self.turn_id, attempt_id=self.attempt_id,
+            turn_id=self.turn_id, attempt_id=attempt_id,
             response_sha256=self.response_sha256, historical=self.historical)
 
 
@@ -404,7 +409,9 @@ class PaidRequestSession:
         self.agent_run_id, self.agent_epoch_id = (
             commander if commander is not None else ('', ''))
         self.candidate_session_run_id = ledger.parent_run_id
-        self.adopt_roots = tuple(Path(root) for root in adopt_roots)
+        # 源根证据路径（工作单元目录等）按绝对路径比对；相对的 `--adopt-root` 在这里
+        # 一次转绝对（与 `work_units._safe` 同口径，不解析符号链接）。
+        self.adopt_roots = tuple(Path(root).absolute() for root in adopt_roots)
         # 未送达重试：首发＋最多 3 次，退避 2/4/8 秒（str06.md 失败表）。
         self.retry_policy = retry_policy or TransportRetryPolicy(
             max_retries=WORK_UNIT_MAX_DELIVERY_ATTEMPTS - 1, backoff_base=2.0)
