@@ -212,13 +212,16 @@ class ChainContext:
         return max(1, min(configured, item_count))
 
 
-def _segment_sentences(text: str) -> list[str]:
-    """按句号切句（证据切分的唯一实现；v13 细化到句，不再按 300 字合并）。
+def _segment_paragraphs(text: str) -> list[str]:
+    """一个非空自然段一段（证据切分的唯一实现；RC-26，2026-10-04）。
 
-    只在句号边界切：不并段（并段会把整章短章塌成一段，source_refs 失去分辨力），
-    也不在句中硬切（句子完整性即上下文）。空段丢弃。
+    段文本＝原文一行去掉首尾空白（含全角缩进）后的连续片段。旧实现只在
+    「。」后切：对白收尾「」」落到下一段开头、问号／叹号收尾的连续自然段
+    并成一段，渲染时段号悬在上一段文字下方——模型系统性地把引文挂到偏大
+    的段号上（三书停书根因）。自然段是模型肉眼可见的单位，段号与文字
+    一一对应；收尾引号天然留在本句所在段。
     """
-    return [s for s in re.split(r'(?<=。)', text) if s.strip()]
+    return [line.strip() for line in text.splitlines() if line.strip()]
 
 
 def build_evidence(chapters, hook_copy: str | None = None) -> dict:
@@ -232,11 +235,11 @@ def build_evidence(chapters, hook_copy: str | None = None) -> dict:
     """
     evidence: dict[str, dict] = {}
     if hook_copy and hook_copy.strip():
-        for i, segment in enumerate(_segment_sentences(hook_copy), 1):
+        for i, segment in enumerate(_segment_paragraphs(hook_copy), 1):
             evidence[f'e00_{i:02d}'] = {'chapter': 0, 'text': segment, 'pre_chapter': True}
     for chapter in chapters:
         no, text = chapter['chapter_ordinal'], chapter['text']
-        for i, segment in enumerate(_segment_sentences(text), 1):
+        for i, segment in enumerate(_segment_paragraphs(text), 1):
             evidence[f'e{no:02d}_{i:02d}'] = {'chapter': no, 'text': segment}
     return evidence
 

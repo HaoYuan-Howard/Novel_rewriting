@@ -118,7 +118,7 @@ def test_chapter_observation_refuses_ambiguous_recovery():
 def _book_wire(quote: str) -> dict:
     from tests.str06_expression_inputs import sample_book_expression
     wire = {
-        'protocol_version': 'stage2-book-v3',
+        'protocol_version': 'stage2-book-v4',
         'characters': {
             'fu_jun': {'canonical': '夫君', 'surfaces': [
                 {'surface': '夫君', 'source_refs': ['e01_01']}]},

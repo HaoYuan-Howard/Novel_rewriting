@@ -21,11 +21,11 @@ from tests.str06_semantic_cases import CASES_BY_BATCH
 A1_CASES = CASES_BY_BATCH['R10a-a1']
 
 # 合成底座：一段含动作细节的章文本（C4 的错位引文素材）＋一段含「原以为／
-# 证实」转折（P3 素材）＋一段含预计限定（C2 素材）。
+# 证实」转折（P3 素材）＋一段含预计限定（C2 素材）。证据段＝自然段（RC-26）。
 CHAPTERS = [
     {'chapter_ordinal': 1,
-     'text': '她攥紧了帕子，指节发白。她原以为丈夫只是性子冷，后来终于证实'
-             '他心里有她。他说此去约莫半个月便回。'},
+     'text': '她攥紧了帕子，指节发白。\n她原以为丈夫只是性子冷，后来终于证实'
+             '他心里有她。\n他说此去约莫半个月便回。'},
 ]
 EVIDENCE = build_evidence(CHAPTERS)
 
@@ -39,7 +39,7 @@ def _beat(event: str, refs: tuple[str, ...], **over) -> dict:
 
 
 def _compile(beats: list[dict]):
-    wire = {'protocol_version': 'stage2-chapters-v2', 'beats': beats}
+    wire = {'protocol_version': 'stage2-chapters-v4', 'beats': beats}
     return compile_chapter_observation(
         wire, evidence_ids=EVIDENCE, chapter=1,
         character_slugs=frozenset({'qi_niang', 'zhang_fu'}))
@@ -230,7 +230,7 @@ def test_book_surface_from_chapter_must_match_earliest_source_chapter():
     ev = build_evidence(chapters)
     assert '表弟' in ev['e01_01']['text']
     wire = {
-        'protocol_version': 'stage2-book-v3',
+        'protocol_version': 'stage2-book-v4',
         'characters': {'pei_shuyuan': {
             'canonical': '表弟', 'surfaces': [
                 {'surface': '表弟', 'from_chapter': 4,
@@ -244,7 +244,7 @@ def test_book_surface_from_chapter_must_match_earliest_source_chapter():
     assert hit and 'from_chapter=4' in hit[0], errors
     # 绿：from_chapter 与最早命中章一致 → 无 ②b 错误。
     wire_ok = {
-        'protocol_version': 'stage2-book-v3',
+        'protocol_version': 'stage2-book-v4',
         'characters': {'pei_shuyuan': {
             'canonical': '表弟', 'surfaces': [
                 {'surface': '表弟', 'from_chapter': 1, 'source_refs': ['e01_01']},

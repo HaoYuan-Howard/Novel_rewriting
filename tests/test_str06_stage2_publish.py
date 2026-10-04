@@ -40,10 +40,11 @@ from tests.str06_expression_inputs import (
 )
 
 HOOK = '新婚夜，夫君坦白借种之约。'
+#: 证据段＝自然段（RC-26）：每章两段，段号 eNN_01／eNN_02。
 CHAPTERS = [
-    {'chapter_ordinal': 1, 'text': '夫君藏进床底。云娘听见床板响动。'},
-    {'chapter_ordinal': 2, 'text': '云娘质问床底的人。夫君说出实情。'},
-    {'chapter_ordinal': 3, 'text': '天亮后夫君把话说开。陆家宅子恢复安静。'},
+    {'chapter_ordinal': 1, 'text': '夫君藏进床底。\n云娘听见床板响动。'},
+    {'chapter_ordinal': 2, 'text': '云娘质问床底的人。\n夫君说出实情。'},
+    {'chapter_ordinal': 3, 'text': '天亮后夫君把话说开。\n陆家宅子恢复安静。'},
 ]
 EVIDENCE = build_evidence(CHAPTERS, HOOK)
 
@@ -69,7 +70,7 @@ def _book_wire(*, extra_characters: dict | None = None) -> dict:
             {'surface': '云娘', 'source_refs': ['e01_02']}]},
     }
     characters.update(extra_characters or {})
-    return {**sample_book_expression(characters), 'protocol_version': 'stage2-book-v3', 'characters': characters,
+    return {**sample_book_expression(characters), 'protocol_version': 'stage2-book-v4', 'characters': characters,
             'initial_state': [], 'world_constraints': []}
 
 

@@ -747,7 +747,7 @@ def _full_chain_wires():
                    'surfaces': [{'surface': s.surface, 'source_refs': ['e01_01']}
                                 for s in entry.surfaces]}
             for slug, entry in chars.characters.items()}),
-        'protocol_version': 'stage2-book-v3',
+        'protocol_version': 'stage2-book-v4',
         'characters': {
             slug: {'canonical': entry.canonical,
                    'surfaces': [{'surface': s.surface, 'source_refs': ['e01_01']}
@@ -770,7 +770,7 @@ def _full_chain_wires():
          'keep_reason': None}]}
     return {
         'book': book,
-        'ch01': {'protocol_version': 'stage2-chapters-v2', 'beats': [
+        'ch01': {'protocol_version': 'stage2-chapters-v4', 'beats': [
             beat('苏芸娘嫁入陆家，夫君立下旧约。', ('e01_01',),
                  participants=('yun_niang', 'fu_jun'),
                  effects=({'target': {'kind': 'relation', 'subject': 'yun_niang',
@@ -780,10 +780,10 @@ def _full_chain_wires():
                            'disclosure': {'visibility': 'on_page'},
                            'basis': ({'segment': 'e01_01',
                                       'quote': '苏芸娘嫁入陆家'},)},))]},
-        'ch02': {'protocol_version': 'stage2-chapters-v2', 'beats': [
+        'ch02': {'protocol_version': 'stage2-chapters-v4', 'beats': [
             beat('夫君夜半离家，芸娘发现玉佩之秘。', ('e02_01',),
                  participants=('yun_niang', 'fu_jun'))]},
-        'names': {'protocol_version': 'stage2-names-v2', **chars.name_structure.model_dump(mode='json')},
+        'names': {'protocol_version': 'stage2-names-v3', **chars.name_structure.model_dump(mode='json')},
         'associate': {'protocol_version': 'stage2-associate-v2',
                       'same_proposition': [], 'same_state_dimension': [],
                       'loop_pairing': [], 'cross_chapter_cause': [],

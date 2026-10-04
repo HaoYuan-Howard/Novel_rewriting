@@ -1330,6 +1330,21 @@ def accept_patch_answer(answer: DurableAnswer, targets: list[PatchTarget],
     return merged, not merged_errors, fields
 
 
+def _answers_in_full(answer: DurableAnswer) -> bool:
+    """RC-29：条目返修轮的回答是不是一份整份回答（JSON object 且无 patches 键）。
+
+    返修请求以原请求为固定前缀（供应商缓存纪律），原请求末尾的整份输出格式
+    与追加的 patch 格式同时在场；模型按原协议交回整份是合法回答——它走与首答
+    相同的全量校验，不算 patch 形状失败（2026-10-04 夫君不行 ch02 就是这样把
+    最后一轮烧掉的）。解码与 D5 救回同 `accept_json_answer` 一把尺。
+    """
+    content = answer.content or ''
+    data, _error = _decode_json(content)
+    if data is None and not content.strip() and (answer.reasoning or '').strip():
+        data, _error = _decode_json(answer.reasoning)
+    return isinstance(data, dict) and 'patches' not in data
+
+
 def revision_user_prompt(base_user: str, previous_answer: str,
                          issues: list[str], *,
                          previous_is_canonical: bool = False,
@@ -1363,7 +1378,8 @@ def ask_json(session: PaidRequestSession, owner: str, request: ChatRequest,
     可定位时，只把失败条目发回（原请求作固定前缀，输出仅替换条目），合并版
     过同一套校验即采纳——返修成本从「整份×轮数」降到「失败条目×轮数」；
     定位不了或 patch 形状不过 → 整份修订；合并仍失败但问题严格减少则继续
-    返修。patch 与整份请求各占一次 `OWNER_REVISION_MAX_ROUNDS` 额度。
+    返修。patch 与整份请求各占一次 `OWNER_REVISION_MAX_ROUNDS` 额度。patch
+    轮收到整份回答（RC-29）按整份走同一套全量校验，不算形状失败。
     问题位置集合重复或回到此前集合即停；严格子集是进展。
     采纳返回 ``(data, answer)``：整份路径 `answer` 是 `DurableAnswer`；patch
     路径是 `PatchedAnswer`（基底＋patch 轮多引用，经 `_as_adoption_refs`
@@ -1405,7 +1421,7 @@ def ask_json(session: PaidRequestSession, owner: str, request: ChatRequest,
         raise stop
 
     while True:
-        if targets is not None:
+        if targets is not None and not _answers_in_full(answer):
             merged, passed, fields = accept_patch_answer(
                 answer, targets, wire_dict, validate)
             data = merged if passed else None

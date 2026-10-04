@@ -619,7 +619,7 @@ def _stage2_outcome(*, book=None, chapters=None, names=None, associate=None):
         chapters={no: ChapterObservation.model_validate(ch_wires[f'ch{no:02d}'])
                   for no in range(1, len(ch_wires) + 1)},
         names=NamesObservation.model_validate({
-            'protocol_version': 'stage2-names-v2',
+            'protocol_version': 'stage2-names-v3',
             'structure': names if names is not None else _names_structure()}),
         associate=AssociateObservation.model_validate(
             associate if associate is not None else _associate_wire()),
@@ -654,7 +654,7 @@ def _chapter_blueprint_bad_wire() -> list:
     """章观察编译闭合：participants 引用书级人物账之外的人物（闭集归 compile，R-2.3）。"""
     from tests.test_str06_stage2_publish import _chapter_wires
     outcome = _stage2_outcome(chapters={**_chapter_wires(), 'ch01': {
-        'protocol_version': 'stage2-chapters-v2', 'beats': [
+        'protocol_version': 'stage2-chapters-v4', 'beats': [
             {'event': '开篇', 'participants': ['ghost'],
              'source_refs': ['e01_01'], 'scene_boundary': 'new',
              'temporal_mode': 'single', 'effects': [], 'cognition': [],
@@ -674,7 +674,7 @@ def _loop_reopened() -> list:
     """R-2.11：同一悬念句柄本章内重复 open（章观察 owner 的自含纪律）。"""
     from tests.test_str06_stage2_publish import EVIDENCE
     from novel.stages.stage2 import compile_chapter_observation
-    wire = {'protocol_version': 'stage2-chapters-v2', 'beats': [
+    wire = {'protocol_version': 'stage2-chapters-v4', 'beats': [
         {'event': '开悬念', 'participants': [], 'source_refs': ['e01_01'],
          'scene_boundary': 'new', 'temporal_mode': 'single', 'effects': [],
          'cognition': [],
@@ -701,7 +701,7 @@ def _concealed_without_known_by() -> list:
     """R-2.13：concealed 效应不声明已知者（揭示链无从闭合）。"""
     from tests.test_str06_stage2_publish import EVIDENCE
     from novel.stages.stage2 import compile_chapter_observation
-    wire = {'protocol_version': 'stage2-chapters-v2', 'beats': [
+    wire = {'protocol_version': 'stage2-chapters-v4', 'beats': [
         {'event': '藏身不声明已知者', 'participants': [], 'source_refs': ['e01_01'],
          'scene_boundary': 'new', 'temporal_mode': 'single',
          'effects': [{'target': {'kind': 'character', 'char_id': 'fu_jun'},
@@ -724,7 +724,7 @@ def _registered_key_wrong_scope() -> list:
     """
     from tests.test_str06_stage2_publish import EVIDENCE
     from novel.stages.stage2 import compile_chapter_observation
-    wire = {'protocol_version': 'stage2-chapters-v2', 'beats': [
+    wire = {'protocol_version': 'stage2-chapters-v4', 'beats': [
         {'event': '旧位置键借道', 'participants': [], 'source_refs': ['e01_01'],
          'scene_boundary': 'new', 'temporal_mode': 'single',
          'effects': [{'target': {'kind': 'character', 'char_id': 'fu_jun'},
@@ -765,7 +765,7 @@ def _names_structure_uncovered() -> list:
                   SurfaceWindow(surface='陆大哥', from_chapter=1,
                                 source_refs=('e01_01',))))})
     _structure, errors = compile_name_structure(
-        {'protocol_version': 'stage2-names-v2', 'resolutions': [],
+        {'protocol_version': 'stage2-names-v3', 'resolutions': [],
          'families': {'fam_lu': {'literal': '陆', 'forms': []}},
          'people': {'ch1': {'family_id': 'fam_lu', 'given': None, 'aliases': [],
                             'surface_forms': {'夫君': None}}}},

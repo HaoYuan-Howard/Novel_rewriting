@@ -18,6 +18,7 @@ Gherkin 使用 [Cucumber 官方语法](https://cucumber.io/docs/gherkin/referenc
 | 同上 | RC-17 | names v2 同一性留证；`tests/test_str06_name_resolution.py`：真实Stage2发布、Preserve消费、未决零下游购买、局部归一与旧版本拒识 |
 | 同上 | RC-16 | 真实CLI／调度／交付／重启的零付费stage与产品入口测试 |
 | 同上 | RC-18～25 | 作业单位、结构化诊断、修订权限、材料语义、时点和共用摄入依赖；逐项证据见下方职责边界表 |
+| 同上 | RC-26～29 | 证据寻址（2026-10-04，rc15）：证据段＝自然段且一段一行、basis 段号由 Resolver 按引文定位、src 区间组合闭合、patch 轮整份回答按整份验收；`tests/test_stage2_evidence_addressing.py`（真实 book／chapters 入口与 `ask_json` 接受循环），见下方证据寻址表 |
 | [计量与对照](../specs/cost_accounting.feature) | CU-01～06 | provider usage解析、新购和缺账恢复、缓存去重、只读历史补证 |
 | 同上 | CU-07～10 | 必要输入送达、精确请求身份、分节点配置对照、可比成本报告 |
 | 同上 | CU-11～12 | `tests/test_str06_cli_dispatch.py` 配置／权限与篡改反例；`tests/test_str06_product_entry.py` 实际请求、免费复检及HTTP到真实子进程全链 |
@@ -106,6 +107,25 @@ RC-19收口追加`test_rc19_three_digit_chapter_can_persist_and_resume_its_revis
 修复必须重新通过保产、模式授权、引用、披露和实际写手材料的原判据。
 不删除义务、不把known改成suspected、不自动提前释放名称来“修绿”。
 语义节点可在已有契约允许的选择空间内生成合法新设计，compiler不作语义推断。
+
+### 证据寻址（RC-26～29）
+
+2026-10-04 cs_golden 三书（三人成行／夫君不行／夫君的报恩）全部停在章观察：
+50 章仅 16 章首答通过，61 份被拒回答中 52 份只因段号或引文定位被拒；引用段号
+恒比真实段号大（194 条中 84 条恰好大 1），207 个段号超出本章末段。返修轮平均
+输出 17.8K token、首答 23.6K——条目返修几乎不省 reasoning，降本靠首答通过率。
+用户批准按下表一次改完；旧根已购观察的复用用仓外一次性脚本按字符位置换算，
+不进产品代码（新书走新契约，不再需要兼容）。
+
+| 规则／场景 | 失败反例与实现 | 真实消费者验证 |
+|---|---|---|
+| I-15、I-21／RC-26 | 「。」后切分把收尾「」」切到下一段、问叹号收尾的自然段并段，标签悬在上一段下方；`novel/stages/chain.py::_segment_paragraphs` 一段一自然段，`novel/stages/stage2/resolver.py::render_evidence_block` 唯一渲染、段含换行即拒 | `test_rc26_each_paragraph_is_exactly_one_segment`、`test_rc26_requests_render_one_segment_per_line`（真实 book／chapters prompt 组装）、`test_rc26_multiline_segment_stops_before_request` |
+| I-21、R-2.18／RC-27 | 模型被要求抄可由引文推导的段号，验收器已算出正确段却让模型付费重抄；`novel/stages/stage2/resolver.py::locate_quote`＋`novel/stages/stage2/chapters.py::_locate_basis_quotes`／`novel/stages/stage2/book.py::_locate_basis_quotes`，范围外→整拍、无命中→该转移 | `test_rc27_*`：章／书级定位、范围外与无命中的返修路径、`test_rc27_real_chain_publishes_located_basis` 经真实 run_book／run_chapters 落盘 |
+| I-35／RC-28 | `["e11_29","e11_31","e11_34..e11_36"]` 数组内区间不展开（三人成行 ch11 停点）；`novel/stages/stage2/slim.py::_expand_src` 对组合闭合 | `test_rc28_src_array_may_mix_single_ids_and_ranges`：展开、倒序与跨章区间按整拍返修 |
+| I-35／RC-29 | patch 轮请求同时带原协议整份格式与 patch 格式，模型交整份被判形状失败并烧掉末轮（夫君不行 ch02）；`novel/llm/paid_requests.py::_answers_in_full` | `test_rc29_full_answer_in_patch_round_is_accepted_as_full_revision`：第二次调用即采纳，不多耗内容轮 |
+
+红例记录 `.test_cache/evidence-addressing-red.xml`（10 例全红，原因分别是切分、
+渲染、缺渲染函数、只给引文的 basis 被拒、书级 wire 协议缺失、patch 轮多一次调用）。
 
 ## 数据流与职责
 

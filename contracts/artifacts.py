@@ -245,19 +245,22 @@ STR06_ARTIFACT_RC_VERSIONS: Final[dict[str, str]] = {
     # （`contracts/schema/observation.py`，协议版本 stage2-observation-v1）；
     # 联合抽取的派生输入（book_extraction／input_snapshots）退役，Characters
     # 与 Blueprint 改由 str06.stage2.compile 作为唯一 writer 发布。
-    'stage2/observations/book.json': 'str06-rc12',
-    'stage2/observations/ch{nn}.json': 'str06-rc12',
-    'stage2/observations/names.json': 'str06-rc12',
+    # rc15（2026-10-04 证据寻址，RC-26/27）：证据段＝自然段，段号含义改变；
+    # 凡携带段号的产物（三份观察、Characters、Blueprint）换身份，旧根拒读。
+    # associate（只有位置句柄）、fold 与 Stage4 起各产物不带段号，不虚构升版。
+    'stage2/observations/book.json': 'str06-rc15',
+    'stage2/observations/ch{nn}.json': 'str06-rc15',
+    'stage2/observations/names.json': 'str06-rc15',
     # rc9（2026-09-28 R1 关联无损）：associate 协议独立升版 stage2-associate-v2
     # ——typed 作用对象显式序列化＋状态句柄位置编码（ch{nn}.b{拍}.e{效应序}.{key}
     # ／book.e{条目序}.{key}）。三类观察协议字面量与请求逐字不变；canonical
     # 无形状变化，不虚构升版（A1.5）。
     'stage2/observations/associate.json': 'str06-rc12',
     # v13（2026-09-26 质量改进批次二）：拍模型三类转移＋场景分段；v12 存量拒读。
-    'stage2/blueprints/chapter_blueprints.json': 'str06-rc12',
+    'stage2/blueprints/chapter_blueprints.json': 'str06-rc15',
     # v13 同批：fold 读数结构化（每章空转移拍比例＋书末未揭示 concealed）。
     'stage2/acceptance/fold.json': 'str06-rc12',
-    'stage2/characters/characters.json': 'str06-rc12',
+    'stage2/characters/characters.json': 'str06-rc15',
     'runtime/preserve_checkpoint.json': 'str06-rc12',
     # rc13（2026-10-03 CS-3 余项，D5 统一＋world 规则 id）：读者揭示统一走
     # knowledge(holder=reader)（TargetDelta 删 reader 域与 confirms；Brief 知

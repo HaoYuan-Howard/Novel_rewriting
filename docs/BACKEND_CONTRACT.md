@@ -145,7 +145,12 @@ associate 独立版本 `stage2-associate-v2`（R1，2026-09-28——typed 作用
 三类观察请求逐字不变）。模型输出面去机械化（I-20/I-21）：拍号、
 状态/约束编号、命题/loop/场景正式 ID、章序、offset、hash 一律由 compiler 生成；
 人物 slug 仍由模型给出（可读语义句柄）。证据定位归 Resolver
-（`novel/stages/stage2/resolver.py`：句段 id 闭集选择、逐字锚唯一定位）。
+（`novel/stages/stage2/resolver.py`：句段 id 闭集选择、逐字锚唯一定位、basis 引文
+所在段定位与证据清单渲染）。**证据段＝源文一个非空自然段**（RC-26，2026-10-04，
+rc15）：段文本是去掉首尾空白的原文一行，请求里一段一行、段号与文字同行
+（`novel/stages/chain.py::build_evidence` 唯一切分、`novel/stages/stage2/resolver.py::render_evidence_block`
+唯一渲染，段文本含换行即拒）；旧的「只在句号后切」会把对白收尾「」」切到下一段、
+把问号叹号收尾的多个自然段并成一段，模型系统性认错段号（三书停书根因）。
 源章原文只进观察节点自己的 prompt；下游一律消费编译产物（source-blind），
 不从源正文推语义。章序身份来自正式 Stage1 `MainText`（阅读序 1..N 密集）；
 **输入身份＝`main_text.json`＋`hook_copy.json` 两份盘上字节的组合摘要**（`R-2.9`）
@@ -175,7 +180,7 @@ associate 独立版本 `stage2-associate-v2`（R1，2026-09-28——typed 作用
 | R-2.15 | **未揭示 concealed 只读报告**：concealed 效应到书末仍无读者确认（reader 持有者的 learns／confirms）时，按命题列出（statement／建立拍／known_by）落 fold.json；只报告、不阻断。 | `度量`（`novel/stages/stage2/compile.py::source_fold`） |
 | R-2.16 | **空转移拍比例**：每章三类转移全空的拍所占比例按章报出（fold.json `chapters`）；这类拍合法——完整性由该读数配合离线核读证明，不加声明字段（D7／D17）。 | `度量`（`novel/stages/stage2/compile.py::source_fold`） |
 | R-2.17 | **知情 fold 读数**：源 fold 只消费 canonical transitions（认知层按「命题＋持有者＋模式」折叠；D3 起不再派生逐章输入快照）；未揭示 concealed、空转移拍比例等读数保留——度量，不是门；读者确认时点由 on_page 效应或 reader 的 learns／confirms 落账。fold 唯一实现随 B2 第三步迁入 compile owner。 | `度量`（`novel/stages/stage2/compile.py::source_fold`） |
-| R-2.18 | **basis 引文定位（R10a a1，C4）**：每条 basis 是 EvidenceQuote{segment, quote}——quote 逐字存在于所引句段文本内，且句段属于该条目自身的 `source_refs`（Effect／Cognition 在所属拍；书级条目在自身）。逐字子串判定，不归一化、不模糊匹配、不要求唯一出现（basis 是证据存在性，不是定位）；失败码 `quote_not_in_segment`／`basis_segment_outside_refs`／`unknown_segment` → `revise_self`。 Blueprint v15 的证据窗口（被引段全文＋同章前后各一句、重叠机械合并）由 compiler 派生——邻句被送达不代表邻句自动成为证据，跨窗口限定须 Stage2 显式补引。 | `HARD`（`novel/stages/stage2/resolver.py::verify_quote`/`verify_bases`＋`contracts/schema/source.py::EvidenceQuote`；反例 `tests/test_str06_a1_semantics.py`、`tests/hard_cases.py`） |
+| R-2.18 | **basis 引文定位（R10a a1，C4；RC-27 起段号由代码定位）**：canonical 的每条 basis 是 EvidenceQuote{segment, quote}——quote 存在于该段文本内，且该段属于条目自身的 `source_refs`（Effect／Cognition 在所属拍；书级条目在自身）。book／chapters 的 LLM 输出面（`stage2-book-v5`／`stage2-chapters-v5`）**只给引文**，所在段由 Resolver 在条目自身证据范围内定位（逐字命中优先，其次仅标点／空白宽度不同的唯一命中并回取原文切片；多段都含时取范围内第一段，basis 是证据存在性不是唯一定位）：范围外命中 → `quote_outside_refs`（整拍返修，修正可能是扩范围也可能是换引文）；全无命中 → `quote_not_found`（只返修该转移）。canonical 直通（wire 领养）照原规则逐字复验，缺段号按协议拒收、不代补；names 的 basis 段号仍由模型选（它决定局部归一作用的出现处）。失败码 `quote_outside_refs`／`quote_not_found`／`quote_not_in_segment`／`basis_segment_outside_refs`／`unknown_segment` → `revise_self`。Blueprint v15 的证据窗口（被引段全文＋同章前后各一段、重叠机械合并）由 compiler 派生——邻段被送达不代表邻段自动成为证据，跨窗口限定须 Stage2 显式补引。 | `HARD`（`novel/stages/stage2/resolver.py::locate_quote`/`verify_quote`/`verify_bases`＋`contracts/schema/source.py::EvidenceQuote`；反例 `tests/test_stage2_evidence_addressing.py`、`tests/test_str06_a1_semantics.py`、`tests/hard_cases.py`） |
 | R-2.19 | **事件时态闭集（R10a a1，C2 源侧）**：`Effect.modality` 必填且取值 `actual/planned/expected/conditional`——计划／预计／条件行为与已发生是不同事实形态，抽取不得把限定词当已发生写入效应；命题 statement 写命题本身，认识限定（以为/觉得/像是/预计/约）只进 cognition 模式或 modality，不混入命题文本。源文未说明不得自动填成 `actual`。 | `HARD`（`contracts/schema/source.py::Effect.modality`＋`novel/stages/common.py` 观察规则；反例 `tests/test_str06_a1_semantics.py`、`tests/hard_cases.py`） |
 
 源语义（归因、因果、揭示）的语义正确性不经机械检查证明，随 Stage2 语义未审披露；

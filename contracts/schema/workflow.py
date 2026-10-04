@@ -559,12 +559,15 @@ STR06_RUNTIME_CONFIG: Final = CandidateRuntimeConfig()
 # rc14（2026-10-03 审阅修复）：Brief 保留逐次 knowledge_changes；Design v7
 # know 短引用与 confirms 明确拍位和事实关联；五份受影响产物显式换身份。
 # rc12/rc13 的无损字段经 store 集中迁移，缺失模式/事实关联走免费恢复。
-STR06_RC_VERSION: Final = 'str06-rc14'
+# rc15（2026-10-04 证据寻址，RC-26/27）：证据段改为一个自然段一段，段号含义
+# 改变——携带段号的 Stage2 观察换协议字面量，观察／Characters／Blueprint 换
+# 身份；旧根按契约表漂移关闭式拒读（不迁移：段号无法从旧根推回新含义）。
+STR06_RC_VERSION: Final = 'str06-rc15'
 
 #: 已知 RC 标签面（版本规则见 `contracts/artifacts.py::STR06_ARTIFACT_RC_VERSIONS`）。
 STR06_RC_LABELS: Final = ('str06-rc2', 'str06-rc3', 'str06-rc4', 'str06-rc5', 'str06-rc6',
                           'str06-rc7', 'str06-rc8', 'str06-rc9', 'str06-rc10', 'str06-rc11',
-                          'str06-rc12', 'str06-rc13', 'str06-rc14')
+                          'str06-rc12', 'str06-rc13', 'str06-rc14', 'str06-rc15')
 
 #: Stage4 四个付费语义节点的独立 wire 协议（B3 前半；各节点独立演进，升版互不
 #: 牵连）。wire 顶层 `protocol_version` 与对应常量逐字对账，漏带或错带即拒

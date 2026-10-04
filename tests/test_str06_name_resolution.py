@@ -20,7 +20,7 @@ from tests.test_str06_stage2_publish import (
 
 def _case():
     chapters = deepcopy(CHAPTERS)
-    chapters[1]['text'] += '云孃决定次日出门。'
+    chapters[1]['text'] += '\n云孃决定次日出门。'  # 新的一段 → e02_03（RC-26）
     wires = _full_stage2_wires()
     basis = [{'segment': 'e02_03', 'quote': '云孃决定次日出门'}]
     row = {'literal': '云孃', 'status': 'same', 'char_id': 'yun_niang', 'surface': '云娘',
@@ -80,7 +80,7 @@ def test_unresolved_identity_stops_before_associate_purchase_and_publish(tmp_pat
 
 @pytest.mark.parametrize('defect,expected', [
     ('quote', '原字面'), ('segment', 'unknown_segment'), ('target', '未登记'),
-    ('registered', '已在人物表'), ('conflict', '冲突'), ('old', 'stage2-names-v2'),
+    ('registered', '已在人物表'), ('conflict', '冲突'), ('old', 'stage2-names-v3'),
 ])
 def test_name_proof_refuses_bad_evidence_target_conflict_and_old_protocol(defect, expected):
     chapters, wires = _case()

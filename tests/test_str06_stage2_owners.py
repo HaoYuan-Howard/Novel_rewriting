@@ -42,10 +42,11 @@ from tests.str06_expression_inputs import (
 )
 
 HOOK = '新婚夜，陆家新人立下借种之约。'
+#: 证据段＝自然段（RC-26）：每章两段，段号 eNN_01／eNN_02。
 CHAPTERS = [
-    {'chapter_ordinal': 1, 'text': '夫君走进门来。云娘坐在窗边没有回头。'},
-    {'chapter_ordinal': 2, 'text': '第二夜陆家宅子里窗外有响动。云娘握紧了剪刀。'},
-    {'chapter_ordinal': 3, 'text': '第三日夫君说出实情。云娘沉默良久。'},
+    {'chapter_ordinal': 1, 'text': '夫君走进门来。\n云娘坐在窗边没有回头。'},
+    {'chapter_ordinal': 2, 'text': '第二夜陆家宅子里窗外有响动。\n云娘握紧了剪刀。'},
+    {'chapter_ordinal': 3, 'text': '第三日夫君说出实情。\n云娘沉默良久。'},
 ]
 EVIDENCE = build_evidence(CHAPTERS, HOOK)
 
@@ -65,7 +66,7 @@ def _book_wire() -> dict:
             'yun_niang': {'canonical': '云娘', 'surfaces': [
                 {'surface': '云娘', 'source_refs': ['e01_02']}]},
         }),
-        'protocol_version': 'stage2-book-v3',
+        'protocol_version': 'stage2-book-v4',
         'characters': {
             'fu_jun': {'canonical': '夫君', 'surfaces': [
                 {'surface': '夫君', 'source_refs': ['e01_01']}]},
@@ -98,7 +99,7 @@ def _chapter_wire(*beats: dict) -> dict:
 
 def _names_wire() -> dict:
     return {
-        'protocol_version': 'stage2-names-v2', 'resolutions': [],
+        'protocol_version': 'stage2-names-v3', 'resolutions': [],
         'families': {'f_lu': {'literal': '陆', 'forms': []}},
         'people': {
             'fu_jun': {'family_id': None, 'given': None, 'aliases': [],
@@ -343,8 +344,8 @@ def test_stage2_observation_leg_persists_observations_and_names_remount(tmp_path
                 'stage2/observations/names.json'):
         artifact = repo.inspect(rel)
         assert artifact['protocol_version'] == (
-            'stage2-book-v3' if rel.endswith('/book.json')
-            else 'stage2-names-v2' if rel.endswith('/names.json')
+            'stage2-book-v4' if rel.endswith('/book.json')
+            else 'stage2-names-v3' if rel.endswith('/names.json')
             else STAGE2_CHAPTERS_PROTOCOL), rel
         assert '_provenance' in artifact, rel
     assert not (repo.root / 'stage2/characters/characters.json').exists(), \

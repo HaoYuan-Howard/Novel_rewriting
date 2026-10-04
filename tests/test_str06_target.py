@@ -207,7 +207,7 @@ def test_identity_stable_constraints_come_only_from_the_fact_layer():
     # 已删，改按观察协议直接构造同一形状）；其文本若泄漏进身份约束，下面两条
     # 断言会红。
     observation = ChapterObservation.model_validate({
-        'protocol_version': 'stage2-chapters-v2', 'beats': [{
+        'protocol_version': 'stage2-chapters-v4', 'beats': [{
             'event': '试探', 'participants': ['fu_jun', 'yun'],
             'source_refs': ['e01_01'], 'scene_boundary': 'new',
             'temporal_mode': 'single',

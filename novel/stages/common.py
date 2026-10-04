@@ -483,23 +483,24 @@ BOOK_PROMPT = """任务：通读全书，产出人物账、初始状态与世界
    允许／不允许的视角信息、主导幽默与重要内外反差；如对外守礼而内心直白。
    所有表达陈述带证据，只记录源书已经呈现的机制；没有某类给空数组，不补猜；不生成 ID。
 
-【证据段 id 清单】（source_refs 只能从中选）
+【证据段 id 清单】（每行一个自然段，行首方括号内是该段的 id；source_refs 只能从中选）
 {evidence}
 
-输出 JSON 顶层：{{"protocol_version":"stage2-book-v3","characters":{{...}},"initial_state":[...],"world_constraints":[...],"expression":{{"narration":{{...}},"mechanisms":[...]}}}}
+输出 JSON 顶层：{{"protocol_version":"stage2-book-v5","characters":{{...}},"initial_state":[...],"world_constraints":[...],"expression":{{"narration":{{...}},"mechanisms":[...]}}}}
 个人自述、某家长辈要求不得推广成普遍世界规则；无法由证据确认的规则不写。
 
 【逐字证据】（R10a a1）initial_state 与 world_constraints 的每个条目必须带 basis：
-[{{"segment":"证据段id","quote":"原句逐字引文"}}]（至少 1 条）。segment 必须取自该条目
-自己的 source_refs；quote 逐字摘自该句段原文，不转写、不缩写、不摘人名或动作词凑数；
-判断依据含限定（以为／觉得／像是／预计／约／几天后）时，引文必须包含该限定原文。"""
+["原句逐字引文", ...]（至少 1 条，只写引文、不写段号——所在段由程序按引文查出）。
+引文必须出自该条目 source_refs 所列的某一段，逐字摘抄，不转写、不缩写、不跨段拼接，
+不摘人名或动作词凑数；判断依据含限定（以为／觉得／像是／预计／约／几天后）时，
+引文必须包含该限定原文。"""
 
 CHAPTER_PROMPT = """任务：把第 {ch} 章正文拆成有序 beats。每一拍是一次状态转移：ev 是给人读的事件表述，需要延续的变化全部由三类转移承载——state（事实）、know（认知）、loops（悬念）。机械字段（拍号、默认值、命题句柄等）由 compiler 派生，你只写判断与例外。
 
 【人物表】（who / state 的 at / know 的 who 只能用这些 slug）
 {glossary}
 {prior}
-【第 {ch} 章正文】（每段前的 [eXX_YY] 是证据 id）
+【第 {ch} 章正文】（每行一个自然段，行首方括号内的 eXX_YY 是该段的证据 id）
 {evidence}
 {pre_chapter}
 【要求】
@@ -514,8 +515,9 @@ CHAPTER_PROMPT = """任务：把第 {ch} 章正文拆成有序 beats。每一拍
      不外推、不补全（没写"送出住处"就不得记成送离住处）；
    - who：本拍中实际行动、说话、感知或被直接作用的人物 slug（可空数组）；
      仅被提及者只留在 ev，不进 who；
-   - src：支撑该拍的**本章**证据段 id，1-4 个。连续多段写成区间（如 "e01_02..e01_05"），
-     单段写 id 本身（如 "e01_03"），不连续给数组；
+   - src：该拍所在的**本章**证据段 id，覆盖这一拍发生的段。连续多段写成区间（如
+     "e01_02..e01_05"），单段写 id 本身（如 "e01_03"），不连续时给数组，数组元素
+     也可以是区间（如 ["e01_02","e01_05..e01_07"]）；
    - new_scene：本拍开新场景（旧场景的 scene 作用域状态就此失效）才写 true，缺省＝
      延续当前场景。全书第一个拍必须 new；第 1 章之后的章若开场直接延续上一章末尾的
      同一场景，第一拍不写 new_scene，否则写；
@@ -575,12 +577,12 @@ CHAPTER_PROMPT = """任务：把第 {ch} 章正文拆成有序 beats。每一拍
 6. 前文与正文的关系：上方前文原文是只读参考——本拍事实以本章正文原文为准，不得为迁就
    前文改写施事、受事或动作主体；前文与正文不一致时，按正文记录。
 7. 逐字证据与时态（R10a a1）：state 与 know 的每条转移必须带 basis：
-   [{{"segment":"证据段id","quote":"原句逐字引文"}}]（至少 1 条）。segment 必须取自本拍
-   src；quote 逐字摘自该句段原文，不转写、不缩写。认识限定（觉得像是／以为／
-   听说）只进 know 的 how（suspects／believes／hears_claim），what 写
-   命题本身；引文保留原限定。
+   ["原句逐字引文", ...]（至少 1 条，只写引文、不写段号——所在段由程序按引文查出）。
+   引文必须出自本拍 src 覆盖的某一段，逐字摘抄，不转写、不缩写、不跨段拼接。
+   认识限定（觉得像是／以为／听说）只进 know 的 how（suspects／believes／
+   hears_claim），what 写命题本身；引文保留原限定。
 
-输出 JSON 顶层：{{"protocol_version":"stage2-chapters-v3","beats":[...]}}
+输出 JSON 顶层：{{"protocol_version":"stage2-chapters-v5","beats":[...]}}
 不要把财富、位置等不同维度塞入同一个 key。"""
 
 #: 七类保存类别与 `contracts/schema/policy.py::PreserveKind` 同源（B2）：定义只在
@@ -878,7 +880,7 @@ NAMES_RULES = """任务：登记全书源名称结构（姓氏家族、名、化
    只在异常字面出现的证据局部授权归一，不授权全书替换。证据不足／有不同解释时status="unresolved"，
    char_id与surface均null并说明歧义；不得凭读音、字形或常见姓名猜测，也不得把真实化名误当笔误。
    没有发现给空数组；同一局部字面不可有相互冲突的指向。原文、引文与逐章观察不由本节点改写。
-输出 JSON 顶层：{"protocol_version":"stage2-names-v2","families":{...},"people":{...},"resolutions":[]}"""
+输出 JSON 顶层：{"protocol_version":"stage2-names-v3","families":{...},"people":{...},"resolutions":[]}"""
 
 HOOK_DESIGN_RULES = """任务：为整本小说设计读者入口（楔子）的结构设计。brief 明确入口知识、跳时定位与末尾悬念；POV 可以与正文不同，事实和披露边界一致。只输出设计 JSON，不写 prose
 （wire 协议 stage4-hook-design-v1）。位置引用只给分量（scene=场景 id、beat=拍 id，

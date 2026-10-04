@@ -120,6 +120,18 @@ LLM 输出面升 `stage2-chapters-v3`（`contracts/schema/observation.py` 瘦模
 r10b 实证：wire 体积降至 56%，`expand(slim(现产物)) == 现产物` 11/11 章
 （模本地句柄重命名）；basis 逐字证据、闭集闸、D2 引文归一判据不放宽。
 
+**证据寻址改版（RC-26～29，2026-10-04，rc15）**：cs_golden 三书全部停在
+`str06.stage2.chapters`，根因是证据切分只在「。」后切——对白收尾「」」落到下一段、
+问号叹号收尾的多个自然段并成一段，段号标签悬在上一段文字下方；模型系统性把
+引文挂到偏大的段号上（61 份被拒回答 52 份只因段号），返修在「地址错／不在 src」
+间来回。改为：① 证据段＝一个非空自然段，请求一段一行（`build_evidence`、
+`render_evidence_block`）；② book／chapters 的 wire basis 只给引文
+（`stage2-book-v5`／`stage2-chapters-v5`），所在段由 Resolver 在条目证据范围内定位
+（I-21）；③ src 数组元素可为区间；④ 条目返修轮收到整份回答按整份验收。携带段号
+的 canonical 换字面量（book v4／chapters v4／names v3，形状不变），三类观察、
+Characters、Blueprint 升 rc15，旧根按契约表漂移拒读。规格 `docs/specs/repair_convergence.feature`
+RC-26～29，反例 `tests/test_stage2_evidence_addressing.py`。
+
 **设计瘦 wire（CS-3 审阅修复，2026-10-03）**：LLM 输出为
 `stage4-design-v7`（`contracts/schema/design.py::DesignWireV7`）。`real` 保留
 义务接受拍/支撑拍；Brief 每条 requirement 的 `knowledge_changes` 从正式
@@ -143,9 +155,10 @@ Brief、BodyDesign、PresentationGraph、ExecutionPlan、WriterBookIR 升 rc14�
 
 关键语义交接的契约面（判据见 BACKEND_CONTRACT R-2.18/19、R-5.15～R-5.20）：
 
-- **证据（a1）**：Stage2 basis 是 `EvidenceQuote{segment, quote}`——quote 逐字
-  存在于所引句段且句段属条目自身 source_refs（Resolver `verify_quote`，不归一
-  化不模糊匹配）；`Effect.modality` 闭集必填。Blueprint v15 派生证据窗口
+- **证据（a1）**：Stage2 canonical basis 是 `EvidenceQuote{segment, quote}`——quote
+  存在于该段且该段属条目自身 source_refs（Resolver `verify_quote`，不模糊匹配）；
+  RC-27 起 book／chapters 的 wire 只给引文，段号由 Resolver `locate_quote` 在条目
+  证据范围内定位后写入；`Effect.modality` 闭集必填。Blueprint v15 派生证据窗口
   （被引段全文＋同章前后各一句、重叠机械合并）；Preserve 输入从整份 JSON 倾倒
   改为 `project_preserve_view` 确定性渲染（R10-0.3 实证 29.9k token/轮）。
 - **锚定与 series（a2）**：义务以 `anchors` 引用投影句柄（`b拍.e|c|l`／`s0_*`／
@@ -230,9 +243,10 @@ Binding 不维护第二份初始态。
 1. **编号归 compiler**：拍号、状态与约束编号、命题/loop/场景 ID、章序、offset、hash
    及登记表可推导的作用域一律由 compiler 生成；下游 prompt 继续显示可读名。人物 slug
    仍由模型给出——它是可读语义句柄、无法机械推导（I-20/I-21）。
-2. **证据**：沿用句段 id 闭集选择；需要字面锚处（称谓、原话）附逐字引文，由 Resolver
-   在所引句段内唯一定位；重复、不存在、冲突定位产生精确 issue，不模糊匹配、不猜笔误；
-   称谓锚点派生沿用 `R-2.10`。
+2. **证据**：证据段＝源文一个非空自然段（RC-26），沿用句段 id 闭集选择；需要字面锚处
+   （称谓、原话）附逐字引文，由 Resolver 在所引句段内定位（basis 的所在段由引文定位，
+   RC-27）；重复、不存在、冲突定位产生精确 issue，不模糊匹配、不猜笔误；称谓锚点派生
+   沿用 `R-2.10`。
 3. **章观察互不依赖（D3）**：保留前文原文；去掉前章快照、命题/loop 登记表与 beat 表。
    前章编译或关联失败不改变后章请求；缺失单元恢复不重购已存结果。
 4. **关联（D8）**：只建立同一性与引用，不移动事实成立、角色知情或读者揭示时点；缺项、
@@ -802,7 +816,7 @@ F-1/F-2/F-3），再做 D10 两本 golden（先修 `tests/golden.py` 的退役 r
 
 ### 名称同一性与材料返修（CS-R）
 
-names wire 使用 `stage2-names-v2`，显式提供 `resolutions`。每条包含 literal、
+names wire 使用 `stage2-names-v3`（rc15 段号按自然段寻址），显式提供 `resolutions`。每条包含 literal、
 status（same／unresolved）、char_id、surface、basis 和 reason。same 指向已登记
 人物称谓；unresolved 的两个指向字段必须为 null。basis 保留源句字面。
 名称观察与 Characters 的信封为 v2：旧版本不能补空 resolutions，须由 names
