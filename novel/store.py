@@ -2080,7 +2080,7 @@ class ArtifactStore:
         from contracts.schema.stage0 import Stage0Transform
         from contracts.schema.stage1 import HookCopy, MainText
         from novel.stages.stage0 import revisions as stage0_revisions
-        from novel.stages.stage1.audit import audit_surface
+        from novel.core.ingest_audit import audit_surface
 
         try:
             transform, _ = self.read_own(Stage0Transform, STAGE0_REVISIONS)

@@ -441,14 +441,15 @@ def run_associate(ctx: ChainContext) -> dict:
 
     输入是 compiler 从 book 与 chapters 观察投影的句柄闭集及最小文本；输出观察
     wire 落 `stage2/observations/associate.json`。缺项、歧义、冲突保持未决——
-    **R3 左移**：验收时做一次 compile 干跑，未决项作为本节点自己的问题（同节点
-    修订内容轮修复，不再攒到 compile 才爆）；compile 侧的未决拒绝发布保留
+    **RC-18～20**：请求前复验章内生命周期并按来源回派；验收时compile干跑
+    只把有稳定身份且归属associate的诊断交同节点修订。最终未决拒绝发布保留
     （崩溃窗口／单节点重跑／owner patch 后的防御）。跨节点回派的 open 记录
     在案时，修订要求并入 prompt（原请求＋上一版＋typed 问题）。
     """
     repository = ctx.repository
     book = repository.read_model('stage2/observations/book.json')
     chapters = _read_chapter_observations(repository, ctx.chapters)
+    _check_chapter_loops(repository, chapters, raised_by='str06.stage2.associate')
     # 名称同一性是关联的正式输入；实际语义文本归一改变请求身份。
     names = repository.read_model('stage2/observations/names.json')
     evidence = build_evidence(ctx.chapters, ctx.hook_copy)
@@ -477,8 +478,14 @@ def run_associate(ctx: ChainContext) -> dict:
         outcome = compile_source_truth(book=book, chapters=chapters, names=names,
                                        associate=observation, evidence=evidence,
                                        source_texts=tuple(c['text'] for c in ctx.chapters))
-        return [f'关联未决（compile 干跑，未决项归本节点修复）：{message}'
-                for message in outcome.undecided]
+        # 干跑发现位置不授予修复权；代码缺陷/无归属诊断禁止购买关联自修。
+        from novel.core.validation import ValidationIssue
+        if outcome.errors or any(not isinstance(issue, ValidationIssue)
+                                 or issue.owner != 'associate' for issue in outcome.undecided):
+            raise MechanicalDefectStop('关联干跑存在非本单位可修问题',
+                                       node='str06.stage2.associate',
+                                       issues=tuple(outcome.errors + outcome.undecided))
+        return outcome.undecided
 
     wire, associate_ref = ctx.ask('associate', prompt, _validate)
     observation, errors = compile_associate_observation(wire, space)
@@ -502,40 +509,70 @@ def _read_chapter_observations(
             for chapter in chapters}
 
 
+def _check_chapter_loops(repository, chapters, *, raised_by: str) -> None:
+    """薄编排消费同源只读判据；修复权按正式章scope回派，成功复验才清账。"""
+    from novel.stages.stage2 import chapter_loop_issues
+    first = None
+    for chapter, observation in sorted(chapters.items()):
+        owner = f'ch{chapter:02d}'
+        issues = chapter_loop_issues(observation.model_dump(mode='json')['beats'],
+                                    chapter=chapter)
+        if not issues:
+            record = open_issue_record(repository, owner)
+            if (record is not None and record.raised_by == raised_by
+                    and all(i.code == 'chapter_loop_conflict' for i in record.issues)):
+                resolve_owner_issues(repository, owner=owner, raised_by=raised_by)
+            continue
+        action, node = route_owner_issue('chapter_loop_conflict')
+        assert action == 'revise_upstream'
+        try:
+            discover_owner_issues(repository, raised_by=raised_by, owner=owner, node=node,
+                                  issues=[OwnerIssueV1(
+                                      code=i.code, item=i.scope, message=str(i),
+                                      context={**i.context, 'validation_identity': i.identity})
+                                      for i in issues])
+        except OwnerRevisionRequired as required:
+            if first is None:
+                first = required
+    if first is not None:
+        raise first
+
+
 def run_compile(ctx: ChainContext) -> dict:
     """`str06.stage2.compile`：解析证据、生成 ID、执行关联，发布双真源（D9）。
 
     Characters 与 Blueprint 两份真源的**唯一 writer**（S2-5/I-25）：四份观察 +
     证据句段 → 同一结果一次成形后落盘（来源账边记录四份观察）；fold 读数随发
-    （`R-2.17` 度量不是门）。存在未决项时**拒绝发布**（D8）——R3 起未决项按
-    `association_undecided` 回派 associate：写 `runtime/issues/associate.json`
+    （`R-2.17` 度量不是门）。章内生命周期先按chapter scope回派；关联选择未决
+    按`association_undecided`回派associate（RC-19/20），写原有回派账
     并抛 `OwnerRevisionRequired`（无进展／额度耗尽按 item 停）；复验通过时
     回写 resolved。不写半份 canonical。
     """
     repository = ctx.repository
     book = repository.read_model('stage2/observations/book.json')
     chapters = _read_chapter_observations(repository, ctx.chapters)
+    _check_chapter_loops(repository, chapters, raised_by='str06.stage2.compile')
     names = repository.read_model('stage2/observations/names.json')
     associate = repository.read_model('stage2/observations/associate.json')
     evidence = build_evidence(ctx.chapters, ctx.hook_copy)
     outcome = compile_source_truth(book=book, chapters=chapters, names=names,
                                    associate=associate, evidence=evidence,
                                    source_texts=tuple(c['text'] for c in ctx.chapters))
+    from novel.core.validation import ValidationIssue
+    if outcome.errors or any(not isinstance(i, ValidationIssue) or i.owner != 'associate'
+                             for i in outcome.undecided):
+        raise MechanicalDefectStop('compile存在不可交给关联单位的缺陷',
+                                   node='str06.stage2.compile',
+                                   issues=tuple(outcome.errors + outcome.undecided))
     if outcome.undecided:
         discover_owner_issues(
             repository, raised_by='str06.stage2.compile', owner='associate',
             node='str06.stage2.associate',
-            issues=[OwnerIssueV1(code='association_undecided', item='',
-                                 message=message)
+            issues=[OwnerIssueV1(code='association_undecided', item=message.scope,
+                                 message=str(message), context={
+                                     'rule_code': message.code, 'location': message.location,
+                                     'validation_identity': message.identity})
                     for message in outcome.undecided])
-    if outcome.errors:
-        # 机械缺陷（形状/闭集/时序，含首现闸 R8c）没有回派路由：typed 停止给
-        # 人，恢复走该章观察重问或 owner patch。裸 ValueError 会穿透成 exit 70
-        # （「结论未知」），把「查出确定性缺陷」记成「压根没跑成」（canary
-        # 20260930 实证）；MechanicalDefectStop 由 CLI 翻译成 exit 1。
-        raise MechanicalDefectStop(
-            f'compile 机械缺陷：{outcome.errors}',
-            node='str06.stage2.compile', issues=tuple(outcome.errors))
     assert outcome.characters is not None and outcome.blueprint is not None
     # R6 输出组发布：双真源＋fold 读数同一组、一个 seal（免费产物同样封存）。
     repository.publish((
@@ -812,8 +849,16 @@ def run_hook_design(ctx: ChainContext) -> dict:
     projection = chars.name_projection()
     kp_statements = {p.kp_id: p.statement for p in brief.propositions}
     world_statements = {wc.constraint_id: wc.statement for wc in brief.book_constraints}
+    from novel.stages.stage4 import project_hook_semantics
+    try:
+        semantics = project_hook_semantics(body, brief)
+    except ValueError as exc:
+        raise MechanicalDefectStop('Hook设计输入的引用语义不闭合',
+                                   node='str06.stage4.hook_design',
+                                   issues=(str(exc),)) from exc
     hook_design_prompt = pack_prompt(
         HOOK_DESIGN_RULES, book_title=ctx.book_title, design=body.model_dump(mode='json'),
+        semantics=semantics,
         identities=[i.model_dump(mode='json') for i in identities],
         constraints=ctx.hook_constraints.model_dump(mode='json'))
     hook_design_prompt = revision_prompt_for_owner(
@@ -2150,7 +2195,9 @@ def execute(args) -> None:
         if patch_replay is not None:
             return patch_replay
         request, selection = sample_request(owner, request)
-        raw, answer = ask_json(session, owner, request, validate, patch=patch)
+        from novel.stages.common import semantic_revision_rules
+        raw, answer = ask_json(session, owner, request, validate, patch=patch,
+                               revision_rules=semantic_revision_rules(owner))
         record_sample(owner, raw, selection, validate)
         return raw, answer
 

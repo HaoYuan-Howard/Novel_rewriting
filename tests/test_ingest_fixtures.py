@@ -247,7 +247,7 @@ def test_case_behaves_as_declared(case: Case):
     from novel.stages.stage0 import checks as checks0
     from novel.stages.stage0.removal import remove_bytes
     from novel.stages.stage1 import checks as checks1
-    from novel.stages.stage1.partition import partition_text
+    from novel.core.partition import partition_text
 
     def exercise():
         removed = remove_bytes(

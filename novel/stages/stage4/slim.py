@@ -99,6 +99,36 @@ def knowledge_change_index(obligations: Mapping[str, Any]) -> dict[str, tuple[st
                                               key=lambda c: c.change_id), start=1)}
 
 
+def project_hook_semantics(body, brief: ReconstructionBrief) -> dict[str, Any]:
+    """Hook决策所需的引用语义闭包；只投影正式Brief，不以句柄代替命题。"""
+    from novel.core.text import kp_statement
+    propositions = {p.kp_id: p.statement for p in brief.propositions}
+    worlds = {c.constraint_id: c.statement for c in brief.book_constraints}
+    used_props, used_worlds = {}, {}
+
+    def visit(value):
+        if isinstance(value, list):
+            for item in value:
+                visit(item)
+        elif isinstance(value, dict):
+            key = value.get('key')
+            if isinstance(key, str):
+                statement = kp_statement(propositions, key)
+                if statement is not None:
+                    used_props[key] = statement
+                if key.startswith('wc_'):
+                    if key not in worlds:
+                        raise ValueError(f'悬空世界约束引用：{key}')
+                    used_worlds[key] = worlds[key]
+            for item in value.values():
+                visit(item)
+
+    visit(body.model_dump(mode='json'))
+    return {'input_version': 'stage4-hook-semantics-v1',
+            'propositions': dict(sorted(used_props.items())),
+            'world_constraints': dict(sorted(used_worlds.items()))}
+
+
 def project_design_input(
     brief: ReconstructionBrief, obligations: Mapping[str, Any],
 ) -> dict[str, Any]:

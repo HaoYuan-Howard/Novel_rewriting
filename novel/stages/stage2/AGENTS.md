@@ -38,6 +38,10 @@ Canonical = truth → Projection = expose → Validator = enforce。
 | S2-6 | Stage2 只产出 artifact、projection 与机械证明。是否进入下一节点由 orchestrator 决定；producer／compile 不得顺手启动下游节点。 |
 | S2-7 | `str06.stage2.associate` 只建立同一性与引用（D8）：输入是 compiler 投影的**已给句柄闭集及最小文本**，输出只选已给句柄；缺项、歧义、冲突保持未决——不默认合并，也不默认不同；不移动事实成立、角色知情或读者揭示时点。 |
 
+章内同一悬念句柄的open／close各最多一次。接受与下游预检复用只读判据；存量
+错误按`chapters + chapter:N`回派，发现位置不授予修复权。associate修订只接收
+本单位可改且具有稳定规则与位置身份的关联问题（RC-18～20）。
+
 ## 目录约束
 
 ```text

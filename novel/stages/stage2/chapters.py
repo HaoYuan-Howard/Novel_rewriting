@@ -9,7 +9,7 @@
     协议版本字面量（I-13）、**本章证据句段闭集**（Resolver）、退役位置键拒识
     与登记键作用域按表归一（`R-2.14`，I-15：canonical 恒带表内作用域）、章内
     句柄纪律的自含部分（同一命题句柄的 statement 文本只建立一次；同一悬念
-    句柄本章内只 open 一次，`R-2.11`/`R-2.12`）。
+    句柄本章内只 open／close 各一次，`R-2.11`/`R-2.12`）。
 
 【章观察互不依赖（D3）】请求只由（本章句段，前文原文，书级人物表，协议）
 决定——**不依赖任何前章产物**：没有前章快照、命题/loop 登记表与 beat 表，
@@ -48,6 +48,36 @@ from contracts.schema.source import REGISTERED_STATE_KEYS, RETIRED_STATE_KEYS
 from novel.stages.common import CHAPTER_PROMPT, PRE_CHAPTER_RULE
 from novel.stages.stage2.resolver import EvidenceResolver
 from novel.stages.stage2.slim import expand_chapter_wire
+from novel.core.validation import ValidationIssue
+
+
+def chapter_loop_issues(beats: list[Any], *, chapter: int | None = None) -> list[ValidationIssue]:
+    """本地悬念生命周期；接受、关联输入预检和最终编译共用，只读且不猜跨章配对。"""
+    seen: dict[tuple[str, str], tuple[int, int]] = {}
+    issues = []
+    for bi, beat in enumerate(beats):
+        if not isinstance(beat, dict):
+            continue
+        for li, loop in enumerate(beat.get('loops') or ()):
+            if not isinstance(loop, dict):
+                continue
+            ref, op = loop.get('ref'), loop.get('op')
+            if not isinstance(ref, str) or op not in ('open', 'close'):
+                continue  # 协议形状由schema报告
+            key = (ref, op)
+            previous = seen.get(key)
+            if previous is not None:
+                issues.append(ValidationIssue(
+                    f'第{chapter}章拍{bi + 1} loop {ref!r} 本章内重复 {op}；'
+                    f'首次位于拍{previous[0] + 1}的loops[{previous[1]}]',
+                    code='chapter_loop_conflict', location=('loops', ref, op),
+                    owner=f'ch{chapter:02d}' if chapter is not None else 'chapter',
+                    scope=f'chapter:{chapter}',
+                    context={'path': ('beats', bi), 'first_path': ('beats', previous[0]),
+                             'loop_ref': ref, 'operation': op}))
+            else:
+                seen[key] = (bi, li)
+    return issues
 
 
 def chapter_prior_text(chapters: list[dict], before_chapter: int) -> str:
@@ -122,10 +152,10 @@ def _chapter_handle_discipline(
         issues: list[tuple[tuple[str | int, ...] | None, str]],
         labels: tuple[str, str] = ('effects', 'cognition'),
         ) -> None:
-    """章内句柄纪律的自含部分（`R-2.11`/`R-2.12`；引用闭合归 compile）。
+    """章内命题句柄纪律（`R-2.12`；引用闭合归compile，悬念另用共享判据）。
 
-    只查不需要登记表就能确证的冲突：同一命题句柄带两种 statement 文本、
-    同一悬念句柄本章内只 open 一次。跨章句柄与章内前向引用保持未决/
+    只查不需要登记表就能确证的冲突：同一命题句柄带两种statement文本。
+    跨章句柄与章内前向引用保持未决/
     放行——配对与闭合归 associate／compile（D8：不默认合并或默认不同）。
     CS-patch（2026-10-03）：逐条附 wire 路径（`compile 的 errors` 是本视图
     去掉路径的投影，判定与定位同一把尺）；`labels` 是瘦 wire 的路径词汇
@@ -133,7 +163,6 @@ def _chapter_handle_discipline(
     """
     eff_label, cog_label = labels
     statements: dict[str, str] = {}
-    opened_loops: set[str] = set()
     for beat_index, raw in enumerate(beats):
         if not isinstance(raw, dict):
             continue
@@ -143,16 +172,6 @@ def _chapter_handle_discipline(
                 if isinstance(prop, dict) and prop.get('statement') is not None:
                     _conflict(statements, prop, kind,
                               ('beats', beat_index, label, transfer_index - 1), issues)
-        for loop in raw.get('loops') or []:
-            if not isinstance(loop, dict):
-                continue
-            ref, op = loop.get('ref'), loop.get('op')
-            if op == 'open' and ref in opened_loops:
-                issues.append((('beats', beat_index),
-                               f'loop {ref!r} 本章内重复 open（悬念只能 open 一次；'
-                               '不同次的约定是不同的悬念线，换新句柄）'))
-            if op == 'open':
-                opened_loops.add(ref)
 
 
 def _conflict(statements: dict[str, str], prop: dict, where: str,
@@ -242,6 +261,8 @@ def _chapter_issues(canonical: Any, resolver: EvidenceResolver,
                                    f'{where} participants 引用未知人物 {person}'
                                    '（人物闭集在章观察验收即查，R3 左移）'))
     _chapter_handle_discipline(canonical.get('beats') or [], issues, labels)
+    issues.extend((issue.context['path'], issue) for issue in chapter_loop_issues(
+        canonical.get('beats') or [], chapter=chapter))
     return issues
 
 

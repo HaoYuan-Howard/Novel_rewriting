@@ -212,7 +212,7 @@ class Stage0Report(StrictModel):
     #:
     #: 【这不是本模块纪律 ② 说的「第二个判官」】那条禁的是视图**自己算**一个判定。
     #: 这一格恰恰相反：它是把**唯一那个判官**
-    #: （`novel/stages/stage0/eligibility.py::is_stage0_executable`）的结论原样投影
+    #: （`novel/core/eligibility.py::is_stage0_executable`）的结论原样投影
     #: 下来。此前前端自己拼 `approved === 'approved' && origin === 'human'`
     #: ——那才是第二个落点，而且是外部评审点名要收口的第五处（前四处是 s0_approval
     #: 判据、stage1 启动前置、orchestrator 队列、付费防线，2026-08-21 已收口）。

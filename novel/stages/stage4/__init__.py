@@ -39,7 +39,7 @@ from novel.stages.stage4.book_ir import (
 )
 from novel.stages.stage4.compile import compile_execution_plan, init_establishments
 from novel.stages.stage4.design import assemble_body_design
-from novel.stages.stage4.slim import knowledge_change_index, project_design_input
+from novel.stages.stage4.slim import knowledge_change_index, project_design_input, project_hook_semantics
 from novel.stages.stage4.fold import (
     FoldedState, ThreadFold, fold_accepted_prefix, fold_thread_faces,
 )
@@ -74,6 +74,6 @@ __all__ = [
     'design_obligation_index', 'design_placements', 'derive_semantic_binding',
     'expected_thread_faces', 'fold_accepted_prefix', 'fold_thread_faces',
     'init_establishments', 'lock_order_violations', 'obligation_core_id',
-    'project_brief', 'project_design_input', 'project_preserve_view', 'preserve_revision_wire',
+    'project_brief', 'project_design_input', 'project_hook_semantics', 'project_preserve_view', 'preserve_revision_wire',
     'publish_graph', 'run_mechanical_guard', 'scene_order',
 ]

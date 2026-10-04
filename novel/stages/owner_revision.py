@@ -118,7 +118,8 @@ def _fingerprint(issues: tuple[OwnerIssueV1, ...] | list[OwnerIssueV1]) -> str:
 
     material = sorted({(i.code, i.item, json.dumps(i.context['material_identity'],
                                                 ensure_ascii=False, sort_keys=True)
-                       if 'material_identity' in i.context else i.message) for i in issues})
+                       if 'material_identity' in i.context else
+                       i.context.get('validation_identity', i.message)) for i in issues})
     return hashlib.sha256(json.dumps(material, ensure_ascii=False,
                                      separators=(',', ':')).encode('utf-8')
                           ).hexdigest()
@@ -358,8 +359,10 @@ def revision_prompt_for_owner(repository, owner: str, base_prompt: str,
     if record is None:
         return base_prompt
     previous = _stored_payload_text(repository, previous_rel, project=previous_wire)
+    from novel.stages.common import semantic_revision_rules
     return revision_user_prompt(base_prompt, previous, _messages(record.issues),
-                                previous_is_canonical=previous_wire is None)
+                                previous_is_canonical=previous_wire is None,
+                                revision_rules=semantic_revision_rules(owner))
 
 
 def _stored_payload_text(repository, rel: str, *,

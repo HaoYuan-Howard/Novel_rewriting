@@ -9,7 +9,7 @@ stage1/hook_copy.json  {text}
 ```
 
 原文章号、切片坐标、章数、断号/重号/倒退和告警都能从当前 clean
-确定性复扫，因此不落盘第二份。`novel/stages/stage1/audit.py::audit_surface`
+确定性复扫，因此不落盘第二份。`novel/core/ingest_audit.py::audit_surface`
 是 producer、`--check-only`、Stage1 页、freshness 与 s1 审批共用的唯一审计口。
 
 ---

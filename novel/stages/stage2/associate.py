@@ -46,6 +46,7 @@ from pydantic import ValidationError
 from contracts.schema.observation import (
     AssociateObservation, BookObservation, ChapterObservation,
 )
+from novel.core.validation import ValidationIssue
 
 
 # ───────────────────────── typed 作用对象显式序列化（AUD-01） ─────────────────────────
@@ -116,6 +117,12 @@ def chapter_state_handle(
 
 
 # ───────────────────────── 关联空间投影（compiler 编码句柄） ─────────────────────────
+
+def association_issue(code: str, location: tuple, message: str) -> ValidationIssue:
+    """关联判据的稳定身份：规则＋句柄，独立于展示前缀、列表序和当前实得值。"""
+    return ValidationIssue('关联未决：' + message, code=f'association_{code}', location=location,
+                           owner='associate')
+
 
 @dataclass(frozen=True)
 class PropositionHandle:
@@ -351,106 +358,61 @@ def loop_pairing_issues(
     for pair in observation.loop_pairing:
         if pair.close in closes:
             issues.append(
-                f'悬念配对重复占用 close {pair.close!r}：'
-                f'{closes[pair.close]!r} 与 {pair.open!r}（保持未决，不默认忽略）')
+                association_issue('loop_duplicate_close', (pair.close,), f'悬念配对重复占用 close {pair.close!r}：'
+                f'{closes[pair.close]!r} 与 {pair.open!r}（保持未决，不默认忽略）'))
         else:
             closes[pair.close] = pair.open
         if pair.open in opens:
             issues.append(
-                f'悬念 {pair.open!r} 不得重复 close：'
-                f'{opens[pair.open]!r} 与 {pair.close!r}')
+                association_issue('loop_duplicate_open', (pair.open,), f'悬念 {pair.open!r} 不得重复 close：'
+                f'{opens[pair.open]!r} 与 {pair.close!r}'))
         else:
             opens[pair.open] = pair.close
         if pair.close in space.loop_opens:
             issues.append(
-                f'悬念 close {pair.close!r} 已在章内自开自闭，'
-                f'不得再配到跨章 open {pair.open!r}（保持未决）')
+                association_issue('loop_local_pair', (pair.close, pair.open), f'悬念 close {pair.close!r} 已在章内自开自闭，'
+                f'不得再配到跨章 open {pair.open!r}（保持未决）'))
     return issues
 
 
 def compile_associate_observation(
     wire: Any, space: AssociationSpace,
 ) -> tuple[AssociateObservation | None, list[str]]:
-    """associate wire → (AssociateObservation, errors)：关联观察的全部 owner 机械闸。
-
-    只选已给句柄（D8）：每类配对的句柄逐个对投影闭集核对，未知即精确 issue；
-    自指配对、同章配对（不是跨章关联）同拒。wire 不被修改（I-24）；错误逐条
-    聚合，不模糊匹配、不猜笔误。语义正确性（配得对不对）归 semantic unit，
-    保持 unver 披露。
-    """
-    errors: list[str] = []
-    if not isinstance(wire, dict):
-        return None, ['associate wire 必须是 JSON object']
-
-    def check(kind: str, handle: Any, closed: Mapping[str, Any]) -> None:
-        if not isinstance(handle, str) or handle not in closed:
-            errors.append(
-                f'{kind} 句柄 {handle!r} 不在投影闭集内（该类共 '
-                f'{len(closed)} 个已给句柄；只选已给句柄，不猜笔误）')
-
-    for pair in wire.get('same_proposition') or []:
-        if not isinstance(pair, dict):
-            continue
-        check('same_proposition.left', pair.get('left'), space.propositions)
-        check('same_proposition.right', pair.get('right'), space.propositions)
-        left, right = space.propositions.get(pair.get('left')), space.propositions.get(pair.get('right'))
-        if left is not None and left is right:
-            errors.append(f'配对自指：{pair.get("left")!r} 与自身配对')
-        elif left is not None and right is not None and left.chapter == right.chapter:
-            errors.append(
-                f'same_proposition 的两端同在第 {left.chapter} 章'
-                '（章内同一性由章内句柄表达，配对只做跨章关联）')
-    for pair in wire.get('same_state_dimension') or []:
-        if not isinstance(pair, dict):
-            continue
-        check('same_state_dimension.left', pair.get('left'), space.states)
-        check('same_state_dimension.right', pair.get('right'), space.states)
-        left, right = space.states.get(pair.get('left')), space.states.get(pair.get('right'))
-        if left is not None and left is right:
-            errors.append(f'配对自指：{pair.get("left")!r} 与自身配对')
-        elif left is not None and right is not None and left.chapter == right.chapter:
-            errors.append(
-                f'same_state_dimension 的两端同在第 {left.chapter} 章'
-                '（同章近义键由本章观察自己收敛，配对只做跨章关联）')
-    for pair in wire.get('loop_pairing') or []:
-        if not isinstance(pair, dict):
-            continue
-        check('loop_pairing.open', pair.get('open'), space.loop_opens)
-        check('loop_pairing.close', pair.get('close'), space.loop_closes)
-        left, right = (space.loop_opens.get(pair.get('open')),
-                       space.loop_closes.get(pair.get('close')))
-        if left is not None and right is not None and left.chapter == right.chapter:
-            errors.append(
-                f'loop_pairing 的两端同在第 {left.chapter} 章'
-                '（章内自开自闭不需要配对）')
-    for edge in wire.get('cross_chapter_cause') or []:
-        if not isinstance(edge, dict):
-            continue
-        check('cross_chapter_cause.from_beat', edge.get('from_beat'), space.beats)
-        check('cross_chapter_cause.to_beat', edge.get('to_beat'), space.beats)
-        left, right = space.beats.get(edge.get('from_beat')), space.beats.get(edge.get('to_beat'))
-        if left is not None and right is not None:
-            if left is right or left.chapter == right.chapter:
-                errors.append(
-                    f'cross_chapter_cause 的两端同在第 {left.chapter} 章'
-                    '（章内因果由拍序与转移结构承载，不进关联）')
-    for pair in wire.get('scene_continuation') or []:
-        if not isinstance(pair, dict):
-            continue
-        check('scene_continuation.left', pair.get('left'), space.scenes)
-        check('scene_continuation.right', pair.get('right'), space.scenes)
-        left, right = space.scenes.get(pair.get('left')), space.scenes.get(pair.get('right'))
-        if left is not None and left is right:
-            errors.append(f'配对自指：{pair.get("left")!r} 与自身配对')
-        elif left is not None and right is not None and left.chapter == right.chapter:
-            errors.append(
-                f'scene_continuation 的两端同在第 {left.chapter} 章'
-                '（章内场景由 new/continue 边界表达）')
+    """只读接受：schema给出字段位置，闭集/跨章/占用判据给出稳定句柄身份。"""
     try:
         observation = AssociateObservation.model_validate(wire)
     except ValidationError as exc:
-        return None, errors + [f'关联观察协议校验失败：{exc}']
+        return None, [association_issue(
+            'schema_' + error['type'], tuple(error['loc']),
+            f"关联观察协议校验失败：{error['loc']}：{error['msg']}")
+            for error in exc.errors()]
+    errors: list[str] = []
+    groups = (
+        ('same_proposition', 'left', 'right', space.propositions, space.propositions),
+        ('same_state_dimension', 'left', 'right', space.states, space.states),
+        ('loop_pairing', 'open', 'close', space.loop_opens, space.loop_closes),
+        ('cross_chapter_cause', 'from_beat', 'to_beat', space.beats, space.beats),
+        ('scene_continuation', 'left', 'right', space.scenes, space.scenes),
+    )
+    for kind, left_field, right_field, left_space, right_space in groups:
+        for pair in getattr(observation, kind):
+            left_ref, right_ref = getattr(pair, left_field), getattr(pair, right_field)
+            for field, ref, closed in ((left_field, left_ref, left_space),
+                                       (right_field, right_ref, right_space)):
+                if ref not in closed:
+                    errors.append(association_issue(
+                        'unknown_handle', (kind, field, ref),
+                        f'{kind}.{field} 句柄 {ref!r} 不在投影闭集内'
+                        f'（该类共 {len(closed)} 个已给句柄；只选已给句柄，不猜笔误）'))
+            left, right = left_space.get(left_ref), right_space.get(right_ref)
+            if left is None or right is None:
+                continue
+            if left is right:
+                errors.append(association_issue(
+                    'self_pair', (kind, left_ref), f'配对自指：{left_ref!r} 与自身配对'))
+            elif left.chapter == right.chapter:
+                errors.append(association_issue(
+                    'same_chapter', (kind, left_ref, right_ref),
+                    f'{kind} 的两端同在第 {left.chapter} 章（章内关系由章观察表达，配对只做跨章关联）'))
     errors.extend(loop_pairing_issues(observation, space))
-    if errors:
-        return None, errors
-    return observation, []
+    return (None, errors) if errors else (observation, [])

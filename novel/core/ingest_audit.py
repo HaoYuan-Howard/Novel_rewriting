@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Stage1 当前材料的唯一审计口。
+"""摄入材料的纯审计；Stage、Repository、来源证明与视图共用的底层判据。
 
 producer、``--check-only``、页面、freshness 与人工审批都复用这里对当前
 ``clean_text`` 的同一次语义：原文现扫是权威，盘上 Stage1 只能与它逐字对账。

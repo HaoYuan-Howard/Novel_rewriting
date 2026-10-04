@@ -437,7 +437,7 @@ STAGE0_WARNINGS: Final = ('early_cut', 'drop_ratio', 'long_marker')
 #: 【为什么不能是 `bool`】「跑了没批」与「批了」必须分开，与 `FRESHNESS` / `JOB_STATE` /
 #: `BADGE` 同构：本项目每一次把「不知道」并进「没问题」都付过学费。
 #: ⚠ `R-0.3b`（`HARD`）判的是**不满足执行资格 ⇒ stage1 拒绝启动**，判它的唯一落点是
-#: `novel/stages/stage0/eligibility.py::is_stage0_executable`，消费方不许复述条件。
+#: `novel/core/eligibility.py::is_stage0_executable`，消费方不许复述条件。
 #: ⚠ `ApprovedApproval` 曾有第三格 `origin: 'auto_zero_hit' | 'human'`，
 #: 2026-08-22 与 `not_run` 同一判据删除：产地 2026-08-21 已停产，而真正带着它的
 #: 存量产物是旧版且本仓不迁移 ⇒ 那些产物连 decode 都过不去，

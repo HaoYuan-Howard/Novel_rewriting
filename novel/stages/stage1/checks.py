@@ -10,7 +10,7 @@ from novel.report.builder import build
 from novel.report.findings import Outcome, ran
 from novel.run import RunContext
 from novel.store import ArtifactStore
-from novel.stages.stage1.audit import Stage1Audit, audit_surface
+from novel.core.ingest_audit import Stage1Audit, audit_surface
 from novel.stages.stage1.partition import CLEAN_TEXT, HOOK_COPY, MAIN_TEXT, STAGE0_STATE
 
 

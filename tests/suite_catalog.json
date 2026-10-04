@@ -1132,6 +1132,22 @@
         "test_proved_variant_reaches_canonical_and_preserve_without_changing_quotes": "stage",
         "test_unresolved_identity_stops_before_associate_purchase_and_publish": "stage"
       }
+    },
+    "tests/test_workflow_role_boundaries.py": {
+      "layer": "stage",
+      "stages": [
+        "stage2",
+        "stage4",
+        "stage5"
+      ],
+      "cases": {
+        "test_rc18_duplicate_close_rejected_by_chapter_acceptance": "unit_contract",
+        "test_rc20_identity_does_not_depend_on_wording_or_order": "unit_contract",
+        "test_rc19_three_digit_chapter_can_persist_and_resume_its_revision": "unit_contract",
+        "test_rc24_design_and_writer_instructions_match_time_contract": "unit_contract",
+        "test_rc21_owner_permissions_reach_full_and_patch_requests": "unit_contract",
+        "test_rc24_successive_states_reach_their_own_beats": "unit_contract"
+      }
     }
   },
   "version": 1

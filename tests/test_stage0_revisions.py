@@ -216,7 +216,7 @@ def test_machine_rerun_replaces_transform_when_algorithm_changes(
     _assert_mechanical_admission(transform.admission)
     assert second.report.revision_origin == 'machine'
     assert second.clean_text != first.clean_text
-    from novel.stages.stage0.eligibility import is_stage0_executable
+    from novel.core.eligibility import is_stage0_executable
     assert is_stage0_executable(second.report)
 
 

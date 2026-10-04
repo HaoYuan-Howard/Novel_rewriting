@@ -83,13 +83,14 @@ def json_ask(session, *, model='fake', max_tokens=1000):
     """ChainContext.ask 形状的 JSON 付费闭包：ask_json 接受循环＋显式引用。"""
     from novel.llm.paid_requests import ask_json
     from novel.llm.transport import ChatRequest
-    from novel.stages.common import SYS
+    from novel.stages.common import SYS, semantic_revision_rules
 
     def ask(owner, prompt, validate, patch=None):
         request = ChatRequest(model=model, system=SYS, user=prompt,
                               reasoning_effort='high', thinking=True,
                               json_mode=True, max_tokens=max_tokens)
-        return ask_json(session, owner, request, validate, patch=patch)
+        return ask_json(session, owner, request, validate, patch=patch,
+                        revision_rules=semantic_revision_rules(owner))
     return ask
 
 

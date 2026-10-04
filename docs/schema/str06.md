@@ -826,3 +826,17 @@ Preserve 同时收到正式归一文本、原句及名称同一性依据，不�
   producer和compiler使用相同映射，旧canonical Brief不能作为新wire模板。
 
 这些版本只描述语义输入，不能当正式artifact版本；输入变化自然进入请求身份。
+
+### 职责边界补充（RC-18～25，2026-10-04）
+
+- 章内悬念open／close各至多一次；同源只读判据在chapters接受、associate输入
+  预检和compile防御复验执行。章观察错误按node＋chapter scope回派，关联只修配对。
+- 关联判据返回带规则码、位置、owner和scope的派生诊断；展示文字不是控制接口。
+  旧误派账的免费更正使用现役issue-correction预览/CAS入口，不清费用和轮数。
+- Hook设计输入新增stage4-hook-semantics-v1派生投影，所引用kp和世界约束的完整
+  文本来自Brief；悬空引用在外发前拒绝。正式领域artifact形状不变，请求摘要随材料变化。
+- renderer升str06-render-v9，正文协议升str06-body-protocol-v8：义务在接受拍兑现，
+  状态在对应拍末成立，持续到被后继转移替代或作用域结束。版本参与请求与章包身份；
+  旧正文/回执不静默补新身份，已购响应仍按正式免费复验与恢复入口处理。
+- Design的requires沿用顺序三分：同场允许接受拍交错，跨场逆序仍拒绝；事实读取与
+  知情披露保留独立硬闸。修订权限由业务owner声明，通用接受循环只消费声明。

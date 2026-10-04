@@ -784,10 +784,10 @@ OWNER_PRODUCT_RELS: Final[dict[str, str]] = {
 }
 
 #: 逐章观察 owner（`chNN`）→ 正式产物 rel（R10a a3：证据冲突按拍句柄回派
-#: 逐章 owner；owner 名即章目录名，rel 由本函数唯一拼装，不逐章登记静态表）。
+#: 逐章 owner；02d是最小显示宽度而非章数上限，rel由本函数唯一拼装）。
 def chapter_owner_product_rel(owner: str) -> str | None:
     import re as _re
-    if _re.fullmatch(r'ch\d{2}', owner):
+    if _re.fullmatch(r'ch\d{2,}', owner):
         return f'stage2/observations/{owner}.json'
     return None
 
@@ -835,6 +835,7 @@ OWNER_ISSUE_CODES: Final = (
     'anchor_conflict',     # 逐字锚命中分散在多个句段（Resolver）
     'schema_violation',    # wire 形状／协议字面量／重复键（同节点）
     'association_undecided',   # 关联未决（D8）：回派 associate
+    'chapter_loop_conflict',  # 本地悬念生命周期：按chapter scope回章观察
     'must_keep_unbound',   # 必保义务未承载：按 unbound.owner 回 body_design/preserve
     'source_evidence_conflict',  # 源证据冲突（R10a a3）：按锚点句柄回派 Stage2 owner
     'epistemic_lock_order',  # 知情升级/读者确认早于授权承载位（R10a a5）：回 body_design
@@ -854,6 +855,7 @@ OWNER_ISSUE_ROUTES: Final[dict[str, str]] = {
     'anchor_conflict': 'revise_self',
     'schema_violation': 'revise_self',
     'association_undecided': 'revise_upstream:str06.stage2.associate',
+    'chapter_loop_conflict': 'revise_upstream:str06.stage2.chapters',
     'must_keep_unbound': 'revise_upstream:unbound_owner',
     'source_evidence_conflict': 'revise_upstream:conflict_anchor',
     # R10a a5：锁位置是 Design 的披露顺序决定（Bind 只选承载位）；单一目标

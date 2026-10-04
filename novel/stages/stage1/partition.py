@@ -3,23 +3,19 @@
 """Stage1 分章产地。零 LLM，不剔除任何非正文。"""
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 from contracts.artifacts import (
     STAGE0_CLEAN_TEXT, STAGE0_REVISIONS, STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT,
 )
-from contracts.invariants import BODY_RATIO_MIN, MIN_CHAPTERS
+from contracts.invariants import BODY_RATIO_MIN
 from contracts.schema.report import CheckReport
 from contracts.schema.stage0 import Stage0Transform
-from contracts.schema.stage1 import HookCopy, MainText, MainTextSection
 from novel import prov
 from novel.errors import (
-    ApprovalRequired, HookCopyMissing, PartitionChapterMismatch, PartitionInputMismatch,
-    ResidualNonbody, Stage0BodyRejected, TooFewChapters,
+    ApprovalRequired, PartitionInputMismatch, Stage0BodyRejected,
 )
 from novel.run import RunContext
 from novel.store import ArtifactStore
-from novel.stages.stage1.audit import scan_partition
+from novel.core import partition
 
 STAGE0_STATE = STAGE0_REVISIONS
 CLEAN_TEXT = STAGE0_CLEAN_TEXT
@@ -27,54 +23,11 @@ MAIN_TEXT = STAGE1_MAIN_TEXT
 HOOK_COPY = STAGE1_HOOK_COPY
 
 
-@dataclass(frozen=True)
-class PartitionResult:
-    main_text: MainText
-    hook_copy: HookCopy
-    tail: str
-
-
-def partition_text(clean_text: str) -> PartitionResult:
-    """分章纯函数；显式终态发生在模型构造和写盘之前。"""
-    partition = scan_partition(clean_text)
-    if partition.scan.nonbody:
-        marker = partition.scan.nonbody[0]
-        line_no = clean_text.count('\n', 0, marker.line_start) + 1
-        raise ResidualNonbody(
-            f'批准后的 clean_text 第 {line_no} 行仍命中非正文标记「{marker.title}」；'
-            'stage1 只断言、不代替 stage0 静默删除')
-
-    hook_text = clean_text[:partition.first_marker]
-    if not hook_text.strip():
-        raise HookCopyMissing(
-            '第一个正文章标记之前没有非空开篇文案；stage6、stage7 都依赖它')
-    if len(partition.markers) < MIN_CHAPTERS:
-        raise TooFewChapters(
-            f'只识别到 {len(partition.markers)} 个正文章节，少于最低要求 {MIN_CHAPTERS}')
-
-    sections: list[MainTextSection] = []
-    for index, (marker, (start, end)) in enumerate(
-        zip(partition.markers, partition.chapter_spans), start=1,
-    ):
-        raw = clean_text[start:end]
-        if not raw.strip():
-            raise PartitionChapterMismatch(
-                f'第 {index} 个章节标记（原章号 {marker.chapter_no}）之后没有正文；'
-                f'独立计数会得到 {len(partition.markers)} 章，但章表无法一一落盘')
-        sections.append(MainTextSection(chapter_ordinal=index, text=raw))
-
-    return PartitionResult(
-        main_text=MainText.model_validate(sections),
-        hook_copy=HookCopy(text=hook_text),
-        tail=partition.tail,
-    )
-
-
 def run_partition(
     ctx: RunContext,
     *,
     dry_run: bool = False,
-) -> tuple[PartitionResult, CheckReport | None]:
+) -> tuple[partition.PartitionResult, CheckReport | None]:
     """读取 Stage0 当前机械 transform，分章并落两份承重材料。"""
     store = ArtifactStore(ctx)
     from novel.stages.stage0 import revisions as stage0_revisions
@@ -82,7 +35,7 @@ def run_partition(
     stage0_revisions.verify_transform(stage0_log)
     stage0 = stage0_revisions.snapshot_of(stage0_log)
     clean_text = store.read_text(CLEAN_TEXT)
-    from novel.stages.stage0.eligibility import is_stage0_executable
+    from novel.core.eligibility import is_stage0_executable
     if not is_stage0_executable(stage0):
         raise ApprovalRequired(
             f'stage0 当前 admission 为 {stage0.admission.status!r}/'
@@ -99,7 +52,7 @@ def run_partition(
             f'stage0 清理后只保留 {ratio:.1%} 正文，低于 {BODY_RATIO_MIN:.0%}，'
             '不能把疑似截断的文本送入下游')
 
-    result = partition_text(clean_text)
+    result = partition.partition_text(clean_text)
     if dry_run:
         return result, None
 

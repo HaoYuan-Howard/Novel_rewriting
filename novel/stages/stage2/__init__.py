@@ -35,7 +35,7 @@ from novel.stages.stage2.book import (
 )
 from novel.stages.stage2.chapters import (
     chapter_observation_prompt, chapter_patch_locate, chapter_prior_text,
-    compile_chapter_observation,
+    compile_chapter_observation, chapter_loop_issues,
 )
 from novel.stages.stage2.compile import (
     CompileOutcome, CONFIRMING_MODES, FoldResult, compile_source_truth,
@@ -65,7 +65,7 @@ __all__ = [
     'chapter_observation_prompt', 'chapter_prior_text',
     'chapter_state_handle', 'character_core_view',
     'compile_associate_observation',
-    'chapter_patch_locate', 'compile_book_observation', 'compile_chapter_observation',
+    'chapter_patch_locate', 'compile_book_observation', 'compile_chapter_observation', 'chapter_loop_issues',
     'compile_name_structure', 'compile_source_truth', 'evidence_metrics',
     'normalize_name_observations', 'validate_name_resolutions',
     'initial_snapshot',

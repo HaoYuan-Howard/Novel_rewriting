@@ -45,10 +45,10 @@ from novel.stages.stage1 import checks as stage1_checks
 from novel.stages.stage1.partition import (
     HOOK_COPY,
     MAIN_TEXT,
-    partition_text,
     run_partition,
 )
-from novel.stages.stage1.audit import audit_surface, scan_partition
+from novel.core.partition import partition_text
+from novel.core.ingest_audit import audit_surface, scan_partition
 from tests.fixtures_ingest import CASES
 
 
@@ -651,7 +651,7 @@ def test_execution_eligibility_has_exactly_one_home():
         text = (_Path(rel)).read_text(encoding='utf-8')
         assert "approval.status == 'approved'" not in text, (
             f'{rel} 复述了审批条件——改用 '
-            f'novel/stages/stage0/eligibility.py::is_stage0_executable')
+            f'novel/core/eligibility.py::is_stage0_executable')
         assert 'eligibility' in text, f'{rel} 应经 eligibility 落点判执行资格'
 
     approvals_text = (_Path('novel/orchestrator/approvals.py')).read_text(encoding='utf-8')

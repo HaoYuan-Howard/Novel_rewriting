@@ -823,25 +823,6 @@ def _import_targets_stage(node) -> bool:
         return any(a.name.startswith('novel.stages') for a in node.names)
     return bool(node.module) and node.module.startswith('novel.stages')
 
-_CROSS_STAGE_DEEP_GRANDFATHER = frozenset({
-    # ── F8c（2026-09-25）：旧链整层删除，81 条冻结边清零到 6 条 ──
-    # 被消化的 75 条全部随旧 Stage2/4/5/6/7 链（novel/stages/stage2|4|5|6|7/、
-    # novel/llm/stage*_runs.py、novel/views/stage{2,4,5,6}.py、
-    # novel/views/blueprint_progress.py、contracts/judges/stage{2,4,5,6,7}.py）
-    # 从磁盘删除而消失：importer 或深导入目标已不存在，边自然不成立。
-    # 逐条理由与对账登记见 contracts/schema/retirement.py（F7e 表
-    # 88 条 grandfather 边，take_over「F8c 随旧链整层删除（grandfather 清零）」）。
-    # 剩下的 6 条都在**范围外**的 stage0/stage1 之间（Stage0/1 整层重构延期），
-    # 继续冻结：它们不是旧链残留，删掉它们等于宣布新链可以新增同类深边。
-    ('novel/source_identity.py', 'novel.stages.stage1.audit'),
-    ('novel/source_identity.py', 'novel.stages.stage1.partition'),
-    ('novel/stages/stage1/partition.py', 'novel.stages.stage0.eligibility'),
-    ('novel/store.py', 'novel.stages.stage1.audit'),
-    ('novel/views/ingest.py', 'novel.stages.stage0.eligibility'),
-    ('novel/views/ingest.py', 'novel.stages.stage1.audit'),
-})
-
-
 def _cross_stage_deep_edges() -> set[tuple[str, str]]:
     """(importer 仓内路径, 深路径 import 的 stage 模块)——含函数内惰性 import。"""
     out: set[tuple[str, str]] = set()
@@ -869,42 +850,30 @@ def _cross_stage_deep_edges() -> set[tuple[str, str]]:
 
 
 def test_cross_stage_imports_stay_on_the_package_surface():
-    """⭐ Stage 公开边界：跨 stage 只许 `from novel.stages.stageN import X`
-    （包级导出）或经 `contracts.schema.stageN`；深路径 import 别的 stage 的
-    measure / prompts / plot_compile / checks 等内部实现一律禁止。
-
-    「删一个机制为什么改几十个文件」的根源正是这些深边——StageN 的内部
-    实现被当成公共接口消费。冻结基线 2026-09 立项时为 67 条，历批消化
-    （Commander 审阅退役、stage0.approve 人工闸退役、STR-02/03 补账、
-    F8b Stage6 服务面与 edits 路由族退役）后，**F8c 随旧链整层删除清零**：
-    81 条里 75 条的 importer 或深导入目标已从磁盘删除（旧 Stage2/4/5/6/7
-    链全家），只剩 6 条——全部在**范围外**的 stage0/stage1 之间
-    （Stage0/1 整层重构延期，见 `docs/REQUIREMENTS.md`）。
-    **只减不增**：消化一条就把它从清单删掉（diff 里可见、须说理由），
-    新增深边必须先建 stageN 包级公开导出。
-    """
+    """RC-25：摄入六条深依赖已消化，现役跨Stage内部导入一律拒绝，无白名单。"""
     current = _cross_stage_deep_edges()
-    new = current - _CROSS_STAGE_DEEP_GRANDFATHER
-    assert not new, (
-        f'新增跨 stage 深路径 import：{sorted(new)}；'
-        f'→ 要么经 stageN 包级导出（from novel.stages.stageN import X），'
-        f'要么走 contracts.schema.stageN')
-    stale = _CROSS_STAGE_DEEP_GRANDFATHER - current
-    assert not stale, (
-        f'以下深边已消失，请同步从冻结清单删除（消化须在提交说明给理由）：{sorted(stale)}')
-    # 守卫的守卫：扫描器必须看得见冻结清单里的已知边，否则红的是探测器。
-    # （F8c 后清单里全是范围外边，取 store→stage1.audit 这条最要紧的：
-    # 产物单口对 Stage1 的惰性深触达仍在，探测器必须还看得见它。）
-    assert ('novel/store.py', 'novel.stages.stage1.audit') in current
-    # F8c（2026-09-25）：旧链整层删除，冻结清单里 75 条深边随 importer／
-    # 目标模块从磁盘消失而一并消化（81→6）。逐条登记口径见
-    # contracts/schema/retirement.py F7e 表 grandfather 边
-    # （take_over「F8c 随旧链整层删除（grandfather 清零）」）与红账
-    # 「删除即清零」条。清单只剩 6 条范围外边，「新链不得新增这些依赖」的
-    # 正向守卫由上面的 `new` 断言继续生效——清单小不等于守卫松：
-    # 任何新深边仍然当场红。
-    assert len(_CROSS_STAGE_DEEP_GRANDFATHER) == 6
+    assert not current, f'跨Stage内部依赖：{sorted(current)}；共用纯逻辑须下沉'
 
+
+def test_deep_stage_scanner_detects_lazy_import_counterexample(tmp_path, monkeypatch):
+    """守卫自身反例：白名单删除后仍须证明能看见函数内部的违规导入。"""
+    path = tmp_path / 'novel' / 'probe.py'
+    path.parent.mkdir()
+    path.write_text('def bad():\n    from novel.stages.stage1.audit import scan_partition\n',
+                    encoding='utf-8')
+    monkeypatch.setattr(__import__(__name__, fromlist=['ROOT']), 'ROOT', str(tmp_path))
+    monkeypatch.setattr(__import__(__name__, fromlist=['_runtime_files']),
+                        '_runtime_files', lambda: (str(path),))
+    assert _cross_stage_deep_edges() == {('novel/probe.py', 'novel.stages.stage1.audit')}
+
+
+def test_ingest_primitives_are_independent_of_stage_and_repository():
+    """RC-25：底层三模块不是反向导入旧实现的包装。"""
+    for rel in ('novel/core/eligibility.py', 'novel/core/ingest_audit.py',
+                'novel/core/partition.py'):
+        imports = _full_imports(os.path.join(ROOT, rel))
+        assert not any(m.startswith(('novel.stages', 'novel.store', 'novel.run'))
+                       for m in imports), (rel, imports)
 
 
 def test_stage2_owner_shims_cannot_return():

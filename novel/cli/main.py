@@ -258,10 +258,10 @@ def _parser() -> argparse.ArgumentParser:
     rr.add_argument('--decline', action='store_true',
                     help='明确放弃本次修复额度；重跑原节点后进入下一采')
 
-    correction = sub.add_parser('issue-correction', help='免费预览／显式更正旧材料回派（不重置额度）')
+    correction = sub.add_parser('issue-correction', help='免费预览／显式更正旧材料或关联回派（不重置额度）')
     correction.add_argument('sid')
     correction.add_argument('--base', required=True)
-    correction.add_argument('--owner', required=True, choices=('book', 'preserve'))
+    correction.add_argument('--owner', required=True, choices=('book', 'preserve', 'associate'))
     correction.add_argument('--apply', action='store_true')
     correction.add_argument('--subject-sha256')
     correction.add_argument('--reason')
@@ -1275,12 +1275,14 @@ def _cmd_issue_correction(a: argparse.Namespace) -> int:
 
     def perform():
         repo = Str06Repository(paths.resolve_novel_dir(Path(a.base), a.sid))
-        budget = derive_total_length_budget(load_stage1_chapters(a.base, a.sid).chapters)
+        chapters = load_stage1_chapters(a.base, a.sid).chapters
+        budget = derive_total_length_budget(chapters)
+        ordinals = tuple(c['chapter_ordinal'] for c in chapters)
         try:
             if a.apply:
                 return apply_issue_correction(repo, a.owner, budget=budget,
-                    expected_sha256=a.subject_sha256, reason=a.reason)
-            return preview_issue_correction(repo, a.owner, budget=budget)
+                    expected_sha256=a.subject_sha256, reason=a.reason, chapter_ordinals=ordinals)
+            return preview_issue_correction(repo, a.owner, budget=budget, chapter_ordinals=ordinals)
         except ValueError as exc:
             raise TerminalState(str(exc)) from exc
 

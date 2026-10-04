@@ -17,6 +17,7 @@ Gherkin 使用 [Cucumber 官方语法](https://cucumber.io/docs/gherkin/referenc
 | 同上 | RC-09～15 | 问题身份、有限修订、耦合patch、消费级联、免费恢复与旧根处理 |
 | 同上 | RC-17 | names v2 同一性留证；`tests/test_str06_name_resolution.py`：真实Stage2发布、Preserve消费、未决零下游购买、局部归一与旧版本拒识 |
 | 同上 | RC-16 | 真实CLI／调度／交付／重启的零付费stage与产品入口测试 |
+| 同上 | RC-18～25 | 作业单位、结构化诊断、修订权限、材料语义、时点和共用摄入依赖；逐项证据见下方职责边界表 |
 | [计量与对照](../specs/cost_accounting.feature) | CU-01～06 | provider usage解析、新购和缺账恢复、缓存去重、只读历史补证 |
 | 同上 | CU-07～10 | 必要输入送达、精确请求身份、分节点配置对照、可比成本报告 |
 | 同上 | CU-11～12 | `tests/test_str06_cli_dispatch.py` 配置／权限与篡改反例；`tests/test_str06_product_entry.py` 实际请求、免费复检及HTTP到真实子进程全链 |
@@ -34,6 +35,52 @@ Gherkin 使用 [Cucumber 官方语法](https://cucumber.io/docs/gherkin/referenc
 存在、函数存在或规格语法正确代替行为证明。新增模块同步 suite_catalog。
 
 ## 责任规则
+
+### 作业单位与控制边界（RC-18～25）
+
+作业单位固定为node＋scope；内容修订和网络尝试不产生新单位。发现节点不自动
+取得上游字段的修改权：章内句柄纪律由章观察接受前验证，已存错误从正式章位置
+回派；associate只修配对选择。无法证明责任或确定性代码缺陷停止，不购买语义修复。
+同一规则在接受前与最终compile复用；validator只报告，薄编排持久登记和执行回派。
+
+关联诊断使用规则码与句柄/正式位置组成身份，文案、列表展示顺序和当前实得值
+不参与。兼容字符串只留在尚未迁移的判据，不能重新包裹已结构化诊断而丢失身份。
+收敛沿用现役有界政策：A+B→B可以继续；A→A、A→B→A停止；此前未出现的
+A+B→B+C可在原轮数上限内继续，但不报告为问题减少，也不新增额度。
+
+每个语义owner明确权威输入与可改输出；观察可纠正自身错误结论，设计可在义务
+约束内调整选择，关联只选句柄，写手按材料展开。整份、条目及跨owner修订共用
+权限描述。原文和只读上游不随修订修改；“不得改换事实”不得禁止纠正错误观察。
+模型实际请求必须包含其决策引用的完整语义，投影与编译共用编号映射。依赖语义
+沿用现役顺序三分：同场允许交错，跨场逆序拒绝，认知披露独立校验。拍末结果
+在对应拍成立，持续状态到后续转移替代或作用域结束；不延长成全部章末条件。
+
+2026-10-04用户裁决：跨层分章纯转换、摄入审计和Stage0放行判据下沉独立底层
+模块，原Stage实现删除；不使用转导出掩盖六条深依赖，不保留双实现。
+架构测试验证依赖方向；现役Stage、来源证明和读面测试验证消费者行为等价。
+
+本组证据按下表追溯；未列文件名的`test_rc*`均在`tests/test_workflow_role_boundaries.py`，
+测试名中的RC编号与Gherkin同号。RC-23在本批基线已通过，
+不再把完整义务投影算作待修缺陷。免费fake transport只证明接口和执行行为。
+
+| 规则／场景 | 失败反例与实现 | 真实消费者验证 |
+|---|---|---|
+| R-2.11、I-24／RC-18 | 同一本地句柄重复close；`novel/stages/stage2/chapters.py::chapter_loop_issues`复用于整份接受与条目定位 | `tests/test_workflow_role_boundaries.py::test_rc18_duplicate_close_rejected_by_chapter_acceptance`，合法单次close绿对照；不修改输入 |
+| I-31、I-35／RC-19 | 历史章观察重复close不能派associate；`novel/stages/chain.py::_check_chapter_loops`按正式chapter scope回派 | `test_rc19_saved_duplicate_routes_to_chapter_without_associate_purchase`经两个真实发现入口、章owner修订、原入口复验及重启读回；`test_rc19_legacy_wrong_owner_correction_keeps_history_and_cost`经显式恢复保留耗尽轮与费用 |
+| I-36／RC-20 | 两个同前缀关联问题修掉一个曾误停；`ValidationIssue`及associate／compile判据产生稳定身份，接受循环和跨owner指纹直接消费 | `test_rc20_real_associate_issues_shrink_and_replay_free`真实associate请求、3轮接受、免费重放、compile发布；`test_rc20_identity_does_not_depend_on_wording_or_order`验证文案与顺序无关 |
+| I-02、I-20／RC-21 | 纠正观察与“不得改换事实”矛盾；`novel/stages/common.py::semantic_revision_rules`统一声明，paid_requests与跨owner修订共用 | `test_rc21_actual_revision_request_allows_correcting_observation`截获整份／patch请求；`test_rc21_owner_permissions_reach_full_and_patch_requests`覆盖各权限面；RC-19实际章修订复用同一声明 |
+| I-12、I-34／RC-22 | 缺语义仍发Hook请求；`novel/stages/stage4/slim.py::project_hook_semantics`投影已引用命题／世界约束，悬空在请求前停 | `test_rc22_hook_request_contains_referenced_proposition_or_stops`截获真实Hook入口，覆盖两类语义存在与缺失；`test_str06_hook.py`验证编译与消费 |
+| I-15、I-21／RC-23 | 原短表已退役；`project_design_input`及`design_obligation_index`统一完整映射；缺条目拒绝，不再截断 | `tests/test_str06_design_slim.py::test_design_projection_preserves_complete_semantics_and_references`及真实Design链测试保护既有正确行为 |
+| I-20、I-22／RC-24 | Design同场指令冲突、正文把拍末延长到章末；Design规则与writer协议／renderer同步校正并升身份版本 | `tests/test_str06_body.py::test_same_scene_requires_interleave_is_legal_cross_scene_inversion_is_not`；`test_rc24_successive_states_reach_their_own_beats`编译两拍相继状态并渲染实际章包；`test_str06_r10b_writer_packet.py`保护材料 |
+| I-03～05／RC-25 | 六条跨Stage深依赖；唯一实现迁至`core/partition.py`、`core/ingest_audit.py`、`core/eligibility.py`，删除旧实现与白名单 | `test_layering.py`同时查顶层与延迟import并禁止底层反向依赖；`test_stage01.py`、`test_stage0_revisions.py`、`test_store.py`、`test_api_stage01.py`验证正式摄入、恢复和API读面 |
+
+红例记录见`.test_cache/role-boundaries-red.xml`中的RC-18、RC-19 associate与RC-21，
+`role-boundaries-red-associate.xml`中的RC-20，以及`role-boundaries-red-materials.xml`
+中的RC-22缺失语义与RC-24。首轮记录中另有fixture来源过期、导入与路径错误，
+不计入缺陷证据；修正fixture后的绿证据与分母统一记在REQUIREMENTS。
+RC-19收口追加`test_rc19_three_digit_chapter_can_persist_and_resume_its_revision`：
+`chapter_owner_product_rel`原先把两位最小格式宽度误当章号上限；修正后通过正式
+问题账、重启摘要与修订门控验证。红例见`.test_cache/role-boundaries-scope-red.xml`。
 
 归因回答两个问题：文本从哪里产生；哪个正式选择使它出现在当前消费位置。
 “包含该字面的材料”不自动等于“应改写该文本”。源章与目标章永不按同号相认。

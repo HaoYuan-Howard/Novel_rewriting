@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-'''stage0 执行资格的唯一落点。
+'''Stage0 执行资格的底层纯判据；消费者不依赖 Stage 实现。
 
 谓词只写在这里，后端一律 import、前端只读 `Stage0Report.executable`，
 不许复述条件（R-0.3b）。

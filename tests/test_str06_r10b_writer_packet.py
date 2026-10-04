@@ -382,18 +382,18 @@ def test_obligations_organize_under_carrying_beats_with_dedup():
     wp = build_writer_packet(project_chapter_packet(ir, 1))
     # ob03（验收拍 sc01#b01）的 statement 与事件逐字相同 →「即本拍事件」形态。
     assert any(
-        line.startswith(f'第一场·第1拍·义务（即本拍事件）——本章结束后须成立：'
+        line.startswith(f'第一场·第1拍·义务（即本拍事件）——本拍验收时须兑现：'
                         '约定作为预计呈现')
         for line in wp.must_realize), wp.must_realize
     # ob01（验收拍 sc01#b02）statement 也与事件逐字相同 → 同样去重；
     # ob04（同拍承载）statement 不同 → 完整义务行（不按相似度删）。
     assert any(
-        line.startswith('第一场·第2拍·义务（即本拍事件）——本章结束后须成立：'
+        line.startswith('第一场·第2拍·义务（即本拍事件）——本拍验收时须兑现：'
                         '对外说辞与真实意图都呈现')
         for line in wp.must_realize)
     assert any(
         line.startswith('第一场·第2拍·义务：夫君当年去向成谜的悬念保留为悬念'
-                        '（本章结束后须成立：悬念保留为悬念，正文不得作答）')
+                        '（本拍验收时须兑现：悬念保留为悬念，正文不得作答）')
         for line in wp.must_realize)
     # 场级孤立义务行（v6 形态）不再出现。
     assert not any(line.startswith('第一场·义务：') for line in wp.must_realize)

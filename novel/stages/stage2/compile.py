@@ -48,10 +48,11 @@ from novel.core.text import norm
 from novel.stages.stage2.resolver import EvidenceResolver, verify_bases
 from novel.stages.common import OverlayChange, StateOverlay
 from novel.stages.stage2.associate import (
-    AssociationSpace, book_state_handle, chapter_state_handle,
+    AssociationSpace, association_issue, book_state_handle, chapter_state_handle,
     loop_pairing_issues, project_association_space, serialize_target, target_label,
 )
 from novel.stages.stage2.book import character_core_view
+from novel.stages.stage2.chapters import chapter_loop_issues
 from novel.stages.stage2.expression import compile_source_expression
 
 #: 认知模式中构成「确认时点」的模态：读者/人物只有 learns／confirms 算确认。
@@ -190,9 +191,9 @@ class _StateClasses:
         expected = self._targets.get(root)
         if expected is not None and expected and dict(target) != expected:
             undecided.append(
-                f'{where} 的同维配对作用对象不一致（类内已有 '
+                association_issue('state_target_mismatch', (handle,), f'{where} 的同维配对作用对象不一致（类内已有 '
                 f'{target_label(expected)}，此处 {target_label(target)}）——'
-                '不同对象不是同一维度，保持未决')
+                '不同对象不是同一维度，保持未决'))
             return key
         self.register(handle, target, key)
         return self._canonical.get(root, key)
@@ -299,19 +300,19 @@ class _BookCompile:
             if formal is None:
                 if paired:
                     undecided.append(
-                        f'{where} 的命题引用 {handle!r} 的等价类没有任何已登记 '
-                        'statement（无 canonical 文本，不猜）')
+                        association_issue('proposition_without_statement', (handle,), f'{where} 的命题引用 {handle!r} 的等价类没有任何已登记 '
+                        'statement（无 canonical 文本，不猜）'))
                 else:
                     undecided.append(
-                        f'{where} 的命题引用 {handle!r} 是悬空的跨章引用且没有配对'
-                        '（缺项保持未决：恢复走 owner patch 或 associate 定向修订）')
+                        association_issue('proposition_unpaired', (handle,), f'{where} 的命题引用 {handle!r} 是悬空的跨章引用且没有配对'
+                        '（缺项保持未决：恢复走 owner patch 或 associate 定向修订）'))
                 continue
             established = self.formal_chapter.get(formal)
             reference_chapter = int(handle[2:handle.index('.')]) if handle.startswith('ch') else 0
             if established is not None and established > reference_chapter:
                 undecided.append(
-                    f'{where} 的命题引用 {handle!r} 指向第 {established} 章才确立的'
-                    '命题（时序倒转，不默认前移）')
+                    association_issue('proposition_future', (handle,), f'{where} 的命题引用 {handle!r} 指向第 {established} 章才确立的'
+                    '命题（时序倒转，不默认前移）'))
                 continue
             self.propositions[handle] = {
                 'id': formal, 'chapter': reference_chapter,
@@ -339,9 +340,9 @@ class _BookCompile:
                 continue    # 任一侧未带 statement 建立：悬空引用族未决另行报告
             if norm(a) != norm(b):
                 undecided.append(
-                    f'配对句柄 {left}（{a}）与 {right}（{b}）的 statement 归一后'
+                    association_issue('proposition_mismatch', tuple(sorted((left, right))), f'配对句柄 {left}（{a}）与 {right}（{b}）的 statement 归一后'
                     '不一致——跨章同一性只认内容相同的命题，不模糊合并；'
-                    '请修订 associate 配对或对应章的命题文本')
+                    '请修订 associate 配对或对应章的命题文本'))
 
 
 # ───────────────────────── 主编译 ─────────────────────────
@@ -425,6 +426,11 @@ def compile_source_truth(
     outcome = CompileOutcome()
     errors = outcome.errors
     undecided = outcome.undecided
+    for chapter, observation in sorted(chapters.items()):
+        undecided.extend(chapter_loop_issues(
+            observation.model_dump(mode='json')['beats'], chapter=chapter))
+    if undecided:
+        return outcome
     from novel.stages.stage2.names import normalize_name_observations, validate_name_resolutions
     core, core_errors = character_core_view(book, evidence=evidence)
     if core_errors:
@@ -717,18 +723,18 @@ def _compile_chapter(
                 open_handle = state.loop_pairing.get(handle)
                 if open_handle is None:
                     undecided.append(
-                        f'{where} 的悬念 close {handle!r} 本章未 open 且没有开合配对'
-                        '（缺项保持未决，不默认丢弃）')
+                        association_issue('loop_unpaired', (handle,), f'{where} 的悬念 close {handle!r} 本章未 open 且没有开合配对'
+                        '（缺项保持未决，不默认丢弃）'))
                     continue
                 formal = state.loop_ids.get(open_handle)
                 if formal is None:
                     undecided.append(
-                        f'{where} 的悬念 close {handle!r} 配对的 open '
-                        f'{open_handle!r} 尚未建立（时序倒转）')
+                        association_issue('loop_future', (handle, open_handle), f'{where} 的悬念 close {handle!r} 配对的 open '
+                        f'{open_handle!r} 尚未建立（时序倒转）'))
                     continue
             if state.loop_state.get(formal) != 'open':
                 undecided.append(
-                    f'{where} 的悬念 {formal} 已 close，不得重复 close（R-2.11）')
+                    association_issue('loop_already_closed', (handle,), f'{where} 的悬念 {formal} 已 close，不得重复 close（R-2.11）'))
                 continue
             state.loop_state[formal] = 'closed'
             loop['ref'] = formal
@@ -765,18 +771,18 @@ def _apply_cross_chapter_causes(
         from_match = _BEAT_HANDLE.fullmatch(edge.from_beat)
         to_match = _BEAT_HANDLE.fullmatch(edge.to_beat)
         if from_match is None or to_match is None:
-            undecided.append(f'因果边句柄形状非法：{edge.from_beat}→{edge.to_beat}')
+            undecided.append(association_issue('cause_handle', (edge.from_beat, edge.to_beat), f'因果边句柄形状非法：{edge.from_beat}→{edge.to_beat}'))
             continue
         from_chapter, from_ordinal = int(from_match.group(1)), int(from_match.group(2))
         to_chapter, to_ordinal = int(to_match.group(1)), int(to_match.group(2))
         if from_chapter >= to_chapter:
             undecided.append(
-                f'因果边 {edge.from_beat}→{edge.to_beat} 时序倒转或同章'
-                '（章内因果由拍序承载，跨章因果不得回指）')
+                association_issue('cause_order', (edge.from_beat, edge.to_beat), f'因果边 {edge.from_beat}→{edge.to_beat} 时序倒转或同章'
+                '（章内因果由拍序承载，跨章因果不得回指）'))
             continue
         target_bp = by_chapter.get(to_chapter)
         if target_bp is None or to_ordinal > len(target_bp.beats):
-            undecided.append(f'因果边 {edge.from_beat}→{edge.to_beat} 的 to 拍不存在')
+            undecided.append(association_issue('cause_missing', (edge.from_beat, edge.to_beat), f'因果边 {edge.from_beat}→{edge.to_beat} 的 to 拍不存在'))
             continue
         edges.setdefault(to_chapter, []).append(CausalEdge(
             from_beat=f'b{from_chapter:02d}_{from_ordinal:02d}',
@@ -810,39 +816,39 @@ def _apply_scene_continuations(
     union = _Union()
     for left_handle, right_handle in state.duplicate_continuation_rights:
         undecided.append(
-            f'续场配对 {left_handle}→{right_handle} 的右端已被另一条配对占用'
-            '（一个场景不能同时续两个前场景）')
+            association_issue('continuation_duplicate', (left_handle, right_handle), f'续场配对 {left_handle}→{right_handle} 的右端已被另一条配对占用'
+            '（一个场景不能同时续两个前场景）'))
     for right_handle, left_handle in sorted(state.scene_pairing.items()):
         where = f'续场配对 {left_handle}→{right_handle}'
         left_match, right_match = (_SCENE_HANDLE.fullmatch(left_handle),
                                    _SCENE_HANDLE.fullmatch(right_handle))
         if left_match is None or right_match is None:
-            undecided.append(f'{where} 句柄形状非法')
+            undecided.append(association_issue('continuation_handle', (left_handle, right_handle), f'{where} 句柄形状非法'))
             continue
         left_chapter, left_ordinal = int(left_match.group(1)), int(left_match.group(2))
         right_chapter, right_ordinal = int(right_match.group(1)), int(right_match.group(2))
         left_list, right_list = scenes_of.get(left_chapter), scenes_of.get(right_chapter)
         if left_list is None or right_list is None:
-            undecided.append(f'{where} 的章蓝图不存在')
+            undecided.append(association_issue('continuation_missing', (left_handle, right_handle), f'{where} 的章蓝图不存在'))
             continue
         if left_chapter >= right_chapter:
-            undecided.append(f'{where} 时序倒转（左章不早于右章）')
+            undecided.append(association_issue('continuation_order', (left_handle, right_handle), f'{where} 时序倒转（左章不早于右章）'))
             continue
         if right_chapter != left_chapter + 1:
             undecided.append(
-                f'{where} 只定义在相邻章的 seam 上（{left_chapter}→{right_chapter} '
-                '中间隔着别的场景，合并会让场景段交错）')
+                association_issue('continuation_nonadjacent', (left_handle, right_handle), f'{where} 只定义在相邻章的 seam 上（{left_chapter}→{right_chapter} '
+                '中间隔着别的场景，合并会让场景段交错）'))
             continue
         if left_ordinal != len(left_list):
             undecided.append(
-                f'{where} 左端不是第 {left_chapter} 章最后一个场景（seam 处才可能续场）')
+                association_issue('continuation_left', (left_handle, right_handle), f'{where} 左端不是第 {left_chapter} 章最后一个场景（seam 处才可能续场）'))
             continue
         if right_ordinal != 1:
-            undecided.append(f'{where} 右端不是第 {right_chapter} 章第一个场景')
+            undecided.append(association_issue('continuation_right', (left_handle, right_handle), f'{where} 右端不是第 {right_chapter} 章第一个场景'))
             continue
         if right_handle in state._seen_continuation_rights:
             undecided.append(
-                f'{where} 右端已被另一条配对占用（一个场景不能同时续两个前场景）')
+                association_issue('continuation_duplicate', (left_handle, right_handle), f'{where} 右端已被另一条配对占用（一个场景不能同时续两个前场景）'))
             continue
         state._seen_continuation_rights.add(right_handle)
         union.union(left_list[left_ordinal - 1].scene_id, (left_chapter, left_ordinal, left_handle),

@@ -11,7 +11,7 @@ Projection = clean_text → Validator = enforce。全程 **0-LLM**。
 
 | 编号 | 规则 |
 |---|---|
-| S0-1 | **机械 admission**：闸门是 `admission.status=passed` 且 `scope=mechanical`，不是语义 `approved`。资格唯一落点 `eligibility.is_stage0_executable`。 |
+| S0-1 | **机械 admission**：闸门是 `admission.status=passed` 且 `scope=mechanical`，不是语义 `approved`。资格唯一落点 `novel/core/eligibility.py::is_stage0_executable`。 |
 | S0-2 | **可重建性**：在可重建前提下，正文权威由「归一化原文 − removed spans」确定；`clean_text.txt` 是物化投影，JSON 只存 `clean_sha1` / `body_code_points`。 |
 | S0-3 | **幂等重跑**：同一原文 + 同一剔除算法结论 ⇒ 盘面字节不变；算法结论变化才整份替换 transform。 |
 | S0-4 | **唯一输出**：权威 JSON 是一次 `Stage0Transform`（路径仍 `stage0/revisions.json`）；无 revision 链、无候选、无 pending、无人工编辑入口。 |
@@ -24,6 +24,6 @@ Projection = clean_text → Validator = enforce。全程 **0-LLM**。
 | `removal.run_source` | 摄入与落盘入口 |
 | `revisions.make_transform` / `commit` / `ensure_materialized` | transform 构造、写盘、物化自愈 |
 | `checks.run_check_only` | 纯复检，不改正文 |
-| `eligibility.is_stage0_executable` | stage1 / 付费链资格唯一谓词 |
+| `novel/core/eligibility.py::is_stage0_executable` | stage1 / 付费链资格唯一谓词 |
 
 v2 revision 链产物拒读；恢复路径是 `stage0.remove --source` 重建，不做通用迁移。

@@ -9,11 +9,21 @@
 不改变冻结实验身份、分母、额度或既有授权。重置前完整记录见提交 `e84a169b` 中本文件；
 更早执行史按 `git log -- docs/REQUIREMENTS.md`，裁决见 [DECISIONS.md](DECISIONS.md)。
 
-**当前交接（2026-10-04用户追加指令）**：本次只完成修复、定向回归并commit，不再重跑全量。
+**上一CS检查点交接（2026-10-04）**：该检查点按当时指令只完成修复、定向回归并commit，不再重跑全量。
 在付费前停止；用户先处理其余流水线潜在问题，之后再进行真实整书验收和A/B。
 本提交是工程检查点，不是最终冻结发布；现有实验草案没有付费或外发授权。
 
 ## 当前状态与下一步
+
+2026-10-04职责边界追加批：按“复核基线→RC-18～25职责规格→真实入口反例→
+完整调用链修复→工程/成书分别验收”推进。Design完整义务投影已存在，保留回归；
+已实现章观察回派、关联问题身份、Hook语义送达、修订权限、顺序/时点指令及
+六条摄入深依赖清除。用户已选择共用纯逻辑下沉独立底层模块。工程验收完成：
+默认非corpus3700项通过；章观察首轮close规则及超过99章的定位收口后466项定向通过。
+本追加批尚未运行真实付费或成书验收，旧批次通过数不作为本批证据。
+规则、场景、反例、实现与消费者的对应见`docs/schema/repair_convergence.md` RC-18～25表。
+本批横跨共享接受循环、摄入原语、Repository及恢复消费者，在定向闭合后执行一次默认非corpus
+回归，按共享基础设施影响与本批工程收口门槛执行；不是重跑上一CS检查点的验收。
 
 | 顺序／批次 | 状态 | 完成条件与下一动作 |
 |---|---|---|
@@ -32,7 +42,8 @@
 
 ## 当前真实运行基线
 
-- 开发分支基线 `e84a169b`；真实三书实验冻结代码仍为 `14312181`，不能追改其身份。
+- 本职责追加批开发基线为`2ac0f83e`加当前worktree改动；上一CS批起点为`e84a169b`。
+  真实三书实验冻结代码仍为`14312181`，不能追改其身份。
 - 首书《三人成行》停在Stage4：源第2章命题 `b02_02.c1` 合法带全名，Design安排
   在目标第1章而称谓到目标第4章释放。Preserve自写statement没有该字面，却被
   旧二分路由误派并耗尽2/2轮。新规格归因须检查正式来源与目标选择，不改短句掩盖。
@@ -83,7 +94,9 @@
 | 历史Step缺请求配置 | Step的CS-T加法契约集中在`contracts/schema/orchestration.py::Step`读取缺字段为None；展示为未知，不从默认配置推断旧请求。新执行和followcheck必须有同源配置。旧JobStart只读归档不再消费后删除缺字段兼容 |
 | Golden评价v1 | v2显式拒识旧manifest／review／snapshot／result；按冻结六维重新收集、重评现有成书，不自动迁移旧结论、不要求为评价升级重购 |
 | 候选身份冻结 | CS-R补齐信封版本与operator_redo；names／Characters信封v2、Hook有限owner修订改变候选身份。新身份由`tests/test_str06_f7e_freeze.py`冻结，旧根不追改；旧身份按不兼容只读拒识 |
-| 字符串判据身份 | `novel/core/validation.py::validation_identity`集中解码仍现役字符串判据；材料问题已用结构化身份。剩余判据全部提供稳定身份后删除字符串前缀兼容，不在各节点扩散解析 |
+| 字符串判据身份 | `novel/core/validation.py::validation_identity`集中解码仍现役字符串判据；材料、章内悬念冲突与关联问题已用结构化身份。剩余判据全部提供稳定身份后删除字符串前缀兼容，不在各节点扩散解析 |
+| 旧associate误派更正 | `novel/stages/issue_recovery.py::_legacy_loop_correction`只从完整正式章观察重建历史重复close错误，证明旧问题全部覆盖后才显式superseded；不解析文案猜owner、不退费、不重置轮数。旧字符串association_undecided账全部只读归档且不再恢复后删除该兼容分支 |
+| 六条摄入深依赖 | RC-25已删除原Stage实现与测试白名单；分章、摄入审计、Stage0放行判据分别唯一位于`novel/core/partition.py`、`ingest_audit.py`、`eligibility.py`，不留转导出adapter |
 | 可信owner修订 | 耐久修订证明＋基线／当前摘要闭合才准入级联；发现节点复验成功才resolved。names登记的准入只认已证明消费变化；unknown、不可读、INVALID不放行 |
 | 已购证据与旧根 | 原始响应、checkpoint、正文、ledger不可当派生缓存删除。请求身份与接受条件相符才采用；`--check-only`零新购但可执行恢复写入，不称纯只读 |
 | 章集合与交付恢复 | committed set及当前章包证明只补缺章；NameMap改动只重交付，Hook窄改不使无关正文失效；Stage1 e00仍参与源身份 |
@@ -135,7 +148,7 @@ body／hook attempts由ContentRevision＋ProviderAttempt取代。旧admission平
 ## 必要证据与批次记录
 
 测试入口与消费者由`tests/suite_catalog.json`登记；定向通过不称全量回归。
-本次按用户追加指令只做定向回归后提交；后续真实验收前的验证范围另行确定，golden与工程分别记录。
+此前CS检查点按当时指令只做定向回归后提交；本职责追加批的工程回归单列如下，golden与工程分别记录。
 历史已清理根不可恢复；证据缺失报告未查／不可用，不补猜。
 每批只更新本文件的当前状态、交付证据和下一步；长历史进Git，复用教训进LESSONS，
 裁决缘由进DECISIONS。文档重置不清除历史失败或长期义务。
@@ -162,3 +175,19 @@ body／hook attempts由ContentRevision＋ProviderAttempt取代。旧admission平
   CLI与只读审阅配置、付费边界配置冻结、统计、文档和依赖分层。
   `.test_cache/cs-product-repair-directed.xml` 6通过，覆盖5个原失败产品入口用例及显式请求配置的
   真实CLI／账／免费重放。均使用fake transport、零真实付费，未重跑全量。
+- 职责边界RC-18～25：`.test_cache/role-boundaries-regression.xml`，默认非corpus
+  `-n 4 --dist loadgroup -m "not corpus" --basetemp=E:/_tr`，3700通过、0失败、0跳过，
+  779.70秒；含真实服务上传→CLI子进程→交付与重启读回。4条为同一外部Starlette/httpx
+  弃用提示，无新增依赖变更。全程fake transport、零真实付费，不代签成书质量。
+  先行定向证据：`role-boundaries-consumers.xml` 780通过/5未选中（含§9.5五文件），
+  `role-boundaries-recovery.xml` 204通过，`role-boundaries-final-directed.xml` 29通过，
+  `role-boundaries-closure-final.xml` 153通过；各集合有交集，不相加为验收分母。
+  本批未改变前端与HTTP响应形状；API摄入消费者已纳入工程回归，未重跑前端构建。
+  全回归后的章观察提示语同步由`role-boundaries-prompt-closure.xml` 215通过验证；
+  随后发现同一回派消费链的`ch100`产物定位失败，补入RC-19，红例为
+  `role-boundaries-scope-red.xml`。该局部补充按精确恢复消费者与契约定向闭合，
+  不把3700例记录冒称包含后加的反例。
+  最终收口：`.test_cache/role-boundaries-final-closure.xml`，466通过、0失败、0跳过，
+  55.08秒；覆盖RC-18～25模块、回派自愈、条目patch及契约§9.5五文件，`git diff --check`通过。
+  章内重复close的两处发现入口均验证真实章owner修订、无关章免费采用、最终compile发布与重启读取；
+  旧associate误派更正经真实CLI预览／提交，保留原账及耗尽轮数。真实成书质量保持未验收。

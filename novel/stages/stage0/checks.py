@@ -135,7 +135,7 @@ def check(
             scanned=f'{len(report.removed)} 个剔除段 · 原文 {len(source.text)} 码点',
         ))
 
-    from novel.stages.stage0.eligibility import is_stage0_executable
+    from novel.core.eligibility import is_stage0_executable
     admission_findings = []
     if not is_stage0_executable(report):
         admission_findings.append(_hit(

@@ -62,7 +62,7 @@ from novel.snapshot_clone import readonly_snapshot_clone
 from novel.store import (
     ArtifactStore, SELF_FRESH_DETERMINISTIC, _json_pointer_diff,
 )
-from novel.stages.stage1.partition import partition_text
+from novel.core.partition import partition_text
 from tests import corpus, sandbox
 from tests.str06_expression_inputs import (
     sample_book_expression,

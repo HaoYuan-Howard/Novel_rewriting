@@ -80,8 +80,8 @@ orchestrator 推进，semantic unit 生成；Stage 页只读监控。`HUMAN_NODE
 |---|---|---|
 | R-0.1 | 自动剔除用的是 `R-1.7` 的同一套判据与同一张 `NONBODY_KINDS`——**只有一份** | `HARD` |
 | R-0.2 | 剔除逐段只记不可再生的决定与最小定位证据：类型、标记行、原文码点区间、来源。行号、字数与预览从原文和 span 现算；**番外体不进产物目录** | `HARD` |
-| R-0.3a | **【v3 收窄】** 剔除语义正确性仍无人可机械证明（见 `R-0.7` / Q-13）。闸门不再是人工 `approved`，而是 transform 的 **mechanical admission**（`status=passed`）。公开检查单从当前 transform、执行资格与 freshness 只读投影。API 仍可投影 `revision_id`（= `transform_id`）供兼容读面 | `结构`（`novel/stages/stage0/eligibility.py::is_stage0_executable`）+ `B-20` 披露面 |
-| R-0.3b | **未获 mechanical admission 的书，stage1 必须拒绝启动**；执行资格的唯一落点是 `novel/stages/stage0/eligibility.py::is_stage0_executable`，消费方一律 import、**不许复述条件**。v3 首跑即写入 admission；缺 transform / 损坏盘面须重跑 `stage0.remove` | `HARD` |
+| R-0.3a | **【v3 收窄】** 剔除语义正确性仍无人可机械证明（见 `R-0.7` / Q-13）。闸门不再是人工 `approved`，而是 transform 的 **mechanical admission**（`status=passed`）。公开检查单从当前 transform、执行资格与 freshness 只读投影。API 仍可投影 `revision_id`（= `transform_id`）供兼容读面 | `结构`（`novel/core/eligibility.py::is_stage0_executable`）+ `B-20` 披露面 |
+| R-0.3b | **未获 mechanical admission 的书，stage1 必须拒绝启动**；执行资格的唯一落点是 `novel/core/eligibility.py::is_stage0_executable`，消费方一律 import、**不许复述条件**。v3 首跑即写入 admission；缺 transform / 损坏盘面须重跑 `stage0.remove` | `HARD` |
 | R-0.4 | 【已退役 2026-09-15】人工编辑剔除范围随 `stage0.edit` 退役；判据漏掉的那类（语义误剔/漏剔）转为 `R-0.7` 的交付披露，不再有人工修正入口 | `不适用`（退役条款） |
 | R-0.5 | transform 自证（判据 `s0_revision_chain` 复算 `transform_id`），`clean_text.txt` 是当前 transform 的唯一物化投影。无多修订祖先链 | `HARD` |
 | R-0.6 | 必须能核对**两个内容身份**：`Stage0Source.normalized_source_sha1`（归一化原文）；`clean_sha1` 从 transform 与 live 投影现算。Stage1 的真正输入身份是后者 | `HARD` |
@@ -168,7 +168,7 @@ associate 独立版本 `stage2-associate-v2`（R1，2026-09-28——typed 作用
 | R-2.8 | **称谓闭合（wire 闸）**：`canonical` 必须逐字等于该人物 `surfaces` 中的某一项。canonical 是内部主键显示名，又作为身份名交给 Design／Hook；未登记字面在替换表里找不到对应新名。不通过走 owner patch，不静默改写。 | `HARD`（`novel/stages/stage2/book.py::compile_book_observation`） |
 | R-2.9 | **组合源身份**：`source_identity` 与 `root_sha1` 由 `main_text.json`＋`hook_copy.json` 两份字节的组合摘要派生（长度前缀，防拼接歧义）。只改章前文字也换源身份 ⇒ 候选根复校关闭式拒绝，旧根不得沿用旧购买；续跑用新独立根。开发路径 `--source-json` 必须显式给出引子或显式声明「无引子」。 | `HARD`（`novel/stages/chain.py::load_stage1_chapters`＋`novel/prov.py::combined_content_sha256`＋`novel/llm/paid_requests.py::init_or_resume_candidate_workflow`） |
 | R-2.10 | **称谓锚点字面（wire 闸）**：每个 surface 的 `from_chapter` 由 compiler 按证据锚点派生（B2 起 wire 不带窗口坐标）：锚点段＝所引证据段中逐字包含该称呼的最早一段，章前文字（e00）锚点映射到第 1 章；所引段没有一个逐字包含该称呼即拒（QP-04 根因：章前称谓被标成第 0 章）。锚点派生唯一实现在 Stage2 Resolver。 | `HARD`（`novel/stages/stage2/resolver.py::EvidenceResolver.surface_chapter`） |
-| R-2.11 | **悬念生命周期**：`loops` 独立成数组，op 只有 open／close；同一 loop 只能 open 一次（已 open 或已 close 的 id 不得再 open），close 必填非空 resolution，问题文本只出现在 open 处、之后不可改写（v12 把 loop 挂成 effect 时模型反复用 set 改写问题文本，F9 与首轮付费验收实证）。 | `HARD`（`contracts/schema/source.py::LoopAction`＋`novel/stages/stage2/chapters.py` 本章内 open 纪律；跨章闭合配对归 associate／compile） |
+| R-2.11 | **悬念生命周期**：`loops` 独立成数组，op 只有 open／close；同一 loop 只能 open 一次（已 open 或已 close 的 id 不得再 open），close 必填非空 resolution，问题文本只出现在 open 处、之后不可改写（v12 把 loop 挂成 effect 时模型反复用 set 改写问题文本，F9 与首轮付费验收实证）。 | `HARD`（`contracts/schema/source.py::LoopAction`＋`novel/stages/stage2/chapters.py` 本章内open／close均不得重复，同一判据用于接受、关联输入预检与最终编译；旧盘错误按chapter scope回派，跨章配对选择归associate） |
 | R-2.12 | **命题引用闭合（B2 版）**：命题与 loop 的引用用**章内本地句柄**（wire `ref`，不进 canonical）；新建（首次出现）必带 statement，引用不带文本——同一命题的文本只建立一次，由形状保证。**同一拍内后建的命题可被本拍其它转移引用**（D5 证实拍模式）；同章跨拍引用须已登记；**章间不引用**（D3 去登记表）——跨章同一性（同一命题、同维状态、悬念开合、跨章因果）由 `str06.stage2.associate` 只选已给句柄建立，配不上即未决，compile 拒绝发布并按 item 报告（D8）。正式 ID（kNN／loopNN）由 compiler 生成。 | `HARD`（`contracts/schema/observation.py`＋`novel/stages/stage2/compile.py`，B2 第三步已接线） |
 | R-2.13 | **事实可见性**：每个 effect 必填 `disclosure`（on_page／concealed）；concealed 必须声明 known_by（非空）并带命题锚——叙述确立但读者此刻不可见的事实，由后续 cognition 经同一命题记录揭示；没有可见性，漏记的揭示无法机械发现（QP-05：ch04 床下现身缺确认 reveal，三份样本全缺）。 | `HARD`（`contracts/schema/source.py::Disclosure`／`Effect`） |
 | R-2.14 | **登记键闭集与作用域绑定**：`scene_location`（scene 作用域，当前所在）与 `residence`（book 作用域，长期居所）为登记键，身体状态各自一键（不塞进位置值）；表内键作用域由 compiler 按表绑定（I-15，模型声明不符即归一化，canonical 恒带表内作用域）；`whereabouts`／`hiding_place`／`location` 已退役，出现即拒并指向分轴后的键。 | `HARD`（`contracts/schema/source.py::REGISTERED_STATE_KEYS`／`RETIRED_STATE_KEYS`＋`novel/stages/stage2/chapters.py` 归一与拒识） |
@@ -259,7 +259,7 @@ Stage4 的四个付费节点按固定序推进：`preserve`（保存策略义务
 不按源目标同号章二分路由。正确源命题的 know 拍位归 Design，Preserve 只修改自身
 statement／satisfaction，默认 keep 由 Design expression_overrides 处理；来源未证明、
 投影不一致或多 owner 歧义停止。Design 接受前与最终 compile 共用实际材料判据。
-问题身份不依赖展示位置或措辞；相同集合、循环和累计额度使返修停止，崩溃后尚未派出的
+关联诊断与材料诊断在判据源头生成规则码、稳定位置和身份，修订控制不得重新解析文案（RC-18～21）。问题身份不依赖展示位置或措辞；相同集合、循环和累计额度使返修停止，崩溃后尚未派出的
 已登记轮可恢复，不能因此多占一轮。运行记录用 OwnerIssue v3，旧版本集中解码；错误
 旧归因仅经 `issue-correction` 身份绑定的免费预览／显式更正变为 superseded，保存原
 记录、已耗轮数与更正理由，不删除历史、不重置额度（RC-09～16）。

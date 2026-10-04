@@ -16,6 +16,18 @@ class ValidationMessage(str):
         return value
 
 
+class ValidationIssue(ValidationMessage):
+    """判据生成的派生诊断；身份与文案分离，责任和位置不由控制器反向猜测。"""
+
+    def __new__(cls, message: str, *, code: str, location: tuple,
+                owner: str, scope: str = 'book', context: dict | None = None):
+        value = super().__new__(cls, message, (code, owner, scope, location))
+        value.code, value.location = code, location
+        value.owner, value.scope = owner, scope
+        value.context = dict(context or {})
+        return value
+
+
 def validation_identity(message: str) -> str:
     if isinstance(message, ValidationMessage):
         return message.identity

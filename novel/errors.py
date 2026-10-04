@@ -274,7 +274,7 @@ class ApprovalRequired(TerminalState):
     """人工闸门没过（`APPROVAL_STATE` 的 `pending`）。
 
     ⚠ 执行资格的**唯一落点**是
-    `novel/stages/stage0/eligibility.py::is_stage0_executable`，消费方不许复述条件
+    `novel/core/eligibility.py::is_stage0_executable`，消费方不许复述条件
     （2026-08-22 删掉 `auto_zero_hit` 之后它恰好等于 `approval.status == 'approved'`，
     但收口的理由是「同一条 R 只有一个守卫」，不是条件复杂）。
     「没跑过」不是产物状态：产物不存在本身就是那个事实（2026-08-21 起 `not_run` 已删）。

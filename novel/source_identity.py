@@ -56,8 +56,8 @@ def revision_proof(store, source_root: str) -> SourceRevisionProof:
     并以 `transform_id` 同时充当 ancestor / current 身份。
     """
     from novel.stages.stage0 import revisions
-    from novel.stages.stage1.audit import audit_surface, scan_partition
-    from novel.stages.stage1.partition import partition_text
+    from novel.core.ingest_audit import audit_surface, scan_partition
+    from novel.core.partition import partition_text
 
     # 所读内容仅用于来源证明，不能污染调用 owner 的业务输入。
     with store.ctx.validation_reads():

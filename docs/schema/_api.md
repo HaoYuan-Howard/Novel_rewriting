@@ -210,7 +210,7 @@ Prompt 选型完成后，`prompt_variants`、`prompt_defaults` 与 `--prompt-var
 > |---|---|
 > | `original_filename` / `total_code_points` | 审校页标题与规模读数 |
 > | `warnings[]` | 运行时证据 + `novel/core/warnings.py::describe` 的措辞；前端不拼措辞 |
-> | `executable` | `novel/stages/stage0/eligibility.py::is_stage0_executable` 的投影；前端不从审批字段重算 |
+> | `executable` | `novel/core/eligibility.py::is_stage0_executable` 的投影；前端不从审批字段重算 |
 > | `revision_id` / `revision_origin` | 当前版乐观锁与来源展示 |
 >
 > source ref、源/clean 指纹、removed、approval、producer code 均留在后端权威链或专用分区视图，

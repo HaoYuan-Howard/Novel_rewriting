@@ -1249,8 +1249,12 @@ def _merge_patches(wire: dict, patches: list[tuple[tuple[str | int, ...], Any]])
     return merged
 
 
+_REVISION_BOUNDARY = ('以原请求声明的权威输入为准，只纠正本单位输出中的错误观察或选择；'
+                      '原文及只读上游不可改写，不得扩展原请求授权的事实与输出范围。')
+
+
 def patch_user_prompt(base_user: str, targets: list[PatchTarget],
-                      wire: dict) -> str:
+                      wire: dict, *, revision_rules: str = _REVISION_BOUNDARY) -> str:
     """条目返修轮的 user 面：**原始请求原样在前**（固定前缀命中供应商缓存，
     且模型保有源文与协议上下文），返修要求与失败条目追加在后（可变后缀，
     与 revision_user_prompt 同一缓存纪律）。"""
@@ -1266,8 +1270,8 @@ def patch_user_prompt(base_user: str, targets: list[PatchTarget],
             + '\n\n【条目返修】上一版仅以下条目未通过机械校验，只替换这些条目。\n'
               '输出 JSON：{"patches": [{"path": "路径", "value": 该条目的完整替换}, …]}。\n'
               '必须逐条覆盖下面列出的全部路径（路径字符串原样照抄）；'
-              '不得新增路径、不得改动未列出条目、不得新增或改换事实。\n'
-            + bullets)
+              '不得新增路径、不得改动未列出条目。\n'
+            + revision_rules + '\n' + bullets)
 
 
 def accept_patch_answer(answer: DurableAnswer, targets: list[PatchTarget],
@@ -1328,7 +1332,8 @@ def accept_patch_answer(answer: DurableAnswer, targets: list[PatchTarget],
 
 def revision_user_prompt(base_user: str, previous_answer: str,
                          issues: list[str], *,
-                         previous_is_canonical: bool = False) -> str:
+                         previous_is_canonical: bool = False,
+                         revision_rules: str = _REVISION_BOUNDARY) -> str:
     """修订内容轮的 user 面：原请求＋上一版＋typed 问题（R3 裁决 1）。
 
     形状照 `novel/stages/stage5/body.py::write_chapter` 的重写循环：同一份原始
@@ -1342,13 +1347,15 @@ def revision_user_prompt(base_user: str, previous_answer: str,
                       if previous_is_canonical else '上一版全文如下，供对照修正：')
     return (base_user
             + '\n\n【修订要求】\n上一版未通过机械校验，问题如下（逐条修复，'
-              '不得改变其余内容、不得新增或改换事实）：\n' + bullets
+              '保留与问题无关的合法内容）：\n' + bullets
+            + '\n' + revision_rules
             + '\n' + previous_label + '\n〔上一版〕\n' + previous_answer
             + '\n请输出修正后的完整回答（同一协议与输出格式）。')
 
 
 def ask_json(session: PaidRequestSession, owner: str, request: ChatRequest,
-             validate, patch: PatchLocate | None = None) -> tuple[dict, Any]:
+             validate, patch: PatchLocate | None = None, *,
+             revision_rules: str = _REVISION_BOUNDARY) -> tuple[dict, Any]:
     """JSON 语义调用的接受循环（调用方组合；Runtime 本体不收业务回调）。
 
     耐久响应 → 解析 → D5 救回 → 校验；**非空但不过闸**时按条目级返修优先、
@@ -1376,8 +1383,8 @@ def ask_json(session: PaidRequestSession, owner: str, request: ChatRequest,
     def _no_progress_stop(errs: list[str], adopted_answer):
         """无进展即停（R8b.3 位置模式集合；CS-patch 起对 patch 合并结果同样
         判定；问题严格缩小允许继续，重复/回归集合才停止）。"""
-        # R8b.3：无进展判定用「位置模式」集合（消息首个冒号前的定位段），
-        # 不用全文——措辞微调（如实得值摘要变化）不再被误判成有进展。
+        # 新诊断由判据提供稳定身份；存量字符串兼容集中在validation_identity。
+        # 展示包装不能吞掉身份；不同未决句柄不得因相同前缀被折成一个问题。
         heads = sorted(validation_identity(e) for e in errs)
         current = frozenset(heads)
         if not (current and current in seen_heads):
@@ -1452,9 +1459,11 @@ def ask_json(session: PaidRequestSession, owner: str, request: ChatRequest,
                                for path, issues in located]
             force_full = False
             if targets:
-                next_user = patch_user_prompt(base_user, targets, wire_dict)
+                next_user = patch_user_prompt(base_user, targets, wire_dict,
+                                               revision_rules=revision_rules)
             else:
-                next_user = revision_user_prompt(base_user, previous, list(errors))
+                next_user = revision_user_prompt(base_user, previous, list(errors),
+                                                  revision_rules=revision_rules)
             request = ChatRequest(
                     model=request.model, system=request.system,
                     user=next_user,

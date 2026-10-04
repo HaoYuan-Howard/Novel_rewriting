@@ -262,14 +262,20 @@ STR-06 新链的 Stage4 免费聚合由结构性禁付节点 `str06.stage4.compi
 （reaggregate／recover-prepared 一类）已随旧链整层退役；存量解码面与退役台账
 已随 STR-06 关闭批删除，旧根的恢复材料只按 Git 历史与冻结的盘上记录读取。
 
-## 旧材料归因更正与历史用量补证
+## 旧回派归因更正与历史用量补证
 
 `python -m novel.cli issue-correction <sid> --base <输出根> --owner preserve`
-只读重建当前正式材料并给出 subject_sha256；只有已证明旧二分归因错误且全部当前
+只读重建当前正式材料并给出 evidence_sha256；只有已证明旧二分归因错误且全部当前
 问题可归因时才给出更正清单。以同一命令追加 `--apply --subject-sha256 <预览摘要>
 --reason <更正理由>` 显式退出旧回派。输入在预览后变化即拒绝；原issue、rounds_total
 和费用保留，重复应用幂等。不可用它清除合法失败或给新owner退款／追加额度。
 names／Characters旧信封须先按新协议重建；冻结实验根不能靠改版本号伪装续跑。
+
+章内重复close曾被旧compile误派到associate时，同一命令指定`--owner associate`。
+CLI从正式Stage1读取完整章集合，按当前章观察和关联重建历史诊断；只有旧问题全部
+被章内生命周期错误覆盖才给出更正预览。正式输入缺失、未配对或另有未覆盖问题即拒绝。
+沿用同一`--apply --subject-sha256 ... --reason ...`提交方式；更正只退出旧路由，
+后续真实associate／compile复验仍会向具体章owner发起修订，不会把坏观察视为通过。
 
 `python tools/repair_rounds.py <输出根> --sid <sid> --usage-json`
 只读核对 ledger 与已购请求／响应证据，区分账内 reasoning 和嵌套usage补证。

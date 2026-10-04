@@ -38,8 +38,8 @@ from novel.errors import (
 )
 from novel.orchestrator.state import readonly_ctx
 from novel.stages.stage0 import removal
-from novel.stages.stage1 import partition
-from novel.stages.stage1.audit import Stage1Audit, audit_surface
+from contracts.artifacts import STAGE0_CLEAN_TEXT, STAGE1_MAIN_TEXT, STAGE1_HOOK_COPY
+from novel.core.ingest_audit import Stage1Audit, audit_surface
 from novel.store import ArtifactStore
 
 STAGE0_NODE = 'stage0.remove'
@@ -57,7 +57,7 @@ def stage0_report(base: str | os.PathLike[str], sid: str) -> Stage0Report:
 
     只返回页面实际消费的字段；告警证据和执行资格由后端唯一落点计算。
     """
-    from novel.stages.stage0.eligibility import is_stage0_executable
+    from novel.core.eligibility import is_stage0_executable
     store = _store(base, sid, STAGE0_NODE)
     from novel.stages.stage0 import revisions as rev
     log = rev.read(store)
@@ -250,19 +250,19 @@ def _stage1_material(base: str | os.PathLike[str], sid: str) -> _Stage1Material:
     if transform is None:
         raise UpstreamMissing('stage0 还没跑，盘上没有 transform')
     stage0 = rev.snapshot_of(transform)
-    from novel.stages.stage0.eligibility import is_stage0_executable
+    from novel.core.eligibility import is_stage0_executable
     if not is_stage0_executable(stage0):
         raise ApprovalRequired(
             f'stage0 当前状态为 {stage0.admission.status!r}/'
             f'{stage0.admission.scope!r}；'
             '先重跑 stage0.remove 完成机械 admission，再启动 stage1')
-    clean = store.read_text(partition.CLEAN_TEXT)
+    clean = store.read_text(STAGE0_CLEAN_TEXT)
     actual = prov.content_sha1(clean.encode('utf-8'))
     if actual != stage0.clean_sha1:
         raise PartitionInputMismatch(
             f'clean_text 实际 sha1={actual}，stage0 transform 记录的是 {stage0.clean_sha1}')
-    main = store.read_own(MainText, partition.MAIN_TEXT)[0]
-    hook = store.read_own(HookCopy, partition.HOOK_COPY)[0]
+    main = store.read_own(MainText, STAGE1_MAIN_TEXT)[0]
+    hook = store.read_own(HookCopy, STAGE1_HOOK_COPY)[0]
     audit = audit_surface(
         clean_text=clean,
         stage0=stage0,
