@@ -285,28 +285,6 @@ def test_verification_rows_are_disclosure_not_blocking():
     assert blocking.delivery_effect == 'blocking'
 
 
-def test_no_current_node_carries_revalidate_and_instructions_stay_system_only():
-    """F8a 翻转后现役 NODES 无 `--revalidate` 提升口；指令格式守卫保留。
-
-    新链的 INVALID 由 owner 重跑／`--check-only` 复检处置。若未来重新引入
-    `--revalidate`，`_revalidate_how` 必须仍指系统自动路径——那条格式断言
-    在这里继续守着，不为空集放水。
-    """
-    from contracts.invariants import (
-        NODES, SYSTEM_INVALID_REVALIDATE_ACTOR, SYSTEM_INVALID_REVALIDATE_REASON,
-    )
-    from novel.orchestrator.inbox_projection import _revalidate_how
-
-    nodes = [node for node, spec in NODES.items() if '--revalidate' in spec.flags]
-    assert not nodes, f'现役链不应有 --revalidate 节点，实得 {nodes}'
-    # 格式守卫：合成节点名走同一拼装路径，重新引入时指令仍是系统自动路。
-    text = _revalidate_how('str06.stage5.body')
-    assert ('str06.stage5.body --revalidate --actor '
-            f'{SYSTEM_INVALID_REVALIDATE_ACTOR}') in text
-    assert SYSTEM_INVALID_REVALIDATE_REASON in text
-    assert '0 LLM' in text
-
-
 class _InvalidStore:
     """只给 `_invalid_items` 的最小只读盘面；不借真实语料替 shape-break 作证。"""
 
@@ -322,7 +300,7 @@ class _InvalidStore:
 
     def schema_version_of(self, rel: str) -> int | None:
         if self.refuse_version_read:
-            raise AssertionError('有 --revalidate 的通用节点不应读取 schema version')
+            raise AssertionError('INVALID 恢复说明不应读取 schema version')
         return self.versions.get(rel)
 
     def seen_rounds(self, rel: str) -> set[int]:
@@ -330,8 +308,8 @@ class _InvalidStore:
         return {2}
 
 
-def test_generic_invalid_checks_the_producer_revalidate_flag_before_schema_version():
-    """通用路由从 NODES 派生；无提升口的节点不得拼出不存在的命令。"""
+def test_invalid_row_never_invents_a_promotion_command_nor_reads_schema_version():
+    """现役节点没有 INVALID 提升入口：恢复说明如实写明，不得拼出不存在的命令。"""
     from contracts.artifacts import STR06_STAGE2_BLUEPRINTS
     from novel import paths
     from novel.orchestrator import inbox_projection as I

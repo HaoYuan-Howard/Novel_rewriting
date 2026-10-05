@@ -18,7 +18,8 @@ inbox_projection.py —— 「待人工」清单的**生产者**（BE-04 第一�
 【各类的数据源】（全部现存机制，本模块**一个判定都不新造**）
   · `invalid`    盘上 `.INVALID` 在、同名正式稿**不在**：首跑被落盘闸门拦下，在等人改
   · `rejected`   `.INVALID` 与正式稿**并存**：通常是付费自救/人工补丁被闸门驳回，
-                 正式稿仍是旧轮——「钱花了，稿丢了」。恢复路先查 producer 真有的 flag
+                 正式稿仍是旧轮——「钱花了，稿丢了」。恢复路如实写明该节点当前有没有
+                 INVALID 提升入口，不拼不存在的命令
                  （**UG-12 的闭环**：被驳回后下一条真实恢复路径写在这行字里）
   · `repairable` 0 成本复检里已绑定确定性 `Rule.fix` 路由的本层 HARD 命中
   · `human_only` 各层 0 成本复检里 `status=hit` 且 `remediation=human` 的结论逐条展开
@@ -130,29 +131,12 @@ def _human_how(stage: str, rule: str | None = None) -> str:
     return head + ' / '.join(routes)
 
 
-def _revalidate_how(node: str) -> str:
-    """Auto 0-wire promotion path; human Stage 页不再发布该用户入口。"""
-    from contracts.invariants import (
-        SYSTEM_INVALID_REVALIDATE_ACTOR, SYSTEM_INVALID_REVALIDATE_REASON,
-    )
-    return (
-        f'队列/自动恢复将跑 `{node} --revalidate --actor '
-        f'{SYSTEM_INVALID_REVALIDATE_ACTOR} --reason <audit>`（0 LLM、同轮重判）；'
-        f'固定理由：{SYSTEM_INVALID_REVALIDATE_REASON}；不是新一轮人工改写')
+def _invalid_recovery_how(node: str) -> str:
+    """INVALID 的恢复说明：现役节点没有 INVALID 提升入口，如实说明。
 
-
-def _invalid_recovery_how(
-    store: ArtifactStore, *, node: str, rel: str,
-    formal_exists: bool) -> str:
-    """返回当前 producer 真正存在的恢复路。
-
-    顺序是契约：通用 INVALID 必须先问 producer 有没有 ``--revalidate``，不能因为
-    某个历史节点有过这条 flag，就给所有节点拼一条不存在的命令。
+    旧链的 ``--revalidate`` 提升旗标族已随旧节点整体退役（`NODES` 不登记任何
+    这类 flag），所以这里不拼命令——不能给节点指一条不存在的恢复路。
     """
-    del store, rel, formal_exists
-    spec = NODES.get(node)
-    if spec is not None and '--revalidate' in spec.flags:
-        return _revalidate_how(node)
     return (
         f'`{node}` 没有可执行的 INVALID 提升入口；先保留 `.INVALID` 证据并按该节点当前恢复契约'
         '处置，不得伪造提升命令'
@@ -270,8 +254,7 @@ def _invalid_items(store: ArtifactStore, stage: str) -> list[InboxItem]:
             continue
         node = _producer_of(rel, stage)
         formal_exists = store.exists(rel)
-        recovery = _invalid_recovery_how(
-            store, node=node, rel=rel, formal_exists=formal_exists)
+        recovery = _invalid_recovery_how(node)
         if formal_exists:
             rounds = sorted(store.seen_rounds(rel))
             what = f'{inv}：付费自救/人工补丁被落盘闸门驳回，正式稿仍是旧轮'

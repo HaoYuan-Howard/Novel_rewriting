@@ -19,40 +19,10 @@ from fastapi.responses import StreamingResponse
 from contracts.schema.api import JobList, LogChunk, LogStreamEvent, PreviewRequest
 from contracts.schema.orchestration import JobRecord, JobStart
 from novel.api.deps import checked_sid, get_base
-from novel.errors import UnsupportedRunMode, UpstreamMissing
-from novel.orchestrator import jobs, nodes
+from novel.errors import UpstreamMissing
+from novel.orchestrator import jobs
 
 router = APIRouter(prefix='/jobs')
-
-
-def _refuse_prepared_recovery_api(flags: list[str]) -> None:
-    """拒绝必须由 Supervisor 绑定内部证据/复用 target 的 orchestration action。
-
-    ⚠ B5（S-05）：`node == 'stage5.write'` 的旧链限定已删——这些 hash-bound
-    旗标本就不登记在任何现役节点；边界按旗标本身拒绝，与提交时点名的节点无关
-    （旧链节点名不再给这道 API 边界当钥匙）。
-    """
-    tokens = set(nodes.flag_tokens(flags))
-    reviewer_rewrite = tokens & {
-        '--request-reviewer-rewrite',
-        '--reviewer-rewrite',
-        '--recover-reviewer-rewrite-prepared',
-        '--retire-reviewer-rewrite-request',
-    }
-    if reviewer_rewrite:
-        selected = ', '.join(sorted(reviewer_rewrite))
-        raise UnsupportedRunMode(
-            f'{selected} 是 approval:stage5-closure / '
-            'recovery:stage5-reviewer-rewrite 的内部 hash-bound action；'
-            'POST /api/jobs/preview 与 POST /api/jobs 不接受客户端旁路提交')
-    recovery = tokens & {
-        '--emit-prepared-recovery-workpack', '--recover-prepared'}
-    if recovery:
-        selected = ', '.join(sorted(recovery))
-        raise UnsupportedRunMode(
-            f'{selected} 只允许由能显式复用同一 target run_id 的 CLI runner 执行；'
-            'POST /api/jobs/preview 与 POST /api/jobs 会为每个 job 生成新的 run_id，'
-            '不能安全承载 hash-bound prepared recovery')
 
 
 def _one(base: str, job_id: str) -> JobRecord:
@@ -80,7 +50,6 @@ def list_jobs(sid: str | None = Query(default=None),
 @router.post('', response_model=JobRecord, status_code=202)
 def start_job(req: PreviewRequest, base: str = Depends(get_base)) -> JobRecord:
     sid = checked_sid(req.sid) if req.sid is not None else None
-    _refuse_prepared_recovery_api(req.flags)
     planned = jobs.plan_start(
         req.node, sid, req.flags, base=base,
         executor_backend=req.executor_backend,
@@ -202,7 +171,6 @@ def preview_job(req: PreviewRequest, base: str = Depends(get_base)) -> JobStart:
     ⚠ 它与真启动端点都经过全局 CSRF 中间件；预览本身仍然 0 成本、无写盘。
     """
     sid = checked_sid(req.sid) if req.sid is not None else None
-    _refuse_prepared_recovery_api(req.flags)
     # Preview accepts an otherwise well-shaped action before the human has
     # supplied its required audit values.  ``nodes.build_steps`` fills those
     # omissions with visibly non-executable ``待填·...`` tokens.  POST /jobs

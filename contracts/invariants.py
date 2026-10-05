@@ -210,31 +210,6 @@ STAGE5_COMMIT_PHASES: Final = (
     'adoption', 'mark_committed', 'committed_verify', 'session_end',
 )
 
-#: Stage5 闭合闸（``require_stage5_closed``）在 CLI 运行边界只拦 stage6/stage7
-#: 的**写效果**跑法。这些 flag 组合是 0 成本只读 / 人工恢复路：闸关闭时仍可
-#: 运行，否则人连开闸需要的证据都拿不到（硬闸与恢复面必须同批交付）。
-#: 一条 stage6/stage7 命令的 flag token 全部落在本表内 ⇒ 免闸；否则必须先有
-#: 当前 typed closure 回执。取值面以各 NodeSpec.flags 为准，由测试交叉钉住。
-#: Stage5 闭合回执的取值域（P0-2）；公开 schema 用 ``Literal[...]`` 引用，
-#: 字面量只许活在这一张表里。
-STAGE5_MUST_APPEAR_RULINGS: Final = ('confirmed_present', 'accepted_exception')
-STAGE5_CLOSURE_GROUPS: Final = ('fact_landing', 'unver')
-STAGE5_CLOSURE_STATES: Final = (
-    'missing', 'review_required', 'blocked', 'ready', 'closed', 'expired',
-)
-
-#: Stage5 顶部 Reviewer 可交给写手的**唯一**局部改写指令闭集。
-#:
-#: 这些 code 只描述已经在 current 正文中逐字举证的压缩手段；执行端另行固定
-#: “压回预算、保留 plan slots / 事实 / 时序 / 必须逐字内容”等不可编辑约束。
-#: Commander 的 actor/reason 与证据只作审计和定位，绝不能被拼成自由 prompt。
-STAGE5_REVIEWER_REWRITE_DIRECTIVE_CODES: Final = (
-    'remove_repetition',
-    'compress_exposition',
-    'repair_wording',
-    'smooth_transition',
-)
-
 
 #: 常用 executor 配置（``PipelineAgentProfiles``）在盘上的三态；与整书代跑
 #: ``AgentRun`` 无关。唯一发布口仍是 ``GET /api/agent/capabilities``（路径保留，
@@ -409,25 +384,6 @@ NONBODY_MARKER_WARN_CP: Final = 17
 #:   后者独立起作用的窗口只有 `body_ratio ∈ [0.60, 0.65)`。两条都留是因为严重度不同。
 STAGE0_WARNINGS: Final = ('early_cut', 'drop_ratio', 'long_marker')
 
-#: 人工审阅闸门的状态。**两态，不是 `bool`**（2026-08-21 裁决，见 `docs/schema/stage0.md` §2.4）。
-#:
-#: 【历史】原型曾按「没跑过 · 跑了没批 · 批了」定成三态。其中 `not_run` 是**死值**：
-#: 一份合法的 `Stage0Revisions` 一旦存在，机器摄入必然已经跑过，
-#: 「没跑过」在产物内不可诚实表达——全仓也从未有过写入方（preflight 存量扫描 0 实例，
-#: 2026-08-21）。「没跑 / 崩了 / 阻断」是**执行状态**，由「产物不存在 + JobState」表达。
-#: 【为什么不能是 `bool`】「跑了没批」与「批了」必须分开，与 `FRESHNESS` / `JOB_STATE` /
-#: `BADGE` 同构：本项目每一次把「不知道」并进「没问题」都付过学费。
-#: ⚠ `R-0.3b`（`HARD`）判的是**不满足执行资格 ⇒ stage1 拒绝启动**，判它的唯一落点是
-#: `novel/core/eligibility.py::is_stage0_executable`，消费方不许复述条件。
-#: ⚠ `ApprovedApproval` 曾有第三格 `origin: 'auto_zero_hit' | 'human'`，
-#: 2026-08-22 与 `not_run` 同一判据删除：产地 2026-08-21 已停产，而真正带着它的
-#: 存量产物是旧版且本仓不迁移 ⇒ 那些产物连 decode 都过不去，
-#: 该取值在盘上**结构不可达**（实测报 `schema v1 不是当前 v3`）。
-#: ⚠ 2026-08-22 起 `approved` 那四个平铺字段收成一格判别联合（`Stage0Approval`），
-#: 本元组仍是 `status` 那一格的取值面；两者的对账在 `tests/test_invariants.py`。
-APPROVAL_STATE: Final = ('pending', 'approved')
-
-
 #: `stage2.blueprint` 那一次调用的**模型可见边界身份**，落在
 #: `_provenance.context.architecture`（历史载体 `contracts/schema/stage2.py::
 #: BlueprintContext`，模块已随旧链 schema 删除）。
@@ -561,8 +517,6 @@ PIPELINE_BOOK_CONCURRENCY: Final = 4
 PIPELINE_PROVIDER_CONCURRENCY: Final = 8
 PIPELINE_TOTAL_CONCURRENCY_MIN: Final = 1
 PIPELINE_TOTAL_CONCURRENCY_MAX: Final = 200
-#: 历史档位。现役允许值是上面的整数区间，本元组不再充当允许集。
-PIPELINE_CONCURRENCY_TRIALS: Final = (4, 6, 8)
 #: 并发覆盖只支持**新链逐章节点**（B1）：键必须已在 `NODES` 登记。现役注册表
 #: 两个逐章 owner：`str06.stage2.chapters`（章观察，B2 五节点重建时登记）与
 #: `str06.stage5.body`（正文逐章 owner，scope=chapter:N）。旧链键
@@ -575,8 +529,11 @@ PIPELINE_PARALLEL_NODES: Final = (
 
 # ⚠ 2026-10-04 清理批：本节（旧链 Stage4 计划与篇幅的六张响应前缀表、
 #   两级档位与对齐断言）已随旧链 stage4/plot schema 删除；档位标定史见
-#   Git 历史与本文件此前版本。现役篇幅带见 `DRAFT_BAND` / `BOOK_BAND`
-#   与 stage4/acceptance 的 guard 报告。
+#   Git 历史与本文件此前版本。旧链的 `DRAFT_BAND`（章 0.80~1.20）／`BOOK_BAND`
+#   （全书 0.90~1.10）两条带随后也因零消费者删除；现役章篇幅带是
+#   `contracts/schema/workflow.py::STR06_RUNTIME_CONFIG` 的 `length_band_low/high`
+#   （0.6／1.3，经 BookBrief 下发，`R-7.3` 由 `stage5/body_checks.py` 的
+#   `length_band` 判据执行），全书偏差只作读数（`R-10.7`）。
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 六、写作（stage5）
@@ -585,43 +542,6 @@ PIPELINE_PARALLEL_NODES: Final = (
 #: Stage5 v1 的历史目录名。只用来识别不兼容盘面和读取不可变旧记录；
 #: 它们不是现役写作臂，不得重新暴露到 CLI/API。
 LEGACY_STAGE5_MODES: Final = ('deep', 'shallow')
-
-
-#: 成稿字数 / 本章预算必须落在这个带里。它就是执行带，**没有第二层宽限**。
-#: ⚠⚠ **它与 `BOOK_BAND` 不再是同一个数**（2026-08-17 用户裁决）。两条带答的是两个问题：
-#:   · 本带答「单章允许偏离预算多少」——写手对齐的是逐拍下发的 `budget_chars`，
-#:     而一章的节奏本来就会让某几章胖一点、某几章瘦一点；
-#:   · `BOOK_BAND` 答「全书总量允许偏离源书多少」——那是产品承诺，必须紧。
-#: 逐章放宽而全书收紧是**自洽**的：逐章的正负偏差在书级相互抵消，全书带兜住总量。
-#: ⚠ 定在 0.80~1.20 的依据是实测分布而不是拍脑袋：盘上 31 章的两端极值为
-#: **0.814 / 1.206**（当时见 `contracts/schema/stage5.py` 文件级注释④；该模块
-#: 已删，极值数字以此处登记为准），本带把它们
-#: 恰好包进去 ⇒ 正常写作波动不再触发收缩臂与 `length_over` / `length_under`。
-#: ⚠ 收窄回 ±10% 之前先看那两个极值：那不是"写坏了"，是这一层的自然方差。
-DRAFT_BAND: Final = (0.80, 1.20)
-
-#: 全书成稿字数 / 全书源字数。
-#: ⚠ 原型这里写死 `0.81~1.21`，注释自述推导自「逐章带**配 ±10% 宽限**」——
-#: 而那个宽限已随 stage4 裁决拿掉，这条书级带于是建立在一个不存在的前提上。
-#: 实测三本 0.949 / 1.022 / 0.980，收紧到本带**代价为 0**。
-#: ⚠ **本带刻意不跟随 `DRAFT_BAND` 放宽**：逐章放宽是给单章节奏留余量，
-#: 而全书总量是对用户的承诺。两个数不同不是漂移，是上面那条裁决的直接结果。
-#:
-#: ⚠⚠ **它有两个消费方，而两边的口径不是同一个数**（2026-08-22 起）：
-#:   · stage5 `book_length`（INFO）：**全书成稿字数 / 全书源字数**（`len(整章文本)` 那一支）；
-#:   · stage4 `plan_book_band`（HARD，`R-5.3c`）：**全书预算合计 / 全书 span 合计**。
-#: 两个分母差着「span 覆盖不到的那 2%~3% 正文」（见 `novel/stages/stage4/measure.py`
-#: 文件头那张三口径表），**不许拿来做相等断言**——产地已经为这件事把一份合格的计划
-#: 判成过 `.INVALID`。共用同一个带是有意的：它们答的是同一个问题（总量偏离源书多少），
-#: 只是一个在钱花之前问、一个在钱花之后问。
-BOOK_BAND: Final = (0.90, 1.10)
-
-#: canonical 闭卷成稿与源章的 20 字窗口重合度上界
-#: （已扣除契约要求逐字保留的部分）。它是提示级信号，不是自动放行门。
-SOURCE_OVERLAP_MAX: Final = 0.10
-
-#: 连续多少轮未消 → 判「根因不在写手」，反哺主动跳过。
-STOP_REWRITE_AFTER: Final = 2
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -675,10 +595,6 @@ FREE_ENTRIES: Final = {
 #: 挂在**付费**动作上的 flag。F8a 后为空：新链没有「把免费节点变付费」的旗标，
 #: 付费性由节点默认路径（`spec.paid`）与 `--check-only` 的免费覆盖共同决定。
 PAID_FLAGS: Final = {}
-
-#: 重算时**只对本次新引入的错误入终态** —— 旧违约照报但不挡路。
-#: 否则一条不相干的旧问题会把重算这条路永久堵死。
-REVALIDATE_ONLY_NEW_ERRORS: Final = True
 
 
 #: 部分改写旗标（旧链 trim／recheck 面）随 Stage5 人工闸退役删除；新链的精确
@@ -746,7 +662,6 @@ OPERATOR_REDO_STRATEGIES: Final = (
 )
 
 
-WORKFLOW_ROLE_CONTRACT: Final = 'pipeline-cost-latency-v2'
 WORK_UNIT_EXECUTOR_MAX_CONTENT_CALLS: Final = 4
 WORK_UNIT_MAX_DELIVERY_ATTEMPTS: Final = 4
 WORK_UNIT_GRANT_ADDITIONS: Final = (1, 2, 3, 4)
@@ -1243,12 +1158,6 @@ COMMANDER_ADMISSION_EVENT_KINDS: Final = (
 #: admission 纵切留下的名字，beacon 也共用这一个闭集，不能另长第三种恢复相位。
 COMMANDER_ADMISSION_TAIL_REPAIR_KINDS: Final = ('authorized', 'applied')
 
-#: 批次 C：live `.INVALID` 的 0-wire ``--revalidate`` 由队列/Supervisor 自动排入，
-#: 不再等人填 actor/reason。固定审计身份避免伪装成人类决定；人类 Stage 页与
-#: enums.actions 不再发布该用户入口（内部 RecoveryRunPolicy / CLI 仍可复用）。
-SYSTEM_INVALID_REVALIDATE_ACTOR: Final = 'system:invalid-revalidate'
-SYSTEM_INVALID_REVALIDATE_REASON: Final = (
-    'live INVALID passes current canonical HARD rules; auto 0-wire revalidate')
 #: Commander 顶层子进程的首事件/空闲超时、同席尝试上限与重试退避已随角色
 #: 退役（2026-09-15）删除：这些是驱动层重试参数，executor 会话各自持有
 #: 独立的超时与尝试策略（见 ``novel/agents``），不再有全局 Commander 席位。

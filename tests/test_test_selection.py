@@ -424,7 +424,7 @@ def test_xdist_report_merges_worker_results_without_losing_collection(tmp_path_f
     report = tmp_path / 'workers.json'
     result = _pytest(tmp_path, '-n', '2',
                      'tests/test_stage01.py::test_stage01_packages_are_in_the_explicit_wheel_manifest',
-                     'tests/test_stage01.py::test_approval_state_no_longer_carries_not_run',
+                     'tests/test_stage01.py::test_prompts_only_expose_the_reading_ordinal',
                      '--selection-report', str(report))
     assert result.returncode == 0, result.stdout + result.stderr
     data = json.loads(report.read_text(encoding='utf-8'))

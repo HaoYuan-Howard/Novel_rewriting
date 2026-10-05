@@ -592,18 +592,7 @@ def test_no_artifact_holds_the_removed_extra_body(work):
     assert unique in source.read_bytes().decode('utf-8')
 
 
-# ── 2026-09-15 全自动裁决：审批格的取值面与状态解释 ─────────────────────────
-
-
-def test_approval_state_no_longer_carries_not_run():
-    """P0-2：`not_run` 是从未落过盘的死值，已从取值面删除。
-
-    Stage0 v3 用 `admission.status=passed`；其它闸的 APPROVAL_STATE 仍可能含
-    pending/approved，但不得再混入 not_run。
-    """
-    from contracts.invariants import APPROVAL_STATE
-
-    assert 'not_run' not in APPROVAL_STATE
+# ── 2026-09-15 全自动裁决：状态解释 ─────────────────────────────────────────
 
 
 def test_missing_transform_and_admitted_states_are_not_conflated(work):

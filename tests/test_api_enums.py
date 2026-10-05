@@ -16,6 +16,8 @@ from novel.errors import ValueDomainRefused
 from novel.orchestrator import nodes as N
 
 BASE = 'E:/nowhere/Output'
+#: 带值 flag 的占位值（现役只有 `--source`，值是外部输入路径）。
+_PLACEHOLDER_VALUE = 'C:/placeholder.json'
 
 #: mock 模式下前端看到的**整份取值面**。它是 `payload()` 的第二落点，而本模块开头
 #: 那段论证说的正是「第 N 个落点必然分家」——所以它必须有一条对账。
@@ -117,6 +119,21 @@ def test_operator_telemetry_and_judge_internals_are_not_frontend_choices(
     } & set(paid_payload)
 
 
+def test_retired_old_chain_value_domains_are_not_published(paid_payload):
+    """旧链取值面不得再经 `/api/enums` 发布（前端只读 `actions`／`job_kinds`）。
+
+    · Stage5 闭合回执三张闭集、章／全书篇幅带（`DRAFT_BAND`／`BOOK_BAND`）与旧人工审批闸的
+      状态取值面（`APPROVAL_STATE`）已因零消费者从 `contracts.invariants` 删除——常量一旦
+      回来会被自动发布，这条先红。现役章篇幅带是 `STR06_RUNTIME_CONFIG.length_band_*`，
+      不经 enums 发布。
+    """
+    retired = {
+        'stage5_must_appear_rulings', 'stage5_closure_groups', 'stage5_closure_states',
+        'draft_band', 'book_band', 'approval_state',
+    }
+    assert not retired & set(paid_payload)
+
+
 def test_every_action_is_unique_and_buildable(paid_payload):
     actions = paid_payload['actions']
     keys = [(a['kind'], tuple(a['extra'] or ())) for a in actions]
@@ -132,28 +149,32 @@ def test_every_action_is_unique_and_buildable(paid_payload):
         ]
         if action['needs_value']:
             index = next(i for i, flag in enumerate(flags) if flag in VALUED_FLAGS)
-            value = ('1' if flags[index] == '--chapters'
-                     else 'formal' if flags[index] == '--edit-confirmation'
-                     else 'source-run-1'
-                     if flags[index] in {'--recover-repair-aggregate', '--recover-prepared'}
-                     else 'a' * 64 if flags[index] in {
-                         '--current-chapter-sha256', '--preview-subject-sha256',
-                         '--source-journal-sha256', '--source-commit-sha256', '--subject-sha256'}
-                     else 'C:/placeholder.json')
-            flags.insert(index + 1, value)
+            flags.insert(index + 1, _PLACEHOLDER_VALUE)
         # ⚠ 必填项由**点下去的那个人**给（同 `needs_value` 那一格的理由）：
-        #   `stage0/6.approve` 的 actor/reason 是人工凭据，`actions[]` 里不可能预先填好。
+        #   `actions[]` 里不可能预先填好带值的必填 flag。
         #   ⇒ 本条测的是「补齐必填之后这条动作拼得出命令」，不是「空 flags 拼得出」——
         #   后者恰恰该拼不出，那正是 `NodeSpec.required_flags` 要挡的（复盘 §六.1）。
         for extra in N.missing_required(action['kind'], flags):
-            value = ('formal' if extra == '--edit-confirmation'
-                     else 'a' * 64 if extra in {
-                         '--current-chapter-sha256', '--preview-subject-sha256',
-                         '--source-journal-sha256', '--source-commit-sha256', '--subject-sha256'}
-                     else 'C:/placeholder.json')
-            flags += [extra, value] if extra in VALUED_FLAGS else [extra]
+            flags += [extra, _PLACEHOLDER_VALUE] if extra in VALUED_FLAGS else [extra]
         argv = N.build_argv(action['kind'], 'sid123', flags, base=BASE)
         assert ('--yes' in argv) == action['paid']
+
+
+def test_actions_are_exactly_nodes_times_default_and_registered_flags(paid_payload):
+    """`actions[]` 恰为 `节点 × (默认路径 + 每个注册 flag)`，发布器不静默藏任何一格。
+
+    旧链的审计凭据／内部恢复 flag 曾由 `enums.actions()` 内两张过滤集从动作表里藏起来；
+    现役 `NODES` 不登记这类 flag，过滤集已删。一个 flag 要不要成为按钮由 `NodeSpec.flags`
+    的登记决定——被藏起来的登记会让 `actions` 与 `job_kinds[].flags` 分家而无人出声。
+    """
+    expected = {
+        (node, flags)
+        for node, spec in NODES.items()
+        for flags in [()] + [(flag,) for flag in spec.flags]
+    }
+    actual = [(a['kind'], tuple(a['extra'] or ())) for a in paid_payload['actions']]
+    assert len(actual) == len(set(actual)), '动作表里有重复项'
+    assert set(actual) == expected
 
 
 def test_revalidate_is_hidden_from_user_action_catalog(paid_payload):

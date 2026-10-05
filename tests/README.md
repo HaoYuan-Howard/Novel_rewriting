@@ -34,8 +34,8 @@
 
 | 变更 | 原职责 | 现役依据 | 等价替代 / 分母影响 |
 |---|---|---|---|
-| `POST /stage2/analyze-draft` 人工写面 | HTTP 提交 owner 草稿订正 | 全自动裁决：用户修复写面退役 | 内部 CLI `--repair-analyze-draft` / `--recover-analyze-draft` 保留；`test_stage2_analyze_draft_http` 改断言 POST 405（读 GET 仍在） |
-| enums.actions 隐藏 `--revalidate` 等 | Stage 页一键提升 INVALID | 队列以 `system:invalid-revalidate` 自动排入 | `test_orchestrator_queue` 的 live-INVALID 用例从 blocked 改为 todo 自动 revalidate；`Stage5Screen.request.test` 断言 actions 中无 `--revalidate` |
+| `POST /stage2/analyze-draft` 人工写面 | HTTP 提交 owner 草稿订正 | 全自动裁决：用户修复写面退役 | 当时保留内部 CLI `--repair-analyze-draft` / `--recover-analyze-draft`；该 CLI 已随旧链 analyze-draft 整层删除（2026-10-04 清理批），现无此入口。POST 405 断言现为 `test_api_discipline.py` 里对 `/stage2/analyze-draft` 的退役探针（原 `test_stage2_analyze_draft_http` 已不存在） |
+| enums.actions 隐藏 `--revalidate` 等 | Stage 页一键提升 INVALID | 队列以 `system:invalid-revalidate` 自动排入 | `test_orchestrator_queue` 的 live-INVALID 用例从 blocked 改为 todo 自动 revalidate；`Stage5Screen.request.test` 断言 actions 中无 `--revalidate`。2026-10-05：该自动路径随 `--revalidate` 旗标族整体退役，`system:invalid-revalidate` 常量与 `_revalidate_how` 已删，现役节点没有 INVALID 提升入口 |
 | Inbox `verification` → disclosure | 部分 verification 挡交付 | Q-13 质量类披露 | `test_inbox_projection` trim/verification 断言 `delivery_effect=disclosure`；交付终验只计 blocking |
 
 ### 分母变化登记（C5 · 2026-09-17 单 Executor 退役边界）
@@ -68,6 +68,22 @@
 | 变更 | 原职责 | 现役依据 | 等价替代 / 分母影响 |
 |---|---|---|---|
 | `test_stage2_node_lifecycle.py` 三用例并一 | 后两条是同一 find_spec 断言的参数化重复；`_RETIRED_WRITE_ENTRIES` 死常量 | 模块缺席即结构性闭合 | 该文件 3→1；新增 `test_retired_surface_scan.py` 夹具节点守卫 +1。收尾批默认非 corpus 回归 3569 通过/0 失败（3570−2+1，`--basetemp=E:/_tr`，exit 0） |
+
+### 分母变化登记（旧链残留收尾批 · 2026-10-05）
+
+复审遗留的 29–33 项与同类残留按用户裁决（PLAN.md 整份退役、`APPROVAL_STATE` 连守卫测试一并删、同类残留一块删）
+闭环；未放宽判据，删除的用例都写明现役依据与等价守卫。
+
+| 变更 | 原职责 | 现役依据 | 等价替代 / 分母影响 |
+|---|---|---|---|
+| 删除 test_stage01.py 里的 test_approval_state_no_longer_carries_not_run | 钉住旧人工审批闸取值面不得回带 `not_run` | `APPROVAL_STATE` 无 schema 与生产消费者（Stage0 v3 闸门是 `Stage0Admission`），常量同批删除 | Stage0 闸门形状由 `test_invariants.py::test_stage0_admission_covers_mechanical_passed_shape` 钉住；`test_test_selection.py` 的 xdist 夹具改用同文件另一条纯用例。−1 |
+| 删除 test_inbox_projection.py 里的 test_no_current_node_carries_revalidate_and_instructions_stay_system_only；`_invalid_recovery_how` 去掉 `--revalidate` 分支 | 现役节点不登记 `--revalidate` ＋ `_revalidate_how` 指令格式 | `_revalidate_how` 与 `SYSTEM_INVALID_REVALIDATE_*` 不可达（无节点登记该旗标），已删 | 「不登记 `--revalidate`」由 `test_api_enums.py::test_revalidate_is_hidden_from_user_action_catalog` 承担（`job_kinds` 由 `NODES` 派生，同一判据）；INVALID 不拼假命令仍由同文件 `test_invalid_row_never_invents_a_promotion_command_nor_reads_schema_version`（原名 `test_generic_invalid_checks_the_producer_revalidate_flag_before_schema_version`）钉住。−1 |
+| `test_api_http.py` 两条 HTTP 退役旗标拒绝测试合并为 `test_http_jobs_refuse_retired_recovery_flag_families` | `_refuse_prepared_recovery_api` 的逐旗标特判（reviewer rewrite／prepared recovery） | 特判随「无现役节点登记这些旗标」删除；边界回到通用 `validate_run`：旧链节点不在 `NODES`、现役节点不登记该旗标 ⇒ 400 `UnsupportedRunMode`，不启动 job | 12→12（2 路径×6 组：3 旧链节点＋3 现役节点），断言由特判文案改为通用拒绝，这条当前边界仍受守卫。±0 |
+| `test_api_enums.py::test_every_action_is_unique_and_buildable` 去掉退役 flag 的死分支 | 为已退役 flag 挑占位值 | 现役唯一带值 flag 是 `--source` | 断言不变。±0 |
+| 新增 `test_api_enums.py` 两条守卫 | — | 发布面不得再出现旧链取值面；`actions[]` 恰为 `节点×(默认＋注册 flag)` | +2 |
+
+本批默认非 corpus 回归 3661 通过/0 失败（`-n 4 --dist loadgroup -m "not corpus"`，`--basetemp=E:/_tr`，exit 0；
+JUnit 与选择报告分母一致）。相对 HEAD 净增减为 0（+2 新守卫、−2 删除、HTTP 12→12）。
 
 Stage3 文风迁移、Stage6 旧定性包 A/B 与 Stage2 旧五轮实验退出当前测试维护范围。
 历史由 Git 和既存实验记录保存，不新增测试归档目录；旧解释器不能接受当前报告的守卫仍保留。

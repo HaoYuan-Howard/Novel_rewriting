@@ -23,7 +23,7 @@ enums.py —— `GET /api/enums` 的**唯一**构造函数。纯函数：不碰�
     `payload()` 当场抛 `ValueDomainRefused`，你必须选一个桶并写出理由。
 
 ⚠ **标量为什么默认不发**：一个孤立的数字（`MIN_CHAPTERS` / `BODY_RATIO_MIN` /
-`SOURCE_OVERLAP_MAX`…）对前端只有一个用途——**自己算一个结论**，而那就是第二个判官
+`NOISY_DUPLICATE_MIN`…）对前端只有一个用途——**自己算一个结论**，而那就是第二个判官
 （`R-11.4`：界面不重算任何已经在校验器里的判据）。容器不一样：取值面、词表、映射表、
 区间，前端拿它渲染选项与图例，渲染不产生判定。
 
@@ -66,7 +66,6 @@ _CONSUMED: dict[str, str] = {
 #: ⚠ 这张表**必须逐个列名**，不许写成「所有标量一律不发」那种规则：
 #: 那样新加一个标量会被**静默**挡住，而静默正是本模块要防的方向。
 _WITHHELD: dict[str, str] = {
-    'WORKFLOW_ROLE_CONTRACT': '工作流执行身份；界面只显示后端工作单元读模型',
     'WORK_UNIT_EXECUTOR_MAX_CONTENT_CALLS': '预算已由持久工作单元账折叠，前端不自行重算',
     'BOOK_CONTENT_CALL_CEILING_DEFAULT': '整书付费总闸默认值只由后端 reserve 时强制；前端显示工作单元预算投影，不自行判断余量',
     'DETERMINISTIC_REBUILD_NODES': '自动重建白名单是后端调度边界（R-11.27）；前端只消费 operator 给出的具体动作，不自行推导重建范围',
@@ -74,14 +73,6 @@ _WITHHELD: dict[str, str] = {
     'CASCADE_REWIND_LIMIT': (
         '跨节点回派每根累计上界（R10c 硬化批）是后端级联背压边界；'
         '前端只消费 typed 停止状态，不自行推导回派额度'),
-    'SYSTEM_INVALID_REVALIDATE_ACTOR': (
-        '批次 C：live .INVALID 由队列自动排入 0-wire --revalidate 的固定审计身份；'
-        '不是前端取值面或按钮文案'),
-    'SYSTEM_INVALID_REVALIDATE_REASON': (
-        '同上的固定复验理由；只写进队列 argv 与审计，不是前端取值面'),
-    'STAGE5_REVIEWER_REWRITE_DIRECTIVE_CODES': (
-        '只随 Commander immutable submission option 与 Stage5 writer 固定 prompt 下发；'
-        '当前浏览器没有该 delegated rewrite 表单，单独发布会制造未接线的第二消费面'),
     'LLM_EXECUTOR_NODES': (
         '付费 LLM executor 节点属于 provider/model/effort/thinking 组合能力面，'
         '唯一公开口是动态 `GET /api/agent/capabilities`；'
@@ -134,15 +125,11 @@ _WITHHELD: dict[str, str] = {
                               '前端就能拿它自己判「这份产物过期没有」——'
                               '而那正是判据在做的事（`R-11.4` 的第二个判官）',
     # ── stage4 / stage5 ──
-    'SOURCE_OVERLAP_MAX': '判据阈值（canonical 成稿与原文的重合度上限）',
-    'STOP_REWRITE_AFTER': '返工护栏的轮次上限。它是**编排**参数，不是给人看的取值面',
-    'REVALIDATE_ONLY_NEW_ERRORS': '一个 bool 开关，说的是重算路怎么判。前端不参与那次判定',
     'PIPELINE_DEFAULT_CONCURRENCY': '并发默认由 Agent capability 发布，enums 不另复制',
     'PIPELINE_BOOK_CONCURRENCY': '整书总槽默认由 Agent capability 发布',
     'PIPELINE_PROVIDER_CONCURRENCY': '供应商总槽默认由 Agent capability 发布',
     'PIPELINE_TOTAL_CONCURRENCY_MIN': '总槽配置范围由 Agent capability 发布',
     'PIPELINE_TOTAL_CONCURRENCY_MAX': '总槽配置范围由 Agent capability 发布',
-    'PIPELINE_CONCURRENCY_TRIALS': '历史档位元组；现役节点与总槽并发取 capability 发布的整数区间',
     'PIPELINE_PARALLEL_NODES': '并发覆盖节点由 Agent capability 发布',
     'LLM_MAX_OUTPUT_TOKENS': '全部付费节点的统一输出上限（D6）；截断即停由后端执行，'
                              '前端不据此改判或重试',
@@ -277,35 +264,14 @@ def actions() -> list[dict[str, Any]]:
     `write_effects` 四张表已经整份下发了，前端按 flag 去查即可——
     同一份数据放两处就是第二个落点（与 `CheckReport` 砍掉四个 sev 桶是同一条裁决）。
 
-    ⚠ `extra` 里的带值 flag **不带值**（`--apply-edit` 而不是 `--apply-edit <路径>`）：
+    ⚠ `extra` 里的带值 flag **不带值**（`--source` 而不是 `--source <路径>`）：
     那个值是人在点下去的那一刻才给的。`needs_value` 就是用来说这件事的。
+
+    ⚠ **不经任何隐藏过滤**：`NodeSpec.flags` 登记什么就发布什么。旧链的审计凭据／内部恢复
+    flag 曾由本函数内的两张过滤集从动作表里藏起来；现役 `NODES` 不登记任何这类 flag，
+    过滤集随之删除——一个 flag 要不要成为按钮，由 `NodeSpec` 的登记决定，不由发布器静默吞掉
+    （守卫：`tests/test_api_enums.py::test_actions_are_exactly_nodes_times_default_and_registered_flags`）。
     """
-    # 这些 flag 是审计凭据/提交锁，不是可独立运行的动作。它们仍留在
-    # ``job_kinds[].flags``，并经下方 ``required_inputs`` 挂到真正需要它们的动作。
-    credential_flags = {
-        '--actor', '--reason', '--subject-sha256',
-        '--review-token',
-        '--current-chapter-sha256', '--preview-subject-sha256',
-        '--edit-confirmation',
-        '--source-journal-sha256', '--source-commit-sha256',
-        '--reviewer-rewrite-request-sha256',
-        '--reviewer-rewrite-recovery-target-run-id',
-        '--reviewer-rewrite-recovery-journal-sha256',
-        # Supervisor 的内部 hash-bound action 不能由普通作业表单发起；
-        # HTTP job 入口也明确拒绝，不能把它们发布成不可执行的按钮。
-        # （--request-reviewer-rewrite 已随批次 B3 trim 三选一退役删除。）
-        '--reviewer-rewrite',
-        '--recover-reviewer-rewrite-prepared',
-        '--retire-reviewer-rewrite-request',
-    }
-    # 批次 C：人工修复写面退役——内部 0-wire revalidate / draft repair 仍可由
-    # 队列与 CLI 恢复路径复用，但 enums.actions 不再向 Stage 页发布这些用户入口。
-    internal_recovery_flags = {
-        '--revalidate',
-        '--repair-analyze-draft',
-        '--emit-analyze-draft-template',
-        '--response-repair',
-    }
 
     def required_inputs(node: str, flags: Sequence[str]) -> list[dict[str, str]]:
         """调用方在执行前必须收齐的缺失值。
@@ -321,11 +287,7 @@ def actions() -> list[dict[str, Any]]:
 
     out: list[dict[str, Any]] = []
     for node, spec in NODES.items():
-        independent = [
-            f for f in spec.flags
-            if f not in credential_flags and f not in internal_recovery_flags
-        ]
-        for flags in [()] + [(f,) for f in independent]:
+        for flags in [()] + [(f,) for f in spec.flags]:
             out.append({
                     'kind': node,
                     'label': step_label(node, flags),

@@ -646,7 +646,7 @@ reasoning 是 completion 的子口径，不再累加。统一解析顶层与 com
 |---|---|---|---|
 | **B-01** ★ | **发明越界七项里的五项**：新事件 · 新地点 · 新道具 · 新因果 · 新时间跳跃 | **零校验。** 只有「新数字」有探针、「新人物」有部分探针（召回有缺口：用本书没出现过的姓造人、不带称谓后缀的光名字都抓不到）。地名后缀是普通名词、无硬左锚，实测 82 条候选几乎全假 | **已裁决（2026-08-10）：不补，直到有 ground truth。** 三条理由都有实测：① gate1 在抽象层做语义判定时**护栏自己成了发明源**，已整节退役；② **唯一 `full` 的那一项自己就零判别力**——`invented_number` 在 3 本里有 2 本被书级恒等闸门判死（头牌 2/8 vs 源章 2/8；三岁 1/9 vs 源章 **2/9**）；③ 修复回环**实测会诱发**自造内容而当轮判定一条都指不出它。<br>⇒ 七项的身份是**给人核对的料**（同 `name_surface_survey`），不是关卡。**「探针报 0 条 ≠ 约束生效」必须写在报告里** |
 | **B-02** | **旧事件拍的落笔顺序** | **现役暴露面已关闭。** 旧 event/beat 写作骨架已经退役；Stage4A 决定新场景披露顺序，Stage5 响应按计划 slot 确定性归位（旧链 stage5/write.py 的 `_ordered_segments` 归位面随旧链退役；新链由 `novel/stages/stage5/body.py` 按章计划成文），不能临场另排一套。至于 A 选出的顺序是否更好没有 ground truth，留在 `B-17` 的结构读数 + 人工裁决面 | 不恢复“源拍位置单调”判据；那会把已去序的规划重新锁回源顺序。执行顺序由 Design 的呈现序权威关闭（`R-5.1`），审美优劣按 `R-5.7` 的 unver 披露交人 |
-| **B-03** | **旧开卷路径的重合度没有阈值** | **历史闭环记录，现役暴露面为空。** 旧盘面逐章重算：旧闭卷 0.0~2.4%，旧开卷 0.9%~96.8%，不存在可标定的开卷一刀切线 | **2026-08-24 以收走能力关闭，不是以发明阈值关闭。** 现役只有 canonical 闭卷 `stage5/chNN.json`，上界为 `SOURCE_OVERLAP_MAX = 10%`（`INFO`）；旧目录只读保留并报 `legacy_incompatible`，CLI 没有可恢复旧能力的入口 |
+| **B-03** | **旧开卷路径的重合度没有阈值** | **历史闭环记录，现役暴露面为空。** 旧盘面逐章重算：旧闭卷 0.0~2.4%，旧开卷 0.9%~96.8%，不存在可标定的开卷一刀切线 | **2026-08-24 以收走能力关闭，不是以发明阈值关闭。** 旧链 canonical 闭卷的上界常量（`SOURCE_OVERLAP_MAX = 10%`，`INFO`）已随旧链 stage5 退役而删除，新链没有重合度判据；成书与源文的逐章 20 字重合只作读数（`tools/book_overlap.py`，不扣豁免、不设阈值）；旧目录只读保留并报 `legacy_incompatible`，CLI 没有可恢复旧能力的入口 |
 | **B-04** | **「必须成立、不必写在纸面上」那一组** | 机械层没有，且对应判据明确标为「查不了」；历史 Stage5 书级语义节点已退役，不再是现役覆盖 | 机械层继续诚实标注 `unver`；没有 ground truth 时不为了消掉盲区恢复一个自动语义门 |
 | **B-05** | **Stage4A prompt 不许泄漏源序或正式内部 id** | **本缺口已按 A 相边界关闭。** `build_blind_projection` 是唯一构造口，正式外发面只含去序 opaque alias、事实语义、因果与状态；生产集成测试直接检查真发 prompt 不含 fact/source beat/stage/material/人物正式 id、原文或源区间。B 相在结构冻结后才有意接收 candidate scene id 与关闭式证据目录，不能把它反推成 A 的输入 | 维持 `R-5.5` 的 prompt 侧隔离守卫；不要把“B 为绑定证据而看正式引用”误报成泄漏，也不要把其它节点的 typed id 需要偷换成 Stage4A 的源序暴露 |
 
@@ -717,7 +717,7 @@ Stage6 整层退役后不再出现在本表（该层没有任何注册判据）�
 |---|---|---|---|
 | deterministic | 代码 | 运行 Rule.fix 指向的同层免费节点与 flag，注册期验证路由真实存在 | 一次免费命令 |
 | llm | stage5 写手 | 只接受 `repair == UNIQUE` 且 `unresolved_rounds < 2`；directive 从 Rule 唯一派生 | 每章每判据最多两轮付费 |
-| human | 人 | 真人工路由为 human_only / upstream / approval；`verification` 批次 C 起转披露（不挡交付）。通过 typed apply-edit、pick 或 wontfix 收口（Stage4 的 hash-bound design resolution、Stage5 的 trim 三选一与闭合回执、analyze-draft/response-repair/INVALID revalidate 用户写面已随 2026-09-15 全自动裁决退役；内部 0-wire revalidate 由队列以 `system:invalid-revalidate` 自动排入） | 无自动费用 |
+| human | 人 | 真人工路由为 human_only / upstream / approval；`verification` 批次 C 起转披露（不挡交付）。通过 typed apply-edit、pick 或 wontfix 收口（Stage4 的 hash-bound design resolution、Stage5 的 trim 三选一与闭合回执、analyze-draft/response-repair/INVALID revalidate 用户写面已随 2026-09-15 全自动裁决退役；`--revalidate` 旗标族后又随旧链整体退役，现役节点没有 INVALID 提升入口） | 无自动费用 |
 | none | 无 | metric 只报告读数 | 无 |
 
 处理顺序：首轮生成 → 机械检查 → deterministic 先修 → UNIQUE 才可付费修 → 连续两轮未消转人 →
@@ -735,8 +735,8 @@ Stage6 整层退役后不再出现在本表（该层没有任何注册判据）�
 
 唯一落点：路由算法 `novel/report/builder.py::remediation_of`；付费筛选随旧链 stage5/write.py 的
 revise_targets 退役——新链付费修复路由由候选 runner 的 realization failure 重写上限承担
-（`novel/stages/stage5/body_checks.py::MAX_BODY_REWRITES`）；轮次上限
-`contracts/invariants.py::STOP_REWRITE_AFTER`；八类清单 `novel/orchestrator/inbox_projection.py::inbox_view`。
+（`novel/stages/stage5/body_checks.py::MAX_BODY_REWRITES`）；owner 修订轮次上限
+`contracts/invariants.py::OWNER_REVISION_MAX_ROUNDS`；八类清单 `novel/orchestrator/inbox_projection.py::inbox_view`。
 
 现役逐条修复归属从注册表读取；密度、比例和档位等多解目标不因此获得付费自救权。
 

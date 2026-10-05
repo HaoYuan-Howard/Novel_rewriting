@@ -157,22 +157,6 @@
   "committed_verify",
   "session_end"
  ],
- "stage5_must_appear_rulings": [
-  "confirmed_present",
-  "accepted_exception"
- ],
- "stage5_closure_groups": [
-  "fact_landing",
-  "unver"
- ],
- "stage5_closure_states": [
-  "missing",
-  "review_required",
-  "blocked",
-  "ready",
-  "closed",
-  "expired"
- ],
  "job_event_kinds": [
   "started",
   "step",
@@ -232,10 +216,6 @@
   "drop_ratio",
   "long_marker"
  ],
- "approval_state": [
-  "pending",
-  "approved"
- ],
  "blueprint_architectures": [
   "plot-blueprint-v1"
  ],
@@ -258,14 +238,6 @@
   "reset",
   "gap",
   "repeat"
- ],
- "draft_band": [
-  0.8,
-  1.2
- ],
- "book_band": [
-  0.9,
-  1.1
  ],
  "inbox_attention": [
   "pending",

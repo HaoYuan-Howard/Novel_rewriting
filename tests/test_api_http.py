@@ -779,74 +779,45 @@ def test_free_jobs_do_not_request_writing_authorization(
 
 
 @pytest.mark.parametrize('path', ['/api/jobs/preview', '/api/jobs'])
-@pytest.mark.parametrize('flags', [
-    ['--emit-prepared-recovery-workpack', 'source-run-api'],
-    [
-        '--recover-prepared', 'source-run-api',
-        '--actor', 'reviewer-a',
-        '--reason', '逐章核对工作包后收口',
-        '--subject-sha256', 'a' * 64,
-    ],
-])
-def test_http_jobs_refuse_cli_only_prepared_recovery(
-        client, monkeypatch, path, flags):
-    """HTTP job 每次生成新 run_id，不能冒充可复用 target 的 CLI runner。
-
-    （F8b-3：该边界不再读审批——`authorize_prepared_recovery` 随人工闸退役；
-    拒绝只剩旗标面这一道，且仍在 argv/job 构造之前。）
-    """
-    monkeypatch.setattr(
-        JOB_API.jobs, 'plan_start',
-        lambda *_args, **_kwargs: pytest.fail(
-            'prepared recovery API 边界必须先于 argv/job 构造'))
-    monkeypatch.setattr(
-        JOB_API.jobs, 'start',
-        lambda *_args, **_kwargs: pytest.fail(
-            'prepared recovery API 边界不得启动 job'))
-
-    response = client.post(path, json={
-        'sid': '42', 'node': 'stage5.write', 'flags': flags,
-    })
-
-    assert response.status_code == 400
-    assert response.json()['kind'] == 'UnsupportedRunMode'
-    assert 'CLI runner' in response.json()['message']
-    assert '同一 target run_id' in response.json()['message']
-
-
-@pytest.mark.parametrize('path', ['/api/jobs/preview', '/api/jobs'])
 @pytest.mark.parametrize(('node', 'flags'), [
-    ('stage5.review', [
-        '--request-reviewer-rewrite', 'reviewer-input.json']),
+    # 旧链节点：不在 `NODES`，节点边界直接拒。
     ('stage5.write', [
         '--reviewer-rewrite', 'stage5/reviewer_rewrite_request.json']),
     ('stage5.write', [
         '--recover-reviewer-rewrite-prepared', 'source-run',
         '--reviewer-rewrite-request-sha256', 'a' * 64]),
     ('stage5.write', [
-        '--retire-reviewer-rewrite-request',
-        'stage5/reviewer_rewrite_request.json',
-        '--reviewer-rewrite-request-sha256', 'a' * 64]),
+        '--recover-prepared', 'source-run-api',
+        '--actor', 'reviewer-a',
+        '--reason', '逐章核对工作包后收口',
+        '--subject-sha256', 'a' * 64]),
+    # 现役节点 + 已退役旗标：旗标不登记在任何现役节点，旗标边界直接拒。
+    ('str06.stage5.body', [
+        '--reviewer-rewrite', 'stage5/reviewer_rewrite_request.json']),
+    ('str06.stage5.body', [
+        '--emit-prepared-recovery-workpack', 'source-run-api']),
+    ('str06.stage2.chapters', [
+        '--recover-prepared', 'source-run-api']),
 ])
-def test_http_jobs_refuse_internal_reviewer_rewrite_actions(
+def test_http_jobs_refuse_retired_recovery_flag_families(
         client, monkeypatch, path, node, flags):
-    """Reviewer rewrite 只由 Supervisor 的 exact queue action 承载。"""
-    monkeypatch.setattr(
-        JOB_API.jobs, 'plan_start',
-        lambda *_args, **_kwargs: pytest.fail(
-            '内部 reviewer rewrite API 边界必须先于 argv/job 构造'))
+    """已退役的 prepared recovery／reviewer rewrite 旗标族不能经 HTTP job 起跑。
+
+    边界就是通用的节点／旗标校验（`validate_run`，展示与执行共用，`R-11.8`）：
+    旧链节点不在 `NODES`、现役节点不登记这些旗标，两种形态都当场 400
+    `UnsupportedRunMode`，且不启动 job。这里没有逐旗标的 HTTP 特判——一个旗标
+    能不能起跑只由 `NodeSpec.flags` 的登记决定。
+    """
     monkeypatch.setattr(
         JOB_API.jobs, 'start',
-        lambda *_args, **_kwargs: pytest.fail(
-            '内部 reviewer rewrite API 边界不得启动 job'))
+        lambda *_args, **_kwargs: pytest.fail('退役旗标族不得启动 job'))
 
     response = client.post(path, json={
         'sid': '42', 'node': node, 'flags': flags,
     })
 
-    assert response.status_code == 400
+    assert response.status_code == 400, response.text
     assert response.json()['kind'] == 'UnsupportedRunMode'
-    assert '内部 hash-bound action' in response.json()['message']
 
 
 def test_paid_blueprint_job_starts_without_a_semantic_review_gate(

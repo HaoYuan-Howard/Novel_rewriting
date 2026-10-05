@@ -425,7 +425,8 @@ def test_job_conflict_maps_and_returns_409(monkeypatch):
         # 全自动单模式整族退役：edits.py 已整文件删除，POST 面不再有它们。
         # （stage5 trim retain-pretrim 两端点已随批次 B3 trim 三选一退役。）
         # Prepare 独立写面（edit/review）与 stage7.approve 已随批次 B4 退役。
-        # analyze-draft 人工提交面已随批次 C 退役（POST 405；内部 CLI 保留）。
+        # analyze-draft 人工提交面已随批次 C 退役（POST 405，见下方退役探针；
+        # 原「内部 CLI 保留」已随 2026-10-04 清理批整层删除）。
         # F8b-3：approvals 写面（gate/backfill/reset）随人工闸整层退役，
         # HTTP 上一条 approvals 端点都不剩（存量账已按 2026-10-04 裁决不再解码，
         # 旧根一律 legacy_incompatible 拒识）。
