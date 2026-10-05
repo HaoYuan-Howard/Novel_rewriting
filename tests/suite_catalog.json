@@ -41,7 +41,8 @@
       "tests": [
         "tests/test_str06_*.py",
         "tests/test_layering.py",
-        "tests/test_test_selection.py"
+        "tests/test_test_selection.py",
+        "tests/test_semantic_calibration.py"
       ]
     }
   },
@@ -66,7 +67,11 @@
   "modules": {
     "tests/test_str06_candidate_preflight.py": {
       "layer": "stage",
-      "stages": ["stage2", "stage4", "stage5"],
+      "stages": [
+        "stage2",
+        "stage4",
+        "stage5"
+      ],
       "cases": {
         "test_execution_plan_failure_does_not_claim_writer_checks_passed": "unit_contract",
         "test_dangling_proposition_stops_projection_without_an_uncaught_exception": "unit_contract"
@@ -74,18 +79,28 @@
     },
     "tests/test_str06_fact_lock_stage.py": {
       "layer": "stage",
-      "stages": ["stage2", "stage4", "stage5"]
+      "stages": [
+        "stage2",
+        "stage4",
+        "stage5"
+      ]
     },
     "tests/test_str06_name_projection.py": {
       "layer": "unit_contract",
-      "stages": ["stage4", "stage5"],
+      "stages": [
+        "stage4",
+        "stage5"
+      ],
       "cases": {
         "test_guard_only_projection_reaches_compile_report_and_survives_restart": "stage"
       }
     },
     "tests/test_str06_design_patch.py": {
       "layer": "stage",
-      "stages": ["stage2", "stage4"],
+      "stages": [
+        "stage2",
+        "stage4"
+      ],
       "cases": {
         "test_leaf_scalars_are_promoted_to_the_complete_element_they_belong_to": "unit_contract",
         "test_scene_level_scalars_and_top_level_scalars_stay_in_place": "unit_contract",
@@ -1168,6 +1183,13 @@
         "test_rc27_real_chain_publishes_located_basis": "stage",
         "test_rc29_full_answer_in_patch_round_is_accepted_as_full_revision": "stage"
       }
+    },
+    "tests/test_semantic_calibration.py": {
+      "layer": "unit_contract",
+      "stages": [
+        "stage2",
+        "stage4"
+      ]
     }
   },
   "version": 1
