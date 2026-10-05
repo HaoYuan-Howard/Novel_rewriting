@@ -376,6 +376,28 @@ def test_open_readers_do_not_block_parallel_chapter_registration_or_ledger_updat
     }
 
 
+def test_registered_unit_ids_is_the_registry_not_a_directory_scan(tmp_path):
+    """分母是登记账：事务锁留下的空壳目录不是单元；登记账身份漂移关闭式拒绝。"""
+    from novel.work_units import registered_unit_ids
+
+    base = tmp_path / '登记账'
+    assert registered_unit_ids(base, '42') == (), '没有登记账＝本书还没有单元'
+    first = WorkUnitBudget(base, '42', 'str06.stage2.chapters', scope='chapter:1')
+    first.reserve(sha('第一章'), run_id='registry')
+    second = WorkUnitBudget(base, '42', 'str06.stage2.chapters', scope='chapter:2')
+    second.reserve(sha('第二章'), run_id='registry')
+    shell = first.directory.parent / ('f' * 64)
+    shell.mkdir()
+    (shell / 'ledger.json.lock').write_bytes(b' ')
+    assert set(registered_unit_ids(base, '42')) == {first.unit_id, second.unit_id}
+    assert registered_unit_ids(base, '43') == (), '别的书的登记账互不相干'
+    tampered = json.loads(first.registry_path.read_text(encoding='utf-8'))
+    tampered['sid'] = '43'
+    first.registry_path.write_text(json.dumps(tampered), encoding='utf-8')
+    with pytest.raises(WorkUnitRefused, match='另一工作流或书'):
+        registered_unit_ids(base, '42')
+
+
 def _old_stage2_review_ledger(base):
     """手写一份旧 Stage2 席位账（stage2_review_ledger 解码面随 STR-06 关闭批
     删除后，路径与内容自持；_require_clean_base 与现役额度仍要认它的在场）。"""

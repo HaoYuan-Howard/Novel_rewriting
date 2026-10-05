@@ -87,6 +87,48 @@ def test_malformed_complete_ledger_is_not_silently_skipped(tmp_path):
         main([str(base), '--sid', 'sid1'])
 
 
+def _unit_dir_of(base, sid='sid1', unit_id='f' * 64):
+    from novel import paths
+    return paths.work_unit_dir(base, sid, unit_id)
+
+
+def test_lock_only_unit_directories_are_not_units(tmp_path, capsys):
+    """采用等路径取事务锁会留下只有 ledger.json.lock 的空壳目录（csf4 根上 4 个）。
+
+    分母是 work_units.json 登记的单元，不是目录扫描：空壳不是单元，既不崩溃也不进分母。
+    """
+    base = _make_base(tmp_path)
+    shell = _unit_dir_of(base)
+    shell.mkdir(parents=True)
+    (shell / 'ledger.json.lock').write_bytes(b' ')
+    assert main([str(base), '--sid', 'sid1']) == 0
+    out = capsys.readouterr().out
+    assert '当前首内容轮接受：0/1' in out, '空壳目录不改变分母'
+
+
+def test_unregistered_unit_directory_with_content_is_refused(tmp_path):
+    """账不闭合不能被悄悄移出分母：未登记却有锁文件之外内容的目录显式拒绝。"""
+    import pytest
+    base = _make_base(tmp_path)
+    stray = _unit_dir_of(base)
+    stray.mkdir(parents=True)
+    (stray / 'ledger.json.lock').write_bytes(b' ')
+    (stray / ('a' * 64 + '.json')).write_text('{}', encoding='utf-8')
+    with pytest.raises(ValueError, match='未登记'):
+        main([str(base), '--sid', 'sid1'])
+
+
+def test_registered_unit_without_ledger_is_still_refused(tmp_path):
+    """登记了却缺预算账是丢账，不是空壳：沿用关闭式拒绝，不当作没有这个单元。"""
+    import pytest
+    from novel.work_units import WorkUnitBudget, WorkUnitRefused
+    base = _make_base(tmp_path)
+    unit = WorkUnitBudget(base, 'sid1', 'str06.stage2.chapters', scope='chapter:1')
+    unit.path.unlink()
+    with pytest.raises(WorkUnitRefused):
+        main([str(base), '--sid', 'sid1'])
+
+
 def test_revalidation_is_not_a_new_content_round(tmp_path, capsys):
     from novel.work_units import WorkUnitBudget
     base = _make_base(tmp_path)

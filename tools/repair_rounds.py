@@ -27,7 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from novel.llm.ledger import read_cost_snapshot
 from novel.llm.usage import parse_usage
 from novel.llm.usage_audit import audit_usage
-from novel.work_units import readonly_budget
+from novel.work_units import readonly_budget, registered_unit_ids
 from contracts.schema.workflow import AcceptanceRecordV1
 
 
@@ -39,9 +39,21 @@ def _load_ledger(base: Path) -> list[dict]:
 
 
 def _load_acceptances(base: Path, sid: str) -> list[dict]:
+    """逐单元读接受记录；分母是 `work_units.json` 登记的单元，不是目录扫描。
+
+    历史采用等路径取事务锁时会留下只有 `ledger.json.lock` 的空壳目录——它们不是
+    工作单元，跳过（2026-10-05 csf4 根上因此崩溃）。未登记却有其它内容的目录是账不
+    闭合，显式拒绝，不能悄悄移出分母。
+    """
     out = []
     root = base / '_service' / 'runs' / sid / 'work_units'
+    registered = set(registered_unit_ids(base, sid))
     for unit_dir in sorted(p for p in root.glob('*') if p.is_dir()):
+        if unit_dir.name not in registered:
+            stray = sorted(p.name for p in unit_dir.iterdir() if p.name != 'ledger.json.lock')
+            if stray:
+                raise ValueError(f'工作单元目录未登记却有内容，不能纳入或跳过分母：{unit_dir.name} {stray}')
+            continue
         unit = readonly_budget(base, sid, unit_dir.name)
         ledger = unit._read()
         accepted = {attempt: AcceptanceRecordV1.model_validate(payload)

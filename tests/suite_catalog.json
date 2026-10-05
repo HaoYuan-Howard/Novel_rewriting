@@ -1124,6 +1124,18 @@
       "layer": "unit_contract",
       "stages": []
     },
+    "tests/test_replay_candidates.py": {
+      "layer": "stage",
+      "stages": [
+        "stage4"
+      ],
+      "cases": {
+        "test_parse_json_path_is_the_inverse_of_format_json_path": "unit_contract",
+        "test_error_code_groups_structured_bracketed_and_plain_diagnostics": "unit_contract",
+        "test_patch_round_merges_onto_the_previous_candidate_and_never_guesses_a_base": "unit_contract",
+        "test_read_only_repository_refuses_every_write": "unit_contract"
+      }
+    },
     "tests/test_str06_chapter_slim.py": {
       "layer": "unit_contract",
       "stages": [

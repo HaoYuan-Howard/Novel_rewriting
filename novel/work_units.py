@@ -1223,6 +1223,24 @@ def budget_for(ctx: RunContext, *, scope: str, role: str = 'executor',
     return WorkUnitBudget(ctx.novel_dir.parent, ctx.sid, node or ctx.node, role, scope)
 
 
+def registered_unit_ids(base: str | os.PathLike[str], sid: str) -> tuple[str, ...]:
+    """登记账里的全部工作单元（只读）；任务或书身份不符一律拒绝。
+
+    工作单元的分母是登记账，不是目录扫描：采用等路径取事务锁时会在
+    ``work_units/`` 下建出只有 ``ledger.json.lock`` 的空壳目录，它们不是单元。
+    登记账不存在＝本书还没有单元（返回空）；登记了却缺预算账由 `readonly_budget`
+    逐个关闭式拒绝，这里不替它判。
+    """
+    registry_path = paths.work_unit_registry_path(base, sid)
+    if not registry_path.exists():
+        return ()
+    registry = _read(base, registry_path, WorkUnitRegistryV1)
+    manifest = workflow_manifest(base)
+    if manifest is None or registry.sid != sid or registry.task_id != manifest.task_id:
+        raise WorkUnitRefused('工作单元登记账属于另一工作流或书，运行状态未知')
+    return registry.unit_ids
+
+
 def readonly_budget(base: str | os.PathLike[str], sid: str, unit_id: str) -> WorkUnitBudget:
     """观察既有工作单元；缺登记、缺账或身份漂移一律拒绝，不初始化额度。"""
     registry = _read(base, paths.work_unit_registry_path(base, sid), WorkUnitRegistryV1)
