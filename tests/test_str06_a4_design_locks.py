@@ -767,3 +767,138 @@ def test_canonical_fact_binding_is_rechecked_by_execution_plan(fault):
     issue = next(e for e in errors if getattr(e, 'code', '') == expected_code)
     assert mapping.kf_id in issue and 'M4' in issue
     assert body.model_dump() == body_before and binding.model_dump() == binding_before
+
+
+@pytest.mark.parametrize(('kind', 'source_i'), [('expected', 5), ('unknown_value', 6)])
+@pytest.mark.parametrize('later', [False, True], ids=['earlier', 'later'])
+def test_fact_lock_outside_its_obligation_carriers_is_rejected_in_acceptance_and_binding(
+        kind, source_i, later):
+    """锁在全书出现不等于对应义务兑现；位置检查与局部修订都从真实标注派生。"""
+    from novel.stages.stage4 import locate_design_patches
+    brief = _brief()
+    wire = _design_wire_v8(brief)
+    beats = wire['scenes'][0]['beats']
+    target_i = len(beats) if later else 0
+    if later:
+        beats.append({'ev': '另一次无关进展', 'who': ['fu_jun']})
+    beats[target_i].setdefault('state', []).extend(beats[source_i].pop('state'))
+    before = deepcopy(wire)
+    body, errors = _inspect_v8(wire, brief)
+    assert body is not None, '保留可构造候选用于诊断，不授予发布资格'
+    issue = next(e for e in errors
+                 if getattr(e, 'code', '') == 'fact_lock_outside_obligation')
+    ob = 'ob02' if kind == 'expected' else 'ob03'
+    assert issue.owner == 'design'
+    assert issue.context['obligation_id'] == ob
+    assert issue.context['kf_id'] == _kf(brief, kind)
+    assert issue.context['beat_ref'] == f'sc01#b{target_i + 1:02d}'
+    assert issue.context['wire_paths'] == [
+        ['scenes', 0, 'beats', target_i], ['scenes', 0, 'beats', source_i]]
+    located = locate_design_patches(wire, [issue])
+    assert {path for path, _ in located} == {
+        ('scenes', 0, 'beats', target_i), ('scenes', 0, 'beats', source_i)}
+    binding, binding_errors = _derive_binding_v8(wire, body)
+    assert binding is None
+    same = next(e for e in binding_errors
+                if getattr(e, 'code', '') == 'fact_lock_outside_obligation')
+    assert same.identity == issue.identity, '接受与派生使用同一稳定问题身份'
+    assert wire == before
+
+
+@pytest.mark.parametrize(('kind', 'source_i', 'ob'), [
+    ('expected', 5, 'ob02'), ('unknown_value', 6, 'ob03')])
+def test_fact_lock_on_explicit_support_beat_is_valid(kind, source_i, ob):
+    """合法提前支撑与最终接受不同拍；不能把位置修复收窄为只允许末拍。"""
+    from novel.stages.stage4.compile import compile_execution_plan
+    brief = _brief()
+    wire = _design_wire_v8(brief)
+    beats = wire['scenes'][0]['beats']
+    beats[0]['state'].extend(beats[source_i].pop('state'))
+    beats[0]['real'] = [ob]
+    body, errors = _inspect_v8(wire, brief)
+    assert body is not None and not errors, errors
+    binding, errors = _derive_binding_v8(wire, body)
+    assert binding is not None and not errors, errors
+    entry = next(e for e in binding.entries if e.obligation_id == ob)
+    assert entry.supporting_beat_refs == ('sc01#b01',)
+    assert entry.beat_ref == f'sc01#b{source_i + 1:02d}'
+    plan, errors = compile_execution_plan(body, binding)
+    assert plan is not None and not errors, errors
+
+
+@pytest.mark.parametrize('missing', [False, True], ids=['wrong_beat', 'missing_mapping'])
+def test_canonical_fact_lock_coverage_and_obligation_position_are_rechecked(missing):
+    """历史正式产物不能沿用旧接受结论；免费消费复核锁分母和义务位置。"""
+    from novel.stages.stage4.compile import compile_execution_plan
+    brief = _brief()
+    wire = _design_wire_v8(brief)
+    body, errors = _inspect_v8(wire, brief)
+    assert body is not None and not errors, errors
+    binding, errors = _derive_binding_v8(wire, body)
+    assert binding is not None and not errors, errors
+    kf = _kf(brief, 'expected')
+    if missing:
+        binding = binding.model_copy(update={'fact_bindings': tuple(
+            f for f in binding.fact_bindings if f.kf_id != kf)})
+    else:
+        beats = list(body.scenes[0].beats)
+        beats[0] = beats[0].model_copy(update={
+            'target_delta': (*beats[0].target_delta, *beats[5].target_delta)})
+        beats[5] = beats[5].model_copy(update={'target_delta': ()})
+        body = body.model_copy(update={'scenes': (
+            body.scenes[0].model_copy(update={'beats': tuple(beats)}),)})
+        binding = binding.model_copy(update={'fact_bindings': tuple(
+            f.model_copy(update={'beat_ref': 'sc01#b01'}) if f.kf_id == kf else f
+            for f in binding.fact_bindings)})
+    before = body.model_dump(), binding.model_dump()
+    plan, errors = compile_execution_plan(body, binding)
+    assert plan is None
+    code = 'fact_lock_unrealized' if missing else 'fact_lock_outside_obligation'
+    issue = next(e for e in errors if getattr(e, 'code', '') == code)
+    assert issue.context['obligation_id'] == 'ob02' and issue.context['kf_id'] == kf
+    assert not issue.context['wire_paths'], 'canonical 消费不伪造可编辑 wire 路径'
+    assert (body.model_dump(), binding.model_dump()) == before
+
+
+@pytest.mark.parametrize(('must_preserve', 'shared_carrier', 'passed'), [
+    (True, True, True), (True, False, False), (False, False, True)])
+def test_shared_fact_lock_requires_each_required_obligation_carrier(
+        must_preserve, shared_carrier, passed):
+    """一份锁映射可共享，但须属于每个必保义务；非必保义务不凭同锁增造硬闸。"""
+    from novel.stages.stage4.compile import compile_execution_plan
+    from novel.stages.stage4.grounding import required_fact_locks
+
+    preserve = _preserve_wire()
+    preserve['obligations'][3].update({
+        'statement': '归期预计也支撑夫君的承诺', 'anchors': ['b01_01.e1'],
+        'must_preserve': must_preserve, 'satisfaction': '保留预计承诺'})
+    checkpoint, errors = assemble_preserve(
+        preserve, policy_id='p', policy_version=5,
+        characters=_characters(), blueprint=_blueprint(),
+        provider='x', model='y', request_sha256='r' * 64)
+    assert checkpoint is not None and not errors, errors
+    brief, _ = project_brief(checkpoint, _characters(), _blueprint())
+    obligations = design_obligation_index(checkpoint, brief)
+    assert required_fact_locks(checkpoint.obligations) == {
+        ob: req.realize_locks for ob, req in obligations.items() if req.must_preserve}
+    wire = _design_wire_v8(brief)
+    wire['scenes'][0]['beats'][0]['real'] = ['ob04']
+    if shared_carrier:
+        wire['scenes'][0]['beats'][5]['real'].append('ob04')
+    body, acceptance_errors = _inspect_v8(wire, brief)
+    assert body is not None
+    model = DesignWireV8.model_validate(wire)
+    binding, binding_errors = derive_semantic_binding(
+        design_placements(model), body, checkpoint, design_fact_marks(model))
+    if passed:
+        assert not acceptance_errors and not binding_errors, (acceptance_errors, binding_errors)
+        assert binding is not None and len(binding.fact_bindings) == 2, '共享不复制映射'
+        plan, errors = compile_execution_plan(body, binding)
+        assert plan is not None and not errors, errors
+    else:
+        assert binding is None
+        for errors in (acceptance_errors, binding_errors):
+            issue = next(e for e in errors
+                         if getattr(e, 'code', '') == 'fact_lock_outside_obligation')
+            assert issue.context['obligation_id'] == 'ob04'
+            assert issue.context['kf_id'] == _kf(brief, 'expected')

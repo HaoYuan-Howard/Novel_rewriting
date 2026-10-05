@@ -281,12 +281,25 @@ def _placements(**over) -> dict[str, list[tuple[int, int]]]:
     return {k: list(v) for k, v in placements.items() if v}
 
 
+def _fact_marks(brief: ReconstructionBrief):
+    """v5 内部基座的正式事实映射：预计归期由 ob05 的 b07 承载。"""
+    from contracts.schema.state import EffectDomain, StateAddress
+    from novel.stages.stage4.slim import FactLockMark
+
+    return (FactLockMark(
+        kf_id=_kf_expected(brief), scene=0, beat=6, state=0,
+        op='set', modality='expected',
+        address=StateAddress(domain=EffectDomain.WORLD, key='return_time')),
+    )
+
+
 def _green_graph_and_binding(placements=None):
     brief = _brief()
     body, errors = _assemble_design(brief)
     assert body is not None and not errors, errors
     binding, errors = derive_semantic_binding(
-        _placements() if placements is None else placements, body, _checkpoint())
+        _placements() if placements is None else placements, body, _checkpoint(),
+        _fact_marks(brief))
     assert binding is not None and not errors, errors
     return body, binding, brief
 
@@ -313,8 +326,9 @@ def test_initial_reader_confirmation_requires_an_actual_initial_fact():
 
 
 def test_v7_composite_obligation_preserves_cognitive_change_positions():
+    from contracts.schema.design import DesignWireV8
     from novel.stages.stage4.grounding import design_obligation_index
-    from novel.stages.stage4.slim import knowledge_change_index
+    from novel.stages.stage4.slim import design_fact_marks, knowledge_change_index
     checkpoint, brief = _checkpoint(), _brief()
     obligations = design_obligation_index(checkpoint, brief)
     source = _design_wire(brief)
@@ -351,7 +365,8 @@ def test_v7_composite_obligation_preserves_cognitive_change_positions():
     assert body.scenes[0].beats[3].target_delta[0].confirms.key == 'evidence_fact'
     binding, errors = derive_semantic_binding(
         {ob: [(0, i) for i, beat in enumerate(beats) if ob in beat['real']]
-         for ob in obligations}, body, checkpoint)
+         for ob in obligations}, body, checkpoint,
+        design_fact_marks(DesignWireV8.model_validate(wire)))
     assert not errors, errors
     assert check_epistemic_lock_order(body, binding) == []
 
@@ -414,23 +429,23 @@ def test_design_obligation_table_carries_series_and_lock_digest():
 
 def test_series_members_same_beat_rejected_and_split_passes():
     """C3/C5 红例：series 两成员接受拍相同 → series_collapsed；绿：分别承载。"""
-    body, _binding, _brief = _green_graph_and_binding()
+    body, _binding, brief = _green_graph_and_binding()
     checkpoint = _checkpoint()
     collapsed = _placements(ob04=[(0, 4)])
-    binding, errors = derive_semantic_binding(collapsed, body, checkpoint)
+    binding, errors = derive_semantic_binding(collapsed, body, checkpoint, _fact_marks(brief))
     assert binding is None
     assert any('series_collapsed' in e and 'ob03' in e and 'ob04' in e
                for e in errors), errors
-    split, errors = derive_semantic_binding(_placements(), body, checkpoint)
+    split, errors = derive_semantic_binding(_placements(), body, checkpoint, _fact_marks(brief))
     assert split is not None and not errors, errors
 
 
 def test_unbound_series_member_does_not_collapse():
     """无标注成员进 unbound（义务不删、owner=design），不参与同拍比较。"""
-    body, _binding, _brief = _green_graph_and_binding()
+    body, _binding, brief = _green_graph_and_binding()
     checkpoint = _checkpoint()
     placements = _placements(ob04=[])
-    binding, errors = derive_semantic_binding(placements, body, checkpoint)
+    binding, errors = derive_semantic_binding(placements, body, checkpoint, _fact_marks(brief))
     assert binding is not None and not errors, errors
     assert [u.obligation_id for u in binding.unbound] == ['ob04']
     assert binding.unbound[0].owner == 'design'
@@ -471,7 +486,7 @@ def test_legal_flashback_not_blocked():
     brief = _brief()
     body, errors = _assemble_design(brief, flashback=True)
     assert body is not None and not errors, errors
-    binding, errors = derive_semantic_binding(_placements(), body, _checkpoint())
+    binding, errors = derive_semantic_binding(_placements(), body, _checkpoint(), _fact_marks(brief))
     assert binding is not None and not errors, errors
     assert check_epistemic_lock_order(body, binding) == []
 
@@ -491,7 +506,7 @@ def test_free_key_and_unauthorized_mode_not_checked():
     del beat
     from contracts.schema.design import BodyDesign
     mutated = BodyDesign.model_validate(body_wire_free)
-    binding, errors = derive_semantic_binding(_placements(), mutated, _checkpoint())
+    binding, errors = derive_semantic_binding(_placements(), mutated, _checkpoint(), _fact_marks(brief))
     assert binding is not None, errors
     assert check_epistemic_lock_order(mutated, binding) == [], \
         '自由键不是锁句柄，位置判据不查'
@@ -512,7 +527,7 @@ def test_initial_state_knowledge_not_in_position_judgement():
         source_narration=brief.source_narration,
         brief=_without_fact_realization(brief))
     assert body is not None and not errors, errors
-    binding, errors = derive_semantic_binding(_placements(), body, _checkpoint())
+    binding, errors = derive_semantic_binding(_placements(), body, _checkpoint(), _fact_marks(brief))
     assert binding is not None, errors
     assert check_epistemic_lock_order(body, binding) == []
 

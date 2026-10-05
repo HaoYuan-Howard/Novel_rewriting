@@ -25,9 +25,9 @@ from contracts.schema.design import (
 from contracts.schema.grounding import SemanticBinding, _lock_id
 from contracts.schema.state import EffectDomain
 from novel.stages.stage4.grounding import (
-    KNOWLEDGE_LOCK_MODE, obligation_core_id,
+    KNOWLEDGE_LOCK_MODE, obligation_core_id, required_fact_locks,
 )
-from novel.stages.stage4.fact_bindings import fact_binding_errors
+from novel.stages.stage4.fact_bindings import fact_binding_errors, fact_lock_carrier_errors
 
 
 
@@ -85,7 +85,7 @@ def check_entry_timing(
 def check_binding_beat_refs(
     binding: SemanticBinding, graph: BodyDesign,
 ) -> list[str]:
-    """M4：义务指向真实拍；事实锁的拍＋地址须唯一定址，正式消费不信任旧接受结论。"""
+    """M4：义务指向真实拍；必保锁齐全、唯一定址且在对应义务的接受／支撑拍。"""
     refs = {f'{s.scene_id}#{b.beat_id}' for s in graph.scenes for b in s.beats}
     problems = []
     for entry in binding.entries:
@@ -93,6 +93,10 @@ def check_binding_beat_refs(
             if ref not in refs:
                 problems.append(f'M4 承载位置：{entry.obligation_id} 的 {ref!r} 不是真实拍')
     problems.extend(fact_binding_errors(graph, binding.fact_bindings))
+    problems.extend(fact_lock_carrier_errors(
+        graph, binding.fact_bindings, required_locks=required_fact_locks(binding.obligations),
+        carrier_refs={entry.obligation_id: (entry.beat_ref, *entry.supporting_beat_refs)
+                      for entry in binding.entries}))
     return problems
 
 

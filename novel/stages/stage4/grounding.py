@@ -29,7 +29,7 @@ CS-3 bind LLM 退役）。
 from __future__ import annotations
 
 import hashlib
-from typing import Any, Final
+from typing import Any, Final, Iterable
 
 from contracts.schema.design import BodyDesign
 from contracts.schema.grounding import (
@@ -43,7 +43,7 @@ from contracts.schema.source import (
 )
 from contracts.schema.workflow import STAGE4_PRESERVE_PROTOCOL
 from novel.stages.common import check_binding_covers_checkpoint
-from novel.stages.stage4.fact_bindings import fact_binding_errors
+from novel.stages.stage4.fact_bindings import fact_binding_errors, fact_lock_carrier_errors
 from pydantic import ValidationError
 
 
@@ -547,6 +547,31 @@ def _fact_lock_statement(anchor: ObligationAnchor) -> str:
     return anchor.address or anchor.handle
 
 
+def _anchor_fact_lock(anchor: ObligationAnchor) -> BriefFactLock | None:
+    """同一结构化源原子派生同一事实锁；Brief 与正式消费复用这份 compiler 规则。"""
+    if anchor.source_kind != 'effect':
+        return None
+    if anchor.op == 'unknown':
+        kind, modality = 'unknown_value', None
+    elif anchor.op != 'unset' and anchor.modality not in (None, 'actual'):
+        kind, modality = anchor.modality, anchor.modality
+    else:
+        return None
+    return BriefFactLock(kf_id=_lock_id('kf_', anchor.handle), kind=kind,
+                         modality=modality, statement=_fact_lock_statement(anchor))
+
+
+def required_fact_locks(obligations: Iterable[SourceObligation]) -> dict[str, tuple[str, ...]]:
+    """仅从正式义务 anchors 重建必保锁分母；不依赖 Brief 或历史接受结论。"""
+    result: dict[str, tuple[str, ...]] = {}
+    for obligation in obligations:
+        if obligation.must_preserve:
+            result[obligation.obligation_id] = tuple(dict.fromkeys(
+                lock.kf_id for anchor in obligation.anchors
+                if (lock := _anchor_fact_lock(anchor)) is not None))
+    return result
+
+
 def _unanswered_loops(
     blueprint: BlueprintsArtifactV15,
 ) -> list[tuple[str, str]]:
@@ -629,23 +654,12 @@ def _derive_brief_locks(
                                                     anchor.holder)})
             elif anchor.source_kind == 'effect':
                 kp = _register_proposition(anchor)
-                if anchor.op == 'unknown':
-                    kf = _lock_id('kf_', anchor.handle)
-                    facts[kf] = BriefFactLock(
-                        kf_id=kf, kind='unknown_value',
-                        statement=_fact_lock_statement(anchor))
-                    derived.append(kf)
+                lock = _anchor_fact_lock(anchor)
+                if lock is not None:
+                    facts[lock.kf_id] = lock
+                    derived.append(lock.kf_id)
                     if obligation.must_preserve:
-                        realize_locks.append(kf)
-                elif anchor.op != 'unset' and anchor.modality not in (
-                        None, 'actual'):
-                    kf = _lock_id('kf_', anchor.handle)
-                    facts[kf] = BriefFactLock(
-                        kf_id=kf, kind=anchor.modality, modality=anchor.modality,
-                        statement=_fact_lock_statement(anchor))
-                    derived.append(kf)
-                    if obligation.must_preserve:
-                        realize_locks.append(kf)
+                        realize_locks.append(lock.kf_id)
                 if kp is not None:
                     derived.append(kp)
         deduped = []
@@ -767,7 +781,8 @@ def derive_semantic_binding(
     CS-F2：`fact_marks`（`slim.py::design_fact_marks`）是 wire 在已选状态上的
     事实锁标注；本函数把每条标注落成 `FactLockBinding`（锁、承载拍复合引用、
     状态地址——不复制 value），并核对该拍的 BodyDesign 里确有同地址的状态：
-    映射必须指向 BodyDesign 实际持有的事实，悬空即拒（I-16）。
+    映射必须指向 BodyDesign 实际持有的事实，悬空即拒（I-16）；必保锁逐义务
+    完整覆盖，承载位须属于该义务的 real 接受／支撑拍，不另造义务承载位。
     """
     errors: list[str] = []
     # (scene 序, beat 序) → (scene_id, beat_id, 复合引用)；越界当场精确拒。
@@ -816,6 +831,10 @@ def derive_semantic_binding(
         fact_bindings.append(FactLockBinding(
             kf_id=mark.kf_id, beat_ref=ref[2], address=mark.address))
     errors.extend(fact_binding_errors(body, fact_bindings, wire_paths=True))
+    errors.extend(fact_lock_carrier_errors(
+        body, fact_bindings, required_locks=required_fact_locks(checkpoint.obligations),
+        carrier_refs={ob: tuple(site_refs[site][2] for site in sites if site in site_refs)
+                      for ob, sites in placements.items()}, wire_paths=True))
     if errors:
         return None, errors
     try:

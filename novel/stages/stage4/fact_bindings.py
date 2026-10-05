@@ -1,4 +1,4 @@
-"""事实锁引用的纯结构判据：拍＋地址必须唯一定址，不解释状态内容或复制值。
+"""事实锁引用的纯结构判据：拍＋地址唯一定址，并属于对应义务的承载位。
 
 Design 接受、Binding 派生及 M4 正式消费共用本判据。唯一性只约束被锁引用的
 承载拍地址；未被锁的状态及其它拍上的同地址更新保持现役行为。来自 v8 wire 的
@@ -6,7 +6,7 @@ Design 接受、Binding 派生及 M4 正式消费共用本判据。唯一性只�
 """
 from __future__ import annotations
 
-from typing import Iterable
+from typing import Iterable, Mapping
 
 from contracts.schema.design import BodyDesign
 from contracts.schema.grounding import FactLockBinding
@@ -51,4 +51,53 @@ def fact_binding_errors(
         errors.append(design_issue(
             message, code=code,
             location=(bound.kf_id, bound.beat_ref, bound.address.address()), paths=paths))
+    return errors
+
+
+def fact_lock_carrier_errors(
+    body: BodyDesign, bindings: Iterable[FactLockBinding], *,
+    required_locks: Mapping[str, tuple[str, ...]],
+    carrier_refs: Mapping[str, tuple[str, ...]], wire_paths: bool = False,
+) -> list[ValidationIssue]:
+    """必保锁须完整映射到对应义务的接受／显式支撑拍，不以全书出现替代兑现。
+
+    锁分母由 compiler 或 Brief 给出，本判据只关联已有引用。共享锁逐义务检查，
+    可共用一个承载拍，但它必须属于每个相关义务的承载集合。问题身份绑定锁与
+    义务，移动到另一个无关拍仍是同一问题；实际位置及可编辑路径只作诊断。
+    """
+    sites = {f'{scene.scene_id}#{beat.beat_id}': ('scenes', si, 'beats', bi)
+             for si, scene in enumerate(body.scenes)
+             for bi, beat in enumerate(scene.beats)}
+    by_lock: dict[str, list[FactLockBinding]] = {}
+    for bound in bindings:
+        by_lock.setdefault(bound.kf_id, []).append(bound)
+    errors: list[ValidationIssue] = []
+    for ob, locks in required_locks.items():
+        allowed = carrier_refs.get(ob, ())
+        for kf in dict.fromkeys(locks):
+            carried = by_lock.get(kf, ())
+            outside = [bound for bound in carried if bound.beat_ref not in allowed]
+            if carried and not outside:
+                continue
+            actual = outside[0].beat_ref if outside else None
+            paths = ()
+            if wire_paths:
+                # 状态与 real 是同一拍的耦合字段；同时开放当前承载位，允许移动状态
+                # 或补 real 支撑，两种修复都必须重跑完整候选预检。
+                repair_refs = (*((actual,) if actual is not None else ()), *allowed)
+                paths = tuple(dict.fromkeys(sites[ref] for ref in repair_refs if ref in sites))
+            if carried:
+                code = 'fact_lock_outside_obligation'
+                message = (f'M4 事实锁 {kf} 的承载拍 {actual} 不属于必保义务 {ob} '
+                           f'的 real 接受／支撑拍 {list(allowed)}：在该义务承载拍上'
+                           '标注锁，或显式补充 real 支撑；事实绑定不另造义务承载位')
+            else:
+                code = 'fact_lock_unrealized'
+                message = (f'必保义务 {ob} 的事实锁未兑现：{kf}——在承载该义务的拍上，'
+                           '让表达该事实的状态带上 lock；已有状态直接标注，'
+                           '没有就补这一条，不为同一事实写两条状态')
+            errors.append(design_issue(
+                message, code=code, location=('fact_lock', kf, ob), paths=paths,
+                context={'obligation_id': ob, 'kf_id': kf, 'beat_ref': actual,
+                         'allowed_beat_refs': list(allowed)}))
     return errors

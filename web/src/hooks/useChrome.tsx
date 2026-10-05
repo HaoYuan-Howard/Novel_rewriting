@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useMemo, useRef, useState, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { Job, JobRequest } from '@/types/jobs'
 
 /**
@@ -15,6 +15,10 @@ export interface Notice {
   id: number
   text: string
   tone: NoticeTone
+}
+
+interface TimedNotice extends Notice {
+  expiresAt: number
 }
 
 export interface PendingConfirm {
@@ -48,18 +52,24 @@ export function ChromeProvider({ children }: { children: ReactNode }) {
   // 阅读是主任务；没有作业时不让空抽屉抢走首屏高度。发起作业仍会自动展开。
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [confirm, setConfirm] = useState<PendingConfirm | null>(null)
-  const [notices, setNotices] = useState<Notice[]>([])
+  const [notices, setNotices] = useState<TimedNotice[]>([])
   const noticeSeq = useRef(0)
 
   // 约 3s 自消，最多同时堆 3 条（先进先出，多的挤掉最旧那条）
   const notify = useCallback((text: string, tone: NoticeTone = 'ok') => {
     noticeSeq.current += 1
     const id = noticeSeq.current
-    setNotices((prev) => [...prev, { id, text, tone }].slice(-3))
-    setTimeout(() => {
-      setNotices((prev) => prev.filter((n) => n.id !== id))
-    }, 3000)
+    const expiresAt = Date.now() + 3000
+    setNotices((prev) => [...prev, { id, text, tone, expiresAt }].slice(-3))
   }, [])
+
+  // 定时器随 Provider 效应清理；保存原到期时刻，避免新通知或 StrictMode 重放延长寿命。
+  useEffect(() => {
+    const timers = notices.map((notice) => setTimeout(() => {
+      setNotices((prev) => prev.filter((n) => n.id !== notice.id))
+    }, Math.max(0, notice.expiresAt - Date.now())))
+    return () => timers.forEach((timer) => clearTimeout(timer))
+  }, [notices])
 
   const value = useMemo<ChromeCtx>(
     () => ({
@@ -69,7 +79,7 @@ export function ChromeProvider({ children }: { children: ReactNode }) {
       confirm,
       askConfirm: (c) => setConfirm(c),
       closeConfirm: () => setConfirm(null),
-      notices,
+      notices: notices.map(({ id, text, tone }) => ({ id, text, tone })),
       notify,
     }),
     [drawerOpen, confirm, notices, notify],

@@ -898,13 +898,13 @@ def _design_lock_mode_escalation() -> list:
 def _binding_series_same_beat() -> list:
     """R-5.18：series 成员接受拍相同（C3/C5 的承载面，离散兑现被压成一次）。"""
     from tests.test_str06_a5_positions import (
-        _placements, _checkpoint, _green_graph_and_binding,
+        _placements, _checkpoint, _fact_marks, _green_graph_and_binding,
     )
     from novel.stages.stage4.grounding import derive_semantic_binding
 
-    body, _binding, _brief = _green_graph_and_binding()
+    body, _binding, brief = _green_graph_and_binding()
     _model, errors = derive_semantic_binding(
-        _placements(ob04=[(0, 4)]), body, _checkpoint())
+        _placements(ob04=[(0, 4)]), body, _checkpoint(), _fact_marks(brief))
     return errors
 
 

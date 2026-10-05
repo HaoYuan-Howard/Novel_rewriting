@@ -57,7 +57,7 @@ from contracts.schema.workflow import STAGE4_DESIGN_PROTOCOL
 from contracts.schema.source import NameProjection, NameStructure
 from novel.core.validation import ValidationIssue
 from novel.stages.stage4.design_paths import design_issue
-from novel.stages.stage4.fact_bindings import fact_binding_errors
+from novel.stages.stage4.fact_bindings import fact_binding_errors, fact_lock_carrier_errors
 from novel.stages.common import expand_surface_releases
 from novel.stages.stage4.read_closure import confirmation_closure_errors, resolve_design_reads
 from novel.stages.stage4.materials import validate_design_materials
@@ -382,14 +382,13 @@ def _mark_where(mark: FactLockMark) -> str:
 
 
 def _check_fact_marks(marks: tuple[FactLockMark, ...], fact_locks: Mapping[str, Any],
-                      errors: list[str]) -> set[str]:
+                      errors: list[str]) -> None:
     """事实锁标注的结构接受（CS-F2）：句柄闭集、一锁一承载、模式与操作同锁一致。
 
-    返回已被**合法**标注兑现的锁集合。只证明结构——标注的状态内容是否在语义上
+    只证明标注结构——标注的状态内容是否在语义上
     满足锁（例如把「暂缓和离」绑到「赏花」）不在此判，那是需要标定的语义核验，
     未运行即保持 unver（I-42）；这里也不因状态文本含源命题字面而改写它。
     """
-    realized: set[str] = set()
     first: dict[str, FactLockMark] = {}
     for mark in marks:
         where = _mark_where(mark)
@@ -420,16 +419,11 @@ def _check_fact_marks(marks: tuple[FactLockMark, ...], fact_locks: Mapping[str, 
                     f'{lock.modality}（尚未发生），实得 op={mark.op}/modality='
                     f'{mark.modality}（计划不得写成已发生，C2）',
                     'fact_lock_modality', mark.path, mark.path))
-            else:
-                realized.add(mark.kf_id)
         elif mark.op != 'unknown':
             errors.append(_lock_issue(
                 f'{where} 承载的事实锁 {mark.kf_id} 是值未知锁（源文未给值）：须标在 '
                 f'op=unknown 的状态上，不得补值（C9），实得 op={mark.op}',
                 'fact_lock_value', mark.path, mark.path))
-        else:
-            realized.add(mark.kf_id)
-    return realized
 
 
 def _check_lock_acceptance(body: BodyDesign, brief: ReconstructionBrief,
@@ -487,13 +481,14 @@ def _check_lock_acceptance(body: BodyDesign, brief: ReconstructionBrief,
             errors.append(
                 f'{where} 的状态键 {key} 是事实锁句柄：kf 句柄不是状态键，'
                 '事实锁在已选状态上用 lock 标注（stage4-design-v8）')
-    realized_kf = _check_fact_marks(marks, fact_locks, errors)
-    errors.extend(fact_binding_errors(body, (
+    _check_fact_marks(marks, fact_locks, errors)
+    bindings = tuple(
         FactLockBinding(kf_id=mark.kf_id,
                         beat_ref=f'{body.scenes[mark.scene].scene_id}#'
                                  f'{body.scenes[mark.scene].beats[mark.beat].beat_id}',
                         address=mark.address)
-        for mark in marks), wire_paths=True))
+        for mark in marks)
+    errors.extend(fact_binding_errors(body, bindings, wire_paths=True))
     ob_of = {req.core_id: ob for ob, req in (obligations or {}).items()}
     for req in brief.requirements:
         label = ob_of.get(req.core_id, req.core_id)
@@ -502,21 +497,13 @@ def _check_lock_acceptance(body: BodyDesign, brief: ReconstructionBrief,
                 errors.append(
                     f'必保义务 {label} 的知情锁未兑现：{change.kp} 需由持有者 '
                     f'{change.holder} 以模式 {change.mode} 承载')
-        for kf in req.realize_locks:
-            if kf not in realized_kf:
-                lock = fact_locks.get(kf)
-                expected = (f'op=set 且 modality={lock.modality}'
-                            if lock is not None and lock.kind in _TEMPORAL_LOCKS
-                            else 'op=unknown（不得补值）'
-                            if lock is not None and lock.kind == 'unknown_value'
-                            else '该锁不可承载')
-                sites = [('scenes', s, 'beats', b)
-                         for s, b in (real_sites or {}).get(label, ())]
-                errors.append(_lock_issue(
-                    f'必保义务 {label} 的事实锁未兑现：{kf}——在承载该义务的拍上，让表达'
-                    f'该事实的那条状态带上 lock（{expected}）；该拍还没有这样的状态就写这一条'
-                    '并标注，不要为同一事实写两条',
-                    'fact_lock_unrealized', ('fact_lock', kf), *sites))
+    errors.extend(fact_lock_carrier_errors(
+        body, bindings,
+        required_locks={ob_of.get(req.core_id, req.core_id): req.realize_locks
+                        for req in brief.requirements if req.must_preserve},
+        carrier_refs={ob: tuple(f'{body.scenes[s].scene_id}#'
+                               f'{body.scenes[s].beats[b].beat_id}' for s, b in sites)
+                      for ob, sites in (real_sites or {}).items()}, wire_paths=True))
 
 
 def assemble_body_design(
