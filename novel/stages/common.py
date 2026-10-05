@@ -38,7 +38,7 @@ from typing import Any, Callable, Iterable, Mapping, NamedTuple, Protocol
 from pydantic import BaseModel
 
 from contracts.schema.book_ir import (
-    ChapterIR, ChapterWriterPacket, PacketBrief, RealizationContract, WithheldNameBinding,
+    ChapterIR, ChapterWriterPacket, PacketBrief, RealizationContract,
     WriterBookIR,
 )
 from contracts.schema.context import (
@@ -51,7 +51,7 @@ from contracts.schema.design import BodyDesign
 from contracts.schema.execution import (
     EffectDomain, Establishment, ExecutionPlan, ExecutionSlice,
 )
-from contracts.schema.state import StateAddress
+from contracts.schema.state import StateAddress, WithheldNameBinding
 from contracts.schema.grounding import BriefFactLock, SemanticBinding
 from contracts.schema.workflow import STR06_RC_VERSION
 from contracts.schema.source import CharactersCore, NameProjection, NameStructure, render_form
@@ -215,12 +215,35 @@ def project_withheld_names(
 
 
 
-def render_hook_context(context: HookContext) -> str:
-    """请求 user 段（R2 分层渲染）：只从 HookContext 构建，不掺源文或盘上材料。
+def _hook_projection(context: HookContext):
+    """Hook 渲染期的确定性称谓投影（CS-F2，rc16）：与正文章包同一把尺
+    （`project_withheld_names`）。绑定表随上下文携带（compile 按 Hook 自选的
+    surface_releases 算好）；本场显示面＝该人物在 Hook 已释放称谓的首个。"""
+    def project(text: str):
+        return project_withheld_names(
+            text, bindings=context.withheld_bindings,
+            display={b.char_id: surface_display(context.usable_surfaces, b.char_id)
+                     for b in context.withheld_bindings})
+    return project
 
-    材料是必须写出；禁止揭示与受保护线程是禁区；起笔事实以延续/背景呈现；
-    withheld_literals 是 validator 材料，不进阅读面（与正文章包同一纪律）。
+
+def _hook_render(context: HookContext) -> tuple[list[str], tuple[dict, ...]]:
+    """行组装与投影留痕的单一场地：render 与审计读数共用同一字段清单。
+
+    字段路径与 `hook_material_issues` 的来源命名同构（0 基下标）；`show` 只改
+    送达字节并留痕，上下文字段与来源文本保持原样（来源归因依赖原字段文本）。
     """
+    project = _hook_projection(context)
+    hits: list[dict] = []
+
+    def show(text: str | None, field: str) -> str:
+        if not text:
+            return text or ''
+        projected, found = project(text)
+        hits.extend({'field': field, 'literal': hit.literal, 'char_id': hit.char_id,
+                     'replacement': hit.replacement} for hit in found)
+        return projected
+
     names = {r.char_id: r.surfaces for r in context.usable_surfaces}
 
     def _name(char_id: str) -> str:
@@ -230,21 +253,24 @@ def render_hook_context(context: HookContext) -> str:
     person = '第一人称' if context.pov.person == 'first' else '第三人称'
     focalizers = '、'.join(_name(f) for f in context.pov.focalizers)
     parts = ['【起笔已成立的事实】（开场前已成立；自然带过，不作为任务交代）']
-    parts.extend(f'- {fact.text}' for fact in context.opening_facts)
+    parts.extend(f'- {show(fact.text, f"opening_facts/{i}")}'
+                 for i, fact in enumerate(context.opening_facts))
     parts.append('【必须写出的材料】（按给定顺序组织；不得重选或换序）')
-    for index, material in enumerate(context.materials, start=1):
+    for i, material in enumerate(context.materials):
+        index = i + 1
         if material.presentation is not None:
-            parts.append(f'- 材料{index}：{material.presentation}')
+            parts.append(f'- 材料{index}：{show(material.presentation, f"materials/{i}/presentation")}')
         else:
-            parts.append(f'- 材料{index}：{material.event}')
-            for delta in material.deltas:
-                parts.append(f'  随材料成立：{delta}')
+            parts.append(f'- 材料{index}：{show(material.event, f"materials/{i}/event")}')
+            for j, delta in enumerate(material.deltas):
+                parts.append(f'  随材料成立：{show(delta, f"materials/{i}/deltas/{j}")}')
     parts.append('【禁止提前兑现】（禁区：不得出现、不得暗示）')
-    parts.extend(f'- {line}' for line in context.forbidden_reveals)
+    parts.extend(f'- {show(line, f"forbidden_reveals/{i}")}'
+                 for i, line in enumerate(context.forbidden_reveals))
     parts.append('【叙述与组织】')
     parts.append(f'- 视角：{person}，聚焦 {focalizers}')
-    parts.append(f'- 组织方式：{context.design_brief}')
-    parts.append(f'- 文风与口吻：{context.delivery_brief}')
+    parts.append(f'- 组织方式：{show(context.design_brief, "design_brief")}')
+    parts.append(f'- 文风与口吻：{show(context.delivery_brief, "delivery_brief")}')
     parts.append('【可用称谓】（只能使用这些字面）')
     surfaces = '、'.join(sorted({s for r in context.usable_surfaces
                                  for s in r.surfaces}))
@@ -253,7 +279,29 @@ def render_hook_context(context: HookContext) -> str:
     parts.append(f'- 篇幅目标约 {context.target_chars} 字，'
                  f'绝对不得超过 {context.hard_max_chars} 字（标点计入，空白不计）。')
     parts.append('请写出楔子。')
+    return parts, tuple(hits)
+
+
+def render_hook_context(context: HookContext) -> str:
+    """请求 user 段（R2 分层渲染）：只从 HookContext 构建，不掺源文或盘上材料。
+
+    材料是必须写出；禁止揭示与受保护线程是禁区；起笔事实以延续/背景呈现；
+    withheld_literals 是 validator 材料，不进阅读面（与正文章包同一纪律）。
+    CS-F2：正向材料行与禁区行在送达前按本场已释放称谓确定性投影（禁区不进
+    字面检查，投影只减少暴露）；上下文字段与来源文本不改写。
+    """
+    parts, _hits = _hook_render(context)
     return '\n'.join(parts) + '\n'
+
+
+def hook_name_projections(context: HookContext) -> tuple[dict, ...]:
+    """Hook 材料实际发生的称谓投影留痕（审计读数；不含行文本，I-38）。
+
+    与 `writer_name_projections` 同一纪律：显式、可观测的确定性步骤；每条记录
+    上下文字段、被替换的完整登记称谓、人物与替换结果，不携带行文本。
+    """
+    _parts, hits = _hook_render(context)
+    return hits
 
 
 

@@ -32,12 +32,13 @@ from typing import Mapping
 
 from contracts.schema.book_ir import (
     BookBrief, ChapterContinuity, ChapterIR, ChapterNavEntry,
-    PreviousChapterEnding, ReleaseScheduleEntry, WithheldNameBinding, WriterBookIR,
+    PreviousChapterEnding, ReleaseScheduleEntry, WriterBookIR,
 )
 from contracts.schema.design import BodyDesign, ChapterAssignment
 from contracts.schema.execution import ExecutionPlan
 from contracts.schema.grounding import BriefFactLock, SemanticBinding
 from contracts.schema.source import NameProjection, NameStructure
+from contracts.schema.state import WithheldNameBinding
 from novel.stages.stage4.fold import ThreadFold, fold_accepted_prefix
 from novel.core.name_materials import withheld_name_bindings
 from novel.stages.common import (

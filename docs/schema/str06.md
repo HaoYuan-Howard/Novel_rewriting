@@ -368,7 +368,12 @@ renderer 在正向材料行（含禁区行）把这类字面换成本场已释�
 原字段与来源文本不变（归因仍按原字段），六分区（含 `guard_only`）的替换留痕于 `name_projections`（候选预检报告、guard report、packet_metrics），
 不含行文本；人物本场没有已释放称谓时不投影，泄漏如实保留并按原归因回派。短姓、关系称呼、多义字面、未登记表达
 （如源文没有的「陆郎」）与源引文永不投影；Design 自有文本的名称冲突仍由 Design 接受判据拦下，compiler 不自动提前释放全名。
-写手视图摘要含投影后的渲染字节，验证输入摘要含绑定表。Hook 材料暂不投影（Hook 自选释放，已有正式回派）。
+写手视图摘要含投影后的渲染字节，验证输入摘要含绑定表。**Hook 同尺投影（rc16，2026-10-05）**：释放面由 Hook Design
+自选（`surface_releases`，非章释放表的投影），`compile_hook_context` 按本场释放算好 `HookContext.withheld_bindings`
+（同一把 `WithheldNameBinding` 尺，随 `stage4/context/hook/hook.json` rc16 携带），`render_hook_context` 在正向材料行与
+禁区行做同一投影——上下文字段保持原文本，条目返修的来源归因仍按原字段核对（`_hook_source_matches`），投影只改送达
+写手的字节；留痕 `hook_name_projections`（field／literal／char_id／replacement）进 guard report。concealed 人物不可
+释放面，绑定存在也无显示面，不投影、泄漏如实报告。
 
 ### 两层 IR 与送达方式（R2 基础，R9 rc11）
 

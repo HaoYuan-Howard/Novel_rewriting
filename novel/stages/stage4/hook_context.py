@@ -22,6 +22,12 @@ Design wire；主体须与楔子人物相关——全场景保护不等于全列
 【withheld_literals】
 未在 Hook 中释放的专名字面：名称结构 ∩（全部人物的专名字面与带名 surface）
 − Hook 已释放的称谓。不写死任何人名；hook validator 据此查成文泄漏。
+
+【withheld_bindings（rc16，CS-F2）】
+同一禁用面里「已证明唯一绑定人物」的完整登记称谓——释放面按 Hook 自选的
+surface_releases（不是章释放表）在 compile 时算好，随上下文携带；渲染期
+（`render_hook_context`）据此把这类字面换成本场已释放称谓。上下文字段保持
+原文本：条目返修的来源归因按原字段核对，投影只改送达写手的字节（RC-40/41）。
 """
 from __future__ import annotations
 
@@ -29,12 +35,14 @@ from typing import Mapping
 
 from contracts.schema.context import SurfaceRelease
 from contracts.schema.design import PresentationGraph
-from contracts.schema.state import EffectDomain
+from contracts.schema.state import EffectDomain, WithheldNameBinding
 from contracts.schema.hook import (
     HookConstraints, HookContext, HookMaterialView, HookOpeningFact,
 )
 from contracts.schema.source import NameProjection, NameStructure
-from novel.core.name_materials import withheld_name_literals, expand_surface_releases
+from novel.core.name_materials import (
+    withheld_name_bindings, withheld_name_literals, expand_surface_releases,
+)
 from novel.core.text import kp_statement
 from novel.stages.stage4.hook_validation import validate_hook_design
 
@@ -235,12 +243,16 @@ def compile_hook_context(
             else:
                 forbidden.append(f'事件不得提前揭示：{beat.event}')
 
-    # 可用称谓与 withheld 专名字面。
+    # 可用称谓与 withheld 专名字面；绑定表按 Hook 自选的释放面同尺推导（CS-F2）。
     usable = tuple(sorted(
         (SurfaceRelease(char_id=r.char_id, surfaces=display_names[r.char_id])
          for r in hook.surface_releases), key=lambda r: r.char_id))
     released = {s for r in usable for s in r.surfaces}
     withheld = withheld_name_literals(projection, released, structure)
+    bindings = tuple(
+        WithheldNameBinding(literal=literal, char_id=char_id, enclosing=enclosing)
+        for literal, char_id, enclosing
+        in withheld_name_bindings(withheld, structure, released))
 
     # 线程收束并入禁区（R2.7）：视界＝材料引用拍的最大（场序, 拍序）；
     # 楔子人物＝focalizers∪材料拍参与者∪起笔事实主语/持有者∪释放与隐藏人物。
@@ -270,4 +282,5 @@ def compile_hook_context(
         forbidden_reveals=tuple(forbidden), design_brief=hook.design_brief,
         delivery_brief=hook.delivery_brief, target_chars=constraints.target_chars,
         hard_max_chars=constraints.hard_max_chars, usable_surfaces=usable,
-        withheld_literals=tuple(sorted(withheld))), []
+        withheld_literals=tuple(sorted(withheld)),
+        withheld_bindings=bindings), []

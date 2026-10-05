@@ -80,7 +80,7 @@ from novel.stages.common import (
     BODY_WRITER_SYSTEM, ChapterIdentities, chapter_identities, pack_prompt,
     packet_metrics, project_chapter_packet, render_chapter_packet,
     validate_hook_materials, validate_writer_materials,
-    hook_material_issues, writer_material_issues,
+    hook_material_issues, writer_material_issues, hook_name_projections,
 )
 from novel.stages.stage2 import (
     NamesObservation, STAGE2_OBSERVATION_PROTOCOL, book_observation_prompt,
@@ -962,8 +962,10 @@ def run_compile_stage4(ctx: ChainContext) -> dict:
                     'chapters': len(writer_ir.chapters), 'scenes': len(graph.scenes),
                     'obligations': len(binding.obligations), 'guard_errors': problems,
                     'material_issues': [asdict(issue) for issue in material_issues],
-                    # 称谓投影留痕（CS-F2）：显式、可观测，不含行文本。
+                    # 称谓投影留痕（CS-F2）：显式、可观测，不含行文本；正文与
+                    # 楔子分别登记（楔子释放面由 Hook Design 自选）。
                     'name_projections': list(inspection.name_projections),
+                    'hook_name_projections': list(hook_name_projections(hook_context)),
                     'chapter_budgets': {c.chapter_ordinal: c.length_budget
                                         for c in writer_ir.chapters}}
     # 失败结果只进诊断：guard report 先落（问题清单与预算读数留证），正式位不写。

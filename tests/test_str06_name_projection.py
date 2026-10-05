@@ -6,16 +6,24 @@
   表达一律没有绑定；
 · 渲染期投影：按本场已释放称谓替换，已释放字面先认领保护，更长的禁用字面内部的子串不被
   单独替换；人物本场没有可用称谓时不替换并如实留下泄漏；
-· 原字段、人物来源与内部身份不变；留痕可观测；同输入恒同输出。
+· 原字段、人物来源与内部身份不变；留痕可观测；同输入恒同输出；
+· Hook（rc16）：释放面由 Hook Design 自选（surface_releases，不是章释放表的投影），
+  绑定表随 HookContext 携带、渲染期投影；条目返修的来源归因按原字段文本核对。
 """
 from copy import deepcopy
 
 import pytest
 
-from contracts.schema.book_ir import ChapterIR, WithheldNameBinding
+from contracts.schema.book_ir import ChapterIR
 from contracts.schema.source import NameStructure
+from contracts.schema.state import WithheldNameBinding
 from novel.core.name_materials import withheld_name_bindings
-from novel.stages.common import project_withheld_names
+from novel.stages.common import (
+    hook_material_issues, hook_name_projections, project_withheld_names,
+    render_hook_context,
+)
+from novel.stages.stage4.hook_context import compile_hook_context
+from novel.stages.stage5.hook_writer import build_hook_user_prompt
 from tests.test_str06_hook import _characters
 
 
@@ -305,3 +313,207 @@ def test_compiler_never_releases_a_full_name_early_to_clear_a_conflict(tmp_path)
     assert '陆大哥' not in chapter_surface_releases(view.body, 1, args['chars'].name_structure)
     assert '陆大哥' in chapter_surface_releases(view.body, 2, args['chars'].name_structure), \
         '释放位置保持 Design 原声明（第2章）'
+
+
+# ───────────────────── Hook：自选释放面的渲染期投影（rc16，CS-F2） ─────────────────────
+
+def _hook_context(**hook_over):
+    """经正式装配与编译链路构造带名称结构的 HookContext；覆盖项直达 Hook wire。"""
+    from contracts.schema.hook import HookConstraints
+    from novel.stages.stage4.design import assemble_body_design
+    from novel.stages.stage4.hook import assemble_hook_design, publish_graph
+    from novel.stages.stage4.hook_context import compile_hook_context
+    from tests.str06_expression_inputs import sample_narration, sample_requirements
+    from tests.test_str06_hook import _body_wire, _hook_wire
+    chars = _characters()
+    known = set(chars.characters)
+    body, errors = assemble_body_design(
+        _body_wire(), known_char_ids=known, expression_requirements=sample_requirements(),
+        source_narration=sample_narration())
+    assert body is not None and not errors, errors
+    hook, errors = assemble_hook_design(
+        _hook_wire(**hook_over), body=body, known_char_ids=known,
+        name_projection=chars.name_projection())
+    assert hook is not None and not errors, errors
+    context, errors = compile_hook_context(
+        publish_graph(body, hook), chars.name_projection(),
+        HookConstraints(target_chars=280, hard_max_chars=360), chars.name_structure)
+    assert context is not None and not errors, errors
+    return context
+
+
+def _released_both():
+    """Hook 自选释放：yun_niang 用闺名两面、fu_jun 只释放纯称谓「夫君」。"""
+    return [
+        {'char_id': 'yun_niang', 'surfaces': ['苏芸娘', '芸娘']},
+        {'char_id': 'fu_jun', 'surfaces': ['夫君']}]
+
+
+def test_hook_bindings_follow_the_hook_own_release_selection():
+    """绑定表按 hook.surface_releases（Hook 自选）推导，不是章释放表的投影。"""
+    context = _hook_context(concealed=[], surface_releases=_released_both())
+    assert {b.literal: b.char_id for b in context.withheld_bindings} == {
+        '陆大哥': 'fu_jun', '陆兄': 'fu_jun', '苏姑娘': 'yun_niang'}
+    assert '夫君' not in {b.literal for b in context.withheld_bindings}, '已释放字面不进绑定表'
+    # 只释放芸娘（不释放苏芸娘）时，同一人物的显示面换成芸娘——同尺不同释放面；
+    # 禁区行按原投影渲染主语（苏芸娘），同样在送达前投影（只减少暴露，不进字面检查）。
+    only_gui = _hook_context(concealed=[], surface_releases=[
+        {'char_id': 'yun_niang', 'surfaces': ['芸娘']},
+        {'char_id': 'fu_jun', 'surfaces': ['夫君']}])
+    prompt = render_hook_context(only_gui)
+    assert '苏芸娘' not in prompt, '本场未释放的完整姓名经投影隐藏'
+    row = next(r for r in hook_name_projections(only_gui) if r['literal'] == '苏芸娘')
+    assert row == {'field': 'forbidden_reveals/0', 'literal': '苏芸娘',
+                   'char_id': 'yun_niang', 'replacement': '芸娘'}
+
+
+def test_hook_materials_project_bound_literals_and_keep_sources_original():
+    """正向材料行渲染期投影；上下文字段与来源归因保持原字段文本。"""
+    context = _hook_context(
+        concealed=[], surface_releases=_released_both(),
+        design_brief='从深夜冷开倒叙入新婚夜旧约，陆大哥的身份不露，苏姑娘只以闺名示人。')
+    assert '陆大哥' in context.design_brief, '上下文字段保持原文本'
+    prompt = render_hook_context(context)
+    assert '陆大哥' not in prompt and '夫君的身份' in prompt
+    assert '苏姑娘' not in prompt and '苏芸娘只以闺名示人' in prompt
+    rows = hook_name_projections(context)
+    assert rows and set(rows[0]) == {'field', 'literal', 'char_id', 'replacement'}
+    assert {'field': 'design_brief', 'literal': '陆大哥', 'char_id': 'fu_jun',
+            'replacement': '夫君'} in rows
+    assert {'field': 'design_brief', 'literal': '苏姑娘', 'char_id': 'yun_niang',
+            'replacement': '苏芸娘'} in rows
+    assert hook_material_issues(context, internal_ids=set()) == (), '投影后无假泄漏'
+    assert render_hook_context(context) == build_hook_user_prompt(context), \
+        '请求与验证共用同一 renderer'
+
+
+def test_hook_unbound_literals_stay_for_the_leak_check_with_original_field_sources():
+    """短姓与未登记表达不投影；禁用短姓的泄漏如实报出，来源归因用原字段文本。"""
+    context = _hook_context(
+        concealed=[], surface_releases=_released_both(),
+        design_brief='陆郎与陆家的旧事不露，陆大哥身份存疑。')
+    prompt = render_hook_context(context)
+    # 陆郎未登记、陆家已随释放面放开：二者原样保留；只有可证绑定的陆大哥被换成夫君。
+    assert '陆郎' in prompt and '陆大哥' not in prompt
+    issues = hook_material_issues(context, internal_ids=set())
+    assert {i.literal for i in issues} == {'陆'}, '短姓无绑定，残留在陆郎内的陆如实报出'
+    issue = next(i for i in issues if i.literal == '陆')
+    assert any(s.kind == 'hook' and s.field == 'design_brief'
+               and s.text == context.design_brief for s in issue.sources), \
+        '来源归因依赖原字段文本，不用投影后的衍生行'
+
+
+def test_hook_bound_literal_without_release_is_reported_not_masked():
+    """concealed 人物不可释放面：绑定存在但无显示面，字面如实留下并报告。"""
+    context = _hook_context(
+        design_brief='从深夜冷开倒叙，陆大哥的身份不露。')
+    assert any(b.literal == '陆大哥' and b.char_id == 'fu_jun'
+               for b in context.withheld_bindings)
+    assert '陆大哥' in render_hook_context(context)
+    assert {i.literal for i in hook_material_issues(context, internal_ids=set())} == {
+        '陆大哥'}
+
+
+def test_hook_forbidden_lines_project_but_never_join_the_leak_check():
+    """禁区行同样投影（减少暴露）；禁区不进字面检查，两个边界分开。"""
+    from tests.test_str06_hook import _body_wire, _hook_wire
+    from contracts.schema.hook import HookConstraints
+    from novel.stages.stage4.design import assemble_body_design
+    from novel.stages.stage4.hook import assemble_hook_design, publish_graph
+    from tests.str06_expression_inputs import sample_narration, sample_requirements
+    chars = _characters()
+    known = set(chars.characters)
+    body_wire = _body_wire()
+    body_wire['scenes'][0]['beats'][0]['event'] = '陆大哥拜堂成亲'
+    body, errors = assemble_body_design(
+        body_wire, known_char_ids=known, expression_requirements=sample_requirements(),
+        source_narration=sample_narration())
+    assert body is not None and not errors, errors
+    wire = _hook_wire(
+        concealed=[], surface_releases=_released_both(),
+        forbidden_reveals=[{'ref': {'scene': 'sc01', 'beat': 'b01'}}])
+    hook, errors = assemble_hook_design(
+        wire, body=body, known_char_ids=known, name_projection=chars.name_projection())
+    assert hook is not None and not errors, errors
+    context, errors = compile_hook_context(
+        publish_graph(body, hook), chars.name_projection(),
+        HookConstraints(target_chars=280, hard_max_chars=360), chars.name_structure)
+    assert context is not None and not errors, errors
+    assert '事件不得提前揭示：夫君拜堂成亲' in render_hook_context(context)
+    assert {'field': 'forbidden_reveals/0', 'literal': '陆大哥',
+            'char_id': 'fu_jun', 'replacement': '夫君'} in hook_name_projections(context)
+    assert hook_material_issues(context, internal_ids=set()) == ()
+    # 无释放面时禁区保留完整称谓，也不扩大扫描面（禁区不验词）。
+    hidden = context.model_copy(update={
+        'usable_surfaces': tuple(r for r in context.usable_surfaces
+                                 if r.char_id != 'fu_jun')})
+    assert '事件不得提前揭示：陆大哥拜堂成亲' in render_hook_context(hidden)
+    assert hook_material_issues(hidden, internal_ids=set()) == ()
+
+
+def test_hook_projection_is_deterministic_and_keeps_the_context_untouched():
+    context = _hook_context(
+        concealed=[], surface_releases=_released_both(),
+        design_brief='从深夜冷开倒叙入新婚夜旧约，陆大哥的身份不露。')
+    before = context.model_dump_json()
+    assert hook_name_projections(context) == hook_name_projections(context)
+    assert render_hook_context(context) == render_hook_context(context)
+    assert context.model_dump_json() == before
+    # 绑定表清空＝不投影：同一上下文的送达字节不同，泄漏如实出现。
+    no_binding = context.model_copy(update={'withheld_bindings': ()})
+    assert '陆大哥' in render_hook_context(no_binding)
+    leaks = hook_material_issues(no_binding, internal_ids=set())
+    assert {i.literal for i in leaks} == {'陆大哥'}
+    assert any(s.field == 'design_brief' and s.text == no_binding.design_brief
+               for i in leaks for s in i.sources)
+
+
+def test_hook_context_rejects_pre_rc16_payload_and_duplicate_bindings():
+    from pydantic import ValidationError
+
+    from contracts.schema.hook import HookContext
+    context = _hook_context(concealed=[], surface_releases=_released_both())
+    stored = context.model_dump(mode='json')
+    stored['contract_version'] = 'str06-rc12'
+    with pytest.raises(ValidationError):
+        HookContext.model_validate(stored)
+    duplicate = dict(stored)
+    duplicate['contract_version'] = 'str06-rc16'
+    duplicate['withheld_bindings'] = [
+        dict(b) for b in context.withheld_bindings][:1] * 2
+    with pytest.raises(ValidationError, match='重复'):
+        HookContext.model_validate(duplicate)
+
+
+def test_hook_projection_reaches_the_compile_guard_report(tmp_path):
+    """经真实 run_workflow：楔子投影留痕进 guard report，重启读取一致（免费产物）。"""
+    from contracts.schema.hook import HookConstraints
+    from novel.stages.chain import run_workflow
+    from novel.store import Str06Repository
+    from tests.str06_facilities import json_ask, text_ask
+    from tests.test_str06_body import _chapters, _make_session
+    from tests.test_str06_hook import _full_chain_wires
+
+    wires = _full_chain_wires()
+    wires['hook_design'].update(
+        concealed=[], surface_releases=_released_both(),
+        design_brief='从深夜冷开倒叙入新婚夜旧约，陆大哥的身份不露。')
+
+    def no_paid_call(*args, **kwargs):
+        raise AssertionError('Stage4 验证不调用正文写手')
+
+    repo, session, _transport = _make_session(tmp_path, wires)
+    run_workflow(repository=repo, chapters=_chapters(), ask=json_ask(session),
+                 ask_text=text_ask(session), ask_body=no_paid_call, budget=2000,
+                 through='stage4',
+                 hook_constraints=HookConstraints(target_chars=10, hard_max_chars=360))
+    report = repo.inspect('stage4/acceptance/guard/report.json')
+    assert not report['guard_errors']
+    expected = {'field': 'design_brief', 'literal': '陆大哥',
+                'char_id': 'fu_jun', 'replacement': '夫君'}
+    assert expected in report['hook_name_projections'], '楔子投影留痕可观测'
+    reopened = Str06Repository(repo.root)
+    assert reopened.inspect('stage4/acceptance/guard/report.json') == report
+    context = reopened.read_model('stage4/context/hook/hook.json')
+    assert context.contract_version == 'str06-rc16'
+    assert '陆大哥' in context.design_brief and '陆大哥' not in build_hook_user_prompt(context)

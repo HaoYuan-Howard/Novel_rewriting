@@ -17,6 +17,13 @@ Hook 是同一目标故事的另一种呈现，不是第二份 truth、不是 Sc
 HookContext 是 Derived（`stage4/context/hook/hook.json`），不含义务字段——
 Hook 不增加义务分母。HookReceipt 只记录机械检查结果，`semantic` 固定为
 `unverified`：机械通过不证明不剧透、遵守材料顺序或开篇质量（如实披露）。
+
+【称谓投影只在渲染期（rc16，CS-F2）】
+`withheld_bindings` 与章 IR 同一把尺（`WithheldNameBinding`）：Hook 的释放面由
+Hook Design 自选（`surface_releases`，不是章释放表的投影），compile 按本场释放
+算好绑定表随上下文携带；`render_hook_context` 送达写手前把已证明唯一绑定人物的
+完整登记称谓换成本场已释放称谓。上下文字段保持原文本——条目返修的来源归因按
+原字段核对，投影只改送达字节。
 """
 from __future__ import annotations
 
@@ -26,7 +33,7 @@ from pydantic import Field, model_validator
 
 from contracts.schema.base import StrictModel
 from contracts.schema.common import FreeProvenance, LlmProvenance
-from contracts.schema.state import StateAddress, SurfaceRelease
+from contracts.schema.state import StateAddress, SurfaceRelease, WithheldNameBinding
 
 OpeningRef = str  # 'init' 或 '<scene_id>#<beat_id>'；存在性归跨引用校验
 
@@ -152,10 +159,13 @@ class HookContext(StrictModel):
 
     只解析引用、投影与格式化，不解释 brief；不含义务字段。`withheld_literals`
     是未在 Hook 中释放的专名字面（名称结构 ∩ Design 称谓推导），供机械
-    validator 检查成文泄漏，不写死任何人名。
+    validator 检查成文泄漏，不写死任何人名。rc16（CS-F2）：`withheld_bindings`
+    是禁用字面中「可唯一绑定人物」的完整登记称谓子集——释放面按 Hook 自选的
+    `surface_releases` 在 compile 时算好，渲染期据此确定性投影；空表合法
+    （无可证明绑定＝一律不投影），上下文字段本身不被投影改写。
     """
 
-    contract_version: Literal['str06-rc12'] = 'str06-rc12'
+    contract_version: Literal['str06-rc16'] = 'str06-rc16'
     pov: HookPov
     opening_facts: tuple[HookOpeningFact, ...] = ()
     materials: tuple[HookMaterialView, ...] = Field(min_length=1)
@@ -168,11 +178,20 @@ class HookContext(StrictModel):
     hard_max_chars: int = Field(ge=1)
     usable_surfaces: tuple[SurfaceRelease, ...] = ()
     withheld_literals: tuple[str, ...] = Field(default=(), min_length=0)
+    #: 禁用字面中已证明唯一绑定人物的完整登记称谓（渲染期投影的验证材料，不进阅读面）。
+    withheld_bindings: tuple[WithheldNameBinding, ...] = Field(default=(), min_length=0)
 
     @model_validator(mode='after')
     def _length_window(self) -> 'HookContext':
         if self.target_chars > self.hard_max_chars:
             raise ValueError('target_chars 不得大于 hard_max_chars')
+        return self
+
+    @model_validator(mode='after')
+    def _unique_binding_literals(self) -> 'HookContext':
+        literals = [b.literal for b in self.withheld_bindings]
+        if len(set(literals)) != len(literals):
+            raise ValueError('Hook 的称谓绑定字面重复')
         return self
 
 

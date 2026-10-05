@@ -119,7 +119,11 @@ from novel.llm.paid_requests import candidate_contract_identity
 # fact_bindings）、writer_book_ir 升 rc16（ChapterIR 新增 withheld_bindings），RC 版式头
 # 升 rc16；Design wire 升 stage4-design-v8、renderer 升 v10（请求面，不在身份输入内）。
 # 旧 rc15 候选根按契约表漂移关闭式拒收，原根作冻结失败证据；原因见 REQUIREMENTS CS-F2。
-FROZEN_CONTRACT_IDENTITY = '4e643fb1ebc902d55b4ea60971bb4a067897716a62c15bd199f0ed1af3657797'
+# rc16 续（2026-10-05 CS-F2 收口，Hook 称谓投影）：hook.json 升 rc16——HookContext 增
+# withheld_bindings（按 Hook 自选 surface_releases 算好的唯一绑定称谓表，渲染期投影）；
+# WithheldNameBinding 定义随 SurfaceRelease 下沉 state.py（斩断 hook↔book_ir 环）。旧
+# rc12 楔子上下文拒读，免费重编译；原因见 REQUIREMENTS CS-F2。
+FROZEN_CONTRACT_IDENTITY = '2a3ae36e487369d10ed2b8178300245fddea687171b1fd430b487098e9e52094'
 
 #: 冻结时的节点集合（CS-3 bind 退役后 13 个：stage0/1 两座＋Stage2 五节点＋
 #: Stage4 四＋Stage5 两＋Stage7 两；bind 的承载位决定并入 body_design）。

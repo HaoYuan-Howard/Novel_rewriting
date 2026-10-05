@@ -989,6 +989,22 @@ STR06_FIELD_DELIVERY: dict[str, FieldDeliverySpec] = {
         'hook_context.withheld_literals', consumers=(_V,), scope=_HOOK,
         mode=DeliveryMode.AUDIT_ONLY,
         note='Hook 禁用字面（validator 检查面）；不进 Hook 阅读面'),
+    # rc16（CS-F2 Hook 称谓投影）：与章 IR 绑定表同一把尺，释放面按 Hook 自选
+    # surface_releases 推导。表本身不进阅读面；renderer 凭它把正向材料行与禁区行
+    # 里的该字面换成本场已释放称谓（上下文字段与来源归因保持原字段文本）。
+    'hook_context.withheld_bindings[].literal': _spec(
+        'hook_context.withheld_bindings[].literal', consumers=(_V,), scope=_HOOK,
+        mode=DeliveryMode.AUDIT_ONLY,
+        note='完整登记称谓字面：绑定表不进阅读面；仅当材料行含该字面时，renderer\n'
+             '凭它换成本场已释放称谓（送达字节覆盖投影结果）'),
+    'hook_context.withheld_bindings[].char_id': _spec(
+        'hook_context.withheld_bindings[].char_id', consumers=(_V,), scope=_HOOK,
+        mode=DeliveryMode.AUDIT_ONLY,
+        note='绑定人物内部身份：只用于解析本场已释放称谓，内部句柄不进阅读面'),
+    'hook_context.withheld_bindings[].enclosing': _spec(
+        'hook_context.withheld_bindings[].enclosing', consumers=(_V,), scope=_HOOK,
+        mode=DeliveryMode.AUDIT_ONLY,
+        note='包含绑定字面的更长称谓（含已释放）：渲染期先认领保护，避免拆开替换'),
     # ── NameMapV5（改名面；不经任何写手）──────────────────────────────────
     'name_map.contract_version': _spec(
         'name_map.contract_version', consumers=(_N, _A), scope=_NAME,
