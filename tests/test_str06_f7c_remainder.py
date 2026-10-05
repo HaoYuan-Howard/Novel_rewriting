@@ -136,14 +136,14 @@ def test_withheld_literal_is_hard_failure_never_disclosed():
     answers = [AnsweredText(text=dirty, finish_reason='stop',
                             identity=f'attempt-{i}', cached=False)
                for i in range(1 + MAX_BODY_REWRITES)]
-    outcome = write_chapter(packet=packet, ask=lambda prompt: answers.pop(0))
+    outcome = write_chapter(packet=packet, ask=lambda prompt, validate: answers.pop(0))
     assert outcome.prose is None and outcome.receipt is None, '硬失败不得披露放行'
     assert len(outcome.attempts) == 1 + MAX_BODY_REWRITES
     assert all(any(e.startswith('[withheld_literals]') for e in a.errors)
                for a in outcome.attempts)
     # 同一把标尺下，只用已释放称谓的稿正常接受（纪律针对未释放面，不是全部专名）。
     ok = write_chapter(packet=packet,
-                       ask=lambda prompt: AnsweredText(text=clean, finish_reason='stop',
+                       ask=lambda prompt, validate: AnsweredText(text=clean, finish_reason='stop',
                                                        identity='clean', cached=False))
     assert ok.prose == clean and ok.receipt is not None
     assert ok.receipt.status == 'accepted' and ok.length_disclosed is False

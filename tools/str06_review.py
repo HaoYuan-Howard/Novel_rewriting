@@ -82,7 +82,7 @@ def request_preview(repository, owner, source, profile):
     else:
         def ask(_owner, prompt, validate):
             raise _Capture(prompt, validate, SYS, True, 0.3)
-        def ask_text(_owner, prompt):
+        def ask_text(_owner, prompt, _validate=None):
             context = repository.read_model('stage4/context/hook/hook.json')
             raise _Capture(prompt, lambda w: validate_prose_wire(w, lambda text: validate_hook_prose(text, context)),
                            HOOK_WRITER_SYSTEM, False, 0.7)

@@ -567,7 +567,7 @@ CLI 的 medium 移除；整书上限从持久准入账派生传入付费边界�
 | SemanticRequest | 业务任务、输入投影与语义协议 | 工作单元 (node, scope)＋请求身份 |
 | ContentRevision | 首次生成或针对明确问题的修订；owner patch 是无外发的修订（绑定基线请求身份与修订说明） | `contracts/schema/workflow.py::WorkUnitContentTurn`，内容轮额度沿用 |
 | ProviderAttempt | 一次实际外发：冻结配置、准确请求、原响应、成本 | `contracts/schema/workflow.py::WorkUnitAttempt`，每轮至多 4 次（`contracts/invariants.py::WORK_UNIT_MAX_DELIVERY_ATTEMPTS`） |
-| AcceptanceRecord | 解析、救回、引用解析、编译、机械验证分项结果；语义恒 `unver` | 取代候选根的 validation 记录 |
+| AcceptanceRecord | 解析、救回、引用解析、编译、机械验证分项结果；语义恒 `unver`；`accepted` 只表示“通过 owner 完整验收、可发布”，被拒或被回派上游的回答记 false 并带问题，是否被采用只看 CommitBundle（见 `docs/schema/work_units.md` 接受记录与发布语义） | 取代候选根的 validation 记录 |
 | CommitBundle | 输入清单、采用证据、输出摘要与 seal | 新增；采用状态从 seal 派生 |
 
 - 原响应按 attempt 存储并被 attempt 引用，**空回答不再占据请求身份**。候选根现有

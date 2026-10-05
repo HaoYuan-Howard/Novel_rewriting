@@ -1124,6 +1124,20 @@
       "layer": "unit_contract",
       "stages": []
     },
+    "tests/test_str06_record_truth.py": {
+      "layer": "stage",
+      "stages": [
+        "stage4",
+        "stage5",
+        "stage7"
+      ],
+      "cases": {
+        "test_upstream_owned_answer_is_recorded_rejected_and_propagates_without_a_second_call": "unit_contract",
+        "test_text_validation_is_recorded_and_empty_validate_keeps_the_old_semantics": "unit_contract",
+        "test_delivery_terminal_is_one_judgement_for_both_paths": "unit_contract",
+        "test_owner_issues_dedupe_by_material_identity_without_changing_the_fingerprint": "unit_contract"
+      }
+    },
     "tests/test_replay_candidates.py": {
       "layer": "stage",
       "stages": [

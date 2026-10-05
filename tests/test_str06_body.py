@@ -341,9 +341,12 @@ class _FakeAnswers:
     def __init__(self, answers):
         self.answers = list(answers)
         self.prompts = []
+        self.validators = []
 
-    def __call__(self, prompt):
+    def __call__(self, prompt, validate):
+        # 付费边界据 validate 把接受结果如实记入账（RC-54）；它必须是本章真实的机械校验。
         self.prompts.append(prompt)
+        self.validators.append(validate)
         return self.answers.pop(0)
 
 
@@ -376,6 +379,9 @@ def test_write_chapter_first_pass_and_rewrite_identity():
     assert len(outcome.attempts) == 2
     assert '[length_band]' in '；'.join(outcome.attempts[0].errors)
     assert '上一稿' in fake.prompts[1] and '原因' in fake.prompts[1]
+    # 交给付费边界的就是控制流用的那把机械校验：同一稿得同一结论（RC-54）
+    assert fake.validators[0](bad) == list(outcome.attempts[0].errors)
+    assert fake.validators[1](good) == []
     # 重写请求仍是同一章包正文 + 重写要求（不含前文/他章材料）
     assert fake.prompts[1].startswith(fake.prompts[0].rstrip('\n'))
 

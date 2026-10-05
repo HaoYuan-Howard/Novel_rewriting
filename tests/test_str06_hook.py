@@ -574,7 +574,7 @@ def test_hook_writer_length_rewrite_same_context():
     ok_prose = '苏芸娘望着空房。'
     prompts = []
 
-    def ask_text(owner, prompt):
+    def ask_text(owner, prompt, validate=None):
         prompts.append(prompt)
         return (long_prose, [], f'id-{len(prompts)}') if len(prompts) == 1 \
             else (ok_prose, [], f'id-{len(prompts)}')
@@ -591,7 +591,7 @@ def test_hook_writer_rewrite_limit_exhausted():
     _, _, context = _green_pair()
     calls = []
 
-    def ask_text(owner, prompt):
+    def ask_text(owner, prompt, validate=None):
         calls.append(prompt)
         return ('夜' * (context.hard_max_chars + 1), [], f'id-{len(calls)}')
 
@@ -817,7 +817,7 @@ def test_through_stage7_full_chain_replay_and_authorization_gate(tmp_path, monke
         return ask
 
     def make_text(repo):
-        def ask_text(owner, prompt):
+        def ask_text(owner, prompt, validate=None):
             return ('苏芸娘望着空房。', [],
                     synthetic_ref(owner, prompt))
         return ask_text

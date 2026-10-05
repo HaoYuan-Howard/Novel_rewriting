@@ -52,6 +52,23 @@ content_limit、content_remaining 和恢复入口；`WorkUnitView.processing` �
 成果，不代表产物通过质量审阅；缺失或坏账只令该投影 unknown 并保留原因，不拦截独立的
 暂停、停止或排空控制。
 
+## 接受记录与发布语义（CS-H，RC-54～56）
+
+工作单元账管内容轮与已购回答，**不管哪份回答被接受**：采用状态只从已封存的 CommitBundle 派生
+（`novel/llm/paid_requests.py::sealed_turn_references`），`AcceptanceRecord` 只回答「这份回答是否通过
+owner 的完整验收、可发布」。二者各自独立：
+
+- `accepted=true`：解析、救回、引用解析、编译与机械闸全部通过（语义恒 `unver`）；
+- `accepted=false`：被拒（问题随记录留证），或问题归上游 owner 因而被回派——验收回调抛出类型化信号
+  `UpstreamOwned`，`ask_json` 记 `accepted=false` 与这些问题后上抛，由节点编排登记跨节点回派，不在节点内
+  再问、也不再以空错误列表冒充通过；文本节点（正文、楔子）的机械闸错误同样进入记录；
+- 「已被采用」不是记录字段：只看已封存 CommitBundle 的 adoptions 是否引用该内容轮／attempt。
+
+每个接受版本以**一个 CommitBundle 原子发布一次**；跨节点修订产生新版本，旧版本的 bundle 保留可追溯；
+交付清单引用的各输入版本必须彼此一致。指标 M1 数的是接受版本，不是“全程只许发布一次”。
+单节点路径跑了交付组装时，`runtime/workflow_status.json` 的终态与 `accepted_body` 取交付报告，与整链
+同源（`delivered`／`assembly_not_ready`），不再恒记 `node_run`。
+
 # 按原配置继续
 
 `GET /api/agent/runs/:run_id/continuation` 返回历史完整 profiles、来源 hash、可用性及原因。

@@ -69,9 +69,10 @@ canonical argv经`--request-profile`传递冻结配置，付费和免费复检�
    直连 LLM 纪律拒收——F9 产品跑书时实证；`nodes.build_argv` 已按
    `DIRECT_LLM_NODE_PREFIX` 修复（str06 节点不挂 executor 旗标），派发断言
    钉住新行为，claim／信标／evidence 三层的进程内替身差异仍在文件头说明。
-③ 产品入口逐节点执行 ⇒ run 级 `runtime/workflow_status.json` 落在最后一次单节点
-   执行上（`node_run`），`delivered` 只由单次整链跑法写出；就绪结论的权威记录是
-   assemble 最后提交的 manifest（本测试按后者断言，并钉住前者的现状）。
+③ （CS-H H1 已修复，记录备查）产品入口逐节点执行 ⇒ run 级 `runtime/workflow_status.json`
+   落在最后一次单节点执行上，曾恒记 `node_run`／`accepted_body=false`，已交付的书在状态里
+   仍是未接受；现单节点路径跑了交付组装即取交付报告终态（`delivered`／`assembly_not_ready`），
+   与整链同源（RC-54）。就绪结论的权威记录仍是 assemble 最后提交的 manifest。
 """
 from __future__ import annotations
 
@@ -350,12 +351,12 @@ def test_full_chain_from_http_upload_to_stage7_delivery(base, monkeypatch):
 
     book = paths.resolve_novel_dir(base, '9001')
     # ④ 交付就绪：规划面 pipeline_complete + 成书 + 最后提交的 manifest。
-    #    ⚠ 产品入口逐节点执行，run 级 `workflow_status.json` 落在最后一次单节点
-    #    执行上（`node_run`）；就绪结论的权威记录是 assemble 最后提交的 manifest
-    #    与 assembly report，`delivered` 只由单次整链跑法写出（见遗留问题③）。
+    #    产品入口逐节点执行，run 级 `workflow_status.json` 落在最后一次单节点执行上；
+    #    最后一个节点是交付组装，终态取交付报告（RC-54：与整链同源，不再恒记 node_run）。
     assert operator.next_action(base, '9001').state == 'pipeline_complete'
     status = _read_json(book / 'runtime' / 'workflow_status.json')
-    assert status['status'] == 'node_run' and status['through'] == 'stage7'
+    assert status['status'] == 'delivered' and status['through'] == 'stage7'
+    assert status['accepted_body'] is True
     final_path = book / paths.book_txt_rel(book)
     assert final_path.is_file()
     final_text = final_path.read_text('utf-8')

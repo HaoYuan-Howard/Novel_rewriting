@@ -92,8 +92,10 @@ def write_chapter(
 ) -> ChapterOutcome:
     """写一章：生成 → 机械检查 → 有限重写 → 确定性候选选择。
 
-    `packet` 是当前章包（唯一输入面，D2）；`ask(user_prompt) -> AnsweredText`
-    由工具层提供（付费边界、缓存与留证都在那一层）。返回的 outcome 不落盘。
+    `packet` 是当前章包（唯一输入面，D2）；`ask(user_prompt, validate) -> AnsweredText`
+    由工具层提供（付费边界、缓存与留证都在那一层）。`validate` 是本章的机械校验
+    （纯函数，与下面控制流用的是同一把）：付费边界据此把被拒首稿的接受记录如实记成
+    accepted=false（RC-54）。返回的 outcome 不落盘。
     """
     chapter = packet.chapter
     contract = packet.realization_contract
@@ -103,6 +105,11 @@ def write_chapter(
     scene_markers = tuple(context.scene_id for context in chapter.scenes)
     low, high, target = contract.band_low, contract.band_high, contract.target_chars
 
+    def validate(prose: str) -> list[str]:
+        return validate_chapter_prose(
+            prose, withheld_literals=withheld, released_surfaces=released,
+            target_chars=target, band_low=low, band_high=high, scene_markers=scene_markers)
+
     attempts: list[ChapterAttempt] = []
     candidates: list[tuple[str, str, list[str], Any]] = []   # (identity, prose, errors, ref)
     errors: list[str] = []
@@ -111,7 +118,7 @@ def write_chapter(
     for attempt in range(1 + MAX_BODY_REWRITES):
         prompt = (packet_text if previous is None
                   else _rewrite_prompt(packet_text, previous, errors))
-        answered = ask(prompt)
+        answered = ask(prompt, validate)
         identity = answered.identity
         if answered.text is None:
             # B1/D5：空回答计一次失败留证；重发同一份章包（同请求身份 → Runtime
@@ -130,10 +137,7 @@ def write_chapter(
                 count_body_chars(prose),
                 ('[truncated] 响应被截断（finish_reason=length），即停该章（D6）',)))
             break
-        errors = validate_chapter_prose(
-            prose, withheld_literals=withheld, released_surfaces=released,
-            target_chars=target, band_low=low, band_high=high,
-            scene_markers=scene_markers)
+        errors = validate(prose)
         attempts.append(ChapterAttempt(attempt + 1, identity, answered.finish_reason,
                                        count_body_chars(prose), tuple(errors)))
         candidates.append((identity, prose, errors, answered.ref))

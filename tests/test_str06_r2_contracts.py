@@ -562,7 +562,7 @@ def test_body_writer_produces_split_receipt():
     prose = ('云娘在灯下坐着，听见外头脚步声停了又起。' * 12)
     outcome = write_chapter(
         packet=packet,
-        ask=lambda prompt: AnsweredText(text=prose, finish_reason='stop',
+        ask=lambda prompt, validate: AnsweredText(text=prose, finish_reason='stop',
                                         identity='i1', cached=False))
     assert outcome.receipt is not None
     identities = chapter_identities(packet)

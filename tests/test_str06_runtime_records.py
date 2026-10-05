@@ -46,7 +46,7 @@ def test_empty_first_body_answer_resends_packet_instead_of_indexerror():
         def __init__(self):
             self.prompts: list[str] = []
 
-        def __call__(self, prompt):
+        def __call__(self, prompt, validate):
             self.prompts.append(prompt)
             if len(self.prompts) == 1:
                 return _answered(None)

@@ -99,11 +99,11 @@ def text_ask(session, *, system='楔子写手', model='fake', max_tokens=1000):
     from novel.llm.paid_requests import ask_text_once
     from novel.llm.transport import ChatRequest
 
-    def ask_text(owner, prompt):
+    def ask_text(owner, prompt, validate=None):
         request = ChatRequest(model=model, system=system, user=prompt,
                               reasoning_effort='high', thinking=True,
                               json_mode=False, max_tokens=max_tokens)
-        text, errors, answer = ask_text_once(session, owner, request)
+        text, errors, answer = ask_text_once(session, owner, request, validate)
         return text, errors, answer.ref
     return ask_text
 
@@ -114,11 +114,11 @@ def body_ask(session, *, model='fake', max_tokens=4000):
     from novel.llm.transport import ChatRequest
     from novel.stages.stage5.body import AnsweredText
 
-    def ask_body(owner, prompt):
+    def ask_body(owner, prompt, validate=None):
         request = ChatRequest(model=model, system='正文写手', user=prompt,
                               reasoning_effort='high', thinking=True,
                               json_mode=False, max_tokens=max_tokens)
-        text, _errors, answer = ask_text_once(session, owner, request)
+        text, _errors, answer = ask_text_once(session, owner, request, validate)
         return AnsweredText(text=text, finish_reason=answer.finish_reason,
                             identity=answer.request_sha256, cached=answer.cached,
                             ref=answer.ref)

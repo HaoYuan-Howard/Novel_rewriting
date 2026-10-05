@@ -62,7 +62,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Callable, Final, NamedTuple
+from typing import Any, Callable, Final, NamedTuple, Sequence
 
 from contracts.artifacts import ARTIFACT_PATHS, STR06_ARTIFACT_RC_VERSIONS
 from novel import run_identity
@@ -96,7 +96,7 @@ from novel.work_units import (
 __all__ = [
     'AdoptionRef', 'CandidateRunContext', 'DurableAnswer', 'ExecutionError', 'ValidationStop',
     'PaidRequestSession', 'PatchLocate', 'PatchTarget', 'PatchedAnswer',
-    'PurchaseRequired', 'RUNTIME_PHASES', 'WORKFLOW_REL',
+    'PurchaseRequired', 'RUNTIME_PHASES', 'UpstreamOwned', 'WORKFLOW_REL',
     'accept_patch_answer', 'ask_json', 'ask_text_once', 'candidate_artifact',
     'candidate_contract_identity', 'format_json_path',
     'candidate_node', 'check_candidate_workflow', 'digest',
@@ -236,6 +236,21 @@ class ValidationStop(ExecutionError):
     """
 
     adoption = None
+
+
+class UpstreamOwned(Exception):
+    """验收回调的类型化结论：回答已耐久，但它的问题归上游 owner——本节点不接受、也不在节点内修订。
+
+    由业务 validate **抛出**，不再以空错误列表冒充通过（RC-54：此前上游优先回派的分支返回 ``[]``
+    以结束接受循环，该 attempt 因此被记成 ``accepted=true``，已回派的候选看起来像已接受）。
+    `ask_json` 把该 attempt 记为 ``accepted=false`` 并带这些问题后**原样上抛**，由节点编排按
+    正式来源登记跨节点回派（`discover_owner_issues`）；它不是执行错误，也不进无进展判定。
+    """
+
+    def __init__(self, errors: Sequence[str], *, context: dict | None = None):
+        self.errors = tuple(str(error) for error in errors)
+        self.context = dict(context or {})
+        super().__init__('；'.join(self.errors) or '问题归上游 owner')
 
 
 class RevisionEvidenceStop(ExecutionError):
@@ -1428,22 +1443,29 @@ def ask_json(session: PaidRequestSession, owner: str, request: ChatRequest,
         raise stop
 
     while True:
-        if targets is not None and not _answers_in_full(answer):
-            merged, passed, fields = accept_patch_answer(
-                answer, targets, wire_dict, validate)
-            data = merged if passed else None
-            errors = list(fields['errors'])
-            if merged is not None:
-                wire_dict = merged
-                patches.append(answer)
+        try:
+            if targets is not None and not _answers_in_full(answer):
+                merged, passed, fields = accept_patch_answer(
+                    answer, targets, wire_dict, validate)
+                data = merged if passed else None
+                errors = list(fields['errors'])
+                if merged is not None:
+                    wire_dict = merged
+                    patches.append(answer)
+                else:
+                    force_full = True
             else:
-                force_full = True
-        else:
-            data, errors, fields = accept_json_answer(answer, validate)
-            base_answer, patches = answer, []
-            previous = (answer.content or '').strip() or (answer.reasoning or '').strip()
-            decoded, _decode_err = _decode_json(previous)
-            wire_dict = decoded if isinstance(decoded, dict) else None
+                data, errors, fields = accept_json_answer(answer, validate)
+                base_answer, patches = answer, []
+                previous = (answer.content or '').strip() or (answer.reasoning or '').strip()
+                decoded, _decode_err = _decode_json(previous)
+                wire_dict = decoded if isinstance(decoded, dict) else None
+        except UpstreamOwned as routed:
+            # 回答已耐久且问题归上游：不接受、不在节点内再问；留一条如实的接受记录后上抛。
+            salvaged = not (answer.content or '').strip() and bool((answer.reasoning or '').strip())
+            session.record_acceptance(answer, 'json', parse='failed', errors=routed.errors,
+                                      salvage='reasoning' if salvaged else 'none', accepted=False)
+            raise
         session.record_acceptance(answer, fields['mode'], parse=fields['parse'],
                                   errors=fields['errors'],
                                   salvage=fields['salvage'],
@@ -1500,14 +1522,26 @@ def ask_json(session: PaidRequestSession, owner: str, request: ChatRequest,
 
 
 def ask_text_once(session: PaidRequestSession,
-                  owner: str, request: ChatRequest) -> tuple[str | None, list[str], DurableAnswer]:
-    """文本语义调用的一次耐久应答：空回答计失败 attempt，由调用方同轮重发。"""
+                  owner: str, request: ChatRequest,
+                  validate: Callable[[str], Sequence[str]] | None = None,
+                  ) -> tuple[str | None, list[str], DurableAnswer]:
+    """文本语义调用的一次耐久应答：空回答计失败 attempt，由调用方同轮重发。
+
+    ``validate`` 是该文本节点的机械校验（判据仍是 stage 的纯函数，Runtime 不识别规则）：
+    给出时，非空回答的校验错误进入接受记录（``accepted=false``、``parse='failed'``），
+    返回的错误列表即这些错误——此前只看「回答非空」就记 ``accepted=true``，被机械闸拒绝
+    的首稿也被记成已接受（RC-54）。不给 validate 时保持原语义（只判空）。
+    """
     answer = session.send(owner, request)
-    errors = [] if answer.text is not None else ['响应为空']
-    session.record_acceptance(answer, mode='text',
-                              parse='ok' if answer.text is not None else 'empty',
-                              errors=tuple(errors), accepted=answer.text is not None)
-    return answer.text, errors, answer
+    text = answer.text
+    errors = [] if text is not None else ['响应为空']
+    parse = 'ok' if text is not None else 'empty'
+    if text is not None and validate is not None:
+        errors = [str(error) for error in validate(text)]
+        parse = 'failed' if errors else 'ok'
+    session.record_acceptance(answer, mode='text', parse=parse, errors=tuple(errors),
+                              accepted=text is not None and not errors)
+    return text, errors, answer
 
 
 def _content_sha256(content: str | None) -> str | None:

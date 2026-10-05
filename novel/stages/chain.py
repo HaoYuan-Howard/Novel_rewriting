@@ -68,7 +68,7 @@ from novel.llm.paid_requests import (
     ExecutionError, PaidRequestSession, PurchaseRequired, AdoptionRef, digest,
     ask_json, ask_text_once, init_or_resume_candidate_workflow, purchased_baseline,
     semantic_owner_unit,
-    ValidationStop,
+    UpstreamOwned, ValidationStop,
 )
 from novel.llm.transport import ChatRequest, DeepSeekTransport
 from novel.llm.budget import count_text_tokens
@@ -174,8 +174,10 @@ class ChainContext:
 
     repository: Any
     ask: Callable[[str, str, Callable], tuple[Any, Any]]
-    ask_text: Callable[[str, str], tuple[str | None, list[str], Any]]
-    ask_body: Callable[[str, str], AnsweredText]
+    #: 文本节点回调 `(owner, prompt[, validate])`：`validate` 是该节点的机械校验（stage 纯函数），
+    #: 付费边界据此如实记录接受结果（RC-54）；缺省＝只判空回答。
+    ask_text: Callable[..., tuple[str | None, list[str], Any]]
+    ask_body: Callable[..., AnsweredText]
     chapters: list[dict]
     #: 章前文字（源引子）：Stage6 退役后 hook_copy 的唯一消费者是 Stage2.source
     # （质量改进批次 C）。空字符串＝显式无引子；进 run 级身份与 e00 证据切分。
@@ -801,26 +803,20 @@ def run_body_design(ctx: ChainContext) -> dict:
         last_inspection = inspection = inspect(w)
         repairs = repairs_for(inspection)
         # 非Design责任的候选留给薄编排处理；validator不落issue、不偷改输入。
-        # 此处只接受响应用于回派，并非接受正式Design。全部预检结果随回派留证；
-        # 上游优先，禁止在已知上游错误下继续购买Design自修。
+        # 上游优先，禁止在已知上游错误下继续购买Design自修：回答已耐久但**不被接受**——
+        # 抛类型化信号（RC-54），由 ask_json 记 accepted=false 与这些问题后上抛，下方按
+        # 正式来源登记回派；不再返回空列表冒充通过。全部预检结果随回派留证。
         if repairs and any(r.owner != 'design' or r.action == 'stop' for r in repairs):
-            return []
+            raise UpstreamOwned(
+                inspection.feedback(list(inspection.errors) + [
+                    ValidationMessage(r.issue.message, r.issue.context['material_identity'])
+                    for r in repairs]))
         return inspection.feedback(list(inspection.errors) + [
             ValidationMessage(r.issue.message, r.issue.context['material_identity']) for r in repairs])
 
-    try:
-        # CS-F1 局部修订（RC-47）：判据已在判定处给每条问题带 wire 路径；可全部定位时
-        # 只把最小完整父项发回返修，合并后重跑**完整**候选预检；有任一问题无法定位
-        # （全局覆盖闸、上游派生材料等）自动退整份返修，不静默漏项。
-        dw, design_ref = ctx.ask('design', design_prompt, validate,
-                                 patch=locate_design_patches)
-    except ValidationStop as exc:
-        if last_inspection is not None:
-            exc.context['candidate_preflight'] = last_inspection.report()
-        raise
-    inspection = inspect(dw)
-    repairs = repairs_for(inspection)
-    if repairs:
+    def route_upstream(inspection) -> None:
+        """把候选的上游归属问题登记成回派；任何情形都抛出，不放行半份候选。"""
+        repairs = repairs_for(inspection)
         # 上游输入将变化时，不为即将过期的Design诊断提前消耗回派轮数。
         # 全部问题仍在同一报告中；上游修订后重新计算Design自己的问题。
         upstream = [r for r in repairs if r.owner != 'design' or r.action == 'stop']
@@ -830,6 +826,25 @@ def run_body_design(ctx: ChainContext) -> dict:
         except (OwnerRevisionRequired, OwnerRevisionStop, MechanicalDefectStop) as exc:
             exc.context['candidate_preflight'] = inspection.report()
             raise
+        stop = MechanicalDefectStop('Design候选的上游归属问题没有登记出回派',
+                                    node='str06.stage4.body_design',
+                                    issues=tuple(inspection.feedback(list(inspection.errors))))
+        stop.context['candidate_preflight'] = inspection.report()
+        raise stop
+
+    try:
+        # CS-F1 局部修订（RC-47）：判据已在判定处给每条问题带 wire 路径；可全部定位时
+        # 只把最小完整父项发回返修，合并后重跑**完整**候选预检；有任一问题无法定位
+        # （全局覆盖闸、上游派生材料等）自动退整份返修，不静默漏项。
+        dw, design_ref = ctx.ask('design', design_prompt, validate,
+                                 patch=locate_design_patches)
+    except UpstreamOwned:
+        route_upstream(last_inspection)
+    except ValidationStop as exc:
+        if last_inspection is not None:
+            exc.context['candidate_preflight'] = last_inspection.report()
+        raise
+    inspection = inspect(dw)
     if not inspection.passed:
         stop = MechanicalDefectStop('Design候选完整预检失败', node='str06.stage4.body_design',
                                    issues=tuple(inspection.feedback(list(inspection.errors))))
@@ -1157,17 +1172,22 @@ def _write_hook(hook_context, ask_text) -> tuple[str | None, list[dict], Any]:
     errors: list[str] = []
     ref = None
     prose_seen = False
+
+    def validate(text: str) -> list[str]:
+        return validate_hook_prose(text, hook_context)
+
     for attempt in range(1 + MAX_REWRITES):
         prompt = (build_hook_user_prompt(hook_context) if not prose_seen
                   else build_rewrite_user_prompt(hook_context, errors))
-        prose, response_errors, answered_ref = ask_text('hook_writer', prompt)
+        # 同一份机械校验也交给付费边界：被拒首稿的接受记录如实记 accepted=false（RC-54）。
+        prose, response_errors, answered_ref = ask_text('hook_writer', prompt, validate)
         ref = answered_ref if answered_ref is not None else ref
         if prose is None:
             errors = response_errors or ['响应为空']
             attempts.append({'attempt': attempt + 1, 'chars': 0, 'errors': errors})
             continue
         prose_seen = True
-        errors = validate_hook_prose(prose, hook_context)
+        errors = validate(prose)
         attempts.append({'attempt': attempt + 1, 'chars': count_non_whitespace_chars(prose), 'errors': errors})
         if not errors:
             return prose, attempts, ref
@@ -1294,7 +1314,8 @@ def _write_and_commit_chapter(ctx: ChainContext, packet, ordinal: int):
     repository = ctx.repository
     outcome = write_chapter(
         packet=packet,
-        ask=lambda prompt: ctx.ask_body(f'body_{_chapter_ordinal(ordinal)}', prompt))
+        ask=lambda prompt, validate: ctx.ask_body(
+            f'body_{_chapter_ordinal(ordinal)}', prompt, validate))
     repository.write(f'runtime/body_attempts_{_chapter_ordinal(ordinal)}.json',
                      {'attempts': [a._asdict() for a in outcome.attempts]})
     if outcome.prose is None or outcome.receipt is None:
@@ -1623,12 +1644,22 @@ def run_chain(ctx: ChainContext, *, through: str = 'stage4',
         if through == 'stage5' and not accepted_body:
             status = 'body_partial'
         if through == 'stage7':
-            assembly = report.get('assembly', {})
-            status = 'delivered' if assembly.get('status') == 'ready' else 'assembly_not_ready'
-            accepted_body = bool(assembly.get('status') == 'ready')
+            status, accepted_body = _delivery_terminal(report.get('assembly', {}))
+        report['accepted_body'] = accepted_body
+        return report, status, accepted_body
+    if 'str06.stage7.assemble' in selected and 'assembly' in report:
+        # 单节点路径跑了交付组装：终态与 accepted_body 取交付报告，与整链同源（RC-54）。
+        # 此前恒记 node_run／accepted_body=false，已交付的书在状态里仍是未接受。
+        status, accepted_body = _delivery_terminal(report['assembly'])
         report['accepted_body'] = accepted_body
         return report, status, accepted_body
     return report, 'node_run', accepted_body
+
+
+def _delivery_terminal(assembly: dict) -> tuple[str, bool]:
+    """交付报告的 assembly 段 → （run 终态, accepted_body）；整链与单节点路径的唯一判定。"""
+    ready = assembly.get('status') == 'ready'
+    return ('delivered' if ready else 'assembly_not_ready'), ready
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -2253,7 +2284,7 @@ def execute(args) -> None:
             released_surfaces=packet.chapter.released_surfaces, target_chars=contract.target_chars,
             band_low=contract.band_low, band_high=contract.band_high))
 
-    def ask_text(owner, prompt):
+    def ask_text(owner, prompt, validate=None):
         path = wire_path(owner)
         if path is not None:
             raw, ref = adopt(owner, path, lambda w: text_validation(owner, w), system=HOOK_WRITER_SYSTEM,
@@ -2269,11 +2300,11 @@ def execute(args) -> None:
             data, ref = patch
             return data['prose'], [], ref
         request, selection = sample_request(owner, request)
-        text, errors, answer = ask_text_once(session, owner, request)
+        text, errors, answer = ask_text_once(session, owner, request, validate)
         return text, errors, answer.adoption_ref(
             prompts={'system': HOOK_WRITER_SYSTEM, 'user': prompt})
 
-    def ask_body(owner, prompt):
+    def ask_body(owner, prompt, validate=None):
         path = wire_path(owner)
         if path is not None:
             raw, ref = adopt(owner, path, lambda w: text_validation(owner, w), system=BODY_WRITER_SYSTEM,
@@ -2291,7 +2322,7 @@ def execute(args) -> None:
             return AnsweredText(text=data['prose'], finish_reason=None,
                                 identity=ref.request_sha256, cached=True, ref=ref)
         request, selection = sample_request(owner, request)
-        text, errors, answer = ask_text_once(session, owner, request)
+        text, errors, answer = ask_text_once(session, owner, request, validate)
         return AnsweredText(text=text, finish_reason=answer.finish_reason,
                             identity=answer.request_sha256, cached=answer.cached,
                             ref=answer.adoption_ref(

@@ -114,15 +114,39 @@ def _messages(issues: tuple[OwnerIssueV1, ...] | list[OwnerIssueV1]) -> list[str
             else f'{issue.code}：{issue.message}' for issue in issues]
 
 
+def _issue_key(issue: OwnerIssueV1) -> tuple[str, str, str]:
+    """问题的稳定身份：（规则码，item，材料身份或存量判据身份／消息）；文案与出现次数不参与。"""
+    import json
+
+    detail = (json.dumps(issue.context['material_identity'], ensure_ascii=False, sort_keys=True)
+              if 'material_identity' in issue.context else
+              issue.context.get('validation_identity', issue.message))
+    return issue.code, issue.item, detail
+
+
+def _distinct(issues: tuple[OwnerIssueV1, ...] | list[OwnerIssueV1]) -> tuple[OwnerIssueV1, ...]:
+    """按稳定身份去重（保序、留首）：同一材料问题在多处命中只算一个问题。
+
+    此前每处命中各占一行：同一个根因的 N 处出现既写进回派账、又逐行进上游返修提示词，
+    反馈越长越不聚焦（csf4 根的 Design 反馈 321 行实为一个根因）。身份与 `_fingerprint`
+    同一把尺，所以去重不改变无进展判定。
+    """
+    seen: set[tuple[str, str, str]] = set()
+    kept: list[OwnerIssueV1] = []
+    for issue in issues:
+        key = _issue_key(issue)
+        if key not in seen:
+            seen.add(key)
+            kept.append(issue)
+    return tuple(kept)
+
+
 def _fingerprint(issues: tuple[OwnerIssueV1, ...] | list[OwnerIssueV1]) -> str:
     """问题集摘要：稳定材料身份或存量消息去重排序后的 SHA-256（纯函数）。"""
     import hashlib
     import json
 
-    material = sorted({(i.code, i.item, json.dumps(i.context['material_identity'],
-                                                ensure_ascii=False, sort_keys=True)
-                       if 'material_identity' in i.context else
-                       i.context.get('validation_identity', i.message)) for i in issues})
+    material = sorted({_issue_key(i) for i in issues})
     return hashlib.sha256(json.dumps(material, ensure_ascii=False,
                                      separators=(',', ':')).encode('utf-8')
                           ).hexdigest()
@@ -248,7 +272,7 @@ def discover_owner_issues(repository, *, raised_by: str, owner: str, node: str,
     """
     if not issues:
         raise ValueError('discover_owner_issues 要求非空 issue 清单（空清单不是问题）')
-    issues = tuple(issues)
+    issues = _distinct(issues)
     existing = read_owner_issue_file(repository, owner)
     fingerprint = _fingerprint(issues)
     against_sha256 = owner_product_digest(repository, owner)

@@ -134,7 +134,7 @@ def test_stage2_stage4_repository_replay_and_writer_consumer(tmp_path):
         assert not validate(data), (owner, validate(data))
         requests.append((owner, prompt))
         return data, synthetic_ref(owner, prompt)
-    def ask_text(owner, prompt):
+    def ask_text(owner, prompt, validate=None):
         raise AssertionError('stage4 干跑不应调用文本 owner')
     repo = Str06Repository(tmp_path / 'book')
     repo.attach_context(make_context(tmp_path / 'book', ledger=CostLedger(path=None)))
