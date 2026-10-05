@@ -134,20 +134,25 @@ STR06_MIGRATION_DEPENDENCY_RULES: Final[tuple[DependencyRule, ...]] = (
         forbids=('novel.llm', 'novel.llm.*', 'novel.stages.common')
         + tuple(m for m in _STAGE457 if m != 'novel.stages.stage4.hook_context')),
     # hook（Stage4 hook_design 的确定性臂与唯一 publisher）禁止 LLM 与
-    # Stage5 写手／Stage7 模块，也不依赖 Stage4 编译面。
+    # Stage5 写手／Stage7 模块，也不依赖 Stage4 编译面。design_paths 只承载
+    # 判据问题的构造约定（wire 路径＋稳定身份，仅依赖 novel.core.validation），
+    # hook 的错误据此接条目返修（CS-F1），不是生产或编译模块。
     DependencyRule(
         module='novel.stages.stage4.hook',
         allows=('contracts.schema.*', 'novel.core.name_materials',
-                'novel.stages.stage4.hook_validation'),
+                'novel.stages.stage4.hook_validation',
+                'novel.stages.stage4.design_paths'),
         forbids=('novel.llm', 'novel.llm.*', 'novel.stages.common',
                  'novel.stages.stage4.compile', 'novel.stages.stage4.book_ir',
                  'novel.stages.stage4.fold', 'novel.stages.stage4.guard',
                  'novel.stages.stage5.hook_writer', 'novel.stages.stage7.naming',
                  'novel.stages.stage7.assembly')),
-    # Hook validator只读规范payload/canonical输入；禁止依赖任何生产或编译模块。
+    # Hook validator只读规范payload/canonical输入；禁止依赖任何生产或编译模块
+    # （design_paths 是判据问题的构造约定，同上不属生产/编译面）。
     DependencyRule(
         module='novel.stages.stage4.hook_validation',
-        allows=('contracts.schema.*', 'novel.core.name_materials'),
+        allows=('contracts.schema.*', 'novel.core.name_materials',
+                'novel.stages.stage4.design_paths'),
         forbids=('novel.llm', 'novel.llm.*', 'novel.stages.common',
                  'novel.stages.stage4.fold', 'novel.stages.stage4.guard') + _STAGE457),
     # hook_writer 只能消费 hook／receipt 契约：禁止 LLM 与 Stage2/4/7 模块。

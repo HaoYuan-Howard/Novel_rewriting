@@ -889,7 +889,8 @@ def run_hook_design(ctx: ChainContext) -> dict:
         return (None, errors) if errors else (hook, [])
 
     hw, hook_design_ref = ctx.ask('hook_design', hook_design_prompt,
-                                  lambda w: hook_design_compile(w)[1])
+                                  lambda w: hook_design_compile(w)[1],
+                                  patch=locate_design_patches)
     hook, errors = hook_design_compile(hw)
     if errors:
         raise ValueError(errors)

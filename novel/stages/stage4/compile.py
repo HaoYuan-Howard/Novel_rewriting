@@ -28,7 +28,7 @@ def compile_execution_plan(
     graph: BodyDesign, binding: SemanticBinding,
 ) -> tuple[ExecutionPlan | None, list[str]]:
     errors = check_binding_beat_refs(binding, graph)
-    errors.extend(confirmation_closure_errors(graph))
+    errors.extend(v.message for v in confirmation_closure_errors(graph))
     obligations = {o.obligation_id: o for o in binding.obligations}
     entries = {e.obligation_id: e for e in binding.entries}
     returned = {e.obligation_id for e in binding.unbound}
@@ -90,7 +90,7 @@ def compile_execution_plan(
     closure = resolve_design_reads(graph)
     scene_establishments = closure.establishments
     resolved_edges = closure.dependencies
-    errors.extend(closure.errors)
+    errors.extend(e.message for e in closure.errors)
     edges |= set(resolved_edges)
     if errors:
         return None, errors

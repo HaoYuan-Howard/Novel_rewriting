@@ -24,7 +24,7 @@ Gherkin 使用 [Cucumber 官方语法](https://cucumber.io/docs/gherkin/referenc
 | 同上 | RC-37／39 | **仅结构层已实现**：结构检查只报引用与模式的实际结果，语义对应未运行即保持unver；局部语义核验及其源盲请求组装属CS-F3（先标定、后启用），**尚未实现** |
 | 同上 | RC-40～43 | 已实现Writer路径（2026-10-04，IR rc16／renderer v10）：只投影已证明唯一绑定人物的完整登记称谓，短姓／未登记表达不猜人物，留痕可观测，Design自有文本冲突不由compiler代选；`tests/test_str06_name_projection.py`、`tests/test_str06_material_repair.py`（归因仍按原字段）、`tests/test_str06_r10b_writer_packet.py`。**Hook材料尚未投影**，Stage7无需改动（新称谓创作不在本批，RC-42只证拒绝未登记别名） |
 | 同上 | RC-44～45 | `tests/test_str06_candidate_preflight.py`：同一候选聚合自身及继承材料问题，真实接受入口上游优先且失败不发布，免费恢复与已有Hook复验，依赖缺失明确未运行；验证记录见提交`edf965d7`说明及重置前（`eb5f0d5a`）的REQUIREMENTS |
-| 同上 | RC-47 | 已实现（2026-10-04）：Design错误在判定处带wire路径，最小完整父项／耦合字段合并／替换不重叠，合并后重跑完整预检，无法定位退整份；`tests/test_str06_design_patch.py`（定位策略纯函数＋真实`patches`回答的stage用例）、`tests/test_str06_product_entry.py`（真实子进程）。未转换路径的错误类（读取／确认闭合、全局覆盖闸等）仍整份修订 |
+| 同上 | RC-47 | 已实现（2026-10-04；2026-10-05 CS-F1 收口）：Design错误在判定处带wire路径，最小完整父项／耦合字段合并／替换不重叠，合并后重跑完整预检，无法定位退整份；读取闭合→read行、确认闭合→初始行／know行（带结构化位置的判据在`read_closure`），Hook判据错误（材料、起笔事实、称谓释放、位置引用，含禁止揭示×材料的双侧路径）同约定接条目返修——Hook与Design共用`design_paths`的构造约定与定位器；`tests/test_str06_design_patch.py`（定位策略纯函数＋真实`patches`回答的stage用例，含读取闭合read行返修与Hook材料条目返修）、`tests/test_str06_product_entry.py`（真实子进程）。仍整份修订：全局覆盖闸与无路径错误类（缺省标注的责任拍须模型选择，不可条目定位） |
 | 同上 | RC-46／48／49 | 责任归因的语义面、版本恢复和分项成本验收；目标行为，未绑定绿证据前不得宣称实现 |
 | [计量与对照](../specs/cost_accounting.feature) | CU-01～06 | provider usage解析、新购和缺账恢复、缓存去重、只读历史补证 |
 | 同上 | CU-07～10 | 必要输入送达、精确请求身份、分节点配置对照、可比成本报告 |

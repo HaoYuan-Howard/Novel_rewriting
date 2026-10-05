@@ -92,7 +92,8 @@
         "test_coupled_fields_in_one_beat_merge_to_the_whole_beat": "unit_contract",
         "test_nested_paths_fold_into_the_outer_replacement_without_overlap": "unit_contract",
         "test_missing_keys_climb_to_the_nearest_existing_ancestor_and_unlocatable_means_full_revision": "unit_contract",
-        "test_every_error_object_is_returned_so_the_ask_loop_can_check_full_coverage": "unit_contract"
+        "test_every_error_object_is_returned_so_the_ask_loop_can_check_full_coverage": "unit_contract",
+        "test_read_and_confirm_closure_errors_carry_wire_paths_for_item_revision": "unit_contract"
       }
     },
     "tests/test_str06_material_repair.py": {

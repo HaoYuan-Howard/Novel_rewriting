@@ -1145,6 +1145,19 @@ def pending_reader_confirmations(
     return tuple(items)
 
 
+class ReadViewError(NamedTuple):
+    """一条读取解析违例：判据码＋场内读取行号＋消息。
+
+    行号是消费面定位的稳定抓手（wire 路径按协议补：v8 wire 的 reads 行与
+    canonical state_reads 同序，`stage4/read_closure` 据此接局部修订）；
+    common 层不知道 wire 协议，不在此构造 ValidationIssue（I-05）。
+    """
+
+    code: str
+    read: int
+    message: str
+
+
 class SceneReadViews(NamedTuple):
     """已声明状态读取的解析结果（R2，AUD-03）：入场视图＋拍级挂拍值＋解析来源＋错误。
 
@@ -1157,9 +1170,9 @@ class SceneReadViews(NamedTuple):
 
     entry_state: tuple[StateEntry, ...]
     entry_knowledge: tuple[KnowledgeEntry, ...]
-    beat_reads: dict[str, tuple['StateEntry | KnowledgeEntry', ...]]
+    beat_reads: dict[str, tuple[StateEntry | KnowledgeEntry, ...]]
     read_anchors: tuple[str, ...]
-    errors: list[str]
+    errors: list[ReadViewError]
 
 
 def scene_read_views(*, scene, establishments: tuple[Establishment, ...],
@@ -1197,16 +1210,18 @@ def scene_read_views(*, scene, establishments: tuple[Establishment, ...],
     knowledge: dict[tuple, KnowledgeEntry] = {}
     beat_reads: dict[str, list[StateEntry | KnowledgeEntry]] = {}
     read_anchors: list[str] = []
-    errors: list[str] = []
-    for read in scene.state_reads:
+    errors: list[ReadViewError] = []
+    for read_k, read in enumerate(scene.state_reads):
         if read.at is None:
             view_state, view_knowledge = entry_state, entry_knowledge
             where = f'{scene.scene_id}（入场）'
         else:
             idx = beat_order.get(read.at)
             if idx is None:
-                errors.append(f'{scene.scene_id} 的读取定位 {read.at!r} 不是本场真实拍'
-                              '（章闭包；返回 Design 修复）')
+                errors.append(ReadViewError(
+                    'design_read_anchor', read_k,
+                    f'{scene.scene_id} 的读取定位 {read.at!r} 不是本场真实拍'
+                    '（章闭包；返回 Design 修复）'))
                 continue
             changes = [c for i in range(idx) for c in by_index.get(i, ())]
             view = folded_prefix.with_scene_changes(scene.scene_id, changes)
@@ -1220,12 +1235,16 @@ def scene_read_views(*, scene, establishments: tuple[Establishment, ...],
             probe = read.address()
             found = next((e for e in view_state if e.address() == probe), None)
         if found is None:
-            errors.append(f'{where} 消费了未建立状态：{read.key}；读取必须定位到'
-                          '事实建立之后（未建立或作用域已失效；返回 Design 修复）')
+            errors.append(ReadViewError(
+                'design_read_unestablished', read_k,
+                f'{where} 消费了未建立状态：{read.key}；读取必须定位到'
+                '事实建立之后（未建立或作用域已失效；返回 Design 修复）'))
             continue
         if found.status == 'unknown':
-            errors.append(f'{where} 消费状态为 unknown；不得当作通过'
-                          '（unknown 初态垫底毒化 fold，F5e 反例）')
+            errors.append(ReadViewError(
+                'design_read_unknown', read_k,
+                f'{where} 消费状态为 unknown；不得当作通过'
+                '（unknown 初态垫底毒化 fold，F5e 反例）'))
             continue
         # 实际解析来源（R2 依赖边的生成材料）：该读取在其定位点解析到的建立锚。
         read_anchors.append(found.established_by)
@@ -1547,7 +1566,7 @@ def project_context(*, scene_id: str, graph: BodyDesign,
     state, knowledge, beat_reads = (
         views.entry_state, views.entry_knowledge, views.beat_reads)
     if views.errors:
-        raise ValueError('；'.join(views.errors))
+        raise ValueError('；'.join(e.message for e in views.errors))
     # 编译器补齐的入场基线（R2.3）：按参与者机械补入；R10b 起写手面经
     # `narrow_background` 收窄（书级初态立足点＋后文仍被消费的当前状态）。
     background_state, background_knowledge = participant_background(

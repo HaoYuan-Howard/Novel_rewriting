@@ -764,11 +764,32 @@ def inspect_body_design(
                         f'（{scene.scene_id}#{beat.beat_id} 的 {thread.ref}）',
                         'design_unknown_char', where, where))
     _check_expression_refs(body, expression_requirements, errors, locatable=locatable)
-    errors.extend(confirmation_closure_errors(body))
+    # 读取/确认闭合（CS-F1 局部修订收口）：违例在判定处带结构化位置，这里映射
+    # 成可编辑 wire 路径——初始行（initial_state[k]）或该拍内第 m 个带 confirms
+    # 的 know 行（canonical 与 v8 wire 同序派发，实际行号按 wire 侧取）。
+    # 非 v8 输入没有可编辑 wire：同一份报告、无路径，退整份返修。
+    for violation in confirmation_closure_errors(body):
+        paths: tuple[tuple, ...] = ()
+        if locatable:
+            if violation.initial is not None:
+                paths = (('initial_state', violation.initial),)
+            else:
+                know = (v8_wire['scenes'][violation.scene]['beats'][violation.beat]
+                        .get('know') or [])
+                confirm_rows = [i for i, row in enumerate(know)
+                                if isinstance(row, dict) and row.get('confirms') is not None]
+                if violation.confirm_ordinal < len(confirm_rows):
+                    paths = (('scenes', violation.scene, 'beats', violation.beat,
+                              'know', confirm_rows[violation.confirm_ordinal]),)
+        errors.append(issue(violation.message, 'design_confirm_unestablished',
+                            violation.location, *paths))
     if brief is not None:
         _check_lock_acceptance(body, brief, errors, marks=marks,
                                obligations=obligations, real_sites=real_sites)
-    errors.extend(resolve_design_reads(body).errors)
+    for err in resolve_design_reads(body).errors:
+        errors.append(issue(err.message, err.code,
+                            (body.scenes[err.scene].scene_id, err.read),
+                            ('scenes', err.scene, 'reads', err.read)))
     if name_projection is not None:
         errors.extend(validate_design_materials(
             body, projection=name_projection, known_char_ids=known_char_ids,

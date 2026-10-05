@@ -1,9 +1,10 @@
-"""Design wire 的局部修订定位（CS-F1，RC-46/47）：错误带 wire 路径，按最小完整父项发起条目返修。
+"""Design／Hook wire 的局部修订定位（CS-F1，RC-46/47）：错误带 wire 路径，按最小完整父项发起条目返修。
 
 【为什么错误要在判定处带路径】修订控制不得从展示文案猜位置（`novel/core/validation.py`）。
 本模块只定义构造与消费约定：判据在发现问题的地方生成 `ValidationIssue`，规则码与稳定
-位置属身份，`context['wire_paths']` 是责任方（Design）可编辑的 v8 wire JSON 路径；
-定位器只读这些结构化字段，不解析任何错误字符串。
+位置属身份，`context['wire_paths']` 是责任方可编辑的 wire JSON 路径；定位器只读这些
+结构化字段，不解析任何错误字符串。Design（v8 wire）与 Hook（stage4-hook-design-v1
+wire）共用同一约定与同一定位器——Hook 错误不带拍结构，耦合合并自然不触发。
 
 【定位策略】（纯函数、确定性、不改 wire）
 · 路径只指向**最小完整父项**：叶子标量（如一条 `state` 里的 `val`）升到它所在的数组

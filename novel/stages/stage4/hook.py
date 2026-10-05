@@ -28,6 +28,7 @@ from contracts.schema.design import BodyDesign, PresentationGraph
 from contracts.schema.hook import HookDesign
 from contracts.schema.source import NameProjection, NameStructure
 from contracts.schema.workflow import STAGE4_HOOK_DESIGN_PROTOCOL
+from novel.stages.stage4.design_paths import design_issue
 from novel.stages.stage4.hook_validation import validate_hook_payload
 
 _WIRE_KEYS = frozenset({
@@ -37,19 +38,24 @@ _WIRE_KEYS = frozenset({
 Init = 'init'
 
 
-def _resolve_ref(raw: Any, where: str, errors: list[str]) -> str | None:
+def _resolve_ref(raw: Any, where: str, errors: list[str],
+                 path: tuple = ()) -> str | None:
     """wire 位置引用 → canonical 复合引用（B3 前半：模型不写复合引用，I-21）。
 
     `'init'` 原样保留；否则必须是 {"scene": scene_id, "beat": beat_id} 分量
-    （闭集内单 ID），compiler 组成 `场景#拍`。"""
+    （闭集内单 ID），compiler 组成 `场景#拍`。形状非法的问题带该条目的 wire
+    路径（CS-F1：条目返修只发该条，不退整份）。"""
     if raw == Init:
         return Init
     if isinstance(raw, dict) and set(raw) == {'scene', 'beat'}:
         scene, beat = raw['scene'], raw['beat']
         if isinstance(scene, str) and scene and isinstance(beat, str) and beat:
             return f'{scene}#{beat}'
-    errors.append(f'{where} 的位置引用形状非法：{raw!r}'
-                  f'（应为 "init" 或 {{"scene": 场景id, "beat": 拍id}}）')
+    errors.append(design_issue(
+        f'{where} 的位置引用形状非法：{raw!r}'
+        f'（应为 "init" 或 {{"scene": 场景id, "beat": 拍id}}）',
+        code='hook_ref_shape', location=(*path, 'ref'),
+        paths=(path,) if path else ()))
     return None
 
 
@@ -76,16 +82,19 @@ def assemble_hook_design(
         return None, errors
     data = deepcopy(wire)
     data.pop('protocol_version', None)  # wire 协议版本不进 canonical
-    for item in data.get('materials') or []:
-        ref = _resolve_ref(item.get('beat_ref'), 'materials', errors)
+    for k, item in enumerate(data.get('materials') or []):
+        ref = _resolve_ref(item.get('beat_ref'), f'materials[{k}]', errors,
+                           path=('materials', k))
         if ref is not None:
             item['beat_ref'] = ref
-    for item in data.get('opening_facts') or []:
-        ref = _resolve_ref(item.get('ref'), 'opening_facts', errors)
+    for k, item in enumerate(data.get('opening_facts') or []):
+        ref = _resolve_ref(item.get('ref'), f'opening_facts[{k}]', errors,
+                           path=('opening_facts', k))
         if ref is not None:
             item['ref'] = ref
-    for item in data.get('forbidden_reveals') or []:
-        ref = _resolve_ref(item.get('ref'), 'forbidden_reveals', errors)
+    for k, item in enumerate(data.get('forbidden_reveals') or []):
+        ref = _resolve_ref(item.get('ref'), f'forbidden_reveals[{k}]', errors,
+                           path=('forbidden_reveals', k))
         if ref is not None:
             item['ref'] = ref
     if errors:
