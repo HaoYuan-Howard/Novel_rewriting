@@ -684,3 +684,120 @@ def test_committed_noop_dispatch_cannot_reopen_as_pending(tmp_path):
         discover_owner_issues(repo, raised_by='str06.stage2.compile', owner='associate',
                               node='str06.stage2.associate', issues=issues)
     assert read_owner_issue_file(repo, 'associate').rounds_total == 1
+
+
+# ── CS-H H1b：三个中断窗口用现有证据继续（RC-55） ────────────────────────────
+
+def test_answer_stored_but_registry_not_updated_recovers_without_repurchase(tmp_path):
+    """窗口①：回答已存证而候选登记未更新 → 同身份重放零新购、登记从账重建。"""
+    from novel.stages import candidates
+    from novel.stages.chain import run_body_design
+    from tests.test_str06_candidate_preflight import _design_ctx, _prepare, _reopened_session
+
+    ctx, wires, transport, _ = _prepare(tmp_path)
+    repo = ctx.repository
+    session = _reopened_session(repo, transport)
+    run_body_design(_design_ctx(ctx, session))
+    paid_rows = [r for r in _ledger_of(repo, 'design') if not r.get('cached')]
+    design_bytes = repo.path('stage4/design/body_design.json').read_bytes()
+
+    # 崩溃窗口：候选登记没写上（回答与产物都在盘上）
+    repo.path(candidates.candidates_rel('design')).unlink()
+    run_body_design(_design_ctx(ctx, session))
+    assert transport.calls.count('design') == 1, '同请求身份免费重放，不重复购买'
+    assert [r for r in _ledger_of(repo, 'design') if not r.get('cached')] == paid_rows
+    assert repo.path('stage4/design/body_design.json').read_bytes() == design_bytes, \
+        '不重复发布另一份接受版本'
+    registry = candidates.load_registry(repo, 'design')
+    assert registry is not None and len(registry.candidates) == 1, '登记从账重建'
+
+
+def _ledger_of(repo, purpose):
+    import json as _json
+    path = repo.root.parent / '_service' / 'ledger.jsonl'
+    return [_json.loads(line) for line in path.read_text(encoding='utf-8').splitlines()
+            if line.strip() and _json.loads(line).get('purpose') == purpose]
+
+
+def test_patch_verified_but_not_published_recovers_without_repurchase(tmp_path):
+    """窗口②：补丁已验证而未发布 → 重启后发布同一候选，零新购、无第二份付费行。"""
+    from novel.stages.chain import run_body_design
+    from tests.test_str06_candidate_preflight import _design_ctx, _prepare, _reopened_session
+
+    ctx, wires, transport, _ = _prepare(tmp_path)
+    repo = ctx.repository
+    session = _reopened_session(repo, transport)
+
+    original_publish = repo.publish
+    state = {'crashed': False}
+
+    def crashing_publish(items):
+        if not state['crashed']:
+            state['crashed'] = True
+            raise RuntimeError('模拟崩溃：产物已验、发布前中断')
+        return original_publish(items)
+
+    repo.publish = crashing_publish
+    with pytest.raises(RuntimeError, match='模拟崩溃'):
+        run_body_design(_design_ctx(ctx, session))
+    repo.publish = original_publish
+    paid_rows = [r for r in _ledger_of(repo, 'design') if not r.get('cached')]
+    assert len(paid_rows) == 1, '崩溃前只买了一份'
+
+    run_body_design(_design_ctx(ctx, session))
+    assert transport.calls.count('design') == 1, '重启零新购：同身份命中已购回答'
+    assert [r for r in _ledger_of(repo, 'design') if not r.get('cached')] == paid_rows, \
+        '不重复购买，也不把缓存行洗成实付'
+    design = repo.read_model('stage4/design/body_design.json')
+    assert design.scenes, '恢复后同一候选发布成功'
+
+
+def test_upstream_revised_downstream_unverified_reruns_free_and_keeps_issue_honest(tmp_path):
+    """窗口③：上游已修订而下游未复验 → 免费复验新版本，不沿用失效的接受记录。"""
+    from novel.stages.chain import run_body_design, run_compile_stage4
+    from novel.stages.owner_revision import (
+        OwnerRevisionRequired, discover_owner_issues, read_owner_issue_file,
+    )
+    from tests.str06_facilities import republish_checkpoint
+    from tests.test_str06_candidate_preflight import (
+        _design_ctx, _lineage_only_mutation, _prepare, _reopened_session,
+    )
+
+    ctx, wires, transport, _ = _prepare(tmp_path)
+    repo = ctx.repository
+    session = _reopened_session(repo, transport)
+    run_body_design(_design_ctx(ctx, session))
+    from novel.stages.chain import run_hook_design
+    run_hook_design(ctx)
+    old_digest = repo.file_sha256(repo.path('stage4/design/body_design.json'))
+
+    # 下游曾对**旧版本**登记过一条 open 回派（必须按当前产物复核，不能凭旧记录放行）
+    from contracts.schema.workflow import OwnerIssueV1
+    issue = OwnerIssueV1(code='must_keep_unbound', item='book', message='必保义务未承载',
+                         context={'unbound': {'owner': 'design'}})
+    with pytest.raises(OwnerRevisionRequired):
+        discover_owner_issues(repo, raised_by='str06.stage4.compile', owner='design',
+                              node='str06.stage4.body_design', issues=[issue])
+    record = read_owner_issue_file(repo, 'design')
+    assert record.status == 'open' and record.against_sha256 == old_digest
+
+    # 上游修订 → design 免费沿用到新版本（新接受版本，不是旧版本改字节）
+    republish_checkpoint(repo, _lineage_only_mutation)
+    result = run_body_design(_design_ctx(ctx, session))
+    assert result['reuse']['action'] == 'carried_forward'
+    still = read_owner_issue_file(repo, 'design')
+    assert still.status == 'open', '沿用本身不清账：下游必须自己复验'
+    assert still.against_sha256 == old_digest
+
+    # 下游确定性复验：design 换版本后其消费者（hook_design→compile）按**新**
+    # 字节重跑——不沿用失效的接受记录；design 本身零新购，清账只由确定性节点做。
+    from novel.stages.chain import run_hook_design
+    run_hook_design(ctx)
+    assert transport.calls.count('design') == 1, 'design 不因下游复验重新购买'
+    run_compile_stage4(ctx)
+    cleared = read_owner_issue_file(repo, 'design')
+    assert cleared.status == 'resolved', '下游复验通过才置 resolved'
+    assert cleared.against_sha256 == old_digest, '核对时的旧摘要留账，不复位'
+    # 编译产物按当前 design 版本生成（复验消费的是当前字节，不是旧版本）
+    plan_inputs = repo.inspect('stage4/compiled/execution_plan.json')['_provenance']['inputs']
+    assert 'stage4/grounding/reconstruction_brief.json' in plan_inputs

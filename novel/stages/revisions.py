@@ -16,11 +16,25 @@ from pydantic import ValidationError
 
 from contracts.invariants import NODES
 from contracts.schema.orchestration import OwnerRevisionState
-from contracts.schema.workflow import OwnerRevisionRecordV1, SamplingSelectionV1
+from contracts.schema.workflow import (
+    OwnerRevisionRecordV2, SamplingSelectionV1, owner_revision_record_of_payload,
+)
 from novel.llm.paid_requests import digest, semantic_owner_unit, purchased_baseline, RevisionEvidenceStop
 from novel.store import Str06Repository
 from novel import prov
 from novel.work_units import sealed_commit_bundles
+
+
+def _revision_record(repository, owner: str, rel: str) -> OwnerRevisionRecordV2 | None:
+    """修订记录的统一读口（v1 集中迁移；损坏显式拒绝，不静默当作不存在）。"""
+    try:
+        payload = repository.inspect(rel)
+    except FileNotFoundError:
+        return None
+    try:
+        return owner_revision_record_of_payload(payload)
+    except ValueError as exc:
+        raise revision_error(owner, f'修订记录损坏：{exc}') from exc
 
 
 def owner_product_rel(owner: str) -> str:
@@ -143,15 +157,11 @@ def preview_owner_patch(*, owner: str, identity: str, candidate: Any,
             'downstream': dry_run(candidate)}
 
 
-def verified_previous_revision(repository, owner: str) -> OwnerRevisionRecordV1 | None:
+def verified_previous_revision(repository, owner: str) -> OwnerRevisionRecordV2 | None:
     """只读核验上一修订，显式接续与正式采用前共用；无登记不伪造证明。"""
-    try:
-        record = OwnerRevisionRecordV1.model_validate(
-            repository.inspect(f'runtime/revisions/active/{owner}.json'))
-    except FileNotFoundError:
+    record = _revision_record(repository, owner, f'runtime/revisions/active/{owner}.json')
+    if record is None:
         return None
-    except ValidationError as exc:
-        raise revision_error(owner, f'上一修订记录损坏：{exc}') from exc
     if (record.owner != owner or record.node != semantic_owner_unit(owner)[0]
             or record.product_rel != owner_product_rel(owner)):
         raise revision_error(owner, '上一修订所属节点或产物登记损坏')
@@ -163,7 +173,8 @@ def verified_previous_revision(repository, owner: str) -> OwnerRevisionRecordV1 
 
 def stage_revision(repository, *, owner: str, identity: str, baseline: dict,
                    raw_bytes: bytes, preview: dict, reason: str,
-                   kind: str = 'owner_patch', sequence: int = 0) -> OwnerRevisionRecordV1:
+                   kind: str = 'owner_patch', sequence: int = 0,
+                   applies_to_request_sha256: str | None = None) -> OwnerRevisionRecordV2:
     candidate_sha = hashlib.sha256(raw_bytes).hexdigest()
     evidence_rel = f'runtime/revisions/evidence/{candidate_sha}.json'
     repository.write_evidence_bytes(evidence_rel, raw_bytes)
@@ -174,13 +185,16 @@ def stage_revision(repository, *, owner: str, identity: str, baseline: dict,
     product_rel = owner_product_rel(owner)
     product = repository.path(product_rel)
     before_product_sha = repository.file_sha256(product) if product.is_file() else None
-    record = OwnerRevisionRecordV1(
+    record = OwnerRevisionRecordV2(
         kind=kind, owner=owner, node=semantic_owner_unit(owner)[0],
         baseline_request_sha256=identity, baseline_response_sha256=baseline['response_sha256'],
         baseline_source_root=baseline['source_root'],
         candidate_sha256=candidate_sha, evidence_rel=evidence_rel,
         diff_sha256=preview['diff_sha256'], reason=reason, sequence=sequence,
         product_rel=product_rel, before_product_sha256=before_product_sha,
+        # V2：owner_patch／resample 的应用身份即基线身份；carried_forward 显式给
+        # 当前请求身份（免费沿用的采用凭证，RC-54/56）。
+        applies_to_request_sha256=applies_to_request_sha256 or identity,
         status='staged', created_at=int(time.time()))
     rel = f'runtime/revisions/active/{owner}.json'
     previous = verified_previous_revision(repository, owner)
@@ -198,15 +212,71 @@ def stage_revision(repository, *, owner: str, identity: str, baseline: dict,
     return record
 
 
+def carried_forward_rel(owner: str, applies_to_request_sha256: str) -> str:
+    """carried_forward 修订记录的落点（专用目录，按应用身份寻址）。
+
+    不进 ``runtime/revisions/active/``：它不是待办恢复级联（open 记录会进
+    `revision_states_at` 并被调度面判 REDO，沿用凭证不该触发那个回路）；也不覆盖
+    ``runtime/revisions/<owner>.json``：那格是历史采用记录，owner patch 采用链
+    核验（`bind_wire_adoption` 的 `_adopt_record`）要读它。
+    """
+    return f'runtime/revisions/carried/{owner}/{applies_to_request_sha256}.json'
+
+
+def stage_carried_forward(repository, *, owner: str, raw_bytes: bytes, baseline: dict,
+                          diff_sha256: str, applies_to_request_sha256: str,
+                          reason: str) -> OwnerRevisionRecordV2:
+    """免费沿用的采用凭证（RC-54/56）：carried_forward 修订记录（V2，幂等）。
+
+    ``raw_bytes`` 是合并后整份候选 wire 的确定性字节（原字节证据经
+    `repository.write_evidence_bytes` 内容寻址落盘）；``baseline`` 携带候选生成
+    时的请求身份与响应摘要（``identity``／``response_sha256``／``source_root``）。
+    成本链 ``ledger-row`` 指向原 attempt（由调用方的 AdopterRef 承载，见
+    `docs/schema/work_units.md` 采用凭据）；同一应用身份＋同一候选重放保留首次
+    建档字节（除 created_at 外逐字段相等即视为同一实体，I-30/I-31）。
+    """
+    candidate_sha = hashlib.sha256(raw_bytes).hexdigest()
+    evidence_rel = f'runtime/revisions/evidence/{candidate_sha}.json'
+    repository.write_evidence_bytes(evidence_rel, raw_bytes)
+    rel = carried_forward_rel(owner, applies_to_request_sha256)
+    product_rel = owner_product_rel(owner)
+    product = repository.path(product_rel)
+    before_product_sha = repository.file_sha256(product) if product.is_file() else None
+    record = OwnerRevisionRecordV2(
+        kind='carried_forward', owner=owner, node=semantic_owner_unit(owner)[0],
+        baseline_request_sha256=baseline['identity'],
+        baseline_response_sha256=baseline['response_sha256'],
+        baseline_source_root=baseline['source_root'],
+        candidate_sha256=candidate_sha, evidence_rel=evidence_rel,
+        diff_sha256=diff_sha256, reason=reason, sequence=0,
+        product_rel=product_rel, before_product_sha256=before_product_sha,
+        applies_to_request_sha256=applies_to_request_sha256,
+        status='staged', created_at=int(time.time()))
+    existing = _revision_record(repository, owner, rel)
+    if existing is not None:
+        def _stable(record) -> dict:
+            return {k: v for k, v in record.model_dump(mode='json').items()
+                    if k not in ('created_at', 'before_product_sha256')}
+        if _stable(existing) == _stable(record):
+            if existing.before_product_sha256 == before_product_sha:
+                return existing
+            # 同一采用事实重放：只刷新「建档时盘上产物」快照，其余逐字段不变
+            # （幂等重写，I-30/I-31；不因重启把凭证换成另一条事实）。
+            refreshed = existing.model_copy(update={'before_product_sha256': before_product_sha})
+            repository.write(rel, refreshed)
+            return refreshed
+        raise revision_error(
+            owner, '同一应用身份已登记不同的 carried_forward 候选，拒绝覆盖采用凭证')
+    repository.write(rel, record)
+    return record
+
+
 def adopted_patch(repository, owner: str, identity: str, validate: Callable):
     """普通同身份重放采用已登记补丁，防止缓存原稿反向覆盖修订。"""
     rel = f'runtime/revisions/active/{owner}.json'
-    try:
-        record = OwnerRevisionRecordV1.model_validate(repository.inspect(rel))
-    except FileNotFoundError:
+    record = _revision_record(repository, owner, rel)
+    if record is None:
         return None
-    except ValidationError as exc:
-        raise revision_error(owner, f'修订记录损坏：{exc}') from exc
     if record.kind != 'owner_patch' or record.baseline_request_sha256 != identity:
         return None
     if record.product_rel != owner_product_rel(owner) or record.node != semantic_owner_unit(owner)[0]:
@@ -257,7 +327,7 @@ def _verify_current_product(repository, record) -> None:
 def activate_node_revisions(repository, node: str) -> None:
     directory = repository.root / 'runtime/revisions/active'
     for path in sorted(directory.glob('*.json')):
-        record = OwnerRevisionRecordV1.model_validate(repository.read_external(path))
+        record = owner_revision_record_of_payload(repository.read_external(path))
         if record.node != node or record.status != 'staged':
             continue
         if repository.file_sha256(repository.path(record.evidence_rel)) != record.candidate_sha256:
@@ -272,7 +342,7 @@ def revision_states_at(root: Path) -> list[OwnerRevisionState]:
     repository = Str06Repository(root)
     states = []
     for path in sorted((root / 'runtime/revisions/active').glob('*.json')):
-        record = OwnerRevisionRecordV1.model_validate(repository.read_external(path))
+        record = owner_revision_record_of_payload(repository.read_external(path))
         if record.status != 'open':
             continue
         if (record.product_rel != owner_product_rel(record.owner)
@@ -354,5 +424,5 @@ def resolve_node_revisions(repository, detector: str) -> None:
         if detector != required_node or state.current_product_sha256 != state.accepted_product_sha256:
             continue
         rel = f'runtime/revisions/active/{state.owner}.json'
-        record = OwnerRevisionRecordV1.model_validate(repository.inspect(rel))
+        record = owner_revision_record_of_payload(repository.inspect(rel))
         repository.write(rel, record.model_copy(update={'status': 'resolved'}))

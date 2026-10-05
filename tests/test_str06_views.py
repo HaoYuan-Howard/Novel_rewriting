@@ -729,3 +729,36 @@ def test_book_download_carries_the_chinese_filename(base):
         assert name.endswith('_rewriting.txt') and name != 'book.txt'
         assert download.text == views.final_text_path(base, 'cand').read_text(
             encoding='utf-8')
+
+
+def test_carried_forward_adoption_adds_only_zero_token_cached_rows(base):
+    """免费沿用在成本面上只增零 token 缓存行：实付行与历史 token 不变（I-43）。"""
+    from dataclasses import replace
+
+    from novel.llm.paid_requests import digest
+    from novel.stages.chain import ChainContext, run_body_design
+    from tests.str06_facilities import carry_forward_ask, republish_checkpoint
+    from tests.test_str06_candidate_preflight import _lineage_only_mutation
+
+    # base fixture 是全链交付根（输出根＝tmp_path，候选目录名 cand）：design 单元
+    # 账里已有已购候选，候选登记随 H1b 落盘。
+    repo = Str06Repository(base / 'cand' / 'run')
+    ledger = CostLedger(path=ledger_path(base / 'cand'))
+    repo.attach_context(make_context(repo.root, ledger=ledger))
+    transport = _RoutingTransport(_full_chain_wires())
+    session = PaidRequestSession(repo, ledger, transport, yes=True,
+                                 allow_source_export=True, provider='fake', sid='run')
+    ctx = ChainContext(repository=repo, ask=_fake_ask(session),
+                       ask_text=_fake_text(session), ask_body=_fake_body(session),
+                       chapters=_chapters(), budget=2000, digest=digest)
+    before = views.run_view(base, 'cand').cost
+    # 上游新版本（修订对照 wire 条目不变）→ 已购 design 候选零调用沿用
+    republish_checkpoint(repo, _lineage_only_mutation)
+    result = run_body_design(replace(ctx, carry_forward=carry_forward_ask(session)))
+    assert result['reuse']['action'] == 'carried_forward'
+    after = views.run_view(base, 'cand').cost
+    assert after.new_paid_rows == before.new_paid_rows, '免费沿用不加实付行'
+    assert after.cached_rows == before.cached_rows + 1, '只多一行零 token 缓存行'
+    assert after.prompt_tokens == before.prompt_tokens
+    assert after.completion_tokens == before.completion_tokens
+    assert after.reasoning_tokens == before.reasoning_tokens, '不把历史 token 抄第二遍'

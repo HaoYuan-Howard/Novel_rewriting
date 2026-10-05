@@ -47,6 +47,8 @@ from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Final, Mapping, NamedTuple
 
+from pydantic import ValidationError
+
 from contracts.artifacts import (
     STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT, str06_chapter_observation_rel,
 )
@@ -58,6 +60,7 @@ from contracts.invariants import (
 )
 from contracts.schema.grounding import OutputConstraints, PreserveCheckpoint
 from contracts.schema.hook import HookConstraints, HookReceipt
+from contracts.schema.design import DesignWireV8, STAGE4_DESIGN_WIRE_PROTOCOL
 from contracts.schema.observation import STAGE2_OBSERVATION_PROTOCOL
 from contracts.schema.workflow import (
     OWNER_REVISION_MAX_ROUNDS, STR06_RUNTIME_CONFIG, OwnerIssueV1, STAGE4_PRESERVE_POLICY_VERSION,
@@ -83,6 +86,7 @@ from novel.stages.common import (
     validate_hook_materials, validate_writer_materials,
     hook_material_issues, writer_material_issues, hook_name_projections,
 )
+from novel.stages import candidates
 from novel.stages.stage2 import (
     NamesObservation, STAGE2_OBSERVATION_PROTOCOL, book_observation_prompt,
     chapter_observation_prompt, chapter_patch_locate, character_core_view,
@@ -110,7 +114,7 @@ from novel.stages.stage4 import (
     inspect_body_materials, inspect_design_candidate, locate_design_patches,
     plan_material_repairs,
 )
-from novel.core.validation import ValidationMessage
+from novel.core.validation import ValidationMessage, validation_identity
 from novel.stages.stage5 import (
     AnsweredText, HOOK_VALIDATOR_VERSION, MAX_REWRITES, MECHANICAL_CHECKS,
     build_hook_user_prompt,
@@ -189,6 +193,11 @@ class ChainContext:
     length_band: tuple[float, float] = (0.6, 1.3)
     body_replay: Callable[[int, Any], bool] = lambda _ordinal, _packet: False
     after_node_commit: Callable[[str], None] = lambda _node: None
+    #: CS-H H1b 免费沿用的采用闭包（RC-50～52）：``(owner, prompt, decision) ->
+    #: (wire, AdoptionRef)``。decision 是 `novel.stages.candidates.plan_reuse` 的
+    #: carried_forward 结论（携带原 attempt 引用与上游差异摘要）。缺省＝本运行不
+    #: 提供沿用通道（测试替身与旧装配），节点按普通购买路径走。
+    carry_forward: Callable[[str, str, Any], tuple[Any, Any]] | None = None
     #: 正文目标章集合（W1/D2 调用层选章）：None＝全书；非空 tuple＝恰好这些章。
     #: 只作调用元数据——记入 `runtime/workflow_status.json` 的独立字段供审计；
     #: 不进 run 身份摘要、请求身份、章回执三把摘要、provenance、CommitBundle
@@ -755,6 +764,150 @@ def run_preserve(ctx: ChainContext) -> dict:
 
 # ─── stage4 body_design ──────────────────────────────────────────────────────
 
+def _registered_person_literals(chars) -> dict[str, tuple[str, ...]]:
+    """人物记号 → **唯一归属**该人物的登记称谓（称谓规范形的输入，I-20/I-21）。
+
+    多义字面（同一称谓登记给多个人物）不进规范形——它不能证明「只差用哪个
+    称谓」。来源是 Characters 的名称结构与 core 登记面，不猜测、不模糊匹配。
+    """
+    owners: dict[str, set[str]] = {}
+    structure = chars.name_structure
+    if structure is not None:
+        for slug, person in structure.people.items():
+            owners.setdefault(slug, set()).update(person.surface_forms)
+    else:
+        for slug, character in chars.characters.items():
+            owners.setdefault(slug, set()).update(s.surface for s in character.surfaces)
+    claimed: dict[str, set[str]] = {}
+    for slug, faces in owners.items():
+        for face in faces:
+            if face:
+                claimed.setdefault(face, set()).add(slug)
+    literals: dict[str, set[str]] = {}
+    for face, slugs in claimed.items():
+        if len(slugs) == 1:
+            literals.setdefault(next(iter(slugs)), set()).add(face)
+    return {slug: tuple(sorted(faces)) for slug, faces in sorted(literals.items())}
+
+
+def _design_root_causes(inspection) -> int:
+    """剩余根因计数：预检 errors＋materials 的规则码去重（择优的同分尺）。"""
+    codes = {getattr(e, 'code', None) or validation_identity(e) for e in inspection.errors}
+    codes.update(m.code for m in inspection.materials)
+    return len(codes)
+
+
+def _design_beat_paths(body) -> tuple[tuple[str | int, ...], ...]:
+    """候选 Design 全部拍的 wire 路径（新增条目可选目标的闭集，RC-58）。"""
+    if body is None:
+        return ()
+    return tuple(('scenes', si, 'beats', bi)
+                 for si, scene in enumerate(body.scenes)
+                 for bi in range(len(scene.beats)))
+
+
+def _design_carriers(inspection, obligation_keys: Mapping[str, tuple[str, tuple[str, ...]]]
+                     ) -> dict[tuple[str, tuple[str, ...]], tuple[tuple[str | int, ...], ...]]:
+    """上游条目键 → 引用它的承载拍 wire 路径（Binding 的 beat_ref／支撑拍派生）。
+
+    承载拍来自候选自己的 Binding（`beat_ref`＋`supporting_beat_refs`），映射到
+    Design wire 的拍路径；引用不存在的拍不猜（Design 构造已拒，这里只做投影）。
+    """
+    body, binding = inspection.body, inspection.binding
+    if body is None or binding is None:
+        return {}
+    position_of = {(scene.scene_id, beat.beat_id): ('scenes', si, 'beats', bi)
+                   for si, scene in enumerate(body.scenes)
+                   for bi, beat in enumerate(scene.beats)}
+    carriers: dict[tuple[str, tuple[str, ...]], set[tuple[str | int, ...]]] = {}
+    for entry in binding.entries:
+        key = obligation_keys.get(entry.obligation_id)
+        if key is None:
+            continue
+        for ref in (entry.beat_ref, *entry.supporting_beat_refs):
+            scene_id, _, beat_id = ref.partition('#')
+            path = position_of.get((scene_id, beat_id))
+            if path is not None:
+                carriers.setdefault(key, set()).add(path)
+    return {key: tuple(sorted(paths)) for key, paths in carriers.items()}
+
+
+def _design_reuse_plan(ctx: ChainContext, *, checkpoint, chars, brief, obligation_index,
+                       constraints, inspect):
+    """ctx.ask 之前的免费判定（CS-H H1b，RC-50～53）：候选集合 → 兼容 → 上游差异
+    → 完整预检 → 择优。返回 ``(plan, assessments)``；没有已购候选时 plan 为 None
+    （整份新购，原因『没有候选』）。纯读：不写盘、不发请求、不改账。
+    """
+    repository = ctx.repository
+    unit, rounds = candidates.purchased_rounds(repository.root.parent, repository.root.name,
+                                               'design')
+    if unit is None:
+        return None, ()
+    registry = candidates.load_registry(repository, 'design')
+    upstream_wire = preserve_revision_wire(checkpoint)
+    person_literals = _registered_person_literals(chars)
+    obligation_keys = {o.obligation_id: (o.kind.value, tuple(sorted(a.handle for a in o.anchors)))
+                       for o in checkpoint.obligations}
+    recorded_upstream = {entry.get('turn_id'): entry.get('upstream_version')
+                         for entry in (registry.candidates if registry else ())}
+    assessments = []
+    for rnd in rounds:
+        if not rnd.usable:
+            continue
+        entry = recorded_upstream.get(rnd.turn_id) or {}
+        recorded_wire = entry.get('wire') if isinstance(entry, dict) else None
+        has_lineage = isinstance(recorded_wire, dict)
+        diff = (candidates.upstream_diff(recorded_wire, upstream_wire)
+                if has_lineage else None)
+        if has_lineage and diff.empty is False:
+            # 条目键毫无交集＝上游是全新回答，与候选生成时的版本没有修订谱系
+            # （RC-53 闭集原因）：此时差异不能证明任何东西。
+            shared = {e.key for e in diff.unchanged} | {e.key for e in diff.changed}
+            has_lineage = bool(shared)
+        inspection = inspect(rnd.wire)
+        changed_equivalent = False
+        if diff is not None and diff.changed:
+            changed_equivalent = all(
+                candidates.canonical_appellation_form(
+                    (e.before or {}).get('statement', ''), person_literals)
+                == candidates.canonical_appellation_form(
+                    (e.after or {}).get('statement', ''), person_literals)
+                for e in diff.changed)
+        compatible, why = _design_candidate_compatible(rnd.wire, constraints)
+        if compatible and not has_lineage:
+            # 闭集原因之一：候选的上游版本摘要缺失（登记未写的崩溃窗口）或上游是
+            # 全新回答——谱系不可证明，差异不能证明任何东西（RC-53）。
+            why = '上游是全新回答无修订谱系（候选的上游版本摘要缺失，无法证明谱系）'
+        assessments.append(candidates.CandidateAssessment(
+            entry={'turn_id': rnd.turn_id, 'ordinal': rnd.ordinal,
+                   'attempt_id': rnd.attempt_id, 'response_sha256': rnd.response_sha256,
+                   'request_sha256': rnd.request_sha256, 'wire': rnd.wire,
+                   'wire_sha256': rnd.wire_sha256,
+                   'upstream_version': entry if isinstance(entry, dict) else {},
+                   'accepted': (rnd.recorded or {}).get('accepted')},
+            ordinal=rnd.ordinal, compatible=compatible, incompatibility_reason=why,
+            has_lineage=has_lineage, diff=diff, changed_equivalent=changed_equivalent,
+            preflight_passed=inspection.passed,
+            root_causes=_design_root_causes(inspection),
+            carriers=_design_carriers(inspection, obligation_keys),
+            beat_closed_set=_design_beat_paths(inspection.body)))
+    return candidates.plan_reuse(assessments), tuple(assessments)
+
+
+def _design_candidate_compatible(wire, constraints: OutputConstraints) -> tuple[bool, str]:
+    """兼容性检查（RC-53 闭集）：wire 协议字面量、可按当前 schema 构造、章数与
+    篇幅约束未变。任一不符即整份新购的原因，不静默降级。"""
+    if not isinstance(wire, dict) or wire.get('protocol_version') != STAGE4_DESIGN_WIRE_PROTOCOL:
+        return False, '协议字面量不兼容'
+    try:
+        model = DesignWireV8.model_validate(wire)
+    except ValidationError as exc:
+        return False, '候选无法按当前schema构造'
+    if len(model.chapters) != constraints.target_chapter_count:
+        return False, '章数或篇幅约束变化'
+    return True, ''
+
+
 def run_body_design(ctx: ChainContext) -> dict:
     repository = ctx.repository
     chars = repository.read_model('stage2/characters/characters.json')
@@ -832,12 +985,53 @@ def run_body_design(ctx: ChainContext) -> dict:
         stop.context['candidate_preflight'] = inspection.report()
         raise stop
 
+    # ── CS-H H1b：ctx.ask 之前的免费判定（候选集合 → 兼容 → 上游差异 → 完整
+    # 预检 → 择优）。零调用采用的路径不进入 ask：沿用凭证经 ctx.carry_forward 落
+    # 修订记录与零 token cached 行，成本链指向原 attempt。窄复核目标并入同一轮
+    # 条目返修（允许原值不变）。整份新购只限闭集原因并留痕（RC-53）。
+    # 只读复检（--check-only）不走沿用凭证：同身份免费重放本就命中已购回答，
+    # 不该把每次免费复检都记成一次采用（重复发布的噪声），恢复语义不变。
+    readonly = bool(getattr(getattr(repository, 'context', None), 'readonly', False))
+    reuse_plan, _assessments = _design_reuse_plan(
+        ctx, checkpoint=checkpoint, chars=chars, brief=brief,
+        obligation_index=obligation_index, constraints=constraints, inspect=inspect)
+    review_targets = ()
+    if (reuse_plan is not None and reuse_plan.action == 'carry_forward'
+            and ctx.carry_forward is not None and not readonly):
+        candidate = reuse_plan.candidate
+        dw, design_ref = ctx.carry_forward('design', design_prompt, reuse_plan)
+        inspection = inspect(dw)
+        if not inspection.passed:
+            stop = MechanicalDefectStop('沿用的候选完整预检失败', node='str06.stage4.body_design',
+                                       issues=tuple(inspection.feedback(list(inspection.errors))))
+            stop.context['candidate_preflight'] = inspection.report()
+            raise stop
+        body, binding = inspection.body, inspection.binding
+        repository.publish((
+            PublishItem(rel='stage4/design/body_design.json', value=body,
+                        owners=('design',), refs=(design_ref,)),
+            PublishItem(rel='stage4/grounding/semantic_binding.json', value=binding,
+                        owners=('design',), refs=(design_ref,)),
+        ))
+        _record_design_candidates(ctx, dw=dw, registry_candidate=candidate,
+                                  carried=reuse_plan, inspection=inspection,
+                                  upstream_wire=preserve_revision_wire(checkpoint))
+        return {'scenes': len(body.scenes), 'entries': len(binding.entries),
+                'unbound': len(binding.unbound), 'candidate_preflight': inspection.report(),
+                'reuse': {'action': 'carried_forward', 'reason': reuse_plan.reason,
+                          'turn_id': candidate['turn_id'],
+                          'baseline_request_sha256': candidate['request_sha256']}}
+    if reuse_plan is not None and reuse_plan.action == 'narrow_review':
+        review_targets = tuple(t.as_patch_target() for t in reuse_plan.targets)
+
+    ask_kwargs: dict[str, Any] = {'patch': locate_design_patches}
+    if review_targets:
+        ask_kwargs['review_targets'] = list(review_targets)
     try:
         # CS-F1 局部修订（RC-47）：判据已在判定处给每条问题带 wire 路径；可全部定位时
         # 只把最小完整父项发回返修，合并后重跑**完整**候选预检；有任一问题无法定位
         # （全局覆盖闸、上游派生材料等）自动退整份返修，不静默漏项。
-        dw, design_ref = ctx.ask('design', design_prompt, validate,
-                                 patch=locate_design_patches)
+        dw, design_ref = ctx.ask('design', design_prompt, validate, **ask_kwargs)
     except UpstreamOwned:
         route_upstream(last_inspection)
     except ValidationStop as exc:
@@ -860,8 +1054,94 @@ def run_body_design(ctx: ChainContext) -> dict:
         PublishItem(rel='stage4/grounding/semantic_binding.json', value=binding,
                     owners=('design',), refs=(design_ref,)),
     ))
-    return {'scenes': len(body.scenes), 'entries': len(binding.entries),
-            'unbound': len(binding.unbound), 'candidate_preflight': inspection.report()}
+    _record_design_candidates(ctx, dw=dw, registry_candidate=None, carried=None,
+                              inspection=inspection, upstream_wire=preserve_revision_wire(checkpoint),
+                              full_purchase_reason=(reuse_plan.reason
+                                                    if reuse_plan is not None
+                                                    and reuse_plan.action == 'full_purchase'
+                                                    else ''))
+    result: dict[str, Any] = {'scenes': len(body.scenes), 'entries': len(binding.entries),
+                              'unbound': len(binding.unbound),
+                              'candidate_preflight': inspection.report()}
+    if reuse_plan is not None and reuse_plan.action != 'carry_forward':
+        # 整份新购／窄复核的判定结论随节点报告出账（RC-53 闭集原因留痕）。
+        result['reuse'] = {'action': reuse_plan.action, 'reason': reuse_plan.reason,
+                           'targets': [list(t.path) for t in reuse_plan.targets]}
+    return result
+
+
+def _record_design_candidates(ctx: ChainContext, *, dw, registry_candidate, carried,
+                              inspection, upstream_wire: dict,
+                              full_purchase_reason: str = '') -> None:
+    """候选登记更新（可由单元账重建的索引；权威仍是账与响应 blob）。
+
+    · 新购路径：把本节点最新内容轮登记为候选（wire 摘要、生成请求身份、上游版本
+      摘要、最近一次预检摘要、接受真相）；整份新购的闭集原因同时留痕；
+    · 沿用路径：在对应候选上追加采用引用链（零调用采用，成本链指向原 attempt）。
+    登记失败不阻断发布本身：崩溃窗口（回答已存证而登记未更新）由下一轮从账重建
+    覆盖——不重购、不补造谱系（RC-55）。
+    """
+    repository = ctx.repository
+    try:
+        unit, rounds = candidates.purchased_rounds(repository.root.parent,
+                                                   repository.root.name, 'design')
+    except ValueError:
+        return
+    if unit is None:
+        return
+    registry = candidates.load_registry(repository, 'design')
+    entries = [dict(e) for e in (registry.candidates if registry is not None else ())]
+    upstream_version = {'sha256': Str06Repository.file_sha256(
+        repository.path('runtime/preserve_checkpoint.json')), 'wire': upstream_wire}
+    if registry_candidate is not None:
+        turn_id = registry_candidate['turn_id']
+        adoption = {'kind': 'carried_forward', 'reason': carried.reason,
+                    'baseline_request_sha256': registry_candidate['request_sha256'],
+                    'candidate_sha256': registry_candidate['wire_sha256'],
+                    'created_at': int(time.time())}
+        existing = next((i for i, e in enumerate(entries) if e.get('turn_id') == turn_id), None)
+        if existing is None:
+            entries.append({**registry_candidate, 'shape': 'carried_forward',
+                            'state': 'adopted', 'last_preflight': inspection.report(),
+                            'accepted': True, 'upstream_version': upstream_version,
+                            'adoptions': [adoption]})
+        else:
+            entry = entries[existing]
+            entry['adoptions'] = [*entry.get('adoptions', []), adoption]
+            entry['last_preflight'] = inspection.report()
+    else:
+        latest = next((r for r in reversed(rounds) if r.usable), None)
+        known = {e.get('turn_id') for e in entries}
+        if latest is not None and latest.turn_id not in known:
+            entries.append({'turn_id': latest.turn_id, 'ordinal': latest.ordinal,
+                            'attempt_id': latest.attempt_id,
+                            'request_sha256': latest.request_sha256,
+                            'wire_sha256': candidates.wire_sha256(dw),
+                            'shape': latest.shape, 'state': latest.state,
+                            'accepted': (latest.recorded or {}).get('accepted'),
+                            'last_preflight': inspection.report(),
+                            'upstream_version': upstream_version, 'adoptions': []})
+        if not known:
+            # 登记缺失（崩溃窗口：回答已存证而登记未更新）重建索引时，把账面其余
+            # 已购候选一并索引进索引——不补造上游版本摘要（谱系缺失如实登记）。
+            indexed = {latest.turn_id} if latest is not None else set()
+            for rnd in rounds:
+                if not rnd.usable or rnd.turn_id in indexed:
+                    continue
+                entries.append({'turn_id': rnd.turn_id, 'ordinal': rnd.ordinal,
+                                'attempt_id': rnd.attempt_id,
+                                'request_sha256': rnd.request_sha256,
+                                'wire_sha256': rnd.wire_sha256, 'shape': rnd.shape,
+                                'state': rnd.state,
+                                'accepted': (rnd.recorded or {}).get('accepted'),
+                                'last_preflight': None, 'upstream_version': {},
+                                'adoptions': []})
+    try:
+        candidates.write_registry(repository, 'design', candidates=entries,
+                                  unit_id=unit.unit_id,
+                                  full_purchase_reason=full_purchase_reason)
+    except (OSError, ValueError):
+        return
 
 
 # ─── stage4 hook_design ──────────────────────────────────────────────────────
@@ -1894,7 +2174,8 @@ def run_workflow(*, repository, chapters, ask, ask_text, ask_body, budget=11000,
                  slot_per_book: int = PIPELINE_BOOK_CONCURRENCY,
                  slot_per_provider: int = PIPELINE_PROVIDER_CONCURRENCY,
                  body_replay=lambda _ordinal, _packet: False,
-                 after_node_commit=lambda _node: None):
+                 after_node_commit=lambda _node: None,
+                 carry_forward=None):
     """记录显式执行状态；失败保留旧产物供恢复，但不能仍宣称上次绿灯有效。
 
     流程编排已归 owner runner（本模块上半）：本函数只装配 ChainContext、驱动
@@ -1915,7 +2196,8 @@ def run_workflow(*, repository, chapters, ask, ask_text, ask_body, budget=11000,
         body_replay=body_replay, after_node_commit=after_node_commit,
         digest=digest, concurrency=concurrency,
         node_concurrency=dict(node_concurrency or {}),
-        slot_per_book=slot_per_book, slot_per_provider=slot_per_provider)
+        slot_per_book=slot_per_book, slot_per_provider=slot_per_provider,
+        carry_forward=carry_forward)
     status_rel = 'runtime/workflow_status.json'
     identity = digest({'chapters': chapters, 'hook_copy': hook_copy, 'budget': budget,
                        'through': through, 'band': length_band})
@@ -2273,6 +2555,38 @@ def execute(args) -> None:
         record_sample(owner, raw, selection, validate)
         return raw, answer
 
+    def carry_forward(owner, prompt, decision):
+        """CS-H H1b 免费沿用的生产闭包（RC-50～52）：零调用采用已购候选。
+
+        判定（兼容／上游差异／完整预检／择优）已在 `run_body_design` 里由纯函数
+        完成；这里只做采用凭证的三件事：① 按当前请求身份核验原 attempt 在本根
+        账与成本行里的存在（`session.adopt_carried_forward`，拒绝即显式停止，
+        不静默降级成购买）；② 落 carried_forward 修订记录（V2，
+        `applies_to_request_sha256`＝当前身份，原字节证据经 write_evidence_bytes
+        内容寻址）；③ 返回候选 wire 与指向原 attempt 的采用引用。wire-dir 显式
+        采用在场时不提供本闭包——人工/离线 wire 优先于免费沿用。
+        """
+        from novel.stages.revisions import stage_carried_forward
+        request = build_request(owner, prompt, json_mode=True, system=SYS, temperature=0.3)
+        identity = digest({'owner': owner, 'provider': session.provider,
+                           'request': request.cache_payload()})
+        candidate = decision.candidate
+        ref = session.adopt_carried_forward(
+            owner, request, identity,
+            baseline_request_sha256=candidate['request_sha256'],
+            turn_id=candidate['turn_id'], attempt_id=candidate['attempt_id'],
+            response_sha256=candidate['response_sha256'])
+        stage_carried_forward(
+            repository, owner=owner,
+            raw_bytes=candidates.canonical_wire_bytes(candidate['wire']),
+            baseline={'identity': candidate['request_sha256'],
+                      'response_sha256': candidate['response_sha256'],
+                      'source_root': str(repository.root)},
+            diff_sha256=decision.diff.sha256 if decision.diff is not None else digest({}),
+            applies_to_request_sha256=identity,
+            reason=f'免费沿用：{decision.reason}')
+        return candidate['wire'], ref
+
     def text_validation(owner, wire):
         from novel.stages.revisions import validate_prose_wire
         if owner == 'hook_writer':
@@ -2376,4 +2690,7 @@ def execute(args) -> None:
                        length_band=(args.body_band_low, args.body_band_high),
                        body_chapters=args.body_chapters,
                        **frozen_concurrency(cfg),
-                       body_replay=body_replay, after_node_commit=after_node_commit))
+                       body_replay=body_replay, after_node_commit=after_node_commit,
+                       # CS-H H1b：wire-dir 显式采用在场时不提供免费沿用闭包——
+                       # 人工/离线 wire 优先于沿用具名候选。
+                       carry_forward=None if args.wire_dir else carry_forward))

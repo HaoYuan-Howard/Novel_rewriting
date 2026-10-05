@@ -365,7 +365,12 @@ class SamplingSelectionV1(FrozenModel):
 
 
 class OwnerRevisionRecordV1(FrozenModel):
-    """R9 人工补丁／显式重采的耐久证据；staged 不授权任何恢复级联。"""
+    """R9 人工补丁／显式重采的耐久证据（v1，CS-H H1b 起只作读兼容源）。
+
+    V2 增 ``applies_to_request_sha256`` 与 kind ``carried_forward``。盘上 v1
+    记录经 :func:`owner_revision_record_of_payload` 集中迁移升到 v2，读写两侧
+    不再各自处理两种形状；本模型只作迁移源，不用于新写盘。
+    """
 
     schema_version: Literal[1] = 1
     kind: Literal['owner_patch', 'resample']
@@ -396,6 +401,73 @@ class OwnerRevisionRecordV1(FrozenModel):
         if (self.kind == 'resample') != (self.sequence > 0):
             raise ValueError('仅显式重采使用正采样序号')
         return self
+
+
+class OwnerRevisionRecordV2(FrozenModel):
+    """R9 修订记录的 V2：owner_patch／resample 之外新增 kind ``carried_forward``。
+
+    CS-H H1b（RC-50～56）：**沿用**把另一请求身份下已购的候选应用到当前请求
+    身份——``applies_to_request_sha256`` 记录该应用身份，``baseline_*`` 仍是
+    候选生成时的原请求/响应身份，成本链 ``ledger-row`` 指向原 attempt，本根只记
+    一行零 token 的 cached 行（`docs/schema/work_units.md` 采用凭据）。其余格子
+    与 V1 逐字一致；V1 盘上记录经 :func:`owner_revision_record_of_payload`
+    集中迁移升到 V2（S-03），删除条件登记在 `docs/REQUIREMENTS.md` 兼容层表。
+    """
+
+    schema_version: Literal[2] = 2
+    kind: Literal['owner_patch', 'resample', 'carried_forward']
+    owner: str = Field(min_length=1)
+    node: str = Field(min_length=1)
+    baseline_request_sha256: Sha256
+    baseline_response_sha256: Sha256
+    baseline_source_root: str = Field(min_length=1)
+    candidate_sha256: Sha256
+    evidence_rel: str = Field(pattern=r'^runtime/revisions/evidence/[0-9a-f]{64}\.json$')
+    diff_sha256: Sha256
+    reason: str = Field(min_length=1)
+    sequence: int = Field(ge=0)
+    product_rel: str = Field(min_length=1)
+    before_product_sha256: Sha256 | None
+    product_sha256: Sha256 | None = None
+    status: Literal['staged', 'open', 'resolved']
+    created_at: int = Field(ge=0)
+    #: 本记录**应用到**的请求身份（V2 新增必填）。owner_patch／resample 的应用
+    #: 身份即其基线身份；carried_forward 是本节点当前的（新）请求身份。
+    applies_to_request_sha256: Sha256
+
+    @model_validator(mode='after')
+    def _closed_shape(self):
+        if not self.reason.strip():
+            raise ValueError('修订必须有真实理由')
+        if self.status != 'staged' and self.product_sha256 is None:
+            raise ValueError('已采用修订必须绑定正式产物摘要')
+        if self.evidence_rel != f'runtime/revisions/evidence/{self.candidate_sha256}.json':
+            raise ValueError('原字节证据路径必须与候选摘要一致')
+        if (self.kind == 'resample') != (self.sequence > 0):
+            raise ValueError('仅显式重采使用正采样序号')
+        return self
+
+
+def owner_revision_record_of_payload(payload: Mapping[str, Any]) -> OwnerRevisionRecordV2:
+    """修订记录的统一读口：v2 原样，v1 集中迁移（S-03），未知版本显式拒绝。
+
+    v1 只可能是 owner_patch／resample（carried_forward 随 V2 才存在），其应用
+    身份即 ``baseline_request_sha256``——V1 写盘时「应用到哪个身份」与「基线
+    身份」是同一格。迁移不改写盘上旧记录，只在读侧升版；删除条件：现存根盘上
+    不再存在 `schema_version=1` 的修订记录（只读归档后），见
+    `docs/REQUIREMENTS.md` 兼容层表。
+    """
+    version = payload.get('schema_version')
+    if version == 2:
+        return OwnerRevisionRecordV2.model_validate(dict(payload))
+    if version == 1:
+        legacy = OwnerRevisionRecordV1.model_validate(dict(payload))
+        return OwnerRevisionRecordV2(
+            **{**legacy.model_dump(mode='json'), 'schema_version': 2,
+               'applies_to_request_sha256': legacy.baseline_request_sha256})
+    raise ValueError(
+        f'修订记录 schema_version 未知：{version!r}（取值面 1|2；'
+        '未知形状不得静默当作任何一种语义继续）')
 
 
 class AcceptanceRecordV1(FrozenModel):

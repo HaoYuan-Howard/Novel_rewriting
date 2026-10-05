@@ -376,3 +376,141 @@ def _identity_session_scope(node_id: str, spec) -> str:
     from contracts.schema.workflow import STR06_NODE_IDENTITY_EXTRAS
     extra = STR06_NODE_IDENTITY_EXTRAS.get(node_id, {})
     return extra.get('session_scope', spec.lifecycle.session_scope)
+
+
+# ── CS-H H1b：候选集合、上游差异与称谓规范形（纯函数与登记对账） ──────────────
+
+def test_upstream_diff_aligns_entries_by_kind_and_anchors():
+    from novel.stages.candidates import upstream_diff
+
+    before = {'obligations': [
+        {'kind': 'event_core', 'statement': '甲嫁入陆家', 'anchors': ['b01_01.e1'],
+         'must_preserve': True, 'satisfaction': '婚约成立', 'requires': []},
+        {'kind': 'reveal', 'statement': '玉佩之秘后揭', 'anchors': ['b02_01.e1'],
+         'must_preserve': False, 'satisfaction': '', 'requires': []}]}
+    after = {'obligations': [
+        {'kind': 'reveal', 'statement': '玉佩之秘后揭', 'anchors': ['b02_01.e1'],
+         'must_preserve': False, 'satisfaction': '', 'requires': []},
+        {'kind': 'event_core', 'statement': '甲嫁入陆家', 'anchors': ['b01_01.e1'],
+         'must_preserve': True, 'satisfaction': '婚约成立', 'requires': []},
+        {'kind': 'causal', 'statement': '旧约之因果不可断', 'anchors': ['b01_01.e1'],
+         'must_preserve': False, 'satisfaction': '', 'requires': []}]}
+    diff = upstream_diff(before, after)
+    by_status = {status: [e.key for e in diff.entries if e.status == status]
+                 for status in ('unchanged', 'changed', 'added', 'removed')}
+    # anchors 顺序与列表顺序不参与对齐；同 anchors 不同 kind 是不同条目。
+    assert sorted(by_status['unchanged']) == [(('event_core', ('b01_01.e1',))),
+                                              (('reveal', ('b02_01.e1',)))]
+    assert by_status['added'] == [('causal', ('b01_01.e1',))]
+    assert not by_status['changed'] and not by_status['removed']
+    changed = upstream_diff(before, {'obligations': [
+        {'kind': 'event_core', 'statement': '甲嫁入陆家且立约', 'anchors': ['b01_01.e1'],
+         'must_preserve': True, 'satisfaction': '婚约成立', 'requires': []}]})
+    assert [e.status for e in changed.entries] == ['changed', 'removed']
+
+
+def test_canonical_appellation_form_ignores_apposition_punctuation_and_surface_choice():
+    from novel.stages.candidates import canonical_appellation_form
+
+    people = {'fu_jun': ('夫君', '陆大哥', '陆兄'), 'yun_niang': ('苏芸娘', '芸娘', '苏姑娘')}
+    same = canonical_appellation_form('苏芸娘嫁入陆家，夫君立下旧约。', people)
+    for variant in ('芸娘嫁入陆家，陆大哥立下旧约。', '苏姑娘嫁入陆家；陆兄立下旧约',
+                    '芸娘 嫁入 陆家 ， 夫君 立下 旧约'):
+        assert canonical_appellation_form(variant, people) == same, variant
+    # 同位语折叠：同一人物的两个相邻登记称谓压成一个记号
+    people_with_kin = {'a': ('裴书远', '表弟')}
+    assert canonical_appellation_form('表弟裴书远来了', people_with_kin) == \
+        canonical_appellation_form('裴书远来了', people_with_kin)
+    assert canonical_appellation_form('裴书远来了', people_with_kin) == \
+        canonical_appellation_form('表弟来了', people_with_kin)
+    # 语义差异不相等（多了一段事实）
+    assert canonical_appellation_form('苏芸娘嫁入陆家且夫君许诺必归', people) != same
+    # 多义字面（同一称谓归属两人）显式拒绝——规范形不猜归属
+    with pytest.raises(ValueError, match='唯一归属'):
+        canonical_appellation_form('夫君来了', {'fu_jun': ('夫君',), 'other': ('夫君',)})
+
+
+def test_plan_reuse_prefers_green_then_fewest_root_causes_then_most_recent():
+    from novel.stages.candidates import (
+        CandidateAssessment, UpstreamDiff, plan_reuse,
+    )
+
+    def diff_of(*statuses):
+        return UpstreamDiff(tuple(), (), 'd' * 64)
+
+    green_early = CandidateAssessment(entry='early', ordinal=1, compatible=True,
+                                      preflight_passed=True, root_causes=0,
+                                      diff=diff_of(), changed_equivalent=False)
+    green_late = CandidateAssessment(entry='late', ordinal=3, compatible=True,
+                                     preflight_passed=True, root_causes=0,
+                                     diff=diff_of(), changed_equivalent=False)
+    failing = CandidateAssessment(entry='failing', ordinal=2, compatible=True,
+                                  preflight_passed=False, root_causes=5, diff=diff_of())
+    assert plan_reuse([failing, green_late, green_early]).candidate == 'late', '同分取最近'
+    assert plan_reuse([green_early, green_late]).candidate == 'late'
+    # 较早的全绿不被较晚的失败候选挡住
+    assert plan_reuse([failing, green_early]).action == 'carry_forward'
+    assert plan_reuse([failing, green_early]).candidate == 'early'
+    # 没有可用候选：整份新购只限闭集原因并留痕
+    none_plan = plan_reuse([])
+    assert none_plan.action == 'full_purchase' and none_plan.reason == '没有候选'
+    incompatible = CandidateAssessment(entry='x', ordinal=1, compatible=False,
+                                       incompatibility_reason='协议字面量不兼容')
+    assert plan_reuse([incompatible]).reason == '协议字面量不兼容'
+    no_lineage = CandidateAssessment(entry='y', ordinal=2, compatible=True,
+                                     has_lineage=False,
+                                     incompatibility_reason='上游是全新回答无修订谱系')
+    assert plan_reuse([no_lineage]).action == 'full_purchase'
+    assert plan_reuse([no_lineage]).reason == '上游是全新回答无修订谱系'
+
+
+def test_candidate_registry_is_a_rebuildable_index_of_the_unit_account(tmp_path):
+    from novel.stages import candidates
+    from novel.stages.chain import run_body_design
+    from tests.test_str06_candidate_preflight import _design_ctx, _prepare, _reopened_session
+
+    ctx, wires, transport, _ = _prepare(tmp_path)
+    repo = ctx.repository
+    run_body_design(_design_ctx(ctx, _reopened_session(repo, transport)))
+    registry = candidates.load_registry(repo, 'design')
+    assert registry is not None and registry.node == 'str06.stage4.body_design'
+    entry = registry.candidates[0]
+    # 登记可由单元账重建：轮次、请求身份、wire 摘要与账面一致
+    unit, rounds = candidates.purchased_rounds(repo.root.parent, repo.root.name, 'design')
+    assert unit is not None and unit.unit_id == registry.unit_id
+    assert [r.turn_id for r in rounds] == [entry['turn_id']]
+    assert rounds[0].request_sha256 == entry['request_sha256']
+    assert rounds[0].wire_sha256 == entry['wire_sha256']
+    # 登记丢失即从账重建（索引不是第二本账）：沿用判定不依赖它存在
+    repo.path(candidates.candidates_rel('design')).unlink()
+    assert candidates.load_registry(repo, 'design') is None
+    rebuilt_unit, rebuilt = candidates.purchased_rounds(repo.root.parent, repo.root.name, 'design')
+    assert [r.turn_id for r in rebuilt] == [entry['turn_id']]
+    # 登记形状损坏显式拒绝（不静默当作没有候选）
+    repo.write(candidates.candidates_rel('design'), {'owner': 'other'})
+    with pytest.raises(ValueError, match='owner/node'):
+        candidates.load_registry(repo, 'design')
+
+
+def test_new_stages_modules_stay_out_of_the_view_and_service_import_face():
+    """candidates.py 可依赖 llm/账（同 revisions.py），但视图与服务层不得经它够到 LLM。"""
+    import ast
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+
+    def imports_of(rel):
+        tree = ast.parse((root / rel).read_text(encoding='utf-8'))
+        out = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module:
+                out.add(node.module)
+            elif isinstance(node, ast.Import):
+                out.update(a.name for a in node.names)
+        return out
+
+    modules = imports_of('novel/stages/candidates.py')
+    assert 'novel.stages.revisions' in modules
+    for rel in ('novel/views/str06.py', 'novel/api/routes/str06.py'):
+        leaked = sorted(m for m in imports_of(rel) if m.startswith('novel.llm'))
+        assert not leaked, f'{rel} 不得直接 import LLM 层：{leaked}'

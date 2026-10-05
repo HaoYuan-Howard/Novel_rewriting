@@ -945,13 +945,40 @@ def _writer_packet_background_narrowed() -> list:
 def _answer_reuse_identity_follows_material() -> list:
     """R-5.20 的机械面：请求身份随实际消费材料变化——材料不同身份必不同
     （否则同身份缓存会命中重放上一轮带冲突处理的旧回答）；纯审计字段
-    （时间戳等）不进 prompt、不换身份。"""
+    （时间戳等）不进 prompt、不换身份。
+
+    CS-H H1b（第三条件改写）另测免费沿用的判定面：身份已变但上游条目未变且
+    当前输入下预检全绿 → 零调用采用；没有可用候选或协议不兼容 → 只按闭集原因
+    整份新购并留痕。判定入口是 `novel.stages.candidates.plan_reuse`（纯函数）。
+    """
     from novel.llm.paid_requests import digest
+    from novel.stages.candidates import (
+        CandidateAssessment, UpstreamDiff, plan_reuse,
+    )
 
     first, second = digest('材料 A（含冲突处理结果）'), digest('材料 B')
+    findings = []
     if first == second:
-        return ['材料不同而请求身份相同：会错误复用旧回答']
-    return ['请求身份随实际消费材料变化：材料 A/B 身份不同']
+        findings.append('材料不同而请求身份相同：会错误复用旧回答')
+    else:
+        findings.append('请求身份随实际消费材料变化：材料 A/B 身份不同')
+    empty_diff = UpstreamDiff((), (), '0' * 64)
+    green = CandidateAssessment(entry='green', ordinal=1, compatible=True,
+                                preflight_passed=True, root_causes=0, diff=empty_diff)
+    failing = CandidateAssessment(entry='failing', ordinal=2, compatible=True,
+                                  preflight_passed=False, root_causes=3, diff=empty_diff)
+    adopted = plan_reuse([failing, green])
+    if adopted.action != 'carry_forward' or adopted.candidate != 'green':
+        findings.append(f'可零调用沿用的候选被判成 {adopted.action}')
+    else:
+        findings.append('上游无差异且预检全绿：零调用采用已购候选（carried_forward）')
+    blocked = plan_reuse([CandidateAssessment(entry='x', ordinal=1, compatible=False,
+                                              incompatibility_reason='协议字面量不兼容')])
+    if blocked.action != 'full_purchase' or blocked.reason != '协议字面量不兼容':
+        findings.append('不兼容候选没有按闭集原因整份新购')
+    else:
+        findings.append('协议不兼容：按闭集原因整份新购并留痕')
+    return findings
 
 
 CASES.update({

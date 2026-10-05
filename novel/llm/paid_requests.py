@@ -1155,6 +1155,76 @@ class PaidRequestSession:
             outcome='ok' if row.get('status') == 'answered' else 'error',
             prompt_tokens=0, completion_tokens=0, reasoning_tokens=0)
 
+    # ── CS-H H1b：免费沿用的采用凭证（carried_forward） ──────────────────────
+
+    def adopt_carried_forward(self, owner: str, request: ChatRequest, identity: str, *,
+                              baseline_request_sha256: str, turn_id: str, attempt_id: str,
+                              response_sha256: str, new_paid_calls: int = 0) -> AdoptionRef:
+        """把**本根已购**候选免费沿用到当前请求身份（RC-50～52）。
+
+        与新购/缓存重放的分界：候选生成时的请求身份与当前身份不同（上游条目未变
+        或称谓规范形相等、当前输入下完整预检全绿），所以不重购、也不冒充同身份
+        缓存命中。核验三件事后才给采用引用（不静默降档，I-34）：① 原 attempt 在
+        本根工作单元账里是 ok 且有响应证据；② 响应 blob 摘要与 attempt 记录一致；
+        ③ 原 attempt 在成本账里有唯一真实付费行——成本链 ``ledger-row`` 因此指向
+        原 attempt（provenance 按 attempt_id 精确聚合），本根只记一行零 token 的
+        cached 行（``cache_policy='carried-forward'``）。返回的引用 ``attempt_id``
+        是原 attempt，供 CommitBundle 的采用证据与成本聚合使用。
+        """
+        node, scope = semantic_owner_unit(owner)
+        unit = self._unit_for(owner)
+        ledger = unit._read()
+        turn = next((t for t in reversed(ledger.turns)
+                     if t.turn_id == turn_id and t.request_sha256 == baseline_request_sha256), None)
+        if turn is None:
+            raise _execution_error(
+                f'{owner} 沿用的候选内容轮不属于原请求身份，拒绝免费采用',
+                code='carried_forward_turn', node=node, item=scope, phase='accept',
+                context={'turn_id': turn_id, 'baseline_request_sha256': baseline_request_sha256})
+        attempt = next((a for a in reversed(turn.attempts)
+                        if a.attempt_id == attempt_id and a.outcome == 'ok'
+                        and a.response_sha256 == response_sha256), None)
+        if attempt is None:
+            raise _execution_error(
+                f'{owner} 沿用的候选 attempt 无 ok 响应证据，拒绝免费采用',
+                code='carried_forward_attempt', node=node, item=scope, phase='accept',
+                context={'attempt_id': attempt_id, 'turn_id': turn_id})
+        payload = unit.attempt_request_payload(turn_id, attempt_id)
+        if payload.get('request_payload') is None:
+            raise _execution_error(
+                f'{owner} 沿用的候选缺原请求工作包，拒绝免费采用',
+                code='carried_forward_request_payload', node=node, item=scope,
+                phase='accept', context={'attempt_id': attempt_id})
+        rows, partial = read_cost_snapshot(self.base)
+        if partial:
+            raise _execution_error('成本账有未提交尾，拒绝追加或采用',
+                                   code='ledger_tail', node=node, item=owner, phase='reserve')
+        original = [r for r in rows if r.get('attempt_id') == attempt_id
+                    and r.get('request_fingerprint') == baseline_request_sha256]
+        if len(original) != 1 or original[0].get('cached') or original[0].get('outcome') != 'ok':
+            raise _execution_error(
+                f'{owner} 沿用的候选缺原成本关联（attempt_id＋指纹无唯一真实付费行）；'
+                '付费状态未知，拒绝采用', code='carried_forward_cost_link',
+                node=node, item=scope, phase='accept',
+                context={'attempt_id': attempt_id})
+        if new_paid_calls:
+            raise _execution_error(
+                '免费沿用不得声称新付费调用', code='carried_forward_paid_calls',
+                node=node, item=scope, phase='accept',
+                context={'new_paid_calls': new_paid_calls})
+        model = (payload.get('response') or {}).get('model') or request.model
+        self.ledger.record(
+            node=node, sid=self.sid, model=model, request_model=request.model,
+            code=STR06_RC_VERSION, attempt=1, max_attempts=1, will_retry=False,
+            cached=True, cache_policy='carried-forward', purpose=owner,
+            attempt_id=uuid.uuid4().hex, request_fingerprint=identity, outcome='ok',
+            prompt_tokens=0, completion_tokens=0, reasoning_tokens=0)
+        return AdoptionRef(
+            owner=owner, model=model, prompts={'system': request.system, 'user': request.user},
+            sid=self.sid, request_sha256=baseline_request_sha256,
+            unit_id=unit.unit_id, turn_id=turn_id, attempt_id=attempt_id,
+            response_sha256=response_sha256, request_fingerprint=baseline_request_sha256)
+
 
 def _decode_json(content: str) -> tuple[Any | None, str | None]:
     """响应 JSON 解码（唯一实现）：重复键、围栏、顶层形状都在这里判定。"""
@@ -1204,10 +1274,16 @@ def accept_json_answer(answer: DurableAnswer,
 class PatchTarget(NamedTuple):
     """一个可条目级返修的失败点：wire 内 JSON 路径＋该条目的错误（CS-patch，
     2026-10-03）。路径指向**最小可替换单元**（如一条 effect／一个 beat），
-    由 owner 的 locate 与其验收闸同源派生（判据 25：定位与判定同一把尺）。"""
+    由 owner 的 locate 与其验收闸同源派生（判据 25：定位与判定同一把尺）。
+
+    ``optional``（CS-H H1b，RC-58）：可选目标——责任位置须由模型决定时给出
+    候选闭集，回答只覆盖它选中的子集即合法（如上游新增义务时在给定拍闭集里
+    选承载位）；缺省 False＝必须逐条替换。
+    """
 
     path: tuple[str | int, ...]
     issues: tuple[str, ...]
+    optional: bool = False
 
 
 #: owner 声明的条目定位协议：``(wire_dict, errors) -> [(path, issues), …] 或
@@ -1284,16 +1360,28 @@ def patch_user_prompt(base_user: str, targets: list[PatchTarget],
     def _item_json(path: tuple[str | int, ...]) -> str:
         return json.dumps(_walk_path(wire, path), ensure_ascii=False)
 
-    bullets = '\n'.join(
+    required = '\n'.join(
         f'- 路径 {format_json_path(t.path)}：当前值 {_item_json(t.path)}；'
         f'问题：{"；".join(t.issues)}'
-        for t in targets)
+        for t in targets if not t.optional)
+    optional = '\n'.join(
+        f'- 路径 {format_json_path(t.path)}：当前值 {_item_json(t.path)}；'
+        f'问题：{"；".join(t.issues)}'
+        for t in targets if t.optional)
+    lines = ['【条目返修】上一版仅以下条目未通过机械校验，只替换这些条目。'
+             if required else '【条目返修】以下条目经免费判定须复核，只替换这些条目。',
+             '输出 JSON：{"patches": [{"path": "路径", "value": 该条目的完整替换}, …]}。',
+             '路径字符串原样照抄；不得改动未列出条目。']
+    if required:
+        lines.append('必须逐条覆盖下面列出的全部路径，不得新增路径、不得改动未列出条目。')
+    if optional:
+        lines.append('下面是可选目标闭集：只对你选中的承载位给替换，未选中不给；'
+                     '至少覆盖一个（一个都不给视为没有选定承载位，将按未通过处理）。')
     return (base_user
-            + '\n\n【条目返修】上一版仅以下条目未通过机械校验，只替换这些条目。\n'
-              '输出 JSON：{"patches": [{"path": "路径", "value": 该条目的完整替换}, …]}。\n'
-              '必须逐条覆盖下面列出的全部路径（路径字符串原样照抄）；'
-              '不得新增路径、不得改动未列出条目。\n'
-            + revision_rules + '\n' + bullets)
+            + '\n\n' + '\n'.join(lines) + '\n'
+            + revision_rules + '\n'
+            + (required if required else optional)
+            + (('\n' + optional) if required and optional else ''))
 
 
 def accept_patch_answer(answer: DurableAnswer, targets: list[PatchTarget],
@@ -1301,12 +1389,12 @@ def accept_patch_answer(answer: DurableAnswer, targets: list[PatchTarget],
                         ) -> tuple[dict | None, bool, dict]:
     """patch 轮回答的接受闸（与 accept_json_answer 同一纪律的条目版）。
 
-    形状闸：顶层 ``{"patches":[...]}``；path 必须与请求的目标**逐一对应**
-    （全覆盖、无多余、无重复）；随后合并进 wire 并过**同一套 owner 校验**。
-    返回 ``(合并版或 None, 是否采纳, acceptance_fields)``——形状/合并失败时
-    合并版为 None（调用方退整份修订）；合并版产出但校验不过时**仍返回合并
-    版**（它是当前最好的全文，供下一轮整份修订作「上一版」，错误如实进
-    无进展判定）。
+    形状闸：顶层 ``{"patches":[...]}``；非可选 path 必须与请求的目标**逐一对应**
+    （全覆盖、无多余、无重复），可选 path（闭集承载位）允许只覆盖选中的子集、
+    但至少覆盖一个；随后合并进 wire 并过**同一套 owner 校验**。返回
+    ``(合并版或 None, 是否采纳, acceptance_fields)``——形状/合并失败时合并版为
+    None（调用方退整份修订）；合并版产出但校验不过时**仍返回合并版**（它是当前
+    最好的全文，供下一轮整份修订作「上一版」，错误如实进无进展判定）。
     """
     fields: dict = {'mode': 'json', 'salvage': 'none', 'errors': ()}
     content = answer.content or ''
@@ -1321,6 +1409,8 @@ def accept_patch_answer(answer: DurableAnswer, targets: list[PatchTarget],
                             f'实得 {decode_error or type(data).__name__}',)
         return None, False, fields
     requested = {format_json_path(t.path): t.path for t in targets}
+    required = {format_json_path(t.path) for t in targets if not t.optional}
+    optional = {format_json_path(t.path) for t in targets if t.optional}
     seen: set[str] = set()
     resolved: list[tuple[tuple[str | int, ...], Any]] = []
     errors: list[str] = []
@@ -1337,7 +1427,9 @@ def accept_patch_answer(answer: DurableAnswer, targets: list[PatchTarget],
             continue
         seen.add(path_str)
         resolved.append((requested[path_str], entry['value']))
-    errors.extend(f'缺少路径 {p!r} 的替换条目' for p in sorted(set(requested) - seen))
+    errors.extend(f'缺少路径 {p!r} 的替换条目' for p in sorted(required - seen))
+    if optional and not (optional & seen):
+        errors.append('可选目标闭集一个都没有选定承载位（至少覆盖一个）')
     if errors:
         fields['parse'], fields['errors'] = 'failed', tuple(errors)
         return None, False, fields
@@ -1392,7 +1484,8 @@ def revision_user_prompt(base_user: str, previous_answer: str,
 
 def ask_json(session: PaidRequestSession, owner: str, request: ChatRequest,
              validate, patch: PatchLocate | None = None, *,
-             revision_rules: str = _REVISION_BOUNDARY) -> tuple[dict, Any]:
+             revision_rules: str = _REVISION_BOUNDARY,
+             review_targets: Sequence[PatchTarget] | None = None) -> tuple[dict, Any]:
     """JSON 语义调用的接受循环（调用方组合；Runtime 本体不收业务回调）。
 
     耐久响应 → 解析 → D5 救回 → 校验；**非空但不过闸**时按条目级返修优先、
@@ -1407,6 +1500,12 @@ def ask_json(session: PaidRequestSession, owner: str, request: ChatRequest,
     路径是 `PatchedAnswer`（基底＋patch 轮多引用，经 `_as_adoption_refs`
     展开进 provenance／CommitBundle）。空回答仍走 D5 同轮付费重试。崩溃/
     重跑按请求身份免费重放：各轮已购回答都会命中，停止结论不重复计费。
+
+    ``review_targets``（CS-H H1b，RC-51）：免费判定要求窄复核的目标（上游条目
+    变化/删除的承载拍、新增条目的可选目标闭集）。首轮校验**已通过**时也据此发
+    一轮条目返修（允许原值不变）；校验未通过时与错误定位的目标合并进同一轮。
+    该轮同样占一次 `OWNER_REVISION_MAX_ROUNDS` 额度（返修轮计入内容轮），不
+    新建第二套返修协议。
     """
     base_user = request.user
     answer = session.send(owner, request)
@@ -1417,6 +1516,7 @@ def ask_json(session: PaidRequestSession, owner: str, request: ChatRequest,
     base_answer = answer
     patches: list[DurableAnswer] = []
     force_full = False
+    pending_review: list[PatchTarget] = list(review_targets or ())
 
     def _no_progress_stop(errs: list[str], adopted_answer):
         """无进展即停（R8b.3 位置模式集合；CS-patch 起对 patch 合并结果同样
@@ -1470,54 +1570,59 @@ def ask_json(session: PaidRequestSession, owner: str, request: ChatRequest,
                                   errors=fields['errors'],
                                   salvage=fields['salvage'],
                                   accepted=data is not None)
-        if data is not None:
+        if data is not None and not pending_review:
             return data, (PatchedAnswer(base=base_answer, patches=tuple(patches))
                           if patches else answer)
-        if answer.cached or fields['parse'] != 'empty':
-            adoption = (PatchedAnswer(base=base_answer, patches=tuple(patches))
-                        if patches else base_answer)
-            current = _no_progress_stop(list(errors), adoption)
-            node, scope = semantic_owner_unit(owner)
-            heads = sorted(validation_identity(e) for e in errors)
-            stop_context = {'owner': owner, 'rounds': revisions,
-                            'max_rounds': OWNER_REVISION_MAX_ROUNDS,
-                            'issues': list(errors), 'issue_locations': heads}
-            if revisions >= OWNER_REVISION_MAX_ROUNDS:
-                stop = ValidationStop(
-                    f'{owner} 校验失败：节点内校验重问轮（≤{OWNER_REVISION_MAX_ROUNDS}）'
-                    '已耗尽仍不过闸，停止；原响应已留证，剩余修复走 owner patch 或人工'
-                    f'重跑：{errors}', code='validation_rounds_exhausted',
-                    stage=_stage_of(node), node=node, item=scope, phase='accept',
-                    context=stop_context)
-                stop.adoption = adoption
-                raise stop
-            revisions += 1
-            seen_heads.append(current)
-            if patches:
-                previous = json.dumps(wire_dict, ensure_ascii=False, indent=1)
-            targets = None
-            if patch is not None and wire_dict is not None and not force_full:
-                located = patch(wire_dict, list(errors))
-                # 定位器须覆盖全部问题，不能通过局部修复静默丢掉其它失败。
-                if located and {e for _, es in located for e in es} == set(errors):
-                    targets = [PatchTarget(path=tuple(path), issues=tuple(issues))
-                               for path, issues in located]
-            force_full = False
-            if targets:
-                next_user = patch_user_prompt(base_user, targets, wire_dict,
-                                               revision_rules=revision_rules)
-            else:
-                next_user = revision_user_prompt(base_user, previous, list(errors),
-                                                  revision_rules=revision_rules)
-            request = ChatRequest(
-                    model=request.model, system=request.system,
-                    user=next_user,
-                    reasoning_effort=request.reasoning_effort, thinking=request.thinking,
-                    json_mode=request.json_mode, max_tokens=request.max_tokens,
-                    temperature=request.temperature, sampling_nonce=request.sampling_nonce)
+        if data is None and not (answer.cached or fields['parse'] != 'empty'):
+            # D5：空回答救回失败——同一内容轮内付费重试（占尝试额度，如实计费）。
             answer = session.send(owner, request)
             continue
-        # D5：空回答救回失败——同一内容轮内付费重试（占尝试额度，如实计费）。
+        # 校验未过，或免费判定（上游差异）要求一轮窄复核：有界修订轮（允许原值
+        # 不变）。同一轮内合并窄复核目标与错误定位目标，不新建返修协议（I-35）。
+        adoption = (PatchedAnswer(base=base_answer, patches=tuple(patches))
+                    if patches else base_answer)
+        current = _no_progress_stop(list(errors), adoption)
+        node, scope = semantic_owner_unit(owner)
+        heads = sorted(validation_identity(e) for e in errors)
+        stop_context = {'owner': owner, 'rounds': revisions,
+                        'max_rounds': OWNER_REVISION_MAX_ROUNDS,
+                        'issues': list(errors), 'issue_locations': heads}
+        if revisions >= OWNER_REVISION_MAX_ROUNDS:
+            stop = ValidationStop(
+                f'{owner} 校验失败：节点内校验重问轮（≤{OWNER_REVISION_MAX_ROUNDS}）'
+                '已耗尽仍不过闸，停止；原响应已留证，剩余修复走 owner patch 或人工'
+                f'重跑：{errors}', code='validation_rounds_exhausted',
+                stage=_stage_of(node), node=node, item=scope, phase='accept',
+                context=stop_context)
+            stop.adoption = adoption
+            raise stop
+        revisions += 1
+        if current:
+            seen_heads.append(current)
+        if patches:
+            previous = json.dumps(wire_dict, ensure_ascii=False, indent=1)
+        round_targets: list[PatchTarget] = list(pending_review)
+        pending_review = []
+        if patch is not None and wire_dict is not None and not force_full and errors:
+            located = patch(wire_dict, list(errors))
+            # 定位器须覆盖全部问题，不能通过局部修复静默丢掉其它失败。
+            if located and {e for _, es in located for e in es} == set(errors):
+                round_targets.extend(PatchTarget(path=tuple(path), issues=tuple(issues))
+                                     for path, issues in located)
+        targets = round_targets or None
+        force_full = False
+        if targets:
+            next_user = patch_user_prompt(base_user, targets, wire_dict,
+                                          revision_rules=revision_rules)
+        else:
+            next_user = revision_user_prompt(base_user, previous, list(errors),
+                                             revision_rules=revision_rules)
+        request = ChatRequest(
+                model=request.model, system=request.system,
+                user=next_user,
+                reasoning_effort=request.reasoning_effort, thinking=request.thinking,
+                json_mode=request.json_mode, max_tokens=request.max_tokens,
+                temperature=request.temperature, sampling_nonce=request.sampling_nonce)
         answer = session.send(owner, request)
 
 

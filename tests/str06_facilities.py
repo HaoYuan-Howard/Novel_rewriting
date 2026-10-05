@@ -80,17 +80,22 @@ def anchor_stub(handle: str = 's0_01') -> tuple:
 # ─── B1 付费边界测试接线（与 `novel/stages/chain.py::execute` 的真实闭包同形） ───
 
 def json_ask(session, *, model='fake', max_tokens=1000):
-    """ChainContext.ask 形状的 JSON 付费闭包：ask_json 接受循环＋显式引用。"""
+    """ChainContext.ask 形状的 JSON 付费闭包：ask_json 接受循环＋显式引用。
+
+    ``review_targets``（CS-H H1b）：免费判定要求窄复核的目标，原样转交
+    `ask_json`（与 `execute` 的生产闭包同一通道）。
+    """
     from novel.llm.paid_requests import ask_json
     from novel.llm.transport import ChatRequest
     from novel.stages.common import SYS, semantic_revision_rules
 
-    def ask(owner, prompt, validate, patch=None):
+    def ask(owner, prompt, validate, patch=None, review_targets=None):
         request = ChatRequest(model=model, system=SYS, user=prompt,
                               reasoning_effort='high', thinking=True,
                               json_mode=True, max_tokens=max_tokens)
         return ask_json(session, owner, request, validate, patch=patch,
-                        revision_rules=semantic_revision_rules(owner))
+                        revision_rules=semantic_revision_rules(owner),
+                        review_targets=review_targets)
     return ask
 
 
@@ -131,6 +136,67 @@ def synthetic_ref(owner: str, prompt: str = '', model: str = 'fake',
     from novel.llm.paid_requests import AdoptionRef
     return AdoptionRef(owner=owner, model=model, prompts={'user': prompt},
                        request_sha256=request_sha256)
+
+
+def carry_forward_ask(session, *, model='fake', max_tokens=1000):
+    """ChainContext.carry_forward 形状的免费沿用闭包（与 `execute` 的生产实现同形）。
+
+    判定已由 `run_body_design` 的纯函数完成；本闭包只做采用凭证：按当前请求身份
+    核验原 attempt（`session.adopt_carried_forward`）＋落 carried_forward 修订记录
+    （V2）＋返回候选 wire 与指向原 attempt 的采用引用。
+    """
+    from novel.llm.paid_requests import digest
+    from novel.llm.transport import ChatRequest
+    from novel.stages import candidates
+    from novel.stages.common import SYS
+    from novel.stages.revisions import stage_carried_forward
+
+    def carry_forward(owner, prompt, decision):
+        request = ChatRequest(model=model, system=SYS, user=prompt,
+                              reasoning_effort='high', thinking=True,
+                              json_mode=True, max_tokens=max_tokens)
+        identity = digest({'owner': owner, 'provider': session.provider,
+                           'request': request.cache_payload()})
+        candidate = decision.candidate
+        ref = session.adopt_carried_forward(
+            owner, request, identity,
+            baseline_request_sha256=candidate['request_sha256'],
+            turn_id=candidate['turn_id'], attempt_id=candidate['attempt_id'],
+            response_sha256=candidate['response_sha256'])
+        stage_carried_forward(
+            session.repository, owner=owner,
+            raw_bytes=candidates.canonical_wire_bytes(candidate['wire']),
+            baseline={'identity': candidate['request_sha256'],
+                      'response_sha256': candidate['response_sha256'],
+                      'source_root': str(session.repository.root)},
+            diff_sha256=decision.diff.sha256 if decision.diff is not None else digest({}),
+            applies_to_request_sha256=identity,
+            reason=f'免费沿用：{decision.reason}')
+        return candidate['wire'], ref
+
+    return carry_forward
+
+
+def republish_checkpoint(repository, mutate, *, owner='preserve'):
+    """改一处已发布 Preserve checkpoint 并重新发布（换 seal＝上游新版本）。
+
+    测试用：直接改 canonical 模型再走正式 publish——不碰盘上旧证据、不伪造
+    Preserve 购买；`mutate(checkpoint)` 返回新 checkpoint。发布前先清来源边窗口
+    并按 Preserve 的真实输入（characters＋blueprints）重读，避免把测试读取的
+    无关产物记成 checkpoint 的上游（ freshness 会据此误判过期）。
+    """
+    from novel.store import PublishItem
+    context = getattr(repository, 'context', None)
+    if context is not None:
+        context.begin_run()
+    checkpoint = repository.read_model('runtime/preserve_checkpoint.json')
+    repository.read_model('stage2/characters/characters.json')
+    repository.read_model('stage2/blueprints/chapter_blueprints.json')
+    updated = mutate(checkpoint)
+    repository.publish((PublishItem(rel='runtime/preserve_checkpoint.json', value=updated,
+                                    owners=(owner,),
+                                    refs=(synthetic_ref(owner, '测试上游修订'),)),))
+    return updated
 
 
 # ─── W1 选章：正文 runner 的测试替身 ───

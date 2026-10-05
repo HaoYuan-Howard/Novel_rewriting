@@ -7,6 +7,9 @@
 与响应 blob（权威）；每个内容轮取最后一份有回答的 attempt，patch 回合先在前一份候选上
 合并成整份 wire，再过同一道验收。
 
+候选集合的读取与合并由 `novel/stages/candidates.py` 提供（H1b 起生产与重放共用同一把尺，
+不为只读工具保留第二份实现）；本文件只负责按当前输入重放与报告。
+
 每个回答并排给出三件事：
   • 记录（当时输入）：该 attempt 落盘的 AcceptanceRecord；
   • 重放（当前输入）：完整候选预检的各项检查、规则码计数、材料问题的责任归因；
@@ -40,17 +43,13 @@ from contracts.schema.workflow import STR06_RUNTIME_CONFIG
 from novel import paths
 from novel.core.validation import validation_identity
 from novel.errors import ProvenanceRefused, UnsealedArtifact, UpstreamMissing
-from novel.llm.paid_requests import (
-    DurableAnswer, PatchTarget, accept_json_answer, accept_patch_answer, digest,
-    format_json_path, semantic_owner_unit,
-)
-from novel.llm.usage import parse_usage
+from novel.llm.paid_requests import digest, semantic_owner_unit
+from novel.stages.candidates import purchased_rounds
 from novel.stages.chain import derive_total_length_budget, load_stage1_chapters
 from novel.stages.stage4 import (
     design_obligation_index, inspect_design_candidate, plan_material_repairs, project_brief,
 )
 from novel.store import Str06Repository
-from novel.work_units import WorkUnitRefused, readonly_budget, registered_unit_ids, WorkUnitBudget
 
 
 class ReplayNotRun(Exception):
@@ -67,103 +66,6 @@ class _ReadOnlyRepository(Str06Repository):
     write_text = write
     write_invalid = write
     write_evidence_bytes = write
-
-
-# ─── 已购回答：工作单元账 → 整份候选 wire ────────────────────────────────────
-
-_PATH_PART = re.compile(r'([^.\[\]]+)|\[(\d+)\]')
-
-
-def parse_json_path(text: str) -> tuple[str | int, ...]:
-    """`scenes[1].beats[0]` → ('scenes', 1, 'beats', 0)；`format_json_path` 的逆。"""
-    return tuple(int(index) if index else key for key, index in _PATH_PART.findall(text))
-
-
-@dataclass(frozen=True)
-class Round:
-    """一个内容轮的已购回答（最后一份有回答的 attempt）。"""
-
-    ordinal: int
-    state: str
-    reason_code: str
-    request_sha256: str
-    attempt_id: str
-    #: full＝整份回答；patch＝条目返修已合并成整份；none＝本轮没有落盘回答；
-    #: undecodable＝有回答但解不出整份 wire（patch 缺基底或路径无法还原等，原因在 note）。
-    shape: str
-    wire: dict | None
-    salvage: str
-    note: str
-    usage: dict
-    recorded: dict | None
-
-
-def _decode_round(answer: DurableAnswer, previous: dict | None) -> tuple[str, dict | None, str, str]:
-    """（shape, wire, salvage, note）。解码与 D5 救回复用生产的 `accept_json_answer`。"""
-    data, errors, fields = accept_json_answer(answer, lambda _wire: [])
-    salvage = fields['salvage']
-    if data is None:
-        return 'undecodable', None, salvage, '；'.join(errors)
-    if 'patches' in data and 'protocol_version' not in data:
-        if previous is None:
-            return 'undecodable', None, salvage, 'patch 回合缺基底（前一轮没有可用整份候选）'
-        entries = data['patches'] if isinstance(data['patches'], list) else []
-        targets = [PatchTarget(path=parse_json_path(str(e['path'])), issues=())
-                   for e in entries if isinstance(e, dict) and 'path' in e]
-        merged, _passed, merge_fields = accept_patch_answer(answer, targets, previous, lambda _w: [])
-        if merged is None:
-            return 'undecodable', None, salvage, '；'.join(merge_fields['errors'])
-        return 'patch', merged, salvage, f'{len(targets)} 个条目：' + '、'.join(
-            format_json_path(t.path) for t in targets)
-    return 'full', data, salvage, ''
-
-
-def purchased_rounds(base: Path, sid: str, owner: str) -> tuple[WorkUnitBudget | None, list[Round]]:
-    """owner 单元的全部内容轮；单元不存在返回 (None, [])——没有购买，不是失败。"""
-    node, scope = semantic_owner_unit(owner)
-    try:
-        unit_id = WorkUnitBudget(base, sid, node, 'executor', scope, read_only=True).unit_id
-        if unit_id not in registered_unit_ids(base, sid):
-            return None, []
-        unit = readonly_budget(base, sid, unit_id)
-        ledger = unit._read()
-        records = dict(unit.acceptance_records())
-    except WorkUnitRefused as exc:
-        raise ReplayNotRun(f'工作单元账不可读：{exc}') from exc
-    rounds: list[Round] = []
-    previous: dict | None = None
-    for turn in ledger.turns:
-        attempt = next((a for a in reversed(turn.attempts) if a.response_sha256), None)
-        if attempt is None:
-            rounds.append(Round(turn.ordinal, turn.state, turn.reason_code, turn.request_sha256,
-                                '', 'none', None, 'none',
-                                '本轮没有落盘回答（attempt：' + ','.join(
-                                    a.outcome for a in turn.attempts) + '）', {}, None))
-            continue
-        try:
-            payload = unit.attempt_request_payload(turn.turn_id, attempt.attempt_id)
-        except WorkUnitRefused as exc:
-            raise ReplayNotRun(f'第{turn.ordinal}轮回答证据不可读：{exc}') from exc
-        response = payload.get('response') or {}
-        answer = DurableAnswer(
-            owner=owner, request_sha256=turn.request_sha256, sid=sid, unit_id=unit.unit_id,
-            turn_id=turn.turn_id, ordinal=turn.ordinal, attempt_id=attempt.attempt_id,
-            response_sha256=attempt.response_sha256, content=response.get('content'),
-            reasoning=response.get('reasoning'), finish_reason=response.get('finish_reason'),
-            usage=response.get('usage'), model=response.get('model') or '', cached=True,
-            attempts_used=len(turn.attempts), attempts_max=len(turn.attempts))
-        shape, wire, salvage, note = _decode_round(answer, previous)
-        previous = wire if wire is not None else previous
-        usage = parse_usage(response.get('usage')).values
-        record = records.get(attempt.attempt_id)
-        rounds.append(Round(
-            turn.ordinal, turn.state, turn.reason_code, turn.request_sha256, attempt.attempt_id,
-            shape, wire, salvage, note,
-            {key: usage.get(key) for key in ('prompt_tokens', 'completion_tokens', 'reasoning_tokens')},
-            None if record is None else {'accepted': record.get('accepted'),
-                                         'parse': record.get('parse'),
-                                         'errors': len(record.get('errors') or ())}))
-    return unit, rounds
 
 
 # ─── design：当前输入下的完整候选预检 ────────────────────────────────────────

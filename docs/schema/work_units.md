@@ -69,6 +69,31 @@ owner 的完整验收、可发布」。二者各自独立：
 单节点路径跑了交付组装时，`runtime/workflow_status.json` 的终态与 `accepted_body` 取交付报告，与整链
 同源（`delivered`／`assembly_not_ready`），不再恒记 `node_run`。
 
+## 候选集合与沿用凭证（CS-H，RC-50～56）
+
+已购候选的权威是工作单元账与响应 blob；候选登记（`runtime/candidates/<owner>.json`，
+`novel/stages/candidates.py`）是**可由账重建的索引**：每个内容轮取最后一份有回答的 attempt，
+patch 回合在上一份候选上合并成整份 wire，登记该单元全部已购候选（含补丁链合并结果），每条记
+wire 原字节摘要、生成它的请求身份、采用引用链、生成时所依据的上游版本摘要与最近一次预检摘要。
+登记丢失或过期即从账重建——不重购、不补造谱系；`tools/replay_candidates.py` 与生产判定共用
+同一把读取尺。
+
+**免费沿用（carried_forward）**：上游修订使请求身份变化后，节点在购买前先对候选集合做免费判定
+（兼容性→上游差异→完整预检→择优）。零调用采用时：
+
+- 修订记录新增 kind `carried_forward`（`OwnerRevisionRecord` V2，新增必填
+  `applies_to_request_sha256`＝当前请求身份；`baseline_*` 仍是候选生成时的原请求/响应），
+  落 `runtime/revisions/carried/<owner>/<applies_to_request_sha256>.json`——**不进** `active/`
+  （它不是待办恢复级联），也不覆盖 `runtime/revisions/<owner>.json`（那格是历史采用记录，
+  owner patch 链核验要读它）；同一应用身份＋同一候选重放保留首次建档（I-30/I-31）；
+- 成本链 `ledger-row` 指向**原 attempt**：provenance 按 attempt_id 从成本账精确聚合原付费行，
+  本根只记一行零 token 的 cached 行（`cache_policy='carried-forward'`，新 attempt_id），
+  不把历史 token 抄第二遍；
+- 重启按当前请求身份免费重放（沿用事件按次记零 token 行，凭证不重写）；
+- 只读复检（`--check-only`）不走沿用凭证：同身份免费重放本就命中已购回答，
+  不该把每次免费复检记成一次采用；
+- 人工 wire 采用与仓外换算采用仍是各自档位，不并入沿用。
+
 # 按原配置继续
 
 `GET /api/agent/runs/:run_id/continuation` 返回历史完整 profiles、来源 hash、可用性及原因。

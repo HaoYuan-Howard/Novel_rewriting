@@ -569,6 +569,8 @@ CLI 的 medium 移除；整书上限从持久准入账派生传入付费边界�
 | ProviderAttempt | 一次实际外发：冻结配置、准确请求、原响应、成本 | `contracts/schema/workflow.py::WorkUnitAttempt`，每轮至多 4 次（`contracts/invariants.py::WORK_UNIT_MAX_DELIVERY_ATTEMPTS`） |
 | AcceptanceRecord | 解析、救回、引用解析、编译、机械验证分项结果；语义恒 `unver`；`accepted` 只表示“通过 owner 完整验收、可发布”，被拒或被回派上游的回答记 false 并带问题，是否被采用只看 CommitBundle（见 `docs/schema/work_units.md` 接受记录与发布语义） | 取代候选根的 validation 记录 |
 | CommitBundle | 输入清单、采用证据、输出摘要与 seal | 新增；采用状态从 seal 派生 |
+| OwnerRevisionRecord（V2） | owner_patch／resample／**carried_forward** 三类修订凭证；V2 增必填 `applies_to_request_sha256`（记录应用到的请求身份），v1 经 `owner_revision_record_of_payload` 集中迁移（删除条件见 REQUIREMENTS 兼容层表）。carried_forward＝免费沿用的采用凭证：`baseline_*` 是候选生成时的原请求/响应，落 `runtime/revisions/carried/<owner>/<身份>.json`，成本链 ledger-row 指向原 attempt | `contracts/schema/workflow.py`；原 `runtime/adopt_*` 的迁移面上浮 |
+| 候选登记 | 该单元全部已购候选（含补丁链合并）的索引：wire 原字节摘要、生成请求身份、采用引用链、上游版本摘要、最近一次预检摘要；**可由工作单元账与响应 blob 重建**，不是第二本账 | `runtime/candidates/<owner>.json`（CS-H H1b，RC-52） |
 
 - 原响应按 attempt 存储并被 attempt 引用，**空回答不再占据请求身份**。候选根现有
   request、admission、validation、adopt 四类运行记录的逐项映射与删除条件登记在

@@ -86,7 +86,10 @@ def _build_root(tmp_path, *, designs=None, through_design=True):
 
 @pytest.mark.parametrize('path', [(), ('scenes',), ('scenes', 1, 'beats', 0), ('a', 10, 'b'), ('x', 0)])
 def test_parse_json_path_is_the_inverse_of_format_json_path(path):
-    assert rc.parse_json_path(format_json_path(path)) == path
+    # H1b 起路径解析与候选合并住在 `novel/stages/candidates.py`（生产与只读重放
+    # 共用同一把尺，不为工具保留第二份实现）。
+    from novel.stages.candidates import parse_json_path
+    assert parse_json_path(format_json_path(path)) == path
 
 
 def test_error_code_groups_structured_bracketed_and_plain_diagnostics():
@@ -107,17 +110,18 @@ def _answer(content: str) -> DurableAnswer:
 
 
 def test_patch_round_merges_onto_the_previous_candidate_and_never_guesses_a_base():
+    from novel.stages.candidates import decode_round
     previous = {'protocol_version': 'v8', 'scenes': [{'k': 1}, {'k': 2}], 'tail': 'keep'}
     patch = json.dumps({'patches': [{'path': 'scenes[1]', 'value': {'k': 99}}]})
-    shape, wire, _, note = rc._decode_round(_answer(patch), previous)
+    shape, wire, _, note = decode_round(_answer(patch), previous)
     assert shape == 'patch' and wire['scenes'] == [{'k': 1}, {'k': 99}] and wire['tail'] == 'keep'
     assert 'scenes[1]' in note and previous['scenes'][1] == {'k': 2}, '合并不得改写前一份候选'
-    shape, wire, _, note = rc._decode_round(_answer(patch), None)
+    shape, wire, _, note = decode_round(_answer(patch), None)
     assert (shape, wire) == ('undecodable', None) and '缺基底' in note
-    shape, wire, _, note = rc._decode_round(_answer(json.dumps(
+    shape, wire, _, note = decode_round(_answer(json.dumps(
         {'patches': [{'path': 'nope[3]', 'value': 1}]})), previous)
     assert (shape, wire) == ('undecodable', None), '路径在基底上不存在不得补造'
-    shape, wire, _, _ = rc._decode_round(_answer(json.dumps({'protocol_version': 'v8', 'scenes': []})), previous)
+    shape, wire, _, _ = decode_round(_answer(json.dumps({'protocol_version': 'v8', 'scenes': []})), previous)
     assert shape == 'full' and wire['scenes'] == []
 
 

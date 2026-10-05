@@ -1052,3 +1052,30 @@ def test_hook_failure_keeps_other_legal_commits_and_recovers_free(tmp_path):
         assert repo.path(f'stage5/acceptance/body/ch{ordinal:02d}.json').read_bytes() == \
             receipts_before[ordinal]
     assert repo.read('runtime/workflow_status.json')['status'] == 'delivered'
+
+
+def test_clean_chain_keeps_one_purchase_and_registers_candidates_without_carry_forward(tmp_path):
+    """干净链每节点只买一次：候选登记随 H1b 落盘，但同身份不走沿用凭证（缓存重放）。"""
+    from novel.stages import candidates
+
+    wires = _full_chain_wires()
+    repo, session, transport = _make_session(tmp_path, wires)
+    _run(repo, session)
+    from novel.work_units import read_book_budget
+    base = _candidates_base(repo)
+    assert read_book_budget(base, 'run').used == 12, '沿用机制不改变干净链的购买次数'
+    design_rows = _ledger_rows(repo, 'design')
+    assert len([row for row in design_rows if not row.get('cached')]) == 1
+    assert not [row for row in design_rows if row.get('cache_policy') == 'carried_forward'], \
+        '同身份免费重放是缓存命中，不记沿用凭证'
+    registry = candidates.load_registry(repo, 'design')
+    assert registry is not None and len(registry.candidates) == 1
+    entry = registry.candidates[0]
+    assert entry['wire_sha256'] and entry['request_sha256'] and entry['upstream_version']['wire']
+    # 免费重放：零新购、登记不退化
+    _run(repo, session)
+    assert len(transport.calls) == 12
+    assert candidates.load_registry(repo, 'design').candidates
+    assert not (repo.root / 'runtime/revisions/carried').exists() or not list(
+        (repo.root / 'runtime/revisions/carried/design').glob('*.json')), \
+        '免费重放不产生沿用凭证'

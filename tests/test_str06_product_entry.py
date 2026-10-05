@@ -1447,3 +1447,81 @@ def _turn_request_payload(base, book, node: str, *, ordinal: int) -> dict:
         (unit.directory / f'{turns[0].request_payload_sha256}.json')
         .read_text(encoding='utf-8')))
     return blob.payload
+
+
+def test_carried_forward_reruns_the_real_cli_node_with_zero_new_design_calls(
+        base, tmp_path, monkeypatch):
+    """CS-H H1b×产品入口：上游修订后重跑 design 单节点（真实 CLI＋付费边界），
+    已购候选零调用沿用——不重复购买、不重复发布，只多一行零 token cached 行。"""
+    from pathlib import Path
+
+    from novel.store import Str06Repository
+
+    repo_root = str(Path(__file__).resolve().parents[1])
+    window = _install_process_window(
+        monkeypatch, tmp_path, real_nodes={'str06.stage4.body_design'})
+
+    source = base.parent / 'input_9006.txt'
+    source.write_text(SOURCE_TEXT, encoding='utf-8')
+    for argv in (
+            [sys.executable, '-B', '-m', 'novel.cli', 'run', 'stage0.remove',
+             '--source', str(source), '--base', str(base)],
+            [sys.executable, '-B', '-m', 'novel.cli', 'run', 'stage1.partition',
+             '9006', '--base', str(base)]):
+        _run_cli_subprocess(argv, repo_root)
+    settings = agent_settings.read(base)
+    agent_settings.update(base, profiles=_profiles(),
+                          expected_revision=settings.revision)
+
+    with TestClient(create_app(base)) as client:
+        response = client.post(
+            '/api/upload',
+            params={'filename': 'input_9006.txt', 'authorized': 'true',
+                    'egress_authorized': 'true',
+                    'idempotency_key': 'csh-h1b-9006'},
+            content=SOURCE_TEXT.encode('utf-8'),
+            headers={UI_HEADER: '1', 'Content-Type': 'application/octet-stream'})
+    assert response.status_code == 200, response.text
+    run_id = response.json()['run']['run_id']
+    assert agent.wait(run_id, 1800), '干净链未在时限内交付'
+
+    book = paths.resolve_novel_dir(base, '9006')
+    design_rel = 'stage4/design/body_design.json'
+    before_design = Str06Repository(book).read_model(design_rel)
+    rows_before = _ledger_rows(base)
+    paid_before = [row for row in rows_before if not row['cached']]
+    design_paid_before = [row for row in paid_before
+                          if row['purpose'] == 'design']
+    assert len(design_paid_before) == 1, '干净链只买过一份 design'
+
+    # 上游新版本：修订对照 wire 条目不变（只改 lineage 派生）⇒ 请求身份变。
+    from novel.llm.ledger import CostLedger, ledger_path
+    from tests.str06_facilities import make_context, republish_checkpoint
+    from tests.test_str06_candidate_preflight import _lineage_only_mutation
+
+    repo = Str06Repository(book)
+    repo.attach_context(make_context(book, ledger=CostLedger(path=ledger_path(base))))
+    republish_checkpoint(repo, _lineage_only_mutation)
+
+    # 重跑 design 单节点（生产 canonical argv：付费旗标＋真实进程窗口）。
+    from novel.orchestrator import nodes as node_planner
+    argv = node_planner.build_argv('str06.stage4.body_design', '9006', [],
+                                   base=base, egress_authorized=True)
+    _run_cli_subprocess(argv, repo_root)
+    _assert_process_window(window, {'str06.stage4.body_design'})
+
+    assert Str06Repository(book).read_model(design_rel) == before_design, \
+        '采用同一候选：产物内容不变（来源账如实记新上游指纹）'
+    fresh = _ledger_rows(base)[len(rows_before):]
+    assert fresh and all(row['cached'] and row['prompt_tokens'] == 0
+                         and row['completion_tokens'] == 0 for row in fresh), \
+        f'只允许零 token 缓存行：{[row.get("cache_policy") for row in fresh]}'
+    assert any(row.get('cache_policy') == 'carried-forward' for row in fresh)
+    assert len([row for row in _ledger_rows(base)
+                if not row['cached'] and row['purpose'] == 'design']) == 1, \
+        'design 不重复购买'
+    carried = list((book / 'runtime' / 'revisions' / 'carried' / 'design').glob('*.json'))
+    assert len(carried) == 1
+    record = _read_json(carried[0])
+    assert record['kind'] == 'carried_forward' and record['schema_version'] == 2
+    assert record['baseline_request_sha256'] == design_paid_before[0]['request_fingerprint']

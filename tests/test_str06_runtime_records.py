@@ -707,3 +707,158 @@ def test_frozen_concurrency_keeps_each_parallel_node():
         'slot_per_book': 32,
         'slot_per_provider': 200,
     }
+
+
+# ── CS-H H1b：carried_forward 采用凭证与 OwnerRevisionRecord V2 读兼容 ─────────
+
+def _carry_session(tmp_path, wires=None):
+    from tests.test_str06_body import _make_session
+    if wires is None:
+        from tests.test_str06_hook import _full_chain_wires
+        wires = _full_chain_wires()
+    return _make_session(tmp_path, wires)
+
+
+def test_carried_forward_records_one_zero_token_cached_row_pointing_at_the_original_attempt(tmp_path):
+    from novel.llm.paid_requests import ask_json
+    from novel.llm.transport import ChatRequest
+    from novel.stages.chain import run_body_design
+    from tests.str06_facilities import carry_forward_ask, json_ask
+    from tests.test_str06_candidate_preflight import _design_ctx, _prepare
+
+    ctx, wires, transport, _ = _prepare(tmp_path)
+    repo = ctx.repository
+    from tests.test_str06_candidate_preflight import _reopened_session
+    session = _reopened_session(repo, transport)
+    run_body_design(_design_ctx(ctx, session))
+    paid = [row for row in _design_ledger(repo) if not row.get('cached')]
+    assert len(paid) == 1
+    original = paid[0]
+
+    from tests.str06_facilities import republish_checkpoint
+    from tests.test_str06_candidate_preflight import _lineage_only_mutation
+    republish_checkpoint(repo, _lineage_only_mutation)
+    result = run_body_design(_design_ctx(ctx, session))
+    rows = _design_ledger(repo)
+    carried = [row for row in rows if row.get('cache_policy') == 'carried-forward']
+    assert len(carried) == 1, '本根只记一行零 token 的 cached 行'
+    assert carried[0]['prompt_tokens'] == 0 and carried[0]['completion_tokens'] == 0
+    assert carried[0]['cached'] is True and carried[0]['outcome'] == 'ok'
+    assert len(rows) == len(paid) + 1, '不重复计原付费 token'
+    assert result['reuse']['action'] == 'carried_forward'
+
+
+def _design_ledger(repo, purpose='design'):
+    import json as _json
+    path = repo.root.parent / '_service' / 'ledger.jsonl'
+    return [_json.loads(line) for line in path.read_text(encoding='utf-8').splitlines()
+            if line.strip() and _json.loads(line).get('purpose') == purpose]
+
+
+def test_carried_forward_revision_record_is_idempotent_and_refuses_a_different_candidate(tmp_path):
+    from novel.stages.candidates import canonical_wire_bytes
+    from novel.stages.chain import run_body_design
+    from novel.stages.revisions import carried_forward_rel, revision_error, stage_carried_forward
+    from tests.str06_facilities import republish_checkpoint
+    from tests.test_str06_candidate_preflight import (
+        _design_ctx, _lineage_only_mutation, _prepare, _reopened_session,
+    )
+
+    ctx, wires, transport, _ = _prepare(tmp_path)
+    repo = ctx.repository
+    session = _reopened_session(repo, transport)
+    run_body_design(_design_ctx(ctx, session))
+    republish_checkpoint(repo, _lineage_only_mutation)
+    run_body_design(_design_ctx(ctx, session))
+    rel = next((p.relative_to(repo.root).as_posix()
+                for p in (repo.root / 'runtime/revisions/carried/design').glob('*.json')), None)
+    assert rel and rel.startswith('runtime/revisions/carried/design/')
+    first = repo.inspect(rel)
+    assert first['kind'] == 'carried_forward' and first['schema_version'] == 2
+    # 重启按当前请求身份免费重放：同一采用事实不重写（只刷新建档时的产物快照），
+    # 成本账只多一行零 token cached 行
+    run_body_design(_design_ctx(ctx, session))
+    replay = repo.inspect(rel)
+
+    def _stable(payload):
+        return {k: v for k, v in payload.items()
+                if k not in ('created_at', 'before_product_sha256')}
+
+    assert _stable(replay) == _stable(first)
+    rows = _design_ledger(repo)
+    assert len(rows) == 3, '原付费一行＋每次免费沿用一行零 token cached 行'
+    assert sum(1 for r in rows if r.get('cached')) == 2
+    assert sum(1 for r in rows if not r.get('cached')) == 1, '实付行不因重放增加'
+    # 同一应用身份换了候选：拒绝覆盖采用凭证（不静默改账）
+    registry = repo.inspect('runtime/candidates/design.json')
+    entry = registry['candidates'][0]
+    identity = first['applies_to_request_sha256']
+    with pytest.raises(Exception, match='拒绝覆盖采用凭证'):
+        stage_carried_forward(
+            repo, owner='design', raw_bytes=canonical_wire_bytes({'protocol_version': 'x'}),
+            baseline={'identity': entry['request_sha256'],
+                      'response_sha256': '0' * 64,
+                      'source_root': str(repo.root)},
+            diff_sha256='1' * 64, applies_to_request_sha256=identity,
+            reason='免费沿用：换一个候选')
+
+
+def test_owner_revision_record_v1_payloads_migrate_on_read_without_rewriting_disk(tmp_path):
+    from contracts.schema.workflow import (
+        OwnerRevisionRecordV1, owner_revision_record_of_payload,
+    )
+    from novel.store import Str06Repository
+    from tests.str06_facilities import make_context
+    from novel.llm.ledger import CostLedger
+
+    repo = Str06Repository(tmp_path / 'run')
+    repo.attach_context(make_context(tmp_path / 'run', ledger=CostLedger(path=None)))
+    v1 = OwnerRevisionRecordV1(
+        kind='owner_patch', owner='design', node='str06.stage4.body_design',
+        baseline_request_sha256='a' * 64, baseline_response_sha256='b' * 64,
+        baseline_source_root='/tmp/src', candidate_sha256='c' * 64,
+        evidence_rel=f'runtime/revisions/evidence/{"c" * 64}.json',
+        diff_sha256='d' * 64, reason='人工补丁', sequence=0,
+        product_rel='stage4/design/body_design.json', before_product_sha256=None,
+        status='staged', created_at=1759000000)
+    repo.write('runtime/revisions/active/design.json', v1)
+    record = owner_revision_record_of_payload(
+        repo.inspect('runtime/revisions/active/design.json'))
+    assert record.schema_version == 2 and record.kind == 'owner_patch'
+    # V1 只可能是 owner_patch／resample：应用身份即基线身份
+    assert record.applies_to_request_sha256 == record.baseline_request_sha256
+    # 盘上仍是 v1 原字节：迁移只在读侧，不重写历史证据
+    assert repo.inspect('runtime/revisions/active/design.json')['schema_version'] == 1
+    # 未知版本显式拒绝（I-34）
+    with pytest.raises(ValueError, match='schema_version 未知'):
+        owner_revision_record_of_payload({'schema_version': 9})
+
+
+def test_revision_record_readers_decode_v1_and_v2_through_one_door(tmp_path):
+    from novel.store import Str06Repository
+    from novel.stages.revisions import verified_previous_revision
+    from tests.str06_facilities import make_context
+    from novel.llm.ledger import CostLedger
+
+    repo = Str06Repository(tmp_path / 'run')
+    repo.attach_context(make_context(tmp_path / 'run', ledger=CostLedger(path=None)))
+    # v1 记录经统一读口可读（先落原字节证据：读口要核对其摘要）
+    import hashlib
+    evidence = b'carried-forward evidence bytes'
+    candidate_sha = hashlib.sha256(evidence).hexdigest()
+    repo.write_evidence_bytes(f'runtime/revisions/evidence/{candidate_sha}.json', evidence)
+    payload = {
+        'schema_version': 1, 'kind': 'owner_patch', 'owner': 'design',
+        'node': 'str06.stage4.body_design', 'baseline_request_sha256': 'a' * 64,
+        'baseline_response_sha256': 'b' * 64, 'baseline_source_root': '/tmp/src',
+        'candidate_sha256': candidate_sha, 'evidence_rel': 'runtime/revisions/evidence/'
+        + candidate_sha + '.json', 'diff_sha256': 'd' * 64, 'reason': '人工补丁',
+        'sequence': 0, 'product_rel': 'stage4/design/body_design.json',
+        'before_product_sha256': None, 'status': 'staged', 'created_at': 1759000000}
+    repo.write('runtime/revisions/active/design.json', payload)
+    record = verified_previous_revision(repo, 'design')
+    assert record is not None and record.applies_to_request_sha256 == 'a' * 64
+    # v2 记录同口可读
+    repo.write('runtime/revisions/active/design.json',
+               {**payload, 'schema_version': 2, 'applies_to_request_sha256': 'e' * 64})
+    assert verified_previous_revision(repo, 'design').applies_to_request_sha256 == 'e' * 64
