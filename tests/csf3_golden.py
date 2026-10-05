@@ -102,7 +102,13 @@ def load_golden(golden_path: Path, source_txt: Path) -> dict:
     return data
 
 
-def _anchor_windows(data: dict, check: dict, span: int = 2) -> list[TextSegment]:
+#: 锚点窗口半径。第一轮 ±2 实测：模型多次引用窗口外的同章证据被逐字闸拒
+#: （测量管道问题，非判定错误）——开发集调参放宽到 ±6；留出集冻结后不再动。
+ANCHOR_WINDOW_SPAN = 6
+
+
+def _anchor_windows(data: dict, check: dict,
+                    span: int = ANCHOR_WINDOW_SPAN) -> list[TextSegment]:
     """锚点行 ±span 的合并窗口（1-based 行号、空行计入、不清洗）。"""
     lines = data['_lines']
     ranges: list[tuple[int, int]] = []

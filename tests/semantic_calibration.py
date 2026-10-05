@@ -54,6 +54,12 @@ CSF3_RULES_REVISION = 'csf3-rules-r1'
 #: 系统段（与现役付费节点同形：短身份，不承载规则正文）。
 CALIBRATION_SYSTEM = '语义核验标定'
 
+#: 核验请求档位（用户 2026-10-05 裁决：flash＋thinking low＋max_tokens 65536。
+#: 首轮 high/4000 实测 15 次全部把额度耗在 reasoning、content 为空——档位
+#: 随授权记录更新，进报告身份登记）。
+CSF3_REQUEST_PROFILE = {'reasoning_effort': 'low', 'thinking': True,
+                        'max_tokens': 65536}
+
 VERDICTS = ('支持', '矛盾', '未确定')
 
 TARGETS = ('stage2_fact', 'preserve_basis', 'design_fragment')
@@ -409,8 +415,7 @@ def build_verification_request(case_id: str, target: str, material: Material, *,
                                model: str) -> ChatRequest:
     return ChatRequest(model=model, system=CALIBRATION_SYSTEM,
                        user=build_verification_prompt(case_id, target, material),
-                       reasoning_effort='high', thinking=True, json_mode=True,
-                       max_tokens=4000)
+                       json_mode=True, **CSF3_REQUEST_PROFILE)
 
 
 # ───────────────────────── 判定 wire 的机械解析 ─────────────────────────
@@ -651,12 +656,20 @@ def run_calibration(labels: FrozenLabels, materials: Mapping[str, Material],
         request = build_verification_request(
             batch, first.target, material, model=model)
         response = transport.send(request)
+        payload_text = (response.content or '').strip()
+        salvaged = False
+        if not payload_text and (response.reasoning or '').strip():
+            # 空正文兜底（同生产 SALVAGE_ANSWER_FROM_REASONING 纪律）：捞回的
+            # 文本过**同一套**解析闸，采纳与否由解析决定；留痕可机器数。
+            from novel.llm.json_text import normalize_json_text
+            payload_text = normalize_json_text(response.reasoning)
+            salvaged = bool(payload_text)
         wire, errors = parse_verdict_payload(
-            response.content, closed_items=material.closed_items(),
+            payload_text, closed_items=material.closed_items(),
             texts=material.texts(),
             require_selection=first.target == 'stage2_fact')
         entry = {'batch': batch, 'prompt_chars': len(request.user),
-                 'parse_errors': errors}
+                 'parse_errors': errors, 'salvaged_from_reasoning': salvaged}
         if token_counter is not None:
             entry['prompt_tokens'] = token_counter(request.user)
         requests.append(entry)
@@ -676,6 +689,7 @@ def run_calibration(labels: FrozenLabels, materials: Mapping[str, Material],
         'model': model,
         'transport': transport_kind,
         'paid': paid,
+        'request_profile': dict(CSF3_REQUEST_PROFILE),
     }
     report['requests'] = requests
     report['cost_note'] = (
