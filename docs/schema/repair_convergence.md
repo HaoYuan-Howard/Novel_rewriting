@@ -19,9 +19,9 @@ Gherkin 使用 [Cucumber 官方语法](https://cucumber.io/docs/gherkin/referenc
 | 同上 | RC-16 | 真实CLI／调度／交付／重启的零付费stage与产品入口测试 |
 | 同上 | RC-18～25 | 作业单位、结构化诊断、修订权限、材料语义、时点和共用摄入依赖；逐项证据见下方职责边界表 |
 | 同上 | RC-26～29 | 证据寻址（2026-10-04，rc15）：证据段＝自然段且一段一行、basis 段号由 Resolver 按引文定位、src 区间组合闭合、patch 轮整份回答按整份验收；`tests/test_stage2_evidence_addressing.py`（真实 book／chapters 入口与 `ask_json` 接受循环），见下方证据寻址表 |
-| 同上 | RC-30～35 | 高影响源事实、叙述者与人物知情、Preserve限制依据及义务去重；目标行为，工程协议测试与真实语义标定分别验收 |
+| 同上 | RC-30～35 | 高影响源事实、叙述者与人物知情、Preserve限制依据及义务去重；目标行为，工程协议测试已落地；真实语义标定已执行并封口（2026-10-05，判官不满足启用硬规则，重开条件见 DECISIONS 同日行） |
 | 同上 | RC-36／38 | 已实现（2026-10-04，rc16，`stage4-design-v8`）：事实锁在已选状态上标注`lock`，映射随SemanticBinding发布且不复制value；`tests/test_str06_a4_design_locks.py`（CS-F2一节：真实v8入口的正反例与RC-38四行）、`tests/test_str06_fact_lock_stage.py`（真实Stage2→Preserve→body_design→compile链）、`tests/test_str06_design_slim.py`、`tests/test_str06_contracts.py` |
-| 同上 | RC-37／39 | **仅结构层已实现**：结构检查只报引用与模式的实际结果，语义对应未运行即保持unver；局部语义核验及其源盲请求组装属CS-F3（先标定、后启用），**尚未实现** |
+| 同上 | RC-37／39 | **仅结构层已实现**：结构检查只报引用与模式的实际结果，语义对应未运行即保持unver；局部语义核验已随CS-F3离线标定封口（2026-10-05：判官不可启用，生产语义维持unver，重开条件见DECISIONS同日行） |
 | 同上 | RC-40～43 | 已实现Writer路径（2026-10-04，IR rc16／renderer v10）：只投影已证明唯一绑定人物的完整登记称谓，短姓／未登记表达不猜人物，留痕可观测，Design自有文本冲突不由compiler代选；`tests/test_str06_name_projection.py`、`tests/test_str06_material_repair.py`（归因仍按原字段）、`tests/test_str06_r10b_writer_packet.py`。**Hook材料尚未投影**，Stage7无需改动（新称谓创作不在本批，RC-42只证拒绝未登记别名） |
 | 同上 | RC-44～45 | `tests/test_str06_candidate_preflight.py`：同一候选聚合自身及继承材料问题，真实接受入口上游优先且失败不发布，免费恢复与已有Hook复验，依赖缺失明确未运行；验证记录见提交`edf965d7`说明及重置前（`eb5f0d5a`）的REQUIREMENTS |
 | 同上 | RC-47 | 已实现（2026-10-04；2026-10-05 CS-F1 收口）：Design错误在判定处带wire路径，最小完整父项／耦合字段合并／替换不重叠，合并后重跑完整预检，无法定位退整份；读取闭合→read行、确认闭合→初始行／know行（带结构化位置的判据在`read_closure`），Hook判据错误（材料、起笔事实、称谓释放、位置引用，含禁止揭示×材料的双侧路径）同约定接条目返修——Hook与Design共用`design_paths`的构造约定与定位器；`tests/test_str06_design_patch.py`（定位策略纯函数＋真实`patches`回答的stage用例，含读取闭合read行返修与Hook材料条目返修）、`tests/test_str06_product_entry.py`（真实子进程）。仍整份修订：全局覆盖闸与无路径错误类（缺省标注的责任拍须模型选择，不可条目定位） |
@@ -182,8 +182,9 @@ compile或只负责同一性关联的associate。不修改13节点拓扑、不�
 不复制一份canonical事实；语义结论变化仍由章观察owner修订其正式产物。
 
 自动语义阻断属于现役`unver`政策的变化。用户于2026-10-04明确选择先做离线
-标定再启用；未完成标定及启用验收时，不能把工程接口或fake transport绿例记成语义核验已通过。
-已确认的具体错误通过现有owner patch纠正，未确定项不补猜；任何新增硬闸必须有
+标定再启用；标定已于2026-10-05执行并封口——判官不满足启用硬规则，自动语义阻断不启用、
+生产语义保持unver，重开条件见DECISIONS同日行；启用验收完成前，不能把工程接口或fake transport
+绿例记成语义核验已通过。已确认的具体错误通过现有owner patch纠正，未确定项不补猜；任何新增硬闸必须有
 免费重验、显式人工编辑或等价恢复，沿用既有付费、外发与预算纪律。
 
 Preserve从源事实中选择本次重构不可丢的功能，不能把每条源事实默认升级为硬锁。

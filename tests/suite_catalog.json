@@ -41,8 +41,7 @@
       "tests": [
         "tests/test_str06_*.py",
         "tests/test_layering.py",
-        "tests/test_test_selection.py",
-        "tests/test_semantic_calibration.py"
+        "tests/test_test_selection.py"
       ]
     }
   },
@@ -1183,13 +1182,6 @@
         "test_rc27_real_chain_publishes_located_basis": "stage",
         "test_rc29_full_answer_in_patch_round_is_accepted_as_full_revision": "stage"
       }
-    },
-    "tests/test_semantic_calibration.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage2",
-        "stage4"
-      ]
     }
   },
   "version": 1

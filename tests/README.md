@@ -299,21 +299,8 @@ state、chapter_ordinals 和 evidence。证据写定位与判断说明，不复�
 `tests/test_golden_set.py` 验证工具自己的授权、完整分母、陈旧证据和质量状态；它属于单元 / contract，
 不能代替 Workbench 的真实生成与人工阅读。原 current-schema corpus 书目、manifest 与付费证据判据继续独立保留。
 
-## CS-F3 语义核验离线标定 harness
-
-`tests/semantic_calibration.py`（`python -m tests.semantic_calibration`）是关键语义离线标定的免费
-前置工具：冻结预期标签 → 按三目标（stage2 高影响事实核验／preserve 限制依据／design 局部语义
-核验）组装请求 → 经脚本化 fake transport 取回答 → 机械解析 → 与金标评分并汇总分项指标与启用
-阻断条件。反例在 `tests/test_semantic_calibration.py`（单元 / contract）。
-
-工具纪律：不新增产品节点、不接付费面——真实执行须独立授权与正式接线，本入口只支持 fake 模式；
-报告恒为 `semantic_gate_status: unver`，fake 绿例不得记成语义核验已通过；金标拟用仓外
-Golden_Set yaml 仍待用户确认，未确认来源在评分中作为阻断条件报出。冻结标签先于模型回答冻结
-（带时点与来源），不能用待测模型自己的回答当标准。
-
-```powershell
-conda run -n novel_refactor python -m tests.semantic_calibration --labels <labels.json> --materials <materials.json> --responses <responses.json> --out <report.json>
-```
+CS-F3 语义核验离线标定 harness 曾登记于此（semantic_calibration 与其反例、冻结标签）；2026-10-05
+随该批封口删除，代码与当时的登记可查 Git 提交 2d17a898，裁决与证据位置见 DECISIONS 同日行。
 
 标记为 `corpus` 的测试是针对冻结生成产物或源语料的集成检查，默认 marker 表达式会跳过它们。
 `corpus` 是现有数据依赖标记，与四层职责并非一一对应；它提供工程证据，不能替代上述成书质量评价。
