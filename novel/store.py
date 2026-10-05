@@ -53,8 +53,8 @@ from contracts.artifacts import (
 )
 from contracts.invariants import NODES
 from contracts.schema import (
-    ARTIFACT_SPECS, ArtifactVersionError, HumanApproval, InputEdge, Provenance,
-    RevalidationAudit, artifact_spec, decode_artifact, encode_artifact,
+    ARTIFACT_SPECS, ArtifactVersionError, InputEdge, Provenance,
+    artifact_spec, decode_artifact, encode_artifact,
 )
 from contracts.schema.workflow import CommitOutputRef
 from novel import paths, prov
@@ -63,7 +63,7 @@ from novel.consumption import (
     producer_node, project_consumed,
 )
 from novel.errors import (
-    ApprovalRequired, ArtifactUnreadable, ByteFormRefused, PathRefused,
+    ArtifactUnreadable, ByteFormRefused, PathRefused,
     ProvenanceRefused, TerminalState, UnsealedArtifact, UpstreamMissing,
     UpstreamStale,
 )
@@ -214,8 +214,6 @@ def _upgrade_rc12_payload(spec: str | None, data: dict) -> dict:
 #: 产物里那个来源账字段的**盘上键名**。模型侧字段叫 `provenance`（`_` 开头在 Pydantic 里
 #: 是私有属性），靠 `Field(alias='_provenance')` 对上；这里按 alias 找，不按字段名猜。
 PROVENANCE_KEY = '_provenance'
-REVALIDATION_DIRNAME = '_revalidation'
-REVALIDATION_REFERENCE_VERSION = 1
 
 # These no-provenance artifacts have a deterministic freshness bridge and are
 # written only after the companion facts needed by that bridge are available.
@@ -308,14 +306,6 @@ def readonly_snapshot_value(
     return cast(T, copy.deepcopy(memo.values[key]))
 
 
-def _canonical_json_bytes(value: Any) -> bytes:
-    """Canonical logical JSON used only for audit comparison and hashing."""
-    return json.dumps(
-        value, ensure_ascii=False, sort_keys=True, separators=(',', ':'),
-        allow_nan=False,
-    ).encode('utf-8')
-
-
 def _filesystem_path(path: Path) -> str:
     """Return an explicit Windows extended-length filesystem path."""
     value = os.path.abspath(os.fspath(path))
@@ -368,69 +358,6 @@ class _HistoryFrame:
     absent_dirs: set[Path] = field(default_factory=set)
 
 
-def _json_pointer_diff(before: Any, after: Any, pointer: str = '') -> tuple[str, ...]:
-    """Return deterministic RFC 6901 pointers whose logical values changed."""
-
-    def child(base: str, token: object) -> str:
-        escaped = str(token).replace('~', '~0').replace('/', '~1')
-        return f'{base}/{escaped}'
-
-    changed: list[str] = []
-    if isinstance(before, dict) and isinstance(after, dict):
-        for key in sorted(set(before) | set(after)):
-            at = child(pointer, key)
-            if key not in before or key not in after:
-                changed.append(at)
-            else:
-                changed.extend(_json_pointer_diff(before[key], after[key], at))
-    elif isinstance(before, list) and isinstance(after, list):
-        common = min(len(before), len(after))
-        for index in range(common):
-            changed.extend(_json_pointer_diff(
-                before[index], after[index], child(pointer, index)))
-        for index in range(common, max(len(before), len(after))):
-            changed.append(child(pointer, index))
-    elif type(before) is not type(after) or before != after:
-        changed.append(pointer)
-    return tuple(sorted(set(changed)))
-
-
-def build_revalidation_audit(
-    *,
-    actor: str,
-    reason: str,
-    baseline_locator_sha256: str,
-    baseline_raw_sha256: str,
-    baseline_payload: Any,
-    candidate_raw_sha256: str,
-    candidate_payload: Any,
-) -> RevalidationAudit:
-    """铸一份「基线 → 候选」的不可变对证账。**全仓唯一的构造口。**
-
-    当前用于 .INVALID 提升：基线是已落盘产物的不可变快照。它回答字节、
-    逻辑内容是否变化及具体 JSON pointer，不根据展示读数推断人工修改。
-    edited_by_human 与 content_changed 同值：此路只允许人修改待提升的候选。
-    """
-    baseline_canonical = hashlib.sha256(
-        _canonical_json_bytes(baseline_payload)).hexdigest()
-    candidate_canonical = hashlib.sha256(
-        _canonical_json_bytes(candidate_payload)).hexdigest()
-    content_changed = baseline_canonical != candidate_canonical
-    return RevalidationAudit(
-        actor=actor,
-        reason=reason,
-        baseline_locator_sha256=baseline_locator_sha256,
-        baseline_raw_sha256=baseline_raw_sha256,
-        candidate_raw_sha256=candidate_raw_sha256,
-        baseline_canonical_sha256=baseline_canonical,
-        candidate_canonical_sha256=candidate_canonical,
-        raw_changed=baseline_raw_sha256 != candidate_raw_sha256,
-        content_changed=content_changed,
-        edited_by_human=content_changed,
-        changed_json_pointers=_json_pointer_diff(baseline_payload, candidate_payload),
-    )
-
-
 def provenance_field(model: type[BaseModel]) -> str | None:
     """这个模型里哪个字段是来源账。没有就返回 `None`。
 
@@ -458,8 +385,9 @@ class ArtifactStore:
             _memo_for_context(ctx)
         self.ctx = ctx
         # Each active history transaction records exact paths it may mutate.
-        # Content-addressed paths are registered lazily by `_write_immutable`;
-        # this avoids scanning/deleting another artifact's concurrent baseline.
+        # Late-bound paths (round archives, delivery retirement) are registered
+        # lazily by `_track_history_path`; this avoids scanning/deleting another
+        # artifact's concurrent history.
         self._history_transactions: list[_HistoryFrame] = []
 
     # ── 定位 ──────────────────────────────────────────────────────────────
@@ -904,7 +832,7 @@ class ArtifactStore:
         """Rollback live artifacts and their immutable history as one byte set.
 
         The scope includes each formal artifact, its INVALID sibling, their
-        matching numbered rounds, and content-addressed revalidation baselines.
+        matching numbered rounds.
         Nested transactions let a producer widen a safe single-artifact helper
         to a companion review/context without duplicating compensation logic.
         """
@@ -976,7 +904,7 @@ class ArtifactStore:
                 detail = '; '.join(repr(error) for error in rollback_errors)
                 raise ProvenanceRefused(
                     f'多产物事务失败且回滚未完整完成：{detail}。'
-                    '请勿继续下游，先人工核对 live/_rounds/_revalidation') from exc
+                    '请勿继续下游，先人工核对 live/_rounds') from exc
             raise
         finally:
             popped = self._history_transactions.pop()
@@ -1066,7 +994,7 @@ class ArtifactStore:
         """只刷新一份**已经存在**的正式产物，不宣称它取代同名 ``.INVALID``。
 
         这条窄路只服务于 ``--recheck`` 一类确定性派生字段回写：正式稿正文没有产生新轮，
-        而 live INVALID 仍是一份尚待 ``--revalidate`` 的独立候选。若复用 :meth:`write`，
+        而 live INVALID 仍是一份尚待处理的独立问题稿。若复用 :meth:`write`，
         后者会按“新正式稿已经取代问题稿”的正确常规语义退休 INVALID，反而把恢复路藏进
         ``_rounds``。目标正式稿不存在时关闭式拒绝，避免凭这条路创造一对新的
         formal + INVALID 并存状态。
@@ -1217,29 +1145,23 @@ class ArtifactStore:
         它是判据 36 那整套设计的**唯一痕迹**，而「闸门没跑成」与「闸门跑过没事」
         正是 `Q-2` 要求必须能区分的两件事。
 
-        ⚠ 稿子**没有丢，也没有再花钱**：0 成本提升路是 `promote_invalid`。
+        ⚠ 稿子**没有丢，也没有再花钱**：它留在 `.INVALID` 孪生上，恢复靠重跑所属
+        owner；合格的新稿落正式位时，同名 `.INVALID` 退休进 `_rounds/`（`retire_invalid`）。
         """
         rel = paths.check_rel_deep(rel)
         inv_rel = paths.invalid_of(rel)
-        _final, data, locator = self._prepare_invalid(rel, artifact, gates_skipped=gates_skipped)
-        baseline = self.path(self._revalidation_baseline_rel(inv_rel, locator))
+        data = self._prepare_invalid(rel, artifact, gates_skipped=gates_skipped)
         p = self.path(inv_rel)
         with self.history_transaction(inv_rel):
             if self.exists(inv_rel):
                 self.archive_round(inv_rel)
-            self._write_immutable(baseline, data)
             os.makedirs(_filesystem_path(p.parent), exist_ok=True)
             self._replace_atomically(p, data)
         return p
 
-    def prospective_invalid_sha256(self, rel: str, artifact: BaseModel, *,
-                                   gates_skipped: list[str]) -> str:
-        """冻结将落 INVALID 的准确字节身份；与真实写口共用唯一渲染算法。"""
-        _final, data, _locator = self._prepare_invalid(rel, artifact, gates_skipped=gates_skipped)
-        return hashlib.sha256(data).hexdigest()
-
     def _prepare_invalid(self, rel: str, artifact: M, *,
-                         gates_skipped: list[str]) -> tuple[M, bytes, str]:
+                         gates_skipped: list[str]) -> bytes:
+        """渲染并预校验将落盘的 `.INVALID` 字节；任何一步失败都发生在第一个字节落盘之前。"""
         inv_rel = paths.invalid_of(paths.check_rel_deep(rel))
         src = self._provenance_of(artifact)
         if src is None:
@@ -1247,25 +1169,11 @@ class ArtifactStore:
                 f'{type(artifact).__name__} 没有 `_provenance` 字段，落不了 `.INVALID`：'
                 f'`gates_skipped` 只有来源账这一个落点，没有它就等于没记过闸门缺料')
 
-        # 定位键不能把自己算进自己的 hash。先渲染一次「没有定位键」的完整字节，
-        # 再把其 raw SHA-256 写回来源账。最终 INVALID 与不可变快照逐字节相同，
-        # 因而 raw hash 能如实区分「只改了排版」与「逻辑 JSON 也改了」。
-        pending = src.model_copy(update={
-            'gates_skipped': list(gates_skipped),
-            'invalid_baseline_sha256': None,
-        })
-        preliminary = self._render(inv_rel, artifact, prov_override=pending)
-        # Locator binds the complete deterministic pre-locator bytes (including
-        # provenance), not the business-content canonical hash used by the audit.
-        # Two generations with identical business JSON but different source facts
-        # must never collide onto one immutable snapshot path.
-        locator = hashlib.sha256(preliminary).hexdigest()
-        final_src = pending.model_copy(update={'invalid_baseline_sha256': locator})
-        data = self._render(inv_rel, artifact, prov_override=final_src)
+        pending = src.model_copy(update={'gates_skipped': list(gates_skipped)})
+        data = self._render(inv_rel, artifact, prov_override=pending)
         self._verify_round_trip(inv_rel, type(artifact), data)
-
-        final, _payload = self._validate_payload(type(artifact), inv_rel, self._loads(inv_rel, data))
-        return final, data, locator
+        self._validate_payload(type(artifact), inv_rel, self._loads(inv_rel, data))
+        return data
 
     def write_text(self, rel: str, text: str) -> Path:
         """落一份**字节形态**产物。**显式按字节写 `\\n`，不带 BOM。**
@@ -1290,187 +1198,6 @@ class ArtifactStore:
         os.makedirs(_filesystem_path(p.parent), exist_ok=True)
         data = text.encode('utf-8')          # ← 不加 BOM：`utf-8` 不是 `utf-8-sig`
         self._replace_atomically(p, data)
-        return p
-
-    # ── `.INVALID` 的 0 成本提升路 ────────────────────────────────────────
-
-    def revalidation_audit(self, rel: str, model: type[M], *,
-                           actor: str, reason: str) -> RevalidationAudit:
-        """Compare the live ``.INVALID`` with its immutable creation snapshot.
-
-        This is public so a caller can show the exact audit before promotion.
-        It is read-only: malformed credentials, a missing/tampered baseline, or
-        an unreadable current artifact all refuse without changing one byte.
-        """
-        _artifact, _baseline, _src, audit = self._revalidation_material(
-            rel, model, actor=actor, reason=reason)
-        return audit
-
-    def revalidation_baseline(self, rel: str, model: type[M], *,
-                              actor: str, reason: str) -> M:
-        """返回并核验创建 live INVALID 时的不可变强类型主体；全程只读。
-
-        Stage-specific producer 可用它关闭那些不允许人工改写的任务身份字段；不能只看
-        live INVALID，因为后者正是允许人编辑、随后再走 ``--revalidate`` 的候选。
-        """
-        _artifact, baseline, _src, _audit = self._revalidation_material(
-            rel, model, actor=actor, reason=reason)
-        return baseline
-
-    def prepared_invalid_promotion(self, rel: str, model: type[M], *,
-                                   actor: str, reason: str,
-                                   artifact_override: M | None = None) -> M:
-        """只读构造 ``promote_invalid`` 将落下的 exact typed 正式目标。
-
-        多产物 producer 先把这份目标及其 prospective SHA 写进 prepared journal，
-        再逐件收敛 live companion；不能为了取得 promoted provenance 先碰正式文件。
-        """
-        official_rel = paths.check_rel_deep(rel)
-        live_artifact, _baseline_artifact, src, audit = self._revalidation_material(
-            official_rel, model, actor=actor, reason=reason)
-        artifact = artifact_override if artifact_override is not None else live_artifact
-        if not isinstance(artifact, model):
-            raise ProvenanceRefused(
-                f'{official_rel} 的 artifact_override 必须是 {model.__name__}，'
-                f'实得 {type(artifact).__name__}；一个字节都没动')
-        promoted_source = src.promoted(code=self.ctx.code, audit=audit)
-        data = self._render(
-            official_rel, artifact, prov_override=promoted_source)
-        self._verify_round_trip(official_rel, model, data)
-        prepared, _payload = self._validate_payload(
-            model, official_rel, self._loads(official_rel, data))
-        return prepared
-
-    def promote_invalid(self, rel: str, model: type[M], *,
-                        actor: str, reason: str,
-                        artifact_override: M | None = None) -> Path:
-        """按**当前**判据重判合格之后，把 `.INVALID` 提升为正式产物。**唯一提升入口。**
-
-        两件事，都是拿实测教训换来的：
-
-        ① **生成来源账原样继承，并追加重验证审计**。`promoted()` 的签名里
-           **没有** `prompts` / `model` / `inputs`，只有强类型审计账；生成来源没有可伪造入口。
-           原型的 `--revalidate` 之所以能**伪造**，正是因为提升分支够得到那个
-           会构造一份全新来源账的函数：它盖上当前 SYS 指纹 + 当前 model + 当前 inputs，
-           `round` 还 +1，而**没有任何一次新落笔发生过**。
-
-        ② **`.INVALID` 归档进 `_rounds/`，不删**（`Q-8`）。原型「读完问题稿就把它删了」
-           造出的正是盘上那条幽灵边：另一份产物的 `inputs` 还指着它。
-           **删一个还被别人指着的文件，会同时制造两个问题。**
-
-        ③ **已有的当前正式稿也要归档，不许被覆盖掉。** 落正式稿走的是原子替换，
-           而原子替换是**无条件**的：盘上那份**花过钱**的正式稿原地消失，
-           `_rounds/` 里连一份副本都没有。原来只归档 `.INVALID` 那一条历史。
-           对 stage5 这直接违反「上一轮正式稿进入 `_rounds`」；对别的层，
-           它违反的是本模块自己那句「**归档是出事之后唯一能回去的那一份**」。
-           唯一例外是注册表已显式登记的低版本 shape-break 正式稿：它不是当前业务
-           轮次，按版本契约应由 producer 重建且不得污染 current `_rounds`。
-
-        ``artifact_override`` 只承载调用方按 live INVALID 重建的业务主体。
-        人工改动审计仍严格比较「不可变基线 vs live INVALID」；最终来源账的
-        prompts/model/inputs/usage/round 强制使用不可变基线的
-        ``src.promoted(audit=...)``，live 中自报的生成来源不被信任。旧链 Stage2
-        派生账白名单（``_REVALIDATION_DERIVED_PROVENANCE_FIELDS``）已随
-        2026-10-05 清理删除：其键全部指向退役路径，分支不可达。
-        """
-        self._require_workflow_write()
-        official_rel = paths.check_rel_deep(rel)
-        inv_rel = paths.invalid_of(official_rel)
-        if not self.exists(inv_rel):
-            raise UpstreamMissing(f'{self.ctx.node}: 没有 {inv_rel} 可提升')
-
-        spec = artifact_spec(official_rel)
-        formal_version = self.schema_version_of(official_rel)
-        if (spec is not None and formal_version is not None
-                and formal_version > spec.current_version):
-            raise ArtifactUnreadable(
-                f'{official_rel} 是未来 schema v{formal_version}，当前仅 v{spec.current_version}；'
-                '拒绝用当前 INVALID 覆盖')
-        discard_shape_break_formal = bool(
-            spec is not None
-            and formal_version is not None
-            and formal_version < spec.current_version
-        )
-
-        artifact = self.prepared_invalid_promotion(
-            official_rel, model, actor=actor, reason=reason,
-            artifact_override=artifact_override)
-
-        # 【四步的顺序是挑过的】① 把两个**大概率的失败**挡在「一个字节都没动」之前
-        # （轮次号撞了 · 载体层往返不过）② 上一轮正式稿进归档 ③ 落正式稿
-        # ④ 把 `.INVALID` 挪进归档。
-        #
-        # ⚠ 剩下那个窗口（③④ 之间硬崩）**是刻意选的那一半**：崩在这里会同时留下
-        #   一份提升好的正式稿和一份还没挪走的 `.INVALID`，而**再跑一次 `--revalidate`
-        #   就自愈**（两份内容本来就相同，正式稿那份带 `revalidated: true`）。
-        #   反过来「先归档后落稿」崩掉的话，`.INVALID` 已经从它该在的位置消失、
-        #   正式稿又还没写——人必须自己去 `_rounds/` 里翻，而没有一行报告会告诉他去翻。
-        # ⚠ 这一处进 `R-14.6` 那张「不保证原子的地方」的表（D 期建表时别漏了它）。
-        round_no = self._round_on_disk(inv_rel) or self.next_round(inv_rel)
-        dest = self.path(paths.round_rel(inv_rel, round_no))
-        if _path_exists(dest):
-            raise PathRefused(
-                f'归档位 {dest} 已被占用，**一个字节都没动**。轮次号多半算错了')
-        data = self._render(official_rel, artifact)
-        self._verify_round_trip(official_rel, model, data)
-
-        p = self.path(official_rel)
-        # ② ⚠⚠ **挪，不是 `keep=True` 抄。** 抄一份会让归档位从此被占住，
-        #   于是③④之间崩溃后的重跑撞上 `PathRefused` 卡死——那正好毁掉上面刻意选的那半个窗口。
-        #   挪走之后重跑没有东西可归档，`--revalidate` 自愈。
-        # ⚠⚠ **字节相同就不叫销毁。** 归档是为了保住一份**会被销毁**的版本；
-        #   ③④ 之间崩过一次的话，重跑时盘上那份已经是提升好的那一份，
-        #   再归档一次就是凭空往轮次账里塞一个**幻影轮**——对 stage5 就是
-        #   「把一次重判记成第 N 轮写作」，正是 `promoted()` 存在要防的那件事。
-        # ⚠ 正式稿与 `.INVALID` 的 stem 不同（`stem_of` 保留 `.INVALID`），
-        #   两条历史各编各的号，`r1` 不会撞。
-        official_before = _read_file_bytes(p) if _is_file(p) else None
-        official_archive: Path | None = None
-        invalid_archive: Path | None = None
-        replacement_attempted = False
-        try:
-            if (official_before is not None and official_before != data
-                    and not discard_shape_break_formal):
-                official_archive = self.archive_round(official_rel)
-            os.makedirs(_filesystem_path(p.parent), exist_ok=True)
-            replacement_attempted = True
-            self._replace_atomically(p, data)
-            self._assert_self_fresh(official_rel, artifact)
-            # INVALID 在正式稿通过 freshness 后置条件之前始终留在活路径。
-            invalid_archive = self.archive_round(inv_rel, round_no=round_no)
-        except BaseException as exc:
-            rollback_errors: list[BaseException] = []
-            if invalid_archive is not None and _is_file(invalid_archive) \
-                    and not _path_exists(self.path(inv_rel)):
-                try:
-                    os.replace(
-                        _filesystem_path(invalid_archive),
-                        _filesystem_path(self.path(inv_rel)),
-                    )
-                except BaseException as rollback_exc:
-                    rollback_errors.append(rollback_exc)
-            try:
-                if official_archive is not None and _is_file(official_archive):
-                    try:
-                        os.unlink(_filesystem_path(p))
-                    except FileNotFoundError:
-                        pass
-                    os.replace(
-                        _filesystem_path(official_archive), _filesystem_path(p))
-                elif replacement_attempted:
-                    if official_before is None:
-                        if _is_file(p):
-                            os.unlink(_filesystem_path(p))
-                    else:
-                        self._replace_atomically(p, official_before)
-            except BaseException as rollback_exc:
-                rollback_errors.append(rollback_exc)
-            if rollback_errors:
-                detail = '; '.join(repr(error) for error in rollback_errors)
-                raise ProvenanceRefused(
-                    f'{official_rel} 提升失败且回滚未完整完成：{detail}。'
-                    '请勿继续下游，先人工恢复正式稿与 INVALID') from exc
-            raise
         return p
 
     # ── 轮次与归档 ────────────────────────────────────────────────────────
@@ -1560,59 +1287,7 @@ class ArtifactStore:
             #   原件和归档，而下一次归档会撞上已存在的目标、把这条路堵死。
             #   `_rounds/` 与产物同卷，`replace` 在这里是原子的。
             os.replace(_filesystem_path(src), _filesystem_path(dest))
-            self._deduplicate_archived_revalidation(rel, dest)
         return dest
-
-    def _deduplicate_archived_revalidation(self, rel: str, archived: Path) -> None:
-        """Compact a byte-identical INVALID baseline into a verified round ref.
-
-        A live ``.INVALID`` needs its immutable ``_revalidation`` baseline so a
-        later human edit can be audited.  Once that live file has been moved to
-        its numbered ``_rounds`` path, an *unedited* INVALID used to leave two
-        complete copies of the same bytes.  The numbered archive is the public
-        recovery surface, so keep it byte-for-byte and replace only the exact,
-        locator-bound duplicate baseline with a small content-addressed ref.
-
-        Existing baselines remain a read-only compatible input to
-        ``_revalidation_material``.  Edited INVALIDs deliberately keep both
-        files because their creation baseline and archived candidate are
-        different evidence.  No link, directory sweep, or guessed filename is
-        involved: the ref binds the exact numbered path and raw SHA-256.  If a
-        crash recovery later moves that round back to live INVALID, the resolver
-        accepts live bytes only while the same SHA still matches.  Failure to
-        compact merely retains the safe duplicate and must not fail the archive.
-        """
-        if not paths.is_invalid(rel):
-            return
-        try:
-            archived_raw = _read_file_bytes(archived)
-            encoded = self._loads(rel, archived_raw)
-            payload = decode_artifact(rel, encoded).payload
-            if not isinstance(payload, dict):
-                return
-            source = payload.get(PROVENANCE_KEY)
-            locator = source.get('invalid_baseline_sha256') \
-                if isinstance(source, dict) else None
-            if not isinstance(locator, str):
-                return
-            baseline = self.path(self._revalidation_baseline_rel(rel, locator))
-            if (not _is_file(baseline)
-                    or _read_file_bytes(baseline) != archived_raw):
-                return
-            self._track_history_path(baseline)
-            reference = json.dumps({
-                '_snapshot_ref_version': REVALIDATION_REFERENCE_VERSION,
-                'raw_sha256': hashlib.sha256(archived_raw).hexdigest(),
-                'round_rel': archived.relative_to(
-                    self.ctx.novel_dir).as_posix(),
-            }, ensure_ascii=False, sort_keys=True,
-                separators=(',', ':')).encode('utf-8') + b'\n'
-            self._replace_atomically(baseline, reference)
-        except (ArtifactUnreadable, ArtifactVersionError, OSError,
-                ProvenanceRefused):
-            # Deduplication is storage hygiene, never an excuse to make the
-            # already-landed numbered recovery archive unavailable.
-            return
 
     def retire_bytes(self, rel: str, destination: str) -> Path:
         """Move live bytes to an immutable, content-addressed archive idempotently.
@@ -2211,180 +1886,6 @@ class ArtifactStore:
 
     # ── 内部：写盘口的两道闸 + 原子落盘 ───────────────────────────────────
 
-    @staticmethod
-    def _approval(actor: str, reason: str) -> HumanApproval:
-        try:
-            return HumanApproval(actor=actor, reason=reason)
-        except ValidationError as exc:
-            raise ApprovalRequired(
-                '提升 `.INVALID` 必须显式给非空 actor 与 reason；'
-                '空白凭据不能形成可问责的人工审计账') from exc
-
-    @staticmethod
-    def _business_payload(payload: Any) -> Any:
-        """The editable artifact content, excluding all provenance bookkeeping."""
-        if not isinstance(payload, dict):
-            return payload
-        return {key: value for key, value in payload.items() if key != PROVENANCE_KEY}
-
-    @staticmethod
-    def _revalidation_baseline_rel(inv_rel: str, locator: str) -> str:
-        inv_rel = paths.check_rel_deep(inv_rel)
-        if len(locator) != 64 or any(ch not in '0123456789abcdef' for ch in locator):
-            raise ProvenanceRefused(
-                f'{inv_rel} 的 invalid_baseline_sha256 不是完整小写 SHA-256：{locator!r}')
-        parent = os.path.dirname(inv_rel).replace('\\', '/')
-        # The locator is the identity.  Repeating a long artifact stem bought no
-        # safety and made the real acceptance path exceed Windows MAX_PATH.
-        return f'{parent}/{REVALIDATION_DIRNAME}/b.{locator}.snapshot'
-
-    # ⚠ 这里曾有 `_legacy_revalidation_baseline_rel()`：短名 `b.<locator>.snapshot` 之前
-    #   用的是 `<长 stem>.<locator>.snapshot`，读侧留了一条只读回落。删除那天的实测是
-    #   **盘上 8 份快照 8/8 都是短名，长名 0 份**，唯一走过那条分支的是它自己的测试
-    #   ——一个靠自己的测试活着的兼容层。产物已整批清空，连那 8 份也不在了。
-    #   ⚠ 长名正是当初撞 Windows MAX_PATH 的原因（见上面 `_revalidation_baseline_rel`
-    #   的注释）：真要恢复它，等于把那个已知缺陷一起恢复。
-
-    def _revalidation_snapshot_bytes(
-            self, snapshot: Path, *, fallback: bytes | None = None,
-    ) -> bytes:
-        """Resolve a legacy full baseline or a v1 content-addressed round ref."""
-        raw = _read_file_bytes(snapshot)
-        try:
-            reference = json.loads(raw.decode('utf-8'))
-        except (UnicodeDecodeError, json.JSONDecodeError):
-            return raw
-        if (not isinstance(reference, dict)
-                or '_snapshot_ref_version' not in reference):
-            return raw
-        if (set(reference) != {
-                '_snapshot_ref_version', 'raw_sha256', 'round_rel'}
-                or reference.get('_snapshot_ref_version')
-                != REVALIDATION_REFERENCE_VERSION):
-            raise ProvenanceRefused(
-                f'重验证基线引用版本或字段不闭合：{snapshot}')
-        round_rel = paths.check_rel_deep(str(reference.get('round_rel') or ''))
-        expected_sha = str(reference.get('raw_sha256') or '')
-        if (len(expected_sha) != 64
-                or any(ch not in '0123456789abcdef' for ch in expected_sha)
-                or '/_rounds/' not in f'/{round_rel}'):
-            raise ProvenanceRefused(f'重验证基线引用身份不合法：{snapshot}')
-        target = self.path(round_rel)
-        archived = _read_file_bytes(target) if _is_file(target) else None
-        for candidate in (archived, fallback):
-            if (candidate is not None
-                    and hashlib.sha256(candidate).hexdigest() == expected_sha):
-                return candidate
-        raise ProvenanceRefused(
-            f'重验证基线引用的 numbered round 缺失/漂移，'
-            f'且 live 候选不匹配：{round_rel}')
-
-    def _write_immutable(self, destination: Path, data: bytes) -> None:
-        """Create a content-addressed audit snapshot; never replace history."""
-        self._require_workflow_write()
-        self._track_history_path(destination)
-        if os.path.exists(_filesystem_path(destination)):
-            try:
-                same = (_is_file(destination)
-                        and self._revalidation_snapshot_bytes(
-                            destination, fallback=data) == data)
-            except OSError as exc:
-                raise ArtifactUnreadable(
-                    f'读不了既有重验证基线 {destination}：{exc!r}') from exc
-            if not same:
-                raise ProvenanceRefused(
-                    f'不可变重验证基线 {destination} 已存在但字节不同；'
-                    '拒绝覆盖审计历史（可能是文件被改动或发生 hash 冲突）')
-            return
-        os.makedirs(_filesystem_path(destination.parent), exist_ok=True)
-        self._replace_atomically(destination, data)
-
-    def _revalidation_material(self, rel: str, model: type[M], *,
-                               actor: str, reason: str
-                               ) -> tuple[M, M, Provenance, RevalidationAudit]:
-        approval = self._approval(actor, reason)
-        official_rel = paths.check_rel_deep(rel)
-        inv_rel = paths.invalid_of(official_rel)
-        if not self.exists(inv_rel):
-            raise UpstreamMissing(f'{self.ctx.node}: 没有 {inv_rel} 可重验证')
-
-        current_raw = self._read_bytes(inv_rel)
-        artifact, current_payload = self._validate_payload(
-            model, inv_rel, self._loads(inv_rel, current_raw))
-        src = self._provenance_of(artifact)
-        if src is None:
-            raise ProvenanceRefused(
-                f'{inv_rel} 没有来源账，提升上来就是一份来历不明的正式产物')
-        locator = src.invalid_baseline_sha256
-        if locator is None:
-            raise ProvenanceRefused(
-                f'{inv_rel} 没有 write_invalid 记录的不可变基线定位键；'
-                '无法分辨原样重判与人工改字节，拒绝洗掉来源')
-
-        baseline_rel = self._revalidation_baseline_rel(inv_rel, locator)
-        baseline_path = self.path(baseline_rel)
-        if not _is_file(baseline_path):
-            raise ProvenanceRefused(
-                f'{inv_rel} 声明的不可变基线不存在：{baseline_rel}；'
-                '没有对照物就不能形成重验证审计账')
-        try:
-            baseline_raw = self._revalidation_snapshot_bytes(
-                baseline_path, fallback=current_raw)
-        except OSError as exc:
-            raise ArtifactUnreadable(f'读不了重验证基线 {baseline_rel}：{exc!r}') from exc
-        baseline_encoded = self._loads(inv_rel, baseline_raw)
-        baseline_artifact, baseline_payload = self._validate_payload(
-            model, inv_rel, baseline_encoded)
-        baseline_src = self._provenance_of(baseline_artifact)
-        if baseline_src is None or baseline_src.invalid_baseline_sha256 != locator:
-            raise ProvenanceRefused(
-                f'不可变基线 {baseline_rel} 与 INVALID 声明的定位键不一致；拒绝提升')
-
-        # 定位键钉的是**当时那一份带版本信封的原始字节**。核验必须拿 raw encoded
-        # object 去比，不能拿解码后的 payload：后者不含 `_schema_version`，而将来任何
-        # 一次 `current_version` +1 都会让 `encode_artifact` 吐出不同的字节
-        # ⇒ 一份完好的基线会仅仅因为版本号变了就被判成「被改过」。
-        # ⚠ 与迁移无关，删掉迁移机制之后这条依然成立——版本号本身就在被签名的字节里。
-        if not isinstance(baseline_encoded, dict):
-            raise ProvenanceRefused(f'{baseline_rel} 的原始 JSON 不是 object，无法核验定位键')
-        subject_encoded = dict(baseline_encoded)
-        block = subject_encoded.get(PROVENANCE_KEY)
-        if not isinstance(block, dict):
-            raise ProvenanceRefused(f'{baseline_rel} 的来源账不是 object，无法核验定位键')
-        subject_block = dict(block)
-        subject_block.pop('invalid_baseline_sha256', None)
-        subject_encoded[PROVENANCE_KEY] = subject_block
-        subject_raw = (
-            json.dumps(subject_encoded, ensure_ascii=False, indent=2) + '\n'
-        ).encode('utf-8')
-        actual_locator = hashlib.sha256(subject_raw).hexdigest()
-        if actual_locator != locator:
-            raise ProvenanceRefused(
-                f'不可变基线 {baseline_rel} 内容校验失败：声明 {locator}，'
-                f'按逻辑内容重算为 {actual_locator}；拒绝用被改过的基线提升')
-
-        baseline_business = self._business_payload(baseline_payload)
-        candidate_business = self._business_payload(current_payload)
-        baseline_canonical = hashlib.sha256(
-            _canonical_json_bytes(baseline_business)).hexdigest()
-        candidate_canonical = hashlib.sha256(
-            _canonical_json_bytes(candidate_business)).hexdigest()
-        baseline_raw_sha = hashlib.sha256(baseline_raw).hexdigest()
-        candidate_raw_sha = hashlib.sha256(current_raw).hexdigest()
-        audit = build_revalidation_audit(
-            actor=approval.actor,
-            reason=approval.reason,
-            baseline_locator_sha256=locator,
-            baseline_raw_sha256=baseline_raw_sha,
-            baseline_payload=baseline_business,
-            candidate_raw_sha256=candidate_raw_sha,
-            candidate_payload=candidate_business,
-        )
-        # live INVALID 的业务主体允许按 producer 规则编辑，但它的 provenance 不是
-        # 人工输入面。最终提升必须继承不可变创建快照，而不是信任 live 文件里一块
-        # 同样可被改写的 `_provenance`。
-        return artifact, baseline_artifact, baseline_src, audit
-
     def _assert_self_fresh(self, rel: str, artifact: BaseModel) -> None:
         """A provenance-bearing formal artifact must be fresh immediately after write."""
         if self._provenance_of(artifact) is None and rel not in SELF_FRESH_DETERMINISTIC:
@@ -2509,7 +2010,7 @@ class ArtifactStore:
 
         ⚠⚠ **另一道闸（「0 成本节点不许记 `model`」）不在这里，在铸造口**
         （`RunContext.llm_provenance`）。这是本轮实测改掉的一处：
-        放在写盘口会误伤若干 0 成本入口——`--revalidate` / `--recheck`
+        放在写盘口会误伤若干 0 成本入口——`--recheck`
         写回的是一份**继承来的**来源账，它记的 `model` 属于当初那次付费产出，
         不是本次跑的新宣称；`stage6.approve` / `stage7.approve` 同理
         （它们是 0 成本节点，改写的却是付费节点产的那份产物）。
@@ -2534,8 +2035,8 @@ class ArtifactStore:
                 exclude_unset: bool = False) -> bytes:
         """产物 → **将要落盘的那串字节**。过写盘口那道闸，但一个字节都不写。
 
-        ⚠ 抽出来是给 `promote_invalid` 用的：它要在**动归档之前**知道自己将要写什么，
-        才能回答「盘上那份会不会被销毁」。见那边第②步。
+        ⚠ 抽出来是为了「先知道将要写什么」：调用方要在**动归档之前**拿到字节并过预校验
+        （`write_invalid`／`write_round`），失败才会发生在第一个字节落盘之前。
         """
         name = provenance_field(type(artifact))
         payload = artifact.model_dump(
@@ -2543,7 +2044,7 @@ class ArtifactStore:
         if name is not None:
             src = prov_override if prov_override is not None else getattr(artifact, name)
             self._refuse_bad_provenance(rel, src)
-            # ⚠ 三态只在 `to_disk()` 里兑现：`revalidated: null` 与「没有这个键」
+            # ⚠ 三态只在 `to_disk()` 里兑现：`origin: null` 与「没有这个键」
             #   在 JSON 里必须是两份不同的字节，而 `model_dump` 会把 `None` 写成 `null`。
             payload[PROVENANCE_KEY] = src.to_disk()
         payload = encode_artifact(rel, payload)
@@ -2969,8 +2470,8 @@ class Str06Repository:
 
         先归档孪生上已有的历史轮次再覆写——归档是出事之后唯一能回去的那份，
         不允许第二次被拦的稿静默覆盖第一次（对齐正式 `_rounds` 纪律）。
-        typed witness 与 revalidation audit 归 F7c；本方法只保证「拦下的稿
-        不丢、正式位不被污染」。
+        本方法只保证「拦下的稿不丢、正式位不被污染」；恢复靠重跑所属 owner，
+        孪生不能被原样提升为正式位。
         """
         invalid = self.invalid_rel(rel)
         seen = self.archived_rounds(invalid)
@@ -2990,20 +2491,6 @@ class Str06Repository:
             payload = {**payload, '_provenance': provenance.to_disk()}
             return self._write_payload(invalid, payload)
         return self.write(invalid, value, owners=owners, refs=refs)
-
-    def promote_invalid(self, rel: str) -> Path:
-        """把 `.INVALID` 孪生提升为正式位（字节原样， provenance 不重铸）。
-
-        提升不改写来源账：这次跑没有新生成任何东西，重铸就是把历史付费产出
-        伪装成本次产物。revalidation audit 归 F7c。
-        """
-        invalid = self.invalid_rel(rel)
-        source, target = self.path(invalid), self.path(rel)
-        if not source.exists():
-            raise FileNotFoundError(f'{rel} 没有可提升的 INVALID 孪生')
-        target.parent.mkdir(parents=True, exist_ok=True)
-        os.replace(source, target)
-        return target
 
     def _archive(self, rel: str, round_no: int) -> Path:
         destination = self.path(self.round_rel(rel, round_no))

@@ -4,7 +4,7 @@
 test_store.py —— 唯一读写口 + 一次跑的上下文。
 
 每条断言各对应一次**已经发生过**的损失（原型实测，不是设想）：
-进程全局来源账把 A 书的边记到 B 书上 · 提升路伪造一份来源账 ·
+进程全局来源账把 A 书的边记到 B 书上 ·
 `prompts` 非空而 `inputs` 是空的却照样落盘 · 归档没编号被覆盖 ·
 `.INVALID` 读完就删造出一条幽灵边 · Windows 上 `open(p,'w')` 把 LF 吐成 CRLF。
 
@@ -15,20 +15,19 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
-import os
 import shutil
 import tempfile
 from pathlib import Path
 from typing import Any
 
 import pytest
-from pydantic import BaseModel, Field, RootModel
+from pydantic import BaseModel, RootModel
 
 from contracts.artifacts import (
     STAGE0_CLEAN_TEXT, STAGE0_REVISIONS, STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT,
     STAGE2_BLUEPRINT_CHARACTER_PROJECTION, STAGE2_GLOBAL_REVIEW,
     STR06_BODY_DESIGN, STR06_DELIVERY_MANIFEST, STR06_EXECUTION_PLAN,
-    STR06_HOOK_CONTEXT, STR06_NAME_MAP, STR06_PRESERVE_CHECKPOINT,
+    STR06_HOOK_CONTEXT, STR06_NAME_MAP,
     STR06_PRESENTATION_GRAPH, STR06_RECONSTRUCTION_BRIEF,
     STR06_SEMANTIC_BINDING, STR06_STAGE2_BLUEPRINTS,
     STR06_STAGE2_CHARACTERS, STR06_STAGE2_OBS_BOOK, STR06_STAGE2_OBS_NAMES,
@@ -36,9 +35,6 @@ from contracts.artifacts import (
 from contracts.schema import (
     ArtifactVersionError, InputEdge, LlmProvenance, Usage, artifact_spec,
     decode_artifact, encode_artifact,
-)
-from contracts.schema.grounding import (
-    PreserveKind, SemanticBinding, SourceLineage, SourceObligation,
 )
 from contracts.schema.naming import NameAssignment, NameMapV5, TargetName
 from contracts.schema.source import (
@@ -49,7 +45,7 @@ from novel.consumption import (
     producer_node, project_consumed, projection_for,
 )
 from novel.errors import (
-    ApprovalRequired, ArtifactUnreadable, ByteFormRefused, PathRefused,
+    ArtifactUnreadable, ByteFormRefused, PathRefused,
     ProvenanceRefused, UpstreamMissing,
 )
 from novel import paths, prov, store as store_module
@@ -58,9 +54,7 @@ from novel.llm.ledger import CostLedger, ledger_path
 from novel.orchestrator.uploads import save_upload
 from novel.orchestrator import state as orchestrator_state
 from novel.run import RunContext
-from novel.store import (
-    ArtifactStore, SELF_FRESH_DETERMINISTIC, _json_pointer_diff,
-)
+from novel.store import ArtifactStore, SELF_FRESH_DETERMINISTIC
 from novel.core.partition import partition_text
 from tests import corpus, sandbox
 from tests.str06_expression_inputs import (
@@ -84,7 +78,6 @@ MT_NODE = 'str06.stage2.book'
 #: names 采样对（本文件「窄投影 × 整份观察」消费面用例的载体）。
 NAMES_REL = STR06_STAGE2_OBS_NAMES
 NAMES_NODE = 'str06.stage2.names'
-REVALIDATION = {'actor': 'test-reviewer', 'reason': '逐项复核当前判据'}
 
 
 def test_readonly_snapshot_memo_never_crosses_operator_invocations(
@@ -255,67 +248,6 @@ def _plan(ctx: RunContext, *, marker: str = '计划一',
         entries=(NameAssignment(char_ref='char_001',
                                 name=TargetName(family=marker)),),
         provenance=provenance)
-
-
-def _anchor_stub():
-    """最小义务锚点（R10a a2）：本地构造，不 import 测试工厂——本文件是
-    与 str06 无关的存储层测试面（选择器按 import 闭包排除，见
-    tests/test_test_selection.py 的选测文档断言）。"""
-    from contracts.schema.grounding import ObligationAnchor
-    return (ObligationAnchor(handle='s0_01', source_kind='initial_state',
-                             address='char:stub.stub', value='stub',
-                             quotes=('依据',)),)
-
-
-def _binding(ctx: RunContext, *, checkpoint_sha: str, marker: str = '义务原稿',
-             inputs: dict | None = None) -> SemanticBinding:
-    """一份最小合法 SemanticBinding（str06.stage4.bind 的现役产地）。
-
-    ``checkpoint_sha`` 是对 `runtime/preserve_checkpoint.json` 完整字节的绑定，
-    对应旧链 compiled 计划对 A/B 两相的完整字节绑定。
-    """
-    provenance = ctx.free_provenance()
-    if inputs is not None:
-        provenance = provenance.model_copy(update={
-            'inputs': {key: InputEdge.model_validate(row) for key, row in inputs.items()}})
-    return SemanticBinding(
-        binding_id='bd-fixture',
-        preserve_checkpoint_sha256=checkpoint_sha,
-        obligations=(SourceObligation(
-            obligation_id='ob_01', kind=PreserveKind.EVENT_CORE, statement=marker,
-            anchors=_anchor_stub(),
-            lineage=SourceLineage(blueprint_refs=('b01_01',), character_ids=()),
-            must_preserve=True, satisfaction='明确呈现'),),
-        entries=(),
-        unbound=(),
-        provenance=provenance,
-    )
-
-
-def _seed_preserve_checkpoint(base: Path) -> str:
-    """落一份 Preserve checkpoint（bind 的付费上游），返回它的完整字节 SHA。
-
-    新链的 compiled 字节绑定只剩这一处：SemanticBinding.preserve_checkpoint_sha256
-    绑定 `runtime/preserve_checkpoint.json` 的完整字节（旧链是 A/B 两相两把 SHA）。
-    """
-    from contracts.schema.grounding import PreserveCheckpoint
-
-    store = ArtifactStore(_ctx(base, node='str06.stage4.preserve', paid=False))
-    checkpoint = PreserveCheckpoint(
-        checkpoint_id='ckpt-fixture', policy_id='policy-fixture', policy_version=1,
-        characters_sha256='a' * 64, blueprints_sha256='b' * 64,
-        provider='fixture-provider', model='fixture-model', request_sha256='c' * 64,
-        obligations=(SourceObligation(
-            obligation_id='ob_01', kind=PreserveKind.EVENT_CORE, statement='义务',
-            anchors=_anchor_stub(),
-            lineage=SourceLineage(blueprint_refs=('b01_01',), character_ids=()),
-            must_preserve=True, satisfaction='明确呈现'),),
-        checkpoint_sha256='d' * 64,
-    )
-    _write_payload(base / '书名_123', STR06_PRESERVE_CHECKPOINT,
-                   checkpoint.model_dump(by_alias=True, mode='json'))
-    raw = store.path(STR06_PRESERVE_CHECKPOINT).read_bytes()
-    return hashlib.sha256(raw).hexdigest()
 
 
 def _prov_on_disk(p: Path) -> dict:
@@ -1426,12 +1358,12 @@ def test_a_run_with_no_calls_still_has_no_usage_key():
 
 
 def test_three_state_keys_are_absent_on_disk_not_null():
-    """三态那四个键：`None` ⇒ **键不在**。`revalidated: null` 与「没有这个键」是两份字节。"""
+    """三态键：`None` ⇒ **键不在**。`gates_skipped: null` 与「没有这个键」是两份字节。"""
     ctx = _plan_ctx(_book())
     st = ArtifactStore(ctx)
     _record_upstream_edge(ctx)
     d = _prov_on_disk(st.write(PLAN_REL, _plan(ctx, origin='human')))
-    for k in ('revalidated', 'gates_skipped', 'input_basis', 'usage'):
+    for k in ('gates_skipped', 'input_basis', 'usage'):
         assert k not in d, f'{k} 是 None，不该出现在盘上'
     # 非 None 的三态键必须原样落盘（`origin='human'` 是显式人工轮次的声明）。
     assert d['origin'] == 'human'
@@ -1453,7 +1385,7 @@ def test_a_free_run_cannot_mint_a_provenance_that_names_a_model():
     """⚠ 「0 成本不许记 `model`」这道闸开在**铸造口**，不开在写盘口。
 
     理由是实测的：写盘口拦不住它，因为若干 0 成本路径本来就要写回一份带 `model` 的
-    来源账（`--revalidate` / `--recheck` / `stage6.approve` /
+    来源账（`--recheck` / `stage6.approve` /
     `stage7.approve` 改写的都是**付费节点产的**那份产物，它记的 model 属于当初那次付费产出）。
     ⇒ 真正该拦的是「0 成本的跑**现造**一份声称模型产了它的账」，而现造只有一个入口。
     """
@@ -1538,12 +1470,6 @@ def test_deterministic_self_fresh_policy_only_guards_artifacts_that_can_self_pro
         'revision 链只按根 source 身份判 freshness，不用写后自证策略'
     assert STAGE2_GLOBAL_REVIEW not in SELF_FRESH_DETERMINISTIC, \
         'global_review 已随语义审阅退役，不再有自证 freshness'
-
-
-def test_json_pointer_diff_uses_rfc6901_escaping_and_stable_order():
-    before = {'z': 1, 'a/b': {'~key': ['same', 'old']}}
-    after = {'z': 2, 'a/b': {'~key': ['same', 'new']}}
-    assert _json_pointer_diff(before, after) == ('/a~1b/~0key/1', '/z')
 
 
 def test_json_artifacts_are_written_without_cr():
@@ -1992,7 +1918,7 @@ def test_a_non_utf8_json_artifact_still_says_it_is_not_utf8_not_bad_json():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 五、`.INVALID`、`gates_skipped`、提升路
+# 五、`.INVALID`、`gates_skipped`
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _write_invalid(base: Path, gates: list[str], *, marker: str = '计划一') -> tuple[RunContext, Path]:
@@ -2015,6 +1941,18 @@ def test_gates_skipped_is_written_even_when_empty():
     assert _prov_on_disk(inv)['gates_skipped'] == []
 
 
+def test_write_invalid_writes_neither_a_baseline_snapshot_nor_a_locator_key():
+    """`.INVALID` 孪生只是证据：没有提升路，也就没有不可变基线快照与定位键。
+
+    旧实现会在孪生旁写 `_revalidation/b.<locator>.snapshot` 并给来源账加
+    `invalid_baseline_sha256`（2026-10-05 随 `--revalidate` 提升路整体删除）。
+    """
+    _ctx_, inv = _write_invalid(_book(), ['name_leak'])
+    assert 'invalid_baseline_sha256' not in _prov_on_disk(inv)
+    assert _prov_on_disk(inv)['gates_skipped'] == ['name_leak']
+    assert not (inv.parent / '_revalidation').exists()
+
+
 def test_invalid_does_not_overwrite_the_official_artifact():
     """`Q-5` 先校验后落盘：阻断级错误**不覆盖已有产物**。"""
     base = _book()
@@ -2034,7 +1972,7 @@ def _byte_tree(root: Path) -> dict[str, bytes]:
     }
 
 
-def test_write_invalid_rolls_back_live_rounds_and_baselines_together(monkeypatch):
+def test_write_invalid_rolls_back_the_predecessor_archive_on_io_failure(monkeypatch):
     """A replacement INVALID must not pre-archive its predecessor on IO failure."""
     base = _book()
     ctx = _plan_ctx(base)
@@ -2044,15 +1982,23 @@ def test_write_invalid_rolls_back_live_rounds_and_baselines_together(monkeypatch
         PLAN_REL, _plan(ctx, marker='第一份问题稿'), gates_skipped=['name_leak'])
     stage = store.path(PLAN_REL).parent
     before = _byte_tree(stage)
+    invalid = store.path(paths.invalid_of(PLAN_REL))
+    original = ArtifactStore._replace_atomically
+    failed_once: list[bool] = []
 
-    def fail_baseline(_self, _destination, _data):
-        raise OSError('模拟新基线写入失败')
+    def fail_invalid(path, data):
+        # 只让**前向**的第一次落盘失败；事务回滚时恢复前任字节走的是同一个原子替换，必须放行。
+        if path == invalid and not failed_once:
+            failed_once.append(True)
+            raise OSError('模拟新问题稿原子替换失败')
+        return original(path, data)
 
-    monkeypatch.setattr(ArtifactStore, '_write_immutable', fail_baseline)
-    with pytest.raises(OSError, match='基线写入失败'):
+    monkeypatch.setattr(ArtifactStore, '_replace_atomically', staticmethod(fail_invalid))
+    with pytest.raises(OSError, match='原子替换失败'):
         store.write_invalid(
             PLAN_REL, _plan(ctx, marker='第二份问题稿'), gates_skipped=['name_leak'])
 
+    assert failed_once, '失败注入没有命中前向落盘，用例什么都没在查'
     assert _byte_tree(stage) == before
 
 
@@ -2135,7 +2081,7 @@ def test_a_new_official_draft_retires_the_old_invalid_sibling():
 
 
 def test_refreshing_formal_derived_fields_preserves_the_live_invalid_sibling():
-    """recheck 刷正式稿指标不等于采用/取代一份尚待 revalidate 的问题稿。"""
+    """recheck 刷正式稿指标不等于采用/取代一份尚待处理的问题稿。"""
     base = _book()
     ctx = _plan_ctx(base)
     store = ArtifactStore(ctx)
@@ -2152,7 +2098,7 @@ def test_refreshing_formal_derived_fields_preserves_the_live_invalid_sibling():
         PLAN_REL, _plan(ctx, marker='按当前判据刷新的派生读数'))
 
     assert refreshed == formal
-    assert invalid.is_file(), 'refresh 后 live INVALID 必须仍在普通 revalidate 入口'
+    assert invalid.is_file(), 'refresh 后 live INVALID 必须仍在原位'
     assert invalid.read_bytes() == invalid_before, 'refresh 不得改写问题稿的任何字节'
     stage_after = _byte_tree(formal.parent)
     changed = {
@@ -2275,481 +2221,6 @@ def test_retiring_the_invalid_sibling_is_a_no_op_when_there_is_none():
     st.write(PLAN_REL, _plan(ctx))
     assert not (st.path(PLAN_REL).parent / paths.ROUNDS_DIRNAME).exists(), \
         '没有问题稿就不该凭空造一个归档目录'
-
-
-def test_promotion_keeps_the_original_phase_bindings_and_archives_the_invalid():
-    """⭐⭐ 提升路两件事，各对应一次实测损失。
-
-    ① **不许伪造**：`--revalidate` 不得改写对付费 checkpoint 的完整字节绑定或当前 inputs，
-       `round` 也不该凭空 +1，因为**没有任何一次新规划发生过**。
-    ② **不许删**（`Q-8`）：原型「读完问题稿就把它删了」造出的正是盘上那条幽灵边
-       ——另一份产物的 `inputs` 还指着它。**删一个还被别人指着的文件，会同时制造两个问题。**
-    """
-    base = _book()
-    # bind 的付费上游：Preserve checkpoint 先落盘，binding 以完整字节 SHA 绑定它
-    #（新链唯一等价于旧链 compiled 计划 A/B 完整字节绑定的身份字段）。
-    checkpoint_sha = _seed_preserve_checkpoint(base)
-    checkpoint_rel = STR06_PRESERVE_CHECKPOINT
-    ctx = _ctx(base, node='str06.stage4.preserve')
-    st = ArtifactStore(ctx)
-    raw = (base / '书名_123' / checkpoint_rel).read_bytes()
-    binding = _binding(ctx, checkpoint_sha=checkpoint_sha, inputs={
-        checkpoint_rel: {
-            'file': prov.fingerprint_bytes(raw),
-            'consumed': prov.projection_fingerprint(artifact_payload(
-                decode_artifact(checkpoint_rel, json.loads(raw.decode('utf-8'))).payload)),
-        }})
-    inv = st.write_invalid(
-        'stage4/grounding/semantic_binding.json', binding, gates_skipped=['name_leak'])
-    was = _prov_on_disk(inv)
-    was_payload = json.loads(inv.read_text(encoding='utf-8'))
-    invalid_bytes = inv.read_bytes()
-    locator = was['invalid_baseline_sha256']
-    baseline = next((inv.parent / '_revalidation').glob(
-        f'*.{locator}.snapshot'))
-
-    # 提升走的是一次 **0 成本**的跑（`--revalidate` 在 `FREE_ENTRIES` 里）
-    ctx2 = _ctx(base, node='str06.stage4.preserve', paid=False)
-    out = ArtifactStore(ctx2).promote_invalid(
-        'stage4/grounding/semantic_binding.json', SemanticBinding, **REVALIDATION)
-    now = _prov_on_disk(out)
-    now_payload = json.loads(out.read_text(encoding='utf-8'))
-
-    assert now.get('prompts') == was.get('prompts')
-    assert 'model' not in now and 'model' not in was, '确定性编译结果不得冒充第三次模型调用'
-    assert (now_payload['preserve_checkpoint_sha256']
-            == was_payload['preserve_checkpoint_sha256']), \
-        '提升不得改写对付费 checkpoint 的完整字节绑定'
-    assert now['inputs'] == was['inputs']
-    assert now['revalidated'] is True
-    assert now['revalidation_audit']['actor'] == REVALIDATION['actor']
-    assert now['revalidation_audit']['raw_changed'] is False
-    assert now['revalidation_audit']['content_changed'] is False
-    assert now['revalidation_audit']['edited_by_human'] is False
-    assert now['revalidation_audit']['changed_json_pointers'] == []
-    assert 'gates_skipped' not in now, '提升上来的是正式产物，不该再挂缺料记录'
-    assert now['code'] == ctx2.code, 'code 必须记本次重判真正使用的代码版本'
-
-    assert not inv.exists()
-    archived = sorted(p.name for p in
-                      (base / '书名_123' / 'stage4' / 'grounding' / '_rounds').iterdir())
-    assert archived == ['semantic_binding.INVALID.r1.json'], \
-        '⚠ 原型归档叫 `*.INVALID.superseded.json`（**没有编号**），第二次会静默覆盖第一次'
-    numbered = inv.parent / '_rounds' / 'semantic_binding.INVALID.r1.json'
-    assert numbered.read_bytes() == invalid_bytes, '正式 numbered 归档的读取语义不得改变'
-    reference = json.loads(baseline.read_text(encoding='utf-8'))
-    assert reference == {
-        '_snapshot_ref_version': 1,
-        'raw_sha256': hashlib.sha256(invalid_bytes).hexdigest(),
-        'round_rel': 'stage4/grounding/_rounds/semantic_binding.INVALID.r1.json',
-    }
-    assert baseline.stat().st_size < len(invalid_bytes), \
-        '未编辑 INVALID 应只留可验证内容引用，不再复制整份 baseline'
-
-
-def test_promotion_rebuilds_a_registered_unreadable_formal_without_losing_history():
-    """盘上正式稿字节不可读（外来 payload）时，提升不得崩溃、不得销毁历史。
-
-    旧链的 shape-break 重建分支依赖版本阶梯（v1 formal < v7 current）；新链
-    现役 str06 产物全部 v1，不可读正式稿按「当前业务轮次」先归档再原位重建，
-    提升照样收敛，两份历史都保得住。
-    """
-    base = _book()
-    _ctx_, inv = _write_invalid(base, [], marker='当前 v1 问题稿')
-    formal = inv.with_name('name_map.json')
-    formal.write_bytes(b'{"_schema_version":1,"legacy":"retired plan"}\n')
-
-    out = ArtifactStore(_plan_ctx(base, paid=False)).promote_invalid(
-        PLAN_REL, PLAN_MODEL, **REVALIDATION)
-
-    assert json.loads(out.read_text(encoding='utf-8'))['_schema_version'] == \
-        artifact_spec(PLAN_REL).current_version
-    assert not inv.exists()
-    archived = sorted(p.name for p in (formal.parent / paths.ROUNDS_DIRNAME).iterdir())
-    assert archived == ['name_map.INVALID.r1.json', 'name_map.r1.json'], \
-        '不可读的旧正式稿也是花过钱的盘上历史，归档后重建，不许静默覆盖'
-
-
-def test_revalidation_records_immutable_baseline_hashes_and_json_pointer_diff():
-    base = _book()
-    _ctx_, inv = _write_invalid(base, [], marker='机器原稿')
-    provenance = _prov_on_disk(inv)
-    locator = provenance['invalid_baseline_sha256']
-    baselines = list((inv.parent / '_revalidation').glob(f'*.{locator}.snapshot'))
-    assert len(baselines) == 1
-    baseline = baselines[0]
-    baseline_before = baseline.read_bytes()
-    assert baseline_before == inv.read_bytes(), '基线不是 INVALID 创建时的完整原始字节'
-
-    edited = json.loads(inv.read_text(encoding='utf-8'))
-    edited['entries'][0]['name']['family'] = '人工修正'
-    inv.write_text(json.dumps(edited, ensure_ascii=False, indent=4) + '\n', encoding='utf-8')
-
-    store = ArtifactStore(_plan_ctx(base, paid=False))
-    audit = store.revalidation_audit(
-        PLAN_REL, PLAN_MODEL, **REVALIDATION)
-    assert audit.raw_changed is True and audit.content_changed is True
-    assert audit.edited_by_human is True
-    assert audit.changed_json_pointers == ('/entries/0/name/family',)
-    assert audit.baseline_raw_sha256 != audit.candidate_raw_sha256
-    assert audit.baseline_canonical_sha256 != audit.candidate_canonical_sha256
-
-    out = store.promote_invalid(PLAN_REL, PLAN_MODEL, **REVALIDATION)
-    disk_audit = _prov_on_disk(out)['revalidation_audit']
-    assert disk_audit == audit.model_dump(mode='json')
-    assert baseline.read_bytes() == baseline_before, '提升过程改写了不可变基线'
-    archived = inv.parent / '_rounds' / 'name_map.INVALID.r1.json'
-    assert archived.read_bytes() != baseline_before, \
-        '人工编辑后的 numbered 轮次与创建基线不是重复内容，两份证据都必须保留'
-
-
-def test_revalidation_distinguishes_raw_only_edits_from_logical_edits():
-    base = _book()
-    _ctx_, inv = _write_invalid(base, [])
-    payload = json.loads(inv.read_text(encoding='utf-8'))
-    payload['_provenance']['code'] = 'manually-touched-provenance-only'
-    inv.write_text(json.dumps(payload, ensure_ascii=False, separators=(',', ':')),
-                   encoding='utf-8')
-
-    audit = ArtifactStore(_plan_ctx(base, paid=False)).revalidation_audit(
-        PLAN_REL, PLAN_MODEL, **REVALIDATION)
-    assert audit.raw_changed is True
-    assert audit.content_changed is False
-    assert audit.edited_by_human is False
-    assert audit.changed_json_pointers == ()
-
-
-def test_promotion_override_rebuilds_derived_fields_but_cannot_replace_live_audit_or_source():
-    base = _book()
-    _ctx_, inv = _write_invalid(base, [], marker='机器原稿')
-    baseline_source = _prov_on_disk(inv)
-    current = json.loads(inv.read_text(encoding='utf-8'))
-    current['entries'][0]['name']['family'] = '人工提交'
-    current['entries'][0]['aliases'] = {'alias_01': '人工正文修订'}
-    current_source = current['_provenance']
-    current_source['code'] = 'live-invalid-forged-code'
-    current_source['root_clean_sha1'] = '0' * 40
-    current_source['inputs'] = {
-        UPSTREAM: {'file': '0' * 10, 'consumed': None},
-    }
-    current_source['prompts'] = {'RULES': '1' * 10}
-    current_source['input_basis'] = 'live-invalid-forged-input-basis'
-    inv.write_text(json.dumps(current, ensure_ascii=False, indent=2) + '\n',
-                   encoding='utf-8')
-    live = PLAN_MODEL.model_validate(decode_artifact(PLAN_REL, current).payload)
-    fake_source = live.provenance.model_copy(update={'code': 'fake-override-code', 'inputs': {}})
-    rebuilt_payload = live.model_dump(by_alias=True, mode='json')
-    rebuilt_payload['entries'][0]['name'][
-        'family'] = '确定性派生字段已重建'
-    rebuilt_payload['_provenance'] = fake_source.model_dump(by_alias=True, mode='json')
-    rebuilt = PLAN_MODEL.model_validate(rebuilt_payload)
-
-    store = ArtifactStore(_plan_ctx(base, paid=False))
-    live_audit = store.revalidation_audit(
-        PLAN_REL, PLAN_MODEL, **REVALIDATION)
-    out = store.promote_invalid(
-        PLAN_REL, PLAN_MODEL, artifact_override=rebuilt, **REVALIDATION)
-    disk = json.loads(out.read_text(encoding='utf-8'))
-    source = disk['_provenance']
-
-    assert disk['entries'][0]['name'][
-        'family'] == '确定性派生字段已重建'
-    assert disk['entries'][0]['aliases'] == {'alias_01': '人工正文修订'}
-    assert source['revalidation_audit'] == live_audit.model_dump(mode='json')
-    assert source['revalidation_audit']['changed_json_pointers'] == [
-        '/entries/0/aliases/alias_01',
-        '/entries/0/name/family',
-    ]
-    promotion_owned = {
-        'code', 'revalidated', 'gates_skipped', 'invalid_baseline_sha256',
-        'revalidation_audit',
-    }
-    assert {
-        key: value for key, value in source.items() if key not in promotion_owned
-    } == {
-        key: value for key, value in baseline_source.items() if key not in promotion_owned
-    }, '正式产物的原始来源账没有完整继承不可变创建基线'
-    assert source['code'] not in {'live-invalid-forged-code', 'fake-override-code'}
-
-
-@pytest.mark.parametrize(('actor', 'reason'), [('', '理由'), ('人', '  ')])
-def test_revalidation_rejects_blank_human_credentials_without_touching_files(actor, reason):
-    base = _book()
-    _ctx_, inv = _write_invalid(base, [])
-    before = inv.read_bytes()
-    store = ArtifactStore(_plan_ctx(base, paid=False))
-    with pytest.raises(ApprovalRequired, match='actor.*reason'):
-        store.promote_invalid(
-            PLAN_REL, PLAN_MODEL, actor=actor, reason=reason)
-    assert inv.read_bytes() == before
-    assert not store.exists(PLAN_REL)
-
-
-def test_revalidation_refuses_a_tampered_immutable_baseline_before_writing():
-    base = _book()
-    _ctx_, inv = _write_invalid(base, [])
-    locator = _prov_on_disk(inv)['invalid_baseline_sha256']
-    baseline = next((inv.parent / '_revalidation').glob(f'*.{locator}.snapshot'))
-    damaged = json.loads(baseline.read_text(encoding='utf-8'))
-    damaged['entries'][0]['name']['family'] = '基线被改'
-    baseline.write_text(json.dumps(damaged, ensure_ascii=False, indent=2) + '\n',
-                        encoding='utf-8')
-
-    store = ArtifactStore(_plan_ctx(base, paid=False))
-    with pytest.raises(ProvenanceRefused, match='内容校验失败'):
-        store.promote_invalid(PLAN_REL, PLAN_MODEL, **REVALIDATION)
-    assert inv.is_file() and not store.exists(PLAN_REL)
-
-
-def test_an_invalid_without_a_creation_snapshot_fails_closed():
-    """被测的是**缺定位键就不许提升**，与版本号无关。
-
-    ⚠ 这条曾顺手把 `_schema_version` 改成 2 来扮演「旧文件」。版本归零后那一笔会让它
-    先死在版本闸上（拒读），根本走不到 `promote_invalid` 的定位键判断——**用例还是红的，
-    但查的已经不是它要查的那件事**。⇒ 去掉那笔道具，只留真正被测的条件。
-    """
-    base = _book()
-    _ctx_, inv = _write_invalid(base, [])
-    legacy = json.loads(inv.read_text(encoding='utf-8'))
-    legacy['_provenance'].pop('invalid_baseline_sha256')
-    inv.write_text(
-        json.dumps(legacy, ensure_ascii=False, indent=2) + '\n',
-        encoding='utf-8', newline='',
-    )
-    before = inv.read_bytes()
-
-    store = ArtifactStore(_plan_ctx(base, paid=False))
-    with pytest.raises(ProvenanceRefused, match='没有 write_invalid 记录的不可变基线定位键'):
-        store.promote_invalid(PLAN_REL, PLAN_MODEL, **REVALIDATION)
-
-    assert inv.read_bytes() == before
-    assert not store.exists(PLAN_REL)
-
-
-def test_first_write_invalid_creates_a_nested_snapshot_near_windows_max_path():
-    root = Path(tempfile.mkdtemp())
-    locator = '0' * 64
-    empty_old = (root / '_123' / 'stage7' / 'naming' / '_revalidation' /
-                 f'name_map.INVALID.{locator}.snapshot')
-    # Reproduce the acceptance budget: the old target-derived temporary name
-    # and even the long legacy target reach MAX_PATH, while every ordinary
-    # input/output directory remains comfortably shorter.
-    title = '长' * max(8, 264 - len(str(empty_old)))
-    base = _book(title=title, root=root)
-    ctx = _plan_ctx(base)
-    store = ArtifactStore(ctx)
-    _record_upstream_edge(ctx)
-    revalidation = store.path(PLAN_REL).parent / '_revalidation'
-    assert not revalidation.exists()
-
-    inv = store.write_invalid(PLAN_REL, _plan(ctx), gates_skipped=[])
-    locator = _prov_on_disk(inv)['invalid_baseline_sha256']
-    snapshots = list(revalidation.glob(f'*.{locator}.snapshot'))
-    assert len(snapshots) == 1
-    assert snapshots[0].name == f'b.{locator}.snapshot'
-    assert snapshots[0].read_bytes() == inv.read_bytes()
-
-    legacy = revalidation / f'name_map.INVALID.{locator}.snapshot'
-    legacy_tmp = legacy.with_name(f'{legacy.name}.{os.getpid()}.tmp')
-    assert len(str(legacy)) >= 260, '夹具没有复现真实验收的 Windows 路径预算'
-    assert len(str(snapshots[0])) + 20 < len(str(legacy_tmp))
-
-
-def test_failed_first_snapshot_write_leaves_no_partial_or_live_invalid(monkeypatch):
-    base = _book()
-    ctx = _plan_ctx(base)
-    store = ArtifactStore(ctx)
-    _record_upstream_edge(ctx)
-    invalid = store.path(paths.invalid_of(PLAN_REL))
-    revalidation = invalid.parent / '_revalidation'
-    original = os.replace
-
-    def fail_snapshot(source, destination):
-        if '_revalidation' in os.fspath(destination):
-            raise OSError('模拟不可变快照原子替换失败')
-        return original(source, destination)
-
-    monkeypatch.setattr(os, 'replace', fail_snapshot)
-    with pytest.raises(OSError, match='快照原子替换失败'):
-        store.write_invalid(PLAN_REL, _plan(ctx), gates_skipped=[])
-
-    assert not invalid.exists(), '快照没落成却留下了可提升的活动 INVALID'
-    assert not revalidation.exists() or not any(revalidation.iterdir()), \
-        '失败路径留下了临时文件或半份审计快照'
-
-
-# ⚠ 这里曾有 `test_revalidation_can_read_the_legacy_long_snapshot_name`：它自己造一份
-#   长名快照，再证明读侧回落读得到。那条回落删除时的实测是**盘上 8 份快照 8/8 都是短名**
-#   ⇒ 它是这条兼容分支的唯一执行者，一个靠自己的测试活着的兼容层。
-#   ⚠ 那条用例顺带还是一个 >260 字符路径的压力源；`MAX_PATH` 那一面由
-#   `test_first_write_invalid_creates_a_nested_snapshot_near_windows_max_path` 独立守着，
-#   删它没有让长路径失去守卫。
-
-
-def test_write_invalid_never_overwrites_an_existing_baseline_snapshot():
-    base = _book()
-    ctx, inv = _write_invalid(base, [])
-    store = ArtifactStore(ctx)
-    artifact = store.read_own(PLAN_MODEL, paths.invalid_of(PLAN_REL))[0]
-    locator = _prov_on_disk(inv)['invalid_baseline_sha256']
-    baseline = next((inv.parent / '_revalidation').glob(f'*.{locator}.snapshot'))
-    baseline.write_bytes(b'tampered immutable history')
-    live_before = inv.read_bytes()
-
-    with pytest.raises(ProvenanceRefused, match='拒绝覆盖审计历史'):
-        store.write_invalid(PLAN_REL, artifact, gates_skipped=[])
-
-    assert baseline.read_bytes() == b'tampered immutable history'
-    assert inv.read_bytes() == live_before
-
-
-def test_a_second_promotion_lands_in_the_next_round_not_on_top_of_the_first():
-    """第二次被拦下的稿归档到 `r2`，**不覆盖 `r1`**；同时**上一轮正式稿也进 `_rounds`**。
-
-    ⚠ 这一条挡的是原型那个 `*.INVALID.superseded.json`（无编号）：
-    第二次会静默覆盖第一次。轮次由 `seen_rounds` 扫出来，缺号也不会退回去。
-
-    ⚠ 两份 `.INVALID` **必须内容不同**（`marker`），否则第二次提升渲染出的字节
-    与盘上正式稿逐字节相同、归档那一步按设计跳过，这条断言就变成靠巧合绿的。
-    """
-    base = _book()
-    _write_invalid(base, [], marker='第一版')
-    p = ArtifactStore(_plan_ctx(base, paid=False)).promote_invalid(
-        PLAN_REL, PLAN_MODEL, **REVALIDATION)
-    first = p.read_bytes()
-    _write_invalid(base, ['name_leak'], marker='第二版')
-    ArtifactStore(_plan_ctx(base, paid=False)).promote_invalid(
-        PLAN_REL, PLAN_MODEL, **REVALIDATION)
-
-    rounds = base / '书名_123' / 'stage7' / 'naming' / '_rounds'
-    archived = sorted(q.name for q in rounds.iterdir())
-    assert archived == ['name_map.INVALID.r1.json', 'name_map.INVALID.r2.json',
-                        'name_map.r1.json']
-    assert (rounds / 'name_map.r1.json').read_bytes() == first, \
-        '归档里那份不是被换掉的那一版正式稿'
-    assert p.read_bytes() != first, '第二次提升根本没改动正式稿？夹具白搭了'
-
-
-def test_promotion_archives_the_paid_official_instead_of_destroying_it():
-    """⭐⭐ **提升不许销毁一份花过钱的正式稿。**
-
-    落正式稿走的是原子替换，而原子替换是**无条件**的：盘上那份原地消失，
-    `_rounds/` 里连一份副本都没有——原来只归档 `.INVALID` 那一条历史。
-    对 stage5 这直接违反「上一轮正式稿进入 `_rounds`」；对别的层，它违反的是
-    本模块自己那句「**归档是出事之后唯一能回去的那一份**」（而且它是花过钱的产物）。
-    """
-    base = _book()
-    # 先有一份**正式**产物（付费产出的那一版）
-    ctx0 = _plan_ctx(base)
-    st0 = ArtifactStore(ctx0)
-    _record_upstream_edge(ctx0)
-    official = st0.write(PLAN_REL, _plan(ctx0, marker='付过钱的那一版'))
-    was = official.read_bytes()
-
-    _write_invalid(base, ['name_leak'], marker='被拦下的那一版')
-    out = ArtifactStore(_plan_ctx(base, paid=False)).promote_invalid(
-        PLAN_REL, PLAN_MODEL, **REVALIDATION)
-
-    rounds = base / '书名_123' / 'stage7' / 'naming' / '_rounds'
-    assert (rounds / 'name_map.r1.json').read_bytes() == was, \
-        '旧正式稿被原子替换销毁了，而 `_rounds/` 里没有任何副本'
-    assert (rounds / 'name_map.INVALID.r1.json').exists(), '`.INVALID` 那条历史也要归档'
-    assert json.loads(out.read_text(encoding='utf-8'))[
-        'entries'][0]['name']['family'] == '被拦下的那一版'
-    assert _prov_on_disk(out)['revalidated'] is True
-
-
-def test_a_resumed_promotion_does_not_invent_a_phantom_round():
-    """⭐ **字节相同就不叫销毁。**
-
-    ③④ 之间（落正式稿 → 挪 `.INVALID`）硬崩之后重跑，盘上那份已经是提升好的那一份。
-    这时候再归档一次就是凭空往轮次账里塞一个**幻影轮**——对 stage5 就是
-    「把一次重判记成第 N 轮写作」，正是 `promoted()` 存在要防的那件事。
-    ⇒ 归档是为了保住一份**会被销毁**的版本；字节相同 ⇒ 什么都没被销毁 ⇒ 没有可归档的东西。
-
-    这里直接模拟那个崩溃窗口：提升一次之后把 `.INVALID` 放回原位，再提升一次。
-    """
-    base = _book()
-    _write_invalid(base, [], marker='唯一那一版')
-    ArtifactStore(_plan_ctx(base, paid=False)).promote_invalid(
-        PLAN_REL, PLAN_MODEL, **REVALIDATION)
-
-    rounds = base / '书名_123' / 'stage7' / 'naming' / '_rounds'
-    # 模拟「正式稿已落、`.INVALID` 还没挪走」那半个刻意选的窗口
-    inv = base / '书名_123' / 'stage7' / 'naming' / 'name_map.INVALID.json'
-    (rounds / 'name_map.INVALID.r1.json').rename(inv)
-    ArtifactStore(_plan_ctx(base, paid=False)).promote_invalid(
-        PLAN_REL, PLAN_MODEL, **REVALIDATION)
-
-    archived = sorted(q.name for q in rounds.iterdir())
-    assert archived == ['name_map.INVALID.r1.json'], \
-        f'重跑凭空造出了轮次：{archived}——`--revalidate` 本该自愈，而不是往账上塞幻影'
-
-
-def test_a_free_produced_invalid_can_be_promoted_too():
-    """⭐ `promoted()` 原来只挂在 `LlmProvenance` 上。
-
-    而 `store.promote_invalid` 拿到的 `src` 类型是 `Provenance`：
-    `stage4.CtxProvenance` 与 `stage5.ReviewProvenance` 都是 `FreeProvenance` 的子类、
-    都是**真实存在**的 0 成本产物，一样会被闸门拦下、一样要走提升路。
-    提升它们抛 `AttributeError`——而 `errors.py` 明写「不设默认异常，
-    每一处终态都要选一个具体的类」，一条裸 `AttributeError` 连终态都不算。
-    """
-    from contracts.schema.common import FreeProvenance
-
-    class FreeArtifact(BaseModel):
-        """一份 0 成本产出的最小产物。形状照 `CtxProvenance` / `ReviewProvenance` 那一族。"""
-        model_config = {'populate_by_name': True}
-        note: str
-        provenance: FreeProvenance = Field(alias='_provenance')
-
-    base = _book()
-    ctx = _plan_ctx(base, paid=False)
-    st = ArtifactStore(ctx)
-    _record_upstream_edge(ctx)
-    art = FreeArtifact(note='0 成本算出来的', _provenance=ctx.free_provenance(prompts={'RULES': '判据表'}))
-    st.write_invalid(PLAN_REL, art, gates_skipped=['name_leak'])
-
-    out = ArtifactStore(_plan_ctx(base, paid=False)).promote_invalid(
-        PLAN_REL, FreeArtifact, **REVALIDATION)
-    now = _prov_on_disk(out)
-    assert now['revalidated'] is True
-    assert 'model' not in now, '0 成本产物提升上来不许长出一个 `model`'
-    assert 'gates_skipped' not in now
-
-
-def test_promotion_refuses_before_touching_anything_when_the_slot_is_taken(monkeypatch):
-    """提升有四步（占归档位 → 归档旧正式稿 → 落正式稿 → 挪 `.INVALID`），
-    **大概率的那个失败必须发生在第一步**。
-
-    ⚠ 归档位被占 ⇒ 轮次号算错了。这时候如果已经落了正式稿再报错，
-    人看到的是「失败」而盘上其实**变过了**——那比直接失败更难收拾。
-
-    ⚠ 这里 monkeypatch 的是**盘上那份自己记的轮次**（`_provenance.round`），
-    因为只有那种产物（stage5 逐章成稿）才可能报出一个已经被占掉的号——
-    没有 `round` 字段的层走 `next_round`，它按定义不会撞。
-    **这条路今天只有 stage5 走得到，但闸门现在就该在**（C 期之后才发作的守卫，本项目已经踩过三次）。
-    """
-    base = _book()
-    _ctx_, inv = _write_invalid(base, [])
-    rounds = base / '书名_123' / 'stage7' / 'naming' / '_rounds'
-    rounds.mkdir(parents=True)
-    (rounds / 'name_map.INVALID.r1.json').write_bytes(b'{"taken": true}')
-
-    st = ArtifactStore(_plan_ctx(base, paid=False))
-    monkeypatch.setattr(ArtifactStore, '_round_on_disk', lambda self, rel: 1)
-    with pytest.raises(PathRefused, match='一个字节都没动'):
-        st.promote_invalid(PLAN_REL, PLAN_MODEL, **REVALIDATION)
-    assert inv.exists(), '`.INVALID` 被挪走了'
-    assert not st.exists(PLAN_REL), '正式稿落下去了，而调用方拿到的是一个异常'
-    assert sorted(q.name for q in rounds.iterdir()) == ['name_map.INVALID.r1.json'], \
-        '归档目录变了——有人把「归档旧正式稿」挪到了占位检查之前'
-
-
-def test_promotion_without_an_invalid_is_a_terminal_state():
-    with pytest.raises(UpstreamMissing):
-        ArtifactStore(_plan_ctx(_book(), paid=False)).promote_invalid(
-            PLAN_REL, PLAN_MODEL, **REVALIDATION)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

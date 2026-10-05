@@ -85,6 +85,25 @@
 本批默认非 corpus 回归 3661 通过/0 失败（`-n 4 --dist loadgroup -m "not corpus"`，`--basetemp=E:/_tr`，exit 0；
 JUnit 与选择报告分母一致）。相对 HEAD 净增减为 0（+2 新守卫、−2 删除、HTTP 12→12）。
 
+### 分母变化登记（`--revalidate` 提升路删除批 · 2026-10-05）
+
+按用户裁决整体删除 0 成本提升路与重验证审计账，不升任何产物版本（`docs/DECISIONS.md` 同日行）。
+分母由 HEAD 副本与工作树逐文件 `--collect-only` 对账；被删用例的被测对象同批不存在，没有放宽任何现役判据。
+
+| 变更 | 原职责 | 现役依据 | 等价替代 / 分母影响 |
+|---|---|---|---|
+| 删除 test_store.py 的提升路用例 9 条（提升时归档付费正式稿、续写不造幽灵轮、第二次提升落下一轮、保留阶段绑定并归档问题稿、免费产出的问题稿也可提升、override 重建派生字段、已登记不可读正式稿重建不丢历史、槽位被占先拒不动文件、无问题稿为终态） | `promote_invalid` 提升函数族的行为与失败窗口 | 提升函数族无任何生产调用，`ArtifactStore` 与 `Str06Repository` 的提升方法同批删除 | 「不许回来」由 `tests/test_retired_surface_scan.py::test_revalidation_machinery_stays_deleted` 与 `tests/test_str06_f7a_wiring.py::test_write_invalid_archives_rounds_and_never_pollutes_the_formal_slot` 钉住。−9 |
+| 删除 test_store.py 的重验证审计账用例 5 条（不可变基线哈希与 JSON Pointer 差、RFC 6901 转义与稳定序、原始字节编辑与逻辑编辑区分、篡改基线拒绝、空白人工凭据拒绝；最后一条参数化 2 例） | `RevalidationAudit` 审计账的构造与拒绝面 | 审计账与 `Provenance` 的 `revalidated`／`invalid_baseline_sha256`／`revalidation_audit` 三键同批删除 | 无等价替代（被测对象不存在）。函数 −5、收集实例 −6 |
+| 删除 test_store.py 的创建快照用例 4 条（缺快照关闭式拒绝、首次快照写失败不留半成品、近 MAX_PATH 的嵌套快照、不覆写既有基线快照）；新增 `test_write_invalid_writes_neither_a_baseline_snapshot_nor_a_locator_key` | `write_invalid` 随 `.INVALID` 孪生写 `_revalidation/` 基线快照与定位键 | 没有提升路就没有基线可比；孪生只是证据 | 新用例钉住「孪生旁不再有快照目录、来源账不再带定位键」。−4 +1 |
+| `test_write_invalid_rolls_back_live_rounds_and_baselines_together` 改写为 `test_write_invalid_rolls_back_the_predecessor_archive_on_io_failure` | 原子替换失败时前一轮归档随事务回滚 | 回滚事务仍是 `write_invalid` 的现役行为，仅去掉快照一半 | 故障注入改为一次性失败（常驻注入会连事务自己的还原写一起挡掉），并断言注入确实触发；去掉事务的变异会让它变红。±0 |
+| 删除 test_schema_common.py 的 3 条（`promoted()` 不能带 prompts／model／inputs、提升保留原来源账、审计账哈希标志与 JSON Pointer 差须一致） | `Provenance.promoted()` 与 `RevalidationAudit` 的契约 | 二者同批删除 | `Provenance` 的 `extra='forbid'` 与三态键由同文件其余用例继续钉住。−3 |
+| `tests/test_str06_f7a_wiring.py` 的 `test_write_invalid_archives_rounds_and_promote_keeps_bytes` 改名 | 孪生归档轮与正式槽不被污染 | 去掉提升半段 | 保留归档轮与「正式槽不被污染」，并断言 `Str06Repository` 无 `promote_invalid`。±0 |
+| 新增 `tests/test_retired_surface_scan.py::test_revalidation_machinery_stays_deleted` | 载体层（`RevalidationAudit`、三键、`promoted()`）、store 层与 repository 层的删除不回来 | 同上 | +1 |
+| `tests/test_report.py`、`tests/test_layering.py` 与前端夹具（`CheckPanel.test.tsx`、`useBookReadModelsRefresh.test.tsx`） | 只去掉 `revalidated` 字段或白名单死键 | 报告 `provenance` 段不再有该键 | 用例数不变。±0 |
+
+逐文件收集数：test_store 164→146、test_schema_common 24→21、test_retired_surface_scan 19→20，其余不变；
+净 −20（相对 HEAD 6ae2c3f7 的 3661 分母为 3641）。
+
 Stage3 文风迁移、Stage6 旧定性包 A/B 与 Stage2 旧五轮实验退出当前测试维护范围。
 历史由 Git 和既存实验记录保存，不新增测试归档目录；旧解释器不能接受当前报告的守卫仍保留。
 从旧实验中抽出的现役 Hook/Retry 夹具归 `tests/factories.py`，不再让当前测试依赖退役实验模块。

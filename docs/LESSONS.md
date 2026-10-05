@@ -55,8 +55,9 @@ API、作业与界面逐值保留。落点：`contracts/schema/report.py`、`nov
 
 ## 9. 加落盘闸门时，必须同批提供零成本恢复路
 
-付费产出被 HARD 拦下时必须可经 `--revalidate`、人工编辑或等价路径恢复；不能把 `.INVALID` 变成永久锁。
-落点：`novel/store.py` 与各 stage 的提升路径。
+付费产出被 HARD 拦下时必须可经免费复检、owner 修订、人工编辑或等价路径恢复；不能把 `.INVALID` 变成永久锁。
+落点：`novel/store.py`（`.INVALID` 孪生写入与退休）与各 stage 的恢复入口（节点级 `--check-only`、owner 修订）；
+旧链的 `--revalidate` 提升路径已删除（2026-10-05）。
 
 ## 10. 生成、归一化、人工写回和提升必须共享同一把尺子
 

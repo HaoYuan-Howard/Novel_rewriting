@@ -233,7 +233,7 @@ class ProvenanceSection(StrictModel):
 
     #: ⭐ 指向已经不在盘上的文件的那些边，**按名字点名**。
     #: `Q-4` 亲自点过的 bug：原型对「取不到指纹」的条目**静默跳过**，
-    #: 而盘上真有一条（0 成本提升路读完 `.INVALID` 就把它删了）。
+    #: 而盘上真有一条（旧链的 0 成本提升路读完 `.INVALID` 就把它删了）。
     ghosts: list[str] = Field(default_factory=list)
 
     edges: list[EdgeLine] = Field(default_factory=list)
@@ -242,7 +242,6 @@ class ProvenanceSection(StrictModel):
     invalid: bool = False
 
     #: 三态照 `_provenance` 原样带下来：`None` = 键不在（这份产物太老，没记过这件事）。
-    revalidated: bool | None = None
     origin: str | None = None
 
     @model_validator(mode='after')

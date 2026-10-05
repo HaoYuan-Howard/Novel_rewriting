@@ -1728,8 +1728,8 @@ class CandidateRunContext:
         """取用本次写盘的输入边：距上次铸账的窗口；窗口空则继承上次（同一份
         付费产出的第二个 key 与正式链「一次调用产多份产物」同形）。
 
-        自边剔除：产物不能把自己记成自己的上游（读旧稿再重写的账归 F7c 的
-        revalidation 面）。断言／视图走 `repository.inspect`，不记边——
+        自边剔除：产物不能把自己记成自己的上游。
+        断言／视图走 `repository.inspect`，不记边——
         单进程 pipeline 里「谁读的」必须能区分生产消费与检查。
         """
         if self._edges:

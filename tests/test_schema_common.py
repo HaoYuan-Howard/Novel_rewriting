@@ -4,11 +4,9 @@
 test_schema_common.py —— 盯住载体层真的在守它声称要守的那几件事。
 
 这些断言各自对应 `docs/schema/_common.md` 里一条**已经发生过**的损失：
-未知字段被静默丢弃 · 两把尺子混用 · 提升路伪造来源账 · 三态被压成两态。
+未知字段被静默丢弃 · 两把尺子混用 · 三态被压成两态。
 """
 from __future__ import annotations
-
-import inspect
 
 import pytest
 from pydantic import ValidationError
@@ -16,7 +14,7 @@ from pydantic import ValidationError
 from contracts.invariants import OWNER, SEVERITY
 from contracts.schema import (
     Finding, Fp10, FreeProvenance, HashBoundHumanApproval, HumanApproval,
-    InputEdge, LlmProvenance, Owner, RevalidationAudit, Severity, Usage,
+    InputEdge, LlmProvenance, Owner, Severity, Usage,
 )
 from contracts.schema.base import StrictModel
 
@@ -28,18 +26,6 @@ def _llm_prov(**kw):
     base = dict(code='abc1234-dirty', root_clean_sha1=ROOT, inputs=EDGE,
                 prompts={'SYS': 'aaaaaaaaaa'}, model='deepseek-v4-pro')
     return LlmProvenance(**{**base, **kw})
-
-
-def _revalidation_audit() -> RevalidationAudit:
-    return RevalidationAudit(
-        actor='reviewer', reason='当前判据已逐条复核',
-        baseline_locator_sha256='0' * 64,
-        baseline_raw_sha256='1' * 64, candidate_raw_sha256='2' * 64,
-        baseline_canonical_sha256='3' * 64,
-        candidate_canonical_sha256='4' * 64,
-        raw_changed=True, content_changed=True, edited_by_human=True,
-        changed_json_pointers=('/surface_habits/0',),
-    )
 
 
 # ───────────────────── ① extra='forbid'：未知字段不许被静默丢弃 ─────────────────────
@@ -86,16 +72,16 @@ def test_fp10_rejects_anything_that_is_not_ten_hex(bad):
 # ───────────────────── ③ 三态：`null` 与「键不在」必须是两份字节 ─────────────────────
 
 def test_none_keys_are_absent_on_disk_not_null():
-    """`revalidated: null` 与「没有 `revalidated` 这个键」在 JSON 里必须不同。
+    """`origin: null` 与「没有 `origin` 这个键」在 JSON 里必须不同。
 
-    这是三态能成立的前提（`Q-2`）：`False` = 跑出来的，键不在 = 这份产物太老。
+    这是三态能成立的前提（`Q-2`）：显式的值必须写出来，键不在 = 这份产物太老。
     """
     d = _llm_prov().to_disk()
-    for k in ('revalidated', 'gates_skipped', 'origin', 'input_basis', 'usage'):
+    for k in ('gates_skipped', 'origin', 'input_basis', 'usage'):
         assert k not in d, f'{k} 是 None，不该出现在盘上'
 
-    d2 = _llm_prov(revalidated=False).to_disk()
-    assert d2['revalidated'] is False, '显式的 False 必须写出来——它与「键不在」不是一回事'
+    d2 = _llm_prov(origin='human').to_disk()
+    assert d2['origin'] == 'human', '显式的值必须写出来——它与「键不在」不是一回事'
 
 
 def test_gates_skipped_empty_list_survives_to_disk():
@@ -148,41 +134,7 @@ def test_free_provenance_has_no_model_field_at_all():
         FreeProvenance(code='c', root_clean_sha1=ROOT, inputs=EDGE, model='deepseek-v4-pro')
 
 
-# ───────────────────── ⑤ 提升路：结构上不可能伪造 ─────────────────────
-
-def test_promoted_signature_cannot_take_prompts_model_or_inputs():
-    """⚠⚠ **这条测试就是那个 bug 本身。**
-
-    原型的 `--revalidate` 能伪造，是因为提升分支够得到一个会造新来源账的函数。
-    **没有参数，就没有可以传错的东西。**
-    """
-    params = set(inspect.signature(LlmProvenance.promoted).parameters) - {'self'}
-    assert params == {'audit', 'code'}, (
-        f'promoted() 的参数变成了 {sorted(params)}。'
-        f'一旦它能接受 prompts / model / inputs，伪造就又成为可能了'
-    )
-
-
-def test_promotion_keeps_the_original_source_account():
-    """提升之后，来源账必须还是**问题稿自己那一份**。
-
-    原型实测：一份上一轮付费产出的问题稿被提升后，来源账写着这一轮的 SYS 指纹、
-    这一轮的 model、这一轮读到的上游指纹——而没有任何一次新落笔发生过。
-    """
-    old = _llm_prov(prompts={'SYS': 'aaaaaaaaaa'}, gates_skipped=['name_leak'])
-    audit = _revalidation_audit()
-    new = old.promoted(code='newcode-dirty', audit=audit)
-
-    assert new.prompts == {'SYS': 'aaaaaaaaaa'}, '盖上了当前的 SYS 指纹 —— 这就是伪造'
-    assert new.model == old.model and new.inputs == old.inputs
-    assert new.revalidated is True
-    assert new.origin is None, 'origin=human 专属 --apply-edit 新一轮；INVALID 改动由 audit 留痕'
-    assert new.revalidation_audit.edited_by_human is True
-    assert new.code == 'newcode-dirty'
-    assert new.revalidation_audit == audit, '重判的人、理由与字节差异没有进入来源账'
-    assert new.invalid_baseline_sha256 is None, '正式产物不该继续冒充活的 INVALID 基线'
-    assert 'gates_skipped' not in new.to_disk(), '提升上来的是正式产物，不该再挂缺料记录'
-
+# ───────────────────── ⑤ 人工凭据与人工稿 ─────────────────────
 
 def test_human_approval_models_reject_blank_credentials_and_bad_hashes():
     assert HumanApproval(actor='甲', reason='逐项复核').actor == '甲'
@@ -192,20 +144,6 @@ def test_human_approval_models_reject_blank_credentials_and_bad_hashes():
         HumanApproval(actor='甲', reason='\t')
     with pytest.raises(ValidationError):
         HashBoundHumanApproval(actor='甲', reason='逐项复核', subject_sha256='short')
-
-
-def test_revalidation_audit_requires_hash_flags_and_json_pointer_diff_to_agree():
-    audit = _revalidation_audit()
-    assert audit.content_changed and audit.raw_changed
-    with pytest.raises(ValidationError, match='raw_changed'):
-        RevalidationAudit(**{**audit.model_dump(), 'raw_changed': False})
-    with pytest.raises(ValidationError, match='edited_by_human'):
-        RevalidationAudit(**{**audit.model_dump(), 'edited_by_human': False})
-    with pytest.raises(ValidationError, match='字典序'):
-        RevalidationAudit(**{
-            **audit.model_dump(),
-            'changed_json_pointers': ['/z', '/a'],
-        })
 
 
 def test_apply_edit_drops_prompts_and_model_but_keeps_inputs():

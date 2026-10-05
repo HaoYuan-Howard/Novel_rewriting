@@ -557,7 +557,7 @@ unknown、缺失、未运行、合法空值、失败和通过分别保留，不�
 
 阻断候选不覆盖有效正式产物，问题稿保留来源并进入 `.INVALID`。历史免费用户写面
 `--revalidate --actor --reason` 与 typed `--apply-edit` 人工轮次已随 2026-09-15 全自动裁决退役
-（内部 0-wire revalidate 仅由队列以固定审计身份自动排入，无用户入口）；新链机械验拦下的稿
+（`--revalidate` 旗标族及其审计载体后又整体删除，2026-10-05，见 `docs/DECISIONS.md`）；新链机械验拦下的稿
 在 `.INVALID` 孪生留证后 fail-fast，恢复走 owner 修订与节点级 `--check-only` 免费复检，
 保留原生成来源，不把人工字节伪装成新模型结果。反例是判据修正后被迫重购另一份稿，或提升
 丢失原来源；恢复载体见 `docs/schema/_common.md`。

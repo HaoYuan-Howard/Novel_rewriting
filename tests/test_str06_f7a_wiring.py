@@ -130,7 +130,7 @@ def test_stale_upstream_read_is_refused_and_inspect_records_nothing(tmp_path):
     assert len(repo.context.edges) == before
 
 
-def test_write_invalid_archives_rounds_and_promote_keeps_bytes(tmp_path):
+def test_write_invalid_archives_rounds_and_never_pollutes_the_formal_slot(tmp_path):
     repo = _repo(tmp_path, node='str06.stage4.compile')
     formal = 'stage4/compiled/execution_plan.json'
     repo.write(formal, {'scenes': []})
@@ -146,9 +146,9 @@ def test_write_invalid_archives_rounds_and_promote_keeps_bytes(tmp_path):
     assert repo.inspect(invalid)['scenes'] == [{'bad': False}]
     archived = repo.inspect(repo.round_rel(invalid, 1))
     assert archived['scenes'] == [{'bad': True}]
-    repo.promote_invalid(formal)
-    assert repo.inspect(formal)['scenes'] == [{'bad': False}]
-    assert not repo.path(invalid).exists()
+    # 孪生不能被原样提升为正式位：正式位仍是第一次写下的那一份。
+    assert repo.inspect(formal)['scenes'] == []
+    assert not hasattr(repo, 'promote_invalid')
 
 
 # ─── 付费边界接正式设施 ──────────────────────────────────────────────────────

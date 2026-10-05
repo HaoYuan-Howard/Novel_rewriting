@@ -16,7 +16,6 @@ describe('CheckPanel', () => {
         ghosts: [],
         edges: [],
         invalid: [],
-        revalidated: true,
         origin: null,
       },
       rules: [

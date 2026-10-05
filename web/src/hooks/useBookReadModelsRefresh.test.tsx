@@ -55,7 +55,7 @@ async function source(sid = SID) {
     stage: 'stage0',
     provenance: {
       freshness: 'fresh', reason: '', ghosts: [], edges: [], invalid: [],
-      revalidated: false, origin: null,
+      origin: null,
     },
     rules: [],
     accounting: [],

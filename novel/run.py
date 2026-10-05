@@ -333,19 +333,19 @@ class RunContext:
 
         ⚠⚠ **「0 成本不许记 `model`」这道闸开在这里，不开在写盘口**（`_common.md` §1.2）。
         这是本轮实测挪的一处：写盘口拦不住它，因为若干 0 成本入口本来就要写回一份
-        带 `model` 的来源账——`--revalidate` / `--recheck` 改写的是
+        带 `model` 的来源账——`--recheck` 改写的是
         **付费节点产的**那份产物，它记的 `model` 属于当初那次付费产出，
         不是本次跑的新宣称；`stage6.approve` / `stage7.approve` 同理（0 成本节点，
         改的是付费产物）。⇒ 真正该拦的是「**0 成本的跑现造一份声称模型产了它的账**」，
-        而**现造只有这一个入口**。放在写盘口会误伤五条真路径，那种闸迟早被人加白名单绕开。
+        而**现造只有这一个入口**。放在写盘口会误伤若干真路径，那种闸迟早被人加白名单绕开。
         """
         if not self.paid:
             raise ProvenanceRefused(
                 f'{self.node} 这一次跑不花钱（paid=False），却在现造一份带 `model` 的来源账。'
                 f'记一个 `model` 上去就是宣称「某个模型产了它」，而这一次跑一个模型都没调。'
                 f'⇒ 0 成本产出走 `free_provenance()`；'
-                f'要写回一份**继承来的**来源账（`--revalidate`/`--recheck`/定稿节点…），'
-                f'走 `store.promote_invalid()` 或直接把读上来的那一份原样带下去，别现造')
+                f'要写回一份**继承来的**来源账（`--recheck`/定稿节点…），'
+                f'直接把读上来的那一份原样带下去，别现造')
         actual_models = sorted(set(adopted_models or ()))
         if not actual_models:
             raise ProvenanceRefused(
@@ -464,8 +464,7 @@ class RunContext:
         标一个 `partial_rewrite` 让混版这件事看得见（`_common.md` §5.1b）。
 
         ⚠⚠ **它没有 `prompts` / `model` / `adopted_models` / `inputs` 四个参数**
-        ——与 `promoted()` 同一条判准：
-        本次一个请求都没发过，记上它们就是假账。`inputs` 只能来自 `_edges`
+        ——本次一个请求都没发过，记上它们就是假账。`inputs` 只能来自 `_edges`
         （与另外两个铸造口一致：**手工列举的来源清单会烂，而且是静默地烂**）。
 
         ⚠ 它**不走 `_settled()`**：本次一分钱没花，`usage` 该原样留着当初那次的
@@ -495,7 +494,7 @@ class RunContext:
         ⚠ **结算点是「铸造来源账」，不是「落盘」。** 铸造口只有这两个
         （`llm_provenance` / `free_provenance`），一份产物 = 一次铸造 = 一次结算。
         挪到写盘口有两个坏处：① 「先铸 N 份再逐份落盘」时每份会认领同一批 token；
-        ② 要给 `promote_invalid` / `write_invalid` 开例外，而 `store.py` 那边刚论证过
+        ② 要给 `write_invalid` 开例外，而 `store.py` 那边刚论证过
         「需要白名单的闸迟早被绕开」。
 
         ⚠ **推刻度必须在构造成功之后。** 来源账自己带后置条件

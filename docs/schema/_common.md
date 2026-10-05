@@ -11,7 +11,7 @@
 |---|---|---|
 | 一~三 | `_provenance` 的六个共有来源键 | 它们**逐层同形**。分层定 = 保证漂：`code` 的口径对全链生效 |
 | 四 | 新鲜度 `fresh/stale/unknown` | `Q-2` 四个落点里最贵的一个。它由 `inputs` 算出来，算法只能有一份 |
-| 五 | `.INVALID` 与三条 0 成本提升路 | 全链**三处**实测伪造 + **一处**实测丢失，都是同一个形状 |
+| 五 | `.INVALID` 与已退役的 0 成本提升路 | 旧链全链**三处**实测伪造 + **一处**实测丢失，都是同一个形状；现役没有提升路 |
 | 六~七 | 轮次账 与 `Finding` | `Finding` 统一为 15 字段，并显式携带章序 |
 | 八~九 | `usage` 与记账键的出口 | 出口规则是 `Q-1` 的形式要求，各现役产物层照办 |
 
@@ -192,7 +192,7 @@ freshness 映射保留，只服务存量盘面的历史解码；新链 Binding �
 > 原型的比对函数对「取不到指纹」的条目**静默跳过**——
 > 于是一条指向已删文件的边**既不报错、也不报「不知道」**，只是安静地当作一条正常的上游边。
 > 盘上真有一条：某本书的写作上下文，`inputs` 里挂着一份 `.INVALID` 的计划，
-> 而那个文件已经不在了（0 成本提升路读完问题稿就把它删了，见 §五）。
+> 而那个文件已经不在了（旧链的 0 成本提升路读完问题稿就把它删了，见 §五）。
 >
 > ⇒ **取不到指纹 = 那份上游已经不在盘上，要报出来，并按名字说是哪一条。**
 
@@ -202,7 +202,7 @@ freshness 映射保留，只服务存量盘面的历史解码；新链 Binding �
 
 ---
 
-## 五、`.INVALID`、`gates_skipped`、以及三条 0 成本提升路
+## 五、`.INVALID`、`gates_skipped`、以及已退役的 0 成本提升路
 
 本节只约束仍生产 `.INVALID` 的产物族。机械测量已经折叠进 Stage5/6 的即时消费，
 没有独立 artifact、`.INVALID`、`--revalidate` 或局部 `--remeasure` 面。
@@ -212,27 +212,20 @@ freshness 映射保留，只服务存量盘面的历史解码；新链 Binding �
 阻断级错误**不覆盖已有产物**，问题稿单独存一份带 `.INVALID` 标记的文件。
 旧链曾配 0 成本提升路（`--revalidate`）：按**当前**判据重判，合格即提升，且只对本次新引入的错误入终态——
 否则一条不相干的旧问题会把重算这条路永久堵死。该旗标族已随旧节点整体退役（`NODES` 不登记），
-现役节点没有 INVALID 提升入口。
+现役节点没有 INVALID 提升入口；提升路的审计载体（`revalidated`／`invalid_baseline_sha256`／
+`revalidation_audit` 三个来源键与 `write_invalid` 保存的不可变基线快照）连同提升函数一并删除
+（2026-10-05，`docs/DECISIONS.md` 同日行），旧实现按 Git 历史查询。
 
 | 键 | 类型 | 必填 | 内容 | 证据 |
 |---|---|---|---|---|
 | `gates_skipped` | `str[]` | **否**（只写在 `.INVALID` 上） | 阻断级判据里**没跑成**的那些。**空列表也要写** | **契·码** |
-| `revalidated` | `bool` | **否** | 这份稿是被重判提升上来的。`False` 与「键不在」不是一回事 | **盘·码** |
-| `invalid_baseline_sha256` | 64 位 sha256 | **否**（只写在活动 `.INVALID` 上） | `write_invalid` 首次落下的问题稿定位键；提升时清除 | **契·码** |
-| `revalidation_audit` | `RevalidationAudit` | **否**（提升后必有） | actor/reason、不可变基线定位、候选 raw/canonical SHA-256、RFC 6901 改动路径及三项变化布尔 | **契·码** |
-| `origin` | `str` | **否** | `human` = 由人工编辑入口形成的新稿；`--revalidate` 不借它表达修改事实 | **三源** |
+| `origin` | `str` | **否** | `human` = 由人工编辑入口形成的新稿 | **三源** |
 | `input_basis` | `str` | **否** | 「这份 `inputs` 是本次重判时读的，不是对历史来源的追认」 | **盘·码** |
 | `partial_rewrite` | `str` | **否** | ⭐ 这份产物被一条 0 成本路径**局部改写**过，值 = 那条路的 flag。见 5.1b | **盘·码** |
 
 `gates_skipped` 空列表也要写，是因为「这次没有闸门缺料」与「这份产物早于这套机制」
 必须分得开。它记的是判据 36 那整套设计的**唯一痕迹**——
 而「闸门没跑成」与「闸门跑过没事」正是 `Q-2` 要求必须能区分的两件事。
-
-`--revalidate` 现在必须同时给非空 `--actor` / `--reason`。`write_invalid` 保存不可变基线，
-提升前分别比较原始字节与去掉 `_provenance` 后的 canonical 业务 JSON：纯排版变化只令
-`raw_changed=true`；业务内容变化令 `content_changed=true`、`edited_by_human=true`，并列出排序去重的
-RFC 6901 `changed_json_pointers`。因此「判据变了、原稿原样提升」与「人改过问题稿后提升」不再同形。
-该审计仍不把提升伪造成新生成：原 prompts/model/adopted_models/inputs/usage/round 原样继承。
 
 ### 5.1b `partial_rewrite` —— 机制已随旧链退役（F8a）
 
@@ -250,7 +243,7 @@ committed_set_recovery／deterministic_replay）全部整份重写本节点产�
 存量盘面上带 `partial_rewrite` 的产物是旧链字节，随旧根与冻结旧代码配对读取；
 新根不产生该键。
 
-### 5.2 ⚠ 提升不许**伪造**，也不许**丢**——全链四处实测
+### 5.2 ⚠ 提升不许**伪造**，也不许**丢**——旧链全链四处实测（提升路已退役）
 
 | 层 | 病 | 实测证据 |
 |---|---|---|
@@ -259,31 +252,24 @@ committed_set_recovery／deterministic_replay）全部整份重写本节点产�
 | stage6 | **伪造** | 归档与正式产物的候选文本、`findings` **逐字相同**，而 `prompts.HOOK_SYS` 是两个值 |
 | stage7 | **伪造** | 四条 0 成本写盘路全部重盖来源账 |
 
-**⇒ 让它在结构上不可能。** 提升函数的签名里**没有** `prompts` / `model` / `adopted_models` / `inputs` 四个参数：
-
-```
-promote(旧的 _provenance, *, 代码版本, revalidation_audit) -> 新的 _provenance
-    继承旧的 prompts / model / adopted_models / inputs 一个字不动
-    记录 revalidated = true 与完整强审计账
-    round 不 +1（它不是新的一轮写作）
-```
-
-**没有参数，就没有可以传错的东西。** 原型之所以能伪造，正是因为提升分支
-够得到那个会构造一份全新来源账的函数。
+**⇒ 现役没有「提升已有稿并继承其来源账」这条路。** 旧链的解法（提升函数的签名里没有
+`prompts` / `model` / `adopted_models` / `inputs`，「没有参数，就没有可以传错的东西」）
+已随提升函数一并删除；现役产物的每一次落盘都经 `store.write` 记**本次真实**来源，
+没有任何入口能把一份已有稿换个位置再沿用旧账。
 
 ⚠ **`.INVALID` 归档进 `_rounds/`，不删**（`Q-8`）。原型「读完问题稿就把它删了」
 造出的正是 §四那条幽灵边——**删一个还被别人指着的文件，会同时制造两个问题**。
+合格的新稿落正式位时，同名 `.INVALID` 退休进 `_rounds/`（`ArtifactStore.retire_invalid`）。
 
-### 5.3 `--apply-edit` 是新修订，`--revalidate` 是强审计提升（两条用户入口均已退役；本节保留 Provenance 解码语义）
+### 5.3 `--apply-edit` 是新修订（用户入口已退役；本节保留 Provenance 解码语义）
 
 继承上一轮的 `inputs`（改的是同一份上游下的稿）· **`pop` 掉 `prompts`、`model` 与 `adopted_models`**
 （这一稿不是任何 prompt / 模型产的，记了就是假账）· 记 `origin=human` ·
 上一轮 `inputs` 为空时**记下这次真实读过的那份并打上 `input_basis`**，
 明说它不是对历史的追认。
 
-两条命令都可以是 0 次 LLM 调用，但不能混称为同一动作：`--revalidate` 只提升活动
-`.INVALID`，保留原生成轮次并写强审计；`--apply-edit` 消费 typed 人工输入、归档被替换版本并形成
-新的人工修订。Stage 5 尤其要求提交完整单章的 `segments[{slot,text}]`，会生成新的
+`--apply-edit` 可以是 0 次 LLM 调用：它消费 typed 人工输入、归档被替换版本并形成新的人工修订。
+Stage 5 尤其要求提交完整单章的 `segments[{slot,text}]`，会生成新的
 `RoundFreeProvenance.round`；「0 LLM 费用」不等于「无需人工重写整章」。
 
 ---

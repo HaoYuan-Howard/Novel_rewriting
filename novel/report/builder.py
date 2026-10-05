@@ -129,8 +129,7 @@ def _status_of(rule: Rule, outcome: Outcome | None) -> tuple[str, str | None]:
 def build(*, sid: str, node: str, freshness: FreshnessReport,
           outcomes: Iterable[Outcome] = (),
           accounting: dict[str, Any] | None = None,
-          invalid: bool = False, revalidated: bool | None = None,
-          origin: str | None = None,
+          invalid: bool = False, origin: str | None = None,
           registry: Registry = REGISTRY) -> CheckReport:
     """造一份校验报告。
 
@@ -194,7 +193,7 @@ def build(*, sid: str, node: str, freshness: FreshnessReport,
     badge = badge_of(lines)
     return CheckReport(
         sid=sid, node=node, stage=stage,
-        provenance=_provenance_section(freshness, invalid, revalidated, origin),
+        provenance=_provenance_section(freshness, invalid, origin),
         rules=lines,
         accounting=build_accounting(stage, accounting or {}),
         badge=badge, passed=badge != 'fail', counts=StatusCounts.of(lines),
@@ -202,7 +201,7 @@ def build(*, sid: str, node: str, freshness: FreshnessReport,
 
 
 def _provenance_section(fr: FreshnessReport, invalid: bool,
-                        revalidated: bool | None, origin: str | None) -> ProvenanceSection:
+                        origin: str | None) -> ProvenanceSection:
     """`FreshnessReport` → 报告第一节。**幽灵边从逐条边派生，不手抄。**"""
     return ProvenanceSection(
         freshness=fr.state, reason=fr.reason,
@@ -211,5 +210,5 @@ def _provenance_section(fr: FreshnessReport, invalid: bool,
                         recorded_file=e.recorded_file, now_file=e.now_file,
                         recorded_consumed=e.recorded_consumed, now_consumed=e.now_consumed)
                for e in fr.edges],
-        invalid=invalid, revalidated=revalidated, origin=origin,
+        invalid=invalid, origin=origin,
     )

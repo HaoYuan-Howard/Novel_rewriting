@@ -66,7 +66,7 @@ _W0 = frozenset({_INBOX, _RESUME})
 
 
 #: 首批恢复闭集。这里登记的是**全部 flag token**，不是只登记主操作；
-#: 例如 revalidate 没有 actor/reason 就不是同一行。表外组合即使节点 argparse
+#: 例如同一个主操作带不同的凭据 flag 就不是同一行。表外组合即使节点 argparse
 #: 暂时能解析，也不能拿到 Commander 执行许可。
 RECOVERY_RUN_POLICIES: Final[tuple[RecoveryRunPolicy, ...]] = (
     # ⚠ F8b-3（S-05 deprecation）：旧链恢复旗标族（--revalidate/--apply-edit/

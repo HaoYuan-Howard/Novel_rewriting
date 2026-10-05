@@ -136,7 +136,7 @@ def _active_artifact_paths(novel_dir: Path) -> tuple[Path, ...]:
     """只枚举当前注册产物，主动剪掉归档、scratch 与历史执行树。
 
     动态逐章/逐轮路径不能从模板预先展开，所以仍需查看七个 stage 根；但
-    ``os.walk`` 在进入 ``_rounds`` / ``_revalidation`` / agent scratch 之前就
+    ``os.walk`` 在进入 ``_rounds`` / agent scratch 之前就
     剪枝，不会像旧 ``novel_dir.rglob('*')`` 一样遍历整本历史。JSON 是否现役
     复用 schema 路由；两个非 JSON 产物则复用路径目录的正式字面。
     """

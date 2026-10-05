@@ -40,9 +40,9 @@ else:
     PartialRewrite = Literal[None]
 Sha256 = Annotated[str, StringConstraints(pattern=r'^[0-9a-f]{64}$')]
 
-#: `promoted()` 的返回类型。**`model_copy` 保留具体类**，于是
-#: `RoundLlmProvenance.promoted()` 仍是 `RoundLlmProvenance`（`round` 原样带下来——
-#: 提升不是新的一轮）。写成 `-> Provenance` 会把这件事在类型上抹掉。
+#: `partially_rewritten()` 的返回类型。**`model_copy` 保留具体类**，于是
+#: `RoundLlmProvenance.partially_rewritten()` 仍是 `RoundLlmProvenance`（`round` 原样带下来——
+#: 局部改写不是新的一轮）。写成 `-> Provenance` 会把这件事在类型上抹掉。
 P = TypeVar('P', bound='Provenance')
 
 
@@ -131,47 +131,6 @@ class HashBoundHumanApproval(HumanApproval):
     subject_sha256: Sha256
 
 
-class RevalidationAudit(HumanApproval):
-    """Immutable facts captured while promoting an ``.INVALID`` artifact.
-
-    Raw hashes expose byte-only edits (including formatting); canonical hashes
-    and RFC 6901 pointers describe logical JSON changes.  Keeping both prevents
-    either representation from silently standing in for the other.
-    """
-
-    baseline_locator_sha256: Sha256
-    baseline_raw_sha256: Sha256
-    candidate_raw_sha256: Sha256
-    baseline_canonical_sha256: Sha256
-    candidate_canonical_sha256: Sha256
-    raw_changed: bool
-    content_changed: bool
-    edited_by_human: bool
-    changed_json_pointers: tuple[str, ...]
-
-    @model_validator(mode='after')
-    def _hashes_and_diff_agree(self) -> 'RevalidationAudit':
-        raw_changed = self.baseline_raw_sha256 != self.candidate_raw_sha256
-        content_changed = (
-            self.baseline_canonical_sha256 != self.candidate_canonical_sha256)
-        if self.raw_changed != raw_changed:
-            raise ValueError('raw_changed 必须与 baseline/candidate raw SHA-256 一致')
-        if self.content_changed != content_changed:
-            raise ValueError('content_changed 必须与 baseline/candidate canonical SHA-256 一致')
-        if self.edited_by_human != content_changed:
-            raise ValueError('edited_by_human 必须与 content_changed 一致')
-        if not raw_changed and content_changed:
-            raise ValueError('原始字节相同而 canonical JSON 不同，审计账自相矛盾')
-        pointers = self.changed_json_pointers
-        if pointers != tuple(sorted(set(pointers))):
-            raise ValueError('changed_json_pointers 必须去重并按字典序排列')
-        if any(pointer and not pointer.startswith('/') for pointer in pointers):
-            raise ValueError('changed_json_pointers 必须是 RFC 6901 JSON Pointer')
-        if content_changed != bool(pointers):
-            raise ValueError('逻辑内容变化与 changed_json_pointers 是否为空必须一致')
-        return self
-
-
 class SharedAnalysisSource(StrictModel):
     """共享首抽的不可变来源身份；费用只由回执及唯一 ledger attempt 认领。"""
 
@@ -212,17 +171,7 @@ class Provenance(StrictModel):
     #: 非空时 usage 不重复认领共享调用；模型与请求身份仍保留真实生成来源。
     shared_analysis_source: SharedAnalysisSource | None = None
 
-    # ── 以下四个是**三态**字段：`None` 一律表示「键不在」，落盘时必须 exclude ──
-
-    #: 这份稿是被 `--revalidate` / `--apply-edit` **提升**上来的。
-    #:
-    #: ⚠ `False` 与「键不在」**不是一回事**：前者是「跑出来的」，
-    #: 后者是「这份产物太老，没记过这件事」（`Q-2` 的三态）。
-    #: 它只回答「这份稿被重判提升过」，不把提升伪装成一轮新的人工稿。
-    #: 是否有人改过业务内容由 ``revalidation_audit.edited_by_human`` 单独回答：
-    #: 仅当去掉 ``_provenance`` 后的 canonical payload 变化才为真；纯排版或来源块变化
-    #: 只会令 ``raw_changed`` 为真。
-    revalidated: bool | None = None
+    # ── 以下是**三态**字段：`None` 一律表示「键不在」，落盘时必须 exclude ──
 
     #: 阻断级判据里**没跑成**的那些。**只写在 `.INVALID` 上，且空列表也要写。**
     #:
@@ -231,8 +180,7 @@ class Provenance(StrictModel):
     #: 要求必须能区分的两件事。
     gates_skipped: list[str] | None = None
 
-    #: `'human'` = `--apply-edit` 落成的**新一轮**人工稿。直接修改活的 `.INVALID`
-    #: 再提升不会冒充新一轮，而由 ``revalidation_audit`` 留下 actor/reason 与内容 diff。
+    #: `'human'` = `--apply-edit` 落成的**新一轮**人工稿。
     origin: Literal['human'] | None = None
 
     #: 「这份 `inputs` 是本次重判时读的，**不是对历史来源的追认**」。
@@ -242,28 +190,18 @@ class Provenance(StrictModel):
     #: （`PARTIAL_REWRITE_FLAGS`）。见 `_common.md` §5.1b。
     #:
     #: 改完之后这一份是**混版的**：LLM 写的那些字段出自当初那次付费产出，
-    #: 被改的那部分是**现在**从盘上重算的。三个记法各错一半：
+    #: 被改的那部分是**现在**从盘上重算的。两个记法各错一半：
     #: 沿用旧账 ⇒「这次重算的派生字段照哪份上游算的」永远说不出口 ·
-    #: 整份覆盖 ⇒ 把 `prompts`/`model` 说成本次产的（伪造）·
-    #: 借 `revalidated` ⇒ 那一条只说发生过提升；其 audit 比较的是 INVALID 创建基线与
-    #: 人工提交面，不能替本次确定性派生字段重算声明新的输入依据。
+    #: 整份覆盖 ⇒ 把 `prompts`/`model` 说成本次产的（伪造）。
     #:
     #: ⚠ **一个带值的键，不是多个布尔。** 否则 `--recheck` / `--renormalize`
     #: 各自还要再加一个键——同一件事会不断长出新落点。
     partial_rewrite: PartialRewrite | None = None
 
-    #: ``write_invalid`` 保存的不可变原始快照定位键。只属于活的 `.INVALID`；
-    #: 提升为正式产物后由 ``revalidation_audit`` 接过审计责任并清除此键。
-    invalid_baseline_sha256: Sha256 | None = None
-
-    #: ``--revalidate`` 的完整人工审计账。raw hash 记录任意字节变化；去掉来源块后的
-    #: canonical hash / JSON Pointer 记录业务变化，并据此唯一派生 ``edited_by_human``。
-    revalidation_audit: RevalidationAudit | None = None
-
     def to_disk(self) -> dict:
         """落盘形态：**本层 `None` 的键一个都不写**。
 
-        这是三态能成立的前提——`revalidated: null` 与「没有 `revalidated` 这个键」
+        这是三态能成立的前提——`origin: null` 与「没有 `origin` 这个键」
         在 JSON 里必须是两份不同的字节。
 
         ⚠⚠ **只剥这一层，不许递归**（2026-08-11 骨架 B1 修）。原来写的是
@@ -288,55 +226,16 @@ class Provenance(StrictModel):
         dumped = self.model_dump(mode='json')
         return {k: v for k, v in dumped.items() if v is not None}
 
-    def promoted(self: P, *, code: str, audit: RevalidationAudit) -> P:
-        """把 `.INVALID` 稿的来源账带上来。`_common.md` §5.2。
-
-        ⚠⚠ **签名里没有 `prompts` / `model` / `adopted_models` / `inputs`
-        —— 这是本方法存在的全部意义。**
-
-        原型的 `--revalidate` 之所以能**伪造**，是因为提升分支够得到那个会构造一份
-        全新来源账的函数：它盖上当前的 SYS 指纹 + 当前 `model` + 当前 `inputs`，
-        `round` 还 +1，而**没有任何一次新的落笔发生过**。
-        三件事同时错：记了一个没产出它的 prompt；记了一个没写它的模型；
-        把「重判提升」记成了「第 N 轮写作」。
-
-        审计参数只接受已经校验过的 ``RevalidationAudit``；其中
-        ``edited_by_human`` 只由不含 ``_provenance`` 的 canonical 业务 payload diff
-        决定，纯排版只记 ``raw_changed``。仍然没有任何入口能替换 prompts / model /
-        inputs，因而不会把重判伪造成一次新生成或新一轮人工稿。
-
-        ⚠ `code` 与重验证审计账是本次动作新增的事实；生成来源的 prompts / model /
-        inputs 与轮次仍然原样继承。
-
-        ⚠⚠ **它挂在基类上，不挂在 `LlmProvenance` 上。** 原来挂在付费那一支，
-        而 `store.promote_invalid` 拿到的 `src` 类型是 `Provenance`：
-        `stage4.CtxProvenance` 与 `stage5.ReviewProvenance` 都是 `FreeProvenance` 的子类、
-        都是**真实存在**的 0 成本产物，一样会被闸门拦下、一样要走提升路。
-        提升它们会抛 `AttributeError`——而 `errors.py` 明写「不设默认异常，
-        每一处终态都要选一个具体的类」，一条裸 `AttributeError` 连终态都不算。
-        方法体里没有一处是付费那一支特有的，「没有参数就没有可以传错的东西」
-        对 0 成本孪生同样成立。
-        """
-        return self.model_copy(update={
-            'code': code,
-            'revalidated': True,
-            'gates_skipped': None,
-            'invalid_baseline_sha256': None,
-            'revalidation_audit': audit,
-        })
-
     def partially_rewritten(self: P, *, by: str, code: str,
                             inputs: dict[str, InputEdge]) -> P:
         """一条 0 成本路径**只改了这份产物的一部分**。`_common.md` §5.1b。
 
-        ⚠⚠ **签名里没有 `prompts` / `model`** —— 与 `promoted()` 同一条判准：
-        本次一个请求都没发过，记上它们就是假账（`Q-5` 点名的那类伪造）。
+        ⚠⚠ **签名里没有 `prompts` / `model`**：本次一个请求都没发过，
+        记上它们就是假账（`Q-5` 点名的那类伪造）。
 
-        ⚠ 签名里**有** `inputs` 而 `promoted()` 没有，这不是不一致：
-        提升路**没有读任何新东西**（它只是把一份已有的稿换个位置），
-        而局部改写**真的重新读了上游**——记下这次读到的正是它的全部意义。
-        沿用旧 `_provenance` 会让「这次重算的派生字段照哪份上游算的」永远说不出口。
-        危险的那两个在两条路上都够不到。
+        ⚠ 签名里**有** `inputs`：局部改写**真的重新读了上游**——记下这次读到的
+        正是它的全部意义。沿用旧 `_provenance` 会让「这次重算的派生字段照哪份上游算的」
+        永远说不出口。
 
         ⚠ 运行时那一侧再收一道：`inputs` 只能来自 `RunContext` 的来源账
         （`novel/run.py::RunContext.rewrite_provenance`），**调用方传不进去**。

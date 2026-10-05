@@ -455,13 +455,13 @@ def test_the_ghost_list_cannot_be_hand_written():
 
 
 def test_the_three_state_keys_survive_as_three_states(monkeypatch):
-    """`None` = 键不在（这份产物太老），与 `False` 不是一回事。"""
+    """`None` = 键不在（这份产物太老），与显式的值不是一回事。"""
     reg = _registry(_rule(rule='a', sev='info'))
-    rep = _build(reg, [ran('a')], monkeypatch=monkeypatch, revalidated=None, origin=None)
+    rep = _build(reg, [ran('a')], monkeypatch=monkeypatch, origin=None)
     assert '键不在' in render(rep)
-    rep2 = _build(reg, [ran('a')], monkeypatch=monkeypatch, revalidated=False)
-    assert rep2.provenance.revalidated is False
-    assert 'revalidated：False' in render(rep2)
+    rep2 = _build(reg, [ran('a')], monkeypatch=monkeypatch, origin='human')
+    assert rep2.provenance.origin == 'human'
+    assert 'origin：human' in render(rep2)
 
 
 # ───────── 服务端算的那几个数不许与 rules 分家（`R-11.7`） ─────────

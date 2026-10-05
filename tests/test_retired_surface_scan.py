@@ -350,3 +350,27 @@ def test_web_fixture_node_ids_stay_within_live_nodes():
     if stale:
         problems.append(f'mock.ts：退役节点 {stale}')
     assert not problems, '\n'.join(problems)
+
+def test_revalidation_machinery_stays_deleted():
+    """2026-10-05：`--revalidate` 提升路与重验证审计账整体删除（DECISIONS 同日行）。
+
+    载体层（`Provenance` 的三个来源键与 `promoted()`）、store 层（提升／审计／基线快照）
+    与新链 repository 的 `promote_invalid` 一个都不许回来。现役产物的盘上字节不含这些键，
+    所以删除不升任何产物版本；一旦有人把它们加回载体，旧根产物与新根产物就又分家了。
+    """
+    import contracts.schema as schema
+    from contracts.schema.common import Provenance
+    from novel import store
+
+    assert not hasattr(schema, 'RevalidationAudit')
+    gone_keys = {'revalidated', 'invalid_baseline_sha256', 'revalidation_audit'}
+    assert not gone_keys & set(Provenance.model_fields), (
+        f'Provenance 又长出了 {sorted(gone_keys & set(Provenance.model_fields))}')
+    assert not hasattr(Provenance, 'promoted')
+    for name in ('promote_invalid', 'prepared_invalid_promotion', 'revalidation_audit',
+                 'revalidation_baseline', 'prospective_invalid_sha256'):
+        assert not hasattr(store.ArtifactStore, name), f'ArtifactStore.{name} 回来了'
+    assert not hasattr(store.Str06Repository, 'promote_invalid')
+    for name in ('REVALIDATION_DIRNAME', 'REVALIDATION_REFERENCE_VERSION',
+                 'build_revalidation_audit'):
+        assert not hasattr(store, name), f'novel.store.{name} 回来了'

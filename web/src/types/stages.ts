@@ -154,7 +154,6 @@ export interface CheckProvenance {
   ghosts: string[]
   edges: unknown[]
   invalid: string[]
-  revalidated: boolean
   origin: string | null
   [k: string]: unknown
 }

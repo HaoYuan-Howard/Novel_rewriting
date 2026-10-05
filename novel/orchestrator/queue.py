@@ -61,12 +61,9 @@ WAITING_ON_INBOX = 'inbox:invalid'
 # （历史解码面模块已删，名册见 `tests/test_retired_surface_scan.py`；当前仅
 # 折叠历史 run 时按原字节解释）。现役规划器只发 `WAITING_ON_INBOX`／
 # `WAITING_ON_LEGACY`／`WAITING_ON_RESUME_DECISION` 三个 blocker；旧链的
-# edit-commit／invalid-revalidate／analyze 修复／stage4 repair／stage5 closure／
+# edit-commit／analyze 修复／stage4 repair／stage5 closure／
 # reviewer-rewrite／stage6 prepare 补尾路只能由旧链节点写出，生产入口已拒识。
 WAITING_ON_STAGE2_EDIT_COMMIT = 'recovery:stage2-global-edit-commit'
-WAITING_ON_STAGE2_EDIT_REVALIDATE = (
-    'recovery:stage2-global-edit-revalidate')
-WAITING_ON_INVALID_REVALIDATE = 'recovery:invalid-revalidate'
 WAITING_ON_ANALYZE_RESPONSE_REPAIR = 'human:stage2-analyze-response-repair'
 WAITING_ON_ANALYZE_RESPONSE_TERMINAL = 'human:stage2-analyze-response-terminal'
 WAITING_ON_ANALYZE_SOURCE = 'human:stage2-analyze-source-unavailable'
@@ -96,8 +93,8 @@ WAITING_ON_REPLAN = 'queue:plan-changed'
 #: 已有 typed 决定、只差按它执行的 blocker 闭集：Supervisor 只对这个集合里的
 #: waiting_on 现场铸 recovery permit 并交给 Executor，避免任何普通人工 blocker
 #: 因“碰巧带 steps”被自动执行。
-#: ⚠⚠ F8c：**现役为空集**。旧链的 0-wire 补尾 waiter（edit-commit／invalid-
-#: revalidate／stage4 repair／reviewer-rewrite／prepared-delivery／stage6
+#: ⚠⚠ F8c：**现役为空集**。旧链的 0-wire 补尾 waiter（edit-commit／
+#: stage4 repair／reviewer-rewrite／prepared-delivery／stage6
 #: prepare-edit）随旧链退役；新链的恢复是候选 runner 自身续跑（`--check-only`
 #: 免费复检与精确补尾，F7c），不经队列发布补尾 argv。blocked 即停在那里并如实
 #: 报告，不猜成可执行命令。
@@ -142,7 +139,7 @@ def _upstream_invalid(ov, stage: str) -> list[str]:
     """目标节点真实依赖的严格上游里，有几份被闸门拦下的稿。
 
     ⚠ 只看上游不看本层：本层自己的 `.INVALID` 是**本节点该处理的事**
-    （0 成本提升路 `--revalidate`），不是挡住它自己的理由。
+    （重跑本节点或 `--check-only` 复检），不是挡住它自己的理由。
 
     当前节点都沿主链消费前序层；Stage3 已退役，编号空洞不改变依赖顺序。
     """
@@ -1323,7 +1320,6 @@ def resume_incomplete(base: str | os.PathLike[str], *,
 __all__ = [
     'HUMAN_NODES', 'WAITING_ON_INBOX',
     'WAITING_ON_STAGE2_EDIT_COMMIT',
-    'WAITING_ON_STAGE2_EDIT_REVALIDATE',
     'WAITING_ON_STAGE4_DESIGN_REVIEW',
     'WAITING_ON_STAGE4_DESIGN_REPAIR_COMMIT',
     'WAITING_ON_STAGE4_BINDING_RESOLUTION',

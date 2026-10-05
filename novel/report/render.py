@@ -45,8 +45,7 @@ def _provenance(p: ProvenanceSection) -> list[str]:
     out = [f'── 来源 ── {p.freshness}（{p.reason}）']
     if p.invalid:
         out.append('  ⚠ 判的这一份是 .INVALID 稿')
-    # 三态：`None` = 键不在（这份产物太老，没记过这件事），与 `False` 不是一回事。
-    out.append(f'  revalidated：{"键不在" if p.revalidated is None else p.revalidated}')
+    # 三态：`None` = 键不在（这份产物太老，没记过这件事）。
     out.append(f'  origin：{p.origin if p.origin is not None else "键不在"}')
     if p.ghosts:
         # ⭐ 点名。`Q-4` 亲自点过的 bug：原型对「取不到指纹」的条目静默跳过。

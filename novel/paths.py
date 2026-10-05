@@ -783,7 +783,7 @@ def uploaded_source_tail(recorded: str | os.PathLike[str]) -> tuple[str, str] | 
 #: （答案本来就该写进 `content`，只是走错了通道）⇒ 跟书走：删书即删证据，
 #: `_service/runs/<sid>` 已是按书隔离、可恢复的受管模型 sidecar；
 #: 而 answer-lost 是不能直接采纳、可能含逸出推理的诊断证据，仍然跟书删除边界走。
-#: `_` 前缀与 `_rounds` / `_revalidation` 同类：它不是产物，完成度与阶段视图不看它。
+#: `_` 前缀与 `_rounds` 同类：它不是产物，完成度与阶段视图不看它。
 #:
 #: 对自由文本 `ask_text`，留证仍只作诊断而不从 reasoning 抠正文；对结构化
 #: `ask_json`，整段 reasoning 只有重新通过与 content 完全相同的 parse、schema、

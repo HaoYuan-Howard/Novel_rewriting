@@ -72,7 +72,6 @@ from contracts.schema.common import (
     LlmProvenance,
     Owner,
     Provenance,
-    RevalidationAudit,
     RoundFreeProvenance,
     RoundLlmProvenance,
     Severity,
@@ -371,7 +370,7 @@ __all__ = [
     # 底座与共有部分
     'Fp10', 'Sha1', 'StrictModel', 'FrozenModel',
     'InputEdge', 'Usage', 'HumanApproval', 'HashBoundHumanApproval',
-    'RevalidationAudit', 'Provenance', 'FreeProvenance', 'LlmProvenance',
+    'Provenance', 'FreeProvenance', 'LlmProvenance',
     'RoundLlmProvenance', 'RoundFreeProvenance',
     'Finding', 'WontFixNote', 'WontFix', 'WontFixEntry', 'Severity', 'Owner',
     'CorpusArtifactEntry', 'CorpusBookEntry', 'CorpusLedgerSummary',

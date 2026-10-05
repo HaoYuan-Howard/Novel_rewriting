@@ -519,9 +519,9 @@ delivery 终验未闭合时只运行`novel/orchestrator/delivery.py` 的确定�
 把它折成「不存在」会让界面说「还没跑」——而它跑过，只是那次把来源账丢了。
 
 `global_naming_blocked` 是 Stage2 的专用 unknown：latest Global 候选虽能按当前 schema 读取，
-但称名 HARD 尚未收口，因而不能铸成 Blueprint 可消费的投影。state/queue 只允许停在 Global typed
-edit / `--revalidate`（0 LLM）等待人工决定；不得把它解释成可 `--renormalize` 的伴生产物缺失，
-更不得生成默认付费 Global / Blueprint argv。
+但称名 HARD 尚未收口，因而不能铸成 Blueprint 可消费的投影。state/queue 只允许停在等待人工决定
+（旧链的 Global typed edit 与 `--revalidate` 0 LLM 提升路均已退役，现役节点旗标面只有 `--check-only`
+免费复检）；不得把它解释成可 `--renormalize` 的伴生产物缺失，更不得生成默认付费 Global / Blueprint argv。
 
 **`StageState`** = 一层的全部 `ArtifactState` + 一个折叠出来的 `done`。
 `done` 的判据是**全部必需产物 `exists` 且 `readable` 且 `freshness != 'stale'` 且 `not invalid`**。
@@ -596,7 +596,7 @@ canonical `stage5/ch*.json` 给；文件名只做发现，每份仍须通过当�
 | 结论 | 什么时候 |
 |---|---|
 | `skip` | 产物在、读得回来、不陈旧 ⇒ **已存在即跳过** |
-| `run` | 产物不在盘上，或盘上是一份被闸门拦下的 `.INVALID`；后者在队列里先停为 `inbox:invalid`，由人优先尝试 0 成本 `--revalidate`，不会直接重跑付费命令 |
+| `run` | 产物不在盘上，或盘上是一份被闸门拦下的 `.INVALID`；后者在队列里先停为 `inbox:invalid`，由人按该节点当前恢复契约处置（重跑 owner／`--check-only` 复检），不会直接重跑付费命令 |
 | `redo` | **上游在中断期间变过** ⇒ **这不是「续」是「重来」** |
 | `unknown` | 判不了；Stage5 章按当前 schema/version 读不回或 freshness 未知也停在这里，不折成付费重跑 |
 | `legacy_incompatible` | 旧契约只作历史证据；不迁移、不冒充 missing，也不静默触发付费重建 |
