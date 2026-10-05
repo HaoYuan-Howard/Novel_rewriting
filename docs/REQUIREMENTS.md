@@ -37,7 +37,7 @@ rc15 冻结根（`outputs/cs_golden_20261004_rc15`，只读）的真实产物片
 |---|---|---|
 | CS-F2 事实引用与名称呈现 | [~] | Hook 称谓投影已闭合（2026-10-05）：`HookContext.withheld_bindings` 按 Hook 自选 `surface_releases` 推导（与章 IR 同一把尺），`render_hook_context` 渲染期投影正向材料行与禁区行，上下文字段与来源归因保持原字段文本，留痕 `hook_name_projections` 进 guard report；`hook.json` 升 rc16，旧 rc12 楔子上下文拒读、免费重编译。余项：v8 提示词与 `lock` 闭集在真实模型上的表现未验证。Stage7 无需改动 |
 | CS-F3 关键语义离线标定 | [x] | 已封口（2026-10-05 用户裁决）：判官 flash/low 不满足启用硬规则，语义闸不启用、生产语义维持 `unver`；提示词迭代余项撤销，剩余 45 次授权作废。结论、归因更正与重开条件见 DECISIONS 同日行 |
-| CS-F4 本书正式恢复 | [~] | 见下 |
+| CS-F4 本书正式恢复 | [x] | 已完成（2026-10-05，路线 A＋全链授权）：正式根 `outputs/csf4_restore_20261005` 交付 `stage7/final/夫君的报恩_rewriting.txt`（11/11 章接受、delivery_identity `01595264…`）；免费段（stage0/1 重放＋book/8章/names/ch04·06·08 采用）零 token；实付 28 行＝输入 434,004／输出 501,336（reasoning 415,287 不重复计）。补丁与证据：`outputs/csf4_fuhun_restore_20261005/`（义务审计、wire-dir、patch note 归档）、scratch 验证根 `outputs/csf4_patch_probe_20261005`。人工恢复如实登记：ch03 补丁 wire 与 Design 已购 wire（额度耗尽后零成本采用＋know 拍位补丁）为 unverified 类采用，preserve 裸姓 16 处走本根正式补丁链（active/preserve.json）；preserve 两次名面回派由模型修订轮闭合。**不计为全自动成功**；成书对比评估归 CS-F5 |
 | CS-F5 成书与成本对照 | [ ] | 相关目标章节与最终正文核验；六维与自动程度分别报告；核验新增成本与返修节省量同口径比较；不以 Stage4 继续运行代替完成 |
 
 **CS-F3 已封口（2026-10-05 用户裁决，裁决全文见 DECISIONS 同日行）**：开发集标定执行 45/90 次真实调用
@@ -52,37 +52,8 @@ fake transport 绿例仍不得记成语义核验已通过。重开三条件（�
 案例、装置缺陷修复）加新授权缺一不可。金标回归用户原意：Golden_Set_v3.0 三本 yaml 为 CS-G／CS-F5 成书
 对比金标（见 CS-G 前置），不再承担判官标定用途。
 
-**CS-F4 本书正式恢复**（《夫君的报恩》，11 章）：
-
-- 起点：旧根 `outputs/cs_golden_20261004_rc15` 在 Design 首答＋两轮修订后 `validation_rounds_exhausted` 停止（整书额度
-  11/512），冻结为失败证据。零付费前置核对已做（2026-10-05）：在干净新根重放 stage0/1 后，用免费入口 `--check-only`
-  复核——Stage2 全节点与 Preserve（62 项义务）可经历史采用 0 成本进入 rc16 新根（book 与 8 章经 `--wire-dir`，wire 由
-  rc15 根 `runtime/revisions/evidence` 按 owner 摆出；ch04／06／08、names、associate、Preserve 按同请求身份；
-  `stage2.compile` 确定性重放）；**Design 无同请求身份结果（wire v8 与提示词换版），必须重购**。探针根
-  `outputs/cs_f2_adopt_probe` 只含零 token 采用行，不是冻结证据；复用只经现役采用入口，换算与摆放脚本不入库。
-- 待办：① 正式 owner 修订：ch03 主体误判（夫君模仿表弟称谓的场景被记成芸娘与表弟已发生关系，Preserve ob18 又锁为必保）、
-  ob44 无依据限制、Preserve 编造的源文没有的短姓称呼 14 处（陆×13、裴×1，写手材料预检仍报出，不可投影）——先修源观察
-  及派生产物，不能靠改目标稿掩盖；② 审计 62 项义务的重复／过保（不设目标条数；同机制不同时点／持有者／认知模式不得为
-  降费合并）；③ 按实际依赖重建 Stage2／Preserve／Design／Hook／Writer／Stage7，原响应、接受历史、费用与累计轮数保留，
-  人工恢复不得记为全自动成功；④ 新 wire 的新语义输出明确列明不可免费复用的原因，不隐式换根、换模型、增预算或授权外发。
-- **①②已闭合（2026-10-05，零付费）**：补丁 wire 与申报理由在 `outputs/csf4_fuhun_restore_20261005/wires/`（ch03：beat3
-  主体更正＋删 relation 状态、beat4 认知更正、「（陆郎）」批注 4 处清除；preserve：ob18 改写＋锚点迁 `b03_04.c1`、ob44 删
-  无依据否定限制、短姓 14 处清除；判据＝用户裁决＋金标 SIG-01＋源文逐字核对，构造脚本不入库）。义务审计报告在
-  `outputs/csf4_fuhun_restore_20261005/obligation_audit.md`：无语句级重复、共享锚点均不同承载面不合并、否定限制 66 条
-  除已修 ob44 外未见无源依据、事实主张抽查（含楔子）全部有据、必保比例 100% 如实登记。全链免费段已在 scratch 根
-  `outputs/csf4_patch_probe_20261005` 端到端验证（stage0/1 重放→book/8章/names/ch04·06·08 零成本带成本链采用→compile
-  →补丁 preserve 62 义务锚点全解析；Characters 错误关系已消失）。同批修复 `chain.py` wire 采用拒收分支闭包晚绑定
-  NameError（错误面丢坐标，违 I-36），回归测试 `tests/test_str06_f7a_wiring.py::test_chain_wire_rejection_reports_with_coordinates_not_nameerror`。
-- **机制发现（待用户裁决）**：ch03 补丁改变关联空间与蓝本 ⇒ **associate／preserve 请求身份漂移**，rc15 付费行不再覆盖
-  （REQUIREMENTS 原「Preserve 可 0 成本采用」仅对未打补丁基线成立）；且 v5 章 wire 系仓外换算产物，其身份无任何已购基线，
-  owner_patch 绑定档不可达 ⇒ ch03 补丁当前只能 unverified 采用（机械闸全过、无正式 OwnerRevisionRecord 账）。恢复路线二选一：
-  （A）付费重购 associate＋preserve（机制最干净；preserve 若复现短姓类错误可在新根内走正式补丁链）；
-  （B）零成本采用手工 wire（unverified 如实留痕，登记为人工恢复）。④ 的不可免费复用清单已在 wires/README 登记。
-- 阻塞与口径：须独立新根与付费／外发授权；即使只做免费采用，CLI 入口也要求 `--yes`（`--check-only` 是唯一免费入口，且会写
-  探针根的采用产物与零 token 账行，不称纯只读）；ch03／ob44 已裁决（2026-10-05）走手工 owner patch——flash 抽取时
-  读错一次、核验时两次都认同该读法，付费重抽不保证读对。Design 重购量级参照
-  （rc15 根账均值，非报价）：约 34k 输入／62k 输出（reasoning 约 52k）；associate 约 17k 输入／4k 输出、preserve 约
-  45k 输入／39k 输出（rc15 读数）；hook／正文×11／naming 无本书历史读数，账行以 ledger 为准；账内金额为空，只报 token。
+**CS-F4 本书正式恢复**（《夫君的报恩》，11 章）：已完成（2026-10-05，用户裁决路线 A＋全链授权到交付），
+明细见 CS-F 表行与提交说明；一项机制债转入「工程余项」（换算链 wire 的正式 owner patch 绑定档缺口）。
 
 ### CS-T 分节点思考对照（含 CS-4：稳定输入前缀）
 
@@ -152,6 +123,10 @@ fake transport 绿例仍不得记成语义核验已通过。重开三条件（�
   checklist prose、章内披露及表达力未验证继续登记；第一人称书不能代签第三人称稳定性。
 - **工程余项**：同身份强制重采、一般 REDO 级联政策仍属既有产品裁决边界，只闭合已证明的消费链，不扩普通队列权限；
   调并发前先看真实 429／unknown。
+- **换算链 wire 的 owner patch 绑定档缺口（CS-F4 遗留，2026-10-05）**：v5 章 wire 系仓外换算产物，其请求身份在任何根都
+  无已购行，`bind_wire_adoption` 的 owner_patch 档（要求同身份已购基线）不可达，手工补丁只能 unverified 采用（CS-F4 的
+  ch03 即此例；跨身份漂移后的手工 wire 同类，Design 已购 wire 的采用亦然）。是否为「已裁决手工修订」建正式登记通道
+  （如 batch-documented 补丁臂＋换算清单基线）待用户裁决；未裁决前 unverified 如实留痕、不计全自动。
 - **token 量级表**：新量级由账与补证逐节点重建（旧 B0／F5e／F9 量级仅作诊断参照，非现役报价，见 `e84a169b` 历史表）；
   异常先回查输入和协议；JSON 字符下降只证明 wire 瘦身，未证明整书费用下降；已退役 bind 不再作为预算项。
 
