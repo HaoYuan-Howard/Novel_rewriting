@@ -67,6 +67,7 @@ from novel.config import Config, load_config
 from novel.llm.paid_requests import (
     ExecutionError, PaidRequestSession, PurchaseRequired, AdoptionRef, digest,
     ask_json, ask_text_once, init_or_resume_candidate_workflow, purchased_baseline,
+    semantic_owner_unit,
     ValidationStop,
 )
 from novel.llm.transport import ChatRequest, DeepSeekTransport
@@ -1973,7 +1974,6 @@ def execute(args) -> None:
     if bool(resample_owner) != bool(resample_reason):
         raise ValueError('--resample 与非空 --reason 必须同时提供')
     if resample_owner:
-        from novel.llm.paid_requests import semantic_owner_unit
         target_node, _scope = semantic_owner_unit(resample_owner)
         if args.check_only or args.wire_dir:
             raise ValueError('定向重采不能与 check-only／wire 采用混用')
@@ -2322,7 +2322,6 @@ def execute(args) -> None:
                 or record.product_sha256 != repository.file_sha256(repository.path(record.product_rel)))
 
     def after_node_commit(node):
-        from novel.llm.paid_requests import semantic_owner_unit
         for owner, selection in selected_samples.items():
             if selection is None or semantic_owner_unit(owner)[0] != node:
                 continue

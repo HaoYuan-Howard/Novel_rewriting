@@ -790,3 +790,19 @@ def test_wire_adoption_binds_work_unit_evidence(tmp_path, long_source):
     other.write_text('{"entries": [{"x": 1}]}', encoding='utf-8')
     with pytest.raises(ValueError, match='不一致'):
         session.bind_wire_adoption('preserve', identity, other)
+
+
+def test_chain_wire_rejection_reports_with_coordinates_not_nameerror():
+    """wire 采用失败分支的符号必须在链装配前可用（CS-F4 实测回归）。
+
+    嵌套 adopt() 的拒收分支引用 `semantic_owner_unit`；它曾被外围函数的
+    条件局部导入变成闭包晚绑定——校验失败时错误面先崩 NameError，坐标
+    （stage/node/item/issues）全部丢失（I-36）。模块级导入后此名恒可用；
+    真实触发面（wire-dir 校验失败 → MechanicalDefectStop）由 CS-F4
+    scratch 根实测闭合，这里钉住绑定不回退。
+    """
+    from novel.stages import chain
+
+    assert callable(chain.semantic_owner_unit)
+    node, scope = chain.semantic_owner_unit('preserve')
+    assert node == 'str06.stage4.preserve' and scope == 'book'

@@ -65,10 +65,24 @@ fake transport 绿例仍不得记成语义核验已通过。重开三条件（�
   及派生产物，不能靠改目标稿掩盖；② 审计 62 项义务的重复／过保（不设目标条数；同机制不同时点／持有者／认知模式不得为
   降费合并）；③ 按实际依赖重建 Stage2／Preserve／Design／Hook／Writer／Stage7，原响应、接受历史、费用与累计轮数保留，
   人工恢复不得记为全自动成功；④ 新 wire 的新语义输出明确列明不可免费复用的原因，不隐式换根、换模型、增预算或授权外发。
+- **①②已闭合（2026-10-05，零付费）**：补丁 wire 与申报理由在 `outputs/csf4_fuhun_restore_20261005/wires/`（ch03：beat3
+  主体更正＋删 relation 状态、beat4 认知更正、「（陆郎）」批注 4 处清除；preserve：ob18 改写＋锚点迁 `b03_04.c1`、ob44 删
+  无依据否定限制、短姓 14 处清除；判据＝用户裁决＋金标 SIG-01＋源文逐字核对，构造脚本不入库）。义务审计报告在
+  `outputs/csf4_fuhun_restore_20261005/obligation_audit.md`：无语句级重复、共享锚点均不同承载面不合并、否定限制 66 条
+  除已修 ob44 外未见无源依据、事实主张抽查（含楔子）全部有据、必保比例 100% 如实登记。全链免费段已在 scratch 根
+  `outputs/csf4_patch_probe_20261005` 端到端验证（stage0/1 重放→book/8章/names/ch04·06·08 零成本带成本链采用→compile
+  →补丁 preserve 62 义务锚点全解析；Characters 错误关系已消失）。同批修复 `chain.py` wire 采用拒收分支闭包晚绑定
+  NameError（错误面丢坐标，违 I-36），回归测试 `tests/test_str06_f7a_wiring.py::test_chain_wire_rejection_reports_with_coordinates_not_nameerror`。
+- **机制发现（待用户裁决）**：ch03 补丁改变关联空间与蓝本 ⇒ **associate／preserve 请求身份漂移**，rc15 付费行不再覆盖
+  （REQUIREMENTS 原「Preserve 可 0 成本采用」仅对未打补丁基线成立）；且 v5 章 wire 系仓外换算产物，其身份无任何已购基线，
+  owner_patch 绑定档不可达 ⇒ ch03 补丁当前只能 unverified 采用（机械闸全过、无正式 OwnerRevisionRecord 账）。恢复路线二选一：
+  （A）付费重购 associate＋preserve（机制最干净；preserve 若复现短姓类错误可在新根内走正式补丁链）；
+  （B）零成本采用手工 wire（unverified 如实留痕，登记为人工恢复）。④ 的不可免费复用清单已在 wires/README 登记。
 - 阻塞与口径：须独立新根与付费／外发授权；即使只做免费采用，CLI 入口也要求 `--yes`（`--check-only` 是唯一免费入口，且会写
   探针根的采用产物与零 token 账行，不称纯只读）；ch03／ob44 已裁决（2026-10-05）走手工 owner patch——flash 抽取时
   读错一次、核验时两次都认同该读法，付费重抽不保证读对。Design 重购量级参照
-  （rc15 根账均值，非报价）：约 34k 输入／62k 输出（reasoning 约 52k）；账内金额为空，只报 token。
+  （rc15 根账均值，非报价）：约 34k 输入／62k 输出（reasoning 约 52k）；associate 约 17k 输入／4k 输出、preserve 约
+  45k 输入／39k 输出（rc15 读数）；hook／正文×11／naming 无本书历史读数，账行以 ledger 为准；账内金额为空，只报 token。
 
 ### CS-T 分节点思考对照（含 CS-4：稳定输入前缀）
 
