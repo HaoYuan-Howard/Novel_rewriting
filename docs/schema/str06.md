@@ -200,7 +200,7 @@ Brief、BodyDesign、PresentationGraph、ExecutionPlan、WriterBookIR 升 rc14�
   `expression_refs`（正向表达任务落具体拍）。kp 键规则、kf 锁标注（CS-F2：见上「事实锁引用」，
   不再是状态键）与必保锁兑现归 `assemble_body_design`（revise_self ≤2）。
 - **承载位（a5＋CS-3 bind 退役）**：`str06.stage4.bind` 节点与
-  stage4-bind-v1 wire 协议退役——义务落在哪一拍由 design wire（v6）的
+  stage4-bind-v1 wire 协议退役——义务落在哪一拍由 design wire（v6 起，现役 v8）的
   `real:["obNN"]` 标注唯一声明：末次标注拍＝接受拍、其余标注拍＝支撑位，
   `derive_semantic_binding` 派生 SemanticBinding（series 成员接受拍互斥，
   同拍 `series_collapsed` 并入 design 同节点修订轮；无标注的非必保义务进
@@ -233,7 +233,7 @@ SemanticBinding。Stage2 的观察与关联决定是付费的内部材料（归�
 Stage2  book（书级观察）──┬── chapters（逐章观察，并行）── associate（跨章关联）──┐
                          └── names（名称结构）─────────────────────────────────────┴→ compile
                                                                   → Characters＋Blueprint
-Stage4  Preserve → Design → Bind → Hook Design → compile → 自足 ChapterIR＋HookContext
+Stage4  Preserve → body_design（Design＋SemanticBinding 双产物）→ Hook Design → compile → 自足 ChapterIR＋HookContext
 Stage5  各章与 Hook 并发成文 → 独立验证、提交
 Stage7  Naming → ApplyNames → 按阅读序组装交付
 ```

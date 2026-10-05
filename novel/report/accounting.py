@@ -44,7 +44,7 @@ ACCOUNTING: dict[str, tuple[AccountingSpec, ...]] = {
                                                 '（「冷揭示」与「被裁空」只能靠它分开）'),
         AccountingSpec('evidence_locator_failures',
                        '哪些事实 locator 因错章、零命中、多命中或正式 span 漂移而失败？'
-                       '（非空即 GlobalGrounding 失败态）'),
+                       '（非空即证据定位失败态）'),
     ),
     # ⚠ **刻意不声明 `partial_rewrite`**：本层没有一条 0 成本路会把计划改成混版的
     #    （`--identity` 只作内存诊断、`--apply-edit` 落的是新一轮）。

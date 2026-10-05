@@ -311,55 +311,20 @@ STR06_ARTIFACT_RC_VERSIONS: Final[dict[str, str]] = {
 
 
 # ── 旧链路径常量（F8a 起全部移入退役表；只供旧盘只读识别与拒绝）──────────
-# ⚠ 这些常量随 F8c 旧链消费者删除一并删除（F6d/F7e 退役登记）。它们**不再
+# ⚠ 这些常量随 F8c 旧链消费者删除一并删除（F6d/F7e 退役登记）——2026-10-05
+# 合并复审先清掉零引用的 34 个别名；下列 10 个仍有现役消费者（store／
+# source_identity 的只读解码与 tests 守卫），保留到消费者一并退役。它们**不再
 # 能通过 `artifact_rel` 取到**——那正是 `legacy_incompatible` 的机械形状：
 # 旧键不在现役表里，正式 decode/encode 路径拒绝旧字节。
 STAGE2_ANALYZE_RECEIPT = RETIRED_ARTIFACT_PATHS['stage2.analyze_receipt']
-STAGE2_ANALYZE_RECOVERY = RETIRED_ARTIFACT_PATHS['stage2.analyze_recovery']
-STAGE2_ANALYZE_OWNER_DRAFT_EDIT = RETIRED_ARTIFACT_PATHS['stage2.analyze_owner_draft_edit']
-STAGE2_ANALYZE_CHARACTERS_DRAFT_REPAIR = RETIRED_ARTIFACT_PATHS['stage2.analyze_characters_draft_repair']
-STAGE2_ANALYZE_GLOBAL_DRAFT_REPAIR = RETIRED_ARTIFACT_PATHS['stage2.analyze_global_draft_repair']
-STAGE2_CHARACTERS = RETIRED_ARTIFACT_PATHS['stage2.characters']
-STAGE2_CHARACTERS_EDIT = RETIRED_ARTIFACT_PATHS['stage2.characters_edit']
-STAGE2_GLOBAL_GROUNDING = RETIRED_ARTIFACT_PATHS['stage2.global_grounding']
-STAGE2_GLOBAL_REVIEW = RETIRED_ARTIFACT_PATHS['stage2.global_review']
-STAGE2_GLOBAL_REVIEW_DECISIONS = RETIRED_ARTIFACT_PATHS['stage2.global_review_decisions']
-STAGE2_GLOBAL_EDIT = RETIRED_ARTIFACT_PATHS['stage2.global_edit']
-STAGE2_GLOBAL_EDIT_FAILURE = RETIRED_ARTIFACT_PATHS['stage2.global_edit_failure']
-STAGE2_GLOBAL_EDIT_INPUT_COMMIT = RETIRED_ARTIFACT_PATHS['stage2.global_edit_input_commit']
-STAGE2_GLOBAL_EDIT_COMMIT = RETIRED_ARTIFACT_PATHS['stage2.global_edit_commit']
 STAGE2_BLUEPRINT_CHARACTER_PROJECTION = RETIRED_ARTIFACT_PATHS['stage2.blueprint_character_projection']
-STAGE2_CHAPTER_BLUEPRINTS = RETIRED_ARTIFACT_PATHS['stage2.chapter_blueprints']
-STAGE2_KNOWLEDGE_LINKS = RETIRED_ARTIFACT_PATHS['stage2.knowledge_links']
-STAGE2_BLUEPRINT_EDIT = RETIRED_ARTIFACT_PATHS['stage2.blueprint_edit']
-STAGE2_BLUEPRINT_RELATION_EDIT = RETIRED_ARTIFACT_PATHS['stage2.blueprint_relation_edit']
+STAGE2_GLOBAL_REVIEW = RETIRED_ARTIFACT_PATHS['stage2.global_review']
+STAGE2_GLOBAL_EDIT = RETIRED_ARTIFACT_PATHS['stage2.global_edit']
 RETIRED_STAGE3_STYLE_GROUNDING = RETIRED_ARTIFACT_PATHS['stage3.style_grounding']
-STAGE4_BLIND_CANDIDATE = RETIRED_ARTIFACT_PATHS['stage4.blind_candidate']
-STAGE4_BLIND_CHAPTER_EDIT = RETIRED_ARTIFACT_PATHS['stage4.blind_chapter_edit']
-STAGE4_EVIDENCE_BINDING = RETIRED_ARTIFACT_PATHS['stage4.evidence_binding']
-STAGE4_PLAN_CHAPTERS = RETIRED_ARTIFACT_PATHS['stage4.plan_chapters']
 STAGE4_PLAN_EDIT = RETIRED_ARTIFACT_PATHS['stage4.plan_edit']
-STAGE4_WRITER_CONTEXT = RETIRED_ARTIFACT_PATHS['stage4.writer_context']
-STAGE5_CHAPTER = RETIRED_ARTIFACT_PATHS['stage5.chapter']
-STAGE5_REJECTED_REVISION = RETIRED_ARTIFACT_PATHS['stage5.rejected_revision']
-STAGE5_REVIEWER_REWRITE_REQUEST = RETIRED_ARTIFACT_PATHS['stage5.reviewer_rewrite_request']
-STAGE5_REVIEW = RETIRED_ARTIFACT_PATHS['stage5.review']
 STAGE5_TRIM_AUDIT = RETIRED_ARTIFACT_PATHS['stage5.trim_audit']
 STAGE5_TRIM_RESOLUTION = RETIRED_ARTIFACT_PATHS['stage5.trim_resolution']
-STAGE5_WONTFIX = RETIRED_ARTIFACT_PATHS['stage5.wontfix']
-STAGE6_PREPARE = RETIRED_ARTIFACT_PATHS['stage6.prepare']
-STAGE6_PREPARE_EDIT = RETIRED_ARTIFACT_PATHS['stage6.prepare_edit']
-STAGE6_PREPARE_REVIEW = RETIRED_ARTIFACT_PATHS['stage6.prepare_review']
-STAGE6_PREPARE_REVIEW_DECISIONS = RETIRED_ARTIFACT_PATHS['stage6.prepare_review_decisions']
-STAGE6_PREPARE_COMMIT = RETIRED_ARTIFACT_PATHS['stage6.prepare_commit']
-STAGE6_HOOK = RETIRED_ARTIFACT_PATHS['stage6.hook']
-STAGE6_HOOK_EDIT = RETIRED_ARTIFACT_PATHS['stage6.hook_edit']
 # stage6.semantic（A/B 语义审判）产物已随节点退役（2026-09-15）；
 # 旧书 semantic_N.json 不再被现役读取。
-STAGE6_WONTFIX = RETIRED_ARTIFACT_PATHS['stage6.wontfix']
-STAGE7_NAME_MAP = RETIRED_ARTIFACT_PATHS['stage7.name_map']
+STAGE6_HOOK_EDIT = RETIRED_ARTIFACT_PATHS['stage6.hook_edit']
 STAGE7_NAME_MAP_EDIT = RETIRED_ARTIFACT_PATHS['stage7.name_map_edit']
-#: ⚠ **它是模板，不是可以直接落盘的路径**：里面还有 `{title}`。
-#: 要具体路径请走 `novel/paths.py::book_txt_rel(novel_dir)`；拿这个常量去
-#: `store.path()` / 相等比较，得到的是一个字面叫 `{title}_rewriting.txt` 的东西。
-STAGE7_BOOK = RETIRED_ARTIFACT_PATHS['stage7.book']

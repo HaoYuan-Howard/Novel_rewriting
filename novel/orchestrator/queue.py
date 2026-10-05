@@ -58,7 +58,7 @@ HUMAN_NODES: frozenset[str] = frozenset()
 #: 待人工清单非空时挡队列的那个理由（`INBOX_KIND` 的 `invalid`）。
 WAITING_ON_INBOX = 'inbox:invalid'
 # ⚠⚠ F8c：以下常量是**旧链 waiter 名**，只供存量队列账／审批账的只读解码
-# （`novel/orchestrator/reviewer_legacy.py`、`reviewer_action_evidence.py` 与
+# （历史解码面模块已删，名册见 `tests/test_retired_surface_scan.py`；当前仅
 # 折叠历史 run 时按原字节解释）。现役规划器只发 `WAITING_ON_INBOX`／
 # `WAITING_ON_LEGACY`／`WAITING_ON_RESUME_DECISION` 三个 blocker；旧链的
 # edit-commit／invalid-revalidate／analyze 修复／stage4 repair／stage5 closure／

@@ -47,8 +47,7 @@ from contracts.artifacts import (
     ARTIFACT_PATHS,
     STAGE0_CLEAN_TEXT, STAGE0_REVISIONS,
     STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT,
-    STAGE2_ANALYZE_RECEIPT, STAGE2_BLUEPRINT_CHARACTER_PROJECTION, STAGE2_CHARACTERS,
-    STAGE2_GLOBAL_GROUNDING,
+    STAGE2_ANALYZE_RECEIPT, STAGE2_BLUEPRINT_CHARACTER_PROJECTION,
     STR06_DELIVERY_MANIFEST, STR06_HOOK_RECEIPT, STR06_HOOK_TEXT,
     STR06_STAGE5_BODY_RECEIPT, artifact_rel,
 )
@@ -217,19 +216,6 @@ def _upgrade_rc12_payload(spec: str | None, data: dict) -> dict:
 PROVENANCE_KEY = '_provenance'
 REVALIDATION_DIRNAME = '_revalidation'
 REVALIDATION_REFERENCE_VERSION = 1
-
-#: 提升时可从 ``artifact_override`` 带入的**确定性归一账**。
-#: 生成来源（prompts/model/inputs/usage/round）仍强制取不可变创建基线；
-#: 这张按 artifact 关闭的白名单只允许同一 normalizer 重算的派生账，
-#: 否则 Stage2 ``--revalidate`` 虽然提升了新的 span 账（历史类型 SourceSpan，
-#: 已随旧链 schema 删除），正式 provenance
-#: 却会被旧 ``evidence_locator_failures`` 再次判红。
-_REVALIDATION_DERIVED_PROVENANCE_FIELDS = {
-    STAGE2_CHARACTERS: frozenset(),
-    STAGE2_GLOBAL_GROUNDING: frozenset({
-        'evidence_locator_failures',
-    }),
-}
 
 # These no-provenance artifacts have a deterministic freshness bridge and are
 # written only after the companion facts needed by that bridge are available.
@@ -1348,24 +1334,6 @@ class ArtifactStore:
                 f'{official_rel} 的 artifact_override 必须是 {model.__name__}，'
                 f'实得 {type(artifact).__name__}；一个字节都没动')
         promoted_source = src.promoted(code=self.ctx.code, audit=audit)
-        derived_fields = _REVALIDATION_DERIVED_PROVENANCE_FIELDS.get(
-            official_rel, frozenset())
-        if derived_fields:
-            override_source = self._provenance_of(artifact)
-            if override_source is None:
-                raise ProvenanceRefused(
-                    f'{official_rel} 的确定性提升候选缺 provenance')
-            missing = sorted(
-                field for field in derived_fields
-                if field not in type(override_source).model_fields
-                or field not in type(promoted_source).model_fields)
-            if missing:
-                raise ProvenanceRefused(
-                    f'{official_rel} 提升派生账字段与当前 schema 漂移：{missing}')
-            promoted_source = promoted_source.model_copy(update={
-                field: copy.deepcopy(getattr(override_source, field))
-                for field in derived_fields
-            })
         data = self._render(
             official_rel, artifact, prov_override=promoted_source)
         self._verify_round_trip(official_rel, model, data)
@@ -1398,11 +1366,12 @@ class ArtifactStore:
            唯一例外是注册表已显式登记的低版本 shape-break 正式稿：它不是当前业务
            轮次，按版本契约应由 producer 重建且不得污染 current `_rounds`。
 
-        ``artifact_override`` 只承载调用方按 live INVALID 重建的确定性派生字段。
+        ``artifact_override`` 只承载调用方按 live INVALID 重建的业务主体。
         人工改动审计仍严格比较「不可变基线 vs live INVALID」；最终来源账的
         prompts/model/inputs/usage/round 强制使用不可变基线的
-        ``src.promoted(audit=...)``。只有模块级白名单登记的 Stage2 确定性归一账
-        可从已验证的 override 带入；live 中自报的生成来源仍不被信任。
+        ``src.promoted(audit=...)``，live 中自报的生成来源不被信任。旧链 Stage2
+        派生账白名单（``_REVALIDATION_DERIVED_PROVENANCE_FIELDS``）已随
+        2026-10-05 清理删除：其键全部指向退役路径，分支不可达。
         """
         self._require_workflow_write()
         official_rel = paths.check_rel_deep(rel)
@@ -1826,7 +1795,8 @@ class ArtifactStore:
         #   provenance_reaches_the_deterministic_bridge` 当场抓住了它。
         if rel == STR06_HOOK_TEXT:
             return self._hook_prose_freshness()
-        # ⚠ 成书的 rel 带书名 ⇒ **不能与 `STAGE7_BOOK` 直接比**（那是模板）。
+        # ⚠ 成书的 rel 带书名 ⇒ **不能与退役表里的 `stage7.book` 模板直接比**
+        #   （`RETIRED_ARTIFACT_PATHS['stage7.book']`，别名常量已删）。
         #   拿模板比出来的恒是 False，而后果是 `_deterministic_freshness` 返回 None
         #   ⇒ 成书的 freshness 变成「没有来源账」，那道对账**静默失效**。
         if rel == paths.book_txt_rel(self.ctx.novel_dir):

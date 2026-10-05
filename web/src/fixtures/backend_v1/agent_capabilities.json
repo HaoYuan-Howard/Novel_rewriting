@@ -4,11 +4,7 @@
       "str06.stage2.chapters",
       "str06.stage5.body"
     ],
-    "node_choices": [
-      4,
-      6,
-      8
-    ],
+    "node_choices": [],
     "default_node": 4,
     "defaults": {
       "node_overrides": {},
@@ -16,7 +12,7 @@
       "per_provider": 8
     },
     "total_min": 1,
-    "total_max": 32,
+    "total_max": 200,
     "scope": "output_root"
   },
   "legacy_providers": [

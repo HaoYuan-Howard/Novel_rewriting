@@ -1251,7 +1251,8 @@ SYSTEM_INVALID_REVALIDATE_REASON: Final = (
     'live INVALID passes current canonical HARD rules; auto 0-wire revalidate')
 #: Commander 顶层子进程的首事件/空闲超时、同席尝试上限与重试退避已随角色
 #: 退役（2026-09-15）删除：这些是驱动层重试参数，executor 会话各自持有
-#: 独立的超时与尝试策略（见 ``novel/agents``），不再有全局 Commander 席位。#: TODO-25 的唯一机器契约。它描述的是显示投影，不是访问控制：服务端响应仍含完整数据。
+#: 独立的超时与尝试策略（见 ``novel/agents``），不再有全局 Commander 席位。
+#: TODO-25 的唯一机器契约。它描述的是显示投影，不是访问控制：服务端响应仍含完整数据。
 #: 后端发布器、前端 adapter、Screen 与 mock 都消费这一个结构；隐藏路径和承诺不再散落成文案。
 SPOILER_DISCLOSURE: Final = {
     'mode': 'display_only',

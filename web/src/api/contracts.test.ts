@@ -57,7 +57,7 @@ describe('request-shaped cache and diagnostics', () => {
       concurrency: {
         nodes: [], node_choices: [], default_node: 4,
         defaults: { node_overrides: {}, per_book: 4, per_provider: 8 },
-        total_min: 1, total_max: 32, scope: 'output_root',
+        total_min: 1, total_max: 200, scope: 'output_root',
       },
       default_profiles: null,
     }

@@ -356,8 +356,9 @@ def _legacy_ghosts(artifacts: list[ArtifactState]) -> list[str]:
 def planned_chapters(store: ArtifactStore) -> list[int] | None:
     """Design 正式产物中的输出章号。**读不回来就返回 `None`**（不是空列表）。
 
-    STR-03-S4：章集分母改读 BlindCandidate / presentation graph，不再依赖
-    已退役的 ``plan_chapters.json``。
+    STR-03-S4：章集分母改读 body_design（``BodyDesign.chapters``；早期的
+    BlindCandidate / presentation graph 读路已随旧链退役），不再依赖已退役的
+    ``plan_chapters.json``。
     """
     try:
         design, _raw = store.read_own(STR06_BODY_DESIGN, STR06_BODY_DESIGN)

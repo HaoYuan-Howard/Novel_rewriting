@@ -84,9 +84,9 @@ export function agentCapabilities(
     executor_nodes: ['node.dynamic-a', 'node.dynamic-b'],
     // node.dynamic-b 只在 V4 Pro 的 executor_nodes 里 ⇒ 前端按钉死表预选覆盖模型。
     legacy_model_pins: { 'node.dynamic-b': 'deepseek-v4-pro' },
-    concurrency: { nodes: ['node.dynamic-a'], node_choices: [4, 6, 8], default_node: 4,
+    concurrency: { nodes: ['node.dynamic-a'], node_choices: [], default_node: 4,
       defaults: { node_overrides: {}, per_book: 4, per_provider: 8 },
-      total_min: 1, total_max: 32, scope: 'output_root' },
+      total_min: 1, total_max: 200, scope: 'output_root' },
     default_profiles: defaultProfiles === null ? null : cloneProfiles(defaultProfiles),
   }
 }

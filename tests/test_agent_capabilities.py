@@ -3,6 +3,9 @@
 """legacy executor capability registry 与动态只读 API 的关闭式守卫（C3）。"""
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
 
@@ -82,6 +85,34 @@ def test_get_agent_capabilities_is_legacy_only():
     assert response.executor_nodes == list(LLM_EXECUTOR_NODES)
     assert response.legacy_providers
     assert all(p.id for p in response.legacy_providers)
+
+
+_WEB_CAPABILITIES = Path(__file__).resolve().parents[1] / 'web' / 'src' / 'fixtures' / 'backend_v1' / 'agent_capabilities.json'
+
+
+def test_the_web_capabilities_fixture_is_the_same_payload():
+    """⭐ `web/src/fixtures/backend_v1/agent_capabilities.json` == `get_agent_capabilities()`。
+
+    与 `tests/test_api_enums.py` 的 enums 夹具同款唯一对账落点：mock 模式下前端
+    读到的能力面（含并发值域）是这份夹具，不是 registry。没有这条对账，夹具会
+    停在旧契约——2026-10-05 合并复审实证过 total_max=32／node_choices=[4,6,8]
+    对真实 1~200／[] 的静默分叉（mock 校验 1~32、真实模式 1~200）。
+    比解析后的对象不比字节（Windows 检出的 CRLF 会红在换行上）。
+    """
+    fixture = json.loads(_WEB_CAPABILITIES.read_text(encoding='utf-8'))
+    live = json.loads(json.dumps(
+        capabilities.get_agent_capabilities().model_dump(mode='json')))
+
+    missing = sorted(set(live) - set(fixture))
+    stale = sorted(set(fixture) - set(live))
+    changed = sorted(key for key in set(live) & set(fixture)
+                     if live[key] != fixture[key])
+    assert (missing, stale, changed) == ([], [], []), (
+        f'capability 夹具与 get_agent_capabilities() 分家了：\n'
+        f'  夹具缺少 {missing}；夹具多出 {stale}；内容不同 {changed}\n'
+        f'  并发面——夹具={fixture.get("concurrency")}，现役={live.get("concurrency")}\n'
+        f'→ 按当前 registry 输出重录夹具（web/src/fixtures/backend_v1/README.md）'
+    )
 
 
 def test_direct_llm_executor_resolves_legacy_wire():

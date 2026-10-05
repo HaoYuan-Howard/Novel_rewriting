@@ -101,6 +101,9 @@ STR06_MIGRATION_MODULE_OWNERS: Final[dict[str, str]] = {
     'novel.stages.stage7.naming': 'stage7.naming',
     'novel.stages.stage7.assembly': 'stage7.assembly',
 }
+#: `novel.stages.stage4.hook_validation` 刻意不在本表：它是 hook_design 与
+#: context 共用的纯结构判据臂（封闭 allows 见 STR06_MIGRATION_DEPENDENCY_RULES），
+#: 不是 writer_owner 的模块级落点；本表只登记语义 owner 模块。
 
 #: Stage2/4/5/7 各语义模块的集合缩写（跨 stage 禁入面）。
 _STAGE457 = (

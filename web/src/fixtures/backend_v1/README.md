@@ -16,7 +16,9 @@ STR-06 切换（F8c）后旧链读屏抓包全部退役：`reading_ch3.json`、`
   含 `retired_stages`（`retired_nodes` 名册已随 STR-06 关闭批的存量解码面删除）。
 - `stage1.json`：`GET /api/novels/:sid/stage1` 的 `Stage1View` 响应
   （连续分区、原文章号诊断与 `anomaly_count`）。
-- `agent_capabilities.json`：离线驱动能力示例，不证明真实账户或模型可用。
+- `agent_capabilities.json`：按 `novel/orchestrator/executor_capabilities.py::get_agent_capabilities()`
+  当前输出重录（并发值域随 `contracts/invariants.py` 走）；`tests/test_agent_capabilities.py`
+  核对完整对象。离线驱动能力示例，不证明真实账户或模型可用。
 - `str06_candidate.json`：录制的合成候选根全链响应（fake transport 产物，非真实书
   正文）；`/api/str06/candidates/{candidate}/*` 十二条只读端点与真后端同形状。
 

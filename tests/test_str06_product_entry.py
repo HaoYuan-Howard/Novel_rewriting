@@ -3,7 +3,7 @@
 """test_str06_product_entry —— F8d：真实产品入口全链集成（fake transport，零真实 LLM）。
 
 【验什么】把「HTTP 上传 → autostart → `agent.start` → Supervisor 按 operator next
-逐动作驱动 → 14 个 `str06.` 节点 → stage7 交付」用 fake transport 真跑一遍，并核对
+逐动作驱动 → 13 个 `str06.` 节点 → stage7 交付」用 fake transport 真跑一遍，并核对
 零调用恢复、`--check-only`、旧书拒读与最终交付。规划面（`operator.next`／
 `queue.plan`）**不打桩**：节点顺序、贵贱、写盘与恢复判定全部由现役 `NODES` 派生。
 fake transport 复用 `tests/test_str06_body.py` 的路由表（同一份 wires），正文按章
@@ -809,7 +809,7 @@ def test_service_full_chain_real_subprocess_and_restart_readback(base, tmp_path,
     assert run_face['present'] is True
     nodes = {n['node'] for n in run_face['nodes']}
     from contracts.invariants import NODES
-    assert nodes == {node for node in NODES if node.startswith('str06.')},         'run 面的节点集合必须恰为现役 14 节点的 str06 全集'
+    assert nodes == {node for node in NODES if node.startswith('str06.')},         'run 面的节点集合必须恰为现役 13 节点的 str06 全集'
     assert delivery_face['present'] is True
     assert delivery_face['final_text_sha256'] == manifest['final_text_sha256']
     assert book_text == final_bytes.decode('utf-8')
