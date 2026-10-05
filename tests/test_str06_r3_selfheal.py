@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """R3 自愈——typed issue 路由、有界修订与故障注入全链。
 
-【覆盖面（PLAN.md R3 完成标准）】
+【覆盖面（首版 PLAN.md（Git 2fc03832）R3 完成标准）】
   • 契约面：code 轴与 unbound.owner 轴双闭合（未知一律停，E-8）；
   • 同节点修订：`ask_json` 非空但不过闸 ⇒ 修订内容轮（≤2 轮、同问题集重复
     即停），修订轮入 ledger 与整书总闸；

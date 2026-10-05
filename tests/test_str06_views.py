@@ -14,7 +14,7 @@ Characters v4、Blueprint v12、graph／binding（Hook 与导演说明）、Writ
 【纪律对账（与现役 api 同构）】响应模型不抄字面量取值面、不带判定字段
 （badge／passed／counts）、契约层不 import web 栈；监控读口不写产物盘。
 
-【R3 监控面（PLAN.md R3 末行）】修订轮与停止原因：跨节点回派账
+【R3 监控面（首版 PLAN.md（Git 2fc03832）R3 末行）】修订轮与停止原因：跨节点回派账
 （`runtime/issues/<owner>.json`，OwnerIssueFileV1）投影进 run 面——owner／
 node／raised_by／status／rounds_total 与逐条 typed 问题；停止原因仍在
 failure_kind／detail 直投影（OwnerRevisionStop 的承载消息含按 item 的

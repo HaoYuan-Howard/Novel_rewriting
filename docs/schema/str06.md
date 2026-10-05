@@ -29,7 +29,7 @@ ExecutionError 另带 `error_code/stage/node/item/phase/context`）与
 留证（前端 str06 监控屏可展示失败类别与 item 定位）。**R5b（2026-09-29）**：
 逐章失败留证改「最近一次完成执行」语义并扩到章观察（两份同形共用），调用层
 选章 `--body-chapters`（canary）只作元数据不进身份（详见「Stage5 按章正文」节）。
-**以小说质量为中心的重设计（2026-09-28；R0–R6 已落地，R4 批登记本文件；原临时计划 PLAN.md 已删除，交付记录见 `docs/REQUIREMENTS.md`）**：
+**以小说质量为中心的重设计（2026-09-28；R0–R6 已落地，R4 批登记本文件；首版临时计划 PLAN.md 与后来的 R10 执行指南 PLAN.md 均已退役（原文分别见 Git 2fc03832、68b5802f），交付记录见提交 eb5f0d5a 中的 `docs/REQUIREMENTS.md`）**：
 审计结论「最后一公里断了」（付费语义漏送达写手、跨章字段无消费者、系统不自愈、
 发布权威名不副实）催生八项裁决（`docs/DECISIONS.md` 2026-09-28 行）与批次
 R0→R1→R2→R3→R4→R6→R5→B6-A→B6-B→R7。已落地：R0 字段级送达登记
@@ -217,8 +217,9 @@ Brief、BodyDesign、PresentationGraph、ExecutionPlan、WriterBookIR 升 rc14�
   仅审计/展示变化→不触发付费重写。
 
 旧候选根按版本关闭式拒识（协议不兼容，不计语义检出）；R10b（WriterIR
-投影与写手协议 v7）、R10c（付费无人工 patch 全书）、R10d（普适性）见
-PLAN.md。
+投影与写手协议 v7）、R10c（付费无人工 patch 全书）已交付，R10d（普适性）见
+`docs/REQUIREMENTS.md` CS-G；R10 执行指南 PLAN.md 已退役（原文见 Git 68b5802f，裁决见
+`docs/DECISIONS.md` 2026-10-01、2026-10-05 行）。
 
 
 

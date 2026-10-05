@@ -281,7 +281,7 @@ def test_associate_protocol_is_independently_versioned():
     """R1：associate 独立升版 stage2-associate-v2；三类观察协议字面量逐字不变。
 
     旧协议字面量对 associate 关闭式拒读（I-13：无运行时转换层）——句柄含义与
-    输入材料已变，旧回答不做句柄替换后继续采用（PLAN.md R1／A1.5）。
+    输入材料已变，旧回答不做句柄替换后继续采用（首版 PLAN.md R1，Git 2fc03832；A1.5 出自被它吸收的提案）。
     """
     assert STAGE2_ASSOCIATE_PROTOCOL == 'stage2-associate-v2'
     assert STAGE2_OBSERVATION_PROTOCOL == 'stage2-observation-v1'

@@ -26,7 +26,7 @@
 | `canary_chapters.py` | B6-A canary 选章（只读 sealed WriterBookIR；逐章计分＋三章＋下一条命令） | `tests/test_canary_chapters.py`、`docs/schema/str06.md` |
 | `ab_compare.py` | A/B 两位匿名评审对照评分 runner | `tests/test_ab_compare.py` |
 | `repair_rounds.py` | 修订轮回派账/收敛读数 | `tests/test_repair_rounds.py`、`docs/OPERATIONS.md` |
-| `str06_review.py` | 新链候选根免费审阅（request_preview/views/obligations） | `docs/OPERATIONS.md`、`docs/schema/str06.md`、`PLAN.md` |
+| `str06_review.py` | 新链候选根免费审阅（request_preview/views/obligations） | `docs/OPERATIONS.md`、`docs/schema/str06.md` |
 
 ### 已退役的剧情链导出工具（2026-09-26 清理删除）
 

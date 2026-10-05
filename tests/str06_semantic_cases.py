@@ -50,7 +50,7 @@ class SemanticCase:
     note: str = ''
 
 
-#: 判据落点子批闭集（与 PLAN.md 批次一致；read-only＝只读数不阻断；
+#: 判据落点子批闭集（与 R10a／R10b 批次一致，见 docs/DECISIONS.md 2026-10-01 行；read-only＝只读数不阻断；
 #: golden＝冻结关键案例与通读）。
 BATCHES = frozenset({
     'R10a-a1', 'R10a-a2', 'R10a-a3', 'R10a-a4', 'R10a-a5',

@@ -13,7 +13,7 @@
 `STAGE2_ASSOCIATE_PROTOCOL`（stage2-associate-v2）只升 associate——typed 作用
 对象显式序列化（人物／关系方向／world）、状态句柄位置编码
 （``ch{nn}.b{拍}.e{效应序}.{key}``／``book.e{条目序}.{key}``）。三类观察的请求
-与字面量逐字不变（PLAN.md R1；A1.5）。
+与字面量逐字不变（首版 PLAN.md R1，Git 2fc03832；A1.5 出自被它吸收的 A0–A6 提案）。
 
 【模型输出面去机械化（I-20/I-21）】协议里**没有**这些字段，模型想给也没处给：
 拍号（事件序即列表序，拍号由 compiler 按序派发）、状态/约束编号

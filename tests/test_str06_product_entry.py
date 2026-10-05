@@ -824,7 +824,7 @@ def test_service_full_chain_real_subprocess_and_restart_readback(base, tmp_path,
 
 # ───────────────────── 五、R3 故障注入：产品链靠修订跑完（真实子进程） ─────────────
 #
-# 【R5 补齐】PLAN.md R5：fake 全链**产品路径**必须含 R3 故障注入与 R6 发布两节。
+# 【R5 补齐】首版 PLAN.md（Git 2fc03832）R5：fake 全链**产品路径**必须含 R3 故障注入与 R6 发布两节。
 # 与第四节共用产品入口；associate 留在真实 run_step/CLI，其余节点进程内
 # 跑到交付与重启读回。故障注入
 # 底座（`tests/str06_faults.py`）：`missing_pairing`＋`fault_once=True`，受影响
@@ -1034,7 +1034,7 @@ def test_seal_loss_refuses_formal_consume_then_free_recovery_reseals(
 
 # ───────────────────── 七、R5b：HTTP 起跑 → CLI canary → HTTP 续跑（B6-A 前置链） ─────
 #
-# 【R5b 完成条件】PLAN.md R5b W4：AgentRun 跑语义层 → 停在正文前 → CLI 写 canary
+# 【R5b 完成条件】首版 PLAN.md（Git 2fc03832）R5b W4：AgentRun 跑语义层 → 停在正文前 → CLI 写 canary
 # 章 → AgentRun 续跑 → 有效提交集合恢复 → 只购买剩余正文。fake transport 经
 # sitecustomize 注入正文关键窗口的真实子进程；HTTP 面（上传／起跑／
 # 续跑）与 CLI 节点执行（canary）都走产品代码同一行（I-51：零真实模型调用）。

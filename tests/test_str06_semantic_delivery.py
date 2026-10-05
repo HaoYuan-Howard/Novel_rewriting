@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """test_str06_semantic_delivery —— R0：语义送达与送达方式守卫＋故障注入底座。
 
-【验什么】PLAN.md「R0 语义送达与送达方式守卫」的四条检查落在
+【验什么】首版 PLAN.md（Git 2fc03832）「R0 语义送达与送达方式守卫」的四条检查落在
 `contracts/schema/consumption.py::STR06_FIELD_DELIVERY`（字段级送达登记）上：
 
   1. canonical 字段未登记即红——送达面的每个 canonical 叶子字段都必须有登记；

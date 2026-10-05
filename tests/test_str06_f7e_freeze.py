@@ -66,7 +66,7 @@ B2 基线（14 节点，`a0f5fb5e…`）原样保存在 Git 历史里；既有�
 main tip 现状冻结（`world_constraints` 不拆）：Stage2 观察协议 book／chapters／names
 共 `stage2-observation-v1`、associate 独立 `stage2-associate-v2`，Stage4 四 wire
 协议 `stage4-preserve-v1`／`stage4-design-v3`／`stage4-bind-v1`／
-`stage4-hook-design-v1`，连同上方全部契约表基线。按 PLAN.md 分层冻结，写作层
+`stage4-hook-design-v1`，连同上方全部契约表基线。按首版 PLAN.md（Git 2fc03832）分层冻结，写作层
 （renderer v5、WriterPacket 呈现、写手协议 v5）不在本闸内——canary 收敛后再冻。
 B6-A／B6-B 期间任何语义层升版都意味着已购 Stage2/4 产物作废、须重购，属用户级
 议程：先取得用户裁决，再改常量并在 REQUIREMENTS 登记；本文件与各协议测试同向
@@ -196,7 +196,7 @@ def test_frozen_rc_version_label():
 #: 协议字面量是 `candidate_contract_identity` 的输入之外的第二条线，单独钉，
 #: 否则一次「顺手升版」不会改变身份哈希、静默混用不同协议的已购产物。
 #: 写作层版本（`RENDERER_VERSION`／`WRITER_PROTOCOL_VERSION`）不在此表——
-#: 分层冻结，canary 收敛后再冻（PLAN.md）。
+#: 分层冻结，canary 收敛后再冻（首版 PLAN.md，Git 2fc03832）。
 #: R10a a1（2026-10-01，D8 修订三裁决）：book 升 v3（初态/约束带 basis 引文）、
 #: chapters 拆独立字面 v2（转移带 basis／Effect.modality）；names 输入投影未变
 #: 保持 observation-v1。

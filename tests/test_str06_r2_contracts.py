@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """test_str06_r2_contracts —— R2 契约面：Design v2、两层 IR、回执身份拆分、M7/M8。
 
-【验什么】PLAN.md「R2 Stage4 语义送达与两层 IR」第 1、2、4、6、9 项的契约侧：
+【验什么】首版 PLAN.md（Git 2fc03832）「R2 Stage4 语义送达与两层 IR」第 1、2、4、6、9 项的契约侧：
 
   · Design v2（第 4/6 项）：`TargetBeat.threads`（与源侧 loops 对称的独立线程
     结构：open 带 kind 闭集＋主体＋文本、advance 带进展、close 带按 kind 限定

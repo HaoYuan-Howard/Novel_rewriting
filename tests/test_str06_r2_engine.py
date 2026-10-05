@@ -3,7 +3,7 @@
 """test_str06_r2_engine —— R2 引擎与渲染面：ThreadFold、解析来源依赖边、
 背景补齐、世界约束通道、WriterPacket 分区渲染、Hook 分层与指标落盘。
 
-【验什么】PLAN.md「R2 Stage4 语义送达与两层 IR」第 1–8 项的引擎侧（契约面
+【验什么】首版 PLAN.md（Git 2fc03832）「R2 Stage4 语义送达与两层 IR」第 1–8 项的引擎侧（契约面
 见 tests/test_str06_r2_contracts.py）：
 
   · ThreadFold（第 2/4 项）：独立线程折叠（共用 guard.scene_order 的阅读序），

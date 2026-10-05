@@ -20,7 +20,7 @@ stage6.prepare，改按 Stage5 有效接受回执过滤。`rename_materials` 写
 章），不能直接换算源章号，也不能用 Binding lineage 猜缺失语义。双坐标投影必须
 分别表达。
 
-【R0 字段级送达登记（2026-09-28，PLAN.md「以小说质量为中心」批次 R0）】
+【R0 字段级送达登记（2026-09-28，首版 PLAN.md「以小说质量为中心」批次 R0；Git 2fc03832）】
 六族投影回答「哪类信息给谁」；`STR06_FIELD_DELIVERY` 把粒度降到**字段**：送达链
 canonical 产物（WriterBookIR／RealizationContract／HookContext／NameMapV5）的每个
 叶子字段都要登记消费者、受影响章范围与 `delivery_mode`（七档，见枚举）。守卫在
@@ -116,7 +116,7 @@ PROJECTION_COORDINATES = ProjectionCoordinate
 # ═════════════════════════════════════════════════════════════════════════════
 
 class DeliveryMode(str, Enum):
-    """一个字段送达写手时的身份与显著度（PLAN.md R0 语义表）。"""
+    """一个字段送达写手时的身份与显著度（首版 PLAN.md R0 语义表，Git 2fc03832）。"""
 
     MUST_REALIZE = 'must_realize'          # 正文中实际写出：本章拍事件与目标效应、
                                           # 义务满足条件、本场线程操作
