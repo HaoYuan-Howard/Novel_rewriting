@@ -411,22 +411,28 @@ def test_fake_red_run_surfaces_hard_rule_and_fabrication_violations():
     assert any('证据不足' in b for b in report['gate_blockers'])
 
 
-def test_missing_material_wire_error_and_pending_golden_labels_block():
+def test_missing_material_and_wire_error_block_with_incomplete_list():
     materials = _materials()
     del materials['dev-preserve-ob44']
     responses = dict(_perfect_responses())
     # 解析失败：证据引文不在材料里。
     responses['dev-design-lock'] = _wire(
         _verdict('kf_01', '矛盾', evidence=('原文写道暂缓和离已被提起',)))
-    labels = _labels(**{'hold-stage2-known': {
-        'label_source': 'golden_yaml_pending_confirmation'}})
-    report = run_calibration(labels, materials, ScriptedTransport(responses))
+    report = run_calibration(labels := _labels(), materials,
+                             ScriptedTransport(responses))
     outcomes = {row['case_id']: row['outcome'] for row in report['cases']}
     assert outcomes['dev-preserve-ob44'] == 'missing'
     assert outcomes['dev-design-lock'] == 'wire_error'
     assert report['hard_rules']['incomplete'] == ['dev-design-lock',
                                                   'dev-preserve-ob44']
-    assert any('金标来源待用户确认' in b for b in report['gate_blockers'])
+    assert any('缺失或解析失败' in b for b in report['gate_blockers'])
+    # rc15 真实材料的草案标签是合法来源（不阻断）；错误来源关闭式拒识。
+    assert _labels(**{'hold-stage2-known': {
+        'label_source': 'rc15_material'}}).cases[-1].label_source == 'rc15_material'
+    bad = _labels().model_dump(mode='json')
+    bad['cases'][-1]['label_source'] = 'golden_yaml_pending_confirmation'
+    with pytest.raises(ValidationError, match='label_source'):
+        FrozenLabels.model_validate(bad)
 
 
 def test_unscripted_case_is_refused_instead_of_passing_silently():

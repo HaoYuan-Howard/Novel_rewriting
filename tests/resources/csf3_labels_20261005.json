@@ -1,0 +1,2037 @@
+{
+  "schema_version": 1,
+  "book": "夫君的报恩（开发集＋rc15 真实案件）",
+  "source_note": "Golden_Set_v3.0_夫君的报恩.yaml＋outputs/cs_golden_20261004_rc15",
+  "cases": [
+    {
+      "case_id": "GS-01-a-neg",
+      "batch": "golden-GS-01",
+      "target": "stage2_fact",
+      "category": "key_misunderstanding",
+      "item": "GS-01-a-neg",
+      "expected": "矛盾",
+      "evidence_insufficient": false,
+      "high_impact": true,
+      "gold_evidence": [
+        {
+          "ref": "1#L29",
+          "quote": "锚点见冻结 yaml 1#L29"
+        },
+        {
+          "ref": "1#L31",
+          "quote": "锚点见冻结 yaml 1#L31"
+        },
+        {
+          "ref": "hook#L5",
+          "quote": "锚点见冻结 yaml hook#L5"
+        }
+      ],
+      "label_source": "golden_yaml",
+      "subset": "dev",
+      "disputed": false,
+      "frozen_at": "2026-10-05T18:00:00+08:00",
+      "notes": ""
+    },
+    {
+      "case_id": "GS-01-a-pos",
+      "batch": "golden-GS-01",
+      "target": "stage2_fact",
+      "category": "key_misunderstanding",
+      "item": "GS-01-a-pos",
+      "expected": "支持",
+      "evidence_insufficient": false,
+      "high_impact": true,
+      "gold_evidence": [
+        {
+          "ref": "1#L29",
+          "quote": "锚点见冻结 yaml 1#L29"
+        },
+        {
+          "ref": "1#L31",
+          "quote": "锚点见冻结 yaml 1#L31"
+        },
+        {
+          "ref": "hook#L5",
+          "quote": "锚点见冻结 yaml hook#L5"
+        }
+      ],
+      "label_source": "golden_yaml",
+      "subset": "dev",
+      "disputed": false,
+      "frozen_at": "2026-10-05T18:00:00+08:00",
+      "notes": ""
+    },
+    {
+      "case_id": "GS-01-b-neg",
+      "batch": "golden-GS-01",
+      "target": "stage2_fact",
+      "category": "identity",
+      "item": "GS-01-b-neg",
+      "expected": "未确定",
+      "evidence_insufficient": true,
+      "high_impact": true,
+      "gold_evidence": [
+        {
+          "ref": "hook#L3",
+          "quote": "锚点见冻结 yaml hook#L3"
+        },
+        {
+          "ref": "hook#L5",
+          "quote": "锚点见冻结 yaml hook#L5"
+        },
+        {
+          "ref": "1#L29",
+          "quote": "锚点见冻结 yaml 1#L29"
+        }
+      ],
+      "label_source": "golden_yaml",
+      "subset": "dev",
+      "disputed": false,
+      "frozen_at": "2026-10-05T18:00:00+08:00",
+      "notes": ""
+    },
+    {
+      "case_id": "GS-01-b-pos",
+      "batch": "golden-GS-01",
+      "target": "stage2_fact",
+      "category": "identity",
+      "item": "GS-01-b-pos",
+      "expected": "支持",
+      "evidence_insufficient": false,
+      "high_impact": true,
+      "gold_evidence": [
+        {
+          "ref": "hook#L3",
+          "quote": "锚点见冻结 yaml hook#L3"
+        },
+        {
+          "ref": "hook#L5",
+          "quote": "锚点见冻结 yaml hook#L5"
+        },
+        {
+          "ref": "1#L29",
+          "quote": "锚点见冻结 yaml 1#L29"
+        }
+      ],
+      "label_source": "golden_yaml",
+      "subset": "dev",
+      "disputed": false,
+      "frozen_at": "2026-10-05T18:00:00+08:00",
+      "notes": ""
+    },
+    {
+      "case_id": "GS-02-a-neg",
+      "batch": "golden-GS-02",
+      "target": "stage2_fact",
+      "category": "key_knowledge",
+      "item": "GS-02-a-neg",
+      "expected": "矛盾",
+      "evidence_insufficient": false,
+      "high_impact": true,
+      "gold_evidence": [
+        {
+          "ref": "1#L51",
+          "quote": "锚点见冻结 yaml 1#L51"
+        },
+        {
+          "ref": "1#L71",
+          "quote": "锚点见冻结 yaml 1#L71"
+        },
+        {
+          "ref": "1#L75",
+          "quote": "锚点见冻结 yaml 1#L75"
+        },
+        {
+          "ref": "3#L167",
+          "quote": "锚点见冻结 yaml 3#L167"
+        }
+      ],
+      "label_source": "golden_yaml",
+      "subset": "dev",
+      "disputed": false,
+      "frozen_at": "2026-10-05T18:00:00+08:00",
+      "notes": ""
+    },
+    {
+      "case_id": "GS-02-a-pos",
+      "batch": "golden-GS-02",
+      "target": "stage2_fact",
+      "category": "key_knowledge",
+      "item": "GS-02-a-pos",
+      "expected": "支持",
+      "evidence_insufficient": false,
+      "high_impact": true,
+      "gold_evidence": [
+        {
+          "ref": "1#L51",
+          "quote": "锚点见冻结 yaml 1#L51"
+        },
+        {
+          "ref": "1#L71",
+          "quote": "锚点见冻结 yaml 1#L71"
+        },
+        {
+          "ref": "1#L75",
+          "quote": "锚点见冻结 yaml 1#L75"
+        },
+        {
+          "ref": "3#L167",
+          "quote": "锚点见冻结 yaml 3#L167"
+        }
+      ],
+      "label_source": "golden_yaml",
+      "subset": "dev",
+      "disputed": false,
+      "frozen_at": "2026-10-05T18:00:00+08:00",
+      "notes": ""
+    },
+    {
+      "case_id": "GS-02-b-neg",
+      "batch": "golden-GS-02",
+      "target": "stage2_fact",
+      "category": "key_misunderstanding",
+      "item": "GS-02-b-neg",
+      "expected": "未确定",
+      "evidence_insufficient": true,
+      "high_impact": true,
+      "gold_evidence": [
+        {
+          "ref": "1#L61",
+          "quote": "锚点见冻结 yaml 1#L61"
+        },
+        {
+          "ref": "2#L121",
+          "quote": "锚点见冻结 yaml 2#L121"
+        },
+        {
+          "ref": "3#L131",
+          "quote": "锚点见冻结 yaml 3#L131"
+        }
+      ],
+      "label_source": "golden_yaml",
+      "subset": "dev",
+      "disputed": false,
+      "frozen_at": "2026-10-05T18:00:00+08:00",
+      "notes": ""
+    },
+    {
+      "case_id": "GS-02-b-pos",
+      "batch": "golden-GS-02",
+      "target": "stage2_fact",
+      "category": "key_misunderstanding",
+      "item": "GS-02-b-pos",
+      "expected": "支持",
+      "evidence_insufficient": false,
+      "high_impact": true,
+      "gold_evidence": [
+        {
+          "ref": "1#L61",
+          "quote": "锚点见冻结 yaml 1#L61"
+        },
+        {
+          "ref": "2#L121",
+          "quote": "锚点见冻结 yaml 2#L121"
+        },
+        {
+          "ref": "3#L131",
+          "quote": "锚点见冻结 yaml 3#L131"
+        }
+      ],
+      "label_source": "golden_yaml",
+      "subset": "dev",
+      "disputed": false,
+      "frozen_at": "2026-10-05T18:00:00+08:00",
+      "notes": ""
+    },
+    {
+      "case_id": "GS-02-c-neg",
+      "batch": "golden-GS-02",
+      "target": "stage2_fact",
+      "category": "key_misunderstanding",
+      "item": "GS-02-c-neg",
+      "expected": "矛盾",
+      "evidence_insufficient": false,
+      "high_impact": true,
+      "gold_evidence": [
+        {
+          "ref": "7#L557",
+          "quote": "锚点见冻结 yaml 7#L557"
+        },
+        {
+          "ref": "7#L559",
+          "quote": "锚点见冻结 yaml 7#L559"
+        }
+      ],
+      "label_source": "golden_yaml",
+      "subset": "dev",
+      "disputed": false,
+      "frozen_at": "2026-10-05T18:00:00+08:00",
+      "notes": ""
+    },
+    {
+      "case_id": "GS-02-c-pos",
+      "batch": "golden-GS-02",
+      "target": "stage2_fact",
+      "category": "key_misunderstanding",
+      "item": "GS-02-c-pos",
+      "expected": "支持",
+      "evidence_insufficient": false,
+      "high_impact": true,
+      "gold_evidence": [
+        {
+          "ref": "7#L557",
+          "quote": "锚点见冻结 yaml 7#L557"
+        },
+        {
+          "ref": "7#L559",
+          "quote": "锚点见冻结 yaml 7#L559"
+        }
+      ],
+      "label_source": "golden_yaml",
+      "subset": "dev",
+      "disputed": false,
+      "frozen_at": "2026-10-05T18:00:00+08:00",
+      "notes": ""
+    },
+    {
+      "case_id": "GS-03-a-neg",
+      "batch": "golden-GS-03",
+      "target": "stage2_fact",
+      "category": "key_knowledge",
+      "item": "GS-03-a-neg",
+      "expected": "矛盾",
+      "evidence_insufficient": false,
+      "high_impact": true,
+      "gold_evidence": [
+        {
+          "ref": "4#L221",
+          "quote": "锚点见冻结 yaml 4#L221"
+        },
+        {
+          "ref": "4#L225",
+          "quote": "锚点见冻结 yaml 4#L225"
+        },
+        {
+          "ref": "4#L227",
+          "quote": "锚点见冻结 yaml 4#L227"
+        }
+      ],
+      "label_source": "golden_yaml",
+      "subset": "dev",
+      "disputed": false,
+      "frozen_at": "2026-10-05T18:00:00+08:00",
+      "notes": ""
+    },
+    {
+      "case_id": "GS-03-a-pos",
+      "batch": "golden-GS-03",
+      "target": "stage2_fact",
+      "category": "key_knowledge",
+      "item": "GS-03-a-pos",
+      "expected": "支持",
+      "evidence_insufficient": false,
+      "high_impact": true,
+      "gold_evidence": [
+        {
+          "ref": "4#L221",
+          "quote": "锚点见冻结 yaml 4#L221"
+        },
+        {
+          "ref": "4#L225",
+          "quote": "锚点见冻结 yaml 4#L225"
+        },
+        {
+          "ref": "4#L227",
+          "quote": "锚点见冻结 yaml 4#L227"
+        }
+      ],
+      "label_source": "golden_yaml",
+      "subset": "dev",
+      "disputed": false,
+      "frozen_at": "2026-10-05T18:00:00+08:00",
+      "notes": ""
+    },
+    {
+      "case_id": "GS-03-b-neg",
+      "batch": "golden-GS-03",
+      "target": "stage2_fact",
+      "category": "key_knowledge",
+      "item": "GS-03-b-neg",
+      "expected": "矛盾",
+      "evidence_insufficient": false,
+      "high_impact": true,
+      "gold_evidence": [
+        {
+          "ref": "5#L273",
+          "quote": "锚点见冻结 yaml 5#L273"
+        },
+        {
+          "ref": "5#L381",
+          "quote": "锚点见冻结 yaml 5#L381"
+        },
+        {
+          "ref": "6#L413",
+          "quote": "锚点见冻结 yaml 6#L413"
+        }
+      ],
+      "label_source": "golden_yaml",
+      "subset": "dev",
+      "disputed": false,
+      "frozen_at": "2026-10-05T18:00:00+08:00",
+      "notes": ""
+    },
+    {
+      "case_id": "GS-03-b-pos",
+      "batch": "golden-GS-03",
+      "target": "stage2_fact",
+      "category": "key_knowledge",
+      "item": "GS-03-b-pos",
+      "expected": "支持",
+      "evidence_insufficient": false,
+      "high_impact": true,
+      "gold_evidence": [
+        {
+          "ref": "5#L273",
+          "quote": "锚点见冻结 yaml 5#L273"
+        },
+        {
+          "ref": "5#L381",
+          "quote": "锚点见冻结 yaml 5#L381"
+        },
+        {
+          "ref": "6#L413",
+          "quote": "锚点见冻结 yaml 6#L413"
+        }
+      ],
+      "label_source": "golden_yaml",
+      "subset": "dev",
+      "disputed": false,
+      "frozen_at": "2026-10-05T18:00:00+08:00",
+      "notes": ""
+    },
+    {
+      "case_id": "GS-03-c-neg",
+      "batch": "golden-GS-03",
+      "target": "stage2_fact",
+      "category": "key_misunderstanding",
+      "item": "GS-03-c-neg",
+      "expected": "矛盾",
+      "evidence_insufficient": false,
+      "high_impact": true,
+      "gold_evidence": [
+        {
+          "ref": "5#L357",
+          "quote": "锚点见冻结 yaml 5#L357"
+        },
+        {
+          "ref": "5#L359",
+          "quote": "锚点见冻结 yaml 5#L359"
+        },
+        {
+          "ref": "5#L383",
+          "quote": "锚点见冻结 yaml 5#L383"
+        }
+      ],
+      "label_source": "golden_yaml",
+      "subset": "dev",
+      "disputed": false,
+      "frozen_at": "2026-10-05T18:00:00+08:00",
+      "notes": ""
+    },
+    {
+      "case_id": "GS-03-c-pos",
+      "batch": "golden-GS-03",
+      "target": "stage2_fact",
+      "category": "key_misunderstanding",
+      "item": "GS-03-c-pos",
+      "expected": "支持",
+      "evidence_insufficient": false,
+      "high_impact": true,
+      "gold_evidence": [
+        {
+          "ref": "5#L357",
+          "quote": "锚点见冻结 yaml 5#L357"
+        },
+        {
+          "ref": "5#L359",
+          "quote": "锚点见冻结 yaml 5#L359"
+        },
+        {
+          "ref": "5#L383",
+          "quote": "锚点见冻结 yaml 5#L383"
+        }
+      ],
+      "label_source": "golden_yaml",
+      "subset": "dev",
+      "disputed": false,
+      "frozen_at": "2026-10-05T18:00:00+08:00",
+      "notes": ""
+    },
+    {
+      "case_id": "GS-03-d-neg",
+      "batch": "golden-GS-03",
+      "target": "stage2_fact",
+      "category": "key_misunderstanding",
+      "item": "GS-03-d-neg",
+      "expected": "矛盾",
+      "evidence_insufficient": false,
+      "high_impact": true,
+      "gold_evidence": [
+        {
+          "ref": "5#L379",
+          "quote": "锚点见冻结 yaml 5#L379"
+        },
+        {
+          "ref": "5#L381",
+          "quote": "锚点见冻结 yaml 5#L381"
+        },
+        {
+          "ref": "5#L387",
+          "quote": "锚点见冻结 yaml 5#L387"
+        },
+        {
+          "ref": "5#L389",
+          "quote": "锚点见冻结 yaml 5#L389"
+        }
+      ],
+      "label_source": "golden_yaml",
+      "subset": "dev",
+      "disputed": false,
+      "frozen_at": "2026-10-05T18:00:00+08:00",
+      "notes": ""
+    },
+    {
+      "case_id": "GS-03-d-pos",
+      "batch": "golden-GS-03",
+      "target": "stage2_fact",
+      "category": "key_misunderstanding",
+      "item": "GS-03-d-pos",
+      "expected": "支持",
+      "evidence_insufficient": false,
+      "high_impact": true,
+      "gold_evidence": [
+        {
+          "ref": "5#L379",
+          "quote": "锚点见冻结 yaml 5#L379"
+        },
+        {
+          "ref": "5#L381",
+          "quote": "锚点见冻结 yaml 5#L381"
+        },
+        {
+          "ref": "5#L387",
+          "quote": "锚点见冻结 yaml 5#L387"
+        },
+        {
+          "ref": "5#L389",
+          "quote": "锚点见冻结 yaml 5#L389"
+        }
+      ],
+      "label_source": "golden_yaml",
+      "subset": "dev",
+      "disputed": false,
+      "frozen_at": "2026-10-05T18:00:00+08:00",
+      "notes": ""
+    },
+    {
+      "case_id": "GS-04-a-neg",
+      "batch": "golden-GS-04",
+      "target": "stage2_fact",
+      "category": "key_knowledge",
+      "item": "GS-04-a-neg",
+      "expected": "未确定",
+      "evidence_insufficient": true,
+      "high_impact": true,
+      "gold_evidence": [
+        {
+          "ref": "5#L347",
+          "quote": "锚点见冻结 yaml 5#L347"
+        },
+        {
+          "ref": "5#L371",
+          "quote": "锚点见冻结 yaml 5#L371"
+        },
+        {
+          "ref": "5#L391",
+          "quote": "锚点见冻结 yaml 5#L391"
+        }
+      ],
+      "label_source": "golden_yaml",
+      "subset": "dev",
+      "disputed": false,
+      "frozen_at": "2026-10-05T18:00:00+08:00",
+      "notes": ""
+    },
+    {
+      "case_id": "GS-04-a-pos",
+      "batch": "golden-GS-04",
+      "target": "stage2_fact",
+      "category": "key_knowledge",
+      "item": "GS-04-a-pos",
+      "expected": "支持",
+      "evidence_insufficient": false,
+      "high_impact": true,
+      "gold_evidence": [
+        {
+          "ref": "5#L347",
+          "quote": "锚点见冻结 yaml 5#L347"
+        },
+        {
+          "ref": "5#L371",
+          "quote": "锚点见冻结 yaml 5#L371"
+        },
+        {
+          "ref": "5#L391",
+          "quote": "锚点见冻结 yaml 5#L391"
+        }
+      ],
+      "label_source": "golden_yaml",
+      "subset": "dev",
+      "disputed": false,
+      "frozen_at": "2026-10-05T18:00:00+08:00",
+      "notes": ""
+    },
+    {
+      "case_id": "GS-04-b-neg",
+      "batch": "golden-GS-04",
+      "target": "stage2_fact",
+      "category": "key_knowledge",
+      "item": "GS-04-b-neg",
+      "expected": "未确定",
+      "evidence_insufficient": true,
+      "high_impact": true,
+      "gold_evidence": [
+        {
+          "ref": "5#L399",
+          "quote": "锚点见冻结 yaml 5#L399"
+        },
+        {
+          "ref": "5#L401",
+          "quote": "锚点见冻结 yaml 5#L401"
+        },
+        {
+          "ref": "5#L403",
+          "quote": "锚点见冻结 yaml 5#L403"
+        },
+        {
+          "ref": "5#L407",
+          "quote": "锚点见冻结 yaml 5#L407"
+        }
+      ],
+      "label_source": "golden_yaml",
+      "subset": "dev",
+      "disputed": false,
+      "frozen_at": "2026-10-05T18:00:00+08:00",
+      "notes": ""
+    },
+    {
+      "case_id": "GS-04-b-pos",
+      "batch": "golden-GS-04",
+      "target": "stage2_fact",
+      "category": "key_knowledge",
+      "item": "GS-04-b-pos",
+      "expected": "支持",
+      "evidence_insufficient": false,
+      "high_impact": true,
+      "gold_evidence": [
+        {
+          "ref": "5#L399",
+          "quote": "锚点见冻结 yaml 5#L399"
+        },
+        {
+          "ref": "5#L401",
+          "quote": "锚点见冻结 yaml 5#L401"
+        },
+        {
+          "ref": "5#L403",
+          "quote": "锚点见冻结 yaml 5#L403"
+        },
+        {
+          "ref": "5#L407",
+          "quote": "锚点见冻结 yaml 5#L407"
+        }
+      ],
+      "label_source": "golden_yaml",
+      "subset": "dev",
+      "disputed": false,
+      "frozen_at": "2026-10-05T18:00:00+08:00",
+      "notes": ""
+    },
+    {
+      "case_id": "GS-04-c-neg",
+      "batch": "golden-GS-04",
+      "target": "stage2_fact",
+      "category": "key_knowledge",
+      "item": "GS-04-c-neg",
+      "expected": "未确定",
+      "evidence_insufficient": true,
+      "high_impact": true,
+      "gold_evidence": [
+        {
+          "ref": "6#L529",
+          "quote": "锚点见冻结 yaml 6#L529"
+        },
+        {
+          "ref": "7#L567",
+          "quote": "锚点见冻结 yaml 7#L567"
+        }
+      ],
+      "label_source": "golden_yaml",
+      "subset": "dev",
+      "disputed": false,
+      "frozen_at": "2026-10-05T18:00:00+08:00",
+      "notes": ""
+    },
+    {
+      "case_id": "GS-04-c-pos",
+      "batch": "golden-GS-04",
+      "target": "stage2_fact",
+      "category": "key_knowledge",
+      "item": "GS-04-c-pos",
+      "expected": "支持",
+      "evidence_insufficient": false,
+      "high_impact": true,
+      "gold_evidence": [
+        {
+          "ref": "6#L529",
+          "quote": "锚点见冻结 yaml 6#L529"
+        },
+        {
+          "ref": "7#L567",
+          "quote": "锚点见冻结 yaml 7#L567"
+        }
+      ],
+      "label_source": "golden_yaml",
+      "subset": "dev",
+      "disputed": false,
+      "frozen_at": "2026-10-05T18:00:00+08:00",
+      "notes": ""
+    },
+    {
+      "case_id": "GS-05-a-neg",
+      "batch": "golden-GS-05",
+      "target": "stage2_fact",
+      "category": "key_knowledge",
+      "item": "GS-05-a-neg",
+      "expected": "矛盾",
+      "evidence_insufficient": false,
+      "high_impact": true,
+      "gold_evidence": [
+        {
+          "ref": "4#L175",
+          "quote": "锚点见冻结 yaml 4#L175"
+        },
+        {
+          "ref": "4#L203",
+          "quote": "锚点见冻结 yaml 4#L203"
+        }
+      ],
+      "label_source": "golden_yaml",
+      "subset": "dev",
+      "disputed": false,
+      "frozen_at": "2026-10-05T18:00:00+08:00",
+      "notes": ""
+    },
+    {
+      "case_id": "GS-05-a-pos",
+      "batch": "golden-GS-05",
+      "target": "stage2_fact",
+      "category": "key_knowledge",
+      "item": "GS-05-a-pos",
+      "expected": "支持",
+      "evidence_insufficient": false,
+      "high_impact": true,
+      "gold_evidence": [
+        {
+          "ref": "4#L175",
+          "quote": "锚点见冻结 yaml 4#L175"
+        },
+        {
+          "ref": "4#L203",
+          "quote": "锚点见冻结 yaml 4#L203"
+        }
+      ],
+      "label_source": "golden_yaml",
+      "subset": "dev",
+      "disputed": false,
+      "frozen_at": "2026-10-05T18:00:00+08:00",
+      "notes": ""
+    },
+    {
+      "case_id": "GS-05-b-neg",
+      "batch": "golden-GS-05",
+      "target": "stage2_fact",
+      "category": "key_knowledge",
+      "item": "GS-05-b-neg",
+      "expected": "矛盾",
+      "evidence_insufficient": false,
+      "high_impact": true,
+      "gold_evidence": [
+        {
+          "ref": "5#L329",
+          "quote": "锚点见冻结 yaml 5#L329"
+        },
+        {
+          "ref": "5#L373",
+          "quote": "锚点见冻结 yaml 5#L373"
+        },
+        {
+          "ref": "5#L377",
+          "quote": "锚点见冻结 yaml 5#L377"
+        }
+      ],
+      "label_source": "golden_yaml",
+      "subset": "dev",
+      "disputed": false,
+      "frozen_at": "2026-10-05T18:00:00+08:00",
+      "notes": ""
+    },
+    {
+      "case_id": "GS-05-b-pos",
+      "batch": "golden-GS-05",
+      "target": "stage2_fact",
+      "category": "key_knowledge",
+      "item": "GS-05-b-pos",
+      "expected": "支持",
+      "evidence_insufficient": false,
+      "high_impact": true,
+      "gold_evidence": [
+        {
+          "ref": "5#L329",
+          "quote": "锚点见冻结 yaml 5#L329"
+        },
+        {
+          "ref": "5#L373",
+          "quote": "锚点见冻结 yaml 5#L373"
+        },
+        {
+          "ref": "5#L377",
+          "quote": "锚点见冻结 yaml 5#L377"
+        }
+      ],
+      "label_source": "golden_yaml",
+      "subset": "dev",
+      "disputed": false,
+      "frozen_at": "2026-10-05T18:00:00+08:00",
+      "notes": ""
+    },
+    {
+      "case_id": "GS-05-c-neg",
+      "batch": "golden-GS-05",
+      "target": "stage2_fact",
+      "category": "key_misunderstanding",
+      "item": "GS-05-c-neg",
+      "expected": "矛盾",
+      "evidence_insufficient": false,
+      "high_impact": true,
+      "gold_evidence": [
+        {
+          "ref": "9#L709",
+          "quote": "锚点见冻结 yaml 9#L709"
+        },
+        {
+          "ref": "9#L715",
+          "quote": "锚点见冻结 yaml 9#L715"
+        },
+        {
+          "ref": "9#L717",
+          "quote": "锚点见冻结 yaml 9#L717"
+        }
+      ],
+      "label_source": "golden_yaml",
+      "subset": "dev",
+      "disputed": false,
+      "frozen_at": "2026-10-05T18:00:00+08:00",
+      "notes": ""
+    },
+    {
+      "case_id": "GS-05-c-pos",
+      "batch": "golden-GS-05",
+      "target": "stage2_fact",
+      "category": "key_misunderstanding",
+      "item": "GS-05-c-pos",
+      "expected": "支持",
+      "evidence_insufficient": false,
+      "high_impact": true,
+      "gold_evidence": [
+        {
+          "ref": "9#L709",
+          "quote": "锚点见冻结 yaml 9#L709"
+        },
+        {
+          "ref": "9#L715",
+          "quote": "锚点见冻结 yaml 9#L715"
+        },
+        {
+          "ref": "9#L717",
+          "quote": "锚点见冻结 yaml 9#L717"
+        }
+      ],
+      "label_source": "golden_yaml",
+      "subset": "dev",
+      "disputed": false,
+      "frozen_at": "2026-10-05T18:00:00+08:00",
+      "notes": ""
+    },
+    {
+      "case_id": "GS-05-d-neg",
+      "batch": "golden-GS-05",
+      "target": "stage2_fact",
+      "category": "key_misunderstanding",
+      "item": "GS-05-d-neg",
+      "expected": "矛盾",
+      "evidence_insufficient": false,
+      "high_impact": true,
+      "gold_evidence": [
+        {
+          "ref": "9#L727",
+          "quote": "锚点见冻结 yaml 9#L727"
+        },
+        {
+          "ref": "9#L729",
+          "quote": "锚点见冻结 yaml 9#L729"
+        },
+        {
+          "ref": "9#L781",
+          "quote": "锚点见冻结 yaml 9#L781"
+        }
+      ],
+      "label_source": "golden_yaml",
+      "subset": "dev",
+      "disputed": false,
+      "frozen_at": "2026-10-05T18:00:00+08:00",
+      "notes": ""
+    },
+    {
+      "case_id": "GS-05-d-pos",
+      "batch": "golden-GS-05",
+      "target": "stage2_fact",
+      "category": "key_misunderstanding",
+      "item": "GS-05-d-pos",
+      "expected": "支持",
+      "evidence_insufficient": false,
+      "high_impact": true,
+      "gold_evidence": [
+        {
+          "ref": "9#L727",
+          "quote": "锚点见冻结 yaml 9#L727"
+        },
+        {
+          "ref": "9#L729",
+          "quote": "锚点见冻结 yaml 9#L729"
+        },
+        {
+          "ref": "9#L781",
+          "quote": "锚点见冻结 yaml 9#L781"
+        }
+      ],
+      "label_source": "golden_yaml",
+      "subset": "dev",
+      "disputed": false,
+      "frozen_at": "2026-10-05T18:00:00+08:00",
+      "notes": ""
+    },
+    {
+      "case_id": "GS-06-a-neg",
+      "batch": "golden-GS-06",
+      "target": "stage2_fact",
+      "category": "key_knowledge",
+      "item": "GS-06-a-neg",
+      "expected": "矛盾",
+      "evidence_insufficient": false,
+      "high_impact": true,
+      "gold_evidence": [
+        {
+          "ref": "6#L467",
+          "quote": "锚点见冻结 yaml 6#L467"
+        },
+        {
+          "ref": "8#L613",
+          "quote": "锚点见冻结 yaml 8#L613"
+        },
+        {
+          "ref": "9#L729",
+          "quote": "锚点见冻结 yaml 9#L729"
+        }
+      ],
+      "label_source": "golden_yaml",
+      "subset": "dev",
+      "disputed": false,
+      "frozen_at": "2026-10-05T18:00:00+08:00",
+      "notes": ""
+    },
+    {
+      "case_id": "GS-06-a-pos",
+      "batch": "golden-GS-06",
+      "target": "stage2_fact",
+      "category": "key_knowledge",
+      "item": "GS-06-a-pos",
+      "expected": "支持",
+      "evidence_insufficient": false,
+      "high_impact": true,
+      "gold_evidence": [
+        {
+          "ref": "6#L467",
+          "quote": "锚点见冻结 yaml 6#L467"
+        },
+        {
+          "ref": "8#L613",
+          "quote": "锚点见冻结 yaml 8#L613"
+        },
+        {
+          "ref": "9#L729",
+          "quote": "锚点见冻结 yaml 9#L729"
+        }
+      ],
+      "label_source": "golden_yaml",
+      "subset": "dev",
+      "disputed": false,
+      "frozen_at": "2026-10-05T18:00:00+08:00",
+      "notes": ""
+    },
+    {
+      "case_id": "GS-06-b-neg",
+      "batch": "golden-GS-06",
+      "target": "stage2_fact",
+      "category": "key_misunderstanding",
+      "item": "GS-06-b-neg",
+      "expected": "未确定",
+      "evidence_insufficient": true,
+      "high_impact": true,
+      "gold_evidence": [
+        {
+          "ref": "6#L467",
+          "quote": "锚点见冻结 yaml 6#L467"
+        },
+        {
+          "ref": "8#L611",
+          "quote": "锚点见冻结 yaml 8#L611"
+        },
+        {
+          "ref": "8#L613",
+          "quote": "锚点见冻结 yaml 8#L613"
+        }
+      ],
+      "label_source": "golden_yaml",
+      "subset": "dev",
+      "disputed": false,
+      "frozen_at": "2026-10-05T18:00:00+08:00",
+      "notes": ""
+    },
+    {
+      "case_id": "GS-06-b-pos",
+      "batch": "golden-GS-06",
+      "target": "stage2_fact",
+      "category": "key_misunderstanding",
+      "item": "GS-06-b-pos",
+      "expected": "支持",
+      "evidence_insufficient": false,
+      "high_impact": true,
+      "gold_evidence": [
+        {
+          "ref": "6#L467",
+          "quote": "锚点见冻结 yaml 6#L467"
+        },
+        {
+          "ref": "8#L611",
+          "quote": "锚点见冻结 yaml 8#L611"
+        },
+        {
+          "ref": "8#L613",
+          "quote": "锚点见冻结 yaml 8#L613"
+        }
+      ],
+      "label_source": "golden_yaml",
+      "subset": "dev",
+      "disputed": false,
+      "frozen_at": "2026-10-05T18:00:00+08:00",
+      "notes": ""
+    },
+    {
+      "case_id": "GS-06-c-neg",
+      "batch": "golden-GS-06",
+      "target": "stage2_fact",
+      "category": "key_knowledge",
+      "item": "GS-06-c-neg",
+      "expected": "矛盾",
+      "evidence_insufficient": false,
+      "high_impact": true,
+      "gold_evidence": [
+        {
+          "ref": "6#L451",
+          "quote": "锚点见冻结 yaml 6#L451"
+        },
+        {
+          "ref": "8#L617",
+          "quote": "锚点见冻结 yaml 8#L617"
+        },
+        {
+          "ref": "8#L633",
+          "quote": "锚点见冻结 yaml 8#L633"
+        }
+      ],
+      "label_source": "golden_yaml",
+      "subset": "dev",
+      "disputed": false,
+      "frozen_at": "2026-10-05T18:00:00+08:00",
+      "notes": ""
+    },
+    {
+      "case_id": "GS-06-c-pos",
+      "batch": "golden-GS-06",
+      "target": "stage2_fact",
+      "category": "key_knowledge",
+      "item": "GS-06-c-pos",
+      "expected": "支持",
+      "evidence_insufficient": false,
+      "high_impact": true,
+      "gold_evidence": [
+        {
+          "ref": "6#L451",
+          "quote": "锚点见冻结 yaml 6#L451"
+        },
+        {
+          "ref": "8#L617",
+          "quote": "锚点见冻结 yaml 8#L617"
+        },
+        {
+          "ref": "8#L633",
+          "quote": "锚点见冻结 yaml 8#L633"
+        }
+      ],
+      "label_source": "golden_yaml",
+      "subset": "dev",
+      "disputed": false,
+      "frozen_at": "2026-10-05T18:00:00+08:00",
+      "notes": ""
+    },
+    {
+      "case_id": "GS-06-d-neg",
+      "batch": "golden-GS-06",
+      "target": "stage2_fact",
+      "category": "key_misunderstanding",
+      "item": "GS-06-d-neg",
+      "expected": "未确定",
+      "evidence_insufficient": true,
+      "high_impact": true,
+      "gold_evidence": [
+        {
+          "ref": "8#L621",
+          "quote": "锚点见冻结 yaml 8#L621"
+        },
+        {
+          "ref": "8#L623",
+          "quote": "锚点见冻结 yaml 8#L623"
+        },
+        {
+          "ref": "8#L631",
+          "quote": "锚点见冻结 yaml 8#L631"
+        }
+      ],
+      "label_source": "golden_yaml",
+      "subset": "dev",
+      "disputed": false,
+      "frozen_at": "2026-10-05T18:00:00+08:00",
+      "notes": ""
+    },
+    {
+      "case_id": "GS-06-d-pos",
+      "batch": "golden-GS-06",
+      "target": "stage2_fact",
+      "category": "key_misunderstanding",
+      "item": "GS-06-d-pos",
+      "expected": "支持",
+      "evidence_insufficient": false,
+      "high_impact": true,
+      "gold_evidence": [
+        {
+          "ref": "8#L621",
+          "quote": "锚点见冻结 yaml 8#L621"
+        },
+        {
+          "ref": "8#L623",
+          "quote": "锚点见冻结 yaml 8#L623"
+        },
+        {
+          "ref": "8#L631",
+          "quote": "锚点见冻结 yaml 8#L631"
+        }
+      ],
+      "label_source": "golden_yaml",
+      "subset": "dev",
+      "disputed": false,
+      "frozen_at": "2026-10-05T18:00:00+08:00",
+      "notes": ""
+    },
+    {
+      "case_id": "GS-07-a-neg",
+      "batch": "golden-GS-07",
+      "target": "stage2_fact",
+      "category": "relation",
+      "item": "GS-07-a-neg",
+      "expected": "矛盾",
+      "evidence_insufficient": false,
+      "high_impact": true,
+      "gold_evidence": [
+        {
+          "ref": "7#L535",
+          "quote": "锚点见冻结 yaml 7#L535"
+        },
+        {
+          "ref": "7#L547",
+          "quote": "锚点见冻结 yaml 7#L547"
+        },
+        {
+          "ref": "7#L549",
+          "quote": "锚点见冻结 yaml 7#L549"
+        }
+      ],
+      "label_source": "golden_yaml",
+      "subset": "dev",
+      "disputed": false,
+      "frozen_at": "2026-10-05T18:00:00+08:00",
+      "notes": ""
+    },
+    {
+      "case_id": "GS-07-a-pos",
+      "batch": "golden-GS-07",
+      "target": "stage2_fact",
+      "category": "relation",
+      "item": "GS-07-a-pos",
+      "expected": "支持",
+      "evidence_insufficient": false,
+      "high_impact": true,
+      "gold_evidence": [
+        {
+          "ref": "7#L535",
+          "quote": "锚点见冻结 yaml 7#L535"
+        },
+        {
+          "ref": "7#L547",
+          "quote": "锚点见冻结 yaml 7#L547"
+        },
+        {
+          "ref": "7#L549",
+          "quote": "锚点见冻结 yaml 7#L549"
+        }
+      ],
+      "label_source": "golden_yaml",
+      "subset": "dev",
+      "disputed": false,
+      "frozen_at": "2026-10-05T18:00:00+08:00",
+      "notes": ""
+    },
+    {
+      "case_id": "GS-07-b-neg",
+      "batch": "golden-GS-07",
+      "target": "stage2_fact",
+      "category": "relation",
+      "item": "GS-07-b-neg",
+      "expected": "矛盾",
+      "evidence_insufficient": false,
+      "high_impact": true,
+      "gold_evidence": [
+        {
+          "ref": "8#L675",
+          "quote": "锚点见冻结 yaml 8#L675"
+        },
+        {
+          "ref": "9#L709",
+          "quote": "锚点见冻结 yaml 9#L709"
+        },
+        {
+          "ref": "10#L831",
+          "quote": "锚点见冻结 yaml 10#L831"
+        }
+      ],
+      "label_source": "golden_yaml",
+      "subset": "dev",
+      "disputed": false,
+      "frozen_at": "2026-10-05T18:00:00+08:00",
+      "notes": ""
+    },
+    {
+      "case_id": "GS-07-b-pos",
+      "batch": "golden-GS-07",
+      "target": "stage2_fact",
+      "category": "relation",
+      "item": "GS-07-b-pos",
+      "expected": "支持",
+      "evidence_insufficient": false,
+      "high_impact": true,
+      "gold_evidence": [
+        {
+          "ref": "8#L675",
+          "quote": "锚点见冻结 yaml 8#L675"
+        },
+        {
+          "ref": "9#L709",
+          "quote": "锚点见冻结 yaml 9#L709"
+        },
+        {
+          "ref": "10#L831",
+          "quote": "锚点见冻结 yaml 10#L831"
+        }
+      ],
+      "label_source": "golden_yaml",
+      "subset": "dev",
+      "disputed": false,
+      "frozen_at": "2026-10-05T18:00:00+08:00",
+      "notes": ""
+    },
+    {
+      "case_id": "GS-07-c-neg",
+      "batch": "golden-GS-07",
+      "target": "stage2_fact",
+      "category": "key_misunderstanding",
+      "item": "GS-07-c-neg",
+      "expected": "矛盾",
+      "evidence_insufficient": false,
+      "high_impact": true,
+      "gold_evidence": [
+        {
+          "ref": "10#L825",
+          "quote": "锚点见冻结 yaml 10#L825"
+        },
+        {
+          "ref": "10#L831",
+          "quote": "锚点见冻结 yaml 10#L831"
+        },
+        {
+          "ref": "10#L831",
+          "quote": "锚点见冻结 yaml 10#L831"
+        },
+        {
+          "ref": "10#L833",
+          "quote": "锚点见冻结 yaml 10#L833"
+        },
+        {
+          "ref": "10#L835",
+          "quote": "锚点见冻结 yaml 10#L835"
+        }
+      ],
+      "label_source": "golden_yaml",
+      "subset": "dev",
+      "disputed": false,
+      "frozen_at": "2026-10-05T18:00:00+08:00",
+      "notes": ""
+    },
+    {
+      "case_id": "GS-07-c-pos",
+      "batch": "golden-GS-07",
+      "target": "stage2_fact",
+      "category": "key_misunderstanding",
+      "item": "GS-07-c-pos",
+      "expected": "支持",
+      "evidence_insufficient": false,
+      "high_impact": true,
+      "gold_evidence": [
+        {
+          "ref": "10#L825",
+          "quote": "锚点见冻结 yaml 10#L825"
+        },
+        {
+          "ref": "10#L831",
+          "quote": "锚点见冻结 yaml 10#L831"
+        },
+        {
+          "ref": "10#L831",
+          "quote": "锚点见冻结 yaml 10#L831"
+        },
+        {
+          "ref": "10#L833",
+          "quote": "锚点见冻结 yaml 10#L833"
+        },
+        {
+          "ref": "10#L835",
+          "quote": "锚点见冻结 yaml 10#L835"
+        }
+      ],
+      "label_source": "golden_yaml",
+      "subset": "dev",
+      "disputed": false,
+      "frozen_at": "2026-10-05T18:00:00+08:00",
+      "notes": ""
+    },
+    {
+      "case_id": "GS-08-a-neg",
+      "batch": "golden-GS-08",
+      "target": "stage2_fact",
+      "category": "identity",
+      "item": "GS-08-a-neg",
+      "expected": "矛盾",
+      "evidence_insufficient": false,
+      "high_impact": true,
+      "gold_evidence": [
+        {
+          "ref": "4#L215",
+          "quote": "锚点见冻结 yaml 4#L215"
+        },
+        {
+          "ref": "9#L757",
+          "quote": "锚点见冻结 yaml 9#L757"
+        }
+      ],
+      "label_source": "golden_yaml",
+      "subset": "dev",
+      "disputed": false,
+      "frozen_at": "2026-10-05T18:00:00+08:00",
+      "notes": ""
+    },
+    {
+      "case_id": "GS-08-a-pos",
+      "batch": "golden-GS-08",
+      "target": "stage2_fact",
+      "category": "identity",
+      "item": "GS-08-a-pos",
+      "expected": "支持",
+      "evidence_insufficient": false,
+      "high_impact": true,
+      "gold_evidence": [
+        {
+          "ref": "4#L215",
+          "quote": "锚点见冻结 yaml 4#L215"
+        },
+        {
+          "ref": "9#L757",
+          "quote": "锚点见冻结 yaml 9#L757"
+        }
+      ],
+      "label_source": "golden_yaml",
+      "subset": "dev",
+      "disputed": false,
+      "frozen_at": "2026-10-05T18:00:00+08:00",
+      "notes": ""
+    },
+    {
+      "case_id": "GS-08-b-neg",
+      "batch": "golden-GS-08",
+      "target": "stage2_fact",
+      "category": "key_knowledge",
+      "item": "GS-08-b-neg",
+      "expected": "矛盾",
+      "evidence_insufficient": false,
+      "high_impact": true,
+      "gold_evidence": [
+        {
+          "ref": "9#L769",
+          "quote": "锚点见冻结 yaml 9#L769"
+        },
+        {
+          "ref": "9#L771",
+          "quote": "锚点见冻结 yaml 9#L771"
+        },
+        {
+          "ref": "9#L775",
+          "quote": "锚点见冻结 yaml 9#L775"
+        },
+        {
+          "ref": "9#L781",
+          "quote": "锚点见冻结 yaml 9#L781"
+        }
+      ],
+      "label_source": "golden_yaml",
+      "subset": "dev",
+      "disputed": false,
+      "frozen_at": "2026-10-05T18:00:00+08:00",
+      "notes": ""
+    },
+    {
+      "case_id": "GS-08-b-pos",
+      "batch": "golden-GS-08",
+      "target": "stage2_fact",
+      "category": "key_knowledge",
+      "item": "GS-08-b-pos",
+      "expected": "支持",
+      "evidence_insufficient": false,
+      "high_impact": true,
+      "gold_evidence": [
+        {
+          "ref": "9#L769",
+          "quote": "锚点见冻结 yaml 9#L769"
+        },
+        {
+          "ref": "9#L771",
+          "quote": "锚点见冻结 yaml 9#L771"
+        },
+        {
+          "ref": "9#L775",
+          "quote": "锚点见冻结 yaml 9#L775"
+        },
+        {
+          "ref": "9#L781",
+          "quote": "锚点见冻结 yaml 9#L781"
+        }
+      ],
+      "label_source": "golden_yaml",
+      "subset": "dev",
+      "disputed": false,
+      "frozen_at": "2026-10-05T18:00:00+08:00",
+      "notes": ""
+    },
+    {
+      "case_id": "GS-08-c-neg",
+      "batch": "golden-GS-08",
+      "target": "stage2_fact",
+      "category": "key_knowledge",
+      "item": "GS-08-c-neg",
+      "expected": "矛盾",
+      "evidence_insufficient": false,
+      "high_impact": true,
+      "gold_evidence": [
+        {
+          "ref": "9#L787",
+          "quote": "锚点见冻结 yaml 9#L787"
+        },
+        {
+          "ref": "9#L795",
+          "quote": "锚点见冻结 yaml 9#L795"
+        },
+        {
+          "ref": "9#L803",
+          "quote": "锚点见冻结 yaml 9#L803"
+        },
+        {
+          "ref": "9#L805",
+          "quote": "锚点见冻结 yaml 9#L805"
+        }
+      ],
+      "label_source": "golden_yaml",
+      "subset": "dev",
+      "disputed": false,
+      "frozen_at": "2026-10-05T18:00:00+08:00",
+      "notes": ""
+    },
+    {
+      "case_id": "GS-08-c-pos",
+      "batch": "golden-GS-08",
+      "target": "stage2_fact",
+      "category": "key_knowledge",
+      "item": "GS-08-c-pos",
+      "expected": "支持",
+      "evidence_insufficient": false,
+      "high_impact": true,
+      "gold_evidence": [
+        {
+          "ref": "9#L787",
+          "quote": "锚点见冻结 yaml 9#L787"
+        },
+        {
+          "ref": "9#L795",
+          "quote": "锚点见冻结 yaml 9#L795"
+        },
+        {
+          "ref": "9#L803",
+          "quote": "锚点见冻结 yaml 9#L803"
+        },
+        {
+          "ref": "9#L805",
+          "quote": "锚点见冻结 yaml 9#L805"
+        }
+      ],
+      "label_source": "golden_yaml",
+      "subset": "dev",
+      "disputed": false,
+      "frozen_at": "2026-10-05T18:00:00+08:00",
+      "notes": ""
+    },
+    {
+      "case_id": "GS-09-a-neg",
+      "batch": "golden-GS-09",
+      "target": "stage2_fact",
+      "category": "key_knowledge",
+      "item": "GS-09-a-neg",
+      "expected": "矛盾",
+      "evidence_insufficient": false,
+      "high_impact": true,
+      "gold_evidence": [
+        {
+          "ref": "10#L841",
+          "quote": "锚点见冻结 yaml 10#L841"
+        },
+        {
+          "ref": "10#L855",
+          "quote": "锚点见冻结 yaml 10#L855"
+        },
+        {
+          "ref": "10#L857",
+          "quote": "锚点见冻结 yaml 10#L857"
+        }
+      ],
+      "label_source": "golden_yaml",
+      "subset": "dev",
+      "disputed": false,
+      "frozen_at": "2026-10-05T18:00:00+08:00",
+      "notes": ""
+    },
+    {
+      "case_id": "GS-09-a-pos",
+      "batch": "golden-GS-09",
+      "target": "stage2_fact",
+      "category": "key_knowledge",
+      "item": "GS-09-a-pos",
+      "expected": "支持",
+      "evidence_insufficient": false,
+      "high_impact": true,
+      "gold_evidence": [
+        {
+          "ref": "10#L841",
+          "quote": "锚点见冻结 yaml 10#L841"
+        },
+        {
+          "ref": "10#L855",
+          "quote": "锚点见冻结 yaml 10#L855"
+        },
+        {
+          "ref": "10#L857",
+          "quote": "锚点见冻结 yaml 10#L857"
+        }
+      ],
+      "label_source": "golden_yaml",
+      "subset": "dev",
+      "disputed": false,
+      "frozen_at": "2026-10-05T18:00:00+08:00",
+      "notes": ""
+    },
+    {
+      "case_id": "GS-09-b-neg",
+      "batch": "golden-GS-09",
+      "target": "stage2_fact",
+      "category": "key_knowledge",
+      "item": "GS-09-b-neg",
+      "expected": "矛盾",
+      "evidence_insufficient": false,
+      "high_impact": true,
+      "gold_evidence": [
+        {
+          "ref": "10#L861",
+          "quote": "锚点见冻结 yaml 10#L861"
+        },
+        {
+          "ref": "10#L863",
+          "quote": "锚点见冻结 yaml 10#L863"
+        }
+      ],
+      "label_source": "golden_yaml",
+      "subset": "dev",
+      "disputed": false,
+      "frozen_at": "2026-10-05T18:00:00+08:00",
+      "notes": ""
+    },
+    {
+      "case_id": "GS-09-b-pos",
+      "batch": "golden-GS-09",
+      "target": "stage2_fact",
+      "category": "key_knowledge",
+      "item": "GS-09-b-pos",
+      "expected": "支持",
+      "evidence_insufficient": false,
+      "high_impact": true,
+      "gold_evidence": [
+        {
+          "ref": "10#L861",
+          "quote": "锚点见冻结 yaml 10#L861"
+        },
+        {
+          "ref": "10#L863",
+          "quote": "锚点见冻结 yaml 10#L863"
+        }
+      ],
+      "label_source": "golden_yaml",
+      "subset": "dev",
+      "disputed": false,
+      "frozen_at": "2026-10-05T18:00:00+08:00",
+      "notes": ""
+    },
+    {
+      "case_id": "GS-09-c-neg",
+      "batch": "golden-GS-09",
+      "target": "stage2_fact",
+      "category": "key_knowledge",
+      "item": "GS-09-c-neg",
+      "expected": "矛盾",
+      "evidence_insufficient": false,
+      "high_impact": true,
+      "gold_evidence": [
+        {
+          "ref": "4#L229",
+          "quote": "锚点见冻结 yaml 4#L229"
+        },
+        {
+          "ref": "5#L255",
+          "quote": "锚点见冻结 yaml 5#L255"
+        },
+        {
+          "ref": "10#L865",
+          "quote": "锚点见冻结 yaml 10#L865"
+        },
+        {
+          "ref": "10#L867",
+          "quote": "锚点见冻结 yaml 10#L867"
+        }
+      ],
+      "label_source": "golden_yaml",
+      "subset": "dev",
+      "disputed": false,
+      "frozen_at": "2026-10-05T18:00:00+08:00",
+      "notes": ""
+    },
+    {
+      "case_id": "GS-09-c-pos",
+      "batch": "golden-GS-09",
+      "target": "stage2_fact",
+      "category": "key_knowledge",
+      "item": "GS-09-c-pos",
+      "expected": "支持",
+      "evidence_insufficient": false,
+      "high_impact": true,
+      "gold_evidence": [
+        {
+          "ref": "4#L229",
+          "quote": "锚点见冻结 yaml 4#L229"
+        },
+        {
+          "ref": "5#L255",
+          "quote": "锚点见冻结 yaml 5#L255"
+        },
+        {
+          "ref": "10#L865",
+          "quote": "锚点见冻结 yaml 10#L865"
+        },
+        {
+          "ref": "10#L867",
+          "quote": "锚点见冻结 yaml 10#L867"
+        }
+      ],
+      "label_source": "golden_yaml",
+      "subset": "dev",
+      "disputed": false,
+      "frozen_at": "2026-10-05T18:00:00+08:00",
+      "notes": ""
+    },
+    {
+      "case_id": "GS-10-a-neg",
+      "batch": "golden-GS-10",
+      "target": "stage2_fact",
+      "category": "relation",
+      "item": "GS-10-a-neg",
+      "expected": "矛盾",
+      "evidence_insufficient": false,
+      "high_impact": true,
+      "gold_evidence": [
+        {
+          "ref": "10#L873",
+          "quote": "锚点见冻结 yaml 10#L873"
+        },
+        {
+          "ref": "10#L875",
+          "quote": "锚点见冻结 yaml 10#L875"
+        },
+        {
+          "ref": "10#L877",
+          "quote": "锚点见冻结 yaml 10#L877"
+        },
+        {
+          "ref": "11#L897",
+          "quote": "锚点见冻结 yaml 11#L897"
+        }
+      ],
+      "label_source": "golden_yaml",
+      "subset": "dev",
+      "disputed": false,
+      "frozen_at": "2026-10-05T18:00:00+08:00",
+      "notes": ""
+    },
+    {
+      "case_id": "GS-10-a-pos",
+      "batch": "golden-GS-10",
+      "target": "stage2_fact",
+      "category": "relation",
+      "item": "GS-10-a-pos",
+      "expected": "支持",
+      "evidence_insufficient": false,
+      "high_impact": true,
+      "gold_evidence": [
+        {
+          "ref": "10#L873",
+          "quote": "锚点见冻结 yaml 10#L873"
+        },
+        {
+          "ref": "10#L875",
+          "quote": "锚点见冻结 yaml 10#L875"
+        },
+        {
+          "ref": "10#L877",
+          "quote": "锚点见冻结 yaml 10#L877"
+        },
+        {
+          "ref": "11#L897",
+          "quote": "锚点见冻结 yaml 11#L897"
+        }
+      ],
+      "label_source": "golden_yaml",
+      "subset": "dev",
+      "disputed": false,
+      "frozen_at": "2026-10-05T18:00:00+08:00",
+      "notes": ""
+    },
+    {
+      "case_id": "GS-10-b-neg",
+      "batch": "golden-GS-10",
+      "target": "stage2_fact",
+      "category": "key_knowledge",
+      "item": "GS-10-b-neg",
+      "expected": "未确定",
+      "evidence_insufficient": true,
+      "high_impact": true,
+      "gold_evidence": [
+        {
+          "ref": "10#L881",
+          "quote": "锚点见冻结 yaml 10#L881"
+        },
+        {
+          "ref": "10#L883",
+          "quote": "锚点见冻结 yaml 10#L883"
+        },
+        {
+          "ref": "10#L885",
+          "quote": "锚点见冻结 yaml 10#L885"
+        },
+        {
+          "ref": "10#L891",
+          "quote": "锚点见冻结 yaml 10#L891"
+        }
+      ],
+      "label_source": "golden_yaml",
+      "subset": "dev",
+      "disputed": false,
+      "frozen_at": "2026-10-05T18:00:00+08:00",
+      "notes": ""
+    },
+    {
+      "case_id": "GS-10-b-pos",
+      "batch": "golden-GS-10",
+      "target": "stage2_fact",
+      "category": "key_knowledge",
+      "item": "GS-10-b-pos",
+      "expected": "支持",
+      "evidence_insufficient": false,
+      "high_impact": true,
+      "gold_evidence": [
+        {
+          "ref": "10#L881",
+          "quote": "锚点见冻结 yaml 10#L881"
+        },
+        {
+          "ref": "10#L883",
+          "quote": "锚点见冻结 yaml 10#L883"
+        },
+        {
+          "ref": "10#L885",
+          "quote": "锚点见冻结 yaml 10#L885"
+        },
+        {
+          "ref": "10#L891",
+          "quote": "锚点见冻结 yaml 10#L891"
+        }
+      ],
+      "label_source": "golden_yaml",
+      "subset": "dev",
+      "disputed": false,
+      "frozen_at": "2026-10-05T18:00:00+08:00",
+      "notes": ""
+    },
+    {
+      "case_id": "GS-10-c-neg",
+      "batch": "golden-GS-10",
+      "target": "stage2_fact",
+      "category": "identity",
+      "item": "GS-10-c-neg",
+      "expected": "未确定",
+      "evidence_insufficient": true,
+      "high_impact": true,
+      "gold_evidence": [
+        {
+          "ref": "11#L901",
+          "quote": "锚点见冻结 yaml 11#L901"
+        },
+        {
+          "ref": "11#L911",
+          "quote": "锚点见冻结 yaml 11#L911"
+        },
+        {
+          "ref": "11#L915",
+          "quote": "锚点见冻结 yaml 11#L915"
+        },
+        {
+          "ref": "11#L919",
+          "quote": "锚点见冻结 yaml 11#L919"
+        }
+      ],
+      "label_source": "golden_yaml",
+      "subset": "dev",
+      "disputed": false,
+      "frozen_at": "2026-10-05T18:00:00+08:00",
+      "notes": ""
+    },
+    {
+      "case_id": "GS-10-c-pos",
+      "batch": "golden-GS-10",
+      "target": "stage2_fact",
+      "category": "identity",
+      "item": "GS-10-c-pos",
+      "expected": "支持",
+      "evidence_insufficient": false,
+      "high_impact": true,
+      "gold_evidence": [
+        {
+          "ref": "11#L901",
+          "quote": "锚点见冻结 yaml 11#L901"
+        },
+        {
+          "ref": "11#L911",
+          "quote": "锚点见冻结 yaml 11#L911"
+        },
+        {
+          "ref": "11#L915",
+          "quote": "锚点见冻结 yaml 11#L915"
+        },
+        {
+          "ref": "11#L919",
+          "quote": "锚点见冻结 yaml 11#L919"
+        }
+      ],
+      "label_source": "golden_yaml",
+      "subset": "dev",
+      "disputed": false,
+      "frozen_at": "2026-10-05T18:00:00+08:00",
+      "notes": ""
+    },
+    {
+      "case_id": "rc15-ch03-misread",
+      "batch": "rc15-ch03",
+      "target": "stage2_fact",
+      "category": "relation",
+      "item": "ch03.b3.e1",
+      "expected": "矛盾",
+      "evidence_insufficient": false,
+      "high_impact": true,
+      "gold_evidence": [
+        {
+          "ref": "user_adjudication/2026-10-04",
+          "quote": "主体是夫君（模仿表弟称谓），非表弟"
+        }
+      ],
+      "label_source": "user_adjudicated",
+      "subset": "dev",
+      "disputed": false,
+      "frozen_at": "2026-10-05T18:00:00+08:00",
+      "notes": "rc15 真实观察：b3.e1 把夫君假作表弟记成与表弟已发生关系"
+    },
+    {
+      "case_id": "rc15-ch03-faithful",
+      "batch": "rc15-ch03",
+      "target": "stage2_fact",
+      "category": "key_knowledge",
+      "item": "ch03.b6.k1",
+      "expected": "支持",
+      "evidence_insufficient": false,
+      "high_impact": true,
+      "gold_evidence": [
+        {
+          "ref": "e03_13",
+          "quote": "夫君说等过两日他们休沐,就去套表弟麻袋。"
+        }
+      ],
+      "label_source": "rc15_material",
+      "subset": "dev",
+      "disputed": false,
+      "frozen_at": "2026-10-05T18:00:00+08:00",
+      "notes": "同章如实观察的反例对照（agent 草案标签）"
+    },
+    {
+      "case_id": "rc15-ob44",
+      "batch": "rc15-ob44",
+      "target": "preserve_basis",
+      "category": "negative_basis",
+      "item": "ob44",
+      "expected": "矛盾",
+      "evidence_insufficient": false,
+      "high_impact": false,
+      "gold_evidence": [
+        {
+          "ref": "runtime/preserve_checkpoint.json#ob44",
+          "quote": "读者由叙述确认裴书远想给夫君“连锅端”——让芸娘与夫君和离后改嫁自己；这解释了他"
+        }
+      ],
+      "label_source": "user_adjudicated",
+      "subset": "dev",
+      "disputed": false,
+      "frozen_at": "2026-10-05T18:00:00+08:00",
+      "notes": "rc15 真实义务：否定限制「不得改成芸娘当场识破」无源依据"
+    },
+    {
+      "case_id": "rc15-ob01",
+      "batch": "rc15-ob01",
+      "target": "preserve_basis",
+      "category": "affirmative_basis",
+      "item": "ob01",
+      "expected": "支持",
+      "evidence_insufficient": false,
+      "high_impact": false,
+      "gold_evidence": [
+        {
+          "ref": "runtime/preserve_checkpoint.json#ob01",
+          "quote": "芸娘已嫁入陆家为妻，与陆郎是新婚夫妻。"
+        }
+      ],
+      "label_source": "rc15_material",
+      "subset": "dev",
+      "disputed": false,
+      "frozen_at": "2026-10-05T18:00:00+08:00",
+      "notes": "有锚定义务的对照（agent 草案标签）"
+    },
+    {
+      "case_id": "rc15-design-bound",
+      "batch": "rc15-design-bound",
+      "target": "design_fragment",
+      "category": "restriction_preservation",
+      "item": "kf_0b894923ea33c5cc",
+      "expected": "支持",
+      "evidence_insufficient": false,
+      "high_impact": false,
+      "gold_evidence": [
+        {
+          "ref": "stage4/grounding/reconstruction_brief.json#kf_0b894923ea33c5cc",
+          "quote": "rel:lu_lang×yun_niang.agreement = '暂不决定是"
+        }
+      ],
+      "label_source": "rc15_material",
+      "subset": "dev",
+      "disputed": false,
+      "frozen_at": "2026-10-05T18:00:00+08:00",
+      "notes": "锁内容由该拍真实承载（agent 草案标签）"
+    },
+    {
+      "case_id": "rc15-design-unbound",
+      "batch": "rc15-design-unbound",
+      "target": "design_fragment",
+      "category": "restriction_preservation",
+      "item": "kf_0b894923ea33c5cc",
+      "expected": "矛盾",
+      "evidence_insufficient": false,
+      "high_impact": false,
+      "gold_evidence": [
+        {
+          "ref": "stage4/grounding/reconstruction_brief.json#kf_0b894923ea33c5cc",
+          "quote": "rel:lu_lang×yun_niang.agreement = '暂不决定是"
+        }
+      ],
+      "label_source": "user_adjudicated",
+      "subset": "dev",
+      "disputed": false,
+      "frozen_at": "2026-10-05T18:00:00+08:00",
+      "notes": "「赏花」模式：锁绑到无关内容应否决（引用合法不是语义承载）"
+    }
+  ]
+}

@@ -10,9 +10,10 @@
 【unver 纪律】
 fake transport 绿例不得记成语义核验已通过：报告恒带 `semantic_gate_status:
 'unver'`，`gate_ready` 只汇总机械阻断条件，本 harness 不启用任何生产闸。
-金标拟用仓外 Golden_Set_v3.0 yaml 属**待用户确认**项——从该来源导入的案件必须
-带 `label_source='golden_yaml_pending_confirmation'`，评分时作为阻断条件报出，
-确认前不参与任何通过判定。
+金标来源已确认（2026-10-05 用户裁决）：仓外 Golden_Set_v3.0 yaml 映射案件带
+`label_source='golden_yaml'`（装载器以 sha256 钉住 yaml 身份）；rc15 真实材料的
+草案标签带 `label_source='rc15_material'`；两者冻结时点登记于冻结文件，分歧由
+用户裁决、agent 不改标签。
 
 【三个核验目标（对象与边界见 docs/schema/repair_convergence.md §A/B）】
 · stage2_fact：章观察候选事实的高影响选择＋源文对照核验（主体／行为命题／
@@ -64,9 +65,10 @@ STAGE2_CATEGORIES = ('relation', 'betrayal', 'death_survival', 'identity',
 PRESERVE_CATEGORIES = ('affirmative_basis', 'negative_basis')
 DESIGN_CATEGORIES = ('fact_preservation', 'restriction_preservation')
 
-#: 标签来源闭集。`golden_yaml_pending_confirmation` 是拟用金标（待用户确认），
-#: 评分时作阻断条件；`user_adjudicated` 是已裁决正反例（硬规则对象）。
-LABEL_SOURCES = ('user_adjudicated', 'golden_yaml_pending_confirmation',
+#: 标签来源闭集。`user_adjudicated` 是已裁决正反例（硬规则对象）；`golden_yaml`
+#: 是仓外 Golden_Set yaml 映射（2026-10-05 用户确认，yaml 以 sha256 钉住）；
+#: `rc15_material` 是 rc15 真实材料的 agent 草案标签（冻结时点登记，分歧由用户裁决）。
+LABEL_SOURCES = ('user_adjudicated', 'golden_yaml', 'rc15_material',
                  'synthetic_fixture')
 
 #: 评分结局闭集（报告分项指标的字段面）。
@@ -100,6 +102,8 @@ class CalibrationCase(Strict):
     不能用待测模型自己的回答当标准。"""
 
     case_id: str = Field(min_length=1)
+    #: 请求批次（生产形态：一章／一案一次集中核验）；空＝独占一请求（按 case_id）。
+    batch: str = Field(default='', min_length=0)
     target: str = Field(pattern=r'^(' + '|'.join(TARGETS) + r')$')
     category: str = Field(min_length=1)
     #: 请求闭集内的条目句柄（stage2：候选事实句柄；preserve：义务 id；
@@ -560,8 +564,6 @@ def score_labels(labels: FrozenLabels,
     incomplete = sorted(r['case_id'] for r in rows
                         if r['outcome'] in ('missing', 'wire_error'))
     disputed = sorted(c.case_id for c in labels.cases if c.disputed)
-    pending_labels = sorted(c.case_id for c in labels.cases
-                            if c.label_source == 'golden_yaml_pending_confirmation')
     holdout_denominator = by_subset['holdout']['denominator']
 
     blockers: list[str] = []
@@ -573,8 +575,6 @@ def score_labels(labels: FrozenLabels,
         blockers.append(f'存在缺失或解析失败案件：{incomplete}')
     if disputed:
         blockers.append(f'标签分歧未裁决：{disputed}')
-    if pending_labels:
-        blockers.append(f'金标来源待用户确认：{pending_labels}')
     if not holdout_denominator:
         blockers.append('留出集未建立（未参与提示词调试的样本分母为 0）')
     return {'overall': _aggregate(rows), 'by_target': by_target,
@@ -595,8 +595,10 @@ def score_labels(labels: FrozenLabels,
 class ScriptedTransport:
     """按标定案件标记分发的脚本化 transport（只用于 fake 跑通；不接付费面）。
 
-    `responses`：case_id → JSON 可序列化回答对象；未脚本化的案件拒绝静默通过。
+    `responses`：批次/案件 id → JSON 可序列化回答对象；未脚本化的拒绝静默通过。
     """
+
+    TRANSPORT_KIND = 'scripted_fake'
 
     def __init__(self, responses: Mapping[str, Any]):
         self.responses = dict(responses)
@@ -620,38 +622,51 @@ class ScriptedTransport:
 
 
 def run_calibration(labels: FrozenLabels, materials: Mapping[str, Material],
-                    transport: ScriptedTransport, *, model: str = 'fake',
+                    transport, *, model: str = 'fake',
                     token_counter: Callable[[str], int] | None = None,
                     ) -> dict:
-    """逐案组装请求 → fake transport → 解析 → 评分。零付费、零外发。"""
+    """按批次组装请求 → transport → 解析 → 评分。批次＝一次集中核验（生产形态：
+    一章／一案／一片段一调）；未指定 batch 的案件独占一请求。fake 与付费的纪律
+    差异由 transport 自报（TRANSPORT_KIND）。"""
+    batches: dict[str, list[CalibrationCase]] = {}
+    for case in labels.cases:
+        batches.setdefault(case.batch or case.case_id, []).append(case)
     wires: dict[str, VerdictWire | None] = {}
     wire_errors: set[str] = set()
     requests: list[dict] = []
-    for case in labels.cases:
-        material = materials.get(case.case_id)
+    for batch, batch_cases in batches.items():
+        first = batch_cases[0]
+        targets = {case.target for case in batch_cases}
+        if len(targets) != 1:
+            raise ValueError(f'批次 {batch} 混合了不同目标：{sorted(targets)}')
+        material = materials.get(batch)
         if material is None or not isinstance(
-                material, _MATERIAL_BY_TARGET[case.target]):
-            wires[case.case_id] = None
+                material, _MATERIAL_BY_TARGET[first.target]):
+            for case in batch_cases:
+                wires[case.case_id] = None
             reason = '标定材料缺失' if material is None else '材料形状与目标不符'
-            requests.append({'case_id': case.case_id, 'prompt_chars': 0,
+            requests.append({'batch': batch, 'prompt_chars': 0,
                              'parse_errors': [reason]})
             continue
         request = build_verification_request(
-            case.case_id, case.target, material, model=model)
+            batch, first.target, material, model=model)
         response = transport.send(request)
         wire, errors = parse_verdict_payload(
             response.content, closed_items=material.closed_items(),
             texts=material.texts(),
-            require_selection=case.target == 'stage2_fact')
-        wires[case.case_id] = wire
-        if wire is None:
-            wire_errors.add(case.case_id)
-        entry = {'case_id': case.case_id, 'prompt_chars': len(request.user),
+            require_selection=first.target == 'stage2_fact')
+        entry = {'batch': batch, 'prompt_chars': len(request.user),
                  'parse_errors': errors}
         if token_counter is not None:
             entry['prompt_tokens'] = token_counter(request.user)
         requests.append(entry)
+        for case in batch_cases:
+            wires[case.case_id] = wire
+            if wire is None:
+                wire_errors.add(case.case_id)
     report = score_labels(labels, wires, wire_errors=frozenset(wire_errors))
+    transport_kind = getattr(transport, 'TRANSPORT_KIND', 'scripted_fake')
+    paid = transport_kind == 'paid'
     report['identity'] = {
         'protocol': CSF3_VERIFY_PROTOCOL,
         'rules_revision': CSF3_RULES_REVISION,
@@ -659,49 +674,202 @@ def run_calibration(labels: FrozenLabels, materials: Mapping[str, Material],
             (_STAGE2_RULES + _PRESERVE_RULES + _DESIGN_RULES).encode('utf-8')
         ).hexdigest(),
         'model': model,
-        'transport': 'scripted_fake',
-        'paid': False,
+        'transport': transport_kind,
+        'paid': paid,
     }
     report['requests'] = requests
-    report['cost_note'] = ('fake transport 零付费；token 计数未注入时只报字符数，'
-                           '真实调用与净变化对照须授权后实测（未测不作零）。')
-    report['gate_blockers'] = list(report['gate_blockers'])
-    report['gate_blockers'].append('非真实付费执行（scripted fake）')
-    report['gate_ready'] = False
+    report['cost_note'] = (
+        '真实调用的 token 与费用以 ledger 为权威（未知不作零）；reasoning 不重复计入。'
+        if paid else
+        'fake transport 零付费；token 计数未注入时只报字符数，'
+        '真实调用与净变化对照须授权后实测（未测不作零）。')
+    if not paid:
+        report['gate_blockers'] = list(report['gate_blockers'])
+        report['gate_blockers'].append('非真实付费执行（scripted fake）')
+        report['gate_ready'] = False
     return report
 
 
-# ───────────────────────── CLI（只支持 fake 模式） ─────────────────────────
+class PaidTransport:
+    """真实付费 transport（CS-F3 标定授权专用，2026-10-05 批准）。
+
+    不接 PaidRequestSession——它按 owner 关闭式映射 13 节点，标定调用不借
+    节点身份。纪律：构造须显式 yes 与 allow_source_export（付费与正文外发分别
+    授权，I-43）；调用上限 ceiling 是硬闸，耗尽即停不追加；每次上线（含失败）
+    都经 CostLedger.record 记账（purpose='csf3_calibration'，账为成本权威，
+    未知不作零）；请求指纹绑定完整请求形态。
+    """
+
+    TRANSPORT_KIND = 'paid'
+
+    def __init__(self, *, ceiling: int, ledger, sid: str,
+                 yes: bool = False, allow_source_export: bool = False):
+        if not yes or not allow_source_export:
+            raise ValueError('真实标定调用须显式付费授权（--yes）与正文外发授权'
+                             '（--allow-egress）；二者是独立权限')
+        if ceiling < 1:
+            raise ValueError('调用上限必须 ≥1')
+        from novel import prov
+        from novel.config import load_config
+        from novel.llm.transport import DeepSeekTransport
+        cfg = load_config()
+        if not cfg.has_key:
+            raise ValueError('缺少 DEEPSEEK_API_KEY（安全配置边界）；不发请求')
+        self.model = cfg.model
+        self.ceiling = ceiling
+        self.calls = 0
+        self._ledger = ledger
+        self._sid = sid
+        self._code = prov.code_version()
+        self._transport = DeepSeekTransport(cfg)
+
+    def send(self, request: ChatRequest) -> ChatResponse:
+        if self.calls >= self.ceiling:
+            raise ValueError(f'标定调用上限 {self.ceiling} 已耗尽；不追加额度')
+        self.calls += 1
+        fingerprint = hashlib.sha256(json.dumps(
+            request.cache_payload(), ensure_ascii=False, sort_keys=True,
+            separators=(',', ':')).encode('utf-8')).hexdigest()
+        try:
+            response = self._transport.send(request)
+        except Exception as exc:  # 传输失败也占额度并如实记账，不吞成通过
+            self._record(request, None, fingerprint, outcome='error',
+                         error=f'{type(exc).__name__}: {exc}'[:400])
+            raise
+        self._record(request, response, fingerprint, outcome='ok')
+        return response
+
+    def _record(self, request, response, fingerprint: str, *, outcome: str,
+                error: str | None = None) -> None:
+        usage = (response.usage if response is not None else None) or {}
+        details = usage.get('completion_tokens_details') or {}
+        self._ledger.record(
+            node=None, sid=self._sid,
+            model=(response.model if response is not None else request.model),
+            code=self._code, cached=False, cache_policy='none',
+            prompt_tokens=usage.get('prompt_tokens'),
+            completion_tokens=usage.get('completion_tokens'),
+            reasoning_tokens=details.get('reasoning_tokens'),
+            purpose='csf3_calibration', outcome=outcome, error=error,
+            reasoning_effort=request.reasoning_effort, thinking=request.thinking,
+            json_mode=request.json_mode, max_tokens=request.max_tokens,
+            finish_reason=(response.finish_reason if response is not None else None),
+            request_fingerprint=fingerprint)
+
+
+# ───────────────────────── CLI ─────────────────────────
+
+def _adopt_run_set(cases, materials):
+    """跨模块类身份归一（`-m` 执行时装载器导入的是同名第二模块）：经 dict
+    往返落到运行模块的模型上，材料按类名分派。"""
+    adopted = [CalibrationCase.model_validate(case.model_dump(mode='json'))
+               for case in cases]
+    by_name = {cls.__name__: cls for cls in
+               (Stage2FactMaterial, ObligationMaterial, DesignMaterial)}
+    fixed: dict[str, Material] = {}
+    for batch, material in materials.items():
+        cls = by_name.get(type(material).__name__)
+        if cls is None:
+            raise ValueError(f'未知材料形状：{type(material).__name__}')
+        fixed[batch] = cls.model_validate(material.model_dump(mode='json'))
+    return adopted, fixed
+
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog='python -m tests.semantic_calibration',
-        description='CS-F3 离线标定 harness（免费前置：请求组装＋评分＋fake transport）。'
-                    '真实付费执行须独立授权与正式接线，本入口不提供。')
-    parser.add_argument('--labels', required=True,
-                        help='冻结标签 JSON（FrozenLabels 形状）')
-    parser.add_argument('--materials', required=True,
-                        help='案件材料 JSON：{case_id: 材料对象}（按 target 分形状）')
-    parser.add_argument('--responses', required=True,
-                        help='脚本化回答 JSON：{case_id: 回答对象}（fake）')
-    parser.add_argument('--out', required=True, help='报告输出 JSON 路径')
+        description='CS-F3 离线标定 harness：请求组装＋评分；默认脚本化 fake，'
+                    '真实付费执行须 --paid --yes --allow-egress（2026-10-05 授权，'
+                    '上限 90 次）。')
+    parser.add_argument('--labels', help='冻结标签 JSON（FrozenLabels 形状）')
+    parser.add_argument('--materials', help='材料 JSON：{批次: 材料对象}（或用装载器）')
+    parser.add_argument('--responses', help='脚本化回答 JSON：{批次: 回答}（fake 模式）')
+    parser.add_argument('--out', help='报告输出 JSON 路径')
+    parser.add_argument('--golden-yaml', help='仓外 Golden_Set yaml 路径（装载器）')
+    parser.add_argument('--source-txt', help='对应源 txt 路径（sha 核对）')
+    parser.add_argument('--rc15-root', help='rc15 冻结根路径（只读真实材料）')
+    parser.add_argument('--write-labels', help='从装载器生成冻结标签 JSON（拒绝覆盖）')
+    parser.add_argument('--paid', action='store_true', help='真实付费执行')
+    parser.add_argument('--yes', action='store_true', help='付费授权（显式）')
+    parser.add_argument('--allow-egress', action='store_true', help='正文外发授权（显式）')
+    parser.add_argument('--ceiling', type=int, default=90, help='付费调用上限（默认 90）')
+    parser.add_argument('--ledger-dir', help='付费模式的账目录（默认输出根旁 csf3_paid/）')
     args = parser.parse_args(argv)
 
+    loader_inputs = [bool(args.golden_yaml), bool(args.rc15_root)]
+    if args.write_labels:
+        if not all(loader_inputs) or not args.source_txt:
+            parser.error('--write-labels 需要 --golden-yaml --source-txt --rc15-root')
+        from tests.csf3_golden import build_run_set
+        cases, materials = _adopt_run_set(
+            *reversed(build_run_set(Path(args.golden_yaml),
+                                    Path(args.source_txt),
+                                    Path(args.rc15_root))))
+        labels = FrozenLabels(book='夫君的报恩（开发集＋rc15 真实案件）',
+                              source_note='Golden_Set_v3.0_夫君的报恩.yaml＋'
+                                          'outputs/cs_golden_20261004_rc15',
+                              cases=tuple(cases))
+        target = Path(args.write_labels)
+        if target.exists():
+            parser.error(f'冻结文件已存在，不覆盖：{target}')
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(labels.model_dump(mode='json'),
+                                     ensure_ascii=False, indent=2),
+                          encoding='utf-8')
+        batches = sorted({c.batch or c.case_id for c in labels.cases})
+        print(f'冻结标签 {len(labels.cases)} 案／{len(batches)} 批 → {target}')
+        return 0
+
+    if not args.labels or not args.out:
+        parser.error('运行需要 --labels 与 --out')
     labels = FrozenLabels.model_validate(
         json.loads(Path(args.labels).read_text(encoding='utf-8')))
-    raw_materials = json.loads(Path(args.materials).read_text(encoding='utf-8'))
     materials: dict[str, Material] = {}
-    for case in labels.cases:
-        if case.case_id in raw_materials:
-            materials[case.case_id] = _MATERIAL_BY_TARGET[case.target].model_validate(
-                raw_materials[case.case_id])
-    responses = json.loads(Path(args.responses).read_text(encoding='utf-8'))
-    report = run_calibration(labels, materials, ScriptedTransport(responses))
+    if args.materials:
+        raw = json.loads(Path(args.materials).read_text(encoding='utf-8'))
+        for case in labels.cases:
+            batch = case.batch or case.case_id
+            if batch in raw:
+                materials[batch] = _MATERIAL_BY_TARGET[case.target].model_validate(
+                    raw[batch])
+    if any(loader_inputs):
+        if not all(loader_inputs) or not args.source_txt:
+            parser.error('装载器需要 --golden-yaml --source-txt --rc15-root 同时给出')
+        from tests.csf3_golden import build_run_set
+        _cases, derived = _adopt_run_set(
+            *reversed(build_run_set(Path(args.golden_yaml),
+                                    Path(args.source_txt),
+                                    Path(args.rc15_root))))
+        for batch in {c.batch or c.case_id for c in labels.cases}:
+            if batch in derived:
+                materials[batch] = derived[batch]
+
+    if args.paid:
+        out_path = Path(args.out)
+        ledger_dir = Path(args.ledger_dir) if args.ledger_dir else (
+            out_path.parent / 'csf3_paid')
+        ledger_dir.mkdir(parents=True, exist_ok=True)
+        from novel.llm.ledger import CostLedger
+        ledger = CostLedger(path=ledger_dir / 'ledger.jsonl')
+        transport = PaidTransport(ceiling=args.ceiling, ledger=ledger,
+                                  sid='csf3_calibration', yes=args.yes,
+                                  allow_source_export=args.allow_egress)
+        model = transport.model
+    else:
+        if not args.responses:
+            parser.error('fake 模式需要 --responses（真实付费用 --paid）')
+        transport = ScriptedTransport(
+            json.loads(Path(args.responses).read_text(encoding='utf-8')))
+        model = 'fake'
+    report = run_calibration(labels, materials, transport, model=model)
     out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(report, ensure_ascii=False, indent=2),
                    encoding='utf-8')
     blockers = report['gate_blockers']
-    print(f'标定完成：{report["overall"]["denominator"]} 案；'
+    paid_note = (f'；付费调用 {getattr(transport, "calls", "?")}/{args.ceiling}'
+                 if args.paid else '')
+    print(f'标定完成：{report["overall"]["denominator"]} 案{paid_note}；'
           f"gate_ready={report['gate_ready']}（阻断 {len(blockers)} 项）；报告 {out}")
     for blocker in blockers:
         print(f'  - {blocker}')
