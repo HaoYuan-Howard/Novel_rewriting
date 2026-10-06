@@ -22,6 +22,8 @@ Guard M1–M6（写前机械）、章级机械验（body_checks）、Hook 机械
 """
 from __future__ import annotations
 
+from typing import Final, Literal, Mapping
+
 from contracts.rules import REGISTRY, Rule
 
 # ─── Stage2：源语义（str06.stage2.book／chapters／names／associate／compile）──
@@ -226,3 +228,135 @@ _unver('naming_quality_unver', 'stage7',
        '新名的阅读质量未经语义评审，保持未评披露', 'R-10.6', disclosable_unver=True)
 _metric('book_length_deviation', 'stage7',
         '全书相对书级目标的偏差读数（±10% 无条件报告）', 'R-10.7')
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 规则码修复路由（CS-H H2，RC-57～59）：窄返修通道的逐码清点
+#
+# 每个**能进入付费节点接受循环**的规则码必须在本表登记恰好一种修复路由，否则
+# `novel/llm/paid_requests.py::ask_json` 即停并报规则码（RC-59：无法定位即停，
+# 不进整份重生）。四态定义：
+#  · ``locate``      —— 判据在判定处给出可编辑 wire 路径，条目返修只发失败条目；
+#  · ``optional``    —— 责任位置须由模型决定（必保义务漏标、新增义务、需选释放
+#                      位置一类），给出候选拍闭集，回答的路径必须落在闭集内；
+#  · ``whole_answer``—— 登记在**整份出口闭集**内：JSON 回答无法解码或整体形状
+#                      失败、协议字面量不符；文本节点另只收篇幅带/空回答/包装；
+#  · ``stop``        —— 该码没有本节点的编辑面（确定性编译/Guard 面的自洽性违例、
+#                      上游归属问题），按所在面的正式路由回派或停机报码，**不得**
+#                      进入整份重生（RC-59 明禁编译缺陷进整份重写）。
+#
+# Δ 与规格「三选一」的差异：compile/guard 的 M1–M8 与编译依赖码落在确定性免费
+# 节点（`str06.stage4.compile`）的复跑面上，没有 Design wire 编辑位置——按 RC-59
+# 末句与 I-34 登记第四态 ``stop``（停机报码或既有回派面），不把它们塞进整份闭集
+# 冒充可修复。裁定全文见 `docs/DECISIONS.md` CS-H H2 行。
+#
+# 一一对应（防漂移）：本表的键集合＝五个判据模块（`stage4/design.py`、
+# `grounding.py`、`compile.py`、`guard.py`、`hook_validation.py`，外加同块的
+# `hook.py`／`preflight.py`）与 `paid_requests.py` 闭集合成码（`answer_shape`／
+# `patch_shape`）在源码里出现的码字面量集合。`tests/test_str06_patch_routes.py`
+# 逐码核对：判据加了码而本表没有（或反过来）当场红。
+PatchRoute = Literal['locate', 'optional', 'whole_answer', 'stop']
+
+#: 规则码 → 修复路由。顺序即分类块，不为 sorted 牺牲可读性。
+PATCH_ROUTES: Final[Mapping[str, PatchRoute]] = {
+    # ── 整份出口闭集（RC-59）：回答/形状/协议字面量 ──────────────────────────
+    'answer_shape': 'whole_answer',              # JSON 回答无法解码或顶层形状失败（D5 救回也未过）
+    'patch_shape': 'whole_answer',               # patch 轮回答不是 {"patches":[…]}／范围外路径
+    'design_protocol_literal': 'whole_answer',   # wire protocol_version 字面量不符（I-13）
+    'hook_protocol_literal': 'whole_answer',     # hook wire 协议字面量不符
+    'design_wire_shape': 'whole_answer',         # v8 wire 整体 pydantic 形状失败
+    'hook_ref_shape': 'whole_answer',            # hook wire 位置引用形状失败
+    'hook_wire_key_whitelist': 'whole_answer',   # hook wire 顶层未知字段（协议外键）
+    'book_design_construct': 'whole_answer',     # canonical BodyDesign 组装失败（形状面）
+    'hook_construct': 'whole_answer',            # canonical HookDesign 组装失败（形状面）
+
+    # ── Design wire 定位面（判据在判定处带 v8 wire 路径） ─────────────────────
+    'design_wire_expand': 'locate',
+    'design_expression_ref': 'locate',
+    'design_unknown_char': 'locate',
+    'design_unregistered_surface': 'locate',
+    'design_confirm_unestablished': 'locate',
+    'design_read_anchor': 'locate',
+    'design_read_unestablished': 'locate',
+    'design_read_unknown': 'locate',
+    'design_pov_closed_set': 'locate',
+    'design_narration_focalizer': 'locate',
+    'design_expression_decision': 'locate',
+    'design_chapter_slice': 'locate',
+    'design_scene_weights': 'locate',
+    'design_thread': 'locate',
+    'design_knowledge_lock': 'locate',
+    # `design_kp_key_closed` 有两个发射面：`design.py` 的 delta 行（locate，
+    # 走 delta_locate）与 `preflight.py` 的 IR 输入键扫描（compile 面，跨拍
+    # 汇总无逐键 wire 行坐标）。同一码两面的路由按**能定位的那一面**登记——
+    # delta 行面是生产链主路径（v8 wire 恒传入 brief）；编译面由 compile 的
+    # 停止规则收口。详见 tests/test_str06_patch_routes.py 的双面说明。
+    'design_kp_key_closed': 'locate',
+    'design_kp_mode_authority': 'locate',
+    'design_kf_state_key': 'locate',
+    'wire_key_whitelist': 'locate',
+    'design_chapter_count': 'locate',
+    'fact_lock_missing': 'locate',
+    'fact_lock_ambiguous': 'locate',
+    'fact_lock_unrealized': 'locate',
+    'fact_lock_outside_obligation': 'locate',
+    'fact_lock_unregistered': 'locate',
+    'fact_lock_duplicate': 'locate',
+    'fact_lock_unanswered': 'locate',
+    'fact_lock_modality': 'locate',
+    'fact_lock_value': 'locate',
+    'positive_material_leak': 'locate',
+    'internal_id_leak': 'locate',
+    'material_name_leak': 'stop',             # 材料归因回派（route_owner_issue）
+
+    # ── 可选目标闭集（RC-58：责任位置须由模型决定） ───────────────────────────
+    'design_carrier_missing': 'optional',    # 必保义务漏标 real：候选拍闭集里选承载位
+    'series_collapsed': 'optional',          # series 成员接受拍互斥：闭集里改选承载位
+
+    # ── HookDesign（CS-F1 起错误在判定处带 wire 路径，同一定位器） ────────────
+    'hook_concealed_char': 'locate',
+    'hook_pov_char': 'locate',
+    'hook_material_ref': 'locate',
+    'hook_withheld_shape': 'locate',
+    'hook_withheld_ref': 'locate',
+    'hook_hidden_presentation': 'locate',
+    'hook_presentation_leak': 'locate',
+    'hook_forbidden_address': 'locate',
+    'hook_forbidden_conflict': 'locate',
+    'hook_forbidden_leak': 'locate',
+    'hook_opening_address': 'locate',
+    'hook_opening_ref': 'locate',
+    'hook_opening_unestablished': 'locate',
+    'hook_opening_timing': 'locate',
+    'hook_opening_horizon': 'locate',
+    'hook_opening_forbidden': 'locate',
+    'hook_opening_material_delta': 'locate',
+    'hook_release_face': 'locate',
+    'hook_release_hidden': 'locate',
+
+    # ── 写前 Guard（M1–M8；判据码＝注册表 guard_m{n}_* 规则 id） ─────────────
+    'guard_m1_obligation_coverage': 'stop',
+    'guard_m2_early_reveal': 'stop',
+    'guard_m3_early_effect': 'stop',
+    'guard_m4_carrier_ref': 'stop',
+    'guard_m5_surface_release': 'stop',
+    'guard_m6_cast_legality': 'stop',
+    'guard_m7_read_projection': 'stop',
+    'guard_m8_thread_lifecycle': 'stop',
+    'guard_m8_thread_projection': 'stop',
+
+    # ── 确定性编译面（str06.stage4.compile 重跑/回派面，无 Design 编辑位置） ──
+    'epistemic_lock_order': 'stop',          # compile 节点按 a5 回派 body_design
+    'compile_binding_denominator': 'stop',
+    'compile_must_unbound': 'stop',          # must_keep_unbound：回派 design/preserve
+    'must_keep_unbound': 'stop',             # 回派 issue 码（OwnerIssueV1.code）
+    'compile_dependency_cycle': 'stop',
+    'compile_dependency_dangling': 'stop',
+    'compile_dependency_order': 'stop',
+    'compile_support_early': 'stop',
+    'compile_prerequisite_unbound': 'stop',
+
+    # ── bind 派生面（derive_semantic_binding 的自洽性违例；compile 侧） ──────
+    'design_real_closed': 'stop',
+    'design_real_anchor': 'stop',
+}

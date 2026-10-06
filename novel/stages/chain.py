@@ -68,7 +68,8 @@ from contracts.schema.workflow import (
 )
 from novel.config import Config, load_config
 from novel.llm.paid_requests import (
-    ExecutionError, PaidRequestSession, PurchaseRequired, AdoptionRef, digest,
+    BaselineAttempt, ExecutionError, PaidRequestSession, PurchaseRequired, AdoptionRef,
+    NarrowPatchRequest, PatchBaseline, digest,
     ask_json, ask_text_once, init_or_resume_candidate_workflow, purchased_baseline,
     semantic_owner_unit,
     UpstreamOwned, ValidationStop,
@@ -82,7 +83,7 @@ from novel.stages.common import (
     NAMES_RULES, PRESERVE_RULES, DESIGN_RULES, design_rules, expand_surface_releases,
     HOOK_DESIGN_RULES, HOOK_WRITER_SYSTEM, NAMING_RULES, SYS,
     BODY_WRITER_SYSTEM, ChapterIdentities, chapter_identities, pack_prompt,
-    packet_metrics, project_chapter_packet, render_chapter_packet,
+    material_identities, packet_metrics, project_chapter_packet, render_chapter_packet,
     validate_hook_materials, validate_writer_materials,
     hook_material_issues, writer_material_issues, hook_name_projections,
 )
@@ -112,8 +113,10 @@ from contracts.schema.observation import STAGE2_NAMES_PROTOCOL
 from contracts.schema.orchestration import LegacyLlmProfile
 from novel.stages.stage4 import (
     inspect_body_materials, inspect_design_candidate, locate_design_patches,
-    plan_material_repairs,
+    plan_material_repairs, hook_combination_errors,
 )
+from novel.stages.stage4.hook import hook_patch_legal_values, hook_patch_slice
+from novel.stages.stage4.slim import design_patch_legal_values, design_patch_slice
 from novel.core.validation import ValidationMessage, validation_identity
 from novel.stages.stage5 import (
     AnsweredText, HOOK_VALIDATOR_VERSION, MAX_REWRITES, MECHANICAL_CHECKS,
@@ -177,6 +180,9 @@ class ChainContext:
     """
 
     repository: Any
+    #: JSON 节点回调 ``(owner, prompt, validate[, patch, review_targets, baseline, narrow])``。
+    #: `review_targets`／`baseline`／`narrow`（CS-H H1b/H2）只对实现了窄返修协议的
+    #: owner 有意义；未实现的边界忽略它们（普通购买路径）。
     ask: Callable[[str, str, Callable], tuple[Any, Any]]
     #: 文本节点回调 `(owner, prompt[, validate])`：`validate` 是该节点的机械校验（stage 纯函数），
     #: 付费边界据此如实记录接受结果（RC-54）；缺省＝只判空回答。
@@ -918,21 +924,49 @@ def run_body_design(ctx: ChainContext) -> dict:
     obligation_index = design_obligation_index(checkpoint, brief)
     constraints = OutputConstraints(target_chapter_count=len(ctx.chapters),
                                     total_length_budget=ctx.budget)
+    # wire 协议规则（schema＋指令）与合法取值闭集：整份请求与窄返修请求共用
+    # 同一把尺——窄请求只裁掉整份输入材料，不另造一套协议（I-11）。
+    protocol_rules = design_rules(
+        known_char_ids=set(chars.characters),
+        knowledge_refs={ref: change.holder == 'reader' and change.mode == 'known'
+                        for ref, (_, change) in knowledge_change_index(obligation_index).items()},
+        # 禁区（unanswered）不承载状态，不进 lock 闭集。
+        fact_lock_ids=[f.kf_id for f in brief.fact_locks
+                       if f.kind != 'unanswered'],
+        registered_surfaces=expand_surface_releases(
+            {cid: {s.surface for s in c.surfaces} for cid, c in chars.characters.items()},
+            chars.name_structure))
+    legal_values = json.dumps(design_patch_legal_values(
+        known_char_ids=set(chars.characters), obligations=obligation_index,
+        knowledge_refs={ref: change.holder == 'reader' and change.mode == 'known'
+                        for ref, (_, change) in knowledge_change_index(obligation_index).items()},
+        fact_lock_ids=[f.kf_id for f in brief.fact_locks if f.kind != 'unanswered'],
+        registered_surfaces=expand_surface_releases(
+            {cid: {s.surface for s in c.surfaces} for cid, c in chars.characters.items()},
+            chars.name_structure)), ensure_ascii=False, separators=(',', ':'))
     design_prompt = revision_prompt_for_owner(
         repository, 'design',
-        pack_prompt(design_rules(known_char_ids=set(chars.characters),
-                                 knowledge_refs={ref: change.holder == 'reader' and change.mode == 'known'
-                                                 for ref, (_, change) in knowledge_change_index(obligation_index).items()},
-                                 # 禁区（unanswered）不承载状态，不进 lock 闭集。
-                                 fact_lock_ids=[f.kf_id for f in brief.fact_locks
-                                                if f.kind != 'unanswered'],
-                                 registered_surfaces=expand_surface_releases(
-                                     {cid: {s.surface for s in c.surfaces} for cid, c in chars.characters.items()},
-                                     chars.name_structure)),
+        pack_prompt(protocol_rules,
                     brief=project_design_input(brief, obligation_index),
                     identities=[i.model_dump(mode='json') for i in identities],
                     constraints=constraints.model_dump(mode='json')),
         'stage4/design/body_design.json')
+
+    def narrow_context(base_wire, targets):
+        """窄返修请求组装（CS-H H2，RC-57）：协议规则＋失败条目＋依赖切片＋合法取值。
+
+        依赖切片由 `stage4/slim.py` 从基底 wire 与目标路径确定性投影（目标拍所在
+        场全文、相邻拍一行提要、被引用的义务与锁、到该拍为止的释放前缀、涉及人物的
+        身份投影）——不带整份原请求，也不带前序材料全文。
+        """
+        slice_payload = design_patch_slice(base_wire, brief, obligation_index,
+                                           targets=[t.path for t in targets],
+                                           identities=identities)
+        return NarrowPatchRequest(
+            rules=protocol_rules,
+            dependency=json.dumps(slice_payload, ensure_ascii=False,
+                                  separators=(',', ':')),
+            legal_values=legal_values)
 
     def inspect(w):
         return inspect_design_candidate(
@@ -1023,10 +1057,22 @@ def run_body_design(ctx: ChainContext) -> dict:
                           'baseline_request_sha256': candidate['request_sha256']}}
     if reuse_plan is not None and reuse_plan.action == 'narrow_review':
         review_targets = tuple(t.as_patch_target() for t in reuse_plan.targets)
+        # 带基底起步（CS-H H2，RC-57）：条目返修从该候选的整份 wire 开始——免费
+        # 判定已对它做过完整预检，不再整份新购一轮；基底 attempt 的引用经
+        # `PatchBaseline.attempt` 由付费边界解析进 provenance（成本链分别聚合）。
+        candidate = reuse_plan.candidate or {}
+        baseline = PatchBaseline(
+            wire=candidate['wire'], digest=candidates.wire_sha256(candidate['wire']),
+            summary=f"已购候选第 {candidate.get('ordinal')} 轮（turn {candidate.get('turn_id')}）",
+            attempt=BaselineAttempt(
+                turn_id=candidate['turn_id'], attempt_id=candidate['attempt_id'],
+                response_sha256=candidate['response_sha256'],
+                request_sha256=candidate['request_sha256']))
 
-    ask_kwargs: dict[str, Any] = {'patch': locate_design_patches}
+    ask_kwargs: dict[str, Any] = {'patch': locate_design_patches, 'narrow': narrow_context}
     if review_targets:
         ask_kwargs['review_targets'] = list(review_targets)
+        ask_kwargs['baseline'] = baseline
     try:
         # CS-F1 局部修订（RC-47）：判据已在判定处给每条问题带 wire 路径；可全部定位时
         # 只把最小完整父项发回返修，合并后重跑**完整**候选预检；有任一问题无法定位
@@ -1149,6 +1195,7 @@ def _record_design_candidates(ctx: ChainContext, *, dw, registry_candidate, carr
 def run_hook_design(ctx: ChainContext) -> dict:
     repository = ctx.repository
     body = repository.read_model('stage4/design/body_design.json')
+    binding = repository.read_model('stage4/grounding/semantic_binding.json')
     chars = repository.read_model('stage2/characters/characters.json')
     checkpoint = repository.read_model('runtime/preserve_checkpoint.json')
     blueprint = repository.read_model('stage2/blueprints/chapter_blueprints.json')
@@ -1172,21 +1219,47 @@ def run_hook_design(ctx: ChainContext) -> dict:
     hook_design_prompt = revision_prompt_for_owner(
         repository, 'hook_design', hook_design_prompt, 'stage4/design/presentation_graph.json')
 
+    def hook_combination(w):
+        """候选 Hook 与已发布正文设计的组合检查（CS-H H2：与只读预览同一把尺）。
+
+        复用 `stage4/hook.py::hook_combination_errors`（`review.py::_design_preview`
+        的同一条实现）：内部句柄闭集取 `material_identities` 全集——此前生产面
+        只用 `chars.characters`，预览抓得到的内部 id 泄漏在这里会漏网。
+        """
+        return hook_combination_errors(
+            w, body=body, binding=binding, chars=chars,
+            hook_constraints=ctx.hook_constraints,
+            kp_statements=kp_statements, world_statements=world_statements)
+
     def hook_design_compile(w):
         hook, errors = assemble_hook_design(w, body=body, known_char_ids=set(chars.characters),
                                            name_projection=projection, name_structure=chars.name_structure)
         if hook is not None:
-            context, context_errors = compile_hook_context(
-                publish_graph(body, hook), projection, ctx.hook_constraints,
-                chars.name_structure, kp_statements, world_statements)
-            errors.extend(context_errors)
-            if context is not None:
-                errors.extend(validate_hook_materials(context, internal_ids=chars.characters))
+            errors.extend(hook_combination(hook))
         return (None, errors) if errors else (hook, [])
+
+    def hook_narrow_context(base_wire, targets):
+        """Hook 窄返修请求组装（CS-H H2，RC-57；与 Design 的窄请求同型）。
+
+        协议规则＝Hook wire 规则（不含整份 design 骨架），依赖切片只带失败条目
+        引用的拍与释放前缀，合法取值给位置分量与称谓释放闭集。
+        """
+        return NarrowPatchRequest(
+            rules=HOOK_DESIGN_RULES,
+            dependency=json.dumps(hook_patch_slice(body, base_wire,
+                                                   [t.path for t in targets]),
+                                  ensure_ascii=False, separators=(',', ':')),
+            legal_values=json.dumps(hook_patch_legal_values(
+                body=body, known_char_ids=set(chars.characters),
+                registered_surfaces=expand_surface_releases(
+                    {cid: {s.surface for s in c.surfaces}
+                     for cid, c in chars.characters.items()},
+                    chars.name_structure)), ensure_ascii=False, separators=(',', ':')))
 
     hw, hook_design_ref = ctx.ask('hook_design', hook_design_prompt,
                                   lambda w: hook_design_compile(w)[1],
-                                  patch=locate_design_patches)
+                                  patch=locate_design_patches,
+                                  narrow=hook_narrow_context)
     hook, errors = hook_design_compile(hw)
     if errors:
         raise ValueError(errors)
@@ -2538,9 +2611,12 @@ def execute(args) -> None:
                        baseline=baseline, raw_bytes=json.dumps(data, ensure_ascii=False).encode('utf-8'),
                        preview=preview, reason=selection.reason, kind='resample', sequence=selection.sequence)
 
-    def ask(owner, prompt, validate, patch=None):
+    def ask(owner, prompt, validate, patch=None, review_targets=None,
+            baseline=None, narrow=None):
         path = wire_path(owner)
         if path is not None:
+            # 人工/离线 wire 显式采用优先于免费沿用与窄复核：它经同一 validate
+            # 验收，但不参与候选集合判定（H1b 沿用闭包的同一条优先级）。
             raw, ref = adopt(owner, path, validate, system=SYS, prompt=prompt,
                              json_mode=True, temperature=0.3)
             return raw, ref
@@ -2551,7 +2627,9 @@ def execute(args) -> None:
         request, selection = sample_request(owner, request)
         from novel.stages.common import semantic_revision_rules
         raw, answer = ask_json(session, owner, request, validate, patch=patch,
-                               revision_rules=semantic_revision_rules(owner))
+                               revision_rules=semantic_revision_rules(owner),
+                               review_targets=review_targets, baseline=baseline,
+                               narrow=narrow)
         record_sample(owner, raw, selection, validate)
         return raw, answer
 

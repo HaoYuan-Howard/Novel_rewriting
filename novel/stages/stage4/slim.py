@@ -160,6 +160,25 @@ def project_hook_semantics(body, brief: ReconstructionBrief) -> dict[str, Any]:
             'world_constraints': dict(sorted(used_worlds.items()))}
 
 
+def _project_requirement(ob: str, obligations: Mapping[str, Any]) -> dict[str, Any]:
+    """单条义务的源盲投影（`project_design_input` 与窄返修切片共用一把尺）。
+
+    ``requires`` 翻成 ob 编号、``knowledge_changes`` 换成 obNN.kNN 短引用；
+    撤去审计 hash／机械 core 与 change 身份，满足条件与锁视野不截断。
+    """
+    cores = {r.core_id: key for key, r in obligations.items()}
+    changes = knowledge_change_index(obligations)
+    requirement = obligations[ob]
+    return {
+        **requirement.model_dump(mode='json',
+                                 exclude={'core_id', 'requires_cores', 'knowledge_changes'}),
+        'requires': [cores[ref] for ref in requirement.requires_cores],
+        'knowledge_changes': {
+            ref: change.model_dump(mode='json', exclude={'change_id'})
+            for ref, (owner, change) in changes.items() if owner == ob},
+    }
+
+
 def project_design_input(
     brief: ReconstructionBrief, obligations: Mapping[str, Any],
 ) -> dict[str, Any]:
@@ -177,16 +196,8 @@ def project_design_input(
     projection = brief.model_dump(mode='json', exclude={
         'brief_id', 'preserve_checkpoint_sha256', 'requirements'})
     projection['input_version'] = 'stage4-design-input-v1'
-    changes = knowledge_change_index(obligations)
-    projection['requirements'] = {
-        ob: {
-            **r.model_dump(mode='json', exclude={'core_id', 'requires_cores', 'knowledge_changes'}),
-            'requires': [cores[ref] for ref in r.requires_cores],
-            'knowledge_changes': {
-                ref: change.model_dump(mode='json', exclude={'change_id'})
-                for ref, (owner, change) in changes.items() if owner == ob},
-        } for ob, r in sorted(obligations.items())
-    }
+    projection['requirements'] = {ob: _project_requirement(ob, obligations)
+                                  for ob in sorted(obligations)}
     return projection
 
 
@@ -451,3 +462,214 @@ def design_fact_marks(model: DesignWireV8) -> tuple[FactLockMark, ...]:
                         subjects=tuple(base['subjects'])),
                     op=op, modality=(state.modality or 'actual') if op == 'set' else None))
     return tuple(marks)
+
+
+# ── 窄返修的依赖切片与合法取值（CS-H H2，RC-57 输入行） ──────────────────────
+
+def _beat_of(path: tuple[str | int, ...]) -> tuple[int, int] | None:
+    """wire 路径所在的拍（scene 序, beat 序）；不在拍内返回 None。"""
+    if len(path) >= 4 and path[0] == 'scenes' and isinstance(path[1], int) \
+            and path[2] == 'beats' and isinstance(path[3], int):
+        return (path[1], path[3])
+    return None
+
+
+def _scene_ranges(chapters) -> list[tuple[int, int]]:
+    """章序 → 该章的场景下标区间（[start, end)），由 wire 章切片确定性派生。"""
+    ranges: list[tuple[int, int]] = []
+    cursor = 0
+    for chapter in chapters:
+        count = chapter.get('scenes') if isinstance(chapter, dict) else None
+        if not isinstance(count, int) or count < 1:
+            return []
+        ranges.append((cursor, cursor + count))
+        cursor += count
+    return ranges
+
+
+def design_patch_slice(
+    wire: Any, brief: ReconstructionBrief, obligations: Mapping[str, Any] | None = None,
+    *, targets: Sequence[tuple[str | int, ...]] = (),
+    identities: Sequence[Any] = (),
+) -> dict[str, Any]:
+    """Design 窄返修的依赖切片（CS-H H2，RC-57）：只带失败条目必需的事实与状态。
+
+    · **目标拍所在场全文**：拍返修的上下文（driver／brief／reads／avoid／全部拍）；
+    · **相邻拍一行提要**：阅读序上紧邻目标拍、且不在已含场内的拍（跨场边界的方向感）；
+    · **被引用的义务与锁**：目标拍 real／know／lock 与场内 reads 引用到的 ob、认知
+      变化、kp 命题与 kf 事实锁（源盲投影，不带 anchors／quotes 与前序材料全文）；
+    · **到该拍为止的释放前缀**：initial_surfaces 与阅读序上不晚于目标拍的 release；
+    · **涉及人物的身份投影**：目标拍 who／pov／release／state 主体涉及的人物。
+    切片不是 wire，不能当回答模板（模型只替换 `targets` 列出的路径）；它也不是
+    整份原请求——全书义务清单、身份投影全集与已发布产物全文都不进来。
+    """
+    if not isinstance(wire, dict):
+        raise ValueError('Design 窄返修切片需要 v8 wire 对象')
+    scenes = wire.get('scenes')
+    if not isinstance(scenes, list):
+        raise ValueError('Design 窄返修切片需要 wire 的 scenes 数组')
+    chapters = wire.get('chapters') if isinstance(wire.get('chapters'), list) else []
+
+    wanted_scenes: set[int] = set()
+    top_fields: set[str] = set()
+    want_initial = False
+    target_beats: list[tuple[int, int]] = []
+    for path in targets:
+        beat = _beat_of(tuple(path))
+        if beat is not None:
+            if beat[0] >= len(scenes) or beat[1] >= len(scenes[beat[0]].get('beats') or ()):
+                raise ValueError(f'窄返修目标越界：{path}')
+            target_beats.append(beat)
+            wanted_scenes.add(beat[0])
+            continue
+        if len(path) >= 2 and path[0] == 'scenes' and isinstance(path[1], int):
+            if path[1] >= len(scenes):
+                raise ValueError(f'窄返修目标越界：{path}')
+            wanted_scenes.add(path[1])
+            continue
+        if len(path) >= 2 and path[0] == 'chapters' and isinstance(path[1], int):
+            ranges = _scene_ranges(chapters)
+            if path[1] >= len(ranges):
+                raise ValueError(f'窄返修目标越界：{path}')
+            start, end = ranges[path[1]]
+            wanted_scenes.update(range(start, min(end, len(scenes))))
+            continue
+        if path[:1] == ('initial_state',):
+            want_initial = True
+            continue
+        if path:
+            top_fields.add(str(path[0]))
+
+    beat_rows = [(scene_i, beat_i, beat)
+                 for scene_i, scene in enumerate(scenes)
+                 for beat_i, beat in enumerate(scene.get('beats') or ())]
+    index_of = {(scene_i, beat_i): order
+                for order, (scene_i, beat_i, _beat) in enumerate(beat_rows)}
+
+    # 相邻拍一行提要：阅读序前后各一拍，且所在场没有整场进来。
+    neighbors: list[dict[str, Any]] = []
+    for scene_i, beat_i in target_beats:
+        for order in (index_of[(scene_i, beat_i)] - 1, index_of[(scene_i, beat_i)] + 1):
+            if not 0 <= order < len(beat_rows):
+                continue
+            near_scene, near_beat, near = beat_rows[order]
+            if near_scene in wanted_scenes:
+                continue
+            neighbors.append({
+                'ref': f'scenes[{near_scene}].beats[{near_beat}]',
+                'event': near.get('ev'), 'who': list(near.get('who') or ())})
+
+    # 被引用的义务、认知变化、命题与事实锁（源盲投影）。
+    obligations = obligations or {}
+    referenced_obs: set[str] = set()
+    referenced_refs: set[str] = set()
+    referenced_locks: set[str] = set()
+    referenced_keys: set[str] = set()
+    involved: set[str] = set()
+    for scene_i, beat_i in target_beats:
+        beat = scenes[scene_i]['beats'][beat_i]
+        referenced_obs.update(beat.get('real') or ())
+        for placement in beat.get('know') or ():
+            ref = placement.get('ref') if isinstance(placement, dict) else None
+            if isinstance(ref, str):
+                referenced_refs.add(ref)
+                referenced_obs.add(ref.split('.', 1)[0])
+        for state in beat.get('state') or ():
+            if isinstance(state, dict):
+                if isinstance(state.get('lock'), str):
+                    referenced_locks.add(state['lock'])
+                referenced_keys.add(str(state.get('key')))
+        for read in (scenes[scene_i].get('reads') or ()):
+            if isinstance(read, dict) and isinstance(read.get('key'), str):
+                referenced_keys.add(read['key'])
+    # 目标场整体进来时（场级/章级目标），场读与场拍的事实键同样只取必需的。
+    for scene_i in wanted_scenes:
+        scene = scenes[scene_i]
+        for read in scene.get('reads') or ():
+            if isinstance(read, dict) and isinstance(read.get('key'), str):
+                referenced_keys.add(read['key'])
+        for beat in scene.get('beats') or ():
+            for state in beat.get('state') or ():
+                if isinstance(state, dict) and isinstance(state.get('key'), str):
+                    referenced_keys.add(str(state['key']))
+
+    changes = knowledge_change_index(obligations)
+    propositions = {p.kp_id: p.model_dump(mode='json') for p in brief.propositions}
+    fact_locks = {f.kf_id: f.model_dump(mode='json') for f in brief.fact_locks}
+    world_rules = {c.constraint_id: c.model_dump(mode='json')
+                   for c in brief.book_constraints}
+    requirements = {ob: _project_requirement(ob, obligations)
+                    for ob in sorted(referenced_obs & set(obligations))}
+
+    # 涉及人物的身份投影（目标拍 who／pov／release／state 与 reads 的主体）。
+    for scene_i, beat_i in target_beats:
+        beat = scenes[scene_i]['beats'][beat_i]
+        involved.update(str(who) for who in (beat.get('who') or ()))
+        for release in beat.get('release') or ():
+            if isinstance(release, dict) and isinstance(release.get('char_id'), str):
+                involved.add(release['char_id'])
+        pov = scenes[scene_i].get('pov')
+        if isinstance(pov, str):
+            involved.add(pov)
+    identity_rows = [i.model_dump(mode='json') for i in identities
+                     if getattr(i, 'char_id', None) in involved]
+
+    # 到该拍为止的释放前缀（阅读序，含本拍释放）。
+    release_prefix = [{'ref': 'initial_surfaces', **row}
+                      for row in (wire.get('initial_surfaces') or ())]
+    for scene_i, beat_i, beat in beat_rows:
+        if not any(index_of[(scene_i, beat_i)] <= index_of[t] for t in target_beats):
+            continue
+        for release in beat.get('release') or ():
+            if isinstance(release, dict):
+                release_prefix.append({
+                    'ref': f'scenes[{scene_i}].beats[{beat_i}]', **release})
+
+    slice_payload: dict[str, Any] = {
+        'slice_version': 'stage4-design-patch-slice-v1',
+        'scenes': [scenes[i] for i in sorted(wanted_scenes)],
+        'neighbor_beats': neighbors,
+        'requirements': requirements,
+        'knowledge_changes': {
+            ref: changes[ref][1].model_dump(mode='json', exclude={'change_id'})
+            for ref in sorted(referenced_refs) if ref in changes},
+        'propositions': {key: propositions[key] for key in sorted(referenced_keys)
+                         if key in propositions},
+        'world_constraints': {key: world_rules[key] for key in sorted(referenced_keys)
+                              if key in world_rules},
+        'fact_locks': {key: fact_locks[key] for key in sorted(referenced_locks)
+                       if key in fact_locks},
+        'release_prefix': release_prefix,
+        'identities': identity_rows,
+    }
+    if want_initial:
+        slice_payload['initial_state'] = list(wire.get('initial_state') or ())
+    for field in sorted(top_fields):
+        if field in ('scenes', 'chapters', 'initial_state'):
+            continue
+        if field in wire:
+            slice_payload[field] = wire[field]
+    return slice_payload
+
+
+def design_patch_legal_values(
+    *, known_char_ids: Iterable[str] = (), obligations: Mapping[str, Any] | None = None,
+    knowledge_refs: Mapping[str, bool] | None = None, fact_lock_ids: Iterable[str] = (),
+    registered_surfaces: Mapping[str, set[str]] | None = None,
+) -> dict[str, Any]:
+    """窄返修请求的合法取值（RC-57）：可引用闭集，模型不得给出闭集外的字面。
+
+    与整份设计请求注入的闭集同一把尺（`design_rules` 的 enum 面同源派生），
+    窄请求不带整份输入时这些闭集单独成块，避免模型只能靠记忆猜可用值。
+    """
+    obligations = obligations or {}
+    return {
+        'char_ids': sorted(known_char_ids),
+        'pov_values': sorted(set(known_char_ids) | {'narrator'}),
+        'obligations': sorted(obligations),
+        'knowledge_refs': {ref: required for ref, required
+                           in sorted((knowledge_refs or {}).items())},
+        'fact_lock_ids': sorted(fact_lock_ids),
+        'surfaces': {char_id: sorted(faces)
+                     for char_id, faces in sorted((registered_surfaces or {}).items())},
+    }

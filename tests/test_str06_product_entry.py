@@ -1308,28 +1308,38 @@ def test_obligation_unbound_replans_across_single_node_subprocesses(base,
     assert (book / 'stage4/grounding/semantic_binding.json').is_file()
     assert (book / 'stage4/compiled/execution_plan.json').is_file()
 
-    # ③ 修订提示真实发生：design 的第二轮请求。CS-I输入按ob短名寻址，不再发送派生
-    #    req ID；接受闸的问题定位和源盲边界仍须成立。
+    # ③ 修订提示真实发生：design 的第二轮请求。CS-H H2 起可定位错误走**窄返修**
+    #    （RC-57：协议规则＋失败条目＋依赖切片＋合法取值，不带整份原请求）。
+    #    ob 短名仍在合法取值闭集里（CS-I 输入按 ob 短名寻址，不发送派生 req ID）；
+    #    源盲边界（anchors/quotes/req id）仍须成立。
     from novel.stages.stage4 import obligation_core_id
     revision_payload = _turn_request_payload(base, book, 'str06.stage4.body_design',
                                              ordinal=2)
     messages = revision_payload['messages']
     revision_user = messages[-1]['content']
     assert obligation_core_id('ob01') not in revision_user
-    assert 'stage4-design-input-v1' in revision_user and 'ob01' in revision_user
+    assert 'stage4-design-v8' in revision_user and 'ob01' in revision_user
     if design_fault == 'obligation_unbound':
-        # 必保义务覆盖闸是全局判据，没有可局部定位的 wire 路径 → 整份修订【修订要求】。
+        # 必保义务漏标（design_carrier_missing）登记可选目标（RC-58）：一轮可选目标
+        # 条目返修——模型在给定拍闭集里选承载位，不再整份重写（CS-H H2 判据③）。
         # CS-3：obNN 是义务清单的正式短名（real 标注的闭集词汇，D6）；问题面确为
         # real 承载缺失。
-        assert '【修订要求】' in revision_user
-        requirement_only = revision_user.split('【修订要求】', 1)[1].split('上一版全文', 1)[0]
-        assert 'real' in requirement_only and '必保义务' in requirement_only
+        assert '【条目返修】' in revision_user and '【修订要求】' not in revision_user
+        item_section = revision_user.split('【条目返修】', 1)[1]
+        assert '必保义务' in item_section and '可选目标闭集' in item_section
+        assert 'stage4-design-patch-slice-v1' in item_section, '窄请求带依赖切片'
+        assert 'stage4-design-input-v1' not in item_section, \
+            '窄返修不带整份原请求的输入投影（RC-57）'
+        assert read_owner_issue_file(Str06Repository(book), 'preserve') is None
     else:
         # Design 自有文本的名称冲突在判定处带 wire 路径 → 只把出问题的拍发回条目返修
         # （RC-47）；合并后仍重跑完整预检。反馈保持源盲，没有跨节点回派账。
         assert '【条目返修】' in revision_user and '【修订要求】' not in revision_user
         item_section = revision_user.split('【条目返修】', 1)[1]
         assert '路径 scenes[0].beats[0]' in item_section and '陆大哥' in item_section
+        assert 'stage4-design-patch-slice-v1' in item_section, '窄请求带依赖切片'
+        assert 'stage4-design-input-v1' not in item_section, \
+            '窄返修不带整份原请求的输入投影（RC-57）'
         assert 'b01_01.c1' not in item_section, 'Design反馈保持源盲'
         assert read_owner_issue_file(Str06Repository(book), 'preserve') is None
 

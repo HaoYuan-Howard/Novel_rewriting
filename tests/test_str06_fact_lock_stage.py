@@ -270,7 +270,7 @@ def test_saved_misplaced_lock_is_rejected_then_owner_patch_recovers_free(tmp_pat
         reopened.root, ledger=CostLedger(path=ledger_path(repo.root.parent)),
         node='str06.stage4.body_design'))
 
-    def replay_registered_patch(owner, prompt, current_validate, patch=None):
+    def replay_registered_patch(owner, prompt, current_validate, patch=None, **kwargs):
         # 与 execute 的 replay_patch 同形：核验登记证据后直接交真实 producer，
         # 不经 transport；用当前完整接受判据复验，不用预检结论冒充通过。
         assert owner == 'design'

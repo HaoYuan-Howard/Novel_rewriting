@@ -17,6 +17,7 @@ from novel.stages.stage4 import (
     design_obligation_index, project_brief, inspect_design_candidate,
     publish_graph, compile_execution_plan, compile_hook_context, compile_writer_book_ir,
     run_mechanical_guard, inspect_body_materials, plan_material_repairs,
+    hook_combination_errors,
 )
 from novel.stages.stage5 import context_sha256, validate_chapter_prose, validate_hook_prose, sha256_text
 from novel.stages.stage7 import (
@@ -160,14 +161,14 @@ def _design_preview(repository, candidate, checkpoint, brief, chars, *, budget,
             hook = None
         if hook is not None:
             try:
-                graph = publish_graph(inspection.body, hook)
-                context, hook_errors = compile_hook_context(
-                    graph, chars.name_projection(), hook_constraints, chars.name_structure,
-                    {p.kp_id: p.statement for p in brief.propositions},
-                    {w.constraint_id: w.statement for w in brief.book_constraints})
-                if context is not None:
-                    hook_errors.extend(validate_hook_materials(context, internal_ids=
-                        material_identities(graph, inspection.binding, chars)))
+                # CS-H H2：与生产接受循环（chain.run_hook_design）共用同一把尺的
+                # 组合检查，内部句柄闭集取 material_identities 全集。
+                hook_errors = hook_combination_errors(
+                    hook, body=inspection.body, binding=inspection.binding, chars=chars,
+                    hook_constraints=hook_constraints,
+                    kp_statements={p.kp_id: p.statement for p in brief.propositions},
+                    world_statements={w.constraint_id: w.statement
+                                      for w in brief.book_constraints})
             except ValidationError as exc:
                 hook_errors = [f'已有Hook与候选不闭合：{e}' for e in exc.errors(include_url=False)]
             errors.extend(hook_errors)

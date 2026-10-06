@@ -83,19 +83,22 @@ def json_ask(session, *, model='fake', max_tokens=1000):
     """ChainContext.ask 形状的 JSON 付费闭包：ask_json 接受循环＋显式引用。
 
     ``review_targets``（CS-H H1b）：免费判定要求窄复核的目标，原样转交
-    `ask_json`（与 `execute` 的生产闭包同一通道）。
+    `ask_json`（与 `execute` 的生产闭包同一通道）。``baseline``／``narrow``
+    （CS-H H2）：带基底起步与窄请求组装，同样原样转交。
     """
     from novel.llm.paid_requests import ask_json
     from novel.llm.transport import ChatRequest
     from novel.stages.common import SYS, semantic_revision_rules
 
-    def ask(owner, prompt, validate, patch=None, review_targets=None):
+    def ask(owner, prompt, validate, patch=None, review_targets=None,
+            baseline=None, narrow=None):
         request = ChatRequest(model=model, system=SYS, user=prompt,
                               reasoning_effort='high', thinking=True,
                               json_mode=True, max_tokens=max_tokens)
         return ask_json(session, owner, request, validate, patch=patch,
                         revision_rules=semantic_revision_rules(owner),
-                        review_targets=review_targets)
+                        review_targets=review_targets, baseline=baseline,
+                        narrow=narrow)
     return ask
 
 

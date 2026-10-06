@@ -97,11 +97,14 @@ def _beat_id(index: int) -> str:
 
 
 def _reject_unknown_keys(errors: list[str], obj: dict[str, Any], allowed: frozenset[str],
-                         where: str) -> bool:
+                         where: str, *, code: str = 'wire_key_whitelist',
+                         path: tuple[str | int, ...] = ()) -> bool:
     extra = set(obj) - allowed
     if extra:
-        errors.append(f'{where} 携带未知字段 {sorted(extra)}（wire 键白名单外；'
-                      'ID、复合引用与归一权重由 compiler 生成，不收）')
+        errors.append(design_issue(
+            f'{where} 携带未知字段 {sorted(extra)}（wire 键白名单外；'
+            'ID、复合引用与归一权重由 compiler 生成，不收）',
+            code=code, location=(where,), paths=(path,) if path else ()))
         return False
     return True
 
@@ -150,22 +153,31 @@ def _resolve_threads(data: dict[str, Any], errors: list[str]) -> None:
                 continue
             where = f'第 {index} 场第 {beat_index} 拍 threads'
             threads = beat.get('threads') or []
+            local_path = ('scenes', index - 1, 'beats', beat_index - 1, 'threads')
+
+            def _thread_error(message: str) -> None:
+                """线程判据问题：码＋稳定位置＋可编辑 wire 路径（RC-57 逐码清点）。"""
+                errors.append(design_issue(
+                    message, code='design_thread',
+                    location=('scene', index, 'beat', beat_index),
+                    paths=(local_path,)))
+
             if not isinstance(threads, list):
-                errors.append(f'{where} 必须是数组')
+                _thread_error(f'{where} 必须是数组')
                 continue
             resolved = []
             for item in threads:
                 if not isinstance(item, dict) or not _reject_unknown_keys(
-                        errors, item, _THREAD_KEYS, where):
+                        errors, item, _THREAD_KEYS, where, path=local_path):
                     continue
                 op = item.get('op')
                 if op == 'open':
                     tag = item.get('tag')
                     if not isinstance(tag, str) or not tag.strip():
-                        errors.append(f'{where} 的 open 必须带本地标签 tag')
+                        _thread_error(f'{where} 的 open 必须带本地标签 tag')
                         continue
                     if tag in dispatch:
-                        errors.append(f'{where} 重复开启标签 {tag!r}（线程只能开一次）')
+                        _thread_error(f'{where} 重复开启标签 {tag!r}（线程只能开一次）')
                         continue
                     thread_id = _thread_id()
                     dispatch[tag] = thread_id
@@ -178,14 +190,14 @@ def _resolve_threads(data: dict[str, Any], errors: list[str]) -> None:
                 elif op in ('advance', 'close'):
                     ref = item.get('ref')
                     if not isinstance(ref, str) or ref not in dispatch:
-                        errors.append(
+                        _thread_error(
                             f'{where} 的 {op} 引用了未开启的线程标签：{ref!r}')
                         continue
                     resolved.append({**{k: v for k, v in item.items()
                                         if k != 'ref' and v is not None},
                                      'ref': dispatch[ref]})
                 else:
-                    errors.append(f'{where} 的 op 必须是 open/advance/close，'
+                    _thread_error(f'{where} 的 op 必须是 open/advance/close，'
                                   f'实得 {op!r}')
             beat['threads'] = resolved
 
@@ -199,17 +211,22 @@ def _resolve_reads(data: dict[str, Any], errors: list[str]) -> None:
         if not isinstance(scene, dict):
             continue
         beats = len(scene.get('beats') or ())
-        for read in scene.get('state_reads') or []:
+        for read_k, read in enumerate(scene.get('state_reads') or []):
             if not isinstance(read, dict):
                 continue
+            read_path = ('scenes', index - 1, 'reads', read_k)
             _reject_unknown_keys(errors, read, _READ_KEYS,
-                                 f'第 {index} 场 state_reads')
+                                 f'第 {index} 场 state_reads', path=read_path)
             at = read.get('at')
             if at is None:
                 continue
             if not isinstance(at, int) or isinstance(at, bool) or not 1 <= at <= beats:
-                errors.append(f'第 {index} 场 state_reads 的读取定位非法：{at!r}'
-                              f'（应为 1-{beats} 的拍序；缺省定位到入场）')
+                errors.append(design_issue(
+                    f'第 {index} 场 state_reads 的读取定位非法：{at!r}'
+                    f'（应为 1-{beats} 的拍序；缺省定位到入场）',
+                    code='design_read_anchor',
+                    location=('scene', index, 'read', read_k),
+                    paths=(read_path,)))
                 continue
             read['at'] = _beat_id(at)
 
@@ -226,21 +243,31 @@ def _build_canonical(data: dict[str, Any], errors: list[str]) -> dict[str, Any]:
             beat['beat_id'] = _beat_id(beat_index)
     slices = []
     for chapter_ordinal, chapter in enumerate(data.get('chapters') or [], start=1):
+        chapter_path = ('chapters', chapter_ordinal - 1)
         if not isinstance(chapter, dict) or \
                 not _reject_unknown_keys(errors, chapter, _CHAPTER_KEYS,
-                                         f'第 {chapter_ordinal} 章'):
-            errors.append(f'第 {chapter_ordinal} 章的切片形状非法：'
-                          f'{chapter!r}（应为 {{purpose, scenes, entry?}}）')
+                                         f'第 {chapter_ordinal} 章', path=chapter_path):
+            errors.append(design_issue(
+                f'第 {chapter_ordinal} 章的切片形状非法：'
+                f'{chapter!r}（应为 {{purpose, scenes, entry?}}）',
+                code='design_chapter_slice',
+                location=('chapter', chapter_ordinal),
+                paths=(chapter_path,)))
             return data
         count = chapter.get('scenes')
         if not isinstance(count, int) or isinstance(count, bool) or count < 1:
-            errors.append(f'第 {chapter_ordinal} 章的切片形状非法：'
-                          f'{chapter.get("scenes")!r}（应为正整数场数）')
+            errors.append(design_issue(
+                f'第 {chapter_ordinal} 章的切片形状非法：'
+                f'{chapter.get("scenes")!r}（应为正整数场数）',
+                code='design_chapter_slice',
+                location=('chapter', chapter_ordinal, 'scenes'),
+                paths=(*chapter_path, 'scenes')))
             return data
         entry_raw = chapter.get('entry')
         if isinstance(entry_raw, dict):
             _reject_unknown_keys(errors, entry_raw, _ENTRY_KEYS,
-                                 f'第 {chapter_ordinal} 章 entry')
+                                 f'第 {chapter_ordinal} 章 entry',
+                                 path=(*chapter_path, 'entry'))
         try:
             if entry_raw and entry_raw.get('anchor') is not None:
                 anchor = entry_raw['anchor']
@@ -248,19 +275,31 @@ def _build_canonical(data: dict[str, Any], errors: list[str]) -> dict[str, Any]:
             entry = (ChapterEntry.model_validate(entry_raw)
                      if entry_raw is not None else None)
         except ValidationError as exc:
-            errors.append(f'第 {chapter_ordinal} 章 entry 形状非法：{exc}')
+            errors.append(design_issue(
+                f'第 {chapter_ordinal} 章 entry 形状非法：{exc}',
+                code='design_chapter_slice',
+                location=('chapter', chapter_ordinal, 'entry'),
+                paths=(*chapter_path, 'entry')))
             return data
         if chapter_ordinal == 1:
             # 第 1 章固定为开篇（裁决 7 的唯一例外：不是设计选择，compiler 填）；
             # 带值必须等于开篇形态——不静默改写模型给的错值。
             if entry is not None and entry != ChapterEntry.opening():
-                errors.append('第 1 章的 entry 固定为开篇（new_scene＋do_not_recap'
-                              '＋无 carryover）；可省略由 compiler 填，不得另行声明')
+                errors.append(design_issue(
+                    '第 1 章的 entry 固定为开篇（new_scene＋do_not_recap'
+                    '＋无 carryover）；可省略由 compiler 填，不得另行声明',
+                    code='design_chapter_slice',
+                    location=('chapter', 1, 'entry'),
+                    paths=((*chapter_path, 'entry'),)))
                 return data
             entry = ChapterEntry.opening()
         elif entry is None:
-            errors.append(f'第 {chapter_ordinal} 章缺少 entry（章间承接由 Design '
-                          '声明，编译器不猜；R2.6）')
+            errors.append(design_issue(
+                f'第 {chapter_ordinal} 章缺少 entry（章间承接由 Design '
+                '声明，编译器不猜；R2.6）',
+                code='design_chapter_slice',
+                location=('chapter', chapter_ordinal, 'entry'),
+                paths=(chapter_path,)))
             return data
         slices.append((chapter_ordinal, chapter.get('purpose'), count, entry))
     assigned, cursor = [], 0
@@ -270,8 +309,12 @@ def _build_canonical(data: dict[str, Any], errors: list[str]) -> dict[str, Any]:
         assigned.append({'chapter_ordinal': chapter_ordinal, 'purpose': purpose,
                          'scene_ids': tuple(chunk), 'entry': entry})
     if cursor != len(scene_ids):
-        errors.append(f'章切片总数 {cursor} 与场景总数 {len(scene_ids)} 不一致'
-                      '（每章至少一场，全部场景恰好归一章）')
+        errors.append(design_issue(
+            f'章切片总数 {cursor} 与场景总数 {len(scene_ids)} 不一致'
+            '（每章至少一场，全部场景恰好归一章）',
+            code='design_chapter_slice',
+            location=('chapter_slices', cursor),
+            paths=(('chapters',),)))
         return data
     data['chapters'] = assigned
     weights = data.pop('scene_weights', None)
@@ -279,8 +322,12 @@ def _build_canonical(data: dict[str, Any], errors: list[str]) -> dict[str, Any]:
         if (not isinstance(weights, list) or len(weights) != len(scene_ids)
                 or any(not isinstance(w, (int, float)) or isinstance(w, bool)
                        or not w > 0 for w in weights)):
-            errors.append('scene_weights 必须是与场景等长的正数数组（相对篇幅重点；'
-                          '归一由 compiler 完成）')
+            errors.append(design_issue(
+                'scene_weights 必须是与场景等长的正数数组（相对篇幅重点；'
+                '归一由 compiler 完成）',
+                code='design_scene_weights',
+                location=('scene_weights',),
+                paths=(('scene_weights',),)))
             return data
         total = float(sum(weights))
         data['chapter_weights'] = {sid: w / total
@@ -336,10 +383,13 @@ def _check_pov_closed_set(data: dict[str, Any], known_char_ids: set[str],
         pov = (scene.get('delivery') or {}).get('pov')
         # 非字符串 pov（数组等）由 pydantic 形状面报，这里只管字符串闭集。
         if isinstance(pov, str) and pov != 'narrator'                 and pov not in known_char_ids:
-            errors.append(
+            errors.append(design_issue(
                 f'第 {index} 场 delivery.pov 必须是本书 char_id 或 "narrator"'
                 f'（闭集），实得 {pov!r}——一场只有一个视角人物，不写数组、'
-                '不写称呼或描述句；可用值只取输入身份投影给出的 char_id 字面')
+                '不写称呼或描述句；可用值只取输入身份投影给出的 char_id 字面',
+                code='design_pov_closed_set',
+                location=('scene', index, 'pov'),
+                paths=(('scenes', index - 1, 'delivery', 'pov'),)))
 
 
 def _check_expression_refs(body: BodyDesign, expression_requirements,
@@ -429,7 +479,8 @@ def _check_fact_marks(marks: tuple[FactLockMark, ...], fact_locks: Mapping[str, 
 def _check_lock_acceptance(body: BodyDesign, brief: ReconstructionBrief,
                            errors: list[str], *, marks: tuple[FactLockMark, ...] = (),
                            obligations: Mapping[str, Any] | None = None,
-                           real_sites: Mapping[str, list[tuple[int, int]]] | None = None) -> None:
+                           real_sites: Mapping[str, list[tuple[int, int]]] | None = None,
+                           delta_locate=None) -> None:
     """a4 接受校验：kp 键规则、kf 标注与必保锁兑现（锁注册表来自 Brief，revise_self）。
 
     · kp 键（knowledge 域）：持有者须有锁且模式被授权——授权集＝该 (holder,
@@ -451,19 +502,32 @@ def _check_lock_acceptance(body: BodyDesign, brief: ReconstructionBrief,
         authorized.setdefault((lock.holder, lock.kp), set()).add(lock.mode)
 
     realized_kp: set[tuple[str, str, str]] = set()
-    delta_sites: list[tuple[str, Any]] = [
-        ('initial_state', delta) for delta in body.initial_state]
-    for scene in body.scenes:
-        for beat in scene.beats:
+    delta_sites: list[tuple[str, Any, tuple[int, int, int] | None]] = [
+        ('initial_state', delta, None) for delta in body.initial_state]
+    for scene_i, scene in enumerate(body.scenes):
+        for beat_i, beat in enumerate(scene.beats):
             delta_sites.extend(
-                (f'{scene.scene_id}#{beat.beat_id}', delta)
-                for delta in beat.target_delta)
-    for where, delta in delta_sites:
+                (f'{scene.scene_id}#{beat.beat_id}', delta, (scene_i, beat_i, delta_i))
+                for delta_i, delta in enumerate(beat.target_delta))
+
+    def _delta_paths(site: tuple[int, int, int] | None) -> tuple[tuple[str | int, ...], ...]:
+        """canonical 增量下标 → 可编辑 wire 路径（生产 v8 输入由调用方定位器给）。"""
+        if site is not None and delta_locate is not None:
+            path = delta_locate(*site)
+            if path is not None:
+                return (path,)
+        return ()
+
+    for where, delta, site in delta_sites:
         key = delta.key
         if key.startswith('kp_'):
             if key not in propositions:
-                errors.append(f'{where} 的 kp 键未在 Brief 登记：{key}'
-                              '（kp 句柄只能取 Brief.propositions 给出的项）')
+                errors.append(design_issue(
+                    f'{where} 的 kp 键未在 Brief 登记：{key}'
+                    '（kp 句柄只能取 Brief.propositions 给出的项）',
+                    code='design_kp_key_closed',
+                    location=(where, key),
+                    paths=_delta_paths(site)))
                 continue
             if delta.domain is EffectDomain.KNOWLEDGE:
                 if delta.op == 'set':
@@ -472,15 +536,21 @@ def _check_lock_acceptance(body: BodyDesign, brief: ReconstructionBrief,
                     # 怀疑不是确认，C6）。
                     allowed = authorized.get((delta.holder, key), set())
                     if delta.knowledge_mode not in allowed:
-                        errors.append(
+                        errors.append(design_issue(
                             f'{where} 的 kp 键 {key} 持有者 {delta.holder} 无锁'
                             f'或模式越权：{delta.knowledge_mode}（授权：'
-                            f'{sorted(allowed) or "无"}；known 只能来自 known 锁）')
+                            f'{sorted(allowed) or "无"}；known 只能来自 known 锁）',
+                            code='design_kp_mode_authority',
+                            location=(where, delta.holder, key, delta.knowledge_mode),
+                            paths=_delta_paths(site)))
                     realized_kp.add((delta.holder, key, delta.knowledge_mode))
         elif key.startswith('kf_'):
-            errors.append(
+            errors.append(design_issue(
                 f'{where} 的状态键 {key} 是事实锁句柄：kf 句柄不是状态键，'
-                '事实锁在已选状态上用 lock 标注（stage4-design-v8）')
+                '事实锁在已选状态上用 lock 标注（stage4-design-v8）',
+                code='design_kf_state_key',
+                location=(where, key),
+                paths=_delta_paths(site)))
     _check_fact_marks(marks, fact_locks, errors)
     bindings = tuple(
         FactLockBinding(kf_id=mark.kf_id,
@@ -492,11 +562,19 @@ def _check_lock_acceptance(body: BodyDesign, brief: ReconstructionBrief,
     ob_of = {req.core_id: ob for ob, req in (obligations or {}).items()}
     for req in brief.requirements:
         label = ob_of.get(req.core_id, req.core_id)
+        ob_id = ob_of.get(req.core_id)
+        know_paths = tuple(sorted({
+            ('scenes', s, 'beats', b, 'know')
+            for s, b in ((real_sites or {}).get(ob_id) or ())}))
         for change in req.knowledge_changes if req.must_preserve else ():
             if (change.holder, change.kp, change.mode) not in realized_kp:
-                errors.append(
+                errors.append(design_issue(
                     f'必保义务 {label} 的知情锁未兑现：{change.kp} 需由持有者 '
-                    f'{change.holder} 以模式 {change.mode} 承载')
+                    f'{change.holder} 以模式 {change.mode} 承载',
+                    code='design_knowledge_lock',
+                    location=('knowledge_lock', req.core_id, change.holder, change.kp,
+                              change.mode),
+                    paths=know_paths))
     errors.extend(fact_lock_carrier_errors(
         body, bindings,
         required_locks={ob_of.get(req.core_id, req.core_id): req.realize_locks
@@ -591,12 +669,18 @@ def inspect_body_design(
                 ob for ob, requirement in obligations.items()
                 if getattr(requirement, 'must_preserve', True) and ob not in annotated)
             if missing:
-                coverage_errors.append(f'必保义务未被任何拍标注承载（real）：{missing}'
-                                       '——每条 must_preserve 需求至少标注一拍')
+                coverage_errors.append(design_issue(
+                    f'必保义务未被任何拍标注承载（real）：{missing}'
+                    '——每条 must_preserve 需求至少标注一拍',
+                    code='design_carrier_missing',
+                    location=('coverage', tuple(missing))))
         wire = expanded
     if wire.get('protocol_version') != STAGE4_DESIGN_PROTOCOL:
-        errors.append(f'protocol_version 必须是 {STAGE4_DESIGN_PROTOCOL}，'
-                      f'实得 {wire.get("protocol_version")!r}（I-13 无隐式迁移）')
+        errors.append(design_issue(
+            f'protocol_version 必须是 {STAGE4_DESIGN_PROTOCOL}，'
+            f'实得 {wire.get("protocol_version")!r}（I-13 无隐式迁移）',
+            code='design_protocol_literal',
+            location=('protocol_version',)))
     try:
         model = DesignWireV5.model_validate(wire)
     except ValidationError as exc:
@@ -609,11 +693,19 @@ def inspect_body_design(
     decisions = data['expression_decisions']
     ids = [item['ex_id'] for item in decisions]
     if len(ids) != len(set(ids)) or set(ids) != set(expressions):
-        errors.append('expression_decisions 必须对输入每个 ex 恰好决定一次，不得遗漏或新增')
+        errors.append(design_issue(
+            'expression_decisions 必须对输入每个 ex 恰好决定一次，不得遗漏或新增',
+            code='design_expression_decision',
+            location=('expression_decisions',),
+            paths=(('expression_overrides',) if locatable else (),)))
     narration_ids = {item.ex_id for item in expression_requirements if item.kind == 'narration'}
     if (any(item['action'] == 'keep' and item['ex_id'] in narration_ids for item in decisions)
             and model.narration != source_narration):
-        errors.append('保留源叙述表达时 narration 必须与输入一致；改变须显式 change 并说明理由')
+        errors.append(design_issue(
+            '保留源叙述表达时 narration 必须与输入一致；改变须显式 change 并说明理由',
+            code='design_expression_decision',
+            location=('narration', 'keep'),
+            paths=(('narration',) if locatable else (),)))
     if errors:
         return None, coverage_errors + errors
     data['expression_decisions'] = [
@@ -636,8 +728,11 @@ def inspect_body_design(
     except (ValidationError, TypeError) as exc:
         shape_errors = (_wire_model_errors(exc)
                         if isinstance(exc, ValidationError) else [str(exc)])
-        return None, coverage_errors + [f'book_design 构造失败：{entry}'
-                                        for entry in shape_errors]
+        return None, coverage_errors + [design_issue(
+            f'book_design 构造失败：{entry}',
+            code='book_design_construct',
+            location=('book_design',))
+            for entry in shape_errors]
     errors.extend(coverage_errors)
 
     def issue(message: str, code: str, location: tuple, *paths: tuple):
@@ -690,11 +785,19 @@ def inspect_body_design(
         return None
 
     if constraints and len(body.chapters) != constraints.target_chapter_count:
-        errors.append('目标章数与 OutputConstraints 不一致')
+        errors.append(design_issue(
+            '目标章数与 OutputConstraints 不一致',
+            code='design_chapter_count',
+            location=('chapters', len(body.chapters)),
+            paths=(('chapters',),) if locatable else ()))
     addressed = [(delta, ('initial_state', k)) for k, delta in enumerate(body.initial_state)]
-    for cid in body.narration.focalizers:
+    for focal_k, cid in enumerate(body.narration.focalizers):
         if cid != 'narrator' and cid not in known_char_ids:
-            errors.append(f'narration 引用未知人物 {cid}')
+            errors.append(design_issue(
+                f'narration 引用未知人物 {cid}',
+                code='design_narration_focalizer',
+                location=('narration', 'focalizers', focal_k, cid),
+                paths=(('narration', 'focalizers', focal_k),) if locatable else ()))
     surfaces = [(intro, ('initial_surfaces', k))
                 for k, intro in enumerate(body.initial_surfaces)]
     for scene_i, scene in enumerate(body.scenes):
@@ -708,7 +811,10 @@ def inspect_body_design(
         beat_ids = {b.beat_id for b in scene.beats}
         for read_k, read in enumerate(scene.state_reads):
             if read.at is not None and read.at not in beat_ids:
-                errors.append(f'{scene.scene_id} 的读取定位 {read.at!r} 不是本场真实拍')
+                errors.append(issue(
+                    f'{scene.scene_id} 的读取定位 {read.at!r} 不是本场真实拍',
+                    'design_read_anchor', ('scenes', scene_i, 'reads', read_k, read.at),
+                    ('scenes', scene_i, 'reads', read_k)))
             addressed.append((read, ('scenes', scene_i, 'reads', read_k)))
         for beat_j, beat in enumerate(scene.beats):
             for cid in beat.participants:
@@ -785,7 +891,8 @@ def inspect_body_design(
                             violation.location, *paths))
     if brief is not None:
         _check_lock_acceptance(body, brief, errors, marks=marks,
-                               obligations=obligations, real_sites=real_sites)
+                               obligations=obligations, real_sites=real_sites,
+                               delta_locate=delta_path if locatable else None)
     for err in resolve_design_reads(body).errors:
         errors.append(issue(err.message, err.code,
                             (body.scenes[err.scene].scene_id, err.read),

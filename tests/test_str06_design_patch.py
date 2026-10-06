@@ -109,6 +109,50 @@ def test_every_error_object_is_returned_so_the_ask_loop_can_check_full_coverage(
     assert wire_paths_of('plain') is None and wire_paths_of(issue('无路径')) is None
 
 
+def test_optional_routed_errors_without_paths_get_the_beat_closed_set():
+    """RC-58：无路径但登记 optional 的规则码 → 候选拍闭集（第三元素 True）。
+
+    必保义务漏标（design_carrier_missing）与 series 接受拍互斥（series_collapsed）
+    的责任位置须由模型决定：定位器给 wire 全部拍作闭集，模型只覆盖选中的子集。
+    """
+    carrier = design_issue('必保义务未被任何拍标注承载（real）：[ob01]',
+                           code='design_carrier_missing', location=('coverage', ('ob01',)))
+    beats = [('scenes', 0, 'beats', 0), ('scenes', 0, 'beats', 1), ('scenes', 1, 'beats', 0)]
+    located = locate_design_patches(deepcopy(WIRE), [carrier])
+    assert located == [(beat, [carrier], True) for beat in beats]
+    series = design_issue('series_collapsed：成员接受拍互斥', code='series_collapsed',
+                          location=('series_collapsed', 'sc01#b02', ('ob01', 'ob02')))
+    assert locate_design_patches(deepcopy(WIRE), [series]) == \
+        [(beat, [series], True) for beat in beats]
+    # 未登记 optional 的无路径错误仍退整份：字符串、无码问题、非 optional 码。
+    assert targets(issue('全局问题')) is None
+    unregistered = design_issue('x', code='not_a_route', location=())
+    assert locate_design_patches(deepcopy(WIRE), [unregistered]) is None
+    assert locate_design_patches({'beats': []}, [carrier]) is None, \
+        '登记 optional 却给不出候选闭集（无拍）＝退整份并如实暴露'
+
+
+def test_optional_closed_set_promotes_required_targets_inside_the_same_beat():
+    """闭集拍内已有必选目标：升格整拍且保持必选；其余拍可选；拍外目标原样保留。
+
+    不让「拍内必选条目」与「整拍可选条目」同时在场——重叠替换的合并次序会
+    静默吞掉一侧的修复。
+    """
+    carrier = design_issue('必保义务漏标', code='design_carrier_missing',
+                           location=('coverage', ('ob01',)))
+    leak = issue('拍内必选', ('scenes', 0, 'beats', 0, 'ev'))
+    located = locate_design_patches(deepcopy(WIRE), [leak, carrier])
+    out = {entry[0]: (entry[1], len(entry) > 2) for entry in located}
+    assert out[('scenes', 0, 'beats', 0)] == ([leak, carrier], False), '必选升格整拍'
+    assert out[('scenes', 0, 'beats', 1)] == ([carrier], True)
+    assert out[('scenes', 1, 'beats', 0)] == ([carrier], True)
+    top = issue('章目的', ('chapters', 0, 'purpose'))
+    located = locate_design_patches(deepcopy(WIRE), [top, carrier])
+    out = {entry[0]: (entry[1], len(entry) > 2) for entry in located}
+    assert out[('chapters', 0)] == ([top], False), '拍外必选目标不被闭集吞并'
+    assert out[('scenes', 0, 'beats', 0)] == ([carrier], True)
+
+
 # ───────────────────────── 真实 stage：模型真的回 patches ─────────────────────────
 
 def _parse_path(text):
@@ -127,14 +171,19 @@ def _walk(document, path):
 class PatchingTransport:
     """所配 owner 首答给坏稿；收到条目返修请求时按请求的路径回 `{"patches":[…]}`
     （值取自好稿或 `patch_value`），整份修订请求回好稿——只在 JSON 面上施加，
-    其余 owner 走原路由。`owner_requests` 按发送序记录该 owner 的 user 面。"""
+    其余 owner 走原路由。`owner_requests` 按发送序记录该 owner 的 user 面。
 
-    def __init__(self, wires, bad, *, patch_value=None, owner='design'):
+    路径解析取全部 `- 路径 X：` 行（必选行带「当前值」、可选目标行在窄形状下
+    不带——闭集当前值随依赖切片送达），闭集全覆盖取好稿值即合法子集语义。"""
+
+    def __init__(self, wires, bad, *, patch_value=None, owner='design',
+                 patch_paths=None):
         self._inner = _RoutingTransport(wires)
         self._good = wires[owner]
         self._bad = bad
         self._owner_name = owner
         self._patch_value = patch_value        # 自定义 patch 取值（无进展用例）
+        self._patch_paths = patch_paths        # 只覆盖给定子集（可选目标闭集用例）
         self.owner_requests: list[str] = []
 
     @property
@@ -147,11 +196,15 @@ class PatchingTransport:
         self._inner.calls.append(self._owner_name)
         self.owner_requests.append(request.user)
         if '【条目返修】' in request.user:
-            paths = [_parse_path(p) for p in re.findall(r'- 路径 (.+?)：当前值', request.user)]
-            patches = [{'path': re.findall(r'- 路径 (.+?)：当前值', request.user)[i],
+            listed = [(text, _parse_path(text)) for text in
+                      re.findall(r'- 路径 ([^\s：]+)：', request.user)]
+            if self._patch_paths is not None:
+                allowed = set(self._patch_paths)
+                listed = [pair for pair in listed if pair[1] in allowed]
+            patches = [{'path': text,
                         'value': (self._patch_value(path) if self._patch_value
                                   else _walk(self._good, path))}
-                       for i, path in enumerate(paths)]
+                       for text, path in listed]
             body = {'patches': patches}
         elif '【修订要求】' in request.user:
             body = self._good
@@ -235,8 +288,12 @@ def test_patch_that_does_not_fix_the_leak_is_stopped_by_the_existing_no_progress
     assert not repo.path('stage4/grounding/semantic_binding.json').exists()
 
 
-def test_a_globally_unlocatable_problem_sends_the_whole_design_back(tmp_path):
-    """必保义务漏标 real 是全局覆盖闸、没有 wire 路径：即使同时有可定位的泄漏，也整份修订。"""
+def test_carrier_missing_gets_one_optional_closed_set_round_instead_of_full_rewrite(tmp_path):
+    """判据③：必保义务漏标（此前整份重写）→ 一轮可选目标返修。
+
+    首答漏标 real：定位器给全部拍作候选闭集（必选两处泄漏拍升格整拍）；模型
+    覆盖闭集子集（含恢复 real）→ 合并过完整预检发布。同轮还有可定位泄漏时
+    必选与可选共存、各自语义保持。"""
     from tests.test_str06_body import _chapters, _make_session
     from tests.str06_facilities import json_ask, text_ask
     from novel.llm.paid_requests import digest
@@ -249,6 +306,96 @@ def test_a_globally_unlocatable_problem_sends_the_whole_design_back(tmp_path):
     for scene in bad['scenes']:
         for beat in scene['beats']:
             beat.pop('real', None)
+    transport = PatchingTransport(wires, bad)
+    repo, session, _ = _make_session(tmp_path, wires, transport=transport)
+    ctx = ChainContext(repository=repo, ask=json_ask(session), ask_text=text_ask(session),
+                       ask_body=lambda *a: (_ for _ in ()).throw(AssertionError('stub')),
+                       chapters=_chapters(), budget=2000, digest=digest)
+    run_workflow(repository=repo, chapters=ctx.chapters, ask=ctx.ask, ask_text=ctx.ask_text,
+                 ask_body=ctx.ask_body, budget=ctx.budget, through='stage2')
+    run_preserve(ctx)
+    run_body_design(ctx)
+    assert transport.calls.count('design') == 2, '首答＋一轮可选目标返修，不整份重写'
+    patch_request = transport.owner_requests[1]
+    assert '【条目返修】' in patch_request and '【修订要求】' not in patch_request
+    assert '可选目标闭集' in patch_request, '漏标 real 以可选目标发回（RC-58）'
+    # 必选行带当前值；可选行不带（当前值随依赖切片送达，M3 返修宽度）。
+    required = re.findall(r'- 路径 (.+?)：当前值', patch_request)
+    assert required == ['scenes[0].beats[0]', 'scenes[0].beats[1]'], \
+        '两处泄漏拍升格整拍保持必选'
+    optional = [p for p in re.findall(r'- 路径 ([^\s：]+)：', patch_request)
+                if p not in required]
+    assert optional == ['scenes[0].beats[2]', 'scenes[1].beats[0]', 'scenes[1].beats[1]'], \
+        '闭集＝候选全部拍，泄漏拍已是必选不重复登记'
+    assert '（当前值见依赖切片）' in patch_request
+    assert 'stage4-design-patch-slice-v1' in patch_request, '窄请求带依赖切片'
+    assert 'stage4-design-input-v1' not in patch_request, '不带整份原请求输入投影'
+    body = repo.read_model('stage4/design/body_design.json')
+    assert [b.event for b in body.scenes[0].beats[:2]] == ['拜堂成亲', '洞房夜夫君立约']
+    binding = repo.read_model('stage4/grounding/semantic_binding.json')
+    assert [e.obligation_id for e in binding.entries] == ['ob01'], 'real 恢复后承载闭合'
+
+
+def test_optional_round_adopts_a_subset_of_the_closed_set_and_keeps_other_beats_intact(tmp_path):
+    """判据②语义（承载位由模型在闭集里选）：只覆盖选中子集即合法；未选拍的
+    字节不变（补丁只替换选中条目，无 real 的拍本就与好稿逐字相同）。"""
+    from tests.test_str06_body import _chapters, _make_session
+    from tests.str06_facilities import json_ask, text_ask
+    from novel.llm.paid_requests import digest
+    from contracts.schema.grounding import OutputConstraints
+    from novel.stages.chain import ChainContext, run_preserve, run_workflow
+    from novel.stages.stage4 import (
+        design_obligation_index, inspect_design_candidate, project_brief,
+    )
+    from tests.test_str06_hook import _full_chain_wires
+
+    wires = _full_chain_wires()
+    bad = deepcopy(wires['design'])
+    for scene in bad['scenes']:
+        for beat in scene['beats']:
+            beat.pop('real', None)
+    # 模型只选中前两拍作承载位（好稿 real 所在的闭集子集）。
+    transport = PatchingTransport(
+        wires, bad,
+        patch_paths=[('scenes', 0, 'beats', 0), ('scenes', 0, 'beats', 1)])
+    repo, session, _ = _make_session(tmp_path, wires, transport=transport)
+    ctx = ChainContext(repository=repo, ask=json_ask(session), ask_text=text_ask(session),
+                       ask_body=lambda *a: (_ for _ in ()).throw(AssertionError('stub')),
+                       chapters=_chapters(), budget=2000, digest=digest)
+    run_workflow(repository=repo, chapters=ctx.chapters, ask=ctx.ask, ask_text=ctx.ask_text,
+                 ask_body=ctx.ask_body, budget=ctx.budget, through='stage2')
+    run_preserve(ctx)
+    run_body_design(ctx)
+    assert transport.calls.count('design') == 2, '一轮可选目标返修即采纳'
+    # 发布体与「好稿直接过闸」的编译结果一致：选中的两拍拿到好稿值（含 real），
+    # 未选拍与坏稿逐字相同（本就无 real）⇒ 合并版＝好稿。
+    chars = repo.read_model('stage2/characters/characters.json')
+    checkpoint = repo.read_model('runtime/preserve_checkpoint.json')
+    blueprint = repo.read_model('stage2/blueprints/chapter_blueprints.json')
+    brief, _ = project_brief(checkpoint, chars.core_view(), blueprint)
+    expected = inspect_design_candidate(
+        wires['design'], checkpoint=checkpoint, brief=brief,
+        obligations=design_obligation_index(checkpoint, brief), chars=chars,
+        constraints=OutputConstraints(target_chapter_count=len(ctx.chapters),
+                                      total_length_budget=ctx.budget),
+        length_band=ctx.length_band)
+    assert expected.passed, expected.report()
+    published = repo.read_model('stage4/design/body_design.json')
+    assert published.model_dump(mode='json') == expected.body.model_dump(mode='json')
+
+
+def test_a_globally_unlocatable_problem_sends_the_whole_design_back(tmp_path):
+    """协议字面量不符（design_protocol_literal，整份出口闭集）没有条目编辑位置：
+    整份退回——可选目标只收登记 optional 的规则码，不越权扩闭集。"""
+    from tests.test_str06_body import _chapters, _make_session
+    from tests.str06_facilities import json_ask, text_ask
+    from novel.llm.paid_requests import digest
+    from novel.stages.chain import ChainContext, run_preserve, run_workflow
+    from tests.test_str06_hook import _full_chain_wires
+
+    wires = _full_chain_wires()
+    bad = deepcopy(wires['design'])
+    bad['protocol_version'] = 'stage4-design-v7'   # 协议字面量不符（I-13 无隐式迁移）
     transport = PatchingTransport(wires, bad)
     repo, session, _ = _make_session(tmp_path, wires, transport=transport)
     ctx = ChainContext(repository=repo, ask=json_ask(session), ask_text=text_ask(session),
@@ -418,6 +565,10 @@ def test_hook_design_item_patch_round_fixes_only_the_failing_material(tmp_path):
     assert transport.calls.count('hook_design') == 2, '首答＋一次条目返修'
     patch_request = transport.owner_requests[1]
     assert '【条目返修】' in patch_request and '【修订要求】' not in patch_request
+    # CS-H H2 ⑦：Hook 与 Design 同法接入窄返修（RC-57）——不带整份原请求，
+    # 只带协议规则＋失败条目＋依赖切片（被引用拍与释放前缀）＋合法取值。
+    assert '【窄返修】' in patch_request, 'Hook 返修走窄形状，原请求不作前缀'
+    assert 'stage4-hook-patch-slice-v1' in patch_request, 'Hook 窄请求带依赖切片'
     listed = re.findall(r'- 路径 (.+?)：当前值', patch_request)
     assert listed == ['materials[0]'], '只返修越界材料，其余条目字节不动'
     graph = repo.read_model('stage4/design/presentation_graph.json')

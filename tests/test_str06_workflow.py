@@ -129,7 +129,7 @@ def test_stage2_stage4_repository_replay_and_writer_consumer(tmp_path):
                                           {'char_id': 'fu_jun', 'surfaces': ['夫君']}]
     wires['design']['scenes'][0]['beats'][0]['know'] = [{'ref': 'ob02.k01'}]
     requests = []
-    def ask(owner, prompt, validate, patch=None):
+    def ask(owner, prompt, validate, patch=None, **kwargs):
         data = deepcopy(wires[owner])
         assert not validate(data), (owner, validate(data))
         requests.append((owner, prompt))
@@ -289,7 +289,7 @@ def test_changed_hook_copy_refuses_the_old_root_and_changes_requests(tmp_path):
         repo.attach_context(make_context(base / 'run', ledger=CostLedger(path=None)))
         prompts: dict[str, str] = {}
 
-        def ask(owner, prompt, validate, patch=None):
+        def ask(owner, prompt, validate, patch=None, **kwargs):
             data = deepcopy(wires[owner])
             errors = validate(data)
             assert not errors, (owner, errors)
@@ -426,7 +426,7 @@ def test_concealed_fact_reaches_writer_as_pending_reader_confirmation(tmp_path):
     repo.attach_context(make_context(tmp_path / 'book', ledger=CostLedger(path=None)))
     requests = []
 
-    def ask(owner, prompt, validate, patch=None):
+    def ask(owner, prompt, validate, patch=None, **kwargs):
         data = deepcopy(wires[owner])
         assert not validate(data), (owner, validate(data))
         requests.append((owner, prompt))

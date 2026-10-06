@@ -42,7 +42,9 @@ from contracts.schema.source import (
     BlueprintsArtifactV15, CharactersCore,
 )
 from contracts.schema.workflow import STAGE4_PRESERVE_PROTOCOL
+from novel.core.validation import ValidationIssue
 from novel.stages.common import check_binding_covers_checkpoint
+from novel.stages.stage4.design_paths import design_issue
 from novel.stages.stage4.fact_bindings import fact_binding_errors, fact_lock_carrier_errors
 from pydantic import ValidationError
 
@@ -762,6 +764,12 @@ def design_obligation_index(
             for o in checkpoint.obligations}
 
 
+def _binding_issue(message: str, code: str, location: tuple) -> ValidationIssue:
+    """bind 派生面问题：规则码＋稳定位置（无 wire 路径；owner=design 的定位由
+    wire 侧判据负责，本面是 compile 侧的承载结构自洽性）。"""
+    return ValidationIssue(message, code=code, location=tuple(location), owner='design')
+
+
 def derive_semantic_binding(
     placements: dict[str, list[tuple[int, int]]],
     body: BodyDesign, checkpoint: PreserveCheckpoint,
@@ -794,16 +802,21 @@ def derive_semantic_binding(
     denominator = {o.obligation_id for o in checkpoint.obligations}
     outside = sorted(set(placements) - denominator)
     if outside:
-        errors.append(f'real 标注引用 checkpoint 外义务：{outside}')
+        # CS-H H2（RC-59）：bind 派生面的自洽性违例带规则码与位置，无 wire
+        # 路径（compile 面）——`PATCH_ROUTES` 的 stop 态。
+        errors.append(_binding_issue(
+            f'real 标注引用 checkpoint 外义务：{outside}',
+            'design_real_closed', ('real_outside', tuple(outside))))
     entries: list[dict[str, Any]] = []
     unbound: list[dict[str, Any]] = []
     for obligation in checkpoint.obligations:
         sites = placements.get(obligation.obligation_id) or ()
         resolved = [site_refs.get(site) for site in sites]
         if any(ref is None for ref in resolved):
-            errors.append(
+            errors.append(_binding_issue(
                 f'义务 {obligation.obligation_id} 的 real 标注拍越界：{list(sites)}'
-                f'（Design 共 {len(site_refs)} 拍）')
+                f'（Design 共 {len(site_refs)} 拍）',
+                'design_real_anchor', ('real_anchor', obligation.obligation_id)))
             continue
         if not resolved:
             unbound.append({
@@ -824,9 +837,12 @@ def derive_semantic_binding(
                 d.address() == mark.address.address() and d.op == mark.op
                 and (mark.op != 'set' or d.modality == mark.modality)
                 for d in beat.target_delta):
-            errors.append(
+            errors.append(design_issue(
                 f'事实锁 {mark.kf_id} 的承载状态在 BodyDesign 中不存在：第 {mark.scene + 1} '
-                f'场第 {mark.beat + 1} 拍 state[{mark.state}]（映射不得悬空）')
+                f'场第 {mark.beat + 1} 拍 state[{mark.state}]（映射不得悬空）',
+                code='fact_lock_missing',
+                location=('fact_lock_missing', mark.kf_id, mark.beat),
+                paths=(mark.path,)))
             continue
         fact_bindings.append(FactLockBinding(
             kf_id=mark.kf_id, beat_ref=ref[2], address=mark.address))
@@ -846,9 +862,14 @@ def derive_semantic_binding(
             unbound=tuple(_unbound_entry(u) for u in unbound),
             fact_bindings=tuple(fact_bindings))
     except (ValidationError, KeyError) as exc:
-        return None, [f'binding 派生构造失败：{exc}']
-    problems = check_binding_covers_checkpoint(checkpoint, binding)
-    # series 接受拍互斥（判据自 assemble_binding 迁入，消息保持同一把尺）。
+        return None, [_binding_issue(
+            f'binding 派生构造失败：{exc}', 'book_design_construct',
+            ('binding_construct',))]
+    problems = [_binding_issue(str(p), 'compile_binding_denominator',
+                               ('binding_covers',))
+                for p in check_binding_covers_checkpoint(checkpoint, binding)]
+    # series 接受拍互斥（判据自 assemble_binding 迁入，消息保持同一把尺；
+    # CS-H H2：候选拍闭集里改选承载位——可选目标，路径由 wire 侧拍坐标给出）。
     entry_of = {e.obligation_id: e for e in binding.entries}
     for group in checkpoint.series:
         carried = [(member, entry_of[member].beat_ref)
@@ -858,10 +879,17 @@ def derive_semantic_binding(
             by_ref.setdefault(ref, []).append(member)
         for ref, members in sorted(by_ref.items()):
             if len(members) > 1:
-                problems.append(
+                collapsed = sorted(members)
+                problem = ValidationIssue(
                     f'series_collapsed：series（mechanism={group.mechanism or "无"}）'
-                    f'的成员 {sorted(members)} 的接受拍同为 {ref}——离散兑现时点'
-                    '必须分别承载（不同拍），复合义务用支撑拍表达前半，不合并成员')
+                    f'的成员 {collapsed} 的接受拍同为 {ref}——离散兑现时点'
+                    '必须分别承载（不同拍），复合义务用支撑拍表达前半，不合并成员',
+                    code='series_collapsed',
+                    location=('series_collapsed', ref, tuple(collapsed)),
+                    owner='design',
+                    context={'beat_ref': ref, 'members': collapsed,
+                             'mechanism': group.mechanism})
+                problems.append(problem)
     if problems:
         return None, problems
     return binding, []

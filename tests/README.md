@@ -125,6 +125,10 @@ Stage3 文风迁移、Stage6 旧定性包 A/B 与 Stage2 旧五轮实验退出�
 单元 / contract 使用 `unit_contract`，阶段职责使用 `stage`；`regression` 复用二者，并包含独立的
 跨阶段整书场景。`corpus` 保留原有数据依赖含义，普通选择默认排除；这些 marker 不代表模型质量。
 新增测试模块必须登记目录表，未登记会拒绝收集；混合模块用 `cases` 指定例外层级。
+CS-H H2 起的规则码清点由 `tests/test_str06_patch_routes.py` 承担（unit_contract，
+`contracts/judges/str06.py::PATCH_ROUTES` ↔ 五个判据模块＋共用发射面的码集合一一
+对应）：新增判据码必须同批登记路由并在该测试覆盖，新增定位判据须同批补最小会红
+变形——本文件是那条约定的登记处。
 模块涉及多个 stage 而单例范围更窄时，用 `pytest.mark.stage_scope('stage2')` 等显式收窄，
 参数化用例也可在 `pytest.param` 上登记；声明不得超出模块的 stage 集合。
 

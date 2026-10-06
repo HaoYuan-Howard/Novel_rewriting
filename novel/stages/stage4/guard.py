@@ -28,7 +28,7 @@ from novel.stages.stage4.grounding import (
     KNOWLEDGE_LOCK_MODE, obligation_core_id, required_fact_locks,
 )
 from novel.stages.stage4.fact_bindings import fact_binding_errors, fact_lock_carrier_errors
-
+from novel.stages.stage4.design_paths import design_issue
 
 
 def scene_order(graph: BodyDesign) -> dict[str, int]:
@@ -49,6 +49,31 @@ def _anchor_order(anchor: str, order: Mapping[str, int]) -> int:
     return order.get(scene_id, len(order))
 
 
+def _guard_issue(message: str, code: str, location: tuple, *paths: tuple):
+    """Guard 判据问题：规则码＋稳定位置＋可编辑 wire 路径（CS-H H2 逐码清点）。
+
+    Guard 跑在 canonical `BodyDesign` 上；`_beat_wire_path` 把复合引用换算成
+    v8 wire 拍路径（拍即最小完整父项——承载拍内多处耦合一并替换）。路径为空
+    ＝该问题没有 Design wire 编辑面（上游归属或编译器侧违例），按
+    `PATCH_ROUTES` 的 `stop` 态停机报码，不进整份重生。
+    """
+    return design_issue(message, code=code, location=location, paths=paths)
+
+
+def _beat_wire_path(graph: BodyDesign, ref: str) -> tuple[str | int, ...] | None:
+    """`场景#拍` 复合引用 → wire 拍路径（`scenes[i].beats[j]`）；未知引用 None。"""
+    if ref == 'init':
+        return None
+    scene_id, _, beat_id = ref.partition('#')
+    for si, scene in enumerate(graph.scenes):
+        if scene.scene_id != scene_id:
+            continue
+        for bi, beat in enumerate(scene.beats):
+            if beat.beat_id == beat_id:
+                return ('scenes', si, 'beats', bi)
+    return None
+
+
 def check_obligation_coverage(
     binding: SemanticBinding, context: WriterContext,
 ) -> list[str]:
@@ -59,7 +84,9 @@ def check_obligation_coverage(
     expected = tuple(sorted((o for o in binding.obligations if o.obligation_id in owned),
                             key=lambda o: o.obligation_id))
     if tuple(context.verification_ir.obligations) != expected:
-        return [f'M1 义务覆盖或内容不一致：{sorted(missing)}']
+        return [_guard_issue(
+            f'M1 义务覆盖或内容不一致：{sorted(missing)}',
+            'guard_m1_obligation_coverage', ('guard', 'm1', context.scene_id))]
     return []
 
 
@@ -71,14 +98,17 @@ def check_entry_timing(
     start = order.get(context.scene_id, 0)
     for entry in context.verification_ir.entry_state:
         if _anchor_order(entry.established_by, order) >= start:
-            problems.append(
+            problems.append(_guard_issue(
                 f'M3 提前效应：entry_state[{entry.key}] 的 established_by='
-                f'{entry.established_by} 不早于本场起点')
+                f'{entry.established_by} 不早于本场起点',
+                'guard_m3_early_effect', ('guard', 'm3', context.scene_id, entry.key)))
     for entry in context.verification_ir.entry_knowledge:
         if _anchor_order(entry.established_by, order) >= start:
-            problems.append(
+            problems.append(_guard_issue(
                 f'M2 提前揭示：entry_knowledge[{entry.holder}:{entry.proposition}] '
-                f'的 established_by={entry.established_by} 不早于本场起点')
+                f'的 established_by={entry.established_by} 不早于本场起点',
+                'guard_m2_early_reveal',
+                ('guard', 'm2', context.scene_id, entry.holder, entry.proposition)))
     return problems
 
 
@@ -91,7 +121,12 @@ def check_binding_beat_refs(
     for entry in binding.entries:
         for ref in (entry.beat_ref, *entry.supporting_beat_refs):
             if ref not in refs:
-                problems.append(f'M4 承载位置：{entry.obligation_id} 的 {ref!r} 不是真实拍')
+                path = _beat_wire_path(graph, entry.beat_ref) or ()
+                problems.append(_guard_issue(
+                    f'M4 承载位置：{entry.obligation_id} 的 {ref!r} 不是真实拍',
+                    'guard_m4_carrier_ref',
+                    ('guard', 'm4', entry.obligation_id, ref),
+                    *((path,) if path else ())))
     problems.extend(fact_binding_errors(graph, binding.fact_bindings))
     problems.extend(fact_lock_carrier_errors(
         graph, binding.fact_bindings, required_locks=required_fact_locks(binding.obligations),
@@ -107,10 +142,12 @@ def check_cast_legality(
 ) -> list[str]:
     """M6：人物须由 Design 声明参与或引入；提及未到场人物同样合法。"""
     problems: list[str] = []
-    for release in context.verification_ir.released_surfaces:
+    for k, release in enumerate(context.verification_ir.released_surfaces):
         if release.char_id not in appeared:
-            problems.append(
-                f'M6 人物合法性：char {release.char_id!r} 尚未由 Design 声明参与或引入')
+            problems.append(_guard_issue(
+                f'M6 人物合法性：char {release.char_id!r} 尚未由 Design 声明参与或引入',
+                'guard_m6_cast_legality', ('guard', 'm6', release.char_id),
+                ('scenes', 'released_surfaces', k)))
     return problems
 
 
@@ -144,21 +181,26 @@ def _read_resolves_in(
     return False
 
 
-def check_read_projection(scene: TargetScene, context: WriterContext) -> list[str]:
+def check_read_projection(scene: TargetScene, context: WriterContext,
+                          graph: BodyDesign | None = None) -> list[str]:
     """M7：每条声明读取都已解析并进入 IR（AUD-03 的判据面）。
 
     入场读取（`at is None`）的解析值必须出现在 entry_state／entry_knowledge；
     拍级读取（`at`＝场内拍）的解析值必须挂到对应拍的 `BeatIR.reads`。
     解析本身（未建立／unknown／定位闭合）由章闭包证明在 compile 期 fail fast；
     M7 钉的是「解析结果确实到达了 IR」——值漏包（写手拿不到本场依赖的事实）
-    在这里红。
+    在这里红。`graph` 给出时问题带 v8 wire 读取行路径（窄返修定位用）。
     """
     ir = context.verification_ir
     problems: list[str] = []
     beats = {b.beat_ref.rsplit('#', 1)[-1]: b for b in ir.beats}
-    for read in scene.state_reads:
+    scene_index = ({scene.scene_id: si for si, scene in enumerate(graph.scenes)}
+                   if graph is not None else {})
+    for k, read in enumerate(scene.state_reads):
         where = f'{scene.scene_id}（入场）' if read.at is None \
             else f'{scene.scene_id}#{read.at}'
+        read_path = (('scenes', scene_index[scene.scene_id], 'reads', k)
+                     if scene.scene_id in scene_index else ())
         if read.at is None:
             reached = _read_resolves_in(read, ir.entry_state) or \
                 _read_resolves_in(read, ir.entry_knowledge)
@@ -166,10 +208,12 @@ def check_read_projection(scene: TargetScene, context: WriterContext) -> list[st
             beat = beats.get(read.at)
             reached = beat is not None and _read_resolves_in(read, beat.reads)
         if not reached:
-            problems.append(
+            problems.append(_guard_issue(
                 f'M7 声明读取未进入 IR：{where} 的 {read.key}（'
                 + ('入场值不在 entry 视图' if read.at is None
-                   else '拍级解析值未挂到对应拍') + '；AUD-03）')
+                   else '拍级解析值未挂到对应拍') + '；AUD-03）',
+                'guard_m7_read_projection',
+                ('guard', 'm7', scene.scene_id, read.key), read_path))
     return problems
 
 
@@ -184,29 +228,41 @@ def check_thread_lifecycle(graph: BodyDesign) -> list[str]:
     """
     problems: list[str] = []
     opened: dict[str, tuple[str, bool]] = {}
+    beats = {(scene.scene_id, beat.beat_id): (si, bi)
+             for si, scene in enumerate(graph.scenes)
+             for bi, beat in enumerate(scene.beats)}
     for scene in graph.scenes:
         for beat in scene.beats:
-            for thread in beat.threads:
+            for ti, thread in enumerate(beat.threads):
                 where = f'{scene.scene_id}#{beat.beat_id} 的线程 {thread.ref}'
+                si, bi = beats[(scene.scene_id, beat.beat_id)]
+                thread_path = ('scenes', si, 'beats', bi, 'threads', ti)
                 if thread.op == 'open':
                     if thread.ref in opened:
-                        problems.append(f'M8 {where} 只能开启一次')
+                        problems.append(_guard_issue(
+                            f'M8 {where} 只能开启一次', 'guard_m8_thread_lifecycle',
+                            ('guard', 'm8', thread.ref), thread_path))
                         continue
                     opened[thread.ref] = (thread.kind, False)
                     continue
                 state = opened.get(thread.ref)
                 if state is None:
-                    problems.append(f'M8 {where} 的 {thread.op} 早于开启')
+                    problems.append(_guard_issue(
+                        f'M8 {where} 的 {thread.op} 早于开启', 'guard_m8_thread_lifecycle',
+                        ('guard', 'm8', thread.ref), thread_path))
                     continue
                 kind, closed = state
                 if closed:
-                    problems.append(f'M8 {where} 已关闭，不得再操作')
+                    problems.append(_guard_issue(
+                        f'M8 {where} 已关闭，不得再操作', 'guard_m8_thread_lifecycle',
+                        ('guard', 'm8', thread.ref), thread_path))
                     continue
                 if thread.op == 'close':
                     if thread.ending not in THREAD_ENDINGS[kind]:
-                        problems.append(
+                        problems.append(_guard_issue(
                             f'M8 {where} 的结局 {thread.ending!r} 不在 {kind} '
-                            f'闭集 {THREAD_ENDINGS[kind]} 内')
+                            f'闭集 {THREAD_ENDINGS[kind]} 内', 'guard_m8_thread_lifecycle',
+                            ('guard', 'm8', thread.ref), thread_path))
                     opened[thread.ref] = (kind, True)
     return problems
 
@@ -268,21 +324,25 @@ def check_thread_projection(graph: BodyDesign, context: WriterContext) -> list[s
     """M8 投影段：应投影的线程已进入 IR（thread_ops／open_threads 对账）。"""
     scene = next((s for s in graph.scenes if s.scene_id == context.scene_id), None)
     if scene is None:
-        return [f'M8 场景 {context.scene_id} 不在 Design 内（线程投影无从对账）']
+        return [_guard_issue(
+            f'M8 场景 {context.scene_id} 不在 Design 内（线程投影无从对账）',
+            'guard_m8_thread_projection', ('guard', 'm8', context.scene_id, 'scene'))]
     expected_ops, expected_open = expected_thread_faces(graph, scene)
     ir = context.verification_ir
     problems: list[str] = []
     if tuple(ir.thread_ops) != expected_ops:
-        problems.append(
+        problems.append(_guard_issue(
             f'M8 本场线程操作未按 Design 投影进 IR：期望 '
             f'{[(t.ref, t.op) for t in expected_ops]}，实得 '
-            f'{[(t.ref, t.op) for t in ir.thread_ops]}（must_realize 身份漏包）')
+            f'{[(t.ref, t.op) for t in ir.thread_ops]}（must_realize 身份漏包）',
+            'guard_m8_thread_projection', ('guard', 'm8', context.scene_id, 'ops')))
     if tuple(ir.open_threads) != expected_open:
-        problems.append(
+        problems.append(_guard_issue(
             f'M8 开放线程未按参与者相关性投影进 IR：期望 '
             f'{[(t.ref, t.kind) for t in expected_open]}，实得 '
             f'{[(t.ref, t.kind) for t in ir.open_threads]}（continuity/guard_only '
-            '身份漏包或过度提醒）')
+            '身份漏包或过度提醒）',
+            'guard_m8_thread_projection', ('guard', 'm8', context.scene_id, 'open')))
     return problems
 
 
@@ -411,14 +471,17 @@ class _GuardScope:
 GUARD_CHECKS: Final[Mapping[str, Callable[[_GuardScope], list[str]]]] = {
     'M5': lambda s: (
         [] if s.context.verification_ir.released_surfaces == s.expected_surfaces
-        else ['M5 称谓释放与 Design 显式释放集不一致']),
+        else [_guard_issue(
+            'M5 称谓释放与 Design 显式释放集不一致', 'guard_m5_surface_release',
+            ('guard', 'm5', s.context.scene_id))]),
     'M1': lambda s: check_obligation_coverage(s.binding, s.context),
     'M2': lambda s: check_entry_timing(s.context, s.order),
     'M3': lambda s: check_entry_timing(s.context, s.order),
     'M4': lambda s: check_binding_beat_refs(s.binding, s.graph),
     'M6': lambda s: check_cast_legality(s.context, s.graph, s.appeared),
     'M7': lambda s: (
-        check_read_projection(s.scene, s.context) if s.scene is not None else []),
+        check_read_projection(s.scene, s.context, s.graph)
+        if s.scene is not None else []),
     'M8': lambda s: check_thread_projection(s.graph, s.context),
 }
 

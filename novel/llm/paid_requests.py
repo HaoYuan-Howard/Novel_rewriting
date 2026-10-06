@@ -52,6 +52,23 @@ adopted（`sealed_turn_references`），未封存的 delivered 轮关闭让位�
 【inputs 只记真读到的】`record_edge` 在 repository 读盘时登记（键 =
 `family_input_key` 完整路径）。单进程 pipeline 在内存里传递对象不产生边——各
 owner 经 repository 读写，inputs 随之闭合；缺边是诚实的空，不是假账。
+
+【窄返修协议（CS-H H2，RC-57～59；`docs/schema/repair_convergence.md` D 表）】
+`ask_json` 的条目返修在 CS-patch（RC-46/47）之上补齐四件事：
+① **带基底起步**（`PatchBaseline`）：免费判定已完整预检过 owner 已发布版本的
+   修订对照 wire 时（窄复核沿用），返修从该基底开始，不发整份首轮请求；
+② **窄输入**（`NarrowPatchRequest`）：patch 轮只带协议规则＋失败条目＋依赖切片
+   ＋合法取值，**不带整份原请求与前序材料全文**——请求规模只与失败条目及其依赖
+   挂钩（M3 返修宽度；对照读数见 REQUIREMENTS CS-H H2 判据⑤）；
+③ **可选目标闭集**（RC-58）：责任位置须由模型决定的规则码（`PATCH_ROUTES`
+   登记 ``optional``：必保义务漏标、series 接受拍互斥）发候选拍闭集，模型只
+   覆盖选中的子集（至少一个），回答路径必须落在闭集内；
+④ **无进展按根因**：owner 的验收反馈按根因聚合成任务（同一规则码的多处命中
+   是一个任务并附受影响位置，`stage4/preflight.py::DesignInspection.feedback`），
+   接受循环以任务身份判定进展——候选字节变化不算进展，回派与重入不重置任何额度。
+整份出口是闭集（RC-59）：只有 JSON 回答无法解码／整体形状失败／协议字面量不符
+才退整份修订——局部称谓、单条义务、编译缺陷一律走条目返修或按所在面回派，规则
+码→处置的逐码清点在 `contracts/judges/str06.py::PATCH_ROUTES`。
 """
 from __future__ import annotations
 
@@ -66,7 +83,7 @@ from typing import Any, Callable, Final, NamedTuple, Sequence
 
 from contracts.artifacts import ARTIFACT_PATHS, STR06_ARTIFACT_RC_VERSIONS
 from novel import run_identity
-from novel.core.validation import validation_identity
+from novel.core.validation import ValidationIssue, validation_identity
 from contracts.invariants import (
     NODES, OWNER_REVISION_MAX_ROUNDS, WORK_UNIT_MAX_DELIVERY_ATTEMPTS,
 )
@@ -94,8 +111,10 @@ from novel.work_units import (
 )
 
 __all__ = [
-    'AdoptionRef', 'CandidateRunContext', 'DurableAnswer', 'ExecutionError', 'ValidationStop',
-    'PaidRequestSession', 'PatchLocate', 'PatchTarget', 'PatchedAnswer',
+    'AdoptionRef', 'BaselineAttempt', 'CandidateRunContext', 'DurableAnswer',
+    'ExecutionError', 'ValidationStop',
+    'NarrowContext', 'NarrowPatchRequest',
+    'PaidRequestSession', 'PatchBaseline', 'PatchLocate', 'PatchTarget', 'PatchedAnswer',
     'PurchaseRequired', 'RUNTIME_PHASES', 'UpstreamOwned', 'WORKFLOW_REL',
     'accept_patch_answer', 'ask_json', 'ask_text_once', 'candidate_artifact',
     'candidate_contract_identity', 'format_json_path',
@@ -1157,6 +1176,53 @@ class PaidRequestSession:
 
     # ── CS-H H1b：免费沿用的采用凭证（carried_forward） ──────────────────────
 
+    def baseline_ref(self, owner: str, attempt: BaselineAttempt) -> AdoptionRef:
+        """已购候选 attempt 的显式引用（CS-H H2 带基底起步的窄返修）。
+
+        窄返修的基底 wire 由已购候选产生，它的 attempt 行仍在本根账里：这里
+        **不新记任何账行**（不重复计费），只从工作单元账核验 ok 响应证据与生成
+        事实（model、prompts 取原请求工作包），返回供 provenance 展开的引用——
+        成本链按 attempt_id 精确聚合（I-17）。证据不闭合即显式拒绝（I-34），
+        不静默丢基座的成本账。
+        """
+        node, scope = semantic_owner_unit(owner)
+        unit = self._unit_for(owner)
+        ledger = unit._read()
+        turn = next((t for t in ledger.turns if t.turn_id == attempt.turn_id
+                     and t.request_sha256 == attempt.request_sha256), None)
+        if turn is None:
+            raise _execution_error(
+                f'{owner} 窄返修基底 attempt 的内容轮不属于原请求身份，拒绝起步',
+                code='carried_forward_turn', node=node, item=scope, phase='accept',
+                context={'turn_id': attempt.turn_id,
+                         'baseline_request_sha256': attempt.request_sha256})
+        found = next((a for a in turn.attempts
+                      if a.attempt_id == attempt.attempt_id and a.outcome == 'ok'
+                      and a.response_sha256 == attempt.response_sha256), None)
+        if found is None:
+            raise _execution_error(
+                f'{owner} 窄返修基底 attempt 无 ok 响应证据，拒绝起步',
+                code='carried_forward_attempt', node=node, item=scope, phase='accept',
+                context={'turn_id': attempt.turn_id, 'attempt_id': attempt.attempt_id})
+        try:
+            payload = unit.attempt_request_payload(attempt.turn_id, attempt.attempt_id)
+        except WorkUnitRefused as exc:
+            raise _execution_error(
+                f'{owner} 窄返修基底的响应证据不可读：{exc}',
+                code='carried_forward_request_payload', node=node, item=scope,
+                phase='accept', context={'turn_id': attempt.turn_id}) from exc
+        messages = (payload.get('request_payload') or {}).get('messages') or []
+        prompts = {role: next((m.get('content') or '' for m in messages
+                               if m.get('role') == role), '')
+                   for role in ('system', 'user')}
+        model = (payload.get('response') or {}).get('model') or ''
+        return AdoptionRef(
+            owner=owner, model=model, prompts=prompts, sid=self.sid,
+            request_sha256=attempt.request_sha256, unit_id=unit.unit_id,
+            turn_id=attempt.turn_id, attempt_id=attempt.attempt_id,
+            response_sha256=attempt.response_sha256,
+            request_fingerprint=attempt.request_sha256)
+
     def adopt_carried_forward(self, owner: str, request: ChatRequest, identity: str, *,
                               baseline_request_sha256: str, turn_id: str, attempt_id: str,
                               response_sha256: str, new_paid_calls: int = 0) -> AdoptionRef:
@@ -1261,7 +1327,12 @@ def accept_json_answer(answer: DurableAnswer,
         else:
             data, errors = None, ['顶层必须为 object']
     if data is None and not errors:
-        errors = [f'响应解码/形状失败：{decode_error}']
+        # 整份出口闭集（CS-H H2，RC-59）：回答无法解码／顶层形状失败是**唯一**
+        # 可退整份修订的 JSON 侧原因；按码登记（`PATCH_ROUTES['answer_shape']`），
+        # 无进展判定与规则码枚举测试据此识别它，不靠解析展示文案。
+        errors = [ValidationIssue(f'响应解码/形状失败：{decode_error}',
+                                  code='answer_shape', location=('answer',),
+                                  owner='runtime')]
     # parse 分项按**线上交付**判定：交付了内容而解析/校验失败是 'failed'
     # （确定性缺陷免费修复，不重购）；线上交付为空（救回也未过闸）是 'empty'
     # ——wire 层失败，D5 同轮重试的判据。
@@ -1286,12 +1357,66 @@ class PatchTarget(NamedTuple):
     optional: bool = False
 
 
+class BaselineAttempt(NamedTuple):
+    """起步基底的生产 attempt 坐标（CS-H H2 带基底起步；本根账内寻址）。
+
+    窄返修的基底是已购候选的整份 wire，它的 attempt 行仍在本根成本账里——
+    成本链按 ``attempt_id`` 精确聚合（I-17），不因返修双计或丢失。
+    """
+
+    turn_id: str
+    attempt_id: str
+    response_sha256: str
+    request_sha256: str
+
+
+class PatchBaseline(NamedTuple):
+    """带基底起步（CS-H H2，RC-57 D 表「基底是 owner 已发布版本的修订对照
+    wire」）：条目返修不从**整份新请求**开始，而是从本节点已发布／已购候选的
+    整份 wire 开始。
+
+    ``wire`` 是起步基底；``digest`` 是它的候选摘要（SHA-256），随窄请求下发给
+    模型核对（「核对基底候选摘要」）——模型修错了版本时合并闸按路径存在性拒绝；
+    ``attempt`` 非空时 `ask_json` 经 ``PaidRequestSession.baseline_ref`` 把它解析
+    成显式引用展开进 provenance（成本按各 attempt 行精确聚合）。
+    """
+
+    wire: dict
+    digest: str
+    summary: str = ''
+    attempt: BaselineAttempt | None = None
+
+
+class NarrowPatchRequest(NamedTuple):
+    """窄返修请求的四块材料（RC-57 输入行）：协议规则＋依赖切片＋合法取值。
+
+    失败条目由 ``PatchTarget`` 携带（路径＋当前值＋问题），不进这里。**整份
+    原请求与前序材料全文不进窄请求**——请求规模只与失败条目及其依赖挂钩，不随
+    全书义务清单、身份投影与已发布产物全文增长（M3 返修宽度；本根 Design
+    修订轮 35,434 输入／29,102 输出的对照见 REQUIREMENTS CS-H H2 判据⑤）。
+    """
+
+    rules: str          #: 协议规则：wire 协议字面量、字段契约与输出格式
+    dependency: str     #: 依赖切片：只带必要的事实与状态（ JSON 文本）
+    legal_values: str   #: 合法取值：可引用闭集（char_id／ob／know ref／kf…）
+
+
+#: owner 声明的窄请求组装协议：``(base_wire, targets) -> NarrowPatchRequest``。
+#: 纯函数、确定性的，与该 owner 的验收闸同源派生（Design 的依赖切片由
+#: `novel/stages/stage4/slim.py::design_patch_slice` 提供）。为 None 时
+#: `patch_user_prompt` 保持 CS-patch 宽形状（原请求作固定前缀）。
+NarrowContext = Callable[[dict, list[PatchTarget]], NarrowPatchRequest]
+
+
 #: owner 声明的条目定位协议：``(wire_dict, errors) -> [(path, issues), …] 或
 #: None``——条目用裸元组（stage 包不 import 本模块也能声明协议；分层规则禁
 #: stage2 依赖 novel.llm）。None（或存在不可定位错误）＝本轮退整份返修；
 #: 返回的条目必须**覆盖全部** errors，否则 ask_json 拒绝进入条目返修
 #: （不静默漏项）。纯函数、确定性——与该 owner 的验收闸同源派生。
-PatchLocate = Callable[[dict, list[str]], 'list[tuple[tuple[str | int, ...], list[str]]] | None']
+#: 第三元素 ``True``（CS-H H2，RC-58）＝可选目标闭集条目：责任位置须由模型
+#: 决定（`PATCH_ROUTES` 登记 ``optional`` 的规则码），模型只覆盖选中的子集
+#: （至少一个），回答路径必须落在闭集内。
+PatchLocate = Callable[[dict, list[str]], 'list[tuple[tuple[str | int, ...], list[str]]] | list[tuple[tuple[str | int, ...], list[str], bool]] | None']
 
 
 class PatchedAnswer(NamedTuple):
@@ -1299,18 +1424,31 @@ class PatchedAnswer(NamedTuple):
 
     产物内容＝基底 wire 经 patch 值替换后的合并结果（compiler 确定性合成，
     I-15）；`refs` 展开为多引用进 provenance／CommitBundle（成本按各 attempt
-    行精确聚合，B1 纪律不变）。``.ref`` 取最后一环，供单引用消费面兜底。"""
+    行精确聚合，B1 纪律不变）。``.ref`` 取最后一环，供单引用消费面兜底。
 
-    base: DurableAnswer
+    ``base`` 可为 None（带基底起步且调用方只给了 wire 与摘要时）；`extra_refs`
+    是基底 attempt 的显式引用（CS-H H2 窄复核沿用：合并产物的事实与成本由基底
+    attempt 与 patch 轮共同承载，经 `adoption_refs` 展开进 provenance）。
+    """
+
+    base: DurableAnswer | None
     patches: tuple[DurableAnswer, ...]
+    extra_refs: tuple[AdoptionRef, ...] = ()
 
     @property
     def answers(self) -> tuple[DurableAnswer, ...]:
-        return (self.base, *self.patches)
+        return tuple(a for a in (self.base, *self.patches) if a is not None)
 
     @property
     def ref(self) -> AdoptionRef:
         return (self.patches[-1] if self.patches else self.base).ref
+
+    @property
+    def adoption_refs(self) -> tuple[AdoptionRef, ...]:
+        """provenance 展开：基底 attempt 引用＋各轮回答引用（按贡献顺序）。"""
+        refs = list(self.extra_refs)
+        refs.extend(answer.ref for answer in self.answers)
+        return tuple(refs)
 
 
 def format_json_path(path: tuple[str | int, ...]) -> str:
@@ -1350,12 +1488,24 @@ def _merge_patches(wire: dict, patches: list[tuple[tuple[str | int, ...], Any]])
 _REVISION_BOUNDARY = ('以原请求声明的权威输入为准，只纠正本单位输出中的错误观察或选择；'
                       '原文及只读上游不可改写，不得扩展原请求授权的事实与输出范围。')
 
+#: 窄请求的段标题（测试与读日志按此识别窄形状；与宽形状的「原请求在前」互斥）。
+NARROW_SECTION = '【窄返修】'
+
 
 def patch_user_prompt(base_user: str, targets: list[PatchTarget],
-                      wire: dict, *, revision_rules: str = _REVISION_BOUNDARY) -> str:
-    """条目返修轮的 user 面：**原始请求原样在前**（固定前缀命中供应商缓存，
-    且模型保有源文与协议上下文），返修要求与失败条目追加在后（可变后缀，
-    与 revision_user_prompt 同一缓存纪律）。"""
+                      wire: dict, *, narrow: NarrowPatchRequest | None = None,
+                      baseline: PatchBaseline | None = None,
+                      revision_rules: str = _REVISION_BOUNDARY) -> str:
+    """条目返修轮的 user 面。
+
+    窄形状（CS-H H2，RC-57；``narrow`` 给出）：**不带整份原请求**，只带协议
+    规则、失败条目、依赖切片与合法取值；带基底起步时附基底候选摘要（模型据此
+    核对自己修的是哪一版）。请求规模只与失败条目及其依赖挂钩。
+
+    宽形状（``narrow`` 为 None，CS-patch 原路径）：原始请求原样在前（固定前缀
+    命中供应商缓存，且模型保有源文与协议上下文），返修要求与失败条目追加在后
+    （可变后缀，与 revision_user_prompt 同一缓存纪律）。
+    """
 
     def _item_json(path: tuple[str | int, ...]) -> str:
         return json.dumps(_walk_path(wire, path), ensure_ascii=False)
@@ -1364,9 +1514,12 @@ def patch_user_prompt(base_user: str, targets: list[PatchTarget],
         f'- 路径 {format_json_path(t.path)}：当前值 {_item_json(t.path)}；'
         f'问题：{"；".join(t.issues)}'
         for t in targets if not t.optional)
+    # 窄形状的可选目标不带「当前值」：闭集的当前值已随依赖切片（目标拍所在场
+    # 全文）送达，逐拍内联会把整份 wire 在请求里写两遍（M3 返修宽度）。
     optional = '\n'.join(
-        f'- 路径 {format_json_path(t.path)}：当前值 {_item_json(t.path)}；'
-        f'问题：{"；".join(t.issues)}'
+        (f'- 路径 {format_json_path(t.path)}：当前值 {_item_json(t.path)}；'
+         f'问题：{"；".join(t.issues)}' if narrow is None else
+         f'- 路径 {format_json_path(t.path)}：问题：{"；".join(t.issues)}（当前值见依赖切片）')
         for t in targets if t.optional)
     lines = ['【条目返修】上一版仅以下条目未通过机械校验，只替换这些条目。'
              if required else '【条目返修】以下条目经免费判定须复核，只替换这些条目。',
@@ -1377,26 +1530,52 @@ def patch_user_prompt(base_user: str, targets: list[PatchTarget],
     if optional:
         lines.append('下面是可选目标闭集：只对你选中的承载位给替换，未选中不给；'
                      '至少覆盖一个（一个都不给视为没有选定承载位，将按未通过处理）。')
-    return (base_user
-            + '\n\n' + '\n'.join(lines) + '\n'
-            + revision_rules + '\n'
-            + (required if required else optional)
-            + (('\n' + optional) if required and optional else ''))
+    if narrow is None:
+        prompt = (base_user
+                  + '\n\n' + '\n'.join(lines) + '\n'
+                  + revision_rules + '\n'
+                  + (required if required else optional)
+                  + (('\n' + optional) if required and optional else ''))
+        return prompt
+    # 窄形状：四块材料（协议规则＋失败条目＋依赖切片＋合法取值），原请求不带。
+    sections = [NARROW_SECTION,
+                '\n'.join(lines),
+                '【协议规则】\n' + narrow.rules,
+                '【合法取值】\n' + narrow.legal_values,
+                '【依赖切片】只含上面条目必需的事实与状态，不是整份输入：\n' + narrow.dependency,
+                revision_rules]
+    if baseline is not None:
+        summary = f'（{baseline.summary}）' if baseline.summary else ''
+        sections.insert(1, '【基底】owner 已发布版本的修订对照 wire，'
+                           f'摘要 sha256:{baseline.digest}{summary}；'
+                           '请核对你在修的就是这一版。')
+    sections.append(required if required else optional)
+    if required and optional:
+        sections.append(optional)
+    return '\n'.join(sections)
 
 
 def accept_patch_answer(answer: DurableAnswer, targets: list[PatchTarget],
-                        wire: dict, validate,
+                        wire: dict, validate, *, baseline: PatchBaseline | None = None,
                         ) -> tuple[dict | None, bool, dict]:
     """patch 轮回答的接受闸（与 accept_json_answer 同一纪律的条目版）。
 
     形状闸：顶层 ``{"patches":[...]}``；非可选 path 必须与请求的目标**逐一对应**
     （全覆盖、无多余、无重复），可选 path（闭集承载位）允许只覆盖选中的子集、
-    但至少覆盖一个；随后合并进 wire 并过**同一套 owner 校验**。返回
-    ``(合并版或 None, 是否采纳, acceptance_fields)``——形状/合并失败时合并版为
-    None（调用方退整份修订）；合并版产出但校验不过时**仍返回合并版**（它是当前
-    最好的全文，供下一轮整份修订作「上一版」，错误如实进无进展判定）。
+    但至少覆盖一个；``baseline`` 给出时先核对基底候选摘要（调用方传入的 wire
+    与声明的起步基底必须是同一版——修错版本的 patch 不合并）；随后合并进 wire
+    并过**同一套 owner 校验**。返回 ``(合并版或 None, 是否采纳, acceptance_fields)``
+    ——形状/合并失败时合并版为 None（调用方退整份修订）；合并版产出但校验不过时
+    **仍返回合并版**（它是当前最好的全文，供下一轮整份修订作「上一版」，错误
+    如实进无进展判定）。
     """
     fields: dict = {'mode': 'json', 'salvage': 'none', 'errors': ()}
+    if baseline is not None and digest(wire) != baseline.digest:
+        fields['parse'], fields['errors'] = 'failed', (ValidationIssue(
+            f'patch 基底与声明的候选摘要不一致（声明 {baseline.digest[:12]}…，'
+            f'实得 {digest(wire)[:12]}…）；拒绝合并，交回派或整份复核',
+            code='patch_shape', location=('patches', 'baseline'), owner='runtime'),)
+        return None, False, fields
     content = answer.content or ''
     data, decode_error = _decode_json(content)
     if data is None and not content.strip() and (answer.reasoning or '').strip():
@@ -1405,8 +1584,10 @@ def accept_patch_answer(answer: DurableAnswer, targets: list[PatchTarget],
     if not isinstance(data, dict) or not isinstance(data.get('patches'), list):
         fields['parse'] = 'ok' if data is not None else (
             'empty' if not content.strip() else 'failed')
-        fields['errors'] = (f'patch 形状失败：期望 {{"patches": [...]}}，'
-                            f'实得 {decode_error or type(data).__name__}',)
+        fields['errors'] = (ValidationIssue(
+            f'patch 形状失败：期望 {{"patches": [...]}}，'
+            f'实得 {decode_error or type(data).__name__}',
+            code='patch_shape', location=('patches',), owner='runtime'),)
         return None, False, fields
     requested = {format_json_path(t.path): t.path for t in targets}
     required = {format_json_path(t.path) for t in targets if not t.optional}
@@ -1416,27 +1597,43 @@ def accept_patch_answer(answer: DurableAnswer, targets: list[PatchTarget],
     errors: list[str] = []
     for entry in data['patches']:
         if not isinstance(entry, dict) or 'path' not in entry or 'value' not in entry:
-            errors.append(f'patch 条目形状失败：须含 path 与 value——{entry!r}')
+            errors.append(ValidationIssue(
+                f'patch 条目形状失败：须含 path 与 value——{entry!r}',
+                code='patch_shape', location=('patches', len(resolved)),
+                owner='runtime'))
             continue
         path_str = str(entry['path'])
         if path_str not in requested:
-            errors.append(f'patch 含未请求的路径 {path_str!r}（只替换列出的失败条目）')
+            errors.append(ValidationIssue(
+                f'patch 含未请求的路径 {path_str!r}（只替换列出的失败条目）',
+                code='patch_shape', location=('patches', len(resolved)),
+                owner='runtime'))
             continue
         if path_str in seen:
-            errors.append(f'patch 路径 {path_str!r} 重复提交')
+            errors.append(ValidationIssue(
+                f'patch 路径 {path_str!r} 重复提交',
+                code='patch_shape', location=('patches', len(resolved)),
+                owner='runtime'))
             continue
         seen.add(path_str)
         resolved.append((requested[path_str], entry['value']))
-    errors.extend(f'缺少路径 {p!r} 的替换条目' for p in sorted(required - seen))
+    errors.extend(ValidationIssue(
+        f'缺少路径 {p!r} 的替换条目', code='patch_shape',
+        location=('patches', 'missing', p), owner='runtime')
+        for p in sorted(required - seen))
     if optional and not (optional & seen):
-        errors.append('可选目标闭集一个都没有选定承载位（至少覆盖一个）')
+        errors.append(ValidationIssue(
+            '可选目标闭集一个都没有选定承载位（至少覆盖一个）',
+            code='patch_shape', location=('patches', 'optional'), owner='runtime'))
     if errors:
         fields['parse'], fields['errors'] = 'failed', tuple(errors)
         return None, False, fields
     try:
         merged = _merge_patches(wire, resolved)
     except (KeyError, TypeError, ValueError) as exc:
-        fields['parse'], fields['errors'] = 'failed', (f'patch 合并失败：{exc}',)
+        fields['parse'], fields['errors'] = 'failed', (ValidationIssue(
+            f'patch 合并失败：{exc}', code='patch_shape',
+            location=('patches', 'merge'), owner='runtime'),)
         return None, False, fields
     merged_errors = list(validate(merged))
     fields['parse'] = 'ok' if not merged_errors else 'failed'
@@ -1485,44 +1682,88 @@ def revision_user_prompt(base_user: str, previous_answer: str,
 def ask_json(session: PaidRequestSession, owner: str, request: ChatRequest,
              validate, patch: PatchLocate | None = None, *,
              revision_rules: str = _REVISION_BOUNDARY,
-             review_targets: Sequence[PatchTarget] | None = None) -> tuple[dict, Any]:
+             review_targets: Sequence[PatchTarget] | None = None,
+             baseline: PatchBaseline | None = None,
+             narrow: NarrowContext | None = None) -> tuple[dict, Any]:
     """JSON 语义调用的接受循环（调用方组合；Runtime 本体不收业务回调）。
 
     耐久响应 → 解析 → D5 救回 → 校验；**非空但不过闸**时按条目级返修优先、
     整份修订兜底（CS-patch，2026-10-03）：owner 提供 `patch` 定位且全部错误
     可定位时，只把失败条目发回（原请求作固定前缀，输出仅替换条目），合并版
     过同一套校验即采纳——返修成本从「整份×轮数」降到「失败条目×轮数」；
-    定位不了或 patch 形状不过 → 整份修订；合并仍失败但问题严格减少则继续
+    定位不了或 patch 形状不过 → 整份修订；合并仍失败但根因任务集不重复则继续
     返修。patch 与整份请求各占一次 `OWNER_REVISION_MAX_ROUNDS` 额度。patch
     轮收到整份回答（RC-29）按整份走同一套全量校验，不算形状失败。
-    问题位置集合重复或回到此前集合即停；严格子集是进展。
-    采纳返回 ``(data, answer)``：整份路径 `answer` 是 `DurableAnswer`；patch
-    路径是 `PatchedAnswer`（基底＋patch 轮多引用，经 `_as_adoption_refs`
-    展开进 provenance／CommitBundle）。空回答仍走 D5 同轮付费重试。崩溃/
-    重跑按请求身份免费重放：各轮已购回答都会命中，停止结论不重复计费。
+    **无进展按根因**（CS-H H2，RC-59）：owner 的验收反馈按根因聚合成任务
+    （`stage4/preflight.py::DesignInspection.feedback`：同一规则码的多处命中是
+    一个任务并附受影响位置），本循环以**任务身份**（规则码＋责任面＋受影响位置
+    集合，`validation_identity`）判定进展——候选字节变化（换了内容、换了句柄
+    仍在同一处失败）不算进展；任务集严格缩小是进展，重复即停。采纳返回
+    ``(data, answer)``：整份路径 `answer` 是 `DurableAnswer`；patch 路径是
+    `PatchedAnswer`（基底＋patch 轮多引用，经 `_as_adoption_refs` 展开进
+    provenance／CommitBundle）。空回答仍走 D5 同轮付费重试。崩溃/重跑按请求身份
+    免费重放：各轮已购回答都会命中，停止结论不重复计费；**回派与重入不重置任何
+    额度**——`seen_heads` 只随本节点本次接受循环累积，上游回派、节点重入都不
+    清零。
 
     ``review_targets``（CS-H H1b，RC-51）：免费判定要求窄复核的目标（上游条目
     变化/删除的承载拍、新增条目的可选目标闭集）。首轮校验**已通过**时也据此发
     一轮条目返修（允许原值不变）；校验未通过时与错误定位的目标合并进同一轮。
     该轮同样占一次 `OWNER_REVISION_MAX_ROUNDS` 额度（返修轮计入内容轮），不
     新建第二套返修协议。
+
+    ``baseline``（CS-H H2，RC-57 带基底起步）：条目返修从 **owner 已发布版本的
+    修订对照 wire** 开始，不发整份首轮请求——免费判定已完整预检过该基底时
+    （窄复核沿用），整份新购不再发生。该模式必须给出 `review_targets`（没有
+    复核目标就没有发起理由）；基底的验收错误与复核目标合并进同一轮条目返修。
+
+    ``narrow``（CS-H H2，RC-57 窄输入）：owner 声明的窄请求组装
+    （协议规则＋依赖切片＋合法取值）。给出时 patch 轮**不带整份原请求**与前序
+    材料全文，只带失败条目及其依赖（`patch_user_prompt` 窄形状）。
     """
     base_user = request.user
-    answer = session.send(owner, request)
+    if baseline is not None:
+        if not review_targets:
+            raise ValueError('带基底起步的条目返修必须给出窄复核目标（review_targets）；'
+                             '没有复核目标时不发起请求')
+        if digest(baseline.wire) != baseline.digest:
+            # 基底声明自洽性（调用方 bug 即时红）：不拿着对不上的摘要起步。
+            raise ValueError('PatchBaseline.digest 与 wire 不一致（声明 '
+                             f'{baseline.digest[:12]}…，实得 {digest(baseline.wire)[:12]}…）')
+    answer: DurableAnswer | None = None if baseline is not None else session.send(owner, request)
     revisions = 0
     seen_heads: list[frozenset[str]] = []
     targets: list[PatchTarget] | None = None
-    wire_dict: dict | None = None
+    wire_dict: dict | None = baseline.wire if baseline is not None else None
     base_answer = answer
     patches: list[DurableAnswer] = []
     force_full = False
     pending_review: list[PatchTarget] = list(review_targets or ())
+    previous = (json.dumps(baseline.wire, ensure_ascii=False, indent=1)
+                if baseline is not None else '')
+    # 带基底起步：基底 attempt 的显式引用（不新记账行；证据不闭合即拒绝起步）。
+    baseline_refs: tuple[AdoptionRef, ...] = ()
+    if baseline is not None and baseline.attempt is not None:
+        baseline_refs = (session.baseline_ref(owner, baseline.attempt),)
+
+    def _result(data):
+        """采纳返回：整份路径是 `DurableAnswer`；条目返修是 `PatchedAnswer`
+        （基底引用＋patch 轮多引用，经 `_as_adoption_refs` 展开进 provenance）。"""
+        if not patches and baseline is None:
+            return answer
+        return PatchedAnswer(base=base_answer, patches=tuple(patches),
+                             extra_refs=baseline_refs)
 
     def _no_progress_stop(errs: list[str], adopted_answer):
-        """无进展即停（R8b.3 位置模式集合；CS-patch 起对 patch 合并结果同样
-        判定；问题严格缩小允许继续，重复/回归集合才停止）。"""
-        # 新诊断由判据提供稳定身份；存量字符串兼容集中在validation_identity。
-        # 展示包装不能吞掉身份；不同未决句柄不得因相同前缀被折成一个问题。
+        """无进展即停（RC-59，按根因）：同一输入下同一根因任务仍在即无进展。
+
+        任务身份由 `validation_identity` 给；owner 的反馈已把同一规则码的多处
+        命中聚合成一个任务（附受影响位置），因此换内容、换句柄仍在同一处失败
+        （候选字节变化）不算进展；不同任务此消彼长仍允许继续（严格缩小是进展）。
+        任务集重复或回到此前集合即停。
+        """
+        # 任务身份（`validation_identity`）：owner 已把同一根因的多处命中聚合
+        # 成一个 carrier，身份与文案/候选字节无关；不同未决任务不因相同前缀被折成一个。
         heads = sorted(validation_identity(e) for e in errs)
         current = frozenset(heads)
         if not (current and current in seen_heads):
@@ -1530,7 +1771,7 @@ def ask_json(session: PaidRequestSession, owner: str, request: ChatRequest,
         node, scope = semantic_owner_unit(owner)
         stop = ValidationStop(
             f'{owner} 校验失败：节点内校验重问后无进展'
-            '（本轮问题位置集合重复——持续重现的失败多为契约或'
+            '（同一根因任务在两轮仍在——持续重现的失败多为契约或'
             '校验器缺陷，整份重写修不动，即停不无限付费）；原响应已按 '
             'attempt 留证，剩余修复走 owner patch、契约修订或人工重跑：'
             f'{errs}',
@@ -1544,9 +1785,16 @@ def ask_json(session: PaidRequestSession, owner: str, request: ChatRequest,
 
     while True:
         try:
-            if targets is not None and not _answers_in_full(answer):
+            if answer is None:
+                # 带基底起步（RC-57）：基底是 owner 已发布版本的修订对照 wire，
+                # 不发整份请求；按同一套 validate 取其当前验收结果，组织条目返修。
+                baseline_errors = list(validate(wire_dict))
+                data, errors, fields = None, baseline_errors, {
+                    'mode': 'json', 'salvage': 'none', 'errors': tuple(baseline_errors)}
+            elif targets is not None and not _answers_in_full(answer):
                 merged, passed, fields = accept_patch_answer(
-                    answer, targets, wire_dict, validate)
+                    answer, targets, wire_dict, validate,
+                    baseline=baseline if not patches else None)
                 data = merged if passed else None
                 errors = list(fields['errors'])
                 if merged is not None:
@@ -1562,25 +1810,28 @@ def ask_json(session: PaidRequestSession, owner: str, request: ChatRequest,
                 wire_dict = decoded if isinstance(decoded, dict) else None
         except UpstreamOwned as routed:
             # 回答已耐久且问题归上游：不接受、不在节点内再问；留一条如实的接受记录后上抛。
-            salvaged = not (answer.content or '').strip() and bool((answer.reasoning or '').strip())
-            session.record_acceptance(answer, 'json', parse='failed', errors=routed.errors,
-                                      salvage='reasoning' if salvaged else 'none', accepted=False)
+            # 带基底起步没有本轮回答（基底的问题归上游时同样如实上抛，不记接受）。
+            if answer is not None:
+                salvaged = not (answer.content or '').strip() and bool((answer.reasoning or '').strip())
+                session.record_acceptance(answer, 'json', parse='failed', errors=routed.errors,
+                                          salvage='reasoning' if salvaged else 'none', accepted=False)
             raise
-        session.record_acceptance(answer, fields['mode'], parse=fields['parse'],
-                                  errors=fields['errors'],
-                                  salvage=fields['salvage'],
-                                  accepted=data is not None)
+        if answer is not None:
+            session.record_acceptance(answer, fields['mode'], parse=fields['parse'],
+                                      errors=fields['errors'],
+                                      salvage=fields['salvage'],
+                                      accepted=data is not None)
         if data is not None and not pending_review:
-            return data, (PatchedAnswer(base=base_answer, patches=tuple(patches))
-                          if patches else answer)
-        if data is None and not (answer.cached or fields['parse'] != 'empty'):
+            return data, _result(data)
+        if answer is not None and data is None and not (answer.cached or fields['parse'] != 'empty'):
             # D5：空回答救回失败——同一内容轮内付费重试（占尝试额度，如实计费）。
             answer = session.send(owner, request)
             continue
         # 校验未过，或免费判定（上游差异）要求一轮窄复核：有界修订轮（允许原值
         # 不变）。同一轮内合并窄复核目标与错误定位目标，不新建返修协议（I-35）。
-        adoption = (PatchedAnswer(base=base_answer, patches=tuple(patches))
-                    if patches else base_answer)
+        adoption = (PatchedAnswer(base=base_answer, patches=tuple(patches),
+                                  extra_refs=baseline_refs)
+                    if (patches or baseline is not None) else base_answer)
         current = _no_progress_stop(list(errors), adoption)
         node, scope = semantic_owner_unit(owner)
         heads = sorted(validation_identity(e) for e in errors)
@@ -1605,14 +1856,30 @@ def ask_json(session: PaidRequestSession, owner: str, request: ChatRequest,
         pending_review = []
         if patch is not None and wire_dict is not None and not force_full and errors:
             located = patch(wire_dict, list(errors))
-            # 定位器须覆盖全部问题，不能通过局部修复静默丢掉其它失败。
-            if located and {e for _, es in located for e in es} == set(errors):
-                round_targets.extend(PatchTarget(path=tuple(path), issues=tuple(issues))
-                                     for path, issues in located)
+            # 定位器须覆盖全部问题，不能通过局部修复静默丢掉其它失败
+            # （条目可能是二元组或带可选目标标志的三元组，按下标取）。
+            if located and {e for entry in located for e in entry[1]} == set(errors):
+                for entry in located:
+                    path, issues = tuple(entry[0]), entry[1]
+                    optional = bool(entry[2]) if len(entry) > 2 else False
+                    hit = next((t for t in round_targets if t.path == path), None)
+                    if hit is None:
+                        round_targets.append(PatchTarget(
+                            path=path, issues=tuple(issues), optional=optional))
+                        continue
+                    # 同一路径既有复核目标又有错误定位：合并问题、必选优先
+                    # （必选须覆盖；不静默丢掉任一侧的问题列表）。
+                    merged = PatchTarget(
+                        path=path,
+                        issues=tuple(dict.fromkeys((*hit.issues, *issues))),
+                        optional=hit.optional and optional)
+                    round_targets[round_targets.index(hit)] = merged
         targets = round_targets or None
         force_full = False
         if targets:
+            narrow_context = narrow(wire_dict, targets) if narrow is not None else None
             next_user = patch_user_prompt(base_user, targets, wire_dict,
+                                          narrow=narrow_context, baseline=baseline,
                                           revision_rules=revision_rules)
         else:
             next_user = revision_user_prompt(base_user, previous, list(errors),
@@ -1775,9 +2042,10 @@ def _unique(pairs):
 def _as_adoption_refs(ref) -> tuple[AdoptionRef, ...]:
     """显式引用归一化：接受 `AdoptionRef`、自带 prompt 原文的 `DurableAnswer`，
     或条目返修的 `PatchedAnswer`（展开为基底＋各 patch 轮的多引用——CS-patch：
-    合并产物的事实与成本由全部贡献回答共同承载，B1 精确 attempt 聚合不变）。"""
+    合并产物的事实与成本由全部贡献回答共同承载，B1 精确 attempt 聚合不变）。
+    """
     if isinstance(ref, PatchedAnswer):
-        return tuple(answer.ref for answer in ref.answers)
+        return ref.adoption_refs
     if isinstance(ref, DurableAnswer):
         return (ref.ref,)
     return (ref,)

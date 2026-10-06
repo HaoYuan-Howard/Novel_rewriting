@@ -43,7 +43,10 @@ from novel.stages.stage4.book_ir import (
 )
 from novel.stages.stage4.compile import compile_execution_plan, init_establishments
 from novel.stages.stage4.design import assemble_body_design
-from novel.stages.stage4.slim import knowledge_change_index, project_design_input, project_hook_semantics
+from novel.stages.stage4.slim import (
+    design_patch_legal_values, design_patch_slice, knowledge_change_index,
+    project_design_input, project_hook_semantics,
+)
 from novel.stages.stage4.fold import (
     FoldedState, ThreadFold, fold_accepted_prefix, fold_thread_faces,
 )
@@ -51,7 +54,9 @@ from novel.stages.stage4.grounding import (
     assemble_preserve, design_obligation_index, derive_semantic_binding,
     obligation_core_id, project_brief, project_preserve_view, preserve_revision_wire,
 )
-from novel.stages.stage4.preflight import inspect_body_materials, inspect_design_candidate
+from novel.stages.stage4.preflight import (
+    hook_combination_errors, inspect_body_materials, inspect_design_candidate,
+)
 from novel.stages.stage4.repair import plan_material_repairs
 from novel.stages.stage4.guard import (
     appeared_chars, check_binding_beat_refs, check_cast_legality,
@@ -60,7 +65,9 @@ from novel.stages.stage4.guard import (
     expected_thread_faces, lock_order_violations, run_mechanical_guard,
     scene_order,
 )
-from novel.stages.stage4.hook import assemble_hook_design, publish_graph
+from novel.stages.stage4.hook import (
+    assemble_hook_design, hook_patch_legal_values, hook_patch_slice, publish_graph,
+)
 from novel.stages.stage4.hook_validation import validate_hook_design
 from novel.stages.stage4.hook_context import compile_hook_context
 from novel.stages.stage4.slim import design_fact_marks, design_placements
@@ -77,10 +84,12 @@ __all__ = [
     'check_obligation_coverage',
     'check_read_projection', 'check_thread_lifecycle', 'check_thread_projection',
     'compile_execution_plan', 'compile_hook_context', 'compile_writer_book_ir',
-    'design_fact_marks', 'design_obligation_index', 'design_placements',
+    'design_fact_marks', 'design_obligation_index', 'design_patch_legal_values',
+    'design_patch_slice', 'design_placements',
     'derive_semantic_binding', 'locate_design_patches',
     'expected_thread_faces', 'fold_accepted_prefix', 'fold_thread_faces',
     'init_establishments', 'lock_order_violations', 'obligation_core_id',
     'project_brief', 'project_design_input', 'project_hook_semantics', 'project_preserve_view', 'preserve_revision_wire',
+    'hook_combination_errors', 'hook_patch_legal_values', 'hook_patch_slice',
     'publish_graph', 'run_mechanical_guard', 'scene_order', 'validate_hook_design',
 ]

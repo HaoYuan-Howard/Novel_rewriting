@@ -357,7 +357,7 @@ def test_rc22_hook_request_contains_referenced_proposition_or_stops(tmp_path, mi
     captured = []
     class Captured(Exception):
         pass
-    def ask(owner, prompt, validate, patch=None):
+    def ask(owner, prompt, validate, patch=None, **kwargs):
         captured.append(prompt)
         raise Captured()
     ctx.ask = ask

@@ -107,6 +107,56 @@ def test_accept_patch_answer_requires_exact_coverage():
     assert not passed and any('缺少路径' in e for e in fields['errors'])
 
 
+def test_optional_targets_accept_subset_refuse_empty_and_outside_the_closed_set():
+    """RC-58 可选目标闭集：子集合法、一个不选拒绝、闭集外路径拒绝。"""
+    from novel.llm.paid_requests import NarrowPatchRequest, PatchTarget
+
+    wire = {'protocol_version': 'v', 'scenes': [
+        {'beats': [{'ev': 'a', 'real': []}, {'ev': 'b', 'real': []}]}]}
+    closed = [PatchTarget(path=('scenes', 0, 'beats', i),
+                          issues=('必保义务漏标：可承载本义务',), optional=True)
+              for i in range(2)]
+
+    def validate(w):
+        return [] if any(b.get('real') for s in w['scenes'] for b in s['beats']) \
+            else ['必保义务未被任何拍标注承载']
+
+    def carrier(**over):
+        return json.dumps({'patches': over.get('patches', [])}, ensure_ascii=False)
+
+    def _beat(i, real):
+        return {'ev': 'ab'[i], 'real': real}
+
+    # ① 只覆盖选中子集（一个）即合法：合并后过同一套校验，未选拍原样。
+    answer = carrier(patches=[{'path': 'scenes[0].beats[0]',
+                               'value': _beat(0, ['ob01'])}])
+    merged, passed, fields = accept_patch_answer(_patch_answer(answer), closed, wire, validate)
+    assert passed and merged['scenes'][0]['beats'][0]['real'] == ['ob01']
+    assert merged['scenes'][0]['beats'][1] == wire['scenes'][0]['beats'][1], '未选拍原样'
+    # ② 一个都不给＝没有选定承载位：拒绝（不静默采纳零承载）。
+    merged, passed, fields = accept_patch_answer(
+        _patch_answer('{"patches": []}'), closed, wire, validate)
+    assert not passed and merged is None
+    assert any('一个都没有选定承载位' in e for e in fields['errors'])
+    # ③ 闭集外路径：拒绝（回答路径必须落在闭集内）。
+    outside = carrier(patches=[{'path': 'scenes[0].beats[0]', 'value': _beat(0, ['ob01'])},
+                               {'path': 'chapters[0]', 'value': {}}])
+    merged, passed, fields = accept_patch_answer(
+        _patch_answer(outside), closed, wire, validate)
+    assert not passed and merged is None
+    assert any('未请求的路径' in e for e in fields['errors'])
+
+    # 窄形状的可选目标行不带「当前值」（当前值随依赖切片送达，M3 返修宽度）；
+    # 宽形状保持原样（无切片，模型需要当前值才能给完整替换）。
+    narrow = NarrowPatchRequest(rules='协议', dependency='切片', legal_values='闭集')
+    prompt = patch_user_prompt('【原始请求】', closed, wire, narrow=narrow)
+    assert '当前值见依赖切片' in prompt and '【依赖切片】' in prompt
+    assert '- 路径 scenes[0].beats[0]：当前值' not in prompt, \
+        '可选目标闭集不逐拍内联当前值（整份 wire 会写两遍）'
+    wide = patch_user_prompt('【原始请求】', closed, wire)
+    assert '- 路径 scenes[0].beats[0]：当前值' in wide
+
+
 # ───────────────────────── ask_json 的 patch 轮（unit） ─────────────────────────
 
 def _locate(wire, errors):
@@ -153,6 +203,34 @@ def test_ask_json_unfixable_patch_stops_as_no_progress(tmp_path):
                             if w['beats'][0]['participants'] == ['ghost'] else []),
                  patch=_locate)
     assert len(transport.calls) == 2, '不无限付费'
+
+
+def test_no_progress_judges_root_cause_tasks_not_candidate_bytes(tmp_path):
+    """判据④（CS-H H2）：无进展按根因任务判定——候选字节变化不算进展。
+
+    两轮 patch 换了 participants 的字面（ghost→幽灵），同一条目仍引用闭集外
+    人物：规则码与位置不变 ⇒ 同一任务 ⇒ 第二轮即停，不为「改了但没改对」付费。"""
+    from novel.core.validation import ValidationIssue
+
+    def validate(w):
+        bad = w['beats'][0]['participants'][0] if w['beats'][0]['participants'] else ''
+        return [] if bad == 'fu_jun' else [ValidationIssue(
+            f'拍1 participants 引用未知人物 {bad}', code='unknown_slug',
+            location=('ch01', 0), owner='chapters',
+            context={'wire_paths': [['beats', 0]]})]
+
+    def _patch(wire, errors):
+        return [(('beats', 0), list(errors))]
+
+    transport = _ScriptedTransport([
+        json.dumps(_faulty_wire(), ensure_ascii=False),
+        json.dumps({'patches': [{'path': 'beats[0]', 'value': {
+            **_faulty_wire()['beats'][0], 'participants': ['幽灵']}}]},
+            ensure_ascii=False)])
+    base, _repo, session = _json_session(tmp_path, transport)
+    with pytest.raises(ValueError, match='重问后无进展'):
+        ask_json(session, 'ch01', _request(), validate, patch=_patch)
+    assert len(transport.calls) == 2, '字节变化不算进展，第二轮即停'
 
 
 def test_ask_json_non_localizable_error_falls_back_to_full_revision(tmp_path):

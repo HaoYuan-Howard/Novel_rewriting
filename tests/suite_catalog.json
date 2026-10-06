@@ -1215,6 +1215,12 @@
         "test_rc27_real_chain_publishes_located_basis": "stage",
         "test_rc29_full_answer_in_patch_round_is_accepted_as_full_revision": "stage"
       }
+    },
+    "tests/test_str06_patch_routes.py": {
+      "layer": "unit_contract",
+      "stages": [
+        "stage4"
+      ]
     }
   },
   "version": 1

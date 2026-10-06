@@ -627,8 +627,11 @@ class _DesignFaultTransport:
     def send(self, request):
         import json as _json
         from novel.llm.transport import ChatResponse
-        if self._inner._owner(request) == 'design' and (
-                self._sticky or '上一版' not in request.user):
+        # 修订轮的两种形状都算「上一版在场」：整份修订带【修订要求】＋上一版全文，
+        # 窄返修带【条目返修】／【窄返修】（不带整份原请求，CS-H H2）。
+        repair = any(mark in request.user for mark in
+                     ('【修订要求】', '【条目返修】', '【窄返修】'))
+        if self._inner._owner(request) == 'design' and (self._sticky or not repair):
             self._inner.calls.append('design')
             return ChatResponse(
                 content=_json.dumps(self._bad, ensure_ascii=False),

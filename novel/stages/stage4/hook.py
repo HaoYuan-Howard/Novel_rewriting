@@ -20,7 +20,7 @@ patch（提取已购 wire、最小修订、经 --wire-dir 采用留证），不�
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import Any
+from typing import Any, Iterable, Mapping, Sequence
 
 from pydantic import ValidationError
 
@@ -72,12 +72,16 @@ def assemble_hook_design(
     wire 先解析成 canonical 形状再走既有校验与 schema 构造。"""
     errors: list[str] = []
     if wire.get('protocol_version') != STAGE4_HOOK_DESIGN_PROTOCOL:
-        errors.append(f'protocol_version 必须是 {STAGE4_HOOK_DESIGN_PROTOCOL}，'
-                      f'实得 {wire.get("protocol_version")!r}（I-13 无隐式迁移）')
+        errors.append(design_issue(
+            f'protocol_version 必须是 {STAGE4_HOOK_DESIGN_PROTOCOL}，'
+            f'实得 {wire.get("protocol_version")!r}（I-13 无隐式迁移）',
+            code='hook_protocol_literal', location=('protocol_version',)))
     extra = set(wire) - _WIRE_KEYS
     if extra:
-        errors.append(f'Hook Design wire 携带未知字段 {sorted(extra)}'
-                      '（源 Hook 证据、义务字段与自由 state0 文本不收）')
+        errors.append(design_issue(
+            f'Hook Design wire 携带未知字段 {sorted(extra)}'
+            '（源 Hook 证据、义务字段与自由 state0 文本不收）',
+            code='hook_wire_key_whitelist', location=('wire_keys', tuple(sorted(extra)))))
     if errors:
         return None, errors
     data = deepcopy(wire)
@@ -107,7 +111,9 @@ def assemble_hook_design(
     try:
         return HookDesign.model_validate(data), []
     except ValidationError as exc:
-        return None, [f'hook_design 构造失败：{exc}']
+        return None, [design_issue(
+            f'hook_design 构造失败：{exc}',
+            code='hook_construct', location=('hook_design',))]
 
 
 def publish_graph(body: BodyDesign, hook: HookDesign) -> PresentationGraph:
@@ -115,3 +121,75 @@ def publish_graph(body: BodyDesign, hook: HookDesign) -> PresentationGraph:
     payload = body.model_dump()
     payload['hook'] = hook.model_dump()
     return PresentationGraph.model_validate(payload)
+
+
+# ── 窄返修的依赖切片与合法取值（CS-H H2，RC-57；与 Design 的 slim 切片同型） ──
+
+def _hook_ref_parts(raw: Any) -> tuple[str, str] | None:
+    """wire 位置引用分量（{"scene","beat"}）→ (scene_id, beat_id)；否则 None。"""
+    if isinstance(raw, dict) and set(raw) == {'scene', 'beat'} \
+            and isinstance(raw['scene'], str) and isinstance(raw['beat'], str):
+        return raw['scene'], raw['beat']
+    return None
+
+
+def hook_patch_slice(body: BodyDesign, wire: dict, targets: Sequence[tuple]) -> dict:
+    """Hook 窄返修的依赖切片：只带失败条目引用的拍与释放事实。
+
+    · **被引用的拍**：目标材料／起笔事实／禁揭条目引用到的拍（event、参与人、
+      目标增量与释放），模型据此判断 withheld 与 presentation；
+    · **到该拍为止的释放前缀**：initial_surfaces 与阅读序上不晚于该拍的释放；
+    · **secret 侧约束**：已发布正文里隐藏人物的呈现约束由 HookContext 编译时
+      校验，切片不预判语义，只给事实。
+    """
+    index = {(scene.scene_id, beat.beat_id): (scene, beat)
+             for scene in body.scenes for beat in scene.beats}
+    order = [(scene.scene_id, beat.beat_id)
+             for scene in body.scenes for beat in scene.beats]
+    wanted: list[tuple[str, str]] = []
+    for path in targets:
+        entry = wire.get(path[0]) if path and isinstance(path[0], str) else None
+        rows = entry if isinstance(entry, list) else ()
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            for key in ('beat_ref', 'ref'):
+                parts = _hook_ref_parts(row.get(key))
+                if parts is not None and parts in index:
+                    wanted.append(parts)
+    beats: list[dict] = []
+    for scene_id, beat_id in dict.fromkeys(wanted):
+        scene, beat = index[(scene_id, beat_id)]
+        limit = order.index((scene_id, beat_id))
+        releases = [{'at': 'initial_surfaces', **s.model_dump(mode='json')}
+                    for s in body.initial_surfaces]
+        for other_scene in body.scenes:
+            for other in other_scene.beats:
+                if order.index((other_scene.scene_id, other.beat_id)) > limit:
+                    continue
+                releases.extend({'at': f'{other_scene.scene_id}#{other.beat_id}',
+                                 **s.model_dump(mode='json')}
+                                for s in other.surface_introductions)
+        beats.append({
+            'beat_ref': {'scene': scene_id, 'beat': beat_id},
+            'event': beat.event, 'participants': list(beat.participants),
+            'target_delta': [d.model_dump(mode='json') for d in beat.target_delta],
+            'release_prefix': releases})
+    return {'slice_version': 'stage4-hook-patch-slice-v1', 'beats': beats}
+
+
+def hook_patch_legal_values(*, body: BodyDesign, known_char_ids: Iterable[str] = (),
+                            registered_surfaces: Mapping[str, set[str]] | None = None,
+                            ) -> dict:
+    """Hook 窄返修的合法取值：位置引用分量与称谓释放闭集（与整份请求同一把尺）。"""
+    beats: dict[str, list[str]] = {}
+    for scene in body.scenes:
+        beats.setdefault(scene.scene_id, []).extend(
+            beat.beat_id for beat in scene.beats)
+    return {
+        'beat_refs': beats,
+        'init': 'init',
+        'char_ids': sorted(known_char_ids),
+        'surfaces': {char_id: sorted(faces)
+                     for char_id, faces in sorted((registered_surfaces or {}).items())},
+    }

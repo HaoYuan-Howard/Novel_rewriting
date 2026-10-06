@@ -808,7 +808,7 @@ def test_through_stage7_full_chain_replay_and_authorization_gate(tmp_path, monke
         {'chapter_ordinal': 2, 'text': '夫君夜半翻墙而出，苏芸娘发现玉佩刻着沈字。'}]
 
     def make_ask(wires, counter, repo):
-        def ask(owner, prompt, validate, patch=None):
+        def ask(owner, prompt, validate, patch=None, **kwargs):
             if owner not in wires:
                 raise PurchaseRequired(owner)
             counter.append(owner)
