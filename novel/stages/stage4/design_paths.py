@@ -81,6 +81,10 @@ def _complete_parent(wire: Any, path: Path) -> Path | None:
         except KeyError:
             existing = existing[:-1]
     if not existing:
+        # 顶层可选键缺失允许补建（CS-H H3：追加式修复如 expression_overrides，
+        # 值＝完整替换数组）；其余（中途缺键／下标越界）仍是不可定位的坏路径。
+        if len(path) == 1 and isinstance(path[0], str) and isinstance(wire, dict):
+            return path
         return None            # 连顶层字段都不存在：不能局部替换，退整份
     # 只允许「缺省的键」升到现存的对象祖先（如拍里没写 real）；下标越界、或要升到的祖先
     # 是整个数组，说明路径指向的条目根本不存在——升上去等于把整个数组重发，违背「最小完整

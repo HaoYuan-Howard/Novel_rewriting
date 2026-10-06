@@ -823,7 +823,12 @@ def inspect_body_design(
         if kind == 'expression':
             hit = next((i for i, v in enumerate(listed('expression_overrides'))
                         if isinstance(v, dict) and v.get('ex_id') == site[1]), None)
-            return ('expression_overrides', hit) if hit is not None else None
+            if hit is not None:
+                return ('expression_overrides', hit)
+            # keep 语句（Brief 回填）的修复入口是**追加**该 ex_id 的 override：
+            # wire 无此条时以整个 overrides 数组为最小完整可替换单元（顶层可选键
+            # 允许补建——CS-H H3 判据⑤：残余全部带路径）。
+            return ('expression_overrides',)
         if kind == 'scene' and site[2] in ('brief', 'driver') and site[1] in scene_index:
             return ('scenes', scene_index[site[1]], site[2])
         if kind == 'beat' and site[3] == 'event' and (site[1], site[2]) in beat_index:

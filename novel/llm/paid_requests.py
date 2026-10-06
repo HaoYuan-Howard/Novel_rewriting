@@ -1476,11 +1476,19 @@ def _walk_path(document, path: tuple[str | int, ...]):
 
 def _merge_patches(wire: dict, patches: list[tuple[tuple[str | int, ...], Any]]) -> dict:
     """wire 深拷贝后按路径替换条目值（patch 合并的唯一实现）。路径在合并版
-    上不再有效即抛 KeyError——模型改动了结构的 patch 整体拒绝。"""
+    上不再有效即抛 KeyError——模型改动了结构的 patch 整体拒绝。
+
+    例外（CS-H H3）：**顶层可选键缺失**时允许补建（值＝完整替换对象，如
+    `expression_overrides` 数组——keep 语句泄漏的修复入口是追加 override，wire
+    缺省省略该键）。嵌套路径不享受该例外：中途缺键仍是坏路径。"""
     merged = json.loads(json.dumps(wire, ensure_ascii=False))
     for path, value in patches:
         parent = _walk_path(merged, path[:-1]) if path else merged
-        _walk_path(merged, path)     # 存在性先行：坏路径不落半份合并
+        try:
+            _walk_path(merged, path)     # 存在性先行：坏路径不落半份合并
+        except KeyError:
+            if not (len(path) == 1 and isinstance(path[0], str) and path[0] not in merged):
+                raise
         parent[path[-1]] = json.loads(json.dumps(value, ensure_ascii=False))
     return merged
 

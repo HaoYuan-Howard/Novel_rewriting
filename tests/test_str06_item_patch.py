@@ -47,8 +47,12 @@ def test_merge_patches_replaces_only_target_items():
 def test_merge_patches_refuses_unknown_path():
     with pytest.raises(KeyError):
         _merge_patches({'beats': []}, [(('beats', 5), {})])
+    # 顶层可选键缺失允许补建（CS-H H3：追加式修复如 expression_overrides，
+    # 值＝完整替换数组）；非顶层／中途缺键仍是坏路径。
+    assert _merge_patches({'beats': []}, [(('nope',), [{'ex_id': 'ex_01'}])]) == {
+        'beats': [], 'nope': [{'ex_id': 'ex_01'}]}
     with pytest.raises(KeyError):
-        _merge_patches({'beats': []}, [(('nope',), {})])
+        _merge_patches({'beats': []}, [(('beats', 'nope', 0), {})])
 
 
 # ───────────────────────── patch 提示词与接受闸 ─────────────────────────
