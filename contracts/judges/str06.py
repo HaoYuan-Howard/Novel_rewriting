@@ -171,6 +171,9 @@ _hard('design_lock_acceptance', 'stage4',
       'reader known 锁；kf 事实锁在已选状态上用 lock 标注（stage4-design-v8）：'
       '时态锁标在同 modality 的 set、值未知锁标在 op=unknown、原文未回答锁是禁区不承载状态、'
       '一锁一承载且承载拍内地址唯一、映射随 Binding 发布不复制 value；必保锁兑现', 'R-5.17')
+_hard('design_requires_released_gate', 'stage4',
+      '必保揭名（RC-61）：requires_released 的 know 所在拍必须已释放所列称谓'
+      '（同拍释放合法）；承载章正文必现该字面（Stage5 段落级修句闭合）', 'R-5.21')
 _hard('binding_series_collapse', 'stage4',
       'Bind series 分别承载：同一 series 成员绑定不同拍（同拍即 '
       'series_collapsed）；投影带出 series 与锁摘要；必保缺口默认归 design',
@@ -194,6 +197,9 @@ _hard('body_chapter_complete', 'stage5',
       '每章正文完整（非空、编码合法、无章节标题/编号/任务术语外壳）', 'R-7.1')
 _hard('body_withheld_literals', 'stage5',
       '未释放专名不得出现在正文（重写耗尽后无合法候选即停止，不披露放行）', 'R-7.2')
+_hard('body_required_literals', 'stage5',
+      '必保揭名的承载章正文必现该称谓字面（RC-61；缺字面即拒，走段落级修句，'
+      '不披露放行）', 'R-7.8')
 _hard('body_length_band', 'stage5',
       '章篇幅落在配置篇幅带内；超限只有篇幅带可披露，硬失败不披露', 'R-7.3')
 _hard('chapter_receipt_binding', 'stage5',
@@ -300,6 +306,7 @@ PATCH_ROUTES: Final[Mapping[str, PatchRoute]] = {
     'fact_lock_ambiguous': 'locate',
     'fact_lock_unrealized': 'locate',
     'fact_lock_outside_obligation': 'locate',
+    'fact_lock_subject': 'locate',           # CS-H H3（RC-63）：锁主体须包含于承载状态主体
     'fact_lock_unregistered': 'locate',
     'fact_lock_duplicate': 'locate',
     'fact_lock_unanswered': 'locate',
@@ -311,6 +318,8 @@ PATCH_ROUTES: Final[Mapping[str, PatchRoute]] = {
     # CS-H H3（RC-60「投影后的残余归属」）：Design 原文闸先投影再查的残余三态。
     'design_unreleased_reference': 'locate',  # 已绑定称谓但该位置无显示面：补释放／挪承载位／改指称
     'design_projection_lossy': 'locate',      # 无损性守卫触发：不可投影残余归 Design
+    # CS-H H3（RC-61 必保揭名）：know 拍位必须已释放所列称谓（同拍合法）。
+    'design_requires_released': 'locate',     # 挪 know 拍位或提前释放（know 行路径）
 
     # ── 可选目标闭集（RC-58：责任位置须由模型决定） ───────────────────────────
     'design_carrier_missing': 'optional',    # 必保义务漏标 real：候选拍闭集里选承载位

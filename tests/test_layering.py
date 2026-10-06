@@ -200,6 +200,9 @@ def _runtime_files() -> tuple[str, ...]:
 
 #: 允许裸读 JSON 的白名单。每一条都要写得出理由。
 _JSON_READ_ALLOWED = {
+    'novel/stages/stage5/body.py': (
+        '只解码段落修句回答的内存字符串（行替换 JSON，CS-H H3）；'
+        '不读盘上 JSON——章包与正文仍经 repository／付费边界'),
     'novel/stages/revisions.py': (
         '只解码 purchased_baseline 已核验并返回的内存回答以计算结构差异；'
         '不直接读盘上小说 JSON，所有修订证据与产物读取仍走 repository'),

@@ -73,10 +73,11 @@ M2/M3 共用 `check_entry_timing`），码集合与判据注册表的 `guard_m{n
 | `preserve_anchor_closure` | hard | R10a a2：义务 anchors 在投影句柄闭集（≥1）、lineage 由 compiler 派生、series 成员闭集互斥、evidence_conflicts 引用闭合 |
 | `source_evidence_conflict_routing` | hard | R10a a3：源证据冲突按锚点句柄回派 Stage2 owner（拍句柄→逐章、书级→book、不可解析即停）；三分支恢复＝修订／保留解释（revise_self 恢复输入）／未决停止；同指纹不二次回派 |
 | `design_lock_acceptance` | hard | R10a a4：Brief 锁定项（kp 命题登记＋知情锁唯一映射＋kf 事实锁）与 Design v5 锁规则——kp 键持有者须有锁且模式被授权（known 只能来自 known 锁）、读者确认须有 reader known 锁、kf 时态锁按锁 modality 承载、值未知/原文未回答不得 set、必保锁兑现 |
+| `design_requires_released_gate` | hard | CS-H H3（RC-61）必保揭名：三项类型化信号合取派生 `requires_released` 随 Brief 认知变化携带；该 know 所在拍必须已释放所列称谓（同拍合法），违例带 know 行路径可窄修 |
 | `binding_series_collapse` | hard | 同一 series 成员接受拍不同（同拍即 series_collapsed，design 修订轮）；锁摘要经 design 义务清单送达；必保漏标由 real 覆盖闸拦 |
 | `epistemic_lock_order_guard` | hard | R10a a5：kp 知情升级/读者确认不得早于授权该模式的义务承载位置（授权位＝必保义务全部承载点最早者；initial_state 与自由键不查；故事发生顺序不查，P5）；违例按 epistemic_lock_order 回派 body_design |
 | `answer_reuse_four_conditions` | hard | R10a §二.4：已购回答复用四条件——模型输入未变→复用；验收条件变化→免费机械复验；实际写作材料变化→按请求身份判断新回答；仅审计/展示变化→不触发付费重写 |
 | `writer_packet_background_narrowing` | hard | R10b §R10b.3：背景投影规则——写手面背景只投书级初态立足点＋建立之后仍被消费的当前状态（消费者＝声明读取/读者确认目标/Hook 地址/锁键）；unset/unknown 不作背景；补齐面（依赖边生成）保持全量 |
 
-当前注册表共 **29 条**：**27 hard、1 metric、1 unver**（R10a 收口新增 6 hard；R10b 新增 1 hard：背景投影规则）。唯一注册表为
+当前注册表共 **30 条**：**28 hard、1 metric、1 unver**（R10a 收口新增 6 hard；R10b 新增 1 hard：背景投影规则）。唯一注册表为
 `contracts/judges/str06.py`（F8c 起分流至本层判据模块）。

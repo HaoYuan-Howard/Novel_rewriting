@@ -754,7 +754,8 @@ def run_preserve(ctx: ChainContext) -> dict:
         # 的无进展闸停，不二次回派。
         _backfill_source_evidence_conflicts(repository, conflicts)
         raise AssertionError('discover_owner_issues 必然抛错，不可达')
-    brief, identities = project_brief(checkpoint, core, blueprint)
+    brief, identities = project_brief(checkpoint, core, blueprint,
+                                      structure=chars.name_structure)
     # R6 输出组发布：checkpoint 与它的投影 brief 同组一个 seal——同一份付费
     # 产出的第二个 key（生成事实继承，用量不重复认领）。
     repository.publish((
@@ -918,7 +919,8 @@ def run_body_design(ctx: ChainContext) -> dict:
     core = chars.core_view()
     checkpoint = repository.read_model('runtime/preserve_checkpoint.json')
     blueprint = repository.read_model('stage2/blueprints/chapter_blueprints.json')
-    brief, identities = project_brief(checkpoint, core, blueprint)
+    brief, identities = project_brief(checkpoint, core, blueprint,
+                                      structure=chars.name_structure)
     obligation_index = design_obligation_index(checkpoint, brief)
     constraints = OutputConstraints(target_chapter_count=len(ctx.chapters),
                                     total_length_budget=ctx.budget)
@@ -1256,7 +1258,8 @@ def run_hook_design(ctx: ChainContext) -> dict:
     checkpoint = repository.read_model('runtime/preserve_checkpoint.json')
     blueprint = repository.read_model('stage2/blueprints/chapter_blueprints.json')
     brief = repository.read_model('stage4/grounding/reconstruction_brief.json')
-    _, identities = project_brief(checkpoint, chars.core_view(), blueprint)
+    _, identities = project_brief(checkpoint, chars.core_view(), blueprint,
+                                  structure=chars.name_structure)
     projection = chars.name_projection()
     kp_statements = {p.kp_id: p.statement for p in brief.propositions}
     world_statements = {wc.constraint_id: wc.statement for wc in brief.book_constraints}

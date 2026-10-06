@@ -1232,6 +1232,17 @@
         "test_mentioned_but_absent_character_projects_in_the_chapter_packet": "stage",
         "test_first_person_focalizer_uses_the_role_word_in_the_packet": "stage"
       }
+    },
+    "tests/test_str06_required_released.py": {
+      "layer": "unit_contract",
+      "stages": [
+        "stage4",
+        "stage5"
+      ],
+      "cases": {
+        "test_missing_literal_gets_a_paragraph_level_repair_round": "stage",
+        "test_unparseable_paragraph_patch_is_a_failed_attempt_not_a_candidate": "stage"
+      }
     }
   },
   "version": 1

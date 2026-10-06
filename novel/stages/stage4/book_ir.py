@@ -198,6 +198,7 @@ def compile_writer_book_ir(
     kp_statements: Mapping[str, str] = {},
     world_statements: Mapping[str, str] = {},
     display_fallback: Mapping[str, str] | None = None,
+    required_releases: Mapping[tuple[str, str, str], tuple[str, ...]] = None,
 ) -> WriterBookIR:
     """全书静态写作 IR 的唯一产地。纯函数：不落盘、不调 LLM、不修改输入。
 
@@ -215,6 +216,21 @@ def compile_writer_book_ir(
     budgets = allocate_chapter_budgets(graph, total_budget)
     guards = unanswered_guards(graph, binding, fact_locks)
     consumers = consumption_closure(graph, binding.fact_bindings)
+    # 必保揭名（CS-H H3，RC-61 正文面）：认知增量 (holder, kp, mode) → 必现字面，
+    # 落到承载该增量的章（同三元组重复取并集——只会多担不会漏担）。
+    releases = dict(required_releases or {})
+    chapter_requires: dict[int, set[str]] = {}
+    chapter_of_scene = {sid: ch.chapter_ordinal for ch in graph.chapters
+                        for sid in ch.scene_ids}
+    for scene in graph.scenes:
+        for beat in scene.beats:
+            for delta in beat.target_delta:
+                key = (delta.holder, delta.key, delta.knowledge_mode)
+                literals = releases.get(key)
+                if not literals:
+                    continue
+                chapter_requires.setdefault(
+                    chapter_of_scene[scene.scene_id], set()).update(literals)
     chapters: list[ChapterIR] = []
     nav: list[ChapterNavEntry] = []
     scenes_before = 0
@@ -251,7 +267,8 @@ def compile_writer_book_ir(
                 for literal, char_id, enclosing
                 in withheld_name_bindings(withheld, structure, released_here)),
             display_prefix=chapter_display_prefix(
-                graph, ordinal, display_fallback=display_fallback)))
+                graph, ordinal, display_fallback=display_fallback),
+            requires_released=tuple(sorted(chapter_requires.get(ordinal, ())))))
         nav.append(ChapterNavEntry(
             chapter_ordinal=ordinal, purpose=assignment.purpose,
             scene_ids=tuple(assignment.scene_ids), scene_lines=tuple(lines)))

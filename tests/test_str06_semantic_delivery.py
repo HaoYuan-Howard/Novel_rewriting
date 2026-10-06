@@ -376,6 +376,9 @@ def _body_mutations() -> list[_BodyMutation]:
         chapter = next(c for c in ir.chapters if c.chapter_ordinal == 2)
         return _patch_chapter(ir, 2, released_surfaces=('变异面九九',))
 
+    def requires_released(ir):
+        return _patch_chapter(ir, 2, requires_released=('变异揭名九九',))
+
     def scene_release(ir):
         scene = _scene(ir, 1, 'sc01')
         releases = list(scene.verification_ir.released_surfaces)
@@ -721,6 +724,8 @@ def _body_mutations() -> list[_BodyMutation]:
                       '禁露字面九九', withheld),
         _BodyMutation('writer_book_ir.chapters[].released_surfaces', 2,
                       '变异面九九', surfaces),
+        _BodyMutation('writer_book_ir.chapters[].requires_released', 2,
+                      '变异揭名九九', requires_released),
         # ── R2 契约面：承接与线程（Machine 层已进章包，阅读面归分区渲染）──
         _BodyMutation('writer_book_ir.chapters[].continuity.entry.transition', 2,
                       None, entry_transition),

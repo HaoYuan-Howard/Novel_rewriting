@@ -54,16 +54,58 @@ def fact_binding_errors(
     return errors
 
 
+def fact_lock_subject_errors(
+    body: BodyDesign, bindings: Iterable[FactLockBinding],
+    lock_subjects: Mapping[str, frozenset[str]], *, wire_paths: bool = False,
+) -> list[ValidationIssue]:
+    """锁主体包含（CS-H H3，RC-63）：锁的主体须**包含于**承载状态的主体。
+
+    此前可以把丈夫的锁标到别人的状态上而通过（地址由被标状态自身派生，恒等
+    自洽）。主体来自 effect 锚点的作用对象（`fact_lock_subjects` 同尺派生）；
+    未知锁（不在分母）由句柄闭集另一面报，这里只查已知锁。违例带承载状态
+    wire 路径（locate：改标到主体相容的状态上）。
+    """
+    sites = {f'{scene.scene_id}#{beat.beat_id}': (si, bi, beat)
+             for si, scene in enumerate(body.scenes)
+             for bi, beat in enumerate(scene.beats)}
+    errors: list[ValidationIssue] = []
+    for bound in bindings:
+        subjects = lock_subjects.get(bound.kf_id)
+        if not subjects:
+            continue
+        if subjects <= set(bound.address.subjects):
+            continue
+        site = sites.get(bound.beat_ref)
+        matches = ([i for i, delta in enumerate(site[2].target_delta)
+                    if delta.address() == bound.address.address()]
+                   if site is not None else [])
+        paths: tuple = ()
+        if wire_paths and matches:
+            si, bi, _beat = site
+            paths = tuple(('scenes', si, 'beats', bi, 'state', i) for i in matches)
+        errors.append(design_issue(
+            f'M4 事实锁 {bound.kf_id} 的主体 {sorted(subjects)} 不包含于承载状态'
+            f' {bound.beat_ref}／{bound.address.address()} 的主体 '
+            f'{list(bound.address.subjects)}：把锁标到主体相容的状态上',
+            code='fact_lock_subject',
+            location=('fact_lock_subject', bound.kf_id, bound.beat_ref),
+            paths=paths))
+    return errors
+
+
 def fact_lock_carrier_errors(
     body: BodyDesign, bindings: Iterable[FactLockBinding], *,
     required_locks: Mapping[str, tuple[str, ...]],
     carrier_refs: Mapping[str, tuple[str, ...]], wire_paths: bool = False,
 ) -> list[ValidationIssue]:
-    """必保锁须完整映射到对应义务的接受／显式支撑拍，不以全书出现替代兑现。
+    """必保锁须完整映射到共享义务集合的接受／显式支撑拍（CS-H H3，RC-63）。
 
-    锁分母由 compiler 或 Brief 给出，本判据只关联已有引用。共享锁逐义务检查，
-    可共用一个承载拍，但它必须属于每个相关义务的承载集合。问题身份绑定锁与
-    义务，移动到另一个无关拍仍是同一问题；实际位置及可编辑路径只作诊断。
+    一项事实定位一次、多条义务共享：承载拍属于**其中任一**共享义务（realize_
+    locks 引用同一 kf 的必保义务）的 real 集合即成立；其余共享义务由 compiler
+    把承载拍记入 `supporting_beat_refs`（`derive_semantic_binding`），对它们只
+    校验先后（承载拍不晚于接受拍，`compile_support_early`）。锁分母由 compiler
+    或 Brief 给出，本判据只关联已有引用。问题身份绑定锁与共享义务集合，移动
+    到无关拍仍是同一问题；实际位置及可编辑路径只作诊断。
     """
     sites = {f'{scene.scene_id}#{beat.beat_id}': ('scenes', si, 'beats', bi)
              for si, scene in enumerate(body.scenes)
@@ -71,33 +113,39 @@ def fact_lock_carrier_errors(
     by_lock: dict[str, list[FactLockBinding]] = {}
     for bound in bindings:
         by_lock.setdefault(bound.kf_id, []).append(bound)
-    errors: list[ValidationIssue] = []
+    sharing: dict[str, tuple[str, ...]] = {}
     for ob, locks in required_locks.items():
-        allowed = carrier_refs.get(ob, ())
         for kf in dict.fromkeys(locks):
-            carried = by_lock.get(kf, ())
-            outside = [bound for bound in carried if bound.beat_ref not in allowed]
-            if carried and not outside:
-                continue
-            actual = outside[0].beat_ref if outside else None
-            paths = ()
-            if wire_paths:
-                # 状态与 real 是同一拍的耦合字段；同时开放当前承载位，允许移动状态
-                # 或补 real 支撑，两种修复都必须重跑完整候选预检。
-                repair_refs = (*((actual,) if actual is not None else ()), *allowed)
-                paths = tuple(dict.fromkeys(sites[ref] for ref in repair_refs if ref in sites))
-            if carried:
-                code = 'fact_lock_outside_obligation'
-                message = (f'M4 事实锁 {kf} 的承载拍 {actual} 不属于必保义务 {ob} '
-                           f'的 real 接受／支撑拍 {list(allowed)}：在该义务承载拍上'
-                           '标注锁，或显式补充 real 支撑；事实绑定不另造义务承载位')
-            else:
-                code = 'fact_lock_unrealized'
-                message = (f'必保义务 {ob} 的事实锁未兑现：{kf}——在承载该义务的拍上，'
-                           '让表达该事实的状态带上 lock；已有状态直接标注，'
-                           '没有就补这一条，不为同一事实写两条状态')
-            errors.append(design_issue(
-                message, code=code, location=('fact_lock', kf, ob), paths=paths,
-                context={'obligation_id': ob, 'kf_id': kf, 'beat_ref': actual,
-                         'allowed_beat_refs': list(allowed)}))
+            sharing[kf] = (*sharing.get(kf, ()), ob)
+    errors: list[ValidationIssue] = []
+    for kf, obligations in sharing.items():
+        carried = by_lock.get(kf, ())
+        allowed = tuple(dict.fromkeys(
+            ref for ob in obligations for ref in carrier_refs.get(ob, ())))
+        outside = [bound for bound in carried if bound.beat_ref not in allowed]
+        if carried and not outside:
+            continue
+        actual = outside[0].beat_ref if outside else None
+        paths = ()
+        if wire_paths:
+            # 状态与 real 是同一拍的耦合字段；同时开放当前承载位，允许移动状态
+            # 或补 real 支撑，两种修复都必须重跑完整候选预检。
+            repair_refs = (*((actual,) if actual is not None else ()), *allowed)
+            paths = tuple(dict.fromkeys(sites[ref] for ref in repair_refs if ref in sites))
+        if carried:
+            code = 'fact_lock_outside_obligation'
+            message = (f'M4 事实锁 {kf} 的承载拍 {actual} 不属于共享义务 '
+                       f'{list(obligations)} 的 real 接受／支撑拍并集 {list(allowed)}：'
+                       '在任一共享义务的承载拍上标注锁（其余共享义务由 compiler 派生'
+                       '支撑引用），或显式补充 real 支撑；事实绑定不另造义务承载位')
+        else:
+            code = 'fact_lock_unrealized'
+            message = (f'共享义务 {list(obligations)} 的事实锁未兑现：{kf}——在任一'
+                       '共享义务承载该事实的拍上让表达该事实的状态带上 lock；'
+                       '已有状态直接标注，没有就补这一条，不为同一事实写两条状态')
+        errors.append(design_issue(
+            message, code=code, location=('fact_lock', kf, tuple(obligations)),
+            paths=paths,
+            context={'obligation_ids': list(obligations), 'kf_id': kf,
+                     'beat_ref': actual, 'allowed_beat_refs': list(allowed)}))
     return errors

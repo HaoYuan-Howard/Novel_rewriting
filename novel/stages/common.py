@@ -908,6 +908,9 @@ Brief.requirements 以 obNN 为键，包含完整语义、依赖 requires、锁�
 认知变化清单由代码给出短引用 obNN.kNN（持有者、命题与模式已固定）。在对应
 义务 real 承载拍写 know:[{ref:"obNN.kNN"}] 标出每次变化的实际发生拍：先怀疑、
 后证实必须分别落拍；每个引用恰好一次。你不重写持有者、命题、模式或机械 ID。
+条目里的 requires_released（必保揭名）：该 know 所在拍必须**已释放**所列称谓
+（同拍释放合法——本拍 release 引入即可，拍前不可用）；这类称谓不投影，承载
+章的正文必须出现该字面。
 读者 known 的变化必须另写 confirms:{domain,key,subjects,holder}，明确确认的
 目标事实地址；必须是该拍及之前已建立的实际事实。其它认知变化不写 confirms。
 - 每条**必保**（must_preserve=true）义务至少标注一拍，漏标即拒（机械校验）；
@@ -2159,6 +2162,12 @@ def _build_writer_packet(packet: ChapterWriterPacket) -> tuple[WriterPacket, dic
                             source('design', voice.char_id, 'voice', voice.voice))
     creative.append(f'本章目的（第{chapter.chapter_ordinal}章）：{chapter.purpose}',
                     source('design', f'chapter:{chapter.chapter_ordinal}', 'purpose', chapter.purpose))
+    # 必保揭名（CS-H H3，RC-61 正文面）：承载的认知变化要求正文必现的称谓字面。
+    for literal in chapter.requires_released:
+        must_respect.append(f'必保揭名：本章正文必须出现称谓字面「{literal}」'
+                            '（人物的首次正式点名；化进情节写出，不得只以别称带过）',
+                            source('projection', f'chapter:{chapter.chapter_ordinal}',
+                                   'requires_released', literal))
 
     # ── 章级承接（R2.6：entry＋上一章末场合成） ──
     entry = chapter.continuity.entry

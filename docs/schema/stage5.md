@@ -42,6 +42,7 @@ HookContext（正式输入确定性重建），不读源 hook 文案。
 |---|---|---|
 | `body_chapter_complete` | hard | 每章正文完整（非空、编码合法、无叙述外壳） |
 | `body_withheld_literals` | hard | 未释放专名不得出现；无合法候选即停止 |
+| `body_required_literals` | hard | 必保揭名的承载章正文必现该称谓字面（缺字面即拒，段落级修句） |
 | `body_length_band` | hard | 章篇幅落在配置篇幅带内；超限只有篇幅带可披露 |
 | `chapter_receipt_binding` | hard | 章回执绑定章序、IR、前文、正文与请求身份 |
 | `body_semantics_unver` | unver | 正文文学质量未经语义评审（Judge 已取消） |
@@ -49,5 +50,5 @@ HookContext（正式输入确定性重建），不读源 hook 文案。
 | `hook_mechanical` | hard | Hook 机械验通过 |
 | `hook_receipt_binding` | hard | Hook 回执绑定 Context 身份、正文 hash 与请求身份 |
 
-当前注册表共 **8 条**：**6 hard、1 metric、1 unver**。唯一注册表为
+当前注册表共 **9 条**：**7 hard、1 metric、1 unver**。唯一注册表为
 `contracts/judges/str06.py`（F8c 起分流至本层判据模块）。

@@ -57,12 +57,15 @@ from contracts.schema.workflow import STAGE4_DESIGN_PROTOCOL
 from contracts.schema.source import CharactersCore, NameProjection, NameStructure
 from novel.core.validation import ValidationIssue
 from novel.stages.stage4.design_paths import design_issue
-from novel.stages.stage4.fact_bindings import fact_binding_errors, fact_lock_carrier_errors
+from novel.stages.stage4.fact_bindings import (
+    fact_binding_errors, fact_lock_carrier_errors, fact_lock_subject_errors,
+)
 from novel.stages.common import expand_surface_releases
 from novel.stages.stage4.read_closure import confirmation_closure_errors, resolve_design_reads
 from novel.stages.stage4.materials import validate_design_materials
 from novel.stages.stage4.slim import (
     FactLockMark, design_fact_marks, design_placements, expand_design_wire,
+    knowledge_change_index,
 )
 
 #: wire 顶层键白名单（Q-1：多余键在 compile 入口报错，不静默丢弃）。v2 起四个
@@ -476,6 +479,47 @@ def _check_fact_marks(marks: tuple[FactLockMark, ...], fact_locks: Mapping[str, 
                 'fact_lock_value', mark.path, mark.path))
 
 
+def _check_requires_released(body: BodyDesign, obligations: Mapping[str, Any],
+                             errors: list[str], *, v8_wire: dict | None = None) -> None:
+    """必保揭名闸（CS-H H3，RC-61）：带 `requires_released` 的 know 所在拍
+    必须**已释放**所列称谓——含本拍释放（本拍正式介绍之后同拍可用），拍前不可用。
+
+    违例带 know 行 wire 路径（locate：挪 know 拍位或提前释放）；这类称谓不投影
+    （释放即字面送达）。离线 v5 输入没有 know 行身份（与事实锁候选同尺），本闸
+    只在现役 v8 wire 上运行。
+    """
+    required = {ref: change.requires_released
+                for ref, (_ob, change) in knowledge_change_index(obligations).items()
+                if change.requires_released}
+    if not required:
+        return
+    from novel.stages.common import ReleasePrefixes
+    prefixes = ReleasePrefixes(body)
+    scenes = v8_wire.get('scenes') if isinstance(v8_wire, dict) else None
+    for scene_i, scene in enumerate(body.scenes):
+        for beat_i, beat in enumerate(scene.beats):
+            rows = (scenes[scene_i]['beats'][beat_i].get('know')
+                    if scenes is not None and scene_i < len(scenes)
+                    and beat_i < len(scenes[scene_i].get('beats') or ()) else None) or []
+            for row_i, row in enumerate(rows):
+                literals = required.get(row.get('ref')) if isinstance(row, dict) else None
+                if not literals:
+                    continue
+                faces = set()
+                for values in prefixes.beat_faces(scene.scene_id, beat.beat_id).values():
+                    faces.update(values)
+                missing = [literal for literal in literals if literal not in faces]
+                if missing:
+                    where = ('scenes', scene_i, 'beats', beat_i, 'know', row_i)
+                    errors.append(design_issue(
+                        f'必保揭名：{row["ref"]} 的认知变化要求已释放称谓 {missing}'
+                        '——该 know 所在拍必须已释放所列称谓（同拍释放合法，'
+                        '拍前不可用）；挪 know 拍位到释放之后，或提前释放',
+                        code='design_requires_released',
+                        location=('requires_released', row['ref'], tuple(missing)),
+                        paths=(where,) if v8_wire is not None else ()))
+
+
 def _check_lock_acceptance(body: BodyDesign, brief: ReconstructionBrief,
                            errors: list[str], *, marks: tuple[FactLockMark, ...] = (),
                            obligations: Mapping[str, Any] | None = None,
@@ -559,6 +603,10 @@ def _check_lock_acceptance(body: BodyDesign, brief: ReconstructionBrief,
                         address=mark.address)
         for mark in marks)
     errors.extend(fact_binding_errors(body, bindings, wire_paths=True))
+    errors.extend(fact_lock_subject_errors(
+        body, bindings,
+        {lock.kf_id: frozenset(lock.subjects) for lock in brief.fact_locks},
+        wire_paths=True))
     ob_of = {req.core_id: ob for ob, req in (obligations or {}).items()}
     for req in brief.requirements:
         label = ob_of.get(req.core_id, req.core_id)
@@ -896,6 +944,10 @@ def inspect_body_design(
         _check_lock_acceptance(body, brief, errors, marks=marks,
                                obligations=obligations, real_sites=real_sites,
                                delta_locate=delta_path if locatable else None)
+    if obligations is not None:
+        _check_requires_released(
+            body, obligations, errors,
+            v8_wire=v8_wire if locatable else None)
     for err in resolve_design_reads(body).errors:
         errors.append(issue(err.message, err.code,
                             (body.scenes[err.scene].scene_id, err.read),

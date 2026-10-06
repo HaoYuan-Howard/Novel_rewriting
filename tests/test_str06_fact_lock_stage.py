@@ -221,8 +221,9 @@ def test_saved_misplaced_lock_is_rejected_then_owner_patch_recovers_free(tmp_pat
     assert not rejected.passed
     issue = next(e for e in rejected.errors
                  if getattr(e, 'code', '') == 'fact_lock_outside_obligation')
-    assert {key: issue.context[key] for key in ('obligation_id', 'kf_id', 'beat_ref')} == {
-        'obligation_id': 'ob02', 'kf_id': KF_PLAN, 'beat_ref': 'sc01#b01'}
+    # CS-H H3（RC-63）：共享集合（realize_locks 引用同一锁的必保义务）取代单义务。
+    assert {key: issue.context[key] for key in ('obligation_ids', 'kf_id', 'beat_ref')} == {
+        'obligation_ids': ['ob02'], 'kf_id': KF_PLAN, 'beat_ref': 'sc01#b01'}
     with pytest.raises(ValidationStop) as stopped:
         run_body_design(ctx)
     assert any(getattr(e, 'code', '') == 'fact_lock_outside_obligation'

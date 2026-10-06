@@ -518,7 +518,10 @@ def _design_wire_v8(brief: ReconstructionBrief) -> dict:
                  'state': [{'at': 'world', 'key': 'return_time', 'val': '约半月后归家',
                             'modality': 'expected', 'lock': _kf(brief, 'expected')}]},
                 {'ev': '去向成谜', 'who': [], 'real': ['ob03'],
-                 'state': [{'at': 'world', 'key': 'departure_whereabouts', 'op': 'unknown',
+                 # CS-H H3（RC-63 主体包含）：该锁的主体是 fu_jun（源锚点
+                 # char:fu_jun.whereabouts_during_leave）——承载状态须是 fu_jun
+                 # 自己的状态，不再允许标到 world／他人状态上。
+                 'state': [{'at': 'fu_jun', 'key': 'departure_whereabouts', 'op': 'unknown',
                             'lock': _kf(brief, 'unknown_value')}]},
             ]}],
         'chapters': [{'purpose': '起疑到证实', 'scenes': 1}],
@@ -789,7 +792,7 @@ def test_fact_lock_outside_its_obligation_carriers_is_rejected_in_acceptance_and
                  if getattr(e, 'code', '') == 'fact_lock_outside_obligation')
     ob = 'ob02' if kind == 'expected' else 'ob03'
     assert issue.owner == 'design'
-    assert issue.context['obligation_id'] == ob
+    assert issue.context['obligation_ids'] == [ob]
     assert issue.context['kf_id'] == _kf(brief, kind)
     assert issue.context['beat_ref'] == f'sc01#b{target_i + 1:02d}'
     assert issue.context['wire_paths'] == [
@@ -855,23 +858,25 @@ def test_canonical_fact_lock_coverage_and_obligation_position_are_rechecked(miss
     assert plan is None
     code = 'fact_lock_unrealized' if missing else 'fact_lock_outside_obligation'
     issue = next(e for e in errors if getattr(e, 'code', '') == code)
-    assert issue.context['obligation_id'] == 'ob02' and issue.context['kf_id'] == kf
+    assert issue.context['obligation_ids'] == ['ob02'] and issue.context['kf_id'] == kf
     assert not issue.context['wire_paths'], 'canonical 消费不伪造可编辑 wire 路径'
     assert (body.model_dump(), binding.model_dump()) == before
 
 
-@pytest.mark.parametrize(('must_preserve', 'shared_carrier', 'passed'), [
-    (True, True, True), (True, False, False), (False, False, True)])
-def test_shared_fact_lock_requires_each_required_obligation_carrier(
-        must_preserve, shared_carrier, passed):
-    """一份锁映射可共享，但须属于每个必保义务；非必保义务不凭同锁增造硬闸。"""
+@pytest.mark.parametrize(('carrier_owner', 'passed'), [
+    ('owner', True), ('shared_other', True), ('neither', False), ('none', False)])
+def test_shared_fact_lock_carrier_belongs_to_any_sharing_obligation(
+        carrier_owner, passed):
+    """CS-H H3（RC-63）：一项事实定位一次——承载拍属于任一共享义务（realize_locks
+    引用同一锁的必保义务）的 real 集合即成立；其余共享义务由 compiler 把承载拍
+    记入 supporting_beat_refs（只校验先后：承载拍不晚于其接受拍）。"""
     from novel.stages.stage4.compile import compile_execution_plan
     from novel.stages.stage4.grounding import required_fact_locks
 
     preserve = _preserve_wire()
     preserve['obligations'][3].update({
         'statement': '归期预计也支撑夫君的承诺', 'anchors': ['b01_01.e1'],
-        'must_preserve': must_preserve, 'satisfaction': '保留预计承诺'})
+        'must_preserve': True, 'satisfaction': '保留预计承诺'})
     checkpoint, errors = assemble_preserve(
         preserve, policy_id='p', policy_version=5,
         characters=_characters(), blueprint=_blueprint(),
@@ -881,10 +886,26 @@ def test_shared_fact_lock_requires_each_required_obligation_carrier(
     obligations = design_obligation_index(checkpoint, brief)
     assert required_fact_locks(checkpoint.obligations) == {
         ob: req.realize_locks for ob, req in obligations.items() if req.must_preserve}
+    kf = _kf(brief, 'expected')
+    assert [ob for ob, locks in required_fact_locks(checkpoint.obligations).items()
+            if kf in locks] == ['ob02', 'ob04'], '共享集合＝引用同一锁的全部必保义务'
     wire = _design_wire_v8(brief)
     wire['scenes'][0]['beats'][0]['real'] = ['ob04']
-    if shared_carrier:
+    if carrier_owner == 'owner':
+        # 承载拍 b06 同时进 ob02 与 ob04 的 real 集（两个共享义务自担）。
         wire['scenes'][0]['beats'][5]['real'].append('ob04')
+    elif carrier_owner == 'shared_other':
+        # 承载位不动，ob04 的接受拍挪到其后（b07）：承载拍只属 ob02，ob04 靠
+        # 派生支撑引用成立（支撑早于验收，compile_support_early 绿）。
+        wire['scenes'][0]['beats'][0]['real'] = []
+        wire['scenes'][0]['beats'][6]['real'].append('ob04')
+    elif carrier_owner == 'neither':
+        # 承载拍挪到无任何 real 的拍：不属于任一共享义务 ⇒ 拒。
+        state = wire['scenes'][0]['beats'][5]['state'][0]
+        del wire['scenes'][0]['beats'][5]['state'][0]
+        wire['scenes'][0]['beats'][1]['state'] = [state]
+    else:
+        del wire['scenes'][0]['beats'][5]['state'][0]['lock']
     body, acceptance_errors = _inspect_v8(wire, brief)
     assert body is not None
     model = DesignWireV8.model_validate(wire)
@@ -895,10 +916,32 @@ def test_shared_fact_lock_requires_each_required_obligation_carrier(
         assert binding is not None and len(binding.fact_bindings) == 2, '共享不复制映射'
         plan, errors = compile_execution_plan(body, binding)
         assert plan is not None and not errors, errors
+        if carrier_owner == 'shared_other':
+            entry = next(e for e in binding.entries if e.obligation_id == 'ob04')
+            assert entry.beat_ref == 'sc01#b07'
+            assert 'sc01#b06' in entry.supporting_beat_refs, \
+                '其余共享义务由 compiler 派生支撑引用（承载拍＝其支撑拍）'
     else:
         assert binding is None
+        expected_code = ('fact_lock_outside_obligation' if carrier_owner == 'neither'
+                         else 'fact_lock_unrealized')
         for errors in (acceptance_errors, binding_errors):
-            issue = next(e for e in errors
-                         if getattr(e, 'code', '') == 'fact_lock_outside_obligation')
-            assert issue.context['obligation_id'] == 'ob04'
-            assert issue.context['kf_id'] == _kf(brief, 'expected')
+            issue = next(e for e in errors if getattr(e, 'code', '') == expected_code)
+            assert issue.context['obligation_ids'] == ['ob02', 'ob04']
+            assert issue.context['kf_id'] == kf
+
+
+def test_fact_lock_subject_must_be_contained_in_the_carrier_state_subjects():
+    """CS-H H3（RC-63）主体包含：丈夫的锁不得标到别人的状态上——fu_jun 的
+    值未知锁标到 yun_niang 的状态 ⇒ `fact_lock_subject` 拒，带承载状态路径。"""
+    brief = _brief()
+    wire = _design_wire_v8(brief)
+    wire['scenes'][0]['beats'][6]['state'][0]['at'] = 'yun_niang'
+    body, errors = _inspect_v8(wire, brief)
+    assert body is not None
+    issue = next(e for e in errors if getattr(e, 'code', '') == 'fact_lock_subject')
+    assert _kf(brief, 'unknown_value') in str(issue)
+    assert issue.context['wire_paths'] == [['scenes', 0, 'beats', 6, 'state', 0]]
+    binding, binding_errors = _derive_binding_v8(wire, body)
+    assert binding is None and any(
+        getattr(e, 'code', '') == 'fact_lock_subject' for e in binding_errors)

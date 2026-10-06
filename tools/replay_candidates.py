@@ -96,7 +96,8 @@ def design_inputs(repository: Str06Repository, *, chapter_count: int, budget: in
         blueprint = repository.read_model('stage2/blueprints/chapter_blueprints.json')
     except (FileNotFoundError, UnsealedArtifact, ProvenanceRefused, ValidationError) as exc:
         raise ReplayNotRun(f'上游正式输入缺失、未封存或不符当前契约：{type(exc).__name__}：{exc}') from exc
-    brief, _ = project_brief(checkpoint, chars.core_view(), blueprint)
+    brief, _ = project_brief(checkpoint, chars.core_view(), blueprint,
+                              structure=chars.name_structure)
     return DesignInputs(
         chars=chars, checkpoint=checkpoint, brief=brief,
         obligations=design_obligation_index(checkpoint, brief),

@@ -161,6 +161,10 @@ class ChapterIR(StrictModel):
     #: 章内场末／拍前缀（含本拍释放）由 renderer 从本表＋`BeatIR.release_introductions`
     #: 确定性累积（同章数据自足，不读其他章 IR）。
     display_prefix: tuple[SurfaceRelease, ...] = Field(default=(), min_length=0)
+    #: 必保揭名（CS-H H3，RC-61 正文面）：本章承载的认知变化要求正文**必现**的
+    #: 称谓字面（compile 由 Brief 的 requires_released 按认知增量落章派生）。随章包
+    #: 送达写手（必保揭名行）并进机械 validator（缺字面即拒，走段落级修句）。
+    requires_released: tuple[str, ...] = Field(default=(), min_length=0)
 
     @model_validator(mode='after')
     def _scenes_unique(self) -> 'ChapterIR':

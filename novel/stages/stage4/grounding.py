@@ -45,7 +45,9 @@ from contracts.schema.workflow import STAGE4_PRESERVE_PROTOCOL
 from novel.core.validation import ValidationIssue
 from novel.stages.common import check_binding_covers_checkpoint
 from novel.stages.stage4.design_paths import design_issue
-from novel.stages.stage4.fact_bindings import fact_binding_errors, fact_lock_carrier_errors
+from novel.stages.stage4.fact_bindings import (
+    fact_binding_errors, fact_lock_carrier_errors, fact_lock_subject_errors,
+)
 from pydantic import ValidationError
 
 
@@ -549,6 +551,23 @@ def _fact_lock_statement(anchor: ObligationAnchor) -> str:
     return anchor.address or anchor.handle
 
 
+def _address_subjects(address: str | None) -> tuple[str, ...]:
+    """compiler 渲染的地址串 → 主体集（`_render_target` 的同一语法，机械回读）。
+
+    char:x.key → (x,)；rel:a×b.key → (a, b)；world / 未知前缀 → ()。锚点只带
+    渲染串（typed target 在 assemble 时已折进地址），回读不猜语义（I-21）。
+    """
+    if not address:
+        return ()
+    head = address.split('.', 1)[0]
+    if head.startswith('char:'):
+        return (head[5:],)
+    if head.startswith('rel:'):
+        left, _, right = head[4:].partition('×')
+        return (left, right) if right else (left,)
+    return ()
+
+
 def _anchor_fact_lock(anchor: ObligationAnchor) -> BriefFactLock | None:
     """同一结构化源原子派生同一事实锁；Brief 与正式消费复用这份 compiler 规则。"""
     if anchor.source_kind != 'effect':
@@ -560,7 +579,8 @@ def _anchor_fact_lock(anchor: ObligationAnchor) -> BriefFactLock | None:
     else:
         return None
     return BriefFactLock(kf_id=_lock_id('kf_', anchor.handle), kind=kind,
-                         modality=modality, statement=_fact_lock_statement(anchor))
+                         modality=modality, statement=_fact_lock_statement(anchor),
+                         subjects=_address_subjects(anchor.address))
 
 
 def required_fact_locks(obligations: Iterable[SourceObligation]) -> dict[str, tuple[str, ...]]:
@@ -571,6 +591,22 @@ def required_fact_locks(obligations: Iterable[SourceObligation]) -> dict[str, tu
             result[obligation.obligation_id] = tuple(dict.fromkeys(
                 lock.kf_id for anchor in obligation.anchors
                 if (lock := _anchor_fact_lock(anchor)) is not None))
+    return result
+
+
+def fact_lock_subjects(obligations: Iterable[SourceObligation]) -> dict[str, frozenset[str]]:
+    """kf → 锁主体集合（CS-H H3，RC-63）：effect 锚点作用对象的机械回读。
+
+    与 `required_fact_locks` 同一把尺（同一 `_anchor_fact_lock` 派生），供主体
+    包含检查（锁主体 ⊆ 承载状态主体）在 bind 派生、Design 接受与 Guard M4
+    三面共用（I-16：不复制第二份锁定义）。
+    """
+    result: dict[str, frozenset[str]] = {}
+    for obligation in obligations:
+        for anchor in obligation.anchors:
+            lock = _anchor_fact_lock(anchor)
+            if lock is not None:
+                result[lock.kf_id] = frozenset(lock.subjects)
     return result
 
 
@@ -597,8 +633,47 @@ def _unanswered_loops(
     return [(ref, questions[ref]) for ref in order if ref not in closed]
 
 
+def _requires_released_surfaces(
+    obligation: SourceObligation, anchor: ObligationAnchor, *,
+    characters: CharactersCore | None, structure,
+    first_appearance: dict[str, str], prop_segments: dict[str, set[str]],
+) -> tuple[str, ...]:
+    """必保揭名识别（CS-H H3，RC-61）——三项类型化信号**合取**：
+
+    ① 所属义务是 identity／reveal 类**必保**义务（类别来自义务 kind，不用文本）；
+    ② 该命题的源证据句段（Blueprint 里该命题 basis 的句段）正是某**带名**称谓
+      在源文首次出现的句段（Characters 的 SurfaceWindow.source_refs[0]；
+      带名＝名称结构构词非 null）；
+    ③ 命题文本含该称谓字面。
+
+    任一不满足即无揭名要求（漏检退化为普通投影，不比现状差）；不用文本共现
+    作判定。返回按字面排序去重的称谓清单（不暴露句段号，保持源盲）。
+    """
+    if not obligation.must_preserve or obligation.kind.value not in ('identity', 'reveal'):
+        return ()
+    if characters is None or structure is None or not anchor.proposition_ref:
+        return ()
+    segments = prop_segments.get(anchor.proposition_ref)
+    statement = anchor.proposition_statement or ''
+    if not segments:
+        return ()
+    matched: set[str] = set()
+    for char_id, entry in characters.characters.items():
+        person = structure.people.get(char_id)
+        if person is None:
+            continue
+        for window in entry.surfaces:
+            surface = window.surface
+            bearing = person.surface_forms.get(surface) is not None
+            if (bearing and first_appearance.get(surface) in segments
+                    and surface in statement):
+                matched.add(surface)
+    return tuple(sorted(matched))
+
+
 def _derive_brief_locks(
     checkpoint: PreserveCheckpoint, blueprint: BlueprintsArtifactV15,
+    characters: CharactersCore | None = None, structure=None,
 ) -> tuple[tuple[BriefProposition, ...], tuple[BriefKnowledgeLock, ...],
            tuple[BriefFactLock, ...], dict[str, dict[str, tuple]]]:
     """义务 anchors＋canonical loops → Brief 锁定项（a4 唯一派生点）。
@@ -614,11 +689,33 @@ def _derive_brief_locks(
     · 认知变化：每个义务独立保留各 anchor 的 holder/kp/mode 与盲句柄；
       必保义务及已实现的可综合义务都按 knowledge_changes 检查完整承载。
       事实兑现分母由必保义务的 kf 句柄 realize_locks 派生。
+    · 必保揭名（CS-H H3）：`requires_released` 由三项类型化信号合取派生
+      （`_requires_released_surfaces`），随认知变化条目携带。
     """
     propositions: dict[str, BriefProposition] = {}
     knowledge: dict[tuple[str, str, str], BriefKnowledgeLock] = {}
     facts: dict[str, BriefFactLock] = {}
     per_obligation: dict[str, dict[str, tuple]] = {}
+    # 必保揭名的两项索引：带名称谓的首次出现句段；命题 → 源证据句段集
+    # （Blueprint 里该命题全部 basis 的句段——anchors 的 quotes 只有引文字面，
+    # 句段身份在 blueprint 的 basis 上）。
+    first_appearance: dict[str, str] = {}
+    if characters is not None:
+        for entry in characters.characters.values():
+            for window in entry.surfaces:
+                if window.source_refs:
+                    first_appearance.setdefault(window.surface, window.source_refs[0])
+    prop_segments: dict[str, set[str]] = {}
+    for chapter_bp in blueprint.chapters:
+        for beat in chapter_bp.beats:
+            for effect in beat.effects:
+                if effect.proposition is not None and effect.proposition.ref:
+                    prop_segments.setdefault(effect.proposition.ref, set()).update(
+                        basis.segment for basis in effect.basis)
+            for cognition in beat.cognition:
+                if cognition.proposition.ref:
+                    prop_segments.setdefault(cognition.proposition.ref, set()).update(
+                        basis.segment for basis in cognition.basis)
 
     def _register_proposition(anchor: ObligationAnchor) -> str | None:
         if not anchor.proposition_ref:
@@ -646,7 +743,11 @@ def _derive_brief_locks(
                         BriefKnowledgeLock(holder=anchor.holder, kp=kp, mode=mode)
                     change_id = _lock_id('kc_', anchor.handle)
                     knowledge_changes[change_id] = BriefKnowledgeChange(
-                        change_id=change_id, holder=anchor.holder, kp=kp, mode=mode)
+                        change_id=change_id, holder=anchor.holder, kp=kp, mode=mode,
+                        requires_released=_requires_released_surfaces(
+                            obligation, anchor, characters=characters,
+                            structure=structure, first_appearance=first_appearance,
+                            prop_segments=prop_segments))
                 elif anchor.mode == 'asserts' and anchor.holder \
                         and anchor.holder != 'public':
                     entry = propositions[kp]
@@ -685,7 +786,7 @@ def _derive_brief_locks(
 
 def project_brief(
     checkpoint: PreserveCheckpoint, characters: CharactersCore,
-    blueprint: BlueprintsArtifactV15,
+    blueprint: BlueprintsArtifactV15, structure=None,
 ) -> tuple[ReconstructionBrief, tuple[IdentityProjection, ...]]:
     """checkpoint → (Brief, IdentityProjection)。Design 的全部语义输入。
 
@@ -696,13 +797,15 @@ def project_brief(
     compiler 不做语义推断。R9 起 blueprint 为必需输入，表达语义无历史默认值。
     a4：锁定项（kp 命题/知情锁/kf 事实锁）由义务 anchors 与 canonical loops
     确定性派生（`_derive_brief_locks`）；series 以盲组 token 标记到成员义务
-    （不泄源序号；mechanism＝源表达 ex_id）。
+    （不泄源序号；mechanism＝源表达 ex_id）。CS-H H3：`structure`（名称结构）
+    供必保揭名识别的「带名」判定；缺席时不派生 `requires_released`（漏检
+    退化为普通投影，不比现状差）。
     """
     # 不以源义务序号暴露叙述顺序；所有类型与满足条件等量投影，依赖闭合。
     core_ids = {o.obligation_id: obligation_core_id(o.obligation_id)
                 for o in checkpoint.obligations}
     propositions, knowledge_locks, fact_locks, derived_locks = \
-        _derive_brief_locks(checkpoint, blueprint)
+        _derive_brief_locks(checkpoint, blueprint, characters, structure)
     series_group: dict[str, str] = {}
     series_mechanism: dict[str, str | None] = {}
     for group in checkpoint.series:
@@ -762,6 +865,24 @@ def design_obligation_index(
     by_core = {r.core_id: r for r in brief.requirements}
     return {o.obligation_id: by_core[obligation_core_id(o.obligation_id)]
             for o in checkpoint.obligations}
+
+
+def required_releases(brief: ReconstructionBrief) -> dict[tuple[str, str, str], tuple[str, ...]]:
+    """必保揭名 → IR compile 的映射面：(holder, kp, mode) → 必现字面。
+
+    认知增量在 canonical BodyDesign 里按 (holder, kp, mode) 展开（change_id
+    不进目标侧）；同三元组若对应多条变化，取并集（重复三元组罕见，取并集
+    只会多担不会漏担）。承载章正文必现该字面（RC-61 正文面）。
+    """
+    result: dict[tuple[str, str, str], tuple[str, ...]] = {}
+    for requirement in brief.requirements:
+        for change in requirement.knowledge_changes:
+            if not change.requires_released:
+                continue
+            key = (change.holder, change.kp, change.mode)
+            merged = set(result.get(key, ())) | set(change.requires_released)
+            result[key] = tuple(sorted(merged))
+    return result
 
 
 def _binding_issue(message: str, code: str, location: tuple) -> ValidationIssue:
@@ -847,12 +968,34 @@ def derive_semantic_binding(
         fact_bindings.append(FactLockBinding(
             kf_id=mark.kf_id, beat_ref=ref[2], address=mark.address))
     errors.extend(fact_binding_errors(body, fact_bindings, wire_paths=True))
+    errors.extend(fact_lock_subject_errors(
+        body, fact_bindings, fact_lock_subjects(checkpoint.obligations),
+        wire_paths=True))
     errors.extend(fact_lock_carrier_errors(
         body, fact_bindings, required_locks=required_fact_locks(checkpoint.obligations),
         carrier_refs={ob: tuple(site_refs[site][2] for site in sites if site in site_refs)
                       for ob, sites in placements.items()}, wire_paths=True))
     if errors:
         return None, errors
+    # 共享锁派生支撑引用（CS-H H3，RC-63）：一项事实定位一次——承载拍属于任一
+    # 共享义务的 real 集合即成立；其余共享义务由 compiler 把承载拍记入
+    # supporting_beat_refs，对它们只校验先后（承载拍不晚于其接受拍，
+    # compile_support_early），不再要求逐义务自担承载。
+    shared_required = required_fact_locks(checkpoint.obligations)
+    carrier_by_ob = {ob: tuple(site_refs[site][2] for site in sites if site in site_refs)
+                     for ob, sites in placements.items()}
+    for bound in fact_bindings:
+        obligations = [ob for ob, locks in shared_required.items()
+                       if bound.kf_id in locks]
+        if len(obligations) < 2:
+            continue
+        for row in entries:
+            if row['obligation_id'] in obligations \
+                    and bound.beat_ref not in carrier_by_ob.get(row['obligation_id'], ()):
+                refs = list(row.get('supporting_beat_refs') or ())
+                if bound.beat_ref not in refs:
+                    refs.append(bound.beat_ref)
+                row['supporting_beat_refs'] = tuple(refs)
     try:
         binding = SemanticBinding(
             binding_id=f'bind_{checkpoint.checkpoint_id}',

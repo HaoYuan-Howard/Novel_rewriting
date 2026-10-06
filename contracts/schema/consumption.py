@@ -327,6 +327,12 @@ STR06_FIELD_DELIVERY: dict[str, FieldDeliverySpec] = {
         'writer_book_ir.chapters[].display_prefix[].surfaces', consumers=(_V,),
         scope=_CHAP, mode=DeliveryMode.AUDIT_ONLY,
         note='章首按释放顺序的显示面（含回落纯称谓）：投影依据，不充当称谓许可'),
+    # CS-H H3（RC-61 必保揭名）：承载章正文必现字面——随章包「必保揭名」行送达
+    # 写手，并进机械 validator（缺字面即拒，走段落级修句）。
+    'writer_book_ir.chapters[].requires_released': _spec(
+        'writer_book_ir.chapters[].requires_released', consumers=(_W, _V),
+        scope=_CHAP, mode=DeliveryMode.MUST_RESPECT,
+        note='必保揭名必现字面：写手任务与 validator 检查面同源（段落级修句闭合）'),
     'writer_book_ir.chapters[].scenes[].verification_ir.beats[].release_introductions[].char_id': _spec(
         'writer_book_ir.chapters[].scenes[].verification_ir.beats[].release_introductions[].char_id',
         consumers=(_V,), scope=_SCENE, mode=DeliveryMode.AUDIT_ONLY,

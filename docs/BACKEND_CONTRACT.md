@@ -261,6 +261,7 @@ Stage4 的四个付费节点按固定序推进：`preserve`（保存策略义务
 | R-5.18 | **series 分别承载（R10a a5；CS-3 随 bind 迁移）**：design 义务清单带出 series（正式 ID＋mechanism）与按义务渲染的锁摘要（Brief 锁面）；同一 series 的成员接受拍不同——两成员接受拍相同即 `series_collapsed`（body_design 同节点修订，C3/C5 的承载面）；复合义务前半用支撑拍（非末次标注拍）表达，不合并成员；必保漏标由 real 覆盖闸拦、无标注的非必保义务进 unbound（义务不删）。 | `HARD`（`novel/stages/stage4/grounding.py::derive_semantic_binding`＋`design_obligation_index`；反例 `tests/test_str06_a5_positions.py`、`tests/hard_cases.py`） |
 | R-5.19 | **锁位置 Guard：信息披露顺序（R10a a5）**：kp 键知情升到某模式的位置、读者确认的位置不得早于**授权该模式的义务承载位置**（授权位＝必保义务 anchors 授权该 (holder, kp, mode) 的全部承载点最早者——支撑拍是承载的一部分，怀疑渐进到证实合法，P2）；initial_state 无披露时点不进判据；自由键不查（模式合法性归 R-5.17）；故事发生顺序不做机械 Guard（顺序三分，P5 合法倒叙不拦）。违例按 `epistemic_lock_order` 回派 `str06.stage4.body_design`（位置上下文＋源盲 core_id；披露顺序是 Design 的决定，Bind 只选承载位）。 | `HARD`（`novel/stages/stage4/guard.py::lock_order_violations`＋`novel/stages/chain.py::_backfill_epistemic_lock_order`；反例 `tests/test_str06_a5_positions.py`、`tests/hard_cases.py`） |
 | R-5.20 | **已购回答复用四条件（R10a §二.4；CS-H H1b 改写第三条件，RC-50～53）**：实际模型输入未变且已购回答仍适用→复用（重启不重复购买）；验收条件变化、模型输入未变→免费机械复验，失败按既有恢复规则；实际写作材料变化→**先走候选集合的免费判定**：对已购候选做兼容性检查（wire 协议字面量相同、可按当前 schema 构造、章数与篇幅约束未变）→上游差异（对候选生成时的上游版本与当前上游版本的修订对照 wire 按（kind, anchors）对齐分未变/变化/新增/删除）→按当前输入完整编译与预检→择优（全绿优先、剩余根因最少次之、同分取最近）；无差异、或差异只有被证明等价的变化条目（位置不变、自由文本称谓规范形相等、其余字段逐字相等；新增／删除条目与编号漂移不算）且预检全绿→**零调用采用**（成本链 `ledger-row` 指向原 attempt，本根只记一行零 token cached 行，修订记录 kind `carried_forward`），变化不能证明等价→只复核引用这些条目的承载拍（一轮条目返修，允许原值不变），删除条目→其承载拍进复核目标，新增条目→可选目标的条目返修（模型在给定拍闭集里选承载位）；**整份新购只限闭集原因**（没有候选／协议字面量不兼容／章数或篇幅约束变化／候选无法按当前 schema 构造／上游是全新回答无修订谱系）并留痕，局部称谓、单条义务、编译缺陷不得成为整份新购理由。仅审计或展示信息变化→不触发付费重写（时间戳等纯审计字段不进模型输入）。未受材料或验收条件影响的章节不重购；上游修订影响的章重新汇集正文与回执。 | `HARD`（`novel/stages/candidates.py` 候选集合与沿用判定＋`novel/llm/paid_requests.py::adopt_carried_forward`＋`novel/stages/chain.py::run_body_design`；反例 `tests/test_str06_candidate_preflight.py`、`tests/test_str06_candidates.py`、`tests/hard_cases.py`） |
+| R-5.21 | **必保揭名（CS-H H3，RC-61）**：`requires_released` 由三项类型化信号合取派生（identity／reveal 必保义务引用＋命题证据句段＝带名称谓首次出现句段＋命题文本含该称谓，不用文本共现）随 Brief 认知变化条目携带（句段号不进 Brief，保持源盲）；该 know 所在拍必须已释放所列称谓（同拍释放合法，拍前不可用），违例带 know 行路径可窄修；这类称谓不投影，承载章正文必现该字面（见 R-7.8）。漏检退化为普通投影，不比现状差。 | `HARD`（`novel/stages/stage4/grounding.py::project_brief`＋`novel/stages/stage4/design.py::_check_requires_released`；反例 `tests/test_str06_required_released.py`） |
 
 材料名称冲突的归因须使用正式字段来源、目标消费拍位和释放依据（RC-01～08）；
 不按源目标同号章二分路由。正确源命题的 know 拍位归 Design，Preserve 只修改自身
@@ -296,7 +297,7 @@ M1–M8 在本节点聚合执行（判据码 → 检查函数的登记表
 | R-6.4 | **M1 义务覆盖**：本场 owner 的义务完整进入 IR，内容逐条一致。 | `HARD`（`novel/stages/stage4/guard.py::check_obligation_coverage`） |
 | R-6.5 | **M2 提前揭示**：`entry_knowledge` 的 `established_by` 早于本场起点。 | `HARD`（`novel/stages/stage4/guard.py::check_entry_timing`） |
 | R-6.6 | **M3 提前效应**：`entry_state` 的 `established_by` 早于本场起点。 | `HARD`（`novel/stages/stage4/guard.py::check_entry_timing`） |
-| R-6.7 | **M4 承载位置**：义务绑定指向真实场景/拍；事实锁绑定的承载拍与状态地址须恰好对应一条目标状态，不存在或歧义均拒绝。由 Binding.obligations 的正式 anchors 重建必保锁分母；缺映射、或映射拍不属于对应义务的 BindingEntry.beat_ref／supporting_beat_refs 均拒绝，共享锁逐义务检查（跨产物引用闭合，免费重编译同验）。 | `HARD`（`novel/stages/stage4/guard.py::check_binding_beat_refs`＋`novel/stages/stage4/grounding.py::required_fact_locks`＋`novel/stages/stage4/fact_bindings.py::fact_lock_carrier_errors`；反例 `tests/test_str06_a4_design_locks.py`、`tests/test_str06_fact_lock_stage.py`） |
+| R-6.7 | **M4 承载位置**：义务绑定指向真实场景/拍；事实锁绑定的承载拍与状态地址须恰好对应一条目标状态，不存在或歧义均拒绝。由 Binding.obligations 的正式 anchors 重建必保锁分母；缺映射、或映射拍不属于**共享义务集合**（realize_locks 引用同一锁的全部必保义务）的 real 接受／支撑拍并集均拒绝——一项事实定位一次，承载拍属于任一共享义务即成立，其余共享义务由 compiler 把承载拍记入 supporting_beat_refs（对它们只校验先后：承载拍不晚于接受拍）；锁的主体须包含于承载状态的主体（CS-H H3，RC-63；跨产物引用闭合，免费重编译同验）。 | `HARD`（`novel/stages/stage4/guard.py::check_binding_beat_refs`＋`novel/stages/stage4/grounding.py::required_fact_locks`＋`novel/stages/stage4/fact_bindings.py::fact_lock_carrier_errors`；反例 `tests/test_str06_a4_design_locks.py`、`tests/test_str06_fact_lock_stage.py`） |
 | R-6.8 | **M5 称谓释放**：IR 释放集与 Design 显式释放集一致（同一称谓释放引擎）。 | `HARD`（`novel/stages/stage4/guard.py::run_mechanical_guard`） |
 | R-6.9 | **M6 合法人物**：释放面人物已由 Design 声明参与或引入。 | `HARD`（`novel/stages/stage4/guard.py::check_cast_legality`） |
 | R-6.10 | Guard 零错误不证明小说质量；本节点确定性重跑是 0 成本修复路（`deterministic_replay`）。 | `结构`（`novel/stages/stage4/guard.py::run_mechanical_guard`） |
@@ -331,6 +332,7 @@ M1–M8 在本节点聚合执行（判据码 → 检查函数的登记表
 | R-7.5 | `ChapterReceipt` 的盘上形状由 `ARTIFACT_SPECS` 登记；回执只证明机械范围。 | `载体`（`contracts/schema/receipt.py::ChapterReceipt`） |
 | R-7.6 | 正文文学质量未经语义评审（生产正文 Judge 已随 STR-06 取消），保持未评披露；章级机械检查不证明章内揭示位置与逐场义务兑现。 | `INFO`（`body_semantics_unver` 明示 `UNVER`，进交付披露）；发明越界见 `B-01`，「必须成立不必写在纸面上」见 `B-04`，潜台词与声音见 `B-10`／`B-09`，无表面探针的事实见 `B-23`，改写式泄底历史闭环见 `B-15` |
 | R-7.7 | 逐章实际篇幅与预算偏差无条件报出（度量，不是门）。 | `度量`（`novel/stages/stage5/body_checks.py::validate_chapter_prose`） |
+| R-7.8 | **必保揭名正文面（CS-H H3，RC-61）**：承载该认知的章正文必须出现所列称谓字面（章包「必保揭名」行送达写手）；缺字面即拒，走**段落级修句**（按行窄输入窄输出，合并稿重跑同一套机械检查），不披露放行。 | `HARD`（`novel/stages/stage5/body_checks.py::validate_chapter_prose`＋`novel/stages/stage5/body.py`；反例 `tests/test_str06_required_released.py`） |
 
 ### R-8 · Hook 成文（stage5 · str06.stage5.hook）
 
@@ -696,8 +698,8 @@ reasoning 是 completion 的子口径，不再累加。统一解析顶层与 com
 | 非正文剔除（`stage0`，**13 条现役**） | R-0 |
 | 分章（`stage1`，**9 条现役**） | R-1 |
 | 源语义与名称结构（`stage2`，**20 条现役**） | R-2、R-3 |
-| 目标故事与确定性编译（`stage4`，**29 条现役**） | R-5、R-6（含 Guard M1–M8） |
-| 按章正文与 Hook（`stage5`，**8 条现役**） | R-7、R-8 |
+| 目标故事与确定性编译（`stage4`，**30 条现役**） | R-5、R-6（含 Guard M1–M8） |
+| 按章正文与 Hook（`stage5`，**9 条现役**） | R-7、R-8 |
 | 命名与交付（`stage7`，**8 条现役**） | R-10 |
 
 `tests/test_coverage.py` 校验双向关联、逐节精确条目数、逐层计数及无遗漏；structural/carrier 的

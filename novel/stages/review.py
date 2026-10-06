@@ -94,7 +94,8 @@ def dry_run_patch(repository, owner, candidate, *, evidence, budget,
         # Brief 是确定性派生；免费预览从正式 checkpoint 重建，旧 Brief 缺认知
         # 分母时不猜值。Design 补丁先验证候选，不能被待修复的旧正文阻断。
         brief, _ = project_brief(checkpoint, chars.core_view(),
-                                  repository.read_model('stage2/blueprints/chapter_blueprints.json'))
+                                  repository.read_model('stage2/blueprints/chapter_blueprints.json'),
+                                  structure=chars.name_structure)
         if owner == 'design':
             return _design_preview(repository, candidate, checkpoint, brief, chars,
                                    budget=budget, chapter_count=chapter_count,
@@ -110,7 +111,8 @@ def dry_run_patch(repository, owner, candidate, *, evidence, budget,
                 provider='preview', model='preview', request_sha256='0' * 64)
             if checkpoint is not None:
                 brief, _ = project_brief(checkpoint, chars.core_view(),
-                                          repository.read_model('stage2/blueprints/chapter_blueprints.json'))
+                                          repository.read_model('stage2/blueprints/chapter_blueprints.json'),
+                                          structure=chars.name_structure)
                 binding = binding.model_copy(update={'obligations': checkpoint.obligations})
         elif owner == 'hook_design':
             hook, errors = assemble_hook_design(candidate, body=body, known_char_ids=set(chars.characters),

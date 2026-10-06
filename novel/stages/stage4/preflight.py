@@ -23,7 +23,7 @@ from novel.stages.stage4.book_ir import compile_writer_book_ir
 from novel.stages.stage4.compile import compile_execution_plan, compile_issue
 from novel.stages.stage4.design import inspect_body_design
 from novel.stages.stage4.design_paths import design_issue, wire_paths_of
-from novel.stages.stage4.grounding import derive_semantic_binding
+from novel.stages.stage4.grounding import derive_semantic_binding, required_releases
 from novel.stages.stage4.guard import run_mechanical_guard
 from novel.stages.stage4.hook import publish_graph
 from novel.stages.stage4.hook_context import compile_hook_context
@@ -291,6 +291,7 @@ def inspect_body_materials(body, binding, brief, chars, *, budget, length_band,
         projection=chars.name_projection(), structure=chars.name_structure,
         fact_locks=brief.fact_locks,
         display_fallback=appellation_fallbacks(chars.core_view(), chars.name_structure),
+        required_releases=required_releases(brief),
         kp_statements=propositions,
         world_statements={wc.constraint_id: wc.statement for wc in brief.book_constraints})
     identities = material_identities(body, binding, chars)

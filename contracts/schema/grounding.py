@@ -254,9 +254,19 @@ class BriefKnowledgeLock(StrictModel):
 
 
 class BriefKnowledgeChange(BriefKnowledgeLock):
-    """单次认知变化的源盲身份；同一命题反复变化不按 (holder,kp) 合并。"""
+    """单次认知变化的源盲身份；同一命题反复变化不按 (holder,kp) 合并。
+
+    `requires_released`（CS-H H3，RC-61 必保揭名）是 compiler 从三项**类型化**
+    信号合取派生的结果：所属命题被 identity／reveal 类必保义务引用、该命题的
+    源证据句段正是某带名称谓在源文首次出现的句段、命题文本含该称谓——三项
+    都来自已有数据（义务类别、Blueprint 证据句段、Characters 的 source_refs），
+    不用文本共现作判定；句段号不进 Brief（保持源盲），只给称谓字面。该 know
+    所在拍必须已释放所列称谓（同拍释放合法），承载章正文必现该字面；这类
+    称谓不投影。漏检（三项未同时满足的揭名）退化为普通投影，不比现状差。
+    """
 
     change_id: str = Field(pattern=r'^kc_[0-9a-f]{16}$')
+    requires_released: tuple[str, ...] = Field(default=(), min_length=0)
 
 
 class BriefFactLock(StrictModel):
@@ -274,6 +284,10 @@ class BriefFactLock(StrictModel):
     kf_id: str = Field(pattern=r'^kf_[0-9a-f]{16}$')
     statement: str = Field(min_length=1)
     kind: str = Field(pattern=r'^(' + '|'.join(FACT_LOCK_KINDS) + r')$')
+    #: 锁主体（CS-H H3，RC-63 主体包含检查的输入）：compiler 从 effect 锚点的
+    #: 作用对象派生（char:x→(x,)；rel:a×b→(a,b)；world→()）。承载该锁的状态
+    #: 主体必须包含锁主体（此前丈夫的锁可标到别人的状态上而通过）。
+    subjects: tuple[str, ...] = Field(default=(), min_length=0)
     #: 时态锁的源 modality（planned/expected/conditional）；其余类别 None。
     modality: str | None = None
 

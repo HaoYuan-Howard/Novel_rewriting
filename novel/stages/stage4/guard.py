@@ -25,9 +25,12 @@ from contracts.schema.design import (
 from contracts.schema.grounding import SemanticBinding, _lock_id
 from contracts.schema.state import EffectDomain
 from novel.stages.stage4.grounding import (
-    KNOWLEDGE_LOCK_MODE, obligation_core_id, required_fact_locks,
+    KNOWLEDGE_LOCK_MODE, fact_lock_subjects, obligation_core_id,
+    required_fact_locks,
 )
-from novel.stages.stage4.fact_bindings import fact_binding_errors, fact_lock_carrier_errors
+from novel.stages.stage4.fact_bindings import (
+    fact_binding_errors, fact_lock_carrier_errors, fact_lock_subject_errors,
+)
 from novel.stages.stage4.design_paths import design_issue
 
 
@@ -128,6 +131,8 @@ def check_binding_beat_refs(
                     ('guard', 'm4', entry.obligation_id, ref),
                     *((path,) if path else ())))
     problems.extend(fact_binding_errors(graph, binding.fact_bindings))
+    problems.extend(fact_lock_subject_errors(
+        graph, binding.fact_bindings, fact_lock_subjects(binding.obligations)))
     problems.extend(fact_lock_carrier_errors(
         graph, binding.fact_bindings, required_locks=required_fact_locks(binding.obligations),
         carrier_refs={entry.obligation_id: (entry.beat_ref, *entry.supporting_beat_refs)

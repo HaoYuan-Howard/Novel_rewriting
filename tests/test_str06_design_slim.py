@@ -263,7 +263,8 @@ def test_design_rules_prompt_carries_v7_and_obligation_table():
     brief = _brief()
     table = project_design_input(brief, _obligations(brief))['requirements']
     assert table['ob01']['knowledge_changes']['ob01.k01'] == {
-        'holder': 'yun_niang', 'kp': 'kp_1111111111111111', 'mode': 'known'}
+        'holder': 'yun_niang', 'kp': 'kp_1111111111111111', 'mode': 'known',
+        'requires_released': []}
     assert 'ob03' in table      # 非必保也在清单（标注可选）
 
 

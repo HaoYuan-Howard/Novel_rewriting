@@ -26,11 +26,14 @@ from novel.core.text import count_non_whitespace_chars
 from novel.stages.common import claim_spans, uncovered_occurrences
 
 #: 机械 validator 的版本：章级回执 validator_version 记这一位，规则变化必须换版。
-BODY_VALIDATOR_VERSION = 'str06-body-mechanical-v1'
+#: v2（CS-H H3，RC-61）：新增 `required_literals`——必保揭名的承载章正文必现
+#: 称谓字面（缺字面即拒，走段落级修句，不披露放行）。
+BODY_VALIDATOR_VERSION = 'str06-body-mechanical-v2'
 
 #: 已通过的机械检查项名单（回执 mechanical_checks 的取值面）。
 BODY_MECHANICAL_CHECKS = (
-    'non_empty', 'encoding', 'no_wrapper', 'withheld_literals', 'length_band',
+    'non_empty', 'encoding', 'no_wrapper', 'withheld_literals', 'required_literals',
+    'length_band',
 )
 
 #: realization failure 的同输入重写上限（首次 + 再 2 次）。
@@ -51,10 +54,13 @@ def validate_chapter_prose(
     text: str, *, withheld_literals: tuple[str, ...], released_surfaces,
     target_chars: int, band_low: int, band_high: int,
     scene_markers: tuple[str, ...] = (),
+    required_literals: tuple[str, ...] = (),
 ) -> list[str]:
     """章级机械校验：只报告，不修改；错误带检查项名（I-36）。
 
     `withheld_literals`／`released_surfaces` 来自当前章包（compile 时算好）。
+    `required_literals`（CS-H H3，RC-61）是必保揭名的承载章必现字面——缺字面
+    即拒（违例走段落级修句，不是披露面）。
     """
     errors: list[str] = []
     body = (text or '').strip()
@@ -70,6 +76,10 @@ def validate_chapter_prose(
     for claim in uncovered_occurrences(body, withheld_literals, claimed):
         errors.append(f'[withheld_literals] 出现未释放的专名字面 {claim.literal!r}'
                       f'（位置 {claim.start}）')
+    for literal in required_literals:
+        if literal not in body:
+            errors.append(f'[required_literals] 必保揭名的称谓字面 {literal!r} 未在正文出现'
+                          '（人物的首次正式点名不得只以别称带过）')
     count = count_body_chars(body)
     if not (band_low <= count <= band_high):
         errors.append(f'[length_band] 字数 {count} 超出篇幅带 [{band_low}, {band_high}]'
