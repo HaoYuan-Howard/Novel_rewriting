@@ -92,9 +92,10 @@ from novel.stages import candidates
 from novel.stages.stage2 import (
     NamesObservation, STAGE2_OBSERVATION_PROTOCOL, book_observation_prompt,
     chapter_observation_prompt, chapter_patch_locate, character_core_view,
-    compile_associate_observation,
+    compile_associate_observation, associate_observation_prompt,
+    associate_patch_locate,
     compile_book_observation, compile_chapter_observation, compile_name_structure,
-    compile_source_truth, associate_observation_prompt, project_association_space,
+    compile_source_truth, project_association_space,
     first_appearance_anchors, first_appearance_issues, NAMES_INPUT_VERSION,
     names_evidence_view, normalize_name_observations, validate_name_resolutions,
 )
@@ -525,7 +526,12 @@ def run_associate(ctx: ChainContext) -> dict:
                                        issues=tuple(outcome.errors + outcome.undecided))
         return outcome.undecided
 
-    wire, associate_ref = ctx.ask('associate', prompt, _validate)
+    def _locate(w, errs):
+        # CS-H H4（RC-57 覆盖）：配对条目定位——机械验收与干跑未决按句柄反查
+        # 条目路径；需要新增条目或歧义时返回 None，退整份返修。
+        return associate_patch_locate(w, errs, space=space)
+
+    wire, associate_ref = ctx.ask('associate', prompt, _validate, patch=_locate)
     observation, errors = compile_associate_observation(wire, space)
     if errors:
         raise ValueError(errors)

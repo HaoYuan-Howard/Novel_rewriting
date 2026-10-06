@@ -255,7 +255,10 @@ STR06_ARTIFACT_RC_VERSIONS: Final[dict[str, str]] = {
     # ——typed 作用对象显式序列化＋状态句柄位置编码（ch{nn}.b{拍}.e{效应序}.{key}
     # ／book.e{条目序}.{key}）。三类观察协议字面量与请求逐字不变；canonical
     # 无形状变化，不虚构升版（A1.5）。
-    'stage2/observations/associate.json': 'str06-rc12',
+    # rc17（2026-10-06 CS-H H4，RC-65）：协议升 stage2-associate-v3——
+    # same_state_dimension 改配维度句柄（dim{nn}，按（作用对象，键）地址聚合），
+    # 章内已自开自闭的 close 不进可配对闭集；旧 v2 wire 关闭式拒读。
+    'stage2/observations/associate.json': 'str06-rc17',
     # v13（2026-09-26 质量改进批次二）：拍模型三类转移＋场景分段；v12 存量拒读。
     'stage2/blueprints/chapter_blueprints.json': 'str06-rc15',
     # v13 同批：fold 读数结构化（每章空转移拍比例＋书末未揭示 concealed）。
@@ -267,10 +270,13 @@ STR06_ARTIFACT_RC_VERSIONS: Final[dict[str, str]] = {
     # 情锁同写法）；Brief.book_constraints 升 WorldConstraint（wc_{nn} 稳定
     # 规则 id）；ConstraintSpec.domain 改类别标签。旧 rc12 盘面经 store
     # read_model 的登记迁移归一后读入（r10b 起的现役产物不拒读）。
-    'stage4/grounding/reconstruction_brief.json': 'str06-rc14',
+    # rc17（2026-10-06 CS-H H3，RC-61）：Brief 认知变化条目新增 requires_released
+    # （必保揭名派生，随认知增量携带）；缺省读入兼容旧盘，身份随 rc17 换。
+    'stage4/grounding/reconstruction_brief.json': 'str06-rc17',
     # rc16（2026-10-04 CS-F2）：Binding 增 fact_bindings（事实锁→已有目标状态的
     # 映射，只存引用不复制 value）；旧 rc12 Binding 缺该映射、无损推不回，拒读。
-    'stage4/grounding/semantic_binding.json': 'str06-rc16',
+    # rc17（2026-10-06 CS-H H3，RC-63）：BriefFactLock 增 subjects（主体包含判定）。
+    'stage4/grounding/semantic_binding.json': 'str06-rc17',
     'stage4/compiled/execution_plan.json': 'str06-rc14',
     'stage4/acceptance/guard/compile.json': 'str06-rc12',
     'stage4/acceptance/guard/report.json': 'str06-rc12',
@@ -287,7 +293,9 @@ STR06_ARTIFACT_RC_VERSIONS: Final[dict[str, str]] = {
     # rc16（2026-10-05 CS-F2）：HookContext 增 withheld_bindings（按 Hook 自选
     # surface_releases 算好的唯一绑定称谓表，渲染期投影）；旧 rc12 楔子上下文
     # 拒读，免费重编译。正文与楔子投影同尺（RC-40/41）。
-    'stage4/context/hook/hook.json': 'str06-rc16',
+    # rc17（2026-10-06 CS-H H3，RC-60）：HookContext 增 display_faces/avoid_lines
+    # （显示面投影与材料所引场 avoid 并集）。
+    'stage4/context/hook/hook.json': 'str06-rc17',
     # rc7 同批：BookBrief 带整书风格与稳定人物声线；PendingConfirmation 带事实
     # 地址（D4），投影按地址精确到消费该地址的章包。
     # rc8（2026-09-27 B4，D2）：ChapterIR 增章级验证材料（称谓许可、禁用字面
@@ -296,7 +304,10 @@ STR06_ARTIFACT_RC_VERSIONS: Final[dict[str, str]] = {
     # 书级 world_rules 进 BookBrief——IR 形状升 rc10。
     # rc16（2026-10-04 CS-F2）：ChapterIR 增 withheld_bindings（禁用字面中已证明唯一
     # 绑定人物的完整登记称谓，供渲染期确定性投影）；旧 rc14 IR 拒读，免费重编译。
-    'stage4/ir/writer_book_ir.json': 'str06-rc16',
+    # rc17（2026-10-06 CS-H H3）：ChapterIR 增 display_fallback（回落显示面分表），
+    # display_prefix 改只含章首已释放称谓、增 requires_released（必保揭名），
+    # BeatIR 增 release_introductions；免费重编译。
+    'stage4/ir/writer_book_ir.json': 'str06-rc17',
     'stage5/hook/hook.txt': 'str06-rc12',
     'stage5/hook/receipt.json': 'str06-rc12',
     'stage5/body/ch{nn}.txt': 'str06-rc12',
@@ -306,7 +317,9 @@ STR06_ARTIFACT_RC_VERSIONS: Final[dict[str, str]] = {
     # （writer_view_sha256，材料含 renderer 与写手协议版本）＋验证输入摘要
     # （validation_sha256：禁用字面、称谓许可、篇幅带）＋Machine 审计摘要
     # （machine_view_sha256，仅审计不触发重购）。
-    'stage5/acceptance/body/ch{nn}.json': 'str06-rc12',
+    # rc17（2026-10-06 CS-H H3，RC-61）：BODY_VALIDATOR 升 v2——必保揭名必现
+    # 字面与场景标记进章级机械校验，回执 validator_version 随行。
+    'stage5/acceptance/body/ch{nn}.json': 'str06-rc17',
     'stage7/naming/name_map.json': 'str06-rc12',
     'stage7/final/{title}_rewriting.txt': 'str06-rc12',
     'stage7/final/delivery_manifest.json': 'str06-rc12',

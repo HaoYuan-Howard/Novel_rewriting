@@ -31,6 +31,13 @@ compile 对未决项拒绝发布并按 item 报告。观察 wire 原样落盘
                                      book 初态无拍位，用独立命名空间按条目序定位
   场景: ``ch{nn}.sc{idx}``           idx＝本章内按开场序的场景序（1 起）
 
+【维度句柄（CS-H H4，RC-65；stage2-associate-v3）】状态槽位在编译器里的身份是
+（作用对象，键）——同地址的全部写入（含书级初态与章内效应同键）已由投影聚合成
+一个**维度句柄** ``dim{nn}``（首次写入序编号）。`same_state_dimension` 只配维度
+句柄：同键配对（v2 的 89/90 空操作）按构造不可能，模型只为键不同但同维的维度
+配对；规范键由编译器按地址传播到整类（`compile.py::_StateClasses`）。可配对
+close 闭集排除章内已自开自闭的 close（`pairable_closes`）。
+
 【typed 目标显式序列化（AUD-01）】`serialize_target` 接受契约声明的 typed 对象
 （`StateTarget`／`EffectTarget`）或 dict，显式序列化为紧凑 dict：人物带
 char_id、关系保留主客体方向、world 是合法显式类型——不拿 `{}` 兜底表示「推测是
@@ -39,7 +46,7 @@ world」；未知类型、缺必要字段、字段与 kind 不匹配均精确报
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 from pydantic import ValidationError
 
@@ -116,6 +123,21 @@ def chapter_state_handle(
     return f'ch{chapter:02d}.b{beat_ordinal}.e{effect_ordinal}.{key}'
 
 
+def state_dimension_address(target: Mapping[str, Any], key: str) -> tuple:
+    """状态维度地址（R1 v2 唯一实现；compile 的 `_state_address` 同一函数）：
+    领域＋作用对象＋键——同地址的全部状态写入是同一维度（RC-65）。"""
+    kind = target.get('kind')
+    if kind == 'character':
+        head: tuple = ('char', target.get('char_id'))
+    elif kind == 'relation':
+        head = ('rel', target.get('subject'), target.get('object'))
+    elif kind == 'world':
+        head = ('world',)
+    else:
+        raise ValueError(f'作用对象 kind 非法：{kind!r}（闭集 {tuple(_TARGET_KINDS)}）')
+    return (head, key)
+
+
 # ───────────────────────── 关联空间投影（compiler 编码句柄） ─────────────────────────
 
 def association_issue(code: str, location: tuple, message: str) -> ValidationIssue:
@@ -171,6 +193,24 @@ class StateHandle:
 
 
 @dataclass(frozen=True)
+class DimensionHandle:
+    """状态维度句柄（CS-H H4，RC-65）：（作用对象，键）同地址的全部写入聚合。
+
+    `handle`＝``dim{nn}``（按首次写入的确定性序编号）；`first_rank`＝首次写入的
+    （章，拍，效应序）——规范键传播时类内 canonical＝first_rank 最小的维度键。
+    `writes` 只用于审计读数，prompt 不逐条携带（输出不随写入数增长）。
+    """
+
+    handle: str
+    target: dict[str, Any]
+    key: str
+    first_rank: tuple[int, int, int]
+    writes: tuple[str, ...]
+    first_op: str
+    first_value: Any
+
+
+@dataclass(frozen=True)
 class SceneHandle:
     """场景句柄：本章内按开场序的序号与开场拍序。"""
 
@@ -186,6 +226,9 @@ class AssociationSpace:
     R1（2026-09-28）：prompt、闭集核对与 `compile.py`（`_StateClasses` 的确定性
     序、初态与章效应的句柄定位）共用本表；状态句柄登记只经 `add_state`，
     重复句柄构建时即拒。
+    CS-H H4（RC-65）：`dimensions`／`dimension_of` 是状态写入的（作用对象，键）
+    聚合层——`same_state_dimension` 的闭集是维度句柄，不是逐条写入；
+    `pairable_closes` 排除章内已自开自闭的 close。
     """
 
     propositions: dict[str, PropositionHandle] = field(default_factory=dict)
@@ -194,6 +237,11 @@ class AssociationSpace:
     beats: dict[str, BeatHandle] = field(default_factory=dict)
     states: dict[str, StateHandle] = field(default_factory=dict)
     scenes: dict[str, SceneHandle] = field(default_factory=dict)
+    #: 维度句柄层（dim{nn} → 维度）；写入句柄 → 维度句柄。
+    dimensions: dict[str, DimensionHandle] = field(default_factory=dict)
+    dimension_of: dict[str, str] = field(default_factory=dict)
+    #: 可配对 close 闭集（章内已自开自闭的 close 不在其中；RC-65）。
+    pairable_closes: dict[str, LoopHandle] = field(default_factory=dict)
 
     def add_state(self, handle: str, entry: StateHandle) -> None:
         """登记一条状态句柄；重复句柄当场拒（绝不允许 dict 静默覆盖）。"""
@@ -270,6 +318,32 @@ def project_association_space(
                 space.scenes.setdefault(f'ch{chapter:02d}.sc{scene_ordinal}',
                                         SceneHandle(chapter=chapter, ordinal=scene_ordinal,
                                                     opening_beat=beat_ordinal))
+    # 维度层（RC-65）：states 的插入序即首次写入的确定性序（book 初态在前，
+    # 其后按（章，拍，效应序））；同（作用对象，键）地址的写入聚合成 dim{nn}。
+    # 同键多写只占一个维度句柄——请求面与模型的配对面不随写入数增长。
+    by_address: dict[tuple, str] = {}
+    for handle, entry in space.states.items():
+        address = state_dimension_address(entry.target, entry.key)
+        dim = by_address.get(address)
+        if dim is None:
+            dim = f'dim{len(by_address) + 1:02d}'
+            by_address[address] = dim
+            space.dimensions[dim] = DimensionHandle(
+                handle=dim, target=dict(entry.target), key=entry.key,
+                first_rank=(entry.chapter, entry.beat_ordinal, entry.effect_ordinal),
+                writes=(handle,), first_op=entry.op, first_value=entry.value)
+        else:
+            existing = space.dimensions[dim]
+            space.dimensions[dim] = DimensionHandle(
+                handle=dim, target=existing.target, key=existing.key,
+                first_rank=existing.first_rank, writes=(*existing.writes, handle),
+                first_op=existing.first_op, first_value=existing.first_value)
+        space.dimension_of[handle] = dim
+    # 可配对 close 闭集：章内已自开自闭的 close（同一句柄串也在 open 集里）不进
+    # 跨章配对面（RC-65）——它们已有归属，配了只会被判重复 close。
+    space.pairable_closes = {
+        handle: entry for handle, entry in space.loop_closes.items()
+        if handle not in space.loop_opens}
     return space
 
 
@@ -277,11 +351,15 @@ def associate_observation_prompt(space: AssociationSpace) -> str:
     """关联请求的 prompt 组装（run_associate 的唯一组装点）。
 
     槽值全部由投影空间决定——同输入逐字节可复算；只含句柄与最小文本，
-    不含正式 ID、拍号以外的机械坐标（编号归 compiler，I-21）。
+    不含正式 ID、拍号以外的机械坐标（编号归 compiler，I-21）。状态以**维度
+    句柄**面出现（RC-65）：同（作用对象，键）的全部写入（含书级初态）已合并为
+    一个维度——请求面不随同键写入数增长。
     """
-    book_states = '\n'.join(
-        f'[{handle}] {entry.op} {target_label(entry.target)}.{entry.key} = {entry.value!r}'
-        for handle, entry in space.states.items() if entry.chapter == 0)
+    dimension_lines = '\n'.join(
+        f'[{entry.handle}] {entry.first_op} {target_label(entry.target)}.'
+        f'{entry.key} = {entry.first_value!r}'
+        + ('' if len(entry.writes) == 1 else f'（共 {len(entry.writes)} 次写入）')
+        for entry in space.dimensions.values()) or '（无）'
     chapter_blocks: list[str] = []
     for chapter in sorted({h.chapter for h in space.beats.values()}):
         lines: list[str] = []
@@ -299,13 +377,10 @@ def associate_observation_prompt(space: AssociationSpace) -> str:
         for handle, entry in sorted(space.loop_opens.items()):
             if entry.chapter == chapter:
                 lines.append(f'悬念 open [{handle}] 问题：{entry.question}')
-        for handle, entry in sorted(space.loop_closes.items()):
+        # close 只列可配对（跨章）面：章内已自开自闭的 close 不进配对闭集（RC-65）。
+        for handle, entry in sorted(space.pairable_closes.items()):
             if entry.chapter == chapter:
                 lines.append(f'悬念 close [{handle}] 收束：{entry.resolution}')
-        for handle, entry in space.states.items():
-            if entry.chapter == chapter:
-                lines.append(f'[{handle}] {entry.op} '
-                             f'{target_label(entry.target)}.{entry.key} = {entry.value!r}')
         scenes = sorted((h for h, s in space.scenes.items() if s.chapter == chapter),
                         key=lambda h: space.scenes[h].ordinal)
         if scenes:
@@ -313,7 +388,7 @@ def associate_observation_prompt(space: AssociationSpace) -> str:
                 f'[{h}]（第{space.scenes[h].opening_beat}拍起）' for h in scenes))
         chapter_blocks.append(f'—— 第 {chapter} 章 ——\n' + '\n'.join(lines))
     return ASSOCIATE_PROMPT.format(
-        book_states=book_states or '（无）', chapters='\n\n'.join(chapter_blocks))
+        dimensions=dimension_lines, chapters='\n\n'.join(chapter_blocks))
 
 
 ASSOCIATE_PROMPT = """任务：跨章关联——把不同章观察里指向**同一语义对象**的本地句柄配成对。
@@ -322,8 +397,9 @@ ASSOCIATE_PROMPT = """任务：跨章关联——把不同章观察里指向**�
 角色知情或读者揭示的时点，不改写任何文本。缺项、歧义、冲突一律保持未决：
 拿不准就不配——不默认合并，也不默认不同。
 
-【书级状态】（book 观察的 initial_state；章内效应与之同维时才配）
-{book_states}
+【状态维度】（按（作用对象，键）聚合；同一维度的全部写入——含书级初态与
+各章效应——已合并为一个维度句柄，不逐条列出）
+{dimensions}
 
 【各章句柄】
 {chapters}
@@ -331,15 +407,16 @@ ASSOCIATE_PROMPT = """任务：跨章关联——把不同章观察里指向**�
 【配对类别】（每类只选上方已给句柄；输出全部为空数组也是合法结论）
 - same_proposition：不同章里**同一命题**的句柄（措辞不同的同义表述也算同一；
   一方是「引用，未在本章登记文本」时，配对即声明它指的就是对方）；
-- same_state_dimension：不同章（或书级与章内）的**同一状态维度**——近义键
-  （如 trust／trust_level）或初态与章内效应的同维合并；作用对象不同的不是同一维度
-  （人物的 char_id、关系的主客体方向都区分对象）；
-- loop_pairing：某章 open 与另一章 close 的**悬念开合**；章内自开自闭不需要配对；
+- same_state_dimension：**键不同但同维**的两个状态维度句柄（如 trust／
+  trust_level）；同一维度内的多次写入已由编译器按地址合并，不需要也不可再配；
+  作用对象不同的不是同一维度（人物的 char_id、关系的主客体方向都区分对象）；
+- loop_pairing：某章 open 与另一章 close 的**悬念开合**；章内自开自闭不需要
+  配对（这类 close 未列入可配对清单）；
 - cross_chapter_cause：前章拍 → 后章拍的跨章因果（causes／motivates／enables／
   setup_payoff）；章内因果不在这里；
 - scene_continuation：上一章末尾的开放场景延续到下一章开头的**跨章续场**。
 
-【输出 JSON 顶层】{{"protocol_version":"stage2-associate-v2","same_proposition":[{{"left":...,"right":...}}],"same_state_dimension":[{{"left":...,"right":...}}],"loop_pairing":[{{"open":...,"close":...}}],"cross_chapter_cause":[{{"from_beat":...,"to_beat":...,"kind":...}}],"scene_continuation":[{{"left":...,"right":...}}]}}
+【输出 JSON 顶层】{{"protocol_version":"stage2-associate-v3","same_proposition":[{{"left":...,"right":...}}],"same_state_dimension":[{{"left":"dim01","right":"dim02"}}],"loop_pairing":[{{"open":...,"close":...}}],"cross_chapter_cause":[{{"from_beat":...,"to_beat":...,"kind":...}}],"scene_continuation":[{{"left":...,"right":...}}]}}
 句柄逐字取自上方方括号清单；编造、缩写、跨类混用都会被拒绝。"""
 
 
@@ -378,7 +455,13 @@ def loop_pairing_issues(
 def compile_associate_observation(
     wire: Any, space: AssociationSpace,
 ) -> tuple[AssociateObservation | None, list[str]]:
-    """只读接受：schema给出字段位置，闭集/跨章/占用判据给出稳定句柄身份。"""
+    """只读接受：schema给出字段位置，闭集/跨章/占用判据给出稳定句柄身份。
+
+    v3（RC-65）：`same_state_dimension` 的闭集是**维度句柄**（同键写入已聚合，
+    不可能同地址再配）；维度跨章，不做同章拒绝——键不同但同维的维度首次写入
+    同章也合法（编译器无法机械合并，正是要模型判断的同一性）。loop_pairing 的
+    close 闭集＝可配对闭集（章内自开自闭的 close 不在其中，引用即精确 issue）。
+    """
     try:
         observation = AssociateObservation.model_validate(wire)
     except ValidationError as exc:
@@ -387,32 +470,102 @@ def compile_associate_observation(
             f"关联观察协议校验失败：{error['loc']}：{error['msg']}")
             for error in exc.errors()]
     errors: list[str] = []
+    # 维度配对不做同章拒绝（见 docstring）；其余四类的两端分属不同章。
     groups = (
-        ('same_proposition', 'left', 'right', space.propositions, space.propositions),
-        ('same_state_dimension', 'left', 'right', space.states, space.states),
-        ('loop_pairing', 'open', 'close', space.loop_opens, space.loop_closes),
-        ('cross_chapter_cause', 'from_beat', 'to_beat', space.beats, space.beats),
-        ('scene_continuation', 'left', 'right', space.scenes, space.scenes),
+        ('same_proposition', 'left', 'right', space.propositions, space.propositions,
+         True),
+        ('same_state_dimension', 'left', 'right', space.dimensions, space.dimensions,
+         False),
+        ('loop_pairing', 'open', 'close', space.loop_opens, space.pairable_closes,
+         True),
+        ('cross_chapter_cause', 'from_beat', 'to_beat', space.beats, space.beats,
+         True),
+        ('scene_continuation', 'left', 'right', space.scenes, space.scenes, True),
     )
-    for kind, left_field, right_field, left_space, right_space in groups:
+    for kind, left_field, right_field, left_space, right_space, cross_chapter in groups:
         for pair in getattr(observation, kind):
             left_ref, right_ref = getattr(pair, left_field), getattr(pair, right_field)
             for field, ref, closed in ((left_field, left_ref, left_space),
                                        (right_field, right_ref, right_space)):
                 if ref not in closed:
+                    detail = ''
+                    if (kind, field) == ('loop_pairing', 'close') \
+                            and ref in space.loop_closes:
+                        detail = '（该 close 已在章内自开自闭，不进可配对闭集）'
                     errors.append(association_issue(
                         'unknown_handle', (kind, field, ref),
                         f'{kind}.{field} 句柄 {ref!r} 不在投影闭集内'
-                        f'（该类共 {len(closed)} 个已给句柄；只选已给句柄，不猜笔误）'))
+                        f'{detail}（该类共 {len(closed)} 个已给句柄；只选已给句柄，不猜笔误）'))
             left, right = left_space.get(left_ref), right_space.get(right_ref)
             if left is None or right is None:
                 continue
             if left is right:
                 errors.append(association_issue(
                     'self_pair', (kind, left_ref), f'配对自指：{left_ref!r} 与自身配对'))
-            elif left.chapter == right.chapter:
+            elif cross_chapter and getattr(left, 'chapter', None) == getattr(
+                    right, 'chapter', None):
                 errors.append(association_issue(
                     'same_chapter', (kind, left_ref, right_ref),
                     f'{kind} 的两端同在第 {left.chapter} 章（章内关系由章观察表达，配对只做跨章关联）'))
     errors.extend(loop_pairing_issues(observation, space))
     return (None, errors) if errors else (observation, [])
+
+
+# ───────────────────────── 条目定位（CS-H H4，RC-57 覆盖） ─────────────────────────
+
+#: 配对数组名 → 参与句柄字段（定位时按句柄反查条目下标）。
+_PAIRING_FIELDS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ('same_proposition', ('left', 'right')),
+    ('same_state_dimension', ('left', 'right')),
+    ('loop_pairing', ('open', 'close')),
+    ('cross_chapter_cause', ('from_beat', 'to_beat')),
+    ('scene_continuation', ('left', 'right')),
+)
+
+
+def associate_patch_locate(
+    wire: Any, errors: Sequence[object], *, space: AssociationSpace,
+) -> list[tuple[tuple[str | int, ...], list[object]]] | None:
+    """associate 条目定位（`ask_json` 的 `patch` 协议；与验收同源）。
+
+    机械验收（闭集／自指／占用）与干跑未决里归属 associate 的问题按其
+    `location` 句柄反查 wire 配对条目，映射到 ``(kind, i)`` 条目路径；句柄在
+    多条配对里出现（歧义）、问题指向**尚不存在的条目**（如悬空命题引用需要
+    新增配对——不是替换既有条目）或错误无结构化位置时返回 None——本轮退整份
+    返修，不静默漏项。干跑未决的写入句柄经 `space.dimension_of` 归到维度句柄
+    后再反查（compile 判定处的句柄是写入句柄，配对条目引用的是维度句柄）。
+    """
+    if not isinstance(wire, dict) or not errors:
+        return None
+    grouped: dict[tuple[str | int, ...], list[object]] = {}
+    for error in errors:
+        location = getattr(error, 'location', None)
+        if not isinstance(location, tuple):
+            return None
+        # 干跑未决的位置句柄可能是状态写入句柄（compile 判定处）；配对条目引用
+        # 维度句柄——先经登记表归并，再反查。
+        handles = set(location)
+        for item in location:
+            dim = space.dimension_of.get(item) if isinstance(item, str) else None
+            if dim is not None:
+                handles.add(dim)
+        candidates: set[tuple[str, int]] = set()
+        for kind, fields in _PAIRING_FIELDS:
+            rows = wire.get(kind)
+            if not isinstance(rows, list):
+                continue
+            for index, row in enumerate(rows):
+                if not isinstance(row, dict):
+                    continue
+                for field in fields:
+                    if row.get(field) in handles:
+                        candidates.add((kind, index))
+        if len(candidates) != 1:
+            # 零命中＝需要新增条目或工程缺陷；多命中＝同一句柄多处出现，无法
+            # 唯一指定替换目标。两种都退整份返修。
+            return None
+        kind, index = candidates.pop()
+        grouped.setdefault((kind, index), [])
+        if error not in grouped[(kind, index)]:
+            grouped[(kind, index)].append(error)
+    return list(grouped.items())

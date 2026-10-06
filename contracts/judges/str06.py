@@ -72,7 +72,8 @@ _hard('source_loop_lifecycle', 'stage2',
       'loops 只许 open/close：loop 一次性 open、close 必带 resolution、问题文本不可改写', 'R-2.11')
 _hard('source_proposition_closure', 'stage2',
       '命题引用闭合：同章重抄与本章登记一致；跨章同义由 associate 声明，'
-      '正式 ID 可解析且统一采用最早建立的代表文本', 'R-2.12')
+      '正式 ID 可解析且统一采用最早建立的代表文本；同维状态配维度句柄'
+      '（键不同但同维才配，规范键按地址传播整类）', 'R-2.12')
 _hard('source_effect_disclosure', 'stage2',
       'effect 可见性形状：必填 on_page/concealed；concealed 必声明已知者并带命题锚', 'R-2.13')
 _hard('source_registered_key_scope', 'stage2',

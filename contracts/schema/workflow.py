@@ -639,13 +639,19 @@ STR06_RUNTIME_CONFIG: Final = CandidateRuntimeConfig()
 # SemanticBinding 发布（`fact_bindings`，不复制目标 value）。只有 semantic_binding
 # 换身份；旧 rc15 候选根按契约表漂移关闭式拒收（`init_or_resume_candidate_workflow`），
 # 原根作冻结失败证据，续跑用新根（已购响应经历史采用按请求身份复用）。
-STR06_RC_VERSION: Final = 'str06-rc16'
+# rc17（2026-10-06 CS-H H3＋H4 集中升版，用户裁决随 H4 一次）：H3 称谓面——
+# Brief 认知变化 `requires_released`、BriefFactLock.subjects、ChapterIR
+# display_prefix/display_fallback/requires_released、BeatIR.release_introductions、
+# HookContext.display_faces/avoid_lines、正文 validator v2（必保揭名必现字面）；
+# H4 associate 协议升 `stage2-associate-v3`（维度句柄，RC-65）。六份携带形状的
+# 产物换身份；旧 rc16 根（含 `csf4_restore_20261005`）按契约表漂移只读拒收。
+STR06_RC_VERSION: Final = 'str06-rc17'
 
 #: 已知 RC 标签面（版本规则见 `contracts/artifacts.py::STR06_ARTIFACT_RC_VERSIONS`）。
 STR06_RC_LABELS: Final = ('str06-rc2', 'str06-rc3', 'str06-rc4', 'str06-rc5', 'str06-rc6',
                           'str06-rc7', 'str06-rc8', 'str06-rc9', 'str06-rc10', 'str06-rc11',
                           'str06-rc12', 'str06-rc13', 'str06-rc14', 'str06-rc15',
-                          'str06-rc16')
+                          'str06-rc16', 'str06-rc17')
 
 #: Stage4 四个付费语义节点的独立 wire 协议（B3 前半；各节点独立演进，升版互不
 #: 牵连）。wire 顶层 `protocol_version` 与对应常量逐字对账，漏带或错带即拒

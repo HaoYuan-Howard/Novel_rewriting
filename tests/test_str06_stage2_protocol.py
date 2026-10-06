@@ -106,12 +106,15 @@ def test_observation_artifacts_are_registered_with_independent_versions():
         assert STR06_ARTIFACT_RC_VERSIONS[rel] == 'str06-rc15'
     # R1：associate 观察独立升版（stage2-associate-v2），形状升 rc9；三类观察
     # 冻结在 rc6（B2 身份）不动。RC 版式头随 R1 升 rc9。
+    # rc17（CS-H H4，RC-65）：associate 协议升 v3（维度句柄）——同键配对按构造
+    # 不可能、模型只配键不同但同维的维度；观察产物随协议换身份。
     assert ARTIFACT_SPECS['stage2/observations/associate.json']
-    assert STR06_ARTIFACT_RC_VERSIONS['stage2/observations/associate.json'] == 'str06-rc12'
+    assert STR06_ARTIFACT_RC_VERSIONS['stage2/observations/associate.json'] == 'str06-rc17'
     # R2（语义送达）起 RC 版式头升 rc10；associate 冻结在 rc9（R1 身份）不动。
-    assert STR06_RC_VERSION == 'str06-rc16'     # rc16：事实锁引用（CS-F2）；Stage2 产物仍 rc15
+    assert STR06_RC_VERSION == 'str06-rc17'     # rc17：CS-H H3 称谓面＋H4 associate v3
     # rc16 续（CS-F2 Hook 称谓投影）：楔子上下文随绑定表换身份，旧 rc12 拒读。
-    assert STR06_ARTIFACT_RC_VERSIONS['stage4/context/hook/hook.json'] == 'str06-rc16'
+    # rc17 续（CS-H H3）：hook 上下文增 display_faces/avoid_lines。
+    assert STR06_ARTIFACT_RC_VERSIONS['stage4/context/hook/hook.json'] == 'str06-rc17'
     for label in ('str06-rc6', 'str06-rc9', 'str06-rc10', 'str06-rc11'):
         assert label in STR06_RC_LABELS
     assert str06_chapter_observation_rel(3) == 'stage2/observations/ch03.json'
@@ -280,18 +283,23 @@ def test_chapter_observation_green_with_local_handles():
 # ───────────────────────── associate 只选已给句柄（D8） ─────────────────────────
 
 def test_associate_protocol_is_independently_versioned():
-    """R1：associate 独立升版 stage2-associate-v2；三类观察协议字面量逐字不变。
+    """R1：associate 独立升版（CS-H H4 起 stage2-associate-v3，RC-65 维度句柄）；
+    三类观察协议字面量逐字不变。
 
     旧协议字面量对 associate 关闭式拒读（I-13：无运行时转换层）——句柄含义与
     输入材料已变，旧回答不做句柄替换后继续采用（首版 PLAN.md R1，Git 2fc03832；A1.5 出自被它吸收的提案）。
     """
-    assert STAGE2_ASSOCIATE_PROTOCOL == 'stage2-associate-v2'
+    assert STAGE2_ASSOCIATE_PROTOCOL == 'stage2-associate-v3'
     assert STAGE2_OBSERVATION_PROTOCOL == 'stage2-observation-v1'
     empty = {'same_proposition': [], 'same_state_dimension': [], 'loop_pairing': [],
              'cross_chapter_cause': [], 'scene_continuation': []}
     obs = AssociateObservation.model_validate(
         {'protocol_version': STAGE2_ASSOCIATE_PROTOCOL, **empty})
     assert obs.protocol_version == STAGE2_ASSOCIATE_PROTOCOL
+    with pytest.raises(ValidationError):
+        AssociateObservation.model_validate(
+            {'protocol_version': 'stage2-associate-v2', **empty}), \
+        'v2 字面量（状态写入句柄配对）对 v3 关闭式拒读'
     with pytest.raises(ValidationError):
         AssociateObservation.model_validate(
             {'protocol_version': 'stage2-observation-v1', **empty}), \

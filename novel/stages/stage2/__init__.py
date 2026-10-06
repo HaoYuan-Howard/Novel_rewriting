@@ -25,10 +25,11 @@ from contracts.schema.observation import (
     BookObservation, ChapterObservation, NamesObservation,
 )
 from novel.stages.stage2.associate import (
-    AssociationSpace, BeatHandle, LoopHandle, PropositionHandle, SceneHandle,
-    StateHandle, associate_observation_prompt, book_state_handle,
-    chapter_state_handle, compile_associate_observation, project_association_space,
-    serialize_target, target_label,
+    AssociationSpace, BeatHandle, DimensionHandle, LoopHandle, PropositionHandle,
+    SceneHandle, StateHandle, associate_observation_prompt, associate_patch_locate,
+    book_state_handle, chapter_state_handle, compile_associate_observation,
+    project_association_space, serialize_target, state_dimension_address,
+    target_label,
 )
 from novel.stages.stage2.book import (
     book_observation_prompt, character_core_view, compile_book_observation,
@@ -55,13 +56,14 @@ from novel.stages.stage2.slim import expand_chapter_wire, slim_chapter_wire
 __all__ = [
     'AnchorHit', 'AssociationSpace', 'AssociateObservation', 'BeatHandle',
     'BookObservation', 'ChapterObservation', 'CompileOutcome',
-    'CONFIRMING_MODES', 'EvidenceResolver', 'FoldResult', 'LoopHandle',
+    'CONFIRMING_MODES', 'DimensionHandle', 'EvidenceResolver', 'FoldResult',
+    'LoopHandle',
     'NAMES_INPUT_VERSION', 'NamesObservation', 'ProbeFinding', 'PropositionHandle', 'ResolverIssue',
     'STAGE2_ASSOCIATE_PROTOCOL', 'STAGE2_CHAPTERS_WIRE_PROTOCOL',
     'STAGE2_OBSERVATION_PROTOCOL', 'SceneHandle',
     'StateHandle', 'expand_chapter_wire', 'first_appearance_anchors',
     'first_appearance_issues', 'slim_chapter_wire',
-    'associate_observation_prompt', 'book_state_handle',
+    'associate_observation_prompt', 'associate_patch_locate', 'book_state_handle',
     'chapter_observation_prompt', 'chapter_prior_text',
     'chapter_state_handle', 'character_core_view',
     'compile_associate_observation',
@@ -70,6 +72,6 @@ __all__ = [
     'normalize_name_observations', 'validate_name_resolutions',
     'initial_snapshot',
     'merge_name_structure', 'names_evidence_view', 'project_association_space',
-    'serialize_target',
+    'serialize_target', 'state_dimension_address',
     'source_fold', 'surname_construction_probe', 'target_label',
 ]

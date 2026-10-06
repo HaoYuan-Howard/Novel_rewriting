@@ -17,7 +17,8 @@
 读数不是判官（R-13.6）：「记录」与「重放」不一致常因上游产物后来变了，本工具不据此断言缺陷；
 重放结论只对「当前输入」成立，输入身份与原运行对不上时在报告头里单独标出。
 
-目前覆盖 design（str06.stage4.body_design）；其余 owner 随各批接入（H3 Preserve、H4 associate），
+目前覆盖 design（str06.stage4.body_design）、preserve（str06.stage4.preserve）与
+associate（str06.stage2.associate——v2 已购 wire 对 v3 维度投影的只读读数）；
 未接入的 owner 明确报告「未接入」，不静默跳过。
 
 用法：
@@ -183,9 +184,87 @@ def _preserve_replayer(base: Path, sid: str, repository: Str06Repository,
     return lambda wire: replay_preserve_round(wire, chars, blueprint)
 
 
-#: owner → 构造重放函数的工厂。后续批次在此登记 associate（H4）。
+# ─── associate：v2 已购 wire 对 v3 维度投影的只读读数（CS-H H4，RC-65） ──────
+
+def associate_inputs(repository: Str06Repository, *, chapter_count: int):
+    """associate 重放的正式输入：四份观察经名称归一后的关联投影空间。
+
+    与 `run_associate` 同一投影（book／chapters／names 观察 → 名称归一 →
+    `project_association_space`）；读不到或归一未闭合＝ReplayNotRun。
+    """
+    from novel.stages.stage2 import normalize_name_observations, project_association_space
+    try:
+        book = repository.read_model('stage2/observations/book.json')
+        names = repository.read_model('stage2/observations/names.json')
+        chapters = {n: repository.read_model(f'stage2/observations/ch{n:02d}.json')
+                    for n in range(1, chapter_count + 1)}
+    except (FileNotFoundError, UnsealedArtifact, ProvenanceRefused, ValidationError) as exc:
+        raise ReplayNotRun(f'上游观察缺失、未封存或不符当前契约：{type(exc).__name__}：{exc}') from exc
+    try:
+        book, chapters = normalize_name_observations(book, chapters, names.structure)
+    except ValueError as exc:
+        raise ReplayNotRun(f'名称局部归一未闭合，不能投影关联空间：{exc}') from exc
+    return project_association_space(book, chapters)
+
+
+def replay_associate_round(wire: dict, space) -> dict:
+    """已购 associate 回答在**当前维度投影**下的只读读数。
+
+    v2 wire 的 `same_state_dimension` 配对逐条**写入句柄**——按 v3 投影分类：
+    同（作用对象，键）地址＝已由维度句柄合并，**不再需要**（csf4 根 90 对里
+    89 对即此类）；不同地址同对象＝键不同（近义键），v3 仍需维度配对；不同
+    对象＝目标冲突。v2 协议字面量对 v3 不可采用（reuse=obsolete：整份新购的
+    闭集原因「协议不兼容」），本读数只回答「哪些配对不再需要」，不判内容对错。
+    v3 wire 走当前机械验收（闭集核对）如实报 reuse。
+    """
+    from novel.stages.stage2 import compile_associate_observation
+    from novel.stages.stage2.associate import state_dimension_address
+    if not isinstance(wire, dict):
+        return {'status': 'ran', 'reuse': 'unknown', 'reason': 'wire 不是 JSON object'}
+    if wire.get('protocol_version') == 'stage2-associate-v3':
+        observation, errors = compile_associate_observation(wire, space)
+        return {'status': 'ran', 'passed': observation is not None,
+                'error_count': len(errors),
+                'codes': dict(Counter(error_code(e) for e in errors)),
+                'reuse': 'green' if observation is not None else 'failed'}
+    pairs = wire.get('same_state_dimension') or []
+    counts = {'same_address_noop': 0, 'cross_key_needed': 0,
+              'target_mismatch': 0, 'unresolvable': 0}
+    for pair in pairs:
+        if not isinstance(pair, dict):
+            counts['unresolvable'] += 1
+            continue
+        entries = [space.states.get(pair.get(field)) for field in ('left', 'right')]
+        if any(entry is None for entry in entries):
+            counts['unresolvable'] += 1
+            continue
+        address_left = state_dimension_address(entries[0].target, entries[0].key)
+        address_right = state_dimension_address(entries[1].target, entries[1].key)
+        if address_left == address_right:
+            counts['same_address_noop'] += 1
+        elif address_left[0] == address_right[0]:
+            counts['cross_key_needed'] += 1
+        else:
+            counts['target_mismatch'] += 1
+    return {
+        'status': 'ran', 'passed': None,
+        'protocol': wire.get('protocol_version'),
+        'pairs_total': len(pairs), **counts,
+        'dimensions': len(space.dimensions), 'state_writes': len(space.states),
+        'reuse': 'obsolete',
+    }
+
+
+def _associate_replayer(base: Path, sid: str, repository: Str06Repository,
+                        source: dict) -> Callable[[dict], dict]:
+    space = associate_inputs(repository, chapter_count=source['chapter_count'])
+    return lambda wire: replay_associate_round(wire, space)
+
+
+#: owner → 构造重放函数的工厂。后续批次在此登记其余 owner。
 REPLAYERS: dict[str, Callable[..., Callable[[dict], dict]]] = {
     'design': _design_replayer, 'preserve': _preserve_replayer,
+    'associate': _associate_replayer,
 }
 
 
@@ -312,6 +391,17 @@ def render(report: dict) -> str:
             replay_row = row['replay']
             if replay_row['status'] != 'ran':
                 lines.append(f'    重放：未运行——{replay_row["reason"]}')
+                continue
+            if 'pairs_total' in replay_row:
+                # associate（v2 已购 wire 的 v3 维度读数）：只报分类，不判内容对错。
+                lines.append(
+                    f'    维度读数：{replay_row["state_writes"]} 条状态写入→'
+                    f'{replay_row["dimensions"]} 个维度；same_state_dimension '
+                    f'{replay_row["pairs_total"]} 对＝同键空操作 {replay_row["same_address_noop"]}'
+                    f'（v3 已按地址合并，不再需要）＋近义键 {replay_row["cross_key_needed"]}'
+                    f'（v3 仍需维度配对）＋对象冲突 {replay_row["target_mismatch"]}'
+                    f'＋不可解析 {replay_row["unresolvable"]}')
+                lines.append('    沿用：不可沿用（v2 协议对 v3 关闭式拒读；读数不判配对正确性）')
                 continue
             checks = ' '.join(f'{c["name"]}={c["status"]}'
                               for c in replay_row.get('checks', ()))

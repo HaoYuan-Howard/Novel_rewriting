@@ -123,7 +123,14 @@ from novel.llm.paid_requests import candidate_contract_identity
 # withheld_bindings（按 Hook 自选 surface_releases 算好的唯一绑定称谓表，渲染期投影）；
 # WithheldNameBinding 定义随 SurfaceRelease 下沉 state.py（斩断 hook↔book_ir 环）。旧
 # rc12 楔子上下文拒读，免费重编译；原因见 REQUIREMENTS CS-F2。
-FROZEN_CONTRACT_IDENTITY = '2a3ae36e487369d10ed2b8178300245fddea687171b1fd430b487098e9e52094'
+# rc17（2026-10-06 CS-H H3＋H4 集中升版，用户裁决随 H4 一次、不 push 不双升）：
+# H3 称谓面（Brief requires_released、BriefFactLock.subjects、ChapterIR
+# display_prefix/display_fallback/requires_released、BeatIR.release_introductions、
+# HookContext.display_faces/avoid_lines、BODY_VALIDATOR v2）与 H4 associate 协议
+# stage2-associate-v3（维度句柄，RC-65）；六份产物换身份（brief／semantic_binding／
+# writer_book_ir／hook／章回执／associate 观察）。旧 rc16 根（含 csf4_restore_20261005）
+# 按契约表漂移只读拒收；原因见 REQUIREMENTS CS-H。
+FROZEN_CONTRACT_IDENTITY = 'c16785377e0fc8144b1e73274dd913219e9f6a286a52ce9523084ddacb9735e8'
 
 #: 冻结时的节点集合（CS-3 bind 退役后 13 个：stage0/1 两座＋Stage2 五节点＋
 #: Stage4 四＋Stage5 两＋Stage7 两；bind 的承载位决定并入 body_design）。
@@ -191,8 +198,9 @@ def test_frozen_artifact_table_shape():
 
 def test_frozen_rc_version_label():
     # rc13（CS-3 余项：D5 统一＋world 规则 id）——五产物形状变化升版，其余
-    # 产物表条目保持 rc12（形状未变）。rc15：证据寻址（RC-26/27）；rc16：事实锁引用（CS-F2）。
-    assert STR06_RC_VERSION == 'str06-rc16'
+    # 产物表条目保持 rc12（形状未变）。rc15：证据寻址（RC-26/27）；rc16：事实锁引用（CS-F2）；
+    # rc17：CS-H H3 称谓面＋H4 associate v3（用户裁决随 H4 集中升一次）。
+    assert STR06_RC_VERSION == 'str06-rc17'
 
 
 #: 语义冻结闸（2026-09-29，裁决 D8）钉住的语义层协议字面量。键是常量名、值是
@@ -212,7 +220,9 @@ FROZEN_SEMANTIC_PROTOCOLS = {
     'STAGE2_BOOK_PROTOCOL': 'stage2-book-v4',
     'STAGE2_CHAPTERS_PROTOCOL': 'stage2-chapters-v4',
     'STAGE2_NAMES_PROTOCOL': 'stage2-names-v3',
-    'STAGE2_ASSOCIATE_PROTOCOL': 'stage2-associate-v2',
+    # rc17（CS-H H4，RC-65）：associate 升 v3——same_state_dimension 改配维度
+    # 句柄（（作用对象，键）地址聚合）；旧 v2 wire 关闭式拒读。
+    'STAGE2_ASSOCIATE_PROTOCOL': 'stage2-associate-v3',
     'STAGE4_PRESERVE_PROTOCOL': 'stage4-preserve-v2',
     'STAGE4_PRESERVE_POLICY_VERSION': 5,
     'STAGE4_DESIGN_PROTOCOL': 'stage4-design-v5',

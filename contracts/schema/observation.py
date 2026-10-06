@@ -10,10 +10,12 @@
 转换层（I-13：本仓无隐式通用迁移；旧根只读，新协议下新根全量重购）。
 
 【associate 独立版本（R1，2026-09-28）】关联协议与三类观察协议分别管理：
-`STAGE2_ASSOCIATE_PROTOCOL`（stage2-associate-v2）只升 associate——typed 作用
-对象显式序列化（人物／关系方向／world）、状态句柄位置编码
-（``ch{nn}.b{拍}.e{效应序}.{key}``／``book.e{条目序}.{key}``）。三类观察的请求
-与字面量逐字不变（首版 PLAN.md R1，Git 2fc03832；A1.5 出自被它吸收的 A0–A6 提案）。
+`STAGE2_ASSOCIATE_PROTOCOL`（CS-H H4 起 stage2-associate-v3）只升 associate——
+typed 作用对象显式序列化（人物／关系方向／world）、状态句柄位置编码
+（``ch{nn}.b{拍}.e{效应序}.{key}``／``book.e{条目序}.{key}``）、维度句柄
+（``dim{nn}``，按（作用对象，键）地址聚合；模型只配键不同但同维的维度）。
+三类观察的请求与字面量逐字不变（首版 PLAN.md R1，Git 2fc03832；A1.5 出自
+被它吸收的 A0–A6 提案）。
 
 【模型输出面去机械化（I-20/I-21）】协议里**没有**这些字段，模型想给也没处给：
 拍号（事件序即列表序，拍号由 compiler 按序派发）、状态/约束编号
@@ -73,10 +75,14 @@ STAGE2_BOOK_WIRE_PROTOCOL: Final = 'stage2-book-v5'
 #: slim 模块，删除条件＝下游消费迁移完成、canonical 自身瘦身时）。
 STAGE2_CHAPTERS_WIRE_PROTOCOL: Final = 'stage2-chapters-v5'
 
-#: 关联协议（associate 独立）的版本字面量（R1，2026-09-28 升 v2）：typed 作用
-#: 对象显式序列化＋状态句柄位置编码。句柄含义与输入材料已变，旧关联回答不做
-#: 句柄替换后继续采用（A1.5：恢复边界）。
-STAGE2_ASSOCIATE_PROTOCOL: Final = 'stage2-associate-v2'
+#: 关联协议（associate 独立）的版本字面量（R1，2026-09-28 升 v2；CS-H H4，
+#: 2026-10-06 升 v3，RC-65）：v2＝typed 作用对象显式序列化＋状态句柄位置编码；
+#: v3＝`same_state_dimension` 改配**维度句柄**（compiler 按（作用对象，键）地址
+#: 聚合，``dim{nn}``）——同键写入已由编译器合并，模型只为键不同但同维的维度
+#: 配对，规范键由编译器按地址传播到整类；章内已自开自闭的 close 不进可配对
+#: 闭集。句柄含义与输入材料已变，旧关联回答不做句柄替换后继续采用
+#: （A1.5：恢复边界）。
+STAGE2_ASSOCIATE_PROTOCOL: Final = 'stage2-associate-v3'
 
 #: 观察句柄（associate 输入/输出）：compiler 投影的闭集成员标识。
 #: 形状只锁字符集与长度；成员资格（只选已给句柄）归 compile 对闭集核对。
@@ -336,8 +342,12 @@ class PropositionPairing(StrictModel):
 
 
 class StateDimensionPairing(StrictModel):
-    """同一状态维度：近义状态键（如 trust／trust_level）或初态与章内效应的
-    同维合并。compiler 据此归一到同一地址。"""
+    """同一状态维度（v3，RC-65）：两个**维度句柄**（``dim{nn}``，compiler 按
+    （作用对象，键）地址聚合）的近义键配对（如 trust／trust_level）。
+
+    同键写入（含书级初态与章内效应同键）已由编译器合并为同一维度句柄，不需要
+    也不可再配；作用对象不同的维度不是同一维度。compiler 据此把规范键按地址
+    传播到两类全部写入。"""
 
     left: str = Field(pattern=OBSERVATION_HANDLE_PATTERN)
     right: str = Field(pattern=OBSERVATION_HANDLE_PATTERN)
@@ -381,7 +391,7 @@ class AssociateObservation(StrictModel):
     对投影句柄核对），只建立同一性与引用（D8）。句柄为 compiler 位置编码
     （R1 v2；见 `novel/stages/stage2/associate.py` 的登记表）。"""
 
-    protocol_version: Literal['stage2-associate-v2']
+    protocol_version: Literal['stage2-associate-v3']
     same_proposition: tuple[PropositionPairing, ...] = Field(default=(), min_length=0)
     same_state_dimension: tuple[StateDimensionPairing, ...] = Field(default=(), min_length=0)
     loop_pairing: tuple[LoopPairing, ...] = Field(default=(), min_length=0)

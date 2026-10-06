@@ -8,9 +8,11 @@
 `str06.stage2.book`／`chapters`／`names`／`associate`（付费观察与关联）＋
 `str06.stage2.compile`（免费确定性编译）；`str06.stage2.source`（book＋chNN
 联合抽取）退役。观察与关联协议在 `contracts/schema/observation.py`
-（三类观察 `stage2-observation-v1`；R1 起 associate 独立版本
-`stage2-associate-v2`——typed 目标显式序列化＋状态句柄位置编码，显式版本化
-I-13）。**B2 第二步（2026-09-27）已落地**：
+（三类观察 `stage2-observation-v1`；R1 起 associate 独立版本，CS-H H4 起
+`stage2-associate-v3`——typed 目标显式序列化＋状态句柄位置编码＋**维度句柄**
+（`dim{nn}`＝（作用对象，键）地址聚合，同键写入已合并、模型只配键不同但同维
+的维度，规范键按地址传播整类；章内已自开自闭的 close 不进可配对闭集），
+显式版本化 I-13）。**B2 第二步（2026-09-27）已落地**：
 book／chapters 两 owner 引擎（`book.py`／`chapters.py`）与 `chain.py` 接线
 （`run_book`／`run_chapters` 替换 `run_source`，`run_names` 重挂书级观察输入，
 names 引擎不变）、付费 owner 记账映射改挂新节点。**B2 第三步（2026-09-27）已

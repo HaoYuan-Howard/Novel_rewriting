@@ -49,7 +49,8 @@ from novel.stages.stage2.resolver import EvidenceResolver, verify_bases
 from novel.stages.common import OverlayChange, StateOverlay
 from novel.stages.stage2.associate import (
     AssociationSpace, association_issue, book_state_handle, chapter_state_handle,
-    loop_pairing_issues, project_association_space, serialize_target, target_label,
+    loop_pairing_issues, project_association_space, serialize_target,
+    state_dimension_address, target_label,
 )
 from novel.stages.stage2.book import character_core_view
 from novel.stages.stage2.chapters import chapter_loop_issues
@@ -105,18 +106,16 @@ class _Union:
         return [item for item in self._parent if self.find(item) == root]
 
 
-def _state_rank(handle: str, space: AssociationSpace) -> tuple:
-    """状态句柄的确定性序（E-5 同步面）：book（chapter=0）在前，其后按
-    （章，拍，效应序）。
+def _dimension_rank(handle: str, space: AssociationSpace) -> tuple:
+    """维度句柄的确定性序（CS-H H4，RC-65）：＝其首次写入的（章，拍，效应序）。
 
-    序取自**唯一关联登记表**的 typed 字段（`StateHandle`），不做第二处字符串
-    解析——句柄形状改版时本函数不依赖正则，不会静默退化成 fallback rank。
-    不在登记表的句柄（陈旧 wire 句柄）排最末，永不成为 canonical。
+    维度已按（作用对象，键）聚合，first_rank 是登记表 typed 字段；不在登记表
+    的句柄（陈旧 wire 句柄）排最末，永不成为 canonical。
     """
-    entry = space.states.get(handle)
+    entry = space.dimensions.get(handle)
     if entry is None:
         return (99, 0, 0, handle)
-    return (entry.chapter, entry.beat_ordinal, entry.effect_ordinal, handle)
+    return (*entry.first_rank, handle)
 
 
 # ───────────────────────── 编译结果 ─────────────────────────
@@ -140,25 +139,22 @@ class CompileOutcome:
 
 
 def _state_address(target: Any, key: str) -> tuple:
-    """事实层地址：领域＋作用对象＋键（与目标侧 StateAddress 同构的两段式）。"""
+    """事实层地址：领域＋作用对象＋键（唯一实现＝`state_dimension_address`，
+    typed 作用对象先经 `serialize_target` 同一形状序列化）。"""
     data = target.model_dump() if hasattr(target, 'model_dump') else dict(target)
     data = {k: v for k, v in data.items() if v is not None}
-    kind = data.get('kind')
-    if kind == 'character':
-        head: tuple = ('char', data.get('char_id'))
-    elif kind == 'relation':
-        head = ('rel', data.get('subject'), data.get('object'))
-    else:
-        head = ('world',)
-    return (head, key)
+    return state_dimension_address(data, key)
 
 
 class _StateClasses:
-    """状态维度等价类（同维合并，I-15）：canonical key＝类内最早确立者的键。
+    """状态维度等价类（同维合并，I-15；CS-H H4 起按**维度句柄**建立，RC-65）。
 
+    维度＝（作用对象，键）同地址的全部写入（`AssociationSpace.dimensions`）；
+    `same_state_dimension` 配对的是维度句柄，canonical key＝类内首次写入最早
+    （`first_rank`）的维度键——规范键按地址传播到两类**全部写入**
+    （`canonical_key` 由写入句柄经 `dimension_of` 归到维度再查类根）。
     作用对象一致性在登记时核对：同类成员目标不同即未决冲突——不同对象的
     「同一维度」不成立，不默认合并（含反向关系：主客体方向区分对象）。
-    确定性序查**唯一关联登记表**（`space`；R1 v2 位置编码）。
     """
 
     def __init__(self, associate: AssociateObservation,
@@ -166,28 +162,33 @@ class _StateClasses:
         self._space = space
         self._union = _Union()
         for pair in associate.same_state_dimension:
-            self._union.union(pair.left, _state_rank(pair.left, space),
-                              pair.right, _state_rank(pair.right, space))
+            self._union.union(pair.left, _dimension_rank(pair.left, space),
+                              pair.right, _dimension_rank(pair.right, space))
         self._targets: dict[str, dict[str, Any]] = {}
         self._canonical: dict[str, str] = {}
         self._rank_of: dict[str, str] = {}
 
-    def register(self, handle: str, target: Mapping[str, Any], key: str) -> None:
-        root = self._union.find(handle)
+    def register(self, dimension: str, target: Mapping[str, Any], key: str) -> None:
+        root = self._union.find(dimension)
         self._targets.setdefault(root, dict(target))
-        # canonical key＝类内最早确立者（rank 序）；键本身的字典序不作依据。
+        # canonical key＝类内首次写入最早者（rank 序）；键本身的字典序不作依据。
         current = self._canonical.get(root)
-        if current is None or _state_rank(handle, self._space) < _state_rank(
+        if current is None or _dimension_rank(dimension, self._space) < _dimension_rank(
                 self._rank_of[root], self._space):
             self._canonical[root] = key
-            self._rank_of[root] = handle
+            self._rank_of[root] = dimension
 
     def canonical_key(self, handle: str, target: Mapping[str, Any], key: str,
                       where: str, undecided: list[str]) -> str:
-        """同维合并：返回该句柄的 canonical key；目标不同即未决冲突。"""
-        if handle not in self._union:
+        """同维合并：返回该状态写入的 canonical key；目标不同即未决冲突。
+
+        `handle` 是状态**写入**句柄——先经登记表归到维度句柄（未登记＝投影
+        漂移，key 原样返回，由调用方的漂移判据报告），再查维度等价类。
+        """
+        dimension = self._space.dimension_of.get(handle)
+        if dimension is None or dimension not in self._union:
             return key
-        root = self._union.find(handle)
+        root = self._union.find(dimension)
         expected = self._targets.get(root)
         if expected is not None and expected and dict(target) != expected:
             undecided.append(
@@ -195,7 +196,7 @@ class _StateClasses:
                 f'{target_label(expected)}，此处 {target_label(target)}）——'
                 '不同对象不是同一维度，保持未决'))
             return key
-        self.register(handle, target, key)
+        self.register(dimension, target, key)
         return self._canonical.get(root, key)
 
 
@@ -203,7 +204,8 @@ class _BookCompile:
     """跨章编译状态：命题/悬念正式 ID、等价类、续场与跨章因果。
 
     R1 v2：持有**唯一关联登记表**（`space`）——状态句柄定位与确定性序都查表，
-    不在本模块重写编码（E-5：`_state_rank`／初态句柄／章效应句柄同批对齐）。
+    不在本模块重写编码（E-5：`_dimension_rank`／初态句柄／章效应句柄同批对齐；
+    CS-H H4 起状态维度按（作用对象，键）聚合，RC-65）。
     """
 
     def __init__(self, *, slugs: set[str], associate: AssociateObservation,

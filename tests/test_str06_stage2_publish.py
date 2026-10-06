@@ -481,7 +481,7 @@ def test_without_pairing_same_text_props_stay_separate(tmp_path):
 
 
 def test_state_key_near_synonyms_unify_to_canonical_key(tmp_path):
-    """状态键近义合并：同维配对把后章键归一到最早确立者的键（I-15）。"""
+    """状态键近义合并：同维配对把后章键归一到最早确立者的键（I-15；v3 配维度）。"""
     wires = _full_stage2_wires()
     wires['book']['initial_state'] = [
         {'target': {'kind': 'relation', 'subject': 'fu_jun', 'object': 'yun_niang'},
@@ -492,8 +492,10 @@ def test_state_key_near_synonyms_unify_to_canonical_key(tmp_path):
         'key': 'trust_level', 'op': 'set', 'value': '回升', 'scope': 'book',
         'modality': 'actual',
         'disclosure': {'visibility': 'on_page'}, 'basis': _basis('e02_01')}]
+    rel = {'kind': 'relation', 'subject': 'fu_jun', 'object': 'yun_niang'}
     wires['associate']['same_state_dimension'] = [
-        {'left': 'book.e1.trust', 'right': 'ch02.b1.e1.trust_level'}]
+        {'left': _dim_handle(wires, rel, 'trust'),
+         'right': _dim_handle(wires, rel, 'trust_level')}]
     repo, _ask, report = _run_stage2(tmp_path, 'near_key', wires)
     assert report['undecided'] == 0
     chars = repo.inspect('stage2/characters/characters.json')
@@ -681,13 +683,14 @@ def test_first_appearance_gate_stops_as_typed_mechanical_defect(tmp_path):
 
 
 def test_state_pairing_with_different_targets_is_undecided(tmp_path):
-    """作用对象不同不是同一维度：同维配对目标不一致即未决冲突。"""
+    """作用对象不同不是同一维度：两个维度的目标不一致即未决冲突（v3——同键
+    同对象的写入已是一个维度句柄，按构造不可能自配；本例＝同键不同对象）。"""
     wires = _full_stage2_wires()
-    wires['associate']['same_state_dimension'] = [
-        {'left': 'ch01.b1.e1.scene_location', 'right': 'ch03.b1.e1.scene_location'}]
-    # ch3 的 effect 作用对象与 ch1 相同 ⇒ 合法；改成不同对象即冲突
     wires['ch03']['beats'][0]['effects'][0]['target'] = {
         'kind': 'character', 'char_id': 'yun_niang'}
+    wires['associate']['same_state_dimension'] = [
+        {'left': _dim_handle(wires, CHAR_FJ, 'scene_location'),
+         'right': _dim_handle(wires, CHAR_YN, 'scene_location')}]
     with pytest.raises(ValueError, match='作用对象不一致'):
         _run_stage2(tmp_path, 'state_conflict', wires)
 
@@ -903,6 +906,23 @@ def _observations(book_wire: dict, chapter_wires: dict[int, dict]):
     return book, chapters
 
 
+def _dim_handle(wires: dict, target: dict, key: str) -> str:
+    """（作用对象，键）地址 → 维度句柄（v3 夹具：按地址取句柄，不硬编码编号）。
+
+    维度编号取决于整本书的状态插入序，硬编码会在夹具增删时静默漂移——
+    统一经投影登记表按地址反查，唯一命中即返回。
+    """
+    from novel.stages.stage2.associate import state_dimension_address
+    book, chapters = _observations(wires['book'], {
+        int(k[2:]): v for k, v in wires.items() if k.startswith('ch')})
+    space = project_association_space(book, chapters)
+    address = state_dimension_address(target, key)
+    hits = [handle for handle, entry in space.dimensions.items()
+            if state_dimension_address(entry.target, entry.key) == address]
+    assert len(hits) == 1, (address, hits)
+    return hits[0]
+
+
 def _quiet_beat(event: str, ref: str) -> dict:
     """无转移拍：只带事件与证据（空转移是合法观察，fold 只记读数）。"""
     return _beat(event, (ref,), participants=('yun_niang', 'fu_jun'))
@@ -961,16 +981,18 @@ def _aud02_wires() -> dict:
         _beat('夫君坦白', ('e01_01',), participants=('fu_jun',),
               scene_boundary='continue',
               effects=[_plain_effect(CHAR_FJ, 'trust_level', '回升')])]}
-    return {
+    wires = {
         'book': book,
         'ch01': ch01,
         'ch02': {'protocol_version': CPV, 'beats': [_quiet_beat('平淡一夜', 'e02_01')]},
         'ch03': {'protocol_version': CPV, 'beats': [_quiet_beat('各自安睡', 'e03_01')]},
         'names': _names_wire(),
-        'associate': _associate_wire(
-            same_proposition=[], loop_pairing=[], same_state_dimension=[
-                {'left': 'book.e1.trust', 'right': 'ch01.b2.e1.trust_level'}]),
     }
+    wires['associate'] = _associate_wire(
+        same_proposition=[], loop_pairing=[], same_state_dimension=[
+            {'left': _dim_handle(wires, CHAR_FJ, 'trust'),
+             'right': _dim_handle(wires, CHAR_FJ, 'trust_level')}])
+    return wires
 
 
 def test_aud02_cross_beat_same_key_handles_stay_independent(tmp_path):
@@ -1009,7 +1031,11 @@ def test_state_handle_count_is_conserved():
     assert 'ch01.b3.e1.trust_level' in space.states
     assert 'ch01.b3.e2.trust' in space.states
     prompt = associate_observation_prompt(space)
-    assert prompt.count('trust_level') >= 3, '三条同键效应都在关联输入里'
+    # v3 维度面（RC-65）：fu_jun 的两条 trust_level 写入合并为一个维度句柄——
+    # 请求面每个（作用对象，键）地址只出现一次，不随同键写入数增长
+    # （`.trust_level` 只匹配维度行；规则说明里另有一次裸词示例）。
+    assert prompt.count('.trust_level') == 2, 'fu_jun（1 维）＋yun_niang（1 维）'
+    assert len(space.dimensions) == 4, 'mood／fu_jun.trust_level／yun_niang.trust_level／rel.trust'
 
 
 def test_registry_rejects_duplicate_state_handles_at_construction():
@@ -1040,13 +1066,18 @@ def _cross_beat_wires(left_target: dict, right_target: dict) -> dict:
             'names': _names_wire()}
 
 
+def _dimension_pairing(wires: dict, left_target: dict, right_target: dict) -> dict:
+    """trust／trust_level 两个维度的配对条目（v3 夹具：按地址取句柄）。"""
+    return {'left': _dim_handle(wires, left_target, 'trust'),
+            'right': _dim_handle(wires, right_target, 'trust_level')}
+
+
 def test_same_object_cross_chapter_state_pairing_publishes(tmp_path):
     """同对象跨拍（跨章）：近义键合并到最早确立者，两章效应都归一。"""
     wires = _cross_beat_wires(CHAR_FJ, CHAR_FJ)
     wires['associate'] = _associate_wire(
         same_proposition=[], loop_pairing=[],
-        same_state_dimension=[{'left': 'ch01.b1.e1.trust',
-                               'right': 'ch02.b1.e1.trust_level'}])
+        same_state_dimension=[_dimension_pairing(wires, CHAR_FJ, CHAR_FJ)])
     repo, _ask, report = _run_stage2(tmp_path, 'cross_beat', wires)
     assert report['undecided'] == 0
     bp = repo.inspect('stage2/blueprints/chapter_blueprints.json')
@@ -1060,8 +1091,7 @@ def test_different_objects_same_key_pairing_stays_undecided(tmp_path):
     wires = _cross_beat_wires(CHAR_FJ, CHAR_YN)
     wires['associate'] = _associate_wire(
         same_proposition=[], loop_pairing=[],
-        same_state_dimension=[{'left': 'ch01.b1.e1.trust',
-                               'right': 'ch02.b1.e1.trust_level'}])
+        same_state_dimension=[_dimension_pairing(wires, CHAR_FJ, CHAR_YN)])
     with pytest.raises(ValueError, match='作用对象不一致'):
         _run_stage2(tmp_path, 'diff_obj', wires)
 
@@ -1071,40 +1101,57 @@ def test_reverse_relation_pairing_stays_undecided(tmp_path):
     wires = _cross_beat_wires(REL_FY, REL_YF)
     wires['associate'] = _associate_wire(
         same_proposition=[], loop_pairing=[],
-        same_state_dimension=[{'left': 'ch01.b1.e1.trust',
-                               'right': 'ch02.b1.e1.trust_level'}])
+        same_state_dimension=[_dimension_pairing(wires, REL_FY, REL_YF)])
     with pytest.raises(ValueError, match='作用对象不一致'):
         _run_stage2(tmp_path, 'reverse_rel', wires)
 
 
-def test_same_chapter_cross_beat_state_pairing_is_refused():
-    """同章两拍的句柄互配不是跨章关联：闭集核对按「同在第 N 章」精确拒。"""
+def test_same_chapter_cross_key_dimension_pairing_is_legal():
+    """v3（RC-65）：同章两拍的键不同但同维（trust／trust_level）是**合法**配对——
+    维度跨章聚合，编译器无法机械合并近义键，这正是要模型判断的同一性；v2 的
+    「同章拒绝」只对逐条写入句柄有意义。同章命题配对仍按「同在第 N 章」拒绝。"""
     book_wire = _book_wire()
     ch01 = {'protocol_version': CPV, 'beats': [
         _beat('第一拍', ('e01_01',), participants=('fu_jun',),
               effects=[_plain_effect(CHAR_FJ, 'trust', '低')]),
         _beat('第二拍', ('e01_02',), participants=('yun_niang',),
               scene_boundary='continue',
-              effects=[_plain_effect(CHAR_FJ, 'trust_level', '回升', ref='e01_02')])]}
+              effects=[_plain_effect(CHAR_FJ, 'trust_level', '回升', ref='e01_02')]),
+        _beat('同章命题一', ('e01_01',),
+              cognition=[{'proposition': {'ref': 'p_a', 'statement': '同章命题甲'},
+                          'holder': 'yun_niang', 'mode': 'learns',
+                          'basis': _basis('e01_01')}]),
+        _beat('同章命题二', ('e01_02',), scene_boundary='continue',
+              cognition=[{'proposition': {'ref': 'p_b', 'statement': '同章命题乙'},
+                          'holder': 'yun_niang', 'mode': 'learns',
+                          'basis': _basis('e01_02')}])]}
     book, chapters = _observations(book_wire, {1: ch01})
     space = project_association_space(book, chapters)
-    wire = _associate_wire(
-        same_state_dimension=[{'left': 'ch01.b1.e1.trust',
-                               'right': 'ch01.b2.e1.trust_level'}])
+    wires = {'book': book_wire, 'ch01': ch01}
+    dims = _dimension_pairing(wires, CHAR_FJ, CHAR_FJ)
+    wire = _associate_wire(same_proposition=[], loop_pairing=[],
+                           same_state_dimension=[dims])
+    observation, errors = compile_associate_observation(wire, space)
+    assert observation is not None and errors == [], errors
+    # 对照：same_proposition 的同章配对仍被拒绝（章内关系由章观察表达）。
+    wire = _associate_wire(same_state_dimension=[],
+                           same_proposition=[{'left': 'ch01.p_a', 'right': 'ch01.p_b'}])
     _obs, errors = compile_associate_observation(wire, space)
     assert any('同在第 1 章' in e for e in errors), errors
 
 
-def test_associate_prompt_declares_v2_protocol_and_handle_positions():
-    """协议升版：prompt 自带 stage2-associate-v2 输出面；句柄是位置编码。"""
+def test_associate_prompt_declares_v3_protocol_and_dimension_handles():
+    """协议升版：prompt 自带 stage2-associate-v3 输出面；状态以维度句柄面出现，
+    逐条写入句柄不再进请求（RC-65）。"""
     book, chapters = _observations(_book_wire(), {
         1: {'protocol_version': CPV, 'beats': [
             _beat('一拍', ('e01_01',), participants=('fu_jun',),
                   effects=[_plain_effect(CHAR_FJ, 'trust', '低')])]}})
     space = project_association_space(book, chapters)
     prompt = associate_observation_prompt(space)
-    assert '"protocol_version":"stage2-associate-v2"' in prompt
-    assert '[ch01.b1.e1.trust]' in prompt
+    assert '"protocol_version":"stage2-associate-v3"' in prompt
+    assert '[dim01] set character(fu_jun).trust' in prompt
+    assert '[ch01.b1.e1.trust]' not in prompt, '逐条写入句柄不进 v3 请求面'
 
 
 @pytest.mark.parametrize('synonymous', [False, True])

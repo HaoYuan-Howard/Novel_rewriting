@@ -180,9 +180,9 @@ def test_cli_prints_text_and_machine_readable_json(tmp_path, capsys):
     assert '第1轮 整份' in text and '第2轮 整份' in text
     assert '完整预检全绿——当前输入下可零调用采用' in text and '输入身份与原运行吻合' in text
     assert rc.main([str(base), '--sid', SID, '--json']) == 0
-    # CLI 缺省＝全部已接入 owner（H3d 起含 preserve）。
+    # CLI 缺省＝全部已接入 owner（H3d 起 preserve、H4 起 associate）。
     assert json.loads(capsys.readouterr().out) == rc.replay(
-        base, SID, owners=('design', 'preserve'))
+        base, SID, owners=('design', 'preserve', 'associate'))
 
 
 def test_input_identity_mismatch_is_reported_not_hidden(tmp_path, capsys):
@@ -207,12 +207,14 @@ def test_unpublished_upstream_is_not_run_rather_than_failed(tmp_path):
 
 def test_owner_without_purchase_or_replayer_is_stated_not_skipped(tmp_path):
     base, _, _ = _build_root(tmp_path, through_design=False)
-    report = rc.replay(base, SID, owners=('design', 'preserve', 'associate'))
+    report = rc.replay(base, SID, owners=('design', 'preserve', 'associate', 'naming'))
     assert report['owners']['design']['status'] == 'no_unit'
-    # CS-H H3d：preserve 重放已接入——本根有已购轮 ⇒ ran；未接入的例换 associate（H4）。
+    # CS-H H3d：preserve 重放已接入——本根有已购轮 ⇒ ran；H4 起 associate 同样
+    # 接入（本根已购 v3 空 wire）⇒ ran；未接入的例用 naming（H5 余项）。
     assert report['owners']['preserve']['status'] == 'ran'
-    assert report['owners']['associate']['status'] == 'not_wired'
-    assert 'associate' in report['owners']['associate']['reason']
+    assert report['owners']['associate']['status'] == 'ran'
+    assert report['owners']['naming']['status'] == 'not_wired'
+    assert 'naming' in report['owners']['naming']['reason']
     rendered = rc.render(report)
     assert 'no_unit' in rendered and 'not_wired' in rendered
 
