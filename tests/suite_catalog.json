@@ -1233,6 +1233,13 @@
         "test_first_person_focalizer_uses_the_role_word_in_the_packet": "stage"
       }
     },
+    "tests/test_str06_request_text.py": {
+      "layer": "unit_contract",
+      "stages": [
+        "stage4",
+        "stage5"
+      ]
+    },
     "tests/test_str06_preserve_gate.py": {
       "layer": "stage",
       "stages": [

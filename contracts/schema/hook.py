@@ -185,6 +185,9 @@ class HookContext(StrictModel):
     #: 不得借回落面获得指称）。只供显示面解析与渲染期投影，不充当「可用称谓」
     #: （可用称谓仍以 `usable_surfaces` 为准）；渲染期不读 Characters（D2 同尺）。
     display_faces: tuple[SurfaceRelease, ...] = Field(default=(), min_length=0)
+    #: 材料所引场的明确禁止（CS-H H3 判据⑥）：materials 引用拍所在场的
+    #: `delivery.avoid` 并集（去重保序）——楔子不得违背正文设计已声明的禁区。
+    avoid_lines: tuple[str, ...] = Field(default=(), min_length=0)
 
     @model_validator(mode='after')
     def _length_window(self) -> 'HookContext':

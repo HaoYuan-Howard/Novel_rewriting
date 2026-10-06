@@ -1041,6 +1041,11 @@ STR06_FIELD_DELIVERY: dict[str, FieldDeliverySpec] = {
         'hook_context.display_faces[].surfaces', consumers=(_V,), scope=_HOOK,
         mode=DeliveryMode.AUDIT_ONLY,
         note='按 Hook 自选释放顺序的显示面（含非 concealed 人物的回落纯称谓）：投影依据'),
+    # CS-H H3（判据⑥）：材料所引场的明确禁止随上下文送达楔子（不违背正文禁区）。
+    'hook_context.avoid_lines': _spec(
+        'hook_context.avoid_lines', consumers=(_H,), scope=_HOOK,
+        mode=DeliveryMode.MUST_RESPECT,
+        note='材料所引场 delivery.avoid 的并集：楔子不得违背正文设计已声明的禁区'),
     # ── NameMapV5（改名面；不经任何写手）──────────────────────────────────
     'name_map.contract_version': _spec(
         'name_map.contract_version', consumers=(_N, _A), scope=_NAME,

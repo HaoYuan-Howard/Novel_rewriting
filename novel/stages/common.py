@@ -359,6 +359,9 @@ def _hook_render(context: HookContext) -> tuple[list[str], tuple[dict, ...]]:
     parts.append('【禁止提前兑现】（禁区：不得出现、不得暗示）')
     parts.extend(f'- {show(line, f"forbidden_reveals/{i}")}'
                  for i, line in enumerate(context.forbidden_reveals))
+    # 材料所引场的明确禁止（CS-H H3 判据⑥）：楔子不得违背正文设计已声明的禁区。
+    for i, line in enumerate(context.avoid_lines):
+        parts.append(f'- 材料所引场景的明确禁止：{show(line, f"avoid_lines/{i}")}')
     parts.append('【叙述与组织】')
     parts.append(f'- 视角：{person}，聚焦 {focalizers}')
     parts.append(f'- 组织方式：{show(context.design_brief, "design_brief")}')
@@ -675,6 +678,8 @@ BOOK_PROMPT = """任务：通读全书，产出人物账、初始状态与世界
    mechanisms 为 [{{kind:pov_permission|humor|contrast,statement,source_refs}}]：逐项记录
    允许／不允许的视角信息、主导幽默与重要内外反差；如对外守礼而内心直白。
    所有表达陈述带证据，只记录源书已经呈现的机制；没有某类给空数组，不补猜；不生成 ID。
+   表达陈述**不点名**：用称谓、角色或「其他人物」一类中性泛称指认人，不写任何
+   姓名字面（叙述机制是全书规则，不绑定具体人物名）。
 
 【证据段 id 清单】（每行一个自然段，行首方括号内是该段的 id；source_refs 只能从中选）
 {evidence}
@@ -2010,7 +2015,7 @@ def _knowledge_entry_line(name, entry: KnowledgeEntry) -> str:
     """知情条目：持有者＋模式＋命题。proposition 由 `project_context` 以
     `Brief.propositions` 回填为命题文本（kp=值 的机器拼接只活在 fold/闭包
     证明的机械面，不进阅读面——R10b「锁以内容送达」，D6 渲染修复）。"""
-    mode = _KNOWLEDGE_WORDINGS.get(entry.mode, entry.mode)
+    mode = _KNOWLEDGE_WORDINGS[entry.mode]
     return f'{name(entry.holder)}{mode}「{entry.proposition}」'
 
 
@@ -2026,7 +2031,7 @@ def _delta_line(name, delta) -> str:
         if delta.op != 'set':
             action = '此项信息仍未知' if delta.op == 'unknown' else '解除此项知情状态'
             return f'{name(delta.holder or "")}：{action}'
-        mode = _KNOWLEDGE_WORDINGS.get(delta.knowledge_mode or 'known', '确知')
+        mode = _KNOWLEDGE_WORDINGS[delta.knowledge_mode or 'known']
         return f'{name(delta.holder or "")}{mode}「{delta.value}」'
     who = _subjects_line(name, delta.subjects, delta.holder)
     head = f'{who}：' if who else ''

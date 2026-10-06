@@ -983,6 +983,8 @@ _HOOK_MUTATION_CASES = [
     ('hook_context.materials[].deltas', {}, '变异钩子效应九九', True),
     ('hook_context.opening_facts[].text', {}, '变异起笔九九', True),
     ('hook_context.usable_surfaces[].surfaces', {}, '变异面九九', True),
+    # CS-H H3 判据⑥：材料所引场的 avoid 随上下文送达楔子（渲染进禁区行）。
+    ('hook_context.avoid_lines', {'avoid_lines': ('变异场禁九九',)}, '变异场禁九九', True),
 ]
 
 

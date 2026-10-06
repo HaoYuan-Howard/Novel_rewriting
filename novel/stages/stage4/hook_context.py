@@ -86,7 +86,7 @@ def _render_fact(projection: NameProjection, key: tuple, delta,
     domain, subjects, holder, name = key
     head = f'{_render_subjects(projection, subjects)}的' if subjects else ''
     if domain == 'knowledge':
-        mode = _KNOWLEDGE_MODES.get(delta.knowledge_mode, delta.knowledge_mode or '未知模式')
+        mode = _KNOWLEDGE_MODES[delta.knowledge_mode or 'known']
         if holder == 'reader':
             who = '读者'
         else:
@@ -294,6 +294,13 @@ def compile_hook_context(
         if fact.address.holder:
             cast.add(fact.address.holder)
     forbidden.extend(_protected_thread_entries(graph, horizon, cast))
+    # 材料所引场的明确禁止（CS-H H3 判据⑥）：materials 引用拍所在场的
+    # delivery.avoid 并集（去重保序）——楔子不得违背正文设计已声明的禁区。
+    avoid_lines = list(dict.fromkeys(
+        line for item in hook.materials
+        for scene in graph.scenes
+        if scene.scene_id == item.beat_ref.split('#', 1)[0]
+        for line in scene.delivery.avoid))
 
     if errors:
         return None, errors
@@ -303,4 +310,5 @@ def compile_hook_context(
         delivery_brief=hook.delivery_brief, target_chars=constraints.target_chars,
         hard_max_chars=constraints.hard_max_chars, usable_surfaces=usable,
         withheld_literals=tuple(sorted(withheld)),
-        withheld_bindings=bindings, display_faces=display_faces), []
+        withheld_bindings=bindings, display_faces=display_faces,
+        avoid_lines=tuple(avoid_lines)), []
