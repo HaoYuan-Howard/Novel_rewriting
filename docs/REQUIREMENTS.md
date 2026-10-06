@@ -72,11 +72,14 @@ tests/test_str06_a4_design_locks.py 改写＋新增）、④（tests/test_str06_
 （陆/沈/裴）在自闸被逐条定位**（计划文案「16 处」为起草估计，以盘面实测 17 为准）。
 每轮全量默认非 corpus 回归 pytest 退出码 0。
 
-余项（H3 收尾）：docs 收口（规格 CS-H 一节标注已落地面的口径差）、rc17 契约
-升版裁决（见「待用户裁决」第 3 项；H3 形状变化＝Brief 认知变化 requires_released、
-BriefFactLock.subjects、ChapterIR.display_prefix/requires_released、
-BeatIR.release_introductions、HookContext.display_faces/avoid_lines、
-BODY_VALIDATOR v2）。
+余项（H3 收尾）：规格 CS-H 一节标注已落地面的口径差（同批随后补）。
+**rc17 升版裁决（2026-10-06 用户裁定）**：随 H4 集中升一次——H4 完成后、首次
+真实运行前一次性升 rc17 并重钉 `tests/test_str06_f7e_freeze.py` 冻结钉；H3
+提交继续在当前分支不 push，不做两次升版。H3 形状变化清单＝Brief 认知变化
+requires_released、BriefFactLock.subjects、ChapterIR.display_prefix/
+requires_released、BeatIR.release_introductions、HookContext.display_faces/
+avoid_lines、BODY_VALIDATOR v2（新字段均可缺省读入，旧 payload 读兼容）。
+「待用户裁决」第 3 项就此闭合。
 
 ### CS-H 接受版本只发一次、首答通过、窄返修（RC-50～65）
 
